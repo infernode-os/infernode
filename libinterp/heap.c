@@ -8,19 +8,17 @@ void	freearray(Heap*, int);
 void	freelist(Heap*, int);
 void	freemodlink(Heap*, int);
 void	freechan(Heap*, int);
-Type	Tarray = { 1, freearray, markarray, sizeof(Array) };
-Type	Tstring = { 1, freestring, noptrs, sizeof(String) };
-Type	Tlist = { 1, freelist, marklist, sizeof(List) };
-Type	Tmodlink = { 1, freemodlink, markheap, -1, 1, 0, 0, { 0x80 } };
-Type	Tchannel = { 1, freechan, markheap, sizeof(Channel), 1,0,0,{0x80} };
-Type	Tptr = { 1, 0, markheap, sizeof(WORD*), 1, 0, 0, { 0x80 } };
-Type	Tbyte = { 1, 0, 0, 1 };
-Type Tword = { 1, 0, 0, sizeof(WORD) };
-Type Tlong = { 1, 0, 0, sizeof(LONG) };
-Type Treal = { 1, 0, 0, sizeof(REAL) };
+Type	Tarray = { Permref, freearray, markarray, sizeof(Array) };
+Type	Tstring = { Permref, freestring, noptrs, sizeof(String) };
+Type	Tlist = { Permref, freelist, marklist, sizeof(List) };
+Type	Tmodlink = { Permref, freemodlink, markheap, -1, 1, 0, 0, { 0x80 } };
+Type	Tchannel = { Permref, freechan, markheap, sizeof(Channel), 1,0,0,{0x80} };
+Type	Tptr = { Permref, 0, markheap, sizeof(WORD*), 1, 0, 0, { 0x80 } };
+Type	Tbyte = { Permref, 0, 0, 1 };
+Type Tword = { Permref, 0, 0, sizeof(WORD) };
+Type Tlong = { Permref, 0, 0, sizeof(LONG) };
+Type Treal = { Permref, 0, 0, sizeof(REAL) };
 
-extern	Pool*	heapmem;
-extern	int	mutator;
 
 void	(*heapmonitor)(int, void*, ulong);
 
@@ -294,10 +292,13 @@ enum
 	DDEPTH = 64,
 };
 
-static	Heap**	dq;
-static	int	ndq;
-static	int	dqlen;
-static	int	ddepth;
+/* the running VM's (interp.h): two VMs destroying at once each have their own */
+#define	dq	(VM->dq)
+#define	ndq	(VM->ndq)
+#define	dqlen	(VM->dqlen)
+#define	ddepth	(VM->ddepth)
+
+int	typesperm = 1;	/* until the first VM runs its first module: interp.h, Permref */
 
 static void
 destroyh(Heap *h)
@@ -358,7 +359,7 @@ dtype(void (*destroy)(Heap*, int), int size, uchar *map, int mapsize)
 
 	t = malloc(sizeof(Type)+mapsize);
 	if(t != nil) {
-		t->ref = 1;
+		t->ref = typesperm ? Permref : 1;
 		t->free = destroy;
 		t->mark = markheap;
 		t->size = size;
@@ -492,6 +493,22 @@ nheap(int n)
 	return h;
 }
 
+/*
+ * A Type's ref when it is used to allocate: positive and plausible, or
+ * in the band around Permref where shared types live (interp.h) -- an
+ * unlocked count there drifts but never leaves it. Anything else is a
+ * freed or corrupt Type.
+ */
+static int
+badtyperef(int ref)
+{
+	if(ref <= 0)
+		return 1;
+	if(ref <= 50000000)
+		return 0;
+	return ref < Permref/2 || ref > Permref + Permref/2;
+}
+
 Heap*
 heapz(Type *t)
 {
@@ -502,7 +519,7 @@ heapz(Type *t)
 		error(exHeap);
 
 	h->t = t;
-	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
+	if(badtyperef(t->ref)) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -524,7 +541,7 @@ heap(Type *t)
 		error(exHeap);
 
 	h->t = t;
-	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
+	if(badtyperef(t->ref)) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -580,7 +597,7 @@ initarray(Type *t, Array *a)
 	int i;
 	uchar *p;
 
-	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
+	if(badtyperef(t->ref)) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	if(t->np == 0)
 		return;
@@ -609,7 +626,7 @@ arraycpy(Array *sa)
 	Tarray.ref++;
 	da = H2D(Array*, dh);
 	da->t = sa->t;
-	if(da->t->ref <= 0 || da->t->ref > 50000000) panic("heap: Type %#p ref %d in use (array) -- freed type?", da->t, da->t->ref);
+	if(badtyperef(da->t->ref)) panic("heap: Type %#p ref %d in use (array) -- freed type?", da->t, da->t->ref);
 	da->t->ref++;
 	da->len = sa->len;
 	da->root = H;

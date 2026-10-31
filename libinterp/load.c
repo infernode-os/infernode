@@ -6,7 +6,6 @@
 
 #define	A(r)	*((Array**)(r))
 
-Module*	modules;
 int	dontcompile;
 
 typedef struct ParseState ParseState;
@@ -245,6 +244,45 @@ brpatch(Inst *ip, Module *m)
 		break;
 	}
 	return 1;
+}
+
+/*
+ * compile() under a lock: the code generator's state is global and
+ * another VM may be loading at the same time (#944). The first load,
+ * init's at boot, comes before there is a second VM to race, and makes
+ * the lock.
+ *
+ * The interpreter is NOT let go while the lock is waited for. A module
+ * being parsed is not yet anywhere the collector looks -- it joins its
+ * VM's module list at the end of parsemod -- so its data, allocated a
+ * moment ago, is garbage to a sweep; and libqlock's way of waiting,
+ * releasing the interpreter, let this VM's idle-time collector run and
+ * sweep exactly that. Three commands started in VMs 1-3 at once
+ * contended for this lock, and the one that waited had its module's
+ * data freed under it and reused: the Pi 4's multi-VM soak panicked a
+ * minute in, a data abort in newmp under schedmod copying it. Holding
+ * the interpreter while waiting cannot deadlock: whoever has the lock
+ * is compiling in another VM and needs nothing of this one's.
+ *
+ * libqlockproc, then: the lock by process, so it also serves a load
+ * with no Prog running in its VM (vmrun into a new VM), which used to
+ * compile with no lock at all.
+ */
+static void*	complock;
+
+static int
+lockedcompile(Module *m, int isize)
+{
+	int ok;
+
+	if(complock == nil){
+		complock = libqlalloc();
+		return compile(m, isize, nil);
+	}
+	libqlockproc(complock);
+	ok = compile(m, isize, nil);
+	libqunlockproc(complock);
+	return ok;
 }
 
 Module*
@@ -761,13 +799,17 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 		m->entryt = m->type[entryt];
 	}
 
+	/*
+	 * The code generator keeps its state in globals (comp-*.c), and two
+	 * VMs may load a module at once (#944): one compile at a time.
+	 */
 	if(cflag) {
 		if((m->rt&DONTCOMPILE) == 0 && !dontcompile)
-			compile(m, isize, nil);
+			lockedcompile(m, isize);
 	}
 	else
 	if(m->rt & MUSTCOMPILE && !dontcompile) {
-		if(compile(m, isize, nil) == 0) {
+		if(lockedcompile(m, isize) == 0) {
 			kwerrstr("compiler required");
 			goto bad;
 		}

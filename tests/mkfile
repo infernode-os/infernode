@@ -120,6 +120,7 @@ TARG=\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
 	pqauth_test.dis\
+	p9any_timeout_test.dis\
 	publicnet_test.dis\
 	interop_test.dis\
 	authneg_test.dis\

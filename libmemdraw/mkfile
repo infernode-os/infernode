@@ -3,6 +3,8 @@
 LIB=libmemdraw.a
 
 COMMONFILES=\
+	aa.$O\
+	aapath.$O\
 	arc.$O\
 	cmap.$O\
 	cread.$O\

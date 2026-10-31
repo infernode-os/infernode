@@ -1,0 +1,47 @@
+hw/usb/hcd-dwc2: a channel the guest halts keeps no pending packet
+
+When a guest writes HCCHAR.CHDIS to stop a channel, the model sets
+CHHLTD but leaves the channel's DWC2Packet with needs_service set.
+dwc2_work_bh then services that stale packet on the next frame timer,
+re-reading HCCHAR/HCTSIZ/HCDMA -- which by now describe whatever the
+guest has programmed into the channel since -- and issues a USB
+transaction the guest never asked for: a duplicate OUT packet, or an
+IN that consumes a device's queued data into a buffer nobody is
+waiting on.
+
+Seen with a guest whose bulk IN reads time out and halt the channel
+every 200 ms (Inferno's usbdwc.c on -M raspi3b) and -device usb-net:
+the DHCP OFFER was read by a stale IN service and lost, and every
+DISCOVER after the first was garbled inside usb-net's RNDIS
+reassembly by a duplicated packet. Two boots in five got an address.
+
+Clear needs_service on a disable, cancel an in-flight async packet,
+and have the work loop service only channels that are still enabled.
+
+--- a/hw/usb/hcd-dwc2.c
++++ b/hw/usb/hcd-dwc2.c
+@@ -585,7 +585,7 @@
+ 
+     do {
+         p = &s->packet[chan];
+-        if (p->needs_service) {
++        if (p->needs_service && (s->hreg1[chan * 8] & HCCHAR_CHENA)) {
+             dev = dwc2_find_device(s, p->devadr);
+             ep = usb_ep_get(dev, p->pid, p->epnum);
+             trace_usb_dwc2_work_bh_service(s->next_chan, chan, dev, p->epnum);
+@@ -1042,6 +1042,15 @@
+     *mmio = val;
+ 
+     if (disflg) {
++        DWC2Packet *p = &s->packet[index >> 3];
++
++        /* the channel is halted: nothing of its transfer is pending any more */
++        if (p->async == DWC2_ASYNC_INFLIGHT) {
++            usb_cancel_packet(&p->packet);
++            usb_packet_cleanup(&p->packet);
++            p->async = DWC2_ASYNC_NONE;
++        }
++        p->needs_service = false;
+         /* set ChHltd in HCINT */
+         s->hreg1[(index & ~7) + 2] |= HCINTMSK_CHHLTD;
+         iflg = 1;

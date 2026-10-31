@@ -73,7 +73,7 @@ if [ "$GUI" -eq 1 ]; then
 		-framework AudioToolbox -framework AVFoundation -framework CoreBluetooth \
 		-framework CoreMotion -framework GameController -framework OpenGLES \
 		-weak_framework CoreHaptics"
-	STAGE_DIRS="dis lib fonts"
+	STAGE_DIRS="dis lib fonts icons man"	# icons: icon(2)'s glyphs (/icons/ui), Tk's cursors (/icons/tk); man: wm/man
 else
 	MODE="headless"
 	APPSRC=main_ios.m
@@ -129,7 +129,7 @@ APPOBJ=${APPSRC%.m}.o
 echo "=== linking executable ==="
 LIBDIR="$ROOT/iOS/arm64/lib"
 INFERNO_LIBS="$LIBDIR/libemu.a \
-	$LIBDIR/libinterp.a $LIBDIR/libmath.a $LIBDIR/libdraw.a \
+	$LIBDIR/libinterp.a $LIBDIR/libtk.a $LIBDIR/libmath.a $LIBDIR/libdraw.a \
 	$LIBDIR/libmemlayer.a $LIBDIR/libmemdraw.a $LIBDIR/libkeyring.a \
 	$LIBDIR/libsec.a $LIBDIR/libmp.a $LIBDIR/lib9.a"
 rm -rf "$APPDIR"
@@ -184,6 +184,15 @@ done
 for d in n tmp usr mnt; do
 	mkdir -p "$APPDIR/root/$d"
 done
+# and the mount points beneath them (mnt/xenith, mnt/acme, n/client, ...):
+# without /mnt/xenith, Xenith cannot mount its file system.
+(cd "$ROOT" && find mnt n -type d) | while read -r d; do
+	mkdir -p "$APPDIR/root/$d"
+done
+# Installing the app clears the execute bits on every bundle file but the
+# binary, and scripts the boot runs directly (lib/sh/plumbrules) then fail
+# "not executable". List them; the app restores the bits on its copy.
+(cd "$APPDIR/root" && find . -type f -perm -u+x | sed 's|^\./||') >"$APPDIR/root-exec"
 
 # --- 5. codesign -------------------------------------------------------
 # Simulator: ad-hoc (no identity). Device: real Apple Development cert +

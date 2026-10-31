@@ -119,4 +119,38 @@ echo "$r" | grep -q '"content": "MOCK_REPLY: hi"' || fail "stream: delta missing
 echo "$r" | grep -q 'data: \[DONE\]' || fail "stream: no [DONE]"
 pass "SSE streaming shape"
 
+# 8. Two identical calls in one turn each get their own result, whichever
+#    side (the SDK's handler, the client's result) comes first.  A spent
+#    rendezvous left queued handed the second call the first one's result:
+#    a file read again after it was written read as it had been.
+out=$(cd "$(dirname "$GATE")" && python3 -I -c '
+import asyncio, sys
+sys.path.insert(0, ".")
+import claude_gate as g
+async def main():
+    t = g.Turn("mock")
+    a = {"path": "/f"}
+    # handler first, then the result; twice
+    t.register_tool_use("u1", "read", a)
+    rv = t.pop_rendezvous("read", a)
+    t.deliver_result("u1", "old", False)
+    r1 = (await rv.wait())[0]
+    t.register_tool_use("u2", "read", a)
+    rv = t.pop_rendezvous("read", a)
+    t.deliver_result("u2", "new", False)
+    r2 = (await rv.wait())[0]
+    # the result first, then the handler
+    t.register_tool_use("u3", "read", a)
+    t.deliver_result("u3", "newer", False)
+    r3 = (await t.pop_rendezvous("read", a).wait())[0]
+    t.register_tool_use("u4", "read", a)
+    rv = t.pop_rendezvous("read", a)
+    t.deliver_result("u4", "newest", False)
+    r4 = (await asyncio.wait_for(rv.wait(), 2))[0]
+    print(r1, r2, r3, r4)
+asyncio.run(main())
+' 2>&1)
+[ "$out" = "old new newer newest" ] || fail "repeated call: results crossed ($out)"
+pass "identical calls in a turn each get their own result"
+
 echo "=== claude-gate mock-mode tests: all green ==="

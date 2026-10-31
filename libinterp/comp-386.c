@@ -1394,39 +1394,13 @@ comp(Inst *i)
 		modrm(Ostw, i->reg, r, RAX);
 		break;
 	case IINDC:
-		opwld(i, Oldw, RAX);			// string
-		mid(i, Oldw, RBX);			// index
-		if(bflag){
-			modrm(Oldw, O(String, len), RAX, RTA);
-			cmpl(RTA, 0);
-			gen2(Ojltb, 16);
-			gen2(0x3b, (3<<6)|(RBX<<3)|RTA);	/* cmp index, len */
-			gen2(0x72, 5);		/* JB */
-			bra((ulong)bounds, Ocall);
-			genb(0x0f);
-			gen2(Omovzxb, (1<<6)|(0<<3)|4);
-			gen2((0<<6)|(RBX<<3)|RAX, O(String, data));
-			gen2(Ojmpb, 11);
-			gen2(Oneg, (3<<6)|(3<<3)|RTA);
-			gen2(0x3b, (3<<6)|(RBX<<3)|RTA);	/* cmp index, len */
-			gen2(0x73, 0xee);		/* JNB */
-			genb(0x0f);
-			gen2(Omovzxw, (1<<6)|(0<<3)|4);
-			gen2((1<<6)|(RBX<<3)|RAX, O(String, data));
-			opwst(i, Ostw, RAX);
-			break;
-		}
-		modrm(Ocmpi, O(String, len), RAX, 7);
-		genb(0);
-		gen2(Ojltb, 7);
-		genb(0x0f);
-		gen2(Omovzxb, (1<<6)|(0<<3)|4);		/* movzbx 12(AX)(RBX*1), RAX */
-		gen2((0<<6)|(RBX<<3)|RAX, O(String, data));
-		gen2(Ojmpb, 5);
-		genb(0x0f);
-		gen2(Omovzxw, (1<<6)|(0<<3)|4);		/* movzwx 12(AX)(RBX*4), RAX */
-		gen2((1<<6)|(RBX<<3)|RAX, O(String, data));
-		opwst(i, Ostw, RAX);
+		/*
+		 * s[i] reads a byte or, when len < 0, a Rune: 32 bits
+		 * now runes go to U+10FFFF. The code compiled here loaded
+		 * a 16-bit one, and there is no machine left to test a
+		 * wider load on, so the interpreter's OP(indc) does it.
+		 */
+		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case ICASE:
 		comcase(i, 1);

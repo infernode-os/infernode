@@ -40,7 +40,7 @@ Four statements, each meant literally:
 **Everything is a file.** Not "many things have file-like
 wrappers" — everything. Networks (`/net/tcp/0/data`), processes
 (`/prog/123/ctl`), the screen (`/dev/draw`), the LLM
-(`/mnt/llm`), payments (`/n/wallet`), the audit trail
+(`/mnt/llm`), payments (`/mnt/wallet`), the audit trail
 (`/mnt/audit/log`). Unix had this as a nice idea applied
 inconsistently; Plan 9 took it seriously, and InferNode inherits
 that seriousness. When you add a capability to the system, you
@@ -195,10 +195,10 @@ serves remote HTTP at `/mnt/web`, because *it* invents the
 foreign trees imported intact, named by their source
 (`/n/local`, a remote peer's root). The full argument, and why
 the convention is itself security work, is in
-[NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md). A few older trees
-predate the convention (`/n/wallet`, `/n/git`, `/n/wikia`,
-`/n/speech`); do not copy them for new work — their migrations
-are tracked as INFR-400 through INFR-403.
+[NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md). The trees that
+predated the convention (`/n/git`, `/n/wikia`, `/n/speech`,
+`/n/wallet`) have moved to `/mnt` (INFR-400 through INFR-403); do
+not copy their old names for new work.
 
 **Control files, not config files.** A service is configured and
 commanded by writing text to its `ctl` file, and reports through
@@ -428,6 +428,27 @@ manifests rot. Remember its scope: nsaudit is advisory; the
 namespace is still what enforces.
 
 
+## The mouse: each button has one job
+
+Every graphical program follows Plan 9's division of the buttons, so a
+hand that knows one program knows them all. This is the canon we align
+with first; improving on it is a later, deliberate change made
+everywhere at once, never one program at a time.
+
+| Button | Job | Examples |
+|---|---|---|
+| 1 | point: select, drag, pan | text selection; page's drag; wm/wm's frame reshape |
+| 2 | act on the content: the program's operations or edit menu | wm/sh's cut, paste, snarf, send; page's zoom, fit, turn, write; acme/Xenith's execute; sam's edit menu |
+| 3 | choose or manage: windows, files, a list to pick from, look | wm/wm's New, Resize, Move, Delete, Hide; sam's window and file menu; page's pages; acme/Xenith's look; wm/sh's plumb |
+
+Chords build on this (in text, button 1 held then 2 cuts, then 3
+pastes), so a program that moves its edit menu to button 3 breaks them
+as well as the habit. A program with a single menu and nothing else to
+do with the buttons (clock, lens) may raise it on any button.
+
+Menus are not modal: press, move to an item, release to choose it; a
+release on no item closes the menu having done nothing.
+
 ## The host boundary
 
 The principles above govern the world inside the namespace. A feature
@@ -455,12 +476,11 @@ boot runs verbatim is a persistence hook for anything that can write
 the file — however convenient it was to generate at install time.
 
 **Placement is shipping.** The release copy loop packs `dis lib fonts
-module services locale usr mnt` into every tarball, .app, and .zip. A
+man doc icons module services locale usr mnt n appl` into every tarball, .app, and .zip. A
 "dev-only" helper placed under `lib/` is in every user's install — its
-placement *is* a release decision. Development-rig material lives
-outside those directories; `tests/agent-harness/` and its CI
-ring-fence are the precedent for keeping something out of artifacts
-deliberately.
+placement *is* a release decision. Development-rig material lives in the
+external `infernode-os/infernode-escape-room` repository; CI and release
+ring-fences keep it out of product artifacts deliberately.
 
 
 ## The honest boundaries
@@ -510,6 +530,7 @@ any code is written:
 | "Access denied" errors reachable by a confined process | Denial should be absence. |
 | A second copy of a security predicate | Share the function. |
 | A global "busy"/"in-use" flag any client can wedge | Per-fid session state, torn down at clunk; exclusivity is `DMEXCL`. (See "The fid is the session" in the ninep-server skill.) |
+| An operations menu on button 3, or a window/list menu on button 2 | Button 2 acts on the content, button 3 chooses or manages: see "The mouse". |
 | UI policy (chords, bindings, gestures) inside a device driver | Drivers deliver events; policy lives in the window system. |
 | An effectful file an agent can reach, guarded by a flag | Proposal/commit split; put the commit in a namespace the agent doesn't have. |
 | `&&`, `\|\|`, POSIX loops in Inferno-side scripts | Inferno `sh` is rc-style; see [INFERNO-SHELL.md](INFERNO-SHELL.md). |

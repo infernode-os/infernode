@@ -26,7 +26,11 @@ Tetris: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-SCORETABLE: con "/lib/scores/tetris";
+# The high-score table is the player's, in their own home: /lib is the
+# system's, and on a hosted install it is inside the application, which
+# a game has no business writing to. It used to be /lib/scores/tetris,
+# a file this tree stopped shipping, so the table could never be opened.
+SCOREDIR: con "lib/scores";	# under /usr/<user>
 LOCKPORT: con 18343;
 
 # number of pieces across and down board.
@@ -172,13 +176,19 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	tkclient->onscreen(win, nil);
 	tkclient->startinput(win, "kbd"::"ptr"::nil);
-	# Keep the toplevel at its window size instead of shrink-wrapping to the
-	# board.  Embedded in the lucifer presentation zone the window is large
-	# (e.g. 677x844); with geometry propagation on, "." collapses to the
-	# board's natural size and Tk draws it at a stale origin, so the board
-	# lands off-window.  Pinning the size (as the classic score screen already
-	# did) lets us anchor the board top-centre in the window below.
-	cmd(win, "pack propagate . 0");
+	# Once on screen the window has its real size.  Embedded in the
+	# lucifer presentation zone it is the zone's (e.g. 677x844): keep the
+	# toplevel at that size instead of shrink-wrapping to the board (with
+	# geometry propagation on, "." collapses to the board's natural size
+	# and Tk draws it at a stale origin, so the board lands off-window),
+	# and bound the board by it, not the whole display.  Under a window
+	# manager the window is what was asked for, nothing yet: pinned, it
+	# stayed its borders alone, so there the board sizes the window.
+	(aw, ah) := (int cmd(win, ". cget -actwidth"), int cmd(win, ". cget -actheight"));
+	if (aw >= 2 * BOARDWIDTH * blocksize && ah >= BOARDHEIGHT * blocksize) {
+		maxsize = Point(aw, ah);
+		cmd(win, "pack propagate . 0");
+	}
 	for (;;) {
 		bd := Board.new(win, ".f", blocksize, maxsize);
 		if (bd == nil) {
@@ -369,7 +379,9 @@ scoresrvwait(ch: chan of int)
 		ch <-= 0;
 		return;
 	}
-	(ok, err) := scoretab->init(LOCKPORT, readfile("/dev/user"), "tetris", SCORETABLE);
+	user := readfile("/dev/user");
+	scoretable := mkscoredir(user) + "/tetris";
+	(ok, err) := scoretab->init(LOCKPORT, user, "tetris", scoretable);
 	if (ok != -1)
 		ch <-= 1;
 	else {
@@ -583,6 +595,10 @@ Board.new(top: ref Tk->Toplevel, w: string, blocksize: int, maxsize: Point): ref
 		dx = avail.y;
 	if (dx <= 0)
 		return nil;
+	# A block no smaller than a line of text: 17px is right on a desktop
+	# but a speck on a phone, whose fonts are three times the pixels.
+	if ((lh := wsize(top, w + ".f.scoref").y) > blocksize)
+		blocksize = lh;
 	if (dx > blocksize)
 		dx = blocksize;
 	cmd(top, w + ".f.ns configure -width " + string(4 * dx + 1 - 2*2) +
@@ -822,3 +838,19 @@ Shape(
 ),
 };
 
+# /usr/<user>/lib/scores, made if it is not there yet
+mkscoredir(user: string): string
+{
+	d := "/usr/" + user;
+	(hok, nil) := sys->stat(d);
+	if(hok < 0)
+		sys->create(d, Sys->OREAD, Sys->DMDIR | 8r755);
+	(nil, parts) := sys->tokenize(SCOREDIR, "/");
+	for(; parts != nil; parts = tl parts){
+		d += "/" + hd parts;
+		(ok, nil) := sys->stat(d);
+		if(ok < 0)
+			sys->create(d, Sys->OREAD, Sys->DMDIR | 8r755);
+	}
+	return d;
+}

@@ -259,7 +259,7 @@ echo delete > /mnt/xenith/1/ctl
 
 ## Testing
 
-See `tests/xenith-window-manipulation.sh` for regression tests covering:
+See `tests/inferno/xenith_window_test.sh` for regression tests covering:
 - Window creation tracking
 - Layout commands (grow, moveto, tocol, newcol)
 - Deletion protection for user windows

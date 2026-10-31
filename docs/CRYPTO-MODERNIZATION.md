@@ -23,7 +23,6 @@ Ed25519 is now the default signature algorithm for all new keys.
 
 **Files modified:**
 - `libkeyring/ed25519alg.c` (new) - Ed25519 implementation
-- `libkeyring/ed25519.c` (new) - Core Ed25519 operations
 - `appl/cmd/auth/signer.b` - Uses Ed25519 by default
 - `appl/cmd/auth/createsignerkey.b` - Ed25519 first in algorithm list
 
@@ -191,9 +190,9 @@ No action needed - Ed25519, SHA-256, and AEAD login are the defaults.
 
 ## Related Documentation
 
-- [QUANTUM-SAFE-CRYPTO-PLAN.md](QUANTUM-SAFE-CRYPTO-PLAN.md) - Full PQ crypto design document
+- [QUANTUM-SAFE-CRYPTO-PLAN.md](history/QUANTUM-SAFE-CRYPTO-PLAN.md) - Full PQ crypto design document
 - [CRYPTO-DEBUGGING-GUIDE.md](CRYPTO-DEBUGGING-GUIDE.md) - Debugging methodology
-- [ELGAMAL-PERFORMANCE.md](ELGAMAL-PERFORMANCE.md) - Detailed performance analysis
+- [ELGAMAL-PERFORMANCE.md](history/ELGAMAL-PERFORMANCE.md) - Detailed performance analysis
 
 ## Commits
 
@@ -236,7 +235,14 @@ Native implementations of NIST post-quantum standards, with no external dependen
 
 #### Hybrid TLS 1.3 Key Exchange
 
-X25519MLKEM768 (IANA group 0x4588) hybrid key exchange per draft-ietf-tls-ecdhe-mlkem.
+X25519MLKEM768 (IANA group 0x11EC, 4588 decimal) hybrid key exchange per
+draft-ietf-tls-ecdhe-mlkem. The client offers it first, with X25519, P-256
+and P-384 shares beside it for servers that do not take it.
+
+Until October 2026 the constant was 0x4588, the decimal codepoint read as
+hex, and the share was never sent: TLS was classical X25519 in practice.
+`tests/tls_cnsa_hybrid_test.sh` now checks the group negotiated against
+OpenSSL.
 
 | Aspect | Classical | Hybrid |
 |--------|-----------|--------|
@@ -270,6 +276,8 @@ auth/createsignerkey -a mldsa87 signer_name
 ```
 
 TLS hybrid key exchange is automatic — clients advertise X25519MLKEM768 first with X25519 fallback.
+`/env/cnsatls` (the host `CNSATLS`) makes the client offer SecP384r1MLKEM1024
+alone instead; see "CNSA 2.0 strict mode" below.
 
 #### Testing
 
@@ -397,6 +405,29 @@ native transport.
 **Breaking change:** This is a clean break (consistent with the rest of this
 document). A v2 node refuses to authenticate with a v1 (classical-only)
 node; all nodes must be upgraded together.
+
+**CNSA 2.0 strict mode.** When the host environment variable `CNSAMODE` is
+set (any value other than empty, `0`, or one starting with `n`/`N`), the
+handshake uses ML-KEM-1024 instead of ML-KEM-768 (`cnsamode()` in
+`libinterp/keyring.c`). Every node in the fleet must agree: a 768/1024 pair
+fails the public-key length check, with no fallback, and each side's error
+says which of the two is in CNSA mode (`bad ml-kem public key length: the
+peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike`).
+The policy is the environment of the process that started the emulator, so
+set it where every way of starting one sees it: on macOS, both launchd
+(`launchctl setenv`, which a LaunchAgent makes last) for the Dock and Finder,
+and the shell's profile for a terminal. Certificates follow the
+signing key's strength (#304): `createsignerkey` and the other signer sites
+choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
+record the choice in the certificate's `ha` field, which verifiers re-hash
+from. `tests/cnsa_nodepair_test.sh` runs two CNSA-mode nodes through the
+handshake with ML-DSA-87 certificates.
+
+`CNSAMODE` does not touch TLS. CNSA-strict TLS (SecP384r1MLKEM1024 only,
+TLS 1.3, `TLS_AES_256_GCM_SHA384`) is the host `CNSATLS`, reflected into
+`/env/cnsatls`. Public servers do not offer that group, so it suits only a
+network whose TLS servers are all its own; a node CNSA-strict to its peers
+keeps the web, over X25519MLKEM768 where the server has it.
 
 **Files modified:**
 - `libinterp/keyring.c` — `Keyring_auth` hybrid handshake (ML-KEM exchange,

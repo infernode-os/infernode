@@ -32,7 +32,14 @@ static int	tablesbuilt;
 
 static void mktables(void);
 typedef int Subdraw(Memdrawparam*);
-static Subdraw chardraw, alphadraw, memoptdraw;
+static Subdraw chardraw, alphadraw, memoptdraw, coverdraw, blenddraw;
+
+/*
+ * memdrawfast 0 sends everything the special cases below would take to
+ * the general alphadraw instead, which is how their output is checked
+ * against it, pixel for pixel (libmemdraw/aatest.c).
+ */
+int	memdrawfast = 1;
 
 static Memimage*	memones;
 static Memimage*	memzeros;
@@ -183,6 +190,20 @@ DBG print("test memoptdraw\n");
 DBG print("memopt handled\n");
 		return;
 	}
+
+	/*
+	 * Coverage: a solid source through an 8-bit mask, as every
+	 * anti-aliased shape and glyph is drawn.
+	 */
+	if(memdrawfast && coverdraw(&par))
+		return;
+
+	/*
+	 * Blending: an image with alpha drawn S over D with no mask, as
+	 * icons, overlays and translucent windows are.
+	 */
+	if(memdrawfast && blenddraw(&par))
+		return;
 
 	/*
 	 * Character drawing.
@@ -597,6 +618,170 @@ dumpbuf(char *s, Buffer b, int n)
  * the calculator, and that buffer is passed to a function to write it to the destination.
  * If the buffer is already pointing at the destination, the writing function is a no-op.
  */
+/*
+ * A solid source (a replicated 1x1) drawn S over D through a GREY8 mask
+ * onto a 24- or 32-bit image of 8-bit channels: the anti-aliased
+ * shapes of aa.c, and glyphs.  alphadraw would read, convert and write
+ * every pixel through its general buffers; this does its arithmetic,
+ * on the pixels directly:
+ *	fd = 255 - MUL(sa, ma)
+ *	c = MUL(ma, sc) + MUL(fd, dc)	for each channel, alpha with sa
+ * and, as alphadraw's writebyte does, clears the unused byte of a
+ * 32-bit pixel with no alpha, even where the mask is 0.  The output is
+ * the same, bit for bit (tested).
+ *
+ * MUL assigns its temporary, so the two products of a sum need two
+ * temporaries, as alphadraw's s and t: with one, the assignments are
+ * unsequenced and gcc interleaves them, so both products read the
+ * second (glyphs came out black whatever the colour).
+ */
+static int
+coverdraw(Memdrawparam *par)
+{
+	Memimage *dst, *mask;
+	Rectangle r;
+	int x, y, dx, nb, ma, fd, sa, sr, sg, sb, hasalpha;
+	int shr, shg, shb, sha;
+	ulong u, s, t, dr, dg, db, da;
+	uchar *d, *m;
+
+	dst = par->dst;
+	mask = par->mask;
+	if(par->op != SoverD || (par->state & Simplesrc) == 0)
+		return 0;
+	if(mask->chan != GREY8 || (mask->flags & Frepl))
+		return 0;
+	if((dst->flags & (Fbytes|Fgrey|Fcmap)) != Fbytes || (dst->depth != 32 && dst->depth != 24))
+		return 0;
+	if(dst->layer != nil)
+		return 0;
+
+	sr = (par->srgba >> 24) & 0xFF;
+	sg = (par->srgba >> 16) & 0xFF;
+	sb = (par->srgba >> 8) & 0xFF;
+	sa = par->srgba & 0xFF;
+	shr = dst->shift[CRed];
+	shg = dst->shift[CGreen];
+	shb = dst->shift[CBlue];
+	hasalpha = (dst->flags & Falpha) != 0;
+	sha = hasalpha ? dst->shift[CAlpha] : 0;
+	nb = dst->depth/8;
+	r = par->r;
+	dx = Dx(r);
+	for(y = 0; y < Dy(r); y++){
+		d = byteaddr(dst, Pt(r.min.x, r.min.y+y));
+		m = byteaddr(mask, Pt(par->mr.min.x, par->mr.min.y+y));
+		for(x = 0; x < dx; x++, d += nb){
+			ma = m[x];
+			if(nb == 4)
+				u = d[0] | d[1]<<8 | d[2]<<16 | (ulong)d[3]<<24;
+			else
+				u = d[0] | d[1]<<8 | d[2]<<16;
+			dr = (u >> shr) & 0xFF;
+			dg = (u >> shg) & 0xFF;
+			db = (u >> shb) & 0xFF;
+			da = hasalpha ? (u >> sha) & 0xFF : 0;
+			if(ma != 0){
+				fd = 255 - MUL(sa, ma, t);
+				dr = MUL(ma, sr, s) + MUL(fd, dr, t);
+				dg = MUL(ma, sg, s) + MUL(fd, dg, t);
+				db = MUL(ma, sb, s) + MUL(fd, db, t);
+				if(hasalpha)
+					da = MUL(ma, sa, s) + MUL(fd, da, t);
+			}
+			u = dr<<shr | dg<<shg | db<<shb;
+			if(hasalpha)
+				u |= da<<sha;
+			d[0] = u;
+			d[1] = u>>8;
+			d[2] = u>>16;
+			if(nb == 4)
+				d[3] = u>>24;
+		}
+	}
+	return 1;
+}
+
+/*
+ * An image of 8-bit channels with alpha (32 bits a pixel) drawn S over
+ * D, with no mask, onto a 24- or 32-bit image of 8-bit channels, as
+ * alphadraw's alphacalc11 would with the mask 255 everywhere:
+ *	fd = 255 - sa
+ *	c = sc + MUL(fd, dc)	each channel, alpha with sa
+ * clearing the unused byte of a 32-bit pixel without alpha as
+ * writebyte does.  The same bits (tested).
+ */
+static int
+blenddraw(Memdrawparam *par)
+{
+	Memimage *dst, *src;
+	Rectangle r;
+	int x, y, dx, nb, fd, hasalpha;
+	int dshr, dshg, dshb, dsha, sshr, sshg, sshb, ssha;
+	ulong u, t, sr, sg, sb, sa, dr, dg, db, da;
+	uchar *d, *sp;
+
+	dst = par->dst;
+	src = par->src;
+	if(par->op != SoverD || (par->state & Fullmask) == 0)
+		return 0;
+	if(src->flags & Frepl)
+		return 0;
+	if((src->flags & (Fbytes|Falpha|Fgrey|Fcmap)) != (Fbytes|Falpha) || src->depth != 32)
+		return 0;
+	if((dst->flags & (Fbytes|Fgrey|Fcmap)) != Fbytes || (dst->depth != 32 && dst->depth != 24))
+		return 0;
+	if(src->data == dst->data || dst->layer != nil || src->layer != nil)
+		return 0;
+
+	sshr = src->shift[CRed];
+	sshg = src->shift[CGreen];
+	sshb = src->shift[CBlue];
+	ssha = src->shift[CAlpha];
+	dshr = dst->shift[CRed];
+	dshg = dst->shift[CGreen];
+	dshb = dst->shift[CBlue];
+	hasalpha = (dst->flags & Falpha) != 0;
+	dsha = hasalpha ? dst->shift[CAlpha] : 0;
+	nb = dst->depth/8;
+	r = par->r;
+	dx = Dx(r);
+	for(y = 0; y < Dy(r); y++){
+		d = byteaddr(dst, Pt(r.min.x, r.min.y+y));
+		sp = byteaddr(src, Pt(par->sr.min.x, par->sr.min.y+y));
+		for(x = 0; x < dx; x++, d += nb, sp += 4){
+			u = sp[0] | sp[1]<<8 | sp[2]<<16 | (ulong)sp[3]<<24;
+			sr = (u >> sshr) & 0xFF;
+			sg = (u >> sshg) & 0xFF;
+			sb = (u >> sshb) & 0xFF;
+			sa = (u >> ssha) & 0xFF;
+			if(nb == 4)
+				u = d[0] | d[1]<<8 | d[2]<<16 | (ulong)d[3]<<24;
+			else
+				u = d[0] | d[1]<<8 | d[2]<<16;
+			dr = (u >> dshr) & 0xFF;
+			dg = (u >> dshg) & 0xFF;
+			db = (u >> dshb) & 0xFF;
+			da = hasalpha ? (u >> dsha) & 0xFF : 0;
+			fd = 255 - sa;
+			dr = sr + MUL(fd, dr, t);
+			dg = sg + MUL(fd, dg, t);
+			db = sb + MUL(fd, db, t);
+			if(hasalpha)
+				da = sa + MUL(fd, da, t);
+			u = dr<<dshr | dg<<dshg | db<<dshb;
+			if(hasalpha)
+				u |= da<<dsha;
+			d[0] = u;
+			d[1] = u>>8;
+			d[2] = u>>16;
+			if(nb == 4)
+				d[3] = u>>24;
+		}
+	}
+	return 1;
+}
+
 #define DBG if(0)
 static int
 alphadraw(Memdrawparam *par)
@@ -1786,13 +1971,17 @@ static Buffer
 boolcopy32(Buffer bdst, Buffer bsrc, Buffer bmask, int dx, int i, int o)
 {
 	uchar *m;
-	ulong *r, *w, *ew;
+	/*
+	 * u32int, not ulong: the 32 in the name is the PIXEL width, and
+	 * ulong is 8 bytes under LP64. See the note in chardraw.
+	 */
+	u32int *r, *w, *ew;
 
 	USED(i);
 	USED(o);
 	m = bmask.grey;
-	w = (ulong*)bdst.red;
-	r = (ulong*)bsrc.red;
+	w = (u32int*)bdst.red;
+	r = (u32int*)bsrc.red;
 	ew = w+dx;
 	for(; w < ew; w++,r++)
 		if(*m++)
@@ -2353,7 +2542,21 @@ chardraw(Memdrawparam *par)
 	ulong v, maskwid, dstwid;
 	uchar *wp, *rp, *q, *wc;
 	ushort *ws;
-	ulong *wl;
+	/*
+	 * A 32-BIT PIXEL IS NOT A ulong on this port.
+	 *
+	 * ulong is 8 bytes under LP64, so writing a pixel through a
+	 * ulong* wrote TWO pixels and advanced the pointer by two.
+	 * Glyphs came out at double width, overwriting their
+	 * neighbours -- text on the framebuffer was legible as smear
+	 * and nothing else. The same cast also read 8 bytes out of the
+	 * 4-byte sp[] below.
+	 *
+	 * memfillcolor already carries this lesson, in the comment
+	 * above its memset32 call; these were the two sites that had
+	 * not been found yet.
+	 */
+	u32int *wl;
 	uchar sp[4];
 	Rectangle r, mr;
 	Memimage *mask, *src, *dst;
@@ -2455,8 +2658,8 @@ DBG print("bits %lux sh %d...", bits, i);
 			}
 			break;
 		case 32:
-			wl = (ulong*)wp;
-			v = *(ulong*)sp;
+			wl = (u32int*)wp;
+			v = *(u32int*)sp;
 			for(x=bx; x>ex; x--, wl++){
 				i = x&7;
 				if(i == 8-1)

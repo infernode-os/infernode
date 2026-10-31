@@ -229,57 +229,25 @@ tkmkbutton(TkTop *t, int btype)
  * math measured from o + CheckButton, which sat 1px up-left of centre).
  */
 /*
- * Anti-aliased disc: an analytic coverage mask alpha-blended the same
- * way glyphs are — the compositor always could blend coverage; the
- * geometric primitives just never generated any.  Integer 4x4
- * supersampling per pixel (1/8th-pixel fixed point), exact enough at
- * indicator sizes with no float dependency.  inner > 0 hollows the
- * disc into a ring.
+ * An anti-aliased disc of radius r centred on the corner c (fillpath in
+ * draw(2)); inner > 0 hollows it into a ring.
  */
 static void
 tkaadisc(Image *i, TkEnv *e, Point c, int r, int inner, int colslot)
 {
-	Image *m;
-	uchar *cov;
-	int x, y, sx, sy, w, hit, d2, ro2, ri2, fx, fy;
-	Rectangle mr;
+	Path *p;
 
-	w = 2*r;
-	if(w <= 0)
+	if(r <= 0)
 		return;
-	m = allocimage(i->display, Rect(0,0,w,w), GREY8, 0, DTransparent);
-	if(m == nil)
+	p = allocpath();
+	if(p == nil)
 		return;
-	cov = malloc(w*w);
-	if(cov == nil){
-		freeimage(m);
-		return;
-	}
-	ro2 = 64*r*r;
-	ri2 = 64*inner*inner;
-	for(y = 0; y < w; y++){
-		for(x = 0; x < w; x++){
-			hit = 0;
-			for(sy = 0; sy < 4; sy++){
-				for(sx = 0; sx < 4; sx++){
-					fx = 8*x + 2*sx + 1 - 8*r;
-					fy = 8*y + 2*sy + 1 - 8*r;
-					d2 = fx*fx + fy*fy;
-					if(d2 <= ro2 && d2 >= ri2)
-						hit++;
-				}
-			}
-			cov[y*w+x] = hit*255/16;
-		}
-	}
-	loadimage(m, m->r, cov, w*w);
-	free(cov);
-	mr.min.x = c.x - r;
-	mr.min.y = c.y - r;
-	mr.max.x = c.x + r;
-	mr.max.y = c.y + r;
-	draw(i, mr, tkgc(e, colslot), m, ZP);
-	freeimage(m);
+	c = mulpt(c, Pathunit);
+	pathellipse(p, c, r*Pathunit, r*Pathunit);
+	if(inner > 0)
+		pathellipse(p, c, inner*Pathunit, inner*Pathunit);
+	fillpath(i, p, 1, tkgc(e, colslot), ZP);
+	freepath(p);
 }
 
 static void

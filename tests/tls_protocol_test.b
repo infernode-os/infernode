@@ -174,9 +174,9 @@ contains(s, sub: string): int
 	return 0;
 }
 
-setcnsamode(v: string)
+setcnsatls(v: string)
 {
-	fd := sys->create("/env/cnsamode", Sys->OWRITE, 8r644);
+	fd := sys->create("/env/cnsatls", Sys->OWRITE, 8r644);
 	if(fd != nil)
 		sys->fprint(fd, "%s", v);
 }
@@ -236,15 +236,15 @@ expecterr(t: ref T, response: array of byte, want: string)
 
 expecterrcnsa(t: ref T, response: array of byte, want: string)
 {
-	setcnsamode("1");
+	setcnsatls("1");
 	{
 		expecterr(t, response, want);
 	} exception e {
 	* =>
-		setcnsamode("0");
+		setcnsatls("0");
 		raise e;
 	}
-	setcnsamode("0");
+	setcnsatls("0");
 }
 
 # ================================================================
@@ -319,6 +319,20 @@ testHandshakeTruncatedBody(t: ref T)
 	# only 10 bytes of body follow (bytes 4-13)
 	response := mkrecord(22, payload);
 	expecterr(t, response, "handshake message truncated");
+}
+
+# A handshake message may go on in the next record (RFC 8446 §5.1):
+# a ServerHello split over two records is read whole, and reaches the
+# check on its suite, not an error that it is truncated (a certificate
+# chain longer than a record failed so: instagram.com)
+testHandshakeAcrossRecords(t: ref T)
+{
+	body := mkserverhello();
+	body[35] = byte 16rFF;
+	body[36] = byte 16rFF;
+	hsmsg := mkhsmsg(2, body);
+	response := catbytes(mkrecord(22, hsmsg[0:20]), mkrecord(22, hsmsg[20:]));
+	expecterr(t, response, "unsupported suite");
 }
 
 # Send Certificate (type 11) when ServerHello (type 2) expected
@@ -543,6 +557,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Handshake message tests
 	run("HandshakeTruncatedHeader", testHandshakeTruncatedHeader);
 	run("HandshakeTruncatedBody", testHandshakeTruncatedBody);
+	run("HandshakeAcrossRecords", testHandshakeAcrossRecords);
 	run("HandshakeWrongType", testHandshakeWrongType);
 
 	# ServerHello parsing tests

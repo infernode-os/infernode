@@ -1,0 +1,100 @@
+# xenith_inside.sh — run an Inferno sh script inside a headless Xenith.
+#
+# Source it after common.sh, then:
+#
+#	xenith_inside name /tests/inferno/script.sh
+#
+# The script sees /mnt/xenith. Its output lines starting PASS or FAIL
+# are printed; the function returns 0 if it printed "ALL PASS", 77 if
+# Xenith cannot run here (no emu, a headless build, Xenith not built),
+# and 1 otherwise, printing the rest of the output.
+#
+# Set XENITH_INSIDE_NET=1 to give Xenith the network (#I at /net and
+# ndb/cs, as the profile does), for a script that reaches a server.
+#
+# Set XENITH_INSIDE_TIMEOUT to the seconds the script may take (60).
+#
+# Set XENITH_INSIDE_PLUMB to a rules file (a path inside the root) to
+# start a plumber with those rules before Xenith, as a session has one.
+# The rules must send something to the port edit, which Xenith reads.
+#
+# Set XENITH_INSIDE_SH to commands for the emulator's shell to run
+# before Xenith starts: the variables they set are in its environment.
+#
+# Xenith forks its namespace, so only commands it runs itself see
+# /mnt/xenith. It is handed a dump file whose one external-command
+# entry ("e", re-run on load as Acme does) runs the script, reporting
+# on the emulator's own console. Xenith runs under the SDL dummy
+# driver, so the SDL GUI emulator is needed.
+
+xenith_inside() {
+    _name=$1
+    _script=$2
+    [ -x "$EMU" ] || { echo "$_name: SKIP (no emu)"; return 77; }
+    if command -v nm >/dev/null 2>&1; then
+        _syms=$(nm "$EMU" 2>/dev/null)
+        if [ -n "$_syms" ] && ! printf '%s\n' "$_syms" | grep -q sdl3_mainloop; then
+            echo "$_name: SKIP (headless emulator)"; return 77
+        fi
+    fi
+    [ -f "$ROOT/dis/xenith.dis" ] || { echo "$_name: SKIP (Xenith not built)"; return 77; }
+
+    # Xenith's temporary files go in /tmp (gitignored; a fresh clone
+    # has none)
+    mkdir -p "$ROOT/tmp"
+    _dir=$(mktemp -d "$ROOT/.$_name.XXXXXX")
+    _d=${_dir##*/}
+    {
+        echo /
+        echo
+        echo
+        printf '%11d \n' 0
+        printf 'e%11d %11d %11d %11d %11d \n' 0 0 0 0 0
+        echo
+        echo /
+        echo "sh /$_d/run"
+    } > "$_dir/dump"
+    {
+        echo "sh $_script >'#c/cons' >[2=1]"
+        echo "echo halt >'#c/sysctl'"
+    } > "$_dir/run"
+
+    # Xenith's buffer file (/tmp/[A-Z]<pid>.<user>xenith) is removed
+    # when Xenith closes it, but the script ends by halting the
+    # emulator, so it never does; and nothing here runs the profile,
+    # whose sweep removes such files at login. Xenith has the same pid
+    # in every fresh emulator, so each run's file takes one of the 26
+    # names it tries, and the 27th run cannot start ("can't create temp
+    # file"). Remove the ones this run left.
+    _before=$(ls "$ROOT/tmp" | grep 'xenith$')
+    # XENITH_INSIDE_NET=1: the network, as the profile sets it up
+    _net=
+    if [ -n "$XENITH_INSIDE_NET" ]; then
+        _net="bind -a '#I' /net; ndb/cs;"
+    fi
+    # XENITH_INSIDE_SH=commands: run in the emulator's shell first; the
+    # variables they set are Xenith's environment
+    if [ -n "$XENITH_INSIDE_SH" ]; then
+        _net="$_net $XENITH_INSIDE_SH;"
+    fi
+    # XENITH_INSIDE_PLUMB=rules: a plumber, as a session has
+    if [ -n "$XENITH_INSIDE_PLUMB" ]; then
+        _net="$_net bind -bc '#splumber' /chan; plumber $XENITH_INSIDE_PLUMB & sleep 1;"
+    fi
+    _out=$(SDL_VIDEODRIVER=dummy with_timeout "${XENITH_INSIDE_TIMEOUT:-60}" "$EMU" -c0 -g800x600 -r"$ROOT" /dis/sh.dis -c "
+load std
+$_net
+xenith -l /$_d/dump" 2>&1)
+    rm -rf "$_dir"
+    for _f in $(ls "$ROOT/tmp" | grep 'xenith$'); do
+        printf '%s\n' "$_before" | grep -qxF "$_f" || rm -f "$ROOT/tmp/$_f"
+    done
+
+    printf '%s\n' "$_out" | grep -E '^(PASS|FAIL|ALL PASS)'
+    if printf '%s\n' "$_out" | grep -q '^ALL PASS'; then
+        return 0
+    fi
+    echo "FAIL: $_name"
+    printf '%s\n' "$_out" | grep -vE '^(PASS|FAIL)' | sed 's/^/    /'
+    return 1
+}

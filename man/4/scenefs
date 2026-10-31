@@ -1,0 +1,159 @@
+.TH SCENEFS 4
+.SH NAME
+scenefs \- a live 2-D scene with a shared camera and a stream of its changes
+.SH SYNOPSIS
+.B mount {scenefs
+[
+.B -D
+]
+.B }
+.I mountpoint
+.SH DESCRIPTION
+.I Scenefs
+serves a scene: things in a plane or on the globe, over time.
+Producers write entities, features and layers; viewers such as
+.IR scene (1)
+read them; anyone steers the shared camera through
+.BR ctl .
+Every change is also a record on the
+.B changes
+stream, so recording a run is reading that file, and playing one back is
+.I scenereplay
+(see
+.IR scene (1))
+writing it into
+.BR log .
+.I Scenefs
+keeps no history of its own.
+It serves 9P on its standard input; the conventional mount point is
+.BR /mnt/scene .
+.PP
+.B -D
+traces 9P messages on standard error.
+.PP
+The data model \(em frames, the stanza attributes, the record grammar \(em
+is
+.BR docs/scene-design.md .
+Stanza files hold one
+.IB attr = value
+per line.
+.SH FILESYSTEM
+.TF entities/
+.TP
+.B ctl
+write-only, one command per line:
+.BI center " a b" ,
+.BI zoom " z" ,
+.BR fit ,
+.BI follow " id" ,
+.BR unfollow ,
+.BI select " id" ,
+.BR deselect ;
+.BR clear .
+Positions are in the scene's frame: latitude and longitude for
+.BR frame=geo ,
+x and y for
+.BR frame=xy .
+.TP
+.B view
+the shared camera:
+.BI "frame " "f " "center " "a b " "zoom " "z " "sel " "id " "follow " "id " "fit " n\f1,
+with
+.B -
+for none.
+.I N
+is a pending fit request, 0 when there is none: the first viewer to see
+it fits the data to its own size and writes the camera back, which
+clears it.
+A fresh scene starts with a request.
+.TP
+.B status
+.BI "t " "t " "gen " "g"
+and the entity, feature and layer counts.
+.I Gen
+changes whenever the scene changes, so a viewer polls this one file.
+.TP
+.B event
+read blocks until something happens and returns one line:
+.BI "gen " g ,
+.BI "select " id
+or
+.BI "view " ... ;
+each open is its own cursor.
+Newer
+.B gen
+and
+.B view
+events replace queued ones.
+.TP
+.B changes
+read blocks until the scene changes and returns the change as records,
+each preceded by a
+.B time
+record when the clock has moved.
+Each open is its own cursor, and begins with the scene as it stands
+(a
+.B clear
+and the records that rebuild it), so what one open reads is a
+self-contained recording.
+Nothing is dropped; a reader that falls more than 4MB behind is cut off
+with an error.
+.TP
+.B log
+write-only: records, one per line
+.RB ( "time" ,
+.BR ent ,
+.BR feat ,
+.BR layer ,
+.BR meta ,
+.BR del ,
+.BR clear ).
+Viewers see a write whole; a bad record stops it with an error, and the
+records before it stand.
+.TP
+.B meta
+the scene's stanza
+.RB ( frame= ,
+.BR projection= ,
+.BR units= ,
+.BR title= ,
+.BR trail= ,
+.BR bounds= ).
+.TP
+.B time
+the scene clock.
+.TP
+.BI entities/ id
+.PD 0
+.TP
+.BI features/ id
+.TP
+.BI layers/ id
+.PD
+one stanza file per object.
+Create, write and remove them as ordinary files; a write lands at its
+offset and takes effect at once, so
+.B echo >
+and
+.B echo >>
+do what they say.
+.PD
+.SH EXAMPLES
+.EX
+mkdir -p /mnt/scene
+mount -c {scenefs} /mnt/scene
+echo 'meta frame=xy units=m ''title=Test''' > /mnt/scene/log
+echo 'time 0' > /mnt/scene/log
+echo 'ent r1 x=0 y=0 shape=triangle group=blue course=45' > /mnt/scene/log
+cat /mnt/scene/entities/r1
+echo 'follow r1' > /mnt/scene/ctl
+cat /mnt/scene/changes > /tmp/run.scene &
+.EE
+.SH SOURCE
+.B /appl/cmd/scenefs.b
+.br
+.B /appl/lib/scene.b
+.SH SEE ALSO
+.IR scene (1),
+.IR scene (2),
+.B docs/scene-design.md

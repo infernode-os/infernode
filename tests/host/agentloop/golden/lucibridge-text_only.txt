@@ -1,0 +1,13 @@
+# lucibridge text_only
+requests 1
+
+== request 0 (turn 0)
+tools: list read write
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:text_only go
+  | 
+  | msg 1
+  | role=veltro text=Hello from the mock.
+  | 

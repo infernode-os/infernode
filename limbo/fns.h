@@ -79,6 +79,7 @@ void	disentry(Decl*);
 void	disexc(Except*);
 void	disinst(Inst*);
 void	disldt(long, Decl*);
+int	ldtentry(Decl*, Decl*);
 void	dismod(Decl*);
 void	dispath(void);
 void	disvar(long, Decl*);

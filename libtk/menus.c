@@ -1685,7 +1685,7 @@ menuevent1(Tk *tk, int event, void *a)
 	Tk *item;
 
 	if (event & TkKey) {
-		menukey(tk, event & 0xffff);
+		menukey(tk, TKKEY(event));
 		return;
 	}
 

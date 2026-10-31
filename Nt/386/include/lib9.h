@@ -55,7 +55,7 @@ typedef unsigned int	uint;
 typedef unsigned long	ulong;
 typedef signed char	schar;
 typedef unsigned short	ushort;
-typedef unsigned short	Rune;
+typedef unsigned int	Rune;
 typedef __int64		vlong;
 typedef unsigned __int64		uvlong;
 typedef unsigned int u32int;
@@ -102,10 +102,12 @@ extern	uvlong	strtoull(const char*, char**, int);
 
 enum
 {
-	UTFmax		= 3,		/* maximum bytes per rune */
+	UTFmax		= 4,		/* maximum bytes per rune */
 	Runesync	= 0x80,		/* cannot represent part of a UTF sequence (<) */
 	Runeself	= 0x80,		/* rune and UTF sequences are the same (<) */
-	Runeerror	= 0x80		/* decoding error in UTF */
+	Runeerror	= 0xFFFD,	/* decoding error in UTF */
+	Runemax		= 0x10FFFF,	/* 21-bit rune */
+	Runemask	= 0x1FFFFF,	/* bits used by runes (see grep) */
 };
 
 /*
@@ -370,8 +372,9 @@ extern	void	wunlock(RWLock*);
 #define	MBEFORE	0x0001	/* mount goes before others in union directory */
 #define	MAFTER	0x0002	/* mount goes after others in union directory */
 #define	MCREATE	0x0004	/* permit creation in mounted directory */
+#define	MREADONLY	0x0008	/* reject mutation through this mount */
 #define	MCACHE	0x0010	/* cache some data */
-#define	MMASK	0x0017	/* all bits on */
+#define	MMASK	0x001f	/* all bits on */
 
 #define	OREAD	0	/* open for read */
 #define	OWRITE	1	/* write */
@@ -484,4 +487,3 @@ extern char *argv0;
 
 extern	void	setbinmode(void);
 extern	void*	sbrk(int);
-

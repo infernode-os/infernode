@@ -9,6 +9,7 @@ xenith : Xenith;
 dat : Dat;
 utils : Utils;
 look : Look;
+docview : Docview;
 windowm : Windowm;
 xfidm : Xfidm;
 
@@ -16,7 +17,7 @@ QTDIR, QTFILE, QTAPPEND : import Sys;
 DMDIR, DMAPPEND, Qid, ORCLOSE, OTRUNC, OREAD, OWRITE, ORDWR, Dir : import Sys;
 sprint : import sys;
 MAXWELEM, Rerror : import Styx;
-Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QMAX, CHAPPEND : import Dat;
+Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QWweb,QWdoc,QWdocctl,QWdoctext,QWdoclinks,QWdocfind,QMAX, CHAPPEND : import Dat;
 TRUE, FALSE : import Dat;
 cxfidalloc, cerr : import dat;
 Mntdir, Fid, Dirtab, Lock, Ref, Smsg0 : import dat;
@@ -40,6 +41,7 @@ init(mods : ref Dat->Mods)
 	dat = mods.dat;
 	utils = mods.utils;
 	look = mods.look;
+	docview = mods.docview;
 	windowm = mods.windowm;
 	xfidm = mods.xfidm;
 }
@@ -68,7 +70,7 @@ dirtab := array[10] of {
 	Dirtab ( nil,		0,			0,			0 ),
 };
 
-dirtabw := array[15] of {
+dirtabw := array[19] of {
 	Dirtab ( ".",		QTDIR,		Qdir,			8r500|DMDIR ),
 	Dirtab ( "addr",		QTFILE,		QWaddr,		8r600 ),
 	Dirtab ( "body",		QTAPPEND,	QWbody,		8r600|DMAPPEND ),
@@ -76,13 +78,27 @@ dirtabw := array[15] of {
 	Dirtab ( "consctl",	QTFILE,		QWconsctl,	8r200 ),
 	Dirtab ( "ctl",		QTFILE,		QWctl,		8r600 ),
 	Dirtab ( "data",		QTFILE,		QWdata,		8r600 ),
+	Dirtab ( "doc",		QTDIR,		QWdoc,		8r500|DMDIR ),
 	Dirtab ( "edit",		QTFILE,		QWedit,		8r200 ),
 	Dirtab ( "editout",	QTFILE,		QWeditout,	8r200 ),
+	Dirtab ( "errors",	QTFILE,		QWerrors,		8r200 ),
 	Dirtab ( "event",	QTFILE,		QWevent,		8r600 ),
 	Dirtab ( "image",	QTFILE,		QWimage,		8r600 ),
 	Dirtab ( "rdsel",		QTFILE,		QWrdsel,		8r400 ),
 	Dirtab ( "tag",		QTAPPEND,	QWtag,		8r600|DMAPPEND ),
+	Dirtab ( "web",		QTFILE,		QWweb,		8r400 ),
 	Dirtab ( "wrsel",	QTFILE,		QWwrsel,		8r200 ),
+	Dirtab ( "xdata",	QTFILE,		QWxdata,		8r600 ),
+	Dirtab ( nil, 		0,			0,			0 ),
+};
+
+# a window's document (docview(2)), as files
+dirtabdoc := array[6] of {
+	Dirtab ( ".",		QTDIR,		QWdoc,		8r500|DMDIR ),
+	Dirtab ( "ctl",		QTFILE,		QWdocctl,		8r600 ),
+	Dirtab ( "find",		QTFILE,		QWdocfind,		8r600 ),
+	Dirtab ( "links",		QTFILE,		QWdoclinks,		8r400 ),
+	Dirtab ( "text",		QTFILE,		QWdoctext,		8r400 ),
 	Dirtab ( nil, 		0,			0,			0 ),
 };
 
@@ -159,6 +175,7 @@ fsysproc()
 			error("i/o error on server channel");
 		}
 		(ok, x.fcall) = Tmsg.unpack(x.buf[0:n]);
+		x.responded = 0;
 		if(ok < 0)
 			error("convert error in convM2S");
 		if(DEBUG)
@@ -217,7 +234,6 @@ fsysaddid(dir : string, ndir : int, incl : array of string, nincl : int) : ref M
 fsysdelid(idm : ref Mntdir)
 {
 	m, prev : ref Mntdir;
-	i : int;
 	
 	if(idm == nil)
 		return;
@@ -233,11 +249,10 @@ fsysdelid(idm : ref Mntdir)
 				prev.next = m.next;
 			else
 				mnt.md = m.next;
-			for(i=0; i<m.nincl; i++)
-				m.incl[i] = nil;
-			m.incl = nil;
-			m.dir = nil;
-			m = nil;
+			# its dir and incl are left as they are: a command's
+			# output still queued for waittask (ccons) names this
+			# Mntdir, and its dir cleared under ndir sent warning()
+			# out of bounds holding the row
 			mnt.qlock.unlock();
 			return;
 		}
@@ -282,6 +297,7 @@ respond(x : ref Xfid, t0 : Smsg0, err : string) : ref Xfid
 {
 	t : ref Rmsg;
 
+	x.responded = 1;
 	# t = nullsmsg;
 	tag := x.fcall.tag;
 	# fid := fid(x.fcall);
@@ -460,12 +476,25 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 			}
 
 			name := names[i];
+			if(name == ".." && id != 0 && FILE(q) == QWdoc){
+				# up from a window's doc directory to the window's
+				path = Qdir;
+				qtype = QTDIR;
+				dir = dirtabw;
+				q.qtype = qtype;
+				q.vers = 0;
+				q.path = big QID(id, path);
+				wqids = q :: wqids;
+				continue;
+			}
 			if(name == ".."){
 				path = Qdir;
 				qtype = QTDIR;
 				id = 0;
 				if(w != nil){
+					row.qlock.lock();	# it may be its last reference
 					w.close();
+					row.qlock.unlock();
 					w = nil;
 				}
 				if(i == MAXWELEM){
@@ -523,8 +552,7 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 						error("w set in walk to new");
 					cw := chan of ref Window;
 					spawn x.walk(cw);
-					w = <- cw;
-					w.refx.inc();
+					w = <- cw;	# with this walk's reference (Xfid.walk)
 					path = QID(w.id, Qdir);
 					qtype = QTDIR;
 					id = w.id;
@@ -543,6 +571,8 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 
 				if(id == 0)
 					d = dirtab;
+				else if(FILE(q) == QWdoc)
+					d = dirtabdoc;
 				else
 					d = dirtabw;
 				k := 1;	# skip '.'
@@ -598,8 +628,11 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 		f.qid = q;
 	}
 
-	if(w != nil)
+	if(w != nil){
+		row.qlock.lock();	# it may be its last reference
 		w.close();
+		row.qlock.unlock();
+	}
 
 	return respond(x, t, err);
 }
@@ -702,7 +735,9 @@ fsysread(x : ref Xfid, f : ref Fid) : ref Xfid
 		b = array[messagesize] of byte;
 		id = WIN(f.qid);
 		n = 0;
-		if(id > 0)
+		if(id > 0 && FILE(f.qid) == QWdoc)
+			d = dirtabdoc;
+		else if(id > 0)
 			d = dirtabw;
 		else
 			d = dirtab;

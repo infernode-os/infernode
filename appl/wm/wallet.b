@@ -3,7 +3,7 @@ implement WmWallet;
 #
 # wallet - Crypto/fiat wallet manager for Lucifer (Tk version)
 #
-# A GUI front-end to wallet9p (/n/wallet). Lists accounts, shows address
+# A GUI front-end to wallet9p (/mnt/wallet). Lists accounts, shows address
 # and balance, transaction history, and sends payments. Private keys live
 # in factotum behind wallet9p; this app only drives the ctl interface.
 #
@@ -91,8 +91,9 @@ bgc:      string;	# theme background
 statusbg: string;	# status-strip background
 statusfg: string;	# status-strip foreground
 
-WALLET: con "/n/wallet";
-LBLW:   con 96;		# pixel width of the aligned label column
+WALLET: con "/mnt/wallet";
+LBLW:   con "12w";	# width of the aligned label column, in characters
+			# (pixels cut the labels off on a 3x display)
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -191,7 +192,7 @@ buildbase()
 		"frame .main",
 		"frame .main.list",
 		"scrollbar .main.list.sb -command {.main.list.lb yview}",
-		"listbox .main.list.lb -yscrollcommand {.main.list.sb set} -width 160 -selectmode single",
+		"listbox .main.list.lb -yscrollcommand {.main.list.sb set} -width 20w -selectmode single",
 		"pack .main.list.sb -side right -fill y",
 		"pack .main.list.lb -side left -fill both -expand 1",
 		"frame .main.div -width 1 -background " + accent,
@@ -338,7 +339,7 @@ buildview()
 {
 	r := ".main.right";
 	tk->cmd(top, "frame " + r + ".net");
-	tk->cmd(top, sys->sprint("label %s.net.l -text {Network:} -width %d -anchor w", r, LBLW));
+	tk->cmd(top, sys->sprint("label %s.net.l -text {Network:} -width %s -anchor w", r, LBLW));
 	vals := "";
 	for(i := 0; i < len networks; i++)
 		vals += "{" + networks[i] + "} ";
@@ -405,7 +406,7 @@ buildform(title: string, flds: array of ref Field, oklabel, oktok: string)
 		f := flds[i];
 		row := sys->sprint("%s.r%d", r, i);
 		tk->cmd(top, "frame " + row);
-		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %s -anchor w", row, f.label, LBLW));
 		show := "";
 		if(f.secret)
 			show = " -show *";
@@ -442,7 +443,7 @@ buildpay()
 		f := fields[i];
 		row := sys->sprint("%s.r%d", r, i);
 		tk->cmd(top, "frame " + row);
-		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %s -anchor w", row, f.label, LBLW));
 		tk->cmd(top, sys->sprint("entry %s.e -width 220", row));
 		tk->cmd(top, sys->sprint("pack %s.l -side left -padx {12 4}", row));
 		tk->cmd(top, sys->sprint("pack %s.e -side left -fill x -expand 1 -padx {0 12}", row));
@@ -450,7 +451,7 @@ buildpay()
 		f.path = row + ".e";
 	}
 	tk->cmd(top, "frame " + r + ".tok");
-	tk->cmd(top, sys->sprint("label %s.tok.l -text {Token:} -width %d -anchor w", r, LBLW));
+	tk->cmd(top, sys->sprint("label %s.tok.l -text {Token:} -width %s -anchor w", r, LBLW));
 	tk->cmd(top, "choicebutton " + r + ".tok.cb -values {{ETH (wei)} {USDC (base units)}}");
 	tk->cmd(top, "pack " + r + ".tok.l -side left -padx {12 4}");
 	tk->cmd(top, "pack " + r + ".tok.cb -side left");
@@ -934,14 +935,22 @@ ensurewallet9p()
 	mod := load Command "/dis/veltro/wallet9p.dis";
 	if(mod == nil)
 		return;
-	spawn mod->init(nil, "wallet9p" :: nil);
-	for(i := 0; i < 50; i++){
-		(ok2, nil) := sys->stat(WALLET + "/accounts");
-		if(ok2 >= 0)
-			break;
-		sys->sleep(100);
+	# its init returns once it is mounted; run in a proc of its own, as
+	# it takes a process group of its own
+	done := chan of int;
+	spawn startwallet9p(mod, done);
+	<-done;
+}
+
+startwallet9p(mod: Command, done: chan of int)
+{
+	{
+		mod->init(nil, "wallet9p" :: nil);
+	} exception {
+	"*" =>
+		;
 	}
-	sys->sleep(200);
+	done <-= 1;
 }
 
 # ── Keyboard ──────────────────────────────────────────────────
@@ -1014,18 +1023,14 @@ menuxy(toks: list of string, n: int): string
 
 themelistener()
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
+	c := lt->watch();
 	for(;;){
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+		<-c;
+		themech <-= 1;
 	}
 }
 
@@ -1037,10 +1042,14 @@ balancetimer()
 	}
 }
 
+# wallet9p's event says when the payments awaiting approval change
 pendingwatcher()
 {
-	for(;;){
-		sys->sleep(2000);
+	fd := sys->open(WALLET + "/event", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[64] of byte;
+	for(first := 1; first || sys->read(fd, buf, len buf) > 0; first = 0){
 		raw := readwalletfile("", "pending");
 		(nil, lines) := sys->tokenize(raw, "\n");
 		n := 0;
@@ -1049,8 +1058,8 @@ pendingwatcher()
 			if(ln != "" && ln != "(none)")
 				n++;
 		}
-		if(n != pendingcount)
-			alt { pendingch <-= n => ; * => ; }
+		# sent, not dropped when the loop is busy: nothing sends it again
+		pendingch <-= n;
 	}
 }
 

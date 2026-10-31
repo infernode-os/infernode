@@ -22,6 +22,11 @@ include "tk.m";
 include "tkclient.m";
 	tkclient: Tkclient;
 
+include "lucitheme.m";
+
+include "icon.m";
+	icon: Icon;
+
 include "dialog.m";
 	dialog: Dialog;
 
@@ -46,7 +51,18 @@ WmDebugger: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-icondir :	con "debug/";
+# the program controls' images and the glyph each shows
+debglyphs := array[] of {
+	("Detach", "unlink", 18),
+	("Kill", "square-x", 18),
+	("Run", "player-play", 18),
+	("Stop", "player-stop", 18),
+	("Bpt", "circle-dot", 18),
+	("Stepop", "arrow-right-bar", 18),
+	("Stepin", "step-into", 18),
+	("Stepout", "step-out", 18),
+	("Stepover", "arrow-forward-up", 18),
+};
 
 tkconfig := array[] of {
 	"frame .m -relief raised -bd 1",
@@ -74,25 +90,7 @@ tkconfig := array[] of {
 	".m.search.menu add command -state disabled"+
 		" -label {Search For} -command {send m search}",
 
-	# program control
-	"image create bitmap Detach -file "+icondir+
-			"detach.bit -maskfile "+icondir+"detach.mask",
-	"image create bitmap Kill -file "+icondir+
-			"kill.bit -maskfile "+icondir+"kill.mask",
-	"image create bitmap Run -file "+icondir+
-			"run.bit -maskfile "+icondir+"run.mask",
-	"image create bitmap Stop -file "+icondir+
-			"stop.bit -maskfile "+icondir+"stop.mask",
-	"image create bitmap Bpt -file "+icondir+
-			"break.bit -maskfile "+icondir+"break.mask",
-	"image create bitmap Stepop -file "+icondir+
-			"stepop.bit -maskfile "+icondir+"stepop.mask",
-	"image create bitmap Stepin -file "+icondir+
-			"stepin.bit -maskfile "+icondir+"stepin.mask",
-	"image create bitmap Stepout -file "+icondir+
-			"stepout.bit -maskfile "+icondir+"stepout.mask",
-	"image create bitmap Stepover -file "+icondir+
-			"stepover.bit -maskfile "+icondir+"stepover.mask",
+	# program control: the images are icon(2)'s, made by glyphs()
 	"button .p.kill -image Kill -command {send m killall}"+
 			" -state disabled -relief sunken",
 	"bind .p.kill <Enter> +{.p.status configure -text {kill current process}}",
@@ -494,6 +492,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	m := chan of string;
 	tk->namechan(tktop, m, "m");
 	toolstate = tknobody;
+	glyphs(tktop);
 	tkcmds(tktop, tkconfig);
 	if(!opts.xscroll){
 		tkcmd("pack forget .body.scx");
@@ -503,6 +502,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	tkcmd("cursor -default");
 	tkclient->onscreen(tktop, nil);
 	tkclient->startinput(tktop, "kbd" :: "ptr" :: nil);
+	themech := chan[1] of int;
+	spawn themelistener(themech);
 
 	kids = nil;
 	kid = nil;
@@ -541,7 +542,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				spawn task(tktop);
 			* =>
 				tkclient->wmctl(tktop, s);
+				if(s == "retheme")
+					glyphs(tktop);
 			}
+		<-themech =>
+			# a theme switch with no window manager to say so (Lucifer)
+			tkclient->wmctl(tktop, "retheme");
+			glyphs(tktop);
+			debdata->wmctl("retheme");
 		c := <-datatop.ctxt.kbd =>
 			tk->keyboard(datatop, c);
 		p := <-datatop.ctxt.ptr =>
@@ -1441,4 +1449,40 @@ writeopts(o: ref Options)
 	b[2] = byte (o.xscroll+'0');
 	b[3] = byte (o.remcr+'0');
 	sys->write(fd, b, 4);
+}
+
+# The program controls' images, icon(2)'s glyphs in the theme's text
+# colour; made blank if the glyphs cannot be drawn, so the buttons are
+# still made.
+glyphs(t: ref Tk->Toplevel)
+{
+	if(icon == nil){
+		icon = load Icon Icon->PATH;
+		if(icon != nil && icon->init(t.display) != nil)
+			icon = nil;
+	}
+	if(icon != nil){
+		icon->tkglyphs(t, debglyphs);
+		return;
+	}
+	for(i := 0; i < len debglyphs; i++){
+		(tkname, nil, nil) := debglyphs[i];
+		tk->cmd(t, "image create bitmap " + tkname);
+	}
+}
+
+# any write of /lib/lucifer/theme/current (lucitheme->watch)
+themelistener(ch: chan of int)
+{
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
+		return;
+	c := lt->watch();
+	for(;;){
+		<-c;
+		alt {
+		ch <-= 1 => ;
+		* => ;
+		}
+	}
 }

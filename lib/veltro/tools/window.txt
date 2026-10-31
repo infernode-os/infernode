@@ -1,0 +1,16 @@
+window - pictures of this activity's windows
+
+Reads the window manager's window pictures for this activity only:
+each window's current image, as a file. A saved picture is an image
+file in scratch, which present can show. Other activities' windows
+are not visible.
+
+Usage:
+  window list              One line per window: id width height
+  window save <id> [name]  Save window <id>'s picture to scratch as
+                           <name>.bit (default window-<id>) and print
+                           its path
+
+Examples:
+  window list
+  window save 1 clock

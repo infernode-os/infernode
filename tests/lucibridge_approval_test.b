@@ -144,12 +144,6 @@ recursiveRmOutsideTmp(args: string): int
 	return sawrm && recursive && (outsidetarget || !tmptarget);
 }
 
-headlessApprovalDeny(): int
-{
-	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
-	return ok >= 0;
-}
-
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
@@ -180,6 +174,25 @@ firstlines(s: string, n: int): string
 			count++;
 	}
 	return out;
+}
+
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
+testApprovalAnswer(t: ref T)
+{
+	t.assertseq(approvalanswer("Allow"), "allow", "explicit Allow grants");
+	t.assertseq(approvalanswer("Deny"), "deny", "explicit Deny refuses");
+	t.assertseq(approvalanswer("allow"), "deny", "case variants do not grant");
+	t.assertseq(approvalanswer("yes"), "deny", "affirmative prose does not grant");
+	t.assertseq(approvalanswer("what will that do?"), "deny", "user question does not grant");
+	t.assertseq(approvalanswer("task 17 complete"), "deny", "task event does not grant");
+	t.assertseq(approvalanswer("message 17 delivered"), "deny", "message event does not grant");
+	t.assertseq(approvalanswer(""), "deny", "empty input does not grant");
 }
 
 # ============================================================================
@@ -361,20 +374,6 @@ testOtherToolsNeverApproval(t: ref T)
 		"memory ops never require approval");
 }
 
-testHeadlessApprovalIsDenyOnly(t: ref T)
-{
-	(ok, nil) := sys->stat("/tmp/veltro");
-	if(ok < 0)
-		sys->create("/tmp/veltro", Sys->OREAD, Sys->DMDIR | 8r700);
-	sys->remove("/tmp/veltro/.headless-approval-deny");
-	t.asserteq(headlessApprovalDeny(), 0, "interactive mode has no deny marker");
-	fd := sys->create("/tmp/veltro/.headless-approval-deny", Sys->OWRITE, 8r600);
-	t.assert(fd != nil, "create headless deny marker");
-	fd = nil;
-	t.asserteq(headlessApprovalDeny(), 1, "headless marker selects denial");
-	sys->remove("/tmp/veltro/.headless-approval-deny");
-}
-
 # ============================================================================
 # firstlines: preview truncation
 # ============================================================================
@@ -481,9 +480,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Tools outside the gated set
 	run("OtherToolsNeverApproval", testOtherToolsNeverApproval);
-	run("HeadlessApprovalIsDenyOnly", testHeadlessApprovalIsDenyOnly);
 
 	# firstlines
+	run("ApprovalAnswer", testApprovalAnswer);
 	run("FirstlinesShorterThanBuffer", testFirstlinesShorterThanBuffer);
 	run("FirstlinesExactN", testFirstlinesExactN);
 	run("FirstlinesTrunc", testFirstlinesTrunc);

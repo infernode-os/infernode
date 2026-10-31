@@ -1,0 +1,794 @@
+# InferNode on bare metal: the manual
+
+InferNode usually runs *hosted*: `emu` is a program on macOS, Linux or
+Windows, and the host's kernel does the scheduling, the memory and the
+devices. This is the other way of running it — **native**, as the
+operating system itself, with nothing underneath. The kernel boots, brings
+up the hardware, starts the Dis virtual machine, and runs the same Limbo
+bytecode the hosted emulator runs: the same shell, the same Tk, the same
+Lucia desktop.
+
+It runs on three machines. Two are below; the third, the **Raspberry Pi
+4B** (`os/bcm2711`), runs on a board -- a Pi 4B rev 1.5, 4GB, since
+2026-10-15: the card, gigabit Ethernet at line rate, both radios, the
+USB-A sockets, the 7" panel and all four cores -- and boots to the desktop
+under QEMU's `raspi4b`; [os/bcm2711/README.md](../os/bcm2711/README.md)
+says what was proved on the board and what has not been tried.
+
+It also runs on 64-bit RISC-V: `os/riscv64` is the architecture, with
+QEMU's RISC-V `virt` (`os/riscvvirt`) and the PolarFire SoC of the
+BeagleV-Fire (`os/mpfs`) as its boards, built and booted by
+`tests/host/baremetal_riscv64_test.sh`. It has its own manual:
+[os/riscv64/README.md](../os/riscv64/README.md).
+
+| | Raspberry Pi 3B+ (`os/bcm2837`) | QEMU `virt` (`os/virt`) |
+|-|-|-|
+| what it is | a real board, and QEMU's `raspi3b` model of it | a machine that exists only in QEMU |
+| what it is for | the product | testing the kernel anywhere QEMU runs, CI included |
+| network | LAN7515 over USB; CYW43455 Wi-Fi | virtio-net |
+| storage | SD card | virtio-blk (the *same card image*) |
+| display, input | HDMI/DSI; USB keyboard and mouse; touch | ramfb; virtio keyboard and tablet |
+| also | Bluetooth, GPIO, audio, A/B kernel update, boot watchdog | a real-time clock |
+| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin and the Pi 5 have |
+
+This document is how to run it, what controls it, and where things are.
+It deliberately does not say *why* things are as they are; three other
+documents do:
+
+- **[os/bcm2837/README.md](../os/bcm2837/README.md)** — the engineering
+  journal: every decision, measurement and war story, in the order they
+  happened. Three thousand lines. Search it; don't read it through.
+- **[os/virt/README.md](../os/virt/README.md)** — what the second machine
+  is for, what it found, and the QEMU flags that fail without saying so.
+- **[BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md)** — what
+  a port to other hardware should take from this one.
+
+and [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) is the
+exact contract a new board directory has to meet.
+
+## 1. How it is put together
+
+    appl/ → dis/            Limbo programs: sh, Tk apps, Lucia, Veltro…     (identical to hosted)
+    ───────────────────────────────────────────────────────────────────────
+    os/init/                the first Limbo: osinit, USB class drivers
+    lib*/                   Dis VM + ARM64 JIT, Tk, draw, crypto, math
+    os/port  os/ip          the portable kernel and TCP/IP, from upstream Inferno
+    os/arm64                boot, traps, SMP, kmain — any AArch64 board
+    os/bcm                  what the Raspberry Pi SoCs share: drivers (mailbox, UARTs, SD, USB, GPIO…), board.c, the MMU map
+    os/bcm2837 │ os/bcm2711 │ os/virt
+                            one board each: addresses, interrupt numbers, RNG, device list
+
+The kernel image carries a small **recovery root** compiled into it —
+`osinit`, the shell and its builtins, file utilities, `dossrv`, the USB
+and Ethernet drivers — enough to reach the card and to give you a usable
+console if the card is bad. Everything else, including the whole
+desktop, comes off the card (or a file server) at boot: see `rootpath`
+in section 5.
+
+### Headless, or with a desktop
+
+Both are ways of running it, and the machine decides which at boot by
+one question: **is there a screen?**
+
+**Headless** is what the port was for its first weeks and what a board
+in a cupboard is for ever. No HDMI or DSI panel on a Pi; no
+`-device ramfb` under QEMU. The machine boots to a shell on the serial
+console with the full namespace; brings up Ethernet by DHCP (and Wi-Fi
+and Bluetooth if the card says to); mounts the card and takes its
+userspace from it, so every command in `dis/` is there; and listens on
+the network console if the card has a `netconsole` file. The boot script
+says one line —
+
+    boot: no display -- running headless; not starting the desktop. This console is the machine's shell.
+
+— and starts nothing else. A headless machine is administered over the
+serial line, the network console, or whatever it is told to serve: it is
+an Inferno system, so `listen`, `styxlisten` and `mount` are how it
+offers and takes services. Nothing about it is degraded.
+
+**With a desktop**: a screen is present, so the same boot goes on to
+`wm/logon` (or straight past it, with `skiplogon`) and the Lucia
+desktop. The serial console is *still* a shell with the full namespace —
+the desktop runs in a narrowed copy (section 6) — so a machine with a
+desktop is a headless machine with a desktop as well.
+
+With **no card at all** either kind still boots, to the recovery root
+compiled into the kernel: a shell, the file utilities, the network. That
+is what the image carries them for.
+
+## 2. Building
+
+There is one supported way to build the kernel, and it is the test
+harness: it generates headers with the Limbo compiler, compiles the
+Limbo that goes in the image, builds the root filesystem, and refuses to
+leave a stale image behind a failed build.
+
+    export ROOT=$PWD
+    export PATH=$ROOT/<SYSHOST>/<OBJTYPE>/bin:$PATH      # the native mk and limbo
+    for d in appl appl/mpeg appl/veltro tests; do (cd $d && mk install); done
+
+    BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
+
+| variable | |
+|-|-|
+| `BAREMETAL_BUILD_DIR=dir` | keep the artefacts there (otherwise a temp dir, deleted) |
+| `BAREMETAL_PLATFORMS="bcm2837 virt bcm2711"` | which machines; the default is all three. Name one to work on it. |
+| `BAREMETAL_BUILD_ONLY=1` | stop after the link; boots nothing, so needs no QEMU (the release job builds the Pi kernels this way) |
+| `EXTRACFLAGS=-D…` | extra compiler flags for an experiment, without editing anything |
+
+It needs `clang` (any; it is asked for `--target=aarch64-elf`), `ld.lld`,
+`llvm-objcopy`, `llvm-ar`, `python3`, the native `limbo`, a built `dis/`
+(all four directories above — the image takes a module from `tests/`),
+and `qemu-system-aarch64`. **If clang, lld or QEMU is missing the harness
+skips and exits 0**: a run that says nothing about the kernel means the
+toolchain was not found, not that everything passed.
+
+What it leaves in the build directory:
+
+| file | |
+|-|-|
+| `bcm2837-kernel.img`, `virt-kernel.img` | the kernels |
+| `*-kernel.elf` | the same, with symbols: `llvm-nm -n` or `addr2line` turns a panic's addresses into names |
+| `bcm2837-nojit.img` | the Pi kernel with the JIT off, for comparison |
+| `cc.log` | every compiler, linker and tool diagnostic |
+| `*-boot.txt`, `*-full.txt`, `*-desktop.txt`, `*.ppm` | serial logs and screens from the boots it made |
+
+The bcm2837 half takes 18–35 minutes depending on the machine; the virt
+half four to twelve. **CI runs both**, a job each, on every pull request
+that touches the kernel, its libraries, the harness or the image tools
+(`.github/workflows/baremetal.yml`). Because the harness skips when its
+tools are missing, the jobs do not trust its exit status: they require
+zero skipped, a floor on the number passed, and a named check near the
+end of each machine's list.
+
+## 3. Running it under QEMU
+
+### `virt` — the quick way to a desktop
+
+    # a card: the trees a Pi's card holds, as a FAT32 image. No root, no mtools.
+    # 256: virt takes any size, but QEMU's SD card model (raspi3b, below)
+    # refuses one that is not a power of two.
+    printf 'local\n' > /tmp/rootpath;  : > /tmp/skiplogon
+    tools/mkcard.py card.img 256 /dis=dis /lib=lib /fonts=fonts /icons=icons /usr= \
+        /rootpath=/tmp/rootpath /skiplogon=/tmp/skiplogon
+
+    qemu-system-aarch64 -M virt -cpu cortex-a53 -smp 4 -m 1024 \
+        -kernel /tmp/bm/virt-kernel.img -serial stdio \
+        -device virtio-rng-device \
+        -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+        -drive file=card.img,if=none,format=raw,id=sd -device virtio-blk-device,drive=sd \
+        -device ramfb -device virtio-keyboard-device -device virtio-tablet-device
+
+A window opens on the Lucia desktop in under a minute, and the terminal
+you started QEMU from is the serial console — a root shell, the whole
+time. Leave `skiplogon` out for the login screen.
+
+**Headless**: use `-nographic` in place of `-serial stdio` and drop the
+last line (`Ctrl-A x` quits). Same kernel, same card; it notices there
+is no screen and boots to the shell and the network. Drop the `-drive`
+line as well and it boots from the recovery root alone — the fastest way
+to a prompt there is.
+
+Each of those flags matters and most fail silently when wrong;
+`os/virt/README.md` has the table. The two that catch everyone:
+**`-cpu cortex-a53`** (without it `-M virt` is a 32-bit CPU and prints
+nothing at all) and **`-kernel …img`, not `.elf`** (QEMU passes the
+device tree only to a flat image).
+
+### `raspi3b` — QEMU's model of the board
+
+    qemu-system-aarch64 -M raspi3b -kernel /tmp/bm/bcm2837-kernel.img \
+        -display none -serial null -serial stdio \
+        -netdev user,id=n0 -device usb-net,netdev=n0 \
+        -drive file=card.img,if=sd,format=raw
+
+The same card comes up in the same desktop, at 640x480 (QEMU's default
+framebuffer for this machine); drop `-display none` to see it.
+
+**Two `-serial`s**: the first is the PL011, which on a Pi 3 belongs to
+the Bluetooth radio; the console is the second, the mini-UART. With one
+`-serial stdio` the machine appears to hang. The card image must be a
+power of two in size. QEMU 6.2 does not pass `-append` to this machine
+and fails checks for that alone; CI passes every check on 8.2.2, and 9.2
+is what the port is developed against.
+
+### Debugging a boot
+
+`-s -S` halts before the first instruction with a GDB stub on `:1234`:
+
+    lldb /tmp/bm/virt-kernel.elf -o 'gdb-remote 1234' -o 'breakpoint set --name kmain' -o continue
+
+A panic prints a register dump and return addresses;
+`llvm-nm -n the.elf` finds the functions. **Symbolise against the ELF of
+the kernel that actually ran** — reading one build's addresses against
+another's symbols has produced confident wrong answers here more than
+once.
+
+## 4. Putting it on a Raspberry Pi 3B+
+
+**The quick way** is a release's image for the board,
+`infernode-<version>-rpi3bplus.img.xz` (or `-rpi4b`), written to a card
+whole: Raspberry Pi Imager's "Use custom" (with its OS customisation
+left off: nothing here reads it), `dd`, or Etcher. It is everything
+below, the radio's Wi-Fi firmware and Bluetooth patch included (in
+`firmware/`, with their licence: the Pi card images are the one release
+that carries them, because they are the one that runs on a Cypress
+radio). To make one from your own tree,
+build the kernel (section 2) and
+
+    tools/mkpiimage.sh rpi3bplus /tmp/bm/bcm2837-kernel.img card.img     # or rpi4b, bcm2711-kernel.img
+
+which fetches the boot, Wi-Fi and Bluetooth firmware, pinned by
+`tools/pi-bootfw-manifest.txt`, `tools/pi-firmware-manifest.txt` and
+`tools/pi-btfw-manifest.txt`, and
+puts on the card only the files of `lib/`, `fonts/` and `icons/` that
+git tracks. `.github/workflows/release.yml` (`raspberry-pi`) makes the
+release's two this way, and checks each before it ships, as a board
+would take it: `tools/piromcheck.py` reads it as the boot ROM and
+firmware do (the boot files by their FAT short names, `config.txt`'s
+load-bearing lines), and `tests/host/piimage_boot_test.sh` boots it
+under QEMU to the login screen. `baremetal.yml` does the same on every
+change to the kernel or the card tools. Run them on a card of your own
+the same way:
+
+    python3 tools/piromcheck.py rpi3bplus card.img
+    sh tests/host/piimage_boot_test.sh rpi3bplus card.img /tmp/bm/bcm2837-kernel.img
+
+What follows is what is on such a card, for making or changing one by
+hand.
+
+The card is FAT32, partition at sector 2048 (what every imaging tool
+makes). On it:
+
+**From Broadcom** (not in this tree): `bootcode.bin`, `start.elf`,
+`fixup.dat`, and `LICENCE.broadcom` with them.
+`tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt DIR` fetches
+the pinned ones into `DIR/firmware/`.
+
+**`config.txt`** — exactly `os/bcm2837/card/config.txt`:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=infernode8.img
+    cmdline=cmdline.txt
+    max_framebuffers=2
+    core_freq=250
+    core_freq_min=250
+
+    [tryboot]
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+
+`tryboot.cmd` (`os/bcm2837/card/tryboot.cmd`) holds the single word
+`tryboot`. `max_framebuffers=2` lets
+the firmware offer a second display (the panel and HDMI together;
+[Displays](#displays), below); without it there is one, whatever is
+plugged in. `core_freq` and `core_freq_min` hold the VPU core clock
+still. The console is the mini-UART, whose baud divisor the kernel
+computes once, at boot, from the core rate the firmware reports; a
+clock that moves afterwards moves the baud with it. Older firmware
+held the clock with `enable_uart=1` alone (at 400 MHz on the bench
+board); the firmware this card is made with (`raspberrypi/firmware`
+1.20260915) reported 250 MHz at boot and then ran the core at about
+400, so the console came out at about 184,000 baud, unreadable at
+115200, and the shell on it could not be reached. FAT short names
+matter here too: the 3B+'s boot ROM reads only those, and finds
+nothing unless `bootcode.bin`'s is `BOOTCODE.BIN` (`tools/mkcard.py`
+writes it so). `cmdline.txt` may be empty
+or absent. Do **not** add `dtoverlay=disable-bt`: the PL011 is the
+radio's now.
+
+**And a `tryboot.txt`.** After a tryboot reset the firmware cards are
+made with (`raspberrypi/firmware` 1.20260915) reads `tryboot.txt`
+*instead of* `config.txt`, and never consults the `[tryboot]` section:
+without the file the reset is acknowledged and the ordinary kernel
+boots, so a candidate silently never runs (a release card on the bench
+3B+, 2026-10-28). The section stays for firmware that does honour it.
+It is `os/bcm2837/card/tryboot.txt`: `config.txt` with the two tryboot
+lines in place of the kernel's, and no section:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+    max_framebuffers=2
+    core_freq=250
+    core_freq_min=250
+
+**The kernel**: `bcm2837-kernel.img`, on the card as **`infernode8.img`**.
+
+**Userspace**, from a built tree: `dis/`, `lib/`, `fonts/`, `icons/`, and
+`usr/inferno` (the machine's writable home: secstore accounts,
+keyrings). It must exist: the first boot makes its secstore account in
+`usr/inferno/secstore/`. `mkpiimage.sh` copies the tree's, profile and
+plumbing and all, but not `usr/inferno/keyring/default`, which is a
+test key and would otherwise be the same key on every card.
+
+**Radio firmware**, if you want Wi-Fi: `tools/pi-firmware.sh` fetches the
+three `brcmfmac43455-sdio.*` files, checks them against pinned SHA-256s
+(`tools/pi-firmware-manifest.txt`) and puts them in `firmware/`; their
+licence, `os/bcm/card/LICENCE.cypress`, goes beside them. Bluetooth
+also wants `firmware/BCM4345C0.hcd`: `tools/pi-firmware.sh --manifest
+tools/pi-btfw-manifest.txt CARDROOT` puts it there, under the same
+licence.
+
+**Control files**, all optional: section 5.
+
+You need a **3.3 V USB-serial cable on GPIO 14/15** (115200 8N1). The
+console is mirrored to HDMI once the framebuffer is up, but everything
+before that, and every panic, is on the serial line only.
+
+### And on a Raspberry Pi 4B
+
+The same card, four differences (the firmware, `config.txt`,
+`tryboot.txt`, the kernel), and a page of what the boot says. Written
+from the QEMU model and the datasheets before any Pi 4 had run it, and
+checked line by line against the first board on 2026-10-15;
+`os/bcm2711/README.md` has what that board showed.
+
+**From the Raspberry Pi firmware repository** (the same manifest):
+`start4.elf` and `fixup4.dat` (the `4` variants; a Pi 4 boots from an
+EEPROM and ignores `bootcode.bin`), and `bcm2711-rpi-4-b.dtb`. The kernel reads no device
+tree — it asks the firmware's mailbox for everything — but the firmware
+wants the file there.
+
+**`config.txt`** — `os/bcm2711/card/config.txt`, the 3B+'s with the
+same words meaning the same things:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=infernode8.img
+    cmdline=cmdline.txt
+    max_framebuffers=2
+    arm_boost=1
+    core_freq=500
+    core_freq_min=500
+
+    [tryboot]
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+
+`arm_boost=1` is the one line the 3B+ does not have: it lets a board
+that can (revision 1.4 and later, C0 silicon) run at 1800 MHz instead of
+1500 -- about 20% on compute-bound code, measured on a rev 1.5 board; the
+kernel asks for the maximum the firmware reports, so the boot log's
+`mbox: ARM clock ... max` line says which it got. Its fan or heatsink is
+the board owner's business.
+
+**And a `tryboot.txt`**, as on the 3B+. On a
+Pi 4 a tryboot reset is handled by the boot EEPROM, which then reads
+`tryboot.txt` *instead of* `config.txt`; the `[tryboot]` section above
+is never consulted. Without the file the reset is acknowledged and the
+ordinary kernel boots, so a candidate silently never runs (seen on the
+bench board, rev 1.5). It is `os/bcm2711/card/tryboot.txt`: `config.txt`
+with the two tryboot lines in place of the kernel's:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+    max_framebuffers=2
+    arm_boost=1
+    core_freq=500
+    core_freq_min=500
+
+Keep the `[tryboot]` section in `config.txt` anyway: it is harmless here
+and it is what a card moved to a 3B+ needs.
+
+Do **not**
+add `enable_gic=0` — the kernel's interrupt controller is the GIC, and
+that line would hand it the 3B+'s instead — and do not add
+`dtoverlay=disable-bt`, for the 3B+'s reason. `core_freq` is pinned
+for the 3B+'s reason as well: the console is the mini-UART here too, and
+its divisor comes from the core rate read once at boot. 500 MHz is the
+rate the Pi 4 bench board's console has always reported, so it is the
+one pinned.
+
+**The kernel**: `bcm2711-kernel.img`, on the card as `infernode8.img`.
+Not the 3B+'s: its peripherals are at another address, and a
+`bcm2837-kernel.img` on a Pi 4 prints nothing at all.
+
+**Power**: a USB-C supply that can give 3 A. The serial cable, the
+userspace trees, the radio firmware and the control files are the 3B+'s.
+
+**The first boot, on the serial line.** In order, and what each line
+settles:
+
+| line | settles |
+|-|-|
+| `InferNode bare-metal (BCM2711 / Raspberry Pi 4B)` | the kernel image, `arm_64bit=1`, and the peripheral address |
+| `mbox: board rev …, ARM memory …` | the mailbox, at its new address |
+| `mbox: ARM clock 600 MHz, max 1800, now 1800 MHz` | the clock request: 1800 on a rev 1.4+ board with `arm_boost=1`, 1500 without it or on an earlier board |
+| `mmu:  on, caches on, identity map 0-4096MB` | the page tables, including the PCIe window 24 GB up |
+| `intr: device interrupt delivered` (the system timer, first try) | the interrupt numbers in `io.h`. If only the GIC's self-test passes, they are wrong |
+| `cpu1: up` … `cpu3: up` | the firmware's spin table is where QEMU's is |
+| **no** `NO RNG200 AT ITS ADDRESS` (a working generator says nothing) | the RNG200's address and layout |
+| `sd: … EMMC2` and **not** `no card on the board's SD controller` | the card controller and its clock id |
+| `ether4330: …` on the Arasan | the radio has its own controller, as intended |
+| `genet: rev 0x6…, xx:xx:… is #l (ether0)` | the MAC exists and answers; `genet: link up, 1000Mbit/s` is the PHY |
+| `pci: bcmstb bridge revision …`, a bus listing with `1106 3483`, `pci: … VL805 firmware reload requested` | the PCIe link came up and the VL805 is on it |
+| `usbxhci: PCI.1.0.0: 1106:3483 registers at …` then `init: USB ep3.0 0x2109:0x3431 class 9 (hub)` | the USB-A sockets, behind the VL805's own hub. The USB-C port is `ep1.0` |
+| `boot OK` | everything else |
+
+A line that says **NO** in capitals is the kernel finding the emulator
+where it expected the board; on a board, each is a bug in this tree, and
+the README says where to look. On the first board every line above
+appeared as written except `sd:`, which said `card will not go idle`
+until the EMMC2's bus power was switched back on after its reset.
+
+**Memory**: a 2 GB or 4 GB board is used entirely; an 8 GB board's top
+half is not (`RAMLIMIT`). **Displays**: [below](#displays); the short
+version is that with the 7" panel attached a monitor belongs on HDMI0,
+the socket beside the USB-C.
+
+### Displays
+
+The firmware decides what is a display, **once, at power-on**, and the
+kernel takes what it is offered (`fb:   displays: N` in the boot log).
+So plug screens in before power-on, and restart after moving a cable.
+
+| attached at power-on | display 0 (console, then login and desktop) | display 1 |
+|-|-|-|
+| the 7" DSI panel | the panel | -- |
+| a monitor alone | the monitor (on a Pi 4, tried on HDMI1) | -- |
+| the panel and a monitor on **HDMI0** | the panel | the monitor: the boot console, mirrored, until the desktop starts; then it keeps the last text shown |
+| the panel and a monitor on **HDMI1** (Pi 4) | the panel | none: the firmware reads the monitor's EDID but offers one display, with `max_framebuffers` 2 or 3 |
+| either, with `ignore_lcd=1` in `config.txt` | the monitor | -- |
+
+- **The panel is the main screen whenever it is attached**, so a board
+  with a panel and a monitor shows login on the panel. To have the
+  desktop on the monitor instead, add `ignore_lcd=1`; the panel then
+  stays dark.
+- **A second display needs `max_framebuffers=2`**, which both
+  `config.txt`s above carry. Without it the firmware offers one.
+- **A monitor plugged in after power-on** is brought up as display 1 if
+  the firmware counted two displays at boot and the desktop has not
+  started yet (the kernel stops looking once it has). Otherwise nothing
+  happens until a restart -- a monitor showing "no signal" after being
+  moved between ports is this, not a fault.
+- **The size** is whatever the firmware negotiated with the screen: the
+  panel is 800x480; the bench's monitor came up at 1024x768 on either
+  port.
+- **The desktop is on display 0 only.** Display 1 mirrors the text
+  console; drawing the desktop on both is not done.
+
+Measured on a Pi 4B rev 1.5 with the official 7" panel, 2026-10-15. The
+3B+ runs the same code (`os/bcm/board.c`, `os/bcm/fb.c`) and has one HDMI
+socket. The bench 3B+ shows the panel-only row; no capture of it with a
+monitor attached exists, so its HDMI rows are expected, not observed.
+
+### Changing the kernel without pulling the card
+
+Never overwrite `infernode8.img` in place; it is the kernel you know
+works. Install a **candidate** instead:
+
+    cp /n/remote/new-kernel.img /n/dos/tryboot.img      # however it gets there
+    echo tryboot > /dev/sysctl
+
+The firmware boots `tryboot.img` **once**. The candidate arms a 90-second
+hardware watchdog before doing anything slow; `osinit` releases it when a
+shell can be typed at. It then prints what to do:
+
+    mv /n/dos/tryboot.img /n/dos/infernode8.img     # keep it
+    echo reboot > /dev/sysctl                       # or reject it
+
+A candidate that panics or hangs is reset, the firmware's one-shot flag
+is spent, and the machine comes back on `infernode8.img`. (`cp
+/dev/bootimage /n/dos/tryboot.img` installs the *running* kernel — that
+is how a kernel loaded over the serial line gets onto the card.)
+
+What this rests on that only hardware can show — the firmware honouring
+the flag, the watchdog actually counting — is discussed in the journal
+under "Working on the board without moving the card". If a boot that
+should have been a candidate says `wdog: not armed`, put `bootwatchdog`
+in `cmdline.txt`.
+
+## 5. Files on the card that control the machine
+
+The card is mounted at `/n/dos`. Policy is **data on the card, never the
+build**: the same kernel image is a thin client, an autonomous node or a
+bench machine depending on what these say. All are optional.
+
+| file | format | effect |
+|-|-|-|
+| `rootpath` | lines: `local`, or `net tcp!host!port` | Where userspace comes from, applied top to bottom. `local` unions the card's `dis/ lib/ fonts/ icons/` *after* the kernel's recovery root and binds `usr/` writable over `/usr`. `net …` mounts a Styx server (**no authentication**) on `/n/remote` and does the same from there. Absent = `local`. |
+| `skiplogon` | existence only | The desktop starts without `wm/logon`, factotum or secstore. Keys will not persist. Delete it for the login screen. |
+| `wifi` | `essid <name>` and `password <phrase>`, one per line; the value is the rest of the line | Join at boot, before anyone logs in. **The card is FAT: no permissions, and this is a passphrase in clear text.** Absent = the radio is left alone. |
+| `bt` | one `/net/bt` ctl line per line (`#` comments). Typically `firmware /n/dos/firmware/BCM4345C0.hcd`, `up`, `name …`, `pairable on`, `discoverable on`, `baud 3000000` | Bluetooth, via `bt9p` on `/dev/eia0`. `firmware` must precede `up`; `baud` follows it (115200 without it: about 94 kbit/s). Absent = no Bluetooth. See [BLUETOOTH.md](BLUETOOTH.md). |
+| `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
+| `netconsole` | first line: empty, or a token; a later line `interface ether0` (recommended) | A shell on **TCP 17010**, section 7. With `interface`, only connections arriving at that interface's addresses are served; without it, every interface, Wi-Fi included. Absent = off. |
+| `cpulisten` | empty, or an address (`tcp!*!17030`) on the first line | The remote-desktop listener: `cpu(1)` from another InferNode runs programs here that draw on its screen, authenticated by certificate and encrypted (AES-256). Needs this machine's certificate in `usr/inferno/keyring/default`, or it refuses to start. Runs in the desktop's narrowed namespace, headless or not. Empty = `tcp!*!rstyx` (6668). Absent = off. See [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). |
+| `usbquirks` | one line per USB pointer or keyboard that needs it: `vid:pid word…`, the IDs in hex as the boot log prints them (`0eef:0005`). Words: `swapxy`, `invertx`, `inverty` (a touchscreen mounted turned or mirrored), `boot` (ignore the report descriptor and use the boot protocol), `report` (a keyboard: read its reports by its descriptor even though it has a boot protocol — every key at once on an n-key-rollover board, not six), `ignore` (no driver at all) | How `mouseusb` and `kbdusb` treat that device. `mouseusb` reads every pointer's own report descriptor, so a mouse, a tablet and a touchscreen that calls itself a mouse all work without an entry (#927). `kbdusb` reads a keyboard with the boot protocol when it has one and by its report descriptor when it has not, so this is only for a boot keyboard whose reports are wanted. `kbdusb=report` on the kernel's command line does that for every keyboard. Absent = no exceptions. |
+| `firmware/` | | Radio firmware, as above. |
+| `infernode8.img`, `tryboot.img`, `tryboot.cmd` | | The kernel, a candidate, and the word `tryboot` — section 4. |
+
+### The kernel command line
+
+`cmdline.txt` on the Pi; `-append "…"` under QEMU. Whole words only. It
+can be read back from `/dev/bootargs`.
+
+| word | |
+|-|-|
+| `tryboot` | this boot is the candidate: arm the boot watchdog. (The firmware supplies it, from `tryboot.cmd`.) |
+| `bootwatchdog` | arm the watchdog on an ordinary boot too |
+| `nowatchdog` | never arm it; wins over the others |
+| `wdogtest` | arm it and ignore the release, to watch the reset happen |
+| `fb=WxH` | (virt) the screen size; default 1280x720 |
+
+Nothing else is consulted. In particular which SD controller is used is
+a build-time choice (`-DSDCARD_ARASAN`), not a word here.
+
+## 6. What happens at boot
+
+**`kmain`** (`os/arm64/main.c`): console; exception vectors; read the
+command line and arm the watchdog if asked; MMU and caches; allocators;
+interrupt controller; clock; process table; **a battery of self-tests**
+(allocator, locks, channels, timer, a device interrupt, a three-second
+wait for a keypress on the UART — they cost about four seconds and are
+all asserted by the harness); framebuffer; the card and network devices;
+the secondary cores; the Dis VM, running `/osinit.dis`.
+
+**`osinit`** (`os/init/osinit.b`), in order: a few more self-checks (the
+kernel image's SHA-1, GPIO, every core ticking, a JIT stress run) → bind
+`#I #p #e #u #s #A` → loopback → **read the card's partition table, name
+the partitions to `#S`, start `dossrv`, mount `/n/dos`** → apply
+`rootpath` → hand the Wi-Fi firmware to the radio → an 8 MB memory
+filesystem on `/tmp` → `wifi` → `bt` → the touch panel → a kernel network
+card, if there is one (virt) → *spawn* the USB bus walk (keyboard, mouse,
+Ethernet arrive when they arrive) → *spawn* the network console → tell
+the kernel `booted` → **`sh -l` on the serial console.**
+
+**`/lib/sh/profile`** (`os/init/profile`): `load std`; start
+`auth/secstored`; run `/lib/lucifer/boot-baremetal.sh` in the
+background, so the serial console stays an interactive shell.
+
+**`boot-baremetal.sh`**: fork the namespace and **take the raw card, the
+GPIO pins, `/dev/sysctl` and `/dev/hostowner` out of it** — then check
+that they are really gone, and refuse to start the desktop if not. Then
+ask the draw device whether there is a screen: **if not, say so in one
+line and stop — the machine is headless.** Otherwise `wm/logon` (three
+attempts; or `skiplogon`), `luciuisrv`, `lucifer`.
+When the desktop exits the machine is still up: its `/dev/sysctl` is
+null, so it cannot halt the board. The serial console can.
+
+## 7. Getting at a running machine
+
+**The serial console** is a shell with the full namespace, always.
+
+**The network console**: create `/n/dos/netconsole` and connect to TCP
+**17010**. An empty file means **no token — anyone who can reach the
+port gets a shell**, and the boot log says so loudly. With a first line,
+that line is a token: the server prompts `token: ` and drops a wrong
+answer before giving it anything. The token crosses the network in the
+clear; it stops a port scan and a curious neighbour, nothing more. Each
+connection gets its own forked namespace and a plain `sh` (no profile,
+so `load std` yourself); a mount made in a session dies with it.
+At most four token checks may be in progress, and a caller that does not
+finish the token line within 15 seconds is disconnected and releases its
+slot. A fifth pre-token connection receives `busy` and is closed. At most
+eight token attempts enter this path per second, and comparison does fixed
+work across the full bounded input rather than stopping at the first mismatch.
+
+**Keep it to the wire.** The console is a full-power shell behind a
+cleartext token, so anyone who can see the traffic can take the
+machine. The recommended file is
+
+```
+yourtoken
+interface ether0
+```
+
+With the `interface` line, the console serves only connections that
+arrive at `ether0`'s own addresses (the wired port; whatever DHCP gave
+it, checked per connection). A connection that reaches port 17010
+through the Wi-Fi is closed before it is asked for the token, and the
+refusal is logged on the serial console. Without the line the console
+answers on every interface, and the boot log says so and suggests the
+line. Put the machine's wired side on a network you trust, and use the
+radio for things that carry their own authentication and encryption —
+the remote desktop ([REMOTE-DESKTOP.md](REMOTE-DESKTOP.md)), for one.
+
+**A remote desktop**: with a `cpulisten` file and a certificate on the
+card, another InferNode runs `cpu` to get this machine's desktop in a
+window on its own screen — [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). It
+has the desktop's powers (no raw card, pins or sysctl), not the
+consoles'.
+
+**`/dev/sysctl`** (host owner only). Reading gives the version string.
+
+| write | |
+|-|-|
+| `reboot` | reset |
+| `tryboot` | reset into the candidate kernel (Pi); a plain reset (virt) |
+| `booted` | release the boot watchdog. `osinit` does this. |
+| `halt` | **resets after three seconds — it does not stop the machine** |
+| `panic` | panic, deliberately |
+| `console on` / `console off` | whether console text is also drawn on the screen |
+| `broken` / `nobroken` | keep broken processes for inspection, or not |
+
+**Debug keys** on the serial console: `Ctrl-T Ctrl-T` then
+
+| key | | key | |
+|-|-|-|-|
+| `?` | list these | `p` | processes |
+| `r` | reset, **from interrupt level** — works when the shell is dead | `m` | memory pools |
+| `q` | panic | `l` | main pool, by allocation site |
+| `S` | the screen, as shaded characters | `x` | xalloc |
+| `D` | the screen, as hex (slow) | `f` | open files of process 6 |
+| `\|` | toggle: one `Ctrl-T` suffices from now on | | |
+
+From a script: `printf '\x14\x14r' > /dev/ttyUSB0` reboots a board that
+no longer answers anything else.
+
+## 8. Devices
+
+Kernel devices (`#x`) and where they appear. "Pi" and "virt" say which
+kernel includes them (`os/<board>/devtab.c`).
+
+The ones that exist only in the native kernel have manual pages:
+`sd(3)`, `boot(3)`, `ether(3)`, `gpio(3)`, `bench(3)`, `touch(3)`, `camera(3)`; with
+`eia(3)`, `audio(3)`, `cons(3)`, `pointer(3)` and `draw(3)` for the rest.
+`osinit(8)` is the boot sequence and the card's control files as a
+reference page, and `mkcard(10.1)` the image tools. (`man 3 gpio` inside
+Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
+
+| | where | files | |
+|-|-|-|-|
+| `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags sysstat sysname user jit` … | both |
+| `#S` | `/dev` | `sdcard` (the whole device), `sdctl`, and one file per named range | both |
+| `#B` | `/dev` | `bootimage` (the running kernel, byte for byte), `bootargs` | both |
+| `#b` | `/dev` | `busec` — microseconds, for timing things honestly | both |
+| `#m` | `/dev` | `pointer` | both |
+| `#i` | — | the draw device. **Not bound at boot**: attaching it takes the screen from the text console. `bind '#i' /dev` when you mean it. | both |
+| `#l` | `/net/ether0` | `clone addr stats ifstats n/{data,ctl,type}` — wired Ethernet | both |
+| `#l1` | `/net/ether1` | the same, for Wi-Fi | Pi |
+| `#I` | `/net` | `tcp udp icmp ipifc iproute arp` … | both |
+| `#t` | `/dev` | `eia0 eia0ctl eia0status` (PL011), `eia1…` (mini-UART). Bound only when the card has a `bt` file. | both; virt has `eia0` only |
+| `#u` | `/usb` | USB endpoints | both; empty on virt |
+| `#seia` | `/dev` | `eiaU0 eiaU0ctl eiaU0status`, `eiaU1…`: USB serial adapters, served by `usbserial`. Bound at boot, empty until one is plugged in. | both |
+| `#G` | `/dev/gpio/N/` | `ctl` (`function in\|out\|alt0-5`, `pull up\|down\|none`, `edge rising\|falling\|both\|none`), `level`, `event` (blocks for an edge; `<µs> <level>`) | Pi |
+| `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
+| `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
+| `#V` | `/dev/camera/` | `ctl` (`source`, `mode W H`, `fps N`, `stream on\|off`; read for the state), `modes`, `frame` (one frame an open, an uncompressed `image(6)`), `raw` (the same, Bayer samples). Only the simulated sensor so far: a test pattern, as a Camera Module 3 would deliver it | both |
+| `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
+
+**The camera** (`os/port/devcam.c`, infernode-os/infernode#1005) has one
+source so far, `test`: a simulated sensor (`os/port/campattern.c`) that
+makes raw 10-bit RGGB frames in the IMX708's binned modes — colour bars
+and a grey band that moves down four rows a frame — which the device
+debayers like any other. No emulator models a Pi camera, so this is what
+the device and everything above it are tested against until the Camera
+Module 3's driver adds a `csi0` source beside it:
+
+    echo mode 640 480 > /dev/camera/ctl
+    echo stream on > /dev/camera/ctl
+    cat /dev/camera/frame > /tmp/shot.bit
+    echo stream off > /dev/camera/ctl
+
+**`/dev/sdctl`** has one verb, `part <name> <startblock> <nblocks>`, which
+names a range of the device so that it appears as `/dev/<name>`; reading
+it lists them. The kernel parses no partition table — a partition table
+is data on the card, and `osinit` reads the MBR and writes those lines.
+
+**A USB disk** (a stick, a card reader, an external drive: mass storage,
+bulk-only, SCSI) is driven by `diskusb`, a program like the other USB
+class drivers, which serves the whole disk as one file, `/chan/usbdiskN`,
+and mounts its FAT partition on `/n/usbN` — **for init and the network
+console.** The console shell forked its namespace when it started, before
+any USB driver ran, so from it (or the desktop) the disk is mounted with
+one command on the block file, which is in every namespace:
+
+    dossrv -f /chan/usbdisk0 -m /n/usb0
+
+Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
+Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
+enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
+on this machine`) and left alone: the driver has run only under
+emulation, and a Pi 3 gets no new behaviour on that evidence.
+
+A **card reader** with several slots is one device with a logical unit per
+slot, and each unit with a card in it is a disk of its own: the next free
+`/chan/usbdiskN`, its FAT on `/n/usbN`, as a one-slot device's is (whose
+name is unchanged: a stick is still `usbdisk0`). An empty slot is watched
+and served when a card goes in; a card taken out makes its file fail until
+one is back, and one put back is read again under the same name. The root
+carries `/n/usb0` to `/n/usb3`, so four FAT volumes are mounted at once; a
+fifth disk is its block file only. Tested on QEMU's `usb-bot` with three
+units (two disks and an empty slot that a medium is put into, taken out of
+and put back into); not yet on a real reader.
+
+**A USB serial adapter** is a port like the board's own, `eia(3)` and
+all: `usbserial` serves it as `/dev/eiaU0`, `eiaU0ctl` and `eiaU0status`
+(the next one `eiaU1`), so a program written for `/dev/eia0`, here or on
+a hosted emulator, works on it unchanged.
+
+    echo b115200 l8 pn s1 > /dev/eiaU0ctl
+    cat /dev/eiaU0 &
+    echo 'hello' > /dev/eiaU0
+    cat /dev/eiaU0status
+        b115200 c0 d1 e0 l8 m0 pn r1 s1 i0
+        dev(U0) type(usb-ftdi) 0x0403:0x6001 framing(0) overruns(0) parity(0) breaks(0) rx(6) tx(6) CTS DSR
+
+The second status line names the adapter and lists the modem inputs that
+are up (`CTS DSR DCD RING`). Three kinds are driven:
+
+- **CDC-ACM**, the USB standard: microcontroller boards (Pico, Arduino,
+  STM32), GPS receivers, modems. It has no CTS and no flow control of its
+  own; DCD, DSR and RI come from its notification endpoint.
+- **FTDI** (FT232R/BM, FT2232, FT4232, FT232H): every `ctl` verb, RTS/CTS
+  and XON/XOFF flow control included.
+- **CP210x** (Silicon Labs): every verb but `x1`.
+
+A port starts at 9600 8N1 with DTR and RTS up, which is what boards that
+wait for DTR before they talk need; one `ctl` write of several settings
+changes the line once. Pulling the adapter hangs up its readers and takes
+the files away. Only on xHCI machines for now, as with disks: a Pi 3
+names the adapter (`is a USB serial port; usbserial is not started on
+this machine`) and leaves it. Not done: CH340 and PL2303, the same name
+for the same adapter after a re-plug (the first free number is taken),
+and exclusive open.
+
+**A USB Ethernet adapter** is driven by `etherusb`, which reads every
+configuration the device has and takes the best function in them:
+**CDC NCM** (newer adapters, phones, a Linux gadget), then **CDC ECM**
+(most adapters, and QEMU's `usb-net`), then **RNDIS**; the LAN78xx (the
+3B+'s own) is recognised by its vendor. `etherusb=rndis` (or `ecm`,
+`ncm`) on the kernel's command line puts one first. The adapter is
+`/net/ether0` on a board whose Ethernet is USB (the 3B+), and on one
+whose `ether0` is a kernel driver — a Pi 4's GENET, virt's virtio --
+the first spare, `/net/ether2`. A second interface gets its own
+network's address by DHCP but leaves the default route and name servers
+where they are, so plugging a phone or a gadget into a Pi 4 does not
+take it off its own network. Not done: link state from ECM's and NCM's
+notification endpoint (the link is taken to be up), and a composite
+device that is a disk as well as an adapter (the Jetson's stock gadget):
+each driver wants the control endpoint, which is exclusive-open, so such
+a device is left to `diskusb`; one with Ethernet and a serial port gets
+Ethernet only.
+
+## 9. Testing
+
+| | what it proves | where it runs |
+|-|-|-|
+| `tests/host/baremetal_test.sh`, bcm2837 half (≈260 checks; **CI**) | the Pi kernel against QEMU's `raspi3b`: boot, SMP, JIT, USB hot-plug, the SD controllers, dossrv on FAT16/32, DHCP/TCP over emulated USB Ethernet, framebuffer by screendump, keyboard and mouse by QMP, tryboot, the kernel installing itself | anywhere with QEMU 8.2 or later |
+| …virt half (≈100 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucia desktop from a card**; and USB on xHCI over PCI — a hub, keyboard, mouse, Ethernet, a disk, an audio device's isochronous stream, hot-plug, MSI | anywhere with QEMU; **CI** |
+| `tests/acceptance/*.py` | the *board*, as a peer to standard tools on a Linux tester: RFC 2544-style Ethernet, Bluetooth PTS cases, hostap-style Wi-Fi scenarios, a GPIO loopback jig. See its [README](../tests/acceptance/README.md). | a bench with a Pi on it |
+
+What QEMU cannot show is a long list — caches, DMA coherence, real USB
+timing, a watchdog that counts, a radio — and it is why there are three
+rows and not one. A change that passes the first two has been proved
+for software.
+
+And what QEMU shows *wrongly* is a shorter list, kept in
+`tests/host/qemu/` as patches CI applies to the QEMU it builds: so far
+one, the Pi's USB controller model servicing a channel the kernel has
+halted, which lost the DHCP OFFER on most boots. A distribution's QEMU
+lacks them, and the harness requires only what holds without them
+unless `BAREMETAL_QEMU_PATCHED=1` says otherwise.
+
+## 10. What an operator should know is not done
+
+- **Every process is the host owner.** The desktop's namespace no longer
+  holds the raw card, the pins or `/dev/sysctl`, but there is no
+  unprivileged user yet.
+- **`/n/dos` is read-write inside the local desktop**, because Inferno has
+  no read-only bind on this kernel: a local desktop program can still
+  overwrite the kernel it booted from through the filesystem. Authenticated
+  `cpu` sessions remove this mount and the server's `/usr` mount, mask both
+  factotum locations, then enable `NODEVS` before their command.
+- **The network console's token is sent in clear**, and `rootpath net`
+  mounts without authentication.
+- **No DHCP lease renewal** (`os/init/etherusb.b`). The link is polled:
+  when it drops the address goes, and when it returns DHCP runs again;
+  the Wi-Fi supplicant stays running and re-joins.
+- **Logon and secstore are exercised only on the board** — the QEMU
+  desktop check uses `skiplogon`.
+- **The tryboot firmware handshake and the watchdog's countdown** are
+  things QEMU models neither of.
+- **USB storage and USB serial** (`diskusb` and `usbserial`, section 8) run only on xHCI machines (virt, Pi 4); a Pi 3 enumerates such a device and leaves it alone. **The Pi 4** (`os/bcm2711`) is built and booted under QEMU's `raspi4b` in CI; see [os/bcm2711/README.md](../os/bcm2711/README.md).
+- Not started: an audio or HDMI acceptance battery.
+- On virt only: KVM untried. USB there is xHCI on the PCI bus and optional (`-device qemu-xhci`).

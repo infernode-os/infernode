@@ -1,0 +1,13 @@
+# What a 3B+'s firmware reads instead of config.txt after a tryboot
+# reset: config.txt with the kernel and command line of the candidate.
+# The firmware cards are made with (raspberrypi/firmware 1.20260915)
+# acknowledges the reset and ignores config.txt's [tryboot] section.
+# docs/BAREMETAL.md, section 4.
+arm_64bit=1
+enable_uart=1
+init_uart_clock=48000000
+kernel=tryboot.img
+cmdline=tryboot.cmd
+max_framebuffers=2
+core_freq=250
+core_freq_min=250

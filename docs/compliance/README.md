@@ -14,7 +14,7 @@ The companion documents are:
 
 - [`../security-standards-roadmap.md`](../security-standards-roadmap.md) — the
   aspirational standards list and the Inferno-native mechanism for each.
-- [`../security-epics.md`](../security-epics.md) — the same, decomposed into Jira epics.
+- [`history/security-epics.md`](../history/security-epics.md) — the same, decomposed into Jira epics.
 
 This register is the *evidence* side of those two; the roadmap is the *intent* side.
 

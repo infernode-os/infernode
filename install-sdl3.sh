@@ -8,7 +8,7 @@ set -e
 echo "=== Installing SDL3 build dependencies ==="
 sudo apt-get install -y cmake ninja-build git \
     libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
-    libwayland-dev libxkbcommon-dev libegl-dev libgles-dev \
+    libwayland-dev libxkbcommon-dev libegl-dev libgles-dev libdecor-0-dev \
     libxtst-dev libdrm-dev libgbm-dev
 
 echo ""
@@ -30,7 +30,16 @@ if [ "$ACTUAL_COMMIT" != "$SDL3_COMMIT" ]; then
   echo "ERROR: SDL3 commit mismatch (expected $SDL3_COMMIT, got $ACTUAL_COMMIT)"
   exit 1
 fi
-cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr/local
+# Wayland compositors that draw no window decorations (GNOME's mutter)
+# leave them to the client: SDL draws them with libdecor, loaded at run
+# time, so a build without it gives a window with no title bar there,
+# which cannot be moved, maximised or made full screen with the mouse.
+cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DSDL_WAYLAND_LIBDECOR=ON -DSDL_WAYLAND_LIBDECOR_SHARED=ON
+if ! grep -qs 'define HAVE_LIBDECOR_H 1' build/include-config-*/build_config/SDL_build_config.h; then
+  echo "ERROR: SDL3 configured without libdecor (install libdecor-0-dev)"
+  exit 1
+fi
 ninja -C build
 
 echo ""

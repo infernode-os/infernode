@@ -7,11 +7,13 @@ implement Wallet9p;
 # Uses factotum for private key storage, budget enforcement for safety.
 #
 # Filesystem layout:
-#   /n/wallet/
+#   /mnt/wallet/
 #       ctl          rw: global config ("limit <amount>", "default <name>")
 #       accounts     r:  newline-separated account names
 #       default      r:  default account name
 #       new          rw: write "eth base myaccount" → read account name
+#       pending      r:  payments awaiting approval
+#       event        r:  "pending" whenever that list changes (blocking)
 #       {name}/          per-account directory
 #           address  r:  public address
 #           balance  r:  balance (queries chain/API)
@@ -78,6 +80,7 @@ Qnew:      con 3;
 Qpending:  con 4;
 Qdefault:  con 5;
 Qnetwork:  con 6;
+Qevent:    con 7;
 # Per-account files start at 16
 Qacctdir:  con 16;
 Qaddress:  con 17;
@@ -103,13 +106,22 @@ MAXHISTORY: con 200;	# history entries kept per account
 PENDTTL:    con 900;	# seconds before an unapproved payment expires
 MAXPENDING: con 100;	# total pending-payment records kept
 
+# A reader of event: what it has not read yet, and its read if it waits.
+EvFid: adt {
+	fid:	int;
+	q:	list of string;
+	rd:	ref Tmsg.Read;
+};
+evfids: list of ref EvFid;
+evsrv: ref Styxserver;
+expirec: chan of int;	# a pending payment's time is up
+
 # Account state
 AcctState: adt {
 	id:         int;		# stable account id (survives list changes)
 	acct:       ref Wallet->Account;
 	history:    list of string;	# recent transactions
 	nhistory:   int;
-	requireapproval: int;		# 1 = require trusted approval for payments
 };
 
 # Pending payment (awaiting approval)
@@ -464,7 +476,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:init";
 	}
 
-	mountpt := "/n/wallet";
+	mountpt := "/mnt/wallet";
 	debug := 0;
 
 	arg := load Arg Arg->PATH;
@@ -491,6 +503,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Start debounced sync thread
 	initsyncthread();
 
+	expirec = chan[8] of int;
 	fds := array[2] of ref Sys->FD;
 	sys->pipe(fds);
 
@@ -533,7 +546,23 @@ readuser(): string
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 {
-	while((gm := <-tchan) != nil) {
+	evsrv = srv;
+	for(;;) {
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			;
+		id := <-expirec =>
+			# an unapproved payment left the list when its time ran out
+			if((pp := findpending(id)) != nil && pp.result == nil) {
+				checkpendingexpiry(pp);
+				if(pp.result != nil)
+					postevent("pending");
+			}
+			continue;
+		}
+		if(gm == nil)
+			break;
 		pick m := gm {
 		Readerror =>
 			return;
@@ -544,6 +573,8 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 				ft := FTYPE(c.path);
 				if(ft == Qnew)
 					setnewstate(m.fid, "");
+				if(ft == Qevent)
+					evfids = ref EvFid(m.fid, nil, nil) :: evfids;
 			}
 			srv.default(gm);
 
@@ -556,12 +587,62 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 		Clunk =>
 			delnewstate(m.fid);
 			delfidresult(m.fid);
+			delevfid(m.fid);
+			srv.default(gm);
+
+		Flush =>
+			for(el := evfids; el != nil; el = tl el)
+				if((hd el).rd != nil && (hd el).rd.tag == m.oldtag)
+					(hd el).rd = nil;
 			srv.default(gm);
 
 		* =>
 			srv.default(gm);
 		}
 	}
+}
+
+# Every reader of event is told; one not reading has it queued, once.
+postevent(msg: string)
+{
+	for(el := evfids; el != nil; el = tl el) {
+		ef := hd el;
+		if(ef.rd != nil) {
+			evsrv.reply(ref Rmsg.Read(ef.rd.tag, array of byte (msg + "\n")));
+			ef.rd = nil;
+		} else if(!inlist(msg, ef.q))
+			ef.q = appendstr(ef.q, msg);
+	}
+}
+
+appendstr(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
+}
+
+findevfid(fid: int): ref EvFid
+{
+	for(el := evfids; el != nil; el = tl el)
+		if((hd el).fid == fid)
+			return hd el;
+	return nil;
+}
+
+delevfid(fid: int)
+{
+	keep: list of ref EvFid;
+	for(el := evfids; el != nil; el = tl el)
+		if((hd el).fid != fid)
+			keep = hd el :: keep;
+	evfids = keep;
+}
+
+expirytimer(id: int)
+{
+	sys->sleep((PENDTTL + 1) * 1000);
+	expirec <-= id;
 }
 
 doread(srv: ref Styxserver, m: ref Tmsg.Read)
@@ -606,6 +687,17 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 			readstr(srv, m, ns.result + "\n");
 		else
 			readstr(srv, m, "");
+
+	Qevent =>
+		# a stream: each read is the next event, waited for
+		ef := findevfid(m.fid);
+		if(ef == nil)
+			srv.reply(ref Rmsg.Error(m.tag, "event not open"));
+		else if(ef.q != nil) {
+			srv.reply(ref Rmsg.Read(m.tag, array of byte (hd ef.q + "\n")));
+			ef.q = tl ef.q;
+		} else
+			ef.rd = m;
 
 	Qpending =>
 		s := "";
@@ -713,10 +805,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 				ethcrypto->betodec(fb.maxpertx),
 				ethcrypto->betodec(fb.maxpersess),
 				ethcrypto->betodec(fb.spent));
-		if(as.requireapproval)
-			s += "requireapproval on\n";
-		else
-			s += "requireapproval off\n";
+		s += "requireapproval on\n";
 		readstr(srv, m, s);
 
 	Qhistory =>
@@ -947,34 +1036,18 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			return;
 		}
 
-		# Check if approval is required for this account
-		if(as.requireapproval) {
-			(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
-			if(qerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "pay: " + qerr));
-				return;
-			}
-			# Bind the proposal to the network it was quoted on, so a
-			# network switch between proposal and approval cannot
-			# silently redirect it to another chain.
-			pp.network = "eip155:" + string getnetwork().chainid;
-			pres := "pending:" + string pp.id;
-			setpaystate(m.fid, pres);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
-		} else {
-			# Execute immediately
-			txhash: string;
-			if(paytoken == "usdc")
-				(txhash, payerr) = executeerc20(as, payamt, payrecip);
-			else
-				(txhash, payerr) = executepayment(as, payamt, payrecip);
-			if(payerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "pay: " + payerr));
-				return;
-			}
-			setpaystate(m.fid, txhash);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
+		if(qerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "pay: " + qerr));
+			return;
 		}
+		# Bind the proposal to the network it was quoted on, so a
+		# network switch between proposal and approval cannot
+		# silently redirect it to another chain.
+		pp.network = "eip155:" + string getnetwork().chainid;
+		pres := "pending:" + string pp.id;
+		setpaystate(m.fid, pres);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qauthorize =>
 		as := findacctbyid(aid);
@@ -992,29 +1065,19 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + aerr));
 			return;
 		}
-		if(as.requireapproval) {
-			(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
-			if(qerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
-				return;
-			}
-			pp.network = areq.network;
-			pp.tokenname = areq.tokenname;
-			pp.tokenver = areq.tokenver;
-			pp.timeout = areq.timeout;
-			pp.resource = areq.resource;
-			pres := "pending:" + string pp.id;
-			setauthstate(m.fid, pres);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
-		} else {
-			(res, xerr) := executex402(as, areq);
-			if(xerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "authorize: " + xerr));
-				return;
-			}
-			setauthstate(m.fid, res);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
+		if(qerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
+			return;
 		}
+		pp.network = areq.network;
+		pp.tokenname = areq.tokenname;
+		pp.tokenver = areq.tokenver;
+		pp.timeout = areq.timeout;
+		pp.resource = areq.resource;
+		pres := "pending:" + string pp.id;
+		setauthstate(m.fid, pres);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qacctctl =>
 		as := findacctbyid(aid);
@@ -1057,13 +1120,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			wallet->setfeebudget(as.acct, fb);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else if(ntoks >= 1 && hd toks == "requireapproval") {
-			val := 1;
-			if(ntoks >= 2 && hd tl toks == "off")
-				val = 0;
-			as.requireapproval = val;
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			if(ntoks == 2 && hd tl toks == "on")
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			else
+				srv.reply(ref Rmsg.Error(m.tag, "requireapproval: approval is mandatory"));
 		} else {
-			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | gasbudget maxpertx maxpersess | requireapproval [off]"));
+			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | gasbudget maxpertx maxpersess | requireapproval on"));
 		}
 
 	* =>
@@ -1109,7 +1171,7 @@ parsetype(s: string): int
 # Register a new account with a stable id
 addaccount(acct: ref Wallet->Account)
 {
-	as := ref AcctState(nextacctid++, acct, nil, 0, 1);
+	as := ref AcctState(nextacctid++, acct, nil, 0);
 	accounts = as :: accounts;
 }
 
@@ -1156,6 +1218,8 @@ newpending(kind, acct, amount, recipient, token: string): (ref PendingPay, strin
 	np := ref PendingPay(nextpendingid++, kind, acct, amount, recipient,
 		token, "agent", t, "", "", "", 0, "", nil);
 	pendingpays = np :: pendingpays;
+	spawn expirytimer(np.id);
+	postevent("pending");
 	return (np, nil);
 }
 
@@ -1219,6 +1283,13 @@ hascontrol(s: string): int
 
 approvepending(id: int): string
 {
+	err := approvepending0(id);
+	postevent("pending");
+	return err;
+}
+
+approvepending0(id: int): string
+{
 	pp := findpending(id);
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
@@ -1273,6 +1344,7 @@ denypending(id: int): string
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
 	pp.result = "denied";
+	postevent("pending");
 	return nil;
 }
 
@@ -2085,6 +2157,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, Qpending);
 				else if(name == "network")
 					n.path = MKPATH(0, Qnetwork);
+				else if(name == "event")
+					n.path = MKPATH(0, Qevent);
 				else {
 					# Look for account name
 					id := acctidbyname(name);
@@ -2132,6 +2206,7 @@ navigator(navops: chan of ref Navop)
 
 			if(ft == Qroot) {
 				# Root: ctl, accounts, new, pending, network, then account dirs
+				entries = MKPATH(0, Qevent) :: entries;
 				entries = MKPATH(0, Qnetwork) :: entries;
 				entries = MKPATH(0, Qpending) :: entries;
 				entries = MKPATH(0, Qnew) :: entries;
@@ -2203,6 +2278,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 		perm = 8r444;
 	Qnetwork =>
 		name = "network";
+		perm = 8r444;
+	Qevent =>
+		name = "event";
 		perm = 8r444;
 	Qacctdir =>
 		as := findacctbyid(aid);

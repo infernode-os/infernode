@@ -3,21 +3,25 @@ implement ToolCharon;
 #
 # charon - Veltro tool for controlling the Charon web browser
 #
-# Provides AI control over the Charon browser via its filesystem
-# interface at /tmp/veltro/browser/. Supports navigation, reading
-# page content, following links, and form interaction.
+# Drives the browser the user sees through its session files at
+# /mnt/charon (charonfs(2)), which tools9p mounts for this tool only.
+# Navigation waits on /mnt/charon/event for the load to finish.
 #
 # Commands:
 #   navigate <url>              Navigate to URL
 #   back                        Go back in history
 #   forward                     Go forward in history
 #   reload                      Reload current page
+#   stop                        Stop loading
 #   follow <n>                  Follow link number n
 #   read [body]                 Read page text
 #   read url                    Read current URL
 #   read title                  Read page title
 #   read links                  Read numbered link index
 #   read forms                  Read form fields
+#   set <node> <value>          Set a form field (node from read forms)
+#   click <node>                Click a link, button, checkbox or radio
+#   submit <form> [<node>]      Submit form <form>, optionally as button <node>
 #   search <text>               Search in page text
 #   status                      Show loading state
 #
@@ -40,7 +44,8 @@ ToolCharon: module {
 	schema: fn(): string;
 };
 
-BROWSER_DIR: con "/tmp/veltro/browser";
+BROWSER_DIR: con "/mnt/charon";
+WAIT: con 30*1000;	# ms a navigation may take
 
 init(): string
 {
@@ -71,7 +76,10 @@ doc(): string
 		"  read url              Read current URL\n" +
 		"  read title            Read page title\n" +
 		"  read links            Read numbered link index\n" +
-		"  read forms            Read form fields\n" +
+		"  read forms            Read form fields: <form> <node> <kind> <name> <value>\n" +
+		"  set <node> <value>    Set a form field\n" +
+		"  click <node>          Click a link, button, checkbox or radio button\n" +
+		"  submit <form> [node]  Submit a form, optionally as the button <node>\n" +
 		"  search <text>         Search in page text\n" +
 		"  status                Show loading state\n\n" +
 		"The browser must be running for commands to work.\n" +
@@ -94,8 +102,8 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"One of: navigate, back, forward, reload, follow, read, search, status.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"Command argument: a URL for navigate; a link number for follow; one of body|url|title|links|forms for read; the search string for search. Omit for back/forward/reload/status.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: navigate, back, forward, reload, stop, follow, read, set, click, submit, search, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"Command argument: a URL for navigate; a link number for follow; one of body|url|title|links|forms for read; '<node> <value>' for set; a node number for click; '<form> [<node>]' for submit; the search string for search. Omit for back/forward/reload/status.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -133,6 +141,12 @@ exec(args: string): string
 		return dostatus();
 	"stop" =>
 		return doctl("stop");
+	"set" =>
+		return doset(rest);
+	"click" =>
+		return doclick(rest);
+	"submit" =>
+		return dosubmit(rest);
 	* =>
 		return sys->sprint("error: unknown command '%s'", cmd);
 	}
@@ -145,25 +159,7 @@ donavigate(url: string): string
 		return "error: usage: navigate <url>";
 	if(!isallowedurl(url))
 		return "error: only http:// and https:// URLs are allowed";
-	err := writefile(BROWSER_DIR + "/ctl", "navigate " + url);
-	if(err != nil)
-		return err;
-	# Wait briefly for page to start loading
-	sys->sleep(500);
-	# Poll for completion (up to 30 seconds)
-	for(i := 0; i < 60; i++) {
-		st := readfile(BROWSER_DIR + "/status");
-		if(st == "ready" || hasprefix(st, "error:"))
-			break;
-		sys->sleep(500);
-	}
-	# Return page summary
-	status := readfile(BROWSER_DIR + "/status");
-	title := readfile(BROWSER_DIR + "/title");
-	url = readfile(BROWSER_DIR + "/url");
-	if(hasprefix(status, "error:"))
-		return status;
-	return sys->sprint("Loaded: %s\nTitle: %s\nURL: %s", status, title, url);
+	return navwait("open " + url);
 }
 
 dofollow(args: string): string
@@ -173,22 +169,37 @@ dofollow(args: string): string
 		return "error: usage: follow <link-number>";
 	if(!validindex(args))
 		return "error: invalid link number: " + args;
-	err := writefile(BROWSER_DIR + "/ctl", "follow " + args);
-	if(err != nil)
+	return navwait("follow " + args);
+}
+
+doclick(args: string): string
+{
+	args = strip(args);
+	if(!validindex(args))
+		return "error: usage: click <node>";
+	return navwait("click " + args);
+}
+
+dosubmit(args: string): string
+{
+	(form, node) := splitfirst(args);
+	if(!validindex(form) || node != "" && !validindex(node))
+		return "error: usage: submit <form> [<node>]";
+	return navwait(strip("submit " + form + " " + node));
+}
+
+doset(args: string): string
+{
+	(node, value) := splitfirst(args);
+	if(!validindex(node))
+		return "error: usage: set <node> <value>";
+	for(i := 0; i < len value; i++)
+		if(value[i] < ' ' && value[i] != '\t')
+			return "error: a value is one line";
+	err := writefile(BROWSER_DIR + "/ctl", "set " + node + " " + value);
+	if(hasprefix(err, "error:"))
 		return err;
-	sys->sleep(500);
-	for(i := 0; i < 60; i++) {
-		st := readfile(BROWSER_DIR + "/status");
-		if(st == "ready" || hasprefix(st, "error:"))
-			break;
-		sys->sleep(500);
-	}
-	status := readfile(BROWSER_DIR + "/status");
-	title := readfile(BROWSER_DIR + "/title");
-	url := readfile(BROWSER_DIR + "/url");
-	if(hasprefix(status, "error:"))
-		return status;
-	return sys->sprint("Followed link %s\nTitle: %s\nURL: %s", args, title, url);
+	return "ok";
 }
 
 validindex(s: string): int
@@ -203,29 +214,72 @@ validindex(s: string): int
 
 doctl(cmd: string): string
 {
+	if(cmd == "back" || cmd == "forward" || cmd == "reload")
+		return navwait(cmd);
 	err := writefile(BROWSER_DIR + "/ctl", cmd);
-	if(err != nil)
+	if(hasprefix(err, "error:"))
 		return err;
-	if(cmd == "back" || cmd == "forward" || cmd == "reload") {
-		sys->sleep(500);
-		for(i := 0; i < 60; i++) {
-			st := readfile(BROWSER_DIR + "/status");
-			if(st == "ready" || hasprefix(st, "error:"))
-				break;
-			sys->sleep(500);
-		}
+	return dostatus();
+}
+
+# Write a command that may start a load, and wait for the load to end.
+# The event file is opened first, so the end cannot be missed; a command
+# that loads nothing (a click on a checkbox) ends with "update" or not
+# at all, and the wait gives up after a moment.
+navwait(cmd: string): string
+{
+	ev := sys->open(BROWSER_DIR + "/event", Sys->OREAD);
+	if(ev == nil)
+		return sys->sprint("error: cannot open %s/event: %r (is charon running? use 'launch charon <url>')", BROWSER_DIR);
+	err := writefile(BROWSER_DIR + "/ctl", cmd);
+	if(hasprefix(err, "error:"))
+		return err;
+	evc := chan of string;
+	spawn eventreader(ev, evc);
+	timeout := chan of int;
+	spawn timer(timeout, WAIT);
+	started := 0;
+	for(;;) alt {
+	e := <-evc =>
+		if(e == nil)
+			return "error: event file closed";
+		if(hasprefix(e, "error"))
+			return "error: " + strip(e[len "error":]);
+		if(hasprefix(e, "loading"))
+			started = 1;
+		if(hasprefix(e, "done") || hasprefix(e, "stopped") || !started && hasprefix(e, "update"))
+			return dostatus();
+	<-timeout =>
+		if(!started)
+			return dostatus();
+		return "error: still loading after 30 seconds\n" + dostatus();
 	}
-	status := readfile(BROWSER_DIR + "/status");
-	title := readfile(BROWSER_DIR + "/title");
-	url := readfile(BROWSER_DIR + "/url");
-	return sys->sprint("Title: %s\nURL: %s\nStatus: %s", title, url, status);
+}
+
+eventreader(fd: ref Sys->FD, c: chan of string)
+{
+	buf := array[1024] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0) {
+			c <-= nil;
+			return;
+		}
+		c <-= string buf[0:n];
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 doread(args: string): string
 {
 	target := strip(args);
 	if(target == "" || target == "body")
-		return readfile(BROWSER_DIR + "/body");
+		return readfile(BROWSER_DIR + "/text");
 	if(target == "url")
 		return readfile(BROWSER_DIR + "/url");
 	if(target == "title")
@@ -242,14 +296,20 @@ dosearch(query: string): string
 	query = strip(query);
 	if(query == "")
 		return "error: usage: search <text>";
-	return writefile(BROWSER_DIR + "/ctl", "search " + query);
+	err := writefile(BROWSER_DIR + "/find", query);
+	if(hasprefix(err, "error:"))
+		return err;
+	r := readfile(BROWSER_DIR + "/find");
+	if(r == "")
+		return "not found: " + query;
+	return r;
 }
 
 dostatus(): string
 {
-	status := readfile(BROWSER_DIR + "/status");
-	title := readfile(BROWSER_DIR + "/title");
-	url := readfile(BROWSER_DIR + "/url");
+	status := strip(readfile(BROWSER_DIR + "/status"));
+	title := strip(readfile(BROWSER_DIR + "/title"));
+	url := strip(readfile(BROWSER_DIR + "/url"));
 	return sys->sprint("Title: %s\nURL: %s\nStatus: %s", title, url, status);
 }
 
@@ -275,17 +335,13 @@ readfile(path: string): string
 
 writefile(path, data: string): string
 {
-	fd := sys->create(path, Sys->OWRITE, 8r600);
+	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
-		return sys->sprint("error: cannot create %s: %r (is charon running?)", path);
+		return sys->sprint("error: cannot open %s: %r (is charon running? use 'launch charon <url>')", path);
 
 	b := array of byte data;
-	n := sys->write(fd, b, len b);
-	fd = nil;
-
-	if(n != len b)
-		return sys->sprint("error: write failed: %r");
-
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("error: %r");
 	return "ok";
 }
 

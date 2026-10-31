@@ -3,21 +3,20 @@
 #include "memdraw.h"
 #include "memlayer.h"
 
+/*
+ * The lines joining vert as one anti-aliased stroke (aadrawlines): the
+ * ends as line's, the joins round, and no seam or doubled coverage
+ * where one segment meets the next.
+ */
 void
 mempoly(Memimage *dst, Point *vert, int nvert, int end0, int end1, int radius, Memimage *src, Point sp, int op)
 {
-	int i, e0, e1;
-	Point d;
+	Aapoly poly;
 
-	if(nvert < 2)
+	if(nvert < 2 || radius < 0)
 		return;
-	d = subpt(sp, vert[0]);
-	for(i=1; i<nvert; i++){
-		e0 = e1 = Enddisc;
-		if(i == 1)
-			e0 = end0;
-		if(i == nvert-1)
-			e1 = end1;
-		memline(dst, vert[i-1], vert[i], e0, e1, radius, src, addpt(d, vert[i-1]), op);
-	}
+	aapolyinit(&poly);
+	aadrawlines(&poly, vert, nvert, radius, end0, end1);
+	memaadraw(dst, &poly, ~0, src, subpt(sp, vert[0]), op);
+	aapolyfree(&poly);
 }

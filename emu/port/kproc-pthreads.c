@@ -16,7 +16,7 @@
 #include	<errno.h>
 #include	<semaphore.h>
 
-#if defined(__NetBSD__) || defined(LINUX_ARM) || defined(LINUX_AMD64) || defined(LINUX_ARM64) || defined(__BIONIC__)
+#if defined(__NetBSD__) || defined(LINUX_ARM) || defined(LINUX_AMD64) || defined(LINUX_ARM64) || defined(LINUX_RISCV64) || defined(__BIONIC__)
 #include	<sched.h>
 /* pthread_yield is a glibc-era non-POSIX extension that Bionic dropped
  * in NDK r28+. sched_yield is the POSIX standard and identical in
@@ -38,6 +38,11 @@ struct Osdep {
 };
 
 static pthread_key_t  prdakey;
+#ifdef __ANDROID__
+static Proc *machup;	/* unused: up is getup() there (emu.h) */
+#else
+__thread Proc *machup;	/* up, where emu.h makes it this (see there) */
+#endif
 
 extern int dflag;
 
@@ -86,6 +91,19 @@ pexit(char *msg, int t)
 		sem_destroy(&os->sem);
 		free(os);
 	}
+	/*
+	 * Forget p before freeing it. lock() and unlock() count into
+	 * up->nlocks, and free(p) takes the pool lock (as can anything
+	 * pthread_exit allocates through our malloc). With
+	 * up still set they write into p after it is back in the pool;
+	 * another thread that has just been handed that memory sees a
+	 * transient +1 in the high half of a pointer (nlocks is at 0x64
+	 * on amd64), and dereferences an address 4GB out. The kbd kproc
+	 * exits at once when stdin is at EOF (</dev/null), so this raced
+	 * the namespace setup in emuinit about one launch in 700.
+	 */
+	pthread_setspecific(prdakey, nil);
+	machup = nil;
 	free(p);
 	pthread_exit(0);
 }
@@ -101,6 +119,7 @@ tramp(void *arg)
 	os->self = pthread_self();
 	if(pthread_setspecific(prdakey, arg))
 		panic("set specific data failed in tramp\n");
+	machup = arg;
 	p->func(p->arg);
 	pexit("{Tramp}", 0);
 	return nil;
@@ -223,6 +242,7 @@ kprocinit(Proc *p)
 		panic("key_create failed");
 	if(pthread_setspecific(prdakey, p))
 		panic("set specific thread data failed");
+	machup = p;
 }
 
 /*
@@ -243,6 +263,7 @@ kprocsetup(Proc *p)
 
 	if(pthread_setspecific(prdakey, p))
 		panic("kprocsetup: pthread_setspecific failed");
+	machup = p;
 }
 
 void

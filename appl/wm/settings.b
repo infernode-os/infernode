@@ -4,16 +4,17 @@ implement Settings;
 # settings - System preferences for Lucifer
 #
 # A graphical settings app that provides a non-technical interface
-# for configuring: theme, tool budget, active tools, namespace
-# paths, agent prompts, and startup profile.
+# for configuring: the LLM service, active tools, tool budget,
+# namespace paths, agent prompts, startup profile, messaging,
+# security, auditing, snapshots, web pages, and theme.
 #
 # Configuration reads/writes:
-#   Theme:        /lib/lucifer/theme/current (persistent, live)
 #   Tool budget:  /tool/budget + /tool/ctl budget-add/budget-remove (live, ephemeral)
 #   Active tools: /tool/tools + /tool/ctl add/remove (live, ephemeral)
 #   Paths:        /tool/paths + /tool/ctl bindpath/unbindpath (live, ephemeral)
 #   Prompts:      /lib/veltro/meta.txt, /lib/veltro/agents/task.txt (persistent)
 #   Profile:      /lib/sh/profile (persistent, restart required)
+#   Theme:        /lib/lucifer/theme/current (persistent, live: lucitheme)
 #
 # Settings marked "restart required" flash a warning in the status bar.
 #
@@ -80,11 +81,11 @@ Runnable: module
 
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots: con iota;
-NCATS: con 11;
+# What the system does first, how it looks last.
+CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots, CatWeb, CatTheme: con iota;
+NCATS: con 12;
 
 catnames := array[] of {
-	"Theme",
 	"LLM Service",
 	"Initial Active Tools",
 	"Delegatable Tools",
@@ -95,13 +96,14 @@ catnames := array[] of {
 	"Security",
 	"Auditing",
 	"Snapshots",
+	"Web Pages",
+	"Theme",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
 # pass to open Settings directly on a given panel. Index parallels
-# CatTheme..CatProfile. See INFR-100.
+# the categories above. See INFR-100.
 catshortnames := array[] of {
-	"theme",
 	"llm",
 	"tools",
 	"delegated",
@@ -112,6 +114,8 @@ catshortnames := array[] of {
 	"security",
 	"audit",
 	"snapshots",
+	"web",
+	"theme",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -221,7 +225,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# Parse -c <name> to choose initial category. Quietly ignore unknown
 	# flags / arguments — launchers should not crash settings if a future
 	# build of lucibridge passes options this version doesn't understand.
-	startcat := CatTheme;
+	startcat := CatLLM;
 	if(argv != nil)
 		argv = tl argv;	# drop progname
 	while(argv != nil) {
@@ -241,7 +245,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
-	sys->sleep(100);
 
 	if(ctxt == nil)
 		ctxt = tkclient->makedrawcontext();
@@ -310,10 +313,16 @@ eget(path: string): string
 
 buildui()
 {
+	# Width in characters: a listbox's default width is pixels, which on a
+	# 3x display leaves the category names cut off after a few letters.
+	catw := 0;
+	for(i := 0; i < len catnames; i++)
+		if(len catnames[i] > catw)
+			catw = len catnames[i];
 	tkcmds(array[] of {
 		". configure -background " + c_bg,
 		"frame .cats -background " + c_bg,
-		"listbox .cats.lb -font " + SFONT + " -selectmode browse" +
+		"listbox .cats.lb -font " + SFONT + " -selectmode browse -width " + string catw + "w" +
 			" -background " + c_bg + " -foreground " + c_fg +
 			" -selectbackground " + c_accent + " -selectforeground " + c_bg,
 		"pack .cats.lb -side top -fill both -expand 1",
@@ -325,7 +334,7 @@ buildui()
 		"pack propagate . 0",
 		"bind .cats.lb <ButtonRelease-1> {send act cat}",
 	});
-	for(i := 0; i < len catnames; i++)
+	for(i = 0; i < len catnames; i++)
 		tk->cmd(top, sys->sprint(".cats.lb insert end {%s}", catnames[i]));
 	tk->cmd(top, sys->sprint(".cats.lb selection set %d", category));
 	buildpanel(category);
@@ -351,6 +360,7 @@ buildpanel(cat: int)
 	CatSecurity =>	panelsecurity();
 	CatAudit =>	panelaudit();
 	CatSnapshots =>	panelsnapshots();
+	CatWeb =>	panelweb();
 	}
 	tk->cmd(top, "update");
 }
@@ -379,18 +389,80 @@ btn(name, text, verb: string)
 
 # ── Panels ─────────────────────────────────────────────────────
 
+# One row per installed theme: a strip of its own colours (background,
+# editor, text, accent) and its name. A click anywhere on the row makes
+# it the system's theme; the active one is outlined in the accent.
 paneltheme()
 {
-	theme_names = readthemes();
-	current := readcurrenttheme();
-	tk->cmd(top, "variable thm " + tk->quote(current));
-	for(i := 0; i < len theme_names; i++)
-		tk->cmd(top, sys->sprint(
-			"radiobutton .content.t%d -text %s -value %s -variable thm" +
-			" -background %s -foreground %s -command {send act theme}; " +
-			"pack .content.t%d -side top -anchor w",
-			i, tk->quote(theme_names[i]), tk->quote(theme_names[i]),
-			c_bg, c_fg, i));
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil){
+		lbl("terr", sys->sprint("cannot load %s: %r", Lucitheme->PATH));
+		return;
+	}
+	cur := lt->current();
+	theme_names = nil;
+	for(l := lt->themes(); l != nil; l = tl l){
+		a := array[len theme_names + 1] of string;
+		a[0:] = theme_names;
+		a[len theme_names] = hd l;
+		theme_names = a;
+	}
+	for(i := 0; i < len theme_names; i++){
+		th := lt->loadtheme(theme_names[i]);
+		if(th == nil)
+			continue;
+		ring := c_bg;
+		if(theme_names[i] == cur)
+			ring = c_accent;
+		w := sys->sprint(".content.t%d", i);
+		tk->cmd(top, sys->sprint("frame %s -background %s -borderwidth 0", w, ring));
+		tk->cmd(top, sys->sprint("frame %s.in -background %s", w, c_bg));
+		# outlined, so a swatch the panel's own colour still shows
+		sw := array[] of {th.bg, th.editbg, th.text, th.accent};
+		tk->cmd(top, sys->sprint("frame %s.in.sw -background %s; pack %s.in.sw -side left", w, c_dim, w));
+		for(j := 0; j < len sw; j++)
+			tk->cmd(top, sys->sprint("frame %s.in.sw.s%d -width 18 -height 18 -background %s;" +
+				" pack %s.in.sw.s%d -side left -padx 1 -pady 1", w, j, col(sw[j] >> 8), w, j));
+		tk->cmd(top, sys->sprint("label %s.in.name -text %s -background %s -foreground %s;" +
+			" pack %s.in.name -side left -padx 8", w, tk->quote(theme_names[i]), c_bg, c_fg, w));
+		tk->cmd(top, sys->sprint("pack %s.in -padx 2 -pady 2 -fill x; pack %s -side top -anchor w -fill x -pady 2", w, w));
+		parts := array[] of {"", ".in", ".in.name", ".in.sw", ".in.sw.s0", ".in.sw.s1", ".in.sw.s2", ".in.sw.s3"};
+		for(k := 0; k < len parts; k++)
+			tk->cmd(top, sys->sprint("bind %s%s <ButtonRelease-1> {send act settheme %d}", w, parts[k], i));
+	}
+	tk->cmd(top, "button .content.tcopy -text {Copy current as new theme} -command {send act themecopy};" +
+		" pack .content.tcopy -side top -anchor w -pady 8");
+	tk->cmd(top, "button .content.tedit -text {Edit current theme} -command {send act themeedit};" +
+		" pack .content.tedit -side top -anchor w");
+}
+
+# A copy of the active theme under a new name, in the theme directory
+# (the user's own, which the profile binds over the system's), to edit.
+copytheme()
+{
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
+		return;
+	cur := lt->current();
+	data := readfile("/lib/lucifer/theme/" + cur);
+	if(data == nil){
+		flashstatus(sys->sprint("cannot read theme %s: %r", cur));
+		return;
+	}
+	name: string;
+	for(n := 1; ; n++){
+		name = sys->sprint("%s-%d", cur, n);
+		if(sys->stat("/lib/lucifer/theme/" + name).t0 < 0)
+			break;
+	}
+	fd := sys->create("/lib/lucifer/theme/" + name, Sys->OWRITE, 8r644);
+	if(fd == nil){
+		flashstatus(sys->sprint("cannot create theme %s: %r", name));
+		return;
+	}
+	b := array of byte data;
+	sys->write(fd, b, len b);
+	flashstatus("new theme " + name + " (a copy of " + cur + "); pick it to use it");
 }
 
 panelllm()
@@ -657,6 +729,112 @@ auditstatus(): string
 	return s;
 }
 
+# ── Web pages panel ────────────────────────────────────────────
+# The web engine's settings (page(2)), which Charon and HTML rendered in
+# Xenith both follow: the user's lib/charon/settings, a "name value"
+# line each, as Charon's ctl takes them.  The engine reads the file
+# again when it changes, so a page opened after a change follows it.
+
+websettings := array[] of {
+	("images", "on", "click"),
+	("fonts", "web", "system"),
+	("effects", "on", "off"),
+};
+
+webfile(): string
+{
+	return "/usr/" + eget2("/dev/user") + "/lib/charon/settings";
+}
+
+# a setting's value: as the file has it, or its default
+webget(name: string): string
+{
+	for(l := readlines(webfile()); l != nil && len l > 0; l = l[1:]) {
+		(n, t) := sys->tokenize(l[0], " \t");
+		if(n == 2 && hd t == name)
+			return hd tl t;
+	}
+	for(i := 0; i < len websettings; i++)
+		if(websettings[i].t0 == name)
+			return websettings[i].t1;
+	return nil;
+}
+
+webput(vals: array of string)
+{
+	u := "/usr/" + eget2("/dev/user");
+	mkdirp2(u + "/lib");
+	mkdirp2(u + "/lib/charon");
+	s := "";
+	for(i := 0; i < len websettings; i++)
+		s += websettings[i].t0 + " " + vals[i] + "\n";
+	fd := sys->create(webfile(), Sys->OWRITE, 8r664);
+	b := array of byte s;
+	if(fd == nil || sys->write(fd, b, len b) != len b)
+		flashstatus(sys->sprint("cannot write %s: %r", webfile()));
+	else
+		flashstatus("pages opened from now on follow this");
+}
+
+webcur(): array of string
+{
+	vals := array[len websettings] of string;
+	for(i := 0; i < len websettings; i++)
+		vals[i] = webget(websettings[i].t0);
+	return vals;
+}
+
+webtoggle(name: string)
+{
+	vals := webcur();
+	for(i := 0; i < len websettings; i++)
+		if(websettings[i].t0 == name) {
+			(nil, a, b) := websettings[i];
+			if(vals[i] == a)
+				vals[i] = b;
+			else
+				vals[i] = a;
+		}
+	webput(vals);
+	buildpanel(CatWeb);
+}
+
+# for a small device: images when clicked, the system's fonts, no effects
+weblight()
+{
+	webput(array[] of {"click", "system", "off"});
+	buildpanel(CatWeb);
+}
+
+panelweb()
+{
+	hdr("webh", "Web pages (Charon, and HTML rendered in Xenith)");
+	if(webget("images") == "on") {
+		lbl("webis", "Images load with the page.");
+		btn("webi", "Load images only when clicked", "webimages");
+	} else {
+		lbl("webis", "Images load when clicked.");
+		btn("webi", "Load images with the page", "webimages");
+	}
+	if(webget("fonts") == "web") {
+		lbl("webfs", "Pages use the fonts they bring.");
+		btn("webf", "Use only the system's fonts", "webfonts");
+	} else {
+		lbl("webfs", "Pages use the system's fonts; theirs are not fetched.");
+		btn("webf", "Use the fonts pages bring", "webfonts");
+	}
+	if(webget("effects") == "on") {
+		lbl("webes", "Shadows and filters are drawn.");
+		btn("webe", "Draw no shadows or filters", "webeffects");
+	} else {
+		lbl("webes", "Shadows and filters are not drawn.");
+		btn("webe", "Draw shadows and filters", "webeffects");
+	}
+	hdr("weblh", "For a small device");
+	btn("webl", "Light: images when clicked, system fonts, no effects", "weblight");
+	lbl("webnote", "Pages opened from now on follow these.");
+}
+
 # ── Snapshots panel ────────────────────────────────────────────
 # Daily vac snapshots of the durable /usr into the local venti store
 # (snapd(8)). Enable/disable persist the marker (daemons start at
@@ -856,7 +1034,18 @@ handleaction(a: string)
 		s := tk->cmd(top, ".cats.lb curselection");
 		if(s != nil && len s > 0 && s[0] >= '0' && s[0] <= '9')
 			buildpanel(int s);
-	"theme" =>	applytheme(tkv("thm"));
+	"settheme" =>
+		if(arg >= 0 && arg < len theme_names){
+			applytheme(theme_names[arg]);
+			buildpanel(CatTheme);
+		}
+	"themecopy" =>
+		copytheme();
+		buildpanel(CatTheme);
+	"themeedit" =>
+		lt := load Lucitheme Lucitheme->PATH;
+		if(lt != nil)
+			openineditor("/lib/lucifer/theme/" + lt->current());
 	"llmmode" =>
 		llm_is_remote = tkv("llmmode") == "remote";
 		buildpanel(CatLLM);
@@ -899,6 +1088,10 @@ handleaction(a: string)
 	"auditdisable" =>	doauditdisable();
 	"auditck" =>	doauditck();
 	"auditverify" =>	doauditverify();
+	"webimages" =>	webtoggle("images");
+	"webfonts" =>	webtoggle("fonts");
+	"webeffects" =>	webtoggle("effects");
+	"weblight" =>	weblight();
 	"snapenable" =>	dosnapenable();
 	"snapdisable" =>	dosnapdisable();
 	"snapnow" =>	dosnapnow();
@@ -1034,44 +1227,7 @@ dodisable2fa()
 	setsecresult("2FA disabled. Login is now password-only.");
 }
 
-readthemes(): array of string
-{
-	fd := sys->open("/lib/lucifer/theme", Sys->OREAD);
-	if(fd == nil)
-		return array[] of { "brimstone", "halo" };
 
-	names: list of string;
-	n := 0;
-	for(;;) {
-		(count, dirs) := sys->dirread(fd);
-		if(count <= 0)
-			break;
-		for(i := 0; i < count; i++) {
-			nm := dirs[i].name;
-			if(nm == "current")
-				continue;
-			names = nm :: names;
-			n++;
-		}
-	}
-	if(n == 0)
-		return array[] of { "brimstone", "halo" };
-
-	result := array[n] of string;
-	for(j := n - 1; j >= 0; j--) {
-		result[j] = hd names;
-		names = tl names;
-	}
-	return result;
-}
-
-readcurrenttheme(): string
-{
-	s := readfile("/lib/lucifer/theme/current");
-	if(s == nil)
-		return "brimstone";
-	return strip(s);
-}
 
 readlines(path: string): array of string
 {
@@ -1145,26 +1301,18 @@ inlist(s: string, arr: array of string): int
 
 applytheme(name: string)
 {
-	# Write to /mnt/ui/ctl for live theme switching across all zones.
-	# luciuisrv persists the choice to /lib/lucifer/theme/current and
-	# broadcasts a "theme <name>" global event so every zone reloads.
-	fd := sys->open("/mnt/ui/ctl", Sys->OWRITE);
-	if(fd != nil) {
-		cmd := "theme " + name;
-		b := array of byte cmd;
-		sys->write(fd, b, len b);
-		flashstatus("theme set to " + name);
+	# every watching program, desktop or not, follows (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil){
+		flashstatus(sys->sprint("error: cannot load %s: %r", Lucitheme->PATH));
 		return;
 	}
-	# Fallback: write directly (pre-luciuisrv or standalone mode)
-	fd = sys->open("/lib/lucifer/theme/current", Sys->OWRITE|Sys->OTRUNC);
-	if(fd == nil) {
-		flashstatus(sys->sprint("error: %r"));
+	err := lt->settheme(name);
+	if(err != nil){
+		flashstatus("error: " + err);
 		return;
 	}
-	b := array of byte name;
-	sys->write(fd, b, len b);
-	flashstatus("theme set to " + name + " — restart for full effect");
+	flashstatus("theme set to " + name);
 }
 
 applytool(name: string, active: int)
@@ -1744,70 +1892,46 @@ openineditor(path: string)
 	pctl := sys->sprint("/mnt/ui/activity/%s/presentation/ctl", aid);
 	sys->fprint(stderr, "settings: openineditor %s → pctl=%s\n", path, pctl);
 
-	# Kill existing editor first (ignore error — may not exist)
-	fd := sys->open(pctl, Sys->OWRITE);
-	if(fd == nil) {
-		flashstatus("cannot open presentation ctl — launch from Lucifer");
-		sys->fprint(stderr, "settings: cannot open %s: %r\n", pctl);
-		return;
+	# A running editor is asked to open the file, through its posted
+	# server (#seditor/fs, post9p(2)); it was killed and started again,
+	# losing what it had not saved.  Else one is started on the file.
+	done := chan of int;
+	spawn editoropen(path, done);
+	if(!<-done) {
+		cmd := sys->sprint("create id=editor type=app dis=/dis/wm/editor.dis label=editor data=%s", path);
+		if(writectl(pctl, cmd) < 0)
+			return;
 	}
-	kb := array of byte "kill id=editor";
-	kn := sys->write(fd, kb, len kb);
-	sys->fprint(stderr, "settings: kill id=editor → %d\n", kn);
-	fd = nil;
-
-	# Small delay for kill to propagate
-	sys->sleep(100);
-
-	# Create editor artifact with file path as data
-	fd = sys->open(pctl, Sys->OWRITE);
-	if(fd == nil) {
-		flashstatus("cannot open presentation ctl");
-		sys->fprint(stderr, "settings: cannot reopen %s: %r\n", pctl);
-		return;
-	}
-	cmd := sys->sprint("create id=editor type=app dis=/dis/wm/editor.dis label=editor data=%s", path);
-	b := array of byte cmd;
-	n := sys->write(fd, b, len b);
-	sys->fprint(stderr, "settings: create → %d (%s)\n", n, cmd);
-	fd = nil;
-	if(n < 0) {
-		flashstatus(sys->sprint("editor launch failed: %r"));
-		return;
-	}
-
-	# Center the editor tab
-	fd = sys->open(pctl, Sys->OWRITE);
-	if(fd != nil) {
-		b = array of byte "center id=editor";
-		cn := sys->write(fd, b, len b);
-		sys->fprint(stderr, "settings: center id=editor → %d\n", cn);
-		fd = nil;
-	}
+	writectl(pctl, "center id=editor");
 
 	flashstatus("opened " + path + " in editor");
+}
+
+editoropen(path: string, done: chan of int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
+		done <-= 0;
+		return;
+	}
+	b := array of byte ("open " + path);
+	ctl := sys->open("/mnt/editor/ctl", Sys->OWRITE);
+	done <-= ctl != nil && sys->write(ctl, b, len b) == len b;
 }
 
 # ── Theme listener ─────────────────────────────────────────────
 
 themelistener()
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		# INFR-28: reset client-side fid offset so the next read on
-		# this streaming queue starts at 0 (otherwise the kernel
-		# applies the accumulated offset to the server reply and
-		# truncates / EOFs on the third read onward).
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+	c := lt->watch();
+	for(;;){
+		<-c;
+		themech <-= 1;
 	}
 }
 

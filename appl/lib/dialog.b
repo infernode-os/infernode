@@ -14,6 +14,11 @@ include "tk.m";
 include "tkclient.m";
 	tkclient: Tkclient;
 
+include "lucitheme.m";
+
+include "icon.m";
+	icon: Icon;
+
 include "dialog.m";
 
 init(): string
@@ -27,6 +32,54 @@ init(): string
 }
 
 STEP: con 20;
+
+#
+# The dialog's icon.  Callers name one of Tk's old bitmaps, perhaps with a
+# colour ("error -fg red", "warning -fg yellow", "info", "question"); it is
+# drawn as icon(2)'s glyph for it, in the theme's red, yellow or accent.
+# A name not among them shows none.
+#
+setico(t: ref Toplevel, ico: string)
+{
+	(nil, w) := sys->tokenize(ico, " \t");
+	if(w == nil)
+		return;
+	glyph: string;
+	th: ref Lucitheme->Theme;
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt != nil)
+		th = lt->gettheme();
+	colour := int 16rCCCCCCFF;
+	case hd w {
+	"error" =>
+		glyph = "alert-circle";
+		if(th != nil)
+			colour = th.red;
+	"warning" or "caution" =>
+		glyph = "alert-triangle";
+		if(th != nil)
+			colour = th.yellow;
+	"info" =>
+		glyph = "info-circle";
+		if(th != nil)
+			colour = th.accent;
+	"question" or "questhead" =>
+		glyph = "help-circle";
+		if(th != nil)
+			colour = th.accent;
+	* =>
+		return;
+	}
+	if(icon == nil){
+		icon = load Icon Icon->PATH;
+		if(icon != nil && icon->init(t.display) != nil)
+			icon = nil;
+	}
+	if(icon == nil)
+		return;
+	if(icon->tkimage(t, "Dialogico", glyph, 32, colour) == nil)
+		cmd(t, ".top.ico configure -image Dialogico");
+}
 
 #
 # find upper left corner for subsidiary child window (always at constant
@@ -86,7 +139,7 @@ prompt(ctxt: ref Draw->Context,
 	tkcmds(t, dialog_config);
 	cmd(t, ".top.msg configure -text '" + msg);
 	if (ico != nil)
-		cmd(t, ".top.ico configure -bitmap " + ico);
+		setico(t, ico);
 
 	n := len labs;
 	for(i := 0; i < n; i++) {
@@ -147,7 +200,7 @@ getstring_config := array[] of {
 getstring(ctxt: ref Draw->Context, parent: ref Draw->Image, msg: string): string
 {
 	where := localgeom(parent);
-	(t, wmctl) := tkclient->toplevel(ctxt, where + " -borderwidth 2 -relief raised", nil, Tkclient->Popup);
+	(t, wmctl) := tkclient->toplevel(ctxt, where, nil, Tkclient->Popup);
 	f := chan of string;
 	tk->namechan(t, f, "f");
 

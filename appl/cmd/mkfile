@@ -35,6 +35,10 @@ TARG=\
 	bind.dis\
 	bit2gif.dis\
 	broke.dis\
+	bt9p.dis\
+	btboardaddr.dis\
+	bthid.dis\
+	btmock.dis\
 	bytes.dis\
 	cal.dis\
 	calc.dis\
@@ -62,6 +66,8 @@ TARG=\
 	diff.dis\
 	disdep.dis\
 	disdump.dis\
+	dossrv.dis\
+	drawbench.dis\
 	du.dis\
 	echo.dis\
 	ed.dis\
@@ -92,11 +98,14 @@ TARG=\
 	gunzip.dis\
 	gzip.dis\
 	history.dis\
+	hostplumb.dis\
 	idea.dis\
 	import.dis\
 	iostats.dis\
 	js.dis\
+	jsfs.dis\
 	kill.dis\
+	lan78stats.dis\
 	ktrans.dis\
 	limbtest.dis\
 	listen.dis\
@@ -139,6 +148,7 @@ TARG=\
 	pipefs.dis\
 	plumb.dis\
 	plumber.dis\
+	procstorm.dis\
 	prof.dis\
 	ps.dis\
 	puttar.dis\
@@ -153,6 +163,9 @@ TARG=\
 	rng.dis\
 	runas.dis\
 	scap.dis\
+	scenedemo.dis\
+	scenefs.dis\
+	scenereplay.dis\
 	sed.dis\
 	sendmail.dis\
 	seq.dis\
@@ -172,9 +185,11 @@ TARG=\
 	tarfs.dis\
 	tcs.dis\
 	tee.dis\
+	themefs.dis\
 	telnet.dis\
 	test.dis\
 	time.dis\
+	tone.dis\
 	timestamp.dis\
 	tokenize.dis\
 	touch.dis\
@@ -218,6 +233,7 @@ TARG=\
 
 
 MODULES=\
+	$ROOT/appl/veltro/veltrosrv.m\
 
 SYSMODULES=\
 	arg.m\
@@ -230,7 +246,11 @@ SYSMODULES=\
 	dial.m\
 	dis.m\
 	draw.m\
-	ecmascript.m\
+	scene.m\
+	web/dom.m\
+	js.m\
+	jslex.m\
+	jsparse.m\
 	encoding.m\
 	env.m\
 	factotum.m\
@@ -258,7 +278,8 @@ SYSMODULES=\
 	rand.m\
 	readdir.m\
 	regex.m\
-	renderer.m\
+	docengine.m\
+	docreg.m\
 	security.m\
 	sh.m\
 	smtp.m\
@@ -279,18 +300,46 @@ SYSMODULES=\
 	wmclient.m\
 	wmlib.m\
 	workdir.m\
+	agentlib.m\
+	att.m\
+	attrdb.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	bthci.m\
+	btmock.m\
+	hid.m\
+	imap.m\
+	json.m\
+	l2cap.m\
+	lock.m\
+	mailparse.m\
+	mermaid.m\
+	nsconstruct.m\
+	pdf.m\
+	rfcomm.m\
+	rlayout.m\
+	sdp.m\
+	secstore.m\
+	smp.m\
+	softkbd.m\
+	srv.m\
+	tls.m\
+	twofa.m\
+	twofaslot.m\
+	viewport.m\
+	webclient.m\
+	wmsrv.m\
 
 DISBIN=$ROOT/dis
 
 <$ROOT/mkfiles/mkdis
 
-# lucibridge.b needs agentlib.m from appl/veltro
+# lucibridge.b includes veltro interfaces from appl/veltro (agentlib.m is in module/)
 LIMBOFLAGS=$LIMBOFLAGS -I$ROOT/appl/veltro
 <$ROOT/mkfiles/mksubdirs
 
-# lucipres.b needs render.m from appl/xenith
-lucipres.dis: lucipres.b
-	limbo -I$ROOT/module -I$ROOT/appl/veltro -I$ROOT/appl/xenith -gw lucipres.b
 
 auhdr.dis: auplay.dis
 	rm -f auhdr.dis && cp auplay.dis auhdr.dis

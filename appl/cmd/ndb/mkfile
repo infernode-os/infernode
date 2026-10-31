@@ -21,6 +21,12 @@ SYSMODULES=\
 	ipattr.m\
 	styx.m\
 	styxservers.m\
+	daytime.m\
+	dial.m\
+	keyring.m\
+	security.m\
+	srv.m\
+	string.m\
 
 MODULES=\
 

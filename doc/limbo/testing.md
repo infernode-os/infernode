@@ -327,7 +327,8 @@ All tests live in the `tests/` directory:
 ```
 tests/
 ├── *_test.b              # Limbo unit tests (Go-style framework)
-├── *_test.sh             # Shell regression tests (C code patterns)
+├── host/*_test.sh        # Shell tests run on the host OS
+├── inferno/*.sh          # Shell tests run inside Inferno
 ├── testing/              # Framework self-tests
 └── mkfile                # Inferno mk build file
 ```
@@ -344,20 +345,20 @@ tests/
 | `sdl3_test.b` | Draw module, Display.allocate |
 | `tempfile_test.b` | Temp file slot management |
 
-### Shell Tests (`*_test.sh`)
+### Shell Tests (`tests/host/`, `tests/inferno/`)
 
 | Test | Description |
 |------|-------------|
-| `sdl3_rendering_test.sh` | Verifies batched rendering in C code |
-| `modifier_mouse_emulation_test.sh` | Verifies modifier key handling in C |
-| `xenith_scroll_focus_test.sh` | Verifies scroll/focus implementation |
-| `xenith_build_test.sh` | Verifies xenith.dis builds correctly |
-| `xenith_window_test.sh` | Xenith window manipulation (requires Xenith) |
-| `xenith_colors_test.sh` | Per-window colors (requires Xenith) |
-| `build_test.sh` | Headless build verification |
-| `commands_test.sh` | Tests all compiled utilities |
-| `network_test.sh` | TCP/IP integration tests |
-| `tempfile_slots_test.sh` | Temp file slot reclamation |
+| `host/sdl3_rendering_test.sh` | Verifies batched rendering in C code |
+| `host/modifier_mouse_emulation_test.sh` | Verifies modifier key handling in C |
+| `host/xenith_scroll_focus_test.sh` | Verifies scroll/focus implementation |
+| `host/xenith_build_test.sh` | Verifies xenith.dis builds correctly |
+| `inferno/xenith_window_test.sh` | Xenith window manipulation (requires Xenith) |
+| `inferno/xenith_colors_test.sh` | Per-window colors (requires Xenith) |
+| `host/build_test.sh` | Headless build verification |
+| `host/commands_test.sh` | Tests all compiled utilities |
+| `inferno/network_test.sh` | TCP/IP integration tests |
+| `inferno/tempfile_slots_test.sh` | Temp file slot reclamation |
 
 ## Running All Tests
 
@@ -365,19 +366,23 @@ tests/
 # Run all Limbo tests
 ./emu/MacOSX/o.emu -r . limbtest -v tests/...
 
-# Run all shell tests (from project root)
-for test in tests/*_test.sh; do
+# Run all host shell tests (from project root)
+for test in tests/host/*_test.sh; do
     echo "=== $test ==="
     sh "$test"
 done
 
-# Run a specific shell test
-tests/sdl3_rendering_test.sh
+# Run a specific host shell test
+sh tests/host/sdl3_rendering_test.sh
+
+# Inferno shell tests (tests/inferno/*.sh) run inside the emulator;
+# tests/runner.dis runs them along with the Limbo tests
+./emu/MacOSX/o.emu -r. /tests/runner.dis
 ```
 
 ## Adding New Tests
 
-1. Create `tests/myfeature_test.b` or `tests/myfeature_test.sh`
-2. Follow naming convention: `*_test.b` or `*_test.sh`
+1. Create `tests/myfeature_test.b`, `tests/host/myfeature_test.sh` or `tests/inferno/myfeature.sh`
+2. Follow naming convention: `*_test.b`; host shell tests end in `_test.sh`
 3. For Limbo tests, add to `tests/mkfile` TARG list
 4. Shell tests run standalone - no build step needed

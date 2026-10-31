@@ -1,0 +1,74 @@
+.TH I420 2
+.SH NAME
+i420 \- convert YCbCr 4:2:0 video frames to RGB
+.SH SYNOPSIS
+.EX
+include "i420.m";
+i420 := load I420 I420->PATH;
+
+rgb24: fn(y, cb, cr: array of byte, w, h: int, out: array of byte);
+.EE
+.SH DESCRIPTION
+.B I420
+is built into the emulator.
+It converts video frames in planar YCbCr 4:2:0 (I420) form,
+as video decoders deliver them
+(see
+.BR /appl/cmd/vid9p.b ),
+to pixels for a
+.B Draw->RGB24
+image.
+.PP
+.B Rgb24
+converts a frame
+.I w
+by
+.I h
+pixels, both even, from its planes:
+.I y
+holds
+.IB w * h
+luma samples, row by row;
+.I cb
+and
+.I cr
+each hold
+.IB w /2* h /2
+chroma samples, one for each 2 by 2 block of pixels.
+It stores
+.IB 3* w * h
+bytes in
+.IR out ,
+three for each pixel in the order blue, green, red,
+which is how
+.B RGB24
+lays out a pixel in memory, ready for
+.BR Image.writepixels .
+The coefficients are those of JPEG (full range BT.601),
+in 16-bit fixed point.
+.PP
+.B Remap24
+in
+.B /appl/mpeg
+uses
+.B I420
+when it can be loaded and converts in Limbo when it cannot,
+with the same arithmetic: the pixels are the same either way,
+only faster here.
+.SH SOURCE
+.B /libinterp/i420.c
+.br
+.B /appl/mpeg/remap24.b
+.SH DIAGNOSTICS
+.B Rgb24
+raises an exception if a plane is nil,
+if
+.I w
+or
+.I h
+is not positive and even,
+or if a plane or
+.I out
+is too small for the frame.
+.SH SEE ALSO
+.IR draw-image (2)

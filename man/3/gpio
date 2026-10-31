@@ -1,0 +1,155 @@
+.TH GPIO 3
+.SH NAME
+gpio \- general-purpose I/O pins as files
+.SH SYNOPSIS
+.nf
+.B bind -a #G /dev
+
+.BI /dev/gpio/ N /ctl
+.BI /dev/gpio/ N /level
+.BI /dev/gpio/ N /event
+.fi
+.SH DESCRIPTION
+.I Gpio
+serves a directory for each pin of the Raspberry Pi's BCM2837,
+.I N
+being the pin's BCM number, 0 to 53, which is the only numbering the
+hardware has.
+A directory a pin, rather than one control file for all of them, so that
+a namespace can give a program exactly one:
+.IP
+.EX
+bind '#G/gpio/29' /mnt/led
+.EE
+.PP
+The device is mechanism only: function, pull, level, edge.
+Pin names, LED polarity, debouncing, counting and PWM are policy, and
+belong to programs.
+.PP
+Pins the kernel drives itself \- the console's UART, the SD card, the
+radio's \- are claimed by their drivers.
+They can be read, and writes to their
+.B ctl
+fail with
+.RI ` "in use by driver" '.
+.SS ctl
+Reading
+.B ctl
+gives the pin's configuration, a line each:
+.IP
+.EX
+function out
+pull none
+edge none
+.EE
+.PP
+.B Pull
+reads as
+.B unknown
+until it has been set, because the hardware cannot be asked.
+The messages that may be written are
+.TP
+.BI function " f"
+where
+.I f
+is
+.BR in ,
+.BR out ,
+or an alternate function
+.B alt0
+to
+.BR alt5 .
+.TP
+.BI pull " p"
+.BR up ,
+.B down
+or
+.BR none .
+.TP
+.BI edge " e"
+.BR rising ,
+.BR falling ,
+.B both
+or
+.BR none :
+which transitions
+.B event
+reports.
+.SS level
+Reading
+.B level
+gives
+.B 0
+or
+.B 1
+and a newline.
+Writing
+.B 0
+or
+.B 1
+drives a pin whose function is
+.BR out .
+.SS event
+A read of
+.B event
+blocks until an edge of the kind
+.B ctl
+asked for has occurred, and then returns a line for each edge not yet
+reported, oldest first:
+.IP
+.EX
+1873226411 1
+1873229042 0
+.EE
+.PP
+The first field is the time of the interrupt in microseconds, on the clock
+.IR bench (3)
+serves; the second is the level after the edge.
+Only the kernel can know that an edge happened and when, since only it
+takes the interrupt: a program polling
+.B level
+learns late, cannot tell two edges from none, and never sleeps.
+A reader that falls more than 256 edges behind loses the oldest, and the
+next read begins with a line
+.BI overrun " n"
+saying how many.
+Detection is enabled in the hardware only while an edge is asked for
+.I and
+an
+.B event
+file is open.
+.SS "The firmware's expander"
+Pins 128 to 135 are the eight lines of the GPIO expander the VideoCore
+firmware drives, reached through the mailbox: on the 3B+ the radios'
+power enables (128 Bluetooth, 129 Wi-Fi), the Ethernet chip's reset (131),
+the power LED and HDMI hot-plug.
+They have
+.B ctl
+and
+.B level
+and no
+.BR event ,
+the expander having no interrupt.
+They have no function select and no pull, so
+.B ctl
+writes are refused;
+.B ctl
+reads report what the firmware says.
+.SH SOURCE
+.B /os/bcm2837/devgpio.c
+.br
+.B /os/bcm2837/gpio.c
+.SH SEE ALSO
+.IR bench (3)
+.br
+.B /tests/acceptance/gpio.py
+(a loopback jig: eight pairs of header pins)
+.SH BUGS
+Raspberry Pi only; QEMU's
+.B virt
+machine has no pins, and its kernel omits the device.
+.br
+The desktop's namespace has
+.B #G
+removed from it; see
+.IR osinit (8).

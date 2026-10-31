@@ -22,6 +22,7 @@ Rowm : module {
 		dragcol : fn(r : self ref Row, c : ref Columnm->Column);
 		clean : fn(r : self ref Row, exiting : int) : int;
 		dump : fn(r : self ref Row, b : string);
+		rescue : fn(r : self ref Row, b : string) : int;
 		loadx : fn(r : self ref Row, b : string, n : int);
 	};
 

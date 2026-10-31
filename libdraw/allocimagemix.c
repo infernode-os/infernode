@@ -4,12 +4,16 @@
 Image*
 allocimagemix(Display *d, ulong color1, ulong color3)
 {
-	Image *t, *b;
-	static Image *qmask;
+	Image *t, *b, *qmask;
 
-	if(qmask == nil)
-		qmask = allocimage(d, Rect(0,0,1,1), GREY8, 1, 0x3F3F3FFF);
-		
+	/*
+	 * The mask was a static, allocated on the first Display ever to
+	 * ask and used with every Display after it. With one screen for
+	 * the life of the machine that was a cache; with displays that come
+	 * and go -- a remote /dev/draw per cpu(1) session -- it outlives the
+	 * display it belongs to and is drawn with on another. It is one
+	 * pixel; make it where it is used.
+	 */
 	if(d->depth <= 8){	/* create a 2×2 texture */
 		t = allocimage(d, Rect(0,0,1,1), d->chan, 0, color1);
 		if(t == nil)
@@ -35,7 +39,14 @@ allocimagemix(Display *d, ulong color1, ulong color3)
 			return nil;
 		}
 
+		qmask = allocimage(d, Rect(0,0,1,1), GREY8, 1, 0x3F3F3FFF);
+		if(qmask == nil){
+			freeimage(t);
+			freeimage(b);
+			return nil;
+		}
 		draw(b, b->r, t, qmask, ZP);
+		freeimage(qmask);
 		freeimage(t);
 		return b;
 	}

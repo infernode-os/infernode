@@ -32,8 +32,8 @@
 - `restrictdir(target, allowed)` core primitive (455 lines replaces 863)
 - Root restriction hides project files (.env, .git, CLAUDE.md, source tree)
 - `/n/local` (host filesystem) hidden via `/n` restriction
-- `/n/speech` auto-detected and preserved for say/hear tools
-- Three entry points: tools9p serveloop, repl init, spawn child
+- `/mnt/speech` auto-detected and preserved for say/hear tools
+- Three entry points: tools9p serveloop, veltro init, spawn child
 - tools9p restriction via non-blocking alt on buffered channel (avoids 9P deadlock)
 - Root restriction skips stat() to avoid 9P self-mount deadlock on /tool
 - Subagents use pre-loaded tool modules (not tools9p)
@@ -150,7 +150,10 @@ Define standard capability profiles:
 
 ### Persistent Tool Server
 
-A system-wide tools9p that runs as a service:
+**Done** for Lucia: `lib/lucifer/boot.sh` starts tools9p at `/tool` with a
+delegation budget (`-b`); child tasks are narrowed through `/tool/provision`.
+
+The original idea, a system-wide tools9p that runs as a service:
 - Started at boot
 - Provides baseline tools to all agents
 - Additional tools granted per-session via namespace overlays

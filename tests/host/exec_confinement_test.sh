@@ -15,7 +15,7 @@ emu_timeout_ok "$rc" || { cat "$log"; exit 1; }
 [[ -s "$PROBE" ]] || { cat "$log"; echo "ERROR: failed to build $PROBE"; exit 1; }
 
 timeout 15 "$EMU" -r"$ROOT" /dis/sh.dis -c \
-	'path=(/dis/veltro /dis/cmd /dis .); tools9p exec & sleep 2; echo /dis/veltro/exec_confinement_probe.dis > /tool/exec/run; sleep 3; cat /tool/exec/run; echo DONE' \
+	'path=(/dis/veltro /dis/cmd /dis .); echo campaign-secret > /env/INFR480_SECRET; tools9p exec & sleep 2; echo /dis/veltro/exec_confinement_probe.dis > /tool/exec/run; sleep 3; cat /tool/exec/run; echo DONE' \
 	</dev/null >"$log" 2>&1
 rc=$?
 output=$(cat "$log")

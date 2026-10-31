@@ -36,6 +36,9 @@ Msgwatch: module {
 };
 
 stderr: ref Sys->FD;
+
+# The mark lucibridge knows an injected message by (MSGEVENT there).
+MSGEVENT: con "[message-event] ";
 verbose := 0;
 actid := 0;
 policyfile := "/lib/veltro/policies/secretary.txt";
@@ -158,6 +161,11 @@ luciferloop(inputpath: string)
 				"Task Agent with a clear brief; draft any reply but NEVER auto-send it — " +
 				"save it for the user to review. ---\n\n" +
 				notification;
+
+		# Marked, so the agent's bridge takes it as a turn of its own, not
+		# the user's words (shown as theirs, the whole policy appeared in the
+		# chat as if they had typed it).
+		turn = MSGEVENT + turn;
 
 		inputfd := sys->open(inputpath, Sys->OWRITE);
 		if(inputfd == nil) {

@@ -74,6 +74,17 @@ Llmclient: module
 	# Returns a newline-separated list of model ids, or ("", err).
 	listmodels:     fn(baseurl, apikey: string): (string, string);
 
+	# The context window of a model, in tokens, as its backend reports
+	# it, and where that came from ("max_model_len", "ollama num_ctx",
+	# ...); (0, why) when the backend does not say.  backend is "openai"
+	# or "api" (Anthropic).
+	contextwindow:  fn(backend, baseurl, apikey, model: string): (int, string);
+
+	# The window a refusal of a too-long prompt names ("maximum context
+	# length is 65536 tokens"), 0 if it names none; and whether err is
+	# such a refusal at all.
+	overflowwindow: fn(err: string): (int, int);
+
 	# Parse TOOL_RESULTS wire format into ToolResult list
 	parsetoolresults: fn(text: string): (list of ref ToolResult, string);
 
@@ -93,6 +104,21 @@ Llmclient: module
 	# Exposed for byte-exact request-shape regression tests: the exact
 	# bytes matter for Anthropic prompt-cache prefix matching.
 	buildanthropicrequest: fn(req: ref AskRequest): string;
+
+	# Parse an Anthropic Messages API response: the whole body, or a
+	# streamed body's events.  Exposed for tests: the STOP: line, and the
+	# structured content (thinking blocks kept whole) replayed as history.
+	parseanthropicresponse: fn(body: string, req: ref AskRequest): (ref AskResponse, string);
+	parseanthropicsse: fn(body: string, req: ref AskRequest): (ref AskResponse, string);
+
+	# What a Claude model's request may carry (temperature, prefill,
+	# thinking), by its generation.
+	CLAUDE_LEGACY, CLAUDE_46, CLAUDE_MODERN: con iota;
+	claudegen:      fn(model: string): int;
+
+	# Milliseconds to wait before trying a failed request again, or -1
+	# for an error not worth retrying.
+	retrydelay:     fn(err: string, attempt: int): int;
 
 	# JSON escape helper
 	jsonescapestr:  fn(s: string): string;

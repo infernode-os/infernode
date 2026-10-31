@@ -44,9 +44,12 @@ cp "$ROOT/MacOSX/arm64/bin/limbo" "$MACOS/tools/"
 cp "$ROOT/MacOSX/arm64/bin/mk" "$MACOS/tools/"
 
 # Runtime tree
-for d in dis lib fonts module services locale usr mnt; do
+for d in dis lib fonts man doc icons module services locale usr mnt n appl; do
 	[ -d "$ROOT/$d" ] && cp -a "$ROOT/$d" "$RESOURCES/"
 done
+# appl: the source, and the .sbl files beside it that the debugger and
+# profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+find "$RESOURCES/appl" -name '*.dis' -delete
 mkdir -p "$RESOURCES/tmp" "$RESOURCES/usr/inferno/secstore" "$RESOURCES/usr/inferno/tmp"
 
 # Bundled default LLM config — gets overridden by the writable overlay
@@ -62,10 +65,14 @@ LLMCONF
 cp "$ROOT/mkconfig" "$RESOURCES/"
 [ -d "$ROOT/mkfiles" ] && cp -a "$ROOT/mkfiles" "$RESOURCES/"
 
-for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md \
+for f in LICENSE NOTICE TRADEMARK.md README.md QUICKSTART.md \
          build-macos-sdl3.sh build-macos-headless.sh makemk.sh; do
 	[ -f "$ROOT/$f" ] && cp "$ROOT/$f" "$RESOURCES/"
 done
+
+# xen and its plumbing, as the release ships them (docs/XEN.md).
+mkdir -p "$RESOURCES/tools"
+cp "$ROOT/tools/xen" "$ROOT/tools/xen.plumbing" "$ROOT/tools/rplumb" "$RESOURCES/tools/"
 
 # Surface the build provenance — useful when comparing dev vs prod runs.
 SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD 2>/dev/null || echo unknown)

@@ -283,7 +283,7 @@ tkcvstextdraw(Image *img, TkCitem *i, TkEnv *pe)
 		if (e->set & (1<<TkCfill))
 			pen = tkgc(e, TkCfill);
 		else
-			pen = img->display->black;
+			pen = tkgc(e, TkCforegnd);	/* as lines do: black vanished on a dark theme */
 	}
 
 

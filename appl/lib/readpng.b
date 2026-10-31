@@ -36,6 +36,7 @@ Png: adt {
 	# tRNS
 	PLTEsize: int;
 	tRNS: array of byte;
+	trgb: array of int;	# truecolour tRNS: the transparent colour
 	# state for managing unpacking
 	alpha: int;
 	done: int;
@@ -239,10 +240,22 @@ read(fd: ref Iobuf): (ref Rawimage, string)
 					raw.trindex = byte level;
 				}
 			2 =>
-				# a legitimate coding, but we can't use the information
-				if (!skip_bytes(fd, chunk.crc_state, chunk.size))
-					png.error = "eof in skipped tRNS chunk";
-				break;
+				# one colour that is transparent: kept, and applied as
+				# an alpha channel once the pixels are in
+				if (chunk.size != 6) {
+					png.error = "tRNS wrong size";
+					break;
+				}
+				png.trgb = array[3] of int;
+				for (k := 0; k < 3; k++) {
+					png.trgb[k] = get_ushort(fd, chunk.crc_state);
+					if (png.trgb[k] < 0) {
+						png.error = "eof in tRNS";
+						break;
+					}
+					if (png.depth == 16)
+						png.trgb[k] >>= 8;	# the channels are kept 8-bit
+				}
 			3 =>
 				if (!seenPLTE) {
 					png.error = "tRNS too early";
@@ -380,7 +393,26 @@ read(fd: ref Iobuf): (ref Rawimage, string)
 	}
 	if (png.error == nil && !png.done)
 		png.error = "insufficient data";
+	if (png.error == nil && png.trgb != nil && raw.nchans == 3)
+		addalpha(raw, png.trgb);
 	return (raw, png.error);
+}
+
+# RGB with a transparent colour becomes RGBA
+addalpha(raw: ref Rawimage, c: array of int)
+{
+	r := raw.chans[0];
+	g := raw.chans[1];
+	b := raw.chans[2];
+	a := array[len r] of byte;
+	for (i := 0; i < len r; i++)
+		if (int r[i] == c[0] && int g[i] == c[1] && int b[i] == c[2])
+			a[i] = byte 0;
+		else
+			a[i] = byte 255;
+	raw.chans = array[] of {r, g, b, a};
+	raw.nchans = 4;
+	raw.chandesc = RImagefile->CRGBA;
 }
 
 phase2stepping(phase: int): (int, int, int, int)

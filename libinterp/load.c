@@ -78,12 +78,21 @@ validtypemap(int size, uchar *map, int mapsize)
 	 * limbo compiler for valid modules (e.g. a 1-byte type with an empty
 	 * pointer map), so checking map length or size alignment alone would
 	 * reject legitimate bytecode.
+	 *
+	 * A type that does hold a pointer must also be a whole number of
+	 * words.  As an array element type, a size such as 12 on a 64-bit
+	 * host puts the pointers of odd elements at offsets that are not
+	 * word-aligned; pointerslot() then misses them, so DEFB/DEFW data can
+	 * overwrite a pointer that destroy() later follows.  The compiler
+	 * pads every pointer-bearing type to word alignment.
 	 */
 	maxwords = (ulong)size/sizeof(WORD);
 	for(i = 0; i < mapsize; i++)
 		for(bit = 0; bit < 8; bit++){
 			word = (ulong)i*8+bit;
-			if((map[i] & (1 << (7-bit))) != 0 && word >= maxwords)
+			if((map[i] & (1 << (7-bit))) == 0)
+				continue;
+			if(word >= maxwords || size%sizeof(WORD) != 0)
 				return 0;
 		}
 	return 1;
@@ -830,7 +839,7 @@ freemod(Module *m)
 		free(m->type);
 	}
 	free(m->name);
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
+#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64) || (defined(__riscv) && __riscv_xlen == 64)
 	/*
 	 * On these targets a compiled module's text is an executable
 	 * mapping from the JIT allocator, not pool memory: free() would

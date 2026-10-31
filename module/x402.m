@@ -52,7 +52,7 @@ X402: module {
 	selectoption:	fn(pr: ref PaymentRequired, chain: string): ref PaymentReq;
 
 	# Request a signed EIP-3009 payment authorization from wallet9p.
-	# Writes a structured request to /n/wallet/{acct}/authorize where
+	# Writes a structured request to /mnt/wallet/{acct}/authorize where
 	# budget and approval policy are enforced server-side, polls for up
 	# to waitsecs while approval is pending, and returns the payment
 	# payload JSON for the X-PAYMENT header (not yet base64-encoded).

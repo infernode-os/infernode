@@ -1,0 +1,758 @@
+implement Dom;
+
+#
+# The document tree.  See module/web/dom.m.
+#
+
+include "sys.m";
+	sys: Sys;
+include "web/dom.m";
+
+tagnames := array[] of {
+	"",
+	"a",
+	"abbr",
+	"address",
+	"applet",
+	"area",
+	"article",
+	"aside",
+	"audio",
+	"b",
+	"base",
+	"basefont",
+	"bdi",
+	"bdo",
+	"bgsound",
+	"big",
+	"blockquote",
+	"body",
+	"br",
+	"button",
+	"canvas",
+	"caption",
+	"center",
+	"cite",
+	"code",
+	"col",
+	"colgroup",
+	"data",
+	"datalist",
+	"dd",
+	"del",
+	"details",
+	"dfn",
+	"dialog",
+	"dir",
+	"div",
+	"dl",
+	"dt",
+	"em",
+	"embed",
+	"fieldset",
+	"figcaption",
+	"figure",
+	"font",
+	"footer",
+	"form",
+	"frame",
+	"frameset",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"head",
+	"header",
+	"hgroup",
+	"hr",
+	"html",
+	"i",
+	"iframe",
+	"image",
+	"img",
+	"input",
+	"ins",
+	"kbd",
+	"keygen",
+	"label",
+	"legend",
+	"li",
+	"link",
+	"listing",
+	"main",
+	"map",
+	"mark",
+	"marquee",
+	"menu",
+	"meta",
+	"meter",
+	"nav",
+	"nobr",
+	"noembed",
+	"noframes",
+	"noscript",
+	"object",
+	"ol",
+	"optgroup",
+	"option",
+	"output",
+	"p",
+	"param",
+	"picture",
+	"plaintext",
+	"pre",
+	"progress",
+	"q",
+	"rb",
+	"rp",
+	"rt",
+	"rtc",
+	"ruby",
+	"s",
+	"samp",
+	"script",
+	"search",
+	"section",
+	"select",
+	"slot",
+	"small",
+	"source",
+	"span",
+	"strike",
+	"strong",
+	"style",
+	"sub",
+	"summary",
+	"sup",
+	"table",
+	"tbody",
+	"td",
+	"template",
+	"textarea",
+	"tfoot",
+	"th",
+	"thead",
+	"time",
+	"title",
+	"tr",
+	"track",
+	"tt",
+	"u",
+	"ul",
+	"var",
+	"video",
+	"wbr",
+	"xmp",
+	"svg",
+	"math",
+	"desc",
+	"foreignObject",
+	"mi",
+	"mo",
+	"mn",
+	"ms",
+	"mtext",
+	"annotation-xml",
+};
+
+Nhash: con 256;
+taghash: array of list of int;
+
+hash(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = h*31 + s[i];
+	return (h & 16r7FFFFFFF) % Nhash;
+}
+
+atom(name: string): int
+{
+	if(taghash == nil) {
+		t := array[Nhash] of list of int;
+		for(i := 1; i < len tagnames; i++) {
+			h := hash(tagnames[i]);
+			t[h] = i :: t[h];
+		}
+		taghash = t;
+	}
+	for(l := taghash[hash(name)]; l != nil; l = tl l)
+		if(tagnames[hd l] == name)
+			return hd l;
+	return Tnone;
+}
+
+tagname(tag: int): string
+{
+	if(tag <= 0 || tag >= len tagnames)
+		return "";
+	return tagnames[tag];
+}
+
+Doc.new(url: string): ref Doc
+{
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1, nil);
+	d.create(Document, "#document", HTML);
+	return d;
+}
+
+Doc.create(d: self ref Doc, kind: int, name: string, ns: int): int
+{
+	if(d.n >= len d.nodes) {
+		a := array[2*len d.nodes] of ref Node;
+		a[0:] = d.nodes[0:d.n];
+		d.nodes = a;
+	}
+	tag := Tnone;
+	if(kind == Element && ns == HTML)
+		tag = atom(name);
+	n := d.n++;
+	d.gen++;
+	d.nodes[n] = ref Node(kind, tag, ns, name, 0, 0, 0, 0, 0, nil, nil, d.gen);
+	return n;
+}
+
+# Note that n's subtree may style differently (n and what is under it).
+# :has(), which looks further, style->restyle answers itself.
+Changedmax: con 512;
+Kidsmax: con 4;	# (compact's)
+
+changed(d: ref Doc, n: int)
+{
+	if(d.nchanged < 0)
+		return;
+	if(n <= 0) {
+		overflow(d);
+		return;
+	}
+	if(d.changed != nil && hd d.changed == n)
+		return;	# (as it was just now)
+	if(!intree(d, n))
+		return;	# no styles to change: built apart, it is restyled when put in
+	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
+		overflow(d);
+		return;
+	}
+	d.changed = n :: d.changed;
+}
+
+# n is in the document, or in a shadow tree in it
+intree(d: ref Doc, n: int): int
+{
+	while(n > 1) {
+		p := d.nodes[n].parent;
+		if(p == 0)
+			for(l := d.shadows; l != nil; l = tl l)
+				if((hd l).t1 == n) {
+					p = (hd l).t0;
+					break;
+				}
+		if(p == 0)
+			return 0;
+		n = p;
+	}
+	return n == 1;
+}
+
+overflow(d: ref Doc)
+{
+	d.changed = nil;
+	d.kids = nil;
+	d.nchanged = -1;
+}
+
+# the journal with each node once (a node changed again and again, as a
+# script animating one element does, filled it, and the restyle was of
+# the whole); how many entries it then has
+compact(d: ref Doc): int
+{
+	# and none under another, whose subtree is restyled with it (a
+	# script building a list in place changes each item and what is
+	# in it); a parent whose children changed in many places, as when
+	# a script appends them one by one, changed as a whole
+	nk := array[d.n] of {* => 0};
+	for(kl := d.kids; kl != nil; kl = tl kl)
+		if((p := (hd kl).t0) < len nk && nk[p]++ == Kidsmax)
+			d.changed = p :: d.changed;
+	seen := array[d.n] of byte;
+	for(l := d.changed; l != nil; l = tl l)
+		if((hd l) < len seen)
+			seen[hd l] = byte 1;
+	r: list of int;
+	k := 0;
+	for(l = d.changed; l != nil; l = tl l)
+		if((hd l) < len seen && seen[hd l] == byte 1 && !under(d, seen, hd l)) {
+			seen[hd l] = byte 2;
+			r = hd l :: r;
+			k++;
+		}
+	d.changed = nil;
+	for(; r != nil; r = tl r)
+		d.changed = hd r :: d.changed;
+	kp: list of (int, int);
+	kr: list of (int, int);
+	for(kl = d.kids; kl != nil; kl = tl kl) {
+		(p, at) := hd kl;
+		dup := p < len seen && (seen[p] != byte 0 || under(d, seen, p));
+		for(o := kr; o != nil && !dup; o = tl o)
+			dup = (hd o).t0 == p && (hd o).t1 == at;
+		if(!dup) {
+			kr = hd kl :: kr;
+			k++;
+		}
+	}
+	for(; kr != nil; kr = tl kr)
+		kp = hd kr :: kp;
+	d.kids = kp;
+	d.nchanged = k;
+	return k;
+}
+
+# whether one of n's ancestors is marked in seen
+under(d: ref Doc, seen: array of byte, n: int): int
+{
+	for(a := d.nodes[n].parent; a != 0; a = d.nodes[a].parent)
+		if(a < len seen && seen[a] != byte 0)
+			return 1;
+	return 0;
+}
+
+# parent's children changed at at (Doc.kids)
+kidschanged(d: ref Doc, parent, at: int)
+{
+	if(d.nchanged < 0 || !intree(d, parent))
+		return;
+	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
+		overflow(d);
+		return;
+	}
+	d.kids = (parent, at) :: d.kids;
+}
+
+# n and the siblings after it, which can match by it (+, ~)
+changedfrom(d: ref Doc, n: int)
+{
+	k := 0;
+	for(s := n; s != 0; s = d.nodes[s].next)
+		if(++k > 50) {
+			changed(d, d.nodes[n].parent);
+			return;
+		}
+	for(s = n; s != 0; s = d.nodes[s].next)
+		changed(d, s);
+}
+
+Doc.attachshadow(d: self ref Doc, host, root: int)
+{
+	for(l := d.shadows; l != nil; l = tl l)
+		if((hd l).t0 == host)
+			return;
+	d.shadows = (host, root) :: d.shadows;
+	d.gen++;
+	d.nodes[host].mgen = d.gen;
+	changed(d, host);	# (what it shows now its shadow's, by the flat tree)
+}
+
+Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
+{
+	r: list of (int, array of string);
+	for(l := d.adopted; l != nil; l = tl l)
+		if((hd l).t0 != root)
+			r = hd l :: r;
+	if(len sheets > 0)
+		r = (root, sheets) :: r;
+	d.adopted = r;
+	d.gen++;
+	if(root > 0 && root < d.n)
+		d.nodes[root].mgen = d.gen;
+	# a shadow root's sheets: its host's flat subtree, as attachshadow
+	host := 0;
+	for(sl := d.shadows; sl != nil; sl = tl sl)
+		if((hd sl).t1 == root)
+			host = (hd sl).t0;
+	changed(d, host);
+}
+
+Doc.adoptedof(d: self ref Doc, root: int): array of string
+{
+	for(l := d.adopted; l != nil; l = tl l)
+		if((hd l).t0 == root)
+			return (hd l).t1;
+	return nil;
+}
+
+# ---- the flat tree ----
+
+flat(d: ref Doc): ref Flat
+{
+	if(d.shadows == nil)
+		return nil;
+	f := ref Flat(array[d.n] of {* => 0}, array[d.n] of {* => 0}, array[d.n] of {* => 0}, array[d.n] of {* => 1}, d.shadows);
+	# each shadow tree's nodes are in its scope
+	for(l := d.shadows; l != nil; l = tl l) {
+		(nil, root) := hd l;
+		if(root <= 0 || root >= d.n)
+			continue;
+		f.scope[root] = root;
+		for(c := d.nodes[root].first; c != 0; c = within(d, c, root))
+			f.scope[c] = root;
+	}
+	flatkids(d, f, 1);
+	return f;
+}
+
+# the next node after n in tree order, inside top
+within(d: ref Doc, n, top: int): int
+{
+	if(d.nodes[n].first != 0)
+		return d.nodes[n].first;
+	while(n != top && n != 0) {
+		if(d.nodes[n].next != 0)
+			return d.nodes[n].next;
+		n = d.nodes[n].parent;
+	}
+	return 0;
+}
+
+shadowof(f: ref Flat, n: int): int
+{
+	for(l := f.roots; l != nil; l = tl l)
+		if((hd l).t0 == n)
+			return (hd l).t1;
+	return 0;
+}
+
+# link n's flat children, then theirs (a walk with its own stack: trees
+# are deep)
+flatkids(d: ref Doc, f: ref Flat, top: int)
+{
+	stack := top :: nil;
+	while(stack != nil) {
+		n := hd stack;
+		stack = tl stack;
+		kids := flatchildren(d, f, n);
+		prev := 0;
+		for(k := kids; k != nil; k = tl k) {
+			c := hd k;
+			f.parent[c] = n;
+			if(prev == 0)
+				f.first[n] = c;
+			else
+				f.next[prev] = c;
+			prev = c;
+		}
+		for(k = kids; k != nil; k = tl k)
+			if(d.nodes[hd k].kind == Element)
+				stack = hd k :: stack;
+	}
+}
+
+# n's children in the flat tree
+flatchildren(d: ref Doc, f: ref Flat, n: int): list of int
+{
+	nd := d.nodes[n];
+	src := n;
+	if(nd.kind == Element && (root := shadowof(f, n)) != 0)
+		src = root;
+	else if(nd.kind == Element && nd.name == "slot" && f.scope[n] != 1) {
+		# the slot's assigned nodes, or its own children for want of any
+		a := assigned(d, f, n);
+		if(a != nil)
+			return a;
+	}
+	r: list of int;
+	for(c := d.nodes[src].first; c != 0; c = d.nodes[c].next)
+		r = c :: r;
+	return rev(r);
+}
+
+# the light children of slot s's host that s is the slot of: the first
+# slot in the shadow tree with the name a child asks for ("" for the
+# unnamed one, which takes text and elements naming none)
+assigned(d: ref Doc, f: ref Flat, s: int): list of int
+{
+	root := f.scope[s];
+	host := 0;
+	for(l := f.roots; l != nil; l = tl l)
+		if((hd l).t1 == root)
+			host = (hd l).t0;
+	if(host == 0)
+		return nil;
+	name := d.attr(s, "name");
+	# s takes a name only if it is the first slot with it
+	for(c := d.nodes[root].first; c != 0; c = within(d, c, root))
+		if(d.nodes[c].kind == Element && d.nodes[c].name == "slot" && d.attr(c, "name") == name) {
+			if(c != s)
+				return nil;
+			break;
+		}
+	r: list of int;
+	for(c = d.nodes[host].first; c != 0; c = d.nodes[c].next) {
+		k := d.nodes[c].kind;
+		want := "";
+		if(k == Element)
+			want = d.attr(c, "slot");
+		else if(k != Text)
+			continue;
+		if(want == name)
+			r = c :: r;
+	}
+	return rev(r);
+}
+
+rev(l: list of int): list of int
+{
+	r: list of int;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+Doc.append(d: self ref Doc, parent, child: int)
+{
+	d.insert(parent, child, 0);
+}
+
+Doc.insert(d: self ref Doc, parent, child, before: int)
+{
+	# A script host can ask for the impossible: a node before itself,
+	# before a node elsewhere, or inside its own descendant.  Each
+	# would make a cycle, so the tree is left as it was.
+	if(child == before || child == parent || before != 0 && d.nodes[before].parent != parent)
+		return;
+	for(a := parent; a != 0; a = d.nodes[a].parent)
+		if(a == child)
+			return;
+	if(d.nodes[child].parent != 0)
+		d.remove(child);
+	if(d.nodes[parent].first == 0)
+		changedfrom(d, parent);	# (:empty no longer)
+	p := d.nodes[parent];
+	c := d.nodes[child];
+	c.parent = parent;
+	if(before == 0) {
+		c.prev = p.last;
+		c.next = 0;
+		if(p.last != 0)
+			d.nodes[p.last].next = child;
+		else
+			p.first = child;
+		p.last = child;
+	} else {
+		b := d.nodes[before];
+		c.next = before;
+		c.prev = b.prev;
+		if(b.prev != 0)
+			d.nodes[b.prev].next = child;
+		else
+			p.first = child;
+		b.prev = child;
+	}
+	changed(d, child);	# (now in the tree, if parent is)
+	kidschanged(d, parent, child);
+	d.gen++;
+	p.mgen = d.gen;
+	c.mgen = d.gen;
+}
+
+Doc.remove(d: self ref Doc, child: int)
+{
+	c := d.nodes[child];
+	if(c.parent == 0)
+		return;
+	kidschanged(d, c.parent, c.next);
+	changed(d, child);	# (out of the tree: its styles go)
+	if(c.prev == 0 && c.next == 0)
+		changedfrom(d, c.parent);	# (:empty now)
+	p := d.nodes[c.parent];
+	if(c.prev != 0)
+		d.nodes[c.prev].next = c.next;
+	else
+		p.first = c.next;
+	if(c.next != 0)
+		d.nodes[c.next].prev = c.prev;
+	else
+		p.last = c.prev;
+	pn := c.parent;
+	c.parent = c.next = c.prev = 0;
+	d.gen++;
+	d.nodes[pn].mgen = d.gen;
+	c.mgen = d.gen;
+}
+
+Doc.setattr(d: self ref Doc, n: int, name, val: string)
+{
+	nd := d.nodes[n];
+	# the value it has already: nothing changes (scripts set the same
+	# class or attribute again and again; each was a restyle, of the
+	# whole document when it was <html>'s)
+	for(l := nd.attrs; l != nil; l = tl l)
+		if((hd l).t0 == name) {
+			if((hd l).t1 == val)
+				return;
+			break;
+		}
+	r: list of (string, string);
+	found := 0;
+	for(l = nd.attrs; l != nil; l = tl l) {
+		(k, v) := hd l;
+		if(k == name) {
+			v = val;
+			found = 1;
+		}
+		r = (k, v) :: r;
+	}
+	if(!found)
+		r = (name, val) :: r;
+	for(nd.attrs = nil; r != nil; r = tl r)
+		nd.attrs = hd r :: nd.attrs;
+	d.gen++;
+	nd.mgen = d.gen;
+	changedfrom(d, n);
+}
+
+Doc.delattr(d: self ref Doc, n: int, name: string)
+{
+	nd := d.nodes[n];
+	for(l := nd.attrs; l != nil && (hd l).t0 != name; l = tl l)
+		;
+	if(l == nil)
+		return;	# it has none: nothing changes
+	r: list of (string, string);
+	for(l = nd.attrs; l != nil; l = tl l)
+		if((hd l).t0 != name)
+			r = hd l :: r;
+	for(nd.attrs = nil; r != nil; r = tl r)
+		nd.attrs = hd r :: nd.attrs;
+	d.gen++;
+	nd.mgen = d.gen;
+	changedfrom(d, n);
+}
+
+Doc.settext(d: self ref Doc, n: int, s: string)
+{
+	old := d.nodes[n].text;
+	d.nodes[n].text = s;
+	d.gen++;
+	d.nodes[n].mgen = d.gen;
+	p := d.nodes[n].parent;
+	if(p != 0)
+		d.nodes[p].mgen = d.gen;
+	if(p != 0 && (old == "") != (s == ""))
+		changedfrom(d, p);	# (:empty)
+}
+
+Doc.attr(d: self ref Doc, n: int, name: string): string
+{
+	for(l := d.nodes[n].attrs; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	return nil;
+}
+
+Doc.hasattr(d: self ref Doc, n: int, name: string): int
+{
+	for(l := d.nodes[n].attrs; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return 1;
+	return 0;
+}
+
+Doc.root(d: self ref Doc): int
+{
+	for(c := d.nodes[1].first; c != 0; c = d.nodes[c].next)
+		if(d.nodes[c].kind == Element)
+			return c;
+	return 0;
+}
+
+# First descendant of from (in document order) with the given tag.
+Doc.find(d: self ref Doc, from, tag: int): int
+{
+	n := d.nodes[from].first;
+	while(n != 0) {
+		if(d.nodes[n].tag == tag && d.nodes[n].kind == Element)
+			return n;
+		n = nextnode(d, n, from);
+	}
+	return 0;
+}
+
+# Next node in document order within the subtree rooted at top.
+nextnode(d: ref Doc, n, top: int): int
+{
+	if(d.nodes[n].first != 0)
+		return d.nodes[n].first;
+	while(n != top && n != 0) {
+		if(d.nodes[n].next != 0)
+			return d.nodes[n].next;
+		n = d.nodes[n].parent;
+	}
+	return 0;
+}
+
+Doc.textof(d: self ref Doc, n: int): string
+{
+	s := "";
+	for(m := d.nodes[n].first; m != 0; m = nextnode(d, m, n))
+		if(d.nodes[m].kind == Text)
+			s += d.nodes[m].text;
+	return s;
+}
+
+# The tree in the format of the html5lib tree-construction tests.
+Doc.dump(d: self ref Doc): string
+{
+	s := "";
+	for(c := d.nodes[1].first; c != 0; c = d.nodes[c].next)
+		s = dumpnode(d, c, 1, s);
+	return s;
+}
+
+dumpnode(d: ref Doc, n, depth: int, s: string): string
+{
+	ind := "| ";
+	for(i := 1; i < depth; i++)
+		ind += "  ";
+	nd := d.nodes[n];
+	case nd.kind {
+	Doctype =>
+		s += ind + "<!DOCTYPE " + nd.name + ">\n";
+	Comment =>
+		s += ind + "<!-- " + nd.text + " -->\n";
+	Text =>
+		s += ind + "\"" + nd.text + "\"\n";
+	Element =>
+		pfx := "";
+		case nd.ns {
+		SVG => pfx = "svg ";
+		MathML => pfx = "math ";
+		}
+		s += ind + "<" + pfx + nd.name + ">\n";
+		for(a := sortattrs(nd.attrs); a != nil; a = tl a)
+			s += ind + "  " + (hd a).t0 + "=\"" + (hd a).t1 + "\"\n";
+		if(nd.tag == Ttemplate && nd.ns == HTML) {
+			s += ind + "  content\n";
+			depth++;
+		}
+		for(c := nd.first; c != 0; c = d.nodes[c].next)
+			s = dumpnode(d, c, depth+1, s);
+	}
+	return s;
+}
+
+sortattrs(l: list of (string, string)): list of (string, string)
+{
+	a := array[len l] of (string, string);
+	for(i := 0; l != nil; l = tl l)
+		a[i++] = hd l;
+	for(i = 1; i < len a; i++)
+		for(j := i; j > 0 && a[j-1].t0 > a[j].t0; j--)
+			(a[j-1], a[j]) = (a[j], a[j-1]);
+	r: list of (string, string);
+	for(i = len a - 1; i >= 0; i--)
+		r = a[i] :: r;
+	return r;
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang=en><head><meta charset=utf-8><title>Inferno (operating system)</title>
+<style>
+body { font-family: sans-serif; margin: 0; color: #202122; font-size: 14px; line-height: 1.6 }
+header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; border-bottom: 1px solid #a2a9b1; background: #f8f9fa }
+header .logo { font-family: Georgia, serif; font-size: 20px; font-weight: bold }
+header nav { display: flex; gap: 12px; margin-left: auto }
+header nav a { color: #36c; text-decoration: none }
+main { max-width: 900px; margin: 0 auto; padding: 16px }
+h1 { font-family: Georgia, 'Linux Libertine', serif; font-weight: normal; font-size: 28px; border-bottom: 1px solid #a2a9b1; margin: 0 0 8px }
+.infobox { float: right; clear: right; width: 260px; margin: 0 0 12px 16px; border: 1px solid #a2a9b1; background: #f8f9fa; font-size: 12px; border-collapse: collapse }
+.infobox caption { font-weight: bold; font-size: 15px; padding: 4px }
+.infobox th { text-align: left; padding: 3px 6px; vertical-align: top; width: 40% }
+.infobox td { padding: 3px 6px }
+.wikitable { border-collapse: collapse; background: #f8f9fa; margin: 1em 0 }
+.wikitable th, .wikitable td { border: 1px solid #a2a9b1; padding: 4px 8px }
+.wikitable th { background: #eaecf0; text-align: center }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 16px }
+.card { border: 1px solid #c8ccd1; border-radius: 8px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.15) }
+.card h3 { margin: 0 0 4px; font-size: 15px }
+.toc { display: inline-block; border: 1px solid #a2a9b1; background: #f8f9fa; padding: 8px 16px; font-size: 13px }
+.toc ol { margin: 4px 0; padding-left: 20px }
+</style></head>
+<body>
+<header><span class=logo>W</span><span>The Free Encyclopedia</span><nav><a href=#>Main page</a><a href=#>Contents</a><a href=#>Random</a><a href=#>About</a></nav></header>
+<main>
+<h1>Inferno (operating system)</h1>
+<table class=infobox>
+<caption>Inferno</caption>
+<tr><th>Developer</th><td>Bell Labs, Vita Nuova Holdings</td></tr>
+<tr><th>Written in</th><td>C, Limbo</td></tr>
+<tr><th>OS family</th><td>Plan 9</td></tr>
+<tr><th>Initial release</th><td>1996</td></tr>
+<tr><th>License</th><td>MIT</td></tr>
+</table>
+<p><b>Inferno</b> is a distributed operating system started at Bell Labs and now developed and maintained by Vita Nuova Holdings as free software under the MIT License. Inferno was based on the experience gained with Plan 9 from Bell Labs, and the further research of Bell Labs into operating systems, languages, on-the-fly compilers, graphics, security, networking and portability.</p>
+<div class=toc><b>Contents</b><ol><li>Design</li><li>Limbo and Dis</li><li>Ports</li><li>Versions</li></ol></div>
+<p>Applications are written in the type-safe language Limbo, whose binary representation is identical over all platforms, and are executed using a just-in-time compilation technique in the Dis virtual machine.</p>
+<h2>Versions</h2>
+<table class=wikitable>
+<tr><th>Edition</th><th>Year</th><th colspan=2>Notes</th></tr>
+<tr><td>1st</td><td>1996</td><td rowspan=2>Lucent</td><td>initial release</td></tr>
+<tr><td>2nd</td><td>1997</td><td>Inferno Network Software</td></tr>
+<tr><td>3rd</td><td>2000</td><td>Vita Nuova</td><td>source available</td></tr>
+<tr><td>4th</td><td>2005</td><td>Vita Nuova</td><td>open source</td></tr>
+</table>
+<div class=cards>
+<div class=card><h3>Dis</h3>A register-based virtual machine.</div>
+<div class=card><h3>Limbo</h3>Concurrent, CSP-style channels.</div>
+<div class=card><h3>Styx</h3>The 9P protocol, renamed.</div>
+<div class=card><h3>Namespaces</h3>Per-process, composed with bind and mount.</div>
+</div>
+</main></body></html>

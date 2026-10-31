@@ -1,0 +1,22 @@
+# lucibridge cut_text
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant: The first half,
+user: 
+  | [harness: your reply was cut off at the output limit.  Continue exactly where it stopped; do not repeat what you already wrote.]
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:cut_text go
+  | 
+  | msg 1
+  | role=veltro text=The first half,
+  | 
+  | msg 2
+  | role=veltro text= and the second.
+  | 

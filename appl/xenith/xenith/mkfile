@@ -1,6 +1,7 @@
 <../../../mkconfig
 
 DIRS=\
+	agent\
 	bin\
 	calendar\
 	debug\

@@ -14,8 +14,8 @@ WRITES
 
 DESCRIPTION
 	The generic "graph this file" view.  Each value column becomes
-	one polyline rendered through aadraw (analytic-coverage
-	anti-aliasing), coloured from a fixed palette (theme accent,
+	one polyline stroked anti-aliased (strokepath in
+	draw-image(2)), coloured from a fixed palette (theme accent,
 	cyan, green, amber, text).  All series share one auto-scaled
 	range whose min/max are labelled at the plot corners; a grid
 	line marks zero when the range crosses it.  When a line has two

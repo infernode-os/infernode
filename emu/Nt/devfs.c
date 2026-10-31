@@ -38,7 +38,7 @@ struct Fsinfo
 	vlong	offset;
 	QLock	oq;
 	char*	spec;
-	Rune*	srv;
+	wchar_t*	srv;
 	Cname*	name;	/* Windows' idea of the file name */
 	ushort	usesec;
 	ushort	checksec;
@@ -60,8 +60,8 @@ struct User
 {
 	QLock	lk;		/* locks the gotgroup and group fields */
 	SID	*sid;
-	Rune	*name;
-	Rune	*dom;
+	wchar_t	*name;
+	wchar_t	*dom;
 	int	type;		/* the type of sid, ie SidTypeUser, SidTypeAlias, ... */
 	int	gotgroup;	/* tried to add group */
 	Gmem	*group;		/* global and local groups to which this user or group belongs. */
@@ -132,11 +132,11 @@ modetomask[] =
 
 extern	DWORD	PlatformId;
 	char    rootdir[MAXROOT] = ".";
-	Rune	rootname[] = L"inferno-server";
+	wchar_t	rootname[] = L"inferno-server";
 static	Qid	rootqid;
 static	User	*fsnone;
 static	User	*fsuser;
-static	Rune	*ntsrv;
+static	wchar_t	*ntsrv;
 static	int	usesec;
 static	int	checksec;
 static	int	isserver;
@@ -197,33 +197,34 @@ static	void		fssettime(char*, long, long);
 static	long		unixtime(FILETIME);
 static	FILETIME	wintime(ulong);
 static	void		secinit(void);
-static	int		secstat(Dir*, char*, Rune*);
-static	int		secsize(char*, Rune*);
-static	void		seccheck(char*, ulong, Rune*);
-static	int		sechasperm(char*, ulong, Rune*);
+static	int		secstat(Dir*, char*, wchar_t*);
+static	int		secsize(char*, wchar_t*);
+static	void		seccheck(char*, ulong, wchar_t*);
+static	int		sechasperm(char*, ulong, wchar_t*);
 static	SECURITY_DESCRIPTOR* secsd(char*, char[SD_ROCK]);
-static	int		secsdhasperm(SECURITY_DESCRIPTOR*, ulong, Rune*);
-static	int		secsdstat(SECURITY_DESCRIPTOR*, Stat*, Rune*);
+static	int		secsdhasperm(SECURITY_DESCRIPTOR*, ulong, wchar_t*);
+static	int		secsdstat(SECURITY_DESCRIPTOR*, Stat*, wchar_t*);
 static	SECURITY_DESCRIPTOR* secmksd(char[SD_ROCK], Stat*, ACL*, int);
 static	SID		*dupsid(SID*);
-static	int		ismembersid(Rune*, User*, SID*);
+static	int		ismembersid(wchar_t*, User*, SID*);
 static	int		ismember(User*, User*);
-static	User		*sidtouser(Rune*, SID*);
-static	User		*domnametouser(Rune*, Rune*, Rune*);
-static	User		*nametouser(Rune*, Rune*);
-static	User		*unametouser(Rune*, char*);
+static	User		*sidtouser(wchar_t*, SID*);
+static	User		*domnametouser(wchar_t*, wchar_t*, wchar_t*);
+static	User		*nametouser(wchar_t*, wchar_t*);
+static	User		*unametouser(wchar_t*, char*);
 static	void		addgroups(User*, int);
-static	User		*mkuser(SID*, int, Rune*, Rune*);
-static	Rune		*domsrv(Rune *, Rune[MAX_PATH]);
-static	Rune		*filesrv(char*);
+static	User		*mkuser(SID*, int, wchar_t*, wchar_t*);
+static	wchar_t		*domsrv(wchar_t *, wchar_t[MAX_PATH]);
+static	wchar_t		*filesrv(char*);
 static	int		fsacls(char*);
 static	User		*secuser(void);
 
-	int		runeslen(Rune*);
-	Rune*		runesdup(Rune*);
-	Rune*		utftorunes(Rune*, char*, int);
-	char*		runestoutf(char*, Rune*, int);
-	int		runescmp(Rune*, Rune*);
+	int		runeslen(wchar_t*);
+	int		widebytes(wchar_t*);
+	wchar_t*		runesdup(wchar_t*);
+	wchar_t*		utftorunes(wchar_t*, char*, int);
+	char*		runestoutf(char*, wchar_t*, int);
+	int		runescmp(wchar_t*, wchar_t*);
 
 
 int
@@ -1685,7 +1686,7 @@ secuser(void)
 }
 
 static int
-secstat(Dir *dir, char *file, Rune *srv)
+secstat(Dir *dir, char *file, wchar_t *srv)
 {
 	int ok, n;
 	Stat st;
@@ -1712,18 +1713,18 @@ secstat(Dir *dir, char *file, Rune *srv)
 		free(sd);
 	if(ok){
 		dir->mode = st.mode;
-		n = runenlen(st.owner->name, runeslen(st.owner->name));
-		dir->uid = smalloc(n+1);
-		runestoutf(dir->uid, st.owner->name, n+1);
-		n = runenlen(st.group->name, runeslen(st.group->name));
-		dir->gid = smalloc(n+1);
-		runestoutf(dir->gid, st.group->name, n+1);
+		n = widebytes(st.owner->name);
+		dir->uid = smalloc(n);
+		runestoutf(dir->uid, st.owner->name, n);
+		n = widebytes(st.group->name);
+		dir->gid = smalloc(n);
+		runestoutf(dir->gid, st.group->name, n);
 	}
 	return ok;
 }
 
 static int
-secsize(char *file, Rune *srv)
+secsize(char *file, wchar_t *srv)
 {
 	int ok;
 	Stat st;
@@ -1741,7 +1742,7 @@ secsize(char *file, Rune *srv)
 	if(sd != (void*)sdrock)
 		free(sd);
 	if(ok)
-		return runenlen(st.owner->name, runeslen(st.owner->name))+runenlen(st.group->name, runeslen(st.group->name));
+		return widebytes(st.owner->name)-1 + widebytes(st.group->name)-1;
 	return -1;
 }
 
@@ -1749,14 +1750,14 @@ secsize(char *file, Rune *srv)
  * verify that u had access to file
  */
 static void
-seccheck(char *file, ulong access, Rune *srv)
+seccheck(char *file, ulong access, wchar_t *srv)
 {
 	if(!sechasperm(file, access, srv))
 		error(Eperm);
 }
 
 static int
-sechasperm(char *file, ulong access, Rune *srv)
+sechasperm(char *file, ulong access, wchar_t *srv)
 {
 	int ok;
 	char sdrock[SD_ROCK];
@@ -1814,7 +1815,7 @@ secsd(char *file, char sdrock[SD_ROCK])
 }
 
 static int
-secsdstat(SECURITY_DESCRIPTOR *sd, Stat *st, Rune *srv)
+secsdstat(SECURITY_DESCRIPTOR *sd, Stat *st, wchar_t *srv)
 {
 	ACL *acl;
 	BOOL hasacl, b;
@@ -1923,7 +1924,7 @@ secsdstat(SECURITY_DESCRIPTOR *sd, Stat *st, Rune *srv)
 }
 
 static int
-secsdhasperm(SECURITY_DESCRIPTOR *sd, ulong access, Rune *srv)
+secsdhasperm(SECURITY_DESCRIPTOR *sd, ulong access, wchar_t *srv)
 {
 	User *u;
 	ACL *acl;
@@ -2060,10 +2061,10 @@ secmksd(char *sdrock, Stat *st, ACL *dacl, int isdir)
  * just make it easier to deal with user identities
  */
 static User*
-sidtouser(Rune *srv, SID *s)
+sidtouser(wchar_t *srv, SID *s)
 {
 	SID_NAME_USE type;
-	Rune aname[100], dname[100];
+	wchar_t aname[100], dname[100];
 	DWORD naname, ndname;
 	User *u;
 
@@ -2085,7 +2086,7 @@ sidtouser(Rune *srv, SID *s)
 }
 
 static User*
-domnametouser(Rune *srv, Rune *name, Rune *dom)
+domnametouser(wchar_t *srv, wchar_t *name, wchar_t *dom)
 {
 	User *u;
 
@@ -2100,12 +2101,12 @@ domnametouser(Rune *srv, Rune *name, Rune *dom)
 }
 
 static User*
-nametouser(Rune *srv, Rune *name)
+nametouser(wchar_t *srv, wchar_t *name)
 {
 	char sidrock[MAX_SID];
 	SID *sid;
 	SID_NAME_USE type;
-	Rune dom[MAX_PATH];
+	wchar_t dom[MAX_PATH];
 	DWORD nsid, ndom;
 
 	sid = (SID*)sidrock;
@@ -2121,9 +2122,9 @@ nametouser(Rune *srv, Rune *name)
  * this mapping could be cached
  */
 static User*
-unametouser(Rune *srv, char *name)
+unametouser(wchar_t *srv, char *name)
 {
-	Rune rname[MAX_PATH];
+	wchar_t rname[MAX_PATH];
 
 	utftorunes(rname, name, MAX_PATH);
 	return nametouser(srv, rname);
@@ -2133,7 +2134,7 @@ unametouser(Rune *srv, char *name)
  * make a user structure and add it to the global cache.
  */
 static User*
-mkuser(SID *sid, int type, Rune *name, Rune *dom)
+mkuser(SID *sid, int type, wchar_t *name, wchar_t *dom)
 {
 	User *u;
 
@@ -2187,7 +2188,7 @@ mkuser(SID *sid, int type, Rune *name, Rune *dom)
  * which might be a group.
  */
 static int
-ismembersid(Rune *srv, User *u, SID *gsid)
+ismembersid(wchar_t *srv, User *u, SID *gsid)
 {
 	User *g;
 
@@ -2243,7 +2244,7 @@ addgroups(User *u, int force)
 	DWORD i, n, rem;
 	User *gu;
 	Gmem *g, *next;
-	Rune *srv, srvrock[MAX_PATH];
+	wchar_t *srv, srvrock[MAX_PATH];
 
 	if(force){
 		u->gotgroup = 0;
@@ -2311,11 +2312,11 @@ dupsid(SID *sid)
 /*
  * return the name of the server machine for file
  */
-static Rune*
+static wchar_t*
 filesrv(char *file)
 {
 	int n;
-	Rune *srv;
+	wchar_t *srv;
 	char *p, uni[MAX_PATH], mfile[MAX_PATH];
 	wchar_t vol[3];
 
@@ -2345,7 +2346,7 @@ filesrv(char *file)
 	memmove(uni, file, n);
 	uni[n] = '\0';
 
-	srv = malloc((n + 1) * sizeof(Rune));
+	srv = malloc((n + 1) * sizeof(wchar_t));
 	if(srv == nil)
 		panic("filesrv: no memory");
 	utftorunes(srv, uni, n+1);
@@ -2394,10 +2395,10 @@ fsacls(char *file)
  * trust the domain anyway, and vice versa, so it's not
  * clear what benifit we would gain by getting the answer "right".
  */
-static Rune*
-domsrv(Rune *dom, Rune srv[MAX_PATH])
+static wchar_t*
+domsrv(wchar_t *dom, wchar_t srv[MAX_PATH])
 {
-	Rune *psrv;
+	wchar_t *psrv;
 	int n, r;
 
 	if(dom[0] == 0)
@@ -2408,7 +2409,7 @@ domsrv(Rune *dom, Rune srv[MAX_PATH])
 		n = runeslen(psrv);
 		if(n >= MAX_PATH)
 			n = MAX_PATH-1;
-		memmove(srv, psrv, n*sizeof(Rune));
+		memmove(srv, psrv, n*sizeof(wchar_t));
 		srv[n] = 0;
 		net.ApiBufferFree(psrv);
 		return srv;
@@ -2417,22 +2418,22 @@ domsrv(Rune *dom, Rune srv[MAX_PATH])
 	return nil;
 }
 
-Rune*
-runesdup(Rune *r)
+wchar_t*
+runesdup(wchar_t *r)
 {
 	int n;
-	Rune *s;
+	wchar_t *s;
 
 	n = runeslen(r) + 1;
-	s = malloc(n * sizeof(Rune));
+	s = malloc(n * sizeof(wchar_t));
 	if(s == nil)
 		error(Enomem);
-	memmove(s, r, n * sizeof(Rune));
+	memmove(s, r, n * sizeof(wchar_t));
 	return s;
 }
 
 int
-runeslen(Rune *r)
+runeslen(wchar_t *r)
 {
 	int n;
 
@@ -2442,46 +2443,81 @@ runeslen(Rune *r)
 	return n;
 }
 
+/*
+ * Win32 strings are UTF-16: a wchar_t is 16 bits, a Rune is not,
+ * and a rune beyond U+FFFF is a surrogate pair. These convert
+ * between them and UTF-8; an unpaired surrogate is Runeerror.
+ */
+int
+widerune(Rune *rp, wchar_t *w)
+{
+	Rune r;
+
+	r = w[0];
+	if(r >= 0xD800 && r <= 0xDBFF && w[1] >= 0xDC00 && w[1] <= 0xDFFF){
+		*rp = 0x10000 + ((r - 0xD800) << 10) + (w[1] - 0xDC00);
+		return 2;
+	}
+	if(r >= 0xD800 && r <= 0xDFFF)
+		r = Runeerror;
+	*rp = r;
+	return 1;
+}
+
+/* the UTF-8 for nc bytes (with NUL) at most */
 char*
-runestoutf(char *p, Rune *r, int nc)
+runestoutf(char *p, wchar_t *w, int nc)
 {
 	char *op, *ep;
-	int n, c;
+	int n;
+	Rune r;
 
 	op = p;
 	ep = p + nc;
-	while(c = *r++) {
-		n = 1;
-		if(c >= Runeself)
-			n = runelen(c);
-		if(p + n >= ep)
+	while(*w != 0) {
+		n = widerune(&r, w);
+		if(p + runelen(r) >= ep)
 			break;
-		if(c < Runeself)
-			*p++ = c;
+		w += n;
+		if(r < Runeself)
+			*p++ = r;
 		else
-			p += runetochar(p, r-1);
+			p += runetochar(p, &r);
 	}
 	*p = '\0';
 	return op;
 }
 
-Rune*
-utftorunes(Rune *r, char *p, int nc)
+/* the UTF-16 for nc wchar_ts (with NUL) at most; one per UTF-8 byte is always enough */
+wchar_t*
+utftorunes(wchar_t *w, char *p, int nc)
 {
-	Rune *or, *er;
+	wchar_t *ow, *ew;
+	Rune r;
+	int n;
 
-	or = r;
-	er = r + nc;
-	while(*p != '\0' && r + 1 < er)
-		p += chartorune(r++, p);
-	*r = '\0';
-	return or;
+	ow = w;
+	ew = w + nc;
+	while(*p != '\0' && w + 1 < ew) {
+		n = chartorune(&r, p);
+		if(r > 0xFFFF) {
+			if(w + 2 >= ew)
+				break;
+			r -= 0x10000;
+			*w++ = 0xD800 + (r >> 10);
+			*w++ = 0xDC00 + (r & 0x3FF);
+		} else
+			*w++ = r;
+		p += n;
+	}
+	*w = '\0';
+	return ow;
 }
 
 int
-runescmp(Rune *s1, Rune *s2)
+runescmp(wchar_t *s1, wchar_t *s2)
 {
-	Rune r1, r2;
+	wchar_t r1, r2;
 
 	for(;;) {
 		r1 = *s1++;

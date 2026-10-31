@@ -220,7 +220,7 @@ Service.attach(svc: self ref Service, localuser, keydir: string): ref Attached
 	"infpk1" =>
 		cryptalg := svc.attrs.get("auth.crypt");
 		if(cryptalg == nil)
-			cryptalg = "none";
+			cryptalg = "aes_256_cbc sha256";
 		ca := svc.attrs.get("auth.signer");
 		kf: string;
 		if(ca != nil){

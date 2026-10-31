@@ -7,7 +7,7 @@ implement Speech9p;
 # Engine backends are pluggable: host commands or HTTP APIs.
 #
 # Filesystem structure:
-#   /n/speech/
+#   /mnt/speech/
 #   ├── ctl        (rw)  Configuration: engine, voice, lang, etc.
 #   ├── say        (rw)  Write text, read status. Plays audio on /dev/audio.
 #   ├── hear       (rw)  Write "start", read transcribed text from /dev/audio.
@@ -16,22 +16,22 @@ implement Speech9p;
 # Usage:
 #   speech9p                       # Start with defaults
 #   speech9p -D                    # With 9P debug tracing
-#   speech9p -m /n/speech          # Custom mount point
+#   speech9p -m /mnt/speech          # Custom mount point
 #   speech9p -e cmd                # Use host command engine
 #   speech9p -e api                # Use HTTP API engine
 #   speech9p -e api -k <key>       # API engine with key
 #
 # Examples:
-#   echo 'Hello world' > /n/speech/say         # Speak text
-#   echo 'start' > /n/speech/hear              # Start listening
-#   cat /n/speech/hear                          # Read transcription
-#   echo 'voice alloy' > /n/speech/ctl         # Change voice
-#   cat /n/speech/voices                        # List voices
-#   cat /n/speech/ctl                           # Show current config
+#   echo 'Hello world' > /mnt/speech/say         # Speak text
+#   echo 'start' > /mnt/speech/hear              # Start listening
+#   cat /mnt/speech/hear                          # Read transcription
+#   echo 'voice alloy' > /mnt/speech/ctl         # Change voice
+#   cat /mnt/speech/voices                        # List voices
+#   cat /mnt/speech/ctl                           # Show current config
 #
 # Runtime ctl writes are intentionally limited to inert knobs such as voice,
 # language, and audio shape. Backend selection, host command paths, model
-# paths, API URLs, and API keys are startup/admin configuration because /n/speech
+# paths, API URLs, and API keys are startup/admin configuration because /mnt/speech
 # may be present in an agent namespace.
 #
 
@@ -100,7 +100,7 @@ whispermodel := "";  # Path to .bin GGML model
 
 stderr: ref Sys->FD;
 user: string;
-mountpt := "/n/speech";
+mountpt := "/mnt/speech";
 fidstates: list of ref FidState;
 
 nomod(s: string)
@@ -113,7 +113,7 @@ usage()
 {
 	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-k apikey]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
-	sys->fprint(stderr, "  -m mountpoint Mount point (default: /n/speech)\n");
+	sys->fprint(stderr, "  -m mountpoint Mount point (default: /mnt/speech)\n");
 	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local\n");
 	sys->fprint(stderr, "  -k key        API key (for api engine)\n");
 	sys->fprint(stderr, "  -u url        API base URL\n");
@@ -523,7 +523,7 @@ saycmd_windows(nil: string): string
 sayapi(text: string): string
 {
 	if(apikey == "")
-		return "error: API key not set (use: echo 'apikey <key>' > /n/speech/ctl)";
+		return "error: API key not set (use: echo 'apikey <key>' > /mnt/speech/ctl)";
 
 	# Build JSON request body
 	apivoice := voice;
@@ -565,7 +565,7 @@ hearcmd(): string
 {
 	if(cmdstt == "")
 		return "error: no STT command configured\n" +
-			"hint: install whisper-cpp and set: echo 'cmdstt whisper-cli' > /n/speech/ctl";
+			"hint: install whisper-cpp and set: echo 'cmdstt whisper-cli' > /mnt/speech/ctl";
 
 	platform := detectplatform();
 	case platform {

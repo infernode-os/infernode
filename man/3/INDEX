@@ -1,7 +1,9 @@
 intro 0intro
 arch arch
 audio audio
+bench bench
 boot boot
+camera camera
 cap cap
 cmd cmd
 cons cons
@@ -13,6 +15,7 @@ eia eia
 env env
 ether ether
 fs fs
+gpio gpio
 indir indir
 ip ip
 mnt mnt
@@ -26,3 +29,4 @@ sign sign
 srv srv
 srv9 srv9
 ssl ssl
+touch touch

@@ -1,0 +1,50 @@
+<$ROOT/mkconfig
+
+TARG=\
+	dom.dis\
+	html.dis\
+	css.dis\
+	style.dis\
+	fonts.dis\
+	layout.dis\
+	page.dis\
+	browser.dis\
+	charonfs.dis\
+	wordbreak.dis\
+	originfs.dis\
+
+MODULES=
+
+SYSMODULES=\
+	sys.m\
+	bidi.m\
+	web/dom.m\
+	web/html.m\
+	web/css.m\
+	web/style.m\
+	web/fonts.m\
+	web/layout.m\
+	web/page.m\
+	imagefile.m\
+	imgload.m\
+	web/browser.m\
+	web/charonfs.m\
+	web/wordbreak.m\
+	web/originfs.m\
+	styx.m\
+	styxservers.m\
+	js.m\
+	outlinefont.m\
+	draw.m\
+	math.m\
+	bufio.m\
+	convcs.m\
+	encoding.m\
+	filter.m\
+	plumbmsg.m\
+	woff2.m\
+	post9p.m\
+
+DISBIN=$ROOT/dis/lib/web
+
+<$ROOT/mkfiles/mkdis

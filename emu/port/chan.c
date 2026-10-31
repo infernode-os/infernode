@@ -193,6 +193,7 @@ newchan(void)
 	c->mqid.path = 0;
 	c->mqid.vers = 0;
 	c->mqid.type = 0;
+	c->mflag = 0;
 	c->name = 0;
 	return c;
 }
@@ -293,6 +294,35 @@ cnamepush(Cname *n, Chan *mp)
 	n->mlen++;
 }
 
+/*
+ * Record a mount crossed at the current path element.  walk() can discover a
+ * mount either while walking a batch of names or at the start of the next
+ * iteration.  The latter consumes no name, so it belongs in the most recent
+ * slot rather than a new one.  A later crossing at the same element replaces
+ * the earlier one: ".." must undo the mount most recently entered.
+ */
+static Cname*
+cnamecross(Cname *n, Chan *mp)
+{
+	Cname *new;
+	int i;
+
+	if(mp == nil || n->mlen == 0)
+		return n;
+	if(n->r.ref > 1){
+		new = newcname(n->s);
+		mtptcopy(new, n);
+		cnameclose(n);
+		n = new;
+	}
+	i = n->mlen - 1;
+	if(n->mtpt[i] != nil)
+		cclose(n->mtpt[i]);
+	n->mtpt[i] = mp;
+	incref(&mp->r);
+	return n;
+}
+
 void
 cnameclose(Cname *n)
 {
@@ -337,8 +367,17 @@ addelem(Cname *n, char *s)
 		n->s[n->len++] = '/';
 	memmove(n->s+n->len, s, i+1);
 	n->len += i;
-	if(isdotdot(s))
+	if(isdotdot(s)){
 		cleancname(n);
+		/* Drop the child before undomount() examines the parent slot. */
+		if(n->mlen > 1){
+			n->mlen--;
+			if(n->mtpt[n->mlen] != nil){
+				cclose(n->mtpt[n->mlen]);
+				n->mtpt[n->mlen] = nil;
+			}
+		}
+	}
 	return n;
 }
 
@@ -541,13 +580,14 @@ if(old->umh)
 		/*
 		 *  copy a union when binding it onto a directory
 		 */
-		flg = order;
+		flg = order | (flag&MREADONLY);
 		if(order == MREPL)
-			flg = MAFTER;
+			flg = MAFTER | (flag&MREADONLY);
 		h = &nm->next;
 		um = mh->mount;
 		for(um = um->next; um; um = um->next) {
-			f = newmount(m, um->to, flg, um->spec);
+			f = newmount(m, um->to,
+				flg | (um->mflag&MREADONLY), um->spec);
 			*h = f;
 			h = &f->next;
 		}
@@ -658,11 +698,30 @@ cclone(Chan *c)
 	Walkqid *wq;
 
 	wq = devtab[c->type]->walk(c, nil, nil, 0);
-	if(wq == nil)
+	if(wq == nil){
+		/*
+		 * A mounted server that refuses the walk says why in an
+		 * Rerror, and mntwalk returns nil with that reason still in
+		 * errstr -- which "clone failed" then overwrote, so the one
+		 * fact needed to diagnose it was thrown away (#650: opens on
+		 * /tmp failing one time in 300 after processes were killed
+		 * mid-request, and no way to tell "fid in use" from anything
+		 * else). Only for devmnt: another device's nil leaves errstr
+		 * whatever it was before, which is nobody's reason.
+		 */
+		/*
+		 * errstr can be the argument as it stands: errorf formats
+		 * into a buffer of its own, bounded, and only then does
+		 * error() copy the result over errstr.
+		 */
+		if(devtab[c->type]->dc == 'M' && up->env->errstr[0] != 0)
+			errorf("clone failed: %s", up->env->errstr);
 		error("clone failed");
+	}
 	nc = wq->clone;
 	free(wq);
 	nc->name = c->name;
+	nc->mflag = c->mflag;
 	if(c->name)
 		incref(&c->name->r);
 	return nc;
@@ -706,9 +765,43 @@ if(m->from == nil){
 }
 
 int
-domount(Chan **cp, Mhead **mp)
+domount(Chan **cp, Mhead **mp, Cname **name)
 {
-	return findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid);
+	if(!findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid))
+		return 0;
+	if(name != nil)
+		*name = cnamecross(*name, (*mp)->from);
+	return 1;
+}
+
+static int
+mheadflag(Mhead *m)
+{
+	int flag;
+
+	if(m == nil)
+		return 0;
+	rlock(&m->lock);
+	flag = m->mount != nil ? m->mount->mflag : 0;
+	runlock(&m->lock);
+	return flag;
+}
+
+int
+mutatingmode(int mode)
+{
+	int rwmode;
+
+	rwmode = mode & 3;
+	return rwmode == OWRITE || rwmode == ORDWR ||
+		(mode & (OTRUNC|ORCLOSE));
+}
+
+void
+checkwritable(Chan *c)
+{
+	if(c->mflag & MREADONLY)
+		error(Eperm);
 }
 
 Chan*
@@ -746,9 +839,8 @@ undomount(Chan *c, Cname *name)
 		return nc;
 	}
 
-	name->mlen--;
-	nc = name->mtpt[name->mlen];
-	name->mtpt[name->mlen] = nil;
+	nc = name->mtpt[name->mlen-1];
+	name->mtpt[name->mlen-1] = nil;
 	if(nc == nil)
 		return c;	/* no mount crossed at this element — the device's parent is correct */
 	cclose(c);
@@ -763,7 +855,7 @@ static char Edoesnotexist[] = "does not exist";
 int
 walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 {
-	int dev, didmount, dotdot, i, n, nhave, ntry, type;
+	int dev, didmount, dotdot, i, mflag, n, nhave, ntry, type;
 	Chan *c, *nc;
 	Cname *cname;
 	Mount *f;
@@ -810,6 +902,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
   	 */
 	didmount = 0;
 	for(nhave=0; nhave<nnames; nhave+=n){
+		mflag = c->mflag;
 		if((c->qid.type&QTDIR)==0){
 			if(nerror)
 				*nerror = nhave;
@@ -836,7 +929,9 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 		}
 
 		if(!dotdot && !nomount && !didmount)
-			domount(&c, &mh);
+			if(domount(&c, &mh, &cname)){
+				mflag = mheadflag(mh);
+			}
 
 		type = c->type;
 		dev = c->dev;
@@ -851,11 +946,12 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				for(f = mh->mount->next; f; f = f->next)
 					if((wq = devtab[f->to->type]->walk(f->to, nil, names+nhave, ntry)) != nil)
 						break;
-				runlock(&mh->lock);
 				if(f != nil){
 					type = f->to->type;
 					dev = f->to->dev;
+					mflag = f->mflag;
 				}
+				runlock(&mh->lock);
 			}
 			if(wq == nil){
 				cclose(c);
@@ -867,6 +963,8 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				return -1;
 			}
 		}
+		if(wq->clone != nil)
+			wq->clone->mflag = mflag;
 
 		nmh = nil;
 		didmount = 0;
@@ -911,6 +1009,8 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				nc = wq->clone;
 			}else{		/* stopped early, at a mount point */
 				didmount = 1;
+				nc = cunique(nc);
+				nc->mflag = mheadflag(nmh);
 				if(wq->clone != nil){
 					cclose(wq->clone);
 					wq->clone = nil;
@@ -976,8 +1076,9 @@ createdir(Chan *c, Mhead *m)
 		nexterror();
 	}
 	for(f = m->mount; f; f = f->next) {
-		if(f->mflag&MCREATE) {
+		if((f->mflag&(MCREATE|MREADONLY)) == MCREATE) {
 			nc = cclone(f->to);
+			nc->mflag = f->mflag;
 			runlock(&m->lock);
 			poperror();
 			cclose(c);
@@ -1013,8 +1114,13 @@ cleancname(Cname *n)
 	n->len = strlen(n->s);
 }
 
+/*
+ * growparse and parsename take a volatile Elemlist because namec's is
+ * one: its handler frees what these allocate, and only a volatile read
+ * makes that handler see it (see namec).
+ */
 static void
-growparse(Elemlist *e)
+growparse(volatile Elemlist *e)
 {
 	char **new;
 	int *inew;
@@ -1044,11 +1150,14 @@ growparse(Elemlist *e)
  * rather than a directory.
  */
 static void
-parsename(char *name, Elemlist *e)
+parsename(char *name, volatile Elemlist *e)
 {
-	char *slash;
+	char *slash, *copy;
 
-	kstrdup(&e->name, name);
+	/* through a plain local: kstrdup wants a char**, not a volatile one */
+	copy = nil;
+	kstrdup(&copy, name);
+	e->name = copy;
 	name = e->name;
 	e->nelems = 0;
 	e->elems = nil;
@@ -1114,7 +1223,19 @@ namec(char *aname, int amode, int omode, ulong perm)
 	int n, prefix, len, t, nomount, npath;
 	Chan *c, *cnew;
 	Cname *cname;
-	Elemlist e;
+	/*
+	 * volatile is load-bearing. e.name, e.elems and e.off are nil at
+	 * waserror() and allocated by parsename after it, and the handler
+	 * frees all three. C leaves a non-volatile local modified between
+	 * setjmp and longjmp indeterminate, and clang -O takes that
+	 * literally: it folded the nils into the handler -- three
+	 * "mov x0, xzr; bl free" -- so every failed lookup leaked the
+	 * parsed copy of the name and its two index arrays, ~400 bytes of
+	 * main pool per miss, measured at 3 blocks per failing ftest -e.
+	 * An agent probing optional files, a shell PATH miss, a poller
+	 * waiting for a file to appear: all of them paid it.
+	 */
+	volatile Elemlist e;
 	Rune r;
 	Mhead *m;
 	Pgrp *pg;
@@ -1244,14 +1365,20 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 	switch(amode){
 	case Aaccess:
-		if(!nomount)
-			domount(&c, nil);
+		m = nil;
+		if(!nomount && domount(&c, &m, nil)){
+			c = cunique(c);
+			c->mflag = mheadflag(m);
+		}
+		putmhead(m);
 		break;
 
 	case Abind:
 		m = nil;
-		if(!nomount)
-			domount(&c, &m);
+		if(!nomount && domount(&c, &m, nil)){
+			c = cunique(c);
+			c->mflag = mheadflag(m);
+		}
 		if(c->umh != nil)
 			putmhead(c->umh);
 		c->umh = m;
@@ -1265,10 +1392,12 @@ namec(char *aname, int amode, int omode, ulong perm)
 		incref(&cname->r);
 		m = nil;
 		if(!nomount)
-			domount(&c, &m);
+			domount(&c, &m, &cname);
 
 		/* our own copy to open or remove */
 		c = cunique(c);
+		if(m != nil)
+			c->mflag = mheadflag(m);
 
 		/* now it's our copy anyway, we can put the name back */
 		cnameclose(c->name);
@@ -1276,11 +1405,19 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 		switch(amode){
 		case Aremove:
+			if(c->mflag & MREADONLY){
+				putmhead(m);
+				error(Eperm);
+			}
 			putmhead(m);
 			break;
 
 		case Aopen:
 		case Acreate:
+			if((c->mflag & MREADONLY) && mutatingmode(omode)){
+				putmhead(m);
+				error(Eperm);
+			}
 if(c->umh != nil){
 	print("cunique umh\n");
 	putmhead(c->umh);
@@ -1397,6 +1534,8 @@ if(c->umh != nil){
 			 * if findmount gave us a new Chan.
 			 */
 			cnew = cunique(cnew);
+			if(cnew->mflag & MREADONLY)
+				error(Eperm);
 			cnameclose(cnew->name);
 			cnew->name = c->name;
 			incref(&cnew->name->r);

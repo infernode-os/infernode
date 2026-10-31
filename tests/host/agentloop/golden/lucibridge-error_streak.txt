@@ -1,0 +1,37 @@
+# lucibridge error_streak
+requests 5
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_error_streak_0_0 read {"args": "\/usr\/agentloop\/missing1"}
+tool-result call_error_streak_0_0:
+  | error: cannot open /usr/agentloop/missing1: '/usr/agentloop/missing1' file does not exist
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_error_streak_1_0 read {"args": "\/usr\/agentloop\/missing2"}
+tool-result call_error_streak_1_0:
+  | error: cannot open /usr/agentloop/missing2: '/usr/agentloop/missing2' file does not exist
+
+== request 4 (turn 4)
+tools: list read write
+assistant-call call_error_streak_3_0 read {"args": "\/usr\/agentloop\/missing4"}
+tool-result call_error_streak_3_0:
+  | error: cannot open /usr/agentloop/missing4: '/usr/agentloop/missing4' file does not exist
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:error_streak go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro dtype=dialogue title=Agent stuck text=Tool 'read' has failed 3 consecutive times. Consider intervening or letting it try a different approach.
+  | 
+  | msg 3
+  | role=veltro text=Giving up.
+  | 

@@ -57,7 +57,7 @@ iOS, and Android:
   permission prompt at the right moment (INFR-186 / INFR-190).
 - **Android:** `emu/Android/audio-sdl3.c` is the same one-line forwarder
   (INFR-188). SDL3 drives AAudio under the hood; the APK's manifest
-  carries `RECORD_AUDIO` so first-use prompts inside Lucifer.
+  carries `RECORD_AUDIO` so first-use prompts inside Lucia.
 
 The `audio_file_*` contract from `emu/port/audio.h` is identical on every
 platform. The only platform difference is what `audio_platform_init()`
@@ -128,7 +128,7 @@ codec + 9P + 4-cat bridge all work.
 # On Mac (Terminal):
 ./emu/MacOSX/o.emu -r$PWD -c0 sh /lib/voice/listen
 
-# On iPhone, in a Lucifer task-activity shell:
+# On iPhone, in a Lucia task-activity shell:
 sh /lib/voice/dial tcp!mac-ip!7070
 ```
 
@@ -156,7 +156,7 @@ The product story. Not yet verified on hardware — tracked in INFR-198.
 Both phones should be able to do this today; what's untested is the
 iOS listener accepting incoming connections under `UIBackgroundModes`
 rules (`audio` + `voip`, already set) and whether typing the dial
-command into the iPhone Lucifer shell stays survivable in practice.
+command into the iPhone Lucia shell stays survivable in practice.
 
 ## Optional opus codec path (INFR-187)
 

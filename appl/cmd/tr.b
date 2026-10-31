@@ -47,7 +47,7 @@ BITSET(a: array of byte, c: int): int
 	return int (a[c>>3] & bits[c&7]);
 }
 
-MAXRUNE: con 16rFFFF;
+MAXRUNE: con Sys->Runemax;
 
 f := array[(MAXRUNE+1)/8] of byte;
 t := array[(MAXRUNE+1)/8] of byte;
@@ -251,7 +251,7 @@ Pcb.getc(p: self ref Pcb): int
 		n := 0;
 		if ((r = p.spec[s]) == 'x') {
 			s++;
-			for (i := 0; i < 4 && s < p.end; i++) {
+			for (i := 0; i < 6 && s < p.end; i++) {
 				p.current = s;
 				r = p.spec[s++];
 				if ('0' <= r && r <= '9')
@@ -266,6 +266,8 @@ Pcb.getc(p: self ref Pcb): int
 					return n;
 				}
 			}
+			if(n > MAXRUNE)
+				error(sys->sprint("\\x%x is beyond the largest rune", n));
 			r = n;
 		} else {
 			for(i := 0; i < 3 && s < p.end; i++) {

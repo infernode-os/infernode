@@ -36,13 +36,27 @@ val haveUploadKey = uploadStorePath != null && file(uploadStorePath).exists()
 
 android {
     namespace = "io.infernode"
-    compileSdk = 35
+    compileSdk = 36    // Android 16
     ndkVersion = "29.0.0"   // matches the toolchain build-android-ndk-arm64.sh uses
 
     defaultConfig {
         applicationId = "io.infernode"
         minSdk = 28         // matches mkfiles/mkfile-Android-arm64 API floor
-        targetSdk = 35
+        // targetSdk 36 (Android 16) — Play requires a target within one year
+        // of the latest release; from Nov 1, 2026 an app targeting 35 can no
+        // longer be updated. Behaviour changes audited for this bump:
+        //   * edge-to-edge is now mandatory — already handled, the SDL
+        //     surface has applied its own window insets since INFR-115
+        //     (tools/check-android-safearea.sh keeps it there).
+        //   * predictive back is on by default and stops dispatching
+        //     KEYCODE_BACK / onBackPressed(); the vendored SDL3 activity
+        //     still uses the legacy path, so AndroidManifest.xml opts out
+        //     with enableOnBackInvokedCallback="false".
+        //   * 16 KB page sizes — libemu.so / libSDL3.so already build with
+        //     16 KB-aligned LOAD segments under NDK r29.
+        //   * orientation/aspect-ratio restrictions ignored on >=600dp
+        //     screens — we set none, so nothing to do.
+        targetSdk = 36
         // CI release builds inject a monotonic versionCode via env (the
         // repo commit count) so each Play upload climbs without a manual
         // bump; local/debug builds keep the checked-in default. Play
@@ -112,6 +126,12 @@ android {
         debug {
             // Debug APKs are signed with the Android debug keystore by
             // default. Sufficient for adb install on dev devices.
+            // INFERNODE_DEBUG_ID_SUFFIX (e.g. ".debug") lets a debug build
+            // install alongside the Play build on the same device: same id
+            // + different signer would otherwise force an uninstall, which
+            // wipes the Play install's data. Off by default so
+            // `am start -n io.infernode/...` and tools/android-smoke.sh hold.
+            System.getenv("INFERNODE_DEBUG_ID_SUFFIX")?.let { applicationIdSuffix = it }
         }
     }
 }

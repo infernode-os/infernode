@@ -1844,6 +1844,30 @@ cnsamode(void)
 	return m;
 }
 
+/*
+ * The ML-KEM material of one authentication, in one heap block. It was
+ * seven arrays on Keyring_auth's C stack, 9,440 bytes of them, which the
+ * hosted emulator's 32KB thread stacks carried and the native kernel's
+ * 16KB kernel stacks do not: every Limbo program on bare metal runs on
+ * the Dis VM kproc's kernel stack, and this builtin overran it on the
+ * first authenticated connection a Raspberry Pi 3 ever took -- a
+ * scheduler panic, a corrupted heap, and a fault loop that needed the
+ * power switch (#725). libsec's ML-KEM already keeps its polynomials on
+ * the heap for the same reason (mlkem.c); this is the same rule one
+ * level up. Wiped and freed at out:, on every path.
+ */
+typedef struct Kembuf Kembuf;
+struct Kembuf
+{
+	uchar	myek[MLKEM1024_PKLEN];
+	uchar	mydk[MLKEM1024_SKLEN];
+	uchar	hisek[MLKEM1024_PKLEN];
+	uchar	myct[MLKEM1024_CTLEN];
+	uchar	hisct[MLKEM1024_CTLEN];
+	uchar	ss_local[MLKEM_SSLEN];
+	uchar	ss_remote[MLKEM_SSLEN];
+};
+
 void
 Keyring_auth(void *fp)
 {
@@ -1858,10 +1882,10 @@ Keyring_auth(void *fp)
 	long now;
 	/* hybrid post-quantum key agreement material. Buffers are sized for the
 	 * larger ML-KEM-1024 (CNSA 2.0 strict); pklen/ctlen select the in-use
-	 * parameter set at runtime. */
-	uchar myek[MLKEM1024_PKLEN], mydk[MLKEM1024_SKLEN];
-	uchar hisek[MLKEM1024_PKLEN], myct[MLKEM1024_CTLEN], hisct[MLKEM1024_CTLEN];
-	uchar ss_local[MLKEM_SSLEN], ss_remote[MLKEM_SSLEN];
+	 * parameter set at runtime. They live on the heap, not the stack:
+	 * see Kembuf. */
+	Kembuf *kem;
+	uchar *myek, *mydk, *hisek, *myct, *hisct, *ss_local, *ss_remote;
 	uchar *kss_lo, *kss_hi, *ek_lo, *ek_hi;
 	int cmp;
 	int cnsa = cnsamode();
@@ -1893,6 +1917,23 @@ Keyring_auth(void *fp)
 		retstr(exNomem, &f->ret->t0);
 		return;
 	}
+	kem = malloc(sizeof(Kembuf));
+	if(kem == nil){
+		free(buf);
+		retstr(exNomem, &f->ret->t0);
+		return;
+	}
+	/* The peer must never receive allocator residue if a later ML-KEM
+	 * allocation fails.  The return values below are checked as the primary
+	 * fail-closed path; zeroing here is defence in depth. */
+	memset(kem, 0, sizeof(Kembuf));
+	myek = kem->myek;
+	mydk = kem->mydk;
+	hisek = kem->hisek;
+	myct = kem->myct;
+	hisct = kem->hisct;
+	ss_local = kem->ss_local;
+	ss_remote = kem->ss_remote;
 
 	/* send auth protocol version number (2 = hybrid PQ; required) */
 	if(sendmsg(fd, "2", 1) <= 0){
@@ -1973,10 +2014,14 @@ Keyring_auth(void *fp)
 	/* generate ephemeral ML-KEM keypair for hybrid PQ key agreement */
 	release();
 	if(cnsa)
-		mlkem1024_keygen(myek, mydk);
+		n = mlkem1024_keygen(myek, mydk);
 	else
-		mlkem768_keygen(myek, mydk);
+		n = mlkem768_keygen(myek, mydk);
 	acquire();
+	if(n != 0){
+		err = "ml-kem key generation failed";
+		goto out;
+	}
 
 	/* send alpha**r0 mod p, mycert, and mypk */
 	n = bigtobase64(alphar0, buf, Maxbuf);
@@ -2094,7 +2139,15 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 	if(n != pklen){
-		err = "bad ml-kem public key length";
+		/* say which side is in CNSA mode: the policy is per node, set
+		 * by CNSAMODE where each was started, and a node started
+		 * another way (a terminal's shell, not launchd) can differ */
+		if(n == MLKEM1024_PKLEN)
+			err = "bad ml-kem public key length: the peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike";
+		else if(n == MLKEM768_PKLEN)
+			err = "bad ml-kem public key length: this node is in CNSA mode (ML-KEM-1024), the peer is not; set CNSAMODE alike";
+		else
+			err = "bad ml-kem public key length";
 		goto out;
 	}
 	memmove(hisek, buf, pklen);
@@ -2102,10 +2155,14 @@ Keyring_auth(void *fp)
 	/* encapsulate to his ek, send the ciphertext */
 	release();
 	if(cnsa)
-		mlkem1024_encaps(myct, ss_local, hisek);
+		n = mlkem1024_encaps(myct, ss_local, hisek);
 	else
-		mlkem768_encaps(myct, ss_local, hisek);
+		n = mlkem768_encaps(myct, ss_local, hisek);
 	acquire();
+	if(n != 0){
+		err = "ml-kem encapsulation failed";
+		goto out;
+	}
 	if(sendmsg(fd, (char*)myct, ctlen) <= 0){
 		err = MSG;
 		goto out;
@@ -2123,9 +2180,13 @@ Keyring_auth(void *fp)
 	}
 	memmove(hisct, buf, ctlen);
 	if(cnsa)
-		mlkem1024_decaps(ss_remote, hisct, mydk);
+		n = mlkem1024_decaps(ss_remote, hisct, mydk);
 	else
-		mlkem768_decaps(ss_remote, hisct, mydk);
+		n = mlkem768_decaps(ss_remote, hisct, mydk);
+	if(n != 0){
+		err = "ml-kem decapsulation failed";
+		goto out;
+	}
 
 	/*
 	 * sign alpha**r0, alpha**r1 and both ML-KEM public keys, then send.
@@ -2278,10 +2339,9 @@ out:
 		certmutable(alphacert);
 		destroy(alphacert);
 	}
-	/* scrub ML-KEM secret key and shared secrets from the stack */
-	memset(mydk, 0, sizeof(mydk));
-	memset(ss_local, 0, sizeof(ss_local));
-	memset(ss_remote, 0, sizeof(ss_remote));
+	/* scrub the heap-backed ML-KEM secret key and shared secrets */
+	secureZero(kem, sizeof(Kembuf));
+	free(kem);
 	/* scrub the combiner buffer: it held the DH secret and both ML-KEM shared secrets */
 	memset(buf, 0, Maxbuf);
 	free(buf);
@@ -4069,7 +4129,11 @@ Keyring_mlkem768_keygen(void *fp)
 	f->ret->t0 = H;
 	f->ret->t1 = H;
 
-	mlkem768_keygen(pk, sk);
+	if(mlkem768_keygen(pk, sk) != 0){
+		secureZero(pk, sizeof(pk));
+		secureZero(sk, sizeof(sk));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(pk, MLKEM768_PKLEN);
 	f->ret->t1 = mem2array(sk, MLKEM768_SKLEN);
@@ -4090,8 +4154,14 @@ Keyring_mlkem768_encaps(void *fp)
 
 	if(f->pk == H || f->pk->len != MLKEM768_PKLEN)
 		error(exBadKey);
+	if(mlkem768_checkek(f->pk->data) != 0)
+		error(exBadKey);
 
-	mlkem768_encaps(ct, ss, f->pk->data);
+	if(mlkem768_encaps(ct, ss, f->pk->data) != 0){
+		secureZero(ct, sizeof(ct));
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(ct, MLKEM768_CTLEN);
 	f->ret->t1 = mem2array(ss, MLKEM_SSLEN);
@@ -4114,8 +4184,13 @@ Keyring_mlkem768_decaps(void *fp)
 		error(exBadKey);
 	if(f->ct == H || f->ct->len != MLKEM768_CTLEN)
 		error(exBadKey);
+	if(mlkem768_checkdk(f->sk->data) != 0)
+		error(exBadKey);
 
-	mlkem768_decaps(ss, f->ct->data, f->sk->data);
+	if(mlkem768_decaps(ss, f->ct->data, f->sk->data) != 0){
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	*f->ret = mem2array(ss, MLKEM_SSLEN);
 	secureZero(ss, MLKEM_SSLEN);
@@ -4133,7 +4208,11 @@ Keyring_mlkem1024_keygen(void *fp)
 	f->ret->t0 = H;
 	f->ret->t1 = H;
 
-	mlkem1024_keygen(pk, sk);
+	if(mlkem1024_keygen(pk, sk) != 0){
+		secureZero(pk, sizeof(pk));
+		secureZero(sk, sizeof(sk));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(pk, MLKEM1024_PKLEN);
 	f->ret->t1 = mem2array(sk, MLKEM1024_SKLEN);
@@ -4154,8 +4233,14 @@ Keyring_mlkem1024_encaps(void *fp)
 
 	if(f->pk == H || f->pk->len != MLKEM1024_PKLEN)
 		error(exBadKey);
+	if(mlkem1024_checkek(f->pk->data) != 0)
+		error(exBadKey);
 
-	mlkem1024_encaps(ct, ss, f->pk->data);
+	if(mlkem1024_encaps(ct, ss, f->pk->data) != 0){
+		secureZero(ct, sizeof(ct));
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(ct, MLKEM1024_CTLEN);
 	f->ret->t1 = mem2array(ss, MLKEM_SSLEN);
@@ -4178,8 +4263,13 @@ Keyring_mlkem1024_decaps(void *fp)
 		error(exBadKey);
 	if(f->ct == H || f->ct->len != MLKEM1024_CTLEN)
 		error(exBadKey);
+	if(mlkem1024_checkdk(f->sk->data) != 0)
+		error(exBadKey);
 
-	mlkem1024_decaps(ss, f->ct->data, f->sk->data);
+	if(mlkem1024_decaps(ss, f->ct->data, f->sk->data) != 0){
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	*f->ret = mem2array(ss, MLKEM_SSLEN);
 	secureZero(ss, MLKEM_SSLEN);

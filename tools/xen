@@ -1,0 +1,202 @@
+#!/bin/sh
+# xen — open host files in a standalone InferNode editor, Acme-SAC style.
+#
+#	xen [-s] [-w] [file ...]
+#
+# Starts an emu that runs nothing but the editor: no Lucifer, no login.
+# The emu window is the editor, and leaving the editor halts the emu.
+#
+#	Xenith (default) runs with no window manager, so it is Plain over
+#	the whole emu window and its Exit halts the emu itself
+#	(appl/xenith/gui.b, killwins).
+#
+#	sam (-s) is Tk and needs a window manager: it runs under wm/wm,
+#	and the emu is halted when sam returns (q, or exit on the
+#	command window's menu).
+#
+# Host paths are reached through /n/local, which the profile mounts over
+# the host root; the editor starts in the caller's directory.
+#
+# By default xen returns at once and the editor runs detached. -w waits
+# for the editor to finish instead, so xen can serve as $EDITOR
+# (EDITOR='xen -w') or be awaited by a script.
+#
+# On macOS, with Xenith.app installed, xen runs the app's own emu and
+# runtime tree, the signed release, rather than a development tree;
+# INFERNODE_ROOT runs a tree instead. Releases ship xen too, in
+# Xenith.app (Contents/Resources/tools) and the Linux GUI and Xenith tarballs
+# (tools), and there it runs the release it came in. Files given while
+# a Xenith is listening to the host's plumber are plumbed to it rather
+# than opened in another instance.
+#
+# Environment:
+#	INFERNODE_ROOT	tree to run (default on macOS: the Xenith.app this
+#			script is in, or one in /Applications or
+#			~/Applications; otherwise the tree holding this
+#			script, a source tree or a Linux release)
+#	XEN_APP		the Xenith.app to run (macOS), before any of those
+#	XEN_THEME	the session's theme (default xenith): any installed theme
+#			(/lib/lucifer/theme); glenda (or plan9) is Plan 9's acme. Xenith's
+#			Theme command switches it, for this session only.
+#			sam takes its colours from the system theme.
+#	XEN_GEOM	initial emu window size (default 1400x900)
+#	XEN_LOG		where a detached emu's output is added, with its start and
+#			exit status (default $TMPDIR/xen.log)
+#	XEN_HOSTS	hosts to mount at /n/<host> (ssh + u9fs), so files they
+#			plumb (tools/rplumb) open and save there
+#	INFERNODE_HIDPI	0 draws Xenith in points doubled on a Retina display
+#			rather than in its own pixels (the default, 1)
+
+usage() {
+	echo "usage: xen [-s] [-w] [file ...]" >&2
+	exit 2
+}
+
+editor=xenith
+wait=0
+while getopts sw c; do
+	case $c in
+	s)	editor=sam ;;
+	w)	wait=1 ;;
+	*)	usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+
+# Find the tree through any symlink (e.g. ~/bin/xen -> .../tools/xen).
+self=$0
+while [ -L "$self" ]; do
+	link=$(readlink "$self")
+	case $link in
+	/*)	self=$link ;;
+	*)	self=$(dirname "$self")/$link ;;
+	esac
+done
+root=${INFERNODE_ROOT:-$(cd "$(dirname "$self")/.." && pwd)}
+case $(uname -s) in
+Darwin)
+	emu=$root/emu/MacOSX/o.emu
+	# An app's emu and tree, unless a tree was asked for: XEN_APP, the
+	# app this script came in (Contents/Resources/tools/xen), or one
+	# installed. Run from inside the bundle, the emu is Xenith to the Dock.
+	if [ -z "$INFERNODE_ROOT" ]; then
+		own=
+		[ -x "$root/../MacOS/emu" ] && own=$(cd "$root/../.." && pwd)
+		for app in "$XEN_APP" "$own" /Applications/Xenith.app "$HOME/Applications/Xenith.app"; do
+			if [ -n "$app" ] && [ -x "$app/Contents/MacOS/emu" ]; then
+				emu=$app/Contents/MacOS/emu
+				root=$app/Contents/Resources
+				break
+			fi
+		done
+	fi ;;
+Linux)
+	emu=$root/emu/Linux/o.emu
+	# A release tarball (tools/xen beside bin and resources): its emu,
+	# with the libraries beside it, and its tree.
+	if [ -x "$root/bin/emu" ] && [ -d "$root/resources" ]; then
+		emu=$root/bin/emu
+		LD_LIBRARY_PATH=$root/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+		export LD_LIBRARY_PATH
+		root=$root/resources
+	fi ;;
+*)	echo "xen: unsupported host $(uname -s); on Windows use tools/xen.ps1" >&2; exit 1 ;;
+esac
+if [ ! -x "$emu" ]; then
+	echo "xen: no emulator at $emu (build one first)" >&2
+	exit 1
+fi
+# A headless emu runs the editor on an offscreen display and shows no
+# window at all. Refuse it, when the binary still has symbols to tell:
+# its own (sdl3_mainloop) or, stripped as a release is, its SDL imports.
+syms=$(nm "$emu" 2>/dev/null)
+if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q -e sdl3_mainloop -e SDL_CreateWindow; then
+	echo "xen: $emu is a headless build and cannot open a window;" >&2
+	echo "xen: build the GUI emulator (./build-macos-sdl3.sh or ./build-linux-*.sh) in $root" >&2
+	exit 1
+fi
+
+# Quote for the Inferno shell: wrap in '' and double any embedded '.
+q() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+# A Xenith already reading the host plumber's xenith port (below) takes
+# the files, new ones too, addressed to it. With none reading, the
+# plumber's own fallback runs xen, which starts one here. One is reading
+# while a bridge of its still has its 9p under it (9p rewrites its own
+# arguments, so look for the shell).
+reading() {
+	for b in $(pgrep -u "$(id -u)" -f 'read plumb/xenith &'); do
+		pgrep -P "$b" -f '9p read plumb' >/dev/null && return 0
+	done
+	return 1
+}
+if [ $editor = xenith ] && [ $wait = 0 ] && [ $# -gt 0 ] &&
+   plumb=$(command -v plumb) && command -v 9p >/dev/null && reading; then
+	for f in "$@"; do
+		case $f in
+		/*)	;;
+		*)	f=$PWD/$f ;;
+		esac
+		"$plumb" -s xen -d xenith -w "$PWD" "$f" || exit
+	done
+	exit 0
+fi
+
+files=
+for f in "$@"; do
+	case $f in
+	/*)	;;
+	*)	f=$PWD/$f ;;
+	esac
+	files="$files $(q "/n/local$f")"
+done
+
+case $editor in
+xenith)
+	run=
+	# With plan9port present, listen on its plumber's xenith port too
+	# (tools/xen.plumbing), so `plumb file` on the host opens the file
+	# here. The host shell kills its reader once the emu is gone.
+	# It starts once boot.sh (below) has started the plumber: a hostplumb
+	# older than its own wait for the plumber (an installed app's) gives
+	# up at once.
+	if nine=$(command -v 9p); then
+		host="'$nine' read plumb/xenith & r=\$!; while kill -0 \$PPID 2>/dev/null; do sleep 1; done; kill \$r"
+		run="${run}load std; {while {! ftest -e /chan/plumb.input} {sleep 1}; os sh -c $(q "$host") | hostplumb} & "
+	fi
+	# Hosts whose files may be plumbed here (tools/rplumb): mounted at
+	# /n/<host> now, since Xenith keeps the name space it starts with.
+	for h in $XEN_HOSTS; do
+		case $h in
+		*[!A-Za-z0-9._-]*|-*)	echo "xen: bad host name in XEN_HOSTS: $h" >&2 ;;
+		*)	run="${run}run /lib/xen/mounthost $(q "$h") >[2] /dev/null; " ;;
+		esac
+	done
+	# Then the plumber, the model and Xenith, as the apps start them.
+	run="${run}run /lib/xen/boot.sh -t $(q "${XEN_THEME:-xenith}")$files"
+	# The display's own pixels on a Retina screen, not each doubled:
+	# Xenith sizes itself by $displayscale (emu(1)). Not for sam, whose
+	# Tk does not. INFERNODE_HIDPI=0 keeps them doubled.
+	INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}
+	export INFERNODE_HIDPI
+	# The window's title, and on Linux the desktop entry it belongs to.
+	SDL_APP_NAME=Xenith
+	SDL_APP_ID=${SDL_APP_ID:-xenith}
+	export SDL_APP_NAME SDL_APP_ID ;;
+sam)
+	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;
+esac
+cmd="cd $(q "/n/local$PWD"); $run"
+
+set -- "$emu" -c1 -pheap=1536m -pmain=512m -pimage=512m \
+	-g"${XEN_GEOM:-1400x900}" -r"$root" /dis/sh.dis -l -c "$cmd"
+if [ $wait = 1 ]; then
+	exec "$@"
+fi
+# Each instance appends, with when it started and how it ended, so one
+# that dies is not wiped from the log by the next to start.
+log=${XEN_LOG:-${TMPDIR:-/tmp}/xen.log}
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') xen $*" >>"$log"
+nohup sh -c '"$@"; s=$?; echo "=== $(date "+%Y-%m-%d %H:%M:%S") emu exit status $s"' xen "$@" </dev/null >>"$log" 2>&1 &

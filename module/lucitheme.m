@@ -7,6 +7,8 @@
 #
 # Active theme is selected by /lib/lucifer/theme/current
 # which contains a single theme name (e.g. "brimstone").
+# Writing a name there switches every running program that
+# watches it (watch, below), Lucifer or not.
 #
 # Users can create custom themes by adding files to this
 # directory.  Missing keys fall back to Brimstone defaults.
@@ -85,6 +87,15 @@ Lucitheme: module
 		# existed; positional initialisers in lucitheme.b construct it
 		# in the same trailing slot.) ---
 		windowborder: int;
+
+		# --- A shell window's text, after windowborder for the
+		# same reason: while it holds what is typed (wm/shell,
+		# wm/sh), and when the window has not the keyboard (wm/sh,
+		# as rio dims it; wm/shell does not, as Xenith does not):
+		# rio's dark blue and grey.  A theme that does not set them
+		# has its own accent and text2. ---
+		editunfocused: int;
+		edithold:     int;
 	};
 
 	# Load the currently active theme.
@@ -95,4 +106,36 @@ Lucitheme: module
 
 	# Return built-in Brimstone (dark) defaults.
 	brimstone: fn(): ref Theme;
+
+	# The named theme, keys it lacks taken from Brimstone;
+	# nil if there is no such theme.
+	loadtheme: fn(name: string): ref Theme;
+
+	# The active theme's name ("brimstone" when none is set).
+	current: fn(): string;
+
+	# Make name the active theme, for every program watching:
+	# nil, or the reason it was refused.
+	settheme: fn(name: string): string;
+
+	# A channel on which the active theme's name arrives each time
+	# it changes, from whatever wrote it: a read of the served
+	# event file (see serve), so nothing polls. Where the theme is
+	# not served, nothing ever arrives.
+	watch: fn(): chan of string;
+
+	# Serve the theme directory's current and event, before it, in
+	# this name space (and those made from it), so a write of
+	# current reaches every watcher; nil, or why not. Done once by
+	# a session's root (the profile, wm/wm, Lucifer); a second call
+	# finds it served and does nothing.
+	serve: fn(): string;
+
+	# The installed themes' names, sorted.
+	themes: fn(): list of string;
+
+	# Every key and colour (RRGGBBAA) the named theme's file sets, in
+	# file order: keys a program defines for itself (Xenith's
+	# xenith-*) as well as the Theme roles above.
+	entries: fn(name: string): list of (string, int);
 };

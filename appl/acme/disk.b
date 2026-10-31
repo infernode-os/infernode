@@ -6,7 +6,7 @@ sys : Sys;
 acme : Acme;
 utils : Utils;
 
-SZSHORT, Block, Blockincr, Astring : import Dat;
+SZRUNE, Block, Blockincr, Astring : import Dat;
 error : import utils;
 
 init(mods : ref Dat->Mods)
@@ -58,7 +58,7 @@ ntosize(n : int) : (int, int)
 	if(size & (Blockincr-1))
 		size += Blockincr - (size & (Blockincr-1));
 	# last bucket holds blocks of exactly Maxblock
-	return (size * SZSHORT, size/Blockincr);
+	return (size * SZRUNE, size/Blockincr);
 }
 
 Disk.new(d : self ref Disk, n : int) : ref Block
@@ -128,7 +128,7 @@ Disk.read(d : self ref Disk, b : ref Block, r : ref Astring, n : int)
 	(nil, nil) := ntosize(b.n);
 	if(sys->seek(d.fd, big b.addr, 0) < big 0)
 		error("seek error in temp file");
-	ab = array[n*SZSHORT] of byte;
+	ab = array[n*SZRUNE] of byte;
 	if(sys->read(d.fd, ab, len ab) != len ab)
 		error("read error from temp file");
 	utils->btos(ab, r);

@@ -30,6 +30,64 @@ authrate := 8;
 ratewindow := 0;
 ratecount := 0;
 
+#
+# Pre-auth slots per source address (#729). authslots bounds how many
+# handshakes are in flight in all; without a per-source bound one host
+# could open authlimit silent connections and hold every slot until the
+# auth timeout, locking everyone else out. A source at perlimit has its
+# next connection hung up at once, so it holds at most perlimit of the
+# slots and the rest stay available. -P 0 turns the bound off.
+#
+perlimit := 4;
+Srccount: adt {
+	host:	string;
+	n:	int;
+};
+srccounts: list of ref Srccount;
+srclock: chan of int;
+
+srcacquire(host: string): int
+{
+	srclock <-= 1;
+	for(l := srccounts; l != nil; l = tl l)
+		if((hd l).host == host){
+			if(perlimit > 0 && (hd l).n >= perlimit){
+				<-srclock;
+				return 0;
+			}
+			(hd l).n++;
+			<-srclock;
+			return 1;
+		}
+	srccounts = ref Srccount(host, 1) :: srccounts;
+	<-srclock;
+	return 1;
+}
+
+srcrelease(host: string)
+{
+	srclock <-= 1;
+	nl: list of ref Srccount;
+	for(l := srccounts; l != nil; l = tl l){
+		c := hd l;
+		if(c.host == host)
+			c.n--;
+		if(c.n > 0)
+			nl = c :: nl;
+	}
+	srccounts = nl;
+	<-srclock;
+}
+
+# the host part of /net/tcp/N/remote ("10.0.2.2!40312\n")
+srchost(dir: string): string
+{
+	(nil, f) := sys->tokenize(readfile(dir + "/remote"), "!\n");
+	if(f == nil)
+		return "?";
+	return hd f;
+}
+
 init(drawctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -51,7 +109,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	doauth := 1;
 	synchronous := 0;
 	trusted := 0;
-	arg->setusage("listen [-i {initscript}] [-Ast] [-L maxauth] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
+	arg->setusage("listen [-i {initscript}] [-Ast] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
 		'a' =>
@@ -83,24 +141,39 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 			authrate = int arg->earg();
 			if(authrate < 1)
 				arg->usage();
+		'P' =>
+			perlimit = int arg->earg();
+			if(perlimit < 0)
+				arg->usage();
 		* =>
 			arg->usage();
 		}
 	}
 	if (doauth && algs == nil)
-		algs = getalgs();
+		algs = "aes_256_cbc" :: "sha256" :: nil;
 	if (doauth && algs == nil) {
 		sys->fprint(stderr(), "listen: authentication requested, but no SSL algorithms are available\n");
 		raise "fail:no auth algorithms";
 	}
 	if (algs != nil) {
 		authslots = chan[authlimit] of int;
+		srclock = chan[1] of int;
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";
+		# Keep key masking private to this listener.  Children need the
+		# in-memory Authinfo, never the credential file itself.
+		if(!trusted && sys->pctl(Sys->FORKNS, nil) < 0) {
+			sys->fprint(stderr(), "listen: cannot fork key namespace: %r\n");
+			raise "fail:key namespace";
+		}
 		serverkey = keyring->readauthinfo(keyfile);
 		if (serverkey == nil) {
 			sys->fprint(stderr(), "listen: cannot read %s: %r\n", keyfile);
 			raise "fail:bad keyfile";
+		}
+		if(!trusted && sys->bind("/dev/null", keyfile, Sys->MREPL) < 0) {
+			sys->fprint(stderr(), "listen: cannot hide %s: %r\n", keyfile);
+			raise "fail:exposed keyfile";
 		}
 	}
 	if(!trusted){
@@ -181,16 +254,28 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 				exit;
 			}
 			if (algs != nil) {
-				if(!rateallow()) {
-					if(verbose)
-						sys->fprint(stderr(), "listen: pre-auth rate limit reached on %s\n", addr);
-					nethangup(c.cfd);
-					c.dfd = c.cfd = nil;
-					continue;
-				}
 				alt {
 				authslots <-= 1 =>
-					spawn authenticatedcommand(c, algs, addr, ctxt.copy(1), cmd);
+					host := srchost(c.dir);
+					if(!srcacquire(host)) {
+						<-authslots;
+						if(verbose)
+							sys->fprint(stderr(), "listen: pre-auth limit per source (%d) reached for %s on %s\n", perlimit, host, addr);
+						nethangup(c.cfd);
+						c.dfd = c.cfd = nil;
+					} else if(!rateallow()) {
+						srcrelease(host);
+						<-authslots;
+						if(verbose)
+							sys->fprint(stderr(), "listen: pre-auth rate limit reached on %s\n", addr);
+						nethangup(c.cfd);
+						c.dfd = c.cfd = nil;
+					} else {
+						spawn authenticatedcommand(c, algs, addr, ctxt, cmd, host);
+						# the connection is the child's now: holding
+						# its fds here kept it open after the session
+						c.dfd = c.cfd = nil;
+					}
 				* =>
 					if(verbose)
 						sys->fprint(stderr(), "listen: pre-auth limit reached on %s\n", addr);
@@ -250,15 +335,27 @@ listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: str
 				sys->fprint(nc.cfd, "keepalive");
 			listench <-= (ok, nc);
 		}
+		# nor here, while the next listen blocks
+		nc.dfd = nc.cfd = nil;
 	}
 }
 
 authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
-		ctxt: ref Context, cmd: list of ref Sh->Listnode)
+		ctxt: ref Context, cmd: list of ref Sh->Listnode, host: string)
 {
+	# The copy is made here, in the connection's own process: a
+	# Context's wait file is that of the process that copies it.  Made
+	# in the listener, every connection's shell waited for its command
+	# on the listener's wait file, never saw it end, and kept the
+	# connection open, so a cpu(1) session never ended (#732).
+	ctxt = ctxt.copy(1);
+	# Its own fd table, likewise: the dups onto 0 and 1 below went into
+	# the table it shared with the listener, which then held the
+	# connection open until the next one replaced it.
+	sys->pctl(Sys->FORKFD, nil);
 	err: string;
 	cancel := chan[1] of int;
-	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout);
+	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout, host);
 	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 1);
 	cancel <-= 1;
 	if (c.dfd == nil) {
@@ -277,6 +374,9 @@ authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
 
 timerproc(c: chan of int, ms: int)
 {
+	# it only sleeps: holding the connection's fd table here kept the
+	# connection open for the whole auth timeout after a session ended
+	sys->pctl(Sys->NEWFD, nil);
 	sys->sleep(ms);
 	c <-= 1;
 }
@@ -296,16 +396,18 @@ kill(pid: int, how: string)
 		sys->fprint(fd, "%s", how);
 }
 
-authwatchdog(cancel: chan of int, pid: int, cfd: ref Sys->FD, ms: int)
+authwatchdog(cancel: chan of int, pid: int, cfd: ref Sys->FD, ms: int, host: string)
 {
 	tmo := chan[1] of int;
 	spawn timerproc(tmo, ms);
 	alt {
 	<-cancel =>
 		<-authslots;
+		srcrelease(host);
 		return;
 	<-tmo =>
 		<-authslots;
+		srcrelease(host);
 		nethangup(cfd);
 		kill(pid, "kill");
 	}
@@ -349,5 +451,8 @@ getalgs(): list of string
 	} else
 		sslctl = "#D/" + sslctl;
 	(nil, algs) := sys->tokenize(readfile(sslctl + "/encalgs") + " " + readfile(sslctl + "/hashalgs"), " \t\n");
-	return "none" :: algs;
+	# Plaintext is an explicit policy (-A, or -a none), never an
+	# authenticated default.  auth->server requires a client to choose both
+	# an encryption and an integrity algorithm when both classes are offered.
+	return algs;
 }

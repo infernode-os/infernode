@@ -6,6 +6,8 @@ enum
 	Max = 100
 };
 
+static Rune	norunes[1];	/* not L"": a wchar_t need not be a Rune */
+
 Point
 string(Image *dst, Point pt, Image *src, Point sp, Font *f, char *s)
 {
@@ -71,7 +73,7 @@ _string(Image *dst, Point pt, Image *src, Point sp, Font *f, char *s, Rune *r, i
 	}else
 		sptr = &s;
 	if(r == nil){
-		r = (Rune*) L"";
+		r = norunes;
 		rptr = nil;
 	}else
 		rptr = &r;

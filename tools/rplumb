@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+# rplumb — plumb from a remote host to the plumber on the machine you
+# ssh'd in from, so a file here opens in your Xenith there.
+#
+#	plumb file[:address] ...
+#
+# Installed on the remote host as ~/bin/plumb. The ssh connection
+# carries your plumber's socket to ~/.plumb.sock (RemoteForward); this
+# writes one plumb message per argument to its send file, in 9P. Each
+# message names this host (attr host=, from ~/.plumbhost, the name you
+# ssh to) and goes to the xenith port, where hostplumb opens the file
+# through /n/<host>, this host's file system mounted over ssh (u9fs), so
+# what you save there is saved here. See docs/XEN.md.
+
+import os
+import socket
+import struct
+import sys
+
+SOCK = os.environ.get("PLUMBSOCK", os.path.expanduser("~/.plumb.sock"))
+NOFID = 0xFFFFFFFF
+OWRITE = 1
+Tversion, Tattach, Twalk, Topen, Twrite, Tclunk = 100, 104, 110, 112, 118, 120
+Rerror = 107
+
+
+def die(msg):
+    sys.stderr.write("plumb: %s\n" % msg)
+    sys.exit(1)
+
+
+def s(x):
+    b = x.encode()
+    return struct.pack("<H", len(b)) + b
+
+
+class Conn:
+    def __init__(self, path):
+        self.c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.c.connect(path)
+
+    def rpc(self, typ, body):
+        msg = struct.pack("<BH", typ, 0) + body
+        self.c.sendall(struct.pack("<I", len(msg) + 4) + msg)
+        hdr = self.recv(4)
+        size = struct.unpack("<I", hdr)[0]
+        rep = self.recv(size - 4)
+        if rep[0] == Rerror:
+            n = struct.unpack("<H", rep[3:5])[0]
+            raise IOError(rep[5:5 + n].decode(errors="replace"))
+        return rep[3:]
+
+    def recv(self, n):
+        b = b""
+        while len(b) < n:
+            chunk = self.c.recv(n - len(b))
+            if not chunk:
+                raise IOError("connection closed")
+            b += chunk
+        return b
+
+
+def message(host, arg):
+    # a file here, made absolute; an address after the last ':' kept
+    path, addr = arg, ""
+    if not os.path.exists(path) and ":" in arg:
+        p, a = arg.rsplit(":", 1)
+        if os.path.exists(p):
+            path, addr = p, a
+    path = os.path.abspath(path)
+    data = path + (":" + addr if addr else "")
+    hdr = "%s\n%s\n%s\n%s\n%s\n%d\n" % (
+        host, "xenith", os.getcwd(), "text", "host=" + host, len(data.encode()))
+    return (hdr + data).encode()
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        die("usage: plumb file[:address] ...")
+    try:
+        host = open(os.path.expanduser("~/.plumbhost")).read().strip()
+    except OSError:
+        die("no ~/.plumbhost (the name the Mac ssh's to this host as)")
+    if not os.path.exists(SOCK):
+        die("no %s: this ssh session does not forward a plumber" % SOCK)
+    try:
+        c = Conn(SOCK)
+        c.rpc(Tversion, struct.pack("<I", 8192) + s("9P2000"))
+        c.rpc(Tattach, struct.pack("<II", 0, NOFID) + s(os.environ.get("USER", "none")) + s(""))
+        for arg in args:
+            c.rpc(Twalk, struct.pack("<IIH", 0, 1, 1) + s("send"))
+            c.rpc(Topen, struct.pack("<IB", 1, OWRITE))
+            m = message(host, arg)
+            c.rpc(Twrite, struct.pack("<IQI", 1, 0, len(m)) + m)
+            c.rpc(Tclunk, struct.pack("<I", 1))
+    except (OSError, IOError) as e:
+        die(str(e))
+
+
+main()

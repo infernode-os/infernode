@@ -154,11 +154,15 @@ test_word_arithmetic()
 	check("add zero", a + 0, 100);
 	check("sub zero", a - 0, 100);
 
-	# Limbo int is 64-bit WORD on 64-bit platforms
+	# Limbo int is 32 bits whatever the VM's word size: the maximum
+	# int plus one wraps to the minimum. (This used to assert the
+	# opposite, and the VM used to agree with it -- see CW() in
+	# libinterp/xec.c for what that cost.)
 	big_val := 16r7FFFFFFF;
 	check("max 32", big_val, 2147483647);
 	ov := big_val + 1;
-	check("32bit+1 gt 0", ov > 0, 1);  # No overflow in 64-bit WORD
+	check("max int + 1 wraps negative", ov < 0, 1);
+	check("max int + 1 is min int", ov, -2147483647 - 1);
 
 	sys->print("  word arithmetic: done\n");
 }

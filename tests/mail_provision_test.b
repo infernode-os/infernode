@@ -18,24 +18,20 @@ MailProbe: module {
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-	nsc = load NsConstruct NsConstruct->PATH;
-	if(nsc == nil) {
-		sys->print("MAILPROBE: FAIL cannot load nsconstruct\n");
-		return;
-	}
-	nsc->init();
-
-	mode := "grant";
+	mode := "";
 	if(tl args != nil)
 		mode = hd tl args;
+	if(mode != "grant" && mode != "nogrant")
+		raise "skip:helper for tests/inferno/mail_provision.sh, which runs it";
+
+	nsc = load NsConstruct NsConstruct->PATH;
+	if(nsc == nil)
+		fail(sys->sprint("cannot load nsconstruct: %r"));
+	nsc->init();
 
 	paths: list of string;
 	if(mode == "grant")
 		paths = "/mnt/msg" :: nil;
-	else if(mode == "nogrant")
-		paths = nil;
-	else
-		fail("unknown mode: " + mode);
 
 	# A typical email task agent: read tool plus the paths explicitly granted
 	# by the parent namespace. actid=-1 => no cowfs.

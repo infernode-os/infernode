@@ -9,28 +9,14 @@
  *   and semithickness t>=0, or filled if t<0.  point sp
  *   in src maps to c in dst
  *
- *   very thick skinny ellipses are brushed with circles (slow)
- *   others are approximated by filling between 2 ellipses
- *   criterion for very thick when b<a: t/b > 0.5*x/(1-x)
- *   where x = b/a
+ *   an outline is the ring 1+2t pixels wide centred on the ellipse
+ *   through the pixel centres, anti-aliased (aa.c).  a filled
+ *   ellipse keeps hard edges, so filled shapes that share an edge
+ *   meet without a seam: its pixels are those whose centres are
+ *   inside, found scan line by scan line.
  */
 
-typedef struct Param	Param;
 typedef struct State	State;
-
-static	void	bellipse(int, State*, Param*);
-static	void	erect(int, int, int, int, Param*);
-static	void	eline(int, int, int, int, Param*);
-
-struct Param {
-	Memimage	*dst;
-	Memimage	*src;
-	Point			c;
-	int			t;
-	Point			sp;
-	Memimage	*disc;
-	int			op;
-};
 
 /*
  * denote residual error by e(x,y) = b^2*x^2 + a^2*y^2 - a^2*b^2
@@ -103,145 +89,61 @@ step(State *s)
 	return s->x;	  
 }
 
+static Point p00 = {0, 0};
+
+static void
+ring(Memimage *dst, Point c, int a, int b, int t, Memimage *src, Point sp, int op)
+{
+	Aapath p;
+	Aapoly poly;
+	Point cc;
+	int w;
+
+	w = (2*t+1)*Aaone/2;
+	cc = Pt((c.x << Aashift) + Aaone/2, (c.y << Aashift) + Aaone/2);
+	a <<= Aashift;
+	b <<= Aashift;
+	aapathinit(&p);
+	aaellipse(&p, cc, a+w, b+w);
+	if(a > w && b > w)
+		aaellipse(&p, cc, a-w, b-w);
+	aapolyinit(&poly);
+	aafill(&poly, &p);
+	memaadraw(dst, &poly, 1, src, subpt(sp, c), op);
+	aapolyfree(&poly);
+	aapathfree(&p);
+}
+
+/* a scan line of the filled ellipse, closed coordinates relative to its centre */
+static void
+erect(Memimage *dst, Point c, int x0, int x1, int y, Memimage *src, Point sp, int op)
+{
+	Rectangle r;
+
+	r = Rect(c.x+x0, c.y+y, c.x+x1+1, c.y+y+1);
+	memdraw(dst, r, src, addpt(sp, r.min), memopaque, p00, op);
+}
+
 void
 memellipse(Memimage *dst, Point c, int a, int b, int t, Memimage *src, Point sp, int op)
 {
-	State in, out;
-	int y, inb, inx, outx, u;
-	Param p;
+	State out;
+	int y, x;
 
 	if(a < 0)
 		a = -a;
 	if(b < 0)
 		b = -b;
-	p.dst = dst;
-	p.src = src;
-	p.c = c;
-	p.t = t;
-	p.sp = subpt(sp, c);
-	p.disc = nil;
-	p.op = op;
-
-	u = (t<<1)*(a-b);
-	if(b<a && u>b*b || a<b && -u>a*a) {
-/*	if(b<a&&(t<<1)>b*b/a || a<b&&(t<<1)>a*a/b)	# very thick */
-		bellipse(b, newstate(&in, a, b), &p);
+	if(t >= 0){
+		ring(dst, c, a, b, t, src, sp, op);
 		return;
 	}
-
-	if(t < 0) {
-		inb = -1;
-		newstate(&out, a, y = b);
-	} else {	
-		inb = b - t;
-		newstate(&out, a+t, y = b+t);
-	}
-	if(t > 0)
-		newstate(&in, a-t, inb);
-	inx = 0;
-	for( ; y>=0; y--) {
-		outx = step(&out);
-		if(y > inb) {
-			erect(-outx, y, outx, y, &p);
-			if(y != 0)
-				erect(-outx, -y, outx, -y, &p);
-			continue;
-		}
-		if(t > 0) {
-			inx = step(&in);
-			if(y == inb)
-				inx = 0;
-		} else if(inx > outx)
-			inx = outx;
-		erect(inx, y, outx, y, &p);
+	sp = subpt(sp, c);
+	newstate(&out, a, y = b);
+	for( ; y >= 0; y--){
+		x = step(&out);
+		erect(dst, c, -x, x, y, src, sp, op);
 		if(y != 0)
-			erect(inx, -y, outx, -y, &p);
-		erect(-outx, y, -inx, y, &p);
-		if(y != 0)
-			erect(-outx, -y, -inx, -y, &p);
-		inx = outx + 1;
+			erect(dst, c, -x, x, -y, src, sp, op);
 	}
-}
-
-static Point p00 = {0, 0};
-
-/*
- * a brushed ellipse
- */
-static
-void
-bellipse(int y, State *s, Param *p)
-{
-	int t, ox, oy, x, nx;
-
-	t = p->t;
-	p->disc = allocmemimage(Rect(-t,-t,t+1,t+1), GREY1);
-	if(p->disc == nil)
-		return;
-	memfillcolor(p->disc, DTransparent);
-	memellipse(p->disc, p00, t, t, -1, memopaque, p00, p->op);
-	oy = y;
-	ox = 0;
-	nx = x = step(s);
-	do {
-		while(nx==x && y-->0)
-			nx = step(s);
-		y++;
-		eline(-x,-oy,-ox, -y, p);
-		eline(ox,-oy,  x, -y, p);
-		eline(-x,  y,-ox, oy, p);
-		eline(ox,  y,  x, oy, p);
-		ox = x+1;
-		x = nx;
-		y--;
-		oy = y;
-	} while(oy > 0);
-}
-
-/*
- * a rectangle with closed (not half-open) coordinates expressed
- * relative to the center of the ellipse
- */
-static
-void
-erect(int x0, int y0, int x1, int y1, Param *p)
-{
-	Rectangle r;
-
-/*	print("R %d,%d %d,%d\n", x0, y0, x1, y1); /**/
-	r = Rect(p->c.x+x0, p->c.y+y0, p->c.x+x1+1, p->c.y+y1+1);
-	memdraw(p->dst, r, p->src, addpt(p->sp, r.min), memopaque, p00, p->op);
-}
-
-/*
- * a brushed point similarly specified
- */
-static
-void
-epoint(int x, int y, Param *p)
-{
-	Point p0;
-	Rectangle r;
-
-/*	print("P%d %d,%d\n", p->t, x, y);	/**/
-	p0 = Pt(p->c.x+x, p->c.y+y);
-	r = Rpt(addpt(p0, p->disc->r.min), addpt(p0, p->disc->r.max));
-	memdraw(p->dst, r, p->src, addpt(p->sp, r.min), p->disc, p->disc->r.min, p->op);
-}
-
-/* 
- * a brushed horizontal or vertical line similarly specified
- */
-static
-void
-eline(int x0, int y0, int x1, int y1, Param *p)
-{
-/*	print("L%d %d,%d %d,%d\n", p->t, x0, y0, x1, y1); /**/
-	if(x1 > x0+1)
-		erect(x0+1, y0-p->t, x1-1, y1+p->t, p);
-	else if(y1 > y0+1)
-		erect(x0-p->t, y0+1, x1+p->t, y1-1, p);
-	epoint(x0, y0, p);
-	if(x1-x0 || y1-y0)
-		epoint(x1, y1, p);
 }

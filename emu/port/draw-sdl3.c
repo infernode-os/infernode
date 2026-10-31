@@ -135,6 +135,17 @@ static Uint32 sdl_button_state = 0;
  */
 static float display_scale = 1.0f;
 
+/*
+ * How much larger than at 1x a program that sizes itself (Xenith)
+ * should draw: published as $displayscale under INFERNODE_HIDPI. Not
+ * display_scale: on X11 (and Windows) the window is in pixels already,
+ * so display_scale is 1 however dense the display, and the desktop's
+ * scale (Xft.dpi, GDK_SCALE, the Windows scale setting) is SDL's
+ * content scale. SDL_GetWindowDisplayScale is the two multiplied, so
+ * 2 on a Retina Mac, on Wayland at 200% and on X11 at 192 dpi alike.
+ */
+static float ui_scale = 1.0f;
+
 /* Shutdown request flag - can be set from any thread */
 static volatile int sdl_quit_requested = 0;
 
@@ -169,6 +180,20 @@ struct touch_finger {
 	float		last_y;
 };
 static struct touch_finger touch_fingers[TOUCH_MAX_FINGERS];
+
+/*
+ * The gestures are for a touchscreen, whose fingers are on the screen.
+ * A Mac trackpad also reports its fingers (an indirect device): taken
+ * as gestures, a two-finger scroll arrived twice, as the trackpad's own
+ * wheel events and as ticks made from its fingers, and a finger resting
+ * on the pad pressed button 3 as a long-press. Its wheel events and
+ * clicks already say what it means; its fingers are left alone.
+ */
+static int
+touchscreen(SDL_TouchID id)
+{
+	return SDL_GetTouchDeviceType(id) == SDL_TOUCH_DEVICE_DIRECT;
+}
 static int touch_finger_count = 0;
 static float touch_scroll_accum_x = 0.0f;
 static float touch_scroll_accum_y = 0.0f;
@@ -203,9 +228,16 @@ static float touch_lp_y0 = 0.0f;
  * Previously, flushmemscreen() called dispatch_sync() for every tiny
  * texture update (100s of times per frame for text rendering), causing
  * massive synchronization overhead. Now flushmemscreen() just accumulates
- * dirty rectangles with NO synchronization, and the main loop does a
- * single dispatch_sync() per frame to upload all changes at once.
+ * dirty rectangles, and the main loop does a single upload per frame.
+ *
+ * The box is shared by two threads, InferNode's writer and the main
+ * loop's reader, so it is held under dirty_lock (a spinlock: a few
+ * instructions either side). Without it a rectangle added while the
+ * main loop read and cleared the box was lost, and that part of the
+ * screen never reached the window: text half drawn after a Font switch,
+ * far likelier at 2x, where each upload is four times the size.
  */
+static SDL_SpinLock dirty_lock = 0;
 static volatile int dirty_pending = 0;
 static int dirty_min_x = 0, dirty_min_y = 0;
 static int dirty_max_x = 0, dirty_max_y = 0;
@@ -233,6 +265,17 @@ static volatile int create_window_result = 0;
  * window size differs from texture size (e.g., full-screen).
  */
 static SDL_FRect dest_rect = {0, 0, 0, 0};
+/*
+ * The part of the screen texture shown, and so the size of the screen
+ * programs see (/dev/wmsize). On desktop the Inferno screen is as large
+ * as the largest display, and the window shows its own size of it, top
+ * left, one to one: a resize changes what is shown and is posted to
+ * /dev/wmsize, and programs lay themselves out to it (Acme-SAC's design;
+ * Xenith and Lucifer read it). Nothing is scaled, and there are no
+ * margins. On the touch platforms the screen is the safe area, shown
+ * whole, as before.
+ */
+static SDL_FRect src_rect = {0, 0, 0, 0};
 static int window_width = 0;
 static int window_height = 0;
 /* Safe-area rect in physical pixels: the part of the window not covered by
@@ -252,6 +295,23 @@ calc_dest_rect(void)
 	float scale_x, scale_y, scale;
 	float dest_w, dest_h;
 	int aw = safe_w, ah = safe_h, ax = safe_x, ay = safe_y;
+
+#if !MOBILE_TOUCH
+	{
+		int vw = window_width < sdl_width ? window_width : sdl_width;
+		int vh = window_height < sdl_height ? window_height : sdl_height;
+		src_rect.x = 0;
+		src_rect.y = 0;
+		src_rect.w = (float)(vw > 0 ? vw : sdl_width);
+		src_rect.h = (float)(vh > 0 ? vh : sdl_height);
+		dest_rect = src_rect;
+		return;
+	}
+#endif
+	src_rect.x = 0;
+	src_rect.y = 0;
+	src_rect.w = (float)sdl_width;
+	src_rect.h = (float)sdl_height;
 
 	/* Present into the safe area, not the full window, so the iOS status
 	 * bar / home indicator don't occlude the UI. Fall back to the full
@@ -304,9 +364,9 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
 	rel_x = win_x - dest_rect.x;
 	rel_y = win_y - dest_rect.y;
 
-	/* Scale from rendered size to texture size */
-	x = (int)(rel_x * (float)sdl_width / dest_rect.w);
-	y = (int)(rel_y * (float)sdl_height / dest_rect.h);
+	/* Scale from rendered size to the shown part of the texture */
+	x = (int)(src_rect.x + rel_x * src_rect.w / dest_rect.w);
+	y = (int)(src_rect.y + rel_y * src_rect.h / dest_rect.h);
 
 	/* Clamp to texture bounds */
 	if (x < 0) x = 0;
@@ -325,6 +385,137 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
  */
 static void update_text_input_area(void);
 
+/*
+ * Desktop: the Inferno screen's size, in the window's pixels: the
+ * largest display's, so the window can grow to any display without
+ * margins, and at least the window's own.
+ */
+static void
+screenmax(int *w, int *h)
+{
+	SDL_DisplayID *ids;
+	SDL_Rect b;
+	int i, n, mw, mh;
+
+	mw = window_width;
+	mh = window_height;
+	ids = SDL_GetDisplays(&n);
+	if (ids != NULL) {
+		for (i = 0; i < n; i++)
+			if (SDL_GetDisplayBounds(ids[i], &b)) {
+				if ((int)(b.w * display_scale) > mw)
+					mw = (int)(b.w * display_scale);
+				if ((int)(b.h * display_scale) > mh)
+					mh = (int)(b.h * display_scale);
+			}
+		SDL_free(ids);
+	}
+	*w = mw;
+	*h = mh;
+}
+
+/*
+ * Desktop: the screen programs see is the part the window shows. The
+ * buffer behind it is as large as the largest display, so the screen
+ * image only changes its rectangle: wmszproc, a kernel process (it
+ * takes the draw lock, which the SDL thread cannot), sets it, then tells
+ * programs through /dev/wmsize (devwmsz.c) so those that read it (Xenith,
+ * Lucifer) lay themselves out to it. Programs that do not read it keep
+ * the layout they made for the window they started in.
+ */
+extern void wmtrack(int, int, int, int);
+extern Memimage *screenimage;	/* devdraw.c */
+extern void drawqlock(void);
+extern void drawqunlock(void);
+
+static Rendez wmszr;
+static volatile int wmsz_w, wmsz_h, wmsz_pending;
+
+static int
+wmszready(void *a)
+{
+	USED(a);
+	return wmsz_pending;
+}
+
+static void
+wmszproc(void *a)
+{
+	int w, h;
+
+	USED(a);
+	for (;;) {
+		Sleep(&wmszr, wmszready, nil);
+		w = wmsz_w;
+		h = wmsz_h;
+		wmsz_pending = 0;
+		drawqlock();
+		if (screenimage != nil) {
+			screenimage->r = Rect(0, 0, w, h);
+			screenimage->clipr = screenimage->r;
+		}
+		drawqunlock();
+		wmtrack(0, w, h, 0);
+	}
+}
+
+/* called from the SDL thread: record the size and wake wmszproc */
+static void
+postwmsize(void)
+{
+#if !MOBILE_TOUCH
+	if (src_rect.w > 0 && src_rect.h > 0) {
+		wmsz_w = (int)src_rect.w;
+		wmsz_h = (int)src_rect.h;
+		wmsz_pending = 1;
+		Wakeup(&wmszr);
+	}
+#endif
+}
+
+/*
+ * Whether the screen has the display's own pixels. iOS always does:
+ * without it the screen is ~393px, not ~1179px, and the mobile boot
+ * binds fonts large to suit. On the desktop it is asked for, by
+ * INFERNODE_HIDPI in the host environment, by programs that size
+ * their own chrome from $displayscale (Xenith, started by tools/xen);
+ * the rest of the desktop still draws at 1x, and with the display's
+ * pixels would come out half size on a Retina screen, so it is not
+ * the default there.
+ */
+/*
+ * The window's title is the app's name: InferNode, or what the
+ * launcher gave as SDL_APP_NAME, which overrides the name set in
+ * sdl3_preinit (Xenith's launchers set it to Xenith).
+ */
+static const char*
+wintitle(void)
+{
+	const char *t;
+
+	t = SDL_GetAppMetadataProperty(SDL_PROP_APP_METADATA_NAME_STRING);
+	return t != nil && *t != 0 ? t : "InferNode";
+}
+
+static int
+hidpiwanted(void)
+{
+#if defined(__APPLE__) && TARGET_OS_IOS
+	return 1;
+#else
+	char *e;
+
+	e = getenv("INFERNODE_HIDPI");
+	return e != nil && *e != 0 && strcmp(e, "0") != 0;
+#endif
+}
+
+static SDL_WindowFlags
+hidpiflag(void)
+{
+	return hidpiwanted() ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0;
+}
+
 static void
 init_hidpi(void)
 {
@@ -340,6 +531,9 @@ init_hidpi(void)
 		display_scale = (float)pix_w / (float)win_w;
 	else
 		display_scale = 1.0f;
+	ui_scale = SDL_GetWindowDisplayScale(sdl_window);
+	if (ui_scale < display_scale)
+		ui_scale = display_scale;
 
 	window_width = pix_w;
 	window_height = pix_h;
@@ -360,10 +554,15 @@ init_hidpi(void)
 		}
 	}
 
+#if MOBILE_TOUCH
 	sdl_width = safe_w;
 	sdl_height = safe_h;
+#else
+	screenmax(&sdl_width, &sdl_height);
+#endif
 	calc_dest_rect();
 	update_text_input_area();	/* window may have resized/rotated */
+	postwmsize();
 }
 
 /* Keep the top pinned (don't slide) for the focused input; set when the
@@ -441,12 +640,12 @@ update_text_input_area(void)
 		 * a degenerate rect to UIKit. */
 		float sx, sy, fx, fy, fw, fh;
 		if (dest_rect.w <= 0 || dest_rect.h <= 0 ||
-		    sdl_width <= 0 || sdl_height <= 0 || display_scale <= 0.0f)
+		    src_rect.w <= 0 || src_rect.h <= 0 || display_scale <= 0.0f)
 			return;
-		sx = dest_rect.w / (float)sdl_width;	/* texture px -> window px */
-		sy = dest_rect.h / (float)sdl_height;
-		fx = (dest_rect.x + (float)softkbd_rect_x * sx) / display_scale;
-		fy = (dest_rect.y + (float)softkbd_rect_y * sy) / display_scale;
+		sx = dest_rect.w / src_rect.w;	/* texture px -> window px */
+		sy = dest_rect.h / src_rect.h;
+		fx = (dest_rect.x + ((float)softkbd_rect_x - src_rect.x) * sx) / display_scale;
+		fy = (dest_rect.y + ((float)softkbd_rect_y - src_rect.y) * sy) / display_scale;
 		fw = ((float)softkbd_rect_w * sx) / display_scale;
 		fh = ((float)softkbd_rect_h * sy) / display_scale;
 		r.x = fx < 0.0f ? 0 : (int)fx;
@@ -819,27 +1018,13 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	attacherr[0] = 0;
 	dispatch_sync(dispatch_get_main_queue(), ^{
 		sdl_window = SDL_CreateWindow(
-			"InferNode",
+			wintitle(),
 			sdl_width, sdl_height,
-			/* HIGH_PIXEL_DENSITY: without it iOS gives a 1x (logical)
-			 * backing, so the screen is ~393px not ~1179px and the
-			 * mobile fonts render ~3x too large (≈8 chars/line). With
-			 * it, GetWindowSizeInPixels reports real Retina pixels and
-			 * the UI is properly sized + crisp. */
-			/* HIGH_PIXEL_DENSITY is iOS-only. On macOS/Linux it makes
-		 * the Inferno surface report physical Retina pixels, so
-		 * 14-pt fonts render at 14 physical pixels on a 2x display
-		 * (half-size). The mobile boot rebinds 14->32/48 to
-		 * compensate; desktop boots don't, so desktop UI ends up
-		 * tiny. Limiting the flag to iOS preserves the iOS fix
-		 * (a5f38e48) without bleeding small fonts to desktop. */
-		SDL_WINDOW_RESIZABLE
-#if defined(__APPLE__) && TARGET_OS_IOS
-		| SDL_WINDOW_HIGH_PIXEL_DENSITY
-#endif
-		);
+			SDL_WINDOW_RESIZABLE | hidpiflag());
 		if (!sdl_window)
 			snprint(attacherr, sizeof attacherr, "%s", SDL_GetError());
+		else
+			SDL_RaiseWindow(sdl_window);	/* in front of the terminal that started emu */
 	});
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: attachscreen: SDL_CreateWindow failed (driver=%s): %s\n",
@@ -884,6 +1069,24 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 
 	sdl_running = 1;
 
+#if !MOBILE_TOUCH
+	/* Pixels per point, for programs that draw at the display's own
+	 * density (see hidpiwanted); set in the opener's environment. */
+	if (hidpiwanted()) {
+		/* In quarters: Wayland's 125% and 150% are 1.25 and 1.5,
+		 * for which Xenith has fonts of their own; whole scales
+		 * are written as before ("2"), and a reader taking the
+		 * value as an integer gets its whole part. */
+		static char *quarter[] = { "", ".25", ".5", ".75" };
+		char buf[16];
+		int q = (int)(ui_scale * 4.0f + 0.5f);
+		if (q < 4)
+			q = 4;
+		snprint(buf, sizeof buf, "%d%s", q / 4, quarter[q % 4]);
+		ksetenv("displayscale", buf, 0);
+	}
+#endif
+
 	/* Row stride must match Inferno's memimage layout (wordsperline),
 	 * not sdl_width*4 — see the sdl_stride comment. */
 	sdl_stride = wordsperline(Rect(0, 0, sdl_width, sdl_height), 32) * sizeof(ulong);
@@ -900,8 +1103,15 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	/* Initialize buffer to white (InferNode default) */
 	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
-	/* Return screen parameters to InferNode */
+	/* Return screen parameters to InferNode. On desktop the screen is
+	 * the part the window shows (the buffer, and the stride, are the
+	 * largest display's: wmszproc grows the rectangle in place). */
 	*r = Rect(0, 0, sdl_width, sdl_height);
+#if !MOBILE_TOUCH
+	if (src_rect.w > 0 && src_rect.h > 0)
+		*r = Rect(0, 0, (int)src_rect.w, (int)src_rect.h);
+	kproc("wmsz", wmszproc, nil, 0);
+#endif
 	*chan = XRGB32;
 	*d = 32;
 	/*
@@ -909,7 +1119,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	 * On 64-bit systems sizeof(ulong)=8, so we use wordsperline()
 	 * which correctly calculates based on word size.
 	 */
-	*width = wordsperline(*r, *d);
+	*width = wordsperline(Rect(0, 0, sdl_width, sdl_height), *d);
 	*softscreen = 1;
 
 	return screen_data;
@@ -948,10 +1158,8 @@ flushmemscreen(Rectangle r)
 	if (r.min.x >= r.max.x || r.min.y >= r.max.y)
 		return;
 
-	/*
-	 * Accumulate into bounding box of all dirty regions.
-	 * No locking needed - single writer (InferNode), single reader (main loop).
-	 */
+	/* Accumulate into bounding box of all dirty regions. */
+	SDL_LockSpinlock(&dirty_lock);
 	if (!dirty_pending) {
 		dirty_min_x = r.min.x;
 		dirty_min_y = r.min.y;
@@ -965,6 +1173,7 @@ flushmemscreen(Rectangle r)
 		if (r.max.x > dirty_max_x) dirty_max_x = r.max.x;
 		if (r.max.y > dirty_max_y) dirty_max_y = r.max.y;
 	}
+	SDL_UnlockSpinlock(&dirty_lock);
 }
 
 /* sdl_pollevents() removed — all event handling is in sdl3_mainloop() */
@@ -972,23 +1181,68 @@ flushmemscreen(Rectangle r)
 /*
  * Set mouse pointer position
  * Coordinates from InferNode are in texture space; we convert to window space.
+ *
+ * setpointer runs on the thread that wrote /dev/pointer (wmlib's "ptr"
+ * request), but SDL allows a warp only on its main thread, and the
+ * conversion reads the window's geometry, which the main thread changes
+ * on a resize.  So setpointer records where the pointer is to go and
+ * sdl3_mainloop moves it (apply_warp), as for the cursor.
  */
+static SDL_SpinLock warp_lock = 0;
+static int warp_pending;	/* a warp is waiting for the main thread */
+static int warp_x, warp_y;	/* where to, in texture coordinates */
+
 void
 setpointer(int x, int y)
 {
-	float win_x, win_y;
-
 	if (!sdl_running)
 		return;
+
+	SDL_LockSpinlock(&warp_lock);
+	warp_x = x;
+	warp_y = y;
+	warp_pending = 1;
+	SDL_UnlockSpinlock(&warp_lock);
+	mouse_x = x;
+	mouse_y = y;
+}
+
+/*
+ * Move the host's pointer where setpointer last asked.  MUST be called
+ * on the main thread; sdl3_mainloop calls it each iteration.
+ */
+static void
+apply_warp(void)
+{
+	float win_x, win_y;
+	int x, y;
+
+	SDL_LockSpinlock(&warp_lock);
+	if (!warp_pending) {
+		SDL_UnlockSpinlock(&warp_lock);
+		return;
+	}
+	warp_pending = 0;
+	x = warp_x;
+	y = warp_y;
+	SDL_UnlockSpinlock(&warp_lock);
 
 	/*
 	 * Convert from texture coordinates to window coordinates.
 	 * This is the inverse of window_to_texture_coords.
 	 */
-	if (dest_rect.w > 0 && dest_rect.h > 0 && sdl_width > 0 && sdl_height > 0) {
-		/* Scale from texture size to rendered size, then add offset */
-		win_x = (float)x * dest_rect.w / (float)sdl_width + dest_rect.x;
-		win_y = (float)y * dest_rect.h / (float)sdl_height + dest_rect.y;
+	if (dest_rect.w > 0 && dest_rect.h > 0 && src_rect.w > 0 && src_rect.h > 0) {
+		/* Scale from the shown part of the texture to rendered size, then add offset */
+		win_x = ((float)x - src_rect.x) * dest_rect.w / src_rect.w + dest_rect.x;
+		win_y = ((float)y - src_rect.y) * dest_rect.h / src_rect.h + dest_rect.y;
+		/* dest_rect is in the window's pixels, the warp in its points:
+		 * the inverse of the mouse path's multiply by display_scale.
+		 * Without it a 2x display sent the pointer to twice the place,
+		 * off to the lower right. */
+		if (display_scale > 0.0f) {
+			win_x /= display_scale;
+			win_y /= display_scale;
+		}
 	} else {
 		/* Fallback - use display_scale */
 		win_x = (float)x / display_scale;
@@ -996,8 +1250,6 @@ setpointer(int x, int y)
 	}
 
 	SDL_WarpMouseInWindow(sdl_window, win_x, win_y);
-	mouse_x = x;
-	mouse_y = y;
 }
 
 /*
@@ -1012,58 +1264,101 @@ setpointer(int x, int y)
  *   (1,1)=black  (0,1)=white  (0,0)=transparent  (1,0)=inverted
  *
  * Mapping: data = set bits, mask = set | clr bits.
+ *
+ * drawcursor runs on the thread that wrote /dev/cursor, but SDL's
+ * cursor calls must be made on the main thread: on macOS the window's
+ * cursor rectangles are rebuilt there from SDL's current cursor, and a
+ * cursor changed under them from another thread could be lost (wm/wm's
+ * cross after New, its gunsight, its box).  So drawcursor only records
+ * the cursor wanted, copied (the bits are the writer's buffer), and
+ * sdl3_mainloop makes it current, as for the soft keyboard.
  */
 enum { MaxCursorSize = 32 };
+
+static SDL_SpinLock cursor_lock = 0;
+static int cursor_pending;	/* a cursor is waiting for the main thread */
+static int cursor_none;		/* it is the default cursor */
+static int cursor_hotx, cursor_hoty;
+static uchar cursor_data[MaxCursorSize * MaxCursorSize / 8];
+static uchar cursor_mask[MaxCursorSize * MaxCursorSize / 8];
 
 void
 drawcursor(Drawcursor *c)
 {
-	static SDL_Cursor *sdl_cursor = NULL;
 	uchar data[MaxCursorSize * MaxCursorSize / 8];
 	uchar mask[MaxCursorSize * MaxCursorSize / 8];
 	uchar *bc, *bs;
 	int i, j, h, w, bpl, stride;
 
-	if (c->data == nil) {
-		/* Reset to default cursor */
-		if (sdl_cursor) {
-			SDL_DestroyCursor(sdl_cursor);
-			sdl_cursor = NULL;
-		}
-		SDL_SetCursor(NULL);
-		return;
-	}
-
-	h = (c->maxy - c->miny) / 2;	/* bounds include image + mask */
-	if (h > MaxCursorSize)
-		h = MaxCursorSize;
-	bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
-	w = bpl;
-	if (w > MaxCursorSize / 8)
-		w = MaxCursorSize / 8;
-
 	memset(data, 0, sizeof(data));
 	memset(mask, 0, sizeof(mask));
+	if (c->data != nil) {
+		h = (c->maxy - c->miny) / 2;	/* bounds include image + mask */
+		if (h > MaxCursorSize)
+			h = MaxCursorSize;
+		bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
+		w = bpl;
+		if (w > MaxCursorSize / 8)
+			w = MaxCursorSize / 8;
 
-	stride = MaxCursorSize / 8;
-	bc = c->data;
-	bs = c->data + h * bpl;
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			data[i * stride + j] = bs[j];
-			mask[i * stride + j] = bs[j] | bc[j];
+		stride = MaxCursorSize / 8;
+		bc = c->data;
+		bs = c->data + h * bpl;
+		for (i = 0; i < h; i++) {
+			for (j = 0; j < w; j++) {
+				data[i * stride + j] = bs[j];
+				mask[i * stride + j] = bs[j] | bc[j];
+			}
+			bs += bpl;
+			bc += bpl;
 		}
-		bs += bpl;
-		bc += bpl;
 	}
 
+	SDL_LockSpinlock(&cursor_lock);
+	cursor_none = c->data == nil;
+	cursor_hotx = c->hotx;
+	cursor_hoty = c->hoty;
+	memmove(cursor_data, data, sizeof(data));
+	memmove(cursor_mask, mask, sizeof(mask));
+	cursor_pending = 1;
+	SDL_UnlockSpinlock(&cursor_lock);
+}
+
+/*
+ * Make the cursor drawcursor last recorded SDL's current cursor.
+ * MUST be called on the main thread; sdl3_mainloop calls it each
+ * iteration.
+ */
+static void
+apply_cursor(void)
+{
+	static SDL_Cursor *sdl_cursor = NULL;
+	uchar data[MaxCursorSize * MaxCursorSize / 8];
+	uchar mask[MaxCursorSize * MaxCursorSize / 8];
+	int none, hotx, hoty;
+
+	SDL_LockSpinlock(&cursor_lock);
+	if (!cursor_pending) {
+		SDL_UnlockSpinlock(&cursor_lock);
+		return;
+	}
+	cursor_pending = 0;
+	none = cursor_none;
+	hotx = cursor_hotx;
+	hoty = cursor_hoty;
+	memmove(data, cursor_data, sizeof(data));
+	memmove(mask, cursor_mask, sizeof(mask));
+	SDL_UnlockSpinlock(&cursor_lock);
+
 	if (sdl_cursor) {
+		/* the default cursor comes back as this one goes */
 		SDL_DestroyCursor(sdl_cursor);
 		sdl_cursor = NULL;
 	}
-
+	if (none)
+		return;
 	sdl_cursor = SDL_CreateCursor(data, mask,
-		MaxCursorSize, MaxCursorSize, -c->hotx, -c->hoty);
+		MaxCursorSize, MaxCursorSize, -hotx, -hoty);
 	if (sdl_cursor)
 		SDL_SetCursor(sdl_cursor);
 }
@@ -1205,24 +1500,33 @@ handle_window_creation(void)
 		return;
 
 	sdl_window = SDL_CreateWindow(
-		"InferNode",
+		wintitle(),
 		sdl_width, sdl_height,
-		/* HIGH_PIXEL_DENSITY is iOS-only. On macOS/Linux it makes
-		 * the Inferno surface report physical Retina pixels, so
-		 * 14-pt fonts render at 14 physical pixels on a 2x display
-		 * (half-size). The mobile boot rebinds 14->32/48 to
-		 * compensate; desktop boots don't, so desktop UI ends up
-		 * tiny. Limiting the flag to iOS preserves the iOS fix
-		 * (a5f38e48) without bleeding small fonts to desktop. */
-		SDL_WINDOW_RESIZABLE
-#if defined(__APPLE__) && TARGET_OS_IOS
-		| SDL_WINDOW_HIGH_PIXEL_DENSITY
-#endif
-	);
+		SDL_WINDOW_RESIZABLE | hidpiflag());
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: SDL_CreateWindow failed: %s\n", SDL_GetError());
 		create_window_result = 0;
 	} else {
+		/*
+		 * With the display's own pixels asked for, the size asked for
+		 * is in points, as on a Mac. Where the window is in pixels
+		 * whatever the display's scale (X11, Windows), grow it by
+		 * that scale: on X11 at 192 dpi, 1400x900 points is 2800x1800
+		 * pixels, the same size on the glass as on a Retina Mac.
+		 * Wayland and macOS do this themselves (pixel density > 1).
+		 */
+		if (hidpiwanted()) {
+			float d = SDL_GetWindowPixelDensity(sdl_window);
+			float f = d > 0.0f ? SDL_GetWindowDisplayScale(sdl_window) / d : 1.0f;
+			if (f > 1.01f && f <= 4.0f) {
+				SDL_SetWindowSize(sdl_window, (int)(sdl_width * f + 0.5f),
+					(int)(sdl_height * f + 0.5f));
+				/* centred again: it was placed at its first size */
+				SDL_SetWindowPosition(sdl_window, SDL_WINDOWPOS_CENTERED,
+					SDL_WINDOWPOS_CENTERED);
+				SDL_SyncWindow(sdl_window);
+			}
+		}
 		init_hidpi();
 		if (!create_renderer_and_texture()) {
 			fprint(2, "draw-sdl3: renderer/texture creation failed: %s\n",
@@ -1231,6 +1535,7 @@ handle_window_creation(void)
 			sdl_window = NULL;
 			create_window_result = 0;
 		} else {
+			SDL_RaiseWindow(sdl_window);	/* in front of the terminal that started emu */
 			create_window_result = 1;
 		}
 	}
@@ -1258,21 +1563,26 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 		uchar *src;
 		int pitch;
 
+		/* Take the box and clear it in one step (see dirty_lock):
+		 * anything drawn after this lands in a fresh box, uploaded
+		 * next frame. */
+		SDL_LockSpinlock(&dirty_lock);
 		dirty.x = dirty_min_x;
 		dirty.y = dirty_min_y;
 		dirty.w = dirty_max_x - dirty_min_x;
 		dirty.h = dirty_max_y - dirty_min_y;
+		dirty_pending = 0;
+		SDL_UnlockSpinlock(&dirty_lock);
 
 		pitch = sdl_stride;
-		src = screen_data + (dirty_min_y * pitch) + (dirty_min_x * 4);
+		src = screen_data + (dirty.y * pitch) + (dirty.x * 4);
 
 		SDL_UpdateTexture(sdl_texture, &dirty, src, pitch);
-		dirty_pending = 0;
 	}
 
 	SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
 	SDL_RenderClear(sdl_renderer);
-	SDL_RenderTexture(sdl_renderer, sdl_texture, NULL, &dest_rect);
+	SDL_RenderTexture(sdl_renderer, sdl_texture, &src_rect, &dest_rect);
 	SDL_RenderPresent(sdl_renderer);
 	return now;
 }
@@ -1458,6 +1768,11 @@ sdl3_mainloop(void)
 		 * (setsoftkbd, called from a worker thread, only set a flag). */
 		apply_softkbd();
 
+		/* and any cursor change (drawcursor only recorded it) */
+		apply_cursor();
+		/* and any warp of the pointer (setpointer only recorded it) */
+		apply_warp();
+
 		/*
 		 * Long-press fire: a single finger held still past the threshold
 		 * becomes a button-3 (context-menu) press. Checked here each loop
@@ -1477,6 +1792,18 @@ sdl3_mainloop(void)
 			switch (event.type) {
 			case SDL_EVENT_QUIT:
 				cleanexit(0);
+				break;
+
+			/*
+			 * A file dropped on the window, or, on macOS, opened
+			 * with the app (Finder's Open With, the Dock icon):
+			 * SDL's app delegate turns the open-document event
+			 * into this. The path goes to /dev/hostopen; what to
+			 * open it in is for the reader there.
+			 */
+			case SDL_EVENT_DROP_FILE:
+				if (event.drop.data != NULL)
+					hostopen((char*)event.drop.data);
 				break;
 
 			case SDL_EVENT_MOUSE_MOTION:
@@ -1543,6 +1870,8 @@ sdl3_mainloop(void)
 			 */
 			case SDL_EVENT_FINGER_DOWN: {
 				float px, py;
+				if (!touchscreen(event.tfinger.touchID))
+					break;
 				touch_finger_to_pixels(&event.tfinger, &px, &py);
 				if (touch_finger_count < TOUCH_MAX_FINGERS) {
 					touch_fingers[touch_finger_count].id = event.tfinger.fingerID;
@@ -1581,7 +1910,10 @@ sdl3_mainloop(void)
 			}
 
 			case SDL_EVENT_FINGER_UP: {
-				int idx = touch_finger_index(event.tfinger.fingerID);
+				int idx;
+				if (!touchscreen(event.tfinger.touchID))
+					break;
+				idx = touch_finger_index(event.tfinger.fingerID);
 				touch_finger_remove_at(idx);
 				if (touch_finger_count < 2)
 					touch_in_multi_gesture = 0;
@@ -1601,8 +1933,11 @@ sdl3_mainloop(void)
 			}
 
 			case SDL_EVENT_FINGER_MOTION: {
-				int idx = touch_finger_index(event.tfinger.fingerID);
+				int idx;
 				float px, py, dx, dy;
+				if (!touchscreen(event.tfinger.touchID))
+					break;
+				idx = touch_finger_index(event.tfinger.fingerID);
 				if (idx < 0)
 					break;
 				touch_finger_to_pixels(&event.tfinger, &px, &py);
@@ -1675,9 +2010,11 @@ sdl3_mainloop(void)
 
 					/*
 					 * Window size changed (e.g., full-screen toggle).
-					 * Recalculate dest rect for centered letterbox rendering.
-					 * Use physical pixel dimensions to match renderer coordinate space.
-					 * Texture/buffer size stays fixed at init dimensions.
+					 * Desktop: show that much of the screen, one to one,
+					 * and post the size to /dev/wmsize. Touch platforms:
+					 * recalculate the centred, letterboxed dest rect.
+					 * Use physical pixel dimensions to match renderer
+					 * coordinate space. The texture keeps its size.
 					 */
 					SDL_GetWindowSizeInPixels(sdl_window, &pix_w, &pix_h);
 					window_width = pix_w;
@@ -1693,6 +2030,7 @@ sdl3_mainloop(void)
 							display_scale = 1.0f;
 					}
 					calc_dest_rect();
+					postwmsize();
 				}
 				break;
 			}

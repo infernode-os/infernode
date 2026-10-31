@@ -4,7 +4,7 @@ implement ToolWallet;
 # wallet - Veltro tool for cryptocurrency and fiat payments
 #
 # Provides wallet operations to Veltro agents via the wallet9p
-# filesystem at /n/wallet/.  The agent writes commands, the tool
+# filesystem at /mnt/wallet/.  The agent writes commands, the tool
 # reads/writes the appropriate wallet9p files.
 #
 # The agent NEVER sees private keys — signing happens inside
@@ -41,7 +41,7 @@ ToolWallet: module {
 	schema: fn(): string;
 };
 
-WALLET_MOUNT: con "/n/wallet";
+WALLET_MOUNT: con "/mnt/wallet";
 
 init(): string
 {
@@ -88,14 +88,14 @@ doc(): string
 		"  - Private keys are never exposed to the agent\n" +
 		"  - Budget limits are enforced server-side in wallet9p\n" +
 		"  - Switching networks is a trusted operation (wallet GUI or\n" +
-		"    /n/wallet/ctl), not available to agents\n";
+		"    /mnt/wallet/ctl), not available to agents\n";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"wallet\"," +
-		"\"description\":\"Cryptocurrency and fiat payment operations via /n/wallet. Private keys are never exposed; payments are proposals that need trusted approval; budget limits are enforced server-side.\"," +
+		"\"description\":\"Cryptocurrency and fiat payment operations via /mnt/wallet. Private keys are never exposed; payments are proposals that need trusted approval; budget limits are enforced server-side.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -194,7 +194,7 @@ cmdhelp(cmd: string): string
 		return "wallet network\n\n" +
 			"Show the active network (name, chain id, USDC contract).\n" +
 			"Switching networks is a trusted operation done from the\n" +
-			"wallet GUI or /n/wallet/ctl, not from this tool.";
+			"wallet GUI or /mnt/wallet/ctl, not from this tool.";
 	* =>
 		return "no specific help for '" + cmd + "'\n" + doc();
 	}

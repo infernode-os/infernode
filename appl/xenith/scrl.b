@@ -89,6 +89,8 @@ scrdraw(t : ref Text)
 
 	if(t.w==nil || t.what!=Textm->Body || t != t.w.body)
 		return;
+	if(t.frame.r.dy() <= 0)	# hidden under a window filling its column
+		return;
 	if(scrx == nil)
 		scrresize();
 	r = t.scrollr;

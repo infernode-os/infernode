@@ -27,7 +27,7 @@ dev
 
 lib
 	interp
-#	tk
+	tk
 #	freetype
 	math
 	draw
@@ -46,7 +46,7 @@ mod
 	sys
 	draw
 
-#	tk
+	tk
 	math
 	srv	srv
 	keyring

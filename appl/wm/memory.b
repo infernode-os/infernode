@@ -37,6 +37,14 @@ Arena: adt
 };
 a := array[10] of Arena;
 
+# The layout was drawn for a 16px line of text; scale it by the real
+# one so a 3x display does not draw every row on top of the last.
+k := 100;	# percent
+sc(v: int): int
+{
+	return v*k/100;
+}
+
 mem_cfg := array[] of {
 	"canvas .c -width 240 -height 45",
 	"pack .c",
@@ -65,22 +73,10 @@ realinit(ctxt: ref Draw->Context)
 	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 
-	# Request a full-size window (bounded by the display) instead of
-	# shrink-wrapping to the 240px stats canvas: in the presentation zone a
-	# tiny window neither composited its content nor got a tab.  A normal
-	# zone-filling window (propagation off, below) does both.
-	dr := ctxt.display.image.r;
-	iw := dr.dx() - 40;
-	ih := dr.dy() - 40;
-	if(iw < 260) iw = 260;
-	if(ih < 120) ih = 120;
 	menubut := chan of string;
-	(t, menubut) = tkclient->toplevel(ctxt, sys->sprint("-width %d -height %d", iw, ih), "Memory", 0);
-	cmd(t, "pack propagate . 0");
+	(t, menubut) = tkclient->toplevel(ctxt, "", "Memory", 0);
 	for(j := 0; j < len mem_cfg; j++)
 		cmd(t, mem_cfg[j]);
-	tkclient->startinput(t, "ptr"::nil);
-	tkclient->onscreen(t, nil);
 
 	tick := chan of int;
 	spawn ticker(tick);
@@ -89,6 +85,12 @@ realinit(ctxt: ref Draw->Context)
 
 	n := getmem(mfd);
 	maxx := initdraw(n);
+
+	# The window keeps the size it is given: what it asks for under wm/wm,
+	# the zone in Lucifer.
+	cmd(t, "pack propagate . 0");
+	tkclient->startinput(t, "ptr"::nil);
+	tkclient->onscreen(t, nil);
 
 	pid: int;
 	for(;;) alt {
@@ -107,21 +109,21 @@ realinit(ctxt: ref Draw->Context)
 		for(i := 0; i < n; i++) {
 			if(a[i].limit <= 0)
 				continue;
-			x := int ((big a[i].size * big (230-maxx)) / big a[i].limit);
+			x := int ((big a[i].size * big (sc(230)-maxx)) / big a[i].limit);
 			s := sys->sprint(".c coords %s %d %d %d %d",
 				a[i].tag,
 				maxx,
-				a[i].y + 4,
+				a[i].y + sc(4),
 				maxx + x,
-				a[i].y + 8);
+				a[i].y + sc(8));
 			cmd(t, s);
-			x = int ((big a[i].hw * big (230-maxx)) / big a[i].limit);
+			x = int ((big a[i].hw * big (sc(230)-maxx)) / big a[i].limit);
 			s = sys->sprint(".c coords %s %d %d %d %d",
 				a[i].taghw,
 				maxx,
-				a[i].y + 4,
+				a[i].y + sc(4),
 				maxx+x,
-				a[i].y + 8);
+				a[i].y + sc(8));
 			cmd(t, s);
 			s = sys->sprint(".c itemconfigure %s -text {%s}", a[i].tagsz, sizestr(a[i].size));
 			cmd(t, s);
@@ -143,32 +145,38 @@ ticker(c: chan of int)
 
 initdraw(n: int): int
 {
-	y := 15;
+	probe := cmd(t, ".c create text 0 0 -text Mg");
+	lh := s2r(cmd(t, ".c bbox " + probe)).dy();
+	cmd(t, ".c delete " + probe);
+	if(lh*100/16 > k)
+		k = lh*100/16;
+	cmd(t, ".c configure -width " + string sc(240));
+	y := sc(15);
 	maxx := 0;
 	for (i := 0; i < n; i++) {
-		id := cmd(t, ".c create text 5 "+string y+" -anchor w -text "+a[i].name);
+		id := cmd(t, ".c create text "+string sc(5)+" "+string y+" -anchor w -text "+a[i].name);
 		r := s2r(cmd(t, ".c bbox " + id));
 		if (r.max.x > maxx)
 			maxx = r.max.x;
-		y += 20;
+		y += sc(20);
 	}
-	maxx += 5;
-	y = 15;
+	maxx += sc(5);
+	y = sc(15);
 	for(i = 0; i < n; i++) {
-		s := sys->sprint(".c create rectangle %d %d 230 %d -fill white", maxx, y+4, y+8);
+		s := sys->sprint(".c create rectangle %d %d %d %d -fill white", maxx, y+sc(4), sc(230), y+sc(8));
 		cmd(t, s);
-		s = sys->sprint(".c create rectangle %d %d 230 %d -fill white", maxx, y+4, y+8);
+		s = sys->sprint(".c create rectangle %d %d %d %d -fill white", maxx, y+sc(4), sc(230), y+sc(8));
 		a[i].taghw = cmd(t, s);
-		s = sys->sprint(".c create rectangle %d %d 230 %d -fill red", maxx, y+4, y+8);
+		s = sys->sprint(".c create rectangle %d %d %d %d -fill red", maxx, y+sc(4), sc(230), y+sc(8));
 		a[i].tag = cmd(t, s);
-		s = sys->sprint(".c create text 230 %d -anchor e -text {%s}", y - 2, sizestr(a[i].limit));
+		s = sys->sprint(".c create text %d %d -anchor e -text {%s}", sc(230), y - sc(2), sizestr(a[i].limit));
 		cmd(t, s);
-		s = sys->sprint(".c create text %d %d -anchor w -text {%s}", maxx, y - 2, string a[i].size);
+		s = sys->sprint(".c create text %d %d -anchor w -text {%s}", maxx, y - sc(2), string a[i].size);
 		a[i].tagsz = cmd(t, s);
-		s = sys->sprint(".c create text 120 %d -fill red -anchor w -text {%d}", y - 2, a[i].allocs-a[i].frees);
+		s = sys->sprint(".c create text %d %d -fill red -anchor w -text {%d}", sc(120), y - sc(2), a[i].allocs-a[i].frees);
 		a[i].tagiu = cmd(t, s);
 		a[i].y = y;
-		y += 20;
+		y += sc(20);
 	}
 	cmd(t, ".c configure -height "+string y);
 	cmd(t, "update");

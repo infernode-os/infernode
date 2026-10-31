@@ -14,7 +14,13 @@ implement TkTest;
 #   - the brutalist default palette resolves to the Brimstone colours
 #     and colour values round-trip cleanly through cget (no 64-bit
 #     sign-extension, no <<-vs-& macro mangling);
-#   - explicit per-widget colours are honoured.
+#   - explicit per-widget colours are honoured;
+#   - glyphs take the foreground colour: an anti-aliased (k8) font drawn
+#     through libmemdraw's coverdraw came out black whatever the colour
+#     when built with gcc, so dark themes were unreadable;
+#   - two presses of a button, soon after and near each other, are a
+#     double click: only the X11 driver marked one, so on SDL hosts no
+#     <Double-Button-1> binding fired (wm/dir opened nothing).
 #
 
 include "sys.m";
@@ -22,7 +28,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Image, Rect: import draw;
+	Display, Font, Image, Rect, Chans: import draw;
 
 include "tk.m";
 	tk: Tk;
@@ -78,6 +84,54 @@ newtop(t: ref T): ref Toplevel
 }
 
 # ── Tests ──────────────────────────────────────────────────────
+
+# a press and release of button 1 at x y, the press at msec
+click(top: ref Toplevel, x, y, msec: int)
+{
+	tk->pointer(top, Draw->Pointer(1, (x, y), msec));
+	tk->pointer(top, Draw->Pointer(0, (x, y), msec + 10));
+}
+
+# what the label's bindings sent since the last call
+heard(c: chan of string): string
+{
+	s := "";
+	for(;;) alt {
+	e := <-c =>
+		s += e + " ";
+	* =>
+		return s;
+	}
+}
+
+testDoubleClick(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	c := chan[16] of string;
+	tk->namechan(top, c, "c");
+	# mapped, as onscreen does, or pointer events find no widget
+	tk->cmd(top, "label .l -width 200 -height 100 -text x; pack .l; . map; update");
+	tk->cmd(top, "bind .l <Double-Button-1> {send c double}");
+	tk->cmd(top, "bind .l <ButtonRelease-1> {send c up}");
+	heard(c);
+	click(top, 20, 20, 1000);
+	click(top, 21, 20, 1150);
+	t.assertseq(heard(c), "up double up ", "two clicks 150ms apart: the second a double");
+	click(top, 20, 20, 3000);
+	click(top, 20, 20, 3500);
+	t.assertseq(heard(c), "up up ", "500ms apart: no double");
+	click(top, 20, 20, 5000);
+	click(top, 80, 60, 5100);
+	t.assertseq(heard(c), "up up ", "far apart: no double");
+	click(top, 20, 20, 0);
+	click(top, 20, 20, 0);
+	t.assertseq(heard(c), "up up ", "no time stamps: no double");
+	tk->pointer(top, Draw->Pointer(1|(1<<8), (20, 20), 9000));
+	tk->pointer(top, Draw->Pointer(0, (20, 20), 9010));
+	t.assertseq(heard(c), "double up ", "a press X11 marked double (bit 8) still is one");
+}
 
 testToplevel(t: ref T)
 {
@@ -181,6 +235,44 @@ testEntryInput(t: ref T)
 		tk->keyboard(top, s[i]);
 	tk->cmd(top, "update");
 	t.assertseq(tk->cmd(top, ".e get"), "hello", "typed text reaches entry");
+}
+
+# Keys that are not characters (keyboard.h's, 16rE000 up: the arrows,
+# Page Up and Down, the function keys) type nothing in an entry or a
+# text and leave the selection; they were typed as private-use glyphs
+# wherever no binding of their own took them.  Characters, a brace and
+# a backslash among them, still type, replacing the selection.
+testSpecialKeys(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	Up: con 16rE012;
+	Pgdown: con 16rE017;
+	F1: con 16rE041;
+	tk->cmd(top, "entry .e; pack .e; focus .e; update");
+	for(s := "a {b}c\\"; s != nil; s = s[1:])
+		tk->keyboard(top, s[0]);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "characters typed into the entry, a blank, braces and a backslash too");
+	tk->keyboard(top, Up);
+	tk->keyboard(top, Pgdown);
+	tk->keyboard(top, F1);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "Up, Page Down and F1 typed nothing into the entry");
+	tk->cmd(top, ".e selection range 0 end");
+	tk->keyboard(top, F1);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "F1 left the entry's selection");
+	tk->keyboard(top, 'z');
+	t.assertseq(tk->cmd(top, ".e get"), "z", "a character replaced the selection");
+	tk->keyboard(top, 16rE014);	# Left
+	tk->keyboard(top, ' ');
+	t.assertseq(tk->cmd(top, ".e get"), " z", "Left moved the caret, and a blank typed alone is typed");
+
+	tk->cmd(top, "text .t; pack .t; focus .t; update");
+	tk->keyboard(top, 'x');
+	tk->keyboard(top, F1);
+	tk->keyboard(top, 16rE063);	# Ins
+	tk->keyboard(top, 'y');
+	t.assertseq(tk->cmd(top, ".t get 1.0 end"), "xy", "F1 and Ins typed nothing into the text");
 }
 
 # A button's -command fires on invoke (how the app tests click actions).
@@ -311,6 +403,149 @@ testDynamicImage(t: ref T)
 	t.assert(ah >= IH, sys->sprint("label actheight tracks image (got %d, want >= %d)", ah, IH));
 }
 
+
+# ── Glyph colour ───────────────────────────────────────────────
+#
+# The Tk default face is DejaVu, whose subfonts are k8: 8-bit coverage,
+# drawn S over D through a GREY8 mask (libmemdraw's coverdraw).  With
+# bg under fg, a pixel of coverage c is c*fg + (1-c)*bg, so each channel
+# of every glyph pixel lies between bg's and fg's, and the stems of an
+# H, fully covered, are fg exactly.
+
+AAFONT: con "/fonts/combined/unicode.sans.14.font";
+GLYPHBG: con 16r0D0D0D;		# brimstone editbg
+
+# Every glyph pixel (a pixel that is not bg) of img, as (r, g, b).
+glyphpixels(t: ref T, img: ref Image): list of (int, int, int)
+{
+	nb: int;
+	if(img.chans.eq(Draw->XRGB32))
+		nb = 4;
+	else if(img.chans.eq(Draw->RGB24))
+		nb = 3;
+	else{
+		t.fatal(sys->sprint("glyphpixels: unexpected chans %s", img.chans.text()));
+		return nil;
+	}
+	buf := array[img.r.dx()*img.r.dy()*nb] of byte;
+	n := img.readpixels(img.r, buf);
+	if(n != len buf){
+		t.fatal(sys->sprint("readpixels: %d bytes, want %d: %r", n, len buf));
+		return nil;
+	}
+	px: list of (int, int, int);
+	bgr := (GLYPHBG>>16) & 16rFF;
+	bgg := (GLYPHBG>>8) & 16rFF;
+	bgb := GLYPHBG & 16rFF;
+	# both layouts are little-endian: blue, green, red (, ignored)
+	for(i := 0; i+nb <= n; i += nb){
+		(r, g, b) := (int buf[i+2], int buf[i+1], int buf[i]);
+		if(r != bgr || g != bgg || b != bgb)
+			px = (r, g, b) :: px;
+	}
+	return px;
+}
+
+between(v, a, b: int): int
+{
+	if(a > b)
+		(a, b) = (b, a);
+	return v >= a && v <= b;
+}
+
+# Assert every glyph pixel of img blends bg towards fg, and some are fg.
+assertglyphcolour(t: ref T, img: ref Image, fg: int, what: string)
+{
+	fr := (fg>>16) & 16rFF;
+	fgg := (fg>>8) & 16rFF;
+	fb := fg & 16rFF;
+	br := (GLYPHBG>>16) & 16rFF;
+	bg := (GLYPHBG>>8) & 16rFF;
+	bb := GLYPHBG & 16rFF;
+	px := glyphpixels(t, img);
+	t.assert(len px > 0, what+": no glyph pixels drawn");
+	full := 0;
+	bad := 0;
+	first := "";
+	for(; px != nil; px = tl px){
+		(r, g, b) := hd px;
+		if(r == fr && g == fgg && b == fb)
+			full++;
+		if(!between(r, br, fr) || !between(g, bg, fgg) || !between(b, bb, fb)){
+			if(bad++ == 0)
+				first = sys->sprint("#%.2x%.2x%.2x", r, g, b);
+		}
+	}
+	t.assert(bad == 0, sys->sprint("%s: %d glyph pixels not between bg #%.6x and fg #%.6x (first %s)",
+		what, bad, GLYPHBG, fg, first));
+	t.assert(full > 0, sys->sprint("%s: no glyph pixel is the foreground #%.6x", what, fg));
+}
+
+# Image.text in a colour, through an anti-aliased font, onto both
+# 8-bit-channel layouts coverdraw handles.
+testGlyphColour(t: ref T)
+{
+	if(display == nil){
+		t.skip("no display available");
+		return;
+	}
+	font := Font.open(display, AAFONT);
+	if(font == nil){
+		t.skip(sys->sprint("cannot open %s: %r", AAFONT));
+		return;
+	}
+	chans := array[] of {Draw->XRGB32, Draw->RGB24};
+	fgs := array[] of {16rCCCCCC, 16rE8553A};	# brimstone edittext, an accent
+	for(c := 0; c < len chans; c++){
+		for(f := 0; f < len fgs; f++){
+			img := display.newimage(Rect((0, 0), (80, 24)), chans[c], 0, (GLYPHBG<<8)|16rFF);
+			if(img == nil){
+				t.fatal(sys->sprint("newimage %s: %r", chans[c].text()));
+				return;
+			}
+			img.text((2, 2), display.color((fgs[f]<<8)|16rFF), (0, 0), font, "HHHH");
+			assertglyphcolour(t, img, fgs[f],
+				sys->sprint("text #%.6x on %s", fgs[f], chans[c].text()));
+		}
+	}
+}
+
+# The report: text and label widgets on a dark background, -fg honoured.
+testForegroundRendered(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	if(Font.open(display, AAFONT) == nil){
+		t.skip(sys->sprint("cannot open %s: %r", AAFONT));
+		return;
+	}
+	W: con 200;
+	H: con 70;
+	cmds := array[] of {
+		sys->sprint(". configure -background #%.6x", GLYPHBG),
+		sys->sprint("text .t -width 190 -height 24 -borderwidth 0 -highlightthickness 0 -background #%.6x -foreground #cccccc", GLYPHBG),
+		sys->sprint("label .l -text HHHH -borderwidth 0 -background #%.6x -foreground #cccccc", GLYPHBG),
+		"pack .t .l",
+		".t insert end HHHH",
+		sys->sprint(". configure -width %d -height %d", W, H),
+		"update",
+	};
+	for(i := 0; i < len cmds; i++){
+		e := tk->cmd(top, cmds[i]);
+		t.assert(e == nil || e[0] != '!', sys->sprint("%q -> %q", cmds[i], e));
+	}
+	img := display.newimage(Rect((0, 0), (W, H)), Draw->XRGB32, 0, (GLYPHBG<<8)|16rFF);
+	if(img == nil){
+		t.fatal(sys->sprint("newimage: %r"));
+		return;
+	}
+	e := tk->putimage(top, ". -1", img, nil);
+	t.assertnil(e, sys->sprint("putimage error: %q", e));
+	tk->cmd(top, "update");
+	assertglyphcolour(t, img, 16rCCCCCC, "text and label -foreground #cccccc");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -348,6 +583,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Toggles",         testToggles);
 	run("TextEdit",        testTextEdit);
 	run("DynamicImage",    testDynamicImage);
+	run("GlyphColour",     testGlyphColour);
+	run("ForegroundRendered", testForegroundRendered);
+	run("DoubleClick",     testDoubleClick);
+	run("SpecialKeys",     testSpecialKeys);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

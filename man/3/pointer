@@ -50,15 +50,28 @@ is a time stamp in milliseconds.
 .PP
 Writing a record of the above form to
 .B pointer
-moves the displayed cursor to the given
+sends that pointer event, as if from the device:
+.I buttons
+held at
+.I x
+and
+.IR y ;
+.I msec
+is ignored.
+Under
+.IR emu (1)
+each such write is delivered as an event of its own, motion included,
+in the order written, where the host's own pointer reports only its
+latest position between changes of buttons; a write waits if events
+are waiting to be read.
+So a press, a move and a release written one after another reach the
+reader as a drag.
+The host's pointer is not moved.
+A record with only
 .I x
 and
 .I y
-position;
-.I buttons
-and
-.I msec
-are ignored.
+moves the pointer there, the host's too, with the buttons as they are.
 .PP
 Writing an
 .IR image (6)

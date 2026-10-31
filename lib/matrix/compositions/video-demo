@@ -11,7 +11,7 @@
 # Matrix pulls one frame per update (2 s cadence, wm/matrix UPDATE_MS), so
 # these feeds are 1 fps clips — the panes step in near-real time and testsrc's
 # counter makes the motion obvious.  Full-rate playback is vidplay9p's job
-# (see demo-video.sh, which opens one on a 25 fps live feed).
+# (see tools/demo/demo-video.sh, which opens one on a 25 fps live feed).
 
 layout hsplit 66 34
 left vsplit 50 50

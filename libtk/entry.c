@@ -49,7 +49,7 @@ static TkStab tkjust[] =
 static
 TkEbind b[] = 
 {
-	{TkKey,			"%W delete sel.first sel.last; %W insert insert {%A};%W see insert"},
+	{TkKey,			"%W tkEntryKey 0x%K"},
 	{TkKey|CNTL('a'),	"%W icursor 0;%W see insert;%W selection clear"},
 	{TkKey|Home,		"%W icursor 0;%W see insert;%W selection clear"},
 	{TkKey|CNTL('d'),	"%W delete insert; %W see insert"},
@@ -825,6 +825,35 @@ tkentryinsert(Tk *tk, char *arg, char **val)
 	return e;
 }
 
+/*
+ * A key typed, as its binding sends it (0x%K): the selection replaced
+ * by it, or it put at the insertion point, which is shown.  A key that
+ * is not a character (an arrow, a function key: the range keyboard.h
+ * gives them) does nothing; it was typed as a private-use glyph.
+ */
+static char*	tkentrydelete(Tk*, char*, char**);
+
+static char*
+tkentrykey(Tk *tk, char *arg, char **val)
+{
+	TkEntry *tke;
+	Rune r;
+	char *e, ins[64];
+
+	USED(val);
+	tke = TKobj(TkEntry, tk);
+	r = strtoul(arg, nil, 0);
+	if(r == 0 || tkspeckey(r))
+		return nil;
+	if(tke->sel0 < tke->sel1)
+		tkentrydelete(tk, "sel.first sel.last", nil);
+	snprint(ins, sizeof ins, "insert '%C", r);	/* ' takes what follows as it is */
+	e = tkentryinsert(tk, ins, nil);
+	if(e != nil)
+		return e;
+	return tkentryseecmd(tk, "insert", nil);
+}
+
 static char*
 tkentrydelete(Tk *tk, char *arg, char **val)
 {
@@ -1359,6 +1388,7 @@ TkCmdtab tkentrycmd[] =
 	"selection",		tkentryselect,
 	"xview",		tkentryxview,
 	"tkEntryBS",		tkentrybs,
+	"tkEntryKey",		tkentrykey,
 	"tkEntryBW",		tkentrybw,
 	"tkEntryB1P",		tkentryb1p,
 	"tkEntryB1M",		tkentryb1m,

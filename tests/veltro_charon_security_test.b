@@ -48,7 +48,11 @@ init(nil: ref Draw->Context, nil: list of string)
 	check(tool, "follow ../3", "invalid link number");
 	check(tool, "follow 3=4", "invalid link number");
 	check(tool, "follow 1234567890", "invalid link number");
-	check(tool, "follow 3", "cannot create /tmp/veltro/browser/ctl");
+	check(tool, "follow 3", "is charon running");
+	check(tool, "set 4 two\nlines", "a value is one line");
+	check(tool, "set x y", "usage: set");
+	check(tool, "submit 1 ../2", "usage: submit");
+	check(tool, "click", "usage: click");
 	check(tool, "navigate file:/lib/veltro/system.txt", "only http:// and https://");
 	check(tool, "navigate https://example.com\nfollow 1", "only http:// and https://");
 }

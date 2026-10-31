@@ -134,8 +134,11 @@ dedupcheck(name, args: string): string
 		if(k == name + " " + args) {
 			if(verbose)
 				sys->fprint(stderr, "agentlib: dedup skip %s (identical call first ran at step %d)\n", name, s);
-			return sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
-				name, truncate(args, 120), s);
+			# No step number: the model's count is not this one, and told
+			# "step 12" it took the result from before its own edit for
+			# this one, and said the file had read stale.
+			return sys->sprint("(skipped: you already made the call `%s %s` in this turn, and nothing has changed anything since, so its output is the same as then)",
+				name, truncate(args, 120));
 		}
 	}
 	return "";
@@ -396,11 +399,16 @@ buildsystemprompt(ns, persona: string): string
 
 	prompt := base + "\n\n== Your Namespace ==\n" + ns;
 
+	proj := projectinstructions(userpaths(readfile(toolmount_g + "/paths")));
+	if(proj != "")
+		prompt += "\n\n" + proj;
+
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;
 
 	if(tooldocs != "")
 		prompt += "\n\n== Tool Documentation ==\n" + tooldocs;
+	prompt += "\n\n" + TOOLDOCNOTE;
 
 	# Substitute the agent name so no prompt file hardcodes identity.
 	prompt = injectagent(prompt);
@@ -431,11 +439,34 @@ buildsystemprompt(ns, persona: string): string
 # Each tool's full doc is preceded by a "## <name>" header so the
 # model can locate sections by tool name. Tools without a .txt file
 # are silently skipped.
+#
+# Only the tools whose use a description cannot carry have their whole
+# documentation here: exec (the shell is not POSIX's) and spawn (its
+# grants).  Every other tool's is a file the agent reads when it needs
+# it (TOOLDOCNOTE).  All of them inlined were some 48 KB with every tool
+# on: with the base prompt, past the 65000-byte cap, and cut.
+INLINEDOCS: con "exec spawn";
+TOOLDOCNOTE: con "== Tools ==\nEach tool's description says what it is for.  The full " +
+	"documentation of every tool, with its options and examples, is the file " +
+	"/lib/veltro/tools/<name>.txt: read it before using a tool in a way its " +
+	"description does not cover.";
+
+inlist(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
 loadtooldocs(toollist: list of string): string
 {
 	docs := "";
+	(nil, inline) := sys->tokenize(INLINEDOCS, " ");
 	for(t := toollist; t != nil; t = tl t) {
 		name := hd t;
+		if(!inlist(name, inline))
+			continue;
 		doc := readtooldoc(name);
 		if(doc == "")
 			continue;
@@ -835,6 +866,208 @@ extracttoolargs(inputjson: string): string
 	return inputjson;
 }
 
+# edit takes <path> <old> <new> [all], and old and new are text: quoted, or
+# a space in one split it ("- milk" became "-" and "milk", and the edit
+# failed, "'-' found 2 times").  Its parser reads "..." with \" inside.
+jget(jv: ref JValue, key: string): ref JValue
+{
+	pick o := jv {
+	Object =>
+		for(ml := o.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			if(name == key)
+				return val;
+		}
+	}
+	return nil;
+}
+
+editargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	pick obj := jv {
+	Object =>
+		path, old, new, all: string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			case name {
+			"path" => path = v;
+			"old" => old = v;
+			"new" => new = v;
+			"all" => all = v;
+			"args" => return v;	# already positional
+			}
+		}
+		# Several changes: the JSON as it is, the path in front.
+		if(jget(jv, "edits") != nil)
+			return "-j " + path + " " + inputjson;
+		r := "-r " + path + " " + editquote(old) + " " + editquote(new);
+		if(all == "true" || all == "all" || all == "1")
+			r += " all";
+		return r;
+	}
+	return inputjson;
+}
+
+# write <path> <content>: a native call's content goes verbatim (-r), as
+# the file is to hold it.
+writeargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	pick obj := jv {
+	Object =>
+		path, content: string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			case name {
+			"path" => path = v;
+			"content" => content = v;
+			"args" => return v;	# already positional
+			}
+		}
+		if(path == "")
+			return extracttoolargs(inputjson);
+		# tools9p drops one trailing newline from a call's arguments (as
+		# echo leaves it); this one is that, so the file keeps its own.
+		return "-r " + path + " " + content + "\n";
+	}
+	return inputjson;
+}
+
+editquote(s: string): string
+{
+	q := "\"";
+	for(i := 0; i < len s; i++) {
+		if(s[i] == '"')
+			q[len q] = '\\';
+		q[len q] = s[i];
+	}
+	q[len q] = '"';
+	return q;
+}
+
+# A native call's JSON arguments, as the tool takes them on its command
+# line.  extracttoolargs joins the values in the order the model sent them,
+# whatever their names: a read with a limit and no offset had the limit
+# taken for the offset ("offset 400 beyond end", every page the agent had
+# fetched unreadable), and arguments sent in another order changed places
+# (a write's content before its path was not seen to write /lib).  Each
+# tool whose arguments are positions is given them in its own order, an
+# omitted one before a present one filled with its default, and names that
+# are flags (say's voice, vision's backend) as flags.  Anything else, and
+# arguments already positional, as before.
+toolargs(tool, inputjson: string): string
+{
+	t := str->tolower(tool);
+	if(t == "edit")
+		return editargs(inputjson);
+	if(t == "write")
+		return writeargs(inputjson);
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	vals: list of (string, string);
+	pick obj := jv {
+	Object =>
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			vals = (name, strip(v)) :: vals;
+		}
+	* =>
+		return extracttoolargs(inputjson);
+	}
+	# exec's timeout, by name: before the command, as exec takes it.
+	if(t == "exec" && jval(vals, "timeout") != nil && jval(vals, "command") != nil)
+		return "-t " + jval(vals, "timeout") + " " + jval(vals, "command");
+	if(jval(vals, "args") != nil || jval(vals, "command") != nil)
+		return extracttoolargs(inputjson);
+	order: list of string;
+	case t {
+	"read" =>
+		offset := jval(vals, "offset");
+		limit := jval(vals, "limit");
+		if(offset == "" && limit != "")
+			offset = "0";
+		return joinargs(jval(vals, "path") :: offset :: limit :: nil);
+	"say" =>
+		voice := jval(vals, "voice");
+		if(voice != "")
+			return "-v " + voice + " " + jval(vals, "text");
+		return jval(vals, "text");
+	"vision" =>
+		b := jval(vals, "backend");
+		if(b != "" && !hasprefix(b, "--"))
+			b = "--" + b;
+		return joinargs(b :: jval(vals, "imagepath") :: jval(vals, "prompt") :: nil);
+	"limbo" =>
+		path := jval(vals, "path");
+		if(path != "")
+			return "-o " + path + " " + jval(vals, "description");
+		return jval(vals, "description");
+	"find" or "search" => order = "pattern" :: "path" :: nil;
+	"grep" => order = "flags" :: "pattern" :: "path" :: nil;
+	"window" => order = "op" :: "id" :: "name" :: nil;
+	"http" => order = "method" :: "url" :: "body" :: nil;
+	"webfetch" => order = "url" :: "prompt" :: nil;
+	"payfetch" => order = "url" :: "flags" :: nil;
+	"sms" => order = "number" :: "body" :: nil;
+	"launch" => order = "app" :: "extra" :: nil;
+	"json" => order = "source" :: "path" :: nil;
+	* =>
+		return extracttoolargs(inputjson);
+	}
+	l: list of string;
+	for(; order != nil; order = tl order)
+		l = jval(vals, hd order) :: l;
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return joinargs(r);
+}
+
+jval(vals: list of (string, string), name: string): string
+{
+	for(; vals != nil; vals = tl vals) {
+		(n, v) := hd vals;
+		if(n == name)
+			return v;
+	}
+	return nil;
+}
+
+# The words, one blank between, the empty ones left out.
+joinargs(l: list of string): string
+{
+	out := "";
+	for(; l != nil; l = tl l) {
+		if(hd l == "")
+			continue;
+		if(out != "")
+			out += " ";
+		out += hd l;
+	}
+	return out;
+}
+
 calltool(tool, args: string): string
 {
 	# Legacy /tool shell tools take positional Plan 9 args. The LLM now emits
@@ -842,7 +1075,7 @@ calltool(tool, args: string): string
 	# mcp9p /call), so the JSON->positional projection for /tool tools happens
 	# HERE, at the boundary. extracttoolargs passes already-positional or empty
 	# input through unchanged, so this is safe for any caller.
-	args = extracttoolargs(args);
+	args = toolargs(tool, args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
 	# Open tool file. The active tool set in tools9p can transiently churn at
@@ -1291,14 +1524,47 @@ parsellmresponse(response: string): (string, list of (string, string, string), s
 # Build the TOOL_RESULTS wire format for submitting tool execution results.
 # results: list of (tool_use_id, content) pairs.
 # The returned string is written to /mnt/llm/{id}/ask to trigger AskWithToolResults.
+#
+# An entry whose id is "-" is not a tool's result but text from the user,
+# sent with the results (a message written while the turn ran).  A line of
+# a result that is all dashes ("---", which ends an entry) is sent with one
+# dash more; parsetoolresults takes it off.  Sent as it was, a result with
+# a "---" line in it (a Markdown rule) was cut there, and its rest taken
+# for another result.
 buildtoolresults(results: list of (string, string)): string
 {
 	text := "TOOL_RESULTS\n";
 	for(r := results; r != nil; r = tl r) {
 		(id, content) := hd r;
-		text += id + "\n" + content + "\n---\n";
+		text += id + "\n" + escapedashes(content) + "\n---\n";
 	}
 	return text;
+}
+
+escapedashes(s: string): string
+{
+	out := "";
+	start := 0;
+	for(i := 0; i <= len s; i++) {
+		if(i < len s && s[i] != '\n')
+			continue;
+		line := s[start:i];
+		if(len line >= 3 && alldashes(line))
+			out += "-";
+		out += line;
+		if(i < len s)
+			out += "\n";
+		start = i + 1;
+	}
+	return out;
+}
+
+alldashes(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] != '-')
+			return 0;
+	return 1;
 }
 
 # ============================================================================
@@ -1656,5 +1922,138 @@ mcptidycommas(s: string): string
 			continue;
 		r[len r] = c;
 	}
+	return r;
+}
+
+# ---- What a loop tells the model (see agentlib.m) ----
+
+# A reply that ends a turn but should not: empty, or announcing a next
+# step it does not take ("Let me check the file:").  "" for one that is
+# a fine end.
+stopnudge(text: string, said: int): string
+{
+	t := strip(text);
+	if(t == "") {
+		if(said)
+			return "";	# it spoke aloud; nothing more is owed
+		return EMPTYNUDGE;
+	}
+	last := t;
+	for(i := len t - 1; i >= 0; i--)
+		if(t[i] == '\n') {
+			last = strip(t[i+1:]);
+			break;
+		}
+	lower := str->tolower(last);
+	if(last[len last - 1] == ':' || hasprefix(lower, "let me ") ||
+	   hasprefix(lower, "now let me ") || hasprefix(lower, "next, let me "))
+		return CONTINUENUDGE;
+	return "";
+}
+
+readonlytool(name: string): int
+{
+	case name {
+	"read" or "list" or "find" or "search" or "grep" or
+	"websearch" or "webfetch" or "spawn" =>
+		return 1;
+	}
+	return 0;
+}
+
+failureof(result: string): string
+{
+	if(hasprefix(result, "error:") || hasprefix(result, "ERROR:"))
+		return firstline(result);
+	(nil, st) := str->splitstrl(result, "status: failed");
+	if(hasprefix(result, "<gate>") && st != nil) {
+		# the compiler's first diagnostic
+		(nil, after) := str->splitstrl(result, "stderr:\n");
+		if(after != nil)
+			return firstline(after[len "stderr:\n":]);
+		return "status: failed";
+	}
+	return nil;
+}
+
+firstline(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			return s[0:i+1];
+	return s;
+}
+
+samefailurenote(n: int): string
+{
+	return sys->sprint("\n\n[harness: this call has now failed %d times this turn with the same " +
+		"error, so the changes made between them are not fixing it.  Read the error again " +
+		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
+		"that it still fails, and why.]", n);
+}
+
+# ---- A project's own instructions ----
+#
+# A folder the user gives the agent may say how to work in it, in the
+# file other agents read for that: AGENTS.md, or CLAUDE.md where there is
+# no AGENTS.md.  The one at the top of each folder given is put in the
+# prompt, up to PROJECTMAX of each and PROJECTALL in all; one longer is
+# cut, and says where the rest is.  What the agent's namespace cannot see
+# (a folder bound later, outside it) is not read.
+PROJECTMAX: con 16384;
+PROJECTALL: con 32768;
+PROJECTFILES: con "AGENTS.md CLAUDE.md";
+
+projectinstructions(paths: list of string): string
+{
+	out := "";
+	(nil, names) := sys->tokenize(PROJECTFILES, " ");
+	for(; paths != nil; paths = tl paths) {
+		dir := hd paths;
+		for(nl := names; nl != nil; nl = tl nl) {
+			file := dir + "/" + hd nl;
+			text := readfile(file);
+			if(strip(text) == "")
+				continue;
+			room := PROJECTALL - len out;
+			if(room <= 256)
+				return projectsection(out + "\n(More folders have instructions: read their " +
+					PROJECTFILES + ".)");
+			lim := PROJECTMAX;
+			if(lim > room - 256)
+				lim = room - 256;
+			if(len text > lim)
+				text = text[0:lim] + sys->sprint("\n... (%d bytes more: read %s for the rest)",
+					len text - lim, file);
+			out += "\n=== " + file + " ===\n" + strip(text) + "\n";
+			break;
+		}
+	}
+	return projectsection(out);
+}
+
+projectsection(body: string): string
+{
+	if(body == "")
+		return "";
+	return "== Project Instructions ==\n" +
+		"The folders you were given say how to work in them.  Follow these " +
+		"instructions for work in those folders, as the user's own, unless the user " +
+		"says otherwise.\n" + body;
+}
+
+# The folders of /tool/paths, one "path perm" a line.
+userpaths(raw: string): list of string
+{
+	out: list of string;
+	(nil, lines) := sys->tokenize(raw, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(nil, w) := sys->tokenize(hd lines, " \t");
+		if(w != nil && len hd w > 1 && (hd w)[0] == '/')
+			out = hd w :: out;
+	}
+	r: list of string;
+	for(; out != nil; out = tl out)
+		r = hd out :: r;
 	return r;
 }

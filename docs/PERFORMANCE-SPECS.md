@@ -1,9 +1,17 @@
 # InferNode - Performance Specifications
 
-**Platforms:** x86_64 Linux, ARM64 Linux, ARM64 macOS
-**Build:** Headless (no X11/graphics)
+**Platforms:** Linux (AMD64, ARM64, RISC-V 64), macOS (Apple Silicon and Intel), Windows (AMD64), Android, iOS
+**Builds:** headless, or with the SDL3 GUI (Lucia + Xenith) — see the `build-*.sh` / `build-*.ps1` scripts at the repository root
+**JIT:** AMD64, ARM64 and RISC-V (`emu -c1`); see [JIT.md](JIT.md)
 
-## Binary Sizes
+> **Interpreter-era measurements.** The sizes, timings and memory figures
+> below were taken on an early headless, interpreter-only build (reference
+> machine Apple M1 Pro, 16 GB) and have not been re-measured since the JITs,
+> the SDL3 GUI and the other platforms landed. Treat them as an order of
+> magnitude, not a specification. Current JIT and interpreter benchmarks are
+> in [BENCHMARKS.md](BENCHMARKS.md).
+
+## Binary Sizes (interpreter-era)
 
 ### Core Binaries
 
@@ -33,10 +41,10 @@
 
 ### Compiled Code
 - **Compiled ARM64 code**: 5.5 MB
-- **Limbo .dis files**: 2.2 MB (280+ programs)
+- **Limbo .dis files**: 2.2 MB at the time (the build now produces the 1,047 modules listed in `tools/dis-manifest.txt`)
 - **Limbo source**: 15 MB (appl/)
 
-## Runtime Performance
+## Runtime Performance (interpreter-era)
 
 ### Startup Time
 - **Cold start to prompt**: ~2 seconds
@@ -132,10 +140,8 @@
 ## Comparison with Other Systems
 
 ### vs Standard Inferno OS
-- **Smaller:** No GUI (saves ~10-20 MB)
-- **Faster startup:** No graphics init
-- **Same performance:** Core VM identical
-- **More efficient:** Headless reduces overhead
+- **Headless build:** no graphics initialisation; the SDL3 GUI build is optional
+- **JIT:** 64-bit JITs for AMD64, ARM64 and RISC-V
 
 ### vs Full Desktop OS
 - **Tiny:** 10-20 MB RAM vs 1-2 GB
@@ -146,7 +152,7 @@
 ### vs Docker Container
 - **Comparable size:** Similar footprint
 - **Faster startup:** No container overhead
-- **Native:** Runs directly on macOS
+- **Native:** Runs directly on the host OS
 - **Simpler:** No container runtime needed
 
 ## Resource Requirements
@@ -154,16 +160,16 @@
 ### Minimum
 - **RAM:** 32 MB (theoretical minimum)
 - **Disk:** 10 MB (binaries only)
-- **CPU:** Any 64-bit processor (x86_64 or ARM64)
-- **OS:** Linux (glibc) or macOS 11+
+- **CPU:** A 64-bit x86_64, ARM64 or RV64GC processor
+- **OS:** Linux, macOS, or Windows
 
 ### Recommended
 - **RAM:** 64 MB+ (comfortable headroom)
 - **Disk:** 100 MB (with source and docs)
-- **CPU:** Modern x86_64 or ARM64
-- **OS:** Linux with glibc, or macOS 13+
+- **CPU:** Modern x86_64, ARM64 or RV64GC
+- **OS:** Linux, macOS, or Windows
 
-### Tested On
+### Tested On (interpreter-era measurements)
 - **x86_64 Linux** - Intel/AMD processors, containers
 - **ARM64 Linux** - Jetson, Raspberry Pi
 - **Apple M1/M2/M3** - Excellent performance
@@ -179,12 +185,11 @@
 - **Minimal dependencies** (no bloat)
 
 ### What Could Be Added
-- **JIT compiler** (inferno64 has this for amd64)
 - **Thread pooling** (currently creates threads on demand)
 - **Memory pool tuning** (could adjust quanta/sizes)
 - **Disk caching** (currently minimal)
 
-## Benchmarks (Informal)
+## Benchmarks (Informal, interpreter-era)
 
 **Tested on Apple M1 Pro, 16GB RAM:**
 
@@ -213,9 +218,9 @@
 - **AI agents** - Lightweight, scriptable
 
 ### Not Optimal For:
-- **Heavy computation** (use native code)
+- **Heavy computation** (the JIT helps; see [BENCHMARKS.md](BENCHMARKS.md))
 - **Large datasets** (memory-bound)
-- **Graphics** (headless build)
+- **Graphics** in the headless build (use the SDL3 GUI build)
 - **High-throughput** (single-threaded)
 
 ## Resource Monitoring
@@ -271,9 +276,9 @@ CPU: 0-1% (idle) to 20-40% (active)
 
 **Memory pools** (emu/port/alloc.c):
 ```c
-{ "main",  0, 32*1024*1024, 127, 512*1024, 0, 31*1024*1024 },
+{ "main",  0, 	512*1024*1024, 127,  512*1024, 0, 511*1024*1024 },
 ```
-- maxsize: 32 MB (can increase)
+- maxsize: 512 MB by default; override at launch with `-pmain=`, `-pheap=`, `-pimage=`
 - quanta: 127 (optimal for 64-bit)
 - ressize: 512 KB (initial)
 
@@ -287,7 +292,7 @@ CPU: 0-1% (idle) to 20-40% (active)
 - **Efficient:** Low CPU when idle
 - **Compact:** 1-3.3 MB emulator, 10-68 MB total
 - **Scalable:** Handles concurrent workloads well
-- **Portable:** Runs on x86_64 and ARM64
+- **Portable:** Runs on x86_64, ARM64 and RISC-V 64
 
 **Perfect for:**
 - Embedded systems
@@ -299,4 +304,4 @@ CPU: 0-1% (idle) to 20-40% (active)
 
 ---
 
-**Performance verified on x86_64 Linux, ARM64 Linux, and Apple Silicon (M1/M2/M3) running macOS 13-15.**
+**Figures above are interpreter-era; see [BENCHMARKS.md](BENCHMARKS.md) for current measurements.**

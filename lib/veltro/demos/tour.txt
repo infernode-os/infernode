@@ -87,7 +87,7 @@ SECTION 3: What Is 9P and Why Files?
     |------|-----------|
     | `/mnt/llm` | The language model I think with |
     | `/mnt/ui` | The GUI you are looking at |
-    | `/n/speech` | My voice (text-to-speech and speech-to-text) |
+    | `/mnt/speech` | My voice (text-to-speech and speech-to-text) |
     | `/tool` | My tools — each one is a directory with ctl and doc files |
     | `/mnt/factotum` | The secure key store (holds your API keys) |
 
@@ -233,10 +233,10 @@ SECTION 9: Voice
 
     | Tool | Path | Purpose |
     |------|------|---------|
-    | `say` | `/n/speech/say` | Text-to-speech |
-    | `hear` | `/n/speech/hear` | Speech-to-text |
+    | `say` | `/mnt/speech/say` | Text-to-speech |
+    | `hear` | `/mnt/speech/hear` | Speech-to-text |
 
-    Both are backed by the speech 9P server at `/n/speech`.
+    Both are backed by the speech 9P server at `/mnt/speech`.
     You can talk to me by voice if a microphone is available.
   - in chat: say and hear — speech is just another file in the namespace
   - wait for their reply
@@ -313,7 +313,7 @@ SECTION 12: Where to Go from Here
     | `/mnt/llm` | The language model |
     | `/mnt/ui` | The GUI state server |
     | `/tool` | My tool filesystem |
-    | `/n/speech` | Speech interface |
+    | `/mnt/speech` | Speech interface |
 
     Everything is a file. Everything is in your namespace.
     I am here whenever you need me.

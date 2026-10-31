@@ -314,7 +314,7 @@ islaunchabledis(path: string): int
 {
 	if(path == nil || len path == 0)
 		return 0;
-	prefixes := "/dis/wm/" :: "/dis/charon/" :: "/dis/xenith/" :: nil;
+	prefixes := "/dis/wm/" :: "/dis/xenith/" :: nil;
 	ok := 0;
 	for(pl := prefixes; pl != nil; pl = tl pl) {
 		pfx := hd pl;
@@ -695,8 +695,12 @@ testIslaunchabledisWm(t: ref T)
 
 testIslaunchabledisCharon(t: ref T)
 {
-	t.asserteq(islaunchabledis("/dis/charon/charon.dis"), 1,
-		"islaunchabledis: /dis/charon/ allowed");
+	# Charon is /dis/wm/charon.dis; /dis/charon/ held the old engine's
+	# modules, none of them an app
+	t.asserteq(islaunchabledis("/dis/wm/charon.dis"), 1,
+		"islaunchabledis: /dis/wm/charon.dis allowed");
+	t.asserteq(islaunchabledis("/dis/charon/http.dis"), 0,
+		"islaunchabledis: /dis/charon/ not allowed");
 }
 
 testIslaunchabledisXenith(t: ref T)

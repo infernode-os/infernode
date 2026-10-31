@@ -63,7 +63,7 @@ safe by construction — it cannot reach a server the parent didn't mount.
 
 ## Where the LLM goes: `/mnt/llm`
 
-The `llm9p` projection (`new`, `clone`, `ask`, `system`, `tools`, `model`,
+The `llmsrv` projection (`new`, `ask`, `system`, `tools`, `model`,
 `usage`, `compact`, …) is a schema **InferNode authors** — `llmsrv` invents it;
 the backend (Ollama, SGLang, the Anthropic API, an on-device runtime) only
 supplies completions behind it. By the one principle, that makes it an
@@ -78,7 +78,7 @@ behind it is a mount-time choice, invisible above the mount:
 | Mode       | How `/mnt/llm` is populated                                              |
 |------------|-------------------------------------------------------------------------|
 | **local**  | `llmsrv` runs on this host and self-mounts at `/mnt/llm`                 |
-| **remote** | `mount -k <keyfile> tcp!peer!5640 /mnt/llm` — a peer's exported `llm9p` tree **bound over** the canonical name |
+| **remote** | `mount -k <keyfile> tcp!peer!5640 /mnt/llm` — a peer's exported `llmsrv` tree **bound over** the canonical name |
 
 Because every process gets its **own** namespace, "local for some, remote for
 others" needs no structure at all: each process binds whichever backend it wants

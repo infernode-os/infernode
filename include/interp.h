@@ -45,6 +45,7 @@ enum
 	Prestrict = 1<<2,	/* enforce memory limits */
 	Prestricted = 1<<3,
 	Pkilled = 1<<4,
+	Pbadpc = 1<<7,		/* #635: reported once by vmachine's queue scan */
 	Pprivatemem = 1<<5	/* keep heap and stack private */
 };
 
@@ -403,6 +404,14 @@ extern	void		cmovw(void*, void*);
 extern	Channel*	cnewc(Type*, void (*)(void), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
+/*
+ * The detectors in heap.c and the JIT (#622, #635) call panic(). The
+ * native kernel declares it in portfns.h and the hosted emulator in its
+ * own fns.h, neither of which libinterp includes, so a hosted build
+ * stopped on an implicit declaration. Both define it with this type.
+ */
+extern	void		panic(char*, ...);
+extern	void		freetypejit(Type*);
 extern	void		cqadd(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);
@@ -460,10 +469,12 @@ extern	void		initarray(Type*, Array*);
 extern	void		initmem(Type*, void*);
 extern	void		irestore(Prog*);
 extern	Prog*		isave(void);
+extern	void		i420modinit(void);
 extern	void		keyringmodinit(void);
 extern	void		killcomm(Progq **p);
 extern	int		killprog(Prog*, char*);
 extern	int		killgrp(Prog*, char*);
+extern	int		killgrptree(Prog*, char*);
 extern	Modlink*	linkmod(Module*, Import*, int);
 extern	Modlink*	mklinkmod(Module*, int);
 extern	Module*		load(char*);

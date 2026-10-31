@@ -17,12 +17,10 @@ include "sys.m";
 
 include "draw.m";
 	drawm: Draw;
-	Display, Font, Image, Point, Rect: import drawm;
+	Display, Font, Image, Path, Point, Rect: import drawm;
 
 include "lucitheme.m";
 
-include "aadraw.m";
-	aad: AAdraw;
 
 include "matrix.m";
 
@@ -58,9 +56,6 @@ init(display: ref Display, font: ref Font, mount: string): string
 	display_g = display;
 	font_g = font;
 	mountpath = mount;
-	aad = load AAdraw AAdraw->PATH;
-	if(aad != nil)
-		aad->init(display);
 	# title: the last two path components ("cpu/history" beats "history")
 	title = mount;
 	slashes := 0;
@@ -166,11 +161,9 @@ draw(dst: ref Image)
 		y := strip.max.y - 1 - int ((vals[i] - lo) / (hi - lo) * real (strip.dy() - 2));
 		pts[i] = Point(x, y);
 	}
-	if(aad != nil) {
-		aad->polyline(dst, pts, 2, acccol);
-		aad->disc(dst, pts[n-1], 3, 3, acccol);
-	} else
-		dst.poly(pts, 0, 0, 0, acccol, (0, 0));
+	polyline(dst, pts, 2.0, acccol);
+	e := pts[n-1];
+	dst.fillpath(Path.new().ellipse(real e.x + 0.5, real e.y + 0.5, 3.0, 3.0), ~0, acccol, e);
 }
 
 pointer(nil: ref Draw->Pointer): int { return 0; }
@@ -185,4 +178,13 @@ retheme(display: ref Display)
 shutdown()
 {
 	vals = nil;
+}
+
+# a polyline through pixel centres, anti-aliased (Image.strokepath)
+polyline(dst: ref Image, pts: array of Point, w: real, col: ref Image)
+{
+	p := Path.new().moveto(real pts[0].x + 0.5, real pts[0].y + 0.5);
+	for(i := 1; i < len pts; i++)
+		p.lineto(real pts[i].x + 0.5, real pts[i].y + 0.5);
+	dst.strokepath(p, w, Draw->Capround, Draw->Joinround, col, pts[0]);
 }

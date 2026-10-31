@@ -13,7 +13,7 @@ If you're new to the project:
 2. Read the [Design Principles](docs/DESIGN-PRINCIPLES.md) — how design works here,
    and why (this is the one document that will save you the most time)
 3. Browse [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a system overview
-4. Try the [Interactive Tour](RUN_TOUR.md) to explore features hands-on
+4. Try the [Interactive Tour](docs/TOUR.md) to explore features hands-on
 5. Look at issues labeled **good first issue** for approachable tasks
 
 ## Design Principles
@@ -112,9 +112,6 @@ Windows support works (headless + SDL3 GUI) but needs polish:
 
 - **Installer/packaging** — MSI, MSIX, or `winget` package instead of manual
   build from source
-- **JIT compiler** — the AMD64 JIT works on Linux but hasn't been ported to
-  Windows (different calling conventions, memory protection APIs). This would
-  give Windows users a ~14x performance boost.
 - **SDL3 GUI testing** — Xenith and Lucia run on Windows via SDL3/D3D12 but
   need more real-world testing
 - **Developer experience** — better error messages, path handling, and docs for
@@ -125,14 +122,14 @@ See [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md) and
 
 ### Platform Testing
 
-We ship on Linux (x86-64, ARM64), macOS (ARM64), and Windows (x86-64).
+We ship on Linux (x86-64, ARM64), macOS (ARM64, x86-64), and Windows (x86-64).
 Testing and fixes on other platforms would be valuable:
 
 - **FreeBSD, OpenBSD, NetBSD** — emulator code exists but is lightly tested
 - **ARM64 single-board computers** — Raspberry Pi, NVIDIA Jetson, Pine64
 - **Linux ARM64 GUI** — the SDL3/Vulkan backend is ~95% complete
-- **RISC-V** — no support yet; the Dis VM is portable and this would be a
-  significant contribution
+- **RISC-V** — Linux RV64GC builds headless (`build-linux-riscv64.sh`) with a
+  JIT, but is not a release target; testing on real boards is welcome
 
 ### Formal Verification
 
@@ -140,7 +137,6 @@ We have TLA+, SPIN, and CBMC proofs of critical security properties. Areas to
 expand:
 
 - Extended CBMC harnesses for `pgrpcpy` and reference counting
-- Severity and reproducibility analysis of the 3 races found by SPIN
 - New properties: memory safety bounds, channel protocol verification
 
 See `formal-verification/README.md` and `formal-verification/METHODOLOGY.md`.
@@ -159,7 +155,7 @@ See `formal-verification/README.md` and `formal-verification/METHODOLOGY.md`.
 
 | Platform | Requirements |
 |----------|-------------|
-| macOS ARM64 | Xcode Command Line Tools |
+| macOS (ARM64 or x86-64) | Xcode Command Line Tools |
 | Linux x86-64 | GCC, make |
 | Linux ARM64 | GCC, make |
 | Windows x86-64 | Visual Studio 2022 Build Tools |
@@ -180,10 +176,9 @@ cd infernode
 # Linux ARM64
 ./build-linux-arm64.sh
 
-# macOS ARM64 (pre-built toolchain ships in repo)
-export ROOT=$PWD
-export PATH=$PWD/MacOSX/arm64/bin:$PATH
-cd appl/cmd; mk install
+# macOS, Apple Silicon or Intel (bootstraps mk, then builds the toolchain)
+./makemk.sh
+./build-macos-sdl3.sh             # or ./build-macos-headless.sh
 
 # Windows (from x64 Native Tools Command Prompt)
 powershell -ExecutionPolicy Bypass -File build-windows-amd64.ps1
@@ -270,8 +265,8 @@ vectors for decapsulation to verify round-trip correctness.
 ### What Not to Commit
 
 - `.dis` files in `appl/` or `tests/` — build artifacts, `.gitignore`d
-- `.dis` files in `dis/` — the runtime tree is tracked, but changes should
-  only result from `mk install` in the corresponding `appl/` directory
+- `.dis` files in `dis/` — the runtime tree is a build product and is not
+  tracked
 - Secrets, API keys, or credentials of any kind
 
 ### Pull Request Guidelines
@@ -351,7 +346,7 @@ conventions — is [docs/INFERNO-SHELL.md](docs/INFERNO-SHELL.md).
 
 By contributing, you agree that your contributions will be licensed under the
 same terms as the project. InferNode uses a dual-license scheme — see
-[LICENCE](LICENCE) for details. The kernel and libraries are under permissive
+[LICENSE](LICENSE) for details. The kernel and libraries are under permissive
 terms (Lucent Public License / MIT-style); the VM library and applications are
 LGPL/GPL.
 

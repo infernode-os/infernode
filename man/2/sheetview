@@ -1,0 +1,191 @@
+.TH SHEETVIEW 2
+.SH NAME
+sheetview \- a document's sheets in a column, on an image
+.SH SYNOPSIS
+.EX
+include "docengine.m";
+include "docreg.m";
+include "sheetview.m";
+sheetview := load Sheetview Sheetview->PATH;
+
+init:  fn(d: ref Draw->Display);
+new:   fn(k: ref Docreg->Kind, name: string, c: chan of ref Ev): ref View;
+
+View: adt {
+	dst:    ref Draw->Image;   # set by the caller
+	r:      Draw->Rect;
+	bg, mark: ref Draw->Image;
+	font:   ref Draw->Font;
+	style:  ref Docengine->Style;
+	eng:    Docengine;         # the document
+	h:      int;
+	scale, rot, fit: int;      # the view
+	org:    Draw->Point;
+	sizes:  array of Draw->Point;
+	...
+	open:     fn(v: self ref View, data: array of byte, name: string);
+	browse:   fn(v: self ref View, url: string): string;
+	close:    fn(v: self ref View);
+	handle:   fn(v: self ref View, e: ref Ev): ref Note;
+	draw:     fn(v: self ref View);
+	layout:   fn(v: self ref View);
+	scroll:   fn(v: self ref View, dy: int);
+	pan:      fn(v: self ref View, org: Draw->Point);
+	zoom:     fn(v: self ref View, scale: int);
+	setfit:   fn(v: self ref View, fit: int);
+	rotate:   fn(v: self ref View, quarters: int);
+	gotosheet: fn(v: self ref View, n: int);
+	sheetat:  fn(v: self ref View, y: int): int;
+	sheetrect: fn(v: self ref View, n: int): Draw->Rect;
+	size:     fn(v: self ref View, n: int): Draw->Point;
+	at:       fn(v: self ref View, p: Draw->Point): (int, Draw->Point);
+	wordof:   fn(v: self ref View, n: int, p: Draw->Point): (string, Draw->Rect, int);
+	linkat:   fn(v: self ref View, n: int, p: Draw->Point): (string, int);
+	select:   fn(v: self ref View, n: int, word: string, r: Draw->Rect);
+	find:     fn(v: self ref View, s: string): string;
+	foundon:  fn(v: self ref View, n: int): list of Draw->Rect;
+	result:   fn(v: self ref View, res: string): ref Note;
+	command:  fn(v: self ref View, cmd, arg: string): (int, string);
+	commands: fn(v: self ref View): list of string;
+};
+.EE
+.SH DESCRIPTION
+.I Sheetview
+is the view every program that shows documents shares: Xenith's
+windows and
+.IR page (1).
+A document is held by its engine
+.RI ( docengine (2))
+as a column of sheets; the view stacks them, a gap between, and draws
+the part at
+.I org
+into the rectangle
+.I r
+of the image
+.IR dst :
+fitted to its width
+.RB ( Fitwidth ,
+a PDF), a whole sheet in view
+.RB ( Fitpage ,
+a picture), at a scale
+.RB ( Fitnone ),
+or, for a flowing document (Markdown, HTML, a page browsed), set to
+its width in
+.IR style .
+.PP
+.I New
+makes a view of a document of kind
+.I k
+named
+.IR name ;
+.I open
+opens it from
+.I data
+(or, nil, the file or URL named),
+.I browse
+as a web page.  The engine is loaded and the document opened off the
+caller's thread, and what is done off it comes back as an
+.B Ev
+on
+.IR c :
+.B Opened
+(or not), a binary document's
+.B Text
+(read after it is shown),
+a sheet
+.B Painted
+at a scale, an engine's own
+.B Engine
+event.  The caller hands each to
+.I handle
+on its own thread and acts on the
+.B Note
+returned:
+.B Opened
+(draw it),
+.BI Failed( err ) ,
+.BI Text( text ) ,
+.BI Loaded( name ", " text )
+(a page browsed loaded),
+.BI Error( err )
+or
+.BR Redraw .
+Nothing in the view calls the caller, and only
+.I draw
+draws; the calls that move the view
+.RI ( scroll ,
+.IR pan ,
+.IR zoom ,
+.IR setfit ,
+.IR rotate ,
+.IR gotosheet ,
+.IR find )
+change it, for the caller to draw when it shows it.
+.PP
+A sheet an engine paints sharp at any scale is painted at the view's,
+by a proc of its own, and kept while it is in view or is the next the
+way the view last moved
+.RI ( dir );
+until it arrives, a painting at another scale is shown scaled.
+A flowing document at scale 100 is painted off
+.I dst
+into a band of the view and half a view above and below
+.RI ( band ,
+.IR bandr ):
+a scroll within it is a copy, and one past it paints only the strip it
+exposes.
+.I Result
+and anything that lays the document out again drop the band.
+The view is never filled before its sheets are drawn, only the gaps
+round them.
+.I Rotate
+turns the sheets by quarter turns: a sheet is turned once, as it is
+painted;
+.I size
+gives a sheet's size turned, and
+.I at
+the sheet and the engine's point under a point of
+.IR dst .
+.I Layout
+lays the column out again for
+.IR r ,
+the scale and the style as they are, keeping the sheet at the top of
+the view and the place in it.
+.PP
+.I Wordof
+is the word the engine drew at a point,
+.I linkat
+the link there: one to a page of the document
+.RB ( #page= \fIn\fP)
+is followed, giving
+.BR "(nil, 1)" ;
+any other is given back for the caller to open, and
+.B "(nil, 0)"
+is none;
+.I select
+marks one,
+.I find
+finds the sheets whose text has a string (marked on them as they are
+drawn) and brings the first into view,
+.I foundon
+gives where on a sheet.
+.I Command
+does
+.BR Zoom+ ,
+.BR Zoom- ,
+.BI Zoom " n" ,
+.BR Fit " [" page ],
+.BI Page " n" ,
+.BR NextPage ,
+.B PrevPage
+and the engine's own;
+.I commands
+lists them.
+.I Result
+does what an engine's answer to a click or a key asks.
+.SH SOURCE
+.B /appl/lib/sheetview.b
+.SH SEE ALSO
+.IR page (1),
+.IR docengine (2),
+.B docs/xenith-documents.md

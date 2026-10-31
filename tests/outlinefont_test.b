@@ -270,6 +270,101 @@ testCacheIsolation(t: ref T)
 # inner hole, diacritical marks). The scanline fill must track
 # subpath boundaries — not connect the last point of one subpath
 # to the first point of the next with a phantom edge.
+# A glyph whose contours' end points are not in increasing order (as a
+# web font on www.sanook.com had): a contour ending past the glyph's
+# points was read past its arrays, and the fault took Xenith's paint
+# with it.  Go Regular's 'o', its first contour made to end past the
+# last, is drawn as nothing.
+testBadEndpoints(t: ref T)
+{
+	if(outlinefont == nil)
+		t.skip("outlinefont module not available");
+	data := readall("/fonts/go/Go-Regular.ttf");
+	if(data == nil)
+		t.skip("no /fonts/go/Go-Regular.ttf");
+	(head, nil) := table(data, "head");
+	(loca, nil) := table(data, "loca");
+	(glyf, nil) := table(data, "glyf");
+	if(head < 0 || loca < 0 || glyf < 0)
+		t.fatal("no head, loca or glyf");
+	disp := Display.allocate(nil);
+	if(disp == nil)
+		t.skip("no display");
+	outlinefont->init(disp);
+	(f, err) := outlinefont->open(data, "ttf");
+	if(f == nil)
+		t.fatal("open: " + err);
+	gid := f.chartogid('o');
+	t.assert(gid > 0, "a glyph for o");
+	long := u16(data, head + 50) != 0;
+	off: int;
+	if(long)
+		off = (u16(data, loca + 4*gid) << 16 | u16(data, loca + 4*gid + 2));
+	else
+		off = 2 * u16(data, loca + 2*gid);
+	g := glyf + off;
+	t.asserteq(u16(data, g), 2, "o has two contours");
+	last := u16(data, g + 12);
+	bad := array[len data] of byte;
+	bad[0:] = data;
+	# the first contour ends past the last, the points as many as the last says
+	bad[g + 10] = byte ((last + 5) >> 8);
+	bad[g + 11] = byte (last + 5);
+	(bf, berr) := outlinefont->open(bad, "ttf");
+	if(bf == nil)
+		t.fatal("open the altered font: " + berr);
+	img := disp.newimage(((0, 0), (64, 64)), Draw->GREY8, 0, Draw->White);
+	{
+		bf.drawglyph(gid, 32.0, img, (8, 48), disp.black);
+	} exception e {
+	"*" =>
+		t.fatal("drawing it: " + e);
+	}
+	# and a good glyph of the same font still draws
+	{
+		bf.drawglyph(bf.chartogid('l'), 32.0, img, (8, 48), disp.black);
+	} exception e {
+	"*" =>
+		t.fatal("drawing l: " + e);
+	}
+}
+
+# a table's offset and length in a TrueType font, -1 if it has none
+table(d: array of byte, tag: string): (int, int)
+{
+	n := u16(d, 4);
+	for(i := 0; i < n; i++) {
+		r := 12 + 16*i;
+		if(string d[r:r+4] == tag)
+			return (u16(d, r+8) << 16 | u16(d, r+10), u16(d, r+12) << 16 | u16(d, r+14));
+	}
+	return (-1, 0);
+}
+
+u16(d: array of byte, o: int): int
+{
+	return int d[o] << 8 | int d[o+1];
+}
+
+readall(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, dir) := sys->fstat(fd);
+	if(ok < 0)
+		return nil;
+	b := array[int dir.length] of byte;
+	n := 0;
+	while(n < len b) {
+		r := sys->read(fd, b[n:], len b - n);
+		if(r <= 0)
+			break;
+		n += r;
+	}
+	return b[0:n];
+}
+
 testMultiContourGlyphs(t: ref T)
 {
 	if(outlinefont == nil){
@@ -352,6 +447,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("FaceMetrics", testFaceMetrics);
 	run("CacheIsolation", testCacheIsolation);
 	run("MultiContourGlyphs", testMultiContourGlyphs);
+	run("BadEndpoints", testBadEndpoints);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

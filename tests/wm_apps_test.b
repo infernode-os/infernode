@@ -5,7 +5,9 @@ implement WmAppsTest;
 #
 # Verifies that the WM apps (shell, editor, fractals) exist under
 # their correct names, load without link typecheck errors, and that
-# the old names (lucishell, edit, luciedit) are gone.
+# the old names (lucishell, luciedit) are gone.  wm/edit is Inferno's
+# own editor, kept for programs that load it (wm/task's Files), and is
+# not the old name of wm/editor.
 #
 # IMPORTANT: This test deliberately avoids passing module functions
 # as function references (ref fn).  The Limbo compiler includes
@@ -88,6 +90,7 @@ init(nil: ref Draw->Context, args: list of string)
 		t.assert(fileexists("/dis/wm/shell.dis"), "dis/wm/shell.dis exists");
 		t.assert(fileexists("/dis/wm/editor.dis"), "dis/wm/editor.dis exists");
 		t.assert(fileexists("/dis/wm/fractals.dis"), "dis/wm/fractals.dis exists");
+		t.assert(fileexists("/dis/wm/edit.dis"), "dis/wm/edit.dis exists (Inferno's wm/edit)");
 		dotest(t, 0);
 	}
 
@@ -96,7 +99,6 @@ init(nil: ref Draw->Context, args: list of string)
 		t := testing->newTsrc("OldNamesRemoved", SRCFILE);
 		t.assert(!fileexists("/dis/wm/lucishell.dis"), "lucishell.dis removed");
 		t.assert(!fileexists("/dis/wm/luciedit.dis"), "luciedit.dis removed");
-		t.assert(!fileexists("/dis/wm/edit.dis"), "wm/edit.dis removed (renamed to editor.dis)");
 		dotest(t, 0);
 	}
 

@@ -55,6 +55,7 @@ enum
 	TKflat,
 	TKgroove,
 	TKridge,
+	TKsolid,		/* one colour: the theme's window border */
 
 	TkArepl		= 0,	/* Bind options */
 	TkAadd,
@@ -137,7 +138,7 @@ extern	int TKF2I(int);
 /*#define TKF2I(f)	(((f) + Tkfpscalar/2)/Tkfpscalar)*/
 #define IAUX(i)		((void*)i)
 #define AUXI(i)		((int)i)
-#define TKKEY(i)	((i)&0xFFFF)
+#define TKKEY(i)	((i)&0x1FFFFF)	/* the rune of a TkKey event; see TkKey below */
 
 typedef struct Tk Tk;
 typedef struct TkCol TkCol;
@@ -322,9 +323,12 @@ enum
 
 	/* Supported Event Types 		*/
 	/*
-	 * Bits 0-15 are keyboard characters
+	 * Bits 0-20 are keyboard characters (a rune, to Runemax)
 	 * but duplicated by other events, as we can distinguish
 	 * key events from others with the TkKey bit.
+	 * Bits 16-18 are TkExtn1, TkExtn2 and TkTakefocus in other
+	 * events, and a rune beyond U+FFFF in a key event: test
+	 * TkKey before any of them.
 	 * N.B. make sure that this distinction *is* made;
 	 * i.e.
 	 *	if (event & TkButton1P)
@@ -394,6 +398,7 @@ enum
 	TkChighlightfgnd,
 	TkCfill,
 	TkCtransparent,
+	TkCwinborder,		/* window frame (relief solid) */
 
 	TkNcolor,
 
@@ -408,6 +413,7 @@ struct TkEnv
 	int		ref;
 	TkTop*		top;			/* Owner */
 	ulong		set;
+	ulong		own;			/* colours an option gave; a retheme keeps them */
 	ulong		colors[TkNcolor];	/* OPTcolr */
 	Font*		font;			/* Font description */
 	int		wzero;			/* Width of "0" in pixel */
@@ -552,6 +558,10 @@ struct TkCtxt
 	Tk*		mgrab;
 	Tk*		entered;
 	TkMouse	mstate;
+	ulong	pmsec;		/* the last button press, for a double click: when, */
+	int		pb;			/* which button, */
+	int		px;			/* and where */
+	int		py;
 
 	Tk*		tkmenu;
 	void*	extn;
@@ -693,6 +703,9 @@ extern	void		tksetpanelimage(Tk *tk, Image*, Image*);
 /* General - colrs.c */
 extern	void		tksetenvcolours(TkEnv*);
 
+/* General - canvs.c */
+extern	void		tkcvsretheme(Tk*);
+
 /* General - ebind.c */
 extern	void		tkcmdbind(Tk*, int, char*, void*);
 extern	TkCtxt*		tkdeldepth(Tk*);
@@ -717,7 +730,8 @@ extern	void		tkdelpack(Tk*);
 extern	void		tkappendpack(Tk*, Tk*, int);
 extern	void		tkpackqit(Tk*);
 extern	void		tkrunpack(TkTop*);
-extern	void		tksetslavereq(Tk*, TkGeom);
+extern	void		tkpackreq(Tk*);
+extern	int		tksetslavereq(Tk*, TkGeom);
 extern	int		tkisslave(Tk*, Tk*);
 
 /* General - grids.c */
@@ -730,6 +744,8 @@ extern	void		tkfreegrid(TkGrid*);
 extern	char*		tkconflist(TkOptab*, char**);
 extern	char*		tkskip(char*, char*);
 extern	char*		tkword(TkTop*, char*, char*, char*, int*);
+extern	int		tkspeckey(Rune);
+extern	void		tkdropkeys(char*);
 extern	char*		tkxyparse(Tk*, char**, Point*);
 extern	char*		tkparse(TkTop*, char*, TkOptab*, TkName**);
 extern	TkName*		tkmkname(char*);
@@ -757,9 +773,6 @@ extern	Tk*		tklook(TkTop*, char*, int);
 extern	void		tktextsdraw(Image*, Rectangle, TkEnv*, int);
 extern	void		tkbox(Image*, Rectangle, int, Image*);
 extern	void		tkbevel(Image*, Point, int, int, int, Image*, Image*);
-extern	void		tkaacover(Image*, Rectangle, Image*, uchar*);
-extern	void		tkaacovellipse(uchar*, int, int, int, int, int, int, int);
-extern	void		tkaacovseg(uchar*, int, int, int, int, int, int, int);
 extern	void		tkdrawrelief(Image*, Tk*, Point, int, int);
 extern	Point		tkstringsize(Tk*, char*);
 extern	void		tkdrawstring(Tk*, Image*, Point, char*, int, Image *, int);

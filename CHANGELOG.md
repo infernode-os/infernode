@@ -6,6 +6,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **A payment's requester waits on its read for the decision; nothing
+  polls (#1019).** x402's `authorize` (payfetch) re-read its fid every
+  two seconds, for up to 90, while a payment waited for a person to
+  approve it. A fid told `pending:<id>` that reads `pay` or `authorize`
+  again at offset 0 now waits until the payment is approved, denied or
+  expires, and gets the outcome; the first read still gives the id at
+  once, and a read at another offset does not wait. x402 makes that
+  read under its time limit, and hears a denial as it is made.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's

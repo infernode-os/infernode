@@ -566,13 +566,29 @@ mlook(Module *m, int limbo, int vm, int scale, int origin)
 	return nil;
 }
 
+extern	Module*	modules;
+extern	Proc*	vmowner;
+
+/* the compiled module whose code holds pc */
+static Module*
+jitmodule(uintptr pc)
+{
+	Module *m;
+
+	for(m = modules; m != nil; m = m->link)
+		if(m->compiled && m->pctab != nil && pc >= (uintptr)m->prog && pc < (uintptr)m->prog + m->jitsize)
+			return m;
+	return nil;
+}
+
 static void
 sampler(void* a)
 {
 	int i;
-	Module *m;
+	Module *m, *jm;
 	Record *r;
 	Inst *p;
+	uintptr pc;
 
 	USED(a);
 	for(;;) {
@@ -586,6 +602,14 @@ sampler(void* a)
 			continue;
 		}
 		p = R.PC;
+		/*
+		 * compiled code does not keep R.PC as it runs: where the
+		 * VM's proc is, from the host, if it is in a compiled module
+		 */
+		if(hostprocpc != nil && vmowner != nil && (pc = hostprocpc(vmowner)) != 0 && (jm = jitmodule(pc)) != nil){
+			m = jm;
+			p = (Inst*)pc;
+		}
 		r = mlook(m, 0, 0, 1, 0);
 		if(r == nil){
 			unlock(&profile.l);

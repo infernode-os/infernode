@@ -13,6 +13,8 @@ print or find manual pages
 ] [
 .B -S
 ] [
+.B -t
+] [
 .B -w
 ]
 [
@@ -122,6 +124,15 @@ Display the pages using
 .B -S
 Do not search the manual indices for the names: only print pages whose file names match the
 .IR titles .
+.TP
+.B -t
+Write
+.IR troff (1)'s
+output for the pages
+.RB ( "troff -man" ),
+to be made a PDF by
+.IR tr2pdf (1).
+Troff is an add-on package, not part of InferNode itself.
 .TP
 .B -w
 Print the names of the man page source files instead of formatting them.

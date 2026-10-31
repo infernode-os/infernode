@@ -21,7 +21,11 @@ badmodule(p: string)
 	raise "fail:bad module";
 }
 
-DEFAULTALG := "none";
+# Authentication without record protection exposes the command stream and
+# namespace traffic to every on-path observer.  Plaintext remains available
+# explicitly with -A; the authenticated default provides both confidentiality
+# and integrity.
+DEFAULTALG := "aes_256_cbc sha256";
 
 verbose := 0;
 

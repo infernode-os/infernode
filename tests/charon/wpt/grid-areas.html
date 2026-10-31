@@ -1,0 +1,7 @@
+<!doctype html><title>grid-template-areas</title>
+<style>body{margin:0} .g{display:grid;grid-template-columns:50px 50px;grid-template-rows:50px 50px;grid-template-areas:"a b" "c c";width:100px}
+.g div{background:red} .a{grid-area:a} .b{grid-area:b} .c{grid-area:c}
+.m{position:absolute;background:green;z-index:1}</style>
+<div class=m style="left:0;top:0;width:50px;height:50px"></div><div class=m style="left:50px;top:0;width:50px;height:50px"></div>
+<div class=m style="left:0;top:50px;width:100px;height:50px"></div>
+<div class=g><div class=c></div><div class=b></div><div class=a></div></div>

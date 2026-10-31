@@ -70,7 +70,7 @@ Copy-Item $sdl3Dll "$StageDir\SDL3.dll"
 
 # --- Copy Inferno root filesystem ---
 
-$rootDirs = @("dis", "lib", "fonts", "module", "services", "locale")
+$rootDirs = @("dis", "lib", "fonts", "man", "doc", "icons", "module", "services", "locale", "n", "appl")
 foreach ($d in $rootDirs) {
     $src = "$ROOT\$d"
     if (Test-Path $src) {
@@ -78,6 +78,9 @@ foreach ($d in $rootDirs) {
         & robocopy $src "$StageDir\$d" /E /NFL /NDL /NJH /NJS /NP /XF .gitkeep .gitignore | Out-Null
     }
 }
+# appl: the source, and the .sbl files beside it that the debugger and
+# profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+Get-ChildItem -Recurse -Filter *.dis "$StageDir\appl" | Remove-Item
 
 # --- Copy icon if available ---
 

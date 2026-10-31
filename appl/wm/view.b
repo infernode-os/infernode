@@ -13,10 +13,8 @@ include "bufio.m";
 
 include "imagefile.m";
 	imageremap: Imageremap;
-	readgif: RImagefile;
-	readjpg: RImagefile;
-	readxbitmap: RImagefile;
-	readpng: RImagefile;
+include "imgload.m";
+	imgload: Imgload;
 include "wmclient.m";
 	wmclient: Wmclient;
 	Window: import wmclient;
@@ -51,13 +49,18 @@ View: module
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
+	sys = load Sys Sys->PATH;
+	# a group of its own, made before the spawn so realinit is in it
+	# (one made in realinit left the group Lucifer had given init, and
+	# Lucifer took view for ended as it opened); where init leads its
+	# group already (Lucifer's) this changes nothing
+	sys->pctl(Sys->NEWPGRP, nil);
 	spawn realinit(ctxt, argv);
 }
 
 
 realinit(ctxt: ref Draw->Context, argv: list of string)
 {
-	sys = load Sys Sys->PATH;
 	if (ctxt == nil) {
 		sys->fprint(sys->fildes(2), "view: no window context\n");
 		raise "fail:bad context";
@@ -69,7 +72,6 @@ realinit(ctxt: ref Draw->Context, argv: list of string)
 
 	menu = ref Menu(array[] of {"orig size", "zoom in", "fit window", "rotate 90", "upside down", "next", "prev", "exit"}, nil, 0);
 	
-	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
 
 	stderr = sys->fildes(2);
@@ -87,6 +89,11 @@ realinit(ctxt: ref Draw->Context, argv: list of string)
 	bufio = load Bufio Bufio->PATH;
 	if(bufio == nil)
 		badload(Bufio->PATH);
+
+	imgload = load Imgload Imgload->PATH;
+	if(imgload == nil)
+		badload(Imgload->PATH);
+	imgload->init(display);
 
 
 	arg->init(argv);
@@ -152,9 +159,24 @@ readimages(file: string, errdiff: int) : (array of ref Image, array of ref Image
 	if(fd == nil)
 		return (nil, nil, sys->sprint("%r"));
 
-	(mod, err1) := filetype(file, fd);
-	if(mod == nil)
-		return (nil, nil, err1);
+	head := array[512] of byte;
+	n := -1;
+	if((hfd := sys->open(file, Sys->OREAD)) != nil)
+		n = sys->read(hfd, head, len head);
+	if(n < 0)
+		return (nil, nil, sys->sprint("%r"));
+	fmt := imgload->format(head[0:n], file);
+	if(fmt == nil)
+		return (nil, nil, "can't recognize file type");
+	(mod, nil) := imgload->reader(fmt);
+	if(mod == nil){
+		# a format imgload reads itself (PPM): one frame, no mask
+		fd.close();
+		(im, err) := imgload->readimage(file);
+		if(im == nil)
+			return (nil, nil, err);
+		return (array[1] of {im}, array[1] of ref Image, nil);
+	}
 
 	(ai, err2) := mod->readmulti(fd);
 	if(ai == nil)
@@ -340,73 +362,6 @@ plumbfile(): string
 		}
 		return file;
 	}
-}
-
-Tab: adt
-{
-	suf:	string;
-	path:	string;
-	mod:	RImagefile;
-};
-
-GIF, JPG, PIC, PNG, XBM: con iota;
-
-tab := array[] of
-{
-	GIF => Tab(".gif",	RImagefile->READGIFPATH,	nil),
-	JPG => Tab(".jpg",	RImagefile->READJPGPATH,	nil),
-	PIC => Tab(".pic",	RImagefile->READPICPATH,	nil),
-	XBM => Tab(".xbm",	RImagefile->READXBMPATH,	nil),
-	PNG => Tab(".png",	RImagefile->READPNGPATH,	nil),
-};
-
-filetype(file: string, fd: ref Iobuf): (RImagefile, string)
-{
-	for(i:=0; i<len tab; i++){
-		n := len tab[i].suf;
-		if(len file>n && file[len file-n:]==tab[i].suf)
-			return loadmod(i);
-	}
-
-	# sniff the header looking for a magic number
-	buf := array[20] of byte;
-	if(fd.read(buf, len buf) != len buf)
-		return (nil, sys->sprint("%r"));
-	fd.seek(big 0, 0);
-	if(string buf[0:6]=="GIF87a" || string buf[0:6]=="GIF89a")
-		return loadmod(GIF);
-	if(string buf[0:5] == "TYPE=")
-		return loadmod(PIC);
-	jpmagic := array[] of {byte 16rFF, byte 16rD8, byte 16rFF, byte 16rE0,
-		byte 0, byte 0, byte 'J', byte 'F', byte 'I', byte 'F', byte 0};
-	if(eqbytes(buf, jpmagic))
-		return loadmod(JPG);
-	pngmagic := array[] of {byte 137, byte 80, byte 78, byte 71, byte 13, byte 10, byte 26, byte 10};
-	if(eqbytes(buf, pngmagic))
-		return loadmod(PNG);
-	if(string buf[0:7] == "#define")
-		return loadmod(XBM);
-	return (nil, "can't recognize file type");
-}
-
-eqbytes(buf, magic: array of byte): int
-{
-	for(i:=0; i<len magic; i++)
-		if(magic[i]>byte 0 && buf[i]!=magic[i])
-			return 0;
-	return i == len magic;
-}
-
-loadmod(i: int): (RImagefile, string)
-{
-	if(tab[i].mod == nil){
-		tab[i].mod = load RImagefile tab[i].path;
-		if(tab[i].mod == nil)
-			sys->fprint(stderr, "view: can't find %s reader: %r\n", tab[i].suf);
-		else
-			tab[i].mod->init(bufio);
-	}
-	return (tab[i].mod, nil);
 }
 
 transparency(r: ref RImagefile->Rawimage, file: string): ref Image

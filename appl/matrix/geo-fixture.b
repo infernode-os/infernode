@@ -2,10 +2,10 @@ implement GeoFixture;
 
 #
 # geo-fixture — a Matrix service that writes a synthetic geo tree so
-# the geo-map module is demoable in stock InferNode with no live data
+# wm/scene is demoable on a map in stock InferNode with no live data
 # source: pure test data.
 #
-# It writes the /mnt/geo contract (docs/geo-map-design.md) as flat files
+# It writes the /mnt/geo contract (docs/scene-design.md §2) as flat files
 # under its outdir — the established Matrix service→outdir idiom:
 #
 #   <outdir>/entities/<id>   ndb stanza, rewritten each tick as units move

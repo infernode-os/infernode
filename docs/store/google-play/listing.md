@@ -14,7 +14,7 @@ as a *feature* does not qualify, so uploads requesting them are rejected.
 
 **Resolution:** these three permissions and `InfernodeSmsReceiver` are stripped
 from the **release** build (what goes to Play) via the manifest overlay
-`app/src/release/AndroidManifest.xml`. The **debug/dev build keeps SMS**, so the
+`android-app/app/src/release/AndroidManifest.xml`. The **debug/dev build keeps SMS**, so the
 feature remains available for development and sideload. `CALL_PHONE` is not in
 a restricted group and is kept in all builds.
 
@@ -37,7 +37,7 @@ InferNode is a 64-bit build of the Inferno® distributed operating system —
 originally developed at Bell Labs — packaged to run as an app on your device.
 
 It is a self-contained computing environment, not a thin client. The whole
-runtime lives on your phone: a graphical shell (Lucifer), a concurrent
+runtime lives on your phone: a graphical shell (Lucia), a concurrent
 programming runtime (Dis), and a namespace model in which everything —
 devices, services, even remote machines — is a file you can mount and compose.
 
@@ -97,8 +97,8 @@ answer the "user-generated content / unrestricted internet" items truthfully.
 Play's Data Safety form asks what data is *collected* (sent off the device) and
 *shared*. InferNode itself operates no collection backend, but data you direct
 to a configured model endpoint counts as collected/shared **by the app** for
-form purposes. Suggested answers, assuming the SMS blocker is resolved by
-removing SMS from the Play build:
+form purposes. Suggested answers, with SMS removed from the Play build (see
+above):
 
 - **Does your app collect or share user data?** Yes (conditionally — only data
   the user sends to a model endpoint they configure).

@@ -4,15 +4,18 @@ DIRS=\
 	convcs\
 	ftree\
 	crypt\
-	ecmascript\
 	encoding\
+	js\
 	git\
 	ida\
 	spki\
 	w3c\
+	web\
 
 TARG=\
-	aadraw.dis\
+	woff2.dis\
+	bidi.dis\
+	brotli.dis\
 	popup.dis\
 	scoretable.dis\
 	acmewin.dis\
@@ -29,6 +32,8 @@ TARG=\
 	auth.dis\
 	auth9.dis\
 	bloomfilter.dis\
+	bthci.dis\
+	btmock.dis\
 	bufio.dis\
 	cfg.dis\
 	cfgfile.dis\
@@ -42,6 +47,7 @@ TARG=\
 	mermaid.dis\
 	deflate.dis\
 	devpointer.dis\
+	dhcpclient.dis\
 	dial.dis\
 	dialnorm.dis\
 	dialog.dis\
@@ -66,10 +72,14 @@ TARG=\
 	fslib.dis\
 	fsproto.dis\
 	geoproj.dis\
+	scene.dis\
 	hash.dis\
 	html.dis\
 	imap.dis\
 	imageremap.dis\
+	icon.dis\
+	imgload.dis\
+	pngload.dis\
 	mailparse.dis\
 	inflate.dis\
 	ip.dis\
@@ -78,6 +88,12 @@ TARG=\
 	llmclient.dis\
 	wirefmt.dis\
 	keyset.dis\
+	l2cap.dis\
+	sdp.dis\
+	rfcomm.dis\
+	att.dis\
+	smp.dis\
+	hid.dis\
 	libc.dis\
 	libc0.dis\
 	lists.dis\
@@ -98,6 +114,8 @@ TARG=\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
+	post9p.dis\
+	appfs.dis\
 	pop3.dis\
 	profile.dis\
 	publicnet.dis\
@@ -153,6 +171,8 @@ TARG=\
 	watchvars.dis\
 	web.dis\
 	outlinefont.dis\
+	pdfenc.dis\
+	sheetview.dis\
 	pdf.dis\
 	webclient.dis\
 	winplace.dis\
@@ -160,6 +180,7 @@ TARG=\
 	wmlib.dis\
 	wmsrv.dis\
 	workdir.dis\
+	wpakey.dis\
 	writegif.dis\
 	x402.dis\
 	xml.dis\
@@ -171,6 +192,9 @@ TARG=\
 
 MODULES=
 SYSMODULES=\
+	bidi.m\
+	woff2.m\
+	brotli.m\
 	9p.m\
 	acmewin.m\
 	agentlib.m\
@@ -180,7 +204,15 @@ SYSMODULES=\
 	attrdb.m\
 	auth9.m\
 	bloomfilter.m\
+	bthci.m\
+	btmock.m\
 	bufio.m\
+	l2cap.m\
+	sdp.m\
+	rfcomm.m\
+	att.m\
+	smp.m\
+	hid.m\
 	cfg.m\
 	cfgfile.m\
 	complete.m\
@@ -197,6 +229,7 @@ SYSMODULES=\
 	dis.m\
 	diskblocks.m\
 	disks.m\
+	docengine.m\
 	draw.m\
 	encoding.m\
 	env.m\
@@ -210,12 +243,16 @@ SYSMODULES=\
 	filter.m\
 	format.m\
 	geoproj.m\
+	scene.m\
 	fslib.m\
 	fsproto.m\
 	hash.m\
 	html.m\
 	imap.m\
+	icon.m\
 	imagefile.m\
+	imgload.m\
+	pngload.m\
 	ip.m\
 	ipattr.m\
 	ipints.m\
@@ -237,6 +274,8 @@ SYSMODULES=\
 	memfs.m\
 	menu.m\
 	outlinefont.m\
+	pdfenc.m\
+	sheetview.m\
 	pdf.m\
 	menuhit.m\
 	midi.m\
@@ -302,8 +341,31 @@ SYSMODULES=\
 	wmlib.m\
 	wmsrv.m\
 	workdir.m\
+	wpakey.m\
 	x402.m\
 	xml.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	dhcp.m\
+	dialog.m\
+	docreg.m\
+	keyringinst.m\
+	mailparse.m\
+	mermaid.m\
+	popup.m\
+	publicnet.m\
+	scoretable.m\
+	selectfile.m\
+	softkbd.m\
+	tabs.m\
+	tkclient.m\
+	tls.m\
+	viewport.m\
+	wmdeb.m\
+	post9p.m\
+	appfs.m\
 
 
 

@@ -5,7 +5,7 @@ A practical guide to using InferNode, the AI-agent-friendly operating system.
 > **First time?** The fastest way to see what InferNode does is the
 > interactive guided tour. Launch Lucia and type `run the tour` in the
 > conversation zone, or run `veltro 'run the tour'` from a headless
-> shell. See [RUN_TOUR.md](../RUN_TOUR.md). The rest of this manual is
+> shell. See [TOUR.md](TOUR.md). The rest of this manual is
 > the reference; the tour is the demo.
 
 ---
@@ -69,7 +69,7 @@ Key additions:
 ### InferNode (2024)
 
 InferNode is Inferno® rebuilt for the AI age:
-- **64-bit support** for modern hardware (ARM64, AMD64)
+- **64-bit support** for modern hardware (ARM64, AMD64, RISC-V)
 - **Xenith** - A text environment designed for AI-human collaboration
 - **SDL3 graphics** - Modern GPU-accelerated rendering
 - **AI agent isolation** - Namespace-based security for running untrusted agents
@@ -368,32 +368,20 @@ When you start a login shell (`sh -l`), it runs `/lib/sh/profile` to set up your
 
 ### What the Profile Does
 
-```sh
-#!/dis/sh.dis
-load std                          # Load standard shell builtins
+`/lib/sh/profile` is the authority; in outline it:
 
-path=(/dis .)                     # Command search path
-
-user="{cat /dev/user}             # Get username
-
-mount -ac {mntgen} /n             # Mount namespace generator
-
-bind -a '#I' /net                 # Initialize networking
-
-# Mount LLM if available
-mount -A 'tcp!127.0.0.1!5640' /mnt/llm >[2] /dev/null
-
-# Setup home directory from host
-if {~ $emuhost MacOSX Linux}{
-    bind '#U*' /n/local
-    home=/n/local/^`{echo 'echo $HOME' | os sh}
-}
-
-# Create and bind tmp
-bind -bc $home/tmp /tmp
-
-cd $home                          # Start in home directory
-```
+- loads `std`, sets `path=(/dis .)` and `user` from `/dev/user`;
+- mounts `mntgen` on `/n`, binds `#I` on `/net` and starts `ndb/cs`;
+- on macOS, Linux and Windows, mounts the host filesystem with `trfs '#U*' /n/local`
+  (`trfs '#UC:/' /n/local` on Windows) and sets `home` to the host home directory;
+- union-binds the writable overlay in `~/.infernode` over `/usr`, `/lib/ndb`,
+  `/lib/lucifer/theme`, `/lib/veltro` and `/tmp`, seeding defaults on first run;
+- starts `auth/secstored` and `auth/factotum` (unlocked from secstore when
+  `SECSTORE_PASSWORD` is set on the host) and provisions API keys from host
+  environment variables;
+- reads `/lib/ndb/llm`: in `mode=remote` it mounts the `dial=` address on `/mnt/llm`,
+  otherwise it starts a local `llmsrv`, which mounts itself on `/mnt/llm`;
+- starts `speech9p`, binds `$home/tmp` on `/tmp`, and `cd`s to `$home`.
 
 ### Key Variables
 
@@ -406,21 +394,12 @@ cd $home                          # Start in home directory
 
 ### Customizing Your Environment
 
-Create `$home/lib/profile` for personal customizations:
+Nothing reads a per-user profile automatically. Keep personal settings in a
+script such as `$home/lib/profile` and load it into the current shell with
+`run`:
 
 ```sh
-# ~/lib/profile
-# Personal InferNode configuration
-
-# Add custom command directory
-path=(/n/local/usr/local/bin $path)
-
-# Aliases via shell functions
-fn gst { os git status }
-fn gd { os git diff }
-
-# Set editor
-EDITOR=xenith
+; run $home/lib/profile
 ```
 
 ### The `#C` Trap
@@ -509,11 +488,11 @@ Xenith is InferNode's text environment—a fork of Acme designed for AI-human co
 ### Starting Xenith
 
 ```sh
-# From the command line
+# From the command line (follows the system theme)
 xenith
 
-# With dark theme
-xenith -t dark
+# Pinned to one theme for this session (Theme switches it; see XENITH.md)
+xenith -t xenith
 
 # The macOS app bundle runs this automatically
 ```
@@ -605,14 +584,11 @@ The login screen detects that keys are already loaded and skips the password pro
 
 ### Key Persistence
 
-Keys are encrypted with AES-256-GCM and stored in secstore at `usr/inferno/secstore/<username>/`. Back up this directory — there is no password recovery mechanism. If you forget your secstore password, the encrypted keys are permanently lost (this is by design, following Plan 9's security model).
+Keys are encrypted with AES-256-GCM and stored in secstore at `~/.infernode/usr/inferno/secstore/<username>/` on the host. Back up this directory — there is no password recovery mechanism. If you forget your secstore password, the encrypted keys are permanently lost (this is by design, following Plan 9's security model).
 
-The `secstored` service runs on TCP port 5356 and can serve keys to remote machines:
-
-```sh
-# On the remote machine (e.g., Jetson)
-auth/factotum -S tcp!mac-ip!5356 -u username -P password
-```
+The `secstored` service listens on `tcp!127.0.0.1!5356`, so by default only the
+same host can reach it. Serving other machines needs an explicit `-a` address,
+and `secstored` logs a warning when it is not a loopback address.
 
 ### Adding API Keys
 
@@ -632,7 +608,7 @@ InferNode includes a built-in text editor (`wm/editor`) with modern editing feat
 # From the Inferno shell
 editor /path/to/file
 
-# From Lucifer (launches in presentation zone)
+# From Lucia (launches in presentation zone)
 # Use the 'launch' or 'editor' Veltro tool
 ```
 
@@ -694,10 +670,10 @@ InferNode includes a native cryptocurrency wallet that enables both users and AI
 
 ### Starting the Wallet
 
-The wallet GUI app launches from Lucifer or the window manager:
+The wallet GUI app launches from Lucia or the window manager:
 
 ```sh
-# From Lucifer presentation zone (via Veltro)
+# From Lucia presentation zone (via Veltro)
 # Or directly:
 wm/wallet
 ```
@@ -716,16 +692,16 @@ wallet9p (the 9P server) starts automatically when needed.
 
 ```sh
 # Create an account
-echo 'eth ethereum myaccount' > /n/wallet/new
+echo 'eth ethereum myaccount' > /mnt/wallet/new
 
 # Check address
-cat /n/wallet/myaccount/address
+cat /mnt/wallet/myaccount/address
 
 # Check balance
-cat /n/wallet/myaccount/balance
+cat /mnt/wallet/myaccount/balance
 
 # Switch network
-echo 'network Base' > /n/wallet/ctl
+echo 'network Base' > /mnt/wallet/ctl
 ```
 
 ### Agent Payments
@@ -735,9 +711,9 @@ Veltro agents can use the `wallet` and `payfetch` tools:
 - **`wallet`** — List accounts, check balances, queue payment proposals
 - **`payfetch`** — HTTP client that automatically handles x402 payment flows
 
-When a server returns HTTP 402 Payment Required, `payfetch` requests a payment authorization from the wallet and retries with it. By default the request waits in the wallet's approval queue — you approve or deny it in the wallet GUI (right-click → **Pending Payments**).
+When a server returns HTTP 402 Payment Required, `payfetch` requests a payment authorization from the wallet and retries with it. The request waits in the wallet's mandatory approval queue; you approve or deny it in the wallet GUI (right-click → **Pending Payments**).
 
-Budget and approval enforcement is server-side in wallet9p. Agents cannot bypass spending limits or the approval queue.
+Budget and approval enforcement is server-side in wallet9p. Approval cannot be disabled, and agents cannot bypass spending limits or the approval queue.
 ERC-20 accounts use a separate ETH-denominated gas budget, and all external
 payment requests reserve budget before submission so an ambiguous network
 error cannot be retried around the session limit.
@@ -746,7 +722,7 @@ error cannot be retried around the session limit.
 
 - Private keys live in factotum; wallet9p fetches them per operation and zeroes them immediately
 - Agents never see the raw signing interface. They submit structured payment requests (`pay`, `authorize`); wallet9p constructs what it signs, so the key only ever signs messages the wallet itself built and policy-checked
-- Wallet access is namespace-gated: agents need explicit `"/n/wallet"` in their capabilities
+- Wallet access is namespace-gated: agents need explicit `"/mnt/wallet"` in their capabilities
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see raw keys
 
 See [docs/WALLET-AND-PAYMENTS.md](WALLET-AND-PAYMENTS.md) for the full architecture, crypto primitives, and API reference.
@@ -763,8 +739,7 @@ A running agent in a restricted namespace:
 ```
 /
 ├── mnt/
-│   └── xenith/     ← Can edit text
-├── n/
+│   ├── xenith/     ← Can edit text
 │   └── llm/        ← Can query AI
 └── tmp/            ← Can use temp files
 ```
@@ -970,10 +945,13 @@ The mount point doesn't exist in your namespace. Check what's mounted:
 ns
 ```
 
-Mount it if needed:
+On the desktop the profile starts a local `llmsrv`, which mounts itself on
+`/mnt/llm`; start it if needed:
 ```sh
-mount -A 'tcp!127.0.0.1!5640' /mnt/llm
+llmsrv &
 ```
+In remote mode (`mode=remote` in `/lib/ndb/llm`) the profile instead mounts the
+`dial=` address, for example a `serve-llm` host on port 5640.
 
 ---
 

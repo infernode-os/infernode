@@ -14,7 +14,7 @@ stderr: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "usage: bind [-a|-b|-c|-ac|-bc] [-q] source target\n");
+	sys->fprint(stderr, "usage: bind [-a|-b] [-cR] [-q] source target\n");
 	raise "fail:usage";
 }
 
@@ -39,6 +39,8 @@ init(nil: ref Draw->Context, args: list of string)
 				flags |= Sys->MBEFORE;
 			'c' =>
 				flags |= Sys->MCREATE;
+			'R' =>
+				flags |= Sys->MREADONLY;
 			'q' =>
 				qflag = 1;
 			* =>

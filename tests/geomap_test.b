@@ -2,7 +2,7 @@ implement GeoMapTest;
 
 #
 # geomap_test - projection round-trips and known anchor points for the
-# geoproj library (the name-keyed projection core behind geo-map).
+# geoproj library (the name-keyed projection core behind lib/scene's geo frame).
 #
 
 include "sys.m";

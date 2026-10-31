@@ -329,20 +329,23 @@ testParsePerfDashboard(t: ref T)
 	t.assertseq(top.mount, "/tmp/matrix/llm-recorder", "top reads recorder outdir");
 }
 
-testParseTbl4(t: ref T)
+# a shipped composition with a nested split and a service
+# (tbl4-overview was retired in ccac4516; video-demo has its shape)
+testParseVideoDemo(t: ref T)
 {
-	text := readfile("/lib/matrix/compositions/tbl4-overview");
+	text := readfile("/lib/matrix/compositions/video-demo");
 	if(text == "")
-		t.fatal("cannot read shipped tbl4-overview composition");
+		t.fatal("cannot read shipped video-demo composition");
 	(c, err) := matrixlib->parsecomposition(text);
-	t.assertnil(err, "tbl4-overview parses cleanly");
+	t.assertnil(err, "video-demo parses cleanly");
 	if(c == nil)
 		t.fatal("nil composition");
 	t.asserteq(countleaves(c.layout), 3, "nested split = 3 leaves");
 	lb := leafbyname(c.layout, "left/bottom");
 	if(lb == nil)
 		t.fatal("left/bottom leaf missing");
-	t.assertseq(lb.modname, "signal-feed", "left/bottom module");
+	t.assertseq(lb.modname, "video-pane", "left/bottom module");
+	t.assertseq(lb.mount, "/mnt/videob/0", "left/bottom mount");
 	t.asserteq(nservices(c), 1, "one service");
 }
 
@@ -1191,18 +1194,26 @@ testControlFSCtlVerbs(t: ref T)
 	t.assert(ok < 0, "unpin removed the file");
 }
 
+# Unload returns to the picker composition (#454), or to nothing
+# (status idle) where there is no picker file.
 testControlFSUnload(t: ref T)
 {
+	picker := readfile("/lib/matrix/compositions/picker");
 	t.assert(writestr("/mnt/matrix/ctl", "unload") > 0, "unload accepted");
-	idle := 0;
+	back := 0;
 	for(waited := 0; waited < 5000; waited += 250) {
-		if(trim(readfile("/mnt/matrix/ctl")) == "idle") {
-			idle = 1;
+		if(picker != "")
+			back = readfile("/mnt/matrix/composition") == picker;
+		else
+			back = trim(readfile("/mnt/matrix/ctl")) == "idle";
+		if(back)
 			break;
-		}
 		sys->sleep(250);
 	}
-	t.assert(idle, "status idle after unload");
+	if(picker != "")
+		t.assert(back, "unload returns to the picker composition");
+	else
+		t.assert(back, "status idle after unload (no picker)");
 	# Dead slots vanish from walks.
 	(ok, nil) := sys->stat("/mnt/matrix/modules/sysmon-svc");
 	t.assert(ok < 0, "unloaded module no longer walkable");
@@ -1250,7 +1261,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("ParseSysmon", testParseSysmon);
 	run("ParsePerfDashboard", testParsePerfDashboard);
-	run("ParseTbl4", testParseTbl4);
+	run("ParseVideoDemo", testParseVideoDemo);
 	run("HeadlessComposition", testHeadlessComposition);
 	run("EmptyComposition", testEmptyComposition);
 	run("NestedSplits", testNestedSplits);

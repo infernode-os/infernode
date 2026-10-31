@@ -113,7 +113,18 @@ jitmalloc(size_t size)
 	}
 	return NULL;
 }
-#elif !defined(__APPLE__)
+#else
+/*
+ * MAP_JIT is what the hardened runtime's allow-jit entitlement admits
+ * on macOS; Intel Macs do not enforce its write protection, but the
+ * pthread_jit_write_protect_np calls below are kept as on arm64.
+ */
+#ifdef __APPLE__
+#define	MAP_JITMEM	MAP_JIT
+#else
+#define	MAP_JITMEM	0
+#endif
+
 static void
 jitfree(void *p, size_t size)
 {
@@ -135,7 +146,7 @@ jitmalloc(size_t size)
 			break;
 		p = mmap((void*)try, size,
 		         PROT_READ|PROT_WRITE|PROT_EXEC,
-		         MAP_PRIVATE|MAP_ANON, -1, 0);
+		         MAP_PRIVATE|MAP_ANON|MAP_JITMEM, -1, 0);
 		if(p != MAP_FAILED) {
 			vlong diff = (vlong)((uvlong)p - base_addr);
 			if(diff < 0) diff = -diff;
@@ -148,7 +159,7 @@ jitmalloc(size_t size)
 		try = base_addr + (uvlong)i * 0x10000ULL;
 		p = mmap((void*)try, size,
 		         PROT_READ|PROT_WRITE|PROT_EXEC,
-		         MAP_PRIVATE|MAP_ANON, -1, 0);
+		         MAP_PRIVATE|MAP_ANON|MAP_JITMEM, -1, 0);
 		if(p != MAP_FAILED) {
 			vlong diff = (vlong)((uvlong)p - base_addr);
 			if(diff < 0) diff = -diff;
@@ -364,6 +375,12 @@ static void
 bounds(void)
 {
 	error(exBounds);
+}
+
+static void
+nilref(void)
+{
+	error(exNilref);
 }
 
 static void
@@ -817,8 +834,11 @@ literal(uvlong imm, int roff)
 }
 
 /*
- * Generate conditional skip over bounds error block.
- * Emits: Jcc <skip> / save R.FP, R.PC / call bounds()
+ * Generate conditional skip over a fault block.
+ * Emits: Jcc <skip> / save R.FP, R.PC / call fn()
+ * where fn is bounds() or nilref(), which raise the exception and
+ * do not return. Jcc is the condition under which the instruction
+ * is in order, so the block is skipped.
  * Uses backpatch for Jcc and fixed 10-byte MOVABS for R.PC
  * to ensure phase consistency between pass 0 and pass 1.
  *
@@ -828,7 +848,7 @@ literal(uvlong imm, int roff)
  * which falls within the handler's [pc1, pc2) range.
  */
 static void
-jnebounds(int cc, Inst *i)
+jnefault(int cc, Inst *i, void (*fn)(void))
 {
 	uchar *patch_loc;
 	uvlong pc;
@@ -845,12 +865,18 @@ jnebounds(int cc, Inst *i)
 #ifdef _WIN32
 	gen_subsp(WINSHADOW_MAIN);			/* 4 bytes */
 #endif
-	bra((uvlong)bounds, Ocall);			/* 5 bytes */
-	/* bounds() does not return (raises exception), but keep ABI-correct */
+	bra((uvlong)fn, Ocall);				/* 5 bytes */
+	/* fn() does not return (raises exception), but keep ABI-correct */
 #ifdef _WIN32
 	gen_addsp(WINSHADOW_MAIN);			/* 4 bytes */
 #endif
 	*patch_loc = code - (patch_loc + 1);		/* backpatch rel8 */
+}
+
+static void
+jnebounds(int cc, Inst *i)
+{
+	jnefault(cc, i, bounds);
 }
 
 /*
@@ -860,6 +886,19 @@ static void
 punt(Inst *i, int m, void (*fn)(void))
 {
 	uvlong pc;
+
+	/*
+	 * R.PC is always written for a real instruction, not only for the
+	 * ops that read it: an op that raises (a big divide by zero, a
+	 * conversion) then leaves R.PC inside this instruction, and the
+	 * exception finds this instruction's handler, as comp-riscv64.c's
+	 * puntop does (and comp-arm64.c's punt).  It was written for WRTPC
+	 * ops only, so a big divide by zero inside a {...} exception block
+	 * was not caught (tests/jit_fault_test.b).  The debug hook's and
+	 * macret's dummy instructions are not real ones.
+	 */
+	if(i >= mod->prog && i < mod->prog + mod->nprog)
+		m |= WRTPC;
 
 	/* Save VM state to R structure */
 	if(m & SRCOP) {
@@ -982,20 +1021,27 @@ mid(Inst *i, uchar mi, int r)
 static void
 arith(Inst *i, int op2, int rm)
 {
+	/*
+	 * The result is computed in RAX and sign-extended from 32 bits
+	 * before it is stored: a Limbo int is 32 bits in a 64-bit slot,
+	 * and the slot must hold it canonically (CW() in xec.c). The
+	 * memory-destination forms cannot do that, so every form loads,
+	 * operates, extends, stores.
+	 */
 	if(UXSRC(i->add) != SRC(AIMM)) {
 		if(i->add&ARM) {
 			mid(i, Oldw, RAX);
 			opwld(i, op2|2, RAX);
-			opwst(i, Ostw, RAX);
-			return;
+		} else {
+			opwld(i, Oldw, RRTMP);
+			opwst(i, Oldw, RAX);
+			modrr(op2, RAX, RRTMP);
 		}
-		opwld(i, Oldw, RAX);
-		opwst(i, op2, RAX);
-		return;
-	}
-	/* Immediate source */
-	if(i->add&ARM) {
-		mid(i, Oldw, RAX);
+	} else {
+		if(i->add&ARM)
+			mid(i, Oldw, RAX);
+		else
+			opwst(i, Oldw, RAX);
 		if(bc(i->s.imm)) {
 			modrr(0x83, RAX, rm);
 			genb(i->s.imm);
@@ -1003,16 +1049,9 @@ arith(Inst *i, int op2, int rm)
 			modrr(0x81, RAX, rm);
 			genw(i->s.imm);
 		}
-		opwst(i, Ostw, RAX);
-		return;
 	}
-	if(bc(i->s.imm)) {
-		opwst(i, 0x83, rm);
-		genb(i->s.imm);
-		return;
-	}
-	opwst(i, 0x81, rm);
-	genw(i->s.imm);
+	modrr(Omovsxd, RAX, RAX);
+	opwst(i, Ostw, RAX);
 }
 
 /*
@@ -1043,6 +1082,8 @@ shift(Inst *i, int ld, int st, int op, int r)
 	mid(i, ld, RAX);
 	opwld(i, Oldw, RCX);
 	modrr(op, RAX, r);
+	if(st == Ostw)
+		modrr(Omovsxd, RAX, RAX);	/* a w result is stored sign-extended from 32 bits */
 	opwst(i, st, RAX);
 }
 
@@ -1182,6 +1223,163 @@ cbrab(Inst *i, int jmp)
 }
 
 /*
+ * REALs in SSE2.  These all went to the interpreter (punt), the
+ * conversions too, so a program doing arithmetic in reals -- every
+ * number in the JavaScript engine is one -- left compiled code at every
+ * operation: the same JavaScript ran ten to twenty times slower here than
+ * under comp-arm64.c, which compiles them.  Each takes its operands by
+ * address (RAX the source, RCX the middle), XMM0 and XMM1 the working
+ * registers, and gives what the interpreter's (xec.c) gives, NaN and the
+ * signed zeros included.
+ */
+
+/* op xmm, [rm]: rm a low register other than RSP and RBP */
+static void
+ssemem(int prefix, int w, int op, int x, int rm)
+{
+	genb(prefix);
+	if(w)
+		genb(REXW);
+	gen2(0x0f, op);
+	genb((0<<6)|((x&7)<<3)|(rm&7));
+}
+
+/* op x, r: register to register (x the ModRM reg field, r its r/m) */
+static void
+sserr(int prefix, int w, int op, int x, int r)
+{
+	genb(prefix);
+	if(w)
+		genb(REXW);
+	gen2(0x0f, op);
+	genb((3<<6)|((x&7)<<3)|(r&7));
+}
+
+enum
+{
+	Smovsd	= 0x10,	/* F2: movsd xmm, m64 */
+	Smovsdst	= 0x11,	/* F2: movsd m64, xmm */
+	Saddsd	= 0x58,
+	Smulsd	= 0x59,
+	Ssubsd	= 0x5c,
+	Sdivsd	= 0x5e,
+	Scvtsi2sd	= 0x2a,	/* F2 REX.W: from a 64-bit integer */
+	Scvttsd2si	= 0x2c,	/* F2 REX.W: to a 64-bit integer, truncated */
+	Sucomisd	= 0x2e,	/* 66 */
+	Smovq	= 0x6e,	/* 66 REX.W: movq xmm, r64 */
+};
+
+/* a REAL operand cannot be an immediate: those go to the interpreter as before */
+static int
+realops(Inst *i)
+{
+	return UXSRC(i->add) != SRC(AIMM) && UXDST(i->add) != DST(AIMM) && (i->add&ARM) != AXIMM;
+}
+
+/* F(d) = F(m) op F(s) */
+static void
+arithf(Inst *i, int op)
+{
+	opwld(i, Olea, RAX);
+	mid(i, Olea, RCX);
+	ssemem(0xf2, 0, Smovsd, 0, RCX);
+	ssemem(0xf2, 0, op, 0, RAX);
+	opwst(i, Olea, RAX);
+	ssemem(0xf2, 0, Smovsdst, 0, RAX);
+}
+
+/*
+ * if(F(s) op F(m)) goto d.  ucomisd sets ZF, PF and CF all for an
+ * unordered pair (a NaN), so > and >= (ja, jae) are false for one, as in
+ * C; < and <= are those with the operands swapped; == wants ZF without
+ * PF, and != is true when unordered.
+ */
+static void
+cbraf(Inst *i, int op)
+{
+	uvlong dst;
+	int a, b, jcc;
+
+	if(RESCHED)
+		schedcheck(i);
+	opwld(i, Olea, RAX);	/* s */
+	mid(i, Olea, RCX);	/* m */
+	a = RAX;
+	b = RCX;
+	jcc = Ojal;
+	switch(op) {
+	case IBGTF:
+		break;
+	case IBGEF:
+		jcc = Ojael;
+		break;
+	case IBLTF:
+		a = RCX;
+		b = RAX;
+		break;
+	case IBLEF:
+		a = RCX;
+		b = RAX;
+		jcc = Ojael;
+		break;
+	}
+	ssemem(0xf2, 0, Smovsd, 0, a);
+	ssemem(0x66, 0, Sucomisd, 0, b);
+	dst = patch[i->d.ins-mod->prog];
+	switch(op) {
+	case IBEQF:
+		gen2(0x7a, 6);		/* jp over the je: unordered is not equal */
+		genb(0x0f);
+		rbra(dst, Ojeql);
+		break;
+	case IBNEF:
+		genb(0x0f);
+		rbra(dst, 0x8a);	/* jp: unordered is not equal */
+		genb(0x0f);
+		rbra(dst, Ojnel);
+		break;
+	default:
+		genb(0x0f);
+		rbra(dst, jcc);
+	}
+}
+
+/*
+ * W(d) = CW((vlong)(f < 0 ? f - .5 : f + .5)) (cvtfw), V(d) the same but
+ * not CW (cvtfl): f + copysign(.5, f) truncated is that for every f, -0
+ * and NaN included (a - .5 is a + -.5 exactly).
+ */
+static void
+cvtfi(Inst *i, int w)
+{
+	opwld(i, Oldw, RAX);		/* f's bits */
+	modrr(Ostw, RDX, RAX);		/* mov rdx, rax */
+	modrr(0xc1, RDX, 5);		/* shr rdx, 63 */
+	genb(63);
+	modrr(0xc1, RDX, 4);		/* shl rdx, 63: f's sign */
+	genb(63);
+	con64(0x3FE0000000000000ULL, RCX);	/* .5 */
+	modrr(0x09, RCX, RDX);		/* or rcx, rdx: copysign(.5, f) */
+	sserr(0x66, 1, Smovq, 0, RAX);
+	sserr(0x66, 1, Smovq, 1, RCX);
+	sserr(0xf2, 0, Saddsd, 0, 1);
+	sserr(0xf2, 1, Scvttsd2si, RAX, 0);
+	if(w)
+		modrr(Omovsxd, RAX, RAX);
+	opwst(i, Ostw, RAX);
+}
+
+/* F(d) = W(s) (a WORD holds its int sign-extended: CW) or V(s) */
+static void
+cvtif(Inst *i)
+{
+	opwld(i, Olea, RAX);
+	ssemem(0xf2, 1, Scvtsi2sd, 0, RAX);
+	opwst(i, Olea, RAX);
+	ssemem(0xf2, 0, Smovsdst, 0, RAX);
+}
+
+/*
  * Case dispatch
  */
 static void
@@ -1219,7 +1417,9 @@ comcase(Inst *i, int w)
 		t[2] = (uvlong)base + patch[t[2]];
 		t += 3;
 	}
-	t[0] = (uvlong)base + patch[t[0]];
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	if(t[0] >= 0)
+		t[0] = (uvlong)base + patch[t[0]];
 }
 
 static void
@@ -1248,7 +1448,9 @@ comcasel(Inst *i)
 		t[2] = (uvlong)base + patch[t[2]];
 		t += 4;
 	}
-	t[0] = (uvlong)base + patch[t[0]];
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	if(t[0] >= 0)
+		t[0] = (uvlong)base + patch[t[0]];
 }
 
 /*
@@ -1444,6 +1646,7 @@ comp(Inst *i)
 {
 	int r;
 	WORD *t, *e;
+	uchar *rune, *done;
 	char buf[64];
 
 	if(0) {
@@ -1490,11 +1693,8 @@ comp(Inst *i)
 		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
 		break;
 	case IADDC:
-	case IMULL:
-	case IDIVL:
-	case IMODL:
 	case IMNEWZ:
-	case ILSRW:
+	case ILSRW:	/* no compiler emits these */
 	case ILSRL:
 		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
@@ -1514,7 +1714,6 @@ comp(Inst *i)
 	case ICONSP:
 	case IMOVMP:
 	case IHEADMP:
-	case IHEADL:
 	case IINSC:
 	case ICVTAC:
 	case ICVTCW:
@@ -1567,7 +1766,20 @@ comp(Inst *i)
 	case ICVTWF:
 	case ICVTLF:
 	case ICVTFL:
-		punt(i, SRCOP|DSTOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP, optab[i->op]);
+			break;
+		}
+		switch(i->op) {
+		case ICVTFW:
+			cvtfi(i, 1);
+			break;
+		case ICVTFL:
+			cvtfi(i, 0);
+			break;
+		default:
+			cvtif(i);
+		}
 		break;
 	case IHEADM:
 		opwld(i, Oldw, RAX);
@@ -1608,6 +1820,7 @@ comp(Inst *i)
 		opwst(i, Ostw, RAX);
 		break;
 	case IHEADW:
+	case IHEADL:		/* a big is a word here: the same 8 bytes */
 		opwld(i, Oldw, RAX);
 		modrm(Oldw, OA(List, data), RAX, RAX);
 		opwst(i, Ostw, RAX);
@@ -1696,7 +1909,11 @@ comp(Inst *i)
 	case IBLTF:
 	case IBGEF:
 	case IBGTF:
-		punt(i, SRCOP|DSTOP|DBRAN|NEWPC|WRTPC, optab[i->op]);
+		if((i->add&ARM) == AXIMM || UXSRC(i->add) == SRC(AIMM)) {
+			punt(i, SRCOP|DSTOP|DBRAN|NEWPC|WRTPC, optab[i->op]);
+			break;
+		}
+		cbraf(i, i->op);
 		break;
 	case IBEQW:
 		cbra(i, Ojeql);
@@ -1741,7 +1958,11 @@ comp(Inst *i)
 		arithb(i, 0x28);
 		break;
 	case ISUBF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+			break;
+		}
+		arithf(i, Ssubsd);
 		break;
 	case IADDW:
 		arith(i, 0x01, 0);
@@ -1750,7 +1971,11 @@ comp(Inst *i)
 		arithb(i, 0x00);
 		break;
 	case IADDF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+			break;
+		}
+		arithf(i, Saddsd);
 		break;
 	case IORW:
 		arith(i, 0x09, 1);
@@ -1783,16 +2008,18 @@ comp(Inst *i)
 		shift(i, Oldb, Ostb, 0xd2, 5);
 		break;
 	case IMOVF:
-		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
-		opwld(i, Omovf, 0);
-		opwst(i, Omovf, 3);
+		/* the eight bytes as they are: through the x87, with an FNINIT
+		 * each time, it was slow and quieted a signalling NaN */
+		opwld(i, Oldw, RAX);
+		opwst(i, Ostw, RAX);
 		break;
 	case INEGF:
-		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
-		opwld(i, Omovf, 0);
-		genb(0xd9);
-		genb(0xe0);
-		opwst(i, Omovf, 3);
+		opwld(i, Oldw, RAX);
+		genb(REXW);			/* btc rax, 63: the sign flipped, as -x is */
+		gen2(0x0f, 0xba);
+		genb(0xf8);
+		genb(63);
+		opwst(i, Ostw, RAX);
 		break;
 	case IMOVB:
 		opwld(i, Oldb, RAX);
@@ -1806,6 +2033,16 @@ comp(Inst *i)
 			break;
 		}
 		opwld(i, Oldw, RAX);
+		/*
+		 * Only the conversion narrows. movw is W(d) = W(s) in xec.c
+		 * and a plain load and store in the arm64 JIT: all 64 bits.
+		 * This sign-extended both from 32 (fb64f7767, written with
+		 * no amd64 machine to run it on), and a word that was not an
+		 * int -- the first CI run on amd64 found one in llmsrv --
+		 * came out as the low half of itself: "SEGV: addr=39a9d420".
+		 */
+		if(i->op == ICVTLW)
+			modrr(Omovsxd, RAX, RAX);
 		opwst(i, Ostw, RAX);
 		break;
 	case ICVTWL:
@@ -1861,7 +2098,11 @@ comp(Inst *i)
 		break;
 	case IMULF:
 	case IDIVF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+			break;
+		}
+		arithf(i, i->op == IMULF? Smulsd: Sdivsd);
 		break;
 	case IMODW:
 	case IDIVW:
@@ -1876,6 +2117,44 @@ comp(Inst *i)
 			modrr(0xf7, RRTMP, 7);
 			if(i->op == IMODW)
 				modrr(Oxchg, RAX, RDX);
+		}
+		modrr(Omovsxd, RAX, RAX);
+		opwst(i, Ostw, RAX);
+		break;
+	case IMODL:
+	case IDIVL:
+	case IMULL:
+		/*
+		 * As the word forms, all 64 bits kept. A zero divisor faults
+		 * in idiv and is raised as a zero divide (jitfaultfp), as
+		 * divl raises it. A divisor of -1 does not reach idiv: the
+		 * most negative big over -1 would fault too, and divl and
+		 * modl wrap it instead (the quotient negated, the remainder 0).
+		 */
+		mid(i, Oldw, RAX);
+		opwld(i, Oldw, RRTMP);
+		if(i->op == IMULL) {
+			modrr(0xf7, RRTMP, 4);
+		} else {
+			uchar *lnorm, *ldone;
+
+			modrr(0x83, RRTMP, 7);		/* cmp rrtmp, -1 */
+			genb(0xff);
+			gen2(Ojneb, 0);
+			lnorm = code-1;
+			if(i->op == IDIVL)
+				modrr(0xf7, RAX, 3);	/* neg rax */
+			else
+				modrr32(0x33, RAX, RAX);	/* xor eax, eax */
+			gen2(Ojmpb, 0);
+			ldone = code-1;
+			*lnorm = code-lnorm-1;
+			genb(REXW);
+			genb(Ocqo);
+			modrr(0xf7, RRTMP, 7);
+			if(i->op == IMODL)
+				modrr(Oxchg, RAX, RDX);
+			*ldone = code-ldone-1;
 		}
 		opwst(i, Ostw, RAX);
 		break;
@@ -1900,8 +2179,14 @@ comp(Inst *i)
 		jnebounds(Ojneb, i);
 		if(bflag) {
 			opwst(i, Oldw, RAX);
-			modrm32(0x3b, O(Array, len), RRTMP, RAX);
-			jnebounds(0x72, i);
+			/*
+			 * The index is a sign-extended 64-bit word and
+			 * Array.len a WORD: one unsigned 64-bit compare
+			 * rejects a negative index with an overlarge one,
+			 * as OP(indx)'s (ulong)i >= a->len does.
+			 */
+			modrm(0x3b, O(Array, len), RRTMP, RAX);	/* CMP RAX, len */
+			jnebounds(0x72, i);			/* JB: in range */
 			modrm(Oldw, O(Array, t), RRTMP, RRTA);
 			modrm32(0xf7, O(Type, size), RRTA, 5);
 		} else {
@@ -1935,8 +2220,9 @@ comp(Inst *i)
 		cmpl64(RAX, (uvlong)H);
 		jnebounds(Ojneb, i);
 		if(bflag) {
-			modrm32(0x3b, O(Array, len), RAX, RRTMP);
-			jnebounds(0x72, i);
+			/* unsigned 64-bit, as for IINDX above */
+			modrm(0x3b, O(Array, len), RAX, RRTMP);	/* CMP RRTMP, len */
+			jnebounds(0x72, i);			/* JB: in range */
 		}
 		modrm(Oldw, O(Array, data), RAX, RAX);
 		/* LEA (RAX)(RRTMP*scale), RAX */
@@ -1949,43 +2235,44 @@ comp(Inst *i)
 		modrm(Ostw, i->reg, r, RAX);
 		break;
 	case IINDC:
+		/*
+		 * s[i]. String.len is an int: negative means a rune
+		 * string of -len runes. The index is a sign-extended
+		 * 64-bit word and the (zero-extended) length a non-negative
+		 * 32-bit one, so one unsigned 64-bit compare rejects a
+		 * negative index with an overlarge one, as OP(indc) in
+		 * string.c does. The 386 original compared the index with
+		 * the length and counted its own bytes for the jumps; the
+		 * amd64 port had the operands the other way round and the
+		 * REX prefixes put its counts off by one, which is why
+		 * bflag was never set: every string index faulted.
+		 */
 		opwld(i, Oldw, RAX);
 		mid(i, Oldw, RDI);
+		cmpl64(RAX, (uvlong)H);
+		jnefault(Ojneb, i, nilref);
+		modrm32(Oldw, O(String, len), RAX, RRTA);	/* MOV R10D, len: zero-extends */
+		modrr32(0x85, RRTA, RRTA);			/* TEST R10D, R10D */
+		gen2(Ojltb, 0);					/* JL rune string */
+		rune = code - 1;
 		if(bflag) {
-			modrm32(Oldw, O(String, len), RAX, RRTA);
-			/*
-			 * String.len is int (32-bit): negative means rune string.
-			 * Use 32-bit TEST — a 32-bit load zero-extends to 64 bits,
-			 * so a 64-bit CMP would see negative 32-bit values as positive.
-			 */
-			modrr32(0x85, RRTA, RRTA);	/* TEST R10D, R10D */
-			gen2(Ojltb, 16);
-			modrr32(0x3b, RDI, RRTA);
-			gen2(0x72, 5);
-			bra((uvlong)bounds, Ocall);
-			genb(0x0f);
-			gen2(Omovzxb, (1<<6)|(0<<3)|4);
-			gen2((0<<6)|(RDI<<3)|RAX, O(String, data));
-			gen2(Ojmpb, 11);
-			modrr32(Oneg, RRTA, 3);
-			modrr32(0x3b, RDI, RRTA);
-			gen2(0x73, 0xee);
-			genb(0x0f);
-			gen2(Omovzxw, (1<<6)|(0<<3)|4);
-			gen2((1<<6)|(RDI<<3)|RAX, O(String, data));
-			opwst(i, Ostw, RAX);
-			break;
+			modrr(0x3b, RRTA, RDI);			/* CMP RDI, R10 */
+			jnebounds(0x72, i);			/* JB: in range */
 		}
-		modrm32(Ocmpi, O(String, len), RAX, 7);
-		genb(0);
-		gen2(Ojltb, 7);
-		genb(0x0f);
+		genb(0x0f);					/* MOVZX EAX, byte [RAX+RDI+data] */
 		gen2(Omovzxb, (1<<6)|(0<<3)|4);
 		gen2((0<<6)|(RDI<<3)|RAX, O(String, data));
-		gen2(Ojmpb, 5);
-		genb(0x0f);
-		gen2(Omovzxw, (1<<6)|(0<<3)|4);
-		gen2((1<<6)|(RDI<<3)|RAX, O(String, data));
+		gen2(Ojmpb, 0);
+		done = code - 1;
+		*rune = code - (rune + 1);
+		modrr32(Oneg, RRTA, 3);				/* NEG R10D: the rune count */
+		if(bflag) {
+			modrr(0x3b, RRTA, RDI);			/* CMP RDI, R10 */
+			jnebounds(0x72, i);			/* JB: in range */
+		}
+		gen2(Oldw, (1<<6)|(0<<3)|4);			/* MOV EAX, dword [RAX+RDI*4+data]: a Rune is 32 bits; zero-extends */
+		gen2((2<<6)|(RDI<<3)|RAX, O(String, data));
+		*done = code - (done + 1);
 		opwst(i, Ostw, RAX);
 		break;
 	case ICASE:
@@ -2068,20 +2355,13 @@ preamble(void)
 	if(comvec)
 		return;
 
-#ifdef __APPLE__
-	comvec = mmap(0, 128, PROT_READ|PROT_WRITE|PROT_EXEC,
-	              MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
-	if(comvec == MAP_FAILED) {
-		comvec = nil;
-		return;
-	}
-	pthread_jit_write_protect_np(0);
-#else
 	comvec = jitmalloc(128);
 	if(comvec == NULL) {
 		comvec = nil;
 		return;
 	}
+#ifdef __APPLE__
+	pthread_jit_write_protect_np(0);
 #endif
 
 	code = (uchar*)comvec;
@@ -2373,7 +2653,7 @@ maccolr(void)
 {
 	modrm32(Oincrm, O(Heap, ref)-sizeof(Heap), RDI, 0);
 	con64((uvlong)&mutator, RAX);
-	modrm(Oldw, 0, RAX, RAX);
+	modrm32(Oldw, 0, RAX, RAX);
 	modrm32(Ocmpw, O(Heap, color)-sizeof(Heap), RDI, RAX);
 	gen2(Ojneb, 0x01);
 	genb(Oret);
@@ -2381,7 +2661,13 @@ maccolr(void)
 	modrm32(Ostw, O(Heap, color)-sizeof(Heap), RDI, RAX);
 	genb(Opushq+RDI);
 	con64((uvlong)&nprop, RDI);
-	modrm(Ostw, 0, RDI, RAX);
+	/*
+	 * nprop and mutator are ints: a 64-bit store here zeroed the low
+	 * half of whatever global the linker put after nprop.  Built by
+	 * clang for macOS that was the collector's sweep pointer, and the
+	 * next collection faulted at 0x100000000.
+	 */
+	modrm32(Ostw, 0, RDI, RAX);
 	genb(Opopq+RDI);
 	genb(Oret);
 }
@@ -2610,15 +2896,63 @@ typecom_bound(Type *t)
  * near-text executable memory. Calling jitmalloc per type consumes
  * one VMA slot each, exhausting the 1024-hint scan after a few
  * hundred types. Instead, grab large slabs and bump-allocate.
- * Type code is never freed individually, so full slabs remain mapped
- * while allocation continues in a new slab.
+ *
+ * A block starts with a Typejithdr-byte header holding its size, and the
+ * code follows it, where freetypejit() finds the header again (#649).  A
+ * freed block goes on a free list and is reused; slabs themselves stay
+ * mapped.  The lists live out of line, in malloc'd Typefree nodes, so
+ * freeing never writes to code memory, which is read-only-execute on
+ * Windows and write-protected under MAP_JIT on Apple.
+ *
+ * Blocks up to TYPEFREE_SMALL bytes are kept by exact size, which is the
+ * common case: a module loaded again compiles the same types to the same
+ * sizes.  Larger ones share one list and are reused first-fit.
  */
 #define TYPECOM_SLAB_SIZE	(2*1024*1024)	/* 2MB holds thousands of types */
+#define Typejithdr	16			/* keeps the code 16-byte aligned */
+#define TYPEFREE_SMALL	4096
 static uchar *typecom_slab = nil;
 static ulong typecom_slab_used = 0;
 
+typedef struct Typefree Typefree;
+struct Typefree
+{
+	uchar*		p;
+	ulong		size;
+	Typefree*	next;
+};
+static Typefree *typefree_small[TYPEFREE_SMALL/16+1];
+static Typefree *typefree_large;
+static Typefree *typefree_nodes;		/* spare nodes */
+
 static uchar*
-typecom_alloc(int n)
+typefree_take(ulong size)
+{
+	Typefree *f, **l;
+	uchar *p;
+
+	if(size <= TYPEFREE_SMALL)
+		l = &typefree_small[size/16];
+	else
+		for(l = &typefree_large; *l != nil && (*l)->size < size; l = &(*l)->next)
+			;
+	f = *l;
+	if(f == nil)
+		return nil;
+	*l = f->next;
+	p = f->p;
+	f->next = typefree_nodes;
+	typefree_nodes = f;
+	return p;
+}
+
+/*
+ * Allocate a block of at least n bytes, header included.  Its size is
+ * returned in *sizep; the caller writes the header once the block is
+ * writable.
+ */
+static uchar*
+typecom_alloc(int n, ulong *sizep)
 {
 	uchar *p;
 	ulong aligned;
@@ -2626,16 +2960,12 @@ typecom_alloc(int n)
 	if(n <= 0 || n > TYPECOM_SLAB_SIZE)
 		return nil;
 	aligned = (n + 15) & ~15;	/* 16-byte align for code */
+	p = typefree_take(aligned);
+	if(p != nil) {
+		*sizep = *(ulong*)p;	/* a large block may be bigger than asked */
+		return p;
+	}
 	if(typecom_slab == nil || typecom_slab_used > TYPECOM_SLAB_SIZE-aligned) {
-#ifdef __APPLE__
-		typecom_slab = mmap(0, TYPECOM_SLAB_SIZE,
-			PROT_READ|PROT_WRITE|PROT_EXEC,
-			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
-		if(typecom_slab == MAP_FAILED) {
-			typecom_slab = nil;
-			return nil;
-		}
-#else
 #ifdef _WIN32
 		/* typecom init/destroy snippets are called directly from C
 		 * (via t->initialize / t->destroy function pointers), not
@@ -2648,21 +2978,61 @@ typecom_alloc(int n)
 #endif
 		if(typecom_slab == nil)
 			return nil;
+		/* not under MAP_JIT, whose write protection may be on here;
+		 * fresh anonymous memory is zero already */
+#ifndef __APPLE__
 		memset(typecom_slab, 0, TYPECOM_SLAB_SIZE);
 #endif
 		typecom_slab_used = 0;
 	}
 	p = typecom_slab + typecom_slab_used;
 	typecom_slab_used += aligned;
+	*sizep = aligned;
 	return p;
+}
+
+/*
+ * Release a type's compiled initialize/destroy code to the free list,
+ * by the size in the header typecom() put in front of it.  Called from
+ * freetypecode() in heap.c when the type goes away.
+ */
+void
+freetypejit(Type *t)
+{
+	uchar *base;
+	ulong size;
+	Typefree *f, **l;
+
+	if(t == nil || t->initialize == nil)
+		return;
+	base = (uchar*)t->initialize - Typejithdr;
+	size = *(ulong*)base;
+	f = typefree_nodes;
+	if(f != nil)
+		typefree_nodes = f->next;
+	else {
+		f = malloc(sizeof(*f));
+		if(f == nil)
+			return;		/* leak the block rather than fail a free */
+	}
+	f->p = base;
+	f->size = size;
+	if(size <= TYPEFREE_SMALL)
+		l = &typefree_small[size/16];
+	else
+		l = &typefree_large;
+	f->next = *l;
+	*l = f;
+	t->initialize = nil;
+	t->destroy = nil;
 }
 
 void
 typecom(Type *t)
 {
 	int n;
-	uchar *tmp;
-	ulong need;
+	uchar *tmp, *base;
+	ulong need, size;
 
 	if(t == nil || t->initialize != 0)
 		return;
@@ -2716,8 +3086,8 @@ typecom(Type *t)
 		urk();
 	}
 
-	code = typecom_alloc(n);
-	if(code == nil)
+	base = typecom_alloc(n + Typejithdr, &size);
+	if(base == nil)
 		error(exNomem);
 
 #ifdef __APPLE__
@@ -2731,10 +3101,12 @@ typecom(Type *t)
 		 * after the slab has already been segflush'd RX. */
 		unsigned long old;
 		__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);
-		VirtualProtect(code, n, PAGE_READWRITE, &old);
+		VirtualProtect(base, size, PAGE_READWRITE, &old);
 	}
 #endif
 
+	*(ulong*)base = size;
+	code = base + Typejithdr;
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
@@ -2746,9 +3118,9 @@ typecom(Type *t)
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(1);
-	sys_icache_invalidate(t->initialize, n);
+	sys_icache_invalidate(base, size);
 #else
-	segflush(t->initialize, n);
+	segflush(base, size);
 #endif
 }
 
@@ -2808,7 +3180,13 @@ compile(Module *m, int size, Modlink *ml)
 		return 0;
 
 	base = nil;
-	patch = mallocz((size+1)*sizeof(*patch), 0);
+	/*
+	 * Cleared: pass 0 encodes base+patch[i+1] before patch[i+1] is
+	 * set, and con64's length depends on the value, so a stale entry
+	 * that put the sum below 4GB made pass 0 shorter than pass 1, and
+	 * the module failed to compile ("phase error").
+	 */
+	patch = mallocz((size+1)*sizeof(*patch), 1);
 	tinit = mallocz(m->ntype*sizeof(*tinit), 0);
 	tmpsize = (ulong)size * 64;
 	if(tmpsize < 8192)
@@ -2865,22 +3243,15 @@ compile(Module *m, int size, Modlink *ml)
 
 	nlit *= sizeof(uvlong);
 
-#ifdef __APPLE__
-	base = mmap(0, n + nlit, PROT_READ|PROT_WRITE|PROT_EXEC,
-	            MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
-	if(base == MAP_FAILED) {
-		base = nil;
-		goto bad;
-	}
-	pthread_jit_write_protect_np(0);
-#else
 	base = jitmalloc(n + nlit);
 	if(base == NULL) {
 		base = nil;
 		goto bad;
 	}
-	memset(base, 0, n + nlit);
+#ifdef __APPLE__
+	pthread_jit_write_protect_np(0);
 #endif
+	memset(base, 0, n + nlit);
 
 	if(cflag > 3)
 		print("dis=%5d %5d amd64=%5d asm=%.16llux lit=%d: %s\n",
@@ -2892,18 +3263,17 @@ compile(Module *m, int size, Modlink *ml)
 	code = base;
 
 	{
-	int nn = 0;
 	for(i = 0; i < size; i++) {
 		s = code;
 		comp(&m->prog[i]);
-		if(patch[i] != nn) {
-			print("amd64 jit phase error: instr %d %D: pass0=%lud pass1=%d\n",
-				i, &m->prog[i], patch[i], nn);
+		/* name the instruction whose size changed, not the next one */
+		if(patch[i] + (code - s) != patch[i+1]) {
+			print("amd64 jit phase error: instr %d %D: pass0=%lud bytes pass1=%d\n",
+				i, &m->prog[i], patch[i+1] - patch[i], (int)(code - s));
 			urk();
 		}
-		nn += code - s;
 		if(cflag > 4) {
-			print("[%d] +0x%lux: %D\n", i, (ulong)nn, &m->prog[i]);
+			print("[%d] +0x%lux: %D\n", i, patch[i+1], &m->prog[i]);
 			das(s, code-s);
 		}
 	}
@@ -2928,14 +3298,24 @@ compile(Module *m, int size, Modlink *ml)
 #endif
 
 	v = (uvlong)base;
+	/*
+	 * A module's exported global data -- the ".mp" link, which the
+	 * compiler emits with pc -1 and load.c admits as a sentinel -- is
+	 * not code and has no entry in patch[]: relocating it read
+	 * patch[-1], the pool word before the array, and gave the link
+	 * base + whatever that was. It is left as loaded, exactly as the
+	 * interpreter sees it; nothing ever jumps to it.
+	 */
 	for(l = m->ext; l->name; l++) {
-		l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);
+		if(l->u.pc-m->prog != -1)
+			l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);
 		typecom(l->frame);
 	}
 	if(ml != nil) {
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
-			e->u.pc = (Inst*)(v+patch[e->u.pc-m->prog]);
+			if(e->u.pc-m->prog != -1)
+				e->u.pc = (Inst*)(v+patch[e->u.pc-m->prog]);
 			typecom(e->frame);
 			e++;
 		}

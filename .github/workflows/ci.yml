@@ -10,17 +10,16 @@ on:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
   # ─────────────────────────────────────────────
-  # Ring-fence pre-flight: testing-only harness files must live
-  # under tests/agent-harness/. Catches "someone moved serve-agent
-  # back into lib/sh/" before any release build runs. See CLAUDE.md.
+  # Ring-fence pre-flight: adversarial campaign infrastructure lives in the
+  # external infernode-escape-room repository, never in product artifacts.
   # ─────────────────────────────────────────────
   ring-fence:
-    name: Ring-fence (tests/agent-harness/)
+    name: Ring-fence (external harness)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -29,22 +28,19 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Verify serve-agent* files only under tests/agent-harness/
+    - name: Reject external harness files in the product tree
       run: |
         offenders=$(find . -path ./.git -prune -o \
           \( -name 'serve-agent*' -o -path '*agent-harness*' \) \
-          -not -path './tests/agent-harness/*' \
-          -not -path './tests/agent-harness' \
           -print 2>/dev/null | grep -v '^$' || true)
         if [ -n "$offenders" ]; then
-          echo "FATAL: testing-only harness files found outside tests/agent-harness/:" >&2
+          echo "FATAL: external escape-room harness files found in InferNode:" >&2
           echo "$offenders" >&2
           echo "" >&2
-          echo "These files must live under tests/agent-harness/ so CI guards" >&2
-          echo "in release.yml can keep them out of shipped artefacts." >&2
+          echo "Keep campaign infrastructure in infernode-os/infernode-escape-room." >&2
           exit 1
         fi
-        echo "Ring-fence OK: no testing-only harness files outside tests/agent-harness/."
+        echo "Ring-fence OK: external harness material is absent."
 
     - name: Verify local-only config files are not tracked
       run: |
@@ -78,7 +74,7 @@ jobs:
   linux-amd64:
     name: Linux AMD64 Build & Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 55
     permissions:
       contents: read
     env:
@@ -122,6 +118,13 @@ jobs:
       run: |
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         ./tools/verify-dis-build.sh
+
+    - name: Check mkfile header dependencies
+      run: |
+        # Every module header a Limbo source includes, at any depth, is a
+        # prerequisite of its .dis: one that is not changes without mk
+        # rebuilding, and the stale .dis fails at load (link typecheck).
+        python3 tools/check-mkfile-deps.py
 
     - name: Compile test suite
       run: |
@@ -185,23 +188,134 @@ jobs:
         ROOT=. bash tests/host/namespace_manifest_invariants_test.sh
         ROOT=. bash tests/host/veltro_namespace_failclosed_test.sh
 
-    - name: Run escape-room evidence checks
+    - name: Check an idle emulator uses no CPU
       run: |
-        # Gates audit-bundle verification, canary scanning, the
-        # evidence-privacy invariants (INFR-406) — raw evidence is 0700/0600
-        # and the derived public artifact carries no canary value — and the
-        # attempt-preservation / fail-closed retry rules (INFR-411).
-        chmod +x tests/host/grind_escape_test.sh
-        ROOT=. bash tests/host/grind_escape_test.sh
+        # With a web page loaded and nothing to do, the idle collector
+        # kept going round the heap: a core, for as long as it sat idle.
+        chmod +x tests/host/idle_cpu_test.sh
+        ROOT=. bash tests/host/idle_cpu_test.sh
 
-    - name: Run outer escape-lab evidence checks
+    - name: Check a form a page's script submits is posted
       run: |
-        # INFR-412: the outer lab creates pcap, console, command log and
-        # manifest private, refuses to start over an exposure, and seals
-        # 0700/0600 at the end.
-        chmod +x tests/agent-harness/escape-lab.sh
-        chmod +x tests/host/escape_lab_evidence_test.sh
-        ROOT=. sh tests/host/escape_lab_evidence_test.sh
+        # form.submit() of a POST form was only logged as unsupported, so
+        # a sign-in posting the password from script went nowhere.
+        chmod +x tests/host/js_formpost_test.sh
+        ROOT=. bash tests/host/js_formpost_test.sh
+
+    - name: Check a long POST body is sent whole
+      run: |
+        chmod +x tests/host/charon_bigpost_test.sh
+        ROOT=. bash tests/host/charon_bigpost_test.sh
+
+    - name: Check Charon's start page ships
+      run: |
+        # The start page must be a file every release package carries
+        # (it was a test fixture, missing from every package).
+        chmod +x tests/host/charon_home_test.sh
+        ROOT=. bash tests/host/charon_home_test.sh
+
+    - name: Check the forms file lists the page's controls
+      run: |
+        # Form numbers came from the order nodes were made: a control a
+        # script moved into a form was in none, and was not sent with it;
+        # removed and never-attached controls were listed as on the page.
+        chmod +x tests/host/charon_forms_test.sh
+        ROOT=. bash tests/host/charon_forms_test.sh
+
+    - name: Check a form's controls are the ones HTML puts in it
+      run: |
+        # A template's input was listed and sent, a control's form
+        # attribute was ignored, and entries went in the order nodes were
+        # made; both through Charon's files and from the page's scripts.
+        chmod +x tests/host/charon_formowner_test.sh
+        ROOT=. bash tests/host/charon_formowner_test.sh
+
+    - name: Check a button's label in the files is the one shown
+      run: |
+        # A web component's button showed no label in forms or dom/N/text:
+        # its label is what the page put in the component, shown through a
+        # slot, and the files read only the button's own subtree.
+        chmod +x tests/host/charon_shadowlabel_test.sh
+        ROOT=. bash tests/host/charon_shadowlabel_test.sh
+
+    - name: Check a label in a shadow tree checks its own checkbox
+      run: |
+        chmod +x tests/host/charon_shadowcheck_test.sh
+        ROOT=. bash tests/host/charon_shadowcheck_test.sh
+
+    - name: Check an image a page's script puts in is fetched
+      run: |
+        chmod +x tests/host/charon_scriptimg_test.sh
+        ROOT=. bash tests/host/charon_scriptimg_test.sh
+
+    - name: Check a web component laid out as a grid takes the page's areas
+      run: |
+        chmod +x tests/host/charon_shadowgrid_test.sh
+        ROOT=. bash tests/host/charon_shadowgrid_test.sh
+
+    - name: Check a PDF navigated to is saved and opened
+      run: |
+        chmod +x tests/host/charon_download_test.sh
+        ROOT=. bash tests/host/charon_download_test.sh
+
+    - name: Check a link to audio is saved, not parsed as a page
+      run: |
+        chmod +x tests/host/charon_notpage_test.sh
+        ROOT=. bash tests/host/charon_notpage_test.sh
+
+    - name: Check the DOM a page's scripts see
+      run: |
+        # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;
+        # nothing ran it, and dom.js told pages CSS animates, which it
+        # does not, so Microsoft's sign-in never left its first step.
+        chmod +x tests/host/js_dom_test.sh
+        ROOT=. bash tests/host/js_dom_test.sh
+
+    - name: Check a page's scripts get and send bytes as they are
+      run: |
+        # A body was kept as text only: bytes that are not UTF-8 read
+        # through arrayBuffer() came back mangled (JSTOR's sign-in check
+        # failed so), and an ArrayBuffer posted was sent re-encoded.
+        chmod +x tests/host/js_binary_test.sh
+        ROOT=. bash tests/host/js_binary_test.sh
+
+    - name: Check a page's files do not show a password
+      run: |
+        # The forms and dom/N/attrs files showed a password field's value
+        # as typed, to anything that could read a browser window's files.
+        chmod +x tests/host/charon_password_test.sh
+        ROOT=. bash tests/host/charon_password_test.sh
+
+    - name: Check releases ship the system's directories
+      run: |
+        # man, doc, icons, appl (without its .dis) and n, in every
+        # release package; without n a fresh install's first start
+        # made the user's home inside the package.
+        chmod +x tests/host/release_dirs_test.sh
+        ROOT=. bash tests/host/release_dirs_test.sh
+        # No private key in a release package: the tree's
+        # usr/inferno/keyring/default (a test key) is scrubbed by every
+        # package job, and a key left anywhere refuses the package.
+        chmod +x tests/host/release_scrub_test.sh
+        ROOT=. bash tests/host/release_scrub_test.sh
+
+    - name: Check the tree's icons
+      run: |
+        # icons/ holds icon(2)'s glyphs (icons/ui), Tk's cursors and the
+        # artwork coffee and draw-example(2) draw, nothing else; every
+        # glyph a program names is there, and no Tk bitmap or /icons
+        # path a program names is missing (one missing fails the widget
+        # naming it).
+        ROOT=. sh tests/host/icons_test.sh
+
+    - name: Check what goes on a Raspberry Pi card image
+      run: |
+        # tools/mkpiimage.sh, which makes the release's card images: each
+        # board's firmware, config.txt and kernel, the built dis/, and of
+        # lib/ fonts/ icons/ only what git tracks; read back by the test's
+        # own FAT32 reader, and by fsck.fat.
+        sudo apt-get install -y dosfstools
+        ROOT=. bash tests/host/piimage_test.sh
 
     - name: Run codex-gate preflight checks
       run: |
@@ -221,6 +335,156 @@ jobs:
         chmod +x tests/host/llmsrv_session_capability_test.sh
         ROOT=. tests/host/llmsrv_session_capability_test.sh
 
+    - name: Run login-profile proxy import check
+      run: |
+        # The host's HTTPS_PROXY and no_proxy reach Inferno's environment,
+        # where llmclient reads them (INFR-307). 77 = skip (no emu).
+        chmod +x tests/host/profile_proxy_test.sh
+        rc=0
+        ROOT=. bash tests/host/profile_proxy_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
+    - name: Run agent harness checks
+      run: |
+        # The one agent loop, veltrosrv, through its files and through its
+        # clients, against a scripted model (tests/host/agentloop): the
+        # contract of /mnt/veltro, the veltro command, and what the loop
+        # sends back to the model after each tool call, pinned as golden
+        # files.  lucibridge's scenarios drive it through /mnt/ui as the
+        # grind driver does; a subset here, the full set is
+        # `tests/host/agentloop_characterization_test.sh`.
+        chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
+          tests/host/lucibridge_tool_timeout_test.sh \
+          tests/host/agentloop_characterization_test.sh \
+          tests/host/tools9p_result_test.sh tests/host/toolctl_view_test.sh \
+          tests/host/wiki9p_test.sh \
+          tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
+          tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
+          tests/host/context_window_test.sh
+        # Concurrent calls to one tool each read their own result.
+        ROOT=. bash tests/host/tools9p_result_test.sh
+        # /mnt/toolctl's ns, event and view: the agent's name space as it
+        # is, read-only, and its lists' changes as events (#1020).
+        ROOT=. bash tests/host/toolctl_view_test.sh
+        ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
+        ROOT=. bash tests/host/veltrosrv_test.sh
+        ROOT=. bash tests/host/veltro_cli_test.sh
+        # Activity 0 delegating to a task agent through lucibridge: the
+        # task's tools, activity 0's afterwards, the completion event.
+        ROOT=. bash tests/host/agent_delegation_test.sh
+        # The agent prompts in ~/.infernode follow the shipped defaults
+        # until edited; every shipped version's hash is listed.
+        ROOT=. bash tests/host/prompt_defaults_test.sh
+        # A closed activity refuses writes and the server survives them.
+        ROOT=. bash tests/host/luciuisrv_closed_test.sh
+        # A long session is compacted without breaking a turn of tool calls.
+        ROOT=. bash tests/host/compaction_test.sh
+        ROOT=. bash tests/host/context_window_test.sh
+        # The LLM-maintained wiki (wiki9p over wikifs) against a scripted model.
+        ROOT=. bash tests/host/wiki9p_test.sh
+        ROOT=. FRONTENDS=veltrosrv bash tests/host/agentloop_characterization_test.sh
+        ROOT=. FRONTENDS=lucibridge bash tests/host/agentloop_characterization_test.sh \
+          single_read two_reads write_then_read error_streak say step_cap
+
+    - name: Run memdraw rasteriser and fast-path checks
+      run: |
+        # libmemdraw/aatest.c: exact coverage, fill rules, strokes, and the
+        # special cases (coverdraw, blenddraw) against the general alphadraw
+        # byte for byte.  Built with this runner's compiler: an unsequenced
+        # temporary in coverdraw passed under clang and drew every
+        # anti-aliased glyph black under gcc.  The libraries are built
+        # above, so a skip (77) here is a failure.
+        ROOT=. sh tests/host/aa_test.sh
+
+    - name: Run headless Tk application check
+      run: |
+        # A Tk application with no window manager waits for events
+        # rather than spinning, and its 9P files answer (INFR-365):
+        # wm/editor's /edit, written and read back, then its idle CPU
+        # time measured. 77 = skip (no emu or dis tree).
+        chmod +x tests/host/editor_headless_test.sh
+        rc=0
+        ROOT=. bash tests/host/editor_headless_test.sh || rc=$?
+        if [ "$rc" -ne 0 ] && [ "$rc" -ne 77 ]; then exit "$rc"; fi
+
+    - name: Run sh script-execution check
+      run: |
+        # A script without the execute bit must be reported as such,
+        # not as a missing .dis module (what Xenith's B2 showed), and
+        # must not hide a command later on the path. 77 = skip (no emu).
+        chmod +x tests/host/sh_noexec_script_test.sh
+        rc=0
+        ROOT=. bash tests/host/sh_noexec_script_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
+    - name: Run dossrv badent alias check
+      run: |
+        # dossrv must decide "damaged entry" from the on-disk name, not
+        # the badent- alias it hands out: a healthy file named badent-1
+        # has to have its clusters freed by rm. The same fixture runs
+        # under QEMU in baremetal_test.sh, which no workflow runs; this
+        # is the hosted copy, against the emu built above. 77 = skip
+        # (no emu or python3).
+        chmod +x tests/host/dossrv_badent_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_badent_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # Long-name slots that are orphaned, mis-summed or out of
+        # sequence must not become a file's name (#673).
+        chmod +x tests/host/dossrv_lfn_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_lfn_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # The radio firmware tool's verification path: a mismatched
+        # checksum must refuse to install. Network-free (--from a
+        # fixture directory), under a second.
+        chmod +x tests/host/pi_firmware_test.sh
+        ROOT=. bash tests/host/pi_firmware_test.sh
+        # A wstat's "don't change" fields must change nothing on a
+        # 64-bit host: mv inside InferNode used to leave a host file
+        # mode 777 with a modification time in 2106. 77 = skip (no emu).
+        chmod +x tests/host/wstat_nulldir_test.sh
+        rc=0
+        ROOT=. bash tests/host/wstat_nulldir_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # An allocation the pool refuses says how much, why, for whom
+        # and how the pool stood (INFR-472). 77 = skip (no emu).
+        chmod +x tests/host/pool_nomem_test.sh
+        rc=0
+        ROOT=. bash tests/host/pool_nomem_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
+    - name: Run WPA2 supplicant vector checks
+      run: |
+        # The supplicant's cryptography against RFC 6070, IEEE 802.11i
+        # Annex H and RFC 3394, plus a whole four-way handshake driven
+        # from synthetic frames. No radio is involved and none can be:
+        # this is the only part of the WiFi work a runner can prove.
+        # 77 = skip (no emulator built).
+        chmod +x tests/host/wpa_vectors_test.sh
+        rc=0
+        ROOT=. bash tests/host/wpa_vectors_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # And the other half: the supplicant driven against an
+        # interface made of plain files, so the conversation, the ctl
+        # verbs, the ifstats parsing and the factotum protocol are
+        # exercised rather than reasoned about. Message 2's integrity
+        # check is recomputed from the nonce it actually used.
+        chmod +x tests/host/wpa_join_test.sh
+        rc=0
+        ROOT=. bash tests/host/wpa_join_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # And what it says while it cannot get a usable link. A board
+        # with only a serial console was made unusable by a supplicant
+        # that reported every retry; the join test above pipes its log
+        # through `sort -u` and so could never have seen it. This one
+        # counts lines, and counts the ctl writes beside them so that
+        # "quiet" cannot be a supplicant that gave up.
+        chmod +x tests/host/wpa_backoff_test.sh
+        rc=0
+        ROOT=. bash tests/host/wpa_backoff_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test
@@ -239,7 +503,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -247,29 +511,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run wallet and secstore integration tests
@@ -354,6 +609,39 @@ jobs:
           fi
         fi
 
+    - name: Run presentation tab strip test
+      run: |
+        # An app in the presentation zone has the tab strip above it, in
+        # every one of several headless boots: lucipres and presrender
+        # join the zone's wmsrv in either order, and taking the first
+        # join for lucipres left the strip blank in about one boot in
+        # three.  A boot that is too slow is a skip (77), not a failure.
+        rc=0
+        ROOT=. bash tests/host/presentation_tabstrip_test.sh || rc=$?
+        [ $rc = 0 ] || [ $rc = 77 ]
+
+    - name: Run walk-leak regression test
+      run: |
+        # A failed name lookup must not leak main-pool memory: namec's
+        # handler freed the parsed name through non-volatile locals and
+        # clang folded the frees away (3 blocks per miss). Deterministic --
+        # it counts live pool blocks across 2000 misses in one emulator --
+        # so it is fatal, unlike the GUI-timing tests above.
+        chmod +x tests/host/walk_leak_test.sh
+        ROOT=. bash tests/host/walk_leak_test.sh
+        # And the byte-order accessors in emu/port/ipaux.c against LP64
+        # sign extension: compiles the function text out of the tree.
+        chmod +x tests/host/nhgetl_test.sh
+        ROOT=. bash tests/host/nhgetl_test.sh
+
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -371,8 +659,44 @@ jobs:
         chmod +x tests/host/jit_boot_test.sh
         tests/host/jit_boot_test.sh
 
+    - name: Run JIT bounds tests (JIT and interpreter)
+      run: |
+        # A negative or overlarge index must raise "array bounds error"
+        # from compiled code, not read or write outside the array.
+        chmod +x tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run rune tests beyond U+FFFF (JIT and interpreter)
+      run: |
+        # U+1F680 and U+20000 are one rune each through byte -> string
+        # -> byte, and s[i] reads all 21 bits from compiled code.
+        ROOT=. sh tests/host/utf21_test.sh
+
+    - name: Run JIT fault and big arithmetic tests (JIT and interpreter)
+      run: |
+        # A fault in compiled code is caught by the handler around it,
+        # in a callee with a handler of its own too; big *, / and % and
+        # hd of a list of big give what the interpreter gives.
+        chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_big_test.sh
+
+    - name: Run cpu(1) session lifetime test
+      run: |
+        # A cpu session ends when its command does, or when its caller
+        # hangs up, and what it started ends with it (#732).
+        ROOT=. sh tests/host/cpu_session_test.sh
+
+    - name: Run JIT type code reuse test
+      run: |
+        # A freed type's compiled code goes back on comp-amd64.c's free
+        # list (#649): 4000 commands must not grow the JIT's resident
+        # size more than the interpreter's.
+        chmod +x tests/host/amd64_jit_typecode_leak_test.sh
+        tests/host/amd64_jit_typecode_leak_test.sh
+
     - name: Upload Linux build artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()
       with:
         name: infernode-linux-amd64
@@ -384,12 +708,141 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
+  # Linux AMD64: the host tests no other job runs
+  # ─────────────────────────────────────────────
+  linux-amd64-host:
+    name: Linux AMD64 Host Tests (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # two halves of about 18 minutes each, the whole being too long
+        # for one job beside the build
+        include:
+          - shard: 1
+            tests: >-
+              activity_switch_test amd64_jit_typecom_bound_test
+              amd64_jit_typecom_slab_test commands_test dhcp_client_test
+              dis_parser_bounds_test editor_capability_test
+              exec_fork_no_panic_test exec_timeout_kill_test
+              factotum_keyfile_test llmctl_test llmsrv_flush_test
+              mail9p_imap_test network_capability_test pathmanage_test
+              plumbrules_test secstore_legacy_auth_test spawn_budget_test
+              statcheck_bounds_test tools9p_env_isolation_test
+              tools9p_integration_test
+          - shard: 2
+            tests: >-
+              amd64_jit_code_leak_test awk_builtins_test calendar9p_test
+              cpu_boundary_test dialogue_test emu_root_test
+              emulator_leader_lifecycle_test exec_confinement_test
+              font_regression_test ipchecksum_test iproute_test
+              jit_interp_handoff_test jit_real_test jsfs_test
+              listen_rate_fairness_test mail9p_test
+              modifier_mouse_emulation_test mount_clone_walk_test
+              nsaudit_metadata_test profile_legacykey_test
+              refadt_zero_test sdl3_keyboard_test secstore_apikey_test
+              secstore_e2e_test secstore_logon_test secstored_test
+              security_check_test serve_llm_smoke_test stale_dis_test
+              strcat_test task_provisioning_test tcpseq_test themefs_test
+              tls_malformed_server_test tools9p_activity_ns_test
+              tools9p_basics_test tools9p_write_exec_view_test
+              write_capability_test xenith_build_test
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install build dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+
+    - name: Bootstrap build (mk, libraries, limbo, emulator)
+      run: |
+        chmod +x build-linux-amd64.sh
+        ./build-linux-amd64.sh headless
+
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
+    - name: Compile test suite
+      run: |
+        LIMBO="$ROOT/Linux/amd64/bin/limbo"
+
+        # Build the testing module first
+        mkdir -p dis/tests dis/lib
+
+        # Build testing library
+        COMPILE_FAILURES=0
+        if [ -d tests/testing ]; then
+          cd tests/testing
+          for f in *.b; do
+            if [ -f "$f" ]; then
+              if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/dis/lib/${f%.b}.dis" "$f" 2>&1; then
+                echo "ERROR: Failed to compile testing/$f"
+                COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
+              fi
+            fi
+          done
+          cd "$ROOT"
+        fi
+
+        # Build test runner and test files into tests/ where the runner expects them
+        cd tests
+        for f in *.b; do
+          name="${f%.b}"
+          echo "Compiling $f..."
+          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+            echo "ERROR: Failed to compile $f"
+            COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
+          fi
+        done
+        cd "$ROOT"
+
+        # Verify runner was compiled
+        test -f tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+
+        echo "Compiled test .dis files:"
+        ls tests/*_test.dis 2>/dev/null | wc -l
+
+        if [ "$COMPILE_FAILURES" -gt 0 ]; then
+          echo "ERROR: $COMPILE_FAILURES test file(s) failed to compile"
+          exit 1
+        fi
+
+    - name: Run host tests
+      run: |
+        # tests/host scripts that no other step runs, found by running
+        # every one: the JIT's leaks, exec and namespace confinement,
+        # secstore and factotum, tools9p, the 9P services (mail9p,
+        # calendar9p, jsfs), the serve-llm daemon, and
+        # source checks.  Those with a display are in the GUI job; those
+        # needing a live service, a key or hardware are in none (vid9p's,
+        # needing ffmpeg and tools/vdec, are with the GUI job's video
+        # tests).  Each must pass: a skip here (exit 77) is a test that
+        # stopped running, and fails too.
+        mkdir -p tmp
+        failed=
+        for t in ${{ matrix.tests }}; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
+  # ─────────────────────────────────────────────
   # Linux AMD64 GUI: SDL3 build from source
   # ─────────────────────────────────────────────
   linux-amd64-gui:
     name: Linux AMD64 SDL3 GUI Build & Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -441,6 +894,13 @@ jobs:
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the headless jobs build it: the suite
+        # loads /dis/mpeg, /dis/matrix, /dis/xenith/render and the rest
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
@@ -507,7 +967,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -515,29 +975,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run wallet and secstore integration tests
@@ -625,8 +1076,79 @@ jobs:
         chmod +x tests/host/jit_boot_test.sh
         SDL_VIDEODRIVER=dummy tests/host/jit_boot_test.sh
 
+    - name: Run wm/wm tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # wm/wm driven by the pointer: New, the sweep and its cursor,
+        # the frame, focus, the menu's operations, a theme switch, a
+        # client leaving, wm/shell typed at (the shell New starts),
+        # wm/page, wm/sam edited through its windows, and every program
+        # in dis/wm opening at a size that shows it, under wm/wm and in
+        # Lucifer's zone.  wm_test.sh was written to
+        # keep New from breaking again, and nothing ran it.
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+          echo "--- $t ---"
+          ROOT=. sh tests/host/$t.sh
+        done
+
+    - name: Run Xenith and display host tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # Host tests that need the SDL emulator, which no step ran:
+        # Xenith's 9P files (tests/host/xenith_inside.sh), its races,
+        # rescue, documents and browsing, the SDL renderer, /dev/wmsize,
+        # Charon's engine and its origin filter (uitest_transport_test,
+        # which needs vdec too, is with the video tests below).  Each must
+        # pass: a skip here (exit 77) is a test that stopped running, and
+        # fails too.
+        failed=
+        for t in sdl3_rendering_test wmsize_test \
+            charon_headless_test charon_accept_test originfs_test \
+            xenith_acme_files_test xenith_blankname_test xenith_edit_test \
+            xenith_event_test xenith_image_test xenith_browse_test \
+            xenith_scroll_focus_test xenith_scroll_quit_test \
+            xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
+            xenith_race_test xenith_doc_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
+    - name: Build tools/vdec (vid9p's decoder)
+      run: |
+        # FFmpeg 6.1, as the crate is pinned to.  ffmpeg-next's default
+        # features link libavdevice, libavfilter and libswresample too;
+        # libavdevice-dev brings the other two.
+        sudo apt-get install -y clang ffmpeg libavcodec-dev libavformat-dev \
+          libavutil-dev libswscale-dev libavdevice-dev
+        # no --locked: Cargo.lock is ignored (tools/vdec/.gitignore);
+        # Cargo.toml pins ffmpeg-next to 6.1
+        (cd tools/vdec && cargo build --release)
+
+    - name: Run video tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # vid9p serving frames vdec decoded, its transport (play, pause,
+        # seek) paced by the clock, and the Matrix video pane driving it
+        # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
+        failed=
+        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
     - name: Upload Linux GUI build artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()
       with:
         name: infernode-linux-amd64-gui
@@ -642,7 +1164,7 @@ jobs:
   linux-arm64:
     name: Linux ARM64 Build & Test
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 55
     permissions:
       contents: read
     env:
@@ -677,6 +1199,13 @@ jobs:
         # libfido2-dev is installed, so the headless emu must link libfido2 or
         # the #F device would ship as a stub. Same guard as the GUI jobs.
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the amd64 and macOS jobs build it: the
+        # host-side JIT tests below run /dis/sh.dis and /dis/tests
+        export PATH="$ROOT/Linux/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
@@ -741,7 +1270,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -749,30 +1278,39 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
         fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
+        fi
+
+    - name: Run JIT fault and bounds tests (JIT and interpreter)
+      run: |
+        # Gating, unlike the suite above: faults raised from compiled
+        # code must be the interpreter's exceptions, caught by the
+        # handler around them. The arm64 JIT failed both while the
+        # suite's non-gating run hid it.
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/utf21_test.sh
+
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -813,7 +1351,7 @@ jobs:
         fi
 
     - name: Upload Linux ARM64 build artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()
       with:
         name: infernode-linux-arm64
@@ -829,7 +1367,7 @@ jobs:
   linux-arm64-gui:
     name: Linux ARM64 SDL3 GUI Build & Test
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -881,6 +1419,13 @@ jobs:
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the headless jobs build it: the suite
+        # loads /dis/mpeg, /dis/matrix, /dis/xenith/render and the rest
+        export PATH="$ROOT/Linux/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
@@ -947,7 +1492,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -955,29 +1500,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run wallet and secstore integration tests
@@ -1019,7 +1555,7 @@ jobs:
         fi
 
     - name: Upload Linux ARM64 GUI build artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()
       with:
         name: infernode-linux-arm64-gui
@@ -1030,16 +1566,113 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
-  # macOS ARM64: Build using shipped toolchain
+  # Linux RISC-V 64: cross-built, run under qemu-user
   # ─────────────────────────────────────────────
-  macos-arm64:
-    name: macOS ARM64 Build & Test
-    runs-on: macos-15
-    timeout-minutes: 30
+  # No hosted riscv64 runner exists, so the emulator is cross-compiled
+  # (build-linux-riscv64.sh) and run under qemu-riscv64. What this says
+  # is that the port builds and that the JIT (comp-riscv64.c) is right
+  # instruction by instruction and on the boot path; it says nothing
+  # about speed. The bare-metal RISC-V kernel is baremetal.yml's.
+  linux-riscv64-cross:
+    name: Linux RISC-V 64 Cross Build & JIT Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
       ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install the cross compiler and qemu-user
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+    # The host's mk and limbo drive the cross build; dis/ is portable
+    # bytecode, built once by the host.
+    - name: Build the host's mk and limbo, and the Dis tree
+      run: |
+        set -e
+        SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$d" && mk install)
+        done
+        for d in appl appl/mpeg appl/veltro tests; do
+          (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
+            grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
+            echo "::error::mk install failed in $d"; exit 1; }
+        done
+        test -f dis/jittest.dis && test -f dis/tests/jit_fault_test.dis
+
+    - name: Cross-build the riscv64 emulator
+      run: |
+        ./build-linux-riscv64.sh
+        file emu/Linux/o.emu | grep -q 'RISC-V' || { echo "::error::o.emu is not a RISC-V binary"; exit 1; }
+
+    - name: Wrap the emulator in qemu-user
+      run: |
+        cat > "$RUNNER_TEMP/emu-rv" <<EOF
+        #!/bin/sh
+        exec qemu-riscv64 -L /usr/riscv64-linux-gnu "$ROOT/emu/Linux/o.emu" "\$@"
+        EOF
+        chmod +x "$RUNNER_TEMP/emu-rv"
+        # emu leaves by killing its process group; timeout gives it one
+        # of its own, so the step's shell is not in it
+        timeout 60 "$RUNNER_TEMP/emu-rv" -c0 -r. /dis/echo.dis riscv64 emu runs > echo.txt 2>&1 < /dev/null || true
+        cat echo.txt
+        grep -q "riscv64 emu runs" echo.txt
+
+    - name: Run JIT correctness tests
+      run: |
+        timeout 600 "$RUNNER_TEMP/emu-rv" -c1 -r . /dis/jittest.dis > jit-test.txt 2>&1 < /dev/null || true
+        cat jit-test.txt
+        grep -q "^PASS$" jit-test.txt || { echo "::error::jittest failed under the riscv64 JIT"; exit 1; }
+
+    - name: Run JIT fault tests (JIT and interpreter)
+      run: |
+        for t in jit_fault_test jit_ownhandler_test jit_bounds_test utf21_test; do
+          for c in 1 0; do
+            timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/$t.dis -v > $t-c$c.txt 2>&1 < /dev/null || true
+            cat $t-c$c.txt
+            grep -qx PASS $t-c$c.txt && ! grep -q -- '--- FAIL' $t-c$c.txt \
+              || { echo "::error::$t failed with -c$c"; exit 1; }
+          done
+        done
+
+    - name: Run JIT boot smoke test
+      run: |
+        chmod +x tests/host/jit_boot_test.sh
+        EMU="$RUNNER_TEMP/emu-rv" TIMEOUT=600 tests/host/jit_boot_test.sh
+
+  # ─────────────────────────────────────────────
+  # macOS: Build using shipped toolchain, on Apple silicon and on Intel
+  # ─────────────────────────────────────────────
+  macos:
+    name: macOS ${{ matrix.label }} Build & Test
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: ARM64
+            runner: macos-15
+            backstop: 1500  # the suite runs interpreted here (no -c1)
+          # Intel Macs (#786).  macos-15-intel is GitHub's last Intel
+          # macOS image; the job goes when it does.
+          - arch: amd64
+            label: AMD64
+            runner: macos-15-intel
+            backstop: 1800  # an i7-8700B, interpreted: slower still
+    env:
+      ROOT: ${{ github.workspace }}
+      OBJTYPE: ${{ matrix.arch }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1062,52 +1695,52 @@ jobs:
       run: |
         chmod +x makemk.sh
         ./makemk.sh
-        test -x MacOSX/arm64/bin/mk || { echo "mk build failed"; exit 1; }
+        test -x MacOSX/$OBJTYPE/bin/mk || { echo "mk build failed"; exit 1; }
 
     - name: Build system libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
 
         for dir in lib9 libbio libmp libsec libmath; do
           echo "Building $dir..."
-          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+          (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         done
 
     - name: Build limbo compiler
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd limbo && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
-        test -x MacOSX/arm64/bin/limbo || { echo "limbo not found"; exit 1; }
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd limbo && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
+        test -x MacOSX/$OBJTYPE/bin/limbo || { echo "limbo not found"; exit 1; }
 
     - name: Build libinterp and remaining libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd libinterp && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libinterp && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         for dir in libkeyring libmemdraw libmemlayer libdraw; do
           echo "Building $dir..."
-          if ! (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install); then
+          if ! (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install); then
             echo "WARNING: $dir build failed (non-fatal for headless build)"
           fi
         done
         # libtk is REQUIRED: the emu links libtk.a (Tk reintegration), even in
         # the headless build.  Build it after libdraw, and fail hard if it does
         # not build (the emu link would fail with 'libtk.a not found').
-        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
+        (cd libtk && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || { echo "libtk build failed"; exit 1; }
 
     - name: Build headless emulator
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         cd emu/MacOSX
         # GUIBACK=headless (mkfile-gui-headless) is the maintained headless
         # build — no-op display stubs, but it still links SDL3/opus/fido2 that
         # the shared device objects reference.  The old mkfile-g predates the
         # SDL3 reintegration (SYSLIBS lacked SDL) and no longer links.
-        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh "$ROOT/MacOSX/arm64/bin/mk" GUIBACK=headless
+        SYSTARG=MacOSX SHELL=/bin/sh "$ROOT/MacOSX/$OBJTYPE/bin/mk" GUIBACK=headless
         test -f o.emu || { echo "Headless emulator build failed"; exit 1; }
 
     - name: Compile essential dis files
       run: |
-        LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
+        LIMBO="$ROOT/MacOSX/$OBJTYPE/bin/limbo"
 
         # Verify limbo works
         echo "Using limbo: $LIMBO"
@@ -1119,7 +1752,7 @@ jobs:
         cp emuinit.dis dis/
 
         echo "Compiling sh.b..."
-        (cd appl/cmd/sh && ../../../MacOSX/arm64/bin/limbo -I../../../module -gw sh.b && cp sh.dis ../../../dis/)
+        (cd appl/cmd/sh && ../../../MacOSX/$OBJTYPE/bin/limbo -I../../../module -gw sh.b && cp sh.dis ../../../dis/)
 
         # Core commands
         for cmd in cat ls pwd echo date; do
@@ -1132,7 +1765,7 @@ jobs:
         cd appl/lib
         for f in bufio.b string.b readdir.b arg.b; do
           echo "Compiling lib/$f..."
-          "../../MacOSX/arm64/bin/limbo" -I../../module -gw "$f" || echo "WARNING: $f compilation failed"
+          "../../MacOSX/$OBJTYPE/bin/limbo" -I../../module -gw "$f" || echo "WARNING: $f compilation failed"
         done
         cp bufio.dis string.dis readdir.dis arg.dis ../../dis/lib/ 2>/dev/null || true
         cd "$ROOT"
@@ -1149,12 +1782,12 @@ jobs:
 
     - name: Build runtime tree
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:$PATH"
         ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
-        LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
+        LIMBO="$ROOT/MacOSX/$OBJTYPE/bin/limbo"
         mkdir -p dis/lib
 
         # Build testing library
@@ -1194,6 +1827,26 @@ jobs:
           exit 1
         fi
 
+    - name: Run memdraw rasteriser and fast-path checks
+      run: |
+        # libmemdraw/aatest.c: exact coverage, fill rules, strokes, and the
+        # special cases (coverdraw, blenddraw) against the general alphadraw
+        # byte for byte.  Built with this runner's compiler: an unsequenced
+        # temporary in coverdraw passed under clang and drew every
+        # anti-aliased glyph black under gcc.  The libraries are built
+        # above, so a skip (77) here is a failure.
+        ROOT=. sh tests/host/aa_test.sh
+
+    - name: Run sh script-execution check
+      run: |
+        # A script without the execute bit must be reported as such,
+        # not as a missing .dis module (what Xenith's B2 showed), and
+        # must not hide a command later on the path. 77 = skip (no emu).
+        chmod +x tests/host/sh_noexec_script_test.sh
+        rc=0
+        ROOT=. bash tests/host/sh_noexec_script_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test
@@ -1210,7 +1863,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge ${{ matrix.backstop }} ] && { echo "Backstop hit (${{ matrix.backstop }}s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -1218,35 +1871,45 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run port verification
       run: |
         chmod +x verify-port.sh
         ./verify-port.sh
+
+    - name: Run JIT fault and bounds tests (JIT and interpreter)
+      run: |
+        # Gating, unlike the suite above: faults raised from compiled
+        # code must be the interpreter's exceptions, caught by the
+        # handler around them. The arm64 JIT failed both while the
+        # suite's non-gating run hid it.  On Intel this is the amd64
+        # JIT's only macOS hardware.
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/utf21_test.sh
+
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -1287,19 +1950,127 @@ jobs:
         fi
 
     - name: Upload macOS build artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()
       with:
-        name: infernode-macos-arm64
+        name: infernode-macos-${{ matrix.arch }}
         path: |
           emu/MacOSX/o.emu
-          MacOSX/arm64/bin/limbo
-          MacOSX/arm64/bin/mk
+          MacOSX/${{ matrix.arch }}/bin/limbo
+          MacOSX/${{ matrix.arch }}/bin/mk
         retention-days: 14
+
+    # The SDL3 emulator, as the release builds it, and the GUI tests under
+    # SDL's windowless driver: the steps above build the headless one, so
+    # without these nothing that needs a display is tested on a Mac.  On
+    # the Apple Silicon runner only, in this job rather than one of its
+    # own: macos-15 runners are scarce at busy hours, and a job left
+    # queued for one is cancelled.
+    - name: Build SDL3 GUI emulator
+      if: matrix.arch == 'arm64'
+      run: |
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libfreetype && mk install) || true
+        cd emu/MacOSX
+        # the headless build's objects were compiled without -DGUI_SDL3
+        rm -f *.o o.emu
+        SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=sdl3
+        test -f o.emu || { echo "Emulator build failed"; exit 1; }
+        nm o.emu | grep -q sdl3_mainloop || { echo "o.emu is not the SDL3 build"; exit 1; }
+
+    - name: Run GUI tests
+      if: matrix.arch == 'arm64'
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
+        # here (77).
+        failed=
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+          echo "--- $t ---"
+          rc=0
+          ROOT=. sh tests/host/$t.sh || rc=$?
+          case $rc in
+          0)	;;
+          77)	echo "($t skipped)" ;;
+          *)	failed="$failed $t" ;;
+          esac
+        done
+        [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
 
   # ─────────────────────────────────────────────
   # Windows AMD64: MSVC build from source
   # ─────────────────────────────────────────────
+  ios:
+    name: iOS Build & Simulator Test
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    # The iOS scripts drive the host's mk and limbo, and bundle dis/ into
+    # the app, so the host side is built first.
+    - name: Build the host's mk and limbo, and the Dis tree
+      run: |
+        set -e
+        ./makemk.sh
+        export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+        for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$d" && mk install)
+        done
+        for d in appl appl/mpeg appl/veltro tests; do
+          (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
+            grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
+            echo "::error::mk install failed in $d"; exit 1; }
+        done
+
+    - name: Cross-build the simulator slice
+      run: ./build-ios-arm64.sh > /tmp/ios-sim.log 2>&1 || { tail -40 /tmp/ios-sim.log; exit 1; }
+
+    - name: Boot a simulator
+      run: |
+        UDID=$(xcrun simctl list devices available | grep -m1 -E '^ +iPhone' | grep -oE '[0-9A-F-]{36}')
+        test -n "$UDID" || { echo "::error::no iPhone simulator available"; exit 1; }
+        xcrun simctl boot "$UDID"
+        xcrun simctl bootstatus "$UDID"
+
+    # Headless app: boots emu from the bundled root and runs hello_test.
+    - name: Headless app runs a test inside iOS
+      run: ./build-ios-app.sh --verify
+
+    - name: Cache SDL3 for iOS
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/sdks/SDL3-ios-sim-arm64
+        key: sdl3-ios-sim-3.2.26-${{ runner.os }}
+
+    # GUI app: the script launches it but asserts nothing, so watch the
+    # console for the presentation view coming up, the last step of a
+    # Lucifer boot.
+    - name: GUI app boots Lucifer
+      run: |
+        ./build-sdl3-ios.sh > /tmp/sdl3.log 2>&1 || { tail -40 /tmp/sdl3.log; exit 1; }
+        ./build-ios-app.sh --gui
+        xcrun simctl terminate booted os.infernode.ios || true
+        ( xcrun simctl launch --console-pty booted os.infernode.ios > /tmp/ios-gui.log 2>&1 ) &
+        for i in $(seq 1 24); do
+          grep -q 'lucipres: plumb consumer listening' /tmp/ios-gui.log && break
+          sleep 5
+        done
+        grep -vE '^$' /tmp/ios-gui.log | tail -40
+        grep -q 'lucipres: plumb consumer listening' /tmp/ios-gui.log || {
+          echo "::error::Lucifer did not finish booting in the iOS Simulator"; exit 1; }
+
+    # Device slice: compile only. Installing needs signing and hardware.
+    - name: Cross-build the device slice
+      run: |
+        IOSSDK=iphoneos ./build-ios-arm64.sh > /tmp/ios-dev.log 2>&1 || { tail -40 /tmp/ios-dev.log; exit 1; }
+
   windows-amd64:
     name: Windows AMD64 Build & Test
     runs-on: windows-2022
@@ -1367,6 +2138,27 @@ jobs:
           Write-Error "Limbo compiler not built"
           exit 1
         }
+
+    - name: Launchers carry the release's version
+      shell: powershell
+      run: |
+        # InferNode.exe and Xenith.exe take their version (Properties >
+        # Details) from include/version.h, which the release stamps with
+        # its tag; stamp one here as the release does and check both.
+        (Get-Content include\version.h) -replace 'InferNode 0.1', 'InferNode 9.8.7 build ci' | Set-Content include\version.h
+        & .\emu\Nt\build-launcher.ps1
+        if ($LASTEXITCODE -ne 0) { Write-Error "launcher build failed"; exit 1 }
+        foreach ($exe in @('InferNode.exe', 'Xenith.exe')) {
+          $v = (Get-Item "emu\Nt\$exe").VersionInfo
+          Write-Host "$exe : $($v.ProductVersion) / $($v.FileVersion) / $($v.CompanyName)"
+          if ($v.ProductVersion -ne '9.8.7' -or $v.FileVersion -ne '9.8.7' -or
+              $v.FileMajorPart -ne 9 -or $v.FileMinorPart -ne 8 -or $v.FileBuildPart -ne 7 -or
+              $v.CompanyName -ne 'InferNode.io') {
+            Write-Error "$exe has the wrong version info"
+            exit 1
+          }
+        }
+        git checkout -- include\version.h
 
     - name: Run test suite (informational on Windows)
       shell: powershell
@@ -1445,7 +2237,7 @@ jobs:
         Write-Host "JIT benchmarks complete (informational only)."
 
     - name: Upload Windows build artifacts
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()
       with:
         name: infernode-windows-amd64

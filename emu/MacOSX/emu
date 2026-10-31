@@ -51,6 +51,7 @@ mod
 	math
 	srv	srv
 	keyring
+	i420
 #	loader
 #	freetype
 

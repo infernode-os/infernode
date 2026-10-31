@@ -12,6 +12,8 @@ implement MLKEMTest;
 #   - Key uniqueness across keygen calls
 #   - ML-KEM-1024 negative tests
 #   - Stress test (10 iterations)
+#   - FIPS 203 input checks: encapsulation key modulus check (7.2),
+#     decapsulation key hash check (7.3)
 #
 
 include "sys.m";
@@ -451,6 +453,126 @@ testMLKEM1024Stress(t: ref T)
 	t.asserteq(failures, 0, sys->sprint("ML-KEM-1024 stress: %d/5 passed", 5 - failures));
 }
 
+#
+# FIPS 203 input checks. A key that fails them must be refused with
+# "bad encryption key", not used: decode masks to 12 bits and the
+# arithmetic wraps, so an unreduced ek would be treated as another key.
+#
+
+MLKEM_Q: con 3329;
+
+# encaps with pk under ML-KEM-768 (k == 3) or -1024; nil, or what it raised
+encapserr(k: int, pk: array of byte): string
+{
+	{
+		ct: array of byte;
+		if(k == 3)
+			(ct, nil) = kr->mlkem768_encaps(pk);
+		else
+			(ct, nil) = kr->mlkem1024_encaps(pk);
+		if(ct == nil)
+			return "encaps returned nil";
+	} exception e {
+	"*" =>
+		return e;
+	}
+	return nil;
+}
+
+decapserr(k: int, sk, ct: array of byte): string
+{
+	{
+		ss: array of byte;
+		if(k == 3)
+			ss = kr->mlkem768_decaps(sk, ct);
+		else
+			ss = kr->mlkem1024_decaps(sk, ct);
+		if(ss == nil)
+			return "decaps returned nil";
+	} exception e {
+	"*" =>
+		return e;
+	}
+	return nil;
+}
+
+keygen(k: int): (array of byte, array of byte)
+{
+	if(k == 3)
+		return kr->mlkem768_keygen();
+	return kr->mlkem1024_keygen();
+}
+
+# A copy of pk with 12-bit coefficient i of t-hat set to v
+setcoef(pk: array of byte, i: int, v: int): array of byte
+{
+	b := array [len pk] of byte;
+	b[0:] = pk;
+	o := (i / 2) * 3;
+	if(i % 2 == 0) {
+		b[o] = byte v;
+		b[o+1] = (b[o+1] & byte 16rF0) | byte (v >> 8);
+	} else {
+		b[o+1] = (b[o+1] & byte 16r0F) | byte ((v & 16rF) << 4);
+		b[o+2] = byte (v >> 4);
+	}
+	return b;
+}
+
+ekmodulus(t: ref T, k: int)
+{
+	(pk, nil) := keygen(k);
+	if(pk == nil) {
+		t.fatal("keygen failed");
+		return;
+	}
+	last := 256 * k - 1;
+
+	t.assertnil(encapserr(k, pk), "a generated key passes");
+	t.assertnil(encapserr(k, setcoef(pk, 0, MLKEM_Q - 1)), "coefficient q-1 is reduced: accepted");
+	t.assertseq(encapserr(k, setcoef(pk, 0, MLKEM_Q)), "bad encryption key", "first coefficient q: refused");
+	t.assertseq(encapserr(k, setcoef(pk, 1, MLKEM_Q)), "bad encryption key", "odd coefficient q: refused");
+	t.assertseq(encapserr(k, setcoef(pk, last, 4095)), "bad encryption key", "last coefficient 4095: refused");
+}
+
+dkhash(t: ref T, k: int)
+{
+	(pk, sk) := keygen(k);
+	if(pk == nil || sk == nil) {
+		t.fatal("keygen failed");
+		return;
+	}
+	ct: array of byte;
+	if(k == 3)
+		(ct, nil) = kr->mlkem768_encaps(pk);
+	else
+		(ct, nil) = kr->mlkem1024_encaps(pk);
+	if(ct == nil) {
+		t.fatal("encaps failed");
+		return;
+	}
+
+	# sk = dk_pke(384k) || ek || H(ek) || z
+	ekoff := 384 * k;
+	hoff := ekoff + len pk;
+
+	t.assertnil(decapserr(k, sk, ct), "a generated key passes");
+
+	bad := array [len sk] of byte;
+	bad[0:] = sk;
+	bad[hoff] ^= byte 1;
+	t.assertseq(decapserr(k, bad, ct), "bad encryption key", "H(ek) altered: refused");
+
+	bad[0:] = sk;
+	bad[ekoff] ^= byte 1;
+	t.assertseq(decapserr(k, bad, ct), "bad encryption key", "ek inside dk altered: refused");
+}
+
+testMLKEM768EkModulus(t: ref T)	{ ekmodulus(t, 3); }
+testMLKEM1024EkModulus(t: ref T)	{ ekmodulus(t, 4); }
+testMLKEM768DkHash(t: ref T)	{ dkhash(t, 3); }
+testMLKEM1024DkHash(t: ref T)	{ dkhash(t, 4); }
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -490,6 +612,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("MLKEM1024/WrongKey", testMLKEM1024WrongKey);
 	run("MLKEM1024/CtTamper", testMLKEM1024CtTamper);
 	run("MLKEM1024/Stress", testMLKEM1024Stress);
+
+	# FIPS 203 input checks
+	run("MLKEM768/EkModulus", testMLKEM768EkModulus);
+	run("MLKEM1024/EkModulus", testMLKEM1024EkModulus);
+	run("MLKEM768/DkHash", testMLKEM768DkHash);
+	run("MLKEM1024/DkHash", testMLKEM1024DkHash);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

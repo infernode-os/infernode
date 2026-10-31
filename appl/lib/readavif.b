@@ -7,7 +7,8 @@ implement RImagefile;
 #   - ISOBMFF (ISO Base Media File Format) container parsing
 #   - HEIF item and property handling
 #   - AV1 OBU (Open Bitstream Unit) parsing
-#   - AV1 still image decoding (intra-frame)
+#   - AV1 still image decoding: NOT IMPLEMENTED (read refuses; the
+#     sketch in av1_decode_intra_frame, behind AV1SKETCH, is not a decoder)
 #   - Alpha plane (auxiliary items)
 #   - Multi-image (grid items) via readmulti()
 #
@@ -708,6 +709,12 @@ decode_av1_image(data: array of byte, width, height, bit_depth: int): (ref Rawim
 	if(data == nil || len data < 2)
 		return (nil, "AVIF: AV1 data too short");
 
+	# av1_decode_intra_frame does not decode AV1: it fills the planes
+	# with a grey taken from the quantiser.  Refuse, rather than return
+	# a picture that is not the image.
+	if(!AV1SKETCH)
+		return (nil, "AVIF: AV1 image decoding is not implemented");
+
 	# Parse AV1 OBUs
 	bits := ref AV1Bits(data, 0);
 	seq: ref SeqHdr;
@@ -1004,6 +1011,9 @@ parse_seq_header(data: array of byte): (ref SeqHdr, string)
 
 	return (seq, "");
 }
+
+# The AV1 decoder below is a sketch, off unless this is set.
+AV1SKETCH: con 0;
 
 # Decode an AV1 intra frame to RGB pixels
 av1_decode_intra_frame(seq: ref SeqHdr, frame_data: array of byte, width, height, bit_depth: int): (array of int, string)

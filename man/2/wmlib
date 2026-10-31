@@ -13,6 +13,10 @@ init:       fn();
 connect:	fn(ctxt: ref Draw->Context): ref Draw->Wmcontext;
 startinput:	fn(w: ref Draw->Wmcontext, devs: list of string): string;
 wmctl:	fn(w: ref Draw->Wmcontext, request: string): (string, ref Draw->Image, string);
+
+Border:	con 4;
+embedded:	fn(w: ref Draw->Wmcontext): int;
+setlabel:	fn(w: ref Draw->Wmcontext, label: string);
 snarfput:	fn(buf: string);
 snarfget:	fn(): string;
 
@@ -71,6 +75,43 @@ and
 .B snarfput
 retrieve and replace the contents of the window
 manager's snarf buffer.
+.PP
+Every window has the same frame, drawn by
+.IR tkclient (2)
+and
+.IR wmclient (2):
+a line
+.B Border
+pixels wide in the current theme's
+.B windowborder
+colour, inside the window's edge, as
+.IR rio (1)
+draws its windows.
+A press on the frame is the window manager's
+(see
+.IR wm (1));
+it never reaches the client.
+.B Embedded
+asks the window manager, with the request
+.BR embedded ,
+whether it frames and places the window itself,
+as Lucifer's presentation zone and Matrix's panes do;
+if so, the window has no frame of its own.
+A window manager that does not know the request, such as
+.IR wm (1),
+leaves the frame to the window.
+.PP
+.B Setlabel
+tells the window manager the window's label, its title, as
+.IR rio (1)'s
+.B /dev/label
+does;
+.IR wm (1)
+names hidden windows by it.
+.IR Tkclient (2)
+and
+.IR wmclient (2)
+send it when a window is made and whenever its title is set.
 .SH FILES
 .TF /chan/snarf
 .TP

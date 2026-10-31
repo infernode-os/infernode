@@ -22,33 +22,41 @@ ZP  := Point(0,0);
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
+	sys = load Sys Sys->PATH;
+	# exit is a killgrp (wmclient): a group of its own, or it takes
+	# the shell that started it, or wm/wm, with it.  Made here, before
+	# the spawn, so the process that runs on is in it: one made in that
+	# process left the group Lucifer had given init, and Lucifer, seeing
+	# that group empty, took colors for ended as it opened.  Where init
+	# leads its group already (Lucifer's) this changes nothing.
+	sys->pctl(Sys->NEWPGRP, nil);
 	spawn init1(ctxt);
 }
 
 init1(ctxt: ref Draw->Context)
 {
-	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	wmclient->init();
 	menuhit = load Menuhit Menuhit->PATH;
 	menu := ref Menu(array[] of {"exit"}, nil, 0);
 
-	w := wmclient->window(ctxt, "clock", Wmclient->Appl);	# Plain?
+	w := wmclient->window(ctxt, "colors", Wmclient->Appl);	# Plain?
 	display = w.display;
 	tmpi = display.newimage(((0,0), (1, 1)), Draw->RGB24, 0, 0);
 
 	w.reshape(Rect((0, 0), (256, 256)));
 	w.startinput("ptr" :: nil);
 	w.onscreen(nil);
-	i := cmap((256,256));
-	w.image.draw(w.image.r, i, nil, ZP);
+	# the size we get, not the 256x256 asked for: in the presentation
+	# zone the window is the zone's size
+	w.image.draw(w.image.r, cmap((w.image.r.dx(), w.image.r.dy())), nil, ZP);
 	menuhit->init(w);
 
 	for(;;) alt {
 	p := <-w.ctxt.ptr =>
 		if(!w.pointer(*p) && p.buttons &1)
-			color(p.xy);
+			color(w.image.r, p.xy);
 		# Button-2 (desktop middle-click) OR button-3 (touch long-press
 		# synthesised by the SDL3 gesture layer — see emu/port/draw-sdl3.c
 		# touch_lp_* and INFR-160/163) raises the exit menu.
@@ -71,12 +79,13 @@ init1(ctxt: ref Draw->Context)
 	}
 }
 
-color(p: Point)
+# cr is the palette's (the window's) rect: a point inside picks a palette
+# entry, one outside reads the screen pixel under it.
+color(cr: Rect, p: Point)
 {
 	r, g, b: int;
 	col: string;
 
-	cr := display.image.r;
 	if(p.in(cr)){
 		p = p.sub(cr.min);
 		p.x = (16*p.x)/cr.dx();

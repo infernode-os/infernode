@@ -27,10 +27,11 @@ trfs '#U*' /n/local
 
 # 3. Find your macOS home directory
 ghome=/n/local/^`{echo 'echo $HOME' | os sh}
-
-# 4. Create acme-home in your macOS home
-lhome=$ghome^/acme-home
+home=$ghome
 ```
+
+On Windows the profile mounts the C: drive instead (`trfs '#UC:/' /n/local`) and sets
+`ghome=/n/local/Users/$user`.
 
 ### After Profile Runs
 
@@ -77,7 +78,6 @@ Creates `/n` as a mount point directory.
   bound whole from `~/.infernode/usr` (see `docs/PERSISTENCE.md`)
 - `$ghome` - Your macOS home (e.g., `/n/local/Users/<you>`)
 - `$infhome` - `~/.infernode` (durable user state; overlay source)
-- `$lhome` - acme-home directory (`$ghome/acme-home`)
 - `$emuhost` - Host OS type (MacOSX, Linux, Nt)
 
 ### Manual Mounting
@@ -105,7 +105,6 @@ This is executed automatically on startup.
 After profile runs:
 - `/n/local` - Your entire macOS filesystem
 - `/n/local/Users/pdfinn` - Your macOS home
-- `$lhome/acme-home` - Persistent acme workspace
 - `/usr/<user>` - Durable Inferno home tree (bound from `~/.infernode/usr`)
 - `/tmp` - Temporary files (bound from `~/.infernode/tmp`)
 

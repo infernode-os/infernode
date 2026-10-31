@@ -17,7 +17,9 @@ is the **relative** cost between algorithms and ciphers and a repeatable method.
 Run on the target hardware for real numbers.
 
 ```sh
-# build, then run from the repo root:
+# No mkfile builds this and it has no PATH constant, so neither mk install
+# nor tools/compile-limbo.sh handles it: compile it with the native limbo.
+# Then run from the repo root:
 limbo -I module -o dis/tests/bench/bench_node.dis tests/bench/bench_node.b
 ./emu/Linux/o.emu -c1 -r$PWD /dis/tests/bench/bench_node.dis [mode [iters [MiB]]]
 #   mode  : all (default) | lat | tp

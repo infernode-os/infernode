@@ -10,8 +10,16 @@
 #include "interp.h"
 #include "raise.h"
 
+/*
+ * INFERNO_NATIVE: built into a bare-metal kernel (os/), which has no
+ * mmap and needs none. See the allocation sites below.
+ */
+#ifdef INFERNO_NATIVE
+extern void	cacheiflush(void*, ulong);
+#else
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 /*
  * Apple's per-thread W^X JIT controls (pthread_jit_write_protect_np and
@@ -93,6 +101,7 @@ enum
 	WRTPC	= (1<<2),
 	TCHECK	= (1<<3),
 	NEWPC	= (1<<4),
+	MODCHK	= (1<<7),	/* the op may have made R.M an interpreted module (IMCALL) */
 	DBRAN	= (1<<5),
 	THREOP	= (1<<6),
 
@@ -106,6 +115,8 @@ enum
 	MacMFRA,
 	MacRELQ,
 	MacBNDS,
+	MacZDIV,
+	MacNIL,
 	NMACRO
 };
 
@@ -283,6 +294,13 @@ enum
 static	u32int*	code;
 static	u32int*	base;
 static	ulong*	patch;
+static	int	incompile;	/* #635 tripwire: compile() is not reentrant */
+
+void
+compiledone(void)
+{
+	incompile = 0;
+}
 static	ulong	codeoff;
 static	int	pass;
 static	Module*	mod;
@@ -301,11 +319,13 @@ static	void	macfram(void);
 static	void	macmfra(void);
 static	void	macrelq(void);
 static	void	macbounds(void);
+static	void	maczdiv(void);
+static	void	macnil(void);
 static	void	movmem(Inst*);
 static	void	mid(Inst*, int, int);
 static	void	mem(int, long, int, int);
 static	void	memfl(int, long, int, int);
-static	void	bcondbra(int, int);
+static	void	faultif(int, int);
 static	void	bradis(int);
 static	void	bramac(int);
 static	void	blmac(int);
@@ -329,6 +349,8 @@ static struct
 	{ MacMFRA,	macmfra,	"MFRA" },
 	{ MacRELQ,	macrelq,	"RELQ" },
 	{ MacBNDS,	macbounds,	"BNDS" },
+	{ MacZDIV,	maczdiv,	"ZDIV" },
+	{ MacNIL,	macnil,		"NIL" },
 };
 
 /*
@@ -406,6 +428,18 @@ bounds(void)
 	error(exBounds);
 }
 
+static void
+zdiv(void)
+{
+	error(exZdiv);
+}
+
+static void
+nilref(void)
+{
+	error(exNilref);
+}
+
 /*
  * con — load a 64-bit constant into register rd.
  * Always emits exactly 4 instructions for phase consistency.
@@ -420,55 +454,36 @@ con(uvlong val, int rd)
 }
 
 /*
- * bcondbra — emit B.cond to a macro.
+ * faultif — call fault macro macidx if cond holds.
  *
- * ARM64 B.cond has a 19-bit signed immediate (±1MB byte range), but
- * macros sit at the very end of the JIT'd module and large modules
- * (limbo.dis pushes the bounds-check macro past 1MB) can place them
- * out of B.cond reach. When that happens we emit a long-form
- * trampoline:
+ * Always two slots, the same in both passes:
  *
- *     B.<inv_cond> +2     ; skip the unconditional B if !cond
- *     B            target ; 26-bit imm = ±128MB, easily reaches macro
- *     ; fallthrough is the instruction after the B
+ *     B.<inv_cond> +2     ; no fault: skip the call
+ *     BL           macro  ; 26-bit imm = ±128MB, reaches the macros
  *
- * To keep pass 0 (sizing) and pass 1 (emit) layouts in lock-step we
- * always reserve TWO instruction slots for bcondbra. The short-form
- * case pads with a NOP so patch[] / macro[] positions stay valid.
- *
- * Refs: INFR-22.
+ * It is a call, not a branch, so the macro has the link: a PC inside
+ * the faulting Dis instruction, which it stores as R.PC for handler().
+ * This was a B.cond straight to the macro (bcondbra, INFR-22 for its
+ * reach); the macro then raised the error with R.PC still naming the
+ * last call, so handler() looked in the wrong place, and a {...}
+ * exception block around an out-of-range index did not catch it.
  */
 static void
-bcondbra(int cond, int macidx)
+faultif(int cond, int macidx)
 {
 	long off;
 
+	BCOND(cond ^ 1, 2);
 	if(pass == 0) {
-		/* reserve two slots; pass 1 picks short or long form */
-		BCOND(cond, 0);
-		NOP_INSN();
+		BL_IMM(0);
 		return;
 	}
 	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
-	if(off <= 0x3FFFF && off >= -0x40000) {
-		/* short form: direct B.cond + NOP padding */
-		BCOND(cond, off);
-		NOP_INSN();
-		return;
-	}
-	/*
-	 * long form: invert condition, fall through to the unconditional
-	 * B when cond is true. The B's offset is one instruction past the
-	 * BCOND we're about to emit, so subtract 1 from `off`.
-	 */
-	BCOND(cond ^ 1, 2);
-	off -= 1;
 	if(off > 0x1FFFFFF || off < -0x2000000) {
-		print("bcondbra long-form overflow: off=%ld macidx=%d\n",
-			off, macidx);
-		urk("bcondbra: branch too far even in long form");
+		print("faultif overflow: off=%ld macidx=%d\n", off, macidx);
+		urk("faultif: branch too far");
 	}
-	B_IMM(off);
+	BL_IMM(off);
 }
 
 /*
@@ -872,6 +887,18 @@ punt(Inst *i, int m, void (*fn)(void))
 {
 	ulong pc;
 
+	/*
+	 * R.PC is always written for a real instruction, not only for the
+	 * ops that read it: an op that raises (a string index, a slice, a
+	 * conversion) then leaves R.PC inside this instruction, and the
+	 * exception finds this instruction's handler, as comp-riscv64.c's
+	 * puntop does.  It was written for WRTPC ops only, so a string
+	 * index out of range inside a {...} exception block was not caught
+	 * (tests/jit_bounds_test.b).  macret's dummy IRET is not one.
+	 */
+	if(i >= mod->prog && i < mod->prog + mod->nprog)
+		m |= WRTPC;
+
 	if(m & SRCOP) {
 		if(UXSRC(i->add) == SRC(AIMM))
 			literal(i->s.imm, O(REG, s));
@@ -930,6 +957,25 @@ punt(Inst *i, int m, void (*fn)(void))
 	mem(Ldw, O(REG, MP), RREG, RMP);
 
 	if(m & NEWPC) {
+		/*
+		 * IMCALL is punted, and OP(mcall) leaves R.M the callee and
+		 * R.PC its entry. If the callee was compiled that is native
+		 * code and the branch below is right; if it was not -- the
+		 * JIT switched off at run time, or a module built with
+		 * limbo -C -- R.PC is a Dis Inst array, and branching to it
+		 * executes bytecode as instructions: a kernel panic on the
+		 * board and a SEGV in JIT code hosted (#687). The interpreter
+		 * takes it from here instead, through xpc, exactly as
+		 * macret() hands a return to an interpreted caller back.
+		 * amd64 inlines the call and makes the same test.
+		 */
+		if(m & MODCHK) {
+			mem(Ldw, O(REG, M), RREG, RA0);
+			mem(Ldw32, O(Modlink, compiled), RA0, RA0);
+			CBNZ_X(RA0, 3);
+			mem(Ldw, O(REG, xpc), RREG, RTA);
+			BR_REG(RTA);
+		}
 		mem(Ldw, O(REG, PC), RREG, RTA);
 		BR_REG(RTA);
 	}
@@ -1057,7 +1103,9 @@ comcase(Inst *i, int w)
 		t[2] = RELPC(patch[t[2]]);
 		t += 3;
 	}
-	t[0] = RELPC(patch[t[0]]);
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	if(t[0] >= 0)
+		t[0] = RELPC(patch[t[0]]);
 }
 
 static void
@@ -1086,7 +1134,9 @@ comcasel(Inst *i)
 		t[2] = RELPC(patch[t[2]]);
 		t += 4;
 	}
-	t[0] = RELPC(patch[t[0]]);
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	if(t[0] >= 0)
+		t[0] = RELPC(patch[t[0]]);
 }
 
 static void
@@ -1350,7 +1400,7 @@ comp(Inst *i)
 		int flags = SRCOP|DSTOP;
 		switch(i->op) {
 		case IMCALL:
-			flags = SRCOP|DSTOP|THREOP|WRTPC|NEWPC;
+			flags = SRCOP|DSTOP|THREOP|WRTPC|NEWPC|MODCHK;
 			break;
 		case ISEND: case IRECV: case IALT:
 			flags = SRCOP|DSTOP|TCHECK|WRTPC;
@@ -1406,7 +1456,7 @@ comp(Inst *i)
 
 	/* ---- Punted opcodes ---- */
 	case IMCALL:
-		punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC, optab[i->op]);
+		punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC|MODCHK, optab[i->op]);
 		break;
 	case ISEND:
 	case IRECV:
@@ -1547,35 +1597,51 @@ comp(Inst *i)
 		break;
 
 	/* ---- Arithmetic (word) ---- */
+	/*
+	 * Every w result is sign-extended before it is stored: a Limbo int
+	 * is 32 bits living in a 64-bit slot, and the slot must hold it
+	 * canonically or 64-bit compares and conversions read junk (CW()
+	 * in xec.c says why). A 64-bit operation followed by SXTW is
+	 * exactly 32-bit wraparound.
+	 */
 	case IADDW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ADD_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ISUBW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		SUB_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IMULW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
 		MUL_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IDIVW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM32(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA0, RA0, RA1);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IMODW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM32(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1601,12 +1667,16 @@ comp(Inst *i)
 	case IDIVB:
 		opwld(i, Ldb, RA1);
 		mid(i, Ldb, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA0, RA0, RA1);
 		opwst(i, Stb, RA0);
 		break;
 	case IMODB:
 		opwld(i, Ldb, RA1);
 		mid(i, Ldb, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
 		opwst(i, Stb, RA0);
@@ -1634,12 +1704,16 @@ comp(Inst *i)
 	case IDIVL:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA0, RA0, RA1);
 		opwst(i, Stw, RA0);
 		break;
 	case IMODL:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
 		opwst(i, Stw, RA0);
@@ -1650,18 +1724,21 @@ comp(Inst *i)
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		AND_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IORW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ORR_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IXORW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		EOR_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1710,18 +1787,22 @@ comp(Inst *i)
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		LSLV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ISHRW:
 		mid(i, Ldw, RA1);
 		opwld(i, Ldw, RA0);
 		ASRV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case ILSRW:
+		/* logical: shift the 32-bit value zero-extended, or the slot's sign bits would shift in */
 		mid(i, Ldw, RA1);
-		opwld(i, Ldw, RA0);
+		opwld(i, Ldw32, RA0);
 		LSRV_REG(RA0, RA1, RA0);
+		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 
@@ -1930,7 +2011,7 @@ comp(Inst *i)
 	case IINDB:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacBNDS);
 		if(bflag)
 			mem(Ldw, O(Array, len), RA0, RA2);
 		mem(Ldw, O(Array, data), RA0, RA0);
@@ -1944,8 +2025,20 @@ comp(Inst *i)
 		}
 		if(UXDST(i->add) == DST(AIMM)) {
 			if(bflag) {
-				CMP_IMM(RA2, i->d.imm);
-				bcondbra(LS, MacBNDS);
+				/*
+				 * CMP (immediate) takes 12 bits: a negative
+				 * or larger literal index (a[-1], a[5000])
+				 * would be encoded into the wrong instruction.
+				 * Sign-extended into a register it compares
+				 * unsigned with the length like any other.
+				 */
+				if(i->d.imm >= 0 && i->d.imm < 4096)
+					CMP_IMM(RA2, i->d.imm);
+				else {
+					con((uvlong)(vlong)i->d.imm, RCON);
+					CMP_REG(RA2, RCON);
+				}
+				faultif(LS, MacBNDS);
 			}
 			{
 				long off = (r > 0) ? ((long)i->d.imm << r) : i->d.imm;
@@ -1961,7 +2054,7 @@ comp(Inst *i)
 			SXTW(RA1, RA1);	/* index is Dis int (32-bit) */
 			if(bflag) {
 				CMP_REG(RA2, RA1);
-				bcondbra(LS, MacBNDS);
+				faultif(LS, MacBNDS);
 			}
 			if(r > 0) {
 				con(r, RCON);
@@ -1974,13 +2067,13 @@ comp(Inst *i)
 	case IINDX:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacBNDS);
 		opwst(i, Ldw, RA1);
 		SXTW(RA1, RA1);	/* index is Dis int (32-bit) */
 		if(bflag) {
 			mem(Ldw, O(Array, len), RA0, RA2);
 			CMP_REG(RA2, RA1);
-			bcondbra(LS, MacBNDS);
+			faultif(LS, MacBNDS);
 		}
 		mem(Ldw, O(Array, t), RA0, RA2);
 		mem(Ldw, O(Array, data), RA0, RA0);
@@ -1997,7 +2090,7 @@ comp(Inst *i)
 	case ITAIL:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldw, O(List, tail), RA0, RA1);
 		goto movp;
 	case IMOVP:
@@ -2006,7 +2099,7 @@ comp(Inst *i)
 	case IHEADP:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldw, OA(List, data), RA0, RA1);
 	movp:
 		CMN_IMM(RA1, 1);
@@ -2028,14 +2121,14 @@ comp(Inst *i)
 	case IHEADF:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldw, OA(List, data), RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IHEADB:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldb, OA(List, data), RA0, RA0);
 		opwst(i, Stb, RA0);
 		break;
@@ -2044,7 +2137,7 @@ comp(Inst *i)
 	case IHEADM:
 		opwld(i, Ldw, RA1);
 		CMN_IMM(RA1, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		ADD_IMM(RA1, RA1, OA(List, data));
 		movmem(i);
 		break;
@@ -2124,7 +2217,20 @@ preamble(void)
 		return;
 
 	sz = 64 * sizeof(u32int);
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	/*
+	 * No mmap on bare metal, and no need for one: the kernel maps all
+	 * RAM without PXN/UXN, so ordinary kernel memory is already
+	 * executable. That is RWX everywhere -- a weaker posture than the
+	 * hosted builds, which deliberately keep JIT pages off the heap
+	 * (see the module-code site below). Making it W^X here means an
+	 * executable-only pool and page-granular mappings; this port maps
+	 * in 2MB blocks today.
+	 */
+	comvec = malloc(sz);
+	if(comvec == nil)
+		error(exNomem);
+#elif defined(APPLE_JIT)
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
@@ -2180,7 +2286,9 @@ preamble(void)
 		code = save;
 	}
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	cacheiflush(start, sz);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2198,22 +2306,44 @@ preamble(void)
 /*
  * Macro implementations.
  */
+/*
+ * Free-pointer macro: drop one reference to the heap cell in RA0.
+ *
+ * The shape is comp-amd64.c's, and the two things it gets right are
+ * both load-bearing. The test is "ref == 1" BEFORE any decrement, and
+ * the last-reference path does not store one: destroy() in heap.c
+ * does its own --ref, so a macro that stored ref-1 first would hand
+ * it a zero, the unsigned decrement would wrap, and the cell would
+ * read as referenced for ever. And the flags the branch consumes are
+ * set by the compare on the refcount, not left over from the nil
+ * check. The previous version did SUB_IMM (which sets no flags) and
+ * then BCOND(NE) on the nil check's flags, always NE for a non-nil
+ * pointer, so rdestroy was unreachable and no compiled code ever ran
+ * a destructor: a dropped fd stayed open until the collector found
+ * it. Found by reading; confirmed by etherusb's #l handoff, whose
+ * endpoint stayed "inuse" after fd = nil.
+ */
 static void
 macfrp(void)
 {
-	u32int *nilcheck, *notzero;
+	u32int *nilcheck, *lastref;
 
-	CMN_IMM(RA0, 1);
+	CMN_IMM(RA0, 1);		/* H is (void*)-1: nothing to count */
 	nilcheck = code;
 	BCOND(EQ, 0);
 
 	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
+	CMP_IMM(RA2, 1);
+	lastref = code;
+	BCOND(EQ, 0);
+
+	/* ref > 1: one fewer, and done */
 	SUB_IMM(RA2, RA2, 1);
 	mem(Stw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
-	notzero = code;
-	BCOND(NE, 0);
+	RET_X30();
 
-	/* ref == 0: save state, call rdestroy */
+	/* ref == 1: save state, let rdestroy take the last one */
+	PATCH_BCOND(lastref);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, s), RREG, RA0);
 	mem(Stw, O(REG, st), RREG, 30);
@@ -2225,7 +2355,6 @@ macfrp(void)
 	mem(Ldw, O(REG, MP), RREG, RMP);
 
 	PATCH_BCOND(nilcheck);
-	PATCH_BCOND(notzero);
 	RET_X30();
 }
 
@@ -2259,7 +2388,7 @@ static void
 macret(void)
 {
 	u32int *notypelab, *nodestroylab, *nofplab, *nomrlab, *noreflab;
-	u32int *linterp;
+	u32int *linterp, *nolrlab;
 	Inst dummy;
 
 	CBZ_X(RA1, 0);
@@ -2292,9 +2421,17 @@ macret(void)
 	CBZ_X(RA3, 0);
 	linterp = code - 1;
 
-	/* Compiled: call destroy, jump to lr */
-	BLR_REG(RA0);
+	/*
+	 * Compiled: call destroy, jump to lr.  R.SP comes down to the
+	 * frame before destroy runs, as OP(ret) does it, on all three
+	 * paths here.  destroy can release the VM (closing a file in
+	 * freeFD), and the collector on another thread then walks this
+	 * Prog's frames up to R.SP (gc.c, rootset): left above, it walks
+	 * the frame being destroyed and marks the cells already freed
+	 * out of it, writing into the pool's free blocks.
+	 */
 	mem(Stw, O(REG, SP), RREG, RFP);
+	BLR_REG(RA0);
 	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
 	mem(Stw, O(REG, FP), RREG, RFP);
@@ -2302,8 +2439,8 @@ macret(void)
 
 	/* Not compiled: return to interpreter */
 	PATCH_BCOND(linterp);
-	BLR_REG(RA0);
 	mem(Stw, O(REG, SP), RREG, RFP);
+	BLR_REG(RA0);
 	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
 	mem(Stw, O(REG, PC), RREG, RA1);
@@ -2311,12 +2448,33 @@ macret(void)
 	mem(Ldw, O(REG, xpc), RREG, RTA);
 	BR_REG(RTA);
 
+	/*
+	 * No mr: a return within the module, which is every return of a
+	 * recursive function. The module is the one running, so it is
+	 * compiled and lr is native code: call destroy and jump to lr, as
+	 * amd64's macret does. This used to punt to OP(ret) and re-enter
+	 * through R.PC, a C call and a dispatch on every such return, and
+	 * recursion ran no faster than the interpreter (#689). lr is
+	 * tested before destroy is called, so the punt below never runs
+	 * destroy twice.
+	 */
+	PATCH_BCOND(nomrlab);
+	mem(Ldw, O(Frame, lr), RFP, RA1);
+	CBZ_X(RA1, 0);
+	nolrlab = code - 1;
+	mem(Stw, O(REG, SP), RREG, RFP);
+	BLR_REG(RA0);
+	mem(Ldw, O(Frame, lr), RFP, RA1);
+	mem(Ldw, O(Frame, fp), RFP, RFP);
+	mem(Stw, O(REG, FP), RREG, RFP);
+	BR_REG(RA1);
+
 	/* Punt fallback */
 	PATCH_BCOND(notypelab);
 	PATCH_BCOND(nodestroylab);
 	PATCH_BCOND(nofplab);
-	PATCH_BCOND(nomrlab);
 	PATCH_BCOND(noreflab);
+	PATCH_BCOND(nolrlab);
 	dummy.add = AXNON;
 	punt(&dummy, TCHECK|NEWPC, optab[IRET]);
 }
@@ -2504,11 +2662,39 @@ macrelq(void)
 	BR_REG(RTA);
 }
 
+/*
+ * The fault macros.  Reached by faultif's BL from inside the faulting
+ * instruction, so X30 is a PC in that instruction: handler() takes
+ * R.PC as a return address, subtracts one and lands inside it.  R.FP
+ * is stored too, as the riscv64 JIT does, so the search starts from
+ * the frame the fault is in.
+ */
+static void
+macfault(void (*fn)(void))
+{
+	mem(Stw, O(REG, FP), RREG, RFP);
+	mem(Stw, O(REG, PC), RREG, 30);	/* R.PC = LR (X30) */
+	con((uvlong)fn, RTA);
+	BLR_REG(RTA);
+	*code++ = 0xD4200000;	/* BRK #0: fn raises, it does not return */
+}
+
 static void
 macbounds(void)
 {
-	con((uvlong)bounds, RTA);
-	BLR_REG(RTA);
+	macfault(bounds);
+}
+
+static void
+maczdiv(void)
+{
+	macfault(zdiv);
+}
+
+static void
+macnil(void)
+{
+	macfault(nilref);
 }
 
 /*
@@ -2572,6 +2758,8 @@ comd(Type *t)
 #define TYPECOM_PERPTR	24
 #define TYPECOM_SLACK	1024
 
+#define Typejithdr	16	/* the mapping's length, in front of a type's code; keeps the code 16-aligned */
+
 void
 typecom(Type *t)
 {
@@ -2618,9 +2806,18 @@ typecom(Type *t)
 	}
 	free(tmp);
 
-	sz = n * sizeof(u32int);
+	/*
+	 * The code is a mapping of its own, and a mapping is unmapped by
+	 * length, which Type does not carry: so the length goes in a header
+	 * in front of the code, where freetypejit() finds it.
+	 */
+	sz = n * sizeof(u32int) + Typejithdr;
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	start = malloc(sz);
+	if(start == nil)
+		return;
+#elif defined(APPLE_JIT)
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(start == MAP_FAILED)
@@ -2633,13 +2830,16 @@ typecom(Type *t)
 		return;
 #endif
 
-	code = start;
+	*(ulong*)start = sz;
+	code = (u32int*)((uchar*)start + Typejithdr);
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
 	comd(t);
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	cacheiflush(start, sz);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(start, sz);
 #else
@@ -2671,6 +2871,27 @@ patchex(Module *m, ulong *p)
 }
 
 /*
+ * Release a type's compiled initialize/destroy code: a mapping, with
+ * its length in the header typecom() put in front of it.
+ */
+void
+freetypejit(Type *t)
+{
+	uchar *base;
+
+	if(t == nil || t->initialize == nil)
+		return;
+	base = (uchar*)t->initialize - Typejithdr;
+#ifdef INFERNO_NATIVE
+	free(base);		/* typecom() took it from the pool: there is no mmap in a kernel */
+#else
+	munmap(base, *(ulong*)base);
+#endif
+	t->initialize = nil;
+	t->destroy = nil;
+}
+
+/*
  * Release a compiled module's executable text.  Called from freemod()
  * when the module's last reference goes away (INFR-421).  Without it
  * every compiled module's mapping leaked for the life of the process.
@@ -2680,7 +2901,13 @@ freejitcode(void *p, ulong size)
 {
 	if(p == nil || size == 0)
 		return;
+#ifdef INFERNO_NATIVE
+	/* the text came from malloc: see the allocation sites above */
+	USED(size);
+	free(p);
+#else
 	munmap(p, size);
+#endif
 }
 
 int
@@ -2696,6 +2923,17 @@ compile(Module *m, int size, Modlink *ml)
 
 	ulong tmpsize;
 
+	/*
+	 * #635 tripwires. The compiler's state -- base, patch, mod, code
+	 * -- is static: a second compile() entered before the first has
+	 * returned would relocate the first module's entries with the
+	 * second's tables, and every compiled address is base+patch[idx],
+	 * so a wrong table gives exactly the "prog - 1" the board keeps
+	 * printing (patch[idx] read as all-ones). Say so at once.
+	 */
+	if(incompile)
+		panic("compile: re-entered while compiling %s (this: %s)", mod? mod->name : "?", m->name);
+	incompile = 1;
 	base = nil;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
@@ -2768,7 +3006,11 @@ compile(Module *m, int size, Modlink *ml)
 		codesize += pagesz;	/* extra guard page */
 	}
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	base = malloc(codesize);
+	if(base == nil)
+		goto bad;
+#elif defined(APPLE_JIT)
 	base = mmap(0, codesize, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(base == MAP_FAILED) {
@@ -2840,7 +3082,25 @@ compile(Module *m, int size, Modlink *ml)
 
 	if(cflag > 3)
 		print("A: mod->entry=%.8p\n", mod->entry);
+	/*
+	 * A module's exported global data -- the ".mp" link, which the
+	 * compiler emits with pc -1 and load.c admits as a sentinel -- is
+	 * not code and has no entry in patch[]: relocating it read
+	 * patch[-1], the pool word before the array, and gave the link
+	 * base + whatever that was, which for a block header is often
+	 * all-ones, so base - 1. That is the "misaligned R.PC = prog - 1"
+	 * of #635, found by the tripwire below on the board: "compile IP:
+	 * export .mp pc index -1". The sentinel stays a sentinel.
+	 */
 	for(l = m->ext; l->name; l++) {
+		if(l->u.pc - m->prog == -1){
+			l->u.pc = (Inst*)-1;
+			typecom(l->frame);
+			continue;
+		}
+		if(l->u.pc - m->prog < 0 || l->u.pc - m->prog > size)
+			panic("compile %s: export %s pc index %ld outside 0..%d (already relocated?)",
+				m->name, l->name, (long)(l->u.pc - m->prog), size);
 		l->u.pc = (Inst*)RELPC(patch[l->u.pc - m->prog]);
 		typecom(l->frame);
 	}
@@ -2849,6 +3109,15 @@ compile(Module *m, int size, Modlink *ml)
 	if(ml != nil) {
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
+			if(e->u.pc - m->prog == -1){
+				e->u.pc = (Inst*)-1;
+				typecom(e->frame);
+				e++;
+				continue;
+			}
+			if(e->u.pc - m->prog < 0 || e->u.pc - m->prog > size)
+				panic("compile %s: link %d pc index %ld outside 0..%d (already relocated?)",
+					m->name, i, (long)(e->u.pc - m->prog), size);
 			e->u.pc = (Inst*)RELPC(patch[e->u.pc - m->prog]);
 			typecom(e->frame);
 			e++;
@@ -2874,9 +3143,24 @@ compile(Module *m, int size, Modlink *ml)
 				eidx, (void*)RELPC(patch[eidx]));
 		m->entry = (Inst*)RELPC(patch[eidx]);
 	}
+	/*
+	 * the code's offsets in bytes, as pc2dispc reads them (the profiler,
+	 * a Prog's stack): they were counted in instructions
+	 */
+	for(i = 0; i <= size; i++)
+		patch[i] *= sizeof(u32int);
 	m->pctab = patch;
 
-#ifdef APPLE_JIT
+#ifdef INFERNO_NATIVE
+	/*
+	 * The icache maintenance is load-bearing on real silicon and
+	 * invisible under emulation: QEMU's TCG does not model split
+	 * I/D caches, so a JIT that skips this works perfectly in QEMU
+	 * and executes stale instructions on a Cortex-A53. Any change
+	 * here has to be validated on the board.
+	 */
+	cacheiflush(base, codesize);
+#elif defined(APPLE_JIT)
 	pthread_jit_write_protect_np(1);
 	sys_icache_invalidate(base, codesize);
 #else
@@ -2899,13 +3183,19 @@ compile(Module *m, int size, Modlink *ml)
 	m->compiled = 1;
 	free(tinit);
 	free(tmp);
+	compiledone();
 	return 1;
 bad:
+	compiledone();
 	free(patch);
 	free(tinit);
 	free(tmp);
 	if(base != nil && codesize != 0)
+#ifdef INFERNO_NATIVE
+		free(base);
+#else
 		munmap(base, codesize);
+#endif
 	base = nil;
 	return 0;
 }

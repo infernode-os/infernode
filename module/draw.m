@@ -39,6 +39,10 @@ Draw: module
 	Enddisc:	con 1;
 	Endarrow:	con 2;
 
+	# ends and joins for Image.strokepath
+	Capbutt, Capround, Capsquare:	con iota;
+	Joinmiter, Joinround, Joinbevel:	con iota;
+
 	# flush control
 	Flushoff:	con 0;
 	Flushon:	con 1;
@@ -139,6 +143,25 @@ Draw: module
 	};
 
 	# a picture; if made by Screen.newwindow, a window.  always attached to a Display
+	# An anti-aliased shape, for Image.fillpath and Image.strokepath.
+	# Coordinates are real: the pixel (x, y) covers x ≤ X < x+1,
+	# y ≤ Y < y+1, so its centre is (x+0.5, y+0.5).  Each method adds
+	# to the path and returns it, so calls can be chained.
+	Path: adt
+	{
+		data:	array of byte;	# the path as the draw device takes it (draw(3))
+		n:	int;		# bytes of data in use
+		x, y:	int;		# the last point, fixed point
+
+		new:	fn(): ref Path;
+		moveto:	fn(p: self ref Path, x, y: real): ref Path;
+		lineto:	fn(p: self ref Path, x, y: real): ref Path;
+		quadto:	fn(p: self ref Path, x1, y1, x, y: real): ref Path;
+		curveto:	fn(p: self ref Path, x1, y1, x2, y2, x, y: real): ref Path;
+		ellipse:	fn(p: self ref Path, cx, cy, a, b: real): ref Path;
+		close:	fn(p: self ref Path): ref Path;
+	};
+
 	Image: adt
 	{
 		# these data are local copies, but repl and clipr
@@ -179,6 +202,10 @@ Draw: module
 		bezier:	fn(dst: self ref Image, a,b,c,d: Point, end0,end1,radius: int, src: ref Image, sp: Point);
 		fillbezierop:	fn(dst: self ref Image, a,b,c,d: Point, wind:int, src: ref Image, sp: Point, op: int);
 		fillbezier:	fn(dst: self ref Image, a,b,c,d: Point, wind:int, src: ref Image, sp: Point);
+		fillpathop:	fn(dst: self ref Image, p: ref Path, wind: int, src: ref Image, sp: Point, op: int);
+		fillpath:	fn(dst: self ref Image, p: ref Path, wind: int, src: ref Image, sp: Point);
+		strokepathop:	fn(dst: self ref Image, p: ref Path, width: real, cap, join: int, src: ref Image, sp: Point, op: int);
+		strokepath:	fn(dst: self ref Image, p: ref Path, width: real, cap, join: int, src: ref Image, sp: Point);
 		textop:		fn(dst: self ref Image, p: Point, src: ref Image, sp: Point, font: ref Font, str: string, op: int): Point;
 		text:		fn(dst: self ref Image, p: Point, src: ref Image, sp: Point, font: ref Font, str: string): Point;
 		textbgop:		fn(dst: self ref Image, p: Point, src: ref Image, sp: Point, font: ref Font, str: string, bg: ref Image, bgp: Point, op: int): Point;

@@ -319,6 +319,7 @@ Push-Location "$ROOT\libmemdraw"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $mdSrc = @(
+    "aa.c", "aapath.c",
     "arc.c", "cmap.c", "cread.c", "defont.c", "ellipse.c", "fillpoly.c",
     "hwdraw.c", "icossin.c", "icossin2.c", "iprint.c", "line.c",
     "openmemsubfont.c", "poly.c", "read.c", "string.c", "subfont.c", "write.c",
@@ -358,7 +359,7 @@ $drawSrc = @(
     "buildfont.c", "bytesperline.c", "chan.c", "cloadimage.c", "computil.c",
     "creadimage.c", "defont.c", "draw.c", "drawrepl.c", "ellipse.c",
     "font.c", "freesubfont.c", "getdefont.c", "getsubfont.c", "init.c",
-    "line.c", "mkfont.c", "openfont.c", "poly.c", "loadimage.c",
+    "line.c", "mkfont.c", "openfont.c", "path.c", "poly.c", "loadimage.c",
     "readimage.c", "readsubfont.c", "rectclip.c", "replclipr.c", "rgb.c",
     "string.c", "stringbg.c", "stringsubfont.c", "stringwidth.c",
     "subfont.c", "subfontcache.c", "subfontname.c", "unloadimage.c",

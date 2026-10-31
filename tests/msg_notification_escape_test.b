@@ -5,23 +5,28 @@ include "sys.m";
 include "draw.m";
 
 MsgNotificationEscape: module {
-	init: fn(nil: ref Draw->Context, nil: list of string);
+	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-init(nil: ref Draw->Context, nil: list of string)
+fail(msg: string)
+{
+	sys->print("MSGESCAPE: FAIL %s\n", msg);
+	raise "fail:msgescape";
+}
+
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	if(tl args == nil || hd tl args != "check")
+		raise "skip:helper for tests/inferno/msg_notification_escape.sh, which runs it";
+
 	fd := sys->open("/mnt/msg/notify", Sys->OREAD);
-	if(fd == nil) {
-		sys->print("MSGESCAPE: FAIL cannot open /mnt/msg/notify: %r\n");
-		return;
-	}
+	if(fd == nil)
+		fail(sys->sprint("cannot open /mnt/msg/notify: %r"));
 	buf := array[16384] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0) {
-		sys->print("MSGESCAPE: FAIL empty notification\n");
-		return;
-	}
+	if(n <= 0)
+		fail("empty notification");
 	s := string buf[0:n];
 	mids := linecount(s, "Message ID: ");
 	triage := linecount(s, "Triage: ");
@@ -38,7 +43,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	   !hasspooftriage && hastrustedfooter)
 		sys->print("MSGESCAPE: PASS hostile fields cannot inject notification control lines\n");
 	else
-		sys->print("MSGESCAPE: FAIL notification field escaping regression\n");
+		fail("notification field escaping regression");
 }
 
 linecount(hay, prefix: string): int

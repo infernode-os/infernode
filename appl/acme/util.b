@@ -136,19 +136,22 @@ setenv(s, t : string)
 
 stob(s : string, n : int) : array of byte
 {
-	b := array[2*n] of byte;
+	b := array[Dat->SZRUNE*n] of byte;
 	for (i := 0; i < n; i++) {
-		b[2*i] = byte (s[i]&16rff);
-		b[2*i+1] = byte ((s[i]>>8)&16rff);
+		c := s[i];
+		b[4*i] = byte c;
+		b[4*i+1] = byte (c>>8);
+		b[4*i+2] = byte (c>>16);
+		b[4*i+3] = byte (c>>24);
 	}
 	return b;
 }
 
 btos(b : array of byte, s : ref Astring)
 {
-	n := (len b)/2;
+	n := (len b)/Dat->SZRUNE;
 	for (i := 0; i < n; i++)
-		s.s[i] = int b[2*i] | ((int b[2*i+1])<<8);
+		s.s[i] = int b[4*i] | (int b[4*i+1]<<8) | (int b[4*i+2]<<16) | (int b[4*i+3]<<24);
 }
 
 reverse(ol : list of string) : list of string

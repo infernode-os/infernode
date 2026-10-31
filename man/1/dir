@@ -1,0 +1,55 @@
+.TH DIR 1
+.SH NAME
+dir \- a directory's files as icons or as a list
+.SH SYNOPSIS
+.B wm/dir
+[
+.I directory
+]
+.SH DESCRIPTION
+.I Dir
+shows the files of
+.I directory
+(default
+.BR / )
+in a
+.IR wm (1)
+window, each as an icon over its name, the first
+.B ..
+for the directory above.
+The icons are
+.IR icon (2)'s
+glyphs, a folder, a program, a text, source, image, PDF or Markdown file,
+an archive, sound or film, painted in the current theme's colours; a
+theme switch repaints them.
+.PP
+Double-clicking button 1 on a folder shows that folder in the same
+window, or with
+.B "A window for each folder"
+checked in the
+.B Options
+menu, in a new one.
+Double-clicking a file plumbs its full name, with the folder as the
+working directory; in Lucifer the presentation view takes it, an editor
+for text and a viewer for images and documents.
+With no plumber running, a program
+.RB ( .dis )
+runs, an image opens in
+.IR view (1),
+a PDF in
+.IR page (1),
+and anything else in
+.IR edit (1).
+Button 3 plumbs the name it is on.
+.PP
+The
+.B Options
+menu sorts the files by name, by when they were last read or written, or
+by size, and shows them as icons or as a list of size, time and name.
+.SH SOURCE
+.B /appl/wm/dir.b
+.SH SEE ALSO
+.IR edit (1),
+.IR wm (1),
+.IR icon (2),
+.IR plumber (8)

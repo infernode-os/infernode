@@ -2,8 +2,6 @@ implement Asyncio;
 
 include "common.m";
 
-include "webclient.m";
-	webclient: Webclient;
 
 sys: Sys;
 dat: Dat;
@@ -20,7 +18,7 @@ nextopid: int;
 CHUNKSIZE: con 8*1024;
 
 # Max content to load into heap — files larger than this get a header-only read
-# (renderers like pdfrender stream directly from the file path)
+# (a document engine reads the file itself: docengine(2))
 MAXCONTENTLOAD: con 4*1024*1024;
 
 init(mods: ref Dat->Mods)
@@ -50,19 +48,6 @@ asyncload(path: string, q0: int): ref AsyncOp
 	return op;
 }
 
-asyncloadimage(path: string, winid: int): ref AsyncOp
-{
-	op := ref AsyncOp;
-	op.opid = nextopid++;
-	op.ctl = chan[1] of int;
-	op.path = path;
-	op.active = 1;
-	op.winid = winid;
-
-	spawn imagetask(op, path, winid);
-	return op;
-}
-
 asyncloadtext(path: string, q0: int, winid: int): ref AsyncOp
 {
 	op := ref AsyncOp;
@@ -71,6 +56,7 @@ asyncloadtext(path: string, q0: int, winid: int): ref AsyncOp
 	op.path = path;
 	op.active = 1;
 	op.winid = winid;
+	op.q0 = q0;
 
 	spawn texttask(op, path, q0, winid);
 	return op;
@@ -156,7 +142,7 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 		# Send chunk - retry with cancellation check if channel full
 		for(;;) {
 			alt {
-				dat->casync <-= ref AsyncMsg.TextData(op.opid, winid, path, q0, data, nrunes, nil) =>
+				dat->casync <-= ref AsyncMsg.TextData(op.opid, winid, path, q0, data, nrunes, nil, nbytes) =>
 					nrunes += nr;
 				<-op.ctl =>
 					fd = nil;
@@ -177,251 +163,6 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 		dat->casync <-= ref AsyncMsg.TextComplete(op.opid, winid, path, nbytes, nrunes, nil) => ;
 		<-op.ctl => ;
 	}
-	op.active = 0;
-}
-
-imagetask(op: ref AsyncOp, path: string, winid: int)
-{
-	# Check for cancellation before starting
-	alt {
-		<-op.ctl =>
-			# Non-blocking error send - drop if channel full
-			alt { dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, nil, "cancelled") => ; * => ; }
-			op.active = 0;
-			return;
-		* => ;
-	}
-
-	# Open file
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil) {
-		# Non-blocking error send
-		alt { dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, nil, sys->sprint("can't open: %r")) => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	# Get file size
-	(ok, dir) := sys->fstat(fd);
-	if(ok != 0) {
-		fd = nil;
-		alt { dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, nil, "can't stat file") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-	fsize := int dir.length;
-	if(fsize <= 0) {
-		fd = nil;
-		alt { dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, nil, "empty file") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-	# No arbitrary file size limit - imgload.b handles large images
-	# by automatically subsampling to fit in available memory
-
-	# Allocate buffer and read entire file
-	data := array[fsize] of byte;
-	total := 0;
-	while(total < fsize) {
-		# Check for cancellation periodically
-		alt {
-			<-op.ctl =>
-				fd = nil;
-				alt { dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, nil, "cancelled") => ; * => ; }
-				op.active = 0;
-				return;
-			* => ;
-		}
-
-		n := sys->read(fd, data[total:], fsize - total);
-		if(n <= 0)
-			break;
-		total += n;
-	}
-	fd = nil;
-
-	if(total < fsize) {
-		alt { dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, nil, "short read") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	# Send raw bytes to main thread - retry with cancellation check if channel full
-	for(;;) {
-		alt {
-			dat->casync <-= ref AsyncMsg.ImageData(op.opid, winid, path, data, nil) => ;
-			<-op.ctl =>
-				op.active = 0;
-				return;
-			* =>
-				# Channel full - yield and retry
-				sys->sleep(1);
-				continue;
-		}
-		break;
-	}
-	op.active = 0;
-}
-
-asyncloadcontent(path: string, winid: int): ref AsyncOp
-{
-	op := ref AsyncOp;
-	op.opid = nextopid++;
-	op.ctl = chan[1] of int;
-	op.path = path;
-	op.active = 1;
-	op.winid = winid;
-
-	spawn contenttask(op, path, winid);
-	return op;
-}
-
-# Check if path is a URL
-isurlpath(path: string): int
-{
-	if(len path >= 8 && path[0:8] == "https://")
-		return 1;
-	if(len path >= 7 && path[0:7] == "http://")
-		return 1;
-	return 0;
-}
-
-# Load raw content bytes (same I/O as imagetask, different message type)
-# For URLs (http:// or https://), fetches via webclient instead of local file.
-contenttask(op: ref AsyncOp, path: string, winid: int)
-{
-	alt {
-		<-op.ctl =>
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "cancelled") => ; * => ; }
-			op.active = 0;
-			return;
-		* => ;
-	}
-
-	# URL fetch path — use webclient for http:// and https://
-	if(isurlpath(path)) {
-		contenttask_url(op, path, winid);
-		return;
-	}
-
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil) {
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, sys->sprint("can't open: %r")) => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	(ok, dir) := sys->fstat(fd);
-	if(ok != 0) {
-		fd = nil;
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "can't stat file") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-	fsize := int dir.length;
-	if(fsize <= 0) {
-		fd = nil;
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "empty file") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	# For large files, read only a header for format detection.
-	# Renderers stream from the file path (hint) for actual I/O.
-	readsize := fsize;
-	if(readsize > MAXCONTENTLOAD)
-		readsize = 8192;
-
-	data := array[readsize] of byte;
-	total := 0;
-	while(total < readsize) {
-		alt {
-			<-op.ctl =>
-				fd = nil;
-				alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "cancelled") => ; * => ; }
-				op.active = 0;
-				return;
-			* => ;
-		}
-
-		n := sys->read(fd, data[total:], readsize - total);
-		if(n <= 0)
-			break;
-		total += n;
-	}
-	fd = nil;
-
-	if(total < readsize) {
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, nil, "short read") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	for(;;) {
-		alt {
-			dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, path, data, nil) => ;
-			<-op.ctl =>
-				op.active = 0;
-				return;
-			* =>
-				sys->sleep(1);
-				continue;
-		}
-		break;
-	}
-	op.active = 0;
-}
-
-# Fetch URL content via webclient and send as ContentData
-contenttask_url(op: ref AsyncOp, url: string, winid: int)
-{
-	stderr := sys->fildes(2);
-
-	# Load webclient lazily
-	if(webclient == nil) {
-		webclient = load Webclient Webclient->PATH;
-		if(webclient == nil) {
-			sys->fprint(stderr, "webfetch: can't load webclient\n");
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "can't load webclient") => ; * => ; }
-			op.active = 0;
-			return;
-		}
-		err := webclient->init();
-		if(err != nil) {
-			sys->fprint(stderr, "webfetch: webclient init: %s\n", err);
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "webclient init: " + err) => ; * => ; }
-			op.active = 0;
-			return;
-		}
-	}
-
-	# Check for cancellation before fetch
-	alt {
-		<-op.ctl =>
-			alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "cancelled") => ; * => ; }
-			op.active = 0;
-			return;
-		* => ;
-	}
-
-	sys->fprint(stderr, "webfetch: fetching %s\n", url);
-	(resp, err) := webclient->get(url);
-	if(err != nil) {
-		sys->fprint(stderr, "webfetch: fetch error: %s\n", err);
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "fetch: " + err) => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	sys->fprint(stderr, "webfetch: got %d bytes\n", len resp.body);
-	if(resp.body == nil || len resp.body == 0) {
-		alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, nil, "empty response") => ; * => ; }
-		op.active = 0;
-		return;
-	}
-
-	# Send response body as content data
-	alt { dat->casync <-= ref AsyncMsg.ContentData(op.opid, winid, url, resp.body, nil) => ; * => ; }
 	op.active = 0;
 }
 
@@ -607,7 +348,7 @@ dirtask(op: ref AsyncOp, path: string, winid: int)
 	op.active = 0;
 }
 
-asyncsavefile(path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int): ref AsyncOp
+asyncsavefile(path: string, winid: int, data: array of byte): ref AsyncOp
 {
 	op := ref AsyncOp;
 	op.opid = nextopid++;
@@ -616,11 +357,17 @@ asyncsavefile(path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int): 
 	op.active = 1;
 	op.winid = winid;
 
-	spawn savetask(op, path, winid, buf, q0, q1);
+	spawn savetask(op, path, winid, data);
 	return op;
 }
 
-savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int)
+# Write data, the text as it was when Put was done.  It was read from the
+# window's Buffer here, in this process, while the window went on: a
+# Buffer has one cache block, moved by every read, and the window's own
+# reads and edits moved it under this one.  A Markdown file shown
+# rendered beside its text was written empty when Put, and its Buffer
+# left broken ("array bounds error", "block not found").
+savetask(op: ref AsyncOp, path: string, winid: int, data: array of byte)
 {
 	# Check for cancellation before starting
 	alt {
@@ -640,11 +387,9 @@ savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0
 		return;
 	}
 
-	total := q1 - q0;
+	total := len data;
 	written := 0;
-	rp := ref Dat->Astring;
-
-	for(q := q0; q < q1; ) {
+	while(written < total) {
 		# Check for cancellation
 		alt {
 			<-op.ctl =>
@@ -654,18 +399,11 @@ savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0
 			* => ;
 		}
 
-		n := q1 - q;
-		if(n > Dat->BUFSIZE)
-			n = Dat->BUFSIZE;
-
-		buf.read(q, rp, 0, n);
-		ab := array of byte rp.s[0:n];
-
-		nw := sys->write(fd, ab, len ab);
-		wantlen := len ab;
-		ab = nil;
-
-		if(nw != wantlen) {
+		n := total - written;
+		if(n > 64*1024)
+			n = 64*1024;
+		nw := sys->write(fd, data[written:written+n], n);
+		if(nw != n) {
 			fd = nil;
 			alt {
 				dat->casync <-= ref AsyncMsg.SaveComplete(op.opid, winid, path, written, 0, sys->sprint("write error: %r")) => ;
@@ -674,20 +412,14 @@ savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0
 			op.active = 0;
 			return;
 		}
-
 		written += nw;
-		q += n;
-
-		# Send progress every 64KB
-		if((written % (64*1024)) < Dat->BUFSIZE) {
-			alt {
-				dat->casync <-= ref AsyncMsg.SaveProgress(op.opid, winid, written, total) => ;
-				<-op.ctl =>
-					fd = nil;
-					op.active = 0;
-					return;
-				* => ;
-			}
+		alt {
+			dat->casync <-= ref AsyncMsg.SaveProgress(op.opid, winid, written, total) => ;
+			<-op.ctl =>
+				fd = nil;
+				op.active = 0;
+				return;
+			* => ;
 		}
 	}
 

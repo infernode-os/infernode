@@ -27,4 +27,5 @@ Utils: module
 	changett: fn(curtab: array of int, newtab: array of int, starting: int): array of int;
 	looknassoc: fn(tab: array of  Nassoc, n: int, key: int): int;
 	lookassoc: fn(tab: array of  Assoc, n: int, key: string): int;
+	mountremote: fn(): string;
 };

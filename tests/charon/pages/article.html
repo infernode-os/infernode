@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang=en><head><meta charset=utf-8><title>Plan 9 from Bell Labs</title>
+<style>
+:root { --accent: #36c; --muted: #54595d; }
+body { font-family: sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #202122; line-height: 1.6 }
+h1 { font-family: Georgia, serif; font-weight: normal; border-bottom: 1px solid #a2a9b1; margin-bottom: .25em }
+.lead { font-size: 1.1em; color: var(--muted) }
+a { color: var(--accent); text-decoration: none }
+a:hover { text-decoration: underline }
+code { background: #f8f9fa; border: 1px solid #eaecf0; padding: 1px 4px; border-radius: 2px }
+blockquote { border-left: 4px solid #c8ccd1; margin-left: 0; padding-left: 1em; font-style: italic }
+.note { background: #eaf3ff; border: 1px solid #a3c4f3; border-radius: 6px; padding: .5em 1em }
+ul li::marker { color: var(--accent) }
+</style></head>
+<body>
+<h1>Plan 9 from Bell Labs</h1>
+<p class=lead><b>Plan 9 from Bell Labs</b> is a distributed operating system which originated from the Computing Science Research Center at <a href="#">Bell Labs</a> in the mid-1980s and built on <a href="#">UNIX</a> concepts first developed there in the late 1960s.</p>
+<h2>Design</h2>
+<p>Plan 9 replaced Unix as Bell Labs's primary platform for operating systems research. It explored several changes to the original Unix model that facilitate the use and programming of the system, notably in distributed <em>multi-user</em> environments. The system is built on the idea that <strong>everything is a file</strong>: <code>/proc</code>, <code>/net</code>, and the window system are all file servers.</p>
+<blockquote>The foundations of the system are built on two ideas: a per-process name space and a simple message-oriented file system protocol.</blockquote>
+<ul><li>Per-process namespaces</li><li>The 9P protocol, carried over any reliable transport</li><li>UTF-8, invented for Plan 9 in 1992</li></ul>
+<ol><li>Rob Pike</li><li>Ken Thompson</li><li>Dave Presotto</li><li>Phil Winterbottom</li></ol>
+<div class=note>Inferno, a descendant, runs programs written in <i>Limbo</i> on the Dis virtual machine.</div>
+<h3>Héritage — 継承 — Наследие</h3>
+<p style="text-align: justify">Justified text: Plan 9 replaced Unix as Bell Labs's primary platform for operating systems research. It explored several changes to the original Unix model that facilitate the use and programming of the system.</p>
+<p style="text-align:center"><small>Centered small text &middot; &copy; 2026</small></p>
+</body></html>

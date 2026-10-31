@@ -157,17 +157,15 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	<-themech =>
 		loadtheme();
-		# Re-theme the engine palette (env-derived widget colours) and
-		# reconfigure the widgets that carry explicit theme colours; the
-		# hardcoded-then-never-updated toplevel + status strip were why the
-		# footer stayed brimstone after a switch.
-		tkclient->wmctl(top, "retheme");
+		# Reconfigure the widgets that carry explicit theme colours, then
+		# re-theme the rest: retheme repaints every widget, so it comes last.
 		tk->cmd(top, ". configure -background " + bgc);
 		tk->cmd(top, ".div configure -background " + accent);
 		tk->cmd(top, ".status configure -background " + statusbg + " -foreground " + statusfg);
 		# re-create the menus / accents that carry explicit colours
 		setmode(mode);
 		flashstatus("theme updated");
+		tkclient->wmctl(top, "retheme");
 	}
 }
 
@@ -253,15 +251,18 @@ setmode(m: int)
 		return;
 	}
 
-	# one labelled row per field
-	for(i := 0; i < len fields; i++){
+	# one labelled row per field, the label column as wide as the
+	# longest label so the rows line up.  Size it in characters ("Nw"):
+	# a pixel width cut the labels off on a 3x display.
+	labw := 0;
+	for(i := 0; i < len fields; i++)
+		if(len fields[i].label > labw)
+			labw = len fields[i].label;
+	for(i = 0; i < len fields; i++){
 		f := fields[i];
 		row := sys->sprint(".form.r%d", i);
 		tk->cmd(top, "frame " + row);
-		# Inferno Tk widget -width is in PIXELS, not characters: reserve
-		# a fixed label column wide enough for the longest label so the
-		# rows line up.
-		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width 84 -anchor w", row, f.label));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %dw -anchor w", row, f.label, labw));
 		show := "";
 		if(f.secret)
 			show = " -show *";
@@ -566,7 +567,10 @@ secstorelocked(): int
 
 handlekey(k: int)
 {
-	Kdel: con 16rFF9F;
+	# Delete: DEL as SDL sends it, or keyboard.h's (16rFF9F, an X11
+	# keysym, was never sent: Delete did nothing)
+	Kdel: con 16rE064;	# Keyboard->Del
+	DEL: con 16r7F;
 	# Ctrl-Q quits
 	if(k == 'q' - 16r60){
 		exit;
@@ -591,7 +595,7 @@ handlekey(k: int)
 		return;
 	}
 	# Delete removes the selected key in list mode
-	if(k == Kdel && mode == ModeList){
+	if((k == Kdel || k == DEL) && mode == ModeList){
 		deleteselected();
 		return;
 	}
@@ -639,18 +643,14 @@ col(v: int): string
 
 themelistener()
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
+	c := lt->watch();
 	for(;;){
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+		<-c;
+		themech <-= 1;
 	}
 }
 

@@ -34,11 +34,11 @@ if {~ $emuhost MacOSX Linux Nt}{
 		# Windows: mount C:\ at /n/local. Profiles live at C:\Users\<name>,
 		# so /n/local/Users/$user matches macOS's /n/local/Users/$user.
 		trfs '#UC:/' /n/local >[2] /dev/null
-		ls /n/local >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
+		ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
 		ghome=/n/local/Users/^$user
 	}{
 		trfs '#U*' /n/local >[2] /dev/null
-		ls /n/local >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
+		ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
 		ghome=/n/local/^`{echo 'echo $HOME' | os sh}
 	}
 	home=$ghome
@@ -93,6 +93,28 @@ if {~ $emuhost MacOSX Linux Nt}{
 		cp /lib/veltro/agents/task.txt $infhome/lib/veltro-agents/task.txt >[2] /dev/null
 	}
 
+	# The agent prompts follow the shipped default until the user edits
+	# them (Settings writes these copies). Seeded once and never touched
+	# again, they froze at the first install's: an install kept running
+	# prompts written for a harness it no longer had. A copy whose hash
+	# is one InferNode has shipped (lib/veltro/prompt-defaults) was never
+	# edited, and becomes the current default; an edited one is the user's.
+	fn promptfollow {
+		shipped=$1
+		copy=$2
+		name=$3
+		if {ftest -f $copy} {
+			if {! cmp -s $shipped $copy} {
+				h=`{sha1sum < $copy}
+				if {grep -s '^'^$h^' '^$name^'$' /lib/veltro/prompt-defaults} {
+					cp $shipped $copy
+				}
+			}
+		}
+	}
+	promptfollow /lib/veltro/meta.txt $infhome/lib/veltro/meta.txt meta.txt
+	promptfollow /lib/veltro/agents/task.txt $infhome/lib/veltro-agents/task.txt task.txt
+
 	# First-run only: seed the default user's home from the shipped
 	# /usr/inferno skeleton (the historical `cp -r /usr/inferno
 	# /usr/<name>` — doc/install.ms "Adding new users" — done once for
@@ -109,6 +131,17 @@ if {~ $emuhost MacOSX Linux Nt}{
 		mkdir -p $infhome/usr/inferno/keyring
 	}
 
+	# Plumbing rules: the user's file is read first, then the system's
+	# defaults (lib/sh/plumbrules). It used to be seeded with Inferno's
+	# whole rule set, which, read first, would take every message from
+	# the defaults (files to acme, web pages to a charon outside Lucifer).
+	# A copy never edited becomes the commented template; the old rules
+	# stay beside it as plumbing.inferno. An edited copy is the user's.
+	if {cmp -s $infhome/usr/inferno/lib/plumbing /usr/inferno/lib/plumbing.inferno >[2] /dev/null} {
+		cp $infhome/usr/inferno/lib/plumbing $infhome/usr/inferno/lib/plumbing.inferno
+		cp /usr/inferno/lib/plumbing $infhome/usr/inferno/lib/plumbing
+	}
+
 	# Writable overlay mounts. /usr is bound WHOLE: names present on the
 	# durable side win, creates land durable, and anything only in the
 	# system tree (e.g. the pristine skeleton, the testnode fixture)
@@ -118,7 +151,6 @@ if {~ $emuhost MacOSX Linux Nt}{
 	bind -bc $infhome/lib/lucifer/theme    /lib/lucifer/theme
 	bind -bc $infhome/lib/veltro           /lib/veltro
 	bind -bc $infhome/lib/veltro-agents    /lib/veltro/agents
-	bind -bc $infhome/lib/veltro-keys      /lib/veltro/keys >[2] /dev/null
 	mkdir -p /lib/keyring >[2] /dev/null
 	bind -bc $infhome/lib/keyring          /lib/keyring >[2] /dev/null
 	bind -bc $infhome/tmp /tmp >[2] /dev/null
@@ -146,6 +178,11 @@ if {~ $emuhost MacOSX Linux Nt}{
 	home=/usr/^$user
 	if {! ftest -d $home} { mkdir -p $home }
 }
+
+# The theme's current and event, served before /lib/lucifer/theme (after
+# the user's theme directory is bound there): a write of current reaches
+# every program watching (lucitheme(2)); none of them polls.
+themefs >[2] /dev/null
 
 # ── Audit log (tamper-evident security log) — OFF by default ──
 # Disabled unless opted in: most installs don't need it, and the emitters
@@ -180,17 +217,31 @@ if {ftest -f /usr/inferno/audit/on} {
 }
 
 # ── Secstored (persistent encrypted key storage) ──────────
-# Kill stale secstored from a previous emu session — a stale
-# instance with different PAK data causes login to hang indefinitely.
+# One secstored per host user, on 127.0.0.1:5356, over the store in
+# ~/.infernode/usr/inferno/secstore. If the port is already served, it
+# is served by another InferNode of this same user -- secstored runs
+# inside an emulator, so a live holder of the port is a live instance,
+# and it serves the same store this one would -- and this instance uses
+# it rather than starting a second that could not bind anyway.
+#
+# This used to kill whatever held the port first ("lsof -ti :5356 |
+# xargs kill"), meant for a stale
+# server with different key data that made login hang. But nothing
+# stale can hold it: an emulator that is gone has released its sockets.
+# What it killed was the user's other InferNode -- their running
+# desktop, the moment a second instance (a remote-desktop viewer, a
+# test shell) started with sh -l.
+#
+# So on macOS and Linux: always start one. If the port is taken, this
+# one cannot announce and exits quietly, and the one already there
+# serves. Windows keeps its taskkill of secstored.exe unchanged: that
+# is a host program there, it can outlive an emulator, and this change
+# has not been run on Windows.
 if {~ $emuhost Nt} {
-	# Windows: kill stale secstored — os without backticks (fire and forget)
 	os cmd /c 'taskkill /F /IM secstored.exe >nul 2>&1' >[2] /dev/null
-}{
-	os sh -c 'lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null; sleep 1; true' >[2] /dev/null
 }
 mkdir -p /usr/inferno/secstore >[2] /dev/null
 auth/secstored >[2] /dev/null &
-sleep 1
 
 # ── Factotum ──────────────────────────────────────────────
 # Headless: if $SECSTORE_PASSWORD is set on the host, start factotum
@@ -205,6 +256,9 @@ if {! ftest -f /mnt/factotum/proto}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}
 	if {! ~ $#havesecpass 0} {
+		# factotum dials the secstored started above at once: give
+		# it the time to announce.  Nothing else here waits on it.
+		sleep 1
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
 		if {! ~ $#secpass 0} {
 			if {! ~ $#user 0} {
@@ -222,23 +276,73 @@ if {! ftest -f /mnt/factotum/proto}{
 
 # Provision API keys into factotum (secstore is the persistent home; these are
 # the CLI/CI fallbacks). Each service is sourced from its host env var
-# <SERVICE>_API_KEY first, then the legacy plaintext file /lib/veltro/keys/<svc>.
-# Add a service to the lists below to provision it the same way.
+# <SERVICE>_API_KEY first, then a legacy plaintext file in
+# ~/.infernode/lib/veltro-keys/<svc> (or the tree's /lib/veltro/keys/<svc>).
+# The host overlay's plaintext directory is no longer
+# bound into the name space (INFR-347): only this profile reads it, once a
+# login, to import the key; factotum saves it to secstore, and the file can
+# then be deleted. Add a service to the lists below to provision it the same
+# way.
 fn provisionkey {
 	# $1 = service name, $2 = host env var
-	_pk=`{os sh -c 'printf %s "${'^$2^'}"' >[2] /dev/null}
+	# The arguments are copied first: a {block} has its own $*, so a $1 or
+	# $2 written inside a backquote is the block's (empty) argument, and
+	# the concatenation failed -- "null list in concatenation" at every
+	# hosted login, and the function stopped there.
+	_pksvc=$1
+	_pkvar=$2
+	_pk=`{os sh -c 'printf %s "${'^$_pkvar^'}"' >[2] /dev/null}
 	if {~ $#_pk 0} {
-		_pk=`{cat /lib/veltro/keys/$1 >[2] /dev/null}
+		legacykey $_pksvc
 	}
 	if {! ~ $#_pk 0} {
 		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
 	}
 }
+fn legacykey {
+	# $1 = service name. Sets _pk from a plaintext key file (the host
+	# overlay's, or one dropped in the tree's /lib/veltro/keys), and says
+	# which, so it can be deleted once secstore holds the key.
+	_lksvc=$1
+	_lkfile=()
+	if {! ~ $#infhome 0} {
+		if {ftest -f $infhome/lib/veltro-keys/$_lksvc} {
+			_lkfile=$infhome/lib/veltro-keys/$_lksvc
+		}
+	}
+	if {~ $#_lkfile 0} {
+		if {ftest -f /lib/veltro/keys/$_lksvc} {
+			_lkfile=/lib/veltro/keys/$_lksvc
+		}
+	}
+	_pk=()
+	if {! ~ $#_lkfile 0} {
+		_pk=`{cat $_lkfile >[2] /dev/null}
+	}
+	if {! ~ $#_pk 0} {
+		echo 'profile: '^$_lksvc^' key imported into factotum from plaintext '^$_lkfile^'; once secstore holds it, delete that file' >[1=2]
+	}
+}
 fn provisionkeyfile {
-	# Windows: os sh in backticks hangs, so file-only. $1 = service name.
-	_pk=`{cat /lib/veltro/keys/$1 >[2] /dev/null}
+	# Windows: os sh in backticks hangs, so file-only. $1 = service name,
+	# copied first for the reason given in provisionkey.
+	_pksvc=$1
+	legacykey $_pksvc
 	if {! ~ $#_pk 0} {
 		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
+	}
+}
+# The host's HTTPS proxy settings, for llmclient's API connections
+# (INFR-307): copied into /env, which the services started below inherit,
+# unless already set here. Not on Windows, where os sh in backticks hangs.
+fn importproxy {
+	for _pv in https_proxy HTTPS_PROXY no_proxy NO_PROXY {
+		if {~ $#$_pv 0} {
+			_pval=`{os sh -c 'printf %s "${'^$_pv^'}"' >[2] /dev/null}
+			if {! ~ $#_pval 0} {
+				echo -n $"_pval > /env/$_pv
+			}
+		}
 	}
 }
 if {~ $emuhost Nt} {
@@ -249,6 +353,7 @@ if {~ $emuhost Nt} {
 	provisionkey anthropic ANTHROPIC_API_KEY
 	provisionkey brave BRAVE_API_KEY
 	provisionkey openai OPENAI_API_KEY
+	importproxy
 }
 
 # ── LLM + Speech (desktop platforms) ──────────────────────
@@ -276,29 +381,68 @@ if {~ $emuhost MacOSX Linux Nt}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
 		llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
+		# autocompact=<tokens>: where a session's history is summarised
+		# (llmsrv -c; its own default when unset).  This llmsrv is the one
+		# a session reaches: lib/lucifer/llmsrv.sh's runs in the boot's
+		# background, in a namespace of its own; it reads the same field.
+		llmcompact=`{sed -n 's/^autocompact=//p' /lib/ndb/llm >[2] /dev/null}
+		# window=<tokens>: the model's context window, where the backend
+		# does not report it (llmsrv -C); the mark follows from it.
+		llmwindow=`{sed -n 's/^window=//p' /lib/ndb/llm >[2] /dev/null}
+		llmopts=()
+		if {! ~ $#llmcompact 0} { llmopts=(-c $llmcompact) }
+		if {! ~ $#llmwindow 0} { llmopts=($llmopts -C $llmwindow) }
 		# backend=cli/codex are the host-side CLI gateways (claude-gate,
 		# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 		# the same way.
+		# In the foreground: llmsrv returns once /mnt/llm is mounted (it
+		# dials nothing until asked), so what follows can count on it.
+		# (A field not set is an empty list, which ~ '' does not match:
+		# its length is the test.)
 		if {~ $llmbackend openai cli codex} {
-			if {! ~ $llmmodel ''} {
-				llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null &
+			if {! ~ $#llmmodel 0} {
+				llmsrv $llmopts -b openai -u $llmurl -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv -b openai -u $llmurl >[2] /dev/null &
+				llmsrv $llmopts -b openai -u $llmurl >[2] /dev/null
 			}
 		}{
-			if {! ~ $llmmodel ''} {
-				llmsrv -M $llmmodel >[2] /dev/null &
+			if {! ~ $#llmmodel 0} {
+				llmsrv $llmopts -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv >[2] /dev/null &
+				llmsrv $llmopts >[2] /dev/null
 			}
 		}
 	}
 
-	# Start speech file server (TTS/STT via /n/speech)
+	# Start speech file server (TTS/STT via /mnt/speech)
 	/dis/veltro/speech9p.dis -e cmd &
 }{
 	# Non-desktop: mount remote llm9p
 	mount -A 'tcp!llmserver!5640' /mnt/llm >[2] /dev/null
+}
+
+# ── Dictionaries (dict(7)) ────────────────────────────────
+# InferNode ships no dictionary text. A copy of your own goes in
+# ~/.infernode/lib/dict (an installed app's /lib/dict is read-only).
+if {! ~ $#infhome 0} {
+	if {ftest -d $infhome/lib/dict} {
+		bind -b $infhome/lib/dict /lib/dict
+	}
+}
+# /lib/ndb/dict names a host that exports dictionary files (the OED,
+# for one); they are unioned onto /lib/dict:
+#   dial=tcp!host!5644
+#   keyfile=/lib/keyring/key	(keyring auth; none means -A)
+# In the background, like /mnt/llm: a remote must never hold up boot.
+# No file, or no such line, is an empty list, not '': count it.
+dictdial=`{sed -n 's/^dial=//p' /lib/ndb/dict >[2] /dev/null}
+if {! ~ $#dictdial 0} {
+	dictkey=`{sed -n 's/^keyfile=//p' /lib/ndb/dict}
+	if {~ $#dictkey 0} {
+		mount -a -A $dictdial /lib/dict >[2] /dev/null &
+	}{
+		mount -a -k $dictkey $dictdial /lib/dict >[2] /dev/null &
+	}
 }
 
 # ── tmp setup ─────────────────────────────────────────────

@@ -25,6 +25,21 @@ DxorS:  con DoutS|SoutD;
 
 Clear:  con 0;
 
+# ends and joins for strokepath
+Capbutt, Capround, Capsquare:     con iota;
+Joinmiter, Joinround, Joinbevel:  con iota;
+
+Path: adt
+{
+    new:     fn(): ref Path;
+    moveto:  fn(p: self ref Path, x, y: real): ref Path;
+    lineto:  fn(p: self ref Path, x, y: real): ref Path;
+    quadto:  fn(p: self ref Path, x1, y1, x, y: real): ref Path;
+    curveto: fn(p: self ref Path, x1, y1, x2, y2, x, y: real): ref Path;
+    ellipse: fn(p: self ref Path, cx, cy, a, b: real): ref Path;
+    close:   fn(p: self ref Path): ref Path;
+};
+
 Image: adt
 {
     r:          Rect;
@@ -66,6 +81,14 @@ Image: adt
                    wind: int, src: ref Image, sp: Point);
     fillpolyop:   fn(dst: self ref Image, p: array of Point,
                    wind: int, src: ref Image, sp: Point, op: int);
+    fillpath:   fn(dst: self ref Image, p: ref Path,
+                   wind: int, src: ref Image, sp: Point);
+    fillpathop: fn(dst: self ref Image, p: ref Path,
+                   wind: int, src: ref Image, sp: Point, op: int);
+    strokepath: fn(dst: self ref Image, p: ref Path, width: real,
+                   cap, join: int, src: ref Image, sp: Point);
+    strokepathop: fn(dst: self ref Image, p: ref Path, width: real,
+                   cap, join: int, src: ref Image, sp: Point, op: int);
     fillbezspline: fn(dst: self ref Image, p: array of Point,
                    wind: int, src: ref Image, sp: Point);
     fillbezsplineop: fn(dst: self ref Image, p: array of Point,
@@ -442,6 +465,13 @@ for more information.
 and the other geometrical operators are equivalent to calls to
 .B gendraw
 using a mask produced by the geometric procedure.
+Lines, polygon outlines, Bézier curves and ellipse and arc outlines are
+anti-aliased: the mask holds, for each pixel, the fraction of it the
+shape covers.  A horizontal or vertical line with square ends is exactly
+its rectangle of pixels.  Filled polygons, ellipses and arcs keep hard
+edges, so that filled shapes sharing an edge meet without a seam; for
+anti-aliased fills see
+.BR fillpath .
 .TP
 \f2dst\fP.\f5poly(\f2p\fP, \f2end0\fP, \f2end1\fP, \f2thick\fP, \f2src\fP, \f2sp\fP)
 .PD0
@@ -504,7 +534,6 @@ If
 .I wind
 is 1,
 a pixel is inside if the winding number is odd.
-Complementary values (0 or ~1) cause outside pixels to be filled.
 The meaning of other values is undefined.
 The polygon is closed with a line if necessary.
 .TP
@@ -622,6 +651,87 @@ as
 .B fillpoly
 is to
 .BR poly .
+.TP
+\f2dst\fP.\f5fillpath(\f2p\fP, \f2wind\fP, \f2src\fP, \f2sp\fP)
+.PD0
+.TP
+\f2dst\fP.\f5fillpathop(\f2p\fP, \f2wind\fP, \f2src\fP, \f2sp\fP, \f2op\fP)
+.PD
+.B Fillpath
+fills the
+.B Path
+.IR p ,
+anti-aliased: each pixel is drawn through the exact fraction of it the
+path covers.
+.I Wind
+is as for
+.BR fillpoly :
+1 fills by the even-odd rule, anything else by the non-zero rule.
+Every subpath is closed.
+The source is aligned so that
+.I sp
+corresponds to the pixel holding the path's first point.
+.TP
+\f2dst\fP.\f5strokepath(\f2p\fP, \f2width\fP, \f2cap\fP, \f2join\fP, \f2src\fP, \f2sp\fP)
+.PD0
+.TP
+\f2dst\fP.\f5strokepathop(\f2p\fP, \f2width\fP, \f2cap\fP, \f2join\fP, \f2src\fP, \f2sp\fP, \f2op\fP)
+.PD
+.B Strokepath
+draws, anti-aliased, a line
+.I width
+pixels wide along
+.IR p ,
+its open ends
+.BR Capbutt ,
+.B Capround
+or
+.B Capsquare
+and its corners
+.BR Joinmiter ,
+.B Joinround
+or
+.BR Joinbevel .
+.TP
+.B Path
+A shape for
+.B fillpath
+and
+.BR strokepath ,
+in real coordinates: the pixel
+.RI ( x ,\  y )
+covers
+.IR x " ≤ X < " x +1
+and
+.IR y " ≤ Y < " y +1,
+so its centre is
+.RI ( x +0.5,\  y +0.5).
+.B Path.new
+makes an empty one;
+.BR moveto ,
+.BR lineto ,
+.B quadto
+(a quadratic curve through the control point
+.IR x1 ,
+.IR y1 ),
+.B curveto
+(a cubic curve through two control points),
+.B ellipse
+(a closed ellipse with centre
+.IR cx ,
+.I cy
+and semi-axes
+.I a
+and
+.IR b )
+and
+.B close
+add to it and return it, so calls can be chained:
+.IP
+.EX
+p := Path.new().moveto(10.0, 10.0).curveto(40.0, 0.0, 60.0, 40.0, 90.0, 20.0);
+img.strokepath(p, 2.5, Draw->Capround, Draw->Joinround, ink, (0, 0));
+.EE
 .TP
 .BI arrow( "a,\ b,\ c" )
 .B Arrow
@@ -904,6 +1014,7 @@ and
 .B gendraw
 where the mask image is optional and may be nil.
 .SH BUGS
-Anti-aliased characters can be drawn by defining a font
-with multiple bits per pixel, but there are
-no anti-aliasing geometric primitives.
+Where one stroke crosses or doubles back on itself, the few pixels its
+edges share there are drawn slightly darker than they should be: each
+edge's coverage is counted.
+

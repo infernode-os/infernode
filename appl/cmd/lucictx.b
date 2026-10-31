@@ -139,8 +139,9 @@ knowntoolnames: list of string;
 pinnedpaths: list of ref PinnedPath;
 
 # Path and tool change tracking for timer-based namespace refresh
-lastpathsraw := "";
-lasttoolsraw := "";
+watchmount := "";	# the toolctl tree whose event file toolwatch reads, or nil
+watchpid := -1;
+fading := 0;		# fadetimer running
 
 # Channel references (for filebrowser access)
 mousech_g: chan of ref Pointer;
@@ -285,21 +286,11 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	loadpinnedpaths();
 	loadmanifest();
 
-	# Snapshot current paths and tools so timer detects future changes
-	raw := readfile(toolmount_g + "/paths");
-	if(raw == nil) raw = "";
-	lastpathsraw = raw;
-	toolsrc := toolmount_g + "/tools";
-	if(actid_g == 0)
-		toolsrc = toolmount_g + "/budget";
-	traw := readfile(toolsrc);
-	if(traw == nil) traw = "";
-	lasttoolsraw = traw;
-
 	redrawctx();
 
-	# Context flash timer (animate activity indicator fade-out)
-	spawn ctxtimer(evch);
+	# tools9p says when its lists change (#1020); nothing is polled
+	startwatch(evch);
+	startfade(evch);
 
 	# Event loop
 	prevbuttons := 0;
@@ -624,66 +615,70 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	}
 }
 
-ctxtimer(evch: chan of string)
+# Read the current activity's /mnt/toolctl*/event, a tick for each
+# change tools9p reports.  Started again on a switch of activity; if
+# tools9p is not up yet, at the next context event.
+startwatch(evch: chan of string)
 {
-	# Poll interval: fast (1s) while waiting for manifest to appear,
-	# slower (5s) once it's loaded and only resource activity needs refresh.
-	for(;;) {
-		interval := 5000;
-		if(nsmanifest == nil)
-			interval = 1000;	# poll faster until manifest appears
-
-		sys->sleep(interval);
-
-		needtick := 0;
-
-		# Always tick if manifest hasn't loaded yet
-		if(nsmanifest == nil) {
-			mp := "/tmp/veltro/.ns/manifest";
-			if(actid_g > 0)
-				mp = "/tmp/veltro/.ns/manifest." + string actid_g;
-			(ok, nil) := sys->stat(mp);
-			if(ok >= 0)
-				needtick = 1;
-		}
-
-		# Tick if /tool/paths changed (namespace bind/unbind from any source)
-		if(!needtick) {
-			curpaths := readfile(toolmount_g + "/paths");
-			if(curpaths == nil)
-				curpaths = "";
-			if(curpaths != lastpathsraw) {
-				lastpathsraw = curpaths;
-				needtick = 1;
-			}
-		}
-
-		# Tick if /tool/tools changed (tool add/remove via ctl)
-		if(!needtick) {
-			curtools := readfile(toolmount_g + "/tools");
-			if(curtools == nil)
-				curtools = "";
-			if(curtools != lasttoolsraw) {
-				lasttoolsraw = curtools;
-				needtick = 1;
-			}
-		}
-
-		# Also tick for resource activity animation
-		if(!needtick) {
-			now := sys->millisec();
-			for(r := resources; r != nil; r = tl r) {
-				res := hd r;
-				if(res.status == "active" || (res.lastused > 0 && now - res.lastused < RES_ACTIVE_FADE_MS)) {
-					needtick = 1;
-					break;
-				}
-			}
-		}
-
-		if(needtick)
-			alt { evch <-= "tick" => ; * => ; }
+	mnt := toolctlmount();
+	if(mnt == watchmount)
+		return;
+	if(watchpid >= 0) {
+		fd := sys->open(sys->sprint("/prog/%d/ctl", watchpid), Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+		watchpid = -1;
 	}
+	watchmount = nil;
+	fd := sys->open(mnt + "/event", Sys->OREAD);
+	if(fd == nil)
+		return;
+	watchmount = mnt;
+	pidc := chan of int;
+	spawn toolwatch(evch, fd, mnt, pidc);
+	watchpid = <-pidc;
+}
+
+toolwatch(evch: chan of string, fd: ref Sys->FD, mnt: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	buf := array[256] of byte;
+	while(sys->read(fd, buf, len buf) > 0)
+		evch <-= "tick";
+	if(watchmount == mnt) {
+		watchmount = nil;
+		watchpid = -1;
+	}
+}
+
+# The activity indicator fades over RES_ACTIVE_FADE_MS: a redraw a
+# second while a resource is active or fading, and no timer otherwise.
+startfade(evch: chan of string)
+{
+	if(fading || !anyfading())
+		return;
+	fading = 1;
+	spawn fadetimer(evch);
+}
+
+fadetimer(evch: chan of string)
+{
+	while(anyfading()) {
+		sys->sleep(1000);
+		evch <-= "fade";
+	}
+	fading = 0;
+}
+
+anyfading(): int
+{
+	now := sys->millisec();
+	for(r := resources; r != nil; r = tl r) {
+		res := hd r;
+		if(res.status == "active" || (res.lastused > 0 && now - res.lastused < RES_ACTIVE_FADE_MS))
+			return 1;
+	}
+	return 0;
 }
 
 # Return the tools9p mount point for the current activity.
@@ -735,26 +730,19 @@ handleevent(ev: string)
 		newid := strtoint(ev[len "switchactivity ":]);
 		if(newid >= 0) {
 			actid_g = newid;
-			editor_launched = 0;
 			updatetoolmount();
 			reloadtools();
 			loadcontext();
 			loadcatalog();
 			loadpinnedpaths();
 			loadmanifest();
-			# Snapshot new activity's state so timer detects changes
-			raw2 := readfile(toolmount_g + "/paths");
-			if(raw2 == nil) raw2 = "";
-			lastpathsraw = raw2;
-			toolsrc2 := toolmount_g + "/tools";
-			if(actid_g == 0)
-				toolsrc2 = toolmount_g + "/budget";
-			traw2 := readfile(toolsrc2);
-			if(traw2 == nil) traw2 = "";
-			lasttoolsraw = traw2;
+			startwatch(evch_g);
+			startfade(evch_g);
 		}
 		return;
 	}
+	if(ev == "fade")
+		return;	# a redraw only
 	if(ev == "catalog" || ev == "tick")
 		loadcatalog();
 	if(ev == "catalog")
@@ -766,6 +754,8 @@ handleevent(ev: string)
 		loadpinnedpaths();
 		loadmanifest();
 		loadagentname();
+		startwatch(evch_g);	# if tools9p was not up before
+		startfade(evch_g);
 	}
 	if(hasprefix(ev, "theme "))
 		reloadcolors();
@@ -790,6 +780,12 @@ reloadcolors()
 	progfgcol = display_g.color(th.progfg);
 	if(menumod != nil)
 		menumod->retheme(display_g);
+	# The variables above are silent until something else redraws this
+	# zone -- a tool list changing, an activity switch. Nothing else
+	# does, on a theme switch: repaint now, with the colours just
+	# reloaded (this zone, unlike a hosted app, has no tkclient ctl
+	# channel for lucifer.b's "retheme" broadcast to reach).
+	redrawctx();
 }
 
 # --- Drawing ---
@@ -1242,6 +1238,20 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 		lineH = TAPMIN;	# 44pt finger tap target for browser entries
 	y := zone.min.y + pad;
 
+	#
+	# Into the backing image, copied to the screen once at the end --
+	# the same discipline redrawctx() got in bef57443 and this modal
+	# was left out of. Clearing the zone and repainting straight into
+	# the window is invisible on a hosted display behind a compositor
+	# and a full-panel flicker on a framebuffer that IS the screen.
+	#
+	if(backbuf == nil || backbuf.r.dx() != zone.dx() || backbuf.r.dy() != zone.dy() ||
+			backbuf.r.min.x != zone.min.x || backbuf.r.min.y != zone.min.y)
+		backbuf = display_g.newimage(zone, mainwin.chans, 0, Draw->Nofill);
+	front := mainwin;
+	if(backbuf != nil)
+		mainwin = backbuf;
+
 	mainwin.draw(zone, bgcol, nil, (0, 0));
 
 	# Header row: ↑  <path>  Bind ✕
@@ -1470,6 +1480,10 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 		}
 	}
 
+	if(backbuf != nil) {
+		mainwin = front;
+		mainwin.draw(zone, backbuf, nil, backbuf.r.min);
+	}
 	mainwin.flush(Draw->Flushnow);
 }
 
@@ -1483,30 +1497,49 @@ filebrowser(startpath: string): string
 	result := "";
 	prevbut := 0;
 
-	for(;;) {
-		# Collect directory entries
-		dirs: list of string;
-		files: list of string;
+	#
+	# The directory is read when the path changes and the view is
+	# drawn when something changed -- NOT once per mouse event. This
+	# loop used to read the directory and repaint the whole zone on
+	# every pointer motion; on a card filesystem behind a framebuffer
+	# that is the screen, that was a directory read plus a full
+	# clear-and-repaint dozens of times a second under the cursor:
+	# profuse flicker, and clicks lost behind the backlog.
+	#
+	dirs: list of string;
+	files: list of string;
+	readpath := "";
+	needdraw := 1;
 
-		fd := sys->open(curpath, Sys->OREAD);
-		if(fd != nil) {
-			for(;;) {
-				(n, ds) := sys->dirread(fd);
-				if(n <= 0)
-					break;
-				for(di := 0; di < len ds; di++) {
-					if(ds[di].mode & Sys->DMDIR)
-						dirs = ds[di].name :: dirs;
-					else
-						files = ds[di].name :: files;
+	for(;;) {
+		if(readpath != curpath) {
+			dirs = nil;
+			files = nil;
+			fd := sys->open(curpath, Sys->OREAD);
+			if(fd != nil) {
+				for(;;) {
+					(n, ds) := sys->dirread(fd);
+					if(n <= 0)
+						break;
+					for(di := 0; di < len ds; di++) {
+						if(ds[di].mode & Sys->DMDIR)
+							dirs = ds[di].name :: dirs;
+						else
+							files = ds[di].name :: files;
+					}
 				}
 			}
+			dirs = sortstrlist(dirs);
+			files = sortstrlist(files);
+			readpath = curpath;
+			needdraw = 1;
 		}
-		dirs = sortstrlist(dirs);
-		files = sortstrlist(files);
 
 		# Draw browser UI (populates brow_* module-level arrays)
-		drawbrowser(curpath, dirs, files, scroll);
+		if(needdraw) {
+			drawbrowser(curpath, dirs, files, scroll);
+			needdraw = 0;
+		}
 
 		# Wait for mouse event, zone resize, or context event.
 		# INFR-28: also handle ctx events here so theme switches that
@@ -1525,9 +1558,11 @@ filebrowser(startpath: string): string
 				result = nil;
 				break;
 			}
+			needdraw = 1;
 			continue;
 		ev := <-evch_g =>
 			handleevent(ev);
+			needdraw = 1;
 			continue;	# loop redraws browser with refreshed colours
 		}
 		if(p == nil)
@@ -1537,12 +1572,11 @@ filebrowser(startpath: string): string
 
 		# Mouse wheel scroll
 		if(p.buttons & 8) {
-			if(scroll > 0) scroll--;
+			if(scroll > 0) { scroll--; needdraw = 1; }
 			continue;
 		}
 		if(p.buttons & 16) {
-			if(scroll < brow_maxscroll)
-				scroll++;
+			if(scroll < brow_maxscroll) { scroll++; needdraw = 1; }
 			continue;
 		}
 
@@ -1605,8 +1639,7 @@ filebrowser(startpath: string): string
 						sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", fpath);
 					else if(!plumbopenfile(fpath, curpath)) {
 						# No plumber — fall back to opening in the editor.
-						has9p := ensureeditor();
-						openineditor(fpath, has9p);
+						openineditor(fpath);
 					}
 					break;
 				}
@@ -2024,14 +2057,13 @@ openpath(path: string)
 		sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", path);
 	} else {
 		# File: open in edit (ensure it's running first)
-		has9p := ensureeditor();
-		openineditor(path, has9p);
+		openineditor(path);
 	}
 }
 
 # Allowed dis path prefixes for GUI app launch from context zone.
 # Must match the whitelist in lucifer.b.
-ALLOWED_DIS_PREFIXES: con "/dis/wm/:/dis/charon/:/dis/xenith/";
+ALLOWED_DIS_PREFIXES: con "/dis/wm/:/dis/xenith/";
 
 # Check if path is a launchable .dis app.  Keep this in step with lucifer.b's
 # validdispath(), which is the execution gate for presentation app loads.
@@ -2040,7 +2072,7 @@ islaunchabledis(path: string): int
 	if(path == nil || len path == 0)
 		return 0;
 	# Check allowed prefixes
-	prefixes := "/dis/wm/" :: "/dis/charon/" :: "/dis/xenith/" :: nil;
+	prefixes := "/dis/wm/" :: "/dis/xenith/" :: nil;
 	ok := 0;
 	for(pl := prefixes; pl != nil; pl = tl pl) {
 		pfx := hd pl;
@@ -2092,7 +2124,6 @@ launchdisapp(path: string)
 	writetofile(pctl, "center id=" + name);
 }
 
-# Send "open <path>" to edit. Use 9P if available, else real-file IPC.
 # Plumb a file-open so the plumber routes it to the presentation view by
 # type (pdf/image/markdown -> content, text/source -> editor) — the same
 # shared path ftree uses.  Returns 1 if the plumber accepted it, 0 if none
@@ -2114,64 +2145,29 @@ plumbopenfile(path, dir: string): int
 	return 1;
 }
 
-openineditor(path: string, has9p: int)
+# Open path in the editor: through its posted server (#seditor/fs,
+# post9p(2)) when one runs, mounted in a name space of the proc's own;
+# else start one on the file.  Nothing waits for it to appear.
+openineditor(path: string)
 {
-	cmd := "open " + path;
-	if(has9p) {
-		fd := sys->open("/edit/ctl", Sys->OWRITE);
-		if(fd != nil) {
-			b := array of byte cmd;
-			n := sys->write(fd, b, len b);
-			if(n == len b)
-				return;
-		}
-		sys->fprint(sys->fildes(2), "lucictx: openineditor 9P failed, using real-file: %r\n");
-	}
-	# Real-file IPC: edit polls /tmp/veltro/editor/ctl on timer ticks
-	wfd := sys->create("/tmp/veltro/editor/ctl", Sys->OWRITE, 8r666);
-	if(wfd != nil) {
-		b := array of byte cmd;
-		sys->write(wfd, b, len b);
-	}
+	done := chan of int;
+	spawn editoropen(path, done);
+	if(<-done)
+		return;
+	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	writetofile(pctl, "create id=editor type=app dis=/dis/wm/editor.dis label=editor data=" + path);
+	writetofile(pctl, "center id=editor");
 }
 
-# Ensure edit is running. If /edit/ctl doesn't exist, create a
-# presentation artifact to launch it in the presentation zone.
-# Guards against re-entry: once we've tried to launch, don't retry
-# until the activity changes (switchactivity resets the flag).
-editor_launched := 0;	# 1 = already attempted launch for this activity
-
-ensureeditor(): int
+editoropen(path: string, done: chan of int)
 {
-	# Check 9P path first (fast, instant open)
-	fd := sys->open("/edit/ctl", Sys->OREAD);
-	if(fd != nil) {
-		fd = nil;
-		editor_launched = 1;
-		return 1;	# 9P available
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
+		done <-= 0;
+		return;
 	}
-	# If we already tried launching, don't spam creation attempts
-	if(editor_launched)
-		return 0;
-	editor_launched = 1;
-	# Launch via presentation system
-	sys->fprint(sys->fildes(2), "lucictx: ensureeditor: launching editor\n");
-	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-	cmd := "create id=editor type=app dis=/dis/wm/editor.dis label=editor";
-	writetofile(pctl, cmd);
-	writetofile(pctl, "center id=editor");
-	# Poll until /edit/ctl appears
-	for(i := 0; i < 20; i++) {
-		sys->sleep(250);
-		fd = sys->open("/edit/ctl", Sys->OREAD);
-		if(fd != nil) {
-			fd = nil;
-			sys->fprint(sys->fildes(2), "lucictx: ensureeditor: 9P ready after %dms\n", (i+1)*250);
-			return 1;
-		}
-	}
-	sys->fprint(sys->fildes(2), "lucictx: ensureeditor: no 9P, using real-file IPC\n");
-	return 0;
+	done <-= writetofile("/mnt/editor/ctl", "open " + path) > 0;
 }
 
 # Find a PinnedPath matching the given source path, or nil if not found.

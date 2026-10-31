@@ -231,6 +231,7 @@ typestart(void)
 	nfns = 0;
 	nadts = 0;
 	selfdecl = nil;
+	selfldt = nil;
 	if(tfnptr->decl != nil)
 		tfnptr->decl->desc = nil;
 

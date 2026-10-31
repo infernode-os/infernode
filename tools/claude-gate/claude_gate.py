@@ -66,6 +66,11 @@ BUILTIN_TOOLS = [
 ]
 
 
+# What a request with no system prompt of its own is given (llmsrv's
+# summary request is one).
+NEUTRAL_SYSTEM = "You are a helpful assistant."
+
+
 # ── turn state ─────────────────────────────────────────────────────
 
 class Rendezvous:
@@ -92,7 +97,8 @@ class Turn:
         self.model = model
         self.events = asyncio.Queue()      # ("tool_calls", [...] ) | ("final", text, usage) | ("error", msg)
         self.text_acc = ""                 # assistant text since the last emit
-        self.rendezvous = {}               # argkey -> [Rendezvous FIFO]
+        self.rendezvous = {}               # argkey -> [Rendezvous] handlers waiting
+        self.delivered = {}                # argkey -> [Rendezvous] results not yet claimed
         self.id_to_argkey = {}             # tool_use id -> argkey
         self.task = None                   # backend driver task
         self.last_activity = time.monotonic()
@@ -104,36 +110,36 @@ class Turn:
     def argkey(name: str, args) -> str:
         return name + "\x00" + json.dumps(args, sort_keys=True, separators=(",", ":"))
 
-    def handler_rendezvous(self, name: str, args) -> Rendezvous:
-        """Called from inside an SDK tool handler: park until the result
-        for this (name, args) call arrives."""
-        rv = Rendezvous()
-        self.rendezvous.setdefault(self.argkey(name, args), []).append(rv)
-        return rv
-
     def register_tool_use(self, tool_use_id: str, name: str, args):
         self.id_to_argkey[tool_use_id] = self.argkey(name, args)
 
+    # Calls are matched to results by (name, args), first come first
+    # served: the SDK's handler is told no tool_use id.  A rendezvous is
+    # taken off its queue by whichever side meets it second, so each one
+    # serves one call.  (Left on the queue once used, the next identical
+    # call in the turn met the spent one and was handed the earlier call's
+    # result: a file read again after it was changed read as it had been.)
     def deliver_result(self, tool_use_id: str, content: str, is_error: bool) -> bool:
         key = self.id_to_argkey.get(tool_use_id)
         if key is None:
             return False
-        fifo = self.rendezvous.get(key)
-        if not fifo:
-            # Handler hasn't fired yet — pre-resolve by creating the slot.
-            rv = Rendezvous()
-            rv.resolve(content, is_error)
-            self.rendezvous.setdefault(key, []).append(rv)
+        waiting = self.rendezvous.get(key)
+        if waiting:
+            waiting.pop(0).resolve(content, is_error)
             return True
-        fifo[0].resolve(content, is_error)
-        # Consumed entries are popped by the handler side after wait().
+        # The result came before its handler: kept for it.
+        rv = Rendezvous()
+        rv.resolve(content, is_error)
+        self.delivered.setdefault(key, []).append(rv)
         return True
 
     def pop_rendezvous(self, name: str, args):
+        """Called from an SDK tool handler: the result for this call,
+        already arrived or to wait for."""
         key = self.argkey(name, args)
-        fifo = self.rendezvous.get(key)
-        if fifo:
-            return fifo.pop(0)
+        early = self.delivered.get(key)
+        if early:
+            return early.pop(0)
         rv = Rendezvous()
         self.rendezvous.setdefault(key, []).append(rv)
         return rv
@@ -338,6 +344,17 @@ if not MOCK:
 
     _OPT_FIELDS = {f.name for f in dataclasses.fields(ClaudeAgentOptions)}
 
+    # The CLI reports a response one content block per AssistantMessage, so
+    # the parallel tool calls of one response arrive as several messages.
+    # With the raw stream events the response's end (message_stop) is
+    # known, and its calls go to llmsrv as one batch.  An SDK without them
+    # falls back to a batch per message: correct, one call per round trip.
+    try:
+        from claude_agent_sdk import StreamEvent  # noqa: E402
+    except ImportError:
+        StreamEvent = None
+    COALESCE = StreamEvent is not None and "include_partial_messages" in _OPT_FIELDS
+
     def make_options(**kw):
         dropped = [k for k in kw if k not in _OPT_FIELDS]
         if dropped:
@@ -367,6 +384,22 @@ if not MOCK:
             handlers.append(tool(name, desc, schema)(make_handler(name)))
         return handlers
 
+    def with_tool_names(system_prompt, tooldefs):
+        """The SDK serves the caller's tools as mcp__nerva__<name>, while the
+        caller's prompt names them bare (read, write, task).  Without saying
+        so, the model calls the bare name, fails, retries with the prefix,
+        and tells the user about it."""
+        if not tooldefs:
+            return system_prompt
+        names = [td.get("function", {}).get("name", "") for td in tooldefs]
+        names = [n for n in names if n]
+        note = ("\n\n<tool_names>The tools named in these instructions are "
+                "available to you as mcp__nerva__<name>: " +
+                ", ".join("%s is mcp__nerva__%s" % (n, n) for n in names) +
+                ". Call them by those names; when you mention a tool to the "
+                "user, use its plain name.</tool_names>")
+        return (system_prompt or "") + note
+
     async def sdk_turn(turn, system_prompt, prompt, tooldefs):
         try:
             mcp_servers = {}
@@ -381,7 +414,11 @@ if not MOCK:
 
             options = make_options(
                 model=map_model(turn.model),
-                system_prompt=system_prompt or None,
+                # Never None: with none, the CLI's own prompt is used, and
+                # with it the host's (its working directory, its git, its
+                # rules), which went into a session's summary as if it
+                # were the session's.
+                system_prompt=with_tool_names(system_prompt, tooldefs) or NEUTRAL_SYSTEM,
                 mcp_servers=mcp_servers,
                 allowed_tools=allowed,
                 disallowed_tools=list(BUILTIN_TOOLS),
@@ -390,13 +427,26 @@ if not MOCK:
                 setting_sources=[],              # never load host CLAUDE.md etc.
                 strict_mcp_config=True,          # ignore host MCP configs
                 max_turns=100,
+                include_partial_messages=COALESCE,
                 env={"MCP_TOOL_TIMEOUT": str(int(HOLD_TIMEOUT * 1000))},
             )
 
             usage_tokens = 0
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
+            tool_uses = []
+
+            async def flush():
+                nonlocal tool_uses
+                if tool_uses:
+                    text, turn.text_acc = turn.text_acc, ""
+                    await turn.events.put(("tool_calls", tool_uses, text, usage_tokens))
                     tool_uses = []
+
+            async for message in query(prompt=prompt, options=options):
+                if COALESCE and isinstance(message, StreamEvent):
+                    if (message.event or {}).get("type") == "message_stop":
+                        await flush()
+                    continue
+                if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             turn.text_acc += block.text
@@ -409,10 +459,14 @@ if not MOCK:
                                 name = name[len("mcp__nerva__"):]
                             turn.register_tool_use(block.id, name, block.input)
                             tool_uses.append((block.id, name, block.input))
-                    if tool_uses:
-                        text, turn.text_acc = turn.text_acc, ""
-                        await turn.events.put(("tool_calls", tool_uses, text, usage_tokens))
-                elif isinstance(message, ResultMessage):
+                    if not COALESCE:
+                        await flush()
+                    continue
+                # Status notices can arrive mid-response; anything else
+                # follows it, and calls are never held past that.
+                if type(message).__name__ not in ("SystemMessage", "RateLimitEvent"):
+                    await flush()
+                if isinstance(message, ResultMessage):
                     u = getattr(message, "usage", None) or {}
                     usage_tokens = int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0))
                     text = turn.text_acc or (getattr(message, "result", None) or "")

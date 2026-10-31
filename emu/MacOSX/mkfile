@@ -1,5 +1,8 @@
 SYSTARG=MacOSX
-OBJTYPE=arm64
+# arm64 (Apple silicon) or amd64 (Intel); the environment's OBJTYPE wins
+OBJTYPE=`{sh -c 'if [ -n "$OBJTYPE" ]; then echo $OBJTYPE; else case $(uname -m) in x86_64) echo amd64;; *) echo arm64;; esac; fi'}
+# Homebrew's prefix differs by architecture
+HOMEBREW=`{sh -c 'case '$OBJTYPE' in amd64) echo /usr/local;; *) echo /opt/homebrew;; esac'}
 # Bypass mkconfig - it causes wrong platform flags
 # Include platform-specific files directly:
 SHELLTYPE=sh

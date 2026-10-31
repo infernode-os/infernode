@@ -35,8 +35,8 @@ if the input sequence is otherwise invalid,
 .B byte2char
 consumes one input byte and generates an error character
 .RB ( Sys->UTFerror ,
-.BR 16r80 ),
-which prints in most fonts as a boxed question mark.
+.BR 16rFFFD ,
+the Unicode replacement character).
 .PP
 .B Char2byte
 performs the inverse of
@@ -49,7 +49,10 @@ is placed in successive bytes starting at
 .IR n ].
 The longest UTF sequence for a single Unicode character is
 .B Sys->UTFmax
-(3) bytes.
+(4) bytes;
+the largest character is
+.B Sys->Runemax
+.RB ( 16r10FFFF ).
 If the translation succeeds,
 .B char2byte
 returns the number of bytes placed in the buffer.

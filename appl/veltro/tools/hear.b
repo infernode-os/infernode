@@ -4,7 +4,7 @@ implement ToolHear;
 # hear - Speech-to-text tool for Veltro agent
 #
 # Listens via /dev/audio and returns transcribed text via the
-# speech9p file server. Requires /n/speech to be mounted.
+# speech9p file server. Requires /mnt/speech to be mounted.
 #
 # Usage:
 #   hear                          # Listen and transcribe (default 5s)
@@ -14,7 +14,7 @@ implement ToolHear;
 #   hear                          # Listen for 5 seconds
 #   hear 10000                    # Listen for 10 seconds
 #
-# The tool writes a start command to /n/speech/hear, then reads
+# The tool writes a start command to /mnt/speech/hear, then reads
 # back the transcribed text. The speech9p server handles the
 # actual recording and STT engine interaction.
 #
@@ -37,8 +37,8 @@ ToolHear: module {
 	schema: fn(): string;
 };
 
-SPEECH_HEAR: con "/n/speech/hear";
-SPEECH_CTL: con "/n/speech/ctl";
+SPEECH_HEAR: con "/mnt/speech/hear";
+SPEECH_CTL: con "/mnt/speech/ctl";
 
 init(): string
 {
@@ -67,15 +67,15 @@ doc(): string
 		"Examples:\n" +
 		"  hear                       Listen for 5 seconds\n" +
 		"  hear 10000                 Listen for 10 seconds\n\n" +
-		"Requires /n/speech (run speech9p first).\n" +
-		"Configure STT engine via: echo 'engine api' > /n/speech/ctl";
+		"Requires /mnt/speech (run speech9p first).\n" +
+		"Configure STT engine via: echo 'engine api' > /mnt/speech/ctl";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"hear\"," +
-		"\"description\":\"Listen and transcribe speech via /n/speech (run speech9p first).\"," +
+		"\"description\":\"Listen and transcribe speech via /mnt/speech (run speech9p first).\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -94,7 +94,7 @@ exec(args: string): string
 	# Check that speech9p is mounted
 	(ok, nil) := sys->stat(SPEECH_HEAR);
 	if(ok < 0)
-		return "error: /n/speech not mounted (run speech9p first)";
+		return "error: /mnt/speech not mounted (run speech9p first)";
 
 	# Parse optional duration
 	duration := "5000";
@@ -107,7 +107,7 @@ exec(args: string): string
 			return "error: duration must be <= 60000ms (60 seconds)";
 	}
 
-	# Write start command to /n/speech/hear to begin recording
+	# Write start command to /mnt/speech/hear to begin recording
 	fd := sys->open(SPEECH_HEAR, Sys->ORDWR);
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r", SPEECH_HEAR);

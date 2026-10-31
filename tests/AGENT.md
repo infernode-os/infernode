@@ -17,16 +17,26 @@ Inferno is Plan 9-derived - it is NOT Unix, Linux, or macOS.
 
 ## Building Software
 
+Build on the host with the native `mk` and `limbo`, not inside Inferno: the
+Inferno shell is not the `SHELLTYPE` the mkfiles expect, and the hosted
+`limbo` marks its output as requiring the JIT. From the repository root:
+
+```sh
+export ROOT=$PWD
+export PATH=$PWD/MacOSX/arm64/bin:$PATH    # or Linux/<arch>/bin
+```
+
 ### Single File
+```sh
+tools/compile-limbo.sh appl/cmd/myfile.b
 ```
-limbo -I /module myfile.b
-```
-Produces `myfile.dis` in the current directory.
+Writes the `.dis` to the path in the module's `PATH` constant. Modules with
+no `PATH` constant are skipped; build those with `mk install`.
 
 ### Project with mkfile
-```
-cd /appl/myproject
-mk
+```sh
+cd appl/myproject
+mk install
 ```
 
 ### mkfile Structure
@@ -231,7 +241,7 @@ Veltro agents run in restricted namespaces. When writing code that interacts wit
 
 - **Agents cannot see**: project files (`.env`, `.git`, `CLAUDE.md`), host filesystem (`/n/local`), top-level commands in `/dis`, most of `/dev` and `/lib`
 - **Agents can see**: `/dis/lib`, `/dis/veltro`, `/lib/veltro`, `/tool`, and
-  isolated `/tmp/veltro/scratch`; `/mnt/llm`, `/n/speech`, app IPC trees, and
+  isolated `/tmp/veltro/scratch`; `/mnt/llm`, `/mnt/speech`, app IPC trees, and
   user paths require explicit capabilities or pre-opened descriptors
 - **Subagents** fork the parent's already-restricted namespace and can only narrow further
 - **Security model**: FORKNS + bind-replace (see `appl/veltro/SECURITY.md`)
@@ -244,13 +254,8 @@ Security tests to run:
 
 ## Building Tests
 
-Tests are built like any other Limbo code:
-```
-cd /tests
-mk
-```
-
-Or single file:
-```
-limbo -I /module mytest_test.b
+Tests are built on the host like any other Limbo code:
+```sh
+cd tests
+mk install
 ```

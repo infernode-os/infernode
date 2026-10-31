@@ -1719,44 +1719,13 @@ comp(Inst *i)
 		}
 		break;
 	case IINDC:
-		opwld(i, Ldw, RA1);			// RA1 = string
-		NOTNIL(RA1, RA2);
-		imm = 1;
-		if((i->add&ARM) != AXIMM || !FITS8((short)i->reg<<1)){
-			mid(i, Ldw, RA2);			// RA2 = i
-			imm = 0;
-		}
-		mem(Ldw, O(String,len),RA1, RA0);	// len<0 => index Runes, otherwise bytes
-		// BUG: check !((ulong)i >= abs(a->len))
-		DPIR(Add, O(String,data), RA1);
-		CMPI(0, RA0);
-		if(imm){
-			label = code;
-			CJUMP(GE, NOBR);
-			if(i->reg < BITS(5))
-				LDB(RA1, i->reg, RA3);
-			else{
-				con(i->reg, RCON, 1);
-				LDRB(RA1, RCON, RA3);
-			}
-			CPATCH(label);
-			label = code;
-			CJUMP(LT, NOBR);
-			if((ushort)((short)i->reg<<1) < BITS(6))
-				LDH(RA1, (short)i->reg<<1, RA3);
-			else{
-				con((short)i->reg<<1, RCON, 1);
-				LDRH(RA1, RCON, RA3);
-			}
-			CPATCH(label);
-		} else {
-			CJUMP(GE, 4);
-			LDRB(RA1, RA2, RA3);
-			CJUMP(LT, 6);
-			DPIRRS(Lsl, 1, RA2, RA2);
-			LDRH(RA1, RA2, RA3);
-		}
-		opwst(i, Stw, RA3);
+		/*
+		 * s[i] reads a byte or, when len < 0, a Rune: 32 bits
+		 * now runes go to U+10FFFF. The code compiled here loaded
+		 * a 16-bit one, and there is no machine left to test a
+		 * wider load on, so the interpreter's OP(indc) does it.
+		 */
+		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case IINDL:
 	case IINDF:

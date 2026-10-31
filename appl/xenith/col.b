@@ -13,9 +13,10 @@ textm : Textm;
 rowm : Rowm;
 filem : Filem;
 windowm : Windowm;
+framem : Framem;
 
 FALSE, TRUE, XXX : import Dat;
-Border : import Dat;
+Border : import dat;
 mouse, colbutton : import dat;
 Point, Rect, Image : import drawm;
 draw : import graph;
@@ -42,6 +43,7 @@ init(mods : ref Dat->Mods)
 	rowm = mods.rowm;
 	filem = mods.filem;
 	windowm = mods.windowm;
+	framem = mods.framem;
 }
 
 Column.init(c : self ref Column, r : Rect)
@@ -370,8 +372,12 @@ Column.grow(c : self ref Column, w : ref Window, but : int, mv : int)
 		}
 		draw(mainwin, cr, textcols[BACK], nil, (0, 0));
 		w.reshape(cr, FALSE, TRUE);
-		for(i=1; i<c.nw; i++)
-			c.w[i].body.frame.maxlines = 0;
+		# the others are under it: their frames hold and draw nothing
+		# until a reshape shows them again
+		for(i=1; i<c.nw; i++){
+			hide(c.w[i].tag);
+			hide(c.w[i].body);
+		}
 		c.safe = FALSE;
 		return;
 	}
@@ -569,6 +575,16 @@ Column.dragwin(c : self ref Column, w : ref Window, but : int)
 	w.reshape(r, c.safe, TRUE);
 	c.safe = TRUE;
     	w.mousebut();
+}
+
+hide(t : ref Text)
+{
+	f := t.frame;
+	framem->frclear(f, 0);
+	r := f.r;
+	r.max.y = r.min.y;
+	framem->frinit(f, r, f.font, f.b, nil);
+	t.lastsr = dat->nullrect;
 }
 
 Column.which(c : self ref Column, p : Point) : ref Text

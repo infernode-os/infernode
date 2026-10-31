@@ -26,6 +26,50 @@ does not provide any means for starting new applications;
 that facility must be provided by an auxilliary program,
 .B wm/toolbar
 being one such example.
+.SS Mouse
+.I Wm
+follows
+.IR rio (1).
+A press of button 1 or 2 on a window's frame (its border, inside its edge; see
+.IR wmlib (2))
+reshapes the window from the nearest edge or corner (a corner within 20 pixels of it)
+for as long as the button is held;
+button 3 moves the window.
+A press of button 1 in a window that is not the current one makes it current,
+and goes no further; buttons 2 and 3 make it current and go on to the window.
+.PP
+On the background, buttons 1 and 2 do nothing.
+Button 3 shows the window menu:
+.TF Delete
+.TP
+.B New
+Sweep out a rectangle with button 3; a shell
+.RB ( wm/shell ,
+see
+.IR wm-shell (1))
+is started in it.
+.TP
+.B Resize
+Choose a window with button 3, then sweep out its new rectangle.
+.TP
+.B Move
+Press button 3 on a window and drag it.
+.TP
+.B Delete
+Choose a window with button 3: its program is told to exit.
+.TP
+.B Hide
+Choose a window with button 3: it is taken off the screen,
+and its label (its title; see the
+.B label
+request below) added to the menu; choosing it puts the window back.
+.PD
+.PP
+Where an operation waits for a window or a rectangle, the cursor shows which,
+as in
+.IR rio ;
+any button but 3 cancels it.
+A click that does not move chooses nothing from the menu.
 .SS Control Interface
 .I Wm
 provides a control interface to programs running inside it
@@ -111,6 +155,15 @@ give the location of the pointer when the drag was initiated.
 .TP
 .B !size \fItag\fP \fIreqid\fP
 Interactively resize window \fItag\fP.
+.TP
+.B label \fItext\fP
+Set the window's label, its title, as shown in the menu of hidden windows.
+.TP
+.B embedded
+Refused:
+.I wm
+places windows but leaves their frames to them (see
+.IR wmlib (2)).
 .TP
 .B fixedorigin
 By default, if a window changes position but not size,
@@ -207,10 +260,29 @@ requests.
 .TP
 .B /chan/wmrect
 File holding current screen rectangle.
+.TP
+.B /chan/wmwindows
+The windows, topmost first, one a line:
+.I id
+and the window's rectangle,
+.IR "minx miny maxx maxy" ;
+hidden windows are not listed.
+Read only.
+A test drives
+.I wm
+as anything else on the screen is driven, by writing to
+.B /dev/pointer
+and
+.B /dev/keyboard
+(see
+.IR pointer (3)
+and
+.IR cons (3)).
 .SH SOURCE
 .B /appl/wm/wm.b
 .SH "SEE ALSO"
 .IR toolbar (1),
 .IR logon (1),
+.IR wm-shell (1),
 .IR tkclient (2),
 .IR wmclient (2)

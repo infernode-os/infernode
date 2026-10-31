@@ -58,9 +58,9 @@ if {ftest -f /dis/llmctl9p.dis} {
 }
 
 # ── LLM service (mounts /mnt/llm) ─────────────────────────────
-llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm}
-llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm}
-llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm}
+llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
+llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
+llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
 
 # backend=cli/codex are the host-side CLI gateways (claude-gate,
 # codex-gate) — both OpenAI-shaped.
@@ -69,21 +69,20 @@ if {~ $llmbackend openai cli codex} {
 	# Per InferNode MODEL-EVAL: low gives ~15× speedup on tool-driven
 	# scenarios with no quality loss vs default medium. Devstral and
 	# Anthropic backends ignore the field — safe to set unconditionally.
-	if {! ~ $llmmodel ''} {
-		llmsrv -D -b openai -u $llmurl -M $llmmodel -r low &
+	if {! ~ $#llmmodel 0} {
+		llmsrv -D -b openai -u $llmurl -M $llmmodel -r low
 	}{
-		llmsrv -D -b openai -u $llmurl -r low &
+		llmsrv -D -b openai -u $llmurl -r low
 	}
 }{
-	if {! ~ $llmmodel ''} {
-		llmsrv -D -M $llmmodel &
+	if {! ~ $#llmmodel 0} {
+		llmsrv -D -M $llmmodel
 	}{
-		llmsrv -D &
+		llmsrv -D
 	}
 }
 
-# Wait for llmsrv to finish its self-mount of /mnt/llm
-sleep 2
+# Each llmsrv above returns once /mnt/llm is mounted, so it is there now.
 
 # ── 9P export ───────────────────────────────────────────────
 # Default: keyring auth (Inferno Ed25519 signer). Clients dial with

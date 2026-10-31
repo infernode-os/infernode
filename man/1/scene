@@ -1,0 +1,127 @@
+.TH SCENE 1
+.SH NAME
+scene, scenedemo, scenereplay \- show a 2-D scene in a window; drive a scene with a demo or a recording
+.SH SYNOPSIS
+.B wm/scene
+[
+.I dir
+]
+.PP
+.B scenedemo
+[
+.B -n
+.I ticks
+] [
+.B -d
+.I ms
+] [
+.I dir
+]
+.PP
+.B scenereplay
+[
+.B -t
+.I start
+] [
+.B -x
+.I rate
+] [
+.I recording
+]
+.SH DESCRIPTION
+.I Scene
+shows the scene in
+.I dir
+(default
+.BR /mnt/scene )
+in a window: entities, features and layers in a geo or xy frame, with
+trails, headings, stale dimming and labels that do not overlap, drawn
+by
+.IR scene (2).
+The directory may be a
+.IR scenefs (4)
+mount, when the view is live and shared: the window follows the
+server's camera and writes its own pan, zoom and selection back to its
+.BR ctl ,
+so every viewer, and any agent, sees the same picture.
+A plain directory of stanza files works too, with a local camera.
+.PP
+It is an ordinary window: it runs under
+.IR wm (1),
+in a Lucifer activity, where the activity's agent can picture it with
+its
+.B window
+tool, or in a Matrix
+.B app
+region:
+.IP
+.EX
+top app /dis/wm/scene.dis /mnt/scene
+.EE
+.PP
+Drag pans, the wheel zooms about the pointer, a click selects;
+.BR + ,
+.B -
+zoom,
+.BR h ,
+.BR j ,
+.BR k ,
+.B l
+pan,
+.B f
+fits; button 3 gives a menu.
+.PP
+.I Scenedemo
+writes a synthetic field survey \(em rovers mowing lanes, a relay, a
+base and its radio range \(em as records to
+.IB dir /log
+(default
+.BR /mnt/scene ),
+one tick per second of scene time, every
+.I ms
+milliseconds (default 200; 0 as fast as possible), for
+.I ticks
+ticks (default: forever).
+.PP
+.I Scenereplay
+plays a recording \(em what a
+.IR scenefs (4)
+.B changes
+file reads \(em back as records on its standard output (from its
+standard input when no
+.I recording
+is named).
+It writes the scene as it stood at
+.I start
+(default: the first time in the recording) as one batch, then each
+tick's records as one write, paced by the recording's clock:
+.I rate
+2 plays at twice its speed, 0 as fast as the reader takes it.
+Where the clock runs backwards, as it does after a
+.BR clear ,
+the pacing starts again from there.
+.SH EXAMPLES
+.EX
+mkdir -p /mnt/scene
+mount -c {scenefs} /mnt/scene
+scenedemo &
+wm/scene
+.EE
+.PP
+Record a run, then show it again from two minutes in, at double speed:
+.IP
+.EX
+cat /mnt/scene/changes > /tmp/run.scene &
+\&...
+scenereplay -t 120 -x 2 /tmp/run.scene > /mnt/scene/log
+.EE
+.SH SOURCE
+.B /appl/wm/scene.b
+.br
+.B /appl/cmd/scenedemo.b
+.br
+.B /appl/cmd/scenereplay.b
+.SH SEE ALSO
+.IR scenefs (4),
+.IR scene (2),
+.IR wmsrv (2)

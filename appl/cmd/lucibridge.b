@@ -1,15 +1,25 @@
 implement LuciBridge;
 
 #
-# lucibridge - Connects Lucifer UI to Veltro agent via /mnt/llm
+# lucibridge - Lucia's client of the Veltro agent harness
 #
 # Reads human messages from /mnt/ui/activity/{id}/conversation/input
-# (blocking read), runs the Veltro agent loop (LLM + tools), and writes
-# responses and tool activity back to the UI as role=veltro messages.
+# (blocking read), hands each to the agent through /mnt/veltro, and
+# renders the agent's text, tool activity and questions back into the
+# UI: conversation messages, the context zone, status and urgency,
+# dialogue tiles for approvals.
 #
-# Usage: lucibridge [-v] [-n maxsteps] [-a actid] [-t tools] [-p paths]
-#   -v            verbose logging
-#   -n steps      max agent steps per turn (default: 20)
+# The agent loop itself is veltrosrv(4): this program starts one with
+# the activity's grants (it mounts at /mnt/veltro in this namespace
+# only) and is a client of its files.  What is Lucia's stays here: the
+# first-run wizard, the welcome document, the guided tour, the context
+# zone, slash commands, the cowfs overlay commands.
+#
+# Usage: lucibridge [-v] [-s] [-n maxsteps] [-a actid] [-t tools] [-p paths]
+#   -v            verbose logging (the agent's trajectory is echoed to
+#                 stderr under the lucibridge: prefix, as before)
+#   -s            register the speech resource
+#   -n steps      max agent steps per turn (default: 100)
 #   -a id         activity ID (default: 0)
 #   -t tools      comma-separated initial tool list (e.g. read,list,write)
 #   -p paths      comma-separated namespace paths to expose via /n/local/
@@ -26,6 +36,7 @@ include "sys.m";
 include "draw.m";
 
 include "string.m";
+include "nsconstruct.m";
 	str: String;
 
 include "arg.m";
@@ -34,11 +45,7 @@ include "arg.m";
 include "agentlib.m";
 	agentlib: AgentLib;
 
-include "audit.m";
-	audit: Audit;
-
-include "auditprov.m";
-	auditprov: AuditProv;
+include "veltrosrv.m";
 
 LuciBridge: module
 {
@@ -53,58 +60,50 @@ autospeak := 0;
 maxsteps := DEFAULT_MAX_STEPS;
 stderr: ref Sys->FD;
 
-# Agent provenance. Optional when auditing is disabled; fail-closed when the
-# install marker says auditing is required.
-provrequired := 0;
-
-# LLM session state
-sessionid := "";
-llmfd: ref Sys->FD;
+# The agent session: its directory under /mnt/veltro.
+sess := "";
 
 # Activity state
 actid := 0;
-convcount := 0;		# messages written to conversation by this bridge
-userinteracted := 0;	# set after user sends a message (suppresses urgency)
+toolmount := "/tool";		# /tool for activity 0, /tool.N for child N
+convcount := 0;				# conversation message count (index for streaming updates)
+userinteracted := 0;		# set once the human sends a message to this activity
+currentpathsraw := "";		# last-seen /tool/paths content (for diffing)
 
-# Failure streak tracking
-MAX_TOOL_FAILURES: con 3;
-lb_failstreak_tool := "";
-lb_failstreak_count := 0;
-
-# Tool tracking: raw string from /tool/tools; updated when tool set changes
-currenttoolsraw := "";
-toolmount := "/tool";	# "/tool" for activity 0, "/tool.N" for child N
-
-# Path tracking: raw string from /tool/paths; updated when path set changes
-currentpathsraw := "";
-
-# CLI overrides from -t/-p flags
 toolargs: list of string;	# from -t flag (comma-separated tool names)
 pathargs: list of string;	# from -p flag (comma-separated paths)
 
+# The role suffix appended to the system prompt when no role file applies.
 BRIDGE_SUFFIX: con "\n\nYou are %AGENT%, the AI agent in a Lucifer activity. " +
-	"You are NOT ChatGPT, NOT Claude, NOT Llama, NOT any other named model. " +
-	"If asked your identity, the first sentence of your reply is exactly: \"I am %AGENT%.\" " +
 	"The user sends messages through the UI. " +
-	"Respond naturally with text for conversational messages, greetings, and answers. " +
-	"Use tools only when the user asks you to perform a specific task.";
+	"Reply directly in plain text for conversation, greetings, and answers. " +
+	"Use tools only when the user asks you to perform a task.";
 
+# A task agent's report to activity 0 when it has finished its assignment,
+# written to activity 0's input (luciuisrv queues it behind a turn in
+# progress).  Activity 0 takes it as a turn of its own, not as words from
+# the human, and tells the human the outcome: it delegates and goes back to
+# the conversation, instead of polling task status in a loop the human can
+# neither see the end of nor interrupt.
+TASKEVENT: con "[task-event] ";
+# A message arrived (msgwatch, with its triage policy): a turn for the agent,
+# shown to the user as a short notice, never as the user's own words.
+MSGEVENT: con "[message-event] ";
+TASKEVENT_MAX: con 7600;	# the whole event: one 9P write (msize 8K) is one message
+TASKEVENT_FILEMAX: con 3500;	# bytes of the task's files carried in the event
+
+# Meta-agent prompt for activity 0 (the Chief of Staff).
 META_PROMPT_PATH: con "/lib/veltro/meta.txt";
-# First-run setup greeting. Read from a data file so a deployment can
-# reword it without patching this module; falls back to the built-in
-# default when the file is absent.
+
+# First-run greeting shown by the setup wizard (overridable).
 SETUP_GREETING_PATH: con "/lib/veltro/setup-greeting.txt";
-# Agent identity, read from a data file so the owner can rename the agent
-# without patching code (default "Veltro"). agentname is the display name /
-# message role; pmark is the "[Name]" prefill+strip identity marker.
+
+# Agent identity (data-driven: the owner can rename the agent without
+# code changes).  The harness reads the same files.
 AGENT_NAME_PATH: con "/lib/veltro/agent-name";
 OS_NAME_PATH: con "/lib/veltro/os-name";
 agentname := "Veltro";
 osname := "InferNode";
-pmark := "[Veltro]";
-# Default agentic sampling temperature (low = reliable tool-calling). Override
-# per-deployment with `temperature=` in /lib/ndb/llm. See initsession().
-AGENT_TEMP: con "0.2";
 
 log(msg: string)
 {
@@ -116,43 +115,6 @@ fatal(msg: string)
 {
 	sys->fprint(stderr, "lucibridge: %s\n", msg);
 	raise "fail:" + msg;
-}
-
-initprovenance()
-{
-	(aonok, nil) := sys->stat(Audit->ONFILE);
-	provrequired = aonok >= 0;
-	(alogok, nil) := sys->stat(Audit->LOGFILE);
-	if(!provrequired && alogok < 0)
-		return;
-	if(provrequired && alogok < 0)
-		fatal("this install requires auditing but /mnt/audit/log is not mounted");
-
-	auditprov = load AuditProv AuditProv->PATH;
-	err := "cannot load audit provenance module";
-	if(auditprov != nil)
-		err = auditprov->init();
-	if(err != nil) {
-		auditprov = nil;
-		if(provrequired)
-			fatal("required provenance unavailable: " + err);
-		return;
-	}
-	err = auditprov->attach(nil);
-	if(err != nil && provrequired)
-		fatal("required provenance unavailable: " + err);
-}
-
-prov(event, msg: string, payload: array of byte)
-{
-	if(auditprov == nil) {
-		if(provrequired)
-			fatal("required provenance module unavailable");
-		return;
-	}
-	rc := auditprov->log("lucibridge", event, msg, payload);
-	if(provrequired && rc != 0)
-		fatal("required provenance write failed");
 }
 
 writefile(path, data: string): int
@@ -240,9 +202,6 @@ llmserviceok(): int
 # the single source of truth.  No hardcoded path lists.
 registernamespace()
 {
-	# Read the manifest written by tools9p — it reflects the agent's
-	# actual restricted namespace.  This is the single source of truth;
-	# no hardcoded path lists.
 	mpath: string;
 	if(actid == 0)
 		mpath = "/tmp/veltro/.ns/manifest";
@@ -260,7 +219,6 @@ registernamespace()
 			line := agentlib->strip(hd lines);
 			if(line == "")
 				continue;
-			# Parse key=value pairs from manifest line
 			path := getkv(line, "path");
 			label := getkv(line, "label");
 			perm := getkv(line, "perm");
@@ -292,13 +250,13 @@ registernamespace()
 	if(mdata != "") {
 		(nil, sl) := sys->tokenize(mdata, "\n");
 		for(; sl != nil; sl = tl sl)
-			if(agentlib->hasprefix(hd sl, "path=/n/speech"))
+			if(agentlib->hasprefix(hd sl, "path=/mnt/speech"))
 				hasspeech = 1;
 	}
 	if(!hasspeech) {
-		(speechok, nil) := sys->stat("/n/speech");
+		(speechok, nil) := sys->stat("/mnt/speech");
 		if(speechok >= 0) {
-			cmd := "resource add path=/n/speech label=Speech type=service status=idle";
+			cmd := "resource add path=/mnt/speech label=Speech type=service status=idle";
 			if(writefile(ctxpath, cmd) >= 0)
 				nreg++;
 		}
@@ -307,39 +265,29 @@ registernamespace()
 	log(sys->sprint("context: registered %d namespace entries", nreg));
 }
 
-# Speak text via speech9p (fire-and-forget, runs in spawned goroutine)
-speaktext(text: string)
-{
-	# Update context zone status
-	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-	writefile(ctxpath, "resource update path=speech status=active");
-
-	fd := sys->open("/n/speech/say", Sys->OWRITE);
-	if(fd == nil) {
-		log("speaktext: cannot open /n/speech/say");
-		writefile(ctxpath, "resource update path=speech status=idle");
-		return;
-	}
-	b := array of byte text;
-	sys->write(fd, b, len b);
-
-	writefile(ctxpath, "resource update path=speech status=idle");
-}
-
-# Read from a blocking fd, strip trailing newline
+# Read one message from a blocking fd (it may take several reads: a read
+# is at most msize), strip trailing newline
 blockread(fd: ref Sys->FD): string
 {
 	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	got := array[0] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		nb := array[len got + n] of byte;
+		nb[0:] = got;
+		nb[len got:] = buf[0:n];
+		got = nb;
+	}
+	if(len got == 0)
 		return nil;
-	s := string buf[0:n];
+	s := string got;
 	if(len s > 0 && s[len s - 1] == '\n')
 		s = s[0:len s - 1];
 	return s;
 }
 
-# Write a message to the activity conversation
 # Replace every occurrence of `from` with `to` (for %AGENT% injection).
 substall(s, pat, repl: string): string
 {
@@ -360,19 +308,34 @@ substall(s, pat, repl: string): string
 	return out;
 }
 
-writemsg(role, text: string)
+# Messages are written from several processes in a turn (the reply as it
+# streams, the user's words as they come); each takes the next index, and
+# the lock keeps two from taking the same one.
+convlock: chan of int;
+
+# Write a message; its index, or -1.
+writemsg(role, text: string): int
+{
+	return writeconv("role=" + role + " text=" + text);
+}
+
+writeconv(msg: string): int
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
-	msg := "role=" + role + " text=" + text;
+	if(convlock == nil)
+		convlock = chan[1] of int;
+	convlock <-= 1;
+	idx := -1;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: write to %s failed: %r\n", path);
 	else
-		convcount++;
+		idx = convcount++;
+	<-convlock;
+	return idx;
 }
 
-# Set activity status
 # Sync convcount with the server's actual message count.
-# Called before streaming to prevent index drift when dialogue tiles
+# Called before a turn to prevent index drift when dialogue tiles
 # or other messages are injected externally.
 syncconvcount()
 {
@@ -388,7 +351,6 @@ syncconvcount()
 # Returns the message index for later updates (e.g. progress).
 writedialogue(title, text, progress, options: string): int
 {
-	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "role=veltro dtype=dialogue";
 	if(title != "")
 		msg += " title=" + title;
@@ -397,12 +359,9 @@ writedialogue(title, text, progress, options: string): int
 	if(options != "")
 		msg += " options=" + options;
 	msg += " text=" + text;
-	if(writefile(path, msg) < 0) {
-		sys->fprint(stderr, "lucibridge: writedialogue failed: %r\n");
-		return -1;
-	}
-	idx := convcount;
-	convcount++;
+	idx := writeconv(msg);
+	if(idx < 0)
+		sys->fprint(stderr, "lucibridge: writedialogue failed\n");
 	return idx;
 }
 
@@ -446,7 +405,6 @@ runsetupwizard()
 
 		if(choice == "Remote API") {
 			writefile(pctl, "create id=keyring type=app dis=/dis/wm/keyring.dis label=Keyring");
-			sys->sleep(500);
 			writefile(pctl, "center id=keyring");
 			writemsg("veltro",
 				"Keyring is open. Select API Key, enter `anthropic` as the service, paste your key. " +
@@ -456,7 +414,6 @@ runsetupwizard()
 			# remainder of the line). -c llm tells wm/settings to open
 			# directly on the LLM Service panel — INFR-100.
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the Ollama backend, " +
@@ -474,7 +431,6 @@ runsetupwizard()
 				gate = "codex-gate";
 			}
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the " +
@@ -486,7 +442,6 @@ runsetupwizard()
 				"Then close InferNode and relaunch it.");
 		} else if(choice == "Remote 9P") {
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
@@ -505,8 +460,7 @@ runsetupwizard()
 			continue;	# keep listening; don't park
 		}
 		# A configurator was opened — park until the user quits and relaunches.
-		for(;;)
-			sys->sleep(60000);
+		<-chan of int;
 	}
 }
 
@@ -524,209 +478,94 @@ updatedialogue(idx: int, progress, title, text: string)
 	writefile(path, msg);
 }
 
-# Read a single user input from the conversation input file (blocking).
-readuserinput(): string
+# The activity's input is read by one process for the agent's life, so
+# what the user types while a turn runs is seen at once: /stop stops the
+# turn, an answer goes to the dialogue that asked, anything else is shown
+# and kept for after the turn.  Read only between turns, it sat unseen
+# until the turn ended, and nothing could stop a turn.
+inputc: chan of string;		# nil once the input is closed
+answerc: chan of string;		# a dialogue's answer, while one is awaited
+awaiting := 0;
+Queued: adt {
+	text:	string;
+	shown:	int;		# already shown as the human's
+};
+queued: list of ref Queued;
+inputclosed := 0;
+
+inputreader()
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return "";
-	return blockread(fd);
-}
-
-# Determine if a tool call needs user approval.
-shellword(args, want: string): int
-{
-	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
-	for(; toks != nil; toks = tl toks)
-		if(hd toks == want)
-			return 1;
-	return 0;
-}
-
-recursiveRmOutsideTmp(args: string): int
-{
-	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
-	sawrm := 0;
-	recursive := 0;
-	tmptarget := 0;
-	outsidetarget := 0;
-	for(; toks != nil; toks = tl toks) {
-		tok := hd toks;
-		if(tok == "rm") {
-			sawrm = 1;
-			continue;
+	for(;;) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil) {
+			inputc <-= nil;
+			return;
 		}
-		if(!sawrm)
-			continue;
-		if(len tok > 1 && tok[0] == '-') {
-			if(agentlib->contains(tok[1:], "r"))
-				recursive = 1;
-			continue;
-		}
-		if(len tok > 0 && tok[0] == '/') {
-			if(tok == "/tmp" || agentlib->hasprefix(tok, "/tmp/"))
-				tmptarget = 1;
-			else
-				outsidetarget = 1;
-		}
+		m := blockread(fd);
+		fd = nil;
+		inputc <-= m;
+		if(m == nil)
+			return;
 	}
-	return sawrm && recursive && (outsidetarget || !tmptarget);
 }
 
-headlessApprovalDeny(): int
+# The next input: one that came during a turn first, in order.
+nextinput(): (string, int)
 {
-	(ok, nil) := sys->stat("/tmp/veltro/.headless-approval-deny");
-	return ok >= 0;
+	if(queued != nil) {
+		q := hd queued;
+		queued = tl queued;
+		return (q.text, q.shown);
+	}
+	if(inputclosed)
+		return (nil, 0);
+	m := <-inputc;
+	if(m == nil)
+		inputclosed = 1;
+	return (m, 0);
 }
 
-needsapproval(toolname, args: string): int
+# Input that came while a turn ran.
+turninput(m: string)
 {
-	if(toolname != "exec" && toolname != "write" && toolname != "edit")
-		return 0;
-	if(toolname == "exec") {
-		if(recursiveRmOutsideTmp(args))
-			return 1;
-		if(shellword(args, "bind") || shellword(args, "mount") ||
-		   shellword(args, "unmount"))
-			return 1;
-	}
-	if(toolname == "write" || toolname == "edit") {
-		if(agentlib->hasprefix(args, "/dis/") || agentlib->hasprefix(args, "/lib/") ||
-		   agentlib->hasprefix(args, "/dev/"))
-			return 1;
-	}
-	return 0;
-}
-
-# Pre-tool approval gate. Returns "allow", "deny", or "headless-deny".
-pretoolapproval(toolname, args: string): string
-{
-	if(!needsapproval(toolname, args))
-		return "allow";
-	# An unattended grind campaign has no trusted operator surface. Its marker
-	# can only make a request fail, never grant authority, so spoofing it cannot
-	# cross a namespace boundary.
-	if(headlessApprovalDeny()) {
-		log("pretool: denied by headless campaign policy for " + toolname);
-		return "headless-deny";
-	}
-	desc := toolname + " " + agentlib->truncate(args, 120);
-	didx := writedialogue("Permission required",
-		desc, "", "Allow,Deny");
-	log("pretool: awaiting approval for " + toolname);
-	setstatus("blocked");
-	seturgency(2);
-	response := readuserinput();
-	log("pretool: user responded: " + response);
-	setstatus("working");
-	seturgency(0);
-	if(response == "Deny" || response == "deny" || response == "no") {
-		if(didx >= 0)
-			updatedialogue(didx, "", "Denied", "");
-		return "deny";
-	}
-	if(didx >= 0)
-		updatedialogue(didx, "", "Allowed", "");
-	return "allow";
-}
-
-# Check context usage and compact with UI feedback.
-COMPACT_THRESHOLD: con 150000;
-
-checkandcompact_ui()
-{
-	usagepath := "/mnt/llm/" + sessionid + "/usage";
-	s := agentlib->readfile(usagepath);
-	if(s == "")
+	if(m == nil) {
+		inputclosed = 1;
+		ctl("cancel");
 		return;
-	n := 0;
-	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++)
-		n = n * 10 + (s[i] - '0');
-	if(n < COMPACT_THRESHOLD)
+	}
+	if(awaiting) {
+		answerc <-= m;
 		return;
-	log(sys->sprint("context at ~%d tokens, compacting", n));
-	pct := n * 100 / 200000;
-	didx := writedialogue("Compacting context",
-		sys->sprint("Context is %d%% full. Summarizing conversation history...", pct),
-		"50", "");
-	compactpath := "/mnt/llm/" + sessionid + "/compact";
-	err := writefile(compactpath, "compact");
-	if(err < 0) {
-		if(didx >= 0)
-			updatedialogue(didx, "100", "Compaction failed", "");
-	} else {
-		if(didx >= 0)
-			updatedialogue(didx, "100", "Context compacted", "Session history summarized.");
 	}
+	if(m == "/stop") {
+		log("human: /stop");
+		ctl("cancel");
+		writemsg("veltro", "(stopping)");
+		return;
+	}
+	shown := 0;
+	if(!agentlib->hasprefix(m, TASKEVENT) && !agentlib->hasprefix(m, MSGEVENT) &&
+	   (len m == 0 || m[0] != '/')) {
+		writemsg("human", m);
+		shown = 1;
+	}
+	r: list of ref Queued;
+	for(l := queued; l != nil; l = tl l)
+		r = hd l :: r;
+	r = ref Queued(m, shown) :: r;
+	queued = nil;
+	for(; r != nil; r = tl r)
+		queued = hd r :: queued;
 }
 
-toolresultstatus(name, content: string): string
+# An answer to a dialogue, during a turn.
+readuserinput(): string
 {
-	lower := str->tolower(content);
-	if(agentlib->hasprefix(lower, "error:") ||
-	   agentlib->hasprefix(lower, "error —") ||
-	   (name == "exec" && (agentlib->contains(lower, "(exit:") ||
-		agentlib->contains(lower, "... (timeout"))) ||
-	   (name == "limbo" && agentlib->contains(lower, "status: failed")))
-		return "error";
-	return "success";
-}
-
-# lucibridge is a trusted process outside the activity namespace. The read
-# tool sees this backing directory mounted at AgentLib->SCRATCH_PATH, so write
-# there but return the path visible to the agent.
-writescratch(content: string, step: int): string
-{
-	path := sys->sprint("%s/%d/step%d.txt", AgentLib->SCRATCH_PATH, actid, step);
-	fd := sys->create(path, Sys->OWRITE, 8r600);
-	if(fd == nil)
-		return "(cannot create activity scratch file)";
-	b := array of byte content;
-	if(sys->write(fd, b, len b) != len b)
-		return "(cannot write activity scratch file)";
-	return sys->sprint("%s/step%d.txt", AgentLib->SCRATCH_PATH, step);
-}
-
-# Track consecutive tool failures with UI notification.
-updatefailstreak_ui(tools: list of (string, string, string), results: list of (string, string)): string
-{
-	ntool := 0;
-	for(tl0 := tools; tl0 != nil; tl0 = tl tl0)
-		ntool++;
-	if(ntool != 1) {
-		lb_failstreak_tool = "";
-		lb_failstreak_count = 0;
-		return "";
-	}
-	(nil, name, nil) := hd tools;
-	(nil, content) := hd results;
-	lname := str->tolower(name);
-	iserror := agentlib->hasprefix(content, "error:") ||
-		agentlib->hasprefix(content, "ERROR:") ||
-		agentlib->hasprefix(content, "error —");
-	if(!iserror) {
-		lb_failstreak_tool = "";
-		lb_failstreak_count = 0;
-		return "";
-	}
-	if(lname == lb_failstreak_tool)
-		lb_failstreak_count++;
-	else {
-		lb_failstreak_tool = lname;
-		lb_failstreak_count = 1;
-	}
-	if(lb_failstreak_count >= MAX_TOOL_FAILURES) {
-		msg := sys->sprint("Tool '%s' has failed %d consecutive times.", name, lb_failstreak_count);
-		writedialogue("Agent stuck",
-			msg + " Consider intervening or letting it try a different approach.",
-			"", "");
-		seturgency(1);
-		lb_failstreak_tool = "";
-		lb_failstreak_count = 0;
-		return msg + " Try a different approach or different arguments.";
-	}
-	return "";
+	awaiting = 1;
+	r := <-answerc;
+	awaiting = 0;
+	return r;
 }
 
 setstatus(status: string)
@@ -739,320 +578,6 @@ seturgency(level: int)
 {
 	path := sys->sprint("/mnt/ui/activity/%d/urgency", actid);
 	writefile(path, string level);
-}
-
-# Create LLM session with system prompt
-initsession(): string
-{
-	log("initsession: creating LLM session");
-	sessionid = agentlib->createsession();
-	if(sessionid == "")
-		return "cannot create LLM session";
-	log("initsession: session " + sessionid);
-
-	# Sampling temperature for the agentic loop. A low temperature sharply
-	# improves tool-call reliability: at the llmsrv default (0.7) the model
-	# intermittently samples a "I've started the tasks…" narration instead of
-	# emitting the task/write tool call (measured ~22% delegation-miss on
-	# gpt-oss); at 0.2 that collapses to ~0 and children also reliably call
-	# write/limbo instead of pasting. Precedence: /tmp/veltro/agent_temp (test
-	# override) > /lib/ndb/llm `temperature=` (deployment config) > AGENT_TEMP
-	# default. Applies to activity 0 and all child activities.
-	tval := agentlib->strip(agentlib->readfile("/tmp/veltro/agent_temp"));
-	if(tval == "")
-		tval = agentlib->strip(readndbfield("/lib/ndb/llm", "temperature"));
-	if(tval == "")
-		tval = AGENT_TEMP;
-	if(tval != "") {
-		tfd := sys->open("/mnt/llm/" + sessionid + "/temperature", Sys->OWRITE);
-		if(tfd != nil) {
-			tb := array of byte tval;
-			sys->write(tfd, tb, len tb);
-			tfd = nil;
-			log("initsession: set temperature to " + tval);
-		}
-	}
-
-	# Apply model override from the task tool (INFR-55). Activity 0 inherits
-	# the system default; child activities may carry a /tmp/veltro/tasks/model.<id>
-	# file selecting a specific backend (e.g. daedalus for coder tasks).
-	if(actid > 0) {
-		modelname := agentlib->strip(agentlib->readfile(
-			sys->sprint("/tmp/veltro/tasks/model.%d", actid)));
-		if(modelname != "") {
-			mfd := sys->open("/mnt/llm/" + sessionid + "/model", Sys->OWRITE);
-			if(mfd != nil) {
-				mb := array of byte modelname;
-				sys->write(mfd, mb, len mb);
-				mfd = nil;
-				log("session model set to " + modelname);
-			} else {
-				log("session model write failed for " + modelname + ": %r");
-			}
-		}
-	}
-
-	# Build system prompt from namespace discovery
-	ns := agentlib->discovernamespace();
-	log("initsession: namespace discovered");
-	sysprompt := agentlib->buildsystemprompt(ns, "");
-	log(sys->sprint("initsession: system prompt %d bytes", len array of byte sysprompt));
-
-	# Append role-specific suffix: meta prompt for activity 0 (main agent),
-	# task agent prompt for child activities (actid > 0). The task tool may
-	# override the default task prompt by writing /tmp/veltro/tasks/agenttype.<id>
-	# (e.g. "coder" -> /lib/veltro/agents/coder.txt) — see INFR-55.
-	suffix := BRIDGE_SUFFIX;
-	atype := "";
-	if(actid == 0) {
-		meta := agentlib->readfile(META_PROMPT_PATH);
-		if(meta != nil)
-			suffix = "\n\n" + agentlib->strip(meta);
-	} else {
-		atype = agentlib->strip(agentlib->readfile(
-			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
-		promptpath := "/lib/veltro/agents/task.txt";
-		if(atype != "" && safeagenttype(atype))
-			promptpath = "/lib/veltro/agents/" + atype + ".txt";
-		taskprompt := agentlib->readfile(promptpath);
-		if(taskprompt == nil && promptpath != "/lib/veltro/agents/task.txt")
-			taskprompt = agentlib->readfile("/lib/veltro/agents/task.txt");
-		if(taskprompt != nil)
-			suffix = "\n\n" + agentlib->strip(taskprompt);
-	}
-	# Inject brand identity into the role suffix (meta.txt / BRIDGE_SUFFIX).
-	suffix = substall(suffix, "%AGENT%", agentname);
-	suffix = substall(suffix, "%OS%", osname);
-
-	MAXWRITE: con 65000;
-	suffixbytes := array of byte suffix;
-	basebytes := array of byte sysprompt;
-	if(len basebytes + len suffixbytes > MAXWRITE) {
-		room := MAXWRITE - len suffixbytes;
-		if(room < 0)
-			room = 0;
-		# Walk back to a valid UTF-8 character boundary to avoid
-		# cutting a multi-byte sequence in half.
-		while(room > 0) {
-			b := int basebytes[room - 1];
-			if(b < 16r80)
-				break;			# ASCII byte -- safe boundary
-			if((b & 16rC0) != 16r80) {
-				room--;			# lead byte of incomplete char -- skip it
-				break;
-			}
-			room--;				# continuation byte -- keep backing up
-		}
-		sysprompt = string basebytes[0:room];
-	}
-	sysprompt += suffix;
-
-	# Open ask fd first so the session stays alive (refs >= 1) while we write
-	# system and tools.  Without this, Limbo's GC finalizes each setup fd
-	# concurrently and can drop refs to 0 between writes, deleting the session.
-	askpath := "/mnt/llm/" + sessionid + "/ask";
-	llmfd = sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil)
-		return sys->sprint("cannot open %s: %r", askpath);
-
-	systempath := "/mnt/llm/" + sessionid + "/system";
-	agentlib->setsystemprompt(systempath, sysprompt);
-
-	# Anchor every response in Veltro identity by prefilling the assistant
-	# turn with "[Veltro] ". agentlib strips the marker on display (see
-	# agentlib.b:hasprefix("[Veltro]") sites) so the user only ever sees
-	# clean text. The prefill is the strongest cheap defence against the
-	# model reflexively introducing itself as ChatGPT / Llama / etc.
-	# Wired only when agentlib has the API available — see INFR-130.
-	prefillpath := "/mnt/llm/" + sessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[" + agentname + "] ");
-
-	# Install tool definitions for native tool_use protocol.
-	# "say" is intentionally excluded: Claude responds with end_turn text directly,
-	# avoiding the tool-call→acknowledgement loop that produces spurious "..." replies.
-	# Tools come from /tool/tools if available (task tools only).
-	toollist: list of string;
-	if(agentlib->pathexists(toolmount)) {
-		tools := agentlib->readfile(toolmount + "/tools");
-		(nil, tls) := sys->tokenize(tools, "\n");
-		for(t := tls; t != nil; t = tl t) {
-			nm := str->tolower(hd t);
-			if(nm != "say")
-				toollist = hd t :: toollist;
-		}
-	}
-	agentlib->initsessiontools(sessionid, toollist);
-	if(agentlib->pathexists(toolmount))
-		currenttoolsraw = agentlib->readfile(toolmount + "/tools");
-
-	# Bind any paths already registered in /tool/paths (e.g. from -p flag)
-	currentpathsraw = "";
-	applypathchanges();
-
-	# Register each available tool as a context resource so the context zone
-	# can display and track which tools the agent is using.
-	nreg := 0;
-	for(t := toollist; t != nil; t = tl t) {
-		nm := str->tolower(hd t);
-		r := writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
-			"resource add path=" + nm + " label=" + hd t + " type=tool status=idle");
-		if(r >= 0)
-			nreg++;
-	}
-	log(sys->sprint("context: registered %d tools as resources", nreg));
-
-	# Register speech resource if speech9p is available
-	if(autospeak) {
-		ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-		writefile(ctxpath, "resource add path=speech label=Speech type=tool status=idle");
-		log("context: registered speech resource");
-	}
-
-	# Register namespace entries (services, devices, filesystems) as resources
-	registernamespace();
-
-	if(atype == "")
-		atype = "default";
-	prov("agentstart", sys->sprint("activity=%d agent=%s agenttype=%s", actid, sessionid,
-		atype), nil);
-	prov("nscaps", sys->sprint("activity=%d agent=%s", actid, sessionid), array of byte ns);
-	prov("sysprompt", sys->sprint("activity=%d agent=%s", actid, sessionid),
-		array of byte sysprompt);
-
-	log(sys->sprint("session %s, prompt %d bytes", sessionid, len array of byte sysprompt));
-	return nil;
-}
-
-# Strip prefill, "say", and "DONE" from LLM responses.
-# Used in chat-only mode where parseaction can't read /tool/tools.
-cleanresponse(response: string): string
-{
-	(nil, lines) := sys->tokenize(response, "\n");
-	result := "";
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		# Strip leading whitespace
-		for(i := 0; i < len line; i++)
-			if(line[i] != ' ' && line[i] != '\t')
-				break;
-		if(i < len line)
-			line = line[i:];
-		else
-			line = "";
-		if(line == "")
-			continue;
-		# Strip [Veltro] prefix
-		if(agentlib->hasprefix(line, pmark))
-			line = agentlib->strip(line[len pmark:]);
-		if(line == "")
-			continue;
-		# Strip "say " prefix
-		lower := str->tolower(line);
-		if(agentlib->hasprefix(lower, "say "))
-			line = agentlib->strip(line[4:]);
-		# Skip DONE lines
-		stripped := str->tolower(agentlib->strip(line));
-		if(stripped == "done")
-			continue;
-		if(result != "")
-			result += "\n";
-		result += line;
-	}
-	if(result == "")
-		result = agentlib->strip(response);
-	return result;
-}
-
-# Extract say text and DONE from LLM response.
-# Returns (text, done): text is nil if no say found.
-extractsay(response: string): (string, int)
-{
-	(nil, lines) := sys->tokenize(response, "\n");
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		line = agentlib->strip(line);
-		if(line == "")
-			continue;
-		if(agentlib->hasprefix(line, pmark))
-			line = agentlib->strip(line[len pmark:]);
-		if(line == "")
-			continue;
-		lower := str->tolower(line);
-		stripped := str->tolower(agentlib->strip(line));
-		if(stripped == "done")
-			return (nil, 1);
-		if(agentlib->hasprefix(lower, "say ")) {
-			# Collect all remaining lines as say text
-			text := agentlib->strip(line[4:]);
-			for(lines = tl lines; lines != nil; lines = tl lines) {
-				rest := hd lines;
-				rest = agentlib->strip(rest);
-				if(agentlib->hasprefix(rest, pmark))
-					rest = agentlib->strip(rest[len pmark:]);
-				rl := str->tolower(agentlib->strip(rest));
-				if(rl == "done")
-					break;
-				if(rest != "")
-					text += " " + rest;
-			}
-			return (text, 0);
-		}
-		# Not say or done — this is a tool invocation or preamble
-		return (nil, 0);
-	}
-	return (nil, 0);
-}
-
-# Write prompt to the LLM ask fd (non-blocking: starts background generation).
-writellmfd(fd: ref Sys->FD, prompt: string)
-{
-	b := array of byte prompt;
-	n := sys->write(fd, b, len b);
-	if(n < 0)
-		sys->fprint(stderr, "lucibridge: writellmfd failed: %r\n");
-}
-
-# Timeout for LLM response reads: 5 minutes (long for extended thinking)
-LLM_READ_TIMEOUT: con 300000;
-
-llmreadworker(fd: ref Sys->FD, ch: chan of string)
-{
-	result := "";
-	buf := array[8192] of byte;
-	offset := big 0;
-	for(;;) {
-		n := sys->pread(fd, buf, len buf, offset);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-		offset += big n;
-	}
-	ch <-= result;
-}
-
-llmreadtimer(ch: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	ch <-= 1;
-}
-
-# Read complete LLM response from the ask fd at offset 0.
-# Blocks until the background generation goroutine completes,
-# or until the timeout expires (prevents infinite hangs on network drop).
-readllmfd(fd: ref Sys->FD): string
-{
-	resultch := chan of string;
-	spawn llmreadworker(fd, resultch);
-	timeoutch := chan of int;
-	spawn llmreadtimer(timeoutch, LLM_READ_TIMEOUT);
-	alt {
-	result := <-resultch =>
-		return result;
-	<-timeoutch =>
-		sys->fprint(stderr, "lucibridge: LLM read timed out after %d seconds\n",
-			LLM_READ_TIMEOUT / 1000);
-		return "";
-	}
 }
 
 # Update an existing conversation message in place (for streaming token display).
@@ -1125,7 +650,7 @@ offertour()
 
 	writemsg("veltro",
 		"Welcome back! Would you like a quick guided tour of InferNode? " +
-		"Or just start chatting \u2014 the tour will wait.");
+		"Or just start chatting — the tour will wait.");
 	writedialogue("Guided Tour",
 		"I can walk you through the basics: launching apps, using tools, and navigating the workspace.",
 		"", "Start Tour,Skip,Don't show again");
@@ -1188,81 +713,54 @@ handletourchoice(input: string): int
 # Generic — decoupled from which tool is being called or its arg order.
 filepathof(args: string): string
 {
-	(nil, toks) := sys->tokenize(args, " \t\n");
-	for(t := toks; t != nil; t = tl t) {
-		tok := hd t;
-		if(len tok > 1 && tok[0] == '/' && safeattrpath(tok))
-			return tok;
+	(nil, toks) := sys->tokenize(args, " \t\n\"{}:,");
+	for(; toks != nil; toks = tl toks) {
+		t := hd toks;
+		if(len t > 1 && t[0] == '/' && safeattrpath(t))
+			return t;
 	}
 	return nil;
 }
 
+# A path is safe as an attribute value when it carries no characters that
+# could terminate or inject a key=value field in the ctl line.
 safeattrpath(p: string): int
 {
-	if(p == nil || p == "" || p[0] != '/')
-		return 0;
 	for(i := 0; i < len p; i++) {
 		c := p[i];
-		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
-		   c == ',' || c == '=')
+		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '=' || c < ' ')
 			return 0;
 	}
 	return 1;
 }
 
+# Replace characters that would break a key=value attribute.
 safeattrtext(s: string): string
 {
 	out := "";
 	for(i := 0; i < len s; i++) {
 		c := s[i];
-		if(c == '=')
-			out[len out] = ':';
-		else if(c == '\n' || c == '\r' || c == '\t')
-			out[len out] = ' ';
+		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '=' || c < ' ')
+			out[len out] = '_';
 		else
 			out[len out] = c;
-	}
-	i = 0;
-	while(i < len out && out[i] == ' ')
-		i++;
-	j := len out;
-	while(j > i && out[j-1] == ' ')
-		j--;
-	if(i >= j)
-		return "";
-	return out[i:j];
-}
-
-# Return the last path component (basename).
-pathbase(path: string): string
-{
-	n := len path;
-	while(n > 1 && path[n-1] == '/')
-		n--;
-	path = path[0:n];
-	i := n - 1;
-	while(i > 0 && path[i] != '/')
-		i--;
-	if(path[i] == '/')
-		return path[i+1:];
-	return path;
-}
-
-# firstlines returns the first n newline-terminated lines of s.
-# Used to keep a preview of large tool results inline for the LLM.
-firstlines(s: string, n: int): string
-{
-	out := "";
-	count := 0;
-	for(i := 0; i < len s && count < n; i++) {
-		out[len out] = s[i];
-		if(s[i] == '\n')
-			count++;
 	}
 	return out;
 }
 
-# strcontains returns 1 if name is in the list l.
+# Last path component (basename)
+pathbase(path: string): string
+{
+	if(path == nil || path == "")
+		return nil;
+	while(len path > 1 && path[len path - 1] == '/')
+		path = path[0:len path - 1];
+	i := len path;
+	while(i > 0 && path[i - 1] != '/')
+		i--;
+	return path[i:];
+}
+
 strcontains(l: list of string, name: string): int
 {
 	for(; l != nil; l = tl l)
@@ -1271,40 +769,31 @@ strcontains(l: list of string, name: string): int
 	return 0;
 }
 
-# Extract just the path portion from "path perm" lines.
-# "path rw" → "path"; "path" → "path" (backward compat)
+# Split a "path [perm]" line into (path, perm).
+splitpathperm(s: string): (string, string)
+{
+	s = agentlib->strip(s);
+	(p, rest) := str->splitl(s, " \t");
+	rest = str->drop(rest, " \t");
+	return (p, rest);
+}
+
+# Extract just the paths from "path perm" lines.
 extractpaths(lines: list of string): list of string
 {
-	result: list of string;
+	out: list of string;
 	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		(p, nil) := splitpathperm(line);
+		(p, nil) := splitpathperm(hd lines);
 		if(p != "")
-			result = p :: result;
+			out = p :: out;
 	}
-	# Reverse to preserve order
 	rev: list of string;
-	for(r := result; r != nil; r = tl r)
-		rev = hd r :: rev;
+	for(; out != nil; out = tl out)
+		rev = hd out :: rev;
 	return rev;
 }
 
-# Split "path [perm]" into (path, perm). Default perm is "rw".
-splitpathperm(s: string): (string, string)
-{
-	for(i := len s - 1; i > 0; i--) {
-		if(s[i] == ' ') {
-			tail := s[i+1:];
-			if(tail == "ro" || tail == "rw")
-				return (s[0:i], tail);
-			break;
-		}
-	}
-	return (s, "rw");
-}
-
-# Look up the permission for a path from /tool/paths lines.
-# Returns "ro" or "rw". Default is "rw" if not found.
+# Permission of a path in "path perm" lines ("" when absent).
 lookuppathperm(lines: list of string, path: string): string
 {
 	for(; lines != nil; lines = tl lines) {
@@ -1312,29 +801,13 @@ lookuppathperm(lines: list of string, path: string): string
 		if(p == path)
 			return perm;
 	}
-	return "rw";
+	return "";
 }
 
-# Sync the running tools9p to match the wanted list.
-# Adds/removes tools via /tool/ctl to reconcile current state.
-synctoolset(want: list of string)
-{
-	if(!agentlib->pathexists(toolmount))
-		return;
-	cur := agentlib->readfile(toolmount + "/tools");
-	(nil, curtl) := sys->tokenize(cur, "\n");
-	for(w := want; w != nil; w = tl w)
-		if(!strcontains(curtl, hd w))
-			writefile(toolctlmount(toolmount) + "/ctl", "add " + hd w);
-	for(c := curtl; c != nil; c = tl c)
-		if(!strcontains(want, hd c))
-			writefile(toolctlmount(toolmount) + "/ctl", "remove " + hd c);
-}
-
-# Apply path changes from /tool/paths into lucibridge's namespace.
-# Diffs current /tool/paths against currentpathsraw; binds new paths,
-# unmounts removed paths.  Called at turn start and from initsession.
-# /tool/paths format: "path perm" per line (e.g. "/n/local/Users/pdfinn/tmp rw").
+# Reflect /tool/paths into the context zone.  Diffs against the last-seen
+# content; binds new paths into this namespace, unmounts removed ones, and
+# pushes resource events so the namespace view updates immediately.  The
+# agent's own system prompt follows /tool/paths inside the harness.
 applypathchanges()
 {
 	if(!agentlib->pathexists(toolmount))
@@ -1345,11 +818,9 @@ applypathchanges()
 	(nil, newlines) := sys->tokenize(latest, "\n");
 	(nil, oldlines) := sys->tokenize(currentpathsraw, "\n");
 
-	# Extract just the path portion from "path perm" lines for diff comparison
 	newpaths := extractpaths(newlines);
 	oldpaths := extractpaths(oldlines);
 
-	# Bind newly added paths into lucibridge's namespace.
 	# Paths already under /n/local/ are accessible via the trfs OS mount —
 	# no rebind needed (and no writable target would exist anyway).
 	# Inferno-native paths (/dis/, /lib/, /mnt/llm/, etc.) are already in the
@@ -1373,7 +844,6 @@ applypathchanges()
 			else
 				log("bound " + p + " -> " + tgt);
 		}
-		# Push resource event so namespace view updates immediately
 		base := pathbase(p);
 		if(base == nil || base == "")
 			base = p;
@@ -1395,32 +865,10 @@ applypathchanges()
 			sys->unmount(nil, tgt);
 			log("unbound " + p);
 		}
-		# Push resource event so namespace view updates immediately
 		writefile(ctxpath, "resource remove " + p);
 	}
 
 	currentpathsraw = latest;
-
-	# Refresh the system prompt so the LLM knows about the updated path set.
-	# (Mirrors the initsessiontools() call that fires when the tool set changes.)
-	if(sessionid != "") {
-		ns := agentlib->discovernamespace();
-		sysprompt := agentlib->buildsystemprompt(ns, "");
-		sfx := BRIDGE_SUFFIX;
-		if(actid == 0) {
-			meta := agentlib->readfile(META_PROMPT_PATH);
-			if(meta != nil)
-				sfx = "\n\n" + agentlib->strip(meta);
-		}
-		MAXWRITE: con 65000;
-		suffixbytes := array of byte sfx;
-		if(len array of byte sysprompt + len suffixbytes > MAXWRITE)
-			sysprompt = string (array of byte sysprompt)[0:MAXWRITE - len suffixbytes];
-		sysprompt += sfx;
-		systempath := "/mnt/llm/" + sessionid + "/system";
-		agentlib->setsystemprompt(systempath, sysprompt);
-		log("system prompt updated with new paths");
-	}
 }
 
 # Handle slash commands from the input channel.
@@ -1494,7 +942,7 @@ handleslash(cmd: string): int
 			ack = "voice: auto-speak disabled";
 		} else {
 			# Set voice name
-			writefile("/n/speech/ctl", "voice " + cmdarg);
+			writefile("/mnt/speech/ctl", "voice " + cmdarg);
 			ack = "voice: set to " + cmdarg;
 		}
 	"diff" =>
@@ -1503,8 +951,17 @@ handleslash(cmd: string): int
 		ack = cowpromote(cmdarg);
 	"revert" =>
 		ack = cowrevert(cmdarg);
+	"kept" =>
+		(nil, w) := sys->tokenize(cmdarg, " ");
+		if(w == nil)
+			ack = keptlist();
+		else if(tl w != nil && (hd w == "apply" || hd w == "discard"))
+			ack = keptdo(hd w, int hd tl w);
+		else
+			ack = "usage: /kept, /kept apply <n>, /kept discard <n>";
 	"help" =>
-		ack = "/bind <path>  — add namespace path\n" +
+		ack = "/stop  — stop what the agent is doing (type it while it works)\n" +
+		      "/bind <path>  — add namespace path\n" +
 		      "/unbind <path>  — remove namespace path\n" +
 		      "/tools +name  — add tool\n" +
 		      "/tools -name  — remove tool\n" +
@@ -1512,11 +969,14 @@ handleslash(cmd: string): int
 		      "/voice <name>  — change voice\n" +
 		      "/diff  — show cowfs changes\n" +
 		      "/promote [path]  — promote cowfs changes\n" +
-		      "/revert [path]  — revert cowfs changes";
+		      "/revert [path]  — revert cowfs changes\n" +
+		      "/kept [apply|discard <n>]  — changes from an earlier session, not applied";
 	* =>
 		return 0;	# unknown slash: pass to agent
 	}
-	writemsg("assistant", ack);
+	# As the agent's: luciuisrv takes no "assistant" role, and every slash
+	# command's answer (/help, /bind, /promote, ...) was refused and lost.
+	writemsg("veltro", ack);
 	return 1;
 }
 
@@ -1531,13 +991,16 @@ Cowfs: module {
 	revertfile:  fn(overlaydir, relpath: string): string;
 };
 
-cowfindoverlay(): string
+# The overlays an activity stages its changes in, one for each folder it
+# may write: /tmp/veltro/cow/<actid>-<key of the folder>.  Only the first
+# was found, so a task given two folders had the changes to one of them
+# reported, promoted and reverted, and the other's left behind.
+cowoverlays(prefix: string): list of string
 {
-	# Overlay dir is /tmp/veltro/cow/{actid}-*
-	prefix := sys->sprint("%d-", actid);
 	fd := sys->open("/tmp/veltro/cow", Sys->OREAD);
 	if(fd == nil)
 		return nil;
+	l: list of string;
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -1545,10 +1008,37 @@ cowfindoverlay(): string
 		for(i := 0; i < n; i++) {
 			nm := dirs[i].name;
 			if(len nm >= len prefix && nm[0:len prefix] == prefix)
-				return "/tmp/veltro/cow/" + nm;
+				l = "/tmp/veltro/cow/" + nm :: l;
 		}
 	}
-	return nil;
+	return l;
+}
+
+myoverlays(): list of string
+{
+	return cowoverlays(sys->sprint("%d-", actid));
+}
+
+# An overlay's changes as lines, each with the folder it is in.
+overlaychanges(cowfs: Cowfs, overlay: string): list of string
+{
+	base := cowbasepath(overlay);
+	out: list of string;
+	for(c := cowfs->diff(overlay); c != nil; c = tl c) {
+		l := hd c;
+		if(base != nil && len l > 2 && l[1] == ' ')
+			l = l[0:2] + base + "/" + l[2:];
+		out = l :: out;
+	}
+	return revl(out);
+}
+
+revl(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 cowdiff(): string
@@ -1556,19 +1046,33 @@ cowdiff(): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
-	changes := cowfs->diff(overlay);
-	if(changes == nil)
-		return "no changes";
 	result := "";
-	for(; changes != nil; changes = tl changes) {
-		if(result != "")
-			result += "\n";
-		result += hd changes;
-	}
+	for(; ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c) {
+			if(result != "")
+				result += "\n";
+			result += hd c;
+		}
+	if(result == "")
+		return "no changes";
 	return result;
+}
+
+# The overlay a file named for /promote or /revert is in: by its full path
+# (under a folder's base), or by a path in the folder (the only overlay).
+cowfilein(ovs: list of string, arg: string): (string, string)
+{
+	for(o := ovs; o != nil; o = tl o) {
+		base := cowbasepath(hd o);
+		if(base != nil && agentlib->hasprefix(arg, base + "/"))
+			return (hd o, arg[len base + 1:]);
+	}
+	if(len ovs == 1 && arg != "" && arg[0] != '/')
+		return (hd ovs, arg);
+	return (nil, nil);
 }
 
 cowpromote(arg: string): string
@@ -1576,28 +1080,65 @@ cowpromote(arg: string): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
-	# Read basepath from .cowmeta
-	basepath := agentlib->readfile(overlay + "/.cowmeta");
-	if(basepath != nil) {
-		# Trim trailing whitespace/newlines
-		while(len basepath > 0 && (basepath[len basepath - 1] == '\n' || basepath[len basepath - 1] == ' '))
-			basepath = basepath[0:len basepath - 1];
-	}
-	if(basepath == nil || basepath == "")
-		return "error: cannot determine base path";
 	if(arg != "") {
-		err := cowfs->promotefile(basepath, overlay, arg);
+		(overlay, rel) := cowfilein(ovs, arg);
+		if(overlay == nil)
+			return "error: " + arg + " is not in a folder this activity changed";
+		err := cowfs->promotefile(cowbasepath(overlay), overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "promoted: " + arg;
 	}
-	(n, err) := cowfs->promote(basepath, overlay);
-	if(err != nil)
-		return "error: " + err;
-	return sys->sprint("promoted %d file(s)", n);
+	total := 0;
+	conflicts := "";
+	for(; ovs != nil; ovs = tl ovs) {
+		basepath := cowbasepath(hd ovs);
+		if(basepath == nil)
+			return "error: cannot determine base path of " + hd ovs;
+		(n, err) := cowfs->promote(basepath, hd ovs);
+		total += n;
+		if(err != nil && agentlib->hasprefix(err, "not applied"))
+			conflicts += sys->sprint("\n%s (in %s)", err, basepath);
+		else if(err != nil)
+			return sys->sprint("error: %s (%d file(s) promoted)", err, total);
+	}
+	# This goes back to the agent that asked for it.  It used to begin
+	# "promoted N file(s)", which a model read as done and told the user so,
+	# and it said to ask the task again, which the task tool cannot do.
+	if(conflicts != "") {
+		applied := "";
+		if(total > 0)
+			applied = sys->sprint(" (%d other file(s) were applied)", total);
+		return sys->sprint("NOT applied%s:%s\n" +
+			"Someone changed those files after this task copied them, so its version would " +
+			"undo that change.  They are left as they are now, without the task's change, which " +
+			"stays staged.  Tell the user it was not applied and why.  To make the change on " +
+			"the current file: \"task revert %d\", then create a new task with the same brief; " +
+			"it starts from the file as it is now.", applied, conflicts, actid);
+	}
+	return sys->sprint("promoted %d file(s)", total);
+}
+
+# The folder an overlay stages changes for: the basepath= line of its
+# .cowmeta.  The whole file used to be taken for the path, so a promote
+# wrote "basepath=/n/local/..." relative to wherever it ran, and saved that
+# as the base, doubling the prefix.  Only an absolute path is a base.
+cowbasepath(overlay: string): string
+{
+	(nil, lines) := sys->tokenize(agentlib->readfile(overlay + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines) {
+		v := agentlib->strip(hd lines);
+		if(!agentlib->hasprefix(v, "basepath="))
+			continue;
+		while(agentlib->hasprefix(v, "basepath="))
+			v = v[len "basepath=":];
+		if(len v > 1 && v[0] == '/')
+			return v;
+	}
+	return nil;
 }
 
 cowrevert(arg: string): string
@@ -1605,371 +1146,833 @@ cowrevert(arg: string): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
 	if(arg != "") {
-		err := cowfs->revertfile(overlay, arg);
+		(overlay, rel) := cowfilein(ovs, arg);
+		if(overlay == nil)
+			return "error: " + arg + " is not in a folder this activity changed";
+		err := cowfs->revertfile(overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "reverted: " + arg;
 	}
-	err := cowfs->revert(overlay);
-	if(err != nil)
-		return "error: " + err;
+	for(; ovs != nil; ovs = tl ovs) {
+		err := cowfs->revert(hd ovs);
+		if(err != nil)
+			return "error: " + err;
+	}
 	return "all changes reverted";
 }
 
-# Run the agent loop for one human turn using native tool_use protocol.
-# Each step starts async LLM generation. If /stream is available (new llmsrv),
-# tokens are streamed into a live placeholder message. Otherwise (old llmsrv,
-# blocking write), the response is displayed directly — no placeholder needed,
-# avoiding the event-delivery race where pushevent("conversation update N")
-# fires before nslistener re-issues its pending read.
-# Read-cache (dedup of identical read-only tool calls) lives in agentlib —
-# agentlib->dedup{reset,check,record}; shared with veltro.b.
+# Changes a task staged and the user neither applied nor discarded before
+# InferNode quit are kept (nsconstruct names their overlay kept-...), not
+# applied, not lost.  Activity 0 offers them back at start, as Acme's Load
+# brings back what was open: each with Apply and Discard, the agent told so
+# it can answer for them.  Left unanswered, they are offered again next time.
+kept: list of (int, string, int);	# (number, overlay, dialogue)
+keptnote := "";				# for the agent, with the first message
 
+offerkept()
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return;
+	# This start's tasks have none yet: an overlay named for an activity is
+	# an earlier start's, until it is set aside when a task of this one is
+	# given the folder.  Set aside now, so its changes are offered.
+	ns := load NsConstruct NsConstruct->PATH;
+	if(ns != nil)
+		for(ovs := cowoverlays(""); ovs != nil; ovs = tl ovs)
+			if(!agentlib->hasprefix(hd ovs, "/tmp/veltro/cow/kept-"))
+				ns->setasidestale(hd ovs);
+	n := 0;
+	about := "";
+	for(ovs = revl(cowoverlays("kept-")); ovs != nil; ovs = tl ovs) {
+		changes := overlaychanges(cowfs, hd ovs);
+		if(changes == nil)
+			continue;
+		if(n == 0)
+			writemsg("veltro", "Some changes a task made in your files last time were never applied. " +
+				"They are kept as they were: apply or discard each below, or leave them for later.");
+		n++;
+		text := "";
+		for(c := changes; c != nil; c = tl c)
+			text += hd c + "\n";
+		text = agentlib->strip(text);
+		didx := writedialogue(sys->sprint("Not applied, from your last session (%d)", n),
+			text, "", sys->sprint("Apply %d,Discard %d", n, n));
+		kept = (n, hd ovs, didx) :: kept;
+		about += sys->sprint("  %d: %s\n", n, agentlib->strip(text));
+	}
+	if(n == 0)
+		return;
+	keptnote = "[Changes a task staged to the user's files in an earlier session were never applied " +
+		"nor discarded; the user is shown each with Apply and Discard. They are:\n" + about +
+		"Only the user applies or discards them (the buttons, or typing /kept apply <n> or " +
+		"/kept discard <n>); you cannot. Mention them if it helps the user.]\n\n";
+	log(sys->sprint("offered %d kept change set(s)", n));
+}
+
+# Apply or discard kept change set n.  Returns what happened.
+keptdo(verb: string, n: int): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "error: cannot load cowfs module";
+	rest: list of (int, string, int);
+	result := "";
+	for(l := kept; l != nil; l = tl l) {
+		(k, overlay, didx) := hd l;
+		if(k != n) {
+			rest = hd l :: rest;
+			continue;
+		}
+		base := cowbasepath(overlay);
+		if(verb == "apply") {
+			if(base == nil)
+				return "error: cannot determine the folder of these changes";
+			(nf, err) := cowfs->promote(base, overlay);
+			if(err != nil && agentlib->hasprefix(err, "not applied"))
+				return sys->sprint("applied %d file(s) to %s, but %s: those files were changed " +
+					"since, and these changes would undo that. Discard %d drops them.", nf, base, err, n);
+			if(err != nil)
+				return "error: " + err;
+			result = sys->sprint("applied %d file(s) to %s", nf, base);
+			updatedialogue(didx, "", sys->sprint("Applied (%d)", n), "");
+		} else {
+			err := cowfs->revert(overlay);
+			if(err != nil)
+				return "error: " + err;
+			result = "discarded the changes to " + base;
+			updatedialogue(didx, "", sys->sprint("Discarded (%d)", n), "");
+		}
+		sys->remove(overlay + "/.cowmeta");
+		sys->remove(overlay);
+	}
+	if(result == "")
+		return sys->sprint("no kept changes numbered %d", n);
+	kept = rest;
+	if(kept == nil)
+		keptnote = "";
+	return result;
+}
+
+keptlist(): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(kept == nil || cowfs == nil)
+		return "no changes kept from an earlier session";
+	out := "";
+	for(l := kept; l != nil; l = tl l) {
+		(k, overlay, nil) := hd l;
+		out += sys->sprint("%d:\n", k);
+		for(c := overlaychanges(cowfs, overlay); c != nil; c = tl c)
+			out += "  " + hd c + "\n";
+	}
+	return agentlib->strip(out) + "\n/kept apply <n> or /kept discard <n>";
+}
+
+# "Apply 2", "Discard 2": a kept change set's buttons.
+handlekeptchoice(input: string): int
+{
+	(n, words) := sys->tokenize(input, " ");
+	if(n != 2 || kept == nil)
+		return 0;
+	verb := hd words;
+	(k, rest) := str->toint(hd tl words, 10);
+	if(rest != "" || (verb != "Apply" && verb != "Discard"))
+		return 0;
+	writemsg("veltro", keptdo(str->tolower(verb), k));
+	return 1;
+}
+
+# --- The harness ---
+
+# Start veltrosrv with this activity's grants.  It mounts at /mnt/veltro in
+# this namespace (the spawned process shares it) and its init returns; the
+# serving process has forked and restricted its own namespace by then.
+srvdone: chan of int;
+
+runsrv(srv: VeltroSrv, args: list of string)
+{
+	srv->init(nil, args);
+	srvdone <-= 1;
+}
+
+startharness()
+{
+	srv := load VeltroSrv VeltroSrv->PATH;
+	if(srv == nil)
+		fatal("cannot load " + VeltroSrv->PATH);
+	args: list of string;
+	args = "-a" :: sys->sprint("activity=%d", actid) :: args;
+	args = "-S" :: sys->sprint("%s/%d", AgentLib->SCRATCH_PATH, actid) :: args;
+	args = "-m" :: toolmount :: args;
+	args = "-n" :: string maxsteps :: args;
+	if(verbose)
+		args = "-v" :: args;
+	if(toolargs != nil)
+		args = "-t" :: join(toolargs, ",") :: args;
+	if(pathargs != nil)
+		args = "-p" :: join(pathargs, ",") :: args;
+	args = "veltrosrv" :: args;
+
+	srvdone = chan of int;
+	spawn runsrv(srv, args);
+	timeout := chan of int;
+	spawn timer(timeout, 20000);
+	alt {
+	<-srvdone =>
+		;
+	<-timeout =>
+		fatal("veltrosrv did not start");
+	}
+
+	sid := agentlib->strip(agentlib->readfile("/mnt/veltro/new"));
+	if(sid == "")
+		fatal("cannot start an agent session");
+	sess = "/mnt/veltro/" + sid;
+	log("agent session at " + sess);
+}
+
+join(l: list of string, sep: string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		if(s != "")
+			s += sep;
+		s += hd l;
+	}
+	return s;
+}
+
+timer(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	ch <-= 1;
+}
+
+ctl(req: string): int
+{
+	n := writefile(sess + "/ctl", req);
+	if(n < 0)
+		log(sys->sprint("ctl %s: %r", req));
+	return n;
+}
+
+# Give the session its role.  Activity 0 is the Chief of Staff (meta.txt);
+# a child activity runs the task prompt, or a specific agent type the task
+# tool named; BRIDGE_SUFFIX stands in when a file is missing.  The task tool
+# may also override the model.  Then the task brief and instructions, as
+# <task> and <instructions> in the system prompt.
+configuresession(): (string, string)
+{
+	atype := "";
+	if(actid == 0) {
+		if(agentlib->readfile(META_PROMPT_PATH) != nil)
+			ctl("role meta");
+		else
+			ctl("brief " + substall(substall(BRIDGE_SUFFIX, "%AGENT%", agentname), "%OS%", osname));
+	} else {
+		atype = agentlib->strip(agentlib->readfile(
+			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
+		role := "task";
+		if(atype != "" && safeagenttype(atype) &&
+		   agentlib->readfile("/lib/veltro/agents/" + atype + ".txt") != nil)
+			role = atype;
+		if(ctl("role " + role) < 0)
+			ctl("brief " + substall(substall(BRIDGE_SUFFIX, "%AGENT%", agentname), "%OS%", osname));
+	}
+
+	taskbrief := "";
+	taskinstr := "";
+	if(actid > 0) {
+		taskbrief = agentlib->readfile(sys->sprint("/tmp/veltro/tasks/brief.%d", actid));
+		if(taskbrief != nil)
+			taskbrief = agentlib->strip(taskbrief);
+		else
+			taskbrief = "";
+		taskinstr = agentlib->readfile(sys->sprint("/tmp/veltro/tasks/instructions.%d", actid));
+		if(taskinstr != nil)
+			taskinstr = agentlib->strip(taskinstr);
+		else
+			taskinstr = "";
+		injection := "";
+		if(taskbrief != "")
+			injection += "<task>" + taskbrief + "</task>";
+		if(taskinstr != "")
+			injection += "\n\n<instructions>" + taskinstr + "</instructions>";
+		if(injection != "") {
+			ctl("brief " + injection);
+			log("injected task brief into system prompt: " + agentlib->truncate(taskbrief, 100));
+			if(taskinstr != "")
+				log("injected instructions: " + agentlib->truncate(taskinstr, 100));
+		}
+	}
+	return (taskbrief, taskinstr);
+}
+
+# --- One turn: the agent's files, rendered into the UI ---
+
+# Shared between the followers of one turn.
+laststop := "";		# how the last turn ended (veltrosrv's stop=)
+placeholder := -1;		# the ▌ bubble shown while the first reply is awaited
+placeholderused := 0;
+curstep := 0;
+
+# Follow text from offset until the session goes idle, rendering each
+# message as it arrives: the first reply of a turn fills the placeholder,
+# later ones get their own bubble, titled notes become dialogue tiles.
+textfollow(offset: big, done: chan of int)
+{
+	fd := sys->open(sess + "/text", Sys->OREAD);
+	if(fd == nil) {
+		done <-= 1;
+		return;
+	}
+	buf := array[8192] of byte;
+
+	role := "";		# of the message being received
+	title := "";
+	body := "";
+	idx := -1;		# conversation index of the live bubble
+	atline := 1;
+	held := "";		# a possible header, held until it is known
+	for(;;) {
+		n := sys->pread(fd, buf, len buf, offset);
+		if(n <= 0)
+			break;
+		offset += big n;
+		chunk := string buf[0:n];
+		changed := 0;
+		for(i := 0; i < len chunk; i++) {
+			c := chunk[i];
+			if(held != "" || (atline && c == '=')) {
+				held[len held] = c;
+				if(c == '\n') {
+					if(len held > 3 && held[0:3] == "== ") {
+						# A header: finish the message in hand.
+						endmessage(role, title, body, idx);
+						(role, title) = splitheader(held[3:len held - 1]);
+						body = "";
+						idx = beginmessage(role, title);
+						changed = 0;
+					} else {
+						body += held;
+						changed = 1;
+					}
+					held = "";
+					atline = 1;
+				} else if(len held <= 3 && held != "== "[0:len held]) {
+					body += held;
+					held = "";
+					changed = 1;
+					atline = 0;
+				}
+				continue;
+			}
+			body[len body] = c;
+			changed = 1;
+			atline = c == '\n';
+		}
+		if(changed && idx >= 0)
+			updateliveconvmsg(idx, trimnl(body));
+	}
+	if(held != "")
+		body += held;
+	endmessage(role, title, body, idx);
+	done <-= 1;
+}
+
+splitheader(h: string): (string, string)
+{
+	(role, rest) := str->splitl(h, " ");
+	return (role, str->drop(rest, " "));
+}
+
+trimnl(s: string): string
+{
+	while(len s > 0 && s[len s - 1] == '\n')
+		s = s[0:len s - 1];
+	return s;
+}
+
+# A message starts: the bubble it will stream into, or -1 for one that is
+# shown whole at its end (notes, and the user's own words, already shown).
+# The first streamed reply of a turn fills the placeholder; a say, which
+# the loop delivers whole, always gets its own bubble.
+beginmessage(role, title: string): int
+{
+	if(role != "veltro")
+		return -1;
+	if(title != "say" && placeholder >= 0 && !placeholderused && curstep <= 1) {
+		placeholderused = 1;
+		return placeholder;
+	}
+	return writemsg("veltro", "");
+}
+
+endmessage(role, title, body: string, idx: int)
+{
+	body = trimnl(body);
+	case role {
+	"veltro" =>
+		if(idx >= 0)
+			updateliveconvmsg(idx, body);
+	"note" =>
+		if(title != "") {
+			writedialogue(title, body, "", "");
+			if(title == "Agent stuck")
+				seturgency(1);
+		} else
+			writemsg("veltro", body);
+	}
+}
+
+# Follow the log: echo it under our prefix (the trajectory grind scores),
+# and keep status and the context zone in step with the tools.
+logfollow(offset: big, done: chan of int)
+{
+	fd := sys->open(sess + "/log", Sys->OREAD);
+	if(fd == nil) {
+		done <-= 1;
+		return;
+	}
+	buf := array[8192] of byte;
+	partial := "";
+	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
+	curtool := "";
+	curpath := "";
+	for(;;) {
+		n := sys->pread(fd, buf, len buf, offset);
+		if(n <= 0)
+			break;
+		offset += big n;
+		partial += string buf[0:n];
+		for(;;) {
+			(line, rest) := str->splitl(partial, "\n");
+			if(rest == "")
+				break;
+			partial = rest[1:];
+			log(line);
+			if(agentlib->hasprefix(line, "turn done stop=")) {
+				(st, nil) := str->splitl(line[len "turn done stop=":], " ");
+				laststop = st;
+			}
+			if(agentlib->hasprefix(line, "step ") && agentlib->contains(line, ": writing ")) {
+				(stepno, nil) := str->toint(line[5:], 10);
+				curstep = stepno;
+				# A tool-only first step leaves the placeholder empty:
+				# clear it rather than show a stale cursor.
+				if(curstep >= 2 && placeholder >= 0 && !placeholderused) {
+					placeholderused = 1;
+					updateliveconvmsg(placeholder, "");
+				}
+			} else if(agentlib->hasprefix(line, "tool ")) {
+				(nm, rest2) := str->splitl(line[5:], ":");
+				nm = str->tolower(nm);
+				if(agentlib->hasprefix(rest2, ": args ")) {
+					curtool = nm;
+					curpath = filepathof(rest2[7:]);
+					writefile(ctxpath, "resource activity " + nm);
+					writefile(ctxpath, "resource update path=" + nm + " status=active");
+					log("context: active " + nm);
+					if(curpath != nil) {
+						base := safeattrtext(pathbase(curpath));
+						ftype := "file";
+						if(curpath[len curpath - 1] == '/')
+							ftype = "dir";
+						writefile(ctxpath, "resource upsert path=" + curpath +
+							" label=" + base + " type=" + ftype +
+							" via=" + nm + " status=active");
+						log("context: file " + curpath + " via " + nm);
+					}
+				} else if(agentlib->hasprefix(rest2, ": calling")) {
+					setstatus(nm);
+				} else if(agentlib->hasprefix(rest2, ": done")) {
+					setstatus("working");
+					writefile(ctxpath, "resource update path=" + nm + " status=idle");
+					if(nm == curtool && curpath != nil)
+						writefile(ctxpath, "resource update path=" + curpath + " status=idle");
+				}
+			} else if(agentlib->hasprefix(line, "pretool: awaiting")) {
+				setstatus("blocked");
+				seturgency(2);
+			} else if(agentlib->hasprefix(line, "pretool: user responded")) {
+				setstatus("working");
+				seturgency(0);
+			}
+		}
+	}
+	done <-= 1;
+}
+
+# An unattended campaign has no operator to answer a dialogue: its driver
+# creates this marker, and a gated call is denied at once and recorded as
+# such, rather than left waiting for an answer that never comes (INFR-442).
+# The marker can only make a call fail, never grant one, so a spoofed
+# marker cannot widen anything.
+HEADLESSDENY: con "/tmp/veltro/.headless-approval-deny";
+
+headlessdeny(): int
+{
+	(ok, nil) := sys->stat(HEADLESSDENY);
+	return ok >= 0;
+}
+
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
+# Answer the agent's requests for approval with a dialogue tile.
+approver(done: chan of int)
+{
+	for(;;) {
+		fd := sys->open(sess + "/approve", Sys->OREAD);
+		if(fd == nil)
+			break;
+		req := blockread(fd);
+		fd = nil;
+		if(req == nil)
+			break;		# the turn is over
+		(callid, rest) := str->splitl(req, " ");
+		rest = str->drop(rest, " ");
+		if(headlessdeny()) {
+			log("pretool: denied by headless campaign policy: " + rest);
+			writefile(sess + "/approve", "deny " + callid + " headless");
+			continue;
+		}
+		(tool, what) := str->splitl(rest, " ");
+		awaiting = 1;	# before the tile: a quick answer is the tile's
+		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
+		response := readuserinput();
+		answer := approvalanswer(response);
+		writefile(sess + "/approve", answer + " " + callid);
+		if(didx >= 0) {
+			if(answer == "deny")
+				updatedialogue(didx, "", "Denied", "");
+			else
+				updatedialogue(didx, "", "Allowed", "");
+		}
+	}
+	done <-= 1;
+}
+
+# Tell activity 0 this task has done its assignment: what it said last, and
+# the files it left in its workspace.  The workspace is the task's own, out
+# of activity 0's sight, so their contents travel with the event.
+notifyparent()
+{
+	base := sys->sprint("/mnt/ui/activity/%d", actid);
+	label := agentlib->strip(agentlib->readfile(base + "/label"));
+	status := agentlib->strip(agentlib->readfile(base + "/status"));
+	report := "";
+	for(i := 0; ; i++) {
+		m := agentlib->readfile(sys->sprint("%s/conversation/%d", base, i));
+		if(m == nil)
+			break;
+		if(!agentlib->hasprefix(m, "role=veltro "))
+			continue;
+		(nil, t) := str->splitstrl(m, "text=");
+		if(t != nil) {
+			t = agentlib->strip(t[len "text=":]);
+			if(t != "" && t != "▌")
+				report = t;
+		}
+	}
+	if(report == "")
+		report = "(it gave no report)";
+
+	done := "has finished its assignment";
+	if(agentlib->hasprefix(status, "failed"))
+		done = "could not finish its assignment";
+	ev := TASKEVENT + sys->sprint("Task %d \"%s\" %s (status: %s). " +
+		"This is a notification from the harness, not a message from the user.\n\n" +
+		"Its report:\n%s\n", actid, label, done, status, report);
+	files := taskartifacts() + stagedchanges() + taskfiles();
+	tail := "\nTell the user the outcome now, briefly: what was done, and the result " +
+		"(show it when it is short, or what the files hold). If the task asked a " +
+		"question, relay it: the user can answer in the task's own tab. If you " +
+		"have already told the user this outcome (they asked, and you looked), say " +
+		"nothing more about it than that it is done.";
+	# Fit one write: the files give way first, then the report.
+	room := TASKEVENT_MAX - len array of byte (ev + tail);
+	if(len array of byte files > room) {
+		cut := room;
+		if(cut < 0)
+			cut = 0;
+		files = clipbytes(files, cut) + "\n... (truncated)\n";
+	}
+	ev = clipbytes(ev, TASKEVENT_MAX - len array of byte (files + tail) - 32);
+	ev += files + tail;
+	if(writefile("/mnt/ui/activity/0/conversation/input", ev) < 0)
+		log(sys->sprint("notify activity 0: %r"));
+	else
+		log("notified activity 0 of completion");
+}
+
+# What the task changed in the user's folders: staged in its overlay, not in
+# the folders, until promoted.  Said in the report, or the user was told a
+# file had been changed when it had not.
+stagedchanges(): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "";
+	changes: list of string;
+	for(ovs := myoverlays(); ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c)
+			changes = hd c :: changes;
+	if(changes == nil)
+		return "";
+	out := sys->sprint("\nIts changes to the user's files are STAGED, not yet in the files " +
+		"(\"task promote %d\" applies them once the user agrees; \"task revert %d\" " +
+		"discards them):\n", actid, actid);
+	for(changes = revl(changes); changes != nil; changes = tl changes)
+		out += "  " + hd changes + "\n";
+	return out;
+}
+
+# What the user is shown of an arrived message: who, what, a preview.
+msgnotice(ev: string): string
+{
+	out := "";
+	(nil, lines) := sys->tokenize(ev, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		if(agentlib->hasprefix(l, "From: ") || agentlib->hasprefix(l, "Subject: ") ||
+		   agentlib->hasprefix(l, "Preview: "))
+			out += l + "\n";
+	}
+	if(out == "")
+		out = "A message arrived.";
+	return agentlib->strip(out);
+}
+
+# What a task event says for the user: the event less its instructions to
+# the agent.
+eventreport(ev: string): string
+{
+	ev = ev[len TASKEVENT:];
+	(head, nil) := str->splitstrl(ev, "\nTell the user the outcome now");
+	(first, rest) := str->splitstrl(head, " This is a notification from the harness");
+	if(rest != nil) {
+		(nil, after) := str->splitstrl(rest, "\n");
+		head = first + after;
+	}
+	return agentlib->strip(head);
+}
+
+# s cut to at most n bytes, on a character boundary.
+clipbytes(s: string, n: int): string
+{
+	if(n <= 0)
+		return "";
+	if(len array of byte s <= n)
+		return s;
+	b := array of byte s;
+	return string b[0:sys->utfbytes(b, n)];
+}
+
+# The files a task left in its workspace, with what they hold (bounded).
+# stepN.txt: a tool result too long for the model, kept for it to read
+# (veltrosrv), not something the task made.
+spillfile(nm: string): int
+{
+	if(!agentlib->hasprefix(nm, "step") || len nm < 9 || nm[len nm - 4:] != ".txt")
+		return 0;
+	for(i := 4; i < len nm - 4; i++)
+		if(nm[i] < '0' || nm[i] > '9')
+			return 0;
+	return 1;
+}
+
+taskfiles(): string
+{
+	dir := sys->sprint("%s/%d", AgentLib->SCRATCH_PATH, actid);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	budget := TASKEVENT_FILEMAX;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			nm := d[i].name;
+			if(nm == "" || nm[0] == '.' || (d[i].mode & Sys->DMDIR) || spillfile(nm))
+				continue;
+			out += sys->sprint("\n--- %s/%s (%bd bytes; in the task's workspace) ---\n",
+				AgentLib->SCRATCH_PATH, nm, d[i].length);
+			if(budget <= 0 || d[i].length > big (2 * TASKEVENT_FILEMAX)) {
+				out += "(not shown)\n";
+				continue;
+			}
+			c := agentlib->readfile(dir + "/" + nm);
+			if(len c > budget)
+				c = c[0:budget] + "\n... (truncated)";
+			budget -= len c;
+			out += c;
+			if(c != "" && c[len c - 1] != '\n')
+				out += "\n";
+		}
+	}
+	if(out == "")
+		return "";
+	return "\nFiles it wrote:" + out;
+}
+
+# The documents the task put in its presentation view: they are in its own
+# tab, not activity 0's.  Unsaid, activity 0 told the user a task's
+# document was "in the presentation zone" and offered to bring it forward
+# there, where it is not.
+taskartifacts(): string
+{
+	dir := sys->sprint("/mnt/ui/activity/%d/presentation", actid);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if(!(d[i].mode & Sys->DMDIR))
+				continue;
+			id := d[i].name;
+			label := agentlib->strip(agentlib->readfile(dir + "/" + id + "/label"));
+			typ := agentlib->strip(agentlib->readfile(dir + "/" + id + "/type"));
+			out += sys->sprint("  %s \"%s\" (%s)\n", id, label, typ);
+		}
+	}
+	if(out == "")
+		return "";
+	return sys->sprint("\nIt made these documents, shown in its own tab (task %d, \"%s\"), " +
+		"not in yours; the user opens that tab to read them:\n%s", actid,
+		agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/label", actid))), out);
+}
+
+# A task closed while it works stops working: its turn is cancelled, not
+# left to run on with no one to see it.  The close is luciuisrv's global
+# event "activity delete N"; the watcher blocks reading it.
+closewatch(turnover: chan of int)
+{
+	closed := chan of int;
+	pidc := chan of int;
+	spawn closereader(pidc, closed);
+	pid := <-pidc;
+	alt {
+	<-turnover =>
+		kill(pid);
+	<-closed =>
+		log("activity closed: cancelling the turn");
+		ctl("cancel");
+		<-turnover;
+	}
+}
+
+closereader(pidc: chan of int, closed: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	# Opened before the status is read, so a close between the two is
+	# still heard.
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
+	if(agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/status", actid))) == "hidden") {
+		closed <-= 1;
+		return;
+	}
+	if(fd == nil)
+		return;
+	want := sys->sprint("activity delete %d", actid);
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0) {
+		if(agentlib->strip(string buf[0:n]) == want) {
+			closed <-= 1;
+			return;
+		}
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+filelen(path: string): big
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return big 0;
+	return d.length;
+}
+
+# Run the agent for one human turn.
 agentturn(input: string)
 {
-	agentlib->dedupreset();	# fresh read-cache per turn
-	prov("prompt", sys->sprint("activity=%d agent=%s", actid, sessionid), array of byte input);
-
 	# Sync convcount with actual server message count before streaming.
 	syncconvcount();
 
 	# Apply any namespace path changes (via /tool/ctl bindpath/unbindpath).
 	applypathchanges();
 
-	# If the tool set changed (via /tool/ctl), reinitialize the LLM session tools
-	# so the LLM knows about added/removed tools before processing this turn.
-	if(agentlib->pathexists(toolmount)) {
-		latest := agentlib->readfile(toolmount + "/tools");
-		if(latest != nil && latest != currenttoolsraw) {
-			currenttoolsraw = latest;
-			(nil, tls) := sys->tokenize(latest, "\n");
-			newtoollist: list of string;
-			for(t := tls; t != nil; t = tl t) {
-				nm := str->tolower(hd t);
-				if(nm != "say")
-					newtoollist = hd t :: newtoollist;
-			}
-			agentlib->initsessiontools(sessionid, newtoollist);
-			log("tools updated: " + latest);
-		}
-	}
-
 	setstatus("working");
-	prompt := input;
-	streambase := "/mnt/llm/" + sessionid;
+	placeholder = -1;
+	placeholderused = 0;
+	curstep = 0;
+	laststop = "";
 
-	hitlimit := 1;
-	laststep := 0;
-	stopstate := "max-steps";
-	for(step := 0; step < maxsteps; step++) {
-		laststep = step + 1;
-		log(sys->sprint("step %d: writing %d bytes to LLM", step + 1, len array of byte prompt));
-
-		# Start async generation — returns immediately with new llmsrv,
-		# blocks until done with old llmsrv.
-		writellmfd(llmfd, prompt);
-
-		# Try to open stream file. Presence indicates new llmsrv with async Write.
-		streampath := streambase + "/stream";
-		streamfd := sys->open(streampath, Sys->OREAD);
-
-		# placeholder_idx >= 0 means we created a streaming placeholder bubble.
-		# For step 0 (first response to a user message) create the placeholder
-		# immediately so the user sees a ▌ cursor while waiting — llmsrv's CLI
-		# backend has async writes but the /stream file currently returns 0 chunks
-		# (chunks are only available via pread from /ask after generation completes).
-		# For step > 0 (tool-execution follow-ups) defer creation to the first
-		# actual chunk, so tool-only steps produce no spurious bubble.
-		placeholder_idx := -1;
-		if(streamfd != nil) {
-			log("stream: reading " + streampath);
-			buf := array[512] of byte;
-			growing := "";
-			nchunks := 0;
-			# Show activity cursor immediately on the first step.
-			if(step == 0) {
-				placeholder_idx = convcount;
-				writemsg("veltro", "▌");
-			}
-			for(;;) {
-				n := sys->read(streamfd, buf, len buf);
-				if(n <= 0)
-					break;
-				growing += string buf[0:n];
-				nchunks++;
-				# Create placeholder on the first chunk if not already created
-				# (steps > 0), seeded with actual text.
-				if(placeholder_idx < 0) {
-					placeholder_idx = convcount;
-					writemsg("veltro", growing + "▌");
-				}
-				# Batch UI updates: update every 4 chunks to reduce
-				# allocation churn and rlayout re-render frequency.
-				# Sleep after each update so the draw loop has time to
-				# render the intermediate state — prevents "all at once"
-				# appearance when llmsrv pre-buffers all chunks.
-				if((nchunks & 3) == 0) {
-					updateliveconvmsg(placeholder_idx, growing + "▌");
-					sys->sleep(50);
-				}
-			}
-			# Final update with accumulated content (no cursor).
-			# When nchunks == 0 (CLI backend, no streaming), clear the
-			# cursor so it doesn't look stuck while pread blocks.
-			if(placeholder_idx >= 0) {
-				if(nchunks > 0)
-					updateliveconvmsg(placeholder_idx, growing);
-				else
-					updateliveconvmsg(placeholder_idx, "…");
-			}
-			log(sys->sprint("stream: done (%d chunks, %d bytes)", nchunks, len growing));
-			streamfd = nil;
-		} else {
-			sys->fprint(stderr, "lucibridge: stream open %s failed: %r\n", streampath);
-			log("stream: not available (old llmsrv); using direct display");
-		}
-
-		# Pread complete formatted response (blocks until generation done).
-		log("step " + string (step + 1) + ": waiting for LLM response...");
-		response := readllmfd(llmfd);
-		log(sys->sprint("step %d: LLM response %d bytes", step + 1, len array of byte response));
-		if(response == "") {
-			stopstate = "empty";
-			if(placeholder_idx >= 0)
-				updateliveconvmsg(placeholder_idx, "(no response from LLM)");
-			else
-				writemsg("veltro", "(no response from LLM)");
-			break;
-		}
-		prov("llm", sys->sprint("activity=%d agent=%s step=%d", actid, sessionid, step + 1),
-			array of byte response);
-
-		log("llm: " + agentlib->truncate(response, 200));
-
-		(stopreason, tools, text) := agentlib->parsellmresponse(response);
-
-		# Harness: 9P-native tool-call fallback. Models fine-tuned for
-		# coding (e.g. devstral-limbo-v2) emit tool invocations as plain
-		# text — `<toolname>\n<args-or-codefence>` — rather than the
-		# OpenAI structured tool_calls JSON that llmsrv translates into
-		# STOP:tool_use / TOOL: lines. parseaction matches the first
-		# token of the response against the live /tool/tools registry
-		# (toolmount + "/tools"), so this only fires for actual known
-		# tools and won't trip on conversational prose.
-		#
-		# Critically: do NOT run on stopreason "end_turn". end_turn is
-		# the model's definitive terminus — it has chosen to stop. The
-		# wrap-up text often mentions tool names in prose ("save this as
-		# limbo hello.b", "use the limbo tool to ..."), and parseaction
-		# walks every line looking for a tool match, so it fires false
-		# positives on this content. The fallback is only for models
-		# whose ENTIRE response is meant to be a 9P-native tool call,
-		# i.e. they didn't end the turn — they emitted a tool call as
-		# their primary output and the runtime cut on stop or length.
-		# (See INFR-21.)
-		if(stopreason != "tool_use" && stopreason != "end_turn" && text != "") {
-			(nativetool, nativeargs) := agentlib->parseaction(text);
-			if(nativetool != "" && nativetool != "DONE") {
-				stopreason = "tool_use";
-				nativeid := sys->sprint("native-%s-%d", sessionid, step);
-				tools = (nativeid, nativetool, nativeargs) :: nil;
-				text = "";
-				log("harness: 9P-native tool call: " + nativetool);
-			}
-		}
-
-		# Display response: update placeholder (streaming) or add new message (legacy).
-		# When text is empty during tool_use, the LLM emitted only tool calls
-		# with no accompanying text — clear the placeholder so no empty tile
-		# is visible.  Previously we showed "[toolname]" but the event that
-		# carries this update to luciconv can be dropped by the non-blocking
-		# channel send in nslistener, leaving a stale "▌" cursor that is
-		# invisible in the bitmap font → an empty tile.  Clearing to "" is
-		# reliable: even if the update event is dropped, the next event for
-		# this index (or the full loadmessages on activity switch) will read
-		# the empty text and skip the tile.
-		if(text != "") {
-			if(placeholder_idx >= 0)
-				updateliveconvmsg(placeholder_idx, text);
-			else
-				writemsg("veltro", text);
-		} else if(placeholder_idx >= 0) {
-			# Tool-only or empty response: clear placeholder so tile is hidden
-			updateliveconvmsg(placeholder_idx, "");
-		}
-
-		# Plain text or end_turn: done.
-		if(stopreason != "tool_use" || tools == nil) {
-			hitlimit = 0;
-			stopstate = stopreason;
-			if(stopstate == "")
-				stopstate = "end-turn";
-			break;
-		}
-
-		# Execute tools, intercepting say locally.
-		results: list of (string, string);
-		for(tc := tools; tc != nil; tc = tl tc) {
-			(id, name, args) := hd tc;
-			prov("toolcall", sys->sprint("activity=%d agent=%s step=%d tool=%s",
-				actid, sessionid, step + 1, name), array of byte args);
-			if(str->tolower(name) == "say") {
-				writemsg("veltro", args);
-				results = (id, "said") :: results;
-				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s",
-					actid, sessionid, step + 1, name), array of byte "said");
-			} else {
-				# Mark the tool as active in the context zone for the full duration.
-				nm := str->tolower(name);
-				ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
-				writefile(ctxpath, "resource activity " + nm);
-				writefile(ctxpath, "resource update path=" + nm + " status=active");
-				log("context: active " + nm);
-
-				eargs := args;
-
-				# Surface the file/dir this tool is accessing
-				fpath := filepathof(eargs);
-				if(fpath != nil) {
-					base := pathbase(fpath);
-					base = safeattrtext(base);
-					ftype := "file";
-					if(fpath[len fpath - 1] == '/')
-						ftype = "dir";
-					writefile(ctxpath, "resource upsert path=" + fpath +
-						" label=" + base + " type=" + ftype +
-						" via=" + nm + " status=active");
-					log("context: file " + fpath + " via " + nm);
-				}
-
-				# Pre-tool approval for destructive operations
-				approval := pretoolapproval(nm, eargs);
-				if(approval == "deny" || approval == "headless-deny") {
-					denied := "error: operation denied by operator";
-					status := "denied";
-					if(approval == "headless-deny") {
-						denied = "error: operation denied by headless campaign policy";
-						status = "headless-denied";
-					}
-					results = (id, denied) :: results;
-					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
-						actid, sessionid, step + 1, name, status), array of byte denied);
-					writefile(ctxpath, "resource update path=" + nm + " status=idle");
-					if(fpath != nil)
-						writefile(ctxpath, "resource update path=" + fpath + " status=idle");
-					continue;
-				}
-
-				# Read-cache: skip identical read-only repeats (agentlib);
-				# a mutating tool invalidates it (so read->edit->read re-reads).
-				dcskip := agentlib->dedupcheck(nm, eargs);
-				if(dcskip != "") {
-					results = (id, dcskip) :: results;
-					prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=cached",
-						actid, sessionid, step + 1, name), array of byte dcskip);
-					writefile(ctxpath, "resource update path=" + nm + " status=idle");
-					if(fpath != nil)
-						writefile(ctxpath, "resource update path=" + fpath + " status=idle");
-					continue;
-				}
-				setstatus(nm);
-				log("tool " + name + ": calling with " + string len eargs + " bytes");
-				result := agentlib->calltool(name, eargs);
-				prov("toolres", sys->sprint("activity=%d agent=%s step=%d tool=%s status=%s",
-					actid, sessionid, step + 1, name, toolresultstatus(nm, result)), array of byte result);
-				agentlib->deduprecord(nm, eargs, result, step);
-				setstatus("working");
-				writefile(ctxpath, "resource update path=" + nm + " status=idle");
-				if(fpath != nil)
-					writefile(ctxpath, "resource update path=" + fpath + " status=idle");
-				log("tool " + name + ": done, " + agentlib->truncate(result, 100));
-				if(len result > AgentLib->STREAM_THRESHOLD) {
-					# Never re-scratch reads of scratch files — creates an infinite loop
-					# where each read produces another scratch file of similar size.
-					isscratchread := nm == "read" &&
-						len eargs >= len AgentLib->SCRATCH_PATH &&
-						eargs[0:len AgentLib->SCRATCH_PATH] == AgentLib->SCRATCH_PATH;
-					if(isscratchread) {
-						# Truncate so LLM gets as much as possible inline.
-						result = result[0:AgentLib->STREAM_THRESHOLD] +
-							"\n... (truncated — content continues in " + eargs + ")";
-					} else {
-						scratch := writescratch(result, step);
-						# Keep first 3 lines inline so LLM has examples to act on immediately.
-						# IMPORTANT: stay small — TOOL_RESULTS must fit in one 9P Write (~8KB).
-						# 3 lines x ~80 bytes x 20 parallel tools < 5KB, safely under msize.
-						preview := firstlines(result, 3);
-						result = preview +
-							sys->sprint("\n... (%d total bytes — full output at %s)",
-								len result, scratch);
-					}
-					}
-				results = (id, result) :: results;
-			}
-		}
-
-		# Reverse results (list was built by prepending).
-		rev: list of (string, string);
-		for(rl := results; rl != nil; rl = tl rl)
-			rev = (hd rl) :: rev;
-
-		# Track consecutive failures and show dialogue if stuck
-		guidance := updatefailstreak_ui(tools, rev);
-
-		# Check context usage and compact if needed
-		checkandcompact_ui();
-
-		# Inject guidance into the last tool result's content
-		# so it stays inside the TOOL_RESULTS wire format.
-		# Appending raw text after the format causes the parser
-		# to treat it as a tool_use_id, breaking the API call.
-		if(guidance != "" && rev != nil) {
-			# Walk to last element
-			last := rev;
-			for(tmp := tl rev; tmp != nil; tmp = tl tmp)
-				last = tmp;
-			(lid, lcontent) := hd last;
-			lcontent += "\n\n[SYSTEM NOTE: " + guidance + "]";
-			# Rebuild rev with updated last entry
-			newrev: list of (string, string);
-			for(rr := rev; rr != nil; rr = tl rr) {
-				if(tl rr == nil)
-					newrev = (lid, lcontent) :: newrev;
-				else
-					newrev = (hd rr) :: newrev;
-			}
-			# Reverse back
-			rev = nil;
-			for(; newrev != nil; newrev = tl newrev)
-				rev = (hd newrev) :: rev;
-		}
-		prompt = agentlib->buildtoolresults(rev);
-	}
-
-	if(hitlimit) {
-		writemsg("veltro", sys->sprint(
-			"(reached %d-step limit — send another message to continue)", maxsteps));
+	# Where this turn starts in text and log: taken before the input is
+	# written, so a quick reply is not skipped.
+	textoff := filelen(sess + "/text");
+	logoff := filelen(sess + "/log");
+	if(writefile(sess + "/input", input) < 0) {
+		writemsg("veltro", sys->sprint("(the agent is unavailable: %r)"));
 		setstatus("idle");
-	} else {
-		# Agent turn completed normally.  For spawned tasks (actid > 0),
-		# signal the user only for the initial autonomous turn (before
-		# the user has interacted).  Once the user has sent a message,
-		# further completions don't raise urgency — the user is already
-		# engaged and the blinking tile is distracting.
-		# "complete" tells the MA this TA finished its autonomous assignment.
-		if(actid > 0 && !userinteracted)
-			setstatus("complete");
-		else
-			setstatus("idle");
-		if(actid > 0 && !userinteracted)
-			seturgency(1);
+		return;
 	}
-	prov("agentdone", sys->sprint("activity=%d agent=%s steps=%d stop=%s",
-		actid, sessionid, laststep, stopstate), nil);
+	# Show activity at once: a cursor while the first reply is awaited.
+	placeholder = writemsg("veltro", "▌");
+
+	done := chan of int;
+	spawn textfollow(textoff, done);
+	spawn logfollow(logoff, done);
+	spawn approver(done);
+	turnover := chan[1] of int;
+	if(actid > 0)
+		spawn closewatch(turnover);
+	for(ndone := 0; ndone < 3; ) alt {
+	<-done =>
+		ndone++;
+	m := <-inputc =>
+		turninput(m);
+	}
+	if(actid > 0)
+		turnover <-= 1;
+
+	if(placeholder >= 0 && !placeholderused)
+		updateliveconvmsg(placeholder, "");
+
+	# For spawned tasks (actid > 0), signal the user only for the initial
+	# autonomous turn.  Once the user has sent a message, further
+	# completions don't raise urgency — the user is already engaged.
+	# "complete" tells the MA this TA finished its autonomous assignment.
+	if(laststop == "llm-error" && actid > 0)
+		setstatus("failed: the model service could not be reached");
+	else if(actid > 0 && !userinteracted)
+		setstatus("complete");
+	else
+		setstatus("idle");
+	if(actid > 0 && !userinteracted)
+		seturgency(1);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -1990,16 +1993,12 @@ init(nil: ref Draw->Context, args: list of string)
 		fatal("cannot load agentlib: " + AgentLib->PATH);
 	agentlib->init();
 
-	# Agent identity from data (see AGENT_NAME_PATH) — lets the owner rename
-	# the agent without code changes. Drives the display name/role and the
-	# "[Name]" prefill marker that anchors the model's self-identity.
 	an := agentlib->readfile(AGENT_NAME_PATH);
 	if(an != nil) {
 		an = agentlib->strip(an);
 		if(an != "")
 			agentname = an;
 	}
-	pmark = "[" + agentname + "]";
 	on := agentlib->readfile(OS_NAME_PATH);
 	if(on != nil) {
 		on = agentlib->strip(on);
@@ -2008,7 +2007,6 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	arg->init(args);
-	# NOTE: settoolmount() is called after arg parsing sets actid (below)
 	while((c := arg->opt()) != 0) {
 		case c {
 		'v' =>
@@ -2052,7 +2050,6 @@ init(nil: ref Draw->Context, args: list of string)
 	if(actid > 0)
 		toolmount = "/tool." + string actid;
 	agentlib->settoolmount(toolmount);
-	initprovenance();
 
 	# Verify prerequisites
 	if(sys->open("/mnt/ui/ctl", Sys->OREAD) == nil)
@@ -2097,7 +2094,7 @@ init(nil: ref Draw->Context, args: list of string)
 		# Nothing configured — show the wizard. It blocks until the
 		# user picks an option and then parks until quit-and-relaunch.
 		runsetupwizard();
-		fatal("/mnt/llm/ not mounted \u2014 configure an LLM and restart");
+		fatal("/mnt/llm/ not mounted — configure an LLM and restart");
 	} else if(!llmserviceok()) {
 		# Failure mode 2: Configured but LLM not ready yet.
 		# llmsrv may still be starting — retry a few times before giving up.
@@ -2151,9 +2148,13 @@ init(nil: ref Draw->Context, args: list of string)
 					pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
 					# Open directly on the LLM Service panel (INFR-100).
 					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-					sys->sleep(500);
 					writefile(pctl, "center id=settings");
 					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
+				} else if(agentlib->hasprefix(choice, TASKEVENT) || agentlib->hasprefix(choice, MSGEVENT)) {
+					# A task's report or an arrived message, not the user:
+					# there is no model to give it to, and saying so to each
+					# one only filled the chat with the same line.
+					continue;
 				} else {
 					# A typed message while the LLM is unreachable: echo it
 					# and explain, instead of silently eating it.
@@ -2161,42 +2162,30 @@ init(nil: ref Draw->Context, args: list of string)
 					writemsg("veltro",
 						"I still can't reach the LLM, so I can't reply yet. Check the dial " +
 						"address and that the remote is running, then close InferNode and " +
-						"relaunch \u2014 or tap Open Settings above.");
+						"relaunch — or tap Open Settings above.");
 					continue;	# keep listening; don't park
 				}
-				for(;;) sys->sleep(60000);
+				<-chan of int;	# parked until quit and relaunch
 			}
-			fatal("/mnt/llm/ not mounted \u2014 LLM service unreachable");
+			fatal("/mnt/llm/ not mounted — LLM service unreachable");
 		}
 	}
 
-	# Tools are optional — bridge works as simple chat relay without them
+	# Tools are optional — the agent works as a chat relay without them
 	if(agentlib->pathexists(toolmount))
 		log("tools available at " + toolmount);
 	else
 		log("no " + toolmount + " mount — running in chat-only mode");
 
-	# Apply -t tool override: sync tools9p to the specified set
-	if(toolargs != nil)
-		synctoolset(toolargs);
-
-	# Apply -p path bindings: register in tools9p so applypathchanges() in
-	# initsession() picks them up, and lucictx can read them from /tool/paths.
-	# Paths may have :ro or :rw suffix (e.g. "/n/local/Users/tmp:ro").
-	# Convert colon-suffix to space-separated format for tools9p ctl.
-	for(pp := pathargs; pp != nil; pp = tl pp) {
-		parg := hd pp;
-		if(len parg > 3 && parg[len parg - 3:] == ":ro")
-			parg = parg[0:len parg - 3] + " ro";
-		else if(len parg > 3 && parg[len parg - 3:] == ":rw")
-			parg = parg[0:len parg - 3] + " rw";
-		writefile(toolctlmount(toolmount) + "/ctl", "bindpath " + parg);
-	}
-
-	# Create LLM session
-	err := initsession();
-	if(err != nil)
-		fatal(err);
+	# The agent: its own server, with this activity's grants (-t, -p).
+	# It mounts at /mnt/veltro in this namespace, so the namespace must be
+	# this activity's alone: activity 0 and the task agents tools9p starts
+	# were born in one, and each new agent's mount replaced the last, so
+	# after its first delegation activity 0 was talking to its child.
+	if(sys->pctl(Sys->FORKNS, nil) < 0)
+		fatal(sys->sprint("cannot fork namespace: %r"));
+	startharness();
+	(taskbrief, taskinstr) := configuresession();
 
 	# Show welcome document on first launch
 	showwelcome(actid);
@@ -2204,53 +2193,45 @@ init(nil: ref Draw->Context, args: list of string)
 	# Offer guided tour on second launch (keys configured, not first boot)
 	if(actid == 0)
 		offertour();
+	if(actid == 0)
+		offerkept();
 
 	# Sync convcount with messages already in the conversation.
 	syncconvcount();
 
-	# For child TAs (actid > 0): read the task brief and optional instructions
-	# written by the task tool.  Append them to the LLM system prompt inside
-	# <task> and <instructions> tags so the TA knows its assignment.
-	taskbrief := "";
-	taskinstr := "";
-	if(actid > 0) {
-		briefpath := sys->sprint("/tmp/veltro/tasks/brief.%d", actid);
-		taskbrief = agentlib->readfile(briefpath);
-		if(taskbrief != nil)
-			taskbrief = agentlib->strip(taskbrief);
-		else
-			taskbrief = "";
+	# Bind any paths already registered in /tool/paths (e.g. from -p flag)
+	currentpathsraw = "";
+	applypathchanges();
 
-		instrpath := sys->sprint("/tmp/veltro/tasks/instructions.%d", actid);
-		taskinstr = agentlib->readfile(instrpath);
-		if(taskinstr != nil)
-			taskinstr = agentlib->strip(taskinstr);
-		else
-			taskinstr = "";
-
-		if(taskbrief != "" || taskinstr != "") {
-			systempath := "/mnt/llm/" + sessionid + "/system";
-			cursys := agentlib->readfile(systempath);
-			if(cursys == nil)
-				cursys = "";
-			injection := "";
-			if(taskbrief != "")
-				injection += "\n\n<task>" + taskbrief + "</task>";
-			if(taskinstr != "")
-				injection += "\n\n<instructions>" + taskinstr + "</instructions>";
-			agentlib->setsystemprompt(systempath, cursys + injection);
-			log("injected task brief into system prompt: " + agentlib->truncate(taskbrief, 100));
-			if(taskinstr != "")
-				log("injected instructions: " + agentlib->truncate(taskinstr, 100));
-			prov("task", sys->sprint("activity=%d agent=%s", actid, sessionid),
-				array of byte (taskbrief + "\n" + taskinstr));
+	# Register each available tool as a context resource so the context zone
+	# can display and track which tools the agent is using.
+	nreg := 0;
+	if(agentlib->pathexists(toolmount)) {
+		(nil, tls) := sys->tokenize(agentlib->readfile(toolmount + "/tools"), "\n");
+		for(t := tls; t != nil; t = tl t) {
+			nm := str->tolower(hd t);
+			if(nm == "say")
+				continue;
+			r := writefile(sys->sprint("/mnt/ui/activity/%d/context/ctl", actid),
+				"resource add path=" + nm + " label=" + hd t + " type=tool status=idle");
+			if(r >= 0)
+				nreg++;
 		}
 	}
+	log(sys->sprint("context: registered %d tools as resources", nreg));
 
-	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
+	# Register speech resource if speech9p is available
+	if(autospeak) {
+		ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
+		writefile(ctxpath, "resource add path=speech label=Speech type=tool status=idle");
+		log("context: registered speech resource");
+	}
+
+	# Register namespace entries (services, devices, filesystems) as resources
+	registernamespace();
 
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
-		actid, sessionid, maxsteps, convcount));
+		actid, sess, maxsteps, convcount));
 
 	# Autonomous first turn for TAs. The brief/instructions are already in the
 	# system prompt inside <task>/<instructions> tags, but a content-free
@@ -2261,6 +2242,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# This turn is NOT recorded with writemsg(), so it is invisible in the UI;
 	# only the agent's response is shown. Fires on brief OR instructions so an
 	# instructions-only task still auto-starts.
+	inputc = chan of string;
+	answerc = chan of string;
+	spawn inputreader();
+
 	if(taskbrief != "" || taskinstr != "") {
 		kickoff := "You have been started automatically to carry out an assigned task.";
 		if(taskbrief != "")
@@ -2273,21 +2258,35 @@ init(nil: ref Draw->Context, args: list of string)
 			"concise clarifying question; otherwise make a reasonable assumption " +
 			"and proceed.";
 		agentturn(kickoff);
+		notifyparent();
 	}
 
-	# Main loop: re-open input fd each iteration because 9P offset
-	# advances after read, causing subsequent reads to return EOF.
 	for(;;) {
-		inputfd := sys->open(inputpath, Sys->OREAD);
-		if(inputfd == nil)
-			fatal("cannot open " + inputpath);
-		human := blockread(inputfd);
-		inputfd = nil;
+		(human, shown) := nextinput();
 		if(human == nil) {
+			# The activity is closed: stop the agent and give back its
+			# model session, so nothing of it keeps running.
 			log("input closed");
+			ctl("cancel");
+			ctl("close");
 			break;
 		}
 		log("human: " + human);
+
+		# A task's report: a turn for the agent, not words from the human.
+		if(actid == 0 && agentlib->hasprefix(human, MSGEVENT)) {
+			writedialogue("New message", msgnotice(human), "", "");
+			agentturn(human);
+			continue;
+		}
+		if(actid == 0 && agentlib->hasprefix(human, TASKEVENT)) {
+			agentturn(human);
+			# The model could not take it: the outcome is the user's all
+			# the same, so it is shown as the task gave it.
+			if(laststop == "llm-error")
+				writedialogue("Task report", eventreport(human), "", "");
+			continue;
+		}
 
 		# Slash commands (/bind, /unbind, /tools, /help) are handled locally.
 		# They update tools9p state and reply immediately; agent is not invoked.
@@ -2297,16 +2296,20 @@ init(nil: ref Draw->Context, args: list of string)
 		# Tour dialogue button clicks (non-blocking — user can also just chat)
 		if(handletourchoice(human))
 			continue;
+		if(handlekeptchoice(human))
+			continue;
 
-		# Record human message in UI
-		writemsg("human", human);
+		# Record human message in UI (unless it was, as it came)
+		if(!shown)
+			writemsg("human", human);
 		# Revert "complete" → "idle" once the human engages this TA.
 		if(!userinteracted)
 			setstatus("idle");
 		userinteracted = 1;
 
-		# Run agent turn
-		agentturn(human);
+		# Run agent turn; the first is told of changes kept from before.
+		agentturn(keptnote + human);
+		keptnote = "";
 	}
 }
 

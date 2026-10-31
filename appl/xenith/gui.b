@@ -132,13 +132,17 @@ cursorswitch(cur: ref Dat->Cursor)
 
 killwins()
 {
-	# Write "halt" to /dev/sysctl to trigger cleanexit() at C level
-	# This properly cleans up SDL and closes the window
-	fd := sys->open("/dev/sysctl", Sys->OWRITE);
-	if(fd != nil)
-		sys->fprint(fd, "halt");
-	# Fallback to wmctl if sysctl fails
-	wmclient->win.wmctl("exit");
+	# Only when xenith has the display to itself, with no window manager
+	# (it then runs Plain, the whole screen), is its Exit the end of the
+	# session: write "halt" to /dev/sysctl so cleanexit() closes SDL
+	# properly.  Under a window manager (wm/wm, or a wm inside Lucifer)
+	# Exit closes xenith alone: halting there took everything with it.
+	if((xenith->xenithctxt).wm == nil){
+		fd := sys->open("/dev/sysctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "halt");
+	}
+	wmclient->win.wmctl("exit");	# kills xenith's process group
 }
 
 signalclose()

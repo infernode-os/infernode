@@ -1,0 +1,66 @@
+#data
+<template><td>q</template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <td>
+|           "q"
+|   <body>
+
+#data
+<body><template><div>a</div></template>b
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <template>
+|       content
+|         <div>
+|           "a"
+|     "b"
+
+#data
+<table><template><tr><td>x</template></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <template>
+|         content
+|           <tr>
+|             <td>
+|               "x"
+
+#data
+<template><template><p>n</template></template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <template>
+|           content
+|             <p>
+|               "n"
+|   <body>
+
+#data
+<div><template><li>x</li></template></div>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <div>
+|       <template>
+|         content
+|           <li>
+|             "x"
+

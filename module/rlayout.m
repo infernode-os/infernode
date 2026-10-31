@@ -12,18 +12,20 @@ Rlayout: module {
 	# Document node types
 	Ntext,          # Inline text run
 	Nbold,          # Bold text
-	Nitalic,        # Italic text (rendered with underline, since we have limited fonts)
+	Nitalic,        # Italic text (underlined where the family has no italic)
 	Ncode,          # Inline code (monospace)
 	Nlink,          # Hyperlink (rendered as underlined text)
 	Npara,          # Paragraph block
 	Nheading,       # Heading block (level in aux)
 	Ncodeblock,     # Code block (monospace, background)
-	Nbullet,        # Bullet list item
-	Nnumber,        # Numbered list item (number in aux)
+	Nbullet,        # Bullet list item (nesting level in aux)
+	Nnumber,        # Numbered list item (number in aux, nesting level in text)
 	Nhrule,         # Horizontal rule
-	Nblockquote,    # Block quote
+	Nblockquote,    # Block quote paragraph (depth of nesting in aux)
 	Nnewline,       # Explicit line break
-	Ntable          # Table (rows in text, pipe-separated cells, aux=ncols)
+	Ntable,         # Table (rows in text, pipe-separated cells, aux=ncols)
+	Nmermaid,       # Mermaid diagram (text= is raw mermaid syntax, rendered as image)
+	Nstrike         # Struck-through text
 		: con iota;
 
 	# Document node: tree of content
@@ -55,6 +57,40 @@ Rlayout: module {
 	# Render a document to an image.
 	# Returns (image, total height used).
 	render: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int);
+
+	# Parse markdown, with the line (from 0) each block starts on.
+	parsemdlines: fn(text: string): (list of ref DocNode, array of int);
+
+	# Render a document, with the y each block starts at: with
+	# parsemdlines, a map between the text's lines and the image.
+	renderat: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int);
+
+	# A word as drawn: where, and the link it is part of (or nil)
+	Word: adt {
+		text: string;
+		r: Draw->Rect;
+		link: string;
+	};
+
+	# Render a document, with the y each block starts at and the words
+	# drawn, where: for hit-testing and showing what a search found.
+	renderwords: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int, array of Word);
+
+	# A document laid out and not drawn: its height (margin and all),
+	# the y each block starts at, the words, where, and the Mermaid
+	# diagrams drawn for it, which drawband draws from
+	Laid: adt {
+		height: int;
+		ys: array of int;
+		words: array of Word;
+		diagrams: list of (ref DocNode, ref Draw->Image);
+	};
+	measure: fn(doc: list of ref DocNode, style: ref Style): ref Laid;
+
+	# The part of the document dst's rectangle covers (dst.r is in the
+	# document's coordinates), drawn on dst: a strip of a long
+	# document, with no image of the whole of it
+	drawband: fn(doc: list of ref DocNode, style: ref Style, dst: ref Draw->Image, laid: ref Laid);
 
 	# Extract plain text from a document tree (for AI/body buffer).
 	totext: fn(doc: list of ref DocNode): string;

@@ -136,19 +136,22 @@ setenv(s, t : string)
 
 stob(s : string, n : int) : array of byte
 {
-	b := array[2*n] of byte;
+	b := array[Dat->SZRUNE*n] of byte;
 	for (i := 0; i < n; i++) {
-		b[2*i] = byte (s[i]&16rff);
-		b[2*i+1] = byte ((s[i]>>8)&16rff);
+		c := s[i];
+		b[4*i] = byte c;
+		b[4*i+1] = byte (c>>8);
+		b[4*i+2] = byte (c>>16);
+		b[4*i+3] = byte (c>>24);
 	}
 	return b;
 }
 
 btos(b : array of byte, s : ref Astring)
 {
-	n := (len b)/2;
+	n := (len b)/Dat->SZRUNE;
 	for (i := 0; i < n; i++)
-		s.s[i] = int b[2*i] | ((int b[2*i+1])<<8);
+		s.s[i] = int b[4*i] | (int b[4*i+1]<<8) | (int b[4*i+2]<<16) | (int b[4*i+3]<<24);
 }
 
 reverse(ol : list of string) : list of string
@@ -280,8 +283,7 @@ error(s : string)
 {
 	sys->fprint(stderr, "xenith: %s: %r\n", s);
 	debug(sys->sprint("error %s : %r\n", s));
-	# s[-1] = 0;	# create broken process for debugging
-	xenith->xenithexit("error");
+	xenith->internalerror(s);
 }
 
 dlock : ref Lock;
@@ -498,6 +500,43 @@ errorwin(dir : string, ndir : int, incl : array of string, nincl : int) : ref Wi
 	for(i=nincl; --i>=0; )
 		w.addincl(incl[i], n);
 	w.autoindent = dat->globalautoindent;
+	return w;
+}
+
+#
+# Locks the +Errors window for the directory of w's body,
+# after unlocking w; the returned window is locked in its place,
+# with w's owner.
+#
+errorwinforwin(w : ref Window) : ref Window
+{
+	i, nincl, owner : int;
+	incl : array of string;
+	t : ref Text;
+
+	t = w.body;
+	(dir, ndir) := look->dirname(t, nil, 0);
+	if(ndir==1 && dir[0]=='.'){	# sigh
+		dir = nil;
+		ndir = 0;
+	}
+	incl = nil;
+	nincl = w.nincl;
+	if(nincl > 0){
+		incl = array[nincl] of string;
+		for(i=0; i<nincl; i++)
+			incl[i] = w.incl[i];
+	}
+	owner = w.owner;
+	w.unlock();
+	for(;;){
+		w = errorwin(dir, ndir, incl, nincl);
+		w.lock(owner);
+		if(w.col != nil)
+			break;
+		# window deleted too fast
+		w.unlock();
+	}
 	return w;
 }
 

@@ -4,7 +4,7 @@ implement ToolSay;
 # say - Text-to-speech tool for Veltro agent
 #
 # Speaks text aloud through /dev/audio via the speech9p file server.
-# Requires /n/speech to be mounted (run speech9p first).
+# Requires /mnt/speech to be mounted (run speech9p first).
 #
 # Usage:
 #   say <text>                    # Speak the given text
@@ -34,8 +34,8 @@ ToolSay: module {
 	schema: fn(): string;
 };
 
-SPEECH_SAY: con "/n/speech/say";
-SPEECH_CTL: con "/n/speech/ctl";
+SPEECH_SAY: con "/mnt/speech/say";
+SPEECH_CTL: con "/mnt/speech/ctl";
 
 init(): string
 {
@@ -65,15 +65,15 @@ doc(): string
 		"Examples:\n" +
 		"  say Hello, I am Veltro.\n" +
 		"  say -v echo The task is complete.\n\n" +
-		"Requires /n/speech (run speech9p first).\n" +
-		"Configure via: echo 'voice <name>' > /n/speech/ctl";
+		"Requires /mnt/speech (run speech9p first).\n" +
+		"Configure via: echo 'voice <name>' > /mnt/speech/ctl";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"say\"," +
-		"\"description\":\"Speak text aloud via /n/speech (run speech9p first). Optionally select a voice with -v <name>.\"," +
+		"\"description\":\"Speak text aloud via /mnt/speech (run speech9p first). Optionally select a voice with -v <name>.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -126,9 +126,9 @@ exec(args: string): string
 	# Check that speech9p is mounted
 	(ok, nil) := sys->stat(SPEECH_SAY);
 	if(ok < 0)
-		return "error: /n/speech not mounted (run speech9p first)";
+		return "error: /mnt/speech not mounted (run speech9p first)";
 
-	# Write text to /n/speech/say — fire and forget.
+	# Write text to /mnt/speech/say — fire and forget.
 	# speech9p runs TTS in a background thread; the write returns immediately.
 	fd := sys->open(SPEECH_SAY, Sys->OWRITE);
 	if(fd == nil)

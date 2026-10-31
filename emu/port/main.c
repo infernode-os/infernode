@@ -26,6 +26,24 @@ extern	int	mflag;
 	ulong	displaychan;
 char *cputype;
 
+/*
+ * The root, from -r, $INFERNO or $ROOT. Cut short to fit, it would
+ * name some other directory, or none, and fail far from here.
+ */
+static void
+setroot(char *p)
+{
+	int n;
+
+	n = strlen(p);
+	if(n >= sizeof(rootdir)){
+		fprint(2, "emu: root path is %d bytes, more than %d: %s\n",
+			n, (int)sizeof(rootdir)-1, p);
+		exits("root");
+	}
+	strecpy(rootdir, rootdir+sizeof(rootdir), p);	/* bounded, though n fits */
+}
+
 static void
 usage(void)
 {
@@ -97,7 +115,7 @@ poolopt(char *str)
 		usage();
 	*str++ = '\0';
 	n = strlen(str);
-	x = atoi(str);
+	x = strtoul(str, nil, 10);
 	switch(str[n - 1]){
 	case 'k':
 	case 'K':
@@ -106,6 +124,10 @@ poolopt(char *str)
 	case 'm':
 	case 'M':
 		x *= 1024*1024;
+		break;
+	case 'g':
+	case 'G':
+		x *= 1024*1024*1024;
 		break;
 	}
 	if(poolsetsize(var, x) == 0)
@@ -162,7 +184,7 @@ option(int argc, char *argv[], void (*badusage)(void))
 		tkfont = EARGF(badusage());
 		break;
 	case 'r':		/* Set inferno root */
-		strecpy(rootdir, rootdir+sizeof(rootdir), EARGF(badusage()));
+		setroot(EARGF(badusage()));
 		break;
 	case '7':		/* use 7 bit colormap in X */
 		xtblbit = 1;
@@ -256,7 +278,7 @@ emu_run(int argc, char *argv[])
 	savestartup(argc, argv);
 	/* set default root now, so either $EMU or -r can override it later */
 	if((p = getenv("INFERNO")) != nil || (p = getenv("ROOT")) != nil)
-		strecpy(rootdir, rootdir+sizeof(rootdir), p);
+		setroot(p);
 	opt = getenv("EMU");
 	if(opt != nil && *opt != '\0') {
 		enva[0] = "emu";
@@ -339,12 +361,18 @@ emuinit(void *imod)
 	kopen("#c/cons", OWRITE);
 	kopen("#c/cons", OWRITE);
 
-	/* the setid cannot precede the bind of #U */
-	kbind("#U", "/", MAFTER|MCREATE);
+	/*
+	 * the setid cannot precede the bind of #U. Without the root,
+	 * nothing after this can be loaded, and the failure would only
+	 * show as /dis/emuinit.dis missing: say what is wrong with it.
+	 */
+	if(kbind("#U", "/", MAFTER|MCREATE) < 0)
+		panic("cannot use root %s: %s", rootdir, up->env->errstr);
 	setid(eve, 0);
 	kbind("#^", "/dev", MBEFORE);	/* snarf */
 	kbind("#^", "/chan", MBEFORE);
 	kbind("#m", "/dev", MBEFORE);	/* pointer */
+	kbind("#w", "/dev", MBEFORE);	/* host window size: /dev/wmsize; no-op without devwmsz */
 	kbind("#c", "/dev", MBEFORE);
 	kbind("#A", "/dev", MBEFORE);	/* audio; no-op on hosts without devaudio */
 	kbind("#p", "/prog", MREPL);
@@ -365,6 +393,12 @@ emuinit(void *imod)
 		char *cnsa = getenv("CNSAMODE");
 		if(cnsa != nil && cnsa[0] != 0)
 			ksetenv("cnsamode", cnsa, 1);
+		/* CNSA-strict TLS is a separate choice: public servers do not
+		 * offer SecP384r1MLKEM1024, so a node CNSA-strict to its peers
+		 * still needs the web. tls(2) reads /env/cnsatls. */
+		cnsa = getenv("CNSATLS");
+		if(cnsa != nil && cnsa[0] != 0)
+			ksetenv("cnsatls", cnsa, 1);
 	}
 	putenvqv("emuargs", rebootargv, rebootargc, 1);
 	putenvq("emuroot", rootdir, 1);
@@ -457,7 +491,7 @@ panic(char *fmt, ...)
 	if(sflag)
 		abort();
 
-	cleanexit(0);
+	cleanexit(1);
 }
 
 int

@@ -216,6 +216,17 @@ Activity: adt {
 };
 
 # --- Pending read for blocking files ---
+# A message being read from conversation/input: one message per fid, over as
+# many reads as it takes (a read is at most msize, 8K), then end of file.
+InputRead: adt {
+	fid:	int;
+	rest:	array of byte;
+};
+inputreads: list of ref InputRead;
+
+# The longest message a writer may post to conversation/input.
+MAXINPUT: con 1024*1024;
+
 PendingRead: adt {
 	fid:	int;
 	tag:	int;
@@ -528,7 +539,7 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 	if(a.nart >= MAX_ARTIFACTS)
 		return nil;
 	if(a.nart >= len a.artifacts) {
-		na := array[len a.artifacts * 2] of ref Artifact;
+		na := array[len a.artifacts * 2 + 8] of ref Artifact;
 		na[0:] = a.artifacts[0:a.nart];
 		a.artifacts = na;
 	}
@@ -778,6 +789,14 @@ Serve:
 			dowrite(srv, m, c);
 
 		Clunk =>
+			# A message written to conversation/input is whole now.
+			cf := srv.getfid(m.fid);
+			if(cf != nil && FTYPE(cf.path) == Qconvinput) {
+				if(cf.data != nil)
+					postinput(ACTID(cf.path), string cf.data);
+				cf.data = nil;
+				dropinputread(m.fid);
+			}
 			# Remove pending reads for this fid
 			prev: ref PendingRead;
 			p := pending;
@@ -914,14 +933,20 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		if(a.inputq == nil) {
+		if(findinputread(m.fid) != nil) {
+			# The rest of this fid's message, then end of file.
+			srv.reply(inputchunk(m));
+		} else if(a.status == "hidden") {
+			# Closed: nothing more will come.
+			srv.reply(ref Rmsg.Read(m.tag, nil));
+		} else if(a.inputq == nil) {
 			# Blocking read
 			addpending(m.fid, m.tag, Qconvinput, actid, m);
 		} else {
 			# inputq is in FIFO order (head = oldest). INFR-36.
-			data := array of byte (hd a.inputq + "\n");
+			startinputread(m.fid, hd a.inputq);
 			a.inputq = tl a.inputq;
-			srv.reply(styxservers->readbytes(m, data));
+			srv.reply(inputchunk(m));
 		}
 
 	Qconvmsg =>
@@ -1054,10 +1079,101 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 
 # --- Write handling ---
 
+# Answer every read waiting on an activity with end of file.
+endpending(actid: int)
+{
+	prev: ref PendingRead;
+	for(p := pending; p != nil; p = p.next) {
+		if(p.actid == actid) {
+			if(prev == nil)
+				pending = p.next;
+			else
+				prev.next = p.next;
+			srv_g.reply(ref Rmsg.Read(p.m.tag, nil));
+			continue;
+		}
+		prev = p;
+	}
+}
+
+# Post a message written to an activity's conversation/input: to the first
+# reader waiting for one, or to the queue.
+postinput(actid: int, data: string)
+{
+	a := findactivity(actid);
+	if(a == nil)
+		return;
+	if(len data > 0 && data[len data - 1] == '\n')
+		data = data[0:len data - 1];
+	delivered := 0;
+	prev: ref PendingRead;
+	for(p := pending; p != nil; p = p.next) {
+		if(p.ft == Qconvinput && p.actid == actid) {
+			if(prev == nil)
+				pending = p.next;
+			else
+				prev.next = p.next;
+			startinputread(p.fid, data);
+			srv_g.reply(inputchunk(p.m));
+			delivered = 1;
+			break;	# deliver to first waiter only
+		}
+		prev = p;
+	}
+	if(!delivered)
+		a.inputq = appendstr(a.inputq, data);
+	pushevent(actid, "input");
+}
+
+findinputread(fid: int): ref InputRead
+{
+	for(l := inputreads; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+startinputread(fid: int, msg: string)
+{
+	dropinputread(fid);
+	inputreads = ref InputRead(fid, array of byte (msg + "\n")) :: inputreads;
+}
+
+dropinputread(fid: int)
+{
+	kept: list of ref InputRead;
+	for(l := inputreads; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			kept = hd l :: kept;
+	inputreads = kept;
+}
+
+# The next piece of the message a fid is reading; nothing once it is all read.
+inputchunk(m: ref Tmsg.Read): ref Rmsg.Read
+{
+	r := findinputread(m.fid);
+	if(r == nil || len r.rest == 0)
+		return ref Rmsg.Read(m.tag, nil);
+	n := len r.rest;
+	if(n > m.count)
+		n = m.count;
+	d := r.rest[0:n];
+	r.rest = r.rest[n:];
+	return ref Rmsg.Read(m.tag, d);
+}
+
 dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 {
 	ft := FTYPE(c.path);
 	actid := ACTID(c.path);
+
+	# A closed activity takes no more writes: its arrays are freed, and
+	# its agent, still working when it was closed, kept writing to them
+	# (resources, artifacts), which crashed the server and with it the UI.
+	if(actid > 0 && (ca := findactivity(actid)) != nil && ca.status == "hidden") {
+		srv.reply(ref Rmsg.Error(m.tag, "activity closed"));
+		return;
+	}
 
 	if(len m.data > MAX_DATA_SIZE) {
 		srv.reply(ref Rmsg.Error(m.tag, "write too large"));
@@ -1137,6 +1253,13 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
+		# Closed is final: the agent of a task closed while it worked kept
+		# writing its status ("working", a tool's name), which undid the
+		# close, so it was never stopped and its tab came back.
+		if(a.status == "hidden") {
+			srv.reply(ref Rmsg.Error(m.tag, "activity closed"));
+			break;
+		}
 		a.status = safeattrtext(data);
 		vers++;
 		pushevent(actid, "status");
@@ -1180,30 +1303,26 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		# Check for pending input readers
-		delivered := 0;
-		prev: ref PendingRead;
-		p := pending;
-		while(p != nil) {
-			next := p.next;
-			if(p.ft == Qconvinput && p.actid == actid) {
-				reply := array of byte (data + "\n");
-				srv_g.reply(styxservers->readbytes(p.m, reply));
-				if(prev == nil)
-					pending = next;
-				else
-					prev.next = next;
-				delivered = 1;
-				p = next;
-				break;	# deliver to first waiter only
-			}
-			prev = p;
-			p = next;
+		# A write larger than msize arrives in pieces: gather them on the
+		# fid, and post the message when it is clunked (postinput).  Each
+		# piece used to be a message of its own, so a long paste became
+		# several turns, each a fragment.
+		if(len c.data + len m.data > MAXINPUT) {
+			srv.reply(ref Rmsg.Error(m.tag, "message too long"));
+			break;
 		}
-		if(!delivered)
-			a.inputq = appendstr(a.inputq, data);
-		pushevent(actid, "input");
+		nd := array[len c.data + len m.data] of byte;
+		nd[0:] = c.data;
+		nd[len c.data:] = m.data;
+		c.data = nd;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		# A piece shorter than a full message is the write's last: post it
+		# now, not at the clunk, which is not always prompt.
+		if(len m.data < srv.iounit()) {
+			msg := string c.data;
+			c.data = nil;
+			postinput(actid, msg);
+		}
 
 	Qpresctl =>
 		a := findactivity(actid);
@@ -1345,22 +1464,12 @@ globalctl(data: string): string
 		activities[idx].nbg = 0;
 		activities[idx].pendingevent = nil;
 		activities[idx].inputq = nil;
+		# Its readers are told it is gone (end of file): a task's agent
+		# blocked reading its input used to wait for ever, and every closed
+		# task kept its agent, tool server and model session running.
+		endpending(id);
 		vers++;
 		pushglobalevent("activity delete " + idstr);
-		return nil;
-	}
-	if(hasprefix(data, "theme ")) {
-		name := data[len "theme ":];
-		if(!validid(name))
-			return "invalid theme name";
-		# Persist theme choice (truncate to avoid stale trailing bytes)
-		fd := sys->open("/lib/lucifer/theme/current", Sys->OWRITE|Sys->OTRUNC);
-		if(fd == nil)
-			return sys->sprint("cannot write theme: %r");
-		b := array of byte name;
-		sys->write(fd, b, len b);
-		# Broadcast so all zones reload colours live
-		pushglobalevent("theme " + name);
 		return nil;
 	}
 	return "unknown ctl command: " + data;
@@ -1475,7 +1584,7 @@ presctl(a: ref Activity, data: string): string
 		if(dispath != nil && dispath != "")
 			art.dispath = dispath;
 		# data= is a terminal attribute (value extends to end of string).
-		# Used to pass launch args to GUI apps (e.g. "-c 1 -E -t dark" for xenith).
+		# Used to pass launch args to GUI apps (e.g. "-c 1 -E" for xenith).
 		d := getattr(attrs, "data");
 		if(d != nil && d != "")
 			art.data = d;
@@ -1656,7 +1765,7 @@ ctxctl(a: ref Activity, data: string): string
 		if(a.nres >= MAX_RESOURCES)
 			return "too many resources";
 		if(a.nres >= len a.resources) {
-			nr := array[len a.resources * 2] of ref Resource;
+			nr := array[len a.resources * 2 + 8] of ref Resource;
 			nr[0:] = a.resources[0:a.nres];
 			a.resources = nr;
 		}
@@ -1741,7 +1850,7 @@ ctxctl(a: ref Activity, data: string): string
 			if(a.nres >= MAX_RESOURCES)
 				return "too many resources";
 			if(a.nres >= len a.resources) {
-				nr := array[len a.resources * 2] of ref Resource;
+				nr := array[len a.resources * 2 + 8] of ref Resource;
 				nr[0:] = a.resources[0:a.nres];
 				a.resources = nr;
 			}
@@ -1811,7 +1920,7 @@ ctxctl(a: ref Activity, data: string): string
 		if(a.ngaps >= MAX_GAPS)
 			return "too many gaps";
 		if(a.ngaps >= len a.gaps) {
-			ng := array[len a.gaps * 2] of ref Gap;
+			ng := array[len a.gaps * 2 + 8] of ref Gap;
 			ng[0:] = a.gaps[0:a.ngaps];
 			a.gaps = ng;
 		}
@@ -1859,7 +1968,7 @@ ctxctl(a: ref Activity, data: string): string
 			if(a.ngaps >= MAX_GAPS)
 				return "too many gaps";
 			if(a.ngaps >= len a.gaps) {
-				ng := array[len a.gaps * 2] of ref Gap;
+				ng := array[len a.gaps * 2 + 8] of ref Gap;
 				ng[0:] = a.gaps[0:a.ngaps];
 				a.gaps = ng;
 			}
@@ -1906,7 +2015,7 @@ ctxctl(a: ref Activity, data: string): string
 		if(a.nbg >= MAX_BGTASKS)
 			return "too many background tasks";
 		if(a.nbg >= len a.bgtasks) {
-			nb := array[len a.bgtasks * 2] of ref BgTask;
+			nb := array[len a.bgtasks * 2 + 8] of ref BgTask;
 			nb[0:] = a.bgtasks[0:a.nbg];
 			a.bgtasks = nb;
 		}

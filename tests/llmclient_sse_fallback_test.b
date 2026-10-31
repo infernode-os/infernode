@@ -29,6 +29,16 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
+include "bufio.m";
+	bufio: Bufio;
+
+include "json.m";
+	json: JSON;
+	JValue: import json;
+
+include "wirefmt.m";
+	wirefmt: WireFmt;
+
 include "llmclient.m";
 	llmclient: Llmclient;
 	AskRequest, AskResponse, LlmMessage: import llmclient;
@@ -285,12 +295,46 @@ testToolCallsArrayFromSpecial66(t: ref T)
 	# Must produce a TOOL: line for the recovered call
 	t.assert(strstr(resp.response, "TOOL:") >= 0,
 		"<SPECIAL_66>[{...}] must surface as a TOOL: line");
-	t.assert(strstr(resp.response, ":read:") >= 0,
-		"recovered tool name must be 'read'");
-	t.assert(strstr(resp.response, "/tool/editor/doc") >= 0,
+	# The TOOL: line carries the arguments as the model's JSON object,
+	# escaped by the wire codec (module/wirefmt.m): decode both before
+	# looking at the path.
+	(nil, name, targs) := toolline(resp.response);
+	t.assertseq(name, "read", "recovered tool name must be 'read'");
+	t.assertseq(jstring(targs, "args"), "/tool/editor/doc",
 		"recovered args must include the path");
 	t.assert(strstr(resp.response, "STOP:tool_use") >= 0,
 		"finish_reason must flip to tool_use after recovery");
+}
+
+# The first TOOL: line of a response, decoded: (id, name, args).
+toolline(resp: string): (string, string, string)
+{
+	for(i := 0; i < len resp; ) {
+		j := i;
+		while(j < len resp && resp[j] != '\n')
+			j++;
+		line := resp[i:j];
+		if(len line > 5 && line[0:5] == "TOOL:")
+			return wirefmt->parsetoolline(line[5:]);
+		i = j + 1;
+	}
+	return (nil, nil, nil);
+}
+
+# The string member key of the JSON object in s, or nil.
+jstring(s, key: string): string
+{
+	(jv, err) := json->readjson(bufio->sopen(s));
+	if(err != nil || jv == nil)
+		return nil;
+	v := jv.get(key);
+	if(v == nil)
+		return nil;
+	pick sv := v {
+	String =>
+		return sv.s;
+	}
+	return nil;
 }
 
 # Variant of mockserver that prepends whitespace to RESP_JSON.
@@ -360,6 +404,15 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "cannot load llmclient module: %r\n");
 		raise "fail:cannot load llmclient";
 	}
+	bufio = load Bufio Bufio->PATH;
+	json = load JSON JSON->PATH;
+	wirefmt = load WireFmt WireFmt->PATH;
+	if(bufio == nil || json == nil || wirefmt == nil) {
+		sys->fprint(sys->fildes(2), "cannot load bufio, json or wirefmt: %r\n");
+		raise "fail:cannot load modules";
+	}
+	json->init(bufio);
+	wirefmt->init();
 	testing->init();
 	llmclient->init();
 

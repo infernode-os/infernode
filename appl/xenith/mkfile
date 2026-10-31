@@ -3,6 +3,7 @@
 DIRS=\
 	xenith\
 	render\
+	doc\
 
 TARG=\
 	xenith.dis\
@@ -14,8 +15,6 @@ TARG=\
 	exec.dis\
 	file.dis\
 	fsys.dis\
-	imgload.dis\
-	pngload.dis\
 	look.dis\
 	regx.dis\
 	row.dis\
@@ -32,11 +31,9 @@ TARG=\
 	ecmd.dis\
 	elog.dis\
 	styxaux.dis\
-	render.dis\
 	format.dis\
-
-ICONS=\
-	abcde.bit\
+	docreg.dis\
+	docview.dis\
 
 MODULES=\
 	xenith.m\
@@ -47,8 +44,6 @@ MODULES=\
 	exec.m\
 	file.m\
 	fsys.m\
-	imgload.m\
-	pngload.m\
 	look.m\
 	regx.m\
 	row.m\
@@ -67,17 +62,22 @@ MODULES=\
 	elog.m\
 	ecmd.m\
 	styxaux.m\
-	render.m\
 	format.m\
+	docview.m\
 
 SYSMODULES=\
 	bufio.m\
-	renderer.m\
+	docengine.m\
+	docreg.m\
+	sheetview.m\
+	htmldoc.m\
 	formatter.m\
 	daytime.m\
 	debug.m\
 	draw.m\
 	imagefile.m\
+	imgload.m\
+	lucitheme.m\
 	plumbmsg.m\
 	sh.m\
 	string.m\
@@ -86,6 +86,9 @@ SYSMODULES=\
 	tk.m\
 	workdir.m\
 	wmclient.m\
+	complete.m\
+	env.m\
+	keyboard.m\
 
 DISBIN=$ROOT/dis/xenith
 

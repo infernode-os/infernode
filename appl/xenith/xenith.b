@@ -1,6 +1,7 @@
 implement Xenith;
 
 include "common.m";
+include "lucitheme.m";
 
 sys : Sys;
 bufio : Bufio;
@@ -33,8 +34,8 @@ editlog: Editlog;
 editcmd: Editcmd;
 styxaux: Styxaux;
 asyncio: Asyncio;
-imgload: Imgload;
-render: Render;
+docview: Docview;
+docevc: chan of ref Sheetview->Ev;
 
 sprint : import sys;
 BACK, HIGH, BORD, TEXT, HTEXT, NCOL : import Framem;
@@ -105,8 +106,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editcmd = load Editcmd path(Editcmd->PATH);
 		styxaux = load Styxaux path(Styxaux->PATH);
 		asyncio = load Asyncio path(Asyncio->PATH);
-		imgload = load Imgload path(Imgload->PATH);
-		render = load Render path(Render->PATH);
+		docview = load Docview path(Docview->PATH);
 
 		mods := ref Dat->Mods(sys, bufio, drawm, styx, styxaux,
 						xenith, gui, graph, dat, framem,
@@ -114,7 +114,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 						textm, filem, windowm, rowm, columnm,
 						bufferm, diskm, exec, look, timerm,
 						fsys, xfidm, plumbmsg, editm, editlog, editcmd,
-						asyncio);
+						asyncio, docview);
 	
 		styx->init();
 		styxaux->init();
@@ -124,6 +124,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		graph->init(mods);
 		dat->init(mods);
 		framem->init(mods);
+		setscale();	# with the display, before anything opens a font
 		regx->init(mods);
 		scrl->init(mods);
 		textm->init(mods);
@@ -142,9 +143,8 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editlog->init(mods);
 		editcmd->init(mods);
 		asyncio->init(mods);
-		imgload->init(display);
-		if(render != nil)
-			render->init(display);
+		docview->init(mods);
+		docevc = docview->events();
 
 		utils->debuginit();
 	
@@ -187,41 +187,24 @@ mainpid : int;
 fontcache : array of ref Reffont;
 nfontcache : int;
 reffonts : array of ref Reffont;
+# Go and Go Mono (Bigelow & Holmes), a matched pair: the same x-height,
+# so Font switches face without changing apparent size. 14 pixels to the
+# em puts the x-height at about 0.17 degrees on a laptop: above the
+# critical print size of readers into their late sixties, with a margin
+# for light text on dark (docs/THEME-RESEARCH.md). 16 and 18 are built
+# for greater distances.
 deffontnames := array[2] of {
-	"/fonts/combined/unicode.sans.14.font",
-	"/fonts/combined/unicode.14.font",
+	"/fonts/combined/go.14.font",
+	"/fonts/combined/gomono.14.font",
 };
 
 # Theme definitions: (env-var-suffix, color-value)
 # Color values: hex "#RRGGBB" (UPPERCASE!), mixed "#RRGGBB/#RRGGBB", or named
-# Official Catppuccin Mocha palette from https://github.com/catppuccin/catppuccin
-catppuccintheme := array[] of {
-	# Body (text area) colors
-	("bg-text-0", "#1E1E2E"),		# Base - main background
-	("fg-text-0", "#CDD6F4"),		# Text - main foreground
-	("bg-text-1", "#585B70"),		# Surface2 - selection background
-	("fg-text-1", "#CDD6F4"),		# Text - selection foreground
-	("bg-text-2", "#F38BA8"),		# Red - button 2 background
-	("fg-text-2", "#1E1E2E"),		# Base - button 2 text
-	("bg-text-3", "#A6E3A1"),		# Green - button 3 background
-	("fg-text-3", "#1E1E2E"),		# Base - button 3 text
-	("bord-text-0", "#89B4FA"),		# Blue - body border
-	# Tag colors
-	("bg-tag-0", "#313244"),			# Surface0 - tag background
-	("fg-tag-0", "#CDD6F4"),			# Text - tag foreground
-	("bg-tag-1", "#45475A"),			# Surface1 - tag selection
-	("fg-tag-1", "#CDD6F4"),			# Text - tag selection text
-	("bord-tag-0", "#89B4FA"),		# Blue - tag border
-	# Border colors
-	("bord-col-0", "#45475A"),		# Surface1 - column border
-	("bord-row-0", "#45475A"),		# Surface1 - row border
-	# Modifier button
-	("mod-but-0", "#CBA6F7"),		# Mauve - modifier button
-	# Empty space background
-	("bg-col-0", "#181825"),			# Mantle - empty area background
-};
 
-themename : string;
+themename : string;	# -t: this session's own theme, not the system's
+pinned : int;		# a -t theme: the system's switches do not apply
+themenow : string;		# the theme in use ("" for acme's colours)
+lucitheme : Lucitheme;
 
 command : ref Command;
 
@@ -242,6 +225,7 @@ main(argl : list of string)
 	ncol = -1;
 
 	mainpid = sys->pctl(0, nil);
+	recoverlock = chan[1] of int;
 	loadfile = nil;
 	fontnames = array[2] of string;
 	fontnames[0:] = deffontnames[0:2];
@@ -310,8 +294,12 @@ main(argl : list of string)
 	fontcache[0] = reffont;
 
 	colinit();
-	applytheme(themename);
-	usercolinit();
+	lucitheme = load Lucitheme Lucitheme->PATH;
+	pinned = themename != nil;
+	if(!pinned && lucitheme != nil)
+		themename = lucitheme->current();
+	if((e := usetheme(themename)) != nil)
+		warning(nil, e + "\n");
 	iconinit();
 	timerm->timerinit();
 	regx->rxinit();
@@ -344,17 +332,21 @@ main(argl : list of string)
 	}
 	else{
 		row.init(mainwin.clipr);
+		# one column where two would be under 40 characters each (a phone)
+		defcol := 2;
+		if(mainwin.clipr.dx() < 80*font.width("0"))
+			defcol = 1;
 		if(ncol < 0){
 			if(arg.av == nil)
-				ncol = 2;
+				ncol = defcol;
 			else{
 				ncol = (len arg.av+(WPERCOL-1))/WPERCOL;
-				if(ncol < 2)
-					ncol = 2;
+				if(ncol < defcol)
+					ncol = defcol;
 			}
 		}
 		if(ncol == 0)
-			ncol = 2;
+			ncol = defcol;
 		for(i=0; i<ncol; i++){
 			c = row.add(nil, -1);
 			if(c==nil && i==0)
@@ -380,9 +372,14 @@ main(argl : list of string)
 	spawn keyboardtask();
 	spawn mousetask();
 	spawn waittask();
+	if(!pinned && lucitheme != nil)
+		spawn themewatcher();
 	spawn xfidalloctask();
-	# Run the plumber inside acme, so plumber can start acme clients
-	spawn exec->run(nil, "{bind -bc '#splumber' /chan; plumber > /tmp/plumb.log >[2=1]&}", nil, 0, TRUE, nil, nil, FALSE);
+	# Run the plumber inside acme, so plumber can start acme clients,
+	# unless one is already serving an edit port (Lucifer's boot, xen)
+	(ok, nil) := sys->stat("/chan/plumb.edit");
+	if(ok < 0)
+		spawn exec->run(nil, "{bind -bc '#splumber' /chan; plumber > /tmp/plumb.log >[2=1]&}", nil, 0, TRUE, nil, nil, FALSE);
 	spawn plumbproc();
 
 	# notify(shutdown);
@@ -401,6 +398,13 @@ readfile(c : ref Column, s : string)
 	w = c.add(nil, nil, -1);
 	(r, nr) = look->cleanname(s, len s);
 	w.setname(r, nr);
+	# a PDF or an image is shown as the document it is, as a file
+	# opened any other way is
+	if((k := docview->kind(r)) != nil && k.class == Docreg->Binary){
+		docview->open(w, r, k);
+		w.tag.setselect(w.tag.file.buf.nc, w.tag.file.buf.nc);
+		return;
+	}
 	w.body.loadx(0, s, 1);
 	w.body.file.mod = FALSE;
 	w.dirty = FALSE;
@@ -425,15 +429,16 @@ shutdown(msg : string)
 	i : int;
 
 	# notify(nil);
-	if(!dumping && msg != "kill" && msg != "exit" && (1 || sys->pctl(0, nil)==mainpid) && row != nil){
+	# kept where Dump's own file is not overwritten: this replaced the
+	# session the user last dumped
+	if(!dumping && msg != "kill" && msg != "exit" && row != nil){
 		dumping = TRUE;
-		row.dump(nil);
+		if((m := rescue()) != nil)
+			sys->fprint(sys->fildes(2), "xenith: %s\n", m);
 	}
 	for(i=0; oknotes[i] != nil; i++)
-		if(utils->strncmp(oknotes[i], msg, len oknotes[i]) == 0) {
-			killprocs();
-			exit;
-		}
+		if(utils->strncmp(oknotes[i], msg, len oknotes[i]) == 0)
+			leave();
 	# killprocs();
 	sys->fprint(sys->fildes(2), "xenith: %s\n", msg);
 	sys->print("xenith: %s\n", msg);
@@ -444,6 +449,13 @@ xenithexit(err: string)
 {
 	if(err != nil)
 		shutdown(err);
+	leave();
+}
+
+# Close the window too: killing the processes alone left it on the
+# screen, drawn and dead
+leave()
+{
 	graph->cursorswitch(nil);
 	if (plumbed)
 		plumbmsg->shutdown();
@@ -452,7 +464,8 @@ xenithexit(err: string)
 		# Signal preswmloop via wmsrv so it immediately removes the tab — without
 		# this, the ghost tab persists until GC collects the gui module (which holds
 		# the wmclient fd open while xenith's background goroutines are still alive).
-		# Do NOT call gui->killwins() — it halts emu via /dev/sysctl.
+		# (gui->killwins() exits too, but it is for a xenith with a
+		# window of its own.)
 		gui->signalclose();
 		exit;
 	}
@@ -504,31 +517,33 @@ keyboardtask()
 
 	{
 		keytid = sys->pctl(0, nil);
+		recovering();
 		null = ref Timer;
 		null.c = chan of int;
 		timer = null;
 		typetext = nil;
 		for(;;){
+			{
 			alt{
 			<-(timer.c) =>
 				timerm->timerstop(timer);
+				# the tag's typing committed, the row held as for any
+				# change to a window (a commit renames it and redraws
+				# the tag), and only while the tag is still there
+				row.qlock.lock();
 				t = typetext;
-				if(t!=nil && t.what==Tag && !t.w.qlock.locked()){
+				if(t!=nil && t.what==Tag && t.file!=nil && t.w!=nil && t.w.col!=nil && !t.w.qlock.locked()){
 					t.w.lock('K');
 					t.w.commit(t);
 					t.w.unlock();
 					bflush();
 				}
+				row.qlock.unlock();
 				timer = null;
 			r = <-ckeyboard =>
 				gotkey := 1;
 				while (gotkey) {
-					typetext = row.typex(r, mouse.xy);
-					t = typetext;
-					if(t!=nil && t.col!=nil)
-						activecol = t.col;
-					if(t!=nil && t.w!=nil)
-						t.w.body.file.curtext = t.w.body;
+					t = row.typex(r, mouse.xy);	# sets typetext
 					if(timer != null)
 						spawn timerm->timerwaittask(timer);
 					if(t!=nil && t.what==Tag)
@@ -543,6 +558,11 @@ keyboardtask()
 					}
 					bflush();
 				}
+			}
+			}
+			exception{
+				* =>
+					taskrecover("keyboard", utils->getexc());
 			}
 		}
 	}
@@ -564,10 +584,12 @@ mousetask()
 
 	{
 		mousetid = sys->pctl(0, nil);
+		recovering();
 		sync := chan of int;
 		spawn waitproc(mousetid, sync);
 		<- sync;
 		for(;;){
+			{
 			alt{
 			*mouse = *<-dat->cmouse =>
 				row.qlock.lock();
@@ -579,20 +601,44 @@ mousetask()
 					break;
 				}
 				if (mouse.buttons & M_HELP) {
-					row.qlock.unlock();  # Release before warning to avoid blocking
-					warning(nil, "no help provided (yet)");
+					warning(nil, "no help provided (yet)");	# changes the row: held
 					bflush();
+					row.qlock.unlock();
 					break;
 				}
 				if(mouse.buttons & M_RESIZE){
-					clipr := mainwin.clipr;  # Capture state before releasing lock
-					row.qlock.unlock();  # Release during expensive draw operations
+					# the row held throughout: let go while the screen
+					# was cleared and the scroll bars' image made again,
+					# a client's write drew a window, with the old
+					# image, where the new layout was being put
 					draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
 					scrl->scrresize();
-					row.qlock.lock();  # Reacquire for reshape
-					row.reshape(clipr);
+					row.reshape(mainwin.clipr);
 					row.qlock.unlock();
 					bflush();
+					break;
+				}
+				# a scroll under way follows the pointer wherever it
+				# goes and ends when its button is let go, over text or
+				# not: its end was looked for only below, past the
+				# returns for no text and no buttons, so it never came,
+				# and the next click of that button scrolled the old
+				# window again
+				if(scrollstate != nil && scrollstate.active){
+					st := scrollstate.t;
+					if(!(mouse.buttons & (1<<(scrollstate.but-1))))
+						scrl->scrollend();
+					else if(st == nil || st.file == nil || st.w == nil || st.w.col == nil)
+						scrl->scrollend();	# its window went (Del, Delcol, a client's del)
+					else{
+						# the window locked as when the scroll began: a
+						# client reading it holds the window, not the row
+						st.w.lock('M');
+						scrl->scrollupdate();
+						st.w.unlock();
+					}
+					bflush();
+					row.qlock.unlock();
 					break;
 				}
 				t = row.which(mouse.xy);
@@ -631,24 +677,25 @@ mousetask()
 				else if(mouse.buttons == 4)
 					but = 3;
 				barttext = t;
-				# Check for active scroll state and handle updates/end
-				if(scrollstate != nil && scrollstate.active) {
-					# Check if button released
-					if(!(mouse.buttons & (1<<(scrollstate.but-1)))) {
-						scrl->scrollend();
-					} else {
-						# Update scroll position
-						scrl->scrollupdate();
-					}
-					bflush();
-					row.qlock.unlock();
-					break;
-				}
 				if(t.what==Body && mouse.xy.in(t.scrollr)){
-					if(w != nil && w.imagemode){
-						# Image mode: scroll wheel → smooth pan or page navigation
-						if(mouse.buttons & (8|16)){
-							imagescroll(w, mouse.buttons);
+					if(w != nil && docview->shown(w)){
+						# a document's scroll bar, as acme's: 1 back
+						# and 3 on by the distance from its top, 2 to
+						# that point in the document, following the
+						# mouse while it is held, as a text's does
+						if(mouse.buttons & (8|16))
+							docview->wheel(w, mouse.buttons);
+						else if(but){
+							docview->scrollclick(w, but, mouse.xy.y);
+							y := mouse.xy.y;
+							while(mouse.buttons){
+								bflush();
+								frgetmouse();
+								if(but == 2 && (mouse.buttons & 2) && mouse.xy.y != y){
+									y = mouse.xy.y;
+									docview->scrollclick(w, 2, y);
+								}
+							}
 						}
 						bflush();
 						row.qlock.unlock();
@@ -693,8 +740,8 @@ mousetask()
 
 # Scroll wheel - scroll window body from anywhere in window
 				if(w != nil && (mouse.buttons &(8|16))){
-					if(w.imagemode){
-						imagescroll(w, mouse.buttons);
+					if(docview->shown(w)){
+						docview->wheel(w, mouse.buttons);
 						bflush();
 						row.qlock.unlock();
 						break;
@@ -736,9 +783,10 @@ mousetask()
 					else
 						t.commit(TRUE);
 					if(mouse.buttons & 1){
-						if(w != nil && w.imagemode && t.what == Body){
-							# Drag to pan in image mode body
-							imagedrag(w);
+						if(w != nil && docview->shown(w) && t.what == Body){
+							# the document dragged (grab and pan), or
+							# clicked: a page's click, a word selected
+							docview->button1(w);
 						} else {
 							t.select(0);
 							if(w != nil)
@@ -751,18 +799,25 @@ mousetask()
 								dat->activewin = t.w;
 						}
 					}else if(mouse.buttons & 2){
-						if(w != nil && w.imagemode && t.what == Body){
-							# No text execution in image mode body
-							;
+						if(w != nil && docview->shown(w) && t.what == Body){
+							# the word there executed
+							(word, ok) := docview->button2(w);
+							if(ok)
+								exec->executeword(t, word);
 						} else {
 							(ok, argt, q0, q1) = t.select2(q0, q1);
 							if(ok)
 								exec->execute(t, q0, q1, FALSE, argt);
 						}
 					}else if(mouse.buttons & 4){
-						if(w != nil && w.imagemode && t.what == Body){
-							# No text look in image mode body
-							;
+						if(w != nil && docview->shown(w) && t.what == Body){
+							# the link there followed, or the word
+							# looked at; a page browsed's click
+							(u, word) := docview->button3(w);
+							if(u != nil)
+								look->openlink(u);
+							else if(word != nil)
+								look->lookword(w, word);
 						} else {
 							(ok, q0, q1) = t.select3(q0, q1);
 							if(ok){
@@ -783,6 +838,11 @@ mousetask()
 					break;
 				}
 			m = <- cplumb =>
+				# a file opened for the plumber changes the row as a
+				# click does, so it holds the row as a click does: this
+				# runs beside the 9P server's procs (acme's threads
+				# never ran at once; these do)
+				row.qlock.lock();
 				if (m.kind == "text") {
 					attrs := plumbmsg->string2attrs(m.attr);
 					(found, act) := plumbmsg->lookup(attrs, "action");
@@ -798,6 +858,13 @@ mousetask()
 					}
 				}
 				bflush();
+				row.qlock.unlock();
+			dev := <-docevc =>
+				# a document's work, done off the main loop (docview(2))
+				row.qlock.lock();
+				docview->handle(dev);
+				bflush();
+				row.qlock.unlock();
 			amsg := <-casync =>
 				# Handle async I/O results
 				pick msg := amsg {
@@ -817,113 +884,6 @@ mousetask()
 						row.qlock.lock();
 						warning(nil, sprint("async read error: %s\n", msg.err));
 						row.qlock.unlock();
-					ImageData =>
-						# Spawn decode in background task for true concurrency
-						if(msg.err != nil) {
-							row.qlock.lock();
-							warning(nil, sprint("image load: %s\n", msg.err));
-							row.qlock.unlock();
-						} else if(msg.data != nil) {
-							# Spawn decode task - it will send ImageDecoded when done
-							spawn decodetask(msg.winid, msg.path, msg.data);
-						}
-					ImageDecoded =>
-						# Apply decoded image to window
-						row.qlock.lock();
-						if(msg.err != nil) {
-							warning(nil, sprint("image decode: %s\n", msg.err));
-						} else if(msg.image != nil) {
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil) {
-								w.bodyimage = msg.image;
-								w.zoomedcache = nil;
-								w.imagepath = msg.path;
-								w.imagemode = 1;
-								w.imageoffset = Point(0, 0);
-								w.drawimage();
-							}
-						}
-						row.qlock.unlock();
-					ImageProgress =>
-						# Progressive image update - redraw partial image
-						row.qlock.lock();
-						if(msg.image != nil) {
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil) {
-								# Update window with partial image
-								w.bodyimage = msg.image;
-								w.zoomedcache = nil;
-								w.imagepath = msg.path;
-								w.imagemode = 1;
-								w.imageoffset = Point(0, 0);
-								w.drawimage();
-							}
-						}
-						row.qlock.unlock();
-					ContentData =>
-						# Dispatch content through renderer pipeline
-						if(msg.err != nil) {
-							row.qlock.lock();
-							warning(nil, sprint("content load: %s\n", msg.err));
-							row.qlock.unlock();
-						} else if(msg.data != nil) {
-							# Store raw data on window for renderer commands
-							row.qlock.lock();
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil)
-								w.contentdata = msg.data;
-							row.qlock.unlock();
-							spawn rendertask(msg.winid, msg.path, msg.data);
-						}
-					ContentDecoded =>
-						# Apply rendered content to window
-						row.qlock.lock();
-						w := look->lookid(msg.winid, 0);
-						if(w != nil)
-							w.rendering = 0;
-						if(msg.err != nil) {
-							warning(nil, sprint("content render: %s\n", msg.err));
-						} else if(msg.image != nil) {
-							if(w != nil && w.col != nil) {
-								w.bodyimage = msg.image;
-								w.zoomedcache = nil;
-								w.imagepath = msg.path;
-								w.imagemode = 1;
-								# Cache renderer on window for command dispatch
-								if(render != nil) {
-									(rmod, nil) := render->findbyext(msg.path);
-									w.contentrenderer = rmod;
-								}
-								w.drawimage();
-								w.settag1();
-								# If renderer extracted text, load it into body buffer
-								if(msg.text != nil && len msg.text > 0) {
-									w.body.file.buf.insert(0, msg.text, len msg.text);
-								}
-							}
-						}
-						# Dispatch pending command if queued during render
-						if(w != nil && w.pendingcmd != nil){
-							pcmd := w.pendingcmd;
-							w.pendingcmd = nil;
-							w.asynccontentcommand(pcmd, nil);
-						}
-						row.qlock.unlock();
-					ContentProgress =>
-						# Progressive content render update
-						row.qlock.lock();
-						if(msg.image != nil) {
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil) {
-								w.bodyimage = msg.image;
-								w.zoomedcache = nil;
-								w.imagepath = msg.path;
-								w.imagemode = 1;
-								w.imageoffset = Point(0, 0);
-								w.drawimage();
-							}
-						}
-						row.qlock.unlock();
 					TextData =>
 						# Insert text chunk into file buffer
 						row.qlock.lock();
@@ -931,9 +891,17 @@ mousetask()
 							warning(nil, sprint("text load: %s\n", msg.err));
 						} else {
 							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil && w.body.file != nil) {
-								# Insert chunk into buffer
-								w.body.file.buf.insert(msg.q0 + msg.offset, msg.data, len msg.data);
+							# the window's own load, still under way: a
+							# chunk of one cancelled (Get, the load
+							# finished at once by an edit) is still on
+							# its way, and went into the new text
+							op := asyncload(w, msg.opid);
+							if(op != nil && w.col != nil && w.body.file != nil) {
+								# put after what came before it: where the
+								# window's count says, kept by this side
+								w.body.file.buf.insert(op.q0 + op.nrunes, msg.data, len msg.data);
+								op.nrunes += len msg.data;
+								op.nbytes = msg.nbytes;
 								# Fill frame to show content as it loads
 								t := w.body;
 								t.fill();
@@ -944,11 +912,16 @@ mousetask()
 					TextComplete =>
 						# Mark file as fully loaded
 						row.qlock.lock();
-						if(msg.err != nil) {
+						w := look->lookid(msg.winid, 0);
+						if(asyncload(w, msg.opid) == nil)
+							;	# a load cancelled or finished at once
+						else if(msg.err != nil) {
+							# done with, so that nothing waits on it
+							w.asyncload = nil;
+							w.body.file.unread = 0;
 							warning(nil, sprint("text load: %s\n", msg.err));
 						} else {
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil) {
+							if(w.col != nil) {
 								w.body.file.unread = 0;
 								w.dirty = FALSE;
 								w.asyncload = nil;
@@ -963,7 +936,7 @@ mousetask()
 						# Add directory entry to window's list
 						row.qlock.lock();
 						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil && w.isdir) {
+						if(asyncload(w, msg.opid) != nil && w.col != nil && w.isdir) {
 							# Add entry to dlp array
 							dl := ref Dirlist(msg.name, 0);  # Width calculated later
 							ndl := w.ndl + 1;
@@ -982,7 +955,7 @@ mousetask()
 							warning(nil, sprint("dir load: %s\n", msg.err));
 						} else {
 							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil && w.isdir) {
+							if(asyncload(w, msg.opid) != nil && w.col != nil && w.isdir) {
 								w.body.file.unread = 0;
 								w.asyncload = nil;
 								# Sort and display directory entries
@@ -1014,12 +987,27 @@ mousetask()
 										f.dev = d.dev;
 										f.mtime = msg.mtime;
 									}
-									f.mod = FALSE;
-									w.dirty = FALSE;
+									# what was written is the text as it was at
+									# Put: an edit made while it was written is
+									# not saved. The seq alone missed a client's
+									# with nomark set, and typing not committed,
+									# and the window was shown saved when it was not
+									unmarked := f.buf.nchange != w.savenchange;
+									for(i := 0; i < f.ntext; i++)
+										if(f.text[i].ncache > 0)
+											unmarked = TRUE;
+									dirty := f.seq != w.saveseq || unmarked;
+									# a change no undo step holds: no step
+									# brings back the text saved
+									putseq := w.saveseq;
+									if(unmarked)
+										putseq = -1;
+									f.mod = dirty;
+									w.dirty = dirty;
 									f.unread = FALSE;
-									for(i := 0; i < f.ntext; i++) {
-										f.text[i].w.putseq = f.seq;
-										f.text[i].w.dirty = FALSE;
+									for(i = 0; i < f.ntext; i++) {
+										f.text[i].w.putseq = putseq;
+										f.text[i].w.dirty = dirty;
 									}
 								}
 								w.settag();
@@ -1031,6 +1019,11 @@ mousetask()
 				}
 				bflush();
 			}
+			}
+			exception{
+				* =>
+					taskrecover("mouse", utils->getexc());
+			}
 		}
 	}
 	exception e {
@@ -1041,125 +1034,156 @@ mousetask()
 	}
 }
 
-# Background task to decode image without blocking UI
-decodetask(winid: int, path: string, data: array of byte)
+# The procs whose exceptions are recovered (the mouse, keyboard and wait
+# tasks, a 9P request's, an Edit's): an internal error in one raises, and
+# it goes on
+recoverers : list of int;
+recoverlock : chan of int;
+
+recovering()
 {
-	im: ref Image;
-	err: string;
+	pid := sys->pctl(0, nil);
+	recoverlock <-= 1;
+	recoverers = pid :: recoverers;
+	<-recoverlock;
+}
 
-	# Create progress channel for progressive updates
-	progress := chan[4] of ref Imgload->ImgProgress;
+# the caller's proc recovers no longer (it is ending)
+norecover()
+{
+	pid := sys->pctl(0, nil);
+	recoverlock <-= 1;
+	l : list of int;
+	for(r := recoverers; r != nil; r = tl r)
+		if(hd r != pid)
+			l = hd r :: l;
+	recoverers = l;
+	<-recoverlock;
+}
 
-	# Spawn progress forwarder
-	spawn progressforwarder(winid, path, progress);
+# utils->error: an internal error, an assertion that failed. It exited
+# Xenith, wherever it was, every unsaved window lost. In a proc that
+# recovers it raises, and what has not been saved is kept as the proc
+# recovers; elsewhere it is kept as Xenith exits.
+internalerror(s : string)
+{
+	pid := sys->pctl(0, nil);
+	if(pid == rescuer)	# a window that cannot be read: left out
+		raise "xenith: "+s;
+	for(l := recoverers; l != nil; l = tl l)
+		if(hd l == pid)
+			raise "xenith: "+s;
+	xenithexit("error");
+}
 
+errtimes : list of int;
+rescuer : int;	# the proc keeping what has not been saved
+
+# An exception recovered from, the row held: what has not been saved is
+# kept first, as the state it left may be wrong; what to tell the user.
+# Many in a minute (one raised again at every event) and Xenith exits,
+# having kept it.
+recovered(e : string) : string
+{
+	now := sys->millisec();
+	n := 0;
+	l : list of int;
+	for(t := errtimes; t != nil; t = tl t)
+		if(now-hd t < 60*1000){
+			l = hd t :: l;
+			n++;
+		}
+	errtimes = now :: l;
+	m := rescue();
+	# on the console too: a log keeps it (tools/xenith-fuzz looks there)
+	sys->fprint(sys->fildes(2), "xenith: recovered from %s\n", e);
+	if(m != nil)
+		sys->fprint(sys->fildes(2), "xenith: %s\n", m);
+	if(n >= 9){
+		sys->fprint(sys->fildes(2), "xenith: %d exceptions in a minute, the last %s\n", n+1, e);
+		xenithexit("error");
+	}
+	return m;
+}
+
+# What has not been saved kept where Xenith has gone wrong, in a file of
+# its own (Dump's is the user's); what to tell the user, nil if there
+# was nothing to keep. The row taken if it can be within a second: the
+# proc holding it may be the one that went wrong, or wait on it.
+rescue() : string
+{
+	if(row == nil || row.ncol == 0)
+		return nil;
+	got := 0;
+	if(!row.qlock.held())
+		for(i := 0; i < 20; i++){
+			got = row.qlock.trylock();
+			if(got)
+				break;
+			sys->sleep(50);
+		}
+	f := rescuefile();
+	bad := -1;
+	orescuer := rescuer;
+	rescuer = sys->pctl(0, nil);
 	{
-		(im, err) = imgload->readimagedataprogressive(data, path, progress);
+		bad = row.rescue(f);
 	}
-	exception e {
-		"out of memory*" =>
-			err = "image too large for heap (try: emu -pheap=128000000)";
-			im = nil;
+	exception{
 		* =>
-			err = "decode failed: " + utils->getexc();
-			im = nil;
+			;
 	}
-
-	# Close progress channel (nil signals end)
-	progress <-= nil;
-
-	# Send result back to main loop - retry if channel full
-	for(;;) {
-		alt {
-			casync <-= ref AsyncMsg.ImageDecoded(winid, path, im, err) => ;
-			* =>
-				# Channel full - yield and retry
-				sys->sleep(1);
-				continue;
-		}
-		break;
-	}
+	rescuer = orescuer;
+	if(got)
+		row.qlock.unlock();
+	if(bad < 0)
+		return sprint("unsaved work could not be kept: cannot write %s", f);
+	s := sprint("unsaved work kept in %s (Load %s, or xenith -l %s)", f, f, f);
+	if(bad > 0)
+		s += sprint("; %d windows could not be read", bad);
+	return s;
 }
 
-# Forward progress updates to main loop
-progressforwarder(winid: int, path: string, progress: chan of ref Imgload->ImgProgress)
+rescuefile() : string
 {
-	for(;;) {
-		p := <-progress;
-		if(p == nil)
-			return;  # Done
-
-		# Forward to main loop - non-blocking to avoid stalling decode
-		alt {
-			casync <-= ref AsyncMsg.ImageProgress(winid, path, p.image, p.rowsdone, p.rowstotal) => ;
-			* => ;  # Drop if channel full
-		}
-	}
+	if(dat->home != nil)
+		return dat->home+"/xenith.rescue";
+	return "/tmp/xenith.rescue."+utils->getuser();
 }
 
-# Background task to render content through the renderer registry
-rendertask(winid: int, path: string, data: array of byte)
+# An exception in the mouse, keyboard or wait task: the locks it holds
+# let go, the fault reported, and the task carries on. It died holding the
+# row, and every window froze with it, their unsaved text with them.
+taskrecover(task : string, e : string)
 {
-	im: ref Image;
-	text: string;
-	err: string;
-
-	if(render == nil) {
-		err = "render module not available";
-	} else {
-		# Find the appropriate renderer for this content
-		(renderer, ferr) := render->find(data, path);
-		if(renderer == nil) {
-			err = ferr;
-		} else {
-			# Create progress channel
-			progress := chan[4] of ref Renderer->RenderProgress;
-
-			# Spawn progress forwarder
-			spawn renderprogressforwarder(winid, path, progress);
-
-			{
-				(im, text, err) = renderer->render(data, path, 0, 0, progress);
-			}
-			exception e {
-				"out of memory*" =>
-					err = "content too large for heap";
-					im = nil;
-				"*" =>
-					err = "render failed: " + e;
-					im = nil;
-			}
-
-			# Signal end of progress
-			progress <-= nil;
-		}
+	for(i := 0; i < row.ncol; i++){
+		c := row.col[i];
+		for(j := 0; j < c.nw; j++)
+			if(c.w[j].qlock.held())
+				c.w[j].unlock();
 	}
-
-	# Send result back to main loop
-	for(;;) {
-		alt {
-			casync <-= ref AsyncMsg.ContentDecoded(winid, path, im, text, err) => ;
-			* =>
-				sys->sleep(1);
-				continue;
-		}
-		break;
+	if(!row.qlock.held())
+		row.qlock.lock();
+	m := recovered(e);
+	{
+		warning(nil, sprint("xenith: %s: %s\n", task, e));
+		if(m != nil)
+			warning(nil, "xenith: "+m+"\n");
+		bflush();
 	}
+	exception{
+		* =>
+			sys->fprint(sys->fildes(2), "xenith: %s: %s\n", task, e);
+	}
+	row.qlock.unlock();
 }
 
-# Forward renderer progress updates to main loop
-renderprogressforwarder(winid: int, path: string, progress: chan of ref Renderer->RenderProgress)
+# w's load in the background, if it is the operation opid
+asyncload(w : ref Window, opid : int) : ref Asyncio->AsyncOp
 {
-	for(;;) {
-		p := <-progress;
-		if(p == nil)
-			return;
-
-		alt {
-			casync <-= ref AsyncMsg.ContentProgress(winid, path, p.image, p.done, p.total) => ;
-			* => ;  # Drop if channel full
-		}
-	}
+	if(w == nil || w.asyncload == nil || w.asyncload.opid != opid)
+		return nil;
+	return w.asyncload;
 }
 
 # list of processes that have exited but we have not heard of yet
@@ -1181,6 +1205,7 @@ waittask()
 	pids : ref Pid;
 
 	waittid = sys->pctl(0, nil);
+	recovering();
 	command = nil;
 	for(;;){
 	{
@@ -1201,6 +1226,7 @@ waittask()
 			break;
 		cmd = <-ckill =>
 			found = FALSE;
+			row.qlock.lock();	# warning changes the row
 			for(c=command; c != nil; c=c.next){
 				# -1 for blank 
 				if(c.name[0:len c.name - 1] == cmd){
@@ -1211,6 +1237,8 @@ waittask()
 			}
 			if(!found)
 				warning(nil, sprint("Kill: no process %s\n", cmd));
+			bflush();
+			row.qlock.unlock();
 			cmd = nil;
 			break;
 		status = <-cwait =>
@@ -1261,24 +1289,37 @@ waittask()
 			}
 			break;
 		c = <-ccommand =>
+			# a command that has exited already (its wait came
+			# first: alt takes either when both are ready) is done
+			# with here, not listed; c was set nil for it and then
+			# listed, a nil dereference
 			lastp : ref Pid = nil;
+			done := 0;
 			for(p := pids; p != nil; p = p.next){
 				if(p.pid == c.pid){
-					status = p.msg;
-					if(status[len status - 1] != ':')
-						warning(c.md, sprint("%s\n", status));
 					if(lastp == nil)
 						pids = p.next;
 					else
 						lastp.next = p.next;
+					status = p.msg;
+					if(status[len status - 1] != ':'){
+						row.qlock.lock();
+						warning(c.md, sprint("%s\n", status));
+						bflush();
+						row.qlock.unlock();
+					}
 					if(c.iseditcmd)
 						cedit <- = 0;
 					fsys->fsysdelid(c.md);
-					c = nil;
+					done = 1;
 					break;
 				}
 				lastp = p;
-			}	
+			}
+			if(done){
+				c = nil;
+				break;
+			}
 			c.next = command;
 			command = c;
 			row.qlock.lock();
@@ -1293,7 +1334,10 @@ waittask()
 	}
 	exception{
 		* =>
-			warning(nil, "waittask: " + utils->getexc() + "\n");
+			# the row let go if a locked section raised this: caught
+			# with the row held, it was kept, and every click and
+			# request after waited for it for ever
+			taskrecover("waittask", utils->getexc());
 	}
 	}
 }
@@ -1325,138 +1369,6 @@ xfidalloctask()
 	}
 }
 
-imagescroll(w: ref Window, buttons: int)
-{
-	if(w.bodyimage == nil)
-		return;
-
-	imw := w.bodyimage.r.dx();
-	imh := w.bodyimage.r.dy();
-	bodyw := w.body.all.dx();
-	bodyh := w.body.all.dy();
-	if(imw <= 0 || imh <= 0 || bodyw <= 0 || bodyh <= 0)
-		return;
-
-	# Compute virtual display dimensions (same formula as drawimage)
-	scalex := (bodyw * 1000) / imw;
-	scaley := (bodyh * 1000) / imh;
-	fitscale := scalex;
-	if(scaley < fitscale)
-		fitscale = scaley;
-	zoom := w.zoomscale;
-	if(zoom < 100)
-		zoom = 100;
-	dispw := (imw * fitscale * zoom) / (1000 * 100);
-	disph := (imh * fitscale * zoom) / (1000 * 100);
-	if(dispw < 1) dispw = 1;
-	if(disph < 1) disph = 1;
-
-	if(dispw <= bodyw && disph <= bodyh){
-		# Image fits at this zoom — page navigation
-		if(buttons & 16)
-			w.asynccontentcommand("NextPage", nil);
-		else if(buttons & 8)
-			w.asynccontentcommand("PrevPage", nil);
-		return;
-	}
-
-	# Zoomed in — smooth scroll by 20% of viewport
-	vph := (bodyh * imh) / disph;
-	step := vph / 5;
-	if(step < 10) step = 10;
-
-	oy := w.imageoffset.y;
-	maxoy := imh - vph;
-	if(maxoy < 0) maxoy = 0;
-
-	if(buttons & 16){
-		# Scroll down
-		if(oy >= maxoy){
-			# At bottom — next page, start at top
-			w.imageoffset.y = 0;
-			w.asynccontentcommand("NextPage", nil);
-			return;
-		}
-		oy += step;
-	} else if(buttons & 8){
-		# Scroll up
-		if(oy <= 0){
-			# At top — prev page, start at bottom
-			w.imageoffset.y = 16r7FFFFFFF;
-			w.asynccontentcommand("PrevPage", nil);
-			return;
-		}
-		oy -= step;
-	}
-	if(oy < 0) oy = 0;
-	if(oy > maxoy) oy = maxoy;
-	w.imageoffset.y = oy;
-	w.drawimage();
-}
-
-imagedrag(w: ref Window)
-{
-	# Pre-render full page at zoom level (one-time cost)
-	prerendered := w.prerenderzoomed();
-	if(prerendered == nil)
-		return;	# Not zoomed or no image
-
-	r := w.body.all;
-	bodyw := r.dx();
-	bodyh := r.dy();
-	pw := prerendered.r.dx();
-	ph := prerendered.r.dy();
-	imw := w.bodyimage.r.dx();
-	imh := w.bodyimage.r.dy();
-
-	# Convert current source offset to display coordinates
-	dispox := (w.imageoffset.x * pw) / imw;
-	dispoy := (w.imageoffset.y * ph) / imh;
-
-	startmx := mouse.xy.x;
-	startmy := mouse.xy.y;
-	startdox := dispox;
-	startdoy := dispoy;
-
-	ox := dispox;
-	oy := dispoy;
-
-	maxox := pw - bodyw;
-	maxoy := ph - bodyh;
-	if(maxox < 0) maxox = 0;
-	if(maxoy < 0) maxoy = 0;
-
-	while(mouse.buttons & 1){
-		dx := startmx - mouse.xy.x;
-		dy := startmy - mouse.xy.y;
-		ox = startdox + dx;
-		oy = startdoy + dy;
-
-		# Clamp
-		if(ox < 0) ox = 0;
-		if(oy < 0) oy = 0;
-		if(ox > maxox) ox = maxox;
-		if(oy > maxoy) oy = maxoy;
-
-		# Fast blit from pre-rendered image (no scaling needed)
-		draw(mainwin, r, w.body.frame.cols[BACK], nil, Point(0, 0));
-		draw(mainwin, r, prerendered, nil, Point(prerendered.r.min.x + ox, prerendered.r.min.y + oy));
-		bflush();
-		*mouse = *<-dat->cmouse;
-	}
-
-	# Convert final display offset back to source coordinates
-	w.imageoffset.x = (ox * imw) / pw;
-	w.imageoffset.y = (oy * imh) / ph;
-
-	# Drain remaining button events
-	while(mouse.buttons)
-		frgetmouse();
-
-	# Final quality render at new position
-	w.drawimage();
-}
-
 frgetmouse()
 {
 	bflush();
@@ -1486,6 +1398,79 @@ waitproc(pid : int, sync: chan of int)
 			error("bad read in waitproc");
 		status = string buf[0:n];
 		cwait <-= status;
+	}
+}
+
+# With the display's own pixels on a Retina screen (the emu's
+# INFERNODE_HIDPI, which tools/xen sets), $displayscale pixels make a
+# point: draw the chrome that many times larger, and bind each reading
+# face's larger build over its name (go.28.font over go.14.font at 2x;
+# the styles Render sets with, go.bold.44.font over go.bold.22.font),
+# so names keep their size, as the mobile boot does for its fonts. The
+# draw device caches a font by name, so this must come before anything
+# opens one.
+#
+# The scale may be fractional (1.25, 1.5 on a Wayland desktop): each
+# name is bound to the build nearest its size times the scale, which
+# for Go and Go Mono is built at 1.25x and 1.5x as well as 2x
+# (tools/gen-text-fonts.py), and for the rest is the nearest there is.
+# A bind takes the file its source names when it is made, so the
+# sizes go in ascending order: each source is bound over only later.
+setscale()
+{
+	s := real utils->getenv("displayscale");
+	if(s < 1.1)
+		return;
+	if(s > 4.0)
+		s = 4.0;
+	sys->pctl(Sys->FORKNS, nil);	# the binds are Xenith's own
+	dat->Scrollwid = scaled(dat->Scrollwid, s);
+	dat->Scrollgap = scaled(dat->Scrollgap, s);
+	dat->Border = scaled(dat->Border, s);
+	dat->Mincolwid = scaled(dat->Mincolwid, s);
+	framem->FRTICKW = scaled(framem->FRTICKW, s);
+	text := list of {14, 16, 18};
+	styled := list of {14, 16, 18, 22};
+	for(f := list of {"go", "gomono", "serif"}; f != nil; f = tl f)
+		bindnearest(hd f, text, s);
+	for(f = list of {"go.medium", "go.bold", "go.italic", "go.bolditalic"}; f != nil; f = tl f)
+		bindnearest(hd f, styled, s);
+}
+
+scaled(n: int, s: real): int
+{
+	return int (real n * s + 0.5);
+}
+
+# bind over face.z.font, for each z, the face's build nearest z*s
+bindnearest(face: string, sizes: list of int, s: real)
+{
+	for(; sizes != nil; sizes = tl sizes){
+		z := hd sizes;
+		want := real z * s;
+		r := int (want + 0.5);
+		best := 0;
+		# outward from the size wanted, while nearer it than z itself
+		for(k := 0; best == 0 && real k < want - real z; k++){
+			bestd := 0.0;
+			for(c := list of {r-k, r+k}; c != nil; c = tl c){
+				if(hd c <= z)
+					continue;
+				d := real hd c - want;
+				if(d < 0.0)
+					d = -d;
+				if(best != 0 && d >= bestd)
+					continue;
+				(ok, nil) := sys->stat(sprint("/fonts/combined/%s.%d.font", face, hd c));
+				if(ok >= 0){
+					best = hd c;
+					bestd = d;
+				}
+			}
+		}
+		if(best != 0)
+			sys->bind(sprint("/fonts/combined/%s.%d.font", face, best),
+				sprint("/fonts/combined/%s.%d.font", face, z), Sys->MREPL);
 	}
 }
 
@@ -1610,7 +1595,13 @@ colinit()
 {
 	tagcols = array[NCOL] of ref Draw->Image;
 	textcols = array[NCOL] of ref Draw->Image;
+	acmecols();
+}
 
+# acme's own colours, for when there is no theme to be had
+# (glenda, the theme, is these and Plan 9's others)
+acmecols()
+{
 	tagcols[BACK] = display.colormix(Draw->Palebluegreen, Draw->White);
 	tagcols[HIGH] = display.color(Draw->Palegreygreen);
 	tagcols[BORD] = display.color(Draw->Purpleblue);
@@ -1621,16 +1612,183 @@ colinit()
 	textcols[BORD] = display.color(Draw->Yellowgreen);
 	textcols[TEXT] = black;
 	textcols[HTEXT] = black;
+	accentcol = display.color(Draw->Greyblue);
 
 	but2col = display.rgb(16raa, 16r00, 16r00);
 	but3col = display.rgb(16r00, 16r66, 16r00);
 	but2colt = white;
 	but3colt = white;
 	modbutcol =  display.rgb(16r00, 16r00, 16r99);
-	
+
 	colbordercol = display.black;
 	rowbordercol = display.black;
 	bgcol = white;		# Default background for empty areas
+}
+
+# Xenith's colours from a theme's roles (lucitheme(2)): the body is the
+# theme's editor, tags its header, selections its menu highlight, and
+# the button 2/3/modified colours its red, green and yellow. Elements
+# are replaced, not the arrays.
+palette(th : ref Lucitheme->Theme)
+{
+	textcols[BACK] = display.color(th.editbg);
+	textcols[TEXT] = display.color(th.edittext);
+	textcols[HIGH] = display.color(th.menuhilit);
+	textcols[HTEXT] = display.color(th.edittext);
+	textcols[BORD] = display.color(th.accent);
+	tagcols[BACK] = display.color(th.header);
+	tagcols[TEXT] = display.color(th.text);
+	tagcols[HIGH] = display.color(th.menuhilit);
+	tagcols[HTEXT] = display.color(th.text);
+	tagcols[BORD] = display.color(th.accent);
+	but2col = display.color(th.red);
+	but2colt = display.color(th.editbg);
+	but3col = display.color(th.green);
+	but3colt = display.color(th.editbg);
+	modbutcol = display.color(th.yellow);
+	colbordercol = display.color(th.border);
+	rowbordercol = display.color(th.border);
+	bgcol = display.color(th.bg);
+	accentcol = display.color(th.accent);
+}
+
+# Take the colours of the named theme; the xenith-* environment
+# variables still override them, as acme-* do acme's.
+usetheme(name : string) : string
+{
+	case name {
+	"" =>
+		acmecols();
+	"plan9" or "acme" =>
+		return usetheme("glenda");	# Plan 9's own colours
+	"dark" or "catppuccin" or "mocha" =>
+		return usetheme("xenith");	# the old -t names
+	* =>
+		th : ref Lucitheme->Theme;
+		if(lucitheme != nil)
+			th = lucitheme->loadtheme(name);
+		if(th == nil){
+			acmecols();
+			usercolinit();
+			themenow = "";
+			return "no theme " + name;
+		}
+		palette(th);
+		# a theme may set Xenith's colours one by one, by the
+		# names the environment variables use (glenda does, to be
+		# acme's exactly)
+		for(l := lucitheme->entries(name); l != nil; l = tl l){
+			(k, v) := hd l;
+			xenithkey(k, v);
+		}
+	}
+	usercolinit();
+	themenow = name;
+	return nil;
+}
+
+# One of Xenith's colours by its environment variable's name (see
+# usercolinit), as a theme file gives it.
+xenithkey(key : string, v : int)
+{
+	c := display.color(v);
+	case key {
+	"xenith-fg-text-0" =>	textcols[TEXT] = c;
+	"xenith-bg-text-0" =>	textcols[BACK] = c;
+	"xenith-fg-text-1" =>	textcols[HTEXT] = c;
+	"xenith-bg-text-1" =>	textcols[HIGH] = c;
+	"xenith-fg-text-2" =>	but2colt = c;
+	"xenith-bg-text-2" =>	but2col = c;
+	"xenith-fg-text-3" =>	but3colt = c;
+	"xenith-bg-text-3" =>	but3col = c;
+	"xenith-bord-text-0" =>	textcols[BORD] = c;
+	"xenith-fg-tag-0" =>	tagcols[TEXT] = c;
+	"xenith-bg-tag-0" =>	tagcols[BACK] = c;
+	"xenith-fg-tag-1" =>	tagcols[HTEXT] = c;
+	"xenith-bg-tag-1" =>	tagcols[HIGH] = c;
+	"xenith-bord-tag-0" =>	tagcols[BORD] = c;
+	"xenith-mod-but-0" =>	modbutcol = c;
+	"xenith-bord-col-0" =>	colbordercol = c;
+	"xenith-bord-row-0" =>	rowbordercol = c;
+	"xenith-bg-col-0" =>	bgcol = c;
+	}
+}
+
+# Redraw everything in the current colours; the caller holds the row.
+recolour()
+{
+	iconinit();
+	textcolours(row.tag, tagcols);
+	for(i := 0; i < row.ncol; i++){
+		c := row.col[i];
+		textcolours(c.tag, tagcols);
+		for(j := 0; j < c.nw; j++){
+			textcolours(c.w[j].tag, tagcols);
+			textcolours(c.w[j].body, textcols);
+		}
+	}
+	draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
+	scrl->scrresize();
+	row.reshape(mainwin.clipr);
+	bflush();
+}
+
+# a frame keeps its own copy of the colours it was made with
+textcolours(t : ref Text, cols : array of ref Draw->Image)
+{
+	if(t == nil || t.frame == nil)
+		return;
+	for(i := 0; i < NCOL; i++)
+		t.frame.cols[i] = cols[i];
+	if(t.frame.tick != nil)
+		framem->frinittick(t.frame);	# the tick is drawn in them
+}
+
+# Follow the system's theme, whoever switches it (lucitheme->watch).
+themewatcher()
+{
+	c := lucitheme->watch();
+	for(;;){
+		name := <-c;
+		row.qlock.lock();
+		if(name != themenow && usetheme(name) == nil)
+			recolour();
+		row.qlock.unlock();
+	}
+}
+
+# The Theme command (the caller holds the row): the named theme or,
+# with none, the next installed one. A -t session changes only itself;
+# otherwise this is the system's switch, which every watcher follows.
+themecmd(name : string)
+{
+	if(lucitheme == nil){
+		warning(nil, "Theme: no theme module\n");
+		return;
+	}
+	if(name == nil){
+		l := lucitheme->themes();
+		if(l == nil)
+			return;
+		first := hd l;
+		for(; l != nil; l = tl l)
+			if(hd l == themenow)
+				break;
+		if(l == nil || tl l == nil)
+			name = first;
+		else
+			name = hd tl l;
+	}
+	e : string;
+	if(!pinned && (e = lucitheme->settheme(name)) != nil){
+		warning(nil, "Theme: " + e + "\n");
+		return;
+	}
+	if((e = usetheme(name)) != nil){
+		warning(nil, "Theme: " + e + "\n");
+		return;
+	}
+	recolour();
 }
 
 iconinit()
@@ -1640,7 +1798,7 @@ iconinit()
 	if(button != nil)
 		button = modbutton = colbutton = nil;
 
-	r = ((0, 0), (Dat->Scrollwid+2, font.height+1));
+	r = ((0, 0), (dat->Scrollwid+2, font.height+1));
 	button = balloc(r, mainwin.chans, Draw->White);
 	draw(button, r, tagcols[BACK], nil, r.min);
 	r.max.x -= 2;
@@ -1657,12 +1815,13 @@ iconinit()
 	draw(modbutton, r, modbutcol, nil, (0, 0));	# was DMedblue
 
 	r = button.r;
+	# solid, as in Plan 9's acme (Inferno's left a strip of tag colour)
 	colbutton = balloc(r, mainwin.chans, Draw->White);
-	draw(colbutton, r, tagcols[BACK], nil, r.min);
-	r.max.x -= 2;
 	draw(colbutton, r, tagcols[BORD], nil, (0, 0));
 
-	arrowcursor = ref Cursor((-1, -1), (16, 32), arrowbits);
+	# the host's own pointer, as every other InferNode window has;
+	# the box cursor is still Xenith's, for dragging columns and windows
+	arrowcursor = nil;
 	boxcursor = ref Cursor((-7, -7), (16, 32), boxbits);
 
 	graph->cursorswitch(arrowcursor);
@@ -1738,23 +1897,6 @@ cenv(s : string, t : string, but : int, i : ref Image) : ref Image
 	return i;
 }
 
-applytheme(name: string)
-{
-	if (name == nil || name == "" || name == "plan9")
-		return;		# Default theme, no env vars needed
-
-	theme: array of (string, string);
-	case name {
-	"catppuccin" or "dark" or "mocha" =>
-		theme = catppuccintheme;
-	* =>
-		warning(nil, "unknown theme: " + name + "\n");
-		return;
-	}
-
-	for (i := 0; i < len theme; i++)
-		utils->setenv("xenith-" + theme[i].t0, theme[i].t1);
-}
 
 usercolinit()
 {
@@ -1772,8 +1914,8 @@ usercolinit()
 	tagcols[BACK] = cenv("bg", "tag", 0, tagcols[BACK]);
 	tagcols[HTEXT] = cenv("fg", "tag", 1, tagcols[HTEXT]);
 	tagcols[HIGH] = cenv("bg", "tag", 1, tagcols[HIGH]);
-	colbordercol = cenv("bord", "col", 0, display.black);
-	rowbordercol = cenv("bord", "row", 0, display.black);
+	colbordercol = cenv("bord", "col", 0, colbordercol);
+	rowbordercol = cenv("bord", "row", 0, rowbordercol);
 	tagcols[BORD] = cenv("bord", "tag", 0, tagcols[BORD]);
 	textcols[BORD] = cenv("bord", "text", 0, textcols[BORD]);
 	bgcol = cenv("bg", "col", 0, bgcol);

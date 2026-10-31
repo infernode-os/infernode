@@ -1,0 +1,148 @@
+.TH SCENE 2
+.SH NAME
+scene \- 2-D scene model, camera and renderer
+.SH SYNOPSIS
+.EX
+include "draw.m";
+include "scene.m";
+scene := load Scene Scene->PATH;
+Model, Cam, Trails, Obj: import scene;
+
+Model.new:     fn(): ref Model;
+Model.read:    fn(dir: string): ref Model;
+m.resolve:     fn();
+m.apply:       fn(rec: string): string;
+m.set:         fn(kind: int, id: string, attrs: list of (string, string));
+m.del:         fn(kind: int, id: string): int;
+m.find:        fn(kind: int, id: string): ref Obj;
+m.objs:        fn(kind: int): array of ref Obj;
+m.dump:        fn(): string;
+m.extent:      fn(): (int, real, real, real, real);
+
+Cam.new:       fn(r: Draw->Rect): ref Cam;
+c.fwd:         fn(m: ref Model, a, b: real): Draw->Point;
+c.inv:         fn(m: ref Model, p: Draw->Point): (real, real);
+c.pan, c.zoomby, c.zoomat, c.fit, c.upp;
+c.text:        fn(m: ref Model): string;
+c.parse:       fn(s: string): int;
+
+Trails.new:    fn(): ref Trails;
+t.note:        fn(m: ref Model);
+
+init:    fn(d: ref Draw->Display, f: ref Draw->Font);
+render:  fn(dst: ref Draw->Image, m: ref Model, c: ref Cam,
+             tr: ref Trails, flags: int, hud: string);
+hit:     fn(m: ref Model, c: ref Cam, p: Draw->Point, radius: int): string;
+signature:    fn(dir: string): string;
+subsignature: fn(m: ref Model): string;
+.EE
+.SH DESCRIPTION
+.I Scene
+holds the semantics of the scene contract in
+.BR docs/scene-design.md ;
+.IR scenefs (4),
+.IR scene (1)
+are thin clients of it.
+.PP
+A
+.B Model
+is a set of objects of three kinds
+.RB ( Scene->ENT ,
+.BR FEAT ,
+.BR LAYER ),
+each the attribute list its producer wrote, kept in order, plus fields
+parsed from it for drawing; its
+.B meta
+names the frame
+.RB ( GEO :
+positions are latitude, longitude;
+.BR XY :
+x, y with y up).
+.B Read
+loads a scene directory, and the scenes its scene layers
+.RB ( kind=scene ,
+.BR dir= )
+name, resolved in the caller's namespace;
+.B resolve
+rereads just those;
+.B apply
+applies one record
+.RB ( "time" ,
+.BR ent ,
+.BR feat ,
+.BR layer ,
+.BR meta ,
+.BR del ,
+.BR clear )
+and returns an error string or nil;
+.B dump
+returns records that rebuild the model from empty.
+.B Gen
+changes on every change.
+.PP
+A
+.B Cam
+maps frame coordinates to pixels within its rectangle
+.BR r :
+.B zoom
+is log2 of the scale (256\(mu2^zoom pixels per world in the geo frame,
+2^zoom pixels per unit in xy).
+.B Text
+and
+.B parse
+convert to and from the
+.B view
+line of
+.IR scenefs (4).
+.PP
+.B Trails
+remembers entity positions each time
+.B note
+is called, for entities with a
+.B trail=
+length (or the model's default).
+.PP
+.B Render
+draws the scene into
+.B c.r
+of
+.IR dst :
+layers or the default grid
+.RB ( RGRID ),
+features, trails, entities and labels, placed so they do not overlap,
+then the HUD
+.RB ( RHUD )
+and zoom buttons
+.RB ( RCHIPS ,
+located by
+.BR chiprects ).
+Shapes are anti-aliased: they are paths, filled and stroked by
+.B Image.fillpath
+and
+.B Image.strokepath
+(see
+.IR draw-image (2)).
+.B Hit
+returns the entity nearest
+.IR p ,
+or nil.
+.PP
+Layers draw in name order under the scene's own objects; a scene layer
+is drawn with the same camera, blended at its
+.BR opacity ,
+and its labels are placed with everyone else's.
+Objects with
+.B hide=1
+are not drawn.
+.PP
+.B Signature
+hashes what the renderer would draw from a directory, scene layers
+included, so a viewer can tell when to reread;
+.B subsignature
+covers only a model's scene layers.
+.SH SOURCE
+.B /appl/lib/scene.b
+.SH SEE ALSO
+.IR scene (1),
+.IR scenefs (4),
+.IR draw-intro (2)

@@ -45,7 +45,7 @@ typedef unsigned long	ulong;
 typedef	  signed char	schar;
 typedef	long long	vlong;
 typedef	unsigned long long	uvlong;
-typedef ushort		Rune;
+typedef unsigned int		Rune;
 typedef uint32_t	u32int;
 typedef uvlong u64int;
 
@@ -120,10 +120,12 @@ extern	void	qsort(void*, long, long, int (*)(void*, void*));
 
 enum
 {
-	UTFmax		= 3,
+	UTFmax		= 4,
 	Runesync	= 0x80,
 	Runeself	= 0x80,
-	Runeerror	= 0x80
+	Runeerror	= 0xFFFD,
+	Runemax		= 0x10FFFF,
+	Runemask	= 0x1FFFFF,
 };
 
 extern	int	runetochar(char*, Rune*);
@@ -350,8 +352,9 @@ extern	void	wunlock(RWLock*);
 #define	MBEFORE	0x0001
 #define	MAFTER	0x0002
 #define	MCREATE	0x0004
+#define	MREADONLY	0x0008
 #define	MCACHE	0x0010
-#define	MMASK	0x0017
+#define	MMASK	0x001f
 
 #define	OREAD	0
 #define	OWRITE	1

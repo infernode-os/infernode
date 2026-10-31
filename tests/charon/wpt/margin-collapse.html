@@ -1,0 +1,5 @@
+<!doctype html><title>vertical margin collapsing</title>
+<style>body{margin:0} .a,.b{height:50px;background:green;width:100px} .a{margin-bottom:20px} .b{margin-top:20px}
+.gap{position:absolute;top:50px;left:0;width:100px;height:20px;background:green}
+.x{position:absolute;top:70px;left:0;width:100px;height:20px;background:red;z-index:-1}</style>
+<div class=x></div><div class=gap></div><div class=a></div><div class=b></div>

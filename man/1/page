@@ -1,0 +1,124 @@
+.TH PAGE 1
+.SH NAME
+page \- show documents
+.SH SYNOPSIS
+.B wm/page
+[
+.B -r
+.I quarters
+]
+[
+.B -w
+|
+.B -f
+|
+.B -z
+.I percent
+]
+[
+.I file ...
+]
+.SH DESCRIPTION
+.I Page
+shows documents: PDF files, images, Markdown, Mermaid diagrams and
+HTML, each by the engine for its kind
+(see
+.IR docengine (2)),
+in the view Xenith's windows use
+.RI ( sheetview (2)):
+a column of its pages, fitted to the window's width (a PDF) or a
+whole page in view (a picture), scrolled smoothly from page to page.
+.PP
+The files named are one document: paging on past a file's last page
+goes to the next file's first, and back.  Only the file shown is held
+open.  With no file named,
+.I page
+reads the document from its standard input.
+.PP
+.B -r
+turns the pages
+.I quarters
+quarter turns clockwise;
+.B -w
+fits the width,
+.B -f
+a whole page,
+.B -z
+sets the scale to
+.I percent
+of the pages' size.
+.PP
+Button 1 drags the pages in both directions; the wheel scrolls them.
+Button 1 clicked without moving on a link follows it: to a page of the
+document, that page; to anything else (a web address), the plumber
+(see
+.IR plumber (8)).
+As in Plan 9's
+.IR page ,
+button 2 raises a menu of operations: the next and previous page, zoom
+in and out, fit width or page, turn right or left,
+.BR find... ,
+.BR "go to page..." ,
+.B "write page..."
+(the page shown, at the scale shown, as an image file, see
+.IR image (6)),
+and
+.BR exit .
+Button 3 raises a menu of the pages to choose from: those near the one
+shown (marked
+.BR * ),
+the first and the last, and, with several files, the files.
+A status line names the file, the page and the scale.
+.PP
+Keys:
+.TF "Page Down"
+.TP
+space, Page Down
+a screen on (into the next file at a file's end)
+.TP
+backspace, Page Up
+a screen back
+.TP
+Down, Up
+scroll
+.TP
+.BR n ", Right"
+the next page
+.TP
+.BR p ", Left"
+the previous page
+.TP
+Home, End
+the first file's first page, the last file's last
+.TP
+.BR + ", " -
+zoom in, out
+.TP
+.BR w ", " f
+fit the width, a whole page
+.TP
+.BR r ", " R
+turn right, left
+.TP
+.B /
+find
+.TP
+.B g
+go to a page
+.TP
+.B W
+write the page shown as an image
+.TP
+.B q
+quit
+.PD
+.PP
+A page is painted at the scale shown, off the window's thread, and
+kept while it is in view or the next the way the pages last moved;
+until it is ready the last painting is shown scaled.
+.SH SOURCE
+.B /appl/wm/page.b
+.SH SEE ALSO
+.IR docengine (2),
+.IR sheetview (2),
+.IR wm (1)

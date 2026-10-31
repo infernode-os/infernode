@@ -17,6 +17,8 @@ plus the `ssl` line-encryption device:
    with a mutual **ML-KEM-768** encapsulation; the session secret is
    `SHA3-512("infernode-pq-sts-v2" || dh || kem_lo || kem_hi || ek_lo || ek_hi)`.
    This closes the harvest-now-decrypt-later gap on node-to-node traffic.
+   With `CNSAMODE=1` in the host environment every node uses
+   **ML-KEM-1024** instead (CNSA 2.0 strict mode; all nodes must agree).
    See [CRYPTO-MODERNIZATION.md §10](CRYPTO-MODERNIZATION.md).
 3. **Line encryption.** The 64-byte secret feeds the `ssl` device; the default
    negotiated by `mount -k` / `styxlisten` is `aes_256_cbc` + `sha256`.
@@ -40,6 +42,8 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | `tests/interop/run-mount-auth.sh` | host harness | **real CLI path**: `auth/createsignerkey` -> on-disk keyfile -> `styxlisten -k ... export /lib` (server) <- `mount -k ... -C` (client), reading a file through the encrypted styx mount and verifying it; covers ed25519 + ML-DSA-65 and checks an anonymous `mount -A` is rejected |
 | `tests/handshake_fuzz_test.b` | in-emu unit (auto-discovered) | receiver robustness: 9 malformed inbound handshake streams (empty, garbage, bad/oversized/truncated length headers, zero-length flood, garbage payloads) over real TCP must each make `auth->server` fail closed — no secret, no crash, no hang |
 | `tests/interop/run-interop.sh` | host harness | **cross-binary**: launches two *separate* emu processes (optionally from different InferNode trees) and transfers a file between them, verifying it byte-for-byte |
+| `tests/interop/run-auth-timeout.sh` | host harness | pre-auth admission guards on a real `listen -T` / `styxlisten -T` server: a stalled client is hung up after the deadline (concurrency or rate limit mode) while a normal `mount -k` still succeeds against the same listener |
+| `tests/cnsa_nodepair_test.sh` | host harness | two separate emu processes in CNSA mode complete the ML-KEM-1024 handshake (ed25519 and ML-DSA-87 signers); a mixed 1024/768 pair fails |
 
 ### Running the in-emu tests
 

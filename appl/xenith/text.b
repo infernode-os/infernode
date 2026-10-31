@@ -21,6 +21,7 @@ exec : Exec;
 lookx : Look;
 complete: Complete;
 asyncio: Asyncio;
+docview : Docview;
 
 Dir, sprint : import sys;
 dirname : import lookx;
@@ -128,6 +129,7 @@ init(mods : ref Dat->Mods)
 	exec = mods.exec;
 	lookx = mods.look;
 	asyncio = mods.asyncio;
+	docview = mods.docview;
 
 	complete = load Complete Complete->PATH;
 	if(complete != nil)
@@ -520,10 +522,14 @@ Text.insert(t : self ref Text, q0 : int, r : string, n : int, tofile : int, echo
 	c, i : int;
 	u : ref Text;
 
+	if(tofile)
+		loadrest(t.file);
 	if(tofile && t.ncache != 0)
-		error("text.insert");
+		cachecommit(t);
 	if(n == 0)
 		return;
+	if(t.what == Body && t.w != nil)
+		docview->edited(t.w);	# a document of it set again, live
 	if(tofile){
 		t.file.insert(q0, r, n);
 		if(t.what == Body){
@@ -611,11 +617,15 @@ Text.delete(t : self ref Text, q0 : int, q1 : int, tofile : int)
 	i, c : int;
 	u : ref Text;
 
+	if(tofile)
+		loadrest(t.file);
 	if(tofile && t.ncache != 0)
-		error("text.delete");
+		cachecommit(t);
 	n = q1-q0;
 	if(n == 0)
 		return;
+	if(t.what == Body && t.w != nil)
+		docview->edited(t.w);
 	if(tofile){
 		t.file.delete(q0, q1);
 		if(t.what == Body){
@@ -672,10 +682,47 @@ Text.readc(t : self ref Text, q : int) : int
 {
 	if(t.cq0<=q && q<t.cq0+t.ncache)
 		return t.cache[q-t.cq0];
+	# past typing not yet in the file, the file has it ncache sooner:
+	# read at q, a scroll's look back from an origin past the typing
+	# read past the end of the file (bad assert: Xenith gone)
+	if(t.ncache > 0 && q >= t.cq0+t.ncache)
+		q -= t.ncache;
 	if (onechar == nil)
 		onechar = stralloc(1);
 	t.file.buf.read(q, onechar, 0, 1);
 	return onechar.s[0];
+}
+
+# The text from q, n characters of it, typing not yet in the file among
+# them, as readc reads one: the file has what follows the typing later.
+# Read from the file at q, a scroll up over typing read the wrong text,
+# and past the end of the file
+Text.readtext(t : self ref Text, q : int, n : int) : string
+{
+	r := utils->stralloc(BUFSIZE);
+	s := "";
+	q1 := q+n;
+	while(q < q1){
+		m := q1-q;
+		if(t.ncache > 0 && q >= t.cq0 && q < t.cq0+t.ncache){
+			if(m > t.cq0+t.ncache-q)
+				m = t.cq0+t.ncache-q;
+			s += t.cache[q-t.cq0:q-t.cq0+m];
+		}else{
+			fq := q;
+			if(t.ncache > 0 && q >= t.cq0+t.ncache)
+				fq = q-t.ncache;
+			else if(t.ncache > 0 && q+m > t.cq0)
+				m = t.cq0-q;	# up to the typing
+			if(m > BUFSIZE)
+				m = BUFSIZE;
+			t.file.buf.read(fq, r, 0, m);
+			s += r.s[0:m];
+		}
+		q += m;
+	}
+	utils->strfree(r);
+	return s;
 }
 
 Text.bswidth(t : self ref Text, c : int) : int
@@ -803,6 +850,16 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 
 	if(alphabet != ALPHA_LATIN)
 		r = transc(r, alphabet);
+	# A document scrolls, a page browsed takes keys in a form field,
+	# a binary document's text is not typed into; anything else goes
+	# back to the text (docview(2))
+	if(t.what == Body && t.w != nil && t.w.doc != nil){
+		if(docview->shown(t.w)){
+			if(docview->key(t.w, r))
+				return;
+		}else if(docview->readonly(t.w) && !isscroll(r))
+			return;
+	}
 	if (echomode == EM_RAW && t.what == Body) {
 		if (t.w != nil) {
 			s := "a";
@@ -853,7 +910,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 				scrollup(t, 4);
 			return;
 		Keyboard->Down=>
-			t.commit(TRUE);
+			typecommit(t);
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
 				nnb = t.bswidth(16r15);
@@ -873,7 +930,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.show (q0, q0);
 			return;
 		Keyboard->Up=>
-			t.commit(TRUE);
+			typecommit(t);
 			# go to where ^U would erase, if not already at BOL
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
@@ -900,7 +957,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			scrollup(t, 2*t.frame.maxlines/3);
 			return;
 		Keyboard->Left =>
-			t.commit(TRUE);
+			typecommit(t);
 			if(t.q0 != t.q1)
 				t.show(t.q0, t.q0);
 			else if(t.q0 != 0)
@@ -908,7 +965,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.navoffset = 0;
 			return;
 		Keyboard->Right =>
-			t.commit(TRUE);
+			typecommit(t);
 			if(t.q0 != t.q1)
 				t.show(t.q1, t.q1);
 			else if(t.q1 != t.file.buf.nc)
@@ -921,15 +978,15 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 				return;
 			break;
 		 16r10 or Keyboard->Home =>
-			t.commit(TRUE);
+			typecommit(t);
 			t.show(0,0);
 			return;
 		 16r11 or Keyboard->End=>
-			t.commit(TRUE);
+			typecommit(t);
 			t.show(t.file.buf.nc,t.file.buf.nc);
 			return;
 		16r01 => # ^A: beginning of line
-			t.commit(TRUE);
+			typecommit(t);
 			# go to where ^U would erase, if not already at BOL
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
@@ -937,22 +994,22 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.show (t.q0-nnb, t.q0-nnb);
 			return;
 		16r05 => # ^E: end of line
-			t.commit(TRUE);
+			typecommit(t);
 			q0 = t.q0;
 			while (q0 < t.file.buf.nc && (t.readc(q0) != '\n'))
 				q0++;
 			t.show (q0, q0);
 			return;
 		16r03 => # ^C: copy
-			t.commit(TRUE);
+			typecommit(t);
 			exec->cut(t, nil, TRUE, FALSE);
 			return;
 		16r1A => # ^Z: undo
-			t.commit(TRUE);
+			typecommit(t);
 			exec->undo(t, TRUE);
 			return;
 		16r13 => # ^S: saves
-			t.commit(TRUE);
+			typecommit(t);
 			exec->put(t, nil, nil, 0);
 			return;
 	}
@@ -961,18 +1018,21 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 		t.file.mark();
 	}
 	case(r){
+	# in the text typed in, as Acme's: from a tag they went to the
+	# body, whose own typing, not committed, the cut or paste then
+	# tripped over (error: Xenith gone)
 	16r18 => # ^X: cut
-		t.commit(TRUE);
-		exec->cut(t, nil, TRUE, TRUE);
+		typecommit(t);
+		exec->cut(t, t, TRUE, TRUE);
 		return;
 	16r16 => # ^V: paste
-		t.commit(TRUE);
-		exec->paste(t, nil, FALSE, TRUE);
+		typecommit(t);
+		exec->paste(t, t, FALSE, FALSE);
 		return;
 	}
 	if(t.q1 > t.q0){
 		if(t.ncache != 0)
-			error("text.type");
+			typecommit(t);
 		exec->cut(t, t, TRUE, TRUE);
 		t.eq0 = ~0;
 		if (r == 16r08 || r == 16r7f){	# erase character : odd if a char then erased
@@ -983,8 +1043,19 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 	t.show(t.q0, t.q0);
 	case(r){
 	16r1B => # Escape key
-		if(t.eq0 != ~0)
-			t.setselect(t.eq0, t.q0);
+		# what was typed since typing began, either way round: ^U and
+		# ^W erase back past where it began, and a client's change
+		# can leave that past the end (an inverted or overlong
+		# selection broke the frame and the next read of the text)
+		if(t.eq0 != ~0){
+			q0 = t.eq0;
+			if(q0 > t.file.buf.nc+t.ncache)
+				q0 = t.file.buf.nc+t.ncache;
+			if(q0 <= t.q0)
+				t.setselect(q0, t.q0);
+			else
+				t.setselect(t.q0, q0);
+		}
 		if(t.ncache > 0){
 			if(t.w != nil)
 				t.w.commit(t);
@@ -1002,12 +1073,22 @@ if(0)	# DEBUGGING
 		if(u.cq0!=t.cq0 && (u.ncache!=t.ncache || t.ncache!=0))
 			error("text.type inconsistent caches");
 	}
+		typesync(t);
 		nnb = t.bswidth(r);
 		q1 = t.q0;
 		q0 = q1-nnb;
-		for(i=0; i<t.file.ntext; i++){
-			u = t.file.text[i];
-			u.nofill = TRUE;
+		# every text on the file kept from filling until each has let
+		# go of the typing erased, and t, which takes what is left from
+		# the file, last: a Zerox done after t was filled by t's delete,
+		# and committed its copy of the typing where the file had
+		# become shorter (File.insert's assert: Xenith gone)
+		for(i=0; i<t.file.ntext; i++)
+			t.file.text[i].nofill = TRUE;
+		for(j := 0; j<=t.file.ntext; j++){
+			if(j == t.file.ntext)
+				u = t;
+			else if((u = t.file.text[j]) == t)
+				continue;
 			nb = nnb;
 			n = u.ncache;
 			if(n > 0){
@@ -1027,8 +1108,9 @@ if(0)	# DEBUGGING
 				u.setselect(u.q0, u.q1);
 			else
 				t.setselect(q0, q0);
-			u.nofill = FALSE;
 		}
+		for(i=0; i<t.file.ntext; i++)
+			t.file.text[i].nofill = FALSE;
 		for(i=0; i<t.file.ntext; i++)
 			t.file.text[i].fill();
 		return;
@@ -1047,7 +1129,7 @@ if(0)	# DEBUGGING
 		break; # fall through to normal code
 	16r7f or Keyboard->Del =>
 		# Delete character - forward delete
-		t.commit(TRUE);
+		typecommit(t);
 		if(t.q0 >= t.file.buf.nc)
 			return;
 		nnb = 1;
@@ -1072,7 +1154,13 @@ if(0)	# DEBUGGING
 			t.file.text[i].fill();
 		return;
 	}
+	# a key keyboard.h gives that no case above took (a function key,
+	# Print, an Alt combination) is not a character: it was typed as a
+	# private-use glyph
+	if(r >= Keyboard->Spec && r <= Keyboard->Specend)
+		return;
 	# otherwise ordinary character; just insert, typically in caches of all texts 
+	typesync(t);
 if(0)	# DEBUGGING 
 	for(i=0; i<t.file.ntext; i++){
 		u = t.file.text[i];
@@ -1112,13 +1200,107 @@ Text.commit(t : self ref Text, tofile : int)
 {
 	if(t.ncache == 0)
 		return;
-	if(tofile)
+	if(tofile){
+		loadrest(t.file);	# its fill commits the typing itself
+		if(t.ncache == 0)
+			return;
 		t.file.insert(t.cq0, t.cache, t.ncache);
+	}
 	if(t.what == Body){
 		t.w.dirty = TRUE;
 		t.w.utflastqid = -1;
 	}
 	t.ncache = 0;
+}
+
+# A file still loading in the background (Text.loadx) read in to its
+# end at once, before its text is changed, written or read whole by a
+# client: what an edit's addresses, a Put and a read see is all of it.
+# A Put while it loaded wrote what had come so far over the file, and an
+# edit moved the place the next chunk went in. The load's chunks still
+# on their way are dropped, as its operation is no longer the window's
+# (asyncload in xenith.b).
+loadrest(f : ref File)
+{
+	w : ref Window;
+
+	if(f == nil)
+		return;
+	for(i := 0; i < f.ntext; i++){
+		u := f.text[i].w;
+		# a body's file: a tag's is changed while its body loads
+		if(u != nil && f.text[i] == u.body && u.asyncload != nil && !u.isdir){
+			w = u;
+			break;
+		}
+	}
+	if(w == nil)
+		return;
+	op := w.asyncload;
+	w.asyncload = nil;
+	asyncio->asynccancel(op);
+	fd := sys->open(op.path, Sys->OREAD);
+	if(fd == nil)
+		warning(nil, sys->sprint("%s: the rest not read: %r\n", op.path));
+	else{
+		sys->seek(fd, big op.nbytes, Sys->SEEKSTART);
+		f.buf.loadx(op.q0+op.nrunes, fd);
+	}
+	f.unread = FALSE;
+	w.dirty = FALSE;
+	w.settag();
+	for(i = 0; i < f.ntext; i++){
+		f.text[i].fill();
+		scrdraw(f.text[i]);
+	}
+}
+
+# Typing not yet in the file put there before the file is changed: it
+# already holds its place in the text, so the change's addresses stay
+# right. An error here (Xenith gone) was the cost of a change made
+# while typing was held: a command written to the event file, Paste in
+# a tag after typing in the body, a key and a click crossing in time.
+# A tag's own typing alone: its window's commit can rename it, and so
+# rewrite the tag under the change.
+cachecommit(t: ref Text)
+{
+	if(t.what == Body && t.w != nil)
+		t.w.commit(t);
+	else
+		t.commit(TRUE);
+}
+
+# Commit typing in every window on the file, not t's alone: a Zerox
+# (or a Render of one) keeps its own copy of what is being typed, and
+# a copy left behind no longer matches where the next key goes in.
+typecommit(t: ref Text)
+{
+	if(t.w != nil)
+		t.w.commit(t);
+	else
+		t.commit(TRUE);
+}
+
+# A window's copy of the typing must end where t types next; one that
+# does not has gone stale. Say so and commit them all, rather than let
+# Text.type's checks below take the editor down with the edit.
+typesync(t: ref Text)
+{
+	for(i:=0; i<t.file.ntext; i++){
+		u := t.file.text[i];
+		if(u.ncache > 0 && u.cq0+u.ncache != t.q0){
+			# commit before warning: the Errors window it may open
+			# reshapes this column, and a redraw then would put a
+			# stale copy into the file a second time
+			typecommit(t);
+			# an Errors window opening takes the pointer, and the
+			# typing would follow it; keep both where they were
+			p := mouse.xy;
+			warning(nil, "typing went out of step between windows on "+t.file.name+"; recovered\n");
+			graph->cursorset(p);
+			return;
+		}
+	}
 }
 
 clicktext : ref Text;
@@ -1642,11 +1824,8 @@ Text.setorigin(t : self ref Text, org : int, exact : int)
 	}
 	else if(a<0 && -a<t.frame.nchars){
 		n = t.org - org;
-		r = utils->stralloc(n);
-		t.file.buf.read(org, r, 0, n);
-		frinsert(t.frame, r.s, n, 0);
-		utils->strfree(r);
-		r = nil;
+		s := t.readtext(org, n);
+		frinsert(t.frame, s, n, 0);
 	}else
 		frdelete(t.frame, 0, t.frame.nchars);
 	t.org = org;
@@ -1662,6 +1841,7 @@ Text.reset(t : self ref Text)
 {
 	t.file.seq = 0;
 	t.eq0 = ~0;
+	t.ncache = 0;	# typing held goes with the text it was typed in
 	# do t.delete(0, t.nc, TRUE) without building backup stuff 
 	t.setselect(t.org, t.org);
 	frdelete(t.frame, 0, t.frame.nchars);
@@ -1670,4 +1850,16 @@ Text.reset(t : self ref Text)
 	t.q1 = 0;
 	t.file.reset();
 	t.file.buf.reset();
+}
+
+# A key that moves about the text without changing it
+isscroll(r : int) : int
+{
+	case r {
+	Dat->Kscrollup or Dat->Kscrolldown or Keyboard->Up or Keyboard->Down or
+	Keyboard->Left or Keyboard->Right or Keyboard->Pgup or Keyboard->Pgdown or
+	Keyboard->Home or Keyboard->End =>
+		return 1;
+	}
+	return 0;
 }

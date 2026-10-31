@@ -1,6 +1,13 @@
 # DESIGN (for review) — Factotum-held audit checkpoint signing (INFR-356)
 
-> **STATUS: APPROVED — implementation in progress.** Owner go/no-go received with
+> **STATUS: SHIPPED.** Implemented as `appl/cmd/auth/factotum/proto/sign.b`, the
+> `genkey` verb in `appl/cmd/auth/factotum/factotum.b`, `lib/sh/audit-setup`,
+> `tests/auditsign_test.b` and `tests/host/audit_signing_test.sh`. The later hardening
+> pass made checkpoints signed-only (§6 below is superseded).
+> [`audit-log-design.md`](audit-log-design.md) is the authoritative description; this
+> document is the design record as approved.
+>
+> **Original status: APPROVED.** Owner go/no-go received with
 > these decisions locked in (see §7): **(1)** no `-k` keyfile fallback — secstore is
 > the sole at-rest backing, degrade to unsigned markers if absent; **(2)** provisioning
 > is a **shell script** (Plan 9 idiom) plus a tiny compiled SK-export filter, and the
@@ -108,6 +115,10 @@ proto; **no `AuthRpcMax` / factotum-core change.**
 
 ## 6. Graceful degradation (unchanged contract)
 
+> Superseded: the unsigned-marker fallback below was removed. With no signer, `auditfs`
+> seals no checkpoint and the head must be anchored externally
+> ([`audit-log-design.md`](audit-log-design.md) §5, signed-only).
+
 If factotum is unreachable or holds no `proto=sign service=audit` key, the `checkpoint`
 write falls back to an **unsigned** chain marker — exactly today's behavior when no `-k`
 is given ([`auditfs.b:276-281`](../../appl/cmd/auditfs.b)). Tamper-*evidence* (the hash
@@ -152,8 +163,11 @@ radius; downgrade to `mldsa65` — violates the CNSA 2.0 Category 5 decision.)
   the stored value is `=`-free / newline-free / whitespace-free, and that a signature does
   not verify over different content. This covers the crypto and the single-line encoding —
   the parts most likely to be subtly wrong.
-- **Not yet verified live:** the running wire path (`genkey` → sign proto → `auditfs`
-  driver) end-to-end. The ad-hoc `auth/factotum &` shell harness in the dev sandbox
+- **Live path, since covered:** `tests/host/audit_signing_test.sh` exercises `genkey` →
+  sign proto → `auditfs` checkpoint → `op=pubkey` → `auditverify` end-to-end (SKIP, not
+  failure, when the namespace is incomplete). The original note follows.
+- **Not yet verified live (at time of writing):** the running wire path (`genkey` → sign
+  proto → `auditfs` driver) end-to-end. The ad-hoc `auth/factotum &` shell harness in the dev sandbox
   **hangs on any factotum `ctl` I/O** — and this was confirmed to affect the **unmodified**
   factotum too (reading `/mnt/factotum/ctl` hangs on stock factotum; reading `proto`
   works). So it is a harness/environment limitation, not a code regression: the bare shell

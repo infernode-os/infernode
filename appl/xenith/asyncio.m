@@ -22,42 +22,6 @@ Asyncio: module {
 			Error =>
 				opid: int;
 				err: string;
-			ImageData =>
-				opid: int;
-				winid: int;     # Window ID for the image
-				path: string;   # Image path (for display in tag)
-				data: array of byte;  # Raw image bytes
-				err: string;    # nil on success
-		ImageDecoded =>
-				winid: int;     # Window ID for the image
-				path: string;   # Image path (for display in tag)
-				image: ref Draw->Image;  # Decoded image (nil on error)
-				err: string;    # nil on success
-		ImageProgress =>
-				winid: int;     # Window ID for the image
-				path: string;   # Image path
-				image: ref Draw->Image;  # Image being decoded (partial content)
-				rowsdone: int;  # Rows decoded so far
-				rowstotal: int; # Total rows
-		# Content rendering messages (renderer-based pipeline)
-		ContentData =>
-				opid: int;
-				winid: int;     # Window ID
-				path: string;   # File path
-				data: array of byte;  # Raw file bytes
-				err: string;    # nil on success
-		ContentDecoded =>
-				winid: int;     # Window ID
-				path: string;   # File path (for display in tag)
-				image: ref Draw->Image;  # Rendered image (nil on error)
-				text: string;   # Extracted text content (nil if none)
-				err: string;    # nil on success
-		ContentProgress =>
-				winid: int;     # Window ID
-				path: string;   # File path
-				image: ref Draw->Image;  # Partial render
-				done: int;      # Units completed
-				total: int;     # Total units
 		TextData =>
 				opid: int;      # Operation ID
 				winid: int;     # Window ID for the text
@@ -66,6 +30,7 @@ Asyncio: module {
 				data: string;   # Chunk of text data
 				offset: int;    # Rune offset within file (cumulative)
 				err: string;    # nil on success
+				nbytes: int;    # bytes of the file read, this chunk's included
 		TextComplete =>
 				opid: int;      # Operation ID
 				winid: int;     # Window ID for the text
@@ -106,16 +71,14 @@ Asyncio: module {
 		path: string;
 		active: int;
 		winid: int;         # Window ID (for image ops)
+		# a text load's progress, kept by the receiver of its chunks
+		q0: int;            # where the file goes in the text
+		nbytes: int;        # bytes of the file put in
+		nrunes: int;        # and the runes they made
 	};
 
 	# Start async file read - returns operation handle
 	asyncload: fn(path: string, q0: int): ref AsyncOp;
-
-	# Start async image load - returns operation handle
-	asyncloadimage: fn(path: string, winid: int): ref AsyncOp;
-
-	# Start async content load (for renderer pipeline) - returns operation handle
-	asyncloadcontent: fn(path: string, winid: int): ref AsyncOp;
 
 	# Start async text file load - returns operation handle
 	asyncloadtext: fn(path: string, q0: int, winid: int): ref AsyncOp;
@@ -125,7 +88,10 @@ Asyncio: module {
 
 	# Start async file save - returns operation handle
 	# Reads from buffer positions q0..q1 and writes to path
-	asyncsavefile: fn(path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int): ref AsyncOp;
+	# write data to path in the background; data is the caller's copy
+	# of the text, taken before (a Buffer is not to be read from another
+	# process while the window edits it)
+	asyncsavefile: fn(path: string, winid: int, data: array of byte): ref AsyncOp;
 
 	# Cancel an async operation
 	asynccancel: fn(op: ref AsyncOp);

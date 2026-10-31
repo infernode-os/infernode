@@ -37,7 +37,7 @@ struct Value {
 	union {
 		ulong	w;
 		vlong	q;
-		Rune	utf[1];	/* more allocated as required */
+		wchar_t	utf[1];	/* more allocated as required */
 		char	data[1];
 	};
 };
@@ -66,7 +66,8 @@ static struct {
 static	QLock	reglock;
 
 extern wchar_t	*widen(char*);
-static	Value*	getregistry(HKEY, Rune*, Rune*);
+extern char	*runestoutf(char*, wchar_t*, int);
+static	Value*	getregistry(HKEY, wchar_t*, wchar_t*);
 static int nprocs(void);
 
 static void
@@ -77,7 +78,7 @@ archinit(void)
 
 	v = getregistry(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"ProcessorNameString");
 	if(v != nil){
-		snprint(arch.cpu, sizeof(arch.cpu), "%S", v->utf);
+		runestoutf(arch.cpu, v->utf, sizeof(arch.cpu));
 		if((p = strrchr(arch.cpu, ' ')) != nil)
 			for(; p >= arch.cpu && *p == ' '; p--)
 				*p = '\0';
@@ -85,7 +86,7 @@ archinit(void)
 	}else{
 		v = getregistry(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"VendorIdentifier");
 		if(v != nil){
-			snprint(arch.cpu, sizeof(arch.cpu), "%S", v->utf);
+			runestoutf(arch.cpu, v->utf, sizeof(arch.cpu));
 			free(v);
 		}else
 			snprint(arch.cpu, sizeof(arch.cpu), "unknown");
@@ -103,7 +104,7 @@ nprocs(void)
 {
 	int n;
 	char *p;
-	Rune *r;
+	wchar_t *r;
 	Value *v;
 	n = 0;
 	for(;;){
@@ -272,7 +273,7 @@ archwrite(Chan* c, void* a, long n, vlong offset)
 	Value *v;
 	int i;
 	Cmdbuf *cb;
-	Rune *key, *item;
+	wchar_t *key, *item;
 
 	if((ulong)c->qid.path != Qregquery)
 		error(Eperm);
@@ -338,16 +339,17 @@ Dev archdevtab = {
 static void
 regerr(int rc)
 {
-	Rune err[64];
+	wchar_t err[64];
+	char msg[3*nelem(err)+1];
 
 	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM,
 		0, rc, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		err, sizeof(err), 0);
-	errorf("%S", err);
+		err, nelem(err), 0);
+	errorf("%s", runestoutf(msg, err, sizeof(msg)));
 }
 
 static Value*
-getregistry(HKEY root, Rune *keyname, Rune *name)
+getregistry(HKEY root, wchar_t *keyname, wchar_t *name)
 {
 	long res;
 	HKEY key;
@@ -376,8 +378,6 @@ getregistry(HKEY root, Rune *keyname, Rune *name)
 		free(val);
 		nexterror();
 	}
-	if(0)
-		fprint(2, "%S\\%S: %d %d\n", keyname, name, dtype, n);
 	val->type = dtype;
 	val->size = n;
 	switch(dtype){

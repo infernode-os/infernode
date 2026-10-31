@@ -1,0 +1,6 @@
+<!doctype html><title>collapsible white space around an inline-block does not widen a shrink-to-fit box</title>
+<style>body{margin:0} .r{position:absolute;left:100px;top:0;width:100px;height:100px;background:red;z-index:-1} .f{display:flex} .g{display:inline-block;width:100px;height:100px;background:green;vertical-align:top} .w{width:100px;height:100px;background:white}</style>
+<div class=r></div>
+<div class=f><div>
+	<span class=g></span>
+</div><div class=w></div></div>

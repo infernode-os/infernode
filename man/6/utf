@@ -7,8 +7,8 @@ based on the Unicode Standard and on the ISO multibyte
 .SM UTF-8
 encoding (Universal Character
 Set Transformation Format, 8 bits wide).
-The Unicode Standard represents its characters in 16
-bits;
+The Unicode Standard represents its characters as values
+from 0 to hexadecimal 10FFFF (21 bits);
 .SM UTF-8
 represents such
 values in an 8-bit byte stream.
@@ -17,7 +17,10 @@ Throughout this manual,
 is shortened to
 .SM UTF.
 .PP
-Internally, programs store individual Unicode characters as 16-bit values.
+Internally, programs store individual Unicode characters as 32-bit values
+(a Limbo string holds them so, and a C
+.B Rune
+is 32 bits).
 However, any external manifestation of textual information,
 in files or at the interface between programs, uses the
 machine-independent, byte-stream encoding called
@@ -65,20 +68,28 @@ as follows:
 01.   x in [00000000.0bbbbbbb] \(-> 0bbbbbbb
 10.   x in [00000bbb.bbbbbbbb] \(-> 110bbbbb, 10bbbbbb
 11.   x in [bbbbbbbb.bbbbbbbb] \(-> 1110bbbb, 10bbbbbb, 10bbbbbb
+100.  x in [000bbbbb.bbbbbbbb.bbbbbbbb] \(-> 11110bbb, 10bbbbbb, 10bbbbbb, 10bbbbbb
 .EE
 .PP
 Conversion 01 provides a one-byte sequence that spans the
 .SM ASCII
 character set in a compatible way.
-Conversions 10 and 11 represent higher-valued characters
-as sequences of two or three bytes with the high bit set.
-Inferno does not support the 4-, 5-, and 6-byte sequences proposed by X-Open.
+Conversions 10, 11 and 100 represent higher-valued characters
+as sequences of two, three or four bytes with the high bit set.
+Conversion 100 carries the characters beyond hexadecimal FFFF,
+up to 10FFFF: emoji, the supplementary ideographs, the mathematical alphanumerics.
+Inferno does not support the 5- and 6-byte sequences once proposed by X-Open,
+nor values above 10FFFF,
+nor the surrogates D800 to DFFF, which are not characters.
 When there are multiple ways to encode a value, for example rune 0,
 the shortest encoding is used.
 .PP
 In the inverse mapping,
 any sequence except those described above
-is incorrect and is converted to the Unicode value of hexadecimal 0080.
+is incorrect and is converted to the Unicode replacement character, hexadecimal FFFD,
+one for each byte of it.
+A value that is not a character (one above 10FFFF, or a surrogate)
+is encoded as FFFD.
 .SH "SEE ALSO"
 .IR sys-byte2char (2),
 .IR "The Unicode Standard" .

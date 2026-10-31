@@ -1,0 +1,43 @@
+# The SHA-1 of every version of the agent prompts InferNode has shipped.
+# lib/sh/profile copies them into ~/.infernode once; a copy whose hash is
+# here was never edited, and is brought up to the current default at boot.
+# A change to lib/veltro/meta.txt or lib/veltro/agents/task.txt adds its
+# hash here (tests/host/prompt_defaults_test.sh checks).
+0062b74a3babe760552285d2e6c9ce53fa930e2d meta.txt
+1615d14bc349f987119d33bfa029daab6ee8be5e meta.txt
+211ac64b491731b9ac6352ccf4397eb2f55aee61 meta.txt
+25c0aba8af67dc26ad80efa53855ba1c0af87ccd meta.txt
+48064217fe0305848cb7993947a9a7aed5e9721d meta.txt
+5167bcea2e75470354b9a5e6b698e63ab6fdd1ce meta.txt
+5b954809a043607d025abbe99fa6763c0a976ba4 meta.txt
+70991cec79ad0f60e06d3ef8da2afe2af4561146 meta.txt
+7c0f8fdb672095fded917049c8859317db78a8a1 meta.txt
+7c74e1dfa67bd2bf64e662f9e51522921cfb250f meta.txt
+804231a5426c2a891d0924d76c7f6d5f39e58e4d meta.txt
+8972859557f621abaf4fd4a51170099033db10d9 meta.txt
+9717ad207a7041c55005410b39ff5f6d9434993f meta.txt
+9b71b83c437ab804829eaedf0b1f494cb7feca7b meta.txt
+9c85ecda22600bbe5ccbb974fd4e17a17a4d8201 meta.txt
+ab3429112961dc354ade328a9accbc0e7abdcf84 meta.txt
+ab752cb8c4d9a9bcd5af3632718739ccfbac525a meta.txt
+d1cc7223c3db2e7e88bbd804fb432e25d368d492 meta.txt
+dc7773105229c7b58c5522967f5fca3739006942 meta.txt
+e52647ef59e5b9eb85fb47b77f08c455470b2ece meta.txt
+ea6910f8eb58979a5c42519479173397a1d3945f meta.txt
+f74c1a716678b21a6bfaa6412cc47938453b6d66 meta.txt
+0bd899dacdd870e8918fdd5395c340901fd2005d task.txt
+122b2259929f525eabbfbe833e133fb2ced3f48b task.txt
+12ba540a8968194c7a7e35d1547b82951482f88a task.txt
+1877b4fbba45eae940ebc2ea62a1689ab2822378 task.txt
+4e4695ff2ce970244eccde7e24a6dc9c21ccf008 task.txt
+504903861b09019ff725dff5a5bc88ad655ebb57 task.txt
+7ae6197bce787eee23f2a256f246aa68e79d45a7 task.txt
+8d29b49c13134cb55d4c04e17b294879997b0f4d task.txt
+8df750cecdfda709069a12327c6e45936144c956 meta.txt
+6bcecad15d6f0aa58c67bf1b8b34c68e56248b25 meta.txt
+5a82843729a874cdbf998fd15638f00f3f0fbee0 meta.txt
+85fac978ef08796cf2ae1cc0dcfbe53f3f84e7a0 task.txt
+4f0ff1347e09762f19f21d39a4c186867b273b0f meta.txt
+9342a283df1966df6f0d65f2f7c379dec279d8fd meta.txt
+b5d5b91657b3d19e0b761a8fec36e8636ed0c364 meta.txt
+4449b82c4ab3b2f69b0a7360c48c8e2c59580076 task.txt

@@ -1,0 +1,153 @@
+.TH CAMERA 3
+.SH NAME
+camera \- a camera's frames, raw and debayered
+.SH SYNOPSIS
+.nf
+.B bind -a #V /dev
+
+.B /dev/camera/ctl
+.B /dev/camera/modes
+.B /dev/camera/frame
+.B /dev/camera/raw
+.fi
+.SH DESCRIPTION
+The camera device serves one camera.
+Its frames come from a
+.IR source :
+so far only
+.BR test ,
+a simulated sensor that makes what a Raspberry Pi Camera Module 3
+(Sony IMX708) makes \(em raw 10-bit Bayer samples, red at the top left,
+in the sensor's binned modes \(em with a test pattern in them.
+A real camera's driver adds itself beside it as another source.
+.IR osinit (8)
+binds the device after
+.BR /dev .
+.PP
+Reading
+.B ctl
+gives the camera's state, one setting a line:
+.IP
+.EX
+source test
+mode 640 480
+fps 30
+stream off
+raw rggb10
+frames 0
+.EE
+.PP
+The
+.B raw
+line names what the
+.B raw
+file holds: the colour filter's two-by-two cell, read left to right and top
+to bottom, and the bits in each sample.
+.B frames
+counts the frames the source has made since
+.BR "stream on" .
+The others are written as they are read, one a write:
+.TF "\fLsource \fIname"
+.TP
+.BI source " name
+Take frames from the named source, in the mode it starts in.
+.TP
+.BI mode " w h
+Use one of the source's modes, as listed in
+.BR modes .
+If the mode's maximum frame rate is below
+.BR fps ,
+.B fps
+is lowered to it.
+.TP
+.BI fps " n
+Frames a second, from 1 to the mode's maximum.
+.TP
+.B "stream on\fR|\fPoff
+Start or stop making frames.
+.PD
+.PP
+.BR source ,
+.B mode
+and
+.B fps
+are refused while streaming.
+.PP
+.B Modes
+lists what can be asked for, one mode a line:
+.IP
+.EX
+.I "source width height maxfps rawformat
+test 2304 1296 56 rggb10
+test 1536 864 120 rggb10
+test 640 480 60 rggb10
+.EE
+.PP
+Opening
+.B frame
+waits for the next frame to be complete and takes it; reads return that
+frame, and end of file at its end.
+The next frame is the next open: a frame is never given out twice, and
+a reader of any speed reads a whole one.
+It is an uncompressed
+.IR image (6)
+file,
+.BR r8g8b8 ,
+which
+.B Display.readimage
+(see
+.IR draw-display (2))
+reads.
+The source's samples are turned into it here, by bilinear interpolation.
+.PP
+.B Raw
+is the same, as the source gave it: one sample a pixel, 16 bits,
+little-endian, row by row, with no header.
+Its width, height and Bayer order are
+.BR ctl 's,
+as
+.BR /dev/audio 's
+format is
+.BR audioctl 's
+(see
+.IR audio (3)).
+.PP
+Opening either is refused unless the camera is streaming.
+.PP
+The test pattern is eight bars across the frame \(em white, yellow,
+cyan, green, magenta, red, blue and black, each channel at full scale or
+nothing \(em and a grey band, half scale and 16 rows high, that moves
+down four rows a frame.
+.SH EXAMPLE
+.EX
+; echo mode 640 480 > /dev/camera/ctl
+; echo stream on > /dev/camera/ctl
+; cat /dev/camera/frame > /tmp/shot.bit
+; echo stream off > /dev/camera/ctl
+.EE
+.SH SOURCE
+.B /os/port/devcam.c
+.br
+.B /os/port/campattern.c
+.br
+.B /os/port/camera.h
+.br
+.B /os/init/camtest.b
+.SH SEE ALSO
+.IR audio (3),
+.IR bench (3),
+.IR image (6),
+.IR osinit (8)
+.SH BUGS
+Only the test source so far: no exposure, white balance or focus, and
+no real camera.
+A frame is debayered in the open that takes it, so a large mode's open
+takes the processor's time for it.
+.PP
+An agent that can read
+.B frame
+or
+.B raw
+can see the room the machine is in: grant either only to an agent with
+no way to send it anywhere, and never grant
+.BR ctl .

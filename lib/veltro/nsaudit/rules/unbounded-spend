@@ -1,5 +1,5 @@
 rule=UNBOUNDED_SPEND
 	severity=high
 	require='spend_ungated'
-	message='A spend authority (wallet/pay) is granted with no caps-level budget. Per-transaction wallet9p gating still applies at runtime, but the configuration declares no ceiling.'
-	fix='declare caps.walletbudget to bound spend, or remove the spending tool'
+	message='A direct spend authority is granted without capability-bound enforcement attestation. Caller-supplied budget text is not proof of enforcement.'
+	fix='remove the direct-spend tool, or implement trusted attestation bound to that exact agent capability'

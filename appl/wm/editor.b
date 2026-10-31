@@ -6,7 +6,11 @@ implement Editor;
 # A simple text editor with a Styx (9P) filesystem interface for
 # programmatic access by Veltro agents and other tools.
 #
-# The 9P filesystem is mounted at /mnt/edit and bound to /edit.
+# The 9P filesystem is mounted at /mnt/edit and bound to /edit, and
+# posted as #seditor/fs (#seditor/fs.1 for a second editor) for those
+# outside this name space: tools9p mounts it at /mnt/editor for the
+# editor tool, and Lucifer's context zone opens files through it.
+# Nothing is polled; event is a read that waits.
 # The filesystem layout uses per-document directories to support
 # future multi-document/split-view without protocol changes:
 #
@@ -70,25 +74,35 @@ include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import styx;
 
+include "post9p.m";
+	post9p: Post9p;
+	Post: import post9p;
+
 include "styxservers.m";
 	styxservers: Styxservers;
 	Fid, Styxserver, Navigator, Navop: import styxservers;
 
 include "lucitheme.m";
 
-# Key codes (formerly imported from widget.m)
-Khome:	con 16rFF61;
-Kend:	con 16rFF57;
-Kup:	con 16rFF52;
-Kdown:	con 16rFF54;
-Kleft:	con 16rFF51;
-Kright:	con 16rFF53;
-Kpgup:	con 16rFF55;
-Kpgdown:	con 16rFF56;
-Kdel:	con 16rFF9F;
-Kins:	con 16rFF63;
+include "keyboard.m";
+
+# Key codes: keyboard.h's, as the emulator and the native kernel send
+# them.  They were X11 keysyms (16rFF52 for Up) from widget.m, which
+# nothing sends since the Tk port: the arrows were typed as glyphs and
+# Delete, which comes as DEL (16r7F), was typed as a character.
+Khome:	con Keyboard->Home;
+Kend:	con Keyboard->End;
+Kup:	con Keyboard->Up;
+Kdown:	con Keyboard->Down;
+Kleft:	con Keyboard->Left;
+Kright:	con Keyboard->Right;
+Kpgup:	con Keyboard->Pgup;
+Kpgdown:	con Keyboard->Pgdown;
+Kdel:	con Keyboard->Del;
+Kins:	con Keyboard->Ins;
 Kbs:	con 8;
 Kesc:	con 27;
+DEL:	con 16r7F;
 
 Editor: module
 {
@@ -247,7 +261,6 @@ EditReq: adt {
 };
 
 editreq: chan of ref EditReq;
-eventch: chan of string;
 
 # ---------- Tk host (global) ----------
 top: ref Toplevel;
@@ -257,7 +270,6 @@ display: ref Display;
 doc: ref Doc;
 stderr: ref Sys->FD;
 themech: chan of int;
-statedirty: int;	# set when doc changes, cleared after writing state files
 vislines: int;		# visible rows in the text widget (for paging)
 prompting: int;		# 1 while the status entry is shown
 
@@ -301,7 +313,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# Start 9P server before creating window (so it's available immediately)
 	editreq = chan of ref EditReq;
-	eventch = chan of string;
 	spawn startfsys();
 
 	# Create the Tk toplevel
@@ -331,15 +342,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# Write initial state so Veltro tool can read immediately after launch.
 	# Without this, body/addr/index files don't exist until the first user
 	# edit or ctl command, causing "editor read" to fail with "is edit running?".
-	statedirty = 1;
-	writeeditstate();
-
-	# Periodic state writer / ctl-file poll
-	ticks := chan of int;
-	spawn timer(ticks, 500);
-
-	statedirty = 1;
-	writeeditstate();
 
 	# Listen for live theme changes
 	themech = chan[1] of int;
@@ -360,7 +362,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			tk->keyboard(top, key);
 		else {
 			handlekey(key);
-			statedirty = 1;
 			rendertext();
 		}
 	p := <-top.ctxt.ptr =>
@@ -371,16 +372,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		updatestatus();
 	a := <-actch =>
 		handleaction(a);
-	<-ticks =>
-		changed := checkctlfile();
-		if(changed) {
-			statedirty = 1;
-			rendertext();
-		}
-		writeeditstate();
 	req := <-editreq =>
 		handleeditreq(req);
-		statedirty = 1;
 		rendertext();
 	<-themech =>
 		reloadcolors();
@@ -898,23 +891,14 @@ handlegctl(cmd: string): string
 
 postevent(msg: string)
 {
-	# Non-blocking send — if nobody is reading events, drop it
-	alt {
-	eventch <-= msg =>
-		;
-	* =>
-		;
-	}
+	if(evops != nil)
+		evops <-= ref Evop.Post(msg);
 }
 
 # ---------- 9P File Server ----------
 
 # --- Real-file IPC for Veltro tool access ---
-# /tmp/veltro/editor/ is visible to the editor tool through an explicit path
-# capability, not as ambient /tmp/veltro state.
 # Named "editor" (not "edit") to match the tool name and avoid confusion with the "edit" tool.
-EDIT_DIR:  con "/tmp/veltro/editor";
-EDIT_INST: con "/tmp/veltro/editor/1";
 
 MNTPT: con "/mnt/edit";
 BINDPT: con "/edit";
@@ -922,8 +906,6 @@ user: string;
 
 startfsys()
 {
-	# Initialise real-file state directories first
-	initeditdir();
 	styx = load Styx Styx->PATH;
 	if(styx == nil) {
 		sys->fprint(stderr, "edit: can't load Styx: %r\n");
@@ -948,15 +930,10 @@ startfsys()
 		return;
 	}
 
-	navops := chan of ref Navop;
-	spawn navigator(navops);
-
-	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big 0);
+	evops = chan of ref Evop;
+	spawn evhub();
+	serveconn(fds[0]);
 	fds[0] = nil;
-
-	pidc := chan of int;
-	spawn serveloop(tchan, srv, pidc, navops);
-	<-pidc;
 
 	# Ensure mount and bind targets exist
 	mkdirq("/mnt");
@@ -969,6 +946,131 @@ startfsys()
 		sys->fprint(stderr, "edit: bind %s %s: %r\n", MNTPT, BINDPT);
 	else
 		sys->fprint(stderr, "edit: 9P ready at %s\n", BINDPT);
+
+	# Posted in #seditor (post9p(2)), for whoever is not in this name
+	# space: the editor tool (tools9p mounts it at /mnt/editor),
+	# Lucifer's context zone.  A second editor is #seditor/fs.1.
+	post9p = load Post9p Post9p->PATH;
+	if(post9p == nil) {
+		sys->fprint(stderr, "edit: cannot load %s: %r\n", Post9p->PATH);
+		return;
+	}
+	post9p->init();
+	conns := chan of ref Sys->FD;
+	(p, perr) := post9p->post("editor", conns);
+	if(p == nil) {
+		sys->fprint(stderr, "edit: post: %s\n", perr);
+		return;
+	}
+	posting = p;
+	spawn connserver(conns);
+	sys->fprint(stderr, "edit: posted %s\n", p.path);
+}
+
+posting: ref Post;
+
+connserver(conns: chan of ref Sys->FD)
+{
+	for(;;)
+		serveconn(<-conns);
+}
+
+# One 9P connection, its own Styxserver; the document is the editor's,
+# through editreq, and events through evhub.
+serveconn(fd: ref Sys->FD)
+{
+	navops := chan of ref Navop;
+	spawn navigator(navops);
+	(tchan, srv) := Styxserver.new(fd, Navigator.new(navops), big 0);
+	pidc := chan of int;
+	spawn serveloop(tchan, srv, pidc, navops);
+	<-pidc;
+}
+
+#
+# event: one line an event, a read waiting for the next.  Each open has
+# its own queue (no reader takes another's), so the hub, one proc for
+# every connection, keeps them; a read is a stream, whatever its offset.
+#
+Evop: adt {
+	pick {
+	Open =>
+		srv:	ref Styxserver;
+		fid:	int;
+	Read =>
+		srv:	ref Styxserver;
+		m:	ref Tmsg.Read;
+	Flush =>
+		srv:	ref Styxserver;
+		tag:	int;
+		done:	chan of int;
+	Clunk =>
+		srv:	ref Styxserver;
+		fid:	int;
+	Post =>
+		msg:	string;
+	}
+};
+evops: chan of ref Evop;
+
+Evq: adt {
+	srv:	ref Styxserver;
+	fid:	int;
+	q:	list of string;
+	rd:	ref Tmsg.Read;
+};
+
+evhub()
+{
+	qs: list of ref Evq;
+	for(;;) {
+		op := <-evops;
+		pick o := op {
+		Open =>
+			qs = ref Evq(o.srv, o.fid, nil, nil) :: qs;
+		Read =>
+			for(l := qs; l != nil; l = tl l)
+				if((hd l).srv == o.srv && (hd l).fid == o.m.fid) {
+					(hd l).rd = o.m;
+					evreply(hd l);
+				}
+		Flush =>
+			for(l := qs; l != nil; l = tl l)
+				if((hd l).srv == o.srv && (hd l).rd != nil && (hd l).rd.tag == o.tag)
+					(hd l).rd = nil;
+			o.done <-= 1;
+		Clunk =>
+			nl: list of ref Evq;
+			for(l := qs; l != nil; l = tl l)
+				if((hd l).srv != o.srv || (hd l).fid != o.fid)
+					nl = hd l :: nl;
+			qs = nl;
+		Post =>
+			for(l := qs; l != nil; l = tl l) {
+				(hd l).q = appendstr((hd l).q, o.msg);
+				evreply(hd l);
+			}
+		}
+	}
+}
+
+evreply(e: ref Evq)
+{
+	if(e.rd == nil || e.q == nil)
+		return;
+	b := array of byte (hd e.q + "\n");
+	e.q = tl e.q;
+	if(len b > e.rd.count)
+		b = b[0:e.rd.count];
+	e.srv.reply(ref Rmsg.Read(e.rd.tag, b));
+	e.rd = nil;
+}
+
+appendstr(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
 }
 
 # Static directory tables for the navigator
@@ -1198,6 +1300,9 @@ Serve:
 			}
 			qid := Sys->Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
+			c.data = nil;
+			if(qiddoc(c.path) > 0 && qidfile(c.path) == Fevent)
+				evops <-= ref Evop.Open(srv, m.fid);
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
 
 		Read =>
@@ -1210,6 +1315,17 @@ Serve:
 				srv.read(m);
 				break;
 			}
+			if(qiddoc(c.path) > 0 && qidfile(c.path) == Fbody) {
+				# the text as it was at this open's first read, so a
+				# reader taking it in pieces gets one text
+				if(c.data == nil || m.offset == big 0) {
+					reply := chan of string;
+					editreq <-= ref EditReq(Rgetbody, qiddoc(c.path), "", reply);
+					c.data = array of byte <-reply;
+				}
+				srv.reply(styxservers->readbytes(m, c.data));
+				break;
+			}
 			handlefsread(srv, m, c);
 
 		Write =>
@@ -1218,9 +1334,33 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, werr));
 				break;
 			}
+			if(qiddoc(c.path) > 0 && qidfile(c.path) == Fbody) {
+				# the body is what this open has written, from offset
+				# 0: a text longer than one message arrives in pieces
+				if(m.offset == big 0 || c.data == nil)
+					c.data = m.data;
+				else {
+					b := array[len c.data + len m.data] of byte;
+					b[0:] = c.data;
+					b[len c.data:] = m.data;
+					c.data = b;
+				}
+				reply := chan of string;
+				editreq <-= ref EditReq(Rsetbody, qiddoc(c.path), string c.data, reply);
+				<-reply;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				break;
+			}
 			handlefswrite(srv, m, c);
 
+		Flush =>
+			done := chan of int;
+			evops <-= ref Evop.Flush(srv, m.oldtag, done);
+			<-done;
+			srv.default(gm);
+
 		Clunk =>
+			evops <-= ref Evop.Clunk(srv, m.fid);
 			srv.clunk(m);
 
 		* =>
@@ -1252,27 +1392,12 @@ handlefsread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		return;
 	}
 
-	# Per-doc files
+	# Per-doc files (body is serveloop's)
 	case fid {
-	Fbody =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rgetbody, did, "", reply);
-		data := <-reply;
-		srv.reply(styxservers->readstr(m, data));
 	Fctl =>
 		srv.reply(styxservers->readstr(m, ""));
 	Fevent =>
-		# Non-blocking receive with timeout to avoid deadlocking serveloop
-		ev := "";
-		timeout := chan of int;
-		spawn evtimeout(timeout, 5000);
-		alt {
-		ev = <-eventch =>
-			;
-		<-timeout =>
-			ev = "";
-		}
-		srv.reply(styxservers->readstr(m, ev + "\n"));
+		evops <-= ref Evop.Read(srv, m);
 	Faddr =>
 		reply := chan of string;
 		editreq <-= ref EditReq(Rgetaddr, did, "", reply);
@@ -1308,11 +1433,6 @@ handlefswrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 
 	# Per-doc files
 	case fid {
-	Fbody =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rsetbody, did, data, reply);
-		<-reply;
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 	Fctl =>
 		reply := chan of string;
 		editreq <-= ref EditReq(Rdoctl, did, data, reply);
@@ -1402,7 +1522,7 @@ handlekey(key: int)
 			doc.curline--;
 			doc.dirty = 1;
 		}
-	Kdel =>
+	Kdel or DEL =>
 		if(deletesel())
 			;
 		else if(doc.curcol < len doc.lines[doc.curline]) {
@@ -1483,7 +1603,9 @@ handlekey(key: int)
 	Kesc =>
 		doc.selactive = 0;
 	* =>
-		if(key >= 16r20 || key == '\t') {
+		# a character: not a key keyboard.h gives (an arrow, a function
+		# key), which would be typed as a private-use glyph
+		if((key >= 16r20 && !(key >= Keyboard->Spec && key <= Keyboard->Specend)) || key == '\t') {
 			deletesel();
 			insertchar(key);
 			doc.dirty = 1;
@@ -2115,22 +2237,14 @@ checkdirty(): int
 
 themelistener()
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		# INFR-28: reset client-side fid offset so the next read on
-		# this streaming queue starts at 0 (otherwise the kernel
-		# applies the accumulated offset to the server reply and
-		# truncates / EOFs on the third read onward).
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+	c := lt->watch();
+	for(;;){
+		<-c;
+		themech <-= 1;
 	}
 }
 
@@ -2149,19 +2263,7 @@ reloadcolors()
 	});
 }
 
-timer(c: chan of int, ms: int)
-{
-	for(;;) {
-		sys->sleep(ms);
-		c <-= 1;
-	}
-}
 
-evtimeout(c: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	c <-= 1;
-}
 
 postnote(t: int, pid: int, note: string): int
 {
@@ -2222,111 +2324,13 @@ readf(path: string): string
 }
 
 # ---------- Real-file IPC helpers ----------
-# /tmp/veltro/editor/ is visible to the editor tool through an explicit path
-# capability, not as ambient /tmp/veltro state.
 # The tick loop polls command files and writes state files so the
 # Veltro editor tool can read/write the editor across namespace forks.
-
-initeditdir()
-{
-	mkdirq("/tmp/veltro");
-	mkdirq(EDIT_DIR);
-	mkdirq(EDIT_INST);
-	# Pre-create state files so tool reads don't fail before writeeditstate().
-	# Empty files are valid — the tool returns "" rather than an error.
-	touchfile(EDIT_INST + "/body");
-	touchfile(EDIT_INST + "/addr");
-	touchfile(EDIT_DIR + "/index");
-}
-
-touchfile(path: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r666);
-	fd = nil;
-}
 
 mkdirq(path: string)
 {
 	fd := sys->open(path, Sys->OREAD);
-	if(fd != nil) {
-		fd = nil;
+	if(fd != nil)
 		return;
-	}
 	fd = sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
-	fd = nil;
-}
-
-writeeditstate()
-{
-	if(!statedirty)
-		return;
-	body := getbodytext();
-	writestatefile(EDIT_INST + "/body", body);
-	addr := sys->sprint("%d %d", doc.curline + 1, doc.curcol + 1);
-	writestatefile(EDIT_INST + "/addr", addr);
-	idx := sys->sprint("%d %s %d\n", doc.id, doc.filepath, doc.dirty);
-	writestatefile(EDIT_DIR + "/index", idx);
-	statedirty = 0;
-}
-
-writestatefile(path, data: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r666);
-	if(fd == nil)
-		return;
-	b := array of byte data;
-	sys->write(fd, b, len b);
-	fd = nil;
-}
-
-checkctlfile(): int
-{
-	changed := 0;
-
-	# Global ctl: open <path>, quit
-	gcmd := readrmfile(EDIT_DIR + "/ctl");
-	if(gcmd != nil && gcmd != "") {
-		handlegctl(gcmd);
-		changed = 1;
-	}
-
-	# Per-doc ctl: save, saveas <p>, goto <n>, find <s>, name <p>, insert, delete
-	dcmd := readrmfile(EDIT_INST + "/ctl");
-	if(dcmd != nil && dcmd != "") {
-		handledocctl(dcmd);
-		changed = 1;
-	}
-
-	# body.in: replace document body
-	newbody := readrmfile(EDIT_INST + "/body.in");
-	if(newbody != nil) {
-		setbodytext(newbody);
-		changed = 1;
-	}
-
-	return changed;
-}
-
-readrmfile(path: string): string
-{
-	# Open for read+write so we can atomically read and truncate
-	fd := sys->open(path, Sys->ORDWR);
-	if(fd == nil)
-		return nil;
-	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0) {
-		fd = nil;
-		return nil;
-	}
-	s := string buf[0:n];
-	# Truncate the file by seeking to start and writing zero bytes
-	# Use create to replace contents atomically
-	fd = nil;
-	fd = sys->create(path, Sys->OWRITE, 8r666);
-	fd = nil;
-	# Strip trailing whitespace
-	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
-		s = s[0:len s - 1];
-	return s;
 }

@@ -30,6 +30,7 @@ OFILES=\
 	keyring.$O\
 	string.$O\
 	gpu-stub.$O\
+	i420.$O\
 
 HFILES=\
 	../include/interp.h\
@@ -50,6 +51,8 @@ MODULES=\
 	keyringif.m\
 	$ROOT/module/gpu.m\
 	gpuif.m\
+	$ROOT/module/i420.m\
+	i420if.m\
 
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE
@@ -90,6 +93,12 @@ gpu.h:D: $MODULES gpuif.m
 gpuif.h:D: $MODULES gpuif.m
 	rm -f $target && limbo -a -I$ROOT/module gpuif.m > $target
 
+i420mod.h:D: $MODULES i420if.m
+	rm -f $target && limbo -t I420 -I$ROOT/module i420if.m > $target
+
+i420if.h:D: $MODULES i420if.m
+	rm -f $target && limbo -a -I$ROOT/module i420if.m > $target
+
 xec.$O:		optab.h  ../include/pool.h
 draw.$O: 	../include/draw.h ../include/drawif.h
 
@@ -98,6 +107,7 @@ draw.$O:	drawmod.h
 math.$O:	mathmod.h
 tk.$O:		$ROOT/include/draw.h $ROOT/include/tk.h $ROOT/include/pool.h tkmod.h
 keyring.$O:	keyring.h ipint.h keyringif.h
+i420.$O:	i420mod.h i420if.h
 
 # GPU support: default uses gpu-stub.$O (no-op).
 # For Jetson with TensorRT, replace gpu-stub.$O with gpu.$O in OFILES above

@@ -24,6 +24,7 @@ esac
 case "$(uname -m)" in
     x86_64)         OBJTYPE=amd64 ;;
     aarch64|arm64)  OBJTYPE=arm64 ;;
+    riscv64)        OBJTYPE=riscv64 ;;
     *) echo "SKIP: unsupported arch $(uname -m)"; exit 77 ;;
 esac
 
@@ -32,6 +33,22 @@ BINDIR="$ROOT/$EMUHOST/$OBJTYPE/bin"
 LIMBO="$BINDIR/limbo"
 
 export ROOT EMUHOST OBJTYPE EMU BINDIR LIMBO
+
+# timeout(1) where there is one; macOS has none, and an emu told to halt
+# exits by itself, bounded then by the CI job's own timeout
+with_timeout() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$@"
+    elif command -v perl >/dev/null 2>&1; then
+        # macOS has no timeout(1); without one an emu that never
+        # halts held a CI job to its 40-minute limit.  SIGALRM's
+        # status is 142, which emu_timeout_ok does not accept.
+        perl -e 'alarm shift; exec @ARGV or exit 127' "$@"
+    else
+        shift
+        "$@"
+    fi
+}
 
 emu_timeout_ok() {
     case "$1" in

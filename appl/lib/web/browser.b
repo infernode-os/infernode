@@ -1,0 +1,3009 @@
+implement Browser;
+
+#
+# browser.b - a browsing session (see browser.m).
+#
+
+include "sys.m";
+	sys: Sys;
+include "draw.m";
+	draw: Draw;
+	Point: import draw;
+include "web/dom.m";
+	dom: Dom;
+	Doc: import dom;
+include "web/css.m";
+	css: Css;
+include "web/html.m";
+	html: Html;
+include "web/style.m";
+	style: Style;
+	Vars: import style;
+include "outlinefont.m";
+include "web/fonts.m";
+include "web/layout.m";
+	layout: Layout;
+	Box, Line, Frag: import layout;
+include "web/page.m";
+	page: Page;
+	Pg: import page;
+include "web/browser.m";
+include "js.m";
+	js: Js;	# a type only: each page loads its own
+	Event: import js;
+
+# how a navigation changes history
+Hnew, Hback, Hforward, Hreload, Hnone: con iota;
+
+init(d: ref Draw->Display): string
+{
+	sys = load Sys Sys->PATH;
+	draw = load Draw Draw->PATH;
+	dom = load Dom Dom->PATH;
+	style = load Style Style->PATH;
+	page = load Page Page->PATH;
+	css = load Css Css->PATH;
+	html = load Html Html->PATH;
+	if(dom == nil || style == nil || page == nil || css == nil || html == nil)
+		return sys->sprint("cannot load modules: %r");
+	realmlk = chan[1] of int;
+	stlk = chan[1] of int;
+	if(locktick == nil) {
+		locktick = chan of int;
+		spawn lockticker();
+	}
+	html->init();
+	html->scripting(1);	# what it parses is a running script's (hparse)
+	css->init();
+	if((err := style->init()) != nil)
+		return err;
+	if((err = page->init(d)) != nil)
+		return err;
+	# pages at the display's pixels to the point, where the emulator
+	# draws at the screen's density (Retina: $displayscale, as Xenith
+	# sizes its own text by)
+	if((ds := real envstr("displayscale")) >= 1.1)
+		page->scale(ds);
+	# page's own: a Layout of our own would know nothing of where page
+	# put things (sticky boxes as last painted, for a click)
+	layout = page->layoutmod();
+	return nil;
+}
+
+Session.new(width, height: int): ref Session
+{
+	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0);
+}
+
+# The session's lock.  A page's realm takes it for each task, and a
+# realm is killed when the page goes (killgrp, which takes effect when
+# the realm next runs): one could take the lock between being told to
+# go and going, and nothing could have the session again.  So the
+# process holding it is known, and one that is gone is taken back from.
+#
+# A waiter blocks on the lock, so waiters are served in turn (one
+# polling for it lost to a realm taking it task after task: a page's
+# Back waited out its 45 s); a tick now and then has one of them look
+# whether the holder has gone.
+lock(s: ref Session)
+{
+	for(;;) alt {
+	s.lk <-= 1 =>
+		s.lkpid = sys->pctl(0, nil);
+		return;
+	<-locktick =>
+		takeback(s);
+	}
+}
+
+# a tick, every so often, to one process waiting for a lock
+locktick: chan of int;
+
+lockticker()
+{
+	for(;;) {
+		sys->sleep(250);
+		alt {
+		locktick <-= 1 =>
+			;
+		* =>
+			;
+		}
+	}
+}
+
+unlock(s: ref Session)
+{
+	s.lkpid = 0;
+	<-s.lk;
+}
+
+stlk: chan of int;	# (taking a lock back from a process that is gone)
+
+takeback(s: ref Session)
+{
+	h := s.lkpid;
+	if(h <= 0 || alive(h))
+		return;
+	stlk <-= 1;
+	if(s.lkpid == h && !alive(h)) {
+		alt {
+		<-s.lk =>
+			s.lkpid = 0;
+		* =>
+			;
+		}
+	}
+	<-stlk;
+}
+
+# whether process pid is still there; a process in a name space with no
+# devices (a page's realm) cannot see, and takes it that it is
+alive(pid: int): int
+{
+	if(sys->open(sys->sprint("#p/%d/status", pid), Sys->OREAD) != nil)
+		return 1;
+	return sys->open(sys->sprint("#p/%d/status", sys->pctl(0, nil)), Sys->OREAD) == nil;
+}
+
+event(s: ref Session, e: string)
+{
+	lock(s);
+	l := s.listeners;
+	unlock(s);
+	for(; l != nil; l = tl l)
+		alt {
+		hd l <-= e =>
+			;
+		* =>
+			;	# a listener that does not keep up misses events
+		}
+}
+
+Session.listen(s: self ref Session): chan of string
+{
+	c := chan[64] of string;
+	lock(s);
+	s.listeners = c :: s.listeners;
+	unlock(s);
+	return c;
+}
+
+Session.unlisten(s: self ref Session, c: chan of string)
+{
+	lock(s);
+	r: list of chan of string;
+	for(l := s.listeners; l != nil; l = tl l)
+		if(hd l != c)
+			r = hd l :: r;
+	s.listeners = r;
+	unlock(s);
+}
+
+# ---- navigation ----
+
+Session.open(s: self ref Session, url: string)
+{
+	navigate(s, typed(s, url), "GET", nil, nil, Hnew);
+}
+
+Session.show(s: self ref Session, data: array of byte, ctype, url: string): string
+{
+	if(ctype == nil)
+		ctype = "text/html";
+	pg: ref Pg;
+	{
+		pg = page->parse(data, ctype, url, s.width, s.height);
+	} exception e {
+	"*" =>
+		return "internal error: " + e;
+	}
+	endrealm(s);
+	lock(s);
+	s.gen++;	# whatever was loading is superseded
+	if(unfrag(pg.url) != unfrag(s.url))
+		history(s, s.url, Hnew);
+	old := s.pg;
+	s.pg = pg;
+	s.url = pg.url;
+	s.title = pg.title;
+	s.status = "done";
+	unlock(s);
+	left(old, pg);
+	event(s, "done " + s.url);
+	return nil;
+}
+
+# What the user typed, as a URL.
+typed(s: ref Session, u: string): string
+{
+	u = trim(u);
+	if(u == "")
+		return "about:blank";
+	if(scheme(u) != nil)
+		return u;
+	if(u[0] == '/')
+		return "file://" + u;
+	if(s.url != "" && (u[0] == '#' || u[0] == '.' || u[0] == '?'))
+		return resolve(s.url, u);
+	return "https://" + u;
+}
+
+Session.goback(s: self ref Session): string
+{
+	lock(s);
+	if(s.back == nil) {
+		unlock(s);
+		return "no previous page";
+	}
+	(u, nil) := hd s.back;
+	unlock(s);
+	navigate(s, u, "GET", nil, nil, Hback);
+	return nil;
+}
+
+Session.goforward(s: self ref Session): string
+{
+	lock(s);
+	if(s.fwd == nil) {
+		unlock(s);
+		return "no next page";
+	}
+	(u, nil) := hd s.fwd;
+	unlock(s);
+	navigate(s, u, "GET", nil, nil, Hforward);
+	return nil;
+}
+
+Session.reload(s: self ref Session)
+{
+	if(s.url != "")
+		navigate(s, s.url, "GET", nil, nil, Hreload);
+}
+
+Session.stop(s: self ref Session)
+{
+	lock(s);
+	s.gen++;
+	stopped := prefix(s.status, "loading");
+	if(stopped)
+		s.status = "done";
+	unlock(s);
+	if(stopped)
+		event(s, "stopped");
+}
+
+# The session ends: what it was loading stops, and its page goes
+Session.close(s: self ref Session)
+{
+	s.stop();
+	endrealm(s);
+	lock(s);
+	old := s.pg;
+	s.pg = nil;
+	unlock(s);
+	left(old, nil);
+}
+
+# A page the session has left, for another or none, is closed
+left(old, now: ref Pg)
+{
+	if(old != nil && old != now)
+		old.close();
+}
+
+Session.resize(s: self ref Session, width, height: int)
+{
+	lock(s);
+	s.width = width;
+	s.height = height;
+	if(s.pg != nil)
+		s.pg.relayout(width, height);
+	unlock(s);
+}
+
+navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: int)
+{
+	if(url == "about:blank")
+		url = "data:text/html,";
+	# (the page's realm may be stuck holding the lock: it goes first,
+	# unless only the view moves within the page, which keeps it)
+	if(!(s.pg != nil && method == "GET" && hist != Hreload &&
+	   fragment(url) != nil && unfrag(url) == unfrag(s.url)))
+		endrealm(s);
+	lock(s);
+	s.gen++;
+	g := s.gen;
+	if(s.pg != nil && (r := realmof(s)) != nil)
+		r.g = g;	# a fragment keeps the page and its scripts
+	# a link to elsewhere in this page moves the view, not the page
+	if(s.pg != nil && method == "GET" && hist != Hreload &&
+	   (frag := fragment(url)) != nil && unfrag(url) == unfrag(s.url)) {
+		prev := s.url;
+		y := wasat(s, hist);
+		history(s, prev, hist);
+		s.url = url;
+		if(y < 0)
+			y = target1(s, s.pg, frag);
+		s.scroll = s.at = y;
+		s.status = "done";
+		unlock(s);
+		event(s, "shown " + url);
+		event(s, "done " + url);
+		return;
+	}
+	s.status = "loading " + url;
+	unlock(s);
+	event(s, "loading " + url);
+	spawn loader(s, g, url, method, ctype, body, hist);
+}
+
+history(s: ref Session, prev: string, hist: int)
+{
+	case hist {
+	Hnew =>
+		if(prev != "")
+			s.back = (prev, s.at) :: s.back;
+		s.fwd = nil;
+	Hback =>
+		if(s.back != nil)
+			s.back = tl s.back;
+		if(prev != "")
+			s.fwd = (prev, s.at) :: s.fwd;
+	Hforward =>
+		if(s.fwd != nil)
+			s.fwd = tl s.fwd;
+		if(prev != "")
+			s.back = (prev, s.at) :: s.back;
+	}
+}
+
+# where the view was on the page Back or Fwd goes to, as history has it
+wasat(s: ref Session, hist: int): int
+{
+	h: list of (string, int);
+	case hist {
+	Hback =>	h = s.back;
+	Hforward =>	h = s.fwd;
+	* =>	return -1;
+	}
+	if(h == nil)
+		return -1;
+	(nil, y) := hd h;
+	return y;
+}
+
+loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, hist: int)
+{
+	pg: ref Pg;
+	err: string;
+	{
+		(pg, err) = page->go(url, method, ctype, body, s.width, s.height);
+	} exception e {
+	"*" =>
+		pg = nil;
+		err = "internal error: " + e;
+	}
+	ep: ref Pg;
+	if(pg == nil) {
+		# a page saying so, where the page would have been
+		{
+			(ep, nil) = page->request(errorpage(url, err), "GET", nil, nil, s.width, s.height);
+		} exception {
+		"*" =>
+			ep = nil;
+		}
+	}
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return;	# superseded or stopped
+	}
+	if(pg == nil) {
+		old := s.pg;
+		if(ep != nil) {
+			history(s, s.url, hist);
+			s.pg = ep;
+			s.url = url;	# so that reload tries it again
+			s.title = ep.title;
+			s.scroll = s.at = 0;
+		}
+		s.status = "error " + err;
+		unlock(s);
+		left(old, s.pg);
+		event(s, "error " + err);
+		return;
+	}
+	y := wasat(s, hist);
+	history(s, s.url, hist);
+	old := s.pg;
+	s.pg = pg;
+	s.url = pg.url;
+	if((frag := fragment(url)) != nil && fragment(s.url) == nil)
+		s.url += "#" + frag;
+	s.title = pg.title;
+	if(y < 0 && frag != nil)
+		y = target1(s, pg, frag);
+	if(y < 0)
+		y = 0;
+	s.scroll = s.at = y;
+	u := s.url;
+	s.status = "loading images " + u;
+	unlock(s);
+	left(old, pg);
+	event(s, "shown " + u);
+	startrealm(s, g, pg);
+	# the page is up; what it shows comes in behind it
+	{
+		images(s, g, pg);
+		pg.frames();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: %s: %s\n", u, e);
+	}
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return;
+	}
+	s.status = "done";
+	unlock(s);
+	event(s, "done " + u);
+	refresh(s, g, pg);
+}
+
+# Fetch and decode the page's images NFETCH at a time, and lay the page
+# out again with those that have come, at most every BATCHMS, so that
+# it fills in as they arrive.
+NFETCH: con 6;
+BATCHMS: con 250;
+
+images(s: ref Session, g: int, pg: ref Pg)
+{
+	lock(s);
+	urls := pg.wanted();
+	if((r := realmof(s)) != nil && r.pg == pg) {
+		urls = claim(r, urls);
+		r.imaging = 1;
+	}
+	unlock(s);
+	fetchpics(s, g, pg, urls);
+}
+
+# what of urls is not fetched or being fetched for the realm's page; the
+# rest it now has (the session's lock held)
+claim(r: ref Realm, urls: list of string): list of string
+{
+	n: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(!member(hd urls, r.pics)) {
+			r.pics = hd urls :: r.pics;
+			n = hd urls :: n;
+		}
+	return rev(n);
+}
+
+fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
+{
+	n := len urls;
+	if(n == 0)
+		return;
+	work := chan[n] of string;
+	for(; urls != nil; urls = tl urls)
+		work <-= hd urls;
+	res := chan of ref Page->Pic;
+	nw := NFETCH;
+	if(nw > n)
+		nw = n;
+	for(i := 0; i < nw; i++)
+		spawn picfetcher(s, g, work, res);
+	tick := chan of int;
+	stop := chan[1] of int;
+	spawn ticker(tick, stop);
+	batch: list of ref Page->Pic;
+	live := 1;
+	for(got := 0; got < n; ) alt {
+	pic := <-res =>
+		got++;
+		if(pic != nil)
+			batch = pic :: batch;
+	<-tick =>
+		if(batch != nil && live) {
+			live = apply(s, g, pg, batch, got, n);
+			batch = nil;
+		}
+	}
+	stop <-= 1;
+	if(batch != nil && live)
+		apply(s, g, pg, batch, n, n);
+}
+
+picsome(s: ref Session, g: int, pg: ref Pg, urls: list of string)
+{
+	pics: list of ref Page->Pic;
+	for(; urls != nil; urls = tl urls) {
+		u := hd urls;
+		pic: ref Page->Pic;
+		{
+			(data, ctype, err) := page->fetchimage(u);
+			pic = page->picture(u, data, ctype, err);
+		} exception e {
+		"*" =>
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
+		}
+		pics = pic :: pics;
+	}
+	apply(s, g, pg, pics, len pics, len pics);
+}
+
+Session.images(s: self ref Session)
+{
+	pg := s.pg;
+	if(pg == nil)
+		return;
+	pg.wantall();
+	spawn images(s, s.gen, pg);
+}
+
+setting(name: string): string
+{
+	return page->setting(name);
+}
+
+Session.configure(s: self ref Session, line: string): string
+{
+	(nil, l) := sys->tokenize(line, " \t\n");
+	if(l == nil)
+		return "usage: name value";
+	was := page->setting(hd l);
+	if((err := page->set(line)) != nil)
+		return err;
+	now := page->setting(hd l);
+	if(now == was || s.pg == nil)
+		return nil;
+	case hd l {
+	"images" =>
+		if(now == "on")
+			spawn images(s, s.gen, s.pg);
+	"fonts" =>
+		s.reload();
+	"effects" =>
+		event(s, "update 0 0");	# drawn again, as it is
+	"scripts" =>
+		s.reload();	# its scripts run, or the page as it is without them
+	}
+	return nil;
+}
+
+settings(): string
+{
+	return page->settings();
+}
+
+savesettings(): string
+{
+	return page->save();
+}
+
+apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: int): int
+{
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return 0;
+	}
+	{
+		pg.install(batch);
+	} exception e {
+	"*" =>
+		fault(s, "placing images", e);
+	}
+	unlock(s);
+	event(s, sys->sprint("update %d %d", got, n));
+	return 1;
+}
+
+picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic)
+{
+	for(;;) alt {
+	u := <-work =>
+		if(g != s.gen) {
+			res <-= nil;	# superseded: count it, fetch nothing
+			continue;
+		}
+		pic: ref Page->Pic;
+		{
+			(data, ctype, err) := page->fetchimage(u);
+			pic = page->picture(u, data, ctype, err);
+		} exception e {
+		"*" =>
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
+		}
+		res <-= pic;
+	* =>
+		return;
+	}
+}
+
+ticker(tick, stop: chan of int)
+{
+	for(;;) {
+		sys->sleep(BATCHMS);
+		alt {
+		<-stop =>
+			return;
+		tick <-= 1 =>
+			;
+		}
+	}
+}
+
+# <meta http-equiv=refresh content="N[; url=U]"> (HTML §4.2.5.3): go to
+# U, or load this page again, after N seconds, unless something else
+# has happened to the session by then.
+refresh(s: ref Session, g: int, pg: ref Pg)
+{
+	d := pg.doc;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || nd.tag != Dom->Tmeta)
+			continue;
+		if(lower(d.attr(n, "http-equiv")) != "refresh")
+			continue;
+		(secs, u) := refreshcontent(d.attr(n, "content"));
+		if(secs < 0)
+			continue;
+		if(u == "")
+			u = unfrag(pg.url);
+		else
+			u = resolve(pg.url, u);
+		spawn refresher(s, g, u, secs);
+		return;
+	}
+}
+
+refresher(s: ref Session, g: int, url: string, secs: int)
+{
+	if(secs > 0)
+		sys->sleep(secs * 1000);
+	lock(s);
+	live := s.gen == g;
+	unlock(s);
+	if(live)
+		navigate(s, url, "GET", nil, nil, Hnew);
+}
+
+# "5; url=http://x", "0;URL='x'", "3" -> (seconds, url); seconds -1 if unreadable
+refreshcontent(c: string): (int, string)
+{
+	i := 0;
+	while(i < len c && isws(c[i]))
+		i++;
+	j := i;
+	while(j < len c && c[j] >= '0' && c[j] <= '9')
+		j++;
+	if(j == i)
+		return (-1, nil);
+	secs := int c[i:j];
+	while(j < len c && (c[j] >= '0' && c[j] <= '9' || c[j] == '.'))
+		j++;	# a fraction is ignored
+	while(j < len c && (isws(c[j]) || c[j] == ';' || c[j] == ','))
+		j++;
+	if(j >= len c)
+		return (secs, "");
+	u := c[j:];
+	if(len u >= 4 && lower(u[0:3]) == "url") {
+		k := 3;
+		while(k < len u && (isws(u[k]) || u[k] == '='))
+			k++;
+		u = u[k:];
+	}
+	u = trim(u);
+	if(len u >= 2 && (u[0] == '\'' || u[0] == '"') && u[len u - 1] == u[0])
+		u = u[1:len u - 1];
+	return (secs, trim(u));
+}
+
+isws(c: int): int
+{
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+# The page shown for one that could not be fetched.
+errorpage(url, err: string): string
+{
+	h := "<!doctype html><title>Cannot load page</title>" +
+		"<body style='font-family: sans-serif; margin: 2em 3em; color: #333'>" +
+		"<h1 style='font-size: 1.4em; font-weight: normal'>Cannot load this page</h1>" +
+		"<p style='overflow-wrap: anywhere; color: #555'>" + htmlesc(url) + "</p>" +
+		"<p style='overflow-wrap: anywhere'>" + htmlesc(err) + "</p>";
+	if(contains(err, "invalid IP address") || contains(err, "cs: ") || contains(err, "/net/cs"))
+		h += "<p>The host name was not translated to an address: nothing is serving /net/cs " +
+			"(ndb/cs, and on a machine without a host system ndb/dns too).</p>";
+	return "data:text/html;charset=utf-8," + pctenc(h);
+}
+
+htmlesc(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		case s[i] {
+		'<' => r += "&lt;";
+		'>' => r += "&gt;";
+		'&' => r += "&amp;";
+		'\'' => r += "&#39;";
+		'"' => r += "&quot;";
+		* => r[len r] = s[i];
+		}
+	return r;
+}
+
+# percent-encode all but what a data: URL can carry plainly
+pctenc(s: string): string
+{
+	b := array of byte s;
+	r := "";
+	for(i := 0; i < len b; i++) {
+		c := int b[i];
+		if(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-' || c == '.' || c == ':' || c == ';' || c == '/' || c == '=' || c == ',')
+			r[len r] = c;
+		else
+			r += sys->sprint("%%%.2X", c);
+	}
+	return r;
+}
+
+# Make the element the fragment names the :target, and return its y.
+target(pg: ref Pg, frag: string): int
+{
+	return pg.target(frag);
+}
+
+absy(b: ref Box): int
+{
+	y := 0;
+	for(; b != nil; b = b.parent)
+		y += b.y;
+	return y;
+}
+
+absx(b: ref Box): int
+{
+	x := 0;
+	for(; b != nil; b = b.parent)
+		x += b.x;
+	return x;
+}
+
+# ---- the page as text ----
+
+Session.text(s: self ref Session): string
+{
+	freshen(s);
+	pg := s.pg;
+	if(pg == nil)
+		return "";
+	r := "";
+	for(l := rev(blocktext(pg, pg.root, nil)); l != nil; l = tl l)
+		r += hd l + "\n";
+	return r;
+}
+
+# The text of b and its descendants, one string per block, reversed.
+blocktext(pg: ref Pg, b: ref Box, acc: list of string): list of string
+{
+	if(b.st != nil && b.st.visibility != Style->Vvisible && b.kids == nil)
+		return acc;
+	if(b.kind == Layout->Krow) {
+		row := "";
+		for(i := 0; i < len b.kids; i++) {
+			t := join(rev(blocktext(pg, b.kids[i], nil)), " ");
+			if(row != "")
+				row += "\t";
+			row += t;
+		}
+		if(trim(row) != "")
+			acc = row :: acc;
+		return acc;
+	}
+	if(len b.lines > 0) {
+		pre := b.st != nil && (b.st.whitespace == Style->Wpre ||
+			b.st.whitespace == Style->Wprewrap || b.st.whitespace == Style->Wbreakspaces);
+		t := "";
+		for(i := 0; i < len b.lines; i++) {
+			lt := linetext(pg, b.lines[i]);
+			if(pre) {
+				acc = lt :: acc;
+				continue;
+			}
+			if(t != "" && lt != "" && t[len t - 1] != ' ' && lt[0] != ' ')
+				t += " ";
+			t += lt;
+		}
+		t = squash(t);
+		if(t != "")
+			acc = t :: acc;
+		# floats and positioned boxes among the inline content
+		for(i = 0; i < len b.kids; i++) {
+			k := b.kids[i];
+			if(!k.inl && k.kind != Layout->Ktext && k.kind != Layout->Kmarker)
+				acc = blocktext(pg, k, acc);
+		}
+	} else
+		for(i := 0; i < len b.kids; i++)
+			acc = blocktext(pg, b.kids[i], acc);
+	for(l := b.pos; l != nil; l = tl l)
+		acc = blocktext(pg, hd l, acc);
+	return acc;
+}
+
+linetext(pg: ref Pg, ln: ref Line): string
+{
+	t := "";
+	end := -1;
+	for(i := 0; i < len ln.frags; i++) {
+		f := ln.frags[i];
+		piece := "";
+		case f.kind {
+		Layout->Ftext =>
+			piece = f.text;
+		Layout->Fatomic =>
+			piece = atomtext(pg, f.box);
+		}
+		if(piece == "")
+			continue;
+		if(t != "" && f.x > end + 1 && t[len t - 1] != ' ' && piece[0] != ' ')
+			t += " ";
+		t += piece;
+		end = f.x + f.w;
+	}
+	return t;
+}
+
+atomtext(pg: ref Pg, b: ref Box): string
+{
+	if(b.kind == Layout->Kreplaced) {
+		if(b.node != 0 && pg.doc.nodes[b.node].tag == Dom->Timg)
+			return pg.doc.attr(b.node, "alt");
+		return b.text;
+	}
+	return join(rev(blocktext(pg, b, nil)), " ");
+}
+
+Session.find(s: self ref Session, what: string): string
+{
+	if(what == "")
+		return "";
+	w := lower(what);
+	r := "";
+	(nil, l) := sys->tokenize(s.text(), "\n");
+	for(; l != nil; l = tl l)
+		if(contains(lower(hd l), w))
+			r += hd l + "\n";
+	return r;
+}
+
+# ---- links ----
+
+Session.links(s: self ref Session): array of ref Link
+{
+	pg := s.pg;
+	if(pg == nil)
+		return nil;
+	d := pg.doc;
+	r: list of ref Link;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || nd.tag != Dom->Ta && nd.tag != Dom->Tarea)
+			continue;
+		if(!d.hasattr(n, "href"))
+			continue;
+		u := resolve(d.url, d.attr(n, "href"));
+		if(lower(scheme(u)) == "javascript")
+			continue;
+		t := squash(d.textof(n));
+		if(t == "") {
+			if((img := d.find(n, Dom->Timg)) != 0)
+				t = d.attr(img, "alt");
+			if(t == "")
+				t = d.attr(n, "title");
+			if(t == "")
+				t = d.attr(n, "alt");
+		}
+		r = ref Link(n, u, squash(t)) :: r;
+	}
+	return toarray(r);
+}
+
+toarray(l: list of ref Link): array of ref Link
+{
+	a := array[len l] of ref Link;
+	for(i := len a - 1; i >= 0; i--) {
+		a[i] = hd l;
+		l = tl l;
+	}
+	return a;
+}
+
+linkstext(a: array of ref Link): string
+{
+	r := "";
+	for(i := 0; i < len a; i++)
+		r += sys->sprint("%d %s %s\n", i+1, a[i].url, a[i].text);
+	return r;
+}
+
+Session.follow(s: self ref Session, n: int): string
+{
+	a := s.links();
+	if(n < 1 || n > len a)
+		return sys->sprint("no link %d", n);
+	navigate(s, a[n-1].url, "GET", nil, nil, Hnew);
+	return nil;
+}
+
+# ---- forms ----
+
+iscontrol(d: ref Doc, n: int): int
+{
+	nd := d.nodes[n];
+	if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
+		return 0;
+	case nd.tag {
+	Dom->Tinput or Dom->Tselect or Dom->Ttextarea or Dom->Tbutton =>
+		return 1;
+	}
+	return 0;
+}
+
+# form numbers: forms[n] is the number of the form node n is in, 0 if
+# none, -1 if n is not in the document.  The tree is walked from the
+# document (node 1), in its order, then each shadow tree whose host is
+# in it: a node's index is when it was made, and a page's scripts make
+# nodes in any order, move them, and keep some out of the document (a
+# framework's copies of a form it is not showing), which are not the
+# page's controls.  A template's content is not in the document either
+# (HTML §4.13.1), though its nodes are the template's children here.
+# A control with a form attribute is in the form with that id, or in
+# none (§4.10.17.3).  order is the nodes in the document, in its order.
+formnumbers(d: ref Doc): (array of int, array of int, array of int)
+{
+	forms := array[d.n] of {* => -1};
+	nodes: list of int;	# the form elements, reversed
+	order: list of int;	# the nodes, reversed
+	nf := 0;
+	(nf, nodes, order) = formwalk(d, 1, forms, nf, nodes, order);
+	for(more := 1; more; ) {
+		more = 0;
+		for(l := d.shadows; l != nil; l = tl l) {
+			(host, root) := hd l;
+			if(host > 0 && host < d.n && forms[host] >= 0 && root > 0 && root < d.n && forms[root] < 0) {
+				(nf, nodes, order) = formwalk(d, root, forms, nf, nodes, order);
+				more = 1;
+			}
+		}
+	}
+	fnode := array[nf+1] of {* => 0};
+	for(i := nf; nodes != nil; nodes = tl nodes)
+		fnode[i--] = hd nodes;
+	a := array[len order] of int;
+	for(i = len a - 1; order != nil; order = tl order)
+		a[i--] = hd order;
+	owners(d, forms, a);
+	return (forms, fnode, a);
+}
+
+# number the forms under root, and the nodes in them
+formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes, order: list of int): (int, list of int, list of int)
+{
+	forms[root] = 0;
+	n := d.nodes[root].first;
+	while(n > 0 && n < d.n) {
+		nd := d.nodes[n];
+		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform) {
+			nf++;
+			nodes = n :: nodes;
+			forms[n] = nf;
+		} else
+			forms[n] = forms[nd.parent];
+		order = n :: order;
+		if(nd.first != 0 && !(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Ttemplate)) {
+			n = nd.first;
+			continue;
+		}
+		while(n != root && d.nodes[n].next == 0)
+			n = d.nodes[n].parent;
+		if(n == root)
+			break;
+		n = d.nodes[n].next;
+	}
+	return (nf, nodes, order);
+}
+
+# controls whose form attribute names their form: the first element in
+# the document with that id, if it is a form
+owners(d: ref Doc, forms, order: array of int)
+{
+	want: list of string;
+	for(i := 0; i < len order; i++) {
+		n := order[i];
+		if(iscontrol(d, n) && d.hasattr(n, "form"))
+			want = d.attr(n, "form") :: want;
+	}
+	if(want == nil)
+		return;
+	found: list of (string, int);
+	for(i = 0; i < len order && want != nil; i++) {
+		n := order[i];
+		if(d.nodes[n].kind != Dom->Element || (id := d.attr(n, "id")) == "" || !member(id, want))
+			continue;
+		want = remove(id, want);
+		nd := d.nodes[n];
+		if(nd.ns == Dom->HTML && nd.tag == Dom->Tform)
+			found = (id, forms[n]) :: found;
+	}
+	for(i = 0; i < len order; i++) {
+		n := order[i];
+		if(!iscontrol(d, n) || !d.hasattr(n, "form"))
+			continue;
+		id := d.attr(n, "form");
+		forms[n] = 0;
+		for(l := found; l != nil; l = tl l)
+			if((hd l).t0 == id)
+				forms[n] = (hd l).t1;
+	}
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+remove(s: string, l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		if(hd l != s)
+			r = hd l :: r;
+	return r;
+}
+
+# n's text as shown, through the flat tree f (a slot's text is what the
+# page put in it, a host's its shadow tree's), leaving out style sheets
+# and scripts; the document's own tree if f is nil or n is not shown
+shown(d: ref Doc, f: ref Dom->Flat, n: int): string
+{
+	if(f == nil || n >= len f.first || f.first[n] == 0 && f.parent[n] == 0)
+		return d.textof(n);
+	s := "";
+	m := f.first[n];
+	while(m > 0 && m < d.n) {
+		nd := d.nodes[m];
+		if(nd.kind == Dom->Text)
+			s += nd.text;
+		if(f.first[m] != 0 && !(nd.kind == Dom->Element && (nd.tag == Dom->Tstyle || nd.tag == Dom->Tscript))) {
+			m = f.first[m];
+			continue;
+		}
+		while(m != n && m != 0 && f.next[m] == 0)
+			m = f.parent[m];
+		if(m == n || m == 0)
+			break;
+		m = f.next[m];
+	}
+	return s;
+}
+
+kindof(d: ref Doc, n: int): string
+{
+	case d.nodes[n].tag {
+	Dom->Tselect =>
+		return "select";
+	Dom->Ttextarea =>
+		return "textarea";
+	Dom->Tbutton =>
+		t := lower(d.attr(n, "type"));
+		if(t == "reset" || t == "button")
+			return t;
+		return "submit";
+	}
+	t := lower(d.attr(n, "type"));
+	case t {
+	"" or "text" or "search" or "email" or "url" or "tel" or "password" or "number" or
+	"hidden" or "checkbox" or "radio" or "submit" or "reset" or "button" or "image" or
+	"file" or "range" or "color" or "date" or "time" or "datetime-local" or "month" or "week" =>
+		if(t == "")
+			t = "text";
+		return t;
+	}
+	return "text";
+}
+
+field(d: ref Doc, form, n: int): ref Field
+{
+	f := ref Field(form, n, kindof(d, n), d.attr(n, "name"), nil, 0, nil, disabled(d, n), d.hasattr(n, "readonly"));
+	case f.kind {
+	"select" =>
+		first := "";
+		got := 0;
+		ops: list of (string, string, int);
+		for(o := d.nodes[n].first; o != 0; o = nextin(d, o, n)) {
+			if(d.nodes[o].tag != Dom->Toption)
+				continue;
+			label := squash(d.textof(o));
+			v := label;
+			if(d.hasattr(o, "value"))
+				v = d.attr(o, "value");
+			sel := d.hasattr(o, "selected");
+			if(first == "" && ops == nil)
+				first = v;
+			if(sel && !got) {
+				f.value = v;
+				got = 1;
+			}
+			ops = (v, label, sel) :: ops;
+		}
+		if(!got)
+			f.value = first;
+		for(; ops != nil; ops = tl ops)
+			f.options = hd ops :: f.options;
+	"textarea" =>
+		f.value = d.textof(n);
+	"button" or "submit" or "reset" =>
+		f.value = d.attr(n, "value");
+		if(d.nodes[n].tag == Dom->Tbutton && f.value == "")
+			f.value = squash(d.textof(n));
+	"checkbox" or "radio" =>
+		f.value = d.attr(n, "value");
+		if(!d.hasattr(n, "value"))
+			f.value = "on";
+		f.checked = d.hasattr(n, "checked");
+	* =>
+		f.value = d.attr(n, "value");
+	}
+	return f;
+}
+
+nextin(d: ref Doc, n, top: int): int
+{
+	if(d.nodes[n].first != 0)
+		return d.nodes[n].first;
+	while(n != top && n != 0) {
+		if(d.nodes[n].next != 0)
+			return d.nodes[n].next;
+		n = d.nodes[n].parent;
+	}
+	return 0;
+}
+
+Session.fields(s: self ref Session): array of ref Field
+{
+	pg := s.pg;
+	if(pg == nil)
+		return nil;
+	d := pg.doc;
+	(forms, nil, order) := formnumbers(d);
+	fl := dom->flat(d);
+	r: list of ref Field;
+	for(k := 0; k < len order; k++)
+		if(iscontrol(d, n := order[k])) {
+			f := field(d, forms[n], n);
+			# a button's label, as shown: a component's is often what
+			# the page put in its slot
+			if(fl != nil && d.nodes[n].tag == Dom->Tbutton && !d.hasattr(n, "value"))
+				f.value = squash(shown(d, fl, n));
+			r = f :: r;
+		}
+	a := array[len r] of ref Field;
+	for(i := len a - 1; i >= 0; i--) {
+		a[i] = hd r;
+		r = tl r;
+	}
+	return a;
+}
+
+# A control disabled itself or by a disabled fieldset it is in, outside
+# that fieldset's first legend (HTML §4.10.18.5)
+disabled(d: ref Doc, n: int): int
+{
+	if(d.hasattr(n, "disabled"))
+		return 1;
+	c := n;
+	for(p := d.nodes[n].parent; p > 0; p = d.nodes[p].parent) {
+		nd := d.nodes[p];
+		if(nd.tag == Dom->Tfieldset && nd.ns == Dom->HTML && d.hasattr(p, "disabled")) {
+			l := nd.first;
+			while(l != 0 && d.nodes[l].kind != Dom->Element)
+				l = d.nodes[l].next;
+			if(l == 0 || l != c || d.nodes[l].tag != Dom->Tlegend)
+				return 1;
+		}
+		c = p;
+	}
+	return 0;
+}
+
+fieldstext(a: array of ref Field): string
+{
+	r := "";
+	for(i := 0; i < len a; i++) {
+		f := a[i];
+		name := f.name;
+		if(name == "")
+			name = "-";
+		v := oneline(f.value);
+		if(f.kind == "password")
+			v = masked(v);
+		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, v);
+		if(f.checked)
+			r += " checked";
+		if(f.disabled)
+			r += " disabled";
+		if(f.readonly)
+			r += " readonly";
+		r += "\n";
+		for(o := f.options; o != nil; o = tl o) {
+			(v, label, sel) := hd o;
+			r += "\toption " + oneline(v) + " " + oneline(label);
+			if(sel)
+				r += " selected";
+			r += "\n";
+		}
+	}
+	return r;
+}
+
+# What a password field holds, as the page's files show it: whether it
+# holds anything, not what or how much.  The files are read by whatever
+# has the window's name space, an agent among them; the page is drawn
+# masked too (layout), and its own scripts still see the value.
+masked(v: string): string
+{
+	if(v == "")
+		return "";
+	return "********";
+}
+
+Session.set(s: self ref Session, n: int, value: string): string
+{
+	pg := s.pg;
+	if(pg == nil)
+		return "no page";
+	d := pg.doc;
+	if(n <= 0 || n >= d.n || !iscontrol(d, n))
+		return sys->sprint("node %d is not a form control", n);
+	if(disabled(d, n))
+		return sys->sprint("node %d is disabled", n);
+	lock(s);
+	err := setfield(d, n, value);
+	if(err == nil)
+		update(s, pg);
+	unlock(s);
+	if(err == nil) {
+		event(s, "update");
+		if(realmof(s) != nil) {
+			reply := chan[1] of int;
+			ask(s, ref Event.Input(n, reply), reply);
+		}
+	}
+	return err;
+}
+
+setfield(d: ref Doc, n: int, value: string): string
+{
+	case kindof(d, n) {
+	"checkbox" =>
+		case lower(value) {
+		"" or "0" or "off" or "false" or "no" or "unchecked" =>
+			d.delattr(n, "checked");
+		* =>
+			d.setattr(n, "checked", "");
+		}
+	"radio" =>
+		case lower(value) {
+		"" or "0" or "off" or "false" or "no" or "unchecked" =>
+			d.delattr(n, "checked");
+		* =>
+			# one of a group: the others in its form with its name go off
+			(forms, nil, nil) := formnumbers(d);
+			name := d.attr(n, "name");
+			for(m := 1; m < d.n; m++)
+				if(m != n && iscontrol(d, m) && kindof(d, m) == "radio" &&
+				   forms[m] == forms[n] && name != "" && d.attr(m, "name") == name)
+					d.delattr(m, "checked");
+			d.setattr(n, "checked", "");
+		}
+	"select" =>
+		found := 0;
+		for(o := d.nodes[n].first; o != 0; o = nextin(d, o, n)) {
+			if(d.nodes[o].tag != Dom->Toption)
+				continue;
+			v := squash(d.textof(o));
+			if(d.hasattr(o, "value"))
+				v = d.attr(o, "value");
+			if(v == value && !found) {
+				d.setattr(o, "selected", "");
+				found = 1;
+			} else if(!d.hasattr(n, "multiple"))
+				d.delattr(o, "selected");
+		}
+		if(!found)
+			return "no option " + value;
+	"textarea" =>
+		while((c := d.nodes[n].first) != 0)
+			d.remove(c);
+		t := d.create(Dom->Text, nil, Dom->HTML);
+		d.settext(t, value);
+		d.append(n, t);
+	"submit" or "reset" or "button" or "image" or "file" =>
+		return "cannot set a " + kindof(d, n);
+	* =>
+		d.setattr(n, "value", value);
+	}
+	return nil;
+}
+
+Session.submit(s: self ref Session, form, submitter: int): string
+{
+	pg := s.pg;
+	if(pg == nil)
+		return "no page";
+	d := pg.doc;
+	(forms, fnode, order) := formnumbers(d);
+	if(form < 1 || form >= len fnode)
+		return sys->sprint("no form %d", form);
+	fe := fnode[form];
+	if(realmof(s) != nil) {
+		reply := chan[1] of int;
+		if(ask(s, ref Event.Submit(fe, submitter, reply), reply) || s.pg != pg)
+			return nil;
+	}
+	action := d.attr(fe, "action");
+	method := lower(d.attr(fe, "method"));
+	if(submitter > 0 && submitter < d.n) {
+		if(d.hasattr(submitter, "formaction"))
+			action = d.attr(submitter, "formaction");
+		if(d.hasattr(submitter, "formmethod"))
+			method = lower(d.attr(submitter, "formmethod"));
+	}
+	# no action, or an empty one, is the document's URL (HTML
+	# §4.10.21.3); resolve leaves an empty reference empty
+	url := d.url;
+	if(action != "")
+		url = resolve(d.url, action);
+	q := "";
+	for(i := 0; i < len order; i++) {
+		n := order[i];
+		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))
+			continue;
+		f := field(d, form, n);
+		if(f.name == "")
+			continue;
+		case f.kind {
+		"submit" or "image" =>
+			if(n != submitter)
+				continue;
+			q = pair(q, f.name, f.value);
+		"reset" or "button" or "file" =>
+			continue;
+		"checkbox" or "radio" =>
+			if(f.checked)
+				q = pair(q, f.name, f.value);
+		"select" =>
+			for(o := f.options; o != nil; o = tl o)
+				if((hd o).t2)
+					q = pair(q, f.name, (hd o).t0);
+			if(f.options != nil && !anyselected(f.options))
+				q = pair(q, f.name, f.value);
+		* =>
+			q = pair(q, f.name, f.value);
+		}
+	}
+	if(method == "post")
+		navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
+	else {
+		u := unfrag(url);
+		for(i = 0; i < len u; i++)
+			if(u[i] == '?') {
+				u = u[0:i];
+				break;
+			}
+		navigate(s, u + "?" + q, "GET", nil, nil, Hnew);
+	}
+	return nil;
+}
+
+anyselected(l: list of (string, string, int)): int
+{
+	for(; l != nil; l = tl l)
+		if((hd l).t2)
+			return 1;
+	return 0;
+}
+
+pair(q, name, value: string): string
+{
+	if(q != "")
+		q += "&";
+	return q + formencode(name) + "=" + formencode(value);
+}
+
+# application/x-www-form-urlencoded
+formencode(s: string): string
+{
+	r := "";
+	b := array of byte s;
+	for(i := 0; i < len b; i++) {
+		c := int b[i];
+		if(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		   c == '*' || c == '-' || c == '.' || c == '_')
+			r[len r] = c;
+		else if(c == ' ')
+			r[len r] = '+';
+		else
+			r += sys->sprint("%%%.2X", c);
+	}
+	return r;
+}
+
+Session.scrollto(s: self ref Session, y: int)
+{
+	if(y < 0)
+		y = 0;
+	lock(s);
+	s.scroll = y;
+	unlock(s);
+	event(s, "scroll " + string y);
+}
+
+Session.viewing(s: self ref Session, y: int)
+{
+	s.at = y;	# (one word: read under the lock when the page is left)
+}
+
+# A fault in the engine while the session's lock is held: said, and
+# the lock let go as ever.  Raised out of a section holding it, it was
+# not: Xenith caught the fault (an array bound in painting
+# www.sanook.com) and went on, and its next paint waited for the lock
+# it held itself.
+fault(s: ref Session, what, e: string)
+{
+	sys->fprint(sys->fildes(2), "charon: %s %s: %s\n", what, s.url, e);
+}
+
+# where a #fragment is, made the :target (the lock held)
+target1(s: ref Session, pg: ref Pg, frag: string): int
+{
+	{
+		return target(pg, frag);
+	} exception e {
+	"*" =>
+		fault(s, "going to #" + frag + " in", e);
+	}
+	return 0;
+}
+
+# the page laid out again after a change the session made (the lock held)
+update(s: ref Session, pg: ref Pg)
+{
+	{
+		pg.update();
+	} exception e {
+	"*" =>
+		fault(s, "laying out", e);
+	}
+}
+
+# ---- pointing ----
+
+Session.nodeat(s: self ref Session, x, y: int): int
+{
+	freshen(s);
+	pg := s.pg;
+	if(pg == nil)
+		return 0;
+	# boxat follows paint's stacking order with paint's own state: not
+	# while the window paints (a script holding the lock for long gets
+	# the click all the same)
+	locked := trylock(s, 500);
+	n := 0;
+	{
+		(n, nil) = layout->boxat(pg.root, Point(x, y));
+	} exception e {
+	"*" =>
+		if(locked)
+			unlock(s);
+		raise e;
+	}
+	if(locked)
+		unlock(s);
+	return n;
+}
+
+Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point): int
+{
+	# a page's script may hold the lock for seconds: the window keeps
+	# what it shows rather than wait (the realm says "update" when done)
+	r := realmof(s);
+	if(r != nil) {
+		if(!trylock(s, 100))
+			return 0;
+	} else
+		lock(s);
+	# laid out as the page's scripts left the document: here, as a
+	# browser does it for a frame, not after each task that changed it
+	if(r != nil && r.pg == s.pg)
+		laidout(r);
+	if(s.pg != nil) {
+		{
+			s.pg.paint(dst, scroll);
+		} exception e {
+		"*" =>
+			fault(s, "painting", e);
+		}
+	}
+	unlock(s);
+	return 1;
+}
+
+# the page laid out as its document now is, if its scripts changed it
+# since (for what reads the boxes without painting)
+freshen(s: ref Session)
+{
+	r := realmof(s);
+	if(r == nil || r.pg != s.pg || r.pg.doc.gen == r.laidout)
+		return;
+	if(!trylock(s, 100))
+		return;
+	if(r.pg == s.pg)
+		laidout(r);
+	unlock(s);
+}
+
+# the lock, if it can be had within ms milliseconds
+trylock(s: ref Session, ms: int): int
+{
+	for(t := 0; ; t += 10) {
+		alt {
+		s.lk <-= 1 =>
+			s.lkpid = sys->pctl(0, nil);
+			return 1;
+		* =>
+			;
+		}
+		if(t >= ms)
+			return 0;
+		takeback(s);
+		sys->sleep(10);
+	}
+}
+
+Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)
+{
+	freshen(s);
+	pg := s.pg;
+	if(pg == nil)
+		return (0, ((0, 0), (0, 0)));
+	for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
+		b := hd l;
+		if(pseudo(pg, n, b))
+			continue;
+		if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil)
+			return (1, hd fr);	# where it starts
+		x := absx(b);
+		y := absy(b);
+		return (1, ((x, y), (x + b.w, y + b.h)));
+	}
+	return (0, ((0, 0), (0, 0)));
+}
+
+# A box of n's ::before, ::after or ::marker, which boxes counts as n's
+# and may give first (the Guardian's links' ::after, their underline):
+# where n is, its box file and a script's getBoundingClientRect, is
+# n's own boxes
+pseudo(pg: ref Pg, n: int, b: ref Box): int
+{
+	c := pg.computed;
+	if(c == nil || b.st == nil || n >= len c.st || b.st == c.st[n])
+		return 0;
+	return c.before != nil && b.st == c.before[n] ||
+		c.after != nil && b.st == c.after[n] ||
+		c.marker != nil && b.st == c.marker[n];
+}
+
+# An inline box's area, in page coordinates: a box has no extent of its
+# own, its fragments in the lines of the block it is in do (a fragment
+# a line, in order).  A link's box was 0 by 0 at its block's origin.
+inlinerects(b: ref Box): list of Draw->Rect
+{
+	c := b.parent;
+	while(c != nil && c.lines == nil)
+		c = c.parent;
+	if(c == nil)
+		return nil;
+	x := absx(c);
+	y := absy(c);
+	r: list of Draw->Rect;
+	for(i := len c.lines - 1; i >= 0; i--) {
+		ln := c.lines[i];
+		for(k := len ln.frags - 1; k >= 0; k--) {
+			f := ln.frags[k];
+			if(f.kind == Layout->Fspan && f.box == b)
+				r = Draw->Rect((x + f.x, y + f.y), (x + f.x + f.w, y + f.y + f.h)) :: r;
+		}
+	}
+	return r;
+}
+
+Session.linkat(s: self ref Session, x, y: int): string
+{
+	pg := s.pg;
+	if(pg == nil)
+		return nil;
+	d := pg.doc;
+	for(m := s.nodeat(x, y); m > 1; m = d.nodes[m].parent) {
+		nd := d.nodes[m];
+		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && (nd.tag == Dom->Ta || nd.tag == Dom->Tarea) && d.hasattr(m, "href"))
+			return resolve(d.url, d.attr(m, "href"));
+	}
+	return nil;
+}
+
+Session.findat(s: self ref Session, what: string, after: int): (int, Draw->Rect)
+{
+	freshen(s);
+	pg := s.pg;
+	if(pg == nil || what == "")
+		return (0, ((0, 0), (0, 0)));
+	(ok, r) := findin(pg.root, lower(what), after, 0, 0);
+	return (ok, r);
+}
+
+# The first text fragment below y=after containing what, in page
+# coordinates; ox, oy are b's parent's position.
+findin(b: ref Box, what: string, after, ox, oy: int): (int, Draw->Rect)
+{
+	x := ox + b.x;
+	y := oy + b.y;
+	for(i := 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++) {
+			f := ln.frags[j];
+			if(f.kind == Layout->Ftext && y + ln.y + f.y > after && contains(lower(f.text), what))
+				return (1, ((x + f.x, y + ln.y + f.y), (x + f.x + f.w, y + ln.y + f.y + ln.h)));
+		}
+	}
+	for(i = 0; i < len b.kids; i++) {
+		(ok, r) := findin(b.kids[i], what, after, x, y);
+		if(ok)
+			return (ok, r);
+	}
+	for(l := b.pos; l != nil; l = tl l) {
+		(ok, r) := findin(hd l, what, after, x, y);
+		if(ok)
+			return (ok, r);
+	}
+	return (0, ((0, 0), (0, 0)));
+}
+
+Session.pageheight(s: self ref Session): int
+{
+	freshen(s);
+	if(s.pg == nil)
+		return 0;
+	return s.pg.pageheight();
+}
+
+Session.pinned(s: self ref Session): int
+{
+	freshen(s);
+	if(s.pg == nil)
+		return 0;
+	return s.pg.pinned();
+}
+
+Session.click(s: self ref Session, n: int): string
+{
+	pg := s.pg;
+	if(pg == nil)
+		return "no page";
+	d := pg.doc;
+	if(n <= 0 || n >= d.n)
+		return sys->sprint("no node %d", n);
+	if(realmof(s) != nil) {
+		reply := chan[1] of int;
+		(nil, br) := s.boxof(n);
+		if(ask(s, ref Event.Click(n, br.min.x, br.min.y, reply), reply) || s.pg != pg)
+			return nil;	# a handler prevented it, or went elsewhere
+	}
+	if(popovers(s, pg, n))
+		return nil;
+	lock(s);
+	us: list of string;
+	{
+		us = pg.want(n);
+	} exception e {
+	"*" =>
+		fault(s, "a click", e);
+	}
+	unlock(s);
+	if(us != nil) {
+		# an image left to be clicked for: this click loads it (and
+		# what is shown with it), and does not follow a link it is in
+		spawn picsome(s, s.gen, pg, us);
+		return nil;
+	}
+	# up the tree as shown: a component's text given to a slot in its
+	# shadow tree is in what holds the slot (a label, a link)
+	f := dom->flat(d);
+	for(m := n; m > 1; m = shownparent(d, f, m)) {
+		nd := d.nodes[m];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
+			continue;
+		case nd.tag {
+		Dom->Ta or Dom->Tarea =>
+			if(d.hasattr(m, "href")) {
+				u := resolve(d.url, d.attr(m, "href"));
+				if(lower(scheme(u)) == "javascript")
+					return "javascript: links need a script engine";
+				navigate(s, u, "GET", nil, nil, Hnew);
+				return nil;
+			}
+		Dom->Tlabel =>
+			# for names an id in the label's own tree: a web
+			# component's shadow root has its own ids (JSTOR's
+			# checkboxes each hold a "checkbox-element")
+			if((id := d.attr(m, "for")) != nil) {
+				for(c := 1; c < d.n; c++)
+					if(iscontrol(d, c) && d.attr(c, "id") == id && samescope(f, c, m))
+						return s.click(c);
+			}
+			for(c := nextin(d, m, m); c != 0; c = nextin(d, c, m))
+				if(iscontrol(d, c))
+					return s.click(c);
+		Dom->Tinput or Dom->Tbutton =>
+			if(disabled(d, m))
+				return nil;
+			(forms, nil, nil) := formnumbers(d);
+			case kindof(d, m) {
+			"submit" or "image" =>
+				if(forms[m] <= 0)
+					return nil;
+				return s.submit(forms[m], m);
+			"checkbox" =>
+				if(d.hasattr(m, "checked"))
+					return s.set(m, "off");
+				return s.set(m, "on");
+			"radio" =>
+				return s.set(m, "on");
+			"reset" =>
+				return nil;	# a reset would need the original values
+			}
+			return nil;
+		Dom->Tsummary =>
+			p := d.nodes[m].parent;
+			if(p > 0 && d.nodes[p].tag == Dom->Tdetails) {
+				lock(s);
+				if(d.hasattr(p, "open"))
+					d.delattr(p, "open");
+				else
+					d.setattr(p, "open", "");
+				update(s, pg);
+				unlock(s);
+				event(s, "update");
+			}
+			return nil;
+		}
+	}
+	return nil;
+}
+
+# Popovers (HTML §6.12) without a script: a button with popovertarget
+# shows, hides or toggles the element it names; a click outside an open
+# auto popover closes it (light dismiss).  Whether the click was taken.
+popovers(s: ref Session, pg: ref Pg, n: int): int
+{
+	d := pg.doc;
+	changed := 0;
+	invoked := 0;
+	for(m := n; m > 1 && !invoked; m = d.nodes[m].parent) {
+		nd := d.nodes[m];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || (nd.tag != Dom->Tbutton && nd.tag != Dom->Tinput))
+			continue;
+		if((id := d.attr(m, "popovertarget")) == nil || d.hasattr(m, "disabled"))
+			continue;
+		t := byid(d, id);
+		if(t == 0 || !d.hasattr(t, "popover"))
+			continue;
+		open := d.hasattr(t, Dom->POPOPEN);
+		case lower(d.attr(m, "popovertargetaction")) {
+		"show" =>
+			if(!open) {
+				d.setattr(t, Dom->POPOPEN, "");
+				changed = 1;
+			}
+		"hide" =>
+			if(open) {
+				d.delattr(t, Dom->POPOPEN);
+				changed = 1;
+			}
+		* =>
+			if(open)
+				d.delattr(t, Dom->POPOPEN);
+			else
+				d.setattr(t, Dom->POPOPEN, "");
+			changed = 1;
+		}
+		invoked = t;
+	}
+	# light dismiss: open auto popovers the click is not inside
+	for(p := 1; p < d.n; p++) {
+		if(p == invoked || !d.hasattr(p, Dom->POPOPEN) || lower(d.attr(p, "popover")) == "manual")
+			continue;
+		if(inside(d, n, p))
+			continue;
+		d.delattr(p, Dom->POPOPEN);
+		changed = 1;
+	}
+	if(changed) {
+		lock(s);
+		update(s, pg);
+		unlock(s);
+		event(s, "update");
+	}
+	return invoked != 0;
+}
+
+# n's parent in the flat tree, or in the document's if n is not in it
+shownparent(d: ref Doc, f: ref Dom->Flat, n: int): int
+{
+	if(f != nil && n < len f.parent && f.parent[n] != 0)
+		return f.parent[n];
+	return d.nodes[n].parent;
+}
+
+# whether nodes a and b are in the same tree (the document's, or one
+# shadow root's)
+samescope(f: ref Dom->Flat, a, b: int): int
+{
+	if(f == nil)
+		return 1;
+	return a < len f.scope && b < len f.scope && f.scope[a] == f.scope[b];
+}
+
+byid(d: ref Doc, id: string): int
+{
+	for(i := 1; i < d.n; i++)
+		if(d.nodes[i].kind == Dom->Element && d.attr(i, "id") == id)
+			return i;
+	return 0;
+}
+
+inside(d: ref Doc, n, p: int): int
+{
+	for(; n > 0; n = d.nodes[n].parent)
+		if(n == p)
+			return 1;
+	return 0;
+}
+
+# ---- the document, node by node ----
+
+kindnames := array[] of {
+	"block", "inline", "text", "br", "replaced", "flex", "grid", "table", "row", "cell", "marker",
+};
+
+Session.dom(s: self ref Session, n: int, what: string): (string, string)
+{
+	pg := s.pg;
+	if(pg == nil)
+		return (nil, "no page");
+	d := pg.doc;
+	if(n <= 0 || n >= d.n)
+		return (nil, "no such node");
+	nd := d.nodes[n];
+	case what {
+	"tag" =>
+		case nd.kind {
+		Dom->Element =>
+			return (nd.name + "\n", nil);
+		Dom->Text =>
+			return ("#text\n", nil);
+		Dom->Comment =>
+			return ("#comment\n", nil);
+		Dom->Doctype =>
+			return ("#doctype\n", nil);
+		}
+		return ("#document\n", nil);
+	"attrs" =>
+		r := "";
+		pw := nd.tag == Dom->Tinput && iscontrol(d, n) && kindof(d, n) == "password";
+		for(l := nd.attrs; l != nil; l = tl l) {
+			v := oneline((hd l).t1);
+			if(pw && (hd l).t0 == "value")
+				v = masked(v);
+			r += (hd l).t0 + " " + v + "\n";
+		}
+		return (r, nil);
+	"text" =>
+		if(nd.kind == Dom->Text || nd.kind == Dom->Comment)
+			return (nd.text, nil);
+		return (shown(d, dom->flat(d), n), nil);
+	"style" =>
+		if(pg.computed == nil || n >= len pg.computed.st || pg.computed.st[n] == nil)
+			return ("", nil);
+		return (style->dump(pg.computed.st[n]), nil);
+	"box" =>
+		freshen(s);
+		r := "";
+		for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
+			b := hd l;
+			if(pseudo(pg, n, b))
+				continue;
+			k := "?";
+			if(b.kind >= 0 && b.kind < len kindnames)
+				k = kindnames[b.kind];
+			if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil) {
+				for(; fr != nil; fr = tl fr)
+					r += sys->sprint("%s %d %d %d %d\n", k, (hd fr).min.x, (hd fr).min.y, (hd fr).max.x - (hd fr).min.x, (hd fr).max.y - (hd fr).min.y);
+				continue;
+			}
+			r += sys->sprint("%s %d %d %d %d\n", k, absx(b), absy(b), b.w, b.h);
+		}
+		return (r, nil);
+	"children" =>
+		r := "";
+		for(c := nd.first; c != 0; c = d.nodes[c].next)
+			r += string c + "\n";
+		return (r, nil);
+	}
+	return (nil, "no such file");
+}
+
+# ---- URLs and strings ----
+
+resolve(base, rel: string): string
+{
+	return style->resolveurl(base, rel);
+}
+
+scheme(u: string): string
+{
+	for(i := 0; i < len u; i++) {
+		c := u[i];
+		if(c == ':')
+			return u[0:i];
+		if(!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.')))
+			break;
+	}
+	return nil;
+}
+
+fragment(u: string): string
+{
+	for(i := 0; i < len u; i++)
+		if(u[i] == '#')
+			return u[i+1:];
+	return nil;
+}
+
+unfrag(u: string): string
+{
+	for(i := 0; i < len u; i++)
+		if(u[i] == '#')
+			return u[0:i];
+	return u;
+}
+
+pctdecode(s: string): string
+{
+	b := array of byte s;
+	o := array[len b] of byte;
+	n := 0;
+	for(i := 0; i < len b; i++) {
+		if(b[i] == byte '%' && i + 2 < len b && hex(int b[i+1]) >= 0 && hex(int b[i+2]) >= 0) {
+			o[n++] = byte (hex(int b[i+1])*16 + hex(int b[i+2]));
+			i += 2;
+		} else
+			o[n++] = b[i];
+	}
+	return string o[0:n];
+}
+
+hex(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+rev(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+join(l: list of string, sep: string): string
+{
+	r := "";
+	for(; l != nil; l = tl l) {
+		if(r != "" && hd l != "")
+			r += sep;
+		r += hd l;
+	}
+	return r;
+}
+
+# collapse white space, as rendered text does
+squash(s: string): string
+{
+	r := "";
+	sp := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
+			sp = 1;
+			continue;
+		}
+		if(sp && r != "")
+			r[len r] = ' ';
+		sp = 0;
+		r[len r] = c;
+	}
+	return r;
+}
+
+oneline(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		case s[i] {
+		'\n' =>
+			r += "\\n";
+		'\r' =>
+			;
+		* =>
+			r[len r] = s[i];
+		}
+	return r;
+}
+
+trim(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'))
+		i++;
+	j := len s;
+	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n'))
+		j--;
+	return s[i:j];
+}
+
+lower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+prefix(s, p: string): int
+{
+	return len s >= len p && s[0:len p] == p;
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
+
+# ---- scripts ----
+#
+# A page's scripts run in a realm of their own (see Js->page): a process
+# that loads the engine, confines itself to a namespace holding only
+# the network, and calls back here for what needs the page laid out.
+# Each session has at most one, for the page it shows; a navigation
+# away kills it.  What a realm asks that needs this process's
+# namespace (another page, a redraw) goes to a helper running here.
+
+Realm: adt {
+	id:	int;
+	s:	ref Session;
+	g:	int;
+	pg:	ref Pg;
+	events:	chan of ref Event;
+	reqs:	chan of ref Req;
+	pid:	int;		# its process, whose group it leads
+	locked:	int;		# it holds the session's lock
+	since:	int;		# since when (sys->millisec)
+	laidout:	int;	# the document's generation when last laid out
+	styled:	int;	# when last styled
+	sels:	list of (string, array of ref Css->Sel);	# selectors parsed, most recent first
+	imaging:	int;	# the page's images are being fetched
+	pics:	list of string;	# the images fetched or being fetched for it
+};
+
+Req: adt {
+	pick {
+	Changed =>
+	Navigate =>
+		url:	string;
+		replace:	int;
+		method:	string;
+		ctype:	string;
+		body:	array of byte;
+	Scroll =>
+		y:	int;
+	Quit =>
+	}
+};
+
+# The realms, a list replaced whole on each change, so that it is read
+# with no lock (a reference's assignment is whole).  The lock is the
+# writers': a realm's own process takes it to drop itself as it ends,
+# and could be killed holding it (lockrealms takes it back).
+realms: list of ref Realm;
+realmlk: chan of int;
+realmlkpid := 0;
+realmids := 0;
+
+lockrealms()
+{
+	for(;;) {
+		alt {
+		realmlk <-= 1 =>
+			realmlkpid = sys->pctl(0, nil);
+			return;
+		<-locktick =>
+			;
+		}
+		h := realmlkpid;
+		if(h > 0 && !alive(h)) {
+			stlk <-= 1;
+			if(realmlkpid == h && !alive(h)) {
+				alt {
+				<-realmlk =>
+					realmlkpid = 0;
+				* =>
+					;
+				}
+			}
+			<-stlk;
+		}
+	}
+}
+
+unlockrealms()
+{
+	realmlkpid = 0;
+	<-realmlk;
+}
+
+# whether the page has anything a script engine would run
+hasscripts(d: ref Doc): int
+{
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element)
+			continue;
+		if(nd.tag == Dom->Tscript && nd.ns == Dom->HTML)
+			return 1;
+		for(l := nd.attrs; l != nil; l = tl l)
+			if(len (hd l).t0 > 2 && (hd l).t0[0:2] == "on")
+				return 1;
+	}
+	return 0;
+}
+
+startrealm(s: ref Session, g: int, pg: ref Pg)
+{
+	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
+		return;
+	lockrealms();
+	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil, 0, nil);
+	realms = r :: realms;
+	unlockrealms();
+	pidc := chan of int;
+	spawn realmhelper(r);
+	spawn realmrun(r, pidc);
+	r.pid = <-pidc;
+	spawn watchdog(r);
+}
+
+# A task that runs too long (a script in an endless loop) holds the
+# session's lock, and nothing else can draw the page: the realm is
+# killed and the page stays as it was.
+Maxtask: con 30000;
+
+watchdog(r: ref Realm)
+{
+	for(;;) {
+		sys->sleep(1000);
+		if(realmbyid(r.id) == nil)
+			return;
+		if(r.locked && sys->millisec() - r.since > Maxtask) {
+			toconsole(r.pg, sys->sprint("a script ran for %d seconds and was stopped", Maxtask / 1000));
+			endrealm(r.s);
+			return;
+		}
+	}
+}
+
+realmrun(r: ref Realm, pidc: chan of int)
+{
+	# a group of its own before it is known: endrealm kills r.pid's
+	# group, and until the engine confined the realm (its own new
+	# group, in confine) that was the browser's.  A page left while its
+	# engine was still loading killed the session's other processes,
+	# a window's among them, every one but the one leaving.
+	sys->pctl(Sys->NEWPGRP, nil);
+	pidc <-= sys->pctl(0, nil);
+	err: string;
+	{
+		pjs := load Js Js->PATH;
+		if(pjs == nil)
+			err = sys->sprint("cannot load %s: %r", Js->PATH);
+		else {
+			h := ref Js->Host(r.id, envint("/env/jsstress"), envint("/env/jsprofile"), r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
+				hlock, hunlock, hchanged, hbox, hcomputed, hmedia, hmatch, hselect, hparse,
+				hviewport, hnavigate, hscroll, hconsole);
+			err = pjs->page(h);
+		}
+	} exception e {
+	"*" =>
+		err = "internal error: " + e;
+	}
+	if(err != nil)
+		sys->fprint(sys->fildes(2), "charon: scripts: %s: %s\n", r.pg.url, err);
+	dropealm(r);
+}
+
+# for testing the engine: /env/jsstress, its collector runs every n
+# allocations; /env/jsprofile, where the time goes, sampled every n ms
+envint(path: string): int
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[16] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	return int string buf[0:n];
+}
+
+# The origin's storage (localStorage): a directory of the user's of its
+# own, made when first wanted, which only that origin's realms are given
+Storeroot: con "lib/charon/store";
+
+storedir(url: string): string
+{
+	o := originname(url);
+	if(o == nil)
+		return nil;
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	d := "/usr/" + string buf[0:n] + "/" + Storeroot + "/" + o;
+	(ok, nil) := sys->stat(d);
+	if(ok < 0 && mkdirp(d) < 0)
+		return nil;
+	return d;
+}
+
+# an origin as a file name: scheme_host_port, nothing a path can misuse
+originname(url: string): string
+{
+	sch := lower(scheme(url));
+	if(sch == "file")
+		return "file";
+	if(sch != "http" && sch != "https")
+		return nil;
+	rest := url[len sch + 1:];
+	if(!prefix(rest, "//"))
+		return nil;
+	rest = rest[2:];
+	for(i := 0; i < len rest && rest[i] != '/' && rest[i] != '?' && rest[i] != '#'; i++)
+		;
+	auth := lower(rest[0:i]);
+	for(j := len auth - 1; j >= 0 && auth[j] != '@'; j--)
+		;
+	auth = auth[j+1:];
+	port := "80";
+	if(sch == "https")
+		port = "443";
+	for(k := len auth - 1; k >= 0 && auth[k] >= '0' && auth[k] <= '9'; k--)
+		;
+	if(k >= 0 && k < len auth - 1 && auth[k] == ':') {
+		port = auth[k+1:];
+		auth = auth[0:k];
+	}
+	name := sch + "_";
+	for(k = 0; k < len auth; k++) {
+		c := auth[k];
+		if(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '.')
+			name[len name] = c;
+		else
+			name[len name] = '_';
+	}
+	if(name == sch + "_" || prefix(name[len sch + 1:], "."))
+		return nil;
+	return name + "_" + port;
+}
+
+mkdirp(d: string): int
+{
+	(ok, nil) := sys->stat(d);
+	if(ok >= 0)
+		return 0;
+	for(i := len d - 1; i > 0 && d[i] != '/'; i--)
+		;
+	if(i > 0 && mkdirp(d[0:i]) < 0)
+		return -1;
+	fd := sys->create(d, Sys->OREAD, Sys->DMDIR|8r700);
+	if(fd == nil)
+		return -1;
+	return 0;
+}
+
+# what a page's realm may reach: the network, and a file: page's directory
+grants(url: string): list of (string, string, int)
+{
+	g: list of (string, string, int);
+	(ok, nil) := sys->stat(Page->WEBFS);
+	if(ok >= 0)
+		g = (Page->WEBFS, Page->WEBFS, 1) :: g;
+	(ok, nil) = sys->stat("/lib/js");
+	if(ok >= 0)
+		g = ("/lib/js", "/lib/js", 0) :: g;
+	if((sd := storedir(url)) != nil)
+		g = ("/mnt/store", sd, 1) :: g;
+	if(lower(scheme(url)) == "file") {
+		p := url[5:];
+		if(prefix(p, "//")) {
+			for(i := 2; i < len p && p[i] != '/'; i++)
+				;
+			p = p[i:];
+		}
+		for(i := len p - 1; i > 0 && p[i] != '/'; i--)
+			;
+		if(i > 0) {
+			dir := p[0:i];
+			(ok, nil) = sys->stat(dir);
+			if(ok >= 0 && dir != "/")
+				g = (dir, dir, 0) :: g;
+		}
+	}
+	return g;
+}
+
+dropealm(r: ref Realm)
+{
+	lockrealms();
+	l: list of ref Realm;
+	for(m := realms; m != nil; m = tl m)
+		if(hd m != r)
+			l = hd m :: l;
+	realms = l;
+	unlockrealms();
+	alt {
+	r.reqs <-= ref Req.Quit =>
+		;
+	* =>
+		;
+	}
+	sys->remove(sys->sprint("/tmp/.js/%d", r.pid));
+}
+
+realmof(s: ref Session): ref Realm
+{
+	for(l := realms; l != nil; l = tl l)
+		if((hd l).s == s)
+			return hd l;
+	return nil;
+}
+
+realmbyid(id: int): ref Realm
+{
+	for(l := realms; l != nil; l = tl l)
+		if((hd l).id == id)
+			return hd l;
+	return nil;
+}
+
+# the page's realm ended: told to quit if it is waiting, killed if not
+endrealm(s: ref Session)
+{
+	r := realmof(s);
+	if(r == nil)
+		return;
+	alt {
+	r.events <-= ref Event.Quit =>
+		spawn reap(r.pid);
+	* =>
+		# if it holds the session's lock, or takes it before it
+		# goes, the next to want it takes it back (lock)
+		killgrp(r.pid);
+		rmshadow(r.pid);
+	}
+	dropealm(r);
+}
+
+# A realm that quits leaves what it started: the sleepers of its timers,
+# its fetches.  They run in its engine, and while one lives so does the
+# engine and every value the page's scripts made (a sleeper waits
+# forever to tell a realm that is gone: ten visits to bbc.com, 600 MB).
+# Its group goes once it has, through any of them still there.
+reap(g: int)
+{
+	for(i := 0; i < 50 && alive(g); i++)
+		sys->sleep(100);
+	if(alive(g))
+		killgrp(g);
+	else if((m := ingroup(g)) > 0)
+		killgrp(m);
+	rmshadow(g);
+}
+
+# a process in group g, or 0
+ingroup(g: int): int
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			return 0;
+		for(i := 0; i < n; i++) {
+			sf := sys->open("/prog/" + d[i].name + "/status", Sys->OREAD);
+			if(sf == nil)
+				continue;
+			b := array[128] of byte;
+			k := sys->read(sf, b, len b);
+			if(k <= 0)
+				continue;
+			(nf, f) := sys->tokenize(string b[0:k], " \t");
+			if(nf >= 2 && int hd tl f == g && int d[i].name != g)
+				return int d[i].name;
+		}
+	}
+}
+
+killgrp(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# the empty tree the realm's namespace was made in (its mount points)
+rmshadow(pid: int)
+{
+	rmtree(sys->sprint("/tmp/.js/%d", pid));
+}
+
+rmtree(path: string)
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return;
+	if(d.mode & Sys->DMDIR) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd != nil)
+			for(;;) {
+				(n, dirs) := sys->dirread(fd);
+				if(n <= 0)
+					break;
+				for(i := 0; i < n; i++)
+					rmtree(path + "/" + dirs[i].name);
+			}
+	}
+	sys->remove(path);
+}
+
+# an event to the page's realm, and whether a handler prevented its default
+ask(s: ref Session, e: ref Event, reply: chan of int): int
+{
+	r := realmof(s);
+	if(r == nil)
+		return 0;
+	t := chan of int;
+	spawn timeout(t, 2000);
+	alt {
+	r.events <-= e =>
+		;
+	<-t =>
+		return 0;
+	}
+	alt {
+	v := <-reply =>
+		return v;
+	<-t =>
+		return 0;
+	}
+}
+
+timeout(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
+# runs in this process's namespace on the realm's behalf
+realmhelper(r: ref Realm)
+{
+	s := r.s;
+	for(;;) {
+		q := <-r.reqs;
+		pick rq := q {
+		Quit =>
+			return;
+		Changed =>
+			event(s, "update");
+		Navigate =>
+			hist := Hnew;
+			if(rq.replace)
+				hist = Hnone;
+			if(rq.method == "POST")
+				navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
+			else
+				navigate(s, rq.url, "GET", nil, nil, hist);
+		Scroll =>
+			lock(s);
+			s.scroll = rq.y;
+			unlock(s);
+			event(s, "scroll " + string rq.y);
+		}
+	}
+}
+
+# the document's title as a script left it
+doctitle(d: ref Doc): string
+{
+	t := d.find(1, Dom->Ttitle);
+	if(t == 0)
+		return "";
+	return squash(d.textof(t));
+}
+
+# the page laid out again if its document has changed (the lock held)
+laidout(r: ref Realm)
+{
+	d := r.pg.doc;
+	if(d.gen == r.laidout)
+		return;
+	{
+		r.pg.update();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: laying out after a script: %s\n", e);
+	}
+	r.laidout = d.gen;
+	r.styled = d.gen;
+	if(r.imaging) {
+		# images the page's scripts put in after its own were sent
+		# for (JSTOR's logo, in a header its script makes)
+		us: list of string;
+		{
+			us = claim(r, r.pg.wanted());
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: images after a script: %s\n", e);
+		}
+		if(us != nil)
+			spawn fetchpics(r.s, r.g, r.pg, us);
+	}
+}
+
+# the document's computed styles as it now is (the lock held)
+styled(r: ref Realm)
+{
+	d := r.pg.doc;
+	if(d.gen == r.styled || d.gen == r.laidout)
+		return;
+	{
+		r.pg.restyle();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: styling after a script: %s\n", e);
+	}
+	r.styled = d.gen;
+}
+
+# The Host functions: they run on the realm's thread, in its namespace.
+
+hlock(id: int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		raise "fail:realm gone";
+	lock(r.s);
+	r.since = sys->millisec();
+	r.locked = 1;
+}
+
+hunlock(id: int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		raise "fail:realm gone";
+	# the page is laid out when it is next painted, or asked about
+	# (laidout), not here: a page's scripts change the document in task
+	# after task, and each was a layout of the whole (BBC: 28 in ten
+	# seconds, 190 ms each)
+	if(r.s.pg == r.pg && r.pg.doc.gen != r.laidout) {
+		t := doctitle(r.pg.doc);
+		if(t != r.pg.title) {
+			r.pg.title = t;
+			r.s.title = t;
+		}
+	}
+	r.locked = 0;
+	unlock(r.s);
+}
+
+hchanged(id: int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return;
+	alt {
+	r.reqs <-= ref Req.Changed =>
+		;
+	* =>
+		;	# one is waiting already
+	}
+}
+
+# ---- what scripts see: CSS px, where the page is laid out in device
+# pixels (Page->scale) ----
+
+scale(r: real)
+{
+	page->scale(r);
+}
+
+envstr(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+# device pixels, in CSS px
+cssn(n: int): int
+{
+	return int (real n / page->dpr());
+}
+
+# a computed value's px lengths in CSS px
+csspx(v: string): string
+{
+	if(page->dpr() == 1.0)
+		return v;
+	r := "";
+	for(i := 0; i < len v; ) {
+		j := i;
+		while(j < len v && (v[j] >= '0' && v[j] <= '9' || v[j] == '.' || v[j] == '-' && j == i))
+			j++;
+		if(j > i && j + 2 <= len v && v[j:j+2] == "px" && (i == 0 || !isalnum(v[i-1]))) {
+			r += sys->sprint("%g", real v[i:j] / page->dpr()) + "px";
+			i = j + 2;
+		} else if(j > i) {
+			r += v[i:j];
+			i = j;
+		} else
+			r[len r] = v[i++];
+	}
+	return r;
+}
+
+isalnum(c: int): int
+{
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '-';
+}
+
+hbox(id, n: int): (int, int, int, int, int)
+{
+	r := realmbyid(id);
+	if(r == nil || n <= 0 || n >= r.pg.doc.n)
+		return (0, 0, 0, 0, 0);
+	laidout(r);
+	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
+		b := hd l;
+		return (1, cssn(absx(b)), cssn(absy(b)), cssn(b.w), cssn(b.h));
+	}
+	return (0, 0, 0, 0, 0);
+}
+
+hcomputed(id, n: int, prop: string): string
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return "";
+	d := r.pg.doc;
+	if(n <= 0 || n >= d.n)
+		return "";
+	st: ref Style->St;
+	if(d.gen == r.styled || d.gen == r.laidout) {
+		c := r.pg.computed;
+		if(c != nil && n < len c.st)
+			st = c.st[n];
+	} else {
+		# changed since: this element's alone, not the document's
+		{
+			st = r.pg.stylefor(n);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: styling after a script: %s\n", e);
+		}
+	}
+	if(st == nil)
+		return "";
+	if(prefix(prop, "--"))
+		return css->tostring(st.vars.get(prop));
+	# a side's margin, padding or border width: one of the dump's four
+	# (top, right, bottom, left)
+	short := prop;
+	side := -1;
+	for(i := 0; i < len sides; i++) {
+		(pre, post) := (sides[i].t0, sides[i].t1);
+		if(prefix(prop, pre) && len prop > len pre + len post && prop[len prop - len post:] == post) {
+			for(k := 0; k < 4; k++)
+				if(prop[len pre:len prop - len post] == sidenames[k]) {
+					short = sides[i].t2;
+					side = k;
+				}
+		}
+	}
+	(nil, lines) := sys->tokenize(style->dump(st), "\n");
+	for(; lines != nil; lines = tl lines) {
+		ln := hd lines;
+		if(prefix(ln, short + " ")) {
+			v := ln[len short + 1:];
+			if(side < 0)
+				return csspx(cssrgb(v));
+			(nv, vl) := sys->tokenize(v, " ");
+			if(nv != 4)
+				return "";
+			for(k := 0; k < side; k++)
+				vl = tl vl;
+			x := hd vl;
+			if(short == "border-width")
+				x += "px";
+			return csspx(x);
+		}
+	}
+	return "";
+}
+
+sidenames := array[] of {"top", "right", "bottom", "left"};
+sides := array[] of {("margin-", "", "margin"), ("padding-", "", "padding"), ("border-", "-width", "border-width")};
+
+# The dump writes colours #rrggbbaa; a computed value serializes them
+# rgb(r, g, b), or rgba() when not opaque (CSSOM §6.7.2).
+cssrgb(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; ) {
+		if(s[i] == '#' && i+9 <= len s && (i+9 == len s || s[i+9] == ' ') && ishex(s[i+1:i+9])) {
+			v := array[4] of int;
+			for(k := 0; k < 4; k++)
+				v[k] = hexval(s[i+1+2*k:i+3+2*k]);
+			if(v[3] == 255)
+				r += sys->sprint("rgb(%d, %d, %d)", v[0], v[1], v[2]);
+			else
+				r += sys->sprint("rgba(%d, %d, %d, %s)", v[0], v[1], v[2], alphastr(v[3]));
+			i += 9;
+		} else
+			r[len r] = s[i++];
+	}
+	return r;
+}
+
+ishex(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(!(s[i] >= '0' && s[i] <= '9' || s[i] >= 'a' && s[i] <= 'f' || s[i] >= 'A' && s[i] <= 'F'))
+			return 0;
+	return 1;
+}
+
+hexval(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= 'a')
+			c -= 'a' - 10;
+		else if(c >= 'A')
+			c -= 'A' - 10;
+		else
+			c -= '0';
+		v = v*16 + c;
+	}
+	return v;
+}
+
+# the shortest decimal that rounds back to this alpha byte
+alphastr(a: int): string
+{
+	if(a == 0)
+		return "0";
+	for(p := 1; p <= 3; p++) {
+		t := sys->sprint("%.*f", p, real a / 255.0);
+		if(int (real t * 255.0 + 0.5) == a) {
+			while(t[len t - 1] == '0')
+				t = t[0:len t - 1];
+			return t;
+		}
+	}
+	return sys->sprint("%.3f", real a / 255.0);
+}
+
+hmedia(id: int, query: string): int
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return 0;
+	return style->mediamatch(css->tokenize(query), r.pg.env);
+}
+
+sels(r: ref Realm, sel: string): array of ref Css->Sel
+{
+	n := 0;
+	for(l := r.sels; l != nil; l = tl l) {
+		if((hd l).t0 == sel)
+			return (hd l).t1;
+		n++;
+	}
+	a := css->parsesels(sel);
+	if(a == nil)
+		return nil;
+	if(n >= 64)
+		r.sels = nil;
+	r.sels = (sel, a) :: r.sels;
+	return a;
+}
+
+matchsels(r: ref Realm, n: int, a: array of ref Css->Sel, scope: int): int
+{
+	d := r.pg.doc;
+	if(d.nodes[n].kind != Dom->Element)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(style->match(d, n, a[i], r.pg.env, scope))
+			return 1;
+	return 0;
+}
+
+hmatch(id, n: int, sel: string, scope: int): int
+{
+	r := realmbyid(id);
+	if(r == nil || n <= 0 || n >= r.pg.doc.n)
+		return 0;
+	a := sels(r, sel);
+	if(a == nil)
+		return -1;
+	if(scope < 0 || scope >= r.pg.doc.n || r.pg.doc.nodes[scope].kind != Dom->Element)
+		scope = 0;
+	return matchsels(r, n, a, scope);
+}
+
+hselect(id, root: int, sel: string, all: int): (int, list of int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return (0, nil);
+	a := sels(r, sel);
+	if(a == nil)
+		return (-1, nil);
+	d := r.pg.doc;
+	scope := root;
+	if(d.nodes[root].kind != Dom->Element)
+		scope = 0;
+	found: list of int;
+	for(n := d.nodes[root].first; n != 0; n = nextin(d, n, root))
+		if(matchsels(r, n, a, scope)) {
+			if(!all)
+				return (1, n :: nil);
+			found = n :: found;
+		}
+	l: list of int;
+	for(; found != nil; found = tl found)
+		l = hd found :: l;
+	return (1, l);
+}
+
+hparse(id: int, markup: string, whole: int): ref Doc
+{
+	r := realmbyid(id);
+	url := "";
+	if(r != nil)
+		url = r.pg.url;
+	if(whole)
+		return html->parsestring(markup, url);
+	return html->parsestring("<!DOCTYPE html><body>" + markup, url);
+}
+
+hviewport(id: int): (int, int, int, int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return (0, 0, 0, 0);
+	return (cssn(r.s.width), cssn(r.s.height), 0, cssn(r.s.scroll));
+}
+
+hnavigate(id: int, url: string, replace: int, method, ctype: string, body: array of byte)
+{
+	r := realmbyid(id);
+	if(r != nil)
+		r.reqs <-= ref Req.Navigate(url, replace, method, ctype, body);
+}
+
+hscroll(id, nil, y: int)
+{
+	r := realmbyid(id);
+	if(r != nil)
+		alt {
+		r.reqs <-= ref Req.Scroll(int (real y * page->dpr())) =>
+			;
+		* =>
+			;
+		}
+}
+
+# what a page's scripts write to the console is the page's, as a
+# browser keeps it for its developer tools (charonfs's console), not
+# the terminal's
+Maxconsole: con 500;
+
+hconsole(id: int, s: string)
+{
+	r := realmbyid(id);
+	if(r != nil)
+		toconsole(r.pg, s);
+}
+
+toconsole(pg: ref Pg, s: string)
+{
+	l := s :: pg.console;
+	if(len l > Maxconsole) {
+		k: list of string;
+		for(i := 0; i < Maxconsole && l != nil; i++) {
+			k = hd l :: k;
+			l = tl l;
+		}
+		for(l = nil; k != nil; k = tl k)
+			l = hd k :: l;
+	}
+	pg.console = l;
+}

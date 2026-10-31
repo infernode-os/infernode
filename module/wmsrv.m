@@ -8,6 +8,20 @@ Wmsrv: module{
 	find:	fn(p: Draw->Point): ref Client;
 	top:	fn(): ref Client;
 
+	# Serve this window manager's windows as a read-only file tree,
+	#	<id>/window	the image of client <id>'s main (oldest) window
+	# (the format of /dev/screen), on the returned descriptor.  Nothing
+	# is mounted: the caller decides whose namespace gets it, e.g.
+	#	sys->mount(wmsrv->wsys(), nil, "/mnt/wsys", Sys->MREPL, nil);
+	# nil and %r on error.
+	wsys:	fn(): ref Sys->FD;
+
+	# Shut the window manager down: tell every connected client to exit,
+	# stop their minders and the server; /chan/<name> goes with it.
+	# Blocks until the server takes the request, so don't call it from
+	# the process that services the join and req channels.
+	stop:	fn();
+
 	Window: adt {
 		tag:	string;
 		r:	Draw->Rect;

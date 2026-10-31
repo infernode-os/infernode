@@ -5,6 +5,10 @@ Usage:
 
 Arguments:
   path    - File path (created if needed, parent dirs created)
-  content - Content (quote for spaces, \n for newlines)
+  content - What the file is to hold
+
+Called with arguments by name (path, content), content is the text itself:
+line breaks as line breaks, nothing unescaped.  Only the one-line form
+above takes \n for a newline.
 
 Returns confirmation with bytes written, or error.

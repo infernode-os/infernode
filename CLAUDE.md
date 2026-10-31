@@ -15,7 +15,7 @@ servers, emulator C) are project skills under `.claude/skills/`.
 
 ## JIT Compiler Availability
 
-**AMD64 (x86-64) and ARM64 have JIT compilers.** The ARM64 JIT (`libinterp/comp-arm64.c`) supports both macOS (Apple Silicon) and Linux (e.g. NVIDIA Jetson). Run with `emu -c1` to enable JIT compilation, `emu -c0` for interpreter only.
+**AMD64 (x86-64), ARM64 and RISC-V (RV64GC) have JIT compilers.** The ARM64 JIT (`libinterp/comp-arm64.c`) supports both macOS (Apple Silicon) and Linux (e.g. NVIDIA Jetson). Run with `emu -c1` to enable JIT compilation, `emu -c0` for interpreter only.
 
 When compiling Limbo code:
 - **Use the native `limbo` compiler** (`MacOSX/arm64/bin/limbo`) - produces portable Dis bytecode
@@ -91,6 +91,8 @@ remove a module and you update the manifest in the same commit.
 ```
 
 After that, every `git pull` triggers an automatic rebuild of stale bytecode. See `hooks/post-merge` for details.
+
+That rebuild is `mk install`, so it only recompiles a `.dis` whose mkfile names the changed header as a prerequisite (`MODULES`/`SYSMODULES` for `mkfiles/mkdis`, the rule itself in `appl/veltro`). **Include a new header in a `.b` and name it in that mkfile too.** `tools/check-mkfile-deps.py` checks every source's includes, followed as `limbo` finds them, against its mkfile (CI runs it); `-fix` adds what is missing. A mkfile that reads `mkdis` sets both lists, even empty: an unset one is inherited from the parent `mk` through the environment, as one word.
 
 **The wrong-target trap (READ THIS BEFORE COMPILING ANYTHING).** A module
 declares `PATH: con "/dis/foo.dis";` so the runtime loads `dis/foo.dis`, and its
@@ -170,7 +172,9 @@ The standard developer launch is `emu` invoked directly from a terminal — same
 
 stdout/stderr stream to the terminal, Ctrl-C exits, no signing/Gatekeeper/Translocation in the loop. `/lib/lucifer/boot.sh` is the canonical boot orchestration and is the same script the production macOS `.app` launcher invokes. See [QUICKSTART.md](QUICKSTART.md#running-for-development) for the full table and flag reference.
 
-The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` is currently untracked and authored ad-hoc — treat it as the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
+The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` (and `build-dev-bundle.ps1` on Windows) is the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
+
+To open a file in an editor for the user, run `plumb <file>` (opens it in their running Xenith, starting one if needed), falling back to `tools/xen <file>` (Xenith alone, full-window) if `plumb` fails; `tools/xen -s <file>` for sam. Both return at once; leaving the editor halts that instance. See [docs/XEN.md](docs/XEN.md).
 
 ## Inferno® Shell Differences
 
@@ -399,16 +403,109 @@ timeoutTask(ch: chan of int, ms: int)
 | `edit_test.b` | Edit operations |
 | `xenith_concurrency_test.b` | Xenith concurrent operations |
 | `xenith_exit_test.b` | Xenith exit handling |
+| `xenith_frame_test.b` | Xenith's frame (text layout and drawing) against a simulated screen: insert, delete, select, wrap, tabs, overflow, random edits; the suite is `xenith_framesuite.b` |
 | `sdl3_test.b` | SDL3 GUI backend |
 | `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
+| `tests/host/mldsa_decompose_test.sh` | ML-DSA Decompose against FIPS 204 Algorithm 36 on every input, and no divide instruction in it (it sees secret-derived values; cf. CVE-2026-22705) |
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
 | `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
+| `llmclient_proxy_test.b` | llmclient's TLS connections through an HTTP proxy (INFR-307): CONNECT for the API's host and port, Basic credentials from the proxy URL, a ClientHello naming the host inside the tunnel, a refusal reported, `no_proxy` hosts and domains dialled directly; `tests/host/profile_proxy_test.sh` checks the login profile copies the host's `HTTPS_PROXY` and `no_proxy` |
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
+| `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
+| `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
+| `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection; a chain deeper than destroy() recurses is freed whole |
+| `fdclose_test.b` | Dropping the last reference to an fd closes it |
+| `pgrp_race_test.b` | A Prog swapping its name space, fd group and dot (`pctl` FORKNS, NEWFD, `chdir`) and exiting while others read its `/prog/n/ns`, `fd` and `status`: no use-after-free, no wedged name space (INFR-373); Progs sharing a name space, one changing dot while the others resolve relative names (INFR-59) |
+| `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
+| `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
+| `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler; `tests/host/jit_fault_test.sh` runs it under `-c0` and `-c1` |
+| `jit_ownhandler_test.b` | A hardware fault in compiled code caught in the faulting callee's own frame (the trap handler takes R.FP from the JIT's register); run by `tests/host/jit_fault_test.sh` too |
+| `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
+| `jit_big_test.b` | `big` `*`, `/`, `%` and `hd` of a list of `big` give from compiled code what the interpreter gives: signs, wrapping, zero divide, the most negative `big` over -1 (it wraps); `tests/host/jit_big_test.sh` runs it under `-c0` and `-c1` |
+| `jit_real_test.b` | Real arithmetic, comparisons (a NaN, the signed zeros), conversions (half away from zero), negation and moves give from compiled code what the interpreter gives; `tests/host/jit_real_test.sh` runs it under `-c0` and `-c1` |
+| `utf21_test.b` | Runes beyond U+FFFF (U+1F680, U+20000, to U+10FFFF): one rune each from four bytes of UTF-8 and back, `s[i] = r` and `%c`, `\U` literals, bad sequences and unencodable runes to U+FFFD, `utfbytes`/`byte2char`/`char2byte`, UTF-16 surrogate pairs through convcs; run under `-c0` and `-c1` |
+| `memdraw_far_test.b` | An image whose rectangle is far from 0 in its coordinates (its top at row 700000, or -700000, 3400 pixels wide) is made, drawn on, read back and drawn from: memdraw's offset to (0,0) was an int, wrapped past 2^31 bytes of lines, and the allocation faulted (a strip far down a long Markdown document at 2x came out blank) |
+| `strcat_test.b` | A string appended to itself (`s += s`, `s = s + s`; ASCII and runes, every short length) is the string twice and leaves the heap whole: the append in place copied the new length, past the block; `tests/host/strcat_test.sh` runs it under `-c0` and `-c1` |
+| `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
+| `limbo_inline_test.b` | Code the compiler inlines: an inlined call's temporary argument outlives the use of its element; `v = f(v)` reads the old `v` |
+| `limbo_ldt_test.b` | A module taking a `ref fn` of its own functions loads another module through a module type equal to its own (INFR-310); the `ref fn` still calls through `$self` |
+| `limbo_asgcall_test.b` | `a[i] = f()` and `p.x = f()` where `f` makes a new `a` or `p`: the call is made before the element's address is found, so its result lands in the new one, not in freed memory |
+| `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
+| `jit_retslice_test.b` | A call between modules from compiled code does not end the thread's time slice, at any stack depth (a return punted to the VM after a call saw mcall's stale R.t) |
+| `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
+| `tests/host/sam_gui_test.sh` | `wm/sam` under `wm/wm`, driven by the pointer and keyboard: a window opened on the file from menu 3, a command typed, words double-clicked (two plain clicks, as SDL reports them, timed by samterm as Plan 9's; and a press marked by bit 8, as X11 reports one) and changed, the file written |
+| `hostplumb_test.b` | hostplumb(1) re-plumbing host messages under `/n/local`; the plumber refusing a message nothing can receive |
+| `tests/host/agent_delegation_test.sh` | Activity 0 delegating to a task agent through lucibridge: the task agent uses its own tools, activity 0 keeps its tools and its own session afterwards, the completion reaches activity 0 as a turn (not the human's words), each reply shown once, a message longer than one 9P message arrives whole; a task's changes to two folders promoted together; changes staged in an earlier session set aside, offered back at start (Apply/Discard), never taken over by a new task |
+| `tests/host/compaction_test.sh` | llmsrv compacting a long session (at a mark low enough to do it after every generation) does not break an agent's turn of tool calls: compaction waits for the end of a tool exchange, as a real API refuses results that answer calls no longer in the history; a chat's last exchange is kept as it was after the summary, not summarised |
+| `tests/host/luciuisrv_closed_test.sh` | A closed activity refuses every write (status, messages, resources, artifacts, urgency) and luciuisrv keeps answering: a task closed while it worked used to crash the UI server or reopen itself |
+| `tests/host/prompt_defaults_test.sh` | The agent prompts copied into `~/.infernode` follow the shipped defaults until the user edits them: every shipped version's hash is in `lib/veltro/prompt-defaults`, an unedited old copy is brought up to date at boot, an edited one is left |
+| `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
+| `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
+| `tests/host/wiki9p_test.sh` | The LLM-maintained wiki (`/mnt/wikia`, wiki9p over wikifs) against a scripted model: a reply's pages all written and listed at once, a page updated with its history kept, a command's result read on its own fid (the read waits), status answering with nothing bound on `raw`, the agent's `wiki` tool through tools9p |
+| `tests/host/xenith_rescue_test.sh` | When Xenith goes wrong, what has not been saved is kept: an internal error in a 9P request (ctl `fault`, made only with `$xenithfaults` set) answered with it, Xenith going on, a file's changes, an unnamed window's text and typing not yet committed kept in `$home/xenith.rescue`, the user told where, Dump's own file left; one in a proc that does not recover exits keeping what changed since; a Xenith started on the rescue file has the windows back with their text |
+| `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
+| `tests/host/xenith_race_test.sh` | Xenith used by a client and its user at once, where it froze or exited: a B3 in a scroll bar ends when let go (the next B3 looks rather than scrolling again), a client's `get` while the body holds typing keeps the typing, a search begun at the end of the file comes round to it, a Put of a file still loading writes all of it and an edit made while it loads goes where it was made, ctl `unlock` without a lock and a second `lock` are refused, commands after `del` in one ctl write are not run, Edit `X` with a pipe command locks each file, text reaching a window hidden under one grown to fill its column (Xenith exited), a window's text changed while an Edit pipe command runs on it kept (the Edit refused; the change and the command's output were both lost), and one changed while a later window's command in Edit `X` runs, a change made while Put writes a large file in the background leaving the window unsaved (one with `nomark` set was shown saved), an Edit run while a file loads working on all of it (`$a` put its text in the middle), `Put x` from a window with no name (a nil dereference), a change by a client with `nomark` set after an Undo emptying the redo list (Redo put the undone text back where the text no longer was); each check under a deadline; `xenith_race_helper.b` is its Limbo half |
+| `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, the document registry not taking text that begins like an image for one |
+| `icon_test.b` | The interface's glyphs (`module/icon.m`, Tabler SVGs in `icons/ui`): every glyph `icons/ui/LIST` names drawn at 16, 24, 32 and 48 pixels, its coverage growing with the area (the root's size set, not its `stroke-width`), a glyph drawn once kept, a path or a missing name refused, a painted glyph the colour asked for, a Tk image made and remade in another colour under one name |
+| `docengine_test.b` | The document registry and engines (`module/docreg.m`, `module/docengine.m`): kinds by name and magic, no engine loaded until a document of its kind is opened (and Markdown never loading Charon), each engine's sheets, painting and text, a PDF sharp at scale 200, a PDF's words where they are drawn, a PDF's links (a URI, a page by destination and by name) where they are, a PDF's ToUnicode mapping a code to several characters (a ligature's `<00660066>`), a PDF whose page box is not at 0 0 (a cropped figure's) painted with its words and links where they are in it, Markdown's words and links, Markdown longer than any one image of it (beyond the 1GB block limit) laid out and drawn a strip at a time, each strip the part of it drawn whole, documents kept apart |
+| `sheetview_test.b` | The document view (`module/sheetview.m`) on an image of its own: a PDF of three pages opened through the view's events, fitted, painted, paged, zoomed, searched, turned (points mapped back to the page), its place kept on a resize, the way it last moved; a source set in pages painted at any scale (troff's) fitted and zoomed as a PDF is, Markdown still set to the width; an HTML page painted into a band round the view (a scroll within it paints nothing, one past it keeps what it held, what is shown is the page) |
+| `tests/host/wm_test.sh` | `wm/wm` driven by the pointer: New by a click or a hold, then swept (with no motion between, as a trackpad sends), a sweep cancelled or too small, the background, click to focus, the frame's move and reshape, Move, Resize, Hide and back, Delete; where each step leaves the windows; a theme switched, the frames (fractals' among them) and the menu checked by pixel |
+| `tests/host/wm_theme_test.sh` | Every wm application under `wm/wm` through a live theme switch, by pixel: it opens bigger than its frame, its frame takes the new windowborder and its window keeps almost none of the old theme's colours (a canvas's items among them) |
+| `tests/host/wm_ghost_test.sh` | A `wm/wm` client that leaves, deleted from the menu and killed (INFR-433): wm stays up, and where its window was is wm's background again, by pixel |
+| `tests/host/wm_shell_test.sh` | `wm/shell` (what wm/wm's New starts) under `wm/wm`, typed at through `/dev/keyboard`: a line sent, `^D` as end of file, `^P` history, `^C` discarding what is typed, ESC holding input, raw mode while a program holds `/dev/consctl`, `/chan/shctl`, Left and End moving the caret and F1 and Insert typing nothing, the window gone when the shell exits (nothing of it left running) and when a `-c` command is done; `tests/wm/shell.sh` is its driver |
+| `tests/host/wm_editor_keys_test.sh` | `wm/editor` under `wm/wm`, typed at through `/dev/keyboard` (`tests/editor/keys.sh`): the arrow keys and End move the caret, F1, Insert and the page keys type nothing (they matched X11 keysyms and were typed as private-use glyphs) |
+| `tests/host/wm_cursor_test.sh` | wm/wm's cursors made SDL's on its main thread: New's cross, the arrow once swept, Delete's gunsight and the arrow when it is cancelled, logged by a shim preloaded into emu (`tests/wm/cursorshim.c`; Linux only) |
+| `tests/host/wm_size_test.sh` | Every program in `dis/wm` (found there, not listed) opens under `wm/wm` at a size that shows it: not its frame alone (tetris was 8x8), not the whole screen (coffee and memory were, sized for Lucifer's zone), a nested `wm/wm` with room for a window; the ones not opened under `wm/wm` (logon, presrender, sam's modules) skipped with the reason |
+| `tests/host/lucifer_app_test.sh` | Every program in `dis/wm` opened in Lucifer's presentation zone, one boot: still running a moment later (not reaped), drawn in the zone below its tab (wm/deb, hung making its second window, showed only its tab), its content filling the zone or centred (not in a corner, as wm/lens was), following a theme switch (photographs, images and documents excepted), wm/deb's tab divided for its Stack window (a second toplevel goes along the bottom of its app's tab, not over it), wm/editor and wm/shell taking a click and typing through `/dev/pointer` and `/dev/keyboard`; `LUCIFER_APPS="..."` opens some alone |
+| `tests/host/page_test.sh` | `wm/page` under `wm/wm`, driven by keys and the pointer, the page shown written as an image at each step: n, p, Home, End, go to, space, the wheel, a button-1 drag, the button-2 operations menu and button-3 pages menu, fit width and page, zoom, turning, two files as one, standard input, q, Markdown and HTML shown, a PDF's links followed (to a page; to a URI, through a plumber) |
+| `tests/host/xenith_doc_test.sh` | A window's document through its files (`doc/`): a PDF shown as a document (read-only body, Put refused, zoom, fit, sheet, Render, Get, find), a window open on it as text shown, Markdown set by Render, Markdown and HTML shown beside their text (Zerox) set again on Put and `doc/ctl` refresh, and with `Live` (either window's tag, or `doc/ctl` `live`) a moment after each edit, at once if edited before; `Live` in a lone text window opening one live beside it, an image, a PDF's links (`doc/links`; button 3 on one to a page goes to it, on one to a URI browses it in Xenith); refresh after typing not yet committed (typed through `/dev/keyboard`); Markdown 120000 pixels tall, more than the image pool holds, set, not refused; run with a plumber whose rules would take a web address, which a link clicked in Xenith must not reach |
+| `tests/host/plumbrules_test.sh` | `lib/sh/plumbrules`: the user's plumbing rules read before the defaults (a user rule overrides, the defaults take the rest); `load` replaces them; a rules file that does not parse is refused at load and left out at start |
+| `tests/host/charon_accept_test.sh` | What Charon's engine sends as Accept: an image fetch `image/webp` first, as browsers do, so image CDNs send WebP; a page or style sheet fetch none |
+| `tests/host/js_dom_test.sh` | `tests/js/pages/dom.html`, the DOM a page's scripts see (`lib/js/dom.js`), checked from inside a page with its scripts on; among its checks, a page asking whether CSS animates is told no (nothing does; Microsoft's sign-in waited for an `animationend` when told yes) |
+| `tests/host/js_formpost_test.sh` | A form a page's script submits by POST is posted (`form.submit()`, a submit button's `click()`), its entries url-encoded, the button named; it was only logged as unsupported, so Microsoft's sign-in went nowhere after the password |
+| `tests/host/charon_bigpost_test.sh` | A form posted with a body larger than one 9P message is sent whole, and a short post after it is not mixed with it: webfs kept only the last write to `postbody`, so a SAML response posted to OpenAthens after an institutional sign-in arrived as its tail |
+| `tests/host/js_binary_test.sh` | A page's scripts get a response's bytes as they came (`arrayBuffer()`, `blob()`, an XHR's `arraybuffer`), every byte value, and an `ArrayBuffer` posted is sent as its bytes; a UTF-8 response's text and bytes unchanged. Bytes that are not UTF-8 came back mangled, so JSTOR's sign-in check could not decode its payload |
+| `tests/host/charon_password_test.sh` | A password field's value is not in a page's files (`forms`, `dom/N/attrs`, `text`): they show `********` when it is filled, as anything with the window's files (an agent) could read them; the page's script and the form sent still have the value |
+| `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
+| `tests/host/presentation_tabstrip_test.sh` | An app in Lucifer's presentation zone (wm/tetris) has the tab strip above it, by pixel, in each of six headless boots: lucipres and presrender join the zone's wmsrv in either order, and the first join taken for lucipres gave it presrender's window, under the app (the strip blank in one boot in three) |
+| `tests/host/xenith_browse_test.sh` | Xenith browses: a URL looked at opens a browser window (the page over its text, Back Fwd Reload in the tag); Get goes to the URL in the tag; Back, Fwd and Render; a form typed into (injected click and keys); the page as files (posted where the window's `web` file says, a form submitted through `ctl` shown in the window, unposted when it closes); the same page over HTTP through webfs from a loopback server; a page's viewport the window's height (it was 600 whatever the window, cutting off JSTOR's sign-in dialog) |
+| `tests/host/xenith_image_test.sh` | Xenith opens every image format as an image through a look (B3) at its name; formats with no decoder are refused with a reason; text still opens as text |
+| `tests/host/charon_forms_test.sh` | Charon's `forms` file after a page's scripts change the document: a control moved into a form made after it is in that form and sent with it; one removed, or made and never put in the document, is not listed (Microsoft's sign-in keeps three such copies of its inputs) |
+| `tests/host/charon_formowner_test.sh` | A form's controls are the ones HTML puts in it, sent in the document's order, through Charon's files (`forms`, `submit`) and from the page's scripts (`.form`, `form.elements`, `form.submit()`): none from a template's content, a control's `form` attribute followed (to the form with that id, or to none), a field a script put first sent first |
+| `tests/host/charon_shadowlabel_test.sh` | A web component's button is labelled in Charon's `forms` and `dom/N/text` with what the page put in the component (shown through a slot), a host's text is its shadow tree's without its style sheet, a plain button keeps its label (JSTOR's sign-in buttons had none) |
+| `tests/host/charon_shadowcheck_test.sh` | A label clicked in a web component's shadow tree checks the checkbox its `for` names in that tree, not one with the same id in another component, and the component hears the change (JSTOR's terms checkbox could not be ticked) |
+| `tests/host/charon_scriptimg_test.sh` | An image a page's script puts in after the page loaded (a `data:` SVG, a file's) is fetched and shown: the page's images were sent for once, so JSTOR's logo, in a header its script makes, showed as its alt text |
+| `tests/host/charon_shadowgrid_test.sh` | A web component laid out as a grid (Pharos's layout on JSTOR's home page): a slot at the top of its shadow tree is `display: contents`, so what is slotted takes the grid areas the page names; `:root` in its sheet matches nothing there; a grid item that scrolls has no automatic minimum, so 35000px of slides do not widen the grid (JSTOR's heading, search and hero were in one cell 144px wide, then the page 35000px wide) |
+| `tests/host/charon_download_test.sh` | A page navigated to that Charon does not show (a PDF) is saved whole in `$home/Downloads` under the name Content-Disposition gives, made safe, a second beside it not over it, the path plumbed, the page saying where it went; a frame's PDF is not saved (JSTOR's Download gave only a page saying Charon does not show PDFs) |
+| `tests/host/charon_notpage_test.sh` | A link to what Charon does not show (20 MB of audio/mpeg) is saved whole in `$home/Downloads`, not parsed as a page (a podcast's megabytes were), and the page says it was saved |
+| `tests/host/wm_edit_test.sh` | `wm/edit`, Inferno's own editor (restored for programs that load `/dis/wm/edit.dis`, as `wm/task`'s Files does), under `wm/wm`, driven by the pointer and keys (`tests/edit/drive.sh`): it opens at a size that shows it on the theme's background, reading with the arrow and page keys leaves the file unchanged (Exit does not ask), text typed and saved is the file with it added and nothing more, a name that does not exist is a new file written by Save, text not saved makes Exit ask |
+| `tests/host/wm_dir_test.sh` | `wm/dir`, Inferno's file browser, under `wm/wm`, driven by the pointer (`tests/dir/drive.sh`): its icons drawn (`icon(2)`'s glyphs), a folder double-clicked opened in the same window and `..` back up, a file double-clicked with no plumber opened in `wm/edit`, with a plumber plumbed by its full name with the folder as working directory; double-clicks are two plain presses, as SDL sends them (`tk_test.b`'s DoubleClick: Tk times them, as only X11 marked one) |
+| `tests/host/ftree_test.sh` | `wm/ftree` under `wm/wm`, driven by keys, the pointer and its agent's ctl file (`tests/ftree/drive.sh`): the arrow keys move the selection and Right opens a folder (keyboard.h's keys), the agent's state file follows each change, refresh keeps what was open open, a bind made in ftree is in its own name space (FORKNS) and not its parent's, Copy and Paste into copy a file, Remove asks then removes a folder whole, `-d` refuses a bind |
+| `tests/host/icons_test.sh` | The tree's icons are `icon(2)`'s glyphs: `icons/` holds `icons/ui` (Tabler SVGs, `LIST`, `LICENSE`), Tk's cursors and the artwork coffee and `draw-example(2)` draw, nothing else; `LIST` and the SVGs agree; every glyph a program names is there; no `/icons` path or Tk `-bitmap`/`-file`/`-maskfile` a program names is missing (one missing fails the widget naming it). No emulator needed |
+| `tests/host/editor_headless_test.sh` | A Tk application with no window manager waits rather than spins (INFR-365): `wm/editor`'s `/edit/1/body` written and read back, its idle CPU time measured |
+| `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened; the user's start-up file (`lib/xen/profile`) run first, its binds in Xenith's name space |
+| `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool); arguments longer than one 9P message run the tool once, on all of them, including arguments ending exactly on a message boundary (INFR-521) |
+| `tests/host/toolctl_view_test.sh` | tools9p's control tree shows the agent's name space as it is (#1020), through `tests/tools9p/view.sh`: `/mnt/toolctl` has `ns`, `event` and `view`; `view` mounted is a tool call's root, a grant there on the next mount, read-only (remove, write, create refused); `ns` has the grant after `bindpath` and not before; `event` gives `paths` and `tools`; none of the three in a tool call's `/tool` |
+| `tests/host/lucictx_event_test.sh` | Lucifer's context zone follows tools9p's `event` file: a folder granted through `/mnt/toolctl/ctl` is drawn within 1.5s and nothing changes after (it polled every 5s) |
+| `tests/host/themefs_test.sh` | The theme's `current` and `event` served (`themefs`, lucitheme's `serve`; `tests/theme/serve.sh`): both beside the themes' files, `current` reads and writes the name, a reader of `event` gets each name written whole at any offset, a name that is no theme refused, the last name kept in the directory's file, a second `themefs` a no-op. Nothing polls the theme |
+| `tests/host/spawn_budget_test.sh` | A subagent spawned through tools9p loads the delegation budget's tools (named, and its default `plan`) and cannot load a tool outside it (INFR-486); `spawn_budget_test.b` is its Limbo half |
+| `tests/host/profile_legacykey_test.sh` | The login profile imports a plaintext key left in `~/.infernode/lib/veltro-keys` into factotum, says which file to delete, and does not bind it into the name space (INFR-347) |
+| `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
+| `tests/host/pool_nomem_test.sh` | An allocation a pool refuses is reported with its size, the reason (beyond the pool's maxsize, over the 1GB block limit, a restricted Prog, the host), the caller as image+offset for addr2line, the pool's state, and the module that asked (in the interpreter, its instruction, for the module's `.sbl`); the first ten, then every thousandth (INFR-472); `pool_nomem_helper.b` is its Limbo half |
+| `tests/host/piimage_test.sh` | `tools/mkpiimage.sh`, the release's Raspberry Pi card images, read back by a FAT32 reader of its own: each board's firmware, `config.txt` and tryboot files and not the other's, the radio's Wi-Fi firmware and Bluetooth patch in `firmware/` with `LICENCE.cypress`, the kernel as `infernode8.img`, the built `dis/`, of `lib/` `fonts/` `icons/` only what git tracks, the tree's `usr/inferno` less its test key, no control files; firmware not matching its manifest refused; `docs/BAREMETAL.md`'s `config.txt` the card's; `tools/piromcheck.py` passes each card (the boot files by FAT short name, as the boot ROM reads them; `config.txt`'s core-clock pin, second display and `kernel=`) and refuses a card with each fault a board has shown |
+| `tests/host/piimage_boot_test.sh BOARD IMAGE KERNEL` | A release's card image booted under QEMU (`raspi3b`; `raspi4b` needs QEMU 9): the card mounted, `dis/` `lib/` `fonts/` `icons/` and a writable `usr/` from it, the shell answering on the serial console, the login screen taking the framebuffer, no panic. `baremetal.yml` (bcm2837, bcm2711) and `release.yml` run it with `piromcheck.py` on the release's own images, so neither needs a board |
+| `tests/host/mail9p_imap_test.sh` | mail9p against a fake IMAP server (`tests/host/mail9p/fake_imap.py`) over TLS the client verifies, its roots the test's own CA bound over `/lib/certs`: an account's boxes, messages by UID, subject, from and body, flags set, search and archive; STARTTLS; a message composed sent through a fake SMTP server (`fake_smtp.py`) over implicit TLS and after STARTTLS, AUTH only inside TLS; a certificate naming only `localhost` refused for 127.0.0.1 (an IP is matched against `iPAddress` subjectAltNames), one from an untrusted CA refused, IMAP and SMTP servers declining STARTTLS refused, nothing sent in clear to any of them |
+| `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
+| `tests/host/release_scrub_test.sh` | `tools/release-scrub.sh`: a package staged from the tree loses `usr/inferno/keyring/default` (a test key) and keeps an empty `keyring/`; an Inferno or PEM private key left anywhere refuses the package; every package job in `release.yml` scrubs what it copied, Windows included |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
+
+Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_blankname_test.sh`: a file name with a blank in it, quoted in the tag and Put to the right file; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). `XENITH_INSIDE_PLUMB=<rules>` starts a plumber with those rules first, as a session has one. They need the SDL GUI emulator and skip on a headless build.
+
+`tools/xenith-fuzz` grinds Xenith with random use (clicks, drags, chords, the wheel, typing, and a client writing through `/mnt/xenith` at once), standalone or inside Lucifer (`-l`), then checks it still answers, that Put writes what a window holds and that undo and redo restore its text; a run that froze, lost a proc or lost text keeps its log, with the procs' stacks as source lines. `tests/xenith_fuzz.b` is the fuzzer.
 
 ## Project Structure
 
@@ -418,8 +515,11 @@ infernode/
 ├── emu/                 # Emulator source and binaries
 │   ├── MacOSX/          #   macOS emulator (o.emu binary)
 │   ├── Linux/           #   Linux emulator (build with build-linux-*.sh)
+│   ├── Nt/              #   Windows emulator (build-windows-amd64.ps1)
+│   ├── Android/         #   Android platform glue (build-android-*.sh)
+│   ├── iOS/             #   iOS platform glue (build-ios-*.sh)
 │   └── port/            #   Platform-independent emulator source
-├── appl/                # Limbo application source (~700 .b files)
+├── appl/                # Limbo application source (~900 .b files)
 │   ├── cmd/             #   Command-line utilities (incl. mail9p — IMAP/SMTP at /mnt/mail)
 │   ├── lib/             #   Library modules
 │   ├── veltro/          #   Veltro AI agent system
@@ -428,11 +528,22 @@ infernode/
 │   ├── wm/              #   Window manager
 │   └── svc/             #   Services (httpd, etc.)
 ├── module/              # Limbo module interfaces (.m files)
+├── os/                  # NATIVE (bare-metal) kernel: os/arm64 shared AArch64,
+│                        #   os/bcm2837 Raspberry Pi 3B+, os/port portable kernel,
+│                        #   os/ip TCP/IP, os/init the Dis that boots it,
+│                        #   os/bcm drivers the Pi SoCs share, os/bcm2711
+│                        #   Raspberry Pi 4B, os/virt QEMU AArch64 virt,
+│                        #   os/virtio virtio drivers, os/fb framebuffer console.
+│                        #   Built and tested ONLY via tests/host/baremetal_test.sh;
+│                        #   status and roadmap in os/bcm2837/README.md.
+│                        #   RISC-V: os/riscv64 (arch), os/riscvvirt (QEMU virt),
+│                        #   os/mpfs (PolarFire SoC: BeagleV-Fire, Icicle Kit),
+│                        #   via tests/host/baremetal_riscv64_test.sh;
+│                        #   see os/riscv64/README.md.
 ├── tests/               # Unit tests (Limbo + shell)
 │   ├── host/            #   Host-side shell tests
 │   ├── inferno/         #   Inferno-side shell tests
 │   ├── testing/         #   Testing framework self-tests
-│   └── agent-harness/   #   Ring-fenced eval-harness gateway (see Ring-fence rule)
 ├── dis/                 # Compiled Dis bytecode (build product, NOT tracked)
 ├── lib/                 # Runtime data (fonts, shell profile, etc.)
 │   └── veltro/          #   Veltro tools, agents, reminders
@@ -442,16 +553,15 @@ infernode/
 ├── hooks/               # Git hooks (run ./hooks/install.sh after clone)
 ├── mkfiles/             # Shared mk build rules
 ├── mkconfig             # Build configuration (auto-detects platform)
-├── .github/workflows/   # CI/CD (ci, security, scorecard)
+├── .github/workflows/   # CI/CD (build, test, release, security and more)
 └── build-*.sh           # Platform build scripts
 ```
 
-## Ring-fence rule (tests/agent-harness/)
+## External harness ring-fence
 
-`tests/agent-harness/` holds the in-tree pieces of the external evaluation
-harness — currently `serve-agent` (an Inferno rc profile that starts the
-headless agent stack) and `serve-agent.sh` (its host launcher). These
-files are **testing-only and must never ship in a release**:
+Adversarial campaign infrastructure lives in
+`infernode-os/infernode-escape-room`, with InferNode pinned as a dependency.
+It is **testing-only and must never ship in an InferNode release**:
 
 - The release tarballs / .app bundle / DMG / .zip would each expose
   `/mnt/ui` over a 9P port if they included these files. That is not the
@@ -467,16 +577,13 @@ Two CI guards enforce this, and they are load-bearing:
    `find` (bash) or `Get-ChildItem` (PowerShell) over the stage dir and
    fails the build if anything matches `serve-agent*` or `*agent-harness*`.
 2. **`.github/workflows/ci.yml`** — a separate `ring-fence` job runs on
-   every PR and fails if those patterns appear in the source tree
-   outside `tests/agent-harness/`.
+   every PR and fails if those patterns appear anywhere in the source tree.
 
-**Do not move serve-agent files into `lib/sh/` or any path that the
-release copy loop touches** (currently `dis lib fonts module services
-locale usr mnt`, in `release.yml`). If the harness ever genuinely
-becomes a shippable feature, that decision needs explicit design work
+**Do not copy serve-agent files into this repository.** If the harness ever
+genuinely becomes a shippable feature, that decision needs explicit design work
 and the CI guards updated together — never silently.
 
-The subagent trajectory logging added in `appl/veltro/{spawn,subagent}.b`
+The subagent trajectory logging added in `appl/veltro/tools/spawn.b` and `appl/veltro/subagent.b`
 is *not* ring-fenced: it's a general observability improvement to the
 agent stack, useful outside the harness, and ships normally.
 

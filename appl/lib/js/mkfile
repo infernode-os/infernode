@@ -1,0 +1,37 @@
+<$ROOT/mkconfig
+
+TARG=\
+	jslex.dis\
+	jsparse.dis\
+	jscheck.dis\
+	jsre.dis\
+	js.dis\
+	jsjitt.dis\
+
+SYSMODULES=\
+	sys.m\
+	math.m\
+	daytime.m\
+	keyring.m\
+	jslex.m\
+	jsparse.m\
+	jscheck.m\
+	jsre.m\
+	js.m\
+	web/dom.m\
+	web/originfs.m\
+	dis.m\
+	draw.m\
+
+DISBIN=$ROOT/dis/lib/js
+
+MODULES=\
+	jsjit.m\
+
+<$ROOT/mkfiles/mkdis
+
+jsre.dis:	jsrx.b
+
+# js.dis is one module from several fragments
+js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b jsregexp.b jsdate.b jsproxy.b jsbigint.b jstyped.b jsiter.b jsdispose.b jsmod.b jsdom.b jsjit.b jsjit.m
+jsjitt.dis:	jsjit.m

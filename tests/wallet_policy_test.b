@@ -20,6 +20,8 @@ include "sys.m";
 
 include "draw.m";
 
+include "sh.m";
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -29,13 +31,8 @@ WalletPolicyTest: module
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-Command: module
-{
-	init: fn(ctxt: ref Draw->Context, argv: list of string);
-};
-
 SRCFILE: con "/tests/wallet_policy_test.b";
-W: con "/n/wallet";
+W: con "/mnt/wallet";
 
 passed := 0;
 failed := 0;
@@ -220,6 +217,17 @@ testGasBudget(t: ref T)
 		"malformed gas budget rejected");
 }
 
+testApprovalMandatory(t: ref T)
+{
+	ctl := rd(W + "/policy/ctl");
+	t.assert(contains(ctl, "requireapproval on"),
+		"account reports mandatory approval");
+	t.assert(wr(W + "/policy/ctl", "requireapproval off") <= 0,
+		"trusted controller cannot disable approval");
+	t.assert(wr(W + "/policy/ctl", "requireapproval on") > 0,
+		"legacy explicit approval-on command remains accepted");
+}
+
 testNetworkPinning(t: ref T)
 {
 	wr(W + "/policy/ctl", "budget 500 2000 USDC");
@@ -286,6 +294,53 @@ testApprovalFlow(t: ref T)
 }
 
 #
+# event: each reader told "pending" when the list awaiting approval
+# changes (a payment queued, one approved or denied); nothing polls.
+#
+testPendingEvent(t: ref T)
+{
+	e1 := sys->open(W + "/event", Sys->OREAD);
+	e2 := sys->open(W + "/event", Sys->OREAD);
+	if(e1 == nil || e2 == nil) {
+		t.fatal(sys->sprint("cannot open event: %r"));
+		return;
+	}
+	(res, err) := roundtrip(W + "/policy/authorize", authreq("eip155:11155111", "100"));
+	t.assert(err == nil && hasprefix(res, "pending:"), "authorization queued");
+	t.assertseq(evread(e1), "pending", "a queued payment is an event");
+	t.assertseq(evread(e2), "pending", "every reader of event is told");
+	if(len res > 8)
+		t.assert(wr(W + "/ctl", "deny " + res[8:]) > 0, "deny accepted");
+	t.assertseq(evread(e1), "pending", "a denied payment is an event");
+	t.assertseq(evread(e2), "pending", "the second reader is told of it too, once");
+}
+
+# The next event, or "timeout" after 5s.
+evread(fd: ref Sys->FD): string
+{
+	c := chan of string;
+	spawn evreader(fd, c);
+	spawn evtimeout(c);
+	return <-c;
+}
+
+evreader(fd: ref Sys->FD, c: chan of string)
+{
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	s := "eof";
+	if(n > 0)
+		s = strip(string buf[0:n]);
+	alt { c <-= s => ; * => ; }
+}
+
+evtimeout(c: chan of string)
+{
+	sys->sleep(5000);
+	alt { c <-= "timeout" => ; * => ; }
+}
+
+#
 # Denial and expiry are reported to the requester on its own fid.
 #
 testDenial(t: ref T)
@@ -330,6 +385,28 @@ testNoSignOracle(t: ref T)
 	t.assert(ok < 0, "the raw sign file is not served");
 }
 
+# Start factotum (wallet9p keeps its keys there) and wallet9p.  Both are
+# started through Sh, not loaded as a Command: this module's type is
+# structurally the same as Command, so limbo gives the two one import
+# table, and the test functions passed by reference (run(name, testfn))
+# land in it; loading a command as a Command would fail to link.
+startserver(): string
+{
+	sh := load Sh Sh->PATH;
+	if(sh == nil)
+		return sys->sprint("cannot load sh: %r");
+	(ok, nil) := sys->stat("/mnt/factotum/rpc");
+	err: string;
+	# A factotum service of its own: #sfactotum is one for the whole
+	# emulator, and another test's factotum may still hold it.
+	fcmd := "/dis/auth/factotum.dis -s factotum." + string sys->pctl(0, nil);
+	if(ok < 0 && (err = sh->system(nil, fcmd)) != nil)
+		return "factotum: " + err;
+	if((err = sh->system(nil, "/dis/veltro/wallet9p.dis")) != nil)
+		return "wallet9p: " + err;
+	return nil;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -344,12 +421,18 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	# wallet9p must already be mounted at /n/wallet (the host harness
-	# starts factotum and the server before running this).
+	# The host harness (tests/host/wallet9p_test.sh) starts factotum and
+	# wallet9p before running this.  Run on its own, as the test runner
+	# does, it starts them itself, in its own namespace.
 	(ok, nil) := sys->stat(W + "/accounts");
 	if(ok < 0) {
-		sys->fprint(sys->fildes(2), "wallet9p not mounted at %s\n", W);
-		raise "fail:no wallet9p";
+		if((err := startserver()) != nil)
+			raise "fail:" + err;
+		(ok, nil) = sys->stat(W + "/accounts");
+		if(ok < 0) {
+			sys->fprint(sys->fildes(2), "wallet9p not mounted at %s\n", W);
+			raise "fail:no wallet9p";
+		}
 	}
 
 	run("Account/Setup", testAccountSetup);
@@ -358,10 +441,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Budget/Uint256", testBudgetUint256);
 	run("Budget/CurrencyFailsClosed", testBudgetCurrencyFailsClosed);
 	run("Budget/Gas", testGasBudget);
+	run("Approval/Mandatory", testApprovalMandatory);
 	run("Network/Pinning", testNetworkPinning);
 	run("Authorize/InjectionRejected", testInjectionRejected);
 	run("Authorize/ApprovalFlow", testApprovalFlow);
 	run("Authorize/Denial", testDenial);
+	run("Approval/Event", testPendingEvent);
 	run("Sign/OracleRemoved", testNoSignOracle);
 
 	if(testing->summary(passed, failed, skipped) > 0)

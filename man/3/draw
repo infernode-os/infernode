@@ -351,7 +351,9 @@ aligned with
 in
 .IR dst .
 The ellipse is drawn with thickness
-.RI 1+2× thick .
+.RI 1+2× thick ,
+its edges anti-aliased (see
+.BR G ).
 .IP
 If the high bit of
 .I alpha
@@ -385,6 +387,7 @@ the corresponding sector using the image
 The 
 .I thick 
 field is ignored, but must be non-negative.
+A filled ellipse or sector keeps hard edges.
 .HP
 .B f
 .IR id [4]
@@ -398,6 +401,84 @@ Free the resources associated with the image
 Free the the screen with the specified
 .IR id .
 Windows on the screen must be freed separately.
+.HP
+.B G
+.IR dstid [4]
+.IR srcid [4]
+.IR sp [2*4]
+.IR wind [4]
+.IR n [2]
+.IR path [ n ]
+.br
+Fill a path, anti-aliased: each pixel gets the source through the
+exact fraction of it the path covers, as through a
+.B GREY8
+mask.
+.I Wind
+is as for
+.BR P :
+1 fills by the even-odd rule, anything else by the non-zero rule.
+The source is aligned so that
+.I sp
+corresponds to the pixel holding the path's first point.
+The path is whatever
+.B U
+messages have sent since the last
+.B G
+or
+.BR g ,
+followed by
+.IR path .
+.IP
+A path is a sequence of verbs, each a byte and its points:
+.B M
+(move),
+.B L
+(line),
+.B Q
+(quadratic curve: control point, end),
+.B C
+(cubic curve: two control points, end),
+.B E
+(a closed ellipse: centre, then the two semi-axes), and
+.B Z
+(close).
+Coordinates are fixed point, 256 to a pixel, the pixel
+.RI ( x ,\  y )
+covering
+.RI [ x ,\  x +1)
+by
+.RI [ y ,\  y +1).
+Each coordinate is written as its difference from the one before it
+(x from x, y from y, starting at 0), except the semi-axes of
+.BR E ,
+which are written as they are, all as zigzag varints: seven bits a
+byte, the least significant first, the top bit set on every byte but
+the last, the sign in the lowest bit of the value.
+Every subpath is closed for filling.
+.HP
+.B g
+.IR dstid [4]
+.IR srcid [4]
+.IR sp [2*4]
+.IR width [4]
+.IR cap [4]
+.IR join [4]
+.IR miter [4]
+.IR n [2]
+.IR path [ n ]
+.br
+Stroke a path, as
+.B G
+fills one: the outline of a line
+.I width
+wide (fixed point) along it, ended by
+.I cap
+(0 butt, 1 round, 2 square) and joined by
+.I join
+(0 miter, 1 round, 2 bevel), a miter longer than
+.I miter
+(fixed point) widths being bevelled.
 .HP
 .B i
 .IR id [4]
@@ -482,6 +563,10 @@ See
 in
 .IR draw-image (2)
 for more details.
+A line is anti-aliased (see
+.BR G ),
+except that a horizontal or vertical line with square ends is exactly
+the rectangle of pixels it covers.
 .HP
 .B N
 .IR id [4]
@@ -567,6 +652,8 @@ specify the line endings for the first and
 last point on the polygon.
 All interior lines have rounded ends
 to make smooth joins.
+The polygon is one anti-aliased stroke (see
+.BR G ).
 .HP
 .B P
 .IR dstid [4]
@@ -595,9 +682,10 @@ If
 is
 .BR 1 ,
 a pixel is inside if the winding number is odd.
-Complementary values (0 or ~1) cause outside pixels to be filled.
 The meaning of other values is undefined.
 The polygon is closed with a line if necessary.
+A filled polygon keeps hard edges, so that filled shapes sharing an edge
+meet without a seam.
 .HP
 .B r
 .IR id [4]
@@ -702,6 +790,18 @@ The window is specified by the list of
 image
 .IR id s
 are moved as a group, maintaining their own order within the stack.
+.HP
+.B U
+.IR n [2]
+.IR path [ n ]
+.br
+Add
+.I path
+to the path of the next
+.B G
+or
+.B g
+message, for a path longer than one message can hold.
 .HP
 .B v
 .br

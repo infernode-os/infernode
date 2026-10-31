@@ -161,16 +161,21 @@ log(s: string)
 # [private]
 # Load root CA DER files from /lib/certs/
 
+# The store is built whole and then published: it was marked loaded
+# before it was read, so a handshake running beside the first one (two
+# fonts fetched at once) found it partly read and the root missing.  Two
+# first handshakes may both read it; each sees all of it.
 load_trust_store()
 {
 	if(trust_store_loaded)
 		return;
-	trust_store_loaded = 1;
-
+	ts: list of ref TrustedRoot;
 	certdir := "/lib/certs";
 	fd := sys->open(certdir, Sys->OREAD);
-	if(fd == nil)
+	if(fd == nil) {
+		trust_store_loaded = 1;
 		return;
+	}
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -190,9 +195,11 @@ load_trust_store()
 			(cerr, c) := Certificate.decode(s.tobe_signed);
 			if(cerr != "")
 				continue;
-			trust_store = ref TrustedRoot(s, c) :: trust_store;
+			ts = ref TrustedRoot(s, c) :: ts;
 		}
 	}
+	trust_store = ts;
+	trust_store_loaded = 1;
 }
 
 # [private]
@@ -241,12 +248,13 @@ load_crl_store()
 {
 	if(crl_store_loaded)
 		return;
-	crl_store_loaded = 1;
-
+	cs: list of ref CRLEntry;	# built whole, then published, as the trust store
 	crldir := "/lib/crls";
 	fd := sys->open(crldir, Sys->OREAD);
-	if(fd == nil)
+	if(fd == nil) {
+		crl_store_loaded = 1;
 		return;
+	}
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -265,9 +273,11 @@ load_crl_store()
 			(cerr, crl) := CRL.decode(s.tobe_signed);
 			if(cerr != "")
 				continue;
-			crl_store = ref CRLEntry(s, crl) :: crl_store;
+			cs = ref CRLEntry(s, crl) :: cs;
 		}
 	}
+	crl_store = cs;
+	crl_store_loaded = 1;
 }
 
 # [private]
@@ -284,7 +294,7 @@ check_revoked(cert: ref Certificate): (int, string)
 		# Match CRL issuer to certificate issuer
 		if(entry.crl.issuer.equal(cert.issuer)) {
 			# Skip expired CRLs (next_update == 0 means no expiry)
-			if(entry.crl.next_update != 0 && entry.crl.next_update < now) {
+			if(entry.crl.next_update != big 0 && entry.crl.next_update < big now) {
 				l = tl l;
 				continue;
 			}
@@ -411,18 +421,40 @@ Signed.sign(s: self ref Signed, sk: ref PrivateKey, hash: int): (string, array o
 # RSA PKCS#1 v1.5 verification: decrypt signature and compare DigestInfo suffix
 rsa_pkcs1_verify(signature: array of byte, pk: ref PKCS->RSAKey, digestinfo: array of byte): int
 {
-	if(len signature < 2)
+	# signature is the BIT STRING content: unused-bits byte, then the octets
+	if(len signature < 2 || int signature[0] != 0)
 		return 0;
-	(derr, decrypted) := pkcs->rsa_decrypt(signature[1:], pk, 1);
-	if(derr != "")
+	return pkcs1v15_verify(signature[1:], pk, digestinfo);
+}
+
+# [private]
+# EMSA-PKCS1-v1_5 verification (RFC 8017 section 8.2.2): recompute the
+# whole encoded message 00 01 FF..FF 00 DigestInfo and compare it
+# exactly. Comparing only a suffix, or accepting short or non-FF
+# padding, admits Bleichenbacher-style forgeries.
+
+pkcs1v15_verify(sig: array of byte, pk: ref PKCS->RSAKey, digestinfo: array of byte): int
+{
+	k := pk.modlen;
+	if(len sig != k || len digestinfo > k - 11)
 		return 0;
-	if(len decrypted < len digestinfo)
+	x := IPint.bebytestoip(sig);
+	if(x.cmp(pk.modulus) >= 0)
 		return 0;
-	off := len decrypted - len digestinfo;
-	for(i := 0; i < len digestinfo; i++)
-		if(decrypted[off + i] != digestinfo[i])
+	yb := x.expmod(pk.exponent, pk.modulus).iptobebytes();
+	if(len yb > k)
+		return 0;
+	em := array [k] of {* => byte 0};
+	em[k - len yb:] = yb;
+	if(em[0] != byte 0 || em[1] != byte 1)
+		return 0;
+	pad := k - 3 - len digestinfo;
+	for(i := 2; i < 2 + pad; i++)
+		if(em[i] != byte 16rFF)
 			return 0;
-	return 1;
+	if(em[2 + pad] != byte 0)
+		return 0;
+	return bytesequal(em[3 + pad:], digestinfo);
 }
 
 Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
@@ -999,7 +1031,7 @@ Certificate.tostring(c: self ref Certificate): string
 
 Certificate.is_expired(c: self ref Certificate, date: int): int
 {
-	if(date > c.validity.not_after || date < c.validity.not_before)
+	if(big date > c.validity.not_after || big date < c.validity.not_before)
 		return 1;
 
 	return 0;
@@ -1231,6 +1263,9 @@ pack_ava(a: ref AVA): ref Elem
 }
 
 # [private]
+# Validity, per RFC 5280 4.1.2.5: each of notBefore and notAfter is a Time,
+# a CHOICE of UTCTime and GeneralizedTime.  CAs use UTCTime through 2049 and
+# GeneralizedTime from 2050, and a conforming implementation must accept both.
 
 parse_validity(e: ref Elem): (int, ref Validity)
 {
@@ -1240,11 +1275,11 @@ parse:
 		if(!ok || len el != 2)
 			break parse;
 		v := ref Validity;
-		(ok, v.not_before) = parse_time(hd el, UTCTime);
+		(ok, v.not_before) = parse_time(hd el, 0);
 		if(!ok)
 			break parse;
 		el = tl el;
-		(ok, v.not_after) = parse_time(hd el, UTCTime);
+		(ok, v.not_after) = parse_time(hd el, 0);
 		if(!ok)
 			break parse;
 		return (1, v);
@@ -1255,11 +1290,11 @@ parse:
 }
 
 # [private]
-# standard says only UTC Time allowed for TBS Certificate, but there is exception of
-# GeneralizedTime for CRL and Attribute Certificate. Parsing is based on format of
-# UTCTime, GeneralizedTime or undetermined (any int not UTCTime or GeneralizedTime).
+# Parse a time as format: UTCTime, GeneralizedTime, or either (any other
+# int; RFC 5280's Time CHOICE).  Times are seconds since the epoch, GMT, as
+# big: a certificate's dates run well past 2038, where an int ends.
 
-parse_time(e: ref Elem, format: int): (int, int)
+parse_time(e: ref Elem, format: int): (int, big)
 {
 parse:
 	for(;;) {
@@ -1272,199 +1307,295 @@ parse:
 			break parse;
 		if(format == GeneralizedTime && e.tag.num != GeneralizedTime)
 			break parse; 
-		t := decode_time(date, e.tag.num);
-		if(t < 0)
+		t: big;
+		(ok, t) = decode_time(date, e.tag.num);
+		if(!ok)
 			break parse;
 		return (1, t);
 	}
 	if(X509_DEBUG)
 		log("parse_time: syntax error");
-	return (0, -1);
+	return (0, big 0);
 }
 
 # [private]
-# decode a BER encoded UTC or Generalized time into epoch (seconds since 1/1/1970 GMT)
-# UTC time format: YYMMDDhhmm[ss](Z|(+|-)hhmm)
-# Generalized time format: YYYYMMDDhhmm[ss.s(...)](Z|(+|-)hhmm[ss.s(...))
+# Decode a BER encoded UTC or Generalized time into seconds since
+# 1970-01-01 00:00:00 GMT.  Returns (ok, seconds).
+# UTC time format: YYMMDDhhmm[ss](Z|(+|-)hhmm); YY >= 50 is 19YY, else 20YY
+# (RFC 5280 4.1.2.5.1).
+# Generalized time format: YYYYMMDDhh[mm[ss[(.|,)f...]]][Z|(+|-)hh[mm]]
+# (X.680 46; RFC 5280 4.1.2.5.2 narrows it to YYYYMMDDhhmmssZ, which is
+# accepted along with the rest).  A time with no zone is taken as GMT.
 
-decode_time(date: string, format: int): int
+decode_time(date: string, format: int): (int, big)
 {
-	time := ref Daytime->Tm;
+	year, mon, mday, hour, min, sec: int;
+	i := 0;
+	n := len date;
 parse:
 	for(;;) {
-    		i := 0;
 		if(format == UTCTime) {
-			if(len date < 11)
+			if(n < 11)
 				break parse;
-			time.year = get2(date, i);
-	   		if(time.year < 0)
-        			break parse;    
-			if(time.year < 70)
-        			time.year += 100;
-			i += 2;
+			year = get2(date, 0);
+			if(year < 0)
+				break parse;
+			if(year < 50)
+				year += 2000;
+			else
+				year += 1900;
+			i = 2;
 		}
 		else {
-			if(len date < 13)
+			if(n < 10)
 				break parse;
-			time.year = get2(date, i);
-			if(time.year-19 < 0)
+			c := get2(date, 0);
+			y := get2(date, 2);
+			if(c < 0 || y < 0)
 				break parse;
-			time.year = (time.year - 19)*100;
-			i += 2;
-			time.year += get2(date, i);
-			i += 2;
+			year = c*100 + y;
+			i = 4;
 		}
-		time.mon = get2(date, i) - 1;
-		if(time.mon < 0 || time.mon > 11)
+		mon = get2(date, i);
+		if(mon < 1 || mon > 12)
 			break parse;
 		i += 2;
-		time.mday = get2(date, i);
-		if(time.mday < 1 || time.mday > 31)
+		mday = get2(date, i);
+		if(mday < 1 || mday > monthdays(year, mon))
 			break parse;
 		i += 2;
-		time.hour = get2(date, i);
-		if(time.hour < 0 || time.hour > 23)
+		hour = get2(date, i);
+		if(hour < 0 || hour > 23)
 			break parse;
 		i += 2;
-		time.min = get2(date, i);
-		if(time.min < 0 || time.min > 59)
-			break parse;
-		i += 2;
-		if(int date[i] >= '0' && int date[i] <= '9') {
-			if(len date < i+3)
-            			break parse;
-			time.sec = get2(date, i);
-			if(time.sec < 0 || time.sec > 59)
-				break parse;
-			i += 2;
-			if(format == GeneralizedTime) {
-				if((len date < i+3) || int date[i++] != '.')
-					break parse;
-				# ignore rest
-				ig := int date[i];
-				while(ig >= '0' && ig <= '9' && i++ < len date) {
-					ig = int date[i];
-				}
-			}
-		}
-		else {
-			time.sec = 0;
-		}    
-		zf := int date[i];
-		if(zf != 'Z' && zf != '+' && zf != '-')
-			break parse;
-		if(zf == 'Z') {
-			if(len date != i+1)
-				break parse;
-			time.tzoff = 0;
-		}
-		else {   
-			if(len date < i + 3)
-				break parse;
-			time.tzoff = get2(date, i+1);
-			if(time.tzoff < 0 || time.tzoff > 23)
-				break parse;
-			i += 2;
-			min := get2(date, i);
+		min = 0;
+		sec = 0;
+		if(format == UTCTime || isdigits(date, i, 2)) {
+			min = get2(date, i);
 			if(min < 0 || min > 59)
 				break parse;
 			i += 2;
-			sec := 0;
-			if(i != len date) {
-				if(format == UTCTime || len date < i+4)
-					break parse;
+			if(isdigits(date, i, 2)) {
 				sec = get2(date, i);
+				if(sec < 0 || sec > 60)		# 60: a leap second
+					break parse;
 				i += 2;
-				# ignore the rest
+				if(format != UTCTime && i < n && (date[i] == '.' || date[i] == ',')) {
+					# a fraction of a second: dropped
+					i++;
+					if(!isdigits(date, i, 1))
+						break parse;
+					while(i < n && date[i] >= '0' && date[i] <= '9')
+						i++;
+				}
 			}
-			time.tzoff = (time.tzoff*60 + min)*60 + sec;
-			if(zf == '-')
-				time.tzoff = -time.tzoff;
 		}
-		return daytime->tm2epoch(time);    
+		tzoff := 0;
+		if(i == n) {
+			if(format == UTCTime)	# UTCTime always gives its zone
+				break parse;
+		}
+		else if(date[i] == 'Z') {
+			if(++i != n)
+				break parse;
+		}
+		else if(date[i] == '+' || date[i] == '-') {
+			sign := 1;
+			if(date[i] == '-')
+				sign = -1;
+			i++;
+			if(!isdigits(date, i, 2))
+				break parse;
+			zh := get2(date, i);
+			i += 2;
+			zm := 0;
+			if(i < n || format == UTCTime) {
+				if(!isdigits(date, i, 2))
+					break parse;
+				zm = get2(date, i);
+				i += 2;
+			}
+			if(i != n || zh > 23 || zm > 59)
+				break parse;
+			tzoff = sign*(zh*60 + zm)*60;
+		}
+		else
+			break parse;
+		t := big days_from_civil(year, mon, mday) * big 86400
+			+ big (hour*3600 + min*60 + sec) - big tzoff;
+		return (1, t);
 	}
 	if(X509_DEBUG)
-		log("decode_time: syntax error: " +
-		sys->sprint("year=%d mon=%d mday=%d hour=%d min=%d, sec=%d", 
-		time.year, time.mon, time.mday, time.hour, time.min, time.sec));
-	return -1;
+		log("decode_time: syntax error: " + date +
+		sys->sprint(" (year=%d mon=%d mday=%d hour=%d min=%d sec=%d)", 
+		year, mon, mday, hour, min, sec));
+	return (0, big 0);
 }
 
 # [private]
-# pack as UTC time
 
-pack_validity(v: ref Validity): ref Elem
+isdigits(s: string, i, n: int): int
 {
-	el: list of ref Elem;
-	el = ref Elem(
-			Tag(Universal, UTCTime, 0), 
-			ref Value.String(pack_time(v.not_before, UTCTime))
-		) :: nil;
-	el = ref Elem(
-			Tag(Universal, UTCTime, 0), 
-			ref Value.String(pack_time(v.not_after, UTCTime))
-		) :: el;
-	return ref Elem(Tag(Universal, SEQUENCE, 1), ref Value.Seq(el));
+	if(i < 0 || i+n > len s)
+		return 0;
+	for(; n > 0; n--) {
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+		i++;
+	}
+	return 1;
 }
 
 # [private]
-# Format must be either UTCTime or GeneralizedTime
-# TODO: convert to coordinate time
+# days in month mon (1-12) of year
 
-pack_time(t: int, format: int): string
+monthdays(year, mon: int): int
 {
-	date := array [32] of byte;
-	tm := daytime->gmt(t);
+	case mon {
+	2 =>
+		if(year%4 == 0 && (year%100 != 0 || year%400 == 0))
+			return 29;
+		return 28;
+	4 or 6 or 9 or 11 =>
+		return 30;
+	}
+	return 31;
+}
+
+# [private]
+# Days since 1970-01-01 of the proleptic Gregorian date year-mon-mday
+# (mon 1-12), and back.  Howard Hinnant's algorithms; exact for any year
+# an int holds, with no loop and no table.
+
+days_from_civil(year, mon, mday: int): int
+{
+	if(mon <= 2)
+		year--;
+	era := year;
+	if(era < 0)
+		era -= 399;
+	era /= 400;
+	yoe := year - era*400;				# [0, 399]
+	mp := (mon + 9) % 12;				# March is 0
+	doy := (153*mp + 2)/5 + mday - 1;		# [0, 365]
+	doe := yoe*365 + yoe/4 - yoe/100 + doy;		# [0, 146096]
+	return era*146097 + doe - 719468;
+}
+
+civil_from_days(z: int): (int, int, int)
+{
+	z += 719468;
+	era := z;
+	if(era < 0)
+		era -= 146096;
+	era /= 146097;
+	doe := z - era*146097;
+	yoe := (doe - doe/1460 + doe/36524 - doe/146096)/365;
+	y := yoe + era*400;
+	doy := doe - (365*yoe + yoe/4 - yoe/100);
+	mp := (5*doy + 2)/153;
+	d := doy - (153*mp + 2)/5 + 1;
+	m := mp + 3;
+	if(m > 12)
+		m -= 12;
+	if(m <= 2)
+		y++;
+	return (y, m, d);
+}
+
+# [private]
+# A Daytime->Tm, in GMT, for a time in seconds since the epoch, good for
+# any time a certificate can hold (Daytime's own gmt takes an int).
+
+bgmt(t: big): ref Daytime->Tm
+{
+	days := t / big 86400;
+	secs := int (t - days*big 86400);
+	if(secs < 0) {
+		secs += 86400;
+		days--;
+	}
+	(y, m, d) := civil_from_days(int days);
+	tm := ref Daytime->Tm;
+	tm.year = y - 1900;
+	tm.mon = m - 1;
+	tm.mday = d;
+	tm.hour = secs/3600;
+	tm.min = (secs/60)%60;
+	tm.sec = secs%60;
+	tm.wday = int ((days%big 7 + big 11)%big 7);	# 1970-01-01 was a Thursday
+	tm.yday = days_from_civil(y, m, d) - days_from_civil(y, 1, 1);
+	tm.zone = "GMT";
+	tm.tzoff = 0;
+	return tm;
+}
+
+# [private]
+# The time as text: in local time when Daytime can say it, else GMT.
+
+timetext(t: big, local: int): string
+{
+	if(local && t >= big -16r7FFFFFFF && t <= big 16r7FFFFFFF)
+		return daytime->text(daytime->local(int t));
+	return daytime->text(bgmt(t));
+}
+
+# [private]
+# pack a time, in GMT, as RFC 5280 4.1.2.5 encodes it:
+# UTCTime YYMMDDhhmmssZ, or GeneralizedTime YYYYMMDDhhmmssZ
+
+pack_time(t: big, format: int): string
+{
+	date := array [16] of byte;
+	tm := bgmt(t);
+	year := tm.year + 1900;
 
 	i := 0;
 	if(format == UTCTime) {
-		i = put2(date, tm.year, i);
+		if(year < 1950 || year > 2049)
+			return nil;
+		i = put2(date, year%100, i);
 	}
 	else { # GeneralizedTime
-		i = put2(date, 19 + tm.year/100, i);
-		i = put2(date, tm.year%100, i);
+		if(year < 0 || year > 9999)
+			return nil;
+		i = put2(date, year/100, i);
+		i = put2(date, year%100, i);
 	}
-	i = put2(date, tm.mon, i);
+	i = put2(date, tm.mon+1, i);
 	i = put2(date, tm.mday, i);
 	i = put2(date, tm.hour, i);
 	i = put2(date, tm.min, i);
-	if(tm.sec != 0) {
-		if(format == UTCTime)
-			i = put2(date, tm.sec, i);
-		else {
-			i = put2(date, tm.sec, i);
-			date[i++] = byte '.';	
-			date[i++] = byte 0;
-		}
-	}
-	if(tm.tzoff == 0) {
-		date[i++] = byte 'Z';
-	}
-	else {
-		off := tm.tzoff;
-		if(tm.tzoff < 0) {
-			off = -off;
-			date[i++] = byte '-';
-		}
-		else {
-			date[i++] = byte '+';
-		}
-		hoff := int (off/3600);
-		moff := int ((off%3600)/60);
-		soff := int ((off%3600)%60);
-		i = put2(date, hoff, i);
-		i = put2(date, moff, i);
-		if(soff) {
-			if(format == UTCTime)
-				i = put2(date, soff, i);
-			else {
-				i = put2(date, soff, i);
-				date[i++] = byte '.';	
-				date[i++] = byte 0;
-			}
-		}
-	}
+	i = put2(date, tm.sec, i);
+	date[i++] = byte 'Z';
 	return string date[0:i];
+}
+
+# [private]
+# a Time (RFC 5280 4.1.2.5): UTCTime through 2049, GeneralizedTime after
+
+pack_timeelem(t: big): ref Elem
+{
+	format := UTCTime;
+	s := pack_time(t, UTCTime);
+	if(s == nil) {
+		format = GeneralizedTime;
+		s = pack_time(t, GeneralizedTime);
+		if(s == nil)
+			return nil;
+	}
+	return ref Elem(Tag(Universal, format, 0), ref Value.String(s));
+}
+
+# [private]
+
+pack_validity(v: ref Validity): ref Elem
+{
+	nb := pack_timeelem(v.not_before);
+	na := pack_timeelem(v.not_after);
+	if(nb == nil || na == nil)
+		return nil;
+	return ref Elem(Tag(Universal, SEQUENCE, 1), ref Value.Seq(nb :: na :: nil));
 }
 
 # [private]
@@ -1767,15 +1898,15 @@ Validity.tostring(v: self ref Validity, format: string): string
 	s: string;
 	if(format == "local") {
 		s = "\n\t\tnot_before[local]: ";
-	 	s += daytime->text(daytime->local(v.not_before));
+	 	s += timetext(v.not_before, 1);
 		s += "\n\t\tnot_after[local]: ";
-		s += daytime->text(daytime->local(v.not_after));
+		s += timetext(v.not_after, 1);
 	}
 	else if(format == "gmt") {
 		s = "\n\t\tnot_before[gmt]: ";
-	 	s += daytime->text(daytime->gmt(v.not_before));
+	 	s += timetext(v.not_before, 0);
 		s += "\n\t\tnot_after[gmt]: ";
-		s += daytime->text(daytime->gmt(v.not_after));
+		s += timetext(v.not_after, 0);
 	}
 	else
 		s += "unknown format: " + format;
@@ -1866,86 +1997,321 @@ Extension.tostring(e: self ref Extension): string
 # 
 
 # [public]
-# Verify a decoded certificate chain in order of root to user. This is useful for 
-# non_ASN.1 encoding of certificates, e.g. in SSL. Return (0, error string) if 
-# verification failure or (1, "") if verification ok
+# Verify a certificate chain as presented by a TLS server (leaf first,
+# intermediates in any order, duplicates and extra certificates allowed:
+# RFC 8446 section 4.4.2). Succeeds only when a path from the leaf ends at
+# a root in the trust store (/lib/certs). Return (1, "") on success or
+# (0, reason).
 
 verify_certchain(cs: list of array of byte): (int, string)
 {
-	lsc: list of (ref Signed, ref Certificate);
-
-	l := cs;
-	while(l != nil) {
-		(err, s) := Signed.decode(hd l); 
-		if(err != "") 
-			return (0, err);
+	nodes: list of ref Node;
+	for(l := cs; l != nil; l = tl l) {
+		der := hd l;
+		if(seen(nodes, der))
+			continue;
+		(err, s) := Signed.decode(der);
+		if(err != "")
+			return (0, "certificate: " + err);
 		c: ref Certificate;
 		(err, c) = Certificate.decode(s.tobe_signed);
 		if(err != "")
-			return (0, err);		
-		lsc = (s, c) :: lsc;
-		l = tl l;
+			return (0, "certificate: " + err);
+		nodes = ref Node(der, s, c) :: nodes;
 	}
-	# lsc is in issuer-first order (cons reversal of TLS leaf-first order)
-	return verify_certpath(lsc);
+	if(nodes == nil)
+		return (0, "no certificates");
+	l2: list of ref Node;
+	for(; nodes != nil; nodes = tl nodes)
+		l2 = hd nodes :: l2;	# back to presented order
+	return verify_leaf(hd l2, tl l2);
 }
 
-# [private]
-# along certificate path; first certificate is root
+# [public]
+# The same, for a decoded path given root first (the historical interface).
+# The order is only a hint: the path is rebuilt from the leaf.
 
 verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 {
-	(s, c) := hd sc;
-	(err, id, pk) := c.subject_pkinfo.getPublicKey();
-	if(err != "")
-		return (0, err);
+	l: list of ref Node;
+	for(; sc != nil; sc = tl sc) {
+		(s, c) := hd sc;
+		l = ref Node(s.tobe_signed, s, c) :: l;	# reversed: leaf first
+	}
+	if(l == nil)
+		return (0, "no certificates");
+	return verify_leaf(hd l, tl l);
+}
+
+# [private]
+# Chain validation, RFC 5280 section 6 reduced to what TLS server
+# authentication needs: signatures, validity, basicConstraints, keyUsage,
+# pathLenConstraint, CRLs, and termination at a trust anchor. It fails
+# closed: an unsupported signature algorithm is an error, not a pass.
+
+MAXPATH: con 8;		# intermediates between leaf and trust anchor
+
+Node: adt {
+	der:	array of byte;
+	s:	ref Signed;
+	c:	ref Certificate;
+};
+
+verify_leaf(leaf: ref Node, pool: list of ref Node): (int, string)
+{
+	if(!is_validtime(leaf.c.validity))
+		return (0, "certificate expired or not yet valid: " + leaf.c.subject.tostring());
+	(revoked, reason) := check_revoked(leaf.c);
+	if(revoked)
+		return (0, reason);
+	return findpath(leaf, pool, 0, leaf :: nil);
+}
+
+# n is accepted; find its issuer. depth counts the intermediates already
+# on the path below n's issuer (0 when n is the leaf).
+findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node): (int, string)
+{
+	if(is_anchor(n))
+		return (1, "");
+	if(depth > MAXPATH)
+		return (0, "certificate path too long");
+	lasterr := "no trusted root CA for " + n.c.issuer.tostring();
+
+	# a trust anchor that issued n
+	load_trust_store();
+	for(t := trust_store; t != nil; t = tl t) {
+		tr := hd t;
+		if(!tr.cert.subject.equal(n.c.issuer))
+			continue;
+		(ok, err) := verify_issued(n.s, tr.cert);
+		if(ok)
+			return (1, "");
+		lasterr = "trust anchor " + tr.cert.subject.tostring() + ": " + err;
+	}
+
+	# a presented intermediate that issued n; backtrack across alternatives
+	# (cross-signed intermediates present more than one candidate)
+	for(p := pool; p != nil; p = tl p) {
+		cand := hd p;
+		if(onpath(path, cand) || !cand.c.subject.equal(n.c.issuer))
+			continue;
+		err := check_ca(cand.c, depth);
+		if(err == nil) {
+			(ok, e) := verify_issued(n.s, cand.c);
+			if(!ok)
+				err = e;
+		}
+		if(err == nil) {
+			(revoked, reason) := check_revoked(cand.c);
+			if(revoked)
+				err = reason;
+		}
+		if(err == nil) {
+			(ok, e) := findpath(cand, pool, depth+1, cand :: path);
+			if(ok)
+				return (1, "");
+			err = e;
+		}
+		lasterr = cand.c.subject.tostring() + ": " + err;
+	}
+	return (0, lasterr);
+}
+
+# n is itself in the trust store (the server sent the root, or is one)
+is_anchor(n: ref Node): int
+{
+	load_trust_store();
+	for(t := trust_store; t != nil; t = tl t)
+		if(bytesequal((hd t).signed.tobe_signed, n.s.tobe_signed))
+			return 1;
+	return 0;
+}
+
+onpath(path: list of ref Node, n: ref Node): int
+{
+	for(; path != nil; path = tl path)
+		if(bytesequal((hd path).s.tobe_signed, n.s.tobe_signed))
+			return 1;
+	return 0;
+}
+
+seen(l: list of ref Node, der: array of byte): int
+{
+	for(; l != nil; l = tl l)
+		if(bytesequal((hd l).der, der))
+			return 1;
+	return 0;
+}
+
+bytesequal(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+# May c issue certificates at this depth? nil if so, else why not.
+check_ca(c: ref Certificate, depth: int): string
+{
 	if(!is_validtime(c.validity))
-		return (0, "validity expired");
-
-	if(c.issuer.equal(c.subject)) {
-		# self-signed root: verify signature against own key
-		if(!s.verify(pk, 0))
-			return (0, "root signature verification failure");
-	} else {
-		# Look up issuer in trust store
-		trusted := find_trusted_root(c.issuer);
-		if(trusted != nil) {
-			(rerr, nil, rpk) := trusted.cert.subject_pkinfo.getPublicKey();
-			if(rerr == "" && sig_algo_supported(s, rpk)) {
-				if(!s.verify(rpk, 0))
-					return (0, "trust anchor: signature verification failure");
-			}
+		return "issuer certificate expired or not yet valid";
+	ca := 0;
+	pathlen := -1;
+	bc := 0;
+	for(l := c.exts; l != nil; l = tl l) {
+		e := hd l;
+		if(oideq(e.oid, OID_BASICCONSTRAINTS)) {
+			bc = 1;
+			(ok, isca, plen) := parse_basicconstraints(e.value);
+			if(!ok)
+				return "bad basicConstraints";
+			ca = isca;
+			pathlen = plen;
+		} else if(oideq(e.oid, OID_KEYUSAGE)) {
+			(ok, certsign) := parse_keycertsign(e.value);
+			if(!ok)
+				return "bad keyUsage";
+			if(!certsign)
+				return "issuer keyUsage lacks keyCertSign";
 		}
-		# If no trusted root found, continue (graceful degradation)
 	}
+	if(!bc || !ca)
+		return "issuer is not a CA (basicConstraints)";
+	if(pathlen >= 0 && depth > pathlen)
+		return "issuer pathLenConstraint exceeded";
+	return nil;
+}
 
-	sc = tl sc;
-	while(sc != nil) {
-		(ns, nc) := hd sc;
-		(err, id, pk) = c.subject_pkinfo.getPublicKey();
-		if(err != "")
-			return (0, err);
-		if(!is_validtime(nc.validity))
-			return (0, "validity expired");
-		if(!nc.issuer.equal(c.subject))
-			return (0, "issuer mismatch");
-		# Only verify if we support the signature algorithm.
-		# For EC keys, we support P-256/SHA-256 and P-384/SHA-384.
-		# Unsupported algorithms are skipped rather than
-		# treated as verification failures.
-		if(sig_algo_supported(ns, pk)) {
-			if(!ns.verify(pk, 0))
-				return (0, "signature verification failure");
+OID_BASICCONSTRAINTS := array [] of {2,5,29,19};
+OID_KEYUSAGE := array [] of {2,5,29,15};
+OID_SHA512RSA := array [] of {1,2,840,113549,1,1,13};
+OID_ECDSASHA512 := array [] of {1,2,840,10045,4,3,4};
+
+oideq(o: ref Oid, nums: array of int): int
+{
+	if(o == nil || len o.nums != len nums)
+		return 0;
+	for(i := 0; i < len nums; i++)
+		if(o.nums[i] != nums[i])
+			return 0;
+	return 1;
+}
+
+# BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLenConstraint INTEGER OPTIONAL }
+# returns (ok, ca, pathlen or -1)
+parse_basicconstraints(der: array of byte): (int, int, int)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "")
+		return (0, 0, -1);
+	(ok, el) := e.is_seq();
+	if(!ok)
+		return (0, 0, -1);
+	ca := 0;
+	pathlen := -1;
+	if(el != nil && (hd el).tag.num == BOOLEAN) {
+		pick v := (hd el).val {
+		Bool or Int =>
+			ca = v.v != 0;
+		* =>
+			return (0, 0, -1);
 		}
-		# Check certificate revocation against loaded CRLs
-		(revoked, reason) := check_revoked(nc);
-		if(revoked)
-			return (0, reason);
-		(s, c) = (ns, nc);
-		sc = tl sc;
+		el = tl el;
 	}
+	if(el != nil) {
+		(ok, pathlen) = (hd el).is_int();
+		if(!ok || pathlen < 0)
+			return (0, 0, -1);
+	}
+	return (1, ca, pathlen);
+}
 
-	return (1, "");
+# KeyUsage ::= BIT STRING; keyCertSign is bit 5 (counting from the most
+# significant bit of the first byte). returns (ok, keycertsign)
+parse_keycertsign(der: array of byte): (int, int)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "")
+		return (0, 0);
+	(ok, nil, bits) := e.is_bitstring();
+	if(!ok)
+		return (0, 0);
+	if(len bits == 0)
+		return (1, 0);
+	return (1, (int bits[0] & 16r04) != 0);
+}
+
+# Verify that child was signed by the key in issuer. Fails closed.
+verify_issued(child: ref Signed, issuer: ref Certificate): (int, string)
+{
+	(err, nil, pk) := issuer.subject_pkinfo.getPublicKey();
+	if(err != "")
+		return (0, "issuer key: " + err);
+	algid := asn1->oid_lookup(child.alg.oid, pkcs->objIdTab);
+	pick key := pk {
+	RSA =>
+		if(algid == PKCS->id_sha256WithRSAEncryption || algid == PKCS->id_sha384WithRSAEncryption) {
+			if(child.verify(pk, 0))
+				return (1, "");
+			return (0, "RSA signature verification failure");
+		}
+		if(oideq(child.alg.oid, OID_SHA512RSA)) {
+			digest := array [Keyring->SHA512dlen] of byte;
+			keyring->sha512(child.tobe_signed, len child.tobe_signed, digest, nil);
+			pfx := array [] of {
+				byte 16r30, byte 16r51, byte 16r30, byte 16r0d,
+				byte 16r06, byte 16r09, byte 16r60, byte 16r86,
+				byte 16r48, byte 16r01, byte 16r65, byte 16r03,
+				byte 16r04, byte 16r02, byte 16r03, byte 16r05,
+				byte 16r00, byte 16r04, byte 16r40
+			};
+			di := array [len pfx + len digest] of byte;
+			di[0:] = pfx;
+			di[len pfx:] = digest;
+			if(rsa_pkcs1_verify(child.signature, key.pk, di))
+				return (1, "");
+			return (0, "RSA signature verification failure");
+		}
+	EC =>
+		digest: array of byte;
+		if(algid == PKCS->id_ecdsa_sha256) {
+			digest = array [Keyring->SHA256dlen] of byte;
+			keyring->sha256(child.tobe_signed, len child.tobe_signed, digest, nil);
+		} else if(algid == PKCS->id_ecdsa_sha384) {
+			digest = array [Keyring->SHA384dlen] of byte;
+			keyring->sha384(child.tobe_signed, len child.tobe_signed, digest, nil);
+		} else if(oideq(child.alg.oid, OID_ECDSASHA512)) {
+			digest = array [Keyring->SHA512dlen] of byte;
+			keyring->sha512(child.tobe_signed, len child.tobe_signed, digest, nil);
+		} else
+			return (0, "unsupported signature algorithm " + child.alg.oid.tostring());
+		# ECDSA takes the hash truncated or zero-extended to the curve
+		# size; the libsec verifiers do that for any hash length
+		case len key.point {
+		65 =>
+			(serr, raw) := decode_ecdsa_sig(child.signature, 32);
+			if(serr != nil)
+				return (0, "ECDSA signature: " + serr);
+			pt := keyring->p256_make_point(key.point);
+			if(pt == nil)
+				return (0, "bad P-256 key");
+			if(keyring->p256_ecdsa_verify(pt, digest, raw))
+				return (1, "");
+		97 =>
+			(serr, raw) := decode_ecdsa_sig(child.signature, 48);
+			if(serr != nil)
+				return (0, "ECDSA signature: " + serr);
+			if(keyring->p384_ecdsa_verify(key.point, digest, raw))
+				return (1, "");
+		* =>
+			return (0, "unsupported EC key size");
+		}
+		return (0, "ECDSA signature verification failure");
+	}
+	return (0, "unsupported signature algorithm " + child.alg.oid.tostring());
 }
 
 # [private]
@@ -1985,7 +2351,7 @@ is_validtime(validity: ref Validity): int
 	now := daytime->now();
 
 	# need some conversion here
-	if(now < validity.not_before || now > validity.not_after)
+	if(big now < validity.not_before || big now > validity.not_after)
 		return 0;
 
 	return 1;	
@@ -2046,14 +2412,15 @@ parse:
 			break parse;
 		el = tl el;
 		# this update
-		(ok, c.this_update) = parse_time(hd el, UTCTime);
+		(ok, c.this_update) = parse_time(hd el, 0);
 		if(!ok)
 			break parse;
 		el = tl el;
 		# OPTIONAL, must be in order
 		# next_update
-		if(el != nil) {
-			(ok, c.next_update) = parse_time(hd el, UTCTime);
+		if(el != nil && (hd el).tag.class == Universal
+		&& ((hd el).tag.num == UTCTime || (hd el).tag.num == GeneralizedTime)) {
+			(ok, c.next_update) = parse_time(hd el, 0);
 			if(!ok)
 				break parse;
 			el = tl el;
@@ -2103,22 +2470,16 @@ pack:
 			break pack;
 		el = e_issuer :: el;
 		# validity
-		e_this_update := pack_time(c.this_update, UTCTime);
+		e_this_update := pack_timeelem(c.this_update);
 		if(e_this_update == nil)
 			break pack;
-		el = ref Elem(
-			Tag(Universal, ASN1->UTCTime, 0), 
-			ref Value.String(e_this_update)
-			) :: el;
+		el = e_this_update :: el;
 		# next crl update
-		if(c.next_update != 0) {
-			e_next_update := pack_time(c.next_update, UTCTime);
+		if(c.next_update != big 0) {
+			e_next_update := pack_timeelem(c.next_update);
 			if(e_next_update == nil)
 				break pack;
-			el = ref Elem(
-				Tag(Universal, ASN1->UTCTime, 0),
-				ref Value.String(e_next_update)
-				) :: el;
+			el = e_next_update :: el;
 		}
 		# revoked certificates
 		if(c.revoked_certs != nil) {
@@ -2157,8 +2518,8 @@ CRL.tostring(c: self ref CRL): string
 	s += "\nVersion: " + string c.version;
 	s += "\nSignature: " + c.sig.tostring();
 	s += "\nIssuer: " + c.issuer.tostring();
-	s += "\nThis Update: " + daytime->text(daytime->local(c.this_update));
-	s += "\nNext Update: " + daytime->text(daytime->local(c.next_update));
+	s += "\nThis Update: " + timetext(c.this_update, 1);
+	s += "\nNext Update: " + timetext(c.next_update, 1);
 	s += "\nRevoked Certificates: ";
 	rcs := c.revoked_certs;
 	while(rcs != nil) {
@@ -2195,8 +2556,8 @@ RevokedCert.tostring(rc: self ref RevokedCert): string
 	if(rc.user_cert == nil)
 		return s + " [Bad Format]\n";
 	s += "\nSerial Number: " + rc.user_cert.iptostr(10);
-	if(rc.revoc_date != 0)
-		s += "\nRevocation Date: " + daytime->text(daytime->local(rc.revoc_date));
+	if(rc.revoc_date != big 0)
+		s += "\nRevocation Date: " + timetext(rc.revoc_date, 1);
 	if(rc.exts != nil) {
 		exts := rc.exts;
 		while(exts != nil) {
@@ -2273,7 +2634,7 @@ parse:
 			break parse;
 		c.user_cert = IPint.bebytestoip(uc);
 		el = tl el;
-		(ok, c.revoc_date) = parse_time(hd el, UTCTime);
+		(ok, c.revoc_date) = parse_time(hd el, 0);
 		if(!ok)
 			break parse;
 		el = tl el;
@@ -2298,14 +2659,11 @@ pack_revoked(r: ref RevokedCert): ref Elem
 			return nil;		
 		el = e_exts :: el;
 	}
-	if(r.revoc_date != 0) {
-		e_date := pack_time(r.revoc_date, UTCTime);
+	if(r.revoc_date != big 0) {
+		e_date := pack_timeelem(r.revoc_date);
 		if(e_date == nil)
 			return nil;
-		el = ref Elem(
-				Tag(Universal, ASN1->UTCTime, 0),
-				ref Value.String(e_date)
-			) :: el;
+		el = e_date :: el;
 	}
 	if(r.user_cert == nil)
 		return nil;
@@ -2680,7 +3038,7 @@ ExtClass.tostring(et: self ref ExtClass): string
 		s += "\n\thold with oid = " + t.oid.tostring();
 	InvalidityDate =>
 		s = "Invalidity Date: ";
-		s += "\n\tdate = " + daytime->text(daytime->local(t.date));
+		s += "\n\tdate = " + timetext(t.date, 1);
 	CRLDistributionPoint =>
 		s = "CRL Distribution Point: ";
 		ps := t.ps;
@@ -2926,7 +3284,7 @@ encode_privateKeyUsage(c: ref ExtClass.PrivateKeyUsage): (string, array of byte)
 	p := c.period;
 	if(p == nil)
 		return ("encode private key usage: imcomplete data", nil);
-	if(p.not_after > 0) {
+	if(p.not_after > big 0) {
 		t := pack_time(p.not_after, GeneralizedTime);
 		e = ref Elem(Tag(Universal, GeneralizedTime, 0), ref Value.String(t));
 		(ok, e) = pack_context(e, 1);
@@ -2934,7 +3292,7 @@ encode_privateKeyUsage(c: ref ExtClass.PrivateKeyUsage): (string, array of byte)
 			return ("encode private key usage: illegal context", nil);
 		el = e :: nil;
 	}
-	if(p.not_before > 0) {
+	if(p.not_before > big 0) {
 		t := pack_time(p.not_before, GeneralizedTime);
 		e = ref Elem(Tag(Universal, GeneralizedTime, 0), ref Value.String(t));
 		(ok, e) = pack_context(e, 0);
@@ -2972,6 +3330,7 @@ parse:
 			if(!ok)
 				break parse;
 			l_pm = (idp, sdp) :: l_pm;
+			el = tl el;
 		}
 		# reverse the order
 		l: list of (ref Oid, ref Oid);
@@ -3030,7 +3389,7 @@ parse:
 			(ok, e_pi) = (hd el).is_seq();
 			if(!ok || len e_pi > 2 || len e_pi < 1)
 				break parse;
-			pi: ref PolicyInfo;	
+			pi := ref PolicyInfo(nil, nil);
 			(ok, pi.oid) = (hd e_pi).is_oid();
 			if(!ok)
 				break parse;
@@ -3043,7 +3402,7 @@ parse:
 					break parse;
 				l_pq: list of ref PolicyQualifier;
 				while(e_pq != nil) {
-					pq: ref PolicyQualifier;
+					pq := ref PolicyQualifier(nil, nil);
 					(ok, pq.oid) = (hd e_pq).is_oid();
 					if(!ok || pq.oid == nil)
 						break parse;
@@ -3063,6 +3422,7 @@ parse:
 				}
 			}
 			l_pi = pi :: l_pi;
+			el = tl el;
 		}
 		# reverse the order
 		l: list of ref PolicyInfo;
@@ -3333,6 +3693,7 @@ pack_gsubtrees(gs: list of ref GSubtree): (int, ref Elem)
 		if(!ok)
 			return (0, nil);
 		l = e :: l;
+		gs = tl gs;
 	}
 	while(l != nil) {
 		el = (hd l) :: el;
@@ -3563,8 +3924,8 @@ parse:
 		(ok, date) := all.is_time();
 		if(!ok)
 			break parse;
-		t := decode_time(date, GeneralizedTime);
-		if(t < 0)
+		(tok, t) := decode_time(date, GeneralizedTime);
+		if(!tok)
 			break parse;
 		return ("", ref ExtClass.InvalidityDate(t));
 	}
@@ -3601,7 +3962,8 @@ parse:
 			if(!ok)
 				break parse;
 			dpl = dp :: dpl;
-		} 
+			el = tl el;
+		}
 		# reverse order
 		while(dpl != nil) {
 			l = (hd dpl) :: l;
@@ -3625,6 +3987,7 @@ encode_cRLDistributionPoint(c: ref ExtClass.CRLDistributionPoint): (string, arra
 		if(!ok)
 			return ("crl distribution point: encoding error", nil);
 		l = e :: l;
+		dpl = tl dpl;
 	}
 	while(l != nil) {
 		el = (hd l) :: el;
@@ -3645,7 +4008,7 @@ parse:
 			break parse;
 		if(!ok || len el > 3 || len el < 1)
 			break parse;
-		dp: ref DistrPoint;
+		dp := ref DistrPoint(nil, 0, nil);
 		e = hd el;
 		# get optional distribution point name
 		(ok, e) = is_context(e, 0);
@@ -3737,13 +4100,29 @@ parse:
 	for(;;) {
 		# parse CHOICE
 		ok := 0;
-		(ok, e) = is_context(e, 0);
-		if(ok) {
-			lg: list of ref GeneralName;
-			(ok, lg) = parse_lgname(e);
-			if(!ok)
+		# fullName [0] IMPLICIT GeneralNames: the content is the
+		# GeneralName elements themselves, one or more of them
+		if(e != nil && e.tag.class == ASN1->Context && e.tag.num == 0) {
+			pick v := e.val {
+			Octets =>
+				(derr, gel) := asn1->decode_seq(v.bytes);
+				if(derr != "" || gel == nil)
+					break parse;
+				lg: list of ref GeneralName;
+				for(; gel != nil; gel = tl gel) {
+					g: ref GeneralName;
+					(ok, g) = parse_gname(hd gel);
+					if(!ok)
+						break parse;
+					lg = g :: lg;
+				}
+				rl: list of ref GeneralName;
+				for(; lg != nil; lg = tl lg)
+					rl = hd lg :: rl;
+				return (1, ref DistrPointName(rl, nil));
+			* =>
 				break parse;
-			return (1, ref DistrPointName(lg, nil));
+			}
 		}
 		(ok, e) = is_context(e, 1);
 		if(!ok)
@@ -4101,6 +4480,8 @@ DistrPoint.tostring(dp: self ref DistrPoint): string
 
 is_context(e: ref Elem, num: int): (int, ref Elem)
 {
+	if(e == nil)
+		return (0, nil);
 	if(e.tag.class == ASN1->Context && e.tag.num == num) {
 		pick v := e.val {
 		Octets =>

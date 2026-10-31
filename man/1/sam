@@ -1,0 +1,355 @@
+.TH SAM 1
+.SH NAME
+sam \- screen editor with structural regular expressions
+.SH SYNOPSIS
+.B wm/sam
+[
+.B -d
+]
+[
+.I file ...
+]
+.SH DESCRIPTION
+.I Sam
+is Plan 9's multi-file editor, running entirely inside Inferno.
+As on Plan 9 it is two programs joined by a byte pipe speaking the sam
+terminal protocol: the terminal
+.RB ( /dis/wm/sam.dis )
+draws the windows and handles the mouse and keyboard, and the host
+.RB ( /dis/wm/samengine.dis )
+holds the files and runs the command language.
+The terminal loads the host as a module and spawns it; no host
+operating system binary is involved.
+.PP
+The terminal follows Plan 9's samterm
+.RI ( flayer.c ,
+.IR menu.c ,
+.IR scroll.c
+and the mouse half of
+.IR main.c ).
+Sam is a single window.
+The command window runs across its top fifth; every window on a file is
+a layer inside sam's window, and layers overlap.
+The current layer, the one typing goes to, is in front with a heavy
+border; the others have a thin one.
+Button 1 in a layer that is not current makes it current; in the
+current layer it selects.
+Buttons 2 and 3 act on the current layer wherever they are pressed.
+.PP
+Each layer has a scroll bar at its left showing the part of the file in
+the layer.
+In the current layer's scroll bar, on release, button 1 moves the text
+back as many lines as the pointer is below the top of the bar, button 3
+brings the line beside the pointer to the top, and button 2 moves to
+the place in the file corresponding to the pointer's height.
+.PP
+When a new layer is needed the cursor becomes a box and a rectangle is
+swept out with button 3.
+A click instead of a sweep takes the whole window or, while the command
+window has one layer, the part of it on the clicked side of the command
+window.
+Another button abandons the sweep, and a rectangle no bigger than 100
+by 40 pixels makes no layer.
+When sam's window is resized every layer is scaled with it.
+.PP
+The files named on the command line are put in the file menu; the
+first is the current file, but it is read, and a layer swept for it,
+only when a command first uses it.
+As in sam, after any command that makes another file current or reads
+the current one, the terminal brings that file's layer to the front
+(sweeping one if it has none); while the command window is current, the
+file's layer only comes to the front, and typing stays in the command
+window.
+The command window, listed in the menu as
+.BR ~~sam~~ ,
+takes commands typed at its end; a command runs when its line is ended
+with a newline.
+Output and error messages (which begin with
+.BR ? )
+appear in the command window.
+.PP
+Button 2 in a file window offers
+.BR cut ,
+.BR paste ,
+.BR snarf ,
+.B look
+(search for the literal selected text) and, once there is one,
+.BI / regexp
+(search again for the last regular expression).
+In the command window the last item is
+.BR send ,
+which runs the selected text as a command.
+Button 3 offers
+.B new
+(sweep a layer for an unnamed file),
+.BR zerox ,
+.BR resize ,
+.B close
+and
+.BR write ,
+followed by the file names.
+For
+.BR zerox ,
+.BR resize ,
+.B close
+and
+.B write
+the cursor becomes a bullseye and the layer to act on is chosen with
+button 3;
+.B zerox
+then sweeps another layer on the same file (at most five per file),
+.B resize
+sweeps a new place for the layer, and
+.B close
+closes the layer, or the file if it is its last.
+While the host is busy the commands are shown in parentheses and
+ignored.
+As in sam, each file name is preceded by
+.B \'
+if the file is modified, by
+.BR - ,
+.B +
+or
+.B *
+for no, one or several windows, and by
+.B .
+if it is the current file.
+Choosing a file with no window sweeps one; choosing one with windows
+brings its front layer up, or the next if that one is current.
+Each menu appears with its last choice under the pointer.
+A double click selects a word, a line, or the text between matching
+brackets or quotes.
+The snarf buffer is
+.BR /chan/snarf ,
+shared with other applications.
+.PP
+The
+.B -d
+option traces the terminal protocol to
+.B samterm.log
+in the current directory.
+.SS Addresses
+An address selects a range of text, as in Plan 9
+.IR sam (1):
+.TF "/regexp/, ?regexp?"
+.TP
+.B .
+dot, the current selection
+.TP
+.I n
+line
+.I n
+.TP
+.BI # n
+the empty string after character
+.I n
+.TP
+.B $
+the end of the file
+.TP
+.B '
+the mark set by
+.B k
+.TP
+.BI / regexp / ", ?" regexp ?
+the next match forwards or backwards, wrapping around the file
+.TP
+.BI \(dq regexp \(dq
+dot in the file whose menu line matches
+.TP
+.IB a1 + a2 ", " a1 - a2
+.I a2
+evaluated forwards or backwards from
+.I a1
+(a missing
+.I a2
+is 1, a line)
+.TP
+.IB a1 , a2 ", " a1 ; a2
+from the start of
+.I a1
+to the end of
+.IR a2 ;
+with
+.B ;
+dot is set to
+.I a1
+before
+.I a2
+is evaluated.
+A missing
+.I a1
+is 0 and a missing
+.I a2
+is
+.BR $ .
+.PD
+.SS Regular expressions
+Regular expressions are sam's: leftmost longest,
+.B ^
+and
+.B $
+match at the ends of every line,
+.B \en
+matches a newline and
+.B .
+never does.
+An empty regular expression means the last one used.
+.SS Commands
+Commands apply to the current file; the default address of most is dot.
+.TF "x/regexp/ command"
+.TP
+.BI a/ text /
+Append text after the range.
+.I Text
+may instead follow on lines of its own, ended by a line holding only
+.BR . .
+.TP
+.BI i/ text / ", c/" text /
+Insert before, or change, the range.
+.TP
+.B d
+Delete the range.
+.TP
+.BI s n / regexp / text /[g]
+Substitute
+.I text
+for the
+.IR n th
+(default first) match in the range, or all matches with
+.BR g .
+In
+.IR text ,
+.B &
+is the match and
+.BI \e d
+the
+.IR d th
+parenthesised subexpression.
+.TP
+.BI m " address" ", t" " address"
+Move or copy the range after
+.IR address .
+.TP
+.B p
+Print the range and set dot to it.
+.TP
+.BR = " [" # ]
+Print the line and character address of the range.
+.TP
+.B k
+Set the mark to the range.
+.TP
+.BI x/ regexp / " command"
+For each match in the range, set dot to it and run
+.IR command .
+With no regular expression, each line.
+.TP
+.BI y/ regexp / " command"
+The same for the text between matches.
+.TP
+.BI g/ regexp / " command" ", v/" regexp / " command"
+Run
+.I command
+if the range does (does not) contain a match.
+.TP
+.BI X/ regexp / " command" ", Y/" regexp / " command"
+Run
+.I command
+in each file whose menu line does (does not) match.
+.TP
+.BI { " commands " }
+Run each command, one per line, with dot set to the range.
+.TP
+.BI "u " n
+Undo the last
+.I n
+(default 1) changes to the file;
+.BI u- n
+redoes them.
+.TP
+.BI "w " file
+Write the range (default the whole file).
+.TP
+.BI "e " file ", r " file
+Replace the file's text, or the range, with
+.IR file 's
+contents.
+.TP
+.BI "f " name
+Set the file's name.
+.TP
+.BI "b " file ", B " "file ..."
+Make a file current, or load files into the menu.
+.TP
+.BI "D " "file ..."
+Remove files from the menu.
+.TP
+.B n
+List the files, flagging
+.B '
+modified,
+.B +
+open in a window and
+.B .
+current.
+.TP
+.B q
+Quit.
+.TP
+.BI ! cmd ", <" cmd ", >" cmd ", |" cmd
+Run
+.I cmd
+with
+.IR sh (1):
+its output replaces the range
+.RB ( < ),
+the range is its input
+.RB ( > ),
+or both
+.RB ( | ).
+.TP
+.BI "cd " dir
+Change directory.
+.PD
+.PP
+As in sam, all the changes a command makes are addressed in the text as
+it was when the command began and are applied together when it ends,
+so they must be in sequence;
+.B u
+undoes a whole command.
+Closing a modified file, or quitting with modified files, warns once.
+.SH FILES
+.TF /chan/snarf
+.TP
+.B /chan/snarf
+the shared snarf buffer
+.PD
+.SH SOURCE
+.B /appl/wm/sam.b
+.br
+.B /appl/wm/samtk.b
+.br
+.B /appl/wm/samstub.b
+.br
+.B /appl/wm/samengine.b
+.br
+.B /appl/wm/samrx.b
+.SH SEE ALSO
+.IR acme (1),
+.IR sh (1)
+.br
+Rob Pike,
+``The Text Editor
+.IR sam '',
+and
+``Structural Regular Expressions''.
+.SH BUGS
+Button 2 has no
+.B plumb
+or
+.B exch
+(Plan 9's
+.BR <rio> )
+items: sam's snarf buffer is already the system's, and the terminal
+protocol has no plumbing message.

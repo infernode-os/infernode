@@ -13,9 +13,7 @@ No emulator models a Pi 5: QEMU master has no `raspi5`. So this port goes
 the other way from the Pi 4's: the board first, and each step asks the
 hardware instead of assuming.
 
-Not done or not proved: the display (no monitor has been attached, so
-`fb.c` here has run only to "no framebuffer"); GPIO edge events, which
-have never fired; memory above 4GB, which the allocator's int-sized pools
+Not done or not proved: two screens at once; memory above 4GB, which the allocator's int-sized pools
 could not use; audio, since a Pi 5 has no analogue output. The D0
 stepping (2GB boards) moves the pin mux and is not handled. An overnight
 soak with everything loaded has not been run.

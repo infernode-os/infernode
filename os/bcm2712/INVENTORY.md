@@ -38,7 +38,7 @@ has the feature, which is what parity means.
 | GPIO edge events | yes | `gpiorp1.c` | **Proved** across a jumper, GPIO 5 to GPIO 0 |
 | `#P` temperature, throttling | yes | shared | **Proved** |
 | Serial recovery loader | yes | `loader/` | Standalone **proved**; embedded copy built |
-| Framebuffer, desktop | yes | shared | **Proved** on HDMI0, one monitor: Lucifer, right size and colours. Needs `framebuffer_depth=32`. The mode comes from the EDID, by the firmware-KMS tags (`../bcm/fb.c`). HDMI1 and a second screen not tried |
+| Framebuffer, desktop | yes | shared | **Proved** on HDMI0 and HDMI1, one monitor at a time: Lucifer, right size and colours. Needs `framebuffer_depth=32`. The mode comes from the EDID, by the firmware-KMS tags (`../bcm/fb.c`). Two screens at once not tried |
 | Audio (PWM jack) | yes | none | No jack on a Pi 5; HDMI audio or I2S instead |
 | DSI panel, touch | yes | none | Not done; DSI is RP1's here |
 | Camera device (`#V`) | simulated | shared | Compiled in; simulated sensor only |
@@ -56,7 +56,7 @@ has the feature, which is what parity means.
 | Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | Written; not watched by anyone |
 | Debug UART connector | `uart10` | Not done |
 | Second console | RP1 UART4, GPIO 12, 13 (pins 32, 33) | **Proved**, in and out |
-| Two HDMI, DSI/CSI connectors | HVS, RP1 | HDMI by firmware framebuffer only |
+| Two HDMI, DSI/CSI connectors | HVS, RP1 | Either HDMI, one at a time. Two together, DSI and CSI not done |
 | RTC battery charging | the firmware, `trickle-charge-microvolt` | Not done; off unless asked for, which is right for a primary cell |
 
 ## RP1's blocks

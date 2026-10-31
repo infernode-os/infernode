@@ -12,10 +12,12 @@ implement Fractals;
 #   Button 2     show Julia set at cursor point (from Mandelbrot view)
 #   Button 3     context menu (zoom out, depth, Julia presets, etc.)
 #
-# Veltro integration:
-#   /tmp/veltro/fractal/ctl     write commands (zoomin, zoomout, julia, etc.)
-#   /tmp/veltro/fractal/state   read current fractal state
-#   /tmp/veltro/fractal/view    read view description for AI "vision"
+# Veltro integration: served and posted as #sfractal/fs (appfs(2);
+# tools9p mounts it at /mnt/fractal for the fractal tool):
+#   ctl     write commands (zoomin, zoomout, julia, etc.); a bad one is
+#           the write's error
+#   state   read current fractal state
+#   view    read view description for AI "vision"
 #
 
 include "sys.m";
@@ -33,6 +35,7 @@ include "tkclient.m";
 	tkclient: Tkclient;
 
 include "lucitheme.m";
+include "appfs.m";
 
 Fractals: module
 {
@@ -44,7 +47,7 @@ top: ref Toplevel;
 wmctl: chan of string;
 actch: chan of string;
 themech: chan of int;
-ticks: chan of int;
+appreqs: chan of ref Appfs->Req;
 display: ref Display;
 font: ref Font;
 colours: array of ref Image;
@@ -111,7 +114,6 @@ HEIGHT:	con 400;
 R, G, B: int;
 
 # Veltro IPC directory
-FRACT_DIR: con "/tmp/veltro/fractal";
 
 Fracpoint: adt {
 	x, y: real;
@@ -213,7 +215,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	themech = chan[1] of int;
 
 	buildui();
-	initfractdir();
+	appreqs = chan of ref Appfs->Req;
+	startfs();
 	allocfracimg();
 
 	canvr := canvposn();
@@ -243,11 +246,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 	spawn themelistener();
-	# ticks must exist before timer() sends and the main alt receives —
-	# a nil channel breaks both procs ("dereference of nil"), freezing
-	# the app.  (Dropped in the Tk migration when ticks became a global.)
-	ticks = chan of int;
-	spawn timer();
 
 	pid := -1;
 	sync := chan of int;
@@ -261,7 +259,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	stack: list of (Fracrect, Params);
 	b1start := Point(-1, -1);
 
-	writefractstate();
+	fractchanged();
 	updatesbar();
 
 	for(;;) {
@@ -379,8 +377,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			"quit" =>
 				exit;
 			}
-		<-ticks =>
-			changed := checkctlfile(specr, p, stack, morj, julp, kdivisor, fill);
+		r := <-appreqs =>
+			if(r.file != "ctl" || r.data == nil) {
+				r.reply <-= fractread(r.file);
+				break;
+			}
+			(changed, cerr) := fractcmd(r.data);
+			r.reply <-= cerr;
 			if(changed != nil)
 			pick cc := changed {
 			Zoomin =>
@@ -413,13 +416,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			Restart =>
 				restart = 1;
 			}
-			writefractstate();
+			fractchanged();
 			updatesbar();
 		<-sync =>
 			blit();
 			pid = -1;
 			g_computing = 0;
-			writefractstate();
+			fractchanged();
 			updatesbar();
 		<-themech =>
 			loadcanvasbg();
@@ -445,7 +448,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				spawn docalculate(sync, p, imgch);
 				pid = <-sync;
 				imgch <-= (fracimg, wr);
-				writefractstate();
+				fractchanged();
 				updatesbar();
 			}
 		}
@@ -689,13 +692,6 @@ themelistener()
 	}
 }
 
-timer()
-{
-	for(;;) {
-		sys->sleep(500);
-		ticks <-= 1;
-	}
-}
 
 # ---- Fractal calculation ----
 
@@ -1011,46 +1007,57 @@ horizline(calc: ref Calc, d: ref Image, x0, x1, y: int, col: int)
 	d.draw(r.addpt(calc.winr.min), colours[col], nil, (0, 0));
 }
 
-# ---- Veltro real-file IPC ----
-#
-# /tmp/veltro/fractal/ is visible to the fractal tool through an explicit
-# path capability, not as ambient /tmp/veltro state.
-# The tick loop polls command files and writes state files so the
-# Veltro fractal tool can drive the viewer across namespace forks.
+# ---- Its files, for Veltro's fractal tool (appfs(2)) ----
 
-initfractdir()
-{
-	mkdirq("/tmp/veltro");
-	mkdirq(FRACT_DIR);
-}
+appfs: Appfs;
+appfstether: ref Sys->FD;	# the files go with it (appfs(2))
 
-mkdirq(path: string)
+startfs()
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd != nil) {
-		fd = nil;
+	appfs = load Appfs Appfs->PATH;
+	if(appfs == nil || appfs->init() != nil) {
+		appfs = nil;
 		return;
 	}
-	fd = sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
-	fd = nil;
+	err: string;
+	(nil, appfstether, err) = appfs->serve("fractal", array[] of {"ctl", "state", "view"}, appreqs);
+	if(err != nil) {
+		sys->fprint(sys->fildes(2), "fractals: serve: %s\n", err);
+		appfs = nil;
+	}
 }
 
-writefractstate()
+# what is shown, or being computed, changed
+fractchanged()
+{
+	if(appfs != nil)
+		appfs->event("changed");
+}
+
+fractread(file: string): string
 {
 	ftype := "mandelbrot";
 	if(!g_morj)
 		ftype = "julia";
+	case file {
+	"state" =>
+		state := sys->sprint("type %s\n", ftype);
+		state += sys->sprint("view %g %g %g %g\n", g_specr.min.x, g_specr.min.y, g_specr.max.x, g_specr.max.y);
+		if(!g_morj)
+			state += sys->sprint("julia %g %g\n", g_julp.x, g_julp.y);
+		state += sys->sprint("depth %d\n", g_kdivisor);
+		state += sys->sprint("fill %d\n", g_fill);
+		state += sys->sprint("computing %d\n", g_computing);
+		state += sys->sprint("zoomdepth %d\n", g_stackdepth);
+		return state;
+	"view" =>
+		return fractview(ftype);
+	}
+	return "";
+}
 
-	state := sys->sprint("type %s\n", ftype);
-	state += sys->sprint("view %g %g %g %g\n", g_specr.min.x, g_specr.min.y, g_specr.max.x, g_specr.max.y);
-	if(!g_morj)
-		state += sys->sprint("julia %g %g\n", g_julp.x, g_julp.y);
-	state += sys->sprint("depth %d\n", g_kdivisor);
-	state += sys->sprint("fill %d\n", g_fill);
-	state += sys->sprint("computing %d\n", g_computing);
-	state += sys->sprint("zoomdepth %d\n", g_stackdepth);
-	writestatefile(FRACT_DIR + "/state", state);
-
+fractview(ftype: string): string
+{
 	# Human-readable view description for Veltro vision
 	view := sys->sprint("Fractal viewer: %s set\n", ftype);
 	view += sys->sprint("Viewing region: x=[%g, %g] y=[%g, %g]\n",
@@ -1092,7 +1099,7 @@ writefractstate()
 		view += "  Star:      c = -0.744 + 0.148i (star-shaped)\n";
 	}
 
-	writestatefile(FRACT_DIR + "/view", view);
+	return view;
 }
 
 boolstr(b: int): string
@@ -1101,17 +1108,8 @@ boolstr(b: int): string
 	return "off";
 }
 
-writestatefile(path, data: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r666);
-	if(fd == nil)
-		return;
-	b := array of byte data;
-	sys->write(fd, b, len b);
-	fd = nil;
-}
 
-# Parse commands from /tmp/veltro/fractal/ctl
+# A command written to ctl: what to do, or why it was refused.
 # Commands:
 #   zoomin <x1> <y1> <x2> <y2>   zoom to fractal coordinates
 #   zoomout                       go back one level
@@ -1122,16 +1120,11 @@ writestatefile(path, data: string)
 #   restart                       restart current computation
 #   center <re> <im> <radius>    zoom to center with radius
 
-checkctlfile(specr: Fracrect, p: Params, stack: list of (Fracrect, Params),
-	morj: int, julp: Fracpoint, kdivisor, fill: int): ref Usercmd
+fractcmd(cmd: string): (ref Usercmd, string)
 {
-	cmd := readrmfile(FRACT_DIR + "/ctl");
-	if(cmd == nil || cmd == "")
-		return nil;
-
 	(nil, toks) := sys->tokenize(cmd, " \t\n");
 	if(toks == nil)
-		return nil;
+		return (nil, "usage: zoomin|center|zoomout|julia|mandelbrot|depth|fill|restart");
 
 	verb := hd toks;
 	toks = tl toks;
@@ -1139,7 +1132,7 @@ checkctlfile(specr: Fracrect, p: Params, stack: list of (Fracrect, Params),
 	case verb {
 	"zoomin" =>
 		if(listlen(toks) < 4)
-			return nil;
+			return (nil, "usage: zoomin x1 y1 x2 y2");
 		x1 := real hd toks; toks = tl toks;
 		y1 := real hd toks; toks = tl toks;
 		x2 := real hd toks; toks = tl toks;
@@ -1152,68 +1145,49 @@ checkctlfile(specr: Fracrect, p: Params, stack: list of (Fracrect, Params),
 		y1 = clampcoord(y1);
 		x2 = clampcoord(x2);
 		y2 = clampcoord(y2);
-		return ref Usercmd.Zoomin(Fracrect((x1, y1), (x2, y2)));
+		return (ref Usercmd.Zoomin(Fracrect((x1, y1), (x2, y2))), nil);
 	"center" =>
 		if(listlen(toks) < 3)
-			return nil;
+			return (nil, "usage: center re im radius");
 		cx := real hd toks; toks = tl toks;
 		cy := real hd toks; toks = tl toks;
 		rad := real hd toks;
 		if(rad <= 0.0) rad = 0.1;
 		cx = clampcoord(cx);
 		cy = clampcoord(cy);
-		return ref Usercmd.Zoomin(Fracrect((cx - rad, cy - rad), (cx + rad, cy + rad)));
+		return (ref Usercmd.Zoomin(Fracrect((cx - rad, cy - rad), (cx + rad, cy + rad))), nil);
 	"zoomout" =>
-		return ref Usercmd.Zoomout;
+		return (ref Usercmd.Zoomout, nil);
 	"julia" =>
 		if(listlen(toks) < 2)
-			return nil;
+			return (nil, "usage: julia re im");
 		re := real hd toks; toks = tl toks;
 		im := real hd toks;
 		re = clampcoord(re);
 		im = clampcoord(im);
-		return ref Usercmd.Julia(Fracpoint(re, im));
+		return (ref Usercmd.Julia(Fracpoint(re, im)), nil);
 	"mandelbrot" =>
-		return ref Usercmd.Mandelbrot;
+		return (ref Usercmd.Mandelbrot, nil);
 	"depth" =>
 		if(toks == nil)
-			return nil;
+			return (nil, "usage: depth n");
 		d := int hd toks;
 		if(d < 1) d = 1;
 		if(d > MAXDEPTH) d = MAXDEPTH;
-		return ref Usercmd.Depth(d);
+		return (ref Usercmd.Depth(d), nil);
 	"fill" =>
 		if(toks == nil)
-			return nil;
+			return (nil, "usage: fill on|off");
 		on := 0;
 		if(hd toks == "on" || hd toks == "1")
 			on = 1;
-		return ref Usercmd.Fill(on);
+		return (ref Usercmd.Fill(on), nil);
 	"restart" =>
-		return ref Usercmd.Restart;
+		return (ref Usercmd.Restart, nil);
 	}
-	return nil;
+	return (nil, "unknown command " + verb);
 }
 
-readrmfile(path: string): string
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	fd = nil;
-	if(n <= 0)
-		return nil;
-	s := string buf[0:n];
-	# Truncate file to consume the command
-	fd = sys->create(path, Sys->OWRITE, 8r666);
-	fd = nil;
-	# Strip trailing whitespace
-	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
-		s = s[0:len s - 1];
-	return s;
-}
 
 clampcoord(v: real): real
 {

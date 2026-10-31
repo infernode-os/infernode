@@ -67,7 +67,139 @@ compile(p: ref Pattern): ref Prog
 	for(nl := c.names; nl != nil; nl = tl nl)
 		names[--c.nname] = hd nl;
 	nslot := 2 * (p.ngroups + 1);
-	return ref Prog(c.code[0:c.n], sets, names, nslot, c.nreg, c.u, p.flags);
+	pr := ref Prog(c.code[0:c.n], sets, names, nslot, c.nreg, c.u, p.flags, 0, nil, nil);
+	(pr.anchored, pr.first) = starts(pr.code);
+	return pr;
+}
+
+# Where a match can start, for exec to skip the rest: anchored, when the
+# program begins with ^ (not multiline), so that it can match only at 0;
+# else the instructions (a character, a set, any character, or a
+# repetition of one at least once) one of which must match the first
+# character on every path, or nil when some path can match without
+# consuming one, or begins with something else (a lookaround, a
+# backreference, an assertion).  A search tried the program at every
+# position: /^x/ on a long string, or a pattern beginning with a
+# letter, did the whole machine's work at each.
+Maxfirst: con 16;
+
+starts(code: array of int): (int, array of int)
+{
+	pc := 0;
+	while(pc < len code && code[pc] == Xsave)
+		pc += 2;
+	if(pc < len code && code[pc] == Xbol && (code[pc+1] & Fmulti) == 0)
+		return (1, nil);
+	seen := array[len code] of {* => byte 0};
+	(ok, l) := firsts(code, pc, seen, nil);
+	if(!ok || l == nil)
+		return (0, nil);
+	n := 0;
+	for(t := l; t != nil; t = tl t)
+		n++;
+	a := array[n] of int;
+	for(; l != nil; l = tl l)
+		a[--n] = hd l;
+	return (0, a);
+}
+
+# the first-character instructions reachable from pc without consuming
+# a character, added to acc; (0, nil) if some path can get past without
+firsts(code: array of int, pc: int, seen: array of byte, acc: list of int): (int, list of int)
+{
+	for(;;) {
+		if(pc >= len code || seen[pc] != byte 0)
+			return (0, nil);
+		seen[pc] = byte 1;
+		case code[pc] {
+		Xchar =>
+			if(code[pc+2] & Fback)
+				return (0, nil);
+			return addfirst(pc, acc);
+		Xany =>
+			if(code[pc+1] & Fback)
+				return (0, nil);
+			return addfirst(pc, acc);
+		Xset =>
+			if(code[pc+2] & Fback)
+				return (0, nil);
+			return addfirst(pc, acc);
+		Xrep =>
+			if(code[pc+6] & Fback)
+				return (0, nil);
+			if(code[pc+1] >= 1)
+				return addfirst(pc, acc);
+			(ok, l) := addfirst(pc, acc);
+			if(!ok)
+				return (0, nil);
+			acc = l;
+			pc += 7;
+		Xsplit =>
+			(ok, l) := firsts(code, code[pc+1], seen, acc);
+			if(!ok)
+				return (0, nil);
+			acc = l;
+			pc = code[pc+2];
+		Xjmp =>
+			pc = code[pc+1];
+		Xsave or Xsetc or Xmark or Xinc =>
+			pc += 2;
+		Xclear =>
+			pc += 3;
+		* =>
+			return (0, nil);
+		}
+	}
+}
+
+addfirst(pc: int, acc: list of int): (int, list of int)
+{
+	n := 0;
+	for(t := acc; t != nil; t = tl t)
+		n++;
+	if(n >= Maxfirst)
+		return (0, nil);
+	return (1, pc :: acc);
+}
+
+# by ASCII character, whether one of p.first matches it (as canstart
+# would, which a search calls only for the rest)
+asciistarts(p: ref Prog): array of byte
+{
+	if(asciichars == nil) {
+		asciichars = "";
+		for(c := 0; c < 128; c++)
+			asciichars[c] = c;
+	}
+	m := ref M(p, asciichars, nil, nil, 0, 0);
+	a := array[128] of byte;
+	for(c := 0; c < 128; c++)
+		a[c] = byte canstart(m, p.first, c);
+	return a;
+}
+asciichars: string;
+
+# whether one of first can match the character at pos
+canstart(m: ref M, first: array of int, pos: int): int
+{
+	code := m.p.code;
+	for(i := 0; i < len first; i++) {
+		pc := first[i];
+		np := -1;
+		case code[pc] {
+		Xchar =>
+			np = match1(m, 0, code[pc+1], code[pc+2], pos);
+		Xany =>
+			np = match1(m, 1, 0, code[pc+1], pos);
+		Xset =>
+			np = match1(m, 2, code[pc+1], code[pc+2], pos);
+		Xrep =>
+			np = match1(m, code[pc+4], code[pc+5], code[pc+6], pos);
+		}
+		if(np >= 0)
+			return 1;
+	}
+	return 0;
 }
 
 newreg(c: ref C): int
@@ -520,7 +652,23 @@ exec(p: ref Pattern, s: string, start: int, sticky: int): array of int
 		p.prog = compile(p);
 	pr := p.prog;
 	m := ref M(pr, s, array[pr.nslot + pr.nreg] of int, array[256] of int, 0, 0);
+	if(pr.anchored && start > 0)
+		return nil;
 	for(i := start; i <= len s; ) {
+		if(pr.first != nil && !sticky) {
+			if(pr.firstascii == nil)
+				pr.firstascii = asciistarts(pr);
+			fa := pr.firstascii;
+			while(i < len s && ((c := s[i]) < 128 && fa[c] == byte 0 || c >= 128 && !canstart(m, pr.first, i))) {
+				# a whole code point in u mode: a match does not begin inside a pair
+				if(pr.u && c >= 16rD800 && c <= 16rDBFF && i + 1 < len s && s[i+1] >= 16rDC00 && s[i+1] <= 16rDFFF)
+					i += 2;
+				else
+					i++;
+			}
+			if(i >= len s)
+				return nil;
+		}
 		for(k := 0; k < len m.slots; k++)
 			m.slots[k] = -1;
 		m.sp = 0;
@@ -529,7 +677,7 @@ exec(p: ref Pattern, s: string, start: int, sticky: int): array of int
 			r[0:] = m.slots[0:pr.nslot];
 			return r;
 		}
-		if(sticky)
+		if(sticky || pr.anchored)
 			break;
 		# the next position (a whole code point in u mode)
 		if(pr.u && i < len s && s[i] >= 16rD800 && s[i] <= 16rDBFF && i + 1 < len s && s[i+1] >= 16rDC00 && s[i+1] <= 16rDFFF)

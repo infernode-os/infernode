@@ -345,6 +345,44 @@ trapFPE(int signo, siginfo_t *info, void *context)
     disfault(nil, "Floating point exception");
 }
 
+/*
+ * The profiler interrupts the VM's proc to read where its compiled code
+ * is (devprof.c, through hostprocpc)
+ */
+static volatile uintptr profpc;
+static volatile int profseq;
+
+static void
+trapPROF(int signo, siginfo_t *info, void *context)
+{
+    ucontext_t *uc;
+
+    USED(signo);
+    USED(info);
+    uc = (ucontext_t*)context;
+#if defined(__aarch64__)
+    profpc = (uintptr)uc->uc_mcontext->__ss.__pc;
+#else
+    profpc = (uintptr)uc->uc_mcontext->__ss.__rip;
+#endif
+    profseq++;
+}
+
+static uintptr
+procpc(Proc *p)
+{
+    int s, i;
+
+    s = profseq;
+    if(pthread_kill((pthread_t)p->sigid, SIGPROF) != 0)
+        return 0;
+    for(i = 0; i < 10000 && profseq == s; i++)
+        sched_yield();
+    if(profseq == s)
+        return 0;
+    return profpc;
+}
+
 static void
 setsigs(void)
 {
@@ -362,6 +400,12 @@ setsigs(void)
     
     act.sa_handler=trapUSR1;
     sigaction(SIGUSR1, &act, nil);
+
+    act.sa_sigaction = trapPROF;
+    act.sa_flags = SA_SIGINFO|SA_RESTART;
+    sigaction(SIGPROF, &act, nil);
+    act.sa_flags = 0;
+    hostprocpc = procpc;
     
     if(sflag == 0) {
         act.sa_sigaction = trapBUS;

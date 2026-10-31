@@ -4,6 +4,217 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Applications
+
+- **A task is ready when its provisioning write returns; nothing polls
+  for it (#1019).** The task tool read tools9p's `provision` file every
+  50ms until its child was ready, and tools9p looked for the child's
+  tree every half second and its manifest every 50ms. The child now
+  tells its parent when its name space is made, and the write is
+  answered then, or with why not. A child granted `/tmp` (or a
+  veltrosrv agent) made its manifest in the `/tmp` of its own that the
+  grant gives it, where neither the UI nor its parent could see it: it
+  was never ready, and its task was refused after 30 seconds. The
+  manifest's file is now made before the name space is restricted
+  (`nsconstruct`'s `openmanifest`). A path with `..` in it under the
+  scratch directory is refused, not dropped as the scratch. lucibridge
+  hears a task closed while it works as luciuisrv's `activity delete`
+  event, not by reading its status every second.
+- **wallet9p's `event` file: the wallet GUI's pending count no longer
+  polls (#1019).** wm/wallet read `/mnt/wallet/pending` every two
+  seconds while it was open. wallet9p now serves `event`, a line
+  `pending` to every reader each time the payments awaiting approval
+  change: one queued, approved, denied, or expired (a timer at its
+  deadline). The GUI waits on it, and waits on wallet9p's own start
+  rather than looking for its files.
+- **wm/shell, wm/man, wm/fractals and wm/ftree serve their agent files;
+  none polls (#1019).** Each wrote state files under `/tmp/veltro/<app>`
+  on a timer and read commands from a file it truncated, every half
+  second (wm/shell wrote its transcript half a second after each
+  change, and wm/ftree also re-read its own name space every two
+  seconds). `appfs(2)`, a small library, serves a program's files and an
+  `event` file, posted as `#s<app>/fs`: a read is answered from what the
+  program shows at that moment, a command is done when its write
+  returns, and one refused (no such manual page, a bad fractal command,
+  a bind under `ftree -d`) is the write's error. The files go with the
+  program. tools9p mounts each at `/mnt/<app>` for its tool alone, and
+  binds an empty directory there when the program is not running, so
+  the tool says so whatever an earlier run left behind. The policy
+  lists name `/mnt/shell`, `/mnt/man`, `/mnt/fractal` and `/mnt/ftree`.
+  Nothing is left under `/tmp/veltro` for these programs.
+- **The editor tool drives wm/editor through its served files; nothing
+  polls (#1019).** wm/editor kept a copy of its document in
+  `/tmp/veltro/editor`, rewritten every half second, and read commands
+  from files there that it truncated after reading, so two commands in
+  half a second lost one, a command to an editor that was not running
+  "succeeded", and the agent read a dead editor's text. Its 9P tree
+  (`/edit`) is now also posted as `#seditor/fs` (`post9p(2)`, the
+  posting Charon's session already used, now a library), and tools9p
+  mounts it at `/mnt/editor` for the editor tool alone: a command is
+  done when its write returns, one refused is the tool's error, and
+  "not running" is said when it is not. A body longer than one message
+  arrives whole (it kept the last piece), each reader of `event` gets
+  every event (two took turns, and a read held up every other request
+  for up to five seconds), and a read of `body` is one text. Lucifer's
+  context zone opens a file in a running editor through the posting, or
+  starts one on the file, where it waited for one to appear. The
+  editor's half-second timer is gone. `editor_test.b` drives the posted
+  editor (no sleeps; a long body, events per open),
+  `editor_capability_test.sh` a real one.
+- **A theme switch reaches every program without any of them polling.**
+  Sixteen programs (wm/wm, Lucifer, Xenith, Charon, and wm/ftree, wallet,
+  matrix, editor, deb, fractals, about, keyring, shell, settings, dir and
+  man) each re-read `/lib/lucifer/theme/current` every second to notice
+  a switch. `themefs`, run by the profile (and by wm/wm or Lucifer when
+  a session starts without one), serves `current` and `event` before
+  `/lib/lucifer/theme`: `current` reads and writes as the file did, and
+  a write, from Settings, Xenith's Theme or `echo halo >`, is kept in the
+  file under it and given to every reader of `event`, which waits for it.
+  `lucitheme->watch` reads `event`. A name that is no theme is refused.
+  `tests/host/themefs_test.sh`.
+- **The agent's name space, as it is, from tools9p's control tree
+  (#1020).** `/mnt/toolctl` (outside every agent's name space) has three
+  new files beside `ctl`. `view`, mounted
+  (`mount -A /mnt/toolctl/view /n/agent`), is the name space a tool call
+  gets, made by the same restriction a call uses and served read-only, so
+  what is shown is what the agent can reach, not a description of it.
+  `ns` is the same name space as `ns(1)` prints it. A read of `event`
+  waits, then says `paths`, `tools` or `budget` when that list changes.
+  Lucifer's context zone follows `event` instead of re-reading `/tool`
+  every five seconds: a folder granted is drawn at once, and nothing runs
+  while nothing changes. The three cannot be granted to an agent.
+  `tests/host/toolctl_view_test.sh`, `tests/host/lucictx_event_test.sh`.
+- **Arrow keys move; keys that are not characters type nothing.** An
+  arrow, Home, End, Page Up or Down, Insert or a function key typed a
+  private-use glyph in Tk entries and text (every form field and
+  dialog), wm/shell and wm/sh, wm/editor, wm/man's search, Charon's
+  find bar, Lucifer's conversation input, Xenith, Acme and wm/sam, and
+  in wm/shell it deleted the selection too. Most matched X11 keysyms
+  (`16rFF52` for Up), which nothing has sent since the widget toolkit
+  went; they match keyboard.h's keys now. A key in keyboard.h's range
+  (`Keyboard->Spec` to the new `Keyboard->Specend`) that a program does
+  not take is dropped where it would have been inserted, Tk's own text
+  and entry bindings included, and no longer replaces a selection.
+  Delete as SDL sends it (DEL, 0x7F) deletes in wm/editor, Charon and
+  Lucifer's input, and works in wm/about and wm/keyring as keyboard.h's
+  Delete does. Lucifer's serial-console arrows are keyboard.h's keys,
+  not keysyms. Tk's tkTextInsert, which typed text goes through, read
+  its argument with the wrong buffer end. Tested by
+  `tests/host/wm_editor_keys_test.sh`, a step of
+  `tests/host/wm_shell_test.sh` and `tk_test.b`'s SpecialKeys.
+- **The old icons are gone; every program draws `icon(2)`'s glyphs.**
+  wm/deb's controls, its Stack window's open and closed marks,
+  wm/bounce's arrows and dialog(2)'s error, warning, information and
+  question icons are Tabler glyphs in the theme's colours, repainted on
+  a theme switch; webget's help page shows them too. The old icon
+  files are removed, 235 of them (`icons/` is 187KB, from 807KB), so
+  `icons/` holds `icons/ui`, Tk's cursors
+  (unchanged), and the artwork that is not an icon: wm/coffee's cups and
+  backdrop and the picture `draw-example(2)` draws, all kept as they
+  were. A glyph that cannot be drawn leaves a blank button, not a
+  program that fails to start: `icon(2)` makes every Tk image it is
+  asked for whatever happens to the glyph, and
+  `tests/host/icons_test.sh` (run in CI) fails if anything names an
+  icon that is not in the tree. Making an image no longer leaves an
+  error in Tk's `lasterror`, which dialog(2) read as a failure and
+  answered its own question with the default ("discard").
+- **wm/ftree works again, and is upstream's tool with the name space
+  added.** The arrow, page and home keys did nothing: ftree matched X11
+  keysyms, which nothing sends since the Tk port dropped the widget
+  toolkit's translation. Its agent's state file was written only on a
+  click, so an agent read a stale selection and view; it is written on
+  every change, the agent's `scroll` moves the view, and the view
+  stays where the user scrolled it. Refresh kept nothing open; it
+  keeps what was open. Restored from upstream: Copy, Paste into and
+  Remove (which now asks first), the `-d`, `-e`, `-E` and `-p` options
+  of a touch-screen start panel, and a name space of its own, so a bind
+  made in ftree no longer changes the name space of whatever started
+  it. The root shows as `/`, not `//`. `ftree(1)` is back.
+  `tests/host/ftree_test.sh` drives it.
+- **`wm/dir` is back, on new icons.** Inferno's file browser, the Files
+  entry of upstream's window menu, was dropped in the migration. It is
+  restored with its icons drawn by `icon(2)` in the theme's colours.
+  A folder opens in the same window (a window each is an option), and
+  a file opens through the plumber, so in Lucifer it lands in the
+  presentation view; with no plumber, a program runs, an image opens
+  in `wm/view`, a PDF in `wm/page` and anything else in `wm/edit`.
+  Fixed on the way: `..` was the working directory's parent, not the
+  folder's; resizing the window indexed an empty string; a name with a
+  blank broke its label; long names made one column; a folder that
+  could not be read closed the window. `tests/host/wm_dir_test.sh`
+  drives it.
+- **Icons: Tabler's glyphs, drawn at any size in any colour.**
+  `icons/ui` holds the 63 glyphs the interface uses, from Tabler Icons
+  (MIT), 30KB of SVG; `icons/ui/LIST` names them and
+  `tools/update-icons.sh` fetches any added. `icon(2)` draws one with
+  readsvg at the size asked for and paints it in a theme's colour, so
+  a glyph is sharp on any display and a theme switch repaints it.
+- **Double-click works in Tk applications on SDL hosts.** Tk took a
+  double click only from a press the X11 driver marked as one; SDL and
+  `/dev/pointer` send two plain presses, so no `<Double-Button-1>`
+  binding ever fired on macOS, Windows or Linux with SDL (wm/dir
+  opened nothing, ftree's double-click did nothing, a text widget
+  never selected a word). Tk now times presses itself as X11 does:
+  the same button again within 300ms and 12 pixels.
+- **`wm/edit` is back.** Inferno's own editor was dropped in the
+  migration and its name later given to the editor now called
+  `wm/editor`, so `wm/task`'s Files button, which loads
+  `/dis/wm/edit.dis`, did nothing. It is restored from upstream with
+  its bugs fixed: it opened at 384x188 with a white text area under the
+  theme's light text, it took the arrow and page keys for changes (so
+  reading a file asked to discard it), a name that did not exist was an
+  error rather than a new file, and an empty Save As name was tried as a
+  file. It follows a theme switch, Limbo mode's colours among it.
+  `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
+  `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
+  `wm/edit`'s.
+
+## [0.9.1] - 2026-10-30
+
+This security patch release fixes remotely reachable IPv4 reassembly and voice
+export flaws, bounds TCP out-of-order queues, and closes the hosted agent
+containment gaps found in the 0.9.0 review. Upgrading is recommended for every
+0.9.0 installation, especially bare-metal nodes and systems that ran
+`voice/listen`.
+
+### Security
+
+- **IPv4 fragments cannot claim bytes that were not received.** Reassembly now
+  validates and trims every fragment to its IPv4 total length, rejects lengths
+  beyond the received block, rejects invalid fragment alignment, and caps the
+  assembled extent before handing a packet to ICMP, TCP, or UDP. The flaw is
+  inherited from upstream Inferno; the final Bell Labs Plan 9 source has the
+  same trust error, while 9front's receive path has used received block lengths
+  and capped completed assemblies since 2019.
+- **TCP out-of-order storage is bounded by both bytes and Blocks.** InferNode
+  now carries 9front's receive-window byte limit and MSS-derived packet-count
+  limit, including segments inserted at the head of the resequencing queue.
+  This is an upstream Inferno omission; 9front has carried the limits since
+  2013.
+- **Voice exports require keyring authentication and expose audio only.** The
+  original `voice/listen` script anonymously exported all of `/dev`, allowing
+  a network peer to inject input and operate control devices. It now constructs
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners,
+  dialers, and loopback tests no longer pass `-A`. There is no anonymous mode in
+  the shipped voice scripts. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `getauthinfo` before using voice on a fresh node.
+- **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
+  `killtree`, which kills N's group and every descendant group. The exec tool
+  uses it on deadlines and output caps, so a confined command cannot survive by
+  calling `NEWPGRP`.
+- **Approval and messaging surfaces are content-bound.** Lucifer grants a gated
+  call only for the exact `Allow` action, not delivered task/message events or
+  conversational text. Message pending entries show a losslessly escaped,
+  immutable body, and approval sends that exact body.
+- **Namespace checks match the host filesystem and actual parent authority.**
+  Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
+  bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
+  aliases are rejected. A parent root grant no longer authorizes a child path
+  the parent cannot see. Confined `NODEVS` processes cannot follow host symlinks
+  out of a granted tree.
+- **mc9p responses are private to the requesting fid.** One client can no
+  longer read or replace another client's endpoint response.
+
 ## [0.9.0] - 2026-10-29
 
 This release adds SD-card images for the Raspberry Pi 3B+ and 4B, which

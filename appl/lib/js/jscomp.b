@@ -1643,6 +1643,26 @@ storebind(b: ref Bind, r: int)
 		e2(Omove, b.reg, r);
 }
 
+# a code's source positions as runs, (pc, position) pairs where the
+# position changes: an operation's operands share its position, and
+# often the operations of one expression do; a word for each doubled
+# the memory its operations take
+posruns(p: array of int, n: int): array of int
+{
+	k := 0;
+	for(i := 0; i < n; i++)
+		if(i == 0 || p[i] != p[i-1])
+			k++;
+	r := array[2 * k] of int;
+	k = 0;
+	for(i = 0; i < n; i++)
+		if(i == 0 || p[i] != p[i-1]) {
+			r[k++] = i;
+			r[k++] = p[i];
+		}
+	return r;
+}
+
 finish(id: ref Node, flen, nformal: int): ref Code
 {
 	name := "";
@@ -1653,8 +1673,12 @@ finish(id: ref Node, flen, nformal: int): ref Code
 	c.flen = flen;
 	c.nparams = nformal;
 	c.nregs = cs.nregs + 1;
-	c.ops = cs.ops[0:cs.nops];
-	c.pos = cs.pos[0:cs.nops];
+	# copies, not slices: a slice keeps the buffer it is cut from, 256
+	# words or more each, doubled as it grew; JSTOR's home page held 60 MB
+	# of them for 15000 compiled functions
+	c.ops = array[cs.nops] of int;
+	c.ops[0:] = cs.ops[0:cs.nops];
+	c.pos = posruns(cs.pos, cs.nops);
 	c.whole = cs.src;
 	c.consts = revv(cs.consts);
 	c.funcs = revcode(cs.funcs);
@@ -4797,7 +4821,7 @@ defaultctor(derived: int, c: ref Node.Class, cname: string): int
 		code.ops = array[] of {Orest, Rarg0+1, 0, Osupercallspread, Rarg0+2, Rarg0+1, Rfn, Rnewtarget, Oret, Rarg0+2};
 	} else
 		code.ops = array[] of {Oundef, Rarg0, Oret, Rarg0};
-	code.pos = array[len code.ops] of {* => c.pos};
+	code.pos = array[] of {0, c.pos};
 	code.src = "";
 	if(c.end <= len cs.src)
 		code.src = cs.src[c.pos:c.end];

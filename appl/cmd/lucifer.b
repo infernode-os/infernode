@@ -44,6 +44,8 @@ include "lucitheme.m";
 include "menu.m";
 
 include "softkbd.m";
+
+include "keyboard.m";
 	softkbd: Softkbd;
 
 Lucifer: module {
@@ -238,6 +240,7 @@ tilescrollx := 0;		# horizontal scroll offset for tile strip
 tiletotalw := 0;		# total pixel width of all tiles (for scroll cap)
 blinkon := 0;			# toggled by tileblinker goroutine
 tilelock: chan of int;		# mutex for tiles/ntiles/blinkon access
+blinkwake: chan of int;		# a tile became urgent: the blinker starts again
 
 # Urgency colors (allocated from theme)
 yellowcol: ref Image;
@@ -672,6 +675,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		spawn nslistener();
 	spawn globallistener();
 	spawn themewatcher();
+	blinkwake = chan[1] of int;
 	spawn tileblinker();
 
 	# Main loop (header redraws + quit/resize)
@@ -2252,8 +2256,15 @@ loadtiles()
 			tiles = na;
 		}
 		tiles[ntiles++] = ref TileInfo(id, label, status, urg, 0, 0);
+		if(urg > 0)
+			wakeblinker();
 	}
 	tilelock <-= 1;
+}
+
+wakeblinker()
+{
+	alt { blinkwake <-= 1 => ; * => ; }
 }
 
 # Update a single tile field without full reload
@@ -2266,8 +2277,11 @@ updatetile(id: int, field, val: string)
 				tiles[i].status = val;
 			else if(field == "label")
 				tiles[i].label = val;
-			else if(field == "urgency")
+			else if(field == "urgency") {
 				tiles[i].urgency = strtoint(val);
+				if(tiles[i].urgency > 0)
+					wakeblinker();
+			}
 			tilelock <-= 1;
 			return;
 		}
@@ -2458,6 +2472,7 @@ themewatcher()
 	lt := load Lucitheme Lucitheme->PATH;
 	if(lt == nil)
 		return;
+	lt->serve();	# a session's root; done already under a profile
 	c := lt->watch();
 	for(;;)
 		themechanged("theme " + <-c);
@@ -2500,7 +2515,8 @@ themechanged(ev: string)
 	alt { uievent <-= 1 => ; * => ; }
 }
 
-# Toggle blink state for urgency tiles
+# Toggle blink state for urgency tiles; with none urgent, wait for one
+# rather than waking twice a second to find none
 tileblinker()
 {
 	for(;;) {
@@ -2521,6 +2537,8 @@ tileblinker()
 		tilelock <-= 1;
 		if(hasurgency)
 			alt { uievent <-= 1 => ; * => ; }
+		else
+			<-blinkwake;
 	}
 }
 
@@ -2809,9 +2827,11 @@ kbdproc()
 	for(;;) {
 		c := <-win.ctxt.kbd;
 
-		# Decode ANSI escape sequences to Inferno key codes.
-		# Inferno key codes (>= 0xFF00) pass through unmodified.
-		if(c < 16rFF00) {
+		# Decode ANSI escape sequences (a serial console's) to
+		# keyboard.h's keys, as the emulator and the native kernel send
+		# them, so every app sees one set; those keys pass through.
+		# (It made X11 keysyms, 16rFF52 for Up, which no app took.)
+		if(c < Keyboard->Spec || c > Keyboard->Specend) {
 			case escstate {
 			0 =>
 				if(c == 27) {
@@ -2828,12 +2848,12 @@ kbdproc()
 				# Bare ESC+char: deliver char as-is (fall through to route)
 			2 =>
 				escstate = 0;
-				if(c == 'A')       c = 16rFF52;	# up
-				else if(c == 'B') c = 16rFF54;	# down
-				else if(c == 'C') c = 16rFF53;	# right
-				else if(c == 'D') c = 16rFF51;	# left
-				else if(c == 'H') c = 16rFF61;	# home
-				else if(c == 'F') c = 16rFF57;	# end
+				if(c == 'A')       c = Keyboard->Up;
+				else if(c == 'B') c = Keyboard->Down;
+				else if(c == 'C') c = Keyboard->Right;
+				else if(c == 'D') c = Keyboard->Left;
+				else if(c == 'H') c = Keyboard->Home;
+				else if(c == 'F') c = Keyboard->End;
 				else if(c == '1' || c == '4' || c == '5' ||
 				        c == '6' || c == '7' || c == '8') {
 					escarg = c - '0';
@@ -2844,10 +2864,10 @@ kbdproc()
 			3 =>
 				if(c == '~') {
 					escstate = 0;
-					if(escarg == 1 || escarg == 7)      c = 16rFF61;	# home
-					else if(escarg == 4 || escarg == 8) c = 16rFF57;	# end
-					else if(escarg == 5)                c = 16rFF55;	# pgup
-					else if(escarg == 6)                c = 16rFF56;	# pgdn
+					if(escarg == 1 || escarg == 7)      c = Keyboard->Home;
+					else if(escarg == 4 || escarg == 8) c = Keyboard->End;
+					else if(escarg == 5)                c = Keyboard->Pgup;
+					else if(escarg == 6)                c = Keyboard->Pgdown;
 					else continue;
 				} else if(c >= '0' && c <= '9') {
 					escarg = escarg * 10 + (c - '0');

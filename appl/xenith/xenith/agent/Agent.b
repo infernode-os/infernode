@@ -148,9 +148,7 @@ startservers(paths, tools: string): string
 		spawn runcmd(TOOLS9P, "tools9p" :: tlist, started);
 		if(<-started < 0)
 			return "cannot start tools9p";
-		# tools9p loads every tool module before it mounts; give it time.
-		for(i := 0; i < 300 && !toolsup(); i++)
-			sys->sleep(100);
+		# runcmd waits for its init, which returns mounted
 		if(!toolsup())
 			return "tools9p did not come up";
 	}

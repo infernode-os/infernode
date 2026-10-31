@@ -935,14 +935,22 @@ ensurewallet9p()
 	mod := load Command "/dis/veltro/wallet9p.dis";
 	if(mod == nil)
 		return;
-	spawn mod->init(nil, "wallet9p" :: nil);
-	for(i := 0; i < 50; i++){
-		(ok2, nil) := sys->stat(WALLET + "/accounts");
-		if(ok2 >= 0)
-			break;
-		sys->sleep(100);
+	# its init returns once it is mounted; run in a proc of its own, as
+	# it takes a process group of its own
+	done := chan of int;
+	spawn startwallet9p(mod, done);
+	<-done;
+}
+
+startwallet9p(mod: Command, done: chan of int)
+{
+	{
+		mod->init(nil, "wallet9p" :: nil);
+	} exception {
+	"*" =>
+		;
 	}
-	sys->sleep(200);
+	done <-= 1;
 }
 
 # ── Keyboard ──────────────────────────────────────────────────
@@ -1034,10 +1042,14 @@ balancetimer()
 	}
 }
 
+# wallet9p's event says when the payments awaiting approval change
 pendingwatcher()
 {
-	for(;;){
-		sys->sleep(2000);
+	fd := sys->open(WALLET + "/event", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[64] of byte;
+	for(first := 1; first || sys->read(fd, buf, len buf) > 0; first = 0){
 		raw := readwalletfile("", "pending");
 		(nil, lines) := sys->tokenize(raw, "\n");
 		n := 0;
@@ -1046,8 +1058,8 @@ pendingwatcher()
 			if(ln != "" && ln != "(none)")
 				n++;
 		}
-		if(n != pendingcount)
-			alt { pendingch <-= n => ; * => ; }
+		# sent, not dropped when the loop is busy: nothing sends it again
+		pendingch <-= n;
 	}
 }
 

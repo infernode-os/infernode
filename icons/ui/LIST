@@ -1,0 +1,80 @@
+# The glyphs InferNode ships from Tabler Icons (outline), one name per
+# line, as Tabler names them (https://tabler.io/icons).  icon(2) draws
+# /icons/ui/NAME.svg.  To add one: add its name here and run
+# tools/update-icons.sh, which fetches every glyph listed from the
+# pinned Tabler release and writes it beside this file.
+
+# files and folders (wm/dir, ftree)
+folder
+folder-open
+folder-up
+file
+file-text
+file-code
+file-type-pdf
+markdown
+photo
+file-zip
+file-music
+movie
+terminal-2
+
+# the name space
+plug-connected
+cpu
+stack-2
+server
+world
+link
+lock
+home
+user
+robot
+
+# views and navigation
+layout-grid
+list
+columns-3
+list-tree
+chevron-right
+chevron-down
+chevron-left
+chevron-up
+arrow-up
+arrow-back-up
+refresh
+search
+sort-ascending
+
+# operations
+arrow-left
+arrow-right
+copy
+clipboard
+cut
+pencil
+trash
+plus
+x
+eye
+settings
+bookmark
+history
+help
+
+# dialogs (dialog(2))
+alert-circle
+alert-triangle
+info-circle
+help-circle
+
+# the debugger's controls (wm/deb)
+player-play
+player-stop
+arrow-right-bar
+step-into
+step-out
+arrow-forward-up
+circle-dot
+unlink
+square-x

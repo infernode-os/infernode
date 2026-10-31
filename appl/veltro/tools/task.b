@@ -373,18 +373,6 @@ strchr(set: string, c: int): int
 	return 0;
 }
 
-readprovisionstate(id: int): string
-{
-	raw := readfile("/tool/provision");
-	if(raw == nil)
-		return "";
-	prefix := string id + " ";
-	for(lines := splitlines(strip(raw)); lines != nil; lines = tl lines)
-		if(hasprefix(hd lines, prefix))
-			return strip((hd lines)[len prefix:]);
-	return "";
-}
-
 docreate(args: string): string
 {
 	attrs := parseattrs(args);
@@ -571,35 +559,22 @@ docreate(args: string): string
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
 
-	# Provisioning is now atomic (INFR-405): tools9p validates the request on
+	# Provisioning is atomic (INFR-405): tools9p validates the request on
 	# this write and refuses it outright rather than dropping the tools and
-	# paths it will not grant. Trusted tools9p publishes a narrow lifecycle result
-	# after observing confinement; the task tool cannot read the hidden manifest
-	# and does not report success while provisioning is still starting.
-	# A refusal must not surface as a created
-	# activity — the caller would poll an activity that has no agent behind
-	# it, or worse, assume the narrowing it asked for was applied. Tear the
-	# activity down and report the reason.
+	# paths it will not grant.  The write is answered when the child is
+	# confined and its agent started, or with why it was not: the task tool
+	# cannot read the hidden manifest, and does not report success while
+	# provisioning is still starting.  A refusal or failure must not
+	# surface as a created activity — the caller would watch an activity
+	# that has no agent behind it, or worse, assume the narrowing it asked
+	# for was applied.  The activity goes, and the reason is reported.
 	writefile(sys->sprint("%s/activity/%d/status", UI_MOUNT, newid), "provisioning");
 	perr := writefile("/tool/provision", provcmd[10:]);
 	if(perr != nil) {
 		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
 		return sys->sprint("error: task not created — %s", perr);
 	}
-
-	for(w := 0; w < 700; w++) {
-		pstatus := readprovisionstate(newid);
-		if(hasprefix(pstatus, "failed")) {
-			writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
-			return sys->sprint("error: task not created — activity %d %s", newid, pstatus);
-		}
-		if(pstatus == "ready")
-			return sys->sprint("created activity %d: %s%s", newid, label, modelnote);
-		sys->sleep(50);
-	}
-	writefile("/tool/provision", "cancel " + string newid);
-	writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
-	return sys->sprint("error: task not created — activity %d provisioning timed out", newid);
+	return sys->sprint("created activity %d: %s%s", newid, label, modelnote);
 }
 
 dostatus(args: string): string

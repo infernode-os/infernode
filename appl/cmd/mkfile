@@ -186,6 +186,7 @@ TARG=\
 	tarfs.dis\
 	tcs.dis\
 	tee.dis\
+	themefs.dis\
 	telnet.dis\
 	test.dis\
 	time.dis\

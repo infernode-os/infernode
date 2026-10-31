@@ -254,6 +254,8 @@ struct Tcpctl
 	int	backedoff;		/* ms we've backed off for rexmits */
 	uchar	flags;			/* State flags */
 	Reseq	*reseq;			/* Resequencing queue */
+	int	nreseq;			/* packets held on resequencing queue */
+	int	reseqlen;		/* bytes held on resequencing queue */
 	uchar	sackok;			/* both ends offered SACK: describe reseq in our ACKs */
 	u32int	sacklast;		/* seq of the segment queued most recently: its block goes first */
 	Tcptimer	timer;			/* Activity timer */
@@ -759,6 +761,8 @@ localclose(Conv *s, char *reason)	/* called with tcb locked */
 		free(rp);
 	}
 	tcb->reseq = nil;
+	tcb->nreseq = 0;
+	tcb->reseqlen = 0;
 
 	if(tcb->state == Syn_sent)
 		Fsconnected(s, reason);
@@ -3016,8 +3020,8 @@ sackblocks(Tcpctl *tcb, Tcp *seg)
 int
 addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 {
-	Reseq *rp, *rp1;
-	int i, rqlen, qmax;
+	Reseq *rp, *rp1, **l;
+	int i, nmax, qmax;
 
 	rp = malloc(sizeof(Reseq));
 	if(rp == nil){
@@ -3029,34 +3033,26 @@ addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 	rp->bp = bp;
 	rp->length = length;
 	tcb->sacklast = seg->seq;	/* RFC 2018: its block is reported first */
+	tcb->nreseq++;
+	tcb->reseqlen += length;
 
 	/* Place on reassembly list sorting by starting seq number */
-	rp1 = tcb->reseq;
-	if(rp1 == nil || seq_lt(seg->seq, rp1->seg.seq)) {
-		rp->next = rp1;
-		tcb->reseq = rp;
-		if(rp->next != nil)
-			tpriv->stats[OutOfOrder]++;
-		return 0;
-	}
-
-	rqlen = 0;
-	for(i = 0;; i++) {
-		rqlen += rp1->length;
-		if(rp1->next == nil || seq_lt(seg->seq, rp1->next->seg.seq)) {
-			rp->next = rp1->next;
-			rp1->next = rp;
-			if(rp->next != nil)
-				tpriv->stats[OutOfOrder]++;
+	for(l = &tcb->reseq; *l != nil; l = &(*l)->next)
+		if(seq_lt(seg->seq, (*l)->seg.seq))
 			break;
-		}
-		rp1 = rp1->next;
-	}
-	qmax = QMAX<<tcb->rcv.scale;
-	if(rqlen > qmax){
-		print("resequence queue > window: %d > %d\n", rqlen, qmax);
+	rp->next = *l;
+	*l = rp;
+	if(rp->next != nil)
+		tpriv->stats[OutOfOrder]++;
+
+	/* Bound both storage and Block allocations, including head insertion. */
+	qmax = tcb->window;
+	nmax = (tcb->window + tcb->mss - 1) / tcb->mss;
+	if(tcb->reseqlen > qmax || tcb->nreseq > nmax){
+		print("resequence queue limit: %d bytes/%d packets (max %d/%d)\n",
+			tcb->reseqlen, tcb->nreseq, qmax, nmax);
 		i = 0;
-	  	for(rp1 = tcb->reseq; rp1 != nil; rp1 = rp1->next){
+		for(rp1 = tcb->reseq; rp1 != nil; rp1 = rp1->next){
 	  		print("%#lux %#lux %#ux\n", rp1->seg.seq,
 	  			rp1->seg.ack, rp1->seg.flags);
 			if(i++ > 10){
@@ -3073,6 +3069,8 @@ addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 			free(rp);
 		}
 		tcb->reseq = nil;
+		tcb->nreseq = 0;
+		tcb->reseqlen = 0;
 
 	  	return -1;
 	}
@@ -3089,6 +3087,8 @@ getreseq(Tcpctl *tcb, Tcp *seg, Block **bp, ushort *length)
 		return;
 
 	tcb->reseq = rp->next;
+	tcb->nreseq--;
+	tcb->reseqlen -= rp->length;
 
 	*seg = rp->seg;
 	*bp = rp->bp;

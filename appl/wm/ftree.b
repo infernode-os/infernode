@@ -14,8 +14,16 @@ implement Ftree;
 # model, namespace parse, plumb, IPC) is toolkit-independent.
 #
 # Usage:
-#   wm/ftree [-n] [root]
+#   wm/ftree [-n] [-d] [-e|-E|-p] [root]
 #   -n  start in namespace mode (annotate mount points)
+#   -d  allow only opening: no copy, paste, remove, bind or unmount
+#   -e  ignore exit, keep move and resize; -E ignore exit, no move or
+#       resize; -p exit, but no move or resize (upstream's modes for a
+#       start panel on a small touch screen)
+#
+# ftree runs in a name space of its own (FORKNS, as upstream's did):
+# what it binds and unmounts changes what it shows, not the name space
+# of the program that started it.
 #
 # Keyboard:
 #   Up/Down      move selection
@@ -28,12 +36,13 @@ implement Ftree;
 #   Ctrl-N       toggle namespace annotations
 #   Ctrl-U       unmount selected
 #   Ctrl-Q       quit
-#   r/R          refresh tree
+#   r/R          refresh tree (what was open stays open)
 #
 # Mouse:
 #   Button 1     select; click indicator to expand/collapse
 #   Button 2     open selected file in presentation view
-#   Button 3     context menu
+#   Button 3     context menu: open, copy, paste into, remove, bind,
+#                unmount, expand/collapse all, refresh, goto
 #   Scroll wheel scroll up/down
 #
 
@@ -58,6 +67,12 @@ include "string.m";
 	str: String;
 
 include "lucitheme.m";
+include "appfs.m";
+
+include "keyboard.m";
+
+include "cptree.m";
+	cptree: Cptree;
 
 include "arg.m";
 	arg: Arg;
@@ -72,7 +87,6 @@ Ftree: module
 };
 
 # Veltro IPC directory
-FTREE_DIR: con "/tmp/veltro/ftree";
 
 # Fallback colours (overridden by theme)
 BG:	con int 16rFFFDF6FF;
@@ -88,19 +102,18 @@ MARGIN:		con 6;
 INDENT:		con 16;
 ICON_W:		con 14;
 
-# Key constants
-Khome:		con 16rFF61;
-Kend:		con 16rFF57;
-Kup:		con 16rFF52;
-Kdown:		con 16rFF54;
-Kleft:		con 16rFF51;
-Kright:		con 16rFF53;
-Kpgup:		con 16rFF55;
-Kpgdown:	con 16rFF56;
-Kdel:		con 16rFF9F;
-Kins:		con 16rFF63;
-Kbs:		con 8;
-Kesc:		con 27;
+# Key constants: keyboard.h's, as every emu driver and the native
+# kernel deliver them.  They were X11 keysyms (16rFF52 for Up), which
+# nothing delivers since the Tk port dropped widget.m's translation,
+# so the arrow, page and home keys did nothing.
+Khome:		con Keyboard->Home;
+Kend:		con Keyboard->End;
+Kup:		con Keyboard->Up;
+Kdown:		con Keyboard->Down;
+Kleft:		con Keyboard->Left;
+Kright:		con Keyboard->Right;
+Kpgup:		con Keyboard->Pgup;
+Kpgdown:	con Keyboard->Pgdown;
 
 # ---------- Namespace entry ----------
 
@@ -149,7 +162,6 @@ selected:	int;
 # Namespace state
 nsops:		list of ref NsOp;	# parsed /dev/ns entries
 nsmode:		int;			# 1 = show namespace annotations
-nssnapshot:	string;			# snapshot of /dev/ns for change detection
 
 # Tk host
 top:		ref Toplevel;
@@ -178,13 +190,20 @@ statusmsg:	string;		# transient right-hand status message
 
 rootpath:	string;
 
+disallow := 0;		# -d: only opening
+noexit := 0;		# -e, -E: exit is ignored
+cpfile := "";		# the path Copy took, for Paste into
+topset := 0;		# topline was set here; else it is the listbox's view
+
 # Prompt modes
 PROMPT_NONE: con 0;
 PROMPT_GOTO: con 1;
 PROMPT_BIND_SRC: con 2;
 PROMPT_BIND_FLAGS: con 3;
+PROMPT_REMOVE: con 4;
 promptmode := 0;
 bindsrc_pending := "";		# stash source path during bind flow
+rmpending := "";		# the path Remove asks about
 
 # ---------- Initialisation ----------
 
@@ -207,12 +226,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		raise "fail:init";
 	}
 
-	sys->pctl(Sys->NEWPGRP, nil);
+	# a name space of its own, as upstream's: binds made here change what
+	# ftree shows, not its parent's name space
+	sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
 	tkclient->init();
 
 	# Parse arguments
 	rootpath = "/";
 	nsmode = 0;
+	winopts := Tkclient->Appl;
 	arg = load Arg Arg->PATH;
 	if(arg != nil) {
 		arg->init(argv);
@@ -220,6 +242,17 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			case c {
 			'n' =>
 				nsmode = 1;
+			'd' =>
+				disallow = 1;
+			'e' =>
+				(noexit, winopts) = (1, Tkclient->Resize);
+			'E' =>
+				(noexit, winopts) = (1, 0);
+			'p' =>
+				(noexit, winopts) = (0, 0);
+			* =>
+				sys->fprint(stderr, "usage: wm/ftree [-n] [-d] [-e|-E|-p] [root]\n");
+				raise "fail:usage";
 			}
 		argv = arg->argv();
 	} else
@@ -230,7 +263,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# Create the Tk toplevel
 	if(ctxt == nil)
 		ctxt = tkclient->makedrawcontext();
-	(top, wmctl) = tkclient->toplevel(ctxt, "-width 480 -height 560", "ftree", Tkclient->Appl);
+	(top, wmctl) = tkclient->toplevel(ctxt, "-width 480 -height 560", "ftree", winopts);
 	display = top.display;
 
 	loadcolors();
@@ -243,7 +276,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# Parse namespace
 	nsops = nil;
-	nssnapshot = "";
 	loadnamespace();
 
 	# Initialise tree
@@ -264,15 +296,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
-	# Veltro IPC
-	initftreedir();
-	writeftreestate();
-	ticks := chan of int;
-	spawn timer(ticks, 500);
-
-	# Namespace change watcher
-	nsch := chan[1] of int;
-	spawn nswatcher(nsch);
+	# its files, for an agent (appfs(2)); its name space changes only
+	# by its own binds (FORKNS), each followed by loadnamespace
+	appreqs := chan of ref Appfs->Req;
+	startfs(appreqs);
 
 	# Theme listener
 	themech = chan[1] of int;
@@ -284,12 +311,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	<-themech =>
 		reloadcolors();
 		redraw();
-	<-nsch =>
-		loadnamespace();
-		annotatenodes();
-		redraw();
-	<-ticks =>
-		if(checkctlfile())
+	r := <-appreqs =>
+		if(r.data == nil || r.file != "ctl") {
+			r.reply <-= ftreeread(r.file);
+			break;
+		}
+		(changed, err) := ftreecmd(r.data);
+		r.reply <-= err;
+		if(changed)
 			redraw();
 	c := <-wmctl or
 	c = <-top.ctxt.ctl or
@@ -297,6 +326,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# window through here); a loop that never drains it leaves every
 	# posted menu mapped-and-grabbing but windowless — invisible.
 	c = <-top.wreq =>
+		if(noexit && c == "exit")
+			c = "task";
 		tkclient->wmctl(top, c);
 		if(c != nil && len c > 0 && c[0] == '!')
 			redraw();
@@ -376,7 +407,7 @@ handleaction(a: string)
 			redraw();
 		}
 		statusmsg = "";
-		writeftreestate();
+		ftreechanged();
 		updatestatus();
 	"activate" =>
 		syncselection();
@@ -435,16 +466,23 @@ buildmenu()
 	tk->cmd(top, "menu .ctx");
 	if(selected >= 0 && selected < nvisible) {
 		nd := nodes[visible[selected]];
-		if(nd.isdir) {
+		if(nd.isdir)
 			mitem("open", "mopen");
+		else
+			mitem("open", "mplumb");
+		if(!disallow){
+			mitem("copy", "mcopy");
+			if(nd.isdir && cpfile != "")
+				mitem("paste into", "mpaste");
+			if(visible[selected] != 0)
+				mitem("remove...", "mremove");
 			mitem("bind here...", "mbind");
-			if(nd.bindsrc != nil)
+			if(nd.isdir && nd.bindsrc != nil)
 				mitem("unmount", "munmount");
+		}
+		if(nd.isdir) {
 			mitem("expand all", "mexpandall");
 			mitem("collapse all", "mcollapseall");
-		} else {
-			mitem("open", "mplumb");
-			mitem("bind here...", "mbind");
 		}
 	}
 	mitem("refresh", "mrefresh");
@@ -473,6 +511,9 @@ handlemenu(verb: string)
 	"mopen" =>	activateselected(); redraw();
 	"mplumb" =>	plumbselected();
 	"mbind" =>	startbind();
+	"mcopy" =>	copyselected();
+	"mpaste" =>	pasteselected();
+	"mremove" =>	startremove();
 	"munmount" =>
 		if(selected >= 0 && selected < nvisible)
 			dounmount(nodes[visible[selected]].path);
@@ -507,6 +548,7 @@ handlekey(key: int)
 	Khome =>
 		selected = 0;
 		topline = 0;
+		topset = 1;
 	Kend =>
 		selected = nvisible - 1;
 		scrolltoselected();
@@ -519,11 +561,13 @@ handlekey(key: int)
 	'g' & 16r1f =>
 		startgoto();
 	'b' & 16r1f =>
-		startbind();
+		if(!disallow)
+			startbind();
 	'n' & 16r1f =>
 		togglensmode();
 	'u' & 16r1f =>
-		unmountselected();
+		if(!disallow)
+			unmountselected();
 	'q' or 'Q' =>
 		exit;
 	'r' or 'R' =>
@@ -550,6 +594,12 @@ handleprompt(val: string)
 	PROMPT_BIND_FLAGS =>
 		dobind(bindsrc_pending, val);
 		bindsrc_pending = "";
+	PROMPT_REMOVE =>
+		if(val == "yes" || val == "y")
+			doremove(rmpending);
+		else
+			setstatus("not removed");
+		rmpending = "";
 	}
 }
 
@@ -584,6 +634,7 @@ togglensmode()
 
 scrolltoselected()
 {
+	topset = 1;
 	if(selected < 0)
 		selected = 0;
 	if(selected >= nvisible)
@@ -912,7 +963,6 @@ loadnamespace()
 		op := ref NsOp(cmd, flags, src, dst, spec);
 		nsops = op :: nsops;
 	}
-	nssnapshot = raw;
 
 	# Reverse to preserve order
 	rev: list of ref NsOp;
@@ -1028,8 +1078,11 @@ dobind(src, flagstr: string)
 		setstatus(sys->sprint("bind failed: %r"));
 	} else {
 		setstatus(sys->sprint("bound %s on %s", src, target));
-		# Refresh namespace and tree
+		# Refresh namespace and tree: the folder bound on, which for a
+		# file is its parent
 		loadnamespace();
+		if(!n.isdir && n.parent >= 0)
+			ni = n.parent;
 		refreshsubtree(ni);
 		annotatenodes();
 	}
@@ -1062,6 +1115,104 @@ dounmount(path: string)
 		annotatenodes();
 	}
 	redraw();
+}
+
+# ---------- Copy, paste, remove (upstream's) ----------
+
+copyselected()
+{
+	if(disallow || selected < 0 || selected >= nvisible)
+		return;
+	cpfile = nodes[visible[selected]].path;
+	setstatus("copy " + basename(cpfile) + ": paste into a folder");
+	redraw();
+}
+
+# Copy what Copy took into the selected folder, with cptree, upstream's
+# copier: a folder whole.
+pasteselected()
+{
+	if(disallow || cpfile == "" || selected < 0 || selected >= nvisible)
+		return;
+	ni := visible[selected];
+	n := nodes[ni];
+	if(!n.isdir)
+		return;
+	if(cptree == nil){
+		cptree = load Cptree Cptree->PATH;
+		if(cptree == nil){
+			setstatus(sys->sprint("cannot load %s: %r", Cptree->PATH));
+			redraw();
+			return;
+		}
+		cptree->init();
+	}
+	progressch := chan of string;
+	warningch := chan of (string, chan of int);
+	finishedch := chan of string;
+	spawn cptree->copyproc(cpfile, n.path, progressch, warningch, finishedch);
+loop:	for(;;) alt {
+	m := <-progressch =>
+		setstatus(m);
+	(m, r) := <-warningch =>
+		setstatus("warning: " + m);
+		r <-= 1;
+	m := <-finishedch =>
+		setstatus(m);
+		break loop;
+	}
+	refreshsubtree(ni);
+	redraw();
+}
+
+startremove()
+{
+	if(disallow || selected < 0 || selected >= nvisible || visible[selected] == 0)
+		return;
+	rmpending = nodes[visible[selected]].path;
+	promptmode = PROMPT_REMOVE;
+	beginprompt("Remove " + rmpending + " and all in it? Type yes:");
+}
+
+doremove(path: string)
+{
+	if(disallow || path == "" || path == rootpath)
+		return;
+	e := rmtree(path);
+	if(e != nil)
+		setstatus("remove: " + e);
+	else
+		setstatus("removed " + basename(path));
+	if(path == cpfile)
+		cpfile = "";
+	# the folder it was in, read again
+	for(i := 0; i < nnodes; i++)
+		if(nodes[i].path == path){
+			if(nodes[i].parent >= 0)
+				refreshsubtree(nodes[i].parent);
+			break;
+		}
+	rebuildvisible();
+	redraw();
+}
+
+# Remove path, a folder with all in it
+rmtree(path: string): string
+{
+	if(sys->remove(path) >= 0)
+		return nil;
+	e := sys->sprint("%r");
+	(ok, d) := sys->stat(path);
+	if(ok < 0 || (d.mode & Sys->DMDIR) == 0)
+		return e;
+	(dirs, n) := readdir->init(path, Readdir->NONE|Readdir->COMPACT);
+	for(i := 0; i < n; i++){
+		if((e = rmtree(joinpath(path, dirs[i].name))) != nil)
+			return e;
+	}
+	if(sys->remove(path) < 0)
+		return sys->sprint("%r");
+	return nil;
 }
 
 # ---------- Tree operations ----------
@@ -1219,6 +1370,11 @@ refreshtree()
 	selpath := "";
 	if(selected >= 0 && selected < nvisible)
 		selpath = nodes[visible[selected]].path;
+	# what was open is read again and open again, not collapsed
+	open: list of string;
+	for(i := 1; i < nnodes; i++)
+		if(nodes[i].isdir && nodes[i].expanded)
+			open = nodes[i].path :: open;
 
 	nnodes = 0;
 	addnode(rootpath, basename(rootpath), 0, 1, -1);
@@ -1226,6 +1382,11 @@ refreshtree()
 		nodes[0].expanded = 1;
 		nodes[0].loaded = 0;
 		loadchildren(0);
+		# a node opened inserts its children after it, so one pass in
+		# order opens the open ones' open children too
+		for(i = 1; i < nnodes; i++)
+			if(nodes[i].isdir && member(nodes[i].path, open))
+				expand(i);
 		rebuildvisible();
 	}
 
@@ -1233,7 +1394,7 @@ refreshtree()
 	annotatenodes();
 
 	selected = 0;
-	for(i := 0; i < nvisible; i++) {
+	for(i = 0; i < nvisible; i++) {
 		if(nodes[visible[i]].path == selpath) {
 			selected = i;
 			break;
@@ -1241,6 +1402,14 @@ refreshtree()
 	}
 	scrolltoselected();
 	redraw();
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 refreshsubtree(ni: int)
@@ -1352,7 +1521,7 @@ rowtext(n: ref Node): string
 			marker = sys->sprint("%c ", 16r25B8);	# ▸
 	}
 	name := n.name;
-	if(n.isdir)
+	if(n.isdir && name != "/")
 		name += "/";
 	row := indent + marker + name;
 	annot := "";
@@ -1379,21 +1548,35 @@ recalcvislines()
 
 # Rebuild the listbox contents from the visible[] list and reflect the
 # current selection and status.  Cheap enough to run on every change.
+#
+# The view stays where it was: where the user scrolled it (the wheel,
+# the scroll bar), unless something here set topline (the keys, goto,
+# the agent's scroll), in which case it moves there.  The agent's
+# state and view files are written each time, so they say what is
+# shown; they were written only on a click.
+#
 redraw()
 {
 	if(top == nil)
 		return;
+	if(!topset){
+		(n, nil) := str->toint(tk->cmd(top, ".main.lb nearest 0"), 10);
+		topline = n;
+	}
+	topset = 0;
 	tk->cmd(top, ".main.lb delete 0 end");
 	for(i := 0; i < nvisible; i++)
 		tk->cmd(top, sys->sprint(".main.lb insert end {%s}", rowtext(nodes[visible[i]])));
 	recalcvislines();
+	clamptop();
+	tk->cmd(top, sys->sprint(".main.lb yview %d", topline));
 	if(selected >= 0 && selected < nvisible) {
 		tk->cmd(top, ".main.lb selection clear 0 end");
 		tk->cmd(top, sys->sprint(".main.lb selection set %d", selected));
-		tk->cmd(top, sys->sprint(".main.lb see %d", selected));
 	}
 	updatestatus();
 	tk->cmd(top, "update");
+	ftreechanged();
 }
 
 # Status strip: selected path on the left, item count / bind info / a
@@ -1478,6 +1661,7 @@ gotopath(path: string)
 	annotatenodes();
 	selected = 0;
 	topline = 0;
+	topset = 1;
 	tkclient->settitle(top, "ftree — " + rootpath);
 }
 
@@ -1554,29 +1738,6 @@ reloadcolors()
 	});
 }
 
-# ---------- Namespace change watcher ----------
-
-nswatcher(ch: chan of int)
-{
-	for(;;) {
-		sys->sleep(2000);
-		pid := sys->pctl(0, nil);
-		nspath := sys->sprint("/prog/%d/ns", pid);
-		fd := sys->open(nspath, Sys->OREAD);
-		if(fd == nil)
-			continue;
-		raw := "";
-		buf := array[4096] of byte;
-		for(;;) {
-			n := sys->read(fd, buf, len buf);
-			if(n <= 0)
-				break;
-			raw += string buf[0:n];
-		}
-		if(raw != nssnapshot)
-			alt { ch <-= 1 => ; * => ; }
-	}
-}
 
 # ---------- Theme listener ----------
 
@@ -1593,36 +1754,41 @@ themelistener(ch: chan of int)
 	}
 }
 
-# ---------- Timer ----------
 
-timer(c: chan of int, ms: int)
+# ---------- Its files, for an agent (appfs(2)) ----------
+#
+# ctl, state and view, served and posted as #sftree/fs: read from the
+# tree as it is shown, a command done when its write returns (a refused
+# one the write's error).  ftree's ctl binds in ftree's own name space.
+
+appfs: Appfs;
+appfstether: ref Sys->FD;	# the files go with it
+
+startfs(appreqs: chan of ref Appfs->Req)
 {
-	for(;;) {
-		sys->sleep(ms);
-		c <-= 1;
-	}
-}
-
-# ---------- Veltro real-file IPC ----------
-
-initftreedir()
-{
-	mkdirq("/tmp/veltro");
-	mkdirq(FTREE_DIR);
-}
-
-mkdirq(path: string)
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd != nil) {
-		fd = nil;
+	appfs = load Appfs Appfs->PATH;
+	if(appfs == nil || appfs->init() != nil) {
+		appfs = nil;
 		return;
 	}
-	fd = sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
-	fd = nil;
+	err: string;
+	(nil, appfstether, err) = appfs->serve("ftree", array[] of {"ctl", "state", "view"}, appreqs);
+	if(err != nil) {
+		sys->fprint(stderr, "ftree: serve: %s\n", err);
+		appfs = nil;
+	}
 }
 
-writeftreestate()
+# what is shown changed
+ftreechanged()
+{
+	if(appfs != nil)
+		appfs->event("changed");
+}
+
+
+
+ftreeread(file: string): string
 {
 	state := sys->sprint("root %s\n", rootpath);
 	state += sys->sprint("nsmode %d\n", nsmode);
@@ -1664,7 +1830,7 @@ writeftreestate()
 		if(i == selected)
 			sel = "* ";
 		view += sel + indent + marker + n.name;
-		if(n.isdir)
+		if(n.isdir && n.name != "/")
 			view += "/";
 		if(nsmode && n.bindsrc != nil) {
 			view += "  <- " + n.bindsrc;
@@ -1678,29 +1844,23 @@ writeftreestate()
 		view += "\n";
 	}
 
-	writestatefile(FTREE_DIR + "/state", state);
-	writestatefile(FTREE_DIR + "/view", view);
+	case file {
+	"state" =>
+		return state;
+	"view" =>
+		return view;
+	}
+	return "";
 }
 
-writestatefile(path, data: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r666);
-	if(fd == nil)
-		return;
-	b := array of byte data;
-	sys->write(fd, b, len b);
-	fd = nil;
-}
 
-checkctlfile(): int
+# A command from ctl: whether what is shown changed, and nil or why it
+# was refused.
+ftreecmd(cmd: string): (int, string)
 {
-	cmd := readrmfile(FTREE_DIR + "/ctl");
-	if(cmd == nil || cmd == "")
-		return 0;
-
 	(nil, toks) := sys->tokenize(cmd, " \t\n");
 	if(toks == nil)
-		return 0;
+		return (0, "usage: cd|select|expand|collapse|refresh|nsmode|bind|unmount|scroll");
 
 	verb := hd toks;
 	toks = tl toks;
@@ -1708,27 +1868,28 @@ checkctlfile(): int
 	case verb {
 	"cd" or "goto" =>
 		if(toks == nil)
-			return 0;
+			return (0, "usage: " + verb + " ...");
 		gotopath(hd toks);
-		return 1;
+		return (1, nil);
 	"select" =>
 		if(toks == nil)
-			return 0;
+			return (0, "usage: " + verb + " ...");
 		path := hd toks;
 		for(i := 0; i < nvisible; i++) {
 			if(nodes[visible[i]].path == path) {
 				selected = i;
 				scrolltoselected();
-				return 1;
+				return (1, nil);
 			}
 		}
+		return (0, "not shown: " + path);
 	"expand" =>
 		if(selected >= 0 && selected < nvisible) {
 			ni := visible[selected];
 			if(nodes[ni].isdir) {
 				expand(ni);
 				rebuildvisible();
-				return 1;
+				return (1, nil);
 			}
 		}
 	"collapse" =>
@@ -1737,18 +1898,18 @@ checkctlfile(): int
 			if(nodes[ni].isdir) {
 				collapse(ni);
 				rebuildvisible();
-				return 1;
+				return (1, nil);
 			}
 		}
 	"refresh" =>
 		refreshtree();
-		return 1;
+		return (1, nil);
 	"nsmode" =>
 		togglensmode();
-		return 1;
+		return (1, nil);
 	"bind" =>
-		if(len toks < 2)
-			return 0;
+		if(disallow || len toks < 2)
+			return (0, ftreerefusal(verb));
 		src := hd toks;
 		toks = tl toks;
 		target := hd toks;
@@ -1767,15 +1928,15 @@ checkctlfile(): int
 		}
 		bindsrc_pending = src;
 		dobind(src, flagstr);
-		return 1;
+		return (1, nil);
 	"unmount" =>
-		if(toks == nil)
-			return 0;
+		if(disallow || toks == nil)
+			return (0, ftreerefusal(verb));
 		dounmount(hd toks);
-		return 1;
+		return (1, nil);
 	"scroll" =>
 		if(toks == nil)
-			return 0;
+			return (0, "usage: " + verb + " ...");
 		case hd toks {
 		"up" =>
 			topline -= vislines;
@@ -1790,28 +1951,21 @@ checkctlfile(): int
 			topline = nvisible - vislines;
 			clamptop();
 			selected = nvisible - 1;
+		* =>
+			return (0, "usage: " + verb + " ...");
 		}
-		return 1;
+		topset = 1;
+		return (1, nil);
 	}
-	return 0;
+	return (0, verb + ": nothing selected, or not a folder");
 }
 
-readrmfile(path: string): string
+
+ftreerefusal(verb: string): string
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	fd = nil;
-	if(n <= 0)
-		return nil;
-	s := string buf[0:n];
-	fd = sys->create(path, Sys->OWRITE, 8r666);
-	fd = nil;
-	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
-		s = s[:len s - 1];
-	return s;
+	if(disallow)
+		return verb + ": not allowed (ftree -d)";
+	return "usage: bind src target [flags], unmount path";
 }
 
 min(a, b: int): int

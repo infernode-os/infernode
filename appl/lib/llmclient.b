@@ -173,6 +173,21 @@ contains(s, sub: string): int
 	return r != nil;
 }
 
+# What is missing when a local model service refuses: the CLI gateways
+# and Ollama are host daemons InferNode does not start, and a bare
+# "connection refused" on a port number did not say which one.
+localgatehint(host, port: string): string
+{
+	if(host != "127.0.0.1" && host != "localhost")
+		return "";
+	case port {
+	"11435" =>	return "; claude-gate is not running: start it on the host with tools/claude-gate/serve-claude-gate.sh";
+	"11436" =>	return "; codex-gate is not running: start it on the host with tools/codex-gate/serve-codex-gate.sh";
+	"11434" =>	return "; Ollama is not running: start it on the host (ollama serve)";
+	}
+	return "";
+}
+
 askanthropic(apikey, apiurl: string, req: ref AskRequest): (ref AskResponse, string)
 {
 	if(apiurl == nil || apiurl == "")
@@ -794,7 +809,7 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 	# Plain HTTP path (typical: Ollama at localhost:11434).
 	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
 	if(ok < 0)
-		return (nil, sys->sprint("openai: cannot connect to %s: %r", host), 0);
+		return (nil, sys->sprint("openai: cannot connect to %s: %r", host) + localgatehint(host, port), 0);
 	d := array of byte reqdata;
 	if(sys->write(conn.dfd, d, len d) < 0)
 		return (nil, sys->sprint("openai: write failed: %r"), 0);
@@ -2253,7 +2268,7 @@ httppost(host, port, path, headers, body: string): (string, string)
 	addr := "tcp!" + host + "!" + port;
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", addr));
+		return (nil, sys->sprint("cannot connect to %s: %r", addr) + localgatehint(host, port));
 
 	contentlen := len array of byte body;
 	req := "POST " + path + " HTTP/1.0\r\n" +

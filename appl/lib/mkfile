@@ -78,6 +78,7 @@ TARG=\
 	html.dis\
 	imap.dis\
 	imageremap.dis\
+	icon.dis\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
@@ -114,6 +115,8 @@ TARG=\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
+	post9p.dis\
+	appfs.dis\
 	pop3.dis\
 	profile.dis\
 	publicnet.dis\
@@ -247,6 +250,7 @@ SYSMODULES=\
 	hash.m\
 	html.m\
 	imap.m\
+	icon.m\
 	imagefile.m\
 	imgload.m\
 	pngload.m\
@@ -361,6 +365,8 @@ SYSMODULES=\
 	tls.m\
 	viewport.m\
 	wmdeb.m\
+	post9p.m\
+	appfs.m\
 
 
 

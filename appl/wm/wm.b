@@ -93,8 +93,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# /lib/lucifer/theme/current) reaches the windows.  Under Lucifer
 	# it sends "retheme" itself; at the top, wm/wm watches.
 	themec := chan of string;
-	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil)
+	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil) {
+		lucitheme->serve();	# a session's root; done already under a profile
 		themec = lucitheme->watch();
+	}
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
 	# Run as another wm/wm's client, a desktop in a window: room for a

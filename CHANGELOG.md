@@ -6,6 +6,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
+  `/prog` (#1019).** Lucifer looked for an app's main process every
+  half second, then read every process's status every half second
+  until none was in the app's group; closing a task polled the same way
+  for up to three seconds. A read of the new `grpwait` file (prog(3))
+  waits until the process group has no process left, in the emulator
+  and the native kernel alike; Lucifer opens it once the app has its
+  group and waits on it.
 - **An activity's `event` file has a queue for each reader; the task
   tool's Apply and Discard wait on it (#1019).** luciuisrv let one
   reader wait on `activity/N/event` at a time: a second reader ended

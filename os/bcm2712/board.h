@@ -41,6 +41,8 @@ int	fanrpm(void);
 
 /* pcie1.c, nvme.c */
 int	pcie1up(void);
+int	pcie1linked(void);
+char*	pcie1speed(void);
 u32int	pcie1cfgr(int);
 void	pcie1cfgw(int, u32int);
 void	nvmelink(void);
@@ -48,6 +50,9 @@ int	cmdlineword(char*);
 int	nvmepresent(void);
 vlong	nvmelength(void);
 long	nvmerw(int, void*, long, vlong);
+long	nvmestat(char*, long);
+
+void	sdaddnvmepart(char*, vlong, vlong);
 
 /* uartrp1.c */
 void	rp1uartlink(void);

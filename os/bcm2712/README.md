@@ -131,13 +131,21 @@ and `rp1.c` finishes what the firmware has no need of. RP1 masters RAM at
 the physical address, not at Linux's `0x10_0000_0000`, and only below
 `0x80000000`, where its own registers are.
 
+## A file system on the drive
+
+`disk/kfs -r -b 16384 -n nv '#S/nvme0p3'` reams, once. At kfs's default
+1KB blocks a large disk takes hours, the free list being most of it; at
+16KB, 1.8TB took 30 seconds. Afterwards `mount -c {disk/kfs -n nv
+'#S/nvme0p3'} /n/nvme`. kfs says "needs check" after a reboot that did
+not halt it first, and checks: 36 seconds on that disk with little on it.
+
 ## What is left
 
 1. A long soak with everything loaded. An hour of that is what has run.
 2. What wants something on the bench: a second monitor, a USB disk or
    SuperSpeed device, the Debug Probe, a Bluetooth peer, a real I2C or
    SPI device, a coin cell, and a person to press the power button.
-3. A real file system on a large drive. kfs on the whole 2TB takes too
-   long to be usable; `nvmepart` ranges work today.
+3. Booting the firmware from the drive. `nvmeroot` takes userland from
+   `nvme0p1` already.
 4. In `docs/DEVICE-LETTERS.md`, when #1036 lands: mark `J`, `Q`, `W` and
    `r` in use, here.

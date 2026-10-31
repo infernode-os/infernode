@@ -94,6 +94,9 @@ exit(int code)
 		up != nil? (ulong)up->pid : 0UL,
 		up != nil? up->text : "-");
 	splhi();
+#ifdef NVME0
+	nvmeshutdown();
+#endif
 
 	/*
 	 * Reset into serialboot rather than halt.
@@ -163,6 +166,9 @@ reboot(void)
 	 * print it. The reset then looks like a crash: the console simply
 	 * stops and starts again with no line saying why.
 	 */
+#ifdef NVME0
+	nvmeshutdown();
+#endif
 	uartputstr("reboot: resetting via the watchdog\n");
 	boardreboot();
 	/* boardreboot does not return; if it somehow does, stop. */

@@ -2324,6 +2324,17 @@ mntgenproc(mg: Command, fd: ref Sys->FD)
 sdsetup()
 {
 	fd := sys->open("/dev/sdcard", Sys->OREAD);
+
+	#
+	# A board that booted from a drive and has no card, or was told
+	# to on the command line, has this on the drive's first partition.
+	# Only a drive's partition table names it, so elsewhere it is not
+	# there.
+	#
+	if((fd == nil || bootword("nvmeroot")) && sys->stat("/dev/nvme0p1").t0 >= 0){
+		dosmount("nvme0p1");
+		return;
+	}
 	if(fd == nil)
 		return;			# no card, which is not an error
 
@@ -2376,7 +2387,28 @@ sdsetup()
 
 	if(dos == "")
 		return;
+	dosmount(dos);
+}
 
+# Whether the command line has this word.
+bootword(w: string): int
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, l) := sys->tokenize(string buf[0:n], " \t\r\n");
+	for(; l != nil; l = tl l)
+		if(hd l == w)
+			return 1;
+	return 0;
+}
+
+dosmount(dos: string)
+{
 	srv := load Command "/dis/dossrv.dis";
 	if(srv == nil){
 		sys->print("init: cannot load dossrv: %r\n");

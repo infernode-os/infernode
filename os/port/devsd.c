@@ -35,12 +35,17 @@ enum{
 	Qdata,
 #ifdef NVME0
 	Qnvme,		/* a second disk: one whole-disk file */
+	Qnvmestat,	/* and what it says of itself */
 #endif
 	Qpart,		/* and upwards, one per partition */
 
 	Blen	= 512,
 	Maxblks	= 64,	/* blocks per multiple-block read: 32KB */
+#ifdef NVME0
+	Npart	= 24,
+#else
 	Npart	= 8,
+#endif
 	Namelen	= 32,
 };
 
@@ -99,6 +104,20 @@ sdaddpart(char *name, vlong startblk, vlong nblk)
 #endif
 }
 
+#ifdef NVME0
+/* nvme.c's, from the disk's partition table: in 512-byte units, as nvmepart */
+void
+sdaddnvmepart(char *name, vlong start, vlong n)
+{
+	int i;
+
+	sdaddpart(name, start, n);
+	for(i = 0; i < sd.npart; i++)
+		if(strcmp(sd.part[i].name, name) == 0)
+			sd.part[i].nvme = 1;
+}
+#endif
+
 static vlong
 sdlength(void)
 {
@@ -132,6 +151,10 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 		return 1;
 	}
 	if(i == 1){
+#ifdef NVME0
+		if(!sdblkpresent())
+			return 0;	/* booted from the drive, with no card */
+#endif
 		q.path = Qdata;
 		devdir(c, q, "sdcard", sdlength(), eve, 0640, dp);
 		return 1;
@@ -144,7 +167,12 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 			devdir(c, q, "nvme0", nvmelength(), eve, 0640, dp);
 			return 1;
 		}
-		i--;
+		if(i == 1){
+			q.path = Qnvmestat;
+			devdir(c, q, "nvmestat", 0, eve, 0444, dp);
+			return 1;
+		}
+		i -= 2;
 	}
 #endif
 	if(i >= sd.npart)
@@ -158,8 +186,13 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 static Chan*
 sdattach(char *spec)
 {
+#ifdef NVME0
+	if(!sdblkpresent() && !nvmepresent())
+		error("no SD card");
+#else
 	if(!sdblkpresent())
 		error("no SD card");
+#endif
 	return devattach('S', spec);
 }
 
@@ -320,6 +353,20 @@ sdread(Chan *c, void *a, long n, vlong off)
 #ifdef NVME0
 	if((ulong)c->qid.path == Qnvme)
 		return nvmerw(0, a, n, off);
+	if((ulong)c->qid.path == Qnvmestat){
+		char *s;
+
+		s = smalloc(READSTR);
+		if(waserror()){
+			free(s);
+			nexterror();
+		}
+		nvmestat(s, READSTR);
+		n = readstr(off, a, n, s);
+		poperror();
+		free(s);
+		return n;
+	}
 #endif
 	sdrange(c, &base, &len);
 #ifdef NVME0
@@ -339,9 +386,6 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 {
 	Cmdbuf *cb;
 	vlong base, len;
-#ifdef NVME0
-	int i;
-#endif
 
 	if((ulong)c->qid.path == Qctl){
 		cb = parsecmd(a, n);
@@ -354,11 +398,8 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 				strtoll(cb->f[3], nil, 0));
 #ifdef NVME0
 		else if(cb->nf == 4 && strcmp(cb->f[0], "nvmepart") == 0){
-			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
+			sdaddnvmepart(cb->f[1], strtoll(cb->f[2], nil, 0),
 				strtoll(cb->f[3], nil, 0));
-			for(i = 0; i < sd.npart; i++)
-				if(strcmp(sd.part[i].name, cb->f[1]) == 0)
-					sd.part[i].nvme = 1;
 		}
 #endif
 		else

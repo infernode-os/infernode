@@ -69,6 +69,7 @@ enum
 	Extcfg		= 0x8000,
 	Extcfgidx	= 0x9000,
 	Lnkcap		= 0xAC + 0x0C,
+	Lnkctl		= 0xAC + 0x10,	/* and link status, above it */
 	Lnkctl2		= 0xAC + 0x30,
 
 	Win		= 0x80000000,
@@ -121,6 +122,26 @@ pcie1cfgw(int off, u32int v)
 	coherence();
 	B(Extcfg + off) = v;
 	coherence();
+}
+
+/* whether the link is there, now */
+int
+pcie1linked(void)
+{
+	return (B(Pciestatus) & (Plu|Dla)) == (Plu|Dla);
+}
+
+/* what it runs at, by the bridge's own link status */
+char*
+pcie1speed(void)
+{
+	switch(B(Lnkctl) >> 16 & 0xF){
+	case 1:
+		return "PCIe gen 1";
+	case 2:
+		return "PCIe gen 2";
+	}
+	return "PCIe link down";
 }
 
 int

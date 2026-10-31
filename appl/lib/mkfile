@@ -367,6 +367,7 @@ SYSMODULES=\
 	wmdeb.m\
 	post9p.m\
 	appfs.m\
+	sdg.m\
 
 
 

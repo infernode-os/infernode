@@ -332,6 +332,7 @@ SYSMODULES=\
 	viewport.m\
 	webclient.m\
 	wmsrv.m\
+	sdg.m\
 
 DISBIN=$ROOT/dis
 

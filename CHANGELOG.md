@@ -6,6 +6,32 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
+  `/prog` (#1019).** Lucifer looked for an app's main process every
+  half second, then read every process's status every half second
+  until none was in the app's group; closing a task polled the same way
+  for up to three seconds. A read of the new `grpwait` file (prog(3))
+  waits until the process group has no process left, in the emulator
+  and the native kernel alike; Lucifer opens it once the app has its
+  group and waits on it.
+- **An activity's `event` file has a queue for each reader; the task
+  tool's Apply and Discard wait on it (#1019).** luciuisrv let one
+  reader wait on `activity/N/event` at a time: a second reader ended
+  the first's read, and an event went to one of them. So the task tool,
+  after sending a task `/promote` or `/revert`, re-read the task's
+  conversation every quarter second for its answer. Each open now has
+  its own queue, as the global `event` file's always had; events with
+  no reader still wait for the first to open the file, and what the
+  last reader leaves unread waits for the next. The task tool waits on
+  the task's events for its answer, five seconds at most as before.
+- **A payment's requester waits on its read for the decision; nothing
+  polls (#1019).** x402's `authorize` (payfetch) re-read its fid every
+  two seconds, for up to 90, while a payment waited for a person to
+  approve it. A fid told `pending:<id>` that reads `pay` or `authorize`
+  again at offset 0 now waits until the payment is approved, denied or
+  expires, and gets the outcome; the first read still gives the id at
+  once, and a read at another offset does not wait. x402 makes that
+  read under its time limit, and hears a denial as it is made.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's

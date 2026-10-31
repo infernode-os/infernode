@@ -9,6 +9,7 @@ prog \- running programs
 .BI /prog/ n /dbgctl
 .BI /prog/ n /exception
 .BI /prog/ n /fd
+.BI /prog/ n /grpwait
 .BI /prog/ n /heap
 .BI /prog/ n /ns
 .BI /prog/ n /nsgrp
@@ -85,6 +86,22 @@ module name enclosed in
 a colon,
 and a possibly empty error message.
 The error message will contain at most 64 characters.
+.PP
+The read-only
+.B grpwait
+file waits for a process group to end.
+Opening it notes the group the process is in at that moment;
+a read blocks until that group has no process left in it,
+then returns the group's number.
+The process itself, once it has exited, does not hold the read:
+a group whose leader returned while others it spawned run on
+is not gone until they have gone too.
+Processes that put themselves in a group of their own
+.RB ( NEWPGRP ;
+see
+.IR sys-pctl (2))
+have left the group and do not hold it either.
+Each open is a waiter of its own.
 .PP
 The read-only
 .B fd

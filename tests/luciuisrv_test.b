@@ -1543,6 +1543,60 @@ testAutocenterOnKill(t: ref T)
 }
 
 # ============================================================================
+# Test: testTwoEventReaders
+#
+# Two readers of one activity's event file (Lucifer's, and a task tool
+# waiting on the task's reply) each hear every event: a second reader
+# used to end the first's read, and an event went to only one of them.
+# ============================================================================
+testTwoEventReaders(t: ref T)
+{
+	if(actid < 0) {
+		t.skip("no activity (testSetup failed)");
+		return;
+	}
+	evpath := actbase() + "/event";
+	writefile(evpath, "flush");
+	drainall(evpath);
+
+	f1 := sys->open(evpath, Sys->OREAD);
+	f2 := sys->open(evpath, Sys->OREAD);
+	if(f1 == nil || f2 == nil) {
+		t.fatal("cannot open the event file twice");
+		return;
+	}
+	c1 := chan[1] of string;
+	c2 := chan[1] of string;
+	spawn evfdreader(f1, c1);	# waiting when the event comes
+	writefile(actbase() + "/label", "two-readers");
+	spawn evfdreader(f2, c2);	# reads after it: it was queued for f2
+	t.assertseq(waitstr(c1), "label", "the reader waiting hears the event");
+	t.assertseq(waitstr(c2), "label", "and so does the other, from its own queue");
+}
+
+evfdreader(fd: ref Sys->FD, c: chan of string)
+{
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		c <-= "error:eof";
+	else
+		c <-= strip(string buf[0:n]);
+}
+
+waitstr(c: chan of string): string
+{
+	toch := chan[1] of int;
+	spawn timerwait(toch, 3000);
+	alt {
+	s := <-c =>
+		return s;
+	<-toch =>
+		return "error:timeout";
+	}
+}
+
+# ============================================================================
 # Test: testAutocenterOnDelete
 #
 # Same as above but for the "delete" ctl command path.
@@ -1998,6 +2052,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Autocenter regression tests (f8b46094)
 	run("AutocenterOnKill", testAutocenterOnKill);
+	run("TwoEventReaders", testTwoEventReaders);
 	run("AutocenterOnDelete", testAutocenterOnDelete);
 	run("AutocenterNonCurrent", testAutocenterNonCurrent);
 

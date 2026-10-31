@@ -110,6 +110,7 @@
 #define	FWRTC		1	/* #P has fan, fanrpm, led, button; devcons sets the clock: rtcfan.c */
 #define	RP1GPIO		1	/* ../bcm/devgpio.c: its interrupts are RP1's */
 #define	SDCARD_EMMC2	1
+#define	SDCARD_HISPEED	1	/* ../bcm/sdmmc.c: CMD6 to 50MHz */
 
 /*
  * Cortex-A76 L1 data cache line: 64 bytes, as the A53's is. Upstream's bcm port says 32, which is

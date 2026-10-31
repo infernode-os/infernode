@@ -532,6 +532,8 @@ arasanbus(int width, int hz)
 			c0 |= Hctldwidth4;
 		emmcwr(Emmccontrol0, c0);
 	}
+	if(hz > 25000000)
+		emmcwr(Emmccontrol0, emmcrd(Emmccontrol0) | Hctlhsen);
 	if(hz > 0)
 		if(emmcsetclock(hz) < 0)
 			uartputstr("emmc: cannot set the clock\n");

@@ -606,13 +606,13 @@ static void
 grpgone(int gid)
 {
 	Grpwait *w;
-	char buf[16];
+	char buf[16];	/* Flawfinder: ignore — an int's decimal, bounded by sizeof buf below */
+	int n;
 
+	n = snprint(buf, sizeof(buf), "%d", gid);
 	for(w = grpwaits; w != nil; w = w->next)
-		if(w->gid == gid){
-			snprint(buf, sizeof(buf), "%d", gid);
-			qproduce(w->q, buf, strlen(buf));
-		}
+		if(w->gid == gid)
+			qproduce(w->q, buf, n);
 }
 
 static Progs*

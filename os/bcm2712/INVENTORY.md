@@ -34,7 +34,7 @@ has the feature, which is what parity means.
 | Wi-Fi, TKIP group cipher | no | shared | Not supported, any board (`wpa.b`) |
 | Bluetooth classic | yes | `uartbt.c` | **Proved** by inquiry |
 | Bluetooth LE scan | yes | shared | **Proved**: `/net/bt/lescan` found 13 neighbours |
-| Bluetooth pairing, L2CAP | yes | shared | Not tested on this board; wants a peer |
+| Bluetooth pairing, L2CAP | yes | shared | **Proved** against a Jetson: Just Works pairing, then an L2CAP channel out and an SDP query answered |
 | GPIO function, level, pull | yes | `gpiorp1.c` | **Proved** |
 | GPIO edge events | yes | `gpiorp1.c` | **Proved** across a jumper, GPIO 5 to GPIO 0 |
 | `#P` temperature, throttling | yes | shared | **Proved** |

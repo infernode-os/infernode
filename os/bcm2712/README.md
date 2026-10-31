@@ -4,7 +4,7 @@
 from a card that also holds Raspberry Pi OS. On that board: all four
 cores through PSCI, the Dis JIT, all the RAM, userspace from the
 card at 19 MB/s, Ethernet at 1000, 100 and 10 Mbit/s, USB through RP1,
-real MSI-X, Wi-Fi with WPA2, Bluetooth inquiry and LE scan, GPIO with
+real MSI-X, Wi-Fi with WPA2, Bluetooth pairing, L2CAP and LE scan, GPIO with
 edges, I2C, SPI, PWM, the real-time clock, the fan, an NVMe drive on the
 external PCIe connector, and the desktop on either HDMI port.
 [INVENTORY.md](INVENTORY.md) says what each of those means, and what
@@ -150,7 +150,7 @@ it. `unmount` is what marks it clean.
 
 1. A long soak with everything loaded. An hour of that is what has run.
 2. What wants something on the bench: a second monitor, a USB disk or
-   SuperSpeed device, the Debug Probe, a Bluetooth peer, a real I2C or
+   SuperSpeed device, the Debug Probe, a real I2C or
    SPI device, a coin cell.
 3. Booting from the drive works: `BOOT_ORDER=0xf416`, a kernel and
    `config.txt` on `nvme0p1`, `nvmeroot` on the command line. But with

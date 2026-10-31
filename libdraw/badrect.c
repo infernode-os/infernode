@@ -3,7 +3,7 @@
 
 /*
  * Keep image geometry inside the range in which unitsperline(), Memimage.zero
- * and byteaddr() can do their signed offset arithmetic.  Use vlong for the
+ * and byteaddr() can do their offset arithmetic.  Use vlong for the
  * validation itself: the host compilers do not provide Plan 9 C's wrapping
  * signed arithmetic.
  */
@@ -24,8 +24,10 @@ badrect(Rectangle r)
 		return 1;
 	zy0 = x*r.min.y;
 	zy1 = x*r.max.y;
-	if(zy0 < -(1<<28) || zy0 >= (1<<28) ||
-	   zy1 < -(1<<28) || zy1 >= (1<<28))
+	/* Memimage.zero is a vlong: an image far down its coordinates is
+	 * fine, so long as the offset stays well inside it. */
+	if(zy0 < -((vlong)1<<32) || zy0 >= ((vlong)1<<32) ||
+	   zy1 < -((vlong)1<<32) || zy1 >= ((vlong)1<<32))
 		return 1;
 	return 0;
 }

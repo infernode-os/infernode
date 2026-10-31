@@ -62,8 +62,10 @@ main(void)
 	failed += check(!badrect(Rect(0, 0, 1, 1)), "ordinary rectangle rejected");
 	failed += check(badrect(Rect(0, 0, 0, 1)), "zero-width rectangle accepted");
 	failed += check(badrect(Rect(0, 0, 1<<26, 1)), "overflowing x coordinate accepted");
-	failed += check(badrect(Rect(0, 1<<28, 1, (1<<28)+1)),
+	failed += check(badrect(Rect(0, 1<<30, 1<<20, (1<<30)+1)),
 		"overflowing y offset accepted");
+	failed += check(!badrect(Rect(0, 500000, 3400, 500004)),
+		"an image far down its coordinates rejected");
 	failed += check(bytesperline(Rect(-2, 0, -1, 1), 8) == 1,
 		"negative-coordinate scan line is mis-sized");
 	icossin2((int)(1U<<31), (int)(1U<<31), &c, &s);

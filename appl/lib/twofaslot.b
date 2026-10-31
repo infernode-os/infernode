@@ -30,7 +30,7 @@ init()
 	secstore->init();
 	twofa = load Twofa Twofa->PATH;
 	twofa->init();
-	twofa->mount();			# best-effort; caller may already have bound #F
+	twofa->mount();			# best-effort; caller may already have bound #h
 	random = load Random Random->PATH;
 }
 

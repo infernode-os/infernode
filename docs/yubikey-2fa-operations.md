@@ -3,7 +3,7 @@
 This is the **hands-on guide** for InferNode's YubiKey-gated secstore login. For
 the design and threat model, see [`second-factor-auth.md`](second-factor-auth.md).
 
-> **Platforms.** The `#F` device and its libfido2 host bridge
+> **Platforms.** The `#h` device and its libfido2 host bridge
 > (`emu/port/fido2bridge.c`) build on **macOS, Linux, and Windows**. Each GUI
 > build links libfido2 when it is present (`apt install libfido2-dev` on Linux,
 > `vcpkg install fido2:x64-windows` on Windows, `brew install libfido2` on
@@ -39,7 +39,7 @@ in a way older InferNode builds cannot read. Read this before deploying.
 
 - **A 2FA-enrolled account's `factotum` blob is encrypted under a random data key
   (DK), not the password.** An InferNode build *without* the 2FA support (no
-  `twofaslot`/`#F` device, no DK-aware `secstore`/`factotum`) **cannot decrypt it**
+  `twofaslot`/`#h` device, no DK-aware `secstore`/`factotum`) **cannot decrypt it**
   and that user **cannot log in** there. The per-account `2fa/` slot files are also
   unrecognized by older builds.
 - **One-way until disabled.** To move an account back to an InferNode without 2FA,
@@ -75,7 +75,7 @@ back. Always back up `~/.infernode/usr/inferno/secstore` first.
 On Windows the YubiKey path **requires running InferNode elevated** (right-click
 `InferNode.exe` → "Run as administrator", or launch from an elevated console).
 Without elevation libfido2 cannot access the YubiKey's HID interface directly —
-Windows reserves it for the WebAuthN platform service — and the kernel `#F`
+Windows reserves it for the WebAuthN platform service — and the kernel `#h`
 device reports `available=0`. macOS and Linux do not need elevation.
 
 The whole 2FA flow must run elevated: **enroll, every login, `2fa addkey`,

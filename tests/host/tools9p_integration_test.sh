@@ -623,6 +623,19 @@ else
     fail "app IPC derived capability probe failed"
 fi
 
+# Two shells post #sshell/fs and fs.1; with the first gone, the shell
+# tool reads the second (it said the shell was not running).
+if emu_c "app_ipc_second_instance" 15 \
+    "/dis/tests/appfs_fake shell body input & first=\$apid; sleep 1; /dis/tests/appfs_fake shell body input & sleep 1; kill \$first; sleep 1; tools9p shell & sleep 2; echo read > /tool/shell/ctl; echo READ; cat /tool/shell/ctl"; then
+    if echo "$OUTPUT" | grep -A1 "^READ" | grep -q "shell body"; then
+        pass "an app tool reads a later instance when the first has gone"
+    else
+        fail "an app tool did not find the instance still posted (output: $OUTPUT)"
+    fi
+else
+    fail "second-instance probe failed"
+fi
+
 if emu_c "startup_direct_send_path_rejected" 12 \
     "mkdir /mnt >[2] /dev/null; mkdir /mnt/mail >[2] /dev/null; mkdir /mnt/mail/accounts >[2] /dev/null; mkdir /mnt/mail/accounts/alice >[2] /dev/null; touch /mnt/mail/accounts/alice/compose; tools9p -p /mnt/mail/accounts/alice/compose:rw read; cat /tool/paths >[2] /dev/null"; then
     if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/mail/accounts/alice/compose"; then

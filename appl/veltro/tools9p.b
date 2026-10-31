@@ -981,11 +981,14 @@ mountcharon()
 
 # Mount a server posted in #s (post9p(2)) for this invocation: the
 # editor's, shell's, man's and fractals', for their tools.  None posted, no mount: the tool says
-# it is not running.
+# it is not running.  A second instance posts fs.1, and so on: when the
+# first has gone, the first of those still posted is mounted, not none.
 mountposted(posted, mnt: string)
 {
 	ensuredir(mnt);
 	fd := sys->open(posted, Sys->ORDWR);
+	for(i := 1; fd == nil && i < 32; i++)
+		fd = sys->open(posted + "." + string i, Sys->ORDWR);
 	if(fd == nil) {
 		# nothing posted: the srv directory, empty, over the mount
 		# point, so the tool sees no files there (not whatever an

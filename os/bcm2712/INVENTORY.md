@@ -20,7 +20,7 @@ has the feature, which is what parity means.
 | Console out (GPIO14/15) | yes | `uartrp1.c` | **Proved** |
 | Console in | interrupt | `uartrp1.c` | **Proved**, by interrupt |
 | Debug connector (uart10) | no | `uartrp1.c` | Console output, out of the firmware's 115200; bytes leave the FIFO, nobody has read them. Wants the Debug Probe. No input: unplugged, its receiver fills with noise |
-| SD read | yes | `emmc2.c` | **Proved**; PIO at identification-to-default speeds, unmeasured |
+| SD read | yes | `emmc2.c` | **Proved**: 19 MB/s at High Speed, 50MHz, PIO. A 64MB region hashes as it does from Linux |
 | SD write | yes | `emmc2.c` | **Proved**, persisted over a reboot |
 | Gigabit Ethernet | yes | `etherrp1.c` | **Proved**, 927 in, 903 out |
 | Ethernet speed changes, 100/10 | yes | `etherrp1.c` | **Proved**, by advertising less (`ether100`, `ether10` on the command line): 95 in, 94 out; 10 in, 9 out. The block divides its own tx clock |

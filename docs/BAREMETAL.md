@@ -32,7 +32,7 @@ BeagleV-Fire (`os/mpfs`) as its boards, built and booted by
 | storage | SD card | virtio-blk (the *same card image*) |
 | display, input | HDMI/DSI; USB keyboard and mouse; touch | ramfb; virtio keyboard and tablet |
 | also | Bluetooth, GPIO, audio, A/B kernel update, boot watchdog | a real-time clock |
-| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin and the Pi 5 have |
+| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin has |
 
 This document is how to run it, what controls it, and where things are.
 It deliberately does not say *why* things are as they are; three other

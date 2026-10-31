@@ -362,6 +362,8 @@ dis/lib/fslib.dis
 dis/lib/fsproto.dis
 dis/lib/ftree/cptree.dis
 dis/lib/ftree/items.dis
+dis/lib/garminav.dis
+dis/lib/gdl90.dis
 dis/lib/geoproj.dis
 dis/lib/git/git.dis
 dis/lib/hash.dis
@@ -741,6 +743,7 @@ dis/tests/gentmpl.dis
 dis/tests/geomap_test.dis
 dis/tests/git_test.dis
 dis/tests/goroutine_leak_test.dis
+dis/tests/gdl90_test.dis
 dis/tests/gps_capability_test.dis
 dis/tests/gpu_bench.dis
 dis/tests/gpu_smoke.dis

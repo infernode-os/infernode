@@ -1,21 +1,27 @@
 .TH NMEA 2
 .SH NAME
-nmea \- NMEA 0183 sentences as GPS fixes
+nmea \- NMEA 0183 sentences as GPS fixes and traffic
 .SH SYNOPSIS
 .EX
 include "nmea.m";
 nmea := load Nmea Nmea->PATH;
-Fix, Parser, Sat: import nmea;
+Fix, Parser, Sat, Target: import nmea;
 
 init:      fn();
 fields:    fn(s: string): (array of string, string);
 timeof:    fn(s: string): string;
+sentences: fn(f: ref Fix): string;
 
 Parser.new:        fn(): ref Parser;
 p.sentence:        fn(s: string): (list of ref Fix, string);
 p.satellites:      fn(): string;
 p.forget:          fn();
+p.target:          fn(t: ref Target);
+p.traffic:         fn(now: int): string;
 p.last:            ref Fix;
+
+Target.new:        fn(kind, id: string): ref Target;
+t.text:            fn(now: int): string;
 
 f.time:            fn(): string;
 f.text:            fn(): string;
@@ -35,7 +41,10 @@ removed) and splits it at its commas, the address first:
 gives
 .BR "GPRMC 1 2" .
 A sentence must begin with
-.BR $ ;
+.B $
+(or
+.BR ! ,
+an encapsulated one: AIS);
 its checksum, if it has one, must be right.
 The error is
 .BR "not a sentence" ,
@@ -68,8 +77,19 @@ constellation's talker
 .BR BD ,
 .BR GQ ,
 .BR GI ,
-.BR GN );
-others, and proprietary sentences, are taken and passed over.
+.BR GN ),
+or a ship's instruments
+.RB ( II ,
+.BR IN ,
+.BR EC ).
+So are what aviation and marine receivers add: the magnetic variation
+(RMC's), a compass heading (HDT; HDG with its deviation and variation;
+HDM once the variation is known), Garmin's pressure altitude and error
+estimates (PGRMZ in feet or metres; PGRME, unless GST is sent), AIS
+(VDM, messages 1, 2, 3, 5, 18, 19 and 24, a message of several
+sentences put together; VDO, a ship's own, is passed over) and FLARM's
+traffic (PFLAA, placed from the fix).
+Other sentences are taken and passed over.
 A receiver sends a burst of sentences for each time it computes a
 position, which ones and in what order varying by receiver.
 A fix is complete when every kind of position sentence the receiver
@@ -128,7 +148,54 @@ is
 or
 .BR M3d ,
 the receiver's if it gave one.
+.B Magvar
+is degrees, east positive;
+.B heading
+degrees true;
+.B baroalt
+metres.
+.PP
+A
+.B Target
+is another craft:
+.B kind
+.BR ais ,
+.B adsb
+or
+.BR flarm ,
+.B id
+its MMSI or address, and what is known of its position, altitude,
+speed, course, heading, climb, name, call sign and category, each with
+a flag.
+.B Seen
+is
+.IR sys->millisec ()
+when it was last heard.
+.B P.target
+merges a target into what the parser knows of it (AIS sends a ship's
+name and its position in different messages).
+.B P.traffic
+gives one line a target heard in the ten minutes before
+.IR now ,
+nearest first when there is a fix, as
+.B T.text
+writes it; older ones are forgotten.
+.PP
+.B Sentences
+goes the other way: a fix written as the sentences a receiver would
+send for it, an RMC (with the variation), a GST if there are error
+estimates, a GGA if there is a position, an HDT if there is a heading
+and a PGRMZ if there is a pressure altitude, each ending CR LF.
+Read back by a
+.BR Parser ,
+they give the fix again.
+.IR Gpsfs (4)
+uses it for receivers that do not speak NMEA
+.RI ( gdl90 (2),
+.IR garminav (2)).
 .SH SOURCE
 .B /appl/lib/nmea.b
 .SH SEE ALSO
+.IR gdl90 (2),
+.IR garminav (2),
 .IR gpsfs (4)

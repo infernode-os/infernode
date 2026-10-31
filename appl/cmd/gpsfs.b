@@ -3,40 +3,54 @@ implement Gpsfs;
 #
 # gpsfs - a GPS receiver as files, at /mnt/gps.
 #
-# A receiver speaks NMEA 0183 over a byte stream: a serial port
-# ('#t/eia0', a USB puck the host enumerates there), a phone's own
-# location service ('#g/nmea', location(3)), a network feed (a phone
-# app serving NMEA over TCP, gpsd), a recorded log.  gpsfs reads
-# one such source, assembles its sentences into fixes (nmea(2)), and
-# serves what it knows:
+# A receiver is a byte stream: a serial port ('#t/eia0', a USB puck
+# the host enumerates there), a phone's own location service
+# ('#g/nmea', location(3)), a network feed (a phone app serving NMEA
+# over TCP, gpsd, a marine gateway's UDP), a recorded log.  It speaks
+# NMEA 0183, or one of two others gpsfs knows: Garmin's Aviation
+# output (garminav(2)) and GDL 90 from an ADS-B receiver (gdl90(2)).
+# A fix from those is written as NMEA (nmea->sentences), so there is
+# one parser and the nmea file speaks one language whatever the
+# receiver.  gpsfs reads one source, assembles its sentences into
+# fixes (nmea(2)), and serves what it knows:
 #
 #   ctl         (rw) write one command:
-#                      source <path> [baud]   a file or serial port;
-#                                             baud is written to <path>ctl
-#                      source <net!host!port> a network feed of NMEA
+#                      source [format] <path> [baud]
+#                                       a file or serial port; baud is
+#                                       written to <path>ctl
+#                      source [format] <net!host!port>
+#                                       a network connection; with host
+#                                       * (udp!*!10110), datagrams sent
+#                                       to that port
 #                      source gpsd <host[!port]>  gpsd, in its NMEA mode
-#                      replay <path>          a log, paced by its times
+#                      replay <path>    an NMEA log, paced by its times
 #                      stop
-#                    a source is open (or refused, with the reason) when
+#                    format is nmea (the default), garmin or gdl90.  A
+#                    source is open (or refused, with the reason) when
 #                    the write returns; a read gives the command in use.
 #   status      (r)  state=fix|nofix|nosource link=none|open|closed|error
 #                    source=... sentences=N bad=N age=S error='...'
 #   position    (r)  "lat lon", decimal degrees; "no fix" is an error
-#   fix         (r)  the last fix, attr=value: time lat lon alt speed
-#                    course mode q sats hdop vdop pdop err verr, each
-#                    there only when known (see nmea(2) for units)
+#   fix         (r)  the last fix, attr=value: time lat lon alt baroalt
+#                    speed course mcourse heading mheading mode q sats
+#                    hdop vdop pdop err verr magvar, each there only
+#                    when known (see nmea(2) for units)
 #   event       (r)  each read waits for the next fix and gives it, as
 #                    fix does, or the fixes since the last read; every
 #                    open has its own
 #   satellites  (r)  one line a satellite in view:
 #                    system prn elevation azimuth snr used
-#   nmea        (r)  the sentences, as received, from the open on;
-#                    each read waits for more
+#   traffic     (r)  one line a craft heard in the last ten minutes,
+#                    nearest first, attr=value: kind (ais adsb flarm) id
+#                    lat lon alt speed course heading climb name
+#                    callsign cat age
+#   nmea        (r)  the sentences, as received (AIS's ! sentences
+#                    too), from the open on; each read waits for more
 #   feed        (w)  sentences written here are taken as the receiver's
 #
 # Reading and commanding are separate files so that access is decided by
 # what is bound, not by checks here: a process given position, fix,
-# event, satellites and nmea can follow the receiver; only one given
+# event, satellites, traffic and nmea can follow the receiver; only one given
 # ctl or feed can change what it says.  feed is how anything without a
 # byte stream (a test, a position from elsewhere) supplies sentences;
 # it puts a position in, so it is not bound where position is merely
@@ -62,16 +76,27 @@ include "styxservers.m";
 	styxservers: Styxservers;
 	Styxserver, Navigator, Navop: import styxservers;
 
+include "daytime.m";
+	daytime: Daytime;
+
 include "nmea.m";
 	nmea: Nmea;
-	Fix, Parser: import nmea;
+	Fix, Parser, Target: import nmea;
+
+include "gdl90.m";
+	gdl90: Gdl90;
+	Framer: import gdl90;
+
+include "garminav.m";
+	garminav: Garminav;
+	Grouper: import garminav;
 
 Gpsfs: module
 {
 	init: fn(nil: ref Draw->Context, argv: list of string);
 };
 
-Qroot, Qctl, Qstatus, Qposition, Qfix, Qevent, Qsatellites, Qnmea, Qfeed: con big iota;
+Qroot, Qctl, Qstatus, Qposition, Qfix, Qevent, Qsatellites, Qtraffic, Qnmea, Qfeed: con big iota;
 
 files := array[] of {
 	("ctl", 8r660),
@@ -80,6 +105,7 @@ files := array[] of {
 	("fix", 8r444),
 	("event", 8r444),
 	("satellites", 8r444),
+	("traffic", 8r444),
 	("nmea", 8r444),
 	("feed", 8r220),
 };
@@ -88,12 +114,13 @@ Maxqueue: con 64*1024;	# what a reader of event or nmea has not read
 Maxline: con 1024;
 
 # what a reader proc reports
-Iopen, Iline, Iend: con iota;
+Iopen, Iline, Iend, Itarget: con iota;
 Input: adt {
 	gen:	int;
 	kind:	int;
 	line:	string;
 	err:	string;
+	target:	ref Target;
 };
 
 # an open of event, nmea or feed
@@ -120,7 +147,8 @@ State: adt {
 # a source command
 Source: adt {
 	cmd:	string;		# as read back from ctl
-	verb:	string;		# file dial gpsd replay
+	verb:	string;		# file dial listen gpsd replay
+	format:	string;		# nmea garmin gdl90
 	addr:	string;
 	baud:	string;
 };
@@ -136,7 +164,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	styx = load Styx Styx->PATH;
 	styxservers = load Styxservers Styxservers->PATH;
 	nmea = load Nmea Nmea->PATH;
-	if(arg == nil || styx == nil || styxservers == nil || nmea == nil)
+	daytime = load Daytime Daytime->PATH;
+	if(arg == nil || styx == nil || styxservers == nil || nmea == nil || daytime == nil)
 		fatal(sys->sprint("cannot load modules: %r"));
 	styx->init();
 	styxservers->init(styx);
@@ -248,8 +277,10 @@ Serve:
 			ctlwait = nil;
 			waitsrc = nil;
 		Iline =>
-			if(len in.line > 0 && in.line[0] == '$')
+			if(len in.line > 0 && (in.line[0] == '$' || in.line[0] == '!'))
 				st.take(in.line);
+		Itarget =>
+			st.p.target(in.target);
 		Iend =>
 			readerpid = -1;
 			if(in.err != nil) {
@@ -311,6 +342,8 @@ Serve:
 				srv.reply(styxservers->readstr(m, s));
 			Qsatellites =>
 				srv.reply(styxservers->readstr(m, st.p.satellites()));
+			Qtraffic =>
+				srv.reply(styxservers->readstr(m, st.p.traffic(sys->millisec())));
 			Qevent or Qnmea =>
 				c := client(st.clients, m.fid);
 				if(c == nil) {
@@ -527,7 +560,7 @@ parsecmd(s: string): (ref Source, string)
 	"replay" =>
 		if(n != 2)
 			return (nil, "usage: replay <path>");
-		return (ref Source("replay " + a[1], "replay", a[1], nil), nil);
+		return (ref Source("replay " + a[1], "replay", "nmea", a[1], nil), nil);
 	"source" =>
 		if(n == 3 && a[1] == "gpsd") {
 			# host, host!port, net!host, net!host!port
@@ -544,18 +577,39 @@ parsecmd(s: string): (ref Source, string)
 					addr = "tcp!" + addr;
 				}
 			}
-			return (ref Source("source gpsd " + a[2], "gpsd", addr, nil), nil);
+			return (ref Source("source gpsd " + a[2], "gpsd", "nmea", addr, nil), nil);
 		}
-		if(n == 2 && count(a[1], '!') > 0)
-			return (ref Source("source " + a[1], "dial", a[1], nil), nil);
-		if(n == 2)
-			return (ref Source("source " + a[1], "file", a[1], nil), nil);
-		if(n == 3) {
-			if(!isdigits(a[2]))
-				return (nil, "bad baud rate " + a[2]);
-			return (ref Source("source " + a[1] + " " + a[2], "file", a[1], a[2]), nil);
+		cmd := "source";
+		format := "nmea";
+		a = a[1:];
+		if(len a > 0 && (a[0] == "nmea" || a[0] == "garmin" || a[0] == "gdl90")) {
+			format = a[0];
+			cmd += " " + a[0];
+			a = a[1:];
 		}
-		return (nil, "usage: source <path> [baud] | source <net!host!port> | source gpsd <host>");
+		if(len a < 1 || len a > 2)
+			return (nil, "usage: source [nmea|garmin|gdl90] <path> [baud] | source [nmea|garmin|gdl90] <net!host!port> | source gpsd <host>");
+		cmd += " " + a[0];
+		baud: string;
+		if(len a == 2) {
+			if(!isdigits(a[1]))
+				return (nil, "bad baud rate " + a[1]);
+			baud = a[1];
+			cmd += " " + baud;
+		}
+		verb := "file";
+		if(count(a[0], '!') > 0) {
+			if(baud != nil)
+				return (nil, "a baud rate is for a serial port, not " + a[0]);
+			(nil, f) := sys->tokenize(a[0], "!");
+			if(len f == 3 && hd tl f == "*") {
+				if(hd f != "udp")
+					return (nil, "only udp is listened for: " + a[0]);
+				verb = "listen";
+			} else
+				verb = "dial";
+		}
+		return (ref Source(cmd, verb, format, a[0], baud), nil);
 	}
 	return (nil, "unknown command " + a[0]);
 }
@@ -603,29 +657,32 @@ kill(pid: int)
 #
 # A source's reader: it opens the source, says whether it could, then
 # sends its lines until it ends.  It is killed when the source changes.
+# A receiver that does not speak NMEA is decoded here and its fixes
+# sent as the sentences a receiver would send for them.
 #
 reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
 	fd: ref Sys->FD;
+	conn: Sys->Connection;	# a listening source's, kept while it is read
 	case s.verb {
 	"file" or "replay" =>
 		fd = sys->open(s.addr, Sys->OREAD);
 		if(fd == nil) {
-			inputc <-= ref Input(gen, Iopen, nil, sys->sprint("%r"));
+			inputc <-= failed(gen, sys->sprint("%r"));
 			return;
 		}
 		if(s.baud != nil) {
 			cfd := sys->open(s.addr + "ctl", Sys->OWRITE);
 			if(cfd == nil || sys->fprint(cfd, "b%s", s.baud) < 0) {
-				inputc <-= ref Input(gen, Iopen, nil, sys->sprint("%sctl: b%s: %r", s.addr, s.baud));
+				inputc <-= failed(gen, sys->sprint("%sctl: b%s: %r", s.addr, s.baud));
 				return;
 			}
 		}
 	"dial" or "gpsd" =>
 		(ok, c) := sys->dial(s.addr, nil);
 		if(ok < 0) {
-			inputc <-= ref Input(gen, Iopen, nil, sys->sprint("dial %s: %r", s.addr));
+			inputc <-= failed(gen, sys->sprint("dial %s: %r", s.addr));
 			return;
 		}
 		fd = c.dfd;
@@ -633,14 +690,49 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			# gpsd's own protocol is JSON; asked, it sends NMEA instead
 			w := "?WATCH={\"enable\":true,\"nmea\":true}\n";
 			if(sys->fprint(fd, "%s", w) < 0) {
-				inputc <-= ref Input(gen, Iopen, nil, sys->sprint("gpsd %s: %r", s.addr));
+				inputc <-= failed(gen, sys->sprint("gpsd %s: %r", s.addr));
 				return;
 			}
 		}
+	"listen" =>
+		ok: int;
+		(ok, conn) = sys->announce(s.addr);
+		if(ok < 0) {
+			inputc <-= failed(gen, sys->sprint("announce %s: %r", s.addr));
+			return;
+		}
+		# each datagram is read with its sender's address before it
+		if(sys->fprint(conn.cfd, "headers") < 0 ||
+		   (fd = sys->open(conn.dir + "/data", Sys->ORDWR)) == nil) {
+			inputc <-= failed(gen, sys->sprint("%s: %r", s.addr));
+			return;
+		}
 	}
-	inputc <-= ref Input(gen, Iopen, nil, nil);
+	inputc <-= ref Input(gen, Iopen, nil, nil, nil);
+
+	garmin: ref Garminav->Grouper;
+	gdl: ref Gdl90->Framer;
+	case s.format {
+	"garmin" =>
+		garminav = load Garminav Garminav->PATH;
+		if(garminav != nil) {
+			garminav->init(nmea);
+			garmin = Grouper.new();
+		}
+	"gdl90" =>
+		gdl90 = load Gdl90 Gdl90->PATH;
+		if(gdl90 != nil) {
+			gdl90->init(nmea);
+			gdl = Framer.new();
+		}
+	}
+	if(s.format != "nmea" && garmin == nil && gdl == nil) {
+		inputc <-= ref Input(gen, Iend, nil, sys->sprint("cannot load the %s decoder: %r", s.format), nil);
+		return;
+	}
 
 	pace := s.verb == "replay";
+	listen := s.verb == "listen";
 	prev := -1;
 	buf := array[8192] of byte;
 	part := "";
@@ -650,24 +742,75 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			err: string;
 			if(n < 0)
 				err = sys->sprint("%r");
-			inputc <-= ref Input(gen, Iend, nil, err);
+			inputc <-= ref Input(gen, Iend, nil, err, nil);
 			return;
 		}
-		part += string buf[0:n];
+		b := buf[0:n];
+		if(listen) {
+			if(len b < Udphdr)
+				continue;
+			b = b[Udphdr:];
+		}
+		if(gdl != nil) {
+			(fixes, targets) := gdl.feed(b);
+			for(; targets != nil; targets = tl targets)
+				inputc <-= ref Input(gen, Itarget, nil, nil, hd targets);
+			sendfixes(gen, inputc, fixes);
+			continue;
+		}
+		if(garmin != nil) {
+			sendfixes(gen, inputc, garmin.feed(b));
+			continue;
+		}
+		part += string b;
+		if(listen && part != "" && part[len part-1] != '\n')
+			part += "\n";	# a datagram is whole
 		for(;;) {
 			(line, rest) := splitline(part);
 			if(line == nil)
 				break;
 			part = rest;
-			if(pace && (t := daytime(nmea->timeof(line))) >= 0) {
+			if(pace && (t := daymillis(nmea->timeof(line))) >= 0) {
 				if(prev >= 0 && t > prev)
 					sys->sleep(min(t - prev, 5000));
 				prev = t;
 			}
-			inputc <-= ref Input(gen, Iline, line, nil);
+			inputc <-= ref Input(gen, Iline, line, nil, nil);
 		}
 		if(len part > Maxline)
 			part = "";
+	}
+}
+
+Udphdr: con 52;	# a datagram's addresses, in headers mode (ip(3))
+
+failed(gen: int, err: string): ref Input
+{
+	return ref Input(gen, Iopen, nil, err, nil);
+}
+
+# fixes from a receiver that gives no time stamped with this host's,
+# each distinct, and sent as sentences
+laststamp := -1;
+stampn := 0;
+sendfixes(gen: int, inputc: chan of ref Input, fixes: list of ref Fix)
+{
+	for(; fixes != nil; fixes = tl fixes) {
+		f := hd fixes;
+		now := daytime->now();
+		if(now == laststamp)
+			stampn++;
+		else
+			stampn = 0;
+		laststamp = now;
+		tm := daytime->gmt(now);
+		f.date = sys->sprint("%.4d-%.2d-%.2d", tm.year + 1900, tm.mon + 1, tm.mday);
+		f.utc = sys->sprint("%.2d:%.2d:%.2d", tm.hour, tm.min, tm.sec);
+		if(stampn > 0 && stampn < 100)
+			f.utc += sys->sprint(".%.2d", stampn);
+		(nil, l) := sys->tokenize(nmea->sentences(f), "\r\n");
+		for(; l != nil; l = tl l)
+			inputc <-= ref Input(gen, Iline, hd l, nil, nil);
 	}
 }
 
@@ -679,7 +822,7 @@ min(a, b: int): int
 }
 
 # hh:mm:ss[.ss] as milliseconds into the day, or -1
-daytime(t: string): int
+daymillis(t: string): int
 {
 	if(t == nil || len t < 8)
 		return -1;

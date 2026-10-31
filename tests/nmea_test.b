@@ -294,8 +294,209 @@ testGarbled(t: ref T)
 		}
 	}
 	t.assert(p.last == nil || p.last.position() == nil, "no position from any of it");
-	(nil, err) := p.sentence("!AIVDM,1,1,,A,13aEOK?P00PD2wVMdLDRhgvL289?,0*26");
-	t.assertseq(err, "not a sentence", "AIS is not a sentence");
+	more := array[] of {
+		"!AIVDM",
+		"!AIVDM,1,1,,A,,0",
+		"!AIVDM,1,1,,A,1,0",
+		"!AIVDM,1,1,,A,~~~~,0",
+		"!AIVDM,3,2,9,A,15M67FC000G?ufbE,0",
+		"$PGRMZ",
+		"$PGRMZ,abc,f,3",
+		"$PFLAA,0,100,200",
+		"$GPHDG",
+		"$GPHDT,x,T",
+	};
+	for(i = 0; i < len more; i++) {
+		{
+			(nil, nil) = p.sentence(more[i]);
+		} exception e {
+		"*" =>
+			t.error("raised " + e + " on " + more[i]);
+		}
+	}
+	t.assertseq(p.traffic(sys->millisec()), "", "no traffic from any of it");
+	(fl, err) := p.sentence("!AIVDM,1,1,,A,13aEOK?P00PD2wVMdLDRhgvL289?,0*26");
+	t.assertnil(err, "AIS is a sentence");
+	t.assert(fl == nil, "and not a fix");
+	(nil, err) = p.sentence("!AIVDM,1,1,,A,13aEOK?P00PD2wVMdLDRhgvL289?,0*27");
+	t.assertseq(err, "checksum mismatch", "an AIS sentence's checksum is checked");
+}
+
+# the sentences pyais (a reference AIS codec) made for these, as VDM
+AIS1: con "!AIVDM,1,1,,A,139Lg00P1s0ef3PN`kp3K2h1P000,0*32";
+AIS3: con "!AIVDM,1,1,,A,139Lg0OP00:l;tqd`0I>4?v1P000,0*1E";
+AIS5a: con "!AIVDM,2,1,3,A,539Lg000Bm`L@48<000mJ0EP4m0hD0000000001600000000000000000000,0*01";
+AIS5b: con "!AIVDM,2,2,3,A,00000000000,2*27";
+AIS18: con "!AIVDM,1,1,,A,B52MJh00=nc@lJ5lQE1hQIP00000,0*36";
+AIS24a: con "!AIVDM,1,1,,A,H52MJh1<D6098DE`D00000000000,0*5D";
+AIS24b: con "!AIVDM,1,1,,A,H52MJh4U0000000G41ijkl000000,0*11";
+AIS19: con "!AIVDM,1,1,,A,C52ulL@0AVcCF85lWb0p@eP0@2T4NU0`b>0000000000J0000000,0*18";
+
+# the traffic, without the ages
+traffic(p: ref Parser): list of string
+{
+	(nil, l) := sys->tokenize(p.traffic(sys->millisec()), "\n");
+	r: list of string;
+	for(; l != nil; l = tl l) {
+		s := hd l;
+		for(i := len s - 5; i > 0; i--)
+			if(s[i:i+5] == " age=")
+				break;
+		r = s[0:i] :: r;
+	}
+	out: list of string;
+	for(; r != nil; r = tl r)
+		out = hd r :: out;
+	return out;
+}
+
+testAis(t: ref T)
+{
+	p := Parser.new();
+	feed(p, AIS1 :: nil);
+	l := traffic(p);
+	t.asserteq(len l, 1, "a position report: a ship");
+	t.assertseq(hd l, "kind=ais id=211234560 lat=53.543200 lon=9.987600 speed=6.3 course=87.6 heading=88",
+		"its position, speed (12.3 knots), course and heading");
+
+	feed(p, AIS5a :: nil);
+	t.assertseq(hd traffic(p), "kind=ais id=211234560 lat=53.543200 lon=9.987600 speed=6.3 course=87.6 heading=88",
+		"the first part of two: nothing yet");
+	feed(p, AIS5b :: nil);
+	t.assertseq(hd traffic(p),
+		"kind=ais id=211234560 lat=53.543200 lon=9.987600 speed=6.3 course=87.6 heading=88 name='MV EXAMPLE' callsign=DABC cat=cargo",
+		"static data in two parts, merged with the position");
+
+	feed(p, AIS3 :: nil);
+	l = traffic(p);
+	t.asserteq(len l, 2, "a second ship");
+	found := 0;
+	for(; l != nil; l = tl l)
+		if(hd l == "kind=ais id=211234561 lat=-33.860100 lon=151.210500 speed=0.0")
+			found = 1;
+	t.assert(found, "course 360 and heading 511 are not known: " + p.traffic(sys->millisec()));
+
+	p = Parser.new();
+	feed(p, AIS18 :: AIS24a :: AIS24b :: nil);
+	t.assertseq(hd traffic(p),
+		"kind=ais id=338123456 lat=40.689200 lon=-74.044500 speed=2.8 course=180.0 heading=179 name='SEA BREEZE' callsign=WDA1234 cat=pleasure",
+		"class B: position (18), name (24A), call sign and type (24B)");
+	feed(p, AIS19 :: nil);
+	found = 0;
+	for(l = traffic(p); l != nil; l = tl l)
+		if(hd l == "kind=ais id=338654321 lat=40.700000 lon=-74.010000 speed=3.6 course=90.0 heading=91 name='HARBOR TUG' cat=tug")
+			found = 1;
+	t.assert(found, "class B extended (19): " + p.traffic(sys->millisec()));
+
+	p = Parser.new();
+	feed(p, AIS5b :: nil);
+	t.asserteq(len traffic(p), 0, "a second part with no first: nothing");
+
+	# nearest first, from this fix
+	p = Parser.new();
+	feed(p, cs("GPRMC,120000,A,4042.0000,N,07400.6000,W,,,311026,,,A") :: AIS19 :: AIS18 :: nil);
+	l = traffic(p);
+	t.assert(len l == 2 && contains(hd l, "id=338654321"), "nearest first: " + p.traffic(sys->millisec()));
+	t.assertseq(p.traffic(sys->millisec() + 11*60*1000), "", "forgotten after ten minutes");
+}
+
+testMagnetic(t: ref T)
+{
+	p := Parser.new();
+	fl := feed(p, cs("GPRMC,120000,A,4041.0000,N,07403.0000,W,10.0,90.0,311026,12.9,W,A") :: nil);
+	f := hd fl;
+	t.assertseq(sys->sprint("%.1f", f.magvar), "-12.9", "variation west is negative");
+	t.assert(contains(f.text(), " course=90.0 mcourse=102.9 "), "course, and magnetic: " + f.text());
+	t.assert(contains(f.text(), " magvar=-12.9"), "the variation in the record");
+
+	feed(p, cs("HEHDT,45.5,T") :: nil);
+	t.assertseq(sys->sprint("%.1f", p.cur.heading), "45.5", "HDT: true heading");
+	t.assert(contains(p.cur.text(), " heading=45.5 mheading=58.4"), "heading, and magnetic: " + p.cur.text());
+
+	# a magnetic sensor 100, deviation 2 E, variation 13 W: 100+2-13 true
+	feed(p, cs("HCHDG,100.0,2.0,E,13.0,W") :: nil);
+	t.assertseq(sys->sprint("%.1f %.1f", p.cur.heading, p.cur.magvar), "89.0 -13.0", "HDG: deviation and variation applied");
+	feed(p, cs("HCHDM,200.0,M") :: nil);
+	t.assertseq(sys->sprint("%.1f", p.cur.heading), "187.0", "HDM with the variation known");
+
+	p = Parser.new();
+	feed(p, cs("HCHDM,200.0,M") :: nil);
+	t.assert(!p.cur.hasheading, "HDM with no variation known: no true heading");
+}
+
+testGarminSentences(t: ref T)
+{
+	p := Parser.new();
+	fl := feed(p, cs("PGRMZ,5500,f,3") :: cs("PGRME,4.5,M,6.0,M,7.5,M") ::
+		cs("GPRMC,120000,A,4041.0000,N,07403.0000,W,,,311026,,,A") :: nil);
+	f := hd fl;
+	t.assertseq(sys->sprint("%.1f", f.baroalt), "1676.4", "PGRMZ: 5500 feet");
+	t.assertseq(sys->sprint("%.1f %.1f", f.err, f.verr), "4.5 6.0", "PGRME's errors");
+	t.assert(contains(f.text(), " baroalt=1676.4 "), "baroalt in the record: " + f.text());
+
+	feed(p, cs("GPGST,120001,1.0,3.0,2.0,0.0,3.0,4.0,6.5") :: cs("PGRME,9.0,M,9.0,M,9.0,M") :: nil);
+	t.assertseq(sys->sprint("%.1f %.1f", p.cur.err, p.cur.verr), "5.0 6.5", "GST's errors preferred to PGRME's");
+	feed(p, cs("PGRMZ,500,m,3") :: nil);
+	t.assertseq(sys->sprint("%.1f", p.cur.baroalt), "500.0", "PGRMZ in metres");
+}
+
+testFlarm(t: ref T)
+{
+	p := Parser.new();
+	feed(p, cs("PFLAA,0,1000,0,100,2,DD1234,90,,30,1.5,1") :: nil);
+	t.asserteq(len traffic(p), 0, "FLARM traffic with no fix: not placed");
+	feed(p, cs("GPRMC,120000,A,4600.0000,N,00800.0000,E,,,311026,,,A") ::
+		cs("GPGGA,120000,4600.0000,N,00800.0000,E,1,08,0.9,1000.0,M,,,,") ::
+		cs("PFLAA,0,1113,-773,150,2,DD1234,90,,30,1.5,1") :: nil);
+	l := traffic(p);
+	t.asserteq(len l, 1, "placed from the fix");
+	t.assertseq(hd l, "kind=flarm id=DD1234 lat=46.009998 lon=7.990004 alt=1150 speed=30.0 course=90.0 climb=1.5 cat=glider",
+		"1113 m north, 773 m west, 150 m above");
+}
+
+testSentences(t: ref T)
+{
+	f := Fix.new();
+	f.date = "2026-10-31";
+	f.utc = "07:08:09.50";
+	f.valid = f.haspos = 1;
+	f.lat = -33.8568;
+	f.lon = 151.2153;
+	f.hasalt = 1;
+	f.altitude = 12.5;
+	f.hasspeed = 1;
+	f.speed = 5.0;
+	f.hascourse = 1;
+	f.course = 271.5;
+	f.err = 4.0;
+	f.verr = 6.0;
+	f.hasmagvar = 1;
+	f.magvar = 12.4;
+	f.hasheading = 1;
+	f.heading = 270.0;
+	f.hasbaro = 1;
+	f.baroalt = 30.48;
+	s := nmea->sentences(f);
+	(n, l) := sys->tokenize(s, "\r\n");
+	t.asserteq(n, 5, "RMC GST GGA HDT PGRMZ: " + s);
+	t.assert(contains(s, "\r\n"), "lines end CR LF");
+	p := Parser.new();
+	out: list of ref Fix;
+	for(; l != nil; l = tl l) {
+		(fl, err) := p.sentence(hd l);
+		if(err != nil)
+			t.error("refused: " + hd l + ": " + err);
+		for(; fl != nil; fl = tl fl)
+			out = hd fl :: out;
+	}
+	t.asserteq(len out, 1, "one fix back");
+	t.assertseq(p.last.text(),
+		"time=2026-10-31T07:08:09.50Z lat=-33.856800 lon=151.215300 alt=12.5 baroalt=30.5 speed=5.00 course=271.5 mcourse=259.1 heading=270.0 mheading=257.6 mode=3d q=gps err=4.0 verr=6.0 magvar=12.4",
+		"read back as it was written");
+
+	g := Fix.new();
+	s = nmea->sentences(g);
+	t.assertseq(s, cs("GPRMC,,V,,,,,,,,,,N"), "no fix: an RMC saying so");
 }
 
 contains(s, sub: string): int
@@ -333,6 +534,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Errors", testErrors);
 	run("VtgZda", testVtgZda);
 	run("Garbled", testGarbled);
+	run("Ais", testAis);
+	run("Magnetic", testMagnetic);
+	run("GarminSentences", testGarminSentences);
+	run("Flarm", testFlarm);
+	run("Sentences", testSentences);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

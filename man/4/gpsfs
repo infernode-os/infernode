@@ -14,16 +14,29 @@ gpsfs \- GPS receiver as a file system
 reads the NMEA 0183 sentences a GPS receiver sends, assembles them into
 fixes with
 .IR nmea (2),
-and serves the receiver's position as files, mounted by default at
+and serves the receiver's position, and the traffic it hears, as
+files, mounted by default at
 .BR /mnt/gps .
 A receiver is a byte stream: a serial port
 .RI ( eia (3)),
 a phone's own location service
 .RI ( location (3)),
-a network feed of NMEA (a phone application serving it over TCP),
+a network feed (a phone application serving NMEA over TCP,
 .IR gpsd ,
-or a recorded log; and anything else writes sentences to
+a marine gateway's UDP), or a recorded log; and anything else writes
+sentences to
 .BR feed .
+.PP
+Besides NMEA, two formats are read: Garmin's Aviation output, from a
+panel or portable aviation GPS
+.RI ( garminav (2)),
+and GDL 90, from an ADS-B receiver
+.RI ( gdl90 (2)).
+A fix from either is written as the NMEA sentences a receiver would
+send for it, and read as those, so every file below means the same
+whatever the receiver, and
+.B nmea
+gives NMEA from any of them.
 The
 .I command
 words, if given, are written to
@@ -40,8 +53,15 @@ reason it could not be opened; the previous source is stopped either
 way.
 .RS
 .TP
-.BI source " path \fR[\fPbaud\fR]"
+.BI source " \fR[\fPformat\fR]\fP path \fR[\fPbaud\fR]"
 a file or serial port, read to its end.
+.I Format
+is
+.B nmea
+(the default),
+.B garmin
+or
+.BR gdl90 .
 If
 .I baud
 is given,
@@ -52,10 +72,16 @@ first, as
 .IR eia (3)
 expects.
 .TP
-.BI source " net\fB!\fPhost\fB!\fPport"
+.BI source " \fR[\fPformat\fR]\fP net\fB!\fPhost\fB!\fPport"
 a network connection, as
 .IR dial (2)
-makes, carrying NMEA.
+makes.
+With host
+.BR * ,
+.BI udp!*! port
+is listened to: the datagrams any sender sends to that port, as a
+marine gateway (port 10110) or an ADS-B receiver (port 4000) sends
+them; an NMEA datagram is whole, a newline or not.
 .TP
 .BI "source gpsd" " host"
 .IR gpsd ,
@@ -68,8 +94,8 @@ It is asked for NMEA with
 its JSON lines are passed over.
 .TP
 .BI replay " path"
-a recorded log, its sentences sent at the pace of their times (no gap
-longer than five seconds).
+a recorded NMEA log, its sentences sent at the pace of their times (no
+gap longer than five seconds).
 .TP
 .B stop
 no source.
@@ -118,10 +144,19 @@ receiver sent it:
 .BR lon ,
 .B alt
 (metres above mean sea level),
+.B baroalt
+(pressure altitude, metres: Garmin's PGRMZ or GDL 90's own-ship report),
 .B speed
 (metres a second over the ground),
 .B course
-(degrees true),
+(over the ground, degrees true),
+.B mcourse
+(the same, magnetic),
+.B heading
+(where the bow or nose points, degrees true, from a compass: HDT, HDG,
+HDM),
+.B mheading
+(the same, magnetic),
 .B mode
 .RB ( none ,
 .BR 2d ,
@@ -145,7 +180,12 @@ for dead reckoning,
 .B err
 and
 .B verr
-(horizontal and vertical error estimates, metres, one sigma).
+(horizontal and vertical error estimates, metres, one sigma: GST, else
+Garmin's PGRME),
+.B magvar
+(the magnetic variation, degrees, east positive).
+Magnetic directions are given only when the receiver gives the
+variation.
 With no fix the line is the time and
 .BR mode=none .
 .TP
@@ -182,15 +222,68 @@ for a satellite not tracked), and
 .I used
 is 1 for a satellite in the fix.
 .TP
+.B traffic
+one line a craft heard in the last ten minutes, nearest first, of
+attr=value fields:
+.B kind
+.RB ( ais
+for a ship,
+.B adsb
+or
+.B flarm
+for an aircraft),
+.B id
+(an MMSI, or an ICAO or FLARM address in hex),
+.BR lat ,
+.BR lon ,
+.B alt
+(metres; pressure altitude by ADS-B, above this fix's altitude by FLARM),
+.BR speed ,
+.BR course ,
+.BR heading ,
+.B climb
+(metres a second),
+.B name
+(a ship's name, a flight's call sign),
+.B callsign
+(a ship's radio call sign),
+.B cat
+(a ship's type:
+.BR cargo ,
+.BR tanker ,
+.BR passenger ,
+.BR fishing ,
+.BR sailing ,
+.BR pleasure ,
+.BR tug ,
+\&...; an aircraft's:
+.BR light ,
+.BR large ,
+.BR heavy ,
+.BR rotorcraft ,
+.BR glider ,
+.BR uav ,
+\&...) and
+.B age
+(seconds since last heard).
+Ships come from AIS sentences (messages 1, 2, 3, 5, 18, 19 and 24;
+those of more than one sentence put together), aircraft from GDL 90's
+traffic reports and FLARM's PFLAA, which FLARM gives relative to this
+position.
+A name with blanks is quoted.
+.TP
 .B nmea
-the sentences, as received, one a line, from the open on; each read
-waits for more.
+the sentences, as received (AIS's, beginning
+.BR ! ,
+too), one a line, from the open on; each read waits for more.
 Sentences that fail their checksum are not passed on.
 .TP
 .B feed
 write-only: sentences written here are taken as the receiver's.
 A write with a sentence that is not one (no
-.BR $ ,
+.B $
+or
+.BR ! ,
 a bad checksum) fails, naming the fault; the others in it are taken.
 .SH CAPABILITY MODEL
 Following the receiver and changing what it says are separate files,
@@ -198,7 +291,8 @@ so what a process may do is what is bound in its name space:
 .BR position ,
 .BR fix ,
 .BR event ,
-.B satellites
+.BR satellites ,
+.B traffic
 and
 .B nmea
 let it follow the receiver;
@@ -206,7 +300,7 @@ let it follow the receiver;
 and
 .B feed
 let it choose the source or supply a position.
-A process that should only know where it is gets the first five.
+A process that should only know where it is gets the first six.
 .PP
 .I Gpsfs
 opens sources in the name space it was started in.
@@ -241,6 +335,24 @@ A phone serving NMEA on port 11123, and a moving map's loop:
 time=2026-10-31T14:32:05Z lat=40.784000 lon=-74.416667 alt=76.0 ...
 .EE
 .PP
+A boat: a gateway on the boat's network sending NMEA 0183 (from its
+NMEA 2000 bus) to port 10110, the position, heading and AIS ships in
+one stream:
+.IP
+.EX
+; echo source udp!*!10110 > /mnt/gps/ctl
+; cat /mnt/gps/traffic
+kind=ais id=211234560 lat=53.543200 lon=9.987600 speed=6.3 course=87.6 heading=88 name='MV EXAMPLE' callsign=DABC cat=cargo age=4.2
+.EE
+.PP
+An aircraft: an ADS-B receiver (Stratux and the like) broadcasting GDL
+90, and a panel GPS's Aviation output on a serial port:
+.IP
+.EX
+; echo source gdl90 udp!*!4000 > /mnt/gps/ctl
+; echo source garmin '#t/eia0' 9600 > /mnt/gps/ctl
+.EE
+.PP
 A day's drive, again:
 .IP
 .EX
@@ -252,10 +364,26 @@ A day's drive, again:
 .B /appl/cmd/gpsfs.b
 .br
 .B /appl/lib/nmea.b
+.br
+.B /appl/lib/gdl90.b
+.br
+.B /appl/lib/garminav.b
 .SH SEE ALSO
 .IR nmea (2),
+.IR gdl90 (2),
+.IR garminav (2),
 .IR eia (3),
-.IR location (3)
+.IR location (3),
+.IR wm-road (1)
 .SH BUGS
 One source at a time.
 A source that ends or fails is not reopened; write the command again.
+.PP
+Neither Garmin's Aviation output nor GDL 90 gives the date and time
+with each fix, so gpsfs stamps them with this host's clock.
+.PP
+It is not navigation equipment: nothing here is certified, there is no
+integrity monitoring (RAIM), and a phone's position may come from
+Wi-Fi.
+A pressure altitude is as the device gives it; it is not corrected
+for the local altimeter setting.

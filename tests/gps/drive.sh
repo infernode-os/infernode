@@ -3,7 +3,9 @@
 # gpsfs driven through its files, for tests/host/gpsfs_test.sh (not a
 # test: the runner runs every script in tests/inferno).  $1 is the
 # test's directory, holding track.nmea; $2 the port of a fake NMEA feed,
-# $3 of a fake gpsd.  What each step gives is written beside it.  A
+# $3 of a fake gpsd; $4 and $5 are UDP ports a fake marine gateway (NMEA
+# and AIS) and a fake ADS-B receiver (GDL 90) send to, and garmin.txt
+# is Garmin Aviation output.  What each step gives is written beside it.  A
 # write refused ends the shell it is in, so each that may be is made in
 # a shell of its own.
 #
@@ -43,7 +45,27 @@ sleep 1
 cat $g/position > $d/position.gpsd
 cat $g/status > $d/status.gpsd
 
+# a marine gateway's datagrams: a fix, its variation, a heading, a ship
+sh -c 'echo source udp!*!'^$4^' > '^$g^'/ctl' >[2] $d/err.udp
+sleep 2
+cat $g/fix > $d/fix.udp
+cat $g/traffic > $d/traffic.udp
+cat $g/ctl > $d/ctl.udp
+
+# an ADS-B receiver's GDL 90: own-ship as NMEA, traffic
+sh -c 'echo source gdl90 udp!*!'^$5^' > '^$g^'/ctl' >[2] $d/err.gdl90
+sleep 2
+cat $g/fix > $d/fix.gdl90
+cat $g/traffic > $d/traffic.gdl90
+
+# Garmin's Aviation output, read as a file
+sh -c 'echo source garmin '^$d^'/garmin.txt > '^$g^'/ctl' >[2] $d/err.garmin
+sleep 1
+cat $g/fix > $d/fix.garmin
+
 # refusals
+sh -c 'echo source gdl90 tcp!*!4000 > '^$g^'/ctl' >[2] $d/err.tcplisten
+sh -c 'echo source udp!*!4000 9600 > '^$g^'/ctl' >[2] $d/err.netbaud
 sh -c 'echo source '^$d^'/track.nmea 4800 > '^$g^'/ctl' >[2] $d/err.baud
 sh -c 'echo source /nonexistent > '^$g^'/ctl' >[2] $d/err.missing
 sh -c 'echo bogus > '^$g^'/ctl' >[2] $d/err.bogus

@@ -110,6 +110,8 @@ TARG=\
 	nametree.dis\
 	newns.dis\
 	nmea.dis\
+	gdl90.dis\
+	garminav.dis\
 	ninep.dis\
 	oldauth.dis\
 	parseman.dis\
@@ -284,6 +286,8 @@ SYSMODULES=\
 	names.m\
 	newns.m\
 	nmea.m\
+	gdl90.m\
+	garminav.m\
 	oldauth.m\
 	pkcs.m\
 	plumbing.m\

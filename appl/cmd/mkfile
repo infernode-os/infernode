@@ -333,6 +333,8 @@ SYSMODULES=\
 	viewport.m\
 	webclient.m\
 	wmsrv.m\
+	garminav.m\
+	gdl90.m\
 
 DISBIN=$ROOT/dis
 

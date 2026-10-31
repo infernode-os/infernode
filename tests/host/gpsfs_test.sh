@@ -41,9 +41,16 @@ serve() {
 PN=$(serve nmea)
 PG=$(serve gpsd)
 [ -n "$PN" ] && [ -n "$PG" ] || { echo "FAIL: a fake feed did not start"; cat "$D"/*.err; exit 1; }
+python3 -I "$F" garmin "$D/garmin.txt"
+UN=$(python3 -I "$F" port)
+UG=$(python3 -I "$F" port)
+python3 -I "$F" udpnmea "$UN" 2>"$D/udpnmea.err" &
+PIDS="$PIDS $!"
+python3 -I "$F" udpgdl90 "$UG" 2>"$D/udpgdl90.err" &
+PIDS="$PIDS $!"
 
 cd "$ROOT"
-with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/drive.sh "/$T" "$PN" "$PG" \
+with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/drive.sh "/$T" "$PN" "$PG" "$UN" "$UG" \
 	</dev/null >"$D/log" 2>&1 || true
 
 failed=0
@@ -54,7 +61,7 @@ has() { f "$1" | grep -q -- "$2"; }
 
 grep -q '^R done' "$D/log" || { fail "the driver did not finish"; tail -20 "$D/log"; exit 1; }
 
-[ "$(f ls | tr '\n' ' ')" = "/mnt/gps/ctl /mnt/gps/event /mnt/gps/feed /mnt/gps/fix /mnt/gps/nmea /mnt/gps/position /mnt/gps/satellites /mnt/gps/status " ] &&
+[ "$(f ls | tr '\n' ' ')" = "/mnt/gps/ctl /mnt/gps/event /mnt/gps/feed /mnt/gps/fix /mnt/gps/nmea /mnt/gps/position /mnt/gps/satellites /mnt/gps/status /mnt/gps/traffic " ] &&
 	pass "its files" || fail "ls: $(f ls | tr '\n' ' ')"
 [ "$(f status.start)" = "state=nosource link=none sentences=0 bad=0" ] &&
 	pass "nothing at first" || fail "status: $(f status.start)"
@@ -93,6 +100,32 @@ early=$(f events.early | tr -d ' '); late=$(f events.late | tr -d ' ')
 has status.gpsd "link=open source=tcp!127.0.0.1!$PG " && pass "status names the source" ||
 	fail "status: '$(f status.gpsd)'"
 
+# a marine gateway over UDP: variation, heading, AIS
+[ -z "$(f err.udp)" ] && [ "$(f ctl.udp)" = "source udp!*!$UN" ] &&
+	pass "a UDP port listened to" || fail "udp: '$(f err.udp)' '$(f ctl.udp)'"
+f fix.udp | grep -Eq '^time=[0-9T:.Z-]+ lat=53\.543200 lon=9\.987600 alt=4\.0 speed=3\.09 course=90\.0 mcourse=88\.0 heading=92\.5 mheading=90\.5 mode=3d q=gps sats=9 hdop=0\.8 magvar=2\.0$' &&
+	pass "variation and heading: course and heading, true and magnetic" || fail "fix: '$(f fix.udp)'"
+f traffic.udp | grep -q '^kind=ais id=211234560 lat=53.543200 lon=9.987600 speed=6.3 course=87.6 heading=88 age=' &&
+	pass "an AIS ship in traffic" || fail "traffic: '$(f traffic.udp)'"
+f nmea | grep -q '^!AIVDM,1,1,,A,139Lg00P1s0ef3PN' && pass "AIS sentences in nmea" ||
+	fail "nmea has no AIS: $(f nmea | grep -c .) lines"
+
+# an ADS-B receiver
+[ -z "$(f err.gdl90)" ] && pass "GDL 90 listened to" || fail "gdl90: '$(f err.gdl90)'"
+f fix.gdl90 | grep -Eq '^time=[0-9T:.Z-]+ lat=39\.999998 lon=-74\.000001 baroalt=914\.4 speed=51\.44 course=90\.0 mode=2d q=gps err=15\.0$' &&
+	pass "own-ship: position (to GDL 90's 2e-5 degrees), pressure altitude, speed, track, NACp" || fail "fix: '$(f fix.gdl90)'"
+f traffic.gdl90 | grep -q '^kind=adsb id=ab4549 lat=44.907067 lon=-122.994862 alt=1524 speed=63.3 course=45.0 climb=0.3 name=N825V cat=light age=' &&
+	pass "ADS-B traffic: the specification's N825V" || fail "traffic: '$(f traffic.gdl90)'"
+f nmea | grep -q '^\$PGRMZ,3000,f,2\*' && pass "own-ship written as NMEA in nmea (PGRMZ)" ||
+	fail "nmea has no PGRMZ: $(f nmea | grep PGRMZ | head -2)"
+
+# Garmin Aviation
+f fix.garmin | grep -Eq '^time=[0-9T:.Z-]+ lat=40\.684333 lon=-74\.398833 alt=213\.4 speed=23\.15 course=77\.1 mcourse=90\.0 mode=3d q=gps magvar=-12\.9$' &&
+	pass "Garmin Aviation output: the last group" || fail "fix: '$(f fix.garmin)'"
+
+has err.tcplisten "only udp is listened for" && has err.netbaud "a baud rate is for a serial port" &&
+	pass "a listen on tcp, a baud rate for a network: refused" ||
+	fail "refusals: '$(f err.tcplisten)' '$(f err.netbaud)'"
 has err.baud "track.nmeactl: b4800" && pass "a baud rate for a file with no ctl refused" ||
 	fail "baud: '$(f err.baud)'"
 has err.missing "does not exist" && pass "a missing source refused" || fail "missing: '$(f err.missing)'"

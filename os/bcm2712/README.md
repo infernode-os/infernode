@@ -143,10 +143,11 @@ it. `unmount` is what marks it clean.
 1. A long soak with everything loaded. An hour of that is what has run.
 2. What wants something on the bench: a second monitor, a USB disk or
    SuperSpeed device, the Debug Probe, a Bluetooth peer, a real I2C or
-   SPI device, a coin cell, and a person to press the power button.
-3. Booting the firmware from the drive. `nvmeroot` takes userland from
-   `nvme0p1` already. Careful: with NVMe first in `BOOT_ORDER`, a FAT
-   partition holding a `config.txt` and no kernel stopped this board's
-   firmware outright, power cycle or no, until the drive was unplugged.
+   SPI device, a coin cell.
+3. Booting from the drive works: `BOOT_ORDER=0xf416`, a kernel and
+   `config.txt` on `nvme0p1`, `nvmeroot` on the command line. But with
+   NVMe first, a FAT partition holding a `config.txt` and no kernel stopped
+   this board's firmware outright, power cycle or no, until the drive was
+   unplugged.
 4. In `docs/DEVICE-LETTERS.md`, when #1036 lands: mark `J`, `Q`, `W` and
    `r` in use, here.

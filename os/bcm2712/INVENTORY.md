@@ -51,10 +51,10 @@ has the feature, which is what parity means.
 |---|---|---|
 | Real-time clock | the firmware, `#r/rtc`, `#r/battery` (`devrtc.c`, `rtcfan.c`) | **Proved** across a reset, and sets the clock at boot; across power off wants the battery connected |
 | External PCIe (FPC connector) | `pcie1.c` | **Proved at gen 2**: drops once about 1.6s after training, recovered, then held under six minutes of everything. Four resets send it to gen 1; `pciegen1` asks from the start; `nvmeslow` in `#S/sdctl` does it by hand, proved |
-| NVMe | `nvme.c`, `#S/nvme0`, `#S/nvmestat`, GPT or MBR as `nvme0p1` on, `nvmepart` ranges | **Proved** on a WD SN7100: both table formats read, 370 MB/s at gen 2, writes hashed back, recovery from a lost command and from a real link drop, a killed reader leaves the queue in step, a clean shutdown (the drive's unsafe count stays still), kfs across 1.8TB, FAT read by Linux, userland from the drive with `nvmeroot`. Firmware boot from the drive not proved, nor no card at all |
+| NVMe | `nvme.c`, `#S/nvme0`, `#S/nvmestat`, GPT or MBR as `nvme0p1` on, `nvmepart` ranges | **Proved** on a WD SN7100: both table formats read, 370 MB/s at gen 2, writes hashed back, recovery from a lost command and from a real link drop, a killed reader leaves the queue in step, a clean shutdown (the drive's unsafe count stays still), kfs across 1.8TB, FAT read by Linux, userland from the drive with `nvmeroot`. firmware boot from the drive with Linux as the way back, and no card (simulated) |
 | Fan connector | RP1 PWM1 channel 3, `#P/fan`, `#P/fanrpm` | **Proved**: follows temperature by the device tree's trips; a written level overrides, `auto` restores |
-| Power button | SoC GPIO 20, `#P/button` | Level read; a press not yet tried; nothing acts on it |
-| Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | Written; not watched by anyone |
+| Power button | SoC GPIO 20, `#P/button`; init halts on a press | **Proved** by a person: press, drive shut down, PSCI off, red LED; a press starts it again. `POWER_OFF_ON_HALT=0` leaves it in standby, not fully off |
+| Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | ACT **proved** by a person. PWR written, not watched |
 | Debug UART connector | `uart10` | Output only, unread: see above |
 | Second console | RP1 UART4, GPIO 12, 13 (pins 32, 33) | **Proved**, in and out |
 | Two HDMI, DSI/CSI connectors | HVS, RP1 | Either HDMI, one at a time. Two together, DSI and CSI not done |

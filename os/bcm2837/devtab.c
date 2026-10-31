@@ -63,7 +63,7 @@ Dev*	devtab[] =
 	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
-	&vmdevtab,		/* 'V' -- #V, the Dis VMs, one a core (#944) */
+	&vmdevtab,		/* 'X' -- #X, the Dis VMs, one a core (#944) */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */

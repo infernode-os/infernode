@@ -227,10 +227,10 @@ init()
 	#
 	# And the Dis VMs, /dev/vm (#944): one a core, each running
 	# programs alongside the others. Here so every namespace forked from
-	# init has them; vm(1) reaches #V directly anyway.
+	# init has them; vm(1) reaches #X directly anyway.
 	#
-	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
-		sys->print("init: cannot bind #V on /dev: %r\n");
+	if(sys->bind("#X", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #X on /dev: %r\n");
 
 	#
 	# Bring up loopback.
@@ -2210,7 +2210,7 @@ vmsetup()
 		line := cmd;
 		for(a := tl tl w; a != nil; a = tl a)
 			line += " " + hd a;
-		fd := sys->open("#V/vm/" + string n + "/run", Sys->ORDWR);
+		fd := sys->open("#X/vm/" + string n + "/run", Sys->ORDWR);
 		if(fd == nil){
 			sys->print("init: vms: no VM %d: %r\n", n);
 			continue;

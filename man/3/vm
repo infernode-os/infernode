@@ -3,7 +3,7 @@
 vm \- the Dis virtual machines, one a core
 .SH SYNOPSIS
 .nf
-.B bind -a #V /dev
+.B bind -a #X /dev
 
 .B /dev/vm/ctl
 .BI /dev/vm/ n /run

@@ -1,5 +1,5 @@
 /*
- * #V -- the Dis VMs (#944).
+ * #X -- the Dis VMs (#944).
  *
  * The kernel runs one Dis VM per core: each with its own interpreter,
  * heap, collector and modules, so a program in one VM runs alongside a
@@ -16,7 +16,7 @@
  * program or a shell script writes to the VM it chooses. VM 0 is the
  * boot VM and the desktop's, and the only one with $Tk and $Draw.
  *
- *	bind -a '#V' /dev
+ *	bind -a '#X' /dev
  */
 #include	"u.h"
 #include	"../port/lib.h"
@@ -58,7 +58,7 @@ vmgen(Chan *c, char *name, Dirtab *tab, int ntab, int i, Dir *dp)
 		case Qroot:
 		case Qvm:
 			mkqid(&q, Qroot, 0, QTDIR);
-			devdir(c, q, "#V", 0, eve, DMDIR|0555, dp);
+			devdir(c, q, "#X", 0, eve, DMDIR|0555, dp);
 			return 1;
 		case Qndir:
 			mkqid(&q, Qvm, 0, QTDIR);
@@ -113,7 +113,7 @@ vmgen(Chan *c, char *name, Dirtab *tab, int ntab, int i, Dir *dp)
 static Chan*
 vmattach(char *spec)
 {
-	return devattach('V', spec);
+	return devattach('X', spec);
 }
 
 static Walkqid*
@@ -206,7 +206,7 @@ vmwrite(Chan *c, void *va, long n, vlong off)
 }
 
 Dev vmdevtab = {
-	'V',
+	'X',
 	"vm",
 
 	devreset,

@@ -6151,7 +6151,7 @@ PYEOF
     vrefute "headless: nothing panics"                      "panic:"
 
     #
-    # More than one Dis VM (#944): #V, the vm command, programs in VMs 1
+    # More than one Dis VM (#944): #X, the vm command, programs in VMs 1
     # and 2 at once, and the two places the kernel crosses between VMs --
     # a VM 1 client of a file a VM 0 program serves through file2chan
     # (devsrv), and a VM 0 kill of a VM 1 Prog (devprog). Correctness
@@ -6225,7 +6225,7 @@ try:
     # the VM directories by name, as a listing gives them: vmgen once
     # gave devdir a name on its own stack, dead by the time devdirread
     # packed it -- every listing came back garbage
-    typed("ls '#V/vm'; echo VMLSEND", 2)
+    typed("ls '#X/vm'; echo VMLSEND", 2)
     # vmstress: echo servers and allocators in VMs 1-3, traffic to them
     # from VM 0 and between them, a job started every 300 ms, bursts
     # in all four at once, sleepers killed across VMs; every count
@@ -6235,7 +6235,7 @@ try:
     # its end kills, from VM 0, clients that may be inside a file another
     # VM serves: each must die, in its own VM, and nothing else may break
     time.sleep(10)
-    typed("echo VSAFTER; for(i in 2 3){cat '#V/vm/'^$i^/status}; ps | grep Vmstress; echo VSAFTEREND", 3)
+    typed("echo VSAFTER; for(i in 2 3){cat '#X/vm/'^$i^/status}; ps | grep Vmstress; echo VSAFTEREND", 3)
     typed("vm")
 finally:
     p.kill(); p.communicate()
@@ -6246,7 +6246,7 @@ PYEOF
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
     vcheck "vm: the card's vms file starts a program in VM 1 at boot" "init: vm 1: /dis/sleep.dis 600, pid "
     vcheck "vm: and says so when one it names is not there"   "init: vms: /dis/nosuchprogram.dis in VM 3:"
-    vcheck "vm: #V lists the VMs: 0, and 1 and 3 from the card" "vms 3 max 4"
+    vcheck "vm: #X lists the VMs: 0, and 1 and 3 from the card" "vms 3 max 4"
     vcheck "vm: the boot-placed program is in VM 1"           "vm 1 progs 1 "
     nt="$(grep -ac 'Total Time: [0-9]* ms' <<<"$OUT")"
     if [[ "$nt" -ge 2 ]]; then
@@ -6284,11 +6284,11 @@ PYEOF
         pass "virt: vm: VM 0 kills it (devprog across VMs)"
     fi
     vcheck "vm: \$Tk stays VM 0's: VM 1's shell cannot load it" "not built-in"
-    vls="$(sed -n "/ls .#V\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | grep -acE '^#V/vm/[0-3]$')"
+    vls="$(sed -n "/ls .#X\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | grep -acE '^#X/vm/[0-3]$')"
     if [[ "$vls" -eq 4 ]]; then
-        pass "virt: vm: ls '#V/vm' names VMs 0-3 (a name devdir keeps outlives the generator)"
+        pass "virt: vm: ls '#X/vm' names VMs 0-3 (a name devdir keeps outlives the generator)"
     else
-        fail "virt: vm: ls '#V/vm' gave $vls of 4 VM names: $(sed -n "/ls .#V\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | head -6 | tr '\n' ' ')"
+        fail "virt: vm: ls '#X/vm' gave $vls of 4 VM names: $(sed -n "/ls .#X\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | head -6 | tr '\n' ' ')"
     fi
     vs="$(grep -aE '^vmstress: [0-9]+s starts' <<<"$VMOUT" | tail -1)"
     if [[ -z "$vs" ]]; then

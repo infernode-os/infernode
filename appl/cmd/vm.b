@@ -6,7 +6,7 @@ implement Vm;
 #	vm			what VMs there are, and what is in each
 #	vm n cmd [arg ...]	run cmd in VM n; print its pid
 #
-# On the native kernel each core can run a Dis VM of its own (#V,
+# On the native kernel each core can run a Dis VM of its own (#X,
 # devvm.c): a command in VM 1 runs alongside one in VM 0 on another
 # core, sharing nothing with it but the kernel -- the files, pipes and
 # 9P every Inferno program already talks through. The command gets this
@@ -29,7 +29,7 @@ Vm: module
 	init:	fn(nil: ref Draw->Context, argv: list of string);
 };
 
-Dev: con "#V/vm";
+Dev: con "#X/vm";
 
 init(nil: ref Draw->Context, argv: list of string)
 {

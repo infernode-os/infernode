@@ -8,7 +8,7 @@ implement Vmstress;
 # exercises what is new about VMs: programs started in them, programs
 # ending, and the crossings between them. This does. It runs as the
 # orchestrator in VM 0 and starts its other roles in VMs 1-3 through
-# #V/vm/N/run, the file vm(1) writes:
+# #X/vm/N/run, the file vm(1) writes:
 #
 #   vmstress run DIR [secs]	orchestrate, forever or for secs; report
 #				one line a minute; stop when DIR/stop exists
@@ -121,7 +121,7 @@ rand(n: int): int
 # start argv in VM n; its pid, or -1 having counted nothing
 vmstart(n: int, args: list of string): int
 {
-	fd := sys->open(sys->sprint("#V/vm/%d/run", n), Sys->ORDWR);
+	fd := sys->open(sys->sprint("#X/vm/%d/run", n), Sys->ORDWR);
 	if(fd == nil)
 		return -1;
 	s := "";
@@ -358,7 +358,7 @@ report(dir: string, clients: list of string, t0: int)
 	}
 	vms := "";
 	for(k := 0; k < NVM; k++)
-		vms += " |" + oneline(readfile(sys->sprint("#V/vm/%d/status", k)));
+		vms += " |" + oneline(readfile(sys->sprint("#X/vm/%d/status", k)));
 	line := sys->sprint("vmstress: %ds starts %d startfail %d done %d bursts %d burstfail %d kills %d killfail %d traffic ok %d bad %d;%s;%s\n",
 		(sys->millisec() - t0) / 1000, cnt.starts, cnt.startfail, cnt.done,
 		cnt.bursts, cnt.burstfail, cnt.kills, cnt.killfail, tok, tbad, vms, per);

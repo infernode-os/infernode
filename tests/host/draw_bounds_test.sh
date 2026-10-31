@@ -21,17 +21,24 @@ if [ -z "$objtype" ]; then
 	*) echo "SKIP: unsupported architecture for draw bounds test"; exit 0 ;;
 	esac
 fi
+case $syshost in
+MacOSX) deadstrip=-Wl,-dead_strip ;;
+*) deadstrip=-Wl,--gc-sections ;;
+esac
 platform=$ROOT/$syshost/$objtype
 if [ ! -f "$platform/include/lib9.h" ] || [ ! -f "$platform/lib/lib9.a" ]; then
 	echo "FAIL: build the host libraries before draw_bounds_test.sh" >&2
 	exit 1
 fi
 
-${CC:-cc} -I"$platform/include" -I"$ROOT/include" \
+${CC:-cc} -ffunction-sections -fdata-sections "$deadstrip" \
+	-I"$platform/include" -I"$ROOT/include" \
 	"$ROOT/tests/host/draw_bounds_helper.c" \
 	"$ROOT/libdraw/badrect.c" \
 	"$ROOT/libdraw/bytesperline.c" \
 	"$ROOT/libdraw/computil.c" \
+	"$ROOT/libdraw/window.c" \
+	"$ROOT/libdraw/font.c" \
 	"$ROOT/libmemdraw/icossin2.c" \
 	"$ROOT/libmemdraw/arc.c" \
 	"$ROOT/libmemdraw/cload.c" \

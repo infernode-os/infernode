@@ -3,6 +3,9 @@
 #include "memdraw.h"
 
 static int arcdrew;
+static int flushresult;
+static int subfontfrees;
+static uchar imagebuf[64];
 Memimage *memopaque;
 
 Memimage* allocmemimage(Rectangle r, ulong chan) { (void)r; (void)chan; arcdrew = 1; return nil; }
@@ -17,6 +20,10 @@ void memimagedraw(Memimage *d, Rectangle r, Memimage *s, Point sp, Memimage *m, 
 void memdraw(Memimage *d, Rectangle r, Memimage *s, Point sp, Memimage *m, Point mp, int op)
 { (void)d; (void)r; (void)s; (void)sp; (void)m; (void)mp; (void)op; }
 void icossin(int a, int *c, int *s) { (void)a; *c = *s = 0; }
+void kwerrstr(char *fmt, ...) { (void)fmt; }
+uchar *bufimage(Display *d, int n) { (void)d; (void)n; return imagebuf; }
+int flushimage(Display *d, int visible) { (void)d; (void)visible; return flushresult; }
+void freesubfont(Subfont *f) { (void)f; subfontfrees++; }
 
 static int
 check(int ok, char *what)
@@ -41,6 +48,14 @@ main(void)
 	uchar repeat[2], pixels[3];
 	Memdata data;
 	Memimage image;
+	Display display;
+	Image screenimage, screenfill;
+	Screen *screen;
+	Font font;
+	Cacheinfo cache;
+	Cachesubf cachesubf;
+	Cachefont cachefont;
+	Subfont subfont;
 	int i, failed, c, s;
 
 	failed = 0;
@@ -57,6 +72,40 @@ main(void)
 	arcdrew = 0;
 	memarc(nil, ZP, 1, 1, 0, nil, ZP, 0, 0, S);
 	failed += check(!arcdrew, "zero-angle arc attempted to draw");
+
+	memset(&display, 0, sizeof display);
+	memset(&screenimage, 0, sizeof screenimage);
+	memset(&screenfill, 0, sizeof screenfill);
+	screenimage.display = screenfill.display = &display;
+	flushresult = -1;
+	screen = allocscreen(&screenimage, &screenfill, 0);
+	failed += check(screen == nil,
+		"allocscreen returned a screen after exhausting every id retry");
+	flushresult = 0;
+	screen = allocscreen(&screenimage, &screenfill, 0);
+	failed += check(screen != nil, "allocscreen rejected a successful allocation");
+	free(screen);
+
+	memset(&font, 0, sizeof font);
+	memset(&cache, 0, sizeof cache);
+	memset(&cachesubf, 0, sizeof cachesubf);
+	memset(&cachefont, 0, sizeof cachefont);
+	memset(&subfont, 0, sizeof subfont);
+	cachefont.name = "test";
+	cachesubf.age = 1;
+	cachesubf.cf = &cachefont;
+	cachesubf.f = &subfont;
+	font.display = &display;
+	font.age = 65535;
+	font.ncache = 1;
+	font.cache = &cache;
+	font.nsubf = 1;
+	font.subf = &cachesubf;
+	display.defaultsubfont = &subfont;
+	subfontfrees = 0;
+	agefont(&font);
+	failed += check(subfontfrees == 0,
+		"agefont freed the display default subfont");
 
 	memset(compressed, 0x5A, sizeof compressed);
 	compressed[0] = 0xFF;

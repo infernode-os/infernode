@@ -532,10 +532,7 @@ ipiput4(Fs *f, Ipifc *ifc, Block *bp)
 if(r->ifc == nil) panic("nil route rfc");
 		if(r->ifc->reassemble){
 			frag = nhgets(h->frag);
-			if(frag) {
-				h->tos = 0;
-				if(frag & IP_MF)
-					h->tos = 1;
+			if(frag & ~IP_DF) {
 				bp = ip4reassemble(ip, frag, bp, h);
 				if(bp == nil)
 					return;
@@ -551,19 +548,12 @@ if(r->ifc == nil) panic("nil route rfc");
 	}
 
 	frag = nhgets(h->frag);
-	if(frag) {
-		h->tos = 0;
-		if(frag & IP_MF)
-			h->tos = 1;
+	if(frag & ~IP_DF) {
 		bp = ip4reassemble(ip, frag, bp, h);
 		if(bp == nil)
 			return;
 		h = (Ip4hdr*)(bp->rp);
 	}
-
-	/* don't let any frag info go up the stack */
-	h->frag[0] = 0;
-	h->frag[1] = 0;
 
 	proto = h->proto;
 	p = Fsrcvpcol(f, proto);
@@ -663,7 +653,7 @@ ip4reassemble(IP *ip, int offset, Block *bp, Ip4hdr *ih)
 	 *  and get rid of any fragments that might go
 	 *  with it.
 	 */
-	if(!ih->tos && (offset & ~(IP_MF|IP_DF)) == 0) {
+	if((offset & ~IP_DF) == 0) {
 		if(f != nil) {
 			ipfragfree4(ip, f);
 			ip->stats[ReasmFails]++;
@@ -774,6 +764,8 @@ ip4reassemble(IP *ip, int offset, Block *bp, Ip4hdr *ih)
 			f->blist = nil;
 			ipfragfree4(ip, f);
 			ih = BLKIP(bl);
+			ih->frag[0] = 0;
+			ih->frag[1] = 0;
 			hnputs(ih->length, len);
 			qunlock(&ip->fraglock4);
 			ip->stats[ReasmOKs]++;

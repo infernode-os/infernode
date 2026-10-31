@@ -5050,6 +5050,11 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: raw network control did not pass -- $NETSEC"
     fi
+    if grep -q '^FRAGMENT-DF-PASS$' <<<"$NETSEC"; then
+        pass "virt: DF-only IPv4 packets do not disturb fragment queues"
+    else
+        fail "virt: DF flag was mistaken for fragmentation -- $NETSEC"
+    fi
     if grep -q '^FRAGMENT-LIE-PASS$' <<<"$NETSEC"; then
         pass "virt: IPv4 reassembly rejects a total length beyond received bytes"
     else

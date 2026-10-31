@@ -224,6 +224,38 @@ def icmp_regression(h):
         raise RuntimeError("valid fragmented ICMP request was not answered")
     print("FRAGMENT-VALID-PASS", flush=True)
 
+    # DF is a flag, not evidence of fragmentation.  A complete DF packet
+    # sharing an id with a queued fragmented datagram must not discard that
+    # queue; the remaining fragment still has to complete afterwards.
+    queued = struct.pack("!BBHHH", 8, 0, 0, 0x2345, 2) + data
+    queued = queued[:2] + struct.pack("!H", checksum(queued)) + queued[4:]
+    dficmp = struct.pack("!BBHHH", 8, 0, 0, 0x7777, 3) + data
+    dficmp = dficmp[:2] + struct.pack("!H", checksum(dficmp)) + dficmp[4:]
+    h.send(eth(ipv4(queued[:24], 1, 0x4104, 0x2000)))
+    h.send(eth(ipv4(dficmp, 1, 0x4104, 0x4000)))
+    end = time.monotonic() + 3
+    dfreply = False
+    while time.monotonic() < end:
+        f = h.recv(end)
+        if f is None or len(f) < 42 or f[12:14] != b"\x08\x00":
+            continue
+        if f[23] == 1 and f[34] == 0 and struct.unpack("!H", f[38:40])[0] == 0x7777:
+            dfreply = True
+            break
+    if not dfreply:
+        raise RuntimeError("complete IPv4 DF control was not answered")
+    h.send(eth(ipv4(queued[24:], 1, 0x4104, 3)))
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        f = h.recv(end)
+        if f is None or len(f) < 42 or f[12:14] != b"\x08\x00":
+            continue
+        if f[23] == 1 and f[34] == 0 and struct.unpack("!H", f[38:40])[0] == 0x2345:
+            print("FRAGMENT-DF-PASS", flush=True)
+            break
+    else:
+        raise RuntimeError("DF-only packet discarded another datagram's fragment queue")
+
     failures = h.ipstat("ReasmFails")
     header_errors = h.ipstat("InHdrErrors")
 

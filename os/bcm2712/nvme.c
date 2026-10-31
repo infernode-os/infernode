@@ -9,8 +9,9 @@
  *
  * A command that does not complete, a controller fatal status, or the
  * link going away, resets the controller and sets everything up again,
- * and the transfer is tried once more. Writes are forced to the medium
- * (FUA): nothing above here asks for a flush. On the way down the
+ * and the transfer is tried once more. Nothing above here asks for a
+ * flush, so a process does, every Flushms; boot option nvmefua forces
+ * each write to the medium instead, nearly halving kfs's speed. On the way down the
  * controller is shut down properly, or the drive counts it as a loss
  * of power.
  *
@@ -74,6 +75,7 @@ enum
 	Fua	= 1<<30,
 	Iowait	= 3000,			/* ms, for one transfer */
 	Linkwait= 5000,			/* ms, for a link to come back */
+	Flushms	= 2000,			/* the most a power cut can lose */
 	Toomany	= 4,			/* resets, before a slower link */
 	Failed	= -1,			/* no answer, as opposed to a status */
 };
@@ -110,6 +112,8 @@ static struct
 	int	msi;
 	int	msicap;
 	int	canwait;	/* a process is issuing it: not the boot's stack */
+	int	fua;		/* Fua, or 0 for the flush process */
+	int	dirty;		/* written since the last flush */
 	int	dead;		/* recovery failed */
 	int	fault;		/* nvmefault: lose the next completion */
 	char	name[80];
@@ -325,7 +329,7 @@ xfer(int write, uvlong lba, int n)
 	coherence();
 	s = cmd(&nvme.io, write ? Opwrite : Opread, 1, DEVADDR(nvme.data),
 		pages > 2 ? DEVADDR(nvme.prp) : (pages == 2 ? DEVADDR(nvme.data + Pgsize) : 0),
-		(u32int)lba, lba>>32, (n-1) | (write ? Fua : 0));
+		(u32int)lba, lba>>32, (n-1) | (write ? nvme.fua : 0));
 	if(!write)
 		cachedwbinvse(nvme.data, len);
 	if(s != 0)
@@ -450,6 +454,7 @@ nvmerw(int write, void *a, long n, vlong off)
 		if(write){
 			memmove(nvme.data + in, p + done, m);
 			xferchecked(1, lba, nb);
+			nvme.dirty = 1;
 		}else
 			memmove(p + done, nvme.data + in, m);
 	}
@@ -457,6 +462,33 @@ nvmerw(int write, void *a, long n, vlong off)
 	qunlock(&nvme.q);
 	poperror();
 	return n;
+}
+
+static void
+flushproc(void*)
+{
+	static Rendez r;
+
+	while(waserror())
+		;
+	for(;;){
+		tsleep(&r, return0, nil, Flushms);
+		if(!nvme.dirty || nvme.dead)
+			continue;
+		qlock(&nvme.q);
+		nvme.dirty = 0;
+		if(cmd(&nvme.io, Opflush, 1, 0, 0, 0, 0, 0) != 0)
+			nvme.dirty = 1;
+		qunlock(&nvme.q);
+	}
+}
+
+/* #P's init: there is a scheduler by then */
+void
+nvmestart(void)
+{
+	if(nvme.present && !nvme.fua)
+		kproc("nvmeflush", flushproc, nil, 0);
 }
 
 /*
@@ -779,6 +811,8 @@ nvmelink(void)
 	gptscan();
 	if(cmdlineword("nvmewrite"))
 		writetest();
+	if(cmdlineword("nvmefua"))
+		nvme.fua = Fua;
 	if(cmdlineword("nvmefault"))
 		nvme.fault = 1;
 }

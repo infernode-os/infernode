@@ -32,3 +32,20 @@ socusblink(void)
 {
 	usbxhcirp1link();
 }
+
+/*
+ * halt: off, by PSCI, which leaves the board waiting for its button.
+ * If the firmware will not, the caller resets.
+ */
+void
+boardpoweroff(void)
+{
+	register u64int x0 __asm__("x0");
+
+	nvmeshutdown();
+	uartputstr("halt: powering off; the button starts it again\n");
+	microdelay(100000);
+	x0 = 0x84000008;	/* SYSTEM_OFF */
+	__asm__ volatile("smc #0" : "+r"(x0) : : "memory", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+		"x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17");
+}

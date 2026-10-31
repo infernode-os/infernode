@@ -69,7 +69,7 @@ has the feature, which is what parity means.
 | SPI | 9 | `devspi.c`, `#Q`, SPI0, two chip selects. **Proved** in the block's own loopback: 8192 bytes back intact at 1 and 10MHz, in the time they should take. No device on the wire yet |
 | PWM | 2 | `devpwm.c`, `#W`, PWM0's four channels. **Proved**: 10ms period, 2.5ms duty measured at the pin to the microsecond. PWM1 is the fan's |
 | I2S | 3 | Not done |
-| ADC | 1 | Not done; board monitoring |
+| ADC | 1 | Not done: reading it with its clock off hangs the reader, and the clock's register is not in hand |
 | PIO | 1 | Not done; needs RP1's mailbox |
 | DMA | 1 | Not done; CPU copies today |
 | SDIO | 2 | Not done; wired to the header pins |

@@ -70,6 +70,7 @@ void	cachedwbinvse(void*, int);
 void	cachedwbse(void*, int);
 #ifdef NVME0
 void	nvmeshutdown(void);
+void	boardpoweroff(void);
 #endif
 
 /* arch.c -- interrupt priority level */

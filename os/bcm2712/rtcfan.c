@@ -197,6 +197,7 @@ void
 fanstart(void)
 {
 	kproc("fan", fanproc, nil, 0);
+	nvmestart();
 }
 
 void

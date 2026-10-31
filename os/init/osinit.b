@@ -336,6 +336,7 @@ init()
 	# into the kernel. Ordered wrongly it announced itself only as
 	# factotum failing to bind, which is a long way from the cause.
 	#
+	spawn buttonwatch();
 	wifisetup();
 
 	#
@@ -2271,6 +2272,36 @@ tmpsetup()
 	} exception e {
 	"*" =>
 		sys->print("init: memfs on /tmp failed: %s\n", e);
+	}
+}
+
+#
+# A press of the power button, where a board has one, is a clean halt:
+# #P says whether it is down, and what it means is decided here. kfs and
+# dossrv write through, so there is nothing to tell them.
+#
+buttonwatch()
+{
+	fd := sys->open("#P/button", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[8] of byte;
+	held := 0;
+	for(;;){
+		sys->sleep(100);
+		if(sys->pread(fd, buf, len buf, big 0) < 1)
+			return;
+		if(buf[0] != byte '1'){
+			held = 0;
+			continue;
+		}
+		if(++held < 2)
+			continue;
+		sys->print("init: power button: halting\n");
+		ctl := sys->open("/dev/sysctl", Sys->OWRITE);
+		if(ctl != nil)
+			sys->fprint(ctl, "halt");
+		return;
 	}
 }
 

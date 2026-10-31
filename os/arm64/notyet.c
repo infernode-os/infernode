@@ -205,6 +205,9 @@ booted(void)
 void
 halt(void)
 {
+#ifdef NVME0
+	boardpoweroff();
+#endif
 	exit(0);
 }
 

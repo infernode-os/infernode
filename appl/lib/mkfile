@@ -14,6 +14,7 @@ DIRS=\
 
 TARG=\
 	woff2.dis\
+	sdg.dis\
 	bidi.dis\
 	brotli.dis\
 	popup.dis\
@@ -366,6 +367,7 @@ SYSMODULES=\
 	wmdeb.m\
 	post9p.m\
 	appfs.m\
+	sdg.m\
 
 
 

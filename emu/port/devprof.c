@@ -566,8 +566,7 @@ mlook(Module *m, int limbo, int vm, int scale, int origin)
 	return nil;
 }
 
-extern	Module*	modules;
-extern	Proc*	vmowner;
+extern	Proc*	vmowner;	/* modules, the module list, is interp.h's: a VM's own (#944) */
 
 /* the compiled module whose code holds pc */
 static Module*

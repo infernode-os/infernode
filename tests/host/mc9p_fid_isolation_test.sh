@@ -43,8 +43,8 @@ init(nil: ref Draw->Context, nil: list of string)
 		sys->print("MECH: FAIL open: %r\n");
 		return;
 	}
-	ra := request(a, "/tmp/mc9p-a");
-	rb := request(b, "/tmp/mc9p-b");
+	ra := request(a, "/tmp/mc9p-root/a");
+	rb := request(b, "/tmp/mc9p-root/b");
 	# Re-read a only after b has completed: a shared endpoint response would
 	# now contain b's value.
 	sys->seek(a, big 0, Sys->SEEKSTART);
@@ -55,7 +55,9 @@ init(nil: ref Draw->Context, nil: list of string)
 	fresh := sys->open("/tmp/mcp-fid/fs/read", Sys->OREAD);
 	fbuf := array[8] of byte;
 	freshn := sys->read(fresh, fbuf, len fbuf);
-	if(ra == "alpha" && rb == "beta" && freshn == 0)
+	escape := request(b, "/tmp/mc9p-secret");
+	if(ra == "alpha" && rb == "beta" && freshn == 0 &&
+	   escape == "error: path outside configured fs root")
 		sys->print("MECH: PASS\n");
 	else
 		sys->print("MECH: FAIL a=%q b=%q fresh=%d\n", ra, rb, freshn);
@@ -66,7 +68,7 @@ EOF
 	echo "FAIL: could not compile mc9p fid probe"; exit 1; }
 
 OUT="$(with_timeout 30 "$EMU" -r"$ROOT" /dis/sh.dis -c \
-    "path=(/dis/veltro /dis/cmd /dis .); echo -n alpha > /tmp/mc9p-a; echo -n beta > /tmp/mc9p-b; mc9p -m /tmp/mcp-fid fs & sleep 2; ${DIS#$ROOT}; echo halt > '#c/sysctl'" 2>&1)"
+    "path=(/dis/veltro /dis/cmd /dis .); mkdir /tmp/mc9p-root; echo -n alpha > /tmp/mc9p-root/a; echo -n beta > /tmp/mc9p-root/b; echo -n secret > /tmp/mc9p-secret; mc9p -m /tmp/mcp-fid -r /tmp/mc9p-root fs & sleep 2; ${DIS#$ROOT}; echo halt > '#c/sysctl'" 2>&1)"
 if echo "$OUT" | grep -q '^MECH: PASS$'; then
 	echo "PASS: mc9p endpoint responses are isolated per fid"
 else

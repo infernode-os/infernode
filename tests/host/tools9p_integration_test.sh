@@ -416,6 +416,8 @@ if emu_c "provision_msg_draft_write" 24 \
         fail "child write tool could not use the exact draft capability (output: $OUTPUT)"
     elif ! echo "$OUTPUT" | grep -q "^[0-9][0-9]* email 1 "; then
         fail "delegated draft did not reach the trusted pending queue (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "^[0-9][0-9]* email 1 15 delegated reply$"; then
+        fail "pending does not show the controller the exact queued body (output: $OUTPUT)"
     elif echo "$OUTPUT" | grep -q "cowfs /mnt/msg/draft"; then
         fail "transactional draft endpoint was incorrectly sent through cowfs"
     else
@@ -635,7 +637,7 @@ else
 fi
 
 if emu_c "provision_sibling_prefix" 14 \
-    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+	"mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
         fail "child provisioning treated sibling prefix as covered by parent grant"
     elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then

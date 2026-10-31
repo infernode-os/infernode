@@ -1,7 +1,7 @@
 # Voice over 9P
 
 InferNode does voice calls without inventing a call protocol. Each device
-exports `/dev/audio` over 9P; the peer mounts it; two `cat`s carry the
+exports a two-file `audio`/`audioctl` view over authenticated 9P; the peer mounts it; two `cat`s carry the
 audio. `mount` is the call. `kill` is the hangup. No SIP, no INVITE, no
 signalling.
 
@@ -17,7 +17,7 @@ Each side runs this once:
 ```
 bind -a '#A' /dev                       # devaudio onto /dev
 sh /lib/voice/listen                    # announces tcp!*!7070,
-                                        # exports /dev under that mount
+                                        # exports only audio and audioctl
 ```
 
 Either side dials:
@@ -25,6 +25,21 @@ Either side dials:
 ```
 sh /lib/voice/dial tcp!peer-ip!7070
 ```
+
+Both scripts require `/usr/$user/keyring/default` and explicitly pass it to
+`listen -k` or `mount -k`. Peers must have certificates signed by the same
+signer. A minimal one-time setup is:
+
+```sh
+mkdir -p /usr/$user/keyring
+auth/createsignerkey -f /usr/$user/keyring/signer $user-signer
+auth/mkauthinfo -k 'key=signer' $user /usr/$user/keyring/default
+```
+
+Provision each peer from the same signer as described in
+[REMOTE-DESKTOP.md](REMOTE-DESKTOP.md#certificate-setup). There is no
+anonymous mode in the production voice scripts. The tone tests use a local
+pipe-mounted 9P export and open no network listener.
 
 `voice/dial` does the four cats that are the call:
 
@@ -117,7 +132,7 @@ of the bridge.
 ./emu/MacOSX/o.emu -r$PWD -c0 sh /lib/voice/test-tone
 ```
 
-Spins up its own listener, mounts the local 9P export, pumps an
+Starts a process-local 9P export, mounts it through a pipe, pumps an
 `audiotone` pulse train through every byte of the export path, plays
 the decoded result. If you hear ten short 1 kHz beeps over ~5 s, the
 codec + 9P + 4-cat bridge all work.

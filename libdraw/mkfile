@@ -5,6 +5,7 @@ LIB=libdraw.a
 OFILES=	alloc.$O\
 	allocimagemix.$O\
 	arith.$O\
+	badrect.$O\
 	bezier.$O\
 	border.$O\
 	buildfont.$O\

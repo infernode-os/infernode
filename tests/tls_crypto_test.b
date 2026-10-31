@@ -481,6 +481,12 @@ testX25519(t: ref T)
 
 	# Both sides should agree
 	assertbytes(t, shared_ab, shared_ba, "ECDH commutativity");
+
+	# RFC 7748 requires rejection of the all-zero shared secret.  Zero is
+	# a low-order peer input and must not become TLS key material.
+	loworder := array[32] of byte;
+	t.assert(kr->x25519(alice_priv, loworder) == nil,
+		"X25519 rejects all-zero shared secret");
 }
 
 # ============================================================

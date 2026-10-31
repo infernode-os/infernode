@@ -250,7 +250,7 @@ struct Tcpctl
 	ushort	mss;			/* Mean segment size */
 	int	rerecv;			/* Overlap of data rerecevived */
 	u32int	window;			/* Recevive window */
-	uchar	backoff;		/* Exponential backoff counter */
+	int	backoff;		/* Exponential backoff counter */
 	int	backedoff;		/* ms we've backed off for rexmits */
 	uchar	flags;			/* State flags */
 	Reseq	*reseq;			/* Resequencing queue */
@@ -2037,7 +2037,7 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 		}
 
 		hdrlen = ntohtcp4(&seg, &bp);
-		if(hdrlen < 0){
+		if(hdrlen < 0 || hdrlen > length){
 			tpriv->stats[HlenErrs]++;
 			tpriv->stats[InErrs]++;
 			netlog(f, Logtcp, "bad tcp hdr len\n");
@@ -2079,7 +2079,7 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 		hnputs(h6->ploadlen, length);
 
 		hdrlen = ntohtcp6(&seg, &bp);
-		if(hdrlen < 0){
+		if(hdrlen < 0 || hdrlen > length){
 			tpriv->stats[HlenErrs]++;
 			tpriv->stats[InErrs]++;
 			netlog(f, Logtcp, "bad tcp hdr len\n");
@@ -2892,7 +2892,8 @@ tcptimeout(void *arg)
 	qlock(&s->ql);
 	switch(tcb->state){
 	default:
-		tcb->backoff++;
+		if(tcb->backoff < 8)
+			tcb->backoff++;
 		if(tcb->state == Syn_sent)
 			maxback = MAXBACKMS/2;
 		else

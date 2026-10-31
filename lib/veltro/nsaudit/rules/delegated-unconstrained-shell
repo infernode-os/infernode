@@ -1,0 +1,5 @@
+rule=DELEGATED_UNCONSTRAINED_SHELL
+	severity=high
+	require='delegates_tool_exec shellcmds_empty'
+	message='task is granted and exec is in /tool/budget with no caps.shellcmds allowlist. The agent can provision a child holding an unconstrained shell, so it holds exec authority even though exec is absent from caps.tools.'
+	fix='remove exec from the delegation budget, or set caps.shellcmds to the minimal command set'

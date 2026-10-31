@@ -702,19 +702,23 @@ valid(Proto *icmp, Ipifc *ifc, Block *bp, Icmppriv6 *ipriv) {
 		switch (p->type) {
 		case NbrSolicit:
 		case NbrAdvert:
+			if(pktsz - sizeof(IPICMP) < IPaddrlen) {
+				ipriv->stats[HlenErrs6]++;
+				goto err;
+			}
 			np = (Ndpkt*) p;
 			if(isv6mcast(np->target)) {
 				ipriv->stats[TargetErrs6]++; 
 				goto err; 
 			}
-			if(optexsts(np) && (np->olen == 0)) {
+			if(pktsz - sizeof(IPICMP) >= IPaddrlen+2 && np->olen == 0) {
 				ipriv->stats[OptlenErrs6]++; 
 				goto err; 
 			}
 		
 			if(p->type == NbrSolicit) {
 				if(ipcmp(np->src, v6Unspecified) == 0) { 
-					if(!issmcast(np->dst) || optexsts(np))  {
+					if(!issmcast(np->dst))  {
 						ipriv->stats[AddrmxpErrs6]++; 
 						goto err;
 					}

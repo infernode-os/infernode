@@ -640,7 +640,7 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 	case Qsysname:
 		if(offset != 0)
 			error(Ebadarg);
-		if(n < 0 || n >= sizeof(buf))
+		if(n <= 0 || n >= sizeof(buf))
 			error(Ebadarg);
 		strncpy(buf, va, n);
 		buf[n] = '\0';

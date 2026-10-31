@@ -89,8 +89,6 @@ char	Esbadstat[] = "invalid directory entry received from server";
 char Enoversion[] = "version not established for mount channel";
 
 
-void (*mntstats)(int, Chan*, uvlong, ulong);
-
 static int
 versionrequested(char *v)
 {
@@ -356,6 +354,8 @@ mntattach(char *muxattach)
 
 	bogus = *((struct bogus *)muxattach);
 	c = bogus.chan;
+	if(bogus.authchan != nil && bogus.authchan->mchan != c)
+		error(Ebadusefd);
 
 	m = c->mux;
 
@@ -682,32 +682,11 @@ static long
 mntread(Chan *c, void *buf, long n, vlong off)
 {
 	uchar *p, *e;
-	int nc, cache, isdir, dirlen;
-
-	isdir = 0;
-	cache = c->flag & CCACHE;
-	if(c->qid.type & QTDIR) {
-		cache = 0;
-		isdir = 1;
-	}
+	int dirlen;
 
 	p = buf;
-	if(cache) {
-		nc = cread(c, buf, n, off);
-		if(nc > 0) {
-			n -= nc;
-			if(n == 0)
-				return nc;
-			p += nc;
-			off += nc;
-		}
-		n = mntrdwr(Tread, c, p, n, off);
-		cupdate(c, p, n, off);
-		return n + nc;
-	}
-
 	n = mntrdwr(Tread, c, buf, n, off);
-	if(isdir) {
+	if(c->qid.type & QTDIR) {
 		for(e = &p[n]; p+BIT16SZ < e; p += dirlen){
 			dirlen = BIT16SZ+GBIT16(p);
 			if(p+dirlen > e)
@@ -743,6 +722,14 @@ mntrdwr(int type, Chan *c, void *buf, long n, vlong off)
 	if(c->qid.type & QTDIR)
 		cache = 0;
 	for(;;) {
+		if(cache && type == Tread) {
+			nr = cread(c, (uchar*)uba, n, off);
+			if(nr > 0) {
+				nreq = nr;
+				goto Next;
+			}
+		}
+
 		r = mntralloc(c, m->msize);
 		if(waserror()) {
 			mntfree(r);
@@ -762,13 +749,39 @@ mntrdwr(int type, Chan *c, void *buf, long n, vlong off)
 		if(nr > nreq)
 			nr = nreq;
 
+		if(cache) {
+			/*
+			 * Do not update the cache from uba: another process can
+			 * change that user buffer before it is copied into cache.
+			 */
+			if(type == Tread) {
+				ulong nc, nn;
+				Block *b;
+
+				nc = 0;
+				for(b = r->b; b != nil; b = b->next) {
+					nn = BLEN(b);
+					if(nc+nn > nr)
+						nn = nr - nc;
+					cupdate(c, b->rp, nn, off + nc);
+					nc += nn;
+					if(nc >= nr)
+						break;
+				}
+			} else {
+				if(convM2S(r->rpc, r->rpclen, &r->request) == 0)
+					panic("convM2S");
+				cwrite(c, (uchar*)r->request.data, nr, off);
+			}
+		}
+
 		if(type == Tread)
 			r->b = bl2mem((uchar*)uba, r->b, nr);
-		else if(cache)
-			cwrite(c, (uchar*)uba, nr, off);
 
-		poperror();
 		mntfree(r);
+		poperror();
+
+	Next:
 		off += nr;
 		uba += nr;
 		cnt += nr;
@@ -1003,14 +1016,15 @@ mountmux(Mnt *m, Mntrpc *r)
 				q->b = r->b;
 				r->b = nil;
 			}
+			/*
+			 * Publish the completed reply only after every field above is
+			 * stable.  mntflushfree takes m->l before observing done, so
+			 * it cannot recycle q while this path is still waking its owner.
+			 */
 			q->done = 1;
-			unlock(&m->l);
-			if(mntstats != nil)
-				(*mntstats)(q->request.type,
-					m->c, q->stime,
-					q->reqlen + r->replen);
 			if(q != r)
 				Wakeup(&q->r);
+			unlock(&m->l);
 			return;
 		}
 		l = &q->list;
@@ -1057,14 +1071,24 @@ mntflushalloc(Mntrpc *r, ulong iounit)
 void
 mntflushfree(Mnt *m, Mntrpc *r)
 {
-	Mntrpc *fr;
+	Mntrpc *fr, **l, *f;
 
 	while(r){
 		fr = r->flushed;
+		lock(&m->l);
 		if(!r->done){
 			r->reply.type = Rflush;
-			mntqrm(m, r);
+			r->done = 1;
+			l = &m->queue;
+			for(f = *l; f; f = f->list) {
+				if(f == r) {
+					*l = r->list;
+					break;
+				}
+				l = &f->list;
+			}
 		}
+		unlock(&m->l);
 		if(fr)
 			mntfree(r);
 		r = fr;

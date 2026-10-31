@@ -1571,8 +1571,13 @@ drawmesg1(Client *client, void *av, int n)
 							drawuninstall(client, dstid);
 							error(Edrawmem);
 						}
+						if(waserror()){
+							free(refx);
+							nexterror();
+						}
 						refx->client = client;
 						refx->dimage = drawlookup(client, dstid, 1);
+						poperror();
 					}
 					memlsetrefresh(l, reffn, refx);
 				}
@@ -1979,6 +1984,10 @@ drawmesg1(Client *client, void *av, int n)
 			pp = malloc(ni*sizeof(Point));
 			if(pp == nil)
 				error(Enomem);
+			if(waserror()){
+				free(pp);
+				nexterror();
+			}
 			doflush = 0;
 			if(dst == screenimage || (dst->layer && dst->layer->screen->image->data == screenimage->data))
 				doflush = 1;	/* simplify test in loop */
@@ -2024,6 +2033,7 @@ drawmesg1(Client *client, void *av, int n)
 				mempoly(dst, pp, ni, e0, e1, j, src, sp, op);
 			else
 				memfillpoly(dst, pp, ni, e0, src, sp, op);
+			poperror();
 			free(pp);
 			m = u-a;
 			continue;
@@ -2083,6 +2093,10 @@ drawmesg1(Client *client, void *av, int n)
 				error(Eshortdraw);
 			clipr = dst->clipr;
 			dst->clipr = r;
+			if(waserror()){
+				dst->clipr = clipr;
+				nexterror();
+			}
 			op = drawclientop(client);
 			if(*a == 'x'){
 				/* paint background */
@@ -2096,7 +2110,6 @@ drawmesg1(Client *client, void *av, int n)
 				while(--j >= 0){
 					ci = BGSHORT(u);
 					if(ci<0 || ci>=font->nfchar){
-						dst->clipr = clipr;
 						error(Eindex);
 					}
 					r.max.x += font->fchar[ci].width;
@@ -2109,13 +2122,13 @@ drawmesg1(Client *client, void *av, int n)
 			while(--ni >= 0){
 				ci = BGSHORT(u);
 				if(ci<0 || ci>=font->nfchar){
-					dst->clipr = clipr;
 					error(Eindex);
 				}
 				q = drawchar(dst, q, src, &sp, font, ci, op);
 				u += 2;
 			}
 			dst->clipr = clipr;
+			poperror();
 			p.y -= font->ascent;
 			dstflush(dst, Rect(p.x, p.y, q.x, p.y+Dy(font->image->r)));
 			continue;
@@ -2159,13 +2172,13 @@ drawmesg1(Client *client, void *av, int n)
 				free(lp);
 				nexterror();
 			}
-			for(j=0; j<nw; j++)
+			for(j=0; j<nw; j++){
 				lp[j] = drawimage(client, a+1+1+2+j*4);
-			if(lp[0]->layer == 0)
-				error("images are not windows");
-			for(j=1; j<nw; j++)
+				if(lp[j]->layer == 0)
+					error("images are not windows");
 				if(lp[j]->layer->screen != lp[0]->layer->screen)
 					error("images not on same screen");
+			}
 			if(a[1])
 				memltofrontn(lp, nw);
 			else

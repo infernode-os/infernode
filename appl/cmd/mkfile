@@ -90,6 +90,7 @@ TARG=\
 	getline.dis\
 	gettar.dis\
 	gif2bit.dis\
+	gpsfs.dis\
 	gpusrv.dis\
 	llmctl9p.dis\
 	llmsrv.dis\
@@ -316,6 +317,7 @@ SYSMODULES=\
 	lock.m\
 	mailparse.m\
 	mermaid.m\
+	nmea.m\
 	nsconstruct.m\
 	pdf.m\
 	rfcomm.m\

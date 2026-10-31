@@ -225,6 +225,7 @@ dis/getkey.dis
 dis/getline.dis
 dis/gettar.dis
 dis/gif2bit.dis
+dis/gpsfs.dis
 dis/gpusrv.dis
 dis/grep.dis
 dis/grid/lib/announce.dis
@@ -397,6 +398,7 @@ dis/lib/msgio.dis
 dis/lib/names.dis
 dis/lib/nametree.dis
 dis/lib/newns.dis
+dis/lib/nmea.dis
 dis/lib/ninep.dis
 dis/lib/oldauth.dis
 dis/lib/outlinefont.dis
@@ -815,6 +817,7 @@ dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
 dis/tests/ninepsrc_config_test.dis
+dis/tests/nmea_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
 dis/tests/outlinefont_test.dis

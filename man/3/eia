@@ -128,9 +128,40 @@ Changes to port settings persist between a subsequent close and reopen.
 The
 .B status
 file can be read for a report of the serial port status.
+Under
+.IR emu (1)
+it ends with
+.BI dev " path" ,
+the host's device behind the port.
+.PP
+Under
+.IR emu ,
+the ports are the host's, found when the emulator starts.
+On Linux they are
+.B /dev/ttyS0
+up to the first missing one, so that
+.B eia0
+is still
+.BR ttyS0 ,
+then every USB serial adapter and USB modem-class device present,
+.B /dev/ttyUSB0
+to
+.B ttyUSB7
+and
+.B /dev/ttyACM0
+to
+.BR ttyACM7 ;
+on macOS, the serial devices IOKit reports.
+A device plugged in later appears when the emulator is next started.
 .SH SOURCE
 .B /os/port/devns16552.c
 .br
 .B /os/*/devuart.c
 .br
 .B /os/*/devscc.c
+.br
+.B /emu/port/deveia-posix.c
+.br
+.B /emu/*/deveia.c
+.SH SEE ALSO
+.IR gpsfs (4)

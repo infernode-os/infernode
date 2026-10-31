@@ -1,17 +1,18 @@
 /*
- * Linux serial port definitions
+ * Linux serial port definitions.  The ports are the host's, found when
+ * the emulator starts, in this order: /dev/ttyS0 to the first
+ * that is missing (as they always were, so eia0 is still ttyS0), then
+ * every USB serial adapter and every USB modem-class device (GPS
+ * receivers, microcontroller boards), /dev/ttyUSB0-7 and /dev/ttyACM0-7.
+ * eiaNstatus names the host's device.  A device plugged in later is
+ * found when the emulator is next started.
  */
 
-static char *sysdev[] = {
-        "/dev/ttyS0",
-        "/dev/ttyS1",
-        "/dev/ttyS2",
-        "/dev/ttyS3",
-        "/dev/ttyS4",
-        "/dev/ttyS5",
-        "/dev/ttyS6",
-        "/dev/ttyS7",
-};
+#define	MAXDEV	24
+static char *sysdev[MAXDEV];
+
+static void _buildsysdev(void);
+#define	buildsysdev()	_buildsysdev()	/* for deveia-posix.c */
 
 #include <sys/ioctl.h>
 #include "deveia-posix.c"
@@ -42,3 +43,28 @@ static struct tcdef_t bps[] = {
 	{-1,		-1}
 };
 
+static void
+_buildsysdev(void)
+{
+	static char *usb[] = { "/dev/ttyUSB%d", "/dev/ttyACM%d" };
+	char name[32];
+	struct stat sb;
+	int i, j, n;
+
+	if(sysdev[0] != nil)
+		return;
+	n = 0;
+	for(i = 0; i < 8; i++){
+		snprint(name, sizeof(name), "/dev/ttyS%d", i);
+		if(stat(name, &sb) < 0)
+			break;
+		sysdev[n++] = strdup(name);
+	}
+	/* USB devices come and go: numbers can have gaps */
+	for(i = 0; i < nelem(usb); i++)
+		for(j = 0; j < 8 && n < MAXDEV; j++){
+			snprint(name, sizeof(name), usb[i], j);
+			if(stat(name, &sb) == 0)
+				sysdev[n++] = strdup(name);
+		}
+}

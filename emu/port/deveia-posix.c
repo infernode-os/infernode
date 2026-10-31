@@ -110,7 +110,7 @@ rdstat(int port, void *buf, long n, ulong offset)
 		    eia[port].r.ref-1, eia[port].frame, eia[port].overrun,
 		    ftos(sbuf, bps, (tcflag_t)cfgetospeed(&ts)));
 	s = rdxtra(port, &ts, s);
-	sprint(s, "\n");
+	sprint(s, " dev %s\n", sysdev[port]);
 
 	return readstr(offset, buf, n, str);
 }
@@ -231,7 +231,7 @@ eiainit(void)
 	/* check to see which ports exist by trying to stat them */
 	nports = 0;
 	for (i=0; i < nelem(sysdev); i++) {
-		if(stat(sysdev[i], &sb) < 0)
+		if(sysdev[i] == nil || stat(sysdev[i], &sb) < 0)
 			break;
 
 		nports++;

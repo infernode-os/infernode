@@ -416,6 +416,8 @@ timeoutTask(ch: chan of int, ms: int)
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
 | `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
+| `nmea_test.b` | NMEA 0183 (`module/nmea.m`): sentences framed and checksummed, positions and times read, a receiver's burst for one time assembled into one fix (a lost GGA, a new receiver), a fix lost told once, satellites in view and used by system (NMEA 4.10 system ids), GST errors, garbled sentences taken without harm |
+| `tests/host/gpsfs_test.sh` | gpsfs(4) at `/mnt/gps` through `tests/gps/drive.sh`: a log as a source (fix, position, satellites, ctl read back), a replay paced by its times with `event` and `nmea` following it, a TCP NMEA feed and gpsd (asked for NMEA) as sources from `tests/host/gps/fake_feed.py`, bad commands, baud rates and sentences refused, `stop`, `feed` taking sentences with `event` telling of a fix and its loss |
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection; a chain deeper than destroy() recurses is freed whole |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
 | `pgrp_race_test.b` | A Prog swapping its name space, fd group and dot (`pctl` FORKNS, NEWFD, `chdir`) and exiting while others read its `/prog/n/ns`, `fd` and `status`: no use-after-free, no wedged name space (INFR-373); Progs sharing a name space, one changing dot while the others resolve relative names (INFR-59) |

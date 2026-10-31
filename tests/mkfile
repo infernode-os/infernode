@@ -11,6 +11,7 @@ TARG=\
 	gentmpl.dis\
 	originfs_test.dis\
 	9p_export_test.dis\
+	nmea_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
 	auditsign_test.dis\
@@ -334,6 +335,7 @@ SYSMODULES=\
 	string.m\
 	sys.m\
 	testing.m\
+	nmea.m\
 	textwidget.m\
 	tk.m\
 	tls.m\

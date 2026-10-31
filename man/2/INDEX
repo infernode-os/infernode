@@ -235,6 +235,7 @@ pathname names
 relative names
 rooted names
 newns newns
+nmea nmea
 plumbmsg plumbmsg
 pop3 pop3
 print print

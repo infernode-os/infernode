@@ -1,0 +1,134 @@
+.TH NMEA 2
+.SH NAME
+nmea \- NMEA 0183 sentences as GPS fixes
+.SH SYNOPSIS
+.EX
+include "nmea.m";
+nmea := load Nmea Nmea->PATH;
+Fix, Parser, Sat: import nmea;
+
+init:      fn();
+fields:    fn(s: string): (array of string, string);
+timeof:    fn(s: string): string;
+
+Parser.new:        fn(): ref Parser;
+p.sentence:        fn(s: string): (list of ref Fix, string);
+p.satellites:      fn(): string;
+p.forget:          fn();
+p.last:            ref Fix;
+
+f.time:            fn(): string;
+f.text:            fn(): string;
+f.position:        fn(): string;
+f.fixmode:         fn(): int;
+.EE
+.SH DESCRIPTION
+.I Nmea
+reads the sentences a GPS receiver sends and assembles them into fixes.
+.B Init
+must be called first.
+.PP
+.B Fields
+checks one sentence (a trailing newline and carriage return are
+removed) and splits it at its commas, the address first:
+.B $GPRMC,1,2*hh
+gives
+.BR "GPRMC 1 2" .
+A sentence must begin with
+.BR $ ;
+its checksum, if it has one, must be right.
+The error is
+.BR "not a sentence" ,
+.BR "checksum mismatch" ,
+.BR "bad checksum field" ,
+.BR "bad character" ,
+.B "bad address field"
+or
+.BR "sentence too long" .
+.PP
+.B Timeof
+gives the time a sentence carries, as
+.IR hh : mm : ss ,
+with a fraction if the receiver gives one, or nil.
+.PP
+A
+.B Parser
+takes a receiver's sentences in order.
+.B Sentence
+gives the fixes the sentence completed, oldest first, usually none or
+one, or the error
+.B fields
+found.
+RMC, GGA, GLL, GSA, GSV, GST, VTG and ZDA are read, from any
+constellation's talker
+.RB ( GP ,
+.BR GL ,
+.BR GA ,
+.BR GB ,
+.BR BD ,
+.BR GQ ,
+.BR GI ,
+.BR GN );
+others, and proprietary sentences, are taken and passed over.
+A receiver sends a burst of sentences for each time it computes a
+position, which ones and in what order varying by receiver.
+A fix is complete when every kind of position sentence the receiver
+has been seen to send (RMC, GGA, GLL) has arrived for one time, or a
+sentence for a new time arrives first.
+A fix with no position is given only when the last one had one, or
+was the first.
+.PP
+.B P.last
+is the last complete fix; sentences after it for the same time (a
+GSA) are added to it.
+.B Satellites
+gives one line for each satellite in view: its system, PRN, elevation,
+azimuth, signal to noise ratio, and 1 if it is in the fix, 0 if not,
+with
+.B -
+for a value not known.
+.B Forget
+is for a new receiver: what the old one sent is forgotten, its last
+fix kept.
+.PP
+A
+.B Fix
+holds what the receiver gave for one time.
+Each value has a flag or a sentinel for unknown: the
+.B has
+flags, -1 for
+.B sats
+and
+.BR mode ,
+a negative value for a dilution or an error.
+Latitude and longitude are degrees, north and east positive;
+.B altitude
+is metres above mean sea level;
+.B speed
+metres a second;
+.B course
+degrees true;
+.B err
+and
+.B verr
+metres, one sigma, from GST.
+.B Time
+is RFC 3339 if the date is known (from RMC or ZDA), nil if not.
+.B Text
+is the fix as one line of attr=value fields, those known only; see
+.IR gpsfs (4).
+.B Position
+is
+.RI ` "lat lon" '
+to six places, or nil when there is no fix.
+.B Fixmode
+is
+.BR Mnone ,
+.B M2d
+or
+.BR M3d ,
+the receiver's if it gave one.
+.SH SOURCE
+.B /appl/lib/nmea.b
+.SH SEE ALSO
+.IR gpsfs (4)

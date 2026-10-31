@@ -1,0 +1,257 @@
+.TH GPSFS 4
+.SH NAME
+gpsfs \- GPS receiver as a file system
+.SH SYNOPSIS
+.B gpsfs
+[
+.B -m
+.I mountpoint
+] [
+.I command ...
+]
+.SH DESCRIPTION
+.I Gpsfs
+reads the NMEA 0183 sentences a GPS receiver sends, assembles them into
+fixes with
+.IR nmea (2),
+and serves the receiver's position as files, mounted by default at
+.BR /mnt/gps .
+A receiver is a byte stream: a serial port
+.RI ( eia (3)),
+a network feed of NMEA (a phone application serving it over TCP),
+.IR gpsd ,
+or a recorded log; and anything that has no byte stream, such as a
+platform's location service, writes sentences to
+.BR feed .
+The
+.I command
+words, if given, are written to
+.B ctl
+once the files are mounted.
+.SH FILESYSTEM
+.TF satellites
+.TP
+.B ctl
+read: the source command in use, or nothing.
+write: one command.
+A source command returns once the source is open, or fails with the
+reason it could not be opened; the previous source is stopped either
+way.
+.RS
+.TP
+.BI source " path \fR[\fPbaud\fR]"
+a file or serial port, read to its end.
+If
+.I baud
+is given,
+.BI b baud
+is written to
+.IB path ctl
+first, as
+.IR eia (3)
+expects.
+.TP
+.BI source " net\fB!\fPhost\fB!\fPport"
+a network connection, as
+.IR dial (2)
+makes, carrying NMEA.
+.TP
+.BI "source gpsd" " host"
+.IR gpsd ,
+at
+.IR host ,
+.IB host ! port ,
+or a full dial address; port 2947 by default.
+It is asked for NMEA with
+.BR ?WATCH ;
+its JSON lines are passed over.
+.TP
+.BI replay " path"
+a recorded log, its sentences sent at the pace of their times (no gap
+longer than five seconds).
+.TP
+.B stop
+no source.
+.RE
+.TP
+.B status
+one line, attr=value:
+.B state=fix
+(the last fix is a position),
+.B nofix
+or
+.BR nosource ;
+.B link=none
+.RB ( opening ,
+.BR open ,
+.B closed
+when the source ended,
+.BR error );
+.BI source= address;
+.BI sentences= n
+and
+.BI bad= n
+counted since start;
+.BI age= seconds
+since the last position;
+.BI error= reason
+for the last source that failed, quoted as
+.IR tokenize
+(see
+.IR sys-tokenize (2))
+expects.
+.TP
+.B position
+.I "latitude longitude"
+in decimal degrees, north and east positive, six places.
+A read is an error,
+.BR "no fix" ,
+when the receiver has no position.
+.TP
+.B fix
+the last fix, one line of attr=value fields, each given only when the
+receiver sent it:
+.BR time
+(RFC 3339, UTC),
+.BR lat ,
+.BR lon ,
+.B alt
+(metres above mean sea level),
+.B speed
+(metres a second over the ground),
+.B course
+(degrees true),
+.B mode
+.RB ( none ,
+.BR 2d ,
+.BR 3d ),
+.B q
+(how it was found:
+.BR gps ,
+.BR dgps ,
+.BR pps ,
+.BR rtk ,
+.BR float ,
+.B dr
+for dead reckoning,
+.BR manual ,
+.BR sim ),
+.B sats
+(satellites used),
+.BR hdop ,
+.BR vdop ,
+.BR pdop ,
+.B err
+and
+.B verr
+(horizontal and vertical error estimates, metres, one sigma).
+With no fix the line is the time and
+.BR mode=none .
+.TP
+.B event
+each read waits for the next fix and gives it, as
+.B fix
+would, or the fixes since the last read.
+Every open has its own; a reader that falls far behind loses the
+oldest.
+A fix is given once the receiver has sent all it sends for one time,
+or a sentence for the next time has come; a lost fix is told once.
+The first fix from a new source is given at its first position
+sentence, before the receiver is known to send others.
+.TP
+.B satellites
+one line a satellite in view:
+.I "system prn elevation azimuth snr used"
+where
+.I system
+is
+.BR gps ,
+.BR sbas ,
+.BR glonass ,
+.BR galileo ,
+.BR beidou ,
+.BR qzss ,
+.B navic
+or
+.BR gnss ;
+.B -
+stands for a value not known (an
+.I snr
+for a satellite not tracked), and
+.I used
+is 1 for a satellite in the fix.
+.TP
+.B nmea
+the sentences, as received, one a line, from the open on; each read
+waits for more.
+Sentences that fail their checksum are not passed on.
+.TP
+.B feed
+write-only: sentences written here are taken as the receiver's.
+A write with a sentence that is not one (no
+.BR $ ,
+a bad checksum) fails, naming the fault; the others in it are taken.
+.SH CAPABILITY MODEL
+Following the receiver and changing what it says are separate files,
+so what a process may do is what is bound in its name space:
+.BR position ,
+.BR fix ,
+.BR event ,
+.B satellites
+and
+.B nmea
+let it follow the receiver;
+.B ctl
+and
+.B feed
+let it choose the source or supply a position.
+A process that should only know where it is gets the first five.
+.PP
+.I Gpsfs
+opens sources in the name space it was started in.
+A serial port can always be named in the kernel's own syntax,
+.BR #t/eia0 .
+.SH EXAMPLES
+A USB receiver on Linux, which
+.IR eia (3)
+finds after the
+.B ttyS
+ports:
+.IP
+.EX
+; cat '#t/eia4status'
+opens 0 ferr 0 oerr 0 baud 9600 ... dev /dev/ttyACM0
+; gpsfs source '#t/eia4' 9600
+; cat /mnt/gps/position
+40.784000 -74.416667
+.EE
+.PP
+A phone serving NMEA on port 11123, and a moving map's loop:
+.IP
+.EX
+; echo source tcp!phone!11123 > /mnt/gps/ctl
+; cat /mnt/gps/event
+time=2026-10-31T14:32:05Z lat=40.784000 lon=-74.416667 alt=76.0 ...
+.EE
+.PP
+A day's drive, again:
+.IP
+.EX
+; cat /mnt/gps/nmea > /usr/$user/track.nmea &
+\&...
+; echo replay /usr/$user/track.nmea > /mnt/gps/ctl
+.EE
+.SH SOURCE
+.B /appl/cmd/gpsfs.b
+.br
+.B /appl/lib/nmea.b
+.SH SEE ALSO
+.IR nmea (2),
+.IR eia (3)
+.SH BUGS
+One source at a time.
+A source that ends or fails is not reopened; write the command again.
+.PP
+A phone's own location service is not yet a source: it needs a device
+in the emulator for each platform, which would supply
+.BR feed .

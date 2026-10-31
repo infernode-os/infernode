@@ -117,6 +117,7 @@ TARG=\
 	rlayout_test.dis\
 	luciuisrv_test.dis\
 	grpwait_test.dis\
+	view_remove_helper.dis\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\
 	pdf_test.dis\

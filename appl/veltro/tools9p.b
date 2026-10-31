@@ -2782,6 +2782,7 @@ viewproc(srv: ref Styxserver, v: ref View)
 	cin: array of byte;	# a message from the client not yet whole
 	xin: array of byte;	# a reply from the export not yet whole
 	rd: ref Tmsg.Read;
+	remtags: list of int;	# removes refused: the export's Rclunk for each is replaced
 	dead := err != nil;
 Loop:
 	for(;;) {
@@ -2794,9 +2795,23 @@ Loop:
 				(n, t) := Tmsg.unpack(cin);
 				if(n <= 0)
 					break;
-				if(t != nil && (e := viewrefuse(t)) != nil)
-					out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
-				else if(sys->write(fds[1], cin[0:n], n) != n) {
+				fwd := cin[0:n];
+				if(t != nil && (e := viewrefuse(t)) != nil) {
+					pick r := t {
+					Remove =>
+						# a remove clunks its fid whether it succeeds or
+						# not: the export is told, under the remove's
+						# tag, and its Rclunk becomes the refusal.  Kept
+						# here, the fid was the client's to use again
+						# and the export's still ("fid in use").
+						fwd = (ref Tmsg.Clunk(r.tag, r.fid)).pack();
+						remtags = r.tag :: remtags;
+					* =>
+						out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
+						fwd = nil;
+					}
+				}
+				if(fwd != nil && sys->write(fds[1], fwd, len fwd) != len fwd) {
 					dead = 1;
 					if(err == nil)
 						err = sys->sprint("export: %r");
@@ -2817,7 +2832,13 @@ Loop:
 						dead = 1;
 						break;
 					}
-					out = catbytes(out, xin[0:n]);
+					(rt, rem) := takeint(remtags, int xin[5] | int xin[6]<<8);
+					if(rt) {
+						remtags = rem;
+						out = catbytes(out, (ref Rmsg.Error(int xin[5] | int xin[6]<<8,
+							"the agent's name space is read-only here")).pack());
+					} else
+						out = catbytes(out, xin[0:n]);
 					xin = xin[n:];
 				}
 			}
@@ -2876,6 +2897,19 @@ viewrefuse(t: ref Tmsg): string
 			return ro;
 	}
 	return nil;
+}
+
+# whether v is in l, and l without it
+takeint(l: list of int, v: int): (int, list of int)
+{
+	found := 0;
+	r: list of int;
+	for(; l != nil; l = tl l)
+		if(!found && hd l == v)
+			found = 1;
+		else
+			r = hd l :: r;
+	return (found, r);
 }
 
 # the size a 9P message says it is, from its first four bytes

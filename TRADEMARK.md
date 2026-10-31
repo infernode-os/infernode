@@ -7,7 +7,7 @@ The InferNode software is released under the MIT License, which applies to the s
 The following are trademarks of Peter Finn:
 
 - **InferNode™** — the name
-- **The InferNode logo** — the Pluto symbol (☿ variant) rendered in red
+- **The InferNode logo** — the Pluto symbol (☿ variant) rendered in orange
 
 ## Permitted Uses
 
@@ -43,7 +43,7 @@ When using the InferNode logo under permitted uses:
 - Maintain the original aspect ratio
 - Provide adequate clear space around the logo
 - Do not place the logo on visually busy backgrounds that reduce legibility
-- The preferred presentation is red (#FF0000) on black (#000000) or white on black
+- The preferred presentation is orange (#FF6633) on black (#000000) or white on black
 - Minimum display size: 32px height for digital use
 
 ## Reporting Trademark Misuse

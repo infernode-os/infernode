@@ -1,0 +1,42 @@
+{
+  "os_list": [
+    {
+      "name": "InferNode",
+      "description": "A 64-bit Inferno® OS that runs on the Pi itself, with no Linux underneath: 9P everywhere and namespace-isolated AI agents.",
+      "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
+      "website": "https://www.infernode.io",
+      "subitems": [
+        {
+          "name": "InferNode 0.9.0 (Raspberry Pi 3B+)",
+          "description": "For the Raspberry Pi 3B+ only. Wi-Fi: put a wifi file on the card (see README.txt on it).",
+          "url": "https://github.com/infernode-os/infernode/releases/download/v0.9.0/infernode-0.9.0-rpi3bplus.img.xz",
+          "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
+          "website": "https://www.infernode.io",
+          "release_date": "2026-10-29",
+          "extract_size": 1073741824,
+          "extract_sha256": "5c3951170afe6dc4182ab671ca763d2f56e113943cf742285acf12bf9409e6d9",
+          "image_download_size": 22423956,
+          "image_download_sha256": "4f87129cb285d58ef7700cc81a3108e79e7ab13936ef532ae8c859d7e8c628dd",
+          "devices": ["pi3-64bit"],
+          "architecture": "armv8",
+          "init_format": "none"
+        },
+        {
+          "name": "InferNode 0.9.0 (Raspberry Pi 4B)",
+          "description": "For the Raspberry Pi 4B. Wi-Fi: put a wifi file on the card (see README.txt on it).",
+          "url": "https://github.com/infernode-os/infernode/releases/download/v0.9.0/infernode-0.9.0-rpi4b.img.xz",
+          "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
+          "website": "https://www.infernode.io",
+          "release_date": "2026-10-29",
+          "extract_size": 1073741824,
+          "extract_sha256": "239d0baa359b409e9cd9cdc396bbcddf5b4d6755e3ad4ae2619b6de8a2c8d4bb",
+          "image_download_size": 22097312,
+          "image_download_sha256": "df74134477c0ae545527e81b5389c4efa63dd0d6a6aa35351a7c7a49cbc61991",
+          "devices": ["pi4-64bit"],
+          "architecture": "armv8",
+          "init_format": "none"
+        }
+      ]
+    }
+  ]
+}

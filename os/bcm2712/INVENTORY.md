@@ -64,9 +64,9 @@ has the feature, which is what parity means.
 | Block | Count | State |
 |---|---|---|
 | UART | 6 | UART0 console only |
-| I2C | 7 | Not done |
-| SPI | 9 | Not done |
-| PWM | 2 | Not done |
+| I2C | 7 | `devi2c.c`, `#J`, i2c0 and i2c1 at 100 and 400kHz. **Proved** on the wire: i2c1 scans clean with nothing on it, i2c0's address byte seen at 10.0us a bit through the jumper. No device has answered yet: nothing is on the bus. 400kHz set, too fast for the edge interrupt to time |
+| SPI | 9 | `devspi.c`, `#Q`, SPI0, two chip selects. **Proved** in the block's own loopback: 8192 bytes back intact at 1 and 10MHz, in the time they should take. No device on the wire yet |
+| PWM | 2 | `devpwm.c`, `#W`, PWM0's four channels. **Proved**: 10ms period, 2.5ms duty measured at the pin to the microsecond. PWM1 is the fan's |
 | I2S | 3 | Not done |
 | ADC | 1 | Not done; board monitoring |
 | PIO | 1 | Not done; needs RP1's mailbox |

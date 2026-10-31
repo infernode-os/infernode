@@ -28,6 +28,7 @@ soak with everything loaded has not been run.
 | `etherrp1.c` | the gigabit port: a Cadence GEM |
 | `usbxhcirp1.c` | the USB ports: two DWC3s, as xHCI |
 | `gpiorp1.c` | RP1's pins, under `../bcm/devgpio.c` |
+| `devi2c.c`, `devspi.c`, `devpwm.c` | `#J`, `#Q`, `#W`: RP1's I2C, SPI and PWM on the header |
 | `emmc2.c` | the card: `../bcm/emmc.c` again |
 | `radio.c` | Wi-Fi's pins, power and SDIO2 for `../bcm/ether4330.c`; Bluetooth's pins |
 | `uartbt.c` | Bluetooth's UART, as `/dev/eia0` |

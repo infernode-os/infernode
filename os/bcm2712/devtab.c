@@ -37,6 +37,9 @@ extern Dev sddevtab;
 extern Dev rtcdevtab;
 extern Dev uartdevtab;
 extern Dev gpiodevtab;
+extern Dev i2cdevtab;
+extern Dev spidevtab;
+extern Dev pwmdevtab;
 extern Dev usbdevtab;
 extern Dev etherdevtab;
 extern Dev bootdevtab;
@@ -60,6 +63,9 @@ Dev*	devtab[] =
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&usbdevtab,		/* 'u' -- #u, USB endpoints */
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */
+	&i2cdevtab,		/* 'J' -- #J, I2C on the header */
+	&spidevtab,		/* 'Q' -- #Q, SPI on the header */
+	&pwmdevtab,		/* 'W' -- #W, PWM on the header */
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 Bluetooth's */
 	&rtcdevtab,		/* 'r' -- #r, the real-time clock */
 	&sddevtab,		/* 'S' -- #S, the SD card as a file */

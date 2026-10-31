@@ -50,7 +50,7 @@ has the feature, which is what parity means.
 |---|---|---|
 | Real-time clock | the firmware, `#r/rtc`, `#r/battery` (`devrtc.c`, `rtcfan.c`) | **Proved** across a reset, and sets the clock at boot; across power off wants the battery connected |
 | External PCIe (FPC connector) | `pcie1.c` | **Proved at gen 1**: link, bridge windows, DMA. At gen 2 the link drops about 1.6s in; `pciegen2` to test |
-| NVMe | `nvme.c`, `#S/nvme0` | **Proved** on a WD SN7100: 194 MB/s at gen 1, 378 at gen 2. MSI-X, one queue; writes fenced to the last 2GB, tested by the `nvmewrite` boot option |
+| NVMe | `nvme.c`, `#S/nvme0`, `nvmepart` ranges | **Proved** on a WD SN7100: 194 MB/s at gen 1, 378 at gen 2, MSI-X, one queue. Writes checked at the start, middle and end of 2TB. kfs in a 4GB range survives a reboot; kfs on all 2TB takes too long to ream to be any use |
 | Fan connector | RP1 PWM1 channel 3, `#P/fan`, `#P/fanrpm` | **Proved**: follows temperature by the device tree's trips; a written level overrides, `auto` restores |
 | Power button | SoC GPIO 20, `#P/button` | Level read; a press not yet tried; nothing acts on it |
 | Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | Written; not watched by anyone |

@@ -5,9 +5,8 @@
  * after that a process waits for MSI-X, through the second
  * MIP: data 8 is GIC_SPI 255, an edge, as Linux has it.
  *
- * Writes reach only a scratch area, the last Scratch bytes of the disk
- * less the last Gptback, where GPT keeps its copy, and are refused
- * anywhere else while the driver is new: the drive holds real data.
+ * Boot option nvmewrite exercises writes at several places on the disk,
+ * saving and restoring what is there.
  *
  * Queues, and the one page data moves through, are in 2MB of Normal
  * non-cacheable memory: the bridge does not snoop. A device reaches
@@ -26,9 +25,6 @@
 #define DEVADDR(p)	(0x1000000000ULL + (u64int)(uintptr)(p))
 
 #define MIP1(o)	(*(volatile u32int*)(uintptr)(0x1000131000ULL + (o)))
-
-#define Scratch	(2ULL*1024*1024*1024)
-#define Gptback	(1024*1024ULL)
 
 enum
 {
@@ -242,12 +238,6 @@ xfer(int write, uvlong lba, int n)
 {
 	int i, s, pages;
 
-	if(write)
-	if(lba*nvme.blocksize < nvmelength() - Scratch ||
-	   (lba+n)*nvme.blocksize > nvmelength() - Gptback){
-		print("nvme: write of %llud+%d refused: outside the scratch area\n", lba, n);
-		return -1;
-	}
 	pages = (n*nvme.blocksize + Pgsize-1)/Pgsize;
 	for(i = 1; i < pages; i++)
 		nvme.prp[i-1] = DEVADDR(nvme.data + i*Pgsize);
@@ -321,49 +311,48 @@ nvmerw(int write, void *a, long n, vlong off)
 }
 
 /*
- * Boot option nvmewrite: in the scratch area, save 128KB, write a
- * pattern, read it back, restore, read that back. Then, to prove the
- * fence, a write just below the area, which must be refused.
+ * Boot option nvmewrite: at the start, the middle and the end of the disk,
+ * save 128KB, write a pattern, read it back, restore, read that back.
  */
 static void
 writetest(void)
 {
 	static uchar save[Xfer];
-	uvlong lba, below;
+	uvlong at[3], lba;
 	u32int *d;
-	int i, n, bad;
+	int i, k, n, bad;
 
 	n = Xfer/nvme.blocksize;
-	lba = (nvmelength() - Gptback)/nvme.blocksize - 2*n;
-	below = (nvmelength() - Scratch)/nvme.blocksize - n;
-	if(xfer(0, lba, n) < 0)
-		return;
-	memmove(save, nvme.data, Xfer);
-	d = (u32int*)nvme.data;
-	for(i = 0; i < Xfer/4; i++)
-		d[i] = 0xA5C30000 ^ i*2654435761U;
-	if(xfer(1, lba, n) < 0)
-		return;
-	memset(nvme.data, 0, Xfer);
-	if(xfer(0, lba, n) < 0)
-		return;
-	bad = 0;
-	for(i = 0; i < Xfer/4; i++)
-		if(d[i] != (0xA5C30000 ^ i*2654435761U))
-			bad++;
-	print("nvme: write test at lba %llud: %d of %d words differ\n", lba, bad, Xfer/4);
-	memmove(nvme.data, save, Xfer);
-	coherence();
-	if(xfer(1, lba, n) < 0)
-		return;
-	memset(nvme.data, 0, Xfer);
-	if(xfer(0, lba, n) < 0)
-		return;
-	print("nvme: restored: %s\n", memcmp(nvme.data, save, Xfer) == 0 ? "matches" : "DIFFERS");
-	if(xfer(1, below, n) == 0)
-		print("nvme: FENCE FAILED: a write below the scratch area went through\n");
-	else
-		print("nvme: fence holds\n");
+	at[0] = 2048;
+	at[1] = nvme.nblocks/2;
+	at[2] = nvme.nblocks - n;
+	for(k = 0; k < nelem(at); k++){
+		lba = at[k];
+		if(xfer(0, lba, n) < 0)
+			return;
+		memmove(save, nvme.data, Xfer);
+		d = (u32int*)nvme.data;
+		for(i = 0; i < Xfer/4; i++)
+			d[i] = 0xA5C30000 ^ i*2654435761U ^ (u32int)lba;
+		if(xfer(1, lba, n) < 0)
+			return;
+		memset(nvme.data, 0, Xfer);
+		if(xfer(0, lba, n) < 0)
+			return;
+		bad = 0;
+		for(i = 0; i < Xfer/4; i++)
+			if(d[i] != (0xA5C30000 ^ i*2654435761U ^ (u32int)lba))
+				bad++;
+		memmove(nvme.data, save, Xfer);
+		coherence();
+		if(xfer(1, lba, n) < 0)
+			return;
+		memset(nvme.data, 0, Xfer);
+		if(xfer(0, lba, n) < 0)
+			return;
+		print("nvme: write at lba %llud: %d of %d words differ, restored %s\n", lba, bad, Xfer/4,
+			memcmp(nvme.data, save, Xfer) == 0 ? "ok" : "DIFFERS");
+	}
 }
 
 /*

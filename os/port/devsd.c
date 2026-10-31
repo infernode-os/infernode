@@ -49,6 +49,9 @@ struct Part {
 	char	name[Namelen];
 	vlong	off;		/* bytes from the start of the card */
 	vlong	len;
+#ifdef NVME0
+	int	nvme;		/* of the second disk, not the card */
+#endif
 };
 
 static struct {
@@ -91,6 +94,9 @@ sdaddpart(char *name, vlong startblk, vlong nblk)
 	p->name[Namelen-1] = 0;
 	p->off = startblk * Blen;
 	p->len = nblk * Blen;
+#ifdef NVME0
+	p->nvme = 0;
+#endif
 }
 
 static vlong
@@ -316,6 +322,15 @@ sdread(Chan *c, void *a, long n, vlong off)
 		return nvmerw(0, a, n, off);
 #endif
 	sdrange(c, &base, &len);
+#ifdef NVME0
+	if((ulong)c->qid.path >= Qpart && sd.part[c->qid.path - Qpart].nvme){
+		if(off >= len)
+			return 0;
+		if(off + n > len)
+			n = len - off;
+		return nvmerw(0, a, n, base + off);
+	}
+#endif
 	return sdio(0, a, n, off, base, len);
 }
 
@@ -324,6 +339,9 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 {
 	Cmdbuf *cb;
 	vlong base, len;
+#ifdef NVME0
+	int i;
+#endif
 
 	if((ulong)c->qid.path == Qctl){
 		cb = parsecmd(a, n);
@@ -334,6 +352,15 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		if(cb->nf == 4 && strcmp(cb->f[0], "part") == 0)
 			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
 				strtoll(cb->f[3], nil, 0));
+#ifdef NVME0
+		else if(cb->nf == 4 && strcmp(cb->f[0], "nvmepart") == 0){
+			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
+				strtoll(cb->f[3], nil, 0));
+			for(i = 0; i < sd.npart; i++)
+				if(strcmp(sd.part[i].name, cb->f[1]) == 0)
+					sd.part[i].nvme = 1;
+		}
+#endif
 		else
 			error(Ebadctl);
 		poperror();
@@ -346,6 +373,15 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		return nvmerw(1, a, n, off);
 #endif
 	sdrange(c, &base, &len);
+#ifdef NVME0
+	if((ulong)c->qid.path >= Qpart && sd.part[c->qid.path - Qpart].nvme){
+		if(off >= len)
+			return 0;
+		if(off + n > len)
+			n = len - off;
+		return nvmerw(1, a, n, base + off);
+	}
+#endif
 	return sdio(1, a, n, off, base, len);
 }
 

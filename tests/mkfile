@@ -276,6 +276,7 @@ MODULES=\
 	$ROOT/appl/xenith/util.m\
 	$ROOT/appl/xenith/wind.m\
 	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/cmd/auth/factotum/authio.m\
 	$ROOT/appl/xenith/xfid.m
 
 SYSMODULES=\
@@ -389,6 +390,8 @@ SYSMODULES=\
 	x402.m\
 	icon.m\
 	appfs.m\
+	auth9.m\
+	styxlib.m\
 
 DISBIN=$ROOT/dis/tests
 

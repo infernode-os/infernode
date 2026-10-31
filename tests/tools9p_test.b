@@ -436,6 +436,118 @@ testReadToolExec(t: ref T)
 	}
 }
 
+# Each caller reads back its own result.  Two fids on one tool's ctl
+# each write their own arguments, then each reads: a result kept per
+# tool, not per fid, hands the first fid the second's (concurrent calls
+# from the agent harness got each other's output).
+testResultPerFid(t: ref T)
+{
+	if(!hastool()) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	if(!strcontains(readfile(TOOLMNT + "/tools"), "read")) {
+		t.skip("'read' tool not active in tools9p");
+		return;
+	}
+	f1 := "/lib/veltro/tools/read.txt";
+	f2 := "/lib/veltro/tools/list.txt";
+	want1 := exectool9p("read", f1);
+	want2 := exectool9p("read", f2);
+	t.assert(want1 != want2, "the two files read differently");
+
+	path := TOOLMNT + "/read/ctl";
+	fd1 := sys->open(path, Sys->ORDWR);
+	fd2 := sys->open(path, Sys->ORDWR);
+	if(fd1 == nil || fd2 == nil) {
+		t.fatal(sys->sprint("cannot open %s: %r", path));
+		return;
+	}
+	b1 := array of byte f1;
+	b2 := array of byte f2;
+	t.assert(sys->write(fd1, b1, len b1) == len b1, "write on the first fid");
+	t.assert(sys->write(fd2, b2, len b2) == len b2, "write on the second fid");
+	t.assertseq(readall(fd1), want1, "the first fid reads its own result");
+	t.assertseq(readall(fd2), want2, "the second fid reads its own result");
+}
+
+readall(fd: ref Sys->FD): string
+{
+	s := "";
+	buf := array[8192] of byte;
+	off := big 0;
+	while((n := sys->pread(fd, buf, len buf, off)) > 0) {
+		s += string buf[0:n];
+		off += big n;
+	}
+	return s;
+}
+
+# A json -d call whose document is n bytes long and answers OK only if
+# the tool sees it whole (as the JSON string "OK"): any piece of it
+# is not valid JSON.
+longjson(n: int): string
+{
+	head := "-d '{\"pad\":\"";
+	tail := "\",\"k\":\"OK\"}' .k";
+	pad := n - len head - len tail;
+	if(pad < 1)
+		pad = 1;
+	b := array[pad] of { * => byte 'x' };
+	return head + string b + tail;
+}
+
+# Write args on one fid as one write, and read that fid's result.
+call1(t: ref T, name, args: string): string
+{
+	fd := sys->open(TOOLMNT + "/" + name + "/ctl", Sys->ORDWR);
+	if(fd == nil) {
+		t.fatal(sys->sprint("cannot open %s ctl: %r", name));
+		return nil;
+	}
+	b := array of byte args;
+	if(sys->write(fd, b, len b) != len b) {
+		t.fatal(sys->sprint("write %d bytes of arguments: %r", len b));
+		return nil;
+	}
+	return readall(fd);
+}
+
+# Arguments longer than one 9P message arrive as several Twrites; the
+# tool runs once, on all of them (INFR-521), not once a fragment.
+testLongArgsOneCall(t: ref T)
+{
+	if(!hastool() || !strcontains(readfile(TOOLMNT + "/tools"), "json")) {
+		t.skip("'json' tool not active in tools9p");
+		return;
+	}
+	t.assertseq(call1(t, "json", longjson(3*8192 + 1000)), "\"OK\"",
+		"a call spanning several messages sees its arguments whole");
+}
+
+# Arguments that end exactly on a message boundary give no short
+# fragment to start the call; the read that follows runs it.
+testArgsOnBoundary(t: ref T)
+{
+	if(!hastool() || !strcontains(readfile(TOOLMNT + "/tools"), "json")) {
+		t.skip("'json' tool not active in tools9p");
+		return;
+	}
+	fd := sys->open(TOOLMNT + "/json/ctl", Sys->OREAD);
+	if(fd == nil) {
+		t.fatal(sys->sprint("cannot open json ctl: %r"));
+		return;
+	}
+	iou := sys->iounit(fd);
+	fd = nil;
+	if(iou <= 0) {
+		t.skip("no iounit");
+		return;
+	}
+	t.assertseq(call1(t, "json", longjson(2*iou)), "\"OK\"",
+		"a call ending on a message boundary runs at the next read");
+}
+
 # Test 7: List tool execution via 9P
 testListToolExec(t: ref T)
 {
@@ -530,8 +642,9 @@ testPathsReadable(t: ref T)
 }
 
 # Test 9b: /tool/meta/ scalar files expose the agent's role/xenith/actid/
-# nodevs for nsaudit (INFR-18). Values vary by how this tools9p was
-# launched; here we assert the files exist and carry well-formed values.
+# nodevs for nsaudit (INFR-18). Role, xenith and actid vary by how this
+# tools9p was launched; nodevs does not, since every tool it runs runs with
+# NODEVS (INFR-456).
 testMetaReadable(t: ref T)
 {
 	if(!hastool()) {
@@ -548,8 +661,7 @@ testMetaReadable(t: ref T)
 		"/tool/meta/xenith is 0|1 (got '" + xenith + "')");
 
 	nodevs := trimnl(readfile(TOOLMNT + "/meta/nodevs"));
-	t.assert(nodevs == "set" || nodevs == "unset",
-		"/tool/meta/nodevs is set|unset (got '" + nodevs + "')");
+	t.assertseq(nodevs, "set", "/tool/meta/nodevs");
 
 	actid := trimnl(readfile(TOOLMNT + "/meta/actid"));
 	t.assertnotnil(actid, "/tool/meta/actid is readable");
@@ -627,11 +739,14 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CtlAddUnknown",         testCtlAddUnknown);
 	run("CtlAliasRemoveAdd",     testCtlAliasRemoveAdd);
 	run("ReadToolExec",          testReadToolExec);
+	run("ResultPerFid",          testResultPerFid);
 	run("ListToolExec",          testListToolExec);
 	run("NoResultBeforeWrite",   testNoResultBeforeWrite);
 	run("PathsReadable",         testPathsReadable);
 	run("MetaReadable",          testMetaReadable);
 	run("InactiveToolNotPresent",testInactiveToolNotPresent);
+	run("LongArgsOneCall",       testLongArgsOneCall);
+	run("ArgsOnBoundary",        testArgsOnBoundary);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

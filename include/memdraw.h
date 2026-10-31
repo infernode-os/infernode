@@ -45,7 +45,7 @@ struct Memimage
 	Memcmap	*cmap;
 
 	Memdata	*data;	/* pointer to data; shared by windows in this image */
-	int		zero;		/* data->bdata+zero==&byte containing (0,0) */
+	vlong	zero;		/* data->bdata+zero==&byte containing (0,0); vlong: an image far down its coordinates passes an int */
 	ulong	width;	/* width in words of a single scan line */
 	Memlayer	*layer;	/* nil if not a layer*/
 	ulong	flags;
@@ -151,6 +151,84 @@ extern void	_memmkcmap(void);
 extern void	memimageinit(void);
 
 /*
+ * Anti-aliased geometry (aa.c, aapath.c).
+ *
+ * Coordinates are fixed point, Aaone units to a pixel.  The pixel (x, y)
+ * covers [x, x+1) × [y, y+1), so its centre is (x*Aaone + Aaone/2, ...).
+ * A pixel's coverage is the exact area of it inside the shape, and the
+ * source is drawn through that coverage as through a GREY8 mask.  It is
+ * all integer arithmetic, so every platform draws the same pixels.
+ *
+ * An Aapath is what a client describes: subpaths of lines and curves,
+ * flattened as they are added.  An Aapoly is what is rasterised: the
+ * edges of closed polygons, made from a path by filling it (aafill) or
+ * stroking it (aastroke).
+ */
+enum
+{
+	Aashift	= 8,		/* Pathunit in draw.h */
+	Aaone	= 1<<Aashift,
+	Aamaxcoord	= 1<<28,	/* |coordinate| limit, fixed point */
+
+	/* Draw's default arrowhead (see arrow in draw-image(2)), in pixels */
+	Arrow1	= 8,	/* from the end of the shaft to the tip */
+	Arrow2	= 10,	/* from the barbs to the tip */
+	Arrow3	= 3,	/* from the edge of the shaft to a barb */
+};
+
+typedef struct Aapath	Aapath;
+typedef struct Aapoly	Aapoly;
+typedef struct Aaedge	Aaedge;
+
+struct Aapath
+{
+	Point	*p;		/* the points of every subpath */
+	int	np;
+	int	nalloc;
+	int	*sub;		/* index in p of each subpath's first point */
+	uchar	*closed;	/* whether each subpath was closed */
+	int	nsub;
+	int	nsuballoc;
+	int	err;		/* out of memory, a bad coordinate, or too complex */
+};
+
+struct Aaedge
+{
+	int	x0, y0, x1, y1;	/* y0 < y1 */
+	int	dir;		/* +1 if the edge runs down the page, -1 if up */
+};
+
+struct Aapoly
+{
+	Aaedge	*e;
+	int	ne;
+	int	nalloc;
+	Rectangle	bb;	/* fixed-point bounds of the edges */
+	int	err;
+};
+
+extern void	aapathinit(Aapath*);
+extern void	aapathfree(Aapath*);
+extern void	aamoveto(Aapath*, Point);
+extern void	aalineto(Aapath*, Point);
+extern void	aaquadto(Aapath*, Point, Point);
+extern void	aacurveto(Aapath*, Point, Point, Point);
+extern void	aaclosepath(Aapath*);
+extern void	aaellipse(Aapath*, Point, int, int);
+extern int	aadecode(Aapath*, uchar*, int);
+extern void	aapolyinit(Aapoly*);
+extern void	aapolyfree(Aapoly*);
+extern void	aapolyedge(Aapoly*, Point, Point);
+extern void	aafill(Aapoly*, Aapath*);
+extern void	aastroke(Aapoly*, Aapath*, int, int, int, int, int);
+extern void	aadrawlines(Aapoly*, Point*, int, int, int, int);
+extern Rectangle	aapixels(Aapoly*);
+extern void	_memaadraw(Memimage*, Aapoly*, Point, int, Memimage*, Point, Rectangle, int);
+extern void	memaadraw(Memimage*, Aapoly*, int, Memimage*, Point, int);
+extern char*	memfillpath(Memimage*, uchar*, int, int, Memimage*, Point, int, Rectangle*);
+extern char*	memstrokepath(Memimage*, uchar*, int, int, int, int, int, Memimage*, Point, int, Rectangle*);
+
+/*
  * Subfont management
  */
 extern Memsubfont*	allocmemsubfont(char*, int, int, int, Fontchar*, Memimage*);
@@ -181,6 +259,7 @@ extern void	rdb(void);
 extern int		iprint(char*, ...);
 #pragma varargck argpos iprint 1
 extern int		drawdebug;
+extern int		memdrawfast;	/* 0: no special cases, to test them */
 
 /*
  * doprint interface: numbconv bit strings

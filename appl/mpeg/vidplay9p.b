@@ -82,6 +82,9 @@ init(ctxt: ref Draw->Context, args: list of string)
     framesize := wh + 2*csz;
     buf := array[framesize] of byte;
 
+    # frames keep to a deadline, one every delay ms, whatever the drawing
+    # took (a live feed also paces itself: its reads wait for frames)
+    next := sys->millisec();
     for(;;){
         if(!readfull(ffd, buf))
             break;                          # EOF / short read = end of stream
@@ -94,7 +97,12 @@ init(ctxt: ref Draw->Context, args: list of string)
         <-win.ctxt.ptr => ;
         * => ;
         }
-        sys->sleep(delay);
+        next += delay;
+        d := next - sys->millisec();
+        if(d > 0)
+            sys->sleep(d);
+        else
+            next = sys->millisec();         # behind: go on without bursting
     }
     sys->fprint(stderr, "vidplay9p: end of stream\n");
 }

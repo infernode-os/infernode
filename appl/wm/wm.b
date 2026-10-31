@@ -7,6 +7,7 @@ include "draw.m";
 include "wmsrv.m";
 	wmsrv: Wmsrv;
 	Window, Client: import wmsrv;
+include "wmlib.m";	# Border
 include "wmclient.m";
 	wmclient: Wmclient;
 include "string.m";
@@ -17,13 +18,19 @@ include "winplace.m";
 include "menuhit.m";
 	menuhit: Menuhit;
 	Menu, Mousectl: import menuhit;
+include "lucitheme.m";
 
 Wm: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-Ptrstarted, Kbdstarted, Controlstarted, Controller, Fixedorigin: con 1<<iota;
+Ptrstarted, Kbdstarted, Controlstarted, Controller, Fixedorigin, Framed: con 1<<iota;
 Bdwidth: con 3;
+# a window is at least this big (9front's goodrect: 100 wide, a line of
+# text and its borders high)
+Minwidth: con 100;
+Minheight: con 2*(Wmlib->Border+1)+16;
+wmwin: ref Wmclient->Window;	# wm/wm's own window (for its cursor)
 Sminx, Sminy, Smaxx, Smaxy: con iota;
 Minx, Miny, Maxx, Maxy: con 1<<iota;
 Background: con int 16r777777FF;
@@ -37,6 +44,10 @@ allowcontrol := 1;
 fakekbd: chan of string;
 fakekbdin: chan of string;
 buttons := 0;
+presspt: Point;		# where the current press began
+held := 0;		# a press wm/wm has taken is still down: the rest is wm/wm's
+hidden: list of ref Client;	# rio's Hide: off the screen, listed on the menu
+sweptr: Rect;			# rio's New: where the next new window goes
 
 badmodule(p: string)
 {
@@ -74,13 +85,31 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		ctxt = wmclient->makedrawcontext();
 	display = ctxt.display;
 	menuhit = load Menuhit Menuhit->PATH;
-	menu := ref Menu(array[] of {"acme", "wm/clock", "wm/colors"}, nil, 0);
 
 	buts := Wmclient->Appl;
 	if(ctxt.wm == nil)
 		buts = Wmclient->Plain;
+	# A theme switched by anyone (Xenith's Theme, Settings, a write to
+	# /lib/lucifer/theme/current) reaches the windows.  Under Lucifer
+	# it sends "retheme" itself; at the top, wm/wm watches.
+	themec := chan of string;
+	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil) {
+		lucitheme->serve();	# a session's root; done already under a profile
+		themec = lucitheme->watch();
+	}
 	win := wmclient->window(ctxt, "Wm", buts);
-	wmclient->win.reshape(((0, 0), (100, 100)));
+	wmwin = win;
+	# Run as another wm/wm's client, a desktop in a window: room for a
+	# window or two, as a shell's (it asked for 100x100, an empty square
+	# in the corner).  At the top, or in Lucifer's zone, it is given the
+	# display or the zone whatever it asks.
+	wr := Rect((0, 0), (640, 480));
+	dr := display.image.r;
+	if(wr.dx() > dr.dx())
+		wr.max.x = dr.dx();
+	if(wr.dy() > dr.dy())
+		wr.max.y = dr.dy();
+	wmclient->win.reshape(wr);
 	wmclient->win.onscreen("place");
 	if(win.image == nil){
 		sys->fprint(sys->fildes(2), "wm: cannot get image to draw on\n");
@@ -112,14 +141,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	}
 	wmsize := startwmsize();
 	fakekbd = chan of string;
+	exitc := chan of int;
 
-	# UI test driver: synthetic input via /chan/uitest, so interaction
-	# is scriptable and CI-testable (tests/host).  Writes, one command
-	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal).
-	# Events enter the exact channels the real devices feed.
-	uitest := sys->file2chan("/chan", "uitest");
-	if(uitest != nil)
-		spawn uitestproc(uitest, wmctxt.ptr);
+	# The windows, as a file (/chan/wmwindows, and /mnt/wm/wmwindows).
+	wmwindows := sys->file2chan("/chan", "wmwindows");
+	if(wmwindows != nil)
+		spawn wmwindowsproc(wmwindows);
 	for(;;) alt {
 	wmsz := <-wmsize =>
 		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
@@ -129,13 +156,30 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		# XXX could implement "pleaseexit" in order that
 		# applications can raise a warning message before
 		# they're unceremoniously dumped.
-		if(c == "exit")
+		if(c == "exit"){
+			# tell every window, hidden ones too, and go once they
+			# have: exiting at once killed the minders still holding
+			# their "exit", leaving the windows' programs running
 			for(z := wmsrv->top(); z != nil; z = z.znext)
 				z.ctl <-= "exit";
+			for(hl := hidden; hl != nil; hl = tl hl)
+				(hd hl).ctl <-= "exit";
+			spawn exitwhenempty(exitc);
+			continue;
+		}
+		if(c == "retheme"){
+			# a live theme switch (Lucifer sends it to the apps it
+			# hosts, wm/wm among them)
+			retheme();
+		}
 
 		wmclient->win.wmctl(c);
 		if(win.image != screen.image)
 			reshaped(win);
+	<-themec =>
+		retheme();
+	<-exitc =>
+		wmclient->win.wmctl("exit");
 	c := <-wmctxt.kbd or
 	c = int <-fakekbd =>
 		if(kbdfocus != nil)
@@ -143,24 +187,54 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	p := <-wmctxt.ptr =>
 		if(wmclient->win.pointer(*p))
 			break;
+		if(held){
+			# the rest of a press wm/wm has taken: motion while it
+			# is down must not reach a window, a frame or a menu
+			if(p.buttons == 0)
+				held = 0;
+			break;
+		}
 		if(p.buttons && (ptrfocus == nil || buttons == 0)){
+			presspt = p.xy;
+			(hc, w) := framehit(p.xy);
+			if(hc != nil){
+				# a window's border: wm/wm's, as rio's -- button 1 or
+				# 2 reshapes from the nearest edge or corner, 3 moves
+				# -- one drag while the button is held, no mode.  The
+				# client never sees the press.
+				hc.top();
+				setkbdfocus(hc);
+				buttons = p.buttons;
+				if(p.buttons & 4)
+					dragwin(wmctxt.ptr, hc, w, p.xy.sub(w.r.min), 0);
+				else
+					sizewin(wmctxt.ptr, hc, w, Point(0, 0), p.xy, 0);
+				buttons = 0;
+				break;
+			}
 			c := wmsrv->find(p.xy);
 			if(c != nil){
+				if(c != kbdfocus && p.buttons == 1){
+					# rio: button 1 in a window that is not the
+					# current one only makes it current; the click
+					# goes no further
+					c.top();
+					setkbdfocus(c);
+					held = 1;
+					break;
+				}
 				ptrfocus = c;
 				c.ctl <-= "raise";
 				setkbdfocus(c);
-			}else if(p.buttons & (2|4)){
-				# Button-2 (desktop middle-click) OR button-3 (a touch
-				# long-press synthesised as button-3 by the SDL3 layer,
-				# INFR-160) raises the rio app-launcher menu.
-				mc := ref Mousectl(win.ctxt.ptr, p.buttons, p.xy, p.msec);
-				n := menuhit->menuhit(p.buttons, mc, menu, nil);
-				if(n >= 0 && n < len menu.item){
-					spawn command(clientctxt, menu.item[n] :: nil, nil);
-				}
+			}else{
+				# the background: as rio, button 3 is the window
+				# menu and buttons 1 and 2 do nothing
+				ptrfocus = nil;
+				held = 1;
+				if(p.buttons & 4)
+					held = button3menu(wmctxt, clientctxt, p);
 				break;
-			}	
-
+			}
 		}
 		if(ptrfocus != nil && (ptrfocus.flags & Ptrstarted) != 0){
 			# inside currently selected client or it had button down last time (might have come up)
@@ -184,6 +258,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		# if client leaving
 		if(rc == nil){
 			c.remove();
+			forgethidden(c);
+			setclientlabel(c, nil);
 			if(c == ptrfocus)
 				ptrfocus = nil;
 			if(c == kbdfocus)
@@ -295,8 +371,14 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 			"onscreen" =>
 				r = fitrect(r, screen.image.r);
 			"place" =>
-				r = fitrect(r, screen.image.r);
-				r = newrect(r, screen.image.r);
+				if(tag == "." && !sweptr.eq(Rect((0, 0), (0, 0)))){
+					# rio's New: the window swept out for it
+					r = sweptr;
+					sweptr = Rect((0, 0), (0, 0));
+				}else{
+					r = fitrect(r, screen.image.r);
+					r = newrect(r, screen.image.r);
+				}
 			"exact" =>
 				;
 			"max" =>
@@ -333,14 +415,27 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		if(ismove){
 			if(n != 5)
 				return "bad arg count";
-			return dragwin(wmctxt.ptr, c, w, Point(int hd args, int hd tl args).sub(w.r.min));
+			return dragwin(wmctxt.ptr, c, w, Point(int hd args, int hd tl args).sub(w.r.min), 1);
 		}else{
 			if(n != 5)
 				return "bad arg count";
-			sizewin(wmctxt.ptr, c, w, Point(int hd args, int hd tl args));
+			return sizewin(wmctxt.ptr, c, w, Point(int hd args, int hd tl args), presspt, 1);
 		}
 	"fixedorigin" =>
 		c.flags |= Fixedorigin;
+	"label" =>
+		# label text: the window's title, as rio's /dev/label; shown in
+		# the menu of hidden windows
+		if(n != 2)
+			return "bad arg count";
+		setclientlabel(c, hd tl args);
+	"embedded" =>
+		# no: wm/wm places windows and leaves the drawing of their
+		# frames to the clients (wmlib->embedded).  A client that asks
+		# draws one, so its frame's presses are wm/wm's (framehit).
+		# Answered here, before a controller could accept it.
+		c.flags |= Framed;
+		return "not embedded";
 	"rect" =>
 		;
 	"kbdfocus" =>
@@ -421,6 +516,13 @@ reshaped(win: ref Wmclient->Window)
 # Send reshape and rect notifications to a client without blocking the
 # main event loop.  The childminder goroutine buffers these via its Squeue,
 # so the sends will complete once the scheduler runs it.
+# A reshape the window manager starts: the client asks for the new
+# image itself, as for a change of screen size.
+tellreshape(c: ref Client, tag: string, r: Rect)
+{
+	spawn reshapenotify(c.ctl, sys->sprint("!reshape %q -1 %s", tag, r2s(r)), "rect " + r2s(screen.image.r));
+}
+
 reshapenotify(ctl: chan of string, reshape, rect: string)
 {
 	ctl <-= reshape;
@@ -433,7 +535,9 @@ controlevent(e: string)
 		controller.ctl <-= e;
 }
 
-dragwin(ptr: chan of ref Pointer, c: ref Client, w: ref Window, off: Point): string
+# tell: the press was the client's (a request of its own), so it gets
+# the release; a press on the frame, or from the menu, it never saw
+dragwin(ptr: chan of ref Pointer, c: ref Client, w: ref Window, off: Point, tell: int): string
 {
 	if(buttons == 0)
 		return "too late";
@@ -442,49 +546,125 @@ dragwin(ptr: chan of ref Pointer, c: ref Client, w: ref Window, off: Point): str
 		p = <-ptr;
 		w.img.origin(w.img.r.min, p.xy.sub(off));
 	} while (p.buttons != 0);
-	c.ptr <-= p;
+	if(tell)
+		c.ptr <-= p;
 	buttons = 0;
 	r: Rect;
 	r.min = p.xy.sub(off);
 	r.max = r.min.add(w.r.size());
 	if(r.eq(w.r))
 		return "not moved";
+	if(!tell){
+		# the client is not waiting for an image: have it ask
+		tellreshape(c, w.tag, r);
+		return nil;
+	}
 	reshape(c, w.tag, r);
 	return nil;
 }
 
-sizewin(ptrc: chan of ref Pointer, c: ref Client, w: ref Window, minsize: Point): string
+# Reshape window w by sweeping from xy, where the press began, while
+# the button is held: one drag, no mode.  If the press is already over,
+# nothing happens.
+sizewin(ptrc: chan of ref Pointer, c: ref Client, w: ref Window, minsize: Point, xy: Point, tell: int): string
 {
+	if(buttons == 0)
+		return "too late";
+	if(minsize.x < Minwidth)
+		minsize.x = Minwidth;
+	if(minsize.y < Minheight)
+		minsize.y = Minheight;
 	borders := array[4] of ref Image;
 	showborders(borders, w.r, Minx|Maxx|Miny|Maxy);
 	screen.image.flush(Draw->Flushnow);
-	while((ptr := <-ptrc).buttons == 0)
-		;
-	xy := ptr.xy;
 	move, show: int;
 	offset := Point(0, 0);
 	r := w.r;
 	show = Minx|Miny|Maxx|Maxy;
-	if(xy.in(w.r) == 0){
-		r = (xy, xy);
-		move = Maxx|Maxy;
-	}else {
-		if(xy.x < (r.min.x+r.max.x)/2){
-			move=Minx;
-			offset.x = xy.x - r.min.x;
-		}else{
-			move=Maxx;
-			offset.x = xy.x - r.max.x;
-		}
-		if(xy.y < (r.min.y+r.max.y)/2){
-			move |= Miny;
-			offset.y = xy.y - r.min.y;
-		}else{
-			move |= Maxy;
-			offset.y = xy.y - r.max.y;
+	# rio's way: the nearest edge, or a corner within 20 pixels of one
+	# (rio.c, whichcorner); an edge moves one side only.  The edge then
+	# moves by as much as the pointer does (offset is from the press
+	# itself), so nothing jumps on the press; a press just off the
+	# window counts as on its nearest edge.
+	cx := xy;
+	if(cx.x < r.min.x)
+		cx.x = r.min.x;
+	if(cx.x >= r.max.x)
+		cx.x = r.max.x-1;
+	if(cx.y < r.min.y)
+		cx.y = r.min.y;
+	if(cx.y >= r.max.y)
+		cx.y = r.max.y-1;
+	px := portion(cx.x, r.min.x, r.max.x);
+	py := portion(cx.y, r.min.y, r.max.y);
+	if(px == 1 && py == 1){
+		# well inside: the nearest corner
+		px = py = 2;
+		if(cx.x < (r.min.x+r.max.x)/2)
+			px = 0;
+		if(cx.y < (r.min.y+r.max.y)/2)
+			py = 0;
+	}
+	move = 0;
+	case px {
+	0 =>
+		move |= Minx;
+		offset.x = xy.x - r.min.x;
+	2 =>
+		move |= Maxx;
+		offset.x = xy.x - r.max.x;
+	}
+	case py {
+	0 =>
+		move |= Miny;
+		offset.y = xy.y - r.min.y;
+	2 =>
+		move |= Maxy;
+		offset.y = xy.y - r.max.y;
+	}
+	nr := sweep(ptrc, r, offset, borders, move, show, minsize);
+	if(!tell){
+		# from the frame: the client is not waiting for an image
+		if(!nr.eq(w.r))
+			tellreshape(c, w.tag, nr);
+		return nil;
+	}
+	return reshape(c, w.tag, nr);
+}
+
+# which third of lo..hi x falls in, the ends being 20 pixels (rio.c)
+portion(x, lo, hi: int): int
+{
+	# 9front's: the halves first, so the corners of a narrow window
+	# do not overlap
+	x -= lo;
+	hi -= lo;
+	if(x < hi/2){
+		if(x < 20)
+			return 0;
+	}else if(x > hi-20)
+		return 2;
+	return 1;
+}
+
+# The window whose border is under p, if a press there is the border's:
+# the topmost window at p, and p on its border -- the Wmlib->Border
+# pixels inside its edge, rio's winborder -- if it is a framed window.
+# Positions are wm/wm's own (w.r), which follow every move; a
+# client's view of its image may not.
+framehit(p: Point): (ref Client, ref Window)
+{
+	for(z := wmsrv->top(); z != nil; z = z.znext){
+		for(wl := z.wins; wl != nil; wl = tl wl){
+			w := hd wl;
+			if(w.img == nil || !p.in(w.r))
+				continue;
+			if(w.tag == "." && (z.flags & Framed) != 0 && !p.in(w.r.inset(Wmlib->Border)))
+				return (z, w);
+			return (nil, nil);	# inside: the app's
 		}
 	}
-	return reshape(c, w.tag, sweep(ptrc, r, offset, borders, move, show, minsize));
+	return (nil, nil);
 }
 
 reshape(c: ref Client, tag: string, r: Rect): string
@@ -558,7 +738,10 @@ showborders(b: array of ref Image, r: Rect, show: int)
 
 showborder(b: ref Image, show: int, r: Rect): ref Image
 {
-	if(!show)
+	# a sweep just begun is narrower than two borders: the top and
+	# bottom edges between the sides are empty, and a window that size
+	# is refused
+	if(!show || r.dx() <= 0 || r.dy() <= 0)
 		return nil;
 	if(b != nil && b.r.size().eq(r.size()))
 		b.origin(r.min, r.min);
@@ -775,31 +958,289 @@ exportproc(fd: ref Sys->FD)
 }
 
 
-# Synthetic input for tests: parse "/chan/uitest" writes and feed the
-# same channels real input arrives on.  Reads answer empty.
-uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
+# /chan/wmwindows: the windows, topmost first, "id minx miny maxx maxy"
+# a line, hidden ones not listed.  Input for a test is written to
+# /dev/pointer and /dev/keyboard, as for anything else on the screen.
+wmwindowsproc(f: ref Sys->FileIO)
 {
 	for(;;) alt {
-	(nil, nil, nil, rc) := <-f.read =>
-		if(rc != nil)
-			rc <-= (nil, nil);
-	(nil, data, nil, wc) := <-f.write =>
-		if(wc == nil)
+	(off, nil, nil, rc) := <-f.read =>
+		if(rc == nil)
 			break;
-		(n, toks) := sys->tokenize(string data, " \t\n");
-		err := "";
-		if(n >= 4 && hd toks == "ptr") {
-			x := int hd tl toks;
-			y := int hd tl tl toks;
-			b := int hd tl tl tl toks;
-			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
-		} else if(n >= 2 && hd toks == "key")
-			fakekbd <-= hd tl toks;
-		else
-			err = "usage: ptr X Y BUTTONS | key RUNE";
-		if(err != "")
-			wc <-= (0, err);
-		else
-			wc <-= (len data, nil);
+		t := "";
+		for(z := wmsrv->top(); z != nil; z = z.znext)
+			if((w := z.window(".")) != nil)
+				t += sys->sprint("%d %d %d %d %d\n", z.id, w.r.min.x, w.r.min.y, w.r.max.x, w.r.max.y);
+		b := array of byte t;
+		if(off > len b)
+			off = len b;
+		rc <-= (b[off:], nil);
+	(nil, nil, nil, wc) := <-f.write =>
+		if(wc != nil)
+			wc <-= (0, "wmwindows is read only");
 	}
+}
+
+# ---- rio's button-3 menu: New, Resize, Move, Delete, Hide, and the
+# hidden windows.  As in rio, an operation that needs a window asks for
+# one: the cursor becomes a gunsight and button 3 chooses it (any other
+# button cancels).  A click that never moves chooses the item under the
+# pointer, New, as rio's does: it only changes the cursor, and any button
+# but 3 cancels.  Returns whether the button is still down.
+
+Rnew, Rresize, Rmove, Rdelete, Rhide: con iota;
+menu3 := array[] of {"New", "Resize", "Move", "Delete", "Hide"};
+
+button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer): int
+{
+	items := array[len menu3 + len hidden] of string;
+	items[0:] = menu3;
+	i := len menu3;
+	for(hl := hidden; hl != nil; hl = tl hl)
+		items[i++] = clientlabel(hd hl);
+	mc := ref Mousectl(wmctxt.ptr, p.buttons, p.xy, p.msec);
+	n := menuhit->menuhit(3, mc, ref Menu(items, nil, 0), nil);
+	held := mc.buttons != 0;
+	if(n < 0)
+		return held;
+	ptr := wmctxt.ptr;
+	case n {
+	Rnew =>
+		r := sweepout(ptr, mc.buttons);
+		if(!r.eq(Rect((0, 0), (0, 0)))){
+			sweptr = r;
+			spawn command(clientctxt, "wm/shell" :: nil, nil);
+		}
+	Rresize =>
+		(c, nil) := pointto(ptr, 1, mc.buttons);
+		if(c != nil){
+			r := sweepout(ptr, 0);
+			if(!r.eq(Rect((0, 0), (0, 0))))
+				tellreshape(c, ".", r);
+		}
+	Rmove =>
+		(c, at) := pointto(ptr, 0, mc.buttons);
+		if(c != nil && (w := c.window(".")) != nil){
+			c.top();
+			setcursor(boxcursor);
+			buttons = 4;
+			dragwin(ptr, c, w, at.sub(w.r.min), 0);
+			buttons = 0;
+			setcursor(nil);
+		}
+	Rdelete =>
+		(c, nil) := pointto(ptr, 1, mc.buttons);
+		if(c != nil)
+			spawn tellexit(c);
+	Rhide =>
+		(c, nil) := pointto(ptr, 1, mc.buttons);
+		if(c != nil)
+			hide(c);
+	* =>
+		j := n - len menu3;
+		for(hl = hidden; hl != nil && j > 0; hl = tl hl)
+			j--;
+		if(hl != nil)
+			unhide(hd hl);
+	}
+	return 0;
+}
+
+# rio's pointto: the gunsight, then button 3 on a window chooses it
+# (with release, the release must be on the same window).  Returns the
+# window, and where it was pressed.  Buttons are those still down when
+# it is called: the menu has usually had the release already, and the
+# next event may be the press that chooses, with no motion before it.
+pointto(ptr: chan of ref Pointer, release, buttons: int): (ref Client, Point)
+{
+	setcursor(sightcursor);
+	while(buttons != 0)
+		buttons = (<-ptr).buttons;
+	p := <-ptr;
+	while(p.buttons == 0)
+		p = <-ptr;
+	at := p.xy;
+	c: ref Client;
+	if(p.buttons == 4){
+		c = wmsrv->find(at);
+		if(c != nil && c.window(".") == nil)
+			c = nil;
+	}
+	if(c == nil || release){
+		while(p.buttons != 0)
+			p = <-ptr;
+		if(c != nil && wmsrv->find(p.xy) != c)
+			c = nil;
+	}
+	setcursor(nil);
+	return (c, at);
+}
+
+# rio's sweep: the cross, then a button-3 drag sweeps out a rectangle.
+# Too small, or any other button, and there is none.  Buttons are
+# those still down when it is called, as for pointto.
+sweepout(ptr: chan of ref Pointer, buttons: int): Rect
+{
+	none := Rect((0, 0), (0, 0));
+	setcursor(crosscursor);
+	while(buttons != 0)
+		buttons = (<-ptr).buttons;
+	p := <-ptr;
+	while(p.buttons == 0)
+		p = <-ptr;
+	r := Rect(p.xy, p.xy);
+	ok := p.buttons == 4;
+	borders := array[4] of ref Image;
+	while(p.buttons != 0){
+		if(p.buttons != 4)
+			ok = 0;
+		if(ok){
+			r.max = p.xy;
+			showborders(borders, r.canon(), Minx|Maxx|Miny|Maxy);
+		}
+		p = <-ptr;
+	}
+	setcursor(nil);
+	r = r.canon();
+	if(!ok || r.dx() < Minwidth || r.dy() < Minheight)
+		return none;
+	return r;
+}
+
+# A theme switch: pass it on to every window, hidden ones too, so
+# their frames and colours follow.  The menu reads the theme as it opens.
+retheme()
+{
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		spawn tellctl(z.ctl, "retheme");
+	for(hl := hidden; hl != nil; hl = tl hl)
+		spawn tellctl((hd hl).ctl, "retheme");
+}
+
+tellexit(c: ref Client)
+{
+	c.ctl <-= "exit";
+}
+
+# exitwhenempty: tell the main loop to exit once every window has gone
+# (their disconnections are handled there), or after two seconds.
+exitwhenempty(exitc: chan of int)
+{
+	for(t := 0; t < 20 && (wmsrv->top() != nil || hidden != nil); t++)
+		sys->sleep(100);
+	exitc <-= 1;
+}
+
+tellctl(ctl: chan of string, s: string)
+{
+	ctl <-= s;
+}
+
+# rio's Hide: off the screen, out of the stacking order, on the menu.
+# The client is not told: its image is the same, only shown nowhere.
+Hidden: adt {
+	c:	ref Client;
+	rs:	list of Rect;
+};
+hiddenat: list of ref Hidden;
+
+hide(c: ref Client)
+{
+	off := screen.image.r.max.add((10000, 10000));
+	rs: list of Rect;
+	for(wl := c.wins; wl != nil; wl = tl wl){
+		w := hd wl;
+		rs = w.r :: rs;
+		if(w.img != nil)
+			w.img.origin(w.img.r.min, off);
+		w.r = Rect(off, off.add(w.r.size()));
+	}
+	hiddenat = ref Hidden(c, rs) :: hiddenat;
+	c.remove();
+	c.znext = nil;		# top() relinks it: remove() leaves it set
+	hidden = c :: hidden;
+	if(kbdfocus == c)
+		setkbdfocus(wmsrv->top());
+}
+
+unhide(c: ref Client)
+{
+	nh: list of ref Client;
+	for(hl := hidden; hl != nil; hl = tl hl)
+		if(hd hl != c)
+			nh = hd hl :: nh;
+	hidden = nh;
+	nha: list of ref Hidden;
+	h: ref Hidden;
+	for(ha := hiddenat; ha != nil; ha = tl ha)
+		if((hd ha).c == c)
+			h = hd ha;
+		else
+			nha = hd ha :: nha;
+	hiddenat = nha;
+	if(h == nil)
+		return;
+	# the rects were saved in reverse
+	rs: list of Rect;
+	for(l := h.rs; l != nil; l = tl l)
+		rs = hd l :: rs;
+	for(wl := c.wins; wl != nil && rs != nil; (wl, rs) = (tl wl, tl rs)){
+		w := hd wl;
+		w.r = hd rs;
+		if(w.img != nil)
+			w.img.origin(w.img.r.min, w.r.min);
+	}
+	c.top();
+	setkbdfocus(c);
+}
+
+# Window labels (rio's /dev/label), from the clients' "label" requests.
+labels: list of (ref Client, string);
+
+setclientlabel(c: ref Client, l: string)
+{
+	nl: list of (ref Client, string);
+	for(ll := labels; ll != nil; ll = tl ll)
+		if((hd ll).t0 != c)
+			nl = hd ll :: nl;
+	if(l != nil)
+		nl = (c, l) :: nl;
+	labels = nl;
+}
+
+clientlabel(c: ref Client): string
+{
+	for(ll := labels; ll != nil; ll = tl ll)
+		if((hd ll).t0 == c)
+			return (hd ll).t1;
+	return "window " + string c.id;
+}
+
+# A gone client is no longer hidden.
+forgethidden(c: ref Client)
+{
+	nh: list of ref Client;
+	for(hl := hidden; hl != nil; hl = tl hl)
+		if(hd hl != c)
+			nh = hd hl :: nh;
+	hidden = nh;
+	nha: list of ref Hidden;
+	for(ha := hiddenat; ha != nil; ha = tl ha)
+		if((hd ha).c != c)
+			nha = hd ha :: nha;
+	hiddenat = nha;
+}
+
+# rio's cursors (rio/data.c), as wmlib's "cursor" request takes them:
+# hot point, 16x32 (the clear plane, then the set plane), in hex.
+crosscursor := "cursor -7 -7 16 32 03c003c003c003c003c003c0ffffffffffffffff03c003c003c003c003c003c000000180018001800180018001807ffe7ffe0180018001800180018001800000";
+boxcursor := "cursor -7 -7 16 32 fffffffffffffffffffff81ff81ff81ff81ff81ff81fffffffffffffffffffff00007ffe7ffe7ffe700e700e700e700e700e700e700e700e7ffe7ffe7ffe0000";
+sightcursor := "cursor -7 -7 16 32 1ff83ffc7ffefbdff3cfe3c7ffffffffffffffffe3c7f3cf7bdf7ffe3ffc1ff800000ff0318c21844182418241827ffe7ffe4182418241822184318c0ff00000";
+
+setcursor(c: string)
+{
+	if(c == nil)
+		c = "cursor";
+	if(wmwin != nil)
+		wmclient->wmwin.wmctl(c);
 }

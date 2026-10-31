@@ -26,6 +26,74 @@ void	(*heapmonitor)(int, void*, ulong);
 
 #define	BIT(bt, nb)	(bt & (1<<nb))
 
+/*
+ * Release a Type's compiled initialize/destroy code.
+ *
+ * Whether that pointer can be freed depends on where this build's
+ * typecom() put it, which is a property of the BUILD, not of the
+ * architecture -- and the four places that used to do this inline all
+ * decided it on the architecture alone.
+ *
+ * The 64-bit JITs were given a blanket "never free it", with the
+ * workaround's own comment saying what it cost: "This leaks type code
+ * on module unload." The reason was real for a hosted build, where
+ * typecom() maps type code with mmap() and handing that pointer to
+ * free() panics the pool.
+ *
+ * The native kernel has no mmap. typecom() there calls malloc(), so the
+ * pointer is ordinary pool memory and the guard was suppressing a free
+ * that had been correct all along. It cost the whole pool, slowly:
+ * running a command loads a module, compiles its types and unloads it
+ * again, and every cycle left its type code behind. Measured on a Pi
+ * 3B+ with a loop spawning about twenty processes a second, the main
+ * pool grew 2 MB every six minutes, and walking it by allocation site
+ * put 7452 of the 7468 blocks gained over four minutes on this one
+ * malloc.
+ *
+ *
+ * 52b8f796 made this a no-op as an experiment (INFR-458): the board was
+ * calling through garbage function pointers, the theory was compiled
+ * code reading a Type's code address after the Type was freed, and the
+ * experiment was to put the leak back and see whether the panics
+ * stopped. They stopped -- but because of #622 (a proc preempted
+ * between clang's copy of x28 and its use, resumed on another core),
+ * found and fixed with the leak still in place. The experiment's own
+ * note said what to do in that case: the free goes straight back in.
+ *
+ * What the leak cost while it was in: any loop that loads modules is
+ * an out-of-memory in minutes (#641 -- an acceptance battery's leftover
+ * shell re-spawning cat 800 times a second took the 123 MB main pool
+ * in three and a half; /dev/memtags put 266,716 of 266,717 new blocks
+ * on typecom's malloc), and even a clean battery run left ~3 MB
+ * behind. If a garbage-pointer panic ever names freed type code again,
+ * /dev/memtags and the #622 detectors are both in the kernel to say so.
+ *
+ * Hosted builds (added when this met the hosted port of the same fix):
+ * On hosted 64-bit builds the JIT maps that code rather than mallocs
+ * it, so free() must not see it, and for a long time nothing released
+ * it at all: "this leaks type code on module unload", this file said,
+ * and it did -- about 52 KB for every command run, since a command
+ * loads a module, compiles its types and drops them again. Measured on
+ * Linux/arm64, 1000 commands in one emulator: resident +52 MB with the
+ * JIT, +0 without. Hosted arm64 now unmaps it (freetypejit, in
+ * comp-arm64.c, by a length typecom() keeps in front of the code).
+ * Hosted amd64 carves its type code from slabs that must stay near the
+ * text segment, so it cannot unmap per type; freetypejit in comp-amd64.c
+ * puts the block on a free list instead, and the next type compiled
+ * reuses it (#649).
+ */
+static void
+freetypecode(Type *t)
+{
+#if defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64)
+	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c and comp-riscv64.c know which */
+#elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
+	freetypejit(t);		/* hosted amd64: back to comp-amd64.c's free list, for the next type */
+#else
+	free(t->initialize);
+#endif
+}
+
 void
 freeptrs(void *v, Type *t)
 {
@@ -129,10 +197,7 @@ freearray(Heap *h, int swept)
 		}
 	}
 	if(t->ref-- == 1) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-		if(t->initialize == nil)
-#endif
-		free(t->initialize);
+		freetypecode(t);
 		free(t);
 	}
 }
@@ -152,10 +217,7 @@ freelist(Heap *h, int swept)
 			freeptrs(l->data, t);
 		t->ref--;
 		if(t->ref == 0) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-			if(t->initialize == nil)
-#endif
-			free(t->initialize);
+			freetypecode(t);
 			free(t);
 		}
 	}
@@ -173,10 +235,7 @@ freelist(Heap *h, int swept)
 				freeptrs(l->data, t);
 			t->ref--;
 			if(t->ref == 0) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-				if(t->initialize == nil)
-#endif
-				free(t->initialize);
+				freetypecode(t);
 				free(t);
 			}
 		}
@@ -217,20 +276,33 @@ freeheap(Heap *h, int swept)
 		freeptrs(H2D(void*, h), t);
 }
 
-void
-destroy(void *v)
+/*
+ * A block whose count reaches zero more than DDEPTH frees deep is
+ * not freed by recursion (that would grow the C stack without bound
+ * along a long list or chain).  It used to be abandoned, count zero,
+ * for the mark-and-sweep collector, which a busy VM may not run for
+ * a long time; dropping one deep structure then held all of it
+ * past the first DDEPTH levels.  It is queued here instead and the
+ * outermost destroy frees the queue, each entry again recursing at
+ * most DDEPTH deep.  The queue is drained before destroy returns,
+ * so the collector (which runs only between instructions) never
+ * sees a queued block.  If the queue cannot grow, the block is
+ * abandoned to the collector as before.
+ */
+enum
 {
-	Heap *h;
+	DDEPTH = 64,
+};
+
+static	Heap**	dq;
+static	int	ndq;
+static	int	dqlen;
+static	int	ddepth;
+
+static void
+destroyh(Heap *h)
+{
 	Type *t;
-
-	if(v == H)
-		return;
-
-	h = D2H(v);
-	{ Bhdr *b; D2B(b, h); }		/* consistency check */
-
-	if(--h->ref > 0 || gchalt > 64) 	/* Protect 'C' thread stack */
-		return;
 
 	if(heapmonitor != nil)
 		heapmonitor(1, h, 0);
@@ -242,6 +314,41 @@ destroy(void *v)
 		freetype(t);
 	}
 	poolfree(heapmem, h);
+}
+
+void
+destroy(void *v)
+{
+	Heap *h, **ndqp;
+
+	if(v == H)
+		return;
+
+	h = D2H(v);
+	{ Bhdr *b; D2B(b, h); }		/* consistency check */
+
+	if(--h->ref > 0)
+		return;
+
+	if(ddepth >= DDEPTH) {	/* Protect 'C' thread stack */
+		if(ndq == dqlen) {
+			ndqp = realloc(dq, (dqlen+256)*sizeof(Heap*));
+			if(ndqp == nil)
+				return;		/* the collector will find it */
+			dq = ndqp;
+			dqlen += 256;
+		}
+		dq[ndq++] = h;
+		return;
+	}
+
+	ddepth++;
+	destroyh(h);
+	if(ddepth == 1) {
+		while(ndq > 0)
+			destroyh(dq[--ndq]);
+	}
+	ddepth--;
 }
 
 Type*
@@ -286,12 +393,7 @@ freetype(Type *t)
 	if(t == nil || --t->ref > 0)
 		return;
 
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-	/* JIT typecom() uses mmap/VirtualAlloc for type code; skip free() to avoid pool panic.
-	 * This leaks type code on module unload. */
-	if(t->initialize == nil)
-#endif
-	free(t->initialize);
+	freetypecode(t);
 	free(t);
 }
 
@@ -400,6 +502,7 @@ heapz(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -421,9 +524,25 @@ heap(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
+	/*
+	 * Zero the cell.  The Dis `new` instruction is specified to leave
+	 * non-pointer slots undefined, and that is exactly what happened:
+	 * initmem() rewrites the pointer slots to H, and the scalars between
+	 * them kept whatever the recycled pool block last held.  Limbo's
+	 * `ref T` with no initializer compiled to INEW (it is INEWZ now), so
+	 * every integer member of such an adt was a function of allocation
+	 * history -- which is why the interpreter and the JIT disagreed about
+	 * which of Charon's Box fields were -1, and why a grid column
+	 * collapsed.  Zeroing here makes INEW match INEWZ, as newa() already
+	 * matches newaz(), closing the gap for bytecode from any compiler,
+	 * and no caller can have depended on the garbage.  t->size is the
+	 * exact size handed to poolalloc() above.
+	 */
+	memset(H2D(void*, h), 0, t->size);
 	if(t->np)
 		initmem(t, H2D(void*, h));
 	if(heapmonitor != nil)
@@ -461,6 +580,7 @@ initarray(Type *t, Array *a)
 	int i;
 	uchar *p;
 
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	if(t->np == 0)
 		return;
@@ -489,6 +609,7 @@ arraycpy(Array *sa)
 	Tarray.ref++;
 	da = H2D(Array*, dh);
 	da->t = sa->t;
+	if(da->t->ref <= 0 || da->t->ref > 50000000) panic("heap: Type %#p ref %d in use (array) -- freed type?", da->t, da->t->ref);
 	da->t->ref++;
 	da->len = sa->len;
 	da->root = H;

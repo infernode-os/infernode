@@ -1,13 +1,14 @@
-# geo-demo — geo-map demonstration on synthetic data
+# geo-demo — a map, on synthetic data
 #
 # geo-fixture writes a synthetic geo tree (moving units + drawn graphics)
-# under /tmp/matrix/geo-fixture; geo-map renders it.  Pan with left-drag,
-# zoom with +/- or the wheel, click a unit to select it, f to centre.
+# under /tmp/matrix/geo-fixture; wm/scene renders it in the geo frame
+# (web mercator).  Pan with left-drag, zoom with the wheel or +/-,
+# click a unit to select it, f to fit.
 #
 # A single full pane: vsplit 100/0 leaves the second region empty.
 
 layout vsplit 100 0
 
-top geo-map /tmp/matrix/geo-fixture
+top app /dis/wm/scene.dis /tmp/matrix/geo-fixture
 
 service geo-fixture /

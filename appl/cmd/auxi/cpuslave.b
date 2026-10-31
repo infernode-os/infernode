@@ -75,5 +75,7 @@ init(nil: ref Context, args: list of string)
 		ctxt.display = display;
 	}
 	
-	spawn cmd->init(ctxt, args);
+	# Run the command here, not spawned: rstyxd ends the session when
+	# this returns, so it must return when the command does.
+	cmd->init(ctxt, args);
 }

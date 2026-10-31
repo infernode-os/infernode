@@ -817,9 +817,11 @@ changecol(TkEnv *e, int setcol, int col, ulong rgba)
 {
 	if (setcol) {
 		e->set |= (1<<col);
+		e->own |= (1<<col);
 	} else {
 		rgba = 0;
 		e->set &= ~(1<<col);
+		e->own &= ~(1<<col);
 	}
 	e->colors[col] = rgba;
 	return rgba;
@@ -1191,4 +1193,36 @@ Error:
 	free(v);
 	*p = nil;
 	return TkNomem;
+}
+
+/*
+ * Whether r is a key that is not a character: keyboard.h maps the
+ * arrows, function keys and the rest to Unicode's private-use range,
+ * Spec (0xE000) to 0xF8FF.  Typed as text, one is a glyph that means
+ * nothing to the user.
+ */
+int
+tkspeckey(Rune r)
+{
+	return r >= 0xE000 && r <= 0xF8FF;
+}
+
+/* s with every such key taken out, in place */
+void
+tkdropkeys(char *s)
+{
+	char *w;
+	Rune r;
+	int n;
+
+	w = s;
+	while(*s != '\0'){
+		n = chartorune(&r, s);
+		if(!tkspeckey(r)){
+			memmove(w, s, n);
+			w += n;
+		}
+		s += n;
+	}
+	*w = '\0';
 }

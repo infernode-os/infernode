@@ -126,6 +126,8 @@ if emu_c "grantable" 20 "tools9p -m /tool -b write,matrix,webfetch read task & s
         fail "grantable catalogue did not normalize a header-style summary"
     elif echo "$OUTPUT" | grep -q '^exec - '; then
         fail "grantable catalogue exposed exec outside the delegation budget"
+    elif ! echo "$OUTPUT" | grep -q -- 'PASS: ResultPerFid'; then
+        fail "two fids on one tool did not each read their own result: $(echo "$OUTPUT" | grep -A3 ResultPerFid | head -8)"
     elif ! echo "$OUTPUT" | grep -q -- 'PASS: GrantableCatalogue'; then
         fail "agent namespace did not receive the grantable catalogue: $(echo "$OUTPUT" | tail -8)"
     else

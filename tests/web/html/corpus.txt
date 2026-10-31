@@ -1,0 +1,122 @@
+# One test input per line; a backslash-n means a newline.  mkdat.py turns this into
+# tree.dat using html5lib as the oracle.
+Test
+<p>One<p>Two
+<!DOCTYPE html><html><head><title>T</title></head><body>x</body></html>
+<p>a<b>b<i>c</p>d
+<b>1<p>2</b>3</p>
+<a href=x>1<a href=y>2</a>3
+<b><p>x</b>y
+<i><b><p>x</i>y</b>z
+<p><b><i><u>x</b>y
+<div><b>a<div>b</b>c</div></div>
+<b><b><b><b>x</b></b></b></b>
+<b><b><b><b><p>x
+<p>a</b>b</i>c
+<table><tr><td>a<td>b<tr><td>c</table>
+<table>x<tr><td>y</td></tr>z</table>
+<table><td>a</table>
+<table><tr>x</tr></table>
+<table><caption>c<tr><td>d</table>
+<table><colgroup><col span=2></colgroup><tr><td>1</table>
+<table><col><tr><td>1</table>
+<table><tbody><tr><td>1</td></tr></tbody><tfoot><tr><td>f</table>
+<table><td><table><td>inner</table>after</table>
+<table><b>x</b><tr><td>y</table>
+<table><input type=hidden><input type=text></table>
+<table><form><tr><td><input></table>
+<table><tr><td><p>a<td>b</table>
+<td>loose
+<tr><td>x
+<ul><li>1<li>2<ul><li>3</ul><li>4</ul>
+<ol><li>a<p>b<li>c</ol>
+<dl><dt>t<dd>d<dt>t2<dd>d2</dl>
+<h1>a<h2>b</h1>c
+<h1>a</h2>b
+<p><h1>x</h1>
+<p><div>x</div>
+<p><table><tr><td>x</table>
+<p>a</p></p>b
+</p>
+</br>
+<br/><img src=a.png><hr>
+<pre>\nx</pre>
+<pre>\n\ny</pre>
+<textarea>\nz</textarea>
+<listing>\nq</listing>
+<form><form><input></form></form>
+<form><div></form>x</div>
+<button><button>
+<button><p>a</button>b
+<select><option>1<option>2<optgroup><option>3</select>
+<select><input>x
+<select><b>x</b><option>y</select>
+<table><tr><td><select><td>z</table>
+<p>&amp;&lt;&gt;&quot;&nbsp;&copy;&notin;&notit;&amp</p>
+<p>&#65;&#x42;&#0;&#x110000;&#128;&#xD800;&#
+<a href="?a=1&copy=2&amp;b=3&lt">x</a>
+<a title=&notit;x>y</a>
+<p title="a 'b'" data-x='c "d"' e=f g>h
+<p CLASS=X Id=Y>u
+<p a=1 a=2>dup
+<!-- comment -->x
+<!---->a<!--->b<!-- a -- b -->c
+<!--x--!>y
+<? pi ?>z
+<!x>w
+</ x>v
+a<b>c
+<div></div>
+<p>1<script>if (a<b) document.write("</p>")</script>2
+<style>p { color: red } </p></style>x
+<title>a&amp;b<b>c</b></title>
+<noscript><p>shown</p></noscript>
+<head><noscript><link rel=x></noscript></head>
+<head><noscript><p>x</p></noscript>
+<iframe><b>x</b></iframe>y
+<xmp><b>x</b></xmp>
+<plaintext><b>x</b></plaintext>
+<svg><circle r=1/><foreignObject><p>x</p></foreignObject></svg>after
+<svg viewbox="0 0 10 10"><lineargradient></lineargradient></svg>
+<svg><p>breakout</svg>
+<math><mi>x</mi><mo>+</mo></math>
+<math><annotation-xml encoding="text/html"><p>h</p></annotation-xml></math>
+<svg><title><b>t</b></title></svg>
+<p><svg><desc><div>d</div></desc></svg>
+<svg><![CDATA[a<b]]></svg>
+<![CDATA[x]]>
+<span><div>a</div></span>
+<a><div><a>b</a></div></a>
+<a><table><a>x</table>
+<nobr>a<nobr>b
+<marquee><p>m</marquee>
+<object><p>o</object>
+<ruby>a<rt>b<rp>c</ruby>
+<image src=x>
+<frameset><frame></frameset>
+<frameset><frame><noframes>x</noframes></frameset>
+<body><frameset>
+<html a=1><html b=2><body c=3><body d=4>
+x<html><body>
+<head></head> <body></body> 
+<html> <head> </head> <body> x </body> </html> 
+</html><p>after
+</body>x
+<!DOCTYPE html>\n<p>a\n\n<p>b
+<p>a<br>b</p>
+<em><strong>a</em>b</strong>
+<s><p>a</s>b
+<font color=red><p>a</font>b
+<center><p>x</center>
+<details><summary>s</summary>d</details>
+<dialog>d</dialog><search>s</search><main>m</main>
+<input type=checkbox checked><label for=a>L</label>
+<video controls><source src=a.mp4><track src=t.vtt></video>
+<picture><source srcset=a.webp><img src=a.jpg></picture>
+<a><p><a>x</a></p></a>
+<b>a<table><tr><td>b</b>c</table>d
+<table><tr><td>a</td></tr><tr>b</table>
+<table><tr><th>h<td>d</table>
+<div>a<!--c-->b</div>
+<custom-el foo=bar><x-y>z</x-y></custom-el>
+<p>é中\u{1F600}</p>

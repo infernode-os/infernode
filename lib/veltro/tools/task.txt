@@ -8,12 +8,14 @@ HOW DELEGATION WORKS (read this first):
   a file path, or a command after creation — calls like `task write ...`
   or `task <path> ...` are errors. Put EVERYTHING the agent needs into
   brief= and instructions= at create time.
-  After create: poll `task status <id>` to watch progress. Do NOT create
-  the same task again while it is [working]. When it reports done, read
-  any file it produced and report the result to the user.
+  After create: tell the user what you started and end your turn. When
+  the task finishes, a "[task-event]" message brings you its report and
+  the files it wrote; report the outcome to the user then. Do not poll
+  `task status` in a loop. Do NOT create the same task again while it
+  is [working].
 
   task create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
-              [category=<text>] [model=<name>] [agenttype=<type>]
+              [category=<text>] [agenttype=<type>]
               [brief=<text>] [instructions=<text>]
       Create new task with isolated conversation and tools.
       Tools validated against delegation budget (/tool/budget).
@@ -22,26 +24,30 @@ HOW DELEGATION WORKS (read this first):
       instructions= sets structured directives injected into the
       TA system prompt via <instructions> tags. Use for specific
       procedural guidance the task agent should follow.
-      model= selects the LLM backing the new activity. Valid:
-      gpt-oss, daedalus, haiku, sonnet, opus. Omit to inherit the
-      parent session's model.
-      agenttype= picks a preset prompt + defaults. Currently:
-        coder — Limbo-capable Daedalus fine-tune with
-                tools=read,write,edit,find,grep,list,limbo
+      The model is the server's: a task cannot choose one, and a
+      model= is ignored.
+      agenttype= picks a preset prompt and its tools. Currently:
+        coder — tools=read,write,edit,find,grep,list,limbo
       Unknown args (e.g. priority=high) are rejected with the list
       of valid keys instead of being silently dropped.
-      Put authority-bearing attrs such as tools=, paths=, model=, and
+      Put authority-bearing attrs such as tools=, paths= and
       agenttype= before brief=/instructions=. Unquoted brief= and
       instructions= consume the rest of the line as literal task text;
       quote them if you intentionally need more attrs after the text.
       Returns activity ID.
 
-  task status <id>     Show task status, urgency, label
+  task status <id>     Show task status, urgency, label, what it has used
+                       lately (latest first), the documents it has made (in
+                       its own tab) and the last thing it said
   task list            List all active tasks with status
   task result <id>     Get the task agent's final report (its answer). Use this
                        once the task reports done to retrieve what it produced —
                        do NOT re-create the task to get its output.
   task close <id>      Archive a completed task
+  task promote <id>    Apply the changes a task staged to the user's folders
+                       (they stay staged until then; the user is asked to
+                       allow it). Only when the user has said to apply them.
+  task revert <id>     Discard a task's staged changes
 
 Each task gets its own activity tile in the header bar, its own
 conversation, tools, and filesystem overlay. Use for work that
@@ -52,7 +58,7 @@ find, search, grep). Use tools= to add task-specific capabilities from the
 budget. Persistence, delegation, planning state, and UI effects are not
 automatic. Only budget tools may be delegated.
 
-Use "task list" to monitor progress. Close tasks when done.
+Use "task list" or "task status" when the user asks about progress.
 
 Examples:
   task create label=Review tools=grep,search
@@ -62,7 +68,7 @@ Examples:
   task create label=Editor instructions="Open /lib/veltro/system.txt and suggest improvements"
   task create label=Refactor tools=read,edit,grep instructions="Refactor all uses of foo() to bar()"
   task create label=BugFix agenttype=coder brief="fix the bug in cat.b"
-  task create label=Port model=daedalus tools=read,write,edit,limbo brief="port spawn.b to ARM64"
+  task create label=Port tools=read,write,edit,limbo brief="port spawn.b to ARM64"
   task list
   task status 2
   task close 2

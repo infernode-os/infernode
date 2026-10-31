@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<title>Charon</title>
+<style>
+body { margin: 0; background: #fbfbfa; color: #222; font-family: sans-serif; line-height: 1.5 }
+main { max-width: 640px; margin: 0 auto; padding: 56px 24px 40px }
+.logo { display: block; width: 280px; height: auto; margin: 0 auto }
+.tag { text-align: center; color: #666; margin: 8px 0 32px }
+form { display: flex; gap: 8px; margin: 0 0 40px }
+input[type=search] { flex: 1; font-size: 1em; padding: 8px 10px; border: 1px solid #bbb; border-radius: 4px; background: #fff }
+button { font-size: 1em; padding: 8px 16px; border: 1px solid #888; border-radius: 4px; background: #eee; color: #222 }
+h2 { font-size: .8em; font-weight: bold; letter-spacing: .08em; text-transform: uppercase; color: #888; margin: 32px 0 8px; border-bottom: 1px solid #e3e3e0; padding-bottom: 4px }
+ul.places { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px }
+ul.places a { color: #1a55c0; text-decoration: none; font-weight: bold }
+ul.places span { display: block; color: #777; font-size: .85em }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0 }
+dt { font-family: monospace; color: #444 }
+dd { margin: 0; color: #444 }
+p.note { color: #555; font-size: .92em }
+code { font-family: monospace; background: #efefec; padding: 0 4px; border-radius: 3px }
+</style>
+</head>
+<body>
+<main>
+<img class=logo src="charon.png" alt="Charon">
+<p class=tag>The web browser of InferNode</p>
+
+<form action="https://html.duckduckgo.com/html/" method=get>
+<input type=search name=q placeholder="Search the web with DuckDuckGo">
+<button type=submit>Search</button>
+</form>
+
+<h2>Places</h2>
+<ul class=places>
+<li><a href="https://en.wikipedia.org/wiki/Main_Page">Wikipedia</a><span>The free encyclopedia</span>
+<li><a href="https://news.ycombinator.com/">Hacker News</a><span>Technology news and discussion</span>
+<li><a href="https://lobste.rs/">Lobsters</a><span>Computing-focused links</span>
+<li><a href="https://developer.mozilla.org/en-US/docs/Web">MDN Web Docs</a><span>HTML, CSS and the web platform</span>
+<li><a href="https://go.dev/doc/">Go documentation</a><span>The Go language</span>
+<li><a href="http://cat-v.org/">cat-v.org</a><span>Plan 9 papers and history</span>
+<li><a href="https://infernode.io/">infernode.io</a><span>InferNode's home</span>
+<li><a href="https://github.com/infernode-os/infernode">InferNode on GitHub</a><span>Source, issues and releases</span>
+</ul>
+
+<h2>Using Charon</h2>
+<dl>
+<dt>Wheel, Up, Down</dt><dd>scroll</dd>
+<dt>PgUp, PgDn, space</dt><dd>scroll a screen</dd>
+<dt>Home, End</dt><dd>top, bottom</dd>
+<dt>Alt-Left, Alt-Right</dt><dd>back, forward</dd>
+<dt>Ctrl-L</dt><dd>go to an address</dd>
+<dt>Ctrl-F</dt><dd>find on the page</dd>
+<dt>Ctrl-R, Escape</dt><dd>reload, stop</dd>
+</dl>
+<p class=note>Right-click the page for settings. Scripts are off by default; turn on <b>Run scripts</b> there, and choose <b>Keep these settings</b> to keep the choice. A program or an agent can drive the browser through its files at <code>/mnt/charon</code>.</p>
+</main>
+</body>
+</html>

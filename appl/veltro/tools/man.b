@@ -3,8 +3,10 @@ implement ToolMan;
 #
 # man - Veltro tool for controlling the wm/man page viewer
 #
-# Provides AI control over the manual page viewer via real-file IPC
-# at /tmp/veltro/man/. The viewer must be running (launch man).
+# Provides AI control over the manual page viewer through its served
+# files (#sman/fs, mounted at /mnt/man by tools9p for this tool alone).
+# The viewer must be running (launch man).  A command is done when it
+# returns; one the viewer refuses is an error.
 #
 # Commands:
 #   open [section] title       Open a man page by title
@@ -31,7 +33,7 @@ ToolMan: module {
 	schema: fn(): string;
 };
 
-MAN_ROOT: con "/tmp/veltro/man";
+MAN_ROOT: con "/mnt/man";
 
 init(): string
 {
@@ -178,7 +180,7 @@ readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %%r (is wm/man running?)", path);
+		return notrunning(path);
 
 	result := "";
 	buf := array[8192] of byte;
@@ -194,18 +196,27 @@ readfile(path: string): string
 
 writefile(path, data: string): string
 {
-	fd := sys->create(path, Sys->OWRITE, 8r666);
+	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
-		return sys->sprint("error: cannot create %s: %%r (is wm/man running?)", path);
+		return notrunning(path);
 
 	b := array of byte data;
 	n := sys->write(fd, b, len b);
 	fd = nil;
 
 	if(n != len b)
-		return sys->sprint("error: write failed: %%r");
+		return sys->sprint("error: %r");
 
 	return nil;
+}
+
+# The viewer's files are there only while it runs.
+notrunning(path: string): string
+{
+	(ok, nil) := sys->stat(MAN_ROOT + "/ctl");
+	if(ok < 0)
+		return "error: wm/man is not running (start it with 'launch man')";
+	return sys->sprint("error: cannot open %s: %r", path);
 }
 
 # --- String helpers ---

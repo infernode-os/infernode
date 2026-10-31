@@ -36,8 +36,17 @@ SYSMODULES=\
 	string.m\
 	styx.m\
 	styxservers.m\
+	audit.m\
+	daytime.m\
+	dial.m\
+	encoding.m\
+	msgio.m\
+	readdir.m\
+	secstore.m\
 
 DISBIN=$ROOT/dis/auth
+
+MODULES=
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs

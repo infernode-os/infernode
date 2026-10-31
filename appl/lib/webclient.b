@@ -24,6 +24,12 @@ include "string.m";
 include "webclient.m";
 include "publicnet.m";
 	publicnet: Publicnet;
+include "brotli.m";
+	brotli: Brotli;
+include "filter.m";
+	inflate: Filter;
+include "daytime.m";
+	daytime: Daytime;
 
 MAXREDIRECTS: con 10;
 
@@ -100,12 +106,24 @@ tlsdial(addr, servername: string): (ref Sys->FD, string)
 	if(c == nil)
 		return (nil, sys->sprint("dial %s: %r", addr));
 
+	return tlsclient(c.dfd, servername);
+}
+
+tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
+{
+	err := loadtls();
+	if(err != nil)
+		return (nil, err);
+
 	cfg := tls->defaultconfig();
 	cfg.servername = servername;
 
-	(conn, terr) := tls->client(c.dfd, cfg);
-	if(terr != nil)
-		return (nil, "tls: " + terr);
+	(conn, terr) := tls->client(fd, cfg);
+	if(terr != nil) {
+		if(len terr < 4 || terr[0:4] != "tls:")
+			terr = "tls: " + terr;
+		return (nil, terr);
+	}
 
 	# Wrap TLS conn as a pipe-like FD pair
 	return tlsconnfd(conn);
@@ -130,12 +148,19 @@ tlsconnfd(conn: ref Conn): (ref Sys->FD, string)
 tlsreadpump(conn: ref Conn, fd: ref Sys->FD)
 {
 	buf := array [16384] of byte;
-	for(;;) {
-		n := conn.read(buf, len buf);
-		if(n <= 0)
-			break;
-		if(sys->write(fd, buf[:n], n) != n)
-			break;
+	{
+		for(;;) {
+			n := conn.read(buf, len buf);
+			if(n <= 0)
+				break;
+			if(sys->write(fd, buf[:n], n) != n)
+				break;
+		}
+	} exception {
+	"write on closed pipe" =>
+		# the caller closed its end while the server still sent
+		# (an SMTP server's 221 after QUIT): nobody to read it
+		;
 	}
 	# Signal EOF by closing our end
 	fd = nil;
@@ -157,25 +182,109 @@ tlswritepump(conn: ref Conn, fd: ref Sys->FD)
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(method, requrl, hdrs, body, 0);
+	return request0(method, requrl, hdrs, body, 0, nil, nil);
 }
 
 requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(method, requrl, hdrs, body, 1);
+	return request0(method, requrl, hdrs, body, 1, nil, nil);
+}
+
+requestjar(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar): (ref Response, string)
+{
+	return requesttypes(method, requrl, hdrs, body, jar, nil);
+}
+
+requesttypes(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar, types: list of string): (ref Response, string)
+{
+	(resp, err) := request0(method, requrl, hdrs, body, 0, jar, types);
+	if(resp != nil && resp.body != nil) {
+		ce := str->tolower(resp.hdrval("Content-Encoding"));
+		case ce {
+		"gzip" or "x-gzip" =>
+			if((b := decompress(resp.body, "h")) != nil)
+				resp.body = b;
+		"deflate" =>
+			# servers send both zlib-wrapped and raw deflate
+			if((b := decompress(resp.body, "z")) != nil)
+				resp.body = b;
+			else if((b = decompress(resp.body, "")) != nil)
+				resp.body = b;
+		"br" =>
+			if(brotli == nil)
+				brotli = load Brotli Brotli->PATH;
+			if(brotli != nil) {
+				(b, nil) := brotli->decompress(resp.body, -1);
+				if(b != nil)
+					resp.body = b;
+			}
+		}
+	}
+	return (resp, err);
+}
+
+# Inflate data: param "h" for a gzip stream, "z" for zlib, "" for raw.
+decompress(data: array of byte, param: string): array of byte
+{
+	if(inflate == nil) {
+		inflate = load Filter Filter->INFLATEPATH;
+		if(inflate == nil)
+			return nil;
+		inflate->init();
+	}
+	rq := inflate->start(param);
+	out: list of array of byte;
+	total := 0;
+	in := 0;
+	for(;;) {
+		pick m := <-rq {
+		Start =>
+			;
+		Fill =>
+			n := len data - in;
+			if(n > len m.buf)
+				n = len m.buf;
+			m.buf[0:] = data[in:in+n];
+			in += n;
+			m.reply <-= n;
+		Result =>
+			b := array[len m.buf] of byte;
+			b[0:] = m.buf;
+			out = b :: out;
+			total += len b;
+			m.reply <-= 0;
+			if(total > MAXBODY)
+				return nil;
+		Info =>
+			;
+		Finished =>
+			return concatchunks(out, total);
+		Error =>
+			return nil;
+		}
+	}
 }
 
 # Revalidates every redirect target. Public mode resolves first and dials the
 # exact validated address, preventing redirect and DNS-rebinding SSRF.
-request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
+request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar, types: list of string): (ref Response, string)
 {
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
-		verr := validrequesttext(method, requrl, hdrs);
+		requrl = encodeurl(requrl);
+		rh := hdrs;
+		if(jar != nil && (c := jar.header(requrl)) != nil)
+			rh = Header("Cookie", c) :: rh;
+		verr := validrequesttext(method, requrl, rh);
 		if(verr != nil)
 			return (nil, verr);
-		(resp, err) := dorequest(method, requrl, hdrs, body, public);
+		(resp, err) := dorequest(method, requrl, rh, body, public, types);
 		if(err != nil)
 			return (nil, err);
+		resp.url = requrl;
+		if(jar != nil)
+			for(h := resp.headers; h != nil; h = tl h)
+				if(str->tolower((hd h).name) == "set-cookie")
+					jar.set(requrl, (hd h).value);
 
 		# Handle redirects
 		case resp.statuscode {
@@ -184,17 +293,13 @@ request0(method, requrl: string, hdrs: list of Header, body: array of byte, publ
 			if(loc == nil)
 				return (resp, nil);
 			oldorigin := schemehost(requrl);
-			# Resolve relative URL
-			if(len loc > 0 && loc[0] == '/')
-				requrl = schemehost(requrl) + loc;
-			else
-				requrl = loc;
+			requrl = resolve(requrl, loc);
 			# Credentials are scoped to the origin selected by the caller. Never
 			# forward them when a redirect changes scheme, host, or port.
 			if(schemehost(requrl) != oldorigin)
 				hdrs = redirectheaders(hdrs);
-			# 303 always changes to GET
-			if(resp.statuscode == 303) {
+			# 303, and 301/302 after a POST, change to GET (as browsers do)
+			if(resp.statuscode == 303 || (resp.statuscode == 301 || resp.statuscode == 302) && method == "POST") {
 				method = "GET";
 				body = nil;
 			}
@@ -203,6 +308,70 @@ request0(method, requrl: string, hdrs: list of Header, body: array of byte, publ
 		}
 	}
 	return (nil, "too many redirects");
+}
+
+# Resolve a reference against a base URL (RFC 3986 §5.2).
+resolve(base, rel: string): string
+{
+	for(i := 0; i < len rel; i++) {
+		c := rel[i];
+		if(c == ':')
+			return rel;
+		if(!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'))
+			break;
+	}
+	sh := schemehost(base);
+	scheme := "";
+	for(i = 0; i < len base; i++)
+		if(base[i] == ':') {
+			scheme = base[0:i];
+			break;
+		}
+	if(len rel >= 2 && rel[0:2] == "//")
+		return scheme + ":" + rel;
+	if(len rel > 0 && rel[0] == '/')
+		return sh + rel;
+	# relative to the base's directory
+	path := base[len sh:];
+	for(i = 0; i < len path; i++)
+		if(path[i] == '?' || path[i] == '#') {
+			path = path[0:i];
+			break;
+		}
+	if(len rel > 0 && rel[0] == '?')
+		return sh + path + rel;
+	for(i = len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			break;
+	return sh + path[0:i+1] + rel;
+}
+
+# A URL as a browser sends it: a space, a character outside ASCII (as
+# its UTF-8 bytes) and " < > ` { } percent-encoded (WHATWG URL, the
+# path and query percent-encode sets).  A link to
+# https://pantip.com/tag/ดูแล... was sent with its Thai as it was, and
+# answered 400; one with a space was refused.  Control characters are
+# left, for validrequesttext to refuse.
+encodeurl(u: string): string
+{
+	for(i := 0; i < len u; i++) {
+		c := u[i];
+		if(c == ' ' || c >= 16r80 || c == '"' || c == '<' || c == '>' || c == '`' || c == '{' || c == '}')
+			break;
+	}
+	if(i == len u)
+		return u;
+	r := u[0:i];
+	for(; i < len u; i++) {
+		c := u[i];
+		if(c == ' ' || c >= 16r80 || c == '"' || c == '<' || c == '>' || c == '`' || c == '{' || c == '}') {
+			b := array of byte u[i:i+1];
+			for(j := 0; j < len b; j++)
+				r += sys->sprint("%%%.2X", int b[j]);
+		} else
+			r[len r] = c;
+	}
+	return r;
 }
 
 validrequesttext(method, requrl: string, hdrs: list of Header): string
@@ -309,7 +478,7 @@ schemehost(requrl: string): string
 }
 
 # [private]
-dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
+dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, types: list of string): (ref Response, string)
 {
 	u := url->makeurl(requrl);
 	if(u == nil)
@@ -334,66 +503,17 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, pub
 		addr = paddr;
 	}
 
-	fd: ref Sys->FD;
 	if(ishttps) {
 		err := loadtls();
 		if(err != nil)
 			return (nil, err);
-		c := dial->dial(addr, nil);
-		if(c == nil)
-			return (nil, sys->sprint("dial %s: %r", addr));
-		cfg := tls->defaultconfig();
-		cfg.servername = host;
-		(conn, terr) := tls->client(c.dfd, cfg);
-		if(terr != nil)
-			return (nil, "tls: " + terr);
-		# Use TLS conn's read/write directly
-		return dotlsrequest(conn, method, u, host, hdrs, body);
-	} else {
-		c := dial->dial(addr, nil);
-		if(c == nil)
-			return (nil, sys->sprint("dial %s: %r", addr));
-		fd = c.dfd;
 	}
-
-	return dofdrequest(fd, method, u, host, hdrs, body);
+	return linkrequest(method, u, host, addr, ishttps, hdrs, body, types);
 }
 
 publicaddr(host, port: string): (string, string)
 {
 	return publicnet->dialaddr(host, port);
-}
-
-# [private]
-dotlsrequest(conn: ref Conn, method: string, u: ref ParsedUrl, host: string,
-	hdrs: list of Header, body: array of byte): (ref Response, string)
-{
-	req := buildrequest(method, u, host, hdrs, body);
-	reqbytes := array of byte req;
-	if(conn.write(reqbytes, len reqbytes) != len reqbytes)
-		return (nil, "write failed");
-	if(body != nil && len body > 0) {
-		if(conn.write(body, len body) != len body)
-			return (nil, "write body failed");
-	}
-
-	return readtlsresponse(conn);
-}
-
-# [private]
-dofdrequest(fd: ref Sys->FD, method: string, u: ref ParsedUrl, host: string,
-	hdrs: list of Header, body: array of byte): (ref Response, string)
-{
-	req := buildrequest(method, u, host, hdrs, body);
-	reqbytes := array of byte req;
-	if(sys->write(fd, reqbytes, len reqbytes) != len reqbytes)
-		return (nil, "write failed");
-	if(body != nil && len body > 0) {
-		if(sys->write(fd, body, len body) != len body)
-			return (nil, "write body failed");
-	}
-
-	return readfdresponse(fd);
 }
 
 # [private]
@@ -408,14 +528,18 @@ buildrequest(method: string, u: ref ParsedUrl, host: string,
 
 	req := method + " " + path + " HTTP/1.1\r\n";
 	req += "Host: " + host + "\r\n";
-	req += "Connection: close\r\n";
-	req += "User-Agent: Infernode/1.0\r\n";
+	ua := "Infernode/1.0";
+	for(h := hdrs; h != nil; h = tl h)
+		if(str->tolower((hd h).name) == "user-agent")
+			ua = nil;	# the caller's
+	if(ua != nil)
+		req += "User-Agent: " + ua + "\r\n";
 
 	if(body != nil && len body > 0)
 		req += "Content-Length: " + string len body + "\r\n";
 
 	# Add user headers
-	for(h := hdrs; h != nil; h = tl h) {
+	for(h = hdrs; h != nil; h = tl h) {
 		hdr := hd h;
 		req += hdr.name + ": " + hdr.value + "\r\n";
 	}
@@ -424,163 +548,323 @@ buildrequest(method: string, u: ref ParsedUrl, host: string,
 	return req;
 }
 
-# [private]
-# Read HTTP response from a TLS connection
-readtlsresponse(conn: ref Conn): (ref Response, string)
+# ---- connections ----
+#
+# A connection whose response had a known length is kept for the next
+# request to the same place (RFC 9112 §9.3, persistence): a page's
+# style sheets and images come from a few hosts, and a new connection
+# for each costs a TCP and a TLS handshake.  One request at a time on
+# each; a kept connection the server has since closed answers nothing,
+# and a GET is sent again on a new one.
+
+Link: adt {
+	key:	string;	# where it goes: the address, and the TLS server name
+	tls:	ref Conn;
+	fd:	ref Sys->FD;
+	buf:	array of byte;
+	p, n:	int;	# buf[p:n] read and not yet taken
+	idle:	int;	# sys->millisec() when it was put back
+	reused:	int;
+
+	read:	fn(l: self ref Link, a: array of byte): int;
+	write:	fn(l: self ref Link, a: array of byte): int;
+	getc:	fn(l: self ref Link): int;
+	close:	fn(l: self ref Link);
+};
+
+MAXIDLE: con 6;		# kept for each place, as many as fetch at once
+MAXPOOL: con 32;	# kept at all
+IDLEMS: con 30*1000;	# not reused after; servers close idle connections
+
+pool: list of ref Link;
+poollk: chan of int;
+
+Link.read(l: self ref Link, a: array of byte): int
 {
-	# Read headers
-	hbuf := array [32768] of byte;
-	hlen := 0;
-	headersdone := 0;
-	while(!headersdone && hlen < len hbuf) {
-		n := conn.read(hbuf[hlen:], 1);
-		if(n <= 0)
-			break;
-		hlen += n;
-		if(hlen >= 4 && hbuf[hlen-4] == byte '\r' && hbuf[hlen-3] == byte '\n'
-		   && hbuf[hlen-2] == byte '\r' && hbuf[hlen-1] == byte '\n')
-			headersdone = 1;
+	if(l.p < l.n) {
+		m := l.n - l.p;
+		if(m > len a)
+			m = len a;
+		a[0:] = l.buf[l.p:l.p+m];
+		l.p += m;
+		return m;
 	}
+	if(l.tls != nil)
+		return l.tls.read(a, len a);
+	return sys->read(l.fd, a, len a);
+}
 
-	if(!headersdone && hlen == 0)
-		return (nil, "empty response");
-
-	hdrstr := string hbuf[:hlen];
-	(resp, bodystart, err) := parseresponse(hdrstr);
-	if(err != nil)
-		return (nil, err);
-
-	# Read body
-	clen := resp.hdrval("Content-Length");
-	te := resp.hdrval("Transfer-Encoding");
-
-	if(te != nil && str->tolower(te) == "chunked") {
-		# Read chunked body via TLS
-		(bdata, berr) := readchunked_tls(conn);
-		if(berr != nil)
-			return (nil, berr);
-		resp.body = bdata;
-	} else if(clen != nil) {
-		nbytes := int clen;
-		if(nbytes > MAXBODY)
-			nbytes = MAXBODY;
-		if(nbytes > 0) {
-			resp.body = array [nbytes] of byte;
-			off := 0;
-			# Copy any body data already read in header buffer
-			if(bodystart < len hdrstr) {
-				extra := array of byte hdrstr[bodystart:];
-				ncopy := len extra;
-				if(ncopy > nbytes)
-					ncopy = nbytes;
-				for(ci := 0; ci < ncopy; ci++)
-					resp.body[ci] = extra[ci];
-				off = ncopy;
-			}
-			while(off < nbytes) {
-				n := conn.read(resp.body[off:], nbytes - off);
-				if(n <= 0)
-					break;
-				off += n;
-			}
-			if(off < nbytes)
-				resp.body = resp.body[:off];
-		}
-	} else {
-		# Read until close
-		chunks: list of array of byte;
-		total := 0;
-		rbuf := array [16384] of byte;
-		done := 0;
-		while(!done && total < MAXBODY) {
-			n := conn.read(rbuf, len rbuf);
-			if(n <= 0)
-				done = 1;
-			else {
-				chunk := array [n] of byte;
-				chunk[:] = rbuf[:n];
-				chunks = chunk :: chunks;
-				total += n;
-			}
-		}
-		resp.body = concatchunks(chunks, total);
+Link.getc(l: self ref Link): int
+{
+	if(l.p >= l.n) {
+		l.p = l.n = 0;
+		m: int;
+		if(l.tls != nil)
+			m = l.tls.read(l.buf, len l.buf);
+		else
+			m = sys->read(l.fd, l.buf, len l.buf);
+		if(m <= 0)
+			return -1;
+		l.n = m;
 	}
+	return int l.buf[l.p++];
+}
 
-	return (resp, nil);
+Link.write(l: self ref Link, a: array of byte): int
+{
+	if(len a == 0)
+		return 0;
+	if(l.tls != nil)
+		return l.tls.write(a, len a);
+	return sys->write(l.fd, a, len a);
+}
+
+Link.close(l: self ref Link)
+{
+	if(l.tls != nil)
+		l.tls.close();
+	l.tls = nil;
+	l.fd = nil;
+}
+
+lockpool()
+{
+	if(poollk == nil)
+		poollk = chan[1] of int;	# (init runs once, before any request)
+	poollk <-= 1;
+}
+
+# A kept connection to key, or nil.
+takelink(key: string): ref Link
+{
+	lockpool();
+	now := sys->millisec();
+	l: ref Link;
+	keep: list of ref Link;
+	for(pl := pool; pl != nil; pl = tl pl) {
+		k := hd pl;
+		if(now - k.idle > IDLEMS)
+			continue;	# dropped, and closed when collected
+		if(l == nil && k.key == key)
+			l = k;
+		else
+			keep = k :: keep;
+	}
+	pool = keep;
+	<-poollk;
+	return l;
+}
+
+putlink(l: ref Link)
+{
+	l.idle = sys->millisec();
+	lockpool();
+	n := 0;
+	t := 0;
+	for(pl := pool; pl != nil; pl = tl pl) {
+		t++;
+		if((hd pl).key == l.key)
+			n++;
+	}
+	if(n < MAXIDLE && t < MAXPOOL) {
+		pool = l :: pool;
+		l = nil;
+	}
+	<-poollk;
+	if(l != nil)
+		l.close();
+}
+
+newlink(key, addr, host: string, ishttps: int): (ref Link, string)
+{
+	c := dial->dial(addr, nil);
+	if(c == nil)
+		return (nil, sys->sprint("dial %s: %r", addr));
+	l := ref Link(key, nil, c.dfd, array[16384] of byte, 0, 0, 0, 0);
+	if(ishttps) {
+		cfg := tls->defaultconfig();
+		cfg.servername = host;
+		(conn, terr) := tls->client(c.dfd, cfg);
+		if(terr != nil)
+			return (nil, "tls: " + terr);
+		l.tls = conn;
+	}
+	return (l, nil);
 }
 
 # [private]
-# Read HTTP response from a plain FD
-readfdresponse(fd: ref Sys->FD): (ref Response, string)
+linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
+	hdrs: list of Header, body: array of byte, types: list of string): (ref Response, string)
 {
-	# Read headers
-	hbuf := array [32768] of byte;
-	hlen := 0;
-	headersdone := 0;
-	while(!headersdone && hlen < len hbuf) {
-		n := sys->read(fd, hbuf[hlen:], 1);
+	req := array of byte buildrequest(method, u, host, hdrs, body);
+	key := addr;
+	if(ishttps)
+		key = "tls!" + addr + "!" + host;
+	for(try := 0; ; try++) {
+		l: ref Link;
+		if(try == 0)
+			l = takelink(key);
+		if(l != nil)
+			l.reused = 1;
+		else {
+			err: string;
+			(l, err) = newlink(key, addr, host, ishttps);
+			if(l == nil)
+				return (nil, err);
+		}
+		again := l.reused && try == 0 && (method == "GET" || method == "HEAD");
+		if(l.write(req) != len req || body != nil && l.write(body) != len body) {
+			l.close();
+			if(again)
+				continue;
+			return (nil, "write failed");
+		}
+		(resp, keep, err) := readresponse(l, method, types);
+		if(resp == nil) {
+			l.close();
+			if(again && err == "empty response")
+				continue;	# it had been closed at the other end
+			return (nil, err);
+		}
+		if(keep)
+			putlink(l);
+		else
+			l.close();
+		return (resp, nil);
+	}
+}
+
+# [private]
+# The response to a request: its header, and its body as the header
+# frames it.  Whether the connection can carry another request after.
+readresponse(l: ref Link, method: string, types: list of string): (ref Response, int, string)
+{
+	resp: ref Response;
+	for(;;) {
+		(hdr, herr) := readheader(l);
+		if(herr != nil)
+			return (nil, 0, herr);
+		err: string;
+		(resp, nil, err) = parseresponse(hdr);
+		if(err != nil)
+			return (nil, 0, err);
+		if(resp.statuscode < 100 || resp.statuscode >= 200 || resp.statuscode == 101)
+			break;
+		# 1xx: an interim response; the real one follows
+	}
+	keep := 1;
+	conn := str->tolower(resp.hdrval("Connection"));
+	if(str->prefix("HTTP/1.0", resp.status))
+		keep = conn == "keep-alive";
+	else if(contains(conn, "close"))
+		keep = 0;
+	clen := resp.hdrval("Content-Length");
+	te := str->tolower(resp.hdrval("Transfer-Encoding"));
+	code := resp.statuscode;
+	if(method == "HEAD" || code == 204 || code == 304 || code < 200)
+		return (resp, keep, nil);
+	if(code < 300 && types != nil && !typeok(resp.hdrval("Content-Type"), types))
+		return (resp, 0, nil);	# not wanted: not read, and the connection with it not kept
+	if(te != nil && contains(te, "chunked")) {
+		ok: int;
+		(resp.body, ok) = readchunked(l);
+		return (resp, keep && ok, nil);
+	}
+	if(clen != nil) {
+		nbytes := int clen;
+		if(nbytes > MAXBODY) {
+			nbytes = MAXBODY;
+			keep = 0;
+		}
+		if(nbytes <= 0)
+			return (resp, keep, nil);
+		resp.body = array[nbytes] of byte;
+		off := 0;
+		while(off < nbytes) {
+			n := l.read(resp.body[off:]);
+			if(n <= 0)
+				break;
+			off += n;
+		}
+		if(off < nbytes) {
+			resp.body = resp.body[:off];
+			keep = 0;
+		}
+		return (resp, keep, nil);
+	}
+	# the body runs to the end of the connection
+	chunks: list of array of byte;
+	total := 0;
+	rbuf := array[16384] of byte;
+	while(total < MAXBODY) {
+		n := l.read(rbuf);
 		if(n <= 0)
 			break;
-		hlen += n;
-		if(hlen >= 4 && hbuf[hlen-4] == byte '\r' && hbuf[hlen-3] == byte '\n'
-		   && hbuf[hlen-2] == byte '\r' && hbuf[hlen-1] == byte '\n')
-			headersdone = 1;
+		chunk := array[n] of byte;
+		chunk[0:] = rbuf[:n];
+		chunks = chunk :: chunks;
+		total += n;
 	}
+	resp.body = concatchunks(chunks, total);
+	return (resp, 0, nil);
+}
 
-	if(!headersdone && hlen == 0)
+# [private]
+# whether a Content-Type is one of types (see requesttypes)
+typeok(ctype: string, types: list of string): int
+{
+	t := str->tolower(ctype);
+	for(i := 0; i < len t; i++)
+		if(t[i] == ';' || t[i] == ' ' || t[i] == '\t') {
+			t = t[0:i];
+			break;
+		}
+	if(t == "")
+		return 1;
+	for(; types != nil; types = tl types) {
+		e := str->tolower(hd types);
+		if(e == "")
+			continue;
+		if(e[len e - 1] == '/') {
+			if(str->prefix(e, t))
+				return 1;
+		} else if(e[0] == '+') {
+			if(len t >= len e && t[len t - len e:] == e)
+				return 1;
+		} else if(t == e)
+			return 1;
+	}
+	return 0;
+}
+
+# [private]
+# Up to and including the blank line that ends a header.
+readheader(l: ref Link): (string, string)
+{
+	hbuf := array[65536] of byte;
+	hlen := 0;
+	while(hlen < len hbuf) {
+		c := l.getc();
+		if(c < 0)
+			break;
+		hbuf[hlen++] = byte c;
+		if(hlen >= 4 && c == '\n' && hbuf[hlen-2] == byte '\r' && hbuf[hlen-3] == byte '\n' && hbuf[hlen-4] == byte '\r')
+			return (string hbuf[:hlen], nil);
+	}
+	if(hlen == 0)
 		return (nil, "empty response");
+	if(hlen == len hbuf)
+		return (nil, "response header too long");
+	return (string hbuf[:hlen], nil);	# as much as came, as before
+}
 
-	hdrstr := string hbuf[:hlen];
-	(resp, nil, err) := parseresponse(hdrstr);
-	if(err != nil)
-		return (nil, err);
-
-	# Read body
-	clen := resp.hdrval("Content-Length");
-	te := resp.hdrval("Transfer-Encoding");
-
-	if(te != nil && str->tolower(te) == "chunked") {
-		(bdata, berr) := readchunked_fd(fd);
-		if(berr != nil)
-			return (nil, berr);
-		resp.body = bdata;
-	} else if(clen != nil) {
-		nbytes := int clen;
-		if(nbytes > MAXBODY)
-			nbytes = MAXBODY;
-		if(nbytes > 0) {
-			resp.body = array [nbytes] of byte;
-			off := 0;
-			while(off < nbytes) {
-				n := sys->read(fd, resp.body[off:], nbytes - off);
-				if(n <= 0)
-					break;
-				off += n;
-			}
-			if(off < nbytes)
-				resp.body = resp.body[:off];
-		}
-	} else {
-		# Read until close
-		chunks: list of array of byte;
-		total := 0;
-		rbuf := array [16384] of byte;
-		done := 0;
-		while(!done && total < MAXBODY) {
-			n := sys->read(fd, rbuf, len rbuf);
-			if(n <= 0)
-				done = 1;
-			else {
-				chunk := array [n] of byte;
-				chunk[:] = rbuf[:n];
-				chunks = chunk :: chunks;
-				total += n;
-			}
-		}
-		resp.body = concatchunks(chunks, total);
-	}
-
-	return (resp, nil);
+# [private]
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
 }
 
 # [private]
@@ -614,7 +898,7 @@ parseresponse(hdrstr: string): (ref Response, int, string)
 	}
 	bodystart += 2;	# past final \r\n
 
-	resp := ref Response(code, status, headers, nil);
+	resp := ref Response(code, status, headers, nil, nil);
 	return (resp, bodystart, nil);
 }
 
@@ -646,101 +930,64 @@ splitheader(line: string): (string, string)
 }
 
 # [private]
-readchunked_tls(conn: ref Conn): (array of byte, string)
+# A chunked body (RFC 9112 §7.1), and whether it ended as it should:
+# the last chunk and the trailer section read, so that the connection
+# is at the next response.
+readchunked(l: ref Link): (array of byte, int)
 {
 	chunks: list of array of byte;
 	total := 0;
-	linebuf := array [64] of byte;
-
 	for(;;) {
-		# Read chunk size line
-		llen := 0;
-		while(llen < len linebuf) {
-			n := conn.read(linebuf[llen:], 1);
-			if(n <= 0)
-				break;
-			llen++;
-			if(llen >= 2 && linebuf[llen-2] == byte '\r' && linebuf[llen-1] == byte '\n')
-				break;
-		}
-		if(llen < 2)
-			break;
-		sizestr := string linebuf[:llen-2];
-		chunksize := hexval(sizestr);
+		line := readline(l);
+		if(line == nil)
+			return (concatchunks(chunks, total), 0);
+		chunksize := hexval(line);
 		if(chunksize <= 0)
 			break;
-		if(total + chunksize > MAXBODY)
+		trunc := 0;
+		if(total + chunksize > MAXBODY) {
 			chunksize = MAXBODY - total;
-
+			trunc = 1;
+		}
 		chunk := array [chunksize] of byte;
 		off := 0;
 		while(off < chunksize) {
-			n := conn.read(chunk[off:], chunksize - off);
+			n := l.read(chunk[off:]);
 			if(n <= 0)
 				break;
 			off += n;
 		}
-		if(off < chunksize)
-			chunk = chunk[:off];
-		chunks = chunk :: chunks;
+		chunks = chunk[:off] :: chunks;
 		total += off;
-
-		# Read trailing \r\n
-		conn.read(linebuf[:2], 2);
-
-		if(total >= MAXBODY)
+		if(off < chunksize || trunc)
+			return (concatchunks(chunks, total), 0);
+		readline(l);	# the CRLF after the data
+	}
+	# the trailer section, to its blank line
+	for(;;) {
+		line := readline(l);
+		if(line == nil)
+			return (concatchunks(chunks, total), 0);
+		if(line == "\r\n" || line == "\n")
 			break;
 	}
-
-	return (concatchunks(chunks, total), nil);
+	return (concatchunks(chunks, total), 1);
 }
 
 # [private]
-readchunked_fd(fd: ref Sys->FD): (array of byte, string)
+# A line, with its end; nil at the end of the connection.
+readline(l: ref Link): string
 {
-	chunks: list of array of byte;
-	total := 0;
-	linebuf := array [64] of byte;
-
-	for(;;) {
-		llen := 0;
-		while(llen < len linebuf) {
-			n := sys->read(fd, linebuf[llen:], 1);
-			if(n <= 0)
-				break;
-			llen++;
-			if(llen >= 2 && linebuf[llen-2] == byte '\r' && linebuf[llen-1] == byte '\n')
-				break;
-		}
-		if(llen < 2)
-			break;
-		sizestr := string linebuf[:llen-2];
-		chunksize := hexval(sizestr);
-		if(chunksize <= 0)
-			break;
-		if(total + chunksize > MAXBODY)
-			chunksize = MAXBODY - total;
-
-		chunk := array [chunksize] of byte;
-		off := 0;
-		while(off < chunksize) {
-			n := sys->read(fd, chunk[off:], chunksize - off);
-			if(n <= 0)
-				break;
-			off += n;
-		}
-		if(off < chunksize)
-			chunk = chunk[:off];
-		chunks = chunk :: chunks;
-		total += off;
-
-		sys->read(fd, linebuf[:2], 2);
-
-		if(total >= MAXBODY)
-			break;
+	s := "";
+	while(len s < 8192) {
+		c := l.getc();
+		if(c < 0)
+			return nil;
+		s[len s] = c;
+		if(c == '\n')
+			return s;
 	}
-
-	return (concatchunks(chunks, total), nil);
+	return s;
 }
 
 # [private]
@@ -789,4 +1036,287 @@ concatchunks(chunks: list of array of byte, total: int): array of byte
 		off += len chunk;
 	}
 	return result;
+}
+
+# ---- cookies (RFC 6265 §5) ----
+
+Jar.new(): ref Jar
+{
+	return ref Jar(nil, chan[1] of int);
+}
+
+now(): int
+{
+	if(daytime == nil)
+		daytime = load Daytime Daytime->PATH;
+	if(daytime == nil)
+		return 0;
+	return daytime->now();
+}
+
+# (scheme, host, path) of a URL, host lower case
+urlparts(u: string): (string, string, string)
+{
+	pu := url->makeurl(u);
+	if(pu == nil)
+		return (nil, nil, nil);
+	path := pu.pstart + pu.path;
+	if(path == "")
+		path = "/";
+	return (url->schemes[pu.scheme], str->tolower(pu.host), path);
+}
+
+domainmatch(host, domain: string): int
+{
+	if(host == domain)
+		return 1;
+	n := len host - len domain;
+	return n > 0 && host[n:] == domain && host[n-1] == '.' && !isip(host);
+}
+
+isip(h: string): int
+{
+	for(i := 0; i < len h; i++)
+		if(!(h[i] >= '0' && h[i] <= '9' || h[i] == '.' || h[i] == ':'))
+			return 0;
+	return 1;
+}
+
+pathmatch(rpath, cpath: string): int
+{
+	if(rpath == cpath)
+		return 1;
+	if(len rpath > len cpath && rpath[0:len cpath] == cpath)
+		return cpath[len cpath - 1] == '/' || rpath[len cpath] == '/';
+	return 0;
+}
+
+# the default path: the request path up to its last '/'
+defaultpath(p: string): string
+{
+	if(p == "" || p[0] != '/')
+		return "/";
+	for(i := len p - 1; i > 0; i--)
+		if(p[i] == '/')
+			return p[0:i];
+	return "/";
+}
+
+Jar.header(j: self ref Jar, u: string): string
+{
+	j.lk <-= 1;
+	r := jarheader(j, u);
+	<-j.lk;
+	return r;
+}
+
+jarheader(j: ref Jar, u: string): string
+{
+	(scheme, host, path) := urlparts(u);
+	if(host == nil)
+		return nil;
+	t := now();
+	r := "";
+	keep: list of ref Cookie;
+	for(l := j.cookies; l != nil; l = tl l) {
+		c := hd l;
+		if(c.expires != 0 && c.expires <= t)
+			continue;	# expired: dropped
+		keep = c :: keep;
+		if(c.hostonly && host != c.domain || !c.hostonly && !domainmatch(host, c.domain))
+			continue;
+		if(!pathmatch(path, c.path))
+			continue;
+		if(c.secure && scheme != "https")
+			continue;
+		if(r != "")
+			r += "; ";
+		r += c.name + "=" + c.value;
+	}
+	j.cookies = nil;
+	for(; keep != nil; keep = tl keep)
+		j.cookies = hd keep :: j.cookies;
+	if(r == "")
+		return nil;
+	return r;
+}
+
+Jar.set(j: self ref Jar, u, sc: string)
+{
+	j.lk <-= 1;
+	jarset(j, u, sc);
+	<-j.lk;
+}
+
+jarset(j: ref Jar, u, sc: string)
+{
+	(scheme, host, path) := urlparts(u);
+	if(host == nil)
+		return;
+	(nil, parts) := sys->tokenize(sc, ";");
+	if(parts == nil)
+		return;
+	nv := trimsp(hd parts);
+	eq := -1;
+	for(i := 0; i < len nv; i++)
+		if(nv[i] == '=') {
+			eq = i;
+			break;
+		}
+	if(eq <= 0)
+		return;
+	c := ref Cookie(trimsp(nv[0:eq]), trimsp(nv[eq+1:]), host, defaultpath(path), 1, 0, 0, 0);
+	maxage := -1;
+	hasmaxage := 0;
+	for(parts = tl parts; parts != nil; parts = tl parts) {
+		a := trimsp(hd parts);
+		k := a;
+		v := "";
+		for(i = 0; i < len a; i++)
+			if(a[i] == '=') {
+				k = trimsp(a[0:i]);
+				v = trimsp(a[i+1:]);
+				break;
+			}
+		case str->tolower(k) {
+		"domain" =>
+			d := str->tolower(v);
+			if(len d > 0 && d[0] == '.')
+				d = d[1:];
+			if(d == "")
+				break;
+			if(!domainmatch(host, d))
+				return;	# a cookie for some other site
+			c.domain = d;
+			c.hostonly = 0;
+		"path" =>
+			if(len v > 0 && v[0] == '/')
+				c.path = v;
+		"max-age" =>
+			hasmaxage = 1;
+			maxage = int v;
+		"expires" =>
+			if(!hasmaxage && now() != 0) {
+				tm := daytime->string2tm(v);
+				if(tm != nil)
+					c.expires = daytime->tm2epoch(tm);
+			}
+		"secure" =>
+			c.secure = 1;
+		"httponly" =>
+			c.httponly = 1;
+		}
+	}
+	if(hasmaxage) {
+		if(maxage <= 0)
+			c.expires = 1;	# in the past: delete
+		else
+			c.expires = now() + maxage;
+	}
+	if(c.secure && scheme != "https")
+		return;
+	# replace any cookie with the same name, domain and path
+	keep: list of ref Cookie;
+	for(l := j.cookies; l != nil; l = tl l) {
+		o := hd l;
+		if(o.name == c.name && o.domain == c.domain && o.path == c.path)
+			continue;
+		keep = o :: keep;
+	}
+	if(c.expires == 0 || c.expires > now())
+		keep = c :: keep;
+	j.cookies = nil;
+	for(; keep != nil; keep = tl keep)
+		j.cookies = hd keep :: j.cookies;
+}
+
+Jar.text(j: self ref Jar): string
+{
+	j.lk <-= 1;
+	r := jartext(j);
+	<-j.lk;
+	return r;
+}
+
+jartext(j: ref Jar): string
+{
+	s := "";
+	for(l := j.cookies; l != nil; l = tl l) {
+		c := hd l;
+		s += sys->sprint("%s %s %s=%s %d %d %d %d\n", c.domain, c.path, c.name, c.value,
+			c.expires, c.secure, c.httponly, c.hostonly);
+	}
+	return s;
+}
+
+Jar.add(j: self ref Jar, line: string): string
+{
+	j.lk <-= 1;
+	r := jaradd(j, line);
+	<-j.lk;
+	return r;
+}
+
+jaradd(j: ref Jar, line: string): string
+{
+	(n, f) := sys->tokenize(line, " \t");
+	if(n < 3)
+		return "bad cookie line: want domain path name=value [expires secure httponly hostonly]";
+	dom := str->tolower(hd f);
+	path := hd tl f;
+	nv := hd tl tl f;
+	f = tl tl tl f;
+	for(i := 0; i < len nv; i++)
+		if(nv[i] == '=')
+			break;
+	if(i == 0 || i == len nv)
+		return "bad cookie: want name=value";
+	c := ref Cookie(nv[0:i], nv[i+1:], dom, path, 0, 0, 0, 0);
+	if(f != nil) {
+		c.expires = int hd f;
+		f = tl f;
+	}
+	if(f != nil) {
+		c.secure = int hd f;
+		f = tl f;
+	}
+	if(f != nil) {
+		c.httponly = int hd f;
+		f = tl f;
+	}
+	if(f != nil)
+		c.hostonly = int hd f;
+	keep: list of ref Cookie;
+	for(l := j.cookies; l != nil; l = tl l) {
+		o := hd l;
+		if(!(o.name == c.name && o.domain == c.domain && o.path == c.path))
+			keep = o :: keep;
+	}
+	j.cookies = c :: nil;
+	for(; keep != nil; keep = tl keep)
+		j.cookies = hd keep :: j.cookies;
+	return nil;
+}
+
+Jar.clear(j: self ref Jar)
+{
+	j.lk <-= 1;
+	jarclear(j);
+	<-j.lk;
+}
+
+jarclear(j: ref Jar)
+{
+	j.cookies = nil;
+}
+
+trimsp(s: string): string
+{
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	e := len s;
+	while(e > i && (s[e-1] == ' ' || s[e-1] == '\t'))
+		e--;
+	return s[i:e];
 }

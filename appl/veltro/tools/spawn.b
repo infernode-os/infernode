@@ -250,7 +250,6 @@ doc(): string
 		"  tools=        Comma-separated tools to grant (REQUIRED)\n" +
 		"  paths=        Comma-separated paths to expose\n" +
 		"  shellcmds=    Comma-separated shell commands to allow\n" +
-		"  model=        LLM model (default: haiku)\n" +
 		"  temperature=  LLM temperature 0.0-2.0 (default: 0.7)\n" +
 		"  thinking=     Thinking budget: off, max, or token count\n" +
 		"  agenttype=    Load prompt from /lib/veltro/agents/<type>.txt\n" +
@@ -530,6 +529,35 @@ exec(args: string): string
 	return out;
 }
 
+# Write a child's tool definitions to its model session: the schema each
+# tool publishes (a single "args" string for one that publishes none),
+# then the MCP tools' (a JSON array, or "").
+installchildtools(tfd: ref Sys->FD, mods: list of Tool, names: list of string, mcpdefs: string)
+{
+	parts := "";
+	for(; mods != nil && names != nil; (mods, names) = (tl mods, tl names)) {
+		entry := (hd mods)->schema();
+		entry = strip(entry);
+		if(len entry < 2 || entry[0] != '{' || entry[len entry - 1] != '}')
+			entry = "{\"name\":\"" + hd names + "\",\"description\":\"The " + hd names +
+				" tool\",\"parameters\":{\"type\":\"object\",\"properties\":{\"args\":" +
+				"{\"type\":\"string\"}},\"required\":[\"args\"]}}";
+		if(parts != "")
+			parts += ",";
+		parts += entry;
+	}
+	m := strip(mcpdefs);
+	if(len m > 2 && m[0] == '[' && m[len m - 1] == ']') {
+		if(parts != "")
+			parts += ",";
+		parts += m[1:len m - 1];
+	}
+	if(parts == "")
+		return;
+	b := array of byte ("[" + parts + "]");
+	sys->write(tfd, b, len b);
+}
+
 # Pre-load tool modules for the union of all specs' tool sets.
 # Returns "" on success, error string on failure.
 preloadmulti(specs: list of ref SubSpec): string
@@ -550,8 +578,14 @@ preloadmulti(specs: list of ref SubSpec): string
 		nm := hd s;
 		path := "/dis/veltro/tools/" + nm + ".dis";
 		mod := load Tool path;
-		if(mod == nil)
+		if(mod == nil) {
+			# Only the delegation budget's tools are in this namespace
+			# to load: "file does not exist" said nothing of why.
+			(ok, nil) := sys->stat(path);
+			if(ok < 0)
+				return sys->sprint("tool %s may not be given to a child: it is not in the delegation budget (see GRANTABLE TO CHILD TASKS)", nm);
 			return sys->sprint("cannot load tool %s: %r", nm);
+		}
 		merr := mod->init();
 		if(merr != nil)
 			return sys->sprint("cannot init tool %s: %s", nm, merr);
@@ -746,10 +780,9 @@ buildagent(o: ref JValue): (ref SubSpec, string)
 	spec.at_ms = atms;
 	spec.every_ms = evms;
 
-	# Default to the BACKEND's own model (empty => llmsrv default) rather than a
-	# hardcoded Claude-era "haiku" — a non-Anthropic backend (e.g. a local
-	# gpt-oss server) 404s on "haiku". An explicit "model" in the args still wins.
-	llmmodel := str->tolower(jfirststr(o, "model" :: nil));
+	# The model is the server's (llmsrv -M): a subagent never chooses one,
+	# and a "model" in the args is ignored.
+	llmmodel := "";
 	llmtemp := jvreal(o.get("temperature"), 0.7);
 	if(llmtemp < 0.0)
 		llmtemp = 0.0;
@@ -936,7 +969,7 @@ parsespecsection(section: string): (ref SubSpec, string)
 	spec.at_ms = 0;
 	spec.every_ms = 0;
 
-	llmmodel   := "haiku";
+	llmmodel   := "";	# the server's; model= is ignored
 	llmtemp    := 0.7;
 	llmsystem  := "";
 	llmthink   := 0;
@@ -961,7 +994,7 @@ parsespecsection(section: string): (ref SubSpec, string)
 				spec.shellcmds = str->tolower(hd clist) :: spec.shellcmds;
 			spec.shellcmds = reverse(spec.shellcmds);
 		} else if(hasprefix(tv, "model=")) {
-			llmmodel = str->tolower(tv[6:]);
+			;	# the model is the server's
 		} else if(hasprefix(tv, "temperature=")) {
 			llmtemp = real tv[12:];
 			if(llmtemp < 0.0)
@@ -1013,12 +1046,18 @@ parsespecsection(section: string): (ref SubSpec, string)
 
 	if(llmsystem == "" && agenttype != "")
 		llmsystem = loadagentprompt(agenttype);
-	if(llmsystem == "")
-		llmsystem = loadagentprompt("default");
+	# As the JSON form: no default.txt, whose text-protocol instructions
+	# (the tool's name as the first word, DONE at the end) are wrong for a
+	# child called with native tool definitions; the subagent's own
+	# default applies.
 
 	spec.llmconfig = ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem, llmthink);
 	return (spec, "");
 }
+
+# The longest wait sys->sleep takes: 2^31-1 ms, some 24.8 days.
+# Durations and at= times are refused beyond it, not wrapped.
+MAXMS: con 16r7FFFFFFF;
 
 # parseduration accepts ISO-8601-flavoured suffixes: <int><unit>
 # where unit is s, m, h, or d. Returns (milliseconds, error).
@@ -1037,18 +1076,21 @@ parseduration(s: string): (int, string)
 	for(i := 0; i < len digits; i++)
 		if(digits[i] < '0' || digits[i] > '9')
 			return (0, "duration must be <int><unit>");
-	val := int digits;
-	if(val < 0)
-		return (0, "negative duration");
-	mult: int;
+	mult: big;
 	case unit {
-	's' => mult = 1000;
-	'm' => mult = 60 * 1000;
-	'h' => mult = 3600 * 1000;
-	'd' => mult = 86400 * 1000;
+	's' => mult = big 1000;
+	'm' => mult = big (60 * 1000);
+	'h' => mult = big (3600 * 1000);
+	'd' => mult = big (86400 * 1000);
 	*   => return (0, "unknown unit (use s/m/h/d)");
 	}
-	return (val * mult, "");
+	# in big: an int of milliseconds holds no more than MAXMS
+	if(len digits > 12)
+		return (0, "duration too long: at most 24 days");
+	ms := big digits * mult;
+	if(ms > big MAXMS)
+		return (0, "duration too long: at most 24 days");
+	return (int ms, "");
 }
 
 # parserfc3339delta wraps the shared appl/lib/rfc3339 parser to return
@@ -1066,7 +1108,10 @@ parserfc3339delta(s: string): (int, string)
 	now := daytime->now();
 	if(target <= now)
 		return (0, "target time is in the past");
-	return ((target - now) * 1000, "");
+	ms := (big target - big now) * big 1000;
+	if(ms > big MAXMS)
+		return (0, "target time is more than 24 days ahead");
+	return (int ms, "");
 }
 
 # Collector goroutine: reads result from pipe with a per-subagent timeout.
@@ -1126,7 +1171,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 
 	# Step 4: Create LLM session using /mnt/llm/new clone pattern.
 	# Each child gets its own session — fully isolated from parent and siblings.
-	llmaskfd: ref Sys->FD;
+	llmaskfd, llmtoolsfd: ref Sys->FD;
 	sessionid := "";  # hoisted so we can close the session after runloop
 	if(caps.llmconfig != nil) {
 		newfd := sys->open("/mnt/llm/new", Sys->OREAD);
@@ -1183,6 +1228,10 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 
 					# Open ask fd (used by runloop)
 					llmaskfd = sys->open("/mnt/llm/" + sessionid + "/ask", Sys->ORDWR);
+					# and the tool definitions', written once the
+					# child's tools are known (Step 5c): after the
+					# restriction there is no /mnt/llm to open.
+					llmtoolsfd = sys->open("/mnt/llm/" + sessionid + "/tools", Sys->OWRITE);
 				}
 			}
 		}
@@ -1202,21 +1251,32 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# native tool calls for them) and hand the routing maps to the sub-agent.
 	# Bounded by the same per-mount/byte caps the agent runtime uses. Best-effort: any failure
 	# just leaves the child without MCP tools, never breaks the run.
+	mcpdefs := "";	# installed with the native tools' (Step 9)
 	if(agentlib != nil && sessionid != "") {
 		mcppaths := filtermcp(caps.paths);
 		if(mcppaths != nil) {
 			(mcpmounts, mcptools) := agentlib->mcpdiscover(mcppaths);
 			if(mcpmounts != nil) {
-				defs := agentlib->mcptooldefs(mcpmounts, 64, 60000);
-				tfd := sys->open("/mnt/llm/" + sessionid + "/tools", Sys->OWRITE);
-				if(tfd != nil) {
-					db := array of byte defs;
-					sys->write(tfd, db, len db);
-					tfd = nil;
-				}
+				mcpdefs = agentlib->mcptooldefs(mcpmounts, 64, 60000);
 				samod->setmcp(mcpmounts, mcptools);
 			}
 		}
+	}
+
+	# Step 5c: The child's tools, as its model is to call them: each
+	# native tool's own schema, and the MCP tools granted.  Given only as
+	# prose in its prompt, a child had nothing it could call, and answered
+	# with what it would have done.
+	if(llmtoolsfd != nil) {
+		cmods: list of Tool;
+		cnames: list of string;
+		for(cp := preloadedtools; cp != nil; cp = tl cp)
+			if(inlist((hd cp).name, caps.tools)) {
+				cmods = (hd cp).mod :: cmods;
+				cnames = (hd cp).name :: cnames;
+			}
+		installchildtools(llmtoolsfd, cmods, cnames, mcpdefs);
+		llmtoolsfd = nil;
 	}
 
 	# Step 6: Verify FDs 0-2 are safe endpoints

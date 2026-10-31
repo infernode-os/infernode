@@ -108,6 +108,8 @@ memmove memory
 memory memory
 memset memory
 mk mk
+mkcard mkcard
+mkrootfs mkcard
 ms2 ms2
 cclose newchan
 chanfree newchan

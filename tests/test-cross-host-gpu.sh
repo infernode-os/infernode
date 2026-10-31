@@ -102,7 +102,7 @@ run_emu() {
 	local cmds="$2"
 	local tmpscript
 	tmpscript=$(mktemp /tmp/infernode-gpu-test-XXXXXX.sh)
-	# Use double quotes around cmds so inner single quotes (e.g. 'rc4_256 sha1')
+	# Use double quotes around cmds so the inner quoted transport policy
 	# pass through correctly. Safe in non-interactive bash (no ! expansion).
 	cat > "$tmpscript" << EMUSCRIPT
 #!/bin/bash
@@ -335,7 +335,7 @@ echo -e "${BOLD}Phase 4: Automated Tests${NC}"
 # Create mount point on host (emu -r . maps this to /n/gpu inside Inferno)
 mkdir -p "$ROOT/n/gpu"
 
-MOUNT_CMD="mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/gpu"
+MOUNT_CMD="mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/gpu"
 
 # ── Test 1: GPU info over encrypted mount ──
 
@@ -395,7 +395,7 @@ echo "  Test 4: Remote inference (clone → model → input → infer → output
 
 # Write Inferno script to avoid backtick quoting issues with bash
 cat > "$ROOT/tmp/gpu-test4.sh" << 'INFERSCRIPT'
-mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default $1 /n/gpu
+mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default $1 /n/gpu
 id=`{cat /n/gpu/clone}
 echo 'model gpu_classifier' > /n/gpu/$id/ctl
 cat /tmp/testinput.bin > /n/gpu/$id/input
@@ -432,7 +432,7 @@ echo "  Test 5: Session isolation (two independent sessions)"
 
 # Write Inferno script to avoid backtick quoting issues with bash
 cat > "$ROOT/tmp/gpu-test5.sh" << 'INFERSCRIPT'
-mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default $1 /n/gpu
+mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default $1 /n/gpu
 id1=`{cat /n/gpu/clone}
 id2=`{cat /n/gpu/clone}
 echo $id1

@@ -7,7 +7,6 @@ include "draw.m";
 
 # Limbo doesn't have built-in maps like Go.
 # We'll use a sorted array of key-value pairs + binary search.
-# This is a fair comparison since Go-on-Dis maps also use sorted arrays.
 
 BenchMapOps: module
 {

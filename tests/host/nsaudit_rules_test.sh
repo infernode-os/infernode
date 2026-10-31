@@ -61,7 +61,7 @@ for d in "$RULESDIR"/*/; do
     out=""
     for attempt in 1 2 3 4 5 6 7 8; do
         timeout 30 "$EMU" -r"$ROOT" "$SH" -c \
-            "path=(/dis/veltro /dis/cmd /dis .); nsaudit -m /tests/nsaudit-rules/$name" \
+            "bind -b /tests/nsaudit-authorities /lib/veltro/nsaudit/authorities; path=(/dis/veltro /dis/cmd /dis .); nsaudit -m /tests/nsaudit-rules/$name" \
             </dev/null >"$log" 2>&1
         rc=$?
         out="$(cat "$log")"

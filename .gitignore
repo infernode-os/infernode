@@ -114,12 +114,38 @@ test-output.txt
 .claude/settings.local.json
 .claude/worktrees/
 
+# Runtime namespace residue. Running `emu -r$PWD` makes the repo root the
+# Inferno root, so 9P services mounted during a session leave their file
+# names behind on the host as empty stubs (/llm/ctl, /mnt/wallet/accounts,
+# /phone/sms, ...). They are recreated by the next boot. Ignore the
+# service trees, not the mount points themselves: n/ is tracked via
+# n/.gitkeep because a bind target has to exist.
+/llm/
+/phone/
+/n/*
+!/n/.gitkeep
+# rstyxd mounts a cpu(1) caller's namespace here
+!/n/client/
+/n/client/*
+!/n/client/.gitkeep
+# scap(1) writes this beside the image it captured.
+/scap.status
+
+# Python bytecode from the host-side tooling (codex-gate, harness scripts).
+__pycache__/
+*.pyc
+
 # Veltro API keys (secrets)
 lib/veltro/keys/
 
 # Site-local NDB config (contains private IPs/hostnames, API URLs, model choices)
 lib/ndb/local
 lib/ndb/llm
+lib/ndb/dict
+
+# Dictionary text (dict(7)): copyright, never distributed
+lib/dict/*
+!lib/dict/README.*
 
 # =========================
 # Build Artifacts
@@ -146,6 +172,7 @@ emu/*/o.emu
 emu/*/o.*
 emu/*/InferNode
 emu/*/InferNode.exe
+emu/*/Xenith.exe
 emu/*/SDL3.dll
 
 # Build logs and transient artefacts at repo root
@@ -209,8 +236,6 @@ Linux/amd64/bin/*
 benchmarks/_build/
 benchmarks/_results/
 
-# GoDis compiled binary
-tools/godis/godis
 
 # Inferno temp files and runtime data
 tmp/*.pdfi*
@@ -221,6 +246,10 @@ tmp/.veltro/
 # running veltro tests under emu); not source.
 usr/inferno/veltro/
 
+# The audit log's state (wm/settings' /usr/inferno/audit/on, the log the
+# audit service keeps); written at run time, not source.
+usr/inferno/audit/
+
 
 # Stray files
 fprint'
@@ -229,6 +258,7 @@ fprint'
 emu/Nt/emu-config.c
 emu/Nt/emu-gui-config.c
 emu/Nt/SDL3.dll
+emu/Nt/launcher-version.h
 limbo/incpath.h
 utils/mk/rootpath.h
 SDL3-dev/
@@ -321,7 +351,7 @@ scratchrun/
 # 2FA POC scratch — belongs with the YubiKey workstream, not the main tree
 tools/2fa-poc/
 
-# video demo media — regenerable, see demo-video.sh header
+# video demo media — regenerable, see tools/demo/demo-video.sh header
 /video-demo-media/
 
 # claude-gate runtime scratch (venv is bootstrapped by serve-claude-gate.sh;
@@ -331,3 +361,26 @@ tests/inferno/claude-gate-e2e.sh
 
 # codex-gate runtime scratch (venv is bootstrapped by serve-codex-gate.sh)
 tools/codex-gate/.venv/
+
+# CYW43455 WiFi firmware for the bare-metal Pi port: Cypress binary-
+# redistribution licence, never committed. tools/pi-firmware.sh puts the
+# files on a card, and in the release's Pi card images (tools/mkpiimage.sh);
+# tools/pi-firmware-manifest.txt pins them by SHA256.
+brcmfmac43455-sdio.*
+cyfmac43455-sdio*
+# and its Bluetooth patch, the same way (tools/pi-btfw-manifest.txt)
+BCM4345C0.hcd
+
+# The Pi's boot firmware: Broadcom's licence, never committed either.
+# tools/mkpiimage.sh puts it in the card images it builds;
+# tools/pi-bootfw-manifest.txt pins it by SHA256.
+bootcode.bin
+start.elf
+start4.elf
+fixup.dat
+fixup4.dat
+LICENCE.broadcom
+
+# agentloop_characterization_test.sh scratch (removed when the test exits)
+/usr/agentloop/
+/tests/inferno/.agentloop-char.*

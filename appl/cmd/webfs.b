@@ -9,13 +9,20 @@ implement Webfs;
 # Filesystem layout:
 #   /mnt/web/
 #       clone           read: allocates connection N, returns "N\n"
-#       ctl             read/write: global config (useragent, timeout)
+#       ctl             read/write: global config (useragent)
+#       cookies         read: the cookie jar, one cookie per line;
+#                       write: a line in the same form, or "clear"
 #       N/              per-connection directory
-#           ctl         write: "url https://...", "method POST", "header Key: Value"
+#           ctl         write: "url https://...", "method POST", "header Key: Value",
+#                       "cookies off", "types text/ image/ +xml ..." (the
+#                       Content-Types whose body is wanted; another's is not
+#                       fetched: status as answered, body empty)
 #           body        open triggers HTTP fetch; read returns response body
 #           postbody    write: POST request body (before opening body)
 #           contenttype read: response Content-Type header
 #           status      read: "200 OK" or "error: ..."
+#           url         read: the URL that answered, after redirects
+#           header      read: the response header, "Name: value" per line
 #           parsed/     subdirectory of parsed URL components
 #               url scheme host port path query fragment
 #
@@ -25,6 +32,11 @@ implement Webfs;
 #   echo 'url https://example.com' > /mnt/web/1/ctl
 #   cat /mnt/web/1/body             # → HTML content
 #   cat /mnt/web/1/status           # → "200 OK"
+#
+# Fetches run concurrently: a request that needs a response waits for
+# its own connection's fetch, not for anyone else's.  All connections
+# share one cookie jar, so webfs is one browsing session.  Bodies sent
+# gzip, deflate or brotli encoded arrive decoded.
 #
 
 include "sys.m";
@@ -46,7 +58,7 @@ include "styxservers.m";
 
 include "webclient.m";
 	webclient: Webclient;
-	Response, Header: import webclient;
+	Response, Header, Jar: import webclient;
 
 include "url.m";
 	urlmod: Url;
@@ -76,6 +88,9 @@ Qpport: con 26;
 Qppath: con 27;
 Qpquery: con 28;
 Qpfragment: con 29;
+Qurl: con 30;
+Qheader: con 31;
+Qcookies: con 3;
 
 # Per-connection state
 ConnState: adt {
@@ -88,6 +103,24 @@ ConnState: adt {
 	status:      string;
 	fetched:     int;
 	contenttype: string;
+	gen:         int;               # bumped when the request changes
+	fetching:    int;               # a fetch for gen is running
+	pending:     list of ref Tmsg;  # waiting for it, newest first
+	nopen:       int;               # open fids on its files
+	nocookies:   int;               # "cookies off": the jar is neither sent nor filled
+	types:       list of string;    # "types ...": the bodies wanted (webclient->requesttypes)
+};
+
+# Connections nobody has open are kept, so that a client may write ctl
+# and read body with separate opens; past this many the oldest go.
+MAXIDLE: con 32;
+
+# a finished fetch
+Done: adt {
+	conn:	ref ConnState;
+	gen:	int;
+	resp:	ref Response;
+	err:	string;
 };
 
 stderr: ref Sys->FD;
@@ -100,7 +133,9 @@ nconns: int;
 nextid: int;
 
 # Global config
-useragent := "Webfs/1.0 (Inferno)";
+useragent := "Mozilla/5.0 (Inferno) Webfs/1.0";
+jar: ref Jar;
+done: chan of ref Done;
 
 usage()
 {
@@ -166,6 +201,8 @@ init(nil: ref Draw->Context, args: list of string)
 	nconns = 0;
 	nextid = 1;
 	vers = 0;
+	jar = Jar.new();
+	done = chan of ref Done;
 
 	sys->pctl(Sys->FORKFD, nil);
 
@@ -201,7 +238,7 @@ init(nil: ref Draw->Context, args: list of string)
 newconn(): ref ConnState
 {
 	id := nextid++;
-	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "");
+	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "", 0, 0, nil, 0, 0, nil);
 
 	# Grow pool if needed
 	if(nconns >= len conns) {
@@ -211,7 +248,21 @@ newconn(): ref ConnState
 	}
 	conns[nconns++] = c;
 	vers++;
+	reap();
 	return c;
+}
+
+# Forget the oldest idle connections beyond MAXIDLE, and their responses.
+reap()
+{
+	idle := 0;
+	for(i := nconns - 1; i >= 0; i--) {
+		c := conns[i];
+		if(c.nopen > 0 || c.fetching || c.pending != nil)
+			continue;
+		if(++idle > MAXIDLE)
+			freeconn(c.id);
+	}
 }
 
 # Find connection by ID
@@ -255,39 +306,104 @@ FTYPE(path: big): int
 	return int path & 16rFF;
 }
 
-# Perform HTTP request for a connection
-dofetch(c: ref ConnState)
+# Start c's fetch, if it needs one; m waits for it.  Returns 0 if
+# c's response is already there and m can be answered now.
+needfetch(c: ref ConnState, m: ref Tmsg): int
 {
+	if(c.fetched)
+		return 0;
+	c.pending = m :: c.pending;
+	if(c.fetching)
+		return 1;
+	c.fetching = 1;
 	if(c.url == "") {
-		c.status = "error: no URL set";
-		c.fetched = 1;
-		vers++;
-		return;
+		spawn fetchdone(ref Done(c, c.gen, nil, "no URL set"));
+		return 1;
 	}
 
 	hdrs := c.headers;
-	# Add User-Agent if not set
 	has_ua := 0;
+	has_ae := 0;
 	for(h := hdrs; h != nil; h = tl h)
-		if(tolower((hd h).name) == "user-agent")
+		case tolower((hd h).name) {
+		"user-agent" =>
 			has_ua = 1;
+		"accept-encoding" =>
+			has_ae = 1;
+		}
 	if(!has_ua)
 		hdrs = Header("User-Agent", useragent) :: hdrs;
+	if(!has_ae)
+		hdrs = Header("Accept-Encoding", "gzip, deflate, br") :: hdrs;
+	j := jar;
+	if(c.nocookies)
+		j = nil;
+	spawn fetcher(c, c.gen, c.method, c.url, hdrs, c.postdata, j, c.types);
+	return 1;
+}
 
-	(resp, err) := webclient->request(c.method, c.url, hdrs, c.postdata);
-	if(err != nil) {
-		c.status = "error: " + err;
-		c.resp = nil;
-		c.contenttype = "";
-	} else {
-		c.resp = resp;
-		c.status = string resp.statuscode + " " + resp.status;
-		c.contenttype = resp.hdrval("Content-Type");
-		if(c.contenttype == nil)
-			c.contenttype = "";
+fetcher(c: ref ConnState, gen: int, method, url: string, hdrs: list of Header, body: array of byte, j: ref Jar, types: list of string)
+{
+	resp: ref Response;
+	err: string;
+	{
+		(resp, err) = webclient->requesttypes(method, url, hdrs, body, j, types);
+	} exception e {
+	"*" =>
+		resp = nil;
+		err = "fetch failed: " + e;
 	}
-	c.fetched = 1;
-	vers++;
+	done <-= ref Done(c, gen, resp, err);
+}
+
+fetchdone(d: ref Done)
+{
+	done <-= d;
+}
+
+# A fetch finished: record it and answer what waited for it.
+finish(srv: ref Styxserver, d: ref Done)
+{
+	c := d.conn;
+	c.fetching = 0;
+	if(d.gen == c.gen) {
+		if(d.err != nil) {
+			c.status = "error: " + d.err;
+			c.resp = nil;
+			c.contenttype = "";
+		} else {
+			c.resp = d.resp;
+			c.status = string d.resp.statuscode + " " + d.resp.status;
+			c.contenttype = d.resp.hdrval("Content-Type");
+			if(c.contenttype == nil)
+				c.contenttype = "";
+		}
+		c.fetched = 1;
+		vers++;
+	}
+	# a stale fetch leaves fetched unset, so these start the new one
+	p := c.pending;
+	c.pending = nil;
+	r: list of ref Tmsg;
+	for(; p != nil; p = tl p)
+		r = hd p :: r;
+	for(; r != nil; r = tl r)
+		handle(srv, hd r);
+}
+
+# Forget a flushed request that is waiting for a fetch.
+flushpending(tag: int)
+{
+	for(i := 0; i < nconns; i++) {
+		c := conns[i];
+		keep: list of ref Tmsg;
+		for(p := c.pending; p != nil; p = tl p)
+			if((hd p).tag != tag)
+				keep = hd p :: keep;
+		c.pending = nil;
+		for(; keep != nil; keep = tl keep)
+			c.pending = hd keep :: c.pending;
+	}
 }
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop)
@@ -295,12 +411,27 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 	pidc <-= sys->pctl(Sys->FORKNS|Sys->NEWFD, 1::2::srv.fd.fd::nil);
 
 Serve:
-	while((gm := <-tchan) != nil) {
-		pick m := gm {
-		Readerror =>
-			sys->fprint(stderr, "webfs: fatal read error: %s\n", m.error);
+	for(;;) alt {
+	gm := <-tchan =>
+		if(gm == nil)
 			break Serve;
+		if(tagof gm == tagof Tmsg.Readerror) {
+			pick m := gm {
+			Readerror =>
+				sys->fprint(stderr, "webfs: fatal read error: %s\n", m.error);
+			}
+			break Serve;
+		}
+		handle(srv, gm);
+	d := <-done =>
+		finish(srv, d);
+	}
+	navops <-= nil;
+}
 
+handle(srv: ref Styxserver, gm: ref Tmsg)
+{
+		pick m := gm {
 		Open =>
 			c := srv.getfid(m.fid);
 			if(c == nil) {
@@ -319,10 +450,12 @@ Serve:
 			if(ft == Qbody && (mode == Sys->OREAD || mode == Sys->ORDWR)) {
 				connid := CONNID(c.path);
 				conn := findconn(connid);
-				if(conn != nil && !conn.fetched)
-					dofetch(conn);
+				if(conn != nil && needfetch(conn, gm))
+					break;
 			}
 
+			if((conn := findconn(CONNID(c.path))) != nil)
+				conn.nopen++;
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
@@ -362,6 +495,12 @@ Serve:
 					"method " + conn.method + "\n";
 				for(h := conn.headers; h != nil; h = tl h)
 					info += "header " + (hd h).name + ": " + (hd h).value + "\n";
+				if(conn.types != nil) {
+					info += "types";
+					for(t := conn.types; t != nil; t = tl t)
+						info += " " + hd t;
+					info += "\n";
+				}
 				srv.reply(styxservers->readbytes(m, array of byte info));
 
 			Qbody =>
@@ -370,8 +509,8 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				if(!conn.fetched)
-					dofetch(conn);
+				if(needfetch(conn, gm))
+					break;
 				if(conn.resp != nil && conn.resp.body != nil)
 					srv.reply(styxservers->readbytes(m, conn.resp.body));
 				else
@@ -394,8 +533,8 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				if(!conn.fetched)
-					dofetch(conn);
+				if(needfetch(conn, gm))
+					break;
 				srv.reply(styxservers->readbytes(m, array of byte conn.contenttype));
 
 			Qstatus =>
@@ -404,9 +543,29 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				if(!conn.fetched)
-					dofetch(conn);
+				if(needfetch(conn, gm))
+					break;
 				srv.reply(styxservers->readbytes(m, array of byte conn.status));
+
+			Qurl or Qheader =>
+				conn := findconn(connid);
+				if(conn == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				if(needfetch(conn, gm))
+					break;
+				val := "";
+				if(conn.resp != nil && ft == Qurl)
+					val = conn.resp.url + "\n";
+				else if(conn.resp != nil) {
+					for(h := conn.resp.headers; h != nil; h = tl h)
+						val += (hd h).name + ": " + (hd h).value + "\n";
+				}
+				srv.reply(styxservers->readbytes(m, array of byte val));
+
+			Qcookies =>
+				srv.reply(styxservers->readbytes(m, array of byte jar.text()));
 
 			# Parsed URL components
 			Qpurl or Qpscheme or Qphost or Qpport or
@@ -450,6 +609,21 @@ Serve:
 				vers++;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
+			Qcookies =>
+				# one cookie per line, as read gives them, or "clear"
+				(nil, lines) := sys->tokenize(data, "\n");
+				err: string;
+				for(; lines != nil && err == nil; lines = tl lines)
+					if(hd lines == "clear")
+						jar.clear();
+					else
+						err = jar.add(hd lines);
+				if(err != nil) {
+					srv.reply(ref Rmsg.Error(m.tag, err));
+					break;
+				}
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
 			Qctl =>
 				conn := findconn(connid);
 				if(conn == nil) {
@@ -469,8 +643,20 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				conn.postdata = m.data;
+				# a body larger than one message comes in several
+				# writes: each lands at its offset, and offset 0
+				# starts a new body
+				off := int m.offset;
+				if(off < 0 || off > len conn.postdata)
+					off = len conn.postdata;
+				if(m.offset == big 0)
+					off = 0;
+				body := array[off + len m.data] of byte;
+				body[0:] = conn.postdata[0:off];
+				body[off:] = m.data;
+				conn.postdata = body;
 				conn.fetched = 0;
+				conn.gen++;
 				vers++;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
@@ -478,17 +664,26 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
 
+		Flush =>
+			flushpending(m.oldtag);
+			srv.default(gm);
+
 		Clunk =>
-			srv.clunk(m);
+			closed(srv.clunk(m));
 
 		Remove =>
-			srv.remove(m);
+			closed(srv.remove(m));
 
 		* =>
 			srv.default(gm);
 		}
-	}
-	navops <-= nil;
+}
+
+# A fid is gone; if it was open on a connection's file, that's one less.
+closed(f: ref Fid)
+{
+	if(f != nil && f.isopen && (conn := findconn(CONNID(f.path))) != nil)
+		conn.nopen--;
 }
 
 # Process connection ctl commands
@@ -497,6 +692,7 @@ connctl(c: ref ConnState, data: string): string
 	if(hasprefix(data, "url ")) {
 		c.url = data[len "url ":];
 		c.fetched = 0;
+		c.gen++;
 		c.resp = nil;
 		c.status = "";
 		c.contenttype = "";
@@ -506,12 +702,27 @@ connctl(c: ref ConnState, data: string): string
 	if(hasprefix(data, "method ")) {
 		m := toupper(data[len "method ":]);
 		case m {
-		"GET" or "POST" or "PUT" or "DELETE" or "HEAD" or "PATCH" =>
+		"GET" or "POST" or "PUT" or "DELETE" or "HEAD" or "PATCH" or "OPTIONS" =>
 			c.method = m;
 		* =>
 			return "invalid method: " + m;
 		}
 		c.fetched = 0;
+		c.gen++;
+		vers++;
+		return nil;
+	}
+	if(data == "cookies off" || data == "cookies on") {
+		c.nocookies = data == "cookies off";
+		c.fetched = 0;
+		c.gen++;
+		vers++;
+		return nil;
+	}
+	if(hasprefix(data, "types ") || data == "types") {
+		(nil, c.types) = sys->tokenize(data[len "types":], " \t");
+		c.fetched = 0;
+		c.gen++;
 		vers++;
 		return nil;
 	}
@@ -521,6 +732,8 @@ connctl(c: ref ConnState, data: string): string
 		for(i := 0; i < len hdr - 1; i++) {
 			if(hdr[i] == ':' && hdr[i+1] == ' ') {
 				c.headers = Header(hdr[0:i], hdr[i+2:]) :: c.headers;
+				c.fetched = 0;
+				c.gen++;
 				vers++;
 				return nil;
 			}
@@ -592,8 +805,17 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qgctl =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r644), nil);
 
+	Qcookies =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "cookies", big 0, 8r600), nil);
+
 	Qconndir =>
 		return (dir(Qid(p, vers, Sys->QTDIR), string connid, big 0, 8r755), nil);
+
+	Qurl =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "url", big 0, 8r444), nil);
+
+	Qheader =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "header", big 0, 8r444), nil);
 
 	Qctl =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r644), nil);
@@ -658,6 +880,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, Qclone);
 				"ctl" =>
 					n.path = MKPATH(0, Qgctl);
+				"cookies" =>
+					n.path = MKPATH(0, Qcookies);
 				* =>
 					# Try as connection ID
 					id := strtoint(n.name);
@@ -684,6 +908,10 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(connid, Qcontenttype);
 				"status" =>
 					n.path = MKPATH(connid, Qstatus);
+				"url" =>
+					n.path = MKPATH(connid, Qurl);
+				"header" =>
+					n.path = MKPATH(connid, Qheader);
 				"parsed" =>
 					n.path = MKPATH(connid, Qparseddir);
 				* =>
@@ -730,6 +958,7 @@ navigator(navops: chan of ref Navop)
 				entries: list of big;
 				entries = MKPATH(0, Qclone) :: entries;
 				entries = MKPATH(0, Qgctl) :: entries;
+				entries = MKPATH(0, Qcookies) :: entries;
 				for(i := 0; i < nconns; i++)
 					entries = MKPATH(conns[i].id, Qconndir) :: entries;
 
@@ -756,6 +985,8 @@ navigator(navops: chan of ref Navop)
 					MKPATH(connid, Qpostbody),
 					MKPATH(connid, Qcontenttype),
 					MKPATH(connid, Qstatus),
+					MKPATH(connid, Qurl),
+					MKPATH(connid, Qheader),
 					MKPATH(connid, Qparseddir),
 				};
 				i := n.offset;

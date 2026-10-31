@@ -1,0 +1,25 @@
+hw/sd/sd: let -device emmc be created from the command line
+
+The eMMC model (TYPE_EMMC) is marked not user-creatable, because an
+eMMC is soldered to a board and a machine that has one creates it
+itself. None of the RISC-V machines does, so a guest's MMC driver has
+nothing to talk to: microchip-icicle-kit has the Cadence SD4HC the
+BeagleV-Fire uses for its 16GB eMMC, but only ever an SD card on it.
+
+Making the model user-creatable lets a test put an eMMC on that bus
+(-drive if=none,id=e,... -device emmc,drive=e) and exercise the MMC
+side of a driver: CMD1, a host-assigned RCA, EXT_CSD's sector count,
+the CMD6 bus-width switch. It changes nothing for a machine that does
+not ask for one.
+
+--- a/hw/sd/sd.c
++++ b/hw/sd/sd.c
+@@ -2876,7 +2876,7 @@
+     dc->realize = emmc_realize;
+     device_class_set_props(dc, emmc_properties);
+     /* Reason: Soldered on board */
+-    dc->user_creatable = false;
++    dc->user_creatable = true;
+ 
+     sc->proto = &sd_proto_emmc;
+ 

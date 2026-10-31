@@ -1,0 +1,28 @@
+# lucibridge dup_read
+requests 3
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_dup_read_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_dup_read_0_0:
+  |     1	alpha
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_dup_read_1_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_dup_read_1_0:
+  | (skipped: you already made the call `read {"args": "/usr/agentloop/a.txt"}` in this turn, and nothing has changed anything since, so its output is the same as then)
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:dup_read go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Read twice.
+  | 

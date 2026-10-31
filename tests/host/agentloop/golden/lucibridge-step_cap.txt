@@ -1,0 +1,43 @@
+# lucibridge step_cap
+requests 100
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_step_cap_0_0 list {"args": "\/usr\/agentloop"}
+tool-result call_step_cap_0_0:
+  | 9 entries:
+  | f       6B a.txt
+  | f       5B b.txt
+  | f       8K big.txt
+  | f      10B f1.txt
+  | f      10B f2.txt
+  | f      10B f3.txt
+  | f      10B f4.txt
+  | f      10B f5.txt
+  | f      10B f6.txt
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_step_cap_1_0 list {"args": "\/usr\/agentloop"}
+tool-result call_step_cap_1_0:
+  | (skipped: you already made the call `list {"args": "/usr/agentloop"}` in this turn, and nothing has changed anything since, so its output is the same as then)
+
+== request 99 (turn 99)
+tools: list read write
+assistant-call call_step_cap_98_0 list {"args": "\/usr\/agentloop"}
+tool-result call_step_cap_98_0:
+  | (skipped: you already made the call `list {"args": "/usr/agentloop"}` in this turn, and nothing has changed anything since, so its output is the same as then)
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:step_cap go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=(reached 100-step limit — send another message to continue)
+  | 

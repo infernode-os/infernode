@@ -1,0 +1,22 @@
+# lucibridge unknown_tool
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_unknown_tool_0_0 nosuchtool {"args": "anything"}
+tool-result call_unknown_tool_0_0:
+  | error: tool not found: nosuchtool
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:unknown_tool go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=That tool does not exist.
+  | 

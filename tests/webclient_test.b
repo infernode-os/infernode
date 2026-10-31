@@ -11,7 +11,7 @@ include "testing.m";
 
 include "webclient.m";
 	webclient: Webclient;
-	Response, Header: import webclient;
+	Response, Header, Jar: import webclient;
 
 WebclientTest: module
 {
@@ -113,11 +113,47 @@ testHeaderLookup(t: ref T)
 {
 	hdrs := Header("Content-Type", "text/html") ::
 		Header("X-Custom", "hello") :: nil;
-	resp := ref Response(200, "HTTP/1.1 200 OK", hdrs, nil);
+	resp := ref Response(200, "HTTP/1.1 200 OK", hdrs, nil, nil);
 	t.assertseq(resp.hdrval("Content-Type"), "text/html", "Content-Type");
 	t.assertseq(resp.hdrval("content-type"), "text/html", "case insensitive");
 	t.assertseq(resp.hdrval("X-Custom"), "hello", "custom header");
 	t.assertnil(resp.hdrval("Missing"), "missing header is nil");
+}
+
+testCookieJar(t: ref T)
+{
+	j := Jar.new();
+	j.set("http://www.example.org/a/b", "sid=1; Path=/");
+	j.set("http://www.example.org/a/b", "here=2");
+	j.set("http://www.example.org/", "wide=3; Domain=.example.org");
+	j.set("http://www.example.org/", "other=4; Domain=example.com");
+	j.set("http://www.example.org/", "sec=5; Secure");
+	j.set("https://www.example.org/", "sec=6; Secure; HttpOnly");
+
+	t.assertseq(j.header("http://www.example.org/a/c"), "sid=1; here=2; wide=3", "path, domain");
+	t.assertseq(j.header("http://www.example.org/x"), "sid=1; wide=3", "default path");
+	t.assertseq(j.header("http://img.example.org/"), "wide=3", "domain cookie on a sibling");
+	t.assertseq(j.header("https://www.example.org/"), "sid=1; wide=3; sec=6", "secure");
+	t.assertnil(j.header("http://example.com/"), "another site");
+	t.assertnil(j.header("http://badexample.org/"), "suffix is not a domain match");
+
+	j.set("http://www.example.org/", "sid=x; Max-Age=0");
+	t.assertseq(j.header("http://www.example.org/"), "wide=3", "max-age=0 deletes");
+
+	k := Jar.new();
+	for(l := tolines(j.text()); l != nil; l = tl l)
+		t.assertnil(k.add(hd l), "add " + hd l);
+	t.assertseq(k.text(), j.text(), "text/add round trip");
+	t.assertseq(k.header("https://www.example.org/a/"), "here=2; wide=3; sec=6", "restored jar");
+	k.clear();
+	t.assertnil(k.header("https://www.example.org/"), "cleared");
+	t.assertnotnil(k.add("example.org /"), "short line refused");
+}
+
+tolines(s: string): list of string
+{
+	(nil, l) := sys->tokenize(s, "\n");
+	return l;
 }
 
 testPublicRequestRejectsPrivate(t: ref T)
@@ -167,6 +203,18 @@ testRejectsControlRequestText(t: ref T)
 		"header name separator rejected before dial");
 }
 
+# A URL with a space or characters outside ASCII is sent percent-encoded,
+# as a browser sends it, not refused (pantip.com's Thai tag links): the
+# request gets as far as dialling (port 1 on the loopback, refused)
+testEncodesURLText(t: ref T)
+{
+	for(l := "http://127.0.0.1:1/a b" :: "http://127.0.0.1:1/tag/\u0e14\u0e39" :: "http://127.0.0.1:1/?q=\"x\"" :: nil; l != nil; l = tl l) {
+		(resp, err) := webclient->request("GET", hd l, nil, nil);
+		t.assert(resp == nil, hd l + ": no response");
+		t.assert(!contains(err, "invalid URL text"), hd l + ": not refused as text: " + err);
+	}
+}
+
 contains(s, needle: string): int
 {
 	if(needle == nil || len needle == 0)
@@ -175,6 +223,103 @@ contains(s, needle: string): int
 		if(s[i:i + len needle] == needle)
 			return 1;
 	return 0;
+}
+
+# A response whose type is not among those asked for is not read past
+# its header: a loopback server offering 32 MB of audio/mpeg sees the
+# connection go before it has sent it; one offering text/html sends it
+# all, and its body comes back.
+testTypes(t: ref T)
+{
+	(ok, c) := sys->announce("tcp!127.0.0.1!0");
+	if(ok < 0)
+		t.skip(sys->sprint("announce: %r"));
+	port := "";
+	(nil, l) := sys->tokenize(readfile(c.dir + "/local"), "!\n");
+	if(l != nil && tl l != nil)
+		port = hd tl l;
+	if(port == "")
+		t.fatal("no local port: " + readfile(c.dir + "/local"));
+	url := "http://127.0.0.1:" + port + "/";
+	sent := chan of int;
+	huge := 32 * 1024 * 1024;
+	spawn serve1(c, sent, "audio/mpeg", huge);
+	(r, err) := webclient->requesttypes("GET", url + "a.mp3", nil, nil, nil, "text/" :: "+xml" :: nil);
+	t.assert(err == nil, "request: " + err);
+	n := <-sent;
+	if(r != nil) {
+		t.asserteq(r.statuscode, 200, "status as answered");
+		t.assertseq(r.hdrval("Content-Type"), "audio/mpeg", "its type");
+		t.asserteq(len r.body, 0, "no body");
+	}
+	t.assert(n < huge, sys->sprint("not read whole: %d of %d sent", n, huge));
+	spawn serve1(c, sent, "text/html; charset=utf-8", 100000);
+	(r, err) = webclient->requesttypes("GET", url + "p.html", nil, nil, nil, "text/" :: "+xml" :: nil);
+	n = <-sent;
+	t.assert(err == nil && r != nil, "request: " + err);
+	if(r != nil)
+		t.asserteq(len r.body, 100000, "a type asked for is read");
+	spawn serve1(c, sent, "image/svg+xml", 1000);
+	(r, err) = webclient->requesttypes("GET", url + "i.svg", nil, nil, nil, "text/" :: "+xml" :: nil);
+	n = <-sent;
+	if(r != nil)
+		t.asserteq(len r.body, 1000, "a suffix (+xml) matches");
+}
+
+serve1(c: Sys->Connection, sent: chan of int, ctype: string, size: int)
+{
+	(ok, nc) := sys->listen(c);
+	if(ok < 0) {
+		sent <-= -1;
+		return;
+	}
+	fd := sys->open(nc.dir + "/data", Sys->ORDWR);
+	if(fd == nil) {
+		sent <-= -1;
+		return;
+	}
+	req := "";
+	buf := array[4096] of byte;
+	while(!hasend(req)) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		req += string buf[0:n];
+	}
+	hdr := array of byte sys->sprint("HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", ctype, size);
+	sys->write(fd, hdr, len hdr);
+	chunk := array[65536] of {* => byte 16rFF};
+	total := 0;
+	while(total < size) {
+		k := len chunk;
+		if(size - total < k)
+			k = size - total;
+		if(sys->write(fd, chunk, k) != k)
+			break;
+		total += k;
+	}
+	fd = nil;
+	sent <-= total;
+}
+
+hasend(s: string): int
+{
+	for(i := 0; i + 3 < len s; i++)
+		if(s[i:i+4] == "\r\n\r\n")
+			return 1;
+	return 0;
+}
+
+readfile(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -207,8 +352,11 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Non-network tests first
 	run("HeaderLookup", testHeaderLookup);
+	run("CookieJar", testCookieJar);
 	run("PublicRequestRejectsPrivate", testPublicRequestRejectsPrivate);
 	run("RejectsControlRequestText", testRejectsControlRequestText);
+	run("EncodesURLText", testEncodesURLText);
+	run("Types", testTypes);
 
 	# Network tests (may skip if no connectivity)
 	run("HttpsGet", testHttpsGet);

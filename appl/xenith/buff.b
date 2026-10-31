@@ -147,6 +147,7 @@ Buffer.insert(b : self ref Buffer, q0 : int, s : string, n : int)
 
 	if (q0>b.nc)
 		error("bad assert in insert");
+	b.nchange++;
 	p = 0;
 	while(n > 0){
 		b.setcache(q0);
@@ -236,6 +237,7 @@ Buffer.delete(b : self ref Buffer, q0 : int, q1 : int)
 
 	if (q0>q1 || q0>b.nc || q1>b.nc)
 		error("bad assert in delete");
+	b.nchange++;
 
 	while(q1 > q0){
 		b.setcache(q0);
@@ -357,6 +359,7 @@ Buffer.reset(b : self ref Buffer)
 {
 	i : int;
 
+	b.nchange++;
 	b.nc = 0;
 	b.cnc = 0;
 	b.cq = 0;

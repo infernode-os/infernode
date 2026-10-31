@@ -159,6 +159,17 @@ disvar(long size, Decl *d)
 		print("%lld data bytes start %lld\n", Boffset(bout) - fileoff, fileoff);
 }
 
+/*
+ * is id an entry of the link table ldt?
+ * the tagged entries addiface puts in an interface are
+ * implemented only by this module; only $self links them.
+ */
+int
+ldtentry(Decl *ldt, Decl *id)
+{
+	return id->tag == 0 || ldt == selfldt;
+}
+
 void
 disldt(long size, Decl *ds)
 {
@@ -183,8 +194,14 @@ disldt(long size, Decl *ds)
 			n = d->init;
 			if(n->ty->kind != Tiface)
 				nerror(n, "disldt: not Tiface");
-			discon(n->val);
+			m = 0;
+			for(id = n->decl->ty->ids; id != nil; id = id->next)
+				if(ldtentry(n->decl, id))
+					m++;
+			discon(m);
 			for(id = n->decl->ty->ids; id != nil; id = id->next){
+				if(!ldtentry(n->decl, id))
+					continue;
 				disword(sign(id));
 				if(id->dot->ty->kind == Tadt){
 					s = id->dot->sym;

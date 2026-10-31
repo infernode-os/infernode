@@ -4,29 +4,64 @@
 int
 statcheck(uchar *buf, uint nbuf)
 {
-	uchar *ebuf;
+	uint n, remain;
 	int i;
-
-	ebuf = buf + nbuf;
 
 	if(nbuf < STATFIXLEN || nbuf != BIT16SZ + GBIT16(buf))
 		return -1;
 
 	buf += STATFIXLEN - 4 * BIT16SZ;
+	remain = nbuf - (STATFIXLEN - 4 * BIT16SZ);
 
 	for(i = 0; i < 4; i++){
-		if(buf + BIT16SZ > ebuf)
+		if(remain < BIT16SZ)
 			return -1;
-		buf += BIT16SZ + GBIT16(buf);
+		n = GBIT16(buf);
+		buf += BIT16SZ;
+		remain -= BIT16SZ;
+		if(n > remain)
+			return -1;
+		buf += n;
+		remain -= n;
 	}
 
-	if(buf != ebuf)
+	if(remain != 0)
 		return -1;
 
 	return 0;
 }
 
+/* Check one stat inside a buffer that may contain following entries. */
+int
+statcheckbuf(uchar *buf, uint navail)
+{
+	uint nbuf;
+
+	if(navail < BIT16SZ)
+		return -1;
+	nbuf = BIT16SZ + GBIT16(buf);
+	if(nbuf > navail || statcheck(buf, nbuf) < 0)
+		return -1;
+	return nbuf;
+}
+
 static char nullstring[] = "";
+
+/*
+ * A wstat leaves mode, atime and mtime alone by sending ~0 in their
+ * 32 bits. Where ulong is wider than that, keep it ~0 in the whole
+ * ulong, or the ~0 and ~0UL tests that look for it never match.
+ */
+static ulong
+gbit32dontcare(uchar *p)
+{
+	ulong v;
+
+	v = GBIT32(p);
+	if(v == 0xFFFFFFFFUL)
+		return ~0UL;
+	return v;
+}
 
 uint
 convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
@@ -52,11 +87,11 @@ convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
 	p += BIT32SZ;
 	d->qid.path = GBIT64(p);
 	p += BIT64SZ;
-	d->mode = GBIT32(p);
+	d->mode = gbit32dontcare(p);
 	p += BIT32SZ;
-	d->atime = GBIT32(p);
+	d->atime = gbit32dontcare(p);
 	p += BIT32SZ;
-	d->mtime = GBIT32(p);
+	d->mtime = gbit32dontcare(p);
 	p += BIT32SZ;
 	d->length = GBIT64(p);
 	p += BIT64SZ;

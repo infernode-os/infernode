@@ -60,19 +60,30 @@ options that are applied to the
 new tk window, as described in
 .IR tk (2).
 .I Title
-gives a label that will be displayed in the title bar
-of the window;
+names the window: task lists show it, though there is no title bar.
+Unless
 .I buts
-determines which buttons are created in the titlebar,
-a bitwise combination of the constants
-.BR Resize ,
-.BR Help ,
-.BR OK,
-and
-.BR Hide .
-If
-.B Plain
-is given, the window is given no decoration at all.
+includes
+.BR Plain ,
+or the window manager frames the window itself (see
+.B embedded
+in
+.IR wmlib (2)),
+the window has the standard frame: a line
+.B Wmlib->Border
+pixels wide, in the current theme's
+.B windowborder
+colour.
+The frame is drawn inside the window's edge, as in
+.IR rio (1),
+and a press on it is the window manager's
+(see
+.IR wm (1)):
+button 1 or 2 reshapes the window from the nearest edge or corner,
+and button 3 moves it.
+Of the other constants in
+.IR buts ,
+none now changes the window; they are accepted as before.
 .B Toplevel
 returns a tuple, say
 .RI ( top ,\  ctl ),
@@ -82,7 +93,7 @@ is the newly created top level tk window,
 and
 .I ctl
 is a channel down which requests from the
-title bar are sent.
+window's frame are sent.
 Messages received on
 .I ctl
 should be processed

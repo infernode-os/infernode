@@ -1,5 +1,5 @@
-# voice/listen — set up local audio and announce a 9P export listener
-#                so a peer can mount this InferNode's /dev and bridge
+# voice/listen — set up local audio and announce an authenticated 9P listener
+#                exporting only the audio device files a peer needs
 #                audio over it. INFR-185 v0.
 #
 # Run on each side that wants to be reachable. Default port 7070.
@@ -34,6 +34,13 @@ bind -a '#A' /dev
 echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
 echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 
+# Build a fresh, two-file export instead of handing a remote peer /dev.
+mkdir -p /tmp/voice-export
+mount {memfs} /tmp/voice-export
+touch /tmp/voice-export/audio /tmp/voice-export/audioctl
+bind /dev/audio /tmp/voice-export/audio
+bind /dev/audioctl /tmp/voice-export/audioctl
+
 # announce + accept loop. The pre-warm sleepers inside the listen
 # block run in the same address space as the export server (INFR-195):
 # they open /dev/audio for read + write to force audio_file_init +
@@ -42,10 +49,10 @@ echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 # instead of touching SDL again — that's the path that fails when
 # the export worker can't reach a usable SDL state on macOS even
 # with SDL_Init / SDL_QuitSubSystem / SDL_Init retry.
-echo 'voice/listen:' $addr 'exporting /dev (pre-warmed)'
-listen -A $addr {
+echo 'voice/listen:' $addr 'exporting authenticated audio/audioctl (pre-warmed)'
+listen $addr {
 	{sleep 99999 > /dev/audio} &
 	{sleep 99999 < /dev/audio > /dev/null} &
 	sleep 1
-	export /dev
+	export /tmp/voice-export
 }

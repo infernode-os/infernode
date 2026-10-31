@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build InferNode for macOS ARM64 (Headless mode)
+# Build InferNode for macOS, Apple silicon (arm64) or Intel (amd64), Headless mode
 #
 
 set -e
@@ -8,14 +8,19 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export ROOT
 
-echo "=== InferNode macOS ARM64 Build (Headless) ==="
+case $(uname -m) in
+x86_64)	OBJTYPE=amd64 ;;
+*)	OBJTYPE=arm64 ;;
+esac
+
+echo "=== InferNode macOS $OBJTYPE Build (Headless) ==="
 echo "ROOT=$ROOT"
 echo ""
 
-# Set up environment for macOS ARM64
+# Set up environment for macOS
 export SYSHOST=MacOSX
-export OBJTYPE=arm64
-export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+export OBJTYPE
+export PATH="$ROOT/MacOSX/$OBJTYPE/bin:$PATH"
 export AWK=awk
 export SHELLNAME=sh
 

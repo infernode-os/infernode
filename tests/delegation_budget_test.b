@@ -91,6 +91,15 @@ writefile(path, content: string): int
 }
 
 # Exact (whitespace-delimited) membership — avoids 'read' matching 'readfile'.
+hasline(text, line: string): int
+{
+	(nil, lines) := sys->tokenize(text, "\n");
+	for(; lines != nil; lines = tl lines)
+		if(hd lines == line)
+			return 1;
+	return 0;
+}
+
 hasentry(listtext, name: string): int
 {
 	(nil, toks) := sys->tokenize(listtext, "\n \t\r");
@@ -247,19 +256,15 @@ testProvisionLifecycleCompletesAfterManifest(t: ref T)
 	id := 8136;
 	mpath := sys->sprint("/tmp/veltro/.ns/manifest.%d", id);
 	sys->remove(mpath);
+	# The write is answered when the child is confined: nothing to wait for
+	# after it.
 	n := writefile(TOOLMNT + "/provision", string id);
 	t.assert(n >= 0, "valid provision write succeeds");
-	ready := 0;
-	for(i := 0; i < 400; i++) {
-		state := readfile(TOOLMNT + "/provision");
-		(mok, nil) := sys->stat(mpath);
-		if(mok >= 0 && hasentry(state, string id) && hasentry(state, "ready")) {
-			ready = 1;
-			break;
-		}
-		sys->sleep(50);
-	}
-	t.assert(ready, "ready lifecycle implies confinement manifest exists");
+	state := readfile(TOOLMNT + "/provision");
+	(mok, nil) := sys->stat(mpath);
+	t.assert(mok >= 0, "the confinement manifest exists when the write returns");
+	t.assert(hasline(state, string id + " ready"),
+		sys->sprint("the lifecycle is ready when the write returns (%q)", state));
 	t.assertnotnil(childtoollist(id),
 		sys->sprint("ready lifecycle implies %s.%d is mounted", TOOLMNT, id));
 }

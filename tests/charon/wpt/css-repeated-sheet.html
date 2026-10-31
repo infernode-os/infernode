@@ -1,0 +1,5 @@
+<!doctype html><title>a style sheet used twice takes its last place in the cascade</title>
+<style>.b{width:100px;height:100px;background:green}</style>
+<style>.b{background:red}</style>
+<style>.b{width:100px;height:100px;background:green}</style>
+<div class=b></div>

@@ -100,6 +100,28 @@ isfix(n: ref Node): int
 }
 
 #
+# the link table for the load of $self.
+# a ref fn of a function the module does not declare adds it,
+# tagged, to the module's interface (addiface), which it shares
+# with every structurally equal module type.  only $self
+# implements those functions, so only its load links them:
+# the shared table leaves them out (ldtentry), or loading
+# another module through an equal type would demand them (INFR-310).
+#
+mkselfldt(src: Src, t: ref Type): ref Decl
+{
+	if(selfldt == nil){
+		d := selfldt = mkids(src, enter(".m.$self", 0), t, nil);
+		installids(Dglobal, d);
+		d.refs++;
+		d.init = mkn(Onothing, nil, nil);
+		d.init.ty = t;
+		d.init.decl = d;
+	}
+	return selfldt;
+}
+
+#
 # rewrite an expression to make it easiser to compile,
 # or give the correct results
 #
@@ -410,6 +432,8 @@ rewrite(n: ref Node): ref Node
 		usetype(nn.ty);
 		usetype(nn.ty.tof);
 		nn = rewrite(nn);
+		if(LDT)
+			nn.right.decl = mkselfldt(n.src, nn.ty.tof);
 		nn.op = Oself;
 		return nn;
 	Ofnptr =>
@@ -826,6 +850,17 @@ ecom(src: Src, nto, n: ref Node): ref Node
 		}
 
 		#
+		# a call in right can change what left's address is found
+		# from: a[i] = f(), where f makes a new a and the old one,
+		# its only reference gone, is freed, had f's result written
+		# into freed memory; p.x = f() so too, f making a new p.  So
+		# right first, into a temporary.  (Only a name's address is
+		# fixed.)
+		#
+		if(left.op != Oname && tright == nil && hascall(right))
+			right = ecom(right.src, tright = talloc(right.ty, nil), right);
+
+		#
 		# think carefully about types here
 		#
 		if(left.addable >= Rcant)
@@ -999,7 +1034,7 @@ ecom(src: Src, nto, n: ref Node): ref Node
 		if(right.addable < Rcant){
 			if(left.addable >= Rcant)
 				(left, tleft) = eacom(left, nto);
-		}else if(left.temps < right.temps){
+		}else if(left.temps < right.temps || hascall(right)){	# (a call first: as for Oas)
 			(right, tright) = eacom(right, nto);
 			if(left.addable >= Rcant)
 				(left, tleft) = eacom(left, nil);
@@ -1106,7 +1141,10 @@ ecom(src: Src, nto, n: ref Node): ref Node
 			break;
 		}
 		if(left.op == Oname && left.decl.store == Dtype){
-			genrawop(src, INEW, mktn(t), nil, nto);
+			# ref T with no initializer: nothing follows to store
+			# into the members, so the allocation itself must zero
+			# them.  INEW only sets the pointer slots to H.
+			genrawop(src, INEWZ, mktn(t), nil, nto);
 			break;
 		}
 		if(t.kind == Tadt && t.tags != nil){

@@ -739,18 +739,35 @@ exmount(Chan *c, Mhead **mp, int doname)
 {
 	struct {Chan *nc;} nc;
 	Cname *oname;
+	Mhead *mh, **mhp;
+	int mflag;
 
 	nc.nc = nil;
-	if((c->flag & COPEN) == 0 && findmount(&nc.nc, mp, c->type, c->dev, c->qid)){
+	mh = nil;
+	mhp = mp != nil ? mp : &mh;
+	if((c->flag & COPEN) == 0 && findmount(&nc.nc, mhp, c->type, c->dev, c->qid)){
 		if(waserror()){
 			cclose(nc.nc);
-			if(mp != nil && *mp != nil){
-				putmhead(*mp);
-				*mp = nil;
+			if(*mhp != nil){
+				putmhead(*mhp);
+				*mhp = nil;
 			}
 			nexterror();
 		}
 		nc.nc = cunique(nc.nc);
+		mh = *mhp;
+		mflag = 0;
+		if(mh != nil){
+			rlock(&mh->lock);
+			if(mh->mount != nil)
+				mflag = mh->mount->mflag;
+			runlock(&mh->lock);
+		}
+		nc.nc->mflag = mflag;
+		if(mp == nil){
+			putmhead(mh);
+			mh = nil;
+		}
 		poperror();
 		if(doname){
 			oname = c->name;
@@ -949,6 +966,8 @@ Exopen(Export *fs, Fcall *t, Fcall *r)
 		return up->env->errstr;
 	}
 	c = exmount(f->chan, &m, 1);
+	if(mutatingmode(t->mode))
+		checkwritable(c);
 
 	/* only save the mount head if it's a multiple element union */
 	if(m && m->mount && m->mount->next){
@@ -1008,6 +1027,7 @@ Excreate(Export *fs, Fcall *t, Fcall *r)
 			putmhead(m);
 		nexterror();
 	}
+	checkwritable(c.c);
 	if(m != nil){
 		oname = c.c->name;
 		incref(&oname->r);
@@ -1132,6 +1152,7 @@ Exwrite(Export *fs, Fcall *t, Fcall *r)
 		return up->env->errstr;
 	}
 	c = f->chan;
+	checkwritable(c);
 	if((c->flag & COPEN) == 0)
 		error(Emode);
 	if(c->mode != OWRITE && c->mode != ORDWR)
@@ -1198,6 +1219,7 @@ Exwstat(Export *fs, Fcall *t, Fcall *r)
 		cclose(c);
 		nexterror();
 	}
+	checkwritable(c);
 	devtab[c->type]->wstat(c, t->stat, t->nstat);
 	poperror();
 
@@ -1228,6 +1250,7 @@ Exremove(Export *fs, Fcall *t, Fcall *r)
 		cclose(c);
 		nexterror();
 	}
+	checkwritable(c);
 	devtab[c->type]->remove(c);
 	poperror();
 	poperror();

@@ -194,6 +194,11 @@ option.
 If that directory has not got write permission,
 the create fails.
 .TP
+.B -R
+Make the mounted view read-only. Write opens, truncation, remove-on-close,
+creation, removal, and metadata changes through the view fail. Rebinding a
+path reached through this view preserves the restriction.
+.TP
 .B -q
 Exit quietly without printing a diagnostic if the bind or mount fails.
 .TP
@@ -214,10 +219,10 @@ specify the algorithm,
 to be used following authentication for digesting or encryption. See 
 .IR ssl (3)
 for the supported algorithms.
-The default is
-.BR none :
-.IR ssl (3)
-is not used after authentication.
+The default is AES-256-CBC with SHA-256, providing confidentiality and
+integrity after authentication.  Specify
+.B none
+explicitly only for a compatibility peer that cannot use record protection.
 .TP
 .BI -k " kfile "
 For mount only, specify the keyfile to be used when authenticating.

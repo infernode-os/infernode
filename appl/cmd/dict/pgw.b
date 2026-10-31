@@ -47,8 +47,10 @@ B	#  Bold
 #  end of tags 
 , Ntag: con  iota;
 
-NONE : con 16r800;
-TAGS, TAGE, SPCS, PAR, LIGS : con iota + NONE;
+#  Runes for special purposes (0xe800-0xfdff is Private Use Area),
+#  as in Plan 9's dict.h; every dictionary module must agree.
+NONE : con 16re800;
+TAGS, TAGE, SPCS, PAR, LIGS : con NONE + 1 + iota;
 LACU, LGRV, LUML, LCED, LTIL, LBRV, LRNG, LDOT, LDTB, LFRN, LFRB, LOGO, LMAC,
 LHCK, LASP, LLEN, LBRB, LIGE, MULTI: con iota + LIGS;
 

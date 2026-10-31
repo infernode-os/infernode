@@ -14,20 +14,28 @@ MsgTriage: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-init(nil: ref Draw->Context, nil: list of string)
+fail(msg: string)
+{
+	sys->print("MSGTRIAGE: FAIL %s\n", msg);
+	raise "fail:msgtriage";
+}
+
+# msgwatch's log, written by tests/inferno/msg_triage.sh, is the
+# argument after the mode.
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-	fd := sys->open("/tmp/mw.log", Sys->OREAD);
-	if(fd == nil) {
-		sys->print("MSGTRIAGE: FAIL cannot open msgwatch log: %r\n");
-		return;
-	}
+	if(tl args == nil || hd tl args != "check" || tl tl args == nil)
+		raise "skip:helper for tests/inferno/msg_triage.sh, which runs it";
+	log := hd tl tl args;
+
+	fd := sys->open(log, Sys->OREAD);
+	if(fd == nil)
+		fail(sys->sprint("cannot open msgwatch log: %r"));
 	buf := array[32768] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0) {
-		sys->print("MSGTRIAGE: FAIL empty log\n");
-		return;
-	}
+	if(n <= 0)
+		fail("empty log");
 	s := string buf[0:n];
 	wake := count(s, "[triage wake] relayed");
 	preempt := count(s, "[triage preempt] relayed");
@@ -39,7 +47,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(wake == 2 && preempt == 1 && ignore == 1 && context == 1 && injected == 3)
 		sys->print("MSGTRIAGE: PASS ignore+context filtered pre-LLM; only wake+preempt dispatched\n");
 	else
-		sys->print("MSGTRIAGE: FAIL routing mismatch (want wake=2 preempt=1 ignore=1 context=1 injected=3)\n");
+		fail("routing mismatch (want wake=2 preempt=1 ignore=1 context=1 injected=3)");
 }
 
 count(hay, needle: string): int

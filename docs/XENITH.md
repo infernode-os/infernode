@@ -1,6 +1,6 @@
 # Xenith - AI-Native Text Environment
 
-Xenith is InferNode's default graphical user interface, a fork of the Acme editor optimized for AI agents and AI-human collaboration.
+Xenith is InferNode's text environment, a fork of the Acme editor optimized for AI agents and AI-human collaboration. The default GUI is Lucia ([LUCIA.md](LUCIA.md)).
 
 ## Overview
 
@@ -10,7 +10,7 @@ Xenith maintains Acme's elegant text-based philosophy while adding capabilities 
 - **Namespace Security** - Capability-based access control for AI containment
 - **Observable Operations** - All agent activity visible to humans
 - **Multimodal Support** - Text and images in the same environment
-- **Dark Mode** - Modern theming with Catppuccin and custom colors
+- **Dark Mode** - Plan 9's colours (`glenda`) for light, a measured dark theme (`xenith`), or any system theme
 
 ## Why Xenith for AI?
 
@@ -21,12 +21,15 @@ Unlike JSON-RPC protocols (MCP) or REST APIs, Xenith exposes everything as files
 ```
 /mnt/xenith/
 ├── new                  # Create window (write returns ID)
-├── focus                # Current focus window
+├── index                # One line per window: id, sizes, dirty, tag
 └── <id>/
     ├── body             # Window text content
     ├── tag              # Title/command line
     ├── addr             # Text address (selection range)
-    ├── ctl              # Control commands
+    ├── data             # Text at addr, reading on to the end of the file
+    ├── xdata            # Like data, but a read stops at the end of addr
+    ├── errors           # Writes append to this directory's +Errors window
+    ├── ctl              # Control commands (incl. dirty, menu, nomenu)
     ├── event            # Event stream
     ├── colors           # Per-window theming
     └── image            # Image display control
@@ -40,7 +43,7 @@ Inferno®'s namespace model provides capability-based security:
 
 ```limbo
 # Agent sees only what you bind:
-sys->bind("/services/llm", "/llm", Sys->MREPL);
+sys->bind("/mnt/llm", "/mnt/llm", Sys->MREPL);
 sys->bind("/tools/safe", "/tools", Sys->MREPL);
 sys->bind("/tmp/scratch", "/scratch", Sys->MCREATE);
 # Nothing else exists from agent's perspective
@@ -71,41 +74,194 @@ Xenith windows are shared workspaces:
 
 ## Features
 
-### Dark Mode and Theming
+### Themes
 
-Xenith includes a modern dark theme (Catppuccin Mocha) and full color customization:
+Xenith takes its colours from the system theme (`/lib/lucifer/theme`,
+the same files every InferNode program uses) and follows it live: write
+a theme's name to `/lib/lucifer/theme/current`, or pick one in Settings,
+and Xenith recolours within a second, on the desktop or off it.
 
-```bash
-# Use dark theme
-xenith -t catppuccin
+The `Theme` command (type it in a tag and middle-click, like `Font`)
+switches: `Theme halo` to a named theme, `Theme` alone to the next one
+installed.
 
-# Traditional Acme colors
-xenith -t plan9
+`-t name` pins a session to one theme instead, which the system's
+switches then leave alone; `Theme` in a pinned session changes that
+session only. `tools/xen` starts Xenith pinned to `xenith`, the dark
+theme: Xenith's original Catppuccin Mocha, corrected against the reading
+research (dark grey behind off-white, every colour read as text at 7:1
+or better, selections bright enough to see with the text on them still
+at body contrast; [THEME-RESEARCH.md](THEME-RESEARCH.md) gives the
+evidence, the numbers and the sources).
+`glenda` is Plan 9's own colours, acme's to the pixel, and the light
+theme to prefer; `-t plan9` and `-t acme` name it too.
 
-# Custom colors via environment
-export xenith_bg_text_0=#1E1E2E
-export xenith_fg_text=#CDD6F4
+```sh
+xenith               # follow the system theme
+xenith -t xenith     # this session: the xenith theme
+xenith -t glenda     # this session: Plan 9's acme, exactly
 ```
 
-20+ color variables for complete UI customization.
+A theme maps onto Xenith by role: body from the theme's `edit*` colours,
+tags from `header` and `text`, selections from `menuhilit`, frame borders
+from `accent` and `border`, and the button 2, button 3 and modified
+colours from `red`, `green` and `yellow`. Any colour can still be set
+directly with environment variables, which win over the theme, as
+`acme-*` do in acme:
 
-### Image Display
-
-Xenith supports inline image display (PNG, PPM formats):
-
-```bash
-# Load image in window
-echo 'image /path/to/diagram.png' > /mnt/xenith/1/ctl
-
-# Query image info
-cat /mnt/xenith/1/image
-# Returns: /path/to/diagram.png 800 600
-
-# Clear image, return to text
-echo 'clearimage' > /mnt/xenith/1/ctl
+```sh
+xenith-bg-text-0='#1E1E2E'	# body background
+xenith-fg-text-0='#CDD6F4'	# body text
 ```
 
-Useful for AI-generated visualizations, charts, and diagrams.
+### Fonts
+
+Xenith reads in Go and Go Mono, the faces Bigelow & Holmes (Lucida's
+designers) drew for the Go project: a humanist sans and a slab-serif
+monospace with the same x-height, so `Font` switches between them
+without the text changing size, and with the characters code confuses
+(`Il1|`, `0O`, `5S`, `8B`) drawn apart. Noto Serif, chosen for an
+x-height that matches theirs, is the serif.
+
+They are set at 14 pixels to the em, which puts the x-height at about
+0.17 degrees on a laptop at 50 cm: above the critical print size, below
+which reading slows, of readers into their late sixties, with a margin
+for light text on dark. Larger buys no speed, only fewer lines on the
+screen. 16 and 18 are for a monitor further away, or older eyes.
+[THEME-RESEARCH.md](THEME-RESEARCH.md) has the evidence for the faces
+and the size.
+
+| Font file | Face |
+|---|---|
+| `/fonts/combined/go.14.font` | Go: the default |
+| `/fonts/combined/gomono.14.font` | Go Mono: the fixed-width font, `Font` toggles to it |
+| `/fonts/combined/serif.14.font` | Noto Serif |
+
+Each is also built at 16 and 18 (`go.16.font`, `serif.18.font`, ...).
+`Font` with a file name sets a window's font (`Font
+/fonts/combined/serif.14.font`), and `-f` and `-F` (or the `xenith-font`
+and `xenith-Font` environment variables) set the two defaults:
+
+```sh
+xenith -f /fonts/combined/serif.14.font		# serif by default
+xenith -f /fonts/combined/go.16.font -F /fonts/combined/gomono.16.font	# larger
+```
+
+Characters the faces lack fall back to DejaVu. `tools/gen-text-fonts.py`
+regenerates the bitmaps from the TrueType sources (Go's are in
+`fonts/go`; the script says where to fetch Noto Serif's).
+
+Go's other weights and slopes are built too, for setting documents
+rather than editing them: `go.medium`, `go.bold`, `go.italic` and
+`go.bolditalic`, at 14, 16, 18 and 22 (`go.bold.22.font`). `Font` does
+not offer them. A program finds a style by putting its name before the
+size in the regular face's file name, which is how Render's markdown
+and HTML get real bold and italic, larger bold headings (22, 18 and 16
+over a 14 body), medium table headers, and tables set with columns as
+wide as their text, aligned as the separator row says, and ruled above,
+below and under the header. Where a family lacks a style (DejaVu has
+bold but no italic built), bold is drawn twice a pixel apart and italic
+is underlined.
+
+### Documents
+
+A PDF, an image, a Mermaid diagram, Markdown and HTML set for reading,
+and a web page are **documents**, all shown one way (see
+[xenith-documents.md](xenith-documents.md) for the design). The
+window's view stacks a document's sheets (a PDF's pages; one sheet for
+a picture, or for a flowing document set to the window's width) in a
+column, and:
+
+- **scrolls** it with the wheel, the scroll bar (as Acme's: 1 back, 3
+  on, 2 to a place) and Page Up/Down, Home and End, smoothly across
+  page boundaries; button 1 **drags** it in both directions (grab and
+  pan);
+- **zooms** it: `Zoom+`, `Zoom-`, `Zoom n` (percent), `Fit` (a page's
+  width to the window: a PDF opens so) and `Fit page` (a whole page in
+  view: an image opens so). A PDF page is painted again at the scale,
+  sharp, while the old painting is shown scaled meanwhile;
+- goes to a page: `Page n`, `NextPage`, `PrevPage`;
+- lets the **text on the drawing** be used, where the document knows
+  where it drew it (PDF, Markdown): button 1 clicked without moving
+  selects the word there, button 2 executes it, button 3 follows the
+  link there (a page of the document goes to that page, a web address
+  opens a browser window in Xenith) or looks the word up (plumbed; if
+  nothing takes it, found in the document and marked).
+
+**Binary documents** (PDF, images) open as documents however they are
+opened: plumbed, looked at, named on Xenith's command line, by Get, by
+Load. The window's body is the document's text (a PDF's extracted
+text), read-only: typing and writes to it are refused, and `Put` writes
+it only to a file named (`Put /tmp/report.txt`), never over the PDF.
+`Render` shows that text instead of the document, and back.
+
+**Source documents** (Markdown, HTML, Mermaid) open as their text;
+`Render` sets the text, unsaved edits and all, as the document, and
+`Render` again goes back. The text is never changed: `Put` saves it,
+programs reading the body see it, and typing goes back to it. Each
+switch keeps your place in Markdown. For editing beside the document,
+`Zerox` the window and `Render` one of the two: it is set again each
+time the file is `Put`, from either window, or when its `doc/ctl` is
+written `refresh` (from the unsaved text). For a preview that follows
+the typing, as Typst's does, execute `Live`: in the document's tag it
+turns on setting it again 600 ms after each edit in the other window
+(and at once, if the text has changed), and off again; in the text's
+tag it does the same for the windows showing its document, or, if
+none does, opens one below showing it, live. So `Live` alone, in the
+window you are typing in, is Zerox, Render and Live at once. A
+document opens not live: a page is laid out again whole, which for
+HTML takes a good part of a second and for a whole book set by troff
+longer. The old drawing stays until the new one is ready.
+
+Markdown and Mermaid are set by `rlayout` (`appl/xenith/render/rlayout.b`),
+the one typesetter, which Lucifer's presentation view uses too:
+headings, emphasis, links, lists, quotes, code, tables and Mermaid
+diagrams, in the window's colours. HTML is laid out by Charon's engine
+(`appl/lib/web`), with its style sheets, fonts and images from the
+file's directory and its own colours; there is no JavaScript. A URL
+opened in Xenith is browsed (see [XEN.md](XEN.md#browsing)).
+
+Nothing is loaded for a kind of document until one is opened: the
+kinds are a table, `/lib/xenith/doctypes`, and each kind's engine
+(`appl/xenith/doc/`) loads its own dependencies (the PDF interpreter,
+`rlayout`, `mermaid`, Charon's engine) when it opens its first
+document. Markdown and Mermaid never load Charon.
+
+Every window's document is also its files, `/mnt/xenith/<id>/doc/`:
+
+```
+ctl	read: kind, class, name, shown, sheets, sheet, scale, fit,
+	view (x y w h), screen (where the view is), column (w h);
+	write: sheet n, scale n, fit [page], scroll dy, render, text,
+	or any of the view's or the document's commands
+text	the document's text
+links	one link a line: sheet x0 y0 x1 y1 url
+find	write a string; read where it was found: sheet x0 y0 x1 y1
+```
+
+```sh
+echo 'image /path/to/diagram.png' > /mnt/xenith/1/ctl	# show a file as a document
+cat /mnt/xenith/1/image		# its name and size: /path/to/diagram.png 800 600
+echo 'scale 200' > /mnt/xenith/1/doc/ctl
+echo clearimage > /mnt/xenith/1/ctl	# back to text
+```
+
+### Opening host files
+
+`tools/xen file ...` runs Xenith by itself, dark and filling the emu
+window, on files from the host; Exit ends the instance. See [XEN.md](XEN.md).
+
+### When Xenith goes wrong
+
+What has not been saved is kept when Xenith goes wrong: an exception in
+the mouse, keyboard or wait task or in a 9P request (Xenith goes on), an
+internal error anywhere else, or an exit nobody asked for (Xenith ends).
+Every window is written to `$home/xenith.rescue` as Dump writes them,
+with an unnamed window's text (named `unnamed.N` in the directory Xenith
+started in) and typing not yet committed; `+Errors` and the console say
+so. `Load $home/xenith.rescue`, or `xenith -l $home/xenith.rescue`,
+brings the windows back with their changes. Dump's own file,
+`$home/xenith.dump`, is left alone.
 
 ### Event Streams
 
@@ -174,7 +330,7 @@ echo 'replaceall oldvar	newvar' > /edit/1/ctl    # tab-separated
 | Aspect | Acme | Xenith |
 |--------|------|--------|
 | Colors | Hardcoded pastels | 20+ customizable + dark theme |
-| Images | Text only | PNG/PPM display |
+| Images | Text only | Inline image display (PNG, JPEG, GIF, WebP, AVIF, SVG, ...) |
 | Per-window UI | Standard | Custom color schemes |
 | AI focus | Generic editor | Agent-friendly design |
 | Code size | ~16K lines | ~21K lines |
@@ -187,7 +343,7 @@ echo 'replaceall oldvar	newvar' > /edit/1/ctl    # tab-separated
 | `fsys.b` | 9P filesystem interface |
 | `exec.b` | Command execution |
 | `asyncio.b` | Async I/O primitives |
-| `imgload.b` | Image loading (PNG/PPM) |
+| `appl/lib/imgload.b` | Image loading (shared library; formats listed above) |
 | `wind.b` | Window management |
 | `text.b` | Text editing |
 
@@ -199,11 +355,11 @@ echo 'replaceall oldvar	newvar' > /edit/1/ctl    # tab-separated
 # From InferNode
 xenith
 
-# With dark theme
-xenith -t catppuccin
+# With the dark theme
+xenith -t xenith
 
-# With specific font
-xenith -f /fonts/pelm/unicode.9.font
+# With a specific font
+xenith -f /fonts/combined/serif.14.font
 ```
 
 ### Agent Interaction Example
@@ -272,7 +428,7 @@ Xenith inherits Acme's interaction model. These resources explain the fundamenta
 
 - `appl/xenith/DESIGN.md` - Detailed design rationale
 - `appl/xenith/IDEAS.md` - Feature roadmap
-- `appl/xenith/IMAGE.md` - Image implementation details
+- [xenith-documents.md](xenith-documents.md) - Documents: the one view, the engines, the namespace
 
 ## License
 

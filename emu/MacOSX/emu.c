@@ -77,6 +77,7 @@ extern void tkmodinit(void);
 extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
+extern void i420modinit(void);
 void modinit(void){
 	sysmodinit();
 	drawmodinit();
@@ -84,6 +85,7 @@ void modinit(void){
 	mathmodinit();
 	srvmodinit();
 	keyringmodinit();
+	i420modinit();
 }
 
 	int	dontcompile = 0;

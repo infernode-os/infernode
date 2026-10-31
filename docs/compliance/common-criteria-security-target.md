@@ -188,7 +188,7 @@ violate it), not a runtime check that could be bypassed or misconfigured.
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
 | **FDP_ACC.2** Complete access control | The namespace SFP covers all subjects (processes) and objects (named resources); all operations are mediated. | Every resource is a file reached only by walking the process's mount table via `namec()`; a name not bound into the namespace cannot be expressed. Single mediation path. | `emu/port/chan.c` (`namec`, `walk`, `findmount`); `SP800-207-zero-trust.md` | By construction |
-| **FDP_ACF.1** Security-attribute-based access control | Access decided by the subject's namespace bindings and per-mount flags; default-deny. | Mount table + bind/mount flags (`MREPL`/`MBEFORE`/`MCREATE`); `NODEVS` restricts the device namespace. | `emu/port/chan.c` (`cmount`); `Pgrp.nodevs` in `emu/port/pgrp.c` | By construction |
+| **FDP_ACF.1** Security-attribute-based access control | Access decided by the subject's namespace bindings and per-mount flags; default-deny. | Mount table + bind/mount flags (`MREPL`/`MBEFORE`/`MCREATE`/`MREADONLY`); `NODEVS` restricts the device namespace. | `emu/port/chan.c` (`cmount`); `Pgrp.nodevs` in `emu/port/pgrp.c` | By construction |
 | **FDP_IFC.1** Subset information-flow control | Flows between namespaces are controlled: a mount in one process's namespace is not visible to another unless independently bound. | `pgrpcpy()` deep-copies the mount table; post-copy mutations are independent. | `emu/port/pgrp.c:74` (`pgrpcpy`) | **Formally verified** (§8.1) |
 | **FDP_IFF.1** Simple security attributes (isolation) | The Namespace Isolation Theorem: a channel appearing at a path in both parent and child was either present at copy time or independently bound by both. | Namespace Isolation Theorem, proved via history variables. | `formal-verification/tla+/IsolationProof.tla`; `formal-verification/spin/namespace_isolation.pml`; `formal-verification/cbmc/harness_pgrpcpy.c` | **Formally verified** (TLA+/SPIN/CBMC) |
 | **FDP_RIP.1** Residual information protection | Freed key material and buffers are not exposed to later subjects. | `libsec/securezero.c` zeroization of key material; Dis VM garbage-collected, bounds-checked memory (no manual reuse of freed application memory). | `libsec/securezero.c`; `libinterp/` | Configurable + by construction |
@@ -234,7 +234,7 @@ before checkpoint and factotum-held signing-key hardening are tracked, not solve
 | SFR | Element (paraphrased) | InferNode realisation | Evidence | Basis |
 |-----|-----------------------|------------------------|----------|-------|
 | **FCS_CKM.1** Key generation | Generate keys for approved algorithms. | ML-KEM-768/1024 (FIPS 203), ML-DSA-65/87 (FIPS 204), SLH-DSA-SHAKE-192s/256s (FIPS 205), plus classical (AES/ECDH/ed25519). | `libsec/mlkem.c`, `libsec/mldsa.c`, `libsec/slhdsa.c`; `CNSA-2.0.md` | Approved algorithms; **module not CMVP/CAVP validated** |
-| **FCS_CKM.2** Key establishment | Establish shared keys. | **Hybrid** X25519+ML-KEM-768 (TLS 1.3) and DH+ML-KEM (native STS), combined via SHA3-512; CNSA-strict offers SecP384r1MLKEM1024. | `appl/lib/crypt/tls.b` (`GROUP_SECP384R1MLKEM1024 = 0x11ED`); `CNSA-2.0.md` §3.3, §4 | Configurable (default classical; CNSA mode) |
+| **FCS_CKM.2** Key establishment | Establish shared keys. | **Hybrid** X25519+ML-KEM-768 (TLS 1.3) and DH+ML-KEM (native STS), combined via SHA3-512; CNSA-strict offers SecP384r1MLKEM1024. | `appl/lib/crypt/tls.b` (`GROUP_X25519MLKEM768 = 0x11EC`, `GROUP_SECP384R1MLKEM1024 = 0x11ED`); `CNSA-2.0.md` §3.3, §4 | Configurable (default hybrid TLS with classical fallback; CNSA modes) |
 | **FCS_CKM.4** Key destruction | Zeroize key material after use. | `securezero`. | `libsec/securezero.c` | By construction (call-sites: needs coverage confirmation) |
 | **FCS_COP.1(SYM)** Symmetric operation | AEAD symmetric encryption. | AES-256-GCM; ChaCha20-Poly1305. | `libsec/aesgcm.c`, `libsec/ccpoly.c` | Approved algorithms |
 | **FCS_COP.1(HASH)** Hashing | SHA-2 / SHA-3. | SHA-384/512 (`sha2.c`); SHA-3/SHAKE (`sha3.c`) — **NIST FIPS 202 known-answer vectors present**. | `libsec/sha2.c`; `libsec/sha3.c`; `tests/sha3_test.b` (22 KAT digests) | **KAT-tested (SHA-3)** |
@@ -340,12 +340,14 @@ reference-monitor property claimed in `SP800-53-controls.md`.
 ### 8.4 Honest residuals (do not overlook)
 
 - **Three use-after-free race conditions** in the `emu` host-threading layer (`kchdir` dot
-  race `sysfile.c:153-154`; FORKNS pgrp swap `inferno.c:873`; `namec` slash/dot read
-  `chan.c:1022,1057`) were **found by the SPIN race model** and are documented in
-  `formal-verification/TODO-RACE-CONDITIONS.md`. They are mitigated by the Dis VM's
-  cooperative scheduling (one Dis thread at a time) but are genuine at the multi-threaded host
-  layer; the suggested lock fix is recorded. An evaluator must treat these as open TSF-layer
-  findings, not resolved.
+  race, now `sysfile.c:153-156`; FORKNS pgrp swap, now `inferno.c:895`; `namec` slash/dot
+  read, now `chan.c:1260,1297`) were **found by the SPIN race model** and are documented in
+  `docs/history/formal-verification/TODO-RACE-CONDITIONS.md`. Commit 89db5178 (2026-05-14)
+  fixed `kchdir` and `namec` by taking the `pg->ns` lock. Its VM-lock re-acquire around the
+  NEWNS/FORKNS swap was removed in fa93471d because it deadlocked, on the reasoning that the
+  `pg->ns` rwlock covers the race (`docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`);
+  the FORKNS pointer swap itself takes no lock. An evaluator should re-check that reasoning
+  rather than treat the FORKNS finding as resolved.
 - **Bounded verification.** TLA+/TLC and CBMC explore finite state spaces; unbounded proofs
   would require interactive theorem proving (Isabelle/HOL). SPIN models abstract lock
   semantics. See `formal-verification/METHODOLOGY.md` §10 "Threats to Validity".

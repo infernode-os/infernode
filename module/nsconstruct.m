@@ -59,9 +59,9 @@ NsConstruct: module {
 	init: fn();
 
 	# Restrict a directory to only the allowed entries.
-	# Creates shadow dir, binds allowed items into it, replaces target with MREPL.
-	# writable=1 adds Sys->MCREATE to the final and inner binds. Use it only
-	# for explicitly writable views such as /tmp and proposal endpoints.
+	# Creates a shadow dir whose entries and outer view are MREADONLY, or uses
+	# MCREATE when writable=1. Service allowlists with writable protocol files
+	# use a separate internal filtering primitive.
 	# Items not in allowed list become invisible after the bind-replace.
 	# Returns nil on success, error string on failure.
 	restrictdir: fn(target: string, allowed: list of string, writable: int): string;
@@ -71,10 +71,17 @@ NsConstruct: module {
 	# Returns nil on success, error string on failure
 	restrictns: fn(caps: ref Capabilities): string;
 
-	# Emit namespace manifest for the UI to display.
-	# Writes to mpath — one entry per line.
-	# Must be called AFTER restrictns() from the restricted namespace.
-	emitmanifest: fn(caps: ref Capabilities, mpath: string);
+	# Apply the model-facing tool policy. This is the same restriction as
+	# restrictns, with trusted UI metadata hidden before /tmp is sealed so no
+	# later shadow construction can recreate the private backing tree.
+	restricttoolns: fn(caps: ref Capabilities): string;
+
+	# Emit namespace manifest for the UI to display, one entry per line.
+	# Called AFTER restrictns() from the restricted namespace, on a file
+	# made by openmanifest BEFORE it: an agent granted /tmp has a /tmp of
+	# its own, and a manifest made there is not where the UI reads it.
+	openmanifest: fn(mpath: string): ref Sys->FD;
+	emitmanifest: fn(caps: ref Capabilities, fd: ref Sys->FD);
 
 	# Verify namespace matches expected security policy
 	# Reads /prog/$pid/ns and checks for dangerous paths
@@ -96,4 +103,9 @@ NsConstruct: module {
 	# Clean up shadow directories for the current process.
 	# Call on agent exit to reclaim /tmp/.veltro-ns/shadow/{pid}-* entries.
 	cleanup: fn();
+
+	# An overlay (/tmp/veltro/cow/<actid>-<key>) made in an earlier start
+	# of the emulator, with changes in it, renamed kept-<start>-<name>:
+	# returns its new path, or "" when it is this start's or empty.
+	setasidestale: fn(overlaydir: string): string;
 };

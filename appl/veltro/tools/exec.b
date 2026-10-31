@@ -45,9 +45,10 @@ ToolExec: module {
 };
 
 # Limits
-DEFAULT_TIMEOUT: con 5000;   # 5 seconds
-MAX_TIMEOUT: con 30000;      # 30 seconds
-MAX_OUTPUT: con 16384;       # 16KB max output
+DEFAULT_TIMEOUT: con 30000;  # 30 seconds; 5 cut off a build half way
+MAX_TIMEOUT: con 120000;     # 120 seconds, under the harness's bound on a call
+MAX_OUTPUT: con 16384;       # 16KB max output kept
+HEAD_OUTPUT: con 4096;       # of it, from the start; the rest is the end
 
 init(): string
 {
@@ -70,18 +71,10 @@ name(): string
 doc(): string
 {
 	return "Exec - Run a program in the Inferno namespace\n\n" +
-		"For GUI/WM programs, Exec launches them in the presentation zone\n" +
-		"automatically. All three forms work (no wm/wm wrapper, no & suffix):\n" +
-		"  Exec wm/clock            (short name)\n" +
-		"  Exec /dis/wm/clock       (absolute path, .dis optional)\n" +
-		"  Exec /dis/wm/clock.dis   (full path)\n\n" +
-		"Available draw-based GUI apps (these work):\n" +
-		"  clock, bounce, coffee, colors, date, view, rt, lens\n\n" +
-		"IMPORTANT GUI launch rules:\n" +
-		"  - Do NOT wrap with 'wm/wm' (wrong: 'exec wm/wm wm/clock')\n" +
-		"  - Do NOT add '&' — background launch is handled automatically\n\n" +
-		"Apps that do NOT work (require Tk, which is not available):\n" +
-		"  task, edit, about, tetris, sh, ftree — do not attempt these\n\n" +
+		"GUI/WM programs (wm/clock, /dis/wm/clock, /dis/wm/clock.dis) are\n" +
+		"not run by Exec: use the launch tool, which puts them in the\n" +
+		"presentation zone (e.g. 'launch clock'). Exec refuses them with an\n" +
+		"error naming the launch call to make.\n\n" +
 		"For non-GUI programs:\n" +
 		"  Exec /dis/bind.dis -a /mnt/foo /n/bar\n" +
 		"  Exec /dis/veltro/tools/someprogram.dis args\n\n" +
@@ -93,19 +86,22 @@ doc(): string
 		"IMPORTANT: Inferno shell syntax, not POSIX:\n" +
 		"  - No &&, ||; use ; to sequence\n" +
 		"  - Single quotes for strings\n\n" +
-		"Returns program output (CLI), or 'launched ... in presentation zone' (GUI).\n" +
-		"Default timeout: 5 seconds (max 30s).";
+		"Returns program output: all of it, or, when it is long, its start\n" +
+		"and its end (where errors are), and how much was left out.\n" +
+		"Default timeout: 30 seconds; -t <seconds> before the command sets\n" +
+		"another (at most 120).";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"exec\"," +
-		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax (no && or ||; sequence with ;). For GUI/wm apps, do NOT add & or wrap in wm/wm \\u2014 launch handles the presentation zone.\"," +
+		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax (no && or ||; sequence with ;). GUI/wm apps are not run here \\u2014 use the launch tool for the presentation zone.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. 'wm/clock' or '/dis/bind.dis -a /mnt/foo /n/bar'.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. '/dis/bind.dis -a /mnt/foo /n/bar'.\"}," +
+				"\"timeout\":{\"type\":\"string\",\"description\":\"Seconds to let it run. Optional; default 30, at most 120.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -129,6 +125,25 @@ exec(args: string): string
 	# Strip leading/trailing whitespace
 	while(len cmd > 0 && (cmd[0] == ' ' || cmd[0] == '\t'))
 		cmd = cmd[1:];
+
+	# -t <seconds>: how long it may run
+	timeoutms := DEFAULT_TIMEOUT;
+	if(len cmd > 3 && cmd[0:3] == "-t ") {
+		i := 3;
+		while(i < len cmd && cmd[i] == ' ')
+			i++;
+		secs := 0;
+		for(; i < len cmd && cmd[i] >= '0' && cmd[i] <= '9'; i++)
+			secs = secs * 10 + cmd[i] - '0';
+		if(secs > 0) {
+			timeoutms = secs * 1000;
+			if(secs > MAX_TIMEOUT / 1000)
+				timeoutms = MAX_TIMEOUT;
+			while(i < len cmd && (cmd[i] == ' ' || cmd[i] == '\t'))
+				i++;
+			cmd = cmd[i:];
+		}
+	}
 	while(len cmd > 0 && (cmd[len cmd - 1] == ' ' || cmd[len cmd - 1] == '\t' || cmd[len cmd - 1] == '\n'))
 		cmd = cmd[0:len cmd - 1];
 
@@ -158,12 +173,12 @@ exec(args: string): string
 	# Inferno's sh uses single quotes for literal strings, not double quotes
 	cmd = convertquotes(cmd);
 
-	# For GUI programs in /dis/wm/, route to the presentation zone.
+	# GUI programs in /dis/wm/ are refused with a pointer to launch.
 	# Detects /dis/wm/ programs three ways:
 	#   1. Full .dis path:  exec /dis/wm/clock.dis
 	#   2. Absolute no-ext: exec /dis/wm/clock    → tries /dis/wm/clock.dis
 	#   3. Short name:      exec wm/clock          → tries /dis/wm/clock.dis
-	# Only /dis/wm/* programs are routed to pres zone; CLI tools fall through.
+	# Only /dis/wm/* programs are refused; CLI tools fall through.
 	if(len cmd > 0) {
 		firstword := cmd;
 		for(i := 0; i < len firstword; i++) {
@@ -196,19 +211,16 @@ exec(args: string): string
 		   dispath[len dispath - 10:] == "xenith.dis") {
 			return "error: use 'launch xenith' — exec cannot target the presentation zone for xenith";
 		}
-		# Only route /dis/wm/* apps to presentation zone (wmclient apps)
+		# /dis/wm/* apps are wmclient GUI programs: they belong in the
+		# presentation zone, which only the launch tool reaches (through
+		# /mnt/ui's presentation/ctl).  exec has no display to give them.
+		# It used to drop the path in /n/pres-launch or
+		# /tmp/veltro/pres-launch for lucifer to poll, but nothing has read
+		# either since lucifer's unified tab model (48174e2fb), so exec
+		# reported a launch that never happened.
 		if(len dispath > 8 && dispath[0:8] == "/dis/wm/") {
-			# Try /n/pres-launch (file2chan, if lucifer exported it).
-			# Fall back to /tmp/veltro/pres-launch which lucifer polls every 200ms.
-			pfd := sys->open("/n/pres-launch", Sys->OWRITE);
-			if(pfd == nil)
-				pfd = sys->create("/tmp/veltro/pres-launch", Sys->OWRITE, 8r644);
-			if(pfd != nil) {
-				data := array of byte dispath;
-				sys->write(pfd, data, len data);
-				pfd = nil;
-				return "launched " + dispath + " in presentation zone";
-			}
+			appname := dispath[8:len dispath - 4];
+			return "error: use 'launch " + appname + "' — exec cannot open GUI apps; launch puts them in the presentation zone";
 		}
 	}
 
@@ -235,11 +247,15 @@ exec(args: string): string
 	done := 0;
 
 	timeout := chan[1] of int;
-	spawn timer(timeout, DEFAULT_TIMEOUT);
+	spawn timer(timeout, timeoutms);
 
 	reader := chan[1] of string;
 	spawn readoutput(fds[0], reader);
 
+	# A long output is kept as its start and its end, and the command
+	# runs to its finish: cut off at the cap, a build or a test run was
+	# killed half way, and its errors, at the end, were lost.
+	omitted := 0;
 	while(!done) {
 		alt {
 		s := <-reader =>
@@ -247,16 +263,26 @@ exec(args: string): string
 				done = 1;
 			} else {
 				output += s;
-				if(len output > MAX_OUTPUT) {
-					output = output[0:MAX_OUTPUT] + "\n... (output truncated)";
-					done = 1;
+				if(len output > 2 * MAX_OUTPUT) {
+					drop := len output - (MAX_OUTPUT - HEAD_OUTPUT);
+					omitted += drop - HEAD_OUTPUT;
+					output = output[0:HEAD_OUTPUT] + output[drop:];
 				}
 			}
 		<-timeout =>
-			output += "\n... (timeout after 5 seconds)";
+			output += sys->sprint("\n... (timeout after %d seconds)", timeoutms / 1000);
 			done = 1;
 		}
 	}
+	if(len output > MAX_OUTPUT) {
+		drop := len output - (MAX_OUTPUT - HEAD_OUTPUT);
+		omitted += drop - HEAD_OUTPUT;
+		output = output[0:HEAD_OUTPUT] + output[drop:];
+	}
+	if(omitted > 0)
+		output = output[0:HEAD_OUTPUT] +
+			sys->sprint("\n... [%d bytes of output left out] ...\n", omitted) +
+			output[HEAD_OUTPUT:];
 
 	# Close read fd to unblock readoutput goroutine if still blocked on read
 	fds[0] = nil;
@@ -266,14 +292,15 @@ exec(args: string): string
 	# leaving it alive orphans a process outside this tool's accounting.
 	# Two abandoned limbo.dis compiles left this way are what faulted the
 	# emulator in the escape campaign (INFR-421).  Kill the worker's whole
-	# process group so nothing survives the return; a killed group leader
+	# descendant process tree so a command cannot escape cleanup with NEWPGRP;
+	# a killed group leader
 	# will not report back, so do not block waiting for it.
 	err := "";
 	alt {
 	e := <-result =>
 		err = e;
 	* =>
-		killgrp(workerpid);
+		killtree(workerpid);
 		output += "\n... (command still running at return; process group terminated)";
 	}
 
@@ -326,17 +353,17 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan 
 	result <-= err;
 }
 
-# Kill a worker's whole process group.  The exec tool is exempt from the
+# Kill a worker's descendant process-group tree.  The exec tool is exempt from the
 # NODEVS restriction that hides /prog from other tools, so it can write here;
 # best-effort, so if /prog is absent the command keeps the pre-fix behaviour.
-killgrp(pid: int)
+killtree(pid: int)
 {
 	if(pid <= 0)
 		return;
 	ctl := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(ctl == nil)
 		return;
-	msg := array of byte "killgrp";
+	msg := array of byte "killtree";
 	sys->write(ctl, msg, len msg);
 }
 

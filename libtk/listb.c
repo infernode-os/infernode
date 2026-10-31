@@ -62,6 +62,8 @@ TkEbind b[] =
 	{TkButton1P,		"%W tkListbButton1P %y"},
 	{TkButton1R,	"%W tkListbButton1R"},
 	{TkButton1P|TkMotion,	"%W tkListbButton1MP %y"},
+	{TkButton4P,	"%W yview scroll -3 units"},	/* the wheel: three lines a tick */
+	{TkButton5P,	"%W yview scroll 3 units"},
 	{TkMotion,		""},
 	{TkKey,	"%W tkListbKey 0x%K"},
 };

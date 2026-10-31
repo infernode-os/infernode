@@ -105,17 +105,54 @@ hasprefix(s, pfx: string): int
 # lucibridge->needsapproval
 #
 # Mirrors the implementation at /appl/cmd/lucibridge.b:396.
+shellword(args, want: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	for(; toks != nil; toks = tl toks)
+		if(hd toks == want)
+			return 1;
+	return 0;
+}
+
+recursiveRmOutsideTmp(args: string): int
+{
+	(nil, toks) := sys->tokenize(args, " \t\n;|&{}()");
+	sawrm := 0;
+	recursive := 0;
+	tmptarget := 0;
+	outsidetarget := 0;
+	for(; toks != nil; toks = tl toks) {
+		tok := hd toks;
+		if(tok == "rm") {
+			sawrm = 1;
+			continue;
+		}
+		if(!sawrm)
+			continue;
+		if(len tok > 1 && tok[0] == '-') {
+			if(contains(tok[1:], "r"))
+				recursive = 1;
+			continue;
+		}
+		if(len tok > 0 && tok[0] == '/') {
+			if(tok == "/tmp" || hasprefix(tok, "/tmp/"))
+				tmptarget = 1;
+			else
+				outsidetarget = 1;
+		}
+	}
+	return sawrm && recursive && (outsidetarget || !tmptarget);
+}
+
 needsapproval(toolname, args: string): int
 {
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
 		return 0;
 	if(toolname == "exec") {
-		if(contains(args, "rm") && contains(args, "-r")) {
-			if(!hasprefix(args, "rm") || !contains(args, "/tmp"))
-				return 1;
-		}
-		if(contains(args, "bind ") || contains(args, "mount ") ||
-		   contains(args, "unmount "))
+		if(recursiveRmOutsideTmp(args))
+			return 1;
+		if(shellword(args, "bind") || shellword(args, "mount") ||
+		   shellword(args, "unmount"))
 			return 1;
 	}
 	if(toolname == "write" || toolname == "edit") {
@@ -137,6 +174,25 @@ firstlines(s: string, n: int): string
 			count++;
 	}
 	return out;
+}
+
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
+testApprovalAnswer(t: ref T)
+{
+	t.assertseq(approvalanswer("Allow"), "allow", "explicit Allow grants");
+	t.assertseq(approvalanswer("Deny"), "deny", "explicit Deny refuses");
+	t.assertseq(approvalanswer("allow"), "deny", "case variants do not grant");
+	t.assertseq(approvalanswer("yes"), "deny", "affirmative prose does not grant");
+	t.assertseq(approvalanswer("what will that do?"), "deny", "user question does not grant");
+	t.assertseq(approvalanswer("task 17 complete"), "deny", "task event does not grant");
+	t.assertseq(approvalanswer("message 17 delivered"), "deny", "message event does not grant");
+	t.assertseq(approvalanswer(""), "deny", "empty input does not grant");
 }
 
 # ============================================================================
@@ -241,6 +297,12 @@ testExecOrdinaryCommandsAllowed(t: ref T)
 	t.asserteq(needsapproval("exec", "cat /tmp/x"), 0, "cat ok");
 	t.asserteq(needsapproval("exec", "echo hello"), 0, "echo ok");
 	t.asserteq(needsapproval("exec", "wc -l /tmp/file"), 0, "wc ok");
+	t.asserteq(needsapproval("exec", "/tmp/veltro/probe-sdk/dis/limbo.dis -I/tmp/veltro/probe-sdk/module -o /tmp/veltro/probe-sdk/9p-delegation-race/malformed9p.dis /tmp/veltro/probe-sdk/9p-delegation-race/malformed9p.b"), 0,
+		"malformed9p compile is not mistaken for rm -r");
+	t.asserteq(needsapproval("exec", "echo reformat -report /tmp/x"), 0,
+		"rm and -r substrings are not shell words");
+	t.asserteq(needsapproval("exec", "rm -rf /tmp/scratch /home/user"), 1,
+		"a /tmp target does not hide an outside recursive target");
 }
 
 # ============================================================================
@@ -420,6 +482,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("OtherToolsNeverApproval", testOtherToolsNeverApproval);
 
 	# firstlines
+	run("ApprovalAnswer", testApprovalAnswer);
 	run("FirstlinesShorterThanBuffer", testFirstlinesShorterThanBuffer);
 	run("FirstlinesExactN", testFirstlinesExactN);
 	run("FirstlinesTrunc", testFirstlinesTrunc);

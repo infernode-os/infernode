@@ -8,6 +8,8 @@
 #   2. both nodes CNSA, ed25519 signer     -> ML-KEM-1024 handshake succeeds
 #   3. both nodes CNSA, ML-DSA-87 signer   -> ML-KEM-1024 + CNSA signer succeeds
 #   4. mixed 1024 listener / 768 dialer    -> handshake FAILS (no silent downgrade)
+#   5. mixed 768 listener / 1024 dialer    -> handshake FAILS
+# and a failing pair names the side in CNSA mode.
 #
 # Requires a built emu and dis/tests/authnode.dis
 #   (cd tests && mk install -- never hand-roll a limbo -o path).
@@ -138,7 +140,8 @@ make_signer "$SIGNER_ML" mldsa87
 pair "both-default-768-ed25519"   plain plain "$SIGNER_ED" OK
 pair "both-cnsa-1024-ed25519"     cnsa  cnsa  "$SIGNER_ED" OK
 pair "both-cnsa-1024-mldsa87"     cnsa  cnsa  "$SIGNER_ML" OK
-pair "mixed-1024-vs-768-mldsa87"  cnsa  plain "$SIGNER_ML" FAIL "bad ml-kem public key length"
+pair "mixed-1024-vs-768-mldsa87"  cnsa  plain "$SIGNER_ML" FAIL "the peer is in CNSA mode \\(ML-KEM-1024\\), this node is not"
+pair "mixed-768-vs-1024-ed25519"   plain cnsa  "$SIGNER_ED" FAIL "this node is in CNSA mode \\(ML-KEM-1024\\), the peer is not"
 
 echo "----"
 if [ "$fails" -eq 0 ]; then

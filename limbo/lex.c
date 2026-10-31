@@ -789,24 +789,33 @@ done:
 int
 escchar(void)
 {
-	char buf[4+1];
-	int c, i;
+	char buf[8+1];
+	int c, i, n, u;
+	ulong v;
 
 	c = getrune();
 	if(c == Beof)
 		return Beof;
-	if(c == 'u'){
-		for(i = 0; i < 4; i++){
+	if(c == 'u' || c == 'U'){
+		/* \uXXXX, or \UXXXXXXXX for a rune beyond the BMP */
+		u = c;
+		n = u == 'u' ? 4 : 8;
+		for(i = 0; i < n; i++){
 			c = getrune();
 			if(c == Beof || !(cmap(c) & (Mdigit|Mhex))){
-				yyerror("malformed \\u escape sequence");
+				yyerror("malformed \\%c escape sequence", u);
 				ungetrune();
 				break;
 			}
 			buf[i] = c;
 		}
 		buf[i] = 0;
-		return strtoul(buf, 0, 16);
+		v = strtoul(buf, 0, 16);
+		if(v > Runemax){
+			yyerror("\\%c%s is beyond the largest rune, \\U%.8ux", u, buf, Runemax);
+			v = Runeerror;
+		}
+		return v;
 	}
 	if(c < 256 && (i = escmap[c]) >= 0)
 		return i;

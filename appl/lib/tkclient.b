@@ -45,21 +45,40 @@ makedrawcontext(): ref Draw->Context
 	return wmlib->makedrawcontext();
 }
 
+hasopt(config, opt: string): int
+{
+	for((nil, l) := sys->tokenize(config, " \t"); l != nil; l = tl l)
+		if(hd l == opt)
+			return 1;
+	return 0;
+}
+
 toplevel(ctxt: ref Draw->Context, topconfig: string, title: string, buts: int): (ref Tk->Toplevel, chan of string)
 {
 	wm := wmlib->connect(ctxt);
 	opts := "";
-	if((buts & Plain) == 0)
-		opts = "-borderwidth 1 -relief raised ";
+	framed := (buts & Plain) == 0 && !wmlib->embedded(wm);
+	if(framed)
+		opts = sys->sprint("-borderwidth %d -relief solid ", Wmlib->Border);
 	top := tk->toplevel(wm.ctxt.display, opts+topconfig);
 	if (top == nil) {
 		sys->fprint(sys->fildes(2), "wmlib: window creation failed (top %ux, i %ux)\n", top, top.image);
 		raise "fail:window creation failed";
 	}
 	top.ctxt = wm;
+	# A size asked for is the window's: Tk keeps it only if propagation
+	# is off before anything is packed, and the applications turn it
+	# off after packing theirs, by which time . had shrunk to what they
+	# need.  A window manager that keeps the size a window asks for
+	# (wm/wm) showed them all at that.
+	if(hasopt(topconfig, "-width") || hasopt(topconfig, "-height"))
+		tk->cmd(top, "pack propagate . 0");
 	readscreenrect(top);
 	c := titlebar->new(top, buts);
 	titlebar->settitle(top, title);
+	wmlib->setlabel(wm, title);
+	# A press on the frame is the window manager's (wm/wm's framehit):
+	# it alone knows where the window really is on the screen.
 	return (top, c);
 }
 
@@ -215,6 +234,7 @@ recvimage(top: ref Tk->Toplevel, name, reqid: string)
 
 settitle(top: ref Tk->Toplevel, name: string): string
 {
+	wmlib->setlabel(top.ctxt, name);
 	return titlebar->settitle(top, name);
 }
 

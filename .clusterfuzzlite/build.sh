@@ -13,11 +13,16 @@ $CC $CFLAGS \
     "$SRC/infernode/libinterp/load.c" \
     $LIB_FUZZING_ENGINE
 
-# Seed corpus: existing .dis bytecode files from the runtime tree
+# Seed corpus: real modules, committed, because dis/ is a build product a
+# fresh clone does not have (INFR-438).  corpus/dis is the smallest set of
+# modules from a full build that libFuzzer's -merge=1 kept, cut down to the
+# ones that each add coverage: 47 modules, 303 edges of the parser at the
+# start against 52 from the regression input alone.  Regenerate the same way
+# when the Dis format changes.
 mkdir -p "$OUT/fuzz_dis_parser_seed_corpus"
-find "$SRC/infernode/dis" -name '*.dis' -size -64k | head -50 | while read -r f; do
-    cp "$f" "$OUT/fuzz_dis_parser_seed_corpus/"
-done
+cp "$SRC/infernode/.clusterfuzzlite/corpus/dis/"*.dis "$OUT/fuzz_dis_parser_seed_corpus/"
+# Regression inputs: malformed modules that once crashed the parser.
+cp "$SRC/infernode/.clusterfuzzlite/regress/dis/"*.dis "$OUT/fuzz_dis_parser_seed_corpus/"
 
 # 9P/Styx message parser fuzz target
 $CC $CFLAGS \

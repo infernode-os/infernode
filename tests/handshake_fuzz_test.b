@@ -41,6 +41,7 @@ SRCFILE: con "/tests/handshake_fuzz_test.b";
 
 # server outcome codes
 CLEAN, ACCEPTED, CRASHED: con iota;	# 0 errored cleanly, 1 wrongly succeeded, 2 raised
+Nfuzz: con 9;
 
 passed := 0;
 failed := 0;
@@ -78,9 +79,17 @@ mkauthinfo(signersk: ref Keyring->SK, signerpk: ref Keyring->PK,
 	return ai;
 }
 
-timerproc(c: chan of int, ms: int)
+timerproc(cancel: chan of int, c: chan of int, ms: int)
 {
-	sys->sleep(ms);
+	for(elapsed := 0; elapsed < ms; elapsed += 100){
+		sys->sleep(100);
+		alt {
+		<-cancel =>
+			return;
+		* =>
+			;
+		}
+	}
 	c <-= 1;
 }
 
@@ -100,17 +109,31 @@ serveOnce(ai: ref Keyring->Authinfo, dfd: ref Sys->FD, rc: chan of int)
 	rc <-= outcome;
 }
 
-server(ac: Sys->Connection, ai: ref Keyring->Authinfo, rc: chan of int)
+server(ac: Sys->Connection, ai: ref Keyring->Authinfo, rc: chan of int,
+		pidc, done: chan of int)
 {
-	for(;;){
+	pidc <-= sys->pctl(0, nil);
+	for(i := 0; i < Nfuzz; i++){
 		(lok, nc) := sys->listen(ac);
-		if(lok < 0)
+		if(lok < 0){
+			done <-= 0;
 			return;
+		}
 		dfd := sys->open(nc.dir + "/data", Sys->ORDWR);
-		if(dfd == nil)
+		if(dfd == nil){
+			rc <-= CRASHED;
 			continue;
+		}
 		spawn serveOnce(ai, dfd, rc);
 	}
+	done <-= 1;
+}
+
+killpid(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
 # hostile client: dial, write the malformed stream, drop the connection.
@@ -206,7 +229,10 @@ testFuzz(t: ref T)
 		return;
 	}
 	rc := chan of int;
-	spawn server(ac, srv, rc);
+	pidc := chan[1] of int;
+	done := chan[1] of int;
+	spawn server(ac, srv, rc, pidc, done);
+	spid := <-pidc;
 
 	hangs := 0;
 	accepts := 0;
@@ -219,10 +245,12 @@ testFuzz(t: ref T)
 		total++;
 		spawn attacker(addr, data);
 
-		tmo := chan of int;
-		spawn timerproc(tmo, 15000);
+		tmo := chan[1] of int;
+		cancel := chan[1] of int;
+		spawn timerproc(cancel, tmo, 15000);
 		alt {
 		outcome := <-rc =>
+			cancel <-= 1;
 			case outcome {
 			ACCEPTED =>
 				accepts++;
@@ -238,6 +266,15 @@ testFuzz(t: ref T)
 			t.log(sys->sprint("%s: server hung (no result within timeout)", name));
 		}
 	}
+	if(total != Nfuzz)
+		t.fatal(sys->sprint("fuzzcase table has %d entries, server expects %d", total, Nfuzz));
+	if(<-done == 0)
+		t.fatal("listener exited before accepting the complete fuzz corpus");
+	# Close the announcement and retain an explicit kill as defensive cleanup
+	# if a future edit makes the accept loop non-finite again.
+	if(ac.cfd != nil)
+		sys->fprint(ac.cfd, "hangup");
+	killpid(spid);
 
 	t.asserteq(accepts, 0, "no malformed inbound stream is accepted as a valid handshake");
 	t.asserteq(crashes, 0, "no malformed inbound stream crashes auth->server");

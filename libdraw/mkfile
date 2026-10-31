@@ -25,6 +25,7 @@ OFILES=	alloc.$O\
 	line.$O\
 	mkfont.$O\
 	openfont.$O\
+	path.$O\
 	poly.$O\
 	loadimage.$O\
 #	readcolmap.$O\

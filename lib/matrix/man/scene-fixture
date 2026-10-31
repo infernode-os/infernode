@@ -1,0 +1,23 @@
+NAME
+	scene-fixture (service) - mount a scenefs at its mount point and drive it with scenedemo, a synthetic field survey
+
+INTERFACE
+	service (MatrixService)
+
+READS
+	nothing
+
+WRITES
+	<mount>/log	scene records (docs/scene-design.md §3.2): six rovers
+			mowing lanes, a relay, a base and its radio range,
+			one tick per second of scene time, every 200 ms
+
+DESCRIPTION
+	init() mounts a scenefs at the mount point unless one is already
+	there, so a composition works from the picker with nothing else
+	running.  Rovers out of radio reach are reported at their last
+	known position with stale= set, so viewers draw them dimmed.
+	The mount is the grant: service scene-fixture /mnt/scene.
+
+SEE ALSO
+	wm/scene, scenefs(4), scenedemo(1)

@@ -170,8 +170,18 @@ refresh()
 	if(ndb == nil){
 		ndb2 := Db.open(ndbfile);
 		if(ndb2 == nil){
+			# no site file (lib/ndb/local is made per site, and a
+			# machine booted from a fresh card has none): the
+			# service map the tree ships, the Internet's ports and
+			# Inferno's, so tcp!host!https still means port 443
 			err := sys->sprint("%r");
-			ndb2 = Db.open("/lib/ndb/inferno");	# try to get service map at least
+			ndb2 = Db.open("/lib/ndb/common");
+			if((inf := Db.open("/lib/ndb/inferno")) != nil){
+				if(ndb2 != nil)
+					ndb2 = ndb2.append(inf);
+				else
+					ndb2 = inf;
+			}
 			if(ndb2 == nil)
 				sys->fprint(sys->fildes(2), "cs: warning: can't open %s: %s\n", ndbfile, err);	# continue without it
 		}

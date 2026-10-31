@@ -168,6 +168,7 @@ tkcvsovaldraw(Image *img, TkCitem *i, TkEnv *pe)
 	Image *pen;
 	TkCoval *o;
 	Rectangle d;
+	Path *path;
 	int w, dx, dy;
 
 	USED(pe);
@@ -182,51 +183,27 @@ tkcvsovaldraw(Image *img, TkCitem *i, TkEnv *pe)
 	if(pen == nil && (e->set & (1<<TkCfill)))
 		pen = tkgc(e, TkCfill);
 
-	w = TKF2I(o->width)/2;
-	if(w < 0)
-		return;
-
+	/*
+	 * The ellipse inscribed in d, anti-aliased (fillpath and
+	 * strokepath in draw(2)): its centre is the middle of d, which a
+	 * box of odd size puts between pixels, and its outline is
+	 * centred on it.
+	 */
 	d = canonrect(d);
-	dx = Dx(d)/2;
-	dy = Dy(d)/2;
-	c.x = d.min.x + dx;
-	c.y = d.min.y + dy;
-
-	/* anti-aliased: coverage masks blended like glyphs (see utils.c);
-	 * the old fillellipse/ellipse path drew stepped edges */
-	{
-		Rectangle bb;
-		uchar *cov;
-		int W, H, ow, cx8, cy8;
-
-		ow = 2*w;
-		if(ow <= 0)
-			ow = 1;
-		bb = insetrect(d, -(ow/2 + 1));
-		if(rectclip(&bb, img->clipr) == 0)
-			return;
-		W = Dx(bb);
-		H = Dy(bb);
-		cov = malloc(W*H);
-		if(cov == nil){
-			/* out of memory: legible beats invisible */
-			if(pen != nil)
-				fillellipse(img, c, dx, dy, pen, c);
-			ellipse(img, c, dx, dy, w, tkgc(e, TkCforegnd), c);
-			return;
-		}
-		cx8 = 8*(c.x - bb.min.x);
-		cy8 = 8*(c.y - bb.min.y);
-		if(pen != nil){
-			memset(cov, 0, W*H);
-			tkaacovellipse(cov, W, H, cx8, cy8, 8*dx, 8*dy, 0);
-			tkaacover(img, bb, pen, cov);
-		}
-		memset(cov, 0, W*H);
-		tkaacovellipse(cov, W, H, cx8, cy8, 8*dx + 4*ow, 8*dy + 4*ow, 8*ow);
-		tkaacover(img, bb, tkgc(e, TkCforegnd), cov);
-		free(cov);
-	}
+	c = Pt((d.min.x + d.max.x)*Pathunit/2, (d.min.y + d.max.y)*Pathunit/2);
+	dx = Dx(d)*Pathunit/2;
+	dy = Dy(d)*Pathunit/2;
+	path = allocpath();
+	if(path == nil)
+		return;
+	pathellipse(path, c, dx, dy);
+	if(pen != nil)
+		fillpath(img, path, ~0, pen, d.min);
+	w = TKF2I(o->width);
+	if(w < 1)
+		w = 1;
+	strokepath(img, path, w*Pathunit, Capbutt, Joinround, tkgc(e, TkCforegnd), d.min);
+	freepath(path);
 }
 
 char*

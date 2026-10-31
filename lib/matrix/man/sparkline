@@ -15,7 +15,7 @@ WRITES
 DESCRIPTION
 	The minimal trend strip: a title (last two path components of
 	the mount), the current value as a right-aligned headline, and
-	one auto-scaled aadraw polyline with a dot marking the newest
+	one auto-scaled anti-aliased polyline with a dot marking the newest
 	sample.  No axes, no chrome — compose several in a column for an
 	at-a-glance board.  Reads the same "[ts] v1 [v2 ...]" shape as
 	line-plot but keeps only the final column, so it works unchanged

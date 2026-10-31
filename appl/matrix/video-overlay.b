@@ -38,7 +38,7 @@ include "sys.m";
 
 include "draw.m";
 	drawm: Draw;
-	Display, Font, Image, Point, Rect: import drawm;
+	Display, Font, Image, Path, Point, Rect: import drawm;
 
 include "mpegio.m";
 	mio: Mpegio;
@@ -48,8 +48,6 @@ remap: Remap;
 
 include "keyboard.m";
 
-include "aadraw.m";
-	aad: AAdraw;
 
 # annotations: <visiondir>/boxes, one detection per line, frame coords:
 #   x0 y0 x1 y1 label...
@@ -139,9 +137,6 @@ init(display: ref Display, font: ref Font, mount: string): string
 			visiondir = visiondir[0:vi] + "/vision" + visiondir[vi+6:];
 			break;
 		}
-	aad = load AAdraw AAdraw->PATH;
-	if(aad != nil)
-		aad->init(display);
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	acc := int 16rE8553AFF;
 	if(lucitheme != nil)
@@ -412,23 +407,21 @@ draw(dst: ref Image)
 	sp := Point(ir.min.x - pane.min.x, ir.min.y - pane.min.y);
 	dst.draw(ir, frame, nil, sp);
 
-	# annotations over the live frame: anti-aliased boxes + labels,
-	# frame coords -> pane coords via the same centring offset
-	if(aad != nil)
-		for(bi := 0; bi < len boxes; bi++) {
-			b := boxes[bi];
-			bp := array[] of {
-				Point(offx + b.x0, offy + b.y0),
-				Point(offx + b.x1, offy + b.y0),
-				Point(offx + b.x1, offy + b.y1),
-				Point(offx + b.x0, offy + b.y1),
-				Point(offx + b.x0, offy + b.y0)
-			};
-			aad->polyline(dst, bp, 2, acol);
-			if(b.label != "" && font_g != nil)
-				dst.text(Point(offx + b.x0, offy + b.y0 - font_g.height - 2),
-					acol, (0, 0), font_g, b.label);
-		}
+	# annotations over the live frame: boxes and labels, frame
+	# coords -> pane coords via the same centring offset.  A box is
+	# on pixel corners, so its 2-pixel sides are crisp.
+	for(bi := 0; bi < len boxes; bi++) {
+		b := boxes[bi];
+		x0 := real (offx + b.x0);
+		y0 := real (offy + b.y0);
+		x1 := real (offx + b.x1);
+		y1 := real (offy + b.y1);
+		box := Path.new().moveto(x0, y0).lineto(x1, y0).lineto(x1, y1).lineto(x0, y1).close();
+		dst.strokepath(box, 2.0, Draw->Capbutt, Draw->Joinmiter, acol, (0, 0));
+		if(b.label != "" && font_g != nil)
+			dst.text(Point(offx + b.x0, offy + b.y0 - font_g.height - 2),
+				acol, (0, 0), font_g, b.label);
+	}
 
 	# thin border so the pane reads as a framed feed
 	dst.draw(Rect((r_g.min.x, r_g.min.y), (r_g.max.x, r_g.min.y+1)), bordercol, nil, (0,0));

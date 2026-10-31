@@ -20,6 +20,7 @@ Utils : module {
 	abs : fn(x : int) : int;
 	error : fn(s : string);
 	warning : fn(md : ref Dat->Mntdir, t : string);
+	errorwinforwin : fn(w : ref Windowm->Window) : ref Windowm->Window;
 	debuginit : fn();
 	debug : fn(s : string);
 	memdebug : fn(s : string);

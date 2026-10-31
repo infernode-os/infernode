@@ -285,6 +285,20 @@ readmod(char *path, Module *m, int sync)
 	return nil;
 }
 
+/*
+ * freemod() in load.c calls freejitcode() on 64-bit targets to unmap a
+ * compiled module's JIT text. Only the JIT compilers define it, and this
+ * harness never compiles a module — compile() above is a no-op, so
+ * m->compiled is never set — so the call is unreachable here; the stub
+ * only completes the link.
+ */
+void
+freejitcode(void *p, ulong size)
+{
+	USED(p);
+	USED(size);
+}
+
 int
 LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {

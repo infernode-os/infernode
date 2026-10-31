@@ -8,41 +8,15 @@ include "tk.m";
 	tk: Tk;
 include "titlebar.m";
 
-# Brutalist window chrome (Brimstone palette; tracks lucitheme).
-# The frame is a 1px border that turns to the accent when focused.
-COLOR:    con "#1a1a1aff";	# default/unfocused window frame
-FOCUSED:  con "#e8553aff";	# accent frame on the focused window
-UNFOCUS:  con "#1a1a1aff";	# subdued frame otherwise
-TITLEBG:  con "#0a0a0aff";	# title strip background
-TITLEFG:  con "#ccccccff";	# title text
-
+# There is no title bar.  The window's frame is tkclient's: a solid
+# border in the theme's windowborder (wmlib->Border wide), whose presses
+# tkclient turns into the "size" and "move" requests sent on this
+# module's channel.  What is left here is that channel and the title,
+# kept in an unpacked .Wm_t.title (task lists ask for it, and some apps
+# configure .Wm_t).
 title_cfg := array[] of {
-	"button .Wm_br -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -width 1",
-	"button .Wm_bl -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -width 1",
-	"button .Wm_bb -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -height 1",
-	"button .Wm_bt -relief flat -fg "+COLOR+" -bg "+COLOR+" -activebackground "+COLOR+" -activeforeground "+COLOR+" -highlightcolor "+COLOR+" -height 1",
-	"pack .Wm_br -side right -fill y",
-	"pack .Wm_bl -side left -fill y",
-	"pack .Wm_bb -side bottom -fill x",
-	"pack .Wm_bt -side top -fill x",
-	"bind .Wm_br <Button-1> {send wm_title move %X %Y}",
-	"bind .Wm_bl <Button-1> {send wm_title move %X %Y}",
-	"bind .Wm_bt <Button-1> {send wm_title move %X %Y}",
-	"bind .Wm_bb <Button-1> {send wm_title move %X %Y}",
-	"bind .Wm_br <Button-2> {send wm_title size} -takefocus 0",
-	"bind .Wm_bl <Button-2> {send wm_title size} -takefocus 0",
-	"bind .Wm_bt <Button-2> {send wm_title size} -takefocus 0",
-	"bind .Wm_bb <Button-2> {send wm_title size} -takefocus 0",
-	"bind .Wm_br <Button-3> {send wm_title exit} ",
-	"bind .Wm_bl <Button-3> {send wm_title exit} ",
-	"bind .Wm_bt <Button-3> {send wm_title exit} ",
-	"bind .Wm_bb <Button-3> {send wm_title exit} ",
-	"bind .Wm_br <Double-Button-1> {send wm_title task}",
-	"bind .Wm_bl <Double-Button-1> {send wm_title task}",
-	"bind .Wm_bb <Double-Button-1> {send wm_title task}",
-	"bind .Wm_bt <Double-Button-1> {send wm_title task}",
 	"frame .Wm_t",
-	"label .Wm_t.title -anchor w -bg "+TITLEBG+" -fg "+TITLEFG,
+	"label .Wm_t.title -anchor w",
 };
 
 init()
@@ -78,18 +52,6 @@ settitle(top: ref Tk->Toplevel, t: string): string
 	s := title(top);
 	tk->cmd(top, ".Wm_t.title configure -text '" + t);
 	return s;
-}
-
-setfocus(top: ref Tk->Toplevel, focus: int)
-{
-	color : string;
-	but := array[] of {".Wm_br", ".Wm_bl", ".Wm_bt", ".Wm_bb"};
-	if(focus)
-		color = FOCUSED;
-	else
-		color = UNFOCUS;
-	for(i:=0; i < len but; i++)
-		cmd(top, sys->sprint("%s configure  -fg %s -bg %s -activebackground %s -activeforeground %s -highlightcolor %s", but[i], color, color, color, color, color));
 }
 
 sendctl(top: ref Tk->Toplevel, c: string)

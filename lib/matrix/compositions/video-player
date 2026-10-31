@@ -12,7 +12,7 @@
 # Wire up the feed, then load me:
 #     mount {vid9p /video-demo-media/clipC.y4m} /mnt/video
 #     wm/matrix /lib/matrix/compositions/video-player
-# (demo-player.sh is that, self-contained)
+# (tools/demo/demo-player.sh is that, self-contained)
 
 layout vsplit 88 12
 

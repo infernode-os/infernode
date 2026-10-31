@@ -29,7 +29,7 @@ mkdir -p /tmp/veltro/.ns
 luciuisrv &
 sleep 3
 echo 'activity create Main' > /mnt/ui/ctl
-tools9p -v -z 750 -b read,list,find,search,grep task read list find search grep &
+tools9p -v -b read,list,find,search,grep task read list find search grep &
 sleep 5
 rm -f /tmp/task-a /tmp/task-b /tmp/task-c /tmp/task-a.done /tmp/task-b.done /tmp/task-c.done
 
@@ -136,7 +136,7 @@ for label in ConcurrentA ConcurrentB ConcurrentC; do
 done
 for id in 1 2 3; do
 	if ! grep -A10 "^MANIFEST-$id$" "$log" |
-	   grep -q "^path=/tmp/veltro label=Veltro Workspace perm=rw$"; then
+	   grep -q "^path=/tmp/veltro/scratch label=Activity Scratch perm=cow$"; then
 		echo "FAIL: activity $id returned without trusted namespace completion"
 		cat "$log"
 		exit 1

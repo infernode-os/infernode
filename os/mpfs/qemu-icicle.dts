@@ -1,0 +1,195 @@
+/*
+ * The device tree for QEMU's microchip-icicle-kit machine, which QEMU
+ * does not generate itself: it describes what hw/riscv/microchip_pfsoc.c
+ * builds, for OpenSBI (-bios fw_dynamic) and then the kernel.
+ *
+ * The addresses and interrupts are the PolarFire SoC's own, and so the
+ * BeagleV-Fire's. On the board none of this file is used: the Hart
+ * Software Services' boot chain hands the kernel the board's own tree.
+ *
+ * Hart 0 is the E51 monitor core, which has no S-mode and no FPU: it is
+ * described, and disabled, so hart ids match the silicon's and nothing
+ * tries to run the kernel there.
+ */
+
+/dts-v1/;
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	model = "Microchip PolarFire-SoC Icicle Kit (QEMU)";
+	compatible = "microchip,mpfs-icicle-kit", "microchip,mpfs";
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	aliases {
+		serial0 = &mmuart0;
+		serial1 = &mmuart1;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <1000000>;
+
+		cpu0: cpu@0 {
+			compatible = "sifive,e51", "sifive,rocket0", "riscv";
+			device_type = "cpu";
+			reg = <0>;
+			riscv,isa = "rv64imac";
+			status = "disabled";
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+
+		cpu1: cpu@1 {
+			compatible = "sifive,u54-mc", "sifive,rocket0", "riscv";
+			device_type = "cpu";
+			reg = <1>;
+			riscv,isa = "rv64imafdc";
+			mmu-type = "riscv,sv39";
+			status = "okay";
+			cpu1_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+
+		cpu2: cpu@2 {
+			compatible = "sifive,u54-mc", "sifive,rocket0", "riscv";
+			device_type = "cpu";
+			reg = <2>;
+			riscv,isa = "rv64imafdc";
+			mmu-type = "riscv,sv39";
+			status = "okay";
+			cpu2_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+
+		cpu3: cpu@3 {
+			compatible = "sifive,u54-mc", "sifive,rocket0", "riscv";
+			device_type = "cpu";
+			reg = <3>;
+			riscv,isa = "rv64imafdc";
+			mmu-type = "riscv,sv39";
+			status = "okay";
+			cpu3_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+
+		cpu4: cpu@4 {
+			compatible = "sifive,u54-mc", "sifive,rocket0", "riscv";
+			device_type = "cpu";
+			reg = <4>;
+			riscv,isa = "rv64imafdc";
+			mmu-type = "riscv,sv39";
+			status = "okay";
+			cpu4_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x40000000>;
+	};
+
+	/*
+	 * As the BeagleV-Fire's tree has it: a buffer the FPGA fabric
+	 * DMAs into, in the middle of the bank, which the kernel must not
+	 * allocate (../riscv64/main.c, confinit).
+	 */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		fabricbuf0: buffer@88000000 {
+			compatible = "shared-dma-pool";
+			reg = <0x0 0x88000000 0x0 0x2000000>;
+			no-map;
+		};
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		compatible = "simple-bus";
+		ranges;
+
+		clint: clint@2000000 {
+			compatible = "sifive,fu540-c000-clint", "sifive,clint0";
+			reg = <0x0 0x2000000 0x0 0x10000>;
+			interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>,
+					      <&cpu1_intc 3>, <&cpu1_intc 7>,
+					      <&cpu2_intc 3>, <&cpu2_intc 7>,
+					      <&cpu3_intc 3>, <&cpu3_intc 7>,
+					      <&cpu4_intc 3>, <&cpu4_intc 7>;
+		};
+
+		plic: interrupt-controller@c000000 {
+			compatible = "sifive,fu540-c000-plic", "sifive,plic-1.0.0";
+			reg = <0x0 0xc000000 0x0 0x4000000>;
+			#address-cells = <0>;
+			#interrupt-cells = <1>;
+			interrupt-controller;
+			riscv,ndev = <186>;
+			interrupts-extended = <&cpu0_intc 11>,
+					      <&cpu1_intc 11>, <&cpu1_intc 9>,
+					      <&cpu2_intc 11>, <&cpu2_intc 9>,
+					      <&cpu3_intc 11>, <&cpu3_intc 9>,
+					      <&cpu4_intc 11>, <&cpu4_intc 9>;
+		};
+
+		mmuart0: serial@20000000 {
+			compatible = "microchip,mpfs-mmuart", "ns16550a";
+			reg = <0x0 0x20000000 0x0 0x400>;
+			reg-io-width = <4>;
+			reg-shift = <2>;
+			interrupt-parent = <&plic>;
+			interrupts = <90>;
+			clock-frequency = <150000000>;
+			current-speed = <115200>;
+		};
+
+		mmuart1: serial@20100000 {
+			compatible = "microchip,mpfs-mmuart", "ns16550a";
+			reg = <0x0 0x20100000 0x0 0x400>;
+			reg-io-width = <4>;
+			reg-shift = <2>;
+			interrupt-parent = <&plic>;
+			interrupts = <91>;
+			clock-frequency = <150000000>;
+			current-speed = <115200>;
+		};
+
+		mmc: mmc@20008000 {
+			compatible = "microchip,mpfs-sd4hc", "cdns,sd4hc";
+			reg = <0x0 0x20008000 0x0 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <88>;
+		};
+
+		mac0: ethernet@20110000 {
+			compatible = "microchip,mpfs-macb", "cdns,macb";
+			reg = <0x0 0x20110000 0x0 0x2000>;
+			interrupt-parent = <&plic>;
+			interrupts = <64>, <65>, <66>, <67>, <68>, <69>;
+		};
+	};
+};

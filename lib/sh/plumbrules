@@ -1,0 +1,60 @@
+#!/dis/sh.dis
+# plumbrules — the plumber's rules: the user's own, then the defaults
+#
+#	plumbrules start defaults ...	start the plumber
+#	plumbrules load defaults ...	give a running plumber the rules again
+#
+# The user's rules are /usr/<user>/lib/plumbing, the file the plumber
+# reads when it is given none, or, for a user with no home of their own
+# (the desktop's, whose home is the default one), /usr/inferno/lib/plumbing,
+# kept in ~/.infernode/usr/inferno.  They come first, so the first rule that
+# fires is the user's and a default applies only where none of theirs
+# does.  The defaults are the system's: /lib/lucifer/plumbing on the
+# desktop (lib/lucifer/boot.sh), /lib/xen/plumbing for a standalone
+# Xenith (lib/xen/boot.sh).
+#
+# A user file the plumber cannot parse is reported and left out, so a
+# mistake there never leaves the system without plumbing: start falls
+# back to the defaults alone, and load leaves the rules as they were.
+#
+# The plumber's /chan must be bound already (bind -bc '#splumber' /chan).
+load std
+args=$*
+verb=${hd $args}
+defaults=${tl $args}
+if {~ $#defaults 0} {
+	echo 'usage: plumbrules start|load defaults ...' >[1=2]
+	raise 'fail:usage'
+}
+user=`{cat /dev/user}
+mine=/usr/^$user^/lib/plumbing
+if {! ftest -f $mine} {
+	mine=/usr/inferno/lib/plumbing
+}
+rules=$defaults
+if {ftest -f $mine} {
+	rules=($mine $defaults)
+}
+# (an if whose condition fails returns that status: each branch ends
+# on what it did)
+if {~ $verb start} {
+	if {plumber $rules} {
+		echo -n
+	} {
+		echo 'plumbrules: '^$mine^': not used (the error is above); plumbing on the defaults alone' >[1=2]
+		plumber $defaults
+	}
+} {~ $verb load} {
+	# one write: the plumber takes each write to plumb.rules as the
+	# whole rule set (rules are separated by a blank line, so one
+	# between files)
+	if {echo -n "{for f in $rules {cat $f; echo; echo}} > /chan/plumb.rules} {
+		echo -n
+	} {
+		echo 'plumbrules: the rules were not loaded; the plumber keeps those it had' >[1=2]
+		raise 'fail:load'
+	}
+} {
+	echo 'usage: plumbrules start|load defaults ...' >[1=2]
+	raise 'fail:usage'
+}

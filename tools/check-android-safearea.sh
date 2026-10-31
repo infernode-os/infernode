@@ -4,7 +4,9 @@
 # the safe-area inset handling.
 #
 # Background: Android 15 (targetSdk=35) renders activities edge-to-edge
-# by default. Without the manual inset handling we added in INFR-115,
+# by default, and Android 16 (targetSdk=36) makes it mandatory —
+# windowOptOutEdgeToEdgeEnforcement is deprecated and ignored, so there is
+# no longer an escape hatch. Without the manual inset handling from INFR-115,
 # Lucifer's SDLSurface overlaps the status bar (top) and gesture / nav
 # bar (bottom). Some well-meaning future refactor might delete the
 # OnApplyWindowInsetsListener thinking "the system handles this now" —
@@ -39,7 +41,7 @@ grep -q 'setPadding' "$F" || missing="$missing setPadding"
 
 if [ -n "$missing" ]; then
 	echo "::error file=android-app/app/src/main/java/io/infernode/InfernodeSDLActivity.kt::Safe-area handling for the SDL surface is gone — missing:$missing. See INFR-115, docs/HELLAPHONE.md."
-	echo "::error::Android 15 / targetSdk=35 needs this to keep Lucifer inside the safe rectangle. Restoring the SDLActivity defaults will overlap the status bar and gesture / nav bar."
+	echo "::error::Android 15+ / targetSdk=36 needs this to keep Lucifer inside the safe rectangle, and Android 16 removed the opt-out. Restoring the SDLActivity defaults will overlap the status bar and gesture / nav bar."
 	exit 1
 fi
 

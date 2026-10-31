@@ -74,7 +74,7 @@ Two changes, both in this commit:
 2. `lib/lucifer/boot.sh`: drop the `ftest -f /n/llm/new` probe entirely
    and run the whole LLM (re)start in a backgrounded subshell. The
    chat UI is responsible for handling "/n/llm not ready yet"
-   gracefully — see `appl/wm/llmclient.b` and downstream.
+   gracefully — see `appl/lib/llmclient.b` and downstream.
 
 Trace markers were left out of the committed version. Re-add them
 locally if a future regression needs the same diagnostic.

@@ -15,7 +15,6 @@ include "menuhit.m";
 
 # related to us
 disp, screen, color: ref Image;
-brdr: Rect;
 ptrchan: chan of Pointer;
 zoom: int;
 window: ref Image;
@@ -37,7 +36,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	display = ctxt.display;	# assume always works
 	disp = display.image;
 	
-	brdr = Rect((0,0), (300, 300));
 	
 	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
@@ -47,7 +45,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	w.onscreen(nil);
 	menuhit->init(w);
 	window = w.image;
-	screen = display.newimage(brdr, display.image.chans, 0, Draw->Red);
+	# the window it is given, not the one it asked for: in Lucifer's zone
+	# the zone, where a 300x300 image sat in its corner
+	screen = display.newimage(Rect((0, 0), (w.image.r.dx(), w.image.r.dy())), display.image.chans, 0, Draw->Red);
 	if(screen == nil)
 		sys->fprint(sys->fildes(2), "no image memory (screen): %r\n");
 	w.image.draw(w.image.r, screen, nil, (0,0));

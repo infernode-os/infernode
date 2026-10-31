@@ -103,7 +103,7 @@ The `cmount()` optimization of releasing `pg_ns` early (while still holding `mhe
 ```c
 wlock(&pg->ns);
 wlock(&m->lock);
-wunlock(&pg->ns);  // ← Early release (line 458 in chan.c)
+wunlock(&pg->ns);  // ← Early release (line 458 in chan.c then; now ~576)
 // ... continue with m->lock held ...
 wunlock(&m->lock);
 ```

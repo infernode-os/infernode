@@ -50,7 +50,12 @@ Inferno shell implementation.
 LLM backend and remote-mount authentication configuration.
 .TP
 .B /env/cnsamode
-CNSA strict-mode policy.
+CNSA strict-mode policy for authentication between nodes.
+TLS has its own,
+.BR /env/cnsatls ,
+which this command does not check: public servers do not offer the
+CNSA group, so strict TLS is a choice for networks whose servers are all
+your own.
 .TP
 .B /env/SERVE_LLM_AUTH
 Headless LLM export authentication policy, when applicable.

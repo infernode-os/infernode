@@ -5,7 +5,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Image: import draw;
+	Display, Image, Rect: import draw;
 
 include "bufio.m";
 
@@ -554,6 +554,31 @@ init(d: ref Display)
 	}
 }
 
+# A strip of an image converted to RGBA32 at a time, a megabyte or so,
+# not the whole of it: a photograph of 8 million pixels was a 32 MB
+# array, and a page of them fragmented the heap until a script could not
+# get 64 bytes.  The image's width, the strip's rows, and its buffer.
+strip(r: Rect): (int, int, array of byte)
+{
+	dx := r.dx();
+	if(dx <= 0)
+		return (1, 1, array[4] of byte);
+	h := (1<<20) / (dx*4);
+	if(h < 1)
+		h = 1;
+	if(h > r.dy())
+		h = r.dy();
+	if(h < 1)
+		h = 1;
+	return (dx, h, array[h*dx*4] of byte);
+}
+
+writestrip(im: ref Image, y, rows: int, buf: array of byte)
+{
+	if(rows > 0)
+		im.writepixels(Rect((im.r.min.x, im.r.min.y+y), (im.r.max.x, im.r.min.y+y+rows)), buf);
+}
+
 remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, string)
 {
 	if(sys == nil || draw == nil || clamp == nil || rgbvmap == nil)
@@ -567,24 +592,112 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		im := d.newimage(i.r, Draw->RGBA32, 0, Draw->Transparent);
 		if(im == nil)
 			return (nil, "can't allocate RGBA32 image");
-		npix := (i.r.max.x - i.r.min.x) * (i.r.max.y - i.r.min.y);
-		buf := array[npix * 4] of byte;
 		rpic := i.chans[0];
 		gpic := i.chans[1];
 		bpic := i.chans[2];
 		apic := i.chans[3];
-		for(j = 0; j < npix; j++) {
-			# RGBA32 little-endian word layout: shift[CAlpha]=0, shift[CBlue]=8, etc.
-			# Byte order in memory: A=byte[0], B=byte[1], G=byte[2], R=byte[3]
-			# Pre-multiply RGB by alpha so Inferno's alphacalc11 computes correct
-			# Porter-Duff SoverD: dst = R*A/255 + (1-A/255)*dst
-			a := int apic[j];
-			buf[j*4+0] = byte a;
-			buf[j*4+1] = byte (int bpic[j] * a / 255);
-			buf[j*4+2] = byte (int gpic[j] * a / 255);
-			buf[j*4+3] = byte (int rpic[j] * a / 255);
+		(dx, h, buf) := strip(i.r);
+		for(y := 0; y < i.r.dy(); y += h) {
+			(j0, n) := (y*dx, h*dx);
+			if(j0 + n > len apic)
+				n = len apic - j0;
+			for(k := 0; k < n; k++) {
+				j = j0 + k;
+				# RGBA32 little-endian word layout: shift[CAlpha]=0, shift[CBlue]=8, etc.
+				# Byte order in memory: A=byte[0], B=byte[1], G=byte[2], R=byte[3]
+				# Pre-multiply RGB by alpha so Inferno's alphacalc11 computes correct
+				# Porter-Duff SoverD: dst = R*A/255 + (1-A/255)*dst
+				a := int apic[j];
+				buf[k*4+0] = byte a;
+				buf[k*4+1] = byte (int bpic[j] * a / 255);
+				buf[k*4+2] = byte (int gpic[j] * a / 255);
+				buf[k*4+3] = byte (int rpic[j] * a / 255);
+			}
+			writestrip(im, y, n/dx, buf[0:n*4]);
 		}
-		im.writepixels(im.r, buf);
+		return (im, "");
+	}
+
+	# An indexed or grey image with a transparent index (PNG tRNS,
+	# GIF): RGBA32, that index clear, rather than painted black.
+	if(i.transp && i.nchans == 1 && (i.chandesc == RImagefile->CRGB1 && i.cmap != nil || i.chandesc == RImagefile->CY)) {
+		im := d.newimage(i.r, Draw->RGBA32, 0, Draw->Transparent);
+		if(im == nil)
+			return (nil, "can't allocate RGBA32 image");
+		pic := i.chans[0];
+		cm := i.cmap;
+		(dx, h, buf) := strip(i.r);
+		for(y := 0; y < i.r.dy(); y += h) {
+			(j0, n) := (y*dx, h*dx);
+			if(j0 + n > len pic)
+				n = len pic - j0;
+			for(k := 0; k < n; k++) {
+				v := int pic[j0+k];
+				r, g, b: byte;
+				a := byte 255;
+				if(byte v == i.trindex)
+					a = byte 0;	# all zero: clear
+				else if(i.chandesc == RImagefile->CY)
+					r = g = b = byte v;
+				else if(3*v + 2 < len cm) {
+					r = cm[3*v];
+					g = cm[3*v+1];
+					b = cm[3*v+2];
+				}
+				buf[k*4+0] = a;
+				buf[k*4+1] = b;
+				buf[k*4+2] = g;
+				buf[k*4+3] = r;
+			}
+			writestrip(im, y, n/dx, buf[0:n*4]);
+		}
+		return (im, "");
+	}
+
+	# Without dithering asked for, or on a display of more than 8 bits
+	# (any but an 8-bit one), an indexed, true-colour or grey image keeps
+	# its colours (RGBA32, opaque) rather than being mapped to the
+	# 256-colour palette, which loses up to 4 bits a channel and, with
+	# dithering, speckles a photograph: web pages compare images to CSS
+	# colours exactly.
+	if((errdiff == 0 || d.image == nil || d.image.depth > 8) &&
+	   (i.chandesc == RImagefile->CRGB1 && i.cmap != nil && i.nchans == 1 ||
+	   i.chandesc == RImagefile->CRGB && i.nchans == 3 || i.chandesc == RImagefile->CY && i.nchans == 1)) {
+		im := d.newimage(i.r, Draw->RGBA32, 0, Draw->Transparent);
+		if(im == nil)
+			return (nil, "can't allocate RGBA32 image");
+		cm := i.cmap;
+		c0 := i.chans[0];
+		(dx, h, buf) := strip(i.r);
+		for(y := 0; y < i.r.dy(); y += h) {
+			(j0, n) := (y*dx, h*dx);
+			if(j0 + n > len c0)
+				n = len c0 - j0;
+			for(k := 0; k < n; k++) {
+				j = j0 + k;
+				r, g, b: byte;
+				case i.chandesc {
+				RImagefile->CRGB =>
+					r = c0[j];
+					g = i.chans[1][j];
+					b = i.chans[2][j];
+				RImagefile->CY =>
+					r = g = b = c0[j];
+				* =>
+					v := 3 * int c0[j];
+					if(v + 2 < len cm) {
+						r = cm[v];
+						g = cm[v+1];
+						b = cm[v+2];
+					}
+				}
+				buf[k*4+0] = byte 255;
+				buf[k*4+1] = b;
+				buf[k*4+2] = g;
+				buf[k*4+3] = r;
+			}
+			writestrip(im, y, n/dx, buf[0:n*4]);
+		}
 		return (im, "");
 	}
 

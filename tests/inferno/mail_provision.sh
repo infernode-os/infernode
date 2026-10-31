@@ -10,6 +10,10 @@ ndb/cs
 /dis/veltro/msg9p.dis >[2] /dev/null &
 sleep 1
 echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
-/tests/mail_provision_test.dis nogrant
-/tests/mail_provision_test.dis grant
+failed=()
+for mode in nogrant grant {
+	if {! /tests/mail_provision_test.dis $mode} {failed=($failed $mode)}
+}
+unmount /mnt/msg > /dev/null >[2] /dev/null
+if {! ~ $#failed 0} {raise 'fail:mail_provision: '^$"failed}
 echo MAILPROVISION DONE

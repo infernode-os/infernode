@@ -1,0 +1,16 @@
+Test PKI for tests/x509_path_test.b. Generated with openssl (P-256 unless
+noted); valid until 2049 so that every date stays a UTCTime. The roots in
+anchors/ are trust anchors only inside the test's private namespace.
+
+  root        CA (trust anchor)
+  inter       CA, issued by root
+  leaf        test.infernode.invalid, issued by inter
+  notca       CA:false, issued by root;   leaf-notca  issued by notca
+  nosign      CA without keyCertSign;     leaf-nosign issued by nosign
+  inter0      CA pathlen:0 under root;    inter1 CA under inter0;
+              leaf-pathlen issued by inter1 (violates inter0's pathlen)
+  self        self-signed leaf, not an anchor
+  rroot       RSA-2048 root (anchor);     rleaf signed by it with SHA-512
+  eroot       P-384 root (anchor);        eleaf (P-256) signed with SHA-256
+
+generate.sh rebuilds everything; ext.cnf holds the extension profiles.

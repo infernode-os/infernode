@@ -61,6 +61,7 @@ SRCFILE: con "/tests/interop_test.b";
 EXPORTTREE: con "/lib";
 MOUNTPT: con "/mnt";
 XFER: con "/ndb/inferno";
+XFERDIR: con "/ndb";
 
 # line-encryption algorithms (server offers a list, client a single spec) --
 # aes_256_cbc + sha256 is the default mount -k / styxlisten negotiates.
@@ -131,6 +132,23 @@ readpath(path: string): array of byte
 	if(fd == nil)
 		return nil;
 	return readall(fd);
+}
+
+# Number of entries in directory path, or -1 if it cannot be read.
+dirlen(path: string): int
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	n := 0;
+	for(;;){
+		(nd, nil) := sys->dirread(fd);
+		if(nd < 0)
+			return -1;
+		if(nd == 0)
+			return n;
+		n += nd;
+	}
 }
 
 # Build an Authinfo for `name`, certified by the given signer, sharing the
@@ -270,6 +288,15 @@ testInterop(t: ref T, label, signeralg: string, bits, port: int)
 	t.assert(byteseq(got, want), label + ": file bytes round-trip intact over cert-auth + PQC + ssl");
 	t.log(sys->sprint("%s: %d bytes of %s round-tripped over an encrypted 9P channel",
 		label, len got, EXPORTTREE + XFER));
+
+	# and a directory: a Tread on a directory fid through the encrypted
+	# channel is what hung `ls` on a mount -k of serve-llm (INFR-124).
+	nent := dirlen(MOUNTPT + XFERDIR);
+	if(nent < 0){
+		sys->unmount(nil, MOUNTPT);
+		t.fatal(sys->sprint("%s: directory read through mount failed: %r", label));
+	}
+	t.asserteq(nent, dirlen(EXPORTTREE + XFERDIR), label + ": directory entries round-trip intact");
 
 	sys->unmount(nil, MOUNTPT);
 }

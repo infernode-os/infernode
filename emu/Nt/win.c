@@ -67,7 +67,9 @@ struct IRectangle
 	IPoint	max;
 };
 
-extern	char*	runestoutf(char*, Rune*, int);
+extern	char*	runestoutf(char*, wchar_t*, int);
+extern	wchar_t*	utftorunes(wchar_t*, char*, int);
+extern	int	widebytes(wchar_t*);
 extern	int	bytesperline(IRectangle, int);
 extern	int	main(int argc, char **argv);
 static	void	dprint(char*, ...);
@@ -789,12 +791,12 @@ drawcursor(Drawcursor* c)
 static char*
 clipreadunicode(HANDLE h)
 {
-	Rune *p;
+	wchar_t *p;
 	int n;
 	char *q;
 	
 	p = GlobalLock(h);
-	n = runenlen(p, runestrlen(p)+1);
+	n = widebytes(p);
 	q = malloc(n);
 	if(q != nil)
 		runestoutf(q, p, n);
@@ -843,8 +845,8 @@ int
 clipwrite(char *buf)
 {
 	HANDLE h;
-	char *p, *e;
-	Rune *rp;
+	char *p;
+	wchar_t *rp;
 	int n;
 
 	n = 0;
@@ -858,15 +860,11 @@ clipwrite(char *buf)
 		return -1;
 	}
 
-	h = GlobalAlloc(GMEM_MOVEABLE|GMEM_DDESHARE, (n+1)*sizeof(Rune));
+	h = GlobalAlloc(GMEM_MOVEABLE|GMEM_DDESHARE, (n+1)*sizeof(wchar_t));
 	if(h == NULL)
 		error(Enovmem);
 	rp = GlobalLock(h);
-	p = buf;
-	e = p+n;
-	while(p<e)
-		p += chartorune(rp++, p);
-	*rp = 0;
+	utftorunes(rp, buf != nil ? buf : "", n+1);
 	GlobalUnlock(h);
 
 	SetClipboardData(CF_UNICODETEXT, h);

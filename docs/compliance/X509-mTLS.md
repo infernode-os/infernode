@@ -19,9 +19,9 @@ rather than claim a clean "Met."
 
 | Capability | Mechanism | Evidence | Status |
 |------------|-----------|----------|--------|
-| TLS 1.2 / 1.3 with AEAD | `TLS_AES_256_GCM_SHA384`, ChaCha20-Poly1305 | `appl/lib/crypt/tls.b:195-200` | ✅ |
-| X.509 parsing + path validation | `verify_certpath()` | `appl/lib/crypt/x509.b:1896` | ✅ |
-| **CRL revocation checking** | CRLs from `/lib/crls/*.der`; `check_revoked()` in path validation | `appl/lib/crypt/x509.b:240,277,1941` | ✅ |
+| TLS 1.2 / 1.3 with AEAD | `TLS_AES_256_GCM_SHA384`, ChaCha20-Poly1305 | `appl/lib/crypt/tls.b:203-213` | ✅ |
+| X.509 parsing + path validation | `verify_certpath()` | `appl/lib/crypt/x509.b:1925` | ✅ |
+| **CRL revocation checking** | CRLs from `/lib/crls/*.der`; `check_revoked()` in path validation | `appl/lib/crypt/x509.b:239,277,1955` | ✅ |
 | PQ-capable transport | Hybrid X25519+ML-KEM-768 key exchange | [`NIST-PQC-migration.md`](NIST-PQC-migration.md) | ✅ |
 | **Mutual** auth (node-to-node) | Native STS handshake: both peers exchange + verify certificates (`Keyring->auth`) | `libinterp/keyring.c` (`Keyring_auth`); `docs/CRYPTO-MODERNIZATION.md` §10 | ✅ (native transport) |
 | PQ X.509 signatures | ML-DSA / SLH-DSA OIDs in cert verification | [`CNSA-2.0.md`](CNSA-2.0.md) | ✅ |
@@ -35,9 +35,9 @@ node-to-node path is **mutually** authenticated.
 Mutual **TLS** specifically — the TLS *client* presenting its own X.509 certificate when a
 server sends `CertificateRequest` — is **not implemented**:
 
-- `appl/lib/crypt/tls.b:696-697` — on `HT_CERTIFICATE_REQUEST` (TLS 1.2): *"Client cert
+- `appl/lib/crypt/tls.b:804-805` — on `HT_CERTIFICATE_REQUEST` (TLS 1.2): *"Client cert
   requested - we don't support this yet."*
-- `appl/lib/crypt/tls.b:926-987` (TLS 1.3) — sends an **empty** Certificate message and
+- `appl/lib/crypt/tls.b:1072-1154` (TLS 1.3) — sends an **empty** Certificate message and
   (per RFC 8446 §4.4.3) omits CertificateVerify; i.e. the client cannot authenticate with a
   cert over TLS.
 

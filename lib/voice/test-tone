@@ -32,7 +32,7 @@ listener_pid=$apid
 sleep 1
 
 mkdir -p /n/voice
-if {! mount -A $addr /n/voice} {
+if {! mount $addr /n/voice} {
 	echo 'voice/test-tone: mount' $addr 'failed' >[1=2]
 	echo kill >/prog/$listener_pid/ctl
 	exit mount

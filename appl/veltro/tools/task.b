@@ -8,7 +8,7 @@ implement ToolTask;
 #
 # Commands:
 #   create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
-#          [category=<text>] [model=<name>] [agenttype=<type>]
+#          [category=<text>] [agenttype=<type>]
 #          [brief=<text>] [instructions=<text>]
 #   status <id>
 #   list
@@ -16,7 +16,7 @@ implement ToolTask;
 #
 # Unknown create args are rejected loudly (with the valid set listed) so the
 # caller — typically an LLM — gets a clear signal instead of having silently
-# dropped fields. Allowed model names live in MODELS; "" inherits from parent.
+# dropped fields. model= is taken and ignored: the model is the server's.
 # agenttype= names a prompt under /lib/veltro/agents/<type>.txt and sets
 # category-specific defaults (see AGENT_DEFAULTS below).
 #
@@ -46,23 +46,16 @@ UI_MOUNT: con "/mnt/ui";
 # Initialized in init() since Limbo `con` does not support array literals.
 createkeys: list of string;
 
-# Recognised models. "" means "inherit parent session's model" (current
-# default behaviour). Keep in sync with serve-llm's backend registry.
-models: list of string;
-
 # Per-agenttype defaults applied when a field is omitted. Fields the caller
 # supplies always win — agenttype only fills blanks. Each tuple is
-# (name, default-model, default-tools-csv).
+# (name, unused, default-tools-csv).
 #
-# coder: backed by the Daedalus fine-tune (Limbo-capable), with the tool
-# surface a coding loop typically needs.
+# coder: the tool surface a coding loop needs (limbo writes and compiles).
 # research: a web-research loop (decompose -> fan out -> synthesize -> cite),
-# backed by gpt-oss with search/fetch and spawn for parallel sub-questions.
+# with search/fetch and spawn for parallel sub-questions.
 # verify: an adversarial "run it, don't read it" checker (exec + read tools,
 # no write/edit — read-only on the project) that emits a PASS/FAIL/PARTIAL
 # verdict backed by captured output.
-# redteam: an authorized source-assisted security tester. It inherits the
-# parent model so a campaign can pin model identity and reasoning at the gate.
 # Tools must still be in the delegation budget; missing ones are dropped at
 # provision time.
 agentdefs: list of (string, string, string);
@@ -79,13 +72,13 @@ init(): string
 	createkeys = "label" :: "tools" :: "paths" :: "urgency" :: "brief" ::
 		"instructions" :: "category" :: "model" :: "agenttype" :: nil;
 
-	models = "gpt-oss" :: "daedalus" :: "haiku" :: "sonnet" :: "opus" :: nil;
-
+	# An agent type is a prompt and its tools.  Not a model: the model is
+	# the server's (llmsrv -M), and a task that named one the server did
+	# not have failed outright ("daedalus" for coder, on a server of one).
 	agentdefs =
-		("coder", "daedalus", "read,write,edit,find,grep,list,limbo") ::
-		("research", "gpt-oss", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
-		("verify", "gpt-oss", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
-		("redteam", "", "read,list,find,search,grep,write,exec,limbo,plan,todo,spawn") ::
+		("coder", "", "read,write,edit,find,grep,list,limbo") ::
+		("research", "", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
+		("verify", "", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
 		nil;
 
 	return nil;
@@ -101,18 +94,17 @@ doc(): string
 	return "task - Create and manage delegated AI tasks\n\n" +
 		"Commands:\n" +
 		"  create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]\n" +
-		"         [category=<text>] [model=<name>] [agenttype=<type>]\n" +
+		"         [category=<text>] [agenttype=<type>]\n" +
 		"         [brief=<text>] [instructions=<text>]\n" +
 		"      Create new task with isolated tools and conversation.\n" +
 		"      Tools validated against delegation budget.\n" +
 		"      instructions= sets structured directives injected into the TA system prompt.\n" +
-		"      model= selects the LLM backing the new activity (gpt-oss, daedalus,\n" +
-		"        haiku, sonnet, opus). Omit to inherit parent session's model.\n" +
+		"      The model is the server's; a task cannot choose one (model= is ignored).\n" +
 		"      agenttype= picks a prompt under /lib/veltro/agents/<type>.txt and\n" +
-		"        fills sensible defaults (e.g. agenttype=coder ⇒ model=daedalus,\n" +
+		"        its tools (e.g. agenttype=coder ⇒\n" +
 		"        tools=read,write,edit,find,grep,list,limbo).\n" +
 		"      Unknown args are rejected with the list of valid keys.\n" +
-		"      Put tools=/paths=/model=/agenttype= before brief=/instructions=.\n" +
+		"      Put tools=/paths=/agenttype= before brief=/instructions=.\n" +
 		"      brief=/instructions= consume the rest of the line.\n" +
 		"  status <id>     Show task status and urgency\n" +
 		"  list            List all active tasks\n" +
@@ -124,7 +116,7 @@ doc(): string
 		"  task create label=Review tools=read,list,find,grep\n" +
 		"  task create label=Editor instructions=\"Open /lib/veltro/system.txt and edit it\"\n" +
 		"  task create label=BugFix agenttype=coder brief=\"fix the bug in cat.b\"\n" +
-		"  task create label=Refactor model=daedalus tools=read,write,edit\n" +
+		"  task create label=Refactor tools=read,write,edit\n" +
 		"  task list\n" +
 		"  task status 2\n" +
 		"  task close 2";
@@ -134,12 +126,12 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"task\"," +
-		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, poll status until it reports done, then read its result. Never re-create a task that is already running.\"," +
+		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, tell the user what you started and end your turn: a [task-event] message brings you the task's report when it finishes. Do not poll status in a loop. Never re-create a task that is already running. A task's writes to the user's folders are staged, not applied: 'promote <id>' applies them once the user agrees (the user is asked to allow it), 'revert <id>' discards them.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, result, close. To make a task do work, describe it in args brief=/instructions= at create time. When a task reports done, use 'result <id>' to get its final answer back — do NOT re-create the task to retrieve output.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/close: the task id. Omit for list.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, result, close, promote, revert. To make a task do work, describe it in args brief=/instructions= at create time. When a task reports done, use 'result <id>' to get its final answer back — do NOT re-create the task to retrieve output.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/result/close/promote/revert: the task id. Omit for list.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -152,7 +144,7 @@ exec(args: string): string
 		return "error: not initialized";
 	args = strip(args);
 	if(args == "")
-		return "error: no command. Use: create, status, list, result, close";
+		return "error: no command. Use: create, status, list, result, close, promote, revert";
 
 	(cmd, rest) := splitfirst(args);
 	cmd = str->tolower(cmd);
@@ -168,8 +160,17 @@ exec(args: string): string
 		return doresult(rest);
 	"close" =>
 		return doclose(rest);
+	"promote" =>
+		return dostaged(rest, "/promote");
+	"revert" =>
+		return dostaged(rest, "/revert");
 	* =>
-		return sys->sprint("error: unknown command '%s'. Use: create, status, list, result, close", cmd);
+		# A create with its verb left out ("label=X tools=... brief=..."):
+		# models do this, and only a create takes these attributes.
+		if(iskeyat(args, 0) && (hasprefix(args, "label=") ||
+		   hasprefix(args, "tools=") || hasprefix(args, "brief=")))
+			return docreate(args);
+		return sys->sprint("error: unknown command '%s'. Use: create, status, list, result, close, promote, revert", cmd);
 	}
 }
 
@@ -278,16 +279,98 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
-readprovisionstate(id: int): string
+# The folders text names that the task would see only if granted, that
+# this agent holds (held: its own grants, from /tool/paths), and that
+# paths= does not give.  Nothing is granted here: the caller refuses the
+# create and suggests these, for the agent to grant itself or leave out.
+# Prose names a path; it never confers one (a brief can be copied mail
+# or a web page).  Only ordinary file trees are suggested: /n/local and
+# /usr, never services, control files or task metadata.  A named file
+# gives its folder (a writable grant is a cowfs folder), said as such.
+ungranted(text, paths: string, held: list of string): list of string
 {
-	raw := readfile("/tool/provision");
-	if(raw == nil)
-		return "";
-	prefix := string id + " ";
-	for(lines := splitlines(strip(raw)); lines != nil; lines = tl lines)
-		if(hasprefix(hd lines, prefix))
-			return strip((hd lines)[len prefix:]);
-	return "";
+	(nil, grants) := sys->tokenize(paths, ",");
+	need: list of string;
+	(nil, words) := sys->tokenize(text, " \t\n");
+	for(; words != nil; words = tl words) {
+		w := hd words;
+		while(len w > 0 && strchr("\"'`(<[", w[0]))
+			w = w[1:];
+		while(len w > 0 && strchr("\"'`)>],.;:!?/", w[len w - 1]))
+			w = w[0:len w - 1];
+		if(!plaintree(w) || !covered(w, held))
+			continue;
+		(ok, d) := sys->stat(w);
+		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
+			for(i := len w - 1; i > 0 && w[i] != '/'; i--)
+				;
+			w = w[0:i];
+		}
+		if(!plaintree(w) || !covered(w, held) || covered(w, grants) || strlistcontains(need, w))
+			continue;
+		need = w :: need;
+	}
+	return need;
+}
+
+# An ordinary file tree of the user's, below its root: /n/local/<...> or
+# /usr/<...>.  Everything else a task sees either way or gets only by
+# capability, and is never suggested.
+plaintree(p: string): int
+{
+	if(hasprefix(p, "/n/local/") && len p > len "/n/local/")
+		return !hasdotdot(p);
+	if(hasprefix(p, "/usr/") && len p > len "/usr/")
+		return !hasdotdot(p);
+	return 0;
+}
+
+hasdotdot(p: string): int
+{
+	(nil, parts) := sys->tokenize(p, "/");
+	for(; parts != nil; parts = tl parts)
+		if(hd parts == ".." || hd parts == ".")
+			return 1;
+	return 0;
+}
+
+# The paths of a grants listing (/tool/paths: "<path> <perm>" a line).
+heldpaths(listing: string): list of string
+{
+	held: list of string;
+	for(lines := splitlines(listing); lines != nil; lines = tl lines) {
+		(nil, f) := sys->tokenize(hd lines, " \t");
+		if(f != nil && hd f != "/tmp/veltro/scratch")
+			held = hd f :: held;
+	}
+	return held;
+}
+
+plural(l: list of string, one, many: string): string
+{
+	if(l != nil && tl l != nil)
+		return many;
+	return one;
+}
+
+covered(p: string, grants: list of string): int
+{
+	for(; grants != nil; grants = tl grants) {
+		g := strip(hd grants);
+		while(len g > 1 && g[len g - 1] == '/')
+			g = g[0:len g - 1];
+		if(g != "" && (p == g || hasprefix(p, g + "/")))
+			return 1;
+	}
+	return 0;
+}
+
+strchr(set: string, c: int): int
+{
+	for(i := 0; i < len set; i++)
+		if(set[i] == c)
+			return 1;
+	return 0;
 }
 
 docreate(args: string): string
@@ -310,17 +393,15 @@ docreate(args: string): string
 		return "error: label contains no safe display text";
 
 	agenttype := str->tolower(getattr(attrs, "agenttype"));
-	(deftools, defmodel) := agentdefaults(agenttype);
-	if(agenttype != "" && deftools == "" && defmodel == "")
+	(deftools, nil) := agentdefaults(agenttype);
+	if(agenttype != "" && deftools == "")
 		return sys->sprint("error: unknown agenttype '%s' (valid: %s).",
 			agenttype, knownagenttypes());
 
-	model := getattr(attrs, "model");
-	if(model == "" && defmodel != "")
-		model = defmodel;
-	if(model != "" && !knownmodel(model))
-		return sys->sprint("error: unknown model '%s' (valid: %s).",
-			model, joinmodels());
+	# model= is taken and ignored: the model is the server's.
+	modelnote := "";
+	if(getattr(attrs, "model") != "")
+		modelnote = " (model= ignored: the model is the server's)";
 
 	toolsarg := getattr(attrs, "tools");
 	if(toolsarg == "" && deftools != "")
@@ -343,12 +424,36 @@ docreate(args: string): string
 		}
 	}
 
+	# A task sees only what paths= grants it. A brief that names a folder
+	# of the user's without granting it creates a task that cannot open the
+	# folder it was sent to work on, and answers that the path does not
+	# exist (mistral-small3.2 did). Refuse it and say what could be granted,
+	# before anything is made.  Nothing is granted from the brief: it is
+	# text, possibly copied from mail or a page, and a grant is only ever
+	# what paths= says (security review, 2026-10).
+	need := ungranted(getattr(attrs, "brief") + " " + getattr(attrs, "instructions"),
+		getattr(attrs, "paths"), heldpaths(readfile("/tool/paths")));
+	if(need != nil) {
+		p := joinstrs(need, ",");
+		if(getattr(attrs, "paths") != "")
+			p = getattr(attrs, "paths") + "," + p;
+		# Say whose move it is: told "unless you grant it", mistral-small3.2
+		# asked the user to bind a folder that was already bound.
+		return sys->sprint("error: not created: the brief names a path in %s.  You have %s, but a task sees only what its create's paths= gives it.  " +
+			"The user has nothing to do.  If the task needs %s, call task create again, the same but with paths=%s before brief=; " +
+			"it gets the whole folder.  If it should not have %s, leave that path out of the brief.\nsuggest: paths=%s",
+			joinstrs(need, " and "), plural(need, "that folder", "those folders"), plural(need, "it", "them"), p,
+			plural(need, "it", "them"), p);
+	}
+
 	# Idempotency guard (INFR-390): the meta-agent repeatedly re-creates the
 	# same-labelled task while waiting on it, spawning duplicate activities.
 	# Refuse a duplicate active label and point it at the existing task.
 	dupid := findlabelledtask(label);
 	if(dupid > 0)
-		return sys->sprint("error: a task labelled \"%s\" already exists (id %d). Use 'task status %d' to check it — do NOT create it again.", label, dupid, dupid);
+		# Not an error: the work is under way.  Worded as a refusal, it
+		# read to the model as a broken tool, and it told the user so.
+		return sys->sprint("task \"%s\" already exists as activity %d and is under way: your earlier create worked. Do not create it again; tell the user it has started, and its report will come as a [task-event].", label, dupid);
 
 	# Create activity via /mnt/ui/ctl
 	ctlpath := UI_MOUNT + "/ctl";
@@ -422,15 +527,6 @@ docreate(args: string): string
 	# reads these files at startup (before opening the LLM session). Files
 	# are only written when explicitly set so the absence still means
 	# "inherit parent session's model" / "use default task prompt".
-	if(model != "") {
-		mpath := sys->sprint("/tmp/veltro/tasks/model.%d", newid);
-		mfd := sys->create(mpath, Sys->OWRITE, 8r644);
-		if(mfd != nil) {
-			mb := array of byte model;
-			sys->write(mfd, mb, len mb);
-			mfd = nil;
-		}
-	}
 	if(agenttype != "") {
 		apath := sys->sprint("/tmp/veltro/tasks/agenttype.%d", newid);
 		afd := sys->create(apath, Sys->OWRITE, 8r644);
@@ -463,35 +559,22 @@ docreate(args: string): string
 	if(getattr(attrs, "paths") != "")
 		provcmd += " paths=" + getattr(attrs, "paths");
 
-	# Provisioning is now atomic (INFR-405): tools9p validates the request on
+	# Provisioning is atomic (INFR-405): tools9p validates the request on
 	# this write and refuses it outright rather than dropping the tools and
-	# paths it will not grant. Trusted tools9p publishes a narrow lifecycle result
-	# after observing confinement; the task tool cannot read the hidden manifest
-	# and does not report success while provisioning is still starting.
-	# A refusal must not surface as a created
-	# activity — the caller would poll an activity that has no agent behind
-	# it, or worse, assume the narrowing it asked for was applied. Tear the
-	# activity down and report the reason.
+	# paths it will not grant.  The write is answered when the child is
+	# confined and its agent started, or with why it was not: the task tool
+	# cannot read the hidden manifest, and does not report success while
+	# provisioning is still starting.  A refusal or failure must not
+	# surface as a created activity — the caller would watch an activity
+	# that has no agent behind it, or worse, assume the narrowing it asked
+	# for was applied.  The activity goes, and the reason is reported.
 	writefile(sys->sprint("%s/activity/%d/status", UI_MOUNT, newid), "provisioning");
 	perr := writefile("/tool/provision", provcmd[10:]);
 	if(perr != nil) {
 		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
 		return sys->sprint("error: task not created — %s", perr);
 	}
-
-	for(w := 0; w < 700; w++) {
-		pstatus := readprovisionstate(newid);
-		if(hasprefix(pstatus, "failed")) {
-			writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
-			return sys->sprint("error: task not created — activity %d %s", newid, pstatus);
-		}
-		if(pstatus == "ready")
-			return sys->sprint("created activity %d: %s", newid, label);
-		sys->sleep(50);
-	}
-	writefile("/tool/provision", "cancel " + string newid);
-	writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
-	return sys->sprint("error: task not created — activity %d provisioning timed out", newid);
+	return sys->sprint("created activity %d: %s%s", newid, label, modelnote);
 }
 
 dostatus(args: string): string
@@ -513,7 +596,120 @@ dostatus(args: string): string
 	if(status != nil) status = strip(status); else status = "unknown";
 	if(urgstr != nil) urgstr = strip(urgstr); else urgstr = "0";
 
-	return sys->sprint("activity %d: %s [%s] urgency=%s", id, label, status, urgstr);
+	out := sys->sprint("activity %d: %s [%s] urgency=%s", id, label, status, urgstr);
+	# What it is doing: asked how a task was going, the agent had only
+	# "working" to say.  What the task has used lately (its context, each
+	# with when it was last used) and the last thing it has said.
+	recent := recentuse(id, 6);
+	if(recent != "")
+		out += "\nrecently used (latest first): " + recent;
+	docs := taskdocs(id);
+	if(docs != "")
+		out += sys->sprint("\ndocuments, in its own tab (task %d), not yours: %s", id, docs);
+	last := lastsaid(id);
+	if(last != "") {
+		if(len last > 400)
+			last = last[0:400] + "...";
+		out += "\nlast said: " + last;
+	}
+	return out;
+}
+
+# The context resources the task used most recently, latest first:
+# "path (via tool)" or a tool's name.
+recentuse(id, max: int): string
+{
+	dir := sys->sprint("%s/activity/%d/context/resources", UI_MOUNT, id);
+	used: list of (int, string);
+	for(i := 0; i < 256; i++) {
+		r := readfile(dir + "/" + string i);
+		if(r == nil)
+			break;
+		# key=value words (parseattrs is for task create's arguments,
+		# whose values run on to the next key it knows)
+		(nil, words) := sys->tokenize(strip(r), " ");
+		attrs: list of (string, string);
+		for(; words != nil; words = tl words) {
+			(k, v) := str->splitl(hd words, "=");
+			if(v != "")
+				attrs = (k, v[1:]) :: attrs;
+		}
+		lu := getattr(attrs, "lastused");
+		if(lu == "" || getattr(attrs, "type") == "tool")
+			continue;	# a tool's use is in the paths' "via"
+		what := getattr(attrs, "path");
+		via := getattr(attrs, "via");
+		if(via != "" && via != "ro" && via != "rw" && via != "cow" && via != "bound")
+			what += " (via " + via + ")";
+		if(getattr(attrs, "status") == "active")
+			what += " [now]";
+		used = (int lu, what) :: used;
+	}
+	# latest first, max of them
+	out := "";
+	for(n := 0; n < max && used != nil; n++) {
+		best := used;
+		for(l := used; l != nil; l = tl l) {
+			(t, nil) := hd l;
+			(bt, nil) := hd best;
+			if(t > bt)
+				best = l;
+		}
+		(bt, bw) := hd best;
+		if(out != "")
+			out += ", ";
+		out += bw;
+		rest: list of (int, string);
+		for(l = used; l != nil; l = tl l)
+			if(l != best)
+				rest = hd l :: rest;
+		used = rest;
+		bt = 0;
+	}
+	return out;
+}
+
+# The documents the task has put in its presentation view.
+taskdocs(id: int): string
+{
+	dir := sys->sprint("%s/activity/%d/presentation", UI_MOUNT, id);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if(!(d[i].mode & Sys->DMDIR))
+				continue;
+			label := readfile(dir + "/" + d[i].name + "/label");
+			if(label != nil)
+				label = strip(label);
+			if(out != "")
+				out += ", ";
+			out += sys->sprint("%s \"%s\"", d[i].name, label);
+		}
+	}
+	return out;
+}
+
+# The latest thing the task's agent has said (while it works, the reply
+# being written).
+lastsaid(id: int): string
+{
+	base := sys->sprint("%s/activity/%d/conversation", UI_MOUNT, id);
+	last := "";
+	for(m := 0; ; m++) {
+		c := readfile(base + "/" + string m);
+		if(c == nil)
+			break;
+		(role, text) := parseconvmsg(c);
+		if(role == "veltro" && text != "" && text != "\u258c" && !hasprefix(c, "role=veltro dtype="))
+			last = text;
+	}
+	return last;
 }
 
 # Parse a /mnt/ui conversation message file ("role=<r> text=<...>") into
@@ -560,7 +756,7 @@ doresult(args: string): string
 	if(last == "") {
 		if(hasprefix(status, "failed"))
 			return sys->sprint("task %d [%s] result: task failed before producing a reply", id, status);
-		return sys->sprint("task %d [%s]: no result yet — it has not produced a reply. Poll 'task status %d' until it reports done, then read the result.", id, status, id);
+		return sys->sprint("task %d [%s]: no result yet — it has not produced a reply. A [task-event] message will bring you its report when it finishes.", id, status);
 	}
 	return sys->sprint("task %d [%s] result:\n%s", id, status, last);
 }
@@ -659,6 +855,43 @@ doclose(args: string): string
 		return "error: " + err;
 
 	return sys->sprint("activity %d archived", id);
+}
+
+# Apply (promote) or discard (revert) the changes a task has staged to the
+# user's files.  Its writes to a granted folder go to an overlay, not the
+# folder, until then; the task's own tab takes /promote and /revert, and
+# this sends the same, a fixed command and nothing else, to its input.
+dostaged(args, slash: string): string
+{
+	args = strip(args);
+	(id, nil) := str->toint(args, 10);
+	if(args == "" || id <= 0)
+		return "error: task id required";
+	base := sys->sprint("%s/activity/%d", UI_MOUNT, id);
+	status := readfile(base + "/status");
+	if(status == nil)
+		return sys->sprint("error: activity %d not found", id);
+	if(strip(status) == "hidden")
+		return sys->sprint("error: task %d is closed", id);
+	nbefore := 0;
+	while(readfile(sys->sprint("%s/conversation/%d", base, nbefore)) != nil)
+		nbefore++;
+	err := writefile(base + "/conversation/input", slash);
+	if(err != nil)
+		return "error: " + err;
+	# The task answers in its conversation; wait a little for it.
+	for(i := 0; i < 20; i++) {
+		sys->sleep(250);
+		for(m := nbefore; ; m++) {
+			c := readfile(sys->sprint("%s/conversation/%d", base, m));
+			if(c == nil)
+				break;
+			(role, text) := parseconvmsg(c);
+			if(role != "human" && text != "")
+				return sys->sprint("task %d: %s", id, text);
+		}
+	}
+	return sys->sprint("task %d: %s sent; the task is busy and will do it when its turn ends", id, slash[1:]);
 }
 
 # --- Utility functions ---
@@ -773,16 +1006,6 @@ joinstrs(l: list of string, sep: string): string
 		first = 0;
 	}
 	return r;
-}
-
-knownmodel(m: string): int
-{
-	return strlistcontains(models, m);
-}
-
-joinmodels(): string
-{
-	return joinstrs(models, ", ");
 }
 
 # Look up agenttype defaults. Returns (tools, model). Both empty if unknown.

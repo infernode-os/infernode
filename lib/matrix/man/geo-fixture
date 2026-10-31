@@ -24,4 +24,4 @@ DESCRIPTION
 	exercising ndb-stanza geo consumers without external feeds.
 
 SEE ALSO
-	geo-map (renders this output format)
+	wm/scene (renders this output format; composed as an app region)

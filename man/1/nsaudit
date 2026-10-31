@@ -89,12 +89,18 @@ exposes at
 .B
 .nf
 	dir/tools               one tool name per line
-	dir/paths               one path grant per line
+	dir/paths               one path ro|rw|cow capability per line
 	dir/meta/role           "toplevel" or "child"
 	dir/meta/xenith         "1" or "0"
 	dir/meta/actid          integer or "-1"
 	dir/meta/nodevs         "set" or "unset"
 .fi
+.PP
+Missing or non-canonical
+.B nodevs
+values are treated as NODEVS unset. Direct spend authority fails closed until
+the granting capability supplies trusted enforcement attestation bound to the
+exact agent view; caller-supplied budget text is not accepted as proof.
 .PP
 For live audit, point
 .I nsaudit
@@ -185,6 +191,7 @@ matches
 .B nodevs=VALUE
 matches
 .B meta/nodevs
+(a missing or invalid value fails closed as unset)
 .br
 .B has_tool_NAME
 tool is present in
@@ -223,7 +230,7 @@ record per line. Records are distinguished by their first attribute:
 .PP
 .B
 .nf
-	nsaudit=caps       the caps header (dir, role, nodevs, actid, xenith)
+	nsaudit=caps       caps plus nodevs_status
 	authority=NAME     one authority axis present in the inventory
 	reads_fs=PATH      one granted reads_fs path
 	writes_fs=PATH     one granted writes_fs path with reversibility tag

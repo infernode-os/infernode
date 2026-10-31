@@ -3,7 +3,7 @@ implement Wiki9p;
 #
 # wiki9p - 9P file server for LLM-maintained wiki knowledge bases
 #
-# "wikia" = wiki agent.  Mounts at /n/wikia to distinguish from
+# "wikia" = wiki agent.  Mounts at /mnt/wikia to distinguish from
 # wikifs itself (the storage layer at /mnt/wiki).
 #
 # Intelligence layer atop wikifs: ingests sources via LLM, answers
@@ -11,7 +11,7 @@ implement Wiki9p;
 # Designed for both human use (Charon/Lucifer) and agent use (Veltro).
 #
 # Filesystem structure:
-#   /n/wikia/
+#   /mnt/wikia/
 #   ├── ctl        (rw)  Commands: ingest [path], lint, reset
 #   ├── query      (rw)  Write question, read synthesized answer
 #   ├── status     (r)   Current state and wiki statistics
@@ -24,9 +24,9 @@ implement Wiki9p;
 #
 # Sources are bound into the namespace by the caller before
 # issuing an ingest command.  They can be anything mountable:
-#   bind /n/local/path/to/docs /n/wikia/raw
-#   mount tcp!host!styx       /n/wikia/raw
-#   mount dbfs                /n/wikia/raw
+#   bind /n/local/path/to/docs /mnt/wikia/raw
+#   mount tcp!host!styx       /mnt/wikia/raw
+#   mount dbfs                /mnt/wikia/raw
 #
 # After ingestion completes, the source can be unmounted.
 # The wiki retains the knowledge with citations.
@@ -34,19 +34,22 @@ implement Wiki9p;
 # Usage:
 #   wiki9p                          # Start with defaults
 #   wiki9p -D                       # With 9P debug tracing
-#   wiki9p -m /n/wikia              # Custom mount point
+#   wiki9p -m /mnt/wikia              # Custom mount point
 #   wiki9p -w /mnt/wiki             # Custom wikifs location
 #
+# A command's result, and a question's answer, are read on the fid that
+# wrote them, and the read waits until they are ready.  Operations run
+# one at a time, in the order written.
+#
 # Examples:
-#   bind /n/local/research /n/wikia/raw
-#   echo 'ingest' > /n/wikia/ctl              # Ingest all sources at /n/wikia/raw
-#   echo 'ingest /n/wikia/raw/report.md' > /n/wikia/ctl  # Ingest one file
-#   echo 'What are the ITAR risks?' > /n/wikia/query
-#   cat /n/wikia/query                         # Read answer
-#   echo 'lint' > /n/wikia/ctl                # Health check
-#   cat /n/wikia/status                        # Wiki stats
-#   cat /n/wikia/log                           # Operation history
-#   cat /n/wikia/doc                           # Interface docs
+#   bind /n/local/research /mnt/wikia/raw
+#   {echo ingest >[1=0]; cat} <>[0] /mnt/wikia/ctl     # Ingest all sources at /mnt/wikia/raw
+#   {echo ingest /mnt/wikia/raw/report.md >[1=0]; cat} <>[0] /mnt/wikia/ctl
+#   {echo 'What are the ITAR risks?' >[1=0]; cat} <>[0] /mnt/wikia/query
+#   {echo lint >[1=0]; cat} <>[0] /mnt/wikia/ctl       # Health check
+#   cat /mnt/wikia/status                        # Wiki stats
+#   cat /mnt/wikia/log                           # Operation history
+#   cat /mnt/wikia/doc                           # Interface docs
 #
 
 include "sys.m";
@@ -81,13 +84,29 @@ Wiki9p: module {
 # Qid layout
 Qroot, Qctl, Qquery, Qstatus, Qlog, Qdoc, Qraw: con iota;
 
-# Per-fid state
+# Per-fid state.  A command written to ctl or a question written to
+# query is answered on the same fid: a read waits until it is done.
+# Like factotum's rpc, the reply is read from its start whatever the
+# file offset, so a shell's write-then-read gets all of it.
 FidState: adt {
 	fid:        int;
 	ctlresp:    array of byte;   # Response from last ctl command
 	queryreq:   string;          # Question written to query
 	queryresp:  array of byte;   # Synthesized answer
+	rpos:       int;             # Bytes of the reply already read
+	busy:       int;             # Operations queued or running for this fid
+	pending:    list of ref Tmsg.Read;	# Reads waiting for them
 };
+
+# An operation for the worker.  There is one worker, so operations run
+# one at a time, in the order written, each with the LLM session to
+# itself.
+Job: adt {
+	fs:     ref FidState;
+	query:  int;                 # 1: a question; 0: a ctl command
+	arg:    string;
+};
+Maxqueued: con 16;
 
 # Operation state
 IDLE, INGESTING, QUERYING, LINTING: con iota;
@@ -96,12 +115,12 @@ statenames := array[] of { "idle", "ingesting", "querying", "linting" };
 curstate := IDLE;
 
 # Configuration
-mountpt := "/n/wikia";
+mountpt := "/mnt/wikia";
 wikidir := "/mnt/wiki";    # Where wikifs is mounted
 llmdir := "/mnt/llm";        # Where llmsrv is mounted
 
 # LLM session
-llmsession := -1;           # Session ID from /mnt/llm/new
+llmsession: string;          # Session name from /mnt/llm/new (nil: none open)
 
 # Operation log (kept in memory, served via Qlog)
 logbuf := "";
@@ -191,8 +210,11 @@ init(nil: ref Draw->Context, args: list of string)
 	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big Qroot);
 	fds[0] = nil;
 
+	jobs := chan[Maxqueued] of ref Job;
+	done := chan of ref FidState;
+	spawn worker(jobs, done);
 	pidc := chan of int;
-	spawn serveloop(tchan, srv, pidc, navops);
+	spawn serveloop(tchan, srv, pidc, navops, jobs, done);
 	<-pidc;
 
 	if(sys->mount(fds[1], nil, mountpt, Sys->MREPL|Sys->MCREATE, nil) < 0) {
@@ -211,19 +233,20 @@ init(nil: ref Draw->Context, args: list of string)
 llmask(systemprompt, prompt: string): string
 {
 	# Allocate session if needed
-	if(llmsession < 0) {
+	if(llmsession == nil) {
 		s := rf(llmdir + "/new");
 		if(s == nil)
 			return "error: cannot open LLM session (is llmsrv mounted at " + llmdir + "?)";
-		llmsession = int strip(s);
+		# llmsrv names sessions with hex strings, not numbers.
+		llmsession = strip(s);
 
 		# Configure session
-		sdir := llmdir + "/" + string llmsession;
+		sdir := llmdir + "/" + llmsession;
 		wf(sdir + "/system", systemprompt);
 	}
 
 	# Write prompt, read response
-	sdir := llmdir + "/" + string llmsession;
+	sdir := llmdir + "/" + llmsession;
 	wf(sdir + "/ask", prompt);
 
 	resp := rf(sdir + "/ask");
@@ -235,10 +258,10 @@ llmask(systemprompt, prompt: string): string
 # Close the LLM session
 llmclose()
 {
-	if(llmsession >= 0) {
-		sdir := llmdir + "/" + string llmsession;
+	if(llmsession != nil) {
+		sdir := llmdir + "/" + llmsession;
 		wf(sdir + "/ctl", "close");
-		llmsession = -1;
+		llmsession = nil;
 	}
 }
 
@@ -246,22 +269,45 @@ llmclose()
 # Wiki operations via /mnt/wiki filesystem (wikifs)
 # ===================================================================
 
-# Read a wiki page's raw content by page number
-wikiread(num: int): string
+# The wiki's pages, by the names wikifs serves them under (lower case,
+# blanks as underscores).  wikifs's map file is a lookup (write a
+# title, read its number), not a listing, so list the directory.
+wikipages(): list of string
 {
-	name := wikipagename(num);
-	if(name == nil)
-		return nil;
-	return rf(wikidir + "/" + name + "/current");
+	(dirs, n) := readdir->init(wikidir, Readdir->NAME);
+	pages: list of string;
+	for(i := n - 1; i >= 0; i--)
+		if((dirs[i].mode & Sys->DMDIR) && dirs[i].name != "new" && dirs[i].name != "map")
+			pages = dirs[i].name :: pages;
+	return pages;
 }
 
-# Read a wiki page by name (with underscore substitution)
-wikireadname(name: string): string
+# A page's text: its current version less wikifs's header (title, D, A
+# and C lines, to the first blank line) and the '#' each text line
+# carries in the stored form.
+pagetext(name: string): string
 {
-	for(i := 0; i < len name; i++)
-		if(name[i] == ' ')
-			name[i] = '_';
-	return rf(wikidir + "/" + name + "/current");
+	raw := rf(wikidir + "/" + name + "/current");
+	if(raw == nil)
+		return nil;
+	hdr := 1;
+	out := "";
+	for(i := 0; i < len raw; ) {
+		e := i;
+		while(e < len raw && raw[e] != '\n')
+			e++;
+		line := raw[i:e];
+		i = e + 1;
+		if(hdr) {
+			if(line == "")
+				hdr = 0;
+			continue;
+		}
+		if(line != "" && line[0] == '#')
+			line = line[1:];
+		out += line + "\n";
+	}
+	return out;
 }
 
 # Write a new wiki page (or update existing) via wikifs /new protocol
@@ -300,57 +346,6 @@ wikiwrite(title, comment, content: string): int
 	if(n > 0)
 		return 0;
 	return -1;
-}
-
-# List all wiki pages (read the map file)
-wikimap(): list of (int, string)
-{
-	content := rf(wikidir + "/map");
-	if(content == nil) {
-		# No map file — try listing directory
-		return wikimapfromdir();
-	}
-	pages: list of (int, string);
-	(nil, lines) := sys->tokenize(content, "\n");
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		(n, toks) := sys->tokenize(line, " \t");
-		if(n >= 2) {
-			num := int hd toks;
-			name := hd tl toks;
-			pages = (num, name) :: pages;
-		}
-	}
-	return pages;
-}
-
-# Fallback: list wiki pages from directory entries
-wikimapfromdir(): list of (int, string)
-{
-	(dirs, n) := readdir->init(wikidir, Readdir->NAME);
-	pages: list of (int, string);
-	for(i := 0; i < n; i++) {
-		d := dirs[i];
-		if((d.mode & Sys->DMDIR) && d.name != "." && d.name != "..") {
-			# Skip non-page directories
-			if(d.name == "new" || d.name == "map")
-				continue;
-			pages = (i, d.name) :: pages;
-		}
-	}
-	return pages;
-}
-
-# Get page name from number via map
-wikipagename(num: int): string
-{
-	pages := wikimap();
-	for(; pages != nil; pages = tl pages) {
-		(n, name) := hd pages;
-		if(n == num)
-			return name;
-	}
-	return nil;
 }
 
 # ===================================================================
@@ -458,24 +453,21 @@ doingest(path: string): string
 # Build a summary of current wiki contents for LLM context
 buildwikicontext(): string
 {
-	pages := wikimap();
+	pages := wikipages();
 	if(pages == nil)
 		return "(empty wiki)";
 
 	context := "";
 	for(; pages != nil; pages = tl pages) {
-		(num, name) := hd pages;
-		content := wikiread(num);
+		name := hd pages;
+		content := pagetext(name);
 		if(content == nil)
 			continue;
-		# Include title and first few lines as context
-		title := "";
+		# The page's first few lines stand for it
 		summary := "";
 		nlines := 0;
 		for(i := 0; i < len content; i++) {
 			if(content[i] == '\n') {
-				if(title == "")
-					title = content[0:i];
 				nlines++;
 				if(nlines >= 5) {
 					summary = content[0:i];
@@ -606,14 +598,14 @@ doquery(question: string): string
 # Full wiki contents for query context
 buildwikifullcontext(): string
 {
-	pages := wikimap();
+	pages := wikipages();
 	if(pages == nil)
 		return "";
 
 	context := "";
 	for(; pages != nil; pages = tl pages) {
-		(num, name) := hd pages;
-		content := wikiread(num);
+		name := hd pages;
+		content := pagetext(name);
 		if(content == nil)
 			continue;
 		context += "=== " + name + " ===\n" + content + "\n\n";
@@ -694,7 +686,7 @@ readstatus(): string
 	s += "mountpoint: " + mountpt + "\n";
 
 	# Count wiki pages
-	pages := wikimap();
+	pages := wikipages();
 	npages := 0;
 	for(p := pages; p != nil; p = tl p)
 		npages++;
@@ -723,14 +715,18 @@ DOCTEXT: con
 	"\n" +
 	"FILESYSTEM\n" +
 	"\n" +
-	"  ctl      Read/write. Write commands, read results.\n" +
+	"  ctl      Read/write. Write a command, then read its result\n" +
+	"           on the same open file; the read waits until it is\n" +
+	"           done.  Operations run one at a time:\n" +
+	"             {echo lint >[1=0]; cat} <>[0] /mnt/wikia/ctl\n" +
 	"           Commands:\n" +
-	"             ingest          Ingest all sources at /n/wikia/raw\n" +
+	"             ingest          Ingest all sources at /mnt/wikia/raw\n" +
 	"             ingest <path>   Ingest a specific file\n" +
 	"             lint            Run wiki health check\n" +
 	"             reset           Close LLM session\n" +
 	"\n" +
-	"  query    Read/write. Write a question, read the answer.\n" +
+	"  query    Read/write. Write a question, then read the answer\n" +
+	"           on the same open file.\n" +
 	"           The answer is synthesized from wiki pages via LLM\n" +
 	"           with citations back to source pages.\n" +
 	"\n" +
@@ -742,8 +738,8 @@ DOCTEXT: con
 	"\n" +
 	"  raw/     Bind point for source data. Bind or mount any\n" +
 	"           data source here before running ingest:\n" +
-	"             bind /n/local/docs /n/wikia/raw\n" +
-	"             mount tcp!host!styx /n/wikia/raw\n" +
+	"             bind /n/local/docs /mnt/wikia/raw\n" +
+	"             mount tcp!host!styx /mnt/wikia/raw\n" +
 	"           Sources can be unmounted after ingestion.\n" +
 	"\n" +
 	"DEPENDENCIES\n" +
@@ -822,7 +818,7 @@ getfidstate(fid: int): ref FidState
 		if((hd l).fid == fid)
 			return hd l;
 	}
-	fs := ref FidState(fid, nil, "", nil);
+	fs := ref FidState(fid, nil, "", nil, 0, 0, nil);
 	fidstates = fs :: fidstates;
 	return fs;
 }
@@ -951,15 +947,26 @@ doreaddir(n: ref Navop.Readdir, path: int)
 # Main 9P serve loop
 # ===================================================================
 
-serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop)
+serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop,
+	jobs: chan of ref Job, done: chan of ref FidState)
 {
 	pidc <-= sys->pctl(0, nil);
 
 Serve:
 	for(;;) {
-		gm := <-tchan;
-		if(gm == nil)
-			break Serve;
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			if(gm == nil)
+				break Serve;
+		fs := <-done =>
+			# An operation finished: answer the reads waiting for it
+			# once nothing more is queued on that fid.
+			fs.busy--;
+			if(fs.busy == 0)
+				answerpending(srv, fs);
+			continue;
+		}
 
 		pick m := gm {
 		Readerror =>
@@ -974,20 +981,16 @@ Serve:
 
 			path := int fid.path;
 			case path {
-			Qctl =>
+			Qctl or Qquery =>
 				fs := getfidstate(m.fid);
-				if(fs.ctlresp != nil)
-					srv.reply(styxservers->readbytes(m, fs.ctlresp));
+				if(fs.busy > 0)
+					fs.pending = m :: fs.pending;
 				else
-					srv.reply(styxservers->readstr(m, ""));
-			Qquery =>
-				fs := getfidstate(m.fid);
-				if(fs.queryresp != nil)
-					srv.reply(styxservers->readbytes(m, fs.queryresp));
-				else
-					srv.reply(styxservers->readstr(m, ""));
+					srv.reply(replyread(m, fs, path));
 			Qstatus =>
-				srv.reply(styxservers->readstr(m, readstatus()));
+				# Built off the serve loop: it lists raw, which may be
+				# this server's own directory, and wikifs.
+				spawn replystatus(srv, m);
 			Qlog =>
 				srv.reply(styxservers->readstr(m, logbuf));
 			Qdoc =>
@@ -1005,21 +1008,33 @@ Serve:
 
 			path := int fid.path;
 			case path {
-			Qctl =>
-				cmd := string m.data;
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			Qctl or Qquery =>
 				fs := getfidstate(m.fid);
-				# Run command asynchronously to avoid blocking serveloop
-				spawn asyncctl(fs, cmd);
-			Qquery =>
-				question := strip(string m.data);
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				fs := getfidstate(m.fid);
-				fs.queryreq = question;
-				spawn asyncquery(fs, question);
+				j := ref Job(fs, path == Qquery, string m.data);
+				if(j.query)
+					j.arg = strip(j.arg);
+				alt {
+				jobs <-= j =>
+					fs.busy++;
+					if(j.query) {
+						fs.queryreq = j.arg;
+						fs.queryresp = nil;
+					} else
+						fs.ctlresp = nil;
+					fs.rpos = 0;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				* =>
+					srv.reply(ref Rmsg.Error(m.tag, "too many operations queued"));
+				}
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
+
+		Flush =>
+			# A flushed read is not answered.
+			for(l := fidstates; l != nil; l = tl l)
+				(hd l).pending = dropread((hd l).pending, m.oldtag);
+			srv.default(gm);
 
 		Clunk =>
 			fid := srv.getfid(m.fid);
@@ -1034,18 +1049,68 @@ Serve:
 	navops <-= nil;
 }
 
-# Async wrappers to keep serveloop responsive
-
-asyncctl(fs: ref FidState, cmd: string)
+# Run operations one at a time, off the serve loop.
+worker(jobs: chan of ref Job, done: chan of ref FidState)
 {
-	result := handlectl(cmd);
-	fs.ctlresp = array of byte result;
+	for(;;) {
+		j := <-jobs;
+		if(j.query)
+			j.fs.queryresp = array of byte doquery(j.arg);
+		else
+			j.fs.ctlresp = array of byte handlectl(j.arg);
+		done <-= j.fs;
+	}
 }
 
-asyncquery(fs: ref FidState, question: string)
+replystatus(srv: ref Styxserver, m: ref Tmsg.Read)
 {
-	result := doquery(question);
-	fs.queryresp = array of byte result;
+	srv.reply(styxservers->readstr(m, readstatus()));
+}
+
+fidresp(fs: ref FidState, path: int): array of byte
+{
+	if(path == Qquery)
+		return fs.queryresp;
+	return fs.ctlresp;
+}
+
+# The next part of the reply, from where the last read left off.
+replyread(m: ref Tmsg.Read, fs: ref FidState, path: int): ref Rmsg.Read
+{
+	r := fidresp(fs, path);
+	n := len r - fs.rpos;
+	if(n > m.count)
+		n = m.count;
+	if(n < 0)
+		n = 0;
+	data := r[fs.rpos:fs.rpos + n];
+	fs.rpos += n;
+	return ref Rmsg.Read(m.tag, data);
+}
+
+answerpending(srv: ref Styxserver, fs: ref FidState)
+{
+	# pending holds the latest read first; answer in arrival order.
+	rl: list of ref Tmsg.Read;
+	for(p := fs.pending; p != nil; p = tl p)
+		rl = hd p :: rl;
+	for(l := rl; l != nil; l = tl l) {
+		m := hd l;
+		fid := srv.getfid(m.fid);
+		if(fid == nil)
+			continue;
+		srv.reply(replyread(m, fs, int fid.path));
+	}
+	fs.pending = nil;
+}
+
+dropread(l: list of ref Tmsg.Read, tag: int): list of ref Tmsg.Read
+{
+	out: list of ref Tmsg.Read;
+	for(; l != nil; l = tl l)
+		if((hd l).tag != tag)
+			out = hd l :: out;
+	return out;
 }
 
 # ===================================================================

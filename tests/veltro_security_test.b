@@ -96,8 +96,10 @@ restrictDirWorker(result: chan of string)
 	testdir := "/tmp/veltro/test-restrict";
 	mkdirp(testdir);
 	mkdirp(testdir + "/keepdir");
+	mkdirp(testdir + "/keepdir/overlay");
 	mkdirp(testdir + "/removedir");
-	createfile(testdir + "/keep.txt");
+	writefilecontent(testdir + "/keep.txt", "original");
+	writefilecontent(testdir + "/keepdir/nested.txt", "nested");
 	createfile(testdir + "/remove.txt");
 
 	# Restrict to only "keepdir" and "keep.txt"
@@ -130,6 +132,97 @@ restrictDirWorker(result: chan of string)
 	(ok4, nil) := sys->stat(testdir + "/remove.txt");
 	if(ok4 >= 0) {
 		result <-= "remove.txt should NOT be visible after restrictdir";
+		return;
+	}
+
+	# writable=0 must protect existing entries, not merely forbid creates.
+	# The backing file is owned by this same emulator user, matching the
+	# condition that exposed /dis/sh.dis in the escape-room campaign.
+	fd := sys->open(testdir + "/keep.txt", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "read-only entry accepted write open";
+		return;
+	}
+	fd = sys->create(testdir + "/keep.txt", Sys->OWRITE, 8r644);
+	if(fd != nil) {
+		result <-= "read-only entry accepted truncating create";
+		return;
+	}
+	if(sys->remove(testdir + "/keep.txt") >= 0) {
+		result <-= "read-only entry accepted remove";
+		return;
+	}
+	(ok5, d) := sys->stat(testdir + "/keep.txt");
+	if(ok5 < 0) {
+		result <-= "cannot stat read-only entry";
+		return;
+	}
+	d.mode = 8r666;
+	if(sys->wstat(testdir + "/keep.txt", d) >= 0) {
+		result <-= "read-only entry accepted wstat";
+		return;
+	}
+
+	# Rebinding a read-only capability must not strip its attenuation.
+	escape := "/tmp/veltro/test-restrict-rebind";
+	mkdirp(escape);
+	if(sys->bind(testdir + "/keepdir", escape, Sys->MREPL) < 0) {
+		result <-= sys->sprint("cannot rebind read-only directory: %r");
+		return;
+	}
+	fd = sys->open(escape + "/nested.txt", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "rebind stripped read-only attenuation";
+		return;
+	}
+
+	# Exporting a read-only projection over 9P must not launder it into a
+	# writable service when the client mounts it without MREADONLY.
+	remote := "/tmp/veltro/test-restrict-remote";
+	mkdirp(remote);
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0) {
+		result <-= sys->sprint("cannot create export pipe: %r");
+		return;
+	}
+	if(sys->export(fds[0], testdir, Sys->EXPASYNC) < 0) {
+		result <-= sys->sprint("cannot export read-only directory: %r");
+		return;
+	}
+	fds[0] = nil;
+	if(sys->mount(fds[1], nil, remote, Sys->MREPL, nil) < 0) {
+		result <-= sys->sprint("cannot mount read-only export: %r");
+		return;
+	}
+	fds[1] = nil;
+	fd = sys->open(remote + "/keep.txt", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "9P export stripped read-only attenuation";
+		return;
+	}
+	if(readfilecontent(remote + "/keep.txt") != "original") {
+		result <-= "cannot read through read-only 9P export";
+		return;
+	}
+	sys->unmount(nil, remote);
+
+	# A deliberate deeper writable mount is a new capability and overrides
+	# the read-only parent for that subtree only.
+	writablebase := "/tmp/veltro/test-restrict-writable-base";
+	mkdirp(writablebase);
+	if(sys->bind(writablebase, testdir + "/keepdir/overlay",
+		Sys->MREPL|Sys->MCREATE) < 0) {
+		result <-= sys->sprint("cannot install deeper writable mount: %r");
+		return;
+	}
+	fd = sys->create(testdir + "/keepdir/overlay/new.txt", Sys->OWRITE, 8r600);
+	if(fd == nil) {
+		result <-= sys->sprint("deeper writable mount remained read-only: %r");
+		return;
+	}
+	fd = nil;
+	if(readfilecontent(testdir + "/keep.txt") != "original") {
+		result <-= "read-only mutation attempt changed backing content";
 		return;
 	}
 
@@ -365,7 +458,7 @@ restrictNsWorker(result: chan of string)
 
 	# Least privilege: with NO /mnt grant in caps.paths, a confined child sees no
 	# /mnt at all — not even /mnt/llm. The model service is NOT granted by mere
-	# existence; an agent that needs it lists /mnt/llm in caps.paths (repl), and a
+	# existence; an agent that needs it lists /mnt/llm in caps.paths (veltro), and a
 	# spawned sub-agent drives the LLM through a pre-opened FD that survives the
 	# restriction. (mntgen would make /mnt/llm *stat* as present in the parent ns;
 	# the root-level restriction is what hides /mnt here.)
@@ -544,7 +637,7 @@ tmpVeltroTrustedIpcNotGrantableWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	caps := ref NsConstruct->Capabilities(
-		"read" :: nil, "/tmp/veltro/ftree" :: nil, nil, nil,
+		"read" :: nil, "/mnt/ftree" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
@@ -605,6 +698,7 @@ TRAVERSAL_TMP_CANARY: con "/tmp/veltro-traversal-canary";
 TRAVERSAL_ROOT_CANARY: con "/veltro-traversal-canary-root";
 TRAVERSAL_TMP_ESCAPE: con "/tmp/veltro-traversal-escape";
 TRAVERSAL_ROOT_ESCAPE: con "/veltro-traversal-escape-root";
+TRAVERSAL_PROBE: con "/tmp/veltro/probe-sdk";
 
 testNamespaceTraversalContainment(t: ref T)
 {
@@ -634,6 +728,8 @@ cleanuptraversal()
 	sys->remove(TRAVERSAL_ROOT_CANARY);
 	sys->remove(TRAVERSAL_TMP_ESCAPE);
 	sys->remove(TRAVERSAL_ROOT_ESCAPE);
+	sys->remove(TRAVERSAL_PROBE + "/marker");
+	sys->remove(TRAVERSAL_PROBE);
 }
 
 # Directory entry names at a path, for probes that care about how much is
@@ -652,6 +748,25 @@ lsnames(path: string): list of string
 			names = d[i].name :: names;
 	}
 	return names;
+}
+
+hasname(names: list of string, want: string): int
+{
+	for(; names != nil; names = tl names)
+		if(hd names == want)
+			return 1;
+	return 0;
+}
+
+samenames(got, want: list of string): int
+{
+	for(g := got; g != nil; g = tl g)
+		if(!hasname(want, hd g))
+			return 0;
+	for(w := want; w != nil; w = tl w)
+		if(!hasname(got, hd w))
+			return 0;
+	return 1;
 }
 
 # Containment must hold for code that is not a Veltro tool. Rooted filesystem
@@ -717,10 +832,12 @@ traversalWorker(result: chan of string)
 	sys->pctl(Sys->FORKNS, nil);
 	createfile(TRAVERSAL_TMP_CANARY);
 	createfile(TRAVERSAL_ROOT_CANARY);
+	mkdirp(TRAVERSAL_PROBE);
+	createfile(TRAVERSAL_PROBE + "/marker");
 
 	caps := ref NsConstruct->Capabilities(
-		"read" :: "write" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
-		nil, 0, 0, 41003, nil
+		"read" :: "write" :: nil, TRAVERSAL_PROBE :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil, nil, 0, 0, 41003, TRAVERSAL_PROBE :: nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
 	if(err != nil) {
@@ -738,6 +855,8 @@ traversalWorker(result: chan of string)
 		"/tmp/veltro/scratch/../../veltro-traversal-canary",
 		"/tmp/veltro/scratch/../../../veltro-traversal-canary-root",
 		"/tmp/veltro/scratch/../../../../veltro-traversal-canary-root",
+		"/tmp/veltro/probe-sdk/../../veltro-traversal-canary",
+		"/tmp/veltro/probe-sdk/../../../veltro-traversal-canary-root",
 		"/tmp/veltro/../../veltro-traversal-canary",
 		"/dis/lib/../../veltro-traversal-canary-root",
 		"/dis/veltro/../../veltro-traversal-canary-root",
@@ -749,6 +868,9 @@ traversalWorker(result: chan of string)
 			report += sys->sprint("  READ  %s reached a canary outside the namespace\n",
 				reads[i]);
 	}
+	if(hasname(lsnames("/tmp/veltro/probe-sdk/../../.."), ".veltro-ns") ||
+	   hasname(lsnames("/tmp/veltro/probe-sdk/../../../.veltro-ns"), "shadow"))
+		report += "  READ  probe-sdk parent traversal exposed .veltro-ns/shadow\n";
 
 	# Relative resolution after chdir. Plan 9 4e keeps the mount-point stack on
 	# the channel, so a relative walk from the working directory must clamp the
@@ -776,6 +898,7 @@ traversalWorker(result: chan of string)
 	# granted writable view by any traversal.
 	writes := array[] of {
 		"/tmp/veltro/scratch/../../veltro-traversal-escape",
+		"/tmp/veltro/probe-sdk/../../veltro-traversal-escape",
 		"/dis/lib/../../veltro-traversal-escape-root",
 		"/lib/veltro/../../veltro-traversal-escape-root",
 	};
@@ -924,6 +1047,11 @@ shellWorker(result: chan of string)
 	(shok, nil) := sys->stat("/dis/sh.dis");
 	if(shok < 0) {
 		result <-= "shellcmds should grant /dis/sh.dis";
+		return;
+	}
+	fd := sys->open("/dis/sh.dis", Sys->OWRITE);
+	if(fd != nil) {
+		result <-= "exec grant exposes /dis/sh.dis for writing";
 		return;
 	}
 
@@ -1155,6 +1283,369 @@ gitGenericHiddenWorker(result: chan of string)
 }
 
 
+# The wiki agent service is a fixed tool-derived /mnt application mount
+# (migrated from /n/wikia per docs/NAMESPACE-LAYOUT.md, INFR-402). The wiki
+# tool must see /mnt/wikia without a raw path grant, while generic tools must
+# not.
+testRestrictNsWikiaToolDerived(t: ref T)
+{
+	createdmnt := 0;
+	(ok, nil) := sys->stat("/mnt");
+	if(ok < 0) {
+		fd := sys->create("/mnt", Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil) {
+			t.skip("cannot create /mnt test fixture");
+			return;
+		}
+		fd = nil;
+		createdmnt = 1;
+	}
+	createdwikia := 0;
+	(ok, nil) = sys->stat("/mnt/wikia");
+	if(ok < 0) {
+		fd := sys->create("/mnt/wikia", Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil) {
+			if(createdmnt)
+				sys->remove("/mnt");
+			t.skip("cannot create /mnt/wikia test fixture");
+			return;
+		}
+		fd = nil;
+		createdwikia = 1;
+	}
+
+	result := chan of string;
+	spawn wikiaToolDerivedWorker(result);
+	r := <-result;
+	if(r == "") {
+		spawn wikiaGenericHiddenWorker(result);
+		r = <-result;
+	}
+
+	if(createdwikia)
+		sys->remove("/mnt/wikia");
+	if(createdmnt)
+		sys->remove("/mnt");
+	if(r != "")
+		t.error(r);
+}
+
+wikiaToolDerivedWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"wiki" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (wiki tool) failed: %s", err);
+		return;
+	}
+	(wikiaok, nil) := sys->stat("/mnt/wikia");
+	if(wikiaok < 0) {
+		result <-= "/mnt/wikia missing for wiki tool without raw path grant";
+		return;
+	}
+	result <-= "";
+}
+
+wikiaGenericHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (generic tool) failed: %s", err);
+		return;
+	}
+	(wikiaok, nil) := sys->stat("/mnt/wikia");
+	if(wikiaok >= 0) {
+		result <-= "/mnt/wikia visible to generic tool without wiki capability";
+		return;
+	}
+	result <-= "";
+}
+
+
+# speech9p mounts at /mnt/speech (migrated from /n/speech per
+# docs/NAMESPACE-LAYOUT.md, INFR-403). tools9p grants "/mnt/speech" as a path
+# to say and hear; that grant must expose it and no sibling under /mnt, and a
+# tool without the grant must not see it.
+testRestrictNsSpeechGrant(t: ref T)
+{
+	made: list of string;
+	for(p := "/mnt" :: "/mnt/speech" :: "/mnt/speechsib" :: nil; p != nil; p = tl p) {
+		(ok, nil) := sys->stat(hd p);
+		if(ok < 0) {
+			fd := sys->create(hd p, Sys->OREAD, Sys->DMDIR | 8r755);
+			if(fd == nil) {
+				for(; made != nil; made = tl made)
+					sys->remove(hd made);
+				t.skip("cannot create " + hd p + " test fixture");
+				return;
+			}
+			made = hd p :: made;
+		}
+	}
+
+	result := chan of string;
+	spawn speechGrantedWorker(result);
+	r := <-result;
+	if(r == "") {
+		spawn speechHiddenWorker(result);
+		r = <-result;
+	}
+
+	for(; made != nil; made = tl made)
+		sys->remove(hd made);
+	if(r != "")
+		t.error(r);
+}
+
+speechGrantedWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"say" :: nil,
+		"/mnt/speech" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (say tool) failed: %s", err);
+		return;
+	}
+	(speechok, nil) := sys->stat("/mnt/speech");
+	if(speechok < 0) {
+		result <-= "/mnt/speech missing for say tool granted /mnt/speech";
+		return;
+	}
+	(sibok, nil) := sys->stat("/mnt/speechsib");
+	if(sibok >= 0) {
+		result <-= "/mnt/speech grant exposed a sibling under /mnt";
+		return;
+	}
+	result <-= "";
+}
+
+speechHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (generic tool) failed: %s", err);
+		return;
+	}
+	(speechok, nil) := sys->stat("/mnt/speech");
+	if(speechok >= 0) {
+		result <-= "/mnt/speech visible to a tool without the speech grant";
+		return;
+	}
+	result <-= "";
+}
+
+# wallet9p mounts at /mnt/wallet (migrated from /n/wallet per
+# docs/NAMESPACE-LAYOUT.md, INFR-400). The wallet is one capability: only an
+# exact "/mnt/wallet" grant exposes it, through restrictwallet()'s filter. A
+# path beneath it grants nothing, and an exact grant with wallet9p absent
+# exposes nothing and does not fail the restriction.
+testRestrictNsWalletGrant(t: ref T)
+{
+	result := chan of string;
+	r: string;
+	(wok, nil) := sys->stat("/mnt/wallet");
+	if(wok >= 0)
+		t.log("/mnt/wallet exists (a wallet9p, or its residue): absent case not run");
+	else {
+		spawn walletAbsentWorker(result);
+		r = <-result;
+		if(r != "") {
+			t.error(r);
+			return;
+		}
+	}
+
+	made: list of string;
+	for(p := "/mnt" :: "/mnt/wallet" :: "/mnt/wallet/alice" ::
+			"/mnt/wallet/alice/pay" :: nil; p != nil; p = tl p) {
+		(ok, nil) := sys->stat(hd p);
+		if(ok < 0) {
+			fd := sys->create(hd p, Sys->OREAD, Sys->DMDIR | 8r755);
+			if(fd == nil) {
+				for(; made != nil; made = tl made)
+					sys->remove(hd made);
+				t.skip("cannot create " + hd p + " test fixture");
+				return;
+			}
+			made = hd p :: made;
+		}
+	}
+	spawn walletSubpathWorker(result);
+	r = <-result;
+	for(; made != nil; made = tl made)
+		sys->remove(hd made);
+	if(r != "")
+		t.error(r);
+}
+
+walletAbsentWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"wallet" :: nil,
+		"/mnt/wallet" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (wallet granted, wallet9p absent) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/mnt/wallet");
+	if(ok >= 0) {
+		result <-= "/mnt/wallet visible with wallet9p absent";
+		return;
+	}
+	result <-= "";
+}
+
+walletSubpathWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"wallet" :: nil,
+		"/mnt/wallet/alice/pay" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (wallet subpath) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/mnt/wallet");
+	if(ok >= 0) {
+		result <-= "a path under /mnt/wallet exposed the wallet";
+		return;
+	}
+	result <-= "";
+}
+
+# /mnt/wsys (wmsrv window pictures, one tree per Lucifer activity) is a
+# fixed-function grant: only the window tool gets it, and only its own
+# activity's tree, bound over /mnt/wsys so no other activity is nameable.
+WSYSA: con 41011;
+WSYSB: con 41012;
+
+testRestrictNsWsysPerActivity(t: ref T)
+{
+	made: list of string;
+	for(p := "/mnt" :: "/mnt/wsys" ::
+			"/mnt/wsys/" + string WSYSA :: "/mnt/wsys/" + string WSYSA + "/7" ::
+			"/mnt/wsys/" + string WSYSB :: "/mnt/wsys/" + string WSYSB + "/9" :: nil;
+			p != nil; p = tl p) {
+		(ok, nil) := sys->stat(hd p);
+		if(ok < 0) {
+			if(sys->create(hd p, Sys->OREAD, Sys->DMDIR | 8r755) == nil) {
+				t.skip("cannot create " + hd p + " test fixture");
+				return;
+			}
+			made = hd p :: made;
+		}
+	}
+	for(w := "/mnt/wsys/" + string WSYSA + "/7/window" ::
+			"/mnt/wsys/" + string WSYSB + "/9/window" :: nil; w != nil; w = tl w) {
+		if(sys->create(hd w, Sys->OWRITE, 8r644) == nil) {
+			t.skip("cannot create " + hd w);
+			return;
+		}
+		made = hd w :: made;
+	}
+
+	result := chan of string;
+	spawn wsysOwnWorker(result);
+	r := <-result;
+	if(r == "") {
+		spawn wsysGenericHiddenWorker(result);
+		r = <-result;
+	}
+
+	for(; made != nil; made = tl made)
+		sys->remove(hd made);
+	for(a := WSYSA :: WSYSB :: nil; a != nil; a = tl a)
+		sys->remove("/tmp/veltro/scratch/" + string hd a);
+	if(r != "")
+		t.error(r);
+}
+
+wsysOwnWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"window" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, WSYSA, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (window tool) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/mnt/wsys/7/window");
+	if(ok < 0) {
+		result <-= "window tool cannot see its own activity's window";
+		return;
+	}
+	for(p := "/mnt/wsys/9" :: "/mnt/wsys/" + string WSYSB ::
+			"/mnt/wsys/" + string WSYSA :: nil; p != nil; p = tl p) {
+		(ok, nil) = sys->stat(hd p);
+		if(ok >= 0) {
+			result <-= "window tool can name another activity's windows: " + hd p;
+			return;
+		}
+	}
+	result <-= "";
+}
+
+wsysGenericHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, WSYSA, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (generic tool) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/mnt/wsys");
+	if(ok >= 0) {
+		result <-= "/mnt/wsys visible to a tool without the window capability";
+		return;
+	}
+	result <-= "";
+}
+
 # Combined /mnt grants must compose rather than replace one another.
 testRestrictNsMntCombined(t: ref T)
 {
@@ -1363,13 +1854,16 @@ verifyNsWorker(result: chan of string)
 
 	# Seed representative privileged control files before restriction. The
 	# shared verifier must prove restriction hides real pre-existing controls,
-	# not just paths absent from the test namespace.
-	mkdirp("/tool");
+	# not just paths absent from the test namespace.  They are made in a
+	# scratch tree bound before the root, in this worker's namespace only:
+	# made in place they were files in the host tree (the emulator's root),
+	# left there for later tests to take for mounted servers.
+	if((err := scratchroot("/tool" :: "/mnt/toolctl" :: "/mnt/msg" :: nil)) != nil) {
+		result <-= err;
+		return;
+	}
 	createfile("/tool/ctl");
-	mkdirp("/mnt");
-	mkdirp("/mnt/toolctl");
 	createfile("/mnt/toolctl/ctl");
-	mkdirp("/mnt/msg");
 	createfile("/mnt/msg/status");
 	createfile("/mnt/msg/ctl");
 	createfile("/mnt/msg/pending");
@@ -1383,7 +1877,7 @@ verifyNsWorker(result: chan of string)
 		nil, 0, 0, -1, nil
 	, nil);
 
-	err := nsconstruct->restrictns(caps);
+	err = nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns failed: %s", err);
 		return;
@@ -1658,8 +2152,8 @@ pathsExposureWorker(result: chan of string)
 # Test 13: NodevsBlocksDeviceAttach
 # Verifies pctl(NODEVS) blocks attach of devices outside the |esDa kernel
 # allowlist. Runtime ground-truth for the SECURITY.md "NODEVS short-term
-# fix" applied at the three top-level FORKNS sites (repl.b:169,
-# veltro.b:168, tools9p.b:644). Without this gate, a tool or exec
+# fix" applied at the top-level FORKNS sites (veltro.b:168,
+# tools9p.b:644). Without this gate, a tool or exec
 # invocation could sys->bind("#sfactotum", ...) and reach factotum
 # regardless of path-based restriction (kernel gate at
 # emu/port/chan.c:1041-1051).
@@ -1736,7 +2230,10 @@ toolCtlHiddenWorker(result: chan of string)
 
 	# Build a synthetic /tool tree so restrictns() can exercise its allowlist
 	# behavior without requiring a running tools9p instance.
-	mkdirp("/tool");
+	if((serr := scratchroot("/tool" :: nil)) != nil) {
+		result <-= serr;
+		return;
+	}
 	createfile("/tool/tools");
 	createfile("/tool/grantable");
 	createfile("/tool/help");
@@ -1951,6 +2448,9 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/mnt/audit/chain",
 		"/mnt/matrix",
 		"/mnt/matrix/composition",
+		"/mnt/wsys",
+		"/mnt/wsys/0",
+		"/mnt/wsys/0/1/window",
 		"/n/git",
 		"/n/git/ctl",
 		"/mnt/gpu",
@@ -1962,6 +2462,8 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/n/web/clone",
 		"/mnt/wiki",
 		"/mnt/wiki/new",
+		"/mnt/wikia",
+		"/mnt/wikia/ctl",
 		"/n/wikia",
 		"/n/wikia/ctl",
 		"/mnt/keys",
@@ -1976,18 +2478,23 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/phone/sms",
 		"/mnt/msg/ctl",
 		"/mnt/msg/ctl/session",
+		"/mnt/wallet/alice/ctl",
+		"/mnt/wallet/alice/ctl/session",
+		"/mnt/wallet/alice/sign",
 		"/n/wallet/alice/ctl",
-		"/n/wallet/alice/ctl/session",
+		"/n/wallet/ctl",
 		"/mnt/mail/accounts/alice/compose",
 		"/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply",
 		"/tmp/veltro/.ns",
 		"/tmp/veltro/cow",
 		"/tmp/veltro/tasks",
 		"/tmp/veltro/browser",
-		"/tmp/veltro/editor",
-		"/tmp/veltro/shell",
-		"/tmp/veltro/fractal",
-		"/tmp/veltro/man",
+		"/mnt/charon",
+		"/mnt/charon/ctl",
+		"/mnt/editor",
+		"/mnt/shell",
+		"/mnt/fractal",
+		"/mnt/man",
 	};
 
 	for(i := 0; i < len bad; i++) {
@@ -2043,7 +2550,10 @@ safeGrantPathOne(path: string, result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 
-	mkdirp("/mnt/msg");
+	if((serr := scratchroot("/mnt/msg" :: nil)) != nil) {
+		result <-= serr;
+		return;
+	}
 	createfile("/mnt/msg/status");
 	createfile("/mnt/msg/draft");
 	mkdirp("/tmp/veltro/scratch");
@@ -2121,7 +2631,7 @@ testStagedWriteOverlay(t: ref T)
 		base :: nil
 	, nil);
 
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, nsconstruct->openmanifest(manifest));
 	mdata := readfilecontent(manifest);
 	t.assert(contains(mdata, "path=" + base), "manifest includes writable granted path");
 	t.assert(contains(mdata, "perm=cow"), "manifest marks writable path as cow");
@@ -2131,7 +2641,31 @@ testStagedWriteOverlay(t: ref T)
 
 testDirectWriteManifest(t: ref T)
 {
-	mkdirp("/mnt/msg");
+	done := chan of string;
+	spawn directwritemanifest(t, done);
+	if((err := <-done) != nil)
+		t.error(err);
+}
+
+directwritemanifest(t: ref T, done: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	{
+		directwritemanifest1(t);
+	} exception e {
+	"*" =>
+		done <-= "exception: " + e;
+		return;
+	}
+	done <-= nil;
+}
+
+directwritemanifest1(t: ref T)
+{
+	if((err := scratchroot("/mnt/msg" :: nil)) != nil) {
+		t.error(err);
+		return;
+	}
 	writefilecontent("/mnt/msg/draft", "");
 	manifest := "/tmp/veltro/.ns/test-manifest-direct";
 	sys->remove(manifest);
@@ -2143,7 +2677,7 @@ testDirectWriteManifest(t: ref T)
 		nil, 0, 0, 42,
 		"/mnt/msg/draft" :: nil
 	, nil);
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, nsconstruct->openmanifest(manifest));
 	mdata := readfilecontent(manifest);
 	t.assert(contains(mdata, "path=/mnt/msg/draft"), "manifest includes transactional endpoint");
 	t.assert(contains(mdata, "path=/mnt/msg/draft label=mnt/msg/draft perm=rw"),
@@ -2173,6 +2707,21 @@ mkdirp(path: string)
 }
 
 # Create an empty file
+# A scratch tree, with dirs made in it, bound before the root of the
+# calling process's namespace (which must be its own): fixtures made in
+# it are not files in the host tree, the emulator's root, left behind
+# for later tests to take for mounted servers.  The result is nil, or
+# why it could not be.
+scratchroot(dirs: list of string): string
+{
+	fix := sys->sprint("/tmp/veltro_security.%d", sys->pctl(0, nil));
+	for(; dirs != nil; dirs = tl dirs)
+		mkdirp(fix + hd dirs);
+	if(sys->bind(fix, "/", Sys->MBEFORE|Sys->MCREATE) < 0)
+		return sys->sprint("bind %s before /: %r", fix);
+	return nil;
+}
+
 createfile(path: string)
 {
 	fd := sys->create(path, Sys->OWRITE, 8r644);
@@ -2238,6 +2787,142 @@ testEnvironmentAllowlist(t: ref T)
 
 	if(r != "")
 		t.error(r);
+}
+
+
+# ============================================================================
+# Baseline capability surface
+# Pins the intentional residual authority in /dev, /dis, /prog and /lib.
+# A campaign PASS is not this contract: these assertions inspect the namespace
+# deterministically and verify that the retained code/config views are read-only.
+# ============================================================================
+testBaselineCapabilitySurface(t: ref T)
+{
+	result := chan of string;
+	parentpid := sys->pctl(0, nil);
+	spawn baselineCapabilityWorker(result, parentpid);
+	r := <-result;
+	if(r != "")
+		t.error(r);
+}
+
+baselineCapabilityWorker(result: chan of string, parentpid: int)
+{
+	selfpid := sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, nil, nil, nil, 0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+
+	if(!samenames(lsnames("/dev"), "cons" :: "null" :: "time" :: nil)) {
+		result <-= "/dev contains authority outside cons, null and time";
+		return;
+	}
+	if(!samenames(lsnames("/dis"), "lib" :: "veltro" :: nil)) {
+		result <-= "/dis contains an ungranted top-level executable or tree";
+		return;
+	}
+	if(!samenames(lsnames("/dis/veltro/tools"), "read.dis" :: nil)) {
+		result <-= "/dis/veltro/tools contains an ungranted tool module";
+		return;
+	}
+	if(!samenames(lsnames("/lib"), "certs" :: "veltro" :: nil)) {
+		result <-= "/lib contains a tree outside certs and veltro";
+		return;
+	}
+	if(!samenames(lsnames("/prog"), string selfpid :: nil)) {
+		result <-= "/prog is not restricted to the current tool process";
+		return;
+	}
+	(parentok, nil) := sys->stat(sys->sprint("/prog/%d/ns", parentpid));
+	if(parentok >= 0) {
+		result <-= "/prog exposes the parent namespace";
+		return;
+	}
+
+	readonly := array[] of {
+		"/dev/time",
+		"/dis/veltro/tools/read.dis",
+		"/lib/veltro/system.txt",
+		sys->sprint("/prog/%d/ctl", selfpid),
+	};
+	for(i := 0; i < len readonly; i++) {
+		fd := sys->open(readonly[i], Sys->OWRITE);
+		if(fd != nil) {
+			result <-= "baseline capability accepted a write open: " + readonly[i];
+			return;
+		}
+	}
+
+	(keyok, nil) := sys->stat("/lib/veltro/keys/ns-secret-canary");
+	if(keyok >= 0) {
+		result <-= "/lib/veltro exposes protected key material";
+		return;
+	}
+	result <-= "";
+}
+
+
+# ============================================================================
+# Concurrent live-shadow containment
+# Every worker holds its completed restricted namespace at a barrier, ensuring
+# other workers' physical shadow trees are live during direct and parent-walk
+# probes. This covers the concurrency condition absent from the INFR-470 serial
+# traversal regression.
+# ============================================================================
+testConcurrentShadowContainment(t: ref T)
+{
+	nworkers := 4;
+	mkdirp(TRAVERSAL_PROBE);
+	createfile(TRAVERSAL_PROBE + "/marker");
+	ready := chan of int;
+	probe := chan[nworkers] of int;
+	results := chan of string;
+	for(i := 0; i < nworkers; i++)
+		spawn concurrentShadowWorker(ready, probe, results, 42000 + i);
+	for(i = 0; i < nworkers; i++)
+		<-ready;
+	for(i = 0; i < nworkers; i++)
+		probe <-= 1;
+	for(i = 0; i < nworkers; i++) {
+		r := <-results;
+		if(r != "")
+			t.error(r);
+	}
+	sys->remove(TRAVERSAL_PROBE + "/marker");
+	sys->remove(TRAVERSAL_PROBE);
+}
+
+concurrentShadowWorker(ready, probe: chan of int, results: chan of string,
+	actid: int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil, TRAVERSAL_PROBE :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil, nil, 0, 0, actid, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		ready <-= 1;
+		results <-= sys->sprint("restrictns failed: %s", err);
+		return;
+	}
+	ready <-= 1;
+	<-probe;
+
+	if(hasname(lsnames("/tmp"), ".veltro-ns") ||
+	   hasname(lsnames("/tmp/.veltro-ns"), "shadow") ||
+	   hasname(lsnames(TRAVERSAL_PROBE + "/../../.."), ".veltro-ns") ||
+	   hasname(lsnames(TRAVERSAL_PROBE + "/../../../.veltro-ns"), "shadow")) {
+		results <-= "concurrent restricted worker exposed live shadow backing";
+		return;
+	}
+	results <-= "";
 }
 
 environmentAllowlistWorker(result: chan of string)
@@ -2419,6 +3104,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictDirExclusion", testRestrictDirExclusion);
 	run("BindReplaceIdempotent", testBindReplaceIdempotent);
 	run("RestrictNs", testRestrictNs);
+	run("RestrictNsWsysPerActivity", testRestrictNsWsysPerActivity);
 	run("TaskMetadataCapability", testTaskMetadataCapability);
 	run("TmpVeltroIpcHidden", testTmpVeltroIpcHidden);
 	run("TmpVeltroExplicitGrant", testTmpVeltroExplicitGrant);
@@ -2428,6 +3114,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ExecTraversalContainment", testExecTraversalContainment);
 	run("NetworkCapability", testNetworkCapability);
 	run("EnvironmentAllowlist", testEnvironmentAllowlist);
+	run("BaselineCapabilitySurface", testBaselineCapabilitySurface);
+	run("ConcurrentShadowContainment", testConcurrentShadowContainment);
 	run("ProgAllowlist", testProgAllowlist);
 	run("ExecProgAllowlist", testExecProgAllowlist);
 	run("ExecShellProgAllowlist", testExecShellProgAllowlist);
@@ -2435,6 +3123,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsGitToolDerived", testRestrictNsGitToolDerived);
+	run("RestrictNsWalletGrant", testRestrictNsWalletGrant);
+	run("RestrictNsSpeechGrant", testRestrictNsSpeechGrant);
+	run("RestrictNsWikiaToolDerived", testRestrictNsWikiaToolDerived);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);
 	run("RestrictNsMcpDeny", testRestrictNsMcpDeny);
 	run("RestrictNsRace", testRestrictNsRace);

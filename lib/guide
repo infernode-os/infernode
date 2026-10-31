@@ -312,7 +312,7 @@ ls /mnt/llm
 cat /mnt/llm/model
 
 # Speech interface
-ls /n/speech
+ls /mnt/speech
 
 # Xenith filesystem
 ls /mnt/xenith

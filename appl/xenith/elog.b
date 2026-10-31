@@ -82,6 +82,7 @@ eloginit(f: ref File)
 	if(f.elog.typex != Empty)
 		return;
 	f.elog.typex = Null;
+	f.elognchange = f.buf.nchange;
 	if(f.elogbuf == nil)
 		f.elogbuf = buffm->newbuffer();
 		# f.elogbuf = ref Buffer;

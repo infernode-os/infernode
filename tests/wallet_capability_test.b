@@ -8,12 +8,13 @@ include "nsconstruct.m";
 include "sh.m";
 
 WalletCapabilityTest: module {
-	init: fn(nil: ref Draw->Context, nil: list of string);
+	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
 fail(s: string)
 {
 	sys->print("WALLETCAP FAIL: %s\n", s);
+	raise "fail:walletcap";
 }
 
 readfile(path: string): string
@@ -53,9 +54,13 @@ runsrv()
 	mod->init(nil, "wallet9p" :: nil);
 }
 
-init(nil: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	# It needs the /n and factotum tests/inferno/wallet_capability.sh
+	# provides.
+	if(tl args == nil || hd tl args != "check")
+		raise "skip:helper for tests/inferno/wallet_capability.sh, which runs it";
 	nsc = load NsConstruct NsConstruct->PATH;
 	if(nsc == nil) {
 		fail("load nsconstruct");
@@ -66,38 +71,38 @@ init(nil: ref Draw->Context, nil: list of string)
 	spawn runsrv();
 	sys->sleep(1500);
 
-	if(writefile("/n/wallet/new", "import eth ethereum captest 0000000000000000000000000000000000000000000000000000000000000001") <= 0 &&
-	   !exists("/n/wallet/captest/address")) {
+	if(writefile("/mnt/wallet/new", "import eth ethereum captest 0000000000000000000000000000000000000000000000000000000000000001") <= 0 &&
+	   !exists("/mnt/wallet/captest/address")) {
 		fail("cannot create test wallet account");
 		return;
 	}
-	if(writefile("/n/wallet/new", "eth ethereum bad/name") >= 0) {
+	if(writefile("/mnt/wallet/new", "eth ethereum bad/name") >= 0) {
 		fail("wallet accepted unsafe account name");
 		return;
 	}
-	if(writefile("/n/wallet/new", "eth ethereum extra tokens") >= 0) {
+	if(writefile("/mnt/wallet/new", "eth ethereum extra tokens") >= 0) {
 		fail("wallet accepted extra account creation tokens");
 		return;
 	}
-	if(writefile("/n/wallet/ctl", "default bad/name") >= 0) {
+	if(writefile("/mnt/wallet/ctl", "default bad/name") >= 0) {
 		fail("wallet accepted unsafe default account name");
 		return;
 	}
-	writefile("/n/wallet/ctl", "default captest");
-	if(writefile("/n/wallet/captest/pay", "1000 0x000000000000000000000000000000000000dEaD") <= 0) {
+	writefile("/mnt/wallet/ctl", "default captest");
+	if(writefile("/mnt/wallet/captest/pay", "1000 0x000000000000000000000000000000000000dEaD") <= 0) {
 		fail("trusted setup could not queue wallet payment proposal");
 		return;
 	}
-	if(writefile("/n/wallet/ctl", "deny 1 trailing") >= 0) {
+	if(writefile("/mnt/wallet/ctl", "deny 1 trailing") >= 0) {
 		fail("wallet accepted trailing tokens on pending denial");
 		return;
 	}
-	if(writefile("/n/wallet/ctl", "deny 1") <= 0) {
+	if(writefile("/mnt/wallet/ctl", "deny 1") <= 0) {
 		fail("wallet rejected exact pending denial");
 		return;
 	}
 
-	caps := ref NsConstruct->Capabilities("wallet" :: nil, "/n/wallet" :: nil,
+	caps := ref NsConstruct->Capabilities("wallet" :: nil, "/mnt/wallet" :: nil,
 		nil, nil, nil, nil, 0, 0, -1, nil, nil);
 	sys->pctl(Sys->FORKNS, nil);
 	err := nsc->restrictns(caps);
@@ -106,21 +111,21 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 
-	if(!exists("/n/wallet/accounts") || !exists("/n/wallet/default") ||
-	   !exists("/n/wallet/network") ||
-	   !exists("/n/wallet/captest/address") || !exists("/n/wallet/captest/pay") ||
-	   !exists("/n/wallet/captest/authorize") || !exists("/n/wallet/captest/history")) {
+	if(!exists("/mnt/wallet/accounts") || !exists("/mnt/wallet/default") ||
+	   !exists("/mnt/wallet/network") ||
+	   !exists("/mnt/wallet/captest/address") || !exists("/mnt/wallet/captest/pay") ||
+	   !exists("/mnt/wallet/captest/authorize") || !exists("/mnt/wallet/captest/history")) {
 		fail("agent wallet proposal/read surface missing");
 		return;
 	}
 
-	if(exists("/n/wallet/ctl") || exists("/n/wallet/pending") ||
-	   exists("/n/wallet/new") || exists("/n/wallet/captest/ctl") ||
-	   exists("/n/wallet/captest/sign")) {
+	if(exists("/mnt/wallet/ctl") || exists("/mnt/wallet/pending") ||
+	   exists("/mnt/wallet/new") || exists("/mnt/wallet/captest/ctl") ||
+	   exists("/mnt/wallet/captest/sign")) {
 		fail("trusted wallet commit/config files visible");
 		return;
 	}
-	if(writefile("/n/wallet/captest/sign",
+	if(writefile("/mnt/wallet/captest/sign",
 	    "9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658") >= 0) {
 		fail("wallet grant allowed raw hash signing");
 		return;
@@ -128,11 +133,11 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	# Master's grammar assertions: the wallet must reject a non-decimal
 	# amount and an unsafe recipient outright.
-	if(writefile("/n/wallet/captest/pay", "abc 0x000000000000000000000000000000000000dEaD") >= 0) {
+	if(writefile("/mnt/wallet/captest/pay", "abc 0x000000000000000000000000000000000000dEaD") >= 0) {
 		fail("wallet accepted non-decimal payment amount");
 		return;
 	}
-	if(writefile("/n/wallet/captest/pay", "1000 not-an-address") >= 0) {
+	if(writefile("/mnt/wallet/captest/pay", "1000 not-an-address") >= 0) {
 		fail("wallet accepted unsafe payment recipient");
 		return;
 	}
@@ -140,7 +145,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	# Results are bound to the writing fid (a shared account-level
 	# result would hand one agent's txhash or signed authorization to
 	# another), so the proposal must be written and read on ONE fd.
-	pfd := sys->open("/n/wallet/captest/pay", Sys->ORDWR);
+	pfd := sys->open("/mnt/wallet/captest/pay", Sys->ORDWR);
 	if(pfd == nil) {
 		fail("agent could not open wallet pay file");
 		return;
@@ -161,12 +166,12 @@ init(nil: ref Draw->Context, nil: list of string)
 		return;
 	}
 	# A reader that did not submit the proposal must see nothing.
-	leak := readfile("/n/wallet/captest/pay");
+	leak := readfile("/mnt/wallet/captest/pay");
 	if(leak != nil && len leak > 0 && leak[0] != '\n') {
 		fail("pay result leaked to an unrelated reader");
 		return;
 	}
-	if(exists("/n/wallet/pending") || exists("/n/wallet/ctl")) {
+	if(exists("/mnt/wallet/pending") || exists("/mnt/wallet/ctl")) {
 		fail("commit path visible after payment proposal");
 		return;
 	}

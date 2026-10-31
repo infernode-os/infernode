@@ -1,6 +1,6 @@
 # Phase 2: Locking Protocol Verification
 
-**Status**: Ready for Verification (requires SPIN installation)
+**Status**: Verified 2026-01-13 — see [../results/PHASE2-LOCKING-RESULTS.md](../results/PHASE2-LOCKING-RESULTS.md)
 **Created**: 2026-01-13
 
 ## Overview
@@ -35,7 +35,7 @@ This ensures a consistent lock hierarchy and prevents deadlock.
 
 ### 1. `cmount()` - Mount Operation
 
-**Source**: `emu/port/chan.c:388`
+**Source**: `emu/port/chan.c:506`
 
 ```c
 wlock(&pg->ns);              // Acquire namespace write lock
@@ -53,7 +53,7 @@ wunlock(&m->lock);
 
 ### 2. `cunmount()` - Unmount Operation
 
-**Source**: `emu/port/chan.c:503`
+**Source**: `emu/port/chan.c:622`
 
 ```c
 wlock(&pg->ns);              // Acquire namespace write lock
@@ -68,7 +68,7 @@ wunlock(&pg->ns);
 
 ### 3. `pgrpcpy()` - Namespace Copy
 
-**Source**: `emu/port/pgrp.c:74`
+**Source**: `emu/port/pgrp.c:75`
 
 ```c
 wlock(&from->ns);            // Write lock source namespace
@@ -84,7 +84,7 @@ wunlock(&from->ns);
 
 ### 4. `findmount()` - Mount Lookup
 
-**Source**: `emu/port/chan.c:592`
+**Source**: `emu/port/chan.c:731`
 
 ```c
 rlock(&pg->ns);              // Read lock namespace
@@ -234,10 +234,10 @@ Verifies lock ordering invariant explicitly.
 
 | Model | C Code | Source File:Line |
 |-------|--------|------------------|
-| `cmount()` | `cmount()` | `emu/port/chan.c:388` |
-| `cunmount()` | `cunmount()` | `emu/port/chan.c:503` |
-| `pgrpcpy()` | `pgrpcpy()` | `emu/port/pgrp.c:74` |
-| `findmount()` | `findmount()` | `emu/port/chan.c:592` |
+| `cmount()` | `cmount()` | `emu/port/chan.c:506` |
+| `cunmount()` | `cunmount()` | `emu/port/chan.c:622` |
+| `pgrpcpy()` | `pgrpcpy()` | `emu/port/pgrp.c:75` |
+| `findmount()` | `findmount()` | `emu/port/chan.c:731` |
 | `closepgrp()` | `closepgrp()` | `emu/port/pgrp.c:23` |
 
 ## Limitations

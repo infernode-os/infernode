@@ -24,7 +24,7 @@ implement Nsaudit;
 # Input format: DIR is a directory of scalar files (one value per file
 # or one value per line), mirroring what tools9p exposes at /tool:
 #   DIR/tools                    one tool name per line
-#   DIR/paths                    one path grant per line
+#   DIR/paths                    one "path ro|rw|cow" capability per line
 #   DIR/meta/role                "toplevel" or "child"
 #   DIR/meta/xenith              "1" or "0"
 #   DIR/meta/actid               integer
@@ -65,7 +65,7 @@ ALWAYS_READS := array[] of {
 	"/dis/lib", "/dis/veltro",
 	"/dev/cons", "/dev/null", "/dev/time",
 	"/lib/certs", "/lib/veltro",
-	"/tmp/veltro",
+	"/tmp/veltro/scratch",
 };
 
 # Caps parsed from a caps directory.
@@ -77,14 +77,14 @@ Caps: adt {
 	role:      string;    # "toplevel" | "child"
 	xenith:    int;
 	actid:     int;
-	nodevs:    string;    # "set" | "unset"
+	nodevs:    string;    # "set" | "unset" | "invalid"
+	nodevsstatus: string; # "valid" | "missing" | "invalid"
 	# Optional caps-level constraints. These are not part of the /tool
 	# shape tools9p exposes today; when a caps dir provides them they
 	# narrow the corresponding rule. Absent => unconstrained (rules that
 	# key off them fire). Sources named in SECURITY.md "Authority axes".
 	shellcmds:    list of string;  # caps.shellcmds — exec allowlist
 	mcproviders:  list of string;  # caps.mcproviders — permitted net peers
-	walletbudget: string;          # per-call spend bound; "" => ungated
 };
 
 # Per-tool manifest entry loaded from the authorities dir.
@@ -200,7 +200,8 @@ parseCaps(dir: string): ref Caps
 	c := ref Caps;
 	c.dir = dir;
 	c.role = "toplevel";
-	c.nodevs = "unset";
+	c.nodevs = "invalid";
+	c.nodevsstatus = "missing";
 	c.actid = -1;
 	c.xenith = 0;
 
@@ -215,7 +216,7 @@ parseCaps(dir: string): ref Caps
 		if(p == "")
 			continue;
 		c.paths = appendstr(c.paths, p);
-		if(perm == "rw")
+		if(perm == "rw" || perm == "cow")
 			c.writepaths = appendstr(c.writepaths, p);
 	}
 
@@ -229,15 +230,16 @@ parseCaps(dir: string): ref Caps
 	if(a != "")
 		c.actid = int a;
 	n := readScalar(dir + "/meta/nodevs");
-	if(n != "")
+	if(n == "set" || n == "unset") {
 		c.nodevs = n;
+		c.nodevsstatus = "valid";
+	} else if(n != "")
+		c.nodevsstatus = "invalid";
 
 	# Optional caps-level constraints (see Caps adt). Missing files leave
 	# the lists nil / the scalar "", which the rules read as unconstrained.
 	c.shellcmds = readLines(dir + "/shellcmds");
 	c.mcproviders = readLines(dir + "/mcproviders");
-	c.walletbudget = readScalar(dir + "/walletbudget");
-
 	return c;
 }
 
@@ -276,7 +278,7 @@ splitPathPerm(s: string): (string, string)
 		if(s[i] == ' ' || s[i] == '\t') {
 			p := trim(s[0:i]);
 			perm := trim(s[i+1:]);
-			if(perm == "ro" || perm == "rw")
+			if(perm == "ro" || perm == "rw" || perm == "cow")
 				return (p, perm);
 			break;
 		}
@@ -410,17 +412,22 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		}
 	}
 
-	# Always-on /tmp/veltro is writable, reversibly (ephemeral).
-	if(!contains(inv.writes_fs, "/tmp/veltro")) {
-		inv.writes_fs = "/tmp/veltro" :: inv.writes_fs;
-		inv.sources = ("writes_fs:/tmp/veltro", "always-on ephemeral") :: inv.sources;
+	# Scratch is the only ambient writable workspace. It is a per-activity
+	# cowfs projection; the parent /tmp/veltro tree is not broad authority.
+	if(!contains(inv.writes_fs, "/tmp/veltro/scratch")) {
+		inv.writes_fs = "/tmp/veltro/scratch" :: inv.writes_fs;
+		inv.sources = ("writes_fs:/tmp/veltro/scratch", "always-on activity cowfs") :: inv.sources;
 	}
 
-	# writes_fs_durable = writes_fs entries that are not /tmp/veltro
-	# and are not covered by the activity's cowfs-staged writable grants.
+	# writes_fs_durable = writes_fs entries that are not activity workspace,
+	# transactional proposal endpoints, or covered by the activity's
+	# cowfs-staged writable grants. /mnt/msg/draft queues an immutable proposal;
+	# only the separately hidden trusted approval endpoint can send it.
 	for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 		p := hd wl;
 		if(pathwithin("/tmp/veltro", p))
+			continue;
+		if(messageProposalGrant(p))
 			continue;
 		if(caps.actid >= 0 && contains(caps.writepaths, p))
 			continue;
@@ -429,12 +436,13 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 	if(inv.writes_durable != nil && !contains(inv.auths, "writes_fs_durable"))
 		inv.auths = "writes_fs_durable" :: inv.auths;
 
-	# Kernel device attach: role=toplevel and nodevs=unset => unrestricted.
-	# role=child and nodevs=unset => subagent missing NODEVS (flagged by rule).
-	if(caps.nodevs == "unset" && caps.role == "toplevel") {
+	# Anything except the canonical "set" value is unsafe. This makes missing
+	# and malformed metadata fail closed while reporting their distinct state.
+	if(caps.nodevs != "set" && caps.role == "toplevel") {
 		if(!contains(inv.auths, "attaches_device"))
 			inv.auths = "attaches_device" :: inv.auths;
-		inv.sources = ("attaches_device", "role=toplevel, nodevs=unset") :: inv.sources;
+		inv.sources = ("attaches_device", "role=toplevel, nodevs=" +
+			caps.nodevsstatus) :: inv.sources;
 	}
 
 	# Xenith grants sends_ui and window access.
@@ -456,10 +464,13 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		}
 	}
 
-	# A spend authority with no caps-level budget is ungated spend.
-	if(contains(inv.auths, "spends") && caps.walletbudget == "") {
+	# There is no direct-spend tool today and no caller-supplied scalar can
+	# prove runtime enforcement. Fail closed until a future capability supplies
+	# trusted, capability-bound attestation for its exact agent view.
+	if(contains(inv.auths, "spends")) {
 		inv.auths = "spend_ungated" :: inv.auths;
-		inv.sources = ("spend_ungated", "spends granted, no caps.walletbudget") :: inv.sources;
+		inv.sources = ("spend_ungated",
+			"direct spend granted without capability-bound attestation") :: inv.sources;
 	}
 
 	for(pl3 := caps.paths; pl3 != nil; pl3 = tl pl3) {
@@ -488,6 +499,12 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 			if(!contains(inv.auths, "direct_mail_send"))
 				inv.auths = "direct_mail_send" :: inv.auths;
 			inv.sources = ("direct_mail_send", "via path " + p) :: inv.sources;
+		}
+		if(messageProposalGrant(p) && contains(caps.writepaths, p) &&
+		   contains(inv.auths, "writes_fs")) {
+			if(!contains(inv.auths, "proposes_message"))
+				inv.auths = "proposes_message" :: inv.auths;
+			inv.sources = ("proposes_message", "via exact writable " + p) :: inv.sources;
 		}
 	}
 
@@ -522,8 +539,12 @@ invalidGrantPath(p: string): string
 
 privilegedControlGrant(p: string): int
 {
+	p = asciilower(p);
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -532,6 +553,9 @@ privilegedControlGrant(p: string): int
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",
@@ -539,6 +563,8 @@ privilegedControlGrant(p: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
 			return 1;
+	if(prefix(p, "/mnt/toolctl."))
+		return 1;
 	if(walletAccountControlGrant(p))
 		return 1;
 	if(ftreeControlGrant(p))
@@ -557,19 +583,44 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(fixedServiceControlGrant(p))
 		return 1;
+	if(ambientAuthorityGrant(p))
+		return 1;
 	return 0;
 }
 
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientAuthorityGrant(p: string): int
+{
+	if(p == "/chan" || p == "/fd" || prefix(p, "/fd/"))
+		return 1;
+	if(p == "/usr")
+		return 1;
+	return pathhascomponent(p, "keyring") &&
+		(p == "/keyring" || prefix(p, "/keyring/") ||
+		 prefix(p, "/usr/") || prefix(p, "/mnt/"));
+}
+
+# nsconstruct's walletcontrolpath: per-account ctl and sign, under the
+# mount (/mnt/wallet) and where it was before INFR-400 (/n/wallet).
 walletAccountControlGrant(p: string): int
 {
-	if(!prefix(p, "/n/wallet/"))
+	if(!prefix(p, "/mnt/wallet/") && !prefix(p, "/n/wallet/"))
 		return 0;
-	return componentcount(p) >= 4 && pathhascomponent(p, "ctl");
+	return componentcount(p) >= 4 &&
+		(pathhascomponent(p, "ctl") || pathhascomponent(p, "sign"));
 }
 
 ftreeControlGrant(p: string): int
 {
-	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
+	return p == "/mnt/ftree" || prefix(p, "/mnt/ftree/");
 }
 
 tmpVeltroInternalGrant(p: string): int
@@ -581,11 +632,12 @@ tmpVeltroInternalGrant(p: string): int
 
 appIpcControlGrant(p: string): int
 {
-	return p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
-		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
-		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
-		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
-		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
+	return p == "/mnt/charon" || prefix(p, "/mnt/charon/") ||
+		p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
+		p == "/mnt/editor" || prefix(p, "/mnt/editor/") ||
+		p == "/mnt/shell" || prefix(p, "/mnt/shell/") ||
+		p == "/mnt/fractal" || prefix(p, "/mnt/fractal/") ||
+		p == "/mnt/man" || prefix(p, "/mnt/man/");
 }
 
 uiAgentControlGrant(p: string): int
@@ -626,6 +678,7 @@ fixedServiceControlGrant(p: string): int
 		p == "/mnt/web" || prefix(p, "/mnt/web/") ||
 		p == "/n/web" || prefix(p, "/n/web/") ||
 		p == "/mnt/wiki" || prefix(p, "/mnt/wiki/") ||
+		p == "/mnt/wikia" || prefix(p, "/mnt/wikia/") ||
 		p == "/n/wikia" || prefix(p, "/n/wikia/") ||
 		p == "/mnt/keys" || prefix(p, "/mnt/keys/") ||
 		p == "/mnt/keysrv" || prefix(p, "/mnt/keysrv/") ||
@@ -645,6 +698,13 @@ directMailSendGrant(p: string): int
 			return 1;
 	}
 	return 0;
+}
+
+messageProposalGrant(p: string): int
+{
+	# This exception is deliberately exact. The parent tree also contains
+	# trusted approval and control endpoints and is not proposal-only.
+	return p == "/mnt/msg/draft";
 }
 
 mailAccountSendAncestor(p: string): int
@@ -812,6 +872,8 @@ conditionTrue(inv: ref Inventory, cond: string): int
 	}
 	if(prefix(cond, "nodevs=")) {
 		want := cond[7:];
+		if(want == "unset")
+			return inv.caps.nodevs != "set";
 		return inv.caps.nodevs == want;
 	}
 	if(prefix(cond, "has_tool_")) {
@@ -857,6 +919,8 @@ runReport(inv: ref Inventory, rules: list of ref Rule)
 			tag := "";
 			if(pathwithin("/tmp/veltro", p))
 				tag = " [ephemeral]";
+			else if(messageProposalGrant(p))
+				tag = " [proposal; trusted approval required]";
 			else if(inv.caps.actid >= 0 && pathwithin("/n/local", p))
 				tag = sys->sprint(" [cowfs actid=%d]", inv.caps.actid);
 			else
@@ -913,6 +977,8 @@ runReach(inv: ref Inventory, path: string)
 		tag := "";
 		if(pathwithin("/tmp/veltro", writ))
 			tag = " (ephemeral)";
+		else if(messageProposalGrant(writ))
+			tag = " (immutable proposal; trusted approval required)";
 		else if(inv.caps.actid >= 0 && pathwithin("/n/local", writ))
 			tag = sys->sprint(" (cowfs actid=%d, reversible)", inv.caps.actid);
 		else
@@ -1033,8 +1099,8 @@ mquote(s: string): string
 runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rule)
 {
 	c := inv.caps;
-	sys->fprint(stdout, "nsaudit=caps\tdir=%s\trole=%s\tnodevs=%s\tactid=%d\txenith=%d\n",
-		mquote(c.dir), c.role, c.nodevs, c.actid, c.xenith);
+	sys->fprint(stdout, "nsaudit=caps\tdir=%s\trole=%s\tnodevs=%s\tnodevs_status=%s\tactid=%d\txenith=%d\n",
+		mquote(c.dir), c.role, c.nodevs, c.nodevsstatus, c.actid, c.xenith);
 
 	for(al := inv.auths; al != nil; al = tl al)
 		sys->fprint(stdout, "authority=%s\n", hd al);
@@ -1047,6 +1113,8 @@ runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rul
 		tag := "durable";
 		if(pathwithin("/tmp/veltro", p))
 			tag = "ephemeral";
+		else if(messageProposalGrant(p))
+			tag = "proposal";
 		else if(c.actid >= 0 && pathwithin("/n/local", p))
 			tag = "cowfs";
 		sys->fprint(stdout, "writes_fs=%s\treversibility=%s\n",
@@ -1084,6 +1152,8 @@ runReachMachine(stdout: ref Sys->FD, inv: ref Inventory, path, reach, writ: stri
 		tag := "durable";
 		if(pathwithin("/tmp/veltro", writ))
 			tag = "ephemeral";
+		else if(messageProposalGrant(writ))
+			tag = "proposal";
 		else if(inv.caps.actid >= 0 && pathwithin("/n/local", writ))
 			tag = "cowfs";
 		sys->fprint(stdout, "writes_fs=yes\tvia=%s\treversibility=%s\n",

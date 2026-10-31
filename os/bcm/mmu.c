@@ -282,6 +282,14 @@ mmuinit(void)
 		if(j >= 16)
 			l3zero[j] |= Contig;
 	}
+#ifdef RESERVEDLOW
+	/*
+	 * The secure firmware's memory: a speculative fetch into it must
+	 * not be possible, so it is not mapped at all.
+	 */
+	for(j = 0; j < RESERVEDLOW/BY2PG; j++)
+		l3zero[j] = 0;
+#endif
 	l2tab[0][0] = (u64int)(uintptr)l3zero | Dtable;
 
 #ifdef PCIWIN
@@ -292,6 +300,16 @@ mmuinit(void)
 	 */
 	l1tab[PCIWIN >> 30] = (PCIWIN & ~((1ULL<<30)-1)) |
 		Dblock | Attridx1 | Apkrw | Shnone | Af | Pxn | Uxn;
+#endif
+#ifdef IOWINS
+	/* a BCM2712's devices are all up there: a list of such gigabytes */
+	{
+		static u64int win[] = IOWINS;
+
+		for(i = 0; i < (int)nelem(win); i++)
+			l1tab[win[i] >> 30] = win[i] |
+				Dblock | Attridx1 | Apkrw | Shnone | Af | Pxn | Uxn;
+	}
 #endif
 
 	mmuenable();

@@ -33,6 +33,9 @@ enum{
 	Qdir,
 	Qctl,
 	Qdata,
+#ifdef NVME0
+	Qnvme,		/* a second disk: one whole-disk file */
+#endif
 	Qpart,		/* and upwards, one per partition */
 
 	Blen	= 512,
@@ -128,6 +131,16 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 		return 1;
 	}
 	i -= 2;
+#ifdef NVME0
+	if(nvmepresent()){
+		if(i == 0){
+			q.path = Qnvme;
+			devdir(c, q, "nvme0", nvmelength(), eve, 0640, dp);
+			return 1;
+		}
+		i--;
+	}
+#endif
 	if(i >= sd.npart)
 		return -1;
 	p = &sd.part[i];
@@ -298,6 +311,10 @@ sdread(Chan *c, void *a, long n, vlong off)
 		return readstr(off, a, n, buf);
 	}
 
+#ifdef NVME0
+	if((ulong)c->qid.path == Qnvme)
+		return nvmerw(0, a, n, off);
+#endif
 	sdrange(c, &base, &len);
 	return sdio(0, a, n, off, base, len);
 }
@@ -324,6 +341,10 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		return n;
 	}
 
+#ifdef NVME0
+	if((ulong)c->qid.path == Qnvme)
+		return nvmerw(1, a, n, off);
+#endif
 	sdrange(c, &base, &len);
 	return sdio(1, a, n, off, base, len);
 }

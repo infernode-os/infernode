@@ -2062,6 +2062,10 @@ struct Smpboot {
 	uvlong	mach;
 	uvlong	entry;		/* nonzero releases the core */
 };
+#ifndef COREAFF
+#define COREAFF	0	/* which MPIDR field numbers the cores: the board's build says */
+#endif
+
 Smpboot smpboot[MAXMACH];
 
 
@@ -2097,7 +2101,7 @@ squidboy(void)
 	mmuenable();
 
 	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-	m->machno = mpidr & 3;
+	m->machno = (mpidr >> COREAFF) & 3;
 	m->ticks = 1;		/* nonzero: some code divides by ticks */
 	m->proc = nil;
 

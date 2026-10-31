@@ -6431,6 +6431,35 @@ if want_platform bcm2711; then
 run_bcm2711
 fi
 
+# The fourth machine: a Raspberry Pi 5 (os/bcm2712). No emulator models
+# it, so this only builds; it is asked for by name.
+run_bcm2712() {
+PLAT=bcm2712
+SRC="$ROOT/os/$PLAT"
+SHARED="$ROOT/os/bcm"
+SHAREDSKIP="audiopwm.c devtouch.c dma.c emmc.c gpio.c sdhost.c timers.c uart.c.none uartmini.c uartpl011.c usbdwc.c"
+ARCHSKIP=""
+PORTSKIP="devaudio.c ethermii.c pci.c usbxhcipci.c"
+platform_flags
+echo -e "${BOLD}--- $PLAT (build only) ---${NC}"
+rm -f "$BUILD/serialboot.img"
+if "$ROOT/os/bcm2712/loader/mkserialboot.sh" "$BUILD/serialboot.img" 2>>"$BUILD/cc.log"; then
+    pass "bcm2712: serialboot builds and is $(wc -c < "$BUILD/serialboot.img" | tr -d ' ') bytes"
+else
+    fail "bcm2712: serialboot failed to build"
+    return
+fi
+if build_kernel "$BUILD/$PLAT-kernel.img" "" "-DCOREAFF=8 -DPSCICORES -DEARLYWDOG -mstrict-align"; then
+    pass "bcm2712: kernel cross-builds for aarch64-elf"
+else
+    fail "bcm2712: kernel failed to build"
+    grep -m 40 'error:\|undefined symbol\|duplicate symbol' "$BUILD/cc.log"
+    tail -5 "$BUILD/cc.log"
+fi
+}
+
+case " ${BAREMETAL_PLATFORMS:-} " in *" bcm2712 "*) run_bcm2712;; esac
+
 echo ""
 echo -e "${BOLD}Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED${NC}"
 [[ "$FAILED" -eq 0 ]] || exit 1

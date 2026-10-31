@@ -192,7 +192,7 @@ profgen(Chan *c, char *name, Dirtab *d, int nd, int s, Dir *dp)
 
 	if(s == DEVDOTDOT) {
 		mkqid(&qid, Qdir, 0, QTDIR);
-		devdir(c, qid, "#P", 0, eve, 0555, dp);
+		devdir(c, qid, "#K", 0, eve, 0555, dp);
 		return 1;
 	}
 
@@ -241,7 +241,7 @@ profgen(Chan *c, char *name, Dirtab *d, int nd, int s, Dir *dp)
 static Chan*
 profattach(char *spec)
 {
-	return devattach('P', spec);
+	return devattach('K', spec);
 }
 
 static Walkqid*
@@ -822,7 +822,7 @@ memprofmi(int c, ulong pc, ulong v, ulong n)
 }
 
 Dev profdevtab = {
-	'P',
+	'K',	/* kprof's letter in Plan 9, 9front and Inferno's native kernels; #P is arch (docs/DEVICE-LETTERS.md) */
 	"prof",
 
 	devinit,

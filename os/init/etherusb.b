@@ -3598,7 +3598,7 @@ setclock(servers: list of string)
 		if(trytime(s) == 0)
 			return;
 	}
-	sys->print("etherusb: no time server answered; the clock stays at 1970\n");
+	sys->print("etherusb: no time server answered; the clock is left as it is\n");
 }
 
 #

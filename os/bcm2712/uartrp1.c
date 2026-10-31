@@ -14,6 +14,7 @@
 
 #define R(r)	(*(volatile u32int*)(uintptr)(RP1UART0 + (r)))
 #define R4(r)	(*(volatile u32int*)(uintptr)(RP1UART4 + (r)))
+#define R10(r)	(*(volatile u32int*)(uintptr)(UART10 + (r)))
 
 enum
 {
@@ -29,6 +30,13 @@ enum
  * M.2 board sits on pins 1-12 and takes the usual ones away; this way
  * the console is on both, and moving the cable needs no new kernel.
  * The firmware's own log stays on GPIO 14 and 15.
+ */
+/*
+ * And on the 3-pin debug connector: uart10, on the SoC itself, which
+ * the firmware leaves at 115200 and which needs nothing of PCIe. It is
+ * what will still talk when RP1 does not. Output only: with nothing
+ * plugged in, its receiver fills with noise that would be typed at the
+ * shell.
  */
 ulong
 miniconsinit(void)
@@ -56,6 +64,9 @@ miniputc(int c)
 	for(i = 0; (R4(Fr) & Txff) != 0 && i < Txspin; i++)
 		;
 	R4(Dr) = c;
+	for(i = 0; (R10(Fr) & Txff) != 0 && i < Txspin; i++)
+		;
+	R10(Dr) = c;
 }
 
 int

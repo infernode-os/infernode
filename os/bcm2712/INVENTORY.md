@@ -19,11 +19,11 @@ has the feature, which is what parity means.
 | RNG200 | yes | `random.c` | Read: two samples differ; not tested beyond that |
 | Console out (GPIO14/15) | yes | `uartrp1.c` | **Proved** |
 | Console in | interrupt | `uartrp1.c` | **Proved**, by interrupt |
-| Debug connector (uart10) | no | none | Not done; wants the Debug Probe |
+| Debug connector (uart10) | no | `uartrp1.c` | Console output, out of the firmware's 115200; bytes leave the FIFO, nobody has read them. Wants the Debug Probe. No input: unplugged, its receiver fills with noise |
 | SD read | yes | `emmc2.c` | **Proved**; PIO at identification-to-default speeds, unmeasured |
 | SD write | yes | `emmc2.c` | **Proved**, persisted over a reboot |
 | Gigabit Ethernet | yes | `etherrp1.c` | **Proved**, 927 in, 903 out |
-| Ethernet speed changes, 100/10 | yes | `etherrp1.c` | Not tested; RP1's tx clock may need setting |
+| Ethernet speed changes, 100/10 | yes | `etherrp1.c` | **Proved**, by advertising less (`ether100`, `ether10` on the command line): 95 in, 94 out; 10 in, 9 out. The block divides its own tx clock |
 | USB host, high speed | yes | `usbxhcirp1.c` | **Proved** on one USB-3 port |
 | USB SuperSpeed | untested | shared | Not tested; the gadget was high speed |
 | Second controller, other ports | n/a | `usbxhcirp1.c` | Controller up; no device tried |
@@ -33,7 +33,8 @@ has the feature, which is what parity means.
 | Wi-Fi, 5GHz WPA2 | yes | `radio.c` | **Proved** |
 | Wi-Fi, TKIP group cipher | no | shared | Not supported, any board (`wpa.b`) |
 | Bluetooth classic | yes | `uartbt.c` | **Proved** by inquiry |
-| Bluetooth LE, pairing, L2CAP | yes | shared | Not tested on this board |
+| Bluetooth LE scan | yes | shared | **Proved**: `/net/bt/lescan` found 13 neighbours |
+| Bluetooth pairing, L2CAP | yes | shared | Not tested on this board; wants a peer |
 | GPIO function, level, pull | yes | `gpiorp1.c` | **Proved** |
 | GPIO edge events | yes | `gpiorp1.c` | **Proved** across a jumper, GPIO 5 to GPIO 0 |
 | `#P` temperature, throttling | yes | shared | **Proved** |
@@ -54,7 +55,7 @@ has the feature, which is what parity means.
 | Fan connector | RP1 PWM1 channel 3, `#P/fan`, `#P/fanrpm` | **Proved**: follows temperature by the device tree's trips; a written level overrides, `auto` restores |
 | Power button | SoC GPIO 20, `#P/button` | Level read; a press not yet tried; nothing acts on it |
 | Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | Written; not watched by anyone |
-| Debug UART connector | `uart10` | Not done |
+| Debug UART connector | `uart10` | Output only, unread: see above |
 | Second console | RP1 UART4, GPIO 12, 13 (pins 32, 33) | **Proved**, in and out |
 | Two HDMI, DSI/CSI connectors | HVS, RP1 | Either HDMI, one at a time. Two together, DSI and CSI not done |
 | RTC battery charging | the firmware, `trickle-charge-microvolt` | Not done; off unless asked for, which is right for a primary cell |

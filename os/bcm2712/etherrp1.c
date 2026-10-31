@@ -25,6 +25,7 @@
 #include "board.h"
 
 #define GEM(o)		(ctlr->r[(o)/4])
+#define RP1REG(o)	(*(volatile u32int*)(uintptr)(RP1REGS + (o)))
 
 enum
 {
@@ -312,7 +313,9 @@ linkset(Ether *edev)
 
 	ctlr = edev->ctlr;
 	cfg = GEM(Ncfgr) & ~(Spd100|Fd|Gbe);
-	g = mdior(ctlr, Gtsr);
+	g = mdior(ctlr, Gtsr);		/* what the partner offers, in 1000BASE-T */
+	if(g > 0)
+		g &= mdior(ctlr, Gtcr)<<2;	/* and we */
 	if(g > 0 && (g & (3<<10)) != 0){
 		mbps = 1000;
 		fd = (g & (1<<11)) != 0;
@@ -330,7 +333,7 @@ linkset(Ether *edev)
 	}
 	if(fd)
 		cfg |= Fd;
-	GEM(Ncfgr) = cfg;
+	GEM(Ncfgr) = cfg;		/* the block divides its tx clock itself: it is left alone */
 	edev->nif.mbps = mbps;
 	print("#l%d: rp1: link up, %d Mbit/s, %s duplex\n", edev->ctlrno, mbps, fd ? "full" : "half");
 }
@@ -389,7 +392,6 @@ multi(void*, uchar*, int)
  * The PHY's reset is RP1's GPIO 32, active low (the Pi 5's device tree):
  * bank 1 pin 4, by RIO, which is function 5.
  */
-#define RP1REG(o)	(*(volatile u32int*)(uintptr)(RP1REGS + (o)))
 enum
 {
 	Gpio32ctrl	= 0xD4000 + 8*4 + 4,
@@ -505,8 +507,16 @@ attach(Ether *edev)
 		error("rp1: no PHY answers");
 	print("#l%d: rp1: phy%d id %.4ux %.4ux queues %d\n", edev->ctlrno,
 		ctlr->phy, mdior(ctlr, 2), mdior(ctlr, 3), nq);
-	mdiow(ctlr, Anar, 0x01E1);
-	mdiow(ctlr, Gtcr, 3<<8);
+	if(cmdlineword("ether10")){
+		mdiow(ctlr, Anar, 0x0061);
+		mdiow(ctlr, Gtcr, 0);
+	}else if(cmdlineword("ether100")){
+		mdiow(ctlr, Anar, 0x01E1);
+		mdiow(ctlr, Gtcr, 0);
+	}else{
+		mdiow(ctlr, Anar, 0x01E1);
+		mdiow(ctlr, Gtcr, 3<<8);
+	}
 	mdiow(ctlr, Bmcr, 1<<12 | 1<<9);
 
 	GEM(Intmod) = 50;

@@ -203,16 +203,18 @@ ipifcunbind(Ipifc *ifc)
 {
 	char *err;
 
+	wlock(&ifc->rwl);
 	if(waserror()){
 		wunlock(&ifc->rwl);
 		nexterror();
 	}
-	wlock(&ifc->rwl);
 
-	/* dissociate routes */
-	if(ifc->m != nil && ifc->m->unbindonclose == 0)
-		ifc->conv->inuse--;
-	ifc->ifcid++;
+	/* disassociate logical interfaces before zeroing medium state */
+	while(ifc->lifc){
+		err = ipifcremlifc(ifc, ifc->lifc);
+		if(err)
+			error(err);
+	}
 
 	/* disassociate device */
 	if(ifc->m != nil && ifc->m->unbind)
@@ -226,13 +228,10 @@ ipifcunbind(Ipifc *ifc)
 	qclose(ifc->conv->wq);
 	qclose(ifc->conv->sq);
 
-	/* disassociate logical interfaces */
-	while(ifc->lifc){
-		err = ipifcremlifc(ifc, ifc->lifc);
-		if(err)
-			error(err);
-	}
-
+	/* publish route/conversation teardown only after fallible cleanup */
+	ifc->ifcid++;
+	if(ifc->m != nil && ifc->m->unbindonclose == 0)
+		ifc->conv->inuse--;
 	ifc->m = nil;
 	wunlock(&ifc->rwl);
 	poperror();
@@ -446,6 +445,10 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 	if(isv4(ip))
 		tentative = 0;
 	wlock(&ifc->rwl);
+	if(waserror()){
+		wunlock(&ifc->rwl);
+		nexterror();
+	}
 
 	/* ignore if this is already a local address for this ifc */
 	for(lifc = ifc->lifc; lifc; lifc = lifc->next) {
@@ -561,6 +564,7 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 
 out:
 	wunlock(&ifc->rwl);
+	poperror();
 	if(tentative && sendnbrdisc)
 		icmpns(f, 0, SRC_UNSPEC, ip, TARG_MULTI, ifc->mac);
 	return nil;
@@ -705,8 +709,12 @@ ipifcremroute(Fs *f, int vers, uchar *addr, uchar *mask)
 			m = ifc->m;
 			if(m == nil)
 				continue;
-			if(m->remroute != nil)
-				m->remroute(ifc, vers, addr, mask);
+			if(m->remroute != nil){
+				if(!waserror()){
+					(*m->remroute)(ifc, vers, addr, mask);
+					poperror();
+				}
+			}
 		}
 	}
 }
@@ -727,18 +735,15 @@ ipifcconnect(Conv* c, char **argv, int argc)
 	if(ifc->m == nil)
 		 return "ipifc not yet bound to device";
 
-	if(waserror()){
-		wunlock(&ifc->rwl);
-		nexterror();
-	}
 	wlock(&ifc->rwl);
 	while(ifc->lifc){
 		err = ipifcremlifc(ifc, ifc->lifc);
-		if(err)
-			error(err);
+		if(err){
+			wunlock(&ifc->rwl);
+			return err;
+		}
 	}
 	wunlock(&ifc->rwl);
-	poperror();
 
 	err = ipifcadd(ifc, argv, argc, 0, nil);
 	if(err)
@@ -919,6 +924,10 @@ addselfcache(Fs *f, Ipifc *ifc, Iplifc *lifc, uchar *a, int type)
 	int h;
 
 	qlock(&f->self->ql);
+	if(waserror()){
+		qunlock(&f->self->ql);
+		nexterror();
+	}
 
 	/* see if the address already exists */
 	h = hashipa(a);
@@ -968,6 +977,7 @@ addselfcache(Fs *f, Ipifc *ifc, Iplifc *lifc, uchar *a, int type)
 	}
 
 	qunlock(&f->self->ql);
+	poperror();
 }
 
 /*
@@ -1073,8 +1083,12 @@ remselfcache(Fs *f, Ipifc *ifc, Iplifc *lifc, uchar *a)
 	if(--(link->ref) != 0)
 		goto out;
 
-	if((p->type & Rmulti) && ifc->m->remmulti != nil)
-		(*ifc->m->remmulti)(ifc, a, lifc->local);
+	if((p->type & Rmulti) && ifc->m->remmulti != nil){
+		if(!waserror()){
+			(*ifc->m->remmulti)(ifc, a, lifc->local);
+			poperror();
+		}
+	}
 
 	/* ref == 0, remove from both chains and free the link */
 	*l_lifc = link->lifclink;
@@ -1539,11 +1553,11 @@ ipifcaddmulti(Conv *c, uchar *ma, uchar *ia)
 		if((*p)->inuse == 0)
 			continue;
 		ifc = (Ipifc*)(*p)->ptcl;
+		wlock(&ifc->rwl);
 		if(waserror()){
 			wunlock(&ifc->rwl);
 			nexterror();
 		}
-		wlock(&ifc->rwl);
 		for(lifc = ifc->lifc; lifc; lifc = lifc->next)
 			if(ipcmp(ia, lifc->local) == 0)
 				addselfcache(f, ifc, lifc, ma, Rmulti);
@@ -1640,6 +1654,10 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				runlock(&nifc->rwl);
 				continue;
 			}
+			if(waserror()){
+				runlock(&nifc->rwl);
+				nexterror();
+			}
 			for(lifc = nifc->lifc; lifc; lifc = lifc->next){
 				maskip(ip, lifc->mask, net);
 				if(ipcmp(net, lifc->remote) == 0) { /* add solicited-node multicast address */
@@ -1651,6 +1669,7 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				}
 			}
 			runlock(&nifc->rwl);
+			poperror();
 		}
 		return;
 	}
@@ -1668,6 +1687,10 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				runlock(&nifc->rwl);
 				continue;
 			}
+			if(waserror()){
+				runlock(&nifc->rwl);
+				nexterror();
+			}
 			for(lifc = nifc->lifc; lifc; lifc = lifc->next){
 				maskip(ip, lifc->mask, net);
 				if(ipcmp(net, lifc->remote) == 0){
@@ -1676,6 +1699,7 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				}
 			}
 			runlock(&nifc->rwl);
+			poperror();
 		}
 	}
 }
@@ -1705,29 +1729,30 @@ enum
 char*
 ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 {
-	uchar	onlink = 1;
-	uchar	autoflag = 1;
-	long 	validlt = 0xffffffff;
-	long 	preflt = 0xffffffff;
-	long	origint = NOW / 1000;
 	uchar	prefix[IPaddrlen];
 	int	plen = 64;
-	Iplifc	*lifc;
+	Iplifc	lifc;
 	char	addr[40], preflen[6];
 	char	*params[3];
 
+	lifc.onlink = 1;
+	lifc.autoflag = 1;
+	lifc.validlt = 0xffffffff;
+	lifc.preflt = 0xffffffff;
+	lifc.origint = NOW / 1000;
+
 	switch(argc) {
 	case 7:
-		preflt = atoi(argv[6]);
+		lifc.preflt = atoi(argv[6]);
 		/* fall through */
 	case 6:
-		validlt = atoi(argv[5]);
+		lifc.validlt = atoi(argv[5]);
 		/* fall through */
 	case 5:
-		autoflag =  atoi(argv[4]);
+		lifc.autoflag = atoi(argv[4]) != 0;
 		/* fall through */
 	case 4:
-		onlink = atoi(argv[3]);
+		lifc.onlink = atoi(argv[3]) != 0;
 		/* fall through */
 	case 3:
 		plen = atoi(argv[2]);
@@ -1738,21 +1763,14 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	}
 
 	if((parseip(prefix, argv[1])!=6) ||
-	 	(validlt < preflt) ||
+		(lifc.validlt < lifc.preflt) ||
 		(plen < 0) || (plen > 64) ||
 		(islinklocal(prefix))
 	)
 		return Ebadarg;
 
-	lifc = smalloc(sizeof(Iplifc));
-	lifc->onlink = (onlink!=0);
-	lifc->autoflag = (autoflag!=0);
-	lifc->validlt = validlt;
-	lifc->preflt = preflt;
-	lifc->origint = origint;
-
 	if(ifc->m->pref2addr!=nil)
-		ifc->m->pref2addr(prefix, ifc->mac);
+		(*ifc->m->pref2addr)(prefix, ifc->mac);
 	else
 		return Ebadarg;
 	
@@ -1762,6 +1780,6 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	params[1] = addr;
 	params[2] = preflen;
 
-	return ipifcadd(ifc, params, 3, 0, lifc);
+	return ipifcadd(ifc, params, 3, 0, &lifc);
 }
 

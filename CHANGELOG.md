@@ -205,6 +205,12 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
   IPv6 lifetime comparisons cannot wrap, TCP backoff cannot roll over, and UDP
   transmits checksum negative zero as `ffff` rather than the IPv4 “no checksum”
   value.
+- **Interface teardown and authentication proxy errors fail cleanly.** Native
+  IP configuration now releases interface/self-cache locks when medium hooks
+  fail, completes fallible address removal before publishing an unbound
+  conversation, and does not leak IPv6 prefix metadata. Factotum proxy framing
+  rejects a non-growing `toosmall` request instead of constructing an invalid
+  input slice, and internal fd close rejects out-of-range descriptors.
 - **Inherited SSL, capability, and 9P identity checks are current.** Opening an
   existing SSL conversation now applies its owner/other mode correctly;
   presenting a capability as the wrong source user cannot consume it; legacy

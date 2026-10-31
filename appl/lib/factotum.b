@@ -267,7 +267,7 @@ done:
 				if(o != "toosmall")
 					break;
 				c := int string a;
-				if(c > AuthRpcMax)
+				if(c <= n || c > AuthRpcMax)
 					break;
 				readc <-= (buf[n:c], reply := chan of (int, string));
 				(m, e) := <-reply;

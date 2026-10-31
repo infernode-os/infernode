@@ -44,7 +44,9 @@ Button 3 shows the window menu:
 .TP
 .B New
 Sweep out a rectangle with button 3; a shell
-.RB ( wm/sh )
+.RB ( wm/shell ,
+see
+.IR wm-shell (1))
 is started in it.
 .TP
 .B Resize
@@ -281,5 +283,6 @@ and
 .SH "SEE ALSO"
 .IR toolbar (1),
 .IR logon (1),
+.IR wm-shell (1),
 .IR tkclient (2),
 .IR wmclient (2)

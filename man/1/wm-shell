@@ -1,0 +1,218 @@
+.TH WM-SHELL 1
+.SH NAME
+wm/shell \- the shell in a window
+.SH SYNOPSIS
+.B wm/shell
+[
+.B -ilxvn
+] [
+.B -w
+.I width
+] [
+.B -h
+.I height
+] [
+.B -f
+.I font
+] [
+.B -c
+.I command
+] [
+.I file
+[
+.IR arg ...
+]
+]
+.SH DESCRIPTION
+.I Wm/shell
+runs
+.IR sh (1)
+in a window, with a
+.B /dev/cons
+and
+.B /dev/consctl
+of the window's own.
+The window's text is the transcript:
+what programs print goes in at the end of the output,
+and what is typed after it is the input,
+sent to a program reading
+.B /dev/cons
+a line at a time.
+Text typed elsewhere in the window edits the transcript and is not sent.
+It is
+.B wm/sh
+with the theme's colours and font, following a theme switch
+(its text, background and selection as Xenith's body has them:
+.BR edittext ,
+.B editbg
+and
+.BR menuhilit ;
+the text is not dimmed when the window has not the keyboard),
+a history of the lines sent,
+and the transcript kept where Veltro's shell tool reads it;
+.B wm/wm
+starts one for
+.BR New .
+.PP
+The options
+.BR -i ,
+.BR -l ,
+.BR -x ,
+.BR -v ,
+.BR -n ,
+.B -c
+.IR command ,
+and
+.I file
+and its
+.I args
+are given to
+.IR sh (1)
+(which is always given
+.BR -n :
+it shares the window's name space).
+.B -w
+and
+.B -h
+give the window's size in pixels (640 by 480 by default),
+.B -f
+its font, under
+.B /fonts
+unless the name begins with
+.B /
+or
+.BR ./ .
+When the shell exits, as when a
+.B -c
+command is done, the window goes.
+.SS Keyboard
+In cooked mode, the default:
+.TF Enter
+.TP
+.B Enter
+Send the line.
+.TP
+.B ^D
+Send what is typed without a newline; on its own, end of file.
+.TP
+.B ^H
+Erase the character before the caret.
+.TP
+.B ^W
+Erase the word before the caret.
+.TP
+.B ^U
+Erase the line before the caret.
+.TP
+.B ^C
+Discard what is typed and not yet sent.
+.TP
+.BR ^P ", " ^N
+Replace the line being typed with the previous, or the next, line sent.
+.TP
+.B ^L
+Clear the transcript above the line being written.
+.TP
+.B Esc
+Hold: nothing typed is sent until
+.B Esc
+again; the text is drawn in the theme's
+.B edithold
+colour meanwhile, and the title says
+.BR (holding) .
+.PD
+.PP
+The arrows,
+.BR Home ,
+.BR End ,
+.BR "Page Up" ,
+.BR "Page Down" ,
+.BR ^A ,
+.BR ^E ,
+.BR ^B ,
+.BR ^F
+and
+.B ^K
+are the text widget's own.
+After a program writes
+.B rawon
+to
+.BR /dev/consctl ,
+every key goes to it as typed and is not shown,
+until it writes
+.B rawoff
+or closes the file.
+.B holdon
+and
+.B holdoff
+set and clear hold.
+.SS Mouse
+Button 1 places the caret and selects.
+Button 2 shows the menu:
+.TF noscroll
+.TP
+.B noscroll
+Stop moving to the end of the output as it comes; while the end is
+out of sight, programs writing to the window wait.
+.B scroll
+undoes it.
+.TP
+.B cut
+Delete the selection, keeping it in the snarf buffer.
+.TP
+.B paste
+Replace the selection with the snarf buffer.
+.TP
+.B snarf
+Copy the selection to the snarf buffer.
+.TP
+.B send
+Send the selection, or the snarf buffer, as typed, with a newline.
+.PD
+.PP
+Button 3, released, plumbs the selection if it is under the pointer,
+or the word under the pointer, from the window's directory (see
+.IR plumber (8)).
+With button 1 held, button 2 cuts and button 3 pastes.
+.SH FILES
+.TP
+.B /chan/shctl
+Programs in the window write commands here:
+.B button
+.I label text
+adds a button above the text that sends
+.I text
+as typed;
+.B action
+.I label text
+adds one whose
+.I text
+a read of
+.B /chan/shctl
+returns;
+.B clear
+removes the buttons;
+.B cwd
+.I dir
+sets the directory shown in the title and plumbed from.
+.TP
+.B #sshell/fs
+For Veltro's
+.B shell
+tool (mounted at
+.B /mnt/shell
+by
+.IR tools9p (8)):
+.B body
+is the transcript up to the end of the output and
+.B input
+what is typed and not yet read, both read from the window as it is;
+.B event
+waits for the next change.  A second shell is
+.BR #sshell/fs.1 .
+.SH SOURCE
+.B /appl/wm/shell.b
+.SH "SEE ALSO"
+.IR sh (1),
+.IR wm (1),
+.IR cons (3)

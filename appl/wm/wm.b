@@ -93,8 +93,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# /lib/lucifer/theme/current) reaches the windows.  Under Lucifer
 	# it sends "retheme" itself; at the top, wm/wm watches.
 	themec := chan of string;
-	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil)
+	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil) {
+		lucitheme->serve();	# a session's root; done already under a profile
 		themec = lucitheme->watch();
+	}
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
 	# Run as another wm/wm's client, a desktop in a window: room for a
@@ -1007,7 +1009,7 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 		r := sweepout(ptr, mc.buttons);
 		if(!r.eq(Rect((0, 0), (0, 0)))){
 			sweptr = r;
-			spawn command(clientctxt, "wm/sh" :: nil, nil);
+			spawn command(clientctxt, "wm/shell" :: nil, nil);
 		}
 	Rresize =>
 		(c, nil) := pointto(ptr, 1, mc.buttons);

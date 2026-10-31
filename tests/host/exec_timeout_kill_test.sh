@@ -12,12 +12,13 @@
 #
 # The fix makes the worker a process-group leader (NEWPGRP), reports its pid,
 # and — if the command is still running when the tool stops reading — writes
-# "killgrp" to /prog/<pid>/ctl so the whole subtree dies with the tool call.
+# "killtree" to /prog/<pid>/ctl so the whole descendant process-group tree
+# dies with the tool call, including commands that called NEWPGRP themselves.
 #
 # This test checks two things without needing the full tools9p COW stack
 # (which the tools9p_* tests already exercise):
-#   1. source contract — exec.b wires the pid channel, NEWPGRP and killgrp;
-#   2. mechanism — killgrp on a NEWPGRP leader actually terminates the group.
+#   1. source contract — exec.b wires the pid channel, NEWPGRP and killtree;
+#   2. mechanism — killtree reaches a descendant that escaped into NEWPGRP.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$(dirname "$0")/common.sh"
@@ -26,10 +27,10 @@ set -u
 fails=0
 E="$ROOT/appl/veltro/tools/exec.b"
 grep -q 'sys->pctl(Sys->NEWPGRP, nil)'          "$E" || { echo "FAIL: exec.b worker is not a process-group leader"; fails=$((fails+1)); }
-grep -q 'killgrp(workerpid)'                    "$E" || { echo "FAIL: exec.b does not kill the worker group when still running"; fails=$((fails+1)); }
-grep -q 'killgrp(pid: int)'                     "$E" || { echo "FAIL: exec.b has no killgrp helper"; fails=$((fails+1)); }
-grep -q '"killgrp"'                             "$E" || { echo "FAIL: exec.b killgrp does not write the killgrp control message"; fails=$((fails+1)); }
-[ "$fails" -eq 0 ] && echo "PASS: source contract (exec.b kills the worker group on timeout/overrun)"
+grep -q 'killtree(workerpid)'                   "$E" || { echo "FAIL: exec.b does not kill the worker tree when still running"; fails=$((fails+1)); }
+grep -q 'killtree(pid: int)'                    "$E" || { echo "FAIL: exec.b has no killtree helper"; fails=$((fails+1)); }
+grep -q '"killtree"'                            "$E" || { echo "FAIL: exec.b killtree does not write the killtree control message"; fails=$((fails+1)); }
+[ "$fails" -eq 0 ] && echo "PASS: source contract (exec.b kills the worker tree on timeout/overrun)"
 
 [ -x "$EMU" ] || { echo "SKIP: emu not found at $EMU"; [ "$fails" -eq 0 ] && exit 0 || exit 1; }
 [ -x "$LIMBO" ] || {
@@ -37,28 +38,32 @@ grep -q '"killgrp"'                             "$E" || { echo "FAIL: exec.b kil
 	[ "$fails" -eq 0 ] && exit 0 || exit 1
 }
 
-WORK="$ROOT/tmp/exec_killgrp_mech"
+WORK="$ROOT/tmp/exec_killtree_mech"
 SRC="$WORK.b"
 DIS="$WORK.dis"
 trap 'rm -f "$SRC" "$DIS"' EXIT HUP INT TERM
 
 cat >"$SRC" <<'EOF'
-implement KillgrpMech;
+implement KilltreeMech;
 include "sys.m";
 	sys: Sys;
 include "draw.m";
-KillgrpMech: module { init: fn(nil: ref Draw->Context, nil: list of string); };
+KilltreeMech: module { init: fn(nil: ref Draw->Context, nil: list of string); };
 
-# Mirror exec.b: a worker becomes a process-group leader, reports its pid,
-# spawns a long child, and idles.  killgrp on that pid must take out both.
-worker(pidch: chan of int)
+# Mirror exec.b: a worker becomes a process-group leader, then its child calls
+# NEWPGRP again. killtree on the worker must cross that group boundary.
+worker(pidch, childch: chan of int)
 {
 	pid := sys->pctl(Sys->NEWPGRP, nil);
 	pidch <-= pid;
-	spawn longchild();
+	spawn longchild(childch);
 	sys->sleep(60000);
 }
-longchild() { sys->sleep(60000); }
+longchild(childch: chan of int)
+{
+	childch <-= sys->pctl(Sys->NEWPGRP, nil);
+	sys->sleep(60000);
+}
 
 exists(pid: int): int
 {
@@ -66,28 +71,30 @@ exists(pid: int): int
 	if(fd == nil) return 0;
 	return 1;
 }
-killgrp(pid: int)
+killtree(pid: int)
 {
 	ctl := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(ctl == nil) return;
-	msg := array of byte "killgrp";
+	msg := array of byte "killtree";
 	sys->write(ctl, msg, len msg);
 }
 init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
 	pidch := chan of int;
-	spawn worker(pidch);
+	childch := chan of int;
+	spawn worker(pidch, childch);
 	wpid := <-pidch;
+	cpid := <-childch;
 	sys->sleep(500);
-	before := exists(wpid);
-	killgrp(wpid);
+	before := exists(wpid) && exists(cpid);
+	killtree(wpid);
 	sys->sleep(500);
-	after := exists(wpid);
+	after := exists(wpid) || exists(cpid);
 	if(before == 1 && after == 0)
 		sys->print("MECH: PASS\n");
 	else
-		sys->print("MECH: FAIL before=%d after=%d\n", before, after);
+		sys->print("MECH: FAIL before=%d survivor=%d\n", before, after);
 }
 EOF
 
@@ -96,9 +103,9 @@ EOF
 
 OUT="$(timeout 30 "$EMU" -r"$ROOT" /dis/sh.dis -c "${DIS#$ROOT}" 2>&1)"
 if echo "$OUT" | grep -q '^MECH: PASS$'; then
-	echo "PASS: killgrp terminates a NEWPGRP worker group"
+	echo "PASS: killtree terminates a descendant NEWPGRP"
 else
-	echo "FAIL: killgrp did not terminate the group"
+	echo "FAIL: killtree did not terminate the descendant group"
 	echo "$OUT" | grep -vE '^JIT|sdl3_pre' | tail -5
 	exit 1
 fi

@@ -25,4 +25,6 @@ SYSMODULES=\
 
 DISBIN=$ROOT/dis/tests/js
 
+MODULES=
+
 <$ROOT/mkfiles/mkdis

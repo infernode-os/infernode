@@ -62,9 +62,11 @@ TARG=\
 	goroutine_leak_test.dis\
 	gpu_test.dis\
 	hello_test.dis\
+	appfs_fake.dis\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	icon_test.dis\
 	docengine_test.dis\
 	pdfrender.dis\
 	pdftext_test.dis\
@@ -245,7 +247,35 @@ TARG=\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\
 
-MODULES=
+MODULES=\
+	$ROOT/appl/mpeg/mpegio.m\
+	$ROOT/appl/xenith/asyncio.m\
+	$ROOT/appl/xenith/buff.m\
+	$ROOT/appl/xenith/col.m\
+	$ROOT/appl/xenith/dat.m\
+	$ROOT/appl/xenith/disk.m\
+	$ROOT/appl/xenith/docview.m\
+	$ROOT/appl/xenith/ecmd.m\
+	$ROOT/appl/xenith/edit.m\
+	$ROOT/appl/xenith/elog.m\
+	$ROOT/appl/xenith/exec.m\
+	$ROOT/appl/xenith/file.m\
+	$ROOT/appl/xenith/format.m\
+	$ROOT/appl/xenith/frame.m\
+	$ROOT/appl/xenith/fsys.m\
+	$ROOT/appl/xenith/graph.m\
+	$ROOT/appl/xenith/gui.m\
+	$ROOT/appl/xenith/look.m\
+	$ROOT/appl/xenith/regx.m\
+	$ROOT/appl/xenith/row.m\
+	$ROOT/appl/xenith/scrl.m\
+	$ROOT/appl/xenith/styxaux.m\
+	$ROOT/appl/xenith/text.m\
+	$ROOT/appl/xenith/time.m\
+	$ROOT/appl/xenith/util.m\
+	$ROOT/appl/xenith/wind.m\
+	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/xenith/xfid.m
 
 SYSMODULES=\
 	woff2.m\
@@ -273,6 +303,7 @@ SYSMODULES=\
 	bufio.m\
 	daytime.m\
 	draw.m\
+	lucitheme.m\
 	git.m\
 	gpu.m\
 	json.m\
@@ -310,6 +341,53 @@ SYSMODULES=\
 	wpakey.m\
 	x509.m\
 	xml.m\
+	agentlib.m\
+	att.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	bthci.m\
+	btmock.m\
+	convcs.m\
+	dhcp.m\
+	dialnorm.m\
+	dis.m\
+	encoding.m\
+	ethcrypto.m\
+	ethrpc.m\
+	formatter.m\
+	hid.m\
+	i420.m\
+	imagefile.m\
+	imgload.m\
+	keyringinst.m\
+	l2cap.m\
+	mailparse.m\
+	memfs.m\
+	msgsrc.m\
+	plumbmsg.m\
+	publicnet.m\
+	rand.m\
+	rfc3339.m\
+	rfcomm.m\
+	rlayout.m\
+	sdp.m\
+	secstore.m\
+	sheetview.m\
+	smp.m\
+	softkbd.m\
+	styx.m\
+	styxservers.m\
+	tool.m\
+	twofaslot.m\
+	url.m\
+	venti.m\
+	web/originfs.m\
+	wirefmt.m\
+	workdir.m\
+	x402.m\
+	icon.m\
+	appfs.m\
 
 DISBIN=$ROOT/dis/tests
 

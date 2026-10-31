@@ -294,6 +294,53 @@ testApprovalFlow(t: ref T)
 }
 
 #
+# event: each reader told "pending" when the list awaiting approval
+# changes (a payment queued, one approved or denied); nothing polls.
+#
+testPendingEvent(t: ref T)
+{
+	e1 := sys->open(W + "/event", Sys->OREAD);
+	e2 := sys->open(W + "/event", Sys->OREAD);
+	if(e1 == nil || e2 == nil) {
+		t.fatal(sys->sprint("cannot open event: %r"));
+		return;
+	}
+	(res, err) := roundtrip(W + "/policy/authorize", authreq("eip155:11155111", "100"));
+	t.assert(err == nil && hasprefix(res, "pending:"), "authorization queued");
+	t.assertseq(evread(e1), "pending", "a queued payment is an event");
+	t.assertseq(evread(e2), "pending", "every reader of event is told");
+	if(len res > 8)
+		t.assert(wr(W + "/ctl", "deny " + res[8:]) > 0, "deny accepted");
+	t.assertseq(evread(e1), "pending", "a denied payment is an event");
+	t.assertseq(evread(e2), "pending", "the second reader is told of it too, once");
+}
+
+# The next event, or "timeout" after 5s.
+evread(fd: ref Sys->FD): string
+{
+	c := chan of string;
+	spawn evreader(fd, c);
+	spawn evtimeout(c);
+	return <-c;
+}
+
+evreader(fd: ref Sys->FD, c: chan of string)
+{
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	s := "eof";
+	if(n > 0)
+		s = strip(string buf[0:n]);
+	alt { c <-= s => ; * => ; }
+}
+
+evtimeout(c: chan of string)
+{
+	sys->sleep(5000);
+	alt { c <-= "timeout" => ; * => ; }
+}
+
+#
 # Denial and expiry are reported to the requester on its own fid.
 #
 testDenial(t: ref T)
@@ -399,6 +446,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Authorize/InjectionRejected", testInjectionRejected);
 	run("Authorize/ApprovalFlow", testApprovalFlow);
 	run("Authorize/Denial", testDenial);
+	run("Approval/Event", testPendingEvent);
 	run("Sign/OracleRemoved", testNoSignOracle);
 
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -12,6 +12,8 @@ SYSMODULES= \
 	bufio.m\
 	css.m\
 	xpointers.m\
+	string.m\
+	uris.m\
 
 DISBIN=$ROOT/dis/lib/w3c
 

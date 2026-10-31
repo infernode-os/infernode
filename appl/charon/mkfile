@@ -14,6 +14,16 @@ SYSMODULES=\
 	sys.m\
 	tk.m\
 	tkclient.m\
+	outlinefont.m\
+	web/browser.m\
+	web/charonfs.m\
+	web/css.m\
+	web/dom.m\
+	web/fonts.m\
+	web/layout.m\
+	web/page.m\
+	web/style.m\
+	keyboard.m\
 
 DISBIN=$ROOT/dis/wm
 

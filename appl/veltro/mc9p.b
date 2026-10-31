@@ -69,18 +69,11 @@ Qdomainbase: con 100;
 # Endpoints start at 1000
 Qendpointbase: con 1000;
 
-# Endpoint state (per-fid)
-EndpointState: adt {
-	request:  array of byte;
-	response: array of byte;
-};
-
 # Endpoint info
 EndpointInfo: adt {
 	name:   string;
 	domain: string;
 	qid:    int;
-	state:  ref EndpointState;
 };
 
 # Domain info
@@ -221,7 +214,7 @@ initdomains(args: list of string)
 		eplist: list of ref EndpointInfo;
 		for(; eps != nil; eps = tl eps) {
 			epname := hd eps;
-			ep := ref EndpointInfo(epname, name, epqid, ref EndpointState(nil, nil));
+			ep := ref EndpointInfo(epname, name, epqid);
 			eplist = ep :: eplist;
 			epqid++;
 		}
@@ -440,8 +433,7 @@ dirgen(path: int): (ref Sys->Dir, string)
 			if(ep != nil) {
 				d.name = ep.name;
 				d.mode = 8r666;  # Read/write
-				if(ep.state.response != nil)
-					d.length = big len ep.state.response;
+				# Response length is fid-specific and is reported by reads.
 			} else {
 				return (nil, Enotfound);
 			}
@@ -529,8 +521,9 @@ Serve:
 			* =>
 				if(path >= Qendpointbase) {
 					ep := findendpointbyqid(path);
-					if(ep != nil && ep.state.response != nil) {
-						srv.reply(styxservers->readbytes(m, ep.state.response));
+					response := fidresponse(fid, path);
+					if(ep != nil && response != nil) {
+						srv.reply(styxservers->readbytes(m, response));
 					} else {
 						srv.reply(styxservers->readbytes(m, nil));
 					}
@@ -550,9 +543,8 @@ Serve:
 			if(path >= Qendpointbase) {
 				ep := findendpointbyqid(path);
 				if(ep != nil) {
-					# Store request and execute
-					ep.state.request = m.data;
-					ep.state.response = executeendpoint(ep);
+					# Execute this fid's request and retain only this fid's response.
+					fid.data = tagresponse(path, executeendpoint(ep, m.data));
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
@@ -568,10 +560,36 @@ Serve:
 	navops <-= nil;
 }
 
-# Execute an endpoint and return response
-executeendpoint(ep: ref EndpointInfo): array of byte
+# Prefix a response with its endpoint qid. A fid may subsequently walk to a
+# different endpoint; the tag prevents a stale response following that walk.
+tagresponse(path: int, response: array of byte): array of byte
 {
-	request := string ep.state.request;
+	if(response == nil)
+		response = array[0] of byte;
+	r := array[len response + 4] of byte;
+	r[0] = byte (path >> 24);
+	r[1] = byte (path >> 16);
+	r[2] = byte (path >> 8);
+	r[3] = byte path;
+	r[4:] = response;
+	return r;
+}
+
+fidresponse(fid: ref Styxservers->Fid, path: int): array of byte
+{
+	r := fid.data;
+	if(r == nil || len r < 4)
+		return nil;
+	tag := (int r[0] << 24) | (int r[1] << 16) | (int r[2] << 8) | int r[3];
+	if(tag != path)
+		return nil;
+	return r[4:];
+}
+
+# Execute an endpoint and return response
+executeendpoint(ep: ref EndpointInfo, data: array of byte): array of byte
+{
+	request := string data;
 
 	case ep.domain {
 	"http" =>

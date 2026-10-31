@@ -77,6 +77,7 @@ TARG=\
 	html.dis\
 	imap.dis\
 	imageremap.dis\
+	icon.dis\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
@@ -113,6 +114,8 @@ TARG=\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
+	post9p.dis\
+	appfs.dis\
 	pop3.dis\
 	profile.dis\
 	publicnet.dis\
@@ -246,6 +249,7 @@ SYSMODULES=\
 	hash.m\
 	html.m\
 	imap.m\
+	icon.m\
 	imagefile.m\
 	imgload.m\
 	pngload.m\
@@ -340,6 +344,28 @@ SYSMODULES=\
 	wpakey.m\
 	x402.m\
 	xml.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	dhcp.m\
+	dialog.m\
+	docreg.m\
+	keyringinst.m\
+	mailparse.m\
+	mermaid.m\
+	popup.m\
+	publicnet.m\
+	scoretable.m\
+	selectfile.m\
+	softkbd.m\
+	tabs.m\
+	tkclient.m\
+	tls.m\
+	viewport.m\
+	wmdeb.m\
+	post9p.m\
+	appfs.m\
 
 
 

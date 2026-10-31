@@ -6,7 +6,7 @@ implement VeltroMoreToolsTest;
 # These tools have no dedicated test file.  They share a pattern: the agent
 # calls exec(args), the tool dispatches on the first word, and most error
 # paths are reached without any external service running (no /mnt/ui, /mnt/wallet,
-# /mnt/wikia, /tmp/veltro/man/).  We exercise:
+# /mnt/wikia, /mnt/man).  We exercise:
 #
 #   mount    — stub: must always refuse, never expand the namespace
 #   wallet   — argument parsing, command dispatch, missing-arg errors
@@ -736,17 +736,17 @@ testFractalRejectsUnsafeCtl(t: ref T)
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"fractal fill rejects control delimiters");
 
-	# unmounted: whatever an earlier test or wm/fractals left at
-	# /tmp/veltro/fractal is hidden (in this test's own namespace)
-	if((d := sys->stat("/tmp/veltro/fractal")).t0 >= 0) {
+	# unmounted: whatever is at /mnt/fractal is hidden (in this test's
+	# own namespace), as when no viewer is posted for tools9p to mount
+	if((d := sys->stat("/mnt/fractal")).t0 >= 0) {
 		empty := sys->sprint("/tmp/veltro_more_tools.%d", sys->pctl(0, nil));
 		sys->create(empty, Sys->OREAD, Sys->DMDIR|8r755);
-		if(sys->bind(empty, "/tmp/veltro/fractal", Sys->MREPL) < 0)
-			t.fatal(sys->sprint("hide /tmp/veltro/fractal: %r"));
+		if(sys->bind(empty, "/mnt/fractal", Sys->MREPL) < 0)
+			t.fatal(sys->sprint("hide /mnt/fractal: %r"));
 	}
 	r = tool->exec("julia -0.4 0.6");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "/tmp/veltro/fractal/ctl"),
-		"valid fractal julia reaches service ctl path when unmounted");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "not running"),
+		"valid fractal julia, with no viewer, says it is not running");
 }
 
 # ============================================================================

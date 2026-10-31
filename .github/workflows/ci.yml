@@ -119,6 +119,13 @@ jobs:
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         ./tools/verify-dis-build.sh
 
+    - name: Check mkfile header dependencies
+      run: |
+        # Every module header a Limbo source includes, at any depth, is a
+        # prerequisite of its .dis: one that is not changes without mk
+        # rebuilding, and the stale .dis fails at load (link typecheck).
+        python3 tools/check-mkfile-deps.py
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/amd64/bin/limbo"
@@ -292,6 +299,15 @@ jobs:
         chmod +x tests/host/release_scrub_test.sh
         ROOT=. bash tests/host/release_scrub_test.sh
 
+    - name: Check the tree's icons
+      run: |
+        # icons/ holds icon(2)'s glyphs (icons/ui), Tk's cursors and the
+        # artwork coffee and draw-example(2) draw, nothing else; every
+        # glyph a program names is there, and no Tk bitmap or /icons
+        # path a program names is missing (one missing fails the widget
+        # naming it).
+        ROOT=. sh tests/host/icons_test.sh
+
     - name: Check what goes on a Raspberry Pi card image
       run: |
         # tools/mkpiimage.sh, which makes the release's card images: each
@@ -340,12 +356,16 @@ jobs:
         chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
           tests/host/lucibridge_tool_timeout_test.sh \
           tests/host/agentloop_characterization_test.sh \
-          tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh \
+          tests/host/tools9p_result_test.sh tests/host/toolctl_view_test.sh \
+          tests/host/wiki9p_test.sh \
           tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
           tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
           tests/host/context_window_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
+        # /mnt/toolctl's ns, event and view: the agent's name space as it
+        # is, read-only, and its lists' changes as events (#1020).
+        ROOT=. bash tests/host/toolctl_view_test.sh
         ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
         ROOT=. bash tests/host/veltrosrv_test.sh
         ROOT=. bash tests/host/veltro_cli_test.sh
@@ -724,7 +744,7 @@ jobs:
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test
               secstore_e2e_test secstore_logon_test secstored_test
               security_check_test serve_llm_smoke_test stale_dis_test
-              strcat_test task_provisioning_test tcpseq_test
+              strcat_test task_provisioning_test tcpseq_test themefs_test
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
               write_capability_test xenith_build_test
@@ -1062,11 +1082,12 @@ jobs:
       run: |
         # wm/wm driven by the pointer: New, the sweep and its cursor,
         # the frame, focus, the menu's operations, a theme switch, a
-        # client leaving, wm/page, wm/sam edited through its windows,
-        # and every program in dis/wm opening at a size that shows it,
-        # under wm/wm and in Lucifer's zone.  wm_test.sh was written to
+        # client leaving, wm/shell typed at (the shell New starts),
+        # wm/page, wm/sam edited through its windows, and every program
+        # in dis/wm opening at a size that shows it, under wm/wm and in
+        # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test sam_gui_test lucifer_app_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1965,7 +1986,7 @@ jobs:
         # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
         # here (77).
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test sam_gui_test lucifer_app_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

@@ -5,7 +5,7 @@ implement ShellToolTest;
 #
 # Tests the shell tool's command parsing, string helpers,
 # tail line-splitting logic, and error handling by simulating
-# the shell IPC files at /tmp/veltro/shell/.
+# the shell's files (served at /mnt/shell).
 #
 
 include "sys.m";

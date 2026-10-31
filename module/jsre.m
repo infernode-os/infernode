@@ -98,6 +98,9 @@ Jsre: module
 		nreg:	int;
 		u:	int;
 		flags:	int;
+		anchored:	int;	# it can match only where it starts: at 0
+		first:	array of int;	# the instructions one of which must match its first character, or nil
+		firstascii:	array of byte;	# by ASCII character: whether one of first matches it (made when first needed)
 	};
 
 	init:	fn();

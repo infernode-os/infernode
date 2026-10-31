@@ -229,12 +229,30 @@ buildindex(s: ref Styles, env: ref Env): ref Index
 			findlayers(ix, (hd sl).t0.rules, (hd sl).t2, "");
 	for(sl = sheets; sl != nil; sl = tl sl) {
 		(sh, origin, base) := hd sl;
+		if(againlater(tl sl, sh, origin, base))
+			continue;
 		indexrules(ix, sh.rules, origin, nil, base, 0);
 	}
 	ix.idx.n = ix.order;
 	for(ll := ix.layerpos; ll != nil; ll = tl ll)
 		ix.idx.layers = (hd ll).t0 :: ix.idx.layers;
 	return ix.idx;
+}
+
+# Whether a sheet is used again later in the cascade: the same parsed
+# sheet, origin and base.  Each of its rules there comes later than here
+# with the same specificity and declarations, so its rules here never
+# win: they are not indexed.  (GitHub links some sheets two and three
+# times; every element was matched against each copy.)  Layers keep
+# their order, which findlayers has taken from every copy.
+againlater(l: list of (ref Sheet, int, string), sh: ref Sheet, origin: int, base: string): int
+{
+	for(; l != nil; l = tl l) {
+		(s2, o2, b2) := hd l;
+		if(s2 == sh && o2 == origin && b2 == base)
+			return 1;
+	}
+	return 0;
 }
 
 findlayers(ix: ref Ix, rs: array of ref Rule, base, pfx: string)

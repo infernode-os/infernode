@@ -65,14 +65,14 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `B` | boot (native) | bridge | bridge | boot, bridge | in use | as Inferno (bridge in Plan 9 and 9front) |
 | `C` | cmd (hosted) | channel element |  | cmd | in use |  |
 | `D` | ssl (hosted/native) | ssl |  | ssl | in use |  |
-| `E` |  | sdp |  | mpeg | in use |  |
+| `E` |  | sdp |  | mpeg | free here |  |
 | `F` | tfa (hosted) | flash | flash | flash, tinyfs | move planned | hosted 2fa to #h (#1040): #F is flash in all three |
 | `G` | gpio (native) |  | gpio | fpga, gpio | in use |  |
-| `H` |  |  |  | ata | in use |  |
+| `H` |  |  |  | ata | free here |  |
 | `I` | ip (hosted/native) | ip | ip | ip | in use |  |
 | `J` |  |  | i2c | i2c | reserved | I2C, as 9front and Inferno |
 | `K` |  | kprof | kprof | kprof | reserved | the hosted profiler, from #P: kprof in all three |
-| `L` |  | lpt | lpt | ds1620, lpt | in use |  |
+| `L` |  | lpt | lpt | ds1620, lpt | free here |  |
 | `M` | mnt (hosted/native) | mnt | mnt | mnt | in use |  |
 | `N` |  |  |  |  | reserved | CAN: free in all three |
 | `P` | arch (native), prof (hosted) | arch | arch | arch, prof | move planned | arch everywhere: the hosted profiler to #K |
@@ -83,7 +83,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `V` | cam (native) | tv | tv | tv | in use | video in, as tv in all three; the Dis VMs, which had it on their branch, moved to #X |
 | `W` |  |  |  |  | reserved | PWM: free in all three |
 | `X` |  | loopback | vmx | loopback | reserved | the Dis VMs (#944): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
-| `Y` |  | cardbus | cardbus | cardbus | in use |  |
+| `Y` |  | cardbus | cardbus | cardbus | free here |  |
 | `Z` | opus (hosted) |  |  | test | divergence | Inferno's test device |
 | `a` |  | tls | tls | arch | free here | tls in Plan 9 and 9front. emu/Nt/devarch.c says #a, and no build includes it |
 | `b` | bench (native) | irq | irq, kbd | dbg | move planned | bench to #x, as Inferno; #b is then Inferno's dbg |
@@ -91,7 +91,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `d` | dup (hosted) | dup | dup | dup | in use |  |
 | `e` | env (hosted/native) | env | env | env | in use |  |
 | `f` | phone (hosted) | floppy | floppy | floppy | divergence | floppy elsewhere, which nothing here will need |
-| `g` |  | segment | segment |  | in use |  |
+| `g` |  | segment | segment |  | free here |  |
 | `h` |  |  |  |  | reserved | 2fa, from #F (#1040): a hardware key; free in all three |
 | `i` | draw (hosted/native) | draw | draw | draw | in use |  |
 | `k` |  | fs | fs | ds | free here | Inferno's ds (man/3/ds, no source here); fs in Plan 9 and 9front |
@@ -105,7 +105,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `v` |  | dss, vga | dss, vga | vga | reserved | display or video out: vga in all three |
 | `w` | wmsz (hosted) | watchdog | watchdog |  | move planned | hosted wmsz to #z (#1040): #w is the watchdog in Plan 9 and 9front |
 | `x` |  |  | xenstore | bench | reserved | bench, from #b, as Inferno |
-| `y` |  | i82365 | i82365 | i82365, pcmcia | in use |  |
+| `y` |  | i82365 | i82365 | i82365, pcmcia | free here |  |
 | `z` |  |  |  |  | reserved | wmsz, from #w (#1040): size; free in all three |
 | `$` |  | pnp | pci, pnp | pci, pnp | reserved | PCI, as all three |
 | `%` | mem (hosted) |  |  | mem | in use |  |
@@ -114,19 +114,19 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `^` | snarf (hosted) |  |  | snarf | in use |  |
 | `|` | pipe (hosted/native) | pipe | pipe | pipe | in use |  |
 | `¤` | cap (hosted) | cap | cap | cap | in use |  |
-| `²` |  |  | twsi |  | in use |  |
-| `¶` |  |  | swap |  | in use |  |
-| `æ` |  | aoe | aoe |  | in use |  |
-| `Δ` |  |  | dtracy |  | in use |  |
-| `Ι` |  | kbin |  |  | in use |  |
-| `Λ` |  | video | video |  | in use |  |
+| `²` |  |  | twsi |  | free here |  |
+| `¶` |  |  | swap |  | free here |  |
+| `æ` |  | aoe | aoe |  | free here |  |
+| `Δ` |  |  | dtracy |  | free here |  |
+| `Ι` |  | kbin |  |  | free here |  |
+| `Λ` |  | video | video |  | free here |  |
 | `Σ` |  |  |  | sign | free here | Inferno's sign (man/3/sign, no source here) |
-| `Φ` |  |  | mii |  | in use |  |
-| `κ` |  | kbmap |  |  | in use |  |
-| `λ` |  |  | loopback |  | in use |  |
-| `σ` |  |  | shr |  | in use |  |
-| `τ` |  |  |  | tk | in use |  |
-| `⁲` |  | twsi |  |  | in use |  |
+| `Φ` |  |  | mii |  | free here |  |
+| `κ` |  | kbmap |  |  | free here |  |
+| `λ` |  |  | loopback |  | free here |  |
+| `σ` |  |  | shr |  | free here |  |
+| `τ` |  |  |  | tk | free here |  |
+| `⁲` |  | twsi |  |  | free here |  |
 | `₪` | srv9 (hosted) |  |  | srv9 | in use |  |
-| `↓` |  |  |  | power | in use |  |
-| `☹` |  | bios |  |  | in use |  |
+| `↓` |  |  |  | power | free here |  |
+| `☹` |  | bios |  |  | free here |  |

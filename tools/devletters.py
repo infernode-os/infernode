@@ -139,6 +139,8 @@ def main():
                 bad.append("#%s is %s in %s, and the registry does not say so (it lists %s)" %
                            (c, d, ", ".join(devs[d][:3]), ", ".join(sorted(reg[c][0])) or "nothing"))
     for c, (names, status) in sorted(reg.items()):
+        if status == "in use" and not names:
+            bad.append("registry: #%s is marked in use and names no device" % c)
         if status == "in use":
             for n in names:
                 if n not in used.get(c, {}):

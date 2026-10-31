@@ -456,7 +456,7 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 			# /mnt/gps sub-restriction: the read files only.
 			if(gpsmnt) {
 				gerr := restrictdir("/mnt/gps",
-					"position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "status" :: nil, 0);
+					"position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "time" :: "status" :: nil, 0);
 				if(gerr != nil)
 					return sys->sprint("restrict /mnt/gps: %s", gerr);
 			}

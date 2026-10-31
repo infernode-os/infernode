@@ -4,8 +4,13 @@ gpsfs \- GPS receiver as a file system
 .SH SYNOPSIS
 .B gpsfs
 [
+.B -S
+] [
 .B -m
 .I mountpoint
+] [
+.B -s
+.I spec
 ] [
 .I command ...
 ]
@@ -42,6 +47,27 @@ The
 words, if given, are written to
 .B ctl
 once the files are mounted.
+.PP
+The files are also posted as
+.B #sgps/fs
+.RI ( post9p (2);
+.B -s
+names another spec,
+.B -S
+posts none), so a process that did not see the mount, an application
+started by Lucifer or an agent's tool, can mount them:
+.IP
+.EX
+mount -A '#sgps/fs' /mnt/gps
+.EE
+.PP
+.IR Wm-road (1)
+and
+.IR tools9p (8),
+for the
+.B gps
+tool, do so themselves.
+Not posted, gpsfs exits when the mount goes.
 .SH FILESYSTEM
 .TF satellites
 .TP
@@ -115,10 +141,13 @@ or
 when the source ended,
 .BR error );
 .BI source= address;
-.BI sentences= n
-and
+.BI origin= recorded
+for a recording;
+.BI sentences= n ,
 .BI bad= n
-counted since start;
+and
+.BI suspect= n
+(positions held back as glitches) counted since start;
 .BI age= seconds
 since the last position;
 .BI error= reason
@@ -183,9 +212,22 @@ and
 (horizontal and vertical error estimates, metres, one sigma: GST, else
 Garmin's PGRME),
 .B magvar
-(the magnetic variation, degrees, east positive).
+(the magnetic variation, degrees, east positive), and
+.B origin
+.RB ( recorded
+for a fix from a recording, a
+.B replay
+or a source that is a file with a length;
+.B fed
+for one written to
+.BR feed ;
+none for a live receiver).
 Magnetic directions are given only when the receiver gives the
 variation.
+A position more than a degree from the last is held back as a glitch,
+up to three in a row (a receiver that has moved is believed at the
+fourth), and counted in
+.BR status .
 With no fix the line is the time and
 .BR mode=none .
 .TP
@@ -272,6 +314,27 @@ traffic reports and FLARM's PFLAA, which FLARM gives relative to this
 position.
 A name with blanks is quoted.
 .TP
+.B time
+the last fix's time beside this host's clock when the fix's first
+sentence began to arrive, as attr=value:
+.B time
+(RFC 3339),
+.B gps
+and
+.B local
+(microseconds since the epoch),
+.B offset
+(their difference) and
+.BR sync .
+The arrival is the read's time less what the bytes after the
+sentence's first took at the line's baud rate, when it is given.
+.B Sync=yes
+only for a live receiver speaking NMEA; a recording, a feed, and a
+receiver whose fixes this host stamps (garmin, gdl90) say
+.BR no .
+.IR Timesync (8)
+sets the clock from it.
+.TP
 .B nmea
 the sentences, as received (AIS's, beginning
 .BR ! ,
@@ -292,7 +355,8 @@ so what a process may do is what is bound in its name space:
 .BR fix ,
 .BR event ,
 .BR satellites ,
-.B traffic
+.BR traffic ,
+.B time
 and
 .B nmea
 let it follow the receiver;
@@ -300,7 +364,7 @@ let it follow the receiver;
 and
 .B feed
 let it choose the source or supply a position.
-A process that should only know where it is gets the first six.
+A process that should only know where it is gets the first seven.
 .PP
 .I Gpsfs
 opens sources in the name space it was started in.
@@ -374,7 +438,14 @@ A day's drive, again:
 .IR garminav (2),
 .IR eia (3),
 .IR location (3),
-.IR wm-road (1)
+.IR wm-road (1),
+.IR timesync (8)
+.br
+Plan 9's
+.IR gpsfs (8),
+whose
+.B time
+file and glitch rejection this one follows
 .SH BUGS
 One source at a time.
 A source that ends or fails is not reopened; write the command again.

@@ -83,6 +83,10 @@ cat $d/feed.nmea > $g/feed
 sleep 1
 sh -c 'cat '^$g^'/position' > $d/position.lost >[2] $d/err.lost
 
+# the agent's gps tool, in a name space without the mount: tools9p
+# mounts the posted #sgps/fs for it
+@{pctl forkns; unmount /mnt/gps; path=(/dis/veltro /dis/cmd /dis .); tools9p -m /tool gps &; sleep 2; echo position > /tool/gps/ctl; cat /tool/gps/ctl > $d/tool.position}
+
 gpsfs >[2] $d/again
 echo R done
 echo halt > '#c/sysctl'

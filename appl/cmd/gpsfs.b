@@ -47,6 +47,25 @@ implement Gpsfs;
 #   nmea        (r)  the sentences, as received (AIS's ! sentences
 #                    too), from the open on; each read waits for more
 #   feed        (w)  sentences written here are taken as the receiver's
+#   time        (r)  the last fix's time beside this host's clock when its
+#                    first sentence began to arrive: time= (RFC 3339)
+#                    gps= local= offset= (microseconds since the epoch,
+#                    and their difference) sync=yes|no.  sync is yes only
+#                    for a live receiver speaking NMEA: never for a
+#                    recording, a feed, or a format with no time of its
+#                    own (garmin, gdl90, whose fixes this host stamps).
+#                    timesync(8) sets the clock from it.
+#
+# A fix from a recording (replay, or a source that is a file with a
+# length) says origin=recorded, one written to feed origin=fed; a live
+# receiver's says nothing.  A position more than a degree from the last
+# is held back as a glitch, up to three in a row (nmea(2)), and counted
+# in status as suspect=.
+#
+# The files are mounted at the mount point and posted as #sgps/fs
+# (post9p(2)), so a process whose name space did not see the mount
+# (Lucifer's applications, an agent's tools) can mount them:
+#	mount -A '#sgps/fs' /mnt/gps
 #
 # Reading and commanding are separate files so that access is decided by
 # what is bound, not by checks here: a process given position, fix,
@@ -58,7 +77,7 @@ implement Gpsfs;
 #
 # The server opens sources in the name space it was started in.
 #
-# Usage:	gpsfs [-m mountpoint] [command ...]
+# Usage:	gpsfs [-S] [-m mountpoint] [-s spec] [command ...]
 #
 
 include "sys.m";
@@ -79,6 +98,9 @@ include "styxservers.m";
 include "daytime.m";
 	daytime: Daytime;
 
+include "post9p.m";
+	post9p: Post9p;
+
 include "nmea.m";
 	nmea: Nmea;
 	Fix, Parser, Target: import nmea;
@@ -96,7 +118,7 @@ Gpsfs: module
 	init: fn(nil: ref Draw->Context, argv: list of string);
 };
 
-Qroot, Qctl, Qstatus, Qposition, Qfix, Qevent, Qsatellites, Qtraffic, Qnmea, Qfeed: con big iota;
+Qroot, Qctl, Qstatus, Qposition, Qfix, Qevent, Qsatellites, Qtraffic, Qtime, Qnmea, Qfeed: con big iota;
 
 files := array[] of {
 	("ctl", 8r660),
@@ -106,6 +128,7 @@ files := array[] of {
 	("event", 8r444),
 	("satellites", 8r444),
 	("traffic", 8r444),
+	("time", 8r444),
 	("nmea", 8r444),
 	("feed", 8r220),
 };
@@ -121,10 +144,19 @@ Input: adt {
 	line:	string;
 	err:	string;
 	target:	ref Target;
+	us:	big;	# this host's clock when the line began to arrive, or 0
+};
+
+# a request from one of the connections: the mount's, or one made
+# through #sgps/fs; m nil when the connection is gone
+Req: adt {
+	srv:	ref Styxserver;
+	m:	ref Tmsg;
 };
 
 # an open of event, nmea or feed
 Client: adt {
+	srv:	ref Styxserver;
 	fid:	int;
 	path:	big;
 	pending:	string;		# event: fixes not read; nmea: sentences not read
@@ -134,14 +166,25 @@ Client: adt {
 
 # what the server knows, apart from its source
 State: adt {
-	srv:	ref Styxserver;
 	p:	ref Parser;
 	clients:	list of ref Client;
 	sentences:	int;
 	bad:	int;
 	lastfix:	int;	# sys->millisec() of the last fix, or -1
+	# the arrival of the first sentence of this time and the last
+	etime:	string;
+	elocal:	big;
+	ptime:	string;
+	plocal:	big;
+	timetext:	string;	# the time file
+	origin:	string;		# the last sentence's
 
-	take:	fn(st: self ref State, line: string): string;
+	# a sentence: where it came from ("" a live receiver, recorded,
+	# fed), whether its times are the receiver's own, when it began
+	# to arrive (0 not known)
+	take:	fn(st: self ref State, line, origin: string, owntime: int, us: big): string;
+	lastorigin:	fn(st: self ref State): string;
+	settime:	fn(st: self ref State, f: ref Fix, sync: int);
 };
 
 # a source command
@@ -151,6 +194,7 @@ Source: adt {
 	format:	string;		# nmea garmin gdl90
 	addr:	string;
 	baud:	string;
+	origin:	string;		# "" live, or recorded
 };
 
 user := "gps";
@@ -172,12 +216,17 @@ init(nil: ref Draw->Context, argv: list of string)
 	nmea->init();
 
 	mnt := "/mnt/gps";
+	spec := "gps";
 	arg->init(argv);
-	arg->setusage("gpsfs [-m mountpoint] [command ...]");
+	arg->setusage("gpsfs [-S] [-m mountpoint] [-s spec] [command ...]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'm' =>
 			mnt = arg->earg();
+		's' =>
+			spec = arg->earg();
+		'S' =>
+			spec = nil;
 		* =>
 			arg->usage();
 		}
@@ -197,10 +246,12 @@ init(nil: ref Draw->Context, argv: list of string)
 		fatal(sys->sprint("pipe: %r"));
 	navops := chan of ref Navop;
 	spawn navigator(navops);
+	reqc := chan of ref Req;
 	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), Qroot);
 	fds[0] = nil;
+	spawn forward(srv, tchan, reqc);
 	pidc := chan of int;
-	spawn server(tchan, srv, navops, pidc);
+	spawn server(reqc, spec, navops, srv.fd, pidc);
 	<-pidc;
 	if(sys->mount(fds[1], nil, mnt, Sys->MREPL, nil) < 0)
 		fatal(sys->sprint("mount %s: %r", mnt));
@@ -210,6 +261,19 @@ init(nil: ref Draw->Context, argv: list of string)
 		fd := sys->open(mnt + "/ctl", Sys->OWRITE);
 		if(fd == nil || sys->fprint(fd, "%s", cmd[1:]) < 0)
 			fatal(sys->sprint("%s: %r", cmd[1:]));
+	}
+}
+
+# a connection's requests into the server's one channel
+forward(srv: ref Styxserver, tchan: chan of ref Tmsg, reqc: chan of ref Req)
+{
+	for(;;) {
+		m := <-tchan;
+		if(m != nil && tagof m == tagof Tmsg.Readerror)
+			m = nil;
+		reqc <-= ref Req(srv, m);
+		if(m == nil)
+			return;
 	}
 }
 
@@ -233,18 +297,37 @@ readfile(f: string): string
 
 #
 # The server: one proc owns all the state, so nothing is locked.
-# Sentences arrive from the reader proc of the current source (on
-# inputc, marked with the source's generation, so a stopped source's
-# last lines are dropped) and from writes of feed.
+# Requests come from every connection (the mount's, and one for each
+# open of #sgps/fs) on reqc; sentences from the reader proc of the
+# current source (on inputc, marked with the source's generation, so
+# a stopped source's last lines are dropped) and from writes of feed.
 #
-server(tchan: chan of ref Tmsg, srv: ref Styxserver, navops: chan of ref Navop, pidc: chan of int)
+server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop,
+	mfd: ref Sys->FD, pidc: chan of int)
 {
 	# a name space and fds of its own, made before the mount: the
 	# server never finds itself when it opens a source
-	pidc <-= sys->pctl(Sys->NEWFD|Sys->FORKNS, srv.fd.fd :: 2 :: nil);
+	pid := sys->pctl(Sys->NEWFD|Sys->FORKNS, mfd.fd :: 2 :: nil);
 	stderr = sys->fildes(2);
+	# posted from here, so the connections' fds are in this fd group
+	conns := chan of ref Sys->FD;
+	posted := 0;
+	if(spec != nil) {
+		post9p = load Post9p Post9p->PATH;
+		if(post9p == nil)
+			sys->fprint(stderr, "gpsfs: cannot load post9p: %r: not posted\n");
+		else {
+			post9p->init();
+			(nil, perr) := post9p->post(spec, conns);
+			if(perr != nil)
+				sys->fprint(stderr, "gpsfs: post #s%s: %s\n", spec, perr);
+			else
+				posted = 1;
+		}
+	}
+	pidc <-= pid;
 
-	st := ref State(srv, Parser.new(), nil, 0, 0, -1);
+	st := ref State(Parser.new(), nil, 0, 0, -1, nil, big 0, nil, big 0, nil, nil);
 	inputc := chan of ref Input;
 	gen := 0;
 	readerpid := -1;
@@ -252,10 +335,17 @@ server(tchan: chan of ref Tmsg, srv: ref Styxserver, navops: chan of ref Navop, 
 	link := "none";
 	srcerr := "";
 	ctlwait: ref Tmsg.Write;	# a source command waiting for its open
+	ctlsrv: ref Styxserver;
 	waitsrc: ref Source;
+	nconn := 1;	# the mount's
 
 Serve:
 	for(;;) alt {
+	fd := <-conns =>
+		(tc, srv) := Styxserver.new(fd, Navigator.new(navops), Qroot);
+		spawn forward(srv, tc, reqc);
+		nconn++;
+
 	in := <-inputc =>
 		if(in.gen != gen)
 			break;
@@ -266,19 +356,21 @@ Serve:
 				srcerr = in.err;
 				readerpid = -1;
 				if(ctlwait != nil)
-					srv.reply(ref Rmsg.Error(ctlwait.tag, in.err));
+					ctlsrv.reply(ref Rmsg.Error(ctlwait.tag, in.err));
 			} else {
 				link = "open";
 				srcerr = "";
 				src = waitsrc;
+				if(in.line != nil)
+					src.origin = in.line;	# what the reader found the source to be
 				if(ctlwait != nil)
-					srv.reply(ref Rmsg.Write(ctlwait.tag, len ctlwait.data));
+					ctlsrv.reply(ref Rmsg.Write(ctlwait.tag, len ctlwait.data));
 			}
 			ctlwait = nil;
 			waitsrc = nil;
 		Iline =>
-			if(len in.line > 0 && (in.line[0] == '$' || in.line[0] == '!'))
-				st.take(in.line);
+			if(len in.line > 0 && (in.line[0] == '$' || in.line[0] == '!') && src != nil)
+				st.take(in.line, src.origin, src.format == "nmea", in.us);
 		Itarget =>
 			st.p.target(in.target);
 		Iend =>
@@ -290,16 +382,27 @@ Serve:
 				link = "closed";
 		}
 
-	gm := <-tchan =>
-		if(gm == nil)
-			break Serve;
-		pick m := gm {
-		Readerror =>
-			break Serve;
+	r := <-reqc =>
+		srv := r.srv;
+		if(r.m == nil) {
+			# a connection gone: its opens with it
+			nl: list of ref Client;
+			for(l := st.clients; l != nil; l = tl l)
+				if((hd l).srv != srv)
+					nl = hd l :: nl;
+			st.clients = nl;
+			if(ctlsrv == srv)
+				ctlwait = nil;
+			# not posted, the last connection gone: nobody can reach it
+			if(--nconn == 0 && !posted)
+				break Serve;
+			break;
+		}
+		pick m := r.m {
 		Open =>
 			f := srv.open(m);
 			if(f != nil && (f.path == Qevent || f.path == Qnmea || f.path == Qfeed))
-				st.clients = ref Client(m.fid, f.path, nil, nil, nil) :: st.clients;
+				st.clients = ref Client(srv, m.fid, f.path, nil, nil, nil) :: st.clients;
 		Read =>
 			(f, err) := srv.canread(m);
 			if(f == nil) {
@@ -319,9 +422,12 @@ Serve:
 				else if(src == nil && st.sentences == 0)
 					state = "nosource";
 				s := "state=" + state + " link=" + link;
-				if(src != nil)
+				if(src != nil) {
 					s += " source=" + quote(src.addr);
-				s += sys->sprint(" sentences=%d bad=%d", st.sentences, st.bad);
+					if(src.origin != nil)
+						s += " origin=" + src.origin;
+				}
+				s += sys->sprint(" sentences=%d bad=%d suspect=%d", st.sentences, st.bad, st.p.suspects);
 				if(st.lastfix >= 0)
 					s += sys->sprint(" age=%.1f", real (sys->millisec() - st.lastfix) / 1000.0);
 				if(srcerr != nil)
@@ -338,14 +444,16 @@ Serve:
 			Qfix =>
 				s := "";
 				if(st.p.last != nil)
-					s = st.p.last.text() + "\n";
+					s = st.p.last.text() + st.lastorigin() + "\n";
 				srv.reply(styxservers->readstr(m, s));
 			Qsatellites =>
 				srv.reply(styxservers->readstr(m, st.p.satellites()));
 			Qtraffic =>
 				srv.reply(styxservers->readstr(m, st.p.traffic(sys->millisec())));
+			Qtime =>
+				srv.reply(styxservers->readstr(m, st.timetext));
 			Qevent or Qnmea =>
-				c := client(st.clients, m.fid);
+				c := client(st.clients, srv, m.fid);
 				if(c == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Ebadfid));
 					break;
@@ -355,7 +463,7 @@ Serve:
 					break;
 				}
 				c.rd = m;
-				streamreply(srv, c);
+				streamreply(c);
 			* =>
 				srv.read(m);
 			}
@@ -390,12 +498,13 @@ Serve:
 				}
 				link = "opening";
 				ctlwait = m;
+				ctlsrv = srv;
 				waitsrc = s;
 				rpidc := chan of int;
 				spawn reader(gen, s, inputc, rpidc);
 				readerpid = <-rpidc;
 			Qfeed =>
-				c := client(st.clients, m.fid);
+				c := client(st.clients, srv, m.fid);
 				if(c == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Ebadfid));
 					break;
@@ -409,7 +518,7 @@ Serve:
 					c.partial = rest;
 					if(line == "" || line == "\r")
 						continue;
-					if((e := st.take(line)) != nil && ferr == "")
+					if((e := st.take(line, "fed", 0, big 0)) != nil && ferr == "")
 						ferr = e;
 				}
 				if(len c.partial > Maxline) {
@@ -426,27 +535,27 @@ Serve:
 			}
 		Flush =>
 			for(l := st.clients; l != nil; l = tl l)
-				if((hd l).rd != nil && (hd l).rd.tag == m.oldtag)
+				if((hd l).srv == srv && (hd l).rd != nil && (hd l).rd.tag == m.oldtag)
 					(hd l).rd = nil;
-			if(ctlwait != nil && ctlwait.tag == m.oldtag)
+			if(ctlwait != nil && ctlsrv == srv && ctlwait.tag == m.oldtag)
 				ctlwait = nil;	# the source still opens; nobody waits for it
-			srv.default(gm);
+			srv.default(r.m);
 		Clunk =>
 			nl: list of ref Client;
 			for(l := st.clients; l != nil; l = tl l) {
 				c := hd l;
-				if(c.fid != m.fid) {
+				if(c.srv != srv || c.fid != m.fid) {
 					nl = c :: nl;
 					continue;
 				}
 				# a sentence written without its newline is still a sentence
 				if(c.path == Qfeed && c.partial != nil)
-					st.take(c.partial);
+					st.take(c.partial, "fed", 0, big 0);
 			}
 			st.clients = nl;
 			srv.clunk(m);
 		* =>
-			srv.default(gm);
+			srv.default(r.m);
 		}
 	}
 	if(readerpid >= 0)
@@ -454,13 +563,17 @@ Serve:
 	navops <-= nil;
 }
 
-# a sentence, from the source or feed: given to the readers of nmea,
-# and any fix it completes to the readers of event; nil, or why it was
-# refused
-State.take(st: self ref State, line: string): string
+# a sentence: given to the readers of nmea, and any fix it completes
+# to the readers of event and the time file; nil, or why it was refused
+State.take(st: self ref State, line, origin: string, owntime: int, us: big): string
 {
 	if(len line > 0 && line[len line-1] == '\r')
 		line = line[0:len line-1];
+	# the arrival of each time's first sentence, for the time file
+	if(us != big 0 && (t := nmea->timeof(line)) != nil && t != st.etime) {
+		(st.ptime, st.plocal) = (st.etime, st.elocal);
+		(st.etime, st.elocal) = (t, us);
+	}
 	(fl, err) := st.p.sentence(line);
 	st.sentences++;
 	if(err != nil) {
@@ -469,41 +582,100 @@ State.take(st: self ref State, line: string): string
 	}
 	for(l := st.clients; l != nil; l = tl l)
 		if((hd l).path == Qnmea)
-			queue(st.srv, hd l, line + "\n");
+			queue(hd l, line + "\n");
 	for(; fl != nil; fl = tl fl) {
 		f := hd fl;
-		if(f.valid && f.haspos)
+		o := "";
+		if(origin != nil)
+			o = " origin=" + origin;
+		if(f.valid && f.haspos) {
 			st.lastfix = sys->millisec();
-		s := f.text() + "\n";
+			st.settime(f, origin == nil && owntime);
+		}
+		s := f.text() + o + "\n";
 		for(l = st.clients; l != nil; l = tl l)
 			if((hd l).path == Qevent)
-				queue(st.srv, hd l, s);
+				queue(hd l, s);
 	}
+	st.origin = origin;
 	return nil;
 }
 
-client(l: list of ref Client, fid: int): ref Client
+State.lastorigin(st: self ref State): string
+{
+	if(st.origin == nil)
+		return "";
+	return " origin=" + st.origin;
+}
+
+# the time file from a fix: its time beside this host's when the
+# first sentence of its time began to arrive
+State.settime(st: self ref State, f: ref Fix, sync: int)
+{
+	gps := fixus(f);
+	local := big 0;
+	if(f.utc == st.etime)
+		local = st.elocal;
+	else if(f.utc == st.ptime)
+		local = st.plocal;
+	if(gps == big 0 || local == big 0)
+		return;
+	ok := "no";
+	if(sync)
+		ok = "yes";
+	st.timetext = sys->sprint("time=%s gps=%bd local=%bd offset=%bd sync=%s\n",
+		f.time(), gps, local, gps - local, ok);
+}
+
+# a fix's time in microseconds since the epoch, or 0
+fixus(f: ref Fix): big
+{
+	if(f.date == nil || len f.date != 10 || f.utc == nil || len f.utc < 8)
+		return big 0;
+	tm := ref Daytime->Tm;
+	tm.year = int f.date[0:4] - 1900;
+	tm.mon = int f.date[5:7] - 1;
+	tm.mday = int f.date[8:10];
+	tm.hour = int f.utc[0:2];
+	tm.min = int f.utc[3:5];
+	tm.sec = int f.utc[6:8];
+	tm.zone = "GMT";
+	us := big daytime->tm2epoch(tm) * big 1000000;
+	if(len f.utc > 9) {
+		frac := f.utc[9:];
+		m := big 0;
+		for(i := 0; i < 6; i++) {
+			m *= big 10;
+			if(i < len frac)
+				m += big (frac[i] - '0');
+		}
+		us += m;
+	}
+	return us;
+}
+
+client(l: list of ref Client, srv: ref Styxserver, fid: int): ref Client
 {
 	for(; l != nil; l = tl l)
-		if((hd l).fid == fid)
+		if((hd l).srv == srv && (hd l).fid == fid)
 			return hd l;
 	return nil;
 }
 
 # lines for a reader of event or nmea; the oldest are dropped if it
 # does not keep up
-queue(srv: ref Styxserver, c: ref Client, s: string)
+queue(c: ref Client, s: string)
 {
 	c.pending += s;
 	if(len c.pending > Maxqueue)
 		c.pending = trimlines(c.pending, Maxqueue);
-	streamreply(srv, c);
+	streamreply(c);
 }
 
 # a waiting read of event or nmea given what has arrived: whole lines
 # when they fit.  A stream, not a file: each read is what came next,
 # whatever its offset
-streamreply(srv: ref Styxserver, c: ref Client)
+streamreply(c: ref Client)
 {
 	if(c.rd == nil || c.pending == nil)
 		return;
@@ -517,7 +689,7 @@ streamreply(srv: ref Styxserver, c: ref Client)
 		if(i > 0)
 			n = i;
 	}
-	srv.reply(ref Rmsg.Read(c.rd.tag, b[0:n]));
+	c.srv.reply(ref Rmsg.Read(c.rd.tag, b[0:n]));
 	c.pending = string b[n:];
 	if(c.pending == "")
 		c.pending = nil;
@@ -560,7 +732,7 @@ parsecmd(s: string): (ref Source, string)
 	"replay" =>
 		if(n != 2)
 			return (nil, "usage: replay <path>");
-		return (ref Source("replay " + a[1], "replay", "nmea", a[1], nil), nil);
+		return (ref Source("replay " + a[1], "replay", "nmea", a[1], nil, "recorded"), nil);
 	"source" =>
 		if(n == 3 && a[1] == "gpsd") {
 			# host, host!port, net!host, net!host!port
@@ -577,7 +749,7 @@ parsecmd(s: string): (ref Source, string)
 					addr = "tcp!" + addr;
 				}
 			}
-			return (ref Source("source gpsd " + a[2], "gpsd", "nmea", addr, nil), nil);
+			return (ref Source("source gpsd " + a[2], "gpsd", "nmea", addr, nil, nil), nil);
 		}
 		cmd := "source";
 		format := "nmea";
@@ -609,7 +781,7 @@ parsecmd(s: string): (ref Source, string)
 			} else
 				verb = "dial";
 		}
-		return (ref Source(cmd, verb, format, a[0], baud), nil);
+		return (ref Source(cmd, verb, format, a[0], baud, nil), nil);
 	}
 	return (nil, "unknown command " + a[0]);
 }
@@ -665,6 +837,7 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 	pidc <-= sys->pctl(0, nil);
 	fd: ref Sys->FD;
 	conn: Sys->Connection;	# a listening source's, kept while it is read
+	origin: string;		# what the source turns out to be, if not live
 	case s.verb {
 	"file" or "replay" =>
 		fd = sys->open(s.addr, Sys->OREAD);
@@ -672,6 +845,11 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			inputc <-= failed(gen, sys->sprint("%r"));
 			return;
 		}
+		# a file with a length is a recording; a device, a pipe or a
+		# serial port, as it arrives, has none
+		(ok, d) := sys->fstat(fd);
+		if(ok >= 0 && (d.qid.qtype & Sys->QTDIR) == 0 && d.length > big 0)
+			origin = "recorded";
 		if(s.baud != nil) {
 			cfd := sys->open(s.addr + "ctl", Sys->OWRITE);
 			if(cfd == nil || sys->fprint(cfd, "b%s", s.baud) < 0) {
@@ -708,7 +886,7 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			return;
 		}
 	}
-	inputc <-= ref Input(gen, Iopen, nil, nil, nil);
+	inputc <-= ref Input(gen, Iopen, origin, nil, nil, big 0);
 
 	garmin: ref Garminav->Grouper;
 	gdl: ref Gdl90->Framer;
@@ -727,7 +905,7 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 		}
 	}
 	if(s.format != "nmea" && garmin == nil && gdl == nil) {
-		inputc <-= ref Input(gen, Iend, nil, sys->sprint("cannot load the %s decoder: %r", s.format), nil);
+		inputc <-= ref Input(gen, Iend, nil, sys->sprint("cannot load the %s decoder: %r", s.format), nil, big 0);
 		return;
 	}
 
@@ -736,13 +914,20 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 	prev := -1;
 	buf := array[8192] of byte;
 	part := "";
+	partus := big 0;	# when part's first byte arrived
+	# how long a byte takes on a serial line: ten bits at its rate
+	charus := big 0;
+	if(s.baud != nil && int s.baud > 0)
+		charus = big (10000000 / int s.baud);
+	clock := sys->open("/dev/time", Sys->OREAD);
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
+		now := hostus(clock);
 		if(n <= 0) {
 			err: string;
 			if(n < 0)
 				err = sys->sprint("%r");
-			inputc <-= ref Input(gen, Iend, nil, err, nil);
+			inputc <-= ref Input(gen, Iend, nil, err, nil, big 0);
 			return;
 		}
 		b := buf[0:n];
@@ -754,7 +939,7 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 		if(gdl != nil) {
 			(fixes, targets) := gdl.feed(b);
 			for(; targets != nil; targets = tl targets)
-				inputc <-= ref Input(gen, Itarget, nil, nil, hd targets);
+				inputc <-= ref Input(gen, Itarget, nil, nil, hd targets, big 0);
 			sendfixes(gen, inputc, fixes);
 			continue;
 		}
@@ -762,21 +947,35 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			sendfixes(gen, inputc, garmin.feed(b));
 			continue;
 		}
-		part += string b;
-		if(listen && part != "" && part[len part-1] != '\n')
-			part += "\n";	# a datagram is whole
-		for(;;) {
-			(line, rest) := splitline(part);
-			if(line == nil)
-				break;
-			part = rest;
+		# when a byte of this read arrived: the read's time less the
+		# time the bytes after it took on the line (a datagram, or a
+		# line of no known rate, all at once)
+		chunk := string b;
+		if(listen && chunk != "" && chunk[len chunk-1] != '\n')
+			chunk += "\n";	# a datagram is whole
+		from := len part;
+		all := part + chunk;
+		if(part == "")
+			partus = now - big len chunk * charus;
+		pos := 0;
+		for(i := 0; i < len all; i++) {
+			if(all[i] != '\n')
+				continue;
+			line := all[pos:i];
+			us := partus;
+			if(pos >= from)
+				us = now - big (len chunk - (pos - from)) * charus;
+			pos = i + 1;
 			if(pace && (t := daymillis(nmea->timeof(line))) >= 0) {
 				if(prev >= 0 && t > prev)
 					sys->sleep(min(t - prev, 5000));
 				prev = t;
 			}
-			inputc <-= ref Input(gen, Iline, line, nil, nil);
+			inputc <-= ref Input(gen, Iline, line, nil, nil, us);
 		}
+		part = all[pos:];
+		if(part != "" && pos >= from)
+			partus = now - big (len chunk - (pos - from)) * charus;
 		if(len part > Maxline)
 			part = "";
 	}
@@ -786,7 +985,19 @@ Udphdr: con 52;	# a datagram's addresses, in headers mode (ip(3))
 
 failed(gen: int, err: string): ref Input
 {
-	return ref Input(gen, Iopen, nil, err, nil);
+	return ref Input(gen, Iopen, nil, err, nil, big 0);
+}
+
+# this host's clock, microseconds since the epoch (cons(3)), or 0
+hostus(fd: ref Sys->FD): big
+{
+	if(fd == nil)
+		return big 0;
+	b := array[32] of byte;
+	n := sys->pread(fd, b, len b, big 0);
+	if(n <= 0)
+		return big 0;
+	return big string b[0:n];
 }
 
 # fixes from a receiver that gives no time stamped with this host's,
@@ -810,7 +1021,7 @@ sendfixes(gen: int, inputc: chan of ref Input, fixes: list of ref Fix)
 			f.utc += sys->sprint(".%.2d", stampn);
 		(nil, l) := sys->tokenize(nmea->sentences(f), "\r\n");
 		for(; l != nil; l = tl l)
-			inputc <-= ref Input(gen, Iline, hd l, nil, nil);
+			inputc <-= ref Input(gen, Iline, hd l, nil, nil, big 0);
 	}
 }
 

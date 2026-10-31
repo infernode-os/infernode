@@ -187,6 +187,7 @@ TARG=\
 	tcs.dis\
 	tee.dis\
 	themefs.dis\
+	timesync.dis\
 	telnet.dis\
 	test.dis\
 	time.dis\
@@ -335,6 +336,7 @@ SYSMODULES=\
 	wmsrv.m\
 	garminav.m\
 	gdl90.m\
+	post9p.m\
 
 DISBIN=$ROOT/dis
 

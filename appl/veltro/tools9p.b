@@ -982,7 +982,7 @@ mountcharon()
 }
 
 # Mount a server posted in #s (post9p(2)) for this invocation: the
-# editor's, shell's, man's and fractals', for their tools.  None posted, no mount: the tool says
+# editor's, shell's, man's, fractals' and gpsfs's, for their tools.  None posted, no mount: the tool says
 # it is not running.
 mountposted(posted, mnt: string)
 {
@@ -1466,6 +1466,10 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	case ti.name {
 	"editor" or "shell" or "man" or "fractal" =>
 		mountposted("#s" + ti.name + "/fs", "/mnt/" + ti.name);
+	"gps" =>
+		# gpsfs mounted where tools9p was started, or posted
+		if(sys->stat("/mnt/gps/position").t0 < 0)
+			mountposted("#sgps/fs", "/mnt/gps");
 	}
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.

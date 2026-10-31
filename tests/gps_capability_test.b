@@ -83,7 +83,7 @@ agentview(c: ref NsConstruct->Capabilities, tool: Tool, rc: chan of string)
 		return;
 	}
 	s := "";
-	for(l := "position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "status" ::
+	for(l := "position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "time" :: "status" ::
 			"ctl" :: "feed" :: "nmea" :: nil; l != nil; l = tl l)
 		if(exists("/mnt/gps/" + hd l))
 			s += hd l + " ";
@@ -104,7 +104,7 @@ testToolGrant(t: ref T)
 	rc := chan of string;
 	spawn agentview(caps("gps" :: nil, nil), tool, rc);
 	s := <-rc;
-	t.assertseq(s, "dir position fix event satellites traffic status | -33.866667 151.200000\n",
+	t.assertseq(s, "dir position fix event satellites traffic time status | -33.866667 151.200000\n",
 		"the read files only, and the tool reads the position");
 }
 
@@ -137,7 +137,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# a receiver of the test's own, given a fix through feed
 	sys->pctl(Sys->FORKNS, nil);
-	gpsfs->init(nil, "gpsfs" :: "-m" :: "/mnt/gps" :: nil);
+	gpsfs->init(nil, "gpsfs" :: "-S" :: "-m" :: "/mnt/gps" :: nil);	# not posted: it goes with the mount
 	fd := sys->open("/mnt/gps/feed", Sys->OWRITE);
 	if(fd == nil || sys->fprint(fd, "$GPRMC,090000.00,A,3352.0000,S,15112.0000,E,,,311026,,,A\n") < 0)
 		raise sys->sprint("fail:feed: %r");

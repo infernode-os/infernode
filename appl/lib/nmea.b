@@ -146,7 +146,7 @@ Parser.new(): ref Parser
 	return ref Parser(Fix.new(), nil, 0, nil, 0, 0, 0, -1,
 		array[len systems] of list of ref Sat,
 		array[len systems] of list of ref Sat,
-		nil, -1, 0, nil, nil);
+		nil, -1, 0, nil, nil, 0, 0.0, 0.0, 0, 0);
 }
 
 Parser.forget(p: self ref Parser)
@@ -163,6 +163,8 @@ Parser.forget(p: self ref Parser)
 	p.gstseen = 0;
 	p.targets = nil;
 	p.aispend = nil;
+	p.hasgood = 0;
+	p.suspect = 0;
 }
 
 # an angle into 0 <= a < 360
@@ -527,7 +529,9 @@ Parser.sentence(p: self ref Parser, s: string): (list of ref Fix, string)
 		if(p.done) {
 			# a kind the receiver had not sent before, for a time
 			# already given out: it is in the fix files from now on
-			p.last = p.cur;
+			# (unless the time's position was held back)
+			if(!(p.cur.valid && p.cur.haspos && far(p, p.cur)))
+				p.last = p.cur;
 		} else if((p.got & p.kinds) == p.kinds)
 			out = give(p, out);
 	"GSA" =>
@@ -561,12 +565,40 @@ Parser.sentence(p: self ref Parser, s: string): (list of ref Fix, string)
 give(p: ref Parser, out: list of ref Fix): list of ref Fix
 {
 	p.done = 1;
-	p.last = p.cur;
 	v := p.cur.valid && p.cur.haspos;
+	if(v && far(p, p.cur)) {
+		if(p.suspect < 3) {
+			# a glitch, as like as not: held back, not believed
+			p.suspect++;
+			p.suspects++;
+			return out;
+		}
+	}
+	p.last = p.cur;
+	if(v) {
+		p.hasgood = 1;
+		p.goodlat = p.cur.lat;
+		p.goodlon = p.cur.lon;
+		p.suspect = 0;
+	}
 	if(v || p.wasvalid != 0)
 		out = p.cur.copy() :: out;
 	p.wasvalid = v;
 	return out;
+}
+
+# more than a degree from the last position given out
+far(p: ref Parser, f: ref Fix): int
+{
+	if(!p.hasgood)
+		return 0;
+	dlon := f.lon - p.goodlon;
+	if(dlon < 0.0)
+		dlon = -dlon;
+	if(dlon > 180.0)
+		dlon = 360.0 - dlon;	# across the date line
+	dlat := f.lat - p.goodlat;
+	return dlat > 1.0 || dlat < -1.0 || dlon * coslat(f.lat) > 1.0;
 }
 
 rmc(p: ref Parser, a: array of string)

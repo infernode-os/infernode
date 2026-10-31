@@ -1,4 +1,4 @@
 tool=gps
 	description='Where this machine is, from the GPS receiver at /mnt/gps'
 	authorities='reads_fs'
-	notes='Reads gpsfs position, fix, event, satellites, traffic and status (PII: the device location). Never ctl or feed: it cannot change the source or supply a position.'
+	notes='Reads gpsfs position, fix, event, satellites, traffic, time and status (PII: the device location). Never ctl or feed: it cannot change the source or supply a position.'

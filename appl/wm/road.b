@@ -171,7 +171,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			sys->fprint(stderr, "road: %s\n", err);
 	loadmapdir("/lib/road");
 
-	sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);	# a mount of gpsfs is this program's alone
 	tkclient->init();
 	if(ctxt == nil)
 		ctxt = tkclient->makedrawcontext();
@@ -383,6 +383,8 @@ gpsreader(c: chan of string)
 	buf := array[8192] of byte;
 	for(;;) {
 		fd := sys->open(GPS + "event", Sys->OREAD);
+		if(fd == nil && mountposted())
+			fd = sys->open(GPS + "event", Sys->OREAD);
 		if(fd == nil) {
 			c <-= "!no receiver: " + GPS + " is not served";
 			sys->sleep(3000);
@@ -404,6 +406,16 @@ gpsreader(c: chan of string)
 		c <-= "!the receiver went";
 		sys->sleep(3000);
 	}
+}
+
+# gpsfs posts its files (#sgps/fs) for a name space, as this one may
+# be, that did not see it mounted: mount them here
+mountposted(): int
+{
+	fd := sys->open("#sgps/fs", Sys->ORDWR);
+	if(fd == nil)
+		return 0;
+	return sys->mount(fd, nil, "/mnt/gps", Sys->MREPL, nil) >= 0;
 }
 
 readfile(f: string): string

@@ -499,6 +499,33 @@ testSentences(t: ref T)
 	t.assertseq(s, cs("GPRMC,,V,,,,,,,,,,N"), "no fix: an RMC saying so");
 }
 
+testGlitch(t: ref T)
+{
+	p := Parser.new();
+	fl := feed(p, cs("GPRMC,120000,A,5130.0000,N,00007.0000,W,,,311026,,,A") :: nil);
+	t.asserteq(len fl, 1, "a fix");
+	# a position 5 degrees off for a second: held back
+	fl = feed(p, cs("GPRMC,120001,A,5630.0000,N,00007.0000,W,,,311026,,,A") ::
+		cs("GPRMC,120002,A,5130.0010,N,00007.0000,W,,,311026,,,A") :: nil);
+	t.asserteq(len fl, 1, "the glitch held back, the next given");
+	t.assertseq((hd fl).utc, "12:00:02", "the one after it");
+	t.asserteq(p.suspects, 1, "and counted");
+	# a receiver really moved: believed at the fourth
+	fl = feed(p, cs("GPRMC,120003,A,4000.0000,N,07400.0000,W,,,311026,,,A") ::
+		cs("GPRMC,120004,A,4000.0010,N,07400.0000,W,,,311026,,,A") ::
+		cs("GPRMC,120005,A,4000.0020,N,07400.0000,W,,,311026,,,A") ::
+		cs("GPRMC,120006,A,4000.0030,N,07400.0000,W,,,311026,,,A") ::
+		cs("GPRMC,120007,A,4000.0040,N,07400.0000,W,,,311026,,,A") :: nil);
+	t.asserteq(len fl, 2, "three held back, then believed");
+	t.assertseq((hd fl).utc, "12:00:06", "from the fourth");
+	t.assertseq(p.last.position(), "40.000067 -74.000000", "the last fix the new place");
+	# across the date line is not far
+	p = Parser.new();
+	fl = feed(p, cs("GPRMC,120000,A,1000.0000,S,17959.9000,E,,,311026,,,A") ::
+		cs("GPRMC,120001,A,1000.0000,S,17959.9000,W,,,311026,,,A") :: nil);
+	t.asserteq(len fl, 2, "a step across the date line is believed");
+}
+
 contains(s, sub: string): int
 {
 	for(i := 0; i + len sub <= len s; i++)
@@ -539,6 +566,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("GarminSentences", testGarminSentences);
 	run("Flarm", testFlarm);
 	run("Sentences", testSentences);
+	run("Glitch", testGlitch);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

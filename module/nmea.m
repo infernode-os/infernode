@@ -90,6 +90,9 @@ Nmea: module
 	# Sentences in, fixes out.  A fix is complete when every kind of
 	# position sentence the receiver sends (RMC, GGA, GLL) has arrived
 	# for one time, or when a sentence for a new time arrives first.
+	# A position more than a degree from the last given out is held
+	# back as a glitch, up to three in a row (a receiver that has
+	# really moved is believed at the fourth).
 	Parser: adt {
 		cur:	ref Fix;	# the time being assembled
 		last:	ref Fix;	# the last complete fix, or nil
@@ -106,6 +109,11 @@ Nmea: module
 		gstseen:	int;	# GST errors are preferred to PGRME's
 		targets:	list of ref Target;
 		aispend:	list of (string, array of string, int);	# AIS fragments: key, parts, fill
+		# the last position given out, against which a jump is suspect
+		hasgood:	int;
+		goodlat, goodlon:	real;
+		suspect:	int;	# suspect positions in a row
+		suspects:	int;	# all held back
 
 		new:	fn(): ref Parser;
 		# the fixes the sentence completed (oldest first), or an error

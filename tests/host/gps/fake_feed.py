@@ -11,10 +11,12 @@
                                  NMEA once a ?WATCH asks for it; print
                                  the port; what the client sent goes in LOG
   fake_feed.py port              print a UDP port free on loopback
-  fake_feed.py udpnmea PORT      send to PORT, five times a second for a
+  fake_feed.py udpnmea PORT [SKEW]
+                                 send to PORT, five times a second for a
                                  minute, as a marine gateway does: a fix
                                  with magnetic variation, a heading and an
-                                 AIS ship, a datagram a sentence
+                                 AIS ship, a datagram a sentence; its
+                                 times SKEW seconds ahead of this host's
   fake_feed.py udpgdl90 PORT     the same, as an ADS-B receiver does:
                                  GDL 90 heartbeat, own-ship and a traffic
                                  report, the specification's N825V
@@ -138,9 +140,13 @@ def udpsend(port, datagrams):
         time.sleep(0.2)
 
 
+SKEW = 0
+
+
 def nmeadatagrams():
-    t = time.strftime("%H%M%S.00", time.gmtime())
-    d = time.strftime("%d%m%y", time.gmtime())
+    now = time.time() + SKEW
+    t = time.strftime("%H%M%S", time.gmtime(now)) + ".%02d" % int((now % 1) * 100)
+    d = time.strftime("%d%m%y", time.gmtime(now))
     return [s.encode() for s in [
         cs("GPRMC,%s,A,5332.5920,N,00959.2560,E,6.0,90.0,%s,2.0,E,A" % (t, d)),
         cs("GPGGA,%s,5332.5920,N,00959.2560,E,1,09,0.8,4.0,M,45.0,M,," % t),
@@ -183,6 +189,8 @@ if __name__ == "__main__":
         so.bind(("127.0.0.1", 0))
         print(so.getsockname()[1])
     elif mode == "udpnmea":
+        if len(sys.argv) > 3:
+            SKEW = float(sys.argv[3])
         udpsend(int(sys.argv[2]), nmeadatagrams)
     elif mode == "udpgdl90":
         udpsend(int(sys.argv[2]), gdldatagrams)

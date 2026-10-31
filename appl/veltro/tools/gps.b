@@ -5,10 +5,11 @@ implement ToolGps;
 #
 # Reads gpsfs(4)'s files: position ("lat lon"), fix (the whole fix,
 # attr=value), status, satellites, traffic (ships by AIS, aircraft by
-# ADS-B or FLARM), and event, for waiting for the next fix.  Read only:
-# the tool's grant (nsconstruct) binds just those six files, never ctl
-# or feed, so an agent can learn where it is but cannot choose the
-# receiver or put a position in.
+# ADS-B or FLARM), time (the GPS's beside this host's clock), and event,
+# for waiting for the next fix.  Read only: the tool's grant
+# (nsconstruct) binds just those seven files, never ctl or feed, so an
+# agent can learn where it is but cannot choose the receiver or put a
+# position in.
 #
 # A location is personal data.  The tool is not granted unless asked
 # for, as every tool is; what an agent does with the position is
@@ -21,6 +22,7 @@ implement ToolGps;
 #   gps status
 #   gps satellites
 #   gps traffic
+#   gps time
 #   gps wait [seconds]
 #
 
@@ -65,6 +67,7 @@ doc(): string
 		"  gps status           the receiver's state\n" +
 		"  gps satellites       satellites in view: system prn elevation azimuth snr used\n" +
 		"  gps traffic          ships and aircraft heard, nearest first\n" +
+		"  gps time             the GPS's time beside this host's clock\n" +
 		"  gps wait [seconds]   wait for the next fix (default 30, at most 300)\n\n" +
 		"Examples:\n" +
 		"  gps\n" +
@@ -89,7 +92,7 @@ schema(): string
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"command\":{\"type\":\"string\"," +
-					"\"description\":\"position (the default), fix, status, satellites, traffic, or wait\"}," +
+					"\"description\":\"position (the default), fix, status, satellites, traffic, time, or wait\"}," +
 				"\"seconds\":{\"type\":\"string\"," +
 					"\"description\":\"for wait: how long to wait, in seconds (default 30, at most 300)\"}" +
 			"}" +
@@ -109,7 +112,7 @@ exec(args: string): string
 		n--;
 	}
 	case cmd {
-	"position" or "fix" or "status" or "satellites" or "traffic" =>
+	"position" or "fix" or "status" or "satellites" or "traffic" or "time" =>
 		if(n != 0)
 			return "error: usage: gps " + cmd;
 		return readgps(cmd);
@@ -125,7 +128,7 @@ exec(args: string): string
 			return "error: usage: gps wait [seconds]";
 		return wait(secs);
 	}
-	return "error: unknown command " + cmd + " (position, fix, status, satellites, traffic, wait)";
+	return "error: unknown command " + cmd + " (position, fix, status, satellites, traffic, time, wait)";
 }
 
 readgps(file: string): string
@@ -151,6 +154,8 @@ readgps(file: string): string
 			return "no satellites reported";
 		"traffic" =>
 			return "no traffic heard";
+		"time" =>
+			return "no GPS time yet";
 		}
 	}
 	return s;

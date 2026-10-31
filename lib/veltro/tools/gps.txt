@@ -14,6 +14,7 @@ Usage:
   gps satellites       one line a satellite: system prn elevation azimuth snr used
   gps traffic          ships (AIS) and aircraft (ADS-B, FLARM) heard, nearest first:
                        kind id lat lon alt speed course heading climb name callsign cat age
+  gps time             the GPS's time beside this host's clock: time gps local offset sync
   gps wait [seconds]   wait for the next fix (default 30, at most 300)
 
 "error: no fix" means the receiver has no position now; gps status says

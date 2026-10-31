@@ -61,12 +61,12 @@ has() { f "$1" | grep -q -- "$2"; }
 
 grep -q '^R done' "$D/log" || { fail "the driver did not finish"; tail -20 "$D/log"; exit 1; }
 
-[ "$(f ls | tr '\n' ' ')" = "/mnt/gps/ctl /mnt/gps/event /mnt/gps/feed /mnt/gps/fix /mnt/gps/nmea /mnt/gps/position /mnt/gps/satellites /mnt/gps/status /mnt/gps/traffic " ] &&
+[ "$(f ls | tr '\n' ' ')" = "/mnt/gps/ctl /mnt/gps/event /mnt/gps/feed /mnt/gps/fix /mnt/gps/nmea /mnt/gps/position /mnt/gps/satellites /mnt/gps/status /mnt/gps/time /mnt/gps/traffic " ] &&
 	pass "its files" || fail "ls: $(f ls | tr '\n' ' ')"
-[ "$(f status.start)" = "state=nosource link=none sentences=0 bad=0" ] &&
+[ "$(f status.start)" = "state=nosource link=none sentences=0 bad=0 suspect=0" ] &&
 	pass "nothing at first" || fail "status: $(f status.start)"
 
-want="time=2026-10-31T14:32:02Z lat=40.784200 lon=-74.416667 alt=76.0 speed=2.57 course=90.0 mode=3d q=gps sats=7 hdop=1.1 vdop=1.6 pdop=2.0 err=5.0 verr=6.5"
+want="time=2026-10-31T14:32:02Z lat=40.784200 lon=-74.416667 alt=76.0 speed=2.57 course=90.0 mode=3d q=gps sats=7 hdop=1.1 vdop=1.6 pdop=2.0 err=5.0 verr=6.5 origin=recorded"
 [ "$(f fix.file)" = "$want" ] && pass "a log as a source: the last fix" ||
 	fail "fix: '$(f fix.file)'"
 [ "$(f position.file)" = "40.784200 -74.416667" ] && pass "position" ||
@@ -75,7 +75,7 @@ want="time=2026-10-31T14:32:02Z lat=40.784200 lon=-74.416667 alt=76.0 speed=2.57
 	pass "satellites in view and used" || fail "satellites: '$(f satellites.file | tr '\n' '|')'"
 [ "$(f ctl.file)" = "source /$T/track.nmea" ] && pass "ctl reads the command" ||
 	fail "ctl: '$(f ctl.file)'"
-has status.file "^state=fix link=closed source=/$T/track.nmea sentences=15 bad=0 age=" &&
+has status.file "^state=fix link=closed source=/$T/track.nmea origin=recorded sentences=15 bad=0 suspect=0 age=" &&
 	pass "status: the log read to its end" || fail "status: '$(f status.file)'"
 
 early=$(f events.early | tr -d ' '); late=$(f events.late | tr -d ' ')
@@ -84,8 +84,8 @@ early=$(f events.early | tr -d ' '); late=$(f events.late | tr -d ' ')
 	fail "replay: $early fixes after a second, $late at the end"
 # a new source: its first fix is given at its first sentence, before
 # the receiver is known to send more; the next once all have come
-[ "$(f events | sed -n 1p)" = "time=2026-10-31T14:32:00Z lat=40.784000 lon=-74.416667 speed=2.57 course=90.0 mode=2d q=gps" ] &&
-	[ "$(f events | sed -n 2p)" = "time=2026-10-31T14:32:01Z lat=40.784100 lon=-74.416667 alt=76.0 speed=2.57 course=90.0 mode=3d q=gps sats=7 hdop=1.1 vdop=1.6 pdop=2.0 err=5.0 verr=6.5" ] &&
+[ "$(f events | sed -n 1p)" = "time=2026-10-31T14:32:00Z lat=40.784000 lon=-74.416667 speed=2.57 course=90.0 mode=2d q=gps origin=recorded" ] &&
+	[ "$(f events | sed -n 2p)" = "time=2026-10-31T14:32:01Z lat=40.784100 lon=-74.416667 alt=76.0 speed=2.57 course=90.0 mode=3d q=gps sats=7 hdop=1.1 vdop=1.6 pdop=2.0 err=5.0 verr=6.5 origin=recorded" ] &&
 	pass "event gives each fix" || fail "events: $(f events | tr '\n' '|')"
 [ "$(f nmea | grep -c .)" -ge 15 ] && f nmea | head -1 | grep -q '^\$GPRMC,143200.00,A' &&
 	! f nmea | grep -q "$(printf '\r')" &&
@@ -120,7 +120,7 @@ f nmea | grep -q '^\$PGRMZ,3000,f,2\*' && pass "own-ship written as NMEA in nmea
 	fail "nmea has no PGRMZ: $(f nmea | grep PGRMZ | head -2)"
 
 # Garmin Aviation
-f fix.garmin | grep -Eq '^time=[0-9T:.Z-]+ lat=40\.684333 lon=-74\.398833 alt=213\.4 speed=23\.15 course=77\.1 mcourse=90\.0 mode=3d q=gps magvar=-12\.9$' &&
+f fix.garmin | grep -Eq '^time=[0-9T:.Z-]+ lat=40\.684333 lon=-74\.398833 alt=213\.4 speed=23\.15 course=77\.1 mcourse=90\.0 mode=3d q=gps magvar=-12\.9 origin=recorded$' &&
 	pass "Garmin Aviation output: the last group" || fail "fix: '$(f fix.garmin)'"
 
 has err.tcplisten "only udp is listened for" && has err.netbaud "a baud rate is for a serial port" &&
@@ -138,11 +138,13 @@ has err.feed "bad sentence: checksum mismatch" && pass "a bad sentence written t
 [ -z "$(f ctl.stop)" ] && has status.stop "link=none" && ! has status.stop "source=" &&
 	pass "stop" || fail "stop: '$(f ctl.stop)' '$(f status.stop)'"
 
-[ "$(f events.feed | tr '\n' '|')" = "time=2026-10-31T09:00:00Z lat=-33.866667 lon=151.200000 speed=0.00 course=0.0 mode=2d q=gps|time=2026-10-31T09:00:01Z lat=-33.866683 lon=151.200000 speed=0.00 course=0.0 mode=2d q=gps|time=2026-10-31T09:00:02Z mode=none|" ] &&
+[ "$(f events.feed | tr '\n' '|')" = "time=2026-10-31T09:00:00Z lat=-33.866667 lon=151.200000 speed=0.00 course=0.0 mode=2d q=gps origin=fed|time=2026-10-31T09:00:01Z lat=-33.866683 lon=151.200000 speed=0.00 course=0.0 mode=2d q=gps origin=fed|time=2026-10-31T09:00:02Z mode=none origin=fed|" ] &&
 	pass "feed: each fix, and its loss, told by event" ||
 	fail "events.feed: '$(f events.feed | tr '\n' '|')'"
 [ -z "$(f position.lost)" ] && has err.lost "no fix" && pass "position refused with no fix" ||
 	fail "lost: '$(f position.lost)' '$(f err.lost)'"
+[ "$(f tool.position)" = "error: no fix" ] && pass "the gps tool reaches the posted gpsfs from a name space without the mount" ||
+	fail "tool: '$(f tool.position)'"
 has again "served already" && pass "a second gpsfs finds it served" || fail "again: '$(f again)'"
 
 [ $failed = 0 ] && echo "gpsfs_test: PASS"

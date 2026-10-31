@@ -723,7 +723,7 @@ jobs:
           - shard: 1
             tests: >-
               activity_switch_test amd64_jit_typecom_bound_test
-              amd64_jit_typecom_slab_test commands_test dhcp_client_test
+              amd64_jit_typecom_slab_test commands_test devletters_test dhcp_client_test
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
               factotum_keyfile_test llmctl_test llmsrv_flush_test

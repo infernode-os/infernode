@@ -30,5 +30,6 @@ ramfile ramfile
 registry registry
 regquery registry
 scenefs scenefs
+sdrfs sdrfs
 tarfs tarfs
 veltrosrv veltrosrv

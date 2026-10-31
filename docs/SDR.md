@@ -1,8 +1,10 @@
 # Software-defined radio for InferNode
 
-Status: proposal. Nothing here is built. This is the design, written
-before the code, as [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) asks:
-the file interface is the design, so review that first. The first
+Status: M0 built: `sdrfs(4)` serves the file interface below over
+`rtl_tcp` (`appl/cmd/sdrfs.b`, tested by `tests/host/sdrfs_test.sh`
+against a fake `rtl_tcp`). The rest is the design, written before the
+code, as [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) asks: the file
+interface is the design, so review that first. The first
 receiver is an RTL-SDR (an RTL2832U with an R820T2 or R828D tuner, the
 common USB dongle, 24–1766 MHz).
 

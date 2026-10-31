@@ -633,6 +633,7 @@ dis/scap.dis
 dis/scenedemo.dis
 dis/scenefs.dis
 dis/scenereplay.dis
+dis/sdrfs.dis
 dis/sed.dis
 dis/sendmail.dis
 dis/seq.dis

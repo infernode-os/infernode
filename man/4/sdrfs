@@ -1,0 +1,208 @@
+.TH SDRFS 4
+.SH NAME
+sdrfs \- software-defined radio receiver as a file system
+.SH SYNOPSIS
+.B sdrfs
+[
+.B -S
+] [
+.B -m
+.I mountpoint
+] [
+.B -s
+.I spec
+] [
+.I command ...
+]
+.SH DESCRIPTION
+.I Sdrfs
+serves a software-defined radio receiver, an RTL-SDR (an RTL2832U and its
+tuner, the common USB dongle), as files, mounted by default at
+.BR /mnt/sdr .
+The receiver is reached through the host's
+.IR rtl_tcp ,
+from librtlsdr, which
+.I sdrfs
+dials.
+It serves the radio, not what the radio hears: a demodulator is a
+program that reads
+.BR iq .
+The
+.I command
+words, if given, are written to
+.B ctl
+once the files are mounted.
+.PP
+The files are also posted as
+.B #ssdr/fs
+.RI ( post9p (2);
+.B -s
+names another spec,
+.B -S
+posts none), so a process that did not see the mount can mount them.
+Not posted, sdrfs exits when the mount goes.
+.SH FILESYSTEM
+.TF status
+.TP
+.B ctl
+one command a line.
+A write is checked whole first: if any line is refused, none is done.
+A read gives every setting, in the form written, after the source if
+there is one.
+.RS
+.TP
+.BI source " address"
+.I rtl_tcp
+at
+.IB tcp! host ! port\f1,\fP
+.IB host ! port\f1,\fP
+or
+.I host
+(port 1234).
+It is dialled at once, to see that it is
+.I rtl_tcp
+and learn its tuner, and the write returns when it has been, or fails
+with the reason; the previous source is gone either way.
+.TP
+.B stop
+no source.
+.TP
+.BI freq " hertz"
+the frequency;
+.BR k ,
+.B M
+and
+.B G
+are taken
+.RB ( 1090M ,
+.BR 162.025M ).
+.TP
+.BI rate " samples"
+samples a second: 225001 to 300000, or 900001 to 3200000, as librtlsdr
+takes; 2.4M is the most a dongle gives reliably.
+.TP
+.BR gain " auto | \fIdB\fP"
+automatic gain, or the tuner's gain nearest
+.IR dB ,
+once the tuner is known
+.RB ( gains ).
+.TP
+.BI ppm " n"
+the frequency correction, in parts a million.
+.TP
+.BR agc " on | off"
+the RTL2832U's own gain control.
+.TP
+.BR direct " off | i | q"
+direct sampling of the I or Q branch, for frequencies below the tuner's
+(HF), on dongles wired for it.
+.TP
+.BR biastee " on | off"
+5 V on the antenna, for a preamplifier, on dongles that have it.
+.RE
+.TP
+.B status
+one line, attr=value:
+.B link=none
+(no source),
+.B idle
+(a source; nothing listening),
+.BR opening ,
+.BR open ,
+.B closed
+(the stream ended) or
+.BR error ;
+.BI source= address;
+.BI tuner= name
+and
+.BI gains= n
+once dialled;
+.BI readers= n ,
+the opens of
+.B iq
+reading;
+.BI bytes= n
+received and
+.BI dropped= n
+lost by readers that fell behind, since start;
+.BI error= reason
+for the last that failed.
+.TP
+.B gains
+the tuner's gains, dB, one a line.
+.TP
+.B iq
+the samples, from the open on: 8-bit unsigned I then Q, two bytes a
+sample, 4.8 MB a second at 2.4M.
+Each read waits for more and gives a whole number of samples when it
+can.
+The first open dials
+.I rtl_tcp
+and sends every setting; the last close hangs up, so the radio is read
+only while something listens.
+Every open has its own queue; one that falls more than 8 MB behind
+loses the oldest, whole samples, counted in
+.BR status .
+When the stream ends, or the source changes, a read gives what was
+queued, then end of file (or the reason).
+.SH CAPABILITY MODEL
+One radio is one tuner on one frequency.
+Every reader of
+.B iq
+hears what it is tuned to, and a setting written to
+.B ctl
+moves them all.
+Tuning and listening are separate files, so what a process may do is
+what is bound in its name space: a process given
+.B iq
+can listen to what the radio is tuned to; one given
+.B ctl
+chooses.
+The receiver cannot transmit.
+.PP
+.I Rtl_tcp
+has no authentication.
+Keep it on the loopback address
+.RB ( "rtl_tcp -a 127.0.0.1" )
+and reach a radio on another machine by exporting
+.B /mnt/sdr
+from there over authenticated 9P, never by opening its port.
+.PP
+What may be listened to is law, which differs by country; nothing here
+enforces it.
+.SH EXAMPLES
+On the host with the dongle:
+.IP
+.EX
+$ rtl_tcp -a 127.0.0.1
+.EE
+.PP
+In InferNode:
+.IP
+.EX
+; sdrfs source localhost
+; cat /mnt/sdr/status
+link=idle source=tcp!localhost!1234 tuner=R828D gains=29 readers=0 bytes=0 dropped=0
+; echo 'freq 1090M
+rate 2M
+gain 49.6' > /mnt/sdr/ctl
+; read 16384 < /mnt/sdr/iq > /tmp/adsb.cu8
+.EE
+.SH SOURCE
+.B /appl/cmd/sdrfs.b
+.SH SEE ALSO
+.IR gpsfs (4),
+.IR audio (3)
+.br
+.B /docs/SDR.md
+.SH BUGS
+Only
+.I rtl_tcp
+is a source; there is no driver of its own for the dongle.
+One dongle a server; a second is a second
+.I sdrfs
+at another mount point.
+.PP
+.I Rtl_tcp
+answers no command, so a setting the dongle cannot take (a frequency
+beyond its tuner, a bias tee it does not have) is not refused here.

@@ -44,6 +44,11 @@
 	<!-- /phone/bio_* uses LocalAuthentication + Keychain biometryCurrentSet
 	     to protect remote-LLM and secstore keys. iOS displays this string
 	     under the Face ID prompt. -->
+	<!-- #g, the phone's location for gpsfs(4) (emu/iOS/locationbridge.m).
+	     Asked for the first time something reads #g/nmea; updates run only
+	     while something does. iOS shows this string in the prompt. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>InferNode reads your location while a program you run asks for it, such as a map or an agent you have given /mnt/gps.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>InferNode uses Face ID to unlock signed keys (LLM mount, secstore) without prompting for a password every launch.</string>
 	<!-- Voice/dial audio (INFR-186, INFR-190). iOS hard-crashes the instant

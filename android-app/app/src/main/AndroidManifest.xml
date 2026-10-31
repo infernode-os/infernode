@@ -53,6 +53,18 @@
     <uses-permission android:name="android.permission.READ_SMS" />
 
     <!--
+      ACCESS_FINE_LOCATION + ACCESS_COARSE_LOCATION — #g, the phone's
+      location as an NMEA receiver (emu/port/devlocation.c) for
+      gpsfs(4), through InfernodeLocationBridge. Foreground only: no
+      ACCESS_BACKGROUND_LOCATION, and updates run only while something
+      reads #g/nmea. Coarse alone (the user's choice on Android 12+)
+      still works, less precisely.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+
+    <!--
       Launcher icons sourced from MacOSX/InferNode.icns (1024x1024
       master) and downsampled into res/mipmap-{m,h,xh,xxh,xxxh}dpi/
       at the standard Android density steps. ic_launcher.png is the

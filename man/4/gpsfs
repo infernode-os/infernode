@@ -18,10 +18,11 @@ and serves the receiver's position as files, mounted by default at
 .BR /mnt/gps .
 A receiver is a byte stream: a serial port
 .RI ( eia (3)),
+a phone's own location service
+.RI ( location (3)),
 a network feed of NMEA (a phone application serving it over TCP),
 .IR gpsd ,
-or a recorded log; and anything that has no byte stream, such as a
-platform's location service, writes sentences to
+or a recorded log; and anything else writes sentences to
 .BR feed .
 The
 .I command
@@ -212,6 +213,12 @@ opens sources in the name space it was started in.
 A serial port can always be named in the kernel's own syntax,
 .BR #t/eia0 .
 .SH EXAMPLES
+On a phone:
+.IP
+.EX
+; gpsfs source '#g/nmea'
+.EE
+.PP
 A USB receiver on Linux, which
 .IR eia (3)
 finds after the
@@ -247,11 +254,8 @@ A day's drive, again:
 .B /appl/lib/nmea.b
 .SH SEE ALSO
 .IR nmea (2),
-.IR eia (3)
+.IR eia (3),
+.IR location (3)
 .SH BUGS
 One source at a time.
 A source that ends or fails is not reopened; write the command again.
-.PP
-A phone's own location service is not yet a source: it needs a device
-in the emulator for each platform, which would supply
-.BR feed .

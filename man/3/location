@@ -1,0 +1,98 @@
+.TH LOCATION 3 hosted
+.SH NAME
+location \- the host's location service as an NMEA receiver
+.SH SYNOPSIS
+.nf
+.B #g/nmea
+.B #g/status
+.fi
+.SH DESCRIPTION
+Under
+.IR emu (1),
+.B #g
+gives the location service of the host it runs on (a phone's) as a
+GPS receiver would: a stream of NMEA 0183 sentences, which
+.IR gpsfs (4)
+takes as it takes a serial receiver:
+.IP
+.EX
+gpsfs source '#g/nmea'
+.EE
+.PP
+.B nmea
+is read-only.
+Each open gets the sentences from then on, and each read waits for
+more.
+For each position the service gives there are three sentences: an RMC
+(time, date, position, speed in knots, course), a GST (the accuracy,
+a radius, as equal latitude and longitude errors whose root sum of
+squares is the radius, and the altitude's error) and a GGA (position
+and altitude above mean sea level).
+A value the service does not give is left empty.
+The service says nothing of satellites: GGA's count and dilution are
+empty, and there is no GSV.
+.PP
+The first open of
+.B nmea
+starts the service and the last close stops it, so it runs only while
+something reads.
+The open fails if the host has none, giving the reason.
+.PP
+.B status
+is the service's state:
+.B unavailable
+(none on this host),
+.B stopped
+(nothing reads),
+.B waiting
+(started, no position yet, or a permission the user has yet to
+answer),
+.BR ok ,
+.B denied
+(the permission refused),
+.B off
+(location services turned off).
+.SH HOSTS
+On Android it is the LocationManager's fused provider (Android 12 and
+later; GPS before), asking for the location permission when the
+application starts; the altitude is given only where Android gives
+one above mean sea level (Android 14 and later).
+On iOS it is CoreLocation, asking for permission (while in use) the
+first time
+.B nmea
+is opened.
+.PP
+On other hosts the device is there and says
+.BR unavailable ,
+unless the environment variable
+.B INFERNODE_LOCATION_FAKE
+was set when the emulator started:
+.IP
+.EX
+INFERNODE_LOCATION_FAKE='lat lon [alt [accuracy]]'
+.EE
+.PP
+in degrees and metres, which gives a fix a second from there, moving
+north a metre a second; it is for tests and for trying a map on a
+desk.
+.SH SOURCE
+.B /emu/port/devlocation.c
+.br
+.B /emu/port/locationbridge-stub.c
+.br
+.B /emu/Android/locationbridge.c
+.br
+.B /android-app/app/src/main/java/io/infernode/InfernodeLocationBridge.kt
+.br
+.B /emu/iOS/locationbridge.m
+.SH SEE ALSO
+.IR eia (3),
+.IR nmea (2),
+.IR gpsfs (4)
+.SH BUGS
+There is none on Windows.
+.br
+macOS's CoreLocation is not used: it grants location only to an
+application bundle, and
+.I emu
+run from a terminal is not one.

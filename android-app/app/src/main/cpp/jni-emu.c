@@ -50,6 +50,8 @@ extern JavaVM *g_vm;
  * class. FindClass from any other thread sees only the system loader
  * and can't reach io.infernode.* classes. */
 extern void phonebridge_jni_init(JNIEnv *env);
+/* emu/Android/locationbridge.c: the same, for InfernodeLocationBridge (#g). */
+extern void locationbridge_jni_init(JNIEnv *env);
 static jobject g_listener;          /* global ref */
 static jmethodID g_onLine_mid;
 static pthread_mutex_t g_listener_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -326,6 +328,7 @@ JNI_OnLoad(JavaVM *vm, void *reserved)
 	 * loader is the system one and our app classes are invisible. */
 	if((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) == JNI_OK){
 		phonebridge_jni_init(env);
+		locationbridge_jni_init(env);
 	}
 	return JNI_VERSION_1_6;
 }

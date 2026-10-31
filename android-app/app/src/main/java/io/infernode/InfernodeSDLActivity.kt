@@ -118,6 +118,7 @@ class InfernodeSDLActivity : SDLActivity() {
         // a fresh install.
         AssetExtractor.extractInfernoRootIfNeeded(this)
         InfernodePhoneBridge.attach(this)
+        InfernodeLocationBridge.attach(this)
         super.onCreate(savedInstanceState)
 
         // Runtime permissions (mic, call, SMS) must be requested *after*
@@ -213,6 +214,9 @@ class InfernodeSDLActivity : SDLActivity() {
      *     SmsManager.sendTextMessage.
      *   * RECEIVE_SMS / READ_SMS — INFR-182: InfernodeSmsReceiver picks
      *     up SMS_RECEIVED. Same perm group, granted together.
+     *   * ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION — #g: the
+     *     phone's location for gpsfs(4), through InfernodeLocationBridge.
+     *     Updates run only while something reads #g/nmea.
      *
      * Android collapses consecutive prompts within a group, so the user
      * sees one dialog per group, not one per permission.
@@ -224,6 +228,8 @@ class InfernodeSDLActivity : SDLActivity() {
             Manifest.permission.SEND_SMS,
             Manifest.permission.RECEIVE_SMS,
             Manifest.permission.READ_SMS,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
         )
         val missing = wanted.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED

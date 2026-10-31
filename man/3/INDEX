@@ -18,6 +18,7 @@ fs fs
 gpio gpio
 indir indir
 ip ip
+location location
 mnt mnt
 pipe pipe
 pointer pointer

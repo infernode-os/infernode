@@ -4,8 +4,9 @@ implement Gpsfs;
 # gpsfs - a GPS receiver as files, at /mnt/gps.
 #
 # A receiver speaks NMEA 0183 over a byte stream: a serial port
-# ('#t/eia0', a USB puck the host enumerates there), a network feed (a
-# phone app serving NMEA over TCP, gpsd), a recorded log.  gpsfs reads
+# ('#t/eia0', a USB puck the host enumerates there), a phone's own
+# location service ('#g/nmea', location(3)), a network feed (a phone
+# app serving NMEA over TCP, gpsd), a recorded log.  gpsfs reads
 # one such source, assembles its sentences into fixes (nmea(2)), and
 # serves what it knows:
 #
@@ -37,9 +38,9 @@ implement Gpsfs;
 # what is bound, not by checks here: a process given position, fix,
 # event, satellites and nmea can follow the receiver; only one given
 # ctl or feed can change what it says.  feed is how anything without a
-# byte stream (a platform's location service, a test) supplies
-# sentences; it is the one way to put a position in, so it is not
-# bound where position is merely read.
+# byte stream (a test, a position from elsewhere) supplies sentences;
+# it puts a position in, so it is not bound where position is merely
+# read.
 #
 # The server opens sources in the name space it was started in.
 #

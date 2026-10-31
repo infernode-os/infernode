@@ -22,7 +22,11 @@ include "testing.m";
 include "nsconstruct.m";
 	nsc: NsConstruct;
 
-include "../appl/veltro/tool.m";
+# Tool interface (as /appl/veltro/tool.m)
+Tool: module {
+	init:	fn(): string;
+	exec:	fn(args: string): string;
+};
 
 GpsCapabilityTest: module
 {

@@ -650,14 +650,29 @@ if emu_c "provision_sibling_prefix" 14 \
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
         fail "child provisioning treated sibling prefix as covered by parent grant"
     elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then
+        fail "child provisioning did not explicitly reject sibling prefix (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
+        pass "child provisioning is component-aware for sibling prefixes"
+    else
+        fail "child provisioning did not preserve covered descendant path (output: $OUTPUT)"
+    fi
+else
+    fail "sibling-prefix child path provisioning probe failed"
+fi
+
+if emu_c "provision_sibling_mixed" 14 \
+    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '17 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
+        fail "child provisioning treated sibling prefix as covered by parent grant"
+    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then
         fail "mixed sibling-prefix request did not fail atomically (output: $OUTPUT)"
     elif echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
         fail "refused sibling-prefix request left a partially granted child"
     else
-        pass "child provisioning rejects sibling prefixes atomically"
+        pass "a mixed sibling-prefix request is refused whole"
     fi
 else
-    fail "sibling-prefix child path provisioning probe failed"
+    fail "mixed sibling-prefix provisioning probe failed"
 fi
 
 if emu_c "provision_covered_descendant" 14 \

@@ -539,8 +539,12 @@ invalidGrantPath(p: string): string
 
 privilegedControlGrant(p: string): int
 {
+	p = asciilower(p);
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -559,6 +563,8 @@ privilegedControlGrant(p: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
 			return 1;
+	if(prefix(p, "/mnt/toolctl."))
+		return 1;
 	if(walletAccountControlGrant(p))
 		return 1;
 	if(ftreeControlGrant(p))
@@ -577,7 +583,29 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(fixedServiceControlGrant(p))
 		return 1;
+	if(ambientAuthorityGrant(p))
+		return 1;
 	return 0;
+}
+
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientAuthorityGrant(p: string): int
+{
+	if(p == "/chan" || p == "/fd" || prefix(p, "/fd/"))
+		return 1;
+	if(p == "/usr")
+		return 1;
+	return pathhascomponent(p, "keyring") &&
+		(p == "/keyring" || prefix(p, "/keyring/") ||
+		 prefix(p, "/usr/") || prefix(p, "/mnt/"));
 }
 
 # nsconstruct's walletcontrolpath: per-account ctl and sign, under the
@@ -592,7 +620,7 @@ walletAccountControlGrant(p: string): int
 
 ftreeControlGrant(p: string): int
 {
-	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
+	return p == "/mnt/ftree" || prefix(p, "/mnt/ftree/");
 }
 
 tmpVeltroInternalGrant(p: string): int
@@ -606,10 +634,10 @@ appIpcControlGrant(p: string): int
 {
 	return p == "/mnt/charon" || prefix(p, "/mnt/charon/") ||
 		p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
-		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
-		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
-		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
-		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
+		p == "/mnt/editor" || prefix(p, "/mnt/editor/") ||
+		p == "/mnt/shell" || prefix(p, "/mnt/shell/") ||
+		p == "/mnt/fractal" || prefix(p, "/mnt/fractal/") ||
+		p == "/mnt/man" || prefix(p, "/mnt/man/");
 }
 
 uiAgentControlGrant(p: string): int

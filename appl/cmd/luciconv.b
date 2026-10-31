@@ -23,6 +23,8 @@ include "lucitheme.m";
 include "menu.m";
 
 include "softkbd.m";
+
+include "keyboard.m";
 	softkbd: Softkbd;
 
 LuciConv: module
@@ -360,8 +362,8 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Ctrl-B — back one character
 			if(inputpos > 0)
 				inputpos--;
-		4 =>
-			# Ctrl-D — delete character at cursor
+		4 or 127 =>
+			# Ctrl-D, or Delete (DEL) — delete character at cursor
 			if(inputpos < len inputbuf)
 				inputbuf = inputbuf[0:inputpos] + inputbuf[inputpos+1:];
 		5 =>
@@ -371,7 +373,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Ctrl-F — forward one character
 			if(inputpos < len inputbuf)
 				inputpos++;
-		8 or 127 =>
+		8 =>
 			# Backspace / Ctrl-H — delete character before cursor
 			if(inputpos > 0) {
 				inputbuf = inputbuf[0:inputpos-1] + inputbuf[inputpos:];
@@ -408,32 +410,31 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			# Escape — clear buffer
 			inputbuf = "";
 			inputpos = 0;
-		16rFF51 =>
-			# Left arrow
+		Keyboard->Left =>
 			if(inputpos > 0)
 				inputpos--;
-		16rFF53 =>
-			# Right arrow
+		Keyboard->Right =>
 			if(inputpos < len inputbuf)
 				inputpos++;
-		16rFF61 =>
-			# Home
+		Keyboard->Home =>
 			inputpos = 0;
-		16rFF57 =>
-			# End
+		Keyboard->End =>
 			inputpos = len inputbuf;
-		16rF00E =>
+		Keyboard->Pgup or 16rF00E =>
 			# Page Up — half viewport
 			scrollpx += viewport_h / 2;
 			if(scrollpx > maxscrollpx)
 				scrollpx = maxscrollpx;
-		16rF00F =>
+		Keyboard->Pgdown or 16rF00F =>
 			# Page Down — half viewport
 			scrollpx -= viewport_h / 2;
 			if(scrollpx < 0)
 				scrollpx = 0;
 		* =>
-			if(k >= 32 && k < 16rFFFF) {
+			# a character: not a key keyboard.h gives (the arrows the
+			# cases above do not take, a function key), which were typed
+			# as private-use glyphs
+			if(k >= 32 && k < 16rFFFF && !(k >= Keyboard->Spec && k <= Keyboard->Specend)) {
 				ch := "x";
 				ch[0] = k;
 				inputbuf = inputbuf[0:inputpos] + ch + inputbuf[inputpos:];

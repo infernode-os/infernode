@@ -5,7 +5,7 @@ implement FractalToolTest;
 #
 # Tests the fractal tool's command parsing, IPC file format,
 # string helpers, and the Veltro IPC state/view generation
-# from fractals.b by simulating the /tmp/veltro/fractal/ files.
+# from fractals.b by simulating its files (served at /mnt/fractal).
 #
 
 include "sys.m";

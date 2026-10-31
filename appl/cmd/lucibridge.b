@@ -405,7 +405,6 @@ runsetupwizard()
 
 		if(choice == "Remote API") {
 			writefile(pctl, "create id=keyring type=app dis=/dis/wm/keyring.dis label=Keyring");
-			sys->sleep(500);
 			writefile(pctl, "center id=keyring");
 			writemsg("veltro",
 				"Keyring is open. Select API Key, enter `anthropic` as the service, paste your key. " +
@@ -415,7 +414,6 @@ runsetupwizard()
 			# remainder of the line). -c llm tells wm/settings to open
 			# directly on the LLM Service panel — INFR-100.
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the Ollama backend, " +
@@ -433,7 +431,6 @@ runsetupwizard()
 				gate = "codex-gate";
 			}
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the " +
@@ -445,7 +442,6 @@ runsetupwizard()
 				"Then close InferNode and relaunch it.");
 		} else if(choice == "Remote 9P") {
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
@@ -464,8 +460,7 @@ runsetupwizard()
 			continue;	# keep listening; don't park
 		}
 		# A configurator was opened — park until the user quits and relaunches.
-		for(;;)
-			sys->sleep(60000);
+		<-chan of int;
 	}
 }
 
@@ -1627,6 +1622,13 @@ headlessdeny(): int
 	return ok >= 0;
 }
 
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
 # Answer the agent's requests for approval with a dialogue tile.
 approver(done: chan of int)
 {
@@ -1649,9 +1651,7 @@ approver(done: chan of int)
 		awaiting = 1;	# before the tile: a quick answer is the tile's
 		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
 		response := readuserinput();
-		answer := "allow";
-		if(response == "Deny" || response == "deny" || response == "no")
-			answer = "deny";
+		answer := approvalanswer(response);
 		writefile(sess + "/approve", answer + " " + callid);
 		if(didx >= 0) {
 			if(answer == "deny")
@@ -1860,25 +1860,51 @@ taskartifacts(): string
 }
 
 # A task closed while it works stops working: its turn is cancelled, not
-# left to run on with no one to see it.
+# left to run on with no one to see it.  The close is luciuisrv's global
+# event "activity delete N"; the watcher blocks reading it.
 closewatch(turnover: chan of int)
 {
-	statpath := sys->sprint("/mnt/ui/activity/%d/status", actid);
-	for(;;) {
-		alt {
-		<-turnover =>
-			return;
-		* =>
-			;
-		}
-		if(agentlib->strip(agentlib->readfile(statpath)) == "hidden") {
-			log("activity closed: cancelling the turn");
-			ctl("cancel");
-			<-turnover;
-			return;
-		}
-		sys->sleep(1000);
+	closed := chan of int;
+	pidc := chan of int;
+	spawn closereader(pidc, closed);
+	pid := <-pidc;
+	alt {
+	<-turnover =>
+		kill(pid);
+	<-closed =>
+		log("activity closed: cancelling the turn");
+		ctl("cancel");
+		<-turnover;
 	}
+}
+
+closereader(pidc: chan of int, closed: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	# Opened before the status is read, so a close between the two is
+	# still heard.
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
+	if(agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/status", actid))) == "hidden") {
+		closed <-= 1;
+		return;
+	}
+	if(fd == nil)
+		return;
+	want := sys->sprint("activity delete %d", actid);
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0) {
+		if(agentlib->strip(string buf[0:n]) == want) {
+			closed <-= 1;
+			return;
+		}
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
 filelen(path: string): big
@@ -2122,7 +2148,6 @@ init(nil: ref Draw->Context, args: list of string)
 					pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
 					# Open directly on the LLM Service panel (INFR-100).
 					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-					sys->sleep(500);
 					writefile(pctl, "center id=settings");
 					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
 				} else if(agentlib->hasprefix(choice, TASKEVENT) || agentlib->hasprefix(choice, MSGEVENT)) {
@@ -2140,7 +2165,7 @@ init(nil: ref Draw->Context, args: list of string)
 						"relaunch — or tap Open Settings above.");
 					continue;	# keep listening; don't park
 				}
-				for(;;) sys->sleep(60000);
+				<-chan of int;	# parked until quit and relaunch
 			}
 			fatal("/mnt/llm/ not mounted — LLM service unreachable");
 		}

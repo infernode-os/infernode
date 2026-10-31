@@ -5,7 +5,8 @@
 # A long quota pause left Inferno raising "out of memory: main" in Sh and
 # Factotum with the main pool at 2MB of 1GB, and nothing said what had been
 # asked for or by whom.  Every refusal now prints the pool, the size, the
-# reason, the caller (image+offset, for addr2line) and the pool's state.
+# reason, the caller (image+offset, for addr2line), the pool's state and
+# the module that asked (with the instruction, in the interpreter).
 #
 # Under an 8MB main pool, Keyring->aesgcmencrypt is asked for 32MB 25 times
 # (pool_nomem_helper): each must raise "out of memory: main", the first ten
@@ -33,7 +34,7 @@ n=$(echo "$reports" | grep -c .)
 [ "$n" = 10 ] || fail "$n refusals reported, want the first 10 only"
 
 first=$(echo "$reports" | head -1)
-pat="^pool main: cannot allocate 3355[0-9]* bytes \(beyond the pool's maxsize\) for [^ ]+\+0x[0-9a-f]+: cursize [0-9]+ arenasize [0-9]+ maxsize 8388608 largest free [0-9]+; refusal 1$"
+pat="^pool main: cannot allocate 3355[0-9]* bytes \(beyond the pool's maxsize\) for [^ ]+\+0x[0-9a-f]+: cursize [0-9]+ arenasize [0-9]+ maxsize 8388608 largest free [0-9]+; asked by \\\$Keyring; refusal 1$"
 echo "$first" | grep -Eq "$pat" || fail "first report not as expected: $first"
 echo "$reports" | tail -1 | grep -q 'refusal 10, now reporting every 1000th$' || fail "the tenth report does not say what follows"
 

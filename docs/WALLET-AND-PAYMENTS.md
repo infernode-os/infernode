@@ -318,6 +318,8 @@ The wallet filesystem mounts at `/mnt/wallet/` and provides account management, 
 ├── default          r    default account name
 ├── network          r    active network: name, chainid, caip2, usdc contract
 ├── pending          r    trusted controller view of pending payments
+├── event          r    "pending" each time that list changes (a read waits;
+│                         each open has its own queue)
 ├── new              rw   write: "eth chain name" or "import eth chain name hexkey"
 │                         read: account name after creation
 └── {name}/
@@ -481,6 +483,9 @@ or from a trusted shell:
 cat /mnt/wallet/pending   # "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
 echo 'approve 3' > /mnt/wallet/ctl      # or: deny 3
 ```
+
+A controller that shows the count, as the wallet GUI does, reads
+`/mnt/wallet/event` and re-reads `pending` on each line; nothing polls.
 
 Payments the user initiates in the wallet GUI itself are auto-approved (the
 human just clicked Send); agent proposals always wait.

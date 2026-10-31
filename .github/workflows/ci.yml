@@ -119,6 +119,13 @@ jobs:
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         ./tools/verify-dis-build.sh
 
+    - name: Check mkfile header dependencies
+      run: |
+        # Every module header a Limbo source includes, at any depth, is a
+        # prerequisite of its .dis: one that is not changes without mk
+        # rebuilding, and the stale .dis fails at load (link typecheck).
+        python3 tools/check-mkfile-deps.py
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/amd64/bin/limbo"
@@ -286,6 +293,29 @@ jobs:
         # made the user's home inside the package.
         chmod +x tests/host/release_dirs_test.sh
         ROOT=. bash tests/host/release_dirs_test.sh
+        # No private key in a release package: the tree's
+        # usr/inferno/keyring/default (a test key) is scrubbed by every
+        # package job, and a key left anywhere refuses the package.
+        chmod +x tests/host/release_scrub_test.sh
+        ROOT=. bash tests/host/release_scrub_test.sh
+
+    - name: Check the tree's icons
+      run: |
+        # icons/ holds icon(2)'s glyphs (icons/ui), Tk's cursors and the
+        # artwork coffee and draw-example(2) draw, nothing else; every
+        # glyph a program names is there, and no Tk bitmap or /icons
+        # path a program names is missing (one missing fails the widget
+        # naming it).
+        ROOT=. sh tests/host/icons_test.sh
+
+    - name: Check what goes on a Raspberry Pi card image
+      run: |
+        # tools/mkpiimage.sh, which makes the release's card images: each
+        # board's firmware, config.txt and kernel, the built dis/, and of
+        # lib/ fonts/ icons/ only what git tracks; read back by the test's
+        # own FAT32 reader, and by fsck.fat.
+        sudo apt-get install -y dosfstools
+        ROOT=. bash tests/host/piimage_test.sh
 
     - name: Run codex-gate preflight checks
       run: |
@@ -326,12 +356,16 @@ jobs:
         chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
           tests/host/lucibridge_tool_timeout_test.sh \
           tests/host/agentloop_characterization_test.sh \
-          tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh \
+          tests/host/tools9p_result_test.sh tests/host/toolctl_view_test.sh \
+          tests/host/wiki9p_test.sh \
           tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
           tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
           tests/host/context_window_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
+        # /mnt/toolctl's ns, event and view: the agent's name space as it
+        # is, read-only, and its lists' changes as events (#1020).
+        ROOT=. bash tests/host/toolctl_view_test.sh
         ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
         ROOT=. bash tests/host/veltrosrv_test.sh
         ROOT=. bash tests/host/veltro_cli_test.sh
@@ -575,6 +609,17 @@ jobs:
           fi
         fi
 
+    - name: Run presentation tab strip test
+      run: |
+        # An app in the presentation zone has the tab strip above it, in
+        # every one of several headless boots: lucipres and presrender
+        # join the zone's wmsrv in either order, and taking the first
+        # join for lucipres left the strip blank in about one boot in
+        # three.  A boot that is too slow is a skip (77), not a failure.
+        rc=0
+        ROOT=. bash tests/host/presentation_tabstrip_test.sh || rc=$?
+        [ $rc = 0 ] || [ $rc = 77 ]
+
     - name: Run walk-leak regression test
       run: |
         # A failed name lookup must not leak main-pool memory: namec's
@@ -661,6 +706,135 @@ jobs:
           Linux/amd64/bin/mk
           dis/
         retention-days: 14
+
+  # ─────────────────────────────────────────────
+  # Linux AMD64: the host tests no other job runs
+  # ─────────────────────────────────────────────
+  linux-amd64-host:
+    name: Linux AMD64 Host Tests (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # two halves of about 18 minutes each, the whole being too long
+        # for one job beside the build
+        include:
+          - shard: 1
+            tests: >-
+              activity_switch_test amd64_jit_typecom_bound_test
+              amd64_jit_typecom_slab_test commands_test dhcp_client_test
+              dis_parser_bounds_test editor_capability_test
+              exec_fork_no_panic_test exec_timeout_kill_test
+              factotum_keyfile_test llmctl_test llmsrv_flush_test
+              mail9p_imap_test network_capability_test pathmanage_test
+              plumbrules_test secstore_legacy_auth_test spawn_budget_test
+              statcheck_bounds_test tools9p_env_isolation_test
+              tools9p_integration_test
+          - shard: 2
+            tests: >-
+              amd64_jit_code_leak_test awk_builtins_test calendar9p_test
+              cpu_boundary_test dialogue_test emu_root_test
+              emulator_leader_lifecycle_test exec_confinement_test
+              font_regression_test ipchecksum_test iproute_test
+              jit_interp_handoff_test jit_real_test jsfs_test
+              listen_rate_fairness_test mail9p_test
+              modifier_mouse_emulation_test mount_clone_walk_test
+              nsaudit_metadata_test profile_legacykey_test
+              refadt_zero_test sdl3_keyboard_test secstore_apikey_test
+              secstore_e2e_test secstore_logon_test secstored_test
+              security_check_test serve_llm_smoke_test stale_dis_test
+              strcat_test task_provisioning_test tcpseq_test themefs_test
+              tls_malformed_server_test tools9p_activity_ns_test
+              tools9p_basics_test tools9p_write_exec_view_test
+              write_capability_test xenith_build_test
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install build dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+
+    - name: Bootstrap build (mk, libraries, limbo, emulator)
+      run: |
+        chmod +x build-linux-amd64.sh
+        ./build-linux-amd64.sh headless
+
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
+    - name: Compile test suite
+      run: |
+        LIMBO="$ROOT/Linux/amd64/bin/limbo"
+
+        # Build the testing module first
+        mkdir -p dis/tests dis/lib
+
+        # Build testing library
+        COMPILE_FAILURES=0
+        if [ -d tests/testing ]; then
+          cd tests/testing
+          for f in *.b; do
+            if [ -f "$f" ]; then
+              if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/dis/lib/${f%.b}.dis" "$f" 2>&1; then
+                echo "ERROR: Failed to compile testing/$f"
+                COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
+              fi
+            fi
+          done
+          cd "$ROOT"
+        fi
+
+        # Build test runner and test files into tests/ where the runner expects them
+        cd tests
+        for f in *.b; do
+          name="${f%.b}"
+          echo "Compiling $f..."
+          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+            echo "ERROR: Failed to compile $f"
+            COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
+          fi
+        done
+        cd "$ROOT"
+
+        # Verify runner was compiled
+        test -f tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+
+        echo "Compiled test .dis files:"
+        ls tests/*_test.dis 2>/dev/null | wc -l
+
+        if [ "$COMPILE_FAILURES" -gt 0 ]; then
+          echo "ERROR: $COMPILE_FAILURES test file(s) failed to compile"
+          exit 1
+        fi
+
+    - name: Run host tests
+      run: |
+        # tests/host scripts that no other step runs, found by running
+        # every one: the JIT's leaks, exec and namespace confinement,
+        # secstore and factotum, tools9p, the 9P services (mail9p,
+        # calendar9p, jsfs), the serve-llm daemon, and
+        # source checks.  Those with a display are in the GUI job; those
+        # needing a live service, a key or hardware are in none (vid9p's,
+        # needing ffmpeg and tools/vdec, are with the GUI job's video
+        # tests).  Each must pass: a skip here (exit 77) is a test that
+        # stopped running, and fails too.
+        mkdir -p tmp
+        failed=
+        for t in ${{ matrix.tests }}; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
 
   # ─────────────────────────────────────────────
   # Linux AMD64 GUI: SDL3 build from source
@@ -901,6 +1075,77 @@ jobs:
       run: |
         chmod +x tests/host/jit_boot_test.sh
         SDL_VIDEODRIVER=dummy tests/host/jit_boot_test.sh
+
+    - name: Run wm/wm tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # wm/wm driven by the pointer: New, the sweep and its cursor,
+        # the frame, focus, the menu's operations, a theme switch, a
+        # client leaving, wm/shell typed at (the shell New starts),
+        # wm/page, wm/sam edited through its windows, and every program
+        # in dis/wm opening at a size that shows it, under wm/wm and in
+        # Lucifer's zone.  wm_test.sh was written to
+        # keep New from breaking again, and nothing ran it.
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+          echo "--- $t ---"
+          ROOT=. sh tests/host/$t.sh
+        done
+
+    - name: Run Xenith and display host tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # Host tests that need the SDL emulator, which no step ran:
+        # Xenith's 9P files (tests/host/xenith_inside.sh), its races,
+        # rescue, documents and browsing, the SDL renderer, /dev/wmsize,
+        # Charon's engine and its origin filter (uitest_transport_test,
+        # which needs vdec too, is with the video tests below).  Each must
+        # pass: a skip here (exit 77) is a test that stopped running, and
+        # fails too.
+        failed=
+        for t in sdl3_rendering_test wmsize_test \
+            charon_headless_test charon_accept_test originfs_test \
+            xenith_acme_files_test xenith_blankname_test xenith_edit_test \
+            xenith_event_test xenith_image_test xenith_browse_test \
+            xenith_scroll_focus_test xenith_scroll_quit_test \
+            xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
+            xenith_race_test xenith_doc_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
+    - name: Build tools/vdec (vid9p's decoder)
+      run: |
+        # FFmpeg 6.1, as the crate is pinned to.  ffmpeg-next's default
+        # features link libavdevice, libavfilter and libswresample too;
+        # libavdevice-dev brings the other two.
+        sudo apt-get install -y clang ffmpeg libavcodec-dev libavformat-dev \
+          libavutil-dev libswscale-dev libavdevice-dev
+        # no --locked: Cargo.lock is ignored (tools/vdec/.gitignore);
+        # Cargo.toml pins ffmpeg-next to 6.1
+        (cd tools/vdec && cargo build --release)
+
+    - name: Run video tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # vid9p serving frames vdec decoded, its transport (play, pause,
+        # seek) paced by the clock, and the Matrix video pane driving it
+        # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
+        failed=
+        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
 
     - name: Upload Linux GUI build artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1714,6 +1959,44 @@ jobs:
           MacOSX/${{ matrix.arch }}/bin/limbo
           MacOSX/${{ matrix.arch }}/bin/mk
         retention-days: 14
+
+    # The SDL3 emulator, as the release builds it, and the GUI tests under
+    # SDL's windowless driver: the steps above build the headless one, so
+    # without these nothing that needs a display is tested on a Mac.  On
+    # the Apple Silicon runner only, in this job rather than one of its
+    # own: macos-15 runners are scarce at busy hours, and a job left
+    # queued for one is cancelled.
+    - name: Build SDL3 GUI emulator
+      if: matrix.arch == 'arm64'
+      run: |
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libfreetype && mk install) || true
+        cd emu/MacOSX
+        # the headless build's objects were compiled without -DGUI_SDL3
+        rm -f *.o o.emu
+        SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=sdl3
+        test -f o.emu || { echo "Emulator build failed"; exit 1; }
+        nm o.emu | grep -q sdl3_mainloop || { echo "o.emu is not the SDL3 build"; exit 1; }
+
+    - name: Run GUI tests
+      if: matrix.arch == 'arm64'
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
+        # here (77).
+        failed=
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+          echo "--- $t ---"
+          rc=0
+          ROOT=. sh tests/host/$t.sh || rc=$?
+          case $rc in
+          0)	;;
+          77)	echo "($t skipped)" ;;
+          *)	failed="$failed $t" ;;
+          esac
+        done
+        [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
 
   # ─────────────────────────────────────────────
   # Windows AMD64: MSVC build from source

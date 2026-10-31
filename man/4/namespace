@@ -117,16 +117,16 @@ Font definitions
 .B /locale
 Timezone and locale information
 .TP
-.B /icons
-Contains
-.IR image (6)
-files used by programs.
+.B /icons/ui
+The interface's glyphs, as SVG files, drawn by
+.IR icon (2).
 .TP
 .B /icons/tk
 Default directory searched by tk's
 .B -bitmap
 option (see
-.IR options (9)).
+.IR options (9)):
+the cursors programs ask for.
 .TP
 .B /lib
 Static program-specific data.
@@ -319,8 +319,10 @@ and
 At least one font must be provided - a default font for Tk
 to use.
 .TP
-.B /icons/tk
-This should contain icons used by applications that run within Tk.
+.B /icons/ui
+This should contain the glyphs
+.IR icon (2)
+draws for applications that run within Tk.
 .TP
 .BI /user/ user
 At least one user directory must exist if

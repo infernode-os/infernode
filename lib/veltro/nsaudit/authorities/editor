@@ -1,4 +1,4 @@
 tool=editor
-	description='Control the Edit text editor via /edit/'
+	description='Control the Editor app through its served files (#seditor, at /mnt/editor)'
 	authorities='reads_fs writes_fs'
 	notes='Reads and writes document bodies; writes are durable unless cowfs is active.'

@@ -41,8 +41,16 @@ SYSMODULES=\
 	sys.m\
 	bundle.m\
 	fslib.m\
+	daytime.m\
+	filepat.m\
+	readdir.m\
+	regex.m\
+	string.m\
+	unbundle.m\
 
 DISBIN=$ROOT/dis/fs
+
+MODULES=
 
 <$ROOT/mkfiles/mkdis
 

@@ -18,6 +18,8 @@ SYSMODULES=\
 	dict.m\
 	string.m\
 	lock.m\
+	cfgfile.m\
+	translate.m\
 
 DISBIN=$ROOT/dis/ip/ppp
 

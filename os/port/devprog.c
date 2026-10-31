@@ -80,6 +80,7 @@ enum
 {
 	CMkill,
 	CMkillgrp,
+	CMkilltree,
 	CMrestricted,
 	CMexceptions,
 	CMprivate
@@ -89,6 +90,7 @@ static
 Cmdtab progcmd[] = {
 	CMkill,	"kill",	1,
 	CMkillgrp,	"killgrp",	1,
+	CMkilltree,	"killtree",	1,
 	CMrestricted, "restricted", 1,
 	CMexceptions, "exceptions", 2,
 	CMprivate, "private",	1,
@@ -1107,6 +1109,9 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 		switch(ct->index){
 		case CMkillgrp:
 			killgrp(p, "killed");
+			break;
+		case CMkilltree:
+			killgrptree(p, "killed");
 			break;
 		case CMkill:
 			killprog(p, "killed");

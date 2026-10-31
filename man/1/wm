@@ -44,7 +44,9 @@ Button 3 shows the window menu:
 .TP
 .B New
 Sweep out a rectangle with button 3; a shell
-.RB ( wm/sh )
+.RB ( wm/shell ,
+see
+.IR wm-shell (1))
 is started in it.
 .TP
 .B Resize
@@ -259,24 +261,28 @@ requests.
 .B /chan/wmrect
 File holding current screen rectangle.
 .TP
-.B /chan/uitest
-Synthetic input, for tests.
-Each write is one of
-.BI ptr " x y buttons"\fR,
-a pointer event;
-.BI key " rune"\fR,
-a key, the rune in decimal; or
-.BI text " string"\fR,
-the rest of the line typed a rune at a time.
-They go where the pointer and keyboard would.
-A read lists the windows, topmost first, one a line:
+.B /chan/wmwindows
+The windows, topmost first, one a line:
 .I id
 and the window's rectangle,
-.IR "minx miny maxx maxy" .
+.IR "minx miny maxx maxy" ;
+hidden windows are not listed.
+Read only.
+A test drives
+.I wm
+as anything else on the screen is driven, by writing to
+.B /dev/pointer
+and
+.B /dev/keyboard
+(see
+.IR pointer (3)
+and
+.IR cons (3)).
 .SH SOURCE
 .B /appl/wm/wm.b
 .SH "SEE ALSO"
 .IR toolbar (1),
 .IR logon (1),
+.IR wm-shell (1),
 .IR tkclient (2),
 .IR wmclient (2)

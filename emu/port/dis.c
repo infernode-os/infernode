@@ -90,9 +90,17 @@ nprog(void)
  * been allocated or freed since, and a heap of a few hundred MB (a web
  * page laid out) took a core to do it, over and over, for as long as
  * the emulator sat idle.
+ *
+ * Going round is counted over however many idle moments it takes, while
+ * the heap does not change between them (idlemark, idlefrom): a program
+ * that wakes now and then to do nothing (Charon's) cuts each moment
+ * short, and counted afresh in each one the three colours were never
+ * reached, so the collector went round for ever.
  */
 static ulong idleseen;
 static int idleknown;
+static ulong idlemark;	/* the heap's activity when idlefrom was taken */
+static int idlefrom;	/* gccolor then */
 
 static void
 execatidle(void)
@@ -103,12 +111,16 @@ execatidle(void)
 		return;
 	if(idleknown && heapactivity() == idleseen)
 		return;
+	if(heapactivity() != idlemark) {
+		idlemark = heapactivity();
+		idlefrom = gccolor;
+	}
 
 	gcidle++;
 	up->type = IdleGC;
 	up->iprog = nil;
 	addrun(up->prog);
-	done = gccolor+3;
+	done = idlefrom+3;
 	while(gccolor < done && gcruns()) {
 		if(isched.vmq != nil || isched.runhd != isched.runtl) {
 			gcpartial++;
@@ -119,10 +131,11 @@ execatidle(void)
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
 	}
-	if(gccolor >= done) {	/* all the way round, not cut short */
+	if(gccolor >= done) {	/* all the way round since the heap last changed */
 		idleseen = heapactivity();
 		idleknown = 1;
 	}
+	idlemark = heapactivity();	/* what this pass freed is not a change */
 	up->type = Interp;
 	delrunq(up->prog);
 }
@@ -677,6 +690,76 @@ killgrp(Prog *p, char *msg)
 	return 1;
 }
 
+static int
+grptreedescendant(Progs *g, Progs *root)
+{
+	for(; g != nil; g = g->parent)
+		if(g == root)
+			return 1;
+	return 0;
+}
+
+static void
+cleargrptreekilled(int *gids, int n)
+{
+	int i;
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		for(i = 0; i < n; i++)
+			if(f->group != nil && f->group->id == gids[i]){
+				f->group->flags &= ~Pkilled;
+				break;
+			}
+}
+
+/* Kill a cleanup domain, including groups made with NEWPGRP below it. */
+int
+killgrptree(Prog *p, char *msg)
+{
+	int i, n, *gids, *pids;
+	Prog *f;
+	Progs *g;
+
+	g = p->group;
+	if(g == nil)
+		return 0;
+	/*
+	 * Scan the VM's flat Prog list rather than recursing through child groups:
+	 * an adversary can build a deep NEWPGRP chain, and cleanup must not turn
+	 * that into a C-stack overflow.
+	 */
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g))
+			n++;
+	pids = malloc(2*n*sizeof(int));
+	if(pids == nil)
+		error(Enomem);
+	gids = pids+n;
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g)){
+			f->group->flags |= Pkilled;
+			pids[n] = f->pid;
+			gids[n++] = f->group->id;
+		}
+	if(waserror()){
+		cleargrptreekilled(gids, n);
+		free(pids);
+		nexterror();
+	}
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f != nil && f != currun())
+			killprog(f, msg);
+	}
+	poperror();
+	cleargrptreekilled(gids, n);
+	free(pids);
+	return 0;
+}
+
 char	changup[] = "channel hangup";
 
 void
@@ -889,6 +972,12 @@ m(Prog *p)
  * culprit when starvation is detected.
  */
 Proc*	vmowner;
+/*
+ * where a proc is in native code: its program counter, from a host that
+ * can interrupt it (the profiler's view of compiled code, whose R.PC is
+ * not kept as it runs); nil where the host cannot
+ */
+uintptr	(*hostprocpc)(Proc*);
 char	vmownertext[KNAMELEN];
 ulong	vmownerms;
 

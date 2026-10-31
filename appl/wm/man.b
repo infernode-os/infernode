@@ -5,8 +5,8 @@ implement ManViewer;
 #
 # Parses troff -man via Parseman and renders into a Tk text widget,
 # styled by the brutalist defaults: accent headings, dim italics, accent
-# links, grey body. Scrolling, find and the Veltro IPC at /tmp/veltro/man
-# are preserved.
+# links, grey body. Scrolling and find are preserved; Veltro's man tool
+# reaches it through its served files (#sman/fs, at /mnt/man there).
 #
 # Keys:  Up/Down line, PgUp/PgDn screenful, Home/End, Ctrl-F find,
 #        Ctrl-G find next, Escape cancel, Ctrl-Q quit.
@@ -41,6 +41,7 @@ include "arg.m";
 	arg: Arg;
 
 include "lucitheme.m";
+include "appfs.m";
 	lucitheme: Lucitheme;
 	Theme: import lucitheme;
 
@@ -49,7 +50,6 @@ ManViewer: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-MAN_DIR: con "/tmp/veltro/man";
 MARGIN:  con 6;
 
 # Pixel-width callback Parseman uses for layout.
@@ -73,7 +73,7 @@ top:     ref Toplevel;
 wmctl:   chan of string;
 actch:   chan of string;
 themech: chan of int;
-ticks:   chan of int;
+appreqs: chan of ref Appfs->Req;
 stderr:  ref Sys->FD;
 
 display: ref Display;
@@ -133,7 +133,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	actch = chan[4] of string;
 	tk->namechan(top, actch, "act");
 	themech = chan[1] of int;
-	ticks = chan of int;
+	appreqs = chan of ref Appfs->Req;
 
 	buildui();
 
@@ -147,9 +147,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
-	initmandir();
+	startfs();
 	spawn themelistener();
-	spawn timer();
 
 	for(;;) alt {
 	c := <-wmctl or
@@ -165,8 +164,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		tk->pointer(top, *p);
 	a := <-actch =>
 		handleaction(a);
-	<-ticks =>
-		checkctlfile();
+	r := <-appreqs =>
+		apprequest(r);
 	<-themech =>
 		retheme();
 	}
@@ -260,7 +259,7 @@ loadpage(path: string)
 	tk->cmd(top, ".top.t yview moveto 0.0");
 	tk->cmd(top, "update");
 	settitle();
-	writemanstate();
+	changed();
 }
 
 # Render one Parseman line (list of (indent, Text)) into the text widget.
@@ -309,14 +308,18 @@ spaces(n: int): string
 	return s;
 }
 
+include "keyboard.m";
+
 # ── Keyboard ──────────────────────────────────────────────────
 
-Khome:   con 16rFF61;
-Kend:    con 16rFF57;
-Kup:     con 16rFF52;
-Kdown:   con 16rFF54;
-Kpgup:   con 16rFF55;
-Kpgdown: con 16rFF56;
+# keyboard.h's keys, as the emulator and the native kernel send them
+# (they were X11 keysyms, which nothing sends: the keys did nothing)
+Khome:   con Keyboard->Home;
+Kend:    con Keyboard->End;
+Kup:     con Keyboard->Up;
+Kdown:   con Keyboard->Down;
+Kpgup:   con Keyboard->Pgup;
+Kpgdown: con Keyboard->Pgdown;
 Kbs:     con 8;
 
 handlekey(k: int)
@@ -339,7 +342,7 @@ handlekey(k: int)
 	Khome =>   tk->cmd(top, ".top.t yview moveto 0.0");
 	Kend =>    tk->cmd(top, ".top.t yview moveto 1.0");
 	}
-	writemanstate();
+	changed();
 }
 
 # ── Find (status-line prompt) ─────────────────────────────────
@@ -429,7 +432,7 @@ findnext()
 	tk->cmd(top, sys->sprint(".top.t tag add match %s %s+%dc", idx, idx, len searchstr));
 	tk->cmd(top, ".top.t see " + idx);
 	setstatus(pagetitle + "    —    found: " + searchstr);
-	writemanstate();
+	changed();
 }
 
 # ── Menu actions ──────────────────────────────────────────────
@@ -548,50 +551,84 @@ lookupman(sections: list of string, title: string): list of string
 	return found;
 }
 
-# ── Veltro IPC (/tmp/veltro/man) ──────────────────────────────
+# ── Its files, for Veltro's man tool (appfs(2)) ─────────────
+#
+# ctl, state and view, served and posted as #sman/fs (#sman/fs.1 for a
+# second man): tools9p mounts it at /mnt/man for the man tool.  A read
+# is made from what is shown now; a command is done when its write
+# returns, a refused one is the write's error.
 
-initmandir()
+appfs: Appfs;
+appfstether: ref Sys->FD;	# the files go with it (appfs(2))
+
+startfs()
 {
-	mkdirq("/tmp/veltro");
-	mkdirq(MAN_DIR);
-}
-
-writemanstate()
-{
-	# state: title + scroll fraction
-	yv := tk->cmd(top, ".top.t yview");
-	state := sys->sprint("page %s\nyview %s\n", pagetitle, yv);
-	if(searchstr != "")
-		state += "search " + searchstr + "\n";
-	writefile(MAN_DIR + "/state", state);
-
-	# view: the currently visible text, for AI context
-	t0 := tk->cmd(top, ".top.t index @0,0");
-	t1 := tk->cmd(top, ".top.t index @0,100000");
-	view := sys->sprint("Man page: %s\n\n", pagetitle);
-	if(t0 != "" && t1 != "")
-		view += tk->cmd(top, ".top.t get " + t0 + " " + t1);
-	writefile(MAN_DIR + "/view", view);
-}
-
-checkctlfile()
-{
-	cmd := readonce(MAN_DIR + "/ctl");
-	if(cmd == "")
+	appfs = load Appfs Appfs->PATH;
+	if(appfs == nil || appfs->init() != nil) {
+		appfs = nil;
 		return;
+	}
+	err: string;
+	(nil, appfstether, err) = appfs->serve("man", array[] of {"ctl", "state", "view"}, appreqs);
+	if(err != nil) {
+		sys->fprint(sys->fildes(2), "man: serve: %s\n", err);
+		appfs = nil;
+	}
+}
+
+# the page or what is shown of it changed
+changed()
+{
+	if(appfs != nil)
+		appfs->event("changed");
+}
+
+apprequest(r: ref Appfs->Req)
+{
+	case r.file {
+	"state" =>
+		# title + scroll fraction
+		yv := tk->cmd(top, ".top.t yview");
+		state := sys->sprint("page %s\nyview %s\n", pagetitle, yv);
+		if(searchstr != "")
+			state += "search " + searchstr + "\n";
+		r.reply <-= state;
+	"view" =>
+		# the visible text, for an agent
+		t0 := tk->cmd(top, ".top.t index @0,0");
+		t1 := tk->cmd(top, ".top.t index @0,100000");
+		view := sys->sprint("Man page: %s\n\n", pagetitle);
+		if(t0 != "" && t1 != "")
+			view += tk->cmd(top, ".top.t get " + t0 + " " + t1);
+		r.reply <-= view;
+	"ctl" =>
+		if(r.data == nil)
+			r.reply <-= "";
+		else
+			r.reply <-= mancmd(r.data);
+	* =>
+		r.reply <-= nil;
+	}
+}
+
+# A command from ctl: nil, or why it was refused.
+mancmd(cmd: string): string
+{
 	(nil, toks) := sys->tokenize(cmd, " \t\n");
 	if(toks == nil)
-		return;
+		return "usage: open page|path, scroll up|down|top|bottom|line, find text";
 	verb := hd toks; toks = tl toks;
 	case verb {
 	"open" =>
 		if(toks == nil)
-			return;
+			return "usage: open [section] page, or open path";
 		arg0 := hd toks;
 		if(len arg0 > 0 && arg0[0] == '/'){
+			if(!isfile(arg0))
+				return "no file " + arg0;
 			pushhistory();
 			loadpage(arg0);
-			return;
+			return nil;
 		}
 		secs: list of string; title := "";
 		for(; toks != nil; toks = tl toks){
@@ -601,16 +638,16 @@ checkctlfile()
 			else
 				title = t;
 		}
-		if(title != ""){
-			found := lookupman(secs, title);
-			if(found != nil){
-				pushhistory();
-				loadpage(hd found);
-			}
-		}
+		if(title == "")
+			return "usage: open [section] page";
+		found := lookupman(secs, title);
+		if(found == nil)
+			return "no manual page " + title;
+		pushhistory();
+		loadpage(hd found);
 	"scroll" =>
 		if(toks == nil)
-			return;
+			return "usage: scroll up|down|top|bottom|line";
 		case hd toks {
 		"up" =>     tk->cmd(top, ".top.t yview scroll -1 pages");
 		"down" =>   tk->cmd(top, ".top.t yview scroll 1 pages");
@@ -618,19 +655,29 @@ checkctlfile()
 		"bottom" => tk->cmd(top, ".top.t yview moveto 1.0");
 		* =>
 			(ln, nil) := str->toint(hd toks, 10);
-			if(ln > 0)
-				tk->cmd(top, sys->sprint(".top.t see %d.0", ln));
+			if(ln <= 0)
+				return "usage: scroll up|down|top|bottom|line";
+			tk->cmd(top, sys->sprint(".top.t see %d.0", ln));
 		}
-		writemanstate();
+		changed();
 	"find" =>
 		if(toks == nil)
-			return;
+			return "usage: find text";
 		searchstr = hd toks;
 		for(toks = tl toks; toks != nil; toks = tl toks)
 			searchstr += " " + hd toks;
 		lastmatch = "";
 		findnext();
+	* =>
+		return "unknown command " + verb;
 	}
+	return nil;
+}
+
+isfile(p: string): int
+{
+	(ok, d) := sys->stat(p);
+	return ok >= 0 && (d.mode & Sys->DMDIR) == 0;
 }
 
 pushhistory()
@@ -679,13 +726,6 @@ gettheme(): ref Theme
 
 # ── Helpers ───────────────────────────────────────────────────
 
-timer()
-{
-	for(;;){
-		sys->sleep(500);
-		ticks <-= 1;
-	}
-}
 
 settitle()
 {
@@ -729,41 +769,8 @@ isdir(path: string): int
 	return (d.mode & Sys->DMDIR) != 0;
 }
 
-mkdirq(path: string)
-{
-	(ok, nil) := sys->stat(path);
-	if(ok >= 0)
-		return;
-	fd := sys->create(path, Sys->OREAD, Sys->DMDIR | 8r777);
-	fd = nil;
-}
 
-writefile(path, data: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r666);
-	if(fd != nil){
-		b := array of byte data;
-		sys->write(fd, b, len b);
-	}
-}
 
-readonce(path: string): string
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return "";
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	s := string buf[0:n];
-	# consume the command
-	fd = sys->create(path, Sys->OWRITE, 8r666);
-	fd = nil;
-	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' ' || s[len s-1] == '\t'))
-		s = s[:len s-1];
-	return s;
-}
 
 tolower(s: string): string
 {

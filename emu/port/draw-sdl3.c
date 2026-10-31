@@ -1181,14 +1181,51 @@ flushmemscreen(Rectangle r)
 /*
  * Set mouse pointer position
  * Coordinates from InferNode are in texture space; we convert to window space.
+ *
+ * setpointer runs on the thread that wrote /dev/pointer (wmlib's "ptr"
+ * request), but SDL allows a warp only on its main thread, and the
+ * conversion reads the window's geometry, which the main thread changes
+ * on a resize.  So setpointer records where the pointer is to go and
+ * sdl3_mainloop moves it (apply_warp), as for the cursor.
  */
+static SDL_SpinLock warp_lock = 0;
+static int warp_pending;	/* a warp is waiting for the main thread */
+static int warp_x, warp_y;	/* where to, in texture coordinates */
+
 void
 setpointer(int x, int y)
 {
-	float win_x, win_y;
-
 	if (!sdl_running)
 		return;
+
+	SDL_LockSpinlock(&warp_lock);
+	warp_x = x;
+	warp_y = y;
+	warp_pending = 1;
+	SDL_UnlockSpinlock(&warp_lock);
+	mouse_x = x;
+	mouse_y = y;
+}
+
+/*
+ * Move the host's pointer where setpointer last asked.  MUST be called
+ * on the main thread; sdl3_mainloop calls it each iteration.
+ */
+static void
+apply_warp(void)
+{
+	float win_x, win_y;
+	int x, y;
+
+	SDL_LockSpinlock(&warp_lock);
+	if (!warp_pending) {
+		SDL_UnlockSpinlock(&warp_lock);
+		return;
+	}
+	warp_pending = 0;
+	x = warp_x;
+	y = warp_y;
+	SDL_UnlockSpinlock(&warp_lock);
 
 	/*
 	 * Convert from texture coordinates to window coordinates.
@@ -1213,8 +1250,6 @@ setpointer(int x, int y)
 	}
 
 	SDL_WarpMouseInWindow(sdl_window, win_x, win_y);
-	mouse_x = x;
-	mouse_y = y;
 }
 
 /*
@@ -1229,58 +1264,101 @@ setpointer(int x, int y)
  *   (1,1)=black  (0,1)=white  (0,0)=transparent  (1,0)=inverted
  *
  * Mapping: data = set bits, mask = set | clr bits.
+ *
+ * drawcursor runs on the thread that wrote /dev/cursor, but SDL's
+ * cursor calls must be made on the main thread: on macOS the window's
+ * cursor rectangles are rebuilt there from SDL's current cursor, and a
+ * cursor changed under them from another thread could be lost (wm/wm's
+ * cross after New, its gunsight, its box).  So drawcursor only records
+ * the cursor wanted, copied (the bits are the writer's buffer), and
+ * sdl3_mainloop makes it current, as for the soft keyboard.
  */
 enum { MaxCursorSize = 32 };
+
+static SDL_SpinLock cursor_lock = 0;
+static int cursor_pending;	/* a cursor is waiting for the main thread */
+static int cursor_none;		/* it is the default cursor */
+static int cursor_hotx, cursor_hoty;
+static uchar cursor_data[MaxCursorSize * MaxCursorSize / 8];
+static uchar cursor_mask[MaxCursorSize * MaxCursorSize / 8];
 
 void
 drawcursor(Drawcursor *c)
 {
-	static SDL_Cursor *sdl_cursor = NULL;
 	uchar data[MaxCursorSize * MaxCursorSize / 8];
 	uchar mask[MaxCursorSize * MaxCursorSize / 8];
 	uchar *bc, *bs;
 	int i, j, h, w, bpl, stride;
 
-	if (c->data == nil) {
-		/* Reset to default cursor */
-		if (sdl_cursor) {
-			SDL_DestroyCursor(sdl_cursor);
-			sdl_cursor = NULL;
-		}
-		SDL_SetCursor(NULL);
-		return;
-	}
-
-	h = (c->maxy - c->miny) / 2;	/* bounds include image + mask */
-	if (h > MaxCursorSize)
-		h = MaxCursorSize;
-	bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
-	w = bpl;
-	if (w > MaxCursorSize / 8)
-		w = MaxCursorSize / 8;
-
 	memset(data, 0, sizeof(data));
 	memset(mask, 0, sizeof(mask));
+	if (c->data != nil) {
+		h = (c->maxy - c->miny) / 2;	/* bounds include image + mask */
+		if (h > MaxCursorSize)
+			h = MaxCursorSize;
+		bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
+		w = bpl;
+		if (w > MaxCursorSize / 8)
+			w = MaxCursorSize / 8;
 
-	stride = MaxCursorSize / 8;
-	bc = c->data;
-	bs = c->data + h * bpl;
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			data[i * stride + j] = bs[j];
-			mask[i * stride + j] = bs[j] | bc[j];
+		stride = MaxCursorSize / 8;
+		bc = c->data;
+		bs = c->data + h * bpl;
+		for (i = 0; i < h; i++) {
+			for (j = 0; j < w; j++) {
+				data[i * stride + j] = bs[j];
+				mask[i * stride + j] = bs[j] | bc[j];
+			}
+			bs += bpl;
+			bc += bpl;
 		}
-		bs += bpl;
-		bc += bpl;
 	}
 
+	SDL_LockSpinlock(&cursor_lock);
+	cursor_none = c->data == nil;
+	cursor_hotx = c->hotx;
+	cursor_hoty = c->hoty;
+	memmove(cursor_data, data, sizeof(data));
+	memmove(cursor_mask, mask, sizeof(mask));
+	cursor_pending = 1;
+	SDL_UnlockSpinlock(&cursor_lock);
+}
+
+/*
+ * Make the cursor drawcursor last recorded SDL's current cursor.
+ * MUST be called on the main thread; sdl3_mainloop calls it each
+ * iteration.
+ */
+static void
+apply_cursor(void)
+{
+	static SDL_Cursor *sdl_cursor = NULL;
+	uchar data[MaxCursorSize * MaxCursorSize / 8];
+	uchar mask[MaxCursorSize * MaxCursorSize / 8];
+	int none, hotx, hoty;
+
+	SDL_LockSpinlock(&cursor_lock);
+	if (!cursor_pending) {
+		SDL_UnlockSpinlock(&cursor_lock);
+		return;
+	}
+	cursor_pending = 0;
+	none = cursor_none;
+	hotx = cursor_hotx;
+	hoty = cursor_hoty;
+	memmove(data, cursor_data, sizeof(data));
+	memmove(mask, cursor_mask, sizeof(mask));
+	SDL_UnlockSpinlock(&cursor_lock);
+
 	if (sdl_cursor) {
+		/* the default cursor comes back as this one goes */
 		SDL_DestroyCursor(sdl_cursor);
 		sdl_cursor = NULL;
 	}
-
+	if (none)
+		return;
 	sdl_cursor = SDL_CreateCursor(data, mask,
-		MaxCursorSize, MaxCursorSize, -c->hotx, -c->hoty);
+		MaxCursorSize, MaxCursorSize, -hotx, -hoty);
 	if (sdl_cursor)
 		SDL_SetCursor(sdl_cursor);
 }
@@ -1689,6 +1767,11 @@ sdl3_mainloop(void)
 		/* Apply any pending soft-keyboard request on the main thread
 		 * (setsoftkbd, called from a worker thread, only set a flag). */
 		apply_softkbd();
+
+		/* and any cursor change (drawcursor only recorded it) */
+		apply_cursor();
+		/* and any warp of the pointer (setpointer only recorded it) */
+		apply_warp();
 
 		/*
 		 * Long-press fire: a single finger held still past the threshold

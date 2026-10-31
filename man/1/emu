@@ -180,7 +180,13 @@ broken host operating system process that results when a trap occurs.
 not Inferno applications.)
 .TP
 .BI \-p pool = maxsize
-Specify the maximum size in bytes of the named memory allocation pool.
+Specify the maximum size in bytes of the named memory allocation pool,
+or in kilobytes, megabytes or gigabytes with a suffix
+.BR k ,
+.B m
+or
+.B g
+.RB ( -pheap=3g ).
 The pools
 are:
 .RS

@@ -183,6 +183,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/appl" -name '*.dis' -delete
@@ -481,6 +484,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE/resources"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/resources/appl" -name '*.dis' -delete
@@ -704,6 +710,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/appl" -name '*.dis' -delete
@@ -1000,6 +1009,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE/resources"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/resources/appl" -name '*.dis' -delete
@@ -1240,6 +1252,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$RESOURCES/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$RESOURCES"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$RESOURCES/appl" -name '*.dis' -delete
@@ -1540,6 +1555,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/appl" -name '*.dis' -delete
@@ -1785,6 +1803,17 @@ jobs:
           foreach ($d in @("dis", "acme", "xenith", "lib", "fonts", "module", "services", "locale", "usr", "mnt")) {
             if (Test-Path $d) { Copy-Item -Recurse $d "$Stage\$d" }
           }
+          # The tree's usr/inferno/keyring/default is a test key: every file
+          # under a keyring\ goes, and the package is refused if a private
+          # key is left anywhere in it (tools/release-scrub.sh, in PowerShell).
+          Get-ChildItem -Path "$Stage\usr" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'keyring' } | ForEach-Object {
+              Write-Host "release-scrub: removed $($_.FullName)"; Remove-Item -Force $_.FullName }
+          $keys = Get-ChildItem -Path $Stage -Recurse -File | Where-Object { $_.Length -lt 65536 } | Where-Object {
+            $head = (Get-Content -LiteralPath $_.FullName -TotalCount 2 -ErrorAction SilentlyContinue)
+            ($head.Count -eq 2 -and $head[0] -match '^\d+$' -and $head[1] -match '^(ed25519|elgamal|rsa|dsa)$') -or
+            (Select-String -LiteralPath $_.FullName -Pattern '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -Quiet -ErrorAction SilentlyContinue) }
+          if ($keys) { $keys | ForEach-Object { Write-Host "release-scrub: a private key is in the package: $($_.FullName)" }; throw "release-scrub: refusing $Stage" }
           New-Item -ItemType Directory -Force -Path "$Stage\tmp" | Out-Null
           foreach ($f in @("LICENSE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
             if (Test-Path $f) { Copy-Item $f "$Stage\" }
@@ -1864,11 +1893,171 @@ jobs:
         retention-days: 3
 
   # ─────────────────────────────────────────────
+  # Raspberry Pi: card images for the native kernel
+  # ─────────────────────────────────────────────
+  # One image per board, flashed whole (Raspberry Pi Imager's "Use
+  # custom", dd, Etcher): the boot firmware, config.txt, the kernel and
+  # the userspace on one FAT32 partition. tools/mkpiimage.sh says what
+  # goes on it and why; docs/BAREMETAL.md is the manual. The kernels are
+  # built by the harness, the only supported build path, with
+  # BAREMETAL_BUILD_ONLY: the boots and their checks are
+  # baremetal.yml's, on every change to the kernel.
+  raspberry-pi:
+    name: Raspberry Pi card images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Extract version from tag
+      id: version
+      run: v=${GITHUB_REF_NAME#v}; echo "version=${v//\//-}" >> "$GITHUB_OUTPUT"   # a branch's / (manual runs) would make paths
+
+    - name: Stamp build version
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        BUILD_DATE=$(date +%Y%m%d)
+        SHORT_SHA=${GITHUB_SHA::8}
+        sed -i "s|InferNode 0.1|InferNode ${VERSION} build ${BUILD_DATE}-${SHORT_SHA}|" include/version.h
+        echo "Version: $(cat include/version.h)"
+
+    # clang is a cross compiler already (--target=aarch64-elf); lld and
+    # llvm supply ld.lld, llvm-objcopy, llvm-ar and llvm-nm. dosfstools
+    # for fsck.fat, which checks each image. qemu-system-arm boots the
+    # 3B+'s image (raspi3b) before it ships.
+    - name: Install the cross toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang lld llvm python3 dosfstools xz-utils qemu-system-arm
+
+    # The 4B's image boots on QEMU's raspi4b, which arrived in 9.0; the
+    # runner's is 8.2. The same QEMU, built the same way and under the
+    # same cache key, as baremetal.yml's bcm2711 job.
+    - name: Restore a built QEMU 9.2.4
+      id: qemucache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/qemu
+        key: qemu-9.2.4-aarch64-softmmu-slirp-ubuntu-24.04-v3-${{ hashFiles('tests/host/qemu/*.patch') }}
+
+    - name: Build QEMU 9.2.4
+      if: steps.qemucache.outputs.cache-hit != 'true'
+      env:
+        QEMU_VERSION: 9.2.4
+      run: |
+        set -e
+        sudo apt-get install -y ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o qemu.tar.xz "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+        tar xf qemu.tar.xz
+        cd "qemu-${QEMU_VERSION}"
+        for p in "$GITHUB_WORKSPACE"/tests/host/qemu/*.patch; do patch -p1 < "$p"; done
+        ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=aarch64-softmmu \
+          --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
+          --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
+          --disable-xen --disable-kvm --disable-capstone
+        make -j"$(nproc)"
+        make install
+
+    - name: The QEMU libraries
+      run: sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
+
+    - name: Build mk and limbo
+      run: |
+        set -e
+        SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for lib in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$lib" && mk install)
+        done
+        test -x Linux/amd64/bin/limbo
+
+    - name: Build the Dis tree
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        "$ROOT/tools/verify-dis-build.sh"
+
+    # The harness skips, and exits 0, when it finds no cross toolchain:
+    # a release must not take that for a build. The kernels have to be
+    # there, and nothing may have failed.
+    - name: Build the kernels
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        mkdir -p "$RUNNER_TEMP/bm"
+        set +e
+        BAREMETAL_BUILD_ONLY=1 BAREMETAL_PLATFORMS="bcm2837 bcm2711" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
+          ./tests/host/baremetal_test.sh 2>&1 | tee "$RUNNER_TEMP/bm/harness.log"
+        st=${PIPESTATUS[0]}
+        set -e
+        [ "$st" = 0 ] || { tail -20 "$RUNNER_TEMP/bm/cc.log"; echo "::error::the harness exited $st"; exit 1; }
+        grep -q 'Skipped: 0' "$RUNNER_TEMP/bm/harness.log" || { echo "::error::the harness skipped something"; exit 1; }
+        for k in bcm2837 bcm2711; do
+          test -s "$RUNNER_TEMP/bm/$k-kernel.img" || { echo "::error::no $k kernel"; exit 1; }
+        done
+
+    - name: Check what the card builder puts on a card
+      run: bash tests/host/piimage_test.sh
+
+    - name: Build the card images
+      run: |
+        set -e
+        VERSION="${{ steps.version.outputs.version }}"
+
+        # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
+        # ring-fence rule. Here the stage is what the images are made of.
+        if find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+          echo "FATAL: testing-only harness files found in what a card carries:" >&2
+          find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          exit 1
+        fi
+
+        # The boot firmware once more, apart from mkpiimage's copy, to
+        # hold the images' bytes against. pi-firmware.sh takes a card's
+        # root and will not make one, so the directory is made here.
+        mkdir -p "$RUNNER_TEMP/bootfw"
+        sh tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt "$RUNNER_TEMP/bootfw"
+
+        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64; do
+          b=${board%%:*} rest=${board#*:} soc=${rest%%:*} qemu=${rest#*:}
+          img="infernode-$VERSION-$b.img"
+          sh tools/mkpiimage.sh "$b" "$RUNNER_TEMP/bm/$soc-kernel.img" "$img"
+          dd if="$img" of="$RUNNER_TEMP/part" bs=512 skip=2048 status=none
+          fsck.fat -n "$RUNNER_TEMP/part"
+          rm -f "$RUNNER_TEMP/part"
+          # What a board would do with this exact image, short of a board:
+          # read it as the boot ROM and firmware do, then boot it to the
+          # login screen. Either failing stops the release here; neither
+          # may skip.
+          python3 tools/piromcheck.py --firmware "$RUNNER_TEMP/bootfw/firmware" "$b" "$img"
+          set +e
+          QEMU="$qemu" sh tests/host/piimage_boot_test.sh "$b" "$img" "$RUNNER_TEMP/bm/$soc-kernel.img"
+          st=$?
+          set -e
+          [ "$st" = 0 ] || { echo "::error::$img did not boot as a board boots it (status $st)"; exit 1; }
+          # what Raspberry Pi Imager's repository JSON asks for, before
+          # and after compression
+          echo "$img: extract_size $(stat -c %s "$img") extract_sha256 $(sha256sum "$img" | cut -d' ' -f1)"
+          xz -T0 -9 "$img"
+          echo "$img.xz: image_download_size $(stat -c %s "$img.xz") image_download_sha256 $(sha256sum "$img.xz" | cut -d' ' -f1)"
+        done
+
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: infernode-raspberry-pi
+        path: infernode-*-rpi*.img.xz
+        retention-days: 3
+
+  # ─────────────────────────────────────────────
   # Create GitHub Release with all archives
   # ─────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos, macos-headless, windows-amd64]
+    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos, macos-headless, windows-amd64, raspberry-pi]
     # only a version tag publishes: a manual run from a branch builds and
     # tests the packages, and stops here
     if: startsWith(github.ref, 'refs/tags/v')
@@ -1936,6 +2125,9 @@ jobs:
         subject-path: artifacts/infernode-*.zip
     - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
       with:
+        subject-path: artifacts/infernode-*.img.xz
+    - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
         subject-path: artifacts/xenith-*.dmg
     - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
       with:
@@ -1973,6 +2165,8 @@ jobs:
           | macOS | AMD64 (Intel, headless) | `infernode-${{ steps.version.outputs.version }}-macos-amd64.tar.gz` |
           | Windows | AMD64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-windows-amd64-gui.zip` |
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
+          | Raspberry Pi 3B+ | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi3bplus.img.xz` |
+          | Raspberry Pi 4B | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi4b.img.xz` |
 
           **Xenith**, the text environment on its own, as an app:
 
@@ -1997,6 +2191,8 @@ jobs:
           **Windows (GUI):** Extract the `-gui` zip, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; the SDL3 GUI emulator and `SDL3.dll` ship in the same zip. Without running `setup-windows.bat` first, Windows SmartScreen silently blocks the unsigned `InferNode.exe` after browser download — see the Code signing section below.
 
           **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
+
+          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+ and 4B images are not interchangeable. For Wi-Fi, put a `wifi` file on the card (`essid` and `password` lines); for Bluetooth, a `bt` file: see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md). The images carry Broadcom's boot firmware and Cypress's Wi-Fi firmware and Bluetooth patch, each with its licence, for use on the Raspberry Pi they are for.
 
           **Xenith (Linux):** Extract, then `./xenith [file ...]`. `./setup-desktop.sh` adds it to the app menu (files open with it) and puts `xenith` on your PATH. It shares `~/.infernode` with InferNode.
 

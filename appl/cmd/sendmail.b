@@ -96,7 +96,7 @@ init(nil : ref Draw->Context, args : list of string) {
 	if(username == nil)
 		(ok, err) := smtp->open(nil);
 	else
-		(ok, err) = smtp->authopen(username, password, nil, 1);
+		(ok, err) = smtp->authopen(username, password, nil, Smtp->IMPLICIT_TLS);
   	if (ok < 0) {
 		smtp->close();
     		error(sprint("smtp open failed: %s", err), 1);

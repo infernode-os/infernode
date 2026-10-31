@@ -558,6 +558,10 @@ struct TkCtxt
 	Tk*		mgrab;
 	Tk*		entered;
 	TkMouse	mstate;
+	ulong	pmsec;		/* the last button press, for a double click: when, */
+	int		pb;			/* which button, */
+	int		px;			/* and where */
+	int		py;
 
 	Tk*		tkmenu;
 	void*	extn;
@@ -699,6 +703,9 @@ extern	void		tksetpanelimage(Tk *tk, Image*, Image*);
 /* General - colrs.c */
 extern	void		tksetenvcolours(TkEnv*);
 
+/* General - canvs.c */
+extern	void		tkcvsretheme(Tk*);
+
 /* General - ebind.c */
 extern	void		tkcmdbind(Tk*, int, char*, void*);
 extern	TkCtxt*		tkdeldepth(Tk*);
@@ -737,6 +744,8 @@ extern	void		tkfreegrid(TkGrid*);
 extern	char*		tkconflist(TkOptab*, char**);
 extern	char*		tkskip(char*, char*);
 extern	char*		tkword(TkTop*, char*, char*, char*, int*);
+extern	int		tkspeckey(Rune);
+extern	void		tkdropkeys(char*);
 extern	char*		tkxyparse(Tk*, char**, Point*);
 extern	char*		tkparse(TkTop*, char*, TkOptab*, TkName**);
 extern	TkName*		tkmkname(char*);

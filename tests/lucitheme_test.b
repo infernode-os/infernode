@@ -232,6 +232,46 @@ testGlendaShipped(t: ref T)
 	t.asserteq(th.border, int 16r8888CCFF, "tag border: DPurpleblue");
 }
 
+# A shell window's text: each shipped theme sets the colour for a
+# window without the keyboard and the one for held input, readable
+# and unlike its text and each other.
+testShellTextShipped(t: ref T)
+{
+	for(l := "brimstone" :: "halo" :: "glenda" :: "xenith" :: nil; l != nil; l = tl l){
+		name := hd l;
+		(unfocused, hold) := (0, 0);
+		for(e := lucitheme->entries(name); e != nil; e = tl e){
+			(k, v) := hd e;
+			if(k == "editunfocused")
+				unfocused = v;
+			else if(k == "edithold")
+				hold = v;
+		}
+		if(!t.assert(unfocused != 0 && hold != 0, name+" sets editunfocused and edithold"))
+			continue;
+		th := lucitheme->loadtheme(name);
+		t.asserteq(th.editunfocused, unfocused, name+": editunfocused as its file sets it");
+		t.asserteq(th.edithold, hold, name+": edithold as its file sets it");
+		t.assertne(unfocused, th.edittext, name+": editunfocused is not its text");
+		t.assertne(hold, th.edittext, name+": edithold is not its text");
+		t.assertne(hold, unfocused, name+": edithold is not editunfocused");
+	}
+	th := lucitheme->brimstone();
+	t.asserteq(th.editunfocused, int 16r8A8A8AFF, "brimstone's built-in editunfocused");
+	t.asserteq(th.edithold, int 16r6FA3E0FF, "brimstone's built-in edithold");
+}
+
+# A theme that does not set them has its own text2 and accent, not
+# Brimstone's shell colours: the fixture sets accent alone.
+testShellTextDerived(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.edithold, int 16r2266CCFF, "edithold is the theme's own accent");
+	t.asserteq(th.editunfocused, th.text2, "editunfocused is the theme's text2");
+}
+
 testEntries(t: ref T)
 {
 	got := "";
@@ -329,9 +369,17 @@ testWatch(t: ref T)
 watchprobe(pidc: chan of int, res: chan of string)
 {
 	pid := sys->pctl(Sys->NEWPGRP, nil);
-	# watch reads the current name before it returns: only then may the
-	# test change it, or the watcher may start from the new name and see
-	# no change (it did, on a slow CI runner)
+	# the theme served (as the profile, wm/wm or Lucifer does): watch
+	# reads its event file, so nothing is polled.  The server is in this
+	# group, killed with it.
+	err := lucitheme->serve();
+	if(err != nil) {
+		pidc <-= pid;
+		res <-= "serve: " + err;
+		<-chan of int;
+	}
+	# watch opens event before it returns: only then may the test change
+	# the name, or the change could come before the reader is there
 	c := lucitheme->watch();
 	pidc <-= pid;
 	res <-= <-c;
@@ -378,6 +426,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("XenithShipped", testXenithShipped);
 	run("GlendaShipped", testGlendaShipped);
 	run("Entries", testEntries);
+	run("ShellTextShipped", testShellTextShipped);
+	run("ShellTextDerived", testShellTextDerived);
 
 	if(fixture() < 0)
 		raise sys->sprint("fail:cannot bind the theme fixture: %r");

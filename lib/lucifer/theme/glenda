@@ -57,6 +57,8 @@ editstatus EAFFFF	# acme's tag
 editstattext 000000
 editscroll 99994C	# acme scroll bar: the body's BORD, DYellowgreen
 editthumb FFFFEA	# acme scroll thumb: the body's BACK
+editunfocused 666666	# rio's darkgrey: a window without the keyboard
+edithold 000099	# DMedblue: rio's hold-mode text
 
 # Diagrams, in Plan 9's palette
 diagbg FFFFEA

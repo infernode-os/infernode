@@ -35,9 +35,6 @@ TARG=\
 	docreg.dis\
 	docview.dis\
 
-ICONS=\
-	abcde.bit\
-
 MODULES=\
 	xenith.m\
 	asyncio.m\
@@ -80,6 +77,7 @@ SYSMODULES=\
 	draw.m\
 	imagefile.m\
 	imgload.m\
+	lucitheme.m\
 	plumbmsg.m\
 	sh.m\
 	string.m\
@@ -88,6 +86,9 @@ SYSMODULES=\
 	tk.m\
 	workdir.m\
 	wmclient.m\
+	complete.m\
+	env.m\
+	keyboard.m\
 
 DISBIN=$ROOT/dis/xenith
 

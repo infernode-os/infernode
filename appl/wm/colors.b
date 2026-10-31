@@ -22,15 +22,19 @@ ZP  := Point(0,0);
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
+	sys = load Sys Sys->PATH;
+	# exit is a killgrp (wmclient): a group of its own, or it takes
+	# the shell that started it, or wm/wm, with it.  Made here, before
+	# the spawn, so the process that runs on is in it: one made in that
+	# process left the group Lucifer had given init, and Lucifer, seeing
+	# that group empty, took colors for ended as it opened.  Where init
+	# leads its group already (Lucifer's) this changes nothing.
+	sys->pctl(Sys->NEWPGRP, nil);
 	spawn init1(ctxt);
 }
 
 init1(ctxt: ref Draw->Context)
 {
-	sys = load Sys Sys->PATH;
-	# exit is a killgrp (wmclient): a group of its own, or it takes
-	# the shell that started it, or wm/wm, with it
-	sys->pctl(Sys->NEWPGRP, nil);
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	wmclient->init();

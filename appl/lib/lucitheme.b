@@ -6,7 +6,10 @@ implement Lucitheme;
 # Reads a colour palette from Plan 9–style flat files.
 # /lib/lucifer/theme/current names the active theme;
 # /lib/lucifer/theme/<name> defines key-value colour pairs.
-# Writing a name to current switches every program that watches it.
+# Writing a name to current switches every program that watches it:
+# serve() puts current and event, served, before the theme directory,
+# a write of current is kept in the file under it and a read of event
+# waits for the next switch (watch reads it; nothing polls).
 #
 # File format: one "key RRGGBB" per line, # comments, blank lines ignored.
 # Missing keys or unreadable files fall back to Brimstone defaults.
@@ -16,6 +19,14 @@ include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+
+include "styx.m";
+	styx: Styx;
+	Tmsg, Rmsg: import styx;
+
+include "styxservers.m";
+	styxservers: Styxservers;
+	Styxserver, Navigator, Navop: import styxservers;
 
 include "lucitheme.m";
 
@@ -123,6 +134,8 @@ setkey(th: ref Theme, key: string, val: int)
 	"editstattext" => th.editstattext = val;
 	"editscroll" =>	th.editscroll = val;
 	"editthumb" =>	th.editthumb = val;
+	"editunfocused" => th.editunfocused = val;
+	"edithold" =>	th.edithold = val;
 	"diagbg" =>	th.diagbg = val;
 	"diagnode" =>	th.diagnode = val;
 	"diagborder" =>	th.diagborder = val;
@@ -211,7 +224,11 @@ brimstone(): ref Theme
 		int 16r89DCEBFF,	# pie7
 
 		# Window chrome (trailing field — see lucitheme.m)
-		int 16r1A1A1AFF		# windowborder — subdued frame around wmclient apps
+		int 16r1A1A1AFF,	# windowborder — subdued frame around wmclient apps
+
+		# A shell window's text (trailing fields — see lucitheme.m)
+		int 16r8A8A8AFF,	# editunfocused
+		int 16r6FA3E0FF		# edithold
 	);
 }
 
@@ -235,10 +252,17 @@ loadtheme(name: string): ref Theme
 	if(data == nil)
 		return nil;
 	th := brimstone();
+	# not Brimstone's when the theme does not set them: a light
+	# theme's shell text would be a dark theme's grey
+	th.editunfocused = th.edithold = 0;	# no colour parse() gives
 	for(l := parse(data); l != nil; l = tl l){
 		(key, val) := hd l;
 		setkey(th, key, val);
 	}
+	if(th.editunfocused == 0)
+		th.editunfocused = th.text2;
+	if(th.edithold == 0)
+		th.edithold = th.accent;
 	return th;
 }
 
@@ -310,35 +334,229 @@ settheme(name: string): string
 	return nil;
 }
 
-# How often a watcher looks at the current file. A switch is seen
-# within this; the cost is one small read per watcher per interval.
-Pollms: con 1000;
-
 watch(): chan of string
 {
 	sys = load Sys Sys->PATH;
 	c := chan[1] of string;
-	spawn watcher(c, current());
+	fd := sys->open(THEMEDIR + "event", Sys->OREAD);
+	if(fd != nil)
+		spawn watcher(c, fd);
 	return c;
 }
 
-watcher(c: chan of string, last: string)
+watcher(c: chan of string, fd: ref Sys->FD)
 {
-	for(;;){
-		sys->sleep(Pollms);
-		name := current();
-		if(name == last)
-			continue;
-		last = name;
+	buf := array[Sys->NAMEMAX] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0) {
 		# never block on a slow reader: one pending change is enough,
 		# since the reader loads whatever is current when it gets to it
 		alt {
-		c <-= name =>
+		c <-= strip(string buf[0:n]) =>
 			;
 		* =>
 			;
 		}
 	}
+}
+
+#
+# The server: current (read the name, write a name to switch) and event
+# (a read waits for the next switch and gives the name), mounted before
+# the theme directory, so the themes' files are still the directory's
+# and a write of current, whoever makes it, reaches every watcher.  The
+# name written is kept in the directory's own current, opened before
+# the mount.  Each open of event has its own pending name.
+#
+Qroot, Qcurrent, Qevent: con big iota;
+
+Evq: adt {
+	fid:	int;
+	name:	string;		# a switch not yet read, or nil
+	rd:	ref Tmsg.Read;	# a read waiting
+};
+
+serve(): string
+{
+	sys = load Sys Sys->PATH;
+	if(sys->stat(THEMEDIR + "event").t0 >= 0)
+		return nil;	# served already
+	styx = load Styx Styx->PATH;
+	styxservers = load Styxservers Styxservers->PATH;
+	if(styx == nil || styxservers == nil)
+		return sys->sprint("cannot load styx: %r");
+	styx->init();
+	styxservers->init(styx);
+	keep := sys->open(THEMEDIR + "current", Sys->ORDWR);
+	if(keep == nil)
+		keep = sys->create(THEMEDIR + "current", Sys->ORDWR, 8r644);
+	if(keep == nil)
+		return sys->sprint("cannot open %scurrent: %r", THEMEDIR);
+	name := current();
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		return sys->sprint("pipe: %r");
+	navops := chan of ref Navop;
+	spawn navigator(navops);
+	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), Qroot);
+	fds[0] = nil;
+	pidc := chan of int;
+	spawn themesrv(tchan, srv, navops, keep, name, pidc);
+	<-pidc;
+	if(sys->mount(fds[1], nil, "/lib/lucifer/theme", Sys->MBEFORE, nil) < 0)
+		return sys->sprint("mount %s: %r", THEMEDIR);
+	return nil;
+}
+
+themesrv(tchan: chan of ref Tmsg, srv: ref Styxserver, navops: chan of ref Navop,
+	keep: ref Sys->FD, name: string, pidc: chan of int)
+{
+	# a name space of its own, made before the mount: the server looks
+	# for a theme's file in the directory, never through itself
+	pidc <-= sys->pctl(Sys->NEWFD|Sys->FORKNS, srv.fd.fd :: keep.fd :: nil);
+	evqs: list of ref Evq;
+Serve:
+	while((gm := <-tchan) != nil) {
+		pick m := gm {
+		Readerror =>
+			break Serve;
+		Open =>
+			f := srv.open(m);
+			if(f != nil && f.path == Qevent)
+				evqs = ref Evq(m.fid, nil, nil) :: evqs;
+		Read =>
+			(f, err) := srv.canread(m);
+			if(f == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, err));
+				break;
+			}
+			case f.path {
+			Qcurrent =>
+				srv.reply(styxservers->readstr(m, name + "\n"));
+			Qevent =>
+				for(l := evqs; l != nil; l = tl l)
+					if((hd l).fid == m.fid) {
+						(hd l).rd = m;
+						evreply(srv, hd l);
+					}
+			* =>
+				srv.read(m);
+			}
+		Write =>
+			(f, err) := srv.canwrite(m);
+			if(f == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, err));
+				break;
+			}
+			if(f.path != Qcurrent) {
+				srv.reply(ref Rmsg.Error(m.tag, "permission denied"));
+				break;
+			}
+			new := strip(string m.data);
+			if(!validname(new)) {
+				srv.reply(ref Rmsg.Error(m.tag, "invalid theme name"));
+				break;
+			}
+			if(sys->stat(THEMEDIR + new).t0 < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, "no theme " + new));
+				break;
+			}
+			# kept in the directory's file, for the next session
+			d := sys->nulldir;
+			d.length = big 0;
+			sys->fwstat(keep, d);
+			b := array of byte new;
+			sys->pwrite(keep, b, len b, big 0);
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			if(new != name) {
+				name = new;
+				for(l := evqs; l != nil; l = tl l) {
+					(hd l).name = name;
+					evreply(srv, hd l);
+				}
+			}
+		Flush =>
+			for(l := evqs; l != nil; l = tl l)
+				if((hd l).rd != nil && (hd l).rd.tag == m.oldtag)
+					(hd l).rd = nil;
+			srv.default(gm);
+		Clunk =>
+			nl: list of ref Evq;
+			for(l := evqs; l != nil; l = tl l)
+				if((hd l).fid != m.fid)
+					nl = hd l :: nl;
+			evqs = nl;
+			srv.clunk(m);
+		* =>
+			srv.default(gm);
+		}
+	}
+	navops <-= nil;
+}
+
+# a waiting read given the switch it waits for, if there is one
+evreply(srv: ref Styxserver, e: ref Evq)
+{
+	if(e.rd == nil || e.name == nil)
+		return;
+	# a stream, not a file: each read is the next switch, whatever its offset
+	b := array of byte (e.name + "\n");
+	if(len b > e.rd.count)
+		b = b[0:e.rd.count];
+	srv.reply(ref Rmsg.Read(e.rd.tag, b));
+	e.rd = nil;
+	e.name = nil;
+}
+
+navigator(navops: chan of ref Navop)
+{
+	while((m := <-navops) != nil) {
+		pick n := m {
+		Stat =>
+			n.reply <-= dirgen(n.path);
+		Walk =>
+			if(n.path != Qroot) {
+				n.reply <-= (nil, "not a directory");
+				continue;
+			}
+			case n.name {
+			".." =>
+				n.reply <-= dirgen(Qroot);
+			"current" =>
+				n.reply <-= dirgen(Qcurrent);
+			"event" =>
+				n.reply <-= dirgen(Qevent);
+			* =>
+				n.reply <-= (nil, "file does not exist");
+			}
+		Readdir =>
+			if(n.path == Qroot)
+				for(i := n.offset; i < 2 && i < n.offset + n.count; i++)
+					n.reply <-= dirgen(Qcurrent + big i);
+			n.reply <-= (nil, nil);
+		}
+	}
+}
+
+dirgen(p: big): (ref Sys->Dir, string)
+{
+	d := ref sys->zerodir;
+	d.qid.path = p;
+	d.uid = d.gid = "theme";
+	case p {
+	Qroot =>
+		d.name = ".";
+		d.qid.qtype = Sys->QTDIR;
+		d.mode = Sys->DMDIR | 8r555;
+	Qcurrent =>
+		d.name = "current";
+		d.mode = 8r666;
+	Qevent =>
+		d.name = "event";
+		d.mode = 8r444;
+	* =>
+		return (nil, "file does not exist");
+	}
+	return (d, nil);
 }
 
 # the user's theme directory is bound over the system's: a name can

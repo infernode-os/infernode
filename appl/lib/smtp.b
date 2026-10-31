@@ -16,55 +16,12 @@ include "ipattr.m";
 include "webclient.m";
 	webclient: Webclient;
 
-include "keyring.m";
-include "asn1.m";
-include "pkcs.m";
-include "sslsession.m";
-include "ssl3.m";
-	ssl3: SSL3;
-	Context: import ssl3;
-# Inferno supported cipher suites: RSA_EXPORT_RC4_40_MD5
-ssl_suites := array [] of {
-	byte 0, byte 16r03,	# RSA_EXPORT_WITH_RC4_40_MD5
-	byte 0, byte 16r04,	# RSA_WITH_RC4_128_MD5
-	byte 0, byte 16r05,	# RSA_WITH_RC4_128_SHA
-	byte 0, byte 16r06,	# RSA_EXPORT_WITH_RC2_CBC_40_MD5
-	byte 0, byte 16r07,	# RSA_WITH_IDEA_CBC_SHA
-	byte 0, byte 16r08,	# RSA_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r09,	# RSA_WITH_DES_CBC_SHA
-	byte 0, byte 16r0A,	# RSA_WITH_3DES_EDE_CBC_SHA
-	
-	byte 0, byte 16r0B,	# DH_DSS_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r0C,	# DH_DSS_WITH_DES_CBC_SHA
-	byte 0, byte 16r0D,	# DH_DSS_WITH_3DES_EDE_CBC_SHA
-	byte 0, byte 16r0E,	# DH_RSA_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r0F,	# DH_RSA_WITH_DES_CBC_SHA
-	byte 0, byte 16r10,	# DH_RSA_WITH_3DES_EDE_CBC_SHA
-	byte 0, byte 16r11,	# DHE_DSS_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r12,	# DHE_DSS_WITH_DES_CBC_SHA
-	byte 0, byte 16r13,	# DHE_DSS_WITH_3DES_EDE_CBC_SHA
-	byte 0, byte 16r14,	# DHE_RSA_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r15,	# DHE_RSA_WITH_DES_CBC_SHA
-	byte 0, byte 16r16,	# DHE_RSA_WITH_3DES_EDE_CBC_SHA
-	
-	byte 0, byte 16r17,	# DH_anon_EXPORT_WITH_RC4_40_MD5
-	byte 0, byte 16r18,	# DH_anon_WITH_RC4_128_MD5
-	byte 0, byte 16r19,	# DH_anon_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r1A,	# DH_anon_WITH_DES_CBC_SHA
-	byte 0, byte 16r1B,	# DH_anon_WITH_3DES_EDE_CBC_SHA
-	
-	byte 0, byte 16r1C,	# FORTEZZA_KEA_WITH_NULL_SHA
-	byte 0, byte 16r1D,	# FORTEZZA_KEA_WITH_FORTEZZA_CBC_SHA
-	byte 0, byte 16r1E,	# FORTEZZA_KEA_WITH_RC4_128_SHA
-};
-ssl_comprs := array [] of {byte 0};
 usessl:= 0;
-sslx : ref Context;
 
 FD, Connection: import sys;
 Iobuf : import bufio;
 
-ibuf, obuf : ref Bufio->Iobuf;
+ibuf : ref Bufio->Iobuf;
 sfd : ref Sys->FD;	# connection fd; writes go here directly (like imap.b)
 conn : int = 0;
 init : int = 0;
@@ -109,15 +66,17 @@ open(server : string): (int, string)
 	return (1, nil);
 }
  
-authopen(user, password, server : string, usesslarg: int): (int, string)
+authopen(user, password, server : string, mode: int): (int, string)
 {
 	s : string;
 	ok: int;
 
- 	usessl = usesslarg;
 	if (!init) {
 		sys = load Sys Sys->PATH;
 		bufio = load Bufio Bufio->PATH;
+		init = 1;
+	}
+	if (base64 == nil) {
 		base64 = load Encoding Encoding->BASE64PATH;
 		attrdb = load Attrdb Attrdb->PATH;
 		if(attrdb == nil)
@@ -132,40 +91,52 @@ authopen(user, password, server : string, usesslarg: int): (int, string)
 			return (-1, "cannot load IPattr");
 		ipattr->init(attrdb, ip);
 		db = Db.open(dbfile);
-		init = 1;
+	}
+	if (webclient == nil) {
+		webclient = load Webclient Webclient->PATH;
+		if(webclient == nil)
+			return (-1, "cannot load Webclient");
+		werr := webclient->init();
+		if(werr != nil)
+			return (-1, "webclient init: " + werr);
 	}
 	if (conn)
 		return (-1, "connection is already open");
+
+	# The password goes in AUTH PLAIN: never in clear.
+	port: string;
+	case mode {
+	IMPLICIT_TLS =>
+		port = "465";
+	STARTTLS =>
+		port = "587";
+	PLAIN =>
+		return (-1, "authopen: credentials are not sent in clear: use IMPLICIT_TLS or STARTTLS");
+	* =>
+		return (-1, "authopen: unknown mode " + string mode);
+	}
 	if (server == nil)
 		server = "$smtp";
-	addr: string;
+	# server is a host, or host!port for a port of its own
+	(host, p) := split(server, '!');
+	if (p != nil)
+		port = p;
+	addr := "tcp!" + host + "!" + port;
+	domain := heloname();
+
 	fd: ref Sys->FD;
-	if(usessl){
-		# Implicit TLS (port 465) via the modern tls stack — the same path
-		# imap.b uses. The legacy SSL3 ciphers in this file (RC4_40, DES,
-		# FORTEZZA, …) are rejected by every current server: Gmail returns
-		# "Must issue a STARTTLS command first" on plaintext 25 and fails
-		# the SSL3 handshake on 465 (empty read).
-		if(webclient == nil){
-			webclient = load Webclient Webclient->PATH;
-			if(webclient == nil)
-				return (-1, "cannot load Webclient");
-			werr := webclient->init();
-			if(werr != nil)
-				return (-1, "webclient init: " + werr);
-		}
-		addr = "tcp!" + server + "!465";
-		(tlsfd, terr) := webclient->tlsdial(addr, server);
+	if(mode == IMPLICIT_TLS){
+		(tlsfd, terr) := webclient->tlsdial(addr, host);
 		if(terr != nil)
 			return (-1, "tlsdial: " + terr);
 		fd = tlsfd;
 	}else{
-		addr = "tcp!" + server + "!25";
-		(dok, c) := sys->dial(addr, nil);
-		if(dok < 0)
-			return (-1, "dialup failed");
-		fd = c.dfd;
+		(tlsfd, serr) := starttls(addr, host, domain);
+		if(serr != nil)
+			return (-1, serr);
+		fd = tlsfd;
 	}
+	usessl = 1;
 	sfd = fd;
 	ibuf = bufio->fopen(fd, Bufio->OREAD);
 	if(ibuf == nil)
@@ -173,19 +144,16 @@ authopen(user, password, server : string, usesslarg: int): (int, string)
 	cread = chan of (int, string);
 	spawn mreader(cread);
 	(rpid, nil) = <- cread;
-	
- 	(ok, s) = mread();
-	if (ok < 0)
-		return (-1, s);
-	
-	hostname := readfile("/dev/sysname");
-	(domain, err) := ipattr->findnetattr(db, "sys", hostname, "dom");
 
-	if(err != nil){
-		sys->fprint(sys->fildes(2), "smtp: %s\n", err);
-		domain=hostname;
+	if(mode == IMPLICIT_TLS){
+		# the greeting; after STARTTLS there is none
+		(ok, s) = mread();
+		if (ok < 0)
+			return (-1, s);
 	}
-	(ok, s) = mcmd("HELO "+domain);
+	# EHLO, not HELO: AUTH is an extension (and after STARTTLS the
+	# client starts again with EHLO, RFC 3207 4.2)
+	(ok, s) = mcmd("EHLO "+domain);
 	if(ok < 0)
 		return (-1, s);
 	(ok, s) = mcmd("AUTH PLAIN");
@@ -199,7 +167,121 @@ authopen(user, password, server : string, usesslarg: int): (int, string)
 	conn = 1;
 	return (1, nil);
 }
- 
+
+# The name EHLO gives: the system's domain from ndb, or its name
+heloname(): string
+{
+	hostname := readfile("/dev/sysname");
+	(domain, err) := ipattr->findnetattr(db, "sys", hostname, "dom");
+	if(err != nil || domain == nil)
+		return hostname;
+	return domain;
+}
+
+# RFC 3207 in clear: the greeting, EHLO, STARTTLS offered and taken,
+# read a byte at a time so that nothing of the TLS handshake after
+# STARTTLS's 220 is taken; then TLS on the same connection.  A server
+# not offering it, or refusing it, is refused: nothing is sent in clear
+# but EHLO and STARTTLS.
+starttls(addr, host, domain: string): (ref Sys->FD, string)
+{
+	(ok, c) := sys->dial(addr, nil);
+	if(ok < 0)
+		return (nil, sys->sprint("dial %s: %r", addr));
+	(code, lines, err) := reply(c.dfd);
+	if(err != nil)
+		return (nil, "greeting: " + err);
+	if(code != 220)
+		return (nil, "greeting: " + hd lines);
+	if(rawwrite(c.dfd, "EHLO " + domain) < 0)
+		return (nil, sys->sprint("EHLO: %r"));
+	(code, lines, err) = reply(c.dfd);
+	if(err != nil)
+		return (nil, "EHLO: " + err);
+	if(code != 250)
+		return (nil, "EHLO: " + hd lines);
+	offered := 0;
+	for(l := lines; l != nil; l = tl l)
+		if(len hd l >= 12 && tolower((hd l)[4:12]) == "starttls")
+			offered = 1;
+	if(!offered)
+		return (nil, "STARTTLS not offered by " + host);
+	if(rawwrite(c.dfd, "STARTTLS") < 0)
+		return (nil, sys->sprint("STARTTLS: %r"));
+	(code, lines, err) = reply(c.dfd);
+	if(err != nil)
+		return (nil, "STARTTLS: " + err);
+	if(code != 220)
+		return (nil, "STARTTLS refused: " + hd lines);
+	(tlsfd, terr) := webclient->tlsclient(c.dfd, host);
+	if(terr != nil)
+		return (nil, "STARTTLS: " + terr);
+	return (tlsfd, nil);
+}
+
+# A reply, its lines "250-..." to the last "250 ...": its code and lines
+reply(fd: ref Sys->FD): (int, list of string, string)
+{
+	lines: list of string;
+	for(;;) {
+		(line, err) := rawline(fd);
+		if(err != nil)
+			return (0, nil, err);
+		if(len line < 3)
+			return (0, nil, "short reply: " + line);
+		lines = line :: lines;
+		if(len line == 3 || line[3] != '-')
+			return (int line[0:3], reverse(lines), nil);
+	}
+}
+
+# A line read a byte at a time, so that nothing after it is taken
+rawline(fd: ref Sys->FD): (string, string)
+{
+	line := "";
+	b := array[1] of byte;
+	for(;;) {
+		if(sys->read(fd, b, 1) != 1)
+			return (nil, "connection closed");
+		if(b[0] == byte '\n')
+			break;
+		if(len line >= 4096)
+			return (nil, "line too long");
+		line[len line] = int b[0];
+	}
+	if(len line > 0 && line[len line - 1] == '\r')
+		line = line[0:len line - 1];
+	if(DEBUG)
+		sys->print("smtp: S: %s\n", line);
+	return (line, nil);
+}
+
+rawwrite(fd: ref Sys->FD, s: string): int
+{
+	if(DEBUG)
+		sys->print("smtp: C: %s\n", s);
+	b := array of byte (s + "\r\n");
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return 0;
+}
+
+reverse(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+tolower(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] >= 'A' && s[i] <= 'Z')
+			s[i] += 'a' - 'A';
+	return s;
+}
+
 sendmail (fromwho : string, towho : list of string, cc : list of string, mlist: list of string): (int, string)
 {
 	ok : int;
@@ -270,10 +352,8 @@ close(): (int, string)
 		return (-1, "connection is not open");
 	ok = mwrite("QUIT");
 	kill(rpid);
-	if(!usessl){
+	if(!usessl)
 		ibuf.close();
-		obuf.close();
-	}
 	conn = 0;
 	if (ok < 0)
 		return (-1, "failed to close connection");
@@ -319,6 +399,8 @@ mreader(c : chan of (int, string))
 			c <- = (-1, "short response from server");
 			continue;
 		}
+		if (l > 3 && line[3] == '-')
+			continue;	# a reply's line before its last (EHLO's)
 		if (l > 0 && (line[0] == '1' || line[0] == '2' || line[0] == '3')) {
 			c <- = (1, nil);
 			continue;
@@ -393,32 +475,6 @@ kill(pid : int) : int
 	if (fd == nil || sys->fprint(fd, "kill") < 0)
 		return -1;
 	return 0;
-}
-
-tlsreader(c : chan of (int, string))
-{
-	buf := array[1] of byte;
-	lin := array[1024] of byte;
-	c <- = (sys->pctl(0, nil), nil);
-	k := 0;
-	for (;;) {
-		n := sslx.read(buf, len buf);
-		if(n < 0){
-			c <- = (-1, "could not read response from server");
-			continue;
-		}
-		lin[k++] = buf[0];
-		if(int buf[0] == '\n'){
-			line := string lin[0:k];
-			if (DEBUG)
-				sys->print("tlsreader : %s", line);
-			l := len line - 1;
-			if (line[l-1] == '\r')
-				l--;
-			c <- = (1, line[0:l]);
-			k = 0;
-		}
-	}
 }
 
 readfile(f : string) : string

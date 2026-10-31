@@ -14,6 +14,9 @@ include "tk.m";
 include "tkclient.m";
 	tkclient: Tkclient;
 
+include "icon.m";
+	icon: Icon;
+
 include "dialog.m";
 
 include "selectfile.m";
@@ -34,7 +37,6 @@ var:		ref Vars;
 vid:		int;
 tkids :=	1;	# increasing id of tk pieces
 
-icondir :	con "debug/";
 
 tkconfig := array[] of {
 	"frame .body -width 400 -height 400",
@@ -42,11 +44,10 @@ tkconfig := array[] of {
 	"pack .body -expand 1 -fill both",
 	"pack propagate . 0",
 	"update",
-	"image create bitmap Itemopen -file "+icondir+
-			"open.bit -maskfile "+icondir+"open.mask",
-	"image create bitmap Itemclosed -file "+icondir+
-			"closed.bit -maskfile "+icondir+"closed.mask",
 };
+
+# a variable's open and closed marks, icon(2)'s chevrons
+marks := array[] of {("Itemopen", "chevron-down", 12), ("Itemclosed", "chevron-right", 12)};
 
 init(acontext: ref Draw->Context,
 	geom: string,
@@ -71,6 +72,7 @@ init(acontext: ref Draw->Context,
 
 	for(i := 0; i < len tkconfig; i++)
 		tk->cmd(tktop, tkconfig[i]);
+	glyphs();
 
 	tkcmd("update");
 	tkclient->onscreen(tktop, nil);
@@ -105,7 +107,28 @@ wmctl(s: string)
 		return;
 	}
 	tkclient->wmctl(tktop, s);
+	if(s == "retheme")
+		glyphs();
 	tkcmd("update");
+}
+
+# The marks in the theme's text colour; made blank if they cannot be
+# drawn, so the tree is still made.
+glyphs()
+{
+	if(icon == nil){
+		icon = load Icon Icon->PATH;
+		if(icon != nil && icon->init(tktop.display) != nil)
+			icon = nil;
+	}
+	if(icon != nil){
+		icon->tkglyphs(tktop, marks);
+		return;
+	}
+	for(i := 0; i < len marks; i++){
+		(tkname, nil, nil) := marks[i];
+		tk->cmd(tktop, "image create bitmap " + tkname);
+	}
 }
 
 Vars.create(): ref Vars

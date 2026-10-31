@@ -207,6 +207,14 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
+	# And the camera, /dev/camera (os/port/devcam.c), likewise after
+	# /dev. Nothing runs until something writes "stream on" to its
+	# ctl, so it costs nothing to have bound.
+	#
+	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #V on /dev: %r\n");
+
+	#
 	# And where USB serial ports appear: usbserial makes eiaU0 and its
 	# ctl and status files in #seia, a #s of their own, and that is
 	# bound after /dev now, at boot, so that every namespace forked from
@@ -1863,6 +1871,7 @@ btjoin(txt: string)
 		sys->print("init: bt: /net/bt/ctl: %r\n");
 		return;
 	}
+	ownaddr := 0;
 	for(i := 0; i < len txt;){
 		j := i;
 		while(j < len txt && txt[j] != '\n')
@@ -1871,8 +1880,30 @@ btjoin(txt: string)
 		i = j + 1;
 		if(line == nil || line[0] == '#')
 			continue;
+		if(len line > 7 && line[0:7] == "bdaddr ")
+			ownaddr = 1;
 		if(sys->fprint(fd, "%s", line) < 0)
 			sys->print("init: bt: %s: %r\n", line);
+	}
+	#
+	# A 3B+'s controller has no address of its own: after the patch it
+	# reports the patch's default, the same on every board, so two of
+	# them would be one device to everything they pair with. Unless the
+	# bt file named one, btboardaddr gives it the board's, as Raspberry
+	# Pi OS does; a 4B's controller has its own and is left alone.
+	#
+	if(!ownaddr){
+		ba := load Command "/dis/btboardaddr.dis";
+		if(ba == nil)
+			sys->print("init: bt: cannot load /dis/btboardaddr.dis: %r\n");
+		else{
+			{
+				ba->init(nil, "btboardaddr" :: nil);
+			} exception e {
+			"fail:*" =>
+				sys->print("init: bt: btboardaddr: %s; add a bdaddr line to %s\n", e[5:], Btfile);
+			}
+		}
 	}
 	(a, got) := slurp("/net/bt/addr");
 	if(got)
@@ -2534,17 +2565,15 @@ rootbind(base: string)
 	if(rootunion(base + "/fonts", "/fonts"))
 		sys->print("init: /fonts grown from %s/fonts\n", base);
 	#
-	# Artwork, and it belongs here rather than in the kernel. The
-	# icons tree is 1.6MB against a 2.1MB kernel, so compiling it in
-	# would nearly double the image and the time every serial load
-	# takes, to save a card read of a bitmap nobody opens twice.
+	# Artwork, and it belongs here rather than in the kernel, beside
+	# the fonts: a card read rather than kernel bytes every serial
+	# load carries.
 	#
-	# Without this /icons is empty on the board and the failures are
-	# not obviously about a missing file: coffee opens
-	# /icons/coffee0.bit, gets nil, and prints "failed to allocate
-	# image", and Tk turns -bitmap small_color_left.bit into
-	# /icons/tk/small_color_left.bit and reports a bitmap it could
-	# not load. Both read like memory trouble and are not.
+	# Without this /icons is empty on the board: icon(2) finds no
+	# /icons/ui/*.svg, so wm/dir, wm/deb and the rest show blank
+	# buttons and no icons, Tk's cursors (/icons/tk) are missing, and
+	# coffee opens /icons/coffee0.bit, gets nil, and prints "failed to
+	# allocate image", which reads like memory trouble and is not.
 	#
 	if(rootunion(base + "/icons", "/icons"))
 		sys->print("init: /icons grown from %s/icons\n", base);

@@ -44,7 +44,7 @@ echo 'chans 1' > /dev/audioctl
 echo 'bits 16' > /dev/audioctl
 
 mkdir -p /n/peer
-if {! mount -A $peer /n/peer} {
+if {! mount $peer /n/peer} {
 	echo 'voice/dial-opus: mount' $peer 'failed' >[1=2]
 	exit mount
 }

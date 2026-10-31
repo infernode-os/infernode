@@ -3157,6 +3157,12 @@ compile(Module *m, int size, Modlink *ml)
 				eidx, (void*)RELPC(patch[eidx]));
 		m->entry = (Inst*)RELPC(patch[eidx]);
 	}
+	/*
+	 * the code's offsets in bytes, as pc2dispc reads them (the profiler,
+	 * a Prog's stack): they were counted in instructions
+	 */
+	for(i = 0; i <= size; i++)
+		patch[i] *= sizeof(u32int);
 	m->pctab = patch;
 
 #ifdef INFERNO_NATIVE

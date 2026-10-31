@@ -16,9 +16,9 @@ has the feature, which is what parity means.
 | GIC, generic timer | yes | shared | **Proved** |
 | Mailbox | yes | shared | **Proved** |
 | Watchdog, reboot | yes | shared | **Proved** |
-| RNG200 | yes | `random.c` | Built; no test has read it |
+| RNG200 | yes | `random.c` | Read: two samples differ; not tested beyond that |
 | Console out (GPIO14/15) | yes | `uartrp1.c` | **Proved** |
-| Console in | interrupt | polled | **Proved**, polled; RP1 vector 25 is free to use |
+| Console in | interrupt | `uartrp1.c` | **Proved**, by interrupt |
 | Debug connector (uart10) | no | none | Not done; wants the Debug Probe |
 | SD read | yes | `emmc2.c` | **Proved**; PIO at identification-to-default speeds, unmeasured |
 | SD write | yes | `emmc2.c` | **Proved**, persisted over a reboot |
@@ -27,17 +27,18 @@ has the feature, which is what parity means.
 | USB host, high speed | yes | `usbxhcirp1.c` | **Proved** on one USB-3 port |
 | USB SuperSpeed | untested | shared | Not tested; the gadget was high speed |
 | Second controller, other ports | n/a | `usbxhcirp1.c` | Controller up; no device tried |
-| USB keyboard, mouse, disk | yes | shared | Not tested on this board |
+| USB keyboard, mouse | yes | shared | **Proved** by a person, on the desktop |
+| USB disk | yes | shared | Not tested on this board |
 | RP1 MSI-X | n/a | `rp1.c` | **Proved** with Ethernet and USB |
 | Wi-Fi, 5GHz WPA2 | yes | `radio.c` | **Proved** |
 | Wi-Fi, TKIP group cipher | no | shared | Not supported, any board (`wpa.b`) |
 | Bluetooth classic | yes | `uartbt.c` | **Proved** by inquiry |
 | Bluetooth LE, pairing, L2CAP | yes | shared | Not tested on this board |
 | GPIO function, level, pull | yes | `gpiorp1.c` | **Proved** |
-| GPIO edge events | yes | `gpiorp1.c` | Built; never fired |
+| GPIO edge events | yes | `gpiorp1.c` | **Proved** across a jumper, GPIO 5 to GPIO 0 |
 | `#P` temperature, throttling | yes | shared | **Proved** |
 | Serial recovery loader | yes | `loader/` | Standalone **proved**; embedded copy built |
-| Framebuffer, desktop | yes | shared | Not proved: no monitor attached |
+| Framebuffer, desktop | yes | shared | **Proved** on HDMI0: Lucifer, colours right. Needs `framebuffer_depth=32`. The firmware gives 1920x1080 whatever the monitor says: a 1024x768 monitor overflows |
 | Audio (PWM jack) | yes | none | No jack on a Pi 5; HDMI audio or I2S instead |
 | DSI panel, touch | yes | none | Not done; DSI is RP1's here |
 | Camera device (`#V`) | simulated | shared | Compiled in; simulated sensor only |

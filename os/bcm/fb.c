@@ -80,8 +80,42 @@ fbinitdisp(u32int disp, Fbinfo *fb)
 		h = dim[1];
 	}
 
+#ifdef FWRTC
+	/*
+	 * A Pi 5's firmware reports 1920x1080 whatever is attached, so the
+	 * display's own word for its size is taken instead: the first
+	 * detailed timing in its EDID, the mode it prefers. A bench monitor
+	 * that says 1024x768 and is sent 1080p scales it past its edges.
+	 */
+	{
+		static uchar edid[128];
+		int ew, eh;
+
+		if(mboxedid(0, edid) == 0 && edid[0] == 0 && edid[1] == 0xFF &&
+		   (edid[54] != 0 || edid[55] != 0)){
+			ew = edid[56] | (edid[58] & 0xF0) << 4;
+			eh = edid[59] | (edid[61] & 0xF0) << 4;
+			if(ew >= 320 && eh >= 200){
+				w = ew;
+				h = eh;
+			}
+		}
+	}
+#endif
 	if(mboxfballoc(disp, w, h, Fbdepth, fb) < 0)
 		return -1;
+#ifdef FWRTC
+	/*
+	 * Whether it gave what was asked: a Pi 5's firmware answers a 32-bit
+	 * request with 16 unless config.txt says framebuffer_depth=32, and
+	 * says nothing. A screen of the wrong depth is garbage, not an error.
+	 */
+	if(fb->pitch < fb->width*Fbdepth/8){
+		print("fb:   the firmware gave pitch %d for width %d at depth %d: set framebuffer_depth=32 in config.txt\n",
+			fb->pitch, fb->width, Fbdepth);
+		return -1;
+	}
+#endif
 
 	/*
 	 * Record the display we ASKED for, not the one echoed back.

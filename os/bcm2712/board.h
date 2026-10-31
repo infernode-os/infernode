@@ -19,6 +19,7 @@ enum
 	RP1intgpio2	= 2,
 	RP1inteth	= 6,		/* Linux's dt-bindings/mfd/rp1.h */
 	RP1intuart0	= 25,
+	RP1intuart4	= 45,
 	RP1intusb0	= 31,		/* host 0, interrupter 0 */
 	RP1intusb1	= 36,
 };

@@ -1,9 +1,8 @@
 /*
  * The console: RP1's UART0 on GPIO14/15, a PL011 the firmware has
  * already set to 115200 (enable_rp1_uart). Its pins and clock are left
- * alone. Output is polled, as every console's is; input is polled from
- * the clock, because RP1's interrupts need the MSI path, which comes
- * with the rest of RP1. At 115200 the 32-byte FIFO lasts 2.7ms.
+ * alone. Output is polled, as every console's is; input arrives by
+ * interrupt.
  */
 #include "u.h"
 #include "../port/lib.h"
@@ -70,16 +69,23 @@ minigetc(void)
 }
 
 static void
-rxpoll(void)
+rxinterrupt(Ureg*, void *arg)
 {
-	while((R(Fr) & Rxfe) == 0)
-		consuartputc(nil, R(Dr) & 0xFF);
-	while((R4(Fr) & Rxfe) == 0)
-		consuartputc(nil, R4(Dr) & 0xFF);
+	uintptr b;
+	volatile u32int *u;
+
+	b = (uintptr)arg;
+	u = (u32int*)b;
+	while((u[Fr/4] & Rxfe) == 0)
+		consuartputc(nil, u[Dr/4] & 0xFF);
 }
 
 void
 rp1uartlink(void)
 {
-	addclock0link(rxpoll, 1);
+	rp1intrenable(RP1intuart0, rxinterrupt, (void*)(uintptr)RP1UART0, 1, "uart0");
+	rp1intrenable(RP1intuart4, rxinterrupt, (void*)(uintptr)RP1UART4, 1, "uart4");
+	R(Imsc) |= Imrx | Imrt;
+	R4(Imsc) |= Imrx | Imrt;
+	coherence();
 }

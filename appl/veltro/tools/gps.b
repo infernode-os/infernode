@@ -4,10 +4,11 @@ implement ToolGps;
 # gps - where this machine is, from the GPS receiver at /mnt/gps.
 #
 # Reads gpsfs(4)'s files: position ("lat lon"), fix (the whole fix,
-# attr=value), status, satellites, and event, for waiting for the next
-# fix.  Read only: the tool's grant (nsconstruct) binds just those
-# five files, never ctl or feed, so an agent can learn where it is but
-# cannot choose the receiver or put a position in.
+# attr=value), status, satellites, traffic (ships by AIS, aircraft by
+# ADS-B or FLARM), and event, for waiting for the next fix.  Read only:
+# the tool's grant (nsconstruct) binds just those six files, never ctl
+# or feed, so an agent can learn where it is but cannot choose the
+# receiver or put a position in.
 #
 # A location is personal data.  The tool is not granted unless asked
 # for, as every tool is; what an agent does with the position is
@@ -19,6 +20,7 @@ implement ToolGps;
 #   gps fix
 #   gps status
 #   gps satellites
+#   gps traffic
 #   gps wait [seconds]
 #
 
@@ -62,6 +64,7 @@ doc(): string
 		"  gps fix              the whole fix: time lat lon alt speed course mode q sats ...\n" +
 		"  gps status           the receiver's state\n" +
 		"  gps satellites       satellites in view: system prn elevation azimuth snr used\n" +
+		"  gps traffic          ships and aircraft heard, nearest first\n" +
 		"  gps wait [seconds]   wait for the next fix (default 30, at most 300)\n\n" +
 		"Examples:\n" +
 		"  gps\n" +
@@ -79,12 +82,14 @@ schema(): string
 			"fix gives the whole fix as attr=value fields (time, lat, lon, alt in metres, " +
 			"speed in m/s, course in degrees true, mode, sats, err in metres); " +
 			"status says whether there is a fix; satellites lists those in view; " +
+			"traffic lists ships (AIS) and aircraft (ADS-B, FLARM) heard, nearest first, " +
+			"as attr=value: kind id lat lon alt speed course heading climb name callsign cat age; " +
 			"wait waits for the next fix.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"command\":{\"type\":\"string\"," +
-					"\"description\":\"position (the default), fix, status, satellites, or wait\"}," +
+					"\"description\":\"position (the default), fix, status, satellites, traffic, or wait\"}," +
 				"\"seconds\":{\"type\":\"string\"," +
 					"\"description\":\"for wait: how long to wait, in seconds (default 30, at most 300)\"}" +
 			"}" +
@@ -104,7 +109,7 @@ exec(args: string): string
 		n--;
 	}
 	case cmd {
-	"position" or "fix" or "status" or "satellites" =>
+	"position" or "fix" or "status" or "satellites" or "traffic" =>
 		if(n != 0)
 			return "error: usage: gps " + cmd;
 		return readgps(cmd);
@@ -120,7 +125,7 @@ exec(args: string): string
 			return "error: usage: gps wait [seconds]";
 		return wait(secs);
 	}
-	return "error: unknown command " + cmd + " (position, fix, status, satellites, wait)";
+	return "error: unknown command " + cmd + " (position, fix, status, satellites, traffic, wait)";
 }
 
 readgps(file: string): string
@@ -144,6 +149,8 @@ readgps(file: string): string
 			return "no fix yet";
 		"satellites" =>
 			return "no satellites reported";
+		"traffic" =>
+			return "no traffic heard";
 		}
 	}
 	return s;

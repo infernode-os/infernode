@@ -2,7 +2,8 @@ implement GpsCapabilityTest;
 
 #
 # The gps tool's grant (nsconstruct): an agent given the gps tool sees
-# /mnt/gps's read files (position, fix, event, satellites, status) and
+# /mnt/gps's read files (position, fix, event, satellites, traffic,
+# status) and
 # not ctl, feed or nmea, and the tool reads the position through them;
 # an agent given a generic path grant of /mnt/gps, without the tool,
 # sees no /mnt/gps at all.  gpsfs runs in the test, fed a fix.
@@ -82,7 +83,7 @@ agentview(c: ref NsConstruct->Capabilities, tool: Tool, rc: chan of string)
 		return;
 	}
 	s := "";
-	for(l := "position" :: "fix" :: "event" :: "satellites" :: "status" ::
+	for(l := "position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "status" ::
 			"ctl" :: "feed" :: "nmea" :: nil; l != nil; l = tl l)
 		if(exists("/mnt/gps/" + hd l))
 			s += hd l + " ";
@@ -103,7 +104,7 @@ testToolGrant(t: ref T)
 	rc := chan of string;
 	spawn agentview(caps("gps" :: nil, nil), tool, rc);
 	s := <-rc;
-	t.assertseq(s, "dir position fix event satellites status | -33.866667 151.200000\n",
+	t.assertseq(s, "dir position fix event satellites traffic status | -33.866667 151.200000\n",
 		"the read files only, and the tool reads the position");
 }
 

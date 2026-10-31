@@ -20,6 +20,11 @@ sleep 8
 echo R win `{cat /chan/wmwindows}
 scap $d/a.img
 
+# a ship by AIS, 311 m north and 231 m east of the fix
+echo '!AIVDM,1,1,,A,B7Odch@0<Re3KFK:3c0p@e000000,0*72' > /mnt/gps/feed
+sleep 4
+scap $d/d.img
+
 mkdir -p /mnt/road
 mount -A '#sroad/fs' /mnt/road
 ls /mnt/road > $d/ls
@@ -28,7 +33,7 @@ sleep 1
 cat /mnt/road/view > $d/view.a
 cat /mnt/road/marks > $d/marks.a
 
-for c in 'center 99 0' 'width 5' 'bogus' 'unmark nosuch' 'follow sideways' {
+for c in 'center 99 0' 'width 5' 'bogus' 'unmark nosuch' 'follow sideways' 'units furlongs' {
 	sh -c 'echo '^$"c^' > /mnt/road/ctl' >[2] $d/err.^`{echo $c | sed 's/ .*//'}
 }
 
@@ -42,6 +47,7 @@ cat /mnt/road/marks > $d/marks.b
 echo unmark X > /mnt/road/ctl
 cat /mnt/road/marks > $d/marks.c
 echo follow on > /mnt/road/ctl
+echo units nautical > /mnt/road/ctl
 cat /mnt/road/view > $d/view.c
 
 echo -n halo > /lib/lucifer/theme/current

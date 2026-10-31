@@ -1,8 +1,8 @@
 gps - Where this machine is, from its GPS receiver
 
 Reads the GPS receiver at /mnt/gps (gpsfs): the position, the whole
-fix, the receiver's state, the satellites in view, or waits for the
-next fix. Read only: it cannot choose the receiver or set a position.
+fix, the receiver's state, the satellites in view, the ships and
+aircraft heard, or waits for the next fix. Read only: it cannot choose the receiver or set a position.
 A location is personal: use it for what the user asked, and do not
 send it anywhere they did not ask you to.
 
@@ -12,6 +12,8 @@ Usage:
                        level) speed (m/s) course (degrees true) mode q sats hdop err (metres)
   gps status           state=fix|nofix|nosource, the source, the age of the fix
   gps satellites       one line a satellite: system prn elevation azimuth snr used
+  gps traffic          ships (AIS) and aircraft (ADS-B, FLARM) heard, nearest first:
+                       kind id lat lon alt speed course heading climb name callsign cat age
   gps wait [seconds]   wait for the next fix (default 30, at most 300)
 
 "error: no fix" means the receiver has no position now; gps status says

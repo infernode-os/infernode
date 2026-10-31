@@ -7,8 +7,9 @@
 # view, marks, event) give the view and the marks of a map file,
 # refuse bad commands with the reason, and move the view (center stops
 # following, and the position is drawn where the place is), add and
-# remove marks, follow again, and tell event of each change; after a
-# theme switch the map is in the new theme's colours.  Needs the SDL
+# remove marks, follow again, change units, and tell event of each
+# change; a ship heard by AIS is drawn where it is; after a theme switch
+# the map is in the new theme's colours.  Needs the SDL
 # emulator; skips on a headless build.
 #
 set -e
@@ -58,19 +59,20 @@ grep -q '^R done' "$D/log" || { fail "the driver did not finish"; tail -20 "$D/l
 	pass "its files" || fail "ls: $(f ls | tr '\n' ' ')"
 # the fake moves north a metre a second: the centre follows it
 f view.a | sed -n 1p | grep -q '^center -33\.856[0-9]* 151\.214000$' &&
-	[ "$(f view.a | sed -n 2,3p | tr '\n' '|')" = "width 1500|follow on|" ] &&
+	[ "$(f view.a | sed -n 2,4p | tr '\n' '|')" = "width 1500|follow on|units metric|" ] &&
 	pass "view: the width given, following" || fail "view: '$(f view.a | tr '\n' '|')'"
 [ "$(f marks.a)" = "-33.856800 151.215300 Opera House" ] && pass "marks: the map file's" ||
 	fail "marks: '$(f marks.a)'"
 has err.center "no such place" && has err.width "usage: width" && has err.bogus "unknown command bogus" &&
-	has err.unmark "no mark nosuch" && has err.follow "usage: follow" &&
+	has err.unmark "no mark nosuch" && has err.follow "usage: follow" && has err.units "usage: units" &&
 	pass "bad commands refused, with the reason" ||
 	fail "errors: '$(f err.center)' '$(f err.width)' '$(f err.bogus)' '$(f err.unmark)' '$(f err.follow)'"
-[ "$(f view.b | tr '\n' '|')" = "center -33.860000 151.210000|width 1500|follow off|" ] &&
+[ "$(f view.b | tr '\n' '|')" = "center -33.860000 151.210000|width 1500|follow off|units metric|" ] &&
 	pass "center moves the view and stops following" || fail "view: '$(f view.b | tr '\n' '|')'"
 [ "$(f marks.b | tail -1)" = "-33.857000 151.215000 X" ] && [ "$(f marks.c)" = "$(f marks.a)" ] &&
 	pass "mark and unmark" || fail "marks: '$(f marks.b | tr '\n' '|')' then '$(f marks.c | tr '\n' '|')'"
-has view.c "follow on" && pass "follow on" || fail "view: '$(f view.c | tr '\n' '|')'"
+has view.c "follow on" && has view.c "units nautical" && pass "follow on, nautical units" ||
+	fail "view: '$(f view.c | tr '\n' '|')'"
 [ "$(f events | grep -c changed)" -ge 4 ] && pass "event tells of each change" ||
 	fail "events: '$(f events | tr '\n' '|')'"
 
@@ -148,6 +150,13 @@ if q and q[0] - p[0] > 80 and p[1] - q[1] > 80:
     print('PASS: the view moved: the position drawn where the place is')
 else:
     print('FAIL: the view moved: the position at %s, before %s' % (q, p)); failed = 1
+
+d = load(os.path.join(D, 'd.img'))
+s = red(d, B['green'])
+if s and abs(s[0] - (cx + 80)) <= 25 and abs(s[1] - (cy - 108)) <= 35:
+    print('PASS: a ship by AIS drawn where it is, in the theme\'s green')
+else:
+    print('FAIL: the ship at %s, want about %s' % (s, (cx + 80, cy - 108))); failed = 1
 
 c = load(os.path.join(D, 'c.img'))
 tot = bg = old = 0

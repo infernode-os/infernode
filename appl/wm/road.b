@@ -9,8 +9,10 @@ implement Road;
 # moves the position and lengthens the track, and while following the
 # map keeps the position at its centre.  It draws a grid of latitude
 # and longitude, a scale bar, the track, the receiver's accuracy as a
-# circle and its course as an arrow, and the lines and marks of any map
-# files given.
+# circle and its heading (or course) as an arrow, the traffic gpsfs
+# hears (ships by AIS, aircraft by ADS-B and FLARM) pointing where
+# each goes, and the lines and marks of any map files given.  Units
+# are metric, or nautical (knots, feet, nautical miles) with -n.
 #
 # Map files are text: "line [name]" begins a line, each "lat lon" after
 # it a point of it; "mark lat lon [name]" is one place.  # begins a
@@ -22,7 +24,8 @@ implement Road;
 # Its files, for an agent or another program, posted as #sroad/fs
 # (appfs(2)):
 #
-#   view   (r)   center lat lon, width (metres across), follow on|off
+#   view   (r)   center lat lon, width (metres across), follow on|off,
+#                units metric|nautical
 #   marks  (r)   one line a mark: lat lon name
 #   ctl    (rw)  those lines written change them; also mark lat lon
 #                name, unmark name, clear (the track), load path (a map
@@ -44,6 +47,9 @@ include "tkclient.m";
 
 include "math.m";
 	math: Math;
+
+include "string.m";
+	str: String;
 
 include "lucitheme.m";
 
@@ -77,6 +83,24 @@ Fix: adt {
 	err:	real;	# < 0 unknown
 	sats:	int;
 	time:	string;
+	hasheading:	int;
+	heading:	real;
+	hasmagvar:	int;
+	magvar:	real;
+	hasbaro:	int;
+	baroalt:	real;
+};
+
+# another craft, as gpsfs's traffic file gives it
+Craft: adt {
+	kind:	string;
+	id:	string;
+	p:	Pt;
+	hasalt:	int;
+	height:	real;
+	hasdir:	int;
+	dir:	real;	# heading, or course
+	name:	string;
 };
 
 Line: adt {
@@ -104,9 +128,11 @@ track: list of Pt;	# newest first
 ntrack := 0;
 lines: list of ref Line;
 marks: list of ref Mark;
+crafts: list of ref Craft;
+nautical := 0;
 
 # theme colours, as Tk wants them
-bgs, gridcol, gridtext, textcol, trackcol, poscol, markcol, linecol, statusbg, statusfg: string;
+bgs, gridcol, gridtext, textcol, trackcol, poscol, markcol, linecol, craftcol, statusbg, statusfg: string;
 
 themech: chan of int;
 actch: chan of string;
@@ -118,22 +144,28 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	tk = load Tk Tk->PATH;
 	tkclient = load Tkclient Tkclient->PATH;
 	math = load Math Math->PATH;
+	str = load String String->PATH;
 	stderr = sys->fildes(2);
-	if(tkclient == nil || math == nil) {
+	if(tkclient == nil || math == nil || str == nil) {
 		sys->fprint(stderr, "road: cannot load modules: %r\n");
 		raise "fail:load";
 	}
 
 	argv = tl argv;
-	if(argv != nil && hd argv == "-w") {
-		argv = tl argv;
-		if(argv == nil)
+	for(; argv != nil && len hd argv > 1 && (hd argv)[0] == '-'; argv = tl argv)
+		case hd argv {
+		"-w" =>
+			argv = tl argv;
+			if(argv == nil)
+				usage();
+			width = real hd argv;
+			if(width < 10.0)
+				width = 10.0;
+		"-n" =>
+			nautical = 1;
+		* =>
 			usage();
-		width = real hd argv;
-		if(width < 10.0)
-			width = 10.0;
-		argv = tl argv;
-	}
+		}
 	for(; argv != nil; argv = tl argv)
 		if((err := loadmap(hd argv)) != nil)
 			sys->fprint(stderr, "road: %s\n", err);
@@ -180,6 +212,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	gpsc := chan of string;
 	spawn gpsreader(gpsc);
+	trafficc := chan of string;
+	spawn trafficreader(trafficc);
 	themech = chan[1] of int;
 	spawn themelistener();
 	reqs := chan of ref Appfs->Req;
@@ -252,6 +286,9 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	s := <-gpsc =>
 		gpsline(s);
 		redraw();
+	s := <-trafficc =>
+		crafts = parsetraffic(s);
+		redraw();
 	r := <-reqs =>
 		case r.file {
 		"view" =>
@@ -282,7 +319,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: road [-w metres] [mapfile ...]\n");
+	sys->fprint(stderr, "usage: road [-n] [-w metres] [mapfile ...]\n");
 	raise "fail:usage";
 }
 
@@ -374,11 +411,74 @@ readfile(f: string): string
 	fd := sys->open(f, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	b := array[2048] of byte;
-	n := sys->read(fd, b, len b);
-	if(n <= 0)
-		return nil;
-	return string b[0:n];
+	s := "";
+	b := array[8192] of byte;
+	while((n := sys->read(fd, b, len b)) > 0)
+		s += string b[0:n];
+	return s;
+}
+
+# the traffic file, every two seconds, when it changes
+trafficreader(c: chan of string)
+{
+	last := "";
+	for(;;) {
+		s := readfile(GPS + "traffic");
+		# ages change each read: compare what is heard, not when
+		k := noages(s);
+		if(k != last) {
+			last = k;
+			c <-= s;
+		}
+		sys->sleep(2000);
+	}
+}
+
+noages(s: string): string
+{
+	r := "";
+	(nil, l) := sys->tokenize(s, "\n");
+	for(; l != nil; l = tl l) {
+		t := hd l;
+		for(i := len t - 5; i > 0; i--)
+			if(t[i:i+5] == " age=")
+				break;
+		if(i > 0)
+			t = t[0:i];
+		r += t + "\n";
+	}
+	return r;
+}
+
+parsetraffic(s: string): list of ref Craft
+{
+	cl: list of ref Craft;
+	(nil, l) := sys->tokenize(s, "\n");
+	for(; l != nil; l = tl l) {
+		c := ref Craft("", "", Pt(0.0, 0.0), 0, 0.0, 0, 0.0, nil);
+		haslat := haslon := 0;
+		course := -1.0;
+		for(f := str->unquoted(hd l); f != nil; f = tl f) {
+			(k, v) := attr(hd f);
+			case k {
+			"kind" =>	c.kind = v;
+			"id" =>	c.id = v;
+			"lat" =>	c.p.lat = real v; haslat = 1;
+			"lon" =>	c.p.lon = real v; haslon = 1;
+			"alt" =>	c.height = real v; c.hasalt = 1;
+			"heading" =>	c.dir = real v; c.hasdir = 1;
+			"course" =>	course = real v;
+			"name" =>	c.name = v;
+			}
+		}
+		if(!c.hasdir && course >= 0.0) {
+			c.dir = course;
+			c.hasdir = 1;
+		}
+		if(haslat && haslon)
+			cl = c :: cl;
+	}
+	return cl;
 }
 
 # a fix (attr=value, as gpsfs gives), or "!why" there is none
@@ -394,7 +494,7 @@ gpsline(s: string)
 			fix.valid = 0;
 		return;
 	}
-	f := ref Fix(0, 0.0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0, -1.0, -1, nil);
+	f := ref Fix(0, 0.0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0, -1.0, -1, nil, 0, 0.0, 0, 0.0, 0, 0.0);
 	haslat := haslon := 0;
 	(nil, l) := sys->tokenize(s, " ");
 	for(; l != nil; l = tl l) {
@@ -421,6 +521,15 @@ gpsline(s: string)
 			f.err = real v;
 		"sats" =>
 			f.sats = int v;
+		"heading" =>
+			f.heading = real v;
+			f.hasheading = 1;
+		"magvar" =>
+			f.magvar = real v;
+			f.hasmagvar = 1;
+		"baroalt" =>
+			f.baroalt = real v;
+			f.hasbaro = 1;
 		}
 	}
 	f.valid = haslat && haslon;
@@ -502,8 +611,13 @@ redraw()
 				tk->cmd(top, sys->sprint(".c create oval %d %d %d %d -outline %s",
 					x-r, y-r, x+r, y+r, poscol));
 		}
-		if(fix.hascourse && fix.hasspeed && fix.speed > 0.5) {
-			a := fix.course * Math->Pi / 180.0;
+		dir := -1.0;
+		if(fix.hasheading)
+			dir = fix.heading;
+		else if(fix.hascourse && fix.hasspeed && fix.speed > 0.5)
+			dir = fix.course;
+		if(dir >= 0.0) {
+			a := dir * Math->Pi / 180.0;
 			ex := x + int (18.0 * math->sin(a));
 			ey := y - int (18.0 * math->cos(a));
 			tk->cmd(top, sys->sprint(".c create line %d %d %d %d -width 2 -arrow last -fill %s",
@@ -512,6 +626,8 @@ redraw()
 		tk->cmd(top, sys->sprint(".c create oval %d %d %d %d -fill %s -outline %s",
 			x-5, y-5, x+5, y+5, poscol, bgs));
 	}
+	for(cr := crafts; cr != nil; cr = tl cr)
+		drawcraft(proj, hd cr);
 	scalebar(mpp, h);
 	tk->cmd(top, ".status configure -text '" + status());
 	tk->cmd(top, "update");
@@ -605,16 +721,76 @@ scalebar(mpp: real, h: int)
 		len_ *= 5.0;
 	else if(len_ * 2.0 <= most)
 		len_ *= 2.0;
-	px := int (len_ / mpp);
 	label := sys->sprint("%d m", int len_);
 	if(len_ >= 1000.0)
-		label = sys->sprint("%g km", len_ / 1000.0);
+		label = short(len_ / 1000.0) + " km";
+	if(nautical) {
+		# the same in nautical miles: 1 2 5 of a power of ten
+		nm := 0.001;
+		while(nm * 10.0 * 1852.0 <= most)
+			nm *= 10.0;
+		if(nm * 5.0 * 1852.0 <= most)
+			nm *= 5.0;
+		else if(nm * 2.0 * 1852.0 <= most)
+			nm *= 2.0;
+		len_ = nm * 1852.0;
+		label = short(nm) + " nm";
+	}
+	px := int (len_ / mpp);
 	y := h - 10;
 	tk->cmd(top, sys->sprint(".c create line 10 %d %d %d -width 3 -fill %s", y, 10 + px, y, textcol));
 	tk->cmd(top, sys->sprint(".c create line 10 %d 10 %d -width 1 -fill %s", y - 5, y, textcol));
 	tk->cmd(top, sys->sprint(".c create line %d %d %d %d -width 1 -fill %s", 10 + px, y - 5, 10 + px, y, textcol));
 	tk->cmd(top, sys->sprint(".c create text %d %d -anchor sw -fill %s -text '%s",
 		14 + px, y + 3, textcol, label));
+}
+
+# another craft: a pointer along its heading or course (a diamond with
+# neither), its name or id, an aircraft's altitude
+drawcraft(p: ref Proj, c: ref Craft)
+{
+	(x, y) := p.xy(c.p);
+	if(c.hasdir) {
+		a := c.dir * Math->Pi / 180.0;
+		sa := math->sin(a);
+		ca := math->cos(a);
+		# nose 9 ahead, tail corners 6 behind and 5 aside
+		nx := x + int (9.0*sa);
+		ny := y - int (9.0*ca);
+		lx := x - int (6.0*sa) - int (5.0*ca);
+		ly := y + int (6.0*ca) - int (5.0*sa);
+		rx := x - int (6.0*sa) + int (5.0*ca);
+		ry := y + int (6.0*ca) + int (5.0*sa);
+		tk->cmd(top, sys->sprint(".c create polygon %d %d %d %d %d %d -fill %s -outline %s",
+			nx, ny, lx, ly, rx, ry, craftcol, craftcol));
+	} else
+		tk->cmd(top, sys->sprint(".c create polygon %d %d %d %d %d %d %d %d -fill %s -outline %s",
+			x, y-5, x+5, y, x, y+5, x-5, y, craftcol, craftcol));
+	label := c.name;
+	if(label == nil)
+		label = c.id;
+	if(c.hasalt && c.kind != "ais")
+		label += " " + altitude(c.height);
+	tk->cmd(top, sys->sprint(".c create text %d %d -anchor w -fill %s -text '%s",
+		x + 9, y + 1, craftcol, label));
+}
+
+altitude(m: real): string
+{
+	if(nautical)
+		return sys->sprint("%d ft", int (m / 0.3048));
+	return sys->sprint("%d m", int m);
+}
+
+# a scale's length: no more figures than it has, a 0 before a point
+short(v: real): string
+{
+	s := sys->sprint("%.3f", v);
+	while(s[len s-1] == '0')
+		s = s[0:len s-1];
+	if(s[len s-1] == '.')
+		s = s[0:len s-1];
+	return s;
 }
 
 drawline(p: ref Proj, l: ref Line)
@@ -644,19 +820,46 @@ status(): string
 	}
 	s := sys->sprint("%.6f %.6f", fix.lat, fix.lon);
 	if(fix.hasalt)
-		s += sys->sprint("   %.0f m", fix.height);
+		s += "   " + altitude(fix.height);
+	if(fix.hasbaro)
+		s += "   pressure " + altitude(fix.baroalt);
 	if(fix.hasspeed) {
-		s += sys->sprint("   %.1f km/h", fix.speed * 3.6);
+		if(nautical)
+			s += sys->sprint("   %.1f kt", fix.speed * 3600.0 / 1852.0);
+		else
+			s += sys->sprint("   %.1f km/h", fix.speed * 3.6);
 		if(fix.hascourse && fix.speed > 0.5)
-			s += sys->sprint(" %.0f°", fix.course);
+			s += "  " + bearing("trk", fix.course);
 	}
+	if(fix.hasheading)
+		s += "  " + bearing("hdg", fix.heading);
 	if(fix.err > 0.0)
-		s += sys->sprint("   ±%.0f m", fix.err);
+		s += "   ±" + distance(fix.err);
 	if(fix.sats >= 0)
 		s += sys->sprint("   %d sats", fix.sats);
 	if(!follow)
 		s += "   (not following)";
 	return s;
+}
+
+# a direction, true, and magnetic too when the variation is known
+bearing(what: string, t: real): string
+{
+	s := sys->sprint("%s %03d°T", what, int t % 360);
+	if(fix.hasmagvar) {
+		m := t - fix.magvar;
+		while(m < 0.0)
+			m += 360.0;
+		s += sys->sprint(" %03d°M", int m % 360);
+	}
+	return s;
+}
+
+distance(m: real): string
+{
+	if(nautical)
+		return sys->sprint("%d ft", int (m / 0.3048));
+	return sys->sprint("%d m", int m);
 }
 
 #
@@ -794,7 +997,10 @@ view(): string
 	f := "on";
 	if(!follow)
 		f = "off";
-	return sys->sprint("center %.6f %.6f\nwidth %.0f\nfollow %s\n", centre.lat, centre.lon, width, f);
+	u := "metric";
+	if(nautical)
+		u = "nautical";
+	return sys->sprint("center %.6f %.6f\nwidth %.0f\nfollow %s\nunits %s\n", centre.lat, centre.lon, width, f, u);
 }
 
 marktext(): string
@@ -828,6 +1034,10 @@ ctl(text: string): string
 			if(n != 2 || !isnum(hd tl f) || real hd tl f < 10.0)
 				return "usage: width metres (10 or more)";
 			width = real hd tl f;
+		"units" =>
+			if(n != 2 || hd tl f != "metric" && hd tl f != "nautical")
+				return "usage: units metric|nautical";
+			nautical = hd tl f == "nautical";
 		"follow" =>
 			if(n != 2 || hd tl f != "on" && hd tl f != "off")
 				return "usage: follow on|off";
@@ -880,7 +1090,7 @@ themecolours()
 	if(lt == nil) {
 		bgs = "#ffffffff"; gridcol = "#ddddddff"; gridtext = "#999999ff";
 		textcol = "#000000ff"; trackcol = "#3366ccff"; poscol = "#cc3333ff";
-		markcol = "#cc9900ff"; linecol = "#555555ff";
+		markcol = "#cc9900ff"; linecol = "#555555ff"; craftcol = "#339933ff";
 		statusbg = "#eeeeeeff"; statusfg = "#000000ff";
 		return;
 	}
@@ -893,6 +1103,7 @@ themecolours()
 	trackcol = col(th.accent);
 	poscol = col(th.red);
 	markcol = col(th.yellow);
+	craftcol = col(th.green);
 	statusbg = col(th.editstatus);
 	statusfg = col(th.editstattext);
 }

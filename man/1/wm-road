@@ -4,6 +4,8 @@ wm/road \- moving map of where the GPS receiver is
 .SH SYNOPSIS
 .B wm/road
 [
+.B -n
+] [
 .B -w
 .I metres
 ] [
@@ -16,17 +18,23 @@ draws a map around the position
 gives at
 .BR /mnt/gps :
 a grid of latitude and longitude, a scale bar, the track so far, the
-receiver's accuracy as a circle about the position and its course as an
-arrow, and the lines and marks of the map files given and of every file
-in
+receiver's accuracy as a circle about the position and its heading (or,
+with none, its course) as an arrow, the traffic
+.I gpsfs
+hears (ships by AIS, aircraft by ADS-B and FLARM, each pointing where it
+heads or goes, with its name or id, and an aircraft's altitude), and the
+lines and marks of the map files given and of every file in
 .BR /lib/road .
 While it follows, each fix moves the map to keep the position at its
 middle.
-The status line gives the position, altitude, speed, course, accuracy
-and satellites, or why there is no fix; with no receiver it says so and
-tries again.
+The status line gives the position, altitude, pressure altitude,
+speed, track and heading (true, and magnetic when the receiver gives
+the variation), accuracy and satellites, or why there is no fix; with
+no receiver it says so and tries again.
 .B -w
 sets the width of ground the window shows, in metres (2000).
+.B -n
+gives nautical units: knots, feet, a scale in nautical miles.
 .PP
 Button 1 drags the map, which stops following.
 Button 2 is the menu:
@@ -72,6 +80,9 @@ and so on, for another
 .B follow on
 or
 .BR off ,
+.B units metric
+or
+.BR nautical ,
 a line each.
 .TP
 .B marks
@@ -106,6 +117,7 @@ the receiver is not a change.
 .B /appl/wm/road.b
 .SH SEE ALSO
 .IR gpsfs (4),
+.IR nmea (2),
 .IR location (3)
 .br
 Plan 9's

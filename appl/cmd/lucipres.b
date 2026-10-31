@@ -21,13 +21,12 @@ implement LuciPres;
 # that ALL tab switches use uniform z-order management.  lucipres would
 # become a thin tab-bar + event coordinator.
 #
-# WARNING: This refactor is non-trivial.  The render registry
-# (xenith/render.b), all individual renderers (imgrender, mdrender,
-# htmlrender, pdfrender, mermaidrender), the async render pipeline
+# WARNING: This refactor is non-trivial.  Documents drawn through
+# their engines (docreg(2): Markdown, Mermaid, images), the async render pipeline
 # (renderdonech, renderartasync), scroll/zoom/pan state, PDF page
 # navigation, and the AI agent's use of the presentation space
 # (artifact creation, centering, app launching) are all coupled to
-# the current architecture.  See docs/TODO-LUCIPRES-ARCHITECTURE.md.
+# the current architecture.  See docs/history/TODO-LUCIPRES-ARCHITECTURE.md.
 #
 
 include "sys.m";
@@ -41,9 +40,9 @@ include "pdf.m";
 
 include "rlayout.m";
 
-include "renderer.m";
+include "docengine.m";
 
-include "render.m";
+include "docreg.m";
 
 include "lucitheme.m";
 
@@ -120,7 +119,7 @@ DocNode: import rlay;
 pdfmod: PDF;
 Doc: import pdfmod;
 
-rendermod: Render;
+docreg: Docreg;
 
 menumod: Menu;
 Popup: import menumod;
@@ -306,10 +305,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(rlay != nil)
 		rlay->init(display_g);
 
-	# Load render registry
-	rendermod = load Render Render->PATH;
-	if(rendermod != nil)
-		rendermod->init(display_g);
+	# The kinds of document and their engines, each loaded the first
+	# time a document of its kind is shown (docreg(2))
+	docreg = load Docreg Docreg->PATH;
+	if(docreg != nil)
+		docreg->init(display_g);
 
 	# Load menu module
 	menumod = load Menu Menu->PATH;
@@ -757,6 +757,13 @@ reloadcolors()
 	for(al := artifacts; al != nil; al = tl al)
 		(hd al).rendimg = nil;
 	artrendw = 0;
+	# The cache invalidation above is silent until something else redraws
+	# this zone -- an artifact update, a presentation event. Nothing else
+	# does, on a theme switch: repaint now, with the colours just
+	# reloaded. A hosted Tk app (matrix, editor, ...) gets its own
+	# "retheme" through lucifer.b's broadcast to its ctl channel; the
+	# picker and any other native content this zone draws itself do not.
+	redrawpres();
 }
 
 # --- Drawing ---
@@ -1488,6 +1495,10 @@ openintopres(path: string)
 	path = strip(path);
 	if(path == "" || actid_g < 0)
 		return;
+	if(isweburl(path)){
+		openincharon(path);
+		return;
+	}
 	name := plumbbasename(path);
 	label := safeattrtext(name);
 	ext := plumblower(plumbext(path));
@@ -1530,6 +1541,47 @@ openintopres(path: string)
 			mountpt_g, actid_g, id), data);
 	}
 	writetofile(ctlpath, "center id=" + id);
+}
+
+# A web page, in Charon: the running one, told to open it through its
+# session (posted at #scharon/fs, see charonfs(2)), or one started on it.
+# Either way it is brought into view.
+openincharon(url: string)
+{
+	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	done := chan of int;
+	spawn charonopen(url, done);
+	if(!<-done)
+		writetofile(ctlpath, sys->sprint(
+			"create id=charon type=app label=charon dis=/dis/wm/charon.dis data=%s", url));
+	writetofile(ctlpath, "center id=charon");
+}
+
+# Tell a running Charon to open url; 1 if it took it.  In a name space of
+# its own, so the mount touches nothing of lucipres's.
+charonopen(url: string, done: chan of int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#scharon/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/tmp", Sys->MREPL, nil) < 0){
+		done <-= 0;
+		return;
+	}
+	cfd := sys->open("/tmp/ctl", Sys->OWRITE);
+	b := array of byte ("open " + url);
+	done <-= cfd != nil && sys->write(cfd, b, len b) == len b;
+}
+
+# An http or https URL, as one word of printable characters: it rides in
+# a presentation ctl command, where a space or a newline would end it.
+isweburl(s: string): int
+{
+	if(!(len s > 7 && s[0:7] == "http://") && !(len s > 8 && s[0:8] == "https://"))
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7F)
+			return 0;
+	return 1;
 }
 
 plumbbasename(path: string): string
@@ -1580,7 +1632,7 @@ artzoom(art: ref Artifact): int
 
 # --- Rendering via registry ---
 
-# Map artifact type to a renderer hint for Render.find().
+# Map artifact type to a name docreg(2) knows its kind by.
 artypehint(art: ref Artifact): string
 {
 	case art.atype {
@@ -1612,7 +1664,7 @@ artdata(art: ref Artifact): array of byte
 	}
 }
 
-# Render an artifact using the Render registry.
+# Render an artifact through its engine (docreg(2)).
 # Falls back to the old rlayout path for markdown if registry unavailable.
 renderart(art: ref Artifact, contentw: int): ref Image
 {
@@ -1629,31 +1681,22 @@ renderart(art: ref Artifact, contentw: int): ref Image
 	if(hint == "")
 		return nil;
 
-	# Try registry first
-	if(rendermod != nil) {
+	# Drawn whole by its engine (docreg(2)): a document set to the
+	# width (larger zoom, narrower, so larger type), a picture scaled
+	# to it
+	if(docreg != nil) {
 		data := artdata(art);
 		if(data == nil)
 			return nil;
-		(renderer, nil) := rendermod->find(data, hint);
-		if(renderer != nil) {
-			# Images: bigger zoom → bigger rendered output (scale up)
-			# Text/document renderers: larger zoom → narrower layout (scale font effect)
-			w := contentw * 100 / artzoom(art);
-			if(art.atype == "image")
-				w = contentw * artzoom(art) / 100;
-			progress := chan of ref Renderer->RenderProgress;
-			# Drain progress (we don't use progressive rendering here)
-			spawn drainprogress(progress);
-			img: ref Image;
-			{
-				(img, nil, nil) = renderer->render(data, hint, w, 0, progress);
-			} exception e {
-			"*" =>
-				sys->fprint(stderr, "lucipres: render %s: %s\n", art.atype, e);
-				return nil;
-			}
-			return img;
-		}
+		w := contentw * 100 / artzoom(art);
+		if(art.atype == "image")
+			w = contentw * artzoom(art) / 100;
+		st := ref Docengine->Style(w, mainfont, monofont_g,
+			textcol, bgcol, accentcol, codebgcol_g, 0);
+		(img, err) := docreg->picture(hint, data, st);
+		if(img == nil)
+			sys->fprint(stderr, "%s: render %s: %s\n", "lucipres", art.atype, err);
+		return img;
 	}
 
 	# Fallback: markdown via rlayout (when registry not loaded)
@@ -1716,15 +1759,6 @@ handlerenderdone(r: ref RenderResult)
 	} else {
 		art.rendimg = r.img;
 		art.rendering = 0;
-	}
-}
-
-drainprogress(ch: chan of ref Renderer->RenderProgress)
-{
-	for(;;) {
-		p := <-ch;
-		if(p == nil)
-			return;
 	}
 }
 

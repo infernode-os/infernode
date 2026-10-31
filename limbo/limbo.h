@@ -642,6 +642,7 @@ Extern	char	*outfile;
 Extern	Type	*precasttab[Tend][Tend];
 Extern	int	scope;
 Extern	Decl	*selfdecl;		/* declaration for limbo's self */
+Extern	Decl	*selfldt;		/* link table for the load of $self */
 Extern	uchar	sideeffect[Oend];
 Extern	char	*signdump;		/* dump sig for this fn */
 Extern	int	superwarn;

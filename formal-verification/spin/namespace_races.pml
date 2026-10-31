@@ -1,29 +1,40 @@
 /*
  * SPIN Model for Inferno Namespace Race Conditions
  *
- * Models race conditions in namespace operations that occur
- * WITHOUT proper locking in the actual C implementation:
+ * Models the namespace operations that race when one emu host thread
+ * reads a Prog's name space while that Prog's own thread changes it
+ * (INFR-373).  Dis code runs one thread at a time, but a system call
+ * releases the VM, so the Prog's own thread then runs beside every
+ * other thread; and devprog (/prog/n/ns, fd, status) reads ANOTHER
+ * Prog's groups, holding the VM.
  *
- * RACE 1: Sys_pctl FORKNS pgrp pointer swap (inferno.c:869-875)
- *   - Process A calls Sys_pctl(FORKNS), swaps o->pgrp without lock
- *   - Process B reads o->pgrp (via namec) concurrently
- *   - B could see stale/freed pgrp if A's closepgrp runs first
+ * RACE 1: Sys_pctl FORKNS pgrp pointer swap (inferno.c, Sys_pctl)
+ *   - Process A calls Sys_pctl(FORKNS) with the VM released, swaps
+ *     o->pgrp and closes the old one
+ *   - Thread B reads A's o->pgrp (devprog) concurrently
+ *   - B could use the old pgrp after A's closepgrp freed it
  *
- * RACE 2: kchdir dot-writing race (sysfile.c:142-157)
- *   - Process A calls kchdir, does: cclose(pg->dot); pg->dot = c;
- *   - Process B calls namec, reads pg->dot for path resolution
- *   - B could read freed channel between cclose and assignment
+ * RACE 2: kchdir dot-writing race (sysfile.c, kchdir)
+ *   - Process A calls kchdir: cclose(pg->dot); pg->dot = c;
+ *   - Thread B reads pg->dot (namec, devprog)
+ *   - B could read the freed channel between cclose and assignment
  *
- * RACE 3: namec reading slash/dot without lock (chan.c:1020-1058)
- *   - namec reads pg->slash or pg->dot without holding pg->ns
- *   - Concurrent FORKNS could change the pgrp pointer
+ * RACE 3: reading slash/dot without the lock (chan.c namec, devprog)
+ *   - pg->slash or pg->dot read without holding pg->ns
  *
- * These model ACTUAL potential bugs in the kernel code.
+ * By default the model is the code as fixed:
+ *   - the pgrp swap holds the VM, as devprog's readers do, and the
+ *     old pgrp is closed after it (pctlswap);
+ *   - kchdir replaces dot holding pg->ns (wlock) and closes the old
+ *     dot after unlocking;
+ *   - readers take pg->ns (rlock) to read slash/dot and incref it.
+ * Defining UNFIXED models the code before the fix, in which SPIN
+ * finds all three use-after-frees:
  *
- * Run with:
- *   spin -a namespace_races.pml
- *   gcc -o pan pan.c -DSAFETY -O2
- *   ./pan -m10000000
+ *   spin -a namespace_races.pml                 # fixed: properties hold
+ *   spin -DUNFIXED -a namespace_races.pml       # before: violations
+ *   gcc -o pan pan.c -O2
+ *   ./pan -a -N no_use_after_free_dot -m10000000
  */
 
 /* Channel states */
@@ -50,6 +61,19 @@ byte chan_refcount[NUM_CHANS];
 
 /* Process's current pgrp pointer (o->pgrp) */
 byte process_pgrp[2];  /* 2 processes sharing an Osenv */
+
+/*
+ * Locks.  The VM lock (acquire/release) and each pgrp's ns RWlock.
+ * The ns lock is modelled as exclusive: that only removes reader
+ * interleavings, and readers do not race with each other.
+ */
+bit vm = 0;
+bit ns[NUM_PGRPS];
+
+inline lockvm()   { atomic { vm == 0 -> vm = 1 } }
+inline unlockvm() { vm = 0 }
+inline lockns(p)  { atomic { ns[p] == 0 -> ns[p] = 1 } }
+inline unlockns(p) { ns[p] = 0 }
 
 /* Verification flags */
 bool use_after_free_dot = false;
@@ -106,8 +130,11 @@ proctype sys_pctl_forkns(byte proc_id) {
         }
     }
 
-    /* pgrpcpy(np.np, o->pgrp) - copy mounts (simplified) */
+    /* pgrpcpy(np.np, o->pgrp) - copy mounts (simplified), wlock(from->ns) */
     old_pg = process_pgrp[proc_id];
+#ifndef UNFIXED
+    lockns(old_pg);
+#endif
     /* Copy dot/slash from old to new */
     pgrp_dot[new_pg] = pgrp_dot[old_pg];
     pgrp_slash[new_pg] = pgrp_slash[old_pg];
@@ -122,15 +149,26 @@ proctype sys_pctl_forkns(byte proc_id) {
         chan_refcount[pgrp_slash[old_pg]] = chan_refcount[pgrp_slash[old_pg]] + 1;
     :: else -> skip
     fi
+#ifndef UNFIXED
+    unlockns(old_pg);
+#endif
 
-    /* CRITICAL: Pointer swap without lock */
-    /* opg = o->pgrp; o->pgrp = np.np; */
+    /* opg = o->pgrp; o->pgrp = np.np; -- holding the VM (pctlswap) */
+#ifndef UNFIXED
+    lockvm();
+#endif
     process_pgrp[proc_id] = new_pg;
+#ifndef UNFIXED
+    unlockvm();
+#endif
 
-    /* closepgrp(opg) - decrement old pgrp refcount */
+    /* closepgrp(opg) - decrement old pgrp refcount; free under wlock(ns) */
     pgrp_refcount[old_pg] = pgrp_refcount[old_pg] - 1;
     if
     :: (pgrp_refcount[old_pg] == 0) ->
+#ifndef UNFIXED
+        lockns(old_pg);
+#endif
         pgrp_state[old_pg] = PGRP_CLOSING;
         /* Free dot channel */
         if
@@ -143,7 +181,21 @@ proctype sys_pctl_forkns(byte proc_id) {
             fi
         :: else -> skip
         fi
+        /* Free slash channel */
+        if
+        :: (pgrp_slash[old_pg] < NUM_CHANS) ->
+            chan_refcount[pgrp_slash[old_pg]] = chan_refcount[pgrp_slash[old_pg]] - 1;
+            if
+            :: (chan_refcount[pgrp_slash[old_pg]] == 0) ->
+                chan_state[pgrp_slash[old_pg]] = CHAN_FREED;
+            :: else -> skip
+            fi
+        :: else -> skip
+        fi
         pgrp_state[old_pg] = PGRP_FREED;
+#ifndef UNFIXED
+        unlockns(old_pg);
+#endif
     :: else -> skip
     fi
 }
@@ -151,14 +203,22 @@ proctype sys_pctl_forkns(byte proc_id) {
 /* ========== RACE 2: kchdir dot-writing ========== */
 
 /*
- * Models kchdir() from sysfile.c:142-157:
+ * Models kchdir() from sysfile.c.  Before the fix:
  *
  *   c = namec(path, Atodir, 0, 0);
  *   pg = up->env->pgrp;
  *   cclose(pg->dot);       // STEP A: free old dot
  *   pg->dot = c;           // STEP B: assign new dot
  *
- * No lock held between steps A and B!
+ * with no lock between steps A and B.  Fixed:
+ *
+ *   c = namec(path, Atodir, 0, 0);
+ *   pg = up->env->pgrp;
+ *   wlock(&pg->ns);
+ *   old = pg->dot;
+ *   pg->dot = c;
+ *   wunlock(&pg->ns);
+ *   cclose(old);
  */
 
 proctype kchdir(byte proc_id; byte new_chan) {
@@ -173,6 +233,7 @@ proctype kchdir(byte proc_id; byte new_chan) {
     :: else -> skip
     fi
 
+#ifdef UNFIXED
     old_dot = pgrp_dot[pg];
 
     /* STEP A: cclose(pg->dot) - decrement refcount */
@@ -197,6 +258,31 @@ proctype kchdir(byte proc_id; byte new_chan) {
         chan_refcount[new_chan] = chan_refcount[new_chan] + 1;
     :: else -> skip
     fi
+#else
+    /* c = namec(...): the new dot arrives with a reference */
+    if
+    :: (new_chan < NUM_CHANS && chan_state[new_chan] == CHAN_VALID) ->
+        chan_refcount[new_chan] = chan_refcount[new_chan] + 1;
+    :: else -> skip
+    fi
+
+    lockns(pg);
+    old_dot = pgrp_dot[pg];
+    pgrp_dot[pg] = new_chan;
+    unlockns(pg);
+
+    /* cclose(old) */
+    if
+    :: (old_dot < NUM_CHANS && chan_state[old_dot] == CHAN_VALID) ->
+        chan_refcount[old_dot] = chan_refcount[old_dot] - 1;
+        if
+        :: (chan_refcount[old_dot] == 0) ->
+            chan_state[old_dot] = CHAN_FREED;
+        :: else -> skip
+        fi
+    :: else -> skip
+    fi
+#endif
 
 done:
     skip;
@@ -205,24 +291,29 @@ done:
 /* ========== RACE 3: namec reading slash/dot ========== */
 
 /*
- * Models namec() reading pg->slash or pg->dot (chan.c:1020-1058):
+ * Models a reader of another thread's pg->slash or pg->dot: namec()
+ * (chan.c) on its own pgrp, devprog on another Prog's.  Before the
+ * fix the read of the pgrp pointer and of slash/dot held no lock:
  *
- *   case '/':
- *     c = up->env->pgrp->slash;   // NO LOCK
- *     incref(&c->r);
- *     break;
- *   default:
- *     c = up->env->pgrp->dot;     // NO LOCK
- *     incref(&c->r);
- *     break;
+ *   c = up->env->pgrp->dot;     // NO LOCK
+ *   incref(&c->r);
  *
- * The read of pgrp->slash/dot is not protected.
- * Concurrent kchdir or Sys_pctl could be modifying these.
+ * Fixed, devprog holds the VM from reading o->pgrp until it is done
+ * with it, and slash/dot are read and incref'd under rlock(&pg->ns):
+ *
+ *   acquire();
+ *   pg = o->pgrp;
+ *   rlock(&pg->ns); c = pg->dot; incref(&c->r); runlock(&pg->ns);
+ *   ...
+ *   release();
  */
 
 proctype namec_reader(byte proc_id; bit use_slash) {
     byte pg, ch;
 
+#ifndef UNFIXED
+    lockvm();
+#endif
     /* Read pgrp pointer (could be stale if concurrent FORKNS) */
     pg = process_pgrp[proc_id];
 
@@ -239,7 +330,10 @@ proctype namec_reader(byte proc_id; bit use_slash) {
     :: else -> skip
     fi
 
-    /* Read slash or dot - NO LOCK */
+#ifndef UNFIXED
+    lockns(pg);
+#endif
+    /* Read slash or dot */
     if
     :: (use_slash) -> ch = pgrp_slash[pg];
     :: else -> ch = pgrp_dot[pg];
@@ -247,7 +341,11 @@ proctype namec_reader(byte proc_id; bit use_slash) {
 
     /* Check channel validity before incref */
     if
-    :: (ch >= NUM_CHANS) -> goto done;
+    :: (ch >= NUM_CHANS) ->
+#ifndef UNFIXED
+        unlockns(pg);
+#endif
+        goto done;
     :: else -> skip
     fi
 
@@ -259,31 +357,44 @@ proctype namec_reader(byte proc_id; bit use_slash) {
         :: (use_slash) -> use_after_free_slash = true;
         :: else -> use_after_free_dot = true;
         fi
+#ifndef UNFIXED
+        unlockns(pg);
+#endif
     :: (chan_state[ch] == CHAN_VALID) ->
         chan_refcount[ch] = chan_refcount[ch] + 1;
+#ifndef UNFIXED
+        unlockns(pg);
+#endif
         /* Use the channel for name resolution */
         skip;
         /* Done, decref */
         chan_refcount[ch] = chan_refcount[ch] - 1;
-    :: else -> skip
+    :: else ->
+#ifndef UNFIXED
+        unlockns(pg);
+#endif
+        skip
     fi
 
 done:
+#ifndef UNFIXED
+    unlockvm();
+#endif
     skip;
 }
 
 /* ========== Test Scenarios ========== */
 
 /*
- * Scenario 1: FORKNS races with namec
- * Process 0 calls Sys_pctl(FORKNS) while process 0's other
- * operations (via emu I/O threads) read pgrp->slash/dot.
+ * Scenario 1: FORKNS races with a reader of process 0's name space
+ * (devprog, reading /prog/n/ns from another thread).  The reader
+ * holds no reference to the pgrp, so FORKNS's closepgrp frees it.
  */
 proctype test_forkns_race() {
     /* Initialize */
     atomic {
         pgrp_state[0] = PGRP_VALID;
-        pgrp_refcount[0] = 2;  /* Shared between 2 "threads" */
+        pgrp_refcount[0] = 1;  /* process 0's only; the reader has none */
         pgrp_dot[0] = 0;
         pgrp_slash[0] = 1;
         chan_state[0] = CHAN_VALID;
@@ -354,14 +465,8 @@ init {
 }
 
 /*
- * LTL properties to check:
- *
- * If use_after_free_dot or use_after_free_pgrp becomes true,
- * it means we found a real race condition in the kernel code.
- *
- * NOTE: These races MAY be benign in Inferno's cooperative threading
- * model (only one Dis thread runs at a time). But they are real races
- * at the C level if multiple emu host threads are used.
+ * LTL properties: no use-after-free of dot, slash or a pgrp.  They
+ * hold for the fixed code and are violated with -DUNFIXED.
  */
 
 /* Check if any use-after-free was detected */

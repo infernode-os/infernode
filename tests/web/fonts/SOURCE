@@ -1,0 +1,17 @@
+Ahem.ttf: the Ahem test font, from web-platform-tests (fonts/Ahem.ttf),
+placed in the public domain by its author for the W3C CSS test suites.
+Ahem.woff: the same font, made into WOFF 1.0 (zlib-compressed tables)
+for the WOFF decoder's test.
+DejaVuSubset.ttf: DejaVu Sans (fonts/ttf/dejavu, Bitstream Vera licence)
+cut to U+0020-007E and U+00A0-00FF with fontTools; its accented letters
+are composite glyphs.  DejaVuSubset.woff2 is the same font as WOFF2 (glyf
+and loca transformed), DejaVuSubset-hmtx.woff2 with hmtx transformed too.
+FASubset.otf: Font Awesome 7 Free Solid (fa-solid-900, SIL Open Font
+Licence 1.1, https://fontawesome.com), cut to two icons, U+F1AB
+(language) and U+F002 (magnifying glass), with fontTools: an OpenType
+font with CFF outlines.  FASubset.woff2 is the same font as WOFF2.
+marks.ttf: made with fontTools (tools/bidi has no part in it): boxes for A, V and a
+combining dot above (U+0307), a GPOS mark anchor putting the dot on A at
+(300, 750) and a GPOS kern pair A V of -100, for web_fonts_test.
+liga.ttf: made with fontTools: f, i and the ligatures f+i (600 units) and
+f+f+i (1100), through GSUB liga, for web_fonts_test.

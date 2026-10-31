@@ -10,7 +10,7 @@ spawn - Parallel subagents with isolated namespaces
              Omitted native tool grants default to plan only.
   paths=     Host paths: "/n/local/Users/me/src"
   agenttype= explore | plan | task | default
-  model=     Optional model name; omitted uses the llmsrv backend default.
+  (The model is the server's: a subagent cannot choose one.)
   shellcmds= Named top-level commands; effective only with an exec grant.
 
 Results: === Subagent N: task === blocks. Use native tool-call form when task

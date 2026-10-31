@@ -16,6 +16,7 @@ columnm : Columnm;
 rowm : Rowm;
 scrl : Scroll;
 look : Look;
+docview : Docview;
 exec : Exec;
 windowm : Windowm;
 fsys : Fsys;
@@ -31,7 +32,7 @@ Smsg0 : import Dat;
 TRUE, FALSE, XXX, BUFSIZE, MAXRPC : import Dat;
 EM_NORMAL, EM_RAW, EM_MASK : import Dat;
 Qdir, Qcons, Qlabel, Qindex, Qeditout : import Dat;
-QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel : import Dat;
+QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata, QWweb, QWdocctl, QWdoctext, QWdoclinks, QWdocfind : import Dat;
 seq, cxfidfree, ccons, Lock, Ref, Range, Mntdir, ConsMsg, Astring : import dat;
 error, warning, max, min, stralloc, strfree, strncmp : import utils;
 address : import regx;
@@ -65,6 +66,7 @@ init(mods : ref Dat->Mods)
 	rowm = mods.rowm;
 	scrl = mods.scroll;
 	look = mods.look;
+	docview = mods.docview;
 	exec = mods.exec;
 	windowm = mods.windowm;
 	fsys = mods.fsys;
@@ -141,6 +143,7 @@ waitproc(pid : int, sync: chan of int)
 Xfid.ctl(x : self ref Xfid)
 {
 	x.tid = sys->pctl(0, nil);
+	xenith->recovering();
 	sync := chan of int;
 	spawn waitproc(x.tid, sync);
 	<-sync;
@@ -151,18 +154,50 @@ Xfid.ctl(x : self ref Xfid)
 	ox = nil;
 	for (;;) {
 		f := <- x.c;
-		case (f) {
-			Xnil => ;
-			Xflush => x.flush();
-			Xwalk => x.walk(nil);
-			Xopen => x.open();
-			Xclose => x.close();
-			Xread => x.read();
-			Xwrite => x.write();
-			* =>		error("bad case in Xfid.ctl()");
+		{
+			case (f) {
+				Xnil => ;
+				Xflush => x.flush();
+				Xwalk => x.walk(nil);
+				Xopen => x.open();
+				Xclose => x.close();
+				Xread => x.read();
+				Xwrite => x.write();
+				* =>		error("bad case in Xfid.ctl()");
+			}
+		}
+		exception{
+			* =>
+				x.recover(utils->getexc());
 		}
 		bflush();
 		cxfidfree <-= x;
+	}
+}
+
+# A request that raised an exception: the locks this proc holds let go
+# and the client answered. It died holding them, and every click and
+# request after waited for the row for ever.
+Xfid.recover(x : self ref Xfid, e : string)
+{
+	if(x.f != nil && (w := x.f.w) != nil && w.qlock.held())
+		w.unlock();
+	if(!row.qlock.held())
+		row.qlock.lock();
+	m := xenith->recovered(e);
+	{
+		warning(nil, sprint("xenith: 9P request: %s\n", e));
+		if(m != nil)
+			warning(nil, "xenith: "+m+"\n");
+	}
+	exception{
+		* =>
+			sys->fprint(sys->fildes(2), "xenith: 9P request: %s\n", e);
+	}
+	row.qlock.unlock();
+	if(!x.responded){
+		fc : Smsg0;
+		respond(x, fc, "xenith: "+e);
 	}
 }
  
@@ -212,7 +247,9 @@ Xfid.walk(x : self ref Xfid, cw: chan of ref Window)
 		w.creatormnt = x.f.mntdir.id;
 	else
 		w.creatormnt = 0;
-	# w.refx.inc();
+	# the walk's reference taken here, with the row held: taken after,
+	# a window deleted at once could be freed first
+	w.refx.inc();
 	# x.f.w = w;
 	# x.f.qid.path = big QID(w.id, Qdir);
 	# x.f.qid.qtype = Sys->QTDIR;
@@ -229,11 +266,20 @@ Xfid.open(x : self ref Xfid)
 	q : int;
 
 	fc.iounit = 0;
+	x.f.snap = nil;
 	w = x.f.w;
 	if(w != nil){
 		t := w.body;
 		row.qlock.lock();	# tasks->procs now
 		w.lock('E');
+		# deleted since the walk: its column and frames are gone (a
+		# wrsel open cut its text and set a tag with no column)
+		if(w.col == nil){
+			w.unlock();
+			row.qlock.unlock();
+			respond(x, fc, Edel);
+			return;
+		}
 		q = FILE(x.f.qid);
 		case(q){
 		QWaddr =>
@@ -241,10 +287,15 @@ Xfid.open(x : self ref Xfid)
 				w.addr = (Range)(0,0);
 				w.limit = (Range)(-1,-1);
 			}
-		QWdata or QWedit =>
+		QWdata or QWxdata =>
 			w.nopen[q]++;
 			seq++;
 			t.file.mark();
+		QWedit =>
+			# No mark here: the edit log marks the file when a
+			# command changes it (elogapply), as Acme's Edit does.
+			# Marking on open left u, written here, nothing to undo.
+			w.nopen[q]++;
 		QWevent =>
 			if(w.nopen[q]++ == byte 0)
 				if(!w.isdir && w.col!=nil){
@@ -285,6 +336,14 @@ Xfid.open(x : self ref Xfid)
 				q0 = t.q0;
 				q1 = t.q1;
 			}
+			# a pipe command lets go of its window while it runs: the
+			# text can be shorter by now than the range it saved, and
+			# the read past its end was an internal error
+			nc := t.file.buf.nc;
+			if(q1 > nc)
+				q1 = nc;
+			if(q0 > q1)
+				q0 = q1;
 			r := utils->stralloc(BUFSIZE);
 			while(q0 < q1){
 				n := q1 - q0;
@@ -334,11 +393,19 @@ Xfid.close(x : self ref Xfid)
 	q : int;
 
 	w = x.f.w;
-	x.f.busy = FALSE;
+	# the Fid kept busy until this is done with it: freed first, it
+	# could be given to a new fid while this waited for the row, and
+	# this then cleared that fid's window
 	if(x.f.open == FALSE){
-		if(w != nil)
+		if(w != nil){
+			# the window's last reference can go here: freed with
+			# the row held, as everywhere else
+			row.qlock.lock();
 			w.close();
+			row.qlock.unlock();
+		}
 		x.f.w = nil;
+		x.f.busy = FALSE;
 		respond(x, fc, nil);
 		return;
 	}
@@ -353,12 +420,12 @@ Xfid.close(x : self ref Xfid)
 				w.ctlfid = ~0;
 				w.ctllock.unlock();
 			}
-		QWdata or QWaddr or QWedit or QWevent =>	
+		QWdata or QWxdata or QWaddr or QWedit or QWevent =>	
 			# BUG: do we need to shut down Xfid?
-			if (q == QWdata || q == QWedit)
+			if (q == QWdata || q == QWxdata || q == QWedit)
 				w.nomark = FALSE;
 			if(--w.nopen[q] == byte 0){
-				if(q == QWdata || q == QWedit)
+				if(q == QWdata || q == QWxdata || q == QWedit)
 					w.nomark = FALSE;
 				if(q==QWevent && !w.isdir && w.col!=nil){
 					w.filemenu = TRUE;
@@ -387,6 +454,7 @@ Xfid.close(x : self ref Xfid)
 		row.qlock.unlock();
 	}
 	x.f.w = nil;
+	x.f.busy = FALSE;
 	respond(x, fc, nil);
 }
  
@@ -416,29 +484,48 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, nil);
 		return;
 	}
+	if(q == QWdoctext || q == QWdoclinks){
+		docread(x, w, q);
+		return;
+	}
+	# the row held as by every other request: with the window's lock
+	# alone, a read paged the buffer while the mouse task, holding the
+	# row, reshaped or filled the same window (a neighbour deleted, a
+	# column resized), and the buffer's cache was taken by both
+	row.qlock.lock();
 	w.lock('F');
 	if(w.col == nil){
 		w.unlock();
+		row.qlock.unlock();
 		respond(x, fc, Edel);
 		return;
 	}
 	off = int offset(x.fcall);	
+	# A case answering with a string sets str: an empty string is nil
+	# in Limbo, so sbuf alone cannot say an empty answer is due
+	# (reading a text window's image file once hung the reader).
+	str := 0;
 	case(q){
 	QWaddr =>
 		w.body.commit(TRUE);
 		clampaddr(w);
 		sbuf = sprint("%11d %11d ", w.addr.q0, w.addr.q1);
+		str = 1;
 	QWbody =>
+		textm->loadrest(w.body.file);	# all of a file still loading
 		if(w.rendermode != 0 && w.contentdata != nil){
 			# Serve raw text to 9P clients (AI sees source, not formatted view)
 			sbuf = string w.contentdata;
+			str = 1;
 		} else
 			x.utfread(w.body, 0, w.body.file.buf.nc, QWbody);
 	QWctl =>
 		sbuf = w.ctlprint(1);
+		str = 1;
 	QWevent =>
 		x.eventread(w);
 	QWdata =>
+		textm->loadrest(w.body.file);
 		# BUG: what should happen if q1 > q0?
 		if(w.addr.q0 > w.body.file.buf.nc){
 			respond(x, fc, Eaddr);
@@ -446,6 +533,15 @@ Xfid.read(x : self ref Xfid)
 		}
 		w.addr.q0 += x.runeread(w.body, w.addr.q0, w.body.file.buf.nc);
 		w.addr.q1 = w.addr.q0;
+	QWxdata =>
+		textm->loadrest(w.body.file);
+		# like data, but the read stops at the end of addr
+		# BUG: what should happen if q1 > q0?
+		if(w.addr.q0 > w.body.file.buf.nc){
+			respond(x, fc, Eaddr);
+			break;
+		}
+		w.addr.q0 += x.runeread(w.body, w.addr.q0, w.addr.q1);
 	QWtag =>
 		x.utfread(w.tag, 0, w.tag.file.buf.nc, QWtag);
 	QWcolors =>
@@ -453,12 +549,27 @@ Xfid.read(x : self ref Xfid)
 			sbuf = w.colorstr;
 		else
 			sbuf = defaultcolorstr();
+		str = 1;
+	QWweb =>
+		# a browser window's page, posted as files (charonfs)
+		str = 1;
+		sbuf = docview->filesof(w);
+		if(sbuf != nil)
+			sbuf += "\n";
+	QWdocctl =>
+		str = 1;
+		sbuf = docview->ctlread(w);
+	QWdocfind =>
+		str = 1;
+		sbuf = docview->foundread(w);
 	QWimage =>
-		if(w.imagemode == 0 || w.bodyimage == nil)
-			sbuf = "";
-		else
-			sbuf = sprint("%s %d %d\n", w.imagepath,
-				w.bodyimage.r.dx(), w.bodyimage.r.dy());
+		# the document shown: its name and its first sheet's size
+		str = 1;
+		sbuf = "";
+		d := w.doc;
+		if(d != nil && docview->shown(w) && d.v.h >= 0 && len d.v.sizes > 0)
+			sbuf = sprint("%s %d %d\n", d.v.name,
+				d.v.sizes[0].x, d.v.sizes[0].y);
 	QWrdsel =>
 		sys->seek(w.rdselfd, big off, 0);
 		n = count(x.fcall);
@@ -479,7 +590,7 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, sbuf);
 		sbuf = nil;
 	}
-	if (sbuf != nil) {
+	if (str) {
 		buf = array of byte sbuf;
 		sbuf = nil;
 		n = len buf;
@@ -493,8 +604,46 @@ Xfid.read(x : self ref Xfid)
 		buf = nil;
 	}
 	w.unlock();
+	row.qlock.unlock();
 }
  
+# A document's text or links, made by its engine: for a long PDF that
+# takes a while, and it was made again for each read, the row held
+# (Xenith stood still while a client read them). Made once, from the
+# read at the start, with neither the row nor the window held; the
+# reads after it take the rest of that.
+docread(x : ref Xfid, w : ref Window, q : int)
+{
+	fc : Smsg0;
+
+	off := int offset(x.fcall);
+	if(off == 0 || x.f.snap == nil){
+		row.qlock.lock();
+		w.lock('F');
+		gone := w.col == nil;
+		w.unlock();
+		row.qlock.unlock();
+		if(gone){
+			respond(x, fc, Edel);
+			return;
+		}
+		s : string;
+		if(q == QWdoctext)
+			s = docview->textread(w);
+		else
+			s = docview->linksread(w);
+		x.f.snap = array of byte s;
+	}
+	b := x.f.snap;
+	if(off > len b)
+		off = len b;
+	if(off+count(x.fcall) > len b)
+		setcount(x.fcall, len b-off);
+	fc.count = count(x.fcall);
+	fc.data = b[off:off+fc.count];
+	respond(x, fc, nil);
+}
+
 Xfid.write(x : self ref Xfid)
 {
 	fc  : Smsg0;
@@ -594,7 +743,19 @@ Xfid.write(x : self ref Xfid)
 		fc.count = count(x.fcall);
 		respond(x, fc, nil);
 		break;
+	QWerrors =>
+		# append to this window's +Errors window, which is
+		# locked in place of w (and so unlocked below)
+		w = utils->errorwinforwin(w);
+		t = w.body;
+		bodytag = 1;
 	QWbody or QWwrsel =>
+		if(docview->readonly(w)){
+			respond(x, fc, "the window's text is its document's: read-only");
+			break;
+		}
+		if(docview->shown(w))
+			docview->render(w);	# writes show in the text
 		if(w.rendermode != 0 && qid == QWbody){
 			respond(x, fc, "window in render mode");
 			break;
@@ -603,6 +764,20 @@ Xfid.write(x : self ref Xfid)
 		bodytag = 1;
 	QWctl =>
 		x.ctlwrite(w);
+	QWdocctl or QWdocfind =>
+		nb := sys->utfbytes(data(x.fcall), count(x.fcall));
+		s := string data(x.fcall)[0:nb];
+		while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
+			s = s[0:len s - 1];
+		err: string;
+		if(qid == QWdocctl){
+			for((nil, l) := sys->tokenize(s, "\n"); l != nil && err == nil; l = tl l)
+				err = docview->ctlwrite(w, hd l);
+		}else
+			err = docview->find(w, s);
+		bflush();
+		fc.count = count(x.fcall);
+		respond(x, fc, err);
 	QWdata =>
 		t = w.body;
 		w.commit(t);
@@ -678,7 +853,7 @@ Xfid.write(x : self ref Xfid)
 					q0 = t.file.buf.nc;
 			}else
 				q0 = t.file.buf.nc;
-			if(qid == QWbody || qid == QWwrsel){
+			if(qid != QWtag){
 				if(!w.nomark){
 					seq++;
 					t.file.mark();
@@ -702,6 +877,11 @@ Xfid.write(x : self ref Xfid)
 	row.qlock.unlock();
 }
 
+fault()
+{
+	utils->error("a fault made for a test, in a proc that does not recover");
+}
+
 # Helper for ctlwrite: handles lock/unlock, clean, show, name, dump commands
 # Returns (handled, m, err, settag) - split to avoid yacc stack overflow
 ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
@@ -711,15 +891,35 @@ ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 	q, i: int;
 	t: ref Text;
 
+	# The request is served holding the row: lock must not wait here
+	# for another fid's unlock, which needs the row too, nor unlock let
+	# go of a lock nobody holds (it waits for ever): either froze every
+	# window
 	if(strncmp(p, "lock", 4) == 0){	# make window exclusive use
+		if(w.ctlfid == x.f.fid)
+			return (TRUE, 4, nil, FALSE);
+		if(w.ctlfid != ~0)
+			return (TRUE, 0, Einuse, FALSE);
 		w.ctllock.lock();
 		w.ctlfid = x.f.fid;
 		return (TRUE, 4, nil, FALSE);
 	}
 	if(strncmp(p, "unlock", 6) == 0){	# release exclusive use
+		if(w.ctlfid != x.f.fid)
+			return (TRUE, 0, "window not locked by this file", FALSE);
 		w.ctlfid = ~0;
 		w.ctllock.unlock();
 		return (TRUE, 6, nil, FALSE);
+	}
+	# for tests (tests/host/xenith_rescue_test.sh), with $xenithfaults
+	# set where Xenith started: an internal error, in this request's
+	# proc, which recovers ("fault"), or in one that does not ("fault exit")
+	if(strncmp(p, "fault", 5) == 0 && utils->getenv("xenithfaults") != nil){
+		if(strncmp(p, "fault exit", 10) == 0){
+			spawn fault();
+			return (TRUE, 10, nil, FALSE);
+		}
+		utils->error("a fault made for a test");
 	}
 	if(strncmp(p, "clean", 5) == 0){	# mark window 'clean', seq=0
 		t = w.body;
@@ -727,6 +927,13 @@ ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		t.file.reset();
 		t.file.mod = FALSE;
 		w.dirty = FALSE;
+		return (TRUE, 5, nil, TRUE);
+	}
+	if(strncmp(p, "dirty", 5) == 0){	# mark window 'dirty'
+		t = w.body;
+		# doesn't change sequence number, so "Put" won't appear.  it shouldn't.
+		t.file.mod = TRUE;
+		w.dirty = TRUE;
 		return (TRUE, 5, nil, TRUE);
 	}
 	if(strncmp(p, "show", 4) == 0){	# show dot
@@ -828,6 +1035,14 @@ ctlcmd2(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		w.body.file.mark();
 		return (TRUE, 4, nil, TRUE);
 	}
+	if(strncmp(p, "nomenu", 6) == 0){	# turn off automatic menu
+		w.filemenu = FALSE;
+		return (TRUE, 6, nil, TRUE);
+	}
+	if(strncmp(p, "menu", 4) == 0){	# enable automatic menu
+		w.filemenu = TRUE;
+		return (TRUE, 4, nil, TRUE);
+	}
 	if(strncmp(p, "noscroll", 8) == 0){	# turn off automatic scrolling
 		w.noscroll = TRUE;
 		return (TRUE, 8, nil, FALSE);
@@ -851,6 +1066,15 @@ ctlcmd2(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 	return (FALSE, 0, nil, FALSE);
 }
 
+# The file at path shown in w as the document it is (docview(2))
+showdoc(w: ref Window, path: string): string
+{
+	k := docview->kind(path);
+	if(k == nil)
+		return path + ": not a document Xenith shows";
+	return docview->open(w, path, k);
+}
+
 # Helper for ctlwrite: handles image and layout commands
 ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 {
@@ -865,13 +1089,13 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		if(q <= 0)
 			return (TRUE, 0, Ebadctl, FALSE);
 		path := pp[0:q];
-		err := w.loadimage(path);
+		err := showdoc(w, path);
 		if(err != nil)
 			return (TRUE, 0, err, FALSE);
 		return (TRUE, m + q + 1, nil, FALSE);
 	}
 	if(strncmp(p, "clearimage", 10) == 0){	# return to text mode
-		w.clearimage();
+		docview->close(w);
 		return (TRUE, 10, nil, FALSE);
 	}
 	if(strncmp(p, "content ", 8) == 0){	# load and render content (renderer pipeline)
@@ -881,13 +1105,13 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		if(q <= 0)
 			return (TRUE, 0, Ebadctl, FALSE);
 		path := pp[0:q];
-		err := w.loadcontent(path);
+		err := showdoc(w, path);
 		if(err != nil)
 			return (TRUE, 0, err, FALSE);
 		return (TRUE, m + q + 1, nil, FALSE);
 	}
 	if(strncmp(p, "clearcontent", 12) == 0){	# return to text mode (alias)
-		w.clearimage();
+		docview->close(w);
 		return (TRUE, 12, nil, FALSE);
 	}
 	if(strncmp(p, "contentcmd ", 11) == 0){	# execute renderer command
@@ -908,7 +1132,9 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 			cmd = cmdstr;
 			arg = nil;
 		}
-		err := w.contentcommand(cmd, arg);
+		(isdoc, err) := docview->command(w, cmd, arg);
+		if(!isdoc)
+			err = "no document";
 		if(err != nil)
 			return (TRUE, 0, err, FALSE);
 		return (TRUE, m + q + 1, nil, FALSE);
@@ -1016,6 +1242,10 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 	nb = sys->utfbytes(data(x.fcall), count(x.fcall));
 	r = string data(x.fcall)[0:nb];
 	for(n=0; n<len r; n+=m){
+		# deleted by a command before (del, delete): the rest is not
+		# done, as the window's column, frames and file are gone
+		if(w.col == nil)
+			break;
 		p = r[n:];
 		# Try each command group in turn
 		(handled, m, err, settag2) = ctlcmd1(x, w, p);
@@ -1053,9 +1283,9 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 		n = 0;
 	fc.count = n;
 	respond(x, fc, err);
-	if(settag)
+	if(settag && w.col != nil)
 		w.settag();
-	if(scrdrw)
+	if(scrdrw && w.col != nil)
 		scrdraw(w.body);
 }
 
@@ -1072,8 +1302,15 @@ Xfid.eventwrite(x : self ref Xfid, w : ref Window)
 	err = nil;
 	nb = sys->utfbytes(data(x.fcall), count(x.fcall));
 	r = string data(x.fcall)[0:nb];
+	# Acme parses events from a C string, whose terminating NUL stops
+	# every scan below. Give r one (two: an event of one character reads
+	# two), so that a short or truncated event is refused as bad, not
+	# read past its end: that raised an array bounds error, which
+	# killed this Xfid and left the writer waiting for ever.
+	nr := len r;
+	r += "\0\0";
 loop :
-	for(n=0; n<len r; n+=m){
+	for(n=0; n<nr; n+=m){
 		p = n;
 		w.owner = r[p++];	# disgusting
 		c = r[p++];
@@ -1283,7 +1520,9 @@ Xfid.eventread(x : self ref Xfid, w : ref Window)
 		}
 		w.eventx = x;
 		w.unlock();
+		row.qlock.unlock();	# both let go while the reader waits
 		<- x.c;
+		row.qlock.lock();
 		w.lock('F');
 		i++;
 	}
@@ -1585,7 +1824,7 @@ Xfid.imagewrite(x: self ref Xfid, w: ref Window)
 		return;
 	}
 
-	err := w.loadimage(r);
+	err := showdoc(w, r);
 	if(err != nil){
 		respond(x, fc, err);
 		return;

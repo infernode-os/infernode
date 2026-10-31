@@ -51,7 +51,7 @@ BState: adt {
 };
 
 filename_config := array[] of {
-	"entry .e -bg white",
+	"entry .e",
 	"frame .pf",
 	"entry .pf.e",
 	"label .pf.t -text {Filter:}",
@@ -107,7 +107,7 @@ filename(ctxt: ref Draw->Context, parent: ref Draw->Image,
 	where := localgeom(parent);
 	if (title == nil)
 		title = "Open";
-	(top, wch) := tkclient->toplevel(ctxt, where+" -bd 1", # -font /fonts/misc/latin1.6x13.font",
+	(top, wch) := tkclient->toplevel(ctxt, where, # -font /fonts/misc/latin1.6x13.font",
 			title, Tkclient->Popup|Tkclient->Resize|Tkclient->OK);
 	(b, colch) := Browser.init(top, ".b", "16w");
 	entrych := chan of string;
@@ -374,10 +374,10 @@ Browser.addcol(b: self ref Browser, title: string, d: array of string)
 	ncol := string b.ncols++;
 
 	f := b.w + ".c.f.d" + ncol;
-	cmd(b.top, "frame " + f + " -bg green -width " + string b.colwidth);
+	cmd(b.top, "frame " + f + " -width " + string b.colwidth);
 
 	t := f + ".t";
-	cmd(b.top, "label " + t + " -text " + tk->quote(title) + " -bg black -fg white");
+	cmd(b.top, "label " + t + " -text " + tk->quote(title));
 
 	sb := f + ".s";
 	lb := f + ".l";

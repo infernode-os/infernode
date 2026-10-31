@@ -4,8 +4,8 @@ This directory provides a thin offline harness for evaluating how well a
 given model — served by an OpenAI-compatible endpoint such as Ollama —
 behaves with the InferNode tool catalogue.
 
-It is **not** a full reproduction of the production lucibridge agent
-loop. It is meant to isolate the model + tool-description behavior so
+It is **not** a full reproduction of the production agent loop
+(veltrosrv, of which lucibridge is a client). It is meant to isolate the model + tool-description behavior so
 fixes to either can be measured without rebuilding `emu` or relaunching
 InferNode. Real production verification still happens in a live Veltro
 session.
@@ -37,7 +37,7 @@ observed in production. Each scenario:
   multi-call sequence or a single-call shape) and `classify_other`
   patterns that distinguish *how* a non-pass run failed.
 
-Scenarios cover three categories:
+Scenarios cover four categories:
 
 - **tool-selection** — does the model pick the right tool? (e.g.
   `launch shell` should call the launch tool, not the shell tool.)
@@ -120,7 +120,7 @@ point elsewhere).
 
 ## Limitations
 
-- **Synthetic tool results.** Production lucibridge runs real tools
+- **Synthetic tool results.** The production loop (veltrosrv) runs real tools
   and feeds real results back. The harness uses canned strings
   ("created artifact", "ok"). For tool-selection and tool-grammar
   scenarios this doesn't matter; for error-recovery it does, and the

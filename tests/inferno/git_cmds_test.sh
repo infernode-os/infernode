@@ -13,6 +13,9 @@ echo '=========================================='
 
 failed=0
 
+# a repository a run before this one left would make init fail
+rm -rf /tmp/testrepo >[2] /dev/null
+
 echo ''
 echo 'Step 1: git/init'
 if {cmd/git/init /tmp/testrepo} {
@@ -117,6 +120,8 @@ if {cmd/git/branch -d /tmp/testrepo develop} {
 	echo 'FAIL: branch delete failed'
 	failed=1
 }
+
+rm -rf /tmp/testrepo >[2] /dev/null
 
 echo ''
 echo '=========================================='

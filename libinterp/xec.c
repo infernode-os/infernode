@@ -25,6 +25,19 @@ String	snil;			/* String known to be zero length */
 #define T(r)	*((void**)(R.r))
 #define JMP(r)	R.PC = *(Inst**)(R.r)
 #define SH(r)	*((SHORT*)(R.r))
+
+/*
+ * A Limbo int is 32 bits. On this VM a WORD is the pointer size, 64
+ * bits, and an int lives in a 64-bit slot; the invariant that makes
+ * that work is that the slot always holds the int SIGN-EXTENDED.
+ * Every comparison and every conversion reads the whole slot, so a
+ * result left with junk in its upper half is a value that prints as
+ * -1 and is not equal to -1 (a dossrv wstat that ignored nulldir,
+ * a shift that would not sign-extend). CW() is that invariant: every
+ * w-typed result goes through it. The JITs keep the same invariant
+ * with a sign-extension before each store.
+ */
+#define CW(v)	((WORD)(int)(v))
 #define SR(r)	*((SREAL*)(R.r))
 
 /*
@@ -57,40 +70,45 @@ OP(cvtws){ SH(d) = W(s); }
 OP(cvtsw){ W(d) = SH(s); }
 OP(cvtwf){ F(d) = W(s); }
 OP(addb) { B(d) = B(m) + B(s); }
-OP(addw) { W(d) = W(m) + W(s); }
+OP(addw) { W(d) = CW(W(m) + W(s)); }
 OP(addl) { V(d) = V(m) + V(s); }
 OP(addf) { F(d) = F(m) + F(s); }
 OP(subb) { B(d) = B(m) - B(s); }
-OP(subw) { W(d) = W(m) - W(s); }
+OP(subw) { W(d) = CW(W(m) - W(s)); }
 OP(subl) { V(d) = V(m) - V(s); }
 OP(subf) { F(d) = F(m) - F(s); }
 OP(divb) { if(B(s) == 0) error(exZdiv); B(d) = B(m) / B(s); }
-OP(divw) { if(W(s) == 0) error(exZdiv); W(d) = W(m) / W(s); }
-OP(divl) { if(V(s) == 0) error(exZdiv); V(d) = V(m) / V(s); }
+OP(divw) { if(W(s) == 0) error(exZdiv); W(d) = CW((vlong)(int)W(m) / (vlong)(int)W(s)); }
+/*
+ * The most negative big over -1 overflows: in C it is undefined, and
+ * x86's idiv traps on it ("sys: fp: exception") where arm64's sdiv
+ * wraps. It wraps here, on every platform, and the JITs do the same.
+ */
+OP(divl) { if(V(s) == 0) error(exZdiv); if(V(s) == -1) V(d) = (LONG)-(ULONG)V(m); else V(d) = V(m) / V(s); }
 OP(divf) { F(d) = F(m) / F(s); }
 OP(modb) { if(B(s) == 0) error(exZdiv); B(d) = B(m) % B(s); }
-OP(modw) { if(W(s) == 0) error(exZdiv); W(d) = W(m) % W(s); }
-OP(modl) { if(V(s) == 0) error(exZdiv); V(d) = V(m) % V(s); }
+OP(modw) { if(W(s) == 0) error(exZdiv); W(d) = CW((vlong)(int)W(m) % (vlong)(int)W(s)); }
+OP(modl) { if(V(s) == 0) error(exZdiv); if(V(s) == -1) V(d) = 0; else V(d) = V(m) % V(s); }
 OP(mulb) { B(d) = B(m) * B(s); }
-OP(mulw) { W(d) = W(m) * W(s); }
+OP(mulw) { W(d) = CW((UWORD)W(m) * (UWORD)W(s)); }
 OP(mull) { V(d) = V(m) * V(s); }
 OP(mulf) { F(d) = F(m) * F(s); }
 OP(andb) { B(d) = B(m) & B(s); }
-OP(andw) { W(d) = W(m) & W(s); }
+OP(andw) { W(d) = CW(W(m) & W(s)); }
 OP(andl) { V(d) = V(m) & V(s); }
 OP(xorb) { B(d) = B(m) ^ B(s); }
-OP(xorw) { W(d) = W(m) ^ W(s); }
+OP(xorw) { W(d) = CW(W(m) ^ W(s)); }
 OP(xorl) { V(d) = V(m) ^ V(s); }
 OP(orb)  { B(d) = B(m) | B(s); }
-OP(orw)  { W(d) = W(m) | W(s); }
+OP(orw)  { W(d) = CW(W(m) | W(s)); }
 OP(orl)  { V(d) = V(m) | V(s); }
 OP(shlb) { B(d) = B(m) << W(s); }
-OP(shlw) { W(d) = W(m) << W(s); }
+OP(shlw) { W(d) = CW((uvlong)(u32int)W(m) << (W(s) & 63)); }
 OP(shll) { V(d) = V(m) << W(s); }
 OP(shrb) { B(d) = B(m) >> W(s); }
-OP(shrw) { W(d) = W(m) >> W(s); }
+OP(shrw) { W(d) = CW((vlong)(int)W(m) >> (W(s) & 63)); }
 OP(shrl) { V(d) = V(m) >> W(s); }
-OP(lsrw) { W(d) = UW(m) >> W(s); }
+OP(lsrw) { W(d) = CW((uvlong)(u32int)W(m) >> (W(s) & 63)); }
 OP(lsrl) { V(d) = UV(m) >> W(s); }
 OP(beqb) { if(B(s) == B(m)) JMP(d); }
 OP(bneb) { if(B(s) != B(m)) JMP(d); }
@@ -124,7 +142,7 @@ OP(bgtc) { if(stringcmp(S(s), S(m)) >  0) JMP(d); }
 OP(bgec) { if(stringcmp(S(s), S(m)) >= 0) JMP(d); }
 OP(iexit){ error(""); }
 OP(cvtwl){ V(d) = W(s); }
-OP(cvtlw){ W(d) = V(s); }
+OP(cvtlw){ W(d) = CW(V(s)); }
 OP(cvtlf){ F(d) = V(s); }
 OP(cvtfl)
 {
@@ -138,7 +156,7 @@ OP(cvtfw)
 	REAL f;
 
 	f = F(s);
-	W(d) = f < 0 ? f - .5 : f + .5;
+	W(d) = CW((vlong)(f < 0 ? f - .5 : f + .5));
 }
 OP(cvtcl)
 {
@@ -172,7 +190,7 @@ OP(iexpw)
 	}
 	if(inv)
 		r = 1/r;
-	W(d) = r;
+	W(d) = CW(r);
 }
 OP(iexpl)
 {
@@ -777,11 +795,44 @@ OP(mspawn)
 	newstack(p);
 	unframe();
 }
+/*
+ * The Modlink a compiled module returned from for the last time (OP(ret)),
+ * held until nothing can be executing its code. That is certain once
+ * the compiled code has come back to xec, and it is also certain when
+ * another return comes to OP(ret): that call is from another module's
+ * code, and the first module has no reference left that could run it.
+ * There is one R, and so one of these. Nothing else refers to it, so
+ * the collector is told of it (gc.c, rootset), or it would be swept.
+ */
+Modlink *retpending;		/* a GC root: gc.c, rootset */
+
+static void
+retrelease(void)
+{
+	Modlink *ml;
+
+	ml = retpending;
+	if(ml != nil){
+		retpending = nil;
+		destroy(ml);
+	}
+}
+
 OP(ret)
 {
 	Frame *f;
 	Modlink *m;
 
+	/*
+	 * R.t says whether compiled code must leave for the interpreter
+	 * when this returns (the JITs punt a return here and test it
+	 * after).  It is set below only when it must; left as it was,
+	 * it is whatever the last punted instruction said: OP(mcall)
+	 * sets it on every call between modules, so a return punted
+	 * after one (from a frame in a stack extension, say) left
+	 * compiled code for the scheduler every time.
+	 */
+	R.t = 0;
 	f = (Frame*)R.FP;
 	R.FP = f->fp;
 	if(R.FP == nil) {
@@ -821,13 +872,30 @@ OP(ret)
 		freeptrs(f, f->t);
 
 	if(m != nil) {
+		Modlink *old;
+
 		if(R.M->compiled != m->compiled) {
 			R.IC = 1;
 			R.t = 1;
 		}
-		destroy(R.M);
+		old = R.M;
 		R.M = m;
 		R.MP = m->MP;
+		/*
+		 * A compiled module returns through this function by a call
+		 * from its own code (the JITs' ret macro punts here when the
+		 * module's Modlink is about to lose its last reference), and
+		 * that call returns into the same code. Destroying the last
+		 * reference now would unload the module and unmap its code
+		 * (freemod, freejitcode) with the return still to run in it:
+		 * a jump into unmapped memory. So the release waits until
+		 * control is back in C (xec, retrelease).
+		 */
+		if(old->compiled && D2H(old)->ref == 1){
+			retrelease();
+			retpending = old;
+		}else
+			destroy(old);
 	}
 }
 OP(iload)
@@ -860,6 +928,8 @@ OP(iload)
 	else {
 		m = readmod(n, lookmod(n), 1);
 		ml = linkmod(m, ldt, 1);
+		if(R.M->compiled && PC_MISALIGNED(R.PC))
+			print("BUG: iload: R.PC=%p misaligned after linkmod %s\n", R.PC, n);
 	}
 
 	mp = R.d;
@@ -1484,7 +1554,7 @@ OP(mulx)
 		r <<= p;
 	else
 		r >>= (-p);
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(divx)
 {
@@ -1498,7 +1568,7 @@ OP(divx)
 	else
 		s >>= (-p);
 	s /= (LONG)W(s);
-	W(d) = (WORD)s;
+	W(d) = CW(s);
 }
 OP(cvtxx)
 {
@@ -1511,7 +1581,7 @@ OP(cvtxx)
 		r <<= p;
 	else
 		r >>= (-p);
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(mulx0)
 {
@@ -1532,7 +1602,7 @@ OP(mulx0)
 	else
 		r >>= (-p);
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(divx0)
 {
@@ -1553,7 +1623,7 @@ OP(divx0)
 	else
 		s >>= (-p);
 	s /= (LONG)y;
-	W(d) = (WORD)s;
+	W(d) = CW(s);
 }
 OP(cvtxx0)
 {
@@ -1573,7 +1643,7 @@ OP(cvtxx0)
 	else
 		r >>= (-p);
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(mulx1)
 {
@@ -1611,7 +1681,7 @@ OP(mulx1)
 		r >>= (-p);
 	r += (LONG)v;
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 OP(divx1)
 {
@@ -1647,7 +1717,7 @@ OP(divx1)
 	else
 		s >>= (-p);
 	s /= (LONG)y;
-	W(d) = (WORD)s + v;
+	W(d) = CW(s + v);
 }
 OP(cvtxx1)
 {
@@ -1683,7 +1753,7 @@ OP(cvtxx1)
 		r >>= (-p);
 	r += (LONG)v;
 	r /= (LONG)a;
-	W(d) = (WORD)r;
+	W(d) = CW(r);
 }
 /*
 OP(cvtxx)
@@ -1701,7 +1771,7 @@ OP(cvtfx)
 
 	v = F(s)*F(m);
 	v = v < 0 ? v-0.5: v+0.5;
-	W(d) = (WORD)v;
+	W(d) = CW((vlong)v);
 }
 OP(cvtxf)
 {
@@ -1766,6 +1836,17 @@ isave(void)
 	Prog *p;
 
 	p = delrun(Prelease);
+	/*
+	 * The saved PC is what xec() will jump to when this Prog next
+	 * runs. If it is already misaligned here, the compiled code that
+	 * called into C left it so, and the C caller's address names
+	 * which system call (#635: "misaligned PC in compiled module",
+	 * R.PC one byte below the module's prog, twice on the board).
+	 */
+	if(R.M != H && R.M->compiled && PC_MISALIGNED(R.PC))
+		print("BUG: isave: misaligned R.PC=%p in %s (prog %p) saved from %p\n",
+			R.PC, R.M->m ? R.M->m->name : "?", R.M->m ? (void*)R.M->m->prog : nil,
+			getcallerpc(&p));
 	p->R = R;
 	return p;
 }
@@ -1773,6 +1854,8 @@ isave(void)
 void
 irestore(Prog *p)
 {
+	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
+		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->R.PC);
 	R = p->R;
 	R.IC = 1;
 }
@@ -1820,7 +1903,21 @@ xec(Prog *p)
 {
 	int op;
 
+	/*
+	 * R is p's before the pending Modlink is released, not after.
+	 * Destroying it destroys its module data, and a file descriptor
+	 * there closes with the VM released (freeFD), and release()
+	 * saves R as the running Prog's registers (isave): p's, since p
+	 * is the head of the run queue. With retrelease() first, R still
+	 * held the previous Prog's registers, which became p's, and p
+	 * resumed on another Prog's stack, in its module, with its PC:
+	 * two Progs running one stack, strings freed under their users,
+	 * the heap's free tree corrupted. Only compiled modules defer
+	 * their release, so only -c1 did it (a page load opening many
+	 * TLS connections at once, docs/JS-ENGINE.md).
+	 */
 	R = p->R;
+	retrelease();
 	R.MP = R.M->MP;
 	R.IC = p->quanta;
 

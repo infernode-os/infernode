@@ -93,11 +93,13 @@ uchar fontmap[] = Draw_Font_map;
 uchar imagemap[] = Draw_Image_map;
 uchar screenmap[] = Draw_Screen_map;
 uchar displaymap[] = Draw_Display_map;
+uchar pathmap[] = Draw_Path_map;
 
 Type*	TFont;
 Type*	TImage;
 Type*	TScreen;
 Type*	TDisplay;
+Type*	TPath;
 
 Draw_Image*	allocdrawimage(DDisplay*, Draw_Rect, ulong, Image*, int, int);
 Draw_Image*	color(DDisplay*, ulong);
@@ -115,6 +117,7 @@ drawmodinit(void)
 	TImage = dtype(freedrawimage, sizeof(DImage), imagemap, sizeof(imagemap));
 	TScreen = dtype(freedrawscreen, sizeof(DScreen), screenmap, sizeof(screenmap));
 	TDisplay = dtype(freedrawdisplay, sizeof(DDisplay), displaymap, sizeof(displaymap));
+	TPath = dtype(freeheap, sizeof(Draw_Path), pathmap, sizeof(pathmap));
 	builtinmod("$Draw", Drawmodtab, Drawmodlen);
 }
 
@@ -873,6 +876,235 @@ Image_fillbezsplineop(void *fp)
 	drawfillsplinepoly(fp, 1, f->op);
 }
 
+/*
+ * Paths: built in real pixel coordinates, kept encoded as the draw
+ * device takes them (libdraw/path.c), and filled or stroked there.
+ */
+static int
+fixcoord(REAL v)
+{
+	v *= Pathunit;
+	if(v != v || v >= (1<<28) || v <= -(1<<28))
+		error("path coordinate out of range");
+	if(v < 0)
+		return -(int)(-v + 0.5);
+	return (int)(v + 0.5);
+}
+
+static void
+pathadd(Draw_Path *p, int verb, REAL *v, int nv)
+{
+	uchar buf[64];
+	Point q[3], last;
+	Heap *h;
+	Array *a;
+	int i, n, len;
+
+	if(p == H)
+		error(exNilref);
+	for(i = 0; i < nv/2; i++)
+		q[i] = Pt(fixcoord(v[2*i]), fixcoord(v[2*i+1]));
+	if(verb == 'E' && (q[1].x < 0 || q[1].y < 0))
+		error("negative ellipse semi-axis");
+	last = Pt(p->x, p->y);
+	n = _pathverb(buf, &last, verb, q, verb == 'E' ? 1 : nv/2);
+	len = 0;
+	if(p->data != H)
+		len = p->data->len;
+	if(p->n < 0 || p->n > len)
+		error(exBounds);
+	if(p->n + n > len){
+		len = 2*len + n;
+		if(len < 64)
+			len = 64;
+		h = heaparray(&Tbyte, len);
+		a = H2D(Array*, h);
+		if(p->data != H){
+			memmove(a->data, p->data->data, p->n);
+			destroy(p->data);
+		}
+		p->data = a;
+	}
+	memmove(p->data->data + p->n, buf, n);
+	p->n += n;
+	p->x = last.x;
+	p->y = last.y;
+}
+
+/* the methods return the path, so calls can be chained */
+static void
+pathret(Draw_Path **ret, Draw_Path *p)
+{
+	Heap *h;
+
+	h = D2H(p);
+	h->ref++;
+	Setmark(h);
+	destroy(*ret);
+	*ret = p;
+}
+
+void
+Path_new(void *fp)
+{
+	F_Path_new *f;
+	Heap *h;
+	Draw_Path *p;
+
+	f = fp;
+	h = heap(TPath);
+	p = H2D(Draw_Path*, h);
+	p->data = H;
+	p->n = 0;
+	p->x = 0;
+	p->y = 0;
+	destroy(*f->ret);
+	*f->ret = p;
+}
+
+void
+Path_moveto(void *fp)
+{
+	F_Path_moveto *f;
+	REAL v[2];
+
+	f = fp;
+	v[0] = f->x;
+	v[1] = f->y;
+	pathadd(f->p, 'M', v, 2);
+	pathret(f->ret, f->p);
+}
+
+void
+Path_lineto(void *fp)
+{
+	F_Path_lineto *f;
+	REAL v[2];
+
+	f = fp;
+	v[0] = f->x;
+	v[1] = f->y;
+	pathadd(f->p, 'L', v, 2);
+	pathret(f->ret, f->p);
+}
+
+void
+Path_quadto(void *fp)
+{
+	F_Path_quadto *f;
+	REAL v[4];
+
+	f = fp;
+	v[0] = f->x1;
+	v[1] = f->y1;
+	v[2] = f->x;
+	v[3] = f->y;
+	pathadd(f->p, 'Q', v, 4);
+	pathret(f->ret, f->p);
+}
+
+void
+Path_curveto(void *fp)
+{
+	F_Path_curveto *f;
+	REAL v[6];
+
+	f = fp;
+	v[0] = f->x1;
+	v[1] = f->y1;
+	v[2] = f->x2;
+	v[3] = f->y2;
+	v[4] = f->x;
+	v[5] = f->y;
+	pathadd(f->p, 'C', v, 6);
+	pathret(f->ret, f->p);
+}
+
+void
+Path_ellipse(void *fp)
+{
+	F_Path_ellipse *f;
+	REAL v[4];
+
+	f = fp;
+	v[0] = f->cx;
+	v[1] = f->cy;
+	v[2] = f->a;
+	v[3] = f->b;
+	pathadd(f->p, 'E', v, 4);
+	pathret(f->ret, f->p);
+}
+
+void
+Path_close(void *fp)
+{
+	F_Path_close *f;
+
+	f = fp;
+	pathadd(f->p, 'Z', nil, 0);
+	pathret(f->ret, f->p);
+}
+
+static void
+drawpath(Draw_Image *dst, Draw_Path *p, int stroke, int wind, REAL width, int cap, int join, Draw_Image *src, Draw_Point sp, int op)
+{
+	Image *d, *s;
+	int locked;
+
+	d = checkimage(dst);
+	s = checkimage(src);
+	if(p == H || p->data == H || p->n <= 0)
+		return;
+	if(p->n > p->data->len)
+		error(exBounds);
+	if(d->display != s->display)
+		return;
+	locked = lockdisplay(d->display);
+	if(stroke)
+		_strokepath(d, p->data->data, p->n, fixcoord(width), cap, join, 4*Pathunit, s, IPOINT(sp), op);
+	else
+		_fillpath(d, p->data->data, p->n, wind, s, IPOINT(sp), op);
+	checkflush(dst);
+	if(locked)
+		unlockdisplay(d->display);
+}
+
+void
+Image_fillpath(void *fp)
+{
+	F_Image_fillpath *f;
+
+	f = fp;
+	drawpath(f->dst, f->p, 0, f->wind, 0, 0, 0, f->src, f->sp, SoverD);
+}
+
+void
+Image_fillpathop(void *fp)
+{
+	F_Image_fillpathop *f;
+
+	f = fp;
+	drawpath(f->dst, f->p, 0, f->wind, 0, 0, 0, f->src, f->sp, f->op);
+}
+
+void
+Image_strokepath(void *fp)
+{
+	F_Image_strokepath *f;
+
+	f = fp;
+	drawpath(f->dst, f->p, 1, 0, f->width, f->cap, f->join, f->src, f->sp, SoverD);
+}
+
+void
+Image_strokepathop(void *fp)
+{
+	F_Image_strokepathop *f;
+
+	f = fp;
+	drawpath(f->dst, f->p, 1, 0, f->width, f->cap, f->join, f->src, f->sp, f->op);
+}
+
 static void
 drawarcellipse(void *fp, int isarc, int alpha, int phi, int op)
 {
@@ -1155,6 +1387,8 @@ Display_colormix(void *fp)
 	i = allocimagemix(disp, f->c1, f->c2);
 	if(locked)
 		unlockdisplay(disp);
+	if(i == nil)		/* the display has gone: a remote one hung up, say */
+		return;
 	*f->ret = mkdrawimage(i, H, f->d, nil);
 }
 
@@ -1910,6 +2144,18 @@ mkdrawimage(Image *i, Draw_Screen *screen, Draw_Display *display, void *ref)
 	Heap *h;
 	DImage *di;
 
+	/*
+	 * No image, no Draw->Image. Every allocation below can fail once
+	 * the display has gone -- a remote /dev/draw whose connection hung
+	 * up (cpu(1) from a desktop, then the desktop closes) fails every
+	 * request -- and a caller that forgets to check hands nil in here.
+	 * On the bare-metal kernel page zero is mapped, so i->r would not
+	 * fault: it read kernel text as a pointer and the dereference of
+	 * that took the machine down (Display_colormix, 2026-09-29).
+	 */
+	if(i == nil)
+		return H;
+
 	h = heap(TImage);
 	if(h == H)
 		return H;
@@ -2143,6 +2389,28 @@ Subfont*
 lookupsubfont(Display *d, char *name)
 {
 	Cache *c;
+
+	/*
+	 * The built-in font is not in the cache and never will be: it is
+	 * built by getdefont() when the Display is allocated and kept on
+	 * the Display itself, not installed through installsubfont.
+	 *
+	 * libdraw's own lookupsubfont -- the one this replaces, in
+	 * libdraw/subfontcache.c -- answers this name from
+	 * d->defaultsubfont, and dropping that case is why "*default*"
+	 * could be opened and MEASURED but never drawn. The metrics live
+	 * in the Font, which buildfont fills in from the same byte array,
+	 * so a program asking for the width of a string got a sensible
+	 * number; the glyphs live in the subfont, which loadchar could
+	 * not find, so nothing appeared. A label that lays out at the
+	 * right size and draws nothing.
+	 *
+	 * It goes unnoticed on any machine with /fonts, because then
+	 * "*default*" is never asked for. This kernel has no font files
+	 * at all, which is how it turned up.
+	 */
+	if(strcmp(name, deffontname) == 0)
+		return d->defaultsubfont;
 
 	c = cachelookup(sfcache, d, name);
 	if(c == nil)

@@ -13,7 +13,11 @@ sleep 1
 /dis/veltro/msg9p.dis >[2] /dev/null &
 sleep 1
 echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
-/dis/veltro/msgwatch.dis -a 0 -v >[2] /tmp/mw.log &
+log=/tmp/msg_triage.^${pid}^.log
+/dis/veltro/msgwatch.dis -a 0 -v >[2] $log &
 sleep 14
-/tests/msg_triage_test.dis check
+st=ok
+if {! /tests/msg_triage_test.dis check $log} {st=failed}
+rm -f $log
+if {! ~ $st ok} {raise 'fail:msg_triage'}
 echo MSGTRIAGE DONE

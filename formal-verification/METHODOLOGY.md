@@ -73,7 +73,7 @@ Total kernel source under verification: **3,831 lines of C**.
 ### 2.1 Data Structures
 
 The central data structure is the **Pgrp** (process group), defined in
-`emu/port/dat.h:266-278`:
+`emu/port/dat.h:284-296` (excerpt; the struct also has `nsh` and `pin`):
 
 ```c
 struct Pgrp {
@@ -94,7 +94,7 @@ Each `Pgrp` contains a hash table of **Mhead** (mount head) entries. Each
 
 ### 2.2 Critical Operations
 
-**`pgrpcpy(to, from)`** (`pgrp.c:74-130`): The core namespace copy
+**`pgrpcpy(to, from)`** (`pgrp.c:75-130`): The core namespace copy
 operation. Creates a deep copy of the mount table from `from` to `to`.
 
 - Acquires `wlock(&from->ns)` for the duration (57 lines)
@@ -105,14 +105,14 @@ operation. Creates a deep copy of the mount table from `from` to `to`.
 - Clones `slash` and `dot` channels via `cclone()`
 - Copies `nodevs` and `progmode` flags
 
-**`cmount(new, old, flag, spec)`** (`chan.c:388-500`): Adds a mount to the
+**`cmount(new, old, flag, spec)`** (`chan.c:506-619`): Adds a mount to the
 current process's namespace.
 
 - Lock sequence: `wlock(&pg->ns)` → `wlock(&m->lock)` → `wunlock(&pg->ns)`
 - The early release of `pg->ns` while holding `m->lock` is a critical
   optimization that allows concurrent operations on different mount points
 
-**`Sys_pctl` with `FORKNS`** (`inferno.c:869-876`): Replaces a process's
+**`Sys_pctl` with `FORKNS`** (`inferno.c:891-898`): Replaces a process's
 namespace with a fresh copy.
 
 ```c
@@ -123,8 +123,10 @@ o->pgrp = np.np;            // Swap pointer (no lock!)
 closepgrp(opg);
 ```
 
-**`namec(aname, ...)`** (`chan.c:998-1060`): Name resolution. Reads
-`pg->slash` or `pg->dot` without any lock:
+**`namec(aname, ...)`** (`chan.c:1221`): Name resolution. As verified, it
+read `pg->slash` or `pg->dot` without any lock (line numbers as of the
+finding). Since 89db5178 both reads take `rlock(&pg->ns)`
+(`chan.c:1259-1262`, `1296-1299`):
 
 ```c
 case '/':
@@ -135,8 +137,10 @@ case default:
     incref(&c->r);
 ```
 
-**`kchdir(path)`** (`sysfile.c:143-157`): Changes working directory.
-Performs `cclose(pg->dot); pg->dot = c;` without any lock.
+**`kchdir(path)`** (`sysfile.c:143-160`): Changes working directory.
+As verified, it performed `cclose(pg->dot); pg->dot = c;` without any lock.
+Since 89db5178 it swaps `dot` under `wlock(&pg->ns)` and closes the old
+channel afterwards (`sysfile.c:153-157`).
 
 ### 2.3 Locking Protocol
 
@@ -328,7 +332,7 @@ properties:
 | `namespace_isolation.pml` | 339 | 3 | 82,628 | Post-copy mount isolation |
 | `namespace_isolation_extended.pml` | 211 | 3 | 5,724 | Nested fork (parent→child→grandchild) |
 | `namespace_locks.pml` | 343 | 3 | 39,744 | Lock ordering (`pg->ns` before `mh->lock`) |
-| `namespace_races.pml` | 370 | 4 | 3,131 | Use-after-free race detection |
+| `namespace_races.pml` | 475 | 4 | 2,013 | Use-after-free race detection |
 | `exportfs_boundary.pml` | 177 | 1 | 106 | Walk("..") cannot escape exported root |
 
 ### 5.2 Modeling Decisions
@@ -360,25 +364,64 @@ wlock_mh(pg, mh);
 
 ### 5.3 Race Conditions Found
 
-The `namespace_races.pml` model formally confirms three use-after-free
-races. These are run with `-DNOCLAIM` for safety (assertions pass) and
-with LTL claims for expected violations (counterexamples found):
+The `namespace_races.pml` model formally confirmed three use-after-free
+races in the code as it was:
 
-1. **kchdir dot race** (`sysfile.c:153-154`): `cclose(pg->dot)` followed
+1. **kchdir dot race** (`sysfile.c`): `cclose(pg->dot)` followed
    by `pg->dot = c` without lock. Concurrent `namec()` reads freed pointer.
-   *LTL `no_use_after_free_dot` violated.*
-
-2. **FORKNS pgrp swap** (`inferno.c:873`): `o->pgrp = np.np` without lock.
-   Cached pgrp pointer in another thread becomes stale.
-
-3. **namec slash/dot read** (`chan.c:1022,1057`): Unprotected reads of
+2. **FORKNS pgrp swap** (`inferno.c`, `Sys_pctl`): `o->pgrp = np.np` and
+   `closepgrp` of the old group with the VM released, while devprog reads
+   another Prog's `o->pgrp` holding the VM.
+3. **namec slash/dot read** (`chan.c`): Unprotected reads of
    `pg->slash`/`pg->dot` concurrent with `kchdir`/`FORKNS`.
-   *LTL `no_use_after_free_slash` violated.*
 
-These races are mitigated by Inferno's cooperative Dis VM scheduling (only
-one Dis thread executes at a time) but are genuine hazards for the
+**Status: fixed** (89db5178 for 1 and 3; INFR-373 for 2). The model is
+now the fixed code, in which the three LTL properties hold and no end
+state deadlocks; `-DUNFIXED` models the code before, in which SPIN
+still finds the dot and pgrp use-after-frees, so the model can see
+them. `verify-all.sh full` checks both.
+
+Exercising the fix on a running emu (`tests/pgrp_race_test.b`: one Prog
+swapping its name space, fd group and dot while others read its
+`/prog/n/ns`, `fd` and `status`) found three more of the same kind in
+devprog and the Prog lifecycle, fixed with it: `/prog/n/ns` kept
+pointers to the Prog's mounts across reads and walked mount lists
+without the `Mhead` lock that `cmount` changes and frees them under
+(a fault there leaked the `pg->ns` read lock and wedged the name
+space); `Sys_pctl` swapped the fd group the same way as the pgrp; and
+`delprog` closed an exiting Prog's groups with the VM released while
+the Prog was still in the pid table.
+
+These races were masked by Inferno's cooperative Dis VM scheduling (only
+one Dis thread executes at a time) but were genuine hazards for the
 multi-threaded emu host layer where I/O threads, timer threads, and
 interpreter threads share the `Osenv`.
+
+**Status:** races 1 and 3 were fixed in 89db5178 (2026-05-14): `kchdir`
+and `namec` now take the `pg->ns` lock. That commit also re-acquired the VM
+lock before the NEWNS/FORKNS swap; fa93471d removed that because it
+deadlocked, on the reasoning that the `pg->ns` rwlock covers the race
+(see the comment in `Sys_pctl` and
+`docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`). INFR-373 then
+fixed race 2 by holding the VM lock for the pointer swap alone.
+
+**Reproduced on the runtime** (INFR-59): `tests/pgrp_race_test.b` has a
+case for each.
+- `SwapWhileRead` covers race 2: before INFR-373, 10 of 12 runs hung or
+  faulted.
+- `ChdirWhileResolve` covers races 1 and 3: Progs sharing a name space,
+  one changing dot while the others resolve relative names. With
+  `kchdir` and `namec` reverted to their unlocked form, 6 of 6 runs
+  panicked emu (`cclose`: the freed dot closed again).
+
+On the fixed emu, 10 of 10 runs pass, under `-c0` and `-c1`. Any Dis
+program can reach both: they need no privilege, only `spawn`, `chdir`,
+`pctl` and reads of `/prog`. The demonstrated impact is a crash of the
+whole emu, which is denial of service to every agent and service on
+the node. A freed `Chan` or `Pgrp` that is reused before the stale
+reference is followed could also resolve names in the wrong name space,
+but this was not demonstrated. All three are fixed, so no follow-up is
+open.
 
 ---
 
@@ -403,7 +446,8 @@ The stub header (`stubs.h`, 324 lines) provides:
 
 ### 6.3 Harnesses
 
-**Quick mode** (3 harnesses, ~1 minute, CI):
+**Quick mode** (CI) — the 3 kernel harnesses below, plus 16 PQC crypto checks from
+`harness_mlkem_ct.c`, `harness_mldsa_ct.c` and `harness_mlkem_ntt.c`:
 
 | Harness | File | Properties |
 |---------|------|-----------|
@@ -458,7 +502,7 @@ For `harness_modification_independence`:
 ### 7.2 Real Kernel Bugs (confirmed by formal methods)
 
 Three use-after-free race conditions documented in
-`TODO-RACE-CONDITIONS.md`:
+`docs/history/formal-verification/TODO-RACE-CONDITIONS.md`:
 
 1. **kchdir dot race** — `cclose(pg->dot); pg->dot = c;` without lock
    (`sysfile.c:153-154`)
@@ -472,8 +516,12 @@ Dis thread executes at a time. However, the emu host layer uses multiple
 OS threads for I/O, timers, and the interpreter, and the `Osenv`
 structure (containing the `Pgrp` pointer) is accessible from all threads.
 
-**Suggested fix**: Hold `pg->ns` read lock around `slash`/`dot` reads in
-`namec()` and write lock around `cclose()/reassign` in `kchdir()`.
+**Fix**: applied in 89db5178 — `pg->ns` read lock around the `slash`/`dot`
+reads in `namec()` and write lock around the reassign in `kchdir()`; and
+for INFR-373 the FORKNS/NEWNS (and NEWFD/FORKFD) swap holds the VM lock
+for the pointer store alone, not the copy that can wait on Limbo file
+servers (see `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md` for
+why the copy must not). See §5.3.
 
 ---
 
@@ -485,10 +533,12 @@ The verification suite is integrated into GitHub Actions
 (`.github/workflows/formal-verification.yml`):
 
 ```yaml
-- SPIN: ./verify-all.sh        # 5 models, ~30 seconds
-- CBMC: ./verify-all.sh quick  # 3 harnesses, ~1 minute
-- TLA+: ./run-verification.sh small  # 11 invariants, ~8 minutes
+- SPIN: ./verify-all.sh quick  # 5 models
+- CBMC: ./verify-all.sh quick  # 3 kernel harnesses + PQC crypto harnesses
 ```
+
+TLA+ (`./run-verification.sh small`) is run by hand; the workflow has no
+TLA+ job.
 
 ### 8.2 Reproducibility
 
@@ -499,14 +549,17 @@ All verification artifacts are committed to the repository under
 formal-verification/
 ├── spin/                    # 5 Promela models + verify-all.sh
 ├── tla+/                    # 4 TLA+ modules + configs
-├── cbmc/                    # 6 C harnesses + stubs.h + verify-all.sh
-├── results/                 # TLC output logs, generated configs
-├── run-verification.sh      # TLC runner (small/medium/large)
-└── TODO-RACE-CONDITIONS.md  # Documented race conditions
+├── cbmc/                    # 10 C harnesses + stub headers + verify-all.sh
+├── docs/                    # Phase 2 locking model design
+├── results/                 # Phase reports, TLC output logs, generated configs
+└── run-verification.sh      # TLC runner (small/medium/large)
 ```
 
-Total verification code: **4,697 lines** (1,440 Promela + 1,199 TLA+ +
-2,058 C/headers).
+The race-condition list is now at
+`docs/history/formal-verification/TODO-RACE-CONDITIONS.md`.
+
+Total verification code: **4,929 lines** (1,440 Promela + 1,198 TLA+ +
+2,291 C/headers).
 
 ---
 

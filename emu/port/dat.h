@@ -52,7 +52,7 @@ enum
 {
 	NERR		= 32,
 	KNAMELEN	= 28,
-	MAXROOT		= 5*KNAMELEN, 	/* Maximum root pathname len of devfs-* */
+	MAXROOT		= 1024, 	/* Maximum root pathname len of devfs-* (a host path) */
 	NUMSIZE		= 11,
 	PRINTSIZE	= 256,
 	READSTR		= 1000		/* temporary buffer size for device reads */
@@ -123,6 +123,7 @@ struct Chan
 	int	uri;			/* union read index */
 	int	dri;			/* devdirread index */
 	ulong	mountid;
+	int	mflag;			/* flags of mount entry used to reach this channel */
 	Mntcache *mcp;			/* Mount cache pointer */
 	Mnt		*mux;		/* Mnt for clients using me for messages */
 	void*	aux;		/* device specific data */
@@ -222,9 +223,8 @@ enum
 struct Mntwalk				/* state for /proc/#/ns */
 {
 	int		cddone;
+	int		started;	/* id is the last mount read */
 	ulong	id;
-	Mhead*	mh;
-	Mount*	cm;
 };
 
 struct Mount
@@ -414,6 +414,7 @@ struct Proc
 	int		killed;		/* by swiproc */
 	int	nlocks;		/* spin locks held (fault fail-stop diagnostic) */
 	int	swipend;	/* software interrupt pending for Prog */
+	int	intpend;	/* Prog killed between Sleeps and syscalls: next one is interrupted (under rlock) */
 	int	syscall;	/* set true under sysio for interruptable syscalls */
 	int	intwait;	/* spin wait for note to turn up */
 	uintptr	sigid;		/* handle used for signal/note/exception: a pid, or a pthread_t on MacOSX, so it must be pointer-sized */

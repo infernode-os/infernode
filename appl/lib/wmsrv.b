@@ -4,10 +4,18 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display, Image, Point, Rect, Screen, Pointer, Context, Wmcontext: import draw;
+	Display, Image, Point, Rect, Screen, Pointer, Context, Wmcontext, Chans: import draw;
 include "wmsrv.m";
+include "styx.m";
+	styx: Styx;
+	Tmsg, Rmsg: import styx;
+include "styxservers.m";
+	styxservers: Styxservers;
+	Styxserver, Navigator, Navop: import styxservers;
 
 zorder: ref Client;		# top of z-order list, linked by znext.
+allclients: array of ref Client;	# wm()'s clients array, for wsys()
+stopc: chan of int;		# stop() -> wm()
 
 ZR: con Rect((0, 0), (0, 0));
 Iqueue: adt {
@@ -57,6 +65,7 @@ init(name: string): 	(chan of (string, chan of (string, ref Wmcontext)),
 	wmreq := chan of (string, chan of (string, ref Wmcontext));
 	join := chan of (ref Client, chan of string);
 	req := chan of (ref Client, array of byte, Sys->Rwrite);
+	stopc = chan of int;
 	spawn wm(ctlio, wmreq, join, req);
 	return (wmreq, join, req);
 }
@@ -119,6 +128,7 @@ wm(ctlio: ref Sys->FileIO,
 				newwmcontext()
 			);
 			clients = addclient(clients, c);
+			allclients = clients;
 		}
 		alt{
 		rc <-= (sys->aprint("%d", c.token), nil) => ;
@@ -139,6 +149,20 @@ wm(ctlio: ref Sys->FileIO,
 			req <-= (c, nil, nil);
 			delclient(clients, c);
 		}
+	<-stopc =>
+		for(i := 0; i < len clients; i++) {
+			c := clients[i];
+			if(c == nil)
+				continue;
+			alt{
+			c.ctl <-= "exit" => ;
+			* => ;
+			}
+			if(c.stop != nil)
+				c.stop <-= 1;
+		}
+		allclients = nil;
+		return;
 		}  # end alt
 	}  # end for
 }
@@ -311,6 +335,14 @@ addclient(clients: array of ref Client, c: ref Client): array of ref Client
 delclient(clients: array of ref Client, c: ref Client)
 {
 	clients[c.id] = nil;
+}
+
+stop()
+{
+	if(stopc == nil)
+		return;
+	stopc <-= 1;
+	stopc = nil;
 }
 
 senderror(rc: chan of (string, ref Wmcontext), e: string)
@@ -617,4 +649,184 @@ Ptrqueue.nonempty(q: self ref Ptrqueue): int
 Ptrqueue.flush(q: self ref Ptrqueue)
 {
 	q.h = q.t = nil;
+}
+
+# ── wsys: the windows as a read-only file tree ──────────────────────
+#
+#	<id>/window	client <id>'s main window: the /dev/screen format,
+#			an uncompressed image, a snapshot taken at open
+#
+# A client's main window is its oldest: windows are kept most recent
+# first, and the later ones are the ephemeral kind (pop-up menus).  The
+# tag is the window manager's business, "." under wm, "app" under
+# lucifer and matrix, so it is not used to find it.
+#
+# Rio serves the same as /dev/wsys/<id>/window.  Windows are allocated
+# Refbackup, so a covered window reads as it is, not as what covers it.
+# Nothing is mounted here; the caller puts the tree in the namespaces
+# that should have it.
+
+Qwroot, Qwdir, Qwwin: con iota;
+
+wsys(): ref Sys->FD
+{
+	if(sys == nil)
+		sys = load Sys Sys->PATH;
+	styx = load Styx Styx->PATH;
+	styxservers = load Styxservers Styxservers->PATH;
+	if(styx == nil || styxservers == nil)
+		return nil;
+	styx->init();
+	styxservers->init(styx);
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		return nil;
+	navops := chan of ref Navop;
+	spawn wsysnav(navops);
+	(tc, srv) := Styxserver.new(fds[0], Navigator.new(navops), big Qwroot);
+	spawn wsysserve(tc, srv, navops);
+	return fds[1];
+}
+
+wsysserve(tc: chan of ref Tmsg, srv: ref Styxserver, navops: chan of ref Navop)
+{
+	while((m := <-tc) != nil) {
+		pick tm := m {
+		Readerror =>
+			break;
+		Open =>
+			c := srv.open(tm);
+			if(c != nil && int (c.path & big 16rFF) == Qwwin)
+				c.data = winimage(wsysclient(int (c.path >> 8)));
+		Read =>
+			c := srv.getfid(tm.fid);
+			if(c != nil && c.isopen && int (c.path & big 16rFF) == Qwwin) {
+				if(c.data == nil)
+					srv.reply(ref Rmsg.Error(tm.tag, "window has no image"));
+				else
+					srv.reply(styxservers->readbytes(tm, c.data));
+			} else
+				srv.read(tm);
+		* =>
+			srv.default(m);
+		}
+	}
+	navops <-= nil;
+}
+
+# The live client with this id that has a window image, or nil.
+wsysclient(id: int): ref Client
+{
+	a := allclients;
+	if(id < 0 || id >= len a || a[id] == nil)
+		return nil;
+	if(mainimage(a[id]) == nil)
+		return nil;
+	return a[id];
+}
+
+mainimage(c: ref Client): ref Image
+{
+	img: ref Image;
+	for(w := c.wins; w != nil; w = tl w)
+		if((hd w).img != nil)
+			img = (hd w).img;
+	return img;
+}
+
+winimage(c: ref Client): array of byte
+{
+	if(c == nil)
+		return nil;
+	img := mainimage(c);
+	if(img == nil)
+		return nil;
+	r := img.r;
+	hdr := array of byte sys->sprint("%11s %11d %11d %11d %11d ",
+		img.chans.text(), r.min.x, r.min.y, r.max.x, r.max.y);
+	bpl := (r.dx() * img.depth + 7) / 8;
+	px := array[bpl * r.dy()] of byte;
+	if(img.readpixels(r, px) != len px)
+		return nil;
+	b := array[len hdr + len px] of byte;
+	b[0:] = hdr;
+	b[len hdr:] = px;
+	return b;
+}
+
+wsysdir(p: big): ref Sys->Dir
+{
+	d := ref sys->zerodir;
+	d.qid.path = p;
+	d.uid = d.gid = "wm";
+	id := int (p >> 8);
+	case int (p & big 16rFF) {
+	Qwroot =>
+		d.name = ".";
+		d.qid.qtype = Sys->QTDIR;
+		d.mode = Sys->DMDIR|8r555;
+	Qwdir =>
+		if(wsysclient(id) == nil)
+			return nil;
+		d.name = string id;
+		d.qid.qtype = Sys->QTDIR;
+		d.mode = Sys->DMDIR|8r555;
+	Qwwin =>
+		if(wsysclient(id) == nil)
+			return nil;
+		d.name = "window";
+		d.mode = 8r444;
+	* =>
+		return nil;
+	}
+	return d;
+}
+
+wsysnav(navops: chan of ref Navop)
+{
+	while((m := <-navops) != nil) {
+		pick n := m {
+		Stat =>
+			d := wsysdir(n.path);
+			if(d == nil)
+				n.reply <-= (nil, Styxservers->Enotfound);
+			else
+				n.reply <-= (d, nil);
+		Walk =>
+			t := int (n.path & big 16rFF);
+			id := int (n.path >> 8);
+			d: ref Sys->Dir;
+			if(n.name == "..")
+				d = wsysdir(big Qwroot);
+			else if(t == Qwroot) {
+				(ok, nil) := sys->tokenize(n.name, "0123456789");
+				if(ok == 0 && n.name != "")
+					d = wsysdir((big int n.name << 8) | big Qwdir);
+			} else if(t == Qwdir && n.name == "window")
+				d = wsysdir((big id << 8) | big Qwwin);
+			if(d == nil)
+				n.reply <-= (nil, Styxservers->Enotfound);
+			else
+				n.reply <-= (d, nil);
+		Readdir =>
+			t := int (n.path & big 16rFF);
+			ents: list of ref Sys->Dir;
+			if(t == Qwroot) {
+				a := allclients;
+				for(i := len a - 1; i >= 0; i--)
+					if(wsysclient(i) != nil)
+						ents = wsysdir((big i << 8) | big Qwdir) :: ents;
+			} else if(t == Qwdir)
+				ents = wsysdir((n.path & ~big 16rFF) | big Qwwin) :: nil;
+			i := 0;
+			for(; ents != nil; ents = tl ents) {
+				if(hd ents == nil)
+					continue;
+				if(i >= n.offset && i < n.offset + n.count)
+					n.reply <-= (hd ents, nil);
+				i++;
+			}
+			n.reply <-= (nil, nil);
+		}
+	}
 }

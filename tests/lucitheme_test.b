@@ -1,7 +1,7 @@
 implement LucithemeTest;
 
 #
-# Regression tests for Lucitheme module (2026-03).
+# Regression tests for Lucitheme module (2026-03, extended 2026-09).
 #
 # Covers:
 #   - Lucitheme->gettheme() renamed from load() (Limbo reserved keyword fix)
@@ -9,6 +9,24 @@ implement LucithemeTest;
 #   - wmclient border colour fix: accent (not hardcoded teal 0x448888FF)
 #   - wmclient border colour fix: border (not hardcoded cyan 0x9EEEEEFF)
 #   - wmclient background fix: bg is not white (no white flash on window close)
+#   - A theme file's colour whose red channel is >= 0x80 is parsed, not
+#     silently dropped (2026-09; see FromFileHighRed* below)
+#
+# What the tests above never exercised: parsehex() packs "RRGGBB" into
+# a 32-bit RRGGBBAA int with alpha always FF, and any colour whose red
+# channel is >= 0x80 -- most of a light theme's near-white colours --
+# sets that int's sign bit and comes back negative. gettheme() used to
+# read "value < 0" as "this line failed to parse" and silently kept
+# Brimstone's default for that key. On Halo (bg FFFFEA, header
+# EAFFFF, ...) the desktop's own hand-drawn zones (conv, ctx,
+# presentation -- appl/cmd/luci{conv,ctx,pres}.b) kept Brimstone's
+# dark background and header while Halo's accent (2266CC, red channel
+# 0x22, unaffected) came through fine: the highlight changed, the
+# background didn't. Every test above uses brimstone()'s own
+# hardcoded fields (correct regardless, since they are Limbo int
+# literals, not parsed) or gettheme() with no theme file on disk (the
+# same brimstone() fallback) -- neither one calls parsehex() on a
+# colour that would expose the bug.
 #
 
 include "sys.m";
@@ -113,6 +131,267 @@ testGetThemeAlpha(t: ref T)
 	t.asserteq(th.text   & 16rFF, 16rFF, "text has full alpha");
 }
 
+THEMEDIR: con "/lib/lucifer/theme/";
+
+writefile(path, data: string)
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		fd = sys->open(path, Sys->OWRITE|Sys->OTRUNC);
+	if(fd == nil)
+		return;
+	b := array of byte data;
+	sys->write(fd, b, len b);
+}
+
+# Fork a namespace, shadow THEMEDIR with a fixture shaped exactly like
+# Halo's real file -- a light background, a light header, an accent
+# that always worked, and a line that is not a valid colour at all --
+# and hand the parsed theme back. The bind is in a forked namespace so
+# the tree's real theme files are never touched.
+probefromfile(resc: chan of ref Lucitheme->Theme)
+{
+	sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKNS, nil);
+
+	dir := sys->sprint("/tmp/lucitheme_test.%d", sys->pctl(0, nil));
+	sys->create(dir, Sys->OREAD, Sys->DMDIR|8r755);
+	writefile(dir + "/current", "lighttest");
+	writefile(dir + "/lighttest",
+		"bg FFFFEA\n" +			# red channel 0xFF: the failing case
+		"header EAFFFF\n" +		# red channel 0xEA: also failing
+		"accent 2266CC\n" +		# red channel 0x22: always worked
+		"badline notahexcolour\n");	# still skipped, not a crash
+
+	if(sys->bind(dir, THEMEDIR, Sys->MREPL) < 0) {
+		resc <-= nil;
+		return;
+	}
+
+	lt := load Lucitheme Lucitheme->PATH;
+	resc <-= lt->gettheme();
+}
+
+fromfiletheme(): ref Lucitheme->Theme
+{
+	resc := chan of ref Lucitheme->Theme;
+	spawn probefromfile(resc);
+	return <-resc;
+}
+
+testFromFileHighRedBackground(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.bg, int 16rFFFFEAFF, "bg FFFFEA (red 0xFF) is applied, not left at Brimstone's default");
+}
+
+testFromFileHighRedHeader(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.header, int 16rEAFFFFFF, "header EAFFFF (red 0xEA) is applied, not left at Brimstone's default");
+}
+
+testFromFileLowRedAccentStillWorks(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.accent, int 16r2266CCFF, "accent 2266CC (red 0x22, the case that always worked) is unaffected");
+}
+
+testFromFileInvalidLineIsSkippedNotFatal(t: ref T)
+{
+	th := fromfiletheme();
+	# "badline notahexcolour" must not have crashed gettheme() or
+	# corrupted a neighbouring field; accent is the check for that.
+	t.assert(th != nil, "gettheme survives a line that is not a valid colour");
+}
+
+testXenithShipped(t: ref T)
+{
+	th := lucitheme->loadtheme("xenith");
+	if(!t.assert(th != nil, "the xenith theme is installed"))
+		return;
+	t.asserteq(th.editbg, int 16r1E1E2EFF, "xenith body is Catppuccin base");
+	t.asserteq(th.header, int 16r313244FF, "xenith tags are Catppuccin surface0");
+}
+
+testGlendaShipped(t: ref T)
+{
+	th := lucitheme->loadtheme("glenda");
+	if(!t.assert(th != nil, "the glenda theme is installed"))
+		return;
+	# acme's body and rio's menus, as allocimagemix makes them
+	t.asserteq(th.editbg, int 16rFFFFEAFF, "body: Paleyellow over White");
+	t.asserteq(th.menubg, int 16rEAFFEAFF, "menu: Palegreen over White");
+	t.asserteq(th.menuhilit, int 16r448844FF, "menu highlight: DDarkgreen");
+	t.asserteq(th.border, int 16r8888CCFF, "tag border: DPurpleblue");
+}
+
+# A shell window's text: each shipped theme sets the colour for a
+# window without the keyboard and the one for held input, readable
+# and unlike its text and each other.
+testShellTextShipped(t: ref T)
+{
+	for(l := "brimstone" :: "halo" :: "glenda" :: "xenith" :: nil; l != nil; l = tl l){
+		name := hd l;
+		(unfocused, hold) := (0, 0);
+		for(e := lucitheme->entries(name); e != nil; e = tl e){
+			(k, v) := hd e;
+			if(k == "editunfocused")
+				unfocused = v;
+			else if(k == "edithold")
+				hold = v;
+		}
+		if(!t.assert(unfocused != 0 && hold != 0, name+" sets editunfocused and edithold"))
+			continue;
+		th := lucitheme->loadtheme(name);
+		t.asserteq(th.editunfocused, unfocused, name+": editunfocused as its file sets it");
+		t.asserteq(th.edithold, hold, name+": edithold as its file sets it");
+		t.assertne(unfocused, th.edittext, name+": editunfocused is not its text");
+		t.assertne(hold, th.edittext, name+": edithold is not its text");
+		t.assertne(hold, unfocused, name+": edithold is not editunfocused");
+	}
+	th := lucitheme->brimstone();
+	t.asserteq(th.editunfocused, int 16r8A8A8AFF, "brimstone's built-in editunfocused");
+	t.asserteq(th.edithold, int 16r6FA3E0FF, "brimstone's built-in edithold");
+}
+
+# A theme that does not set them has its own text2 and accent, not
+# Brimstone's shell colours: the fixture sets accent alone.
+testShellTextDerived(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.edithold, int 16r2266CCFF, "edithold is the theme's own accent");
+	t.asserteq(th.editunfocused, th.text2, "editunfocused is the theme's text2");
+}
+
+testEntries(t: ref T)
+{
+	got := "";
+	n := 0;
+	for(l := lucitheme->entries("glenda"); l != nil; l = tl l){
+		(k, v) := hd l;
+		n++;
+		if(k == "xenith-bg-tag-0" || k == "xenith-bord-tag-0" || k == "xenith-mod-but-0")
+			got += sys->sprint(" %s=%.8ux", k, v);
+	}
+	t.assertseq(got, " xenith-bg-tag-0=eaffffff xenith-bord-tag-0=8888ccff xenith-mod-but-0=000099ff",
+		"a program's own keys come through, in file order");
+	t.assert(n > 60, "every entry, roles and all");
+	t.assert(lucitheme->entries("../glenda") == nil, "a path is not a theme name");
+}
+
+# The tests below run with a fixture bound over THEMEDIR in this
+# process's own name space (forked first), so the tree's current file
+# is never written.
+FIXTURE: con "/tmp/lucitheme_test.fixture";
+
+fixture(): int
+{
+	sys->pctl(Sys->FORKNS, nil);
+	sys->create(FIXTURE, Sys->OREAD, Sys->DMDIR|8r755);
+	writefile(FIXTURE + "/current", "darkone");
+	writefile(FIXTURE + "/darkone", "bg 101010\n");
+	writefile(FIXTURE + "/lightone", "bg F0F0F0\n");
+	return sys->bind(FIXTURE, THEMEDIR, Sys->MREPL);
+}
+
+testThemes(t: ref T)
+{
+	l := lucitheme->themes();
+	s := "";
+	for(; l != nil; l = tl l)
+		s += " " + hd l;
+	t.assertseq(s, " darkone lightone", "installed themes, sorted, current excluded");
+}
+
+testCurrent(t: ref T)
+{
+	t.assertseq(lucitheme->current(), "darkone", "current names the active theme");
+}
+
+testLoadUnknown(t: ref T)
+{
+	t.assert(lucitheme->loadtheme("nosuch") == nil, "no such theme");
+	t.assert(lucitheme->loadtheme("../darkone") == nil, "a path is not a theme name");
+	t.assert(lucitheme->loadtheme("current") == nil, "current is not a theme");
+}
+
+testSetRefused(t: ref T)
+{
+	t.assert(lucitheme->settheme("nosuch") != nil, "no such theme is refused");
+	t.assert(lucitheme->settheme("a/b") != nil, "a path is refused");
+	t.assert(lucitheme->settheme("current") != nil, "current is refused");
+	t.assertseq(lucitheme->current(), "darkone", "a refused switch changes nothing");
+}
+
+testSet(t: ref T)
+{
+	t.assert(lucitheme->settheme("lightone") == nil, "switch to an installed theme");
+	t.assertseq(lucitheme->current(), "lightone", "current follows the switch");
+	t.asserteq(lucitheme->gettheme().bg, int 16rF0F0F0FF, "gettheme loads the new theme");
+	lucitheme->settheme("darkone");
+}
+
+testWatch(t: ref T)
+{
+	# the watcher runs until its process group is killed, so give it
+	# a group of its own: left running it would keep emu up
+	res := chan of string;
+	pidc := chan of int;
+	spawn watchprobe(pidc, res);
+	pid := <-pidc;
+	# whoever writes current, by any means, is seen
+	writefile(THEMEDIR + "current", "lightone");
+	timeout := chan[1] of int;
+	spawn sleeper(timeout, 5000);
+	name := "";
+	alt {
+	name = <-res =>
+		;
+	<-timeout =>
+		;
+	}
+	ctl := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if(ctl != nil)
+		sys->fprint(ctl, "killgrp");
+	lucitheme->settheme("darkone");
+	t.assertseq(name, "lightone", "watch delivers the new name");
+}
+
+watchprobe(pidc: chan of int, res: chan of string)
+{
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	# the theme served (as the profile, wm/wm or Lucifer does): watch
+	# reads its event file, so nothing is polled.  The server is in this
+	# group, killed with it.
+	err := lucitheme->serve();
+	if(err != nil) {
+		pidc <-= pid;
+		res <-= "serve: " + err;
+		<-chan of int;
+	}
+	# watch opens event before it returns: only then may the test change
+	# the name, or the change could come before the reader is there
+	c := lucitheme->watch();
+	pidc <-= pid;
+	res <-= <-c;
+	<-chan of int;	# stay, so the group can be killed by this pid
+}
+
+sleeper(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -140,6 +419,24 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BrimstoneColors",  testBrimstoneColors);
 	run("GetThemeNotNil",   testGetThemeNotNil);
 	run("GetThemeAlpha",    testGetThemeAlpha);
+	run("FromFileHighRedBackground",       testFromFileHighRedBackground);
+	run("FromFileHighRedHeader",           testFromFileHighRedHeader);
+	run("FromFileLowRedAccentStillWorks",  testFromFileLowRedAccentStillWorks);
+	run("FromFileInvalidLineIsSkippedNotFatal", testFromFileInvalidLineIsSkippedNotFatal);
+	run("XenithShipped", testXenithShipped);
+	run("GlendaShipped", testGlendaShipped);
+	run("Entries", testEntries);
+	run("ShellTextShipped", testShellTextShipped);
+	run("ShellTextDerived", testShellTextDerived);
+
+	if(fixture() < 0)
+		raise sys->sprint("fail:cannot bind the theme fixture: %r");
+	run("Themes", testThemes);
+	run("Current", testCurrent);
+	run("LoadUnknown", testLoadUnknown);
+	run("SetRefused", testSetRefused);
+	run("Set", testSet);
+	run("Watch", testWatch);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -19,9 +19,11 @@ columnm : Columnm;
 fsys : Fsys;
 editm: Edit;
 asyncio: Asyncio;
+docview : Docview;
 
 Dir, OREAD, OWRITE : import Sys;
 formatmod : Format;
+framem : Framem;
 EVENTSIZE, QWaddr, QWdata, QWevent, Astring, CHAPPEND : import dat;
 Lock, Reffont, Ref, seltext, seq, row : import dat;
 warning, error, skipbl, findbl, stralloc, strfree, strncmp, exec : import utils;
@@ -52,11 +54,13 @@ init(mods : ref Dat->Mods)
 	scrl = mods.scroll;
 	filem = mods.filem;
 	rowm = mods.rowm;
+	framem = mods.framem;
 	windowm = mods.windowm;
 	columnm = mods.columnm;
 	fsys = mods.fsys;
 	editm = mods.edit;
 	asyncio = mods.asyncio;
+	docview = mods.docview;
 
 	snarfbuf = bufferm->newbuffer();
 }
@@ -69,10 +73,11 @@ Exectab : adt {
 	flag2 : int;
 };
 
-F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX : con iota;
+F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_LIVE, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
 
 exectab := array[] of {
 	Exectab ( "Alphabet",	F_ALPHABET,	FALSE,	XXX,		XXX		),
+	Exectab ( "Back",		F_WEB,		FALSE,	0,		XXX		),
 	Exectab ( "Cut",		F_CUT,		TRUE,	TRUE,	TRUE	),
 	Exectab ( "Del",			F_DEL,		FALSE,	FALSE,	XXX		),
 	Exectab ( "Delcol",		F_DELCOL,	FALSE,	XXX,		XXX		),
@@ -81,6 +86,7 @@ exectab := array[] of {
 	Exectab ( "Edit",		F_EDIT,		FALSE,	XXX,		XXX		),
 	Exectab ( "Exit",		F_EXITX,		FALSE,	XXX,		XXX		),
 	Exectab ( "Font",		F_FONTX,		FALSE,	XXX,		XXX		),
+	Exectab ( "Fwd",		F_WEB,		FALSE,	1,		XXX		),
 	Exectab ( "Get",			F_GET,		FALSE,	TRUE,	XXX		),
 	Exectab ( "ID",			F_ID,		FALSE,	XXX,		XXX		),
 	Exectab ( "Incl",		F_INCL,		FALSE,	XXX,		XXX		),
@@ -89,6 +95,7 @@ exectab := array[] of {
 	Exectab ( "Limbo",		F_LIMBO,		FALSE,	XXX,		XXX   	),
 	Exectab ( "Lineno",		F_LINENO,	FALSE,	XXX,		XXX		),
 	Exectab ( "Load",		F_DUMP,		FALSE,	FALSE,	XXX		),
+	Exectab ( "Live",		F_LIVE,		FALSE,	XXX,		XXX		),
 	Exectab ( "Local",		F_LOCAL,		FALSE,	XXX,		XXX		),
 	Exectab ( "Look",		F_LOOK,		FALSE,	XXX,		XXX		),
 	Exectab ( "New",		F_NEW,		FALSE,	XXX,		XXX		),
@@ -98,10 +105,13 @@ exectab := array[] of {
 	Exectab ( "Putall",		F_PUTALL,	FALSE,	XXX,		XXX		),
 	Exectab ( "Render",		F_RENDER,	FALSE,	XXX,		XXX		),
 	Exectab ( "Redo",		F_UNDO,		FALSE,	FALSE,	XXX		),
+	Exectab ( "Reload",		F_WEB,		FALSE,	2,		XXX		),
 	Exectab ( "Send",		F_SEND,		TRUE,	XXX,		XXX		),
 	Exectab ( "Snarf",		F_CUT,		FALSE,	TRUE,	FALSE	),
 	Exectab ( "Sort",		F_SORT,		FALSE,	XXX,		XXX		),
+	Exectab ( "Stop",		F_WEB,		FALSE,	3,		XXX		),
 	Exectab ( "Tab",		F_TAB,		FALSE,	XXX,		XXX		),
+	Exectab ( "Theme",		F_THEME,		FALSE,	XXX,		XXX		),
 	Exectab ( "Undo",		F_UNDO,		FALSE,	TRUE,	XXX		),
 	Exectab ( "Zerox",		F_ZEROX,		FALSE,	XXX,		XXX		),
 	Exectab ( nil, 			0,			0,		0,		0		),
@@ -118,6 +128,7 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_EDIT		=> edit(et, argt, arg, narg);
 		F_EXITX		=> exitx();
 		F_FONTX		=> fontx(et, t, argt, arg, narg);
+		F_THEME		=> themex(argt, arg, narg);
 		F_GET 		=> get(et, t, argt, flag1, arg, narg);
 		F_ID 		=> id(et);
 		F_INCL 		=> incl(et, argt, arg, narg);
@@ -133,11 +144,13 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_PUT		=> put(et, argt, arg, narg);
 		F_PUTALL 	=> putall();
 		F_RENDER	=> renderx(et, t);
+		F_LIVE		=> livex(et);
 		F_UNDO 		=> undo(et, flag1);
 		F_SEND		=> send(et, t);
 		F_SORT		=> sort(et);
 		F_TAB		=> tab(et, argt, arg, narg);
 		F_ZEROX		=> zerox(et, t);
+		F_WEB		=> webx(et, flag1);
 		*			=> error("bad case in runfun()");
 	}
 }	
@@ -251,43 +264,10 @@ execute(t : ref Text, aq0 : int, aq1 : int, external : int, argt : ref Text)
 		return;
 	}
 
-	# Check if this is a zoom or renderer command for image mode windows
-	if(t.w != nil && t.w.imagemode){
-		(cs, cn) := skipbl(r.s, q1-q0);
-		(nil, cn) = findbl(cs, cn);
-		cn = len cs - cn;
-		cmdstr := cs[0:cn];
-		# Zoom commands are handled locally (no re-render needed)
-		if(cmdstr == "Zoom+"){
-			if(t.w.zoomscale < 400)
-				t.w.zoomscale += 25;
-			t.w.drawimage();
-			strfree(r);
-			r = nil;
-			return;
-		}
-		if(cmdstr == "Zoom-"){
-			if(t.w.zoomscale > 100)
-				t.w.zoomscale -= 25;
-			t.w.imageoffset.x = 0;
-			t.w.imageoffset.y = 0;
-			t.w.drawimage();
-			strfree(r);
-			r = nil;
-			return;
-		}
-		# Renderer commands (NextPage, PrevPage, etc.) — async re-render
-		if(t.w.contentrenderer != nil){
-			cmds := t.w.contentrenderer->commands();
-			for(; cmds != nil; cmds = tl cmds){
-				if((hd cmds).name == cmdstr){
-					t.w.asynccontentcommand(cmdstr, nil);
-					strfree(r);
-					r = nil;
-					return;
-				}
-			}
-		}
+	if(doccommand(t.w, r.s[0:q1-q0])){
+		strfree(r);
+		r = nil;
+		return;
 	}
 
 	(dir, n) = dirname(t, nil, 0);
@@ -299,6 +279,60 @@ execute(t : ref Text, aq0 : int, aq1 : int, external : int, argt : ref Text)
 	if(t.w != nil)
 		t.w.refx.inc();
 	spawn run(t.w, r.s, dir, n, TRUE, aa, a, FALSE);
+}
+
+# The view's commands on a document: Zoom+, Zoom-, Zoom n, Fit, Fit
+# page, Page n, NextPage, PrevPage, and the engine's own; 1 if s was one
+doccommand(w : ref Window, s : string) : int
+{
+	if(w == nil || w.doc == nil)
+		return 0;
+	(nil, words) := sys->tokenize(s, " \t\n");
+	if(words == nil)
+		return 0;
+	darg := "";
+	for(l := tl words; l != nil; l = tl l){
+		if(darg != "")
+			darg += " ";
+		darg += hd l;
+	}
+	(isdoc, derr) := docview->command(w, hd words, darg);
+	if(isdoc && derr != nil)
+		warning(nil, sprint("%s: %s\n", hd words, derr));
+	return isdoc;
+}
+
+# A word button 2 chose where there is no text to address (a word on a
+# document's drawing), executed as execute does: a built-in, a document's
+# command, else a command run.  run lets go of the window when it is
+# done, so it is held for it here.
+executeword(t : ref Text, s : string)
+{
+	if(s == nil)
+		return;
+	e := lookup(s, len s);
+	if(e >= 0){
+		if(exectab[e].mark && seltext!=nil)
+		if(seltext.what == Body){
+			seq++;
+			seltext.w.body.file.mark();
+		}
+		(a, n) := skipbl(s, len s);
+		(a, n) = findbl(a, n);
+		(a, n) = skipbl(a, n);
+		runfun(exectab[e].fun, t, seltext, nil, exectab[e].flag1, exectab[e].flag2, a, n);
+		return;
+	}
+	if(doccommand(t.w, s))
+		return;
+	(dir, n) := dirname(t, nil, 0);
+	if(n==1 && dir[0]=='.'){	# sigh 
+		dir = nil;
+		n = 0;
+	}
+	if(t.w != nil)
+		t.w.refx.inc();
+	spawn run(t.w, s, dir, n, TRUE, nil, nil, FALSE);
 }
 
 printarg(argt : ref Text, q0 : int, q1 : int) : string
@@ -416,15 +450,41 @@ undo(et : ref Text, flag1 : int)
 	if(et==nil || et.w== nil)
 		return;
 	seq = seqof(et.w, flag1);
+	# nothing to undo: every other window with nothing to undo has the
+	# same seq, 0, and was undone with it
+	if(seq == 0)
+		return;
+	# the executing window first, as Acme does: its display follows,
+	# the others' do not jump
+	et.w.undo(flag1);
 	for(i=0; i<row.ncol; i++){
 		c = row.col[i];
 		for(j=0; j<c.nw; j++){
 			w = c.w[j];
-			if(seqof(w, flag1) == seq)
-				w.undo(flag1);
+			if(w.body.file == et.w.body.file)
+				continue;	# et.w and its Zeroxes, locked with it
+			if(seqof(w, flag1) == seq){
+				# the other files the same change made (Edit X):
+				# locked as et.w is, so their events have an owner
+				# and a client reading them does not see them change
+				o := et.w.owner;
+				if(o == 0)
+					o = 'M';
+				w.lock(o);
+				# let go if it raises: in an Edit (its u) nothing
+				# else would, and every window waited for it
+				{
+					w.undo(flag1);
+				}
+				exception e{
+					* =>
+						w.unlock();
+						raise e;
+				}
+				w.unlock();
+			}
 		}
 	}
-	# et.w.undo(flag1);
 }
 
 getname(t : ref Text, argt : ref Text, arg : string, narg : int, isput : int) : string
@@ -460,7 +520,10 @@ getname(t : ref Text, argt : ref Text, arg : string, narg : int, isput : int) : 
 		ndir = 0;
 		if(n>0 && arg[0]!='/'){
 			(dir, ndir) = dirname(t, nil, 0);
-			if(n==1 && dir[0]=='.'){	# sigh 
+			# the directory's length, as Acme has it: the argument's
+			# (n) took dir[0] of no directory, with an argument one
+			# character long (a nil dereference)
+			if(ndir==1 && dir[0]=='.'){	# sigh 
 				dir = nil;
 				ndir = 0;
 			}
@@ -517,9 +580,50 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	if(flag1)
 		if(et==nil || et.w==nil)
 			return;
+	# In a browser window Get goes to the URL given, or named in the
+	# tag, or reloads the page there.
+	if(et.w.doc != nil && et.w.doc.v.web){
+		w = et.w;
+		u := "";
+		if(narg > 0)
+			u = arg[0:narg];
+		else{
+			(nil, r, n) = getarg(argt, FALSE, TRUE);
+			if(r != nil)
+				u = r[0:n];
+		}
+		if(u == nil)
+			u = w.body.file.name;
+		err : string;
+		if(u == nil || u == w.doc.v.name)
+			(nil, err) = docview->command(w, "Reload", nil);
+		else
+			err = docview->browse(w, u);
+		if(err != nil)
+			warning(nil, sprint("Get: %s\n", err));
+		return;
+	}
+	# A document's file is opened again as what it is (its kind found
+	# again from its name and first bytes)
+	if(et.w.doc != nil && narg == 0 && getarg(argt, FALSE, TRUE).t1 == nil){
+		w = et.w;
+		name = w.body.file.name;
+		if((k := docview->kind(name)) != nil && k.class == Docreg->Binary){
+			if((err := docview->open(w, name, k)) != nil)
+				warning(nil, sprint("Get: %s\n", err));
+			return;
+		}
+		docview->close(w);
+	}
 	# Clear render mode before reloading file
 	if(et.w.rendermode != 0)
 		renderoff(et.w);
+	# typing not yet in the file is a change, as any other: committed,
+	# the window is dirty and not read over. Left, Get read the file
+	# with the typing still held, which Text.loadx refused by taking
+	# Xenith down (a client's get while the body was typed in)
+	if(et.w.body.ncache)
+		et.w.commit(et.w.body);
 	if(!et.w.isdir && (et.w.body.file.buf.nc>0 && !et.w.clean(TRUE, FALSE)))
 		return;
 	w = et.w;
@@ -538,6 +642,12 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	}
 	r = name;
 	n = len name;
+	# a load still under way stopped: its chunks went into the new text
+	# (they are dropped by their operation, no longer the window's)
+	if(w.asyncload != nil){
+		asyncio->asynccancel(w.asyncload);
+		w.asyncload = nil;
+	}
 	for(i=0; i<t.file.ntext; i++){
 		u = t.file.text[i];
 		# second and subsequent calls with zero an already empty buffer, but OK 
@@ -545,6 +655,16 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		u.w.dirfree();
 	}
 	samename := r[0:n] == t.file.name;
+	# a PDF or an image is shown as the document it is
+	if((k := docview->kind(name)) != nil && k.class == Docreg->Binary){
+		if(!samename)
+			w.setname(name, len name);
+		if((err := docview->open(w, name, k)) != nil)
+			warning(nil, sprint("Get: %s\n", err));
+		return;
+	}
+	if(w.doc != nil)
+		docview->close(w);
 	t.loadx(0, name, samename);
 	if(samename){
 		t.file.mod = FALSE;
@@ -564,6 +684,32 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		u.w.tag.setselect(u.w.tag.file.buf.nc, u.w.tag.file.buf.nc);
 		scrl->scrdraw(u);
 	}
+}
+
+# the text of buf from q0 to q1, as UTF-8
+textbytes(buf: ref Bufferm->Buffer, q0, q1: int): array of byte
+{
+	r := stralloc(BUFSIZE);
+	parts: list of array of byte;
+	total := 0;
+	for(q := q0; q < q1; ){
+		n := q1 - q;
+		if(n > BUFSIZE)
+			n = BUFSIZE;
+		buf.read(q, r, 0, n);
+		b := array of byte r.s[0:n];
+		parts = b :: parts;
+		total += len b;
+		q += n;
+	}
+	strfree(r);
+	data := array[total] of byte;
+	for(; parts != nil; parts = tl parts){
+		b := hd parts;
+		total -= len b;
+		data[total:] = b;
+	}
+	return data;
 }
 
 putfile(f: ref File, q0: int, q1: int, name: string)
@@ -597,9 +743,12 @@ putfile(f: ref File, q0: int, q1: int, name: string)
 				warning(nil, sys->sprint("%s modified since last read\n", name));
 			return;
 		}
-		# Start async save
+		# Start async save, of the text as it is now: the writer has
+		# its own copy, not the Buffer the window goes on using
 		w.savename = name;
-		w.asyncsave = asyncio->asyncsavefile(name, w.id, f.buf, q0, q1);
+		w.saveseq = f.seq;
+		w.savenchange = f.buf.nchange;
+		w.asyncsave = asyncio->asyncsavefile(name, w.id, textbytes(f.buf, q0, q1));
 		return;
 	}
 
@@ -705,6 +854,17 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 		return;
 	w = et.w;
 	f := w.body.file;
+	# all of a file still loading written, not what has come so far
+	textm->loadrest(f);
+	# a web page, a PDF or an image is not written over with the text
+	# it is shown with: its text is written only to a file named
+	if(docview->readonly(w) && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
+		what := "a document";
+		if(w.doc.v.web)
+			what = "a web page";
+		warning(nil, sprint("%s is %s: Put /file writes its text\n", f.name, what));
+		return;
+	}
 
 	name = getname(w.body, argt, arg, narg, TRUE);
 	if(name == nil){
@@ -713,47 +873,26 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 	}
 	namer = name;
 
-	# If in render mode, temporarily restore raw text for save
-	wasrendered := w.rendermode;
-	saveddata : array of byte;
-	if(wasrendered && w.contentdata != nil){
-		saveddata = w.contentdata;
-		rawstr := string w.contentdata;
-		w.nomark = 1;
-		w.body.delete(0, w.body.file.buf.nc, TRUE);
-		w.body.insert(0, rawstr, len rawstr, TRUE, 0);
-		w.nomark = 0;
-		rawstr = nil;
+	# A formatted view (Render through a text formatter) holds the
+	# formatted text in the buffer and the raw text aside. Save the raw
+	# text, and stay on it: a large file is written in the background
+	# from the buffer itself (putfile), so putting the formatted text
+	# back after starting the save wrote it to the file.
+	if(w.rendermode){
+		if(w.contentdata == nil){
+			warning(nil, sprint("%s not written: the window shows formatted text\n", name));
+			return;
+		}
+		renderoff(w);
 	}
 
 	putfile(f, 0, f.buf.nc, namer);
 
-	# Restore formatted view if was rendered
-	if(wasrendered && saveddata != nil){
-		w.contentdata = saveddata;
-		if(formatmod != nil){
-			(formatter, nil) := formatmod->find(w.body.file.name);
-			if(formatter != nil){
-				rawstr := string saveddata;
-				charwidth := 80;
-				fw := graph->strwidth(w.body.frame.font, "0");
-				if(fw > 0){
-					dx := w.body.frame.r.max.x - w.body.frame.r.min.x;
-					if(dx > 0)
-						charwidth = dx / fw;
-				}
-				if(charwidth < 20)
-					charwidth = 20;
-				formatted := formatter->format(rawstr, charwidth);
-				w.nomark = 1;
-				w.body.delete(0, w.body.file.buf.nc, TRUE);
-				w.body.insert(0, formatted, len formatted, TRUE, 0);
-				w.body.file.mod = FALSE;
-				w.nomark = 0;
-				rawstr = nil;
-			}
-		}
-	}
+	# a window showing the file as its document shows what was written
+	if(namer == f.name)
+		for(i := 0; i < f.ntext; i++)
+			if((u := f.text[i].w) != nil && docview->shown(u) && !docview->readonly(u))
+				docview->refresh(u);
 
 	name = nil;
 }
@@ -896,6 +1035,7 @@ look(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 
 	if(et != nil && et.w != nil){
 		t = et.w.body;
+		et.w.commit(t);	# Look in the tag: the body's typing is in its file
 		if(narg > 0){
 			lookx->search(t, arg, narg);
 			return;
@@ -978,6 +1118,21 @@ putall()
 	}
 }
 
+# Back, Fwd, Reload and Stop: a browser window's (Window.browse)
+webx(et : ref Text, which : int)
+{
+	if(et==nil || et.w==nil)
+		return;
+	cmd := array[] of {"Back", "Fwd", "Reload", "Stop"};
+	if(which < 0 || which >= len cmd)
+		return;
+	(isdoc, err) := docview->command(et.w, cmd[which], nil);
+	if(!isdoc)
+		err = "not a web page";
+	if(err != nil)
+		warning(nil, sprint("%s: %s\n", cmd[which], err));
+}
+
 renderx(et : ref Text, nil : ref Text)
 {
 	if(et==nil || et.w==nil)
@@ -989,8 +1144,46 @@ renderx(et : ref Text, nil : ref Text)
 		renderoff(w);
 }
 
+# Live: a source document set again as its text is edited, or not
+# (docview(2)): the window's own, or those of the windows showing its
+# file; none, and a window opened below showing it, live
+livex(et : ref Text)
+{
+	if(et==nil || et.w==nil)
+		return;
+	w := et.w;
+	if(docview->live(w, -1) > 0)
+		return;
+	if(docview->shown(w)){
+		warning(nil, "Live: not a source document\n");
+		return;
+	}
+	k := docview->kind(w.body.file.name);
+	if(k == nil || k.class != Docreg->Source){
+		warning(nil, sprint("Live: %s: not a source document\n", w.body.file.name));
+		return;
+	}
+	nw := w.col.add(nil, w, -1);
+	nw.lock1(w.owner);
+	if((err := docview->render(nw)) != nil){
+		warning(nil, sprint("Live: %s\n", err));
+		return;
+	}
+	docview->live(nw, 1);
+	nw.settag();
+}
+
 renderon(w : ref Window)
 {
+	# a document (a page browsed, a PDF, an image, Markdown, HTML,
+	# Mermaid) shown, or shown again (docview(2))
+	if(w.doc != nil || docview->kind(w.body.file.name) != nil){
+		if((err := docview->render(w)) != nil)
+			warning(nil, sprint("Render: %s\n", err));
+		w.settag();
+		return;
+	}
+
 	# Load format module on first use
 	if(formatmod == nil){
 		formatmod = load Format Format->PATH;
@@ -1055,6 +1248,11 @@ renderon(w : ref Window)
 
 renderoff(w : ref Window)
 {
+	if(w.doc != nil){
+		if(docview->shown(w))
+			docview->render(w);
+		return;
+	}
 	if(w.contentdata == nil)
 		return;
 
@@ -1077,6 +1275,8 @@ renderoff(w : ref Window)
 	scrl->scrdraw(w.body);
 	w.settag();
 }
+
+# name's extension, lower case
 
 id(et : ref Text)
 {
@@ -1127,14 +1327,26 @@ kill(argt : ref Text, arg : string, narg : int)
 	if(r != nil)
 		kill(nil, r, na);
 	# loop condition: *arg is not a blank 
+	cmds : list of string;
 	for(;;){
 		(a, na) = findbl(arg, narg);
 		if(a == arg)
 			break;
 		cmd = arg[0:narg-na];
-		dat->ckill <-= cmd;
+		cmds = cmd :: cmds;
 		(arg, narg) = skipbl(a, na);
 	}
+	if(cmds != nil)
+		spawn sendkills(utils->reverse(cmds));
+}
+
+# The names to kill sent to waittask by a proc of their own: sent with
+# the row held, more than ckill holds waited for waittask, which waited
+# for the row
+sendkills(cmds : list of string)
+{
+	for(; cmds != nil; cmds = tl cmds)
+		dat->ckill <-= hd cmds;
 }
 
 lineno(et : ref Text)
@@ -1240,6 +1452,7 @@ fontx(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 		t.reffont.close();
 		t.reffont = newfont;
 		t.frame.font = newfont.f;
+		framem->frinittick(t.frame);	# the tick is the font's height
 		if(t.w.isdir){
 			t.all.min.x++;	# force recolumnation; disgusting! 
 			for(i=0; i<t.w.ndl; i++){
@@ -1254,6 +1467,18 @@ fontx(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 	}
 	file = nil;
 	flag = nil;
+}
+
+# Theme [name]: that theme, or the next one (xenith->themecmd)
+themex(argt : ref Text, arg : string, narg : int)
+{
+	name : string;
+	(a, na) := findbl(arg, narg);
+	if(a != arg)
+		name = arg[0:narg-na];
+	else
+		(nil, name, nil) = getarg(argt, FALSE, TRUE);
+	xenith->themecmd(name);
 }
 
 incl(et : ref Text, argt : ref Text, arg : string, narg : int)
@@ -1451,6 +1676,10 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		wids : string = "";
 		filename: string;
 
+		# the window read, and the reference execute took for this let
+		# go, with the row held: if the window was deleted meanwhile it
+		# is freed here, beside the procs using its file and frames
+		row.qlock.lock();
 		if(win != nil){
 			filename = win.body.file.name;
 			wids = string win.id;
@@ -1467,6 +1696,7 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 			if(dat->activewin != nil)
 				winid = (dat->activewin).id;
 		}
+		row.qlock.unlock();
 		# sys->pctl(Sys->FORKNS|Sys->FORKFD|Sys->NEWPGRP, nil);
 		sys->pctl(Sys->FORKNS|Sys->NEWFD|Sys->FORKENV|Sys->NEWPGRP, 0::1::2::fsys->fsyscfd()::nil);
 		if(rdir != nil){
@@ -1478,7 +1708,10 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 			utils->setenv("%", filename);
 		c.md = fsys->fsysmount(rdir, ndir, incl, nincl);
 		if(c.md == nil){
-			warning(nil, "can't mount /mnt/xenith");
+			# reported by waittask, which holds the row: warning() here,
+			# beside the procs laying out the windows, broke the frames
+			# it drew in (with no /mnt/xenith, Xenith died starting)
+			dat->cerr <-= sys->sprint("can't mount /mnt/xenith: %r\n");
 			exit;
 		}
 		if(winid > 0 && (pipechar=='|' || pipechar=='>')){
@@ -1520,8 +1753,11 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		tfd = nil;
 		utils->setenv("xenithwin", wids);
 	}else{
-		if(win != nil)
+		if(win != nil){
+			row.qlock.lock();	# as above
 			win.close();
+			row.qlock.unlock();
+		}
 		sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
 		if(rdir != nil){
 			dir = rdir[0:ndir];
@@ -1530,7 +1766,8 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		}
 		p = array[2] of ref Sys->FD;
 		if(sys->pipe(p) < 0){
-			error("child: can't pipe");
+			# the command fails, not Xenith (error() took it down)
+			dat->cerr <-= sys->sprint("can't run %s: no pipe: %r\n", s);
 			exit;
 		}
 		pc = chan of int;

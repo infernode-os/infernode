@@ -8,12 +8,21 @@
 # right artifact: pdf/image/markdown render as content, anything else
 # opens in the editor.
 #
-# One rule, on purpose: the presentation manager picks the renderer by
+# Two rules, on purpose: the presentation manager picks the renderer by
 # file type, so the rules stay trivial and every file lands in the
-# presentation view rather than spawning a standalone acme/charon window.
+# presentation view rather than spawning a standalone acme/charon window;
+# a web page lands there too, in Charon.
 #
-# to update: cat /lib/lucifer/plumbing > /chan/plumb.rules
+# These are the defaults: the user's own rules (/usr/<user>/lib/plumbing)
+# are read first, and the first rule that fires wins (lib/sh/plumbrules).
+#
+# to update: /lib/sh/plumbrules load /lib/lucifer/plumbing
 # to read:   cat /chan/plumb.rules
+
+# Web pages go to the presentation view, which shows them in Charon.
+kind is text
+data matches 'https?://[^ ]+'
+plumb to presentation
 
 # Existing files (any type, spaces allowed) go to the presentation view.
 kind is text

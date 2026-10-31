@@ -105,7 +105,7 @@ for lib in lib9 libbio libmp libsec libmath libmemdraw libmemlayer libdraw libfr
     "$MK" $MKARGS install || { echo "ERROR: $lib build failed" >&2; exit 1; }
 done
 
-for lib in libinterp libkeyring; do
+for lib in libinterp libtk libkeyring; do
     [ -d "$ROOT/$lib" ] || continue
     echo "Building $lib..."
     cd "$ROOT/$lib"

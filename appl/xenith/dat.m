@@ -34,9 +34,10 @@ Dat : module {
 		editlog: Editlog;
 		editcmd: Editcmd;
 		asyncio: Asyncio;
+		docview: Docview;
 	};
 
-	SZSHORT : con 2;
+	SZRUNE : con 4;	# bytes a rune takes in the temp file (runes go to 16r10FFFF)
 	SZINT : con 4;
 
 	FALSE, TRUE, XXX : con iota;
@@ -45,7 +46,7 @@ Dat : module {
 
 	EM_NORMAL, EM_RAW, EM_MASK : con iota;
 
-	Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QMAX : con iota;
+	Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QWweb,QWdoc,QWdocctl,QWdoctext,QWdoclinks,QWdocfind,QMAX : con iota;
 
 	Blockincr : con 256;
 	Maxblock : con 8*1024;
@@ -57,10 +58,7 @@ Dat : module {
 	BUFSIZE : con MAXRPC;
 	EVENTSIZE : con 256;
 	PLUMBSIZE : con 1024*64;
-	Scrollwid : con 12;	# width of scroll bar
-	Scrollgap : con 4;	# gap right of scroll bar
 	Margin : con 4;		# margin around text
-	Border : con 2;		#  line between rows, cols, windows
 	Maxtab : con 4;		# size of a tab, in units of the '0' character
 	
 	Empty: con 0;
@@ -88,11 +86,14 @@ Dat : module {
 	Lock : adt {
 		cnt : int;
 		chann : chan of int;
+		pid : int;	# the holder's
 
 		init : fn() : ref Lock;
 		lock : fn(l : self ref Lock);
 		unlock : fn(l : self ref Lock);
 		locked : fn(l : self ref Lock) : int;
+		held : fn(l : self ref Lock) : int;
+		trylock : fn(l : self ref Lock) : int;
 	};
 
 # 	Lockx : adt {
@@ -190,6 +191,7 @@ Dat : module {
 		mntdir : ref Mntdir;
 		nrpart : int;
 		rpart : array of byte;
+		snap : array of byte;	# a doc text or links read's answer, for the reads after it
 	};
 
 	Rangeset : type array of Range;
@@ -267,6 +269,12 @@ Dat : module {
 			FC => fc: ref Filecheck;
 		}
 	};
+
+	# in pixels, so times $displayscale (setscale): 12, 4 and 2 at 1x
+	Scrollwid : int;	# width of scroll bar
+	Scrollgap : int;	# gap right of scroll bar
+	Border : int;		#  line between rows, cols, windows
+	Mincolwid : int;	# narrowest a column is dragged
 
 	globalincref: int;
 	globalautoindent: int;

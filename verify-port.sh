@@ -1,9 +1,9 @@
 #!/bin/bash
-# Verification script for ARM64 64-bit Inferno port
+# Verification script for the 64-bit macOS port (arm64 or amd64)
 # Tests that critical functionality works
 
 echo "========================================="
-echo "ARM64 64-bit Inferno Port Verification"
+echo "64-bit macOS Inferno Port Verification"
 echo "========================================="
 echo ""
 
@@ -17,7 +17,8 @@ fi
 echo "✅ Emulator binary exists"
 
 # Check limbo exists
-if [[ ! -f MacOSX/arm64/bin/limbo ]]; then
+case $(uname -m) in x86_64) objtype=amd64 ;; *) objtype=arm64 ;; esac
+if [[ ! -f MacOSX/${OBJTYPE:-$objtype}/bin/limbo ]]; then
     echo "❌ FAIL: limbo compiler not found"
     exit 1
 fi
@@ -44,42 +45,69 @@ if [[ "$MISSING" -gt 0 ]]; then
 fi
 echo "✅ Critical .dis files present"
 
-# Test simple output
-echo ""
-echo "Testing console output..."
-timeout 3 ./emu/MacOSX/o.emu -r. test-stderr.dis 2>&1 | grep -q "STDERR: Hello" && \
-    echo "✅ Console output works" || \
-    echo "❌ FAIL: No console output"
+FAILS=0
+check() {	# check name pattern output
+    if printf '%s\n' "$3" | grep -q "$2"; then
+        echo "✅ $1 works"
+    else
+        echo "❌ FAIL: $1; emu said:"
+        printf '%s\n' "$3" | sed 's/^/    /' | head -20
+        FAILS=$((FAILS + 1))
+    fi
+}
+
+# Run emu with its shell's input from ours, and print what it says.  It
+# is stopped after 10 seconds if it has not finished: by hand, as macOS
+# has no timeout(1).
+emu() {
+    local in out pid killer
+    in=$(mktemp) out=$(mktemp)
+    cat >"$in"
+    ./emu/MacOSX/o.emu -r. <"$in" >"$out" 2>&1 &
+    pid=$!
+    ( sleep 10; kill -9 "$pid" ) >/dev/null 2>&1 &
+    killer=$!
+    wait "$pid" 2>/dev/null
+    kill "$killer" 2>/dev/null
+    grep -v DEBUG "$out"
+    rm -f "$in" "$out"
+}
 
 # Test shell commands
 echo ""
 echo "Testing shell commands..."
-TEST_OUTPUT=$(timeout 5 ./emu/MacOSX/o.emu -r. <<'SHELL' 2>&1 | grep -v DEBUG
+TEST_OUTPUT=$(emu <<'SHELL'
 pwd
 date
 cat /dev/sysctl
 SHELL
 )
-
-echo "$TEST_OUTPUT" | grep -q "/" && echo "✅ pwd works" || echo "❌ pwd failed"
-echo "$TEST_OUTPUT" | grep -q "202[0-9]" && echo "✅ date works" || echo "❌ date failed"
-echo "$TEST_OUTPUT" | grep -q "Fourth Edition" && echo "✅ cat works" || echo "❌ cat failed"
+# The console echoes the input as sh starts, so its first prompt can land
+# inside an echoed line rather than before the answer: "/" may stand alone.
+check pwd '^\(; *\)*/$' "$TEST_OUTPUT"
+check date '20[0-9][0-9]' "$TEST_OUTPUT"
+check cat 'Fourth Edition' "$TEST_OUTPUT"
 
 # Test ls
 echo ""
 echo "Testing ls command..."
-timeout 5 ./emu/MacOSX/o.emu -r. <<'SHELL' 2>&1 | grep -v DEBUG | grep -q "/dis/ls.dis" && \
-    echo "✅ ls works" || \
-    echo "❌ ls failed"
+LS_OUTPUT=$(emu <<'SHELL'
 ls /dis
 SHELL
+)
+check ls '/dis/ls.dis' "$LS_OUTPUT"
+
+if [[ "$FAILS" -gt 0 ]]; then
+    echo "❌ $FAILS check(s) failed"
+    exit 1
+fi
 
 echo ""
 echo "========================================="
 echo "Verification Complete"
 echo "========================================="
 echo ""
-echo "If all checks passed, the port is working!"
+echo "All checks passed."
 echo ""
 echo "To use Inferno:"
 echo "  ./emu/MacOSX/o.emu -r."

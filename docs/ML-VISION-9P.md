@@ -3,6 +3,11 @@
 **Status:** design exploration (INFR-277) — not committed work. Cross-refs:
 `docs/H264-9P-BRIDGE.md` / INFR-263 (the video bridge), INFR-278
 (namespace convention).
+One consumer exists: `appl/matrix/video-overlay.b` reads detections from
+`/mnt/vision/<n>/boxes` (one per line, frame coordinates) beside
+`/mnt/video/<n>`; this document calls that file `detections`. No vision
+server is in the tree; `tools/demo/demo-overlay.sh` writes `boxes` from
+the host.
 
 ## Premise
 

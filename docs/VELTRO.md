@@ -9,20 +9,48 @@
 Veltro is a Limbo-native agent harness:
 
 - Talks to an LLM via the **`/mnt/llm`** 9P filesystem (Anthropic Claude or any OpenAI-compatible backend through `llmsrv`).
-- Calls **40 tools** via the **`/tool`** 9P filesystem, each tool a separate `.dis` module.
+- Calls **44 tools** via the **`/tool`** 9P filesystem, each tool a separate `.dis` module.
 - Runs inside a **restricted namespace** (FORKNS + bind-replace) so an agent only sees the files and capabilities its caller granted.
 - Can **spawn subagents** with strictly narrower namespaces (capability attenuation).
 
 Three things the agent sees as files: **the LLM, the tools, the host filesystem**. There is no SDK, no JSON-RPC, no HTTP — everything is read/write on a 9P tree.
 
-## Entry points
+## The harness, and its clients
 
-| Command   | Form                          | Use for                                                               |
-|-----------|-------------------------------|-----------------------------------------------------------------------|
-| `veltro`  | one-shot, `veltro "do X"`     | scripted tasks, batch runs, resumable sessions                        |
-| `repl`    | interactive                   | iterative work; opens a Xenith window if available, terminal otherwise|
-| `spawn`   | inside a tool call            | parallel subagents launched by a parent agent                         |
-| `lucibridge` | embedded in Lucia          | the agent loop driving the [Lucia](LUCIA.md) UI                       |
+The agent loop is one program, `veltrosrv` (see `man 4 veltrosrv`), which
+serves it as files at `/mnt/veltro`. Everything that puts the agent in
+front of a person is a client of those files:
+
+| Client       | Where                        | Use for                                                               |
+|--------------|------------------------------|-----------------------------------------------------------------------|
+| `veltro`     | the command line             | scripted tasks, batch runs, resumable sessions                        |
+| `Agent`      | a Xenith window              | iterative work on a project, from the editor                          |
+| `lucibridge` | Lucia                        | the agent driving the [Lucia](LUCIA.md) UI                            |
+| `sh`         | anywhere                     | `echo` a message to `input`, `cat` the reply from `text`              |
+| `spawn`      | inside a tool call           | parallel subagents launched by a parent agent                         |
+
+A session is a directory: `input` takes a message and starts a turn;
+`text` is the conversation and follows the agent's reply as it is
+generated, ending when the turn is over; `log` is the trajectory;
+`status` says what the agent is doing; `approve` is where it asks before
+a destructive call; `ctl` takes `cancel`, `reset`, `persona`, `model` and
+the rest.
+
+```sh
+; veltrosrv -p /n/local/Users/me/proj
+; id=`{cat /mnt/veltro/new}
+; echo 'what does nsconstruct.b do?' > /mnt/veltro/$id/input
+; cat /mnt/veltro/$id/text
+```
+
+The server restricts its own namespace to the grants it was started
+with before it serves, and the mount exists only in the client's
+namespace, so the agent cannot reach its own `ctl` or `approve`.
+
+The tool calls of one model response run concurrently when they are
+all read-only (reads, searches, `spawn`), and one at a time, in order,
+when any of them mutates, so a write always precedes the read or
+compile that follows it.
 
 ### `veltro` — one-shot
 
@@ -38,6 +66,9 @@ Flags:
 
 - `-v` — verbose tool/LLM logging.
 - `-t` — enable extended thinking (8000-token budget).
+- `-y` — answer the agent's approval requests yes; otherwise a destructive
+  call (an `rm -r` outside `/tmp`, a `bind`, a write under `/dis`) asks on
+  the terminal.
 - `-r name` — resume a persisted session (`last` = most recent).
 - `-p paths` — comma-separated host paths to expose under `/n/local/`.
 - `-a type` — run as a specialist persona from `lib/veltro/agents/<type>.txt`
@@ -46,20 +77,16 @@ Flags:
 
 Sessions persist to `/usr/inferno/veltro/sessions/`. The hard step cap is 200 (the LLM's `end_turn` is the primary stop condition).
 
-### `repl` — interactive
+### `Agent` — in Xenith
 
-```sh
-; repl
-; repl -v
-; repl -n 80      # raise per-turn step cap (default 50, max 100)
-```
-
-Two modes, picked automatically:
-
-- **Xenith mode** (when `/chan` is available) — a window with **Send · Voice · Clear · Reset · Delete** tag buttons. Voice records via `speech9p` and transcribes with the `hear` tool.
-- **Terminal mode** — line-oriented stdin/stdout fallback.
-
-Both establish a persistent LLM session for the duration of the REPL invocation. Each turn injects the current namespace into the system prompt so the agent always knows what tools and paths it actually has.
+Middle-click `Agent` in a tag (or run `Agent -p /n/local/Users/me/proj`).
+The window's body is the conversation: type at its end and middle-click
+**Send**; the reply arrives as it is generated. **Stop** cancels the
+turn, **Reset** starts a new model session, **Allow** and **Deny** answer
+a request for approval shown in the body, **Delete** ends the session.
+With no `-p`, the agent is granted the directory Xenith was started in.
+`Agent` starts `tools9p` and `veltrosrv` itself when they are not running;
+it needs `llmsrv` at `/mnt/llm`.
 
 ### `spawn` (subagents)
 
@@ -81,24 +108,24 @@ A child can never exceed the parent's capabilities; it can only narrow them furt
 
 ## Tools
 
-Thirty-nine tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a small interface (`init`, `name`, `doc`, `exec`) defined in [`tool.m`](../appl/veltro/tool.m). Tools are loaded on demand and exposed to the agent through `/tool`.
+Forty-four tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a small interface (`init`, `name`, `doc`, `exec`) defined in [`tool.m`](../appl/veltro/tool.m). Tools are loaded on demand and exposed to the agent through `/tool`.
 
 | Category       | Tools |
 |----------------|-------|
 | **Files**      | `read`, `write`, `edit`, `list`, `find`, `search`, `grep`, `diff` |
 | **Execution**  | `exec`, `shell`, `launch`, `spawn` |
-| **Code**       | `git`, `json`, `vision`, `editor` |
+| **Code**       | `git`, `json`, `vision`, `editor`, `limbo` |
 | **Web**        | `webfetch`, `websearch`, `browse`, `charon`, `http` |
-| **Comms**      | `say`, `hear` |
+| **Comms**      | `say`, `hear`, `sms`, `dial`, `contacts` |
 | **Persistence**| `memory`, `todo`, `task`, `wiki`, `keyring`, `wallet`, `payfetch` |
-| **UI**         | `xenith`, `present`, `gap`, `man`, `fractal`, `plan` |
+| **UI**         | `xenith`, `present`, `gap`, `man`, `fractal`, `plan`, `matrix`, `window` |
 | **System**     | `mount`, `gpu` |
 
-Run `cat /tool/tools` in a Veltro shell to list whatever tools the running agent actually has — the namespace-restricted view, not the full 40.
+Run `cat /tool/tools` in a Veltro shell to list whatever tools the running agent actually has — the namespace-restricted view, not the full 44.
 
 ## Capabilities and the tool budget
 
-Capabilities are granted at **namespace construction time**, not per call. The `Capabilities` adt in [`nsconstruct.m`](../appl/veltro/nsconstruct.m) names the dimensions:
+Capabilities are granted at **namespace construction time**, not per call. The `Capabilities` adt in [`nsconstruct.m`](../module/nsconstruct.m) names the dimensions:
 
 | Field         | Meaning |
 |---------------|---------|
@@ -123,7 +150,7 @@ When `tools9p` is started, two flags shape what agents see:
 - The `-b` budget is the **maximum a child can be granted**. Subagents can never exceed it.
 - `/tool/grantable` lists that effective budget as `name - summary` records. Agent namespace discovery injects this live catalogue so a coordinator can delegate capabilities it does not hold directly without relying on a hand-maintained prompt list.
 
-The Lucia launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical configuration. Edit them to lock down a deployment.
+Lucia's boot script (`lib/lucifer/boot.sh`) shows a typical configuration. Edit it to lock down a deployment.
 
 ## Agentic behaviour
 
@@ -157,6 +184,54 @@ are short-circuited within a turn with an "already ran at step N" note instead o
 re-executing. A mutating tool (`write`/`edit`/`exec`/…) invalidates the cache, so
 `read → edit → read` still re-reads the changed file.
 
+### The loop and the model
+
+What veltrosrv does when a model's turn goes wrong in a way it can put right
+(`appl/veltro/veltrosrv.b`, pinned by `tests/host/agentloop_characterization_test.sh`):
+
+- **Cut off by the output limit** (`STOP:max_tokens`). Tool calls in the reply
+  are not run, since their arguments may be cut too; each is answered "not run",
+  and the model sends it again. A reply of text alone is continued.
+- **Ended where it should not have.** An empty reply, or one that announces the
+  next step ("Let me read the file:") without taking it, is answered with a
+  `[harness: …]` note saying so, at most twice a turn.
+- **A message written while the turn runs** is queued, not refused. It goes to
+  the model with the next tool results, or starts the next turn if this one
+  ends first. It is dropped if the turn is cancelled.
+- **Long results.** A result longer than 32 KB is put in the workspace and as
+  much of it as fits is shown: the end of an `exec` output, where the errors
+  are, and the start of anything else, with the path to the whole of it. `read`
+  stops at 2000 lines or 30000 bytes and says the offset to read from next.
+- **The system prompt is sent once.** After a session's first message a change
+  of namespace, persona, role or brief goes with the next message, and the
+  system prompt stays as it was sent. Rewritten, it loses the prompt cache for
+  everything after it, and a current Claude refuses the thinking it wrote under
+  the old one.
+- **Calls in one response** run in the model's order: read-only calls that come
+  together run concurrently, and a call that changes something runs alone,
+  after those before it.
+- **Cancel** (`ctl cancel`) stops the model's generation where it is (llmsrv's
+  `ctl cancel`), and no further call of the turn is started. Calls the model
+  had made are answered "not run" with the next message, so its history stays
+  one the API takes.
+
+`tests/host/veltro_edit_bench.sh` measures the loop against a real model:
+known bugs planted in real Limbo functions, solved when the file is the
+original again, with the steps and tool calls each took. Run it on two trees
+(`BENCH_ROOT`) to compare a change.
+
+A folder the agent is given may say how to work in it, in an `AGENTS.md`
+(or `CLAUDE.md`) at its top: it is put in the system prompt under
+`== Project Instructions ==`, up to 16 KB a file and 32 KB in all; a folder
+given later has its file sent with the next message.
+
+llmsrv compacts a long session into a checkpoint of a fixed form (goal,
+constraints, progress, decisions, next steps, critical context, what the user
+was told). The summariser is given the tool calls and their results, not only
+the prose, and the last exchanges are kept as they were. `veltro -r` gives a
+saved session's own history back to the model through
+`/mnt/veltro/<id>/context`, instead of a summary of its log.
+
 ## LLM configuration
 
 LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
@@ -169,11 +244,12 @@ LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
 /mnt/llm/N/temperature  # 0.0 – 2.0
 /mnt/llm/N/thinking     # disabled | max | <integer token budget>
 /mnt/llm/N/system       # write-only system prompt
-/mnt/llm/N/context      # read current conversation as JSON
+/mnt/llm/N/context      # the conversation as JSON; written between turns, it
+                        # becomes the history (veltro -r gives a saved one back)
 /mnt/llm/N/compact      # summarise+truncate to free tokens
 ```
 
-Default model: **haiku**. Override with the `LLMConfig` field of `Capabilities`, or by writing to `/mnt/llm/N/model` directly.
+Default model: llmsrv's, which is `claude-sonnet-5-5` on the Anthropic backend, or the `model=` line of `/lib/ndb/llm` (passed as `llmsrv -M`). Override with the `LLMConfig` field of `Capabilities`, `veltro -m`, or by writing to `/mnt/llm/N/model` directly.
 
 ### Backends
 
@@ -193,7 +269,7 @@ System prompts and per-type prompts live in `lib/veltro/`:
 
 | File                          | Role |
 |-------------------------------|------|
-| `lib/veltro/system.txt`       | Default system prompt for `veltro`/`repl`. |
+| `lib/veltro/system.txt`       | Default system prompt for `veltro` and `lucibridge`. |
 | `lib/veltro/meta.txt`         | "Chief of Staff" prompt used by Lucia: never executes, always delegates via `task`. |
 | `lib/veltro/agents/default.txt`  | Subagent baseline. Pre-loaded tools, machine-parseable output, terminate with `DONE`. |
 | `lib/veltro/agents/explore.txt`  | Read-only codebase analysis. No speculation; report file paths and dependencies. |
@@ -233,8 +309,6 @@ Two distinct stores:
 - **`memory` tool** — agent-controlled key/value store. `memory save K V`, `memory load K`, `memory list`, `memory clear`. Persists to `/tmp/veltro/memory/{agentid}/`.
 - **Sessions** — full conversation transcripts for `veltro`, written to `/usr/inferno/veltro/sessions/`. Resume with `veltro -r name` or `veltro -r last`.
 
-`repl` does **not** persist conversations across REPL restarts; use `veltro` for that.
-
 ## Common workflows
 
 ### One-shot scripted task
@@ -246,10 +320,9 @@ Two distinct stores:
 ### Iterative exploration
 
 ```sh
-; repl
-> walk me through how spawn enforces capability attenuation
-> show me where MREPL is used in nsconstruct.b
-> are there tests for this?
+; veltro "walk me through how spawn enforces capability attenuation"
+; veltro -r last "show me where MREPL is used in nsconstruct.b"
+; veltro -r last "are there tests for this?"
 ```
 
 ### Parallel delegation
@@ -282,15 +355,25 @@ answer, and ends with a `SOURCES` list of the `file:line`/URLs it actually read.
 The verify persona *runs* the check, probes edge cases, and ends with a single
 `VERDICT: PASS` / `FAIL` / `PARTIAL` backed by the captured output.
 
+### From the shell
+
+```sh
+; veltrosrv -p $home/proj
+; id=`{cat /mnt/veltro/new}
+; echo 'list the TODOs in main.b' > /mnt/veltro/$id/input
+; cat /mnt/veltro/$id/text          # returns when the turn is over
+; cat /mnt/veltro/$id/log           # what it did
+```
+
 ### Embedded in Lucia
 
-The Lucia launch scripts wire everything up: `tools9p` with the default budget, `lucibridge` as the agent loop, `speech9p` for voice. See [LUCIA.md](LUCIA.md).
+`lib/lucifer/boot.sh` wires everything up: `tools9p` with the default budget, `lucibridge` as the agent's Lucia client (it starts its own `veltrosrv`); `lib/sh/profile` starts `speech9p` for voice. See [LUCIA.md](LUCIA.md).
 
 ## Hardening checklist
 
 For deployments where untrusted prompts may reach the agent:
 
-1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in your launch script.
+1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in `lib/lucifer/boot.sh`.
 2. **Restrict `-p` paths** — only mount what the agent legitimately needs.
 3. **Disable `xenith` and `memory`** in the `Capabilities` you construct.
 4. **Pin `llmconfig.model`** so prompt-injected attempts to switch to a more permissive model can't take effect.
@@ -303,7 +386,7 @@ For deployments where untrusted prompts may reach the agent:
 |---------|--------------|-----|
 | `cannot load module testing.dis` and friends | Stale `.dis` after `git pull` | `./hooks/install.sh` (once); `mk install` in `appl/cmd` and `appl/veltro` |
 | `/mnt/llm: file does not exist` | `llmsrv` not started | Run as `sh -l` so `lib/sh/profile` starts it; check `ANTHROPIC_API_KEY` |
-| Agent says it has tool X but `/tool` doesn't list it | Tool not in the positional list of `tools9p` | Add it to the launch script, or rely on `spawn` (subject to `-b` budget) |
+| Agent says it has tool X but `/tool` doesn't list it | Tool not in the positional list of `tools9p` | Add it to `lib/lucifer/boot.sh`, or rely on `spawn` (subject to `-b` budget) |
 | `tools9p` deadlock on the first tool call | Self-mount race during namespace restriction | Already mitigated; if it recurs, check `nsconstruct.b` hasn't been edited to add a `stat()` on the restricted root |
 | Subagent times out at 5 minutes | Default `spawn` timeout | Pass `timeout=N` (seconds) in the `spawn` call |
 | Memory writes silently lost | Wrong agent id | The `memory` tool keys by sandbox id; confirm with `memory list` |

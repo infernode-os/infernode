@@ -53,7 +53,9 @@ regression to an inline `accept -> auth` loop, which a single staller would
 block.
 
 ```sh
-# build with the native limbo, then run directly:
+# No mkfile builds this and it has no PATH constant, so neither mk install
+# nor tools/compile-limbo.sh handles it: compile it with the native limbo,
+# then run directly:
 limbo -I module -o dis/tests/stress/dos_stall_test.dis tests/stress/dos_stall_test.b
 ./emu/Linux/o.emu -c1 -r$PWD /dis/tests/stress/dos_stall_test.dis -v
 ```

@@ -32,6 +32,9 @@ include "json.m";
 include "wirefmt.m";
 	wirefmt: WireFmt;
 
+include "encoding.m";
+	base64: Encoding;
+
 include "llmclient.m";
 
 stderr: ref Sys->FD;
@@ -63,48 +66,270 @@ init()
 
 # ==================== Anthropic Messages API ====================
 
+# What a Claude model's request may carry, by generation.  A model the
+# rules do not name is taken to be a current one.
+#	CLAUDE_LEGACY	4.5 and before: temperature, prefill, and thinking
+#			as a budget ("enabled", budget_tokens)
+#	CLAUDE_46	4.6: temperature; thinking adaptive; no prefill
+#	CLAUDE_MODERN	4.7, 4.8 and 5: no temperature, no prefill (a 400
+#			each); thinking adaptive, its depth the effort
+
+claudegen(model: string): int
+{
+	m := str->tolower(model);
+	if(hasprefix(m, "claude-3") || hasprefix(m, "claude-2") || hasprefix(m, "claude-instant"))
+		return CLAUDE_LEGACY;
+	for(fams := "opus-" :: "sonnet-" :: "haiku-" :: nil; fams != nil; fams = tl fams) {
+		(nil, rest) := str->splitstrl(m, hd fams);
+		if(rest == nil)
+			continue;
+		rest = rest[len hd fams:];
+		(major, r) := str->toint(rest, 10);
+		if(r == rest)
+			continue;
+		if(major >= 5)
+			return CLAUDE_MODERN;
+		if(major < 4)
+			return CLAUDE_LEGACY;
+		# 4: the minor version, unless what follows is a date
+		# (claude-sonnet-4-20250514 is 4.0)
+		if(r == nil || r[0] != '-')
+			return CLAUDE_LEGACY;
+		(minor, r2) := str->toint(r[1:], 10);
+		if(r2 == r[1:] || len r[1:] - len r2 > 2)
+			return CLAUDE_LEGACY;
+		if(minor >= 7)
+			return CLAUDE_MODERN;
+		if(minor == 6)
+			return CLAUDE_46;
+		return CLAUDE_LEGACY;
+	}
+	return CLAUDE_MODERN;
+}
+
+# Effort levels the API takes, as llmsrv's reasoning setting names them.
+anthropiceffort(e: string): string
+{
+	case e {
+	"low" or "medium" or "high" or "xhigh" or "max" =>
+		return e;
+	}
+	return "";
+}
+
+# Requests that failed before any of the answer was seen are tried
+# again: an overloaded or rate-limited API, a server error, a backend
+# not yet listening.  A request whose answer had begun is not: what was
+# shown cannot be taken back.
+MAXRETRIES: con 4;
+RETRYBASEMS: con 1000;
+RETRYMAXMS: con 60000;
+
+# How long to wait before trying err again, or -1 for an error that is
+# not worth retrying.  A server's retry-after (passed on in err as
+# "retry-after=<s>") is honoured.
+retrydelay(err: string, attempt: int): int
+{
+	if(err == nil)
+		return -1;
+	retry := 0;
+	(nil, st) := str->splitstrl(err, "HTTP error: HTTP/1.");
+	if(st != nil) {
+		(nil, w) := sys->tokenize(st[len "HTTP error: ":], " ");
+		if(tl w != nil) {
+			case hd tl w {
+			"408" or "409" or "429" or "500" or "502" or "503" or "504" or "529" =>
+				retry = 1;
+			}
+		}
+	}
+	if(contains(err, "overloaded") || contains(err, "cannot connect"))
+		retry = 1;
+	# A backend that went quiet before any of the answer, once: a gateway
+	# that starts a model per conversation stalls now and then, and the
+	# same request then answers; a hung one is not waited on again.
+	if(contains(err, "no-progress timeout")) {
+		if(attempt > 0)
+			return -1;
+		retry = 1;
+	}
+	if(!retry)
+		return -1;
+	ms := RETRYBASEMS << attempt;
+	(nil, ra) := str->splitstrl(err, "retry-after=");
+	if(ra != nil) {
+		(secs, nil) := str->toint(ra[len "retry-after=":], 10);
+		if(secs > 0)
+			ms = secs * 1000;
+	}
+	if(ms > RETRYMAXMS)
+		ms = RETRYMAXMS;
+	return ms;
+}
+
+contains(s, sub: string): int
+{
+	(nil, r) := str->splitstrl(s, sub);
+	return r != nil;
+}
+
+# What is missing when a local model service refuses: the CLI gateways
+# and Ollama are host daemons InferNode does not start, and a bare
+# "connection refused" on a port number did not say which one.
+localgatehint(host, port: string): string
+{
+	if(host != "127.0.0.1" && host != "localhost")
+		return "";
+	case port {
+	"11435" =>	return "; claude-gate is not running: start it on the host with tools/claude-gate/serve-claude-gate.sh";
+	"11436" =>	return "; codex-gate is not running: start it on the host with tools/codex-gate/serve-codex-gate.sh";
+	"11434" =>	return "; Ollama is not running: start it on the host (ollama serve)";
+	}
+	return "";
+}
+
 askanthropic(apikey, apiurl: string, req: ref AskRequest): (ref AskResponse, string)
 {
 	if(apiurl == nil || apiurl == "")
 		apiurl = "api.anthropic.com";
 
 	body := buildanthropicrequest(req);
-
-	# Debug: dump request body when /tmp/llm-debug exists
-	dpath := sys->sprint("/tmp/llm-req-%d.json", debugseq++);
-	debugfd := sys->create(dpath, Sys->OWRITE, 8r666);
-	if(debugfd != nil) {
-		d := array of byte body;
-		sys->write(debugfd, d, len d);
-		debugfd = nil;
-	}
+	debugdump(body);
 
 	headers := "Content-Type: application/json\r\n" +
 		"x-api-key: " + apikey + "\r\n" +
 		"anthropic-version: 2023-06-01\r\n";
-
 	if(req.streamch != nil)
 		headers += "Accept: text/event-stream\r\n";
 
-	(respbody, err) := httpspost(apiurl, "443", "/v1/messages", headers, body);
-	if(err != nil)
-		return (nil, "anthropic: " + err);
-
-	if(req.streamch != nil)
-		return parseanthropicsse(respbody, req);
-
-	return parseanthropicresponse(respbody, req);
+	for(attempt := 0; ; attempt++) {
+		(resp, err, shown) := anthropiconce(apiurl, headers, body, req);
+		if(err == nil || shown || attempt >= MAXRETRIES)
+			return (resp, err);
+		ms := retrydelay(err, attempt);
+		if(ms < 0)
+			return (resp, err);
+		sys->fprint(stderr, "llmclient: %s; trying again in %d ms\n", err, ms);
+		sys->sleep(ms);
+	}
 }
+
+# One request.  shown is set when some of the answer reached the
+# stream before the error.
+anthropiconce(apiurl, headers, body: string, req: ref AskRequest): (ref AskResponse, string, int)
+{
+	if(req.streamch == nil) {
+		(respbody, err) := httpspost(apiurl, "443", "/v1/messages", headers, body);
+		if(err != nil)
+			return (nil, "anthropic: " + err, 0);
+		(r, perr) := parseanthropicresponse(respbody, req);
+		return (r, perr, 0);
+	}
+
+	# Streaming: read the events as they arrive, so the text reaches
+	# the stream file while it is written, not once the reply is whole.
+	if(tlsmod == nil) {
+		tlsmod = load TLS TLS->PATH;
+		if(tlsmod == nil)
+			return (nil, "anthropic: cannot load TLS module", 0);
+		terr := tlsmod->init();
+		if(terr != nil)
+			return (nil, "anthropic: TLS init: " + terr, 0);
+	}
+	(conn, derr) := tlsdial(apiurl, "443");
+	if(derr != nil)
+		return (nil, "anthropic: " + derr, 0);
+	config := tlsmod->defaultconfig();
+	config.servername = apiurl;
+	(tc, cerr) := tlsmod->client(conn.dfd, config);
+	if(cerr != nil)
+		return (nil, "anthropic: TLS: " + cerr, 0);
+	reqdata := "POST /v1/messages HTTP/1.0\r\n" +
+		"Host: " + apiurl + "\r\n" +
+		"Content-Length: " + string len array of byte body + "\r\n" +
+		headers +
+		"Connection: close\r\n" +
+		"\r\n" + body;
+	d := array of byte reqdata;
+	if(tc.write(d, len d) < 0) {
+		tc.close();
+		return (nil, "anthropic: TLS write failed", 0);
+	}
+	rch := chan[1] of (int, array of byte);
+	spawn _httpsread(tc, rch);
+	ant := newantstate();
+	(resp, rerr, shown) := _sseconsume(conn, rch, req, ant);
+	tc.close();
+	if(rerr == nil && ant.err != nil)
+		rerr = ant.err;
+	if(rerr != nil)
+		return (resp, "anthropic: " + rerr, shown);
+	return (resp, nil, 0);
+}
+
+# The request body, written to /tmp/llm-req-<n>.json when /tmp/llm-debug
+# exists.
+debugdump(body: string)
+{
+	(ok, nil) := sys->stat("/tmp/llm-debug");
+	if(ok < 0)
+		return;
+	dpath := sys->sprint("/tmp/llm-req-%d.json", debugseq++);
+	debugfd := sys->create(dpath, Sys->OWRITE, 8r600);
+	if(debugfd != nil) {
+		b := array of byte body;
+		sys->write(debugfd, b, len b);
+	}
+}
+
+# Output caps when the session sets none: room for a long reply or a
+# whole file written in one call.  Streamed, a long generation cannot
+# time out the request; unstreamed, it is kept shorter.
+ANTSTREAMMAX: con 32000;
+ANTMAX: con 16000;
+LEGACYTHINKBUDGET: con 16000;	# thinking=max on a model that takes a budget
 
 buildanthropicrequest(req: ref AskRequest): string
 {
+	gen := claudegen(req.model);
+	mt := req.maxtokens;
+	if(mt <= 0) {
+		mt = ANTMAX;
+		if(req.streamch != nil)
+			mt = ANTSTREAMMAX;
+	}
+
+	# Thinking.  A current model thinks by its own default when nothing
+	# is said; asked to think, it is told adaptive, its depth the
+	# effort.  A legacy model takes a budget, below max_tokens, and no
+	# temperature with it.
+	thinking := "";
+	if(req.thinkingtokens != 0) {
+		if(gen == CLAUDE_LEGACY) {
+			budget := req.thinkingtokens;
+			if(budget < 0)
+				budget = LEGACYTHINKBUDGET;
+			if(budget < 1024)
+				budget = 1024;
+			if(mt <= budget)
+				mt = budget + 4096;
+			thinking = sys->sprint("{\"type\":\"enabled\",\"budget_tokens\":%d}", budget);
+		} else
+			thinking = "{\"type\":\"adaptive\"}";
+	}
+	effort := "";
+	if(gen != CLAUDE_LEGACY)
+		effort = anthropiceffort(req.reasoningeffort);
+
 	s := "{";
 	s += "\"model\":" + jquote(req.model) + ",";
-	mt := req.maxtokens;
-	if(mt <= 0)
-		mt = 8192;
-	s += sys->sprint("\"max_tokens\":%d,", mt);
-	s += sys->sprint("\"temperature\":%.2f", req.temperature);
+	s += sys->sprint("\"max_tokens\":%d", mt);
+	if(gen != CLAUDE_MODERN && !(gen == CLAUDE_LEGACY && thinking != ""))
+		s += sys->sprint(",\"temperature\":%.2f", req.temperature);
+	if(thinking != "")
+		s += ",\"thinking\":" + thinking;
+	if(effort != "")
+		s += ",\"output_config\":{\"effort\":" + jquote(effort) + "}";
 
 	# System prompt — cache_control marks it for Anthropic prompt caching.
 	# The cache hierarchy is tools → system → messages; caching the system
@@ -136,23 +361,26 @@ buildanthropicrequest(req: ref AskRequest): string
 		mi++;
 	}
 
-	# Add new prompt or tool results
+	# The new prompt or tool results.  Its last block carries the
+	# conversation's cache breakpoint: each step of a turn finds the
+	# history up to the step before it in the cache, and pays for the
+	# new part only.
 	if(req.toolresults != nil) {
 		if(!first)
 			s += ",";
-		s += buildtoolresultsmessage(req.toolresults);
+		s += buildtoolresultsmessage(req.toolresults, 1);
 		sys->fprint(stderr, "llmclient: msg[%d] appended tool_results\n", mi);
 	} else if(req.prompt != "") {
 		if(!first)
 			s += ",";
-		s += "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":" + jquote(req.prompt) + "}]}";
+		s += "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":" + jquote(req.prompt) +
+			",\"cache_control\":{\"type\":\"ephemeral\"}}]}";
 		sys->fprint(stderr, "llmclient: msg[%d] appended prompt (%d bytes)\n", mi, len req.prompt);
 	}
 
-	# Add prefill (only when no tools)
-	if(req.prefill != "" && req.tooldefs == nil) {
+	# Prefill, where the model takes one (legacy, and no tools)
+	if(req.prefill != "" && req.tooldefs == nil && gen == CLAUDE_LEGACY)
 		s += ",{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":" + jquote(req.prefill) + "}]}";
-	}
 
 	s += "]";
 
@@ -205,7 +433,9 @@ buildanthropicmessage(m: ref LlmMessage): string
 	return "{\"role\":" + jquote(role) + ",\"content\":[{\"type\":\"text\",\"text\":" + jquote(content) + "}]}";
 }
 
-buildtoolresultsmessage(results: list of ref ToolResult): string
+# The user message carrying tool results; with mark, its last block is
+# the cache breakpoint.
+buildtoolresultsmessage(results: list of ref ToolResult, mark: int): string
 {
 	s := "{\"role\":\"user\",\"content\":[";
 	first := 1;
@@ -214,11 +444,248 @@ buildtoolresultsmessage(results: list of ref ToolResult): string
 		if(!first)
 			s += ",";
 		first = 0;
-		s += "{\"type\":\"tool_result\",\"tool_use_id\":" + jquote(r.tooluseid) +
-			",\"content\":" + jquote(r.content) + "}";
+		if(r.tooluseid == "")	# the user's text, after the results
+			s += "{\"type\":\"text\",\"text\":" + jquote(r.content);
+		else
+			s += "{\"type\":\"tool_result\",\"tool_use_id\":" + jquote(r.tooluseid) +
+				",\"content\":" + jquote(r.content);
+		if(mark && tl results == nil)
+			s += ",\"cache_control\":{\"type\":\"ephemeral\"}";
+		s += "}";
 	}
 	s += "]}";
 	return s;
+}
+
+# ---- A response, as content blocks ----
+#
+# Both the whole response and the event stream are read into the same
+# blocks, in the order the model wrote them, and the answer is built from
+# those.  Thinking blocks are kept whole, signature and all: in a tool
+# exchange the API must be given them back unchanged.
+
+AntBlock: adt {
+	kind:	string;		# text | thinking | redacted_thinking | tool_use
+	text:	string;		# text; thinking
+	sig:	string;		# thinking: signature; redacted_thinking: data
+	id:	string;		# tool_use
+	name:	string;
+	input:	string;		# tool_use: its arguments, JSON
+};
+
+AntState: adt {
+	blocks:		array of ref AntBlock;
+	nblocks:	int;
+	stopreason:	string;
+	intokens:	int;		# input, cache reads and writes included
+	outtokens:	int;
+	err:		string;		# an error event in the stream
+	shown:		int;		# some of the answer reached the stream
+};
+
+newantstate(): ref AntState
+{
+	return ref AntState(array[4] of ref AntBlock, 0, "", 0, 0, nil, 0);
+}
+
+antblock(st: ref AntState, idx: int): ref AntBlock
+{
+	if(idx < 0)
+		idx = 0;
+	if(idx >= len st.blocks) {
+		nb := array[2 * idx + 4] of ref AntBlock;
+		nb[0:] = st.blocks[0:st.nblocks];
+		st.blocks = nb;
+	}
+	if(idx >= st.nblocks) {
+		for(i := st.nblocks; i <= idx; i++)
+			st.blocks[i] = ref AntBlock("", "", "", "", "", "");
+		st.nblocks = idx + 1;
+	}
+	return st.blocks[idx];
+}
+
+jstr(jv: ref JValue, key: string): string
+{
+	if(jv == nil)
+		return "";
+	v := jv.get(key);
+	if(v == nil)
+		return "";
+	pick sv := v {
+	String =>
+		return sv.s;
+	}
+	return "";
+}
+
+jint(jv: ref JValue, key: string): int
+{
+	if(jv == nil)
+		return 0;
+	v := jv.get(key);
+	if(v == nil)
+		return 0;
+	pick iv := v {
+	Int =>
+		return int iv.value;
+	}
+	return 0;
+}
+
+# A block as the response gives it whole.
+antsetblock(b: ref AntBlock, jv: ref JValue)
+{
+	b.kind = jstr(jv, "type");
+	case b.kind {
+	"text" =>
+		b.text = jstr(jv, "text");
+	"thinking" =>
+		b.text = jstr(jv, "thinking");
+		b.sig = jstr(jv, "signature");
+	"redacted_thinking" =>
+		b.sig = jstr(jv, "data");
+	"tool_use" =>
+		b.id = jstr(jv, "id");
+		b.name = jstr(jv, "name");
+		iv := jv.get("input");
+		if(iv != nil)
+			b.input = iv.text();
+	}
+}
+
+antusage(st: ref AntState, u: ref JValue)
+{
+	if(u == nil)
+		return;
+	intok := jint(u, "input_tokens") + jint(u, "cache_creation_input_tokens") +
+		jint(u, "cache_read_input_tokens");
+	if(intok > 0)
+		st.intokens = intok;
+	if((out := jint(u, "output_tokens")) > 0)
+		st.outtokens = out;
+}
+
+# One event of the stream.  Returns 1 at the message's end.
+antevent(jv: ref JValue, st: ref AntState, req: ref AskRequest): int
+{
+	case jstr(jv, "type") {
+	"message_start" =>
+		if((msg := jv.get("message")) != nil)
+			antusage(st, msg.get("usage"));
+	"content_block_start" =>
+		b := antblock(st, jint(jv, "index"));
+		cb := jv.get("content_block");
+		if(cb != nil)
+			antsetblock(b, cb);
+		if(b.kind == "tool_use")
+			b.input = "";	# the deltas carry it
+	"content_block_delta" =>
+		b := antblock(st, jint(jv, "index"));
+		delta := jv.get("delta");
+		case jstr(delta, "type") {
+		"text_delta" =>
+			t := jstr(delta, "text");
+			b.text += t;
+			if(t != "" && req.streamch != nil) {
+				st.shown = 1;
+				alt {
+					req.streamch <-= t => ;
+					* => ;	# the display feed; the answer is b.text
+				}
+			}
+		"thinking_delta" =>
+			b.text += jstr(delta, "thinking");
+		"signature_delta" =>
+			b.sig += jstr(delta, "signature");
+		"input_json_delta" =>
+			b.input += jstr(delta, "partial_json");
+		}
+	"message_delta" =>
+		if((sr := jstr(jv.get("delta"), "stop_reason")) != "")
+			st.stopreason = sr;
+		antusage(st, jv.get("usage"));
+	"message_stop" =>
+		return 1;
+	"error" =>
+		e := jv.get("error");
+		st.err = jstr(e, "type") + ": " + jstr(e, "message");
+		return 1;
+	}
+	return 0;
+}
+
+# The STOP: line for a stop reason.  max_tokens is said as such: a reply
+# cut short, and any tool call in it perhaps cut too, is not a finished
+# turn.
+stopline(reason: string): string
+{
+	case reason {
+	"tool_use" or "tool_calls" =>
+		return "STOP:tool_use\n";
+	"max_tokens" or "length" =>
+		return "STOP:max_tokens\n";
+	"refusal" =>
+		return "STOP:refusal\n";
+	}
+	return "STOP:end_turn\n";
+}
+
+antbuild(st: ref AntState, req: ref AskRequest): (ref AskResponse, string)
+{
+	tokens := st.intokens + st.outtokens;
+	text := "";
+	toollines: list of string;
+	blocks: list of string;
+	for(i := 0; i < st.nblocks; i++) {
+		b := st.blocks[i];
+		case b.kind {
+		"text" =>
+			if(b.text == "")
+				continue;
+			text += b.text;
+			blocks = ("{\"type\":\"text\",\"text\":" + jquote(b.text) + "}") :: blocks;
+		"thinking" =>
+			blocks = ("{\"type\":\"thinking\",\"thinking\":" + jquote(b.text) +
+				",\"signature\":" + jquote(b.sig) + "}") :: blocks;
+		"redacted_thinking" =>
+			blocks = ("{\"type\":\"redacted_thinking\",\"data\":" + jquote(b.sig) + "}") :: blocks;
+		"tool_use" =>
+			input := b.input;
+			if(input == "")
+				input = "{}";
+			# Arguments cut off by max_tokens are not JSON; the
+			# history must stay a valid request.
+			(nil, jerr) := readjsonstring(input);
+			if(jerr != nil)
+				input = "{}";
+			# Emit the model's JSON arguments verbatim; wirefmt->encodetool
+			# escapes them safely (colons/backslashes/newlines). MCP tools
+			# (mcp9p /call) consume JSON directly; the legacy /tool positional
+			# projection happens at agentlib calltool — do NOT flatten here.
+			toollines = wirefmt->encodetool(b.id, b.name, input) :: toollines;
+			blocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(b.id) +
+				",\"name\":" + jquote(b.name) +
+				",\"input\":" + input + "}") :: blocks;
+		}
+	}
+
+	# No tools defined — plain text mode
+	if(req.tooldefs == nil) {
+		if(req.prefill != "" && claudegen(req.model) == CLAUDE_LEGACY && !hasprefix(text, req.prefill))
+			text = req.prefill + text;
+		return (ref AskResponse(text, "", tokens), nil);
+	}
+
+	structjson := "";
+	if(blocks != nil)
+		structjson = "[" + joinrev(blocks, ",") + "]";
+	response := stopline(st.stopreason);
+	response += joinrev(toollines, "\n");
+	if(toollines != nil)
+		response += "\n";
+	response += text;
+	return (ref AskResponse(response, structjson, tokens), nil);
 }
 
 parseanthropicresponse(body: string, req: ref AskRequest): (ref AskResponse, string)
@@ -230,7 +697,7 @@ parseanthropicresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	# Check for error response
 	errv := jv.get("error");
 	if(errv != nil) {
-		emsg := jv.get("error").get("message");
+		emsg := errv.get("message");
 		if(emsg != nil) {
 			pick em := emsg {
 			String => return (nil, em.s);
@@ -239,260 +706,39 @@ parseanthropicresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 		return (nil, "anthropic: API error");
 	}
 
-	# Extract tokens
-	tokens := 0;
-	usage := jv.get("usage");
-	if(usage != nil) {
-		itok := usage.get("input_tokens");
-		otok := usage.get("output_tokens");
-		if(itok != nil) pick iv := itok { Int => tokens += int iv.value; }
-		if(otok != nil) pick ov := otok { Int => tokens += int ov.value; }
-	}
-
-	# Extract content blocks
 	content := jv.get("content");
 	if(content == nil)
 		return (nil, "anthropic: no content in response");
 
-	textparts: list of string;
-	toollines: list of string;
-	structblocks: list of string;
-	stopreason := "";
-
-	srv := jv.get("stop_reason");
-	if(srv != nil) pick sr := srv { String => stopreason = sr.s; }
-
+	st := newantstate();
+	st.stopreason = jstr(jv, "stop_reason");
+	antusage(st, jv.get("usage"));
 	pick ca := content {
 	Array =>
-		for(i := 0; i < len ca.a; i++) {
-			block := ca.a[i];
-			typev := block.get("type");
-			if(typev == nil)
-				continue;
-			typestr := "";
-			pick tv := typev { String => typestr = tv.s; }
-
-			case typestr {
-			"text" =>
-				textv := block.get("text");
-				if(textv != nil) {
-					pick tv := textv {
-					String =>
-						if(tv.s != "") {
-							textparts = tv.s :: textparts;
-							structblocks = ("{\"type\":\"text\",\"text\":" + jquote(tv.s) + "}") :: structblocks;
-						}
-					}
-				}
-			"tool_use" =>
-				idv := block.get("id");
-				namev := block.get("name");
-				inputv := block.get("input");
-				id := "";
-				name := "";
-				inputjson := "{}";
-				if(idv != nil) pick iv := idv { String => id = iv.s; }
-				if(namev != nil) pick nv := namev { String => name = nv.s; }
-				if(inputv != nil)
-					inputjson = inputv.text();
-				# Emit the model's JSON arguments verbatim; wirefmt->encodetool
-				# escapes them safely (colons/backslashes/newlines). MCP tools
-				# (mcp9p /call) consume JSON directly; the legacy /tool positional
-				# projection happens at agentlib calltool — do NOT flatten here.
-				toollines = wirefmt->encodetool(id, name, inputjson) :: toollines;
-				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
-					",\"name\":" + jquote(name) +
-					",\"input\":" + inputjson + "}") :: structblocks;
-			}
-		}
+		for(i := 0; i < len ca.a; i++)
+			antsetblock(antblock(st, i), ca.a[i]);
 	}
-
-	# No tools defined — plain text mode
-	if(req.tooldefs == nil) {
-		text := joinrev(textparts, "");
-		if(req.prefill != "" && !hasprefix(text, req.prefill))
-			text = req.prefill + text;
-		return (ref AskResponse(text, "", tokens), nil);
-	}
-
-	# Tool mode — build STOP: response
-	structjson := "";
-	if(structblocks != nil)
-		structjson = "[" + joinrev(structblocks, ",") + "]";
-
-	response := "";
-	if(stopreason == "tool_use")
-		response = "STOP:tool_use\n";
-	else
-		response = "STOP:end_turn\n";
-	response += joinrev(toollines, "\n");
-	if(toollines != nil)
-		response += "\n";
-	response += joinrev(textparts, "");
-
-	return (ref AskResponse(response, structjson, tokens), nil);
+	return antbuild(st, req);
 }
 
+# The events of a whole streamed body, as the tests and a buffered
+# reader have them.
 parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 {
-	# The body was received in full from httpspost.
-	# Parse SSE events from it line by line.
-	# For true streaming over TLS, we'd need to read incrementally,
-	# but httpspost reads to completion. The streaming chunks are still
-	# sent to req.streamch for the Styx stream file.
-
-	fulltext := "";
-	toollines: list of string;
-	structblocks: list of string;
-	tokens := 0;
-	stopreason := "";
-
-	# Per-tool accumulation for streaming tool_use
-	# Track current tool block's id, name, and partial input JSON
-	curtoolid := "";
-	curtoolname := "";
-	curtoolinput := "";
-
-	lines := splitlines(body);
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(line == "" || line == "\r")
-			continue;
+	st := newantstate();
+	for(lines := splitlines(body); lines != nil; lines = tl lines) {
+		line := stripnl(hd lines);
 		if(!hasprefix(line, "data: "))
 			continue;
-		data := line[6:];
-		if(data == "[DONE]")
-			break;
-
-		(jv, jerr) := readjsonstring(data);
+		(jv, jerr) := readjsonstring(line[6:]);
 		if(jerr != nil)
 			continue;
-
-		typev := jv.get("type");
-		if(typev == nil)
-			continue;
-		typestr := "";
-		pick tv := typev { String => typestr = tv.s; }
-
-		case typestr {
-		"content_block_delta" =>
-			delta := jv.get("delta");
-			if(delta == nil)
-				continue;
-			dtv := delta.get("type");
-			if(dtv == nil)
-				continue;
-			dtypestr := "";
-			pick dtval := dtv { String => dtypestr = dtval.s; }
-			if(dtypestr == "text_delta") {
-				textv := delta.get("text");
-				if(textv != nil) {
-					pick tv := textv {
-					String =>
-						fulltext += tv.s;
-						if(req.streamch != nil) {
-							alt {
-								req.streamch <-= tv.s => ;
-								* => ;  # drop if full
-							}
-						}
-					}
-				}
-			} else if(dtypestr == "input_json_delta") {
-				pjv := delta.get("partial_json");
-				if(pjv != nil)
-					pick pv := pjv { String => curtoolinput += pv.s; }
-			}
-		"message_delta" =>
-			usagev := jv.get("usage");
-			if(usagev != nil) {
-				otv := usagev.get("output_tokens");
-				if(otv != nil) pick ov := otv { Int => tokens += int ov.value; }
-			}
-			srv := jv.get("delta");
-			if(srv != nil) {
-				srr := srv.get("stop_reason");
-				if(srr != nil) pick sr := srr { String => stopreason = sr.s; }
-			}
-		"message_start" =>
-			msgv := jv.get("message");
-			if(msgv != nil) {
-				usagev := msgv.get("usage");
-				if(usagev != nil) {
-					itv := usagev.get("input_tokens");
-					if(itv != nil) pick iv := itv { Int => tokens += int iv.value; }
-				}
-			}
-		"content_block_start" =>
-			cb := jv.get("content_block");
-			if(cb != nil) {
-				cbtv := cb.get("type");
-				if(cbtv != nil) {
-					cbtypestr := "";
-					pick ct := cbtv { String => cbtypestr = ct.s; }
-					if(cbtypestr == "tool_use") {
-						idv := cb.get("id");
-						namev := cb.get("name");
-						if(idv != nil) pick iv := idv { String => curtoolid = iv.s; }
-						if(namev != nil) pick nv := namev { String => curtoolname = nv.s; }
-						curtoolinput = "";
-					}
-				}
-			}
-		"content_block_stop" =>
-			# Finalize accumulated tool input
-			if(curtoolid != "") {
-				inputjson := curtoolinput;
-				if(inputjson == "")
-					inputjson = "{}";
-				# JSON arguments verbatim; wirefmt->encodetool escapes safely.
-				# Legacy /tool positional projection happens at agentlib calltool.
-				toollines = wirefmt->encodetool(curtoolid, curtoolname, inputjson) :: toollines;
-				structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(curtoolid) +
-					",\"name\":" + jquote(curtoolname) +
-					",\"input\":" + inputjson + "}") :: structblocks;
-				curtoolid = "";
-				curtoolname = "";
-				curtoolinput = "";
-			}
-		}
+		if(antevent(jv, st, req))
+			break;
 	}
-
-	# Build response
-	if(req.tooldefs == nil) {
-		if(req.prefill != "" && !hasprefix(fulltext, req.prefill))
-			fulltext = req.prefill + fulltext;
-		return (ref AskResponse(fulltext, "", tokens), nil);
-	}
-
-	# Build structjson with text BEFORE tool_use (API requires this order)
-	structjson := "";
-	textblock := "";
-	if(fulltext != "")
-		textblock = "{\"type\":\"text\",\"text\":" + jquote(fulltext) + "}";
-	if(textblock != "" || structblocks != nil) {
-		structjson = "[";
-		if(textblock != "")
-			structjson += textblock;
-		if(structblocks != nil) {
-			if(textblock != "")
-				structjson += ",";
-			structjson += joinrev(structblocks, ",");
-		}
-		structjson += "]";
-	}
-
-	response := "";
-	if(stopreason == "tool_use")
-		response = "STOP:tool_use\n";
-	else
-		response = "STOP:end_turn\n";
-	response += joinrev(toollines, "\n");
-	if(toollines != nil)
-		response += "\n";
-	response += fulltext;
-
-	return (ref AskResponse(response, structjson, tokens), nil);
+	if(st.err != nil)
+		return (nil, "anthropic: " + st.err);
+	return antbuild(st, req);
 }
 
 # ==================== OpenAI-Compatible API ====================
@@ -506,7 +752,7 @@ parseanthropicsse(body: string, req: ref AskRequest): (ref AskResponse, string)
 # mid-response, the caller still gets back whatever content arrived
 # before the stall (in fulltext) plus a non-nil error string. The
 # old code would return (nil, err) and the user would see nothing.
-askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string)
+askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string, int)
 {
 	if(baseurl == nil || baseurl == "")
 		baseurl = "http://localhost:11434/v1";
@@ -515,7 +761,7 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 
 	(scheme, host, port, path, uerr) := parseurl(baseurl + "/chat/completions");
 	if(uerr != nil)
-		return (nil, "openai: " + uerr);
+		return (nil, "openai: " + uerr, 0);
 
 	headers := "Content-Type: application/json\r\n";
 	if(apikey != nil && apikey != "" && apikey != "not-needed")
@@ -533,55 +779,56 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 		if(tlsmod == nil) {
 			tlsmod = load TLS TLS->PATH;
 			if(tlsmod == nil)
-				return (nil, "openai: cannot load TLS module");
+				return (nil, "openai: cannot load TLS module", 0);
 			terr := tlsmod->init();
 			if(terr != nil)
-				return (nil, "openai: TLS init: " + terr);
+				return (nil, "openai: TLS init: " + terr, 0);
 		}
-		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-		if(ok < 0)
-			return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
+		(conn, derr) := tlsdial(host, port);
+		if(derr != nil)
+			return (nil, "openai: " + derr, 0);
 		config := tlsmod->defaultconfig();
 		config.servername = host;
 		(tc, cerr) := tlsmod->client(conn.dfd, config);
 		if(cerr != nil)
-			return (nil, "openai: TLS: " + cerr);
+			return (nil, "openai: TLS: " + cerr, 0);
 		d := array of byte reqdata;
 		if(tc.write(d, len d) < 0) {
 			tc.close();
-			return (nil, "openai: TLS write failed");
+			return (nil, "openai: TLS write failed", 0);
 		}
 		rch := chan[1] of (int, array of byte);
 		spawn _httpsread(tc, rch);
-		(resp, rerr) := _sseconsume(conn, rch, req);
+		(resp, rerr, shown) := _sseconsume(conn, rch, req, nil);
 		tc.close();
 		if(rerr != nil)
-			return (resp, "openai: " + rerr);
-		return (resp, nil);
+			return (resp, "openai: " + rerr, shown);
+		return (resp, nil, 0);
 	}
 
 	# Plain HTTP path (typical: Ollama at localhost:11434).
 	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
 	if(ok < 0)
-		return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
+		return (nil, sys->sprint("openai: cannot connect to %s: %r", host) + localgatehint(host, port), 0);
 	d := array of byte reqdata;
 	if(sys->write(conn.dfd, d, len d) < 0)
-		return (nil, sys->sprint("openai: write failed: %r"));
+		return (nil, sys->sprint("openai: write failed: %r"), 0);
 	rch := chan[1] of (int, array of byte);
 	spawn _httpread(conn.dfd, rch);
-	(resp, rerr) := _sseconsume(conn, rch, req);
+	(resp, rerr, shown) := _sseconsume(conn, rch, req, nil);
 	if(rerr != nil)
-		return (resp, "openai: " + rerr);
-	return (resp, nil);
+		return (resp, "openai: " + rerr, shown);
+	return (resp, nil, 0);
 }
 
 # Incremental SSE consumer. Drives a byte channel (filled by
 # _httpread / _httpsread) through:
 #   1. HTTP header drain (until \r\n\r\n)
 #   2. Status line check
-#   3. SSE event drain via _ssedrain_lines, which calls
-#      _ssehandle_event for each complete `data: ...` line and
-#      forwards content deltas to req.streamch in real time
+#   3. SSE event drain via _ssedrain_lines, which hands each complete
+#      `data: ...` line to _ssehandle_event (OpenAI) or antevent
+#      (Anthropic, when ant is given), forwarding text deltas to
+#      req.streamch in real time
 #
 # Per-read no-progress watchdog: same shape as _httpreadloop —
 # HTTP_NO_PROGRESS_MS without any bytes triggers a hangup, but a
@@ -590,16 +837,30 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 # On timeout, returns the partial response (fulltext + tool calls
 # accumulated so far) plus an error string. Caller decides what to
 # do with the partial.
+#
+# A status other than 200 is an error that says what the server said:
+# its body (the API's own message) and its Retry-After, as
+# "retry-after=<s>", for retrydelay.
+ERRBODYMAX: con 4096;
+
 _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
-            req: ref AskRequest): (ref AskResponse, string)
+            req: ref AskRequest, ant: ref AntState): (ref AskResponse, string, int)
 {
-	st := ref _SseState("", 0, "", nil, nil, nil);
+	st := ref _SseState("", 0, "", nil, nil, nil, 0);
 	headersbuf := array[0] of byte;
 	bodybuf := array[0] of byte;
 	in_body := 0;
 	status := "";
+	httperr := "";
 	idle_ms := 0;
 	done := 0;
+	# Whether the body is a plain chat.completion object rather than SSE:
+	# -1 not yet known (nothing but whitespace so far), 0 SSE, 1 JSON.
+	# Some OpenAI-shape backends (the local Devstral chat_server.py, vLLM
+	# with streaming off) ignore "stream": true and send one JSON body;
+	# its `data: ` lines would never come, and the reply would be lost.
+	# See tests/llmclient_sse_fallback_test.b.
+	plainjson := -1;
 	while(!done) {
 		alt {
 		rr := <-rch =>
@@ -634,8 +895,12 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 						status = hdrs[0:nl];
 					# Validate status
 					if(status != "" && !hasprefix(status, "HTTP/1.1 200") &&
-					   !hasprefix(status, "HTTP/1.0 200"))
-						return (nil, "HTTP error: " + strip(status));
+					   !hasprefix(status, "HTTP/1.0 200")) {
+						httperr = "HTTP error: " + strip(status);
+						if((ra := httpheader(hdrs, "retry-after")) != "")
+							httperr += " retry-after=" + ra;
+						plainjson = 2;	# the error's body, kept to say
+					}
 					in_body = 1;
 					after := boundary + 4;
 					if(after < len headersbuf)
@@ -649,8 +914,15 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 				bodybuf[0:] = old;
 				bodybuf[len old:] = rdata[0:n];
 			}
-			if(in_body) {
-				(remaining, ssedone) := _ssedrain_lines(bodybuf, st, req);
+			if(plainjson == 2) {
+				if(len bodybuf >= ERRBODYMAX)
+					done = 1;
+				break;
+			}
+			if(in_body && plainjson < 0)
+				plainjson = _sniffjson(bodybuf);
+			if(in_body && plainjson == 0) {
+				(remaining, ssedone) := _ssedrain_lines(bodybuf, st, req, ant);
 				bodybuf = remaining;
 				if(ssedone)
 					done = 1;
@@ -658,22 +930,94 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 		* =>
 			sys->sleep(HTTP_POLL_MS);
 			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+			if(idle_ms >= quietlimit(in_body || len headersbuf > 0)) {
 				if(conn.cfd != nil)
 					sys->fprint(conn.cfd, "hangup");
+				if(httperr != "")
+					return (nil, httperr, 0);
 				# Build partial response from whatever arrived
-				(presp, _) := _ssebuild_response(st, req);
+				if(ant != nil) {
+					(aresp, nil) := antbuild(ant, req);
+					return (aresp, sys->sprint("HTTP read no-progress timeout after %d ms",
+						idle_ms), ant.shown);
+				}
+				(presp, nil) := _ssebuild_response(st, req);
 				return (presp, sys->sprint(
 					"HTTP read no-progress timeout after %d ms (got %d bytes of content, %d tool deltas)",
-					HTTP_NO_PROGRESS_MS, len st.fulltext, listlen(st.tcids)));
+					idle_ms, len st.fulltext, listlen(st.tcids)), st.shown);
 			}
 		}
 	}
-	return _ssebuild_response(st, req);
+	if(httperr != "") {
+		eb := bodybuf;
+		if(len eb > ERRBODYMAX)
+			eb = eb[0:ERRBODYMAX];
+		if(len eb > 0)
+			httperr += ": " + strip(string eb);
+		return (nil, httperr, 0);
+	}
+	r: ref AskResponse;
+	e: string;
+	if(ant != nil) {
+		if(plainjson == 1)
+			(r, e) = parseanthropicresponse(string bodybuf, req);
+		else
+			(r, e) = antbuild(ant, req);
+		return (r, e, ant.shown);
+	}
+	if(plainjson == 1)
+		(r, e) = parseopenairesponse(string bodybuf, req);
+	else
+		(r, e) = _ssebuild_response(st, req);
+	return (r, e, st.shown);
+}
+
+# The value of a header in an HTTP header block, by its name in any case.
+httpheader(hdrs, name: string): string
+{
+	name = str->tolower(name) + ":";
+	for(l := splitlines(hdrs); l != nil; l = tl l) {
+		line := stripnl(hd l);
+		if(len line > len name && str->tolower(line[0:len name]) == name)
+			return strip(line[len name:]);
+	}
+	return "";
+}
+
+# Whether a response body is a plain JSON object (1), SSE (0), or not yet
+# known because it holds only whitespace so far (-1).
+_sniffjson(b: array of byte): int
+{
+	for(i := 0; i < len b; i++) {
+		case int b[i] {
+		' ' or '\t' or '\r' or '\n' =>
+			;
+		'{' =>
+			return 1;
+		* =>
+			return 0;
+		}
+	}
+	return -1;
 }
 
 askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string)
 {
+	for(attempt := 0; ; attempt++) {
+		(resp, err, shown) := askopenaionce(baseurl, apikey, req);
+		if(err == nil || shown || attempt >= MAXRETRIES)
+			return (resp, err);
+		ms := retrydelay(err, attempt);
+		if(ms < 0)
+			return (resp, err);
+		sys->fprint(stderr, "llmclient: %s; trying again in %d ms\n", err, ms);
+		sys->sleep(ms);
+	}
+}
+
+askopenaionce(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string, int)
+{
+	debugdump(buildopenairequestjson(req));
 	# Streaming path — true incremental SSE consumption.
 	# Forwards delta.content to req.streamch as it arrives on the
 	# wire, not after buffering. On mid-response stall, returns
@@ -689,7 +1033,7 @@ askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, strin
 
 	(scheme, host, port, path, uerr) := parseurl(baseurl + "/chat/completions");
 	if(uerr != nil)
-		return (nil, "openai: " + uerr);
+		return (nil, "openai: " + uerr, 0);
 
 	headers := "Content-Type: application/json\r\n";
 	if(apikey != nil && apikey != "" && apikey != "not-needed")
@@ -704,19 +1048,22 @@ askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, strin
 		(respbody, err) = httppost(host, port, path, headers, body);
 
 	if(err != nil)
-		return (nil, "openai: " + err);
+		return (nil, "openai: " + err, 0);
 
-	return parseopenairesponse(respbody, req);
+	(r, perr) := parseopenairesponse(respbody, req);
+	return (r, perr, 0);
 }
 
 buildopenairequestjson(req: ref AskRequest): string
 {
 	s := "{";
 	s += "\"model\":" + jquote(req.model) + ",";
-	mt := req.maxtokens;
-	if(mt <= 0)
-		mt = 1024;
-	s += sys->sprint("\"max_tokens\":%d,", mt);
+	# No cap set: the server's own, which for vLLM, SGLang and Ollama is
+	# what is left of the context.  A cap chosen here was either too
+	# small (a whole file written in one call, cut off) or too large for
+	# a small context (a 400).
+	if(req.maxtokens > 0)
+		s += sys->sprint("\"max_tokens\":%d,", req.maxtokens);
 	s += sys->sprint("\"temperature\":%.2f", req.temperature);
 
 	# Stream
@@ -737,12 +1084,22 @@ buildopenairequestjson(req: ref AskRequest): string
 	# thinkmode() returns "" for models that don't support thinking at
 	# all; in that case we omit BOTH fields. For models that do, we emit
 	# both reasoning_effort (top-level) and options.think (Ollama).
+	#
+	# A model the table does not know is asked to think only when the
+	# session asks it to (thinking set), with reasoning_effort alone, the
+	# field OpenAI, vLLM, SGLang and Ollama all take; one that cannot
+	# think says so in its error.
 	thinkopts := thinkmode(req.model, req.thinkingtokens);
 	if(thinkopts != "") {
 		if(req.reasoningeffort != "")
 			s += sys->sprint(",\"reasoning_effort\":%s",
 				jquote(req.reasoningeffort));
 		s += ",\"options\":" + thinkopts;
+	} else if(req.thinkingtokens != 0) {
+		effort := req.reasoningeffort;
+		if(effort == "")
+			effort = thinklevel(req.thinkingtokens);
+		s += sys->sprint(",\"reasoning_effort\":%s", jquote(effort));
 	}
 
 	# Messages
@@ -784,8 +1141,11 @@ buildopenairequestjson(req: ref AskRequest): string
 			r := hd trl;
 			if(!first) s += ",";
 			first = 0;
-			s += "{\"role\":\"tool\",\"content\":" + jquote(r.content) +
-				",\"tool_call_id\":" + jquote(r.tooluseid) + "}";
+			if(r.tooluseid == "")	# the user's text, after the results
+				s += "{\"role\":\"user\",\"content\":" + jquote(r.content) + "}";
+			else
+				s += "{\"role\":\"tool\",\"content\":" + jquote(r.content) +
+					",\"tool_call_id\":" + jquote(r.tooluseid) + "}";
 		}
 	} else if(req.prompt != "") {
 		if(!first) s += ",";
@@ -908,6 +1268,14 @@ buildopenaitoolresultmessages(m: ref LlmMessage, first: int): string
 			s += "{\"role\":\"tool\",\"content\":" + jquote(content) +
 				",\"tool_call_id\":" + jquote(id) + "}";
 		}
+		# The user's text sent with the results follows them.
+		for(i = 0; i < len a.a; i++) {
+			block := a.a[i];
+			if(jstr(block, "type") != "text")
+				continue;
+			if(!first || s != "") s += ",";
+			s += "{\"role\":\"user\",\"content\":" + jquote(jstr(block, "text")) + "}";
+		}
 	}
 
 	if(s == "") {
@@ -916,6 +1284,17 @@ buildopenaitoolresultmessages(m: ref LlmMessage, first: int): string
 		s += "{\"role\":\"user\",\"content\":" + jquote(m.content) + "}";
 	}
 	return s;
+}
+
+# The effort a thinking budget asks for: up to 10000 low, to 20000
+# medium, more (or max, -1) high.
+thinklevel(tokens: int): string
+{
+	if(tokens > 0 && tokens <= 10000)
+		return "low";
+	if(tokens > 0 && tokens <= 20000)
+		return "medium";
+	return "high";
 }
 
 thinkoptions(tokens: int): string
@@ -1095,11 +1474,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	if(structblocks != nil)
 		structjson = "[" + joinrev(structblocks, ",") + "]";
 
-	response := "";
-	if(finishreason == "tool_calls")
-		response = "STOP:tool_use\n";
-	else
-		response = "STOP:end_turn\n";
+	response := stopline(finishreason);
 	response += joinrev(toolentries, "\n");
 	if(toolentries != nil)
 		response += "\n";
@@ -1122,6 +1497,7 @@ _SseState: adt {
 	tcids:    list of string;
 	tcnames:  list of string;
 	tcargs:   list of string;
+	shown:    int;	# some of the answer reached the stream
 };
 
 # Process one parsed SSE event JSON value into the running state.
@@ -1161,9 +1537,16 @@ _ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
 		if(cv != nil) {
 			pick c := cv {
 			String =>
-				if(c.s != "") {
+				# The whole text so far, sent again in a chunk of its own:
+				# SGLang (gpt-oss, with its tool-call parser) was seen to,
+				# and the reply was shown and kept twice over.  No reply
+				# repeats all of itself in one chunk; it is dropped.
+				if(c.s != "" && len c.s >= 32 && c.s == st.fulltext)
+					;
+				else if(c.s != "") {
 					st.fulltext += c.s;
 					if(req.streamch != nil) {
+						st.shown = 1;
 						alt {
 							req.streamch <-= c.s => ;
 							* => ;
@@ -1262,11 +1645,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 	if(structblocks != nil)
 		structjson = "[" + joinrev(structblocks, ",") + "]";
 
-	response := "";
-	if(st.finishreason == "tool_calls")
-		response = "STOP:tool_use\n";
-	else
-		response = "STOP:end_turn\n";
+	response := stopline(st.finishreason);
 	response += joinrev(toolentries, "\n");
 	if(toolentries != nil)
 		response += "\n";
@@ -1280,7 +1659,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 # `done_flag` = 1 iff `data: [DONE]` was seen.
 # Also tolerates Transfer-Encoding chunked size lines (`42\r\n`) that
 # show up inline — they don't start with "data: " so they're skipped.
-_ssedrain_lines(buf: array of byte, st: ref _SseState, req: ref AskRequest): (array of byte, int)
+_ssedrain_lines(buf: array of byte, st: ref _SseState, req: ref AskRequest, ant: ref AntState): (array of byte, int)
 {
 	start := 0;
 	done := 0;
@@ -1305,6 +1684,13 @@ _ssedrain_lines(buf: array of byte, st: ref _SseState, req: ref AskRequest): (ar
 		(jv, jerr) := readjsonstring(data);
 		if(jerr != nil)
 			continue;
+		if(ant != nil) {
+			if(antevent(jv, ant, req)) {
+				done = 1;
+				break;
+			}
+			continue;
+		}
 		_ssehandle_event(jv, st, req);
 	}
 	# Anything from `start` onwards is the trailing partial line —
@@ -1336,7 +1722,7 @@ parseopenaisseresponse(body: string, req: ref AskRequest): (ref AskResponse, str
 	# in one go (askopenaistream's non-streaming peer, error fallback,
 	# or the existing fallback tests). For true incremental streaming,
 	# askopenaistream uses _ssehandle_event + _ssebuild_response directly.
-	st := ref _SseState("", 0, "", nil, nil, nil);
+	st := ref _SseState("", 0, "", nil, nil, nil, 0);
 	lines := splitlines(body);
 	for(; lines != nil; lines = tl lines) {
 		line := hd lines;
@@ -1680,18 +2066,24 @@ parsetoolresults(text: string): (list of ref ToolResult, string)
 			continue;
 		}
 
-		# Next non-empty line is tool_use_id
+		# Next non-empty line is tool_use_id ("-": the user's text)
 		tooluseid := strip(hd lines);
+		if(tooluseid == "-")
+			tooluseid = "";
 		lines = tl lines;
 
-		# Collect content lines until "---" or end
+		# Collect content lines until "---" or end; a line of more
+		# dashes was a line of content one dash shorter.
 		contentlines: list of string;
-		while(lines != nil && hd lines != "---") {
-			contentlines = hd lines :: contentlines;
+		while(lines != nil && stripnl(hd lines) != "---") {
+			line := hd lines;
+			if(len stripnl(line) > 3 && alldashes(stripnl(line)))
+				line = line[1:];
+			contentlines = line :: contentlines;
 			lines = tl lines;
 		}
 		# Skip "---" separator
-		if(lines != nil && hd lines == "---")
+		if(lines != nil && stripnl(hd lines) == "---")
 			lines = tl lines;
 
 		content := joinrev(contentlines, "\n");
@@ -1711,6 +2103,14 @@ parsetoolresults(text: string): (list of ref ToolResult, string)
 		rev = hd results :: rev;
 
 	return (rev, nil);
+}
+
+alldashes(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] != '-')
+			return 0;
+	return 1;
 }
 
 extracttextcontent(response: string): string
@@ -1797,8 +2197,24 @@ jsonescapestr(s: string): string
 # in-flight sys->read to fail. The reader thread then deposits its
 # final (n, buf) tuple onto a buffered channel and exits. We don't wait
 # for it.
+#
+# Before the first byte the wait is longer, HTTP_FIRST_BYTE_MS.  A server
+# that serves one request at a time (Ollama's default) sends nothing to a
+# request queued behind another until that one is done, and an agent with a
+# task running asks while the task does: mistral-small3.2 on a Jetson took
+# more than 120s that way, and the turn was lost as "model unavailable".
+# Once bytes come, a quiet of HTTP_NO_PROGRESS_MS is still a hang.
 HTTP_POLL_MS:        con 200;
 HTTP_NO_PROGRESS_MS: con 120000;
+HTTP_FIRST_BYTE_MS:  con 300000;
+
+# How long a connection may be quiet, given whether anything has come yet.
+quietlimit(got: int): int
+{
+	if(got > 0)
+		return HTTP_NO_PROGRESS_MS;
+	return HTTP_FIRST_BYTE_MS;
+}
 
 # Per-read reader thread: blocks on sys->read, pushes one chunk per
 # iteration. Caller's channel must be buffered (capacity >= 1) so a
@@ -1835,12 +2251,12 @@ _httpreadloop(conn: Sys->Connection): (string, string)
 		* =>
 			sys->sleep(HTTP_POLL_MS);
 			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+			if(idle_ms >= quietlimit(len response)) {
 				if(conn.cfd != nil)
 					sys->fprint(conn.cfd, "hangup");
 				return (response, sys->sprint(
 					"HTTP read no-progress timeout after %d ms (got %d bytes)",
-					HTTP_NO_PROGRESS_MS, len response));
+					idle_ms, len response));
 			}
 		}
 	}
@@ -1852,7 +2268,7 @@ httppost(host, port, path, headers, body: string): (string, string)
 	addr := "tcp!" + host + "!" + port;
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", addr));
+		return (nil, sys->sprint("cannot connect to %s: %r", addr) + localgatehint(host, port));
 
 	contentlen := len array of byte body;
 	req := "POST " + path + " HTTP/1.0\r\n" +
@@ -1870,8 +2286,26 @@ httppost(host, port, path, headers, body: string): (string, string)
 	if(rerr != nil)
 		return (nil, rerr);
 
-	(nil, nil, rbody) := parsehttpresponse(response);
+	(status, hdrs, rbody) := parsehttpresponse(response);
+	if((e := httpstatuserr(status, hdrs, rbody)) != nil)
+		return (nil, e);
 	return (rbody, nil);
+}
+
+# The error a status other than 200 is, as retrydelay reads it, or nil.
+httpstatuserr(status, hdrs, body: string): string
+{
+	if(status == "" || hasprefix(status, "HTTP/1.1 200") || hasprefix(status, "HTTP/1.0 200"))
+		return nil;
+	e := "HTTP error: " + strip(status);
+	if((ra := httpheader(hdrs, "retry-after")) != "")
+		e += " retry-after=" + ra;
+	if(body != "") {
+		if(len body > ERRBODYMAX)
+			body = body[0:ERRBODYMAX];
+		e += ": " + body;
+	}
+	return e;
 }
 
 # Plain-HTTP GET — mirror of httppost with no body/Content-Length.
@@ -1898,6 +2332,170 @@ httpget(host, port, path, headers: string): (string, string)
 
 	(nil, nil, rbody) := parsehttpresponse(response);
 	return (rbody, nil);
+}
+
+# ==================== Context window ====================
+#
+# How much a model can be given, as its server says: an OpenAI-shape
+# server's model list (vLLM and SGLang give max_model_len; others
+# context_length or context_window); Ollama's running model (/api/ps) or
+# its num_ctx, the window Ollama gives it, which is not the model's own
+# (and a prompt longer than it is cut, silently, from the front); the
+# Anthropic API's models endpoint (max_input_tokens).
+
+contextwindow(backend, baseurl, apikey, model: string): (int, string)
+{
+	if(backend == "openai")
+		return openaiwindow(baseurl, apikey, model);
+	return anthropicwindow(baseurl, apikey, model);
+}
+
+openaiwindow(baseurl, apikey, model: string): (int, string)
+{
+	if(baseurl == nil || baseurl == "")
+		baseurl = "http://localhost:11434/v1";
+	headers := "";
+	if(apikey != nil && apikey != "" && apikey != "not-needed")
+		headers = "Authorization: Bearer " + apikey + "\r\n";
+	(body, err) := getjson(baseurl + "/models", headers);
+	if(err == nil) {
+		(jv, nil) := readjsonstring(body);
+		if(jv != nil && (data := jv.get("data")) != nil) {
+			pick da := data {
+			Array =>
+				for(i := 0; i < len da.a; i++) {
+					m := da.a[i];
+					if(jstr(m, "id") != model && len da.a != 1)
+						continue;
+					for(keys := "max_model_len" :: "context_length" :: "context_window" ::
+					    "max_context_length" :: nil; keys != nil; keys = tl keys)
+						if((n := jint(m, hd keys)) > 0)
+							return (n, hd keys);
+				}
+			}
+		}
+	}
+
+	# Ollama: the window it runs the model with
+	base := baseurl;
+	if(len base > 3 && base[len base - 3:] == "/v1")
+		base = base[0:len base - 3];
+	(body, err) = getjson(base + "/api/ps", "");
+	if(err == nil) {
+		(jv, nil) := readjsonstring(body);
+		if(jv != nil && (ms := jv.get("models")) != nil) {
+			pick ma := ms {
+			Array =>
+				for(i := 0; i < len ma.a; i++)
+					if(ollamaname(jstr(ma.a[i], "name")) == ollamaname(model) &&
+					   (n := jint(ma.a[i], "context_length")) > 0)
+						return (n, "ollama context_length");
+			}
+		}
+	}
+	(body, err) = postjson(base + "/api/show", "{\"model\":" + jquote(model) + "}");
+	if(err == nil) {
+		(jv, nil) := readjsonstring(body);
+		if(jv != nil) {
+			# num_ctx, when the model's parameters set it
+			(nil, ps) := sys->tokenize(jstr(jv, "parameters"), "\n");
+			for(; ps != nil; ps = tl ps) {
+				(nil, w) := sys->tokenize(hd ps, " \t");
+				if(len w == 2 && hd w == "num_ctx") {
+					(n, nil) := str->toint(hd tl w, 10);
+					if(n > 0)
+						return (n, "ollama num_ctx");
+				}
+			}
+			if(jv.get("model_info") != nil)
+				return (OLLAMADEFAULTCTX, "ollama default num_ctx");
+		}
+	}
+	return (0, "the server does not say");
+}
+
+# Ollama's window for a model whose num_ctx is not set: its default.
+OLLAMADEFAULTCTX: con 4096;
+
+# A model's name as Ollama lists it: a name without a tag is ":latest".
+ollamaname(n: string): string
+{
+	if(n == "" || contains(n, ":"))
+		return n;
+	return n + ":latest";
+}
+
+anthropicwindow(apiurl, apikey, model: string): (int, string)
+{
+	if(apiurl == nil || apiurl == "")
+		apiurl = "api.anthropic.com";
+	headers := "x-api-key: " + apikey + "\r\n" + "anthropic-version: 2023-06-01\r\n";
+	(body, err) := httpsget(apiurl, "443", "/v1/models/" + model, headers);
+	if(err != nil)
+		return (0, err);
+	(jv, nil) := readjsonstring(body);
+	if(jv != nil && (n := jint(jv, "max_input_tokens")) > 0)
+		return (n, "max_input_tokens");
+	return (0, "the models endpoint does not say");
+}
+
+getjson(url, headers: string): (string, string)
+{
+	(scheme, host, port, path, uerr) := parseurl(url);
+	if(uerr != nil)
+		return (nil, uerr);
+	if(scheme == "https")
+		return httpsget(host, port, path, headers);
+	return httpget(host, port, path, headers);
+}
+
+postjson(url, body: string): (string, string)
+{
+	(scheme, host, port, path, uerr) := parseurl(url);
+	if(uerr != nil)
+		return (nil, uerr);
+	headers := "Content-Type: application/json\r\n";
+	if(scheme == "https")
+		return httpspost(host, port, path, headers, body);
+	return httppost(host, port, path, headers, body);
+}
+
+# A refusal of a prompt longer than the window, by how servers word it:
+#	vLLM, OpenAI	"maximum context length is 65536 tokens"
+#	SGLang		"longer than the model's context length (65536 tokens)"
+#	Anthropic	"prompt is too long: 210000 tokens > 200000 maximum"
+#	llama.cpp	"exceeds the available context size"
+overflowwindow(err: string): (int, int)
+{
+	l := str->tolower(err);
+	if(contains(l, "maximum context length is")) {
+		(nil, r) := str->splitstrl(l, "maximum context length is");
+		return (firstint(r[len "maximum context length is":]), 1);
+	}
+	if(contains(l, "context length (")) {
+		(nil, r) := str->splitstrl(l, "context length (");
+		return (firstint(r[len "context length (":]), 1);
+	}
+	if(contains(l, "prompt is too long")) {
+		(nil, r) := str->splitstrl(l, " > ");
+		if(r != nil)
+			return (firstint(r[3:]), 1);
+		return (0, 1);
+	}
+	if(contains(l, "context size") || contains(l, "context window") && contains(l, "exceed"))
+		return (0, 1);
+	return (0, 0);
+}
+
+firstint(s: string): int
+{
+	i := 0;
+	while(i < len s && (s[i] < '0' || s[i] > '9'))
+		i++;
+	n := 0;
+	for(; i < len s && s[i] >= '0' && s[i] <= '9'; i++)
+		n = n * 10 + s[i] - '0';
+	return n;
 }
 
 # List the backend's available models via the OpenAI-compatible
@@ -1985,16 +2583,217 @@ _httpsreadloop(conn: Sys->Connection, tc: ref Conn): (string, string)
 		* =>
 			sys->sleep(HTTP_POLL_MS);
 			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+			if(idle_ms >= quietlimit(len response)) {
 				if(conn.cfd != nil)
 					sys->fprint(conn.cfd, "hangup");
 				return (response, sys->sprint(
 					"HTTPS read no-progress timeout after %d ms (got %d bytes)",
-					HTTP_NO_PROGRESS_MS, len response));
+					idle_ms, len response));
 			}
 		}
 	}
 	return (response, nil);
+}
+
+# ==================== HTTPS proxy ====================
+#
+# Hosts that reach the Internet only through an HTTP proxy reach the
+# APIs through it (INFR-307): a TLS connection is dialled through the
+# proxy named by $https_proxy (or $HTTPS_PROXY), opened with CONNECT,
+# and TLS runs inside the tunnel as it would on a direct connection.
+# The proxy is written as curl and Go take it, http://[user:pass@]host[:port];
+# a user and password are sent as Basic authorisation.  $no_proxy (or
+# $NO_PROXY) lists the hosts dialled directly: a name, a domain (with or
+# without a leading dot, matching its subdomains too), or * for all.
+# Plain HTTP, as to a local Ollama, is always dialled directly.
+# The login profile copies these variables from the host's environment.
+
+PROXYHDRMAX: con 16*1024;
+
+getenv(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	for(i := 0; i < n; i++)
+		if(buf[i] == byte 0)
+			break;
+	v := string buf[0:i];
+	(nil, v) = str->splitl(v, "^ \t\r\n");
+	while(v != nil && str->in(v[len v - 1], " \t\r\n"))
+		v = v[0:len v - 1];
+	return v;
+}
+
+proxyenv(lower, upper: string): string
+{
+	v := getenv(lower);
+	if(v == nil)
+		v = getenv(upper);
+	return v;
+}
+
+# Is host dialled directly, by the list in $no_proxy?
+noproxy(host: string): int
+{
+	(nil, l) := sys->tokenize(proxyenv("no_proxy", "NO_PROXY"), ", \t");
+	host = str->tolower(host);
+	for(; l != nil; l = tl l){
+		e := str->tolower(hd l);
+		if(e == "*")
+			return 1;
+		(e, nil) = str->splitl(e, ":");
+		if(e != nil && e[0] == '.')
+			e = e[1:];
+		if(e == nil)
+			continue;
+		if(host == e)
+			return 1;
+		if(len host > len e && host[len host - len e:] == e && host[len host - len e - 1] == '.')
+			return 1;
+	}
+	return 0;
+}
+
+# The proxy for host, as (address, Basic credentials, error); nil address for none.
+proxyfor(host: string): (string, string, string)
+{
+	p := proxyenv("https_proxy", "HTTPS_PROXY");
+	if(p == nil || noproxy(host))
+		return (nil, nil, nil);
+	(scheme, rest) := str->splitstrl(p, "://");
+	if(rest != nil){
+		# not the whole URL: it may hold a password
+		if(str->tolower(scheme) != "http")
+			return (nil, nil, "proxy scheme " + scheme + ": only an http:// proxy is supported");
+		p = rest[len "://":];
+	}
+	(p, nil) = str->splitl(p, "/");
+	cred := "";
+	(u, hp) := str->splitr(p, "@");
+	if(u != nil){
+		cred = u[0:len u - 1];
+		p = hp;
+	}
+	if(p == nil)
+		return (nil, nil, "proxy has no host");
+	phost := p;
+	pport := "80";
+	if(p[0] == '['){
+		(a, b) := str->splitl(p, "]");
+		if(b == nil)
+			return (nil, nil, "proxy " + p + ": bad address");
+		phost = a[1:];
+		if(len b > 1 && b[1] == ':')
+			pport = b[2:];
+	}else{
+		(a, b) := str->splitl(p, ":");
+		phost = a;
+		if(b != nil)
+			pport = b[1:];
+	}
+	if(phost == nil || pport == nil)
+		return (nil, nil, "proxy " + p + ": bad address");
+	if(cred != nil){
+		if(base64 == nil)
+			base64 = load Encoding Encoding->BASE64PATH;
+		if(base64 == nil)
+			return (nil, nil, sys->sprint("cannot load base64: %r"));
+		cred = base64->enc(array of byte urldecode(cred));
+	}
+	return ("tcp!" + phost + "!" + pport, cred, nil);
+}
+
+urldecode(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++){
+		if(s[i] == '%' && i+2 < len s){
+			(v, rest) := str->toint(s[i+1:i+3], 16);
+			if(rest == nil){
+				r[len r] = v;
+				i += 2;
+				continue;
+			}
+		}
+		r[len r] = s[i];
+	}
+	return r;
+}
+
+# Dial host!port for a TLS connection: directly, or through the proxy.
+tlsdial(host, port: string): (Sys->Connection, string)
+{
+	none: Sys->Connection;
+	(paddr, cred, perr) := proxyfor(host);
+	if(perr != nil)
+		return (none, perr);
+	if(paddr == nil){
+		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+		if(ok < 0)
+			return (none, sys->sprint("cannot connect to %s: %r", host));
+		return (conn, nil);
+	}
+	(ok, conn) := sys->dial(paddr, nil);
+	if(ok < 0)
+		return (none, sys->sprint("cannot connect to proxy %s: %r", paddr));
+	target := host + ":" + port;
+	if(str->in(':', host))
+		target = "[" + host + "]:" + port;
+	req := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n";
+	if(cred != nil)
+		req += "Proxy-Authorization: Basic " + cred + "\r\n";
+	req += "\r\n";
+	b := array of byte req;
+	if(sys->write(conn.dfd, b, len b) != len b)
+		return (none, sys->sprint("proxy %s: write failed: %r", paddr));
+	# The reply is read a byte at a time: whatever follows its header
+	# belongs to the tunnel.  A proxy that never answers is hung up on.
+	answered := chan[1] of int;
+	spawn connectdog(conn.cfd, answered);
+	hdr := array[PROXYHDRMAX] of byte;
+	n := 0;
+	for(;;){
+		if(n == len hdr){
+			answered <-= 1;
+			return (none, "proxy " + paddr + ": reply header too long");
+		}
+		if(sys->read(conn.dfd, hdr[n:], 1) != 1){
+			answered <-= 1;
+			return (none, "proxy " + paddr + ": no answer to CONNECT");
+		}
+		n++;
+		if(n >= 4 && string hdr[n-4:n] == "\r\n\r\n")
+			break;
+	}
+	answered <-= 1;
+	(status, nil) := str->splitl(string hdr[0:n], "\r\n");
+	(nil, w) := sys->tokenize(status, " ");
+	if(len w < 2 || !str->prefix("HTTP/", hd w) || hd tl w != "200")
+		return (none, "proxy " + paddr + " refused CONNECT " + target + ": " + status);
+	return (conn, nil);
+}
+
+# Hang up a proxy connection whose CONNECT goes unanswered for
+# HTTP_NO_PROGRESS_MS.  It looks for the answer often, so as not to
+# hold the connection open long after it is done with.
+connectdog(cfd: ref Sys->FD, answered: chan of int)
+{
+	for(t := 0; t < HTTP_NO_PROGRESS_MS; t += HTTP_POLL_MS){
+		sys->sleep(HTTP_POLL_MS);
+		alt {
+		<-answered =>
+			return;
+		* =>
+			;
+		}
+	}
+	if(cfd != nil)
+		sys->fprint(cfd, "hangup");
 }
 
 httpspost(host, port, path, headers, body: string): (string, string)
@@ -2008,9 +2807,9 @@ httpspost(host, port, path, headers, body: string): (string, string)
 			return (nil, "TLS init: " + terr);
 	}
 
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", host));
+	(conn, derr) := tlsdial(host, port);
+	if(derr != nil)
+		return (nil, derr);
 
 	config := tlsmod->defaultconfig();
 	config.servername = host;
@@ -2039,12 +2838,9 @@ httpspost(host, port, path, headers, body: string): (string, string)
 		return (nil, rerr);
 
 	# Check for HTTP error status
-	(status, nil, rbody) := parsehttpresponse(response);
-	if(status != "" && !hasprefix(status, "HTTP/1.1 200") && !hasprefix(status, "HTTP/1.0 200")) {
-		if(rbody != "")
-			return (nil, "HTTP error: " + strip(status) + ": " + rbody);
-		return (nil, "HTTP error: " + strip(status));
-	}
+	(status, hdrs, rbody) := parsehttpresponse(response);
+	if((e := httpstatuserr(status, hdrs, rbody)) != nil)
+		return (nil, e);
 
 	return (rbody, nil);
 }
@@ -2061,9 +2857,9 @@ httpsget(host, port, path, headers: string): (string, string)
 			return (nil, "TLS init: " + terr);
 	}
 
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", host));
+	(conn, derr) := tlsdial(host, port);
+	if(derr != nil)
+		return (nil, derr);
 
 	config := tlsmod->defaultconfig();
 	config.servername = host;

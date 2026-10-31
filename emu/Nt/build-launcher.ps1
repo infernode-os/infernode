@@ -1,4 +1,6 @@
-# Build InferNode.exe launcher
+# Build the InferNode.exe and Xenith.exe launchers: one source,
+# infernode-launcher.c, built twice (Xenith.exe with /DXENITH), each with
+# its own icon and version info.
 # Run from Visual Studio Developer Command Prompt, or this script will source vcvars64.
 
 $ErrorActionPreference = "Stop"
@@ -20,37 +22,65 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 $ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $ROOT
 
-# Repo-relative path to the multi-resolution icon. rc.exe needs the file
-# next to the .rc OR an /I include path. Copy it next to the .rc so the
-# resource script can reference it by bare filename (avoids absolute
+# Repo-relative paths to the multi-resolution icons. rc.exe needs each
+# file next to the .rc OR an /I include path. Copy it next to the .rc so
+# the resource script can reference it by bare filename (avoids absolute
 # paths in committed source).
 $repoRoot = Resolve-Path "$ROOT\..\.."
-$iconSrc = Join-Path $repoRoot "Nt\Infernode.ico"
-if (-not (Test-Path $iconSrc)) {
-    Write-Host "ERROR: icon not found at $iconSrc" -ForegroundColor Red
+
+# The launchers' version (Explorer's Properties > Details) is the
+# release's: include/version.h names it ("InferNode 0.6.0 build ..."; the
+# release stamps it with its tag, a source checkout says 0.1).  It is
+# written to launcher-version.h, which both resource scripts include.
+$verLine = Get-Content (Join-Path $repoRoot "include\version.h") | Select-String 'InferNode (\d+(\.\d+){0,3})' | Select-Object -First 1
+if (-not $verLine) {
+    Write-Host "ERROR: no version in include\version.h" -ForegroundColor Red
     exit 1
 }
-Copy-Item $iconSrc -Destination "$ROOT\Infernode.ico" -Force
+$verStr = $verLine.Matches[0].Groups[1].Value
+$verNum = @($verStr.Split('.') + @('0', '0', '0', '0'))[0..3] -join ','
+Set-Content -Path "$ROOT\launcher-version.h" -Encoding ascii -Value @(
+    "#define LVERNUM $verNum",
+    "#define LVERSTR `"$verStr`""
+)
+Write-Host "Launcher version: $verStr ($verNum)"
 
-Write-Host "Compiling resource script (icon + version info)..."
-& rc.exe /nologo /fo infernode-launcher.res infernode-launcher.rc
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "FAILED to compile resource script" -ForegroundColor Red
-    exit 1
+function Build-Launcher([string]$exe, [string]$rc, [string]$ico, [string]$define) {
+    $iconSrc = Join-Path $repoRoot "Nt\$ico"
+    if (-not (Test-Path $iconSrc)) {
+        Write-Host "ERROR: icon not found at $iconSrc" -ForegroundColor Red
+        exit 1
+    }
+    Copy-Item $iconSrc -Destination "$ROOT\$ico" -Force
+
+    $res = [System.IO.Path]::ChangeExtension($rc, ".res")
+    Write-Host "Compiling $rc (icon + version info)..."
+    & rc.exe /nologo /fo $res $rc
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "FAILED to compile resource script $rc" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Compiling $exe launcher..."
+    $defs = @()
+    if ($define) { $defs = @("/D$define") }
+    & cl.exe /O2 /MT @defs /Fe:$exe infernode-launcher.c $res /link /subsystem:windows user32.lib shell32.lib
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "FAILED to compile $exe" -ForegroundColor Red
+        exit 1
+    }
+
+    Remove-Item "infernode-launcher.obj",$res,$ico -ErrorAction SilentlyContinue
+
+    if (Test-Path $exe) {
+        $sz = (Get-Item $exe).Length / 1KB
+        Write-Host "SUCCESS: $exe ($([math]::Round($sz, 1)) KB)" -ForegroundColor Green
+    }
 }
 
-Write-Host "Compiling InferNode.exe launcher..."
-& cl.exe /O2 /MT /Fe:InferNode.exe infernode-launcher.c infernode-launcher.res /link /subsystem:windows user32.lib shell32.lib
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "FAILED to compile InferNode.exe" -ForegroundColor Red
-    exit 1
-}
+Build-Launcher "InferNode.exe" "infernode-launcher.rc" "Infernode.ico" ""
+Build-Launcher "Xenith.exe" "xenith-launcher.rc" "Xenith.ico" "XENITH"
 
-Remove-Item "infernode-launcher.obj","infernode-launcher.res","Infernode.ico" -ErrorAction SilentlyContinue
-
-if (Test-Path "InferNode.exe") {
-    $sz = (Get-Item "InferNode.exe").Length / 1KB
-    Write-Host "SUCCESS: InferNode.exe ($([math]::Round($sz, 1)) KB)" -ForegroundColor Green
-}
+Remove-Item "$ROOT\launcher-version.h" -ErrorAction SilentlyContinue
 
 Pop-Location

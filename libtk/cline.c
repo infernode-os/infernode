@@ -215,54 +215,12 @@ tkcvslinedraw(Image *img, TkCitem *i, TkEnv *pe)
 	if(w < 0)
 		return;
 
+	/* both anti-aliased by the draw device: a spline is a poly */
 	p = i->p.drawpt;
-	if(l->smooth == BoolT && i->p.npoint >= 3){
-		/* beziers keep the old renderer for now (AA follow-up) */
+	if(l->smooth == BoolT && i->p.npoint >= 3)
 		bezspline(img, p, i->p.npoint, l->arrowf, l->arrowl, w, pen, p[0]);
-		return;
-	}
-	if(l->arrowf > Enddisc || l->arrowl > Enddisc){
-		/* arrowheads keep the old renderer for now (AA follow-up) */
+	else
 		poly(img, p, i->p.npoint, l->arrowf, l->arrowl, w, pen, p[0]);
-		return;
-	}
-
-	/* anti-aliased: per-segment coverage with round caps, blended
-	 * like glyphs (see utils.c); the old poly path drew stairs on
-	 * every diagonal */
-	{
-		Rectangle bb;
-		uchar *cov;
-		int j, W, H, r8;
-
-		bb.min = bb.max = p[0];
-		for(j = 1; j < i->p.npoint; j++){
-			if(p[j].x < bb.min.x) bb.min.x = p[j].x;
-			if(p[j].y < bb.min.y) bb.min.y = p[j].y;
-			if(p[j].x > bb.max.x) bb.max.x = p[j].x;
-			if(p[j].y > bb.max.y) bb.max.y = p[j].y;
-		}
-		bb = insetrect(bb, -(w + 2));
-		if(rectclip(&bb, img->clipr) == 0)
-			return;
-		W = Dx(bb);
-		H = Dy(bb);
-		cov = malloc(W*H);
-		if(cov == nil){
-			poly(img, p, i->p.npoint, l->arrowf, l->arrowl, w, pen, p[0]);
-			return;
-		}
-		memset(cov, 0, W*H);
-		r8 = 8*w;
-		if(r8 < 4)
-			r8 = 4;	/* hairline: half-pixel radius */
-		for(j = 0; j < i->p.npoint - 1; j++)
-			tkaacovseg(cov, W, H,
-				8*(p[j].x - bb.min.x), 8*(p[j].y - bb.min.y),
-				8*(p[j+1].x - bb.min.x), 8*(p[j+1].y - bb.min.y), r8);
-		tkaacover(img, bb, pen, cov);
-		free(cov);
-	}
 }
 
 char*

@@ -96,12 +96,13 @@ memarc(Memimage *dst, Point c, int a, int b, int t, Memimage *src, Point sp, int
 		goto Return;
 	memfillcolor(wedge, DTransparent);
 	memfillpoly(wedge, bnd, i, ~0, memopaque, p00, S);
-	figure = allocmemimage(rect, GREY1);
+	/* GREY8: an outline's edges are anti-aliased (see ellipse.c); the cut ends stay hard */
+	figure = allocmemimage(rect, GREY8);
 	if(figure == nil)
 		goto Return;
 	memfillcolor(figure, DTransparent);
 	memellipse(figure, p00, a, b, t, memopaque, p00, S);
-	mask = allocmemimage(rect, GREY1);
+	mask = allocmemimage(rect, GREY8);
 	if(mask == nil)
 		goto Return;
 	memfillcolor(mask, DTransparent);

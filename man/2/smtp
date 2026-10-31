@@ -7,6 +7,7 @@ include "smtp.m";
 smtp := load Smtp Smtp->PATH;
 
 open:     fn(server: string): (int, string);
+authopen: fn(user, password, server: string, mode: int): (int, string);
 sendmail: fn(fromwhom: string, 
              towhom: list of string, 
              cc: list of string,
@@ -30,6 +31,27 @@ default mail server
 which must be defined in
 .IR ndb (6).
 It returns -1 and an error message if the connection fails.
+.PP
+.B Authopen
+opens a connection over TLS and authenticates as
+.I user
+with
+.I password
+(AUTH PLAIN).
+.I Mode
+is
+.B IMPLICIT_TLS
+for TLS from the start, on port 465, or
+.B STARTTLS
+for a connection in clear on port 587 upgraded with STARTTLS
+(RFC 3207); a server that does not offer STARTTLS, or refuses it, is
+refused, and nothing is sent in clear but EHLO and STARTTLS.
+.BR PLAIN ,
+which would send the password in clear, is refused.
+.I Server
+is a host, or
+.IB host ! port
+for another port; the certificate is checked against the host.
 .PP
 .B Sendmail
 sends mail to the SMTP server for subsequent delivery.

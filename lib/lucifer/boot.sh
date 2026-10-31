@@ -20,75 +20,45 @@ if {! ~ $user ''} {
 # logon runs). When $skiplogon is 1, secstore stays locked and
 # factotum starts empty; downstream code that needs keys (LLM
 # keyring mounts, etc.) will fail in expected ways.
+#
+# wm/logon returns when the user logged in, fails with status
+# "skipped" when they chose to go on without secstore, and fails with
+# the reason otherwise (no display, no keyboard -- see the top of
+# appl/wm/logon.b). The hosted boot goes on to the desktop in every
+# case, as it always has: the host's own login already stands between
+# the world and this screen, and a developer running without a
+# display wants the desktop, not a refusal. But it says which of the
+# three it was, because a desktop with no factotum looks exactly like
+# one with. ($status is copied first: `if` resets it from every
+# condition it evaluates, the `~` included.)
 if {! ~ $skiplogon 1} {
-	wm/logon
+	if {wm/logon} {
+		echo 'boot: logged in — secstore keys are in factotum'
+	}{
+		why=$status
+		if {~ $why skipped} {
+			echo 'boot: login skipped at the screen — no factotum, no secstore; keys will not persist'
+		}{
+			echo 'boot: wm/logon failed:' $why '— continuing without factotum/secstore'
+		}
+	}
 }{
 	echo 'boot: skiplogon=1 — wm/logon bypassed (dev mode; no factotum, no secstore)'
 }
 
-# (Re-)start LLM service in the background.
-#
-# Local boot must NEVER block on remote InferNode availability — see
-# docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md.
-# The previous version probed `ftest -f /mnt/llm/new`; that walk into a
-# potentially-degraded 9P export blocks indefinitely (no protocol-level
-# timeout) and wedges the entire desktop boot. Run the whole LLM setup
-# in a backgrounded subshell so the desktop comes up regardless.
+# (Re-)start LLM service in the background: lib/lucifer/llmsrv.sh,
+# which a standalone Xenith runs too.  Backgrounded so the desktop
+# comes up whether or not a remote /mnt/llm answers.
 {
-	llmmode=`{sed -n 's/^mode=//p' /lib/ndb/llm >[2] /dev/null}
-	if {~ $llmmode remote} {
-		llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}
-		llmauth=`{sed -n 's/^auth=//p' /lib/ndb/llm >[2] /dev/null}
-		llmkey=`{sed -n 's/^keyfile=//p' /lib/ndb/llm >[2] /dev/null}
-		if {~ $llmkey ''} { llmkey=/lib/keyring/serve-llm }
-		if {~ $llmauth keyring} {
-			# Biometric secstore opportunistic unlock (INFR-169
-			# follow-up). If /phone/bio_status reports available
-			# and the on-disk keyfile is missing, ask the OS
-			# secure-element to release the slot. The user sees a
-			# FaceID/TouchID prompt. /tmp/serve-llm is tmpfs in
-			# the per-boot namespace, so it never hits flash.
-			if {! ftest -f $llmkey} {
-				if {~ `{cat /phone/bio_status >[2] /dev/null} available} {
-					if {bioget serve-llm /tmp/serve-llm >[2] /dev/null} {
-						llmkey=/tmp/serve-llm
-					}
-				}
-			}
-			if {ftest -f $llmkey} {
-				mount -k $llmkey $llmdial /mnt/llm >[2] /dev/null
-			}{
-				echo 'boot: keyring auth requested but keyfile not found at' $llmkey
-			}
-		}{
-			mount -A $llmdial /mnt/llm >[2] /dev/null
-		}
-	}{
-		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
-		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
-		llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
-		# backend=cli/codex are the host-side CLI gateways (claude-gate,
-		# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
-		# the same way.
-		if {~ $llmbackend openai cli codex} {
-			if {! ~ $llmmodel ''} {
-				llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
-			}{
-				llmsrv -b openai -u $llmurl >[2] /dev/null
-			}
-		}{
-			if {! ~ $llmmodel ''} {
-				llmsrv -M $llmmodel >[2] /dev/null
-			}{
-				llmsrv >[2] /dev/null
-			}
-		}
-	}
+	run /lib/lucifer/llmsrv.sh
 } &
 
-# Wallet service
-/dis/veltro/wallet9p.dis >[2] /dev/null &
-sleep 1
+# Wallet service.  wallet9p, msg9p and luciuisrv mount themselves and
+# return, serving from the background: run in the foreground, each one's
+# files are there when the next line runs.  (Each used to be started
+# with & and followed by a sleep 1 -- five seconds of every boot spent
+# guessing how long a mount takes.)
+/dis/veltro/wallet9p.dis >[2] /dev/null
 
 # Message layer — msg9p mounts /mnt/msg and aggregates Notifications from
 # every registered MsgSrc into /mnt/msg/notify, which lucibridge / agents
@@ -97,8 +67,7 @@ sleep 1
 # own init() returns an error if the backing channel isn't available,
 # e.g. sms on a build without /phone bound). stderr stays attached so
 # mount/register failures surface in the console.
-/dis/veltro/msg9p.dis &
-sleep 1
+/dis/veltro/msg9p.dis
 echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
 # Email source — registered only when an account is configured, so we never
@@ -114,8 +83,12 @@ if {ftest -f /lib/veltro/sources/email.conf} {
 # GUI services
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
-sleep 1
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
+# The messages are activity 0's to hand on: /mnt/msg is the read-only
+# summary (status), /mnt/msg/draft the proposal endpoint a task writes a
+# draft to (queued for the user, never sent by itself), /mnt/msg/flag where
+# a message is marked seen.  nsconstruct keeps each to that.  Without them
+# meta.txt's and the message policy's ways to delegate mail were refused.
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw -p /mnt/msg/flag:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 # /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
 # cases where it silently failed and the redirect below produced no log
 # file (GH #230 sphynkx report). Force /tmp into existence and pre-create
@@ -124,15 +97,26 @@ sleep 1
 # instead of being silenced.
 mkdir -p /tmp
 > /tmp/lucibridge.log
-lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
-sleep 1
+# The Tasks tab first: lucibridge may add a Welcome tab of its own, and
+# a sleep between them only made this order likely.
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
+lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
+
+# Incoming messages reach the agent only when the user has turned it on
+# (/lib/veltro/messaging.conf watch=on; shipped off).  After luciuisrv and
+# activity 0, which msgwatch hands each message to.
+if {grep -s '^watch=on' /lib/veltro/messaging.conf} {
+	/dis/veltro/msgwatch.dis >[2] /tmp/msgwatch.log &
+}
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno
-# plumber matches /lib/lucifer/plumbing and forwards to the 'presentation'
-# port; lucipres consumes it (plumbreceiver) and opens each file as the
-# right artifact.  This is the shared path for every picker: the ftree file
-# tree, the context panel, an agent, or the `plumb` command.
+# plumber matches the user's rules (/usr/<user>/lib/plumbing) and then
+# /lib/lucifer/plumbing, and forwards to the 'presentation' port; lucipres
+# consumes it (plumbreceiver) and opens each file as the right artifact,
+# and a web page in Charon.  This is the shared path for every picker: the
+# ftree file tree, the context panel, an agent, or the `plumb` command.
+# lib/sh/plumbrules starts it, falling back to the defaults alone if the
+# user's rules do not parse.
 #
 # The plumber publishes /chan/plumb.* via file2chan, which needs /chan on
 # the srv device (#s); emu leaves /chan as the snarf device (#^).  Bind a
@@ -147,8 +131,7 @@ echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentat
 # consumer must never gate lucipres's init (see lucipres plumbreceiver).
 if {! ~ $noplumber 1} {
 	bind -bc '#splumber' /chan
-	plumber /lib/lucifer/plumbing &
-	sleep 1
+	/lib/sh/plumbrules start /lib/lucifer/plumbing
 }{
 	echo 'boot: noplumber=1 — plumber not started (pickers use the /mnt/ui fallback)'
 }

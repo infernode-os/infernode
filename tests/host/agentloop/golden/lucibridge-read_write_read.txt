@@ -1,0 +1,28 @@
+# lucibridge read_write_read
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_read_write_read_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+assistant-call call_read_write_read_0_1 write {"args": "\/usr\/agentloop\/a.txt omega"}
+assistant-call call_read_write_read_0_2 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_read_write_read_0_0:
+  |     1	alpha
+tool-result call_read_write_read_0_1:
+  | wrote 5 bytes to /usr/agentloop/a.txt
+tool-result call_read_write_read_0_2:
+  |     1	omega
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:read_write_read go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Read, wrote, read.
+  | 

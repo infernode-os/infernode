@@ -57,6 +57,8 @@ writeimage(int fd, Image *i, int dolock)
 		dy = r.max.y-miny;
 		if(dy*bpl > chunk)
 			dy = chunk/bpl;
+		if(dy <= 0)
+			dy = 1;	/* a row wider than chunk: unloadimage reads it in pieces */
 		if(dolock)
 			lockdisplay(i->display);
 		nb = unloadimage(i, Rect(r.min.x, miny, r.max.x, miny+dy),

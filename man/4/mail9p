@@ -31,7 +31,16 @@ flag enables Styx tracing on stderr.
 .B ctl
 write-only:
 .BR "connect " "\fIname server\fP [\fBtls\fP|\fBstarttls\fP] [\fBsmtp=\fP\fIhost\fP]"
-opens an IMAP session and best-effort SELECTs INBOX;
+opens an IMAP session and best-effort SELECTs INBOX:
+.B tls
+(the default) speaks TLS from the start, on port 993;
+.B starttls
+connects in clear on port 143 and upgrades with STARTTLS, refusing a
+server that declines it rather than logging in in clear.
+.I Server
+is a host, or
+.IB host ! port
+for another port (a local bridge's, say);
 .BR "disconnect " \fIname\fP
 LOGOUTs and frees the slot;
 .BR "sync " \fIname\fP
@@ -159,16 +168,24 @@ IMAP credentials are read from
 .IR factotum (4)
 at connect time using
 .PP
-.B proto=pass service=imap dom=\fIserver\fP
+.B proto=pass service=imap dom=\fIhost\fP
 .PP
 SMTP send tries the
 .BR service=smtp
 key first and falls back to the
 .BR service=imap
 key for the corresponding IMAP server, since most providers share
-credentials. SMTP transport mirrors the account's IMAP mode:
-implicit TLS over port 465 when IMAPS is in use, plaintext port 25
-otherwise. STARTTLS on SMTP is not yet supported.
+credentials. Sends follow the account's IMAP mode: implicit TLS on
+port 465 for
+.BR tls ,
+STARTTLS on port 587 for
+.BR starttls .
+Neither is ever in clear: an SMTP server that does not offer STARTTLS,
+or refuses it, is refused before the password is sent.
+.B smtp=
+may name
+.IB host ! port
+for another port.
 .SH EXAMPLES
 .PP
 Connect, list folders, read the latest message in INBOX, mark it
@@ -229,9 +246,6 @@ Archive and move STORE
 .B \eDeleted
 but do not EXPUNGE, mirroring Gmail-style retention. There is no
 EXPUNGE verb exposed yet.
-.PP
-STARTTLS for SMTP is not supported; sends go over plain port 25 or
-implicit TLS port 465.
 .SH SEE ALSO
 .IR factotum (4),
 .IR llmsrv (4),

@@ -58,4 +58,4 @@ DESCRIPTION
 SEE ALSO
 	vid9p (appl/cmd/vid9p.b — serves /mnt/video/<id>)
 	vidplay9p (appl/mpeg — standalone windowed player, same feed)
-	docs/H264-9P-BRIDGE.md, docs/MULTIPLEXED-VIDEO-SPIKE.md
+	docs/H264-9P-BRIDGE.md, docs/history/MULTIPLEXED-VIDEO-SPIKE.md

@@ -1,0 +1,17 @@
+# scene-demo — a live 2-D scene, served by scenefs, drawn by wm/scene.
+#
+# scene-fixture mounts a scenefs at /mnt/scene and drives it with
+# scenedemo (a synthetic field survey: rovers mowing lanes, a relay, a
+# base and its radio range).  Out-of-range rovers show their last
+# report, dimmed.  Drag to pan, wheel to zoom, click to select;
+# space pauses and plays, . and , step, L rejoins live, f fits.
+#
+# The scene is plain files: cat /mnt/scene/status, cat
+# /mnt/scene/entities/rover3, echo 'follow rover3' > /mnt/scene/ctl.
+# Any program that writes records to /mnt/scene/log is a producer.
+
+layout vsplit 100 0
+
+top app /dis/wm/scene.dis /mnt/scene
+
+service scene-fixture /mnt/scene

@@ -16,7 +16,7 @@ search=yes
 while {~ $d 0}{
 	#echo d$d search$search cmd$cmd fils$fils: $"x
 	if {no $x}{
-		echo 'Usage: man [-bnSwpf] [0-9] [0-9] ... name1 name2 ...'
+		echo 'Usage: man [-bnSwptf] [0-9] [0-9] ... name1 name2 ...'
 		exit
 	}
 	if{ftest -d $S/${hd $x}}{
@@ -30,6 +30,8 @@ while {~ $d 0}{
 			cmd=b; x=${tl $x};
 		}{~ ${hd $x} '-p'}{
 			cmd=p; x=${tl $x};
+		}{~ ${hd $x} '-t'}{
+			cmd=t; x=${tl $x};
 		}{~ ${hd $x} '-s'}{
 			search=no; x=${tl $x};
 		}{~ ${hd $x} '-f'}{
@@ -95,6 +97,8 @@ for i in $fils {
 			echo $i
 		}{~ $cmd p}{
 			wm/man -f $i
+		}{~ $cmd t}{
+			troff -man $i
 		}{~ $cmd b}{
 			if{~ $i '/man/*/0intro'}{
 				x=`{echo $i | sed 's;/man/(.*)/.*;\1 intro;'}

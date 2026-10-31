@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<title>Control characters in preserved white space</title>
+<!-- A form feed or carriage return in preserved white space once hung
+     layout.  A correct rendering is the green square. -->
+<style>body { margin: 0 } div { width: 100px; height: 100px; background: green; font: 10px monospace; color: green }</style>
+<div><span style="white-space:pre">a&#x0C;&#x0C;b&#x0D;&#x0D;c</span><span style="white-space:pre-wrap">&#x0C;&#x0D;&#x0C;</span><span style="white-space:break-spaces">&#x0D;&#x0C;&#x0D;</span></div>

@@ -3,13 +3,14 @@
 **Standard:** NSA CNSA 2.0 (announced Sept 2022; quantum-resistant suite for National
 Security Systems).
 **Roadmap row:** Cryptographic foundation — CNSA 2.0, Tier 0→1.
-**Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`../security-epics.md`](../security-epics.md)).
+**Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`history/security-epics.md`](../history/security-epics.md)).
 **Artifact date:** 2026-06-22.
 **Overall status:** **All in-scope CNSA 2.0 algorithm requirements Met under CNSA-strict mode.**
 Every applicable CNSA 2.0 algorithm is implemented natively at the required security
 category. The two parameter-selection gaps are closed under a fleet-wide **CNSA mode**
 (the host `CNSAMODE` env var, reflected by the emu into Inferno `/env/cnsamode`, off by
-default): **ML-KEM-1024** is negotiated end-to-end on both transports (G1 — native STS
+default, for the native transport; the host `CNSATLS`, reflected into `/env/cnsatls`, for
+TLS): **ML-KEM-1024** is negotiated end-to-end on both transports (G1 — native STS
 multi-node-verified + TLS interop-verified vs OpenSSL) and **ML-DSA-87** is the signing
 default (G2). The **LMS/XMSS firmware-signing** item (G3) is determined **Not Applicable**
 — InferNode has no firmware and no in-system signed-image verification; distribution
@@ -46,8 +47,8 @@ small, auditable `libsec`/`keyring` boundary that FIPS 140-3 work (EPIC 6) will 
 validate.
 
 Design rationale and full implementation history:
-[`../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md`](../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md) and
-[`../../docs/CRYPTO-MODERNIZATION.md`](../../docs/CRYPTO-MODERNIZATION.md) §8–10.
+[`history/QUANTUM-SAFE-CRYPTO-PLAN.md`](../history/QUANTUM-SAFE-CRYPTO-PLAN.md) and
+[`../../docs/CRYPTO-MODERNIZATION.md`](../CRYPTO-MODERNIZATION.md) §8–10.
 
 ---
 
@@ -62,8 +63,8 @@ implementation and the regression test.
 |------|--------|
 | Requirement | AES with 256-bit keys |
 | Implementation | `libsec/aes.c`, AES-GCM in `libsec/aesgcm.c` (`setupAESGCMstate` accepts `keylen`; 32 = AES-256) — decl `include/libsec.h:53` |
-| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:197`, `:199`. Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
-| Evidence | `tests/tls_crypto_test.b`, `tests/aesgcm`/crypto suite |
+| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
+| Evidence | `tests/tls_crypto_test.b` (AES-GCM NIST vectors), `tests/secstore_crypto_test.b` (SGCM file encryption) |
 | Status | **Met** — AES-256-GCM available and negotiated |
 
 ### 3.2 Hashing — SHA-384 / SHA-512 ✅
@@ -83,9 +84,9 @@ implementation and the regression test.
 | Requirement | ML-KEM-1024 (Category 5) |
 | Implementation | `libsec/mlkem.c`, `libsec/mlkem_ntt.c`, `libsec/mlkem_poly.c`. **Both** ML-KEM-768 *and* ML-KEM-1024 keygen/encaps/decaps present (`mlkem1024_*`) — sizes per FIPS 203 (`docs/CRYPTO-MODERNIZATION.md` §8) |
 | Keyring binding | `libinterp/keyring.c` builtins (`Keyring_mlkem768_keygen` at `:3944`, ML-KEM-1024 counterparts) |
-| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`, SHA3-512 combiner). **TLS 1.3** — classical X25519 by default; under CNSA mode the client offers the **SecP384r1MLKEM1024** hybrid (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Note: the older `GROUP_X25519MLKEM768 = 0x4588` constant existed but was never wired into the TLS key_share; the CNSA path supersedes it.)* |
+| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`, SHA3-512 combiner). **TLS 1.3** — the **X25519MLKEM768** hybrid (`0x11EC`) first by default, with classical X25519/P-256/P-384 for servers without it; under CNSA-strict TLS (`/env/cnsatls`) the client offers the **SecP384r1MLKEM1024** hybrid alone (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Until October 2026 the X25519MLKEM768 constant was `0x4588`, the decimal codepoint read as hex, and the share was never sent.)* |
 | Evidence | `tests/mlkem_test.b` (KAT + round-trip), `tests/mlkem_stress_test.b`, `tests/pqauth_test.b` (hybrid handshake, downgrade-rejected, tamper-rejected), `tests/handshake_fuzz_test.b` |
-| Status | **Met (CNSA-strict mode)** — both transports negotiate **ML-KEM-1024** under CNSA mode. *Native STS:* `Keyring_auth` uses `mlkem1024_*`; **multi-node verified** (`tests/cnsa_nodepair_test.sh`) — two CNSA nodes complete the 1024 handshake over TCP, a mixed 1024/768 pair is rejected (no silent downgrade); `tests/pqauth_test.b` passes 11/11 in both modes. *TLS 1.3:* the client offers **SecP384r1MLKEM1024** (P-384 ECDH + ML-KEM-1024, ECDH-first combiner) — **interop-verified against OpenSSL 3.6** (`tests/tls_cnsa_hybrid_test.sh`): the hybrid handshake + application data succeed, the classical path still works, and a CNSA client refuses an X25519-only server. Default deployments stay classical (ML-KEM-768 native / X25519 TLS). |
+| Status | **Met (CNSA-strict mode)** — both transports negotiate **ML-KEM-1024** under CNSA mode (`CNSAMODE` for the native transport, `CNSATLS` for TLS). *Native STS:* `Keyring_auth` uses `mlkem1024_*`; **multi-node verified** (`tests/cnsa_nodepair_test.sh`) — two CNSA nodes complete the 1024 handshake over TCP, a mixed 1024/768 pair is rejected (no silent downgrade); `tests/pqauth_test.b` passes 11/11 in both modes. *TLS 1.3:* the client offers **SecP384r1MLKEM1024** (P-384 ECDH + ML-KEM-1024, ECDH-first combiner) — **interop-verified against OpenSSL 3.6** (`tests/tls_cnsa_hybrid_test.sh`): the hybrid handshake + application data succeed, the classical path still works, and a CNSA client refuses an X25519-only server. Default deployments use ML-KEM-768 (native) and X25519MLKEM768 with classical fallback (TLS). The two settings are apart because public servers do not offer SecP384r1MLKEM1024: a node CNSA-strict to its peers keeps the web. |
 
 ### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅
 
@@ -125,8 +126,8 @@ All deployed PQ key exchange is **hybrid** (classical + PQ), so a session is saf
 *both* the classical and the post-quantum problem are broken — directly addressing the
 "harvest-now-decrypt-later" threat:
 
-- TLS 1.3: X25519 **+** ML-KEM-768, combined secret fed to HKDF
-  (`appl/lib/crypt/tls.b`, `docs/CRYPTO-MODERNIZATION.md` §8).
+- TLS 1.3: X25519 **+** ML-KEM-768, combined secret fed to HKDF, where the server offers
+  it; classical otherwise (`appl/lib/crypt/tls.b`, `docs/CRYPTO-MODERNIZATION.md` §8).
 - Native 9P/Styx transport: classical DH **+** mutual ML-KEM-768, combined via SHA3-512,
   transcript-bound against active substitution (`docs/CRYPTO-MODERNIZATION.md` §10;
   proven by `tests/pqauth_test.b` *TamperedEkRejected* / *DowngradeRejected*).
@@ -140,7 +141,7 @@ stricter, transition-safe posture.
 
 | ID | CNSA 2.0 requirement | Resolution | Tracking |
 |----|----------------------|------------|----------|
-| **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1765`–`2026`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
+| **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1891`–`2177`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
 | **G2** | **ML-DSA-87** (Cat 5) across all signing surfaces | **Closed.** Under CNSA mode, `createsignerkey` and `auth/signer` (the auth-domain CA, first-run key) default to ML-DSA-87; the native STS / TLS / factotum / X.509 signers are algorithm-agnostic and honor the signer key's algorithm. `createsignerkey -c` selects it in one flag regardless of mode. | INFR-330 |
 | **G3** | LMS/XMSS (SP 800-208) firmware signing | **Resolved — Not Applicable** (§3.5): no firmware / in-system signed-image use case; compensating control is hardware (YubiKey) release signing, with ML-DSA-87 / SLH-DSA available. Accreditor to confirm the determination. | INFR-331 |
 
@@ -152,14 +153,15 @@ changes rather than bundled here. **No code is altered by this evidence artifact
 
 - CNSA 2.0 **algorithm primitives: complete** at Category 5 (FIPS 203/204/205/202; AES-256;
   SHA-384/512) — closes EPIC 3 acceptance item *"algorithm inventory documented."*
-- CNSA 2.0 **strict-mode parameter compliance:** open via G1–G3.
-- Recommended next step for full close-out: schedule G1 + G2 (both small, both use existing
-  Category-5 code paths), then revisit G3 with the accreditor (LMS/XMSS vs. SLH-DSA waiver).
+- CNSA 2.0 **strict-mode parameter compliance:** Met under CNSA-strict mode — G1 and G2
+  Closed, G3 Resolved as Not Applicable (§5).
+- Remaining: the accreditor to confirm the G3 applicability determination (LMS/XMSS vs.
+  SLH-DSA waiver).
 
 ## 7. References
 
 - NSA, *Announcing the Commercial National Security Algorithm Suite 2.0* (CNSA 2.0).
 - NIST FIPS 203 (ML-KEM), 204 (ML-DSA), 205 (SLH-DSA), 202 (SHA-3), 197 (AES), 180 (SHA-2).
 - NIST SP 800-208 (Stateful Hash-Based Signatures: LMS/XMSS).
-- Implementation history: [`../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md`](../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md),
-  [`../../docs/CRYPTO-MODERNIZATION.md`](../../docs/CRYPTO-MODERNIZATION.md).
+- Implementation history: [`history/QUANTUM-SAFE-CRYPTO-PLAN.md`](../history/QUANTUM-SAFE-CRYPTO-PLAN.md),
+  [`../../docs/CRYPTO-MODERNIZATION.md`](../CRYPTO-MODERNIZATION.md).

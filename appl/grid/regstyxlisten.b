@@ -67,7 +67,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		'v' =>
 			verbose = 1;
 		'a' =>
-			alg := arg->earg() :: algs;
+			algs = arg->earg() :: algs;
 		'f' =>
 			keyfile = arg->earg();
 			if (! (keyfile[0] == '/' || (len keyfile > 2 &&  keyfile[0:2] == "./")))
@@ -320,16 +320,7 @@ readfile(f: string): string
 
 getalgs(): list of string
 {
-	sslctl := readfile("#D/clone");
-	if (sslctl == nil) {
-		sslctl = readfile("#D/ssl/clone");
-		if (sslctl == nil)
-			return nil;
-		sslctl = "#D/ssl/" + sslctl;
-	} else
-		sslctl = "#D/" + sslctl;
-	(nil, algs) := sys->tokenize(readfile(sslctl + "/encalgs") + " " + readfile(sslctl + "/hashalgs"), " \t\n");
-	return "none" :: algs;
+	return "aes_256_cbc" :: "sha256" :: nil;
 }
 
 stderr(): ref Sys->FD
@@ -341,7 +332,7 @@ netmkaddr(addr, net, svc: string): string
 {
 	if(net == nil)
 		net = "net";
-	(n, l) := sys->tokenize(addr, "!");
+	(n, nil) := sys->tokenize(addr, "!");
 	if(n <= 1){
 		if(svc== nil)
 			return sys->sprint("%s!%s", net, addr);

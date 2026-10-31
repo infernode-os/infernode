@@ -6,11 +6,11 @@ TARG=\
 	risk-gauge.dis\
 	alert-watcher.dis\
 	geo-fixture.dis\
-	geo-map.dis\
 	line-plot.dis\
 	llm-recorder.dis\
 	llm-context.dis\
 	llm-sessions.dis\
+	scene-fixture.dis\
 	sparkline.dis\
 	sysmon-svc.dis\
 	comp-list.dis\
@@ -31,9 +31,16 @@ SYSMODULES=\
 	math.m\
 	matrix.m\
 	matrixtk.m\
+	scene.m\
 	tk.m\
+	keyboard.m\
+	readdir.m\
+	sh.m\
 
 DISBIN=$ROOT/dis/matrix
+
+MODULES=\
+	$ROOT/appl/mpeg/mpegio.m\
 
 <$ROOT/mkfiles/mkdis
 

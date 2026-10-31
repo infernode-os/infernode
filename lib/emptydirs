@@ -43,7 +43,6 @@ dis/acme
 dis/auth
 dis/auth/proto
 dis/auxi
-dis/charon
 dis/dbm
 dis/dict
 dis/disk

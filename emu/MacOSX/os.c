@@ -9,6 +9,7 @@
 #include	"fns.h"
 #include	"error.h"
 #include	"interp.h"
+#include	"raise.h"
 
 #undef _POSIX_C_SOURCE 
 #undef getwd
@@ -58,12 +59,13 @@ char *cputype = "power";
 #endif
 
 static pthread_key_t  prdakey;
+__thread Proc *machup;	/* up: see emu.h */
 
 extern int dflag;
 
 Proc *
 getup(void) {
-    return (Proc *)pthread_getspecific(prdakey);
+    return machup;
 }
 
 /*  Pthread version */
@@ -101,15 +103,91 @@ pexit(char *msg, int t)
     }
     free(e->user);
     free(p->prog);
+    /* forget p before freeing it: lock() counts into up->nlocks (see kproc-pthreads.c:/^pexit) */
+    pthread_setspecific(prdakey, nil);
+    machup = nil;
     free(p);
     pthread_exit(0);
 }
+
+/*
+ * A fault at a nil address is a Limbo nil dereference, the program's
+ * exception "dereference of nil", as on Linux: no register dump, and
+ * R.PC set from the faulting instruction so a {...} exception block
+ * around it catches it under the JIT (see jitfault).  It was reported
+ * as "Segmentation violation"/"Bus error" with a dump, and with R.PC
+ * stale under -c1 no handler matched and the program died Broken.
+ */
+static void
+nilfault(siginfo_t *info, void *context)
+{
+    ucontext_t *uc;
+
+    if(info == nil || !isnilfault((uintptr)info->si_addr))
+        return;
+    uc = (ucontext_t*)context;
+    if(uc != nil) {
+#if defined(__aarch64__)
+        jitfaultfp((uintptr)uc->uc_mcontext->__ss.__pc,
+            (uintptr)uc->uc_mcontext->__ss.__x[21]);	/* X21: the JIT's RFP */
+#elif defined(__x86_64__)
+        jitfaultfp((uintptr)uc->uc_mcontext->__ss.__rip,
+            (uintptr)uc->uc_mcontext->__ss.__rbx);	/* RBX: the JIT's RFP */
+#endif
+    }
+    disfault(nil, exNilref);
+}
+
+#if defined(__x86_64__)
+/*
+ * The amd64 counterpart of the arm64 dumps below: the JIT's own
+ * registers (RLINK=R14 &R, RRFP=RBX, RRMP=R12, RRTA=R10) and where
+ * the PC and the return address on the stack fall.
+ */
+static void
+x86dump(ucontext_t *uc)
+{
+    Dl_info di;
+    void *pc, *ret;
+
+    if(uc == nil)
+        return;
+    pc = (void*)uc->uc_mcontext->__ss.__rip;
+    fprint(2, "  RIP=%p RSP=%p RAX=%p RCX=%p RDX=%p RSI=%p RDI=%p\n",
+        pc,
+        (void*)uc->uc_mcontext->__ss.__rsp,
+        (void*)uc->uc_mcontext->__ss.__rax,
+        (void*)uc->uc_mcontext->__ss.__rcx,
+        (void*)uc->uc_mcontext->__ss.__rdx,
+        (void*)uc->uc_mcontext->__ss.__rsi,
+        (void*)uc->uc_mcontext->__ss.__rdi);
+    fprint(2, "  RLINK(R14)=%p RFP(RBX)=%p RMP(R12)=%p RTA(R10)=%p\n",
+        (void*)uc->uc_mcontext->__ss.__r14,
+        (void*)uc->uc_mcontext->__ss.__rbx,
+        (void*)uc->uc_mcontext->__ss.__r12,
+        (void*)uc->uc_mcontext->__ss.__r10);
+    if(dladdr(pc, &di) == 0)
+        fprint(2, "  PC not in any loaded image (JIT-generated code?)\n");
+    else if(di.dli_sname != nil)
+        fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
+            (ulong)((uintptr)pc - (uintptr)di.dli_saddr));
+    else
+        fprint(2, "  PC in %s+%#lx (no exported symbol; static function)\n",
+            di.dli_fname != nil ? di.dli_fname : "?",
+            (ulong)((uintptr)pc - (uintptr)di.dli_fbase));
+    ret = *(void**)uc->uc_mcontext->__ss.__rsp;
+    if(dladdr(ret, &di) && di.dli_sname != nil)
+        fprint(2, "  [RSP] in %s+%#lx\n", di.dli_sname,
+            (ulong)((uintptr)ret - (uintptr)di.dli_saddr));
+}
+#endif
 
 void
 trapBUS(int signo, siginfo_t *info, void *context)
 {
     extern REG R;
     USED(signo);
+    nilfault(info, context);
     if(info != nil) {
         fprint(2, "BUS: addr=%p code=%d\n", info->si_addr, info->si_code);
 #if defined(__aarch64__)
@@ -153,6 +231,8 @@ trapBUS(int signo, siginfo_t *info, void *context)
                         (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
             }
         }
+#elif defined(__x86_64__)
+        x86dump((ucontext_t*)context);
 #endif
         if(R.M != nil && R.M->m != nil && R.M->m->name != nil)
             fprint(2, "  module=%s compiled=%d R.PC=%p prog=%p\n",
@@ -166,6 +246,8 @@ trapUSR1(int signo)
 {
     USED(signo);
     
+    if(up == nil)               /* pexit has already forgotten the proc */
+        return;
     if(up->type != Interp)      /* Used to unblock pending I/O */
         return;
     if(up->intwait == 0)        /* Not posted so its a sync error */
@@ -195,6 +277,7 @@ void
 trapSEGV(int signo, siginfo_t *info, void *context)
 {
     USED(signo);
+    nilfault(info, context);
     if(info != nil) {
         fprint(2, "SEGV: addr=%p code=%d\n", info->si_addr, info->si_code);
 #if defined(__aarch64__)
@@ -234,16 +317,70 @@ trapSEGV(int signo, siginfo_t *info, void *context)
                         (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
             }
         }
+#elif defined(__x86_64__)
+        x86dump((ucontext_t*)context);
 #endif
     }
     disfault(nil, "Segmentation violation");
 }
 
 void
-trapFPE(int signo)
+trapFPE(int signo, siginfo_t *info, void *context)
 {
     USED(signo);
+#if defined(__x86_64__)
+    /*
+     * x86's integer divide traps on a zero divisor.  In compiled code
+     * that is the program's "zero divide", raised at the divide, as on
+     * Linux (see emu/Linux/os.c:/^trapFPE).
+     */
+    if(info != nil && info->si_code == FPE_INTDIV && context != nil &&
+       jitfaultfp((uintptr)((ucontext_t*)context)->uc_mcontext->__ss.__rip,
+            (uintptr)((ucontext_t*)context)->uc_mcontext->__ss.__rbx))
+        disfault(nil, exZdiv);
+#else
+    USED(info);
+    USED(context);
+#endif
     disfault(nil, "Floating point exception");
+}
+
+/*
+ * The profiler interrupts the VM's proc to read where its compiled code
+ * is (devprof.c, through hostprocpc)
+ */
+static volatile uintptr profpc;
+static volatile int profseq;
+
+static void
+trapPROF(int signo, siginfo_t *info, void *context)
+{
+    ucontext_t *uc;
+
+    USED(signo);
+    USED(info);
+    uc = (ucontext_t*)context;
+#if defined(__aarch64__)
+    profpc = (uintptr)uc->uc_mcontext->__ss.__pc;
+#else
+    profpc = (uintptr)uc->uc_mcontext->__ss.__rip;
+#endif
+    profseq++;
+}
+
+static uintptr
+procpc(Proc *p)
+{
+    int s, i;
+
+    s = profseq;
+    if(pthread_kill((pthread_t)p->sigid, SIGPROF) != 0)
+        return 0;
+    for(i = 0; i < 10000 && profseq == s; i++)
+        sched_yield();
+    if(profseq == s)
+        return 0;
+    return profpc;
 }
 
 static void
@@ -263,6 +400,12 @@ setsigs(void)
     
     act.sa_handler=trapUSR1;
     sigaction(SIGUSR1, &act, nil);
+
+    act.sa_sigaction = trapPROF;
+    act.sa_flags = SA_SIGINFO|SA_RESTART;
+    sigaction(SIGPROF, &act, nil);
+    act.sa_flags = 0;
+    hostprocpc = procpc;
     
     if(sflag == 0) {
         act.sa_sigaction = trapBUS;
@@ -274,7 +417,7 @@ setsigs(void)
         act.sa_sigaction = trapSEGV;
         act.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV, &act, nil);
-        act.sa_handler = trapFPE;
+        act.sa_sigaction = trapFPE;
         sigaction(SIGFPE, &act, nil);
         if(signal(SIGINT, SIG_IGN) != SIG_IGN)
             signal(SIGINT, cleanexit);
@@ -295,6 +438,7 @@ tramp(void *arg)
         print("set specific data failed in tramp\n");
         pthread_exit(0);
     }
+    machup = arg;
     p->func(p->arg);
     pexit("{Tramp}", 0);
     return NULL;
@@ -375,6 +519,11 @@ segflush(void *va, ulong len)
 #if defined(__aarch64__) || defined(__arm64__)
     if(len)
         sys_icache_invalidate(va, len);
+    return 0;
+#elif defined(__x86_64__)
+    /* x86 instruction fetch is coherent with stores */
+    USED(va);
+    USED(len);
     return 0;
 #else
     kern_return_t   err;
@@ -529,6 +678,7 @@ emuinit_worker(void *arg)
     p = newproc();
     if(pthread_setspecific(prdakey, p))
         panic("emuinit_worker: pthread_setspecific failed");
+    machup = p;
 
     /* Now emuinit can use 'up' */
     emuinit(imod);
@@ -565,6 +715,7 @@ libinit(char *imod)
     p = newproc();
     if(pthread_setspecific(prdakey, p))
         panic("set specific thread data failed\n");
+    machup = p;
     
     pw = getpwuid(getuid());
     if(pw != nil)

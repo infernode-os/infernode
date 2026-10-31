@@ -11,6 +11,7 @@ rowm: Rowm;
 scroll: Scroll;
 editlog: Editlog;
 editcomd: Editcmd;
+xenith: Xenith;
 
 sprint, print: import sys;
 FALSE, TRUE, BUFSIZE, Null, Empty, Inactive: import Dat;
@@ -34,6 +35,7 @@ init(mods : ref Dat->Mods)
 	scroll = mods.scroll;
 	editlog = mods.editlog;
 	editcomd = mods.editcmd;
+	xenith = mods.xenith;
 	editing = Inactive;
 }
 
@@ -115,17 +117,33 @@ editthread()
 	cmdp: ref Cmd;
 
 	mypid := sys->pctl(0, nil);
+	xenith->recovering();	# an internal error comes back as one
 	sync := chan of int;
 	spawn editwaitproc(mypid, sync);
 	yourpid := <- sync;
-	while((cmdp=parsecmd(0)) != nil){
-#		ocurfile = curfile;
-#		loaded = curfile && !curfile->unread;
-		if(cmdexec(curtext, cmdp) == 0)
-			break;
-		freecmd();
+	# the caller, holding the row, waits for this answer: an exception
+	# other than an Edit error killed this proc and left it waiting for
+	# ever
+	err: string;
+	{
+		while((cmdp=parsecmd(0)) != nil){
+#			ocurfile = curfile;
+#			loaded = curfile && !curfile->unread;
+			if(cmdexec(curtext, cmdp) == 0)
+				break;
+			freecmd();
+		}
 	}
-	editerrc <-= nil;
+	exception e{
+		"edit:*" =>
+			err = e[len "edit:":];
+		* =>
+			freecmd();
+			allwindows(ALLELOGTERM, nil);
+			err = "internal error: " + utils->getexc();
+	}
+	xenith->norecover();
+	editerrc <-= err;
 	utils->postnote(Utils->PNPROC, mypid, yourpid, "kill");
 }
 
@@ -136,6 +154,9 @@ allelogterm(w: ref Window)
 
 alleditinit(w: ref Window)
 {
+	# all of a file still loading: an Edit saw only what had come, so
+	# ,d left the rest and $a put its text in the middle
+	textm->loadrest(w.body.file);
 	w.tag.commit(TRUE);
 	w.body.commit(TRUE);
 	w.body.file.editclean = FALSE;
@@ -153,7 +174,27 @@ allupdate(w: ref Window)
 		return;
 	if(f.elog.typex == Null)
 		elogterm(f);
-	else if(f.elog.typex != Empty){
+	else if(f.elog.typex != Empty && f.buf.nchange != f.elognchange){
+		# changed since the Edit's changes to it were made (an X loop's
+		# pipe command lets go of the row, and its Undo, its u, change
+		# it at once): made where the text no longer is, they lost the
+		# change and themselves
+		elogterm(f);
+		name := f.name;
+		if(name == nil)
+			name = "a window";
+		warning(nil, sprint("Edit: %s changed while the Edit ran: its changes to it were not made\n", name));
+	}else if(f.elog.typex != Empty){
+		# an X's other files are changed here with nobody holding
+		# their windows: what they report to an event reader needs an
+		# owner, or it took Xenith down (no window owner), as warning()
+		# gives the +Errors window one
+		owners := array[f.ntext] of int;
+		for(i=0; i<f.ntext; i++){
+			owners[i] = f.text[i].w.owner;
+			if(owners[i] == 0)
+				f.text[i].w.owner = 'E';
+		}
 		elogapply(f);
 		if(f.editclean){
 			f.mod = FALSE;
@@ -163,6 +204,8 @@ allupdate(w: ref Window)
 		t.setselect(t.q0, t.q1);
 		scrdraw(t);
 		w.settag();
+		for(i=0; i<f.ntext && i<len owners; i++)
+			f.text[i].w.owner = owners[i];
 	}
 }
 
@@ -171,9 +214,12 @@ editerror(s: string)
 	# print("%s", s);
 	freecmd();
 	allwindows(ALLELOGTERM, nil);	# truncate the edit logs
-	editerrc <-= s;
-	exit;
+	raise "edit:" + s;	# to editthread, past the X loop's locks
 }
+
+# an Edit under way: one waiting for a pipe command lets go of the row,
+# and a second, started then, reset the first's state and took its answer
+editbusy := 0;
 
 editcmd(ct: ref Text, r: string, n: int)
 {
@@ -181,6 +227,10 @@ editcmd(ct: ref Text, r: string, n: int)
 
 	if(n == 0)
 		return;
+	if(editbusy){
+		warning(nil, "Edit: another Edit is running\n");
+		return;
+	}
 	if(2*n > BUFSIZE){
 		warning(nil, "string too long\n");
 		return;
@@ -201,11 +251,17 @@ editcmd(ct: ref Text, r: string, n: int)
 		editerrc = chan of string;
 		lastpat = allocstring(0);
 	}
+	editbusy = 1;
 	spawn editthread();
 	err = <- editerrc;
+	editbusy = 0;
 	editing = Inactive;
 	if(err != nil)
 		warning(nil, sprint("Edit: %s\n", err));
+	# what has not been saved kept, as after any exception (the row is
+	# held here, the edit thread done)
+	if(len err > 15 && err[0:15] == "internal error:" && (m := xenith->recovered(err)) != nil)
+		warning(nil, "xenith: "+m+"\n");
 
 	# update everyone whose edit log has data
 	allwindows(ALLUPDATE, nil);

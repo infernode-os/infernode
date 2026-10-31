@@ -33,6 +33,13 @@ enum
 	X11STACK=	256*1024
 };
 char *hosttype = "Linux";
+#if defined(__x86_64__)
+char *cputype = "amd64";
+#elif defined(__aarch64__)
+char *cputype = "arm64";
+#elif defined(__riscv) && __riscv_xlen == 64
+char *cputype = "riscv64";
+#endif
 
 typedef sem_t	Sem;
 
@@ -62,7 +69,7 @@ trapILL(int signo, siginfo_t *si, void *a)
 static int
 isnilref(siginfo_t *si)
 {
-	return si != 0 && (si->si_addr == (void*)~(uintptr_t)0 || (uintptr_t)si->si_addr < 512);
+	return si != 0 && isnilfault((uintptr)si->si_addr);
 }
 
 /*
@@ -96,48 +103,154 @@ typedef struct {
 extern int dladdr(const void*, Dlinfo*);
 
 enum {
+	Gregrbx	= 11,	/* REG_RBX: RRFP, the amd64 JIT's Dis frame pointer */
+	Gregrbp	= 10,	/* REG_RBP */
+	Gregrsp	= 15,	/* REG_RSP */
 	Gregrip	= 16,	/* REG_RIP */
 	Gregeip	= 14,	/* REG_EIP */
+	Nframes	= 8,	/* callers reported after a fault */
 };
+
+/*
+ * dladdr() only sees the dynamic symbol table, so a fault in a static
+ * function (e.g. the JIT's own genw/typecom) resolves the image but
+ * leaves dli_sname nil.  Reporting that as "not in any image" is wrong
+ * and actively misleading: it sent INFR-421 chasing JIT-generated code
+ * when the PC was in emu's own text the whole time.  Distinguish the
+ * three cases: named symbol, image-but-no-symbol, and truly no image.
+ */
+static void
+whereis(char *what, void *pc)
+{
+	Dlinfo di;
+
+	if(dladdr(pc, &di) == 0)
+		fprint(2, "  %s %p not in any loaded image (JIT-generated code?)\n", what, pc);
+	else if(di.dli_sname != nil)
+		fprint(2, "  %s in %s+%#lx\n", what, di.dli_sname,
+			(ulong)((uintptr)pc - (uintptr)di.dli_saddr));
+	else
+		fprint(2, "  %s in %s+%#lx (no exported symbol; static function — addr2line the offset)\n",
+			what, di.dli_fname != nil ? di.dli_fname : "?",
+			(ulong)((uintptr)pc - (uintptr)di.dli_fbase));
+}
+
+/*
+ * The same, into buf, for the allocator's refusals (poolnomem): where
+ * the caller of malloc and the rest is, as addr2line takes it.
+ */
+static char*
+pcwhere(ulong pc, char *buf, int n)
+{
+	Dlinfo di;
+
+	if(dladdr((void*)pc, &di) == 0)
+		return nil;
+	if(di.dli_sname != nil)
+		snprint(buf, n, "%s+%#lux", di.dli_sname, (ulong)(pc - (uintptr)di.dli_saddr));
+	else
+		snprint(buf, n, "%s+%#lux", di.dli_fname != nil ? di.dli_fname : "?",
+			(ulong)(pc - (uintptr)di.dli_fbase));
+	return buf;
+}
+
+/*
+ * The callers, by the frame-pointer chain (the Linux builds keep frame
+ * pointers): a fault in a leaf such as _tas, the lock primitive, names
+ * only the leaf, and the question is who took the lock.  (A leaf with no
+ * frame of its own, _tas included, leaves its direct caller -- lock --
+ * out of the chain; the next one up is the one that matters.)  Each frame
+ * holds the previous frame pointer and then the return address; the
+ * walk follows only frames that are aligned, above the stack pointer,
+ * strictly rising and within 8 MB of it, so a corrupt chain ends it
+ * rather than faulting again in the handler.
+ */
+#if defined(__x86_64__) || defined(__aarch64__)
+static void
+callers(uintptr sp, uintptr fp)
+{
+	uintptr *f;
+	int i;
+
+	for(i = 0; i < Nframes; i++){
+		if(fp < sp || fp - sp > 8*1024*1024 || fp & (sizeof(uintptr)-1))
+			return;
+		f = (uintptr*)fp;
+		if(f[1] == 0)
+			return;
+		whereis("caller", (void*)f[1]);
+		if(f[0] <= fp)
+			return;
+		fp = f[0];
+	}
+}
+#endif
+
+/* the faulting PC from a signal's ucontext, or nil where we cannot say */
+static void*
+faultpc(void *a)
+{
+	ucontext_t *uc;
+
+	if(a == nil)
+		return nil;
+	uc = (ucontext_t*)a;
+#if defined(__x86_64__)
+	return (void*)uc->uc_mcontext.gregs[Gregrip];
+#elif defined(__i386__)
+	return (void*)uc->uc_mcontext.gregs[Gregeip];
+#elif defined(__aarch64__)
+	return (void*)uc->uc_mcontext.pc;
+#elif defined(__riscv)
+	return (void*)uc->uc_mcontext.__gregs[0];	/* REG_PC */
+#else
+	USED(uc);
+	return nil;
+#endif
+}
+
+/*
+ * The Dis frame pointer compiled code was running with, from the
+ * register the JIT keeps it in (RFP in comp-<arch>.c), or 0 where we
+ * do not say (see jitfaultfp).
+ */
+static uintptr
+faultfp(void *a)
+{
+	ucontext_t *uc;
+
+	if(a == nil)
+		return 0;
+	uc = (ucontext_t*)a;
+#if defined(__x86_64__)
+	return (uintptr)uc->uc_mcontext.gregs[Gregrbx];
+#elif defined(__aarch64__)
+	return (uintptr)uc->uc_mcontext.regs[21];	/* X21 */
+#elif defined(__riscv)
+	return (uintptr)uc->uc_mcontext.__gregs[18];	/* s2 (x18) */
+#else
+	USED(uc);
+	return 0;
+#endif
+}
 
 static void
 faultwhere(void *a)
 {
 	ucontext_t *uc;
-	Dlinfo di;
 	void *pc;
 
-	if(a == nil)
+	pc = faultpc(a);
+	if(pc == nil)
 		return;
 	uc = (ucontext_t*)a;
-#if defined(__x86_64__)
-	pc = (void*)uc->uc_mcontext.gregs[Gregrip];
-#elif defined(__i386__)
-	pc = (void*)uc->uc_mcontext.gregs[Gregeip];
-#elif defined(__aarch64__)
-	pc = (void*)uc->uc_mcontext.pc;
-#else
-	USED(uc);
-	return;
-#endif
 	fprint(2, "  PC=%p\n", pc);
-	/*
-	 * dladdr() only sees the dynamic symbol table, so a fault in a static
-	 * function (e.g. the JIT's own genw/typecom) resolves the image but
-	 * leaves dli_sname nil.  Reporting that as "not in any image" is wrong
-	 * and actively misleading: it sent INFR-421 chasing JIT-generated code
-	 * when the PC was in emu's own text the whole time.  Distinguish the
-	 * three cases: named symbol, image-but-no-symbol, and truly no image.
-	 */
-	if(dladdr(pc, &di) == 0)
-		fprint(2, "  PC not in any loaded image (JIT-generated code?)\n");
-	else if(di.dli_sname != nil)
-		fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
-			(ulong)((uintptr)pc - (uintptr)di.dli_saddr));
-	else
-		fprint(2, "  PC in %s+%#lx (no exported symbol; static function — addr2line the offset)\n",
-			di.dli_fname != nil ? di.dli_fname : "?",
-			(ulong)((uintptr)pc - (uintptr)di.dli_fbase));
+	whereis("PC", pc);
+#if defined(__x86_64__)
+	callers(uc->uc_mcontext.gregs[Gregrsp], uc->uc_mcontext.gregs[Gregrbp]);
+#elif defined(__aarch64__)
+	callers(uc->uc_mcontext.sp, uc->uc_mcontext.regs[29]);
+#endif
 	if(up != nil && up->nlocks > 0)
 		fprint(2, "  holding %d lock(s)\n", up->nlocks);
 }
@@ -145,9 +258,10 @@ faultwhere(void *a)
 static void
 trapmemref(int signo, siginfo_t *si, void *a)
 {
-	if(isnilref(si))
+	if(isnilref(si)){
+		jitfaultfp((uintptr)faultpc(a), faultfp(a));
 		disfault(nil, exNilref);
-	else if(signo == SIGBUS){
+	}else if(signo == SIGBUS){
 		fprint(2, "BUS: addr=%p code=%d\n", si->si_addr, si->si_code);
 		faultwhere(a);
 		sysfault("bad address addr=", si->si_addr);	/* eg, misaligned */
@@ -164,7 +278,14 @@ trapFPE(int signo, siginfo_t *si, void *a)
 	char buf[64];
 
 	USED(signo);
-	USED(a);
+	/*
+	 * x86's integer divide traps on a zero divisor.  In compiled code
+	 * that is the program's "zero divide", as the interpreter raises
+	 * it, at the divide (see jitfault); it was "sys: fp: ..." with a
+	 * stale R.PC, so no handler for "zero divide" matched.
+	 */
+	if(si != nil && si->si_code == FPE_INTDIV && jitfaultfp((uintptr)faultpc(a), faultfp(a)))
+		disfault(nil, exZdiv);
 	snprint(buf, sizeof(buf), "sys: fp: exception status=%.4lux pc=%#p", getfsr(), si->si_addr);
 	disfault(nil, buf);
 }
@@ -172,18 +293,20 @@ trapFPE(int signo, siginfo_t *si, void *a)
 static void
 trapUSR1(int signo)
 {
-	int intwait;
-
 	USED(signo);
 
-	intwait = up->intwait;
-	up->intwait = 0;	/* clear it to let proc continue in osleave */
-
-	if(up->type != Interp)		/* Used to unblock pending I/O */
+	if(up == nil)		/* pexit has already forgotten the proc */
 		return;
 
-	if(intwait == 0)		/* Not posted so it's a sync error */
-		disfault(nil, Eintr);	/* Should never happen */
+	/*
+	 * Let the proc continue in osleave.  Nothing more to do: swiproc
+	 * set swipend with intwait, and osleave raises the Eintr.  If
+	 * intwait is already 0, osleave gave up waiting for this signal and
+	 * cleared it itself (proc.c), so the signal is late; it used to
+	 * raise a second Eintr here, from a signal handler, wherever the
+	 * proc had got to by then.
+	 */
+	up->intwait = 0;
 }
 
 void
@@ -212,12 +335,18 @@ termrestore(void)
 	tcsetattr(0, TCSANOW, &tinit);
 }
 
+/*
+ * Leave with status x: halt's argument, 1 for a panic or a fault in
+ * emu, 128+n for signal n.  _exit ends every thread at once, as the
+ * SIGKILL to our own group it replaces did; with the SIGKILL the
+ * status was whichever of the signal and the exit(0) after it came
+ * first, so the same run exited 0 on one machine and 137 on the next,
+ * and a crash could exit 0.
+ */
 void
 cleanexit(int x)
 {
-	USED(x);
-
-	if(up->intwait) {
+	if(up != nil && up->intwait) {
 		up->intwait = 0;
 		return;
 	}
@@ -225,8 +354,20 @@ cleanexit(int x)
 	if(dflag == 0)
 		termrestore();
 
-	kill(0, SIGKILL);
-	exit(0);
+	_exit(x);
+}
+
+/*
+ * SIGTERM and SIGINT: not cleanexit, whose intwait test would take a
+ * signal landing on a proc waiting for its SIGUSR1 for that SIGUSR1,
+ * swallowing it and leaving the SIGUSR1 to come late.
+ */
+static void
+sigexit(int sig)
+{
+	if(dflag == 0)
+		termrestore();
+	_exit(128+sig);
 }
 
 void
@@ -269,6 +410,7 @@ libinit(char *imod)
 	char sys[64];
 
 	setsid();
+	poolpcwhere = pcwhere;
 
 	gethostname(sys, sizeof(sys));
 	kstrdup(&ossysname, sys);
@@ -294,9 +436,9 @@ libinit(char *imod)
 	 */
 	signal(SIGPIPE, SIG_IGN);
 	if(signal(SIGTERM, SIG_IGN) != SIG_IGN)
-		signal(SIGTERM, cleanexit);
+		signal(SIGTERM, sigexit);
 	if(signal(SIGINT, SIG_IGN) != SIG_IGN)
-		signal(SIGINT, cleanexit);
+		signal(SIGINT, sigexit);
 
 	if(sflag == 0) {
 		act.sa_flags = SA_SIGINFO;
@@ -364,7 +506,7 @@ readkbd(void)
 		buf[0] = 'H' - '@';
 		break;
 	case CTRLC:
-		cleanexit(0);
+		cleanexit(128+SIGINT);
 		break;
 	}
 	return buf[0];

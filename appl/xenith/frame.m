@@ -3,7 +3,7 @@ Framem : module {
 
 	BACK, HIGH, BORD, TEXT, HTEXT, NCOL : con iota;
 
-	FRTICKW : con 3;
+	FRTICKW : int;	# tick width: 3, times $displayscale
 
 	init : fn(mods : ref Dat->Mods);
 
@@ -52,4 +52,5 @@ Framem : module {
 	frdrawsel : fn(f : ref Frame, p : Draw->Point, p0 : int, p1 : int, n : int);
 	frdrawsel0 : fn(f : ref Frame, p : Draw->Point, p0 : int, p1 : int, i1 : ref Draw->Image, i2 : ref Draw->Image);
 	frtick : fn(f : ref Frame, p : Draw->Point, n : int);
+	frinittick : fn(f : ref Frame);
 };

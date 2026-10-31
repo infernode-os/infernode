@@ -236,6 +236,8 @@ receiver(input: ref Input)
 			err := "";
 			if(res == UNKNOWN)
 				err = "no matching plumb rule";
+			else if(res == NOTSTARTED)
+				err = "no receiver and nothing to start";
 			wc <-= (len msg, err);
 		}
 	}

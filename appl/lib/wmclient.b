@@ -10,7 +10,6 @@ include "wmlib.m";
 include "wmclient.m";
 include "lucitheme.m";
 
-Focusnone, Focusimage, Focustitle: con iota;
 
 # Single subdued window border, applied uniformly to focused and
 # unfocused windows so every wm app shows the same calm frame in
@@ -72,10 +71,11 @@ makedrawcontext(): ref Draw->Context
 }
 		
 blankwin: Window;
-window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
+window(ctxt: ref Draw->Context, title: string, buts: int): ref Window
 {
 	w := ref blankwin;
 	w.ctxt = wmlib->connect(ctxt);
+	wmlib->setlabel(w.ctxt, title);
 	w.display = ctxt.display;
 	w.ctl = chan[2] of string;
 	readscreenrect(w);
@@ -102,10 +102,10 @@ window(ctxt: ref Draw->Context, nil: string, buts: int): ref Window
 	if(buts & Plain)
 		return w;
 
-	if(ctxt.wm == nil)
-		buts &= ~(Resize|Hide);
-
-	w.bd = 1;
+	# the frame (wmlib->Border, the theme's windowborder), unless the
+	# window manager frames this window itself (Lucifer's zone, Matrix)
+	if(!wmlib->embedded(w.ctxt))
+		w.bd = Wmlib->Border;
 
 	w.wmctl("fixedorigin");
 	return w;
@@ -133,30 +133,11 @@ findkbdstate(ctxt: ref Draw->Wmcontext): ref KbdState
 	return nil;
 }
 
-Window.pointer(w: self ref Window, p: Draw->Pointer): int
+# A press on the frame is the window manager's (wm/wm's framehit): it
+# alone knows where the window really is on the screen.  Nothing here
+# is the frame's any more; the app has every event.
+Window.pointer(nil: self ref Window, nil: Draw->Pointer): int
 {
-	if(w.screen == nil)
-		return 0;
-
-	# Scroll wheel events (buttons 8/16) should pass through without focus changes
-	if(p.buttons & (8|16))
-		return 0;
-
-	if(p.buttons && (w.ptrfocus == Focusnone || w.buttons == 0)){
-		if(inborder(w, p.xy))
-			w.ptrfocus = Focustitle;
-		else
-			w.ptrfocus = Focusimage;
-	}
-	w.buttons = p.buttons;
-	if(w.ptrfocus == Focustitle){
-		if(p.buttons & (2|4))
-			w.ctl <-= sys->sprint("!size . -1 %d %d", 0, 0);
-		else if(p.buttons & 1){
-			w.ctl <-= sys->sprint("!move . -1 %d %d", p.xy.x, p.xy.y);
-		}
-		return 1;
-	}
 	return 0;
 }
 
@@ -223,8 +204,8 @@ Window.imager(w: self ref Window, r: Rect): Rect
 	return r;
 }
 
-# draw an imitation tk border using a single subdued, theme-driven colour
-# regardless of focus state.
+# draw the frame: w.bd wide, in the theme's windowborder whatever the
+# focus, as tkclient's relief solid is.
 drawborder(w: ref Window)
 {
 	if(w.screen == nil)
@@ -236,15 +217,6 @@ drawborder(w: ref Window)
 	i.draw(((r.min.x+w.bd, r.min.y), (r.max.x, r.min.y+w.bd)), col, nil, (0, 0));
 	i.draw(((r.max.x-w.bd, r.min.y+w.bd), r.max), col, nil, (0, 0));
 	i.draw(((r.min.x+w.bd, r.max.y-w.bd), (r.max.x-w.bd, r.max.y)), col, nil, (0, 0));
-}
-
-inborder(w: ref Window, p: Point): int
-{
-	r := w.screen.image.r;
-	return (Rect(r.min, (r.min.x+w.bd, r.max.y))).contains(p) ||
-		(Rect((r.min.x+w.bd, r.min.y), (r.max.x, r.min.y+w.bd))).contains(p) ||
-		(Rect((r.max.x-w.bd, r.min.y+w.bd), r.max)).contains(p) ||
-		(Rect((r.min.x+w.bd, r.max.y-w.bd), (r.max.x-w.bd, r.max.y))).contains(p);
 }
 
 readscreenrect(w: ref Window)
@@ -301,6 +273,9 @@ Window.wmctl(w: self ref Window, req: string): string
 	"haskbdfocus" =>
 		w.focused = int qword(req, next).t0;
 		drawborder(w);
+	"retheme" =>
+		# a live theme switch (Lucifer sends it to the apps it hosts)
+		retheme(w);
 	"task" =>
 		title := "";
 		wmreq(w, sys->sprint("task %q", title), next);
@@ -347,8 +322,9 @@ recvimage(w: ref Window)
 	putimage(w, i);
 }
 
-Window.settitle(nil: self ref Window, nil: string): string
+Window.settitle(w: self ref Window, name: string): string
 {
+	wmlib->setlabel(w.ctxt, name);
 	return nil;
 }
 

@@ -83,7 +83,7 @@ init(nil: ref Draw->Context, args: list of string)
 	pkbuf := array of byte kr->pktostr(info.mypk);
 	state := certdigest(sai.mysk, pkbuf);
 	info.cert = kr->sign(sai.mysk, expiry, state, certhash(sai.mysk));
-	if(kr->writeauthinfo("/fd/1", info) < 0){
+	if(kr->writeauthinfo(dstfile, info) < 0){
 		sys->fprint(stderr, "sign: error writing certificate: %r\n");
 		raise "fail:write error";
 	}

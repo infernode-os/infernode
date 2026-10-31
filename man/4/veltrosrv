@@ -1,0 +1,235 @@
+.TH VELTROSRV 4
+.SH NAME
+veltrosrv \- the Veltro agent harness, served as files
+.SH SYNOPSIS
+.B veltrosrv
+[
+.B -v
+] [
+.B -n
+.I maxsteps
+] [
+.B -m
+.I toolmount
+] [
+.B -S
+.I scratchdir
+] [
+.B -a
+.I tag
+] [
+.B -t
+.IR tool , ...
+] [
+.B -p
+.IR path [: ro | rw ], ...
+] [
+.B -M
+.I mountpoint
+]
+.SH DESCRIPTION
+.I Veltrosrv
+runs the Veltro agent loop (the model at
+.BR /mnt/llm ,
+the tools at
+.BR /tool )
+and serves it as a filesystem, by default at
+.BR /mnt/veltro .
+Every front end is a client of these files:
+.IR veltro (1)
+on the command line,
+.I lucibridge
+for Lucia, Xenith's
+.B Agent
+window, or a shell with
+.I echo
+and
+.IR cat .
+.PP
+The server mounts itself in the namespace of the process that starts it
+and returns.  The serving process first forks its own namespace and
+applies
+.IR nsconstruct 's
+restriction with the grants given by
+.B -t
+and
+.BR -p ,
+so the agent runs with those and nothing else; the mount lands only in
+the caller's namespace, so the agent cannot name its own
+.B ctl
+or
+.B approve
+files.  Different grants are different servers, mounted at the same
+name in different namespaces.
+.PP
+The options:
+.TP
+.B -v
+log the trajectory to standard error as well as to each session's
+.B log
+file.
+.TP
+.BI -n " maxsteps"
+the most model steps one turn may take (default 100).
+.TP
+.BI -m " toolmount"
+the tool server's mount (default
+.BR /tool ;
+a Lucia activity uses
+.BI /tool. n ).
+.TP
+.BI -S " scratchdir"
+where tool output too large for the model is written; the agent is told
+the path it sees that directory at,
+.BR /tmp/veltro/scratch .
+.TP
+.BI -a " tag"
+prefixed to every provenance record, for example
+.BR activity=0 .
+.TP
+.BI -t " tool,..."
+make the tool server's active set exactly these tools.
+.TP
+.BI -p " path,..."
+register each path with the tool server and grant it to the agent.  A
+.B :ro
+or
+.B :rw
+suffix sets the permission.
+.TP
+.BI -M " mountpoint"
+serve at another name.
+.SH FILES
+.TF approve
+.TP
+.B new
+read: start a session and return its id, a small integer.
+.TP
+.BI id /ctl
+write, one request per write:
+.RS
+.TP
+.B cancel
+stop the running turn at its next step; a call waiting on
+.B approve
+is denied.
+.TP
+.B reset
+start a new model session for this conversation.
+.TP
+.B close
+end the session.
+.TP
+.BI persona " type"
+layer
+.BI /lib/veltro/agents/ type .txt
+into the system prompt as the agent's role.
+.TP
+.BI role " name"
+append
+.B /lib/veltro/meta.txt
+.RB ( meta )
+or
+.BI /lib/veltro/agents/ name .txt
+to the system prompt, as Lucia's activities do.
+.TP
+.BI brief " text"
+append
+.I text
+to the system prompt.
+.TP
+.BI model " name"
+.TP
+.BI think " tokens"
+.TP
+.BI maxsteps " n"
+.TP
+.BR gate " on | off"
+whether destructive calls wait on
+.B approve
+(default on).
+.RE
+.IP
+Read: the settings, as
+.IR attr = value
+pairs on one line.
+.TP
+.BI id /input
+write: one user message.  It starts a turn; while one runs the write
+fails with
+.BR busy .
+.TP
+.BI id /text
+read: the conversation as the user sees it, as messages each headed by
+a line
+.BR "== user" ,
+.B "== veltro"
+or
+.BR "== note" ,
+the last optionally followed by a title.  A line of the model's own text
+that would read as a header is given a leading space.  While a turn
+runs, a read at the end waits for more, so the model's text arrives as
+it is generated; when the session is idle it is the end of the file.
+.I Cat
+therefore prints the conversation and returns when the turn is over.
+.TP
+.BI id /log
+read: the trajectory, one line per event, in the form
+.B lucibridge -v
+writes: the bytes sent to the model, the model's response, each tool
+call and its result, and
+.BI "turn done stop=" reason
+at the end.  Ends as
+.B text
+does.
+.TP
+.BI id /status
+read:
+.BR idle ,
+.BR working ,
+.B blocked
+(a call waits on
+.BR approve ),
+or the name of the tool running.
+.TP
+.BI id /approve
+read: while a turn runs, waits until a call needs the operator's
+approval, then gives
+.IR "callid tool args" ;
+when the session is idle it is empty.  Write
+.BI allow " callid"
+or
+.BI deny " callid"
+to answer.
+.SH TOOL CALLS
+The tool calls of one model response are a batch.  Each is first
+gated, or intercepted
+.RB ( say
+is shown, not run), or answered from the read cache, in the model's
+order.  What remains runs concurrently when every call is read-only
+.RB ( read ,
+.BR list ,
+.BR find ,
+.BR search ,
+.BR grep ,
+.BR websearch ,
+.BR webfetch ,
+.BR spawn ),
+and one at a time, in order, when any call mutates, so a write precedes
+the read or compile that follows it.  Every call is bounded to sixty
+seconds.  Output too large for the model is written to
+.I scratchdir
+and summarised by its first lines.
+.SH EXAMPLE
+.EX
+; id=`{cat /mnt/veltro/new}
+; echo 'what does nsconstruct.b do?' > /mnt/veltro/$id/input
+; cat /mnt/veltro/$id/text
+.EE
+.SH SOURCE
+.B /appl/veltro/veltrosrv.b
+.SH SEE ALSO
+.IR veltro (1),
+.IR llmsrv (4),
+.IR tools9p (4),
+.IR nsconstruct (2)

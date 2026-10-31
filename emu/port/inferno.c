@@ -786,6 +786,24 @@ enum
 	BlockingPctl=	Sys_NEWFD|Sys_FORKFD|Sys_NEWNS|Sys_FORKNS|Sys_NEWENV|Sys_FORKENV
 };
 
+/*
+ * Install a new fd or name space group in o.  The copy that made it
+ * ran with the VM released (it can wait on Limbo file servers), but
+ * other threads read another Prog's groups holding the VM lock:
+ * devprog's ns, fd and status files.  Swap the pointer holding that
+ * lock too, so such a reader sees the old group or the new one and
+ * has finished with the old before the caller closes it.  INFR-373.
+ */
+static void
+pctlswap(int vmreleased, void **slot, void *new)
+{
+	if(vmreleased)
+		acquire();
+	*slot = new;
+	if(vmreleased)
+		release();
+}
+
 void
 Sys_pctl(void *fp)
 {
@@ -842,7 +860,7 @@ Sys_pctl(void *fp)
 			}
 		}
 		unlock(&ofg->l);
-		o->fgrp = nfg;
+		pctlswap(vmreleased, (void**)&o->fgrp, nfg);
 		closefgrp(ofg);
 	}
 	else
@@ -852,7 +870,7 @@ Sys_pctl(void *fp)
 		/* file descriptors to close */
 		for(l = f->movefd; l != H; l = l->tail)
 			kclose(*(int*)l->data);
-		o->fgrp = fg;
+		pctlswap(vmreleased, (void**)&o->fgrp, fg);
 		closefgrp(ofg);
 	}
 
@@ -883,7 +901,7 @@ Sys_pctl(void *fp)
 		cnameclose(np.np->slash->name);
 		np.np->slash->name = newcname("/");
 		opg = pg;
-		o->pgrp = np.np;
+		pctlswap(vmreleased, (void**)&o->pgrp, np.np);
 		np.np = nil;
 		closepgrp(opg);
 	}
@@ -892,7 +910,7 @@ Sys_pctl(void *fp)
 		np.np = newpgrp();
 		pgrpcpy(np.np, o->pgrp);
 		opg = o->pgrp;
-		o->pgrp = np.np;
+		pctlswap(vmreleased, (void**)&o->pgrp, np.np);
 		np.np = nil;
 		closepgrp(opg);
 	}
@@ -912,9 +930,6 @@ Sys_pctl(void *fp)
 		closeegrp(oe);
 	}
 
-	if(f->flags & Sys_NEWPGRP)
-		newgrp(p);
-
 	if(f->flags & Sys_NODEVS)
 		o->pgrp->nodevs = 1;
 
@@ -922,6 +937,22 @@ Sys_pctl(void *fp)
 
 	if(vmreleased)
 		acquire();
+
+	/*
+	 * With the VM: the groups' lists are the VM's, changed by spawn,
+	 * exit and kill on other threads.  newgrp with the VM released (as
+	 * pctl(NEWPGRP|FORKNS, ...) had it, a common pairing) raced them,
+	 * and a list could keep a Prog that had exited and been freed: the
+	 * next spawn into that group wrote into freed memory.
+	 */
+	if(f->flags & Sys_NEWPGRP){
+		if(waserror()){
+			*f->ret = -1;
+			return;
+		}
+		newgrp(p);
+		poperror();
+	}
 
 	*f->ret = p->pid;
 }

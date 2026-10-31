@@ -104,7 +104,8 @@ RUNT=../../libinterp/runt.h		# for culling dependencies
 alloc.$O: ../../include/pool.h\
 		$INTERP
 devcons.$O:	../../include/version.h
-devdraw.$O:	../../include/draw.h\
+devdraw.$O:	../../port/devdraw.c\
+		../../include/draw.h\
 		../../include/memdraw.h\
 		../../include/memlayer.h
 devmem.$O:	$INTERP

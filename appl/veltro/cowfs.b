@@ -60,6 +60,7 @@ SrvState: adt {
 
 # Internal file names to hide from directory listings
 WHITEOUT_FILE: con ".whiteout";
+BASE_FILE: con ".cowbase";	# relpath<TAB>what the base was when first shadowed
 META_FILE: con ".cowmeta";
 
 stderr: ref Sys->FD;
@@ -188,14 +189,21 @@ promote(basepath, overlaydir: string): (int, string)
 	initsys();
 
 	count := 0;
+	conflicts: list of string;
 
 	# Apply whiteout deletes to base
+	keptwh: list of string;
 	wh := loadwhiteouts(overlaydir);
 	for(; wh != nil; wh = tl wh) {
 		# Validate whiteout path — reject traversal attempts
 		(relpath, pathok) := cleanrelpath(hd wh);
 		if(!pathok)
 			continue;
+		if(basechanged(basepath, overlaydir, relpath)) {
+			conflicts = relpath :: conflicts;
+			keptwh = hd wh :: keptwh;
+			continue;
+		}
 		bpath := basepath + "/" + relpath;
 		# Remove from base (best-effort)
 		removefile(bpath);
@@ -203,18 +211,37 @@ promote(basepath, overlaydir: string): (int, string)
 	}
 
 	# Copy overlay files to base
-	(n, err) := promotewalk(basepath, overlaydir, "");
-	if(err != nil)
-		return (count + n, err);
+	(n, err, wc) := promotewalk(basepath, overlaydir, "");
 	count += n;
+	for(; wc != nil; wc = tl wc)
+		conflicts = hd wc :: conflicts;
+	if(err != nil)
+		return (count, err);
 
-	# Clear overlay
-	clearoverlay(overlaydir);
-
-	# Re-write metadata (overlay is now clean)
-	writemeta(overlaydir, basepath);
-
-	return (count, nil);
+	if(conflicts == nil) {
+		# Clear overlay
+		clearoverlay(overlaydir);
+		# Re-write metadata (overlay is now clean)
+		writemeta(overlaydir, basepath);
+		return (count, nil);
+	}
+	# What was applied is gone from the overlay; what was not stays staged.
+	savewhiteouts(overlaydir, keptwh);
+	l := loadbases(overlaydir);
+	kept: list of (string, string);
+	for(; l != nil; l = tl l) {
+		(r, nil) := hd l;
+		if(inlist(r, conflicts))
+			kept = hd l :: kept;
+	}
+	savebases(overlaydir, kept);
+	msg := "";
+	for(; conflicts != nil; conflicts = tl conflicts) {
+		if(msg != "")
+			msg += ", ";
+		msg += hd conflicts;
+	}
+	return (count, "not applied, changed since the task's copy was made (still staged): " + msg);
 }
 
 promotefile(basepath, overlaydir, relpath: string): string
@@ -226,6 +253,9 @@ promotefile(basepath, overlaydir, relpath: string): string
 	(relpath, pathok) = cleanrelpath(relpath);
 	if(!pathok)
 		return "invalid path: contains traversal";
+
+	if(basechanged(basepath, overlaydir, relpath))
+		return "not applied, changed since the task's copy was made (still staged): " + relpath;
 
 	# Check if it's a whiteout (deletion)
 	wh := loadwhiteouts(overlaydir);
@@ -239,6 +269,7 @@ promotefile(basepath, overlaydir, relpath: string): string
 			if(hd wh != relpath)
 				newwh = hd wh :: newwh;
 		savewhiteouts(overlaydir, newwh);
+		dropbase(overlaydir, relpath);
 		return nil;
 	}
 
@@ -259,6 +290,7 @@ promotefile(basepath, overlaydir, relpath: string): string
 
 	# Remove from overlay
 	sys->remove(opath);
+	dropbase(overlaydir, relpath);
 
 	return nil;
 }
@@ -266,7 +298,15 @@ promotefile(basepath, overlaydir, relpath: string): string
 revert(overlaydir: string): string
 {
 	initsys();
+	# The overlay's metadata stays: cleared with the rest, the overlay
+	# lost its base and its mark while its cowfs still served it.
+	meta := rf(overlaydir + "/" + META_FILE);
 	clearoverlay(overlaydir);
+	if(meta != nil) {
+		fd := sys->create(overlaydir + "/" + META_FILE, Sys->OWRITE, 8r644);
+		if(fd != nil)
+			sys->write(fd, array of byte meta, len array of byte meta);
+	}
 	return nil;
 }
 
@@ -282,12 +322,14 @@ revertfile(overlaydir, relpath: string): string
 			if(hd wh != relpath)
 				newwh = hd wh :: newwh;
 		savewhiteouts(overlaydir, newwh);
+		dropbase(overlaydir, relpath);
 		return nil;
 	}
 
 	# Remove overlay file
 	opath := overlaydir + "/" + relpath;
 	sys->remove(opath);
+	dropbase(overlaydir, relpath);
 	return nil;
 }
 
@@ -310,12 +352,23 @@ MetaInfo: adt {
 	overlaydir: string;
 };
 
+# The basepath line is cowfs's; any other line (boot=, which nsconstruct
+# writes) is kept.  Rewritten without it, an overlay promoted or reverted
+# lost its mark, and was taken for one an earlier session left.
 writemeta(overlaydir, basepath: string)
 {
 	path := overlaydir + "/" + META_FILE;
+	keep := "";
+	old := rf(path);
+	if(old != nil) {
+		(nil, lines) := sys->tokenize(old, "\n");
+		for(; lines != nil; lines = tl lines)
+			if(!(len hd lines >= 9 && (hd lines)[0:9] == "basepath="))
+				keep += hd lines + "\n";
+	}
 	fd := sys->create(path, Sys->OWRITE, 8r644);
 	if(fd != nil) {
-		sys->fprint(fd, "basepath=%s\n", basepath);
+		sys->fprint(fd, "basepath=%s\n%s", basepath, keep);
 		fd = nil;
 	}
 }
@@ -562,6 +615,7 @@ Serve:
 				tpe := lookuppath(state, c.path);
 				if(tpe != nil && tpe.relpath != "") {
 					topath := state.overlaydir + "/" + tpe.relpath;
+					notebase(state.basepath, state.overlaydir, tpe.relpath);
 					ensureparent(topath);
 					tfd := sys->create(topath, Sys->OWRITE, FILE_PERM);
 					if(tfd == nil) {
@@ -597,6 +651,8 @@ Serve:
 			}
 
 			relpath := joinrel(pe.relpath, m.name);
+			if(!(m.perm & Sys->DMDIR))
+				notebase(state.basepath, state.overlaydir, relpath);
 
 			# Remove whiteout if creating over a deleted file
 			if(iswhiteout(state, relpath))
@@ -675,6 +731,7 @@ Serve:
 			(ook, nil) := sys->stat(opath);
 			if(ook < 0) {
 				# Not in overlay yet — check base for copy-up
+				notebase(state.basepath, state.overlaydir, pe.relpath);
 				bpath := state.basepath + "/" + pe.relpath;
 				(bok, nil) := sys->stat(bpath);
 				if(bok >= 0) {
@@ -715,9 +772,14 @@ Serve:
 			srv.reply(ref Rmsg.Write(m.tag, n));
 
 		Remove =>
-			(c, nil, rerr) := srv.canremove(m);
+			# Checked as Create and Write are: the host filesystem under
+			# the overlay is the authority.  Styxserver.canremove judged
+			# against the owner cowfs started with, which in an agent's
+			# namespace (no /dev/user then) is "inferno", not the caller,
+			# so every remove in a workspace was refused.
+			c := srv.getfid(m.fid);
 			if(c == nil) {
-				srv.reply(ref Rmsg.Error(m.tag, rerr));
+				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
 				break;
 			}
 			# Tremove always clunks the fid (success or failure). The
@@ -734,13 +796,23 @@ Serve:
 
 			# Remove from overlay if present
 			opath := state.overlaydir + "/" + pe.relpath;
-			sys->remove(opath);
+			(inoverlay, nil) := sys->stat(opath);
+			if(inoverlay >= 0 && sys->remove(opath) < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, sys->sprint("remove: %r")));
+				break;
+			}
 
 			# If file exists in base, add whiteout
 			bpath := state.basepath + "/" + pe.relpath;
 			(bok, nil) := sys->stat(bpath);
-			if(bok >= 0)
+			if(bok >= 0) {
+				notebase(state.basepath, state.overlaydir, pe.relpath);
 				addwhiteout(state, pe.relpath);
+			}
+			else if(inoverlay < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+				break;
+			}
 
 			state.vers++;
 			srv.reply(ref Rmsg.Remove(m.tag));
@@ -961,6 +1033,95 @@ readat(path: string, offset, count: int): array of byte
 	return buf[0:n];
 }
 
+# --- What the base was when the overlay first shadowed it ---
+#
+# A file is copied up (or replaced, created, removed) in the overlay when
+# the task first changes it; what the base file was then is noted.  If the
+# base has changed since (the user edited it, an earlier change was
+# applied), promoting the overlay's copy would put back the old text with
+# the task's change and lose the new: that file is not promoted, and stays
+# staged, its conflict said.
+
+basesig(bpath: string): string
+{
+	(ok, d) := sys->stat(bpath);
+	if(ok < 0)
+		return "absent";
+	return sys->sprint("%bud.%ud.%ud.%bd", d.qid.path, d.qid.vers, d.mtime, d.length);
+}
+
+loadbases(overlaydir: string): list of (string, string)
+{
+	l: list of (string, string);
+	(nil, lines) := sys->tokenize(rf(overlaydir + "/" + BASE_FILE), "\n");
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		for(i := len line - 1; i > 0; i--)
+			if(line[i] == '\t') {
+				l = (line[0:i], line[i+1:]) :: l;
+				break;
+			}
+	}
+	return l;
+}
+
+savebases(overlaydir: string, l: list of (string, string))
+{
+	path := overlaydir + "/" + BASE_FILE;
+	if(l == nil) {
+		sys->remove(path);
+		return;
+	}
+	out := "";
+	for(; l != nil; l = tl l) {
+		(rel, sig) := hd l;
+		out += rel + "\t" + sig + "\n";
+	}
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd != nil) {
+		b := array of byte out;
+		sys->write(fd, b, len b);
+	}
+}
+
+basefor(l: list of (string, string), rel: string): string
+{
+	for(; l != nil; l = tl l) {
+		(r, sig) := hd l;
+		if(r == rel)
+			return sig;
+	}
+	return nil;
+}
+
+# The overlay is about to shadow relpath: note what the base is, the first time.
+notebase(basepath, overlaydir, relpath: string)
+{
+	l := loadbases(overlaydir);
+	if(basefor(l, relpath) != nil)
+		return;
+	savebases(overlaydir, (relpath, basesig(basepath + "/" + relpath)) :: l);
+}
+
+dropbase(overlaydir, relpath: string)
+{
+	l := loadbases(overlaydir);
+	n: list of (string, string);
+	for(; l != nil; l = tl l) {
+		(r, nil) := hd l;
+		if(r != relpath)
+			n = hd l :: n;
+	}
+	savebases(overlaydir, n);
+}
+
+# The base of relpath has changed since the overlay shadowed it.
+basechanged(basepath, overlaydir, relpath: string): int
+{
+	was := basefor(loadbases(overlaydir), relpath);
+	return was != nil && was != basesig(basepath + "/" + relpath);
+}
+
 copyfile(src, dst: string): string
 {
 	sfd := sys->open(src, Sys->OREAD);
@@ -1077,9 +1238,10 @@ countfiles(overlaydir, parentrel: string): int
 	return n;
 }
 
-promotewalk(basepath, overlaydir, parentrel: string): (int, string)
+promotewalk(basepath, overlaydir, parentrel: string): (int, string, list of string)
 {
 	count := 0;
+	conflicts: list of string;
 	odir := overlaydir;
 	if(parentrel != "")
 		odir += "/" + parentrel;
@@ -1104,20 +1266,27 @@ promotewalk(basepath, overlaydir, parentrel: string): (int, string)
 					fd = nil;
 			}
 			# Recurse
-			(cn, cerr) := promotewalk(basepath, overlaydir, childrel);
+			(cn, cerr, cc) := promotewalk(basepath, overlaydir, childrel);
 			count += cn;
+			for(; cc != nil; cc = tl cc)
+				conflicts = hd cc :: conflicts;
 			if(cerr != nil)
-				return (count, cerr);
+				return (count, cerr, conflicts);
 		} else {
+			if(basechanged(basepath, overlaydir, childrel)) {
+				conflicts = childrel :: conflicts;
+				continue;
+			}
 			# Copy file to base
 			ensureparent(bpath);
 			err := copyfile(opath, bpath);
 			if(err != nil)
-				return (count, err);
+				return (count, err, conflicts);
+			sys->remove(opath);
 			count++;
 		}
 	}
-	return (count, nil);
+	return (count, nil, conflicts);
 }
 
 # --- General helpers ---
@@ -1140,7 +1309,7 @@ parentrel(relpath: string): string
 
 isinternal(name: string): int
 {
-	return name == WHITEOUT_FILE || name == META_FILE;
+	return name == WHITEOUT_FILE || name == META_FILE || name == BASE_FILE;
 }
 
 inlist(s: string, l: list of string): int

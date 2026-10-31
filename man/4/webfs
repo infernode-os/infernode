@@ -1,0 +1,168 @@
+.TH WEBFS 4
+.SH NAME
+webfs \- HTTP client file server, one browsing session
+.SH SYNOPSIS
+.B webfs
+[
+.B -D
+]
+[
+.I mountpoint
+]
+.SH DESCRIPTION
+.I Webfs
+serves HTTP and HTTPS as files, by default at
+.BR /mnt/web .
+Each request has its own directory, allocated by reading
+.BR clone ;
+requests run concurrently, so a slow one delays only the readers of
+its own files.
+All requests share one cookie jar: a
+.I webfs
+is a browsing session, and a different session is a different
+.IR webfs ,
+mounted elsewhere or in another name space.
+.PP
+The root holds:
+.TF cookies
+.PD
+.TP
+.B clone
+Reading it allocates a connection directory and returns its number.
+.TP
+.B ctl
+Global settings; reading gives them, writing
+.BI useragent " string"
+sets the default
+.B User-Agent
+header.
+.TP
+.B cookies
+The cookie jar (RFC 6265), one cookie per line:
+.IP
+.EX
+domain path name=value expires secure httponly hostonly
+.EE
+.IP
+.I Expires
+is in seconds since the epoch, 0 for a session cookie; the flags are 0 or 1.
+Writing lines in the same form adds or replaces cookies; writing
+.B clear
+empties the jar.
+Responses' Set-Cookie headers fill it, and requests send the cookies
+that match them, across redirects as well.
+.PP
+A connection directory
+.I N
+holds:
+.TF contenttype
+.PD
+.TP
+.B ctl
+Written before the request is made:
+.BI url " url"\f1,
+.BI method " method"
+(GET, POST, PUT, DELETE, HEAD, PATCH or OPTIONS),
+.BI header " Name: value"\f1,
+.B "cookies off"
+(the request neither sends the jar's cookies nor stores those its
+response sets: a script's cross-origin request without credentials) or
+.BR "cookies on" ,
+and
+.BI types " type ..."\f1:
+the content types whose body is wanted, an entry ending in
+.B /
+a prefix
+.RB ( text/ ),
+one beginning with
+.B +
+a suffix
+.RB ( +xml ),
+any other the type itself.
+A successful response of another type is not read past its header:
+.B status
+and
+.B contenttype
+are as it answered, and
+.B body
+is empty.
+A browser's navigation to an mp3 has no use for its megabytes.
+Reading gives what has been set.
+.TP
+.B postbody
+The request body.
+.TP
+.B body
+The response body.
+Opening it for reading, or reading
+.BR status ,
+.BR contenttype ,
+.B url
+or
+.BR header ,
+makes the request; each waits until it completes.
+A body sent with a gzip or deflate Content-Encoding is decoded.
+.TP
+.B status
+The status code and line, or
+.BI error: " message"\f1.
+.TP
+.B contenttype
+The response's Content-Type.
+.TP
+.B url
+The URL that answered, after any redirects; relative references in the
+body are relative to it.
+.TP
+.B header
+The response header, one
+.B Name: value
+per line.
+.TP
+.B parsed/
+The request URL's parts:
+.BR url ,
+.BR scheme ,
+.BR host ,
+.BR port ,
+.BR path ,
+.BR query ,
+.BR fragment .
+.PP
+Unless the request sets its own,
+.I webfs
+sends
+.B "Accept-Encoding: gzip, deflate"
+and its default User-Agent.
+Changing the request
+.RB ( ctl
+or
+.BR postbody )
+after it was made makes it again on the next read.
+.PP
+Connections stay until they are no longer open and 32 newer idle
+connections exist, so a client may write
+.B ctl
+and read
+.B body
+with separate opens.
+.SH EXAMPLE
+.EX
+; webfs
+; c=`{cat /mnt/web/clone}
+; echo url https://example.org/ >/mnt/web/$c/ctl
+; cat /mnt/web/$c/status
+200 HTTP/1.1 200 OK
+; cat /mnt/web/$c/body
+.EE
+.SH SOURCE
+.B /appl/cmd/webfs.b
+.br
+.B /appl/lib/webclient.b
+.SH SEE ALSO
+.IR web9p (4),
+.IR charon (1)
+.SH BUGS
+There is no HTTP cache yet.
+.br
+A response body is held in memory, up to 64 megabytes.

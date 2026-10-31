@@ -157,6 +157,31 @@ isfix(Node *n)
 }
 
 /*
+ * the link table for the load of $self.
+ * a ref fn of a function the module does not declare adds it,
+ * tagged, to the module's interface (addiface), which it shares
+ * with every structurally equal module type.  only $self
+ * implements those functions, so only its load links them:
+ * the shared table leaves them out (ldtentry), or loading
+ * another module through an equal type would demand them (INFR-310).
+ */
+static Decl*
+mkselfldt(Src *src, Type *t)
+{
+	Decl *d;
+
+	if(selfldt == nil){
+		d = selfldt = mkids(src, enter(".m.$self", 0), t, nil);
+		installids(Dglobal, d);
+		d->refs++;
+		d->init = mkn(Onothing, nil, nil);
+		d->init->ty = t;
+		d->init->decl = d;
+	}
+	return selfldt;
+}
+
+/*
  * rewrite an expression to make it easiser to compile,
  * or give the correct results
  */
@@ -488,6 +513,8 @@ if(debug['U']) print("call %n\n", left);
 		usetype(nn->ty);
 		usetype(nn->ty->tof);
 		nn = rewrite(nn);
+		if(LDT)
+			nn->right->decl = mkselfldt(&n->src, nn->ty->tof);
 		nn->op = Oself;
 		return nn;
 	case Ofnptr:
@@ -953,6 +980,27 @@ ecom(Src *src, Node *nto, Node *n)
 			else if(left->op != Oname || tupaliased(left, right))
 				right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 		}
+		/*
+		 * an inlined call yields Oif or Ocomma, whose tuple results
+		 * are built straight into the destination one member at a
+		 * time: v = f(v) would then read members already written
+		 */
+		else if((right->op == Oif || right->op == Ocomma)
+		&& (right->ty->kind == Ttuple || right->ty->kind == Tadt || right->ty->kind == Tadtpick)
+		&& (left->op != Oname || tupaliased(left, right)))
+			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
+
+		/*
+		 * a call in right can change what left's address is found
+		 * from: a[i] = f(), where f makes a new a and the old one,
+		 * its only reference gone, is freed, had f's result written
+		 * into freed memory (indx before the call, the element's
+		 * address passed as where the result goes); p.x = f() so
+		 * too, f making a new p.  So right first, into a temporary,
+		 * then the address.  (Only a name's address is fixed.)
+		 */
+		if(left->op != Oname && right != &tr && hascall(right))
+			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 
 		/*
 		 * think carefully about types here
@@ -1138,7 +1186,7 @@ ecom(Src *src, Node *nto, Node *n)
 		if(right->addable < Rcant){
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nto);
-		}else if(left->temps < right->temps){
+		}else if(left->temps < right->temps || hascall(right)){	/* (a call first: as for Oas) */
 			right = eacom(right, &tr, nto);
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nil);
@@ -1249,7 +1297,13 @@ ecom(Src *src, Node *nto, Node *n)
 			break;
 		}
 		if(left->op == Oname && left->decl->store == Dtype){
-			genrawop(src, INEW, mktn(t), nil, nto);
+			/*
+			 * ref T with no initializer: nothing follows to store
+			 * into the members, so the allocation itself must zero
+			 * them.  INEW only sets the pointer slots to H and leaves
+			 * the scalars holding whatever the recycled block held.
+			 */
+			genrawop(src, INEWZ, mktn(t), nil, nto);
 			break;
 		}
 		if(t->kind == Tadt && t->tags != nil){
@@ -1456,7 +1510,13 @@ eacom(Node *n, Node *reg, Node *t)
 		tn = n->left->left;
 		ecom(&n->left->src, nil, n->left);
 		n = eacom(n->right, reg, t);
-		tfree(tn);
+		/*
+		 * n may address into tn (an inlined call's argument,
+		 * e.g. tn[i] for f(array[] of {...}) with f(a) = a[i]);
+		 * freeing tn here would nil it, releasing the array,
+		 * before the caller uses n.  Hold it to the statement's end.
+		 */
+		tfreelater(tn);
 		return n;
 	}
 

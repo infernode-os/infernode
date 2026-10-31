@@ -1,0 +1,13 @@
+DejaVu fonts, version 2.35, unmodified: Sans, Serif and Sans Mono in
+regular, bold, oblique/italic and bold oblique/italic.
+
+Taken from the matplotlib 3.11.2 wheel (PyPI,
+matplotlib-3.11.2-cp311-cp311-manylinux2014_x86_64...whl,
+matplotlib/mpl-data/fonts/ttf/), which redistributes them unchanged.
+Upstream: https://dejavu-fonts.github.io/
+
+Licence: LICENSE (Bitstream Vera / Arev terms; free to use, copy and
+redistribute).  SHA256SUMS pins every file.
+
+Used by Charon's engine (appl/lib/web/font.b) through outlinefont(2) to
+draw text at any size, weight and slant.

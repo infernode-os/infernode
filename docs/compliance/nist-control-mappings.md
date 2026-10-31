@@ -48,7 +48,7 @@ and the four-family itemization in
 | **AC-5** / 3.1.4 | Separation of duties | Distinct capability sets + distinct factotum identities per subject | Partial | `SP800-53-controls.md` (AC-5) | FMT_SMR.1 | Enforcement partly operator process |
 | **AC-6** / 3.1.5 | Least privilege | Capability attenuation (child ⊆ parent, structural); default-deny bind-replace; `NODEVS` device gate | By construction | `emu/port/pgrp.c` (`nodevs`); `tests/veltro_security_test.b` | FDP_ACF.1, FMT_MSA.3 | Attenuation covered by isolation proof |
 | **AC-6(9)** / 3.1.7 | Audit use of privileged functions | Audit log records privileged credential ops (factotum keyadd/keydel, 2fa enroll/disable) | Configurable | `SP800-92-audit-log.md` | FAU_GEN.1 | Broader privileged-op coverage pending — **gap (F-4)** |
-| **AC-25** | Reference monitor: tamper-proof, small, verifiable | 9P/Styx single mediation chokepoint; isolation **formally verified** (TLA+/SPIN/CBMC) | By construction (assurance-backed) | `formal-verification/` | FDP_IFF.1, FPT_SEP.1 (informative) | Residual: emu-host races (F-1) qualify "tamper-proof" |
+| **AC-25** | Reference monitor: tamper-proof, small, verifiable | 9P/Styx single mediation chokepoint; isolation **formally verified** (TLA+/SPIN/CBMC) | By construction (assurance-backed) | `formal-verification/` | FDP_IFF.1, FPT_SEP.1 (informative) | Residual: emu-host races (F-1; `kchdir`/`namec` fixed in 89db5178, FORKNS swap see §9) |
 | **AC-2** / 3.1.1 | Account management | Factotum + secstore accounts; lifecycle partly process | Partial / Integrator | `module/factotum.m` | FIA_UID.2 | Lifecycle is operator process |
 
 ## 2. Audit & Accountability (AU) — SP 800-53 / 800-171 §3.3
@@ -83,12 +83,12 @@ and the four-family itemization in
 | **SC-7** / 3.13.1 | Boundary protection | Namespace boundaries + 9P as the one mediated interface; `NODEVS` gate | By construction | `emu/port/chan.c`; `SP800-53-controls.md` (SC-7) | FDP_ACF.1, FTP_ITC.1 | |
 | **SC-8** / 3.13.8 | Transmission confidentiality & integrity | TLS 1.2/1.3 (AES-256-GCM); native STS line encryption | Configurable | `appl/lib/crypt/tls.b`; `X509-mTLS.md` | FTP_ITC.1 | Client-cert mTLS open (INFR-344) |
 | **SC-8(1)** | Cryptographic protection in transit | AEAD ciphers; hybrid PQC key exchange | Configurable | `appl/lib/crypt/tls.b` | FCS_COP.1(SYM), FCS_CKM.2 | |
-| **SC-12** / 3.13.10 | Key establishment & management | Hybrid X25519+ML-KEM (TLS), DH+ML-KEM (native); SecP384r1MLKEM1024 under CNSA | Configurable | `appl/lib/crypt/tls.b` (`0x11ED`); `CNSA-2.0.md` | FCS_CKM.1/.2 | Default classical; CNSA mode off by default |
+| **SC-12** / 3.13.10 | Key establishment & management | Hybrid X25519+ML-KEM (TLS), DH+ML-KEM (native); SecP384r1MLKEM1024 under CNSA-strict TLS | Configurable | `appl/lib/crypt/tls.b` (`0x11EC`, `0x11ED`); `CNSA-2.0.md` | FCS_CKM.1/.2 | Default hybrid where the TLS server offers it, classical otherwise; CNSA modes off by default |
 | **SC-13** / 3.13.11 | FIPS-validated cryptography | Approved algorithms present (AES-256, SHA-384/512, FIPS 203/204/205) — **module not FIPS-validated** | Partial | `CNSA-2.0.md`; `FIPS-140-3-readiness.md` | FCS_COP.1(*) | **gap (F-2)**: algorithms ✅ / validated module ☐ |
 | **SC-13 (KAT/ACVP)** | Algorithm correctness validation | SHA-3: **NIST FIPS 202 KATs**. ML-KEM/ML-DSA/SLH-DSA: functional + constant-time CBMC harnesses only | Partial | `tests/sha3_test.b`; `formal-verification/cbmc/harness_mlkem_ct.c`, `harness_mldsa_ct.c` | FCS_COP.1(KEM/SIG) | **gap (F-3)**: no ACVP KAT for lattice/hash-DSA; **pending external cryptographic audit** |
 | **SC-23** | Session authenticity | TLS/STS session keys; transcript binding rejects MITM | Configurable | `tests/pqauth_test.b` (*TamperedEkRejected*) | FTP_ITC.1 | |
 | **SC-28** / 3.13.16 | Protection of information at rest | AES-256-GCM secstore vault, DK-wrapped, factor-gated | Configurable | `SP800-63B-AAL3.md` §1 | FDP_RIP.1 | |
-| **SC-39** | Process isolation | Per-process namespaces; Dis VM memory/type safety | By construction | `emu/port/pgrp.c`; `libinterp/` | FPT_SEP.1 (informative) | Residual: emu-host races (F-1) |
+| **SC-39** | Process isolation | Per-process namespaces; Dis VM memory/type safety | By construction | `emu/port/pgrp.c`; `libinterp/` | FPT_SEP.1 (informative) | Residual: emu-host races (F-1; `kchdir`/`namec` fixed in 89db5178, FORKNS swap see §9) |
 
 ## 5. System & Information Integrity (SI) — SP 800-53 / 800-171 §3.14
 
@@ -98,7 +98,7 @@ and the four-family itemization in
 | **SI-3** / 3.14.2 | Malicious-code protection | Application layer is type-/memory-safe Dis bytecode; modules type-checked at load | By construction | `libinterp/`; `CLAUDE.md` (link typecheck) | FPT_TDC.1 | Eliminates whole CWE classes for ~700 Limbo apps |
 | **SI-7** / 3.14.x | Software/firmware/information integrity | bytecode built from source at release and checked against a tracked module manifest; hash-chained audit | By construction | `.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`; `tools/dis-manifest.txt` | FPT_TST | |
 | **SI-16** | Memory protection | No raw pointers; bounds-checked arrays in Dis VM | By construction | `libinterp/` | FPT_TDC.1 | C TCB (emu/libsec) is *not* memory-safe — covered by CodeQL/fuzz/formal only |
-| **SI (TCB race residual)** | Integrity of the TSF itself | Namespace primitives formally verified; **3 emu-host UAF races open** | Partial | `formal-verification/TODO-RACE-CONDITIONS.md` | FPT_SEP.1 | **gap (F-1)** — formally confirmed defects |
+| **SI (TCB race residual)** | Integrity of the TSF itself | Namespace primitives formally verified; **3 emu-host UAF races**: `kchdir`/`namec` fixed in 89db5178 (2026-05-14); FORKNS swap see F-1 | Partial | `docs/history/formal-verification/TODO-RACE-CONDITIONS.md` | FPT_SEP.1 | **gap (F-1)** — formally confirmed defects |
 
 ## 6. Configuration Management (CM) — SP 800-53 / 800-171 §3.4
 
@@ -106,7 +106,7 @@ and the four-family itemization in
 |---------|--------------------------|-----------------------------|--------------------|---------------|------------------|-------|
 | **CM-2** / 3.4.1 | Baseline configuration | Reproducible Inferno-`mk` builds; tracked `dis/` runtime tree | By construction | `CLAUDE.md` ("Why Native Tools") | ALC (Part 3) | |
 | **CM-5** | Access restrictions for change | CI verifiers gate PRs; `hooks/post-merge` keeps working trees current | Configurable | `hooks/`, `.github/workflows/verify-dis-build.yml` | ALC | |
-| **CM-6** / 3.4.2 | Configuration settings | CNSA mode (`/env/cnsamode`), `NODEVS`, export scope are explicit settings | Configurable | `appl/lib/crypt/tls.b` (`cnsamode`); `CNSA-2.0.md` | FMT_SMF.1 | Secure settings are opt-in — integrator must set |
+| **CM-6** / 3.4.2 | Configuration settings | CNSA mode (`/env/cnsamode` for the native transport, `/env/cnsatls` for TLS), `NODEVS`, export scope are explicit settings | Configurable | `libinterp/keyring.c` (`cnsamode`); `appl/lib/crypt/tls.b` (`cnsatls`); `CNSA-2.0.md` | FMT_SMF.1 | Secure settings are opt-in — integrator must set |
 | **CM-7** / 3.4.6–3.4.7 | Least functionality | Small TCB; `NODEVS`; compose only needed file services; ring-fence guard keeps test-only harness out of releases | By construction | `CLAUDE.md` (Ring-fence rule); `.github/workflows/ci.yml`, `release.yml` | FMT_MSA.3 | |
 | **CM-14 / SR** | Signed components / provenance | SHA-pinned CI actions; Sigstore cosign; SLSA provenance; SBOM | By construction | `.github/workflows/release.yml`, `scorecard.yml`, `sbom.yml` | ALC / (SR family) | See §7 |
 
@@ -146,7 +146,7 @@ action). **None of these is presented as met.**
 
 | ID | Gap | Affected controls | Type | Existing tracking |
 |----|-----|-------------------|------|-------------------|
-| **F-1** | Three formally-confirmed use-after-free races in the `emu` host-threading layer (`kchdir`, FORKNS swap, `namec`) | AC-25, SC-39, SI (TSF integrity) | Defect (TSF) | `formal-verification/TODO-RACE-CONDITIONS.md` — **no Jira ticket found** |
+| **F-1** | Three formally-confirmed use-after-free races in the `emu` host-threading layer (`kchdir`, FORKNS swap, `namec`). 89db5178 (2026-05-14) put `kchdir` and `namec` under the `pg->ns` lock; its VM-lock re-acquire around the `Sys_pctl` NEWNS/FORKNS swap was removed in fa93471d (deadlock), on the reasoning that the `pg->ns` rwlock covers the race (`docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`) | AC-25, SC-39, SI (TSF integrity) | Defect (TSF) | `docs/history/formal-verification/TODO-RACE-CONDITIONS.md` — **no Jira ticket found** |
 | **F-2** | Cryptographic module not FIPS 140-2/140-3 CMVP validated | SC-13, IA-7 | Validation | `FIPS-140-3-readiness.md` (readiness only) |
 | **F-3** | No NIST ACVP/CAVP known-answer validation for ML-KEM/ML-DSA/SLH-DSA (round-trip + CBMC only); pending external cryptographic audit | SC-13 (KAT/ACVP) | Validation / assurance | **no dedicated ticket found** |
 | **F-4** | AU-4/5/6/7 operational tooling and broad privileged-op coverage incomplete | AU-6, AC-6(9), AU-12 | Coverage | INFR-343 (partial) |

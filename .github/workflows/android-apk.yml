@@ -176,6 +176,14 @@ jobs:
             exit 1
           fi
         done
+        # Empty mount roots are dropped by APK packaging unless they carry a
+        # placeholder; a missing /mnt boots to a blank screen.
+        for d in n mnt mnt/llm tmp; do
+          if [ ! -f "$ASSETS/$d/KEEPDIR" ]; then
+            echo "::error::$ASSETS/$d/KEEPDIR missing — mount root would not ship"
+            exit 1
+          fi
+        done
         DIS_COUNT=$(find "$ASSETS/dis" -name '*.dis' | wc -l)
         echo "dis/ files staged: $DIS_COUNT"
         test "$DIS_COUNT" -gt 100 || { echo "::error::suspiciously few .dis files"; exit 1; }
@@ -183,11 +191,12 @@ jobs:
     # ─────────────────────────────────────────────
     # Gradle assemble — produces app-debug.apk.
     #
-    # JDK 17 is mandatory for AGP 8.7 (the gradle.properties pin). The
-    # actions/setup-java action wires JAVA_HOME automatically. The
-    # Android SDK comes from setup-android, which installs platforms;35
-    # + build-tools;35.0.0 — that pair matches what
-    # android-app/app/build.gradle.kts compiles against.
+    # JDK 17 is mandatory for AGP 8.13 (the version pinned in
+    # android-app/build.gradle.kts). The actions/setup-java action wires
+    # JAVA_HOME automatically. The Android SDK comes from setup-android,
+    # which installs platforms;36 + build-tools;36.0.0 — that pair matches
+    # the compileSdk/targetSdk 36 (Android 16) android-app/app/build.gradle.kts
+    # compiles against.
     #
     # The local-property pattern (write a local.properties file with
     # sdk.dir=...) is the standard way to tell Gradle where the SDK
@@ -196,15 +205,15 @@ jobs:
     # set both.
     # ─────────────────────────────────────────────
     - name: Set up JDK 17
-      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
       with:
         distribution: temurin
         java-version: '17'
 
     - name: Set up Android SDK
-      uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
       with:
-        packages: 'platforms;android-35 build-tools;35.0.0'
+        packages: 'platforms;android-36 build-tools;36.0.0'
 
     - name: Cache Gradle
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -233,14 +242,14 @@ jobs:
         echo "APK OK"
 
     - name: Upload libemu.so
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: libemu-arm64
         path: android-app/app/src/main/jniLibs/arm64-v8a/libemu.so
         retention-days: 14
 
     - name: Upload debug APK
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: infernode-debug-apk
         path: android-app/app/build/outputs/apk/debug/app-debug.apk
@@ -263,9 +272,14 @@ jobs:
   #     the onCreate crash fires, Android instantly restarts the
   #     activity, so `pidof` reports a live PID even on the broken build.
   #     A liveness check would falsely pass; the signature is definitive.
+  #
+  # The emulator runs API 36 (Android 16) — the level the app now targets.
+  # That is deliberate: the targetSdk 36 behaviour changes (mandatory
+  # edge-to-edge, predictive back) only bite on an Android 16 image, so a
+  # smoke test on an older image would not exercise them.
   # ─────────────────────────────────────────────
   android-smoke:
-    name: Emulator launch smoke (x86_64, fresh-install perms)
+    name: Emulator launch smoke (x86_64, API 36, fresh-install perms)
     needs: android-apk-staging
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -277,7 +291,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Download debug APK
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: infernode-debug-apk
         path: apk
@@ -296,7 +310,7 @@ jobs:
     - name: Launch smoke test on x86_64 emulator
       uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
       with:
-        api-level: 34
+        api-level: 36
         arch: x86_64
         target: google_apis
         force-avd-creation: false
@@ -309,7 +323,7 @@ jobs:
 
     - name: Upload launch log
       if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: android-smoke-launch-log
         path: launch.log

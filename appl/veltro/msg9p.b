@@ -504,6 +504,10 @@ handlectl(data: string): string
 # source and original id. Nothing is sent until a trusted controller consumes
 # the immutable pending request through /mnt/msg/approve.
 
+# What a writer that got the form wrong needs to know: an agent drafting a
+# new email tried it here, again and again, from "unsafe source name".
+DRAFTHOW: con " (a draft is a reply to a message here: its first line is the message's source and its second the message's id, as /mnt/msg/status lists them, then the body; a new message to someone cannot be drafted here)";
+
 queuedraft(data: string): string
 {
 	verr := validreply(data);
@@ -529,15 +533,15 @@ validreply(data: string): string
 	src = msgstrip(src);
 	origid = msgstrip(origid);
 	if(src == "" || origid == "")
-		return "draft: want <srcname>\\n<origid>\\n<body>";
+		return "draft: want <srcname>\\n<origid>\\n<body>" + DRAFTHOW;
 	if(!safesrcname(src))
-		return "draft: unsafe source name";
+		return "draft: unsafe source name" + DRAFTHOW;
 	if(hascontrol(origid))
-		return "draft: unsafe message id";
+		return "draft: unsafe message id" + DRAFTHOW;
 	for(sl := sources; sl != nil; sl = tl sl)
 		if((hd sl).name == src)
 			return nil;
-	return "draft: no source: " + src;
+	return "draft: no source: " + src + DRAFTHOW;
 }
 
 genpending(): string
@@ -547,9 +551,31 @@ genpending(): string
 		ps := hd p;
 		(src, r1) := splitfirst(ps.data, '\n');
 		(origid, body) := splitfirst(r1, '\n');
-		result += sys->sprint("%d %s %s %d\n", ps.id, msgstrip(src), msgstrip(origid), len body);
+		result += sys->sprint("%d %s %s %d %s\n", ps.id, msgstrip(src),
+			msgstrip(origid), len body, pendingescape(body));
 	}
 	return result;
+}
+
+# Lossless single-line rendering for the trusted approval surface.  Length
+# alone made equal-sized proposals indistinguishable to the approver.
+pendingescape(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		case c := s[i] {
+		'\\' => out += "\\\\";
+		'\n' => out += "\\n";
+		'\r' => out += "\\r";
+		'\t' => out += "\\t";
+		* =>
+			if(c < ' ' || c == 16r7f)
+				out += sys->sprint("\\x%.2ux", c);
+			else
+				out += s[i:i+1];
+		}
+	}
+	return out;
 }
 
 approvalid(data, verb: string): (int, string)

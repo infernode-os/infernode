@@ -11,7 +11,9 @@ Rcmd: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-DEFAULTALG := "none";
+DEFAULTALG := "aes_256_cbc sha256";
+Rstyx2 := "!rstyx2";
+Rstyx2ok := "OK rstyx2\n";
 sys: Sys;
 auth: Auth;
 
@@ -24,11 +26,14 @@ init(nil: ref Draw->Context, argv: list of string)
 	arg->init(argv);
 	alg: string;
 	doauth := 1;
-	exportpath := "/";
+	legacy := 0;
+	exportpath: string;
 	keyfile: string;
-	arg->setusage("rcmd [-A] [-f keyfile] [-a alg] [-e exportpath] tcp!mach cmd");
+	arg->setusage("rcmd [-1A] [-f keyfile] [-a alg] [-e exportpath] tcp!mach cmd");
 	while((o := arg->opt()) != 0)
 		case o {
+		'1' =>
+			legacy = 1;
 		'a' =>
 			alg = arg->earg();
 		'A' =>
@@ -103,16 +108,73 @@ init(nil: ref Draw->Context, argv: list of string)
 			raise "fail:auth failed";
 		}
 	}
-	t := array of byte sys->sprint("%d\n%s\n", len (array of byte args)+1, args);
+	wargs := args;
+	if(!legacy)
+		wargs = Rstyx2 + " " + args;
+	t := array of byte sys->sprint("%d\n%s\n", len (array of byte wargs)+1, wargs);
 	if(sys->write(fd, t, len t) != len t){
 		sys->fprint(stderr(), "rcmd: cannot write arguments: %r\n");
 		raise "fail:bad arg write";
 	}
+	if(!legacy)
+		expectack(fd);
 
-	if(sys->export(fd, exportpath, sys->EXPWAIT) < 0) {
+	private := 0;
+	if(exportpath == nil){
+		if(sys->pctl(Sys->FORKNS, nil) < 0)
+			error(sys->sprint("cannot fork export namespace: %r"));
+		exportpath = mkexportroot();
+		private = 1;
+	}
+	rc := sys->export(fd, exportpath, sys->EXPWAIT);
+	if(private)
+		rmexportroot(exportpath);
+	if(rc < 0) {
 		sys->fprint(stderr(), "rcmd: export: %r\n");
 		raise "fail:export failed";
 	}
+}
+
+expectack(fd: ref Sys->FD)
+{
+	b := array[len Rstyx2ok] of byte;
+	if(sys->readn(fd, b, len b) != len b || string b != Rstyx2ok)
+		error("server rejected request before export");
+}
+
+mkexportroot(): string
+{
+	base := "/tmp/rcmd-export-" + string sys->pctl(0, nil) + "-" + string sys->millisec();
+	root := base;
+	for(i := 0; i < 10; i++){
+		if(i > 0)
+			root = base + "-" + string i;
+		fd := sys->create(root, Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil)
+			continue;
+		fd = nil;
+		fd = sys->create(root + "/dev", Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil){
+			sys->remove(root);
+			continue;
+		}
+		fd = nil;
+		if(sys->bind("/dev", root + "/dev", Sys->MREPL) < 0){
+			sys->remove(root + "/dev");
+			sys->remove(root);
+			continue;
+		}
+		return root;
+	}
+	error(sys->sprint("cannot make private export root: %r"));
+	return nil;
+}
+
+rmexportroot(root: string)
+{
+	sys->unmount(nil, root + "/dev");
+	sys->remove(root + "/dev");
+	sys->remove(root);
 }
 
 exists(f: string): int

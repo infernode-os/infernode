@@ -5,8 +5,9 @@
 #
 # Designed to run from .github/workflows/analytics.yml (daily cron) or
 # locally with `GH_TOKEN=$(gh auth token) python3 tools/github-analytics.py`.
-# Stdlib only; no pip install. The traffic endpoints require a token
-# with push access — the workflow's default GITHUB_TOKEN has it.
+# Stdlib only; no pip install. The traffic endpoints require the
+# Administration (read) permission, which the workflow's GITHUB_TOKEN
+# cannot have; the workflow passes a fine-grained PAT (ANALYTICS_TOKEN).
 #
 # Output:
 #   analytics/snapshots.jsonl  — append-only, one JSON line per day.

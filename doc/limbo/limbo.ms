@@ -411,6 +411,7 @@ special characters:
 \f(CW\ef\fR		form feed (FF)
 \f(CW\er\fR		carriage return (CR)
 \f(CW\eu\fIdddd	\fRUnicode character named by 4 hexadecimal digits
+\f(CW\eU\fIdddddddd	\fRUnicode character named by 8 hexadecimal digits, up to \f(CW0010FFFF\fR
 \f(CW\e0\fR		NUL
 .DE
 Character constants have type

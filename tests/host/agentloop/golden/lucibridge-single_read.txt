@@ -1,0 +1,22 @@
+# lucibridge single_read
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_single_read_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_single_read_0_0:
+  |     1	alpha
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:single_read go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Read it.
+  | 

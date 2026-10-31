@@ -23,7 +23,7 @@ struct
 	Atidle*	idletasks;
 } isched;
 
-int	bflag;
+int	bflag = 1;	/* JIT array bounds checks; emu -B clears it */
 int	cflag;
 uvlong	gcbusy;
 uvlong	gcidle;
@@ -84,6 +84,24 @@ nprog(void)
 	return n;
 }
 
+/*
+ * The heap's activity (heapactivity) when the idle collector last went
+ * round it all.  Going round again finds nothing new while nothing has
+ * been allocated or freed since, and a heap of a few hundred MB (a web
+ * page laid out) took a core to do it, over and over, for as long as
+ * the emulator sat idle.
+ *
+ * Going round is counted over however many idle moments it takes, while
+ * the heap does not change between them (idlemark, idlefrom): a program
+ * that wakes now and then to do nothing (Charon's) cuts each moment
+ * short, and counted afresh in each one the three colours were never
+ * reached, so the collector went round for ever.
+ */
+static ulong idleseen;
+static int idleknown;
+static ulong idlemark;	/* the heap's activity when idlefrom was taken */
+static int idlefrom;	/* gccolor then */
+
 static void
 execatidle(void)
 {
@@ -91,12 +109,18 @@ execatidle(void)
 
 	if(tready(nil))
 		return;
+	if(idleknown && heapactivity() == idleseen)
+		return;
+	if(heapactivity() != idlemark) {
+		idlemark = heapactivity();
+		idlefrom = gccolor;
+	}
 
 	gcidle++;
 	up->type = IdleGC;
 	up->iprog = nil;
 	addrun(up->prog);
-	done = gccolor+3;
+	done = idlefrom+3;
 	while(gccolor < done && gcruns()) {
 		if(isched.vmq != nil || isched.runhd != isched.runtl) {
 			gcpartial++;
@@ -107,6 +131,11 @@ execatidle(void)
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
 	}
+	if(gccolor >= done) {	/* all the way round since the heap last changed */
+		idleseen = heapactivity();
+		idleknown = 1;
+	}
+	idlemark = heapactivity();	/* what this pass freed is not a change */
 	up->type = Interp;
 	delrunq(up->prog);
 }
@@ -207,14 +236,11 @@ delprog(Prog *p, char *msg)
 
 	tellsomeone(p, msg);	/* call before being removed from prog list */
 
-	o = p->osenv;
-	release();
-	closepgrp(o->pgrp);
-	closefgrp(o->fgrp);
-	closeegrp(o->egrp);
-	closesigs(o->sigs);
-	acquire();
-
+	/*
+	 * Unlink p before closing its groups with the VM released:
+	 * devprog finds Progs by pid, through the list or their prog
+	 * group, holding the VM, and reads their groups (INFR-373).
+	 */
 	delgrp(p);
 
 	if(p->prev)
@@ -231,6 +257,14 @@ delprog(Prog *p, char *msg)
 	if(*ph == nil)
 		panic("lost pid");
 	*ph = p->pidlink;
+
+	o = p->osenv;
+	release();
+	closepgrp(o->pgrp);
+	closefgrp(o->fgrp);
+	closeegrp(o->egrp);
+	closesigs(o->sigs);
+	acquire();
 
 	if(p == isched.runhd) {
 		isched.runhd = p->link;
@@ -345,10 +379,21 @@ exprog(Prog *p, char *exc)
 	return 1;
 }
 
+/*
+ * The group's other Progs are taken by pid and each looked up again
+ * before it is touched, as killgrp does.  killprog can release the VM
+ * (delprog does, to close the Prog's groups), and other threads run
+ * meanwhile: any Prog of the group may exit and be freed then, the
+ * leader too.  Walking grpnext across a killprog wrote into such a freed
+ * Prog (its grpnext, through delgrp), corrupting whatever had been
+ * allocated there: emu died now and then in poolfree, a block's
+ * neighbour no longer a block.
+ */
 static void
 propex(Prog *p, char *estr)
 {
-	Prog *f, *nf, *pgl;
+	Prog *f, *pgl;
+	int i, n, gid, ppid, pglpid, propagate, *pids;
 
 	if(!(p->flags & (Ppropagate|Pnotifyleader)) || p->group == nil)
 		return;
@@ -362,18 +407,35 @@ propex(Prog *p, char *estr)
 		pgl = p;
 	if(!(pgl->flags & (Ppropagate|Pnotifyleader)))
 		return;	/* exceptions are local; don't propagate */
-	for(f = p->group->head; f != nil; f = nf){
-		nf = f->grpnext;
-		if(f != p && f != pgl){
-			if(pgl->flags & Ppropagate)
-				exprog(f, estr);
-			else{
-				f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
-				killprog(f, "killed");
-			}
+	propagate = pgl->flags & Ppropagate;
+	gid = p->group->id;
+	ppid = p->pid;
+	pglpid = pgl->pid;
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		n++;
+	pids = malloc(n*sizeof(int));
+	if(pids == nil){
+		print("propex: no memory to propagate \"%s\" from %d\n", estr, ppid);
+		return;
+	}
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		if(f->pid != ppid && f->pid != pglpid)
+			pids[n++] = f->pid;
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f == nil || f->group == nil || f->group->id != gid)
+			continue;	/* gone, or in a group of its own now */
+		if(propagate)
+			exprog(f, estr);
+		else{
+			f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
+			killprog(f, "killed");
 		}
 	}
-	if(p != pgl)
+	free(pids);
+	if(pglpid != ppid && (pgl = progpid(pglpid)) != nil)
 		exprog(pgl, estr);
 }
 
@@ -433,11 +495,16 @@ killprog(Prog *p, char *cause)
 		return 0;
 	}
 
+	/*
+	 * Exiting before propex: killing the group's others can release the
+	 * VM (delprog), and a killprog or exprog of p from another thread
+	 * then must leave p alone, not free it or queue it to run again.
+	 */
+	p->state = Pexiting;
 	propex(p, "killed");
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
 
-	p->state = Pexiting;
 	gclock();
 	destroystack(&p->R);
 	delprog(p, msg);
@@ -550,10 +617,31 @@ printgrp(Prog *p, char *v)
 	print("]\n");
 }
 
+/*
+ * The group with id gid, found through those of pids still in it; nil
+ * once none is.  A group is freed with its last Prog (delgrp), and
+ * killprog can release the VM (delprog), so killgrp holds the group by
+ * id, not by pointer: killing every Prog of another's group, it freed
+ * the group and then cleared Pkilled in what had been allocated there.
+ */
+static Progs*
+grpbyid(int gid, int *pids, int npid)
+{
+	int i;
+	Prog *f;
+
+	for(i = 0; i < npid; i++){
+		f = progpid(pids[i]);
+		if(f != nil && f->group != nil && f->group->id == gid)
+			return f->group;
+	}
+	return nil;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
-	int i, npid, *pids;
+	int i, npid, *pids, pid, gid;
 	Prog *f;
 	Progs *g;
 
@@ -561,9 +649,14 @@ killgrp(Prog *p, char *msg)
 	g = p->group;
 	if(g == nil || g->head == nil)
 		return 0;
+	pid = p->pid;
+	gid = g->id;
 	while(g->flags & Pkilled){
 		release();
 		acquire();
+		/* p, and its group, may be gone */
+		if((p = progpid(pid)) == nil || (g = p->group) == nil || g->id != gid || g->head == nil)
+			return 0;
 	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
@@ -580,7 +673,8 @@ killgrp(Prog *p, char *msg)
 		pids[npid++] = f->pid;
 	g->flags |= Pkilled;
 	if(waserror()) {
-		g->flags &= ~Pkilled;
+		if((g = grpbyid(gid, pids, npid)) != nil)
+			g->flags &= ~Pkilled;
 		free(pids);
 		nexterror();
 	}
@@ -590,9 +684,80 @@ killgrp(Prog *p, char *msg)
 			killprog(f, msg);
 	}
 	poperror();
-	g->flags &= ~Pkilled;
+	if((g = grpbyid(gid, pids, npid)) != nil)
+		g->flags &= ~Pkilled;
 	free(pids);
 	return 1;
+}
+
+static int
+grptreedescendant(Progs *g, Progs *root)
+{
+	for(; g != nil; g = g->parent)
+		if(g == root)
+			return 1;
+	return 0;
+}
+
+static void
+cleargrptreekilled(int *gids, int n)
+{
+	int i;
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		for(i = 0; i < n; i++)
+			if(f->group != nil && f->group->id == gids[i]){
+				f->group->flags &= ~Pkilled;
+				break;
+			}
+}
+
+/* Kill a cleanup domain, including groups made with NEWPGRP below it. */
+int
+killgrptree(Prog *p, char *msg)
+{
+	int i, n, *gids, *pids;
+	Prog *f;
+	Progs *g;
+
+	g = p->group;
+	if(g == nil)
+		return 0;
+	/*
+	 * Scan the VM's flat Prog list rather than recursing through child groups:
+	 * an adversary can build a deep NEWPGRP chain, and cleanup must not turn
+	 * that into a C-stack overflow.
+	 */
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g))
+			n++;
+	pids = malloc(2*n*sizeof(int));
+	if(pids == nil)
+		error(Enomem);
+	gids = pids+n;
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g)){
+			f->group->flags |= Pkilled;
+			pids[n] = f->pid;
+			gids[n++] = f->group->id;
+		}
+	if(waserror()){
+		cleargrptreekilled(gids, n);
+		free(pids);
+		nexterror();
+	}
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f != nil && f != currun())
+			killprog(f, msg);
+	}
+	poperror();
+	cleargrptreekilled(gids, n);
+	free(pids);
+	return 0;
 }
 
 char	changup[] = "channel hangup";
@@ -807,6 +972,12 @@ m(Prog *p)
  * culprit when starvation is detected.
  */
 Proc*	vmowner;
+/*
+ * where a proc is in native code: its program counter, from a host that
+ * can interrupt it (the profiler's view of compiled code, whose R.PC is
+ * not kept as it runs); nil where the host cannot
+ */
+uintptr	(*hostprocpc)(Proc*);
 char	vmownertext[KNAMELEN];
 ulong	vmownerms;
 
@@ -879,8 +1050,11 @@ acquire(void)
 	vmsetowner();
 
 	if(up->type == Interp) {
+		lock(&up->rlock);	/* with swiproc */
 		p = up->iprog;
 		up->iprog = nil;
+		up->intpend = 0;	/* a kill pending for p is p's, not the next Prog's */
+		unlock(&up->rlock);
 		irestore(p);
 	}
 	else
@@ -1054,11 +1228,11 @@ disfault(void *reg, char *msg)
 
 	if(up == nil) {
 		print("EMU: faults: %s\n", msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->type != Interp) {
 		print("SYS: process %s faults: %s\n", up->text, msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->nlocks > 0) {
 		/*
@@ -1081,6 +1255,69 @@ disfault(void *reg, char *msg)
 	/* cause an exception in the dis prog.  As for error(), but Plan 9 needs reg*/
 	kstrcpy(up->env->errstr, msg, ERRMAX);
 	oslongjmp(reg, up->estack[--up->nerr], 1);
+}
+
+/*
+ * A memory fault at this address is a Limbo nil dereference: Dis's nil
+ * (H) is -1, and a field of a nil ref adt is a small offset from 0.
+ */
+int
+isnilfault(uintptr addr)
+{
+	return addr == ~(uintptr)0 || addr < 512;
+}
+
+/*
+ * A fault in JIT-compiled code, before it becomes the program's
+ * exception; 1 if pc is in the running module's compiled code.  The JIT keeps R.PC only around calls, so at a fault it
+ * still names the last call, and handler() searched the exception
+ * tables at that place, not at the faulting instruction: a nil load
+ * inside a {...} exception block was not caught and the program died
+ * Broken.  The interpreter keeps R.PC current, so -c0 was right and
+ * -c1 was not.  os/arm64/trap.c does the same for bare metal (#753).
+ *
+ * handler() takes R.PC as a return address and looks one byte back,
+ * so R.PC is set just past the faulting instruction: the next word on
+ * the fixed-width ISAs, which keeps it aligned, and one byte on x86.
+ * A fault outside the running module's compiled code (in emu itself,
+ * in a builtin) leaves R.PC alone.
+ *
+ * R.FP is stale in the same way: compiled code keeps the Dis frame
+ * pointer in a register and stores it to R only where it leaves the
+ * compiled code, not at a call.  A fault in a function called from
+ * compiled code had handler() start from the caller's frame with the
+ * callee's pc; it unwound to the wrong handler and freed the wrong
+ * frames ("alloc:D2B", or a SEGV), where -c0 caught the exception.
+ * jitfaultfp sets R.FP as well, from the register the JIT keeps it
+ * in, where the trap handler can read it from the fault's context;
+ * jitfault, for one that cannot, leaves R.FP as it is.
+ */
+int
+jitfault(uintptr pc)
+{
+	return jitfaultfp(pc, 0);
+}
+
+int
+jitfaultfp(uintptr pc, uintptr fp)
+{
+	Modlink *ml;
+
+	if(up == nil || up->type != Interp)
+		return 0;
+	ml = R.M;
+	if(ml == nil || ml == H || !ml->compiled || ml->m == nil)
+		return 0;
+	if(pc < (uintptr)ml->prog || pc - (uintptr)ml->prog >= ml->m->jitsize)
+		return 0;
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+	R.PC = (Inst*)(pc + 1);
+#else
+	R.PC = (Inst*)(pc + 4);
+#endif
+	if(fp != 0)
+		R.FP = (uchar*)fp;
+	return 1;
 }
 
 void
@@ -1140,7 +1377,7 @@ vmachine(void *a)
 			up->env = &up->defenv;
 		}
 		if(isched.runhd != nil)
-		if((++gccounter&0xFF) == 0 || memlow()) {
+		if((++gccounter&0xFF) == 0 || memlowpass(gccounter)) {
 			gcbusy++;
 			up->type = BusyGC;
 			pushrun(up->prog);

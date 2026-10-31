@@ -1,0 +1,10 @@
+# Plumbing rules for tests/host/xenith_doc_test.sh: a web address to the
+# port web (the test reads it, to see that nothing was sent there); any
+# other text to Xenith.
+kind is text
+data matches 'https?://.*'
+plumb to web
+
+kind is text
+data matches '.*'
+plumb to edit

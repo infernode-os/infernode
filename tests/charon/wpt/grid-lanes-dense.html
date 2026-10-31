@@ -1,0 +1,4 @@
+<!doctype html><title>grid lanes: dense packing puts a later item into the room a spanning item skipped (without it, 30px of red would show in the first lane)</title>
+<style>body{margin:0} .r{position:absolute;left:0;top:0;width:100px;height:100px;background:red;z-index:-1} .c{display:grid-lanes;grid-lanes-pack:dense;flow-tolerance:0;grid-template-columns:50px 50px;width:100px} .c div{background:green}</style>
+<div class=r></div>
+<div class=c><div style="grid-column:1;height:20px"></div><div style="grid-column:2;height:50px"></div><div style="grid-column:span 2;height:50px"></div><div style="height:30px"></div></div>

@@ -12,17 +12,30 @@ TARG=\
 	virgild.dis\
 	sntp.dis\
 	dhcp.dis\
+	wpa.dis\
 
 SYSMODULES=\
+	arg.m\
 	attrdb.m\
 	bufio.m\
 	draw.m\
 	ether.m\
+	factotum.m\
 	ip.m\
 	ipattr.m\
+	keyring.m\
+	security.m\
 	sys.m\
+	wpakey.m\
+	daytime.m\
+	dhcp.m\
+	dial.m\
+	rand.m\
+	timers.m\
 
 DISBIN=$ROOT/dis/ip
+
+MODULES=
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs

@@ -2,8 +2,13 @@ implement Remap;
 
 include "sys.m";
 include "mpegio.m";
+include "i420.m";
 
 Mpegi, YCbCr: import Mpegio;
+
+# the emulator's built-in converter: the same arithmetic in C, some twenty
+# times faster; nil where there is none, and the loop below does it
+i420: I420;
 
 CLOFF: con 255;
 
@@ -19,6 +24,9 @@ init(m: ref Mpegi)
 	w2 = width >> 1;
 	h2 = height >> 1;
 	out = array[3 * width * height] of byte;
+	i420 = nil;
+	if(((width | height) & 1) == 0)
+		i420 = load I420 I420->PATH;
 	b0r1 = array[w2] of int;
 	b1 = array[w2] of int;
 	r0 = array[w2] of int;
@@ -53,6 +61,10 @@ remap(p: ref Mpegio->YCbCr): array of byte
 	Y := p.Y;
 	Cb := p.Cb;
 	Cr := p.Cr;
+	if(i420 != nil) {
+		i420->rgb24(Y, Cb, Cr, width, height, out);
+		return out;
+	}
 	m := 0;
 	n := 0;
 	x := 0;

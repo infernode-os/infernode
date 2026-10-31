@@ -406,6 +406,7 @@ kfwstat(int fd, uchar *buf, int n)
 	}
 	validstat(buf, n);
 	c.c = fdtochan(up->env->fgrp, fd, -1, 1, 1);
+	checkwritable(c.c);
 	n = devtab[c.c->type]->wstat(c.c, buf, n);
 	poperror();
 	cclose(c.c);
@@ -418,8 +419,13 @@ bindmount(Chan *c, char *old, int flag, char *spec)
 	int ret;
 	volatile struct { Chan *c; } c1;
 
-	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER))
+	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER) ||
+	   (flag&(MCREATE|MREADONLY)) == (MCREATE|MREADONLY))
 		error(Ebadarg);
+	if(c->mflag & MREADONLY){
+		flag &= ~MCREATE;
+		flag |= MREADONLY;
+	}
 
 	c1.c = namec(old, Amount, 0, 0);
 	if(waserror()){
@@ -772,7 +778,7 @@ validstat(uchar *s, int n)
 	int m;
 	char buf[64];
 
-	if(statcheck(s, n) < 0)
+	if(n < 0 || statcheckbuf(s, n) != n)
 		error(Ebadstat);
 	/* verify that name entry is acceptable */
 	s += STATFIXLEN - 4*BIT16SZ;	/* location of first string */
@@ -890,6 +896,7 @@ kwstat(char *path, uchar *buf, int n)
 	}
 	validstat(buf, n);
 	c.c = namec(path, Aaccess, 0, 0);
+	checkwritable(c.c);
 	n = devtab[c.c->type]->wstat(c.c, buf, n);
 	poperror();
 	cclose(c.c);
@@ -1015,8 +1022,8 @@ dirpackage(uchar *buf, long ts, Dir **d)
 	ss = 0;
 	n = 0;
 	for(i = 0; i < ts; i += m){
-		m = BIT16SZ + GBIT16(&buf[i]);
-		if(statcheck(&buf[i], m) < 0)
+		m = statcheckbuf(&buf[i], ts - i);
+		if(m < 0)
 			break;
 		ss += m;
 		n++;

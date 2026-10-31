@@ -7,6 +7,7 @@ include "draw.m";
 	Image, Font, Rect, Point, Display, Screen, Pointer: import draw;
 include "wmclient.m";
 include "menuhit.m";
+include "lucitheme.m";
 
 
 Margin : con 4;
@@ -39,14 +40,43 @@ init(w: ref Wmclient->Window)
 }
 
 
+# The theme's menu colours (menubg, menuborder, menuhilit, menutext),
+# read as each menu opens so a theme switched since is followed;
+# without the theme module, menuhit.c's.  The chosen item's text is
+# the menu's text if it reads on the highlight, else black or white.
 menucolors()
 {
-	back = display.colormix(Draw->Palegreen, Draw->White);
-	high = display.color(Draw->Darkgreen);
-	bord = display.color(Draw->Medgreen);
-	text = display.color(Draw->Black);
-	htext = display.color(Draw->White);
-	return;
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme == nil){
+		back = display.colormix(Draw->Palegreen, Draw->White);
+		high = display.color(Draw->Darkgreen);
+		bord = display.color(Draw->Medgreen);
+		text = display.color(Draw->Black);
+		htext = display.color(Draw->White);
+		return;
+	}
+	th := lucitheme->gettheme();
+	back = display.color(th.menubg);
+	high = display.color(th.menuhilit);
+	bord = display.color(th.menuborder);
+	text = display.color(th.menutext);
+	ht := th.menutext;
+	if(dark(th.menuhilit) == dark(th.menutext)){
+		if(dark(th.menuhilit))
+			ht = int 16rFFFFFFFF;
+		else
+			ht = int 16r000000FF;
+	}
+	htext = display.color(ht);
+}
+
+# a colour (RRGGBBAA) darker than mid grey
+dark(c: int): int
+{
+	r := (c >> 24) & 16rFF;
+	g := (c >> 16) & 16rFF;
+	b := (c >> 8) & 16rFF;
+	return 299*r + 587*g + 114*b < 128*1000;
 }
 
 menurect(r: Rect, i: int): Rect
@@ -145,12 +175,18 @@ menuhit(but: int, mc: ref Mousectl, menu: ref Menu, scr: ref Screen):int
 	i, nitem, nitemdrawn, maxwid, lasti, off, noff, wid, screenitem: int;
 	scrolling: int;
 	r, menur, sc, textr, scrollr: Rect;
+
+	# but is a button's number (1, 2, 3).  Callers that pass the
+	# pointer's buttons instead (lens, clock, scene, view, colours)
+	# give 4 for button 3: watching bit 1<<3 the menu ended at once,
+	# choosing whatever item was under the pointer.
+	if(but == 4)
+		but = 3;
 	b, save, backup: ref Image;
 	pt: Point;
 	item: string;
 	
-	if(back == nil)
-		menucolors();
+	menucolors();
 	screen := window.screen.image;
 	sc = screen.clipr;
 #	replclipr(screen, 0, screen.r);

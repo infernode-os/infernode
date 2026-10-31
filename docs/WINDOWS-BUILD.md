@@ -111,9 +111,9 @@ Or with the shell profile loaded (sets up PATH, creates `/tmp`, etc.):
 .\emu\Nt\o.emu.exe -g 1024x768 -r . sh -l -c xenith
 ```
 
-### Lucifer (GUI build)
+### Lucia (GUI build)
 
-Lucifer is a three-zone AI interface (conversation, presentation, context) designed for human-AI collaboration. Launch it the same way as on macOS and Linux — direct `emu` against the canonical boot script:
+Lucia is a three-zone AI interface (conversation, presentation, context) designed for human-AI collaboration. Launch it the same way as on macOS and Linux — direct `emu` against the canonical boot script:
 
 ```powershell
 .\emu\Nt\o.emu.exe -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r%CD% sh -l /lib/lucifer/boot.sh

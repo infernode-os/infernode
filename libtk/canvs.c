@@ -121,6 +121,12 @@ tkcvsf2i(Tk *tk, TkCanvas *tkc)
 
 }
 
+static TkEbind cvsbinds[] =
+{
+	{TkButton4P,	"%W yview scroll -1 wheel"},
+	{TkButton5P,	"%W yview scroll 1 wheel"},
+};
+
 char*
 tkcanvas(TkTop *t, char *arg, char **ret)
 {
@@ -160,6 +166,12 @@ tkcanvas(TkTop *t, char *arg, char **ret)
 		e = TkBadwp;
 		goto err;
 	}
+
+	/* the wheel scrolls it (within its scrollregion; an app's own
+	 * binding for the wheel replaces these) */
+	e = tkbindings(t, tk, cvsbinds, nelem(cvsbinds));
+	if(e != nil)
+		goto err;
 
 	tkc->current = tkmkname("current");
 	if(tkc->current == nil) {
@@ -309,6 +321,31 @@ tkcvsconf(Tk *tk, char *arg, char **val)
 	tkbbmax(&c->update, &c->region);
 	tk->dirty = tkrect(tk, 1);
 	return nil;
+}
+
+/*
+ * A theme switch (retheme): an item given a colour of its own has its
+ * own copy of the environment, made when the option was set, with the
+ * theme's other colours as they were then -- a rectangle given -fill
+ * kept the old theme's outline.  Refresh those copies as retheme does a
+ * widget's (the colours an option set are kept) and repaint it all.
+ */
+void
+tkcvsretheme(Tk *tk)
+{
+	TkCanvas *c;
+	TkCitem *i;
+	Rectangle r;
+
+	c = TKobj(TkCanvas, tk);
+	for(i = c->head; i != nil; i = i->next)
+		if(i->env != nil && i->env != tk->env)
+			tksetenvcolours(i->env);
+	r.min = c->view;
+	r.max.x = r.min.x+tk->act.width;
+	r.max.y = r.min.y+tk->act.height;
+	tkbbmax(&c->update, &r);
+	tkbbmax(&c->update, &c->region);
 }
 
 void
@@ -1901,6 +1938,8 @@ tkcvsview(Tk *tk, char *arg, char **val, int nl, int *posn, int min, int max, in
 		tkword(t, arg, buf, buf+sizeof(buf), nil);
 		if(buf[0] == 'p')		/* Pages */
 			amount = amount * nl * 9 /10;
+		else if(buf[0] == 'w')		/* Wheel ticks: a tenth of the view */
+			amount = amount * nl / 10;
 		else if (inc > 0)
 			amount *= inc;
 		else

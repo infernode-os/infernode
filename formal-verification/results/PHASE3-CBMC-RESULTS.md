@@ -17,7 +17,7 @@ The critical implementation properties of the Inferno namespace system have been
 
 **Properties Verified**:
 
-#### MOUNTH Macro Bounds (dat.h:257)
+#### MOUNTH Macro Bounds (dat.h:257; now dat.h:275)
 ```c
 #define MOUNTH(p,qid) ((p)->mnthash[(qid).path&((1<<MNTLOG)-1)])
 ```

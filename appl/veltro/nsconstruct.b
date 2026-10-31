@@ -25,6 +25,7 @@ include "draw.m";
 include "nsconstruct.m";
 
 include "cowfs.m";
+include "daytime.m";
 
 include "keyring.m";
 	kr: Keyring;
@@ -63,6 +64,19 @@ init()
 # Creates a shadow dir with only the allowed items, then replaces target
 restrictdir(target: string, allowed: list of string, writable: int): string
 {
+	return restrictdirx(target, allowed, writable, !writable);
+}
+
+# Filter a directory without claiming its existing entries are read-only.
+# This is for writable file protocols such as /mnt services and /tool.
+filterdir(target: string, allowed: list of string, creatable: int): string
+{
+	return restrictdirx(target, allowed, creatable, 0);
+}
+
+restrictdirx(target: string, allowed: list of string,
+	creatable, readonly: int): string
+{
 	if(sys == nil)
 		init();
 
@@ -92,7 +106,12 @@ restrictdir(target: string, allowed: list of string, writable: int): string
 			dfd := sys->create(dstpath, Sys->OREAD, DIR_MODE);
 			if(dfd != nil)
 				dfd = nil;
-			sys->bind(srcpath, dstpath, Sys->MREPL);
+			rootflags := Sys->MREPL;
+			if(creatable)
+				rootflags |= Sys->MCREATE;
+			else if(readonly)
+				rootflags |= Sys->MREADONLY;
+			sys->bind(srcpath, dstpath, rootflags);
 		} else {
 			# Check if source exists and get type
 			(ok, dir) := sys->stat(srcpath);
@@ -116,18 +135,22 @@ restrictdir(target: string, allowed: list of string, writable: int): string
 			# Without MCREATE on the inner bind, the kernel returns
 			# "mounted directory forbids creation" for any create inside that subdir.
 			innerbindflags := Sys->MREPL;
-			if(writable)
+			if(creatable)
 				innerbindflags |= Sys->MCREATE;
+			else if(readonly)
+				innerbindflags |= Sys->MREADONLY;
 			if(sys->bind(srcpath, dstpath, innerbindflags) < 0)
 				return sys->sprint("cannot bind %s: %r", srcpath);
 		}
 	}
 
-	# Replace target with shadow — only allowed items visible.
-	# MCREATE allows file creation at the mount point (needed for /tmp).
+	# MCREATE controls new directory entries; MREADONLY separately prevents
+	# mutation of existing entries reached through the restricted view.
 	bindflags := Sys->MREPL;
-	if(writable)
+	if(creatable)
 		bindflags |= Sys->MCREATE;
+	else if(readonly)
+		bindflags |= Sys->MREADONLY;
 	if(sys->bind(shadowdir, target, bindflags) < 0)
 		return sys->sprint("cannot replace %s: %r", target);
 
@@ -136,6 +159,19 @@ restrictdir(target: string, allowed: list of string, writable: int): string
 
 # Apply full namespace restriction policy
 restrictns(caps: ref Capabilities): string
+{
+	return restrictnsx(caps, 0);
+}
+
+# Tool workers must finish every shadow-backed restriction before the final
+# /tmp replacement. Constructing another shadow afterward recreates
+# /tmp/.veltro-ns inside the restricted writable view.
+restricttoolns(caps: ref Capabilities): string
+{
+	return restrictnsx(caps, 1);
+}
+
+restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 {
 	if(sys == nil)
 		init();
@@ -208,17 +244,21 @@ restrictns(caps: ref Capabilities): string
 
 	# 3. Restrict /dev to: cons, null, time
 	# time is read-only clock; required by daytime->now() for TLS cert validation.
-	err = restrictdir("/dev", "cons" :: "null" :: "time" :: nil, 0);
+	err = filterdir("/dev", "cons" :: "null" :: "time" :: nil, 0);
 	if(err != nil)
 		return sys->sprint("restrict /dev: %s", err);
+	if(sys->bind("/dev/time", "/dev/time", Sys->MREPL|Sys->MREADONLY) < 0)
+		return sys->sprint("protect /dev/time: %r");
 
 	# 4-5. Restrict /n to explicitly granted entries only.
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
-	#   /n/speech — "/n/speech" in caps.paths
-	#   /n/wallet — "/n/wallet" in caps.paths
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
+	# NB: speech9p moved to /mnt/speech (INFR-403): a "/mnt/speech" path grant is
+	# handled by the /mnt machinery in step 5b like any other.
+	# NB: wallet9p moved to /mnt/wallet (INFR-400); its filtered view is built
+	# in step 5b.
 	# NB: the LLM (llm9p) and the UI presentation surface (luciuisrv) are no longer
 	# /n entries — their schemas are ours, so they live at /mnt/llm and /mnt/ui
 	# (docs/NAMESPACE-LAYOUT.md, INFR-254). Both are handled by the uniform /mnt
@@ -231,28 +271,6 @@ restrictns(caps: ref Capabilities): string
 		# MCP providers (mc9p, mcp9p adapters) and the LLM (llm9p) mount under
 		# /mnt — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). All
 		# /mnt grants are handled in step 5b below, not here.
-
-		# /n/speech — only if explicitly granted via caps.paths
-		if(inlist("/n/speech", caps.paths)) {
-			(speechok, nil) := sys->stat("/n/speech");
-			if(speechok >= 0)
-				nallow = "speech" :: nallow;
-		}
-
-		# /n/wallet — only if explicitly granted via caps.paths
-		if(inlist("/n/wallet", caps.paths)) {
-			(walletok, nil) := sys->stat("/n/wallet");
-			if(walletok >= 0)
-				nallow = "wallet" :: nallow;
-		}
-
-		# /n/wikia — fixed-function wiki agent service. The wiki tool receives
-		# it per-invocation; generic path grants cannot drive ctl/query directly.
-		if(inlist("wiki", caps.tools)) {
-			(wikiaok, nil) := sys->stat("/n/wikia");
-			if(wikiaok >= 0)
-				nallow = "wikia" :: nallow;
-		}
 
 		# (The UI presentation surface moved to /mnt/ui — granted + sub-restricted
 		# by the uniform /mnt machinery in step 5b, like /mnt/llm and /mnt/mcp.
@@ -275,15 +293,9 @@ restrictns(caps: ref Capabilities): string
 		if(localpaths != nil)
 			nallow = "local" :: nallow;
 
-		err = restrictdir("/n", nallow, 0);
+		err = filterdir("/n", nallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
-
-		if(inlist("/n/wallet", caps.paths)) {
-			werr := restrictwallet();
-			if(werr != nil)
-				return sys->sprint("restrict /n/wallet: %s", werr);
-		}
 
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
@@ -321,6 +333,23 @@ restrictns(caps: ref Capabilities): string
 	# SECURITY INVARIANT: changes here must keep the negative, positive, and
 	# composition cases in tests/veltro_security_test.b in sync.
 	mntpaths := filterpaths(caps.paths, "/mnt/");
+	# Message descendants are separate proposal capabilities but /mnt/msg has
+	# its own protocol-aware filter below. Recursing through them here and then
+	# filtering the service a second time creates inconsistent stacked mounts.
+	# The wallet is one capability: "/mnt/wallet" grants the filtered view
+	# restrictwallet() builds below, and nothing beneath it is a grant of its
+	# own, so a path under it is dropped rather than drilled (INFR-400).
+	mnttop: list of string;
+	for(mp0 := mntpaths; mp0 != nil; mp0 = tl mp0) {
+		if(prefix(hd mp0, "wallet/"))
+			continue;
+		if(prefix(hd mp0, "msg/")) {
+			if(!inlist("msg", mnttop))
+				mnttop = "msg" :: mnttop;
+		} else
+			mnttop = hd mp0 :: mnttop;
+	}
+	mntpaths = mnttop;
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
 	# Matrix is a fixed-function capability. Derive its control filesystem from
@@ -329,6 +358,17 @@ restrictns(caps: ref Capabilities): string
 		(matrixok, nil) := sys->stat("/mnt/matrix");
 		if(matrixok >= 0 && !inlist("matrix", mntpaths))
 			mntpaths = "matrix" :: mntpaths;
+	}
+	# /mnt/wsys — the window manager's window pictures (wmsrv(2) wsys), one
+	# tree per Lucifer activity at /mnt/wsys/<actid>.  Fixed-function: only
+	# the window tool, and only its own activity's tree, which is bound over
+	# /mnt/wsys itself so no other activity is even nameable.
+	if(inlist("window", caps.tools) && caps.actid >= 0) {
+		own := "/mnt/wsys/" + string caps.actid;
+		(wok, nil) := sys->stat(own);
+		if(wok >= 0 && sys->bind(own, "/mnt/wsys", Sys->MREPL) >= 0 &&
+		   !inlist("wsys", mntpaths))
+			mntpaths = "wsys" :: mntpaths;
 	}
 	# GPU inference is fixed-function service authority. The gpu and vision
 	# tools receive it per-invocation; generic path grants cannot.
@@ -345,6 +385,14 @@ restrictns(caps: ref Capabilities): string
 		(gitok, nil) := sys->stat("/mnt/git");
 		if(gitok >= 0 && !inlist("git", mntpaths))
 			mntpaths = "git" :: mntpaths;
+	}
+	# /mnt/wikia — fixed-function wiki agent service (wiki9p; migrated from
+	# /n/wikia per docs/NAMESPACE-LAYOUT.md, INFR-402). The wiki tool receives
+	# it per-invocation; generic path grants cannot drive ctl/query directly.
+	if(inlist("wiki", caps.tools)) {
+		(wikiaok, nil) := sys->stat("/mnt/wikia");
+		if(wikiaok >= 0 && !inlist("wikia", mntpaths))
+			mntpaths = "wikia" :: mntpaths;
 	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
@@ -371,10 +419,16 @@ restrictns(caps: ref Capabilities): string
 		if(facok >= 0 && !inlist("factotum", mntpaths))
 			mntpaths = "factotum" :: mntpaths;
 	}
+	# /mnt/wallet (wallet9p) only if it is mounted, as the old /n/wallet was.
+	if(inlist("wallet", mntpaths)) {
+		(walletok, nil) := sys->stat("/mnt/wallet");
+		if(walletok < 0)
+			mntpaths = dropname("wallet", mntpaths);
+	}
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
 		if(mntok >= 0) {
-			err = restrictpath("/mnt", mntpaths);
+			err = filterpath("/mnt", mntpaths);
 			if(err != nil)
 				return sys->sprint("restrict /mnt: %s", err);
 			keepmnt = 1;
@@ -383,7 +437,7 @@ restrictns(caps: ref Capabilities): string
 				uiallow := "activity" :: nil;
 				if(inlist("task", caps.tools))
 					uiallow = "ctl" :: uiallow;
-				uerr := restrictdir("/mnt/ui", uiallow, 0);
+				uerr := filterdir("/mnt/ui", uiallow, 0);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
 			}
@@ -403,9 +457,20 @@ restrictns(caps: ref Capabilities): string
 					msgallow = "flag" :: msgallow;
 					msgwrite = 1;
 				}
-				merr := restrictdir("/mnt/msg", msgallow, msgwrite);
+				merr: string;
+				if(msgwrite)
+					merr = filterdir("/mnt/msg", msgallow, 1);
+				else
+					merr = restrictdir("/mnt/msg", msgallow, 0);
 				if(merr != nil)
 					return sys->sprint("restrict /mnt/msg: %s", merr);
+			}
+			# /mnt/wallet sub-restriction: accounts, default and network, and
+			# in each account only its proposal and read files.
+			if(inlist("wallet", mntpaths)) {
+				werr := restrictwallet();
+				if(werr != nil)
+					return sys->sprint("restrict /mnt/wallet: %s", werr);
 			}
 		}
 	}
@@ -506,7 +571,9 @@ restrictns(caps: ref Capabilities): string
 
 	# Expose additional Inferno root-level directories from caps.paths.
 	# e.g. "/appl/veltro" → add "appl" to safe, then restrict /appl to "veltro".
-	# Paths under /dis/, /n/, /dev/, /lib/, /tmp/ are already handled above.
+	# Paths under /dis/, /n/, /dev/, /lib/, /tmp/, /mnt/ are already handled
+	# above. /mnt is step 5b's alone: a /mnt path it declined to grant (one
+	# beneath /mnt/wallet, say) must not come back here as an extra root.
 	extradirs: list of string;
 	for(ep := caps.paths; ep != nil; ep = tl ep) {
 		p := hd ep;
@@ -516,7 +583,8 @@ restrictns(caps: ref Capabilities): string
 		if(first == "")
 			continue;
 		# Skip top-level dirs already in safe or handled by steps 1–7
-		if(inlist(first, safe) || first == "net" || first == "net.alt")
+		if(inlist(first, safe) || first == "net" || first == "net.alt" ||
+		   first == "mnt")
 			continue;
 		if(!inlist(first, extradirs))
 			extradirs = first :: extradirs;
@@ -525,7 +593,7 @@ restrictns(caps: ref Capabilities): string
 		safe = (hd ed) :: safe;
 
 	{
-		err = restrictdir("/", safe, 0);
+		err = filterdir("/", safe, 0);
 	} exception e {
 	"*" =>
 		return sys->sprint("restrictdir / exception: %s", e);
@@ -538,13 +606,14 @@ restrictns(caps: ref Capabilities): string
 	# trusted /mnt/toolctl* alias outside the restricted root.
 	(toolok, nil) := sys->stat("/tool");
 	if(toolok >= 0) {
-		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
+		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" ::
+			"budget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
 			if(!inlist(hd tl2, toolallow))
 				toolallow = hd tl2 :: toolallow;
-		terr := restrictdir("/tool", toolallow, 0);
+		terr := filterdir("/tool", toolallow, 0);
 		if(terr != nil)
 			return sys->sprint("restrict /tool: %s", terr);
 	}
@@ -610,6 +679,11 @@ restrictns(caps: ref Capabilities): string
 	err = restrictdir("/tmp/veltro", tmpveltroallow(caps), 1);
 	if(err != nil)
 		return sys->sprint("restrict /tmp/veltro: %s", err);
+	if(hidemetadata) {
+		err = restrictdir("/tmp/veltro/.ns", nil, 0);
+		if(err != nil)
+			return sys->sprint("hide namespace manifest: %s", err);
+	}
 
 	# Provenance (INFR-355): record this restriction while the trusted
 	# /tmp/.veltro-ns tree is still reachable (step 10 hides it). The
@@ -618,11 +692,14 @@ restrictns(caps: ref Capabilities): string
 	# above, so the record comes from inside the restricted namespace.
 	# ops are consumed newest-first (emitauditlog reverses them).
 	auditops := "restrict /tmp -> veltro (final, after this manifest)" ::
+		"effectivepath=/tmp/veltro/scratch perm=cow" ::
 		("shellcmds=" + joincsv(caps.shellcmds)) ::
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
-	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd) != 0 &&
+	if(hidemetadata)
+		auditops = "restrict /tmp/veltro/.ns -> empty" :: auditops;
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd, 0) != 0 &&
 	   auditrequired)
 		return "required namespace audit write failed";
 	auditfd = nil;
@@ -707,7 +784,7 @@ restrictwallet(): string
 		if(!inlist(hd a, allow))
 			allow = hd a :: allow;
 
-	err := restrictdir("/n/wallet", allow, 0);
+	err := filterdir("/mnt/wallet", allow, 0);
 	if(err != nil)
 		return err;
 
@@ -718,7 +795,7 @@ restrictwallet(): string
 	acctallow := "address" :: "balance" :: "chain" ::
 		"pay" :: "authorize" :: "history" :: nil;
 	for(a = accts; a != nil; a = tl a) {
-		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);
+		err = restrictdir("/mnt/wallet/" + hd a, acctallow, 1);
 		if(err != nil)
 			return err;
 	}
@@ -727,7 +804,7 @@ restrictwallet(): string
 
 walletaccounts(): list of string
 {
-	fd := sys->open("/n/wallet/accounts", Sys->OREAD);
+	fd := sys->open("/mnt/wallet/accounts", Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	buf := array[8192] of byte;
@@ -761,6 +838,16 @@ safename(s: string): int
 # then recurses for deeper components.
 restrictpath(dir: string, paths: list of string): string
 {
+	return restrictpathx(dir, paths, 1);
+}
+
+filterpath(dir: string, paths: list of string): string
+{
+	return restrictpathx(dir, paths, 0);
+}
+
+restrictpathx(dir: string, paths: list of string, readonly: int): string
+{
 	# Pass 1: collect unique first components
 	allow: list of string;
 	for(p := paths; p != nil; p = tl p) {
@@ -770,7 +857,11 @@ restrictpath(dir: string, paths: list of string): string
 	}
 
 	# Restrict this level (read-only — /n/local paths are read-only by default)
-	err := restrictdir(dir, allow, 0);
+	err: string;
+	if(readonly)
+		err = restrictdir(dir, allow, 0);
+	else
+		err = filterdir(dir, allow, 0);
 	if(err != nil)
 		return err;
 
@@ -784,7 +875,7 @@ restrictpath(dir: string, paths: list of string): string
 				subpaths = rest :: subpaths;
 		}
 		if(subpaths != nil) {
-			serr := restrictpath(dir + "/" + name, subpaths);
+			serr := restrictpathx(dir + "/" + name, subpaths, readonly);
 			if(serr != nil)
 				return serr;
 		}
@@ -800,6 +891,15 @@ inlist(s: string, l: list of string): int
 		if(hd l == s)
 			return 1;
 	return 0;
+}
+
+dropname(s: string, l: list of string): list of string
+{
+	out: list of string;
+	for(; l != nil; l = tl l)
+		if(hd l != s)
+			out = hd l :: out;
+	return out;
 }
 
 denymcptools(deny: list of string): string
@@ -849,7 +949,7 @@ restrictmcptools(toolsdir: string, deny: list of string): string
 	fd = nil;
 	if(denied == 0)
 		return nil;	# nothing denied here — leave tools/ as-is
-	return restrictdir(toolsdir, allow, 0);
+	return filterdir(toolsdir, allow, 0);
 }
 
 needsnet(tools: list of string): int
@@ -970,17 +1070,43 @@ validatepath(p: string): string
 
 grantpathallowed(path: string, tools: list of string): int
 {
-	if(privilegedcontrolpath(path, tools))
+	check := asciilower(path);
+	if(privilegedcontrolpath(check, tools))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 	return 1;
+}
+
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientauthoritypath(path: string): int
+{
+	if(path == "/chan" || path == "/fd" || prefix(path, "/fd/"))
+		return 1;
+	if(path == "/usr")
+		return 1;
+	return pathhascomponent(path, "keyring") &&
+		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
 }
 
 privilegedcontrolpath(path: string, tools: list of string): int
 {
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -989,6 +1115,9 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",
@@ -996,6 +1125,12 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
+	# Each tools9p instance also publishes its trusted controller as
+	# /mnt/toolctl.<id>.  Treat numbered aliases exactly like the canonical
+	# mount; otherwise a caller can grant the same controller under a name the
+	# policy did not recognise.
+	if(prefix(path, "/mnt/toolctl."))
+		return 1;
 	if(walletcontrolpath(path))
 		return 1;
 	if(ftreecontrolpath(path))
@@ -1028,7 +1163,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 #
 walletcontrolpath(path: string): int
 {
-	if(!prefix(path, "/n/wallet/"))
+	# /n/wallet is where wallet9p mounted before INFR-400; it stays denied.
+	if(!prefix(path, "/mnt/wallet/") && !prefix(path, "/n/wallet/"))
 		return 0;
 	if(componentcount(path) < 4)
 		return 0;
@@ -1039,9 +1175,9 @@ walletcontrolpath(path: string): int
 
 ftreecontrolpath(path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl file can bind and
-	# unmount in the user's GUI namespace, so it is never an agent grant.
-	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+	# ftree is a trusted user namespace browser. Its ctl (#sftree, mounted at
+	# /mnt/ftree) binds and unmounts in ftree's name space: never an agent grant.
+	return path == "/mnt/ftree" || prefix(path, "/mnt/ftree/");
 }
 
 tmpveltrointernalpath(path: string): int
@@ -1058,11 +1194,12 @@ appipccontrolpath(path: string): int
 {
 	# App IPC roots are controlled through their fixed-function tools. A raw
 	# path grant would let generic filesystem/shell tools drive the app protocol.
-	return path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
-		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
-		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
-		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
+		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
+		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
+		path == "/mnt/shell" || prefix(path, "/mnt/shell/") ||
+		path == "/mnt/fractal" || prefix(path, "/mnt/fractal/") ||
+		path == "/mnt/man" || prefix(path, "/mnt/man/");
 }
 
 appipctoolpath(path: string, tools: list of string): int
@@ -1070,19 +1207,19 @@ appipctoolpath(path: string, tools: list of string): int
 	# These are not user-delegatable filesystem grants. tools9p derives them
 	# only for the matching fixed-function tool invocation, so generic tools in
 	# the same server cannot reuse them.
-	if((path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/")) &&
+	if((path == "/mnt/charon" || prefix(path, "/mnt/charon/")) &&
 	   inlist("charon", tools))
 		return 1;
-	if((path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/")) &&
+	if((path == "/mnt/editor" || prefix(path, "/mnt/editor/")) &&
 	   inlist("editor", tools))
 		return 1;
-	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&
+	if((path == "/mnt/shell" || prefix(path, "/mnt/shell/")) &&
 	   inlist("shell", tools))
 		return 1;
-	if((path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/")) &&
+	if((path == "/mnt/fractal" || prefix(path, "/mnt/fractal/")) &&
 	   inlist("fractal", tools))
 		return 1;
-	if((path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/")) &&
+	if((path == "/mnt/man" || prefix(path, "/mnt/man/")) &&
 	   inlist("man", tools))
 		return 1;
 	return 0;
@@ -1130,12 +1267,14 @@ calendarcontrolpath(path: string): int
 fixedservicecontrolpath(path: string): int
 {
 	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
+		path == "/mnt/wsys" || prefix(path, "/mnt/wsys/") ||
 		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
+		path == "/mnt/wikia" || prefix(path, "/mnt/wikia/") ||
 		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
 		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
 		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||
@@ -1232,11 +1371,104 @@ overlaykey(path: string): string
 	return sys->sprint("%8.8ux", h);
 }
 
+# An overlay is this session's or an earlier one's: activity ids start
+# again at 1 when InferNode does, and /tmp persists, so a new task 1 given
+# the folder an earlier task 1 had took over its overlay, with changes the
+# user had not approved in it, to be shown as its own and promoted with
+# its own.  The overlay notes when the emulator it was made in started
+# (boot= in .cowmeta, which cowfs keeps from the agent); one from another
+# start, with changes in it, is set aside, not deleted: they were never
+# approved, nor refused.  Within one start, every tool server of the activity
+# shares the overlay as before.
+BOOTSLACK: con 2;	# seconds: the start time is worked out, not read
+
+bootstamp(): int
+{
+	daytime := load Daytime Daytime->PATH;
+	if(daytime == nil)
+		return 0;
+	return daytime->now() - sys->millisec() / 1000;
+}
+
+markboot(overlaydir: string, boot: int)
+{
+	if(boot == 0)
+		return;
+	meta := "";
+	(nil, lines) := sys->tokenize(readfile(overlaydir + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(!prefix(hd lines, "boot="))
+			meta += hd lines + "\n";
+	fd := sys->create(overlaydir + "/.cowmeta", Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	sys->fprint(fd, "%sboot=%d\n", meta, boot);
+}
+
+setasidestale(overlaydir: string): string
+{
+	init();
+	return setaside(overlaydir, bootstamp());
+}
+
+setaside(overlaydir: string, boot: int): string
+{
+	(ok, nil) := sys->stat(overlaydir);
+	if(ok < 0 || boot == 0)
+		return "";
+	was := 0;
+	(nil, lines) := sys->tokenize(readfile(overlaydir + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(prefix(hd lines, "boot="))
+			was = int (hd lines)[len "boot=":];
+	if(was != 0 && was - boot <= BOOTSLACK && boot - was <= BOOTSLACK)
+		return "";
+	# Nothing staged in it: nothing to keep.
+	staged := 0;
+	fd := sys->open(overlaydir, Sys->OREAD);
+	if(fd != nil) {
+		for(;;) {
+			(n, d) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++)
+				if(d[i].name != ".cowmeta")
+					staged = 1;
+		}
+		fd = nil;
+	}
+	if(!staged)
+		return "";	# nothing in it to keep apart: used as it is
+	# Kept beside the others, under a name no activity's overlay has.
+	(nil, base) := splitlast(overlaydir);
+	dir := sys->nulldir;
+	dir.name = sys->sprint("kept-%d-%s", was, base);
+	if(sys->wstat(overlaydir, dir) < 0) {
+		sys->fprint(sys->fildes(2), "nsconstruct: cannot set aside %s: %r\n", overlaydir);
+		return "";
+	}
+	sys->fprint(sys->fildes(2), "nsconstruct: %s is from an earlier session: kept as %s, not used\n", overlaydir, dir.name);
+	(parent, nil) := splitlast(overlaydir);
+	return parent + "/" + dir.name;
+}
+
+splitlast(path: string): (string, string)
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return (path[0:i], path[i+1:]);
+	return ("", path);
+}
+
 overlaywritepaths(paths: list of string, actid: int): string
 {
 	cowfs: Cowfs;
 	for(p := paths; p != nil; p = tl p) {
 		fullpath := hd p;
+		# Scratch already has a dedicated per-activity cowfs projection below.
+		# Recursively staging that mount can block while its manifest is built.
+		if(fullpath == "/tmp/veltro/scratch")
+			continue;
 		if(directwritepath(fullpath))
 			continue;
 		if(cowfs == nil) {
@@ -1250,6 +1482,8 @@ overlaywritepaths(paths: list of string, actid: int): string
 		# Keyed by (activity, path) so every tool that is granted the same
 		# writable path shares one overlay and sees the same files.
 		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%s", actid, overlaykey(fullpath));
+		boot := bootstamp();
+		setaside(overlaydir, boot);
 		merr := mkdirp(overlaydir);
 		if(merr != nil)
 			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
@@ -1257,6 +1491,7 @@ overlaywritepaths(paths: list of string, actid: int): string
 		(mntfd, cerr) := cowfs->start(fullpath, overlaydir);
 		if(cerr != nil)
 			return sys->sprint("cowfs %s: %s", fullpath, cerr);
+		markboot(overlaydir, boot);
 
 		# MCREATE here is safe in a way it is NOT for the plain MREPL
 		# binds above (which restrict MCREATE to /tmp): every mutation
@@ -1274,19 +1509,25 @@ overlaywritepaths(paths: list of string, actid: int): string
 	return nil;
 }
 
-# Emit namespace manifest for the UI to display.
-# Writes to /tmp/veltro/.ns/manifest — one entry per line:
-#   path=/dev/time label=System Clock perm=ro
-# Must be called AFTER restrictns() from the restricted namespace
-# so stat checks reflect exactly what the agent can access.
-emitmanifest(caps: ref Capabilities, mpath: string)
+# The manifest's file, made in the name space the UI reads: called
+# before restrictns, which may give the agent a /tmp of its own.
+openmanifest(mpath: string): ref Sys->FD
 {
 	if(sys == nil)
 		init();
-
 	mkdirp("/tmp/veltro/.ns");
+	return sys->create(mpath, Sys->OWRITE, FILE_MODE);
+}
 
-	fd := sys->create(mpath, Sys->OWRITE, FILE_MODE);
+# Emit namespace manifest for the UI to display, on fd (openmanifest's),
+# one entry per line:
+#   path=/dev/time label=System Clock perm=ro
+# Must be called AFTER restrictns() from the restricted namespace
+# so stat checks reflect exactly what the agent can access.
+emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
+{
+	if(sys == nil)
+		init();
 	if(fd == nil)
 		return;
 
@@ -1299,7 +1540,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/lib/certs",     "Certificates",     "ro"),
 		("/lib/veltro",    "Veltro Config",    "ro"),
 		("/dis/veltro",    "Veltro Tools",     "ro"),
-		("/tmp/veltro",    "Veltro Workspace", "rw"),
+		("/tmp/veltro/scratch", "Activity Scratch", "cow"),
 	};
 
 	for(i := 0; i < len infra; i++) {
@@ -1311,8 +1552,6 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
-		("/n/speech", "Speech",           "rw"),
-		("/n/wikia",  "Wiki Agent",       "rw"),
 		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
 		# /mnt now — application mount points, schema is ours, not /n imports
@@ -1321,10 +1560,13 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/ui",   "UI Service",       "rw"),
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 		("/mnt/matrix", "Matrix Runtime", "rw"),
+		("/mnt/wsys", "Window Pictures", "ro"),
 		("/mnt/gpu", "GPU Service", "rw"),
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),
+		("/mnt/wikia", "Wiki Agent", "rw"),
+		("/mnt/speech", "Speech", "rw"),
 		("/mnt/registry", "Registry", "rw"),
 	};
 
@@ -1423,12 +1665,18 @@ verifyns(expected: list of string): string
 		"/.git",
 		"/CLAUDE.md",
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/msg/ctl",
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",
@@ -1456,10 +1704,11 @@ emitauditlog(id: string, ops: list of string)
 	# -1: a direct caller outside restrictns has no activity to attribute the
 	# restriction to. The field is still emitted so a reader can tell an
 	# unattributed record from one written before attribution existed.
-	emitauditlogto(id, -1, ops, nil);
+	emitauditlogto(id, -1, ops, nil, 1);
 }
 
-emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD): int
+emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD,
+	allowfallback: int): int
 {
 	if(sys == nil)
 		init();
@@ -1494,7 +1743,9 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 	# be quietly edited after the fact. restrictns passes a pre-opened append
 	# FD because /mnt/audit is deliberately absent from the completed namespace;
 	# direct callers fall back to Audit->log and may no-op when auditing is off.
-	if(audit == nil) {
+	# restrictns must not use that fallback: /mnt has already been narrowed, and
+	# opening a hidden or stale 9P audit mount can block namespace construction.
+	if(allowfallback && audit == nil) {
 		a := load Audit Audit->PATH;
 		if(a != nil) {
 			a->init();
@@ -1521,7 +1772,7 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 				return -1;
 			return 0;
 		}
-		if(audit != nil)
+		if(allowfallback && audit != nil)
 			return audit->log("veltro", "nsrestrict", msg);
 	}
 	return -1;

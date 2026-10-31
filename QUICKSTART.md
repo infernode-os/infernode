@@ -21,7 +21,8 @@ cd infernode-*-linux-*
 #   ./setup-desktop.sh --no-icon  # PATH wrapper only (headless/server)
 #   ./setup-desktop.sh --uninstall
 
-# macOS ARM64 (Apple Silicon) — open DMG, drag to Applications, double-click
+# macOS — open the DMG (macos-arm64 for Apple Silicon, macos-amd64 for Intel),
+#   drag to Applications, double-click
 ```
 
 > Match the tarball to your CPU: `amd64` (Intel/AMD) vs `arm64` (Jetson / Raspberry Pi / Apple-Silicon Linux). Running the wrong arch fails with a missing `ld-linux-aarch64.so.1` / loader error.
@@ -42,7 +43,7 @@ cd infernode-*-linux-*
 ./install-sdl3.sh                 # GUI only, one time
 ./build-linux-arm64.sh            # add 'headless' to skip SDL3
 
-# macOS ARM64 (Apple Silicon)
+# macOS, Apple Silicon or Intel (the scripts follow uname -m)
 ./makemk.sh                       # bootstrap mk (one time)
 brew install sdl3 sdl3_ttf        # GUI only
 ./build-macos-sdl3.sh             # or ./build-macos-headless.sh
@@ -69,7 +70,7 @@ Bootstrap the build tools and install the post-merge git hook:
 
 This hook runs automatically after every `git pull` or `git merge`. It detects which `.m` (interface) and `.b` (source) files changed and rebuilds the affected `.dis` files. Without it, pulling interface changes can leave you with stale `.dis` files that fail at load time with `link typecheck` errors.
 
-### Why are `.dis` files in git?
+### Why are `.dis` files not in git?
 
 Inferno is a self-hosting OS and the `dis/` directory is its runtime, like
 `/usr/bin` on Unix. It holds compiled bytecode, so it is a **build product and
@@ -91,9 +92,9 @@ makes `git pull` do it for you. All four directories matter: `appl/mpeg` and
 A downloaded **release** already contains a built runtime — the packaging job
 builds it before staging, so nothing is required of you there.
 
-Build artifacts in source directories (`appl/**/*.dis`, `tests/**/*.dis`) are **not** tracked — only the runtime tree.
+Build artifacts in source directories (`appl/**/*.dis`, `tests/**/*.dis`) are not tracked either.
 
-The trade-off: tracked `.dis` files can go stale when `.m` interfaces change between commits. The post-merge hook closes that gap automatically.
+Built `.dis` files can still go stale when `.m` interfaces change between commits. The post-merge hook closes that gap automatically.
 
 ## First Steps
 
@@ -122,7 +123,7 @@ After building (see Building section below):
 - **Network**: mntgen, trfs, os
 - **Utilities**: du, wc, grep, ftest, echo
 
-**Note:** The runtime `.dis` files in `dis/` are tracked in git, so basic commands work after clone. If you see `link typecheck` errors, run `./hooks/install.sh` and pull again, or rebuild manually with `mk install` in the affected `appl/` subdirectory.
+**Note:** The runtime `.dis` files in `dis/` are a build product and are not tracked in git, so commands work only after the build step. If you see `link typecheck` errors, run `./hooks/install.sh` and pull again, or rebuild manually with `mk install` in the affected `appl/` subdirectory.
 
 ## Building
 
@@ -144,7 +145,15 @@ This bootstraps the `mk` build tool, compiles all libraries, builds the `limbo` 
 
 Same process as x86_64, but for ARM64 platforms like Jetson or Raspberry Pi.
 
-### macOS ARM64
+### Linux RISC-V (RV64GC)
+
+```bash
+./build-linux-riscv64.sh          # headless only
+```
+
+Runs natively on a riscv64 Linux host or cross-compiles from amd64/arm64; see the script's header for the cross-compiling steps.
+
+### macOS (Apple Silicon or Intel)
 
 ```bash
 ./makemk.sh                       # bootstrap mk (first time only)
@@ -183,6 +192,10 @@ Flags worth knowing:
 - `-pheap`/`-pmain`/`-pimage` — pool sizes; raise if you hit allocation pressure with large LLM contexts.
 - `-r<path>` — Inferno root. Use `-r$PWD` from the repo root to run against the working tree.
 
+### Just the editor
+
+`tools/xen file ...` opens host files in an instance running only Xenith (or `tools/xen -s` for sam), like Acme-SAC. See [docs/XEN.md](docs/XEN.md).
+
 ### macOS: testing the `.app` packaging path
 
 For the rare case when you need to validate the bundle layout, launcher script, or the read-only `Resources/` snapshot semantics — not for code iteration:
@@ -211,4 +224,4 @@ The critical fix for 64-bit platforms was changing pool quanta from 31 to 127 in
 
 ---
 
-**Status: 64-bit Inferno® is working on x86_64 Linux, ARM64 Linux, ARM64 macOS, and x86_64 Windows**
+**Status: 64-bit Inferno® is working on x86_64 Linux, ARM64 Linux, RISC-V Linux, ARM64 and x86_64 macOS, x86_64 Windows, Android and iOS**

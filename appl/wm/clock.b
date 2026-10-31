@@ -131,12 +131,21 @@ drawclock(screen: ref Image, t: int)
 	rad /= 2;
 	rad -= 8;
 
+	# hands and dots grow with the face: fixed 1px hands are hairlines
+	# on a large window or a 3x display
+	dot := rad/80;
+	if(dot < 2)
+		dot = 2;
+	thick := rad/150;	# line radius: 1+2*thick pixels wide
+	if(thick < 1)
+		thick = 1;
+
 	screen.draw(screen.r, back, nil, ZP);
 	for(i:=0; i<12; i++)
-		screen.fillellipse(circlept(c, rad, i*(360/12)), 2, 2, dots, ZP);
+		screen.fillellipse(circlept(c, rad, i*(360/12)), dot, dot, dots, ZP);
 
-	screen.line(c, circlept(c, (rad*3)/4, angmin), 0, 0, 1, minhand, ZP);
-	screen.line(c, circlept(c, rad/2, anghr), 0, 0, 1, hrhand, ZP);
+	screen.line(c, circlept(c, (rad*3)/4, angmin), 0, 0, thick, minhand, ZP);
+	screen.line(c, circlept(c, rad/2, anghr), 0, 0, thick, hrhand, ZP);
 
 	screen.flush(Draw->Flushnow);
 }

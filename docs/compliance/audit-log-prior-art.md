@@ -3,7 +3,7 @@
 **Purpose:** Survey existing immutable / append-only / tamper-evident / archival approaches in
 Plan 9 (Bell Labs), Inferno, and 9front — plus the relevant general secure-logging literature —
 to inform the InferNode tamper-evident audit-log service (EPIC 2 / [INFR-343]).
-**Status:** Research input for the audit-log architecture pass. Not a design decision yet.
+**Status:** Research input for the audit-log architecture pass. The design and implementation that followed are [`audit-log-design.md`](audit-log-design.md), `appl/cmd/auditfs.b`, `appl/lib/auditchain.b` and `appl/cmd/auditverify.b`.
 **Date:** 2026-06-22.
 
 > Sourcing caveat: many canonical hosts (9p.io, cat-v.org, man.9front.org, swtch.com,

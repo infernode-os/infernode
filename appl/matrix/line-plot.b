@@ -6,7 +6,7 @@ implement LinePlot;
 # Point it at ANY history-style file: one sample per line, optionally
 # led by a timestamp, one or more numeric columns —
 #     [ts] v1 [v2 ...]
-# Every value column becomes an anti-aliased polyline (aadraw), auto-
+# Every value column becomes an anti-aliased polyline (strokepath), auto-
 # scaled to the union range, with min/max labels, a zero line when the
 # range crosses zero, and the file's basename as title.  The sysmon
 # and llm-recorder history rings already have this shape, and any
@@ -22,12 +22,10 @@ include "sys.m";
 
 include "draw.m";
 	drawm: Draw;
-	Display, Font, Image, Point, Rect: import drawm;
+	Display, Font, Image, Path, Point, Rect: import drawm;
 
 include "lucitheme.m";
 
-include "aadraw.m";
-	aad: AAdraw;
 
 include "matrix.m";
 
@@ -66,9 +64,6 @@ init(display: ref Display, font: ref Font, mount: string): string
 	display_g = display;
 	font_g = font;
 	mountpath = mount;
-	aad = load AAdraw AAdraw->PATH;
-	if(aad != nil)
-		aad->init(display);
 	# title: the last two path components ("cpu/history" beats "history")
 	title = mount;
 	slashes := 0;
@@ -213,10 +208,7 @@ draw(dst: ref Image)
 			y := plot.max.y - 1 - int ((series[c][i] - lo) / (hi - lo) * real (plot.dy() - 2));
 			pts[i] = Point(x, y);
 		}
-		if(aad != nil)
-			aad->polyline(dst, pts, 2, col);
-		else
-			dst.poly(pts, 0, 0, 0, col, (0, 0));
+		polyline(dst, pts, 2.0, col);
 	}
 }
 
@@ -242,4 +234,13 @@ retheme(display: ref Display)
 shutdown()
 {
 	series = nil;
+}
+
+# a polyline through pixel centres, anti-aliased (Image.strokepath)
+polyline(dst: ref Image, pts: array of Point, w: real, col: ref Image)
+{
+	p := Path.new().moveto(real pts[0].x + 0.5, real pts[0].y + 0.5);
+	for(i := 1; i < len pts; i++)
+		p.lineto(real pts[i].x + 0.5, real pts[i].y + 0.5);
+	dst.strokepath(p, w, Draw->Capround, Draw->Joinround, col, pts[0]);
 }

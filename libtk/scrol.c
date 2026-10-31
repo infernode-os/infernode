@@ -68,23 +68,28 @@ TkEbind b[] =
 static char*
 tkinitscroll(Tk *tk)
 {
-	int gap;
+	int gap, thick;
 	TkScroll *tks;
 
 	tks = TKobj(TkScroll, tk);
 	
 	gap = 2*tk->borderwidth;
+	/* at least half a line of text thick: a fixed Triangle is a
+	 * hairline on a 3x display, where the font is three times the pixels */
+	thick = Triangle;
+	if(tk->env->font != nil && tk->env->font->height/2 > thick)
+		thick = tk->env->font->height/2;
 	if(tks->orient == Tkvertical) {
 		if(tk->req.width == 0)
-			tk->req.width = Triangle + gap;
+			tk->req.width = thick + gap;
 		if(tk->req.height == 0)	
-			tk->req.height = 2*Triangle + gap + 6*Elembw;
+			tk->req.height = 2*thick + gap + 6*Elembw;
 	}
 	else {
 		if(tk->req.width == 0)
-			tk->req.width = 2*Triangle + gap + 6*Elembw;
+			tk->req.width = 2*thick + gap + 6*Elembw;
 		if(tk->req.height == 0)	
-			tk->req.height = Triangle + gap;
+			tk->req.height = thick + gap;
 	}
 
 

@@ -1,0 +1,4 @@
+tool=window
+	description='Pictures of this activity windows via /mnt/wsys'
+	authorities='reads_fs writes_fs'
+	notes='Reads only its own activity window images (wmsrv wsys, bound over /mnt/wsys by nsconstruct); writes the copied image into /tmp/veltro/scratch.'

@@ -26,6 +26,7 @@ enum
 	Qwait,
 	Qfd,
 	Qexception,
+	Qgrpwait,
 };
 
 /*
@@ -45,6 +46,7 @@ Dirtab progdir[] =
 	"wait",		{Qwait},	0,			0400,
 	"fd",		{Qfd},		0,			0400,
 	"exception",	{Qexception},	0,	0400,
+	"grpwait",	{Qgrpwait},	0,	0444,
 };
 
 enum
@@ -289,6 +291,16 @@ progopen(Chan *c, int omode)
 			error(Enomem);
 		o->childq = c->aux;
 		break;
+	case Qgrpwait:
+		/* waits for the group the Prog is in now to have no Prog left */
+		c->aux = qopen(64, Qmsg, nil, nil);
+		if(c->aux == nil)
+			error(Enomem);
+		if(p->group != nil)
+			grpwaitadd(p->group->id, c->aux);
+		else
+			qproduce(c->aux, "0", 1);
+		break;
 	case Qns:
 		c->aux = malloc(sizeof(Mntwalk));
 		if(c->aux == nil)
@@ -418,6 +430,15 @@ progclose(Chan *c)
 		}
 		release();
 		qfree(c->aux);
+		break;
+	case Qgrpwait:
+		if((c->flag & COPEN) == 0)
+			return;
+		acquire();
+		grpwaitdel(c->aux);
+		release();
+		qfree(c->aux);
+		break;
 	}
 }
 
@@ -892,6 +913,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 		release();
 		return readstr(offset, va, n, up->genbuf);
 	case Qwait:
+	case Qgrpwait:
 		return qread(c->aux, va, n);
 	case Qns:
 		acquire();

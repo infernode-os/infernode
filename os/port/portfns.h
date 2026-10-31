@@ -278,6 +278,8 @@ Queue*		qopen(int, int, void (*)(void*), void*);
 int		qpass(Queue*, Block*);
 int		qpassnolim(Queue*, Block*);
 int		qproduce(Queue*, void*, int);
+void		grpwaitadd(int, Queue*);
+void		grpwaitdel(Queue*);
 void		qputback(Queue*, Block*);
 long		qread(Queue*, void*, int);
 Block*		qremove(Queue*);

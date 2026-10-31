@@ -621,6 +621,63 @@ addgrp(Prog *n, Prog *p)
 	}
 }
 
+/*
+ * A read of /prog/n/grpwait waits for n's process group, as it was when
+ * the file was opened, to have no Prog left: delgrp posts to each such
+ * reader's queue as it frees the group (a group is freed with its last
+ * Prog, and group ids are pids, never reused).  The list is changed and
+ * walked with the interpreter held.
+ */
+typedef struct Grpwait Grpwait;
+struct Grpwait
+{
+	int	gid;
+	Queue*	q;
+	Grpwait*	next;
+};
+static Grpwait *grpwaits;
+
+void
+grpwaitadd(int gid, Queue *q)
+{
+	Grpwait *w;
+
+	w = malloc(sizeof(*w));
+	if(w == nil)
+		error(Enomem);
+	w->gid = gid;
+	w->q = q;
+	w->next = grpwaits;
+	grpwaits = w;
+}
+
+void
+grpwaitdel(Queue *q)
+{
+	Grpwait **l, *w;
+
+	for(l = &grpwaits; (w = *l) != nil; ){
+		if(w->q == q){
+			*l = w->next;
+			free(w);
+		}else
+			l = &w->next;
+	}
+}
+
+static void
+grpgone(int gid)
+{
+	Grpwait *w;
+	char buf[16];
+
+	for(w = grpwaits; w != nil; w = w->next)
+		if(w->gid == gid){
+			snprint(buf, sizeof(buf), "%d", gid);
+			qproduce(w->q, buf, strlen(buf));
+		}
+}
+
 static Progs*
 delgrp(Prog *p)
 {
@@ -658,6 +715,7 @@ delgrp(Prog *p)
 					pg->child = cg;
 				}
 			}
+			grpgone(g->id);
 			free(g);
 		}while((g = pg) != nil && g->head == nil);
 	}

@@ -873,6 +873,7 @@ dis/tests/js/jsrun.dis
 dis/tests/js/t262.dis
 dis/tests/testing/testing_test.dis
 dis/tests/textwidget_test.dis
+dis/tests/tk_entry_growth_test.dis
 dis/tests/tk_test.dis
 dis/tests/fractals_zoombox_test.dis
 dis/tests/tkimgrender.dis

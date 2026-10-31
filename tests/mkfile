@@ -150,6 +150,7 @@ TARG=\
 	tcp_test.dis\
 	tempfile_test.dis\
 	textwidget_test.dis\
+	tk_entry_growth_test.dis\
 	tk_test.dis\
 	fractals_zoombox_test.dis\
 	tkimgrender.dis\

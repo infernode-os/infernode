@@ -12,7 +12,7 @@
  * them is the waveform. With the range at 2048 the resolution is 11
  * bits, which through this filter is what the jack is good for; a
  * 16-bit sample is shifted down to it. The PWM clock comes from the
- * clock manager: PLLD, 500 MHz on this board, divided (MASH fractional
+ * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), divided (MASH fractional
  * divider) so that clock / range is the sample rate. Both channels
  * share one FIFO and take words alternately (left, right), so a stereo
  * frame is two words in order.
@@ -60,9 +60,9 @@
 #include "../port/audio-tbls.h"
 
 enum {
-	PWMREGS		= PHYSIO + 0x20C000,
+	PWMREGS		= PHYSIO + AUDIOPWMOFF,	/* the board's: io.h says which block the jack's pins carry */
 	CMREGS		= PHYSIO + 0x101000,
-	PWMFIFOBUS	= 0x7E20C018,	/* the FIFO as the DMA engine addresses it */
+	PWMFIFOBUS	= 0x7E000000 + AUDIOPWMOFF + 0x18,	/* the FIFO as the DMA engine addresses it */
 
 	/* PWM registers */
 	Pctl		= 0x00,
@@ -100,7 +100,7 @@ enum {
 	Cmkill		= 1<<5,
 	Cmsrcplld	= 6,
 	Cmmash1		= 1<<9,
-	Plldhz		= 500000000,
+	Plldhz		= AUDIOPLLDHZ,
 
 	Range		= 2048,		/* pulse range: 11 bits of level */
 	Silence		= Range/2,
@@ -109,7 +109,7 @@ enum {
 	Gpiopwm1	= 41,		/* PWM1, right */
 
 	Dmachan		= 5,		/* of the ARM's 0-6; SD and USB use none here */
-	Dreqpwm		= 5,		/* the PWM's DREQ line */
+	Dreqpwm		= AUDIODREQ,	/* the PWM's DREQ line (io.h) */
 
 	Nbuf		= 4,		/* the writer may run three buffers ahead */
 	Maxframes	= 2048,		/* stereo frames per buffer: 46 ms at 44.1 kHz; the default, and what is allocated */
@@ -409,6 +409,18 @@ audio_file_read(Chan *c, void *va, long count, vlong offset)
  * is more than one in front of the engine, which is the whole of how
  * the latency is kept down.
  */
+/* buffers written and not yet played */
+static int
+queued(Ctlr *c)
+{
+	int i, n;
+
+	n = 0;
+	for(i = 0; i < Nbuf; i++)
+		n += c->full[i];
+	return n;
+}
+
 static int
 roomfor(void *a)
 {
@@ -416,7 +428,13 @@ roomfor(void *a)
 	int d;
 
 	c = a;
-	if(c->full[c->wbuf])
+	/*
+	 * Nor the buffer the engine is playing: when it is playing silence
+	 * its full[] is 0, and a writer come round the ring to it filled it
+	 * under the engine -- part 4 of a tone heard before parts 1-3, in
+	 * a regular pattern, on the bench Pi 4.
+	 */
+	if(c->full[c->wbuf] || c->wbuf == c->pbuf)
 		return 0;
 	if(c->ahead >= Nbuf - 1)
 		return 1;
@@ -468,6 +486,22 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 	p = va;
 	for(n = 0; n < count; n += ba){
 		if(ctlr.woff == 0){
+			/*
+			 * Nothing queued -- a new open, or a writer that paused:
+			 * the engine has gone on round the ring playing silence,
+			 * and wbuf is wherever the last writer left it, which may
+			 * be behind the engine or the very buffer it is playing.
+			 * Writing there played the sound in pieces and out of
+			 * order (parts 3, 4, 1, 2 of a tone, on the bench Pi 4's
+			 * second and later runs of audiotone; the first, from a
+			 * fresh ring, was clean). Start after the one playing:
+			 * two after, where there is room for it, because the one
+			 * just after is the one the interrupt silences if it is
+			 * not full when the engine reaches it, and a writer that
+			 * began it a moment before would lose its first frames.
+			 */
+			if(queued(&ctlr) == 0)
+				ctlr.wbuf = (ctlr.pbuf + (ctlr.ahead > 1 ? 2 : 1)) % Nbuf;
 			/*
 			 * Low latency: a writer the engine has caught up with
 			 * (it paused, or has only now begun) would be filling

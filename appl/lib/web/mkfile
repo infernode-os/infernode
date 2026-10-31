@@ -43,6 +43,7 @@ SYSMODULES=\
 	filter.m\
 	plumbmsg.m\
 	woff2.m\
+	post9p.m\
 
 DISBIN=$ROOT/dis/lib/web
 

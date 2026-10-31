@@ -108,6 +108,8 @@ SYSMODULES=\
 	cptree.m\
 	icon.m\
 	names.m\
+	post9p.m\
+	appfs.m\
 
 DISBIN=$ROOT/dis/wm
 

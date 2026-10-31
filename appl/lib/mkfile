@@ -114,6 +114,8 @@ TARG=\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
+	post9p.dis\
+	appfs.dis\
 	pop3.dis\
 	profile.dis\
 	publicnet.dis\
@@ -362,6 +364,8 @@ SYSMODULES=\
 	tls.m\
 	viewport.m\
 	wmdeb.m\
+	post9p.m\
+	appfs.m\
 
 
 

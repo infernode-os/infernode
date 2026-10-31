@@ -972,6 +972,12 @@ m(Prog *p)
  * culprit when starvation is detected.
  */
 Proc*	vmowner;
+/*
+ * where a proc is in native code: its program counter, from a host that
+ * can interrupt it (the profiler's view of compiled code, whose R.PC is
+ * not kept as it runs); nil where the host cannot
+ */
+uintptr	(*hostprocpc)(Proc*);
 char	vmownertext[KNAMELEN];
 ulong	vmownerms;
 

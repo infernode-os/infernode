@@ -542,6 +542,9 @@ privilegedControlGrant(p: string): int
 	p = asciilower(p);
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -617,7 +620,7 @@ walletAccountControlGrant(p: string): int
 
 ftreeControlGrant(p: string): int
 {
-	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
+	return p == "/mnt/ftree" || prefix(p, "/mnt/ftree/");
 }
 
 tmpVeltroInternalGrant(p: string): int
@@ -631,10 +634,10 @@ appIpcControlGrant(p: string): int
 {
 	return p == "/mnt/charon" || prefix(p, "/mnt/charon/") ||
 		p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
-		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
-		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
-		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
-		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
+		p == "/mnt/editor" || prefix(p, "/mnt/editor/") ||
+		p == "/mnt/shell" || prefix(p, "/mnt/shell/") ||
+		p == "/mnt/fractal" || prefix(p, "/mnt/fractal/") ||
+		p == "/mnt/man" || prefix(p, "/mnt/man/");
 }
 
 uiAgentControlGrant(p: string): int

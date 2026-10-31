@@ -196,13 +196,20 @@ removes the buttons;
 .I dir
 sets the directory shown in the title and plumbed from.
 .TP
-.B /tmp/veltro/shell/body
-The transcript up to the end of the output, for Veltro's
+.B #sshell/fs
+For Veltro's
 .B shell
-tool, written half a second after it changes.
-.TP
-.B /tmp/veltro/shell/input
-What is typed and not yet read.
+tool (mounted at
+.B /mnt/shell
+by
+.IR tools9p (8)):
+.B body
+is the transcript up to the end of the output and
+.B input
+what is typed and not yet read, both read from the window as it is;
+.B event
+waits for the next change.  A second shell is
+.BR #sshell/fs.1 .
 .SH SOURCE
 .B /appl/wm/shell.b
 .SH "SEE ALSO"

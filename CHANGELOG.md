@@ -6,6 +6,84 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **A task is ready when its provisioning write returns; nothing polls
+  for it (#1019).** The task tool read tools9p's `provision` file every
+  50ms until its child was ready, and tools9p looked for the child's
+  tree every half second and its manifest every 50ms. The child now
+  tells its parent when its name space is made, and the write is
+  answered then, or with why not. A child granted `/tmp` (or a
+  veltrosrv agent) made its manifest in the `/tmp` of its own that the
+  grant gives it, where neither the UI nor its parent could see it: it
+  was never ready, and its task was refused after 30 seconds. The
+  manifest's file is now made before the name space is restricted
+  (`nsconstruct`'s `openmanifest`). A path with `..` in it under the
+  scratch directory is refused, not dropped as the scratch. lucibridge
+  hears a task closed while it works as luciuisrv's `activity delete`
+  event, not by reading its status every second.
+- **wallet9p's `event` file: the wallet GUI's pending count no longer
+  polls (#1019).** wm/wallet read `/mnt/wallet/pending` every two
+  seconds while it was open. wallet9p now serves `event`, a line
+  `pending` to every reader each time the payments awaiting approval
+  change: one queued, approved, denied, or expired (a timer at its
+  deadline). The GUI waits on it, and waits on wallet9p's own start
+  rather than looking for its files.
+- **wm/shell, wm/man, wm/fractals and wm/ftree serve their agent files;
+  none polls (#1019).** Each wrote state files under `/tmp/veltro/<app>`
+  on a timer and read commands from a file it truncated, every half
+  second (wm/shell wrote its transcript half a second after each
+  change, and wm/ftree also re-read its own name space every two
+  seconds). `appfs(2)`, a small library, serves a program's files and an
+  `event` file, posted as `#s<app>/fs`: a read is answered from what the
+  program shows at that moment, a command is done when its write
+  returns, and one refused (no such manual page, a bad fractal command,
+  a bind under `ftree -d`) is the write's error. The files go with the
+  program. tools9p mounts each at `/mnt/<app>` for its tool alone, and
+  binds an empty directory there when the program is not running, so
+  the tool says so whatever an earlier run left behind. The policy
+  lists name `/mnt/shell`, `/mnt/man`, `/mnt/fractal` and `/mnt/ftree`.
+  Nothing is left under `/tmp/veltro` for these programs.
+- **The editor tool drives wm/editor through its served files; nothing
+  polls (#1019).** wm/editor kept a copy of its document in
+  `/tmp/veltro/editor`, rewritten every half second, and read commands
+  from files there that it truncated after reading, so two commands in
+  half a second lost one, a command to an editor that was not running
+  "succeeded", and the agent read a dead editor's text. Its 9P tree
+  (`/edit`) is now also posted as `#seditor/fs` (`post9p(2)`, the
+  posting Charon's session already used, now a library), and tools9p
+  mounts it at `/mnt/editor` for the editor tool alone: a command is
+  done when its write returns, one refused is the tool's error, and
+  "not running" is said when it is not. A body longer than one message
+  arrives whole (it kept the last piece), each reader of `event` gets
+  every event (two took turns, and a read held up every other request
+  for up to five seconds), and a read of `body` is one text. Lucifer's
+  context zone opens a file in a running editor through the posting, or
+  starts one on the file, where it waited for one to appear. The
+  editor's half-second timer is gone. `editor_test.b` drives the posted
+  editor (no sleeps; a long body, events per open),
+  `editor_capability_test.sh` a real one.
+- **A theme switch reaches every program without any of them polling.**
+  Sixteen programs (wm/wm, Lucifer, Xenith, Charon, and wm/ftree, wallet,
+  matrix, editor, deb, fractals, about, keyring, shell, settings, dir and
+  man) each re-read `/lib/lucifer/theme/current` every second to notice
+  a switch. `themefs`, run by the profile (and by wm/wm or Lucifer when
+  a session starts without one), serves `current` and `event` before
+  `/lib/lucifer/theme`: `current` reads and writes as the file did, and
+  a write, from Settings, Xenith's Theme or `echo halo >`, is kept in the
+  file under it and given to every reader of `event`, which waits for it.
+  `lucitheme->watch` reads `event`. A name that is no theme is refused.
+  `tests/host/themefs_test.sh`.
+- **The agent's name space, as it is, from tools9p's control tree
+  (#1020).** `/mnt/toolctl` (outside every agent's name space) has three
+  new files beside `ctl`. `view`, mounted
+  (`mount -A /mnt/toolctl/view /n/agent`), is the name space a tool call
+  gets, made by the same restriction a call uses and served read-only, so
+  what is shown is what the agent can reach, not a description of it.
+  `ns` is the same name space as `ns(1)` prints it. A read of `event`
+  waits, then says `paths`, `tools` or `budget` when that list changes.
+  Lucifer's context zone follows `event` instead of re-reading `/tool`
+  every five seconds: a folder granted is drawn at once, and nothing runs
+  while nothing changes. The three cannot be granted to an agent.
+  `tests/host/toolctl_view_test.sh`, `tests/host/lucictx_event_test.sh`.
 - **Arrow keys move; keys that are not characters type nothing.** An
   arrow, Home, End, Page Up or Down, Insert or a function key typed a
   private-use glyph in Tk entries and text (every form field and

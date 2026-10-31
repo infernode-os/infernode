@@ -1714,6 +1714,37 @@ svgdims(b: ref Box, data: array of byte, obj: int)
 }
 
 # Inline <svg>: the subtree as markup, rendered at the box's size.
+# Inline svgs drawn, by their markup: what svgmarkup makes holds all the
+# drawing depends on (the subtree, its sizes and the colours the page's
+# styles give it), so the same markup draws the same picture.  Pages
+# repeat their icons: Spiegel's front page drew 402 svgs, 3 ms each,
+# most of them a few icons again and again.
+Nsvgbucket: con 251;
+Maxsvgcache: con 1024;
+svgcache: array of list of (string, ref Image);
+nsvgcache := 0;
+
+svgdrawn(markup: string): ref Image
+{
+	h := 0;
+	for(i := 0; i < len markup; i++)
+		h = h * 31 + markup[i];
+	h = (h & 16r7FFFFFFF) % Nsvgbucket;
+	if(svgcache == nil || nsvgcache >= Maxsvgcache) {
+		svgcache = array[Nsvgbucket] of list of (string, ref Image);
+		nsvgcache = 0;
+	}
+	for(l := svgcache[h]; l != nil; l = tl l)
+		if((hd l).t0 == markup)
+			return (hd l).t1;
+	img := decodeimage(array of byte markup, "image/svg+xml", nil);
+	if(img != nil) {
+		svgcache[h] = (markup, img) :: svgcache[h];
+		nsvgcache++;
+	}
+	return img;
+}
+
 inlinesvg(p: ref Pg, b: ref Box)
 {
 	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0) {
@@ -1722,7 +1753,7 @@ inlinesvg(p: ref Pg, b: ref Box)
 			w := b.w - b.bl - b.br - b.pl - b.pr;
 			h := b.h - b.bt - b.bb - b.pt - b.pb;
 			if(w > 0 && h > 0 && (b.img == nil || b.img.r.dx() != w || b.img.r.dy() != h))
-				b.img = decodeimage(array of byte svgmarkup(p.doc, p.computed, b.node, w, h, b.st), "image/svg+xml", nil);
+				b.img = svgdrawn(svgmarkup(p.doc, p.computed, b.node, w, h, b.st));
 		}
 	} else if(b.kind == Layout->Kreplaced && b.url != nil && b.img != nil) {
 		# an SVG image: drawn at the size it is shown (by object-fit), not scaled

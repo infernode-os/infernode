@@ -22,6 +22,7 @@ ulong	miniconsinit(void);
 void	miniputc(int);
 int	minigetc(void);
 int	minitxidle(void);
+int	minitxrdy(void);
 
 /* uart.c: console policy over it */
 int	consuartputc(Queue*, int);

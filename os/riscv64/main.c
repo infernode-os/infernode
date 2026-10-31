@@ -573,7 +573,7 @@ kmain(void)
 
 	kbind("#S", "/dev", MAFTER);
 	kbind("#B", "/dev", MAFTER);
-	kbind("#b", "/dev", MAFTER);
+	kbind("#x", "/dev", MAFTER);
 
 	print("clock: %llud Hz timebase, %d Hz tick\n", clockfreq(), HZ);
 	uartputstr("\nboot OK\n");

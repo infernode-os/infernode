@@ -39,7 +39,7 @@ Dev*	devtab[] =
 	&ipdevtab,		/* 'I' -- #I, the IP stack */
 	&sddevtab,		/* 'S' -- #S, the disk as a file: a virtio block device */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
-	&benchdevtab,		/* 'b' -- #b, microsecond timing */
+	&benchdevtab,		/* 'x' -- #x, microsecond timing */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer */

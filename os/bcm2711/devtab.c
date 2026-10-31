@@ -61,7 +61,7 @@ Dev*	devtab[] =
 	&pointerdevtab,		/* 'm' -- #m, the pointer */
 	&sddevtab,		/* 'S' -- #S, the SD card as a file */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
-	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
+	&benchdevtab,		/* 'x' -- #x, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */

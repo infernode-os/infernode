@@ -1,5 +1,6 @@
 /*
- * #b -- the apparatus for measuring things honestly.
+ * #x -- the apparatus for measuring things honestly. x as Inferno's
+ * bench; #b is Inferno's dbg (docs/DEVICE-LETTERS.md).
  *
  * Provides the $Bench builtin module described in module/bench.m, which
  * is the interface Vita Nuova's "Reliable Benchmarking with Limbo on
@@ -142,7 +143,7 @@ benchreset(void)
 static Chan*
 benchattach(char *spec)
 {
-	return devattach('b', spec);
+	return devattach('x', spec);
 }
 
 static Walkqid*
@@ -197,7 +198,7 @@ benchwrite(Chan*, void*, long, vlong)
 }
 
 Dev benchdevtab = {
-	'b',
+	'x',
 	"bench",
 
 	benchreset,

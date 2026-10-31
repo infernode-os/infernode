@@ -4,11 +4,12 @@
 # dummy driver, typed at through /dev/keyboard (tests/wm/shell.sh): a
 # line sent and its output shown; ^D sending what is typed and, alone,
 # end of file; ^P bringing back the last line; ^C discarding what is
-# typed; Left and End moving the caret and F1 and Insert typing
+# typed and stopping what the shell runs; Left and End moving the caret and F1 and Insert typing
 # nothing; ESC holding input until ESC again; raw mode while a program
 # holds /dev/consctl, a key at a time and not echoed; /chan/shctl's
 # commands; the window gone when the shell exits, nothing of it left
-# running, and gone when a -c command is done.  Each step is checked
+# running, gone when a -c command is done, and deleted from wm/wm's
+# menu or killed from outside with what its shell runs.  Each step is checked
 # in the transcript the window writes for Veltro
 # (#sshell/fs's body).
 #
@@ -31,7 +32,7 @@ mkdir -p "$ROOT/$T"
 LOG="$ROOT/$T/log"
 trap 'rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
-SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
+SDL_VIDEODRIVER=dummy with_timeout 200 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
 	/dis/sh.dis -c "bind -c /$T /tmp; wm/wm sh /tests/wm/shell.sh" \
 	</dev/null >"$LOG" 2>&1 || true
 
@@ -66,6 +67,12 @@ fi
 
 [ "$(nlines arrows abcde)" = 1 ] && pass "arrow keys move the caret, special keys type nothing" ||
 	fail "arrows: no line 'abcde' in: $(body arrows | tail -3)"
+
+if [ "$(nlines interrupt interrupted)" = 1 ] && [ "$(nlines interrupt slept)" = 0 ]; then
+	pass "^C stops what the shell runs, and the shell goes on"
+else
+	fail "interrupt: $(body interrupt)"
+fi
 
 if [ "$(nlines holding held)" = 0 ] && [ "$(nlines released held)" = 1 ]; then
 	pass "ESC holds what is typed until ESC again"
@@ -102,6 +109,24 @@ if [ -n "$(windows cmd-running)" ] && [ -z "$(windows cmd-done)" ]; then
 	pass "-c: the window goes when the command is done"
 else
 	fail "-c: windows '$(windows cmd-running)' then '$(windows cmd-done)'"
+fi
+
+if [ -z "$(windows deleted)" ] && [ -f "$ROOT/$T/procs.deleted" ] &&
+   [ "$(procs deleted ' Shell')" = 0 ] && [ "$(procs deleted ' Sleep')" = 0 ] &&
+   [ "$(procs deleted Lucitheme)" = "$(procs before Lucitheme)" ]; then
+	pass "a window deleted from the menu takes its shell and what it runs"
+else
+	fail "delete: windows '$(windows deleted)', left $(procs deleted ' Shell') Shell, $(procs deleted ' Sleep') Sleep, $(procs deleted Lucitheme) Lucitheme (before: $(procs before Lucitheme))"
+fi
+
+if [ -z "$(windows wingroup)" ]; then
+	fail "killed: the window's process group not found"
+elif [ -z "$(windows killed)" ] && [ -f "$ROOT/$T/procs.killed" ] &&
+   [ "$(procs killed ' Shell')" = 0 ] && [ "$(procs killed ' Sleep')" = 0 ] &&
+   [ "$(procs killed Lucitheme)" = "$(procs before Lucitheme)" ]; then
+	pass "a window killed from outside takes its shell and what it runs"
+else
+	fail "killed: windows '$(windows killed)', left $(procs killed ' Shell') Shell, $(procs killed ' Sleep') Sleep, $(procs killed Lucitheme) Lucitheme (before: $(procs before Lucitheme))"
 fi
 
 if [ $failed = 0 ]; then echo "ALL PASS"; exit 0; fi

@@ -1121,7 +1121,20 @@ waitfor(ctxt: ref Context, pids: list of int): string
 	r := status[len status - 1];
 	for (i := len status - 2; i >= 0; i--)
 		r += "|" + status[i];
+	# In an interactive shell a command killed ends the line: what
+	# follows it (after ;, in a loop) is not run, as rc abandons a line
+	# on an interrupt.  wm/shell's ^C kills what its shell runs.
+	if ((ctxt.options() & ctxt.INTERACTIVE) && waskilled(status))
+		raise "fail:" + r;
 	return r;
+}
+
+waskilled(status: array of string): int
+{
+	for (i := 0; i < len status; i++)
+		if (status[i] == "killed")
+			return 1;
+	return 0;
 }
 
 parsewaitstatus(ctxt: ref Context, status: string): (int, string, string)

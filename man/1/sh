@@ -54,6 +54,11 @@ variable
 gets the process's wait message (see
 .IR prog (3));
 it will be the null string if the command was successful.
+In an interactive shell, a command it waited for that was killed
+ends the line: the commands after it are not run
+(this is how an interrupt in
+.IR wm-shell (1)
+stops a line).
 .PP
 A number-sign
 .RB ( # )

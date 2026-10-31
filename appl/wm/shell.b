@@ -22,7 +22,8 @@ implement Shell;
 # Keyboard, in cooked mode (in raw mode each key goes to the program):
 #	Enter	send the line	^D	end of file (sends what is typed)
 #	^H	erase a char	^U	erase the line	^W	erase a word
-#	^C	discard what is typed and not yet sent
+#	^C	discard what is typed and not yet sent, and stop what the
+#		shell is running (interrupt)
 #	^P ^N	the previous, the next line sent
 #	^L	clear the transcript above the line being written
 #	ESC	hold: nothing typed is sent until ESC again
@@ -167,6 +168,7 @@ c_bg, c_fg, c_hold, c_sel: string;
 
 lastcaret := "";
 themepgrp := -1;
+shellpid := -1;		# the shell's process, and its group's
 
 badmod(p: string)
 {
@@ -300,17 +302,28 @@ main(ctxt: ref Draw->Context, argv: list of string)
 	tkclient->onscreen(t, nil);
 	tkclient->startinput(t, "ptr" :: "kbd" :: nil);
 
-	themech := chan of int;
-	tpid := chan of int;
-	spawn themelistener(themech, tpid);
-	themepgrp = <-tpid;
 	appreqs := chan of ref Appfs->Req;
 	startfs(appreqs);
 
 	ioc := chan of (int, ref FileIO, ref FileIO, string, ref FileIO);
 	spawn newsh(ctxt, ioc, argv);
 
-	(nil, file, filectl, consfile, shctl) := <-ioc;
+	(shpid, file, filectl, consfile, shctl) := <-ioc;
+	shellpid = shpid;
+
+	# the theme's watchers, and the window's tether: this frame holds
+	# tether[0] (not a global, which the module's other procs would
+	# keep), and watchwindow, reading the other end, kills the groups
+	# when it goes
+	themech := chan of int;
+	tpid := chan of int;
+	tether := array[2] of ref Sys->FD;
+	if(sys->pipe(tether) < 0)
+		tether[1] = nil;
+	spawn themelistener(themech, tpid, tether[1]);
+	themepgrp = <-tpid;
+	tether[1] = nil;
+
 	if(file == nil || filectl == nil || shctl == nil) {
 		sys->fprint(sys->fildes(2), "wm/shell: shell cons creation failed\n");
 		gone();
@@ -333,6 +346,8 @@ main(ctxt: ref Draw->Context, argv: list of string)
 	c := <-wm.ctl or
 	c = <-t.wreq or
 	c = <-titlectl =>
+		if(c == "exit")
+			killgroups();
 		tkclient->wmctl(t, c);
 	<-themech =>
 		loadcolors();
@@ -383,6 +398,7 @@ main(ctxt: ref Draw->Context, argv: list of string)
 		ETX =>
 			cmd(t, ".ft.t delete outpoint end; .ft.t mark set insert end");
 			histpos = -1;
+			interrupt();
 		FF =>
 			cmd(t, ".ft.t delete 1.0 {outpoint linestart}");
 		DLE =>
@@ -626,10 +642,84 @@ gone()
 	exit;
 }
 
-themelistener(c: chan of int, pid: chan of int)
+# ^C: stop what the shell is running.  Inferno's console has no
+# interrupt, so the window kills every process the shell started (its
+# group, of its own) but the shell, which prints its next prompt.  A
+# program that made a group of its own (a window's) is not touched.
+interrupt()
 {
-	# a process group of its own, lucitheme's watcher in it too, for gone()
-	pid <-= sys->pctl(Sys->NEWPGRP, nil);
+	if(shellpid <= 0)
+		return;
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return;
+	for(;;){
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++){
+			pid := int d[i].name;
+			if(pid <= 0 || pid == shellpid)
+				continue;
+			# status: pid group user time state size module
+			(nf, f) := sys->tokenize(readsmall("/prog/"+d[i].name+"/status"), " \t");
+			if(nf >= 2 && int hd tl f == shellpid)
+				writesmall("/prog/"+d[i].name+"/ctl", "kill");
+		}
+	}
+}
+
+# The window is closed: the shell and what it started, and the theme's
+# watchers, go with it; each is in a group of its own, not the window's.
+killgroups()
+{
+	if(shellpid > 0)
+		writesmall("/prog/"+string shellpid+"/ctl", "killgrp");
+	if(themepgrp > 0)
+		writesmall("/prog/"+string themepgrp+"/ctl", "killgrp");
+}
+
+readsmall(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+writesmall(path, s: string)
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "%s", s);
+}
+
+# The window's tether: the window alone holds its other end, so this
+# read ends when the window has gone, however it went (its group killed
+# from outside, without exit): the shell's group and this one go then.
+watchwindow(tether: ref Sys->FD)
+{
+	buf := array[1] of byte;
+	while(sys->read(tether, buf, len buf) > 0)
+		;
+	killgroups();
+}
+
+themelistener(c: chan of int, pid: chan of int, tether: ref Sys->FD)
+{
+	# a process group of its own, lucitheme's watcher and watchwindow
+	# in it too, for gone() and killgroups(); no file but the tether,
+	# so the window's end is the window's alone
+	keep: list of int;
+	if(tether != nil)
+		keep = tether.fd :: nil;
+	pid <-= sys->pctl(Sys->NEWPGRP|Sys->NEWFD, keep);
+	if(tether != nil)
+		spawn watchwindow(tether);
 	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
 	lt := load Lucitheme Lucitheme->PATH;
 	if(lt == nil)
@@ -1069,7 +1159,8 @@ triminput(nr: int, input: string, partial: array of byte): (int, array of byte, 
 # /dev/cons and /dev/consctl, which the soft keyboard is told through)
 # with /dev/cons, /dev/consctl and /chan/shctl served by the window.
 # It opens /dev/cons ORCLOSE, so the file goes when the shell and
-# everything it started have closed it, and the window with it.
+# everything it started have closed it, and the window with it.  Its
+# process group is its own, for ^C (interrupt) to find what it started.
 newsh(ctxt: ref Context, ioc: chan of (int, ref FileIO, ref FileIO, string, ref FileIO),
 			args: list of string)
 {
@@ -1098,6 +1189,7 @@ newsh(ctxt: ref Context, ioc: chan of (int, ref FileIO, ref FileIO, string, ref 
 	fd0 := sys->open("/dev/cons", sys->OREAD|sys->ORCLOSE);
 	fd1 := sys->open("/dev/cons", sys->OWRITE);
 	fd2 := sys->open("/dev/cons", sys->OWRITE);
+	sys->pctl(Sys->NEWPGRP, nil);
 
 	{
 		sh->init(ctxt, "sh" :: "-n" :: args);

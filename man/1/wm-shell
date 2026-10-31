@@ -84,7 +84,8 @@ or
 .BR ./ .
 When the shell exits, as when a
 .B -c
-command is done, the window goes.
+command is done, the window goes;
+when the window is closed, the shell and what it runs go with it.
 .SS Keyboard
 In cooked mode, the default:
 .TF Enter
@@ -105,7 +106,12 @@ Erase the word before the caret.
 Erase the line before the caret.
 .TP
 .B ^C
-Discard what is typed and not yet sent.
+Discard what is typed and not yet sent, and interrupt what the shell is
+running: every process the shell started is killed (the shell runs in a
+process group of its own; a program that made its own, as a window
+does, is left), and the shell ends that line (see
+.IR sh (1))
+and prompts again.
 .TP
 .BR ^P ", " ^N
 Replace the line being typed with the previous, or the next, line sent.

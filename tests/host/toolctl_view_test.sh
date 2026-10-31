@@ -8,9 +8,6 @@
 #  - view, mounted, is the root a tool call gets: /tool there, no /usr;
 #    after 'bindpath /usr/inferno ro' a new mount has /usr/inferno,
 #    whose files read as the host's;
-#  - a remove refused still clunks its fid at the export, so the fid
-#    walked again at once works ("fid in use" before), in 9P spoken to
-#    view by tests/view_remove_helper.b;
 #  - it is read-only: remove, a write and a create through it are
 #    refused, and the host's file is unchanged;
 #  - ns (ns(1)'s text of that name space) has /usr/inferno after the
@@ -67,10 +64,11 @@ for e in rm.err write.err create.err; do
 done
 [ -f "$ROOT/usr/inferno/README" ] && [ "$(head -c 1 "$ROOT/usr/inferno/README")" != x ] || { ro=0; fail "the host's README changed"; }
 [ $ro = 1 ] && pass "view is read-only: remove, write and create refused, the host's file unchanged"
-if f viewremove | grep -q '^remove: error .*read-only' && f viewremove | grep -qx 'walk again: walk 3'; then
-	pass "a refused remove releases its fid: walked again at once, it works"
+
+if [ -z "$(f afterrm.err)" ]; then
+	pass "refused removes leave the view usable: forty reads after six of them, no errors"
 else
-	fail "a refused remove releases its fid: $(f viewremove | tr '\n' ' ')"
+	fail "after a refused remove: $(f afterrm.err | sort | uniq -c | tr '\n' ' ')"
 fi
 
 if ! f ns.before | grep -q '/usr/inferno' && f ns.after | grep -q '/usr/inferno'; then

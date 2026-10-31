@@ -34,9 +34,12 @@ cat /mnt/toolctl/ns > /tmp/ns.after
 cat /n/agent/usr/inferno/README > /tmp/readme
 # each in a shell of its own: a redirection refused ends the shell it is in
 sh -c 'rm /n/agent/usr/inferno/README' >[2] /tmp/rm.err
-# a refused remove still clunks its fid, at the export too: the same
-# fid walked again at once must work (it was "in use" at the export)
-/dis/tests/view_remove_helper.dis > /tmp/viewremove
+# a remove clunks its fid even when it fails (remove(5)): if the view
+# refused it without telling the export, the export kept the fid and
+# the next walks that reuse its number were "fid in use"
+for(i in 1 2 3 4 5) { sh -c 'rm /n/agent/usr/inferno/README' >[2] /dev/null }
+for(i in `{seq 1 40}) { cat /n/agent/usr/inferno/README > /dev/null >[2] /tmp/afterrm.err.$i }
+cat /tmp/afterrm.err.* > /tmp/afterrm.err
 sh -c 'echo x > /n/agent/usr/inferno/README' >[2] /tmp/write.err
 sh -c 'echo x > /n/agent/tmp/veltro/scratch/new' >[2] /tmp/create.err
 

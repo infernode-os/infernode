@@ -43,7 +43,7 @@ has the feature, which is what parity means.
 | Audio (PWM jack) | yes | none | No jack on a Pi 5; HDMI audio or I2S instead |
 | DSI panel, touch | yes | none | Not done; DSI is RP1's here |
 | Camera device (`#V`) | simulated | shared | Compiled in; simulated sensor only |
-| Memory above 4GB | no | none | Pools are int-sized; shared-code work |
+| Memory above 4GB | no | `../bcm/mmu.c` | **Proved**: found at boot from the device tree, every bank mapped at run time, no constant to change for a bigger board. 7.1GB free, 3.76GB of Dis heap touched. `memlimit=N` runs as a smaller board: 4, 2 and 1GB boots proved |
 
 ## What only a Pi 5 has
 

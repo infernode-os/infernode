@@ -73,10 +73,11 @@
  * where the firmware leaves it with pciex4_reset=0. 2 in MMUIPS is the
  * 40 bits this CPU reports.
  *
- * Memory above 4GB is not used yet.
+ * Memory above 4GB is found at boot.
  */
 #define	MAPGB		4
 #define	DMATOP		0x40000000UL
+#define	RAMDISCOVER	1	/* memory above 4GB, as the firmware says: ../bcm/mmu.c */
 #define	IOWINS		{ 0x1000000000ULL, 0x1040000000ULL, 0x1B80000000ULL, 0x1C00000000ULL }
 #define	MMUIPS		2
 #define	RAMLIMIT	0xFC000000UL
@@ -88,8 +89,7 @@
  * The allocator pools' ceilings, as fractions of memory (../arm64/main.c).
  * The 3B+'s defaults let the three reach half of memory together, which
  * on a 4GB board left 2GB that nothing could allocate: here they add up
- * to all of it, the Dis heap taking half. poolsize takes an int, and
- * half of memory below RAMLIMIT is under 2GB, so none of them wraps.
+ * to all of it, the Dis heap taking half, of whatever the board turns out to have.
  */
 #define	MAINDIV		4
 #define	HEAPDIV		2

@@ -966,7 +966,7 @@ poolcompact(Pool *pool)
 }
 
 void
-poolsize(Pool *p, int max, int contig)
+poolsize(Pool *p, ulong max, int contig)
 {
 	void *x;
 
@@ -978,7 +978,7 @@ poolsize(Pool *p, int max, int contig)
 	else
 		p->ressize = max-RESERVED;
 	if (contig && max > 0) {
-		p->chunk = max-1024;
+		p->chunk = max-1024;		/* who asks for this has under 2GB */
 		x = poolalloc(p, p->chunk);
 		if(x == nil)
 			panic("poolsize: don't have %d bytes\n", p->chunk);

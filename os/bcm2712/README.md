@@ -2,7 +2,7 @@
 
 **It runs on a board**: a Pi 5 Model B rev 1.0 (8GB), since 2026-10-31,
 from a card that also holds Raspberry Pi OS. On that board: all four
-cores through PSCI, the Dis JIT, about 4GB of RAM, userspace from the
+cores through PSCI, the Dis JIT, all the RAM, userspace from the
 card at 19 MB/s, Ethernet at 1000, 100 and 10 Mbit/s, USB through RP1,
 real MSI-X, Wi-Fi with WPA2, Bluetooth inquiry and LE scan, GPIO with
 edges, I2C, SPI, PWM, the real-time clock, the fan, an NVMe drive on the
@@ -14,8 +14,7 @@ No emulator models a Pi 5: QEMU master has no `raspi5`. So this port goes
 the other way from the Pi 4's: the board first, and each step asks the
 hardware instead of assuming.
 
-Not done or not proved: two screens at once; memory above 4GB, which the
-allocator's int-sized pools could not use; audio, since a Pi 5 has no
+Not done or not proved: two screens at once; audio, since a Pi 5 has no
 analogue output; DSI and CSI. The D0 stepping (2GB boards) moves the pin
 mux and is not handled.
 
@@ -128,6 +127,15 @@ The kernel keeps the firmware's PCIe setup rather than doing its own,
 and `rp1.c` finishes what the firmware has no need of. RP1 masters RAM at
 the physical address, not at Linux's `0x10_0000_0000`, and only below
 `0x80000000`, where its own registers are.
+
+## How much memory
+
+Nothing in the build says. `mmuinit` reads `/memory` from the device tree
+the firmware passes, or failing that the revision code, and each gigabyte
+above 4GB is a single level-1 block, so a bigger board needs no bigger
+tables; the pools' ceilings are fractions of what was found. What the
+boards still fix is below 4GB: `RAMLIMIT`, where their devices begin.
+`memlimit=N` on the command line stops at N MB, to try a smaller board.
 
 ## A file system on the drive
 

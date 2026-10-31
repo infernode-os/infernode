@@ -156,6 +156,14 @@ static u64int l3zero[Ntabent] __attribute__((aligned(4096)));	/* the first 2MB, 
 
 static uintptr ramtop;
 static uintptr hightop;		/* one past RAM above the first gigabyte, or 0 */
+#ifdef RAMDISCOVER
+enum { Maxbank = 4 };
+static struct {
+	uintptr	base;
+	uvlong	size;
+} bank[Maxbank];		/* memory above 4GB, in whole gigabytes */
+static int nbank;
+#endif
 
 /*
  * mmuguardzero: from here on, page zero is not mapped (#735).
@@ -232,6 +240,167 @@ findhightop(void)
 	return (uintptr)size;
 }
 
+#ifdef RAMDISCOVER
+/*
+ * What memory there is, from nothing the build knows: /memory's reg in
+ * the device tree the firmware hands every board. An 8GB Pi 5's says 0
+ * to 0x3FC00000, 1GB to 4GB, 4GB to 8GB. Below 4GB the two functions
+ * above say the same, and keep the board's limits; what is new here is
+ * above 4GB, and however much of it there is needs no tables of its
+ * own, each gigabyte being one level-1 block.
+ *
+ * Without a tree, the revision code says how much, and the rest of it
+ * is taken to start at 4GB, which is the only shape there has been.
+ *
+ * Boot option memlimit=N stops at N MB, the way a smaller board would.
+ */
+static u32int
+be32(uchar *p)
+{
+	return p[0]<<24 | p[1]<<16 | p[2]<<8 | p[3];
+}
+
+static uvlong
+becells(uchar *p, int n)
+{
+	uvlong v;
+
+	v = 0;
+	while(n-- > 0){
+		v = v<<32 | be32(p);
+		p += 4;
+	}
+	return v;
+}
+
+static void
+addbank(uvlong base, uvlong size)
+{
+	uvlong top;
+
+	top = base + size;
+	if(top <= 0x100000000ULL)
+		return;
+	if(base < 0x100000000ULL)
+		base = 0x100000000ULL;
+	base = (base + 0x3FFFFFFFULL) & ~0x3FFFFFFFULL;
+	top &= ~0x3FFFFFFFULL;
+	if(top <= base || nbank == Maxbank)
+		return;
+	bank[nbank].base = base;
+	bank[nbank++].size = top - base;
+}
+
+static int
+fdtbanks(void)
+{
+	extern uintptr dtbptr;
+	uchar *h, *p, *e, *strs, *d;
+	char *name;
+	u32int tok, len;
+	int depth, inmem, ac, sc, n, i;
+
+	h = (uchar*)dtbptr;
+	if(h == nil || be32(h) != 0xd00dfeed)
+		return -1;
+	p = h + be32(h+8);
+	strs = h + be32(h+12);
+	e = h + be32(h+4);
+	depth = inmem = 0;
+	ac = 2;
+	sc = 1;
+	n = 0;
+	while(p + 4 <= e){
+		tok = be32(p);
+		p += 4;
+		switch(tok){
+		case 1:		/* a node */
+			name = (char*)p;
+			if(++depth == 2)
+				inmem = strncmp(name, "memory", 6) == 0;
+			p += (strlen(name) + 4) & ~3;
+			break;
+		case 2:		/* its end */
+			if(--depth < 2)
+				inmem = 0;
+			break;
+		case 3:		/* a property */
+			len = be32(p);
+			name = (char*)strs + be32(p+4);
+			d = p + 8;
+			p = d + ((len + 3) & ~3);
+			if(depth == 1 && strcmp(name, "#address-cells") == 0)
+				ac = be32(d);
+			else if(depth == 1 && strcmp(name, "#size-cells") == 0)
+				sc = be32(d);
+			else if(inmem && strcmp(name, "reg") == 0){
+				for(i = 0; i + (ac+sc)*4 <= len; i += (ac+sc)*4){
+					addbank(becells(d+i, ac), becells(d+i+ac*4, sc));
+					n++;
+				}
+			}
+			break;
+		case 4:		/* nothing */
+			break;
+		default:	/* the end, or not a tree */
+			return n > 0 ? 0 : -1;
+		}
+	}
+	return -1;
+}
+
+static void
+findbanks(void)
+{
+	static char line[1024];
+	char *p;
+	uvlong lim, size;
+	u32int rev[1];
+	int i;
+
+	if(fdtbanks() < 0){
+		rev[0] = 0;
+		if(mboxprop(Taggetrev, rev, 0, 1) == 0 && (rev[0] & (1<<23)) != 0){
+			size = 256ULL*1024*1024 << ((rev[0] >> 20) & 7);
+			addbank(0, size);
+		}
+	}
+	line[0] = 0;
+	mboxcmdline(line, sizeof line - 1);
+	for(p = line; *p != 0; p++)
+		if(memcmp(p, "memlimit=", 9) == 0)
+			break;
+	if(*p == 0)
+		return;
+	lim = 0;
+	for(p += 9; *p >= '0' && *p <= '9'; p++)
+		lim = lim*10 + *p - '0';
+	lim <<= 20;
+	if(lim == 0)
+		return;
+	for(i = 0; i < nbank; i++){
+		if(bank[i].base >= lim)
+			bank[i].size = 0;
+		else if(bank[i].base + bank[i].size > lim)
+			bank[i].size = lim - bank[i].base;
+	}
+	if(hightop > lim)
+		hightop = lim > 0x40000000ULL ? lim : 0;
+	if(ramtop > lim)
+		ramtop = lim;
+}
+
+/* the n'th stretch of memory above 4GB, its size 0 past the last */
+uvlong
+mmubank(int n, uintptr *base)
+{
+	if(n >= nbank)
+		return 0;
+	*base = bank[n].base;
+	return bank[n].size;
+}
+#endif
+
 void
 mmuinit(void)
 {
@@ -241,6 +410,9 @@ mmuinit(void)
 
 	ramtop = findramtop();
 	hightop = findhightop();
+#ifdef RAMDISCOVER
+	findbanks();
+#endif
 
 	/* level 1: one entry per level-2 table, each covering 1GB */
 	for(i = 0; i < Ntabent; i++)
@@ -292,6 +464,12 @@ mmuinit(void)
 #endif
 	l2tab[0][0] = (u64int)(uintptr)l3zero | Dtable;
 
+#ifdef RAMDISCOVER
+	for(i = 0; i < nbank; i++)
+		for(pa = bank[i].base; pa < bank[i].base + bank[i].size; pa += 0x40000000UL)
+			l1tab[pa >> 30] = (u64int)pa | Dblock | Attridx0 | Apkrw | Shinner | Af;
+#endif
+
 #ifdef PCIWIN
 	/*
 	 * A board with PCIe has its devices' registers in a window far
@@ -329,6 +507,24 @@ mmuramtop(void)
  */
 uintptr
 mmuhightop(void)
+{
+#ifdef RAMDISCOVER
+	int i;
+	uintptr top;
+
+	top = hightop != 0 ? hightop : ramtop;
+	for(i = 0; i < nbank; i++)
+		if(bank[i].size != 0 && bank[i].base + bank[i].size > top)
+			top = bank[i].base + bank[i].size;
+	return top;
+#else
+	return hightop != 0 ? hightop : ramtop;
+#endif
+}
+
+/* the end of what the tables map as level 2: the top of the first 4GB's memory */
+uintptr
+mmulowtop(void)
 {
 	return hightop != 0 ? hightop : ramtop;
 }

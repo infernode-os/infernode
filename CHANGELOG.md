@@ -6,6 +6,16 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **An activity's `event` file has a queue for each reader; the task
+  tool's Apply and Discard wait on it (#1019).** luciuisrv let one
+  reader wait on `activity/N/event` at a time: a second reader ended
+  the first's read, and an event went to one of them. So the task tool,
+  after sending a task `/promote` or `/revert`, re-read the task's
+  conversation every quarter second for its answer. Each open now has
+  its own queue, as the global `event` file's always had; events with
+  no reader still wait for the first to open the file, and what the
+  last reader leaves unread waits for the next. The task tool waits on
+  the task's events for its answer, five seconds at most as before.
 - **A payment's requester waits on its read for the decision; nothing
   polls (#1019).** x402's `authorize` (payfetch) re-read its fid every
   two seconds, for up to 90, while a payment waited for a person to

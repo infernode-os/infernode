@@ -17,12 +17,6 @@
 
 load std
 
-port=$1
-if {~ $#port 0} {
-	port=7070
-}
-addr='tcp!127.0.0.1!'$port
-
 bind -a '#A' /dev
 mkdir -p /n/opus
 bind '#Z' /n/opus
@@ -42,18 +36,12 @@ echo 'bits 16' > /dev/audioctl
 cat /n/opus/dec > /dev/audio &
 spk_pid=$apid
 
-# Announce + export. We export /n/opus so the dialer sees
-# /n/peer/{enc,dec,ctl,status} as the same files.
-listen 'tcp!*!'$port { export /n/opus & } &
-listen_pid=$apid
-sleep 1
-
-# Loopback mount
+# Process-local 9P export. No network listener is needed for this acceptance
+# test; /n/peer still traverses the same Styx export server as a remote call.
 mkdir -p /n/peer
-if {! mount $addr /n/peer} {
-	echo 'voice/test-tone-opus: mount' $addr 'failed' >[1=2]
+if {! mount {export /n/opus} /n/peer} {
+	echo 'voice/test-tone-opus: local export mount failed' >[1=2]
 	if {ftest -e /prog/$spk_pid} { echo kill > /prog/$spk_pid/ctl }
-	if {ftest -e /prog/$listen_pid} { echo kill > /prog/$listen_pid/ctl }
 	exit mount
 }
 
@@ -63,7 +51,7 @@ if {! mount $addr /n/peer} {
 cat /n/opus/enc > /n/peer/dec &
 net_pid=$apid
 
-echo 'voice/test-tone-opus: routing audiotone through opus over' $addr
+echo 'voice/test-tone-opus: routing audiotone through opus over local 9P'
 audiotone -r 48000 -c 1 /n/opus/enc
 
 # Give the pipeline a beat to finish playing what's still in the SDL
@@ -73,7 +61,5 @@ sleep 1
 
 if {ftest -e /prog/$net_pid}    { echo kill > /prog/$net_pid/ctl }
 if {ftest -e /prog/$spk_pid}    { echo kill > /prog/$spk_pid/ctl }
-if {ftest -e /prog/$listen_pid} { echo kill > /prog/$listen_pid/ctl }
-
 echo 'voice/test-tone-opus: done'
 cat /n/opus/status

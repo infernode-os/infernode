@@ -18,7 +18,11 @@ trap 'rm -rf "$BASE" "$SECRET"; rm -f "$SRC" "$DIS"' EXIT HUP INT TERM
 rm -rf "$BASE" "$SECRET"
 mkdir -p "$BASE" "$SECRET"
 printf 'outside\n' >"$SECRET/value"
-ln -s ../nodevs-symlink-secret "$BASE/link"
+printf 'inside\n' >"$BASE/plain"
+ln -s ../nodevs-symlink-secret "$BASE/dir-rel"
+ln -s "$SECRET" "$BASE/dir-abs"
+ln -s ../nodevs-symlink-secret/value "$BASE/file-rel"
+ln -s "$SECRET/value" "$BASE/file-abs"
 
 cat >"$SRC" <<'EOF'
 implement NodevsSymlinkMech;
@@ -27,23 +31,34 @@ include "sys.m";
 include "draw.m";
 NodevsSymlinkMech: module { init: fn(nil: ref Draw->Context, nil: list of string); };
 
-canopen(): int
+canopen(path: string): int
 {
-	fd := sys->open("/tmp/nodevs-symlink-root/link/value", Sys->OREAD);
+	fd := sys->open(path, Sys->OREAD);
 	return fd != nil;
 }
 
 init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
-	before := canopen();
+	paths := array[] of {
+		"/tmp/nodevs-symlink-root/dir-rel/value",
+		"/tmp/nodevs-symlink-root/dir-abs/value",
+		"/tmp/nodevs-symlink-root/file-rel",
+		"/tmp/nodevs-symlink-root/file-abs",
+	};
+	before := 1;
+	for(i := 0; i < len paths; i++)
+		before &= canopen(paths[i]);
 	pctlok := sys->pctl(Sys->NODEVS, nil) >= 0;
-	after := canopen();
-	if(before && pctlok && !after)
+	after := 0;
+	for(i = 0; i < len paths; i++)
+		after |= canopen(paths[i]);
+	plain := canopen("/tmp/nodevs-symlink-root/plain");
+	if(before && pctlok && !after && plain)
 		sys->print("MECH: PASS\n");
 	else
-		sys->print("MECH: FAIL before=%d pctl=%d after=%d err=%r\n",
-			before, pctlok, after);
+		sys->print("MECH: FAIL before=%d pctl=%d after=%d plain=%d err=%r\n",
+			before, pctlok, after, plain);
 }
 EOF
 

@@ -123,7 +123,7 @@ fdclose(Fgrp *f, int fd)
 	Chan *c;
 
 	lock(&f->l);
-	c = f->fd[fd];
+	c = fd >= 0 && fd <= f->maxfd ? f->fd[fd] : nil;
 	if(c == 0) {
 		/* can happen for users with shared fd tables */
 		unlock(&f->l);

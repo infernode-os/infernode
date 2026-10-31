@@ -582,9 +582,9 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		(first, nil) := splitfirst(p[1:]);
 		if(first == "")
 			continue;
-		# Skip top-level dirs already in safe or handled by steps 1–7
-		if(inlist(first, safe) || first == "net" || first == "net.alt" ||
-		   first == "mnt")
+		# Gated roots enter safe only through their dedicated capability above.
+		# A differently-cased path grant must not re-add the real root here.
+		if(inlist(first, safe) || reservedroot(first))
 			continue;
 		if(!inlist(first, extradirs))
 			extradirs = first :: extradirs;
@@ -629,6 +629,16 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 			if(ederr != nil)
 				return sys->sprint("restrict %s: %s", topdir, ederr);
 		}
+	}
+
+	# Home-directory grants must not carry authentication material. Hide both
+	# credential stores after the requested /usr view has been constructed.
+	for(ud := extradirs; ud != nil; ud = tl ud) {
+		if(asciilower(hd ud) != "usr")
+			continue;
+		err = hideusercredentials("/" + hd ud);
+		if(err != nil)
+			return sys->sprint("restrict /%s credentials: %s", hd ud, err);
 	}
 
 	if(caps.actid >= 0 && caps.writepaths != nil) {
@@ -753,6 +763,32 @@ tmpveltroallow(caps: ref Capabilities): list of string
 # Filter paths that start with a given prefix, stripping the prefix.
 # E.g., filterpaths(("/n/local/Users/pdfinn/tmp"::nil), "/n/local/")
 # returns ("Users/pdfinn/tmp"::nil)
+hideusercredentials(root: string): string
+{
+	fd := sys->open(root, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if((dirs[i].mode & Sys->DMDIR) == 0)
+				continue;
+			for(c := "keyring" :: "secstore" :: nil; c != nil; c = tl c) {
+				p := root + "/" + dirs[i].name + "/" + hd c;
+				(ok, d) := sys->stat(p);
+				if(ok >= 0 && (d.mode & Sys->DMDIR)) {
+					err := restrictdir(p, nil, 0);
+					if(err != nil)
+						return err;
+				}
+			}
+		}
+	}
+	return nil;
+}
+
 filterpaths(paths: list of string, prefix: string): list of string
 {
 	result: list of string;
@@ -1091,17 +1127,22 @@ asciilower(s: string): string
 
 ambientauthoritypath(path: string): int
 {
-	if(path == "/chan" || path == "/fd" || prefix(path, "/fd/"))
+	if(path == "/chan" || prefix(path, "/chan/") ||
+	   path == "/fd" || prefix(path, "/fd/"))
 		return 1;
 	if(path == "/usr")
 		return 1;
-	return pathhascomponent(path, "keyring") &&
+	return (pathhascomponent(path, "keyring") || pathhascomponent(path, "secstore")) &&
 		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 path == "/secstore" || prefix(path, "/secstore/") ||
 		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
 }
 
 privilegedcontrolpath(path: string, tools: list of string): int
 {
+	path = asciilower(path);
+	if(ambientauthoritypath(path))
+		return 1;
 	dangerous := array[] of {
 		"/tool/ctl",
 		"/tool/ns",
@@ -1131,6 +1172,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	# policy did not recognise.
 	if(prefix(path, "/mnt/toolctl."))
 		return 1;
+	if(reservedrootpath(path) || controlaliaspath(path))
+		return 1;
 	if(walletcontrolpath(path))
 		return 1;
 	if(ftreecontrolpath(path))
@@ -1149,6 +1192,36 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		return 1;
 	if(fixedservicecontrolpath(path))
 		return 1;
+	return 0;
+}
+
+reservedroot(first: string): int
+{
+	first = asciilower(first);
+	return first == "mnt" || first == "chan" || first == "phone" ||
+		first == "net" || first == "net.alt" || first == "fd";
+}
+
+reservedrootpath(path: string): int
+{
+	return path == "/mnt" ||
+		path == "/chan" || prefix(path, "/chan/") ||
+		path == "/fd" || prefix(path, "/fd/");
+}
+
+controlaliaspath(path: string): int
+{
+	return prefix(path, "/mnt/toolctl.") || prefix(path, "/tool.");
+}
+
+policyroot(path: string): int
+{
+	case asciilower(path) {
+	"/dev" or "/dis" or "/env" or "/lib" or "/n" or "/n/local" or "/prog" or
+	"/tmp" or "/tmp/veltro" or "/tool" or "/mnt" or "/chan" or "/fd" or
+	"/phone" or "/net" or "/net.alt" =>
+		return 1;
+	}
 	return 0;
 }
 

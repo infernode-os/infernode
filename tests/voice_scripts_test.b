@@ -101,6 +101,8 @@ testListenShape(t: ref T)
 		"voice/listen calls listen builtin");
 	t.assert(!contains(s, "listen -A"),
 		"voice/listen requires authenticated transport");
+	t.assert(contains(s, "listen -k $key"),
+		"voice/listen explicitly selects its keyring");
 	t.assert(!contains(s, "export /dev"),
 		"voice/listen does not export the whole device tree");
 	t.assert(contains(s, "export /tmp/voice-export"),
@@ -109,6 +111,8 @@ testListenShape(t: ref T)
 		"voice/listen includes only the audio data endpoint");
 	t.assert(contains(s, "bind /dev/audioctl /tmp/voice-export/audioctl"),
 		"voice/listen includes only the audio control endpoint");
+	t.assert(contains(s, "memfs /tmp/voice-export"),
+		"voice/listen creates a private export filesystem without blocking");
 }
 
 testDialShape(t: ref T)
@@ -124,6 +128,8 @@ testDialShape(t: ref T)
 		"voice/dial writes INFR-194 capture buffer cap");
 	t.assert(contains(s, "mount "),
 		"voice/dial calls mount");
+	t.assert(contains(s, "mount -k $key"),
+		"voice/dial explicitly selects its keyring");
 	t.assert(contains(s, "/n/voice/audio"),
 		"voice/dial references the mounted /n/voice/audio file");
 	t.assert(contains(s, "/dev/audio"),
@@ -135,8 +141,22 @@ testTestToneShape(t: ref T)
 	s := script_contents(t, "/lib/voice/test-tone");
 	t.assert(contains(s, "audiotone"),
 		"voice/test-tone invokes audiotone");
-	t.assert(contains(s, "tcp!127.0.0.1!"),
-		"voice/test-tone targets the loopback");
+	t.assert(contains(s, "mount {export /tmp/voice-test-export}"),
+		"voice/test-tone exercises a process-local 9P export");
+	t.assert(!contains(s, "listen -A") && !contains(s, "mount -A"),
+		"voice/test-tone opens no anonymous network transport");
+}
+
+testOpusAuthShape(t: ref T)
+{
+	l := script_contents(t, "/lib/voice/listen-opus");
+	d := script_contents(t, "/lib/voice/dial-opus");
+	t.assert(contains(l, "listen -k $key"),
+		"voice/listen-opus explicitly selects its keyring");
+	t.assert(!contains(l, "listen -A"),
+		"voice/listen-opus has no anonymous remote mode");
+	t.assert(contains(d, "mount -k $key"),
+		"voice/dial-opus explicitly selects its keyring");
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -157,6 +177,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ListenShape", testListenShape);
 	run("DialShape", testDialShape);
 	run("TestToneShape", testTestToneShape);
+	run("OpusAuthShape", testOpusAuthShape);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

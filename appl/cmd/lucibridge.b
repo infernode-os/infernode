@@ -534,7 +534,10 @@ turninput(m: string)
 		ctl("cancel");
 		return;
 	}
-	if(awaiting) {
+	# Delivered task/message events are subsequent turns, never answers to a
+	# permission dialogue. Only the user's own input can resolve the tile.
+	if(awaiting && !agentlib->hasprefix(m, TASKEVENT) &&
+	   !agentlib->hasprefix(m, MSGEVENT)) {
 		answerc <-= m;
 		return;
 	}

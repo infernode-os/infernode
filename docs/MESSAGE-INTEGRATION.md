@@ -41,7 +41,7 @@ underlying protocol." Sources live in `appl/veltro/sources/` (`sms.b`,
     status    (r)   human-readable per-source status
     draft     (w)   <src>\n<origid>\n<body...>           queue immutable reply proposal
     flag      (w)   <src> <origid> <word>                message flag capability
-    pending   (r)   request IDs and metadata              trusted controller only
+    pending   (r)   IDs, metadata, and exact escaped body trusted controller only
     approve   (w)   approve <id>                          trusted, one shot
     deny      (w)   deny <id>                             trusted, one shot
     sources/  (dir) one entry per registered source

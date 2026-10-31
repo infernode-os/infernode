@@ -120,6 +120,7 @@ TARG=\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
 	pqauth_test.dis\
+	p9any_timeout_test.dis\
 	publicnet_test.dis\
 	interop_test.dis\
 	authneg_test.dis\
@@ -275,6 +276,7 @@ MODULES=\
 	$ROOT/appl/xenith/util.m\
 	$ROOT/appl/xenith/wind.m\
 	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/cmd/auth/factotum/authio.m\
 	$ROOT/appl/xenith/xfid.m
 
 SYSMODULES=\
@@ -388,6 +390,8 @@ SYSMODULES=\
 	x402.m\
 	icon.m\
 	appfs.m\
+	auth9.m\
+	styxlib.m\
 
 DISBIN=$ROOT/dis/tests
 

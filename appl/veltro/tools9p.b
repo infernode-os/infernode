@@ -2782,6 +2782,7 @@ viewproc(srv: ref Styxserver, v: ref View)
 	cin: array of byte;	# a message from the client not yet whole
 	xin: array of byte;	# a reply from the export not yet whole
 	rd: ref Tmsg.Read;
+	removes: list of (int, string);	# refused removes the export is clunking: tag, refusal
 	dead := err != nil;
 Loop:
 	for(;;) {
@@ -2794,9 +2795,27 @@ Loop:
 				(n, t) := Tmsg.unpack(cin);
 				if(n <= 0)
 					break;
-				if(t != nil && (e := viewrefuse(t)) != nil)
-					out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
-				else if(sys->write(fds[1], cin[0:n], n) != n) {
+				if(t != nil && (e := viewrefuse(t)) != nil) {
+					pick m := t {
+					Remove =>
+						# A remove clunks its fid even when it fails
+						# (remove(5)), so the export must let the fid
+						# go as well: refused here and never passed on,
+						# the export kept it, and the client's next use
+						# of that number was "fid in use". It is passed
+						# on as a clunk, whose reply goes back as this
+						# refusal.
+						c := (ref Tmsg.Clunk(m.tag, m.fid)).pack();
+						if(sys->write(fds[1], c, len c) != len c) {
+							dead = 1;
+							if(err == nil)
+								err = sys->sprint("export: %r");
+						} else
+							removes = (m.tag, e) :: removes;
+					* =>
+						out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
+					}
+				} else if(sys->write(fds[1], cin[0:n], n) != n) {
 					dead = 1;
 					if(err == nil)
 						err = sys->sprint("export: %r");
@@ -2817,7 +2836,17 @@ Loop:
 						dead = 1;
 						break;
 					}
-					out = catbytes(out, xin[0:n]);
+					reply := xin[0:n];
+					if(removes != nil) {
+						(nil, r) := Rmsg.unpack(reply);
+						if(r != nil) {
+							e: string;
+							(removes, e) = takeremove(removes, r.tag);
+							if(e != nil)
+								reply = (ref Rmsg.Error(r.tag, e)).pack();
+						}
+					}
+					out = catbytes(out, reply);
 					xin = xin[n:];
 				}
 			}
@@ -2847,6 +2876,21 @@ Loop:
 	fd := sys->open(sys->sprint("/prog/%d/ctl", mypid), Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "killgrp");
+}
+
+# The refusal a refused remove's reply carries, if tag is one, and the list without it.
+takeremove(l: list of (int, string), tag: int): (list of (int, string), string)
+{
+	r: list of (int, string);
+	e: string;
+	for(; l != nil; l = tl l) {
+		(t, s) := hd l;
+		if(t == tag && e == nil)
+			e = s;
+		else
+			r = hd l :: r;
+	}
+	return (r, e);
 }
 
 viewpipe(fd: ref Sys->FD, inq: chan of array of byte)

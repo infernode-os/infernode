@@ -17,9 +17,7 @@ hardware instead of assuming.
 Not done or not proved: two screens at once; memory above 4GB, which the
 allocator's int-sized pools could not use; audio, since a Pi 5 has no
 analogue output; DSI and CSI. The D0 stepping (2GB boards) moves the pin
-mux and is not handled. External PCIe stays at gen 1 unless `pciegen2`
-is on the command line, because at gen 2 this bench's link drops, under
-Linux too.
+mux and is not handled.
 
 ## What is here
 
@@ -137,7 +135,8 @@ the physical address, not at Linux's `0x10_0000_0000`, and only below
 1KB blocks a large disk takes hours, the free list being most of it; at
 16KB, 1.8TB took 30 seconds. Afterwards `mount -c {disk/kfs -n nv
 '#S/nvme0p3'} /n/nvme`. kfs says "needs check" after a reboot that did
-not halt it first, and checks: 36 seconds on that disk with little on it.
+not unmount it first, and checks: 36 seconds on that disk with little on
+it. `unmount` is what marks it clean.
 
 ## What is left
 
@@ -146,6 +145,8 @@ not halt it first, and checks: 36 seconds on that disk with little on it.
    SuperSpeed device, the Debug Probe, a Bluetooth peer, a real I2C or
    SPI device, a coin cell, and a person to press the power button.
 3. Booting the firmware from the drive. `nvmeroot` takes userland from
-   `nvme0p1` already.
+   `nvme0p1` already. Careful: with NVMe first in `BOOT_ORDER`, a FAT
+   partition holding a `config.txt` and no kernel stopped this board's
+   firmware outright, power cycle or no, until the drive was unplugged.
 4. In `docs/DEVICE-LETTERS.md`, when #1036 lands: mark `J`, `Q`, `W` and
    `r` in use, here.

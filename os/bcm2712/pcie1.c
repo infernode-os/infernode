@@ -131,6 +131,16 @@ pcie1linked(void)
 	return (B(Pciestatus) & (Plu|Dla)) == (Plu|Dla);
 }
 
+/* down to gen 1, and retrain */
+void
+pcie1slow(void)
+{
+	B(Lnkctl2) = (B(Lnkctl2) & ~0xFU) | 1;
+	coherence();
+	B(Lnkctl) |= 1<<5;
+	coherence();
+}
+
 /* what it runs at, by the bridge's own link status */
 char*
 pcie1speed(void)
@@ -183,13 +193,14 @@ pcie1up(void)
 	B(Ubusbar1hi) = 0x10;
 
 	/*
-	 * Gen 1. At gen 2 the link trains, carries 378MB/s, and about 1.6s
-	 * later drops: the drive takes link-down as a reset and loses its
-	 * configuration, and the link comes back at gen 1 by itself. Linux
-	 * lost this drive the same way on this HAT, so the cause may well
-	 * be the board and not this file: pciegen2 is for finding out.
+	 * Gen 2. On the bench the link trains, carries 370MB/s, drops once
+	 * about 1.6s later, as it also did under Linux on this board, and
+	 * comes straight back, the drive having lost its configuration;
+	 * nvme.c recovers that, and it has then held under load. A link
+	 * that keeps doing it is sent to gen 1: pcie1slow. pciegen1 is for
+	 * asking for that from the start.
 	 */
-	i = cmdlineword("pciegen2") ? 2 : 1;
+	i = cmdlineword("pciegen1") ? 1 : 2;
 	B(Lnkcap) = (B(Lnkcap) & ~0xFU) | i;
 	B(Lnkctl2) = (B(Lnkctl2) & ~0xFU) | i;
 	B(Idval3) = (B(Idval3) & ~0xFFFFFFU) | 0x060400;

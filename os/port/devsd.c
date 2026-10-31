@@ -401,6 +401,8 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 			sdaddnvmepart(cb->f[1], strtoll(cb->f[2], nil, 0),
 				strtoll(cb->f[3], nil, 0));
 		}
+		else if(cb->nf == 1 && strcmp(cb->f[0], "nvmeslow") == 0)
+			nvmeslow();
 #endif
 		else
 			error(Ebadctl);

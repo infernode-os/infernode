@@ -74,6 +74,7 @@ enum
 	Fua	= 1<<30,
 	Iowait	= 3000,			/* ms, for one transfer */
 	Linkwait= 5000,			/* ms, for a link to come back */
+	Toomany	= 4,			/* resets, before a slower link */
 	Failed	= -1,			/* no answer, as opposed to a status */
 };
 
@@ -350,6 +351,11 @@ recover(void)
 	print("nvme: resetting the controller\n");
 	wait = nvme.canwait;
 	nvme.canwait = 0;
+	if(nvme.nrecover == Toomany){
+		print("nvme: too many resets: down to gen 1\n");
+		pcie1slow();
+		microdelay(100000);
+	}
 	for(i = 0; i < Linkwait && !pcie1linked(); i++)
 		microdelay(1000);
 	if(i == Linkwait){
@@ -367,6 +373,15 @@ recover(void)
 	nvme.canwait = wait;
 	print("nvme: back, %s\n", pcie1speed());
 	return 0;
+}
+
+/* by hand, from #S/sdctl: let the next transfer find what is left */
+void
+nvmeslow(void)
+{
+	qlock(&nvme.q);
+	pcie1slow();
+	qunlock(&nvme.q);
 }
 
 /* one transfer, and if it got no answer one more after a reset */

@@ -38,7 +38,7 @@ has the feature, which is what parity means.
 | GPIO edge events | yes | `gpiorp1.c` | **Proved** across a jumper, GPIO 5 to GPIO 0 |
 | `#P` temperature, throttling | yes | shared | **Proved** |
 | Serial recovery loader | yes | `loader/` | Standalone **proved**; embedded copy built |
-| Framebuffer, desktop | yes | shared | **Proved** on HDMI0: Lucifer, colours right. Needs `framebuffer_depth=32`. The firmware gives 1920x1080 whatever the monitor says: a 1024x768 monitor overflows |
+| Framebuffer, desktop | yes | shared | **Proved** on HDMI0, one monitor: Lucifer, right size and colours. Needs `framebuffer_depth=32`. The mode comes from the EDID, by the firmware-KMS tags (`../bcm/fb.c`). HDMI1 and a second screen not tried |
 | Audio (PWM jack) | yes | none | No jack on a Pi 5; HDMI audio or I2S instead |
 | DSI panel, touch | yes | none | Not done; DSI is RP1's here |
 | Camera device (`#V`) | simulated | shared | Compiled in; simulated sensor only |

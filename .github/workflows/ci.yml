@@ -740,7 +740,7 @@ jobs:
               jit_interp_handoff_test jit_real_test jsfs_test
               listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
-              nsaudit_metadata_test profile_legacykey_test
+              nsaudit_metadata_test prof_test profile_legacykey_test
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test
               secstore_e2e_test secstore_logon_test secstored_test
               security_check_test serve_llm_smoke_test stale_dis_test

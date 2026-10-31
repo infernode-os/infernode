@@ -4,14 +4,14 @@
 # dummy driver, typed at through /dev/keyboard (tests/wm/shell.sh): a
 # line sent and its output shown; ^D sending what is typed and, alone,
 # end of file; ^P bringing back the last line; ^C discarding what is
-# typed and stopping what the shell runs; Left and End moving the caret and F1 and Insert typing
-# nothing; ESC holding input until ESC again; raw mode while a program
-# holds /dev/consctl, a key at a time and not echoed; /chan/shctl's
-# commands; the window gone when the shell exits, nothing of it left
-# running, gone when a -c command is done, and deleted from wm/wm's
-# menu or killed from outside with what its shell runs.  Each step is checked
-# in the transcript the window writes for Veltro
-# (#sshell/fs's body).
+# typed and stopping what the shell runs; Left and End moving the caret
+# and F1 and Insert typing nothing; ESC holding input until ESC again;
+# raw mode while a program holds /dev/consctl, a key at a time and not
+# echoed; /chan/shctl's commands; the window gone when the shell exits,
+# nothing of it left running, gone when a -c command is done, and
+# deleted from wm/wm's menu or killed from outside with what its shell
+# runs.  Each step is checked in the transcript the window writes for
+# Veltro (#sshell/fs's body).
 #
 set -e
 . "$(dirname "$0")/common.sh"

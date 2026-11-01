@@ -22,7 +22,7 @@ The logo is unchanged from the app icons (`emu/iOS/.../icon_1024.png`,
 ## The application
 
 - **Name:** InferNode
-- **Description:** A 64-bit Inferno® OS that runs on the Pi itself, with no
+- **Description:** A 64-bit Inferno® OS that runs on the Pi itself, without
   Linux underneath: 9P everywhere and namespace-isolated AI agents.
 - **Website:** https://www.infernode.io
 - **Support:** https://infernode.io/support/ (and

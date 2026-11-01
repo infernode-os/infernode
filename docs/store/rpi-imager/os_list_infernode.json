@@ -2,7 +2,7 @@
   "os_list": [
     {
       "name": "InferNode",
-      "description": "A 64-bit Inferno® OS that runs on the Pi itself, with no Linux underneath: 9P everywhere and namespace-isolated AI agents.",
+      "description": "A 64-bit Inferno® OS that runs on the Pi itself, without Linux underneath: 9P everywhere and namespace-isolated AI agents.",
       "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
       "website": "https://www.infernode.io",
       "subitems": [

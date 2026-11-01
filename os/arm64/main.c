@@ -1988,21 +1988,18 @@ idlehands(void)
 	 * "setpower ON" with two cores idling politely around the
 	 * corpse.
 	 *
-	 * Core 0 waits for interrupts (it owns the devices); the others
-	 * wait for events, because their wakeups are ready()'s sev.
-	 * Both do it with DAIF clear and restore the caller's splhi
-	 * afterwards.
+	 * Every core waits for events, core 0 too, because a wakeup is
+	 * ready()'s sev, and an interrupt ends a wfe as well. Core 0 used to
+	 * wfi, and sev does not end that: a process that had to run there
+	 * (a preempted one stays on its core) waited for the next clock
+	 * tick, each time. On a Pi 5 that was gigabit input at 300 Mbit/s
+	 * with nothing lost, until something happened to take a lock in the
+	 * receive path and hide it. Both restore the caller's splhi.
 	 */
-	if(m->machno == 0)
-		__asm__ volatile(
-			"msr daifclr, #2\n\t"
-			"wfi\n\t"
-			"msr daifset, #2" ::: "memory");
-	else
-		__asm__ volatile(
-			"msr daifclr, #2\n\t"
-			"wfe\n\t"
-			"msr daifset, #2" ::: "memory");
+	__asm__ volatile(
+		"msr daifclr, #2\n\t"
+		"wfe\n\t"
+		"msr daifset, #2" ::: "memory");
 }
 
 /*

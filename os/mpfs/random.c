@@ -31,11 +31,18 @@
  * its refusal path, and the harness checks that it does. The success
  * path is proved only on silicon.
  *
- * When the service is refused or does not answer, this board has NO
- * ENTROPY SOURCE: it says so in capitals, as ../virt/random.c does
- * with no virtio-rng, and hands out a counter stirred with the time so
- * that the machine still boots. NOTHING CRYPTOGRAPHIC DONE ON SUCH A
- * BOOT IS WORTH ANYTHING.
+ * When the service is refused or does not answer at boot, this board
+ * has NO ENTROPY SOURCE: it says so in capitals, as ../virt/random.c
+ * does with no virtio-rng, and hwrandom answers -1, so os/port/random.c
+ * makes no key unless the command line says "insecurerandom" (which the
+ * QEMU harness passes). The machine boots either way.
+ *
+ * When it worked at boot and stops working later, the board still has
+ * a generator, only a silent one: hwrandom returns what it had, and the
+ * key that wanted more waits, out loud, while each call asks again. It
+ * used to hand out the counter from then on, after one line on the
+ * console: a key made a minute after that line was as predictable as
+ * one made with no generator at all.
  */
 
 #include "u.h"
@@ -66,7 +73,9 @@ enum
 
 static Lock rnglock;
 static int hastrng;
+static int probed;	/* rnginit has run */
 static int warned;
+static int failed;	/* the service stopped answering after boot; reported */
 static uchar nonce[Noncebytes];
 static int noncepos = Noncebytes;	/* bytes of nonce[] already handed out */
 
@@ -128,6 +137,7 @@ rnginit(void)
 		hastrng = 1;
 		noncepos = 0;
 	}
+	probed = 1;
 	iunlock(&rnglock);
 	if(hastrng)
 		print("rng:  system controller nonce service (TRNG-seeded DRBG)\n");
@@ -137,43 +147,40 @@ rnginit(void)
 		print("rng:  the system controller did not answer: NO ENTROPY SOURCE\n");
 }
 
-static int
-weakrandom(uchar *p, int n)
-{
-	static u64int weak;
-	int got;
-
-	if(!warned){
-		warned = 1;
-		uartputstr("\nrng:  NO ENTROPY SOURCE. Keys made on this boot are PREDICTABLE.\n\n");
-	}
-	for(got = 0; got < n; got++){
-		weak = weak*6364136223846793005ULL + clockcount() + 1442695040888963407ULL;
-		p[got] = weak >> 56;
-	}
-	return got;
-}
-
 int
 hwrandom(uchar *p, int n)
 {
-	int got, m;
+	int got, m, s;
 
-	if(!hastrng)
-		return weakrandom(p, n);
+	if(!probed)
+		return 0;		/* before boardioprobe: not yet known, so dry */
+	if(!hastrng){
+		if(!warned){
+			warned = 1;
+			uartputstr("\nrng:  NO ENTROPY SOURCE: no key is made on this boot unless the command\n"
+				"      line says insecurerandom.\n\n");
+		}
+		return -1;
+	}
 	ilock(&rnglock);
 	for(got = 0; got < n; got += m){
 		if(noncepos == Noncebytes){
-			if(noncereq() != 0){
+			s = noncereq();
+			if(s != 0){
 				/*
-				 * It worked at boot and has stopped: say so,
-				 * and do not pretend what follows is random.
+				 * It worked at boot and has stopped. Say so the first
+				 * time, and give back only what was real; the next call
+				 * asks again.
 				 */
-				hastrng = 0;
-				iunlock(&rnglock);
-				uartputstr("\nrng:  the system controller's nonce service has FAILED\n");
-				return got + weakrandom(p + got, n - got);
+				if(!failed){
+					failed = 1;
+					iunlock(&rnglock);
+					uartputstr("\nrng:  the system controller's nonce service has FAILED; keys wait for it\n");
+					return got;
+				}
+				break;
 			}
+			failed = 0;
 			noncepos = 0;
 		}
 		m = Noncebytes - noncepos;
@@ -188,21 +195,8 @@ hwrandom(uchar *p, int n)
 	return got;
 }
 
-void
-genrandom(uchar *p, int n)
-{
-	hwrandom(p, n);
-}
-
-void
-prng(uchar *p, int n)
-{
-	genrandom(p, n);
-}
-
-int
-prngtry(uchar *p, int n)
-{
-	genrandom(p, n);
-	return 0;
-}
+/*
+ * genrandom, prng and prngtry -- what libsec's key generators call --
+ * are os/port/random.c's: all n bytes from hwrandom, however long that
+ * takes, never padded, and never from a made-up source.
+ */

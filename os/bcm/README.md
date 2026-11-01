@@ -28,12 +28,13 @@ Ethernet chip, their own `arch*.c` and their own list of devices.
 | `audiopwm.c` | the headphone jack: PWM through DMA |
 | `devtouch.c` | `#T`, the DSI panel's touch buffer |
 | `ether4330.c` | the CYW43455 radio — a chip on the board, not in the SoC, but on every board so far |
+| `rng200.c` | the iProc RNG200, the BCM2711's and BCM2712's random-number generator, at the board's `RNG200REGS`; the BCM2837 has the BCM2835's instead and leaves it out |
 | `bcmio.h` | register layouts, relative to `PHYSIO`; included by a board's `io.h` |
 | `bcm.h` | what these drivers and their boards declare to each other; included by a board's `board.h` |
 
 What is **not** here is what differs between the SoCs: the interrupt
 controller, the peripheral window and interrupt numbers, the timer's
-routing, the random-number generator, and the list of devices. Those
+routing, the BCM2837's random-number generator, and the list of devices. Those
 are the board directory's, and they are most of what a board directory
 is: `os/bcm2711` is about 2,200 lines, 1,600 of them two drivers from
 9front (`ethergenet.c`, `pcibcm.c`).

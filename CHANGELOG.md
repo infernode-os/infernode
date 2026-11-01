@@ -195,6 +195,38 @@ All notable changes to InferNode are documented in this file.
   `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
   `wm/edit`'s.
 
+### Security
+
+- **Bare metal: a key is made only from a hardware generator.** A board
+  with no working generator (the Pi 4's RNG200 not answering, the
+  PolarFire's nonce service refusing, a QEMU virt without virtio-rng)
+  handed libsec's key generators, `#c/notquiterandom` and `#c/random` a
+  counter stirred with the time, after one line on the console; the
+  PolarFire did the same, silently, if its service stopped after boot.
+  On a board that means a driver or address map at fault, and on a Pi 5,
+  which no emulator models, it could only mean that. Now `hwrandom`
+  never makes bytes up: it says -1 when there is no generator, and
+  `genrandom`, `prng` and `prngtry`, which every board copied, are
+  `os/port/random.c`'s, waiting for real bytes and saying why every five
+  seconds (`prngtry` answers -1 at once, as libsec.h says). The machine
+  still boots and uses the network: nrand, for port and sequence
+  numbers, no longer waits on the pool. An emulator that has nothing
+  better passes `insecurerandom` on its command line and gets the
+  counter, labelled; the harness does for QEMU's `raspi4b` and Icicle
+  Kit. A `virt` boot with no virtio-rng checks both ways.
+- **Bare metal: the Pi's generator is read one word at a time under a
+  lock.** The Pi 3 and Pi 4 drivers tested for a word and read it with
+  no lock, on four cores with preemption: two readers could both see
+  one word waiting and both read it, and what an empty FIFO reads as is
+  not documented. The test and the read are now one step under a spin
+  lock, as `virt` and the PolarFire already did.
+- **Bare metal: the RNG200's own health test is heeded.** The Pi 4's
+  generator says in its interrupt status when its NIST health test has
+  failed; nothing read the register. As Linux's driver does, a failure
+  now resets the block before another word is taken from it, and says
+  so. The driver is `os/bcm/rng200.c`, for the Pi 4 and the Pi 5, with
+  the board's `io.h` naming where it is.
+
 ## [0.9.1] - 2026-10-30
 
 This security patch release fixes remotely reachable IPv4 reassembly and voice

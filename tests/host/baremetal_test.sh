@@ -1414,7 +1414,7 @@ QEMUARGS="$2"
 # globals, the platforms run one after another in one shell, and a value
 # left over from the last machine is a kernel built from the wrong files.
 SHARED="$ROOT/os/bcm"
-SHAREDSKIP=""
+SHAREDSKIP="rng200.c"		# the BCM2837 has the BCM2835's generator: os/bcm2837/random.c
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
 PORTSKIP="ethermii.c pci.c usbxhci.c usbxhcipci.c"	# a PHY library, a bus and what is on it: this board has none
 SERIALARGS="-serial null -serial stdio"
@@ -6331,6 +6331,49 @@ else
     fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
 fi
 
+# No entropy source: the machine fails closed (os/port/random.c).
+#
+# The same kernel without virtio-rng, on a cortex-a53, which has no
+# RNDR: no generator at all. It must still boot to its shell (nrand,
+# which picks port numbers, never waits), make no key material -- a read
+# of #c/notquiterandom, what libsec's key generators are, waits and says
+# why -- and leave #c/random's readers waiting too. Then the same with
+# "insecurerandom" on the command line, when the counter is handed out
+# and labelled. Every board without a generator used to hand it out
+# silently but for one line. A marker is printed as A^B so the typed
+# line, which the console echoes, cannot be taken for the output.
+NORNGARGS="${VIRTARGS/ -device virtio-rng-device/}"
+savedargs="$QEMUARGS"
+QEMUARGS="$NORNGARGS"
+NROUT="$(SESSION_DRAIN=20 shell_session "$BUILD/$PLAT-kernel.img" \
+    '{read 32 < /dev/notquiterandom > /dev/null; echo KEY^BYTES-MADE} &' \
+    '{read 16 < /dev/random > /dev/null; echo POOL^BYTES-MADE} &' \
+    'sleep 9' \
+    'echo NORNG^SHELL-ALIVE')"
+QEMUARGS="$NORNGARGS -append insecurerandom"
+INSOUT="$(SESSION_DRAIN=20 shell_session "$BUILD/$PLAT-kernel.img" \
+    'read 32 < /dev/notquiterandom > /dev/null; echo WEAKKEY^BYTES-MADE' \
+    'read 16 < /dev/random > /dev/null; echo WEAKPOOL^BYTES-MADE')"
+QEMUARGS="$savedargs"
+printf '%s\n' "$NROUT" > "$BUILD/$PLAT-norng.txt"
+printf '%s\n' "$INSOUT" > "$BUILD/$PLAT-insecure.txt"
+nrcheck() { if grep -qaF -- "$2" <<<"$NROUT"; then pass "virt: no rng: $1"; else fail "virt: no rng: $1 -- no '$2' (see $BUILD/$PLAT-norng.txt)"; fi; }
+nrrefute() { if grep -qaF -- "$2" <<<"$NROUT"; then fail "virt: no rng: $1 -- '$2' (see $BUILD/$PLAT-norng.txt)"; else pass "virt: no rng: $1"; fi; }
+nrcheck "the kernel says there is no entropy source" "rng:  NO ENTROPY SOURCE"
+nrcheck "it still reaches its shell" "NORNGSHELL-ALIVE"
+nrcheck "key material waits, and says why" "there is NO ENTROPY SOURCE on this machine; 32 bytes of key material have waited"
+nrcheck "a reader of #c/random waits, and says why" "a reader of #c/random has waited"
+nrrefute "no key material is made" "KEYBYTES-MADE"
+nrrefute "nothing is read from #c/random" "POOLBYTES-MADE"
+nrrefute "no counter is handed out" "PREDICTABLE"
+nrrefute "nothing panics" "panic:"
+if grep -qaF "Keys made on it are PREDICTABLE" <<<"$INSOUT" && grep -qaF "WEAKKEYBYTES-MADE" <<<"$INSOUT" \
+   && grep -qaF "WEAKPOOLBYTES-MADE" <<<"$INSOUT"; then
+    pass "virt: no rng: with insecurerandom, both files answer with the counter, and the console says what it is"
+else
+    fail "virt: no rng: with insecurerandom -- $(grep -a 'random\|BYTES-MADE' <<<"$INSOUT" | head -4 | tr '\n' ' ') (see $BUILD/$PLAT-insecure.txt)"
+fi
+
 echo ""
 }
 
@@ -6358,7 +6401,13 @@ fi
 # board's four USB-A ports, and NO random-number generator -- the kernel
 # finds that out for itself and says so (os/bcm2711/random.c).
 #
-PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
+# insecurerandom: QEMU's raspi4b has no RNG200, so this machine has no
+# entropy source, and without the word the kernel makes no key on it
+# (os/port/random.c) -- which is right on a board and would stop the
+# desktop here. The word lets it hand out a labelled counter instead;
+# the check below sees the label. It reaches the kernel as the
+# firmware command line, as cmdline.txt does on a board.
+PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0 -append insecurerandom"
 
 run_bcm2711() {
 PLAT=bcm2711
@@ -6439,6 +6488,7 @@ else
     fail "bcm2711: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
 fi
 pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS"
+pcheck "with insecurerandom, the counter that stands in for it says what it is" "Keys made on it are PREDICTABLE"
 # With no card in it, the Arasan is the radio's and the radio's driver
 # probes it -- which on this board means two instances of one SDHCI
 # driver alive at once (os/bcm2711/emmc2.c). QEMU models no radio, so

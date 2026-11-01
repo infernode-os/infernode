@@ -19,11 +19,11 @@
  *   and from whatever context wants a key, so waiting for an interrupt
  *   is not available to it.
  *
- * With neither there is no entropy to be had, and what this file does
- * then is say so on the console in capitals and hand out a counter
- * stirred with the time, so that the machine still boots and a test
- * that does not care still runs. NOTHING CRYPTOGRAPHIC DONE ON SUCH A
- * BOOT IS WORTH ANYTHING. The harness always gives the device.
+ * With neither there is no entropy to be had. This file says so on
+ * the console in capitals and hwrandom answers -1, and os/port/random.c
+ * then makes no key (it waits, saying why) -- unless the command line
+ * says "insecurerandom", when it hands out a labelled counter instead.
+ * The machine boots either way. The harness always gives the device.
  */
 
 #include "u.h"
@@ -46,6 +46,7 @@ static Vdev *rngdev;
 static Vq *rngq;
 static uchar *rngbuf;		/* what the device writes into; never the caller's */
 static int hasrndr;
+static int probed;		/* rnginit has run */
 static int warned;
 
 /*
@@ -97,6 +98,8 @@ rnginit(void)
 		hasrndr ? "RNDR " : "",
 		rngdev != nil ? "virtio-rng" : "",
 		!hasrndr && rngdev == nil ? "NO ENTROPY SOURCE" : "");
+	coherence();
+	probed = 1;
 }
 
 static int
@@ -144,9 +147,20 @@ virtiorandom(uchar *p, int n)
 int
 hwrandom(uchar *p, int n)
 {
-	static u64int weak;
 	u64int v;
 	int got, i;
+
+	if(!probed)
+		return 0;		/* before boardioprobe: not yet known, so dry */
+	if(rngdev == nil && !hasrndr){
+		/* no source at all; see the top of the file */
+		if(!warned){
+			warned = 1;
+			uartputstr("\nrng:  NO ENTROPY SOURCE: no key is made on this boot unless the command\n"
+				"      line says insecurerandom. Start QEMU with: -device virtio-rng-device\n\n");
+		}
+		return -1;
+	}
 
 	got = 0;
 	if(rngdev != nil)
@@ -158,60 +172,11 @@ hwrandom(uchar *p, int n)
 				v >>= 8;
 			}
 	}
-	if(got == n)
-		return got;
-
-	if(rngdev != nil || hasrndr)
-		return got;		/* a real source that ran dry: say how much */
-
-	/* no source at all; see the top of the file */
-	if(!warned){
-		warned = 1;
-		uartputstr("\nrng:  NO ENTROPY SOURCE. Keys made on this boot are PREDICTABLE.\n"
-			"      Start QEMU with: -device virtio-rng-device\n\n");
-	}
-	while(got < n){
-		weak = weak*6364136223846793005ULL + clockcount() + 1442695040888963407ULL;
-		p[got++] = weak >> 56;
-	}
-	return got;
+	return got;		/* short if a real source ran dry: say how much */
 }
 
 /*
- * libsec's names, and what its key generators call. All n bytes come
- * from hwrandom, however long that takes -- never padding; see
- * os/bcm2837/random.c's genrandom for how padding with zeros turned
- * into zero-tailed private keys. A source that has run dry is waited
- * for, out loud. (A machine with NO source gets hwrandom's labelled
- * counter, which has already said what it is in capitals.)
+ * genrandom, prng and prngtry -- what libsec's key generators call --
+ * are os/port/random.c's: all n bytes from hwrandom, however long that
+ * takes, never padded, and never from a made-up source.
  */
-void
-genrandom(uchar *p, int n)
-{
-	int got, r, waited;
-
-	waited = 0;
-	for(got = 0; got < n; got += r){
-		r = hwrandom(p + got, n - got);
-		if(r > 0)
-			continue;
-		r = 0;
-		microdelay(1000);
-		if(++waited % 5000 == 0)
-			print("random: no entropy for %d seconds; still waiting for %d bytes\n",
-				waited/1000, n - got);
-	}
-}
-
-void
-prng(uchar *p, int n)
-{
-	genrandom(p, n);
-}
-
-int
-prngtry(uchar *p, int n)
-{
-	genrandom(p, n);
-	return 0;
-}

@@ -11,7 +11,7 @@ https://www.raspberrypi.com/news/how-to-add-your-own-images-to-imager/).
 
 | File | What it is |
 |-|-|
-| `os_list_infernode.json` | The entry: InferNode, with an item per board. Its sizes and SHA-256s are the published release's |
+| `os_list_infernode.json` | The subitem file: an item per board, which Imager shows under InferNode. Its sizes and SHA-256s are the published release's. The InferNode entry above them is Raspberry Pi's, made from the form (below), so it is not in this file |
 | `infernode-40.svg` | The icon Imager shows: the InferNode logo, the shipped app icon traced as a vector. Imager takes an SVG or a 40x40 PNG |
 | `infernode-40.png` | The same at 40x40, scaled from the 1024 app icon, for anywhere an SVG is not taken |
 
@@ -21,13 +21,25 @@ The logo is unchanged from the app icons (`emu/iOS/.../icon_1024.png`,
 
 ## The application
 
+Raspberry Pi's form, "Request an addition to the Raspberry Pi Imager OS
+List" (https://forms.gle/khSteUmzGCb49wrr6). They review for two
+prerequisites: a named point of contact for the OS (ideally two), and correct
+device annotations.
+
 - **Name:** InferNode
+- **Category:** Other general-purpose OS
+- **Website:** https://www.infernode.io
+- **Icon URL:**
+  https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg
 - **Description:** A 64-bit Inferno® OS that runs on the Pi itself, without
   Linux underneath: 9P everywhere and namespace-isolated AI agents.
-- **Website:** https://www.infernode.io
+- **Subitem JSON URL:**
+  https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/os_list_infernode.json
 - **Support:** https://infernode.io/support/ (and
   https://github.com/infernode-os/infernode/issues)
-- **Icon:** `infernode-40.svg`, at its raw URL on `master`
+
+And what the entry carries:
+
 - **Images:** the release's `infernode-<version>-rpi3bplus.img.xz` and
   `-rpi4b.img.xz`, signed (sigstore) and with build provenance, from
   https://github.com/infernode-os/infernode/releases
@@ -57,8 +69,9 @@ Imager reads a repository of your own with `--repo`:
 
     rpi-imager --repo https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/os_list_infernode.json
 
-Choose the board, then InferNode, then the card: it writes and verifies the
-image as it would from the official list.
+Choose the board, then its InferNode item (with `--repo` the items are the
+whole list, with no InferNode entry above them), then the card: it writes and
+verifies the image as it would from the official list.
 
 ## Each release
 

@@ -25,9 +25,6 @@
 #ifndef HEAPDIV
 #define HEAPDIV	4
 #endif
-#ifndef HEAPNUM
-#define HEAPNUM	1	/* the heap may have HEAPNUM/HEAPDIV */
-#endif
 #ifndef IMAGDIV
 #define IMAGDIV	8
 #endif
@@ -2594,9 +2591,37 @@ kmain(void)
 		ulong mem;
 
 		mem = (ulong)conf.npage * BY2PG;
+#ifdef POOLBYNEED
+		{
+			ulong mainmax, imagmax;
+
+			/*
+			 * From what they were seen to use, a desktop and every
+			 * device busy: about 10MB each. An eighth of memory,
+			 * but no less than a small board needs and no more than
+			 * is of use: a 4K screen is 33MB. Everything else is
+			 * for programs, and the two are held back from them.
+			 */
+			mainmax = mem/8;
+			if(mainmax < 64*1024*1024)
+				mainmax = 64*1024*1024;
+			if(mainmax > 512*1024*1024)
+				mainmax = 512*1024*1024;
+			imagmax = mem/8;
+			if(imagmax < 32*1024*1024)
+				imagmax = 32*1024*1024;
+			if(imagmax > 1024*1024*1024)
+				imagmax = 1024*1024*1024;
+			poolsize(mainmem, mainmax, 0);
+			poolsize(imagmem, imagmax, 0);
+			poolsize(heappool, mem - mainmax - imagmax, 0);
+			heapreserve = mainmax + imagmax;
+		}
+#else
 		poolsize(mainmem, mem/MAINDIV, 0);
-		poolsize(heappool, mem/HEAPDIV*HEAPNUM, 0);
+		poolsize(heappool, mem/HEAPDIV, 0);
 		poolsize(imagmem, mem/IMAGDIV, 0);
+#endif
 	}
 
 	boardfbprobe();

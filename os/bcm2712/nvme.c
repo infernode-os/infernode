@@ -538,10 +538,9 @@ nvmeshutdown(void)
 		print("nvme: down already\n");	/* the link's first drop: it holds nothing */
 		return;
 	}
-	if(!canqlock(&nvme.q))
-		print("nvme: busy on the way down\n");
 	nvme.canwait = 0;
-	cmd(&nvme.io, Opflush, 1, 0, 0, 0, 0, 0);
+	if(canqlock(&nvme.q))	/* else a transfer is under way; the shutdown flushes anyway */
+		cmd(&nvme.io, Opflush, 1, 0, 0, 0, 0, 0);
 	R(Cc) = (R(Cc) & ~(3U<<14)) | Ccshn;
 	coherence();
 	for(i = 0; i < 2000 && (R(Csts) & Shstmask) != Shstdone; i++)

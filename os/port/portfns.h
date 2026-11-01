@@ -250,6 +250,8 @@ int		procok(Proc*);
 int		poolread(char*, int, ulong);
 int		pooltagsread(char*, int, ulong);
 void		poolsize(Pool *, ulong, int);
+ulong		xbytesfree(void);
+extern ulong	heapreserve;
 int		postnote(Proc *, int, char *, int);
 int		pprint(char*, ...);
 int		preemption(int);

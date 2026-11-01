@@ -41,7 +41,7 @@ retry=$(sed -n '/^runproc(void)/,/^}/p' os/port/proc.c | grep -A22 'if(p == 0 ||
 if echo "$retry" | grep -q 'spllo' && echo "$retry" | grep -q 'microdelay'; then ok "runproc's retry lets go, with interrupts on"
 else no "runproc's retry spins on the run queue lock"; fi
 
-if grep -q 'up->nlocks == 0' os/port/proc.c && grep -q 'up->nlocks++' os/port/taslock.c; then ok "no proc is preempted holding a spin lock"
+if grep -q 'up->nlocks == 0' os/port/proc.c && grep -q 'up->nlocks == 0' os/port/portclock.c && grep -q 'up->nlocks++' os/port/taslock.c; then ok "no proc is preempted holding a spin lock"
 else no "a proc can be preempted holding a spin lock"; fi
 
 bad=$(grep -rnE '\b(int|long|ulong|uint|char\*?|void\*?|Proc\*?|\*)[[:space:]]+\*?up[[:space:]]*[,);]' \

@@ -901,7 +901,7 @@ command(ctxt: ref Draw->Context, args: list of string, sync: chan of string)
 startwmsize(): chan of Rect
 {
 	rchan := chan of Rect;
-	fd := sys->open("#w/wmsize", Sys->OREAD);
+	fd := sys->open("#z/wmsize", Sys->OREAD);
 	if(fd == nil)
 		return rchan;
 	sync := chan of int;

@@ -167,12 +167,6 @@ sched(void)
 
 	if(up) {
 		splhi();
-		/*
-		 * A proc leaving of its own accord holds no spin lock, whatever
-		 * the count says: left high it would never be preempted again.
-		 */
-		if(up->state != Running)
-			up->nlocks = 0;
 		procsave(up);
 		if(setlabel(&up->sched)) {
 			procrestore(up);
@@ -313,7 +307,7 @@ anyhigher(void)
 int
 preemption(int tick)
 {
-	if(up != nil && up->state == Running && !up->preempted && up->nlocks == 0 &&
+	if(up != nil && up->state == Running && !up->preempted &&
 	   (anyhigher() || tick && anyready())){
 		up->preempted = 1;
 		sched();

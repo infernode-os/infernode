@@ -396,6 +396,8 @@ SYSMODULES=\
 	appfs.m\
 	garminav.m\
 	gdl90.m\
+	keyboard.m\
+	wmclient.m\
 
 DISBIN=$ROOT/dis/tests
 

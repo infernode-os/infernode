@@ -235,6 +235,7 @@ TARG=\
 	wallet_policy_test.dis\
 	wallet9p_test.dis\
 	x402_test.dis\
+	websocket_test.dis\
 	wiki9p_security_probe.dis\
 	contacts_tool_test.dis\
 	sms_tool_test.dis\
@@ -390,6 +391,7 @@ SYSMODULES=\
 	wirefmt.m\
 	workdir.m\
 	x402.m\
+	websocket.m\
 	icon.m\
 	appfs.m\
 	auth9.m\

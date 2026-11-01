@@ -410,6 +410,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
 | `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
+| `websocket_test.b` | The WebSocket client (`module/websocket.m`, RFC 6455) against a server played over a pipe: the upgrade (the caller's headers, a frame arriving with the reply kept), refusals (no 101, wrong accept, an extension or subprotocol not offered), fragments joined round a ping (answered with a masked pong), 70000 bytes of binary, closing either way, and every protocol error a server can make refused with the right close code (1002, 1007, 1009); `tests/host/websocket_test.sh` runs it against a Python server written apart from it over `ws://` and verified `wss://`, an untrusted certificate refused |
 | `llmclient_proxy_test.b` | llmclient's TLS connections through an HTTP proxy (INFR-307): CONNECT for the API's host and port, Basic credentials from the proxy URL, a ClientHello naming the host inside the tunnel, a refusal reported, `no_proxy` hosts and domains dialled directly; `tests/host/profile_proxy_test.sh` checks the login profile copies the host's `HTTPS_PROXY` and `no_proxy` |
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |

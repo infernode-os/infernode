@@ -1,0 +1,181 @@
+.TH WEBSOCKET 2
+.SH NAME
+websocket: dial, client, Conn, Msg \- WebSocket client (RFC 6455)
+.SH SYNOPSIS
+.EX
+include "websocket.m";
+ws := load Websocket Websocket->PATH;
+Conn, Msg, Header: import ws;
+
+init:      fn(): string;
+dial:      fn(url: string, hdrs: list of ref Header): (ref Conn, string);
+client:    fn(fd: ref Sys->FD, url: string, hdrs: list of ref Header):
+               (ref Conn, string);
+
+Msg: adt {
+    op:    int;           # Otext, Obinary or Oclose
+    data:  array of byte;
+    code:  int;           # Oclose: the server's close code
+    text:  fn(m: self ref Msg): string;
+};
+
+Conn: adt {
+    fd:        ref Sys->FD;
+    url:       string;
+    protocol:  string;
+    headers:   list of ref Header;
+    read:      fn(c: self ref Conn): (ref Msg, string);
+    write:     fn(c: self ref Conn, op: int, data: array of byte): string;
+    writetext: fn(c: self ref Conn, s: string): string;
+    ping:      fn(c: self ref Conn, data: array of byte): string;
+    close:     fn(c: self ref Conn, code: int, reason: string): string;
+};
+
+acceptkey: fn(key: string): string;
+frame:     fn(fin, op: int, data, mask: array of byte): array of byte;
+utf8ok:    fn(data: array of byte): int;
+.EE
+.SH DESCRIPTION
+.B Websocket
+is the client end of the WebSocket protocol: a stream of whole messages
+over one HTTP connection, upgraded.
+Services such as Slack's Socket Mode send live events this way.
+The module is a mechanism only; what the messages mean, and what is
+served from them, is the caller's.
+.PP
+.B Init
+loads the modules
+.B websocket
+needs and must be called first; it returns an error string, or nil.
+.PP
+.B Dial
+connects to a
+.B ws://
+or
+.B wss://
+.I url
+(TCP, or TLS verified against
+.BR /lib/certs ,
+through
+.IR webclient (2)'s
+.BR tlsdial ),
+and upgrades it.
+.I Hdrs
+are sent with the upgrade: an
+.BR Authorization ,
+an
+.BR Origin ,
+a
+.B Sec-WebSocket-Protocol
+listing the subprotocols offered.
+The handshake's own headers
+.RB ( Host ,
+.BR Upgrade ,
+.BR Connection ,
+.BR Sec-WebSocket-Key ,
+.BR -Version ,
+.BR -Extensions )
+are refused, as is any name or value with a control character in it.
+The server's reply must be
+.B 101
+with the right
+.BR Sec-WebSocket-Accept ;
+a subprotocol it chose is in
+.BR c.protocol ,
+and must have been offered.
+No extension is offered, so a reply choosing one is refused.
+.PP
+.B Client
+upgrades a connection
+.I fd
+already open to the URL's host: a tunnel through a proxy's
+.BR CONNECT ,
+a TLS connection made some other way, or a pipe in a test.
+The URL gives the request's
+.B Host
+and target.
+.PP
+.B C.read
+returns the next whole message: fragments are joined, a text message
+must be UTF-8.
+A ping is answered with a pong inside
+.BR read ,
+so a connection stays up only while something reads it.
+When the server closes,
+.B read
+answers its close and returns a
+.B Msg
+with
+.B op
+.BR Oclose ,
+the server's
+.B code
+.RB ( Cnostatus ,
+1005, when it gave none) and its reason as
+.BR data .
+A server breaking the protocol (a masked frame, a reserved bit, a control
+frame fragmented or over 125 bytes, a message over
+.B MAXMSG
+bytes, text that is not UTF-8, an unknown opcode) is sent a close with
+the code that says how
+.RB ( Cprotocol ,
+.BR Cbaddata ,
+.BR Ctoobig )
+and
+.B read
+returns an error naming it.
+After a close or an error the connection is finished, and
+.B read
+returns
+.BR (nil, \&"closed") .
+.PP
+.B C.write
+sends one message,
+.B Otext
+(which must be UTF-8) or
+.BR Obinary ,
+as one masked frame;
+.B c.writetext
+sends a string.
+.B C.ping
+sends a ping of at most 125 bytes.
+.B C.close
+sends a close with
+.I code
+(0 for none) and
+.IR reason ;
+the server's close then comes back from
+.BR read .
+Nothing may be sent after a close.
+Reads and writes may be made from different threads; frames are written
+one at a time.
+.PP
+.BR Acceptkey ,
+.B frame
+and
+.B utf8ok
+are the protocol's pieces, for tests and for a server built on this:
+the
+.B Sec-WebSocket-Accept
+for a key, one frame
+.RI ( mask
+nil for a server's unmasked frame, else four bytes), and whether bytes are
+well-formed UTF-8.
+.SH SOURCE
+.B /appl/lib/websocket.b
+.br
+.B /tests/websocket_test.b
+.br
+.B /tests/host/websocket_test.sh
+.SH SEE ALSO
+.IR webclient (2),
+.IR json (2)
+.br
+I Fette and A Melnikov, ``The WebSocket Protocol'',
+.IR RFC6455 .
+.SH BUGS
+The handshake waits for the server as long as it takes; a caller that
+cannot wait should dial in a thread it can kill.
+.B Dial
+goes direct: behind an HTTP proxy, open the tunnel and use
+.BR client .

@@ -492,6 +492,7 @@ dis/lib/web/page.dis
 dis/lib/web/style.dis
 dis/lib/web/wordbreak.dis
 dis/lib/webclient.dis
+dis/lib/websocket.dis
 dis/lib/winplace.dis
 dis/lib/wirefmt.dis
 dis/lib/wmclient.dis
@@ -906,6 +907,7 @@ dis/tests/wallet9p_test.dis
 dis/tests/wallet_capability_test.dis
 dis/tests/wallet_policy_test.dis
 dis/tests/web_browser_test.dis
+dis/tests/websocket_test.dis
 dis/tests/web_css_test.dis
 dis/tests/web_fonts_test.dis
 dis/tests/web_wordbreak_test.dis

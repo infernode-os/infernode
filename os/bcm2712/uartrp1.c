@@ -69,6 +69,16 @@ miniputc(int c)
 	R10(Dr) = c;
 }
 
+/*
+ * Whether miniputc can go without waiting, for ../bcm/uart.c's process
+ * writer, which waits for this with interrupts on.
+ */
+int
+minitxrdy(void)
+{
+	return ((R(Fr) | R4(Fr) | R10(Fr)) & Txff) == 0;
+}
+
 int
 minigetc(void)
 {

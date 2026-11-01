@@ -266,9 +266,16 @@ delnewstate(fid: int)
 # Per-fid result state for the pay and authorize files.
 # Results are bound to the writing fid so concurrent clients never
 # read each other's transaction results.
+#
+# A fid told "pending:<id>" that reads again at offset 0 waits for the
+# outcome: its read is kept in wait, and answered when the payment is
+# approved, denied or expires.  The first read still answers at once,
+# so the requester learns the id.
 FidResult: adt {
 	fid:    int;
 	result: string;
+	told:   int;			# "pending:<id>" was read
+	wait:   ref Tmsg.Read;	# a read waiting for the outcome
 };
 paystates: list of ref FidResult;
 authstates: list of ref FidResult;
@@ -286,9 +293,10 @@ setpaystate(fid: int, result: string)
 	fr := getfidresult(paystates, fid);
 	if(fr != nil) {
 		fr.result = result;
+		fr.told = 0;
 		return;
 	}
-	paystates = ref FidResult(fid, result) :: paystates;
+	paystates = ref FidResult(fid, result, 0, nil) :: paystates;
 }
 
 setauthstate(fid: int, result: string)
@@ -296,9 +304,10 @@ setauthstate(fid: int, result: string)
 	fr := getfidresult(authstates, fid);
 	if(fr != nil) {
 		fr.result = result;
+		fr.told = 0;
 		return;
 	}
-	authstates = ref FidResult(fid, result) :: authstates;
+	authstates = ref FidResult(fid, result, 0, nil) :: authstates;
 }
 
 delfidresult(fid: int)
@@ -313,6 +322,60 @@ delfidresult(fid: int)
 		if((hd l).fid != fid)
 			nl = hd l :: nl;
 	authstates = nl;
+}
+
+readresult(srv: ref Styxserver, m: ref Tmsg.Read, fr: ref FidResult)
+{
+	if(fr == nil || fr.result == nil) {
+		readstr(srv, m, "");
+		return;
+	}
+	r := resolvefidresult(fr.result);
+	if(ispending(r)) {
+		if(fr.told && m.offset == big 0) {
+			fr.wait = m;
+			return;
+		}
+		fr.told = 1;
+	}
+	readstr(srv, m, r + "\n");
+}
+
+ispending(r: string): int
+{
+	return len r > 8 && r[0:8] == "pending:";
+}
+
+# A pending payment's outcome is known: the reads waiting for it are
+# answered.
+wakeresults()
+{
+	for(l := paystates; l != nil; l = tl l)
+		wakeresult(hd l);
+	for(l = authstates; l != nil; l = tl l)
+		wakeresult(hd l);
+}
+
+wakeresult(fr: ref FidResult)
+{
+	if(fr.wait == nil)
+		return;
+	r := resolvefidresult(fr.result);
+	if(ispending(r))
+		return;
+	m := fr.wait;
+	fr.wait = nil;
+	readstr(evsrv, m, r + "\n");
+}
+
+flushresult(tag: int)
+{
+	for(l := paystates; l != nil; l = tl l)
+		if((hd l).wait != nil && (hd l).wait.tag == tag)
+			(hd l).wait = nil;
+	for(l = authstates; l != nil; l = tl l)
+		if((hd l).wait != nil && (hd l).wait.tag == tag)
+			(hd l).wait = nil;
 }
 
 #
@@ -591,6 +654,7 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 			srv.default(gm);
 
 		Flush =>
+			flushresult(m.oldtag);
 			for(el := evfids; el != nil; el = tl el)
 				if((hd el).rd != nil && (hd el).rd.tag == m.oldtag)
 					(hd el).rd = nil;
@@ -603,8 +667,10 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 }
 
 # Every reader of event is told; one not reading has it queued, once.
+# Each change to the pending list may settle a waiting read too.
 postevent(msg: string)
 {
+	wakeresults();
 	for(el := evfids; el != nil; el = tl el) {
 		ef := hd el;
 		if(ef.rd != nil) {
@@ -761,11 +827,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		# every agent's bound view, so an account-level fallback would
 		# hand another principal's txhash (or pending id) to whoever
 		# opened the file next.
-		fr := getfidresult(paystates, m.fid);
-		if(fr != nil && fr.result != nil)
-			readstr(srv, m, resolvefidresult(fr.result) + "\n");
-		else
-			readstr(srv, m, "");
+		readresult(srv, m, getfidresult(paystates, m.fid));
 
 	Qauthorize =>
 		as := findacctbyid(aid);
@@ -776,11 +838,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		# Per-fid ONLY — see Qpay above.  A signed EIP-3009
 		# authorization is a replayable bearer credential; handing one
 		# to a reader that did not request it is a fund-moving leak.
-		fr := getfidresult(authstates, m.fid);
-		if(fr != nil && fr.result != nil)
-			readstr(srv, m, resolvefidresult(fr.result) + "\n");
-		else
-			readstr(srv, m, "");
+		readresult(srv, m, getfidresult(authstates, m.fid));
 
 	Qacctctl =>
 		as := findacctbyid(aid);

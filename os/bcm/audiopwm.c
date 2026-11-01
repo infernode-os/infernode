@@ -11,9 +11,11 @@
  * pulses at ~44 kHz through the filter are a voltage, and a stream of
  * them is the waveform. With the range near 2048 the resolution is 11
  * bits, which through this filter is what the jack is good for; a
- * 16-bit sample comes down to it with its error carried forward (level). The PWM clock comes from the
- * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), divided (MASH fractional
- * divider) so that clock / range is the sample rate. Both channels
+ * 16-bit sample comes down to it with its error carried forward (level).
+ * The PWM clock comes from the
+ * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), by
+ * a whole number, and the range is what makes clock / range the sample
+ * rate (audiolevel.h). Both channels
  * share one FIFO and take words alternately (left, right), so a stereo
  * frame is two words in order.
  *
@@ -59,6 +61,7 @@
 #define Audio_Alaw_Val		2
 #include "../port/audio-tbls.h"
 #include "audioring.h"
+#include "audiolevel.h"
 
 enum {
 	PWMREGS		= PHYSIO + AUDIOPWMOFF,	/* the board's: io.h says which block the jack's pins carry */
@@ -102,7 +105,6 @@ enum {
 	Cmsrcplld	= 6,
 	Plldhz		= AUDIOPLLDHZ,
 
-	Range		= 2048,		/* pulse range: 11 bits of level */
 
 	Gpiopwm0	= 40,		/* PWM0 on the jack's left */
 	Gpiopwm1	= 41,		/* PWM1, right */
@@ -151,7 +153,7 @@ struct Ctlr {
 	ulong	played;		/* buffers played out, for the curious */
 	ulong	underruns;	/* buffers silenced for want of data */
 	int	carry[2];	/* each channel's rounding error: level */
-	int	range;		/* pulse range, about Range: pwmclock */
+	int	range;		/* pulse range: pwmclock */
 	int	silence;	/* its middle */
 	Audio_t	av;
 };
@@ -164,29 +166,14 @@ getaudiodev(void)
 	return &ctlr.av;
 }
 
-static int
-pwmdivider(int rate)
-{
-	int d;
-
-	d = Plldhz / (rate * Range);
-	return d < 2 ? 2 : d;
-}
-
 static void
 pwmclock(int rate)
 {
 	u32int divi, divf;
 
-	/*
-	 * A whole number off PLLD, and the range makes up the difference: a
-	 * fractional divider gets its average by dithering the clock, and
-	 * that jitter is on every edge of the pulses, a fuzz on any tone.
-	 * 500MHz/5 at 44100 is a range of 2267, 44100.4Hz.
-	 */
-	divi = pwmdivider(rate);
+	divi = audiodivider(Plldhz, rate);
 	divf = 0;
-	ctlr.range = Plldhz / divi / rate;
+	ctlr.range = audiorange(Plldhz, rate);
 	ctlr.silence = ctlr.range / 2;
 	CM(Cmpwmctl) = Cmpasswd | Cmkill;
 	while(CM(Cmpwmctl) & Cmbusy)
@@ -328,7 +315,7 @@ start(Ctlr *c)
 		if(c->cb == nil || c->buf[0] == nil || c->buf[Nbuf-1] == nil)
 			error(Enomem);
 	}
-	c->range = Plldhz / pwmdivider(c->av.out.rate) / c->av.out.rate;
+	c->range = audiorange(Plldhz, c->av.out.rate);
 	c->silence = c->range / 2;	/* what ring() fills with */
 	ring(c);
 
@@ -446,22 +433,7 @@ roomfor(void *a)
 static u32int
 level(int s, int gain, int *carry)
 {
-	long v;
-
-	v = (long)s * gain / Audio_Max_Val;	/* -32768..32767 */
-	/*
-	 * What is below the range's resolution goes into the next sample,
-	 * not away. Dropped, it repeats with the waveform, and a pure tone
-	 * comes out with a fuzz on it at any volume; carried, it is noise,
-	 * moved up out of the way.
-	 */
-	v = (v + 32768) * ctlr.range + *carry;
-	if(v < 0)
-		v = 0;
-	if(v >= 65536L * ctlr.range)
-		v = 65536L * ctlr.range - 1;
-	*carry = v & 0xFFFF;
-	return v >> 16;
+	return audiolevel(s, gain, Audio_Max_Val, ctlr.range, carry);
 }
 
 long

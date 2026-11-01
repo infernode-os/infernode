@@ -316,6 +316,9 @@ jobs:
         # own FAT32 reader, and by fsck.fat.
         sudo apt-get install -y dosfstools
         ROOT=. bash tests/host/piimage_test.sh
+        # the Raspberry Pi Imager entry each release attaches: the release's
+        # files' sizes and hashes, the reviewed wording, mismatches refused
+        ROOT=. bash tests/host/imagerjson_test.sh
 
     - name: Run codex-gate preflight checks
       run: |

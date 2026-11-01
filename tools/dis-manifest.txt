@@ -922,6 +922,8 @@ dis/tests/webfs_test.dis
 dis/tests/wiki9p_security_probe.dis
 dis/tests/wireformat_test.dis
 dis/tests/wm_apps_test.dis
+dis/tests/wm_frozen.dis
+dis/tests/wmapp_fuzz.dis
 dis/tests/wmsrv_zorder_test.dis
 dis/tests/wpa_test.dis
 dis/tests/x402_test.dis

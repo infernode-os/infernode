@@ -12,7 +12,7 @@ set -e
 set -u
 
 [ -x "$EMU" ] || { echo "SKIP: emulator not found at $EMU"; exit 77; }
-for f in dis/wm/wm.dis dis/wm/colors.dis dis/scap.dis; do
+for f in dis/wm/wm.dis dis/wm/colors.dis dis/scap.dis dis/tests/wm_frozen.dis; do
 	[ -f "$ROOT/$f" ] || { echo "SKIP: $f not built"; exit 77; }
 done
 syms=$(nm "$EMU" 2>/dev/null || true)
@@ -26,12 +26,12 @@ T=tmp/wm_ghost_test.$$
 mkdir -p "$ROOT/$T"
 trap 'rm -f "$LOG"; rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
-SDL_VIDEODRIVER=dummy with_timeout 90 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
+SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
 	/dis/sh.dis -c "bind -c /$T /tmp; wm/wm sh /tests/wm/ghost.sh" \
 	</dev/null >"$LOG" 2>&1 || true
 
 failed=0
-for step in colors deleted colors2 killed done; do
+for step in colors deleted colors2 killed frozen frozen-deleted after-frozen after-frozen-deleted keeps done; do
 	if grep -q "^R $step\( \|\$\)" "$LOG"; then
 		echo "PASS: $step"
 	else
@@ -97,6 +97,16 @@ for s in "1 deleted" "2 killed"; do
 		check "$what: background at $xy" ghost-$n.img $xy $BG
 	done
 done
+
+# a client that has stopped: Delete still takes its window, wm goes on;
+# one that took the exit and stays is left alone
+step() { grep "^R $1\( \|\$\)" "$LOG" | head -1 | cut -d' ' -f3-; }
+[ -n "$(step frozen)" ] && echo "PASS: frozen window shown" || { echo "FAIL: frozen window not shown"; failed=1; }
+check "frozen: its window shown" ghost-3.img 150 100 "!$BG"
+[ -z "$(step frozen-deleted)" ] && echo "PASS: frozen client deleted" || { echo "FAIL: frozen client left: $(step frozen-deleted)"; failed=1; }
+check "frozen: background where it was" ghost-4.img 150 100 $BG
+[ -n "$(step after-frozen)" ] && [ -z "$(step after-frozen-deleted)" ] && echo "PASS: wm works after a frozen client" || { echo "FAIL: wm after frozen: $(step after-frozen) / $(step after-frozen-deleted)"; failed=1; }
+[ -n "$(step keeps)" ] && echo "PASS: a client that took the exit stays" || { echo "FAIL: a client that took the exit was dropped"; failed=1; }
 
 if [ $failed = 0 ]; then echo "ALL PASS"; exit 0; fi
 sed -n '/^R /!p' "$LOG" | head -20

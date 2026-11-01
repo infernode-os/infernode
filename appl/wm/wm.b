@@ -41,6 +41,7 @@ ptrfocus: ref Client;
 kbdfocus: ref Client;
 controller: ref Client;
 allowcontrol := 1;
+forcec: chan of ref Client;		# a Delete the client did not take
 fakekbd: chan of string;
 fakekbdin: chan of string;
 buttons := 0;
@@ -142,6 +143,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	wmsize := startwmsize();
 	fakekbd = chan of string;
 	exitc := chan of int;
+	forcec = chan of ref Client;
 
 	# The windows, as a file (/chan/wmwindows, and /mnt/wm/wmwindows).
 	wmwindows := sys->file2chan("/chan", "wmwindows");
@@ -180,6 +182,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		retheme();
 	<-exitc =>
 		wmclient->win.wmctl("exit");
+	c := <-forcec =>
+		dropwindows(c);
 	c := <-wmctxt.kbd or
 	c = int <-fakekbd =>
 		if(kbdfocus != nil)
@@ -257,20 +261,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(c, data, rc) := <-req =>
 		# if client leaving
 		if(rc == nil){
-			c.remove();
-			forgethidden(c);
-			setclientlabel(c, nil);
-			if(c == ptrfocus)
-				ptrfocus = nil;
-			if(c == kbdfocus)
-				kbdfocus = nil;
-			if(c == controller)
-				controller = nil;
+			forgetclient(c);
 			controlevent("delclient " + string c.id);
-			for(z := wmsrv->top(); z != nil; z = z.znext)
-				if(z.flags & Kbdstarted)
-					break;
-			setkbdfocus(z);
 			c.stop <-= 1;
 			break;
 		}
@@ -988,6 +980,7 @@ wmwindowsproc(f: ref Sys->FileIO)
 # pointer, New, as rio's does: it only changes the cursor, and any button
 # but 3 cancels.  Returns whether the button is still down.
 
+Exitgrace: con 2000;	# ms for a client to take a Delete's exit
 Rnew, Rresize, Rmove, Rdelete, Rhide: con iota;
 menu3 := array[] of {"New", "Resize", "Move", "Delete", "Hide"};
 
@@ -1117,9 +1110,50 @@ retheme()
 		spawn tellctl((hd hl).ctl, "retheme");
 }
 
+# A client takes its exit in its own loop; wm cannot kill it, not knowing
+# its process.  One that has not taken it in Exitgrace is stuck (a read
+# that never ends, say) and its window goes from the screen, or Delete
+# would do nothing; it keeps the exit, and leaves if it ever wakes.  One
+# that took it and stays is asking its user something, and stays.
 tellexit(c: ref Client)
 {
 	c.ctl <-= "exit";
+	sys->sleep(Exitgrace);
+	if(c.ctlwaiting > 0)
+		forcec <-= c;
+}
+
+dropwindows(c: ref Client)
+{
+	for(z := wmsrv->top(); z != nil && z != c; z = z.znext)
+		;
+	if(z == nil)
+		return;	# it left, or was hidden and is on the menu
+	off := screen.image.r.max.add((10000, 10000));
+	for(wl := c.wins; wl != nil; wl = tl wl){
+		w := hd wl;
+		if(w.img != nil)
+			w.img.origin(w.img.r.min, off);
+	}
+	forgetclient(c);
+	c.znext = nil;		# top() relinks it: remove() leaves it set
+}
+
+forgetclient(c: ref Client)
+{
+	c.remove();
+	forgethidden(c);
+	setclientlabel(c, nil);
+	if(c == ptrfocus)
+		ptrfocus = nil;
+	if(c == kbdfocus)
+		kbdfocus = nil;
+	if(c == controller)
+		controller = nil;
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		if(z.flags & Kbdstarted)
+			break;
+	setkbdfocus(z);
 }
 
 # exitwhenempty: tell the main loop to exit once every window has gone

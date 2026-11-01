@@ -6,6 +6,15 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **Settings no longer freezes on its Theme panel, and Delete takes the
+  window of a program that has frozen.** `event`, served in the theme
+  directory since themefs, was listed as a theme: loading it read a file
+  that waits for the next switch, in Settings' main loop, so the Theme
+  panel never came back (and Xenith's `Theme` would have stopped on it).
+  wm/wm's Delete only asks a program to exit, and a stuck one never
+  hears: if the exit is not taken in two seconds the window now leaves
+  the screen. The program itself is not killed (wm does not know its
+  process); it takes the exit if it ever wakes.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's

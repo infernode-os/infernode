@@ -35,5 +35,31 @@ show killed
 sleep 1
 scap /tmp/ghost-2.img
 
+# a client that has stopped: it never takes the exit, and its window
+# still goes, a moment after
+/dis/tests/wm_frozen.dis &
+sleep 2
+show frozen
+scap /tmp/ghost-3.img
+menu 900 100 154
+click 100 100 4
+sleep 3
+show frozen-deleted
+scap /tmp/ghost-4.img
+# wm still works: a window after it
+wm/colors &
+sleep 3
+show after-frozen
+menu 900 100 154
+click 100 100 4
+show after-frozen-deleted
+
+# a client that took the exit and stays is asking its user: it stays
+/dis/tests/wm_frozen.dis -k &
+sleep 2
+menu 900 100 154
+click 100 100 4
+sleep 3
+show keeps
 echo R done
 echo halt > '#c/sysctl'

@@ -11,7 +11,7 @@
  * pulses at ~44 kHz through the filter are a voltage, and a stream of
  * them is the waveform. With the range at 2048 the resolution is 11
  * bits, which through this filter is what the jack is good for; a
- * 16-bit sample is shifted down to it. The PWM clock comes from the
+ * 16-bit sample comes down to it with its error carried forward (level). The PWM clock comes from the
  * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), divided (MASH fractional
  * divider) so that clock / range is the sample rate. Both channels
  * share one FIFO and take words alternately (left, right), so a stereo
@@ -152,6 +152,7 @@ struct Ctlr {
 	int	frames;		/* stereo frames per buffer now: Maxframes unless audioctl's buf said less (#653) */
 	ulong	played;		/* buffers played out, for the curious */
 	ulong	underruns;	/* buffers silenced for want of data */
+	int	carry[2];	/* each channel's rounding error: level */
 	Audio_t	av;
 };
 
@@ -427,17 +428,24 @@ roomfor(void *a)
  * 0..Range-1 around Silence, scaled by the channel's gain.
  */
 static u32int
-level(int s, int gain)
+level(int s, int gain, int *carry)
 {
 	long v;
 
 	v = (long)s * gain / Audio_Max_Val;	/* -32768..32767 */
-	v = (v + 32768) >> 5;			/* 0..2047 */
+	/*
+	 * What the 5 bits below the range's resolution leave out goes into
+	 * the next sample, not away. Dropped, it repeats with the waveform,
+	 * and a pure tone comes out with a fuzz on it at any volume; carried,
+	 * it is noise, moved up out of the way.
+	 */
+	v += 32768 + *carry;
 	if(v < 0)
 		v = 0;
-	if(v >= Range)
-		v = Range - 1;
-	return v;
+	if(v > 65535)
+		v = 65535;
+	*carry = v & 31;
+	return v >> 5;				/* 0..2047 */
 }
 
 long
@@ -480,8 +488,8 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 			r = chans == 2? ((int)p[n+1] - 128) << 8 : l;
 		}
 		b = ctlr.buf[ctlr.rg.wbuf];
-		b[ctlr.woff++] = level(l, lg);
-		b[ctlr.woff++] = level(r, rg);
+		b[ctlr.woff++] = level(l, lg, &ctlr.carry[0]);
+		b[ctlr.woff++] = level(r, rg, &ctlr.carry[1]);
 		if(ctlr.woff >= ctlr.frames * 2){
 			cachedwbse(b, ctlr.frames * 2 * 4);
 			ringfilled(&ctlr.rg);

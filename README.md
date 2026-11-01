@@ -15,7 +15,14 @@
 
 InferNode is a 64-bit distribution of Inferno® OS. Each agent runs in its own namespace, which holds only the files and services you grant it. Nothing else exists for it. [Watch the 45-second demo](https://infernode.io/#demo).
 
-It also has JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, an optional SDL3 GUI (Lucia + Xenith), and a complete Plan 9-inspired environment, all in under 30 MB of RAM. It runs on macOS, Linux and Windows, and boots on bare metal on ARM64 and RISC-V.
+It is a whole system, not only a runtime: a desktop, a web browser, an editor that opens PDFs and images, a shell and a network stack, with JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, all in under 30 MB of RAM. It runs on macOS, Linux and Windows, and boots as the operating system itself on Raspberry Pi and RISC-V.
+
+<p>
+  <a href="docs/images/desktop.png"><img src="docs/images/desktop.png" width="49%" alt="The wm/wm desktop in Plan 9's colours: a shell listing its namespace, a Mandelbrot set, a clock, and the Charon browser showing infernode.io."></a>
+  <a href="docs/images/xenith.png"><img src="docs/images/xenith.png" width="49%" alt="Xenith with three columns: Markdown source, the same Markdown typeset live beside it, the Inferno paper as a PDF, and an image."></a>
+</p>
+
+*Left: `wm/wm`, a desktop in the manner of Plan 9's rio, with the Charon browser. Right: [Xenith](docs/XENITH.md), with Markdown typeset live beside its source, a PDF and an image. Agents drive Xenith and Charon through the same files you can.*
 
 ## Quick Start
 
@@ -24,11 +31,12 @@ It also has JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, an optional
 Every tagged release ships signed binaries for macOS, Linux, and Windows on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
 
 - **macOS (Apple Silicon or Intel)** — `infernode-*-macos-arm64.dmg` or `infernode-*-macos-amd64.dmg`: open, drag to Applications, launch. Or with Homebrew: `brew install --cask infernode-os/tap/infernode`.
-- **macOS (Intel)** — `infernode-*-macos-amd64.dmg`: the same, built and tested on GitHub's Intel macOS runner. Supported for as long as Apple supports Intel Macs and GitHub has Intel runners.
-- **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. (Until code-signing lands, the unsigned `InferNode.exe` would otherwise be silently blocked by SmartScreen after browser download — Windows propagates Mark-of-the-Web from the zip to every extracted file. `.bat` files are exempt from that gate, so `setup-windows.bat` runs anyway and its first job is to unblock the rest of the bundle.)
+- **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`**, then double-click `InferNode.exe`. The first step clears the download tag Windows would otherwise use to block the unsigned program, and configures an LLM backend.
 - **Linux x86_64 (GUI)** — `infernode-*-linux-amd64-gui.tar.gz`: SDL3 is bundled.
 - **Linux ARM64 (GUI)** — `infernode-*-linux-arm64-gui.tar.gz`: for Jetson, Raspberry Pi, etc.
 - **Linux (headless)** — `infernode-*-linux-amd64.tar.gz` or `infernode-*-linux-arm64.tar.gz`.
+- **Raspberry Pi, no host OS** — `infernode-*-rpi3bplus.img.xz` or `infernode-*-rpi4b.img.xz`: flash to an SD card with Raspberry Pi Imager and boot. See [the manual](docs/BAREMETAL.md).
+- **Xenith alone** — `xenith-*` for macOS, Linux and Windows: the editor as its own application.
 - **Container** — multi-arch (amd64 + arm64) headless image on GHCR:
   ```bash
   docker run -it ghcr.io/infernode-os/infernode:latest
@@ -45,7 +53,7 @@ cd infernode-*-linux-*-gui
 
 Every release asset is published with a cosign `.sigstore` bundle and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 
-Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (handled in the meantime by `setup-windows.bat`, which clears the tag from the bundle on first run — see the Windows install bullet above).
+Windows builds are not code-signed yet. Signing through the [SignPath Foundation](https://signpath.org/) is planned.
 
 ### Build from source
 
@@ -91,12 +99,14 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 - **Lightweight** — 15–30 MB RAM, 2-second startup, ~10 MB on disk.
 - **JIT compiled** — native code generation on AMD64, ARM64 and RISC-V; interpreter fallback everywhere.
 - **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 44 tool modules, LLM integration via 9P, and formally verified containment.
-- **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
+- **Desktop (optional)** — Lucia, a three-zone tiling interface for working with agents, and `wm/wm`, a window manager in the manner of Plan 9's rio, with its menus and mouse language. Rendered via SDL3 (Metal / Vulkan / D3D).
+- **Xenith** — an AI-native [text environment](docs/XENITH.md) descended from Acme. It [opens PDFs and images](docs/xenith-documents.md), typesets Markdown live beside its source, and browses the web.
+- **Charon** — InferNode's own web browser, with its own CSS layout and [JavaScript engine](docs/JS-ENGINE.md), its pages exposed as files.
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucia) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
 - **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
 - **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).
-- **Complete** — 1,100+ Limbo source files, a full shell, TCP/IP, 9P, and over 1,000 compiled Dis modules.
+- **Complete** — 1,200+ Limbo source files, a full shell, TCP/IP, 9P, and over 1,000 compiled Dis modules.
 
 ## Platforms
 
@@ -109,6 +119,7 @@ Run with `emu -c1` to enable the JIT (Dis bytecode → native code at module loa
 | Linux ARM64 | Cortex-A78AE (Jetson) | **8.3×** | Jetson AGX, Raspberry Pi 4/5 |
 | Windows AMD64 | AMD Ryzen 7 255 | **13.3×** | SDL3 GUI with D3D |
 | Linux RISC-V 64 | RV64GC | not yet measured | Headless; cross-built and tested under qemu-user in CI. BeagleV-Fire, VisionFive 2 ([os/riscv64/README.md](os/riscv64/README.md)) |
+| Android, iOS | ARM64 | | Built from source: [android-app/README.md](android-app/README.md), [docs/IOS.md](docs/IOS.md) |
 
 Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Performance envelope: [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md).
 
@@ -126,14 +137,16 @@ serial console, with the full namespace and the network up.
 | Board | State |
 |-------|-------|
 | **Raspberry Pi 3B+** (`os/bcm2837`) | Runs on the real board, and on QEMU's `raspi3b`. Ethernet (LAN7515 over USB), Wi-Fi (CYW43455), Bluetooth, SD card, HDMI/DSI, USB keyboard and mouse, touch, GPIO, audio, A/B kernel update, boot watchdog. |
+| **Raspberry Pi 4B** (`os/bcm2711`) | Runs on the real board (a 4GB rev 1.5), and on QEMU's `raspi4b`: gigabit Ethernet at line rate (932 Mbit/s in), Wi-Fi, Bluetooth, USB-A, the 7" panel, all four cores. [os/bcm2711/README.md](os/bcm2711/README.md) says what was proved and what has not been tried. |
 | **QEMU `virt`** (`os/virt`) | GICv2 and virtio (net, blk, keyboard, tablet, ramfb) — the kernel anywhere QEMU runs, which is what CI boots. |
-| **Raspberry Pi 4B** (`os/bcm2711`) | Boots to the desktop under QEMU's `raspi4b`; has never run on a board. [os/bcm2711/README.md](os/bcm2711/README.md) says what that does and does not establish. |
 | **QEMU RISC-V `virt`** (`os/riscvvirt`) | RV64GC under OpenSBI with the RISC-V Dis JIT: 4 harts, PLIC, virtio (net, blk, keyboard, tablet), ramfb to the graphical logon, and U-Boot `booti`/`boot.scr`. [os/riscv64/README.md](os/riscv64/README.md). |
 | **PolarFire SoC: BeagleV-Fire, Icicle Kit** (`os/mpfs`) | Boots under QEMU's `microchip-icicle-kit`: SD card (Cadence SD4HC), Gigabit Ethernet (Cadence GEM, PHY over MDIO), the system controller's TRNG service, `/reserved-memory`. It has never run on a board. |
 
-Building and booting it is one command — the test harness, which is the only
-supported way to build the kernel (it needs `clang`, `ld.lld`, `llvm-objcopy`,
-`python3`, `qemu-system-aarch64` and a built `dis/`):
+The quickest way onto a Pi is a release's card image (see
+[Install](#install-recommended)); no build is needed. To build the kernel, use
+the test harness, which is the only supported way and is one command (it needs
+`clang`, `ld.lld`, `llvm-objcopy`, `python3`, `qemu-system-aarch64` and a built
+`dis/`):
 
 ```bash
 BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
@@ -150,6 +163,7 @@ running it, the card image, the QEMU flags that fail silently, what controls it:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
 - [docs/BAREMETAL.md](docs/BAREMETAL.md) — running InferNode as the operating system, on Raspberry Pi and QEMU
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment
+- [docs/xenith-documents.md](docs/xenith-documents.md) — PDFs, images and Markdown in Xenith
 - [docs/matrix-architecture.md](docs/matrix-architecture.md) — Matrix compositional module runtime
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — wallet, x402, secstore, key management
 - [appl/veltro/SECURITY.md](appl/veltro/SECURITY.md) — Veltro agent security model
@@ -168,7 +182,7 @@ InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/spon
 
 ## About
 
-InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
+InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 desktop (Lucia, `wm/wm`, Xenith, Charon). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
 
 ## Acknowledgements
 

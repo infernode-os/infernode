@@ -483,7 +483,6 @@ struct Proc
 {
 	Label		sched;		/* known to l.s */
 	char*		kstack;		/* known to l.s */
-	int		nlocks;		/* spin locks taken or being taken: see lock() */
 	Mach*		mach;		/* machine running this proc */
 	struct Vm*	vm;		/* the Dis VM whose interpreter it takes in acquire() (#944) */
 	struct Vm*	vmhome;		/* its own, while devprog works in another's */

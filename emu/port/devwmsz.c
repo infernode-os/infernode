@@ -128,7 +128,7 @@ wmsizeconsume(void)
 static Chan*
 wmsizeattach(char* spec)
 {
-	return devattach('w', spec);
+	return devattach('z', spec);
 }
 
 static Walkqid*
@@ -251,7 +251,7 @@ wmsizewrite(Chan* c, void* va, long n, vlong off)
 }
 
 Dev wmszdevtab = {
-	'w',
+	'z',	/* #z: #w is the watchdog in Plan 9 and 9front (docs/DEVICE-LETTERS.md) */
 	"wmsz",
 
 	devinit,

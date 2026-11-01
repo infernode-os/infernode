@@ -3,386 +3,387 @@
 #include "lib9.h"
 #include "isa.h"
 #include "interp.h"
+#include "opreg.h"
 
 #define DIND(reg, xxx) (uchar*)((*(ulong*)(R.reg+R.PC->xxx.i.f))+R.PC->xxx.i.s)
 static void
-D00(void)
+D00(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D01(void)
+D01(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D02(void)
+D02(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D03(void)
+D03(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D04(void)
+D04(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D05(void)
+D05(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D06(void)
+D06(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D07(void)
+D07(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D08(void)
+D08(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D09(void)
+D09(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D0A(void)
+D0A(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D0B(void)
+D0B(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D0C(void)
+D0C(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D0D(void)
+D0D(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D0E(void)
+D0E(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D0F(void)
+D0F(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D10(void)
+D10(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D11(void)
+D11(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D12(void)
+D12(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D13(void)
+D13(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D14(void)
+D14(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D15(void)
+D15(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D16(void)
+D16(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D17(void)
+D17(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D18(void)
+D18(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D19(void)
+D19(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D1A(void)
+D1A(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D1B(void)
+D1B(OPARGS)
 {
 }
 static void
-D1C(void)
+D1C(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D1D(void)
+D1D(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D1E(void)
+D1E(OPARGS)
 {
 }
 static void
-D1F(void)
+D1F(OPARGS)
 {
 }
 static void
-D20(void)
+D20(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D21(void)
+D21(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D22(void)
+D22(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D23(void)
+D23(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-D24(void)
+D24(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D25(void)
+D25(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D26(void)
+D26(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-D27(void)
+D27(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-D28(void)
+D28(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D29(void)
+D29(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D2A(void)
+D2A(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D2B(void)
+D2B(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-D2C(void)
+D2C(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D2D(void)
+D2D(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D2E(void)
+D2E(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-D2F(void)
+D2F(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-D30(void)
+D30(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D31(void)
+D31(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D32(void)
+D32(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D33(void)
+D33(OPARGS)
 {
 }
 static void
-D34(void)
+D34(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D35(void)
+D35(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D36(void)
+D36(OPARGS)
 {
 }
 static void
-D37(void)
+D37(OPARGS)
 {
 }
 static void
-D38(void)
+D38(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D39(void)
+D39(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.d;
 }
 static void
-D3A(void)
+D3A(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.d;
 }
 static void
-D3B(void)
+D3B(OPARGS)
 {
 }
 static void
-D3C(void)
+D3C(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.d;
 }
 static void
-D3D(void)
+D3D(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.d;
 }
 static void
-D3E(void)
+D3E(OPARGS)
 {
 }
 static void
-D3F(void)
+D3F(OPARGS)
 {
 }
 static void
-D40(void)
+D40(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
@@ -390,7 +391,7 @@ D40(void)
 	R.m = &R.t;
 }
 static void
-D41(void)
+D41(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
@@ -398,7 +399,7 @@ D41(void)
 	R.m = &R.t;
 }
 static void
-D42(void)
+D42(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
@@ -406,12 +407,12 @@ D42(void)
 	R.m = &R.t;
 }
 static void
-D43(void)
+D43(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D44(void)
+D44(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(MP, d);
@@ -419,7 +420,7 @@ D44(void)
 	R.m = &R.t;
 }
 static void
-D45(void)
+D45(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(FP, d);
@@ -427,17 +428,17 @@ D45(void)
 	R.m = &R.t;
 }
 static void
-D46(void)
+D46(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D47(void)
+D47(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D48(void)
+D48(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
@@ -445,7 +446,7 @@ D48(void)
 	R.m = &R.t;
 }
 static void
-D49(void)
+D49(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
@@ -453,7 +454,7 @@ D49(void)
 	R.m = &R.t;
 }
 static void
-D4A(void)
+D4A(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
@@ -461,12 +462,12 @@ D4A(void)
 	R.m = &R.t;
 }
 static void
-D4B(void)
+D4B(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D4C(void)
+D4C(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(MP, d);
@@ -474,7 +475,7 @@ D4C(void)
 	R.m = &R.t;
 }
 static void
-D4D(void)
+D4D(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(FP, d);
@@ -482,17 +483,17 @@ D4D(void)
 	R.m = &R.t;
 }
 static void
-D4E(void)
+D4E(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D4F(void)
+D4F(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D50(void)
+D50(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.MP+R.PC->d.ind;
@@ -500,7 +501,7 @@ D50(void)
 	R.m = &R.t;
 }
 static void
-D51(void)
+D51(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.FP+R.PC->d.ind;
@@ -508,7 +509,7 @@ D51(void)
 	R.m = &R.t;
 }
 static void
-D52(void)
+D52(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = (uchar*)&R.PC->d.imm;
@@ -516,12 +517,12 @@ D52(void)
 	R.m = &R.t;
 }
 static void
-D53(void)
+D53(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D54(void)
+D54(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(MP, d);
@@ -529,7 +530,7 @@ D54(void)
 	R.m = &R.t;
 }
 static void
-D55(void)
+D55(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(FP, d);
@@ -537,64 +538,64 @@ D55(void)
 	R.m = &R.t;
 }
 static void
-D56(void)
+D56(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D57(void)
+D57(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D58(void)
+D58(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D59(void)
+D59(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D5A(void)
+D5A(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D5B(void)
+D5B(OPARGS)
 {
 }
 static void
-D5C(void)
+D5C(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D5D(void)
+D5D(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D5E(void)
+D5E(OPARGS)
 {
 }
 static void
-D5F(void)
+D5F(OPARGS)
 {
 }
 static void
-D60(void)
+D60(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.MP+R.PC->d.ind;
@@ -602,7 +603,7 @@ D60(void)
 	R.m = &R.t;
 }
 static void
-D61(void)
+D61(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.FP+R.PC->d.ind;
@@ -610,7 +611,7 @@ D61(void)
 	R.m = &R.t;
 }
 static void
-D62(void)
+D62(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = (uchar*)&R.PC->d.imm;
@@ -618,12 +619,12 @@ D62(void)
 	R.m = &R.t;
 }
 static void
-D63(void)
+D63(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-D64(void)
+D64(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(MP, d);
@@ -631,7 +632,7 @@ D64(void)
 	R.m = &R.t;
 }
 static void
-D65(void)
+D65(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(FP, d);
@@ -639,17 +640,17 @@ D65(void)
 	R.m = &R.t;
 }
 static void
-D66(void)
+D66(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-D67(void)
+D67(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-D68(void)
+D68(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.MP+R.PC->d.ind;
@@ -657,7 +658,7 @@ D68(void)
 	R.m = &R.t;
 }
 static void
-D69(void)
+D69(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.FP+R.PC->d.ind;
@@ -665,7 +666,7 @@ D69(void)
 	R.m = &R.t;
 }
 static void
-D6A(void)
+D6A(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = (uchar*)&R.PC->d.imm;
@@ -673,12 +674,12 @@ D6A(void)
 	R.m = &R.t;
 }
 static void
-D6B(void)
+D6B(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-D6C(void)
+D6C(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(MP, d);
@@ -686,7 +687,7 @@ D6C(void)
 	R.m = &R.t;
 }
 static void
-D6D(void)
+D6D(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(FP, d);
@@ -694,863 +695,863 @@ D6D(void)
 	R.m = &R.t;
 }
 static void
-D6E(void)
+D6E(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-D6F(void)
+D6F(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-D70(void)
+D70(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D71(void)
+D71(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D72(void)
+D72(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D73(void)
+D73(OPARGS)
 {
 }
 static void
-D74(void)
+D74(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D75(void)
+D75(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D76(void)
+D76(OPARGS)
 {
 }
 static void
-D77(void)
+D77(OPARGS)
 {
 }
 static void
-D78(void)
+D78(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D79(void)
+D79(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D7A(void)
+D7A(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D7B(void)
+D7B(OPARGS)
 {
 }
 static void
-D7C(void)
+D7C(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D7D(void)
+D7D(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.t = (short)R.PC->reg;
 	R.m = &R.t;
 }
 static void
-D7E(void)
+D7E(OPARGS)
 {
 }
 static void
-D7F(void)
+D7F(OPARGS)
 {
 }
 static void
-D80(void)
+D80(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D81(void)
+D81(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D82(void)
+D82(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D83(void)
+D83(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D84(void)
+D84(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D85(void)
+D85(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D86(void)
+D86(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D87(void)
+D87(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-D88(void)
+D88(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D89(void)
+D89(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D8A(void)
+D8A(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D8B(void)
+D8B(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D8C(void)
+D8C(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D8D(void)
+D8D(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D8E(void)
+D8E(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D8F(void)
+D8F(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-D90(void)
+D90(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D91(void)
+D91(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D92(void)
+D92(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D93(void)
+D93(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D94(void)
+D94(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D95(void)
+D95(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D96(void)
+D96(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D97(void)
+D97(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-D98(void)
+D98(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D99(void)
+D99(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D9A(void)
+D9A(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D9B(void)
+D9B(OPARGS)
 {
 }
 static void
-D9C(void)
+D9C(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D9D(void)
+D9D(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-D9E(void)
+D9E(OPARGS)
 {
 }
 static void
-D9F(void)
+D9F(OPARGS)
 {
 }
 static void
-DA0(void)
+DA0(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DA1(void)
+DA1(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DA2(void)
+DA2(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DA3(void)
+DA3(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-DA4(void)
+DA4(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DA5(void)
+DA5(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DA6(void)
+DA6(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-DA7(void)
+DA7(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-DA8(void)
+DA8(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DA9(void)
+DA9(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DAA(void)
+DAA(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DAB(void)
+DAB(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-DAC(void)
+DAC(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DAD(void)
+DAD(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DAE(void)
+DAE(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-DAF(void)
+DAF(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-DB0(void)
+DB0(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DB1(void)
+DB1(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DB2(void)
+DB2(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DB3(void)
+DB3(OPARGS)
 {
 }
 static void
-DB4(void)
+DB4(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DB5(void)
+DB5(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DB6(void)
+DB6(OPARGS)
 {
 }
 static void
-DB7(void)
+DB7(OPARGS)
 {
 }
 static void
-DB8(void)
+DB8(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DB9(void)
+DB9(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DBA(void)
+DBA(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DBB(void)
+DBB(OPARGS)
 {
 }
 static void
-DBC(void)
+DBC(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DBD(void)
+DBD(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.FP+R.PC->reg;
 }
 static void
-DBE(void)
+DBE(OPARGS)
 {
 }
 static void
-DBF(void)
+DBF(OPARGS)
 {
 }
 static void
-DC0(void)
+DC0(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DC1(void)
+DC1(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DC2(void)
+DC2(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DC3(void)
+DC3(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-DC4(void)
+DC4(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DC5(void)
+DC5(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DC6(void)
+DC6(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-DC7(void)
+DC7(OPARGS)
 {
 	R.s = R.MP+R.PC->s.ind;
 }
 static void
-DC8(void)
+DC8(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DC9(void)
+DC9(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DCA(void)
+DCA(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DCB(void)
+DCB(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-DCC(void)
+DCC(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DCD(void)
+DCD(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DCE(void)
+DCE(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-DCF(void)
+DCF(OPARGS)
 {
 	R.s = R.FP+R.PC->s.ind;
 }
 static void
-DD0(void)
+DD0(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DD1(void)
+DD1(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DD2(void)
+DD2(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DD3(void)
+DD3(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-DD4(void)
+DD4(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DD5(void)
+DD5(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DD6(void)
+DD6(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-DD7(void)
+DD7(OPARGS)
 {
 	R.s = (uchar*)&R.PC->s.imm;
 }
 static void
-DD8(void)
+DD8(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DD9(void)
+DD9(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DDA(void)
+DDA(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DDB(void)
+DDB(OPARGS)
 {
 }
 static void
-DDC(void)
+DDC(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DDD(void)
+DDD(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DDE(void)
+DDE(OPARGS)
 {
 }
 static void
-DDF(void)
+DDF(OPARGS)
 {
 }
 static void
-DE0(void)
+DE0(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DE1(void)
+DE1(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DE2(void)
+DE2(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DE3(void)
+DE3(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-DE4(void)
+DE4(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DE5(void)
+DE5(OPARGS)
 {
 	R.s = DIND(MP, s);
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DE6(void)
+DE6(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-DE7(void)
+DE7(OPARGS)
 {
 	R.s = DIND(MP, s);
 }
 static void
-DE8(void)
+DE8(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DE9(void)
+DE9(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DEA(void)
+DEA(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DEB(void)
+DEB(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-DEC(void)
+DEC(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DED(void)
+DED(OPARGS)
 {
 	R.s = DIND(FP, s);
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DEE(void)
+DEE(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-DEF(void)
+DEF(OPARGS)
 {
 	R.s = DIND(FP, s);
 }
 static void
-DF0(void)
+DF0(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DF1(void)
+DF1(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DF2(void)
+DF2(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DF3(void)
+DF3(OPARGS)
 {
 }
 static void
-DF4(void)
+DF4(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DF5(void)
+DF5(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DF6(void)
+DF6(OPARGS)
 {
 }
 static void
-DF7(void)
+DF7(OPARGS)
 {
 }
 static void
-DF8(void)
+DF8(OPARGS)
 {
 	R.d = R.MP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DF9(void)
+DF9(OPARGS)
 {
 	R.d = R.FP+R.PC->d.ind;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DFA(void)
+DFA(OPARGS)
 {
 	R.d = (uchar*)&R.PC->d.imm;
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DFB(void)
+DFB(OPARGS)
 {
 }
 static void
-DFC(void)
+DFC(OPARGS)
 {
 	R.d = DIND(MP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DFD(void)
+DFD(OPARGS)
 {
 	R.d = DIND(FP, d);
 	R.m = R.MP+R.PC->reg;
 }
 static void
-DFE(void)
+DFE(OPARGS)
 {
 }
 static void
-DFF(void)
+DFF(OPARGS)
 {
 }
 
-void	(*dec[])(void) =
+void	(*dec[])(OPARGS) =
 {
 	D00,
 	D01,

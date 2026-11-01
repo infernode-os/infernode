@@ -1,5 +1,5 @@
 /*
- * devtfa — #F, the "2fa" device: a provider-agnostic second-factor
+ * devtfa — #h, the "2fa" device: a provider-agnostic second-factor
  * challenge-response service, exposed as a small synthetic filesystem.
  *
  *   /dev/2fa/providers   (r)   available backends, e.g. "yubikey-fido2 available=1"
@@ -56,7 +56,7 @@ cpystr(char *d, char *s, int dn)
 static Chan*
 tfaattach(char *spec)
 {
-	return devattach('F', spec);
+	return devattach('h', spec);
 }
 
 static Walkqid*
@@ -206,7 +206,7 @@ tfawrite(Chan *c, void *va, long n, vlong offset)
 }
 
 Dev tfadevtab = {
-	'F',
+	'h',	/* #h: #F is flash in Plan 9, 9front and Inferno (docs/DEVICE-LETTERS.md) */
 	"2fa",
 
 	devinit,

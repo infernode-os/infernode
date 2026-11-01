@@ -738,6 +738,7 @@ dis/tests/fractal_tool_test.dis
 dis/tests/gentmpl.dis
 dis/tests/geomap_test.dis
 dis/tests/git_test.dis
+dis/tests/grpwait_test.dis
 dis/tests/goroutine_leak_test.dis
 dis/tests/gpu_bench.dis
 dis/tests/gpu_smoke.dis
@@ -1010,6 +1011,8 @@ dis/veltro/wiki9p.dis
 dis/ventisrv.dis
 dis/vid9p.dis
 dis/wav2iaf.dis
+dis/vm.dis
+dis/vmstress.dis
 dis/wc.dis
 dis/webfs.dis
 dis/webgrab.dis

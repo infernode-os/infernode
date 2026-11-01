@@ -329,6 +329,8 @@ The wallet filesystem mounts at `/mnt/wallet/` and provides account management, 
     ├── pay          rw   write: "amount recipient" → read: pending:id
     ├── authorize    rw   write: structured x402 request → read: pending:id;
     │                         signature is returned after trusted approval
+    │                         (on either, a read again at offset 0 on the
+    │                         same fid waits for the outcome)
     ├── ctl          rw   "budget maxpertx maxpersess currency",
     │                     "gasbudget maxpertx maxpersess", "requireapproval on"
     └── history      r    recent transactions (timestamped, capped at 200)
@@ -471,7 +473,9 @@ amounts and balances above 2^63 wei do not wrap.
 
 All accounts require trusted approval. Writing to
 `/mnt/wallet/{account}/pay` or `/mnt/wallet/{account}/authorize` queues a pending
-payment and returns `pending:<id>`. Requests are validated *before* queueing
+payment and returns `pending:<id>` to the first read of that fid; a read
+there again at offset 0 waits until the payment is approved, denied or
+expires, and gives the outcome. Requests are validated *before* queueing
 (malformed or over-budget requests are rejected immediately), and pending
 entries expire after 15 minutes if unapproved.
 
@@ -553,7 +557,7 @@ Implements the x402 v2 specification for HTTP 402 payment flows.
 opt := x402->selectoption(pr, "base");
 
 # Request a signed authorization from wallet9p (policy enforced there);
-# polls up to waitsecs while trusted approval is pending
+# waits on its read, for waitsecs at most, while trusted approval is pending
 (payload, err) := x402->authorize(opt, pr.resource, "myaccount", 90);
 # err == "pending:<id>" if approval did not arrive in time
 

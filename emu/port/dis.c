@@ -194,8 +194,8 @@ newprog(Prog *p, Modlink *m)
 	h = D2H(m);
 	h->ref++;
 	Setmark(h);
-	n->R.M = m;
-	n->R.MP = m->MP;
+	n->reg.M = m;
+	n->reg.MP = m->MP;
 	if(m->MP != H)
 		Setmark(D2H(m->MP));
 	addrun(n);
@@ -343,7 +343,7 @@ exprog(Prog *p, char *exc)
 	/* similar code to killprog but not quite */
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -454,7 +454,7 @@ killprog(Prog *p, char *cause)
 
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -503,10 +503,10 @@ killprog(Prog *p, char *cause)
 	p->state = Pexiting;
 	propex(p, "killed");
 
-	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
+	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
 	gclock();
-	destroystack(&p->R);
+	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
 
@@ -558,6 +558,63 @@ addgrp(Prog *n, Prog *p)
 	}
 }
 
+/*
+ * A read of /prog/n/grpwait waits for n's process group, as it was when
+ * the file was opened, to have no Prog left: delgrp posts to each such
+ * reader's queue as it frees the group (a group is freed with its last
+ * Prog, and group ids are pids, never reused).  The list is changed and
+ * walked with the interpreter held.
+ */
+typedef struct Grpwait Grpwait;
+struct Grpwait
+{
+	int	gid;
+	Queue*	q;
+	Grpwait*	next;
+};
+static Grpwait *grpwaits;
+
+void
+grpwaitadd(int gid, Queue *q)
+{
+	Grpwait *w;
+
+	w = malloc(sizeof(*w));
+	if(w == nil)
+		error(Enomem);
+	w->gid = gid;
+	w->q = q;
+	w->next = grpwaits;
+	grpwaits = w;
+}
+
+void
+grpwaitdel(Queue *q)
+{
+	Grpwait **l, *w;
+
+	for(l = &grpwaits; (w = *l) != nil; ){
+		if(w->q == q){
+			*l = w->next;
+			free(w);
+		}else
+			l = &w->next;
+	}
+}
+
+static void
+grpgone(int gid)
+{
+	Grpwait *w;
+	char buf[16];	/* Flawfinder: ignore — an int's decimal, bounded by sizeof buf below */
+	int n;
+
+	n = snprint(buf, sizeof(buf), "%d", gid);
+	for(w = grpwaits; w != nil; w = w->next)
+		if(w->gid == gid)
+			qproduce(w->q, buf, n);
+}
+
 static Progs*
 delgrp(Prog *p)
 {
@@ -595,6 +652,7 @@ delgrp(Prog *p)
 					pg->child = cg;
 				}
 			}
+			grpgone(g->id);
 			free(g);
 		}while((g = pg) != nil && g->head == nil);
 	}
@@ -940,12 +998,12 @@ schedmod(Module *m)
 	p = newprog(nil, ml);
 	h = D2H(ml);
 	h->ref--;
-	p->R.PC = m->entry;
+	p->reg.PC = m->entry;
 	fp = &f;
 	R.s = &fp;
 	f.t = m->entryt;
 	newstack(p);
-	initmem(m->entryt, p->R.FP);
+	initmem(m->entryt, p->reg.FP);
 
 	return p;
 }
@@ -955,9 +1013,9 @@ static char*
 m(Prog *p)
 {
 	if(p)
-		if(p->R.M)
-			if(p->R.M->m)
-				return p->R.M->m->name;
+		if(p->reg.M)
+			if(p->reg.M->m)
+				return p->reg.M->m->name;
 	return "nil";
 }
 */
@@ -1186,7 +1244,7 @@ progexit(void)
 			char *pc = strstr(estr, "pc=");
 
 			if(pc != nil)
-				R.PC = r->R.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
+				R.PC = r->reg.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
 		}
 		print("[%s] Broken: \"%s\"\n", m->name, estr);
 	}
@@ -1409,6 +1467,7 @@ disinit(void *a)
 
 	opinit();
 	modinit();
+	typesperm = 0;		/* builtin types are shared and permanent; a module's are its VM's (interp.h) */
 	excinit();
 
 	root = load(initmod);

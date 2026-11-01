@@ -947,7 +947,7 @@ SBEOF
         # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
-        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types -Wno-error=incompatible-pointer-types-discards-qualifiers -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 
@@ -977,7 +977,7 @@ SBEOF
     for f in "$ROOT"/libkernfp/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/libkernfp-$(basename "$f").o"
-        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -Werror=incompatible-function-pointer-types -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 
@@ -6169,6 +6169,164 @@ PYEOF
     vrefute "headless: nothing claims a desktop exited"     "the desktop has exited"
     vcheck "headless: the machine is up -- shell and network" "etherusb: 10.0.2.15 mask"
     vrefute "headless: nothing panics"                      "panic:"
+
+    #
+    # More than one Dis VM (#944): #X, the vm command, programs in VMs 1
+    # and 2 at once, and the two places the kernel crosses between VMs --
+    # a VM 1 client of a file a VM 0 program serves through file2chan
+    # (devsrv), and a VM 0 kill of a VM 1 Prog (devprog). Correctness
+    # here; how much faster four VMs are is measured on the board, which
+    # TCG is no stopwatch for.
+    #
+    # its own card: the desktop's, with a vms file placing one program
+    # at boot and naming one that is not there
+    printf '# boot placement (#944)\n1 sleep 600\n3 nosuchprogram\n' > "$BUILD/vms"
+    python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-card-vm.img" 192 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr= \
+        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" /vms="$BUILD/vms" > "$BUILD/mkcard-vm.txt" 2>&1
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-card-vm.img" <<'PYEOF' > "$BUILD/$PLAT-vm.txt" 2>&1
+import re, subprocess, sys, threading, time
+qemu, img, extra, card = sys.argv[1:5]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % card, "-device", "virtio-blk-device,drive=sd"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def rd():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=rd, daemon=True).start()
+def waitfor(pat, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if re.search(pat, bytes(buf[start:])):
+            return True
+        time.sleep(0.3)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(rb"init: starting the shell", 150)
+    time.sleep(8)
+    typed("vm")
+    m = len(buf)
+    typed("vm 1 jitbench2", 0.5)
+    typed("vm 2 jitbench2", 0.5)
+    end = time.time() + 300
+    while len(re.findall(rb"Total Time: \d+ ms", bytes(buf[m:]))) < 2 and time.time() < end:
+        time.sleep(0.5)
+    time.sleep(1)
+    # Three VMs loading the same module at the same instant: the loads
+    # contend for the JIT's compile lock, and the one that waited used
+    # to let its interpreter go, so its VM's collector swept the module
+    # being parsed (libinterp/load.c, lockedcompile). The Pi 4's soak
+    # panicked on this a minute in. sh is loaded in none of the three
+    # yet, so all three parse and compile it.
+    m = len(buf)
+    typed("load std; for(n in 1 2 3) { vm $n sh -c 'load std; for(i in 1 2 3 4 5 6 7 8){ sleep 0 }; echo CONCSH-ok' & }", 0.5)
+    end = time.time() + 60
+    while bytes(buf[m:]).count(b"\nCONCSH-ok") < 3 and time.time() < end:
+        time.sleep(0.5)
+    time.sleep(1)
+    typed("ramfile /chan/vmrf served-from-vm0", 1)
+    typed("vm 1 cat /chan/vmrf", 3)
+    typed("vm 1 sh -c 'echo written-by-vm1 > /chan/vmrf'", 3)
+    typed("echo VMRF `{cat /chan/vmrf}", 2)
+    # not pid=`{vm 1 sleep 300}: the sleep shares vm's output, which
+    # there is the substitution's pipe, held open for the 300 seconds
+    typed("ramfile /chan/vmpid", 1)
+    typed("vm 1 sleep 300 > /chan/vmpid", 2)
+    typed("pid=`{cat /chan/vmpid}; echo VMSLEEP pid $pid", 2)
+    typed("ps; echo VMPSBEFORE", 3)
+    typed("kill $pid; sleep 1; echo VMPS; ps; echo VMKILLED", 3)
+    typed("vm 1 sh -c 'load tk'", 4)
+    # the VM directories by name, as a listing gives them: vmgen once
+    # gave devdir a name on its own stack, dead by the time devdirread
+    # packed it -- every listing came back garbage
+    typed("ls '#X/vm'; echo VMLSEND", 2)
+    # vmstress: echo servers and allocators in VMs 1-3, traffic to them
+    # from VM 0 and between them, a job started every 300 ms, bursts
+    # in all four at once, sleepers killed across VMs; every count
+    m = len(buf)
+    typed("vmstress run /tmp/vs 75", 0.5)
+    waitfor(rb"vmstress: stopped", 200, m)
+    # its end kills, from VM 0, clients that may be inside a file another
+    # VM serves: each must die, in its own VM, and nothing else may break
+    time.sleep(10)
+    typed("echo VSAFTER; for(i in 2 3){cat '#X/vm/'^$i^/status}; ps | grep Vmstress; echo VSAFTEREND", 3)
+    typed("vm")
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+    rm -f "$BUILD/$PLAT-card-vm.img"
+    OUT="$(cat "$BUILD/$PLAT-vm.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "vm: the card's vms file starts a program in VM 1 at boot" "init: vm 1: /dis/sleep.dis 600, pid "
+    vcheck "vm: and says so when one it names is not there"   "init: vms: /dis/nosuchprogram.dis in VM 3:"
+    vcheck "vm: #X lists the VMs: 0, and 1 and 3 from the card" "vms 3 max 4"
+    vcheck "vm: the boot-placed program is in VM 1"           "vm 1 progs 1 "
+    nt="$(grep -ac 'Total Time: [0-9]* ms' <<<"$OUT")"
+    if [[ "$nt" -ge 2 ]]; then
+        pass "virt: vm: jitbench2 in VM 1 and VM 2 at once, both to the end ($(grep -ao 'Total Time: [0-9]* ms' <<<"$OUT" | tr '\n' ' '))"
+    else
+        fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
+    fi
+    vcheck "vm: with VM 2, four"                              "vms 4 max 4"
+    nc="$(tr -d '\r' <<<"$OUT" | grep -ac '^CONCSH-ok')"
+    if [[ "$nc" -ge 3 ]]; then
+        pass "virt: vm: sh started in VMs 1, 2 and 3 at the same instant -- three loads contending for the compiler -- all three run to the end"
+    else
+        fail "virt: vm: sh in VMs 1-3 at once: $nc of 3 finished"
+    fi
+    vcheck "vm: a VM 1 program reads a file a VM 0 program serves (file2chan across VMs)" "served-from-vm0"
+    vcheck "vm: and writes it"                                "VMRF written-by-vm1"
+    if grep -aqE "^VMSLEEP pid [0-9]+" <<<"$(tr -d '\r' <<<"$OUT")"; then
+        pass "virt: vm: a VM 1 Prog is given a pid"
+    else
+        fail "virt: vm: vm 1 sleep gave no pid"
+    fi
+    VMOUT="$(tr -d '\r' <<<"$OUT")"
+    if sed -n '/echo VMPSBEFORE/,/^VMPSBEFORE/p' <<<"$VMOUT" | grep -aq "Sleep"; then
+        pass "virt: vm: ps lists the VM 1 Prog among VM 0's (/prog across VMs)"
+    else
+        fail "virt: vm: ps does not show the VM 1 sleep"
+    fi
+    # by pid: the sleep the card's vms file started at boot is a Sleep too
+    killpid="$(grep -aoE '^VMSLEEP pid [0-9]+' <<<"$VMOUT" | grep -oE '[0-9]+$' | head -1)"
+    if [[ -z "$killpid" ]]; then
+        fail "virt: vm: no pid to kill"
+    elif sed -n '/^VMPS$/,/^VMKILLED$/p' <<<"$VMOUT" | grep -aqE "^ *$killpid "; then
+        fail "virt: vm: VM 1's sleep (pid $killpid) outlived its kill from VM 0"
+    else
+        pass "virt: vm: VM 0 kills it (devprog across VMs)"
+    fi
+    vcheck "vm: \$Tk stays VM 0's: VM 1's shell cannot load it" "not built-in"
+    vls="$(sed -n "/ls .#X\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | grep -acE '^#X/vm/[0-3]$')"
+    if [[ "$vls" -eq 4 ]]; then
+        pass "virt: vm: ls '#X/vm' names VMs 0-3 (a name devdir keeps outlives the generator)"
+    else
+        fail "virt: vm: ls '#X/vm' gave $vls of 4 VM names: $(sed -n "/ls .#X\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | head -6 | tr '\n' ' ')"
+    fi
+    vs="$(grep -aE '^vmstress: [0-9]+s starts' <<<"$VMOUT" | tail -1)"
+    if [[ -z "$vs" ]]; then
+        fail "virt: vmstress: no report (did it start? $(grep -a 'vmstress:' <<<"$VMOUT" | head -2 | tr '\n' ' '))"
+    elif grep -qE 'startfail 0 .*burstfail 0 kills [1-9][0-9]* killfail 0 traffic ok [1-9][0-9]* bad 0;' <<<"$vs" &&
+        ! grep -qE 'starts 0 |done 0 |bursts 0 ' <<<"$vs" && grep -aq '^vmstress: stopped' <<<"$VMOUT"; then
+        pass "virt: vmstress: churn, bursts, kills and traffic across four VMs, nothing failed (${vs%%;*})"
+    else
+        fail "virt: vmstress: $vs"
+    fi
+    vsafter="$(sed -n '/^VSAFTER$/,/^VSAFTEREND$/p' <<<"$VMOUT")"
+    if grep -aq '^vm 2 progs 0 ' <<<"$vsafter" && grep -aq '^vm 3 progs 0 ' <<<"$vsafter" && ! grep -aq 'Vmstress' <<<"$vsafter"; then
+        pass "virt: vmstress: everything it started is gone 10 s after it stops -- clients killed from VM 0 while inside another VM's served file included"
+    else
+        fail "virt: vmstress: left behind after its end: $(tr '\n' ' ' <<<"$vsafter")"
+    fi
+    vrefute "vm: nothing panics"                              "panic:"
+    vrefute "vm: no exception goes unhandled"                 "unhandled exception"
 else
     fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
 fi

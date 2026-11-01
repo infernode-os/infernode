@@ -657,6 +657,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
 | `#V` | `/dev/camera/` | `ctl` (`source`, `mode W H`, `fps N`, `stream on\|off`; read for the state), `modes`, `frame` (one frame an open, an uncompressed `image(6)`), `raw` (the same, Bayer samples). Only the simulated sensor so far: a test pattern, as a Camera Module 3 would deliver it | both |
+| `#X` | `/dev/vm` | `ctl`, and `N/run`, `N/status` for each Dis VM: `vm(3)` | both |
 | `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
 
 **The camera** (`os/port/devcam.c`, infernode-os/infernode#1005) has one

@@ -1347,8 +1347,20 @@ teardowntask(id: int)
 			pids = a.pid :: pids;
 	}
 	tp.applock <-= 1;
-	for(t := 0; t < 30 && alive(pids); t++)
-		sys->sleep(100);
+	# each group's grpwait answers when it has gone; three seconds at most
+	n := len pids;
+	gone := chan[n] of int;
+	for(pl := pids; pl != nil; pl = tl pl)
+		spawn waitgrp(hd pl, gone);
+	tick := chan of int;
+	spawn timer(tick, 3000);
+	while(n > 0)
+		alt {
+		<-gone =>
+			n--;
+		<-tick =>
+			n = 0;
+		}
 	for(; pids != nil; pids = tl pids)
 		writetofile(sys->sprint("/prog/%d/ctl", hd pids), "killgrp");
 
@@ -1368,15 +1380,22 @@ actdeleted(id: int): int
 	return st != nil && strip(st) == "hidden";
 }
 
-# alive: whether any of pids is still running.
-alive(pids: list of int): int
+# waitgrp: send on gone when the process group numbered gid has no Prog
+# left (at once if its leader has already gone).
+waitgrp(gid: int, gone: chan of int)
 {
-	for(; pids != nil; pids = tl pids) {
-		(ok, nil) := sys->stat(sys->sprint("/prog/%d/status", hd pids));
-		if(ok >= 0)
-			return 1;
+	fd := sys->open(sys->sprint("/prog/%d/grpwait", gid), Sys->OREAD);
+	if(fd != nil) {
+		buf := array[32] of byte;
+		sys->read(fd, buf, len buf);
 	}
-	return 0;
+	gone <-= 1;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt { c <-= 1 => ; * => ; }
 }
 
 # setslotpid: record app id's main pid in its task's slot.
@@ -3424,10 +3443,9 @@ cleanupappslot(c: ref Client)
 
 # appreaper — process-lifecycle backstop for artifact-launched GUI apps.
 #
-# Plan-9 plumbing: read on /prog/<pid>/wait blocks until the proc
-# (and any child procs in its lineage created via spawn) terminate.
-# When that read returns, the app is gone — whether it called exit
-# cleanly, was killed by a note, panicked, segfaulted, or had any
+# A read of /prog/<pid>/grpwait blocks until the app's process group
+# has no Prog left.  When that read returns, the app is gone — whether
+# it called exit cleanly, was killed by a note, panicked, or had any
 # other terminal misfortune.  At that point we write `delete id=<id>`
 # to the activity's presentation/ctl and compact the matching AppSlot.
 #
@@ -3439,40 +3457,23 @@ cleanupappslot(c: ref Client)
 # returns without acting).  appreaper exists because the wmsrv-
 # disconnect path turns out to be unreliable when apps exit via the
 # common `postnote(kill); exit` pattern (editor.b:494 et al.).
-appreaper(actid: int, id: string, pid: int,
+appreaper(actid: int, id: string, grpc: chan of ref Sys->FD,
 	appwm: chan of (string, chan of (string, ref Wmcontext)))
 {
-	# Track the app's MAIN proc by liveness, not by /prog/<pid>/wait.
-	#
-	# /prog/<pid>/wait returns when the FIRST CHILD of <pid> exits —
-	# not when <pid> itself dies.  Every wmclient app spawns a
-	# short-lived `kbddrainer` child (see wmclient.b) that exits
-	# normally the instant the app calls startinput("kbd"), which is
-	# during init.  The old single-read-then-delete logic therefore
-	# reaped every healthy GUI app a few milliseconds after launch:
-	# the artifact was deleted out from under the running app and the
-	# presentation zone autocentered back to the taskboard, so the
-	# app never appeared.  (INFR-119 mobile launch bug.)
-	#
-	# Instead, poll /prog/<pid>/status: it is readable for exactly as
-	# long as the app's main proc is alive.  When the app's event loop
-	# returns (window closed, exec failure, exception) the proc exits,
-	# the status file vanishes, and we clean up.  Child churn is
-	# invisible to this check.
-	statuspath := sys->sprint("/prog/%d/status", pid);
-	for(;;) {
-		sfd := sys->open(statuspath, Sys->OREAD);
-		if(sfd == nil)
-			break;		# main proc gone -> app exited
-		sfd = nil;
-		sys->sleep(500);
+	# The app is gone when its process group is: /prog/<pid>/grpwait,
+	# opened by launchappns once the app has a group of its own, is
+	# read when the last Prog in it ends.  Its main proc's exit is not
+	# the end (xenith spawns its tasks and returns from init), nor is a
+	# child's (/prog/<pid>/wait answers when the first child ends: every
+	# wmclient app's kbddrainer did, at once, INFR-119).  Children that
+	# took groups of their own (wallet9p, webfs) are services, not it.
+	gfd := <-grpc;
+	if(gfd == nil) {
+		sys->fprint(stderr, "lucifer: app %s: no grpwait: it is reaped when its window goes\n", id);
+		return;
 	}
-	# Some apps spawn their tasks and return from init (xenith), so
-	# the main proc is gone while the app runs on.  launchappns gave
-	# the app its own process group, numbered by this pid: wait for
-	# the group to empty.
-	while(groupalive(pid))
-		sys->sleep(500);
+	buf := array[32] of byte;
+	sys->read(gfd, buf, len buf);
 	if(actid >= 0 && id != "") {
 		writetofile(
 			sys->sprint("%s/activity/%d/presentation/ctl", mountpt, actid),
@@ -3481,27 +3482,6 @@ appreaper(actid: int, id: string, pid: int,
 	}
 	# nothing of the app is left to connect: end its relay
 	appwm <-= (nil, nil);
-}
-
-# groupalive: whether any proc in process group gid is still running.
-groupalive(gid: int): int
-{
-	fd := sys->open("/prog", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	for(;;) {
-		(n, d) := sys->dirread(fd);
-		if(n <= 0)
-			return 0;
-		for(i := 0; i < n; i++) {
-			st := readfile("/prog/" + d[i].name + "/status");
-			if(st == nil)
-				continue;
-			(nf, f) := sys->tokenize(st, " ");
-			if(nf >= 2 && int hd tl f == gid)
-				return 1;
-		}
-	}
 }
 
 # cleanupappslotbyid — slot-array twin of cleanupappslot.  Same
@@ -3754,10 +3734,14 @@ launchappns(tp: ref TaskPres, guimod: GuiApp,
 	appwm: chan of (string, chan of (string, ref Wmcontext)))
 {
 	pid := sys->pctl(0, nil);
-	spawn appreaper(tp.actid, id, pid, appwm);
+	# The reaper is spawned before the app's group is made, so it is not
+	# in it; the group's grpwait is opened after, so it is the app's.
+	grpc := chan of ref Sys->FD;
+	spawn appreaper(tp.actid, id, grpc, appwm);
 	# The app's own process group, so ending its activity can kill it
 	# and everything it spawned without touching Lucifer's.
 	sys->pctl(Sys->NEWPGRP, nil);
+	grpc <-= sys->open(sys->sprint("/prog/%d/grpwait", pid), Sys->OREAD);
 	setslotpid(tp, id, pid);
 	# Activity 0 uses the default /chan/wmctl — no FORKNS needed.
 	# Child tasks use /chan/wmctl.N and need FORKNS + bind so apps

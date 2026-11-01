@@ -145,9 +145,12 @@ boards still fix is below 4GB: `RAMLIMIT`, where their devices begin.
 `disk/kfs -r -b 16384 -n nv '#S/nvme0p3'` reams, once. At kfs's default
 1KB blocks a large disk takes hours, the free list being most of it; at
 16KB, 1.8TB took 30 seconds. Afterwards `mount -c {disk/kfs -n nv
-'#S/nvme0p3'} /n/nvme`. kfs says "needs check" after a reboot that did
-not unmount it first, and checks: 36 seconds on that disk with little on
-it. `unmount` is what marks it clean.
+'#S/nvme0p3'} /n/nvme`.
+
+kfs marks itself clean after four seconds without a write, and dirty at
+the next, so a machine reset or switched off idle mounts with no check,
+and one stopped in the middle of a write is checked. It is not journalled:
+that check rebuilds the free list, and what was being written may be short.
 
 ## What is left
 

@@ -13,6 +13,9 @@
 #                ready() starved until lock() panicked "lock loop".
 #   up           a parameter called up: it is a macro, and clang then
 #                deleted the rest of the function, loop exit and all.
+#   kfs idle     kfs marks itself clean only when idle for longer than a
+#                drive's write-back, or the mark can reach the medium
+#                ahead of the data it speaks for.
 #   ceilings     the pools' ceilings must not add up to more than there
 #                is, and no heap may take the kernel's share.
 #
@@ -43,5 +46,10 @@ m=$(sed -n '/#ifdef POOLBYNEED/,/#else/p' os/arm64/main.c)
 if echo "$m" | grep -q 'mem - mainmax - imagmax' && echo "$m" | grep -q 'heapreserve = mainmax + imagmax'; then ok "the pools fit in memory, and the heaps leave the kernel its share"
 else no "POOLBYNEED: the ceilings no longer fit in memory"; fi
 if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the reserve"; else no "poolalloc ignores heapreserve"; fi
+
+idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
+flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)
+if [ -n "$idle" ] && [ -n "$flush" ] && [ "$idle" -gt "$flush" ]; then ok "kfs waits $idle ms, the drive flushes every $flush"
+else no "kfs's idle mark ($idle ms) must outlast the drive's write-back ($flush ms)"; fi
 
 exit $fail

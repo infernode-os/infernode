@@ -6,6 +6,17 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **A service that does not answer no longer stops Settings or llmsrv.**
+  Settings' panels read llmsrv, factotum, msg9p and audit in its one
+  loop; each read, write and stat now has its own proc and a time limit,
+  and the status line names what did not answer. llmsrv asked the backend
+  for `models` in its serve loop, stopping every session behind a slow
+  one; it now does so as it does for `ask`.
+- **Quitting a program leaves nothing of it running.** wm/about, colors,
+  dir, fractals, ftree, keyring, man and wallet ended only their main
+  proc on their own Quit (wm/dir on Delete too), leaving their theme
+  watchers; wm/shell's Delete missed its own. In ftree and shell that
+  also kept their posted files alive.
 - **Settings no longer freezes on its Theme panel, and Delete takes the
   window of a program that has frozen.** `event`, served in the theme
   directory since themefs, was listed as a theme: loading it read a file

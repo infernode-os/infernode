@@ -920,21 +920,15 @@ doauditdisable()
 
 doauditck()
 {
-	fd := sys->open("/mnt/audit/ctl", Sys->OWRITE);
-	if(fd == nil) {
-		setpanellbl("audres", sys->sprint("cannot open audit ctl: %r"));
-		return;
-	}
-	b := array of byte "checkpoint";
-	if(sys->write(fd, b, len b) < 0)
-		setpanellbl("audres", sys->sprint("checkpoint failed: %r"));
+	if((e := twrite("/mnt/audit/ctl", "checkpoint", Waitslow)) != nil)
+		setpanellbl("audres", "checkpoint failed: " + e);
 	else
 		setpanellbl("audres", "checkpoint signed");
 }
 
 doauditverify()
 {
-	setpanellbl("audres", "verify: " + strip(readfile1("/mnt/audit/verify")));
+	setpanellbl("audres", "verify: " + strip(tread("/mnt/audit/verify", Waitslow)));
 }
 
 dosnapenable()
@@ -981,19 +975,109 @@ dosnapnow()
 
 fileexists(p: string): int
 {
-	return sys->stat(p).t0 >= 0;
+	return texists(p);
 }
 
 readfile1(p: string): string
 {
-	fd := sys->open(p, Sys->OREAD);
-	if(fd == nil)
-		return "";
-	buf := array[2048] of byte;
+	return tread(p, Waitfile);
+}
+
+# ── Files that are services ────────────────────────────────────
+#
+# What Settings shows comes from file servers (llmsrv, factotum, msg9p,
+# audit, tools9p), and its panels are built in its one loop: a server
+# that does not answer must not stop the window.  Each read, write and
+# stat is made by a proc of its own and waited for so long; one that
+# never returns is left behind, to go with the process group.
+
+Waitfile: con 2000;
+Waitctl: con 5000;
+Waitslow: con 60000;	# audit's verify and checkpoint do real work
+Waitllmctl: con 90000;	# llmctl starts a stack (a minute, cold)
+
+reader(path: string, c: chan of (string, string))
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		c <-= (nil, sys->sprint("%r"));
+		return;
+	}
+	buf := array[8192] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	return string buf[:n];
+	if(n < 0)
+		c <-= (nil, sys->sprint("%r"));
+	else
+		c <-= (string buf[:n], nil);
+}
+
+writer(path, data: string, c: chan of (string, string))
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		c <-= (nil, sys->sprint("%r"));
+		return;
+	}
+	b := array of byte data;
+	if(sys->write(fd, b, len b) != len b)
+		c <-= (nil, sys->sprint("%r"));
+	else
+		c <-= (nil, nil);
+}
+
+statter(path: string, c: chan of (string, string))
+{
+	if(sys->stat(path).t0 < 0)
+		c <-= (nil, "no");
+	else
+		c <-= (nil, nil);
+}
+
+after(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# the answer on c, or an error if there is none in time
+twait(c: chan of (string, string), path: string, ms: int): (string, string)
+{
+	t := chan[1] of int;
+	spawn after(t, ms);
+	alt {
+	r := <-c =>
+		return r;
+	<-t =>
+		e := "no answer from " + path;
+		flashstatus(e);
+		sys->fprint(stderr, "settings: %s\n", e);
+		return (nil, e);
+	}
+}
+
+tread(path: string, ms: int): string
+{
+	c := chan[1] of (string, string);
+	spawn reader(path, c);
+	(s, nil) := twait(c, path, ms);
+	return s;
+}
+
+# nil, or why not
+twrite(path, data: string, ms: int): string
+{
+	c := chan[1] of (string, string);
+	spawn writer(path, data, c);
+	(nil, e) := twait(c, path, ms);
+	return e;
+}
+
+texists(path: string): int
+{
+	c := chan[1] of (string, string);
+	spawn statter(path, c);
+	(nil, e) := twait(c, path, Waitfile);
+	return e == nil;
 }
 
 eget2(p: string): string
@@ -1561,25 +1645,16 @@ readllmconfig(): (string, string, string, string, string, int)
 	}
 
 	# Check for API key in factotum
-	fd := sys->open("/mnt/factotum/ctl", Sys->OREAD);
-	if(fd != nil) {
-		buf := array[4096] of byte;
-		n := sys->read(fd, buf, len buf);
-		if(n > 0) {
-			content := string buf[0:n];
-			if(hassubstr(content, "anthropic") || hassubstr(content, "llm"))
-				haskey = 1;
-		}
-	}
+	content := tread("/mnt/factotum/ctl", Waitfile);
+	if(hassubstr(content, "anthropic") || hassubstr(content, "llm"))
+		haskey = 1;
 
 	return (mode, backend, url, model, dial, haskey);
 }
 
 # The connected backend's model catalogue, read from /mnt/llm/models
 # (served by llmsrv). nil when the file is absent/empty — no llmsrv
-# mounted, the backend is unreachable, or it lists nothing. The read is
-# fast in the common cases (a local GET, or an immediate dial-refused),
-# so calling it from layout is fine.
+# mounted, the backend is unreachable or slow, or it lists nothing.
 readllmmodels(): array of string
 {
 	return readlines("/mnt/llm/models");
@@ -1705,20 +1780,12 @@ islinekey(line, key: string): int
 
 synthfs_present(): int
 {
-	(ok, nil) := sys->stat("/llm/ctl");
-	return ok >= 0;
+	return texists("/llm/ctl");
 }
 
 readllmstatus_raw(): string
 {
-	fd := sys->open("/llm/status", Sys->OREAD);
-	if(fd == nil)
-		return "";
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	return string buf[0:n];
+	return tread("/llm/status", Waitfile);
 }
 
 # Single-line status summary for the panel label. Reduces the daemon's
@@ -1790,13 +1857,8 @@ llm_stack_index_from_status(): int
 # cold sglang start (flashinfer JIT compile).
 writellmctl(verb: string): string
 {
-	fd := sys->open("/llm/ctl", Sys->OWRITE);
-	if(fd == nil)
-		return sys->sprint("open /llm/ctl: %r");
-	b := array of byte verb;
-	n := sys->write(fd, b, len b);
-	if(n != len b)
-		return sys->sprint("write /llm/ctl: %r");
+	if((e := twrite("/llm/ctl", verb, Waitllmctl)) != nil)
+		return "/llm/ctl: " + e;
 	return "";
 }
 
@@ -1822,14 +1884,12 @@ hassubstr(s, sub: string): int
 # Read the live source registry from /mnt/msg/status (best-effort display).
 readmsgstatus(): string
 {
-	fd := sys->open("/mnt/msg/status", Sys->OREAD);
-	if(fd == nil)
+	if(!texists("/mnt/msg/status"))
 		return "(msg9p not mounted at /mnt/msg)";
-	buf := array[8192] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	s := tread("/mnt/msg/status", Waitfile);
+	if(s == nil)
 		return "(no sources registered)";
-	return string buf[:n];
+	return s;
 }
 
 # Register the email source live from /lib/veltro/sources/email.conf — the same
@@ -1853,14 +1913,8 @@ doregisteremail()
 		conf = conf[:len conf-1];
 
 	cmd := "register email /dis/veltro/sources/email.dis " + conf;
-	wfd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
-	if(wfd == nil) {
-		flashstatus("cannot open /mnt/msg/ctl");
-		return;
-	}
-	b := array of byte cmd;
-	if(sys->write(wfd, b, len b) != len b)
-		flashstatus(sys->sprint("register failed: %r"));
+	if((e := twrite("/mnt/msg/ctl", cmd, Waitctl)) != nil)
+		flashstatus("register failed: " + e);
 	else
 		flashstatus("email source registered");
 
@@ -1895,9 +1949,19 @@ openineditor(path: string)
 	# A running editor is asked to open the file, through its posted
 	# server (#seditor/fs, post9p(2)); it was killed and started again,
 	# losing what it had not saved.  Else one is started on the file.
-	done := chan of int;
+	done := chan[1] of int;
 	spawn editoropen(path, done);
-	if(!<-done) {
+	t := chan[1] of int;
+	spawn after(t, Waitctl);
+	opened := 0;
+	alt {
+	opened = <-done =>
+		;
+	<-t =>
+		flashstatus("no answer from the editor");
+		return;
+	}
+	if(!opened) {
 		cmd := sys->sprint("create id=editor type=app dis=/dis/wm/editor.dis label=editor data=%s", path);
 		if(writectl(pctl, cmd) < 0)
 			return;
@@ -1977,30 +2041,16 @@ reloadcolors()
 
 writectl(path, cmd: string): int
 {
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil) {
-		flashstatus(sys->sprint("error: %r"));
+	if((e := twrite(path, cmd, Waitctl)) != nil) {
+		flashstatus("error: " + e);
 		return -1;
 	}
-	b := array of byte cmd;
-	n := sys->write(fd, b, len b);
-	if(n != len b) {
-		flashstatus(sys->sprint("error: %r"));
-		return -1;
-	}
-	return n;
+	return len cmd;
 }
 
 readfile(path: string): string
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
-	return string buf[0:n];
+	return tread(path, Waitfile);
 }
 
 strip(s: string): string

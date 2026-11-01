@@ -726,7 +726,7 @@ jobs:
               amd64_jit_typecom_slab_test commands_test dhcp_client_test
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
-              factotum_keyfile_test gpsfs_test llmctl_test llmsrv_flush_test
+              factotum_keyfile_test gpsfs_test llmctl_test llmsrv_flush_test llmsrv_models_stall_test
               location_test sdrfs_test timesync_test
               mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
@@ -1088,7 +1088,7 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1987,7 +1987,7 @@ jobs:
         # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
         # here (77).
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

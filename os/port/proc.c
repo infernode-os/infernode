@@ -39,7 +39,7 @@ typedef struct
 	Proc*	tail;
 }Schedq;
 
-static Schedq	runq[Nrq];
+static Schedq	runq[Nrq] __attribute__((aligned(64)));
 static ulong	occupied;
 int	nrdy;
 

@@ -85,18 +85,8 @@
 /* The first 512KB is the secure firmware's, which PSCI runs from. */
 #define	RESERVEDLOW	0x80000
 
-/*
- * The allocator pools' ceilings, as fractions of memory (../arm64/main.c).
- * The 3B+'s defaults let the three reach half of memory together, which
- * on a 4GB board left 2GB that nothing could allocate. Here they overlap,
- * being ceilings and not reservations, of whatever the board turns out to
- * have: the Dis heap, which is what programs live in, may take three
- * quarters, and main or image a quarter each.
- */
-#define	MAINDIV		4
-#define	HEAPNUM		3
-#define	HEAPDIV		4
-#define	IMAGDIV		4
+/* The allocator pools' ceilings go by need, not fraction: ../arm64/main.c. */
+#define	POOLBYNEED	1
 
 /*
  * Ethernet input queue per conversation (../port/devether.c): GENET is

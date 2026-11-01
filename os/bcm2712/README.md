@@ -133,8 +133,10 @@ the physical address, not at Linux's `0x10_0000_0000`, and only below
 Nothing in the build says. `mmuinit` reads `/memory` from the device tree
 the firmware passes, or failing that the revision code, and each gigabyte
 above 4GB is a single level-1 block, so a bigger board needs no bigger
-tables; the pools' ceilings are fractions of what was found, and overlap,
-being ceilings: the Dis heap may have three quarters. What the
+tables. The pools' ceilings go by need: main and image an eighth each,
+within 64-512MB and 32MB-1GB, around 10MB each having been seen with a
+desktop and every device busy; programs have the rest. Each VM's heap has
+that ceiling alone, so no heap grows into the last of memory: `heapreserve`. What the
 boards still fix is below 4GB: `RAMLIMIT`, where their devices begin.
 `memlimit=N` on the command line stops at N MB, to try a smaller board.
 

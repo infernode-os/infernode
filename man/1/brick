@@ -1,0 +1,342 @@
+.TH BRICK 1
+.SH NAME
+brick \- pair with, configure and mount a styxbrick
+.SH SYNOPSIS
+.B brick key
+[
+.B -d
+.I keydir
+]
+.br
+.B brick pair
+[
+.B -d
+.I keydir
+]
+.I usbmnt
+.br
+.B brick wifi
+.I usbmnt
+.br
+.B brick mount
+[
+.B -abu
+] [
+.B -d
+.I keydir
+]
+.I addr
+.I mountpoint
+.br
+.B brick d2
+[
+.B -u
+] [
+.B -d
+.I keydir
+] [
+.B -l
+.I leasems
+] [
+.B -r
+.I addr
+]
+.I brickmnt
+.I dir
+.br
+.B brick fetch
+[
+.B -w
+.I window
+] [
+.B -n
+.I bytes
+]
+.I file
+.SH DESCRIPTION
+A styxbrick is a microcontroller that serves its hardware
+(LED, GPIO pins, ADC, temperature sensor) as a Styx file tree.
+On its USB serial port it serves the tree without authentication,
+and also a
+.B /config
+directory; physical access is the trust boundary there.
+That port is mounted with
+.IR mount (1)'s
+.B -A
+option, for example
+.EX
+	mount -A '#U*/dev/ttyACM0' /n/brick
+.EE
+(after setting the host's tty to raw mode).
+On the network the brick serves only to the client it was paired with:
+inside TLS 1.3 on TCP, or over Noise-secured datagrams on UDP
+(see
+.IR sdg (2)),
+which a lossy or intermittent link favours.
+Each side identifies the other by a pin: the SHA-256 hash
+of its certificate's SubjectPublicKeyInfo, in hex.
+No certificate authority is involved.
+.PP
+.B "brick key"
+prints our pin, making a key and certificate first if there are none.
+.PP
+.B "brick pair"
+gives the brick mounted over USB at
+.I usbmnt
+our pin (in
+.IB usbmnt /config/peer\fR)
+and saves its pin (read from
+.IB usbmnt /config/spki\fR)
+as
+.IB keydir /brick.spki\fR.
+If the brick serves datagrams
+.RB ( /config/sdg ),
+it also gives the brick our X25519 public key and a fresh pre-shared key,
+and saves the brick's public key;
+and a fresh D2 safety key
+.RB ( /config/d2 ).
+Each pairing replaces the brick's datagram peer and its D2 key, so
+pairing a second commander leaves the first one's keys useless; the brick
+holds one commander at a time.
+Because all of it travels over the USB cable, nothing the network
+could alter is trusted.
+A brick that reports
+.B unprovisioned
+in
+.B /config/spki
+has no identity yet: write
+.B regenerate
+there first (it wipes the brick's configuration and reboots it), then pair.
+.PP
+.B "brick wifi"
+copies standard input, which should be
+.EX
+	ssid \fIname\fP
+	pass \fIpassphrase\fP
+.EE
+to
+.IB usbmnt /config/wifi\fR
+in a single write.
+The brick never lets the passphrase be read back.
+.PP
+.B "brick mount"
+dials
+.I addr
+(port 564 if none is given),
+makes a TLS 1.3 connection presenting our certificate and accepting
+only the server key pinned in
+.IB keydir /brick.spki\fR,
+and mounts the brick's tree on
+.IR mountpoint .
+The
+.B -a
+and
+.B -b
+options are as for
+.IR bind (1).
+The connection is closed when the tree is unmounted.
+With
+.BR -u ,
+it mounts over datagrams instead
+(UDP port 5640 if none is given; the address may be a dial string such as
+.BR udp!host!5640 ).
+Then every request gets an answer: the brick's reply, or an error made
+locally when its deadline (5 s) passes
+.RB ( "timed out" ;
+for a write,
+.BR "outcome unknown: timed out" ),
+or when a read the brick has acknowledged as waiting for data stops being
+acknowledged
+.RB ( "link down" ),
+or when the brick says it will never run the request, because its reply has
+left the brick's cache or the request came too late
+.RB ( "reply gone" ;
+for a write,
+.BR "outcome unknown: reply gone" ).
+Nothing blocks on a lost link, the session outlives outages, and a read
+that waits for data (such as
+.BR /events )
+may wait as long as it needs.
+.PP
+.B "brick d2"
+holds the brick's safety outputs live on behalf of applications.
+A safety output is driven only by D2 commands: each carries a fresh grant
+from the brick, a lease, a sequence number and a MAC under the safety key,
+and the brick takes the output to its configured failsafe value when the
+lease runs out.
+.B "brick d2"
+opens a D2 session on the brick mounted at
+.I brickmnt
+and serves, in
+.IR dir ,
+a file
+.B ctl
+and a file for each safety output, named for it
+.RB ( pwm.2 ,
+.BR gpio.5 ).
+Writing a value (a pulse width in microseconds, or a level) to an output's
+file holds the output at that value: it is renewed under fresh grants every
+.IR leasems /5
+(default lease 500 ms).
+Writing
+.B release
+ends its use: it goes to failsafe at once, and the others are untouched.
+Reading it gives its value and state.
+Writing
+.B arm
+to
+.B ctl
+arms the session, which values need;
+.B safe
+takes every output to failsafe.
+Arming is never automatic.
+The lease asked for
+.RB ( -l ,
+default 500 ms) is lowered to the smallest maximum the brick reports for
+its outputs, and
+.B off
+is accepted for
+.BR release .
+If the link fails or this program dies, renewals stop and the brick takes
+every output to failsafe within a lease, then refuses commands until an
+application writes
+.B arm
+again; reading
+.B ctl
+says why.
+.PP
+After the brick restarts, its D2 session and the mount's 9P state are gone
+for good: nothing could arm again until
+.B "brick d2"
+itself was restarted.
+With
+.B -r
+.I addr
+(and
+.B -u
+for datagrams) it restores the connection itself: when its commands have
+failed on the transport (link down, timed out, hung up) for 2 s, it mounts
+the brick at
+.I brickmnt
+again and opens a new D2 session.
+It does not arm: from the start of the reconnection
+.B ctl
+reads
+.B failsafe
+with the reason, and its
+.B last
+line reads
+.B reconnecting
+and then
+.BR reconnected ,
+after which an application may write
+.BR arm .
+Measured on a bench: about 7 s from the brick being back to
+.BR reconnected .
+.PP
+.I Brick
+records what gives or changes authority in the audit log
+.RI ( auditfs (4)):
+.BR pair " and " paired ,
+.B wifi
+(the network's name, never the passphrase),
+and for
+.BR "brick d2" :
+.B d2arm
+(the brick, the session and the outputs held: the intent) and then
+.B d2armed
+or
+.B d2armfail
+(the brick's answer),
+.BR d2safe ,
+.B d2lapse
+(with the reason, once an arming, where authority is first lost or first
+unprovable: a link failure, a reconnect, or the brick's refusal) and
+.BR d2reconnect .
+Where auditing is off, or
+.B /mnt/audit
+is not in the name space, nothing is recorded and nothing is refused.
+Where the install requires auditing
+.RB ( /usr/inferno/audit/on
+exists) and the record cannot be made,
+.BR pair ,
+.B wifi
+and
+.B arm
+are refused;
+.B safe
+never is: it is recorded after it is done.
+.PP
+.B Brick fetch
+copies
+.I file
+to its standard output with up to
+.I window
+reads in flight (default 1), each at its own offset, and writes them in
+order; it stops after
+.I bytes
+(if given) or at the end of the file.
+Over a datagram mount one read moves one
+.IR iounit (2)
+per round trip; a window keeps the link busy, as TCP keeps data in flight.
+It suits files addressed by offset, such as the brick's
+.BR adc/data .
+.PP
+.I Keydir
+defaults to
+.BI /usr/ user /keyring/brick
+and holds
+.TP
+.B client.key
+our P-256 private key, as 64 hex digits (mode 600)
+.TP
+.B client.crt
+our self-signed X.509 certificate, in DER
+.TP
+.B brick.spki
+the brick's pin
+.TP
+.B sdg.key
+our X25519 private key, hex (mode 600)
+.TP
+.B sdg.psk
+the pre-shared key given to the brick, hex (mode 600)
+.TP
+.B sdg.brick
+the brick's X25519 public key
+.TP
+.B sdg.ctr
+the datagram handshake counter, which never repeats or goes back.
+The brick refuses a handshake whose counter is not newer than the last it
+accepted for that key, so each commander needs its own
+.BR sdg.key :
+two sharing one lock each other out whenever their counters disagree
+.TP
+.B d2.key
+the D2 safety key given to the brick, hex (mode 600)
+.SH EXAMPLE
+Pair over USB, give the brick its network, then use it from anywhere:
+.EX
+	mount -A '#U*/dev/ttyACM0' /n/brick
+	echo regenerate >/n/brick/config/spki	# a new board only; it reboots
+	mount -A '#U*/dev/ttyACM0' /n/brick
+	brick pair /n/brick
+	brick wifi /n/brick <creds
+	cat /n/brick/net/status
+	unmount /n/brick
+	brick mount -u 192.168.1.23 /n/brick
+	echo 1 >/n/brick/led
+.EE
+Hold a servo on a safety output, then let it go:
+.EX
+	brick d2 -u -r 192.168.1.23 /n/brick /n/d2
+	echo arm >/n/d2/ctl
+	echo 1600 >/n/d2/pwm.2
+	echo release >/n/d2/pwm.2
+.EE
+.SH SOURCE
+.B /appl/cmd/brick.b
+.SH SEE ALSO
+.IR mount (1),
+.IR bind (1),
+.IR sdg (2)

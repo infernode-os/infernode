@@ -20,6 +20,10 @@ include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import styx;
 
+include "styxlib.m";
+	styxlib: Styxlib;
+	Styxserver, Chan: import styxlib;
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -48,6 +52,8 @@ run(name: string)
 			testRemoveClunksOnError(t);
 		"RemoveRaceThroughMount" =>
 			testRemoveRaceThroughMount(t);
+		"OversizeStatBecomesError" =>
+			testOversizeStatBecomesError(t);
 		}
 	} exception e {
 	"fail:fatal" =>
@@ -229,17 +235,41 @@ fidinuse(): int
 	return 0;
 }
 
+testOversizeStatBecomesError(t: ref T)
+{
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		t.fatal(sys->sprint("pipe: %r"));
+	srv := ref Styxserver(p[1], array[32] of list of ref Chan, "none", 128);
+	name := array[200] of byte;
+	for(i := 0; i < len name; i++)
+		name[i] = byte 'a';
+	d := sys->zerodir;
+	d.name = string name;
+	d.uid = d.gid = d.muid = "none";
+	t.assert(srv.reply(ref Rmsg.Stat(7, d)) > 0, "write bounded stat reply");
+	r := Rmsg.read(p[0], 128);
+	pick m := r {
+	Error =>
+		t.assert(m.tag == 7, "error preserves request tag");
+	* =>
+		t.error("oversize Rstat was not converted to Rerror");
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	styx = load Styx Styx->PATH;
+	styxlib = load Styxlib Styxlib->PATH;
 	testing = load Testing Testing->PATH;
 
-	if(testing == nil || styx == nil) {
+	if(testing == nil || styx == nil || styxlib == nil) {
 		sys->fprint(sys->fildes(2), "cannot load modules: %r\n");
 		raise "fail:cannot load";
 	}
 	styx->init();
+	styxlib->init(styx);
 	testing->init();
 
 	for(a := args; a != nil; a = tl a) {
@@ -249,6 +279,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("RemoveClunksOnError");
 	run("RemoveRaceThroughMount");
+	run("OversizeStatBecomesError");
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

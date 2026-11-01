@@ -778,15 +778,11 @@ childpathallowed(path: string): int
 		return 0;
 	}
 	for(ep := extpaths; ep != nil; ep = tl ep)
-		if(pathwithin(hd ep, path)) {
-			(ok, nil) := sys->stat(path);
-			return ok >= 0;
-		}
+		if(grantcovers(hd ep, path))
+			return 1;
 	for(bp := boundpaths; bp != nil; bp = tl bp)
-		if(pathwithin((hd bp).path, path)) {
-			(ok, nil) := sys->stat(path);
-			return ok >= 0;
-		}
+		if(grantcovers((hd bp).path, path))
+			return 1;
 	return 0;
 }
 
@@ -813,12 +809,14 @@ asciilower(s: string): string
 
 ambientauthoritypath(path: string): int
 {
-	if(path == "/chan" || path == "/fd" || prefix(path, "/fd/"))
+	if(path == "/chan" || prefix(path, "/chan/") ||
+	   path == "/fd" || prefix(path, "/fd/"))
 		return 1;
 	if(path == "/usr")
 		return 1;
-	return pathhascomponent(path, "keyring") &&
+	return (pathhascomponent(path, "keyring") || pathhascomponent(path, "secstore")) &&
 		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 path == "/secstore" || prefix(path, "/secstore/") ||
 		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
 }
 
@@ -890,86 +888,36 @@ componentcount(path: string): int
 
 privilegedcontrolpath(path: string): int
 {
-	dangerous := array[] of {
-		"/tool/ctl",
-		"/tool/ns",
-		"/tool/event",
-		"/tool/view",
-		"/mnt/toolctl",
-		"/mnt/toolctl/ctl",
-		"/mnt/factotum",
-		"/mnt/ui/ctl",
-		"/mnt/msg/ctl",
-		"/mnt/msg/pending",
-		"/mnt/msg/approve",
-		"/mnt/msg/deny",
-		"/mnt/wallet/ctl",
-		"/mnt/wallet/pending",
-		"/mnt/wallet/new",
-		"/n/wallet/ctl",
-		"/n/wallet/pending",
-		"/n/wallet/new",
-	};
-	for(i := 0; i < len dangerous; i++)
-		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
-			return 1;
-	if(prefix(path, "/mnt/toolctl."))
-		return 1;
-	if(walletaccountcontrolpath(path))
-		return 1;
-	if(ftreecontrolpath(path))
-		return 1;
-	if(tmpveltrointernalpath(path))
-		return 1;
-	if(appipccontrolpath(path))
-		return 1;
-	if(uiagentcontrolpath(path))
-		return 1;
-	if(llmctlcontrolpath(path))
-		return 1;
-	if(auditcontrolpath(path))
-		return 1;
-	if(calendarcontrolpath(path))
-		return 1;
-	if(fixedservicecontrolpath(path))
-		return 1;
-	return 0;
-}
-
-# Delegate to nsconstruct's single definition. A local copy of this
-# predicate drifted once already: nsconstruct learned that per-account
-# "sign" is privileged while this copy still allowed it, which would
-# have let an agent bind the raw signing oracle as a capability.
-walletaccountcontrolpath(path: string): int
-{
 	if(nsc == nil) {
 		nsc = load NsConstruct NsConstruct->PATH;
 		if(nsc == nil)
-			return 1;	# fail closed: cannot verify, so deny
+			return 1;
 		nsc->init();
 	}
-	return nsc->walletcontrolpath(path);
+	return nsc->privilegedcontrolpath(path, nil);
 }
 
-ftreecontrolpath(path: string): int
+grantcovers(grant, path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl (#sftree, mounted at
-	# /mnt/ftree) binds and unmounts in ftree's name space: never an agent grant.
-	return path == "/mnt/ftree" || prefix(path, "/mnt/ftree/");
+	if(!pathwithin(grant, path))
+		return 0;
+	if(grant != path) {
+		if(nsc == nil) {
+			nsc = load NsConstruct NsConstruct->PATH;
+			if(nsc == nil)
+				return 0;
+			nsc->init();
+		}
+		if(nsc->policyroot(grant))
+			return 0;
+	}
+	# A lexical ancestor is not authority to invent a child the parent cannot
+	# currently name. This also preserves attenuation for non-policy roots.
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
 }
 
-tmpveltrointernalpath(path: string): int
-{
-	# Internal Veltro state roots are managed by trusted code. Exposing them as
-	# path grants lets an agent spoof manifests, tamper with COW overlays, or
-	# read/write task briefs outside the task tool's mediation.
-	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
-		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
-		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
-}
-
-# Mount the running browser's session at /mnt/charon in this (forked)
-# name space. No browser, no mount: the tool says charon is not running.
+# Mount the running browser's session at /mnt/charon in this forked namespace.
 mountcharon()
 {
 	fd := sys->open("#scharon/fs", Sys->ORDWR);
@@ -998,79 +946,6 @@ mountposted(posted, mnt: string)
 	if(sys->mount(fd, nil, mnt, Sys->MREPL, nil) < 0)
 		sys->fprint(stderr, "tools9p: mount %s: %r\n", posted);
 }
-
-appipccontrolpath(path: string): int
-{
-	# These real-file IPC trees are capabilities of their fixed-function tools,
-	# not generic path grants. A raw write/exec grant to them bypasses tool-level
-	# mediation and can drive GUI apps or browser navigation directly.
-	# /mnt/charon is the browser's served session (charonfs), mounted per
-	# charon invocation only.
-	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
-		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
-		path == "/mnt/shell" || prefix(path, "/mnt/shell/") ||
-		path == "/mnt/fractal" || prefix(path, "/mnt/fractal/") ||
-		path == "/mnt/man" || prefix(path, "/mnt/man/");
-}
-
-uiagentcontrolpath(path: string): int
-{
-	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
-	# grant would also hand write/exec every per-activity ctl file.
-	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
-}
-
-llmctlcontrolpath(path: string): int
-{
-	# /llm/ctl switches host LLM backends through llmctl9p. Keep that Settings
-	# control surface out of caller-supplied path grants.
-	return path == "/llm" || path == "/llm/ctl" || prefix(path, "/llm/ctl/");
-}
-
-auditcontrolpath(path: string): int
-{
-	# /mnt/audit/log is the append-only subject capability. A raw root or chain
-	# grant leaks log history; ctl can force signed checkpoints.
-	return path == "/mnt/audit" ||
-		path == "/mnt/audit/ctl" || prefix(path, "/mnt/audit/ctl/") ||
-		path == "/mnt/audit/chain" || prefix(path, "/mnt/audit/chain/");
-}
-
-calendarcontrolpath(path: string): int
-{
-	# Calendar depth grants may name exact read/query subtrees, but broad roots
-	# expose writable ctl files that configure accounts and CalDAV operations.
-	if(path == "/mnt/cal" || path == "/mnt/cal/ctl" || path == "/mnt/cal/accounts")
-		return 1;
-	if(prefix(path, "/mnt/cal/accounts/")) {
-		if(componentcount(path) <= 4)
-			return 1;
-		if(pathhascomponent(path, "ctl"))
-			return 1;
-	}
-	return 0;
-}
-
-fixedservicecontrolpath(path: string): int
-{
-	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
-		path == "/mnt/wsys" || prefix(path, "/mnt/wsys/") ||
-		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
-		path == "/n/git" || prefix(path, "/n/git/") ||
-		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
-		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
-		path == "/n/web" || prefix(path, "/n/web/") ||
-		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
-		path == "/mnt/wikia" || prefix(path, "/mnt/wikia/") ||
-		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
-		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
-		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||
-		path == "/mnt/registry" || prefix(path, "/mnt/registry/") ||
-		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
-		path == "/phone" || prefix(path, "/phone/");
-}
-
 pathperm(path: string): string
 {
 	if(path == "/tmp/veltro/scratch")
@@ -2782,6 +2657,7 @@ viewproc(srv: ref Styxserver, v: ref View)
 	cin: array of byte;	# a message from the client not yet whole
 	xin: array of byte;	# a reply from the export not yet whole
 	rd: ref Tmsg.Read;
+	removes: list of (int, string);	# refused removes the export is clunking: tag, refusal
 	dead := err != nil;
 Loop:
 	for(;;) {
@@ -2794,9 +2670,27 @@ Loop:
 				(n, t) := Tmsg.unpack(cin);
 				if(n <= 0)
 					break;
-				if(t != nil && (e := viewrefuse(t)) != nil)
-					out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
-				else if(sys->write(fds[1], cin[0:n], n) != n) {
+				if(t != nil && (e := viewrefuse(t)) != nil) {
+					pick m := t {
+					Remove =>
+						# A remove clunks its fid even when it fails
+						# (remove(5)), so the export must let the fid
+						# go as well: refused here and never passed on,
+						# the export kept it, and the client's next use
+						# of that number was "fid in use". It is passed
+						# on as a clunk, whose reply goes back as this
+						# refusal.
+						c := (ref Tmsg.Clunk(m.tag, m.fid)).pack();
+						if(sys->write(fds[1], c, len c) != len c) {
+							dead = 1;
+							if(err == nil)
+								err = sys->sprint("export: %r");
+						} else
+							removes = (m.tag, e) :: removes;
+					* =>
+						out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
+					}
+				} else if(sys->write(fds[1], cin[0:n], n) != n) {
 					dead = 1;
 					if(err == nil)
 						err = sys->sprint("export: %r");
@@ -2817,7 +2711,17 @@ Loop:
 						dead = 1;
 						break;
 					}
-					out = catbytes(out, xin[0:n]);
+					reply := xin[0:n];
+					if(removes != nil) {
+						(nil, r) := Rmsg.unpack(reply);
+						if(r != nil) {
+							e: string;
+							(removes, e) = takeremove(removes, r.tag);
+							if(e != nil)
+								reply = (ref Rmsg.Error(r.tag, e)).pack();
+						}
+					}
+					out = catbytes(out, reply);
 					xin = xin[n:];
 				}
 			}
@@ -2847,6 +2751,21 @@ Loop:
 	fd := sys->open(sys->sprint("/prog/%d/ctl", mypid), Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "killgrp");
+}
+
+# The refusal a refused remove's reply carries, if tag is one, and the list without it.
+takeremove(l: list of (int, string), tag: int): (list of (int, string), string)
+{
+	r: list of (int, string);
+	e: string;
+	for(; l != nil; l = tl l) {
+		(t, s) := hd l;
+		if(t == tag && e == nil)
+			e = s;
+		else
+			r = hd l :: r;
+	}
+	return (r, e);
 }
 
 viewpipe(fd: ref Sys->FD, inq: chan of array of byte)

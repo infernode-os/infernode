@@ -12,6 +12,7 @@ CLASS_MASK : con 16rC0;
 
 # Decoding errors
 OK, ESHORT, ETOOBIG, EVALLEN, ECONSTR, EPRIM, EINVAL, EUNIMPL: con iota;
+Maxdepth: con 32;
 
 debug : con 0;
 
@@ -26,7 +27,7 @@ init()
 # be nil.
 decode(a: array of byte) : (string, ref Elem)
 {
-	(ecode, i, elem) := ber_decode(a, 0, len a);
+	(ecode, i, elem) := ber_decode(a, 0, len a, 0);
 	return (errstr(ecode, i, len a), elem);
 }
 
@@ -34,7 +35,7 @@ decode(a: array of byte) : (string, ref Elem)
 # of array ends.
 decode_seq(a: array of byte) : (string, list of ref Elem)
 {
-	(ecode, i, elist) := seq_decode(a, 0, len a, -1, 1);
+	(ecode, i, elist) := seq_decode(a, 0, len a, -1, 1, 0);
 	return (errstr(ecode, i, len a), elist);
 }
 
@@ -48,7 +49,7 @@ decode_seq(a: array of byte) : (string, list of ref Elem)
 decode_value(a: array of byte, kind, constr: int) : (string, ref Value)
 {
 	n := len a;
-	(ecode, i, val) := value_decode(a, 0, n, n, kind, constr);
+	(ecode, i, val) := value_decode(a, 0, n, n, kind, constr, 0);
 	return (errstr(ecode, i, len a), val);
 }
 
@@ -61,8 +62,10 @@ ber_ind := "";
 ber_ind_save := "";
 
 # Decode an ASN1 (tag, length, value).
-ber_decode(a: array of byte, i, n: int) : (int, int, ref Elem)
+ber_decode(a: array of byte, i, n, depth: int) : (int, int, ref Elem)
 {
+	if(depth > Maxdepth)
+		return (ETOOBIG, i, nil);
 	if(debug) {
 		ber_ind_save = ber_ind;
 		ber_ind = ber_ind + "  ";
@@ -80,9 +83,9 @@ ber_decode(a: array of byte, i, n: int) : (int, int, ref Elem)
 				sys->print("%sgot tag %s, length %d, now at byte %d\n",
 						ber_ind, tag.tostring(), length, i);
 			if(tag.class == Universal)
-				(err, i, val) = value_decode(a, i, n, length, tag.num, tag.constr);
+				(err, i, val) = value_decode(a, i, n, length, tag.num, tag.constr, depth);
 			else
-				(err, i, val) = value_decode(a, i, n, length, OCTET_STRING, 0);
+				(err, i, val) = value_decode(a, i, n, length, OCTET_STRING, 0, depth);
 			if(val != nil)
 				elem = ref Elem(tag, val);
 		}
@@ -146,7 +149,7 @@ length_decode(a: array of byte, i, n: int) : (int, int, int)
 # Decode a value according to the encoding of the Universal
 # type with number "kind" and constructed/primitive according
 # to "constr", with given length (may be -1, for "indefinite").
-value_decode(a: array of byte, i, n, length, kind, constr: int) : (int, int, ref Value)
+value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, int, ref Value)
 {
 	err := OK;
 	val : ref Value;
@@ -224,7 +227,7 @@ value_decode(a: array of byte, i, n, length, kind, constr: int) : (int, int, ref
 			}
 		}
 	OCTET_STRING or ObjectDescriptor =>
-		(err, i, va) = octet_decode(a, i, n, length, constr);
+		(err, i, va) = octet_decode(a, i, n, length, constr, depth+1);
 		if(err == OK)
 			val = ref Value.Octets(va);
 	NULL =>
@@ -287,7 +290,7 @@ value_decode(a: array of byte, i, n, length, kind, constr: int) : (int, int, ref
 		}
 	SEQUENCE or SET=>
 		vl : list of ref Elem;
-		(err, i, vl) = seq_decode(a, i, n, length, constr);
+		(err, i, vl) = seq_decode(a, i, n, length, constr, depth+1);
 		if(err == OK) {
 			if(kind == SEQUENCE)
 				val = ref Value.Seq(vl);
@@ -298,7 +301,7 @@ value_decode(a: array of byte, i, n, length, kind, constr: int) : (int, int, ref
 	or VideotexString or IA5String or UTCTime
 	or GeneralizedTime or GraphicString or VisibleString
 	or GeneralString or UniversalString or BMPString =>
-		(err, i, va) = octet_decode(a, i, n, length, constr);
+		(err, i, va) = octet_decode(a, i, n, length, constr, depth+1);
 		if(err == OK)
 			# sometimes wrong: need to do char set conversion
 			val = ref Value.String(string va);
@@ -366,7 +369,7 @@ uint7_decode(a: array of byte, i, n: int) : (int, int, int)
 # Decode an octet string, recursively if constr.
 # We've already checked that length==-1 implies constr==1,
 # and otherwise that specified length fits within a[i..n].
-octet_decode(a: array of byte, i, n, length, constr: int) : (int, int, array of byte)
+octet_decode(a: array of byte, i, n, length, constr, depth: int) : (int, int, array of byte)
 {
 	err := OK;
 	va : array of byte;
@@ -389,7 +392,7 @@ octet_decode(a: array of byte, i, n, length, constr: int) : (int, int, array of 
 				break cloop;
 			}
 			oldi := i;
-			(err, i, elem) = ber_decode(a, i, n);
+			(err, i, elem) = ber_decode(a, i, n, depth);
 			if(err != OK)
 				break;
 			pick v := elem.val {
@@ -426,7 +429,7 @@ octet_decode(a: array of byte, i, n, length, constr: int) : (int, int, array of 
 # Decode a sequence or set.
 # We've already checked that length==-1 implies constr==1,
 # and otherwise that specified length fits within a[i..n].
-seq_decode(a : array of byte, i, n, length, constr: int) : (int, int, list of ref Elem)
+seq_decode(a : array of byte, i, n, length, constr, depth: int) : (int, int, list of ref Elem)
 {
 	err := OK;
 	ans : list of ref Elem = nil;
@@ -445,7 +448,7 @@ seq_decode(a : array of byte, i, n, length, constr: int) : (int, int, list of re
 				break cloop;
 			}
 			oldi := i;
-			(err, i, elem) = ber_decode(a, i, n);
+			(err, i, elem) = ber_decode(a, i, n, depth);
 			if(err != OK)
 				break;
 			pick v := elem.val {

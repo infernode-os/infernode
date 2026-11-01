@@ -32,6 +32,15 @@
 # QEMU=path picks the emulator (default qemu-system-aarch64), and
 # BOOT_TIMEOUT the seconds the boot may take (default 300).
 #
+# STUCKKEY=1 makes the first-boot password a key HELD DOWN, twice, for
+# STUCKSECS (default 60) each -- what something resting on the keyboard
+# types. wm/logon takes MAXPW (1024) characters and drops the rest, so
+# both entries are the same 1024 x's and the account is made; without
+# that bound the two lengths are whatever the key repeat managed in the
+# time, all but never equal, and the login fails. (On the bench 3B+ a
+# held key filled the field for two days, exhausted the kernel's main
+# pool and flooded the console.) Set BOOT_TIMEOUT to cover it.
+#
 # Exit status: 0 the image booted as a board boots it; 1 it did not; 77
 # skipped (no QEMU, or one without the board's machine).
 
@@ -57,9 +66,9 @@ cp "$IMAGE" "$tmp/card.img" || exit 1
 # The boot, driven from Python for the timeouts: the console is the
 # second -serial on both machines (the first is the PL011, the radio's).
 # Wait for the milestones, then type to the shell and read its answer.
-python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" "$tmp/qmp" > "$tmp/console.txt" 2> "$tmp/driver.txt" <<'EOF'
+python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" "$tmp/qmp" "${STUCKKEY:-0}" "${STUCKSECS:-60}" > "$tmp/console.txt" 2> "$tmp/driver.txt" <<'EOF'
 import json, socket, subprocess, sys, threading, time
-qemu, mach, card, kernel, limit, qmp = sys.argv[1:7]
+qemu, mach, card, kernel, limit, qmp, stuck, stucksecs = sys.argv[1:9]
 limit = int(limit)
 p = subprocess.Popen([qemu, "-M", mach, "-kernel", kernel,
                       "-drive", "file=%s,if=sd,format=raw" % card,
@@ -112,10 +121,24 @@ if b"console released to the draw device" in buf:
         f = s.makefile("rw"); f.readline()
         f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
         time.sleep(3)
-        for word in ("piboottest42\n", "piboottest42\n"):
-            for ch in word:
-                qkey(f, ch)
-            time.sleep(2)
+        if stuck == "1":
+            # a key held down, not typed: down, the repeat runs, up
+            for entry in range(2):
+                f.write(json.dumps({"execute": "input-send-event", "arguments": {"events":
+                    [{"type": "key", "data": {"down": True, "key": {"type": "qcode", "data": "x"}}}]}}) + "\n")
+                f.flush(); f.readline()
+                time.sleep(int(stucksecs))
+                f.write(json.dumps({"execute": "input-send-event", "arguments": {"events":
+                    [{"type": "key", "data": {"down": False, "key": {"type": "qcode", "data": "x"}}}]}}) + "\n")
+                f.flush(); f.readline()
+                time.sleep(1)
+                qkey(f, "\n")
+                time.sleep(2)
+        else:
+            for word in ("piboottest42\n", "piboottest42\n"):
+                for ch in word:
+                    qkey(f, ch)
+                time.sleep(2)
     except OSError as e:
         sys.stderr.write("qmp: %s\n" % e)
     # the account is made, then unlocked, then the desktop starts; the

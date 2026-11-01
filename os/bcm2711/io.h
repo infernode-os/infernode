@@ -29,6 +29,18 @@
 enum
 {
 	PHYSIO		= 0xFE000000,	/* peripheral base */
+
+	/*
+	 * The headphone jack's PWM (../bcm/audiopwm.c). Not the 3B+'s: on
+	 * this SoC GPIO 40 and 41 at ALT0 are the SECOND PWM block's
+	 * channels (PWM1_0, PWM1_1), at 0x7E20C800, whose DMA request line
+	 * is 1 (shared with DSI0); and PLLD runs at 750 MHz. Written to the
+	 * first block, as the 3B+ code did, every sample went to a PWM no
+	 * pin carries: the bench Pi 4 took the audio and played silence.
+	 */
+	AUDIOPWMOFF	= 0x20C800,
+	AUDIODREQ	= 1,
+	AUDIOPLLDHZ	= 750000000,
 	ARMLOCAL	= 0xFF800000,	/* ARM-local block: unused here, the GIC does its job */
 
 	GICDREGS	= 0xFF841000,	/* GIC-400 distributor */

@@ -256,6 +256,30 @@ testFactotumOpen(t: ref T)
 	t.log("factotum service is available");
 }
 
+testFactotumRpcLimit(t: ref T)
+{
+	fds := array[17] of ref Sys->FD;
+	req := array of byte "pending";
+	for(i := 0; i < 16; i++) {
+		fds[i] = factotum->open();
+		if(fds[i] == nil) {
+			t.skip("factotum service not available");
+			return;
+		}
+		if(sys->write(fds[i], req, len req) != len req) {
+			t.skip("factotum already has active RPCs");
+			return;
+		}
+	}
+	fds[16] = factotum->open();
+	if(fds[16] == nil) {
+		t.fatal("cannot open limit probe");
+		return;
+	}
+	t.assert(sys->write(fds[16], req, len req) < 0,
+		"factotum accepted more than 16 active RPCs");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -296,6 +320,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Service-dependent tests
 	run("FactotumOpen", testFactotumOpen);
+	run("FactotumRpcLimit", testFactotumRpcLimit);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

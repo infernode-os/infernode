@@ -366,3 +366,13 @@ minitxidle(void)
 {
 	return (AUX[Mulsr] & Mutxdone) != 0;
 }
+
+/*
+ * Is there room in the transmit FIFO for one more character? For
+ * uart.c's process writer, which waits for it with interrupts on.
+ */
+int
+minitxrdy(void)
+{
+	return (AUX[Mulsr] & Mutxrdy) != 0;
+}

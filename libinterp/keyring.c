@@ -3601,6 +3601,7 @@ Keyring_x25519(void *fp)
 	F_Keyring_x25519 *f;
 	uchar out[32];
 	void *r;
+	int i, nz;
 
 	f = fp;
 	r = *f->ret;
@@ -3613,8 +3614,16 @@ Keyring_x25519(void *fp)
 		error(exBadKey);
 
 	x25519(out, f->scalar->data, f->point->data);
+	nz = 0;
+	for(i = 0; i < nelem(out); i++)
+		nz |= out[i];
+	if(nz == 0){
+		memset(out, 0, sizeof(out));
+		return;
+	}
 
 	*f->ret = mem2array(out, 32);
+	memset(out, 0, sizeof(out));
 }
 
 void

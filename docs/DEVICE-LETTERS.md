@@ -38,7 +38,6 @@ edition), 9front and Inferno -- read from their sources (every
 
 | From | To | Why |
 |---|---|---|
-| `#V` Dis VMs (branch) | `#X` (#1038) | the camera has `#V`; `#X` is 9front's vmx, its virtual machines |
 | `#b` bench (native) | `#x` (#1039) | Inferno's bench; `#b` is Inferno's dbg |
 | `#P` prof (hosted) | `#K` (#1037) | kprof in all three; then `#P` is arch everywhere |
 | `#w` wmsz (hosted) | `#z` (#1040) | `#w` is the watchdog in Plan 9 and 9front; `#z` for size, free in all three |
@@ -66,7 +65,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `C` | cmd (hosted) | channel element |  | cmd | in use |  |
 | `D` | ssl (hosted/native) | ssl |  | ssl | in use |  |
 | `E` |  | sdp |  | mpeg | free here |  |
-| `F` | tfa (hosted) | flash | flash | flash, tinyfs | move planned | hosted 2fa to #h (#1040): #F is flash in all three |
+| `F` |  | flash | flash | flash, tinyfs | free here | flash in all three; 2fa moved to #h |
 | `G` | gpio (native) |  | gpio | fpga, gpio | in use |  |
 | `H` |  |  |  | ata | free here |  |
 | `I` | ip (hosted/native) | ip | ip | ip | in use |  |
@@ -82,17 +81,17 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `U` | fs (hosted) |  |  | fs, usb | in use | as Inferno |
 | `V` | cam (native) | tv | tv | tv | in use | video in, as tv in all three; the Dis VMs, which had it on their branch, moved to #X |
 | `W` | pwm (native) |  |  |  | in use | PWM, free in all three: Pi 5 |
-| `X` |  | loopback | vmx | loopback | reserved | the Dis VMs (#944): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
+| `X` | vm (native) | loopback | vmx | loopback | in use | the Dis VMs (#944): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
 | `Y` |  | cardbus | cardbus | cardbus | free here |  |
 | `Z` | opus (hosted) |  |  | test | divergence | Inferno's test device |
 | `a` |  | tls | tls | arch | free here | tls in Plan 9 and 9front. emu/Nt/devarch.c says #a, and no build includes it |
-| `b` |  | irq | irq, kbd | dbg | free | Inferno's dbg; bench moved to #x |
+| `b` |  | irq | irq, kbd | dbg | free here | Inferno's dbg; bench moved to #x |
 | `c` | cons (hosted/native) | cons | cons | cons | in use |  |
 | `d` | dup (hosted) | dup | dup | dup | in use |  |
 | `e` | env (hosted/native) | env | env | env | in use |  |
 | `f` | phone (hosted) | floppy | floppy | floppy | divergence | floppy elsewhere, which nothing here will need |
 | `g` |  | segment | segment |  | free here |  |
-| `h` |  |  |  |  | reserved | 2fa, from #F (#1040): a hardware key; free in all three |
+| `h` | tfa (hosted) |  |  |  | in use | 2fa, from #F (#1040): a hardware key; free in all three |
 | `i` | draw (hosted/native) | draw | draw | draw | in use |  |
 | `k` |  | fs | fs | ds | free here | Inferno's ds (man/3/ds, no source here); fs in Plan 9 and 9front |
 | `l` | ether (native) | ether | ether | ether | in use |  |
@@ -103,10 +102,10 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `t` | eia (hosted), uart (native) | uart | uart | ns16552, uart | in use | serial lines: uart (native) and eia (hosted) serve the same eia(3) files |
 | `u` | usb (native) | usb | usb |  | in use | as Plan 9 and 9front (Inferno #U) |
 | `v` |  | dss, vga | dss, vga | vga | reserved | display or video out: vga in all three |
-| `w` | wmsz (hosted) | watchdog | watchdog |  | move planned | hosted wmsz to #z (#1040): #w is the watchdog in Plan 9 and 9front |
+| `w` |  | watchdog | watchdog |  | free here | Plan 9 and 9front's watchdog; wmsz moved to #z |
 | `x` | bench (native) |  | xenstore | bench | in use | bench, from #b, as Inferno |
 | `y` |  | i82365 | i82365 | i82365, pcmcia | free here |  |
-| `z` |  |  |  |  | reserved | wmsz, from #w (#1040): size; free in all three |
+| `z` | wmsz (hosted) |  |  |  | in use | wmsz, from #w (#1040): size; free in all three |
 | `$` |  | pnp | pci, pnp | pci, pnp | reserved | PCI, as all three |
 | `%` | mem (hosted) |  |  | mem | in use |  |
 | `*` | indir (hosted) |  |  | indir | in use |  |

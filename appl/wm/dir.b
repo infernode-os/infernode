@@ -191,6 +191,9 @@ init(env: ref Draw->Context, argv: list of string)
 	if(plumbmsg != nil && plumbmsg->init(1, nil, 0) >= 0)
 		plumbed = 1;
 
+	# a group of its own: an exit is a killgrp, and the one it was
+	# started in may be wm's
+	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 	dialog->init();
 

@@ -12,6 +12,12 @@ All notable changes to InferNode are documented in this file.
   and the status line names what did not answer. llmsrv asked the backend
   for `models` in its serve loop, stopping every session behind a slow
   one; it now does so as it does for `ask`.
+- **Delete on Matrix takes what it hosts; Delete on Task no longer takes
+  wm/wm.** A composition's hosted programs (wm/scene in `scene-demo`) run
+  in groups of their own, so Matrix's exit left them, holding the window
+  with nothing left to take a Delete. wm/task and wm/dir never made a
+  process group of their own, so an exit killed the group they were
+  started in, wm's among them.
 - **Quitting a program leaves nothing of it running.** wm/about, colors,
   dir, fractals, ftree, keyring, man and wallet ended only their main
   proc on their own Quit (wm/dir on Delete too), leaving their theme

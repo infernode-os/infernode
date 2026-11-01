@@ -1442,11 +1442,13 @@ guiloop()
 			# events for it.
 			if(len c >= 7 && c[0:7] == "delete ")
 				menuposted = 0;
-			# services run in process groups of their own: the exit's
-			# killgrp misses them, and one left running keeps this
-			# module, its window and wm's connection with it
-			if(c == "exit" && comp != nil)
+			# hosted apps and services run in process groups of their
+			# own: the exit's killgrp misses them, and one left running
+			# keeps its window, with nothing left to take a Delete
+			if(c == "exit" && comp != nil) {
+				shutdowndisplaymodules(comp.layout);
 				shutdownservices(comp.services);
+			}
 			tkclient->wmctl(top, c);
 			if(c != nil && len c > 0 && c[0] == '!') {
 				aw := int tk->cmd(top, ".c cget -actwidth");

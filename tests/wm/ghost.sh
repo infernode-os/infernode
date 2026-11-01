@@ -54,6 +54,31 @@ menu 900 100 154
 click 100 100 4
 show after-frozen-deleted
 
+# programs that once shared wm's process group: an exit is a killgrp
+wm/dir &
+sleep 3
+show dir
+menu 900 100 154
+click 100 100 4
+show dir-deleted
+wm/task &
+sleep 3
+show task
+menu 900 100 154
+click 100 100 4
+show task-deleted
+
+# Matrix hosting a program in a group of its own: both go, or the
+# hosted one keeps the window with nothing left to take a Delete
+wm/matrix /lib/matrix/compositions/scene-demo &
+sleep 4
+show matrix
+menu 900 100 154
+click 100 100 4
+sleep 3
+show matrix-deleted
+echo R matrix-left `{ps | grep 'WmScene|Matrix|SceneFixture'}
+
 # a client that took the exit and stays is asking its user: it stays
 /dis/tests/wm_frozen.dis -k &
 sleep 2

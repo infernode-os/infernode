@@ -61,6 +61,10 @@ uintptr	dtbptr;
 
 Mach	machs[MAXMACH];
 
+/* R is read as [x28] in libinterp and the JIT: vmreg must be Mach's first word */
+_Static_assert(__builtin_offsetof(Mach, vmreg) == 0, "Mach.vmreg must be at offset 0");
+extern struct Vm vm0;
+
 struct Active active;
 
 
@@ -2105,6 +2109,7 @@ squidboy(void)
 
 	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
 	m->machno = (mpidr >> COREAFF) & 3;
+	m->vmreg = &vm0;		/* the one VM, until there are more (#944) */
 	m->ticks = 1;		/* nonzero: some code divides by ticks */
 	m->proc = nil;
 
@@ -2399,6 +2404,7 @@ kmain(void)
 	 */
 	m->proc = &mainproc;
 	m->machno = 0;
+	m->vmreg = &vm0;		/* before any Dis runs: R is *m->vmreg (interp.h) */
 
 	/*
 	 * Copy the loaded image before anything writes to .data.
@@ -2592,7 +2598,7 @@ kmain(void)
 
 		mem = (ulong)conf.npage * BY2PG;
 		poolsize(mainmem, mem/MAINDIV, 0);
-		poolsize(heapmem, mem/HEAPDIV*HEAPNUM, 0);
+		poolsize(heappool, mem/HEAPDIV*HEAPNUM, 0);
 		poolsize(imagmem, mem/IMAGDIV, 0);
 	}
 

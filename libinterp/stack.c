@@ -23,7 +23,7 @@ newstack(Prog *p)
 	f->lr = nil;
 	f->mr = nil;
 	f->fp = nil;
-	l = p->R.M->m->ss;
+	l = p->reg.M->m->ss;
 	/* room for Stkext's record keeping, before the frame: four
 	 * pointers, 32 bytes on a 64-bit host (16 was a 32-bit host's) */
 	if(l < OA(Stkext, reg.tos.fu)+t->size)
@@ -36,13 +36,13 @@ newstack(Prog *p)
 	ns->reg.SP = nil;
 	ns->reg.TS = nil;
 	ns->reg.EX = nil;
-	p->R.EX = ns->stack;
-	p->R.TS = ns->stack + l;
-	p->R.SP = ns->reg.tos.fu + t->size;
-	p->R.FP = ns->reg.tos.fu;
+	p->reg.EX = ns->stack;
+	p->reg.TS = ns->stack + l;
+	p->reg.SP = ns->reg.tos.fu + t->size;
+	p->reg.FP = ns->reg.tos.fu;
 
-	memmove(p->R.FP, f, t->size);
-	f = (Frame*)p->R.FP;
+	memmove(p->reg.FP, f, t->size);
+	f = (Frame*)p->reg.FP;
 	f->t = nil;
 }
 

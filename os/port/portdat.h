@@ -484,6 +484,8 @@ struct Proc
 	Label		sched;		/* known to l.s */
 	char*		kstack;		/* known to l.s */
 	Mach*		mach;		/* machine running this proc */
+	struct Vm*	vm;		/* the Dis VM whose interpreter it takes in acquire() (#944) */
+	struct Vm*	vmhome;		/* its own, while devprog works in another's */
 	char		text[KNAMELEN];
 	Proc*		rnext;		/* next process in run queue */
 	Proc*		qnext;		/* next process on queue for a QLock */
@@ -675,7 +677,7 @@ enum
 };
 
 extern Pool*	mainmem;
-extern Pool*	heapmem;
+extern Pool*	heappool;
 extern Pool*	imagmem;
 
 /* queue state bits,  Qmsg, Qcoalesce, and Qkick can be set in qopen */

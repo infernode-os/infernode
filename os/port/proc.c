@@ -199,6 +199,15 @@ sched(void)
 			up->text, up->mach != nil ? (int)((Mach*)up->mach - MACHP(0)) : -1, m->machno);
 	SETSTATE(up, Running);
 	m->proc = up;
+	/*
+	 * R on this core is now this process's VM's (interp.h): a process
+	 * holding one VM's interpreter must never run against another's
+	 * registers, here or after a move to another core.
+	 */
+#ifdef VMREGPERMACH
+	if(up->vm != nil)
+		m->vmreg = up->vm;
+#endif
 
 	/*
 	 * gotolabel() is an unconditional branch through up->sched.pc, so a
@@ -539,6 +548,7 @@ newproc(void)
 	unlock(&procalloc.l);
 
 	p->type = Unknown;
+	p->vm = &vm0;		/* the VM a new process belongs to; kproc gives it its creator's */
 #ifdef PROCTRACE
 	p->ptracen = 0;
 #endif
@@ -893,6 +903,8 @@ kproc(char *name, void (*func)(void *), void *arg, int flags)
 	p = newproc();
 	p->psstate = 0;
 	p->kp = 1;
+	if(up != nil && up->vm != nil)
+		p->vm = up->vm;	/* a VM's helpers -- its vmachine kprocs among them -- are its own */
 
 	p->fpsave = up->fpsave;
 	p->scallnr = up->scallnr;

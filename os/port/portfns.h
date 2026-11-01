@@ -102,6 +102,16 @@ int		eqchan(Chan*, Chan*, int);
 int		eqqid(Qid, Qid);
 void		error(char*);
 void		errorf(char*, ...);
+Pool*	heappoolnew(char*);
+void	poolusage(Pool*, ulong*, ulong*);
+int	vmprogs(struct Vm*);
+void	vmclearwaitq(void*);
+int	vmcount(void);
+struct Vm*	vmn(int);
+struct Vm*	vmget(int);
+int	vmrun(int, int, char**);
+int	progpidn(int);
+struct Vm*	pidvm(int);
 #pragma varargck argpos errorf 1
 void		errstr(char*, int);
 void		excinit(void);

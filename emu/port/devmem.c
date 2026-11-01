@@ -114,13 +114,6 @@ static struct {
 } memprof;
 
 extern	void	(*memmonitor)(int, ulong, ulong, ulong);
-extern	ulong	gcnruns;
-extern	ulong	gcsweeps;
-extern	ulong	gcbroken;
-extern	ulong	gchalted;
-extern	ulong	gcepochs;
-extern	uvlong	gcdestroys;
-extern	uvlong	gcinspects;
 extern	uvlong	gcbusy;
 extern	uvlong	gcidle;
 extern	uvlong	gcidlepass;

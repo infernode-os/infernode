@@ -419,6 +419,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection; a chain deeper than destroy() recurses is freed whole |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
 | `pgrp_race_test.b` | A Prog swapping its name space, fd group and dot (`pctl` FORKNS, NEWFD, `chdir`) and exiting while others read its `/prog/n/ns`, `fd` and `status`: no use-after-free, no wedged name space (INFR-373); Progs sharing a name space, one changing dot while the others resolve relative names (INFR-59) |
+| `grpwait_test.b` | `/prog/n/grpwait`: a read answers when the process group has no Prog left (its leader gone and a member still running is not yet), killed or not, every reader told, a member in a group of its own not counted; Lucifer reaps an app by it |
 | `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
 | `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
 | `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler; `tests/host/jit_fault_test.sh` runs it under `-c0` and `-c1` |

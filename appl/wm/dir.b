@@ -438,7 +438,9 @@ button1(t: ref Toplevel, item: ref Dir)
 
 applinit(mod: Wm, ctxt: ref Draw->Context, args: list of string)
 {
-	sys->pctl(sys->NEWPGRP|sys->FORKFD, nil);
+	# not a copy of this window's connection to wm: it would keep the
+	# window up after this program had gone
+	sys->pctl(sys->NEWPGRP|sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	spawn mod->init(ctxt, args);
 }
 

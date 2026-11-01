@@ -55,4 +55,11 @@ y = ${expr ${index 3 $w} 46 +}
 dclick $x $y
 sleep 2
 show plumbed
+
+# the first wm/dir deleted, with the wm/edit it started still open: its
+# window goes (wm/edit had a copy of its connection to wm, and kept it)
+ptr 900 700 4; ptr 900 754 4; ptr 900 754 0
+ptr 50 46 4; ptr 50 46 0
+sleep 3
+show dir-deleted
 echo R done

@@ -40,10 +40,11 @@ has the feature, which is what parity means.
 | `#P` temperature, throttling | yes | shared | **Proved** |
 | Serial recovery loader | yes | `loader/` | Standalone **proved**; embedded copy built |
 | Framebuffer, desktop | yes | shared | **Proved** on HDMI0 and HDMI1, one monitor at a time: Lucifer, right size and colours. Needs `framebuffer_depth=32`. The mode comes from the EDID, by the firmware-KMS tags (`../bcm/fb.c`). Two screens at once not tried |
+| D0 stepping (2GB and newer boards) | n/a | `radio.c` | Detected from the device tree; pin tables from Linux. Dry run on C1 with D0's tree writes what Linux's table says. Has not run on a D0 chip |
 | Audio (PWM jack) | yes | none | No jack on a Pi 5; HDMI audio or I2S instead |
 | DSI panel, touch | yes | none | Not done; DSI is RP1's here |
 | Camera device (`#V`) | simulated | shared | Compiled in; simulated sensor only |
-| Memory above 4GB | no | `../bcm/mmu.c` | **Proved**: found at boot from the device tree, every bank mapped at run time, no constant to change for a bigger board. 7.1GB free, 3.76GB of Dis heap touched. `memlimit=N` runs as a smaller board: 4, 2 and 1GB boots proved |
+| Memory above 4GB | no | `../bcm/mmu.c` | **Proved**: found at boot from the device tree, every bank mapped at run time, no constant to change for a bigger board. Dis heap may take three quarters: 5.9GB touched on 8GB. `memlimit=N` runs as a smaller board: 4, 3, 2 and 1GB boots proved |
 
 ## What only a Pi 5 has
 

@@ -15,8 +15,8 @@ the other way from the Pi 4's: the board first, and each step asks the
 hardware instead of assuming.
 
 Not done or not proved: two screens at once; audio, since a Pi 5 has no
-analogue output; DSI and CSI. The D0 stepping (2GB boards) moves the pin
-mux and is not handled.
+analogue output; DSI and CSI. The D0 stepping (2GB boards and later) has its own pin
+tables in `radio.c`, and has not run on a D0 chip.
 
 ## What is here
 
@@ -133,7 +133,8 @@ the physical address, not at Linux's `0x10_0000_0000`, and only below
 Nothing in the build says. `mmuinit` reads `/memory` from the device tree
 the firmware passes, or failing that the revision code, and each gigabyte
 above 4GB is a single level-1 block, so a bigger board needs no bigger
-tables; the pools' ceilings are fractions of what was found. What the
+tables; the pools' ceilings are fractions of what was found, and overlap,
+being ceilings: the Dis heap may have three quarters. What the
 boards still fix is below 4GB: `RAMLIMIT`, where their devices begin.
 `memlimit=N` on the command line stops at N MB, to try a smaller board.
 

@@ -88,11 +88,14 @@
 /*
  * The allocator pools' ceilings, as fractions of memory (../arm64/main.c).
  * The 3B+'s defaults let the three reach half of memory together, which
- * on a 4GB board left 2GB that nothing could allocate: here they add up
- * to all of it, the Dis heap taking half, of whatever the board turns out to have.
+ * on a 4GB board left 2GB that nothing could allocate. Here they overlap,
+ * being ceilings and not reservations, of whatever the board turns out to
+ * have: the Dis heap, which is what programs live in, may take three
+ * quarters, and main or image a quarter each.
  */
 #define	MAINDIV		4
-#define	HEAPDIV		2
+#define	HEAPNUM		3
+#define	HEAPDIV		4
 #define	IMAGDIV		4
 
 /*

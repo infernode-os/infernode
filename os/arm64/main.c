@@ -25,6 +25,9 @@
 #ifndef HEAPDIV
 #define HEAPDIV	4
 #endif
+#ifndef HEAPNUM
+#define HEAPNUM	1	/* the heap may have HEAPNUM/HEAPDIV */
+#endif
 #ifndef IMAGDIV
 #define IMAGDIV	8
 #endif
@@ -2589,7 +2592,7 @@ kmain(void)
 
 		mem = (ulong)conf.npage * BY2PG;
 		poolsize(mainmem, mem/MAINDIV, 0);
-		poolsize(heapmem, mem/HEAPDIV, 0);
+		poolsize(heapmem, mem/HEAPDIV*HEAPNUM, 0);
 		poolsize(imagmem, mem/IMAGDIV, 0);
 	}
 

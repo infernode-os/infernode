@@ -163,6 +163,7 @@ static struct {
 	uvlong	size;
 } bank[Maxbank];		/* memory above 4GB, in whole gigabytes */
 static int nbank;
+static uintptr lowbank;		/* the top of what the tree says runs past 1GB, below 4GB */
 #endif
 
 /*
@@ -244,9 +245,9 @@ findhightop(void)
 /*
  * What memory there is, from nothing the build knows: /memory's reg in
  * the device tree the firmware hands every board. An 8GB Pi 5's says 0
- * to 0x3FC00000, 1GB to 4GB, 4GB to 8GB. Below 4GB the two functions
- * above say the same, and keep the board's limits; what is new here is
- * above 4GB, and however much of it there is needs no tables of its
+ * to 0x3FC00000, 1GB to 4GB, 4GB to 8GB. A tree overrules the revision
+ * code below 4GB too, whose size field cannot say 3GB; RAMLIMIT still
+ * holds there. However much there is above 4GB needs no tables of its
  * own, each gigabyte being one level-1 block.
  *
  * Without a tree, the revision code says how much, and the rest of it
@@ -279,6 +280,8 @@ addbank(uvlong base, uvlong size)
 	uvlong top;
 
 	top = base + size;
+	if(base <= 0x40000000ULL && top > 0x40000000ULL)
+		lowbank = top < 0x100000000ULL ? top : 0x100000000ULL;
 	if(top <= 0x100000000ULL)
 		return;
 	if(base < 0x100000000ULL)
@@ -358,7 +361,11 @@ findbanks(void)
 	u32int rev[1];
 	int i;
 
-	if(fdtbanks() < 0){
+	if(fdtbanks() == 0){
+		hightop = lowbank < RAMLIMIT ? lowbank : RAMLIMIT;
+		if(lowbank == 0)
+			hightop = 0;
+	}else{
 		rev[0] = 0;
 		if(mboxprop(Taggetrev, rev, 0, 1) == 0 && (rev[0] & (1<<23)) != 0){
 			size = 256ULL*1024*1024 << ((rev[0] >> 20) & 7);

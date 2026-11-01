@@ -484,6 +484,10 @@ cunique(Chan *c)
 		cclose(c);
 		c = nc;
 	}
+	if(c->umh != nil){
+		putmhead(c->umh);
+		c->umh = nil;
+	}
 
 	return c;
 }
@@ -1085,12 +1089,6 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 
 	c = cunique(c);
 
-	if(c->umh != nil){	//BUG
-		print("walk umh\n");
-		putmhead(c->umh);
-		c->umh = nil;
-	}
-
 	cnameclose(c->name);
 	c->name = cname;
 
@@ -1488,21 +1486,28 @@ namec(char *aname, int amode, int omode, ulong perm)
 	case Aaccess:
 		m = nil;
 		if(!nomount && domountc(&c, &m, nil)){
+			if(waserror()){
+				putmhead(m);
+				nexterror();
+			}
 			c = cunique(c);
 			c->mflag = mheadflag(m);
+			poperror();
 		}
 		putmhead(m);
 		break;
 
 	case Abind:
 		m = nil;
-		if(!nomount && domountc(&c, &m, nil)){
-			c = cunique(c);
+		if(!nomount && domountc(&c, &m, nil))
 			c->mflag = mheadflag(m);
+		if(waserror()){
+			putmhead(m);
+			nexterror();
 		}
-		if(c->umh != nil)
-			putmhead(c->umh);
+		c = cunique(c);
 		c->umh = m;
+		poperror();
 		break;
 
 	case Aremove:
@@ -1516,7 +1521,12 @@ namec(char *aname, int amode, int omode, ulong perm)
 			domountc(&c, &m, &cname);
 
 		/* our own copy to open or remove */
+		if(waserror()){
+			putmhead(m);
+			nexterror();
+		}
 		c = cunique(c);
+		poperror();
 		if(m != nil)
 			c->mflag = mheadflag(m);
 
@@ -1539,12 +1549,6 @@ namec(char *aname, int amode, int omode, ulong perm)
 				putmhead(m);
 				error(Eperm);
 			}
-if(c->umh != nil){
-	print("cunique umh\n");
-	putmhead(c->umh);
-	c->umh = nil;
-}
-
 			/* only save the mount head if it's a multiple element union */
 			if(m && m->mount && m->mount->next)
 				c->umh = m;

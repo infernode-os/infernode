@@ -598,7 +598,10 @@ auth(procid, fid: int, uname, aname: string): string
 			clunk(procid, fid);
 			return err;
 		}
-		# XXX check that authinfo.cuid == uname?
+		if(authinfo.cuid != uname){
+			clunk(procid, fid);
+			return "auth uname mismatch";
+		}
 		return nil;
 	}
 }

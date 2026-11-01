@@ -644,7 +644,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags sysstat sysname user jit` … | both |
 | `#S` | `/dev` | `sdcard` (the whole device), `sdctl`, and one file per named range | both |
 | `#B` | `/dev` | `bootimage` (the running kernel, byte for byte), `bootargs` | both |
-| `#b` | `/dev` | `busec` — microseconds, for timing things honestly | both |
+| `#x` | `/dev` | `busec` — microseconds, for timing things honestly | both |
 | `#m` | `/dev` | `pointer` | both |
 | `#i` | — | the draw device. **Not bound at boot**: attaching it takes the screen from the text console. `bind '#i' /dev` when you mean it. | both |
 | `#l` | `/net/ether0` | `clone addr stats ifstats n/{data,ctl,type}` — wired Ethernet | both |

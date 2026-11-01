@@ -191,13 +191,59 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
   limit, including segments inserted at the head of the resequencing queue.
   This is an upstream Inferno omission; 9front has carried the limits since
   2013.
+- **Malformed transport and ICMPv6 packets are rejected before indexed or
+  trimmed access.** UDP lengths smaller than the UDP header, TCP data offsets
+  larger than the IP payload, and truncated neighbor solicitation or
+  advertisement bodies are dropped. These checks port applicable 9front fixes
+  `7838d689` and `9211c6c5`.
+- **Inherited IP and mount boundary checks are current.** Negative IP device
+  attaches are rejected before indexing a stack, conversation permissions and
+  accepted-call ownership are enforced under lock, authentication fids must
+  belong to the mounted connection, mount-cache data comes from immutable
+  kernel replies rather than mutable caller buffers, and completion cannot race
+  request recycling. Protocol conversation counts are capped to the qid field;
+  IPv6 lifetime comparisons cannot wrap, TCP backoff cannot roll over, and UDP
+  transmits checksum negative zero as `ffff` rather than the IPv4 “no checksum”
+  value.
+- **Interface teardown and authentication proxy errors fail cleanly.** Native
+  IP configuration now releases interface/self-cache locks when medium hooks
+  fail, completes fallible address removal before publishing an unbound
+  conversation, and does not leak IPv6 prefix metadata. Factotum proxy framing
+  rejects a non-growing `toosmall` request instead of constructing an invalid
+  input slice, and internal fd close rejects out-of-range descriptors.
+- **Inherited SSL, capability, and 9P identity checks are current.** Opening an
+  existing SSL conversation now applies its owner/other mode correctly;
+  presenting a capability as the wrong source user cannot consume it; legacy
+  Styx servers bound oversized replies to the negotiated message size; and
+  persistent 9P authentication verifies factotum's caller identity.
+- **Authentication RPC concurrency is bounded.** Factotum refuses a seventeenth
+  active RPC worker, preventing unauthenticated connection attempts from
+  pinning an unbounded number of protocol processes.
+- **Untrusted image data cannot cross decoder or geometry bounds.** Compressed
+  image transforms stop at the supplied buffer, the LZ history starts zeroed
+  instead of disclosing stack contents, and image allocation/load paths reject
+  rectangles whose size or offsets overflow. Window stacking checks every image
+  before dereferencing its layer, and zero or negative full-circle arcs take
+  bounded special paths. This ports the applicable 9front draw hardening through
+  `e252b1b9`, `c4f5b99c`, `d7538ebb`, `e8228856`, and `0fea8e09`.
+- **Certificate and X25519 inputs fail closed.** BER decoding stops at a fixed
+  recursion depth instead of allowing a crafted certificate to exhaust the
+  interpreter stack, and the common X25519 primitive rejects low-order peer
+  keys that produce the RFC 7748 all-zero shared secret. This covers TLS 1.2,
+  TLS 1.3, and hybrid key agreement callers.
+- **The common cryptographic generator uses rekeyed ChaCha20.** The inherited
+  two-key 3DES X9.17 state has been replaced with a 256-bit ChaCha20 state that
+  rekeys itself before each response and advances a per-call nonce. Hosted
+  seeds come from the operating-system CSPRNG; native seeds come from the
+  platform hardware generator.
 - **Voice exports require keyring authentication and expose audio only.** The
   original `voice/listen` script anonymously exported all of `/dev`, allowing
   a network peer to inject input and operate control devices. It now constructs
-  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners,
-  dialers, and loopback tests no longer pass `-A`. There is no anonymous mode in
-  the shipped voice scripts. Provision a signer and peer auth information with
-  `auth/createsignerkey` and `getauthinfo` before using voice on a fresh node.
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners
+  and dialers explicitly select their keyring. There is no anonymous remote
+  mode in the shipped voice scripts; acceptance tests use a process-local 9P
+  pipe and open no listener. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `auth/mkauthinfo` before using voice on a fresh node.
 - **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
   `killtree`, which kills N's group and every descendant group. The exec tool
   uses it on deadlines and output caps, so a confined command cannot survive by
@@ -209,11 +255,14 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
 - **Namespace checks match the host filesystem and actual parent authority.**
   Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
   bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
-  aliases are rejected. A parent root grant no longer authorizes a child path
-  the parent cannot see. Confined `NODEVS` processes cannot follow host symlinks
+  and `/tool.*` aliases are rejected. A parent root grant no longer authorizes
+  a child path the parent cannot see, and `/usr` grants mask both keyring and
+  secstore credentials. Confined `NODEVS` processes cannot follow host symlinks
   out of a granted tree.
-- **mc9p responses are private to the requesting fid.** One client can no
-  longer read or replace another client's endpoint response.
+- **mc9p responses and filesystem authority are scoped.** One client can no
+  longer read or replace another client's endpoint response. The `fs` domain
+  requires a non-root `-r` directory, rejects requests outside it, and applies
+  `NODEVS` so host symlinks cannot escape it.
 
 ## [0.9.0] - 2026-10-29
 

@@ -36,7 +36,7 @@
 #include "kernel.h"
 
 extern Dev	mntdevtab;	/* #M, the 9P client */
-extern Dev	benchdevtab;	/* #b, microsecond timing */
+extern Dev	benchdevtab;	/* #x, microsecond timing */
 extern Dev	srvdevtab;	/* #s, names a Limbo program serves */
 extern Dev	etherdevtab;	/* #l, the kernel Ethernet data path */
 extern Dev	uartdevtab;	/* #t, serial ports; the console's input arrives through it */
@@ -1618,7 +1618,7 @@ probecons(void)
 		mntdevtab.reset();
 
 	/*
-	 * #b's reset is what REGISTERS $Bench as a builtin module.
+	 * #x's reset is what REGISTERS $Bench as a builtin module.
 	 *
 	 * A device's reset is not called for its own sake here -- this
 	 * kernel does not run chandevreset() -- so a device whose reset
@@ -2625,7 +2625,7 @@ kmain(void)
 	kbind("#G", "/dev", MAFTER);	/* /dev/gpio/N/{ctl,level} */
 
 	/* microsecond timing, for measuring things honestly */
-	kbind("#b", "/dev", MAFTER);
+	kbind("#x", "/dev", MAFTER);
 
 	/*
 	 * #i is deliberately NOT bound here.

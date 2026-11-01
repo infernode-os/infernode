@@ -826,6 +826,7 @@ dis/tests/pdftext_test.dis
 dis/tests/pgrp_race_test.dis
 dis/tests/spawn_budget_test.dis
 dis/tests/sheetview_test.dis
+dis/tests/p9any_timeout_test.dis
 dis/tests/pqauth_test.dis
 dis/tests/pqc_fuzz_test.dis
 dis/tests/pres_launch_test.dis
@@ -872,6 +873,7 @@ dis/tests/js/jsrun.dis
 dis/tests/js/t262.dis
 dis/tests/testing/testing_test.dis
 dis/tests/textwidget_test.dis
+dis/tests/tk_entry_growth_test.dis
 dis/tests/tk_test.dis
 dis/tests/fractals_zoombox_test.dis
 dis/tests/tkimgrender.dis

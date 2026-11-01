@@ -2,7 +2,7 @@
 # /n/opus device, so a dialer can stream Opus frames in and out and
 # the call runs at ~24 kbps instead of ~1.4 Mbps. INFR-187.
 #
-# Symmetric to voice/listen (which exports /dev for raw PCM); use one
+# Symmetric to voice/listen (which exports audio/audioctl for raw PCM); use one
 # or the other depending on whether the link is LAN/ZeroTier (PCM is
 # fine, simpler) or cellular (opus is necessary).
 #
@@ -22,6 +22,8 @@ if {~ $#port 0} {
 	port=7070
 }
 addr='tcp!*!'$port
+user=`{cat /dev/user}
+key='/usr/'^$user^'/keyring/default'
 
 # Devaudio + devopus.
 bind -a '#A' /dev
@@ -51,4 +53,4 @@ local_dec=$apid
 echo 'voice/listen-opus:' $addr 'exporting authenticated /n/opus (enc/dec/ctl/status)'
 echo '  local enc pid=' $local_enc '(mic -> encoder)'
 echo '  local dec pid=' $local_dec '(decoder -> speaker)'
-listen $addr { export /n/opus & }
+listen -k $key $addr { export /n/opus & }

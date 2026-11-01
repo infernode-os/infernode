@@ -14,6 +14,15 @@ enum
 	PHYSIO		= 0x3F000000,	/* peripheral base */
 
 	/*
+	 * The headphone jack's PWM (../bcm/audiopwm.c): the one PWM block,
+	 * whose two channels GPIO 40 and 41 carry at ALT0; its DMA request
+	 * line; and PLLD, the clock it is divided from.
+	 */
+	AUDIOPWMOFF	= 0x20C000,
+	AUDIODREQ	= 5,
+	AUDIOPLLDHZ	= 500000000,
+
+	/*
 	 * ARM local peripherals: per-core timer and mailbox routing.
 	 * These live OUTSIDE the 0x3F000000 peripheral window, at a
 	 * separate base introduced with the BCM2836 for multicore.

@@ -232,7 +232,10 @@ consuartputc(Queue *q, int c)
  * splhi before the spin and holding it until the release means the
  * holder cannot be preempted, so it cannot migrate, so the core IS the
  * holder for as long as the lock is held; the same discipline as
- * ilock. The cost is interrupts masked on one core for one emission:
+ * ilock. (A process that may sleep no longer takes it for a whole
+ * emission, only for each character's store: see uartputs. #622 has
+ * since made a preempted proc resume on the core it left.)
+ * The cost is interrupts masked on one core for one emission:
  * conswrite chunks at 256 bytes, about 22ms at 115200 baud on the
  * board, and a pending tick is delayed, not lost. The nested case
  * above is unchanged by it -- with interrupts masked, the only way
@@ -437,11 +440,60 @@ uartputd(u64int v)
  * Unbuffered and synchronous on purpose. This is the path a panic takes,
  * and a panic that queues its output can lose it.
  */
+/*
+ * A process that may sleep writes the console a character at a time,
+ * waiting for room in the FIFO with interrupts ON and taking the lock
+ * only around the store that sends each one.
+ *
+ * The whole-emission lock above masks interrupts on the writer's core
+ * for as long as its text takes to go out: about 10ms for a line, 22ms
+ * for one of conswrite's 256-byte chunks. Nothing else runs on that core
+ * meanwhile, interrupts included. On the bench 3B+ a key held down for
+ * two days under the login screen made Tk print an error 27 times a
+ * second; a quarter of a core went with interrupts masked, and the
+ * Bluetooth controller's UART, which needs its interrupts at 3Mbaud, lost
+ * enough that L2CAP connects failed ("Host is down") until the key came
+ * up. Soft real time does not survive console output.
+ *
+ * Processes are kept in order by a QLock, so two of them never mix
+ * characters; a process holding it may be preempted and resume on its
+ * own core (#622), and the next process waits asleep. Everything else --
+ * an interrupt-time print, iprint at splhi, a panic, a holder of a spin
+ * lock, the multi-line reports that hold uartlock() across lines -- takes
+ * the whole-emission lock as before, so its text still comes out whole:
+ * it can land between two of a process's characters, a line inside a
+ * line, never one character at a time.
+ */
+static QLock uartql;
+
+static void
+uartputc1(int c)
+{
+	int held;
+	long i;
+
+	for(i = 0; !minitxrdy() && i < 100000; i++)
+		microdelay(1);	/* 87us a character: wait with interrupts on */
+	held = uartlock();
+	uartputc(c);
+	uartunlock(held);
+}
+
 void
 uartputs(char *s, int n)
 {
 	int i, held;
 
+	if(uartlocking && up != nil && islo() && up->pri != PriLock){
+		qlock(&uartql);
+		for(i = 0; i < n; i++){
+			if(s[i] == '\n')
+				uartputc1('\r');
+			uartputc1(s[i]);
+		}
+		qunlock(&uartql);
+		return;
+	}
 	held = uartlock();
 	for(i = 0; i < n; i++){
 		if(s[i] == '\n')

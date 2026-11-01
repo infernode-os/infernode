@@ -7,7 +7,7 @@
  *	#G/gpio/N/level	read "0\n" or "1\n"; write "0" or "1" to drive an output
  *	#G/gpio/N/event	read blocks for an edge, then a line per edge, oldest
  *			first: "<microseconds> <level>\n", the time the
- *			interrupt's, on #b/busec's clock; "overrun <n>\n"
+ *			interrupt's, on #x/busec's clock; "overrun <n>\n"
  *			first if this reader fell behind and n were dropped
  *
  * One directory per pin, in BCM numbering because that is the only

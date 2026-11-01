@@ -8,7 +8,7 @@ loadmemimage(Memimage *i, Rectangle r, uchar *data, int ndata)
 	int y, l, lpart, rpart, mx, m, mr;
 	uchar *q;
 
-	if(!rectinrect(r, i->r))
+	if(badrect(r) || !rectinrect(r, i->r))
 		return -1;
 	l = bytesperline(r, i->depth);
 	if(ndata < l*Dy(r))

@@ -5042,7 +5042,7 @@ vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv
 
 # Raw Ethernet from a UDP socket netdev gives the native stack packets the
 # host kernel cannot normalise first. Keep the valid fragmented control beside
-# the two adversarial cases: a claimed IPv4 length beyond the received bytes,
+# the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
 # and hundreds of one-byte descending TCP segments (head insertion).
 if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
     if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
@@ -5050,10 +5050,30 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: raw network control did not pass -- $NETSEC"
     fi
+    if grep -q '^FRAGMENT-DF-PASS$' <<<"$NETSEC"; then
+        pass "virt: DF-only IPv4 packets do not disturb fragment queues"
+    else
+        fail "virt: DF flag was mistaken for fragmentation -- $NETSEC"
+    fi
     if grep -q '^FRAGMENT-LIE-PASS$' <<<"$NETSEC"; then
         pass "virt: IPv4 reassembly rejects a total length beyond received bytes"
     else
         fail "virt: lying IPv4 fragment was not rejected -- $NETSEC"
+    fi
+    if grep -q '^IPV4-IHL-PASS$' <<<"$NETSEC" && grep -q '^IPV4-TRIM-PASS$' <<<"$NETSEC"; then
+        pass "virt: IPv4 validates IHL before checksum and trims link padding"
+    else
+        fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
+    fi
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC"; then
+        pass "virt: malformed UDP/TCP header lengths are rejected without panic"
+    else
+        fail "virt: transport header length checks did not pass -- $NETSEC"
+    fi
+    if grep -q '^DEVIP-NEGATIVE-PASS$' <<<"$NETSEC"; then
+        pass "virt: a negative IP device attach is rejected without corruption"
+    else
+        fail "virt: negative IP device attach check did not pass -- $NETSEC"
     fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"
@@ -5270,7 +5290,7 @@ vrefute "usb: the adapter takes no default route"   "default route via 10.0.3.2"
 # patch. The same watcher covers GENET (Pi 4) and GEM (PolarFire), whose
 # drivers already kept nif.link from their PHYs.
 cp "$VSD" "$BUILD/$PLAT-hotplug-sd.img"
-VHPOUT="$(python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hotplug-sd.img" <<'PYEOF'
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hotplug-sd.img" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt"
 import subprocess, socket, time, json, os, sys, threading
 qemu, img, extra, sd = sys.argv[1:5]
 PORT = int(os.environ["QMPBASE"]) + 16   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
@@ -5315,7 +5335,7 @@ finally:
     p.kill()
 sys.stdout.write(buf.decode(errors="replace").replace("\r", ""))
 PYEOF
-)"
+VHPOUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
 if ! grep -q '^VHP-ADDRESS-AT-BOOT$' <<<"$VHPOUT"; then
     fail "virt: hot plug: ether0 got no address at boot, so the link could not be pulled"
 else

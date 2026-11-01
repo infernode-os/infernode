@@ -24,7 +24,8 @@ fi
 LOG=$(mktemp)
 T=tmp/wm_ghost_test.$$
 mkdir -p "$ROOT/$T"
-trap 'rm -f "$LOG"; rm -rf "$ROOT/$T"' EXIT
+# chmod: Matrix's services leave directories of no permission in /tmp
+trap 'rm -f "$LOG"; chmod -R u+rwx "$ROOT/$T" 2>/dev/null; rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
 SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
 	/dis/sh.dis -c "bind -c /$T /tmp; wm/wm sh /tests/wm/ghost.sh" \

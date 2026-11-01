@@ -6627,7 +6627,7 @@ else
     fail "bcm2712: serialboot failed to build"
     return
 fi
-if build_kernel "$BUILD/$PLAT-kernel.img" "" "-DCOREAFF=8 -DPSCICORES -DEARLYWDOG -mstrict-align"; then
+if build_kernel "$BUILD/$PLAT-kernel.img" "" "-DCOREAFF=8 -DPSCICORES -DEARLYWDOG -DWORDMEM -mstrict-align"; then
     pass "bcm2712: kernel cross-builds for aarch64-elf"
 else
     fail "bcm2712: kernel failed to build"

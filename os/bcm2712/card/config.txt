@@ -2,7 +2,8 @@
 # What each line is for: os/bcm2712/README.md.
 os_check=0
 arm_64bit=1
-kernel=kernel_2712.img
+kernel=infernode8.img
+cmdline=cmdline.txt
 enable_rp1_uart=1
 pciex4_reset=0
 enable_uart=1
@@ -10,3 +11,4 @@ uart_2ndstage=1
 framebuffer_depth=32
 framebuffer_ignore_alpha=1
 disable_overscan=1
+max_framebuffers=2

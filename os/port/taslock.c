@@ -35,6 +35,17 @@ lock(Lock *l)
 		return;
 	}
 
+	/*
+	 * Counted before the test-and-set, not after: a proc preempted
+	 * between winning the lock and saying so holds it at its ordinary
+	 * priority, with nothing to show for it (key 1, pc 0). It can resume
+	 * only on its own core, and if something there is spinning for this
+	 * lock at PriLock, holding another, the yield below always comes
+	 * back to the spinner: the Pi 5 did that within the hour, under load.
+	 * preemption() leaves a proc with nlocks alone, so a holder is always
+	 * on a core, and a spinner's wait is short.
+	 */
+	up->nlocks++;
 	for(i=0; ; i++) {
 		if(_tas(&l->key) == 0)
 			break;
@@ -121,8 +132,13 @@ ilock(Lock *l)
 int
 canlock(Lock *l)
 {
-	if(_tas(&l->key))
+	if(up)
+		up->nlocks++;
+	if(_tas(&l->key)){
+		if(up)
+			up->nlocks--;
 		return 0;
+	}
 	if(up){
 		l->pri = up->pri;
 		up->pri = PriLock;
@@ -161,6 +177,8 @@ unlock(Lock *l)
 	l->key = 0;
 	if(up){
 		up->pri = p;
+		if(up->nlocks > 0)
+			up->nlocks--;
 
 		/*
 		 * islo(), which upstream does not check.
@@ -197,7 +215,7 @@ unlock(Lock *l)
 		 * which point the guard word finally reports a corrupt
 		 * process on a stack that has nothing to do with the driver.
 		 */
-		if(up->state == Running && anyhigher() && islo())
+		if(up->state == Running && up->nlocks == 0 && anyhigher() && islo())
 			sched();
 	}
 }

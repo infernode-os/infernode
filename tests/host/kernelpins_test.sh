@@ -11,6 +11,9 @@
 #                gigabit input at 300 Mbit/s with nothing lost.
 #   runproc      back round the run queue lock at splhi with no pause:
 #                ready() starved until lock() panicked "lock loop".
+#   nlocks       a proc preempted between winning a lock and recording it,
+#                pinned to a core with a spinner at PriLock: deadlock,
+#                "lock loop ... held by pc 0x0", within the hour.
 #   up           a parameter called up: it is a macro, and clang then
 #                deleted the rest of the function, loop exit and all.
 #   kfs idle     kfs marks itself clean only when idle for longer than a
@@ -37,6 +40,9 @@ else no "idlehands has no wfe"; fi
 retry=$(sed -n '/^runproc(void)/,/^}/p' os/port/proc.c | grep -A22 'if(p == 0 || p->mach) {' | grep -v '^[[:space:]]*\*\|/\*')
 if echo "$retry" | grep -q 'spllo' && echo "$retry" | grep -q 'microdelay'; then ok "runproc's retry lets go, with interrupts on"
 else no "runproc's retry spins on the run queue lock"; fi
+
+if grep -q 'up->nlocks == 0' os/port/proc.c && grep -q 'up->nlocks++' os/port/taslock.c; then ok "no proc is preempted holding a spin lock"
+else no "a proc can be preempted holding a spin lock"; fi
 
 bad=$(grep -rnE '\b(int|long|ulong|uint|char\*?|void\*?|Proc\*?|\*)[[:space:]]+\*?up[[:space:]]*[,);]' \
 	os/bcm os/bcm2712 os/bcm2711 os/bcm2837 os/arm64 --include='*.c' --include='*.h' 2>/dev/null | grep -v '^\S*:[0-9]*:[[:space:]]*\*\|/\*\|\bProc\s*\*up\b')

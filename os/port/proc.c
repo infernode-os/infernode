@@ -307,7 +307,7 @@ anyhigher(void)
 int
 preemption(int tick)
 {
-	if(up != nil && up->state == Running && !up->preempted &&
+	if(up != nil && up->state == Running && !up->preempted && up->nlocks == 0 &&
 	   (anyhigher() || tick && anyready())){
 		up->preempted = 1;
 		sched();

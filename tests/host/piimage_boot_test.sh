@@ -70,7 +70,15 @@ python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" "$tmp/qmp" "
 import json, socket, subprocess, sys, threading, time
 qemu, mach, card, kernel, limit, qmp, stuck, stucksecs = sys.argv[1:9]
 limit = int(limit)
-p = subprocess.Popen([qemu, "-M", mach, "-kernel", kernel,
+# QEMU's raspi4b has no RNG200, so the machine has no entropy source,
+# and without "insecurerandom" the kernel makes no key on it
+# (os/port/random.c): the first-boot login, which makes one, and DNS,
+# whose query ids come from /dev/random, would wait for ever. A board
+# has the generator, so the word is the emulator's, given here as the
+# firmware command line; the card's own cmdline.txt does not say it.
+# raspi3b models the BCM2835's generator and gets nothing.
+extra = ["-append", "insecurerandom"] if mach == "raspi4b" else []
+p = subprocess.Popen([qemu, "-M", mach, "-kernel", kernel] + extra + [
                       "-drive", "file=%s,if=sd,format=raw" % card,
                       "-netdev", "user,id=n0", "-device", "usb-net,netdev=n0",
                       "-device", "usb-kbd", "-qmp", "unix:%s,server=on,wait=off" % qmp,

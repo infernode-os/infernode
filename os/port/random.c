@@ -21,10 +21,12 @@
  * only ever be that, since no emulator models one.
  *
  * So with no generator a key is not made: genrandom waits, saying so
- * every few seconds, and #c/random's readers wait with it. The machine
- * still boots and still talks to the network, since nrand -- port
- * numbers and TCP sequence numbers, not secrets, and an LCG over the
- * clock since upstream -- never waits (devcons.c's seedrand).
+ * every few seconds, and #c/random's readers wait with it -- among
+ * them DNS, whose query ids come from /dev/random, and so a profile
+ * that names a host. The kernel still boots and its network still
+ * works, since nrand -- port numbers and TCP sequence numbers, not
+ * secrets, and an LCG over the clock since upstream -- never waits
+ * (devcons.c's seedrand).
  *
  * The counter is still here for an emulator that has nothing better.
  * It is used only when the boot command line holds the word

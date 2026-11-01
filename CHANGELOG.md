@@ -208,12 +208,15 @@ All notable changes to InferNode are documented in this file.
   never makes bytes up: it says -1 when there is no generator, and
   `genrandom`, `prng` and `prngtry`, which every board copied, are
   `os/port/random.c`'s, waiting for real bytes and saying why every five
-  seconds (`prngtry` answers -1 at once, as libsec.h says). The machine
-  still boots and uses the network: nrand, for port and sequence
-  numbers, no longer waits on the pool. An emulator that has nothing
-  better passes `insecurerandom` on its command line and gets the
-  counter, labelled; the harness does for QEMU's `raspi4b` and Icicle
-  Kit. A `virt` boot with no virtio-rng checks both ways.
+  seconds (`prngtry` answers -1 at once, as libsec.h says). The kernel
+  still boots and its network still works: nrand, for port and sequence
+  numbers, no longer waits on the pool. What reads `/dev/random` waits
+  with the keys: the first-boot login, and DNS, whose query ids come
+  from it. An emulator that has nothing better passes `insecurerandom`
+  on its command line and gets the counter, labelled; the harness and
+  `tests/host/piimage_boot_test.sh` do for QEMU's `raspi4b`, and the
+  Icicle Kit's tree says it. A `virt` boot with no virtio-rng checks
+  both ways.
 - **Bare metal: the Pi's generator is read one word at a time under a
   lock.** The Pi 3 and Pi 4 drivers tested for a word and read it with
   no lock, on four cores with preemption: two readers could both see

@@ -239,8 +239,6 @@ f:	for(;;) alt {
 	s := <-t.ctxt.ctl or
 	s = <-t.wreq or
 	s = <-wmctl =>
-		if (s == "exit")
-			exit;
 		tkclient->wmctl(t, s);
 		if(s == "retheme"){
 			glyphcolour();

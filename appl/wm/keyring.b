@@ -573,7 +573,7 @@ handlekey(k: int)
 	DEL: con 16r7F;
 	# Ctrl-Q quits
 	if(k == 'q' - 16r60){
-		exit;
+		tkclient->wmctl(top, "exit");
 	}
 	# Escape cancels the form / clears selection
 	if(k == 27){

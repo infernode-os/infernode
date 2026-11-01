@@ -958,7 +958,7 @@ startwallet9p(mod: Command, done: chan of int)
 handlekey(k: int)
 {
 	if(k == 'q' - 16r60)
-		exit;
+		tkclient->wmctl(top, "exit");
 	if(k == 27){
 		if(mode != ModeView)
 			setmode(ModeView);

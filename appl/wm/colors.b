@@ -64,7 +64,7 @@ init1(ctxt: ref Draw->Context)
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
 			n := menuhit->menuhit(p.buttons, mc, menu, nil);
 			if(n == 0)
-				exit;
+				w.wmctl("exit");
 		}
 	# ctxt.kbd is unbuffered; not draining it deadlocks the wm on
 	# first keypress with focus and freezes the whole UI.  We don't

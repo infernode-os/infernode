@@ -74,6 +74,47 @@ typedef struct Atidle	Atidle;
 typedef struct Altc	Altc;
 typedef struct Except Except;
 typedef struct Handler Handler;
+typedef struct Vm Vm;
+typedef struct Pool Pool;
+
+/*
+ * R, the running VM's registers.
+ *
+ * On the native arm64 kernel each core's Mach holds, at offset 0, a
+ * pointer to the registers of the VM whose process that core is
+ * running (m is x28 there, os/arm64/dat.h), so R is one load from x28
+ * -- the same cost as the global it replaces -- and the JIT keeps it in
+ * X20 as before. That is what lets more than one VM run at once (#944).
+ * The asm is not volatile on purpose: the value is the running
+ * process's VM, which does not change while it runs, so a copy cached
+ * across a preemption and a move to another core is still right. (What
+ * must never be cached is x28 itself; this reads through it in the
+ * same instruction.)
+ *
+ * Elsewhere -- the hosted emulator, the RISC-V kernel -- R is a global.
+ */
+#if defined(__aarch64__) && !__STDC_HOSTED__	/* the native kernel: -ffreestanding */
+#define	VMREGPERMACH
+static inline REG*
+_vmreg(void)
+{
+	REG *r;
+
+	__asm__("ldr %0, [x28]" : "=r"(r));
+	return r;
+}
+#define	R	(*_vmreg())
+#define	VM	((Vm*)_vmreg())	/* R is a Vm's first member */
+#define	OPARGS	REG *Rp		/* an op's and a decoder's parameter: libinterp/opreg.h */
+#define	OPCALL	Rp
+#define	OPCALLR	(&R)		/* the same, from outside an op */
+#else
+#define	R	(vm0.reg)
+#define	VM	(&vm0)
+#define	OPARGS	void
+#define	OPCALL
+#define	OPCALLR
+#endif
 
 struct ILock
 {
@@ -126,7 +167,7 @@ struct Channel
 	Progq*	send;		/* Queue of progs ready to send */
 	Progq*	recv;		/* Queue of progs ready to receive */
 	void*	aux;		/* Rock for devsrv */
-	void	(*mover)(void);	/* Data mover */
+	void	(*mover)(OPARGS);	/* Data mover: an op (libinterp/opreg.h) */
 	union {
 		WORD	w;
 		Type*	t;
@@ -202,6 +243,17 @@ struct Alt
 	Altc	ac[1];
 };
 
+/*
+ * A Type made at boot -- the static ones in heap.c and those the builtin
+ * modules make in their init -- is shared by every VM, and its ref is
+ * bumped by all of them without a lock. It starts at Permref, which no
+ * number of lost updates brings to zero, so it is never freed and the
+ * races cost nothing (#944). Types a module makes when it is loaded
+ * belong to one VM and count as ever.
+ */
+enum { Permref = 1<<30 };
+extern	int	typesperm;	/* dtype() makes permanent types while set: boot */
+
 struct Type
 {
 	int	ref;
@@ -233,6 +285,69 @@ struct REG
 	WORD		dt;		/* Destination temporary */
 };
 
+/*
+ * A Dis VM (#944): its registers and its collector. There is one,
+ * vm0, so far.
+ *
+ * reg, which R names, must stay first. The core's Mach.vmreg and the JIT's X20 point at a
+ * Vm and use it as the REG, and the JIT reaches the collector's colours
+ * the same way, as X20 plus an offset: mutator is stamped on what the
+ * write barrier touches and nprop set when it propagates, so the barrier
+ * costs no more than it did against globals.
+ *
+ * mutator, nprop, gccolor, gchalt and the collector's counters are
+ * macros for the running VM's (below; the fields are v-prefixed so the
+ * macros do not rewrite them); the rest of the collector's
+ * state is private to gc.c.
+ */
+struct Vm
+{
+	REG	reg;		/* R: first, see above */
+	int	vmutator;	/* colour the mutator allocates and marks with */
+	int	vnprop;		/* something was coloured propagator this pass */
+	int	vgccolor;	/* the epoch: mutator, marker and sweeper rotate from it */
+	int	vgchalt;		/* rungc does nothing (devbench) */
+	int	marker;
+	int	sweeper;
+	int	quanta;		/* blocks to sweep each time slice */
+	int	gce, gct;	/* sweep efficiency, which sets quanta */
+	int	visit;
+	void*	gcbase;		/* gc.c's walk of the heap pool: Bhdr* */
+	void*	gclimit;
+	void*	gcptr;		/* os/port/alloc.c moves it past a block it frees */
+	ulong	vgcnruns, vgcsweeps, vgcbroken, vgchalted, vgcepochs;
+	uvlong	vgcdestroys, vgcinspects;
+	void*	ptrtab[32];	/* Heap the C side holds, which the collector must mark: gc.c, ptradd */
+	void*	ptrfree;
+	Pool*	vheap;		/* the pool its Dis objects live in: no other VM's sweeper ever walks it */
+	Module*	vmodules;	/* the modules loaded into it */
+	Modlink*	vretpending;	/* the module OP(ret) is holding for release: xec.c */
+	void*	vsched;		/* its scheduler: the interpreter token, run queue and Progs (os/port/dis.c) */
+	Heap**	dq;		/* destroy()'s queue of what is too deep to destroy now: heap.c */
+	int	ndq, dqlen, ddepth;
+	int	markdepth;	/* markheap()'s recursion: gc.c */
+	int	id;		/* its number: /dev/vm/<id> */
+	int	ready;		/* its builtin modules are registered */
+};
+enum { MAXVM = 4 };	/* Dis VMs: one a core on the Pi (#944); os/port/dis.c */
+extern	Vm	vm0;
+extern	void	vmbuiltins(void);
+#define	mutator		(VM->vmutator)
+#define	nprop		(VM->vnprop)
+#define	gccolor		(VM->vgccolor)
+#define	gchalt		(VM->vgchalt)
+#define	gcnruns		(VM->vgcnruns)
+#define	gcsweeps	(VM->vgcsweeps)
+#define	gcbroken	(VM->vgcbroken)
+#define	gchalted	(VM->vgchalted)
+#define	gcepochs	(VM->vgcepochs)
+#define	gcdestroys	(VM->vgcdestroys)
+#define	gcinspects	(VM->vgcinspects)
+#define	heapmem		(VM->vheap)
+#define	modules		(VM->vmodules)
+#define	retpending	(VM->vretpending)
+extern	Pool*	heappool;	/* vm0's heap pool (os/port/alloc.c, emu/port/alloc.c) */
+
 struct Progs
 {
 	int	id;
@@ -246,7 +361,9 @@ struct Progs
 
 struct Prog
 {
-	REG		R;		/* Register set */
+	REG		reg;		/* Register set (R is the running VM's; see interp.h) */
+	Vm*		vm;		/* the VM it runs in, for ever (#944) */
+	Vm*		curvm;		/* the VM whose interpreter it is under now: vm, or another while inside a file that VM serves; see killprog */
 	Prog*		link;		/* Run queue */
 	Channel*		chan;	/* Channel pointer */
 	void*		ptr;		/* Channel data pointer */
@@ -378,16 +495,10 @@ extern	Type	Tbyte;
 extern	Type Tword;
 extern	Type Tlong;
 extern	Type Treal;
-extern	REG	R;
 extern	String	snil;
-extern	void	(*optab[256])(void);
+extern	void	(*optab[256])(OPARGS);
 extern	void	(*comvec)(void);
-extern	void	(*dec[])(void);
-extern	Module*	modules;
-extern	int	mutator;
-extern	int	nprop;
-extern	int	gchalt;
-extern	int	gccolor;
+extern	void	(*dec[])(OPARGS);
 extern	int	minvalid;
 
 extern	int		Dconv(Fmt*);
@@ -401,7 +512,7 @@ extern	Module*	builtinmod(char*, void*, int);
 extern	void		cblock(Prog*);
 extern	void*		checktype(void*, Type*, char*, int);
 extern	void		cmovw(void*, void*);
-extern	Channel*	cnewc(Type*, void (*)(void), int);
+extern	Channel*	cnewc(Type*, void (*)(OPARGS), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
 /*
@@ -490,9 +601,9 @@ extern	Array*		mem2array(void*, int);
 extern	void		mlink(Module*, Link*, uchar*, int, int, Type*);
 extern	void		modinit(void);
 extern	WORD		modstatus(REG*, char*, int);
-extern	void		movp(void);
-extern	void		movtmp(void);
-extern	void		movtmpsafe(void);
+extern	void		movp(OPARGS);
+extern	void		movtmp(OPARGS);
+extern	void		movtmpsafe(OPARGS);
 extern	int			mustbesigned(char*, uchar*, ulong, Dir*);
 extern	Module*		newmod(char*);
 extern	Module*		newdyncode(int, char*, Dir*);
@@ -514,7 +625,7 @@ extern	void		ptradd(Heap*);
 extern	void		ptrdel(Heap*);
 extern	void		pushrun(Prog*);
 extern	Module*		readmod(char*, Module*, int);
-extern	void		irecv(void);
+extern	void		irecv(OPARGS);
 extern	void		release(void);
 extern	void		releasex(void);
 extern	void		retnstr(char*, int, String**);
@@ -523,7 +634,7 @@ extern	void		rungc(Prog*);
 extern	void		runtime(Module*, Link*, char*, int, void(*)(void*), Type*);
 extern	void		safemem(void*, Type*, void (*)(void*));
 extern	int		segflush(void *, ulong);
-extern	void		isend(void);
+extern	void		isend(OPARGS);
 extern	void	setdbreg(uchar*);
 extern	uchar*	setdbloc(uchar*);
 extern	void		seterror(char*, ...);

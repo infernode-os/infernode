@@ -171,6 +171,12 @@ struct Conf
  */
 struct Mach
 {
+	/*
+	 * FIRST, at offset 0, and it must stay there: libinterp reads it as
+	 * [x28] and the JIT loads X20 from it (include/interp.h, R). The
+	 * registers of the Dis VM this core is running (#944).
+	 */
+	void*		vmreg;
 	int		machno;		/* physical id of this processor */
 	uintptr		splpc;		/* pc of the last caller to splhi */
 	Proc*		proc;		/* current process on this processor */

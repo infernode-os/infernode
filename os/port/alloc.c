@@ -88,7 +88,41 @@ struct
 };
 
 Pool*	mainmem = &table.pool[0];
-Pool*	heapmem = &table.pool[1];
+Pool*	heappool = &table.pool[1];	/* vm0's; heapmem is the running VM's (interp.h) */
+
+/* how much of a pool is in use, and its limit: /dev/vm/N/status */
+void
+poolusage(Pool *p, ulong *cur, ulong *max)
+{
+	*cur = p->cursize;
+	*max = p->maxsize;
+}
+
+/*
+ * A heap pool for another Dis VM (#944): its own arenas, so its
+ * collector walks only its own blocks, with the limits of vm0's.
+ * Called with the VM table locked (os/port/dis.c); nil when the table
+ * of pools is full.
+ */
+Pool*
+heappoolnew(char *name)
+{
+	Pool *p;
+
+	if(table.n >= MAXPOOL)
+		return nil;
+	p = &table.pool[table.n];
+	memset(p, 0, sizeof *p);
+	p->name = name;
+	p->pnum = table.n;
+	p->maxsize = heappool->maxsize;
+	p->quanta = heappool->quanta;
+	p->chunk = heappool->chunk;
+	p->ressize = heappool->ressize;
+	p->move = heappool->move;
+	table.n++;
+	return p;
+}
 Pool*	imagmem = &table.pool[2];
 
 static void _auditmemloc(char *, void *);
@@ -473,9 +507,10 @@ void
 poolfree(Pool *p, void *v)
 {
 	Bhdr *b, *c;
-	extern Bhdr *ptr;
+	Bhdr **gcp;
 
 	D2B(b, v);
+	gcp = (Bhdr**)&VM->gcptr;	/* the collector's place in its sweep (gc.c): moved off a block absorbed here */
 
 	ilock(&p->l);
 	p->nfree++;
@@ -483,8 +518,8 @@ poolfree(Pool *p, void *v)
 
 	c = B2NB(b);
 	if(c->magic == MAGIC_F) {	/* Join forward */
-		if(c == ptr)
-			ptr = b;
+		if(c == *gcp)
+			*gcp = b;
 		pooldel(p, c);
 		c->magic = 0;
 		b->size += c->size;
@@ -493,8 +528,8 @@ poolfree(Pool *p, void *v)
 
 	c = B2PT(b)->hdr;
 	if(c->magic == MAGIC_F) {	/* Join backward */
-		if(b == ptr)
-			ptr = c;
+		if(b == *gcp)
+			*gcp = c;
 		pooldel(p, c);
 		b->magic = 0;
 		c->size += b->size;
@@ -1257,6 +1292,7 @@ poolbysite(void)
 void
 poolinit(void)
 {
+	vm0.vheap = heappool;	/* vm0's heap is the heap pool, from the start (interp.h) */
 	debugkey('m', "memory pools", poolsummary, 0);
 	debugkey('l', "main pool by allocation site", poolbysite, 0);
 }

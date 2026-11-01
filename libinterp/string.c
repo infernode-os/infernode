@@ -4,7 +4,8 @@
 #include "raise.h"
 #include "pool.h"
 
-#define OP(fn)	void fn(void)
+#include "opreg.h"
+#define OP(fn)	void fn(OPARGS)
 #define B(r)	*((BYTE*)(R.r))
 #define W(r)	*((WORD*)(R.r))
 #define F(r)	*((REAL*)(R.r))

@@ -21,7 +21,14 @@
 
 	void	vmachine(void*);
 
-struct
+/*
+ * A VM's scheduler (#944): the interpreter token, which procs queue for
+ * in acquire(), its run queue and its Progs. isched is the one of the
+ * VM the current process belongs to -- not the core's, because acquire()
+ * is called by a process that does not hold any yet.
+ */
+typedef struct Isched Isched;
+struct Isched
 {
 	Lock	l;
 	Prog*	runhd;
@@ -36,7 +43,10 @@ struct
 	Proc*	vmqt;
 	Proc*	idlevmq;	/* queue of procs wanting work */
 	Atidle*	idletasks;
-} isched;
+};
+static	Isched	sched0;		/* vm0's */
+#define	VMSCHED(v)	((Isched*)(v)->vsched)
+#define	isched	(*VMSCHED(up->vm))
 
 int	bflag = 1;	/* JIT array bounds checks; emu -B clears it */
 int	cflag;
@@ -46,6 +56,12 @@ uvlong	gcidlepass;
 uvlong	gcpartial;
 int keepbroken = 1;
 static Prog*	proghash[64];
+/*
+ * pids are unique across every VM, and the pid hash is global: kill,
+ * /prog and wait look a Prog up by pid from anywhere. So they have a
+ * lock of their own; each VM's lists are under its interpreter (#944).
+ */
+static Lock	pidlk;
 
 /*
  * Every Prog pointer stored into the run queue must point at RAM, and
@@ -89,7 +105,55 @@ tready(void *a)
 Prog*
 progpid(int pid)
 {
-	return *pidlook(pid);
+	Prog *p;
+
+	lock(&pidlk);
+	p = *pidlook(pid);
+	unlock(&pidlk);
+	return p;
+}
+
+/*
+ * The VMs (#944). vm0 is the boot VM, the desktop's; the others are
+ * made when something is first run in them (/dev/vm, devvm.c). A VM
+ * is never destroyed.
+ */
+static Vm*	vms[MAXVM] = { &vm0 };
+static int	nvms = 1;
+static Lock	vmlk;
+
+int
+vmcount(void)
+{
+	return nvms;
+}
+
+Vm*
+vmn(int n)
+{
+	if(n < 0 || n >= MAXVM)
+		return nil;
+	return vms[n];
+}
+
+/*
+ * The n'th Prog of all of them, in VM order. Under pidlk, which every
+ * VM's list changes take, so the walk is safe from another VM's
+ * newprog and delprog; the Prog itself is only safe to touch under its
+ * own VM (devprog's pacquire).
+ */
+static Prog*
+prognlocked(int n)
+{
+	int i;
+	Prog *p;
+
+	for(i = 0; i < nvms; i++)
+		if(vms[i] != nil)
+			for(p = VMSCHED(vms[i])->head; p != nil; p = p->next)
+				if(n-- == 0)
+					return p;
+	return nil;
 }
 
 Prog*
@@ -97,20 +161,104 @@ progn(int n)
 {
 	Prog *p;
 
-	for(p = isched.head; p && n--; p = p->next)
-		;
+	lock(&pidlk);
+	p = prognlocked(n);
+	unlock(&pidlk);
 	return p;
 }
 
+/* the pid of the n'th Prog, or -1: what can be kept after the lock */
 int
-nprog(void)
+progpidn(int n)
+{
+	Prog *p;
+	int pid;
+
+	lock(&pidlk);
+	p = prognlocked(n);
+	pid = p != nil ? p->pid : -1;
+	unlock(&pidlk);
+	return pid;
+}
+
+/* the VM a pid's Prog runs in, or nil if there is no such Prog */
+Vm*
+pidvm(int pid)
+{
+	Prog *p;
+	Vm *v;
+
+	lock(&pidlk);
+	p = *pidlook(pid);
+	v = p != nil ? p->vm : nil;
+	unlock(&pidlk);
+	return v;
+}
+
+/*
+ * Forget a wait queue that is being freed: no Prog in any VM may
+ * still point at it as its waitq or childq. Each VM's Progs are walked
+ * in one go under that VM's interpreter, never one Prog at a time: a
+ * Prog that runs between two steps of such a walk can spawn a child
+ * that inherits the queue, behind the walk, and the child's exit then
+ * writes into a freed Queue -- found as a corrupt main pool by the
+ * bcm2837 scheduler soak (#944). A child is always in its parent's VM,
+ * so each walk is complete.
+ */
+void
+vmclearwaitq(void *q)
+{
+	int i;
+	Vm *home, *v;
+	Prog *p;
+	Osenv *o;
+
+	home = up->vm;
+	for(i = 0; i < MAXVM; i++){
+		if((v = vms[i]) == nil)
+			continue;
+		up->vm = v;
+		acquire();
+		for(p = VMSCHED(v)->head; p != nil; p = p->next){
+			o = p->osenv;
+			if(o->waitq == q)
+				o->waitq = nil;
+			if(o->childq == q)
+				o->childq = nil;
+		}
+		release();
+	}
+	up->vm = home;
+}
+
+/* how many Progs one VM has */
+int
+vmprogs(Vm *v)
 {
 	int n;
 	Prog *p;
 
 	n = 0;
-	for(p = isched.head; p; p = p->next)
+	lock(&pidlk);
+	for(p = VMSCHED(v)->head; p != nil; p = p->next)
 		n++;
+	unlock(&pidlk);
+	return n;
+}
+
+int
+nprog(void)
+{
+	int i, n;
+	Prog *p;
+
+	n = 0;
+	lock(&pidlk);
+	for(i = 0; i < nvms; i++)
+		if(vms[i] != nil)
+			for(p = VMSCHED(vms[i])->head; p != nil; p = p->next)
+				n++;
+	unlock(&pidlk);
 	return n;
 }
 
@@ -119,9 +267,16 @@ accountant(void)
 {
 	Prog *p;
 
-	p = isched.runhd;
-	if(p != nil)
-		p->ticks++;
+	int i;
+
+	/* on the clock, in whatever process it interrupted: every VM's */
+	for(i = 0; i < nvms; i++){
+		if(vms[i] == nil)
+			continue;
+		p = VMSCHED(vms[i])->runhd;
+		if(p != nil)
+			p->ticks++;
+	}
 }
 
 /*
@@ -253,11 +408,14 @@ newprog(Prog *p, Modlink *m)
 			error(exNomem);
 	}
 
+	n->vm = up->vm;
+	n->curvm = up->vm;
+	n->group = nil;
+
+	lock(&pidlk);
 	n->pid = ++pidnum;
 	if(n->pid <= 0)
 		panic("no pids");
-	n->group = nil;
-
 	if(isched.tail != nil) {
 		n->prev = isched.tail;
 		isched.tail->next = n;
@@ -267,12 +425,12 @@ newprog(Prog *p, Modlink *m)
 		n->prev = nil;
 	}
 	isched.tail = n;
-
 	ph = pidlook(n->pid);
 	if(*ph != nil)
 		panic("dup pid");
 	n->pidlink = nil;
 	*ph = n;
+	unlock(&pidlk);
 
 	n->osenv = (Osenv*)((uchar*)n + sizeof(Prog));
 	n->xec = xec;
@@ -283,8 +441,8 @@ newprog(Prog *p, Modlink *m)
 	h = D2H(m);
 	h->ref++;
 	Setmark(h);
-	n->R.M = m;
-	n->R.MP = m->MP;
+	n->reg.M = m;
+	n->reg.MP = m->MP;
 	if(m->MP != H)
 		Setmark(D2H(m->MP));
 	addrun(n);
@@ -352,6 +510,7 @@ delprog(Prog *p, char *msg)
 
 	delgrp(p);
 
+	lock(&pidlk);
 	if(p->prev)
 		p->prev->next = p->next;
 	else
@@ -366,6 +525,7 @@ delprog(Prog *p, char *msg)
 	if(*ph == nil)
 		panic("lost pid");
 	*ph = p->pidlink;
+	unlock(&pidlk);
 
 	if(p == isched.runhd) {
 		isched.runhd = p->link;
@@ -441,7 +601,7 @@ exprog(Prog *p, char *exc)
 {
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -515,6 +675,24 @@ killprog(Prog *p, char *cause)
 	Osenv *env;
 	char msg[ERRMAX+2*KNAMELEN];
 
+	/*
+	 * A Prog inside a file another VM serves (devsrv) is on that VM's
+	 * run queue, under that VM's interpreter, not the one held here
+	 * (devprog takes the Prog's own). Its state, its run-queue link and
+	 * its stack are that VM's to change: unlinking it from this VM's
+	 * queue and freeing its stack while the other ran it corrupted both
+	 * VMs' heaps (vmstress, killing its clients at the end, on virt).
+	 * So only mark it, as a kill in a system call is marked, and wake it
+	 * if it sleeps: it raises the kill under its own VM when it next
+	 * runs there (xec), and cdone will not let it sleep meanwhile.
+	 */
+	if(p->curvm != nil && p->curvm != up->vm) {
+		p->kill = "";
+		p->flags |= Pkilled;
+		swiprog(p);
+		return 0;
+	}
+
 	if(p == isched.runhd) {
 		p->kill = "";
 		p->flags |= Pkilled;
@@ -524,7 +702,7 @@ killprog(Prog *p, char *cause)
 
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -567,11 +745,11 @@ killprog(Prog *p, char *cause)
 
 	propex(p, "killed");
 
-	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
+	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
 	p->state = Pexiting;
 	gclock();
-	destroystack(&p->R);
+	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
 
@@ -899,10 +1077,10 @@ addrun(Prog *p)
 	 * nil->compiled quietly returned junk; with no memory there (RISC-V,
 	 * no paging) it is a load access fault in the boot's first addrun.
 	 */
-	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && ((uintptr)p->R.PC & 3))
+	if(p->reg.M != nil && p->reg.M != H && p->reg.M->compiled && ((uintptr)p->reg.PC & 3))
 		print("BUG: addrun: prog %d %s R.PC=%p (prog %p) from %#p\n",
-			p->pid, p->R.M->m? p->R.M->m->name : "?", p->R.PC,
-			p->R.M->m? (void*)p->R.M->m->prog : nil, getcallerpc(&p));
+			p->pid, p->reg.M->m? p->reg.M->m->name : "?", p->reg.PC,
+			p->reg.M->m? (void*)p->reg.M->m->prog : nil, getcallerpc(&p));
 	chkprog(p, "addrun");
 	chkprog(isched.runtl, "addrun.tl");
 	if(isched.runhd == nil)
@@ -991,14 +1169,153 @@ schedmod(Module *m)
 	p = newprog(nil, ml);
 	h = D2H(ml);
 	h->ref--;
-	p->R.PC = m->entry;
+	p->reg.PC = m->entry;
 	fp = &f;
 	R.s = &fp;
 	f.t = m->entryt;
 	newstack(p);
-	initmem(m->entryt, p->R.FP);
+	initmem(m->entryt, p->reg.FP);
 
 	return p;
+}
+
+/*
+ * VM n, made if it is not there yet (#944): a scheduler whose
+ * interpreter is free, a heap pool of its own, a collector at the
+ * start of its first epoch. Its builtin modules are registered by the
+ * first vmrun, under its interpreter. nil if n is out of range or the
+ * pools are all taken.
+ */
+Vm*
+vmget(int n)
+{
+	static char names[MAXVM][8];
+	Vm *v;
+	Isched *s;
+
+	if(n < 0 || n >= MAXVM)
+		return nil;
+	lock(&vmlk);
+	v = vms[n];
+	if(v == nil){
+		v = mallocz(sizeof(Vm), 1);
+		s = mallocz(sizeof(Isched), 1);
+		snprint(names[n], sizeof names[n], "heap%d", n);
+		if(v == nil || s == nil || (v->vheap = heappoolnew(names[n])) == nil){
+			unlock(&vmlk);
+			free(v);
+			free(s);
+			return nil;
+		}
+		v->id = n;
+		v->vgccolor = 3;	/* as vm0's (xec.c) */
+		v->marker = 1;
+		v->sweeper = 2;
+		v->quanta = 50;
+		v->gct = 1;
+		s->idle = 1;		/* the interpreter is free: the first acquire takes it */
+		v->vsched = s;
+		vms[n] = v;
+		if(n >= nvms)
+			nvms = n+1;
+	}
+	unlock(&vmlk);
+	return v;
+}
+
+/*
+ * Run a module in VM n: init(nil, argv), with the caller's namespace,
+ * environment and file descriptors as a spawn would share them, and
+ * its own heap there. Returns the new pid. The caller is in a system
+ * call, holding no interpreter; it takes VM n's for the length of the
+ * load, as a crossing does (#944), and the release that ends it starts
+ * the VM's first interpreter process if it has none.
+ *
+ * init's parameters are where the Limbo compiler puts a function's
+ * first two: MaxTemp, (NREG+3) words into the frame (limbo/limbo.h).
+ * The frame type is checked to say both are pointers, so a module
+ * whose init is not init(ctxt, argv) is refused, not mis-called.
+ */
+int
+vmrun(int n, int argc, char **argv)
+{
+	Vm *v, *home;
+	Module *root;
+	Prog *p;
+	Osenv *o;
+	Type *t;
+	List *l;
+	String *s;
+	uchar *fp;
+	int i, pid, w;
+
+	if(argc < 1)
+		error(Ebadarg);
+	v = vmget(n);
+	if(v == nil)
+		error("no such VM");
+	home = up->vm;
+	up->vm = v;
+	acquire();
+	if(waserror()){
+		release();
+		up->vm = home;
+		nexterror();
+	}
+	if(!v->ready){
+		vmbuiltins();
+		v->ready = 1;
+	}
+	/*
+	 * As OP(load) does it, not as load() does: the interpreter is let
+	 * go while the file is read, because the file may be served by a
+	 * Dis program -- /dis on the card is dossrv's, in vm0 -- which must
+	 * run to answer. Held, that is a deadlock.
+	 */
+	root = readmod(argv[0], lookmod(argv[0]), 1);
+	if(root == nil){
+		kgerrstr(up->genbuf, sizeof up->genbuf);
+		error(up->genbuf);
+	}
+	t = root->entryt;
+	w = NREG+3;
+	if(t == nil || t->np <= (w+1)/8 || (t->map[w/8] & (0x80>>(w%8))) == 0 || (t->map[(w+1)/8] & (0x80>>((w+1)%8))) == 0)
+		error("not a command: init is not init(ctxt, argv)");
+	p = schedmod(root);
+
+	l = (List*)H;
+	for(i = argc-1; i >= 0; i--){
+		s = c2string(argv[i], strlen(argv[i]));
+		l = cons(IBY2WD, &l);
+		l->t = &Tptr;
+		Tptr.ref++;
+		*(String**)l->data = s;
+	}
+	fp = p->reg.FP;
+	*(WORD**)(fp + w*IBY2WD) = H;		/* ctxt: nil */
+	*(List**)(fp + (w+1)*IBY2WD) = l;	/* argv */
+
+	memmove(p->osenv, up->env, sizeof(Osenv));
+	o = p->osenv;
+	incref(&o->pgrp->r);
+	incref(&o->fgrp->r);
+	if(o->egrp != nil)
+		incref(&o->egrp->r);
+	if(o->sigs != nil)
+		incref(&o->sigs->r);
+	o->user = nil;
+	kstrdup(&o->user, up->env->user);
+	o->errstr = o->errbuf0;
+	o->syserrstr = o->errbuf1;
+	o->waitq = nil;
+	o->childq = nil;
+	o->debug = nil;
+	pid = p->pid;
+
+	poperror();
+	release();
+	up->vm = home;
+	return pid;
 }
 
 /*
@@ -1013,6 +1330,16 @@ acquire(void)
 {
 	int empty;
 	Prog *p;
+
+	/*
+	 * Say which VM this process's Prog is about to be under, before
+	 * it is: devsrv and devprog take another VM's interpreter for a
+	 * Prog that is not that VM's, and a kill from the Prog's own VM
+	 * must then leave it alone (killprog).
+	 */
+	p = up->type == Interp ? up->iprog : up->prog;
+	if(p != nil)
+		p->curvm = up->vm;
 
 	lock(&isched.l);
 	if(isched.idle) {
@@ -1038,6 +1365,14 @@ acquire(void)
 		sched();
 	}
 
+#ifdef VMREGPERMACH
+	/*
+	 * This core now runs this process's VM: R must be its registers
+	 * before irestore loads them (interp.h). sched() does the same on a
+	 * switch; this is the path that takes a free interpreter without one.
+	 */
+	m->vmreg = up->vm;
+#endif
 	if(up->type == Interp) {
 		p = up->iprog;
 		up->iprog = nil;
@@ -1334,7 +1669,7 @@ vmachine(void*)
 			 * read these two fields first.
 			 */
 			pid = r->pid;
-			modname = r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?";
+			modname = r->reg.M != nil && r->reg.M->m != nil ? r->reg.M->m->name : "?";
 
 			FPrestore(&o->fpu);
 			r->xec(r);
@@ -1351,11 +1686,11 @@ vmachine(void*)
 			{
 				Prog *q;
 				for(q = isched.runhd; q != nil; q = q->link)
-					if(q != r && q->R.M != nil && q->R.M != H && q->R.M->compiled && ((uintptr)q->R.PC & 3) && !(q->flags & Pbadpc)){
+					if(q != r && q->reg.M != nil && q->reg.M != H && q->reg.M->compiled && ((uintptr)q->reg.PC & 3) && !(q->flags & Pbadpc)){
 						q->flags |= Pbadpc;
 						print("BUG: prog %d %s R.PC=%p (prog %p) went bad during the quantum of prog %d %s at pc %p (prog %p, state %d)\n",
-							q->pid, q->R.M->m? q->R.M->m->name : "?", q->R.PC, q->R.M->m? (void*)q->R.M->m->prog : nil,
-							pid, modname, r->R.PC, r->R.M != H && r->R.M->m? (void*)r->R.M->m->prog : nil, r->state);
+							q->pid, q->reg.M->m? q->reg.M->m->name : "?", q->reg.PC, q->reg.M->m? (void*)q->reg.M->m->prog : nil,
+							pid, modname, r->reg.PC, r->reg.M != H && r->reg.M->m? (void*)r->reg.M->m->prog : nil, r->state);
 					}
 			}
 
@@ -1477,6 +1812,9 @@ disinit(void *a)
 	if(waserror())
 		panic("disinit error: %r");
 
+	vm0.vsched = &sched0;
+	up->vm = &vm0;
+
 	print("Initial Dis: \"%s\"\n", initmod);
 
 	fmtinstall('D', Dconv);
@@ -1488,6 +1826,7 @@ disinit(void *a)
 
 	opinit();
 	modinit();
+	typesperm = 0;		/* builtin types are shared and permanent; a module's are its VM's (interp.h) */
 	excinit();
 
 	root = load(initmod);

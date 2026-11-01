@@ -1,4 +1,4 @@
-void	(*optab[256])(void) =
+void	(*optab[256])(OPARGS) =
 {
 	badop,
 	alt,

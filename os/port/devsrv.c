@@ -63,6 +63,7 @@ struct SrvFile
 	Channel*	write;
 	SrvFile*	dir;		/* parent directory */
 	Pending	waitlist;	/* pending requests from client opens */
+	Vm*	vm;		/* the VM of the program serving it, whose channels these are (#944) */
 };
 
 enum
@@ -357,16 +358,44 @@ srvputdir(SrvFile *dir)
 	free(dir);
 }
 
+/*
+ * A served file's channels belong to the VM of the program that made it
+ * (#944). A client in another VM -- or the kernel closing the file for
+ * one -- must do its channel work under THAT VM's interpreter, and
+ * allocate the request and reply there: the server's VM is the one that
+ * will read them. So the process takes the server's VM for the length
+ * of the request, and gives back its own at the end, on every path.
+ */
+static Vm*
+srvacquire(SrvFile *sf)
+{
+	Vm *home;
+
+	home = up->vm;
+	if(sf->vm != nil)
+		up->vm = sf->vm;
+	acquire();
+	return home;
+}
+
+static void
+srvrelease(Vm *home)
+{
+	release();
+	up->vm = home;
+}
+
 static void
 srvunblock(SrvFile *sf, int fid)
 {
+	Vm *home;
 	Channel *d;
 	Sys_FileIO_read rreq;
 	Sys_FileIO_write wreq;
 
-	acquire();
+	home = srvacquire(sf);
 	if(waserror()){
-		release();
+		srvrelease(home);
 		nexterror();
 	}
 	d = sf->read;
@@ -387,17 +416,18 @@ srvunblock(SrvFile *sf, int fid)
 		csendalt(d, &wreq, d->mid.t, -1);
 	}
 	poperror();
-	release();
+	srvrelease(home);
 }
 
 static void
 srvcancelreqs(SrvFile *sf)
 {
+	Vm *home;
 	Pending *w, *ws;
 	Sys_Rread rreply;
 	Sys_Rwrite wreply;
 
-	acquire();
+	home = srvacquire(sf);
 	ws = &sf->waitlist;
 	while((w = ws->next) != ws){
 		delwaiting(w);
@@ -415,7 +445,7 @@ srvcancelreqs(SrvFile *sf)
 			poperror();
 		}
 	}
-	release();
+	srvrelease(home);
 }
 
 static void
@@ -570,6 +600,7 @@ delwaiting(Pending *w)
 static long
 srvread(Chan *c, void *va, long count, vlong offset)
 {
+	Vm *home;
 	int l;
 	Heap * volatile h;
 	Array *a;
@@ -594,9 +625,9 @@ srvread(Chan *c, void *va, long count, vlong offset)
 
 	sp = c->aux;
 
-	acquire();
+	home = srvacquire(sp);
 	if(waserror()){
-		release();
+		srvrelease(home);
 		nexterror();
 	}
 
@@ -660,7 +691,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 	destroy(rc);
 
 	poperror();
-	release();
+	srvrelease(home);
 
 	return l;
 }
@@ -668,6 +699,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 static long
 srvwrite(Chan *c, void *va, long count, vlong offset)
 {
+	Vm *home;
 	long l;
 	Heap * volatile h;
 	SrvFile *sp;
@@ -680,13 +712,13 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	if(c->qid.type & QTDIR)
 		error(Eperm);
 
-	acquire();
+	sp = c->aux;
+	home = srvacquire(sp);
 	if(waserror()){
-		release();
+		srvrelease(home);
 		nexterror();
 	}
 
-	sp = c->aux;
 	wr = sp->write;
 	if(wr == H)
 		error(Ehungup);
@@ -752,7 +784,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	destroy(wc);
 
 	poperror();
-	release();
+	srvrelease(home);
 	if(l < 0)
 		l = 0;
 	return l;
@@ -824,6 +856,7 @@ srvf2c(char *dir, char *file, Sys_FileIO *io)
 	s->entry = f;
 	s->ref++;
 	f->dir = s;
+	f->vm = up->vm;	/* its channels are this VM's: srvacquire */
 	poperror();
 	qunlock(&dev.l);
 

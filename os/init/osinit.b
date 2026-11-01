@@ -2355,7 +2355,8 @@ tmpsetup()
 #
 # A press of the power button, where a board has one, is a clean halt:
 # #P says whether it is down, and what it means is decided here. kfs and
-# dossrv write through, so there is nothing to tell them.
+# dossrv write through, and kfs marks itself clean when idle, so there is
+# nothing to tell them.
 #
 buttonwatch()
 {

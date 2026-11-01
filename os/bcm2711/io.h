@@ -95,6 +95,12 @@ enum
  * as if the board had a Pi 3's pin mux; emmc2.c names the Arasan as the
  * second place to look.
  */
+/*
+ * The RNG200 (../bcm/rng200.c), where the BCM2835's generator was.
+ * Proved on the board (README.md).
+ */
+#define	RNG200REGS	(PHYSIO+0x104000)
+
 enum
 {
 	EMMC2REGS	= PHYSIO+0x340000,

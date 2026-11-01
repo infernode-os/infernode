@@ -63,13 +63,15 @@ enum
 
 #define RNG(r)	(*(volatile u32int*)((uintptr)RNGREGS + (r)))
 
+static Lock rnglock;
 static int rngready;
 
 /*
  * Start the generator and let it warm up.
  *
- * Called once, lazily, so a kernel that never asks for randomness
- * never powers it on.
+ * Called once, lazily, under rnglock, so a kernel that never asks for
+ * randomness never powers it on, and two cores asking at once do not
+ * both start it.
  */
 static void
 rnginit(void)
@@ -86,29 +88,50 @@ rnginit(void)
 }
 
 /*
+ * One word, if the generator has one: 1 and *wp, else 0.
+ *
+ * The test and the read are one step under rnglock. This is a
+ * four-core machine with preemption, and the generator is read from
+ * the pool's producer and from whichever process wants a key: two of
+ * them could both see one word waiting and both read it, and what a
+ * read of an empty FIFO returns is not documented. That is two keys
+ * sharing a word, or a key holding a stale one.
+ */
+static int
+rngword(u32int *wp)
+{
+	int ok;
+
+	ilock(&rnglock);
+	rnginit();
+	ok = (RNG(Rngstatus) >> Rngavailshift) != 0;
+	if(ok)
+		*wp = RNG(Rngdata);
+	iunlock(&rnglock);
+	return ok;
+}
+
+/*
  * Fill a buffer with hardware random bytes. Returns how many it
  * managed, which may be short -- the caller must cope rather than
- * assume.
+ * assume. This SoC always has the generator, so it never says -1.
  *
  * Bounded: a generator that never reports words available would
  * otherwise hang the kernel here, which is the exact failure this file
  * exists to remove. Returning short is recoverable; spinning is not.
+ * The lock is taken for each look, not across the wait, so a dry
+ * generator holds no other core up.
  */
 int
 hwrandom(uchar *p, int n)
 {
-	int i, got;
+	int i, got, spins;
 	u32int w;
-	static int spins;
-
-	rnginit();
 
 	for(got = 0; got < n; ){
-		for(spins = 0; (RNG(Rngstatus) >> Rngavailshift) == 0; spins++)
+		for(spins = 0; !rngword(&w); spins++)
 			if(spins > 100000)
 				return got;
-
-		w = RNG(Rngdata);
 		for(i = 0; i < 4 && got < n; i++){
 			p[got++] = w & 0xFF;
 			w >>= 8;
@@ -118,67 +141,9 @@ hwrandom(uchar *p, int n)
 }
 
 /*
- * genrandom -- n bytes from the hardware generator, ALL of them from
- * the hardware generator, however long that takes.
- *
- * This began as "the fast, explicitly non-cryptographic source behind
- * #c/notquiterandom", and for that a short read padded with zeros was
- * a fair answer: repetitive at worst, and not a disclosure of whatever
- * the buffer held. But it did not stay that. prng() and prngtry() below
- * are libsec's SECURE entropy entry points and delegate here, and
- * libsec's key generators -- RSA, DSA, ElGamal, ECC, Ed25519, ML-KEM,
- * ML-DSA, SLH-DSA -- call genrandom by name. So the padding became: a
- * private key whose tail is zeros, made without a word to anyone,
- * whenever hwrandom() came back short.
- *
- * And it can come back short. hwrandom() gives up after a bounded spin,
- * deliberately (see above: the entropy producer must not spin), and the
- * generator discards Rngwarmup words after it is enabled before it
- * offers one. A caller inside that window gets fewer bytes than it
- * asked for. QEMU's model always has a word ready, so no run of the
- * harness has ever taken this path; it was found by reading, while
- * writing the same function for a second board (os/virt), and only a
- * board can show how wide the window really is.
- *
- * So: wait. A key is worth waiting for and a machine with a dead
- * generator should not be minting keys, so this fails closed -- it does
- * not return until the bytes are real, and it says so on the console
- * every few seconds while it waits, because a boot that hangs silently
- * here would be read as anything but this.
+ * genrandom, prng and prngtry -- what libsec's key generators call --
+ * are os/port/random.c's: all n bytes from hwrandom, however long that
+ * takes, never padded. Why it must never pad is told there; it was
+ * found here (#658), where hwrandom comes back short while the
+ * generator warms up.
  */
-void
-genrandom(uchar *p, int n)
-{
-	int got, r, waited;
-
-	waited = 0;
-	for(got = 0; got < n; got += r){
-		r = hwrandom(p + got, n - got);
-		if(r > 0)
-			continue;
-		r = 0;
-		microdelay(1000);
-		if(++waited % 5000 == 0)
-			print("random: the hardware generator has produced nothing for %d seconds; still waiting for %d bytes\n",
-				waited/1000, n - got);
-	}
-}
-
-/*
- * libsec's entropy entry points, which its host build (prng.c) fills
- * from getentropy/urandom. On bare metal the hardware generator is the
- * secure source, so both delegate here -- and prngtry never fails,
- * because genrandom does not return until it has real bytes.
- */
-void
-prng(uchar *p, int n)
-{
-	genrandom(p, n);
-}
-
-int
-prngtry(uchar *p, int n)
-{
-	genrandom(p, n);
-	return 0;
-}

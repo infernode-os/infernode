@@ -78,7 +78,7 @@ Every one of those choices has a way to go wrong that says nothing:
 | `-cpu cortex-a53` | `-M virt` defaults to cortex-a15, a **32-bit** CPU, even under `qemu-system-aarch64`. An AArch64 kernel on it prints nothing at all. A53 is also the board's core, so the JIT emits for the same part. |
 | `-kernel …img`, not `.elf` | QEMU passes the device tree in `x0` only to a flat image (the Linux boot protocol). Given the ELF it loads and runs it with no tree; the kernel says so. |
 | `virtio-*-device` | The MMIO transport, which `virtio.c` drives. `virtio-net-pci`, and whatever `-drive if=virtio` makes, are PCI devices on a bus this kernel does not walk. |
-| `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and every key it makes is predictable. |
+| `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and makes no key: anything that wants one waits, and the console says why. `-append insecurerandom` hands out a labelled, predictable counter instead. |
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
 | `-m` up to 8192 | `mmu.c` maps eight gigabytes; `-m 6144` boots with 6141 MB of free pages and a 1.6 GB Dis heap, which is the tree's only run with physical addresses above 4 GB (a Pi 4's are capped below it by `RAMLIMIT`). Not in the harness: CI's runners have 7 GB. |
 | `-device qemu-xhci` (or `nec-usb-xhci`) | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
@@ -101,7 +101,7 @@ both kinds work and the boot log says which each device is.
 | `uart.c`, `uartpl011.c` | the PL011: polled console, and `#t`'s `eia0` with receive interrupts |
 | `board.c` | the hooks in `../arm64/fns.h`; PSCI (SMP, reset, power off); the PL031 RTC |
 | `virtio.c`, `virtio.h` | the MMIO transport (legacy and modern) and virtqueues |
-| `random.c` | `hwrandom` from virtio-rng, polled; RNDR if the CPU has it |
+| `random.c` | `hwrandom` from virtio-rng, polled; RNDR if the CPU has it; -1 with neither |
 | `blkvirtio.c` | the blocks under `#S` (`../port/devsd.c`) |
 | `ethervirtio.c` | `/net/ether0`, as `devether`'s instance 0 |
 | `../virtio/ramfb.c` | a linear framebuffer, configured through fw_cfg, under `../fb/screen.c` and `fbcons.c` |

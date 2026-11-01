@@ -19,14 +19,15 @@ main(void)
 
 	print("#include \"lib9.h\"\n");
 	print("#include \"isa.h\"\n");
-	print("#include \"interp.h\"\n\n");
+	print("#include \"interp.h\"\n");
+	print("#include \"opreg.h\"\n\n");
 
 	print("#define DIND(reg, xxx) (uchar*)((*(ulong*)(R.reg+R.PC->xxx.i.f))+R.PC->xxx.i.s)\n");
 
 	for(i = 0; i < 256; i++)
 		decgen(i);
 
-	print("\nvoid	(*dec[])(void) =\n{\n");
+	print("\nvoid	(*dec[])(OPARGS) =\n{\n");
 	for(i = 0; i < 256; i++)
 		print("\tD%.2uX%c\n", i, i != 255 ? ',' : ' ');
 	print("};\n");
@@ -37,7 +38,7 @@ decgen(int addr)
 {
 	int nodst;
 
-	print("static void\nD%.2uX(void)\n{\n", addr);
+	print("static void\nD%.2uX(OPARGS)\n{\n", addr);
 
 	switch(USRC(addr)) {
 	case AMP:

@@ -26,6 +26,9 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
+include "x402.m";
+	x402: X402;
+
 WalletPolicyTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
@@ -294,6 +297,107 @@ testApprovalFlow(t: ref T)
 }
 
 #
+# A requester told "pending:<id>" that reads again at offset 0 waits
+# for the outcome rather than re-reading on a timer; a read at another
+# offset does not wait.
+#
+testWaitForOutcome(t: ref T)
+{
+	fd := sys->open(W + "/policy/authorize", Sys->ORDWR);
+	if(fd == nil) {
+		t.fatal("cannot open authorize");
+		return;
+	}
+	req := array of byte authreq("eip155:11155111", "300");
+	if(sys->write(fd, req, len req) <= 0) {
+		t.fatal("authorize write refused");
+		return;
+	}
+	buf := array[4096] of byte;
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	n := sys->read(fd, buf, len buf);
+	res := "";
+	if(n > 0)
+		res = strip(string buf[0:n]);
+	t.assert(hasprefix(res, "pending:"), "the first read gives the pending id at once");
+	if(!hasprefix(res, "pending:"))
+		return;
+	id := res[8:];
+
+	# past the text: end of file, at once
+	sys->seek(fd, big n, Sys->SEEKSTART);
+	t.asserteq(sys->read(fd, buf, len buf), 0, "a read past the text does not wait");
+
+	# again at offset 0: waits until the controller decides
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	c := chan[1] of string;	# its answer kept while the deny is written
+	spawn evreader(fd, c);
+	early := "";
+	alt {
+	early = <-c =>
+		;
+	* =>
+		sys->sleep(300);
+		alt {
+		early = <-c =>
+			;
+		* =>
+			;
+		}
+	}
+	t.assertseq(early, "", "the read at offset 0 waits while the payment is pending");
+	t.assert(wr(W + "/ctl", "deny " + id) > 0, "deny accepted");
+	spawn evtimeout(c);
+	t.assertseq(<-c, "denied", "the waiting read is answered with the outcome");
+}
+
+#
+# x402's authorize, as payfetch calls it: it waits on its read for the
+# controller's decision, and gives up with the pending id at its limit.
+#
+testX402Waits(t: ref T)
+{
+	x402 = load X402 X402->PATH;
+	if(x402 == nil || x402->init() != nil) {
+		t.skip("cannot load x402");
+		return;
+	}
+	req := ref X402->PaymentReq("exact", "eip155:11155111", "400", ASSET, PAYTO,
+		60, "USDC", "2", "eip3009");
+
+	# nobody decides: given up after its 1s with the id
+	t0 := sys->millisec();
+	(payload, err) := x402->authorize(req, nil, "policy", 1);
+	dt := sys->millisec() - t0;
+	t.assertseq(payload, "", "no authorization while pending");
+	t.assert(hasprefix(err, "pending:"), "still pending at the limit: " + err);
+	t.assert(dt >= 900 && dt < 4000, sys->sprint("it waited its limit (%dms)", dt));
+
+	# denied while it waits: told at once, not at the next poll
+	spawn denynext();
+	t0 = sys->millisec();
+	(nil, err) = x402->authorize(req, nil, "policy", 30);
+	dt = sys->millisec() - t0;
+	t.assertseq(err, "payment denied by wallet controller", "the denial reaches the waiting authorize");
+	t.assert(dt < 2000, sys->sprint("as soon as it is made (%dms)", dt));
+}
+
+# deny the newest pending payment (the highest id) once it is listed
+denynext()
+{
+	sys->sleep(300);
+	(nil, lines) := sys->tokenize(rd(W + "/pending"), "\n");
+	id := -1;
+	for(; lines != nil; lines = tl lines) {
+		(nil, f) := sys->tokenize(hd lines, " ");
+		if(f != nil && hd f != "(none)" && int hd f > id)
+			id = int hd f;
+	}
+	if(id >= 0)
+		wr(W + "/ctl", "deny " + string id);
+}
+
+#
 # event: each reader told "pending" when the list awaiting approval
 # changes (a payment queued, one approved or denied); nothing polls.
 #
@@ -447,6 +551,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Authorize/ApprovalFlow", testApprovalFlow);
 	run("Authorize/Denial", testDenial);
 	run("Approval/Event", testPendingEvent);
+	run("Authorize/WaitForOutcome", testWaitForOutcome);
+	run("Authorize/X402Waits", testX402Waits);
 	run("Sign/OracleRemoved", testNoSignOracle);
 
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -566,8 +566,7 @@ mlook(Module *m, int limbo, int vm, int scale, int origin)
 	return nil;
 }
 
-extern	Module*	modules;
-extern	Proc*	vmowner;
+extern	Proc*	vmowner;	/* modules, the module list, is interp.h's: a VM's own (#944) */
 
 /* the compiled module whose code holds pc */
 static Module*
@@ -637,7 +636,7 @@ cpxec(Prog *p)
 	Record *r;
 	Prog *n;
 
-	R = p->R;
+	R = p->reg;
 	R.MP = R.M->MP;
 	R.IC = p->quanta;
 
@@ -675,7 +674,7 @@ cpxec(Prog *p)
 		}while(--R.IC != 0);
 	}
 
-	p->R = R;
+	p->reg = R;
 }
 
 /* memory profiling */

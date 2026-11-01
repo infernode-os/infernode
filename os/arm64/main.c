@@ -1989,21 +1989,18 @@ idlehands(void)
 	 * "setpower ON" with two cores idling politely around the
 	 * corpse.
 	 *
-	 * Core 0 waits for interrupts (it owns the devices); the others
-	 * wait for events, because their wakeups are ready()'s sev.
-	 * Both do it with DAIF clear and restore the caller's splhi
-	 * afterwards.
+	 * Every core waits for events, core 0 too, because a wakeup is
+	 * ready()'s sev, and an interrupt ends a wfe as well. Core 0 used to
+	 * wfi, and sev does not end that: a process that had to run there
+	 * (a preempted one stays on its core) waited for the next clock
+	 * tick, each time. On a Pi 5 that was gigabit input at 300 Mbit/s
+	 * with nothing lost, until something happened to take a lock in the
+	 * receive path and hide it. Both restore the caller's splhi.
 	 */
-	if(m->machno == 0)
-		__asm__ volatile(
-			"msr daifclr, #2\n\t"
-			"wfi\n\t"
-			"msr daifset, #2" ::: "memory");
-	else
-		__asm__ volatile(
-			"msr daifclr, #2\n\t"
-			"wfe\n\t"
-			"msr daifset, #2" ::: "memory");
+	__asm__ volatile(
+		"msr daifclr, #2\n\t"
+		"wfe\n\t"
+		"msr daifset, #2" ::: "memory");
 }
 
 /*
@@ -2066,6 +2063,10 @@ struct Smpboot {
 	uvlong	mach;
 	uvlong	entry;		/* nonzero releases the core */
 };
+#ifndef COREAFF
+#define COREAFF	0	/* which MPIDR field numbers the cores: the board's build says */
+#endif
+
 Smpboot smpboot[MAXMACH];
 
 
@@ -2101,7 +2102,7 @@ squidboy(void)
 	mmuenable();
 
 	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
-	m->machno = mpidr & 3;
+	m->machno = (mpidr >> COREAFF) & 3;
 	m->vmreg = &vm0;		/* the one VM, until there are more (#944) */
 	m->ticks = 1;		/* nonzero: some code divides by ticks */
 	m->proc = nil;
@@ -2590,9 +2591,37 @@ kmain(void)
 		ulong mem;
 
 		mem = (ulong)conf.npage * BY2PG;
+#ifdef POOLBYNEED
+		{
+			ulong mainmax, imagmax;
+
+			/*
+			 * From what they were seen to use, a desktop and every
+			 * device busy: about 10MB each. An eighth of memory,
+			 * but no less than a small board needs and no more than
+			 * is of use: a 4K screen is 33MB. Everything else is
+			 * for programs, and the two are held back from them.
+			 */
+			mainmax = mem/8;
+			if(mainmax < 64*1024*1024)
+				mainmax = 64*1024*1024;
+			if(mainmax > 512*1024*1024)
+				mainmax = 512*1024*1024;
+			imagmax = mem/8;
+			if(imagmax < 32*1024*1024)
+				imagmax = 32*1024*1024;
+			if(imagmax > 1024*1024*1024)
+				imagmax = 1024*1024*1024;
+			poolsize(mainmem, mainmax, 0);
+			poolsize(imagmem, imagmax, 0);
+			poolsize(heappool, mem - mainmax - imagmax, 0);
+			heapreserve = mainmax + imagmax;
+		}
+#else
 		poolsize(mainmem, mem/MAINDIV, 0);
 		poolsize(heappool, mem/HEAPDIV, 0);
 		poolsize(imagmem, mem/IMAGDIV, 0);
+#endif
 	}
 
 	boardfbprobe();

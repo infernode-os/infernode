@@ -212,9 +212,15 @@ gpioinit(void)
 		pullstate[i] = -1;
 	for(i = 0; i < Nexppin; i++)
 		expstate[i] = -1;
+#ifdef RP1GPIO
+	rp1intrenable(RP1intgpio0, gpiointr, nil, 1, "gpio0");
+	rp1intrenable(RP1intgpio1, gpiointr, nil, 1, "gpio1");
+	rp1intrenable(RP1intgpio2, gpiointr, nil, 1, "gpio2");
+#else
 	intrenable(IRQgpio0, gpiointr, nil, 0, "gpio0");
 	intrenable(IRQgpio1, gpiointr, nil, 0, "gpio1");
 	intrenable(IRQgpio2, gpiointr, nil, 0, "gpio2");
+#endif
 }
 
 static int

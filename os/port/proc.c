@@ -454,6 +454,18 @@ loop:
 	 */
 	if(p == 0 || p->mach) {
 		unlock(&runq[0].l);
+		/*
+		 * Not straight back round. A proc still marked with a core
+		 * is here until that core gets the lock to finish with it,
+		 * and this loop at splhi takes and frees that lock faster
+		 * than a core spinning in ready() can win it: on a Pi 5 the
+		 * lock read as held 20 million times in a row, with every
+		 * holder having released it, until lock() called it a loop
+		 * and panicked. Whether it did depended on where runq landed.
+		 * Let go for a moment, with interrupts on.
+		 */
+		spllo();
+		microdelay(1);
 		goto loop;
 	}
 	if(p->rnext == nil)

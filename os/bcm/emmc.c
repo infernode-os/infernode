@@ -231,9 +231,13 @@ emmcsetclock(u32int hz)
 	u32int base, div, c1;
 	int i;
 
+#ifdef EMMCBASEHZ
+	base = EMMCBASEHZ;
+#else
 	base = mboxclockrate(EMMCCLK);
 	if(base == 0)
 		base = Corefallback;
+#endif
 
 	for(div = 1; div < 0x400; div++)
 		if(base / (div * 2) <= hz)
@@ -528,6 +532,10 @@ arasanbus(int width, int hz)
 			c0 |= Hctldwidth4;
 		emmcwr(Emmccontrol0, c0);
 	}
+#ifdef SDCARD_HISPEED
+	if(hz > 25000000)
+		emmcwr(Emmccontrol0, emmcrd(Emmccontrol0) | Hctlhsen);
+#endif
 	if(hz > 0)
 		if(emmcsetclock(hz) < 0)
 			uartputstr("emmc: cannot set the clock\n");

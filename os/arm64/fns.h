@@ -68,6 +68,12 @@ void	fpinit(void);
 void	cacheiflush(void*, ulong);
 void	cachedwbinvse(void*, int);
 void	cachedwbse(void*, int);
+uintptr	mmulowtop(void);
+uvlong	mmubank(int, uintptr*);
+#ifdef NVME0
+void	nvmeshutdown(void);
+void	boardpoweroff(void);
+#endif
 
 /* arch.c -- interrupt priority level */
 

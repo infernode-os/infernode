@@ -84,7 +84,11 @@ uartdescribe(void)
 	int i;
 	ulong v;
 
+#ifdef RP1GPIO
+	s = "RP1 UART0, polled; clock ";
+#else
 	s = "mini-UART (UART1), polled; core clock ";
+#endif
 	p = buf;
 	while(*s)
 		*p++ = *s++;

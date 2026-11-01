@@ -30,6 +30,19 @@
 /* SPSR to eret with: EL1h (use SP_EL1), all of DAIF masked */
 #define SPSREL1H	0x3C5
 
+/*
+ * Which affinity field numbers the cores, from the board's build: an
+ * A76's is Aff1.
+ */
+#ifndef COREAFF
+#define COREAFF		0
+#endif
+#if COREAFF == 0
+#define COREFIELD	and	x0, x0, #3
+#else
+#define COREFIELD	ubfx	x0, x0, #COREAFF, #2
+#endif
+
 .section ".text.boot"
 .global _start
 
@@ -44,8 +57,57 @@ _start:
 	 */
 	mov	x19, x0
 
+#ifdef EARLYWDOG
+	/*
+	 * A BCM2712 kernel is tried from a card whose normal boot is
+	 * something else: arm the watchdog first (../bcm/bcmio.h), so
+	 * that a hang anywhere before the kernel's own boot watchdog
+	 * takes over is a reset. 15 seconds, full reset. Core 0 only.
+	 */
 	mrs	x0, mpidr_el1
-	and	x0, x0, #3
+	ubfx	x0, x0, #8, #2
+	cbnz	x0, 1f
+	ldr	x1, =0x107D200000
+	ldr	w2, =0x5A0F0000
+	str	w2, [x1, #0x24]
+	ldr	w2, [x1, #0x1C]
+	and	w2, w2, #0xFFFFFFCF
+	and	w2, w2, #0x00FFFFFF
+	ldr	w3, =0x5A000020
+	orr	w2, w2, w3
+	str	w2, [x1, #0x1C]
+
+	/*
+	 * The firmware puts the kernel at 0x80000 whatever kernel_address
+	 * says, and it is linked at 2MB (../bcm2712/kernel.ld): move it,
+	 * and continue there. The MMU is off, so the copy is in memory.
+	 */
+	adr	x1, _start
+	ldr	x2, =_start
+	cmp	x1, x2
+	b.eq	1f
+	ldr	x3, =edata
+	add	x3, x3, #15
+	sub	x3, x3, x2
+	and	x3, x3, #~15
+	add	x1, x1, x3		/* from the end: they overlap */
+	add	x2, x2, x3
+2:
+	ldp	x5, x6, [x1, #-16]!
+	stp	x5, x6, [x2, #-16]!
+	subs	x3, x3, #16
+	b.ne	2b
+	dsb	sy
+	ic	iallu
+	dsb	sy
+	isb
+	ldr	x1, =1f
+	br	x1
+1:
+#endif
+
+	mrs	x0, mpidr_el1
+	COREFIELD
 	cbz	x0, core0
 
 	/*
@@ -79,7 +141,7 @@ park:
 	.global	secentry
 secentry:
 	mrs	x0, mpidr_el1
-	and	x0, x0, #3
+	COREFIELD
 	ldr	x1, =smpboot
 	mov	x2, #24
 	madd	x19, x0, x2, x1

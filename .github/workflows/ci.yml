@@ -733,7 +733,7 @@ jobs:
               tools9p_integration_test
           - shard: 2
             tests: >-
-              amd64_jit_code_leak_test audioring_test awk_builtins_test calendar9p_test
+              amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test wordmem_test awk_builtins_test calendar9p_test
               cpu_boundary_test dialogue_test emu_root_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test iproute_test

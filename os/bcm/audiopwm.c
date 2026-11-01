@@ -9,7 +9,7 @@
  * HOW THE SOUND IS MADE. A PWM channel in FIFO mode turns each word it
  * is given into one pulse whose width is that word out of a range;
  * pulses at ~44 kHz through the filter are a voltage, and a stream of
- * them is the waveform. With the range at 2048 the resolution is 11
+ * them is the waveform. With the range near 2048 the resolution is 11
  * bits, which through this filter is what the jack is good for; a
  * 16-bit sample comes down to it with its error carried forward (level). The PWM clock comes from the
  * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), divided (MASH fractional
@@ -100,11 +100,9 @@ enum {
 	Cmenab		= 1<<4,
 	Cmkill		= 1<<5,
 	Cmsrcplld	= 6,
-	Cmmash1		= 1<<9,
 	Plldhz		= AUDIOPLLDHZ,
 
 	Range		= 2048,		/* pulse range: 11 bits of level */
-	Silence		= Range/2,
 
 	Gpiopwm0	= 40,		/* PWM0 on the jack's left */
 	Gpiopwm1	= 41,		/* PWM1, right */
@@ -153,6 +151,8 @@ struct Ctlr {
 	ulong	played;		/* buffers played out, for the curious */
 	ulong	underruns;	/* buffers silenced for want of data */
 	int	carry[2];	/* each channel's rounding error: level */
+	int	range;		/* pulse range, about Range: pwmclock */
+	int	silence;	/* its middle */
 	Audio_t	av;
 };
 
@@ -164,23 +164,37 @@ getaudiodev(void)
 	return &ctlr.av;
 }
 
+static int
+pwmdivider(int rate)
+{
+	int d;
+
+	d = Plldhz / (rate * Range);
+	return d < 2 ? 2 : d;
+}
+
 static void
 pwmclock(int rate)
 {
-	uvlong f;
 	u32int divi, divf;
 
-	/* the PWM clock: rate * Range, from PLLD through the MASH divider */
-	f = (uvlong)rate * Range;
-	divi = Plldhz / f;
-	divf = ((Plldhz % f) << 12) / f;
+	/*
+	 * A whole number off PLLD, and the range makes up the difference: a
+	 * fractional divider gets its average by dithering the clock, and
+	 * that jitter is on every edge of the pulses, a fuzz on any tone.
+	 * 500MHz/5 at 44100 is a range of 2267, 44100.4Hz.
+	 */
+	divi = pwmdivider(rate);
+	divf = 0;
+	ctlr.range = Plldhz / divi / rate;
+	ctlr.silence = ctlr.range / 2;
 	CM(Cmpwmctl) = Cmpasswd | Cmkill;
 	while(CM(Cmpwmctl) & Cmbusy)
 		;
 	CM(Cmpwmdiv) = Cmpasswd | (divi << 12) | divf;
-	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld | Cmmash1;
+	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld;
 	microdelay(10);
-	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld | Cmmash1 | Cmenab;
+	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld | Cmenab;
 	while((CM(Cmpwmctl) & Cmbusy) == 0)
 		;
 }
@@ -225,7 +239,7 @@ fillsilence(u32int *b)
 
 	words = ctlr.frames * 2;
 	for(i = 0; i < words; i++)
-		b[i] = Silence;
+		b[i] = ctlr.silence;
 	cachedwbse(b, words * 4);
 }
 
@@ -314,6 +328,8 @@ start(Ctlr *c)
 		if(c->cb == nil || c->buf[0] == nil || c->buf[Nbuf-1] == nil)
 			error(Enomem);
 	}
+	c->range = Plldhz / pwmdivider(c->av.out.rate) / c->av.out.rate;
+	c->silence = c->range / 2;	/* what ring() fills with */
 	ring(c);
 
 	gpioclaim(Gpiopwm0, "audio");
@@ -324,8 +340,8 @@ start(Ctlr *c)
 	PWM(Pctl) = 0;
 	microdelay(10);
 	pwmclock(c->av.out.rate);
-	PWM(Prng1) = Range;
-	PWM(Prng2) = Range;
+	PWM(Prng1) = ctlr.range;
+	PWM(Prng2) = ctlr.range;
 	PWM(Pdmac) = Denab | Dpanic | Ddreq;
 	PWM(Pctl) = Clrf1;
 	microdelay(10);
@@ -385,7 +401,7 @@ audio_file_close(Chan *c)
 
 		b = ctlr.buf[ctlr.rg.wbuf];
 		while(ctlr.woff < ctlr.frames * 2)
-			b[ctlr.woff++] = Silence;
+			b[ctlr.woff++] = ctlr.silence;
 		cachedwbse(b, ctlr.frames * 2 * 4);
 		ringfilled(&ctlr.rg);
 		ctlr.woff = 0;
@@ -425,7 +441,7 @@ roomfor(void *a)
 
 /*
  * One sample to a PWM word: signed 16-bit (or unsigned 8-bit) to
- * 0..Range-1 around Silence, scaled by the channel's gain.
+ * 0..range-1 around its middle, scaled by the channel's gain.
  */
 static u32int
 level(int s, int gain, int *carry)
@@ -434,18 +450,18 @@ level(int s, int gain, int *carry)
 
 	v = (long)s * gain / Audio_Max_Val;	/* -32768..32767 */
 	/*
-	 * What the 5 bits below the range's resolution leave out goes into
-	 * the next sample, not away. Dropped, it repeats with the waveform,
-	 * and a pure tone comes out with a fuzz on it at any volume; carried,
-	 * it is noise, moved up out of the way.
+	 * What is below the range's resolution goes into the next sample,
+	 * not away. Dropped, it repeats with the waveform, and a pure tone
+	 * comes out with a fuzz on it at any volume; carried, it is noise,
+	 * moved up out of the way.
 	 */
-	v += 32768 + *carry;
+	v = (v + 32768) * ctlr.range + *carry;
 	if(v < 0)
 		v = 0;
-	if(v > 65535)
-		v = 65535;
-	*carry = v & 31;
-	return v >> 5;				/* 0..2047 */
+	if(v >= 65536L * ctlr.range)
+		v = 65536L * ctlr.range - 1;
+	*carry = v & 0xFFFF;
+	return v >> 16;
 }
 
 long
@@ -525,8 +541,11 @@ audio_ctl_write(Chan *c, void *va, long count, vlong offset)
 		error("audio: 8 or 16 bits");
 	if(tmp.out.flags & AUDIO_CHAN_FLAG && tmp.out.chan != 1 && tmp.out.chan != 2)
 		error("audio: 1 or 2 channels");
-	if(tmp.out.flags & AUDIO_RATE_FLAG && tmp.out.rate != ctlr.av.out.rate && ctlr.running)
+	if(tmp.out.flags & AUDIO_RATE_FLAG && tmp.out.rate != ctlr.av.out.rate && ctlr.running){
 		pwmclock(tmp.out.rate);
+		PWM(Prng1) = ctlr.range;
+		PWM(Prng2) = ctlr.range;
+	}
 	if(tmp.out.flags & AUDIO_BUF_FLAG)
 		setframes(&ctlr, framesfor(tmp.out.buf));
 	tmp.out.flags = 0;

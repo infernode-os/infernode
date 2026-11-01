@@ -191,7 +191,7 @@ hzclock(Ureg *ur)
 	 * while some other process ran and would suppress its preemption
 	 * too.
 	 */
-	if(up && up->state == Running && !up->inpreempt){
+	if(up && up->state == Running && !up->inpreempt && up->nlocks == 0){
 		if(anyready()){
 			up->inpreempt = 1;
 			sched();

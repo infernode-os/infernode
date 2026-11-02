@@ -999,10 +999,34 @@ schedmod(Module *m)
 	h = D2H(ml);
 	h->ref--;
 	p->reg.PC = m->entry;
-	fp = &f;
+	/*
+	 * newstack copies the frame it is given, t->size bytes of it: a
+	 * Frame on this stack is only its 32-byte header, so the rest of
+	 * the entry frame was whatever followed it here (initmem resets
+	 * the pointers, not the rest), read past f (AddressSanitizer:
+	 * stack-buffer-overflow, 136 bytes from 32). Given a zeroed frame
+	 * of the entry type's size, the Prog starts with one.
+	 */
+	t = m->entryt;
+	if(t != nil && t->size > sizeof(Frame)){
+		fp = mallocz(t->size, 1);
+		if(fp == nil)
+			error(exNomem);
+	}else{
+		memset(&f, 0, sizeof(f));
+		fp = &f;
+	}
+	fp->t = t;
 	R.s = &fp;
-	f.t = m->entryt;
+	if(waserror()){
+		if(fp != &f)
+			free(fp);
+		nexterror();
+	}
 	newstack(p);
+	poperror();
+	if(fp != &f)
+		free(fp);
 	initmem(m->entryt, p->reg.FP);
 
 	return p;

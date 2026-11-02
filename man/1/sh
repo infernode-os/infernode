@@ -954,7 +954,7 @@ flag enables them.
 Print each simple command to stderr before executing it.
 .PD
 .SH SOURCE
-.B /appl/cmd/sh/sh.y
+.B /appl/cmd/sh/sh.b
 .SH "SEE ALSO"
 .IR sh (1),
 .IR sh-std (1),

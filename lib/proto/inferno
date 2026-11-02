@@ -651,7 +651,6 @@ appl
 			regex.b
 			sexprs.b
 			sh.b
-			sh.y
 			std.b
 			string.b
 			test.b

@@ -552,7 +552,7 @@ exception string that is too long.
 .BI /prog/ pid /wait
 The file used by the shell to wait for dead child processes.
 .SH SOURCE
-.B /appl/cmd/sh/sh.y
+.B /appl/cmd/sh/sh.b
 .SH SEE ALSO
 .IR sh (1),
 .IR sh-std (1),

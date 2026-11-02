@@ -1,5 +1,12 @@
 implement Sh;
 
+#
+# The shell.  Its parser (yyparse and the tables before it, from
+# yyexca on) was made by yacc(1) from a grammar, sh.y, that this file
+# has long since outgrown: sh.y is gone, and this file is the source.
+# A change to the grammar is made here, by hand.
+#
+
 include "sys.m";
 	sys: Sys;
 	sprint: import sys;

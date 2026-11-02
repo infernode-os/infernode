@@ -683,6 +683,11 @@ jobs:
         chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_big_test.sh
+        # Byte / and % from compiled code, and a module under 128
+        # instructions compiled at all; a call through a nil module
+        # caught where it is made (all found by tools/disfuzz).
+        ROOT=. sh tests/host/jit_byte_test.sh
+        ROOT=. sh tests/host/jit_nilmod_test.sh
 
     - name: Run cpu(1) session lifetime test
       run: |

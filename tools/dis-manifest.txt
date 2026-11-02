@@ -755,12 +755,15 @@ dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis
 dis/tests/jit_big_test.dis
+dis/tests/jit_byte_test.dis
 dis/tests/jit_bounds_test.dis
 dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
+dis/tests/jit_nilmod_test.dis
 dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
+dis/tests/jit_small_helper.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
@@ -835,6 +838,7 @@ dis/tests/publicnet_host_test.dis
 dis/tests/publicnet_test.dis
 dis/tests/readjpg_test.dis
 dis/tests/readwebp_test.dis
+dis/tests/realconv_test.dis
 dis/tests/refadt_zero_test.dis
 dis/tests/regex_test.dis
 dis/tests/rfcomm_test.dis

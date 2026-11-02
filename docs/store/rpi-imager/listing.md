@@ -11,7 +11,7 @@ https://www.raspberrypi.com/news/how-to-add-your-own-images-to-imager/).
 
 | File | What it is |
 |-|-|
-| `os_list_infernode.json` | The entry: InferNode, with an item per board. Its sizes and SHA-256s are the published release's |
+| `os_list_infernode.json` | The subitem file's template: an item per board, which Imager shows under InferNode. `tools/mkimagerjson.py` writes each release's from it -- that release's version, URLs, sizes and SHA-256s, everything else as here -- and the release job attaches it. The InferNode entry above the items is Raspberry Pi's, made from the form (below), so it is not in this file |
 | `infernode-40.svg` | The icon Imager shows: the InferNode logo, the shipped app icon traced as a vector. Imager takes an SVG or a 40x40 PNG |
 | `infernode-40.png` | The same at 40x40, scaled from the 1024 app icon, for anywhere an SVG is not taken |
 
@@ -21,13 +21,27 @@ The logo is unchanged from the app icons (`emu/iOS/.../icon_1024.png`,
 
 ## The application
 
+Raspberry Pi's form, "Request an addition to the Raspberry Pi Imager OS
+List" (https://forms.gle/khSteUmzGCb49wrr6). They review for two
+prerequisites: a named point of contact for the OS (ideally two), and correct
+device annotations.
+
 - **Name:** InferNode
-- **Description:** A 64-bit Inferno® OS that runs on the Pi itself, with no
-  Linux underneath: 9P everywhere and namespace-isolated AI agents.
+- **Category:** Other general-purpose OS
 - **Website:** https://www.infernode.io
+- **Icon URL:**
+  https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg
+- **Description:** A 64-bit Inferno® OS that runs on the Pi itself, without
+  Linux underneath: 9P everywhere and namespace-isolated AI agents.
+- **Subitem JSON URL:**
+  https://github.com/infernode-os/infernode/releases/latest/download/os_list_infernode.json
+  -- the latest published release's (a draft is not "latest"), so it follows
+  each release by itself
 - **Support:** https://infernode.io/support/ (and
   https://github.com/infernode-os/infernode/issues)
-- **Icon:** `infernode-40.svg`, at its raw URL on `master`
+
+And what the entry carries:
+
 - **Images:** the release's `infernode-<version>-rpi3bplus.img.xz` and
   `-rpi4b.img.xz`, signed (sigstore) and with build provenance, from
   https://github.com/infernode-os/infernode/releases
@@ -55,22 +69,23 @@ So each item's description names its board, as other images' do ("for RPi
 
 Imager reads a repository of your own with `--repo`:
 
-    rpi-imager --repo https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/os_list_infernode.json
+    rpi-imager --repo https://github.com/infernode-os/infernode/releases/latest/download/os_list_infernode.json
 
-Choose the board, then InferNode, then the card: it writes and verifies the
-image as it would from the official list.
+Choose the board, then its InferNode item (with `--repo` the items are the
+whole list, with no InferNode entry above them), then the card: it writes and
+verifies the image as it would from the official list.
 
 ## Each release
 
-The release job prints, for each image, what the entry needs:
+Nothing to do by hand. The release job's `raspberry-pi` job writes
+`os_list_infernode.json` from the images it has just built, checked
+(`tools/piromcheck.py`) and booted (`tests/host/piimage_boot_test.sh`), and the
+release carries it with the images; once the release is published, the URL
+above is its file. `tests/host/imagerjson_test.sh` (in CI) checks the writer.
 
-    infernode-<v>-rpi3bplus.img: extract_size … extract_sha256 …
-    infernode-<v>-rpi3bplus.img.xz: image_download_size … image_download_sha256 …
+To change what the entry says -- an item's description, a board, the devices
+-- edit the template here; the next release carries the change. To check a
+published release's file against its images:
 
-Put them, the release's URLs and its date into `os_list_infernode.json`, and
-check them against the published files before sending them on:
-
-    gh release download v<v> -p 'infernode-<v>-rpi*.img.xz'
-    for f in infernode-<v>-rpi*.img.xz; do
-      stat -c %s $f; sha256sum $f; xz -dc $f | wc -c; xz -dc $f | sha256sum
-    done
+    gh release download v<v> -p 'infernode-<v>-rpi*.img.xz' -p os_list_infernode.json
+    python3 tools/mkimagerjson.py <v> <date> infernode-<v>-rpi*.img.xz | diff - os_list_infernode.json

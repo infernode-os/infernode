@@ -677,15 +677,34 @@ else
     fail "mixed sibling-prefix provisioning probe failed"
 fi
 
+# A descendant of an ordinary grant is the parent's to delegate: the parent
+# sees /tmp/veltro/ok/sub through its grant of /tmp/veltro/ok.
 if emu_c "provision_covered_descendant" 14 \
-    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
-    if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
+    "mkdir -p /tmp/veltro/ok/sub; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok/sub:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok/sub rw'; then
         pass "child provisioning preserves a covered descendant path"
     else
         fail "child provisioning did not preserve covered descendant path (output: $OUTPUT)"
     fi
 else
     fail "covered descendant child path provisioning probe failed"
+fi
+
+# /tmp/veltro is a policy root (nsconstruct's policyroot): nsconstruct gives a
+# parent granted bare /tmp/veltro only its allow-list (.ns, scratch, and what
+# its tools need), never /tmp/veltro/ok. Delegating that would hand the child
+# more than the parent has (18c45e6f).
+if emu_c "provision_policyroot_descendant" 14 \
+    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '18 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.18/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
+        fail "a bare /tmp/veltro grant authorised a descendant the parent cannot see"
+    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltro/ok'; then
+        fail "policy-root descendant was not explicitly refused (output: $OUTPUT)"
+    else
+        pass "a bare policy-root grant does not authorise its descendants"
+    fi
+else
+    fail "policy-root descendant provisioning probe failed"
 fi
 
 # ── summary ──────────────────────────────────────────────────────────────────

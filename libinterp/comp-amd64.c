@@ -2332,6 +2332,13 @@ comp(Inst *i)
 		}
 		gen2(Oldw, (1<<6)|(0<<3)|4);			/* MOV EAX, dword [RAX+RDI*4+data]: a Rune is 32 bits; zero-extends */
 		gen2((2<<6)|(RDI<<3)|RAX, O(String, data));
+		/*
+		 * MOVSXD RAX, EAX: a rune is a signed int, and an int is kept
+		 * sign-extended in its word, as OP(indc)'s W(d) = Srune[i]
+		 * has it. Zero-extended, a negative rune (-77) printed as
+		 * itself but compared unequal to -77 (disfuzz).
+		 */
+		modrr(Omovsxd, RAX, RAX);
 		*done = code - (done + 1);
 		opwst(i, Ostw, RAX);
 		break;

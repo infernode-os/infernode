@@ -85,6 +85,11 @@ ARITH = {
 }
 CMP = ["<", "<=", ">", ">=", "==", "!="]
 
+# element types for lists, arrays and channels (feature())
+ELT = ["int", "big", "real", "byte", "string", "refA", "B", "C", "tup"]
+LELT = {"int": "int", "big": "big", "real": "real", "byte": "byte",
+	"string": "string", "refA": "ref A", "B": "B", "C": "C", "tup": "(int, string, big)"}
+
 
 class Var:
 	def __init__(self, name, t, assignable=True):
@@ -120,6 +125,7 @@ class Gen:
 		self.loopdepth = 0
 		self.mult = 1		# how many times the current statement runs
 		self.costacc = 0
+		self.senders = set()	# send<T> helpers feature() used
 
 	# ---- helpers ----
 	def chance(self, p):
@@ -279,7 +285,7 @@ class Gen:
 		if k == 16:
 			return "%s.i" % self.paren(self.expr("refA", d + 1))
 		if k == 17:
-			return "(%s ** %s)" % (self.expr("int", d + 1), self.pick(["0", "1", "2", "3", "31", "(-1+zn)", self.smallint(d)]))
+			return "(%s ** %s)" % (self.expr("int", d + 1), self.pick(["0", "1", "2", "3", "31", "(-1+zn)", "(%s + zn)" % self.smallint(d)]))
 		if k == 18:
 			c = self.call("int", d)
 			if c:
@@ -307,7 +313,7 @@ class Gen:
 		if k == 8:
 			return "%s.b" % self.paren(self.expr("refA", d + 1))
 		if k == 9:
-			return "(%s ** %s)" % (self.expr("big", d + 1), self.pick(["0", "1", "2", "63", "64", self.smallint(d)]))
+			return "(%s ** %s)" % (self.expr("big", d + 1), self.pick(["0", "1", "2", "63", "64", "(%s + zn)" % self.smallint(d)]))
 		if k == 10:
 			c = self.call("big", d)
 			if c:
@@ -327,7 +333,7 @@ class Gen:
 		if k == 7:
 			return "%s.r" % self.paren(self.expr("refA", d + 1))
 		if k == 8:
-			return "(%s ** %s)" % (self.expr("real", d + 1), self.pick(["0", "1", "2", "(-1+zn)", "(-2+zn)", "1000", self.smallint(d)]))
+			return "(%s ** %s)" % (self.expr("real", d + 1), self.pick(["0", "1", "2", "(-1+zn)", "(-2+zn)", "1000", "(%s + zn)" % self.smallint(d)]))
 		if k == 9:
 			c = self.call("real", d)
 			if c:
@@ -585,6 +591,9 @@ class Gen:
 		if k == 21 and not pure and self.loopdepth == 0:
 			self.churn()
 			return
+		if k in (23, 24) and not pure and self.loopdepth == 0 and d < 2:
+			self.feature()
+			return
 		if k == 22 and self.loopdepth == 0:
 			n = self.pick([1, 10, 100, 1000, 5000])
 			if pure:
@@ -726,6 +735,142 @@ class Gen:
 		f.spawned = True
 		self.emit("out(%d, string %s);" % (self.tag(), sv))
 
+	# ---- the rest of the instruction set ----
+	# Lists, arrays and channels of every element type, a value adt and a
+	# tuple among them; alt with a default (on a channel whose state is
+	# known, so it is deterministic); pick adts; functions returning
+	# tuples; ref fn, nil among them; the module loaded as $self (sharing
+	# its module data); a spawned Prog that exits. Each says what it saw.
+	def eexpr(self, t, d=2):
+		if t == "B":
+			return "B(%s, %s)" % (self.expr("int", d), self.expr("string", d))
+		if t == "C":
+			return "C(%s, %s)" % (self.expr("int", d), self.expr("real", d))
+		if t == "tup":
+			return "(%s, %s, %s)" % (self.expr("int", d), self.expr("string", d), self.expr("big", d))
+		return self.expr(t, d)
+
+	def eshow(self, t, e):
+		if t == "B":
+			return "Bs(%s)" % e
+		if t == "C":
+			return "Cs(%s)" % e
+		if t == "tup":
+			return "Ts(%s)" % e
+		return self.show(t, e)
+
+	def feature(self):
+		r = self.r
+		t = self.pick(ELT)
+		lt = LELT[t]
+		k = r.randint(0, 9)
+		tag = self.tag()
+		v = self.newname("q")
+		x = self.newname("x")
+		if k == 0:
+			n = r.randint(1, 4)
+			self.emit("%s: list of %s;" % (v, lt))
+			for _ in range(n):
+				self.emit("%s = %s :: %s;" % (v, self.eexpr(t), v))
+			self.emit("out(%d, string len %s);" % (tag, v))
+			self.emit("for(%s := %s; %s != nil; %s = tl %s)" % (x, v, x, x, x))
+			self.emit("\tout(%d, %s);" % (tag, self.eshow(t, "hd " + x)))
+		elif k == 1:
+			n = r.randint(0, 5)
+			self.emit("%s := array[%d] of %s;" % (v, n, lt))
+			for _ in range(r.randint(0, 3)):
+				self.emit("%s[%s] = %s;" % (v, self.smallint(2), self.eexpr(t)))
+			self.emit("for(%s := 0; %s < len %s; %s++)" % (x, x, v, x))
+			self.emit("\tout(%d, %s);" % (tag, self.eshow(t, "%s[%s]" % (v, x))))
+			self.emit("out(%d, string len %s[%s:]);" % (tag, v, self.smallint(2)))
+		elif k == 2:
+			n = r.randint(1, 4)
+			self.emit("%s := array[] of {%s};" % (v, ", ".join(self.eexpr(t) for _ in range(n))))
+			self.emit("out(%d, %s);" % (tag, self.eshow(t, "%s[%s]" % (v, self.smallint(2)))))
+		elif k == 3:
+			# buffered: every send fits, so one Prog does it all
+			n = r.randint(1, 4)
+			self.emit("%s := chan[%d] of %s;" % (v, n, lt))
+			for _ in range(n):
+				self.emit("%s <-= %s;" % (v, self.eexpr(t)))
+			self.emit("for(%s := 0; %s < %d; %s++) {" % (x, x, n, x))
+			y = self.newname("y")
+			self.emit("\t%s := <-%s;" % (y, v))
+			self.emit("\tout(%d, %s);" % (tag, self.eshow(t, y)))
+			self.emit("}")
+		elif k == 4:
+			# from another Prog, unbuffered
+			n = r.randint(1, 3)
+			self.senders.add(t)
+			self.emit("%s := chan of %s;" % (v, lt))
+			self.emit("spawn send%s(%s, %s, %d);" % (t, v, self.eexpr(t), n))
+			self.emit("for(%s := 0; %s < %d; %s++)" % (x, x, n, x))
+			self.emit("\tout(%d, %s);" % (tag, self.eshow(t, "<-" + v)))
+		elif k == 5:
+			# alt with a default, the channel full or empty as decided here
+			self.emit("%s := chan[1] of %s;" % (v, lt))
+			self.emit("if(%s)" % self.expr("int", 2))
+			self.emit("\t%s <-= %s;" % (v, self.eexpr(t)))
+			for _ in range(r.randint(1, 2)):
+				y = self.newname("y")
+				self.emit("alt {")
+				self.emit("%s := <-%s =>" % (y, v))
+				self.emit("\tout(%d, %s);" % (tag, self.eshow(t, y)))
+				self.emit("* =>")
+				self.emit("\tout(%d, \"empty\");" % tag)
+				self.emit("}")
+		elif k == 6:
+			self.emit("%s: ref P;" % v)
+			c = self.expr("int", 2)
+			self.emit("case (%s) & 3 {" % c)
+			self.emit("0 => %s = ref P.I(%s);" % (v, self.expr("int", 2)))
+			self.emit("1 => %s = ref P.S(%s);" % (v, self.expr("string", 2)))
+			self.emit("2 => %s = ref P.R(%s);" % (v, self.expr("real", 2)))
+			self.emit("}")
+			self.emit("if(%s == nil)" % v)
+			self.emit("\tout(%d, \"nil P\");" % tag)
+			self.emit("else pick %s := %s {" % (x, v))
+			self.emit("I => out(%d, \"I \" + string %s.i);" % (tag, x))
+			self.emit("S => out(%d, \"S \" + qs(%s.s));" % (tag, x))
+			self.emit("R => out(%d, \"R \" + string %s.r);" % (tag, x))
+			self.emit("}")
+		elif k == 7:
+			a, b, c = self.newname("t"), self.newname("t"), self.newname("t")
+			if self.chance(0.5):
+				self.emit("(%s, %s, %s) := tf(%s);" % (a, b, c, self.expr("int", 2)))
+				self.emit("out(%d, string %s + \" \" + qs(%s) + \" \" + string %s);" % (tag, a, b, c))
+			else:
+				self.emit("(%s, nil, %s) := tf(%s);" % (a, c, self.expr("int", 2)))
+				self.emit("out(%d, string %s + \" \" + string %s);" % (tag, a, c))
+		elif k == 8:
+			self.emit("%s: ref fn(x: int): int;" % v)
+			w = r.randint(0, 2)
+			if w == 0:
+				self.emit("%s = rf1;" % v)
+			elif w == 1:
+				self.emit("if(%s) %s = rf2; else %s = rf1;" % (self.expr("int", 2), v, v))
+			# else nil: calling it raises
+			self.emit("out(%d, string %s(%s));" % (tag, v, self.expr("int", 2)))
+		else:
+			c = self.newname("c")
+			self.emit("%s := chan of int;" % c)
+			m = self.newname("me")
+			self.emit("%s := load Fz \"$self\";" % m)
+			if self.chance(0.5):
+				# through the module: mspawn
+				self.emit("if(%s != nil) spawn %s->exiter(%s, %s); else spawn exiter(%s, %s);"
+					% (m, m, c, self.expr("int", 2), c, self.expr("int", 2)))
+			else:
+				self.emit("spawn exiter(%s, %s);" % (c, self.expr("int", 2)))
+			self.emit("out(%d, \"exit \" + string <-%s);" % (tag, c))
+			fs = [f for f in self.funcs if f.body is not None and self.cur is not None and f is not self.cur and f.cost * self.mult < 2000]
+			if fs and self.chance(0.6):
+				# $self: this instance, its module data shared
+				f = self.pick(fs)
+				self.emit("if(%s != nil)" % m)
+				self.emit("\tout(%d, %s);" % (tag, self.show(f.ret, "%s->%s(%s)" % (m, f.name, ", ".join(self.expr(p.t, 3) for p in f.params)))))
+		self.costacc += 50
+
 	def churn(self):
 		# allocate in a loop, keeping some: the collector runs under compiled code
 		r = self.r
@@ -829,6 +974,7 @@ class Gen:
 		o.append("")
 		o.append("Fz: module\n{")
 		o.append("\tinit: fn(nil: ref Draw->Context, nil: list of string);")
+		o.append("\texiter: fn(c: chan of int, v: int);")
 		for f in self.funcs:
 			a, b = self.sig(f).split("(", 1)
 			o.append("\t%s: fn(%s;" % (a, b))
@@ -840,7 +986,12 @@ class Gen:
 		o.append("")
 		for g in self.globals:
 			o.append("%s: %s;" % (g.name, LTYPE[g.t]))
+		o.append("B: adt {\n\ti: int;\n\ts: string;\n};")
+		o.append("C: adt {\n\ti: int;\n\tr: real;\n};	# no pointers: consm, headm, newcm")
+		o.append("P: adt {\n\tpick {\n\tI => i: int;\n\tS => s: string;\n\tR => r: real;\n\t}\n};")
 		o.append(HELPERS)
+		for t in sorted(self.senders):
+			o.append("send%s(c: chan of %s, v: %s, n: int)\n{\n\tfor(i := 0; i < n; i++)\n\t\tc <-= v;\n}\n" % (t, LELT[t], LELT[t]))
 		for f in self.funcs:
 			o.append(self.sig(f))
 			o.append("{")
@@ -962,6 +1113,44 @@ rs(n: int): string
 		* => s[len s] = 16r1F600 + i;
 		}
 	return s;
+}
+
+Bs(b: B): string
+{
+	return sys->sprint("B(%d %s)", b.i, qs(b.s));
+}
+
+Cs(c: C): string
+{
+	return sys->sprint("C(%d %s)", c.i, string c.r);
+}
+
+Ts(t: (int, string, big)): string
+{
+	(a, b, c) := t;
+	return sys->sprint("T(%d %s %bd)", a, qs(b), c);
+}
+
+tf(x: int): (int, string, big)
+{
+	return (x, string x, big x * big 3);
+}
+
+rf1(x: int): int
+{
+	return x + 1;
+}
+
+rf2(x: int): int
+{
+	return x * 2;
+}
+
+# a Prog that sends, then exits
+exiter(c: chan of int, v: int)
+{
+	c <-= v;
+	exit;
 }
 
 # recursion n deep: the stack grown, then given back

@@ -1460,9 +1460,28 @@ static void
 commframe(Inst *i)
 {
 	int o;
-	uchar *punt_label, *mlnil;
+	uchar *punt_label, *mlnil, *notnil;
+	vlong d;
 
 	opwld(i, Oldw, RAX);
+	cmpl64(RAX, (uvlong)H);
+	/*
+	 * A nil module goes to the interpreter's mframe, which raises
+	 * "module not loaded" at this instruction, where the handler
+	 * around the call finds it: MacMFRA's rmfram raised it with R.PC
+	 * not this instruction's, and the Prog died (as commcall).
+	 * The error does not return, so RAX is not needed after it.
+	 */
+	genb(0x0f);
+	genb(Ojnel);
+	genw(0);
+	notnil = code;
+	punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+	d = code - notnil;
+	notnil[-4] = d;
+	notnil[-3] = d >> 8;
+	notnil[-2] = d >> 16;
+	notnil[-1] = d >> 24;
 	cmpl64(RAX, (uvlong)H);
 	gen2(Ojeqb, 0);
 	mlnil = code - 1;
@@ -1507,7 +1526,30 @@ commframe(Inst *i)
 static void
 commcall(Inst *i)
 {
-	uchar *mlnil;
+	uchar *mlnil, *notnil;
+	vlong d;
+
+	/*
+	 * A nil module goes to the interpreter's mcall, which raises
+	 * "module not loaded" at this instruction in the caller's frame,
+	 * where the handler around the call finds it. Compiled code went
+	 * on into MacMCAL with RAX still the return address: for a builtin
+	 * module that read Modlink.prog through H ("dereference of nil"),
+	 * otherwise rmcall raised it from the new frame; neither reached a
+	 * handler in the calling function, and the Prog died.
+	 */
+	opwst(i, Oldw, RRTA);
+	cmpl64(RRTA, (uvlong)H);
+	genb(0x0f);
+	genb(Ojnel);
+	genw(0);
+	notnil = code;
+	punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC, optab[i->op]);
+	d = code - notnil;
+	notnil[-4] = d;
+	notnil[-3] = d >> 8;
+	notnil[-2] = d >> 16;
+	notnil[-1] = d >> 24;
 
 	/* Load new frame pointer from source operand into RCX */
 	opwld(i, Oldw, RCX);
@@ -2166,8 +2208,26 @@ comp(Inst *i)
 		if(i->op == IMULB) {
 			modrr32(0xf6, RRTMP, 4);
 		} else {
-			genb(Ocdq);
-			modrr32(0xf6, RRTMP, 7);
+			/*
+			 * Bytes are unsigned, as OP(divb) and OP(modb) have them:
+			 * both zero-extended to 32 bits, then an unsigned divide,
+			 * the quotient in EAX and the remainder in EDX. It was
+			 * cdq and the 8-bit idiv: that divides AX, whose AH is
+			 * whatever RAX held before (an earlier value's bits made
+			 * 0 % 1 overflow the quotient, raised as a zero divide),
+			 * signed (255/200 was -4), and modb then took EDX, the
+			 * sign of EAX, for the remainder, which is in AH.
+			 * A zero divisor faults in div and is raised as a zero
+			 * divide (jitfaultfp), as the interpreter raises it.
+			 */
+			genb(0x0f);				/* movzx eax, al */
+			modrr32(Omovzxb, RAX, RAX);
+			genb(REX|REXR|REXB);			/* movzx r15d, r15b */
+			genb(0x0f);
+			genb(Omovzxb);
+			genb((3<<6)|((RRTMP&7)<<3)|(RRTMP&7));
+			modrr32(0x33, RDX, RDX);		/* xor edx, edx */
+			modrr32(0xf7, RRTMP, 6);		/* div r15d */
 			if(i->op == IMODB)
 				modrr32(Oxchg, RAX, RDX);
 		}
@@ -3188,12 +3248,18 @@ compile(Module *m, int size, Modlink *ml)
 	 */
 	patch = mallocz((size+1)*sizeof(*patch), 1);
 	tinit = mallocz(m->ntype*sizeof(*tinit), 0);
+	/*
+	 * The overflow test is on the product, before the floor of 8192:
+	 * made after it, it refused every module of fewer than 128
+	 * instructions (8192/64 != size), and they all ran in the
+	 * interpreter under -c1, saying nothing.
+	 */
 	tmpsize = (ulong)size * 64;
-	if(tmpsize < 8192)
-		tmpsize = 8192;
 	if(size > 0 && tmpsize / 64 != (ulong)size) {
 		goto bad;
 	}
+	if(tmpsize < 8192)
+		tmpsize = 8192;
 	if(tmpsize > compile_tmp_size) {
 		if(compile_tmp != nil)
 			jitfree(compile_tmp, compile_tmp_size*sizeof(uchar));

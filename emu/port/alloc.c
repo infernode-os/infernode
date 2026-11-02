@@ -746,6 +746,82 @@ poolread(char *va, int count, ulong offset)
 	return n;
 }
 
+#ifdef SANMALLOC
+/*
+ * A sanitizer build (-DSANMALLOC, with -fsanitize=address): C's own
+ * allocations go to the C library's allocator, the sanitizer's, which
+ * knows each block's bounds and lifetime; a pool knows neither, so an
+ * overrun or a use after free in the kernel's C went unseen. Only
+ * mainmem goes: the Dis heap and images stay in their pools, which the
+ * collector and the draw code walk. Inferno's malloc zero-fills: run
+ * with ASAN_OPTIONS=malloc_fill_byte=0:max_malloc_fill_size=2147483647
+ * so the sanitizer's does too (tools/sanemu sets it).
+ */
+void*
+smalloc(size_t size)
+{
+	void *v;
+
+	v = calloc(1, size != 0? size: 1);
+	if(v == nil)
+		panic("smalloc: out of memory allocating %lud bytes", (ulong)size);
+	return v;
+}
+
+void*
+kmalloc(size_t size)
+{
+	return calloc(1, size != 0? size: 1);
+}
+
+void*
+mallocz(ulong size, int clr)
+{
+	if(clr)
+		return calloc(1, size != 0? size: 1);
+	return malloc(size != 0? size: 1);
+}
+
+void
+setmalloctag(void *v, ulong pc)
+{
+	USED(v);
+	USED(pc);
+}
+
+ulong
+getmalloctag(void *v)
+{
+	USED(v);
+	return ~0;
+}
+
+void
+setrealloctag(void *v, ulong pc)
+{
+	USED(v);
+	USED(pc);
+}
+
+ulong
+getrealloctag(void *v)
+{
+	USED(v);
+	return ~0;
+}
+
+extern size_t malloc_usable_size(void*);
+
+ulong
+msize(void *v)
+{
+	if(v == nil)
+		return 0;
+	return malloc_usable_size(v);
+}
+
+#else
+
 void*
 smalloc(size_t size)
 {
@@ -997,6 +1073,8 @@ calloc(size_t n, size_t szelem)
 		return nil;
 	return malloc(n*szelem);
 }
+
+#endif	/* SANMALLOC */
 
 /*
 void

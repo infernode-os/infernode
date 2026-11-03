@@ -677,9 +677,11 @@ else
     fail "mixed sibling-prefix provisioning probe failed"
 fi
 
+# /tmp/veltro is a policy root, which covers nothing beneath it: the grant
+# has to be an ordinary directory.
 if emu_c "provision_covered_descendant" 14 \
-    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
-    if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
+    "mkdir -p /tmp/veltro/ok/sub; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok/sub:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok/sub rw'; then
         pass "child provisioning preserves a covered descendant path"
     else
         fail "child provisioning did not preserve covered descendant path (output: $OUTPUT)"

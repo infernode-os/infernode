@@ -2046,10 +2046,20 @@ jobs:
           echo "$img.xz: image_download_size $(stat -c %s "$img.xz") image_download_sha256 $(sha256sum "$img.xz" | cut -d' ' -f1)"
         done
 
+        # Raspberry Pi Imager's entry for these images, attached to the
+        # release: releases/latest/download/os_list_infernode.json is the
+        # URL Raspberry Pi has, so each release brings the listing up to
+        # date with no hand edit (docs/store/rpi-imager/listing.md)
+        python3 tools/mkimagerjson.py "$VERSION" "$(date -u +%F)" \
+          "infernode-$VERSION-rpi3bplus.img.xz" "infernode-$VERSION-rpi4b.img.xz" > os_list_infernode.json
+        cat os_list_infernode.json
+
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: infernode-raspberry-pi
-        path: infernode-*-rpi*.img.xz
+        path: |
+          infernode-*-rpi*.img.xz
+          os_list_infernode.json
         retention-days: 3
 
   # ─────────────────────────────────────────────

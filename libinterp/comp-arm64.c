@@ -379,6 +379,7 @@ rmcall(void)
 {
 	Frame *f;
 	Prog *p;
+	Inst *lr;
 
 	if((void*)R.dt == H)
 		error(exModule);
@@ -389,6 +390,7 @@ rmcall(void)
 
 	f->mr = nil;
 	((void(*)(Frame*))R.dt)(f);
+	lr = f->lr;
 	R.SP = (uchar*)f;
 	R.FP = f->fp;
 	if(f->t == nil)
@@ -396,8 +398,22 @@ rmcall(void)
 	else
 		freeptrs(f, f->t);
 	p = currun();
-	if(p->kill != nil)
+	if(p->kill != nil){
+		/*
+		 * A kill that came while the call blocked (exprog, killprog
+		 * of a released Prog) is raised here, in the caller's frame,
+		 * as OP(mcall) raises it. Compiled code keeps the pc in a
+		 * register, and R.PC was whatever it last was: the handler
+		 * matched that with this frame, took another function's
+		 * handler for it, and freed what that function's locals
+		 * would be, here C addresses and nils (destroy of nil:
+		 * sysfuzz, kill with exceptions propagate while a group's
+		 * Progs export and mount). The call's return address is the
+		 * caller's pc.
+		 */
+		R.PC = lr;
 		error(p->kill);
+	}
 }
 
 static void

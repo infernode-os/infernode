@@ -688,6 +688,9 @@ jobs:
         # caught where it is made (all found by tools/disfuzz).
         ROOT=. sh tests/host/jit_byte_test.sh
         ROOT=. sh tests/host/jit_nilmod_test.sh
+        # An exception arriving during a builtin call is raised at the
+        # call, caught by the handler around it (tools/sysfuzz).
+        ROOT=. sh tests/host/jit_killcall_test.sh
 
     - name: Run cpu(1) session lifetime test
       run: |

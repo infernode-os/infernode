@@ -66,16 +66,19 @@ void
 freeFD(Heap *h, int swept)
 {
 	FD *handle;
+	Dsave ds;
 
 	USED(swept);
 
 	handle = H2D(FD*, h);
 
+	destroysave(&ds);	/* release() inside a destroy: heap.c */
 	release();
 	if(handle->fd.fd >= 0)
 		kfgrpclose(handle->grp, handle->fd.fd);
 	closefgrp(handle->grp);
 	acquire();
+	destroyrestore(&ds);
 }
 
 void
@@ -703,6 +706,19 @@ Sys_sleep(void *fp)
 	if(f->period > 0){
 		if(waserror()){
 			acquire();
+			/*
+			 * Interrupted for an exception this Prog is to have
+			 * (exprog: a group's exceptions propagate) or a kill:
+			 * it is raised after the call, as for any call that
+			 * returns with one pending (OP(mcall), rmcall), with
+			 * its own string. error("") here lost an exception,
+			 * and the Prog went as though killed, its handler
+			 * never seeing it.
+			 */
+			if(currun()->kill != nil){
+				*f->ret = -1;
+				return;
+			}
 			error("");
 		}
 		tsleep(&up->sleep, return0, 0, f->period);

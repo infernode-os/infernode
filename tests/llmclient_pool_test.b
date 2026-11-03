@@ -287,6 +287,135 @@ testcancel(t: ref T)
 	}
 }
 
+# The heap in use, from /dev/memory.
+heapused(): int
+{
+	fd := sys->open("/dev/memory", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	b := array[1024] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return -1;
+	(nil, lines) := sys->tokenize(string b[0:n], "\n");
+	for(; lines != nil; lines = tl lines) {
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf >= 8 && hd tl tl tl tl tl tl tl f == "heap")
+			return int hd f;
+	}
+	return -1;
+}
+
+# Start a slow stream in a group of its own and kill the group once
+# its first delta has come: llmsrv's cancel.
+cancelone(t: ref T): ref Said
+{
+	pid := chan of int;
+	sc := chan[1000] of string;
+	res := chan[1] of (string, string);
+	spawn streamer("slow", pid, sc, res);
+	p := <-pid;
+	tmo := chan of int;
+	spawn timer(tmo, 5000);
+	first := "";
+	alt {
+	first = <-sc =>
+		;
+	<-tmo =>
+		t.fatal("no delta from the stream");
+	}
+	fd := sys->open(sys->sprint("/prog/%d/ctl", p), Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "killgrp") < 0)
+		t.fatal(sys->sprint("cannot kill the stream: %r"));
+	return said(first);
+}
+
+# A stream cancelled mid-read leaves nothing behind: its TLS state was
+# kept in a table of the TLS module's, emptied only by close, which a
+# killed reader never reaches.
+testcancelfrees(t: ref T)
+{
+	warm(t);
+	cancelone(t);	# whatever a first cancel loads or makes once
+	sys->sleep(300);
+	warm(t);
+	before := heapused();
+	if(before < 0)
+		t.skip("no /dev/memory");
+	N: con 20;
+	for(i := 0; i < N; i++) {
+		cancelone(t);
+		sys->sleep(100);
+	}
+	sys->sleep(500);
+	warm(t);
+	after := heapused();
+	t.log(sys->sprint("heap %d before, %d after %d cancelled streams", before, after, N));
+	t.assert(after - before < 32*1024,
+		sys->sprint("%d cancelled streams keep %d bytes of heap", N, after - before));
+}
+
+# A request in a group of its own, killed after ms: anywhere, a pool
+# operation included.
+killat(ms: int, model: string, stream: int)
+{
+	pid := chan of int;
+	sc: chan of string;
+	if(stream)
+		sc = chan[1000] of string;
+	spawn streamer(model, pid, sc, chan[1] of (string, string));
+	p := <-pid;
+	sys->sleep(ms);
+	fd := sys->open(sys->sprint("/prog/%d/ctl", p), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+asker(model: string, res: chan of (string, string))
+{
+	res <-= openai(model, 0);
+}
+
+# Requests killed at every moment of their life (taking a connection,
+# writing, reading, putting it back) leave the pool working: the next
+# ones answer, and two at once still get two connections.  A request
+# killed while it held a lock on the pool wedged every request after.
+testkillstorm(t: ref T)
+{
+	warm(t);
+	seed := sys->millisec();
+	for(i := 0; i < 60; i++) {
+		seed = seed * 1103515245 + 12345;
+		ms := (seed >> 8) & 16r1f;
+		if(i & 1)
+			spawn killat(ms, "plain", i & 2);
+		else
+			killat(ms, "plain", i & 2);
+	}
+	sys->sleep(500);
+	for(i = 0; i < 3; i++) {
+		res := chan[1] of (string, string);
+		spawn asker("plain", res);
+		tmo := chan of int;
+		spawn timer(tmo, 10000);
+		alt {
+		(r, err) := <-res =>
+			must(t, "after the storm", r, err);
+		<-tmo =>
+			t.fatal("a request after the storm did not return: the pool is wedged");
+		}
+	}
+	pid := chan[2] of int;
+	res := chan[2] of (string, string);
+	spawn streamer("slow2", pid, chan[100] of string, res);
+	spawn streamer("slow2", pid, chan[100] of string, res);
+	(r, err) := <-res;
+	a := must(t, "at once after the storm", r, err);
+	(r, err) = <-res;
+	b := must(t, "at once after the storm", r, err);
+	t.assertne(a.conn, b.conn, "two at once still on two connections");
+}
+
 testconcurrent(t: ref T)
 {
 	before := warm(t);
@@ -546,6 +675,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RetryOnce", testretryonce);
 	run("ConnectionClose", testconnclose);
 	run("Proxy", testproxy);
+	# these two leave more than one connection kept: after the rest
+	run("CancelFreesState", testcancelfrees);
+	run("KillStorm", testkillstorm);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

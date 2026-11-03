@@ -63,8 +63,8 @@ init()
 		raise "fail:llmclient: cannot load WireFmt";
 	wirefmt->init();
 
-	if(poollk == nil)
-		poollk = chan[1] of int;
+	if(idleconns == nil)
+		idleconns = chan[MAXPOOL] of ref HConn;
 }
 
 # ==================== Anthropic Messages API ====================
@@ -2171,7 +2171,13 @@ quietlimit(got: int): int
 # idempotent once it has started.
 #
 # The pool is shared by every proc that uses this instance of the
-# module; poollk is held only for list operations.
+# module.  It is a buffered channel of the idle connections, not a list
+# under a lock: a cancel kills a Prog wherever it is (one preempted
+# while holding a lock is freed with it held, and every request after
+# would wait on it), and a channel's send or receive is whole or not
+# at all.  A connection is in the channel once or not at all, so two
+# takers never get the same one; a Prog killed while it holds some it
+# took out to look through only loses them (closed when collected).
 
 HConn: adt {
 	key:	string;
@@ -2192,8 +2198,7 @@ MAXPOOL: con 16;	# kept at all
 IDLEMS: con 20*1000;	# not reused after: below the idle timeouts of the APIs' servers
 DRAINMS: con 5000;	# wait for a body's end after the stream's last event
 
-pool: list of ref HConn;
-poollk: chan of int;
+idleconns: chan of ref HConn;	# made by init, room for MAXPOOL
 
 HConn.read(c: self ref HConn, buf: array of byte): int
 {
@@ -2229,31 +2234,43 @@ HConn.close(c: self ref HConn)
 	c.conn.cfd = nil;
 }
 
-lockpool()
+# Every idle connection, taken out of the pool; those idle too long
+# closed and left out.
+drainconns(): list of ref HConn
 {
-	poollk <-= 1;
+	now := sys->millisec();
+	l: list of ref HConn;
+	for(;;) alt {
+	c := <-idleconns =>
+		if(now - c.idle > IDLEMS)
+			c.close();
+		else
+			l = c :: l;
+	* =>
+		return l;
+	}
 }
 
-# A kept connection to key, or nil.  Those idle too long are closed.
+# Put c back, or close it if the pool is full.
+keepconn(c: ref HConn)
+{
+	alt {
+	idleconns <-= c =>
+		;
+	* =>
+		c.close();
+	}
+}
+
+# A kept connection to key, or nil.
 takeconn(key: string): ref HConn
 {
-	lockpool();
-	now := sys->millisec();
 	c: ref HConn;
-	keep, old: list of ref HConn;
-	for(pl := pool; pl != nil; pl = tl pl) {
-		k := hd pl;
-		if(now - k.idle > IDLEMS)
-			old = k :: old;
-		else if(c == nil && k.key == key)
-			c = k;
+	for(l := drainconns(); l != nil; l = tl l)
+		if(c == nil && (hd l).key == key)
+			c = hd l;
 		else
-			keep = k :: keep;
-	}
-	pool = keep;
-	<-poollk;
-	for(; old != nil; old = tl old)
-		(hd old).close();
+			keepconn(hd l);
 	if(c != nil)
 		c.reused = 1;
 	return c;
@@ -2263,37 +2280,24 @@ takeconn(key: string): ref HConn
 # those kept beside it are likely to be too (a server restarted).
 flushconns(key: string)
 {
-	lockpool();
-	keep, old: list of ref HConn;
-	for(pl := pool; pl != nil; pl = tl pl)
-		if((hd pl).key == key)
-			old = hd pl :: old;
+	for(l := drainconns(); l != nil; l = tl l)
+		if((hd l).key == key)
+			(hd l).close();
 		else
-			keep = hd pl :: keep;
-	pool = keep;
-	<-poollk;
-	for(; old != nil; old = tl old)
-		(hd old).close();
+			keepconn(hd l);
 }
 
 putconn(c: ref HConn)
 {
 	c.idle = sys->millisec();
-	lockpool();
 	n := 0;
-	t := 0;
-	for(pl := pool; pl != nil; pl = tl pl) {
-		t++;
-		if((hd pl).key == c.key)
-			n++;
+	for(l := drainconns(); l != nil; l = tl l) {
+		if((hd l).key == c.key && ++n >= MAXIDLE)
+			(hd l).close();	# room for c: MAXIDLE to a place
+		else
+			keepconn(hd l);
 	}
-	if(n < MAXIDLE && t < MAXPOOL) {
-		pool = c :: pool;
-		c = nil;
-	}
-	<-poollk;
-	if(c != nil)
-		c.close();
+	keepconn(c);
 }
 
 tlsinit(): string

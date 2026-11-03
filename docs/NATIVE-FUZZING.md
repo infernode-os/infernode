@@ -180,10 +180,6 @@ Prog exiting of itself within 10s).
 - Orphaned calls whose server never answers keep their tag and their
   Mntrpc until the mount goes: one tag of 64K a call, which a long soak
   against a stuck server could use up.
-- One-core machines under `-icount` (seeds 401, 411, 417): the shell
-  prints its prompt and then echoes nothing, not even the debug keys;
-  no panic. The kernel from before the kill and lock fixes does the
-  same, so it is older than them. Not yet looked into.
 - Hosted sysfuzz, rarely (seeds 704 with `-d`, 904 without): heartbeats
   stop with no watchdog report and nothing found under gdb on a rerun.
 
@@ -194,3 +190,10 @@ and runs every core on one host thread: under `-icount 0` a run takes
 many times its seconds. nativefuzz waits while the heartbeats go on (a
 minute without one is a hang) rather than for a fixed time; a "hang" on
 an `-icount` machine from before that was the machine being slow.
+
+On one core, nativefuzz gives `-icount` `sleep=on`. With `sleep=off`
+QEMU (8.2) jumps the clock to the next deadline whenever every core is
+idle, and with a single core, idling as it should in `wfi`, it then never
+runs its main loop again: no serial input reaches the guest and the
+QEMU monitor does not answer either. Every one-core `-icount` seed hung
+at the prompt that way; it was never the kernel.

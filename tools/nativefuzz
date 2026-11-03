@@ -83,6 +83,9 @@ QEMU = shutil.which("qemu-system-aarch64")
 CRASH = re.compile(rb"panic|unhandled exception|lock loop|not locked|double sleep|runproc|dequeued|"
 	rb"waserror:|poperror:|nexterror:|CORRUPT|not in pools|arena too large|(?m:^no free [a-z])|"
 	rb"is (?:Running|Ready|Wakeme|Scheding) on cpu|sys: trap|SEGV|bad op|illegal instruction")
+# Under -C, what malloc refusing gives: exhausted()'s "no free ..." is the
+# kernel failing a call as it should, not a crash
+CRASHCHAOS = re.compile(CRASH.pattern.replace(rb"(?m:^no free [a-z])|", b""))
 PROMPT = b"; "
 
 
@@ -263,6 +266,11 @@ def one(seed, a, card):
 			left = "Progs left: " + ", ".join("VM %s %s" % (v.decode(), n.decode()) for v, n in left)
 			if a.C:
 				note += "; " + left
+				c.buf.extend(b"\n--- nativefuzz: Progs left: ^T^Tk ^T^Td ---\n")
+				for k in (b"k", b"d"):
+					p.stdin.write(b"\x14\x14" + k)
+					p.stdin.flush()
+					c.pump(5)
 			elif a.L:
 				kind, why = "leaked", left
 			else:
@@ -333,6 +341,9 @@ def main():
 	ap.add_argument("-L", action="store_true")
 	ap.add_argument("-C", default=None)
 	a = ap.parse_args()
+	if a.C:
+		global CRASH
+		CRASH = CRASHCHAOS
 
 	if QEMU is None:
 		print("nativefuzz: no qemu-system-aarch64")

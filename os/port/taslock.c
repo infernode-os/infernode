@@ -123,6 +123,9 @@ lock(Lock *l)
 	l->pri = opri;
 	l->pc = pc;
 	l->p = up;
+#ifdef CHAOS
+	chaoslock();
+#endif
 }
 
 void
@@ -254,6 +257,10 @@ unlock(Lock *l)
 		 */
 		if(up->state == Running && anyhigher() && islo())
 			sched();
+#ifdef CHAOS
+		else if(up->state == Running && islo() && chaosyield())
+			sched();
+#endif
 	}
 }
 

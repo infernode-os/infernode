@@ -648,6 +648,7 @@ enum{
 	Quser,
 	Qjit,
 	Qsysstat,
+	Qchaos,
 };
 
 static Dirtab consdir[]=
@@ -673,6 +674,9 @@ static Dirtab consdir[]=
 	"user",		{Quser},	0,	0644,
 	"jit",		{Qjit},	0,	0666,
 	"sysstat",	{Qsysstat},	0,	0444,
+#ifdef CHAOS
+	"chaos",	{Qchaos},	0,	0664,	/* chaos.c: faults made often */
+#endif
 };
 
 ulong	boottime;		/* seconds since epoch at boot */
@@ -1101,6 +1105,11 @@ consread(Chan *c, void *buf, long n, vlong offset)
 		snprint(tmp, sizeof(tmp), "%d", cflag);
 		return readstr(offset, buf, n, tmp);
 
+#ifdef CHAOS
+	case Qchaos:
+		return chaosread(buf, n, offset);
+#endif
+
 	case Qnull:
 		return 0;
 
@@ -1314,6 +1323,11 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			buf[n-1] = 0;
 		kstrdup(&up->env->user, buf);
 		break;
+
+#ifdef CHAOS
+	case Qchaos:
+		return chaoswrite(va, n);
+#endif
 
 	case Qjit:
 		if(n >= sizeof(buf))

@@ -650,6 +650,9 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 
 	if(up == nil)
 		panic("sleep() not in process (%lux)", getcallerpc(&r));
+#ifdef CHAOS
+	chaossleep();
+#endif
 	/*
 	 * spl is to allow lock to be called
 	 * at interrupt time. lock is mutual exclusion

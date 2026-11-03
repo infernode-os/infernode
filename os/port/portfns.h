@@ -181,6 +181,14 @@ Block*		mem2bl(uchar*, int);
 int			memlow(void);
 int			memusehigh(void);
 void		microdelay(int);
+#ifdef CHAOS
+int		chaosmalloc(void);
+void		chaossleep(void);
+void		chaoslock(void);
+int		chaosyield(void);
+long		chaosread(void*, long, vlong);
+long		chaoswrite(void*, long);
+#endif
 uvlong		mk64fract(uvlong, uvlong);
 void		mkqid(Qid*, vlong, ulong, int);
 void		modinit(void);

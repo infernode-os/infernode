@@ -1159,9 +1159,21 @@ addprog(Proc *p)
 	Prog *n;
 
 	if((n = p->prog) == nil) {
-		n = malloc(sizeof(Prog));
-		if(n == nil)
-			panic("no memory");
+		/*
+		 * Waited for, not panicked over, and not with an error:
+		 * newproc can be given no error to raise, and release()
+		 * makes a VM's next kproc here with isched.creating set,
+		 * which an error out of it would leave set for good (no
+		 * kproc made again, the VM stopped). A pool short for a
+		 * moment -- every malloc can be refused (os/port/chaos.c)
+		 * -- panicked the machine. Not tsleep: a sleep can be
+		 * interrupted.
+		 */
+		while((n = malloc(sizeof(Prog))) == nil){
+			if(up == nil)
+				panic("no memory");
+			microdelay(1000);
+		}
 		p->prog = n;
 	} else
 		memset(n, 0, sizeof(Prog));

@@ -496,6 +496,7 @@ struct Proc
 	Osenv*		env;
 	Osenv		defenv;
 	int		swipend;	/* software interrupt pending for Prog */
+	int		intpend;	/* a Prog's kill that came while its proc was not asleep: the next sleep raises it */
 	Lock		sysio;		/* note handler lock */
 	char*		psstate;	/* What /proc/#/status reports */
 	ulong		pid;

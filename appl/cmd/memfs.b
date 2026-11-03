@@ -319,7 +319,8 @@ Serve:
 				err = Styxlib->Ebadfid;
 			if (err == nil && (mf.perm & Sys->DMDIR))
 				err = Styxlib->Eperm;
-			if (err == nil && (tm.offset < big 0 || tm.offset + big len tm.data > big Maxoff))
+			# compared so as not to overflow: 2^63-1 plus a count was negative
+			if (err == nil && (tm.offset < big 0 || tm.offset > big (Maxoff - len tm.data)))
 				err = Ebadoff;
 			if (err == nil)
 				err = writefile(mf, int tm.offset, tm.data);

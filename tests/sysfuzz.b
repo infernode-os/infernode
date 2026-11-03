@@ -71,6 +71,7 @@ scratch := "";
 scratchdir := "";	# -d: where scratch is made when there is no #U (the native kernel)
 mine: list of int;	# pids this run made
 nmine := 0;
+epochpids: list of int;	# this epoch's: its group, whoever of it is left
 
 # paths to aim at; refreshed each epoch by walking the name space
 paths: array of string;
@@ -121,6 +122,18 @@ init(nil: ref Draw->Context, args: list of string)
 	if(epochsecs < 1)
 		epochsecs = 1;
 	sys->print("sysfuzz: seed %d procs %d secs %d\n", seed, nprocs, secs);
+	# what ends the run, said: in another VM (vm(1)) no shell does
+	{
+		run();
+	} exception e {
+	"*" =>
+		sys->print("sysfuzz: died: %s\n", e);
+		raise e;
+	}
+}
+
+run()
+{
 	setup();
 
 	start := sys->millisec();
@@ -131,11 +144,35 @@ init(nil: ref Draw->Context, args: list of string)
 		epoch++;
 		walk();
 		pidc := chan of int;
-		spawn epochleader(pidc, seed*1000 + epoch);
+		go := chan of int;
+		spawn epochleader(pidc, go, seed*1000 + epoch);
 		lpid := <-pidc;
+		# its ctl opened before its workers start: with -d they can
+		# rename the root's prog directory, and a kill by name later
+		# found nothing, the epoch's Progs left running (nativefuzz)
+		lctl := sys->open(sys->sprint("/prog/%d/ctl", lpid), Sys->OWRITE);
+		go <-= 1;
 		sys->sleep(epochsecs*1000);
-		# the whole epoch's group, wherever it got to
-		killgrp(lpid);
+		# the whole epoch's group, wherever it got to; through any of it
+		# still there if the leader is not (an exception propagated to
+		# it, its workers in calls still running: nativefuzz)
+		# By a helper, waited for a while: a kill runs the dead Progs'
+		# closes in the killer, and one on a server that never answers
+		# does not return (docs/NATIVE-FUZZING.md, Open); the helper is
+		# left in it and the run goes on
+		kdone := chan[1] of int;	# the helper never waits to say it is done
+		spawn epochkill(lctl, epochpids, kdone);
+		kt := chan of int;
+		spawn timer(kt, 3000);
+		alt {
+		<-kdone =>
+			;
+		<-kt =>
+			if(verbose)
+				sys->print("epoch %d: the kill did not return in 3s\n", epoch);
+		}
+		lctl = nil;
+		epochpids = nil;
 		sys->sleep(50);
 		if(verbose)
 			sys->print("epoch %d over\n", epoch);
@@ -277,10 +314,22 @@ dirs(p: string): list of (string, int)
 	return l;
 }
 
-epochleader(pidc: chan of int, s: int)
+epochkill(lctl: ref FD, pids: list of int, done: chan of int)
+{
+	if(lctl == nil || sys->fprint(lctl, "killgrp") < 0)
+		for(; pids != nil; pids = tl pids){
+			fd := sys->open(sys->sprint("/prog/%d/ctl", hd pids), Sys->OWRITE);
+			if(fd != nil && sys->fprint(fd, "killgrp") >= 0)
+				break;
+		}
+	done <-= 1;
+}
+
+epochleader(pidc: chan of int, go: chan of int, s: int)
 {
 	sys->pctl(Sys->NEWPGRP|Sys->FORKFD|Sys->FORKNS, nil);
 	pidc <-= sys->pctl(0, nil);
+	<-go;
 	for(i := 0; i < nprocs; i++)
 		spawn worker(ref Rng(big (s*31 + i)), 0);
 	# the leader itself just waits to be killed
@@ -302,6 +351,7 @@ worker(r: ref Rng, depth: int)
 	# heartbeat's output, which then blocked on a full pipe)
 	pid := sys->pctl(Sys->FORKNS|Sys->FORKFD, nil);
 	mine = pid :: mine;
+	epochpids = pid :: epochpids;
 	nmine++;
 	w := ref Wk(r, array[24] of ref FD, nil, depth);
 	for(;;){
@@ -381,6 +431,12 @@ openable(p: string): int
 	for(i := 0; i+6 <= len p; i++)
 		if(p[i:i+6] == "kprint")
 			return 0;
+	# a Prog's wait file has one reader, the last to open it: opened,
+	# another's children's exits come here, not to it. The operator's
+	# shell waited for ever on the next command it ran (nativefuzz)
+	pid := progpid(p);
+	if(pid >= 0 && !ismine(pid) && len p >= 4 && p[len p - 4:] == "wait")
+		return 0;
 	return 1;
 }
 
@@ -559,7 +615,13 @@ op(w: ref Wk)
 	20 =>
 		sys->chdir(anypath(r));
 	21 =>
-		fl := array[] of {Sys->NEWFD, Sys->FORKFD, Sys->FORKNS, Sys->NEWENV, Sys->FORKENV, Sys->NEWPGRP, 0, Sys->FORKFD|Sys->FORKNS};
+		# not NEWPGRP: a worker in a group of its own escaped the epoch's
+		# kill, and stayed in its reads and mounts after the run, one
+		# reading the console taking the operator's next line
+		# (nativefuzz). Killing each Prog by pid instead hung the killer:
+		# a kill runs the dead Prog's closes in the killer, and a close
+		# on a server that never answers does not return
+		fl := array[] of {Sys->NEWFD, Sys->FORKFD, Sys->FORKNS, Sys->NEWENV, Sys->FORKENV, 0, Sys->FORKFD|Sys->FORKNS};
 		pf := fl[r.n(len fl)];
 		if(pf == Sys->NEWFD)
 			sys->pctl(pf, 0 :: 1 :: 2 :: nil);
@@ -599,6 +661,8 @@ op(w: ref Wk)
 		files := array[] of {"status", "wait", "ns", "nsgrp", "fd", "stack", "exception", "grpwait", "heap", "dbgctl", "ctl", "pgrp", "text"};
 		f := files[r.n(len files)];
 		p := sys->sprint("/prog/%d/%s", pid, f);
+		if(!openable(p))
+			return;
 		if(r.c(50) && writable(p)){
 			fd := sys->open(p, Sys->ORDWR);
 			if(fd != nil){
@@ -768,7 +832,14 @@ check()
 timer(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
-	c <-= 1;
+	# no one may be listening: a send would hold this Prog, and with it
+	# the name space and the exports it shares, after the run
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
 }
 
 checker(done: chan of string)

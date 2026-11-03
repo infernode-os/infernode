@@ -543,47 +543,98 @@ progdot(Pgrp *pg, char *va, int count)
 	return n;
 }
 
-static int
-progfds(Osenv *o, char *va, int count, vlong offset)
+/*
+ * A Prog's fd table, copied with a reference to each Chan, under its
+ * VM; printed, with its dot, and its Chans closed, with the VM let go.
+ * Nothing that takes a name space's lock is done holding a VM: a
+ * mount waits for a Mhead's lock holding its name space's, and a union
+ * directory's read holds the Mhead's across a 9P read that may never
+ * be answered, so a read of fd or ns stopped a VM for good
+ * (tools/nativefuzz). Natively the table is locked as it is copied:
+ * holding the Prog's VM does not hold its fd table, which vm(1) shares
+ * with a Prog in another VM.
+ */
+typedef struct Fdsnap Fdsnap;
+struct Fdsnap
 {
-	Fgrp *f;
+	int	n;
+	Chan**	c;
+	int*	fd;
+};
+
+static void
+fdsnap(Fgrp *f, Fdsnap *s)
+{
+	int i, m;
 	Chan *c;
+
+	s->n = 0;
+	m = f->maxfd+1;
+	if(m < 1)
+		m = 1;
+	s->c = malloc(m*sizeof(Chan*));
+	s->fd = malloc(m*sizeof(int));
+	if(s->c == nil || s->fd == nil){
+		free(s->c);
+		free(s->fd);
+		s->c = nil;
+		s->fd = nil;
+		error(Enomem);
+	}
+	for(i = 0; i <= f->maxfd && s->n < m; i++) {
+		c = f->fd[i];
+		if(c == nil)
+			continue;
+		incref(&c->r);
+		s->c[s->n] = c;
+		s->fd[s->n++] = i;
+	}
+}
+
+static void
+fdsnapfree(Fdsnap *s)
+{
+	int i;
+
+	for(i = 0; i < s->n; i++)
+		cclose(s->c[i]);
+	free(s->c);
+	free(s->fd);
+	s->n = 0;
+	s->c = nil;
+	s->fd = nil;
+}
+
+/*
+ * The listing is made whole in a buffer of its own, sized for it, and
+ * the read's part taken from it. Made in the reader's buffer, a line
+ * that did not fit was snprint's -1 (no room), added to the count: the
+ * next line went before the buffer, over the heap.
+ */
+static int
+progfds(Pgrp *pg, Fdsnap *s, char *va, int count, vlong offset)
+{
 	int n, i, w, ww, size, k;
 	char *buf;
 
-	/*
-	 * The listing is made whole in a buffer of its own, sized for it,
-	 * and the read's part taken from it. Made in the reader's buffer,
-	 * a line that did not fit was snprint's -1 (no room), added to the
-	 * count: the next line went before the buffer, over the heap.
-	 */
-	f = o->fgrp;	/* f is not locked because we've acquired */
-	size = 64 + KNAMELEN;
-	for(i = 0; i <= f->maxfd; i++)
-		if((c = f->fd[i]) != nil)
-			size += 96 + (c->name != nil? strlen(c->name->s) : 0);
+	size = 1024;
+	for(i = 0; i < s->n; i++)
+		size += 96 + (s->c[i]->name != nil? strlen(s->c[i]->name->s) : 0);
 	buf = malloc(size);
 	if(buf == nil)
 		error(Enomem);
-	k = progdot(o->pgrp, buf, size - 2);
+	k = progdot(pg, buf, 1000);
 	buf[k++] = '\n';
 	buf[k] = 0;
 	/* compute width of qid.path */
 	w = 0;
-	for(i = 0; i <= f->maxfd; i++) {
-		c = f->fd[i];
-		if(c == nil)
-			continue;
-		ww = progqidwidth(c);
+	for(i = 0; i < s->n; i++) {
+		ww = progqidwidth(s->c[i]);
 		if(ww > w)
 			w = ww;
 	}
-	for(i = 0; i <= f->maxfd && k < size - 1; i++) {
-		c = f->fd[i];
-		if(c == nil)
-			continue;
-		k += progfdprint(c, i, w, buf+k, size-k);
-	}
+	for(i = 0; i < s->n && k < size - 1; i++)
+		k += progfdprint(s->c[i], s->fd[i], w, buf+k, size-k);
 	buf[k] = 0;
 	n = readstr(offset, va, count, buf);
 	free(buf);
@@ -899,6 +950,8 @@ progread(Chan *c, void *va, long n, vlong offset)
 	ulong grpid;
 	char *a = va;
 	char *nsl;
+	Pgrp *pg;
+	Fdsnap fs;
 	Progctl *ctl;
 	char mbuf[64], timebuf[12];
 
@@ -955,34 +1008,41 @@ progread(Chan *c, void *va, long n, vlong offset)
 			return 0;
 		}
 		o = p->osenv;
+		/* the name space, held, its locks taken with the VM let go: see fdsnap */
+		pg = o->pgrp;
+		incref(&pg->r);
+		poperror();
+		release();
 		/*
 		 * A line, made in a buffer of its own and as much of it given
 		 * as the read has room for. Made in the reader's, a read too
 		 * short for "cd " had snprint's -1 (no room) added to its
 		 * count, and dot's name went before the buffer (a nil write,
-		 * the kernel's panic; tools/nativefuzz).
+		 * the kernel's panic; tools/nativefuzz). The mount is found and
+		 * its line made under the name space's lock: a Mount kept past
+		 * the lock can be freed by an unmount on another core.
 		 */
 		if(n <= 0){
-			poperror();
-			release();
+			closepgrp(pg);
 			return 0;
 		}
 		nsl = malloc(Nsline);
-		if(nsl == nil)
+		if(nsl == nil){
+			closepgrp(pg);
 			error(Enomem);
-		i = mntscan(mw, o->pgrp, nsl, Nsline);
+		}
+		i = mntscan(mw, pg, nsl, Nsline);
 		if(i < 0) {
 			mw->cddone = 1;
 			i = snprint(nsl, Nsline, "cd ");
-			i += progdot(o->pgrp, nsl+i, Nsline-i-2);
+			i += progdot(pg, nsl+i, Nsline-i-2);
 			nsl[i++] = '\n';
 		}
 		if(i > n)
 			i = n;
 		memmove(a, nsl, i);
 		free(nsl);
-		poperror();
-		release();
+		closepgrp(pg);
 		return i;
 	case Qnsgrp:
 		acquire();
@@ -1041,9 +1101,20 @@ progread(Chan *c, void *va, long n, vlong offset)
 		if(p == nil)
 			error(Ethread);
 		o = p->osenv;
-		n = progfds(o, va, n, offset);
+		fdsnap(o->fgrp, &fs);
+		pg = o->pgrp;
+		incref(&pg->r);
 		poperror();
 		release();
+		if(waserror()) {
+			fdsnapfree(&fs);
+			closepgrp(pg);
+			nexterror();
+		}
+		n = progfds(pg, &fs, va, n, offset);
+		poperror();
+		fdsnapfree(&fs);
+		closepgrp(pg);
 		return n;
 	case Qexception:
 		acquire();

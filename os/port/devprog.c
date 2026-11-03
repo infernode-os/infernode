@@ -573,91 +573,105 @@ progfdprint(Chan *c, int fd, int w, char *s, int ns)
 	return n;
 }
 
-static int
-progfds(Osenv *o, char *va, int count, vlong offset, Chan ***csp, int *ncs)
+/*
+ * A Prog's fd table, copied with a reference to each Chan, under its
+ * VM; printed, with its dot, and its Chans closed, with the VM let go.
+ * Nothing that takes a name space's lock is done holding a VM: a
+ * mount waits for a Mhead's lock holding its name space's, and a union
+ * directory's read holds the Mhead's across a 9P read that may never
+ * be answered, so a read of fd or ns stopped a VM for good
+ * (tools/nativefuzz). Natively the table is locked as it is copied:
+ * holding the Prog's VM does not hold its fd table, which vm(1) shares
+ * with a Prog in another VM.
+ */
+typedef struct Fdsnap Fdsnap;
+struct Fdsnap
 {
-	Fgrp *f;
-	Chan *c, **cs;
-	int n, i, m, w, ww, *fds, size, k;
-	char *buf;
+	int	n;
+	Chan**	c;
+	int*	fd;
+};
 
-	/*
-	 * The fd table is copied, a reference to each Chan with it, under
-	 * its lock, and printed from the copy. Holding the Prog's VM does
-	 * not hold its fd table: vm(1) runs a command in another VM with
-	 * the caller's file descriptors, so a Prog on another core can
-	 * close an fd, or grow the table, while it is read (a nil write in
-	 * snprint, the kernel's panic; tools/nativefuzz).
-	 */
-	f = o->fgrp;
+static void
+fdsnap(Fgrp *f, Fdsnap *s)
+{
+	int i, m;
+	Chan *c;
+
+	s->n = 0;
 	lock(&f->l);
 	m = f->maxfd+1;
 	unlock(&f->l);
 	if(m < 1)
 		m = 1;
-	cs = malloc(m*sizeof(Chan*));
-	fds = malloc(m*sizeof(int));
-	if(cs == nil || fds == nil){
-		free(cs);
-		free(fds);
+	s->c = malloc(m*sizeof(Chan*));
+	s->fd = malloc(m*sizeof(int));
+	if(s->c == nil || s->fd == nil){
+		free(s->c);
+		free(s->fd);
+		s->c = nil;
+		s->fd = nil;
 		error(Enomem);
 	}
 	lock(&f->l);
-	n = 0;
-	for(i = 0; i <= f->maxfd && n < m; i++) {
+	for(i = 0; i <= f->maxfd && s->n < m; i++) {
 		c = f->fd[i];
 		if(c == nil)
 			continue;
 		incref(&c->r);
-		cs[n] = c;
-		fds[n++] = i;
+		s->c[s->n] = c;
+		s->fd[s->n++] = i;
 	}
 	unlock(&f->l);
-	m = n;
+}
 
-	/*
-	 * The listing is made whole in a buffer of its own, sized for it,
-	 * and the read's part taken from it. Made in the reader's buffer,
-	 * a line that did not fit was snprint's -1 (no room), added to the
-	 * count: the next line went before the buffer, over the heap.
-	 */
-	size = 64 + KNAMELEN;
-	for(i = 0; i < m; i++)
-		size += 96 + (cs[i]->name != nil? strlen(cs[i]->name->s) : 0);
+static void
+fdsnapfree(Fdsnap *s)
+{
+	int i;
+
+	for(i = 0; i < s->n; i++)
+		cclose(s->c[i]);
+	free(s->c);
+	free(s->fd);
+	s->n = 0;
+	s->c = nil;
+	s->fd = nil;
+}
+
+/*
+ * The listing is made whole in a buffer of its own, sized for it, and
+ * the read's part taken from it. Made in the reader's buffer, a line
+ * that did not fit was snprint's -1 (no room), added to the count: the
+ * next line went before the buffer, over the heap.
+ */
+static int
+progfds(Pgrp *pg, Fdsnap *s, char *va, int count, vlong offset)
+{
+	int n, i, w, ww, size, k;
+	char *buf;
+
+	size = 1024;
+	for(i = 0; i < s->n; i++)
+		size += 96 + (s->c[i]->name != nil? strlen(s->c[i]->name->s) : 0);
 	buf = malloc(size);
-	if(buf == nil){
-		free(fds);
-		*csp = cs;
-		*ncs = m;
+	if(buf == nil)
 		error(Enomem);
-	}
-	if(waserror()){
-		free(buf);
-		free(fds);
-		*csp = cs;
-		*ncs = m;
-		nexterror();
-	}
-	k = progdot(o->pgrp, buf, size - 2);
+	k = progdot(pg, buf, 1000);
 	buf[k++] = '\n';
 	buf[k] = 0;
 	/* compute width of qid.path */
 	w = 0;
-	for(i = 0; i < m; i++) {
-		ww = progqidwidth(cs[i]);
+	for(i = 0; i < s->n; i++) {
+		ww = progqidwidth(s->c[i]);
 		if(ww > w)
 			w = ww;
 	}
-	for(i = 0; i < m && k < size - 1; i++)
-		k += progfdprint(cs[i], fds[i], w, buf+k, size-k);
+	for(i = 0; i < s->n && k < size - 1; i++)
+		k += progfdprint(s->c[i], s->fd[i], w, buf+k, size-k);
 	buf[k] = 0;
-	poperror();
 	n = readstr(offset, va, count, buf);
 	free(buf);
-	/* closed by the caller with the VM let go: a last close is a clunk */
-	free(fds);
-	*csp = cs;
-	*ncs = m;
 	return n;
 }
 
@@ -970,10 +984,10 @@ progread(Chan *c, void *va, long n, vlong offset)
 	ulong grpid;
 	char *a = va;
 	char *nsl;
+	Pgrp *pg;
+	Fdsnap fs;
 	Progctl *ctl;
 	char mbuf[64], timebuf[12];
-	Chan **cs;
-	int ncs;
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, a, n, 0, 0, proggen);
@@ -1028,37 +1042,41 @@ progread(Chan *c, void *va, long n, vlong offset)
 			return 0;
 		}
 		o = p->osenv;
+		/* the name space, held, its locks taken with the VM let go: see fdsnap */
+		pg = o->pgrp;
+		incref(&pg->r);
+		poperror();
+		prelease();
 		/*
 		 * A line, made in a buffer of its own and as much of it given
 		 * as the read has room for. Made in the reader's, a read too
 		 * short for "cd " had snprint's -1 (no room) added to its
 		 * count, and dot's name went before the buffer (a nil write,
-		 * the kernel's panic; tools/nativefuzz).
-		 * The mount is found and its line made under the name
-		 * space's lock: a Mount kept past the lock can be freed by
-		 * an unmount on another core before it is read.
+		 * the kernel's panic; tools/nativefuzz). The mount is found and
+		 * its line made under the name space's lock: a Mount kept past
+		 * the lock can be freed by an unmount on another core.
 		 */
 		if(n <= 0){
-			poperror();
-			prelease();
+			closepgrp(pg);
 			return 0;
 		}
 		nsl = malloc(Nsline);
-		if(nsl == nil)
+		if(nsl == nil){
+			closepgrp(pg);
 			error(Enomem);
-		i = mntscan(mw, o->pgrp, nsl, Nsline);
+		}
+		i = mntscan(mw, pg, nsl, Nsline);
 		if(i < 0) {
 			mw->cddone = 1;
 			i = snprint(nsl, Nsline, "cd ");
-			i += progdot(o->pgrp, nsl+i, Nsline-i-2);
+			i += progdot(pg, nsl+i, Nsline-i-2);
 			nsl[i++] = '\n';
 		}
 		if(i > n)
 			i = n;
 		memmove(a, nsl, i);
 		free(nsl);
-		poperror();
-		prelease();
+		closepgrp(pg);
 		return i;
 	case Qnsgrp:
 		pacquire(PID(c->qid));
@@ -1108,26 +1126,29 @@ progread(Chan *c, void *va, long n, vlong offset)
 		prelease();
 		return n;
 	case Qfd:
-		cs = nil;
-		ncs = 0;
 		pacquire(PID(c->qid));
 		if(waserror()) {
 			prelease();
-			for(i = 0; i < ncs; i++)
-				cclose(cs[i]);
-			free(cs);
 			nexterror();
 		}
 		p = progpid(PID(c->qid));
 		if(p == nil)
 			error(Ethread);
 		o = p->osenv;
-		n = progfds(o, va, n, offset, &cs, &ncs);
+		fdsnap(o->fgrp, &fs);
+		pg = o->pgrp;
+		incref(&pg->r);
 		poperror();
 		prelease();
-		for(i = 0; i < ncs; i++)
-			cclose(cs[i]);
-		free(cs);
+		if(waserror()) {
+			fdsnapfree(&fs);
+			closepgrp(pg);
+			nexterror();
+		}
+		n = progfds(pg, &fs, va, n, offset);
+		poperror();
+		fdsnapfree(&fs);
+		closepgrp(pg);
 		return n;
 	case Qexception:
 		pacquire(PID(c->qid));

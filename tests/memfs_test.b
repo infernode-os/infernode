@@ -306,7 +306,8 @@ testFarOffsetRefused(t: ref T)
 faroffsets(fd: ref Sys->FD, res: chan of string)
 {
 	b := array of byte "hello";
-	offs := array[] of {big 16r7FFFFFFC, big 16r80000000, big 16r80000008, big 1<<40, big -2};
+	offs := array[] of {big 16r7FFFFFFC, big 16r80000000, big 16r80000008, big 1<<40, big -2,
+		big 16r7FFFFFFFFFFFFFFF, big 16r7FFFFFFFFFFFFFFF - big 3};
 	for(i := 0; i < len offs; i++){
 		if(sys->pwrite(fd, b, len b, offs[i]) != -1){
 			res <-= sys->sprint("pwrite at %bd was not refused", offs[i]);

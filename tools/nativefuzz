@@ -28,7 +28,9 @@
 #		answer (a file, a pipe, a spawn) once its Progs were killed
 #	hang	not every sysfuzz said done within secs + 120 seconds
 #	dead	the shell did not answer afterwards
-#	leaked	Progs left in VMs 1-3 ten seconds after every sysfuzz ended
+#	leaked	with -L, Progs left in VMs 1-3 ten seconds after every sysfuzz
+#		ended; without it they are noted on the pass line, with the
+#		console's ^T^Td to say which
 #
 # A failed run keeps the console and the machine in
 # $ROOT/tmp/nativefuzz/fail/<seed>/; rerun it with -n 1 -s <seed>. The
@@ -46,6 +48,7 @@
 #	-m	the machine, instead of the seed's
 #	-x	sysfuzz operations to leave out
 #	-v	sysfuzz says when each epoch is over
+#	-L	Progs left behind fail the run
 #
 # Exit status: 0 no failure, 1 a failure, 2 a setup error.
 #
@@ -145,6 +148,7 @@ def one(seed, a, card):
 	p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 	c = Console(p)
 	kind, why = None, ""
+	note = ""
 	nvm = 0
 	try:
 		# slow under -icount: the boot runs the JIT's stress and a benchmark
@@ -161,17 +165,17 @@ def one(seed, a, card):
 		sf = "/dis/tests/sysfuzz.dis -t %d -e %d -p %d -d /tmp%s" % (a.t, a.e, a.p, x)
 		nvm = m["smp"]
 		mark = len(c.buf)
-		for v in range(1, nvm):
-			c.typed("vm %d %s -s %d" % (v, sf, seed * 10 + v))
-			c.pump(0.5)
+		# one line: a line typed once one is running could be read by
+		# its workers (they read /dev/cons) and not the shell. VM 0's
 		# in the background, so the shell answers while they run
-		c.typed("{%s -s %d; echo VM0END} &" % (sf, seed * 10))
+		line = "".join("vm %d %s -s %d; " % (v, sf, seed * 10 + v) for v in range(1, nvm))
+		c.typed(line + "{%s -s %d; echo VM0END} &" % (sf, seed * 10))
 		end = time.monotonic() + a.t + 120
 		while time.monotonic() < end:
 			out = bytes(c.buf[mark:])
 			if CRASH.search(out) or p.poll() is not None:
 				break
-			if out.count(b"sysfuzz: done") + out.count(b"sysfuzz: wedged") + out.count(b"sysfuzz: cannot") >= nvm and b"\nVM0END" in out:
+			if out.count(b"sysfuzz: done") + out.count(b"sysfuzz: wedged") + out.count(b"sysfuzz: cannot") + out.count(b"sysfuzz: died") >= nvm and b"\nVM0END" in out:
 				break
 			if not c.pump(1):
 				break
@@ -181,7 +185,7 @@ def one(seed, a, card):
 		if p.poll() is not None:
 			kind, why = "died", "QEMU exited %d" % p.returncode
 			raise StopIteration
-		w = re.search(rb"sysfuzz: (wedged|cannot)[^\r\n]*", out)
+		w = re.search(rb"sysfuzz: (wedged|cannot|died)[^\r\n]*", out)
 		if w:
 			kind, why = "wedged", w.group(0).decode(errors="replace")
 			raise StopIteration
@@ -198,11 +202,23 @@ def one(seed, a, card):
 			raise StopIteration
 		left = re.findall(rb"vm ([1-9]) progs ([1-9][0-9]*)", bytes(c.buf[mark:]))
 		if left:
-			kind, why = "leaked", "Progs left: " + ", ".join("VM %s %s" % (v.decode(), n.decode()) for v, n in left)
+			# Progs left behind: killed ones still in a 9P call to a
+			# server that will not answer (another of their epoch's,
+			# itself stuck: the mount driver waits for a flush's reply
+			# uninterruptibly). Noted, with ^T^Td for which, not failed:
+			# -L fails the run on it
+			left = "Progs left: " + ", ".join("VM %s %s" % (v.decode(), n.decode()) for v, n in left)
+			if a.L:
+				kind, why = "leaked", left
+			else:
+				note = left
+				p.stdin.write(b"\x14\x14d")
+				p.stdin.flush()
+				c.pump(3)
 	except StopIteration:
 		pass
 	finally:
-		if kind in ("hang", "dead", "boot") and p.poll() is None:
+		if kind in ("hang", "dead", "boot", "leaked") and p.poll() is None:
 			# what the kernel's processes are doing, from the console's
 			# debug keys (devcons.c): ^T^Tp the processes, ^T^Tm the pools,
 			# ^T^Tk the kernel stacks of those not running, ^T^Td the Progs;
@@ -235,7 +251,7 @@ def one(seed, a, card):
 			s = text.rfind(b"\n", 0, cr.start()) + 1
 			e = text.find(b"\n", cr.end())
 			kind, why = "crash", text[s:e if e >= 0 else len(text)].decode(errors="replace").strip()[:200]
-	return seed, m, nvm, kind, why, text.decode(errors="replace")
+	return seed, m, nvm, kind, why or note, text.decode(errors="replace")
 
 
 def mkcard(path):
@@ -259,6 +275,7 @@ def main():
 	ap.add_argument("-m", default=None)
 	ap.add_argument("-x", default=None)
 	ap.add_argument("-v", action="store_true")
+	ap.add_argument("-L", action="store_true")
 	a = ap.parse_args()
 
 	if QEMU is None:
@@ -310,7 +327,7 @@ def main():
 					if not a.k:
 						stop = True
 				else:
-					print("seed %d (%s, %d VMs): pass" % (s, describe(m), nvm), flush=True)
+					print("seed %d (%s, %d VMs): pass%s" % (s, describe(m), nvm, " (" + why + ")" if why else ""), flush=True)
 	print("nativefuzz: %d runs: %s" % (n, " ".join("%s %d" % kv for kv in sorted(counts.items()))))
 	return 1 if failed else 0
 

@@ -163,6 +163,13 @@ prognlocked(int n)
  * answering, where nothing else can be asked -- so pidlk only if it
  * can be had, and a Prog's module only if it looks like one.
  */
+/* the pid of a released interpreter's Prog (Proc.iprog), for ^T^Tk */
+int
+iprogpid(void *iprog)
+{
+	return ((Prog*)iprog)->pid;
+}
+
 static void
 progdump(void)
 {
@@ -527,6 +534,32 @@ delprog(Prog *p, char *msg)
 	tellsomeone(p, msg);	/* call before being removed from prog list */
 	n1 = up->nerrlab;
 
+	/*
+	 * Unlinked before its groups are closed with the VM let go, as emu
+	 * does (INFR-373): devprog finds a Prog by pid, through the list or
+	 * its group, holding its VM, and reads its fd table and name space.
+	 * Still listed, it read a table being freed under it (a nil load and
+	 * the kernel's panic; nativefuzz).
+	 */
+	delgrp(p);
+
+	lock(&pidlk);
+	if(p->prev)
+		p->prev->next = p->next;
+	else
+		isched.head = p->next;
+
+	if(p->next)
+		p->next->prev = p->prev;
+	else
+		isched.tail = p->prev;
+
+	ph = pidlook(p->pid);
+	if(*ph == nil)
+		panic("lost pid");
+	*ph = p->pidlink;
+	unlock(&pidlk);
+
 	o = p->osenv;
 	release();
 	closepgrp(o->pgrp);
@@ -546,25 +579,6 @@ delprog(Prog *p, char *msg)
 	if(up->nerrlab != n0)
 		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closepgrp %d -> closefgrp %d -> %d\n",
 			p->pid, msg, n0, n1, n2, n3, up->nerrlab);
-
-	delgrp(p);
-
-	lock(&pidlk);
-	if(p->prev)
-		p->prev->next = p->next;
-	else
-		isched.head = p->next;
-
-	if(p->next)
-		p->next->prev = p->prev;
-	else
-		isched.tail = p->prev;
-
-	ph = pidlook(p->pid);
-	if(*ph == nil)
-		panic("lost pid");
-	*ph = p->pidlink;
-	unlock(&pidlk);
 
 	if(p == isched.runhd) {
 		isched.runhd = p->link;
@@ -1495,8 +1509,11 @@ acquire(void)
 	m->vmreg = up->vm;
 #endif
 	if(up->type == Interp) {
+		lock(&up->rlock);	/* with swiproc */
 		p = up->iprog;
 		up->iprog = nil;
+		up->intpend = 0;	/* a kill pending for p is p's, raised in the VM; not the next Prog's */
+		unlock(&up->rlock);
 		irestore(p);
 	}
 	else

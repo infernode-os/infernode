@@ -718,6 +718,7 @@ dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/destructor_test.dis
+dis/tests/devprog_nslock_test.dis
 dis/tests/devprog_read_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis

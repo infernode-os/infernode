@@ -257,6 +257,7 @@ void		printinit(void);
 void		procctl(Proc*);
 void		procdump(void);
 void		labelstack(Proc*);
+int		iprogpid(void*);
 void		procinit(void);
 Proc*		proctab(int);
 extern void	(*proctrace)(Proc*, int, vlong);

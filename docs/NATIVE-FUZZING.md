@@ -111,3 +111,36 @@ module's `.sbl` (compile with `limbo -g`).
 - `/env` opened ORCLOSE and closed by Limbo's collector faulted (no
   environment in the collector's kproc) and emu exited.
 - emu's `/dev/scancode` open unlocked the wrong lock on its error path.
+- A union directory's read holds its mount point's lock across a 9P read;
+  a mount on that point waits for it holding the name space's lock; and
+  devprog's `fd` and `ns` took the name space's lock holding the VM. A
+  server not answering stopped the VM for good. devprog now takes only
+  references under the VM (the name space, a copy of the fd table) and
+  locks with it let go.
+- Native `delprog` closed a Prog's fd table and name space while it was
+  still listed, and devprog read them as they were freed (emu had been
+  fixed, INFR-373).
+- Native kills were lost when they came while the Prog's kproc ran the
+  kernel between sleeps (emu kept them as `intpend`); the Prog then slept
+  on, unkillable, in whatever it called next.
+- memfs: an offset of 2^63-1 passed its range check (the sum overflowed).
+
+## Open
+
+- `delprog` closes a Prog's name space before its fd table: a Prog
+  holding the far end of a pipe it mounted waits in its own exit for a
+  clunk that only its fd table's close could answer. Closing the fds
+  first fixes that and breaks `auditprov_test` (ventisrv), so the order
+  stands until that dependence is understood.
+- A kill runs the dead Prog's closes in the killer's thread (`killprog`
+  → `delprog`): a close on a server that never answers hangs the
+  killer.
+- An interrupted 9P call waits for its flush's reply, uninterruptibly.
+  Progs killed while in calls to servers that are themselves stuck the
+  same way (an epoch of sysfuzz's workers, serving each other through
+  pipes whose ends their fd tables hold) never finish dying.
+  nativefuzz notes them on the pass line (`-L` fails on them).
+- `lock loop ... held by pc 0x0` on a Chan's reference in `fdtochan`,
+  once, under `-icount 5` (seed 100, cortex-a57, three cores, GICv3).
+  pc 0 is also what a holder preempted inside `unlock` leaves, so this
+  may be starvation under one-thread TCG rather than a freed Chan.

@@ -389,11 +389,24 @@ rdestroy(void)
 	destroy(R.s);
 }
 
+/*
+ * A call to a built-in module's function, as OP(mcall) makes it.
+ * macmcal has made R.M the callee's Modlink, with a reference, and
+ * commcall left the caller's in f->mr, its return in f->lr.  An
+ * exception the function raises then finds no handler in the callee
+ * (a built-in has none) and goes back through f->mr and f->lr to the
+ * caller's, and unwinding f drops the reference.  With f->mr nil and
+ * R.M the caller's, handler() looked in the caller's handlers at R.PC,
+ * which a compiled call does not write: one left inside the caller's
+ * handler took f for the caller's frame, and destroyed what was at
+ * its exception slot (tests/jit_fault_test.b, BuiltinRaise).
+ */
 static void
 rmcall(void)
 {
 	Prog *p;
 	Frame *f;
+	Modlink *ml;
 
 	if((void*)R.dt == H)
 		error(exModule);
@@ -402,8 +415,10 @@ rmcall(void)
 	if(f == H)
 		error(exModule);
 
-	f->mr = nil;
+	ml = R.M;
 	((void(*)(Frame*))R.dt)(f);
+	R.M = f->mr;
+	D2H(ml)->ref--;
 	R.SP = (uchar*)f;
 	R.FP = f->fp;
 	if(f->t == nil)
@@ -2692,6 +2707,8 @@ macmcal(void)
 	*mlnil = code-mlnil-1;
 	modrm(Ostw, O(REG, FP), RLINK, RCX);
 	modrm(Ostw, O(REG, dt), RLINK, RAX);
+	modrm(Ostw, O(REG, M), RLINK, RRTA);			/* R.M = the callee's, as OP(mcall) */
+	modrm32(Oincrm, O(Heap, ref)-sizeof(Heap), RRTA, 0);	/* with a reference: rmcall drops it */
 #ifdef _WIN32
 	gen_subsp(WINSHADOW_MAC);
 #endif

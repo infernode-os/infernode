@@ -2006,9 +2006,14 @@ fi
 # refusals, one "camtest:" line each.
 # Typed after the authenticated mount, so ls answers while the shell is
 # still printing prompts for the lines typed ahead of it: its first
-# name came back as "; /dev/camera/ctl". The prompts are taken off.
-CAMLS="$(sed 's/^\(; \)*//' <<<"$SHOUT")"
-if grep -qx '/dev/camera/frame' <<<"$CAMLS" && grep -qx '/dev/camera/ctl' <<<"$CAMLS"; then
+# name came back as "; /dev/camera/ctl". And the harness's drain line,
+# typed as ls prints, is echoed into its output: one run had
+# "; e/dev/camera/ctl", then "cho dRaInEd" after the listing (#1050's
+# bcm2837 job). So a name is looked for anywhere in a line, not as the
+# whole line; camtest's lines, which name these files when they fail,
+# are left out, and camtest is checked on its own below.
+CAMLS="$(grep -v '^\(; \)*camtest:' <<<"$SHOUT")"
+if grep -q '\(^\|[^/]\)/dev/camera/frame' <<<"$CAMLS" && grep -q '\(^\|[^/]\)/dev/camera/ctl' <<<"$CAMLS"; then
     pass "#V is bound after /dev: /dev/camera/ctl and frame"
 else
     fail "/dev/camera -- $(reply_to "$SHOUT" 'ls /dev/camera' | head -3 | tr '\n' ' ')"

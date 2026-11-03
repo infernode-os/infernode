@@ -18,7 +18,11 @@
 #      that device's name in the row's "Here" column -- so a letter that
 #      means two devices in different builds (#P: arch native, prof
 #      hosted) is there only by being written down, both names;
-#   3. a registry row marked "in use" names only devices that exist.
+#   3. a registry row marked "in use" names only devices that exist;
+#   4. every letter the emulator binds or opens at boot (emu/port/main.c's
+#      kbind and kopen) is a device some hosted build has. A device that
+#      moves letter and leaves the bind behind binds nothing, silently:
+#      wmsz moved from #w to #z and /dev/wmsize was gone.
 #
 # The registry is the table in docs/DEVICE-LETTERS.md: one row per letter,
 # the letter in backquotes in the first column, the devices here in the
@@ -145,6 +149,14 @@ def main():
             for n in names:
                 if n not in used.get(c, {}):
                     bad.append("registry: #%s %s is marked in use, and no build has it" % (c, n))
+    hosted = {c for c, devs in used.items() if any(b.startswith("hosted ") for bs in devs.values() for b in bs)}
+    for f in sorted(glob.glob(os.path.join(ROOT, "emu", "port", "main.c"))):
+        src = open(f, errors="replace").read()
+        for m in re.finditer(r'\bk(?:bind|open|chdir)\s*\(\s*"#(.)', src):
+            c = m.group(1)
+            if c not in hosted:
+                line = src.count("\n", 0, m.start()) + 1
+                bad.append("%s:%d uses #%s, which no hosted build has" % (os.path.relpath(f, ROOT), line, c))
     for line in bad:
         print("FAIL: " + line)
     if not bad:

@@ -435,6 +435,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `limbo_ldt_test.b` | A module taking a `ref fn` of its own functions loads another module through a module type equal to its own (INFR-310); the `ref fn` still calls through `$self` |
 | `limbo_asgcall_test.b` | `a[i] = f()` and `p.x = f()` where `f` makes a new `a` or `p`: the call is made before the element's address is found, so its result lands in the new one, not in freed memory |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
+| `jit_small_test.b` | A module of fewer than 128 Dis instructions is compiled (comp-amd64.c refused them, so one module in eight ran interpreted under `-c1`); a copy of its helper marked MUSTCOMPILE is loaded with the JIT off; `tests/host/jit_small_test.sh` runs it under `-c0` and `-c1` |
 | `jit_retslice_test.b` | A call between modules from compiled code does not end the thread's time slice, at any stack depth (a return punted to the VM after a call saw mcall's stale R.t) |
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
 | `tests/host/sam_gui_test.sh` | `wm/sam` under `wm/wm`, driven by the pointer and keyboard: a window opened on the file from menu 3, a command typed, words double-clicked (two plain clicks, as SDL reports them, timed by samterm as Plan 9's; and a press marked by bit 8, as X11 reports one) and changed, the file written |

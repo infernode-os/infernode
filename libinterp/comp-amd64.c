@@ -3188,12 +3188,17 @@ compile(Module *m, int size, Modlink *ml)
 	 */
 	patch = mallocz((size+1)*sizeof(*patch), 1);
 	tinit = mallocz(m->ntype*sizeof(*tinit), 0);
+	/*
+	 * The overflow check is on the product, before the floor: with
+	 * the floor first, every module of fewer than 128 instructions
+	 * failed it (8192/64 is 128, not size) and ran interpreted under
+	 * -c1, without a word (tests/jit_small_test.b).
+	 */
 	tmpsize = (ulong)size * 64;
+	if(size > 0 && tmpsize / 64 != (ulong)size)
+		goto bad;
 	if(tmpsize < 8192)
 		tmpsize = 8192;
-	if(size > 0 && tmpsize / 64 != (ulong)size) {
-		goto bad;
-	}
 	if(tmpsize > compile_tmp_size) {
 		if(compile_tmp != nil)
 			jitfree(compile_tmp, compile_tmp_size*sizeof(uchar));

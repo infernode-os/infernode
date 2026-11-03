@@ -86,11 +86,13 @@ TARG=\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
+	jit_small_helper.dis\
 	pool_nomem_helper.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
+	jit_small_test.dis\
 	jit_test.dis\
 	js_engine_test.dis\
 	json_test.dis\

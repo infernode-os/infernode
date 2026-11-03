@@ -1895,7 +1895,7 @@ comp(Inst *i)
 /*
  * preamble -- comvec entry/exit trampoline (allocated once).
  */
-static void
+static int
 preamble(void)
 {
 	ulong sz;
@@ -1903,19 +1903,19 @@ preamble(void)
 	long hi, lo;
 
 	if(comvec)
-		return;
+		return 1;
 
 	sz = 64 * sizeof(u32int);
 #ifdef INFERNO_NATIVE
 	comvec = malloc(sz);
 	if(comvec == nil)
-		error(exNomem);
+		return 0;
 #else
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
-		error(exNomem);
+		return 0;
 	}
 #endif
 
@@ -1976,6 +1976,7 @@ preamble(void)
 		for(k = 0; k < code - start; k++)
 			print("  %.8p  %.8ux\n", &start[k], start[k]);
 	}
+	return 1;
 }
 
 /*
@@ -2372,6 +2373,9 @@ comd(Type *t)
 
 #define Typejithdr	16	/* the mapping's length, in front of a type's code */
 
+/* a type whose code typecom could not make for want of memory: compile fails, the module interpreted */
+static int typecomfailed;
+
 void
 typecom(Type *t)
 {
@@ -2383,12 +2387,12 @@ typecom(Type *t)
 		return;
 
 	if(t->np < 0 || (uvlong)t->np * 8 * TYPECOM_PERPTR > 16*1024*1024)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 	need = TYPECOM_FIXED + (ulong)t->np * 8 * TYPECOM_PERPTR;
 
 	tmp = mallocz((need + TYPECOM_SLACK) * sizeof(u32int), 0);
 	if(tmp == nil)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 
 	/* type code is not module code: no sites, no pool */
 	saveinmod = inmod;
@@ -2619,7 +2623,8 @@ compile(Module *m, int size, Modlink *ml)
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
 
-	preamble();
+	if(!preamble())
+		goto bad;
 
 	mod = m;
 
@@ -2686,6 +2691,25 @@ compile(Module *m, int size, Modlink *ml)
 	codeoff = 0;
 	if(compass(m, size, tmp, tmpsize) != n)
 		urk("emitted size differs from pass 1");
+
+	/*
+	 * Every type's code first, before a link is changed: typecom
+	 * refused memory leaves the module interpreted and whole. It
+	 * raised "out of memory" from in here, and lockedcompile's lock
+	 * was never let go: every module load after it waited, each
+	 * holding its VM (the native chaos build; a VM stopped for good).
+	 */
+	typecomfailed = 0;
+	for(l = m->ext; l->name; l++)
+		typecom(l->frame);
+	if(ml != nil)
+		for(i = 0; i < ml->nlinks; i++)
+			typecom(ml->links[i].frame);
+	for(i = 0; i < m->ntype; i++)
+		if(tinit[i] != 0)
+			typecom(m->type[i]);
+	if(typecomfailed)
+		goto bad;
 
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc - m->prog == -1){

@@ -2463,16 +2463,16 @@ comp(Inst *i)
 /*
  * JIT entry preamble
  */
-static void
+static int
 preamble(void)
 {
 	if(comvec)
-		return;
+		return 1;
 
 	comvec = jitmalloc(128);
 	if(comvec == NULL) {
 		comvec = nil;
-		return;
+		return 0;
 	}
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
@@ -2517,6 +2517,7 @@ preamble(void)
 			print(" %02x", ((uchar*)comvec)[j]);
 		print("\n");
 	}
+	return 1;
 }
 
 /*
@@ -3141,6 +3142,9 @@ freetypejit(Type *t)
 	t->destroy = nil;
 }
 
+/* a type whose code typecom could not make for want of memory: compile fails, the module interpreted */
+static int typecomfailed;
+
 void
 typecom(Type *t)
 {
@@ -3159,7 +3163,7 @@ typecom(Type *t)
 	 */
 	need = typecom_bound(t);
 	if(need == 0)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 	if(need > typecom_tmp_size) {
 		if(typecom_tmp != nil) {
 #ifdef __APPLE__
@@ -3173,11 +3177,11 @@ typecom(Type *t)
 #ifdef __APPLE__
 		typecom_tmp = mallocz(need + TYPECOM_SLACK, 0);
 		if(typecom_tmp == nil)
-			error(exNomem);
+			{ typecomfailed = 1; return; }
 #else
 		typecom_tmp = jitmalloc(need + TYPECOM_SLACK);
 		if(typecom_tmp == NULL)
-			error(exNomem);
+			{ typecomfailed = 1; return; }
 #endif
 		typecom_tmp_size = need + TYPECOM_SLACK;
 	}
@@ -3202,7 +3206,7 @@ typecom(Type *t)
 
 	base = typecom_alloc(n + Typejithdr, &size);
 	if(base == nil)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
@@ -3329,7 +3333,8 @@ compile(Module *m, int size, Modlink *ml)
 		goto bad;
 	}
 
-	preamble();
+	if(!preamble())
+		goto bad;
 	if(comvec == nil)
 		goto bad;
 
@@ -3426,6 +3431,25 @@ compile(Module *m, int size, Modlink *ml)
 	 * base + whatever that was. It is left as loaded, exactly as the
 	 * interpreter sees it; nothing ever jumps to it.
 	 */
+	/*
+	 * Every type's code first, before a link is changed: typecom
+	 * refused memory leaves the module interpreted and whole. It
+	 * raised "out of memory" from in here, and lockedcompile's lock
+	 * was never let go: every module load after it waited, each
+	 * holding its VM (the native chaos build; a VM stopped for good).
+	 */
+	typecomfailed = 0;
+	for(l = m->ext; l->name; l++)
+		typecom(l->frame);
+	if(ml != nil)
+		for(i = 0; i < ml->nlinks; i++)
+			typecom(ml->links[i].frame);
+	for(i = 0; i < m->ntype; i++)
+		if(tinit[i] != 0)
+			typecom(m->type[i]);
+	if(typecomfailed)
+		goto bad;
+
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc-m->prog != -1)
 			l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);

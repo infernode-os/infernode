@@ -405,6 +405,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `xenith_exit_test.b` | Xenith exit handling |
 | `xenith_frame_test.b` | Xenith's frame (text layout and drawing) against a simulated screen: insert, delete, select, wrap, tabs, overflow, random edits; the suite is `xenith_framesuite.b` |
 | `sdl3_test.b` | SDL3 GUI backend |
+| `tls_hrr_test.b` | TLS 1.3 HelloRetryRequest (RFC 8446 §4.1.4) against a scripted server: the first ClientHello's shares are X25519MLKEM768 and X25519 alone, an HRR for P-256 or P-384 (with a cookie, or a cookie alone, under SHA-256 and SHA-384) answered by a second ClientHello the server finishes a handshake with (its own key schedule, the client's Finished over `message_hash`); an HRR for a group already shared or not offered, one changing nothing, a second HRR, a ServerHello disagreeing with the HRR, an unsent extension, a session id not echoed, refused |
 | `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
 | `tests/host/mldsa_decompose_test.sh` | ML-DSA Decompose against FIPS 204 Algorithm 36 on every input, and no divide instruction in it (it sees secret-derived values; cf. CVE-2026-22705) |
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |

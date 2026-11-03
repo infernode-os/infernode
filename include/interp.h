@@ -477,6 +477,17 @@ struct Handler
 #define H		((void*)(-1))
 #define SEXTYPE(f)	((Stkext*)((uchar*)(f)-OA(Stkext, reg.tos.fu)))
 #define Setmark(h)	if((h)->color!=mutator) { (h)->color = propagator; nprop=1; }
+typedef struct Dsave Dsave;
+struct Dsave		/* destroy's state, kept across a release (heap.c) */
+{
+	Heap**	sdq;
+	int	sndq;
+	int	sdqlen;
+	int	sddepth;
+};
+extern	void	destroysave(Dsave*);
+extern	void	destroyrestore(Dsave*);
+
 #define gclock()	gchalt++
 #define gcunlock()	gchalt--
 #define gcruns()	(gchalt == 0)

@@ -352,6 +352,43 @@ destroy(void *v)
 	ddepth--;
 }
 
+/*
+ * A free routine that releases the VM (freeFD, closing a channel that
+ * may block; devsrv's channels) lets another thread run the VM, and
+ * destroy, while its own destroy is part done: and the depth and queue
+ * above are the VM's, not the thread's. The other's destroy counted on
+ * from this one's depth; this one, back at its outermost level, saw the
+ * other's level still counted and did not drain the queue, then let
+ * the collector run (gcunlock), which freed the queued blocks (count
+ * zero) as garbage; the other then drained them, destroying freed
+ * memory (sysfuzz: a destroy faulting at H-16 in an exception's
+ * unwinding, under the JIT; one SEGV in two runs). So such a routine
+ * keeps its destroy state across the release, and whoever holds the
+ * VM meanwhile starts from none.
+ */
+void
+destroysave(Dsave *s)
+{
+	s->sdq = dq;
+	s->sndq = ndq;
+	s->sdqlen = dqlen;
+	s->sddepth = ddepth;
+	dq = nil;
+	ndq = dqlen = ddepth = 0;
+}
+
+void
+destroyrestore(Dsave *s)
+{
+	/* what any other thread left is idle: its destroys drained */
+	if(dq != nil && dq != s->sdq)
+		free(dq);
+	dq = s->sdq;
+	ndq = s->sndq;
+	dqlen = s->sdqlen;
+	ddepth = s->sddepth;
+}
+
 Type*
 dtype(void (*destroy)(Heap*, int), int size, uchar *map, int mapsize)
 {

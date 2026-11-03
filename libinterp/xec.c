@@ -1114,23 +1114,39 @@ cqsize(Progq *q)
 	return n;
 }
 */
-void
-cqadd(Progq **q, Prog *p)
+/*
+ * p queued on q, or 0 if there is no memory for it, q as it was. A
+ * caller that has queued p elsewhere, or taken it off the run queue,
+ * must undo that before raising the error: alt's queuing on its
+ * channels, and isend and irecv, raised it with p left on the first
+ * channels (to be woken freed) or off the run queue (its exception
+ * handled with no Prog current). Malloc refused, os/port/chaos.c.
+ */
+int
+cqaddok(Progq **q, Prog *p)
 {
 	Progq *n;
 
 	if((*q)->prog == nil){
 		(*q)->prog = p;
-		return;
+		return 1;
 	}
 	n = (Progq*)malloc(sizeof(Progq));
 	if(n == nil)
-		error(exNomem);
+		return 0;
 	n->prog = p;
 	n->next = nil;
 	for( ; *q != nil; q = &(*q)->next)
 		;
 	*q = n;
+	return 1;
+}
+
+void
+cqadd(Progq **q, Prog *p)
+{
+	if(!cqaddok(q, p))
+		error(exNomem);
 }
 void
 cqdel(Progq **q)
@@ -1177,12 +1193,13 @@ OP(isend)
 	if((p = c->recv->prog) == nil) {
 		if(c->buf != H && cputb(c, R.s))
 			return;
+		/* queued first: refused, nothing has changed (cqaddok) */
+		cqadd(&c->send, currun());
 		p = delrun(Psend);
 		p->ptr = R.s;
 		p->chan = c;	/* for killprog */
-		R.IC = 1;	
+		R.IC = 1;
 		R.t = 1;
-		cqadd(&c->send, p);
 		return;
 	}
 
@@ -1212,12 +1229,13 @@ OP(irecv)
 	if((p = c->send->prog) == nil) {
 		if(c->buf != H && cgetb(c, R.d))
 			return;
+		/* queued first: refused, nothing has changed (cqaddok) */
+		cqadd(&c->recv, currun());
 		p = delrun(Precv);
 		p->ptr = R.d;
 		p->chan = c;	/* for killprog */
 		R.IC = 1;
 		R.t = 1;
-		cqadd(&c->recv, p);
 		return;
 	}
 

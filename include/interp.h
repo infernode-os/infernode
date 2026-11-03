@@ -535,6 +535,7 @@ extern	void		freejitcode(void*, ulong);
 extern	void		panic(char*, ...);
 extern	void		freetypejit(Type*);
 extern	void		cqadd(Progq**, Prog*);
+extern	int		cqaddok(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);
 extern	void		crecv(Channel*, void*);

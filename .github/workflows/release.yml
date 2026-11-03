@@ -308,7 +308,7 @@ jobs:
 
     - name: Verify libfido2 linkage (/dev/2fa)
       run: |
-        # libfido2-dev is installed, so the GUI emu must link libfido2 or the #F
+        # libfido2-dev is installed, so the GUI emu must link libfido2 or the #h
         # (2fa) device degraded to a stub and YubiKey enrollment would dead-end.
         # Linux analogue of the macOS HAVE_FIDO2 guard (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
@@ -835,7 +835,7 @@ jobs:
 
     - name: Verify libfido2 linkage (/dev/2fa)
       run: |
-        # libfido2-dev is installed, so the GUI emu must link libfido2 or the #F
+        # libfido2-dev is installed, so the GUI emu must link libfido2 or the #h
         # (2fa) device degraded to a stub and YubiKey enrollment would dead-end.
         # Linux analogue of the macOS HAVE_FIDO2 guard (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }

@@ -37,6 +37,9 @@
 #	-c	JIT flag for emu (1)
 #	-d	as on the native kernel (tools/nativefuzz): scratch in a memfs,
 #		the root a directory of it, exported and mounted (sysfuzz -d)
+#	-P	emu's pool options, as -P="-pmain=1m -pheap=4m": a pool set too
+#		small, as anyone can set it, run out of for real; refused
+#		allocations must fail calls, not the kernel
 #
 # Exit status: 0 no failure, 1 a failure, 2 a setup error.
 #
@@ -72,7 +75,7 @@ def one(seed, a, emu, env):
 	if a.d:
 		pre = "mkdir -p /tmp/sysfuzz/m%d; memfs -m 8388608 /tmp/sysfuzz/m%d; " % (seed, seed)
 		d = " -d /tmp/sysfuzz/m%d" % seed
-	cmd = [emu, "-c%d" % a.c, "-r" + ROOT, "/dis/sh.dis", "-c",
+	cmd = [emu, "-c%d" % a.c] + (a.P.split() if a.P else []) + ["-r" + ROOT, "/dis/sh.dis", "-c",
 		pre + "/dis/tests/sysfuzz.dis -s %d -t %d -e %d -p %d%s; echo halt > /dev/sysctl" % (seed, a.t, a.e, a.p, d)]
 	before = set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*")))
 	p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -120,6 +123,7 @@ def main():
 	ap.add_argument("-e", type=int, default=4)
 	ap.add_argument("-p", type=int, default=8)
 	ap.add_argument("-a", action="store_true")
+	ap.add_argument("-P", default=None)
 	ap.add_argument("-k", action="store_true")
 	ap.add_argument("-c", type=int, default=1)
 	ap.add_argument("-d", action="store_true")

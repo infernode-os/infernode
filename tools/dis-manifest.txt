@@ -762,6 +762,7 @@ dis/tests/jit_byte_test.dis
 dis/tests/jit_bounds_test.dis
 dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
+dis/tests/jit_builtinexc_test.dis
 dis/tests/jit_killcall_test.dis
 dis/tests/jit_nilmod_test.dis
 dis/tests/jit_ownhandler_test.dis

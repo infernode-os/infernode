@@ -88,6 +88,7 @@ TARG=\
 	sysfuzz.dis\
 	jit_nilmod_test.dis\
 	jit_killcall_test.dis\
+	jit_builtinexc_test.dis\
 	jit_small_helper.dis\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\

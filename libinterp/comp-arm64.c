@@ -389,6 +389,19 @@ rmcall(void)
 		error(exModule);
 
 	f->mr = nil;
+	/*
+	 * R.PC before the caller's every handler, while the builtin runs:
+	 * an exception it raises (exBounds from utfbytes, out of memory,
+	 * an interrupted call) is then matched not with this frame, the
+	 * builtin's, but through its lr with the caller's pc and frame, as
+	 * the interpreter's mcall has it. R.PC was whatever was last
+	 * punted: inside the caller's handler block, the handler was taken
+	 * with this frame for the caller's, its locals' zeroing and the
+	 * exception written into the builtin's frame, and the caller went
+	 * on in it (destroy of nil; a nil R.FP in compiled code: tests
+	 * jit_builtinexc_test.b, tools/sysfuzz -P, the native chaos build).
+	 */
+	R.PC = (Inst*)R.M->prog;
 	((void(*)(Frame*))R.dt)(f);
 	lr = f->lr;
 	R.SP = (uchar*)f;
@@ -1233,6 +1246,8 @@ commframe(Inst *i)
 	bramac(MacMFRA);
 
 	PATCH_BCOND(punt_lab);
+	con(RELPC(patch[i - mod->prog + 1]), RA0);	/* R.PC as punt writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
+	mem(Stw, O(REG, PC), RREG, RA0);
 	blmac(MacFRAM);
 	opwst(i, Stw, RA2);
 }
@@ -1369,6 +1384,8 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3);
+		con(RELPC(patch[i - mod->prog + 1]), RA0);	/* R.PC as punt writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
+		mem(Stw, O(REG, PC), RREG, RA0);
 		blmac(MacFRAM);
 		opwst(i, Stw, RA2);
 		return;
@@ -2031,6 +2048,8 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3);
+		con(RELPC(patch[i - mod->prog + 1]), RA0);	/* R.PC as punt writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
+		mem(Stw, O(REG, PC), RREG, RA0);
 		blmac(MacFRAM);
 		opwst(i, Stw, RA2);
 		break;

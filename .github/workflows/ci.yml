@@ -691,6 +691,9 @@ jobs:
         # An exception arriving during a builtin call is raised at the
         # call, caught by the handler around it (tools/sysfuzz).
         ROOT=. sh tests/host/jit_killcall_test.sh
+        # An exception a builtin raises inside a handler block is caught
+        # in the calling function's frame (tools/sysfuzz -P).
+        ROOT=. sh tests/host/jit_builtinexc_test.sh
 
     - name: Run system call fuzzing (fixed seeds)
       run: |

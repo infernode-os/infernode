@@ -122,9 +122,14 @@ kstrdup(char **p, char *s)
 	char *t, *prev;
 
 	n = strlen(s)+1;
-	t = kmalloc(n);
-	if(t == nil)
-		panic("kstrdup: no memory");
+	/* a proc can wait for memory (smalloc), as the native kernel's does */
+	if(up != nil)
+		t = smalloc(n);
+	else{
+		t = kmalloc(n);
+		if(t == nil)
+			panic("kstrdup: no memory");
+	}
 	memmove(t, s, n);
 	prev = *p;
 	*p = t;

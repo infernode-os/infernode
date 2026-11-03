@@ -925,9 +925,14 @@ addprog(Proc *p)
 {
 	Prog *n;
 
-	n = malloc(sizeof(Prog));
-	if(n == nil)
-		panic("no memory");
+	/*
+	 * Waited for, not panicked over, and not with an error: release()
+	 * makes a VM's next kproc with isched.creating set, which an error
+	 * would leave set (no kproc made again). A main pool too small
+	 * (-pmain) panicked the emulator here.
+	 */
+	while((n = malloc(sizeof(Prog))) == nil)
+		waitmem();
 	p->prog = n;
 	n->osenv = p->env;
 }

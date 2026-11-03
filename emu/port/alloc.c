@@ -822,20 +822,59 @@ msize(void *v)
 
 #else
 
+static int smallocwarned;
+
+/*
+ * A must-have allocation refused: say so once, and wait a moment for
+ * something to free memory. Uninterruptible; for callers that can raise
+ * no error (kproc, addprog). smalloc is the interruptible one.
+ */
+void
+waitmem(void)
+{
+	if(smallocwarned++ == 0)
+		print("pool %s exhausted, waiting (-p%s= too small?)\n", mainmem->name, mainmem->name);
+	if(up != nil)
+		osenter();
+	osmillisleep(100);
+	if(up != nil)
+		osleave();
+}
+
 void*
 smalloc(size_t size)
 {
 	void *v;
 	int retries;
 
+	/*
+	 * Waited for, for as long as it takes, as the native kernel's
+	 * smalloc waits: what is needed is freed when something exits or
+	 * is killed. It panicked after ten seconds, and a main pool set
+	 * too small (-pmain, anyone's to set) took the whole emulator down
+	 * at the first busy moment (tools/sysfuzz -P). The wait says so
+	 * once, so a pool too small for what is run is not a silent hang,
+	 * and a kill of the Prog waiting interrupts it, as a kill
+	 * interrupts any sleep, where there is an error label to take it.
+	 */
 	for(retries = 0;; retries++){
 		v = malloc(size);
 		if(v != nil)
 			break;
-		if(retries > 100)
-			panic("smalloc: out of memory allocating %lud bytes", (ulong)size);
-		if(0)
-			print("smalloc waiting from %lux\n", getcallerpc(&size));
+		if(retries == 0 && smallocwarned++ == 0)
+			print("pool %s exhausted, waiting (-p%s= too small?)\n",
+				mainmem->name, mainmem->name);
+		if(up != nil && up->nerr > 0){
+			lock(&up->rlock);
+			if(up->killed || up->swipend || up->intpend){
+				up->killed = 0;
+				up->swipend = 0;
+				up->intpend = 0;
+				unlock(&up->rlock);
+				error(Eintr);
+			}
+			unlock(&up->rlock);
+		}
 		osenter();
 		osmillisleep(100);
 		osleave();

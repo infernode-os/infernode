@@ -404,6 +404,19 @@ rmcall(void)
 		error(exModule);
 
 	f->mr = nil;
+	/*
+	 * R.PC before the caller's every handler, while the builtin runs:
+	 * an exception it raises (exBounds from utfbytes, out of memory,
+	 * an interrupted call) is then matched not with this frame, the
+	 * builtin's, but through its lr with the caller's pc and frame, as
+	 * the interpreter's mcall has it. R.PC was whatever was last
+	 * punted: inside the caller's handler block, the handler was taken
+	 * with this frame for the caller's, its locals' zeroing and the
+	 * exception written into the builtin's frame, and the caller went
+	 * on in it (destroy of nil; a nil R.FP in compiled code: tests
+	 * jit_builtinexc_test.b, tools/sysfuzz -P, the native chaos build).
+	 */
+	R.PC = (Inst*)R.M->prog;
 	((void(*)(Frame*))R.dt)(f);
 	lr = f->lr;
 	R.SP = (uchar*)f;
@@ -1472,6 +1485,22 @@ comcasel(Inst *i)
 /*
  * Module frame setup
  */
+/*
+ * R.PC for MacFRAM, as punt writes it: the frame it makes can need a new
+ * stack segment (extend), whose allocation refused raises "out of
+ * memory", and the exception is looked for at R.PC. Left stale, it was
+ * taken by the handler of wherever R.PC last pointed, another frame's,
+ * and the Prog ran on in a frame not its own (a main pool too small:
+ * tools/sysfuzz -P; the native chaos build's mframe faults). RAX is
+ * free here: MacFRAM loads it first.
+ */
+static void
+framepc(Inst *i)
+{
+	con64((uvlong)base + patch[i-mod->prog+1], RAX);
+	modrm(Ostw, O(REG, PC), RLINK, RAX);
+}
+
 static void
 commframe(Inst *i)
 {
@@ -1532,6 +1561,7 @@ commframe(Inst *i)
 	rbra(patch[i-mod->prog+1], Ojmp);
 
 	*punt_label = code-punt_label-1;
+	framepc(i);
 	rbra(macro[MacFRAM], Ocall);
 	opwst(i, Ostw, RCX);
 }
@@ -1863,6 +1893,7 @@ comp(Inst *i)
 			break;
 		}
 		tinit[i->s.imm] = 1;
+		framepc(i);
 		con64((uvlong)mod->type[i->s.imm], RRTA);
 		rbra(macro[MacFRAM], Ocall);
 		opwst(i, Ostw, RCX);

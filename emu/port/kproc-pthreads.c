@@ -136,13 +136,16 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 	pthread_attr_t attr;
 	Osdep *os;
 
-	p = newproc();
-	if(p == nil)
-		panic("kproc: no memory");
+	/*
+	 * Waited for, not panicked over: kproc gives its callers no error
+	 * to raise (release() among them), and a main pool set too small
+	 * (-pmain) took the emulator down here.
+	 */
+	while((p = newproc()) == nil)
+		waitmem();
 
-	os = malloc(sizeof(*os));
-	if(os == nil)
-		panic("kproc: no memory");
+	while((os = malloc(sizeof(*os))) == nil)
+		waitmem();
 	os->self = 0;	/* set by tramp */
 	sem_init(&os->sem, 0, 0);
 	p->os = os;

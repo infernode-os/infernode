@@ -36,8 +36,9 @@ implement Osk;
 #	ctl	show, hide, toggle, layout <name>, mode text|plain,
 #		correct on|off, swipe on|off, height <pixels>,
 #		record <file>|off, rect ... (accepted, not needed)
-#	status	shown, layout, mode, height, a line each; a read after
-#		a file's first waits for a change
+#	status	state, layout, mode, correct, swipe, height, keyboards,
+#		words, shift, a line each; a read after a file's first
+#		waits for a change
 #	words	the words it has learned, "word count" a line;
 #		a write adds them
 #	keys	the keys shown and where, "name minx miny maxx maxy"
@@ -204,6 +205,9 @@ recfd: ref Sys->FD;
 init(ctxt: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	# a group of its own, which its exit kills: Lucifer starts it
+	# with a spawn, in Lucifer's
+	sys->pctl(Sys->NEWPGRP, nil);
 	stderr = sys->fildes(2);
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
@@ -549,8 +553,6 @@ place()
 	win.r = Rect((sr.min.x, sr.max.y - h), sr.max);
 	win.onscreen("exact");
 	img = win.image;
-	if(img != nil && img.r.dy() != h)
-		img = nil;
 	geometry();
 	redraw();
 }
@@ -560,6 +562,10 @@ geometry()
 	if(img == nil)
 		return;
 	r := img.r;
+	# a window taller than the keyboard (a window manager that does not
+	# dock it, as Lucifer's zone for an app): the keys along its bottom
+	if(r.dy() > height() && height() > 0)
+		r.min.y = r.max.y - height();
 	handlerect = r;
 	sh := rowh * 3 / 4;
 	striprect = Rect(r.min, (r.max.x, r.min.y + sh));
@@ -890,7 +896,11 @@ loop()
 wmctl(s: string)
 {
 	if(s == "exit"){
+		# all of it: the files' server, the fingers' reader, the
+		# suggester and the word list's reader are processes of its
+		# group (wmclient's exit kills the group)
 		saveoffsets();
+		win.wmctl("exit");
 		exit;
 	}
 	if(s == "retheme"){
@@ -1372,6 +1382,7 @@ unshift()
 	if(shift == Once){
 		shift = Unshifted;
 		redraw();
+		statuschanged();
 	}
 }
 
@@ -1412,6 +1423,7 @@ press(k: ref Lkey, p: Point)
 			shift = Unshifted;
 		lastshift = now;
 		redraw();
+		statuschanged();
 	Osklayout->Kctrl =>
 		ctrl = !ctrl;
 		redraw();
@@ -1491,6 +1503,7 @@ space()
 		lastspace = 0;
 		shift = Once;
 		redraw();
+		statuschanged();
 		return;
 	}
 	hadword := wlit != nil || swiped;
@@ -1617,6 +1630,7 @@ autocap()
 			return;		# a new line is not a new sentence in code
 		shift = Once;
 		redraw();
+		statuschanged();
 	}
 }
 
@@ -2129,8 +2143,9 @@ statustext(): string
 	h := 0;
 	if(img != nil)
 		h = img.r.dy();
-	return sys->sprint("state %s\nlayout %s\nmode %s\ncorrect %s\nswipe %s\nheight %d\nkeyboards %d\nwords %d\n",
-		st, letters[cur].name, m, on[correcting], on[swiping], h, hwkbd, lex.nterm);
+	shifts := array[] of {"none", "once", "locked"};
+	return sys->sprint("state %s\nlayout %s\nmode %s\ncorrect %s\nswipe %s\nheight %d\nkeyboards %d\nwords %d\nshift %s\n",
+		st, letters[cur].name, m, on[correcting], on[swiping], h, hwkbd, lex.nterm, shifts[shift]);
 }
 
 statuschanged()

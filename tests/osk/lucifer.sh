@@ -32,11 +32,11 @@ scap /tmp/shot.img
 # typed into the chat (the zone with the keyboard), and sent: the
 # conversation has a message more (with no model configured the human's
 # line is answered, not kept)
-ls /mnt/ui/activity/0/conversation | grep -c '^[0-9]' > /tmp/nconv.before
+ls /mnt/ui/activity/0/conversation | wc -l > /tmp/nconv.before
 keys
 taps h e l l o enter
 sleep 3
-ls /mnt/ui/activity/0/conversation | grep -c '^[0-9]' > /tmp/nconv.after
+ls /mnt/ui/activity/0/conversation | wc -l > /tmp/nconv.after
 
 # a keyboard attached: it goes, and the zones have the screen
 echo kbd attach kt9 Test Keyboard > /dev/consctl

@@ -55,6 +55,7 @@ TARG=\
 	kbdecode_test.dis\
 	osk_accuracy_test.dis\
 	keyboards_test.dis\
+	osk_fuzz.dis\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\

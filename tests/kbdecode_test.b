@@ -69,7 +69,7 @@ words := array[] of {
 	("their", 7000), ("this", 20000), ("that", 25000), ("with", 22000),
 	("about", 9000), ("think", 3000), ("thing", 2500), ("things", 2000),
 	("good", 5000), ("great", 3000), ("really", 3500), ("people", 6000),
-	("because", 5000), ("question", 1200), ("swipe", 40), ("finger", 300),
+	("because", 5000), ("question", 1200), ("swipe", 40), ("finger", 300), ("so", 9000),
 };
 
 lexicon(): ref Lexicon
@@ -330,6 +330,32 @@ intop(c: array of ref Cand, w: string, n: int): int
 	return 0;
 }
 
+# the word before: after "so", a tap between r and t is far, not the
+# commoner fat
+testContext(t: ref T)
+{
+	(l, d) := decoder(t, "qwerty");
+	fd := sys->create("/tmp/kbdecode_test.pairs", Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.skip(sys->sprint("cannot make a pairs file: %r"));
+	sys->fprint(fd, "so\tfar\t1000\nso\tfat\t2\nso\tnotaword\t5\n");
+	fd = nil;
+	t.assertnil(d.lex.readpairs("/tmp/kbdecode_test.pairs"), "pairs read");
+	f := centre(l, 'f');
+	a := centre(l, 'a');
+	r := centre(l, 'r');
+	tt := centre(l, 't');
+	mid := Touch((r.x + tt.x)/2, r.y, 0);
+	tp := array[] of {Touch(f.x, f.y, 0), Touch(a.x, a.y, 0), mid};
+	d.setcontext(nil);
+	t.assertseq(best(d.taps(tp, 4)), "fat", "with no word before, the commoner");
+	d.setcontext("so");
+	t.assertseq(best(d.taps(tp, 4)), "far", "after so, far");
+	d.setcontext("dvorak");	# no pairs for it
+	t.assertseq(best(d.taps(tp, 4)), "fat", "a word with no pairs changes nothing");
+	sys->remove("/tmp/kbdecode_test.pairs");
+}
+
 testLearn(t: ref T)
 {
 	(l, d) := decoder(t, "qwerty");
@@ -394,6 +420,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Layouts", testLayouts);
 	run("Taps", testTaps);
 	run("Swipe", testSwipe);
+	run("Context", testContext);
 	run("Learn", testLearn);
 	run("WordList", testWordList);
 	if(testing->summary(passed, failed, skipped) > 0)

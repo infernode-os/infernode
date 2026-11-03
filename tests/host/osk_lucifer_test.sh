@@ -53,8 +53,8 @@ top=$((768 - ${h:-0}))
 bad=$(awk -v top="$top" 'NF == 5 && ($3 < top || $5 > 768 || $2 < 0 || $4 > 1024) {print}' "$ROOT/$T/keys.touched" | head -3)
 [ -s "$ROOT/$T/keys.touched" ] && [ -z "$bad" ] && pass "its keys in the strip" ||
 	fail "keys outside the strip: $bad"
-nb=$(cat "$ROOT/$T/nconv.before" 2>/dev/null)
-na=$(cat "$ROOT/$T/nconv.after" 2>/dev/null)
+nb=$(tr -dc 0-9 < "$ROOT/$T/nconv.before" 2>/dev/null)
+na=$(tr -dc 0-9 < "$ROOT/$T/nconv.after" 2>/dev/null)
 [ -n "$nb" ] && [ -n "$na" ] && [ "$na" -gt "$nb" ] && pass "typed into the chat and sent" ||
 	fail "the conversation did not grow: $nb then $na"
 [ "$(st attached state)" = hidden ] && pass "a keyboard attached hides it" ||

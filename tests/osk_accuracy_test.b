@@ -55,11 +55,14 @@ OskAccuracyTest: module
 SRCFILE: con "/tests/osk_accuracy_test.b";
 
 # the bounds, in percent of words
-MinCorrected:	con 92.0;	# right after correction (tapping)
-MaxFalse:	con 1.5;	# typed right, changed
-MinGain:	con 6.0;	# corrected beats the literal by this much
-MinSwipe1:	con 75.0;	# a stroke read as its word, first
-MinSwipe3:	con 88.0;	# among the first three
+MinCorrected:	con 90.5;	# right after correction (tapping)
+MaxFalse:	con 1.0;	# typed right, changed
+MinGain:	con 11.0;	# corrected beats the literal by this much
+MinSwipe1:	con 84.0;	# a stroke read as its word, first
+MinSwipe3:	con 93.0;	# among the first three
+# (measured, 2026-11: corrected 92.0-93.0%, false 0.51-0.56%, gain
+# 13.4-14.0, swipes 86.2-88.7% first and 95.1-96.1% among three, on
+# QWERTY, Dvorak and Colemak; the bounds a point or two below)
 
 # the typist
 Sigma:		con 0.20;

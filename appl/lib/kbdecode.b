@@ -452,7 +452,7 @@ Decoder.new(lex: ref Lexicon, keys: array of Key): ref Decoder
 	d.acronym = 4.0;
 	d.margin = 2.0;
 	d.validmargin = 3.5;
-	d.context = 0.5;
+	d.context = 0.3;
 	d.ctxon = 0;
 	d.beam = 160;
 	d.ssigma = 0.07;

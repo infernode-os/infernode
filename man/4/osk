@@ -79,9 +79,11 @@ What it is showing, a line each:
 .BR correct ,
 .BR swipe ,
 .BI height " pixels" \fR,
-and
 .BI keyboards " n"
-(1 when a keyboard of the machine's is taken to be attached).  The first
+(1 when a keyboard of the machine's is taken to be attached),
+.BI words " n"
+(the words in the list, 0 until it is read) and
+.BR shift " none" | once | locked .  The first
 read of an open file answers at once; each later read waits until the
 status changes.
 .TP

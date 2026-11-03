@@ -506,7 +506,8 @@ mntwalk(Chan *c, Chan *nc, char **name, int nname)
 	r->request.fid = c->fid;
 	r->request.newfid = nc->fid;
 	r->request.nwname = nname;
-	memmove(r->request.wname, name, nname*sizeof(char*));
+	if(nname > 0)
+		memmove(r->request.wname, name, nname*sizeof(char*));
 
 	mountrpc(m, r);
 

@@ -403,7 +403,8 @@ dtype(void (*destroy)(Heap*, int), int size, uchar *map, int mapsize)
 		t->np = mapsize;
 		t->initialize = nil;
 		t->destroy = nil;
-		memmove(t->map, map, mapsize);
+		if(mapsize > 0)
+			memmove(t->map, map, mapsize);
 	}
 	return t;
 }

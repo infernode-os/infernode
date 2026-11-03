@@ -366,10 +366,12 @@ incoming(void* arg)
 	return conv->incall != nil;
 }
 
+/* OEXEC too: without it, omode&3 == 3 read past the table (emu's devip) */
 static int m2p[] = {
 	[OREAD]		4,
 	[OWRITE]	2,
-	[ORDWR]		6
+	[ORDWR]		6,
+	[OEXEC]		1,
 };
 
 static Chan*

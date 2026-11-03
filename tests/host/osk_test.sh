@@ -2,7 +2,8 @@
 #
 # wm/osk under wm/wm, typed on through /dev/fingers into a wm/shell
 # (tests/osk/drive.sh): it docks along the bottom of the screen and
-# the shell keeps the keyboard; taps type, shift is one capital, a slip
+# the shell keeps the keyboard; taps type, the words offered mid-word,
+# shift is one capital, a slip
 # onto the key beside is put right when the word ends and a delete
 # straight after takes the correction back; two fingers down at once
 # type in the order they landed; a mouse's click types; a stroke
@@ -58,6 +59,12 @@ check() {	# step want what
 	[ "$got" = "$2" ] && pass "$3" || fail "$3: '$got', not '$2'"
 }
 check hello hello "taps type into the window with the keyboard"
+if grep -qx '"keybo"' "$ROOT/$T/suggestions" 2>/dev/null && grep -qx 'keyboard' "$ROOT/$T/suggestions"; then
+	pass "the words offered mid-word: what was typed, and the word it begins"
+else
+	fail "suggestions for keybo: $(tr '\n' ' ' < "$ROOT/$T/suggestions" 2>/dev/null)"
+fi
+check keyboard keyboard "the word finished"
 check shift Hey "shift: one capital"
 check slip hello "a slip onto the key beside put right"
 check undo teh "a correction taken back by a delete straight after"

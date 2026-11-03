@@ -6,6 +6,9 @@ wm/osk \- a keyboard on the screen
 [
 .B -sm
 ] [
+.B -M
+.BR text | plain | secret
+] [
 .B -l
 .I layout
 ] [
@@ -131,6 +134,24 @@ is
 .BR off ;
 on iOS and Android, while it runs, the system's keyboard is not asked
 for, and a keyboard attached to the device types as it always did.
+.PP
+.B -M
+sets the mode
+.IR osk (4)'s
+.B mode
+request sets:
+.B text
+(prose: words put right, sentences begun with a capital),
+.B plain
+(a shell's or code's: words offered, never put right) or
+.B secret
+(a password's: nothing put right, nothing shown above the keys or
+enlarged under the finger, nothing learned, and a trace says only that
+a key was typed).  The boot starts
+.B wm/osk -s -M secret
+for the login screen, with no window manager: it draws along the
+bottom of the screen and takes only the touches there, and is killed
+when the login is done, Lucifer starting its own.
 .PP
 .B -l
 .I layout

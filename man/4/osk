@@ -9,6 +9,8 @@ osk \- the keyboard on the screen's files
 .B /mnt/osk/words
 .br
 .B /mnt/osk/keys
+.br
+.B /mnt/osk/suggestions
 .SH DESCRIPTION
 .IR Wm-osk (1)
 serves these files at
@@ -38,10 +40,11 @@ the letters' layout
 .BR /lib/osk/layouts ),
 kept for next time
 .TP
-.BR mode " text" | plain
+.BR mode " text" | plain | secret
 what the field holds: prose, whose words are put right and whose
-sentences begin with a capital, or not (a shell's commands, code), whose
-words are only offered
+sentences begin with a capital; not (a shell's commands, code), whose
+words are only offered; or a password, of which nothing is shown,
+put right, learned or recorded
 .TP
 .BR correct " on" | off
 .TP
@@ -107,6 +110,13 @@ the character a key types, or the key's word in the layout
 .BR sym ,
 \&...).  Empty while the keys are not shown.  For a test, an agent, or a
 trace's reader, to find a key.
+.TP
+.B suggestions
+The words shown above the keys as a word is typed, a line each: what was
+typed, in quotes, then the likeliest words; the one a space would put
+in instead of what was typed is marked with a leading
+.BR * .
+Empty between words.
 .PD
 .SH EXAMPLE
 Switch to Dvorak and wait for the keyboard to change:

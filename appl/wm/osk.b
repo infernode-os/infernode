@@ -3,7 +3,7 @@ implement Osk;
 #
 # osk -- a keyboard on the screen, for a touch screen.
 #
-#	wm/osk [-sm] [-l layout] [-F fd] [-r tracefile]
+#	wm/osk [-sm] [-M text|plain|secret] [-l layout] [-F fd] [-r tracefile]
 #
 # A keyboard drawn at the bottom of the screen, typed with fingers:
 # its keys type into whatever has the keyboard, as a keyboard's do
@@ -43,6 +43,8 @@ implement Osk;
 #		a write adds them
 #	keys	the keys shown and where, "name minx miny maxx maxy"
 #		a line (for a test, an agent, a typist's trace)
+#	suggestions	the words shown above the keys, a line each,
+#		the one a space would put in marked *
 #
 
 include "sys.m";
@@ -97,8 +99,9 @@ Dupms:		con 300;	# a pointer press this near a finger's is the finger's
 Off, Handle, Shown: con iota;
 # shift
 Unshifted, Once, Locked: con iota;
-# mode: whether words are put right
-Text, Plain: con iota;
+# mode: whether words are put right; Secret, a password's: nothing
+# shown of what is typed, nothing put right, learned or recorded
+Text, Plain, Secret: con iota;
 
 stderr: ref Sys->FD;
 display: ref Display;
@@ -139,7 +142,7 @@ forcedrowh := 0;
 dockok := 0;			# the window manager docks
 
 # where things are
-striprect, keysrect, handlerect: Rect;
+striprect, keysrect, handlerect: Rect;	# handlerect: all of the keyboard's
 
 # the word being typed: its taps, what was typed for them, their case
 wtaps: array of Touch;
@@ -222,7 +225,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage("wm/osk [-sm] [-l layout] [-F fd] [-r tracefile]");
+	arg->setusage("wm/osk [-sm] [-M text|plain|secret] [-l layout] [-F fd] [-r tracefile]");
 	first := "";
 	servefd := -1;
 	recfile := "";
@@ -233,6 +236,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 		'l' =>	first = arg->earg();
 		'F' =>	servefd = int arg->earg();
 		'r' =>	recfile = arg->earg();
+		'M' =>
+			case arg->earg() {
+			"text" =>	mode = Text;
+			"plain" =>	mode = Plain;
+			"secret" =>	mode = Secret;
+			* =>	arg->usage();
+			}
 		* =>	arg->usage();
 		}
 	if(arg->argv() != nil)
@@ -241,10 +251,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(recfile != nil)
 		record(recfile);
 
+	wmclient->init();
 	if(ctxt == nil)
 		ctxt = wmclient->makedrawcontext();
 	display = ctxt.display;
-	wmclient->init();
 	theme = lucitheme->gettheme();
 	if(icon != nil && icon->init(display) != nil)
 		icon = nil;
@@ -280,6 +290,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn suggester(sreqc, srepc);
 	restate();
 	statuschanged();
+	if(win.ctxt.connfd == nil){
+		# no window manager (a login screen's): drawn again once the
+		# screen it shares has been drawn
+		spawn timer(1500, -1);
+		spawn timer(4000, -1);
+	}
 	loop();
 }
 
@@ -430,6 +446,8 @@ savelayout()
 
 learnword(w: string)
 {
+	if(mode == Secret)
+		return;
 	if(lex.lookup(w) > 0 && !isrejected(w))
 		return;
 	lex.add(w, userweight);
@@ -611,7 +629,13 @@ redraw()
 {
 	if(img == nil)
 		return;
-	img.draw(img.r, colour(theme.header), nil, (0, 0));
+	# its own rectangle only when there is no window manager: its
+	# window is then the whole screen, a login screen's; with one, a
+	# window taller than the keyboard (an app's in Lucifer's zone) is
+	# the theme's background above it
+	if(win.ctxt.connfd != nil && !img.r.eq(handlerect))
+		img.draw(img.r, colour(theme.bg), nil, (0, 0));
+	img.draw(handlerect, colour(theme.header), nil, (0, 0));
 	if(state == Handle){
 		drawhandle();
 		img.flush(Draw->Flushnow);
@@ -733,7 +757,7 @@ drawkey(k: ref Lkey, pressed: int)
 # the key's character large above it, while a finger is on it
 drawpreview(k: ref Lkey)
 {
-	if(img == nil || k.kind != Osklayout->Kchar)
+	if(img == nil || k.kind != Osklayout->Kchar || mode == Secret)
 		return;
 	(s, nil) := keylabel(k);
 	w := k.r.dx() * 13 / 10;
@@ -1023,8 +1047,10 @@ ntouches(): int
 
 touchdown(id: int, p: Point, ms: int): ref Tch
 {
-	if(img == nil || !p.in(img.r))
+	if(img == nil || !p.in(handlerect))
 		return nil;
+	if(win.ctxt.connfd == nil && state == Shown)
+		redraw();	# no window manager: what else draws may have drawn over it
 	t := ref Tch(id, ms, p, p, p :: nil, 1, 0.0, nil, nil, 0, 0, 0, 0, nil, 0, 0, ++tgen, 0);
 	if(state == Handle){
 		t.inhandle = 1;
@@ -1261,6 +1287,10 @@ timer(ms, g: int)
 
 tick(g: int)
 {
+	if(g < 0){
+		redraw();
+		return;
+	}
 	for(l := touches; l != nil; l = tl l){
 		t := hd l;
 		if(t.gen != g || t.stroke || t.cancelled)
@@ -1275,6 +1305,8 @@ tick(g: int)
 			t.lp = 1;
 			t.lpalts = a;
 			t.lpsel = 0;
+			redraw();	# the preview goes
+			drawkey(t.key, 1);
 			drawlongpress(t);
 			img.flush(Draw->Flushnow);
 		Osklayout->Kdel =>
@@ -1562,6 +1594,8 @@ endword(boundary: string)
 # a word committed as typed: one not in the list, typed twice, is learned
 typed(w: string)
 {
+	if(mode == Secret)
+		return;
 	if(lex.lookup(w) > 0 || len w < 2 || !kbdecode->wordlike(w))
 		return;
 	np: list of (string, int);
@@ -1593,6 +1627,8 @@ isrejected(w: string): int
 # where the taps landed, for the letters of the word they were meant as
 learntaps(taps: array of Touch, word: string)
 {
+	if(mode == Secret)
+		return;
 	if(len taps != len word || lex.lookup(word) == 0)
 		return;
 	for(i := 0; i < len taps; i++)
@@ -1813,12 +1849,13 @@ suggester(req: chan of ref Sreq, rep: chan of (int, array of ref Cand, string))
 	l: ref Lexicon;
 	for(;;){
 		r := <-req;
-		# only the latest request matters
-		for(;;) alt {
+		# only the latest request matters (a break in an alt leaves
+		# only the alt: the loop is named)
+	drain:	for(;;) alt {
 		n := <-req =>
 			r = n;
 		* =>
-			break;
+			break drain;
 		}
 		if(r.lex != l || d == nil){
 			l = r.lex;
@@ -1838,6 +1875,10 @@ suggester(req: chan of ref Sreq, rep: chan of (int, array of ref Cand, string))
 
 suggest()
 {
+	if(mode == Secret){
+		clearsugg();
+		return;
+	}
 	if(wlit == nil){
 		clearsugg();
 		return;
@@ -2003,8 +2044,15 @@ record(path: string): string
 
 record1(s: string)
 {
-	if(recfd != nil)
-		sys->fprint(recfd, "%s\n", s);
+	if(recfd == nil)
+		return;
+	if(mode == Secret){
+		# a password's keys are not recorded, only that one was typed
+		if(len s > 1 && s[0:2] == "t ")
+			sys->fprint(recfd, "t *\n");
+		return;
+	}
+	sys->fprint(recfd, "%s\n", s);
 }
 
 recordlayout()
@@ -2063,12 +2111,14 @@ ctl(s: string): string
 		return "no layout " + hd tl f;
 	"mode" =>
 		if(nf != 2)
-			return "usage: mode text|plain";
+			return "usage: mode text|plain|secret";
 		case hd tl f {
 		"text" =>	mode = Text;
 		"plain" =>	mode = Plain;
-		* =>		return "usage: mode text|plain";
+		"secret" =>	mode = Secret;
+		* =>		return "usage: mode text|plain|secret";
 		}
+		forget();
 		statuschanged();
 	"correct" or "swipe" =>
 		if(nf != 2 || hd tl f != "on" && hd tl f != "off")
@@ -2097,6 +2147,15 @@ ctl(s: string): string
 		return e;
 	"\u0001keys" =>
 		return keyslist();	# the keys file's, not a ctl request
+	"\u0001suggestions" =>
+		r := "";
+		for(i := 0; sugg != nil && i < len sugg; i++)
+			if(sugg[i] != nil){
+				if(i == suggauto)
+					r += "*";
+				r += sugg[i] + "\n";
+			}
+		return r;
 	"learn" =>
 		for(f = tl f; f != nil; f = tl f)
 			if(kbdecode->wordlike(hd f))
@@ -2137,8 +2196,10 @@ statustext(): string
 	Handle =>	st = "handle";
 	}
 	m := "text";
-	if(mode == Plain)
-		m = "plain";
+	case mode {
+	Plain =>	m = "plain";
+	Secret =>	m = "secret";
+	}
 	on := array[] of {"off", "on"};
 	h := 0;
 	if(img != nil)
@@ -2171,7 +2232,7 @@ statuschanged()
 	}
 }
 
-Qdir, Qctl, Qstatus, Qwords, Qkeys: con iota;
+Qdir, Qctl, Qstatus, Qwords, Qkeys, Qsugg: con iota;
 
 dir(name: string, perm: int, path: int): Sys->Dir
 {
@@ -2222,6 +2283,7 @@ startserver(fdn: int)
 	tree.create(big Qdir, dir("status", 8r444, Qstatus));
 	tree.create(big Qdir, dir("words", 8r666, Qwords));
 	tree.create(big Qdir, dir("keys", 8r444, Qkeys));
+	tree.create(big Qdir, dir("suggestions", 8r444, Qsugg));
 	(tc, srv) := Styxserver.new(fd, Navigator.new(treeop), big Qdir);
 	spawn serve(tc, srv, tree);
 }
@@ -2233,6 +2295,7 @@ mountit(fd: ref Sys->FD)
 }
 
 keystext := "";
+suggtext := "";
 
 Reader: adt {
 	fid:	int;
@@ -2321,6 +2384,13 @@ serve(tc: chan of ref Tmsg, srv: ref Styxserver, tree: ref Tree)
 					keystext = <-rc;
 				}
 				srv.reply(styxservers->readstr(tm, keystext));
+			Qsugg =>
+				if(tm.offset == big 0){
+					rc := chan of string;
+					ctlc <-= ("\u0001suggestions", rc);
+					suggtext = <-rc;
+				}
+				srv.reply(styxservers->readstr(tm, suggtext));
 			}
 		Write =>
 			c := srv.getfid(tm.fid);

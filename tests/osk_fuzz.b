@@ -145,6 +145,22 @@ pickkey(keys: array of Key): string
 	}
 }
 
+# a key that types and leaves the layer as it is: for the actions of
+# several touches aimed from one reading of the keys (a burst, two
+# fingers), which a layer changed under them would send elsewhere --
+# the more layer's arrows among them
+picktyping(keys: array of Key): string
+{
+	for(;;){
+		n := pickkey(keys);
+		case n {
+		"sym" or "abc" or "next" or "shift" =>
+			continue;
+		}
+		return n;
+	}
+}
+
 # somewhere in key k, a little off its centre, as a finger lands
 inkey(k: ref Key): (int, int)
 {
@@ -212,8 +228,8 @@ stroke(keys: array of Key)
 
 rollover(keys: array of Key)
 {
-	a := find(keys, pickkey(keys));
-	b := find(keys, pickkey(keys));
+	a := find(keys, picktyping(keys));
+	b := find(keys, picktyping(keys));
 	(ax, ay) := inkey(a);
 	(bx, by) := inkey(b);
 	ev(0, ax, ay, 1);
@@ -229,7 +245,7 @@ longpress(keys: array of Key)
 {
 	k := find(keys, "e");
 	if(k == nil)
-		k = find(keys, pickkey(keys));
+		k = find(keys, picktyping(keys));
 	(x, y) := inkey(k);
 	ev(0, x, y, 1);
 	sys->sleep(600);
@@ -275,7 +291,7 @@ hide(keys: array of Key)
 burst(keys: array of Key)
 {
 	for(i := 0; i < 12; i++){
-		k := find(keys, pickkey(keys));
+		k := find(keys, picktyping(keys));
 		(x, y) := inkey(k);
 		tap(i % 3, x, y, 0);
 	}

@@ -86,6 +86,13 @@ snap start
 taps e c h o space h e l l o enter
 snap hello
 
+# the words offered as a word is typed: the word it begins
+taps e c h o space k e y b o
+sleep 2
+cat /mnt/osk/suggestions > /tmp/suggestions
+taps a r d enter
+snap keyboard
+
 # shift once: a capital, then lower case again
 taps e c h o space shift h e y enter
 snap shift

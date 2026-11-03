@@ -2,9 +2,23 @@
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| master  | Yes       |
+| Version | Security fixes |
+|---------|----------------|
+| The latest release | Yes |
+| The release before it | Until 6 months after the latest release came out |
+| Older releases | No |
+| `master` | Yes, as it is fixed |
+
+This covers every package a release ships: the macOS, Linux and Windows
+packages and the Raspberry Pi 3B+ and 4B card images.
+
+A security fix ships as a new release, on the
+[releases page](https://github.com/infernode-os/infernode/releases), signed
+(sigstore) and with build provenance. Nothing updates itself: you install the
+new release as you installed the old one. On a Raspberry Pi that means writing
+the new card image, which replaces the whole card, `usr/` too (your keys and
+secstore account): copy `usr/` off first and back after. A release that fixes a
+security problem says so in its notes, with the advisory.
 
 ## Reporting a Vulnerability
 

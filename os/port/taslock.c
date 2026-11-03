@@ -44,13 +44,24 @@ lock(Lock *l)
 			for(i=0; ; i++) {
 				if(_tas(&l->key) == 0)
 					break;
-				if (i >= 1000000) {
+				/*
+				 * The same bound as a proc's, below. A million
+				 * spins is tens of milliseconds under QEMU's TCG,
+				 * less than a host takes to run a descheduled
+				 * vCPU again when it is oversubscribed: a holder
+				 * of the run queue at splhi, nanoseconds from its
+				 * unlock, and the scheduler spinning for it
+				 * panicked (nativefuzz seed 403, four QEMUs on
+				 * four host cores).
+				 */
+				if (i >= 100*1000*1000) {
 					lockloop(l, pc);
 					break;
 				}
 			}
 		}
 		l->pc = pc;
+		l->p = nil;	/* no proc: the scheduler, or before procs */
 		return;
 	}
 

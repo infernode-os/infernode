@@ -24,7 +24,7 @@ Wm: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-Ptrstarted, Kbdstarted, Controlstarted, Controller, Fixedorigin, Framed: con 1<<iota;
+Ptrstarted, Kbdstarted, Controlstarted, Controller, Fixedorigin, Framed, Docked: con 1<<iota;
 Bdwidth: con 3;
 # a window is at least this big (9front's goodrect: 100 wide, a line of
 # text and its borders high)
@@ -39,6 +39,7 @@ screen: ref Screen;
 display: ref Display;
 ptrfocus: ref Client;
 kbdfocus: ref Client;
+docked: ref Client;	# a keyboard on the screen ("dock"), above every other window
 controller: ref Client;
 allowcontrol := 1;
 fakekbd: chan of string;
@@ -202,7 +203,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				# 2 reshapes from the nearest edge or corner, 3 moves
 				# -- one drag while the button is held, no mode.  The
 				# client never sees the press.
-				hc.top();
+				totop(hc);
 				setkbdfocus(hc);
 				buttons = p.buttons;
 				if(p.buttons & 4)
@@ -213,12 +214,16 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				break;
 			}
 			c := wmsrv->find(p.xy);
-			if(c != nil){
+			if(c != nil && (c.flags & Docked) != 0){
+				# a keyboard on the screen: its presses are its own,
+				# and the keyboard stays with the window that has it
+				ptrfocus = c;
+			}else if(c != nil){
 				if(c != kbdfocus && p.buttons == 1){
 					# rio: button 1 in a window that is not the
 					# current one only makes it current; the click
 					# goes no further
-					c.top();
+					totop(c);
 					setkbdfocus(c);
 					held = 1;
 					break;
@@ -266,6 +271,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				kbdfocus = nil;
 			if(c == controller)
 				controller = nil;
+			if(c == docked)
+				docked = nil;
 			controlevent("delclient " + string c.id);
 			for(z := wmsrv->top(); z != nil; z = z.znext)
 				if(z.flags & Kbdstarted)
@@ -396,7 +403,7 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		if(c.wins == nil && c == kbdfocus)
 			setkbdfocus(nil);
 	"raise" =>
-		c.top();
+		totop(c);
 	"lower" =>
 		c.bottom();
 	"!move" or
@@ -420,6 +427,22 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 			if(n != 5)
 				return "bad arg count";
 			return sizewin(wmctxt.ptr, c, w, Point(int hd args, int hd tl args), presspt, 1);
+		}
+	"dock" =>
+		# dock bottom <height>: a keyboard on the screen (wm/osk).  It
+		# places itself along the bottom; here it is kept above every
+		# window, and a press in it goes to it without taking the
+		# keyboard from the window that has it.  Height 0: undocked.
+		if(n != 3 || hd tl args != "bottom")
+			return "usage: dock bottom height";
+		if(int hd tl tl args > 0){
+			c.flags |= Docked;
+			docked = c;
+			c.top();
+		}else{
+			c.flags &= ~Docked;
+			if(docked == c)
+				docked = nil;
 		}
 	"fixedorigin" =>
 		c.flags |= Fixedorigin;
@@ -680,8 +703,16 @@ reshape(c: ref Client, tag: string, r: Rect): string
 		if(c.setimage(tag, img) == -1)
 			return "can't do two at once";
 	}
-	c.top();
+	totop(c);
 	return nil;
+}
+
+# c to the top, under a docked keyboard
+totop(c: ref Client)
+{
+	c.top();
+	if(docked != nil && docked != c)
+		docked.top();
 }
 
 sweep(ptr: chan of ref Pointer, r: Rect, offset: Point, borders: array of ref Image, move, show: int, min: Point): Rect
@@ -1021,7 +1052,7 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 	Rmove =>
 		(c, at) := pointto(ptr, 0, mc.buttons);
 		if(c != nil && (w := c.window(".")) != nil){
-			c.top();
+			totop(c);
 			setcursor(boxcursor);
 			buttons = 4;
 			dragwin(ptr, c, w, at.sub(w.r.min), 0);
@@ -1190,7 +1221,7 @@ unhide(c: ref Client)
 		if(w.img != nil)
 			w.img.origin(w.img.r.min, w.r.min);
 	}
-	c.top();
+	totop(c);
 	setkbdfocus(c);
 }
 

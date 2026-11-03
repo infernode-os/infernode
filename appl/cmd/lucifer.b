@@ -336,6 +336,17 @@ M_QUIT:   con 1 << 6;
 cmouse: chan of ref Pointer;
 zpointer: Pointer;
 
+# The keyboard on the screen (wm/osk -s): a client of a window server
+# of its own, given a strip along the bottom of the screen when it asks
+# to be docked; the zones are laid out above it.  Its touches are its
+# own and move no focus: what it types arrives as any keyboard's does
+# (kbdproc), for whichever zone or app has the keyboard.
+dockh := 0;			# the height it asked for; 0: no strip
+dockr: Rect;			# the strip, while there is one
+dockscr: ref Screen;
+dockclient: ref Client;
+dockgrab := 0;			# a press began in the strip
+
 # Screen/sub-image globals — must be module-level to prevent GC.
 # When a Screen is GC'd the draw kernel refills its background area with the
 # parent screen's fill color (White from wmclient putimage).  The separator
@@ -671,6 +682,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn eventproc();
 	spawn mouseproc();
 	spawn kbdproc();
+	startosk();
 	if(actid >= 0)
 		spawn nslistener();
 	spawn globallistener();
@@ -1130,6 +1142,22 @@ reqkbd(on: int)
 {
 	if(!mobile)
 		return;
+	if(softkbd != nil){
+		if(on){
+			# a shell's or an editor's words are not to be put right
+			prose := 1;
+			if(curtaskpres != nil)
+				case curtaskpres.activeappid {
+				"shell" or "sh" or "acme" or "xenith" =>
+					prose = 0;
+				}
+			softkbd->mode(prose);
+			softkbd->show(Softkbd->KEEPTOP);
+		}else
+			softkbd->show(Softkbd->HIDE);
+		softkbd->clear_rect();
+		return;
+	}
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
@@ -1206,6 +1234,137 @@ setexpandedzone(z: int)
 	# until mainloop drains; the wm pointer channel buffers
 	# upstream so taps aren't lost.
 	cmouse <-= ref p;
+}
+
+# --- The keyboard on the screen ---
+
+Oskcmd: module
+{
+	init:	fn(ctxt: ref Draw->Context, args: list of string);
+};
+
+# startosk: wm/osk as the system's keyboard, if it is there and not
+# turned off ($osk is "off"), in a strip of its own along the bottom.
+# Its files are mounted at /mnt/osk here, before any app is launched,
+# so every app's name space has them: softkbd(2) asks it to show
+# itself for a text field.  It shows itself only with no keyboard of
+# the machine's attached, and on a screen whose GUI does not say when a
+# text field has the keyboard (a desktop's), once the screen is touched.
+startosk()
+{
+	o := readfile("/env/osk");
+	if(o != nil && strip(o) == "off")
+		return;
+	(ok, nil) := sys->stat("/dis/wm/osk.dis");
+	if(ok < 0)
+		return;
+	dockwm := load Wmsrv Wmsrv->PATH;
+	if(dockwm == nil)
+		return;
+	(dockchan, djoin, dreq) := dockwm->init("wmctl.osk");
+	if(dockchan == nil)
+		return;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return;
+	spawn dockloop(djoin, dreq);
+	spawn runosk(dockchan, p[1]);
+	spawn mountosk(p[0]);
+}
+
+runosk(wm: chan of (string, chan of (string, ref Draw->Wmcontext)), fd: ref Sys->FD)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("/chan/wmctl.osk", "/chan/wmctl", Sys->MREPL) < 0){
+		sys->fprint(stderr, "lucifer: osk: bind: %r\n");
+		return;
+	}
+	osk := load Oskcmd "/dis/wm/osk.dis";
+	if(osk == nil){
+		sys->fprint(stderr, "lucifer: osk: %r\n");
+		return;
+	}
+	args := "osk" :: "-s" :: "-F" :: string fd.fd :: nil;
+	if(mobile)
+		args = "osk" :: "-s" :: "-m" :: "-F" :: string fd.fd :: nil;
+	osk->init(ref Draw->Context(display, nil, wm), args);
+}
+
+mountosk(fd: ref Sys->FD)
+{
+	if(sys->mount(fd, nil, "/mnt/osk", Sys->MREPL, nil) < 0)
+		sys->fprint(stderr, "lucifer: osk: mount /mnt/osk: %r\n");
+}
+
+# the keyboard's window server: one client, its window the strip
+dockloop(join: chan of (ref Client, chan of string), req: chan of (ref Client, array of byte, Sys->Rwrite))
+{
+	for(;;) alt {
+	(c, rc) := <-join =>
+		dockclient = c;
+		rc <-= nil;
+	(c, data, rc) := <-req =>
+		if(rc == nil){
+			# gone
+			if(c == dockclient)
+				dockclient = nil;
+			c.remove();
+			c.wins = nil;
+			if(c.stop != nil)
+				c.stop <-= 1;
+			setdock(0);
+			continue;
+		}
+		s := string data;
+		n := len data;
+		err: string;
+		(nf, f) := sys->tokenize(s, " ");
+		if(nf > 0)
+		case hd f {
+		"!reshape" or "!onscreen" =>
+			ds := dockscr;
+			if(dockh <= 0 || ds == nil){
+				err = "not docked";
+				break;
+			}
+			img := ds.newwindow(ds.image.r, Draw->Refbackup, Draw->Nofill);
+			if(img == nil){
+				err = "window creation failed";
+				break;
+			}
+			c.setimage("app", img);
+			c.top();
+		"dock" =>
+			if(nf != 3 || hd tl f != "bottom"){
+				err = "usage: dock bottom height";
+				break;
+			}
+			setdock(int hd tl tl f);
+		"delete" =>
+			c.setimage("app", nil);
+		}
+		if(err != nil)
+			n = -1;
+		alt { rc <-= (n, err) => ; * => ; }
+	}
+}
+
+# the strip's height: the zones laid out again above it
+setdock(h: int)
+{
+	if(h < 0)
+		h = 0;
+	if(h == dockh)
+		return;
+	dockh = h;
+	p := zpointer;
+	p.buttons = M_RESIZE;
+	spawn kickresize(ref p);
+}
+
+kickresize(p: ref Pointer)
+{
+	cmouse <-= p;
 }
 
 # --- Per-task presentation zone management ---
@@ -2066,6 +2225,11 @@ topexpandedzone()
 handleresize()
 {
 	r := mainwin.r;
+	h := dockh;
+	if(h > r.dy() * 6 / 10)
+		h = r.dy() * 6 / 10;
+	if(h > 0)
+		r.max.y -= h;
 
 	# Mobile accordion toggle: mainwin geometry unchanged, only which
 	# zone is expanded. pressubimg's rect is invariant (presmaxr in
@@ -2124,6 +2288,18 @@ handleresize()
 	convimg = mainscr.newwindow(convr, Draw->Refbackup, Draw->Nofill);
 	ctximg  = mainscr.newwindow(ctxr,  Draw->Refbackup, Draw->Nofill);
 	pressubimg = mainscr.newwindow(presr, Draw->Refbackup, Draw->Nofill);
+	dockscr = nil;
+	if(h > 0){
+		dockr = Rect((mainwin.r.min.x, r.max.y), mainwin.r.max);
+		dockimg := mainscr.newwindow(dockr, Draw->Refbackup, Draw->Nofill);
+		if(dockimg != nil){
+			dockimg.draw(dockr, bgcol, nil, (0, 0));
+			dockscr = Screen.allocate(dockimg, bgcol, 0);
+		}
+		# the keyboard asks again for its window, now there is a strip
+		if(dockclient != nil && dockscr != nil)
+			spawn sendctlmsg(dockclient.ctl, sys->sprint("!reshape . -1 %s", r2s(dockr)));
+	}
 	if(convimg == nil || ctximg == nil || pressubimg == nil) {
 		sys->fprint(sys->fildes(2), "lucifer: handleresize: newwindow failed (mobile=%d expanded=%d) convr=%s presr=%s ctxr=%s\n",
 			mobile, expanded_zone, r2s(convr), r2s(presr), r2s(ctxr));
@@ -2676,6 +2852,14 @@ mouseproc()
 	prevb := 0;
 	for(;;) {
 		p := <-win.ctxt.ptr;
+		# the keyboard on the screen's: a press in its strip and the
+		# rest of that press.  Not taken as where the mouse is, which
+		# decides (on a desktop) which zone has the keyboard.
+		if(dockclient != nil && (dockgrab || dockscr != nil && p.xy.in(dockr))){
+			dockgrab = p.buttons != 0;
+			alt { dockclient.ptr <-= p => ; * => ; }
+			continue;
+		}
 		lastmousex = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
 			wasdown := prevb;

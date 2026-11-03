@@ -1,8 +1,11 @@
 #
 # softkbd.m — On-screen keyboard avoidance helper.
 #
-# Wraps the /dev/consctl verbs that the SDL3 iOS backend uses to control
-# the soft keyboard and the keyboard-avoidance rect:
+# With InferNode's own keyboard running (wm/osk, its files at /mnt/osk)
+# the requests go to it, as show, hide and rect on /mnt/osk/ctl, and
+# the system's keyboard is never asked for.  Otherwise they are the
+# /dev/consctl verbs that the SDL3 iOS backend uses to control the soft
+# keyboard and the keyboard-avoidance rect:
 #
 #   "kbd on"           — show, slide so the bottom input is visible
 #                        (legacy default: 56pt strip at the bottom)
@@ -46,4 +49,10 @@ Softkbd: module {
 
 	# Convenience: clear the override. Same as set_rect(0,0,0,0).
 	clear_rect: fn();
+
+	# What the focused text is: prose (1), whose words a keyboard on
+	# the screen may put right and capitalise, or not (0: a shell's
+	# commands, code).  Only InferNode's own keyboard (wm/osk) takes
+	# it; the system's has no such hint here.
+	mode: fn(prose: int);
 };

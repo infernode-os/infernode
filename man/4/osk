@@ -1,0 +1,121 @@
+.TH OSK 4
+.SH NAME
+osk \- the keyboard on the screen's files
+.SH SYNOPSIS
+.B /mnt/osk/ctl
+.br
+.B /mnt/osk/status
+.br
+.B /mnt/osk/words
+.br
+.B /mnt/osk/keys
+.SH DESCRIPTION
+.IR Wm-osk (1)
+serves these files at
+.B /mnt/osk
+(Lucifer mounts them there for every application it starts).
+.TF status
+.TP
+.B ctl
+Requests, one a write:
+.RS
+.TF "\fBrecord \fIfile\fR|\fBoff"
+.TP
+.B show
+a text field has the keyboard: show it, unless a keyboard of the
+machine's is attached
+.TP
+.B hide
+none has: hide it
+.TP
+.B toggle
+hide it to its handle, or show it
+.TP
+.BI layout " name"
+the letters' layout
+.I name
+(a file in
+.BR /lib/osk/layouts ),
+kept for next time
+.TP
+.BR mode " text" | plain
+what the field holds: prose, whose words are put right and whose
+sentences begin with a capital, or not (a shell's commands, code), whose
+words are only offered
+.TP
+.BR correct " on" | off
+.TP
+.BR swipe " on" | off
+whether words are put right, and strokes read as words
+.TP
+.BI height " pixels"
+the keys' height (0: from the screen's size)
+.TP
+.BI record " file" \fR|\fPoff
+record the touches and what is typed in
+.I file
+.RI ( wm-osk (1)'s
+.BR -r ),
+or stop
+.TP
+.BI learn " word ..."
+the words, as words of the typist's
+.TP
+.BI rect " x y w h"
+.TP
+.B ontop
+accepted, and not needed: where a text field is, for a keyboard the
+view must be moved above
+.RI ( softkbd (2));
+this one is docked, the field above it already
+.PD
+.RE
+.TP
+.B status
+What it is showing, a line each:
+.BR state " shown" | handle | hidden ,
+.BI layout " name" \fR,
+.BR mode ,
+.BR correct ,
+.BR swipe ,
+.BI height " pixels" \fR,
+and
+.BI keyboards " n"
+(1 when a keyboard of the machine's is taken to be attached).  The first
+read of an open file answers at once; each later read waits until the
+status changes.
+.TP
+.B words
+The words learned,
+.I "word count"
+a line; a write of such lines adds them.
+.TP
+.B keys
+The keys shown and where they are, a line each:
+.IP
+.I "name minx miny maxx maxy"
+.IP
+in screen pixels,
+.I name
+the character a key types, or the key's word in the layout
+.RB ( shift ,
+.BR space ,
+.BR del ,
+.BR enter ,
+.BR sym ,
+\&...).  Empty while the keys are not shown.  For a test, an agent, or a
+trace's reader, to find a key.
+.PD
+.SH EXAMPLE
+Switch to Dvorak and wait for the keyboard to change:
+.IP
+.EX
+echo layout dvorak > /mnt/osk/ctl
+read 400 < /mnt/osk/status
+.EE
+.SH SOURCE
+.B /appl/wm/osk.b
+.SH SEE ALSO
+.IR wm-osk (1),
+.IR softkbd (2),
+.IR cons (3)

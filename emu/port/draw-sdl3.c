@@ -735,17 +735,29 @@ apply_softkbd(void)
 #if MOBILE_TOUCH
 	static int applied_keeptop = 0;
 	static int applied_rx = 0, applied_ry = 0, applied_rw = 0, applied_rh = 0;
+	int want;
+
 	if (!sdl_window)
 		return;
-	if (softkbd_want != softkbd_applied) {
-		softkbd_applied = softkbd_want;
+	/*
+	 * With a keyboard of the machine's attached (a Bluetooth or USB
+	 * keyboard on a phone or tablet), text input stays on whatever is
+	 * focused: the system shows no keyboard of its own over one, and
+	 * without text input its keys would type nothing.  Without one,
+	 * the GUI's request decides; and with InferNode's own keyboard
+	 * running (wm/osk) the GUI asks that instead, never this, so the
+	 * system's keyboard does not come up.
+	 */
+	want = softkbd_want || SDL_HasKeyboard();
+	if (want != softkbd_applied) {
+		softkbd_applied = want;
 		if (softkbd_applied) {
 			SDL_StartTextInput(sdl_window);
 			update_text_input_area();
 		} else {
 			SDL_StopTextInput(sdl_window);
 		}
-	} else if (softkbd_want &&
+	} else if (want &&
 		   (softkbd_keeptop != applied_keeptop ||
 		    softkbd_rect_x != applied_rx ||
 		    softkbd_rect_y != applied_ry ||
@@ -929,6 +941,92 @@ touch_finger_to_pixels(const SDL_TouchFingerEvent *ev, float *px, float *py)
 }
 
 /*
+ * Every finger, for /dev/fingers (devpointer's fingertrack): SDL's
+ * finger ids are opaque (pointers on iOS), so each finger on the
+ * screen gets the lowest free small id for as long as it is there.
+ * Coordinates go to the screen's pixels as the mouse path's do.  This
+ * is all a backend does with fingers: what they mean is for the
+ * reader.
+ */
+static SDL_FingerID finger_sdlid[TOUCH_MAX_FINGERS];
+static int finger_used[TOUCH_MAX_FINGERS];
+
+static int
+finger_slot(SDL_FingerID id, int alloc)
+{
+	int i;
+
+	for(i = 0; i < TOUCH_MAX_FINGERS; i++)
+		if(finger_used[i] && finger_sdlid[i] == id)
+			return i;
+	if(!alloc)
+		return -1;
+	for(i = 0; i < TOUCH_MAX_FINGERS; i++)
+		if(!finger_used[i]){
+			finger_used[i] = 1;
+			finger_sdlid[i] = id;
+			return i;
+		}
+	return -1;
+}
+
+static void
+finger_event(const SDL_TouchFingerEvent *ev, int on)
+{
+	float px, py;
+	int slot, x, y;
+
+	slot = finger_slot(ev->fingerID, on);
+	if(slot < 0)
+		return;
+	touch_finger_to_pixels(ev, &px, &py);
+	window_to_texture_coords(px, py, &x, &y);
+	fingertrack(slot, x, y, on);
+	if(!on)
+		finger_used[slot] = 0;
+}
+
+/*
+ * The keyboards SDL knows of, for /dev/keyboards (devcons's
+ * kbdattach): at start and as they come and go.  SDL is one source of
+ * them; the native kernel's drivers say the same through
+ * /dev/consctl.
+ */
+static void
+keyboard_attach(SDL_KeyboardID kid)
+{
+	char id[32];
+	const char *name;
+
+	snprint(id, sizeof id, "sdl%ud", (unsigned)kid);
+	name = SDL_GetKeyboardNameForID(kid);
+	kbdattach(id, (char*)(name != NULL ? name : ""));
+}
+
+static void
+keyboard_detach(SDL_KeyboardID kid)
+{
+	char id[32];
+
+	snprint(id, sizeof id, "sdl%ud", (unsigned)kid);
+	kbddetach(id);
+}
+
+static void
+keyboards_init(void)
+{
+	SDL_KeyboardID *ids;
+	int i, n;
+
+	ids = SDL_GetKeyboards(&n);
+	if(ids == NULL)
+		return;
+	for(i = 0; i < n; i++)
+		keyboard_attach(ids[i]);
+	SDL_free(ids);
+}
+
+/*
  * Pre-initialize SDL3 on main thread
  * Called from main() before threading starts
  */
@@ -975,6 +1073,7 @@ sdl3_preinit(void)
 	/* Register cleanup handler to ensure window closes on exit */
 	atexit(sdl_atexit_handler);
 
+	keyboards_init();
 	sdl_initialized = 1;
 	return 1;
 }
@@ -1872,6 +1971,7 @@ sdl3_mainloop(void)
 				float px, py;
 				if (!touchscreen(event.tfinger.touchID))
 					break;
+				finger_event(&event.tfinger, 1);
 				touch_finger_to_pixels(&event.tfinger, &px, &py);
 				if (touch_finger_count < TOUCH_MAX_FINGERS) {
 					touch_fingers[touch_finger_count].id = event.tfinger.fingerID;
@@ -1909,10 +2009,12 @@ sdl3_mainloop(void)
 				break;
 			}
 
+			case SDL_EVENT_FINGER_CANCELED:
 			case SDL_EVENT_FINGER_UP: {
 				int idx;
 				if (!touchscreen(event.tfinger.touchID))
 					break;
+				finger_event(&event.tfinger, 0);
 				idx = touch_finger_index(event.tfinger.fingerID);
 				touch_finger_remove_at(idx);
 				if (touch_finger_count < 2)
@@ -1937,6 +2039,7 @@ sdl3_mainloop(void)
 				float px, py, dx, dy;
 				if (!touchscreen(event.tfinger.touchID))
 					break;
+				finger_event(&event.tfinger, 1);
 				idx = touch_finger_index(event.tfinger.fingerID);
 				if (idx < 0)
 					break;
@@ -1989,6 +2092,14 @@ sdl3_mainloop(void)
 
 			case SDL_EVENT_TEXT_INPUT:
 				handle_text_input(event.text.text);
+				break;
+
+			case SDL_EVENT_KEYBOARD_ADDED:
+				keyboard_attach(event.kdevice.which);
+				break;
+
+			case SDL_EVENT_KEYBOARD_REMOVED:
+				keyboard_detach(event.kdevice.which);
 				break;
 
 			case SDL_EVENT_KEY_DOWN:

@@ -68,6 +68,32 @@ Each prints `hb SECONDS OPS` every second and `sysfuzz: done` at the end
 (`sysfuzz: wedged: ...` if the kernel stopped answering). Then `vm` should
 show no Progs left in VMs 1-3.
 
+## The chaos build
+
+Faults a kernel meets seldom, made often. Build the kernel with
+`EXTRACFLAGS=-DCHAOS` (os/port/chaos.c) and it has `/dev/chaos`:
+
+```
+echo 'malloc 3000' > /dev/chaos   one malloc, mallocz or realloc in 3000 refused
+echo 'sleep 300' > /dev/chaos     a Prog's system call's sleep interrupted, as a kill does
+echo 'lock 1000' > /dev/chaos     a spin lock's holder delayed a few microseconds
+echo 'yield 1000' > /dev/chaos    a proc releasing a spin lock preempted
+echo 'vms 0xe' > /dev/chaos       only in Dis VMs 1-3 (bit 31: the kernel's own procs)
+echo off > /dev/chaos
+cat /dev/chaos                    each site's rate and how often it fired
+```
+
+`tools/nativefuzz -C malloc=3000,sleep=300,lock=1000,yield=1000 -K
+tmp/bmC/virt-kernel.img` turns them on in VMs 1-3 and the kernel's procs
+while sysfuzz runs, VM 0 (the console's shell) spared, and off before the
+shell is checked. A chaos run fails only on a crash, QEMU exiting, no
+boot, or a shell that does not answer once chaos is off: Progs dying of
+what is injected, sysfuzz among them, is expected.
+
+A refused allocation is not far-fetched: the hosted emulator's pools are
+anyone's to size (`-pmain=`), and set too small they are run out of for
+real. `tools/sysfuzz -P="-pmain=2m"` does that to the emulator.
+
 ## When it stops
 
 The console's debug keys work when nothing else does. Type Ctrl-T twice,
@@ -175,11 +201,49 @@ Test: `kill_deadserver_test` (a server that never answers a read, a
 clunk or a flush; the killer and the killed both get away within 5s, a
 Prog exiting of itself within 10s).
 
+Found by the chaos build and by `tools/sysfuzz -P` (refused memory):
+
+- **The JITs' calls of a builtin** ran it with R.PC whatever was last
+  punted and the builtin's frame as R.FP: an exception the builtin raised
+  inside a handler block (an array bounds error from `utfbytes`, out of
+  memory, an interrupted call) was matched with the builtin's frame, the
+  block's locals "zeroed" in it, and the caller resumed on it. Reachable
+  with plenty of memory (`jit_builtinexc_test`); seen as destroy of nil
+  and as compiled code running with a nil frame pointer (`mframe`).
+- **MacFRAM** (a frame that needs a new stack segment) raised out of
+  memory with R.PC stale: the same wrong handler.
+- **spawn** made the Prog runnable, then could not allocate its stack,
+  and left it to run with none.
+- **compile** raised out of memory from inside the compile lock, which
+  was never let go: every later module load waited, holding its VM, and
+  the console's VM stopped. A failure partway also left the module's links
+  pointing at freed code.
+- **Channels**: `alt` left its Prog queued on the first channels when
+  queuing it on a later one failed (the collector later woke it, freed);
+  `isend`/`irecv` took the Prog off the run queue before queuing it (its
+  exception handled with another Prog current); a new channel whose queue
+  heads could not be allocated kept the freed pointers.
+- A kproc's Prog (`addprog`), a first Prog from `#X` (`newprog`), a
+  mount's queue (`mntversion`, which also called qopen holding a spin
+  lock), an IP conversation's queues (`Fsprotoclone`): each panicked or
+  kept a nil.
+- `killgrp` killed nothing when it could not allocate its list of pids:
+  under memory pressure a group could not be killed.
+- The emulator's `smalloc` panicked after ten seconds without memory, and
+  `kstrdup`, `kproc`, `addprog` at once; they wait, as the native kernel's
+  do, the pool named once on the console, a kill interrupting the wait.
+
 ## Open
 
 - Orphaned calls whose server never answers keep their tag and their
   Mntrpc until the mount goes: one tag of 64K a call, which a long soak
   against a stuck server could use up.
+- A main pool far too small for what is run (emu `-pmain=2m` under
+  sysfuzz) still brings every Prog, the one that would kill the others
+  among them, to wait for memory nothing frees: a standstill with the
+  pool named, not a crash. And with hundreds of procs blocked, the host
+  can refuse emu another thread's stack (glibc's assertion in
+  `pthread_create`).
 - Hosted sysfuzz, rarely (seeds 704 with `-d`, 904 without): heartbeats
   stop with no watchdog report and nothing found under gdb on a rerun.
 

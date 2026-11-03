@@ -311,6 +311,17 @@ writable(p: string): int
 	return 1;
 }
 
+# Open at all? Not kprint, by any path (through an export too): while it
+# is open, everything written to /dev/cons, every Prog's output, goes to
+# its queue, and the run looks hung (the heartbeat silent).
+openable(p: string): int
+{
+	for(i := 0; i+6 <= len p; i++)
+		if(p[i:i+6] == "kprint")
+			return 0;
+	return 1;
+}
+
 anypath(r: ref Rng): string
 {
 	if(paths == nil || len paths == 0)
@@ -382,6 +393,8 @@ op(w: ref Wk)
 		m := modes[r.n(len modes)];
 		if(m != Sys->OREAD && !writable(p))
 			m = Sys->OREAD;
+		if(!openable(p))
+			return;
 		keep(w, sys->open(p, m));
 	3 =>
 		d := array[] of {"/nvfs", "/nvfs/a", "/env", "/n", "/chan", "/tmp"};
@@ -479,7 +492,7 @@ op(w: ref Wk)
 			spawn quiet(nil, nil, (f[0], ex[r.n(len ex)]), r);
 			on := array[] of {"/n", "/nvfs/a", "/tmp", "/net"};
 			if(sys->mount(f[1], nil, on[r.n(len on)], Sys->MREPL|Sys->MCREATE, "") >= 0)
-				keep(w, sys->open(on[r.n(len on)] + "/" + junkname(r), modes[r.n(3)]));
+				keep(w, sys->open(on[r.n(len on)] + "/" + junkname(r), modes[r.n(3)]));	# junkname: never kprint
 		}
 	20 =>
 		sys->chdir(anypath(r));

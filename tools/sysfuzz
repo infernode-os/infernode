@@ -68,7 +68,6 @@ def sanenv():
 def one(seed, a, emu, env):
 	cmd = [emu, "-c%d" % a.c, "-r" + ROOT, "/dis/sh.dis", "-c",
 		"/dis/tests/sysfuzz.dis -s %d -t %d -e %d -p %d; echo halt > /dev/sysctl" % (seed, a.t, a.e, a.p)]
-	logdir = env.get("ASAN_OPTIONS", "")
 	before = set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*")))
 	p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
 		env=env, start_new_session=True)
@@ -80,7 +79,10 @@ def one(seed, a, emu, env):
 		out, _ = p.communicate()
 		hung = True
 	text = NOISE.sub("", out.decode("utf-8", "replace"))
-	new = sorted(set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*"))) - before) if a.a else []
+	# only this emu's own reports: they are named for its pid, and other
+	# runs write theirs into the same directory at the same time
+	new = sorted(f for f in set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*"))) - before
+		if f.endswith(".%d" % p.pid)) if a.a else []
 	kind, why = None, ""
 	bad = [l for l in text.splitlines() if CRASH.search(l)]
 	reports = []

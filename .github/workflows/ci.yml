@@ -692,6 +692,14 @@ jobs:
         # call, caught by the handler around it (tools/sysfuzz).
         ROOT=. sh tests/host/jit_killcall_test.sh
 
+    - name: Run system call fuzzing (fixed seeds)
+      run: |
+        # Many Progs making random system calls, killing one another,
+        # exporting and mounting their name spaces (tools/sysfuzz); a
+        # crash, a kernel no longer answering or no end fails. These
+        # seeds found exportfs's freed queue tail and rmcall's stale pc.
+        python3 tools/sysfuzz -n 6 -s 100 -j 2 -t 15
+
     - name: Run cpu(1) session lifetime test
       run: |
         # A cpu session ends when its command does, or when its caller

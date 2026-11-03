@@ -142,34 +142,49 @@ run()
 	spawn heartbeat(hb, start);
 	while(sys->millisec() - start < secs*1000){
 		epoch++;
-		walk();
-		pidc := chan of int;
-		go := chan of int;
-		spawn epochleader(pidc, go, seed*1000 + epoch);
-		lpid := <-pidc;
-		# its ctl opened before its workers start: with -d they can
-		# rename the root's prog directory, and a kill by name later
-		# found nothing, the epoch's Progs left running (nativefuzz)
-		lctl := sys->open(sys->sprint("/prog/%d/ctl", lpid), Sys->OWRITE);
-		go <-= 1;
-		sys->sleep(epochsecs*1000);
+		# An exception here (a chaos kernel's refused allocations:
+		# nil where a value was, "out of memory") ended the run with
+		# the epoch's Progs never killed, hundreds of them left on
+		# servers that would not answer; the epoch is killed whatever
+		# happened, and the run goes on
+		lctl: ref FD;
+		{
+			walk();
+			pidc := chan of int;
+			go := chan of int;
+			spawn epochleader(pidc, go, seed*1000 + epoch);
+			lpid := <-pidc;
+			# its ctl opened before its workers start: with -d they can
+			# rename the root's prog directory, and a kill by name later
+			# found nothing, the epoch's Progs left running (nativefuzz)
+			lctl = sys->open(sys->sprint("/prog/%d/ctl", lpid), Sys->OWRITE);
+			go <-= 1;
+			sys->sleep(epochsecs*1000);
+		} exception e {
+		"*" =>
+			sys->print("epoch %d: %s\n", epoch, e);
+		}
 		# the whole epoch's group, wherever it got to; through any of it
 		# still there if the leader is not (an exception propagated to
 		# it, its workers in calls still running: nativefuzz)
-		# By a helper, waited for a while: a kill runs the dead Progs'
-		# closes in the killer, and one on a server that never answers
-		# does not return (docs/NATIVE-FUZZING.md, Open); the helper is
-		# left in it and the run goes on
-		kdone := chan[1] of int;	# the helper never waits to say it is done
-		spawn epochkill(lctl, epochpids, kdone);
-		kt := chan of int;
-		spawn timer(kt, 3000);
-		alt {
-		<-kdone =>
-			;
-		<-kt =>
-			if(verbose)
-				sys->print("epoch %d: the kill did not return in 3s\n", epoch);
+		# By a helper, waited for a while: a kill of a Prog whose
+		# closes wait on a server that never answers took long; the
+		# helper is left in it and the run goes on
+		{
+			kdone := chan[1] of int;	# the helper never waits to say it is done
+			spawn epochkill(lctl, epochpids, kdone);
+			kt := chan of int;
+			spawn timer(kt, 3000);
+			alt {
+			<-kdone =>
+				;
+			<-kt =>
+				if(verbose)
+					sys->print("epoch %d: the kill did not return in 3s\n", epoch);
+			}
+		} exception e {
+		"*" =>
+			sys->print("epoch %d: kill: %s\n", epoch, e);
 		}
 		lctl = nil;
 		epochpids = nil;

@@ -175,6 +175,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	Fcall f;
 	uchar *msg;
 	Mnt *m;
+	Queue *q;
 	char *v;
 	long k, l;
 	uvlong oo;
@@ -274,7 +275,14 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	if(!versioncompatible(v, f.version))
 		error("bad 9P version returned from server");
 
-	/* now build Mnt associated with this connection */
+	/*
+	 * now build Mnt associated with this connection; its queue first,
+	 * outside the lock: qopen gives nil when malloc refuses it, and a
+	 * Mnt with none faulted at its first reply (mntrpcread's qlen)
+	 */
+	q = qopen(10*MAXRPC, 0, nil, nil);
+	if(q == nil)
+		exhausted("mount queue");
 	lock(&mntalloc.l);
 	m = mntalloc.mntfree;
 	if(m != 0)
@@ -283,6 +291,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 		m = malloc(sizeof(Mnt));
 		if(m == 0) {
 			unlock(&mntalloc.l);
+			qfree(q);
 			exhausted("mount devices");
 		}
 	}
@@ -291,7 +300,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	m->version = nil;
 	kstrdup(&m->version, f.version);
 	m->id = mntalloc.id++;
-	m->q = qopen(10*MAXRPC, 0, nil, nil);
+	m->q = q;
 	m->msize = f.msize;
 	unlock(&mntalloc.l);
 

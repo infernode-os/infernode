@@ -231,7 +231,9 @@ def one(seed, a, card):
 		if a.C:
 			cm = len(c.buf)
 			c.typed("echo off > /dev/chaos; cat /dev/chaos; echo CHAOSOFF")
-			if not c.waitfor(rb"\nCHAOSOFF", 300 if m["icount"] >= 0 else 60, cm):
+			# slow, not dead, with hundreds of Progs left on servers
+			# that will never answer: the shell gets five minutes
+			if not c.waitfor(rb"\nCHAOSOFF", 300, cm):
 				if not CRASH.search(bytes(c.buf[cm:])):
 					kind, why = "dead", "the shell did not answer once chaos was off"
 				raise StopIteration

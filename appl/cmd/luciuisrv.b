@@ -30,7 +30,8 @@ implement Luciuisrv;
 #                   {artifact-id}/
 #                       type         artifact type
 #                       label        display name
-#                       data         structured content
+#                       data         structured content (rw; a write at offset 0
+#                                    replaces it, one after adds to it)
 #               context/
 #                   ctl              update resources/gaps/bg tasks
 #                   resources/
@@ -152,6 +153,9 @@ Artifact: adt {
 	idx:	int;		# index in artifacts array
 	dispath:   string;	# "/dis/wm/clock.dis"  (type=app only)
 	appstatus: string;	# "launching"|"running"|"dead"  (type=app only)
+	written:   big;		# bytes written to data since a write at offset 0
+	held:      array of byte;	# their tail not yet in data: a rune cut by
+				# the message's end, a final newline
 };
 
 Resource: adt {
@@ -557,10 +561,42 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 		na[0:] = a.artifacts[0:a.nart];
 		a.artifacts = na;
 	}
-	art := ref Artifact(id, atype, label, "", a.nart, "", "");
+	art := ref Artifact(id, atype, label, "", a.nart, "", "", big 0, nil);
 	a.artifacts[a.nart++] = art;
 	vers++;
 	return art;
+}
+
+# A write to an artifact's data file.  Content longer than one 9P
+# message comes as several writes, each at the offset the last ended
+# at: the first (offset 0) replaces the data, the rest add to it.  Each
+# used to replace it, so a plumbed README showed only its last 8K, and
+# only its last line once laid out.  A rune cut by a message's end is
+# held until the next one completes it, as is a final newline (one
+# write's trailing newline is not the data's, as for the other files;
+# one between two writes is).
+writeartdata(art: ref Artifact, off: big, b: array of byte): string
+{
+	base := "";
+	if(off == big 0) {
+		art.held = nil;
+		art.written = big 0;
+	} else if(off == art.written)
+		base = art.data;
+	else
+		return "data written out of order";
+	nb := array[len art.held + len b] of byte;
+	nb[0:] = art.held;
+	nb[len art.held:] = b;
+	n := sys->utfbytes(nb, len nb);
+	if(n > 0 && nb[n-1] == byte '\n')
+		n--;
+	if(len base + n > MAX_DATA_SIZE)
+		return "artifact data too large";
+	art.held = nb[n:];
+	art.written += big len b;
+	art.data = base + string nb[0:n];
+	return nil;
 }
 
 # Append s to the end of list l (FIFO queue push).
@@ -1448,7 +1484,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		a.artifacts[subid].data = data;
+		err := writeartdata(a.artifacts[subid], m.offset, m.data);
+		if(err != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, err));
+			break;
+		}
 		vers++;
 		pushevent(actid, "presentation " + a.artifacts[subid].id);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -1698,8 +1738,11 @@ presctl(a: ref Activity, data: string): string
 		if(art == nil)
 			return "unknown artifact: " + id;
 		d := getattr(attrs, "data");
-		if(d != nil)
+		if(d != nil) {
 			art.data = d;
+			art.held = nil;
+			art.written = big 0;
+		}
 		l := getattr(attrs, "label");
 		if(l != nil)
 			art.label = safeattrtext(l);

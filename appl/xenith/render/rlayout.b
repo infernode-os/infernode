@@ -1607,6 +1607,39 @@ pmd_parseinline(text: string): list of ref DocNode
 					continue;
 				}
 			}
+			# Inline HTML: not shown as its markup.  The tags that
+			# say what Markdown can say (<b> <i> <code> <s> <br>)
+			# do so; any other tag (<sub>, <span>, <kbd>, …) is
+			# dropped and its text kept; a comment is dropped whole.
+			(hend, tag, closing) := pmd_htmltag(text, i);
+			if(hend > 0){
+				if(len plain > 0){
+					nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+					plain = "";
+				}
+				i = hend;
+				kind := -1;
+				case tag {
+				"b" or "strong" => kind = Nbold;
+				"i" or "em" => kind = Nitalic;
+				"code" or "tt" => kind = Ncode;
+				"s" or "del" or "strike" => kind = Nstrike;
+				"br" =>
+					nodes = ref DocNode(Nnewline, nil, nil, 0) :: nodes;
+				}
+				if(kind >= 0 && !closing){
+					cend := pmd_findclosetag(text, i, tag);
+					if(cend >= 0){
+						inner := text[i:cend];
+						if(kind == Ncode)
+							nodes = ref DocNode(Ncode, inner, nil, 0) :: nodes;
+						else
+							nodes = ref DocNode(kind, nil, pmd_parseinline(inner), 0) :: nodes;
+						(i, nil, nil) = pmd_htmltag(text, cend);
+					}
+				}
+				continue;
+			}
 		}
 
 		# Link: [text](url)
@@ -1650,6 +1683,72 @@ pmd_ispunct(c: int): int
 		if(c == "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"[i])
 			return 1;
 	return 0;
+}
+
+# An HTML tag or comment at text[i] (a '<'): where it ends (after its
+# '>'), its name in lower case, and whether it closes (</name>); or -1.
+# A tag is <name ...> or </name> with name a letter then letters,
+# digits or '-', as CommonMark's raw HTML; a comment is <!-- ... -->.
+pmd_htmltag(text: string, i: int): (int, string, int)
+{
+	n := len text;
+	if(i >= n || text[i] != '<')
+		return (-1, nil, 0);
+	if(i+3 < n && text[i+1:i+4] == "!--"){
+		e := pmd_findclose(text, i+4, "-->");
+		if(e < 0)
+			return (-1, nil, 0);
+		return (e+3, "!--", 0);
+	}
+	j := i+1;
+	closing := 0;
+	if(j < n && text[j] == '/'){
+		closing = 1;
+		j++;
+	}
+	if(j >= n || !pmd_isalpha(text[j]))
+		return (-1, nil, 0);
+	tag := "";
+	for(; j < n && (pmd_isalpha(text[j]) || (text[j] >= '0' && text[j] <= '9') || text[j] == '-'); j++){
+		c := text[j];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		tag[len tag] = c;
+	}
+	if(j < n && text[j] != '>' && text[j] != '/' && text[j] != ' ' && text[j] != '\t')
+		return (-1, nil, 0);
+	# its attributes, quoted values among them, to the '>'
+	q := 0;
+	for(; j < n; j++){
+		c := text[j];
+		if(q){
+			if(c == q)
+				q = 0;
+		}else if(c == '"' || c == '\'')
+			q = c;
+		else if(c == '<')
+			return (-1, nil, 0);
+		else if(c == '>')
+			return (j+1, tag, closing);
+	}
+	return (-1, nil, 0);
+}
+
+pmd_isalpha(c: int): int
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+# Where </tag> begins in text from start (any case), or -1.
+pmd_findclosetag(text: string, start: int, tag: string): int
+{
+	for(i := start; i < len text; i++)
+		if(text[i] == '<'){
+			(e, t, c) := pmd_htmltag(text, i);
+			if(e > 0 && c && t == tag)
+				return i;
+		}
+	return -1;
 }
 
 pmd_findclose(text: string, start: int, delim: string): int

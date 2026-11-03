@@ -52,6 +52,8 @@ SYSMODULES=\
 	readdir.m\
 	man.m\
 	daytime.m\
+	docengine.m\
+	docreg.m\
 	draw.m\
 	scene.m\
 	factotum.m\

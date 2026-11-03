@@ -362,8 +362,8 @@ jobs:
           tests/host/tools9p_result_test.sh tests/host/toolctl_view_test.sh \
           tests/host/wiki9p_test.sh \
           tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
-          tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
-          tests/host/context_window_test.sh
+          tests/host/luciuisrv_closed_test.sh tests/host/luciuisrv_data_test.sh \
+          tests/host/compaction_test.sh tests/host/context_window_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         # /mnt/toolctl's ns, event and view: the agent's name space as it
@@ -380,6 +380,9 @@ jobs:
         ROOT=. bash tests/host/prompt_defaults_test.sh
         # A closed activity refuses writes and the server survives them.
         ROOT=. bash tests/host/luciuisrv_closed_test.sh
+        # An artifact's data written in several 9P messages is kept whole
+        # (a plumbed README showed as its last line).
+        ROOT=. bash tests/host/luciuisrv_data_test.sh
         # A long session is compacted without breaking a turn of tool calls.
         ROOT=. bash tests/host/compaction_test.sh
         ROOT=. bash tests/host/context_window_test.sh

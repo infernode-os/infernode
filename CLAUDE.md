@@ -406,6 +406,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `xenith_frame_test.b` | Xenith's frame (text layout and drawing) against a simulated screen: insert, delete, select, wrap, tabs, overflow, random edits; the suite is `xenith_framesuite.b` |
 | `sdl3_test.b` | SDL3 GUI backend |
 | `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
+| `tests/host/kernrandom_test.sh` | The bare-metal kernel's random numbers (os/port/random.c) against a simulated hardware generator: ChaCha20 keyed by SHA-256 of hardware bytes, checked against a model; nothing made with no generator, the Dis VM let go while a key waits, reseeds by time and bytes, ten minutes on the old key when the generator is dry, stuck and repeated seeds refused |
 | `tests/host/mldsa_decompose_test.sh` | ML-DSA Decompose against FIPS 204 Algorithm 36 on every input, and no divide instruction in it (it sees secret-derived values; cf. CVE-2026-22705) |
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |

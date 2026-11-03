@@ -186,6 +186,8 @@ int		chaosmalloc(void);
 void		chaossleep(void);
 void		chaoslock(void);
 int		chaosyield(void);
+int		chaosdevice(ulong*);
+int		chaosintr(ulong*);
 long		chaosread(void*, long, vlong);
 long		chaoswrite(void*, long);
 #endif

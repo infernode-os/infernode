@@ -22,6 +22,14 @@
  *		reach into
  *	yield	a proc releasing a spin lock gives up its core, as when
  *		preempted there
+ *	device	a virtio device lies: a used entry names a descriptor not
+ *		its own, or the shared descriptors' links are scribbled on
+ *		(os/virtio/virtio.c's vqcollect)
+ *	intr	after an interrupt, another device's handler is called with
+ *		nothing for it to do, as a spurious or shared interrupt does
+ *		(os/arm64/gic.c)
+ *
+ * device and intr are the machine's, not a VM's: vms does not confine them.
  *
  * vms is a mask of the Dis VMs (#X) whose procs meet the faults, bit 0
  * VM 0; bit 31 is the kernel's own procs, in no VM. Sparing VM 0 keeps
@@ -45,6 +53,8 @@ enum {
 	Csleep,
 	Clock,
 	Cyield,
+	Cdevice,
+	Cintr,
 	Nchaos
 };
 
@@ -53,6 +63,8 @@ static char *chaosname[Nchaos] = {
 	[Csleep]	"sleep",
 	[Clock]	"lock",
 	[Cyield]	"yield",
+	[Cdevice]	"device",
+	[Cintr]	"intr",
 };
 
 static ulong chaosrate[Nchaos];
@@ -70,7 +82,7 @@ chaos(int site)
 	r = chaosrate[site];
 	if(r == 0)
 		return 0;
-	if(up != nil){
+	if(up != nil && site != Cdevice && site != Cintr){
 		if(up->vm != nil){
 			if((chaosvms & (1UL << (up->vm->id & 31))) == 0)
 				return 0;
@@ -121,6 +133,25 @@ int
 chaosyield(void)
 {
 	return chaos(Cyield);
+}
+
+/* fired: 1, and a random number in *r */
+int
+chaosdevice(ulong *r)
+{
+	if(!chaos(Cdevice))
+		return 0;
+	*r = chaosseed;
+	return 1;
+}
+
+int
+chaosintr(ulong *r)
+{
+	if(!chaos(Cintr))
+		return 0;
+	*r = chaosseed;
+	return 1;
 }
 
 long

@@ -882,6 +882,7 @@ dis/tests/fractals_zoombox_test.dis
 dis/tests/tkimgrender.dis
 dis/tests/tkrender.dis
 dis/tests/tls_crypto_test.dis
+dis/tests/tls_hrr_test.dis
 dis/tests/tls_live_test.dis
 dis/tests/tls_pq_test.dis
 dis/tests/tls_protocol_test.dis

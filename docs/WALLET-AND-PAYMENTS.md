@@ -216,7 +216,7 @@ All keys (wallet, API, email) sync automatically.
 
 ### secp256k1 (libsec/secp256k1.c)
 
-Clean-room implementation of the secp256k1 elliptic curve used by Ethereum and Bitcoin. Follows the same patterns as the existing P-256 implementation in `libsec/ecc.c`.
+Clean-room implementation of the secp256k1 elliptic curve used by Ethereum and Bitcoin. It follows the patterns `libsec/ecc.c` (P-256, P-384) used before that was made constant time: libmp field reduction and a ladder that branches on the identity.
 
 - **Montgomery ladder** in Jacobian coordinates (structurally constant-time;
   see the field-arithmetic caveat under [Status and Security Model](#status-and-security-model))

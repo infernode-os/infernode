@@ -236,8 +236,20 @@ Native implementations of NIST post-quantum standards, with no external dependen
 #### Hybrid TLS 1.3 Key Exchange
 
 X25519MLKEM768 (IANA group 0x11EC, 4588 decimal) hybrid key exchange per
-draft-ietf-tls-ecdhe-mlkem. The client offers it first, with X25519, P-256
-and P-384 shares beside it for servers that do not take it.
+draft-ietf-tls-ecdhe-mlkem. The client offers it first, with an X25519 share
+beside it. P-256 and P-384 are offered in `supported_groups` without a share:
+a server that takes only one of them asks for it by HelloRetryRequest
+(RFC 8446 §4.1.4), and the client makes that share then. A share costs a
+scalar multiplication, so a handshake no longer pays for two it rarely uses.
+
+P-256 and P-384 themselves (`libsec/ecc.c`, under keyring's `p256_*` and
+`p384_*`) are constant time with respect to secret scalars: Montgomery
+arithmetic on 64-bit limbs (no libmp), complete projective formulas
+(Renes–Costello–Batina 2016, a = -3), a fixed 4-bit window read by masked
+scans, Fermat inversion. A key generation takes about 0.3 ms (P-256) and
+0.9 ms (P-384), where the libmp version took 11 and 27.
+`tests/host/ecc_test.sh` checks known answers from OpenSSL and, under
+valgrind, that no branch or address depends on a secret.
 
 Until October 2026 the constant was 0x4588, the decimal codepoint read as
 hex, and the share was never sent: TLS was classical X25519 in practice.

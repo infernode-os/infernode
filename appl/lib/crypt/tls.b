@@ -45,6 +45,7 @@ HT_SERVER_HELLO_DONE:		con 14;
 HT_CERTIFICATE_VERIFY:		con 15;
 HT_CLIENT_KEY_EXCHANGE:		con 16;
 HT_FINISHED:			con 20;
+HT_MESSAGE_HASH:		con 254;	# RFC 8446 §4.4.1: stands for ClientHello1 after a HelloRetryRequest
 
 # Alert levels
 ALERT_WARNING:	con 1;
@@ -70,6 +71,7 @@ EXT_SERVER_NAME:		con 0;
 EXT_SUPPORTED_GROUPS:		con 10;
 EXT_SIGNATURE_ALGORITHMS:	con 13;
 EXT_SUPPORTED_VERSIONS:		con 43;
+EXT_COOKIE:			con 44;
 EXT_KEY_SHARE:			con 51;
 
 # Named groups
@@ -83,6 +85,10 @@ MLKEM768_EKLEN:		con 1184;	# ML-KEM-768 encapsulation key
 MLKEM768_CTLEN:		con 1088;	# ML-KEM-768 ciphertext
 MLKEM1024_EKLEN:	con 1568;	# ML-KEM-1024 encapsulation key
 MLKEM1024_CTLEN:	con 1568;	# ML-KEM-1024 ciphertext
+
+# A ServerHello with this random is a HelloRetryRequest (RFC 8446 §4.1.3):
+# SHA-256("HelloRetryRequest")
+HRRRANDOM: con "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c";
 
 # Max record size
 MAXRECORD:	con 16384;
@@ -713,18 +719,21 @@ handshake0(cs: ref ConnState, config: ref Config): string
 	cs.handhash = nil;
 	cs.handhash384 = nil;
 
-	# Generate client random
+	# Generate client random, and the legacy session id, both of which
+	# a second ClientHello after a HelloRetryRequest repeats
 	client_random := randombytes(32);
+	session_id := randombytes(32);
 
 	# Key exchange: only the CNSA hybrid (SecP384r1MLKEM1024) when
-	# /env/cnsatls is set; else the X25519MLKEM768 hybrid first, with
-	# X25519, P-256 and P-384 for servers that do not take it.
+	# /env/cnsatls is set; else the X25519MLKEM768 hybrid first, then
+	# X25519.  P-256 and P-384 are offered in supported_groups but get
+	# no share until a server asks for one by HelloRetryRequest: a
+	# share costs a scalar multiplication, and most servers take
+	# X25519 or the hybrid.
 	x25519_priv: array of byte;
 	x25519_pub: array of byte;
-	hybridshare: array of byte;
-	pqshare: array of byte;
-	p256share: array of byte;
-	p384share: array of byte;
+	groups: list of int;			# supported_groups, in preference order
+	shares: list of (int, array of byte);	# key_share entries sent
 	cnsa := cnsatls();
 	if(cnsa){
 		strictcnsaconfig(config);
@@ -735,37 +744,26 @@ handshake0(cs: ref ConnState, config: ref Config): string
 		cs.eph_p384_priv = p384priv;
 		cs.eph_mlkem_sk = mlkem_sk;
 		# key_share entry: P-384 point (97) || ML-KEM-1024 ek (1568)
-		hybridshare = catbytes(p384pub, mlkem_ek);
+		groups = GROUP_SECP384R1MLKEM1024 :: nil;
+		shares = (GROUP_SECP384R1MLKEM1024, catbytes(p384pub, mlkem_ek)) :: nil;
 	}else{
 		x25519_priv = randombytes(32);
 		x25519_pub = keyring->x25519_base(x25519_priv);
+		groups = GROUP_X25519 :: GROUP_SECP256R1 :: GROUP_SECP384R1 :: nil;
+		shares = (GROUP_X25519, x25519_pub) :: nil;
 		# The post-quantum hybrid, preferred: ML-KEM-768 ek (1184) ||
 		# X25519 (32), the X25519 key shared with the plain X25519
 		# share (draft-ietf-tls-ecdhe-mlkem allows it, as browsers do).
 		(mlkem_ek, mlkem_sk) := keyring->mlkem768_keygen();
 		if(mlkem_ek != nil && mlkem_sk != nil) {
 			cs.eph_mlkem768_sk = mlkem_sk;
-			pqshare = catbytes(mlkem_ek, x25519_pub);
-		}
-		# Also offer a secp256r1 share, so TLS 1.3 servers that prefer
-		# P-256 (e.g. www.nist.gov) accept it without a HelloRetryRequest.
-		(p256priv, p256pt) := keyring->p256_keygen();
-		if(p256priv != nil && p256pt != nil) {
-			cs.eph_p256_priv = p256priv;
-			p256share = keyring->p256_point_bytes(p256pt);
-		}
-		# and secp384r1, for servers that take nothing else
-		# (pantip.com); with no HelloRetryRequest here, the share
-		# has to be in the first hello
-		(p384priv, p384pub) := keyring->p384_keygen();
-		if(p384priv != nil && p384pub != nil) {
-			cs.eph_p384_priv = p384priv;
-			p384share = p384pub;
+			groups = GROUP_X25519MLKEM768 :: groups;
+			shares = (GROUP_X25519MLKEM768, catbytes(mlkem_ek, x25519_pub)) :: shares;
 		}
 	}
 
 	# Build and send ClientHello
-	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, pqshare, p256share, p384share);
+	hello := buildclienthello(config, client_random, session_id, groups, shares, nil);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
 	if(err != nil)
 		return err;
@@ -777,15 +775,67 @@ handshake0(cs: ref ConnState, config: ref Config): string
 	if(shtype != HT_SERVER_HELLO)
 		return "tls: expected ServerHello";
 
+	# A HelloRetryRequest (RFC 8446 §4.1.4): the server wants a share
+	# for another group we offered, a cookie echoed, or both.  Answer
+	# with a second ClientHello, the same but for those (§4.1.2).
+	hrrsuite := 0;
+	hrrgroup := 0;
+	if(ishrr(shdata)) {
+		(suite, group, cookie, herr) := parsehrr(shdata, session_id, config, groups, shares);
+		if(herr != nil)
+			return herr;
+		hrrsuite = suite;
+		hrrgroup = group;
+		cs.suite = suite;
+		cs.version = TLS13;
+
+		# the transcript begins again: ClientHello1 stands as its
+		# hash in a message_hash message, then the HRR (§4.4.1)
+		hrrtranscript(cs, hsmsg(HT_CLIENT_HELLO, hello), hsmsg(HT_SERVER_HELLO, shdata));
+
+		if(group != 0) {
+			(share, serr) := keyshare(cs, group);
+			if(serr != nil)
+				return serr;
+			shares = (group, share) :: nil;
+		}
+		hello = buildclienthello(config, client_random, session_id, groups, shares, cookie);
+		err = sendhsmsg(cs, HT_CLIENT_HELLO, hello);
+		if(err != nil)
+			return err;
+
+		(shtype, shdata, sherr) = readhsmsg(cs);
+		if(sherr != nil)
+			return sherr;
+		if(shtype != HT_SERVER_HELLO)
+			return "tls: expected ServerHello";
+		if(ishrr(shdata))
+			return "tls: second HelloRetryRequest";
+	}
+
 	# Parse ServerHello
 	(server_random, server_suite, server_version, key_share_group, key_share_data, pherr) := parseserverhello(shdata, config);
 	if(pherr != nil)
 		return pherr;
 
+	if(hrrsuite != 0) {
+		# §4.1.4: the ServerHello must agree with the HRR
+		if(server_version != TLS13)
+			return "tls: ServerHello after HelloRetryRequest is not TLS 1.3";
+		if(server_suite != hrrsuite)
+			return "tls: ServerHello cipher suite differs from HelloRetryRequest's";
+		if(hrrgroup != 0 && key_share_group != hrrgroup)
+			return "tls: ServerHello key share differs from HelloRetryRequest's group";
+	}
+
 	cs.version = server_version;
 	cs.suite = server_suite;
-	if(cs.version == TLS13)
+	if(cs.version == TLS13) {
 		cs.group = key_share_group;
+		# the server's share must answer one we sent (§4.2.8)
+		if(sharefor(shares, key_share_group) == nil)
+			return sys->sprint("tls: server chose key share group 0x%04x, which we did not send", key_share_group);
+	}
 
 	if(cnsa) {
 		if(cs.version != TLS13)
@@ -801,6 +851,171 @@ handshake0(cs: ref ConnState, config: ref Config): string
 			x25519_priv, key_share_group, key_share_data);
 	return handshake12(cs, config, client_random, server_random,
 		x25519_priv);
+}
+
+# ================================================================
+# HelloRetryRequest (RFC 8446 §4.1.4)
+# ================================================================
+
+ishrr(shdata: array of byte): int
+{
+	if(len shdata < 34)
+		return 0;
+	return hexstr(shdata[2:34]) == HRRRANDOM;
+}
+
+hexstr(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%02x", int a[i]);
+	return s;
+}
+
+# The share entry sent for group, or nil.
+sharefor(shares: list of (int, array of byte), group: int): array of byte
+{
+	for(; shares != nil; shares = tl shares) {
+		(g, d) := hd shares;
+		if(g == group)
+			return d;
+	}
+	return nil;
+}
+
+# Parse a HelloRetryRequest: (cipher suite, selected group or 0, cookie or nil, error).
+# It must name a TLS 1.3 suite we offered, echo our session id, carry only
+# extensions we sent, and change something in the ClientHello: select a
+# group we offered without a share, or send a cookie, or both.
+parsehrr(data: array of byte, session_id: array of byte, config: ref Config,
+	groups: list of int, shares: list of (int, array of byte)): (int, int, array of byte, string)
+{
+	if(len data < 38)
+		return (0, 0, nil, "tls: HelloRetryRequest too short");
+	off := 34;	# legacy_version(2) + random(32)
+	sid_len := int data[off++];
+	if(off + sid_len + 3 > len data)
+		return (0, 0, nil, "tls: HelloRetryRequest truncated");
+	if(!bytescmp(data[off:off+sid_len], session_id))
+		return (0, 0, nil, "tls: HelloRetryRequest does not echo our session id");
+	off += sid_len;
+	suite := get16(data, off);
+	off += 2;
+	if(int data[off++] != 0)
+		return (0, 0, nil, "tls: non-null compression");
+
+	if(off + 2 > len data)
+		return (0, 0, nil, "tls: HelloRetryRequest has no extensions");
+	ext_end := off + 2 + get16(data, off);
+	off += 2;
+	if(ext_end != len data)
+		return (0, 0, nil, "tls: HelloRetryRequest extensions truncated");
+
+	version := 0;
+	group := 0;
+	cookie: array of byte;
+	seen := 0;
+	while(off < ext_end) {
+		if(off + 4 > ext_end)
+			return (0, 0, nil, "tls: HelloRetryRequest extension truncated");
+		etype := get16(data, off);
+		elen := get16(data, off + 2);
+		off += 4;
+		if(off + elen > ext_end)
+			return (0, 0, nil, "tls: HelloRetryRequest extension truncated");
+		bit := 0;
+		case etype {
+		EXT_SUPPORTED_VERSIONS =>
+			bit = 1;
+			if(elen != 2)
+				return (0, 0, nil, "tls: bad supported_versions in HelloRetryRequest");
+			version = get16(data, off);
+		EXT_KEY_SHARE =>
+			bit = 2;
+			if(elen != 2)
+				return (0, 0, nil, "tls: bad key_share in HelloRetryRequest");
+			group = get16(data, off);
+		EXT_COOKIE =>
+			bit = 4;
+			if(elen < 3 || get16(data, off) != elen - 2)
+				return (0, 0, nil, "tls: bad cookie in HelloRetryRequest");
+			cookie = data[off+2:off+elen];
+		* =>
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest has extension %d we did not send", etype));
+		}
+		if(seen & bit)
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest repeats extension %d", etype));
+		seen |= bit;
+		off += elen;
+	}
+
+	if(version != TLS13)
+		return (0, 0, nil, "tls: HelloRetryRequest is not TLS 1.3");
+	if((suite >> 8) != 16r13 || !member(config.suites, suite))
+		return (0, 0, nil, sys->sprint("tls: HelloRetryRequest chose unsupported suite 0x%04x", suite));
+	if(group != 0) {
+		if(!member(groups, group))
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest selected group 0x%04x, which we did not offer", group));
+		if(sharefor(shares, group) != nil)
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest selected group 0x%04x, which we sent a share for", group));
+	}else if(cookie == nil)
+		return (0, 0, nil, "tls: HelloRetryRequest asks for no change");
+	return (suite, group, cookie, nil);
+}
+
+member(l: list of int, x: int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == x)
+			return 1;
+	return 0;
+}
+
+# A share for group, made when a HelloRetryRequest asks for it.
+keyshare(cs: ref ConnState, group: int): (array of byte, string)
+{
+	case group {
+	GROUP_SECP256R1 =>
+		(priv, pt) := keyring->p256_keygen();
+		if(priv == nil || pt == nil)
+			return (nil, "tls: P-256 key generation failed");
+		cs.eph_p256_priv = priv;
+		return (keyring->p256_point_bytes(pt), nil);
+	GROUP_SECP384R1 =>
+		(priv, pub) := keyring->p384_keygen();
+		if(priv == nil || pub == nil)
+			return (nil, "tls: P-384 key generation failed");
+		cs.eph_p384_priv = priv;
+		return (pub, nil);
+	}
+	return (nil, sys->sprint("tls: no key share for group 0x%04x", group));
+}
+
+# After a HelloRetryRequest the transcript is message_hash(ClientHello1)
+# followed by the HRR (RFC 8446 §4.4.1), each transcript hashing
+# ClientHello1 with its own algorithm.
+hrrtranscript(cs: ref ConnState, ch1, hrr: array of byte)
+{
+	h256 := array[Keyring->SHA256dlen] of byte;
+	keyring->sha256(ch1, len ch1, h256, nil);
+	h384 := array[Keyring->SHA384dlen] of byte;
+	keyring->sha384(ch1, len ch1, h384, nil);
+	m256 := hsmsg(HT_MESSAGE_HASH, h256);
+	m384 := hsmsg(HT_MESSAGE_HASH, h384);
+	cs.handhash = keyring->sha256(m256, len m256, nil, nil);
+	cs.handhash = keyring->sha256(hrr, len hrr, nil, cs.handhash);
+	cs.handhash384 = keyring->sha384(m384, len m384, nil, nil);
+	cs.handhash384 = keyring->sha384(hrr, len hrr, nil, cs.handhash384);
+}
+
+# A handshake message: type(1) + length(3) + body
+hsmsg(mtype: int, data: array of byte): array of byte
+{
+	msg := array [4 + len data] of byte;
+	msg[0] = byte mtype;
+	put24(msg, 1, len data);
+	msg[4:] = data;
+	return msg;
 }
 
 # ================================================================
@@ -1268,12 +1483,11 @@ handshake13(cs: ref ConnState, config: ref Config,
 # Handshake Message Building
 # ================================================================
 
-buildclienthello(config: ref Config, random: array of byte,
-	x25519_pub: array of byte, hybridshare: array of byte, pqshare: array of byte,
-	p256share: array of byte, p384share: array of byte): array of byte
+buildclienthello(config: ref Config, random, session_id: array of byte,
+	groups: list of int, shares: list of (int, array of byte),
+	cookie: array of byte): array of byte
 {
 	# Build extensions
-	exts: array of byte;
 
 	# SNI extension
 	sni: array of byte;
@@ -1284,14 +1498,17 @@ buildclienthello(config: ref Config, random: array of byte,
 
 	# Supported groups + key share: the CNSA hybrid alone, or the
 	# X25519MLKEM768 hybrid ahead of the classical groups.
-	groups: array of byte;
-	keyshare: array of byte;
-	if(hybridshare != nil){
-		groups = buildsupportedgroups_cnsa();
-		keyshare = buildkeyshare_group(GROUP_SECP384R1MLKEM1024, hybridshare);
-	}else{
-		groups = buildsupportedgroups(pqshare != nil);
-		keyshare = buildkeyshare(pqshare, x25519_pub, p256share, p384share);
+	groupsext := buildsupportedgroups(groups);
+	keyshare := buildkeyshare(shares);
+
+	# Cookie, echoed from a HelloRetryRequest (RFC 8446 §4.2.2)
+	cookieext: array of byte;
+	if(cookie != nil) {
+		cookieext = array[4 + 2 + len cookie] of byte;
+		put16(cookieext, 0, EXT_COOKIE);
+		put16(cookieext, 2, 2 + len cookie);
+		put16(cookieext, 4, len cookie);
+		cookieext[6:] = cookie;
 	}
 
 	# Signature algorithms extension
@@ -1305,11 +1522,8 @@ buildclienthello(config: ref Config, random: array of byte,
 		suppver = nil;
 
 	# Concatenate extensions
-	extlist := catbytes(sni, catbytes(groups, catbytes(sigalgs,
-		catbytes(suppver, keyshare))));
-
-	# Session ID (32 bytes for compatibility)
-	session_id := randombytes(32);
+	extlist := catbytes(sni, catbytes(groupsext, catbytes(sigalgs,
+		catbytes(suppver, catbytes(cookieext, keyshare)))));
 
 	# Cipher suites
 	suitebytes := buildsuites(config.suites);
@@ -1372,12 +1586,8 @@ buildsniext(name: string): array of byte
 	return ext;
 }
 
-buildsupportedgroups(pq: int): array of byte
+buildsupportedgroups(groups: list of int): array of byte
 {
-	# [x25519mlkem768,] x25519, secp256r1, secp384r1
-	groups := GROUP_X25519 :: GROUP_SECP256R1 :: GROUP_SECP384R1 :: nil;
-	if(pq)
-		groups = GROUP_X25519MLKEM768 :: groups;
 	n := 2 * len groups;
 	ext := array [4 + 2 + n] of byte;
 	put16(ext, 0, EXT_SUPPORTED_GROUPS);
@@ -1388,31 +1598,6 @@ buildsupportedgroups(pq: int): array of byte
 		put16(ext, off, hd groups);
 		off += 2;
 	}
-	return ext;
-}
-
-buildsupportedgroups_cnsa(): array of byte
-{
-	# CNSA strict: offer only SecP384r1MLKEM1024 (no classical downgrade)
-	ext := array [4 + 2 + 2] of byte;
-	put16(ext, 0, EXT_SUPPORTED_GROUPS);
-	put16(ext, 2, 2 + 2);
-	put16(ext, 4, 2);
-	put16(ext, 6, GROUP_SECP384R1MLKEM1024);
-	return ext;
-}
-
-buildkeyshare_group(group: int, share: array of byte): array of byte
-{
-	# one key_share entry: group(2) + key_len(2) + key
-	listlen := 2 + 2 + len share;
-	ext := array [4 + 2 + listlen] of byte;
-	put16(ext, 0, EXT_KEY_SHARE);
-	put16(ext, 2, 2 + listlen);
-	put16(ext, 4, listlen);
-	put16(ext, 6, group);
-	put16(ext, 8, len share);
-	ext[10:] = share;
 	return ext;
 }
 
@@ -1468,46 +1653,26 @@ buildsupportedversions(config: ref Config): array of byte
 	return ext;
 }
 
-buildkeyshare(pq_pub, x25519_pub, p256_pub, p384_pub: array of byte): array of byte
+buildkeyshare(shares: list of (int, array of byte)): array of byte
 {
-	# X25519MLKEM768 first (preferred) if we have it, then X25519,
-	# then secp256r1 and secp384r1 if we have them
-	listlen := 2 + 2 + 32;	# group(2) + keylen(2) + data(32)
-	if(pq_pub != nil)
-		listlen += 2 + 2 + len pq_pub;
-	if(p256_pub != nil)
-		listlen += 2 + 2 + len p256_pub;
-	if(p384_pub != nil)
-		listlen += 2 + 2 + len p384_pub;
-
+	# one entry per share: group(2) + key_len(2) + key
+	listlen := 0;
+	for(l := shares; l != nil; l = tl l) {
+		(nil, d) := hd l;
+		listlen += 2 + 2 + len d;
+	}
 	ext := array [4 + 2 + listlen] of byte;
 	put16(ext, 0, EXT_KEY_SHARE);
 	put16(ext, 2, 2 + listlen);
 	put16(ext, 4, listlen);
-
 	off := 6;
-	if(pq_pub != nil) {
-		put16(ext, off, GROUP_X25519MLKEM768);
-		put16(ext, off+2, len pq_pub);
-		ext[off+4:] = pq_pub;
-		off += 4 + len pq_pub;
+	for(l = shares; l != nil; l = tl l) {
+		(g, d) := hd l;
+		put16(ext, off, g);
+		put16(ext, off+2, len d);
+		ext[off+4:] = d;
+		off += 4 + len d;
 	}
-	put16(ext, off, GROUP_X25519);
-	put16(ext, off+2, 32);
-	ext[off+4:] = x25519_pub;
-	off += 4 + 32;
-	if(p256_pub != nil) {
-		put16(ext, off, GROUP_SECP256R1);
-		put16(ext, off+2, len p256_pub);
-		ext[off+4:] = p256_pub;
-		off += 4 + len p256_pub;
-	}
-	if(p384_pub != nil) {
-		put16(ext, off, GROUP_SECP384R1);
-		put16(ext, off+2, len p384_pub);
-		ext[off+4:] = p384_pub;
-	}
-
 	return ext;
 }
 
@@ -2455,11 +2620,7 @@ parse_ecdsa_der_sig_p384(sig: array of byte): array of byte
 
 sendhsmsg(cs: ref ConnState, mtype: int, data: array of byte): string
 {
-	# Handshake header: type(1) + length(3)
-	msg := array [4 + len data] of byte;
-	msg[0] = byte mtype;
-	put24(msg, 1, len data);
-	msg[4:] = data;
+	msg := hsmsg(mtype, data);
 
 	# Hash the handshake message
 	updatehash(cs, msg);

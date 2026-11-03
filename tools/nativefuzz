@@ -231,10 +231,20 @@ def one(seed, a, card):
 			raise StopIteration
 		if a.C:
 			cm = len(c.buf)
-			c.typed("echo off > /dev/chaos; cat /dev/chaos; echo CHAOSOFF")
 			# slow, not dead, with hundreds of Progs left on servers
-			# that will never answer: the shell gets five minutes
-			if not c.waitfor(rb"\nCHAOSOFF", 300, cm):
+			# that will never answer: the shell gets five minutes. And
+			# typed again every half minute: Progs whose epoch's kill
+			# was refused (chaos) still read /dev/cons, and take a line
+			# the shell never sees
+			ok = False
+			for _ in range(10):
+				c.typed("echo off > /dev/chaos; cat /dev/chaos; echo CHAOSOFF")
+				if c.waitfor(rb"\nCHAOSOFF", 30, cm):
+					ok = True
+					break
+				if CRASH.search(bytes(c.buf[cm:])) or p.poll() is not None:
+					break
+			if not ok:
 				if not CRASH.search(bytes(c.buf[cm:])):
 					kind, why = "dead", "the shell did not answer once chaos was off"
 				raise StopIteration
@@ -255,7 +265,13 @@ def one(seed, a, card):
 		c.pump(10)
 		mark = len(c.buf)
 		c.typed("echo ALIVE; vm; cat /dev/memory; echo MEMAFTER")
-		if not c.waitfor(rb"\nMEMAFTER", 300 if m["icount"] >= 0 else 60, mark):
+		ok = c.waitfor(rb"\nMEMAFTER", 300 if m["icount"] >= 0 else 60, mark)
+		for _ in range(9 if a.C and not ok else 0):
+			c.typed("echo ALIVE; vm; cat /dev/memory; echo MEMAFTER")
+			ok = c.waitfor(rb"\nMEMAFTER", 30, mark)
+			if ok or CRASH.search(bytes(c.buf[mark:])):
+				break
+		if not ok:
 			if not CRASH.search(bytes(c.buf[mark:])):
 				kind, why = "dead", "the shell did not answer"
 			raise StopIteration

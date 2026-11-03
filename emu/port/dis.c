@@ -458,7 +458,7 @@ upkilled(void)
 	if(up == nil)
 		return 0;
 	if(up->killing)
-		return 1;	/* closing a Prog it is killing: killprog */
+		return 1;	/* closing a dying Prog's groups: killprog, progexit */
 	if(up->type != Interp)
 		return 0;
 	p = up->iprog;
@@ -1331,10 +1331,19 @@ progexit(void)
 		return;
 	}
 
+	/*
+	 * Its closes are a dying Prog's, killed or not: a 9P clunk among
+	 * them is sent and waited for Mntexitms at most (devmnt,
+	 * upkilled). Waited for without end, Progs exiting on servers that
+	 * never answer held their kprocs until none was left (nativefuzz,
+	 * "no procs").
+	 */
+	up->killing = upkilled() ? 1 : 2;
 	gclock();
 	destroystack(&R);
 	delprog(r, msg);
 	gcunlock();
+	up->killing = 0;
 
 	if(isched.head == nil)
 		cleanexit(0);

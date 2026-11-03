@@ -16,8 +16,11 @@ implement KillDeadserverTest;
 # flush, and waited for the flush's answer for good, holding whatever it
 # held (nativefuzz: an epoch's workers, serving each other, never died).
 #
-# Both now leave the call on the mount's queue, its tag held for an
-# answer, and go (devmnt, mntorphan).
+# Exiter: a Prog exiting of itself waited for its mount's clunk without
+# end.
+#
+# All now wait a bounded time, then leave the call on the mount's queue,
+# its tag held for an answer, and go (devmnt, mntorphan).
 #
 
 include "sys.m";
@@ -53,6 +56,8 @@ run(name: string)
 			testKillerNotHeld(t);
 		"KilledNotHeld" =>
 			testKilledNotHeld(t);
+		"ExiterNotHeld" =>
+			testExiterNotHeld(t);
 		}
 	} exception e {
 	"fail:fatal" =>
@@ -80,6 +85,19 @@ stalls: list of int;
 
 stall(fd: ref Sys->FD, pidc: chan of int)
 {
+	serve(fd, pidc, nil);
+}
+
+# answers a clunk, and says so on clunked: the second server, behind the
+# first in a union
+answering(fd: ref Sys->FD, pidc: chan of int, clunked: chan of int)
+{
+	serve(fd, pidc, clunked);
+}
+
+serve(fd: ref Sys->FD, pidc: chan of int, clunked: chan of int)
+{
+	rootfid := -1;
 	# a name space of its own: shared with a victim, it kept the
 	# victim's, and so its mount, from being closed by the kill
 	sys->pctl(Sys->FORKNS, nil);
@@ -95,10 +113,12 @@ stall(fd: ref Sys->FD, pidc: chan of int)
 		Version =>
 			r = ref Rmsg.Version(x.tag, x.msize, "9P2000");
 		Attach =>
+			rootfid = x.fid;
 			r = ref Rmsg.Attach(x.tag, rootqid);
 		Walk =>
-			if(len x.names == 0)
+			if(len x.names == 0){
 				r = ref Rmsg.Walk(x.tag, nil);
+			}
 			else if(len x.names == 1 && x.names[0] == "f")
 				r = ref Rmsg.Walk(x.tag, array[] of {fileqid});
 			else
@@ -115,7 +135,16 @@ stall(fd: ref Sys->FD, pidc: chan of int)
 		Read =>
 			continue;	# never
 		Clunk =>
-			continue;	# never
+			if(clunked == nil)
+				continue;	# never
+			if(x.fid == rootfid)
+				alt {
+				clunked <-= 1 =>
+					;
+				* =>
+					;
+				}
+			r = ref Rmsg.Clunk(x.tag);
 		Flush =>
 			continue;	# never
 		Readerror =>
@@ -132,6 +161,11 @@ stall(fd: ref Sys->FD, pidc: chan of int)
 # the server's mount, on dir in this name space
 mountstall(t: ref T, dir: string)
 {
+	mountstallas(t, dir, Sys->MREPL);
+}
+
+mountstallas(t: ref T, dir: string, flag: int)
+{
 	sys->create(dir, Sys->OREAD, Sys->DMDIR|8r777);
 	p := array[2] of ref Sys->FD;
 	if(sys->pipe(p) < 0)
@@ -140,8 +174,25 @@ mountstall(t: ref T, dir: string)
 	spawn stall(p[1], pidc);
 	stalls = <-pidc :: stalls;
 	p[1] = nil;
-	if(sys->mount(p[0], nil, dir, Sys->MREPL, nil) < 0)
+	if(sys->mount(p[0], nil, dir, flag, nil) < 0)
 		t.fatal(sys->sprint("mount: %r"));
+}
+
+# an answering server's mount on dir, the dead server then mounted
+# before it: the union is closed in that order, so the answering one's
+# root is clunked once the dead server's clunk is given up on
+mountanswering(t: ref T, dir: string, clunked: chan of int)
+{
+	sys->create(dir, Sys->OREAD, Sys->DMDIR|8r777);
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		t.fatal(sys->sprint("pipe: %r"));
+	pidc := chan of int;
+	spawn answering(p[1], pidc, clunked);
+	stalls = <-pidc :: stalls;
+	p[1] = nil;
+	if(sys->mount(p[0], nil, dir, Sys->MREPL, nil) < 0)
+		t.fatal(sys->sprint("mount the answering server: %r"));
 }
 
 timer(c: chan of int, ms: int)
@@ -157,19 +208,25 @@ timer(c: chan of int, ms: int)
 
 # a Prog with the server mounted in a name space of its own, waiting on
 # a channel: killed, its name space's close clunks the mount
-mounted(dir: string, pidc: chan of int, mounted: chan of string)
+mounted(dir: string, pidc: chan of int, mounted: chan of string, clunked: chan of int)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	pidc <-= sys->pctl(0, nil);
 	{
 		t := testing->newTsrc("mounted", SRCFILE);
-		mountstall(t, dir);
+		if(clunked != nil){
+			mountanswering(t, dir, clunked);
+			mountstallas(t, dir, Sys->MBEFORE);
+		}else
+			mountstall(t, dir);
 	} exception e {
 	"*" =>
 		mounted <-= e;
 		return;
 	}
 	mounted <-= nil;
+	if(clunked != nil)
+		return;	# exits of itself, its mounts clunked as it goes
 	c := chan of int;
 	<-c;
 }
@@ -184,7 +241,7 @@ testKillerNotHeld(t: ref T)
 {
 	pidc := chan of int;
 	ok := chan of string;
-	spawn mounted("/tmp/killdead1", pidc, ok);
+	spawn mounted("/tmp/killdead1", pidc, ok, nil);
 	pid := <-pidc;
 	e := <-ok;
 	if(e != nil)
@@ -239,6 +296,31 @@ testKilledNotHeld(t: ref T)
 	t.assert(sys->open(st, Sys->OREAD) == nil, "the killed reader is gone within 5s, its read unanswered");
 }
 
+# a Prog exiting of itself, not killed, its name space's close clunking
+# the mount: it waited for the clunk without end, and on servers that
+# never answer exiting Progs held their kprocs until there were none
+# (nativefuzz, "no procs"). Now it waits a few seconds.
+testExiterNotHeld(t: ref T)
+{
+	pidc := chan of int;
+	ok := chan of string;
+	clunked := chan of int;
+	spawn mounted("/tmp/killdead3", pidc, ok, clunked);
+	<-pidc;
+	e := <-ok;
+	if(e != nil)
+		t.fatal("mount in the exiter: " + e);
+	# its exit closes the dead server's mount, then the answering one's
+	tc := chan of int;
+	spawn timer(tc, 10000);
+	alt {
+	<-clunked =>
+		;
+	<-tc =>
+		t.fatal("the exiting Prog's second mount was not closed in 10s: it waits for the dead server's clunk");
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -256,6 +338,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("KillerNotHeld");
 	run("KilledNotHeld");
+	run("ExiterNotHeld");
 
 	for(; stalls != nil; stalls = tl stalls)
 		sys->fprint(sys->open(sys->sprint("/prog/%d/ctl", hd stalls), Sys->OWRITE), "kill");

@@ -496,7 +496,7 @@ struct Proc
 	Osenv*		env;
 	Osenv		defenv;
 	int		swipend;	/* software interrupt pending for Prog */
-	int		killing;	/* in killprog, destroying a Prog: its clunks are not waited for (devmnt) */
+	int		killing;	/* closing a dying Prog: 1 killed (killprog, progexit), 2 exiting; its clunks are waited for a bounded time (devmnt) */
 	int		intpend;	/* a Prog's kill that came while its proc was not asleep: the next sleep raises it */
 	Lock		sysio;		/* note handler lock */
 	char*		psstate;	/* What /proc/#/status reports */

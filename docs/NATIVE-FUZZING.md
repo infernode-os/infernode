@@ -152,6 +152,13 @@ module's `.sbl` (compile with `limbo -g`).
   the tag is not reused while the server may still answer, freed by
   whoever reads that answer. Progs left behind after a run fell from
   10-40 a VM to 1-12.
+- **Exiting Progs used up the kernel's processes**: a Prog exiting of
+  itself, not killed, waited in its exit for each clunk without end. On
+  servers that never answer, such Progs held their kprocs until there
+  were none, and exportfs could start no slave (`no procs`, seed 408 on
+  an `-icount 0` machine). An exit's clunk is now waited for five
+  seconds at most (`Mntexitms`; a kill's, one), long enough for a
+  server that acts on the clunk, a ctl file's, to answer first.
 - **exportfs held a request behind its own name space**: a slave adopting
   the next request's name space and fd table closed the ones it had,
   before serving the request; a close that waited on a server reached
@@ -165,12 +172,11 @@ module's `.sbl` (compile with `limbo -g`).
   test, holding the test's Venti port.)
 
 Test: `kill_deadserver_test` (a server that never answers a read, a
-clunk or a flush; the killer and the killed both get away within 5s).
+clunk or a flush; the killer and the killed both get away within 5s, a
+Prog exiting of itself within 10s).
 
 ## Open
 
-- A Prog that exits normally (not killed) still waits for its clunks,
-  however long the server takes.
 - Orphaned calls whose server never answers keep their tag and their
   Mntrpc until the mount goes: one tag of 64K a call, which a long soak
   against a stuck server could use up.

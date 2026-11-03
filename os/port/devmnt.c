@@ -884,7 +884,13 @@ mountrpc(Mnt *m, Mntrpc *r)
  * that has gone on past its time; mountio then leaves the call orphaned
  * (mntorphan) and goes.
  */
-enum { Mntwaitms = 1000 };
+/*
+ * How long a dying Prog's call is waited for: a killed one's, and the
+ * flush of one killed in a call, Mntwaitms; one exiting of itself
+ * (up->killing 2), whose next command may depend on what the server
+ * does at the clunk, a ctl file's action, Mntexitms.
+ */
+enum { Mntwaitms = 1000, Mntexitms = 5000 };
 
 typedef struct Mwatch Mwatch;
 struct Mwatch
@@ -928,7 +934,7 @@ mntwatch(Mwatch *w)
 	int start;
 
 	w->p = up;
-	w->deadline = TK2MS(MACHP(0)->ticks) + Mntwaitms;
+	w->deadline = TK2MS(MACHP(0)->ticks) + (up->killing == 2 ? Mntexitms : Mntwaitms);
 	w->fired = 0;
 	lock(&mwatch.l);
 	w->next = mwatch.list;
@@ -1083,11 +1089,12 @@ mountio(Mnt *m, Mntrpc *r)
 	unlock(&m->l);
 
 	/*
-	 * A killed Prog's clunk (a close, in its exit as anywhere, or in its
-	 * killer's thread) is waited for Mntwaitms at most -- its write too, to a server that has stopped reading: then the wait is
-	 * interrupted, and the call orphaned above. The fid is gone whatever
-	 * the server says, and a server that never answered held the dying
-	 * Prog, or its killer, for good.
+	 * A dying Prog's clunk or remove (a close in its exit, killed or
+	 * not, or in its killer's thread) is waited for Mntwaitms at most,
+	 * its write to a server that has stopped reading too: then the wait
+	 * is interrupted and the call orphaned above. The fid is gone
+	 * whatever the server says, and a server that never answered held
+	 * the dying Prog, or its killer, for good.
 	 */
 	if(!watched && (r->request.type == Tclunk || r->request.type == Tremove) && upkilled()){
 		mntwatch(&w);

@@ -3161,10 +3161,21 @@ freejitcode(void *p, ulong size)
 }
 
 /*
+ * Pass 0's scratch: each instruction, then each macro, is generated
+ * into it from its start to be measured, so it holds one at a time and
+ * its size does not depend on the module's.  The largest one generated
+ * is a few hundred bytes (an indc, 126); upstream's is 4096.  It must be
+ * near the text segment, so that bra()'s rel32 displacements to C have
+ * the length they will have in pass 1; it is made once and kept.
+ */
+enum {
+	COMPILE_TMP = 8192,
+};
+static uchar *compile_tmp = nil;
+
+/*
  * Main compilation entry point
  */
-static uchar *compile_tmp = nil;
-static ulong compile_tmp_size = 0;
 
 int
 compile(Module *m, int size, Modlink *ml)
@@ -3174,7 +3185,6 @@ compile(Module *m, int size, Modlink *ml)
 	Link *l;
 	int i, n = 0;
 	uchar *s, *tmp = nil;
-	ulong tmpsize;
 
 	if(getenv("INFERNODE_NOJIT") != nil)
 		return 0;
@@ -3188,26 +3198,10 @@ compile(Module *m, int size, Modlink *ml)
 	 */
 	patch = mallocz((size+1)*sizeof(*patch), 1);
 	tinit = mallocz(m->ntype*sizeof(*tinit), 0);
-	/*
-	 * The overflow check is on the product, before the floor: with
-	 * the floor first, every module of fewer than 128 instructions
-	 * failed it (8192/64 is 128, not size) and ran interpreted under
-	 * -c1, without a word (tests/jit_small_test.b).
-	 */
-	tmpsize = (ulong)size * 64;
-	if(size > 0 && tmpsize / 64 != (ulong)size)
-		goto bad;
-	if(tmpsize < 8192)
-		tmpsize = 8192;
-	if(tmpsize > compile_tmp_size) {
-		if(compile_tmp != nil)
-			jitfree(compile_tmp, compile_tmp_size*sizeof(uchar));
-		compile_tmp = jitmalloc(tmpsize*sizeof(uchar));
-		if(compile_tmp == nil) {
-			compile_tmp_size = 0;
+	if(compile_tmp == nil) {
+		compile_tmp = jitmalloc(COMPILE_TMP);
+		if(compile_tmp == nil)
 			goto bad;
-		}
-		compile_tmp_size = tmpsize;
 	}
 	tmp = compile_tmp;
 	if(tinit == nil || patch == nil) {
@@ -3232,6 +3226,12 @@ compile(Module *m, int size, Modlink *ml)
 	for(i = 0; i < size; i++) {
 		code = tmp;
 		comp(&m->prog[i]);
+		if(code - tmp >= COMPILE_TMP) {
+			print("JIT: instruction %d overflowed tmp (%ld >= %d)\n",
+				i, (long)(code - tmp), COMPILE_TMP);
+			base = nil;	/* it is tmp here, which is kept */
+			goto bad;
+		}
 		patch[i] = n;
 		n += code - tmp;
 	}
@@ -3240,6 +3240,12 @@ compile(Module *m, int size, Modlink *ml)
 	for(i = 0; i < nelem(mactab); i++) {
 		code = tmp;
 		mactab[i].gen();
+		if(code - tmp >= COMPILE_TMP) {
+			print("JIT: macro %d overflowed tmp (%ld >= %d)\n",
+				i, (long)(code - tmp), COMPILE_TMP);
+			base = nil;	/* it is tmp here, which is kept */
+			goto bad;
+		}
 		macro[mactab[i].idx] = n;
 		n += code - tmp;
 	}

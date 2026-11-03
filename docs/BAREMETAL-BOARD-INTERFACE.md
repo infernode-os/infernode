@@ -122,12 +122,19 @@ And, called from devices rather than from boot:
 | call | from | |
 |-|-|-|
 | `irqdispatch(Ureg*)` | `trap()` on every IRQ | Run the handlers; return 0 only for an enabled source with no handler (that panics). Maintain `irqorphan[]`, `nspurious`; supply `intrdump`, `intrpending`. |
-| `hwrandom(p, n)` | `os/port/random.c` | Up to `n` bytes of real entropy; may return short, **must not spin**. |
-| `genrandom`, `prng`, `prngtry` | libsec, `#c` | All `n` bytes, however long it takes. **Never pad** — libsec's key generators call these. |
+| `hwrandom(p, n)` | `os/port/random.c`, `devcons.c`'s `seedrand` | Up to `n` bytes of real entropy; may return short, **must not spin**; 0 when the generator is dry for now, **-1 when the machine has none** (`hwrandom(nil, 0)` asks only that). **Never makes bytes up**, and two cores may call it at once. |
 | `boardreboot()`, `boardtryboot()`, `boardbooted()`, `boardcandidate()`, `boardwatchdogpoll()`, `boardwatchdogtick()` | `#c/sysctl`, `exit()`, `microdelay`, `clockintr` | Reset; A/B trial boot; the boot watchdog. All may be empty or a plain reset. |
 | `getmacaddr(mac)` | `kmain` | An Ethernet address the *board* knows (the Pi's firmware derives one); `-1` if the network device carries its own. |
 | `physuart[]`, `consuartputc` | `os/port/devuart.c` | The board's UARTs as `PhysUart`s, nil-terminated. The one marked `.console = 1` feeds `kbdq` through its `.putc`. |
 | `uartputc`, `uartgetc`, `uartputstr`, `uartputx`, `uartputd`, `uartputs`, `uartlock`, `uartunlock`, `uartlockon` | everywhere, including the panic path | The polled console. Only the first two are really the board's; the rest are policy and are copies today (see below). |
+
+`genrandom`, `prng` and `prngtry` — what libsec's key generators and
+`#c/notquiterandom` call — are `os/port/random.c`'s, not the board's: all
+`n` bytes from `hwrandom`, however long it takes, **never padded**, and
+never from anything else. With no generator they wait, saying so every
+five seconds (`prngtry` answers -1), unless the command line holds the
+word `insecurerandom`, which hands out a labelled counter for an emulator
+that has nothing better.
 
 ## What the shared drivers call downward
 

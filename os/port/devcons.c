@@ -1409,10 +1409,25 @@ Dev consdevtab = {
 
 static	ulong	randn;
 
+/*
+ * nrand's seed: port numbers and TCP sequence numbers, not secrets --
+ * nrand is an LCG over the clock, as upstream's is. So it must never
+ * wait: it used to read the pool, which on a machine with no entropy
+ * source (os/port/random.c) now waits for ever, and the first network
+ * conversation would have waited with it. The generator if it has a
+ * word, and the clock with it either way.
+ */
 static void
 seedrand(void)
 {
-	randomread((void*)&randn, sizeof(randn));
+	ulong r;
+
+	r = 0;
+	if(hwrandom((uchar*)&r, sizeof(r)) < 0)
+		r = 0;
+	randn = r ^ (ulong)fastticks(nil);
+	if(randn == 0)
+		randn = 1;
 }
 
 int

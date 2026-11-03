@@ -448,10 +448,14 @@ newprog(Prog *p, Modlink *m)
 	}
 	n = malloc(sizeof(Prog)+sizeof(Osenv));
 	if(n == 0){
-		if(p == nil)
+		/*
+		 * A first Prog, with no parent, from boot (no error label:
+		 * panic) or from #X's vmrun (a write, which can fail; it
+		 * panicked the machine when malloc refused, chaos.c).
+		 */
+		if(p == nil && (up == nil || up->nerrlab == 0))
 			panic("no memory");
-		else
-			error(exNomem);
+		error(exNomem);
 	}
 
 	n->vm = up->vm;

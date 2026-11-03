@@ -158,10 +158,14 @@ newprog(Prog *p, Modlink *m)
 	}
 	n = malloc(sizeof(Prog)+sizeof(Osenv));
 	if(n == 0){
-		if(p == nil)
+		/*
+		 * A first Prog, with no parent: at boot, with no error
+		 * label, a panic; from a call that can fail, its error (as
+		 * the native kernel's #X vmrun needs).
+		 */
+		if(p == nil && (up == nil || up->nerr == 0))
 			panic("no memory");
-		else
-			error(exNomem);
+		error(exNomem);
 	}
 
 	n->pid = ++pidnum;

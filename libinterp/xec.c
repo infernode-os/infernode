@@ -541,11 +541,22 @@ cnewc(Type *t, void (*mover)(OPARGS), int len)
 
 	h = heap(&Tchannel);
 	c = H2D(Channel*, h);
+	c->buf = H;
 	c->send = malloc(sizeof(Progq));
 	c->recv = malloc(sizeof(Progq));
 	if(c->send == nil || c->recv == nil){
+		/*
+		 * The channel, unreferenced, is freed now (freechan): its
+		 * queues nil, not the freed ones, and its buffer H, not
+		 * nil. Left as they were, the collector freed it later
+		 * through freed memory (killcomm; a malloc refused,
+		 * os/port/chaos.c).
+		 */
 		free(c->send);
 		free(c->recv);
+		c->send = c->recv = nil;
+		c->mover = nil;
+		destroy(c);
 		error(exNomem);
 	}
 	c->send->prog = c->recv->prog = nil;

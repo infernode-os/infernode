@@ -85,7 +85,9 @@ TARG=\
 	realconv_test.dis\
 	jit_big_test.dis\
 	jit_byte_test.dis\
+	sysfuzz.dis\
 	jit_nilmod_test.dis\
+	jit_killcall_test.dis\
 	jit_small_helper.dis\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\

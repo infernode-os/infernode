@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+#
+# sysfuzz -- random system calls from many Progs at once against the
+# emulator's C, one emu per seed, each watched for what goes wrong.
+#
+#	tools/sysfuzz [-n runs] [-s seed] [-j jobs] [-t secs] [-e epochsecs]
+#		[-p procs] [-a] [-k] [-c n]
+#
+# Each run is emu (or, with -a, the sanitizers' emu from tools/sanemu)
+# running dis/tests/sysfuzz.dis with one seed: procs Progs making random
+# system calls (open, create, read, write, seek, pread and pwrite, stat
+# and wstat, dirread, dup, pipe, file2chan servers that misbehave, bind,
+# unmount, mounts of a server that lies and of the name space exported
+# back, chdir, pctl, spawn, kill through /prog, the debugger's files) in a
+# name space of their own with nothing of the host's but a scratch
+# directory, killed wholesale each epoch. A run fails when
+#
+#	signal	emu died by a signal
+#	crash	a crash signature (panic, SEGV, BUS, sys: trap, a sanitizer's
+#		report) in its output, or a new report in the sanitizers' log
+#	wedged	the kernel did not answer the check at the end (a file made,
+#		written, read and removed; a pipe; a spawn)
+#	hang	no "sysfuzz: done" within secs + 60 seconds
+#
+# A failed run keeps its output (and any sanitizer report) in
+# $ROOT/tmp/sysfuzz/fail/<seed>/; rerun it with -n 1 -s <seed>. The same
+# seed makes the same operations in each Prog, though not their timing.
+#
+#	-n	runs (10); 0 for no end
+#	-s	first seed (the time)
+#	-j	runs at once (the CPUs / 2)
+#	-t	seconds of operations in a run (20)
+#	-e	seconds in an epoch (4)
+#	-p	Progs in an epoch (8)
+#	-a	the sanitizers' emu ($ROOT/tmp/sanemu/o.emu; tools/sanemu build)
+#	-k	keep going after a failure
+#	-c	JIT flag for emu (1)
+#
+# Exit status: 0 no failure, 1 a failure, 2 a setup error.
+#
+
+import argparse
+import concurrent.futures
+import glob
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+DIS = os.path.join(ROOT, "dis", "tests", "sysfuzz.dis")
+CRASH = re.compile(r"panic|SEGV|BUS: addr|sys: trap|ERROR: AddressSanitizer|runtime error: (?!left shift|load of misaligned)|ERROR: LeakSanitizer|ThreadSanitizer|bad op|illegal instruction|double free|corrupted")
+NOISE = re.compile(r"/bin/bash: line [0-9]+: unalias: unsetenv: not found\n?")
+
+
+def sanenv():
+	out = subprocess.run([os.path.join(ROOT, "tools", "sanemu"), "env"], capture_output=True, text=True).stdout
+	env = dict(os.environ)
+	for l in out.splitlines():
+		k, _, v = l.partition("=")
+		env[k] = v
+	return env
+
+
+def one(seed, a, emu, env):
+	cmd = [emu, "-c%d" % a.c, "-r" + ROOT, "/dis/sh.dis", "-c",
+		"/dis/tests/sysfuzz.dis -s %d -t %d -e %d -p %d; echo halt > /dev/sysctl" % (seed, a.t, a.e, a.p)]
+	logdir = env.get("ASAN_OPTIONS", "")
+	before = set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*")))
+	p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+		env=env, start_new_session=True)
+	hung = False
+	try:
+		out, _ = p.communicate(timeout=a.t + 60)
+	except subprocess.TimeoutExpired:
+		os.killpg(p.pid, signal.SIGKILL)
+		out, _ = p.communicate()
+		hung = True
+	text = NOISE.sub("", out.decode("utf-8", "replace"))
+	new = sorted(set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*"))) - before) if a.a else []
+	kind, why = None, ""
+	bad = [l for l in text.splitlines() if CRASH.search(l)]
+	reports = []
+	for f in new:
+		with open(f, errors="replace") as fh:
+			reports.append(fh.read())
+	if p.returncode is not None and p.returncode < 0 and not hung:
+		kind, why = "signal", "emu died by signal %d" % -p.returncode
+	elif bad:
+		kind, why = "crash", bad[0][:200]
+	elif reports:
+		kind, why = "crash", "sanitizer report: " + reports[0].strip().splitlines()[1][:200] if len(reports[0].strip().splitlines()) > 1 else "sanitizer report"
+	elif "sysfuzz: wedged" in text:
+		kind, why = "wedged", [l for l in text.splitlines() if "wedged" in l][0]
+	elif hung or "sysfuzz: done" not in text:
+		kind, why = "hang", "no done in %ds" % (a.t + 60)
+	# what the run left in its scratch directory
+	shutil.rmtree(os.path.join(ROOT, "tmp", "sysfuzz", str(seed)), ignore_errors=True)
+	return seed, kind, why, text, reports
+
+
+def main():
+	ap = argparse.ArgumentParser()
+	ap.add_argument("-n", type=int, default=10)
+	ap.add_argument("-s", type=int, default=None)
+	ap.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 2) // 2))
+	ap.add_argument("-t", type=int, default=20)
+	ap.add_argument("-e", type=int, default=4)
+	ap.add_argument("-p", type=int, default=8)
+	ap.add_argument("-a", action="store_true")
+	ap.add_argument("-k", action="store_true")
+	ap.add_argument("-c", type=int, default=1)
+	a = ap.parse_args()
+
+	if a.a:
+		emu = os.path.join(ROOT, "tmp", "sanemu", "o.emu")
+		env = sanenv()
+	else:
+		h = {"Linux": "Linux", "Darwin": "MacOSX"}.get(os.uname().sysname)
+		emu = os.path.join(ROOT, "emu", h, "o.emu")
+		env = dict(os.environ)
+	for f in (emu, DIS):
+		if not os.path.exists(f):
+			sys.exit("sysfuzz: no %s (build it first)" % f)
+	seed = a.s if a.s is not None else int(time.time()) % 1000000
+	print("sysfuzz: seeds from %d, %s, %d at once, %ds each" % (seed, "sanitizers' emu" if a.a else "emu", a.j, a.t), flush=True)
+
+	failed = 0
+	counts = {}
+	n = 0
+	with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
+		pend = set()
+		nxt = seed
+		stop = False
+		while True:
+			while not stop and len(pend) < a.j and (a.n == 0 or nxt < seed + a.n):
+				pend.add(ex.submit(one, nxt, a, emu, env))
+				nxt += 1
+			if not pend:
+				break
+			done, pend = concurrent.futures.wait(pend, return_when=concurrent.futures.FIRST_COMPLETED)
+			for fu in done:
+				s, kind, why, text, reports = fu.result()
+				n += 1
+				k = kind or "pass"
+				counts[k] = counts.get(k, 0) + 1
+				if kind:
+					failed += 1
+					d = os.path.join(ROOT, "tmp", "sysfuzz", "fail", str(s))
+					os.makedirs(d, exist_ok=True)
+					with open(os.path.join(d, "out"), "w") as f:
+						f.write(text)
+					for i, r in enumerate(reports):
+						with open(os.path.join(d, "report%d" % i), "w") as f:
+							f.write(r)
+					with open(os.path.join(d, "why"), "w") as f:
+						f.write("%s %s\n" % (kind, why))
+					print("FAIL seed %d: %s: %s\n  kept in %s" % (s, kind, why, d), flush=True)
+					if not a.k:
+						stop = True
+				else:
+					print("seed %d: pass" % s, flush=True)
+	print("sysfuzz: %d runs: %s" % (n, " ".join("%s %d" % kv for kv in sorted(counts.items()))))
+	return 1 if failed else 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

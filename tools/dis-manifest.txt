@@ -759,6 +759,7 @@ dis/tests/jit_byte_test.dis
 dis/tests/jit_bounds_test.dis
 dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
+dis/tests/jit_killcall_test.dis
 dis/tests/jit_nilmod_test.dis
 dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
@@ -867,6 +868,7 @@ dis/tests/ssl_transport_test.dis
 dis/tests/stderr_test.dis
 dis/tests/strcat_test.dis
 dis/tests/string_test.dis
+dis/tests/sysfuzz.dis
 dis/tests/task_concurrent_probe.dis
 dis/tests/task_consistency_test.dis
 dis/tests/taskparse_test.dis

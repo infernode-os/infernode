@@ -19,7 +19,7 @@ char*	uartdescribe(void);
 void	uartputc(int);
 int	uartgetc(void);
 void	serialrecover(void);
-int	hwrandom(uchar*, int);
+int	hwrandom(uchar*, int);	/* the board's: real bytes, may be short; 0 dry; -1 no generator (os/port/random.c) */
 void	uartputstr(char*);
 void	uartlockon(void);
 int	uartlock(void);

@@ -1243,6 +1243,7 @@ commframe(Inst *i)
 	PATCH_BCOND(mlnil);
 	con(RELPC(patch[i - mod->prog + 1]), RA1);
 	mem(Stw, O(REG, st), RREG, RA1);
+	mem(Stw, O(REG, PC), RREG, RA1);	/* R.PC as punt writes it: rmfram can raise (comp-amd64.c framepc) */
 	bramac(MacMFRA);
 
 	PATCH_BCOND(punt_lab);

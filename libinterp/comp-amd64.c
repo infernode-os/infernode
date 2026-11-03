@@ -1486,19 +1486,20 @@ comcasel(Inst *i)
  * Module frame setup
  */
 /*
- * R.PC for MacFRAM, as punt writes it: the frame it makes can need a new
- * stack segment (extend), whose allocation refused raises "out of
- * memory", and the exception is looked for at R.PC. Left stale, it was
- * taken by the handler of wherever R.PC last pointed, another frame's,
- * and the Prog ran on in a frame not its own (a main pool too small:
- * tools/sysfuzz -P; the native chaos build's mframe faults). RAX is
- * free here: MacFRAM loads it first.
+ * R.PC for MacFRAM and MacMFRA, as punt writes it: the frame they make
+ * can need a new stack segment (extend), whose allocation refused raises
+ * "out of memory", and rmfram raises "module not loaded"; the exception
+ * is looked for at R.PC. Left stale, it was taken by the handler of
+ * wherever R.PC last pointed, another frame's, and the Prog ran on in a
+ * frame not its own (a main pool too small: tools/sysfuzz -P; the native
+ * chaos build's mframe faults). RCX is free on both paths: MacFRAM loads
+ * it before using it, MacMFRA does not touch it (RAX holds its type).
  */
 static void
 framepc(Inst *i)
 {
-	con64((uvlong)base + patch[i-mod->prog+1], RAX);
-	modrm(Ostw, O(REG, PC), RLINK, RAX);
+	con64((uvlong)base + patch[i-mod->prog+1], RCX);
+	modrm(Ostw, O(REG, PC), RLINK, RCX);
 }
 
 static void
@@ -1557,6 +1558,7 @@ commframe(Inst *i)
 	modrr(Oxchg, RAX, RRTA);
 	opwst(i, Olea, RRTA);
 	*mlnil = code-mlnil-1;
+	framepc(i);
 	rbra(macro[MacMFRA], Ocall);
 	rbra(patch[i-mod->prog+1], Ojmp);
 

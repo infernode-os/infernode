@@ -1036,15 +1036,29 @@ mountio(Mnt *m, Mntrpc *r)
 		 * an epoch's workers serving each other). Unanswered in time,
 		 * the call is left on the queue, its tag held, for its reply.
 		 */
+		if(upkilled() && fired){
+			mntorphan(m, r);
+			nexterror();
+		}
+		/*
+		 * The flush made before the watch is set: refused memory
+		 * (exhausted, in mntralloc), the error left this function
+		 * with w, on this stack, still on the watchdog's list, and
+		 * the call on the queue for whoever freed it (the native
+		 * chaos build: mntunwatch walking a stack long gone). The
+		 * call is left on the queue for its answer, as one given
+		 * up on.
+		 */
+		if(waserror()){
+			mntorphan(m, r);
+			nexterror();
+		}
+		r = mntflushalloc(r, m->msize);
+		poperror();
 		if(upkilled()){
-			if(fired){
-				mntorphan(m, r);
-				nexterror();
-			}
 			mntwatch(&w);
 			watched = 1;
 		}
-		r = mntflushalloc(r, m->msize);
 	}
 
 	lock(&m->l);

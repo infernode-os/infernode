@@ -34,8 +34,8 @@ cross build, clean before building for the host again
 What says the JIT is right:
 
 - `appl/cmd/jittest.b` (installed as `/dis/jittest.dis`): 182 opcode cases.
-- `tests/jit_fault_test.b`: zero divide, bounds, nil, unwinding, and
-  which handler catches.
+- `tests/jit_fault_test.b`: zero divide, bounds, nil, unwinding,
+  which handler catches, and an exception a built-in raises in C.
 - `tests/host/jit_boot_test.sh` and `jit_interp_handoff`.
 
 Under qemu-user a full `runner.dis -c1` pass is slow but works. The one

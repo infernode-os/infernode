@@ -686,6 +686,9 @@ jobs:
         chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_big_test.sh
+        # A module of fewer than 128 instructions is compiled: the amd64
+        # JIT refused them, so they ran interpreted under -c1.
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run cpu(1) session lifetime test
       run: |
@@ -1328,6 +1331,7 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -1927,6 +1931,7 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
       run: |

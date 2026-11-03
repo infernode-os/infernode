@@ -20,11 +20,22 @@ implement JitFaultTest;
 # divide traps on zero; the emulator's signal handlers raised those with
 # R.PC just as stale, and the divide as "sys: fp: ...", on amd64 too.
 #
+# BuiltinRaise: an exception a built-in module's function raises in C,
+# caught by compiled code.  The amd64 JIT calls a built-in itself
+# (rmcall) rather than through OP(mcall), and left R.M the caller's and
+# f->mr nil, so handler() matched the caller's handlers against a stale
+# R.PC on the built-in's frame and destroyed what it took for the
+# exception slot: emu faulted or panicked (alloc:D2B).  The arm64 and
+# riscv64 JITs give the call to OP(mcall).
+#
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+
+include "keyring.m";
+	kr: Keyring;
 
 include "testing.m";
 	testing: Testing;
@@ -245,6 +256,49 @@ testHandlerChoice(t: ref T)
 	t.asserteq(n, 1000 + 10 + 5 + 3 + 2 + 2 + 1 + 1 + 1 + 1, "loop with a handler");
 }
 
+# Keyring->aesgcmencrypt raises in C (checktype) when its state is nil.
+builtinraise(): string
+{
+	kr->aesgcmencrypt(nil, array[64] of byte, nil);
+	return "no exception";
+}
+
+testBuiltinRaise(t: ref T)
+{
+	if(kr == nil)
+		t.skip(sys->sprint("cannot load Keyring: %r"));
+
+	# caught where the built-in is called, more than once
+	n := 0;
+	for(k := 0; k < 5; k++) {
+		got := "no exception";
+		{
+			kr->aesgcmencrypt(nil, array[64] of byte, nil);
+		} exception e {
+		"*" =>
+			got = e;
+			n++;
+		}
+		t.assertseq(got, "dereference of nil", sys->sprint("raised by a built-in, caught in its caller (%d)", k));
+	}
+	t.asserteq(n, 5, "the handler ran each time, and the code after it");
+
+	# caught a frame further up
+	got := "";
+	{
+		got = builtinraise();
+	} exception e {
+	"*" =>
+		got = e;
+	}
+	t.assertseq(got, "dereference of nil", "raised by a built-in, caught a frame up");
+
+	# and the built-in still works after
+	st := kr->aesgcmsetup(array[16] of {* => byte 1}, array[12] of {* => byte 2});
+	(ct, tag) := kr->aesgcmencrypt(st, array[64] of {* => byte 3}, nil);
+	t.assert(ct != nil && len ct == 64 && tag != nil && len tag == 16, "a built-in call after the exceptions");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -254,6 +308,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load testing";
 	}
 	testing->init();
+	kr = load Keyring Keyring->PATH;
 	zerov = int "0";
 	onev = int "1";
 	for(a := args; a != nil; a = tl a)
@@ -267,6 +322,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NilRef", testNilRef);
 	run("Unwind", testUnwind);
 	run("HandlerChoice", testHandlerChoice);
+	run("BuiltinRaise", testBuiltinRaise);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

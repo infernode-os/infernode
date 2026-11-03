@@ -422,7 +422,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `grpwait_test.b` | `/prog/n/grpwait`: a read answers when the process group has no Prog left (its leader gone and a member still running is not yet), killed or not, every reader told, a member in a group of its own not counted; Lucifer reaps an app by it |
 | `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
 | `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
-| `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler; `tests/host/jit_fault_test.sh` runs it under `-c0` and `-c1` |
+| `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler, an exception a built-in module raises in C caught by compiled code (amd64's own built-in call left the handler the caller's frame to search at a stale PC, and emu faulted); `tests/host/jit_fault_test.sh` runs it under `-c0` and `-c1` |
 | `jit_ownhandler_test.b` | A hardware fault in compiled code caught in the faulting callee's own frame (the trap handler takes R.FP from the JIT's register); run by `tests/host/jit_fault_test.sh` too |
 | `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
 | `jit_big_test.b` | `big` `*`, `/`, `%` and `hd` of a list of `big` give from compiled code what the interpreter gives: signs, wrapping, zero divide, the most negative `big` over -1 (it wraps); `tests/host/jit_big_test.sh` runs it under `-c0` and `-c1` |
@@ -435,6 +435,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `limbo_ldt_test.b` | A module taking a `ref fn` of its own functions loads another module through a module type equal to its own (INFR-310); the `ref fn` still calls through `$self` |
 | `limbo_asgcall_test.b` | `a[i] = f()` and `p.x = f()` where `f` makes a new `a` or `p`: the call is made before the element's address is found, so its result lands in the new one, not in freed memory |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
+| `jit_small_test.b` | A module of fewer than 128 Dis instructions is compiled (comp-amd64.c refused them, so one module in eight ran interpreted under `-c1`); a copy of its helper marked MUSTCOMPILE is loaded with the JIT off; `tests/host/jit_small_test.sh` runs it under `-c0` and `-c1` |
 | `jit_retslice_test.b` | A call between modules from compiled code does not end the thread's time slice, at any stack depth (a return punted to the VM after a call saw mcall's stale R.t) |
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
 | `tests/host/sam_gui_test.sh` | `wm/sam` under `wm/wm`, driven by the pointer and keyboard: a window opened on the file from menu 3, a command typed, words double-clicked (two plain clicks, as SDL reports them, timed by samterm as Plan 9's; and a press marked by bit 8, as X11 reports one) and changed, the file written |

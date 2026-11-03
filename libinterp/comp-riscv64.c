@@ -2547,6 +2547,11 @@ compass(Module *m, int size, u32int *tmp, ulong tmpsize)
 		codeoff = n;
 		code = codestart = tmp;
 		mactab[i].gen();
+		if(code - tmp >= (long)tmpsize) {
+			print("JIT: macro %d overflowed tmp buffer (%lud >= %lud)\n",
+				i, (ulong)(code - tmp), tmpsize);
+			return -1;
+		}
 		macro[mactab[i].idx] = n;
 		n += code - tmp;
 	}
@@ -2578,12 +2583,13 @@ compile(Module *m, int size, Modlink *ml)
 	ncon = ncpool = 0;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
-	/* each Dis instruction expands to at most a few hundred words (case, movm) */
-	if(size > 0 && (ulong)size > ((ulong)-1) / 64)
-		goto bad;
-	tmpsize = size * 64;
-	if(tmpsize < 8192)
-		tmpsize = 8192;
+	/*
+	 * The sizing passes generate each instruction, then each macro,
+	 * into tmp from its start, so tmp holds one at a time and its size
+	 * does not depend on the module's (upstream's is 4096 words); one
+	 * that does not fit is caught in compass().
+	 */
+	tmpsize = 8192;
 	tmp = malloc(tmpsize * sizeof(u32int));
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;

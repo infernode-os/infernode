@@ -58,13 +58,13 @@ run(name: string)
 		"DRestart" =>		testDRestart(t);
 		"Ordinary" =>		testOrdinary(t);
 		}
-	} exception {
+	} exception e {
 	"fail:fatal" =>
 		;
 	"fail:skip" =>
 		;
 	"*" =>
-		t.failed = 1;
+		t.error("exception: " + e);
 	}
 
 	if(testing->done(t))
@@ -89,7 +89,12 @@ runsed(args: list of string, input: string): (string, string)
 	got := chan[1] of string;
 	spawn reader(outp[0], got);
 	outp[0] = nil;
-	sys->write(inp[0], array of byte input, len array of byte input);
+	{
+		sys->write(inp[0], array of byte input, len array of byte input);
+	} exception {
+	"write on closed pipe" =>
+		;	# sed ended (an error, q) before reading: not a failure
+	}
 	inp[0] = nil;
 	tmo := chan[1] of int;
 	spawn timer(tmo);

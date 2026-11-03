@@ -1039,8 +1039,33 @@ killgrp(Prog *p, char *msg)
 			npid++;
 	/* use pids not Prog* because state can change during killprog (eg, in delprog) */
 	pids = malloc(npid*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list: kill them anyway, the first not
+		 * yet killed each time round (killprog can change the
+		 * group), as many times as it had Progs. A kill refused
+		 * for want of memory left a group running when killing
+		 * it is how memory is got back (os/port/chaos.c: a
+		 * sysfuzz epoch's hundreds of Progs, never killed).
+		 */
+		g->flags |= Pkilled;
+		if(waserror()){
+			g->flags &= ~Pkilled;
+			nexterror();
+		}
+		for(i = 0; i < npid; i++){
+			for(f = g->head; f != nil; f = f->grpnext)
+				if(f != currun() && (f->flags & Pkilled) == 0 &&
+				   f->state != Pexiting && f->state != Pbroken)
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+		}
+		poperror();
+		g->flags &= ~Pkilled;
+		return 1;
+	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
 		pids[npid++] = f->pid;

@@ -169,7 +169,8 @@ def one(seed, a, card):
 	nvm = 0
 	try:
 		# slow under -icount: the boot runs the JIT's stress and a benchmark
-		boot = 240 if m["icount"] >= 0 else 150
+		# (one core under -icount 0 sleeping in real time: past 240s)
+		boot = 600 if m["icount"] >= 0 else 150
 		if not c.waitfor(rb"init: starting the shell", boot) or not c.waitfor(re.escape(PROMPT), 60):
 			kind, why = "boot", "no shell prompt"
 			raise StopIteration

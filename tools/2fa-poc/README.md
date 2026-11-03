@@ -6,7 +6,7 @@ unlock behind a physical second factor, **before** any `emu`/Limbo work.
 
 This is **host-side only**. It does not run inside Inferno. It exercises the same
 libfido2 entry points the emu bridge calls on the host side of the emulator. That
-bridge has since shipped as `emu/port/devtfa.c` (`#F`, configured on macOS, Linux
+bridge has since shipped as `emu/port/devtfa.c` (`#h`, configured on macOS, Linux
 and Windows) and reaches Limbo at `/mnt/2fa`. This PoC is superseded by it.
 
 ## What it proves
@@ -51,7 +51,7 @@ remains a valid fallback provider per the design doc.
 
 ## Scope / next
 
-Phase 0 only. The later phases shipped: `emu/port/devtfa.c` (`#F`),
+Phase 0 only. The later phases shipped: `emu/port/devtfa.c` (`#h`),
 `module/twofa.m` and `appl/lib/twofa.b` (`/mnt/2fa`), `appl/cmd/2fa.b`, and
 `mkkek2fa` in `appl/lib/secstore.b`. See `docs/second-factor-auth.md` and
 `docs/yubikey-2fa-operations.md`.

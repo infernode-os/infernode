@@ -126,7 +126,7 @@ if (-not $sdl3Found) {
 # Find libfido2 (optional — for /dev/2fa, YubiKey/FIDO2)
 # =============================================
 # Mirrors the SDL3 discovery above but is OPTIONAL: when libfido2 is not found
-# the emu still builds, with the #F (2fa) device degraded to its stub bridge
+# the emu still builds, with the #h (2fa) device degraded to its stub bridge
 # (available=0). vcpkg's fido2:x64-windows lays out lib/fido2.lib + bin/fido2.dll;
 # the Yubico binary release uses the same include/lib/bin shape.
 $fido2Found = $false

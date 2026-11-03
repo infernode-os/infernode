@@ -678,7 +678,7 @@ else
 fi
 
 if emu_c "provision_covered_descendant" 14 \
-    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
         pass "child provisioning preserves a covered descendant path"
     else

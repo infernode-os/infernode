@@ -62,6 +62,9 @@ init()
 	if(wirefmt == nil)
 		raise "fail:llmclient: cannot load WireFmt";
 	wirefmt->init();
+
+	if(poollk == nil)
+		poollk = chan[1] of int;
 }
 
 # ==================== Anthropic Messages API ====================
@@ -218,8 +221,9 @@ askanthropic(apikey, apiurl: string, req: ref AskRequest): (ref AskResponse, str
 # stream before the error.
 anthropiconce(apiurl, headers, body: string, req: ref AskRequest): (ref AskResponse, string, int)
 {
+	(host, port) := apihostport(apiurl);
 	if(req.streamch == nil) {
-		(respbody, err) := httpspost(apiurl, "443", "/v1/messages", headers, body);
+		(respbody, err) := httpspost(host, port, "/v1/messages", headers, body);
 		if(err != nil)
 			return (nil, "anthropic: " + err, 0);
 		(r, perr) := parseanthropicresponse(respbody, req);
@@ -228,43 +232,37 @@ anthropiconce(apiurl, headers, body: string, req: ref AskRequest): (ref AskRespo
 
 	# Streaming: read the events as they arrive, so the text reaches
 	# the stream file while it is written, not once the reply is whole.
-	if(tlsmod == nil) {
-		tlsmod = load TLS TLS->PATH;
-		if(tlsmod == nil)
-			return (nil, "anthropic: cannot load TLS module", 0);
-		terr := tlsmod->init();
-		if(terr != nil)
-			return (nil, "anthropic: TLS init: " + terr, 0);
-	}
-	(conn, derr) := tlsdial(apiurl, "443");
-	if(derr != nil)
-		return (nil, "anthropic: " + derr, 0);
-	config := tlsmod->defaultconfig();
-	config.servername = apiurl;
-	(tc, cerr) := tlsmod->client(conn.dfd, config);
-	if(cerr != nil)
-		return (nil, "anthropic: TLS: " + cerr, 0);
-	reqdata := "POST /v1/messages HTTP/1.0\r\n" +
-		"Host: " + apiurl + "\r\n" +
+	if((terr := tlsinit()) != nil)
+		return (nil, "anthropic: " + terr, 0);
+	reqdata := "POST /v1/messages HTTP/1.1\r\n" +
+		"Host: " + hostheader("https", host, port) + "\r\n" +
 		"Content-Length: " + string len array of byte body + "\r\n" +
 		headers +
-		"Connection: close\r\n" +
 		"\r\n" + body;
-	d := array of byte reqdata;
-	if(tc.write(d, len d) < 0) {
-		tc.close();
-		return (nil, "anthropic: TLS write failed", 0);
-	}
-	rch := chan[1] of (int, array of byte);
-	spawn _httpsread(tc, rch);
+	(r, err) := roundtrip("https", host, port, array of byte reqdata);
+	if(err != nil)
+		return (nil, "anthropic: " + err, 0);
 	ant := newantstate();
-	(resp, rerr, shown) := _sseconsume(conn, rch, req, ant);
-	tc.close();
+	(resp, rerr, shown) := _sseconsume(r, req, ant);
 	if(rerr == nil && ant.err != nil)
 		rerr = ant.err;
 	if(rerr != nil)
 		return (resp, "anthropic: " + rerr, shown);
 	return (resp, nil, 0);
+}
+
+# The API's host and port, from an apiurl of host or host:port.
+apihostport(apiurl: string): (string, string)
+{
+	if(hasprefix(apiurl, "https://"))
+		apiurl = apiurl[len "https://":];
+	(apiurl, nil) = str->splitl(apiurl, "/");
+	if(apiurl == nil || apiurl[0] == '[')
+		return (apiurl, "443");
+	(h, p) := str->splitl(apiurl, ":");
+	if(len p < 2)
+		return (h, "443");
+	return (h, p[1:]);
 }
 
 # The request body, written to /tmp/llm-req-<n>.json when /tmp/llm-debug
@@ -768,71 +766,41 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 		headers += "Authorization: Bearer " + apikey + "\r\n";
 
 	contentlen := len array of byte body;
-	reqdata := "POST " + path + " HTTP/1.0\r\n" +
-		"Host: " + host + "\r\n" +
+	reqdata := "POST " + path + " HTTP/1.1\r\n" +
+		"Host: " + hostheader(scheme, host, port) + "\r\n" +
 		"Content-Length: " + string contentlen + "\r\n" +
 		headers +
-		"Connection: close\r\n" +
 		"\r\n" + body;
 
-	if(scheme == "https") {
-		if(tlsmod == nil) {
-			tlsmod = load TLS TLS->PATH;
-			if(tlsmod == nil)
-				return (nil, "openai: cannot load TLS module", 0);
-			terr := tlsmod->init();
-			if(terr != nil)
-				return (nil, "openai: TLS init: " + terr, 0);
-		}
-		(conn, derr) := tlsdial(host, port);
-		if(derr != nil)
-			return (nil, "openai: " + derr, 0);
-		config := tlsmod->defaultconfig();
-		config.servername = host;
-		(tc, cerr) := tlsmod->client(conn.dfd, config);
-		if(cerr != nil)
-			return (nil, "openai: TLS: " + cerr, 0);
-		d := array of byte reqdata;
-		if(tc.write(d, len d) < 0) {
-			tc.close();
-			return (nil, "openai: TLS write failed", 0);
-		}
-		rch := chan[1] of (int, array of byte);
-		spawn _httpsread(tc, rch);
-		(resp, rerr, shown) := _sseconsume(conn, rch, req, nil);
-		tc.close();
-		if(rerr != nil)
-			return (resp, "openai: " + rerr, shown);
-		return (resp, nil, 0);
-	}
-
-	# Plain HTTP path (typical: Ollama at localhost:11434).
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("openai: cannot connect to %s: %r", host) + localgatehint(host, port), 0);
-	d := array of byte reqdata;
-	if(sys->write(conn.dfd, d, len d) < 0)
-		return (nil, sys->sprint("openai: write failed: %r"), 0);
-	rch := chan[1] of (int, array of byte);
-	spawn _httpread(conn.dfd, rch);
-	(resp, rerr, shown) := _sseconsume(conn, rch, req, nil);
+	if(scheme == "https" && (terr := tlsinit()) != nil)
+		return (nil, "openai: " + terr, 0);
+	(r, err) := roundtrip(scheme, host, port, array of byte reqdata);
+	if(err != nil)
+		return (nil, "openai: " + err, 0);
+	(resp, rerr, shown) := _sseconsume(r, req, nil);
 	if(rerr != nil)
 		return (resp, "openai: " + rerr, shown);
 	return (resp, nil, 0);
 }
 
-# Incremental SSE consumer. Drives a byte channel (filled by
-# _httpread / _httpsread) through:
-#   1. HTTP header drain (until \r\n\r\n)
-#   2. Status line check
-#   3. SSE event drain via _ssedrain_lines, which hands each complete
+# Incremental SSE consumer.  Reads the body of a response whose
+# header roundtrip has read, through:
+#   1. Status line check
+#   2. SSE event drain via _ssedrain_lines, which hands each complete
 #      `data: ...` line to _ssehandle_event (OpenAI) or antevent
 #      (Anthropic, when ant is given), forwarding text deltas to
 #      req.streamch in real time
+#   3. The rest of the body after the stream's last event (the
+#      chunked terminator), so that the connection can be used again
 #
-# Per-read no-progress watchdog: same shape as _httpreadloop —
-# HTTP_NO_PROGRESS_MS without any bytes triggers a hangup, but a
-# successful read at any time resets the timer.
+# The connection goes back to the pool only once the body has been
+# read to its end; a stream cut short, timed out or abandoned closes
+# it.  A cancel (llmsrv's killgrp) kills this proc with the connection
+# still taken: it is never put back.
+#
+# Per-read no-progress watchdog (HResp.next): HTTP_NO_PROGRESS_MS
+# without any bytes triggers a hangup, but a successful read at any
+# time resets the timer.
 #
 # On timeout, returns the partial response (fulltext + tool calls
 # accumulated so far) plus an error string. Caller decides what to
@@ -843,17 +811,12 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 # "retry-after=<s>", for retrydelay.
 ERRBODYMAX: con 4096;
 
-_sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
-            req: ref AskRequest, ant: ref AntState): (ref AskResponse, string, int)
+_sseconsume(r: ref HResp, req: ref AskRequest, ant: ref AntState): (ref AskResponse, string, int)
 {
 	st := ref _SseState("", 0, "", nil, nil, nil, 0);
-	headersbuf := array[0] of byte;
 	bodybuf := array[0] of byte;
-	in_body := 0;
-	status := "";
+	status := r.status;
 	httperr := "";
-	idle_ms := 0;
-	done := 0;
 	# Whether the body is a plain chat.completion object rather than SSE:
 	# -1 not yet known (nothing but whitespace so far), 0 SSE, 1 JSON.
 	# Some OpenAI-shape backends (the local Devstral chat_server.py, vLLM
@@ -861,93 +824,60 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 	# its `data: ` lines would never come, and the reply would be lost.
 	# See tests/llmclient_sse_fallback_test.b.
 	plainjson := -1;
-	while(!done) {
-		alt {
-		rr := <-rch =>
-			(n, rdata) := rr;
-			if(n <= 0) {
-				done = 1;
-				break;
+	if(status != "" && !hasprefix(status, "HTTP/1.1 200") &&
+	   !hasprefix(status, "HTTP/1.0 200")) {
+		httperr = "HTTP error: " + strip(status);
+		if((ra := httpheader(r.hdrs, "retry-after")) != "")
+			httperr += " retry-after=" + ra;
+		plainjson = 2;	# the error's body, kept to say
+	}
+	ssedone := 0;
+	for(;;) {
+		(d, end, terr) := r.next();
+		if(terr != nil) {
+			r.done(0);
+			if(ssedone)
+				break;	# the answer is whole; only its end is missing
+			if(httperr != "")
+				return (nil, httperr, 0);
+			# Build partial response from whatever arrived
+			if(ant != nil) {
+				(aresp, nil) := antbuild(ant, req);
+				return (aresp, terr, ant.shown);
 			}
-			idle_ms = 0;
-			if(!in_body) {
-				# Accumulate header bytes; look for \r\n\r\n
-				old := headersbuf;
-				headersbuf = array[len old + n] of byte;
-				headersbuf[0:] = old;
-				headersbuf[len old:] = rdata[0:n];
-				boundary := -1;
-				for(i := 0; i + 3 < len headersbuf; i++) {
-					if(headersbuf[i] == byte '\r' && headersbuf[i+1] == byte '\n' &&
-					   headersbuf[i+2] == byte '\r' && headersbuf[i+3] == byte '\n') {
-						boundary = i;
-						break;
-					}
-				}
-				if(boundary >= 0) {
-					# Pull status line out of the header block
-					hdrs := string headersbuf[0:boundary];
-					nl := 0;
-					for(; nl < len hdrs; nl++)
-						if(hdrs[nl] == '\n')
-							break;
-					if(nl > 0)
-						status = hdrs[0:nl];
-					# Validate status
-					if(status != "" && !hasprefix(status, "HTTP/1.1 200") &&
-					   !hasprefix(status, "HTTP/1.0 200")) {
-						httperr = "HTTP error: " + strip(status);
-						if((ra := httpheader(hdrs, "retry-after")) != "")
-							httperr += " retry-after=" + ra;
-						plainjson = 2;	# the error's body, kept to say
-					}
-					in_body = 1;
-					after := boundary + 4;
-					if(after < len headersbuf)
-						bodybuf = headersbuf[after:];
-					headersbuf = array[0] of byte;
+			(presp, nil) := _ssebuild_response(st, req);
+			return (presp, sys->sprint("%s (got %d bytes of content, %d tool deltas)",
+				terr, len st.fulltext, listlen(st.tcids)), st.shown);
+		}
+		if(!ssedone && len d > 0) {
+			old := bodybuf;
+			bodybuf = array[len old + len d] of byte;
+			bodybuf[0:] = old;
+			bodybuf[len old:] = d;
+			if(plainjson == 2) {
+				if(len bodybuf >= ERRBODYMAX) {
+					r.done(0);
+					break;
 				}
 			} else {
-				# Append new bytes to bodybuf
-				old := bodybuf;
-				bodybuf = array[len old + n] of byte;
-				bodybuf[0:] = old;
-				bodybuf[len old:] = rdata[0:n];
-			}
-			if(plainjson == 2) {
-				if(len bodybuf >= ERRBODYMAX)
-					done = 1;
-				break;
-			}
-			if(in_body && plainjson < 0)
-				plainjson = _sniffjson(bodybuf);
-			if(in_body && plainjson == 0) {
-				(remaining, ssedone) := _ssedrain_lines(bodybuf, st, req, ant);
-				bodybuf = remaining;
-				if(ssedone)
-					done = 1;
-			}
-		* =>
-			sys->sleep(HTTP_POLL_MS);
-			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= quietlimit(in_body || len headersbuf > 0)) {
-				if(conn.cfd != nil)
-					sys->fprint(conn.cfd, "hangup");
-				if(httperr != "")
-					return (nil, httperr, 0);
-				# Build partial response from whatever arrived
-				if(ant != nil) {
-					(aresp, nil) := antbuild(ant, req);
-					return (aresp, sys->sprint("HTTP read no-progress timeout after %d ms",
-						idle_ms), ant.shown);
+				if(plainjson < 0)
+					plainjson = _sniffjson(bodybuf);
+				if(plainjson == 0) {
+					(remaining, sd) := _ssedrain_lines(bodybuf, st, req, ant);
+					bodybuf = remaining;
+					if(sd) {
+						# what follows the last event is the body's
+						# end, and should come at once
+						ssedone = 1;
+						r.drain = DRAINMS;
+					}
 				}
-				(presp, nil) := _ssebuild_response(st, req);
-				return (presp, sys->sprint(
-					"HTTP read no-progress timeout after %d ms (got %d bytes of content, %d tool deltas)",
-					idle_ms, len st.fulltext, listlen(st.tcids)), st.shown);
 			}
 		}
+		if(end)
+			break;
 	}
+	r.done(1);
 	if(httperr != "") {
 		eb := bodybuf;
 		if(len eb > ERRBODYMAX)
@@ -956,20 +886,20 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 			httperr += ": " + strip(string eb);
 		return (nil, httperr, 0);
 	}
-	r: ref AskResponse;
+	rr: ref AskResponse;
 	e: string;
 	if(ant != nil) {
 		if(plainjson == 1)
-			(r, e) = parseanthropicresponse(string bodybuf, req);
+			(rr, e) = parseanthropicresponse(string bodybuf, req);
 		else
-			(r, e) = antbuild(ant, req);
-		return (r, e, ant.shown);
+			(rr, e) = antbuild(ant, req);
+		return (rr, e, ant.shown);
 	}
 	if(plainjson == 1)
-		(r, e) = parseopenairesponse(string bodybuf, req);
+		(rr, e) = parseopenairesponse(string bodybuf, req);
 	else
-		(r, e) = _ssebuild_response(st, req);
-	return (r, e, st.shown);
+		(rr, e) = _ssebuild_response(st, req);
+	return (rr, e, st.shown);
 }
 
 # The value of a header in an HTTP header block, by its name in any case.
@@ -2216,79 +2146,634 @@ quietlimit(got: int): int
 	return HTTP_FIRST_BYTE_MS;
 }
 
-# Per-read reader thread: blocks on sys->read, pushes one chunk per
-# iteration. Caller's channel must be buffered (capacity >= 1) so a
-# final post-hangup tuple can be deposited even if main has bailed.
-_httpread(fd: ref Sys->FD, ch: chan of (int, array of byte))
+# ==================== Connections ====================
+#
+# A connection is kept for the next request to the same place: an
+# agent's turn is many model calls, and a new connection for each
+# costs a TCP round trip and a TLS one (more through a proxy) before
+# the request is sent.  Requests are HTTP/1.1, persistent (RFC 9112
+# §9.3); a connection goes back to the pool only once its response
+# has been read to its end (Content-Length, or the chunked
+# terminator), never mid-stream, after an error or a timeout, or when
+# the server says it will close.  One request at a time on each: a
+# connection is taken out of the pool for its request and put back
+# after, so two requests in flight never share one.
+#
+# A place is the scheme, host and port, and for TLS the proxy and the
+# credentials it was dialled with: a connection through a proxy is
+# not used for a host dialled directly, nor one direct for a proxied
+# host.
+#
+# A kept connection the server has since closed (its idle timeout, a
+# restart) answers nothing: a request on it that gets not one byte of
+# response is sent again, once, on a new connection.  Nothing is sent
+# again once any of the response has come: a model's request is not
+# idempotent once it has started.
+#
+# The pool is shared by every proc that uses this instance of the
+# module; poollk is held only for list operations.
+
+HConn: adt {
+	key:	string;
+	conn:	Sys->Connection;	# dfd the socket or the proxy's tunnel, cfd to hang it up
+	tls:	ref Conn;		# nil for plain HTTP
+	idle:	int;			# sys->millisec() when it was put back
+	reused:	int;			# taken from the pool
+	hung:	int;
+
+	read:	fn(c: self ref HConn, buf: array of byte): int;
+	write:	fn(c: self ref HConn, a: array of byte): int;
+	hangup:	fn(c: self ref HConn);
+	close:	fn(c: self ref HConn);
+};
+
+MAXIDLE: con 4;		# kept for each place
+MAXPOOL: con 16;	# kept at all
+IDLEMS: con 20*1000;	# not reused after: below the idle timeouts of the APIs' servers
+DRAINMS: con 5000;	# wait for a body's end after the stream's last event
+
+pool: list of ref HConn;
+poollk: chan of int;
+
+HConn.read(c: self ref HConn, buf: array of byte): int
 {
-	for(;;) {
-		buf := array[8192] of byte;
-		n := sys->read(fd, buf, len buf);
-		ch <-= (n, buf);
-		if(n <= 0)
-			break;
-	}
+	if(c.tls != nil)
+		return c.tls.read(buf, len buf);
+	return sys->read(c.conn.dfd, buf, len buf);
 }
 
-# Common read-with-watchdog loop. Drives _httpread and collects bytes
-# until EOF, error, or the no-progress watchdog fires. Returns
-# (response, errstr) — errstr non-nil only on timeout (EOF/sys errors
-# are normal terminators, surfaced by parse).
-_httpreadloop(conn: Sys->Connection): (string, string)
+HConn.write(c: self ref HConn, a: array of byte): int
 {
-	response := "";
-	rch := chan[1] of (int, array of byte);
-	spawn _httpread(conn.dfd, rch);
-	idle_ms := 0;
-	for(;;) {
-		alt {
-		rr := <-rch =>
-			(n, rdata) := rr;
-			if(n <= 0)
-				return (response, nil);
-			response += string rdata[0:n];
-			idle_ms = 0;
-		* =>
-			sys->sleep(HTTP_POLL_MS);
-			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= quietlimit(len response)) {
-				if(conn.cfd != nil)
-					sys->fprint(conn.cfd, "hangup");
-				return (response, sys->sprint(
-					"HTTP read no-progress timeout after %d ms (got %d bytes)",
-					idle_ms, len response));
+	if(c.tls != nil)
+		return c.tls.write(a, len a);
+	return sys->write(c.conn.dfd, a, len a);
+}
+
+# Hang up the socket: a read outstanding on it fails.
+HConn.hangup(c: self ref HConn)
+{
+	if(!c.hung && c.conn.cfd != nil)
+		sys->fprint(c.conn.cfd, "hangup");
+	c.hung = 1;
+}
+
+# Close it: a TLS close_notify if it is still up (and the TLS module's
+# state for it freed either way), then the socket.
+HConn.close(c: self ref HConn)
+{
+	if(c.tls != nil)
+		c.tls.close();
+	c.tls = nil;
+	c.hangup();
+	c.conn.dfd = nil;
+	c.conn.cfd = nil;
+}
+
+lockpool()
+{
+	poollk <-= 1;
+}
+
+# A kept connection to key, or nil.  Those idle too long are closed.
+takeconn(key: string): ref HConn
+{
+	lockpool();
+	now := sys->millisec();
+	c: ref HConn;
+	keep, old: list of ref HConn;
+	for(pl := pool; pl != nil; pl = tl pl) {
+		k := hd pl;
+		if(now - k.idle > IDLEMS)
+			old = k :: old;
+		else if(c == nil && k.key == key)
+			c = k;
+		else
+			keep = k :: keep;
+	}
+	pool = keep;
+	<-poollk;
+	for(; old != nil; old = tl old)
+		(hd old).close();
+	if(c != nil)
+		c.reused = 1;
+	return c;
+}
+
+# Close every kept connection to key: one of them was found dead, and
+# those kept beside it are likely to be too (a server restarted).
+flushconns(key: string)
+{
+	lockpool();
+	keep, old: list of ref HConn;
+	for(pl := pool; pl != nil; pl = tl pl)
+		if((hd pl).key == key)
+			old = hd pl :: old;
+		else
+			keep = hd pl :: keep;
+	pool = keep;
+	<-poollk;
+	for(; old != nil; old = tl old)
+		(hd old).close();
+}
+
+putconn(c: ref HConn)
+{
+	c.idle = sys->millisec();
+	lockpool();
+	n := 0;
+	t := 0;
+	for(pl := pool; pl != nil; pl = tl pl) {
+		t++;
+		if((hd pl).key == c.key)
+			n++;
+	}
+	if(n < MAXIDLE && t < MAXPOOL) {
+		pool = c :: pool;
+		c = nil;
+	}
+	<-poollk;
+	if(c != nil)
+		c.close();
+}
+
+tlsinit(): string
+{
+	if(tlsmod != nil)
+		return nil;
+	t := load TLS TLS->PATH;
+	if(t == nil)
+		return "cannot load TLS module";
+	if((terr := t->init()) != nil)
+		return "TLS init: " + terr;
+	tlsmod = t;
+	return nil;
+}
+
+# A connection to scheme://host:port: a kept one, or a new one when
+# fresh is set or none is kept.
+getconn(scheme, host, port: string, fresh: int): (ref HConn, string)
+{
+	paddr, cred: string;
+	if(scheme == "https") {
+		perr: string;
+		(paddr, cred, perr) = proxyfor(host);
+		if(perr != nil)
+			return (nil, perr);
+	}
+	key := scheme + "!" + host + "!" + port + "!" + paddr + "!" + cred;
+	if(fresh)
+		flushconns(key);
+	else if((c := takeconn(key)) != nil)
+		return (c, nil);
+
+	if(scheme != "https") {
+		addr := "tcp!" + host + "!" + port;
+		(ok, conn) := sys->dial(addr, nil);
+		if(ok < 0)
+			return (nil, sys->sprint("cannot connect to %s: %r", addr) + localgatehint(host, port));
+		return (ref HConn(key, conn, nil, 0, 0, 0), nil);
+	}
+	if((terr := tlsinit()) != nil)
+		return (nil, terr);
+	(conn, derr) := tlsdialvia(host, port, paddr, cred);
+	if(derr != nil)
+		return (nil, derr);
+	config := tlsmod->defaultconfig();
+	config.servername = host;
+	(tc, cerr) := tlsmod->client(conn.dfd, config);
+	if(cerr != nil) {
+		if(conn.cfd != nil)
+			sys->fprint(conn.cfd, "hangup");
+		return (nil, "TLS: " + cerr);
+	}
+	return (ref HConn(key, conn, tc, 0, 0, 0), nil);
+}
+
+# The Host header: the port only when it is not the scheme's own.
+hostheader(scheme, host, port: string): string
+{
+	(nil, colon) := str->splitl(host, ":");
+	if(colon != nil)
+		host = "[" + host + "]";
+	if((scheme == "https" && port == "443") || (scheme == "http" && port == "80"))
+		return host;
+	return host + ":" + port;
+}
+
+# ==================== Responses ====================
+#
+# A response is read by a reader proc, one read at a time when asked
+# (so that it never reads past the response into the connection's next
+# use), while a ticker proc keeps the watchdog's time.  Its body is
+# decoded as its header frames it: Content-Length, chunked, or (with
+# neither) to the end of the connection, which is then not kept.
+
+BLEN, BCHUNK, BEOF: con iota;		# Body.mode
+CSIZE, CDATA, CCRLF, CTRAIL: con iota;	# Body.cst
+
+Body: adt {
+	mode:	int;
+	left:	big;	# bytes left of the body (BLEN) or of the chunk (CDATA)
+	cst:	int;
+	line:	string;	# a chunk-size or trailer line so far
+	bad:	int;	# not HTTP: the connection is not kept
+
+	feed:	fn(b: self ref Body, a: array of byte): (array of byte, int, int);
+};
+
+# What a holds of the body, whether the body ended in it, and how many
+# bytes came after its end.
+Body.feed(b: self ref Body, a: array of byte): (array of byte, int, int)
+{
+	case b.mode {
+	BEOF =>
+		return (a, 0, 0);
+	BLEN =>
+		if(big len a >= b.left) {
+			n := int b.left;
+			b.left = big 0;
+			return (a[0:n], 1, len a - n);
+		}
+		b.left -= big len a;
+		return (a, 0, 0);
+	}
+	out := array[len a] of byte;
+	o := 0;
+	i := 0;
+	while(i < len a) {
+		if(b.cst == CDATA) {
+			n := len a - i;
+			if(big n > b.left)
+				n = int b.left;
+			out[o:] = a[i:i+n];
+			o += n;
+			i += n;
+			b.left -= big n;
+			if(b.left == big 0)
+				b.cst = CCRLF;
+			continue;
+		}
+		c := int a[i++];
+		if(c != '\n') {
+			if(len b.line >= 1024) {
+				b.bad = 1;
+				return (out[0:o], 1, len a - i);
+			}
+			if(c != '\r')
+				b.line[len b.line] = c;
+			continue;
+		}
+		l := b.line;
+		b.line = "";
+		case b.cst {
+		CCRLF =>
+			if(l != "") {
+				b.bad = 1;
+				return (out[0:o], 1, len a - i);
+			}
+			b.cst = CSIZE;
+		CTRAIL =>
+			if(l == "")
+				return (out[0:o], 1, len a - i);
+		CSIZE =>
+			(l, nil) = str->splitl(l, "; \t");
+			(v, rest) := str->tobig(l, 16);
+			if(l == nil || rest != nil || v < big 0) {
+				b.bad = 1;
+				return (out[0:o], 1, len a - i);
+			}
+			if(v == big 0)
+				b.cst = CTRAIL;
+			else {
+				b.left = v;
+				b.cst = CDATA;
 			}
 		}
 	}
-	return (response, nil);  # unreachable; satisfies the type checker
+	return (out[0:o], 0, 0);
+}
+
+HResp: adt {
+	c:	ref HConn;
+	want:	chan of int;	# to the reader: 1 read once, 0 stop
+	rch:	chan of (int, array of byte);
+	tick:	chan of int;
+	stop:	chan of int;
+	reading:	int;	# a read is outstanding
+	got:	int;		# bytes of the response read
+	timedout:	int;
+	status:	string;	# its status line, without the CRLF
+	hdrs:	string;	# its header lines
+	body:	ref Body;
+	pend:	array of byte;	# body read with the header, not yet decoded
+	keep:	int;	# the server keeps the connection after it
+	complete:	int;	# the body was read to its end
+	drain:	int;	# the quiet allowed, if not quietlimit's
+	finished:	int;
+
+	header:	fn(r: self ref HResp): string;
+	frame:	fn(r: self ref HResp);
+	next:	fn(r: self ref HResp): (array of byte, int, string);
+	done:	fn(r: self ref HResp, ok: int);
+	raw:	fn(r: self ref HResp): (int, array of byte, string);
+};
+
+newresp(c: ref HConn): ref HResp
+{
+	r := ref HResp(c, chan[1] of int, chan[1] of (int, array of byte),
+		chan of int, chan[1] of int, 0, 0, 0, "", "", nil, nil, 0, 0, 0, 0);
+	spawn _connreader(c, r.want, r.rch);
+	spawn _ticker(r.tick, r.stop);
+	return r;
+}
+
+# Reads c when asked, one read for each 1 on want; stops at a 0.
+_connreader(c: ref HConn, want: chan of int, rch: chan of (int, array of byte))
+{
+	while(<-want) {
+		buf := array[8192] of byte;
+		n := c.read(buf);
+		rch <-= (n, buf);
+	}
+}
+
+_ticker(tick, stop: chan of int)
+{
+	for(;;) {
+		sys->sleep(HTTP_POLL_MS);
+		alt {
+		<-stop =>
+			return;
+		tick <-= 1 =>
+			;
+		}
+	}
+}
+
+# The next read of the connection: (n, data, nil), n <= 0 at its end or
+# an error, or (-1, nil, err) when it has been quiet too long (it is
+# then hung up).
+HResp.raw(r: self ref HResp): (int, array of byte, string)
+{
+	if(!r.reading) {
+		r.want <-= 1;
+		r.reading = 1;
+	}
+	idle := 0;
+	for(;;) alt {
+	(n, buf) := <-r.rch =>
+		r.reading = 0;
+		if(n > 0)
+			r.got += n;
+		return (n, buf, nil);
+	<-r.tick =>
+		idle += HTTP_POLL_MS;
+		limit := r.drain;
+		if(limit <= 0)
+			limit = quietlimit(r.got);
+		if(idle >= limit) {
+			r.c.hangup();
+			r.timedout = 1;
+			return (-1, nil, sys->sprint("HTTP read no-progress timeout after %d ms", idle));
+		}
+	}
+}
+
+# Read the response's header, and from it how its body is framed.
+HResp.header(r: self ref HResp): string
+{
+	hb := array[0] of byte;
+	for(;;) {
+		(n, buf, err) := r.raw();
+		if(err != nil)
+			return sys->sprint("%s (got %d bytes)", err, r.got);
+		if(n <= 0) {
+			if(r.got == 0)
+				return "connection closed before a response";
+			return "connection closed in the response header";
+		}
+		old := hb;
+		hb = array[len old + n] of byte;
+		hb[0:] = old;
+		hb[len old:] = buf[0:n];
+		if(len hb > PROXYHDRMAX)
+			return "response header too long";
+		for(i := 0; i + 3 < len hb; i++) {
+			if(hb[i] != byte '\r' || hb[i+1] != byte '\n' || hb[i+2] != byte '\r' || hb[i+3] != byte '\n')
+				continue;
+			h := string hb[0:i];
+			rest := hb[i+4:];
+			(st, hl) := str->splitl(h, "\n");
+			if(st != nil && st[len st - 1] == '\r')
+				st = st[0:len st - 1];
+			if(hl != nil)
+				hl = hl[1:];
+			(nil, w) := sys->tokenize(st, " ");
+			if(len w >= 2 && len hd tl w == 3 && (hd tl w)[0] == '1') {
+				# 1xx: an interim response; the real one follows
+				hb = rest;
+				i = -1;
+				continue;
+			}
+			r.status = st;
+			r.hdrs = hl;
+			r.pend = rest;
+			r.frame();
+			return nil;
+		}
+	}
+}
+
+# How the body is framed (RFC 9112 §6.3), and whether the server keeps
+# the connection after it (§9.3).
+HResp.frame(r: self ref HResp)
+{
+	r.body = ref Body(BEOF, big 0, CSIZE, "", 0);
+	te := str->tolower(httpheader(r.hdrs, "transfer-encoding"));
+	cl := httpheader(r.hdrs, "content-length");
+	conn := str->tolower(httpheader(r.hdrs, "connection"));
+	(nil, w) := sys->tokenize(r.status, " ");
+	if(len w >= 2 && (hd tl w == "204" || hd tl w == "304")) {
+		r.body.mode = BLEN;	# no body, whatever the header says
+		te = cl = "";
+	}
+	if(contains(te, "chunked"))
+		r.body.mode = BCHUNK;
+	else if(te == "" && cl != "") {
+		(v, rest) := str->tobig(cl, 10);
+		if(rest == nil && v >= big 0) {
+			r.body.mode = BLEN;
+			r.body.left = v;
+		}
+	}
+	if(hasprefix(r.status, "HTTP/1.1 "))
+		r.keep = !contains(conn, "close");
+	else
+		r.keep = contains(conn, "keep-alive");
+	if(r.body.mode == BEOF)
+		r.keep = 0;
+	if(r.body.mode == BLEN && r.body.left == big 0)
+		r.complete = 1;
+}
+
+# The next of the body: (data, end, nil), end set when the body is over
+# (data may hold its last bytes), or (nil, 0, err) on a timeout.
+HResp.next(r: self ref HResp): (array of byte, int, string)
+{
+	if(r.complete)
+		return (nil, 1, nil);
+	a := r.pend;
+	r.pend = nil;
+	if(a == nil || len a == 0) {
+		(n, buf, err) := r.raw();
+		if(err != nil)
+			return (nil, 0, err);
+		if(n <= 0) {
+			# the server closed: the end of a body framed by it,
+			# or one cut short, taken as it is
+			if(r.body.mode == BEOF)
+				r.complete = 1;
+			r.keep = 0;
+			return (nil, 1, nil);
+		}
+		a = buf[0:n];
+	}
+	(d, end, extra) := r.body.feed(a);
+	if(end) {
+		if(r.body.bad || extra > 0)
+			r.keep = 0;	# not what HTTP/1.1 sends: not trusted again
+		else
+			r.complete = 1;
+	}
+	return (d, end, nil);
+}
+
+# Done with the response: its connection back to the pool if ok is set
+# and the body was read to its end on a connection the server keeps,
+# closed otherwise.  The reader and the ticker stop.
+HResp.done(r: self ref HResp, ok: int)
+{
+	if(r.finished)
+		return;
+	r.finished = 1;
+	r.stop <-= 1;
+	if(ok && r.complete && r.keep && !r.reading && !r.c.hung) {
+		r.want <-= 0;
+		putconn(r.c);
+		return;
+	}
+	# a read outstanding fails once the socket is hung up, and the
+	# reader then finds the 0
+	r.c.hangup();
+	r.want <-= 0;
+	r.c.close();
+}
+
+# Send req on a connection to scheme://host:port and read its
+# response's header.  A kept connection that answers not one byte
+# (the server closed it while it was idle) is replaced: the request
+# is sent again on a new connection, once.  A connection that has
+# answered anything, or timed out, is not tried again.
+roundtrip(scheme, host, port: string, req: array of byte): (ref HResp, string)
+{
+	fresh := 0;
+	for(;;) {
+		(c, err) := getconn(scheme, host, port, fresh);
+		if(err != nil)
+			return (nil, err);
+		r := newresp(c);
+		if(c.write(req) != len req) {
+			if(c.tls != nil)
+				err = "TLS write failed";
+			else
+				err = sys->sprint("write failed: %r");
+		} else if((err = r.header()) == nil)
+			return (r, nil);
+		r.done(0);
+		if(!c.reused || r.got > 0 || r.timedout)
+			return (nil, err);
+		fresh = 1;
+	}
+}
+
+# A whole request: (status, header lines, body, error).
+httpreq(scheme, host, port, method, path, headers, body: string): (string, string, string, string)
+{
+	if(scheme == "https" && (terr := tlsinit()) != nil)
+		return (nil, nil, nil, terr);
+	req := method + " " + path + " HTTP/1.1\r\n" +
+		"Host: " + hostheader(scheme, host, port) + "\r\n";
+	if(method != "GET")
+		req += "Content-Length: " + string len array of byte body + "\r\n";
+	req += headers + "\r\n" + body;
+	(r, err) := roundtrip(scheme, host, port, array of byte req);
+	if(err != nil)
+		return (nil, nil, nil, err);
+	b := array[8192] of byte;
+	nb := 0;
+	for(;;) {
+		(d, end, rerr) := r.next();
+		if(rerr != nil) {
+			r.done(0);
+			return (nil, nil, nil, sys->sprint("%s (got %d bytes)", rerr, r.got));
+		}
+		if(nb + len d > len b) {
+			m := 2 * len b;
+			if(m < nb + len d)
+				m = nb + len d;
+			old := b;
+			b = array[m] of byte;
+			b[0:] = old[0:nb];
+		}
+		b[nb:] = d;
+		nb += len d;
+		if(end)
+			break;
+	}
+	r.done(1);
+	return (r.status, r.hdrs, string b[0:nb], nil);
 }
 
 httppost(host, port, path, headers, body: string): (string, string)
 {
-	addr := "tcp!" + host + "!" + port;
-	(ok, conn) := sys->dial(addr, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", addr) + localgatehint(host, port));
-
-	contentlen := len array of byte body;
-	req := "POST " + path + " HTTP/1.0\r\n" +
-		"Host: " + host + "\r\n" +
-		"Content-Length: " + string contentlen + "\r\n" +
-		headers +
-		"Connection: close\r\n" +
-		"\r\n" + body;
-
-	data := array of byte req;
-	if(sys->write(conn.dfd, data, len data) < 0)
-		return (nil, sys->sprint("write failed: %r"));
-
-	(response, rerr) := _httpreadloop(conn);
-	if(rerr != nil)
-		return (nil, rerr);
-
-	(status, hdrs, rbody) := parsehttpresponse(response);
+	(status, hdrs, rbody, err) := httpreq("http", host, port, "POST", path, headers, body);
+	if(err != nil)
+		return (nil, err);
 	if((e := httpstatuserr(status, hdrs, rbody)) != nil)
 		return (nil, e);
+	return (rbody, nil);
+}
+
+httpspost(host, port, path, headers, body: string): (string, string)
+{
+	(status, hdrs, rbody, err) := httpreq("https", host, port, "POST", path, headers, body);
+	if(err != nil)
+		return (nil, err);
+	if((e := httpstatuserr(status, hdrs, rbody)) != nil)
+		return (nil, e);
+	return (rbody, nil);
+}
+
+# Plain-HTTP GET: the body whatever the status, as Ollama's endpoints
+# are read.
+httpget(host, port, path, headers: string): (string, string)
+{
+	(nil, nil, rbody, err) := httpreq("http", host, port, "GET", path, headers, nil);
+	if(err != nil)
+		return (nil, err);
+	return (rbody, nil);
+}
+
+httpsget(host, port, path, headers: string): (string, string)
+{
+	(status, nil, rbody, err) := httpreq("https", host, port, "GET", path, headers, nil);
+	if(err != nil)
+		return (nil, err);
+	if(status != "" && !hasprefix(status, "HTTP/1.1 200") && !hasprefix(status, "HTTP/1.0 200")) {
+		if(rbody != "")
+			return (nil, "HTTP error: " + strip(status) + ": " + rbody);
+		return (nil, "HTTP error: " + strip(status));
+	}
 	return (rbody, nil);
 }
 
@@ -2306,32 +2791,6 @@ httpstatuserr(status, hdrs, body: string): string
 		e += ": " + body;
 	}
 	return e;
-}
-
-# Plain-HTTP GET — mirror of httppost with no body/Content-Length.
-httpget(host, port, path, headers: string): (string, string)
-{
-	addr := "tcp!" + host + "!" + port;
-	(ok, conn) := sys->dial(addr, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", addr));
-
-	req := "GET " + path + " HTTP/1.0\r\n" +
-		"Host: " + host + "\r\n" +
-		headers +
-		"Connection: close\r\n" +
-		"\r\n";
-
-	data := array of byte req;
-	if(sys->write(conn.dfd, data, len data) < 0)
-		return (nil, sys->sprint("write failed: %r"));
-
-	(response, rerr) := _httpreadloop(conn);
-	if(rerr != nil)
-		return (nil, rerr);
-
-	(nil, nil, rbody) := parsehttpresponse(response);
-	return (rbody, nil);
 }
 
 # ==================== Context window ====================
@@ -2430,7 +2889,8 @@ anthropicwindow(apiurl, apikey, model: string): (int, string)
 	if(apiurl == nil || apiurl == "")
 		apiurl = "api.anthropic.com";
 	headers := "x-api-key: " + apikey + "\r\n" + "anthropic-version: 2023-06-01\r\n";
-	(body, err) := httpsget(apiurl, "443", "/v1/models/" + model, headers);
+	(host, port) := apihostport(apiurl);
+	(body, err) := httpsget(host, port, "/v1/models/" + model, headers);
 	if(err != nil)
 		return (0, err);
 	(jv, nil) := readjsonstring(body);
@@ -2546,53 +3006,6 @@ listmodels(baseurl, apikey: string): (string, string)
 		}
 	}
 	return (out, nil);
-}
-
-# TLS variant of _httpread: reads through the TLS wrapper. Same
-# contract (buffered channel, deposits one tuple per chunk + a
-# terminator on EOF/err).
-_httpsread(tc: ref Conn, ch: chan of (int, array of byte))
-{
-	for(;;) {
-		buf := array[8192] of byte;
-		n := tc.read(buf, len buf);
-		ch <-= (n, buf);
-		if(n <= 0)
-			break;
-	}
-}
-
-# Same watchdog shape as _httpreadloop but for TLS. The TLS layer
-# wraps conn.dfd; writing "hangup" to conn.cfd closes the underlying
-# TCP socket, which makes the in-flight tc.read fail (TLS sees socket
-# error and surfaces it).
-_httpsreadloop(conn: Sys->Connection, tc: ref Conn): (string, string)
-{
-	response := "";
-	rch := chan[1] of (int, array of byte);
-	spawn _httpsread(tc, rch);
-	idle_ms := 0;
-	for(;;) {
-		alt {
-		rr := <-rch =>
-			(n, rdata) := rr;
-			if(n <= 0)
-				return (response, nil);
-			response += string rdata[0:n];
-			idle_ms = 0;
-		* =>
-			sys->sleep(HTTP_POLL_MS);
-			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= quietlimit(len response)) {
-				if(conn.cfd != nil)
-					sys->fprint(conn.cfd, "hangup");
-				return (response, sys->sprint(
-					"HTTPS read no-progress timeout after %d ms (got %d bytes)",
-					idle_ms, len response));
-			}
-		}
-	}
-	return (response, nil);
 }
 
 # ==================== HTTPS proxy ====================
@@ -2726,12 +3139,10 @@ urldecode(s: string): string
 }
 
 # Dial host!port for a TLS connection: directly, or through the proxy.
-tlsdial(host, port: string): (Sys->Connection, string)
+# paddr and cred are proxyfor's for host.
+tlsdialvia(host, port, paddr, cred: string): (Sys->Connection, string)
 {
 	none: Sys->Connection;
-	(paddr, cred, perr) := proxyfor(host);
-	if(perr != nil)
-		return (none, perr);
 	if(paddr == nil){
 		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
 		if(ok < 0)
@@ -2794,142 +3205,6 @@ connectdog(cfd: ref Sys->FD, answered: chan of int)
 	}
 	if(cfd != nil)
 		sys->fprint(cfd, "hangup");
-}
-
-httpspost(host, port, path, headers, body: string): (string, string)
-{
-	if(tlsmod == nil) {
-		tlsmod = load TLS TLS->PATH;
-		if(tlsmod == nil)
-			return (nil, "cannot load TLS module");
-		terr := tlsmod->init();
-		if(terr != nil)
-			return (nil, "TLS init: " + terr);
-	}
-
-	(conn, derr) := tlsdial(host, port);
-	if(derr != nil)
-		return (nil, derr);
-
-	config := tlsmod->defaultconfig();
-	config.servername = host;
-
-	(tc, cerr) := tlsmod->client(conn.dfd, config);
-	if(cerr != nil)
-		return (nil, "TLS: " + cerr);
-
-	contentlen := len array of byte body;
-	req := "POST " + path + " HTTP/1.0\r\n" +
-		"Host: " + host + "\r\n" +
-		"Content-Length: " + string contentlen + "\r\n" +
-		headers +
-		"Connection: close\r\n" +
-		"\r\n" + body;
-
-	data := array of byte req;
-	if(tc.write(data, len data) < 0) {
-		tc.close();
-		return (nil, "TLS write failed");
-	}
-
-	(response, rerr) := _httpsreadloop(conn, tc);
-	tc.close();
-	if(rerr != nil)
-		return (nil, rerr);
-
-	# Check for HTTP error status
-	(status, hdrs, rbody) := parsehttpresponse(response);
-	if((e := httpstatuserr(status, hdrs, rbody)) != nil)
-		return (nil, e);
-
-	return (rbody, nil);
-}
-
-# TLS GET — mirror of httpsget's POST sibling with no body.
-httpsget(host, port, path, headers: string): (string, string)
-{
-	if(tlsmod == nil) {
-		tlsmod = load TLS TLS->PATH;
-		if(tlsmod == nil)
-			return (nil, "cannot load TLS module");
-		terr := tlsmod->init();
-		if(terr != nil)
-			return (nil, "TLS init: " + terr);
-	}
-
-	(conn, derr) := tlsdial(host, port);
-	if(derr != nil)
-		return (nil, derr);
-
-	config := tlsmod->defaultconfig();
-	config.servername = host;
-
-	(tc, cerr) := tlsmod->client(conn.dfd, config);
-	if(cerr != nil)
-		return (nil, "TLS: " + cerr);
-
-	req := "GET " + path + " HTTP/1.0\r\n" +
-		"Host: " + host + "\r\n" +
-		headers +
-		"Connection: close\r\n" +
-		"\r\n";
-
-	data := array of byte req;
-	if(tc.write(data, len data) < 0) {
-		tc.close();
-		return (nil, "TLS write failed");
-	}
-
-	(response, rerr) := _httpsreadloop(conn, tc);
-	tc.close();
-	if(rerr != nil)
-		return (nil, rerr);
-
-	(status, nil, rbody) := parsehttpresponse(response);
-	if(status != "" && !hasprefix(status, "HTTP/1.1 200") && !hasprefix(status, "HTTP/1.0 200")) {
-		if(rbody != "")
-			return (nil, "HTTP error: " + strip(status) + ": " + rbody);
-		return (nil, "HTTP error: " + strip(status));
-	}
-	return (rbody, nil);
-}
-
-parsehttpresponse(response: string): (string, string, string)
-{
-	# Find status line
-	statusend := 0;
-	for(; statusend < len response; statusend++)
-		if(response[statusend] == '\n')
-			break;
-	if(statusend == 0)
-		return ("", "", "");
-
-	status := response[0:statusend];
-
-	# Find headers end (double newline)
-	headersend := statusend + 1;
-	for(; headersend < len response - 1; headersend++) {
-		if(response[headersend] == '\n' &&
-		   (response[headersend+1] == '\n' || response[headersend+1] == '\r'))
-			break;
-	}
-
-	headers := "";
-	if(headersend > statusend + 1)
-		headers = response[statusend+1:headersend];
-
-	# Find body
-	bodystart := headersend + 1;
-	if(bodystart < len response && response[bodystart] == '\r')
-		bodystart++;
-	if(bodystart < len response && response[bodystart] == '\n')
-		bodystart++;
-
-	bodys := "";
-	if(bodystart < len response)
-		bodys = response[bodystart:];
-
-	return (status, headers, bodys);
 }
 
 parseurl(url: string): (string, string, string, string, string)

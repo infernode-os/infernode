@@ -412,6 +412,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
 | `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
 | `llmclient_proxy_test.b` | llmclient's TLS connections through an HTTP proxy (INFR-307): CONNECT for the API's host and port, Basic credentials from the proxy URL, a ClientHello naming the host inside the tunnel, a refusal reported, `no_proxy` hosts and domains dialled directly; `tests/host/profile_proxy_test.sh` checks the login profile copies the host's `HTTPS_PROXY` and `no_proxy` |
+| `tests/host/llmclient_pool_test.sh` | llmclient's kept connections (`llmclient_pool_test.b` its Limbo half) against a fake LLM API (`tests/host/llmclient/fake_llm.py`) over TLS the client verifies, the test's CA bound over `/lib/certs`: sequential requests (buffered and streamed, OpenAI and Anthropic, Content-Length and chunked) on one connection, one the server closed while idle replaced with no error, a stream read to its terminating chunk before its connection is used again, a cancelled stream's connection dropped, two requests at once on two, a request sent again at most once and never after a byte of its reply, a proxy's tunnel kept and not used for a host dialled directly; `--bench [MS]` times 20 calls through a relay with MS of round trip |
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |

@@ -735,6 +735,8 @@ run_mpfs() {
     # QEMU's system controller fails every service with status 1: the
     # nonce driver must see the refusal and say there is no entropy
     mcheck "the TRNG driver sees the system controller refuse" "rng:  the system controller refused the nonce service (status 1): NO ENTROPY SOURCE"
+    # qemu-icicle.dts says insecurerandom, so a counter stands in -- labelled
+    mcheck "the counter that stands in for it says what it is" "Keys made on it are PREDICTABLE"
     mcheck "/reserved-memory is kept from the allocator" "conf: reserved 0x0000000088000000 size 0x0000000002000000"
     mcheck "the bank is split around it" "runs between"
     mcheck "the trap path round-trips" "trap: returned, save/restore OK"

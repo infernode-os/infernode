@@ -34,14 +34,16 @@ edition), 9front and Inferno -- read from their sources (every
   are in programs and scripts people run, so its moves are made one at a
   time, each its own change.
 
-## Planned moves
+## Moves made
+
+Each moved a letter to its precedent's, in its own PR:
 
 | From | To | Why |
 |---|---|---|
 | `#b` bench (native) | `#x` (#1039) | Inferno's bench; `#b` is Inferno's dbg |
-| `#P` prof (hosted) | `#K` (#1037) | kprof in all three; then `#P` is arch everywhere |
-| `#w` wmsz (hosted) | `#z` (#1040) | `#w` is the watchdog in Plan 9 and 9front; `#z` for size, free in all three |
-| `#F` 2fa (hosted) | `#h` (#1040) | `#F` is flash in all three; `#h` for a hardware key, free in all three |
+| `#P` prof (hosted) | `#K` (#1037) | kprof in all three; `#P` is arch everywhere |
+| `#w` wmsz (hosted) | `#z` (#1040) | `#w` is the watchdog in Plan 9 and 9front |
+| `#F` 2fa (hosted) | `#h` (#1040) | `#F` is flash in all three |
 
 Left as they are, written down: `#f` phone (hosted; floppy elsewhere)
 and `#Z` opus (hosted; Inferno's test device).
@@ -50,7 +52,8 @@ and `#Z` opus (hosted; Inferno's test device).
 
 For devices this tree is likely to grow, at their precedents' letters:
 `#r` real-time clock, `#J` I2C, `#Q` SPI, `#$` PCI, `#v` display or
-video out, `#W` PWM, `#N` CAN; and `#X`, `#x`, `#K`, `#z`, `#h` for the moves above.
+video out, `#W` PWM, `#N` CAN; and, freed by the moves, `#w` for a
+watchdog and `#F` for flash.
 
 ## The table
 
@@ -65,27 +68,27 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `C` | cmd (hosted) | channel element |  | cmd | in use |  |
 | `D` | ssl (hosted/native) | ssl |  | ssl | in use |  |
 | `E` |  | sdp |  | mpeg | free here |  |
-| `F` |  | flash | flash | flash, tinyfs | free here | flash in all three; 2fa moved to #h |
+| `F` |  | flash | flash | flash, tinyfs | free here | flash in all three; the hosted 2fa moved to #h (#1040) |
 | `G` | gpio (native) |  | gpio | fpga, gpio | in use |  |
 | `H` |  |  |  | ata | free here |  |
 | `I` | ip (hosted/native) | ip | ip | ip | in use |  |
 | `J` | i2c (native) |  | i2c | i2c | in use | I2C, as 9front and Inferno: Pi 5 |
-| `K` | prof (hosted) | kprof | kprof | kprof | in use | the hosted profiler, from #P: kprof in all three |
+| `K` | prof (hosted) | kprof | kprof | kprof | in use | the profiler, from #P (#1037): kprof in all three |
 | `L` |  | lpt | lpt | ds1620, lpt | free here |  |
 | `M` | mnt (hosted/native) | mnt | mnt | mnt | in use |  |
 | `N` |  |  |  |  | reserved | CAN: free in all three |
-| `P` | arch (native) | arch | arch | arch, prof | in use | arch everywhere |
+| `P` | arch (native) | arch | arch | arch, prof | in use | arch everywhere; the hosted profiler moved to #K (#1037) |
 | `Q` | spi (native) |  | qspi |  | in use | SPI, the letter of 9front's qspi: Pi 5 |
 | `S` | sd (native) | sd | sd | sd | in use |  |
 | `T` | touch (native) | lm78 |  | cerf, ipaq, lm78, touch | in use | as Inferno (lm78 in Plan 9) |
 | `U` | fs (hosted) |  |  | fs, usb | in use | as Inferno |
 | `V` | cam (native) | tv | tv | tv | in use | video in, as tv in all three; the Dis VMs, which had it on their branch, moved to #X |
 | `W` | pwm (native) |  |  |  | in use | PWM, free in all three: Pi 5 |
-| `X` | vm (native) | loopback | vmx | loopback | in use | the Dis VMs (#944): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
+| `X` | vm (native) | loopback | vmx | loopback | in use | the Dis VMs (#944, #1038): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
 | `Y` |  | cardbus | cardbus | cardbus | free here |  |
 | `Z` | opus (hosted) |  |  | test | divergence | Inferno's test device |
 | `a` |  | tls | tls | arch | free here | tls in Plan 9 and 9front. emu/Nt/devarch.c says #a, and no build includes it |
-| `b` |  | irq | irq, kbd | dbg | free here | Inferno's dbg; bench moved to #x |
+| `b` |  | irq | irq, kbd | dbg | free here | Inferno's dbg; the bench moved to #x (#1039) |
 | `c` | cons (hosted/native) | cons | cons | cons | in use |  |
 | `d` | dup (hosted) | dup | dup | dup | in use |  |
 | `e` | env (hosted/native) | env | env | env | in use |  |
@@ -102,8 +105,8 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `t` | eia (hosted), uart (native) | uart | uart | ns16552, uart | in use | serial lines: uart (native) and eia (hosted) serve the same eia(3) files |
 | `u` | usb (native) | usb | usb |  | in use | as Plan 9 and 9front (Inferno #U) |
 | `v` |  | dss, vga | dss, vga | vga | reserved | display or video out: vga in all three |
-| `w` |  | watchdog | watchdog |  | free here | Plan 9 and 9front's watchdog; wmsz moved to #z |
-| `x` | bench (native) |  | xenstore | bench | in use | bench, from #b, as Inferno |
+| `w` |  | watchdog | watchdog |  | free here | the watchdog in Plan 9 and 9front; the hosted wmsz moved to #z (#1040) |
+| `x` | bench (native) |  | xenstore | bench | in use | bench, from #b (#1039), as Inferno |
 | `y` |  | i82365 | i82365 | i82365, pcmcia | free here |  |
 | `z` | wmsz (hosted) |  |  |  | in use | wmsz, from #w (#1040): size; free in all three |
 | `$` |  | pnp | pci, pnp | pci, pnp | reserved | PCI, as all three |

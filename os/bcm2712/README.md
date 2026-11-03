@@ -34,7 +34,7 @@ tables in `radio.c`, and has not run on a D0 chip.
 | `uartbt.c` | Bluetooth's UART, as `/dev/eia0` |
 | `rtcfan.c`, `devrtc.c` | the firmware's clock as `#r`; the fan, LED and button in `#P` |
 | `pcie1.c`, `nvme.c` | the external PCIe bridge and a drive on it, `#S/nvme0` |
-| `random.c`, `recover.c`, `intr.c`, `devtab.c`, `stubs.c`, `kernel.ld` | the rest of a board |
+| `recover.c`, `intr.c`, `devtab.c`, `stubs.c`, `kernel.ld` | the rest of a board |
 | `loader/` | `serialboot` for this board: the report (`probe.c`), and a loader carried in the kernel |
 
 The other boards' kernels are byte-identical with or without this.

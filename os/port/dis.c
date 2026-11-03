@@ -562,9 +562,16 @@ delprog(Prog *p, char *msg)
 
 	o = p->osenv;
 	release();
-	closepgrp(o->pgrp);
-	n2 = up->nerrlab;
+	/*
+	 * The fds before the name space: a Prog that mounted a pipe and
+	 * holds its other end (or shares a table that does) waited in the
+	 * name space's close for a clunk only that end's close could
+	 * answer, with a hangup, and never exited (nativefuzz). n2 and n3
+	 * keep their names: after the first close and after the second.
+	 */
 	closefgrp(o->fgrp);
+	n2 = up->nerrlab;
+	closepgrp(o->pgrp);
 	n3 = up->nerrlab;
 	closeegrp(o->egrp);
 	closesigs(o->sigs);
@@ -577,7 +584,7 @@ delprog(Prog *p, char *msg)
 	 * that quantum, so: which of these left the stack off?
 	 */
 	if(up->nerrlab != n0)
-		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closepgrp %d -> closefgrp %d -> %d\n",
+		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closefgrp %d -> closepgrp %d -> %d\n",
 			p->pid, msg, n0, n1, n2, n3, up->nerrlab);
 
 	if(p == isched.runhd) {
@@ -722,11 +729,36 @@ propex(Prog *p, char *estr)
 		exprog(pgl, estr);
 }
 
+/*
+ * Is the Prog this proc works for being killed (devmnt: a killed
+ * Prog's 9P calls are abandoned, not waited for)? Its kill, set and
+ * not yet raised, or raised and exiting.
+ */
+int
+upkilled(void)
+{
+	Prog *p;
+
+	if(up == nil)
+		return 0;
+	if(up->killing)
+		return 1;	/* closing a Prog it is killing: killprog */
+	if(up->type != Interp)
+		return 0;
+	p = up->iprog;
+	if(p == nil)
+		p = isched.runhd;
+	if(p == nil)
+		return 0;
+	return p->kill != nil || (p->flags & Pkilled) != 0;
+}
+
 int
 killprog(Prog *p, char *cause)
 {
 	Osenv *env;
 	char msg[ERRMAX+2*KNAMELEN];
+	int okilling;
 
 	/*
 	 * A Prog inside a file another VM serves (devsrv) is on that VM's
@@ -796,15 +828,26 @@ killprog(Prog *p, char *cause)
 		return 0;
 	}
 
+
 	propex(p, "killed");
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
 	p->state = Pexiting;
+	/*
+	 * Destroyed here, in the killer: its closes are a killed Prog's,
+	 * and a 9P clunk among them is sent and not waited for (devmnt,
+	 * upkilled). Waited for, one on a server that never answers held
+	 * the killer -- a shell's kill, a group's leader -- for good
+	 * (tools/sysfuzz).
+	 */
+	okilling = up->killing;
+	up->killing = 1;
 	gclock();
 	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
+	up->killing = okilling;
 
 	return 1;
 }

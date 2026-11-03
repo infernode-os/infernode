@@ -440,6 +440,21 @@ openable(p: string): int
 	return 1;
 }
 
+# kprint by whatever name reached it -- a bind of /dev/kprint over
+# another path, opened there -- closed at once: while it is open,
+# everything written to the console goes to its queue, and the run's
+# output, the operator's too, vanished (nativefuzz: a run "hung" with
+# its Progs alive)
+notkprint(fd: ref FD): ref FD
+{
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0 && d.dtype == 'c' && d.name == "kprint")
+		return nil;
+	return fd;
+}
+
 anypath(r: ref Rng): string
 {
 	if(paths == nil || len paths == 0)
@@ -513,7 +528,7 @@ op(w: ref Wk)
 			m = Sys->OREAD;
 		if(!openable(p))
 			return;
-		keep(w, sys->open(p, m));
+		keep(w, notkprint(sys->open(p, m)));
 	3 =>
 		d := array[] of {"/nvfs", "/nvfs/a", "/env", "/n", "/chan", "/tmp"};
 		p := d[r.n(len d)] + "/" + junkname(r);
@@ -610,7 +625,7 @@ op(w: ref Wk)
 			spawn quiet(nil, nil, (f[0], ex[r.n(len ex)]), r);
 			on := array[] of {"/n", "/nvfs/a", "/tmp", "/net"};
 			if(sys->mount(f[1], nil, on[r.n(len on)], Sys->MREPL|Sys->MCREATE, "") >= 0)
-				keep(w, sys->open(on[r.n(len on)] + "/" + junkname(r), modes[r.n(3)]));	# junkname: never kprint
+				keep(w, notkprint(sys->open(on[r.n(len on)] + "/" + junkname(r), modes[r.n(3)])));
 		}
 	20 =>
 		sys->chdir(anypath(r));

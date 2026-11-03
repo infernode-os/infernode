@@ -79,6 +79,7 @@ then:
 | `k` | the kernel stack of each process not running (frame-pointer walk from its saved label) |
 | `d` | every VM's Progs: pid, VM, state, group, a kill pending, module |
 | `m` | the memory pools |
+| `a` | the timed sleepers: the alarm list's lock, each sleeper and when it is due, each core's ticks |
 
 `k` prints addresses; turn them into functions with the kernel's ELF
 (`BAREMETAL_BUILD_DIR` keeps `virt-kernel.elf`, `bcm2837-kernel.elf`, ...):
@@ -125,22 +126,61 @@ module's `.sbl` (compile with `limbo -g`).
   on, unkillable, in whatever it called next.
 - memfs: an offset of 2^63-1 passed its range check (the sum overflowed).
 
+- **#640's lock loop**, `lock loop ... held by pc 0x0` on a Chan's
+  reference in `fdtochan`: `lock()` raised the holder to `PriLock` only
+  after its test-and-set won. A proc preempted in between held the lock
+  at its own priority, kept to its core (`samecore`); the spinner, at
+  `PriLock` because it held the fd table's lock, yielded only to itself,
+  and after a hundred million spins the machine panicked. pc 0 and the
+  Proc named were the previous holder's, left by its `unlock`. The raise
+  now comes before the test-and-set (`canlock` too); `lockloop` says who
+  took the lock last, what it is doing, and its stack. Reproduced on two
+  of eight seeds of one `-icount 2` machine before, none of eight after.
+- **A kill hung the killer**: `killprog` destroys a Prog blocked on a
+  channel there and then, in the killer's thread, and a close among its
+  closes on a server that never answers (a 9P clunk) did not return. The
+  killer marks itself (`up->killing`) while it destroys, and the mount
+  driver sends that clunk without waiting for it. Kill stays synchronous:
+  ventisrv, for one, kills its helpers and goes on as if they were gone.
+- **A killed Prog stuck in a 9P call**: interrupted, it sent a flush and
+  waited for the flush's answer for good. A killed Prog still sends the
+  flush, and a killed Prog's clunk or remove is still sent, but each is
+  waited for at most a second (a watchdog kproc interrupts it, `Mwatch`
+  in devmnt): a server that answers in time is told everything as before
+  (a killed listener's announce is still taken down), and one that does
+  not leaves the call orphaned, on the mount's queue holding its tag, so
+  the tag is not reused while the server may still answer, freed by
+  whoever reads that answer. Progs left behind after a run fell from
+  10-40 a VM to 1-12.
+- **exportfs held a request behind its own name space**: a slave adopting
+  the next request's name space and fd table closed the ones it had,
+  before serving the request; a close that waited on a server reached
+  through this export waited on itself. The old ones are closed after the
+  reply.
+- **An exiting Prog waiting on itself**: `delprog` closed the name space
+  before the fd table, so a Prog holding the far end of a pipe it had
+  mounted waited in its own exit for a clunk only its fd table's close
+  could answer. The fd table goes first. (That once seemed to break
+  `auditprov_test`; the cause was an emu left running from an earlier
+  test, holding the test's Venti port.)
+
+Test: `kill_deadserver_test` (a server that never answers a read, a
+clunk or a flush; the killer and the killed both get away within 5s).
+
 ## Open
 
-- `delprog` closes a Prog's name space before its fd table: a Prog
-  holding the far end of a pipe it mounted waits in its own exit for a
-  clunk that only its fd table's close could answer. Closing the fds
-  first fixes that and breaks `auditprov_test` (ventisrv), so the order
-  stands until that dependence is understood.
-- A kill runs the dead Prog's closes in the killer's thread (`killprog`
-  → `delprog`): a close on a server that never answers hangs the
-  killer.
-- An interrupted 9P call waits for its flush's reply, uninterruptibly.
-  Progs killed while in calls to servers that are themselves stuck the
-  same way (an epoch of sysfuzz's workers, serving each other through
-  pipes whose ends their fd tables hold) never finish dying.
-  nativefuzz notes them on the pass line (`-L` fails on them).
-- `lock loop ... held by pc 0x0` on a Chan's reference in `fdtochan`,
-  once, under `-icount 5` (seed 100, cortex-a57, three cores, GICv3).
-  pc 0 is also what a holder preempted inside `unlock` leaves, so this
-  may be starvation under one-thread TCG rather than a freed Chan.
+- A Prog that exits normally (not killed) still waits for its clunks,
+  however long the server takes.
+- Orphaned calls whose server never answers keep their tag and their
+  Mntrpc until the mount goes: one tag of 64K a call, which a long soak
+  against a stuck server could use up.
+- Hosted sysfuzz, rarely (seeds 704 with `-d`, 904 without): heartbeats
+  stop with no watchdog report and nothing found under gdb on a rerun.
+
+## Reading a run under -icount
+
+`-icount` gives every instruction a fixed slice of the machine's time
+and runs every core on one host thread: under `-icount 0` a run takes
+many times its seconds. nativefuzz waits while the heartbeats go on (a
+minute without one is a hang) rather than for a fixed time; a "hang" on
+an `-icount` machine from before that was the machine being slow.

@@ -26,7 +26,9 @@
 #	boot	no shell prompt
 #	wedged	a sysfuzz's check at the end failed: the kernel did not
 #		answer (a file, a pipe, a spawn) once its Progs were killed
-#	hang	not every sysfuzz said done within secs + 120 seconds
+#	hang	not every sysfuzz said done, their heartbeats stopped for a
+#		minute (or twelve times secs + 120 seconds passed: -icount
+#		runs take many times their seconds)
 #	dead	the shell did not answer afterwards
 #	leaked	with -L, Progs left in VMs 1-3 ten seconds after every sysfuzz
 #		ended; without it they are noted on the pass line, with the
@@ -142,7 +144,7 @@ def one(seed, a, card):
 		"-drive", "file=%s,if=none,format=raw,id=sd,snapshot=on" % card, "-device", "virtio-blk-device,drive=sd",
 		"-kernel", a.K, "-display", "none", "-serial", "stdio", "-monitor", "none", "-nic", "none"]
 	if m["icount"] >= 0:
-		args += ["-icount", "shift=%d,align=off,sleep=off" % m["icount"]]
+		args += ["-icount", "shift=%d,align=off,sleep=%s" % (m["icount"], os.environ.get("NF_ICOUNT_SLEEP", "off"))]
 	else:
 		args += ["-accel", "tcg,thread=multi"]
 	p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -170,9 +172,22 @@ def one(seed, a, card):
 		# in the background, so the shell answers while they run
 		line = "".join("vm %d %s -s %d; " % (v, sf, seed * 10 + v) for v in range(1, nvm))
 		c.typed(line + "{%s -s %d; echo VM0END} &" % (sf, seed * 10))
-		end = time.monotonic() + a.t + 120
+		# Waited for while the heartbeats go on, not for a fixed time:
+		# under -icount 0 every instruction is a nanosecond of the
+		# machine's time and all cores share one host thread, so a run
+		# takes many times its seconds, and one still beating is not
+		# hung. A run whose heartbeats stop for a minute is; and none
+		# goes on for ever.
+		start = time.monotonic()
+		end = start + a.t + 120
+		cap = start + (a.t + 120) * 12
+		beats = 0
 		while time.monotonic() < end:
 			out = bytes(c.buf[mark:])
+			nb = out.count(b"hb ")
+			if nb > beats:
+				beats = nb
+				end = min(max(end, time.monotonic() + 60), cap)
 			if CRASH.search(out) or p.poll() is not None:
 				break
 			if out.count(b"sysfuzz: done") + out.count(b"sysfuzz: wedged") + out.count(b"sysfuzz: cannot") + out.count(b"sysfuzz: died") >= nvm and b"\nVM0END" in out:
@@ -191,12 +206,12 @@ def one(seed, a, card):
 			raise StopIteration
 		nd = out.count(b"sysfuzz: done")
 		if nd < nvm:
-			kind, why = "hang", "%d of %d sysfuzz done in %ds" % (nd, nvm, a.t + 120)
+			kind, why = "hang", "%d of %d sysfuzz done, no heartbeat for a minute (or %ds in all)" % (nd, nvm, (a.t + 120) * 12)
 			raise StopIteration
 		c.pump(10)
 		mark = len(c.buf)
 		c.typed("echo ALIVE; vm; cat /dev/memory; echo MEMAFTER")
-		if not c.waitfor(rb"\nMEMAFTER", 60, mark):
+		if not c.waitfor(rb"\nMEMAFTER", 300 if m["icount"] >= 0 else 60, mark):
 			if not CRASH.search(bytes(c.buf[mark:])):
 				kind, why = "dead", "the shell did not answer"
 			raise StopIteration
@@ -225,14 +240,14 @@ def one(seed, a, card):
 			# and whether the shell still answers
 			try:
 				c.buf.extend(b"\n--- nativefuzz: ^T^Tp ^T^Tm ^T^Tk ^T^Td, then lines typed ---\n")
-				for k in (b"p", b"m", b"k", b"d"):
+				for k in (b"p", b"m", b"k", b"d", b"a"):
 					p.stdin.write(b"\x14\x14" + k)
 					p.stdin.flush()
 					c.pump(3)
 				c.typed("echo STILLALIVE; ps")
 				c.pump(5)
 				# the Dis side: each Sysfuzz Prog's status and stack
-				c.typed("load std; for p in `{ls /prog} { cat $p/status; cat $p/stack; echo }; echo STACKSEND")
+				c.typed("load std; for p in `{ls /prog} { cat $p/status; cat $p/stack; grep -s Sysfuzz $p/status && cat $p/fd; echo }; echo STACKSEND")
 				c.waitfor(rb"\nSTACKSEND", 60, len(c.buf))
 				c.pump(2)
 			except (BrokenPipeError, OSError):

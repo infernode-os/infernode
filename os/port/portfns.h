@@ -257,6 +257,8 @@ void		printinit(void);
 void		procctl(Proc*);
 void		procdump(void);
 void		labelstack(Proc*);
+int		upkilled(void);
+void		alarminit(void);
 int		iprogpid(void*);
 void		procinit(void);
 Proc*		proctab(int);

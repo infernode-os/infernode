@@ -260,8 +260,14 @@ delprog(Prog *p, char *msg)
 
 	o = p->osenv;
 	release();
-	closepgrp(o->pgrp);
+	/*
+	 * The fds before the name space: a Prog that mounted a pipe and
+	 * holds its other end (or shares a table that does) waited in the
+	 * name space's close for a clunk only that end's close could
+	 * answer, with a hangup, and never exited (nativefuzz).
+	 */
 	closefgrp(o->fgrp);
+	closepgrp(o->pgrp);
 	closeegrp(o->egrp);
 	closesigs(o->sigs);
 	acquire();
@@ -439,11 +445,36 @@ propex(Prog *p, char *estr)
 		exprog(pgl, estr);
 }
 
+/*
+ * Is the Prog this proc works for being killed (devmnt: a killed
+ * Prog's 9P calls are abandoned, not waited for)? Its kill, set and
+ * not yet raised, or raised and exiting.
+ */
+int
+upkilled(void)
+{
+	Prog *p;
+
+	if(up == nil)
+		return 0;
+	if(up->killing)
+		return 1;	/* closing a Prog it is killing: killprog */
+	if(up->type != Interp)
+		return 0;
+	p = up->iprog;
+	if(p == nil)
+		p = isched.runhd;
+	if(p == nil)
+		return 0;
+	return p->kill != nil || (p->flags & Pkilled) != 0;
+}
+
 int
 killprog(Prog *p, char *cause)
 {
 	Osenv *env;
 	char msg[ERRMAX+2*KNAMELEN];
+	int okilling;
 
 	if(p == isched.runhd) {
 		p->kill = "";
@@ -495,6 +526,7 @@ killprog(Prog *p, char *cause)
 		return 0;
 	}
 
+
 	/*
 	 * Exiting before propex: killing the group's others can release the
 	 * VM (delprog), and a killprog or exprog of p from another thread
@@ -505,10 +537,20 @@ killprog(Prog *p, char *cause)
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
+	/*
+	 * Destroyed here, in the killer: its closes are a killed Prog's,
+	 * and a 9P clunk among them is sent and not waited for (devmnt,
+	 * upkilled). Waited for, one on a server that never answers held
+	 * the killer -- a shell's kill, a group's leader -- for good
+	 * (tools/sysfuzz).
+	 */
+	okilling = up->killing;
+	up->killing = 1;
 	gclock();
 	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
+	up->killing = okilling;
 
 	return 1;
 }

@@ -269,3 +269,4 @@ void		cnameclose(Cname*);
 
 #pragma varargck argpos iprint 1
 extern	uintptr	(*hostprocpc)(Proc*);
+int	upkilled(void);

@@ -414,6 +414,7 @@ struct Proc
 	int		killed;		/* by swiproc */
 	int	nlocks;		/* spin locks held (fault fail-stop diagnostic) */
 	int	swipend;	/* software interrupt pending for Prog */
+	int		killing;	/* in killprog, destroying a Prog: its clunks are not waited for (devmnt) */
 	int	intpend;	/* Prog killed between Sleeps and syscalls: next one is interrupted (under rlock) */
 	int	syscall;	/* set true under sysio for interruptable syscalls */
 	int	intwait;	/* spin wait for note to turn up */

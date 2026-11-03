@@ -725,6 +725,9 @@ exslave(void *a)
 	Export *fs;
 	Exq *q, *t, *fq, **last;
 	char *err;
+	Pgrp *opg;
+	Egrp *oeg;
+	Fgrp *ofg;
 
 	USED(a);
 
@@ -792,10 +795,6 @@ exslave(void *a)
 		 * to be adopted.
 		 */
 		{
-			Pgrp *opg;
-			Egrp *oeg;
-			Fgrp *ofg;
-
 			incref(&q->export->pgrp->r);
 			incref(&q->export->egrp->r);
 			incref(&q->export->fgrp->r);
@@ -808,9 +807,14 @@ exslave(void *a)
 			up->env->egrp = q->export->egrp;
 			up->env->fgrp = q->export->fgrp;
 
-			closepgrp(opg);
-			closeegrp(oeg);
-			closefgrp(ofg);
+			/*
+			 * What it held before is let go once this request has
+			 * been answered (the end of the loop), not here: a close
+			 * waits on whatever the old name space mounted, and one
+			 * on a server that never answers held the slave, and
+			 * the request it had just taken -- a client's walk, a
+			 * shell's open -- for good (nativefuzz).
+			 */
 		}
 		up->env->uid = q->export->uid;
 		up->env->gid = q->export->gid;
@@ -883,6 +887,10 @@ exslave(void *a)
 
 		notkilled();
 		exfreeq(q);
+
+		closepgrp(opg);
+		closeegrp(oeg);
+		closefgrp(ofg);
 	}
 }
 

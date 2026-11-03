@@ -640,6 +640,7 @@ procinit(void)
 
 	debugkey('p', "processes", procdump, 0);
 	debugkey('k', "kernel stacks", procstacks, 0);
+	alarminit();
 }
 
 void

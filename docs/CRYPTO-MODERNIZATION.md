@@ -242,6 +242,15 @@ a server that takes only one of them asks for it by HelloRetryRequest
 (RFC 8446 §4.1.4), and the client makes that share then. A share costs a
 scalar multiplication, so a handshake no longer pays for two it rarely uses.
 
+P-256 and P-384 themselves (`libsec/ecc.c`, under keyring's `p256_*` and
+`p384_*`) are constant time with respect to secret scalars: Montgomery
+arithmetic on 64-bit limbs (no libmp), complete projective formulas
+(Renes–Costello–Batina 2016, a = -3), a fixed 4-bit window read by masked
+scans, Fermat inversion. A key generation takes about 0.3 ms (P-256) and
+0.9 ms (P-384), where the libmp version took 11 and 27.
+`tests/host/ecc_test.sh` checks known answers from OpenSSL and, under
+valgrind, that no branch or address depends on a secret.
+
 Until October 2026 the constant was 0x4588, the decimal codepoint read as
 hex, and the share was never sent: TLS was classical X25519 in practice.
 `tests/tls_cnsa_hybrid_test.sh` now checks the group negotiated against

@@ -266,6 +266,14 @@ trapmemref(int signo, siginfo_t *si, void *a)
 		if(up != nil && up->nlocks > 0){
 			fprint(2, "SEGV: addr=%p code=%d (nil, %d lock(s) held)\n", si->si_addr, si->si_code, up->nlocks);
 			faultwhere(a);
+		}else if(up != nil && (up->iprog != nil || up->type != Interp)){
+			/*
+			 * Released, or a kproc: in the kernel's C, not in a Prog's
+			 * Dis. disfault says only "process ... faults";
+			 * this is the emulator's bug, so say where (sysfuzz).
+			 */
+			fprint(2, "SEGV: addr=%p code=%d (nil, in a system call)\n", si->si_addr, si->si_code);
+			faultwhere(a);
 		}
 		jitfaultfp((uintptr)faultpc(a), faultfp(a));
 		disfault(nil, exNilref);

@@ -4,7 +4,7 @@
 # emulator's C, one emu per seed, each watched for what goes wrong.
 #
 #	tools/sysfuzz [-n runs] [-s seed] [-j jobs] [-t secs] [-e epochsecs]
-#		[-p procs] [-a] [-k] [-c n]
+#		[-p procs] [-a] [-k] [-c n] [-d]
 #
 # Each run is emu (or, with -a, the sanitizers' emu from tools/sanemu)
 # running dis/tests/sysfuzz.dis with one seed: procs Progs making random
@@ -35,6 +35,8 @@
 #	-a	the sanitizers' emu ($ROOT/tmp/sanemu/o.emu; tools/sanemu build)
 #	-k	keep going after a failure
 #	-c	JIT flag for emu (1)
+#	-d	as on the native kernel (tools/nativefuzz): scratch in a memfs,
+#		the root a directory of it, exported and mounted (sysfuzz -d)
 #
 # Exit status: 0 no failure, 1 a failure, 2 a setup error.
 #
@@ -66,8 +68,12 @@ def sanenv():
 
 
 def one(seed, a, emu, env):
+	pre, d = "", ""
+	if a.d:
+		pre = "mkdir -p /tmp/sysfuzz/m%d; memfs -m 8388608 /tmp/sysfuzz/m%d; " % (seed, seed)
+		d = " -d /tmp/sysfuzz/m%d" % seed
 	cmd = [emu, "-c%d" % a.c, "-r" + ROOT, "/dis/sh.dis", "-c",
-		"/dis/tests/sysfuzz.dis -s %d -t %d -e %d -p %d; echo halt > /dev/sysctl" % (seed, a.t, a.e, a.p)]
+		pre + "/dis/tests/sysfuzz.dis -s %d -t %d -e %d -p %d%s; echo halt > /dev/sysctl" % (seed, a.t, a.e, a.p, d)]
 	before = set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*")))
 	p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
 		env=env, start_new_session=True)
@@ -101,6 +107,7 @@ def one(seed, a, emu, env):
 		kind, why = "hang", "no done in %ds" % (a.t + 60)
 	# what the run left in its scratch directory
 	shutil.rmtree(os.path.join(ROOT, "tmp", "sysfuzz", str(seed)), ignore_errors=True)
+	shutil.rmtree(os.path.join(ROOT, "tmp", "sysfuzz", "m%d" % seed), ignore_errors=True)
 	return seed, kind, why, text, reports
 
 
@@ -115,6 +122,7 @@ def main():
 	ap.add_argument("-a", action="store_true")
 	ap.add_argument("-k", action="store_true")
 	ap.add_argument("-c", type=int, default=1)
+	ap.add_argument("-d", action="store_true")
 	a = ap.parse_args()
 
 	if a.a:

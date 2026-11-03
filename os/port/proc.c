@@ -32,6 +32,8 @@ struct
 	Proc*	free;
 }procalloc;
 
+static void	procstacks(void);
+
 typedef struct
 {
 	Lock	l;
@@ -636,6 +638,7 @@ procinit(void)
 	p->qnext = 0;
 
 	debugkey('p', "processes", procdump, 0);
+	debugkey('k', "kernel stacks", procstacks, 0);
 }
 
 void
@@ -889,6 +892,29 @@ procdump(void)
 			*tmp = '\0';
 		print("%lux:%3lud:%14s pc %.8lux %s/%s qpc %.8lux pri %d%s\n",
 			p, p->pid, p->text, p->pc, s, statename[p->state], p->qpc, p->pri, tmp);
+	}
+}
+
+/*
+ * ^T^Tk: each process that is not running, and where in the kernel it
+ * stopped: its saved label's pc and the frames above it (labelstack,
+ * the architecture's walk of the frame-pointer chain from the label).
+ * For a hang, where ^T^Tp says only which processes sleep, and on
+ * what: tools/nativefuzz types it when the kernel stops answering,
+ * and it works the same at a board's serial console.
+ */
+static void
+procstacks(void)
+{
+	int i;
+	Proc *p;
+
+	for(i=0; i<conf.nproc; i++) {
+		p = &procalloc.arena[i];
+		if(p->state == Dead || p->state == Running)
+			continue;
+		print("%lud:%s %s qpc %#p r %#p\n", p->pid, p->text, statename[p->state], p->qpc, p->r);
+		labelstack(p);
 	}
 }
 

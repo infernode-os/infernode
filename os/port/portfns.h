@@ -256,6 +256,7 @@ int		preemption(int);
 void		printinit(void);
 void		procctl(Proc*);
 void		procdump(void);
+void		labelstack(Proc*);
 void		procinit(void);
 Proc*		proctab(int);
 extern void	(*proctrace)(Proc*, int, vlong);

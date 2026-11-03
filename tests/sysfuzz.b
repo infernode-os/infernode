@@ -68,6 +68,7 @@ ctls := array[] of {"kill", "killgrp", "stop", "start", "exceptions propagate", 
 
 ops := 0;		# all workers' operations (a racy count; only for the heartbeat)
 scratch := "";
+scratchdir := "";	# -d: where scratch is made when there is no #U (the native kernel)
 mine: list of int;	# pids this run made
 nmine := 0;
 
@@ -98,6 +99,7 @@ init(nil: ref Draw->Context, args: list of string)
 		"-t" =>	secs = v; args = tl args;
 		"-e" =>	epochsecs = v; args = tl args;
 		"-v" =>	verbose = 1;
+		"-d" =>	scratchdir = hd args; args = tl args;
 		"-K" =>
 			# -K kill,stop: only these written to a Prog's ctl
 			(nil, kl) := sys->tokenize(hd args, ",");
@@ -112,7 +114,7 @@ init(nil: ref Draw->Context, args: list of string)
 					skip[int hd l] = 1;
 			args = tl args;
 		* =>
-			sys->fprint(sys->fildes(2), "usage: sysfuzz [-s seed] [-p procs] [-t secs] [-e epochsecs] [-v]\n");
+			sys->fprint(sys->fildes(2), "usage: sysfuzz [-s seed] [-p procs] [-t secs] [-e epochsecs] [-d scratchdir] [-v] [-x ops] [-K ctls]\n");
 			raise "fail:usage";
 		}
 	}
@@ -157,19 +159,40 @@ heartbeat(stop: chan of int, start: int)
 setup()
 {
 	sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->FORKENV, nil);
-	sys->create("/tmp/sysfuzz", Sys->OREAD, Sys->DMDIR|8r777);
-	scratch = sys->sprint("/tmp/sysfuzz/%d", seed);
+	top := "/tmp/sysfuzz";
+	if(scratchdir != nil)
+		top = scratchdir + "/sysfuzz";
+	sys->create(top, Sys->OREAD, Sys->DMDIR|8r777);
+	scratch = sys->sprint("%s/%d", top, seed);
 	sys->create(scratch, Sys->OREAD, Sys->DMDIR|8r777);
 	ok := 1;
-	ok &= sys->bind("#U"+scratch, "/n", Sys->MREPL|Sys->MCREATE) >= 0;
-	ok &= sys->bind("#/", "/", Sys->MREPL) >= 0;
+	if(scratchdir != nil){
+		# no #U (the native kernel), and its #/ has neither /nvfs nor
+		# /fd: the root is a directory of scratch, with a mount point
+		# for each device, and scratch's files are another beside it,
+		# each exported from a copy of the name space as it is now
+		root := scratch + "/root";
+		sys->create(root, Sys->OREAD, Sys->DMDIR|8r777);
+		for(d := "dev" :: "prog" :: "fd" :: "env" :: "chan" :: "n" :: "nvfs" :: "tmp" :: nil; d != nil; d = tl d)
+			sys->create(root + "/" + hd d, Sys->OREAD, Sys->DMDIR|8r777);
+		sys->create(scratch + "/files", Sys->OREAD, Sys->DMDIR|8r777);
+		rfd := exportscratch(root);
+		vfd := exportscratch(scratch + "/files");
+		ok &= rfd != nil && vfd != nil;
+		ok &= ok && sys->mount(rfd, nil, "/", Sys->MREPL|Sys->MCREATE, nil) >= 0;
+		ok &= ok && sys->mount(vfd, nil, "/nvfs", Sys->MREPL|Sys->MCREATE, nil) >= 0;
+	}else{
+		ok &= sys->bind("#U"+scratch, "/n", Sys->MREPL|Sys->MCREATE) >= 0;
+		ok &= sys->bind("#/", "/", Sys->MREPL) >= 0;
+	}
 	ok &= sys->bind("#c", "/dev", Sys->MREPL) >= 0;
 	ok &= sys->bind("#p", "/prog", Sys->MREPL) >= 0;
-	ok &= sys->bind("#d", "/fd", Sys->MREPL) >= 0;
+	sys->bind("#d", "/fd", Sys->MREPL);	# the native kernel has no #d
 	ok &= sys->bind("#e", "/env", Sys->MREPL|Sys->MCREATE) >= 0;
 	ok &= sys->bind("#s", "/chan", Sys->MREPL) >= 0;
 	# the scratch directory, which the root's #U no longer shows
-	ok &= sys->bind("#U"+scratch, "/nvfs", Sys->MREPL|Sys->MCREATE) >= 0;
+	if(scratchdir == nil)
+		ok &= sys->bind("#U"+scratch, "/nvfs", Sys->MREPL|Sys->MCREATE) >= 0;
 	if(!ok){
 		sys->print("sysfuzz: cannot build the name space: %r\n");
 		raise "fail:setup";
@@ -180,6 +203,29 @@ setup()
 		sys->print("sysfuzz: the host's files are still reachable; not running\n");
 		raise "fail:setup";
 	}
+}
+
+exportscratch(dir: string): ref FD
+{
+	f := array[2] of ref FD;
+	if(sys->pipe(f) < 0)
+		return nil;
+	sync := chan of int;
+	spawn scratchexporter(f[0].fd, dir, sync);
+	<-sync;
+	# the server's end only in the exporter's own fd table: in ours, a
+	# worker's dup of a random fd took it, read the requests or wrote
+	# junk at the mount, and the run hung on the root it serves
+	f[0] = nil;
+	return f[1];
+}
+
+scratchexporter(fdn: int, dir: string, sync: chan of int)
+{
+	sys->pctl(Sys->FORKNS|Sys->NEWFD, fdn :: nil);
+	fd := sys->fildes(fdn);
+	sync <-= 1;
+	sys->export(fd, dir, Sys->EXPWAIT);
 }
 
 # every path two levels under the trees we have
@@ -280,23 +326,39 @@ ismine(pid: int): int
 	return 0;
 }
 
-# a path's last two elements are /prog/N/file: whose is N?
+# a path through a Prog's directory (/prog/N, or prog/N under an export
+# of our name space mounted somewhere, or #p/N): whose is N?
 progpid(p: string): int
 {
-	if(len p < 7 || p[0:6] != "/prog/")
-		return -1;
-	n := 0;
-	for(i := 6; i < len p && p[i] >= '0' && p[i] <= '9'; i++)
-		n = n*10 + p[i] - '0';
-	return n;
+	(nil, el) := sys->tokenize(p, "/");
+	for(; el != nil && tl el != nil; el = tl el){
+		if(hd el != "prog" && hd el != "#p")
+			continue;
+		d := hd tl el;
+		n := 0;
+		for(i := 0; i < len d && d[i] >= '0' && d[i] <= '9'; i++)
+			n = n*10 + d[i] - '0';
+		if(i > 0)
+			return n;
+	}
+	return -1;
 }
 
 # may this path be written?
 writable(p: string): int
 {
-	case p {
-	"/dev/sysctl" or "/dev/hostopen" or "/dev/hoststdin" or "/dev/hoststdout" or "/dev/hoststderr" or
-	"/dev/user" or "/dev/hostowner" =>	# a new user or owner, and the driver's halt is refused
+	# by the last element, so no path reaches them: an export of our own
+	# name space mounted under /n has a dev/sysctl too. sysctl's halt is
+	# the driver's, and on the native kernel its tryboot resets the
+	# machine; a new user or owner refuses the driver's halt; what is
+	# written to keyboard is typed at the console's shell
+	(nil, el) := sys->tokenize(p, "/");
+	last := "";
+	for(; el != nil; el = tl el)
+		last = hd el;
+	case last {
+	"sysctl" or "hostopen" or "hoststdin" or "hoststdout" or "hoststderr" or
+	"user" or "hostowner" or "keyboard" or "scancode" or "reboot" =>
 		return 0;
 	}
 	pid := progpid(p);
@@ -713,6 +775,13 @@ checker(done: chan of string)
 {
 	p := "/env/sysfuzzcheck";
 	fd := sys->create(p, Sys->ORDWR, 8r666);
+	if(fd == nil && scratchdir != nil && sys->stat("/env").t0 < 0){
+		# with -d the root is scratch, and a worker may have renamed
+		# its env directory, the mount point: a name the fuzz changed,
+		# not the kernel failing. The pipe and the spawn still tell.
+		checkpipe(done);
+		return;
+	}
 	if(fd == nil){
 		done <-= sys->sprint("create %s: %r", p);
 		return;
@@ -734,13 +803,20 @@ checker(done: chan of string)
 		done <-= sys->sprint("remove: %r");
 		return;
 	}
+	checkpipe(done);
+}
+
+checkpipe(done: chan of string)
+{
+	b := array of byte "check";
+	r := array[16] of byte;
 	f := array[2] of ref FD;
 	if(sys->pipe(f) < 0){
 		done <-= sys->sprint("pipe: %r");
 		return;
 	}
 	sys->write(f[0], b, len b);
-	n = sys->read(f[1], r, len r);
+	n := sys->read(f[1], r, len r);
 	if(n != len b){
 		done <-= "pipe read back";
 		return;

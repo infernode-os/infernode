@@ -718,6 +718,7 @@ dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/destructor_test.dis
+dis/tests/devprog_read_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
@@ -725,6 +726,7 @@ dis/tests/diswrite_test.dis
 dis/tests/docengine_test.dis
 dis/tests/edit_test.dis
 dis/tests/editor_test.dis
+dis/tests/env_rclose_test.dis
 dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
@@ -820,6 +822,7 @@ dis/tests/msg_inject_test.dis
 dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
+dis/tests/ninep_pack_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
@@ -897,6 +900,7 @@ dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
 dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
+dis/tests/styx_pack_test.dis
 dis/tests/utf21_test.dis
 dis/tests/veltro_cc_alignment_test.dis
 dis/tests/veltro_charon_security_test.dis

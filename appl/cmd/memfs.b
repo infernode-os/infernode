@@ -19,6 +19,8 @@ MemFS: module {
 
 blksz : con 512;
 Efull : con "filesystem full";
+Ebadoff : con "offset out of range";
+Maxoff : con 16r3FFFFFFF;	# the most a file may hold; an offset plus a count stays an int
 
 Memfile : adt {
 	name : string;
@@ -143,12 +145,17 @@ memfs(maxsz : int, tc : chan of ref Tmsg, srv : ref Styxserver, sync: chan of in
 	root := newmf(qhash, nil, "memfs", srv.uname, 8r755 | Sys->DMDIR);
 	root.parent = root;
 
+Serve:
 	while((tmsg := <-tc) != nil) {
 #		sys->print("%s\n", tmsg.text());
 	Msg:
 		pick tm := tmsg {
 		Readerror =>
-			break;
+			# the reader has gone: nothing more will come on tc. A
+			# break here left the pick and waited on tc for ever,
+			# every client of the mount hung with it.
+			sys->fprint(stderr(), "memfs: %s\n", tm.error);
+			break Serve;
 		Version =>
 			srv.devversion(tm);
 		Auth =>
@@ -283,16 +290,27 @@ memfs(maxsz : int, tc : chan of ref Tmsg, srv : ref Styxserver, sync: chan of in
 			(err, c, mf) := fidtomf(srv, qhash, tm.fid);
 			if (err == "" && !c.open)
 				err = Styxlib->Ebadfid;
+			# an offset is 64 bits and the files here are int-sized:
+			# one past an int was cut to a negative one, and indexed
+			# the block table with it (array bounds error, the server
+			# gone; tools/nativefuzz)
+			if (err == "" && (tm.offset < big 0 || tm.offset > big Maxoff || tm.count < 0))
+				err = Ebadoff;
 
 			if (err != "") {
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
 			}
 			data: array of byte = nil;
+			# no more than one message holds: a raw client's count
+			# was the size of the array filedata made
+			count := tm.count;
+			if (count > Styx->MAXFDATA)
+				count = Styx->MAXFDATA;
 			if (mf.perm & Sys->DMDIR)
-				data = dirdata(mf, int tm.offset, tm.count);
+				data = dirdata(mf, int tm.offset, count);
 			else
-				data = filedata(mf, int tm.offset, tm.count);
+				data = filedata(mf, int tm.offset, count);
 			mf.atime = now();
 			srv.reply(ref Rmsg.Read(tm.tag, data));
 		Write =>
@@ -301,6 +319,8 @@ memfs(maxsz : int, tc : chan of ref Tmsg, srv : ref Styxserver, sync: chan of in
 				err = Styxlib->Ebadfid;
 			if (err == nil && (mf.perm & Sys->DMDIR))
 				err = Styxlib->Eperm;
+			if (err == nil && (tm.offset < big 0 || tm.offset + big len tm.data > big Maxoff))
+				err = Ebadoff;
 			if (err == nil)
 				err = writefile(mf, int tm.offset, tm.data);
 			if (err != nil) {
@@ -484,17 +504,22 @@ filedata(mf: ref Memfile, offset, n: int): array of byte
 	if (n <= 0)
 		return nil;
 
-	data := array [n] of byte;
+	# A block never written is nil -- a write past the end leaves a
+	# hole -- and reads as zeros: data is made zeroed. Sliced, a nil
+	# block was an array bounds error, the server gone (nativefuzz).
+	data := array [n] of {* => byte 0};
 	startblk := offset/blksz;
 	offset %= blksz;
 	rn := min(blksz - offset, n);
-	data[:] = mf.data[startblk++][offset:offset+rn];
+	if ((b := mf.data[startblk++]) != nil)
+		data[:] = b[offset:offset+rn];
 	ix := blksz - offset;
 	while (ix < n) {
 		rn = blksz;
 		if (ix+rn > n)
 			rn = n - ix;
-		data[ix:] = mf.data[startblk++][:rn];
+		if ((b = mf.data[startblk++]) != nil)
+			data[ix:] = b[:rn];
 		ix += blksz;
 	}
 	return data;

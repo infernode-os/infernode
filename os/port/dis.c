@@ -156,6 +156,45 @@ prognlocked(int n)
 	return nil;
 }
 
+/*
+ * ^T^Td: every VM's Progs, from the console's debug keys: pid, VM (and
+ * the VM it is under, if another's), state, group, a kill pending, and
+ * its module. Racy by design -- it is for a kernel that has stopped
+ * answering, where nothing else can be asked -- so pidlk only if it
+ * can be had, and a Prog's module only if it looks like one.
+ */
+static void
+progdump(void)
+{
+	static char *st[] = {"alt", "send", "recv", "debug", "ready", "release", "exiting", "broken"};
+	int i, locked;
+	Prog *p;
+	Modlink *m;
+	char *name;
+
+	locked = canlock(&pidlk);
+	if(!locked)
+		print("progdump: pidlk is held; walking without it\n");
+	for(i = 0; i < nvms; i++){
+		if(vms[i] == nil)
+			continue;
+		print("vm %d:\n", i);
+		for(p = VMSCHED(vms[i])->head; p != nil; p = p->next){
+			m = p->reg.M;
+			name = "?";
+			if(m != H && m != nil && m->m != nil && m->m->name != nil)
+				name = m->m->name;
+			print("  %6d vm %d/%d %-8s grp %d%s %s\n", p->pid,
+				p->vm != nil? p->vm->id: -1, p->curvm != nil? p->curvm->id: -1,
+				p->state >= 0 && p->state < nelem(st)? st[p->state]: "?",
+				p->group != nil? p->group->id: 0,
+				p->kill != nil? " killed": "", name);
+		}
+	}
+	if(locked)
+		unlock(&pidlk);
+}
+
 Prog*
 progn(int n)
 {
@@ -1890,6 +1929,8 @@ disinit(void *a)
 	Osenv *o;
 	Module *root;
 	char *initmod = a;
+
+	debugkey('d', "Dis Progs", progdump, 0);
 
 	if(waserror())
 		panic("disinit error: %r");

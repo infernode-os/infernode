@@ -183,6 +183,10 @@ TARG=\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
+	styx_pack_test.dis\
+	ninep_pack_test.dis\
+	devprog_read_test.dis\
+	env_rclose_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_charon_security_test.dis\
@@ -401,6 +405,7 @@ SYSMODULES=\
 	appfs.m\
 	auth9.m\
 	styxlib.m\
+	9p.m\
 
 DISBIN=$ROOT/dis/tests
 

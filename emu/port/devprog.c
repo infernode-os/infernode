@@ -148,6 +148,27 @@ static	void	dbgstart(Prog*);
 static	void	freebpts(Bpt*);
 static	Bpt*	delbpt(Bpt*, char*, int);
 static	Bpt*	setbpt(Bpt*, char*, int);
+/*
+ * snprint for a listing made in the reader's buffer, a line at a time:
+ * no room is 0, not snprint's -1. Added to the count, the -1 moved it
+ * back, and the next line was written before the buffer (a nil write
+ * and the native kernel's panic, from a /prog read of 0 or 1 bytes;
+ * tools/nativefuzz).
+ */
+static int
+psnprint(char *s, int n, char *fmt, ...)
+{
+	va_list arg;
+
+	if(n <= 0)
+		return 0;
+	va_start(arg, fmt);
+	n = vsnprint(s, n, fmt, arg);
+	va_end(arg);
+	return n < 0? 0: n;
+}
+
+enum { Nsline = 2048 };	/* the most of a line of ns */
 static	int	mntscan(Mntwalk*, Pgrp*, char*, int);
 extern	Type	*Trdchan;
 extern	Type	*Twrchan;
@@ -481,21 +502,6 @@ progsize(Prog *p)
 	return size/1024;
 }
 
-static long
-progoffset(long offset, char *va, int *np)
-{
-	if(offset > 0) {
-		offset -= *np;
-		if(offset < 0) {
-			memmove(va, va+*np+offset, -offset);
-			*np = -offset;
-		}
-		else
-			*np = 0;
-	}
-	return offset;
-}
-
 static int
 progqidwidth(Chan *c)
 {
@@ -516,7 +522,9 @@ progfdprint(Chan *c, int fd, int w, char *s, int ns)
 		&"r w rw"[(c->mode&3)<<1],
 		devtab[c->type]->dc, c->dev,
 		c->qid.path, w, c->qid.vers, c->qid.type,
-		c->iounit, c->offset, c->name->s);
+		c->iounit, c->offset, c->name != nil? c->name->s : "");
+	if(n < 0)
+		n = 0;
 	return n;
 }
 
@@ -536,16 +544,30 @@ progdot(Pgrp *pg, char *va, int count)
 }
 
 static int
-progfds(Osenv *o, char *va, int count, long offset)
+progfds(Osenv *o, char *va, int count, vlong offset)
 {
 	Fgrp *f;
 	Chan *c;
-	int n, i, w, ww;
+	int n, i, w, ww, size, k;
+	char *buf;
 
+	/*
+	 * The listing is made whole in a buffer of its own, sized for it,
+	 * and the read's part taken from it. Made in the reader's buffer,
+	 * a line that did not fit was snprint's -1 (no room), added to the
+	 * count: the next line went before the buffer, over the heap.
+	 */
 	f = o->fgrp;	/* f is not locked because we've acquired */
-	n = progdot(o->pgrp, va, count);
-	n += snprint(va+n, count-n, "\n");
-	offset = progoffset(offset, va, &n);
+	size = 64 + KNAMELEN;
+	for(i = 0; i <= f->maxfd; i++)
+		if((c = f->fd[i]) != nil)
+			size += 96 + (c->name != nil? strlen(c->name->s) : 0);
+	buf = malloc(size);
+	if(buf == nil)
+		error(Enomem);
+	k = progdot(o->pgrp, buf, size - 2);
+	buf[k++] = '\n';
+	buf[k] = 0;
 	/* compute width of qid.path */
 	w = 0;
 	for(i = 0; i <= f->maxfd; i++) {
@@ -556,13 +578,15 @@ progfds(Osenv *o, char *va, int count, long offset)
 		if(ww > w)
 			w = ww;
 	}
-	for(i = 0; i <= f->maxfd; i++) {
+	for(i = 0; i <= f->maxfd && k < size - 1; i++) {
 		c = f->fd[i];
 		if(c == nil)
 			continue;
-		n += progfdprint(c, i, w, va+n, count-n);
-		offset = progoffset(offset, va, &n);
+		k += progfdprint(c, i, w, buf+k, size-k);
 	}
+	buf[k] = 0;
+	n = readstr(offset, va, count, buf);
+	free(buf);
 	return n;
 }
 
@@ -614,7 +638,7 @@ progstack(REG *reg, int state, char *va, int count, long offset)
 
 	while(fp != nil) {
 		f = (Frame*)fp;
-		n += snprint(va+n, count-n, "%.8lux %.8lux %.8lux %.8lux %d %s\n",
+		n += psnprint(va+n, count-n, "%.8lux %.8lux %.8lux %.8lux %d %s\n",
 				(ulong)f,		/* FP */
 				(ulong)(pc - m->prog),	/* PC in dis instructions */
 				(ulong)m->MP,		/* MP */
@@ -682,11 +706,11 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 		case 'W':
 			if(addr & 3)
 				return -1;
-			n += snprint(va+n, count-n, "%d\n", *(WORD*)addr);
+			n += psnprint(va+n, count-n, "%d\n", *(WORD*)addr);
 			s = sizeof(WORD);
 			break;
 		case 'B':
-			n += snprint(va+n, count-n, "%d\n", *(BYTE*)addr);
+			n += psnprint(va+n, count-n, "%d\n", *(BYTE*)addr);
 			s = sizeof(BYTE);
 			break;
 		case 'V':
@@ -695,7 +719,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			w = (WORD*)addr;
 			rock.w[0] = w[0];
 			rock.w[1] = w[1];
-			n += snprint(va+n, count-n, "%lld\n", rock.l);
+			n += psnprint(va+n, count-n, "%lld\n", rock.l);
 			s = sizeof(LONG);
 			break;
 		case 'R':
@@ -704,7 +728,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			w = (WORD*)addr;
 			rock.w[0] = w[0];
 			rock.w[1] = w[1];
-			n += snprint(va+n, count-n, "%g\n", rock.r);
+			n += psnprint(va+n, count-n, "%g\n", rock.r);
 			s = sizeof(REAL);
 			break;
 		case 'I':
@@ -716,7 +740,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			if(m == nil)
 				error(Ebadctl);
 			addr = (ulong)(m->prog+addr);
-			n += snprint(va+n, count-n, "%D\n", (Inst*)addr);
+			n += psnprint(va+n, count-n, "%D\n", (Inst*)addr);
 			s = sizeof(Inst);
 			break;
 		case 'P':
@@ -726,7 +750,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			fmt = "nil\n";
 			if(p != H)
 				fmt = "%lux\n";
-			n += snprint(va+n, count-n, fmt, p);
+			n += psnprint(va+n, count-n, fmt, p);
 			s = sizeof(WORD);
 			break;
 		case 'L':
@@ -735,7 +759,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			hd = *(List**)addr;
 			if(hd == H || D2H(hd)->t != &Tlist)
 				return -1;
-			n += snprint(va+n, count-n, "%lux.%lux\n", (ulong)&hd->tail, (ulong)hd->data);
+			n += psnprint(va+n, count-n, "%lux.%lux\n", (ulong)&hd->tail, (ulong)hd->data);
 			s = sizeof(WORD);
 			break;
 		case 'A':
@@ -743,11 +767,11 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 				return -1;
 			a = *(Array**)addr;
 			if(a == H)
-				n += snprint(va+n, count-n, "nil\n");
+				n += psnprint(va+n, count-n, "nil\n");
 			else {
 				if(D2H(a)->t != &Tarray)
 					return -1;
-				n += snprint(va+n, count-n, "%d.%lux\n", a->len, (ulong)a->data);
+				n += psnprint(va+n, count-n, "%d.%lux\n", a->len, (ulong)a->data);
 			}
 			s = sizeof(WORD);
 			break;
@@ -760,7 +784,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			else
 			if(D2H(ss)->t != &Tstring)
 				return -1;
-			n += snprint(va+n, count-n, "%d.", abs(ss->len));
+			n += psnprint(va+n, count-n, "%d.", abs(ss->len));
 			str = string2c(ss);
 			len = strlen(str);
 			if(count-n < len)
@@ -775,7 +799,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 				return -1;
 			ml = *(Modlink**)addr;
 			fmt = ml == H ? "nil\n" : "%lux\n";
-			n += snprint(va+n, count-n, fmt, ml->MP);
+			n += psnprint(va+n, count-n, fmt, ml->MP);
 			s = sizeof(WORD);
 			break;
 		case 'c':
@@ -783,15 +807,15 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 				return -1;
 			c = *(Channel**)addr;
 			if(c == H)
-				n += snprint(va+n, count-n, "nil\n");
+				n += psnprint(va+n, count-n, "nil\n");
 			else{
 				t = D2H(c)->t;
 				if(t != &Tchannel && t != Trdchan && t != Twrchan)
 					return -1;
 				if(c->buf == H)
-					n += snprint(va+n, count-n, "0.%lux\n", (ulong)c);
+					n += psnprint(va+n, count-n, "0.%lux\n", (ulong)c);
 				else
-					n += snprint(va+n, count-n, "%d.%lux.%d.%d\n", c->buf->len, (ulong)c->buf->data, c->front, c->size);
+					n += psnprint(va+n, count-n, "%d.%lux.%d.%d\n", c->buf->len, (ulong)c->buf->data, c->front, c->size);
 			}
 			break;
 			
@@ -874,6 +898,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 	Mntwalk *mw;
 	ulong grpid;
 	char *a = va;
+	char *nsl;
 	Progctl *ctl;
 	char mbuf[64], timebuf[12];
 
@@ -930,13 +955,32 @@ progread(Chan *c, void *va, long n, vlong offset)
 			return 0;
 		}
 		o = p->osenv;
-		i = mntscan(mw, o->pgrp, a, n);
+		/*
+		 * A line, made in a buffer of its own and as much of it given
+		 * as the read has room for. Made in the reader's, a read too
+		 * short for "cd " had snprint's -1 (no room) added to its
+		 * count, and dot's name went before the buffer (a nil write,
+		 * the kernel's panic; tools/nativefuzz).
+		 */
+		if(n <= 0){
+			poperror();
+			release();
+			return 0;
+		}
+		nsl = malloc(Nsline);
+		if(nsl == nil)
+			error(Enomem);
+		i = mntscan(mw, o->pgrp, nsl, Nsline);
 		if(i < 0) {
 			mw->cddone = 1;
-			i = snprint(a, n, "cd ");
-			i += progdot(o->pgrp, a+i, n-i);
-			i += snprint(a+i, n-i, "\n");
+			i = snprint(nsl, Nsline, "cd ");
+			i += progdot(o->pgrp, nsl+i, Nsline-i-2);
+			nsl[i++] = '\n';
 		}
+		if(i > n)
+			i = n;
+		memmove(a, nsl, i);
+		free(nsl);
 		poperror();
 		release();
 		return i;
@@ -963,7 +1007,8 @@ progread(Chan *c, void *va, long n, vlong offset)
 	case Qstack:
 		acquire();
 		p = progpid(PID(c->qid));
-		if(p == nil || p->state == Pexiting) {
+		/* M is H in a Prog with no frame left to run: nothing to show (a nil walk of H, the kernel's panic) */
+		if(p == nil || p->state == Pexiting || p->reg.M == H) {
 			release();
 			error(Ethread);
 		}

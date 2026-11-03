@@ -61,6 +61,22 @@ envstat(Chan *c, uchar *db, int n)
 	return devstat(c, db, n, 0, 0, envgen);
 }
 
+/*
+ * A Chan opened ORCLOSE keeps the environment it was opened in, and the
+ * remove at its close is from that. The close is by whoever drops the
+ * Chan last: Limbo's collector, freeing an FD, in a kproc of its own
+ * with no environment at all, which faulted taking up->env->egrp's lock
+ * (sysfuzz: "process released faults: dereference of nil").
+ */
+static void
+envkeep(Chan *c, Egrp *eg, int mode)
+{
+	if((mode & ORCLOSE) == 0 || c->aux != nil)
+		return;
+	incref(&eg->r);
+	c->aux = eg;
+}
+
 static Chan *
 envopen(Chan *c, int mode)
 {
@@ -91,6 +107,7 @@ envopen(Chan *c, int mode)
 		e->qid.vers++;
 	}
 	qunlock(&eg->l);
+	envkeep(c, eg, mode);
 	c->offset = 0;
 	c->flag |= COPEN;
 	c->mode = mode&~OTRUNC;
@@ -129,16 +146,28 @@ envcreate(Chan *c, char *name, int mode, ulong perm)
 	c->qid = e->qid;
 	eg->vers++;
 	qunlock(&eg->l);
+	envkeep(c, eg, mode);
 	c->offset = 0;
 	c->flag |= COPEN;
 	c->mode = mode;
 }
 
 static void
-envclose(Chan * c)
+envclose(Chan *c)
 {
-	if(c->flag & CRCLOSE)
-		envremove(c);
+	Egrp *eg;
+
+	eg = c->aux;
+	if(c->flag & CRCLOSE){
+		if(!waserror()){
+			envremove(c);
+			poperror();
+		}
+	}
+	if(eg != nil){
+		c->aux = nil;
+		closeegrp(eg);
+	}
 }
 
 static long
@@ -215,7 +244,12 @@ envremove(Chan *c)
 
 	if(c->qid.type & QTDIR)
 		error(Eperm);
-	eg = up->env->egrp;
+	/* an ORCLOSE Chan's own, closed by whoever drops it last: the collector's kproc has none */
+	eg = c->aux;
+	if(eg == nil && up->env != nil)
+		eg = up->env->egrp;
+	if(eg == nil)
+		error(Enonexist);
 	qlock(&eg->l);
 	for(l = &eg->entries; *l != nil; l = &(*l)->next)
 		if((*l)->qid.path == c->qid.path)

@@ -83,14 +83,20 @@ runsed(args: list of string, input: string): (string, string)
 	outp := array[2] of ref Sys->FD;
 	if(sys->pipe(inp) < 0 || sys->pipe(outp) < 0)
 		return (nil, "crash: no pipe");
+	# The input is in the pipe before sed runs: a script sed refuses
+	# (unclosed, a lone "{") ends it before it reads, and a write after
+	# its end of the pipe is gone kills the writer, this test, with
+	# "write on closed pipe".
+	b := array of byte input;
+	if(sys->write(inp[0], b, len b) != len b)
+		return (nil, "crash: cannot write input");
+	inp[0] = nil;
 	how := chan[1] of string;
 	spawn child(args, inp[1], outp[1], how);
 	inp[1] = outp[1] = nil;
 	got := chan[1] of string;
 	spawn reader(outp[0], got);
 	outp[0] = nil;
-	sys->write(inp[0], array of byte input, len array of byte input);
-	inp[0] = nil;
 	tmo := chan[1] of int;
 	spawn timer(tmo);
 	out: string;

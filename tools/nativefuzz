@@ -248,7 +248,7 @@ def one(seed, a, card):
 				if not CRASH.search(bytes(c.buf[cm:])):
 					kind, why = "dead", "the shell did not answer once chaos was off"
 				raise StopIteration
-			hits = re.findall(rb"\n(malloc|sleep|lock|yield) (\d+) (\d+)", bytes(c.buf[cm:]))
+			hits = re.findall(rb"\n(malloc|sleep|lock|yield|device|intr) (\d+) (\d+)", bytes(c.buf[cm:]))
 			note = "chaos " + " ".join("%s %s" % (k.decode(), h.decode()) for k, r, h in hits)
 		w = re.search(rb"sysfuzz: (wedged|cannot|died)[^\r\n]*", out)
 		if w and a.C:

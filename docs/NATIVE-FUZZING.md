@@ -78,6 +78,8 @@ echo 'malloc 3000' > /dev/chaos   one malloc, mallocz or realloc in 3000 refused
 echo 'sleep 300' > /dev/chaos     a Prog's system call's sleep interrupted, as a kill does
 echo 'lock 1000' > /dev/chaos     a spin lock's holder delayed a few microseconds
 echo 'yield 1000' > /dev/chaos    a proc releasing a spin lock preempted
+echo 'device 50' > /dev/chaos     a virtio device lies: a used entry not its own, a shared link scribbled on
+echo 'intr 20' > /dev/chaos       after an interrupt, another device's handler called with nothing to do
 echo 'vms 0xe' > /dev/chaos       only in Dis VMs 1-3 (bit 31: the kernel's own procs)
 echo off > /dev/chaos
 cat /dev/chaos                    each site's rate and how often it fired
@@ -227,6 +229,18 @@ Found by the chaos build and by `tools/sysfuzz -P` (refused memory):
   mount's queue (`mntversion`, which also called qopen holding a spin
   lock), an IP conversation's queues (`Fsprotoclone`): each panicked or
   kept a nil.
+- **virtio believed its devices.** A used entry naming a descriptor out
+  of range panicked; one in range but not lent (never, or given back
+  already) freed its chain twice and handed the driver a nil cookie
+  (ethervirtio dereferenced it); chains and the free list were followed
+  through `desc[].next`, which the device can rewrite (out of range, or a
+  loop). The driver keeps its own copy of links, chain lengths and which
+  heads are the device's; a lie is refused, counted and said once. With
+  `device 2` and `intr 2`, a disk read loop and 300 pings ran through
+  thousands of lies and spurious interrupts. A device that lies keeps the
+  buffers it lied about: enough lies and virtio-net has no receive buffer
+  left (`rxroom 0` in `ifstats`); getting them back would mean resetting
+  the device.
 - `killgrp` killed nothing when it could not allocate its list of pids:
   under memory pressure a group could not be killed.
 - The emulator's `smalloc` panicked after ten seconds without memory, and

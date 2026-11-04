@@ -2654,6 +2654,22 @@ bufimage(Display *d, int n)
 	return p;
 }
 
+uchar*
+_bufimageop(Display *d, int n, Drawop op)
+{
+	uchar *a;
+
+	if(op != SoverD){
+		a = bufimage(d, 2+n);
+		if(a == nil)
+			return nil;
+		a[0] = 'O';
+		a[1] = op;
+		return a+2;
+	}
+	return bufimage(d, n);
+}
+
 void
 drawerror(Display *d, char *s)
 {

@@ -302,11 +302,8 @@ sendproc(void *arg)
 	while(waserror())
 		;
 	for(;;){
-		if((b = qbread(edev->oq, 1000)) == nil){
-			/* nothing new for a second: the last frame we gave may be stranded */
-			txkick(ctlr, &ctlr->tx[(ctlr->txhead + Ntx - 1) % Ntx]);
+		if((b = qbread(edev->oq, 100000)) == nil)
 			continue;
-		}
 		n = BLEN(b);
 		if(n <= 0 || n > Bsz){
 			freeb(b);
@@ -379,10 +376,11 @@ linkproc(void *arg)
 {
 	Ether *edev;
 	Ctlr *ctlr;
-	int s, link;
+	int s, link, lasthead;
 
 	edev = arg;
 	ctlr = edev->ctlr;
+	lasthead = -1;
 	while(waserror())
 		;
 	for(;;){
@@ -396,6 +394,16 @@ linkproc(void *arg)
 				print("#l%d: rp1: link down\n", edev->ctlrno);
 			edev->nif.link = link;
 		}
+		/*
+		 * Nothing more may come to send, and with it no ring-full
+		 * wait in sendproc to notice: the last frame given could
+		 * sit there. Kick only when it has sat through two looks,
+		 * half a second apart, with nothing given since: one look
+		 * could fall between sendproc handing it over and its TSTART.
+		 */
+		if(ctlr->txhead == lasthead)
+			txkick(ctlr, &ctlr->tx[(lasthead + Ntx - 1) % Ntx]);
+		lasthead = ctlr->txhead;
 		tsleep(&ctlr->lr, return0, nil, 500);
 	}
 }

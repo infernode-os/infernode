@@ -250,6 +250,12 @@ testSignTx(t: ref T)
 
 	# Verify it's valid RLP (starts with list prefix)
 	t.assert(int signed[0] >= 16rc0, "signed tx starts with RLP list prefix");
+	# v = 37 (0x25): recovery id 0 + 35 + 2 * chainid
+	t.assertseq(ethcrypto->hexencode(signed),
+		"f86c808504a817c800825208947e5f4552091a69125d5dfcb7b8c2659029395bdf880de0b6b3a76400008025" +
+		"a0f356e0520bd721a42c97b4fa961dfff9941b18ed05682746b165bf83c11bee4c" +
+		"a0700513f6860d1cce2e8e1a0b39043e36366350efb6ba4779c2fa038f1f738c19",
+		"key 1's transaction, byte for byte");
 }
 
 #
@@ -297,6 +303,13 @@ testSignTxLargeValue(t: ref T)
 	tx := ref Ethcrypto->EthTx(big 0, big 1000000000, big 21000, dst, v, nil, 1);
 	signed := ethcrypto->signtx(tx, priv);
 	t.assert(signed != nil, "signtx handles >64-bit value");
+	# an independent Python reference (Keccak, RLP, RFC 6979, low S) that
+	# reproduces the EIP-155 spec vector above gives this
+	t.assertseq(ethcrypto->hexencode(signed),
+		"f86c80843b9aca0082520894353535353535353535353535353535353535353589056bc75e2d631000008026" +
+		"a0b63508f4dff1502649d954d0321f119029d716179b898e3d1d3db207022a4310" +
+		"a0268de5a7aa1e99ae251cbeb187e2290d34e6e1b7aa6ea73803cec1614f801a2f",
+		"100 ETH transaction, byte for byte");
 }
 
 #

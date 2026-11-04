@@ -251,6 +251,14 @@ scans, Fermat inversion. A key generation takes about 0.3 ms (P-256) and
 `tests/host/ecc_test.sh` checks known answers from OpenSSL and, under
 valgrind, that no branch or address depends on a secret.
 
+secp256k1 (`libsec/secp256k1.c`, keyring's `secp256k1_*`: Ethereum keys and
+transaction signatures) is built the same way for its p and n, with the
+complete formulas for a = 0 (Algorithms 7 and 9) and the nonce inverted by
+Fermat; a key generation or signature takes about 0.3 ms, a recovery 0.65,
+where the libmp version took 11 and 23. `tests/host/secp256k1_test.sh`
+checks signatures byte for byte against a reference checked against
+OpenSSL, recovery's edges, and the same constant-time property.
+
 Until October 2026 the constant was 0x4588, the decimal codepoint read as
 hex, and the share was never sent: TLS was classical X25519 in practice.
 `tests/tls_cnsa_hybrid_test.sh` now checks the group negotiated against

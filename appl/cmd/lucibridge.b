@@ -1424,6 +1424,9 @@ laststop := "";		# how the last turn ended (veltrosrv's stop=)
 placeholder := -1;		# the ▌ bubble shown while the first reply is awaited
 placeholderused := 0;
 curstep := 0;
+stepoff := big 0;		# how far logstep has read the log this turn
+logcur := 0;			# the last step it found there
+step1chunks := -1;		# step 1's stream's chunks: -1 not done, -2 no stream
 
 # Follow text from offset until the session goes idle, rendering each
 # message as it arrives: the first reply of a turn fills the placeholder,
@@ -1510,11 +1513,65 @@ beginmessage(role, title: string): int
 {
 	if(role != "veltro")
 		return -1;
-	if(title != "say" && placeholder >= 0 && !placeholderused && curstep <= 1) {
+	if(title != "say" && placeholder >= 0 && !placeholderused && stepone()) {
 		placeholderused = 1;
 		return placeholder;
 	}
 	return writemsg("veltro", "");
+}
+
+# Whether a veltro message just begun is step 1's reply, which takes
+# the placeholder, by the log as it is now.  logfollow's curstep can lag
+# the text: the agent logs "step 2: writing" before it asks the model
+# again, but a quick reply's text can be read before logfollow has read
+# that line.  Nor is the step now the message's: step 1's text can be
+# read after step 2 has begun.  What settles it is step 1's stream: a
+# veltro message is begun at a stream's first chunk, and the log says
+# how many chunks step 1's stream had once it is done.  Not done yet,
+# the message is step 1's; done with none, it is a later step's.
+# Without a stream (an llmsrv that has none) the step is all there is.
+# The log is read up to its length, as served, so the read does not wait.
+stepone(): int
+{
+	end := filelen(sess + "/log");
+	if(end > stepoff && (fd := sys->open(sess + "/log", Sys->OREAD)) != nil) {
+		b := array[int (end - stepoff)] of byte;
+		n := 0;
+		while(n < len b) {
+			m := sys->pread(fd, b[n:], len b - n, stepoff + big n);
+			if(m <= 0)
+				break;
+			n += m;
+		}
+		t := string b[0:n];
+		# whole lines only: the rest is read next time
+		for(last := len t; last > 0 && t[last-1] != '\n'; last--)
+			;
+		stepoff += big len array of byte t[0:last];
+		(nil, lines) := sys->tokenize(t[0:last], "\n");
+		for(l := lines; l != nil; l = tl l) {
+			line := hd l;
+			if(agentlib->hasprefix(line, "step ") && agentlib->contains(line, ": writing ")) {
+				(k, nil) := str->toint(line[5:], 10);
+				if(k > logcur)
+					logcur = k;
+			} else if(logcur == 1 && step1chunks < 0) {
+				if(agentlib->hasprefix(line, "stream: done ("))
+					(step1chunks, nil) = str->toint(line[len "stream: done (":], 10);
+				else if(agentlib->hasprefix(line, "stream: not available"))
+					step1chunks = -2;
+			}
+		}
+	}
+	case step1chunks {
+	-1 =>
+		return 1;
+	-2 =>
+		return curstep <= 1 && logcur <= 1;
+	0 =>
+		return 0;
+	}
+	return 1;
 }
 
 endmessage(role, title, body: string, idx: int)
@@ -1548,6 +1605,7 @@ logfollow(offset: big, done: chan of int)
 	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	curtool := "";
 	curpath := "";
+	s1chunks := -1;		# step 1's stream's chunks, once it is done
 	for(;;) {
 		n := sys->pread(fd, buf, len buf, offset);
 		if(n <= 0)
@@ -1568,11 +1626,15 @@ logfollow(offset: big, done: chan of int)
 				(stepno, nil) := str->toint(line[5:], 10);
 				curstep = stepno;
 				# A tool-only first step leaves the placeholder empty:
-				# clear it rather than show a stale cursor.
-				if(curstep >= 2 && placeholder >= 0 && !placeholderused) {
+				# clear it rather than show a stale cursor.  One whose
+				# stream had text has it, or textfollow is about to put
+				# it there (stepone).
+				if(curstep >= 2 && placeholder >= 0 && !placeholderused && s1chunks <= 0) {
 					placeholderused = 1;
 					updateliveconvmsg(placeholder, "");
 				}
+			} else if(curstep == 1 && s1chunks < 0 && agentlib->hasprefix(line, "stream: done (")) {
+				(s1chunks, nil) = str->toint(line[len "stream: done (":], 10);
 			} else if(agentlib->hasprefix(line, "tool ")) {
 				(nm, rest2) := str->splitl(line[5:], ":");
 				nm = str->tolower(nm);
@@ -1937,6 +1999,9 @@ agentturn(input: string)
 	# written, so a quick reply is not skipped.
 	textoff := filelen(sess + "/text");
 	logoff := filelen(sess + "/log");
+	stepoff = logoff;
+	logcur = 0;
+	step1chunks = -1;
 	if(writefile(sess + "/input", input) < 0) {
 		writemsg("veltro", sys->sprint("(the agent is unavailable: %r)"));
 		setstatus("idle");

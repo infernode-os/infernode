@@ -11,7 +11,7 @@
 #
 # On unsupported platforms the script exits 77 (skip), per run-tests.sh.
 
-if [ -z "$ROOT" ] || [ "$ROOT" = "." ]; then
+if [ -z "${ROOT:-}" ] || [ "$ROOT" = "." ]; then
     ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 fi
 

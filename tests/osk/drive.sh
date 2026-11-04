@@ -131,6 +131,18 @@ sleep 1
 taps enter
 snap mouse
 
+# a tap whose pointer press, made from the finger, is read and lifted
+# before the finger lands (they come through two files) types once
+taps e c h o space
+sleep 1
+xy=`{centre q}
+echo m $xy 1 > /dev/pointer
+echo m $xy 0 > /dev/pointer
+echo f0 $xy 1 > /dev/fingers
+echo f0 $xy 0 > /dev/fingers
+taps enter
+snap echo
+
 # a stroke through a word's letters types it
 taps e c h o space
 stroke h e l o

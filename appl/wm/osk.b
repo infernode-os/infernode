@@ -233,6 +233,8 @@ fingermode := 0;		# /dev/fingers is read
 lastfinger := -100000;		# msec of the last finger landing
 ptrsuppress := 0;		# the pointer's press is a finger's
 ptrtouch: ref Tch;
+ptrended := -100000;		# msec the last pointer press landed, once it has ended
+echoes: list of int;		# fingers whose touch the pointer has already made
 
 # channels
 fingerc: chan of (int, int, int, int, int);
@@ -1034,8 +1036,21 @@ finger(id: int, p: Point, on, ms: int)
 		if(sysmode && !managed)
 			restate();
 	}
+	if(isecho(id)){
+		if(!on)
+			echoes = dropid(echoes, id);
+		return;
+	}
 	t := findtouch(id);
 	if(on && t == nil){
+		# the pointer's press made from this finger can be read, and
+		# lifted, before the finger is: then it has typed the key
+		# already, and the finger is not another touch
+		if(ms - ptrended < Dupms){
+			ptrended = -100000;
+			echoes = id :: echoes;
+			return;
+		}
 		lastfinger = ms;
 		# the pointer's press, made from this finger, is not another touch
 		if(ptrtouch != nil && ms - ptrtouch.down < Dupms){
@@ -1071,12 +1086,31 @@ pointer(p: ref Pointer)
 		if(ptrtouch != nil){
 			t := ptrtouch;
 			ptrtouch = nil;
+			if(fingermode)
+				ptrended = t.down;
 			touchup(t, p.xy);
 		}
 		return;
 	}
 	if(ptrtouch != nil)
 		touchmove(ptrtouch, p.xy);
+}
+
+isecho(id: int): int
+{
+	for(l := echoes; l != nil; l = tl l)
+		if(hd l == id)
+			return 1;
+	return 0;
+}
+
+dropid(l: list of int, id: int): list of int
+{
+	r: list of int;
+	for(; l != nil; l = tl l)
+		if(hd l != id)
+			r = hd l :: r;
+	return r;
 }
 
 findtouch(id: int): ref Tch

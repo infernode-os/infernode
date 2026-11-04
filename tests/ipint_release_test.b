@@ -41,12 +41,14 @@ passed := 0;
 failed := 0;
 skipped := 0;
 
-# The worst lateness of a 1 ms sleep allowed while expmod runs.  Held,
-# the VM froze for the whole loop of calls (ten 2048-bit calls are a
-# second or more: a builtin barely counts against a thread's time
-# slice); released, the ticker is late by 1 to 10 ms, as it is with the
-# garbage thread alone and no expmod at all (up to 20 ms seen there on
-# a loaded 4-core host), which the margin is for.
+# The worst lateness of a 1 ms sleep allowed while expmod runs: a quarter
+# of the loop of calls, and never less than MAXLATE.  Held, the VM froze
+# for the whole loop (a builtin barely counts against a thread's time
+# slice), so the ticker was late by all of it, 242 ms of 243 and 520 of
+# 520 on an M-series Mac, or by half of it with two threads handing the
+# VM to each other (261 ms of 509).  Released, it is late by the host's
+# noise, which does not grow with the loop: 1 to 20 ms, and 52 ms of 622
+# on a loaded CI runner, where a fixed 50 ms failed.
 MAXLATE: con 50;
 
 # 2048-bit modulus, base and exponent, and base^exp mod m (Python's pow)
@@ -277,8 +279,8 @@ churn(stop: chan of int)
 	}
 }
 
-# worst lateness of the ticker while nw threads each run n expmods
-freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint): int
+# the ticker's worst lateness while nw threads each run n expmods
+freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint)
 {
 	stop := chan of int;
 	res := chan of int;
@@ -300,7 +302,10 @@ freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint): int
 	t.asserteq(bad, 0, label+": every result right");
 	sys->print("%s: %d calls in %d ms (%d ms each), worst ticker lateness %d ms\n",
 		label, nw*n, ms, ms/(nw*n), worst);
-	return worst;
+	limit := ms/4;
+	if(limit < MAXLATE)
+		limit = MAXLATE;
+	t.assert(worst < limit, sys->sprint("worst lateness %d ms of %d, want < %d", worst, ms, limit));
 }
 
 # the ticker's lateness with the garbage thread and no expmod: the
@@ -322,23 +327,20 @@ baseline(): int
 
 testFreeze2048(t: ref T)
 {
-	worst := freeze(t, "2048-bit modulus, 2048-bit exponent", 1, 10,
+	freeze(t, "2048-bit modulus, 2048-bit exponent", 1, 10,
 		hex(B2048), hex(E2048), hex(M2048), hex(R2048));
-	t.assert(worst < MAXLATE, sys->sprint("worst lateness %d ms, want < %d", worst, MAXLATE));
 }
 
 testFreeze256(t: ref T)
 {
-	worst := freeze(t, "2048-bit modulus, 256-bit exponent", 1, 40,
+	freeze(t, "2048-bit modulus, 256-bit exponent", 1, 40,
 		hex(B2048), hex(E256), hex(M2048), hex(R256));
-	t.assert(worst < MAXLATE, sys->sprint("worst lateness %d ms, want < %d", worst, MAXLATE));
 }
 
 testFreezeConcurrent(t: ref T)
 {
-	worst := freeze(t, "two threads, 2048-bit modulus and exponent", 2, 5,
+	freeze(t, "two threads, 2048-bit modulus and exponent", 2, 5,
 		hex(B2048), hex(E2048), hex(M2048), hex(R2048));
-	t.assert(worst < MAXLATE, sys->sprint("worst lateness %d ms, want < %d", worst, MAXLATE));
 }
 
 init(nil: ref Draw->Context, args: list of string)

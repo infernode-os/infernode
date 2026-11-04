@@ -1113,7 +1113,7 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -2017,7 +2017,7 @@ jobs:
         # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
         # here (77).
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

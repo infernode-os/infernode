@@ -2282,7 +2282,17 @@ handleresize()
 
 	# Recreate all zone sub-images on a fresh mainscr.
 	# Must happen before drawchrome so separators are drawn on top of the fill.
-	mainscr = Screen.allocate(mainwin, bgcol, 0);
+	#
+	# On a phone the zones are laid out again on the screen they had,
+	# not a fresh one.  The old windows (the presentation zone's, held
+	# by its apps until preswmloop moves them) are freed after the new
+	# ones are drawn; freed from a screen of their own, each painted
+	# its rectangle in that screen's fill over the new zones -- the
+	# Chat title and the chat gone blank each time the keyboard on the
+	# screen showed or hid.  On one screen, a window freed shows what
+	# is beneath it, and the new windows are above.
+	if(!mobile || mainscr == nil)
+		mainscr = Screen.allocate(mainwin, bgcol, 0);
 	if(mainscr == nil)
 		return;
 	convimg = mainscr.newwindow(convr, Draw->Refbackup, Draw->Nofill);

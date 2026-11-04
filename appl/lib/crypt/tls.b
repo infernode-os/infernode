@@ -98,58 +98,9 @@ MAXFRAGMENT:	con 16384 + 256;	# room for overhead
 # TLS 1.2 record version
 RECVERSION: con 16r0303;
 
-# Internal connection state
-ConnState: adt {
-	fd:		ref Sys->FD;
-	version:	int;		# negotiated version
-	suite:		int;		# negotiated cipher suite
-	group:		int;		# TLS 1.3 key-exchange group; 0 under TLS 1.2
-
-	# AEAD keys
-	writekey:	array of byte;
-	writeiv:	array of byte;
-	readkey:	array of byte;
-	readiv:		array of byte;
-
-	# Sequence numbers
-	writeseq:	big;
-	readseq:	big;
-
-	# Read buffer (decrypted application data)
-	rbuf:		array of byte;
-	roff:		int;
-	rlen:		int;
-
-	# Handshake transcript hash — both algorithms run in parallel until suite is known
-	handhash:	ref Keyring->DigestState;	# SHA-256 transcript (for TLS_AES_128_GCM_SHA256)
-
-	handhash384:	ref Keyring->DigestState;	# SHA-384 transcript
-
-	# TLS 1.3 traffic secrets
-	cts:		array of byte;	# client traffic secret
-	sts:		array of byte;	# server traffic secret
-
-	# Server name for cert verification
-	servername:	string;
-	insecure:	int;
-
-	# TLS 1.3: whether handshake is encrypted
-	hsencrypted:	int;
-
-	# Handshake message buffer (multiple msgs may arrive in one record)
-	hsbuf:		array of byte;
-	hsoff:		int;
-
-	# Ephemeral CNSA hybrid (SecP384r1MLKEM1024) private material; nil otherwise
-	eph_p384_priv:	array of byte;
-	eph_mlkem_sk:	array of byte;
-
-	# Ephemeral ML-KEM-768 secret key for the X25519MLKEM768 share; nil otherwise
-	eph_mlkem768_sk:	array of byte;
-
-	# Ephemeral P-256 private key for the TLS 1.3 secp256r1 key share; nil otherwise
-	eph_p256_priv:	array of byte;
-};
+# A connection's state is TLS->State (tls.m), held by its Conn: dropped
+# with it, wherever its holder stops (a reader killed mid-read included).
+ConnState: type State;
 
 # Entropy source fd, opened once in init() and reused for all randombuf() calls.
 #
@@ -187,8 +138,6 @@ init(): string
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "tls: cannot load Sys";
-	if(connlk == nil)
-		connlk = chan[1] of int;
 
 	keyring = load Keyring Keyring->PATH;
 	if(keyring == nil)
@@ -250,8 +199,8 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	cs.rbuf = nil;
 	cs.roff = 0;
 	cs.rlen = 0;
-	cs.handhash = nil;
-	cs.handhash384 = nil;
+	cs.tr256 = nil;
+	cs.tr384 = nil;
 	cs.cts = nil;
 	cs.sts = nil;
 	cs.servername = config.servername;
@@ -269,66 +218,14 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	conn.suite = cs.suite;
 	conn.group = cs.group;
 	conn.servername = cs.servername;
-
-	# Stash ConnState in a global for the conn methods to access
-	addconn(conn, cs);
+	conn.st = cs;
 
 	return (conn, nil);
 }
 
-# ================================================================
-# Connection pool - maps Conn refs to internal ConnState
-# ================================================================
-
-Connentry: adt {
-	conn:	ref Conn;
-	cs:	ref ConnState;
-};
-
-# Connections are made, used and closed by many processes at once
-# (webfs fetches in parallel): the pool is changed only under connlk,
-# else one change loses another's and a live connection's state is
-# gone (its reads fail, as an empty response).
-connpool: list of ref Connentry;
-connlk: chan of int;
-
-addconn(conn: ref Conn, cs: ref ConnState)
-{
-	connlk <-= 1;
-	connpool = ref Connentry(conn, cs) :: connpool;
-	<-connlk;
-}
-
-findconn(conn: ref Conn): ref ConnState
-{
-	connlk <-= 1;
-	for(l := connpool; l != nil; l = tl l) {
-		e := hd l;
-		if(e.conn == conn) {
-			<-connlk;
-			return e.cs;
-		}
-	}
-	<-connlk;
-	return nil;
-}
-
-delconn(conn: ref Conn)
-{
-	connlk <-= 1;
-	nl: list of ref Connentry;
-	for(l := connpool; l != nil; l = tl l) {
-		e := hd l;
-		if(e.conn != conn)
-			nl = e :: nl;
-	}
-	connpool = nl;
-	<-connlk;
-}
-
 Conn.read(conn: self ref Conn, buf: array of byte, n: int): int
 {
-	cs := findconn(conn);
+	cs := conn.st;
 	if(cs == nil)
 		return -1;
 
@@ -380,7 +277,7 @@ Conn.read(conn: self ref Conn, buf: array of byte, n: int): int
 
 Conn.write(conn: self ref Conn, buf: array of byte, n: int): int
 {
-	cs := findconn(conn);
+	cs := conn.st;
 	if(cs == nil)
 		return -1;
 
@@ -399,17 +296,16 @@ Conn.write(conn: self ref Conn, buf: array of byte, n: int): int
 
 Conn.close(conn: self ref Conn): string
 {
-	cs := findconn(conn);
+	cs := conn.st;
 	if(cs == nil)
-		return "tls: connection not found";
+		return "tls: connection closed";
 
 	# Send close_notify alert
 	alert := array [2] of byte;
 	alert[0] = byte ALERT_WARNING;
 	alert[1] = byte ALERT_CLOSE_NOTIFY;
+	conn.st = nil;
 	writerecord(cs, CT_ALERT, alert);
-
-	delconn(conn);
 	return nil;
 }
 
@@ -715,9 +611,9 @@ handshake(cs: ref ConnState, config: ref Config): string
 
 handshake0(cs: ref ConnState, config: ref Config): string
 {
-	# Initialize handshake hash (SHA-256 for most suites)
-	cs.handhash = nil;
-	cs.handhash384 = nil;
+	# A new transcript
+	cs.tr256 = nil;
+	cs.tr384 = nil;
 
 	# Generate client random, and the legacy session id, both of which
 	# a second ClientHello after a HelloRetryRequest repeats
@@ -1002,10 +898,8 @@ hrrtranscript(cs: ref ConnState, ch1, hrr: array of byte)
 	keyring->sha384(ch1, len ch1, h384, nil);
 	m256 := hsmsg(HT_MESSAGE_HASH, h256);
 	m384 := hsmsg(HT_MESSAGE_HASH, h384);
-	cs.handhash = keyring->sha256(m256, len m256, nil, nil);
-	cs.handhash = keyring->sha256(hrr, len hrr, nil, cs.handhash);
-	cs.handhash384 = keyring->sha384(m384, len m384, nil, nil);
-	cs.handhash384 = keyring->sha384(hrr, len hrr, nil, cs.handhash384);
+	cs.tr256 = trcat(m256, hrr);
+	cs.tr384 = trcat(m384, hrr);
 }
 
 # A handshake message: type(1) + length(3) + body
@@ -2697,28 +2591,32 @@ readhsmsg(cs: ref ConnState): (int, array of byte, string)
 
 updatehash(cs: ref ConnState, data: array of byte)
 {
-	# Maintain both SHA-256 and SHA-384 transcripts until the suite is known.
-	# hashcurrent() selects the right one based on cs.suite.
-	cs.handhash = keyring->sha256(data, len data, nil, cs.handhash);
-	cs.handhash384 = keyring->sha384(data, len data, nil, cs.handhash384);
+	# Both transcripts until the suite is known; hashcurrent() hashes
+	# the one cs.suite needs.
+	cs.tr256 = trcat(cs.tr256, data);
+	cs.tr384 = trcat(cs.tr384, data);
+}
+
+# a then b, in a new array: the transcript shares no bytes with a
+# buffer the record layer reuses.
+trcat(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
 }
 
 hashcurrent(cs: ref ConnState): array of byte
 {
-	# Return the transcript hash appropriate for the negotiated suite
+	# The transcript hash for the negotiated suite
 	if(hashlength(cs.suite) == 48) {
 		digest := array [Keyring->SHA384dlen] of byte;
-		if(cs.handhash384 != nil) {
-			ds := cs.handhash384.copy();
-			keyring->sha384(nil, 0, digest, ds);
-		}
+		keyring->sha384(cs.tr384, len cs.tr384, digest, nil);
 		return digest;
 	}
 	digest := array [Keyring->SHA256dlen] of byte;
-	if(cs.handhash != nil) {
-		ds := cs.handhash.copy();
-		keyring->sha256(nil, 0, digest, ds);
-	}
+	keyring->sha256(cs.tr256, len cs.tr256, digest, nil);
 	return digest;
 }
 

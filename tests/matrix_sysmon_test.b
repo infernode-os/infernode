@@ -129,9 +129,16 @@ testLoadService(t: ref T)
 
 # ── Service lifecycle ───────────────────────────────────────
 
-runsvc()
+runsvc(done: chan of int)
 {
 	svc->run();
+	done <-= 1;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 testServiceEndToEnd(t: ref T)
@@ -141,8 +148,24 @@ testServiceEndToEnd(t: ref T)
 		t.fatal(sys->sprint("cannot load sysmon-svc: %r"));
 	err := svc->init("/", OUTDIR);
 	t.assertnil(err, "init ok");
-	spawn runsvc();
+	done := chan of int;
+	spawn runsvc(done);
 	sys->sleep(3500);	# ~3 polls at 1 Hz
+
+	# Stop it before reading: the service replaces each file by
+	# removing it and renaming a new one into place, so a read while
+	# it polls can find no file, and proc/list and proc/cpurates
+	# (checked against each other) can come from different polls.
+	# run() returns once the poll and sleep under way are done.
+	svc->shutdown();
+	tc := chan[1] of int;
+	spawn timer(tc, 3*1000 + 2000);
+	alt {
+	<-done =>
+		t.log("service shut down");
+	<-tc =>
+		t.fatal("service still running 5s after shutdown");
+	}
 
 	# mem/current: verbatim /dev/memory — pool lines of 8 fields.
 	mem := readfile(OUTDIR + "/mem/current");
@@ -225,11 +248,6 @@ testServiceEndToEnd(t: ref T)
 		nnh++;
 	}
 	t.assert(nnh >= 2, "net/history has samples");
-
-	# Shutdown is observed within a poll.
-	svc->shutdown();
-	sys->sleep(1500);
-	t.log("service shut down");
 }
 
 init(nil: ref Draw->Context, args: list of string)

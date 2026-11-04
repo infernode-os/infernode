@@ -352,4 +352,21 @@ bufimage(Display *d, int n)
 	return p;
 }
 
+/* Reserve the operator and its drawing command as one indivisible record. */
+uchar*
+_bufimageop(Display *d, int n, Drawop op)
+{
+	uchar *a;
+
+	if(op != SoverD){
+		a = bufimage(d, 2+n);
+		if(a == nil)
+			return nil;
+		a[0] = 'O';
+		a[1] = op;
+		return a+2;
+	}
+	return bufimage(d, n);
+}
+
 #endif

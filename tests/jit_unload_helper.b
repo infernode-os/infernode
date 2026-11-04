@@ -3,10 +3,11 @@ implement JitUnloadHelper;
 # Loaded by jit_unload_test.b: a module whose one function sleeps, so
 # that its caller can drop the last reference to it before it returns.
 #
-# It must be compiled for the test to mean anything, and comp-amd64.c
-# declines a module of fewer than 128 instructions (its compile()'s
-# overflow check compares a size it has already rounded up), so pad()
-# is there to make it longer than that. Nothing calls it.
+# It must be compiled for the test to mean anything.  pad() made it
+# longer than 128 instructions while comp-amd64.c's compile() declined
+# anything shorter (its overflow check compared a size it had already
+# rounded up; tests/jit_small_test.b now holds it to compiling them).
+# It stays, so that this module is as it was.  Nothing calls it.
 #
 # holdfile() is hold() with a file open in the module's data, so that
 # releasing the module closes it, and closing a file releases the VM.

@@ -362,8 +362,8 @@ jobs:
           tests/host/tools9p_result_test.sh tests/host/toolctl_view_test.sh \
           tests/host/wiki9p_test.sh \
           tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
-          tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
-          tests/host/context_window_test.sh
+          tests/host/luciuisrv_closed_test.sh tests/host/luciuisrv_data_test.sh \
+          tests/host/compaction_test.sh tests/host/context_window_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         # /mnt/toolctl's ns, event and view: the agent's name space as it
@@ -380,6 +380,9 @@ jobs:
         ROOT=. bash tests/host/prompt_defaults_test.sh
         # A closed activity refuses writes and the server survives them.
         ROOT=. bash tests/host/luciuisrv_closed_test.sh
+        # An artifact's data written in several 9P messages is kept whole
+        # (a plumbed README showed as its last line).
+        ROOT=. bash tests/host/luciuisrv_data_test.sh
         # A long session is compacted without breaking a turn of tool calls.
         ROOT=. bash tests/host/compaction_test.sh
         ROOT=. bash tests/host/context_window_test.sh
@@ -683,6 +686,9 @@ jobs:
         chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_big_test.sh
+        # A module of fewer than 128 instructions is compiled: the amd64
+        # JIT refused them, so they ran interpreted under -c1.
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run cpu(1) session lifetime test
       run: |
@@ -729,17 +735,18 @@ jobs:
               amd64_jit_typecom_slab_test commands_test devletters_test dhcp_client_test
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
-              factotum_keyfile_test llmctl_test llmsrv_flush_test
-              mail9p_imap_test network_capability_test pathmanage_test
+              factotum_keyfile_test llmclient_pool_test llmctl_test
+              llmsrv_flush_test mail9p_imap_test network_capability_test
+              pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test
+              tools9p_integration_test ecc_test secp256k1_test tls_matrix_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audioring_test kernrandom_test awk_builtins_test calendar9p_test
               cpu_boundary_test dialogue_test emu_root_test
               emulator_leader_lifecycle_test exec_confinement_test
-              font_regression_test ipchecksum_test iproute_test
+              font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
               listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
@@ -760,7 +767,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -1325,6 +1332,7 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -1924,6 +1932,7 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
       run: |

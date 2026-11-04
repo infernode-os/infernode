@@ -1,0 +1,4 @@
+# The letters' layouts wm/osk offers, in the order its next key goes
+# through them; the first is a new typist's.  Each is a file in
+# lib/osk/layouts.  osk(1).
+qwerty dvorak colemak

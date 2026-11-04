@@ -376,6 +376,7 @@ dis/lib/inflate.dis
 dis/lib/ip.dis
 dis/lib/ipattr.dis
 dis/lib/json.dis
+dis/lib/kbdecode.dis
 dis/lib/keyringinst.dis
 dis/lib/keyset.dis
 dis/lib/l2cap.dis
@@ -399,6 +400,7 @@ dis/lib/nametree.dis
 dis/lib/newns.dis
 dis/lib/ninep.dis
 dis/lib/oldauth.dis
+dis/lib/osklayout.dis
 dis/lib/outlinefont.dis
 dis/lib/parseman.dis
 dis/lib/pdf.dis
@@ -777,7 +779,9 @@ dis/tests/js-spike/valrep.dis
 dis/tests/js_engine_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis
+dis/tests/kbdecode_test.dis
 dis/tests/keyring_test.dis
+dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/killblocked_test.dis
 dis/tests/l2cap_test.dis
@@ -822,6 +826,8 @@ dis/tests/msg_triage_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
+dis/tests/osk_accuracy.dis
+dis/tests/osk_fuzz.dis
 dis/tests/outlinefont_test.dis
 dis/tests/pathmanage_test.dis
 dis/tests/pdf_conformance_test.dis
@@ -1043,6 +1049,7 @@ dis/wm/man.dis
 dis/wm/matrix.dis
 dis/wm/memory.dis
 dis/wm/presrender.dis
+dis/wm/osk.dis
 dis/wm/rt.dis
 dis/wm/sam.dis
 dis/wm/samengine.dis

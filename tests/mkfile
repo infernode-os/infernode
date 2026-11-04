@@ -52,6 +52,10 @@ TARG=\
 	edit_test.dis\
 	editor_test.dis\
 	example_test.dis\
+	kbdecode_test.dis\
+	osk_accuracy.dis\
+	keyboards_test.dis\
+	osk_fuzz.dis\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\
@@ -288,6 +292,8 @@ MODULES=\
 
 SYSMODULES=\
 	woff2.m\
+	kbdecode.m\
+	osklayout.m\
 	bidi.m\
 	brotli.m\
 	web/dom.m\

@@ -93,6 +93,9 @@ ulong	getcallerpc(void*);
 ulong	getFPcontrol(void);
 ulong	getFPstatus(void);
 void		gkbdputc(Queue*, int);
+void		kbdattach(char*, char*);	/* a keyboard is there: id, description (/dev/keyboards) */
+void		kbddetach(char*);
+void		fingertrack(int, int, int, int);	/* a finger: id, x, y, on the screen (/dev/fingers) */
 void		hostopen(char*);
 int		incref(Ref*);
 int		iprint(char*, ...);

@@ -1,0 +1,6 @@
+# More symbols, and the keys a shell or an editor wants (the symbols'
+# more key).  The format: lib/osk/layouts/dvorak.
+row	esc tab ctrl ~ ` | \ ^ = _
+row	[ ] { } < > € £ ° …
+row	sym:1.5 home left up right end del:1.5
+row	abc:1.5 next down space:4 enter:1.5

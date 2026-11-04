@@ -16,7 +16,8 @@
 enum{
 	Qdir,
 	Qpointer,
-	Qcursor
+	Qcursor,
+	Qfingers
 };
 
 typedef struct Pointer Pointer;
@@ -43,6 +44,7 @@ Dirtab pointertab[]={
 	".",			{Qdir, 0, QTDIR},	0,	0555,
 	"pointer",		{Qpointer},	0,	0666,
 	"cursor",		{Qcursor},		0,	0222,
+	"fingers",		{Qfingers},	0,	0666,
 };
 
 enum {
@@ -102,6 +104,107 @@ mousetrack(int b, int x, int y, int isdelta)
 	Wakeup(&ptrq.r);
 /*	drawactive(1);	*/
 /*	setpointer(x, y); */
+}
+
+/*
+ * /dev/fingers: the fingers on a touch screen, each a pointer of its
+ * own.  /dev/pointer is one pointer -- the first finger, as a mouse --
+ * and stays so for everything that reads it; a program that needs
+ * every finger (a keyboard on the screen, typed with two thumbs whose
+ * touches overlap) reads this as well.  Each read is one event,
+ *
+ *	f<id> <x> <y> <on> <msec>
+ *
+ * in the fixed-width fields /dev/pointer uses: on is 1 while the
+ * finger is on the screen and 0 when it lifts, and an id is a finger's
+ * from the event it lands until the one it lifts, then free again.  A
+ * write of "f<id> <x> <y> <on>" is such an event, from a driver that
+ * is a program (the native kernel's touch) or a test.
+ *
+ * One reader at a time.  With none, events are dropped rather than
+ * kept for a reader who comes later and would see touches long gone.
+ * From the GUI backend an event is dropped if the queue is full, as it
+ * may not wait; room is kept for the lifts, so a finger is not left on
+ * the screen by an event lost.  A write waits for room.
+ */
+typedef struct Finger Finger;
+struct Finger
+{
+	int	id;
+	int	x;
+	int	y;
+	int	on;
+	ulong	msec;
+};
+
+enum
+{
+	Nfinger	= 128,
+	Nfingerlift = 16,	/* of those, kept for lifts */
+};
+
+static struct
+{
+	Lock	l;
+	QLock	rq;		/* procs sharing the reader's fd read one at a time */
+	QLock	wq;		/* writers wait for room one at a time */
+	Rendez	r;		/* the reader waits for an event */
+	Rendez	w;		/* a writer waits for room */
+	int	reading;	/* a reader has it open */
+	Finger	e[Nfinger];
+	int	rd;
+	int	n;
+} fq;
+
+/* 1 if queued or dropped for want of a reader, 0 if there is no room */
+static int
+fingerput(int id, int x, int y, int on)
+{
+	Finger *f;
+
+	lock(&fq.l);
+	if(!fq.reading){
+		unlock(&fq.l);
+		return 1;
+	}
+	if(fq.n >= (on ? Nfinger-Nfingerlift : Nfinger)){
+		unlock(&fq.l);
+		return 0;
+	}
+	f = &fq.e[(fq.rd+fq.n) % Nfinger];
+	f->id = id;
+	f->x = x;
+	f->y = y;
+	f->on = on != 0;
+	f->msec = osmillisec();
+	fq.n++;
+	unlock(&fq.l);
+	Wakeup(&fq.r);
+	return 1;
+}
+
+/*
+ * called by any source of touches: finger id is at x, y (screen
+ * pixels) and on the screen, or has lifted (on 0)
+ */
+void
+fingertrack(int id, int x, int y, int on)
+{
+	fingerput(id, x, y, on);
+}
+
+static int
+fingerready(void *a)
+{
+	USED(a);
+	return fq.n > 0;
+}
+
+static int
+fingerroom(void *a)
+{
+	USED(a);
+	return !fq.reading || fq.n < Nfinger-Nfingerlift;
 }
 
 static int
@@ -204,6 +307,17 @@ pointeropen(Chan* c, int omode)
 	 * so let OWRITE opens coexist with the reader.  This lets a headless
 	 * driver synthesise clicks while the window system is running.
 	 */
+	if((ulong)c->qid.path == Qfingers && (omode & 3) != OWRITE){
+		lock(&fq.l);
+		if(fq.reading){
+			unlock(&fq.l);
+			c->flag &= ~COPEN;
+			error(Einuse);
+		}
+		fq.reading = 1;
+		fq.n = 0;
+		unlock(&fq.l);
+	}
 	if((ulong)c->qid.path == Qpointer && (omode & 3) != OWRITE){
 		if(waserror()){
 			c->flag &= ~COPEN;
@@ -228,6 +342,15 @@ pointerclose(Chan* c)
 	if((c->flag & COPEN) == 0)
 		return;
 	switch((ulong)c->qid.path){
+	case Qfingers:
+		if((c->mode & 3) == OWRITE)
+			break;
+		lock(&fq.l);
+		fq.reading = 0;
+		fq.n = 0;
+		unlock(&fq.l);
+		Wakeup(&fq.w);
+		break;
 	case Qpointer:
 		/* Write-only injectors never took the read-owner ref (see
 		 * pointeropen), so don't drop it here. */
@@ -246,7 +369,7 @@ static long
 pointerread(Chan* c, void* a, long n, vlong off)
 {
 	Pointer mt;
-	char buf[1+4*12+1];
+	char buf[1+5*12+1];
 	int l;
 
 	USED(&off);
@@ -266,6 +389,34 @@ pointerread(Chan* c, void* a, long n, vlong off)
 		if(l < n)
 			n = l;
 		memmove(a, buf, n);
+		break;
+	case Qfingers:
+		{
+			Finger f;
+
+			qlock(&fq.rq);
+			if(waserror()){
+				qunlock(&fq.rq);
+				nexterror();
+			}
+			Sleep(&fq.r, fingerready, nil);
+			poperror();
+			qunlock(&fq.rq);
+			lock(&fq.l);
+			if(fq.n == 0){
+				unlock(&fq.l);
+				return 0;
+			}
+			f = fq.e[fq.rd];
+			fq.rd = (fq.rd+1) % Nfinger;
+			fq.n--;
+			unlock(&fq.l);
+			Wakeup(&fq.w);
+			l = snprint(buf, sizeof(buf), "f%11d %11d %11d %11d %11lud ", f.id, f.x, f.y, f.on, f.msec);
+			if(l < n)
+				n = l;
+			memmove(a, buf, n);
+		}
 		break;
 	default:
 		n=0;
@@ -310,6 +461,33 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 		}else{
 			mousetrack(mouse.v.b, x, y, 0);
 			setpointer(x, y);
+		}
+		break;
+	case Qfingers:
+		{
+			int id, on;
+
+			if(n > sizeof buf-1)
+				n = sizeof buf -1;
+			memmove(buf, va, n);
+			buf[n] = 0;
+			if(buf[0] != 'f')
+				error(Ebadarg);
+			id = strtoul(buf+1, &a, 0);
+			x = strtoul(a, &a, 0);
+			y = strtoul(a, &a, 0);
+			if(*a == 0)
+				error(Eshort);
+			on = strtoul(a, 0, 0);
+			qlock(&fq.wq);
+			if(waserror()){
+				qunlock(&fq.wq);
+				nexterror();
+			}
+			while(!fingerput(id, x, y, on))
+				Sleep(&fq.w, fingerroom, nil);
+			poperror();
+			qunlock(&fq.wq);
 		}
 		break;
 	case Qcursor:

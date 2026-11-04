@@ -1,0 +1,20 @@
+# What a long press on a key offers: the key's character, then the
+# characters offered, in order.  osk(1).
+a	àáâäæãåā
+c	çćč
+e	èéêëēęė
+i	ìíîïī
+n	ñń
+o	òóôöõøōœ
+s	ßśš
+u	ùúûüū
+y	ýÿ
+z	žźż
+'	’‘"
+"	“”«»
+-	–—
+.	…
+?	¿
+!	¡
+$	€£¥¢
+0	°

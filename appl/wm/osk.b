@@ -1255,6 +1255,10 @@ touchup(t: ref Tch, p: Point)
 		return;
 	}
 	if(t.stroke){
+		# the trail drawn over the keys goes with the finger, whatever
+		# the stroke turns out to be (a word, delete's words, a hide,
+		# the key it ended on)
+		redraw();
 		strokeup(t);
 		return;
 	}

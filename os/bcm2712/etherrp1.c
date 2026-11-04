@@ -137,6 +137,7 @@ struct Ctlr
 	ulong	nrxbad;
 	ulong	ntx;
 	ulong	nmdiotimeout;
+	ulong	nkick;		/* transmitter found idle with a frame of ours: TSTART again */
 };
 
 static int
@@ -256,6 +257,36 @@ recvproc(void *arg)
 	}
 }
 
+/*
+ * The transmitter can stop with frames still given to it, and stay
+ * stopped: TSR says "used bit read" and not "going", a descriptor we
+ * handed over is never handed back, and nothing is logged. On a Pi 5
+ * under a soak's load it happened 15 minutes in, after a 24-hour soak
+ * on the same driver had not seen it; every frame after it waited for
+ * ever, and with them every connection on 192.168.1.x, Wi-Fi's too,
+ * whose replies leave by this interface. Linux's macb has the same
+ * stall on RP1 (raspberrypi/linux #7339), cause unknown there too, and
+ * what is known to recover it is to write TSTART again.
+ *
+ * So: if the descriptor d is still the MAC's and the transmitter is not
+ * going, kick it. It cannot go wrong on a healthy MAC: TSTART while
+ * idle with nothing given to it does nothing, and a MAC that is going
+ * is left alone. Each kick is counted in ifstats, and the first said
+ * on the console, so a soak shows whether it happens.
+ */
+static void
+txkick(Ctlr *ctlr, volatile Desc *d)
+{
+	coherence();
+	if((d->ctrl & Txused) != 0 || (GEM(Tsr) & Tgo) != 0)
+		return;
+	if(ctlr->nkick++ == 0)
+		print("#l0: rp1: transmitter stopped with frames to send (tsr %#ux); restarted, and counted in ifstats\n",
+			GEM(Tsr));
+	GEM(Ncr) |= Tstart;
+	(void)GEM(Ncr);		/* a read: the write is posted, over PCIe */
+}
+
 static void
 sendproc(void *arg)
 {
@@ -271,8 +302,11 @@ sendproc(void *arg)
 	while(waserror())
 		;
 	for(;;){
-		if((b = qbread(edev->oq, 100000)) == nil)
+		if((b = qbread(edev->oq, 1000)) == nil){
+			/* nothing new for a second: the last frame we gave may be stranded */
+			txkick(ctlr, &ctlr->tx[(ctlr->txhead + Ntx - 1) % Ntx]);
 			continue;
+		}
 		n = BLEN(b);
 		if(n <= 0 || n > Bsz){
 			freeb(b);
@@ -282,6 +316,7 @@ sendproc(void *arg)
 		while((d->ctrl & Txused) == 0){		/* the ring is full */
 			coherence();
 			tsleep(&ctlr->tr, txready, (void*)d, 100);
+			txkick(ctlr, d);
 		}
 		memmove(ctlr->tbuf + ctlr->txhead*Bsz, b->rp, n);
 		freeb(b);
@@ -292,6 +327,7 @@ sendproc(void *arg)
 		d->ctrl = ctl;		/* clears Txused: it is the MAC's */
 		coherence();
 		GEM(Ncr) |= Tstart;
+		(void)GEM(Ncr);		/* flush the posted write */
 		ctlr->txhead = (ctlr->txhead + 1) % Ntx;
 		ctlr->ntx++;
 		edev->nif.outpackets++;
@@ -543,9 +579,11 @@ ifstat(Ether *edev, void *a, long n, ulong off)
 	if(p == nil)
 		error(Enomem);
 	snprint(p, READSTR, "rp1 gem mid %#ux\nintr %lud rx %lud rxbad %lud tx %lud mdiotimeout %lud rxtail %d txhead %d\n"
+		"txkick %lud tbqp %d\n"
 		"tsr %#ux rsr %#ux isr %#ux ncfgr %#ux dmacfg %#ux\n"
 		"mac txframes %ud txunder %ud rxframes %ud rxfcs %ud rxalign %ud rxover %ud rxres %ud\n",
 		GEM(Mid), ctlr->nintr, ctlr->nrx, ctlr->nrxbad, ctlr->ntx, ctlr->nmdiotimeout, ctlr->rxtail, ctlr->txhead,
+		ctlr->nkick, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)),
 		GEM(Tsr), GEM(0x20), GEM(0x24), GEM(Ncfgr), GEM(Dmacfg),
 		GEM(0x108), GEM(0x134), GEM(0x158), GEM(0x190), GEM(0x194), GEM(0x1A4), GEM(0x1A0));
 	n = readstr(off, a, n, p);

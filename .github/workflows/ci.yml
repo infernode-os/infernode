@@ -740,7 +740,7 @@ jobs:
               pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test ecc_test tls_matrix_test
+              tools9p_integration_test ecc_test mpexp_test tls_matrix_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audioring_test awk_builtins_test calendar9p_test

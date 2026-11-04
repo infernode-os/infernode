@@ -229,9 +229,12 @@ testTLS13(t: ref T)
 
 	t.assert(hasprefix(response, "HTTP/"), "response starts with HTTP/");
 
+	# Any status read back is the record layer working both ways, which
+	# is what this tests.  Which status is Cloudflare's policy: since
+	# 2026-11-04 it answers CI runners' addresses 403.
 	status := getstatus(response);
 	t.log(sys->sprint("HTTP status: %d", status));
-	t.assert(status >= 200 && status < 400, "HTTP status 2xx/3xx");
+	t.assert(status >= 100 && status < 600, "an HTTP status read back");
 }
 
 # ============================================================

@@ -212,13 +212,18 @@ done
 # every UI widget loads via Font.open("/fonts/combined/…") — without
 # this, libdraw falls back to *default* and every font bind in
 # boot-mobile.sh is a no-op (this is exactly what bit INFR-115).
+# icons/ holds icon(2)'s glyphs (/icons/ui) and Tk's cursors, man/ is
+# for wm/man, as build-ios-app.sh stages them: without icons/ no glyph
+# was drawn (the keyboard on the screen's hide icon among them).
 # Other top-level dirs (appl/, tests/, src, etc.) are not needed at
 # runtime and stay out of the APK to keep it small.
-rm -rf "$ASSETS/dis" "$ASSETS/lib" "$ASSETS/module" "$ASSETS/fonts"
+rm -rf "$ASSETS/dis" "$ASSETS/lib" "$ASSETS/module" "$ASSETS/fonts" "$ASSETS/icons" "$ASSETS/man"
 cp -a "$ROOT/dis"    "$ASSETS/dis"
 [ -d "$ROOT/lib" ]    && cp -a "$ROOT/lib"    "$ASSETS/lib"    || true
 [ -d "$ROOT/module" ] && cp -a "$ROOT/module" "$ASSETS/module" || true
 [ -d "$ROOT/fonts" ]  && cp -a "$ROOT/fonts"  "$ASSETS/fonts"  || true
+[ -d "$ROOT/icons" ]  && cp -a "$ROOT/icons"  "$ASSETS/icons"  || true
+[ -d "$ROOT/man" ]    && cp -a "$ROOT/man"    "$ASSETS/man"    || true
 
 # Inferno expects /n to exist as the standard mount point root
 # (sh/profile mounts mntgen there). The asset-tree extractor only

@@ -99,20 +99,19 @@ kstrcpy(char *s, char *t, int ns)
 	if(s == nil || t == nil || ns <= 0)
 		return;
 	nt = strlen(t);
-	if(nt+1 <= ns){
-		memmove(s, t, nt+1);
+	if(nt < ns){
+		memmove(s, t, nt);
+		s[nt] = 0;
 		return;
 	}
-	/* too long */
-	if(ns < 4){
-		/* but very short! */
-		strncpy(s, t, ns);
+	/* too long: truncate, always leaving a terminator */
+	nt = ns-1;
+	memmove(s, t, nt);
+	s[nt] = 0;
+	if(ns < 4)
 		return;
-	}
 	/* truncate with ... at character boundary (very rare case) */
-	memmove(s, t, ns-4);
 	ns -= 4;
-	s[ns] = '\0';
 	/* look for first byte of UTF-8 sequence by skipping continuation bytes */
 	while(ns>0 && (s[--ns]&0xC0)==0x80)
 		;

@@ -210,6 +210,7 @@ TARG=\
 	vacput.dis\
 	ventisrv.dis\
 	vid9p.dis\
+	camsrv.dis\
 	wav2iaf.dis\
 	vm.dis\
 	wc.dis\

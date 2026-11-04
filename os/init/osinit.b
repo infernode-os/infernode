@@ -207,12 +207,13 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
-	# And the camera, /dev/camera (os/port/devcam.c), likewise after
-	# /dev. Nothing runs until something writes "stream on" to its
-	# ctl, so it costs nothing to have bound.
+	# And the camera receiver and its I2C, where the board has them
+	# (the Pi 4), likewise after /dev: nothing runs until a program
+	# powers it, so they cost nothing to have bound.
 	#
-	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
-		sys->print("init: cannot bind #V on /dev: %r\n");
+	for(devs := "#V" :: "#J" :: nil; devs != nil; devs = tl devs)
+		if(sys->stat(hd devs).t0 >= 0 && sys->bind(hd devs, "/dev", Sys->MAFTER) < 0)
+			sys->print("init: cannot bind %s on /dev: %r\n", hd devs);
 
 	#
 	# And where USB serial ports appear: usbserial makes eiaU0 and its

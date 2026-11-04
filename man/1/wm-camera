@@ -1,0 +1,30 @@
+.TH WM-CAMERA 1
+.SH NAME
+camera \- show the camera, live
+.SH SYNOPSIS
+.B wm/camera
+.SH DESCRIPTION
+.I Camera
+shows the feed at
+.B /mnt/video/0
+in a window, mounting
+.IR camsrv (4)
+there if nothing is. Holding the feed open keeps the camera on; when
+the window goes and nothing else is reading, it goes off.
+.PP
+The keys
+.B +
+and
+.B -
+move the lens's focus,
+.B a
+runs autofocus once, and
+.B q
+exits.
+.SH SOURCE
+.B /appl/wm/camera.b
+.SH SEE ALSO
+.IR camsrv (4)
+.SH BUGS
+Resizing the window does not scale the picture, which stays in the
+middle of it. A hidden window keeps the camera on.

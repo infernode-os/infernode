@@ -9,6 +9,7 @@ TARG=\
 	date.dis\
 	bounce.dis\
 	logon.dis\
+	camera.dis\
 	clock.dis\
 	colors.dis\
 	ftree.dis\

@@ -1,0 +1,105 @@
+.TH CAMSRV 4
+.SH NAME
+camsrv \- a camera as a live video feed
+.SH SYNOPSIS
+.B mount {camsrv} /mnt/video
+.br
+.B mount {camsrv -t} /mnt/video
+.SH DESCRIPTION
+.I Camsrv
+serves a Raspberry Pi Camera Module 3 in the schema of
+.IR vid9p ,
+so what shows a video feed shows a camera, here or across a mount:
+.BR wm/camera ,
+.BR vidplay9p ,
+and Matrix's
+.BR video-pane .
+With
+.B -t
+it serves a simulated sensor, on any machine: colour bars and a moving
+band, as raw samples, through the same code.
+.PP
+.I Camsrv
+is the only thing that knows the sensor. It drives it over
+.IR i2c (3),
+takes raw frames from
+.IR camera (3),
+and turns them into pictures with
+.BR $Bayer .
+The sensor is on only while something has
+.B frame
+or
+.B raw
+open, and the last close powers it down.
+.TP
+.B 0/fmt
+.RI `` w
+.I h
+.B i420
+.IR fps ''.
+.TP
+.B 0/frame
+I420, full range. Each open joins live: a read at a frame's start takes
+the newest frame this open has not had, waiting for one.
+.TP
+.B 0/raw
+A frame as the sensor gave it, 16 bits a sample, little-endian, at the
+size and mosaic in
+.BR status .
+.TP
+.B 0/status
+One line of
+.IB key = value\f1,
+with no
+.BR pos= :
+this is what marks a feed live to its readers.
+.BR autofocus=
+says how the last run went.
+.TP
+.B 0/ctl
+Writes, one at a time; reading gives the settings.
+.RS
+.PD 0
+.TP
+.BI mode " w h
+Picture size: 576 324 or 1152 648. Not while streaming.
+.TP
+.BI fps " n
+1 to 56. Not while streaming.
+.TP
+.BI exposure " lines
+0, the default, is automatic.
+.TP
+.BI gain " code
+Analogue gain, 0 to 960, of 1024\-1024/\fIgain\fR.
+.TP
+.BI focus " n
+The lens, 0 to 1023. Taken at any time, and applied when the sensor
+starts.
+.TP
+.B focus auto
+Contrast autofocus, once: a few seconds, needing a still picture with
+detail in it. A picture that moves leaves the lens where it was.
+.TP
+.BI flip " n
+1 mirrors, 2 turns upside down. 3, the default, is right way up as the
+module usually sits. Not while streaming.
+.PD
+.RE
+.SH EXAMPLES
+A video with known answers to point the camera at during a soak:
+exposure steps, white balance, a focus chart, motion:
+.IP
+.B tools/camera-test-pattern.py loop.mp4
+.SH SOURCE
+.B /appl/cmd/camsrv.b
+.br
+.B /libinterp/bayer.c
+.SH SEE ALSO
+.IR camera (3),
+.IR i2c (3),
+.IR wm-camera (1)
+.SH BUGS
+There is no ISP. White balance assumes the picture averages to grey, so
+a screenful of one colour comes out washed out, and there is no lens
+shading correction, so the corners are dark.

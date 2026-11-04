@@ -630,7 +630,7 @@ Kernel devices (`#x`) and where they appear. "Pi" and "virt" say which
 kernel includes them (`os/<board>/devtab.c`).
 
 The ones that exist only in the native kernel have manual pages:
-`sd(3)`, `boot(3)`, `ether(3)`, `gpio(3)`, `bench(3)`, `touch(3)`, `camera(3)`; with
+`sd(3)`, `boot(3)`, `ether(3)`, `gpio(3)`, `bench(3)`, `touch(3)`, `camera(3)`, `i2c(3)`; with
 `eia(3)`, `audio(3)`, `cons(3)`, `pointer(3)` and `draw(3)` for the rest.
 `osinit(8)` is the boot sequence and the card's control files as a
 reference page, and `mkcard(10.1)` the image tools. (`man 3 gpio` inside
@@ -653,22 +653,22 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#G` | `/dev/gpio/N/` | `ctl` (`function in\|out\|alt0-5`, `pull up\|down\|none`, `edge rising\|falling\|both\|none`), `level`, `event` (blocks for an edge; `<µs> <level>`) | Pi |
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
-| `#V` | `/dev/camera/` | `ctl` (`source`, `mode W H`, `fps N`, `stream on\|off`; read for the state), `modes`, `frame` (one frame an open, an uncompressed `image(6)`), `raw` (the same, Bayer samples). Only the simulated sensor so far: a test pattern, as a Camera Module 3 would deliver it | both |
+| `#V` | `/dev/unicam/` | `ctl` (`format W H`, `power on\|off`, `stream on\|off`; read for the state), `frame` (one raw frame an open): the camera receiver and nothing beyond it | Pi 4 |
+| `#J` | `/dev` | `i2c0ctl`, `i2c0data`: the bus on the ribbon connectors | Pi 4 |
 | `#X` | `/dev/vm` | `ctl`, and `N/run`, `N/status` for each Dis VM: `vm(3)` | both |
 | `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
 
-**The camera** (`os/port/devcam.c`, infernode-os/infernode#1005) has one
-source so far, `test`: a simulated sensor (`os/port/campattern.c`) that
-makes raw 10-bit RGGB frames in the IMX708's binned modes — colour bars
-and a grey band that moves down four rows a frame — which the device
-debayers like any other. No emulator models a Pi camera, so this is what
-the device and everything above it are tested against until the Camera
-Module 3's driver adds a `csi0` source beside it:
+**The camera** on a Pi 4 follows the rule that device protocols live
+outside the kernel. `#V` receives raw frames and `#J` is its I2C; all
+that is known about the Camera Module 3 is in `camsrv(4)`, a Limbo
+program that serves the camera as a live video feed in `vid9p`'s schema,
+with `$Bayer`, built-in C, for the pixel loop Limbo cannot keep up with:
 
-    echo mode 640 480 > /dev/camera/ctl
-    echo stream on > /dev/camera/ctl
-    cat /dev/camera/frame > /tmp/shot.bit
-    echo stream off > /dev/camera/ctl
+    mount {camsrv} /mnt/video
+    wm/camera
+
+The sensor runs only while something reads the feed. `camsrv -t` is the
+same program over a simulated sensor, which needs no hardware.
 
 **`/dev/sdctl`** has one verb, `part <name> <startblock> <nblocks>`, which
 names a range of the device so that it appears as `/dev/<name>`; reading

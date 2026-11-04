@@ -3268,8 +3268,21 @@ BMOD: con	1<<0;
 BIMM: con	1<<1;
 BSTALE: con	1<<2;
 
-HIOB: con 31;	# a prime 
-NIOBUF: con 20;
+#
+# The sector cache: NIOBUF tracks of sect2trk sectors, found through
+# HIOB hash buckets. It was 20 tracks of 9 -- 90 KB, a floppy's worth,
+# from when that was what this served. A native board's whole /dis and
+# /lib come off a FAT card through here, so every program started
+# looks itself up in /dis (some 250 names, long-name slots and all)
+# and the FAT under it, and 90 KB does not hold that: on a Pi 5 with
+# fifteen busy loops, every lookup went back to the card, and reading
+# /lib/certs's 122 roots took 54 s, long enough for a TLS server to
+# give up on a handshake waiting for them. With 256 tracks (1.1 MB) it
+# took 1.6-2.8 s on the same load, and 0.15 s against three loops that
+# start programs where 90 KB took 5.9 s.
+#
+HIOB: con 127;	# a prime
+NIOBUF: con 256;
 
 Sectorsize: con 512;
 Sect2trk: con 9;	# default

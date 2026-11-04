@@ -266,6 +266,10 @@ status(Uart *uart, void *buf, long n, long offset)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	snprint(p, READSTR,
 		"b%d c%d d%d e%d l%d m%d p%c r%d s%d\n"
 		"dev(%d) type(%d) framing(%d) overruns(%d) "
@@ -276,6 +280,7 @@ status(Uart *uart, void *buf, long n, long offset)
 		uart->berr, uart->serr, uart->freq);
 	n = readstr(offset, buf, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

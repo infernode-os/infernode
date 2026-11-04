@@ -562,12 +562,12 @@ kunmount(char *old, char *new)
 	cmount.c = namec(new, Amount, 0, 0);
 	if(old != nil && old[0] != '\0') {
 		/*
-		 * This has to be namec(..., Aopen, ...) because
-		 * if arg[0] is something like /srv/cs or /fd/0,
-		 * opening it is the only way to get at the real
-		 * Chan underneath.
+		 * Aunmount opens non-directories such as /srv/cs and /fd/0 to
+		 * reach the underlying Chan, but preserves a directory's walked
+		 * Qid.  A remote server may change a directory Qid on open; the
+		 * bind recorded the walked Qid and unmount must compare that one.
 		 */
-		cmounted.c = namec(old, Aopen, OREAD, 0);
+		cmounted.c = namec(old, Aunmount, OREAD, 0);
 	}
 
 	cunmount(cmount.c, cmounted.c);

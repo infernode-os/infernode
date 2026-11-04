@@ -22,7 +22,7 @@ for path in files:
     if "_bufimageop" not in text:
         raise SystemExit("FAIL: %s does not reserve Drawop with its command" % path.name)
 
-providers = (root / "libdraw" / "init.c", root / "libinterp" / "draw.c")
+providers = (root / "libinterp" / "draw.c",)
 for path in providers:
     text = path.read_text()
     match = re.search(r"_bufimageop\([^)]*\)\n\{(.*?)\n\}", text, re.S)

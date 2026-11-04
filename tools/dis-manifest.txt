@@ -776,6 +776,7 @@ dis/tests/js-spike/valrep.dis
 dis/tests/js_engine_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis
+dis/tests/ipint_expmod_test.dis
 dis/tests/keyring_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/killblocked_test.dis

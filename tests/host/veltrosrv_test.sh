@@ -111,7 +111,7 @@ grep 'namespace changed' /mnt/veltro/\$id/log
 
 echo '@@ cancel'
 echo maxsteps 100 > /mnt/veltro/\$id/ctl
-echo 'SCENARIO:step_cap go' > /mnt/veltro/\$id/input
+echo 'SCENARIO:slow_loop go' > /mnt/veltro/\$id/input
 sleep 1
 echo cancel > /mnt/veltro/\$id/ctl
 cat /mnt/veltro/\$id/text > /dev/null

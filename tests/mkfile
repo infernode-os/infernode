@@ -249,6 +249,7 @@ TARG=\
 	gpu_smoke.dis\
 	llmclient_sse_fallback_test.dis\
 	llmclient_proxy_test.dis\
+	llmclient_pool_test.dis\
 	tlsclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\

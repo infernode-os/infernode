@@ -1,11 +1,18 @@
 #include "limbo.h"
 
+/*
+ * The exponent is held in a vlong: -n of the most negative int is itself
+ * as an int, and n >>= 1 of a negative n never reaches 0, so 3 ** (-2147483647-1)
+ * hung the compiler. A negative power of 0 is 0, as the VM's iexpw has it
+ * (1/r of 0 divided by zero here).
+ */
 static vlong
-ipow(vlong x, int n)
+ipow(vlong x, int en)
 {
 	int inv;
-	vlong r;
+	vlong n, r;
 
+	n = en;
 	inv = 0;
 	if(n < 0){
 		n = -n;
@@ -20,16 +27,18 @@ ipow(vlong x, int n)
 		x *= x;
 	}
 	if(inv)
-		r = 1/r;
+		r = r == 0 ? 0 : 1/r;
 	return r;
 }
 
 double
-rpow(double x, int n)
+rpow(double x, int en)
 {
 	int inv;
+	vlong n;
 	double r;
 
+	n = en;		/* as ipow: -n of the most negative int */
 	inv = 0;
 	if(n < 0){
 		n = -n;
@@ -805,8 +814,16 @@ foldvc(Node *n)
 		}
 		break;
 	case Oexp:
-		if(right->val == 0){
+		/*
+		 * x ** 0 is a 1 of x's type: the exponent is always an int,
+		 * so returning it made big ** 0 an int, and the big operation
+		 * using it took an immediate source operand, which compiled
+		 * code read as an address. Nor is a call in x dropped.
+		 */
+		if(right->val == 0 && !hasside(left, 1)
+		&& (left->ty == tint || left->ty == tbyte || left->ty == tbig)){
 			right->val = 1;
+			right->ty = left->ty;
 			return right;
 		}
 		if(right->val == 1)
@@ -865,14 +882,25 @@ foldc(Node *n)
 			nerror(n, "divide by 0 in constant expression");
 			return n;
 		}
-		v = left->val / right->val;
+		/*
+		 * Over -1, as the VM has it: the most negative big over -1
+		 * wraps to itself, remainder 0 (x86's idiv traps on it, and
+		 * the compiler died of a SIGFPE folding it).
+		 */
+		if(right->val == -1)
+			v = -(uvlong)left->val;
+		else
+			v = left->val / right->val;
 		break;
 	case Omod:
 		if(right->val == 0){
 			nerror(n, "mod by 0 in constant expression");
 			return n;
 		}
-		v = left->val % right->val;
+		if(right->val == -1)
+			v = 0;
+		else
+			v = left->val % right->val;
 		break;
 	case Oexp:
 		if(left->val == 0 && right->val < 0){

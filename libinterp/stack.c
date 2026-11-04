@@ -6,6 +6,14 @@
 
 #define T(r)	*((void**)(R.r))
 
+/*
+ * The new Prog's stack, its first frame copied from the spawner's. The
+ * Prog is already made and queued to run (newprog): refused the memory
+ * for it, it is killed before the error is raised. Left as it was, it
+ * ran with no stack, R.FP nil, and faulted in compiled code (a main pool
+ * set too small, tools/sysfuzz -P; the native chaos build's mframe
+ * faults) or was unwound through frames never initialised.
+ */
 void
 newstack(Prog *p)
 {
@@ -29,8 +37,10 @@ newstack(Prog *p)
 	if(l < OA(Stkext, reg.tos.fu)+t->size)
 		l = OA(Stkext, reg.tos.fu)+t->size;
 	ns = mallocz(l, 0);
-	if(ns == nil)
+	if(ns == nil){
+		killprog(p, exNomem);
 		error(exNomem);
+	}
 
 	ns->reg.TR = t;
 	ns->reg.SP = nil;

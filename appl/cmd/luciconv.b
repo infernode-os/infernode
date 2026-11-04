@@ -1421,6 +1421,15 @@ writetosnarf(text: string)
 # so the keyboard surfaces only while the chat input is focused.
 reqkbd(on: int)
 {
+	# through softkbd(2): to InferNode's own keyboard, when it runs
+	if(softkbd != nil){
+		if(on){
+			softkbd->mode(1);	# a chat's words are prose
+			softkbd->show(Softkbd->SLIDE);
+		}else
+			softkbd->show(Softkbd->HIDE);
+		return;
+	}
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;

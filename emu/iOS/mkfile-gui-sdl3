@@ -7,7 +7,7 @@
 # override on the mk command line for the device slice. The framework
 # set is exactly what $SDL3_PREFIX/lib/pkgconfig/sdl3.pc lists for iOS.
 
-GUISRC=draw-sdl3.$O
+GUISRC=draw-sdl3.$O nokeyboard.$O
 
 SDL3_PREFIX=`{echo $HOME/sdks/SDL3-ios-sim-arm64}
 

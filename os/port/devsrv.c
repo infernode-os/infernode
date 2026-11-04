@@ -496,7 +496,9 @@ static void
 freerdchan(Heap *h, int swept)
 {
 	SrvFile *sf;
+	Dsave ds;
 
+	destroysave(&ds);	/* release() inside a destroy: heap.c */
 	release();
 	qlock(&dev.l);
 	sf = H2D(Channel*, h)->aux;
@@ -504,6 +506,7 @@ freerdchan(Heap *h, int swept)
 	srvfree(sf, SRDCLOSE);
 	qunlock(&dev.l);
 	acquire();
+	destroyrestore(&ds);
 
 	freechan(h, swept);
 }
@@ -512,7 +515,9 @@ static void
 freewrchan(Heap *h, int swept)
 {
 	SrvFile *sf;
+	Dsave ds;
 
+	destroysave(&ds);	/* release() inside a destroy: heap.c */
 	release();
 	qlock(&dev.l);
 	sf = H2D(Channel*, h)->aux;
@@ -520,6 +525,7 @@ freewrchan(Heap *h, int swept)
 	srvfree(sf, SWRCLOSE);
 	qunlock(&dev.l);
 	acquire();
+	destroyrestore(&ds);
 
 	freechan(h, swept);
 }

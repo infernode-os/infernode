@@ -163,6 +163,24 @@ component in Xcode. The device build overwrites the simulator slice in
 `iOS/arm64/lib`; run a plain `./build-ios-arm64.sh` before going back
 to the simulator.
 
+**iPadOS.** The app is universal (`UIDeviceFamily` 1 and 2): the same
+build installs on an iPad, simulator or device, with no separate target.
+On iPad it offers all four orientations (`UISupportedInterfaceOrientations~ipad`),
+as Split View and Slide Over need. To run it on an iPad simulator, boot one
+(and only one: the script installs on `booted`) and build as above:
+
+```sh
+xcrun simctl shutdown all
+xcrun simctl boot 'iPad Pro 13-inch (M4)'   # any iPad in `xcrun simctl list devices`
+./build-ios-app.sh --gui
+```
+
+CI's iOS job does the same after the iPhone run: Lucifer must boot on the
+iPad simulator and `hello_test` must pass there, and the run keeps a
+screenshot and the simulator `.app` as the `ipados-simulator-build` artifact.
+For an iPad device, `IOSSDK=iphoneos ./build-ios-app.sh --gui` as in B3,
+with the iPad connected (or `IOS_DEVICE_UDID`) and registered in the profile.
+
 ## Phase C — on-device `/mnt/llm`. Not started.
 
 Same retarget Android Phase 1 plans: the 9P surface at `/mnt/llm` stays,

@@ -791,7 +791,8 @@ drawnewclient(void)
 		cp = malloc((sdraw.nclient+1)*sizeof(Client*));
 		if(cp == 0)
 			return 0;
-		memmove(cp, sdraw.client, sdraw.nclient*sizeof(Client*));
+		if(sdraw.nclient > 0)
+			memmove(cp, sdraw.client, sdraw.nclient*sizeof(Client*));
 		free(sdraw.client);
 		sdraw.client = cp;
 		sdraw.nclient++;

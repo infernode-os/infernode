@@ -30,6 +30,7 @@ TARG=\
 	dir.dis\
 	matrix.dis\
 	shell.dis\
+	osk.dis\
 	view.dis\
 	page.dis\
 	wm.dis\
@@ -101,6 +102,8 @@ SYSMODULES=\
 	selectfile.m\
 	sheetview.m\
 	softkbd.m\
+	kbdecode.m\
+	osklayout.m\
 	tabs.m\
 	twofa.m\
 	twofaslot.m\

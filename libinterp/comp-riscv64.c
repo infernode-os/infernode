@@ -425,6 +425,7 @@ rmcall(void)
 {
 	Frame *f;
 	Prog *p;
+	Inst *lr;
 
 	if((void*)R.dt == H)
 		error(exModule);
@@ -434,7 +435,21 @@ rmcall(void)
 		error(exModule);
 
 	f->mr = nil;
+	/*
+	 * R.PC before the caller's every handler, while the builtin runs:
+	 * an exception it raises (exBounds from utfbytes, out of memory,
+	 * an interrupted call) is then matched not with this frame, the
+	 * builtin's, but through its lr with the caller's pc and frame, as
+	 * the interpreter's mcall has it. R.PC was whatever was last
+	 * punted: inside the caller's handler block, the handler was taken
+	 * with this frame for the caller's, its locals' zeroing and the
+	 * exception written into the builtin's frame, and the caller went
+	 * on in it (destroy of nil; a nil R.FP in compiled code: tests
+	 * jit_builtinexc_test.b, tools/sysfuzz -P, the native chaos build).
+	 */
+	R.PC = (Inst*)R.M->prog;
 	((void(*)(Frame*))R.dt)(f);
+	lr = f->lr;
 	R.SP = (uchar*)f;
 	R.FP = f->fp;
 	if(f->t == nil)
@@ -442,8 +457,22 @@ rmcall(void)
 	else
 		freeptrs(f, f->t);
 	p = currun();
-	if(p->kill != nil)
+	if(p->kill != nil){
+		/*
+		 * A kill that came while the call blocked (exprog, killprog
+		 * of a released Prog) is raised here, in the caller's frame,
+		 * as OP(mcall) raises it. Compiled code keeps the pc in a
+		 * register, and R.PC was whatever it last was: the handler
+		 * matched that with this frame, took another function's
+		 * handler for it, and freed what that function's locals
+		 * would be, here C addresses and nils (destroy of nil:
+		 * sysfuzz, kill with exceptions propagate while a group's
+		 * Progs export and mount). The call's return address is the
+		 * caller's pc.
+		 */
+		R.PC = lr;
 		error(p->kill);
+	}
 }
 
 static void
@@ -1719,7 +1748,7 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		conaddr((uvlong)mod->type[i->s.imm], RA3);
-		blmac(MacFRAM);
+		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 		opwst(i, Stw, RA2);
 		break;
 
@@ -1864,7 +1893,7 @@ comp(Inst *i)
 /*
  * preamble -- comvec entry/exit trampoline (allocated once).
  */
-static void
+static int
 preamble(void)
 {
 	ulong sz;
@@ -1872,19 +1901,19 @@ preamble(void)
 	long hi, lo;
 
 	if(comvec)
-		return;
+		return 1;
 
 	sz = 64 * sizeof(u32int);
 #ifdef INFERNO_NATIVE
 	comvec = malloc(sz);
 	if(comvec == nil)
-		error(exNomem);
+		return 0;
 #else
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
-		error(exNomem);
+		return 0;
 	}
 #endif
 
@@ -1945,6 +1974,7 @@ preamble(void)
 		for(k = 0; k < code - start; k++)
 			print("  %.8p  %.8ux\n", &start[k], start[k]);
 	}
+	return 1;
 }
 
 /*
@@ -2216,6 +2246,7 @@ macfram(void)
 	mem(Stw, O(REG, s), RREG, RA3);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, st), RREG, RLINK);
+	mem(Stw, O(REG, PC), RREG, RLINK);	/* R.PC for extend's "out of memory", here only (comp-arm64.c macfram) */
 	conaddr((uvlong)extend, RTA);
 	CALLR(RTA);
 	mem(Ldw, O(REG, st), RREG, RLINK);
@@ -2341,6 +2372,9 @@ comd(Type *t)
 
 #define Typejithdr	16	/* the mapping's length, in front of a type's code */
 
+/* a type whose code typecom could not make for want of memory: compile fails, the module interpreted */
+static int typecomfailed;
+
 void
 typecom(Type *t)
 {
@@ -2352,12 +2386,12 @@ typecom(Type *t)
 		return;
 
 	if(t->np < 0 || (uvlong)t->np * 8 * TYPECOM_PERPTR > 16*1024*1024)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 	need = TYPECOM_FIXED + (ulong)t->np * 8 * TYPECOM_PERPTR;
 
 	tmp = mallocz((need + TYPECOM_SLACK) * sizeof(u32int), 0);
 	if(tmp == nil)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 
 	/* type code is not module code: no sites, no pool */
 	saveinmod = inmod;
@@ -2594,7 +2628,8 @@ compile(Module *m, int size, Modlink *ml)
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
 
-	preamble();
+	if(!preamble())
+		goto bad;
 
 	mod = m;
 
@@ -2661,6 +2696,25 @@ compile(Module *m, int size, Modlink *ml)
 	codeoff = 0;
 	if(compass(m, size, tmp, tmpsize) != n)
 		urk("emitted size differs from pass 1");
+
+	/*
+	 * Every type's code first, before a link is changed: typecom
+	 * refused memory leaves the module interpreted and whole. It
+	 * raised "out of memory" from in here, and lockedcompile's lock
+	 * was never let go: every module load after it waited, each
+	 * holding its VM (the native chaos build; a VM stopped for good).
+	 */
+	typecomfailed = 0;
+	for(l = m->ext; l->name; l++)
+		typecom(l->frame);
+	if(ml != nil)
+		for(i = 0; i < ml->nlinks; i++)
+			typecom(ml->links[i].frame);
+	for(i = 0; i < m->ntype; i++)
+		if(tinit[i] != 0)
+			typecom(m->type[i]);
+	if(typecomfailed)
+		goto bad;
 
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc - m->prog == -1){

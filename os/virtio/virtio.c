@@ -279,8 +279,8 @@ virtioqueue(Vdev *d, int idx, int n)
 	q->avail = (Vqavail*)(mem + availoff);
 	q->used = (Vqused*)(mem + usedoff);
 	for(i = 0; i < n-1; i++)
-		q->desc[i].next = i+1;
-	q->desc[n-1].next = 0xFFFF;
+		q->desc[i].next = q->snext[i] = i+1;
+	q->desc[n-1].next = q->snext[n-1] = 0xFFFF;
 	q->free = 0;
 	q->nfree = n;
 	q->lastused = 0;
@@ -372,11 +372,14 @@ vqsubmit(Vq *q, Vbuf *b, int nbuf, void *cookie)
 		d->addr = PADDR(b[i].p);
 		d->len = b[i].len;
 		d->flags = (b[i].write ? Vdwrite : 0) | (i < nbuf-1 ? Vdnext : 0);
-		j = d->next;
+		d->next = q->snext[j];	/* ours: what the device left there is not read */
+		j = q->snext[j];
 	}
 	q->free = j;
 	q->nfree -= nbuf;
 	q->cookie[head] = cookie;
+	q->nchain[head] = nbuf;
+	q->busy[head] = 1;
 
 	/*
 	 * The ring entry, a barrier, THEN the index: the index is what
@@ -402,33 +405,64 @@ vqkick(Vq *q)
  * device wrote, and the cookie it was queued with. -1 when there is
  * nothing. The chain's descriptors go back on the free list.
  */
+/*
+ * What a device puts in the used ring, and in the descriptors it was
+ * lent, is believed only as far as the driver's own records agree: a
+ * head out of range, or one not the device's (never lent, or given back
+ * already), is refused and counted -- it panicked, or freed a chain
+ * twice, or gave the driver back nil for its cookie -- and a chain is
+ * freed by the driver's copy of its links and length, not by desc[]'s,
+ * which the device can rewrite (a link out of range, or round in a
+ * loop). A device that lies loses the descriptors it lied about; the
+ * kernel goes on.
+ */
 int
 vqcollect(Vq *q, u32int *lenp, void **cookiep)
 {
 	Vqusedelem *e;
-	int head, j;
+	int head, j, k;
 
 	ilock(&q->l);
-	if(q->lastused == q->used->idx){
-		iunlock(&q->l);
-		return -1;
+#ifdef CHAOS
+	{
+		ulong r;
+
+		/* a lying device: a used entry or a shared link rewritten */
+		if(q->lastused != q->used->idx && chaosdevice(&r)){
+			if(r & 1)
+				q->used->ring[q->lastused % q->n].id = (r >> 1) % (2*q->n);
+			else
+				q->desc[(r >> 1) % q->n].next = r >> 8;
+		}
 	}
-	e = &q->used->ring[q->lastused % q->n];
-	q->lastused++;
-	head = e->id;
-	if(head < 0 || head >= q->n)
-		panic("virtio: slot %d queue %d: used ring names descriptor %d",
-			q->dev->slot, q->idx, head);
+#endif
+	for(;;){
+		if(q->lastused == q->used->idx){
+			iunlock(&q->l);
+			return -1;
+		}
+		e = &q->used->ring[q->lastused % q->n];
+		q->lastused++;
+		head = e->id;
+		if(head >= 0 && head < q->n && q->busy[head])
+			break;
+		if(q->nbogus++ == 0)
+			iprint("virtio: slot %d queue %d: used ring names descriptor %d, not the device's; refused\n",
+				q->dev->slot, q->idx, head);
+	}
 	if(lenp != nil)
 		*lenp = e->len;
 	if(cookiep != nil)
 		*cookiep = q->cookie[head];
 	q->cookie[head] = nil;
+	q->busy[head] = 0;
 
-	/* walk to the end of the chain, then splice the whole of it back */
-	for(j = head; q->desc[j].flags & Vdnext; j = q->desc[j].next)
-		q->nfree++;
-	q->nfree++;
+	/* walk to the end of the chain by our links, then splice the whole of it back */
+	j = head;
+	for(k = 1; k < q->nchain[head]; k++)
+		j = q->snext[j];
+	q->nfree += q->nchain[head];
+	q->snext[j] = q->free;
 	q->desc[j].next = q->free;
 	q->desc[j].flags = 0;
 	q->free = head;

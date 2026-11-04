@@ -11,6 +11,21 @@ if {! ~ $user ''} {
 	ls /usr/inferno/secstore/$user >[2] /dev/null
 }
 
+# The keyboard on the screen for the password, on a screen with no
+# keyboard (a phone, the Pi's touch panel): it shows itself once the
+# screen is touched with none attached, and in secret mode shows
+# nothing of what is typed and learns none of it (osk(1)).  It goes
+# when the login is done; Lucifer starts its own.  $osk off: not.
+oskpid=()
+if {! ~ $osk off} {
+	if {! ~ $skiplogon 1} {
+		if {ftest -f /dis/wm/osk.dis} {
+			wm/osk -s -M secret &
+			oskpid=$apid
+		}
+	}
+}
+
 # Login screen (unlocks secstore, loads keys into factotum).
 #
 # Skippable via $skiplogon. Mobile dev iteration (hellaphone) sets
@@ -45,6 +60,7 @@ if {! ~ $skiplogon 1} {
 }{
 	echo 'boot: skiplogon=1 — wm/logon bypassed (dev mode; no factotum, no secstore)'
 }
+if {! ~ $#oskpid 0} {kill -g $oskpid >[2] /dev/null}
 
 # (Re-)start LLM service in the background: lib/lucifer/llmsrv.sh,
 # which a standalone Xenith runs too.  Backgrounded so the desktop

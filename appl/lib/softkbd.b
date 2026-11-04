@@ -19,6 +19,7 @@ include "softkbd.m";
 
 # Resolved at init(); tests override via the SOFTKBD_PATH env var.
 ctlpath := "/dev/consctl";
+OSKCTL: con "/mnt/osk/ctl";
 
 init(): string
 {
@@ -46,10 +47,37 @@ init(): string
 	return nil;
 }
 
+# the verb for wm/osk's ctl (osk(4)), or nil for one it has no use for
+oskverb(verb: string): string
+{
+	case verb {
+	"kbd on" or "kbd ontop" =>
+		return "show";
+	"kbd off" =>
+		return "hide";
+	}
+	if(len verb > 9 && verb[0:9] == "kbd rect ")
+		return "rect " + verb[9:];
+	if(len verb > 5 && verb[0:5] == "mode ")
+		return verb;
+	return nil;
+}
+
 write_verb(verb: string)
 {
 	if(sys == nil)
 		return;
+	# InferNode's own keyboard, when it is running, rather than the
+	# system's (a test's SOFTKBD_PATH is its own business)
+	if(ctlpath == "/dev/consctl" && (ofd := sys->open(OSKCTL, Sys->OWRITE)) != nil){
+		if((v := oskverb(verb)) != nil){
+			b := array of byte v;
+			sys->write(ofd, b, len b);
+		}
+		return;
+	}
+	if(len verb > 5 && verb[0:5] == "mode ")
+		return;		# the system's keyboard takes no hint
 	fd := sys->open(ctlpath, Sys->OWRITE);
 	if(fd == nil)
 		return;
@@ -89,4 +117,12 @@ set_rect(x, y, w, h: int)
 clear_rect()
 {
 	write_verb("kbd rect 0 0 0 0");
+}
+
+mode(prose: int)
+{
+	if(prose)
+		write_verb("mode text");
+	else
+		write_verb("mode plain");
 }

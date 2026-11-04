@@ -2594,6 +2594,14 @@ if(debug['z']) print("inline1: %n\n", n);
 	}
 	if(d != nil || n != nil)
 		fatal("bad arg match in putinline()");
+	/*
+	 * A function returning nil inlines as nil, whose type is any
+	 * (polymorphic): given no other, len, tl and indexing of it were
+	 * fatal ("can't len", "can't deal with op 3 ... in genmove") or
+	 * a fault. It has the type the function returns.
+	 */
+	if(e->ty == tany && t->tof != nil && t->tof != tany)
+		e->ty = t->tof;
 if(debug['z']) print("inline2: %n\n", e);
 	return e;
 }

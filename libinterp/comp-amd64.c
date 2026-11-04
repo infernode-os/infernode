@@ -407,6 +407,7 @@ rmcall(void)
 	Prog *p;
 	Frame *f;
 	Modlink *ml;
+	Inst *lr;
 
 	if((void*)R.dt == H)
 		error(exModule);
@@ -419,6 +420,7 @@ rmcall(void)
 	((void(*)(Frame*))R.dt)(f);
 	R.M = f->mr;
 	D2H(ml)->ref--;
+	lr = f->lr;
 	R.SP = (uchar*)f;
 	R.FP = f->fp;
 	if(f->t == nil)
@@ -426,8 +428,22 @@ rmcall(void)
 	else
 		freeptrs(f, f->t);
 	p = currun();
-	if(p->kill != nil)
+	if(p->kill != nil){
+		/*
+		 * A kill that came while the call blocked (exprog, killprog
+		 * of a released Prog) is raised here, in the caller's frame,
+		 * as OP(mcall) raises it. Compiled code keeps the pc in a
+		 * register, and R.PC was whatever it last was: the handler
+		 * matched that with this frame, took another function's
+		 * handler for it, and freed what that function's locals
+		 * would be, here C addresses and nils (destroy of nil:
+		 * sysfuzz, kill with exceptions propagate while a group's
+		 * Progs export and mount). The call's return address is the
+		 * caller's pc.
+		 */
+		R.PC = lr;
 		error(p->kill);
+	}
 }
 
 static void
@@ -1471,13 +1487,49 @@ comcasel(Inst *i)
 /*
  * Module frame setup
  */
+/*
+ * R.PC for MacFRAM and MacMFRA, as punt writes it: the frame they make
+ * can need a new stack segment (extend), whose allocation refused raises
+ * "out of memory", and rmfram raises "module not loaded"; the exception
+ * is looked for at R.PC. Left stale, it was taken by the handler of
+ * wherever R.PC last pointed, another frame's, and the Prog ran on in a
+ * frame not its own (a main pool too small: tools/sysfuzz -P; the native
+ * chaos build's mframe faults). RCX is free on both paths: MacFRAM loads
+ * it before using it, MacMFRA does not touch it (RAX holds its type).
+ */
+static void
+framepc(Inst *i)
+{
+	con64((uvlong)base + patch[i-mod->prog+1], RCX);
+	modrm(Ostw, O(REG, PC), RLINK, RCX);
+}
+
 static void
 commframe(Inst *i)
 {
 	int o;
-	uchar *punt_label, *mlnil;
+	uchar *punt_label, *mlnil, *notnil;
+	vlong d;
 
 	opwld(i, Oldw, RAX);
+	cmpl64(RAX, (uvlong)H);
+	/*
+	 * A nil module goes to the interpreter's mframe, which raises
+	 * "module not loaded" at this instruction, where the handler
+	 * around the call finds it: MacMFRA's rmfram raised it with R.PC
+	 * not this instruction's, and the Prog died (as commcall).
+	 * The error does not return, so RAX is not needed after it.
+	 */
+	genb(0x0f);
+	genb(Ojnel);
+	genw(0);
+	notnil = code;
+	punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+	d = code - notnil;
+	notnil[-4] = d;
+	notnil[-3] = d >> 8;
+	notnil[-2] = d >> 16;
+	notnil[-1] = d >> 24;
 	cmpl64(RAX, (uvlong)H);
 	gen2(Ojeqb, 0);
 	mlnil = code - 1;
@@ -1508,10 +1560,12 @@ commframe(Inst *i)
 	modrr(Oxchg, RAX, RRTA);
 	opwst(i, Olea, RRTA);
 	*mlnil = code-mlnil-1;
+	framepc(i);
 	rbra(macro[MacMFRA], Ocall);
 	rbra(patch[i-mod->prog+1], Ojmp);
 
 	*punt_label = code-punt_label-1;
+	framepc(i);
 	rbra(macro[MacFRAM], Ocall);
 	opwst(i, Ostw, RCX);
 }
@@ -1522,7 +1576,30 @@ commframe(Inst *i)
 static void
 commcall(Inst *i)
 {
-	uchar *mlnil;
+	uchar *mlnil, *notnil;
+	vlong d;
+
+	/*
+	 * A nil module goes to the interpreter's mcall, which raises
+	 * "module not loaded" at this instruction in the caller's frame,
+	 * where the handler around the call finds it. Compiled code went
+	 * on into MacMCAL with RAX still the return address: for a builtin
+	 * module that read Modlink.prog through H ("dereference of nil"),
+	 * otherwise rmcall raised it from the new frame; neither reached a
+	 * handler in the calling function, and the Prog died.
+	 */
+	opwst(i, Oldw, RRTA);
+	cmpl64(RRTA, (uvlong)H);
+	genb(0x0f);
+	genb(Ojnel);
+	genw(0);
+	notnil = code;
+	punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC, optab[i->op]);
+	d = code - notnil;
+	notnil[-4] = d;
+	notnil[-3] = d >> 8;
+	notnil[-2] = d >> 16;
+	notnil[-1] = d >> 24;
 
 	/* Load new frame pointer from source operand into RCX */
 	opwld(i, Oldw, RCX);
@@ -1820,6 +1897,7 @@ comp(Inst *i)
 			break;
 		}
 		tinit[i->s.imm] = 1;
+		framepc(i);
 		con64((uvlong)mod->type[i->s.imm], RRTA);
 		rbra(macro[MacFRAM], Ocall);
 		opwst(i, Ostw, RCX);
@@ -2181,8 +2259,26 @@ comp(Inst *i)
 		if(i->op == IMULB) {
 			modrr32(0xf6, RRTMP, 4);
 		} else {
-			genb(Ocdq);
-			modrr32(0xf6, RRTMP, 7);
+			/*
+			 * Bytes are unsigned, as OP(divb) and OP(modb) have them:
+			 * both zero-extended to 32 bits, then an unsigned divide,
+			 * the quotient in EAX and the remainder in EDX. It was
+			 * cdq and the 8-bit idiv: that divides AX, whose AH is
+			 * whatever RAX held before (an earlier value's bits made
+			 * 0 % 1 overflow the quotient, raised as a zero divide),
+			 * signed (255/200 was -4), and modb then took EDX, the
+			 * sign of EAX, for the remainder, which is in AH.
+			 * A zero divisor faults in div and is raised as a zero
+			 * divide (jitfaultfp), as the interpreter raises it.
+			 */
+			genb(0x0f);				/* movzx eax, al */
+			modrr32(Omovzxb, RAX, RAX);
+			genb(REX|REXR|REXB);			/* movzx r15d, r15b */
+			genb(0x0f);
+			genb(Omovzxb);
+			genb((3<<6)|((RRTMP&7)<<3)|(RRTMP&7));
+			modrr32(0x33, RDX, RDX);		/* xor edx, edx */
+			modrr32(0xf7, RRTMP, 6);		/* div r15d */
 			if(i->op == IMODB)
 				modrr32(Oxchg, RAX, RDX);
 		}
@@ -2287,6 +2383,13 @@ comp(Inst *i)
 		}
 		gen2(Oldw, (1<<6)|(0<<3)|4);			/* MOV EAX, dword [RAX+RDI*4+data]: a Rune is 32 bits; zero-extends */
 		gen2((2<<6)|(RDI<<3)|RAX, O(String, data));
+		/*
+		 * MOVSXD RAX, EAX: a rune is a signed int, and an int is kept
+		 * sign-extended in its word, as OP(indc)'s W(d) = Srune[i]
+		 * has it. Zero-extended, a negative rune (-77) printed as
+		 * itself but compared unequal to -77 (disfuzz).
+		 */
+		modrr(Omovsxd, RAX, RAX);
 		*done = code - (done + 1);
 		opwst(i, Ostw, RAX);
 		break;
@@ -2364,16 +2467,16 @@ comp(Inst *i)
 /*
  * JIT entry preamble
  */
-static void
+static int
 preamble(void)
 {
 	if(comvec)
-		return;
+		return 1;
 
 	comvec = jitmalloc(128);
 	if(comvec == NULL) {
 		comvec = nil;
-		return;
+		return 0;
 	}
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
@@ -2418,6 +2521,7 @@ preamble(void)
 			print(" %02x", ((uchar*)comvec)[j]);
 		print("\n");
 	}
+	return 1;
 }
 
 /*
@@ -3044,6 +3148,9 @@ freetypejit(Type *t)
 	t->destroy = nil;
 }
 
+/* a type whose code typecom could not make for want of memory: compile fails, the module interpreted */
+static int typecomfailed;
+
 void
 typecom(Type *t)
 {
@@ -3062,7 +3169,7 @@ typecom(Type *t)
 	 */
 	need = typecom_bound(t);
 	if(need == 0)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 	if(need > typecom_tmp_size) {
 		if(typecom_tmp != nil) {
 #ifdef __APPLE__
@@ -3076,11 +3183,11 @@ typecom(Type *t)
 #ifdef __APPLE__
 		typecom_tmp = mallocz(need + TYPECOM_SLACK, 0);
 		if(typecom_tmp == nil)
-			error(exNomem);
+			{ typecomfailed = 1; return; }
 #else
 		typecom_tmp = jitmalloc(need + TYPECOM_SLACK);
 		if(typecom_tmp == NULL)
-			error(exNomem);
+			{ typecomfailed = 1; return; }
 #endif
 		typecom_tmp_size = need + TYPECOM_SLACK;
 	}
@@ -3105,7 +3212,7 @@ typecom(Type *t)
 
 	base = typecom_alloc(n + Typejithdr, &size);
 	if(base == nil)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
@@ -3225,7 +3332,8 @@ compile(Module *m, int size, Modlink *ml)
 		goto bad;
 	}
 
-	preamble();
+	if(!preamble())
+		goto bad;
 	if(comvec == nil)
 		goto bad;
 
@@ -3334,6 +3442,25 @@ compile(Module *m, int size, Modlink *ml)
 	 * base + whatever that was. It is left as loaded, exactly as the
 	 * interpreter sees it; nothing ever jumps to it.
 	 */
+	/*
+	 * Every type's code first, before a link is changed: typecom
+	 * refused memory leaves the module interpreted and whole. It
+	 * raised "out of memory" from in here, and lockedcompile's lock
+	 * was never let go: every module load after it waited, each
+	 * holding its VM (the native chaos build; a VM stopped for good).
+	 */
+	typecomfailed = 0;
+	for(l = m->ext; l->name; l++)
+		typecom(l->frame);
+	if(ml != nil)
+		for(i = 0; i < ml->nlinks; i++)
+			typecom(ml->links[i].frame);
+	for(i = 0; i < m->ntype; i++)
+		if(tinit[i] != 0)
+			typecom(m->type[i]);
+	if(typecomfailed)
+		goto bad;
+
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc-m->prog != -1)
 			l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);

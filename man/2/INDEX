@@ -414,3 +414,6 @@ wmsrv wmsrv
 workdir workdir
 wpakey wpakey
 xml xml
+kbdecode kbdecode
+osklayout kbdecode
+softkbd softkbd

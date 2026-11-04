@@ -383,7 +383,6 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
  * Updates sdl_width/sdl_height to physical pixels for crisp HiDPI rendering.
  * Must be called after sdl_window is created and before texture creation.
  */
-static void update_text_input_area(void);
 
 /*
  * Desktop: the Inferno screen's size, in the window's pixels: the
@@ -561,218 +560,78 @@ init_hidpi(void)
 	screenmax(&sdl_width, &sdl_height);
 #endif
 	calc_dest_rect();
-	update_text_input_area();	/* window may have resized/rotated */
 	postwmsize();
 }
 
-/* Keep the top pinned (don't slide) for the focused input; set when the
- * GUI requests the keyboard for a workspace text app. See setsoftkbd.
- * Written from the devcons worker thread, read on the main thread. */
-static volatile int softkbd_keeptop = 0;
-
-/* Explicit focused-widget rect in INFERNO SCREEN PIXELS, set by the GUI
- * via /dev/consctl "kbd rect x y w h" (see setsoftkbd_rect). Pixels are
- * the only coordinate system Limbo has (see attachscreen); update_text_
- * input_area maps them to window points before handing them to SDL.
- * When w*h > 0 this overrides the hard-coded top/bottom rect in
- * update_text_input_area — SDL slides the view so the *actual* widget
- * stays above the keyboard, regardless of where the cursor is or
- * whether keeptop is set. Cleared with "kbd rect 0 0 0 0". Plain ints
- * read by the main thread, written from the devcons worker thread;
- * the one-frame race is harmless. */
-static volatile int softkbd_rect_x = 0;
-static volatile int softkbd_rect_y = 0;
-static volatile int softkbd_rect_w = 0;
-static volatile int softkbd_rect_h = 0;
-
 /*
- * iOS soft-keyboard avoidance via SDL_SetTextInputArea, which tells UIKit
- * where the caret is (window POINTS); SDL then slides the view up so that
- * rect stays above the keyboard. The rect is position-aware:
+ * The system's keyboard (iOS's, Android's) is never shown: InferNode
+ * types with a keyboard of its own (wm/osk), and the system's covered the
+ * screen, slid the view and fought the GUI for focus.  Three locks:
  *
- *   keeptop == 0 (chat input, at the very bottom): put the rect at the
- *     bottom so SDL slides the input up into view.
- *   keeptop == 1 (a workspace text app — editor/man/settings, which fill
- *     the upper area below the header): put the rect at the TOP. It's
- *     already above the keyboard, so SDL does NOT slide — the top stays
- *     pinned and a cursor near the top no longer scrolls off-screen. The
- *     keyboard simply overlays the lower part of the app.
+ *  - SDL_HINT_ENABLE_SCREEN_KEYBOARD "0", before SDL_Init (sdl3_preinit):
+ *    SDL never asks for it, whoever starts text input (on Android that
+ *    is the whole of it: its keyboard is shown only when asked for).
+ *  - Text input is started only while SDL knows of a hardware keyboard,
+ *    whose keys it turns into text (apply_softkbd); stopped the moment
+ *    the last one goes (SDL_EVENT_KEYBOARD_REMOVED).  On iOS starting it
+ *    makes SDL's text field the first responder, and UIKit shows its
+ *    keyboard for a first responder with no hardware keyboard attached.
+ *  - On iOS that field's input view is an empty one
+ *    (emu/iOS/nokeyboard.m, ios_nosystemkeyboard), so UIKit has no
+ *    keyboard to show even then, and the hardware keyboard still types.
  *
- * When the GUI has supplied an explicit "kbd rect" (softkbd_rect_*, in
- * Inferno screen pixels) it wins over both heuristics: we map it to
- * window points and let SDL slide the real widget above the keyboard.
- * This is what lets the workspace shell prompt — which sits at the
- * bottom of the zone — stay visible so you can see what you're typing.
- *
- * No-op on macOS/Linux (no soft keyboard).
+ * Without text input, a hardware keyboard SDL does not know of (Android
+ * reports none) still types: handle_key_down takes its printable keys.
+ * The GUI's requests for the system's keyboard ("kbd on", "kbd rect" on
+ * /dev/consctl: setsoftkbd, setsoftkbd_rect) are accepted and do
+ * nothing; softkbd(2) asks wm/osk instead.
  */
-static void
-update_text_input_area(void)
-{
 #if defined(__APPLE__) && TARGET_OS_IOS
-	int win_w = 0, win_h = 0;
-	SDL_Rect r;
-	int ih;
-
-	if (!sdl_window)
-		return;
-	SDL_GetWindowSize(sdl_window, &win_w, &win_h);	/* points */
-	if (win_w <= 0 || win_h <= 0)
-		return;
-	if (softkbd_rect_w > 0 && softkbd_rect_h > 0) {
-		/* Explicit focused-widget rect from the GUI (INFR-166).
-		 *
-		 * It arrives in Inferno SCREEN PIXELS — the only coordinate
-		 * system Limbo draws in. SDL_SetTextInputArea wants window
-		 * POINTS, so map it exactly the way the renderer maps the
-		 * texture: texture pixels -> window pixels through dest_rect
-		 * (which already carries the safe-area origin and any
-		 * letterbox scale), then -> points by dividing out
-		 * display_scale. This is the inverse of the mouse path's
-		 * window_to_texture_coords. Without it the rect was 2-3x
-		 * oversized on every HiDPI device, got clamped to a degenerate
-		 * strip, and SDL never slid the caret above the keyboard — so
-		 * the workspace shell prompt stayed covered and you couldn't
-		 * see what you typed.
-		 *
-		 * Clamp to the window afterwards so a transient out-of-window
-		 * value (e.g. a rotation caught mid-update) doesn't round-trip
-		 * a degenerate rect to UIKit. */
-		float sx, sy, fx, fy, fw, fh;
-		if (dest_rect.w <= 0 || dest_rect.h <= 0 ||
-		    src_rect.w <= 0 || src_rect.h <= 0 || display_scale <= 0.0f)
-			return;
-		sx = dest_rect.w / src_rect.w;	/* texture px -> window px */
-		sy = dest_rect.h / src_rect.h;
-		fx = (dest_rect.x + ((float)softkbd_rect_x - src_rect.x) * sx) / display_scale;
-		fy = (dest_rect.y + ((float)softkbd_rect_y - src_rect.y) * sy) / display_scale;
-		fw = ((float)softkbd_rect_w * sx) / display_scale;
-		fh = ((float)softkbd_rect_h * sy) / display_scale;
-		r.x = fx < 0.0f ? 0 : (int)fx;
-		r.y = fy < 0.0f ? 0 : (int)fy;
-		r.w = (int)(fw + 0.5f);
-		r.h = (int)(fh + 0.5f);
-		if (r.x + r.w > win_w) r.w = win_w - r.x;
-		if (r.y + r.h > win_h) r.h = win_h - r.y;
-		if (r.w <= 0 || r.h <= 0)
-			return;
-	} else {
-		ih = 56;				/* input row height, points */
-		r.x = 0;
-		r.w = win_w;
-		r.h = ih;
-		if (softkbd_keeptop)
-			r.y = 0;			/* top — SDL won't need to slide */
-		else
-			r.y = win_h - ih;		/* bottom input row — SDL slides it up */
-	}
-	SDL_SetTextInputArea(sdl_window, &r, 0);
+extern void	ios_nosystemkeyboard(SDL_Window*);
+#define nosystemkeyboard()	ios_nosystemkeyboard(sdl_window)
+#else
+#define nosystemkeyboard()
 #endif
-}
 
-/*
- * Soft-keyboard control, driven from Limbo via /dev/consctl ("kbd on" /
- * "kbd off"). The keyboard must surface only while a text field is
- * focused — not on every tap — so text input is no longer started
- * unconditionally; the GUI requests it on focus and drops it on blur.
- *
- * setsoftkbd runs on an Inferno worker thread (the devcons write), but
- * SDL_StartTextInput/StopTextInput touch UIKit and MUST run on the main
- * thread — calling them here crashes on device. So setsoftkbd only sets
- * a desired-state flag; sdl3_mainloop (main thread) reconciles it. The
- * flag is a plain int written from one thread and read from another: the
- * only race is a one-frame delay, which is harmless.
- */
-static volatile int softkbd_want = 0;	/* desired state (set from any thread) */
-static int softkbd_applied = 0;		/* last state pushed to SDL (main thread) */
+#if MOBILE_TOUCH
+static int softkbd_applied = 0;		/* text input started (main thread) */
+#endif
 
-/*
- * on: 0 = hide, 1 = show (bottom input — slide to keep it above the
- * keyboard), 2 = show + keep the top pinned (workspace text app — don't
- * slide). Encoded in the int so the headless stubs and the signature
- * stay unchanged.
- */
 void
 setsoftkbd(int on)
 {
-#if MOBILE_TOUCH
-	softkbd_want = on ? 1 : 0;
-	softkbd_keeptop = (on == 2);
-#else
-	/* Desktop: text input stays enabled; nothing to toggle. */
 	USED(on);
-#endif
 }
 
-/*
- * Override the keyboard-avoidance rect with the focused widget's actual
- * bounds (window POINTS). Called from /dev/consctl "kbd rect x y w h"
- * (devcons.c) — Limbo helper is appl/lib/softkbd.b. When the rect is
- * non-empty it wins over the legacy keeptop hint; (0,0,0,0) clears
- * the override and the hard-coded top/bottom rect comes back into
- * play. apply_softkbd will re-push the area on the main thread.
- */
 void
 setsoftkbd_rect(int x, int y, int w, int h)
 {
-#if MOBILE_TOUCH
-	softkbd_rect_x = x;
-	softkbd_rect_y = y;
-	softkbd_rect_w = (w > 0) ? w : 0;
-	softkbd_rect_h = (h > 0) ? h : 0;
-#else
 	USED(x); USED(y); USED(w); USED(h);
-#endif
 }
 
 /*
- * Apply a pending soft-keyboard request. MUST be called on the main
- * (SDL/UIKit) thread — sdl3_mainloop calls it each iteration.
+ * Text input on while a hardware keyboard is attached, off while none
+ * is.  MUST be called on the main (SDL/UIKit) thread -- sdl3_mainloop
+ * calls it each iteration, and as a keyboard comes or goes.
  */
 static void
 apply_softkbd(void)
 {
 #if MOBILE_TOUCH
-	static int applied_keeptop = 0;
-	static int applied_rx = 0, applied_ry = 0, applied_rw = 0, applied_rh = 0;
 	int want;
 
 	if (!sdl_window)
 		return;
-	/*
-	 * With a keyboard of the machine's attached (a Bluetooth or USB
-	 * keyboard on a phone or tablet), text input stays on whatever is
-	 * focused: the system shows no keyboard of its own over one, and
-	 * without text input its keys would type nothing.  Without one,
-	 * the GUI's request decides; and with InferNode's own keyboard
-	 * running (wm/osk) the GUI asks that instead, never this, so the
-	 * system's keyboard does not come up.
-	 */
-	want = softkbd_want || SDL_HasKeyboard();
-	if (want != softkbd_applied) {
-		softkbd_applied = want;
-		if (softkbd_applied) {
-			SDL_StartTextInput(sdl_window);
-			update_text_input_area();
-		} else {
-			SDL_StopTextInput(sdl_window);
-		}
-	} else if (want &&
-		   (softkbd_keeptop != applied_keeptop ||
-		    softkbd_rect_x != applied_rx ||
-		    softkbd_rect_y != applied_ry ||
-		    softkbd_rect_w != applied_rw ||
-		    softkbd_rect_h != applied_rh)) {
-		/* keyboard already up but the mode or the focused-widget
-		 * rect changed (focus moved between chat and a workspace
-		 * app, or the cursor moved within the same app — INFR-166). */
-		update_text_input_area();
-	}
-	applied_keeptop = softkbd_keeptop;
-	applied_rx = softkbd_rect_x;
-	applied_ry = softkbd_rect_y;
-	applied_rw = softkbd_rect_w;
-	applied_rh = softkbd_rect_h;
+	want = SDL_HasKeyboard();
+	if (want == softkbd_applied)
+		return;
+	softkbd_applied = want;
+	if (want) {
+		nosystemkeyboard();
+		SDL_StartTextInput(sdl_window);
+		nosystemkeyboard();
+	} else
+		SDL_StopTextInput(sdl_window);
 #endif
 }
 
@@ -820,14 +679,14 @@ create_renderer_and_texture(void)
 
 	SDL_SetTextureScaleMode(sdl_texture, SDL_SCALEMODE_NEAREST);
 	SDL_ShowWindow(sdl_window);
-#if !MOBILE_TOUCH
-	/* Desktop: no soft keyboard, so leave text input enabled — typing
-	 * (SDL_EVENT_TEXT_INPUT) needs it. On mobile we deliberately do NOT
-	 * start it here; the keyboard must appear only on text-field focus
-	 * (the GUI calls setsoftkbd via /dev/consctl). */
+#if MOBILE_TOUCH
+	/* the system's keyboard never shown, from the first: see apply_softkbd */
+	nosystemkeyboard();
+#else
+	/* Desktop: no keyboard on the screen, so text input stays on:
+	 * typing (SDL_EVENT_TEXT_INPUT) needs it. */
 	SDL_StartTextInput(sdl_window);
 #endif
-	update_text_input_area();
 	return 1;
 }
 
@@ -1049,6 +908,10 @@ sdl3_preinit(void)
 	 * touchscreen laptops behave the same way.
 	 */
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
+#if MOBILE_TOUCH
+	/* The system's keyboard is never shown: see apply_softkbd. */
+	SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
+#endif
 
 	/*
 	 * Initialize SDL3 on the main thread.
@@ -1821,6 +1684,20 @@ handle_key_down(SDL_Event *event)
 		break;
 	}
 
+#if MOBILE_TOUCH
+	/*
+	 * A hardware keyboard's printable keys, while text input is off (no
+	 * keyboard SDL knows of: Android reports none): what the key types
+	 * with its modifiers, from SDL's keymap.  With text input on they
+	 * come as SDL_EVENT_TEXT_INPUT, and are not taken here as well.
+	 */
+	if (key == 0 && sdl_window != NULL && !SDL_TextInputActive(sdl_window) &&
+	    (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI | SDL_KMOD_ALT)) == 0) {
+		SDL_Keycode k = SDL_GetKeyFromScancode(event->key.scancode, mods, true);
+		if ((k & SDLK_SCANCODE_MASK) == 0 && k >= ' ' && k != 0x7F && k < 0x110000)
+			key = (int)k;
+	}
+#endif
 	if (key != 0)
 		gkbdputc(gkbdq, key);
 }
@@ -1919,19 +1796,6 @@ sdl3_mainloop(void)
 					Uint32 mask = button_event_mask(event.button.button);
 					if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 						sdl_button_state |= mask;
-						/*
-						 * Re-assert text input on a press ONLY while a
-						 * text field is focused (softkbd_want, set by the
-						 * GUI via setsoftkbd). A system gesture (back,
-						 * swipe-down, a permission dialog) can dismiss
-						 * the IME and SDL won't restore it; re-asserting
-						 * on the next tap brings it back. When no field
-						 * is focused this is skipped, so a tap no longer
-						 * pops the keyboard. (On desktop, no IME.) This
-						 * runs on the main thread, so the SDL call is safe.
-						 */
-						if (softkbd_want)
-							SDL_StartTextInput(sdl_window);
 					} else
 						sdl_button_state &= ~mask;
 
@@ -2096,10 +1960,12 @@ sdl3_mainloop(void)
 
 			case SDL_EVENT_KEYBOARD_ADDED:
 				keyboard_attach(event.kdevice.which);
+				apply_softkbd();
 				break;
 
 			case SDL_EVENT_KEYBOARD_REMOVED:
 				keyboard_detach(event.kdevice.which);
+				apply_softkbd();	/* now, not on the next iteration */
 				break;
 
 			case SDL_EVENT_KEY_DOWN:

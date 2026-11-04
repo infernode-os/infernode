@@ -1,25 +1,20 @@
 #
-# softkbd.m — On-screen keyboard avoidance helper.
+# softkbd.m — ask for a keyboard on the screen for a text field.
 #
-# With InferNode's own keyboard running (wm/osk, its files at /mnt/osk)
-# the requests go to it, as show, hide and rect on /mnt/osk/ctl, and
-# the system's keyboard is never asked for.  Otherwise they are the
-# /dev/consctl verbs that the SDL3 iOS backend uses to control the soft
-# keyboard and the keyboard-avoidance rect:
+# The requests go to InferNode's own keyboard (wm/osk, its files at
+# /mnt/osk): show, hide, rect and mode on /mnt/osk/ctl.  With it not
+# running they are /dev/consctl's verbs, which do nothing now: the
+# system's keyboard (iOS's, Android's) is never shown, whatever asks for
+# it (emu/port/draw-sdl3.c, apply_softkbd), so the view is never slid
+# above it either.  The verbs remain for the callers that write them:
 #
-#   "kbd on"           — show, slide so the bottom input is visible
-#                        (legacy default: 56pt strip at the bottom)
-#   "kbd ontop"        — show, keep the top pinned (workspace text app)
-#   "kbd off"          — hide
-#   "kbd rect x y w h" — focused-widget rect, window points. Overrides
-#                        the legacy top/bottom heuristic so SDL slides
-#                        the *actual* widget above the keyboard — the
-#                        INFR-166 fix.
+#   "kbd on"           — a field at the bottom has the keyboard
+#   "kbd ontop"        — a field filling the screen has it
+#   "kbd off"          — none has
+#   "kbd rect x y w h" — where the focused field is, screen pixels
 #
-# Centralised here so every text app/widget that wants to play nicely
-# with the soft keyboard uses the same wire format. The bridge below
-# devcons.c parses the verbs; iOS-side SDL_SetTextInputArea does the
-# slide. Desktop / Linux SDL3 silently no-ops.
+# Centralised here so every text app/widget uses one wire format.
+# softkbd(2).
 #
 
 Softkbd: module {
@@ -40,14 +35,12 @@ Softkbd: module {
 	# Non-mobile builds are silently no-op.
 	show: fn(mode: int);
 
-	# Tell the GUI backend the focused widget's bounds in window
-	# points. On iOS, SDL_SetTextInputArea is updated so the system
-	# slides the view to keep this rect above the keyboard. Calling
-	# with w<=0 or h<=0 clears the override (the legacy
-	# top-or-bottom heuristic comes back).
+	# Where the focused field is, in screen pixels: for a keyboard the
+	# view must be moved above.  wm/osk is docked, the field already
+	# above it, and takes it without acting on it.  w<=0 or h<=0: none.
 	set_rect: fn(x, y, w, h: int);
 
-	# Convenience: clear the override. Same as set_rect(0,0,0,0).
+	# Same as set_rect(0,0,0,0).
 	clear_rect: fn();
 
 	# What the focused text is: prose (1), whose words a keyboard on

@@ -132,8 +132,9 @@ Lucifer starts it unless the environment variable
 .B osk
 is
 .BR off ;
-on iOS and Android, while it runs, the system's keyboard is not asked
-for, and a keyboard attached to the device types as it always did.
+on iOS and Android the system's keyboard is never shown, whether this
+runs or not, and a keyboard attached to the device types as it always
+did.
 .PP
 .B -M
 sets the mode

@@ -34,22 +34,21 @@ takes that back.
 says what the field holds: prose (1), whose words a keyboard may put
 right and capitalise, or not (0: a shell's commands, code).
 .PP
-With InferNode's own keyboard running
+The requests are InferNode's own keyboard's
 .RI ( wm-osk (1),
 its files at
 .BR /mnt/osk ,
-.IR osk (4))
-the requests are its:
+.IR osk (4)):
 .BR show ,
 .BR hide ,
 .BR rect ,
 .BR mode .
-Otherwise they are
+With it not running they are
 .BR /dev/consctl 's
 .B kbd
-verbs, for the system's keyboard on iOS and Android
-.RI ( cons (3));
-elsewhere these do nothing, and
+verbs, which do nothing: the system's keyboard (iOS's, Android's) is
+never shown, whatever asks for it (the emulator's SDL backend sees to
+that), and
 .B mode
 is not sent.  The environment variable
 .B SOFTKBD_PATH

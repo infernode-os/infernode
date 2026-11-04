@@ -235,7 +235,11 @@ cp -a "$ROOT/dis"    "$ASSETS/dis"
 # exist` and Lucifer shows a blank screen. /mnt/llm is mounted by plain
 # `mount` in sh/profile, which creates nothing. The desktop tree hides
 # all of this because its gitignored mnt/ accumulates these directories.
-for d in n mnt mnt/llm tmp phone usr/inferno/secstore usr/inferno/tmp; do
+# The mount points the tree keeps beneath mnt and n (mnt/osk, mnt/xenith,
+# n/client, ...) go too, as build-ios-app.sh stages them: without
+# /mnt/osk, wm/osk cannot serve its files and the keyboard never shows.
+treemnts=$(cd "$ROOT" && git ls-files mnt n 2>/dev/null | sed 's|/[^/]*$||' | sort -u)
+for d in n mnt mnt/llm tmp phone usr/inferno/secstore usr/inferno/tmp $treemnts; do
     mkdir -p "$ASSETS/$d"
     touch    "$ASSETS/$d/KEEPDIR"
 done

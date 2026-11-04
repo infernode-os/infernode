@@ -149,10 +149,16 @@ poolsetsize(char *s, ulong size)
 
 	for(i = 0; i < table.n; i++) {
 		if(strcmp(table.pool[i].name, s) == 0) {
+			/*
+			 * A pool smaller than its reserve cannot run: say which
+			 * and how small is too small. It was "not enough memory"
+			 * and nothing more, with ressize already wrapped round.
+			 */
+			if(size < RESERVED)
+				panic("pool %s: -p%s=%lud is less than its reserve of %d bytes; give it more",
+					s, s, size, RESERVED);
 			table.pool[i].maxsize = size;
 			table.pool[i].ressize = size-RESERVED;
-			if(size < RESERVED)
-				panic("not enough memory");
 			return 1;
 		}
 	}

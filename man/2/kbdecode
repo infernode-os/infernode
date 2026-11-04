@@ -152,7 +152,7 @@ reads
 .PP
 .B tests/kbdecode_test.b
 checks both;
-.B tests/osk_accuracy_test.b
+.B tests/osk_accuracy.b
 measures the decoder against a simulated typist on each layout, and
 holds it to bounds.
 .SH SOURCE

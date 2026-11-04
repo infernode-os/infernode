@@ -1,4 +1,4 @@
-implement OskAccuracyTest;
+implement OskAccuracy;
 
 #
 # How well wm/osk's decoder (kbdecode(2)) reads a typist, on each
@@ -47,12 +47,12 @@ include "osklayout.m";
 	osklayout: Osklayout;
 	Layout, Lkey: import osklayout;
 
-OskAccuracyTest: module
+OskAccuracy: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
-SRCFILE: con "/tests/osk_accuracy_test.b";
+SRCFILE: con "/tests/osk_accuracy.b";
 
 # the bounds, in percent of words
 MinCorrected:	con 90.5;	# right after correction (tapping)
@@ -479,7 +479,7 @@ init(nil: ref Draw->Context, args: list of string)
 	kbdecode = load Kbdecode Kbdecode->PATH;
 	osklayout = load Osklayout Osklayout->PATH;
 	if(testing == nil || kbdecode == nil || osklayout == nil || rand == nil || math == nil || bufio == nil){
-		sys->fprint(sys->fildes(2), "osk_accuracy_test: cannot load a module: %r\n");
+		sys->fprint(sys->fildes(2), "osk_accuracy: cannot load a module: %r\n");
 		raise "fail:cannot load";
 	}
 	testing->init();
@@ -505,11 +505,11 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	lex = Lexicon.new();
 	if((err := lex.read("/lib/osk/en.words", 1)) != nil){
-		sys->print("osk_accuracy_test: no word list (%s)\n", err);
+		sys->print("osk_accuracy: no word list (%s)\n", err);
 		raise "skip:no word list";
 	}
 	if(usecontext && (err = lex.readpairs("/lib/osk/en.pairs")) != nil){
-		sys->print("osk_accuracy_test: no word pairs (%s): no context\n", err);
+		sys->print("osk_accuracy: no word pairs (%s): no context\n", err);
 		usecontext = 0;
 	}
 	t := testing->newTsrc("Phrases", SRCFILE);

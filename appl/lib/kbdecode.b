@@ -438,7 +438,7 @@ Decoder.new(lex: ref Lexicon, keys: array of Key): ref Decoder
 		init();
 	d := ref Decoder;
 	d.lex = lex;
-	# tuned against tests/osk_accuracy_test.b's simulated typist, on
+	# tuned against tests/osk_accuracy.b's simulated typist, on
 	# words and noise of their own (not those its bounds are checked on)
 	d.sigma = 0.38;
 	d.lmweight = 0.55;

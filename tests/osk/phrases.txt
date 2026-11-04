@@ -1,4 +1,4 @@
-# Sentences for wm/osk's accuracy benchmark (tests/osk_accuracy_test.b):
+# Sentences for wm/osk's accuracy benchmark (tests/osk_accuracy.b):
 # its simulated typist types each word.  Prose from InferNode's own
 # documentation (docs/*.md, README.md, QUICKSTART.md), its punctuation,
 # numbers and markup taken out: a word list's common words and this

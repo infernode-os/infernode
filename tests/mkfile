@@ -53,7 +53,7 @@ TARG=\
 	editor_test.dis\
 	example_test.dis\
 	kbdecode_test.dis\
-	osk_accuracy_test.dis\
+	osk_accuracy.dis\
 	keyboards_test.dis\
 	osk_fuzz.dis\
 	factotum_test.dis\

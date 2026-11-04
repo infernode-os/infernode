@@ -179,6 +179,20 @@ class Harness:
             time.sleep(0.05)
         raise RuntimeError("timed out reading IP statistics")
 
+    def tcpstat(self, name):
+        start = len(self.console)
+        self.command("echo NETSEC-TCP-STATS; cat /net/tcp/stats; echo NETSEC-TCP-END")
+        end = time.monotonic() + 4
+        while time.monotonic() < end:
+            tail = bytes(self.console[start:])
+            if re.search(rb"(?:^|\r?\n)NETSEC-TCP-END(?:\r?\n|$)", tail):
+                match = re.search(rb"(?:^|\r?\n)" + name.encode() + rb": ([0-9]+)", tail)
+                if match:
+                    return int(match.group(1))
+                raise RuntimeError("TCP statistic %s was not reported" % name)
+            time.sleep(0.05)
+        raise RuntimeError("timed out reading TCP statistics")
+
     def close(self):
         self.p.kill()
         self.p.wait()
@@ -373,6 +387,30 @@ def malformed_transport_regression(h):
     print("TRANSPORT-BOUNDS-PASS", flush=True)
 
 
+def tcp_limbo_regression(h):
+    # 9front 1c786deef: above 100 half-open connections the old reaper
+    # repeatedly inspected one entry without advancing, preventing the table
+    # from aging and eventually allowing a same-bucket reuse to self-link it.
+    dport = 8703
+    h.command("listen -A 'tcp!*!8703' {cat > /dev/null} &")
+    time.sleep(1)
+    for i in range(192):
+        sport = 41000 + i
+        syn = tcp(b"", sport, dport, 0x70000000 + i, 0, 0x02)
+        h.send(eth(ipv4(syn, 6, 0x6000 + i)))
+        # QEMU's datagram socket backend drops a large unpaced burst before
+        # the guest can drain it, which can leave this below the precondition.
+        time.sleep(0.002)
+    if h.tcpstat("InLimbo") < 101:
+        raise RuntimeError("half-open flood did not exercise the limbo threshold")
+    deadline = time.monotonic() + 30
+    while h.tcpstat("InLimbo") != 0:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("half-open TCP entries did not age out")
+        time.sleep(1)
+    print("TCP-LIMBO-REAP-PASS", flush=True)
+
+
 def negative_devip_attach_regression(h):
     h.command("bind '#I-1' /net.alt")
     time.sleep(0.5)
@@ -395,6 +433,7 @@ def main():
         for name, test in (("fragment", icmp_regression),
                            ("transport", malformed_transport_regression),
                            ("devip", negative_devip_attach_regression),
+                           ("tcp-limbo", tcp_limbo_regression),
                            ("tcp", tcp_regression)):
             try:
                 test(h)

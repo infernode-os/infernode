@@ -5075,6 +5075,11 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: negative IP device attach check did not pass -- $NETSEC"
     fi
+    if grep -q '^TCP-LIMBO-REAP-PASS$' <<<"$NETSEC"; then
+        pass "virt: a half-open TCP flood is fully reaped"
+    else
+        fail "virt: TCP half-open entries did not age out -- $NETSEC"
+    fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"
     else

@@ -720,6 +720,8 @@ dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/destructor_test.dis
+dis/tests/devprog_nslock_test.dis
+dis/tests/devprog_read_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
@@ -727,6 +729,7 @@ dis/tests/diswrite_test.dis
 dis/tests/docengine_test.dis
 dis/tests/edit_test.dis
 dis/tests/editor_test.dis
+dis/tests/env_rclose_test.dis
 dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
@@ -758,9 +761,13 @@ dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis
 dis/tests/ipint_release_test.dis
 dis/tests/jit_big_test.dis
+dis/tests/jit_byte_test.dis
 dis/tests/jit_bounds_test.dis
 dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
+dis/tests/jit_builtinexc_test.dis
+dis/tests/jit_killcall_test.dis
+dis/tests/jit_nilmod_test.dis
 dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
@@ -783,9 +790,11 @@ dis/tests/kbdecode_test.dis
 dis/tests/keyring_test.dis
 dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis
+dis/tests/kill_deadserver_test.dis
 dis/tests/killblocked_test.dis
 dis/tests/l2cap_test.dis
 dis/tests/limbo_asgcall_test.dis
+dis/tests/limbo_fold_test.dis
 dis/tests/limbo_inline_test.dis
 dis/tests/limbo_ldt_test.dis
 dis/tests/lists_test.dis
@@ -823,6 +832,7 @@ dis/tests/msg_inject_test.dis
 dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
+dis/tests/ninep_pack_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
@@ -845,6 +855,7 @@ dis/tests/publicnet_host_test.dis
 dis/tests/publicnet_test.dis
 dis/tests/readjpg_test.dis
 dis/tests/readwebp_test.dis
+dis/tests/realconv_test.dis
 dis/tests/refadt_zero_test.dis
 dis/tests/regex_test.dis
 dis/tests/rfcomm_test.dis
@@ -872,6 +883,7 @@ dis/tests/ssl_transport_test.dis
 dis/tests/stderr_test.dis
 dis/tests/strcat_test.dis
 dis/tests/string_test.dis
+dis/tests/sysfuzz.dis
 dis/tests/task_concurrent_probe.dis
 dis/tests/task_consistency_test.dis
 dis/tests/taskparse_test.dis
@@ -901,6 +913,7 @@ dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
 dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
+dis/tests/styx_pack_test.dis
 dis/tests/utf21_test.dis
 dis/tests/veltro_cc_alignment_test.dis
 dis/tests/veltro_charon_security_test.dis

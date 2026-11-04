@@ -686,9 +686,27 @@ jobs:
         chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_big_test.sh
+        # Byte / and % from compiled code; a call through a nil module
+        # caught where it is made (both found by tools/disfuzz).
+        ROOT=. sh tests/host/jit_byte_test.sh
+        ROOT=. sh tests/host/jit_nilmod_test.sh
+        # An exception arriving during a builtin call is raised at the
+        # call, caught by the handler around it (tools/sysfuzz).
+        ROOT=. sh tests/host/jit_killcall_test.sh
+        # An exception a builtin raises inside a handler block is caught
+        # in the calling function's frame (tools/sysfuzz -P).
+        ROOT=. sh tests/host/jit_builtinexc_test.sh
         # A module of fewer than 128 instructions is compiled: the amd64
         # JIT refused them, so they ran interpreted under -c1.
         ROOT=. sh tests/host/jit_small_test.sh
+
+    - name: Run system call fuzzing (fixed seeds)
+      run: |
+        # Many Progs making random system calls, killing one another,
+        # exporting and mounting their name spaces (tools/sysfuzz); a
+        # crash, a kernel no longer answering or no end fails. These
+        # seeds found exportfs's freed queue tail and rmcall's stale pc.
+        python3 tools/sysfuzz -n 6 -s 100 -j 2 -t 15
 
     - name: Run cpu(1) session lifetime test
       run: |

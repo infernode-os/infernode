@@ -39,6 +39,7 @@ struct Lock
 	ulong	sr;
 	uintptr	pc;
 	int	pri;
+	void*	p;	/* the Proc that took it last: lockloop says what it is doing (#640) */
 };
 
 /*

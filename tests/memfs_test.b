@@ -54,6 +54,12 @@ run(name: string)
 			testRemoveRaceThroughMount(t);
 		"OversizeStatBecomesError" =>
 			testOversizeStatBecomesError(t);
+		"FarOffsetRefused" =>
+			testFarOffsetRefused(t);
+		"LongWstatServed" =>
+			testLongWstatServed(t);
+		"HoleReadsZeros" =>
+			testHoleReadsZeros(t);
 		}
 	} exception e {
 	"fail:fatal" =>
@@ -257,6 +263,162 @@ testOversizeStatBecomesError(t: ref T)
 	}
 }
 
+# memfs mounted on /n in a name space of the caller's own
+mountmemfs(t: ref T)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		t.fatal(sys->sprint("pipe: %r"));
+	sync := chan of int;
+	spawn server(p[1], sync);
+	<-sync;
+	p[1] = nil;
+	if(sys->mount(p[0], nil, "/n", Sys->MREPL | Sys->MCREATE, nil) < 0)
+		t.fatal(sys->sprint("mount: %r"));
+}
+
+# Offsets past an int are refused, and memfs goes on: one was cut to a
+# negative int and indexed the block table (array bounds error, the
+# server gone and /tmp with it on the native kernel; tools/nativefuzz).
+testFarOffsetRefused(t: ref T)
+{
+	mountmemfs(t);
+	fd := sys->create("/n/far", Sys->ORDWR, 8r666);
+	if(fd == nil)
+		t.fatal(sys->sprint("create: %r"));
+	# in a Prog of its own, and timed: a memfs that died never answers
+	res := chan of string;
+	spawn faroffsets(fd, res);
+	tc := chan of int;
+	spawn timer(tc, 5000);
+	alt {
+	e := <-res =>
+		t.assertseq(e, "", "offsets past an int refused");
+	<-tc =>
+		t.fatal("memfs did not answer in 5s (the server died)");
+	}
+	(n, d) := sys->stat("/n/far");
+	t.asserteq(n, 0, "memfs still answers");
+	t.assert(d.length == big 5, "and the file is what was written");
+}
+
+faroffsets(fd: ref Sys->FD, res: chan of string)
+{
+	b := array of byte "hello";
+	offs := array[] of {big 16r7FFFFFFC, big 16r80000000, big 16r80000008, big 1<<40, big -2,
+		big 16r7FFFFFFFFFFFFFFF, big 16r7FFFFFFFFFFFFFFF - big 3};
+	for(i := 0; i < len offs; i++){
+		if(sys->pwrite(fd, b, len b, offs[i]) != -1){
+			res <-= sys->sprint("pwrite at %bd was not refused", offs[i]);
+			return;
+		}
+		r := array[8] of byte;
+		if(sys->pread(fd, r, len r, offs[i]) > 0){
+			res <-= sys->sprint("pread at %bd read something", offs[i]);
+			return;
+		}
+	}
+	if(sys->pwrite(fd, b, len b, big 0) != len b){
+		res <-= sys->sprint("a write at 0: %r");
+		return;
+	}
+	res <-= "";
+}
+
+# A Twstat of a stat 256 bytes or more (a long name): Styx refused it,
+# memfs's reader ended on the refusal, and memfs waited for ever.
+testLongWstatServed(t: ref T)
+{
+	mountmemfs(t);
+	fd := sys->create("/n/short", Sys->ORDWR, 8r666);
+	if(fd == nil)
+		t.fatal(sys->sprint("create: %r"));
+	fd = nil;
+	d := sys->nulldir;
+	d.name = "";
+	for(i := 0; i < 210; i++)
+		d.name[i] = 'a' + i%26;
+	done := chan of int;
+	spawn wstatter("/n/short", d, done);
+	tc := chan of int;
+	spawn timer(tc, 5000);
+	alt {
+	r := <-done =>
+		t.asserteq(r, 0, "the rename to a 210-byte name");
+	<-tc =>
+		t.fatal("the rename was not answered in 5s");
+	}
+	(n, nil) := sys->stat("/n/" + d.name);
+	t.asserteq(n, 0, "the file has its long name");
+}
+
+# A write past the end leaves blocks never written; a read of them is
+# zeros. They were nil, sliced: an array bounds error, the server gone.
+testHoleReadsZeros(t: ref T)
+{
+	mountmemfs(t);
+	fd := sys->create("/n/sparse", Sys->ORDWR, 8r666);
+	if(fd == nil)
+		t.fatal(sys->sprint("create: %r"));
+	res := chan of string;
+	spawn holes(fd, res);
+	tc := chan of int;
+	spawn timer(tc, 5000);
+	alt {
+	e := <-res =>
+		t.assertseq(e, "", "a file with holes reads");
+	<-tc =>
+		t.fatal("memfs did not answer in 5s (the server died)");
+	}
+}
+
+holes(fd: ref Sys->FD, res: chan of string)
+{
+	b := array of byte "end";
+	if(sys->pwrite(fd, b, len b, big 5000) != len b){
+		res <-= sys->sprint("pwrite past the end: %r");
+		return;
+	}
+	r := array[5003] of byte;
+	n := sys->pread(fd, r, len r, big 0);
+	if(n != len r){
+		res <-= sys->sprint("read %d of %d: %r", n, len r);
+		return;
+	}
+	for(i := 0; i < 5000; i++)
+		if(r[i] != byte 0){
+			res <-= sys->sprint("byte %d of the hole is %d", i, int r[i]);
+			return;
+		}
+	if(string r[5000:] != "end"){
+		res <-= "the end is not what was written";
+		return;
+	}
+	n = sys->pread(fd, r[0:10], 10, big 1000);
+	if(n != 10){
+		res <-= sys->sprint("a read inside the hole: %d: %r", n);
+		return;
+	}
+	res <-= "";
+}
+
+wstatter(p: string, d: Sys->Dir, done: chan of int)
+{
+	done <-= sys->wstat(p, d);
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -280,6 +442,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RemoveClunksOnError");
 	run("RemoveRaceThroughMount");
 	run("OversizeStatBecomesError");
+	run("FarOffsetRefused");
+	run("LongWstatServed");
+	run("HoleReadsZeros");
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -241,6 +241,7 @@ vlong		nhgetv(void*);
 ulong		nhgetl(void*);
 ushort		nhgets(void*);
 void*	smalloc(size_t);
+void	waitmem(void);
 void*	kmalloc(size_t);
 
 /* Namespace Emulation */
@@ -272,3 +273,4 @@ void		cnameclose(Cname*);
 
 #pragma varargck argpos iprint 1
 extern	uintptr	(*hostprocpc)(Proc*);
+int	upkilled(void);

@@ -181,6 +181,16 @@ Block*		mem2bl(uchar*, int);
 int			memlow(void);
 int			memusehigh(void);
 void		microdelay(int);
+#ifdef CHAOS
+int		chaosmalloc(void);
+void		chaossleep(void);
+void		chaoslock(void);
+int		chaosyield(void);
+int		chaosdevice(ulong*);
+int		chaosintr(ulong*);
+long		chaosread(void*, long, vlong);
+long		chaoswrite(void*, long);
+#endif
 uvlong		mk64fract(uvlong, uvlong);
 void		mkqid(Qid*, vlong, ulong, int);
 void		modinit(void);
@@ -256,6 +266,10 @@ int		preemption(int);
 void		printinit(void);
 void		procctl(Proc*);
 void		procdump(void);
+void		labelstack(Proc*);
+int		upkilled(void);
+void		alarminit(void);
+int		iprogpid(void*);
 void		procinit(void);
 Proc*		proctab(int);
 extern void	(*proctrace)(Proc*, int, vlong);

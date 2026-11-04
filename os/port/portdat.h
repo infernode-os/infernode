@@ -287,9 +287,8 @@ enum
 struct Mntwalk				/* state for /proc/#/ns */
 {
 	int		cddone;
+	int		started;	/* id is the last mount read */
 	ulong	id;
-	Mhead*	mh;
-	Mount*	cm;
 };
 
 struct Mount
@@ -497,6 +496,8 @@ struct Proc
 	Osenv*		env;
 	Osenv		defenv;
 	int		swipend;	/* software interrupt pending for Prog */
+	int		killing;	/* closing a dying Prog: 1 killed (killprog, progexit), 2 exiting; its clunks are waited for a bounded time (devmnt) */
+	int		intpend;	/* a Prog's kill that came while its proc was not asleep: the next sleep raises it */
 	Lock		sysio;		/* note handler lock */
 	char*		psstate;	/* What /proc/#/status reports */
 	ulong		pid;

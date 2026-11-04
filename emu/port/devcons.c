@@ -439,7 +439,15 @@ consopen(Chan *c, int omode)
 	case Qscancode:
 		qlock(&kbd.gq);
 		if(gkscanq != nil || gkscanid == nil) {
-			qunlock(&kbd.q);
+			/*
+			 * gq, the lock just taken. This was kbd.q: gq stayed
+			 * locked, so the next open of scancode waited for it
+			 * for ever, unkillable (a qlock is not interruptible),
+			 * and the console reader's kbd.q was let go under it.
+			 * Every open on a host without scan codes (gkscanid
+			 * nil) took this path (tools/sysfuzz -d, memfs).
+			 */
+			qunlock(&kbd.gq);
 			c->flag &= ~COPEN;
 			if(gkscanq)
 				error(Einuse);

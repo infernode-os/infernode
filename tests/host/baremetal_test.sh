@@ -5080,6 +5080,11 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: TCP half-open entries did not age out -- $NETSEC"
     fi
+    if grep -q '^TCP-WINDOW-SCALE-PASS$' <<<"$NETSEC"; then
+        pass "virt: TCP applies the peer's window scale to its send window"
+    else
+        fail "virt: TCP window-scale directions are reversed -- $NETSEC"
+    fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"
     else

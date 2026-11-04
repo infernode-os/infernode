@@ -1215,6 +1215,25 @@ qbwrite(Queue *q, Block *b)
 		error(q->err);
 	}
 
+	/*
+	 * Do not allocate another queue entry after an interrupted writer has
+	 * already filled the queue.  Flow control normally happens after the
+	 * Block is queued so that a note cannot make a protocol write partial;
+	 * a caller that retries such a write used to add another Block before
+	 * sleeping again and could grow the queue without bound.  The writer
+	 * lock serializes this preflight with every other producer.
+	 */
+	while(q->len >= q->limit && q->noblock == 0){
+		q->state |= Qflow;
+		iunlock(&q->l);
+		sleep(&q->wr, qnotfull, q);
+		ilock(&q->l);
+		if(q->state & Qclosed){
+			iunlock(&q->l);
+			error(q->err);
+		}
+	}
+
 	/* if nonblocking, don't queue over the limit */
 	if(q->len >= q->limit){
 		if(q->noblock){
@@ -1348,6 +1367,11 @@ qiwrite(Queue *q, void *vp, int len)
 		ilock(&q->l);
 
 		QDEBUG checkb(b, "qiwrite");
+		if((q->state & Qclosed) != 0 || q->len >= q->limit){
+			iunlock(&q->l);
+			freeb(b);
+			break;
+		}
 		if(q->bfirst)
 			q->blast->next = b;
 		else

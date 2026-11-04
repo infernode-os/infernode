@@ -226,7 +226,7 @@ struct Tcpctl
 		u32int	wnd;		/* Tcp send window */
 		u32int	urg;		/* Urgent data pointer */
 		u32int	wl2;
-		int	scale;		/* how much to right shift window in xmitted packets */
+		int	scale;		/* how much to left shift peer windows we receive */
 		/* to implement tahoe and reno TCP */
 		u32int	dupacks;	/* number of duplicate acks rcvd */
 		int	recovery;	/* loss recovery flag */
@@ -238,12 +238,12 @@ struct Tcpctl
 		u32int	urg;		/* Urgent pointer */
 		int	blocked;
 		int	una;		/* unacked data segs */
-		int	scale;		/* how much to left shift window in rcved packets */
+		int	scale;		/* how much to right shift our transmitted window */
 	} rcv;
 	u32int	iss;			/* Initial sequence number */
 	int	sawwsopt;		/* true if we saw a wsopt on the incoming SYN */
 	u32int	cwind;			/* Congestion window */
-	int	scale;			/* desired snd.scale */
+	int	scale;			/* desired rcv.scale */
 	ushort	ssthresh;		/* Slow start threshold */
 	int	resent;			/* Bytes just resent */
 	int	irs;			/* Initial received squence */
@@ -479,7 +479,7 @@ tcpstate(Conv *c, char *state, int n)
 		c->rq ? qlen(c->rq) : 0,
 		c->wq ? qlen(c->wq) : 0,
 		s->srtt, s->mdev,
-		s->cwind, s->snd.wnd, s->rcv.scale, s->rcv.wnd, s->snd.scale,
+		s->cwind, s->snd.wnd, s->snd.scale, s->rcv.wnd, s->rcv.scale,
 		s->timer.start, s->timer.count, s->rerecv,
 		s->katimer.start, s->katimer.count);
 }
@@ -996,7 +996,7 @@ htontcp6(Tcp *tcph, Block *data, Tcp6hdr *ph, Tcpctl *tcb)
 	hnputl(h->tcpseq, tcph->seq);
 	hnputl(h->tcpack, tcph->ack);
 	hnputs(h->tcpflag, (hdrlen<<10) | tcph->flags);
-	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->snd.scale : 0));
+	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->rcv.scale : 0));
 	hnputs(h->tcpurg, tcph->urg);
 
 	if(tcph->flags & SYN){
@@ -1096,7 +1096,7 @@ htontcp4(Tcp *tcph, Block *data, Tcp4hdr *ph, Tcpctl *tcb)
 	hnputl(h->tcpseq, tcph->seq);
 	hnputl(h->tcpack, tcph->ack);
 	hnputs(h->tcpflag, (hdrlen<<10) | tcph->flags);
-	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->snd.scale : 0));
+	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->rcv.scale : 0));
 	hnputs(h->tcpurg, tcph->urg);
 
 	if(tcph->flags & SYN){
@@ -1534,6 +1534,7 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 
 		/* each new SYN restarts the retransmits */
 		lp->irs = seg->seq;
+		lp->rexmits = 0;
 		break;
 	}
 	if((lp = *l) == nil){
@@ -1556,6 +1557,7 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 		lp->sackok = seg->sackok;
 		lp->irs = seg->seq;
 		lp->iss = (nrand(1<<16)<<16)|nrand(1<<16);
+		lp->rexmits = 0;
 		*l = lp;
 	}
 
@@ -1729,7 +1731,7 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 	tcpsetscale(new, tcb, lp->rcvscale, lp->sndscale);
 
 	/* the congestion window always starts out as a single segment */
-	tcb->snd.wnd = segp->wnd;
+	tcb->snd.wnd = segp->wnd << tcb->snd.scale;
 	tcb->cwind = tcb->mss;
 
 	/* set initial round trip time */
@@ -2133,7 +2135,7 @@ reset:
 	qunlock(&tcp->ql);
 
 	/* fix up window */
-	seg.wnd <<= tcb->rcv.scale;
+	seg.wnd <<= tcb->snd.scale;
 
 	/* every input packet in puts off the keep alive time out */
 	tcpsetkacounter(tcb);
@@ -3351,12 +3353,17 @@ tcpinit(Fs *fs)
 #endif
 
 void
-tcpsetscale(Conv *s, Tcpctl *tcb, ushort rcvscale, ushort sndscale)
+tcpsetscale(Conv *s, Tcpctl *tcb, ushort peerscale, ushort localscale)
 {
-	if(rcvscale){
-		tcb->rcv.scale = rcvscale & 0xff;
-		tcb->snd.scale = sndscale & 0xff;
-		tcb->window = QMAX<<tcb->snd.scale;
+	if(peerscale){
+		/*
+		 * The peer's option scales the windows it advertises, hence our
+		 * send window.  Our option scales the receive windows we put on
+		 * the wire.  These assignments were historically reversed.
+		 */
+		tcb->snd.scale = peerscale & 0xff;
+		tcb->rcv.scale = localscale & 0xff;
+		tcb->window = QMAX<<tcb->rcv.scale;
 		qsetlimit(s->rq, tcb->window);
 		qsetlimit(s->wq, TCPWQLIMIT);
 	} else {

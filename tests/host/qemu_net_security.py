@@ -46,12 +46,18 @@ def udp(payload, sport, dport, src=PEER_IP, dst=GUEST_IP):
     return struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
 
 
-def tcp(payload, sport, dport, seq, ack, flags, window=65535, data_offset=5):
+def tcp(payload, sport, dport, seq, ack, flags, window=65535,
+        data_offset=None, options=b""):
+    if data_offset is None:
+        if len(options) & 3:
+            raise ValueError("TCP options must be padded to four bytes")
+        data_offset = 5 + len(options) // 4
     hdr = struct.pack("!HHIIBBHHH", sport, dport, seq, ack,
                       data_offset << 4, flags, window, 0, 0)
-    pseudo = PEER_IP + GUEST_IP + bytes((0, 6)) + struct.pack("!H", len(hdr) + len(payload))
-    csum = checksum(pseudo + hdr + payload)
-    return hdr[:16] + struct.pack("!H", csum) + hdr[18:] + payload
+    segment = hdr + options + payload
+    pseudo = PEER_IP + GUEST_IP + bytes((0, 6)) + struct.pack("!H", len(segment))
+    csum = checksum(pseudo + segment)
+    return hdr[:16] + struct.pack("!H", csum) + hdr[18:] + options + payload
 
 
 def dhcp_type(packet):
@@ -366,6 +372,54 @@ def tcp_regression(h):
     print("TCP-RESEQ-LIMIT-PASS", flush=True)
 
 
+def tcp_window_scale_regression(h):
+    # 9front 0bfae3882: the peer's window-scale option governs windows it
+    # advertises (our send window), while our option governs receive windows
+    # we advertise.  The inherited assignments were reversed.  With an ACK
+    # window of one and peer scale 14, the server must be able to send more
+    # than the old, incorrectly local-scaled 16-byte window.
+    sport, dport = 40500, 8704
+    response = "0123456789abcdef" * 4
+    h.command("listen -A 'tcp!*!8704' {echo %s} &" % response)
+    time.sleep(1)
+    synseq = 0x71000000
+    wsopt = b"\x03\x03\x0e\x01"
+    h.send(eth(ipv4(tcp(b"", sport, dport, synseq, 0, 0x02,
+                           window=1, options=wsopt), 6, 0x6200)))
+    end = time.monotonic() + 4
+    synack = None
+    while time.monotonic() < end:
+        frame = h.recv(end)
+        if frame is None:
+            break
+        parsed = parse_tcp(frame, sport)
+        if parsed is not None and parsed[3] & 0x12 == 0x12:
+            synack = parsed
+            break
+    if synack is None:
+        raise RuntimeError("scaled-window listener did not answer SYN")
+    guestseq = synack[1]
+    h.send(eth(ipv4(tcp(b"", sport, dport, synseq + 1, guestseq + 1,
+                           0x10, window=1), 6, 0x6201)))
+    end = time.monotonic() + 5
+    while time.monotonic() < end:
+        frame = h.recv(end)
+        if frame is None:
+            break
+        parsed = parse_tcp(frame, sport)
+        if parsed is None or parsed[1] != guestseq + 1:
+            continue
+        ihl = (frame[14] & 15) * 4
+        tcpoff = 14 + ihl
+        tcp_hlen = (frame[tcpoff + 12] >> 4) * 4
+        total = struct.unpack("!H", frame[16:18])[0]
+        payload_len = total - ihl - tcp_hlen
+        if payload_len > 16:
+            print("TCP-WINDOW-SCALE-PASS", flush=True)
+            return
+    raise RuntimeError("peer window scale was not applied to the send window")
+
+
 def malformed_transport_regression(h):
     # 9front 7838d689: transport lengths smaller than their headers used to
     # reach trimblock with a negative/underflowed size.  A listening UDP
@@ -394,15 +448,16 @@ def tcp_limbo_regression(h):
     dport = 8703
     h.command("listen -A 'tcp!*!8703' {cat > /dev/null} &")
     time.sleep(1)
-    for i in range(192):
+    for i in range(1056):
         sport = 41000 + i
         syn = tcp(b"", sport, dport, 0x70000000 + i, 0, 0x02)
         h.send(eth(ipv4(syn, 6, 0x6000 + i)))
         # QEMU's datagram socket backend drops a large unpaced burst before
         # the guest can drain it, which can leave this below the precondition.
         time.sleep(0.002)
-    if h.tcpstat("InLimbo") < 101:
-        raise RuntimeError("half-open flood did not exercise the limbo threshold")
+    nlimbo = h.tcpstat("InLimbo")
+    if nlimbo != 1000:
+        raise RuntimeError("half-open TCP table did not hold at Maxlimbo")
     deadline = time.monotonic() + 30
     while h.tcpstat("InLimbo") != 0:
         if time.monotonic() >= deadline:
@@ -433,6 +488,7 @@ def main():
         for name, test in (("fragment", icmp_regression),
                            ("transport", malformed_transport_regression),
                            ("devip", negative_devip_attach_regression),
+                           ("tcp-scale", tcp_window_scale_regression),
                            ("tcp-limbo", tcp_limbo_regression),
                            ("tcp", tcp_regression)):
             try:

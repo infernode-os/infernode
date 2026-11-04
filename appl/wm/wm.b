@@ -1154,6 +1154,11 @@ forgetclient(c: ref Client)
 		if(z.flags & Kbdstarted)
 			break;
 	setkbdfocus(z);
+	# A window leaves the screen when its image is freed.  tellexit
+	# holds c through Exitgrace, so the images go now, not then.
+	for(wl := c.wins; wl != nil; wl = tl wl)
+		(hd wl).img = nil;
+	c.wins = nil;
 }
 
 # exitwhenempty: tell the main loop to exit once every window has gone

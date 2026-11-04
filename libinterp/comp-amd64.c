@@ -389,11 +389,24 @@ rdestroy(void)
 	destroy(R.s);
 }
 
+/*
+ * A call to a built-in module's function, as OP(mcall) makes it.
+ * macmcal has made R.M the callee's Modlink, with a reference, and
+ * commcall left the caller's in f->mr, its return in f->lr.  An
+ * exception the function raises then finds no handler in the callee
+ * (a built-in has none) and goes back through f->mr and f->lr to the
+ * caller's, and unwinding f drops the reference.  With f->mr nil and
+ * R.M the caller's, handler() looked in the caller's handlers at R.PC,
+ * which a compiled call does not write: one left inside the caller's
+ * handler took f for the caller's frame, and destroyed what was at
+ * its exception slot (tests/jit_fault_test.b, BuiltinRaise).
+ */
 static void
 rmcall(void)
 {
 	Prog *p;
 	Frame *f;
+	Modlink *ml;
 	Inst *lr;
 
 	if((void*)R.dt == H)
@@ -403,21 +416,10 @@ rmcall(void)
 	if(f == H)
 		error(exModule);
 
-	f->mr = nil;
-	/*
-	 * R.PC before the caller's every handler, while the builtin runs:
-	 * an exception it raises (exBounds from utfbytes, out of memory,
-	 * an interrupted call) is then matched not with this frame, the
-	 * builtin's, but through its lr with the caller's pc and frame, as
-	 * the interpreter's mcall has it. R.PC was whatever was last
-	 * punted: inside the caller's handler block, the handler was taken
-	 * with this frame for the caller's, its locals' zeroing and the
-	 * exception written into the builtin's frame, and the caller went
-	 * on in it (destroy of nil; a nil R.FP in compiled code: tests
-	 * jit_builtinexc_test.b, tools/sysfuzz -P, the native chaos build).
-	 */
-	R.PC = (Inst*)R.M->prog;
+	ml = R.M;
 	((void(*)(Frame*))R.dt)(f);
+	R.M = f->mr;
+	D2H(ml)->ref--;
 	lr = f->lr;
 	R.SP = (uchar*)f;
 	R.FP = f->fp;
@@ -2809,6 +2811,8 @@ macmcal(void)
 	*mlnil = code-mlnil-1;
 	modrm(Ostw, O(REG, FP), RLINK, RCX);
 	modrm(Ostw, O(REG, dt), RLINK, RAX);
+	modrm(Ostw, O(REG, M), RLINK, RRTA);			/* R.M = the callee's, as OP(mcall) */
+	modrm32(Oincrm, O(Heap, ref)-sizeof(Heap), RRTA, 0);	/* with a reference: rmcall drops it */
 #ifdef _WIN32
 	gen_subsp(WINSHADOW_MAC);
 #endif
@@ -3281,10 +3285,21 @@ freejitcode(void *p, ulong size)
 }
 
 /*
+ * Pass 0's scratch: each instruction, then each macro, is generated
+ * into it from its start to be measured, so it holds one at a time and
+ * its size does not depend on the module's.  The largest one generated
+ * is a few hundred bytes (an indc, 126); upstream's is 4096.  It must be
+ * near the text segment, so that bra()'s rel32 displacements to C have
+ * the length they will have in pass 1; it is made once and kept.
+ */
+enum {
+	COMPILE_TMP = 8192,
+};
+static uchar *compile_tmp = nil;
+
+/*
  * Main compilation entry point
  */
-static uchar *compile_tmp = nil;
-static ulong compile_tmp_size = 0;
 
 int
 compile(Module *m, int size, Modlink *ml)
@@ -3294,7 +3309,6 @@ compile(Module *m, int size, Modlink *ml)
 	Link *l;
 	int i, n = 0;
 	uchar *s, *tmp = nil;
-	ulong tmpsize;
 
 	if(getenv("INFERNODE_NOJIT") != nil)
 		return 0;
@@ -3308,27 +3322,10 @@ compile(Module *m, int size, Modlink *ml)
 	 */
 	patch = mallocz((size+1)*sizeof(*patch), 1);
 	tinit = mallocz(m->ntype*sizeof(*tinit), 0);
-	/*
-	 * The overflow test is on the product, before the floor of 8192:
-	 * made after it, it refused every module of fewer than 128
-	 * instructions (8192/64 != size), and they all ran in the
-	 * interpreter under -c1, saying nothing.
-	 */
-	tmpsize = (ulong)size * 64;
-	if(size > 0 && tmpsize / 64 != (ulong)size) {
-		goto bad;
-	}
-	if(tmpsize < 8192)
-		tmpsize = 8192;
-	if(tmpsize > compile_tmp_size) {
-		if(compile_tmp != nil)
-			jitfree(compile_tmp, compile_tmp_size*sizeof(uchar));
-		compile_tmp = jitmalloc(tmpsize*sizeof(uchar));
-		if(compile_tmp == nil) {
-			compile_tmp_size = 0;
+	if(compile_tmp == nil) {
+		compile_tmp = jitmalloc(COMPILE_TMP);
+		if(compile_tmp == nil)
 			goto bad;
-		}
-		compile_tmp_size = tmpsize;
 	}
 	tmp = compile_tmp;
 	if(tinit == nil || patch == nil) {
@@ -3354,6 +3351,12 @@ compile(Module *m, int size, Modlink *ml)
 	for(i = 0; i < size; i++) {
 		code = tmp;
 		comp(&m->prog[i]);
+		if(code - tmp >= COMPILE_TMP) {
+			print("JIT: instruction %d overflowed tmp (%ld >= %d)\n",
+				i, (long)(code - tmp), COMPILE_TMP);
+			base = nil;	/* it is tmp here, which is kept */
+			goto bad;
+		}
 		patch[i] = n;
 		n += code - tmp;
 	}
@@ -3362,6 +3365,12 @@ compile(Module *m, int size, Modlink *ml)
 	for(i = 0; i < nelem(mactab); i++) {
 		code = tmp;
 		mactab[i].gen();
+		if(code - tmp >= COMPILE_TMP) {
+			print("JIT: macro %d overflowed tmp (%ld >= %d)\n",
+				i, (long)(code - tmp), COMPILE_TMP);
+			base = nil;	/* it is tmp here, which is kept */
+			goto bad;
+		}
 		macro[mactab[i].idx] = n;
 		n += code - tmp;
 	}

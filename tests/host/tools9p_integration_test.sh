@@ -647,26 +647,35 @@ else
     fail "startup direct-send path rejection probe failed"
 fi
 
+# Sibling prefixes: a grant of /tmp/veltro/ok must not cover /tmp/veltro/okevil,
+# which a check of string prefixes would let through.  The grant is an
+# ordinary directory and okevil exists, so only pathwithin()'s component check
+# refuses it: under a policy root (/tmp/veltro, which covers nothing beneath
+# it) or for a path that does not exist, grantcovers() refuses first and the
+# probe proves nothing.  Each probe makes what it needs, so it gives the same
+# result alone as in this script.
 if emu_c "provision_sibling_prefix" 14 \
-	"mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
-    if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
+    "mkdir -p /tmp/veltro/ok /tmp/veltro/okevil; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '15 paths=/tmp/veltro/okevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltro/okevil'; then
         fail "child provisioning treated sibling prefix as covered by parent grant"
-    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then
+    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltro/okevil'; then
         fail "child provisioning did not explicitly reject sibling prefix (output: $OUTPUT)"
     elif echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
         pass "child provisioning is component-aware for sibling prefixes"
     else
-        fail "child provisioning did not preserve covered descendant path (output: $OUTPUT)"
+        fail "child provisioning did not grant the parent's own path after refusing its sibling (output: $OUTPUT)"
     fi
 else
     fail "sibling-prefix child path provisioning probe failed"
 fi
 
+# The grantable path comes first, so a request is refused whole only if
+# nothing is provisioned before every path is checked.
 if emu_c "provision_sibling_mixed" 14 \
-    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '17 paths=/tmp/veltroevil:rw,/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
-    if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
+    "mkdir -p /tmp/veltro/ok /tmp/veltro/okevil; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '17 paths=/tmp/veltro/ok:rw,/tmp/veltro/okevil:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltro/okevil'; then
         fail "child provisioning treated sibling prefix as covered by parent grant"
-    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then
+    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltro/okevil'; then
         fail "mixed sibling-prefix request did not fail atomically (output: $OUTPUT)"
     elif echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
         fail "refused sibling-prefix request left a partially granted child"
@@ -677,9 +686,27 @@ else
     fail "mixed sibling-prefix provisioning probe failed"
 fi
 
-if emu_c "provision_covered_descendant" 14 \
-    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+# A policy root covers nothing beneath it (18c45e6f, grantcovers()), and a
+# refused request before it changes nothing: under -p /tmp/veltro:rw a child
+# asking for /tmp/veltro/ok, which exists, is refused.
+if emu_c "provision_policy_root_descendant" 14 \
+    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok rw'; then
+        fail "a policy-root grant minted a descendant for a child (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltro/ok (outside'; then
+        fail "child provisioning did not refuse a policy root's descendant (output: $OUTPUT)"
+    else
+        pass "a policy-root grant does not cover its descendants for a child"
+    fi
+else
+    fail "policy-root descendant provisioning probe failed"
+fi
+
+# /tmp/veltro is a policy root, which covers nothing beneath it: the grant
+# has to be an ordinary directory.
+if emu_c "provision_covered_descendant" 14 \
+    "mkdir -p /tmp/veltro/ok/sub; tools9p -p /tmp/veltro/ok:rw read task & sleep 3; echo '16 paths=/tmp/veltro/ok/sub:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    if echo "$OUTPUT" | grep -q '^/tmp/veltro/ok/sub rw'; then
         pass "child provisioning preserves a covered descendant path"
     else
         fail "child provisioning did not preserve covered descendant path (output: $OUTPUT)"

@@ -329,13 +329,41 @@ echo "=== verifying (launch + assert hello_test passes) ==="
 LOG=$(mktemp -t infernode-ios-verify)
 # The headless app runs /tests/hello_test.dis then emu exits (which exits
 # the app process), so --console-pty returns on its own; cap it anyway.
-( xcrun simctl launch --console-pty --terminate-running-process booted "$BUNDLE_ID" \
-	>"$LOG" 2>&1 ) &
-LAUNCH_PID=$!
-( sleep 60; kill "$LAUNCH_PID" 2>/dev/null ) &
-WATCHDOG=$!
-wait "$LAUNCH_PID" 2>/dev/null || true
-kill "$WATCHDOG" 2>/dev/null || true
+#
+# A launch that started the app has its first line ("InferNode: emu_run")
+# at once and the test's PASS within ten seconds. On some CI runs (master
+# 86de1203 and 62ce2a6a among them) simctl wrote nothing at all for the
+# whole cap, not even the "bundle: pid" it prints when it has started an
+# app: it never started this one. So a launch with nothing written in
+# STARTWAIT seconds is stopped and made again, up to LAUNCHES times; one
+# that has started is given the whole cap. A real fault still fails: the
+# last attempt's log, and what the simulator says, are printed.
+STARTWAIT=20
+CAP=60
+LAUNCHES=3
+attempt=0
+while :; do
+	attempt=$((attempt + 1))
+	: >"$LOG"
+	( exec xcrun simctl launch --console-pty --terminate-running-process booted "$BUNDLE_ID" \
+		>"$LOG" 2>&1 ) &
+	LAUNCH_PID=$!
+	waited=0
+	while kill -0 "$LAUNCH_PID" 2>/dev/null && [ "$waited" -lt "$CAP" ]; do
+		if [ "$waited" -ge "$STARTWAIT" ] && [ ! -s "$LOG" ]; then
+			break
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	kill "$LAUNCH_PID" 2>/dev/null || true
+	wait "$LAUNCH_PID" 2>/dev/null || true
+	if [ -s "$LOG" ] || [ "$attempt" -ge "$LAUNCHES" ]; then
+		break
+	fi
+	echo "launch $attempt: simctl started nothing in ${STARTWAIT}s; stopping it and launching again"
+	xcrun simctl terminate booted "$BUNDLE_ID" >/dev/null 2>&1 || true
+done
 
 echo "--- captured console ---"
 grep -vE '^$' "$LOG" | tail -20
@@ -345,7 +373,11 @@ if grep -qE 'PASS|[0-9]+ passed' "$LOG"; then
 	rm -f "$LOG"
 	exit 0
 else
-	echo "VERIFY FAILED: expected test PASS output not found." >&2
+	echo "VERIFY FAILED: expected test PASS output not found (after $attempt launch(es))." >&2
 	echo "  full log: $LOG" >&2
+	echo "--- simulator: booted devices, the app's container, recent crash reports ---" >&2
+	xcrun simctl list devices booted >&2 2>&1 || true
+	xcrun simctl get_app_container booted "$BUNDLE_ID" >&2 2>&1 || true
+	ls -t "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null | grep -i infernode | head -3 >&2 || true
 	exit 1
 fi

@@ -312,6 +312,11 @@ SCENARIOS = {
 # Scenarios whose model never stops calling tools: every turn is the same.
 LOOPING = {
     "step_cap": {"tools": [tool("list", FIX)]},
+    # The same, each step 200ms: a turn a test interrupts (cancel, input
+    # typed while it runs) is still running when it does, however fast
+    # the client (llmclient's kept connections made a step of step_cap
+    # a few ms, and 100 of them ended before a cancel 1s later).
+    "slow_loop": {"tools": [tool("list", FIX)], "delay": 0.2},
 }
 
 LOG = None

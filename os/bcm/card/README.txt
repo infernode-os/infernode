@@ -39,6 +39,25 @@ All are optional, and absent from a new card:
               token on its first line is sent in clear.
   skiplogon   start the desktop with no login. Keys will not persist.
 
+Security and updates
+--------------------
+
+There is no default password: the first boot asks you to choose one. A
+new card offers nothing on the network that lets anyone in; the files
+above (netconsole, and cpulisten in the manual) are what turn that on.
+The serial console on GPIO 14 and 15 is a shell for anyone who can
+reach those pins.
+
+Nothing updates itself. Security fixes come as a new release, with new
+card images; write the new image to the card as you wrote this one.
+That replaces the whole card, usr/ too, which holds your keys and
+secstore account: copy usr/, and any control files, off it first and
+back after. How long each release gets fixes is in SECURITY.md:
+https://github.com/infernode-os/infernode/blob/master/SECURITY.md
+
+Report a security problem privately, not as a public issue:
+https://github.com/infernode-os/infernode/security/advisories/new
+
 The manual, and every other file the machine reads:
 https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md
 

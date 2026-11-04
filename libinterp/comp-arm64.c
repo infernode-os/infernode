@@ -2991,17 +2991,11 @@ compile(Module *m, int size, Modlink *ml)
 	base = nil;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
-	/* Size tmp buffer proportional to module: each Dis instruction can
-	 * expand to many ARM64 instructions (especially case statements).
-	 * Use 64 ARM64 instructions per Dis instruction as upper bound,
-	 * with a minimum of 8192. */
-	if(size > 0 && (ulong)size > ((ulong)-1) / 64) {
-		/* overflow check */
-		goto bad;
-	}
-	tmpsize = size * 64;
-	if(tmpsize < 8192)
-		tmpsize = 8192;
+	/* Pass 0 generates each instruction, then each macro, into tmp
+	 * from its start to measure it, so tmp holds one at a time and its
+	 * size does not depend on the module's (upstream's is 4096 words).
+	 * One that does not fit is caught below. */
+	tmpsize = 8192;
 	tmp = malloc(tmpsize * sizeof(u32int));
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
@@ -3047,6 +3041,11 @@ compile(Module *m, int size, Modlink *ml)
 		codeoff = n;
 		code = tmp;
 		mactab[i].gen();
+		if(code - tmp >= (int)tmpsize) {
+			print("JIT: macro %d overflow tmp buffer (%lud >= %lud)\n",
+				i, (ulong)(code - tmp), tmpsize);
+			goto bad;
+		}
 		macro[mactab[i].idx] = n;
 		n += code - tmp;
 	}

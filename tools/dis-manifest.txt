@@ -757,6 +757,7 @@ dis/tests/imgload_test.dis
 dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis
+dis/tests/ipint_release_test.dis
 dis/tests/jit_big_test.dis
 dis/tests/jit_byte_test.dis
 dis/tests/jit_bounds_test.dis
@@ -769,6 +770,7 @@ dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_small_helper.dis
+dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
@@ -793,6 +795,7 @@ dis/tests/limbo_inline_test.dis
 dis/tests/limbo_ldt_test.dis
 dis/tests/lists_test.dis
 dis/tests/llmclient_anthropic_test.dis
+dis/tests/llmclient_pool_test.dis
 dis/tests/llmclient_proxy_test.dis
 dis/tests/llmclient_reqshape_test.dis
 dis/tests/llmclient_sse_fallback_test.dis
@@ -893,6 +896,7 @@ dis/tests/fractals_zoombox_test.dis
 dis/tests/tkimgrender.dis
 dis/tests/tkrender.dis
 dis/tests/tls_crypto_test.dis
+dis/tests/tls_hrr_test.dis
 dis/tests/tls_live_test.dis
 dis/tests/tls_pq_test.dis
 dis/tests/tls_protocol_test.dis

@@ -89,15 +89,17 @@ TARG=\
 	jit_nilmod_test.dis\
 	jit_killcall_test.dis\
 	jit_builtinexc_test.dis\
-	jit_small_helper.dis\
+	ipint_release_test.dis\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
+	jit_small_helper.dis\
 	pool_nomem_helper.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
+	jit_small_test.dis\
 	jit_test.dis\
 	js_engine_test.dis\
 	json_test.dis\
@@ -181,6 +183,7 @@ TARG=\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
+	tls_hrr_test.dis\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
@@ -260,6 +263,7 @@ TARG=\
 	gpu_smoke.dis\
 	llmclient_sse_fallback_test.dis\
 	llmclient_proxy_test.dis\
+	llmclient_pool_test.dis\
 	tlsclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\
@@ -409,6 +413,7 @@ SYSMODULES=\
 	auth9.m\
 	styxlib.m\
 	9p.m\
+	ipints.m\
 
 DISBIN=$ROOT/dis/tests
 

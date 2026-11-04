@@ -1648,6 +1648,8 @@ check "lbl:  setlabel/gotolabel OK"     "context switch restores sp AND callee-s
 check "gcpc: getcallerpc OK"            "getcallerpc names the caller from both the macro and the asm"
 check "proc: procinit/newproc OK"       "os/port/proc allocates processes with distinct pids and stacks"
 check "qlok: qlock/rwlock OK"           "os/port/qlock blocking locks work uncontended"
+check "qlok: canrlock punts for a writer only" \
+                                      "canrlock fails for a writer, not beside another reader (os/ip dropped packets)"
 check "pgrp: newpgrp OK"                "os/port/pgrp allocates a process group"
 check "chan: newchan/cname OK"          "os/port/chan allocates channels and composes paths"
 check "root: devattach/walk/cclose OK"   "root device attaches, walks to /dev, and closes cleanly"

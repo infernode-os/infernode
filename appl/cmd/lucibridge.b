@@ -379,6 +379,11 @@ writedialogue(title, text, progress, options: string): int
 # NOTE: the dialogue returns the clicked LABEL as the choice string, so
 # the labels in the option list below and the choice comparisons further
 # down MUST stay in sync.  If you rename a button, rename its comparison.
+#
+# On a phone (infmobile) the two CLI options are not offered: there is no
+# host there to run a gateway or the CLI it serves (iOS cannot run one at
+# all), so choosing one only ever ended at "can't reach it".  A phone
+# reaches a computer's CLI login through Remote 9P instead, and says so.
 runsetupwizard()
 {
 	greeting := agentlib->readfile(SETUP_GREETING_PATH);
@@ -386,9 +391,15 @@ runsetupwizard()
 		greeting = "Welcome to InferNode! I'm **Veltro**, your AI agent.\n\n" +
 			"I need an LLM connection to get started. Choose an option below:";
 	writemsg("veltro", agentlib->strip(greeting));
+	options := "Remote API,Local model,Claude CLI,Codex CLI,Remote 9P";
+	optionlist := "Remote API / Local model / Claude CLI / Codex CLI / Remote 9P";
+	if(onphone()){
+		options = "Remote API,Local model,Remote 9P";
+		optionlist = "Remote API / Local model / Remote 9P";
+	}
 	writedialogue("LLM Setup",
 		"Choose how to connect to an AI model:",
-		"", "Remote API,Local model,Claude CLI,Codex CLI,Remote 9P");
+		"", options);
 	log("displayed LLM setup dialogue");
 
 	pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
@@ -446,6 +457,7 @@ runsetupwizard()
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
 				"dial address (`tcp!host!port`) of an InferNode exporting `/mnt/llm`. " +
+				phonecli() +
 				"Then close InferNode and relaunch it.");
 		} else {
 			# A typed message (not one of the option buttons) before any
@@ -454,7 +466,7 @@ runsetupwizard()
 			writemsg("user", choice);
 			writemsg("veltro",
 				"I'm not connected to an LLM yet, so I can't reply. Choose an option above " +
-				"(Remote API / Local model / Claude CLI / Codex CLI / Remote 9P) to set one " +
+				"(" + optionlist + ") to set one " +
 				"up — or, if you already configured it in Settings, close InferNode and " +
 				"relaunch so the change takes effect.");
 			continue;	# keep listening; don't park
@@ -462,6 +474,30 @@ runsetupwizard()
 		# A configurator was opened — park until the user quits and relaunches.
 		<-chan of int;
 	}
+}
+
+# Lucifer's phone layout (iOS, Android): boot-mobile.sh sets infmobile.
+onphone(): int
+{
+	s := agentlib->readfile("/env/infmobile");
+	return s != nil && s[0] == '1';
+}
+
+# how a phone uses a computer's Claude or Codex CLI login, for the
+# Remote 9P guidance; nothing elsewhere
+phonecli(): string
+{
+	if(!onphone())
+		return "";
+	return "To use the Claude or Codex CLI from this phone, run InferNode on a " +
+		"computer set up for one and enter that computer's address here. ";
+}
+
+gatelabel(backend: string): string
+{
+	if(backend == "codex")
+		return "Codex CLI gateway";
+	return "Claude CLI gateway";
 }
 
 # Update a dialogue tile in-place (e.g. progress bar update).
@@ -2186,6 +2222,12 @@ init(nil: ref Draw->Context, args: list of string)
 					"Common causes: an invalid key, blocked network access to api.anthropic.com, " +
 					"or a startup error logged at /tmp/lucibridge.log. " +
 					"Open Settings → LLM Service, then close InferNode and relaunch it.");
+			else if((backend == "cli" || backend == "codex") && onphone())
+				writemsg("veltro",
+					"The " + gatelabel(backend) + " is configured, but a phone has no host " +
+					"to run its gateway. Open Settings → LLM Service and choose Remote API, " +
+					"Local model or Remote (9P). " + phonecli() +
+					"Then close InferNode and relaunch it.");
 			else if(backend == "cli")
 				writemsg("veltro",
 					"The Claude CLI gateway is configured, but I can't reach it. " +

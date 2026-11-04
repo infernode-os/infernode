@@ -221,6 +221,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				mobile = 1;
 		}
 	}
+	# A phone has no host to run a CLI gateway, or the CLI it serves
+	# (iOS cannot run one at all): the backends are the first two.  A
+	# phone uses a computer's CLI login through Remote (9P).
+	if(mobile){
+		llm_backend_names = llm_backend_names[0:2];
+		llm_backend_labels = llm_backend_labels[0:2];
+	}
 
 	# Parse -c <name> to choose initial category. Quietly ignore unknown
 	# flags / arguments — launchers should not crash settings if a future
@@ -500,6 +507,8 @@ panelllm()
 			i, tk->quote(llm_mode_labels[i]), llm_mode_names[i], c_bg, c_fg, i));
 
 	if(llm_is_remote){
+		if(mobile)
+			lbl("dialcli", "Claude or Codex CLI:\nrun InferNode on a\ncomputer with one,\nits address below.");
 		lbl("diall", "Dial address (tcp!host!port):");
 		entryrow("dial", curdial);
 		hdr("krh", "Keyring authentication");

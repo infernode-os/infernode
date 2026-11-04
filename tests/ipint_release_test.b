@@ -174,10 +174,12 @@ testLargeOperands(t: ref T)
 	t.assert(r.cmp(b) < 0, "r < b");
 	t.assert(a.mod(b).eq(r), "mod agrees with div");
 
-	m := IPint.random(40000).shl(1).add(IPint.inttoip(1));	# odd
+	# m = x*2k + 1 is odd, larger than x and prime to it, so x has an
+	# inverse mod m.  A random odd m shared a factor with x about one
+	# run in five, and invert raised "no inverse".
 	x := IPint.inttoip(2).expmod(IPint.inttoip(39999), nil).add(IPint.inttoip(12345));
-	if(x.cmp(m) >= 0)
-		x = x.mod(m);
+	k := IPint.random(64).add(IPint.inttoip(1)).shl(1);
+	m := x.mul(k).add(IPint.inttoip(1));
 	y := x.invert(m);
 	t.assert(x.mul(y).mod(m).eq(IPint.inttoip(1)), "x * x^-1 mod m is 1");
 }

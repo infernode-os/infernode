@@ -51,6 +51,13 @@ skipped := 0;
 # on a loaded CI runner, where a fixed 50 ms failed.
 MAXLATE: con 50;
 
+# How long each loop of calls runs.  It is a time, not a count of calls:
+# held against released is told apart only when the loop is long beside
+# the host's noise, and a faster expmod (Montgomery's, 14 ms a 2048-bit
+# call where it was 138) made ten calls 145 ms, against noise of 76 ms
+# with no expmod at all on a loaded runner.
+LOOPMS: con 1000;
+
 # 2048-bit modulus, base and exponent, and base^exp mod m (Python's pow)
 M2048: con
 	"d022e8f4fa56820673ae38cc8820c81662b720857e4fb620c7fcc6e3869e9435" +
@@ -253,13 +260,18 @@ ticker(stop: chan of int, res: chan of int)
 	}
 }
 
-worker(n: int, b, e, m, want: ref IPint, done: chan of int)
+# expmods until the deadline, at least one; sends the calls made and
+# how many were wrong
+worker(deadline: int, b, e, m, want: ref IPint, done: chan of (int, int))
 {
+	n := 0;
 	bad := 0;
-	for(i := 0; i < n; i++)
+	do{
 		if(!b.expmod(e, m).eq(want))
 			bad++;
-	done <-= bad;
+		n++;
+	}while(sys->millisec() < deadline);
+	done <-= (n, bad);
 }
 
 # garbage, so the collector runs while expmod holds no VM; it sleeps
@@ -281,8 +293,8 @@ churn(stop: chan of int)
 	}
 }
 
-# the ticker's worst lateness while nw threads each run n expmods
-freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint)
+# the ticker's worst lateness while nw threads run expmods for LOOPMS
+freeze(t: ref T, label: string, nw: int, b, e, m, want: ref IPint)
 {
 	stop := chan of int;
 	res := chan of int;
@@ -290,20 +302,24 @@ freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint)
 	spawn ticker(stop, res);
 	spawn churn(cstop);
 	sys->sleep(50);
-	done := chan of int;
+	done := chan of (int, int);
 	t0 := sys->millisec();
 	for(i := 0; i < nw; i++)
-		spawn worker(n, b, e, m, want, done);
+		spawn worker(t0+LOOPMS, b, e, m, want, done);
+	calls := 0;
 	bad := 0;
-	for(i = 0; i < nw; i++)
-		bad += <-done;
+	for(i = 0; i < nw; i++){
+		(c, nb) := <-done;
+		calls += c;
+		bad += nb;
+	}
 	ms := sys->millisec() - t0;
 	stop <-= 1;
 	worst := <-res;
 	cstop <-= 1;
 	t.asserteq(bad, 0, label+": every result right");
 	sys->print("%s: %d calls in %d ms (%d ms each), worst ticker lateness %d ms\n",
-		label, nw*n, ms, ms/(nw*n), worst);
+		label, calls, ms, ms/calls, worst);
 	limit := ms/4;
 	if(limit < MAXLATE)
 		limit = MAXLATE;
@@ -329,19 +345,19 @@ baseline(): int
 
 testFreeze2048(t: ref T)
 {
-	freeze(t, "2048-bit modulus, 2048-bit exponent", 1, 10,
+	freeze(t, "2048-bit modulus, 2048-bit exponent", 1,
 		hex(B2048), hex(E2048), hex(M2048), hex(R2048));
 }
 
 testFreeze256(t: ref T)
 {
-	freeze(t, "2048-bit modulus, 256-bit exponent", 1, 40,
+	freeze(t, "2048-bit modulus, 256-bit exponent", 1,
 		hex(B2048), hex(E256), hex(M2048), hex(R256));
 }
 
 testFreezeConcurrent(t: ref T)
 {
-	freeze(t, "two threads, 2048-bit modulus and exponent", 2, 5,
+	freeze(t, "two threads, 2048-bit modulus and exponent", 2,
 		hex(B2048), hex(E2048), hex(M2048), hex(R2048));
 }
 

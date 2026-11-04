@@ -328,6 +328,41 @@ IPint_iptoint(void *fp)
 	*f->ret = mptoi(MP(f->i));
 }
 
+/*
+ * Long computations leave the Dis VM to other threads while they run:
+ * the builtin calls release() before and acquire() after, as Keyring's
+ * sign, verify and genSK and the prime generators below do.  Held, a
+ * 2048-bit expmod with a 2048-bit exponent (Inferno's Diffie-Hellman,
+ * secstore3) stopped every Limbo thread for 90 ms on a fast x86 and for
+ * seconds on a Raspberry Pi.
+ *
+ * While released this thread must touch nothing in the Limbo heap (the
+ * collector and every other thread run) and must not raise: an error()
+ * would unwind into the interpreter without the VM.  So the operands are
+ * copied out of their IPints first, every error libmp would raise for
+ * them is raised before release() or after acquire() instead, and the
+ * result's IPint is made after acquire().  (libmp still raises if malloc
+ * fails, as genprime and the others here always have.)
+ *
+ * A switch of thread costs tens of microseconds, so only operations
+ * expected to take longer than about a millisecond on a fast x86
+ * release: an RSA public-key operation (e = 65537, 0.6 ms at 2048 bits;
+ * TLS's certificate checks) keeps the VM.
+ */
+enum
+{
+	ExpRelModBits=	512,	/* expmod: a modulus longer than this */
+	ExpRelExpBits=	32,	/* and an exponent longer than this */
+	InvRelBits=	1024,	/* invert: a modulus longer than this (1 ms at 2048 bits) */
+	OpRelBits=	16384,	/* mul, div, mod: an operand longer than this */
+};
+
+static int
+bigop(mpint *a, mpint *b)
+{
+	return mpsignif(a) > OpRelBits || mpsignif(b) > OpRelBits;
+}
+
 /* modular exponentiation */
 void
 IPint_expmod(void *fp)
@@ -347,8 +382,21 @@ IPint_expmod(void *fp)
 		mod = MP(f->mod);
 	else
 		mod = nil;
+	if(mpcmp(exp, mpzero) < 0)
+		error("mpexp: negative exponent");	/* as libmp would */
 	ret = mpnew(0);
-	if(ret != nil)
+	if(mod != nil && mpsignif(mod) > ExpRelModBits && mpsignif(exp) > ExpRelExpBits){
+		/* mod is not zero, exp is positive: mpexp cannot raise */
+		base = mpcopy(base);
+		exp = mpcopy(exp);
+		mod = mpcopy(mod);
+		release();
+		mpexp(base, exp, mod, ret);
+		acquire();
+		mpfree(base);
+		mpfree(exp);
+		mpfree(mod);
+	}else
 		mpexp(base, exp, mod, ret);
 	*f->ret = newIPint(ret);
 }
@@ -358,7 +406,8 @@ void
 IPint_invert(void *fp)
 {
 	F_IPint_invert *f;
-	mpint *ret;
+	mpint *ret, *base, *mod, *g, *dc;
+	int ok;
 	void *v;
 
 	f = fp;
@@ -366,9 +415,37 @@ IPint_invert(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	base = MP(f->base);
+	mod = MP(f->mod);
 	ret = mpnew(0);
-	if(ret != nil)
-		mpinvert(MP(f->base), MP(f->mod), ret);
+	if(mpsignif(mod) <= InvRelBits){
+		mpinvert(base, mod, ret);
+		*f->ret = newIPint(ret);
+		return;
+	}
+
+	/*
+	 * mpinvert, its "no inverse" raised after acquire();
+	 * mod is not zero, so mpmod cannot raise
+	 */
+	base = mpcopy(base);
+	mod = mpcopy(mod);
+	g = mpnew(0);
+	dc = mpnew(0);
+	release();
+	mpextendedgcd(base, mod, g, ret, dc);
+	ok = mpcmp(g, mpone) == 0;
+	if(ok)
+		mpmod(ret, mod, ret);
+	acquire();
+	mpfree(g);
+	mpfree(dc);
+	mpfree(base);
+	mpfree(mod);
+	if(!ok){
+		mpfree(ret);
+		error("mpinvert: no inverse");	/* as libmp would */
+	}
 	*f->ret = newIPint(ret);
 }
 
@@ -428,7 +505,15 @@ IPint_mul(void *fp)
 	i1 = MP(f->i1);
 	i2 = MP(f->i2);
 	ret = mpnew(0);
-	if(ret != nil)
+	if(bigop(i1, i2)){
+		i1 = mpcopy(i1);
+		i2 = mpcopy(i2);
+		release();
+		mpmul(i1, i2, ret);
+		acquire();
+		mpfree(i1);
+		mpfree(i2);
+	}else
 		mpmul(i1, i2, ret);
 
 	*f->ret = newIPint(ret);
@@ -458,7 +543,17 @@ IPint_div(void *fp)
 		mpfree(quo);
 		error(exHeap);
 	}
-	mpdiv(i1, i2, quo, rem);
+	if(i2->top != 0 && bigop(i1, i2)){
+		/* the divisor is not zero: mpdiv cannot raise */
+		i1 = mpcopy(i1);
+		i2 = mpcopy(i2);
+		release();
+		mpdiv(i1, i2, quo, rem);
+		acquire();
+		mpfree(i1);
+		mpfree(i2);
+	}else
+		mpdiv(i1, i2, quo, rem);
 
 	f->ret->t0 = newIPint(quo);
 	f->ret->t1 = newIPint(rem);
@@ -478,7 +573,16 @@ IPint_mod(void *fp)
 	i1 = MP(f->i1);
 	i2 = MP(f->i2);
 	ret = mpnew(0);
-	if(ret != nil)
+	if(i2->top != 0 && bigop(i1, i2)){
+		/* the divisor is not zero: mpmod cannot raise */
+		i1 = mpcopy(i1);
+		i2 = mpcopy(i2);
+		release();
+		mpmod(i1, i2, ret);
+		acquire();
+		mpfree(i1);
+		mpfree(i2);
+	}else
 		mpmod(i1, i2, ret);
 
 	*f->ret = newIPint(ret);

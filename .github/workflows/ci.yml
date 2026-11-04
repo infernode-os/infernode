@@ -745,7 +745,7 @@ jobs:
               amd64_jit_code_leak_test audioring_test awk_builtins_test calendar9p_test
               cpu_boundary_test dialogue_test emu_root_test
               emulator_leader_lifecycle_test exec_confinement_test
-              font_regression_test ipchecksum_test iproute_test
+              font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
               listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test

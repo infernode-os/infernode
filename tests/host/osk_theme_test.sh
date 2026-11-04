@@ -1,12 +1,14 @@
 #!/bin/sh
 #
 # wm/osk through a live switch to every theme in lib/lucifer/theme
-# (tests/osk/themes.sh), by pixel: the board the theme's header, a
-# letter's key its input colour with its label in its text colour, the
-# keyboard's own keys (shift, delete) its border colour, a key held down
-# its accent; and every label, the words shown and a held key legible
-# against what is behind them (WCAG's 4.5:1).  The theme left as it was
-# found.  Needs the SDL emulator (SDL_VIDEODRIVER=dummy).
+# (tests/osk/themes.sh), by pixel: the board, a letter's key (and its
+# label), the keyboard's own keys (shift, delete) and a key
+# held down each the colour the theme gives -- its osk-* keys
+# (lib/lucifer/theme/glenda's) or its roles, header, input, border,
+# accent; every label, the words shown and a held key legible against
+# what is behind them (WCAG's 4.5:1); and in a theme that sets the
+# keyboard's colours, the typing keys standing out more than its own.
+# The theme left as it was found.  Needs the SDL emulator (SDL_VIDEODRIVER=dummy).
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -43,7 +45,7 @@ root, T, themes = sys.argv[1], sys.argv[2], sys.argv[3:]
 def load(n):
     d = {}
     for l in open(os.path.join(root, 'lib/lucifer/theme', n)):
-        m = re.match(r'(\w+)\s+([0-9A-Fa-f]{6})', l)
+        m = re.match(r'([\w-]+)\s+([0-9A-Fa-f]{6})', l)
         if m: d[m.group(1)] = m.group(2).upper()
     return d
 base = load('brimstone')
@@ -59,8 +61,17 @@ def check(ok, msg):
     global failed
     print(('PASS: ' if ok else 'FAIL: ') + msg)
     if not ok: failed = 1
+def osk(t):	# the keyboard's colours: its own keys (osk-*), else the theme's roles
+    k = {'board': t['header'], 'key': t['input'], 'meta': t['border'],
+         'text': t['text'], 'metatext': t['text'], 'press': t['accent'], 'presstext': t['bg'],
+         'word': t['text2'], 'auto': t['accent'], 'autobg': None}
+    for n in list(k):
+        if 'osk-' + n in t: k[n] = t['osk-' + n]
+    return k
 for th in themes:
     t = dict(base); t.update(load(th))
+    own = any(n.startswith('osk-') for n in load(th))
+    t = osk(t)
     im = P.load(os.path.join(root, T, th + '.img'))
     keys = {}
     for l in open(os.path.join(root, T, th + '.keys')):
@@ -75,21 +86,27 @@ for th in themes:
         cx, cy = (x0+x1)//2, (y0+y1)//2
         return {im.px(x, y) for x in range(cx-8, cx+9) for y in range(cy-10, cy+11)}
     a = keys['a']
-    check(im.px(a[0]+1, a[1]+1) == t['header'], f"{th}: the board is its header colour ({t['header']}, not {im.px(a[0]+1, a[1]+1)})")
+    check(im.px(a[0]+1, a[1]+1) == t['board'], f"{th}: the board ({t['board']}, not {im.px(a[0]+1, a[1]+1)})")
     for k in ('a', 'e', 'z'):
         got = im.px(*inside(k))
-        check(got == t['input'], f"{th}: {k}'s key is its input colour ({t['input']}, not {got})")
-    check(t['text'] in label('a'), f"{th}: a's label in its text colour ({t['text']})")
+        check(got == t['key'], f"{th}: {k}'s key ({t['key']}, not {got})")
+    check(t['text'] in label('a'), f"{th}: a's label ({t['text']})")
     for k in ('shift', 'del'):
         got = im.px(*inside(k))
-        check(got == t['border'], f"{th}: {k}'s key is its border colour ({t['border']}, not {got})")
+        check(got == t['meta'], f"{th}: {k}'s key ({t['meta']}, not {got})")
     got = im.px(*inside('t', 'bottom'))
-    check(got == t['accent'], f"{th}: a key held down is its accent ({t['accent']}, not {got})")
-    for what, fg, bg in (('a letter', 'text', 'input'), ('a key of its own', 'text', 'border'),
-                         ('a held key', 'bg', 'accent'), ('the words shown', 'text2', 'header'),
-                         ('the word a space puts in', 'accent', 'header')):
+    check(got == t['press'], f"{th}: a key held down ({t['press']}, not {got})")
+    for what, fg, bg in (('a letter', 'text', 'key'), ('a key of its own', 'metatext', 'meta'),
+                         ('a held key', 'presstext', 'press'), ('the words shown', 'word', 'board'),
+                         ('the word a space puts in', 'auto', t['autobg'] and 'autobg' or 'board')):
         c = cr(t[fg], t[bg])
         check(c >= 4.5, f"{th}: {what}'s label legible, {c:.1f}:1")
+    if own:
+        # a theme that sets the keyboard's colours sets them so the keys
+        # that type stand out from the board more than its own keys do
+        kc = cr(t['key'], t['board'])
+        mc = cr(t['meta'], t['board'])
+        check(kc > mc, f"{th}: the typing keys stand out more than shift and delete ({kc:.2f}:1 against {mc:.2f}:1)")
 sys.exit(failed)
 PY
 r=$?

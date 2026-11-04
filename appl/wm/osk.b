@@ -108,6 +108,46 @@ display: ref Display;
 win: ref Window;
 img: ref Image;			# the window's, nil while not on the screen
 theme: ref Lucitheme->Theme;
+
+# The keyboard's colours: a theme's roles, unless its file sets keys of
+# the keyboard's own (osk-*: lib/lucifer/theme/glenda's, Plan 9's),
+# read as Xenith reads its xenith-* (lucitheme's entries).  0: none
+# (as lucitheme's: a colour read always has its alpha; -1 is white).
+Kc: adt {
+	board:	int;		# behind the keys (osk-board; header)
+	key:	int;		# a key that types (osk-key; input)
+	meta:	int;		# the keyboard's own keys, shift, del (osk-meta; border)
+	text:	int;		# a typing key's label (osk-text; text)
+	metatext:	int;	# the keyboard's own keys' (osk-metatext; text)
+	press:	int;		# a key held down, shift on (osk-press; accent)
+	presstext:	int;	# its label (osk-presstext; bg)
+	word:	int;		# the words shown (osk-word; text2)
+	auto:	int;		# the word a space would put in (osk-auto; accent)
+	autobg:	int;		# behind it (osk-autobg; none)
+};
+kc: Kc;
+
+loadcolours()
+{
+	theme = lucitheme->gettheme();
+	kc = Kc(theme.header, theme.input, theme.border, theme.text, theme.text,
+		theme.accent, theme.bg, theme.text2, theme.accent, 0);
+	for(l := lucitheme->entries(lucitheme->current()); l != nil; l = tl l){
+		(k, v) := hd l;
+		case k {
+		"osk-board" =>	kc.board = v;
+		"osk-key" =>	kc.key = v;
+		"osk-meta" =>	kc.meta = v;
+		"osk-text" =>	kc.text = v;
+		"osk-metatext" =>	kc.metatext = v;
+		"osk-press" =>	kc.press = v;
+		"osk-presstext" =>	kc.presstext = v;
+		"osk-word" =>	kc.word = v;
+		"osk-auto" =>	kc.auto = v;
+		"osk-autobg" =>	kc.autobg = v;
+		}
+	}
+}
 font, sfont: ref Font;
 
 # the layouts
@@ -255,7 +295,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(ctxt == nil)
 		ctxt = wmclient->makedrawcontext();
 	display = ctxt.display;
-	theme = lucitheme->gettheme();
+	loadcolours();
 	if(icon != nil && icon->init(display) != nil)
 		icon = nil;
 
@@ -635,7 +675,7 @@ redraw()
 	# the theme's background above it
 	if(win.ctxt.connfd != nil && !img.r.eq(handlerect))
 		img.draw(img.r, colour(theme.bg), nil, (0, 0));
-	img.draw(handlerect, colour(theme.header), nil, (0, 0));
+	img.draw(handlerect, colour(kc.board), nil, (0, 0));
 	if(state == Handle){
 		drawhandle();
 		img.flush(Draw->Flushnow);
@@ -725,16 +765,16 @@ drawkey(k: ref Lkey, pressed: int)
 	g := gap();
 	outer := k.r;
 	r := outer.inset(g);
-	img.draw(outer, colour(theme.header), nil, (0, 0));
-	bg := theme.input;
-	fg := theme.text;
-	if(k.kind != Osklayout->Kchar && k.kind != Osklayout->Kspace)
-		bg = theme.border;
-	if(k.kind == Osklayout->Kshift && shift != Unshifted || k.kind == Osklayout->Kctrl && ctrl)
-		bg = theme.accent;
-	if(pressed){
-		bg = theme.accent;
-		fg = theme.bg;
+	img.draw(outer, colour(kc.board), nil, (0, 0));
+	bg := kc.key;
+	fg := kc.text;
+	if(k.kind != Osklayout->Kchar && k.kind != Osklayout->Kspace){
+		bg = kc.meta;
+		fg = kc.metatext;
+	}
+	if(k.kind == Osklayout->Kshift && shift != Unshifted || k.kind == Osklayout->Kctrl && ctrl || pressed){
+		bg = kc.press;
+		fg = kc.presstext;
 	}
 	img.draw(r, colour(bg), nil, (0, 0));
 	(s, gname) := keylabel(k);
@@ -771,10 +811,10 @@ drawpreview(k: ref Lkey)
 	if(y < img.r.min.y)
 		y = img.r.min.y;
 	r := Rect((x, y), (x + w, y + h));
-	img.draw(r, colour(theme.accent), nil, (0, 0));
+	img.draw(r, colour(kc.press), nil, (0, 0));
 	f := pickfont(rowh * 7 / 10, 0);
 	tw := f.width(s);
-	img.text((x + (w - tw)/2, y + (h - f.height)/2), colour(theme.bg), (0, 0), f, s);
+	img.text((x + (w - tw)/2, y + (h - f.height)/2), colour(kc.presstext), (0, 0), f, s);
 }
 
 drawlongpress(t: ref Tch)
@@ -794,14 +834,14 @@ drawlongpress(t: ref Tch)
 		y = img.r.min.y;
 	for(i := 0; i < n; i++){
 		r := Rect((x + i*w, y), (x + (i+1)*w, y + h));
-		bg := theme.menubg;
-		fg := theme.text;
+		bg := kc.key;
+		fg := kc.text;
 		if(i == t.lpsel){
-			bg = theme.accent;
-			fg = theme.bg;
+			bg = kc.press;
+			fg = kc.presstext;
 		}
 		img.draw(r, colour(bg), nil, (0, 0));
-		img.border(r, 1, colour(theme.border), (0, 0));
+		img.border(r, 1, colour(kc.meta), (0, 0));
 		s := "";
 		s[0] = t.lpalts[i];
 		if(shift != Unshifted)
@@ -833,7 +873,7 @@ drawstrip()
 	if(img == nil || state != Shown)
 		return;
 	r := striprect;
-	img.draw(r, colour(theme.header), nil, (0, 0));
+	img.draw(r, colour(kc.board), nil, (0, 0));
 	# the hide gesture's handle, at the right
 	hz := r.dy() * 3 / 5;
 	hc := Point(r.max.x - hz - r.dy()/3, r.min.y + (r.dy() - hz)/2);
@@ -847,16 +887,22 @@ drawstrip()
 		if(s == nil)
 			continue;
 		cr := Rect((r.min.x + i*sw, r.min.y), (r.min.x + (i+1)*sw, r.max.y));
-		fg := theme.text2;
+		fg := kc.word;
 		if(i == suggauto)
-			fg = theme.accent;
+			fg = kc.auto;
 		f := sfont;
 		for(; f.width(s) > cr.dx() - 8 && len s > 1; )
 			s = s[0:len s - 1];
 		w := f.width(s);
+		if(i == suggauto && kc.autobg != 0){
+			# marked as acme marks what is selected: behind it
+			b := Rect((cr.min.x + (cr.dx() - w)/2 - 6, cr.min.y + (cr.dy() - f.height)/2 - 2),
+				(cr.min.x + (cr.dx() + w)/2 + 6, cr.min.y + (cr.dy() + f.height)/2 + 2));
+			img.draw(b, colour(kc.autobg), nil, (0, 0));
+		}
 		img.text((cr.min.x + (cr.dx() - w)/2, cr.min.y + (cr.dy() - f.height)/2), colour(fg), (0, 0), f, s);
 		if(i > 0)
-			img.draw(Rect((cr.min.x, cr.min.y + cr.dy()/4), (cr.min.x+1, cr.max.y - cr.dy()/4)), colour(theme.border), nil, (0, 0));
+			img.draw(Rect((cr.min.x, cr.min.y + cr.dy()/4), (cr.min.x+1, cr.max.y - cr.dy()/4)), colour(kc.meta), nil, (0, 0));
 	}
 }
 
@@ -884,7 +930,7 @@ drawtrail(a, b: Point)
 	r := rowh / 12;
 	if(r < 2)
 		r = 2;
-	img.line(a, b, Draw->Enddisc, Draw->Enddisc, r, colour(theme.accent), (0, 0));
+	img.line(a, b, Draw->Enddisc, Draw->Enddisc, r, colour(kc.auto), (0, 0));
 	img.flush(Draw->Flushnow);
 }
 
@@ -928,7 +974,7 @@ wmctl(s: string)
 		exit;
 	}
 	if(s == "retheme"){
-		theme = lucitheme->gettheme();
+		loadcolours();
 		redraw();
 		return;
 	}

@@ -183,6 +183,25 @@ the word list: SCOWL's words, counted in Google Books Ngram
 .B tools/osk/mkwords.sh
 makes it)
 .TP
+.B /lib/lucifer/theme/*
+its colours: a theme's roles (header, input, border, accent, text),
+unless the theme sets the keyboard's own,
+.BR osk-board ,
+.BR osk-key ,
+.B osk-meta
+(shift, delete, the layers),
+.BR osk-text ,
+.BR osk-metatext ,
+.B osk-press
+(a key held down),
+.BR osk-presstext ,
+.B osk-word
+(the words shown),
+.B osk-auto
+and
+.B osk-autobg
+(the word a space would put in, and behind it), as Glenda does
+.TP
 .B $home/lib/osk/*
 what it has learned
 .PD

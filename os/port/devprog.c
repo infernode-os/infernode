@@ -653,7 +653,7 @@ progfds(Pgrp *pg, Fdsnap *s, char *va, int count, vlong offset)
 
 	size = 1024;
 	for(i = 0; i < s->n; i++)
-		size += 96 + (s->c[i]->name != nil? strlen(s->c[i]->name->s) : 0);
+		size += 96 + (s->c[i]->name != nil? s->c[i]->name->len : 0);	/* len is strlen(s), kept by every Cname change */
 	buf = malloc(size);
 	if(buf == nil)
 		error(Enomem);

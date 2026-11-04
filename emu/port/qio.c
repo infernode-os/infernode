@@ -281,6 +281,10 @@ trimblock(Block *bp, int offset, int len)
 	ulong l;
 	Block *nb, *startb;
 
+	if(offset < 0 || len < 0){
+		freeblist(bp);
+		return nil;
+	}
 	if(blocklen(bp) < offset+len) {
 		freeblist(bp);
 		return nil;

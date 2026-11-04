@@ -306,7 +306,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 	lex = Lexicon.new();
 	dec = Decoder.new(lex, nil);
 	lexc = chan[1] of ref Lexicon;
-	spawn loadwords(lexc);
+	# a password's keyboard (the login screen's) puts nothing right and
+	# offers nothing, so it reads no words: reading them is seconds of
+	# work on a slow board, at the moment the password is typed
+	if(mode != Secret)
+		readwords();
 
 	fingerc = chan[64] of (int, int, int, int, int);
 	kbdsc = chan of (int, int);
@@ -460,6 +464,17 @@ loadwords(c: chan of ref Lexicon)
 		nl.read(userwords, userweight);
 	}
 	c <-= nl;
+}
+
+wordsread := 0;
+
+# the word list, read in the background, once
+readwords()
+{
+	if(wordsread)
+		return;
+	wordsread = 1;
+	spawn loadwords(lexc);
 }
 
 # the word list, read: the decoder is made again on it
@@ -2164,6 +2179,8 @@ ctl(s: string): string
 		"secret" =>	mode = Secret;
 		* =>		return "usage: mode text|plain|secret";
 		}
+		if(mode != Secret)
+			readwords();
 		forget();
 		statuschanged();
 	"correct" or "swipe" =>

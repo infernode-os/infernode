@@ -5,8 +5,10 @@
 # secret mode: hidden until the screen is touched, then along the
 # bottom of the screen; what it types reaches the keyboard's reader
 # (wm/logon) as typed -- nothing put right -- and nothing of it is
-# recorded (its trace says only that a key was typed) or learned; a
-# touch above its keys types nothing; kill -g ends all of it.  Needs
+# recorded (its trace says only that a key was typed) or learned; no
+# word list read (a slow board's seconds, as the password is typed)
+# until a mode wants it; a touch above its keys types nothing; kill -g
+# ends all of it.  Needs
 # the SDL emulator (SDL_VIDEODRIVER=dummy).
 #
 set -e
@@ -52,6 +54,10 @@ else
 	[ "$n" -ge 6 ] && pass "its trace says only that keys were typed ($n)" || fail "trace: $n keys"
 fi
 [ ! -s "$ROOT/$T/home/lib/osk/words" ] && pass "nothing learned" || fail "learned: $(cat "$ROOT/$T/home/lib/osk/words")"
+[ "$(st secret words)" = 0 ] && pass "no words read for a password (it puts nothing right)" ||
+	fail "secret mode read $(st secret words) words"
+w=$(st text words)
+[ -n "$w" ] && [ "$w" -gt 0 ] && pass "read once a mode wants them ($w)" || fail "text mode: words '$w'"
 grep -q '^R gone' "$LOG" && pass "kill -g ends it" || fail "still serving after kill -g"
 
 [ $failed -eq 0 ] && echo "ALL PASS"

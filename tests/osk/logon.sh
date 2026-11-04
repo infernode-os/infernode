@@ -14,7 +14,7 @@ cat /dev/keyboard > /tmp/typed &
 wm/osk -s -M secret -r /tmp/trace &
 oskpid=$apid
 sleep 1
-while {! grep -s '^words [1-9]' /mnt/osk/status} {sleep 1}
+while {! grep -s '^state ' /mnt/osk/status} {sleep 1}
 cat /mnt/osk/status > /tmp/status.before
 # the screen touched, above where the keyboard will be
 echo f0 300 100 1 > /dev/fingers
@@ -37,6 +37,11 @@ sleep 1
 echo f0 300 100 1 > /dev/fingers
 echo f0 300 100 0 > /dev/fingers
 sleep 1
+cat /mnt/osk/status > /tmp/status.secret
+echo mode text > /mnt/osk/ctl
+sleep 1
+while {! grep -s '^words [1-9]' /mnt/osk/status} {sleep 1}
+cat /mnt/osk/status > /tmp/status.text
 kill -g $oskpid
 sleep 2
 if {ftest -e /mnt/osk/status} {

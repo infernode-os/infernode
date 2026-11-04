@@ -1748,9 +1748,7 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		conaddr((uvlong)mod->type[i->s.imm], RA3);
-		conpos(patch[i - mod->prog + 1], RA0);	/* R.PC as puntop writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
-		mem(Stw, O(REG, PC), RREG, RA0);
-		blmac(MacFRAM);
+		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 		opwst(i, Stw, RA2);
 		break;
 
@@ -2248,6 +2246,7 @@ macfram(void)
 	mem(Stw, O(REG, s), RREG, RA3);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, st), RREG, RLINK);
+	mem(Stw, O(REG, PC), RREG, RLINK);	/* R.PC for extend's "out of memory", here only (comp-arm64.c macfram) */
 	conaddr((uvlong)extend, RTA);
 	CALLR(RTA);
 	mem(Ldw, O(REG, st), RREG, RLINK);

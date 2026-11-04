@@ -1247,9 +1247,7 @@ commframe(Inst *i)
 	bramac(MacMFRA);
 
 	PATCH_BCOND(punt_lab);
-	con(RELPC(patch[i - mod->prog + 1]), RA0);	/* R.PC as punt writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
-	mem(Stw, O(REG, PC), RREG, RA0);
-	blmac(MacFRAM);
+	blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 	opwst(i, Stw, RA2);
 }
 
@@ -1385,9 +1383,7 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3);
-		con(RELPC(patch[i - mod->prog + 1]), RA0);	/* R.PC as punt writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
-		mem(Stw, O(REG, PC), RREG, RA0);
-		blmac(MacFRAM);
+		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 		opwst(i, Stw, RA2);
 		return;
 	case ICASE:
@@ -2049,9 +2045,7 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3);
-		con(RELPC(patch[i - mod->prog + 1]), RA0);	/* R.PC as punt writes it: MacFRAM's extend can raise "out of memory" (comp-amd64.c framepc) */
-		mem(Stw, O(REG, PC), RREG, RA0);
-		blmac(MacFRAM);
+		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 		opwst(i, Stw, RA2);
 		break;
 
@@ -2674,6 +2668,16 @@ macfram(void)
 	mem(Stw, O(REG, s), RREG, RA3);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, st), RREG, 30);
+	/*
+	 * R.PC for extend, whose allocation refused raises "out of memory"
+	 * and is looked for at R.PC (stale, another frame's handler took
+	 * it: comp-amd64.c framepc). The return address is inside the
+	 * IFRAME or MFRAME that called, as good to the handler as punt's
+	 * next instruction, and stored here, on the rare path: stored
+	 * before every call it cost recursive calls 6% (jitbench2's fib
+	 * on the native kernel under -icount).
+	 */
+	mem(Stw, O(REG, PC), RREG, 30);
 	con((uvlong)extend, RTA);
 	BLR_REG(RTA);
 	LOADRREG();

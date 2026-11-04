@@ -1,4 +1,3 @@
-intro 0intro
 arch arch
 audio audio
 bench bench
@@ -16,16 +15,20 @@ env env
 ether ether
 fs fs
 gpio gpio
+i2c i2c
 indir indir
+intro 0intro
 ip ip
 mnt mnt
 pipe pipe
 pointer pointer
 prof prof
 prog prog
+pwm pwm
 root root
 sd sd
 sign sign
+spi spi
 srv srv
 srv9 srv9
 ssl ssl

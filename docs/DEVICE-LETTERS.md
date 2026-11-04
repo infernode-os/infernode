@@ -78,18 +78,18 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `G` | gpio (native) |  | gpio | fpga, gpio | in use |  |
 | `H` |  |  |  | ata | free here |  |
 | `I` | ip (hosted/native) | ip | ip | ip | in use |  |
-| `J` |  |  | i2c | i2c | reserved | I2C, as 9front and Inferno |
+| `J` | i2c (native) |  | i2c | i2c | in use | I2C, as 9front and Inferno: Pi 5 |
 | `K` | prof (hosted) | kprof | kprof | kprof | in use | the hosted profiler, moved from #P (#1037): kprof in all three |
 | `L` |  | lpt | lpt | ds1620, lpt | free here |  |
 | `M` | mnt (hosted/native) | mnt | mnt | mnt | in use |  |
 | `N` |  |  |  |  | reserved | CAN: free in all three |
 | `P` | arch (native) | arch | arch | arch, prof | in use | arch everywhere; the hosted profiler moved to #K (#1037) |
-| `Q` |  |  | qspi |  | reserved | SPI: 9front's qspi |
+| `Q` | spi (native) |  | qspi |  | in use | SPI, the letter of 9front's qspi: Pi 5 |
 | `S` | sd (native) | sd | sd | sd | in use |  |
 | `T` | touch (native) | lm78 |  | cerf, ipaq, lm78, touch | in use | as Inferno (lm78 in Plan 9) |
 | `U` | fs (hosted) |  |  | fs, usb | in use | as Inferno |
 | `V` | cam (native) | tv | tv | tv | in use | video in, as tv in all three; the Dis VMs, which had it on their branch, moved to #X |
-| `W` |  |  |  |  | reserved | PWM: free in all three |
+| `W` | pwm (native) |  |  |  | in use | PWM, free in all three: Pi 5 |
 | `X` | vm (native) | loopback | vmx | loopback | in use | the Dis VMs (#944, #1038): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
 | `Y` |  | cardbus | cardbus | cardbus | free here |  |
 | `Z` | opus (hosted) |  |  | test | divergence | Inferno's test device |
@@ -106,7 +106,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `l` | ether (native) | ether | ether | ether | in use |  |
 | `m` | pointer (hosted/native) | mouse | mouse | pointer | in use | pointer, as Inferno (mouse in Plan 9 and 9front) |
 | `p` | prog (hosted/native) | proc | proc | prog | in use | prog, as Inferno (proc in Plan 9 and 9front) |
-| `r` |  | rtc | rtc | pcf8563, rtc | reserved | real-time clock, as all three |
+| `r` | rtc (native) | rtc | rtc | pcf8563, rtc | in use | real-time clock, as all three: Pi 5 |
 | `s` | srv (hosted/native) | srv | srv | srv | in use |  |
 | `t` | eia (hosted), uart (native) | uart | uart | ns16552, uart | in use | serial lines: uart (native) and eia (hosted) serve the same eia(3) files |
 | `u` | usb (native) | usb | usb |  | in use | as Plan 9 and 9front (Inferno #U) |

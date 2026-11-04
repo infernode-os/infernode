@@ -654,11 +654,13 @@ sdioinit(void)
 	u32int ocr, rca;
 	int i, silent;
 
+#ifndef SOCRADIO
 	for(i = 34; i <= 39; i++){
 		gpiofunc(i, Gpioalt3);
 		gpiopull(i, i == 34? Pullnone : Pullup);
 		gpioclaim(i, "ether4330");
 	}
+#endif
 	/*
 	 * And the radio's power enable, which is #G/gpio/129: claimed so
 	 * that it can be READ from the shell -- is the radio powered? --
@@ -666,7 +668,9 @@ sdioinit(void)
 	 * (see the WL_REG_ON reset below). The same rule as the six pins
 	 * above, and the same one bt9p relies on for 128 being its own.
 	 */
+#ifndef SOCRADIO
 	gpioclaim(Wlregon, "ether4330");
+#endif
 	if(sdio->init() < 0){
 		bootsay("controller will not reset", 0, -1);
 		return -1;
@@ -3385,11 +3389,18 @@ ether4330probe(void)
 	 * afterwards is the regulator's own settling time, which was
 	 * already here and is what the first CMD5 waits on.
 	 */
+#ifdef SOCRADIO
+	radiopins();
+	radiopower(0);
+	microdelay(20000);
+	radiopower(1);
+#else
 	if(mboxsetgpio(Wlregon, 0) < 0)
 		uartputstr("ether4330: WL_REG_ON low: mailbox refused; trying anyway\n");
 	microdelay(20000);
 	if(mboxsetgpio(Wlregon, 1) < 0)
 		uartputstr("ether4330: WL_REG_ON: mailbox refused; trying anyway\n");
+#endif
 	microdelay(150000);
 	booting = 1;
 	if(sdioinit() < 0 || sbinit(ctl) < 0){

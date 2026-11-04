@@ -13,7 +13,10 @@ It runs on three machines. Two are below; the third, the **Raspberry Pi
 2026-10-15: the card, gigabit Ethernet at line rate, both radios, the
 USB-A sockets, the 7" panel and all four cores -- and boots to the desktop
 under QEMU's `raspi4b`; [os/bcm2711/README.md](../os/bcm2711/README.md)
-says what was proved on the board and what has not been tried.
+says what was proved on the board and what has not been tried. A
+**Raspberry Pi 5** (`os/bcm2712`) runs too, on a board and on nothing
+else, since no emulator models one; [its README](../os/bcm2712/README.md)
+says how far.
 
 It also runs on 64-bit RISC-V: `os/riscv64` is the architecture, with
 QEMU's RISC-V `virt` (`os/riscvvirt`) and the PolarFire SoC of the
@@ -29,7 +32,7 @@ BeagleV-Fire (`os/mpfs`) as its boards, built and booted by
 | storage | SD card | virtio-blk (the *same card image*) |
 | display, input | HDMI/DSI; USB keyboard and mouse; touch | ramfb; virtio keyboard and tablet |
 | also | Bluetooth, GPIO, audio, A/B kernel update, boot watchdog | a real-time clock |
-| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin and the Pi 5 have |
+| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin has |
 
 This document is how to run it, what controls it, and where things are.
 It deliberately does not say *why* things are as they are; three other

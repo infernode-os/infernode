@@ -72,6 +72,9 @@ TLOCK:	con 5*MINUTE;
 NTLOCK:	con 200;	# number of active file locks
 
 Buffering: con 1;
+Idlems: con 4000;		# see syncproc
+fsdirty := 1;		# the superblock says so: mounting clears fsok
+lastchange := 0;
 
 FID1, FID2, FID3: con 1+iota;
 
@@ -497,9 +500,39 @@ panic(s: string)
 	raise "panic";
 }
 
+#
+# A file system is clean whenever it has been left alone for Idlems, not
+# only when it is unmounted, so that a machine switched off idle, or
+# rebooted, comes back without a check: nothing on these boards tells
+# kfs they are going down. Writes go straight to the device, so idle
+# means nothing is held here. Idlems is longer than a drive's write-back
+# (os/bcm2712/nvme.c, two seconds), so what the mark says is on the
+# medium before the mark is.
+#
 syncproc(c: chan of int)
 {
-	c <-= 0;
+	c <-= sys->pctl(0, nil);
+	for(;;){
+		sys->sleep(1000);
+		mainlock.lock();
+		if(fsdirty && !readonly && sys->millisec() - lastchange >= Idlems){
+			superok(1);
+			fsdirty = 0;
+		}
+		mainlock.unlock();
+	}
+}
+
+# called with mainlock, before anything that may write
+fschange()
+{
+	if(readonly)
+		return;
+	if(!fsdirty){
+		superok(0);
+		fsdirty = 1;
+	}
+	lastchange = sys->millisec();
 }
 
 shutdown()
@@ -751,6 +784,24 @@ apply(cp: ref Chan, t: ref Tmsg): ref Rmsg
 {
 	mainlock.lock();	# TO DO: this is just to keep console and kfs from colliding
 	r: ref Rmsg;
+	pick c := t {
+	Open =>
+		fschange();
+	Create =>
+		fschange();
+	Read =>
+		fschange();
+	Write =>
+		fschange();
+	Clunk =>
+		fschange();
+	Remove =>
+		fschange();
+	Wstat =>
+		fschange();
+	* =>
+		;
+	}
 	pick m := t {
 	Readerror =>
 		error(sys->sprint("mount read error: %s", m.error));

@@ -17,7 +17,7 @@ void
 lock(Lock *l)
 {
 	int i;
-	ulong pc;
+	ulong pc, x;
 
 	pc = getcallerpc(&l);
 	if(up == 0) {
@@ -35,9 +35,21 @@ lock(Lock *l)
 		return;
 	}
 
+	/*
+	 * Interrupts off from the test-and-set until the priority is raised.
+	 * A proc preempted between winning the lock and saying so holds it at
+	 * its ordinary priority with nothing to show for it (key 1, pc 0). It
+	 * can resume only on its own core, and something there spinning for
+	 * this lock at PriLock, holding another, always comes straight back
+	 * from the yield below: on a Pi 5 under load, that was a deadlock
+	 * inside the hour. Once at PriLock the holder is in line with the
+	 * spinner, and the yield reaches it.
+	 */
 	for(i=0; ; i++) {
+		x = splhi();
 		if(_tas(&l->key) == 0)
 			break;
+		splx(x);
 		/*
 		 * A bound sized for contention that can actually happen.
 		 * The inherited 1000 was a uniprocessor's tripwire --
@@ -79,6 +91,7 @@ lock(Lock *l)
 	l->pri = up->pri;
 	up->pri = PriLock;
 	l->pc = pc;
+	splx(x);
 }
 
 void
@@ -121,13 +134,19 @@ ilock(Lock *l)
 int
 canlock(Lock *l)
 {
-	if(_tas(&l->key))
+	ulong x;
+
+	x = splhi();	/* as lock() */
+	if(_tas(&l->key)){
+		splx(x);
 		return 0;
+	}
 	if(up){
 		l->pri = up->pri;
 		up->pri = PriLock;
 	}
 	l->pc = getcallerpc(&l);
+	splx(x);
 	return 1;
 }
 

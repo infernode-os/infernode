@@ -9,11 +9,13 @@
  * HOW THE SOUND IS MADE. A PWM channel in FIFO mode turns each word it
  * is given into one pulse whose width is that word out of a range;
  * pulses at ~44 kHz through the filter are a voltage, and a stream of
- * them is the waveform. With the range at 2048 the resolution is 11
+ * them is the waveform. With the range near 2048 the resolution is 11
  * bits, which through this filter is what the jack is good for; a
- * 16-bit sample is shifted down to it. The PWM clock comes from the
- * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), divided (MASH fractional
- * divider) so that clock / range is the sample rate. Both channels
+ * 16-bit sample comes down to it with its error carried forward (level).
+ * The PWM clock comes from the
+ * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), by
+ * a whole number, and the range is what makes clock / range the sample
+ * rate (audiolevel.h). Both channels
  * share one FIFO and take words alternately (left, right), so a stereo
  * frame is two words in order.
  *
@@ -59,6 +61,7 @@
 #define Audio_Alaw_Val		2
 #include "../port/audio-tbls.h"
 #include "audioring.h"
+#include "audiolevel.h"
 
 enum {
 	PWMREGS		= PHYSIO + AUDIOPWMOFF,	/* the board's: io.h says which block the jack's pins carry */
@@ -100,11 +103,8 @@ enum {
 	Cmenab		= 1<<4,
 	Cmkill		= 1<<5,
 	Cmsrcplld	= 6,
-	Cmmash1		= 1<<9,
 	Plldhz		= AUDIOPLLDHZ,
 
-	Range		= 2048,		/* pulse range: 11 bits of level */
-	Silence		= Range/2,
 
 	Gpiopwm0	= 40,		/* PWM0 on the jack's left */
 	Gpiopwm1	= 41,		/* PWM1, right */
@@ -152,6 +152,9 @@ struct Ctlr {
 	int	frames;		/* stereo frames per buffer now: Maxframes unless audioctl's buf said less (#653) */
 	ulong	played;		/* buffers played out, for the curious */
 	ulong	underruns;	/* buffers silenced for want of data */
+	int	carry[2];	/* each channel's rounding error: level */
+	int	range;		/* pulse range: pwmclock */
+	int	silence;	/* its middle */
 	Audio_t	av;
 };
 
@@ -166,20 +169,19 @@ getaudiodev(void)
 static void
 pwmclock(int rate)
 {
-	uvlong f;
 	u32int divi, divf;
 
-	/* the PWM clock: rate * Range, from PLLD through the MASH divider */
-	f = (uvlong)rate * Range;
-	divi = Plldhz / f;
-	divf = ((Plldhz % f) << 12) / f;
+	divi = audiodivider(Plldhz, rate);
+	divf = 0;
+	ctlr.range = audiorange(Plldhz, rate);
+	ctlr.silence = ctlr.range / 2;
 	CM(Cmpwmctl) = Cmpasswd | Cmkill;
 	while(CM(Cmpwmctl) & Cmbusy)
 		;
 	CM(Cmpwmdiv) = Cmpasswd | (divi << 12) | divf;
-	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld | Cmmash1;
+	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld;
 	microdelay(10);
-	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld | Cmmash1 | Cmenab;
+	CM(Cmpwmctl) = Cmpasswd | Cmsrcplld | Cmenab;
 	while((CM(Cmpwmctl) & Cmbusy) == 0)
 		;
 }
@@ -224,7 +226,7 @@ fillsilence(u32int *b)
 
 	words = ctlr.frames * 2;
 	for(i = 0; i < words; i++)
-		b[i] = Silence;
+		b[i] = ctlr.silence;
 	cachedwbse(b, words * 4);
 }
 
@@ -313,6 +315,8 @@ start(Ctlr *c)
 		if(c->cb == nil || c->buf[0] == nil || c->buf[Nbuf-1] == nil)
 			error(Enomem);
 	}
+	c->range = audiorange(Plldhz, c->av.out.rate);
+	c->silence = c->range / 2;	/* what ring() fills with */
 	ring(c);
 
 	gpioclaim(Gpiopwm0, "audio");
@@ -323,8 +327,8 @@ start(Ctlr *c)
 	PWM(Pctl) = 0;
 	microdelay(10);
 	pwmclock(c->av.out.rate);
-	PWM(Prng1) = Range;
-	PWM(Prng2) = Range;
+	PWM(Prng1) = ctlr.range;
+	PWM(Prng2) = ctlr.range;
 	PWM(Pdmac) = Denab | Dpanic | Ddreq;
 	PWM(Pctl) = Clrf1;
 	microdelay(10);
@@ -384,7 +388,7 @@ audio_file_close(Chan *c)
 
 		b = ctlr.buf[ctlr.rg.wbuf];
 		while(ctlr.woff < ctlr.frames * 2)
-			b[ctlr.woff++] = Silence;
+			b[ctlr.woff++] = ctlr.silence;
 		cachedwbse(b, ctlr.frames * 2 * 4);
 		ringfilled(&ctlr.rg);
 		ctlr.woff = 0;
@@ -424,20 +428,12 @@ roomfor(void *a)
 
 /*
  * One sample to a PWM word: signed 16-bit (or unsigned 8-bit) to
- * 0..Range-1 around Silence, scaled by the channel's gain.
+ * 0..range-1 around its middle, scaled by the channel's gain.
  */
 static u32int
-level(int s, int gain)
+level(int s, int gain, int *carry)
 {
-	long v;
-
-	v = (long)s * gain / Audio_Max_Val;	/* -32768..32767 */
-	v = (v + 32768) >> 5;			/* 0..2047 */
-	if(v < 0)
-		v = 0;
-	if(v >= Range)
-		v = Range - 1;
-	return v;
+	return audiolevel(s, gain, Audio_Max_Val, ctlr.range, carry);
 }
 
 long
@@ -480,8 +476,8 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 			r = chans == 2? ((int)p[n+1] - 128) << 8 : l;
 		}
 		b = ctlr.buf[ctlr.rg.wbuf];
-		b[ctlr.woff++] = level(l, lg);
-		b[ctlr.woff++] = level(r, rg);
+		b[ctlr.woff++] = level(l, lg, &ctlr.carry[0]);
+		b[ctlr.woff++] = level(r, rg, &ctlr.carry[1]);
 		if(ctlr.woff >= ctlr.frames * 2){
 			cachedwbse(b, ctlr.frames * 2 * 4);
 			ringfilled(&ctlr.rg);
@@ -517,8 +513,11 @@ audio_ctl_write(Chan *c, void *va, long count, vlong offset)
 		error("audio: 8 or 16 bits");
 	if(tmp.out.flags & AUDIO_CHAN_FLAG && tmp.out.chan != 1 && tmp.out.chan != 2)
 		error("audio: 1 or 2 channels");
-	if(tmp.out.flags & AUDIO_RATE_FLAG && tmp.out.rate != ctlr.av.out.rate && ctlr.running)
+	if(tmp.out.flags & AUDIO_RATE_FLAG && tmp.out.rate != ctlr.av.out.rate && ctlr.running){
 		pwmclock(tmp.out.rate);
+		PWM(Prng1) = ctlr.range;
+		PWM(Prng2) = ctlr.range;
+	}
 	if(tmp.out.flags & AUDIO_BUF_FLAG)
 		setframes(&ctlr, framesfor(tmp.out.buf));
 	tmp.out.flags = 0;

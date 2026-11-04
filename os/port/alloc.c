@@ -124,6 +124,7 @@ heappoolnew(char *name)
 	return p;
 }
 Pool*	imagmem = &table.pool[2];
+ulong	heapreserve;		/* free memory no heap may take; see poolalloc */
 
 static void _auditmemloc(char *, void *);
 void (*auditmemloc)(char *, void *) = _auditmemloc;
@@ -445,6 +446,22 @@ poolalloc(Pool *p, ulong asize)
 		}
 		alloc = ns+ldr+ldr;
 		p->arenasize += alloc;
+	}
+
+	/*
+	 * Each VM's heap has the whole ceiling to itself, so together they
+	 * could take what the kernel and the screen need next. A program
+	 * that hits this gets "out of memory"; a kernel that did would not
+	 * get so far.
+	 */
+	if(heapreserve != 0 && p != mainmem && p != imagmem && xbytesfree() < alloc + heapreserve){
+		p->arenasize -= alloc;
+		if(poolcompact(p)) {
+			iunlock(&p->l);
+			return poolalloc(p, osize);
+		}
+		iunlock(&p->l);
+		return nil;
 	}
 
 	p->nbrk++;
@@ -1001,7 +1018,7 @@ poolcompact(Pool *pool)
 }
 
 void
-poolsize(Pool *p, int max, int contig)
+poolsize(Pool *p, ulong max, int contig)
 {
 	void *x;
 
@@ -1013,7 +1030,7 @@ poolsize(Pool *p, int max, int contig)
 	else
 		p->ressize = max-RESERVED;
 	if (contig && max > 0) {
-		p->chunk = max-1024;
+		p->chunk = max-1024;		/* who asks for this has under 2GB */
 		x = poolalloc(p, p->chunk);
 		if(x == nil)
 			panic("poolsize: don't have %d bytes\n", p->chunk);

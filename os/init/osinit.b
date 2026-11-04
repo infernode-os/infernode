@@ -344,6 +344,7 @@ init()
 	# into the kernel. Ordered wrongly it announced itself only as
 	# factotum failing to bind, which is a long way from the cause.
 	#
+	spawn buttonwatch();
 	wifisetup();
 
 	#
@@ -2352,6 +2353,37 @@ tmpsetup()
 }
 
 #
+# A press of the power button, where a board has one, is a clean halt:
+# #P says whether it is down, and what it means is decided here. kfs and
+# dossrv write through, and kfs marks itself clean when idle, so there is
+# nothing to tell them.
+#
+buttonwatch()
+{
+	fd := sys->open("#P/button", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[8] of byte;
+	held := 0;
+	for(;;){
+		sys->sleep(100);
+		if(sys->pread(fd, buf, len buf, big 0) < 1)
+			return;
+		if(buf[0] != byte '1'){
+			held = 0;
+			continue;
+		}
+		if(++held < 2)
+			continue;
+		sys->print("init: power button: halting\n");
+		ctl := sys->open("/dev/sysctl", Sys->OWRITE);
+		if(ctl != nil)
+			sys->fprint(ctl, "halt");
+		return;
+	}
+}
+
+#
 # Mount points on demand, under /mnt.
 #
 # The root is the kernel's own, read only, and its /mnt holds the few
@@ -2401,6 +2433,17 @@ mntgenproc(mg: Command, fd: ref Sys->FD)
 sdsetup()
 {
 	fd := sys->open("/dev/sdcard", Sys->OREAD);
+
+	#
+	# A board that booted from a drive and has no card, or was told
+	# to on the command line, has this on the drive's first partition.
+	# Only a drive's partition table names it, so elsewhere it is not
+	# there.
+	#
+	if((fd == nil || bootword("nvmeroot")) && sys->stat("/dev/nvme0p1").t0 >= 0){
+		dosmount("nvme0p1");
+		return;
+	}
 	if(fd == nil)
 		return;			# no card, which is not an error
 
@@ -2453,7 +2496,28 @@ sdsetup()
 
 	if(dos == "")
 		return;
+	dosmount(dos);
+}
 
+# Whether the command line has this word.
+bootword(w: string): int
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, l) := sys->tokenize(string buf[0:n], " \t\r\n");
+	for(; l != nil; l = tl l)
+		if(hd l == w)
+			return 1;
+	return 0;
+}
+
+dosmount(dos: string)
+{
 	srv := load Command "/dis/dossrv.dis";
 	if(srv == nil){
 		sys->print("init: cannot load dossrv: %r\n");

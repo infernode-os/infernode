@@ -10,6 +10,9 @@
 #include	"mem.h"
 #include	"dat.h"
 #include	"fns.h"
+#ifdef FWRTC
+int	rtcset(u32int);
+#endif
 #include	"../port/error.h"
 #include	<version.h>
 #include	"mp.h"
@@ -1282,6 +1285,9 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		buf[n] = 0;
 		t = strtoll(buf, 0, 0)/1000000;
 		boottime = t - TK2SEC(MACHP(0)->ticks);
+#ifdef FWRTC
+		rtcset((u32int)t);	/* a clock worth setting is worth keeping */
+#endif
 		break;
 
 	case Qhostowner:

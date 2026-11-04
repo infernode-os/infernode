@@ -1,0 +1,43 @@
+.TH I2C 3
+.SH NAME
+i2c \- I2C buses, as files
+.SH SYNOPSIS
+.nf
+.B bind -a #J /dev
+
+.BI /dev/i2c N ctl
+.BI /dev/i2c N data
+.fi
+.SH DESCRIPTION
+.I I2c
+is a polled master, with 7-bit addresses, on the Raspberry Pi 5's header:
+bus 0 on GPIO 0 and 1, bus 1 on GPIO 2 and 3.
+The pins become I2C's at the first open.
+.PP
+Writing the control file sets:
+.TP
+.BI addr " n"
+the device to talk to.
+.TP
+.BI subaddress " n"
+that each transfer starts with the file offset, in
+.I n
+bytes, high first, and that a read then uses a repeated start: how most
+register and EEPROM devices are read.
+.TP
+.BI speed " n"
+100000 or 400000.
+.PP
+Reading it returns those settings.
+Reads and writes of the data file are one transfer each with the device at
+.IR addr ,
+of at most 4096 bytes.
+.PP
+An address nothing answers gives the error
+.BR "no device" ,
+which is how to scan a bus.
+.SH SOURCE
+.B /os/bcm2712/devi2c.c
+.SH SEE ALSO
+.IR gpio (3),
+.IR spi (3)

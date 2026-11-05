@@ -182,8 +182,13 @@ testLookup(t: ref T)
 	# a part of a word, when nothing else answers
 	found(t, "momso", nil, "+15551230006 Tom Momson mobile");
 	found(t, "anyone", nil, "error no contact called anyone");
+	# a book with no one in it says why, rather than "no contact"
 	(nil, nil, nil, err) := ds->lookup("# contacts: permission denied\n", "mom", nil);
-	t.assertseq(err, "no contact called mom", "an address book with nothing in it");
+	t.assertseq(err, "contacts: permission denied", "a book denied says so");
+	(nil, nil, nil, err) = ds->lookup("# contacts: Android bridge not wired (INFR-182)\n", "mom", nil);
+	t.assertseq(err, "contacts: Android bridge not wired (INFR-182)", "a book not wired says so");
+	(nil, nil, nil, err) = ds->lookup("", "mom", nil);
+	t.assertseq(err, "no contact called mom", "an empty book");
 }
 
 init(nil: ref Draw->Context, args: list of string)

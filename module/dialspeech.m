@@ -33,7 +33,9 @@ Dialspeech: module
 	# The address book's entry for a name said: its number, the
 	# contact's name and the number's kind as the book has them; or
 	# nil and why not (no such name, two people answer to it, that
-	# kind of number not there).  A name said whole beats a word of
-	# one (mom, Mom); with no kind said, a mobile is taken first.
+	# kind of number not there; or, for a book with no one in it, its
+	# own "# ..." line: permission denied, not wired).  A name said
+	# whole beats a word of one (mom, Mom); with no kind said, a
+	# mobile is taken first.
 	lookup:	fn(contacts: string, name, kind: string): (string, string, string, string);
 };

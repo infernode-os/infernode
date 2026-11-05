@@ -254,11 +254,22 @@ lookup(contacts: string, name, kind: string): (string, string, string, string)
 	# every number of every contact the name could be, whole names
 	# kept apart from names a word of which was said
 	whole, word, part: list of (string, string, string);
+	entries := 0;
+	why := "";	# the book's own word on itself: "# contacts: ..."
 	(nil, lines) := sys->tokenize(contacts, "\n");
 	for(; lines != nil; lines = tl lines){
 		l := hd lines;
-		if(l == "" || l[0] == '#')
+		if(l == "")
 			continue;
+		if(l[0] == '#'){
+			if(why == ""){
+				why = l[1:];
+				while(why != "" && why[0] == ' ')
+					why = why[1:];
+			}
+			continue;
+		}
+		entries++;
 		(nf, f) := sys->tokenize(l, "\t");
 		if(nf < 3)
 			continue;
@@ -279,6 +290,8 @@ lookup(contacts: string, name, kind: string): (string, string, string, string)
 		c = word;
 	if(c == nil)
 		c = part;
+	if(c == nil && entries == 0 && why != "")
+		return (nil, nil, nil, why);	# no book: denied, not wired; say so
 	if(c == nil)
 		return (nil, nil, nil, "no contact called " + name);
 	c = rev(c);

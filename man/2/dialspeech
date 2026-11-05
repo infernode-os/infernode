@@ -115,7 +115,13 @@ it, and that before one with it inside a word.
 It returns the number, the contact's name and the number's kind as the
 book has them, and nil; or nil and why not: no such name, two people
 answer to it (both named, so the caller can ask which), or no number of
-the kind asked for.
+the kind asked for; and for a book with no one in it, the book's own
+.B #
+line, such as
+.B "contacts: permission denied"
+or
+.BR "contacts: Android bridge not wired" ,
+so that is not told as no such name.
 With no kind asked, a mobile number is taken first.
 .SH SOURCE
 .B /appl/lib/dialspeech.b

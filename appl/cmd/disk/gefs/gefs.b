@@ -7,17 +7,25 @@ implement Gefs;
 # the design in 9front's sys/doc/gefs.ms). The disk format is 9front's,
 # byte for byte, so a disk made by either is read by the other.
 #
-#	disk/gefs [-r user] [-cRSAd] [-m cachemb] dev
+#	disk/gefs [-r user] [-cRSAd] [-m cachemb] [-M aname:dir]... dev
 #
 # serves the file system on fd 0, as kfs does:
 #
 #	mount -c {disk/gefs '#S/nvme0p3'} /n/gefs
+#
+# or, with -M, mounts it itself, as many times as asked, from the one
+# server -- 9front's posted service, mounted with an attach name each:
+#
+#	disk/gefs -M main:/n/gefs -M adm:/n/gefs.adm -M dump:/n/gefs.dump '#S/nvme0p3'
+#
+# Two servers on one disk would wreck it; this is how there is one.
 #
 # -r user	ream (make) a new file system on dev, owned by user, and exit
 # -c		check the file system and exit
 # -R		read only
 # -S		permissive: anyone may attach to adm
 # -m mb		block cache size in megabytes (default 64)
+# -M an:dir	mount the attach name an (main, adm, dump, a label) on dir
 #
 # The attach name picks a snapshot label: "main" (the default), "adm"
 # (the users file and ctl), "dump" (every snapshot, read only). The
@@ -123,6 +131,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	checkonly := 0;
 	rdonly := 0;
 	cachemb := 64;
+	mounts: list of (string, string);
 	arg->init(argv);
 	arg->setusage("disk/gefs [-r user] [-cRSd] [-m cachemb] dev");
 	while((c := arg->opt()) != 0)
@@ -136,6 +145,13 @@ init(nil: ref Draw->Context, argv: list of string)
 		'A' =>	;	# no authentication either way
 		'd' =>	debug++;
 		'm' =>	cachemb = int arg->earg();
+		'M' =>
+			am := arg->earg();
+			for(i := 0; i < len am && am[i] != ':'; i++)
+				;
+			if(i == len am)
+				arg->usage();
+			mounts = (am[0:i], am[i+1:]) :: mounts;
 		* =>	arg->usage();
 		}
 	argv = arg->argv();
@@ -163,8 +179,23 @@ init(nil: ref Draw->Context, argv: list of string)
 		sys->fprint(sys->fildes(2), "gefs: %s\n", errmsg(e));
 		raise "fail:"+errmsg(e);
 	}
-	srvfd = sys->fildes(0);
-	serve();
+	if(mounts == nil){
+		srvfd = sys->fildes(0);
+		serve();
+		return;
+	}
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->fprint(sys->fildes(2), "gefs: pipe: %r\n");
+		raise "fail:pipe";
+	}
+	srvfd = p[0];
+	spawn serve();
+	for(; mounts != nil; mounts = tl mounts){
+		(an, dir) := hd mounts;
+		if(sys->mount(p[1], nil, dir, Sys->MREPL|Sys->MCREATE, an) < 0)
+			sys->fprint(sys->fildes(2), "gefs: mount %s on %s: %r\n", an, dir);
+	}
 }
 
 initfs(cachemb, rdonly: int, dev: string)
@@ -231,8 +262,9 @@ migrateusers()
 	clunkmount(mnt);
 }
 
-reader(c: chan of ref Tmsg)
+reader(c: chan of ref Tmsg, pid: chan of int)
 {
+	pid <-= sys->pctl(0, nil);
 	for(;;){
 		t := Tmsg.read(srvfd, Max9p + Styx->IOHDRSZ);
 		c <-= t;
@@ -245,8 +277,9 @@ reader(c: chan of ref Tmsg)
 	}
 }
 
-ticker(c: chan of int)
+ticker(c: chan of int, pid: chan of int)
 {
+	pid <-= sys->pctl(0, nil);
 	for(;;){
 		sys->sleep(5000);
 		c <-= 1;
@@ -257,8 +290,11 @@ serve()
 {
 	tc := chan of ref Tmsg;
 	tk := chan of int;
-	spawn reader(tc);
-	spawn ticker(tk);
+	pid := chan of int;
+	spawn reader(tc, pid);
+	rpid := <-pid;
+	spawn ticker(tk, pid);
+	tpid := <-pid;
 	while(!halting){
 		alt{
 		t := <-tc =>
@@ -290,4 +326,13 @@ serve()
 	"gefs:*" =>
 		sys->fprint(sys->fildes(2), "gefs: halt: %s\n", errmsg(e));
 	}
+	kill(tpid);
+	kill(rpid);
+}
+
+kill(pid: int)
+{
+	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }

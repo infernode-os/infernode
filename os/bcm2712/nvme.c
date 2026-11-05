@@ -77,7 +77,8 @@ enum
 	Linkwait= 5000,			/* ms, for a link to come back */
 	Flushms	= 2000,			/* the most a power cut can lose */
 	Toomany	= 4,			/* resets, before a slower link */
-	Deadretry = 30000,		/* ms, before a dead drive is tried again */
+	Deadretry = 30000,
+	Cfgwait	= 1000,			/* ms, for a reset drive's configuration space */		/* ms, before a dead drive is tried again */
 	Failed	= -1,			/* no answer, as opposed to a status */
 };
 
@@ -379,6 +380,17 @@ recover1(int step)
 		microdelay(1000);
 	if(i == Linkwait){
 		print("nvme: the link has not come back\n");
+		return -1;
+	}
+	/*
+	 * A drive just out of reset answers its configuration space with
+	 * ones for a while, up to a second by the specification: the BAR
+	 * written before then is not written.
+	 */
+	for(i = 0; i < Cfgwait && (pcie1cfgr(0) & 0xFFFF) == 0xFFFF; i++)
+		microdelay(1000);
+	if(i == Cfgwait){
+		print("nvme: the drive does not answer its configuration space\n");
 		return -1;
 	}
 	devsetup();

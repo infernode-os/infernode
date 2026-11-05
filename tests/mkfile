@@ -59,6 +59,7 @@ TARG=\
 	osk_accuracy.dis\
 	keyboards_test.dis\
 	osk_fuzz.dis\
+	phone_fuzz.dis\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\

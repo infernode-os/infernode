@@ -1146,8 +1146,9 @@ jobs:
       run: |
         # wm/osk under wm/wm and as Lucifer's keyboard (desktop and
         # phone layouts), at the screens' sizes, through every theme,
-        # for wm/logon, and ground by its fuzzer.
-        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test; do
+        # for wm/logon, and ground by its fuzzer; Lucifer's phone layout
+        # ground with it (phone_fuzz_test).
+        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test phone_fuzz_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -2051,7 +2052,7 @@ jobs:
         # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
         # here (77).
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test llmsetup_phone_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test phone_fuzz_test llmsetup_phone_test; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

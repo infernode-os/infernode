@@ -79,7 +79,10 @@ starts.
 .TP
 .B focus auto
 Contrast autofocus, once: a few seconds, needing a still picture with
-detail in it. A picture that moves leaves the lens where it was.
+detail in it. A picture that moves, or has nothing to focus on, leaves
+the lens where it was, and
+.B status
+says which.
 .TP
 .BI flip " n
 1 mirrors, 2 turns upside down. 3, the default, is right way up as the
@@ -91,6 +94,15 @@ A video with known answers to point the camera at during a soak:
 exposure steps, white balance, a focus chart, motion:
 .IP
 .B tools/camera-test-pattern.py loop.mp4
+.PP
+.I Camsrv
+runs in a process group of its own. To stop it, unmount it; to kill
+it, write
+.B killgrp
+to the
+.B ctl
+file of its process: killing one of its processes alone leaves the
+mount without a server and its readers waiting.
 .SH SOURCE
 .B /appl/cmd/camsrv.b
 .br

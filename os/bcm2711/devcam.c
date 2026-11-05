@@ -26,6 +26,13 @@
  * high-power regulator: with the low-power one on as well there is
  * sync and no packets.
  *
+ * THE SENSOR MUST STAY OFF A WHILE. Off and on again within a few
+ * milliseconds, a Camera Module 3 comes back half reset: it answers
+ * I2C, takes every setting, reports itself streaming, and its frame
+ * counter never moves. Measured on the bench: 30 cycles with 100 ms
+ * off failed once, with 250 ms none. So power on waits until the
+ * sensor has been off Mintoff ms, however soon a program asks.
+ *
  * THREE BUFFERS: one being written, the newest complete, and the one a
  * reader is in, so the receiver always has one nobody is reading. The
  * next buffer is set at a frame's start and taken at the following one.
@@ -117,6 +124,7 @@ enum
 	Maxbuf		= 8*1024*1024,	/* the most a format may take: three fit the DMA arena's 32 MB */
 	Framems		= 1000,
 	Powerms		= 20,		/* the sensor's start, from enable */
+	Minoff		= 500,		/* ms the sensor must be off before it is on again: twice what was seen to suffice */
 
 	Qroot		= 0,
 	Qdir,
@@ -137,6 +145,7 @@ static struct {
 	ulong	bufsz;		/* what each of buf holds: the frame, to a page */
 	int	w, h;
 	int	power;
+	ulong	offat;		/* when power went off, in ms of TK2MS(ticks); 0 never */
 	int	on;
 	int	reader;		/* frame is open */
 	ulong	frames;
@@ -255,6 +264,13 @@ campower(int on)
 	if(on == u.power)
 		return;
 	if(on){
+		if(u.offat != 0){
+			long w;
+
+			w = Minoff - (long)(TK2MS(MACHP(0)->ticks) - u.offat);
+			if(w > 0)
+				tsleep(&up->sleep, return0, nil, w);
+		}
 		mboxsetgpio(Camenable, 1);
 		tsleep(&up->sleep, return0, nil, Powerms);
 		domain(1);
@@ -265,6 +281,9 @@ campower(int on)
 		ldo(0);
 		domain(0);
 		mboxsetgpio(Camenable, 0);
+		u.offat = TK2MS(MACHP(0)->ticks);
+		if(u.offat == 0)
+			u.offat = 1;
 	}
 	u.power = on;
 }
@@ -484,8 +503,8 @@ uread(Chan *c, void *a, long n, vlong off)
 	case Qdir:
 		return devdirread(c, a, n, nil, 0, ugen);
 	case Qctl:
-		snprint(buf, sizeof buf, "format %d %d\npower %s\nstream %s\nframes %lud\nstarts %lud\nends %lud\nintrs %lud\n",
-			u.w, u.h, u.power? "on": "off", u.on? "on": "off", u.frames, u.fs, u.fe, u.intrs);
+		snprint(buf, sizeof buf, "format %d %d\npower %s\nstream %s\nframes %lud\nstarts %lud\nends %lud\nintrs %lud\npmcam1 %.8ux\n",
+			u.w, u.h, u.power? "on": "off", u.on? "on": "off", u.frames, u.fs, u.fe, u.intrs, PM(Pmcam1));
 		return readstr(off, a, n, buf);
 	case Qframe:
 		sz = (long)u.w*2*u.h;

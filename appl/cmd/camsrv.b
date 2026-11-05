@@ -94,6 +94,7 @@ sess: list of ref Fsess;
 parked: list of (ref Tmsg.Read, ref Fsess);
 users := 0;
 capstop: chan of int;
+capdone: chan of int;
 framec: chan of array of byte;
 rawc: chan of array of byte;
 errc: chan of string;
@@ -113,6 +114,9 @@ init(nil: ref Draw->Context, args: list of string)
 	styx->init();
 	styxservers->init(styx);
 	nametree->init();
+	# a group of its own, so that one killgrp stops the server and its
+	# helpers together: killing the first alone leaves the mount wedged
+	sys->pctl(Sys->NEWPGRP, nil);
 	for(args = tl args; args != nil; args = tl args)
 		if(hd args == "-t"){
 			sim = 1;
@@ -123,6 +127,7 @@ init(nil: ref Draw->Context, args: list of string)
 	framec = chan of array of byte;
 	rawc = chan of array of byte;
 	errc = chan[1] of string;
+	capdone = chan of int;
 	ctlc = chan[8] of string;
 
 	(tree, treeop) := nametree->start();
@@ -159,14 +164,12 @@ serve(tree: ref Tree)
 	for(;;) alt {
 	tmsg := <-tc =>
 		if(tmsg == nil){
-			stopcapture();
-			tree.quit();
+			shutdown(tree);
 			return;
 		}
 		pick tm := tmsg {
 		Readerror =>
-			stopcapture();
-			tree.quit();
+			shutdown(tree);
 			return;
 		Open =>
 			c := srv.getfid(tm.fid);
@@ -236,7 +239,31 @@ serve(tree: ref Tree)
 	e := <-errc =>
 		err = e;
 		wake();
+	<-capdone =>
+		running = 0;
+		capstop = nil;
+		if(wanted && err == "")
+			launch();
 	}
+}
+
+# The mount has gone. The capture process may be in the middle of a frame,
+# blocked handing it over: take what it sends until it has gone, or it
+# waits for ever, with the sensor on and the name tree held.
+shutdown(tree: ref Tree)
+{
+	stopcapture();
+	while(running) alt {
+	<-framec =>
+		;
+	<-rawc =>
+		;
+	<-errc =>
+		;
+	<-capdone =>
+		running = 0;
+	}
+	tree.quit();
 }
 
 find(fid: int): ref Fsess
@@ -335,7 +362,7 @@ status(): string
 		s += " regcheck=" + regcheck;
 	if(afresult != "")
 		s += " autofocus=" + afresult;
-	s += sys->sprint(" i2cerrors=%d lostwrites=%d", i2cerrs, lostw);
+	s += sys->sprint(" writes=%d i2cerrors=%d lostwrites=%d", nwrites, i2cerrs, lostw);
 	if(err != "")
 		s += " error=" + err;
 	return s + "\n";
@@ -434,21 +461,44 @@ tell(s: string)
 	}
 }
 
+# One capture process at a time, ever. Starting the sensor can take a
+# while (the bus retries), and a close followed by an open must not start
+# a second capture beside one still on its way out: they would share the
+# bus and the receiver, and close each other's files. So a start waits
+# for the last capture to have gone.
+running := 0;		# a capture process exists
+wanted := 0;		# one should
+
 startcapture()
+{
+	wanted = 1;
+	if(!running)
+		launch();
+}
+
+stopcapture()
+{
+	wanted = 0;
+	if(capstop != nil){
+		capstop <-= 1;
+		capstop = nil;
+	}
+}
+
+launch()
 {
 	seq = 0;
 	latest = nil;
 	lastraw = nil;
 	capstop = chan[1] of int;
-	spawn capture(capstop);
+	running = 1;
+	spawn capwrap(capstop);
 }
 
-stopcapture()
+capwrap(stop: chan of int)
 {
-	if(capstop != nil){
-		capstop <-= 1;
-		capstop = nil;
-	}
+	capture(stop);
+	capdone <-= 1;
 }
 
 # The capture process: everything that touches the sensor, one place.
@@ -466,6 +516,7 @@ capture(stop: chan of int)
 		return;
 	}
 	aewait := Aeevery;
+	aesum := aen := 0;
 	wlines := wgain := -1;
 	raw := array[Sw*Sh*2] of byte;
 	scale := Sw/width;
@@ -517,9 +568,12 @@ capture(stop: chan of int)
 		if(focusing)
 			af = autofocus(af, y);
 		# not during a sweep: sharpness is to be compared at one exposure
+		aesum += mean[1];
+		aen++;
 		if(!focusing && exposure == 0 && --aewait <= 0){
 			aewait = Aeevery;
-			(aelines, aegain) = aestep(mean[1], aelines, aegain);
+			(aelines, aegain) = aestep(aesum/aen, aelines, aegain);
+			aesum = aen = 0;
 		}
 		if(aelines != wlines || aegain != wgain){
 			setexposure(aelines, aegain);
@@ -649,14 +703,24 @@ gaintoq(code: int): int
 	return Gain1*1024/(1024-code);
 }
 
+# One step of auto-exposure, from the green cells' mean over the last
+# Aeevery frames. Measured on the bench, a controller that went straight
+# to the exposure it computed hunted for ever: what it writes shows two
+# frames later, and a screen in view flickers from frame to frame, so it
+# overshot, saw that, and went back, 27 register writes a second over a
+# shared bus. So: half the way at a time, nothing inside a band of a
+# third either side of the target, and nothing written that is not
+# a real change.
 aestep(green, lines, q: int): (int, int)
 {
 	v := green - Black;
 	if(v < 2)
 		v = 2;
-	if(v*8 > Aetarget*7 && v*8 < Aetarget*9)
+	if(v*4 > Aetarget*3 && v*3 < Aetarget*4)
 		return (lines, q);
-	total := big lines * big q * big Aetarget / big v;
+	cur := big lines * big q;
+	want := cur * big Aetarget / big v;
+	total := (cur + want) / big 2;
 	maxl := framelen - Exposureoff;
 	l := int (total / big Gain1);
 	g := Gain1;
@@ -668,6 +732,10 @@ aestep(green, lines, q: int): (int, int)
 		if(g > Gainmaxq)
 			g = Gainmaxq;
 	}
+	# a change of less than an eighth is no change
+	nt := big l * big g;
+	if(nt*big 8 > cur*big 7 && nt*big 7 < cur*big 8)
+		return (lines, q);
 	return (l, g);
 }
 
@@ -678,6 +746,7 @@ Af: adt {
 	step:	int;
 	best:	int;
 	bestat:	int;
+	worst:	int;	# the coarse pass's least sharp: what noise looks like here
 	fine:	int;	# the second pass, round the first's peak
 	tries:	int;
 	was:	int;	# focus before, to go back to if this fails
@@ -701,7 +770,7 @@ autofocus(a: ref Af, y: array of byte): ref Af
 	if(a == nil || !a.on){
 		afrun = 0;
 		afresult = "running";
-		a = ref Af(1, 0, 1023, Afcoarse, 0, 0, 0, 0, focus, nil);
+		a = ref Af(1, 0, 1023, Afcoarse, 0, 0, -1, 0, 0, focus, nil);
 		lens(0);
 		afwait = Afsettle;
 		return a;
@@ -732,12 +801,26 @@ autofocus(a: ref Af, y: array of byte): ref Af
 		a.best = s;
 		a.bestat = a.pos;
 	}
+	if(!a.fine && (a.worst < 0 || s < a.worst))
+		a.worst = s;
 	a.pos += a.step;
 	if(a.pos > a.end){
 		if(a.fine){
 			focus = a.bestat;
 			lens(focus);
 			afresult = "ok";
+			a.on = 0;
+			return a;
+		}
+		# A picture with no detail has no sharpest place: its sharpness
+		# is noise, and the peak of noise is anywhere (on the bench, a
+		# plain grey screen sent the lens to 0, 288 and 1008, each called
+		# a success). A real peak stands well clear of the rest.
+		if(a.best < 4*a.worst){
+			afresult = "failed: no detail";
+			focus = a.was;
+			if(focus >= 0)
+				lens(focus);
 			a.on = 0;
 			return a;
 		}
@@ -904,7 +987,16 @@ checkregs(): string
 
 i2cerrs := 0;
 lostw := 0;
-Tries: con 8;
+# The firmware's touch polling holds the bus in bursts: transfers fail,
+# reads and all, for longer than a few quick retries cover (measured:
+# 8 tries 2 ms apart failed a sensor start one time in two). So a try
+# waits twice as long as the one before, about half a second in all.
+Tries: con 9;
+
+backoff(i: int)
+{
+	sys->sleep(1<<i);
+}
 i2cctl, sensorfd, lensfd: ref Sys->FD;
 Exposureoff: con 48;
 Linelen: con 7824;
@@ -932,15 +1024,18 @@ rd8(reg: int): int
 		if(sys->pread(sensorfd, b, 1, big reg) == 1)
 			return int b[0];
 		i2cerrs++;
-		sys->sleep(2);
+		backoff(i);
 	}
 	return -1;
 }
 
 written: list of (int, int);
+nwrites := 0;		# register writes since the sensor came on, for status
+badreg := "";		# the last register that would not take a write, for errors
 
 wr8(reg, v: int): int
 {
+	nwrites++;
 	if(reg != 16r0100 && reg != 16r0202 && reg != 16r0203 && reg != 16r0204 && reg != 16r0205)
 		written = (reg, v&16rff) :: written;
 	b := array[1] of byte;
@@ -948,12 +1043,15 @@ wr8(reg, v: int): int
 	for(i := 0; i < Tries; i++){
 		if(sys->pwrite(sensorfd, b, 1, big reg) != 1){
 			i2cerrs++;
-			sys->sleep(2);
+			backoff(i);
 			continue;
 		}
-		if(rd8(reg) == (v&16rff))
+		got := rd8(reg);
+		if(got == (v&16rff))
 			return 0;
 		lostw++;
+		badreg = sys->sprint("%.4x wrote %.2x read %d", reg, v&16rff, got);
+		backoff(i);
 	}
 	return -1;
 }
@@ -1025,7 +1123,7 @@ sensoron(): string
 	if(id != Chip)
 		return sys->sprint("camsrv: not an IMX708: %.4x", id);
 	if(sensormode() < 0)
-		return "camsrv: the sensor will not take its settings";
+		return "camsrv: the sensor will not take its settings: " + badreg;
 	e = unicam("stream on");
 	if(e != nil)
 		return e;

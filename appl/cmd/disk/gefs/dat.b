@@ -74,6 +74,7 @@ Bcached: con 1<<3;
 Bqueued: con 1<<4;
 Blimbo:	con 1<<5;
 Bstatic: con 1<<6;
+Bdefer:	con 1<<7;	# a tree root not yet hashed or written (settle)
 
 # label flags
 Lmut:	con 1<<0;

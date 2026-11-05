@@ -383,6 +383,7 @@ updatesnap(o: ref Tree, lbl: string, flg: int): ref Tree
 		broke("updatesnap: immutable");
 	if(!o.dirty)
 		return o;
+	settle(o);	# t takes its root pointer
 	t := ref Tree;
 	t.dirty = 0;
 	t.nlbl = 1;

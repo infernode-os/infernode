@@ -2054,13 +2054,22 @@ wifijoin(essid, pass: string)
 }
 
 #
-# A re-join after a lost link is new keys; it may be a different
-# network, or the same one after its lease ran out. The address was
-# asked for once, so it went stale. The supplicant writes "group key"
-# each time it finishes a handshake: one more than last time is a
-# re-join, and the address is asked for again.
+# A re-join after a lost link is a new four-way handshake, and the
+# supplicant writes "pairwise transmit key installed" once in each. It
+# is counted, and said, and nothing else is done: the address and the
+# routes are left as they are.
 #
-wifiwatch(ifcno: string)
+# This counted "group key" lines, and dropped the address and started
+# a new DHCP client at each one. But a router sends new group keys to a
+# station that never left -- a routine rekey -- and every one of those
+# was taken for a re-join: the address went, every connection on Wi-Fi
+# broke, and removing the address took the default route with it, which
+# is ether0's, on the same subnet, so nothing off the subnet was reached
+# again until a reboot. A Pi 5 under a soak did it from the first rekey.
+# The lease needs nothing from here: ip/dhcp -m runs for as long as it
+# does, and renews it, or finds another, by itself.
+#
+wifiwatch(nil: string)
 {
 	seen := keycount();
 	for(;;){
@@ -2071,13 +2080,7 @@ wifiwatch(ifcno: string)
 			continue;
 		}
 		seen = n;
-		sys->print("init: wifi: re-joined; asking for an address again\n");
-		dropaddress(ifcno);
-		if(wifidhcp(ifcno)){
-			(ndb, nil) := slurp("/net/ndb");
-			sys->print("init: wifi: %s\n", ndb);
-		}else
-			sys->print("init: wifi: re-joined but no address\n");
+		sys->print("init: wifi: re-joined; the address and its lease are left to ip/dhcp\n");
 	}
 }
 
@@ -2085,28 +2088,10 @@ keycount(): int
 {
 	(log, nil) := slurp(Wpalog);
 	n := 0;
-	for(i := 0; i + 9 <= len log; i++)
-		if(log[i:i+9] == "group key")
+	for(i := 0; i + 21 <= len log; i++)
+		if(log[i:i+21] == "pairwise transmit key")
 			n++;
 	return n;
-}
-
-# remove whatever addresses the interface has: "\taddr /mask ..." lines of its status
-dropaddress(ifcno: string)
-{
-	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
-	ctl := sys->open("/net/ipifc/" + ifcno + "/ctl", Sys->OWRITE);
-	if(ctl == nil)
-		return;
-	(nil, lines) := sys->tokenize(st, "\n");
-	for(; lines != nil; lines = tl lines){
-		l := hd lines;
-		if(l == "" || l[0] != '\t')
-			continue;
-		(nf, f) := sys->tokenize(l, " \t");
-		if(nf >= 2)
-			sys->fprint(ctl, "remove %s %s", hd f, hd tl f);
-	}
 }
 
 Wpalog: con "/tmp/wpa.log";

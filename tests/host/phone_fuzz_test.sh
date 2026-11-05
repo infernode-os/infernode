@@ -29,8 +29,10 @@ if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q sdl3_mainloop; then
 fi
 command -v python3 >/dev/null || { echo "SKIP: no python3"; exit 77; }
 
-# a seed of its own each run, but 1 in CI (CI is set), so a failure there reruns
-SEED=${PHONE_FUZZ_SEED:-${CI:+1}}
+# a seed of its own each run, but 3 in CI (CI is set), so a failure there
+# reruns: 3 broke osk (a flush with no window, after a keyboard attached
+# hid it) in three runs of four before it was fixed
+SEED=${PHONE_FUZZ_SEED:-${CI:+3}}
 SEED=${SEED:-$(date +%s)}
 ACTIONS=${PHONE_FUZZ_ACTIONS:-240}
 EVERY=${PHONE_FUZZ_EVERY:-30}

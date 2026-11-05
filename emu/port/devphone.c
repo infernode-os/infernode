@@ -27,6 +27,9 @@
  *     "dial <number>\n"
  *     "answer\n"        (where supported)
  *     "hangup\n"        (where supported)
+ *     "dtmf <digits>\n" (where supported) — touch tones sent down the
+ *                       line in a call (a modem's AT+VTS); a platform
+ *                       that cannot refuses it with the reason
  *
  * msg9p's `sms` MsgSrc (separate module) reads /phone/sms and forwards
  * incoming messages into /mnt/msg/notify so Veltro gets unified alerts;

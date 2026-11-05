@@ -8,8 +8,11 @@
 # (a touch held) on 0 is +, the star key shown a sextile dials *,
 # and a call the phone file reports connected
 # turns Call into a red Hang up that writes "hangup", green again once
-# the call has ended (by pixel).  Runs on a headless emulator: its
-# in-memory screen (-g) is enough.
+# the call has ended (by pixel), and digits in a call go down the line
+# ("dtmf <digit>").  The touch tones are caught from its audio device
+# and decoded as an exchange decodes them: the keys pressed, in order,
+# a tone each, at the standard frequencies.  Runs on a headless
+# emulator: its in-memory screen (-g) is enough.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -42,6 +45,8 @@ dial 123
 dial 123
 dial *67#
 dial +44
+dtmf 1
+dtmf 2
 hangup'
 n=0
 echo "$want" | while IFS= read -r w; do
@@ -54,12 +59,13 @@ echo "$want" | while IFS= read -r w; do
 	4)	what="Call with no number dials the last again" ;;
 	5)	what="the star key (a sextile) dials a star, and hash a hash" ;;
 	6)	what="button 3 on 0 is +" ;;
-	7)	what="a connected call's Call hangs up" ;;
+	7|8)	what="in a call a digit is sent down the line" ;;
+	9)	what="a connected call's Call hangs up" ;;
 	esac
 	if [ "$got" = "$w" ]; then pass "$what ($got)"; else echo "FAIL: $what: '$got', not '$w'"; fi
 done | tee "$ROOT/$T/results"
 grep -q '^FAIL' "$ROOT/$T/results" && failed=1
-[ "$(wc -l < "$ROOT/$T/writes")" -eq 7 ] || fail "writes: $(tr '\n' '|' < "$ROOT/$T/writes")"
+[ "$(wc -l < "$ROOT/$T/writes")" -eq 9 ] || fail "writes: $(tr '\n' '|' < "$ROOT/$T/writes")"
 
 # the colour at x y of a screenshot, as RRGGBB
 pixel() {
@@ -157,5 +163,116 @@ if [ $# = 2 ] && [ $1 -ge -2 ] && [ $1 -le 2 ] && [ $2 -ge -2 ] && [ $2 -le 2 ];
 else
 	fail "the sextile is off the star key's centre: twice the offset is '$off'"
 fi
+
+# The touch tones, decoded as an exchange decodes them: each step's
+# sound (tests/dialpad/drive.sh keeps it as raw 16-bit stereo) cut into
+# tones where it falls quiet between them, each 10 ms of a tone read by
+# Goertzel at the eight DTMF frequencies, its strongest row and column
+# tone standing well clear of the others; a tone's keys in turn, the
+# tones space-separated, with each tone's length and the loudest sample.
+dtmf() {
+	python3 -I - "$1" <<'PY'
+import sys, struct, math
+RATE = 44100
+LOW = [697, 770, 852, 941]; HIGH = [1209, 1336, 1477, 1633]
+GRID = "123A456B789C*0#D"
+def goertzel(x, f):
+    k = 2 * math.cos(2 * math.pi * f / RATE); s1 = s2 = 0.0
+    for v in x:
+        s0 = v + k * s1 - s2; s2 = s1; s1 = s0
+    return s1 * s1 + s2 * s2 - k * s1 * s2
+try:
+    raw = open(sys.argv[1], 'rb').read()
+except OSError:
+    raw = b''
+n = len(raw) // 4
+left = [struct.unpack_from('<h', raw, 4 * i)[0] for i in range(n)]
+b = 44
+env = [max(abs(v) for v in left[i:i + b]) for i in range(0, n - b + 1, b)]
+peak = max(env) if env else 0
+segs = []; start = None
+for i, e in enumerate(env):
+    on = e > 0.2 * peak
+    if on and start is None:
+        start = i
+    if not on and start is not None:
+        segs.append((start * b, i * b)); start = None
+if start is not None:
+    segs.append((start * b, len(env) * b))
+tones = []; lens = []
+for a, z in segs:
+    keys = ''
+    for w in range(a, z - 441 + 1, 441):
+        x = left[w:w + 441]
+        lo = [goertzel(x, f) for f in LOW]; hi = [goertzel(x, f) for f in HIGH]
+        l = max(range(4), key=lambda i: lo[i]); h = max(range(4), key=lambda i: hi[i])
+        if lo[l] < 8 * sorted(lo)[-2] or hi[h] < 8 * sorted(hi)[-2]:
+            continue
+        k = GRID[l * 4 + h]
+        if not keys or keys[-1] != k:
+            keys += k
+    tones.append(keys or '?'); lens.append(round((z - a) * 1000 / RATE))
+print(' '.join(tones) + '|' + (str(min(lens)) if lens else '0') + '|' + str(peak))
+PY
+}
+tonecheck() {	# step, want (a pattern), what
+	r=$(dtmf "$ROOT/$T/audio.$1" 2>/dev/null || echo 'error|0|0')
+	got=${r%%|*}; rest=${r#*|}; shortest=${rest%%|*}; peak=${rest#*|}
+	case $got in
+	$2)	if [ "$shortest" -ge 115 ] && [ "$peak" -gt 1000 ] && [ "$peak" -lt 32767 ]; then
+			pass "$3 ($got; each at least ${shortest}ms, peak $peak)"
+		else
+			fail "$3: tones '$got', shortest ${shortest}ms, peak $peak"
+		fi ;;
+	*)	fail "$3: the tones heard were '$got', not '$2'" ;;
+	esac
+}
+tonecheck digits '5 5 5 1 2 3 4' "each tap sounds its key's pair, a tap each (5 5 5 three tones)"
+case $(dtmf "$ROOT/$T/audio.slide" 2>/dev/null | cut -d'|' -f1) in
+'89 7 6'|'9 7 6')	pass "a press slid from 8 to 9 sounds 9 once there" ;;
+*)	fail "slide: tones '$(dtmf "$ROOT/$T/audio.slide" 2>/dev/null)'" ;;
+esac
+tonecheck keyboard '1 2 3' "keys typed sound too"
+tonecheck star '\* 6 7 #' "the star and hash keys sound theirs"
+tonecheck plus '0 4 4' "0 held for + sounds 0's pair"
+tonecheck intones '1 2' "a digit sent in a call sounds as it goes"
+# The frequencies themselves, finer than a decoder needs: the whole of
+# the first tone of a step scanned a hertz at a time; its loudest low
+# and high frequencies within 3 Hz of the standard pair.
+hz() {	# step
+	python3 -I - "$1" <<'PY'
+import sys, struct, math
+RATE = 44100
+raw = open(sys.argv[1], 'rb').read()
+left = [struct.unpack_from('<h', raw, 4 * i)[0] for i in range(len(raw) // 4)]
+peak = max(abs(v) for v in left)
+i = 0
+while abs(left[i]) < 0.2 * peak:
+    i += 1
+x = left[i:i + RATE * 110 // 1000]
+def power(f):
+    k = 2 * math.cos(2 * math.pi * f / RATE); s1 = s2 = 0.0
+    for v in x:
+        s0 = v + k * s1 - s2; s2 = s1; s1 = s0
+    return s1 * s1 + s2 * s2 - k * s1 * s2
+lo = max(range(650, 1000), key=power)
+hi = max(range(1150, 1700), key=power)
+print(lo, hi)
+PY
+}
+freqcheck() {	# step key low high
+	set -- "$1" "$2" "$3" "$4" $(hz "$ROOT/$T/audio.$1" 2>/dev/null || echo 0 0)
+	if [ $(($5 - $3)) -ge -3 ] && [ $(($5 - $3)) -le 3 ] && [ $(($6 - $4)) -ge -3 ] && [ $(($6 - $4)) -le 3 ]; then
+		pass "$2 is $3 Hz and $4 Hz (heard $5 and $6)"
+	else
+		fail "$2 should be $3 Hz and $4 Hz: heard $5 and $6"
+	fi
+}
+freqcheck digits 5 770 1336
+freqcheck star '*' 941 1209
+freqcheck intones 1 697 1209
+freqcheck plus 0 941 1336
+r=$(dtmf "$ROOT/$T/audio.redial" 2>/dev/null | cut -d'|' -f1)
+[ -z "$r" ] && pass "Call and delete make no tone" || fail "Call made tones '$r'"
 
 exit $failed

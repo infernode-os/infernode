@@ -3,7 +3,7 @@ implement Dialpad;
 #
 # dialpad -- a telephone keypad, for a touch screen.
 #
-#	wm/dialpad [-p phonedir] [-k keysfile] [number]
+#	wm/dialpad [-q] [-a audiodev] [-p phonedir] [-k keysfile] [number]
 #
 # Twelve keys and Call, as a phone's: the number typed is dialled by a
 # write of "dial <number>" to phonedir/phone (/phone, devphone(3)), the
@@ -19,6 +19,20 @@ implement Dialpad;
 # delete clears the number.  Call with no number dials the last one
 # again.  The keyboard types the same: digits, * # +, Backspace,
 # Escape to clear, Enter to call.
+#
+# Each key sounds its Touch-Tone pair while it is held (a tap at least
+# Tonems): a row's low tone, 697, 770, 852 or 941 Hz, with a column's
+# high one, 1209, 1336 or 1477 Hz, the frequencies Bell Labs chose so
+# that no pair is a harmonic of another and speech seldom makes one;
+# the high tone a little louder, as a line loses more of it.  They go
+# to audiodev (/dev/audio, audio(3)) as 16-bit stereo, paced to the
+# time they take, so a held key does not fill the device's queue.  -q
+# is silence.  A device that will not open is told once and left.
+#
+# In a call, a digit is not added to the number: it is sent down the
+# line, "dtmf <digit>" written to the phone file, for the menus and
+# voicemail at the other end.  What sends it is the platform's (a
+# modem's AT+VTS); one that cannot says why, under the number.
 #
 # The phone file's reads are the call's state ("<state> <handle>
 # <time>", devphone(3)): while a call is dialing, ringing or connected,
@@ -45,6 +59,8 @@ include "tk.m";
 include "icon.m";
 	icon: Icon;
 include "arg.m";
+include "math.m";
+	math: Math;
 
 Dialpad: module
 {
@@ -62,6 +78,19 @@ Sextile:	con 16r26B9;
 # star in the number is centred.  Measured on the Go fonts' digits.
 Digitmid:	con 41;
 Maxdigits:	con 64;
+
+# The tones
+Rate:		con 44100;
+Tonems:		con 120;	# a tap sounds at least this long
+Chunkms:	con 10;	# written this much at a time
+Leadms:		con 40;	# kept at most this far ahead of the clock
+Attackms:	con 3;	# faded in and out over these, not clicked
+Releasems:	con 6;
+Idlems:		con 3000;	# the device let go after this long quiet
+Lowamp:		con 9000.0;	# of 32767: together under full scale
+Highamp:	con 11000.0;
+lowhz := array[] of {697, 770, 852, 941};
+highhz := array[] of {1209, 1336, 1477, 1633};
 
 # what a key does
 Kdigit, Kcall, Kdel: con iota;
@@ -81,6 +110,9 @@ theme: ref Lucitheme->Theme;
 font, sfont: ref Font;
 
 phonedir := "/phone";
+audiodev := "/dev/audio";
+quiet := 0;
+tonec: chan of int;		# the key sounding, 0 for none
 keysfile := "";
 keystext := "";		# what keysfile holds
 number := "";
@@ -113,9 +145,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("wm/dialpad [-p phonedir] [-k keysfile] [number]");
+		arg->setusage("wm/dialpad [-q] [-a audiodev] [-p phonedir] [-k keysfile] [number]");
 		while((o := arg->opt()) != 0)
 			case o {
+			'q' =>	quiet = 1;
+			'a' =>	audiodev = arg->earg();
 			'p' =>	phonedir = arg->earg();
 			'k' =>	keysfile = arg->earg();
 			* =>	arg->usage();
@@ -144,6 +178,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	redraw();
 
 	tickc = chan[4] of int;
+	tonec = chan[16] of int;
+	math = load Math Math->PATH;
+	if(!quiet && math != nil)
+		spawn sounder();
 	eventc := chan of string;
 	spawn events(phonedir + "/phone", eventc);
 
@@ -243,6 +281,22 @@ phonewrite(s: string): string
 	return nil;
 }
 
+# In a call, a digit goes down the line rather than into the number.
+sendtone(c: int)
+{
+	s := "";
+	s[0] = c;
+	if((e := phonewrite("dtmf " + s)) != nil)
+		setstatus("tone not sent: " + e, theme.red);
+	else
+		setstatus("sent " + s, theme.green);
+}
+
+istone(c: int): int
+{
+	return c >= '0' && c <= '9' || c == '*' || c == '#';
+}
+
 setstatus(s: string, col: int)
 {
 	status = s;
@@ -306,9 +360,17 @@ key(k: int)
 		delete();
 	27 =>
 		number = "";
-	Sextile =>
-		add('*');
 	* =>
+		if(k == Sextile)
+			k = '*';
+		if(istone(k)){
+			sound(k);
+			sound(0);
+			if(incall){
+				sendtone(k);
+				break;
+			}
+		}
 		add(k);
 	}
 	redraw();
@@ -318,7 +380,9 @@ act(k: ref Key, long: int)
 {
 	case k.kind {
 	Kdigit =>
-		if(long && k.c == '0')
+		if(incall)
+			sendtone(k.c);
+		else if(long && k.c == '0')
 			add('+');
 		else
 			add(k.c);
@@ -349,6 +413,8 @@ pointer(p: Pointer)
 			press = k;
 			pgen++;
 			longdone = 1;
+			soundkey(k);
+			sound(0);
 			act(k, 1);
 		}
 		return;
@@ -362,6 +428,7 @@ pointer(p: Pointer)
 			pgen++;
 			if(k != nil)
 				spawn ticker(pgen);
+			soundkey(k);
 			redraw();
 		}
 		return;
@@ -370,12 +437,183 @@ pointer(p: Pointer)
 		k := press;
 		press = nil;
 		pgen++;
+		sound(0);
 		if(!longdone)
 			act(k, 0);
 		else
 			redraw();
 	}
 	longdone = 0;
+}
+
+#
+# Touch tones
+#
+
+# The tone of the key under a finger (none for Call and delete).
+soundkey(k: ref Key)
+{
+	if(k != nil && k.kind == Kdigit)
+		sound(k.c);
+	else
+		sound(0);
+}
+
+sound(c: int)
+{
+	if(quiet || tonec == nil)
+		return;
+	alt {
+	tonec <-= c =>
+		;
+	* =>
+		;	# the sounder is behind: a tone dropped, never the keypad held
+	}
+}
+
+# A key's pair: its row's low tone and its column's high one.
+pair(c: int): (int, int)
+{
+	grid := "123A456B789C*0#D";
+	for(i := 0; i < len grid; i++)
+		if(grid[i] == c)
+			return (lowhz[i/4], highhz[i%4]);
+	return (0, 0);
+}
+
+# Owns the audio device: sounds the key last sent on tonec until a 0,
+# and at least Tonems; lets the device go after Idlems of quiet.
+sounder()
+{
+	fd: ref Sys->FD;
+	idlec := chan[16] of int;
+	igen := 0;
+	cur := 0;		# the key sounding
+	held := 0;
+	(f1, f2) := (0, 0);
+	(ph1, ph2) := (0.0, 0.0);
+	frames := 0;		# since the tone began
+	t0 := 0;
+	minframes := Rate * Tonems / 1000;
+	chunk := Rate * Chunkms / 1000;
+	for(;;){
+		if(cur == 0){
+			if(fd != nil){
+				igen++;
+				spawn idle(igen, idlec);
+			}
+			alt {
+			k := <-tonec =>
+				if(k == 0)
+					continue;
+				if(fd == nil && (fd = opendev()) == nil){
+					quiet = 1;
+					return;
+				}
+				cur = k;
+				held = 1;
+				(f1, f2) = pair(k);
+				(ph1, ph2) = (0.0, 0.0);
+				frames = 0;
+				t0 = sys->millisec();
+			g := <-idlec =>
+				if(g == igen)
+					fd = nil;
+			}
+			continue;
+		}
+		# while the key is down, a slide to another changes the pair;
+		# once it is let go, nothing more is read until its tone is
+		# done, so taps queued behind it each sound in turn
+		if(held) alt {
+		k := <-tonec =>
+			if(k == 0)
+				held = 0;
+			else if(k != cur){
+				cur = k;
+				(f1, f2) = pair(k);
+			}
+		* =>
+			;
+		}
+		end := !held && frames >= minframes;
+		n := chunk;
+		if(end)
+			n = Rate * Releasems / 1000;
+		(b, p1, p2) := tone(n, frames, end, f1, f2, ph1, ph2);
+		(ph1, ph2) = (p1, p2);
+		if(sys->write(fd, b, len b) != len b){
+			sys->fprint(stderr, "dialpad: %s: %r: no tones\n", audiodev);
+			quiet = 1;
+			return;
+		}
+		frames += n;
+		if(end){
+			cur = 0;
+			continue;
+		}
+		# no further ahead of the clock than Leadms
+		ahead := frames * 1000 / Rate - (sys->millisec() - t0);
+		if(ahead > Leadms)
+			sys->sleep(ahead - Leadms);
+	}
+}
+
+opendev(): ref Sys->FD
+{
+	fd := sys->open(audiodev, Sys->OWRITE);
+	if(fd == nil){
+		sys->fprint(stderr, "dialpad: %s: %r: no tones\n", audiodev);
+		return nil;
+	}
+	# its format, where it is an audio(3) device: audiodev's ctl beside it
+	if(len audiodev >= 5 && audiodev[len audiodev - 5:] == "audio"){
+		cfd := sys->open(audiodev + "ctl", Sys->OWRITE);
+		if(cfd != nil)
+			sys->fprint(cfd, "rate %d\nchans 2\nbits 16\nenc pcm\n", Rate);
+	}
+	return fd;
+}
+
+idle(g: int, c: chan of int)
+{
+	sys->sleep(Idlems);
+	alt {
+	c <-= g =>
+		;
+	* =>
+		;
+	}
+}
+
+# n frames of the pair, 16-bit little-endian stereo, from frame "at" of
+# the tone: faded in over its first Attackms, and out over all n when
+# it is the last; the phases after it.
+tone(n, at, last, f1, f2: int, ph1, ph2: real): (array of byte, real, real)
+{
+	b := array[n*4] of byte;
+	d1 := 2.0 * Math->Pi * real f1 / real Rate;
+	d2 := 2.0 * Math->Pi * real f2 / real Rate;
+	attack := Rate * Attackms / 1000;
+	for(i := 0; i < n; i++){
+		env := 1.0;
+		if(at + i < attack)
+			env = real (at + i) / real attack;
+		if(last)
+			env *= real (n - i) / real n;
+		v := int (env * (Lowamp * math->sin(ph1) + Highamp * math->sin(ph2)));
+		ph1 += d1;
+		ph2 += d2;
+		b[4*i] = b[4*i+2] = byte v;
+		b[4*i+1] = b[4*i+3] = byte (v >> 8);
+	}
+	# kept small, so sin stays exact over a long hold
+	twopi := 2.0 * Math->Pi;
+	while(ph1 > twopi)
+		ph1 -= twopi;
+	while(ph2 > twopi)
+		ph2 -= twopi;
+	return (b, ph1, ph2);
 }
 
 ticker(g: int)

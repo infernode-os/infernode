@@ -4,6 +4,11 @@ wm/dialpad \- telephone keypad
 .SH SYNOPSIS
 .B wm/dialpad
 [
+.B -q
+] [
+.B -a
+.I audiodev
+] [
 .B -p
 .I phonedir
 ] [
@@ -59,7 +64,37 @@ The keyboard types the same: the digits,
 and
 .BR + ;
 Backspace deletes, Escape clears, Enter calls.
+.SS Touch tones
+Each key sounds its Touch-Tone pair while it is held, and for at least
+120 ms when it is only tapped: its row's low tone, 697, 770, 852 or
+941 Hz, with its column's high one, 1209, 1336 or 1477 Hz (the fourth
+column, 1633 Hz, is the A to D keys this keypad has not got).
+Bell Labs chose the frequencies so that no pair is a harmonic of
+another and speech seldom makes one; the high tone is a little the
+louder, as a line loses more of it.
+A press slid to another key changes the pair under the finger.
+Taps faster than their tones queue, each sounding in turn.
+The tones go to
+.I audiodev
+.RB ( /dev/audio ,
+.IR audio (3))
+as 16-bit stereo at 44.1 kHz, set through its
+.B ctl
+file where it has one, and are paced to the time they take, so a key
+held does not fill the device's queue.
+.B -q
+is silence; a device that will not open is reported once and left.
 .PP
+In a call, a digit is not added to the number: it is sent down the
+line by a write of
+.BI "dtmf " digit
+to the phone file, for the menus and voicemail at the other end, and
+the line under the number says it was sent, or why not.
+What sends it is the platform's (a modem's
+.BR AT+VTS );
+Android lets only the default phone app send tones into a call, and
+says so.
+.SS Calls
 Reads of the phone file are the call's state, a line
 .RI \&" state " " handle " " time \&"
 each.
@@ -104,7 +139,6 @@ dials, hangs up and reports the call's state
 .SH SEE ALSO
 .IR wm-osk (1)
 .SH BUGS
-It does not send tones (DTMF) during a call, and
 .B answer
 has no key: an incoming call is answered on the platform's own call
 screen.

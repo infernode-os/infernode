@@ -378,10 +378,24 @@ phonebridge_phone_ctl(const char *verb, const char *rest, char *err, int errlen)
 		fprintf(stderr, "phone: Android dial %s\n", rest);
 		return android_dial(rest, err, errlen);
 	}
-	fprintf(stderr, "phone: Android phone_ctl %s%s%s (stub — INFR-182)\n",
+	/*
+	 * Everything else is refused with its reason, as iOS refuses: a
+	 * write that "succeeds" with nothing done is worse than an error
+	 * (docs/HELLAPHONE.md, "Why no desktop stub"). It returned 0 here,
+	 * so a hangup looked done and the call went on.
+	 */
+	fprintf(stderr, "phone: Android phone_ctl %s%s%s refused\n",
 		verb ? verb : "", rest ? " " : "", rest ? rest : "");
-	(void)err; (void)errlen;
-	return 0;
+	if(verb != NULL && strcmp(verb, "dtmf") == 0)
+		snprintf(err, errlen,
+			"Android: tones in a call are sent by the default phone app "
+			"(an InCallService); use its keypad");
+	else if(verb != NULL && (strcmp(verb, "answer") == 0 || strcmp(verb, "hangup") == 0))
+		snprintf(err, errlen,
+			"Android: %s is not wired yet (INFR-182); use the call screen", verb);
+	else
+		snprintf(err, errlen, "phone_ctl: unknown verb %s", verb ? verb : "");
+	return -1;
 }
 
 int

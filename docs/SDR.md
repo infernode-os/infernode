@@ -39,7 +39,7 @@ the decisions a radio must follow.
    text files: `fix`, `event`, `traffic`. ADS-B decoded from a radio is
    one more format for it.
 4. **Run only while something listens.** `location(3)`: the first open
-   of `#g/nmea` starts the phone's location service, the last close
+   of `#o/nmea` starts the phone's location service, the last close
    stops it. A dongle drawing 300 mA should do the same.
 5. **Posted for every name space.** `gpsfs` and the editor post
    themselves in `#s` (`post9p(2)`), so an application or an agent's

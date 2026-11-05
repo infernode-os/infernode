@@ -2,14 +2,14 @@
  * locationbridge — iOS: CoreLocation.
  *
  * start and stop are called from the kproc that opened or closed
- * #g/nmea.  CLLocationManager must be made and driven on a thread with
+ * #o/nmea.  CLLocationManager must be made and driven on a thread with
  * a run loop, so both post the work to the main queue and return
  * without waiting (locationbridge.h: they must not block).  Fixes and
  * changes of authorisation arrive on the main queue through the
  * delegate, which hands them to devlocation.
  *
  * Permission is "when in use" (NSLocationWhenInUseUsageDescription in
- * app/Info.plist), asked for the first time something reads #g/nmea.
+ * app/Info.plist), asked for the first time something reads #o/nmea.
  * Until it is answered the device says waiting; refused, denied.
  *
  * CLLocation's altitude is above mean sea level, as NMEA's is.  A

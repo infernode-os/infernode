@@ -1,18 +1,18 @@
 /*
- * #g / `location` — the host's location service as an NMEA receiver.
+ * #o / `location` — the host's location service as an NMEA receiver.
  *
- *     #g/nmea      (r)  NMEA 0183 sentences, from the open on: an RMC,
+ *     #o/nmea      (r)  NMEA 0183 sentences, from the open on: an RMC,
  *                       a GST and a GGA for each fix the host gives.
  *                       Reads block.  The first open starts the host's
  *                       service, the last close stops it.
- *     #g/status    (r)  the service's state: unavailable (none on this
+ *     #o/status    (r)  the service's state: unavailable (none on this
  *                       host), stopped, waiting (started, no fix yet),
  *                       ok, denied (permission refused), off (location
  *                       services disabled)
  *
  * A phone's location service gives positions, not sentences; they are
  * written here as a receiver would send them, so gpsfs(4) takes the
- * phone as it takes a serial receiver: `source '#g/nmea'`.  The
+ * phone as it takes a serial receiver: `source '#o/nmea'`.  The
  * platform calls live in emu/<plat>/locationbridge.{c,m}
  * (locationbridge.h); this file owns the namespace and the sentences.
  *
@@ -203,7 +203,7 @@ locinit(void)
 static Chan*
 locattach(char *spec)
 {
-	return devattach('g', spec);
+	return devattach('o', spec);
 }
 
 static Walkqid*
@@ -330,7 +330,7 @@ locwrite(Chan *c, void *va, long n, vlong offset)
 }
 
 Dev locationdevtab = {
-	'g',
+	'o',
 	"location",
 
 	locinit,

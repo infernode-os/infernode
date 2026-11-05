@@ -50,7 +50,7 @@ extern JavaVM *g_vm;
  * class. FindClass from any other thread sees only the system loader
  * and can't reach io.infernode.* classes. */
 extern void phonebridge_jni_init(JNIEnv *env);
-/* emu/Android/locationbridge.c: the same, for InfernodeLocationBridge (#g). */
+/* emu/Android/locationbridge.c: the same, for InfernodeLocationBridge (#o). */
 extern void locationbridge_jni_init(JNIEnv *env);
 static jobject g_listener;          /* global ref */
 static jmethodID g_onLine_mid;

@@ -3,20 +3,20 @@
 location \- the host's location service as an NMEA receiver
 .SH SYNOPSIS
 .nf
-.B #g/nmea
-.B #g/status
+.B #o/nmea
+.B #o/status
 .fi
 .SH DESCRIPTION
 Under
 .IR emu (1),
-.B #g
+.B #o
 gives the location service of the host it runs on (a phone's) as a
 GPS receiver would: a stream of NMEA 0183 sentences, which
 .IR gpsfs (4)
 takes as it takes a serial receiver:
 .IP
 .EX
-gpsfs source '#g/nmea'
+gpsfs source '#o/nmea'
 .EE
 .PP
 .B nmea

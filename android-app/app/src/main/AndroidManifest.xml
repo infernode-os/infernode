@@ -53,11 +53,11 @@
     <uses-permission android:name="android.permission.READ_SMS" />
 
     <!--
-      ACCESS_FINE_LOCATION + ACCESS_COARSE_LOCATION — #g, the phone's
+      ACCESS_FINE_LOCATION + ACCESS_COARSE_LOCATION — #o, the phone's
       location as an NMEA receiver (emu/port/devlocation.c) for
       gpsfs(4), through InfernodeLocationBridge. Foreground only: no
       ACCESS_BACKGROUND_LOCATION, and updates run only while something
-      reads #g/nmea. Coarse alone (the user's choice on Android 12+)
+      reads #o/nmea. Coarse alone (the user's choice on Android 12+)
       still works, less precisely.
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

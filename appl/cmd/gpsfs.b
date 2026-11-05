@@ -5,7 +5,7 @@ implement Gpsfs;
 #
 # A receiver is a byte stream: a serial port ('#t/eia0', a USB puck
 # the host enumerates there), a phone's own location service
-# ('#g/nmea', location(3)), a network feed (a phone app serving NMEA
+# ('#o/nmea', location(3)), a network feed (a phone app serving NMEA
 # over TCP, gpsd, a marine gateway's UDP), a recorded log.  It speaks
 # NMEA 0183, or one of two others gpsfs knows: Garmin's Aviation
 # output (garminav(2)) and GDL 90 from an ADS-B receiver (gdl90(2)).

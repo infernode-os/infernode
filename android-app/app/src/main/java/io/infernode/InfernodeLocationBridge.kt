@@ -15,10 +15,10 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
- * The phone's location for `#g` (emu/port/devlocation.c), through
+ * The phone's location for `#o` (emu/port/devlocation.c), through
  * emu/Android/locationbridge.c.
  *
- * The device calls [start] when the first reader opens `#g/nmea` and
+ * The device calls [start] when the first reader opens `#o/nmea` and
  * [stop] when the last closes, so the receiver runs only while
  * something (gpsfs) listens. Both are called on an attached Inferno
  * kproc thread with a small stack: they only post to the main looper,

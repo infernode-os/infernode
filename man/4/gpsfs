@@ -374,7 +374,7 @@ A serial port can always be named in the kernel's own syntax,
 On a phone:
 .IP
 .EX
-; gpsfs source '#g/nmea'
+; gpsfs source '#o/nmea'
 .EE
 .PP
 A USB receiver on Linux, which

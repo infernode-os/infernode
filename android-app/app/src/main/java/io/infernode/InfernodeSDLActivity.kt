@@ -214,9 +214,9 @@ class InfernodeSDLActivity : SDLActivity() {
      *     SmsManager.sendTextMessage.
      *   * RECEIVE_SMS / READ_SMS — INFR-182: InfernodeSmsReceiver picks
      *     up SMS_RECEIVED. Same perm group, granted together.
-     *   * ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION — #g: the
+     *   * ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION — #o: the
      *     phone's location for gpsfs(4), through InfernodeLocationBridge.
-     *     Updates run only while something reads #g/nmea.
+     *     Updates run only while something reads #o/nmea.
      *
      * Android collapses consecutive prompts within a group, so the user
      * sees one dialog per group, not one per permission.

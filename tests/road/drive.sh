@@ -3,7 +3,7 @@
 # wm/road under wm/wm, for tests/host/road_test.sh (not a test: the
 # runner runs every script in tests/inferno).  $1 is the test's
 # directory, holding map.txt and the themes; the emulator is started
-# with $INFERNODE_LOCATION_FAKE, so #g gives a fix a second, read by
+# with $INFERNODE_LOCATION_FAKE, so #o gives a fix a second, read by
 # gpsfs.  What each step gives is written beside it: the screen while
 # following, after the view is moved by its ctl, and after a theme
 # switch; the files' contents; the errors refused writes got.  A write
@@ -14,7 +14,7 @@ load std
 
 d=$1
 sleep 1
-gpsfs source '#g/nmea'
+gpsfs source '#o/nmea'
 wm/road -w 1500 $d/map.txt &
 sleep 8
 echo R win `{cat /chan/wmwindows}

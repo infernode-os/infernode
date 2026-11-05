@@ -1,7 +1,7 @@
 /*
  * locationbridge — hosts with no location service (desktops).
  *
- * #g is there, and says unavailable.  For tests, and for trying a
+ * #o is there, and says unavailable.  For tests, and for trying a
  * map on a desk, $INFERNODE_LOCATION_FAKE, read when the emulator
  * starts, gives a service that reports a fix a second:
  *

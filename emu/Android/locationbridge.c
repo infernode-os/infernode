@@ -3,7 +3,7 @@
  * android-app/.../InfernodeLocationBridge.kt.
  *
  * start and stop call the Kotlin object's static start() and stop()
- * from the kproc that opened or closed #g/nmea; Kotlin posts the
+ * from the kproc that opened or closed #o/nmea; Kotlin posts the
  * LocationManager calls to the main looper (they need one, and a
  * kproc's stack is too small for a binder round trip) and returns, so
  * neither blocks.  Positions and state changes come back on the main
@@ -12,7 +12,7 @@
  * The class and its methods are cached in JNI_OnLoad (jni-emu.c calls
  * locationbridge_jni_init) for the reason phonebridge.c gives: from a
  * kproc's attached thread the app's classes are not visible.  The
- * headless o.emu has no JVM, and says so when #g/nmea is opened.
+ * headless o.emu has no JVM, and says so when #o/nmea is opened.
  */
 
 #include <stdio.h>

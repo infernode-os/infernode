@@ -24,17 +24,19 @@ static int	gen;	/* the running fake's generation; a stop ends it */
 void
 locationbridge_init(void)
 {
-	char *s, *f[4];
+	char buf[128], *s, *f[4];
 	int n;
+	size_t l;
 
+	/* four numbers: anything longer is not one, and is refused */
 	s = getenv("INFERNODE_LOCATION_FAKE");
-	if(s == nil || (s = strdup(s)) == nil){
+	if(s == nil || (l = strlen(s)) >= sizeof buf){
 		locationbridge_post_state("unavailable");
 		return;
 	}
-	n = getfields(s, f, nelem(f), 1, " \t");
+	memmove(buf, s, l+1);
+	n = getfields(buf, f, nelem(f), 1, " \t");
 	if(n < 2){
-		free(s);
 		locationbridge_post_state("unavailable");
 		return;
 	}
@@ -50,7 +52,6 @@ locationbridge_init(void)
 	fake.speed = 1.0;
 	fake.hascourse = 1;
 	fake.course = 0.0;
-	free(s);
 	hasfake = 1;
 }
 

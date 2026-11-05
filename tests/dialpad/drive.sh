@@ -62,7 +62,16 @@ file2chan /chan/phone {rblock; rtag=$tag} {
 	}
 }
 
-wm/dialpad -a /chan/audio -p /chan -k /tmp/keys &
+# speech9p's hear, as the microphone key uses it: each "start" kept in
+# /tmp/hearwrites, and the words heard whatever /tmp/heard holds then;
+# the address book is /tmp/contacts (the test writes it)
+file2chan /chan/hear {rreadone "{cat /tmp/heard}} {
+	echo ${rget data} >> /tmp/hearwrites
+	rwrite
+}
+file2chan /chan/contacts {rreadone "{cat /tmp/contacts}} {}
+
+wm/dialpad -a /chan/audio -p /chan -s /chan -k /tmp/keys &
 sleep 3
 echo R windows `{cat /chan/wmwindows}
 
@@ -120,5 +129,32 @@ step intones
 tones hangup
 taps call
 step hangup
+
+# The microphone key.  A number said is put on the keypad, not dialled
+tones voice
+echo 'five five five, one two one two.' > /tmp/heard
+taps mic
+sleep 2
+taps call
+step saidnumber
+# said after "call", a name is found and dialled once the countdown ends
+echo 'Call Sarah at work.' > /tmp/heard
+taps mic
+sleep 5
+step saidcall
+# a touch in the countdown stops it, and types nothing; Call then dials
+echo 'call mom' > /tmp/heard
+taps mic
+sleep 1
+taps 1
+sleep 4
+taps call
+step stopped
+# a name not in the book dials nothing
+echo 'call nobody' > /tmp/heard
+taps mic
+sleep 5
+step nobody
+scap /tmp/nobody.img
 scap /tmp/ended.img
 echo R done

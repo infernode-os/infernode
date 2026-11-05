@@ -37,6 +37,7 @@ devpointer devpointer
 dialog dialog
 getstring dialog
 prompt dialog
+dialspeech dialspeech
 dict dict
 dis dis
 block diskblocks

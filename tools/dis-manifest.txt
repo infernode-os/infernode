@@ -333,6 +333,7 @@ dis/lib/devpointer.dis
 dis/lib/dhcpclient.dis
 dis/lib/dial.dis
 dis/lib/dialnorm.dis
+dis/lib/dialspeech.dis
 dis/lib/dialog.dis
 dis/lib/dict.dis
 dis/lib/dis.dis
@@ -730,6 +731,7 @@ dis/tests/devprog_read_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
+dis/tests/dialspeech_test.dis
 dis/tests/diswrite_test.dis
 dis/tests/docengine_test.dis
 dis/tests/edit_test.dis

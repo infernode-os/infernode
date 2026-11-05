@@ -28,6 +28,8 @@ mkdir -p "$ROOT/$T"
 LOG="$ROOT/$T/log"
 trap '[ -n "${KEEP:-}" ] || rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
+# the address book the microphone key's names are found in
+printf 'Mom\tmobile\t+15551230001\nMom\twork\t+15551230002\nSarah Smith\tmobile\t+15551230003\nSarah Smith\twork\t+15551230004\n# contacts: 4 numbers\n' > "$ROOT/$T/contacts"
 SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g800x600 -r"$ROOT" \
 	/dis/sh.dis -c "bind -c /$T /tmp; wm/wm sh /tests/dialpad/drive.sh" \
 	</dev/null >"$LOG" 2>&1 || true
@@ -47,7 +49,10 @@ dial *67#
 dial +44
 dtmf 1
 dtmf 2
-hangup'
+hangup
+dial 5551212
+dial +15551230004
+dial +15551230001'
 n=0
 echo "$want" | while IFS= read -r w; do
 	n=$((n + 1))
@@ -61,11 +66,14 @@ echo "$want" | while IFS= read -r w; do
 	6)	what="button 3 on 0 is +" ;;
 	7|8)	what="in a call a digit is sent down the line" ;;
 	9)	what="a connected call's Call hangs up" ;;
+	10)	what="a number said is put on the keypad, and Call dials it" ;;
+	11)	what="\"call Sarah at work\" said dials her work number once the countdown ends" ;;
+	12)	what="a touch stops a said call and types nothing; Call then dials Mom's mobile" ;;
 	esac
 	if [ "$got" = "$w" ]; then pass "$what ($got)"; else echo "FAIL: $what: '$got', not '$w'"; fi
 done | tee "$ROOT/$T/results"
 grep -q '^FAIL' "$ROOT/$T/results" && failed=1
-[ "$(wc -l < "$ROOT/$T/writes")" -eq 9 ] || fail "writes: $(tr '\n' '|' < "$ROOT/$T/writes")"
+[ "$(wc -l < "$ROOT/$T/writes")" -eq 12 ] || fail "writes: $(tr '\n' '|' < "$ROOT/$T/writes")"
 
 # the colour at x y of a screenshot, as RRGGBB
 pixel() {
@@ -274,5 +282,75 @@ freqcheck intones 1 697 1209
 freqcheck plus 0 941 1336
 r=$(dtmf "$ROOT/$T/audio.redial" 2>/dev/null | cut -d'|' -f1)
 [ -z "$r" ] && pass "Call and delete make no tone" || fail "Call made tones '$r'"
+
+# A long number is shown whole, its digits smaller, not cut at its
+# start: after the last step the number is Mom's, +15551230001, and the
+# leftmost glyph is its +: shorter than the digits beside it, and far
+# taller than an ellipsis's dots, which a number cut short begins with.
+plusfirst() {	# shot minx miny maxx maxy
+	python3 -I - "$@" <<'PY'
+import sys
+data = open(sys.argv[1], 'rb').read(); off = 0
+if data[:11] == b'compressed\n':
+    off = 11
+hdr = data[off:off+60]; off += 60
+chan = hdr[0:11].strip().decode()
+minx, miny, maxx, maxy = (int(hdr[i:i+12]) for i in (12, 24, 36, 48))
+w = maxx - minx
+bpp = {'x8r8g8b8': 4, 'a8r8g8b8': 4, 'r8g8b8': 3}[chan]
+if data[:11] != b'compressed\n':
+    rows = data[off:]
+else:
+    rows = bytearray(); yy = miny
+    while yy < maxy:
+        bmaxy = int(data[off:off+12]); nb = int(data[off+12:off+24]); off += 24
+        blk = data[off:off+nb]; off += nb; i = 0
+        while i < len(blk):
+            c = blk[i]; i += 1
+            if c >= 128:
+                n = c - 128 + 1; rows += blk[i:i+n]; i += n
+            else:
+                n = (c >> 2) + 3; o = ((c & 3) << 8 | blk[i]) + 1; i += 1
+                for _ in range(n):
+                    rows.append(rows[-o])
+        yy = bmaxy
+def px(x, y):
+    p = ((y - miny) * w + (x - minx)) * bpp
+    return rows[p:p+3]
+x0, y0, x1, y1 = (int(a) for a in sys.argv[2:6])
+fill = px(x0, y0)
+cols = {}
+for x in range(x0, x1):
+    for y in range(y0, y1):
+        if sum(abs(a - b) for a, b in zip(px(x, y), fill)) > 60:
+            cols.setdefault(x, []).append(y)
+xs = sorted(cols)
+if not xs:
+    print('none'); sys.exit()
+groups = [[xs[0]]]
+for x in xs[1:]:
+    if x - groups[-1][-1] <= 1:
+        groups[-1].append(x)
+    else:
+        groups.append([x])
+def height(g):
+    ys = [y for x in g for y in cols[x]]
+    return max(ys) - min(ys) + 1
+first = height(groups[0]); rest = max(height(g) for g in groups[1:]) if len(groups) > 1 else 0
+print(first, rest, xs[0] - x0, x1 - 1 - xs[-1])
+PY
+}
+set -- $(grep '^number ' "$ROOT/$T/keys")
+set -- $(plusfirst "$ROOT/$T/nobody.img" $2 $3 $4 $5 2>/dev/null || echo none)
+if [ $# = 4 ] && [ $(($1 * 10)) -lt $(($2 * 8)) ] && [ $(($1 * 10)) -ge $(($2 * 4)) ]; then
+	pass "a long number is shown whole, its + first (glyph $1 high beside digits $2)"
+else
+	fail "the number's start is not its +: '$*'"
+fi
+
+# the microphone key asked speech9p's hear to start each time
+n=$(grep -c '^start 5000$' "$ROOT/$T/hearwrites" 2>/dev/null)
+[ "$n" = 4 ] && pass "the microphone key starts hear each time (start 5000)" ||
+	fail "hear was written: $(tr '\n' '|' < "$ROOT/$T/hearwrites" 2>/dev/null)"
 
 exit $failed

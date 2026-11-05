@@ -3,7 +3,7 @@ implement Dialpad;
 #
 # dialpad -- a telephone keypad, for a touch screen.
 #
-#	wm/dialpad [-q] [-a audiodev] [-p phonedir] [-k keysfile] [number]
+#	wm/dialpad [-q] [-a audiodev] [-p phonedir] [-s speechdir] [-k keysfile] [number]
 #
 # Twelve keys and Call, as a phone's: the number typed is dialled by a
 # write of "dial <number>" to phonedir/phone (/phone, devphone(3)), the
@@ -34,6 +34,15 @@ implement Dialpad;
 # voicemail at the other end.  What sends it is the platform's (a
 # modem's AT+VTS); one that cannot says why, under the number.
 #
+# The microphone key listens (speechdir/hear, speech9p's) for a number
+# or a name, read as dialspeech(2) reads it: "five five five one two",
+# "nine one one", "555-1234", or "Mom", "Sarah at work", a name found
+# in phonedir/contacts, the address book the agent's contacts tool
+# reads.  It is put on the keypad.  Said after "call" or "dial", it is
+# dialled after Autodialms, the line under the number saying who; any
+# touch or key in that time stops it, so a name heard wrong is not
+# rung.
+#
 # The phone file's reads are the call's state ("<state> <handle>
 # <time>", devphone(3)): while a call is dialing, ringing or connected,
 # Call is Hang up, which writes "hangup".  Where the platform reports
@@ -41,8 +50,8 @@ implement Dialpad;
 #
 # With -k, each time the keys are laid out their places are written to
 # keysfile, "name minx miny maxx maxy" a line (as wm/osk's keys file):
-# the digits by themselves, star, hash, call and delete; for a test, an
-# agent, a typist's trace.
+# the digits by themselves, star, hash, call, delete and mic, and the
+# number shown above them; for a test, an agent, a typist's trace.
 #
 
 include "sys.m";
@@ -61,6 +70,8 @@ include "icon.m";
 include "arg.m";
 include "math.m";
 	math: Math;
+include "dialspeech.m";
+	dialspeech: Dialspeech;
 
 Dialpad: module
 {
@@ -78,6 +89,9 @@ Sextile:	con 16r26B9;
 # star in the number is centred.  Measured on the Go fonts' digits.
 Digitmid:	con 41;
 Maxdigits:	con 64;
+Autodialms:	con 3000;	# a number said after "call" is dialled after this
+Hearms:		con 5000;	# listened for this long
+Heartimeout:	con 30000;	# and its words waited for this long
 
 # The tones
 Rate:		con 44100;
@@ -93,7 +107,7 @@ lowhz := array[] of {697, 770, 852, 941};
 highhz := array[] of {1209, 1336, 1477, 1633};
 
 # what a key does
-Kdigit, Kcall, Kdel: con iota;
+Kdigit, Kcall, Kdel, Kmic: con iota;
 
 Key: adt {
 	kind:	int;
@@ -110,6 +124,11 @@ theme: ref Lucitheme->Theme;
 font, sfont: ref Font;
 
 phonedir := "/phone";
+speechdir := "/mnt/speech";
+listening := 0;		# a mic's words awaited, from hear number listening
+hearc: chan of (int, string, string);	# (listening, words, why not)
+dialing := 0;		# a call said, to be dialled when dialc says
+dialc: chan of int;
 audiodev := "/dev/audio";
 quiet := 0;
 tonec: chan of int;		# the key sounding, 0 for none
@@ -125,6 +144,7 @@ keys: array of ref Key;
 disprect, statusrect: Rect;
 
 press: ref Key;		# the key under a finger that is down
+swallow := 0;		# the touch that stopped a call said, until let go
 pgen := 0;		# which press a tick is for
 longdone := 0;		# the press has had its long meaning
 tickc: chan of int;
@@ -145,12 +165,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("wm/dialpad [-q] [-a audiodev] [-p phonedir] [-k keysfile] [number]");
+		arg->setusage("wm/dialpad [-q] [-a audiodev] [-p phonedir] [-s speechdir] [-k keysfile] [number]");
 		while((o := arg->opt()) != 0)
 			case o {
 			'q' =>	quiet = 1;
 			'a' =>	audiodev = arg->earg();
 			'p' =>	phonedir = arg->earg();
+			's' =>	speechdir = arg->earg();
 			'k' =>	keysfile = arg->earg();
 			* =>	arg->usage();
 			}
@@ -178,6 +199,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 	redraw();
 
 	tickc = chan[4] of int;
+	hearc = chan[4] of (int, string, string);
+	dialc = chan[4] of int;
 	tonec = chan[16] of int;
 	math = load Math Math->PATH;
 	if(!quiet && math != nil)
@@ -201,6 +224,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 		}
 	l := <-eventc =>
 		phoneevent(l);
+	(h, words, herr) := <-hearc =>
+		if(h == listening && h > 0)
+			heard(words, herr);
+	g := <-dialc =>
+		if(g == dialing && g > 0){
+			dialing = 0;
+			call();
+			redraw();
+		}
 	}
 }
 
@@ -353,6 +385,8 @@ phoneevent(l: string)
 
 key(k: int)
 {
+	if(stopdial())
+		return;
 	case k {
 	'\n' or '\r' =>
 		call();
@@ -393,6 +427,8 @@ act(k: ref Key, long: int)
 			delete();
 	Kcall =>
 		call();
+	Kmic =>
+		listen();
 	}
 	redraw();
 }
@@ -407,6 +443,16 @@ keyat(p: Point): ref Key
 
 pointer(p: Pointer)
 {
+	if(p.buttons != 0 && press == nil && stopdial()){
+		press = nil;
+		swallow = 1;	# the touch that stopped it does nothing else
+		return;
+	}
+	if(swallow){
+		if(p.buttons == 0)
+			swallow = 0;
+		return;
+	}
 	if(p.buttons & 4){
 		# a touch held, or button 3: the key's other meaning, once
 		if(press == nil && (k := keyat(p.xy)) != nil){
@@ -444,6 +490,145 @@ pointer(p: Pointer)
 			redraw();
 	}
 	longdone = 0;
+}
+
+#
+# Voice
+#
+
+listen()
+{
+	if(listening)
+		return;
+	if(incall){
+		setstatus("not while in a call", theme.text2);
+		return;
+	}
+	if(dialspeech == nil){
+		dialspeech = load Dialspeech Dialspeech->PATH;
+		if(dialspeech == nil){
+			setstatus(sys->sprint("no dialspeech: %r"), theme.red);
+			return;
+		}
+		dialspeech->init();
+	}
+	(ok, nil) := sys->stat(speechdir + "/hear");
+	if(ok < 0){
+		setstatus("no speech here: " + speechdir + "/hear", theme.red);
+		return;
+	}
+	listening = ++hears;
+	setstatus("listening", theme.accent);
+	spawn hear(listening);
+	spawn hearlimit(listening);
+}
+hears := 0;
+
+# The words heard: speechdir/hear started, then read to its end.
+hear(n: int)
+{
+	fd := sys->open(speechdir + "/hear", Sys->ORDWR);
+	if(fd == nil){
+		hearc <-= (n, nil, sys->sprint("%s/hear: %r", speechdir));
+		return;
+	}
+	b := array of byte sys->sprint("start %d", Hearms);
+	if(sys->write(fd, b, len b) != len b){
+		hearc <-= (n, nil, sys->sprint("hear: %r"));
+		return;
+	}
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	words := "";
+	buf := array[1024] of byte;
+	while((r := sys->read(fd, buf, len buf)) > 0)
+		words += string buf[0:r];
+	if(r < 0){
+		hearc <-= (n, nil, sys->sprint("hear: %r"));
+		return;
+	}
+	hearc <-= (n, words, nil);
+}
+
+hearlimit(n: int)
+{
+	sys->sleep(Heartimeout);
+	hearc <-= (n, nil, "nothing heard");
+}
+
+heard(words, err: string)
+{
+	listening = 0;
+	if(err != nil){
+		setstatus(err, theme.red);
+		redraw();
+		return;
+	}
+	said := dialspeech->parse(words);
+	who: string;
+	case said.what {
+	Dialspeech->Number =>
+		if(len said.number > Maxdigits){
+			setstatus("too long a number", theme.red);
+			redraw();
+			return;
+		}
+		number = said.number;
+		who = number;
+	Dialspeech->Name =>
+		(num, cname, ckind, e) := dialspeech->lookup(readall(phonedir + "/contacts"), said.name, said.kind);
+		if(e != nil){
+			setstatus(e, theme.red);
+			redraw();
+			return;
+		}
+		number = "";
+		for(i := 0; i < len num; i++)
+			add(num[i]);	# what a phone dials of it: no blanks, dashes
+		who = cname;
+		if(ckind != nil)
+			who += " (" + ckind + ")";
+	* =>
+		setstatus("heard nothing to dial", theme.text2);
+		redraw();
+		return;
+	}
+	if(said.call && number != ""){
+		dialing = ++dials;
+		setstatus(sys->sprint("calling %s in %d s: touch to stop", who, Autodialms/1000), theme.green);
+		spawn dialafter(dialing);
+	}else
+		setstatus(who, theme.text2);
+	redraw();
+}
+dials := 0;
+
+dialafter(g: int)
+{
+	sys->sleep(Autodialms);
+	dialc <-= g;
+}
+
+# A call said and not yet dialled is stopped: whether there was one.
+stopdial(): int
+{
+	if(!dialing)
+		return 0;
+	dialing = 0;
+	setstatus("stopped", theme.text2);
+	redraw();
+	return 1;
+}
+
+readall(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	s := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		s += string buf[0:n];
+	return s;
 }
 
 #
@@ -630,11 +815,12 @@ makekeys()
 {
 	digits := "123456789*0#";
 	subs := array[] of {"", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ", "", "+", ""};
-	keys = array[14] of ref Key;
+	keys = array[15] of ref Key;
 	for(i := 0; i < 12; i++)
 		keys[i] = ref Key(Kdigit, digits[i], subs[i], Rect((0, 0), (0, 0)));
 	keys[12] = ref Key(Kcall, 0, nil, Rect((0, 0), (0, 0)));
 	keys[13] = ref Key(Kdel, 0, nil, Rect((0, 0), (0, 0)));
+	keys[14] = ref Key(Kmic, 0, nil, Rect((0, 0), (0, 0)));
 }
 
 # Units of u: the number 1.4, its status 0.6, then five rows of keys,
@@ -664,6 +850,7 @@ layout()
 	yy := y + 4*(u + g);
 	keys[12].r = Rect((o.x + kw + g, yy), (o.x + 2*kw + g, yy + u));
 	keys[13].r = Rect((o.x + 2*(kw + g), yy), (o.x + 3*kw + 2*g, yy + u));
+	keys[14].r = Rect((o.x, yy), (o.x + kw, yy + u));
 
 	font = pickfont(u * 45 / 100);
 	sfont = pickfont(u * 20 / 100);
@@ -680,6 +867,7 @@ writekeys()
 		case k.kind {
 		Kcall =>	name = "call";
 		Kdel =>	name = "delete";
+		Kmic =>	name = "mic";
 		* =>
 			case k.c {
 			'*' =>	name = "star";
@@ -690,6 +878,7 @@ writekeys()
 		}
 		t += sys->sprint("%s %d %d %d %d\n", name, k.r.min.x, k.r.min.y, k.r.max.x, k.r.max.y);
 	}
+	t += sys->sprint("number %d %d %d %d\n", disprect.min.x, disprect.min.y, disprect.max.x, disprect.max.y);
 	if(t == keystext)
 		return;
 	fd := sys->create(keysfile, Sys->OWRITE, 8r666);
@@ -704,6 +893,15 @@ writekeys()
 }
 
 fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36};
+
+# the size below px that pickfont has
+smaller(px: int): int
+{
+	for(i := len fontsizes - 1; i >= 0; i--)
+		if(fontsizes[i] < px && (i == 0 || fontsizes[i-1] < fontsizes[i]))
+			return fontsizes[i];
+	return fontsizes[0];
+}
 
 pickfont(px: int): ref Font
 {
@@ -734,9 +932,20 @@ redraw()
 	if(number == "")
 		textin(disprect, f, "number", theme.dim);
 	else{
+		# smaller digits before fewer: a number's start (its +, its
+		# country) is what says where it rings.  Only one too long at
+		# the smallest size loses its start, to an ellipsis.
+		px := disprect.dy() * 55 / 100;
+		while(numwidth(f, number) > disprect.dx() && px > fontsizes[0]){
+			px = smaller(px);
+			f = pickfont(px);
+		}
 		s := number;
-		while(len s > 1 && numwidth(f, s) > disprect.dx())
-			s = s[1:];
+		if(numwidth(f, s) > disprect.dx()){
+			while(len s > 1 && numwidth(f, "…" + s) > disprect.dx())
+				s = s[1:];
+			s = "…" + s;
+		}
 		drawnumber(disprect, f, s, theme.text);
 	}
 
@@ -801,6 +1010,16 @@ drawkey(k: ref Key)
 			fg = theme.accent;
 		if(number != "" && !glyph("backspace", r, fg))
 			textin(r, sfont, "Delete", fg);
+	Kmic =>
+		fg := theme.text2;
+		if(listening){
+			# listening: as a recorder's red light
+			img.draw(r, colour(theme.red), nil, (0, 0));
+			fg = theme.bg;
+		}else if(down)
+			fg = theme.accent;
+		if(!glyph("microphone", r, fg))
+			textin(r, sfont, "Speak", fg);
 	}
 }
 

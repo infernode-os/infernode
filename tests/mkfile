@@ -52,6 +52,7 @@ TARG=\
 	destructor_test.dis\
 	dial_test.dis\
 	dialnorm_test.dis\
+	dialspeech_test.dis\
 	edit_test.dis\
 	editor_test.dis\
 	example_test.dis\
@@ -386,6 +387,7 @@ SYSMODULES=\
 	convcs.m\
 	dhcp.m\
 	dialnorm.m\
+	dialspeech.m\
 	dis.m\
 	encoding.m\
 	ethcrypto.m\

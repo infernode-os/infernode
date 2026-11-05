@@ -50,6 +50,7 @@ TARG=\
 	dhcpclient.dis\
 	dial.dis\
 	dialnorm.dis\
+	dialspeech.dis\
 	dialog.dis\
 	selectfile.dis\
 	tabs.dis\
@@ -230,6 +231,7 @@ SYSMODULES=\
 	devpointer.m\
 	dial.m\
 	dialnorm.m\
+	dialspeech.m\
 	dict.m\
 	dis.m\
 	diskblocks.m\

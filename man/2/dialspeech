@@ -1,0 +1,123 @@
+.TH DIALSPEECH 2
+.SH NAME
+dialspeech \- what was said to a telephone, as a number to dial
+.SH SYNOPSIS
+.EX
+include "dialspeech.m";
+dialspeech := load Dialspeech Dialspeech->PATH;
+Said: import dialspeech;
+
+Said: adt {
+	what:	int;	# Nothing, Number or Name
+	call:	int;	# began with call, dial, phone or ring
+	number:	string;
+	name:	string;
+	kind:	string;	# mobile, work, home, main; nil for any
+};
+
+init:	fn();
+parse:	fn(text: string): ref Said;
+lookup:	fn(contacts, name, kind: string): (string, string, string, string);
+.EE
+.SH DESCRIPTION
+.I Dialspeech
+reads speech recognised (as
+.IR speech9p 's
+.B hear
+gives it) as a phone's voice dialling reads it.
+.PP
+.I Parse
+reads
+.IR text .
+A leading
+.BR call ,
+.BR dial ,
+.B phone
+or
+.B ring
+sets
+.BR call .
+Words that are all a number's make a
+.BR Number :
+digits said
+.RB ( zero
+to
+.BR nine ,
+.B oh
+for 0), teens and tens
+.RB ( "nine eleven"
+is 911,
+.B "twenty five"
+25),
+.B double
+and
+.B triple
+before a digit,
+.B hundred
+after one and
+.B thousand
+after any,
+.B star
+or
+.B asterisk
+for
+.BR * ,
+.B pound
+or
+.B hash
+for
+.BR # ,
+and
+.B plus
+first only, for
+.BR + ;
+and numbers written as numbers,
+.BR 555-1234 ,
+.BR "(555) 123-4567" ,
+.BR "+1 555 123 4567" .
+Anything else is a
+.BR Name ,
+in lower case, without the words around it that are not part of it
+.RB ( please ,
+.BR at ,
+.BR on ,
+.BR her ,
+.BR the ...)
+and with the kind of number said taken out of it:
+.B mobile
+(or
+.BR cell ),
+.B work
+(or
+.BR office ),
+.B home
+or
+.BR main ,
+so
+.B "call Sarah at work"
+is the name
+.B sarah
+and the kind
+.BR work .
+.PP
+.I Lookup
+finds a name in an address book,
+.I contacts
+in
+.BR /phone/contacts 's
+form: a line
+.IB name \et kind \et number
+each, lines beginning
+.B #
+ignored.
+A contact whose whole name was said is taken before one with a word of
+it, and that before one with it inside a word.
+It returns the number, the contact's name and the number's kind as the
+book has them, and nil; or nil and why not: no such name, two people
+answer to it (both named, so the caller can ask which), or no number of
+the kind asked for.
+With no kind asked, a mobile number is taken first.
+.SH SOURCE
+.B /appl/lib/dialspeech.b
+.SH SEE ALSO
+.IR wm-dialpad (1)

@@ -12,6 +12,9 @@ wm/dialpad \- telephone keypad
 .B -p
 .I phonedir
 ] [
+.B -s
+.I speechdir
+] [
 .B -k
 .I keysfile
 ] [
@@ -94,6 +97,48 @@ What sends it is the platform's (a modem's
 .BR AT+VTS );
 Android lets only the default phone app send tones into a call, and
 says so.
+.SS Voice
+The microphone key, at the bottom left, listens: it writes
+.B start
+to
+.IB speechdir /hear
+.RB ( /mnt/speech ,
+.IR speech9p ),
+red while it does, and reads what was said.
+That is read as
+.IR dialspeech (2)
+reads it: a number said as digits
+.RB ( "five five five one two" ,
+.BR "nine one one" ,
+.BR "double two" ,
+.BR "eight hundred" ,
+.BR star ,
+.BR pound ,
+.BR plus )
+or written as one
+.RB ( 555-1234 ),
+or a name, with the kind of number wanted
+.RB ( "Sarah at work" ,
+.BR "Mom's mobile" ),
+found in
+.IB phonedir /contactsR,
+the address book the agent's
+.B contacts
+tool reads (a mobile number first when no kind is said; two people of
+the name are named, and neither rung).
+What is found is put on the keypad.
+Said after
+.B call
+or
+.BR dial ,
+it is dialled three seconds later, the line under the number saying
+who; a touch or a key in that time stops it, and does nothing else, so
+a name heard wrong is not rung.
+.PP
+A number too long for its line is shown in smaller digits, and only one
+too long even so loses its start, to an ellipsis: the start (a
+.BR + ,
+a country) is what says where it rings.
 .SS Calls
 Reads of the phone file are the call's state, a line
 .RI \&" state " " handle " " time \&"
@@ -126,9 +171,12 @@ each, as
 file: the digits as themselves,
 .BR star ,
 .BR hash ,
-.B call
+.BR call ,
+.B delete
 and
-.BR delete .
+.BR mic ,
+and the number shown above them,
+.BR number .
 .SH FILES
 .TF /phone/phone
 .TP
@@ -137,7 +185,8 @@ dials, hangs up and reports the call's state
 .SH SOURCE
 .B /appl/wm/dialpad.b
 .SH SEE ALSO
-.IR wm-osk (1)
+.IR wm-osk (1),
+.IR dialspeech (2)
 .SH BUGS
 .B answer
 has no key: an incoming call is answered on the platform's own call

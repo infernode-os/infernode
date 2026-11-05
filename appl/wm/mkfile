@@ -66,6 +66,7 @@ SYSMODULES=\
 	imgload.m\
 	keyboard.m\
 	lucitheme.m\
+	dialspeech.m\
 	math.m\
 	matrix.m\
 	matrixlib.m\

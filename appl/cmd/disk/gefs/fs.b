@@ -1090,7 +1090,7 @@ fscreate(m: ref Tmsg.Create)
 	(found, nil, nil) := walk1(f.mnt.root, f.qpath, m.name);
 	if(found)
 		error(Eexist);
-	if(fs.nextqid >= Qdump)
+	if(fs.nextqid < big 0)	# reached Qdump, 1<<63: unsigned in the C
 		error(Enoqid);
 	if(de.gone)
 		error(Ephase);
@@ -1159,7 +1159,7 @@ candelete(f: ref Fid): string
 	if(!(f.dent.d.qtype & Sys->QTDIR))
 		return nil;
 	pfx := array[Dpfxsz] of byte;
-	packdkey(pfx, 0, len pfx, f.qpath, nil);
+	packdpfx(pfx, 0, f.qpath);
 	s := btnewscan(pfx);
 	btenter(f.mnt.root, s);
 	e: string;
@@ -1338,7 +1338,7 @@ readdir(m: ref Tmsg.Read, f: ref Fid): array of byte
 		error(Edscan);
 	if(s == nil || m.offset == big 0){
 		pfx := array[Dpfxsz] of byte;
-		packdkey(pfx, 0, len pfx, f.qpath, nil);
+		packdpfx(pfx, 0, f.qpath);
 		s = btnewscan(pfx);
 		f.scan = s;
 	}
@@ -1512,6 +1512,8 @@ fswrite(m: ref Tmsg.Write)
 	p := 0;
 	o := m.offset;
 	c := big len m.data;
+	if(o < big 0 || o + c < big 0)	# o >= (1ULL<<63) - c, unsigned in the C
+		error(Ewstatl);
 	if(f.dent.d.mode & Sys->DMAPPEND)
 		o = f.dent.d.length;
 	t := f.mnt.root;

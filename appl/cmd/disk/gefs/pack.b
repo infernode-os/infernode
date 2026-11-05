@@ -63,10 +63,10 @@ g64(b: array of byte, o: int): big
 unpackstr(b: array of byte, o, e: int): (string, int)
 {
 	if(e - o < 3)
-		broke(Efs);
+		broke(Efs+": unpackstr");
 	n := g16(b, o);
 	if(e - o < n + 3 || int b[o+n+2] != 0)
-		broke(Efs);
+		broke(Efs+": unpackstr");
 	return (string b[o+2:o+2+n], o+3+n);
 }
 
@@ -92,19 +92,26 @@ dir2kv(up: big, d: ref Xdir): Kvp
 	return Kvp(buf[0:ek], buf[ek:ev]);
 }
 
+# a directory entry's key. The name is always packed, the empty one
+# too: in Limbo "" is nil, where the C tells them apart -- its nil, the
+# prefix of a directory's scan, is packdpfx.
 packdkey(b: array of byte, o, e: int, up: big, name: string): int
 {
 	o = p8(b, o, Kent);
 	o = p64(b, o, up);
-	if(name != nil)
-		o = packstr(b, o, e, name);
-	return o;
+	return packstr(b, o, e, name);
+}
+
+packdpfx(b: array of byte, o: int, up: big): int
+{
+	o = p8(b, o, Kent);
+	return p64(b, o, up);
 }
 
 unpackdkey(b: array of byte, o, e: int): (big, string)
 {
 	if(e - o <= 9 || g8(b, o) != Kent)
-		broke(Efs);
+		broke(Efs+": unpackdkey");
 	up := g64(b, o+1);
 	(name, nil) := unpackstr(b, o+9, e);
 	return (up, name);
@@ -137,7 +144,7 @@ packdval(b: array of byte, o, e: int, d: ref Xdir): int
 kv2dir(kv: Kvp): ref Xdir
 {
 	if(len kv.k < 9 || len kv.v != Xdirsz)
-		broke(Efs);
+		broke(Efs+": kv2dir");
 	(name, nil) := unpackstr(kv.k, 9, len kv.k);
 	v := kv.v;
 	d := ref Xdir;
@@ -164,7 +171,7 @@ fillxdir(qid: big, name: string, qtype, mode: int, length: big): ref Xdir
 kv2dlist(kv: Kvp): ref Dlist
 {
 	if(len kv.k < Dlksz || len kv.v < Dlvsz)
-		broke(Efs);
+		broke(Efs+": kv2dlist");
 	dl := ref Dlist;
 	dl.gen = g64(kv.k, 1);
 	dl.bgen = g64(kv.k, 9);
@@ -256,7 +263,7 @@ unpackbp(b: array of byte, o: int): Bptr
 unpacktree(b: array of byte, o: int): ref Tree
 {
 	if(len b - o < Treesz)
-		broke(Efs);
+		broke(Efs+": unpacktree");
 	t := ref Tree;
 	t.nref = g32(b, o);
 	t.nlbl = g32(b, o+4);

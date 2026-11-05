@@ -11,6 +11,9 @@ TARG=\
 	gentmpl.dis\
 	originfs_test.dis\
 	9p_export_test.dis\
+	nmea_test.dis\
+	gdl90_test.dis\
+	gps_capability_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
 	auditsign_test.dis\
@@ -101,6 +104,8 @@ TARG=\
 	pool_nomem_helper.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
+	wmapp_fuzz.dis\
+	wm_frozen.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
 	jit_small_test.dis\
@@ -363,6 +368,7 @@ SYSMODULES=\
 	string.m\
 	sys.m\
 	testing.m\
+	nmea.m\
 	textwidget.m\
 	tk.m\
 	tls.m\
@@ -417,6 +423,10 @@ SYSMODULES=\
 	x402.m\
 	icon.m\
 	appfs.m\
+	garminav.m\
+	gdl90.m\
+	keyboard.m\
+	wmclient.m\
 	auth9.m\
 	styxlib.m\
 	9p.m\

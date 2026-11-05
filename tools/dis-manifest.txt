@@ -225,6 +225,7 @@ dis/getkey.dis
 dis/getline.dis
 dis/gettar.dis
 dis/gif2bit.dis
+dis/gpsfs.dis
 dis/gpusrv.dis
 dis/grep.dis
 dis/grid/lib/announce.dis
@@ -361,6 +362,8 @@ dis/lib/fslib.dis
 dis/lib/fsproto.dis
 dis/lib/ftree/cptree.dis
 dis/lib/ftree/items.dis
+dis/lib/garminav.dis
+dis/lib/gdl90.dis
 dis/lib/geoproj.dis
 dis/lib/git/git.dis
 dis/lib/hash.dis
@@ -398,6 +401,7 @@ dis/lib/msgio.dis
 dis/lib/names.dis
 dis/lib/nametree.dis
 dis/lib/newns.dis
+dis/lib/nmea.dis
 dis/lib/ninep.dis
 dis/lib/oldauth.dis
 dis/lib/osklayout.dis
@@ -631,6 +635,7 @@ dis/scap.dis
 dis/scenedemo.dis
 dis/scenefs.dis
 dis/scenereplay.dis
+dis/sdrfs.dis
 dis/sed.dis
 dis/sendmail.dis
 dis/seq.dis
@@ -745,6 +750,8 @@ dis/tests/geomap_test.dis
 dis/tests/git_test.dis
 dis/tests/grpwait_test.dis
 dis/tests/goroutine_leak_test.dis
+dis/tests/gdl90_test.dis
+dis/tests/gps_capability_test.dis
 dis/tests/gpu_bench.dis
 dis/tests/gpu_smoke.dis
 dis/tests/gpu_test.dis
@@ -835,6 +842,7 @@ dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
 dis/tests/ninep_pack_test.dis
 dis/tests/ninepsrc_config_test.dis
+dis/tests/nmea_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
 dis/tests/osk_accuracy.dis
@@ -942,6 +950,8 @@ dis/tests/webfs_test.dis
 dis/tests/wiki9p_security_probe.dis
 dis/tests/wireformat_test.dis
 dis/tests/wm_apps_test.dis
+dis/tests/wm_frozen.dis
+dis/tests/wmapp_fuzz.dis
 dis/tests/wmsrv_zorder_test.dis
 dis/tests/wpa_test.dis
 dis/tests/x402_test.dis
@@ -953,6 +963,7 @@ dis/tests/xenith_htmldoc_test.dis
 dis/tests/xenith_race_helper.dis
 dis/tests/xml_test.dis
 dis/themefs.dis
+dis/timesync.dis
 dis/time.dis
 dis/timestamp.dis
 dis/tlsperf.dis
@@ -996,6 +1007,7 @@ dis/veltro/tools/find.dis
 dis/veltro/tools/fractal.dis
 dis/veltro/tools/gap.dis
 dis/veltro/tools/git.dis
+dis/veltro/tools/gps.dis
 dis/veltro/tools/gpu.dis
 dis/veltro/tools/grep.dis
 dis/veltro/tools/hear.dis
@@ -1064,6 +1076,7 @@ dis/wm/matrix.dis
 dis/wm/memory.dis
 dis/wm/presrender.dis
 dis/wm/osk.dis
+dis/wm/road.dis
 dis/wm/rt.dis
 dis/wm/sam.dis
 dis/wm/samengine.dis

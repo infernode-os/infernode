@@ -375,7 +375,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 					restart = 1;
 				}
 			"quit" =>
-				exit;
+				tkclient->wmctl(top, "exit");
 			}
 		r := <-appreqs =>
 			if(r.file != "ctl" || r.data == nil) {

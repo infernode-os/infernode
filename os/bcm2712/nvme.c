@@ -9,9 +9,10 @@
  *
  * A command that does not complete, a controller fatal status, or the
  * link going away, resets the controller and sets everything up again,
- * and the transfer is tried once more. Nothing above here asks for a
- * flush, so a process does, every Flushms; boot option nvmefua forces
- * each write to the medium instead, nearly halving kfs's speed. On the way down the
+ * and the transfer is tried once more. A file system that orders its
+ * writes asks for a flush through #S/sdctl (nvmeflush); for the rest, a
+ * process flushes every Flushms; boot option nvmefua forces each write
+ * to the medium instead, nearly halving kfs's speed. On the way down the
  * controller is shut down properly, or the drive counts it as a loss
  * of power.
  *
@@ -116,6 +117,7 @@ static struct
 	int	canwait;	/* a process is issuing it: not the boot's stack */
 	int	fua;		/* Fua, or 0 for the flush process */
 	int	dirty;		/* written since the last flush */
+	ulong	nflush;		/* asked for, through sdctl */
 	int	dead;		/* recovery failed */
 	ulong	deadat;		/* when, in ms */
 	int	fault;		/* nvmefault: lose the next completion */
@@ -535,6 +537,48 @@ flushproc(void*)
 	}
 }
 
+/*
+ * #S/sdctl's flush: what has been written is on the medium when this
+ * returns, not in the drive's cache. A file system with a commit
+ * protocol (gefs) needs this between its steps, for the order of its
+ * writes to survive a power cut; the background flush gives no order.
+ */
+void
+nvmeflush(void)
+{
+	int s;
+
+	if(!nvme.present)
+		return;
+	qlock(&nvme.q);
+	if(waserror()){
+		nvme.canwait = 0;
+		qunlock(&nvme.q);
+		nexterror();
+	}
+	if(nvme.dead){
+		if(TK2MS(MACHP(0)->ticks) - nvme.deadat < Deadretry || recover() < 0)
+			error(Eio);
+	}
+	nvme.canwait = nvme.msi;
+	nvme.dirty = 0;
+	s = cmd(&nvme.io, Opflush, 1, 0, 0, 0, 0, 0);
+	if(s == Failed){
+		if(recover() < 0)
+			error(Eio);
+		s = cmd(&nvme.io, Opflush, 1, 0, 0, 0, 0, 0);
+	}
+	if(s != 0){
+		nvme.dirty = 1;
+		print("nvme: flush: status %#ux\n", s);
+		error(Eio);
+	}
+	nvme.nflush++;
+	nvme.canwait = 0;
+	qunlock(&nvme.q);
+	poperror();
+}
+
 /* #P's init: there is a scheduler by then */
 void
 nvmestart(void)
@@ -556,8 +600,8 @@ nvmestat(char *buf, long n)
 
 	l = nvme.id;
 	e = buf + n;
-	buf = seprint(buf, e, "%s\n%llud blocks of %d, %s\nintr %lud recoveries %lud%s\n",
-		nvme.name, nvme.nblocks, nvme.blocksize, pcie1speed(), nvme.nintr, nvme.nrecover,
+	buf = seprint(buf, e, "%s\n%llud blocks of %d, %s\nintr %lud recoveries %lud flushes %lud%s\n",
+		nvme.name, nvme.nblocks, nvme.blocksize, pcie1speed(), nvme.nintr, nvme.nrecover, nvme.nflush,
 		nvme.dead ? " dead" : "");
 	qlock(&nvme.q);
 	s = nvme.dead ? -1 : cmd(&nvme.admin, Oplogpage, 0xFFFFFFFF, DEVADDR(l), 0, 127<<16 | 2, 0, 0);

@@ -46,7 +46,7 @@ blocks 62333952
 part sd0 2048 524288
 .EE
 .PP
-It accepts one control message:
+It accepts these control messages:
 .TP
 .BI part " name start nblocks"
 Name the
@@ -65,6 +65,17 @@ Naming an existing
 redefines it.
 There may be eight; a name may be 31 characters.
 Nothing is checked against the ranges already named: two may overlap.
+.TP
+.B flush
+Return when what has been written is on the medium.
+An NVMe drive (on the Raspberry Pi 5) holds writes in a cache that a
+power cut loses, and in no particular order, so a file system that
+depends on the order of its writes, as
+.IR gefs (4)
+does, writes this between them.
+A card has no such cache, and the message does nothing there.
+The NVMe driver also flushes on its own, every two seconds, for
+programs that never ask.
 .PP
 .IR Osinit (8)
 is what normally writes these: it reads the master boot record from
@@ -90,6 +101,7 @@ dossrv -f /dev/boot -m /n/dos
 (a virtio block device)
 .SH SEE ALSO
 .IR dossrv (4),
+.IR gefs (4),
 .IR osinit (8),
 .IR mkcard (10.1)
 .br

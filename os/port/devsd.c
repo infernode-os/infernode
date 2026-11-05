@@ -403,7 +403,11 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		}
 		else if(cb->nf == 1 && strcmp(cb->f[0], "nvmeslow") == 0)
 			nvmeslow();
+		else if(cb->nf == 1 && strcmp(cb->f[0], "flush") == 0)
+			nvmeflush();
 #endif
+		else if(cb->nf == 1 && strcmp(cb->f[0], "flush") == 0)
+			;	/* an SD card has no cache to flush */
 		else
 			error(Ebadctl);
 		poperror();

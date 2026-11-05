@@ -60,7 +60,7 @@ static Listener	*listeners;
 static int	nlisteners;
 static Lock	llock;
 static QLock	startlock;	/* serialises start and stop */
-static char	state[32] = "stopped";
+static char	state[32] = "stopped";	/* Flawfinder: ignore — set only by utfecpy, bounded by sizeof state */
 static int	started;
 
 void
@@ -131,7 +131,7 @@ civil(long long days, int *y, int *m, int *d)
 void
 locationbridge_post_fix(const LocFix *f)
 {
-	char buf[512], body[200], hms[16], dmy[8], *p, *e, *b, *be;
+	char buf[512], body[200], hms[16], dmy[8], *p, *e, *b, *be;	/* Flawfinder: ignore — each written by seprint/snprint bounded by its own end; hms needs 9, dmy 6 */
 	long long t, days;
 	int y, mo, d, s, cs;
 	Listener *l;
@@ -223,7 +223,7 @@ locopen(Chan *c, int omode)
 {
 	Listener *l;
 	Queue *q;
-	char err[ERRMAX];
+	char err[ERRMAX];	/* Flawfinder: ignore — filled by the bridge with snprint(err, sizeof err) */
 
 	c = devopen(c, omode, loctab, nelem(loctab), devgen);
 	if((ulong)c->qid.path != Qnmea)
@@ -301,7 +301,7 @@ locclose(Chan *c)
 static long
 locread(Chan *c, void *va, long n, vlong offset)
 {
-	char buf[64];
+	char buf[64];	/* Flawfinder: ignore — snprint bounded by sizeof buf; state is at most 31 bytes */
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, va, n, loctab, nelem(loctab), devgen);

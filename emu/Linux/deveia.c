@@ -9,7 +9,7 @@
  */
 
 #define	MAXDEV	24
-static char *sysdev[MAXDEV];
+static char *sysdev[MAXDEV];	/* Flawfinder: ignore — at most 8 ttyS and the USB loop stops at MAXDEV */
 
 static void _buildsysdev(void);
 #define	buildsysdev()	_buildsysdev()	/* for deveia-posix.c */
@@ -47,7 +47,7 @@ static void
 _buildsysdev(void)
 {
 	static char *usb[] = { "/dev/ttyUSB%d", "/dev/ttyACM%d" };
-	char name[32];
+	char name[32];	/* Flawfinder: ignore — written only by snprint(name, sizeof(name)) */
 	struct stat sb;
 	int i, j, n;
 

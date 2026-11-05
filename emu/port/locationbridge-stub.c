@@ -24,13 +24,13 @@ static int	gen;	/* the running fake's generation; a stop ends it */
 void
 locationbridge_init(void)
 {
-	char buf[128], *s, *f[4];
+	char buf[128], *s, *f[4];	/* Flawfinder: ignore — buf filled only after strlen(s) < sizeof buf */
 	int n;
 	size_t l;
 
 	/* four numbers: anything longer is not one, and is refused */
-	s = getenv("INFERNODE_LOCATION_FAKE");
-	if(s == nil || (l = strlen(s)) >= sizeof buf){
+	s = getenv("INFERNODE_LOCATION_FAKE");	/* Flawfinder: ignore — the user's own setting for tests; length checked, fields parsed by strtod */
+	if(s == nil || (l = strlen(s)) >= sizeof buf){	/* Flawfinder: ignore — getenv's string is NUL-terminated */
 		locationbridge_post_state("unavailable");
 		return;
 	}

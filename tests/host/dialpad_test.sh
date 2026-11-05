@@ -348,6 +348,15 @@ else
 	fail "the number's start is not its +: '$*'"
 fi
 
+# The tones set the audio device's output format only: the format is
+# the device's, and a bare "rate" changes the microphone's as well,
+# under whatever is recording.
+if grep -q '^out rate 44100$' "$ROOT/$T/audioctl" 2>/dev/null && ! grep -v '^out ' "$ROOT/$T/audioctl" | grep -q .; then
+	pass "the tones set the output's format and leave the microphone's"
+else
+	fail "audioctl was written: $(tr '\n' '|' < "$ROOT/$T/audioctl" 2>/dev/null)"
+fi
+
 # the microphone key asked speech9p's hear to start each time
 n=$(grep -c '^start 5000$' "$ROOT/$T/hearwrites" 2>/dev/null)
 [ "$n" = 4 ] && pass "the microphone key starts hear each time (start 5000)" ||

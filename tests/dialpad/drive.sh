@@ -45,6 +45,11 @@ file2chan /chan/audio {} {
 	fetchwdata >> /tmp/audio.^`{cat /tmp/step}
 	rwrite
 }
+# and the format it sets, beside it as audio(3)'s audioctl is
+file2chan /chan/audioctl {} {
+	fetchwdata >> /tmp/audioctl
+	rwrite
+}
 
 rtag=none
 ev=connected

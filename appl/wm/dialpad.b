@@ -751,11 +751,14 @@ opendev(): ref Sys->FD
 		sys->fprint(stderr, "dialpad: %s: %r: no tones\n", audiodev);
 		return nil;
 	}
-	# its format, where it is an audio(3) device: audiodev's ctl beside it
+	# its format, where it is an audio(3) device: audiodev's ctl beside
+	# it.  The output's only ("out"): the format is the device's, not
+	# this open's, and a bare "rate" would change the microphone's too,
+	# under whatever is recording (speech9p's 16 kHz)
 	if(len audiodev >= 5 && audiodev[len audiodev - 5:] == "audio"){
 		cfd := sys->open(audiodev + "ctl", Sys->OWRITE);
 		if(cfd != nil)
-			sys->fprint(cfd, "rate %d\nchans 2\nbits 16\nenc pcm\n", Rate);
+			sys->fprint(cfd, "out rate %d\nout chans 2\nout bits 16\nout enc pcm\n", Rate);
 	}
 	return fd;
 }

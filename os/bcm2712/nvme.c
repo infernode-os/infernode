@@ -77,6 +77,7 @@ enum
 	Linkwait= 5000,			/* ms, for a link to come back */
 	Flushms	= 2000,			/* the most a power cut can lose */
 	Toomany	= 4,			/* resets, before a slower link */
+	Deadretry = 30000,		/* ms, before a dead drive is tried again */
 	Failed	= -1,			/* no answer, as opposed to a status */
 };
 
@@ -115,6 +116,7 @@ static struct
 	int	fua;		/* Fua, or 0 for the flush process */
 	int	dirty;		/* written since the last flush */
 	int	dead;		/* recovery failed */
+	ulong	deadat;		/* when, in ms */
 	int	fault;		/* nvmefault: lose the next completion */
 	char	name[80];
 	ulong	nintr;
@@ -345,11 +347,48 @@ static void devsetup(void);
 /*
  * The drive stopped answering. Wait for the link, if that is what went,
  * and start again from the configuration space up. nvme.q is held.
+ *
+ * In three steps, each only if the one before did not bring it back:
+ * as it was; at gen 1, retrained, which is where this link has been
+ * steady; and from a slot reset, PERST, as at boot. One soak's drive
+ * went at gen 2 with the link still up and the controller reading all
+ * ones, and the one step there was then left it dead for the rest of
+ * the boot. Dead is still possible, but it is not for ever: a request
+ * Deadretry after the last try tries again.
  */
+static int
+recover1(int step)
+{
+	int i;
+
+	switch(step){
+	case 1:
+		print("nvme: down to gen 1, and retraining\n");
+		pcie1slow();
+		microdelay(100000);
+		break;
+	case 2:
+		print("nvme: resetting the slot\n");
+		if(pcie1perst() < 0){
+			print("nvme: no link after the slot reset\n");
+			return -1;
+		}
+		break;
+	}
+	for(i = 0; i < Linkwait && !pcie1linked(); i++)
+		microdelay(1000);
+	if(i == Linkwait){
+		print("nvme: the link has not come back\n");
+		return -1;
+	}
+	devsetup();
+	return enable();
+}
+
 static int
 recover(void)
 {
-	int i, wait;
+	int step, wait;
 
 	nvme.nrecover++;
 	print("nvme: resetting the controller\n");
@@ -360,18 +399,16 @@ recover(void)
 		pcie1slow();
 		microdelay(100000);
 	}
-	for(i = 0; i < Linkwait && !pcie1linked(); i++)
-		microdelay(1000);
-	if(i == Linkwait){
-		print("nvme: the link has not come back\n");
+	for(step = 0; step < 3; step++)
+		if(recover1(step) == 0)
+			break;
+	if(step == 3){
+		print("nvme: the drive did not come back; trying again in %d s, at the next request\n", Deadretry/1000);
 		nvme.dead = 1;
+		nvme.deadat = TK2MS(MACHP(0)->ticks);
 		return -1;
 	}
-	devsetup();
-	if(enable() < 0){
-		nvme.dead = 1;
-		return -1;
-	}
+	nvme.dead = 0;
 	if(nvme.msi)
 		msitable();
 	nvme.canwait = wait;
@@ -394,8 +431,10 @@ xferchecked(int write, uvlong lba, int n)
 {
 	int s;
 
-	if(nvme.dead)
-		error(Eio);
+	if(nvme.dead){
+		if(TK2MS(MACHP(0)->ticks) - nvme.deadat < Deadretry || recover() < 0)
+			error(Eio);
+	}
 	s = xfer(write, lba, n);
 	if(s == Failed){
 		if(recover() < 0)

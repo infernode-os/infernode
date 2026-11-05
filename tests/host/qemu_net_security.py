@@ -199,6 +199,20 @@ class Harness:
             time.sleep(0.05)
         raise RuntimeError("timed out reading TCP statistics")
 
+    def udpstat(self, name):
+        start = len(self.console)
+        self.command("echo NETSEC-UDP-STATS; cat /net/udp/stats; echo NETSEC-UDP-END")
+        end = time.monotonic() + 4
+        while time.monotonic() < end:
+            tail = bytes(self.console[start:])
+            if re.search(rb"(?:^|\r?\n)NETSEC-UDP-END(?:\r?\n|$)", tail):
+                match = re.search(rb"(?:^|\r?\n)" + name.encode() + rb": ([0-9]+)", tail)
+                if match:
+                    return int(match.group(1))
+                raise RuntimeError("UDP statistic %s was not reported" % name)
+            time.sleep(0.05)
+        raise RuntimeError("timed out reading UDP statistics")
+
     def close(self):
         self.p.kill()
         self.p.wait()
@@ -439,6 +453,21 @@ def malformed_transport_regression(h):
     if not h.wait_console("TRANSPORT-BOUNDS-PASS", 3):
         raise RuntimeError("malformed transport length stopped the guest")
     print("TRANSPORT-BOUNDS-PASS", flush=True)
+
+    # 9front b1b8d305e: an IPv4 datagram can name UDP or TCP while containing
+    # only its 20-byte IP header.  Link padding and Block allocation headroom
+    # are not received transport bytes; reject before reading ports, lengths,
+    # flags, or checksums beyond wp.
+    udp_errors = h.udpstat("InErrors")
+    tcp_errors = h.tcpstat("HlenErrs")
+    h.send(eth(ipv4(b"", 17, 0x5202)))
+    h.send(eth(ipv4(b"", 6, 0x5203)))
+    time.sleep(0.5)
+    if h.udpstat("InErrors") <= udp_errors:
+        raise RuntimeError("headerless UDP datagram was not counted as an error")
+    if h.tcpstat("HlenErrs") <= tcp_errors:
+        raise RuntimeError("headerless TCP datagram was not counted as an error")
+    print("TRANSPORT-HEADER-PASS", flush=True)
 
 
 def tcp_limbo_regression(h):

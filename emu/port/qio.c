@@ -1197,13 +1197,14 @@ qnotfull(void *a)
 long
 qbwrite(Queue *q, Block *b)
 {
+	void (*bypass)(void*, Block*);
 	int n, dowakeup;
 	volatile struct {Block *b;} cb;
 
 	dowakeup = 0;
 	n = BLEN(b);
-	if(q->bypass){
-		(*q->bypass)(q->arg, b);
+	if((bypass = q->bypass) != nil){
+		(*bypass)(q->arg, b);
 		return n;
 	}
 	cb.b = b;
@@ -1330,6 +1331,7 @@ qwrite(Queue *q, void *vp, int len)
 int
 qiwrite(Queue *q, void *vp, int len)
 {
+	void (*bypass)(void*, Block*);
 	int n, sofar, dowakeup;
 	Block *b;
 	uchar *p = vp;
@@ -1349,6 +1351,12 @@ qiwrite(Queue *q, void *vp, int len)
 		}
 		memmove(b->wp, p+sofar, n);
 		b->wp += n;
+
+		if((bypass = q->bypass) != nil){
+			sofar += n;
+			(*bypass)(q->arg, b);
+			continue;
+		}
 
 		lock(&q->l);
 

@@ -5069,8 +5069,8 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
     fi
-    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC"; then
-        pass "virt: malformed UDP/TCP header lengths are rejected without panic"
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC" && grep -q '^TRANSPORT-HEADER-PASS$' <<<"$NETSEC"; then
+        pass "virt: incomplete and malformed UDP/TCP headers are rejected without panic"
     else
         fail "virt: transport header length checks did not pass -- $NETSEC"
     fi

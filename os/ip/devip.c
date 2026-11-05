@@ -975,13 +975,15 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 
 	if(c->state != 0)
 		error(Econinuse);
-	c->state = Connecting;
-	c->cerr[0] = '\0';
 	if(x->connect == nil)
 		error("connect not supported");
+	c->cerr[0] = '\0';
+	c->state = Connecting;
 	p = x->connect(c, cb->f, cb->nf);
-	if(p != nil)
+	if(p != nil){
+		c->state = Idle;
 		error(p);
+	}
 
 	qunlock(&c->ql);
 	if(waserror()){
@@ -1027,13 +1029,15 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 
 	if(c->state != 0)
 		error(Econinuse);
-	c->state = Announcing;
-	c->cerr[0] = '\0';
 	if(x->announce == nil)
 		error("announce not supported");
+	c->cerr[0] = '\0';
+	c->state = Announcing;
 	p = x->announce(c, cb->f, cb->nf);
-	if(p != nil)
+	if(p != nil){
+		c->state = Idle;
 		error(p);
+	}
 
 	qunlock(&c->ql);
 	if(waserror()){

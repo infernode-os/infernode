@@ -730,7 +730,6 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 	USED(x);
 	if(c->state != Idle)
 		error(Econinuse);
-	c->state = Connecting;
 	c->cerr[0] = '\0';
 	switch(cb->nf) {
 	default:
@@ -748,10 +747,11 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 		setlport(c);
 		break;
 	}
+	c->state = Connecting;
 	qunlock(&c->l);
 	if(waserror()){
 		qlock(&c->l);
-		c->state = Connected;	/* sic */
+		c->state = Idle;
 		nexterror();
 	}
 	/* p = x->connect(c, cb->f, cb->nf); */
@@ -767,7 +767,6 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 {
 	if(c->state != Idle)
 		error(Econinuse);
-	c->state = Announcing;
 	c->cerr[0] = '\0';
 	ipmove(c->raddr, IPnoaddr);
 	c->rport = 0;
@@ -778,13 +777,14 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 		setladdrport(c, cb->f[1], 1);
 		break;
 	}
+	c->state = Announcing;
 	USED(x);
 	/* p = x->announce(c, cb->f, cb->nf); */
 	if(c->p->stype != S_UDP){
 		qunlock(&c->l);
 		if(waserror()){
-			c->state = Announced;	/* sic */
 			qlock(&c->l);
+			c->state = Idle;
 			nexterror();
 		}
 		so_listen(c->sfd);

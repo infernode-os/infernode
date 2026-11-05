@@ -2004,6 +2004,14 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 	h6 = (Tcp6hdr*)(bp->rp);
 
 	if((h4->vihl&0xF0)==IP_VER4) {
+		if(BLEN(bp) < TCP4_PKT+TCP4_HDRSIZE){
+	Badhdr:
+			tpriv->stats[HlenErrs]++;
+			tpriv->stats[InErrs]++;
+			netlog(f, Logtcp, "bad tcp header\n");
+			freeblist(bp);
+			return;
+		}
 		version = V4;
 		length = nhgets(h4->length);
 		v4tov6(dest, h4->tcpdst);
@@ -2039,10 +2047,14 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 		}
 	}
 	else {
-		int ttl = h6->ttl;
-		int proto = h6->proto;
+		int ttl, proto;
+
+		if(BLEN(bp) < TCP6_PKT+TCP6_HDRSIZE)
+			goto Badhdr;
 
 		version = V6;
+		ttl = h6->ttl;
+		proto = h6->proto;
 		length = nhgets(h6->ploadlen);
 		ipmove(dest, h6->tcpdst);
 		ipmove(source, h6->tcpsrc);

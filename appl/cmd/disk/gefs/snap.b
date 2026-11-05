@@ -341,7 +341,7 @@ tagsnap(t: ref Tree, name: string, flg: int)
 	if(flg & Lmut){
 		kv := btlookup(fs.snap, snapkey(t.gen));
 		if(kv == nil)
-			broke(Efs);
+			broke(Efs+": tagsnap");
 		c := unpacktree(kv.v, 0);
 		n := ref Tree;
 		n.dirty = 0;
@@ -426,7 +426,7 @@ opentree(gen: big): ref Tree
 			return (hd ml).root;
 	kv := btlookup(fs.snap, snapkey(gen));
 	if(kv == nil)
-		broke(Efs);
+		broke(Efs+": opentree");
 	t := unpacktree(kv.v, 0);
 	t.memgen = fs.nextgen++;
 	return t;
@@ -439,7 +439,7 @@ opensnap(label: string): (ref Tree, int)
 	if(kv == nil)
 		return (nil, 0);
 	if(len kv.v != 1+8+4)
-		broke(Efs);
+		broke(Efs+": opensnap");
 	gen := g64(kv.v, 1);
 	flg := g32(kv.v, 1+8);
 	return (opentree(gen), flg);

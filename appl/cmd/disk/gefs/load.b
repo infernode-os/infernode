@@ -25,7 +25,7 @@ loadarena(a: ref Arena, head: Bptr)
 	if(b == nil)
 		b = h1;
 	if(b == nil)
-		error(Efs);
+		error(Efs+": loadarena");
 	if(h0 == nil || h1 == nil)
 		sys->fprint(sys->fildes(2), "gefs: using fallback arena header %bux\n", b.bp.addr);
 	# we could have crashed mid-pass: take the blocks as they are

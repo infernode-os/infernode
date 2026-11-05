@@ -111,7 +111,7 @@ getval(b: ref Blk, i: int): Kvp
 getptr(kv: Kvp): (Bptr, int)
 {
 	if(len kv.v != Ptrsz+2)
-		broke(Efs);
+		broke(Efs+": getptr");
 	return (unpackbp(kv.v, 0), g16(kv.v, Ptrsz));
 }
 

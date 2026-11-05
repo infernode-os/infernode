@@ -149,13 +149,23 @@ ipifcbind(Conv *c, char **argv, int argc)
 		wunlock(&ifc->rwl);
 		return "interface already bound";	
 	}
+	ifc->m = &unboundmedium;
+	ifc->arg = nil;
+	wunlock(&ifc->rwl);
 	if(waserror()){
+		wlock(&ifc->rwl);
+		ifc->m = nil;
+		ifc->arg = nil;
 		wunlock(&ifc->rwl);
 		nexterror();
 	}
 
-	/* do medium specific binding */
+	/* A medium bind can walk /net; do not hold the interface lock while
+	 * namespace services may themselves be reading /net/ipifc. */
 	(*m->bind)(ifc, argc, argv);
+	poperror();
+
+	wlock(&ifc->rwl);
 
 	/* set the bound device name */
 	if(argc > 2)
@@ -189,7 +199,6 @@ ipifcbind(Conv *c, char **argv, int argc)
 	qreopen(c->sq);
 
 	wunlock(&ifc->rwl);
-	poperror();
 
 	return nil;
 }
@@ -202,11 +211,19 @@ static char*
 ipifcunbind(Ipifc *ifc)
 {
 	char *err;
+	Medium *m;
 
 	wlock(&ifc->rwl);
 	if(waserror()){
 		wunlock(&ifc->rwl);
 		nexterror();
+	}
+
+	m = ifc->m;
+	if(m == nil || m == &unboundmedium){
+		wunlock(&ifc->rwl);
+		poperror();
+		return "interface not bound";
 	}
 
 	/* disassociate logical interfaces before zeroing medium state */
@@ -216,9 +233,18 @@ ipifcunbind(Ipifc *ifc)
 			error(err);
 	}
 
-	/* disassociate device */
-	if(ifc->m != nil && ifc->m->unbind)
-		(*ifc->m->unbind)(ifc);
+	/* Medium teardown can wait for readers that walk /net.  Publish a
+	 * non-operational placeholder, drop the lock, and always reacquire it
+	 * before changing the interface's remaining state. */
+	if(m->unbind != nil){
+		ifc->m = &unboundmedium;
+		wunlock(&ifc->rwl);
+		if(!waserror()){
+			(*m->unbind)(ifc);
+			poperror();
+		}
+		wlock(&ifc->rwl);
+	}
 	memset(ifc->dev, 0, sizeof(ifc->dev));
 	ifc->arg = nil;
 	ifc->reassemble = 0;
@@ -230,7 +256,7 @@ ipifcunbind(Ipifc *ifc)
 
 	/* publish route/conversation teardown only after fallible cleanup */
 	ifc->ifcid++;
-	if(ifc->m != nil && ifc->m->unbindonclose == 0)
+	if(m->unbindonclose == 0)
 		ifc->conv->inuse--;
 	ifc->m = nil;
 	wunlock(&ifc->rwl);
@@ -1190,8 +1216,8 @@ ipforme(Fs *f, uchar *addr)
 }
 
 /*
- *  find the ifc on same net as the remote system.  If none,
- *  return nil.
+ *  find the ifc on same net as the remote system.
+ *  returns the read-locked ifc, otherwise nil.
  */
 Ipifc*
 findipifc(Fs *f, uchar *remote, int type)
@@ -1199,10 +1225,13 @@ findipifc(Fs *f, uchar *remote, int type)
 	Ipifc *ifc, *x;
 	Iplifc *lifc;
 	Conv **cp, **e;
+	uchar xifcid;
 	uchar gnet[IPaddrlen];
 	uchar xmask[IPaddrlen];
 
-	x = nil; memset(xmask, 0, IPaddrlen);
+	x = nil;
+	xifcid = 0;
+	memset(xmask, 0, IPaddrlen);
 
 	/* find most specific match */
 	e = &f->ipifc->conv[f->ipifc->nc];
@@ -1211,19 +1240,25 @@ findipifc(Fs *f, uchar *remote, int type)
 			continue;
 
 		ifc = (Ipifc*)(*cp)->ptcl;
+		rlock(&ifc->rwl);
 
 		for(lifc = ifc->lifc; lifc; lifc = lifc->next){
 			maskip(remote, lifc->mask, gnet);
 			if(ipcmp(gnet, lifc->net) == 0){
 				if(x == nil || ipcmp(lifc->mask, xmask) > 0){
 					x = ifc;
+					xifcid = ifc->ifcid;
 					ipmove(xmask, lifc->mask);
 				}
 			}
 		}
+		runlock(&ifc->rwl);
 	}
-	if(x != nil)
-		return x;
+	if(x != nil && canrlock(&x->rwl)){
+		if(x->ifcid == xifcid)
+			return x;
+		runlock(&x->rwl);
+	}
 
 	/* for now for broadcast and multicast, just use first interface */
 	if(type & (Rbcast|Rmulti)){
@@ -1231,8 +1266,10 @@ findipifc(Fs *f, uchar *remote, int type)
 			if(*cp == 0)
 				continue;
 			ifc = (Ipifc*)(*cp)->ptcl;
+			rlock(&ifc->rwl);
 			if(ifc->lifc != nil)
 				return ifc;
+			runlock(&ifc->rwl);
 		}
 	}
 		

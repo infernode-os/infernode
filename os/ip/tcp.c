@@ -805,6 +805,8 @@ tcpmtu(Proto *tcp, uchar *addr, int version, int *scale)
 			*scale = HaveWS | 0;
 	} else
 		*scale = HaveWS | 0;
+	if(ifc != nil)
+		runlock(&ifc->rwl);
 
 	return mtu;
 }

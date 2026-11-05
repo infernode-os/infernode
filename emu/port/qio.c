@@ -69,12 +69,15 @@ freeb(Block *b)
 	 * pool of uncached buffers and provide their own free routine.
 	 */
 	if(b->free) {
+		b->next = nil;
+		b->list = nil;
 		b->free(b);
 		return;
 	}
 
 	/* poison the block in case someone is still holding onto it */
 	b->next = (void*)0xdeadbabe;
+	b->list = (void*)0xdeadbabe;
 	b->rp = (void*)0xdeadbabe;
 	b->wp = (void*)0xdeadbabe;
 	b->lim = (void*)0xdeadbabe;

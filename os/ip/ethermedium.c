@@ -160,7 +160,6 @@ static char *nbmsg = "nonblocking";
 
 /*
  *  called to bind an IP ifc to an ethernet device
- *  called with ifc wlock'd
  */
 static void
 etherbind(Ipifc *ifc, int argc, char **argv)
@@ -303,9 +302,6 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	kproc("etherread6", etherread6, ifc, 0);
 }
 
-/*
- *  called with ifc wlock'd
- */
 static void
 etherunbind(Ipifc *ifc)
 {

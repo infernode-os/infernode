@@ -507,12 +507,13 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 	uchar gate[IPaddrlen];
 	Ipifc *ifc;
 
-	if(c != nil && c->r != nil && c->r->ifc != nil && c->rgen == v4routegeneration)
-		return c->r;
-
 	la = nhgetl(a);
 	q = nil;
 	rlock(&routelock);
+	if(c != nil && c->r != nil && c->rgen == v4routegeneration){
+		q = c->r;
+		goto resolve;
+	}
 	for(p=f->v4root[V4H(la)]; p;)
 		if(la >= p->v4.address) {
 			if(la <= p->v4.endaddress) {
@@ -523,7 +524,17 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 		} else
 			p = p->left;
 
-	if(q && (q->ifc == nil || q->ifcid != q->ifc->ifcid)){
+
+resolve:
+	if(q != nil){
+		ifc = q->ifc;
+		if(ifc != nil && canrlock(&ifc->rwl)){
+			if(ifc->ifcid == q->ifcid){
+				runlock(&ifc->rwl);
+				goto resolved;
+			}
+			runlock(&ifc->rwl);
+		}
 		if(q->type & Rifc) {
 			hnputl(gate+IPv4off, q->v4.address);
 			memmove(gate, v4prefix, IPv4off);
@@ -535,9 +546,11 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 		else {
 			q->ifc = ifc;
 			q->ifcid = ifc->ifcid;
+			runlock(&ifc->rwl);
 		}
 	}
 
+resolved:
 	if(c != nil){
 		c->r = q;
 		c->rgen = v4routegeneration;
@@ -563,14 +576,15 @@ v6lookup(Fs *f, uchar *a, Conv *c)
 			return q;
 	}
 
-	if(c != nil && c->r != nil && c->r->ifc != nil && c->rgen == v6routegeneration)
-		return c->r;
-
 	for(h = 0; h < IPllen; h++)
 		la[h] = nhgetl(a+4*h);
 
 	q = 0;
 	rlock(&routelock);
+	if(c != nil && c->r != nil && c->rgen == v6routegeneration){
+		q = c->r;
+		goto resolve;
+	}
 	for(p=f->v6root[V6H(la)]; p;){
 		for(h = 0; h < IPllen; h++){
 			x = la[h];
@@ -599,7 +613,17 @@ v6lookup(Fs *f, uchar *a, Conv *c)
 next:		;
 	}
 
-	if(q && (q->ifc == nil || q->ifcid != q->ifc->ifcid)){
+
+resolve:
+	if(q != nil){
+		ifc = q->ifc;
+		if(ifc != nil && canrlock(&ifc->rwl)){
+			if(ifc->ifcid == q->ifcid){
+				runlock(&ifc->rwl);
+				goto resolved;
+			}
+			runlock(&ifc->rwl);
+		}
 		if(q->type & Rifc) {
 			for(h = 0; h < IPllen; h++)
 				hnputl(gate+4*h, q->v6.address[h]);
@@ -611,8 +635,11 @@ next:		;
 		else {
 			q->ifc = ifc;
 			q->ifcid = ifc->ifcid;
+			runlock(&ifc->rwl);
 		}
 	}
+
+resolved:
 	if(c != nil){
 		c->r = q;
 		c->rgen = v6routegeneration;

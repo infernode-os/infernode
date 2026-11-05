@@ -6,6 +6,7 @@ ether=$root/os/ip/ethermedium.c
 loop=$root/os/ip/loopbackmedium.c
 ifc=$root/os/ip/ipifc.c
 route=$root/os/ip/iproute.c
+tcp=$root/os/ip/tcp.c
 
 if ! grep -q 'memset(r, 0, n);' "$ether"; then
 	echo "FAIL: ARP reply padding is not cleared" >&2
@@ -24,6 +25,29 @@ do
 	if [ -z "$start" ] || [ -z "$spawn" ] || [ -z "$stop" ] || [ -z "$free" ] ||
 	   [ "$start" -ge "$spawn" ] || [ "$stop" -ge "$free" ]; then
 		echo "FAIL: $file does not bracket reader startup before teardown" >&2
+		exit 1
+	fi
+done
+
+findbody=$(sed -n '/^findipifc(/,/^}/p' "$ifc")
+if ! printf '%s\n' "$findbody" | grep -qF 'rlock(&ifc->rwl);' ||
+   ! printf '%s\n' "$findbody" | grep -qF 'canrlock(&x->rwl)' ||
+   ! printf '%s\n' "$findbody" | grep -qF 'x->ifcid == xifcid'; then
+	echo "FAIL: findipifc does not return a stable read-locked interface" >&2
+	exit 1
+fi
+
+tcpmtu=$(sed -n '/^tcpmtu(/,/^}/p' "$tcp")
+if ! printf '%s\n' "$tcpmtu" | grep -qF 'runlock(&ifc->rwl);'; then
+	echo "FAIL: tcpmtu does not release the interface returned by findipifc" >&2
+	exit 1
+fi
+
+for fn in v4lookup v6lookup; do
+	body=$(sed -n "/^$fn(/,/^}/p" "$route")
+	if ! printf '%s\n' "$body" | grep -qF 'canrlock(&ifc->rwl)' ||
+	   ! printf '%s\n' "$body" | grep -qF 'runlock(&ifc->rwl);'; then
+		echo "FAIL: $fn does not validate and release its route interface" >&2
 		exit 1
 	fi
 done
@@ -53,4 +77,29 @@ for fn in v4lookup v6lookup; do
 	fi
 done
 
-echo "PASS: IP media clear wire padding and serialize reader/proxy lifetimes"
+bindbody=$(sed -n '/^ipifcbind(/,/^}/p' "$ifc")
+mark=$(printf '%s\n' "$bindbody" | grep -nF 'ifc->m = &unboundmedium;' | head -1 | cut -d: -f1)
+callback=$(printf '%s\n' "$bindbody" | grep -nF '(*m->bind)(ifc, argc, argv);' | cut -d: -f1)
+drop=$(printf '%s\n' "$bindbody" | grep -nF 'wunlock(&ifc->rwl);' | awk -F: -v cb="$callback" '$1 < cb { n=$1 } END { print n }')
+relock=$(printf '%s\n' "$bindbody" | grep -nF 'wlock(&ifc->rwl);' | awk -F: -v cb="$callback" '$1 > cb { print $1; exit }')
+if [ -z "$mark" ] || [ -z "$drop" ] || [ -z "$callback" ] || [ -z "$relock" ] ||
+   [ "$mark" -ge "$callback" ] || [ "$drop" -ge "$callback" ] || [ "$callback" -ge "$relock" ]; then
+	echo "FAIL: medium bind callback runs while the interface lock is held" >&2
+	exit 1
+fi
+
+unbindbody=$(sed -n '/^ipifcunbind(/,/^}/p' "$ifc")
+if ! printf '%s\n' "$unbindbody" | grep -qF 'm == &unboundmedium'; then
+	echo "FAIL: concurrent unbind can enter a medium transition" >&2
+	exit 1
+fi
+callback=$(printf '%s\n' "$unbindbody" | grep -nF '(*m->unbind)(ifc);' | cut -d: -f1)
+drop=$(printf '%s\n' "$unbindbody" | grep -nF 'wunlock(&ifc->rwl);' | awk -F: -v cb="$callback" '$1 < cb { n=$1 } END { print n }')
+relock=$(printf '%s\n' "$unbindbody" | grep -nF 'wlock(&ifc->rwl);' | awk -F: -v cb="$callback" '$1 > cb { print $1; exit }')
+if [ -z "$drop" ] || [ -z "$callback" ] || [ -z "$relock" ] ||
+   [ "$drop" -ge "$callback" ] || [ "$callback" -ge "$relock" ]; then
+	echo "FAIL: medium unbind callback runs while the interface lock is held" >&2
+	exit 1
+fi
+
+echo "PASS: IP media and route lookups serialize interface lifetimes"

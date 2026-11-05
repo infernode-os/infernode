@@ -5,6 +5,10 @@ camsrv \- a camera as a live video feed
 .B mount {camsrv} /mnt/video
 .br
 .B mount {camsrv -t} /mnt/video
+.br
+.B mount {camsrv -l
+.I file
+.B } /mnt/video
 .SH DESCRIPTION
 .I Camsrv
 serves a Raspberry Pi Camera Module 3 in the schema of
@@ -18,6 +22,15 @@ With
 .B -t
 it serves a simulated sensor, on any machine: colour bars and a moving
 band, as raw samples, through the same code.
+.PP
+With
+.B -l
+it appends its
+.B status
+line to
+.IR file ,
+seconds since boot first, once a minute, which is how a soak reads it
+from outside the namespace the feed is mounted in.
 .PP
 .I Camsrv
 is the only thing that knows the sensor. It drives it over

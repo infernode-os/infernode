@@ -23,6 +23,8 @@ implement Camsrv;
 #
 # usage: mount {camsrv} /mnt/video
 #        mount {camsrv -t} /mnt/video     a simulated sensor, for tests
+#        mount {camsrv -l file} ...       append the status line to file
+#                                         once a minute, for a soak
 #
 # The kernel gives raw frames (#V) and an I2C bus (#J); all that is known
 # about the Camera Module 3 is here. The bus is shared with the firmware,
@@ -117,8 +119,12 @@ init(nil: ref Draw->Context, args: list of string)
 	# a group of its own, so that one killgrp stops the server and its
 	# helpers together: killing the first alone leaves the mount wedged
 	sys->pctl(Sys->NEWPGRP, nil);
+	logfile := "";
 	for(args = tl args; args != nil; args = tl args)
-		if(hd args == "-t"){
+		if(hd args == "-l" && tl args != nil){
+			args = tl args;
+			logfile = hd args;
+		}else if(hd args == "-t"){
 			sim = 1;
 			width = 288;
 			height = 162;
@@ -139,6 +145,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("raw", 8r444, Qraw));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 	(tc, srv) = Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
+	if(logfile != nil)
+		spawn statuslog(logfile);
 	serve(tree);
 }
 
@@ -264,6 +272,22 @@ shutdown(tree: ref Tree)
 		running = 0;
 	}
 	tree.quit();
+}
+
+# a soak's record: the status line, time first, once a minute, until the
+# server goes (the log process is in its group, so killgrp ends it too)
+statuslog(file: string)
+{
+	fd := sys->open(file, Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->create(file, Sys->OWRITE, 8r666);
+	if(fd == nil)
+		return;
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	for(;;){
+		sys->fprint(fd, "%d %s", sys->millisec()/1000, status());
+		sys->sleep(60*1000);
+	}
 }
 
 find(fid: int): ref Fsess

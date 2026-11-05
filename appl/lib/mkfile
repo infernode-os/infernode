@@ -187,6 +187,8 @@ TARG=\
 	bioauth.dis\
 	keyringinst.dis\
 	softkbd.dis\
+	kbdecode.dis\
+	osklayout.dis\
 	viewport.dis\
 
 
@@ -359,6 +361,8 @@ SYSMODULES=\
 	scoretable.m\
 	selectfile.m\
 	softkbd.m\
+	kbdecode.m\
+	osklayout.m\
 	tabs.m\
 	tkclient.m\
 	tls.m\
@@ -366,6 +370,7 @@ SYSMODULES=\
 	wmdeb.m\
 	post9p.m\
 	appfs.m\
+	keyboard.m\
 
 
 

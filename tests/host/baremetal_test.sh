@@ -1699,8 +1699,18 @@ check "present"                          "the root hub sees the attached device"
 # a two-element array and wrote eight words back over the caller's stack
 # frame -- and discarded the result, so none of it showed. Asserting the
 # reply is what makes the contract testable rather than assumed.
+#
+# osinit's setpower line goes out a character at a time (os/bcm/uart.c:
+# a process's console output, interrupts on), and the secondaries' boot
+# iprints -- "CLKn ctl=..." and "cpuN: up" -- can land in the middle of
+# it, a line inside a line: "setpower: devcpu3: up" then " 3 -> ... ON"
+# three lines on. Match against the boot with those lines taken out,
+# wherever they fell, so the line is whole again.
+USBOUT="$(perl -0pe 's/CLK[0-9]+ ctl=[^\n]*\n//g; s/cpu[0-9]+: up\r?\n//g' <<<"$OUT")"
+OUT_SAVED="$OUT"; OUT="$USBOUT"
 check "setpower: dev 3"                  "the USB power domain is requested by id"
 check "setpower: dev 3 .* ON"            "the firmware confirms the USB block is powered"
+OUT="$OUT_SAVED"
 refute "FIRMWARE REFUSED"                "the USB block is not left unpowered"
 
 check "USB port 1 after reset"           "SET_FEATURE(PORT_RESET) enables the port"

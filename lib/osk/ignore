@@ -1,0 +1,16 @@
+# Keyboards /dev/keyboards lists that are not keyboards to type on: a
+# host lists its power and sleep buttons, its laptop lid and its
+# displays' controls as keyboards.  wm/osk shows itself with no other
+# keyboard attached, and one of these attached is not one; a line
+# here matches any keyboard whose line holds it, case aside.  osk(1).
+power button
+sleep button
+lid switch
+video bus
+consumer control
+system control
+xtest
+hdmi
+headphone
+intel hid events
+wireless hotkeys

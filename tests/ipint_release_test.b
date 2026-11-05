@@ -41,13 +41,22 @@ passed := 0;
 failed := 0;
 skipped := 0;
 
-# The worst lateness of a 1 ms sleep allowed while expmod runs.  Held,
-# the VM froze for the whole loop of calls (ten 2048-bit calls are a
-# second or more: a builtin barely counts against a thread's time
-# slice); released, the ticker is late by 1 to 10 ms, as it is with the
-# garbage thread alone and no expmod at all (up to 20 ms seen there on
-# a loaded 4-core host), which the margin is for.
+# The worst lateness of a 1 ms sleep allowed while expmod runs: a quarter
+# of the loop of calls, and never less than MAXLATE.  Held, the VM froze
+# for the whole loop (a builtin barely counts against a thread's time
+# slice), so the ticker was late by all of it, 242 ms of 243 and 520 of
+# 520 on an M-series Mac, or by half of it with two threads handing the
+# VM to each other (261 ms of 509).  Released, it is late by the host's
+# noise, which does not grow with the loop: 1 to 20 ms, and 52 ms of 622
+# on a loaded CI runner, where a fixed 50 ms failed.
 MAXLATE: con 50;
+
+# How long each loop of calls runs.  It is a time, not a count of calls:
+# held against released is told apart only when the loop is long beside
+# the host's noise, and a faster expmod (Montgomery's, 14 ms a 2048-bit
+# call where it was 138) made ten calls 145 ms, against noise of 76 ms
+# with no expmod at all on a loaded runner.
+LOOPMS: con 1000;
 
 # 2048-bit modulus, base and exponent, and base^exp mod m (Python's pow)
 M2048: con
@@ -174,10 +183,12 @@ testLargeOperands(t: ref T)
 	t.assert(r.cmp(b) < 0, "r < b");
 	t.assert(a.mod(b).eq(r), "mod agrees with div");
 
-	m := IPint.random(40000).shl(1).add(IPint.inttoip(1));	# odd
+	# m = x*2k + 1 is odd, larger than x and prime to it, so x has an
+	# inverse mod m.  A random odd m shared a factor with x about one
+	# run in five, and invert raised "no inverse".
 	x := IPint.inttoip(2).expmod(IPint.inttoip(39999), nil).add(IPint.inttoip(12345));
-	if(x.cmp(m) >= 0)
-		x = x.mod(m);
+	k := IPint.random(64).add(IPint.inttoip(1)).shl(1);
+	m := x.mul(k).add(IPint.inttoip(1));
 	y := x.invert(m);
 	t.assert(x.mul(y).mod(m).eq(IPint.inttoip(1)), "x * x^-1 mod m is 1");
 }
@@ -249,13 +260,18 @@ ticker(stop: chan of int, res: chan of int)
 	}
 }
 
-worker(n: int, b, e, m, want: ref IPint, done: chan of int)
+# expmods until the deadline, at least one; sends the calls made and
+# how many were wrong
+worker(deadline: int, b, e, m, want: ref IPint, done: chan of (int, int))
 {
+	n := 0;
 	bad := 0;
-	for(i := 0; i < n; i++)
+	do{
 		if(!b.expmod(e, m).eq(want))
 			bad++;
-	done <-= bad;
+		n++;
+	}while(sys->millisec() < deadline);
+	done <-= (n, bad);
 }
 
 # garbage, so the collector runs while expmod holds no VM; it sleeps
@@ -277,8 +293,8 @@ churn(stop: chan of int)
 	}
 }
 
-# worst lateness of the ticker while nw threads each run n expmods
-freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint): int
+# the ticker's worst lateness while nw threads run expmods for LOOPMS
+freeze(t: ref T, label: string, nw: int, b, e, m, want: ref IPint)
 {
 	stop := chan of int;
 	res := chan of int;
@@ -286,21 +302,28 @@ freeze(t: ref T, label: string, nw, n: int, b, e, m, want: ref IPint): int
 	spawn ticker(stop, res);
 	spawn churn(cstop);
 	sys->sleep(50);
-	done := chan of int;
+	done := chan of (int, int);
 	t0 := sys->millisec();
 	for(i := 0; i < nw; i++)
-		spawn worker(n, b, e, m, want, done);
+		spawn worker(t0+LOOPMS, b, e, m, want, done);
+	calls := 0;
 	bad := 0;
-	for(i = 0; i < nw; i++)
-		bad += <-done;
+	for(i = 0; i < nw; i++){
+		(c, nb) := <-done;
+		calls += c;
+		bad += nb;
+	}
 	ms := sys->millisec() - t0;
 	stop <-= 1;
 	worst := <-res;
 	cstop <-= 1;
 	t.asserteq(bad, 0, label+": every result right");
 	sys->print("%s: %d calls in %d ms (%d ms each), worst ticker lateness %d ms\n",
-		label, nw*n, ms, ms/(nw*n), worst);
-	return worst;
+		label, calls, ms, ms/calls, worst);
+	limit := ms/4;
+	if(limit < MAXLATE)
+		limit = MAXLATE;
+	t.assert(worst < limit, sys->sprint("worst lateness %d ms of %d, want < %d", worst, ms, limit));
 }
 
 # the ticker's lateness with the garbage thread and no expmod: the
@@ -322,23 +345,20 @@ baseline(): int
 
 testFreeze2048(t: ref T)
 {
-	worst := freeze(t, "2048-bit modulus, 2048-bit exponent", 1, 10,
+	freeze(t, "2048-bit modulus, 2048-bit exponent", 1,
 		hex(B2048), hex(E2048), hex(M2048), hex(R2048));
-	t.assert(worst < MAXLATE, sys->sprint("worst lateness %d ms, want < %d", worst, MAXLATE));
 }
 
 testFreeze256(t: ref T)
 {
-	worst := freeze(t, "2048-bit modulus, 256-bit exponent", 1, 40,
+	freeze(t, "2048-bit modulus, 256-bit exponent", 1,
 		hex(B2048), hex(E256), hex(M2048), hex(R256));
-	t.assert(worst < MAXLATE, sys->sprint("worst lateness %d ms, want < %d", worst, MAXLATE));
 }
 
 testFreezeConcurrent(t: ref T)
 {
-	worst := freeze(t, "two threads, 2048-bit modulus and exponent", 2, 5,
+	freeze(t, "two threads, 2048-bit modulus and exponent", 2,
 		hex(B2048), hex(E2048), hex(M2048), hex(R2048));
-	t.assert(worst < MAXLATE, sys->sprint("worst lateness %d ms, want < %d", worst, MAXLATE));
 }
 
 init(nil: ref Draw->Context, args: list of string)

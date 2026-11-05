@@ -1,0 +1,163 @@
+.TH KBDECODE 2
+.SH NAME
+kbdecode, osklayout \- what was meant on a keyboard on a screen, and its layouts
+.SH SYNOPSIS
+.EX
+include "draw.m";
+include "kbdecode.m";
+include "osklayout.m";
+kbdecode := load Kbdecode Kbdecode->PATH;
+osklayout := load Osklayout Osklayout->PATH;
+
+Lexicon.new:    fn(): ref Lexicon;
+l.read:         fn(path: string, weight: int): string;
+l.add:          fn(word: string, count: int);
+l.lookup:       fn(word: string): int;
+
+Decoder.new:    fn(lex: ref Lexicon, keys: array of Key): ref Decoder;
+d.setkeys:      fn(keys: array of Key);
+d.taps:         fn(t: array of Touch, n: int): array of ref Cand;
+d.literal:      fn(t: array of Touch): string;
+d.correct:      fn(t: array of Touch, c: array of ref Cand): string;
+d.swipe:        fn(path: array of Touch, n: int): array of ref Cand;
+d.learn:        fn(c: int, t: Touch);
+d.offsets:      fn(): string;
+d.setoffsets:   fn(s: string);
+
+Layout.read:    fn(path: string): (ref Layout, string);
+Layout.parse:   fn(name, text: string): (ref Layout, string);
+l.place:        fn(r: Rect);
+l.keyat:        fn(p: Point): ref Lkey;
+l.dkeys:        fn(): array of Kbdecode->Key;
+.EE
+.SH DESCRIPTION
+.I Kbdecode
+turns touches on a keyboard drawn on a screen into words.  It knows
+nothing of how the keyboard is drawn or where: it is given its keys, a
+character and a rectangle each
+.RB ( Key ),
+and a word list, and answers with the likeliest words, best first, each
+with a cost, a negative log probability.
+.PP
+A
+.B Lexicon
+is the words and how often each is used:
+.B read
+takes a file of
+.I "word count"
+lines (each count times
+.IR weight );
+.B add
+one word.  Words of letters and apostrophes are kept, matched with no
+regard to case or accents (é is typed with e's key); each keeps its
+spellings, and the one shown is its lower-case one if it has one, else
+its commonest
+.RB ( I ,
+.BR Dvorak ).
+.PP
+.B Taps
+decodes one touch a character.  A touch is scored against each key by a
+Gaussian round its centre and the offset learned for it
+.RB ( sigma ,
+in key sizes); the word list is searched as a trie, touch by touch, the
+likeliest few hundred prefixes kept
+.RB ( beam ),
+a letter of the word not touched
+.RB ( omit ;
+an apostrophe all but free), a touch that is none of the word's
+.RB ( insert ),
+and two swapped
+.RB ( swap )
+each at a cost; and a word's commonness adds its own
+.RB ( lmweight ).
+Words longer than the touches are offered too, marked
+.BR complete ,
+at a cost for each letter more
+.RB ( completion ).
+A
+.B Touch
+whose
+.B c
+is not 0 is a character typed exactly, from a layer with no letters or
+a long press.
+.B Literal
+is what the touches spell, the nearest key each.
+.B Correct
+is the word to put in for them, or nil to leave what they spell:
+never one offered as a completion, never for a single letter or a word
+with a digit; for a word not in the list, one likelier by
+.B margin
+(a word not in the list costs
+.B oovbase
+and
+.B oov
+a letter); for one in it, by
+.BR validmargin .
+.PP
+.B Swipe
+decodes a stroke through a word's letters: SHARK2 (Kristensson and Zhai,
+UIST 2004).  Each word's template is the line through its keys' centres
+(a doubled letter one key), so any layout works with no training.  The
+words are pruned by the keys nearest where the stroke begins and ends
+and by its length; the stroke and each template, resampled to 64 points,
+are compared by shape (each scaled to a unit box,
+.BR ssigma )
+and by place (nothing while each stays within half a key of the other,
+else how far apart, the ends counting most,
+.BR lsigma ),
+and the word's commonness
+.RB ( slmweight ).
+.PP
+.B Learn
+moves where a key's touches are taken to land towards where one did
+(a touch meant for the key typing
+.IR c );
+.B offsets
+gives what was learned as text, which
+.B setoffsets
+restores.
+.B Setkeys
+gives the decoder other keys, keeping what was learned for each
+character.
+.PP
+.I Osklayout
+reads a layout, rows of keys in text, and places them in a rectangle
+(the format is at the head of
+.BR /lib/osk/layouts/dvorak ).
+An
+.B Lkey
+is a character's key
+.RB ( Kchar ,
+.B c
+and
+.BR shifted )
+or one of the keyboard's own
+.RB ( Kshift ,
+.BR Kdel ,
+.BR Kenter ,
+.BR Kspace ,
+.BR Kctrl ,
+.BR Klayer ,
+.BR Knext ,
+.BR Kspecial ),
+.B width
+keys wide.
+.B Keyat
+is the key at a point, the nearest in its row.
+.B Dkeys
+are the keys a decoder works on, the letters' and the apostrophe's.
+.B Alternates
+reads
+.BR /lib/osk/alternates .
+.PP
+.B tests/kbdecode_test.b
+checks both;
+.B tests/osk_accuracy.b
+measures the decoder against a simulated typist on each layout, and
+holds it to bounds.
+.SH SOURCE
+.B /appl/lib/kbdecode.b
+.br
+.B /appl/lib/osklayout.b
+.SH SEE ALSO
+.IR wm-osk (1)

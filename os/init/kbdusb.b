@@ -254,18 +254,39 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
+	# /dev/keyboards lists this keyboard while it is being read: a
+	# keyboard on the screen (wm/osk) need not show itself over one.
+	announce("attach", vidpid);
 	if(keys == nil){
 		sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d\n",
 			dev, epnum, maxpkt, ival);
 		poll(fd, kbd, ival);
-		return;
+	}else{
+		ids := "";
+		for(l := keys; l != nil; l = tl l)
+			ids += sys->sprint(" %d", (hd l).id);
+		sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d (report protocol, report%s)\n",
+			dev, epnum, maxpkt, ival, ids);
+		pollreport(fd, kbd, ival, maxpkt, keys);
 	}
-	ids := "";
-	for(l := keys; l != nil; l = tl l)
-		ids += sys->sprint(" %d", (hd l).id);
-	sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d (report protocol, report%s)\n",
-		dev, epnum, maxpkt, ival, ids);
-	pollreport(fd, kbd, ival, maxpkt, keys);
+	announce("detach", nil);
+}
+
+# "kbd attach usb<dev> USB keyboard <vid:pid>" or "kbd detach usb<dev>"
+# on /dev/consctl (cons(3)).
+announce(verb, vidpid: string)
+{
+	fd := sys->open("/dev/consctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	id := "usb";
+	for(i := 0; i < len dev; i++)
+		if(dev[i] > ' ' && dev[i] != '/')
+			id[len id] = dev[i];
+	if(verb == "attach")
+		sys->fprint(fd, "kbd attach %s USB keyboard %s", id, vidpid);
+	else
+		sys->fprint(fd, "kbd detach %s", id);
 }
 
 protoname(p: int): string

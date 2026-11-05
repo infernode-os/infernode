@@ -52,6 +52,10 @@ TARG=\
 	edit_test.dis\
 	editor_test.dis\
 	example_test.dis\
+	kbdecode_test.dis\
+	osk_accuracy.dis\
+	keyboards_test.dis\
+	osk_fuzz.dis\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\
@@ -82,7 +86,13 @@ TARG=\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_real_test.dis\
+	realconv_test.dis\
 	jit_big_test.dis\
+	jit_byte_test.dis\
+	sysfuzz.dis\
+	jit_nilmod_test.dis\
+	jit_killcall_test.dis\
+	jit_builtinexc_test.dis\
 	ipint_release_test.dis\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\
@@ -102,6 +112,7 @@ TARG=\
 	llmclient_anthropic_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
+	ipint_expmod_test.dis\
 	mail_provision_test.dis\
 	lists_test.dis\
 	lucifer_flicker_test.dis\
@@ -134,6 +145,7 @@ TARG=\
 	concurrent_auth_test.dis\
 	handshake_fuzz_test.dis\
 	limbo_inline_test.dis\
+	limbo_fold_test.dis\
 	limbo_ldt_test.dis\
 	limbo_asgcall_test.dis\
 	refadt_zero_test.dis\
@@ -180,6 +192,12 @@ TARG=\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
+	styx_pack_test.dis\
+	ninep_pack_test.dis\
+	devprog_read_test.dis\
+	devprog_nslock_test.dis\
+	kill_deadserver_test.dis\
+	env_rclose_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_charon_security_test.dis\
@@ -288,6 +306,8 @@ MODULES=\
 
 SYSMODULES=\
 	woff2.m\
+	kbdecode.m\
+	osklayout.m\
 	bidi.m\
 	brotli.m\
 	web/dom.m\
@@ -399,6 +419,7 @@ SYSMODULES=\
 	appfs.m\
 	auth9.m\
 	styxlib.m\
+	9p.m\
 	ipints.m\
 
 DISBIN=$ROOT/dis/tests

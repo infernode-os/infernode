@@ -546,12 +546,21 @@ gbytes(a: array of byte, o: int): (array of byte, int)
 
 utflen(s: string): int
 {
-	# the domain is 16-bit unicode only, which is all that Inferno now implements
+	# the bytes array of byte s gives: runes to U+10FFFF (four bytes past
+	# U+FFFF), and one that is not a rune (negative, or past U+10FFFF) as
+	# U+FFFD's three. A count of 16-bit runes made packdir's array too
+	# short for a name with U+1F680 in it, and the server that packed it
+	# died of the array bounds error (tools/nativefuzz, memfs on /tmp).
 	n := l := len s;
 	for(i:=0; i<l; i++)
-		if((c := s[i]) > 16r7F){
-			n++;
-			if(c > 16r7FF)
+		if((c := s[i]) > 16r7F || c < 0){
+			if(c < 0 || c > 16r10FFFF)
+				n += 2;
+			else if(c > 16rFFFF)
+				n += 3;
+			else if(c > 16r7FF)
+				n += 2;
+			else
 				n++;
 		}
 	return n;

@@ -18,7 +18,7 @@ extern	OP(irecv);
  * Set each channel's alt pointer to the owning prog
  */
 static int
-altmark(Channel *c, Prog *p)
+altmark(Channel *c, Prog *p, char **e)
 {
 	int nrdy;
 	Array *a;
@@ -33,7 +33,8 @@ altmark(Channel *c, Prog *p)
 		if(c != H) {
 			if(c->send->prog || CANGET(c))
 				nrdy++;
-			cqadd(&c->recv, p);
+			if(!cqaddok(&c->recv, p))
+				*e = exNomem;
 		}
 		ca++;
 	}
@@ -97,11 +98,12 @@ altrdy(Alt *a, Prog *p)
 		}
 		t = D2H(c)->t;
 		if(t == &Tarray)
-			nrdy += altmark(c, p);
+			nrdy += altmark(c, p, &e);
 		else {
 			if(c->send->prog || CANGET(c))
 				nrdy++;
-			cqadd(&c->recv, p);
+			if(!cqaddok(&c->recv, p))
+				e = exNomem;	/* undone by altdone below */
 		}
 	}
 
@@ -121,7 +123,8 @@ altrdy(Alt *a, Prog *p)
 			}
 			nrdy++;
 		}
-		cqadd(&c->send, p);
+		if(!cqaddok(&c->send, p))
+			e = exNomem;
 	}
 
 	if(e != nil) {

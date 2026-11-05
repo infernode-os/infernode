@@ -358,6 +358,7 @@ struct RWLock
 	QLock	x;
 	QLock	k;
 	int	readers;
+	int	writers;	/* writers holding or waiting, under l */
 } RWLock;
 
 extern	int	canrlock(RWLock*);

@@ -79,6 +79,14 @@ unicode -t 1b > /dev/keyboard
 taps call
 step redial
 
+# the star key, shown a sextile, dials a star; and hash
+hold delete
+taps star 6 7 hash
+sleep 1
+scap /tmp/star.img
+taps call
+step star
+
 # button 3 (a touch held) on 0 is +; a call that connects makes Call
 # hang up
 hold delete

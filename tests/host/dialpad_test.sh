@@ -5,7 +5,8 @@
 # Call writes "dial <number>" to it, a press slid to another key types
 # that key, delete takes one back and held clears, the keyboard types
 # and Enter calls, Call with no number dials the last again, button 3
-# (a touch held) on 0 is +, and a call the phone file reports connected
+# (a touch held) on 0 is +, the star key shown a sextile dials *,
+# and a call the phone file reports connected
 # turns Call into a red Hang up that writes "hangup", green again once
 # the call has ended (by pixel).  Runs on a headless emulator: its
 # in-memory screen (-g) is enough.
@@ -39,6 +40,7 @@ want='dial 5551234
 dial 96
 dial 123
 dial 123
+dial *67#
 dial +44
 hangup'
 n=0
@@ -50,13 +52,14 @@ echo "$want" | while IFS= read -r w; do
 	2)	what="a slide to another key types it; delete takes one back, held clears" ;;
 	3)	what="the keyboard types; Escape clears, Enter calls" ;;
 	4)	what="Call with no number dials the last again" ;;
-	5)	what="button 3 on 0 is +" ;;
-	6)	what="a connected call's Call hangs up" ;;
+	5)	what="the star key (a sextile) dials a star, and hash a hash" ;;
+	6)	what="button 3 on 0 is +" ;;
+	7)	what="a connected call's Call hangs up" ;;
 	esac
 	if [ "$got" = "$w" ]; then pass "$what ($got)"; else echo "FAIL: $what: '$got', not '$w'"; fi
 done | tee "$ROOT/$T/results"
 grep -q '^FAIL' "$ROOT/$T/results" && failed=1
-[ "$(wc -l < "$ROOT/$T/writes")" -eq 6 ] || fail "writes: $(tr '\n' '|' < "$ROOT/$T/writes")"
+[ "$(wc -l < "$ROOT/$T/writes")" -eq 7 ] || fail "writes: $(tr '\n' '|' < "$ROOT/$T/writes")"
 
 # the colour at x y of a screenshot, as RRGGBB
 pixel() {

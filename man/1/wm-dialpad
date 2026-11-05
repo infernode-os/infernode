@@ -39,6 +39,13 @@ A
 .I number
 given is typed in at the start.
 .PP
+The star key and the stars in the number are drawn as the sextile,
+six arms 60 degrees apart with one upright, the star Bell Labs drew
+for the Touch-Tone keypad, rather than a font's asterisk; what is
+dialled is
+.BR * ,
+and the sextile's own rune (⚹, U+26B9) typed is taken for one.
+.PP
 A key types when the finger lifts, the key under it then, so a finger
 that lands on the wrong key slides to the right one.
 Held, or with button 3 (what a touch held becomes), 0 types

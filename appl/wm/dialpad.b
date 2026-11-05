@@ -52,6 +52,12 @@ Dialpad: module
 };
 
 Longms:		con 500;	# a press this long is a key's other meaning
+# The star key's mark is the sextile, six arms 60 degrees apart, one
+# upright, as Bell Labs drew it for the Touch-Tone keypad: drawn (the
+# asterisk glyph, icon(2)), on the key and in the number, not a font's
+# star; what is typed and dialled is the '*' the network takes.  The
+# sextile's own rune, typed, is taken for one.
+Sextile:	con 16r26B9;
 Maxdigits:	con 64;
 
 # what a key does
@@ -297,6 +303,8 @@ key(k: int)
 		delete();
 	27 =>
 		number = "";
+	Sextile =>
+		add('*');
 	* =>
 		add(k);
 	}
@@ -481,16 +489,15 @@ redraw()
 	img.draw(img.r, colour(theme.bg), nil, (0, 0));
 
 	# the number, its end in view when it is too long to show whole
-	s := number;
-	col := theme.text;
-	if(s == ""){
-		s = "number";
-		col = theme.dim;
-	}
 	f := pickfont(disprect.dy() * 55 / 100);
-	while(len s > 1 && f.width(s) > disprect.dx())
-		s = s[1:];
-	textin(disprect, f, s, col);
+	if(number == "")
+		textin(disprect, f, "number", theme.dim);
+	else{
+		s := number;
+		while(len s > 1 && numwidth(f, s) > disprect.dx())
+			s = s[1:];
+		drawnumber(disprect, f, s, theme.text);
+	}
 
 	if(status != ""){
 		t := status;
@@ -524,7 +531,7 @@ drawkey(k: ref Key)
 		if(k.sub != "")
 			h += sfont.height;
 		y := r.min.y + (r.dy() - h)/2;
-		img.text((r.min.x + (r.dx() - font.width(s))/2, y), colour(fg), (0, 0), font, s);
+		drawnumber(Rect((r.min.x, y), (r.max.x, y + font.height)), font, s, fg);
 		if(k.sub != "")
 			img.text((r.min.x + (r.dx() - sfont.width(k.sub))/2, y + font.height),
 				colour(fg), (0, 0), sfont, k.sub);
@@ -548,6 +555,47 @@ drawkey(k: ref Key)
 			fg = theme.accent;
 		if(number != "" && !glyph("backspace", r, fg))
 			textin(r, sfont, "Delete", fg);
+	}
+}
+
+# A number drawn in f, centred in r, each star a sextile as tall as a
+# digit; numwidth is its width.
+starsize(f: ref Font): int
+{
+	return f.height * 6 / 10;
+}
+
+numwidth(f: ref Font, s: string): int
+{
+	w := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '*' && icon != nil)
+			w += starsize(f) + f.width(" ")/2;
+		else
+			w += f.width(s[i:i+1]);
+	return w;
+}
+
+drawnumber(r: Rect, f: ref Font, s: string, col: int)
+{
+	x := r.min.x + (r.dx() - numwidth(f, s))/2;
+	y := r.min.y + (r.dy() - f.height)/2;
+	sz := starsize(f);
+	for(i := 0; i < len s; i++){
+		c := s[i:i+1];
+		if(c == "*" && icon != nil){
+			(gi, m, err) := icon->paint("asterisk", sz, col);
+			pad := f.width(" ")/4;
+			if(err == nil && gi != nil){
+				# centred on the digits' middle, as a keypad's star is
+				p := Point(x + pad, y + f.ascent - f.ascent*6/10 - sz/2);
+				img.draw(Rect(p, p.add((sz, sz))), gi, m, (0, 0));
+			}
+			x += sz + 2*pad;
+			continue;
+		}
+		img.text((x, y), colour(col), (0, 0), f, c);
+		x += f.width(c);
 	}
 }
 

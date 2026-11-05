@@ -900,6 +900,41 @@ enqueue(b: ref Blk)
 		cacheins(b);
 }
 
+#
+# A tree's root after an update that fits in its buffer (fastupsert),
+# which is most of them: the next update replaces it, and nothing points
+# at it but the Tree in memory. So it is not hashed or written yet, only
+# cached (a dirty block is never evicted), and one replaced in the
+# meantime is freed having cost neither, where every write request used
+# to hash and write a root as well as its data. It is still a fresh
+# copy each time, never changed in place: a scan between requests holds
+# blocks and needs them as they were.
+#
+# settle() hashes and writes it when something is to point at it: a
+# snapshot or the superblock, packed by tree2kv and packsb, both before
+# a commit's first flush.
+#
+deferblk(b: ref Blk)
+{
+	bassert(b, (b.flag & (Bdirty|Bstatic|Bfinal)) == Bdirty, "deferblk: not new");
+	b.flag |= Bdefer;
+	if((b.flag & Bcached) == 0)
+		cacheins(b);
+}
+
+settle(t: ref Tree)
+{
+	b := cachepeek(t.bp.addr);
+	if(b == nil || b.bp.gen != t.bp.gen)
+		return;
+	if(b.flag & Bdefer){
+		b.flag &= ~Bdefer;
+		enqueue(b);
+	}
+	if(b.flag & Bfinal)
+		t.bp.hash = b.bp.hash;
+}
+
 # ---- the block cache ----
 
 cacheslot(addr: big): int

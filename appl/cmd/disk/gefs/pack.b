@@ -194,6 +194,7 @@ dlist2kv(dl: ref Dlist): Kvp
 
 tree2kv(t: ref Tree): Kvp
 {
+	settle(t);
 	b := array[Snapsz+Treesz] of byte;
 	ek := packsnap(b, 0, t.gen);
 	o := packtree(b, ek, t);
@@ -312,6 +313,7 @@ unpackarena(a: ref Arena, b: array of byte, o: int): int
 # the superblock, and its hash after it
 packsb(b: array of byte): int
 {
+	settle(fs.snap);
 	o := 0;
 	b[o:] = array of byte Superver;
 	o += 8;

@@ -970,7 +970,7 @@ fastupsert(t: ref Tree, b: ref Blk, msg: array of Msg)
 			r.data[s+2+k] = r.data[s+k];
 		p16(r.data, s, o);
 	}
-	enqueue(r);
+	deferblk(r);
 	t.bp = r.bp;
 	t.dirty = 1;
 	freeblk(t, b);

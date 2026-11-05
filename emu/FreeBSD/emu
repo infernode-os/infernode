@@ -20,7 +20,7 @@ dev
 
 	ip	ipif ipaux
 	eia
-	audio	audio
+	audio	audio audiomix
 	mem
 
 lib

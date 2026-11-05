@@ -7,11 +7,24 @@ audio \- digital audio input and output
 .B /dev/audio
 .br
 .B /dev/audioctl
+.br
+.B /dev/mix/new
+.br
+.BI /dev/mix/ n /data
+.br
+.BI /dev/mix/ n /ctl
 .SH DESCRIPTION
 The
 .I audio
-device serves a one-level directory containing two files,
-giving access to the host or native audio device in a platform-independent way.
+device serves the host or native audio device in a platform-independent way.
+In the emulator it is shared: every open of
+.BR audio ,
+and every stream made in
+.BR mix ,
+is a stream of its own.
+What the streams write is mixed into what the speaker plays, each converted
+from its own format; every stream reading gets the whole of the microphone,
+in its own format, from its open on.
 .PP
 .B Audio
 is the data file, which can be read or written to exchange data with the device. Audio
@@ -142,8 +155,113 @@ is one of
 .BR line ,
 .BR aux1 ,
 .BR loop .
+.SS Streams
+Opening
+.B mix/new
+makes a stream,
+.IR n ,
+and the open file becomes its
+.BR ctl ;
+a read of it gives
+.I n
+on its first line.
+The stream's directory,
+.BI mix/ nR,
+holds
+.B data
+and
+.BR ctl ,
+and lasts while any of them is open.
+.B Data
+written is played; read, it is the microphone.
+.B Ctl
+takes the format lines
+.B audioctl
+takes
+.RB ( rate ,
+.BR chans ,
+.BR bits ,
+.BR enc ,
+after
+.BR in ,
+.B out
+or neither, for the rest of the line), and:
+.TP
+.BI role " name"
+.BR media ,
+.BR tone ,
+.BR notify ,
+.B speech
+or
+.BR call .
+While a stream of a higher role sounds,
+.B media
+is played at a quarter under
+.BR notify ,
+.B speech
+and
+.BR call ,
+and
+.B speech
+at a third under
+.BR call ;
+the others are never lowered.
+Changes are ramped, not stepped.
+.TP
+.BI "[in out] queue" " ms"
+How much of the stream is held, 0 to 2000.
+With 0, the default, the output holds two seconds and a writer waits for
+room, so a file copied to the stream plays at the speaker's pace;
+with
+.I ms
+a write never waits and only the newest
+.I ms
+are kept, the oldest dropped: what a call fed over a network needs, or it
+drifts behind the speaker.
+The input keeps the newest two seconds, or
+.IR ms .
+.PP
+A read of
+.B ctl
+gives the stream's number, role, queues, formats and how many milliseconds
+of output it holds.
+A line with any part that is not understood, or a format that cannot be
+played, is refused and changes nothing.
+.PP
+.B Audio
+is a stream in
+.BR audioctl 's
+format, which its streams follow as they change.
+.B Audioctl
+also takes
+.BR role ,
+and
+.B play_buffer_ms
+and
+.B rec_buffer_ms
+for the output and input queues of
+.BR audio 's
+streams.
+.PP
+What a stream writes before it is closed is played to its end.
+The host's device is opened when a stream first needs it, in the mixer's
+format (48 kHz, stereo, 16-bit), and let go when the streams have drained,
+or the last reader has gone.
+A stream whose direction cannot open it is refused at its open.
+.PP
+With
+.B $INFERNODE_AUDIO_FAKE
+set when the emulator starts there is no host device: what the speaker would
+play is read from
+.B fakeout
+(the newest 30 seconds, at its pace) and what is written to
+.B fakein
+is the microphone, both in the mixer's format.
+For tests.
 .SH SOURCE
 .B /emu/port/devaudio*.c
+.br
+.B /emu/port/audiomix.c
 .br
 .B /emu/*/devaudio.c
 .br
@@ -166,4 +284,6 @@ not
 .BR audioctl ,
 and supports a subset of the commands described above.
 .br
-The device is exclusive-use and cannot mix streams from several clients.
+The native kernel's device
+.RB ( os/ )
+is still exclusive-use and cannot mix streams from several clients.

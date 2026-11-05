@@ -33,8 +33,10 @@ svp_t audio_enc_tbl[] = {
 svp_t audio_rate_tbl[] = {
 	{ "8000", 8000 },	/* 8000 samples per second */
 	{ "11025", 11025 },	/* 11025 samples per second */
+	{ "16000", 16000 },	/* 16000 samples per second: speech */
 	{ "22050", 22050 },	/* 22050 samples per second */
 	{ "44100", 44100 },	/* 44100 samples per second */
+	{ "48000", 48000 },	/* 48000 samples per second: the mixer's */
 	{nil},
 };
 

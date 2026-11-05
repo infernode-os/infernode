@@ -14,6 +14,7 @@ export export
 factotum factotum
 feedkey factotum
 ftpfs ftpfs
+gefs gefs
 9export import
 import import
 keyfs keyfs

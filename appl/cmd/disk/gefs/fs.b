@@ -82,6 +82,7 @@ iounit := Max9p;
 versioned := 0;
 authok := 0;
 halting := 0;
+haltsynced := 0;	# halt's commits are done
 
 # ---- trees ----
 
@@ -116,7 +117,24 @@ upsert(mnt: ref Mount, m: array of Msg)
 
 # ---- sync: 9front's four passes, with a device flush at each barrier ----
 
+#
+# A sync that fails part way has changed what is in memory (the
+# deadlists handed over, qgen moved on) without the commit being on
+# disk, so it cannot simply be tried again: as 9front does, the file
+# system goes read only, and what is on disk is the last good commit.
+#
 sync(): int
+{
+	{
+		return sync0();
+	} exception e {
+	"gefs:*" =>
+		broke("sync failed, read only from here: "+errmsg(e));
+	}
+	return 0;
+}
+
+sync0(): int
 {
 	# pass 0: update the open snapshots, and pack what is to be synced
 	for(ml := fs.mounts; ml != nil; ml = tl ml){
@@ -136,10 +154,20 @@ sync(): int
 	fs.dropdl.tail = Zb();
 	fs.dropdl.ins = nil;
 	fs.qgen++;
-	for(i := 0; i < fs.narena; i++){
+	for(i := 0; i < fs.narena; i++)
+		logbarrier(fs.arenas[i], fs.qgen);
+	# the logs' tails in two steps (tailstage), the first all at once
+	staged := 0;
+	for(i = 0; i < fs.narena; i++){
+		a := fs.arenas[i];
+		if((a.logtl.flag & Bdirty) != 0 && tailstage(a))
+			staged = 1;
+	}
+	if(staged)
+		devflush();
+	for(i = 0; i < fs.narena; i++){
 		a := fs.arenas[i];
 		# the log is in preallocated blocks: it is written out now
-		logbarrier(a, fs.qgen);
 		flushlog(a);
 		packarena(a.h0.data, 0, a);
 		packarena(a.h1.data, 0, a);
@@ -158,8 +186,11 @@ sync(): int
 		syncblk(fs.arenas[i].h0);
 	fs.qgen++;
 	devflush();
-	# pass 2: the superblocks; with good headers, a crash is safe
+	# pass 2: the superblocks; with good headers, a crash is safe. A
+	# flush between them, which 9front does not have, so that a cut
+	# cannot tear both
 	syncblk(fs.sb0);
+	devflush();
 	syncblk(fs.sb1);
 	fs.qgen++;
 	devflush();
@@ -1666,9 +1697,17 @@ writectl(m: ref Tmsg.Write, nil: ref Fid)
 	case nsp {
 	1 =>
 		case hd sp {
+		# both done before the reply, so that when the write returns
+		# what was asked is on the disk, or the write says why not
 		"sync" =>
-			a.op = AOsync;
+			fs.snap.dirty = 1;
+			quiesce();
+			syncfs();
+			a = nil;
 		"halt" =>
+			if(!fs.rdonly)
+				drainsync();
+			haltsynced = 1;
 			a.op = AOhalt;
 		"check" =>
 			if(!checkfs()){

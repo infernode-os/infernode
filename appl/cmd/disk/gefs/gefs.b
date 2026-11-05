@@ -7,7 +7,7 @@ implement Gefs;
 # the design in 9front's sys/doc/gefs.ms). The disk format is 9front's,
 # byte for byte, so a disk made by either is read by the other.
 #
-#	disk/gefs [-r user] [-cRSAd] [-m cachemb] [-M aname:dir]... dev
+#	disk/gefs [-r user] [-cRSAd] [-m cachemb] [-M aname:dir]... [-W journal] dev
 #
 # serves the file system on fd 0, as kfs does:
 #
@@ -26,6 +26,9 @@ implement Gefs;
 # -S		permissive: anyone may attach to adm
 # -m mb		block cache size in megabytes (default 64)
 # -M an:dir	mount the attach name an (main, adm, dump, a label) on dir
+# -W file	write a journal of every block written and every device
+#		flush to file, from which tests/host/gefs_crash_test.sh
+#		makes the disks a power cut could leave
 #
 # The attach name picks a snapshot label: "main" (the default), "adm"
 # (the users file and ctl), "dump" (every snapshot, read only). The
@@ -115,6 +118,7 @@ noneid := 0;
 nogroupid := -2;
 admid := -1;
 srvfd: ref Sys->FD;
+wjfd: ref Sys->FD;	# -W: the write journal, for crash tests
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -133,7 +137,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	cachemb := 64;
 	mounts: list of (string, string);
 	arg->init(argv);
-	arg->setusage("disk/gefs [-r user] [-cRSd] [-m cachemb] dev");
+	arg->setusage("disk/gefs [-r user] [-cRSd] [-m cachemb] [-M aname:dir]... [-W journal] dev");
 	while((c := arg->opt()) != 0)
 		case c {
 		'r' =>
@@ -145,6 +149,13 @@ init(nil: ref Draw->Context, argv: list of string)
 		'A' =>	;	# no authentication either way
 		'd' =>	debug++;
 		'm' =>	cachemb = int arg->earg();
+		'W' =>
+			wj := arg->earg();
+			wjfd = sys->create(wj, Sys->OWRITE, 8r644);
+			if(wjfd == nil){
+				sys->fprint(sys->fildes(2), "gefs: %s: %r\n", wj);
+				raise "fail:journal";
+			}
 		'M' =>
 			am := arg->earg();
 			for(i := 0; i < len am && am[i] != ':'; i++)
@@ -171,6 +182,7 @@ init(nil: ref Draw->Context, argv: list of string)
 			return;
 		}
 		if(!fs.rdonly){
+			normlogs();
 			migrateusers();
 			syncfs();
 		}
@@ -231,12 +243,15 @@ initfs(cachemb, rdonly: int, dev: string)
 #
 # The commit barriers: what was written must be on the medium, not in a
 # drive's cache. A disk that has nothing to flush (an SD card, a file)
-# has nothing to say, and that is not an error.
+# has nothing to say, and that is not an error. A flush that fails is a
+# disk that cannot keep its order, and the file system goes read only.
 #
 devflush()
 {
-	if(fs.ctl != nil)
-		sys->fprint(fs.ctl, "flush");
+	if(wjfd != nil)
+		sys->write(wjfd, array[] of {byte 'F'}, 1);
+	if(fs.ctl != nil && sys->fprint(fs.ctl, "flush") < 0)
+		broke(sys->sprint("flush %s: %r", fs.dev));
 }
 
 # the adm tree's ctl and status, on a disk made before they were there
@@ -320,7 +335,7 @@ serve()
 	}
 	# the last commits, so the disk is clean
 	{
-		if(!fs.rdonly)
+		if(!fs.rdonly && !haltsynced)
 			drainsync();
 	} exception e {
 	"gefs:*" =>

@@ -58,6 +58,9 @@ Longms:		con 500;	# a press this long is a key's other meaning
 # star; what is typed and dialled is the '*' the network takes.  The
 # sextile's own rune, typed, is taken for one.
 Sextile:	con 16r26B9;
+# How far up its ascent a digit's middle is, in hundredths: where a
+# star in the number is centred.  Measured on the Go fonts' digits.
+Digitmid:	con 41;
 Maxdigits:	con 64;
 
 # what a key does
@@ -525,6 +528,11 @@ drawkey(k: ref Key)
 		}
 		img.draw(r, colour(bg), nil, (0, 0));
 		img.border(r, 1, colour(theme.border), (0, 0));
+		if(k.c == '*' && icon != nil){
+			# the sextile at the key's centre, not set as text
+			star(r.min.add(r.max).div(2), starsize(font), fg);
+			return;
+		}
 		s := "";
 		s[0] = k.c;
 		h := font.height;
@@ -584,19 +592,25 @@ drawnumber(r: Rect, f: ref Font, s: string, col: int)
 	for(i := 0; i < len s; i++){
 		c := s[i:i+1];
 		if(c == "*" && icon != nil){
-			(gi, m, err) := icon->paint("asterisk", sz, col);
+			# centred on the digits' middle, as a keypad's star is
 			pad := f.width(" ")/4;
-			if(err == nil && gi != nil){
-				# centred on the digits' middle, as a keypad's star is
-				p := Point(x + pad, y + f.ascent - f.ascent*6/10 - sz/2);
-				img.draw(Rect(p, p.add((sz, sz))), gi, m, (0, 0));
-			}
+			star(Point(x + pad + sz/2, y + f.ascent - f.ascent*Digitmid/100), sz, col);
 			x += sz + 2*pad;
 			continue;
 		}
 		img.text((x, y), colour(col), (0, 0), f, c);
 		x += f.width(c);
 	}
+}
+
+# The sextile, sz pixels square, centred on c.
+star(c: Point, sz, col: int)
+{
+	(gi, m, err) := icon->paint("asterisk", sz, col);
+	if(err != nil || gi == nil)
+		return;
+	p := c.sub((sz/2, sz/2));
+	img.draw(Rect(p, p.add((sz, sz))), gi, m, (0, 0));
 }
 
 textin(r: Rect, f: ref Font, s: string, col: int)

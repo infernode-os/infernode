@@ -105,4 +105,57 @@ green() { [ "$1" != none ] && [ $((0x$(echo "$1" | cut -c3-4))) -gt $((0x$(echo 
 red "$during" && pass "Call is red while a call is connected ($during)" || fail "during a call, Call is $during"
 green "$after" && pass "Call is green again once it has ended ($after)" || fail "after the call, Call is $after"
 
+# The sextile at the star key's centre: the middle of its ink (what
+# differs from the key's fill) within a pixel of the key's middle.
+inkmid() {	# shot minx miny maxx maxy
+	python3 -I - "$@" <<'PY'
+import sys
+data = open(sys.argv[1], 'rb').read(); off = 0
+if data[:11] == b'compressed\n':
+    off = 11
+hdr = data[off:off+60]; off += 60
+chan = hdr[0:11].strip().decode()
+minx, miny, maxx, maxy = (int(hdr[i:i+12]) for i in (12, 24, 36, 48))
+w = maxx - minx
+bpp = {'x8r8g8b8': 4, 'a8r8g8b8': 4, 'r8g8b8': 3}[chan]
+if data[:11] != b'compressed\n':
+    rows = data[off:]
+else:
+    rows = bytearray(); yy = miny
+    while yy < maxy:
+        bmaxy = int(data[off:off+12]); nb = int(data[off+12:off+24]); off += 24
+        blk = data[off:off+nb]; off += nb; i = 0
+        while i < len(blk):
+            c = blk[i]; i += 1
+            if c >= 128:
+                n = c - 128 + 1; rows += blk[i:i+n]; i += n
+            else:
+                n = (c >> 2) + 3; o = ((c & 3) << 8 | blk[i]) + 1; i += 1
+                for _ in range(n):
+                    rows.append(rows[-o])
+        yy = bmaxy
+def px(x, y):
+    p = ((y - miny) * w + (x - minx)) * bpp
+    return rows[p:p+3]
+x0, y0, x1, y1 = (int(a) for a in sys.argv[2:6])
+fill = px(x0 + 3, y0 + 3)
+xs = []; ys = []
+for y in range(y0 + 2, y1 - 2):
+    for x in range(x0 + 2, x1 - 2):
+        if sum(abs(a - b) for a, b in zip(px(x, y), fill)) > 60:
+            xs.append(x); ys.append(y)
+if not xs:
+    print('none'); sys.exit()
+print(min(xs) + max(xs) - (x0 + x1), min(ys) + max(ys) - (y0 + y1))	# twice the offset
+PY
+}
+set -- $(grep '^star ' "$ROOT/$T/keys")
+off=$(inkmid "$ROOT/$T/star.img" $2 $3 $4 $5 2>/dev/null || echo none)
+set -- $off
+if [ $# = 2 ] && [ $1 -ge -2 ] && [ $1 -le 2 ] && [ $2 -ge -2 ] && [ $2 -le 2 ]; then
+	pass "the sextile is at the star key's centre (within a pixel)"
+else
+	fail "the sextile is off the star key's centre: twice the offset is '$off'"
+fi
+
 exit $failed

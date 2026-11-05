@@ -235,6 +235,7 @@ pathname names
 relative names
 rooted names
 newns newns
+nmea nmea
 plumbmsg plumbmsg
 pop3 pop3
 print print
@@ -414,6 +415,8 @@ wmsrv wmsrv
 workdir workdir
 wpakey wpakey
 xml xml
+gdl90 gdl90
+garminav garminav
 kbdecode kbdecode
 osklayout kbdecode
 softkbd softkbd

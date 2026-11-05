@@ -700,12 +700,10 @@ Serve:
 				srv.reply(styxservers->readbytes(m, data));
 
 			Qmodels =>
-				(mtext, merr) := availablemodels();
-				if(merr != nil) {
-					srv.reply(ref Rmsg.Error(m.tag, merr));
-					break;
-				}
-				srv.reply(styxservers->readbytes(m, array of byte mtext));
+				# asks the backend: not here, where a backend that
+				# does not answer would stop every session
+				modelsid := trackasync(m.tag);
+				spawn asyncmodelsread(modelsid, m);
 
 			Qask =>
 				sess := findsession(sid);
@@ -1616,6 +1614,15 @@ completeasync(id: int): int
 			kept = hd ops :: kept;
 	pendingops = kept;
 	return found;
+}
+
+asyncmodelsread(id: int, m: ref Tmsg.Read)
+{
+	(mtext, merr) := availablemodels();
+	if(merr != nil)
+		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(m.tag, merr));
+	else
+		asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, array of byte mtext));
 }
 
 asyncaskread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)

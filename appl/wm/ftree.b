@@ -530,7 +530,7 @@ handlemenu(verb: string)
 	"mrefresh" =>	refreshtree();
 	"mnsmode" =>	togglensmode();
 	"mgoto" =>	startgoto();
-	"mexit" =>	exit;
+	"mexit" =>	tkclient->wmctl(top, "exit");
 	}
 }
 
@@ -565,7 +565,7 @@ handlekey(key: int)
 	Kleft =>
 		collapseselected();
 	'q' & 16r1f =>
-		exit;
+		tkclient->wmctl(top, "exit");
 	'g' & 16r1f =>
 		startgoto();
 	'b' & 16r1f =>
@@ -577,7 +577,7 @@ handlekey(key: int)
 		if(!disallow)
 			unmountselected();
 	'q' or 'Q' =>
-		exit;
+		tkclient->wmctl(top, "exit");
 	'r' or 'R' =>
 		refreshtree();
 	'n' =>

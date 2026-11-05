@@ -6,6 +6,8 @@ pointer \- mouse and stylus interface
 .PP
 .B /dev/cursor
 .br
+.B /dev/fingers
+.br
 .B /dev/pointer
 .SH DESCRIPTION
 The
@@ -72,6 +74,38 @@ A record with only
 and
 .I y
 moves the pointer there, the host's too, with the buttons as they are.
+.PP
+A touch screen's fingers, every one, are read from
+.BR fingers ,
+an event a read:
+.IP
+.BI f "id x y on msec"
+.PP
+in the fixed-width fields
+.B pointer
+uses.
+.I On
+is 1 while the finger is on the screen (as it lands, and as it moves)
+and 0 when it lifts;
+.I id
+is the finger's from the event it lands until the one it lifts, a small
+number free again after.
+.B Pointer
+is the first finger as a mouse, for every program that reads it; a
+program that needs every finger, a keyboard on the screen typed with
+two thumbs whose touches overlap
+.RI ( wm-osk (1)),
+reads
+.B fingers
+as well.  One program reads it at a time; while none does, touches are
+dropped, not kept for a reader who comes later.  A write of
+.BI f "id x y on"
+is such an event, from a driver that is a program (the native kernel's
+touch panel,
+.BR os/init/touch.b )
+or a test; a write waits for room in the queue, where an event from
+the GUI backend, which may not wait, is dropped (room is kept for
+fingers lifting).
 .PP
 Writing an
 .IR image (6)

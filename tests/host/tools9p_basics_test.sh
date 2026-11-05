@@ -51,7 +51,7 @@ emu_c() {
             </dev/null >"$log" 2>&1
     local rc=$?
     OUTPUT=$(cat "$log")
-    if [[ "$rc" -eq 0 ]] || [[ "$rc" -eq 124 ]]; then
+    if emu_timeout_ok "$rc"; then
         info "[$name] ok: $OUTPUT"
         return 0
     else

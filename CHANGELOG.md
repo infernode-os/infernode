@@ -6,6 +6,58 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
+  `/prog` (#1019).** Lucifer looked for an app's main process every
+  half second, then read every process's status every half second
+  until none was in the app's group; closing a task polled the same way
+  for up to three seconds. A read of the new `grpwait` file (prog(3))
+  waits until the process group has no process left, in the emulator
+  and the native kernel alike; Lucifer opens it once the app has its
+  group and waits on it.
+- **An activity's `event` file has a queue for each reader; the task
+  tool's Apply and Discard wait on it (#1019).** luciuisrv let one
+  reader wait on `activity/N/event` at a time: a second reader ended
+  the first's read, and an event went to one of them. So the task tool,
+  after sending a task `/promote` or `/revert`, re-read the task's
+  conversation every quarter second for its answer. Each open now has
+  its own queue, as the global `event` file's always had; events with
+  no reader still wait for the first to open the file, and what the
+  last reader leaves unread waits for the next. The task tool waits on
+  the task's events for its answer, five seconds at most as before.
+- **A payment's requester waits on its read for the decision; nothing
+  polls (#1019).** x402's `authorize` (payfetch) re-read its fid every
+  two seconds, for up to 90, while a payment waited for a person to
+  approve it. A fid told `pending:<id>` that reads `pay` or `authorize`
+  again at offset 0 now waits until the payment is approved, denied or
+  expires, and gets the outcome; the first read still gives the id at
+  once, and a read at another offset does not wait. x402 makes that
+  read under its time limit, and hears a denial as it is made.
+- **A service that does not answer no longer stops Settings or llmsrv.**
+  Settings' panels read llmsrv, factotum, msg9p and audit in its one
+  loop; each read, write and stat now has its own proc and a time limit,
+  and the status line names what did not answer. llmsrv asked the backend
+  for `models` in its serve loop, stopping every session behind a slow
+  one; it now does so as it does for `ask`.
+- **Delete on Matrix takes what it hosts; Delete on Task no longer takes
+  wm/wm.** A composition's hosted programs (wm/scene in `scene-demo`) run
+  in groups of their own, so Matrix's exit left them, holding the window
+  with nothing left to take a Delete. wm/task and wm/dir never made a
+  process group of their own, so an exit killed the group they were
+  started in, wm's among them.
+- **Quitting a program leaves nothing of it running.** wm/about, colors,
+  dir, fractals, ftree, keyring, man and wallet ended only their main
+  proc on their own Quit (wm/dir on Delete too), leaving their theme
+  watchers; wm/shell's Delete missed its own. In ftree and shell that
+  also kept their posted files alive.
+- **Settings no longer freezes on its Theme panel, and Delete takes the
+  window of a program that has frozen.** `event`, served in the theme
+  directory since themefs, was listed as a theme: loading it read a file
+  that waits for the next switch, in Settings' main loop, so the Theme
+  panel never came back (and Xenith's `Theme` would have stopped on it).
+  wm/wm's Delete only asks a program to exit, and a stuck one never
+  hears: if the exit is not taken in two seconds the window now leaves
+  the screen. The program itself is not killed (wm does not know its
+  process); it takes the exit if it ever wakes.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's
@@ -168,6 +220,41 @@ All notable changes to InferNode are documented in this file.
   `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
   `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
   `wm/edit`'s.
+
+### Security
+
+- **Bare metal: a key is made only from a hardware generator.** A board
+  with no working generator (the Pi 4's RNG200 not answering, the
+  PolarFire's nonce service refusing, a QEMU virt without virtio-rng)
+  handed libsec's key generators, `#c/notquiterandom` and `#c/random` a
+  counter stirred with the time, after one line on the console; the
+  PolarFire did the same, silently, if its service stopped after boot.
+  On a board that means a driver or address map at fault, and on a Pi 5,
+  which no emulator models, it could only mean that. Now `hwrandom`
+  never makes bytes up: it says -1 when there is no generator, and
+  `genrandom`, `prng` and `prngtry`, which every board copied, are
+  `os/port/random.c`'s, waiting for real bytes and saying why every five
+  seconds (`prngtry` answers -1 at once, as libsec.h says). The kernel
+  still boots and its network still works: nrand, for port and sequence
+  numbers, no longer waits on the pool. What reads `/dev/random` waits
+  with the keys: the first-boot login, and DNS, whose query ids come
+  from it. An emulator that has nothing better passes `insecurerandom`
+  on its command line and gets the counter, labelled; the harness and
+  `tests/host/piimage_boot_test.sh` do for QEMU's `raspi4b`, and the
+  Icicle Kit's tree says it. A `virt` boot with no virtio-rng checks
+  both ways.
+- **Bare metal: the Pi's generator is read one word at a time under a
+  lock.** The Pi 3 and Pi 4 drivers tested for a word and read it with
+  no lock, on four cores with preemption: two readers could both see
+  one word waiting and both read it, and what an empty FIFO reads as is
+  not documented. The test and the read are now one step under a spin
+  lock, as `virt` and the PolarFire already did.
+- **Bare metal: the RNG200's own health test is heeded.** The Pi 4's
+  generator says in its interrupt status when its NIST health test has
+  failed; nothing read the register. As Linux's driver does, a failure
+  now resets the block before another word is taken from it, and says
+  so. The driver is `os/bcm/rng200.c`, for the Pi 4 and the Pi 5, with
+  the board's `io.h` naming where it is.
 
 ## [0.9.1] - 2026-10-30
 

@@ -3,7 +3,7 @@
 prof \- profiling device
 .SH SYNOPSIS
 .nf
-.B bind #P /prof
+.B bind #K /prof
 
 .BI /prof/ctl
 .BI /prof/ n /name

@@ -371,10 +371,16 @@ ipstat(Chan *c, uchar *db, int n)
 	return devstat(c, db, n, 0, 0, ipgen);
 }
 
+/*
+ * By omode&3, OEXEC (3) too: with three entries an open with OEXEC read
+ * past the table (AddressSanitizer: global-buffer-overflow, sysfuzz), and
+ * the permission checked was whatever followed it.
+ */
 static int m2p[] = {
 	4,
 	2,
 	6,
+	1,
 };
 
 static Chan *

@@ -1,5 +1,5 @@
 /*
- * fido2bridge — host-side libfido2 interface for the #F (2fa) device.
+ * fido2bridge — host-side libfido2 interface for the #h (2fa) device.
  *
  * Plain C contract between the kernel-side device (emu/port/devtfa.c, which
  * includes only Inferno headers) and the host-side implementation

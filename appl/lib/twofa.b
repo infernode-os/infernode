@@ -1,7 +1,7 @@
 implement Twofa;
 
 #
-# Twofa — Limbo wrapper over the #F (2fa) device. See module/twofa.m and
+# Twofa — Limbo wrapper over the #h (2fa) device. See module/twofa.m and
 # docs/second-factor-auth.md.
 #
 include "sys.m";
@@ -22,8 +22,8 @@ mount(): string
 			return sys->sprint("cannot create %s: %r", Dev);
 		fd = nil;
 	}
-	if(sys->bind("#F", Dev, Sys->MREPL) < 0)
-		return sys->sprint("bind #F %s: %r", Dev);
+	if(sys->bind("#h", Dev, Sys->MREPL) < 0)
+		return sys->sprint("bind #h %s: %r", Dev);
 	return nil;
 }
 

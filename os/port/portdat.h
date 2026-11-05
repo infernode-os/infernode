@@ -288,9 +288,8 @@ enum
 struct Mntwalk				/* state for /proc/#/ns */
 {
 	int		cddone;
+	int		started;	/* id is the last mount read */
 	ulong	id;
-	Mhead*	mh;
-	Mount*	cm;
 };
 
 struct Mount
@@ -485,6 +484,8 @@ struct Proc
 	Label		sched;		/* known to l.s */
 	char*		kstack;		/* known to l.s */
 	Mach*		mach;		/* machine running this proc */
+	struct Vm*	vm;		/* the Dis VM whose interpreter it takes in acquire() (#944) */
+	struct Vm*	vmhome;		/* its own, while devprog works in another's */
 	char		text[KNAMELEN];
 	Proc*		rnext;		/* next process in run queue */
 	Proc*		qnext;		/* next process on queue for a QLock */
@@ -496,6 +497,8 @@ struct Proc
 	Osenv*		env;
 	Osenv		defenv;
 	int		swipend;	/* software interrupt pending for Prog */
+	int		killing;	/* closing a dying Prog: 1 killed (killprog, progexit), 2 exiting; its clunks are waited for a bounded time (devmnt) */
+	int		intpend;	/* a Prog's kill that came while its proc was not asleep: the next sleep raises it */
 	Lock		sysio;		/* note handler lock */
 	char*		psstate;	/* What /proc/#/status reports */
 	ulong		pid;
@@ -676,7 +679,7 @@ enum
 };
 
 extern Pool*	mainmem;
-extern Pool*	heapmem;
+extern Pool*	heappool;
 extern Pool*	imagmem;
 
 /* queue state bits,  Qmsg, Qcoalesce, and Qkick can be set in qopen */

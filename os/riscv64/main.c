@@ -563,7 +563,7 @@ kmain(void)
 
 		mem = (ulong)conf.npage * BY2PG;
 		poolsize(mainmem, mem/8, 0);
-		poolsize(heapmem, mem/4, 0);
+		poolsize(heappool, mem/4, 0);
 		poolsize(imagmem, mem/8, 0);
 	}
 
@@ -573,7 +573,7 @@ kmain(void)
 
 	kbind("#S", "/dev", MAFTER);
 	kbind("#B", "/dev", MAFTER);
-	kbind("#b", "/dev", MAFTER);
+	kbind("#x", "/dev", MAFTER);
 
 	print("clock: %llud Hz timebase, %d Hz tick\n", clockfreq(), HZ);
 	uartputstr("\nboot OK\n");

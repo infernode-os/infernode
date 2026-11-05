@@ -1357,7 +1357,7 @@ Display_newimage(void *fp)
 				nil, f->repl, f->color);
 	if(*f->ret == H){
 		char err[ERRMAX];
-		Memimage *si;
+		Image *si;	/* the display's screen image: an Image, not a Memimage, so chan is read from the right place */
 
 		err[0] = 0;
 		kgerrstr(err, sizeof err);

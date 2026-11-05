@@ -239,6 +239,26 @@ testSysUtf(t: ref T)
 	t.assertseq(hex(buf), "F0 A0 80 80", "char2byte bytes");
 }
 
+# A negative rune put in a string of ASCII reads back as itself, from
+# compiled code as from the interpreter: it was kept as a byte, read
+# through a signed char (-77) by one and zero-extended (179) by the other.
+# disfuzz (tools/disfuzz) found it.
+negrune := -77;
+
+testNegative(t: ref T)
+{
+	s := "a";
+	s[len s] = negrune;
+	t.asserteq(len s, 2, "len after a negative rune appended");
+	t.asserteq(s[1], -77, "a negative rune appended to ASCII");
+	u := "b";
+	u[0] = negrune;
+	t.asserteq(u[0], -77, "a negative rune over ASCII");
+	w := "\u00e9";
+	w[len w] = negrune;
+	t.asserteq(w[1], -77, "a negative rune appended to runes");
+}
+
 # The report's reproduction: a file holding 🚀 read as a string and
 # written back must hold 🚀, not four C2 80s.
 testThroughFile(t: ref T)
@@ -317,6 +337,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SysUtf", testSysUtf);
 	run("ThroughFile", testThroughFile);
 	run("Utf16", testUtf16);
+	run("Negative", testNegative);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

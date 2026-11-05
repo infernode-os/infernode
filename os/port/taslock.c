@@ -8,15 +8,34 @@
 static void
 lockloop(Lock *l, ulong pc)
 {
+	Proc *h;
+
 	setpanic();
 	print("lock loop 0x%lux key 0x%lux pc 0x%lux held by pc 0x%lux\n", l, l->key, pc, l->pc);
+	/*
+	 * Who took it last, and what it is doing: pc 0 is a holder caught
+	 * between unlock's two stores, or lock's tas and its own (#640),
+	 * and only the holder can say which.
+	 */
+	h = l->p;
+	if(h != nil){
+		print("lock loop: last recorded by %lud:%s %s pri %d on cpu%d samecore %d, now %s (the holder, or the one before it if the holder had not got that far)\n",
+			h->pid, h->text, statename[h->state], h->pri,
+			h->mach != nil? h->mach->machno: -1, h->samecore,
+			h == up? "the spinner itself": "another");
+		if(h != up && h->state != Running)
+			labelstack(h);
+	}
+	print("lock loop: spinner %lud:%s pri %d on cpu%d islo %d\n",
+		up != nil? up->pid: 0, up != nil? up->text: "-", up != nil? up->pri: -1, m->machno, islo());
+	procdump();
 	panic("lockloop");
 }
 
 void
 lock(Lock *l)
 {
-	int i;
+	int i, opri;
 	ulong pc;
 
 	pc = getcallerpc(&l);
@@ -25,16 +44,41 @@ lock(Lock *l)
 			for(i=0; ; i++) {
 				if(_tas(&l->key) == 0)
 					break;
-				if (i >= 1000000) {
+				/*
+				 * The same bound as a proc's, below. A million
+				 * spins is tens of milliseconds under QEMU's TCG,
+				 * less than a host takes to run a descheduled
+				 * vCPU again when it is oversubscribed: a holder
+				 * of the run queue at splhi, nanoseconds from its
+				 * unlock, and the scheduler spinning for it
+				 * panicked (nativefuzz seed 403, four QEMUs on
+				 * four host cores).
+				 */
+				if (i >= 100*1000*1000) {
 					lockloop(l, pc);
 					break;
 				}
 			}
 		}
 		l->pc = pc;
+		l->p = nil;	/* no proc: the scheduler, or before procs */
 		return;
 	}
 
+	/*
+	 * PriLock BEFORE the tas, not after it. Raised after, a proc
+	 * preempted between its winning tas and the raise held the lock at
+	 * its own priority, and a spinner at PriLock (holding a lock of its
+	 * own: fdtochan's fd table, taking a Chan's ref) yielded only to
+	 * itself, the highest there: the holder, kept to that core
+	 * (samecore), never ran. "lock loop ... held by pc 0x0" -- the pc
+	 * and Proc still the last holder's, its unlock's -- after a hundred
+	 * million spins (#640; nativefuzz, -icount, the holder's stack in
+	 * lockloop's report). Raised first, whoever holds the key is at
+	 * PriLock, and the spinner's yield lets it run.
+	 */
+	opri = up->pri;
+	up->pri = PriLock;
 	for(i=0; ; i++) {
 		if(_tas(&l->key) == 0)
 			break;
@@ -76,9 +120,12 @@ lock(Lock *l)
 			sched();
 		}
 	}
-	l->pri = up->pri;
-	up->pri = PriLock;
+	l->pri = opri;
 	l->pc = pc;
+	l->p = up;
+#ifdef CHAOS
+	chaoslock();
+#endif
 }
 
 void
@@ -93,6 +140,7 @@ ilock(Lock *l)
 		if(_tas(&l->key) == 0) {
 			l->sr = x;
 			l->pc = pc;
+			l->p = up;
 			return;
 		}
 		if(conf.nmach < 2)
@@ -121,13 +169,23 @@ ilock(Lock *l)
 int
 canlock(Lock *l)
 {
-	if(_tas(&l->key))
-		return 0;
+	int opri;
+
+	/* PriLock before the tas, as in lock (#640) */
+	opri = 0;
 	if(up){
-		l->pri = up->pri;
+		opri = up->pri;
 		up->pri = PriLock;
 	}
+	if(_tas(&l->key)){
+		if(up)
+			up->pri = opri;
+		return 0;
+	}
+	if(up)
+		l->pri = opri;
 	l->pc = getcallerpc(&l);
+	l->p = up;
 	return 1;
 }
 
@@ -199,6 +257,10 @@ unlock(Lock *l)
 		 */
 		if(up->state == Running && anyhigher() && islo())
 			sched();
+#ifdef CHAOS
+		else if(up->state == Running && islo() && chaosyield())
+			sched();
+#endif
 	}
 }
 

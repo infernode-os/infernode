@@ -26,7 +26,13 @@ cachechars(Font *f, char **ss, Rune **rr, ushort *cp, int max, int *wp, char **s
 	}
 	wid = 0;
 	*subfontname = 0;
-	for(i=0; (*sp || *rp) && i<max; sp+=w, rp+=rw){
+	/*
+	 * The count first: a rune array need not end in 0 (Tk's entry passes
+	 * one Rune for a hidden entry's every character, and its text
+	 * unterminated), and *rp past the max-th was a read past its end
+	 * (AddressSanitizer: stack-buffer-overflow, 4 bytes past a Rune).
+	 */
+	for(i=0; i<max && (*sp || *rp); sp+=w, rp+=rw){
 		if(ss){
 			r = *(uchar*)sp;
 			if(r < Runeself)

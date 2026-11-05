@@ -873,25 +873,76 @@ dostaged(args, slash: string): string
 		return sys->sprint("error: activity %d not found", id);
 	if(strip(status) == "hidden")
 		return sys->sprint("error: task %d is closed", id);
+	# The task's event file opened before its messages are counted, so
+	# a reply between the two is still heard; each open has its own
+	# queue, so this takes nothing from Lucifer's.
+	evfd := sys->open(base + "/event", Sys->OREAD);
 	nbefore := 0;
 	while(readfile(sys->sprint("%s/conversation/%d", base, nbefore)) != nil)
 		nbefore++;
 	err := writefile(base + "/conversation/input", slash);
 	if(err != nil)
 		return "error: " + err;
-	# The task answers in its conversation; wait a little for it.
-	for(i := 0; i < 20; i++) {
-		sys->sleep(250);
-		for(m := nbefore; ; m++) {
-			c := readfile(sys->sprint("%s/conversation/%d", base, m));
-			if(c == nil)
-				break;
-			(role, text) := parseconvmsg(c);
-			if(role != "human" && text != "")
-				return sys->sprint("task %d: %s", id, text);
+	# The task answers in its conversation; wait a little for it, on its
+	# events: each new or changed message is looked at.
+	if(evfd != nil) {
+		# its reader ends at the task's next event after this returns
+		# (a tool call's /prog has only its own pid: nothing to kill)
+		evc := chan[1] of int;
+		stop := ref Stop(0);
+		spawn convevents(evfd, evc, stop);
+		evfd = nil;
+		tick := chan of int;
+		spawn stagedtimer(tick, 5000);
+		for(;;) alt {
+		<-evc =>
+			if((r := stagedreply(base, nbefore)) != nil) {
+				stop.done = 1;
+				return sys->sprint("task %d: %s", id, r);
+			}
+		<-tick =>
+			stop.done = 1;
+			return sys->sprint("task %d: %s sent; the task is busy and will do it when its turn ends", id, slash[1:]);
 		}
 	}
+	if((r := stagedreply(base, nbefore)) != nil)
+		return sys->sprint("task %d: %s", id, r);
 	return sys->sprint("task %d: %s sent; the task is busy and will do it when its turn ends", id, slash[1:]);
+}
+
+# The first message since nbefore that is not the human's, nil if none.
+stagedreply(base: string, nbefore: int): string
+{
+	for(m := nbefore; ; m++) {
+		c := readfile(sys->sprint("%s/conversation/%d", base, m));
+		if(c == nil)
+			return nil;
+		(role, text) := parseconvmsg(c);
+		if(role != "human" && text != "")
+			return text;
+	}
+}
+
+Stop: adt {
+	done:	int;
+};
+
+# Each event of the task's that is about its conversation, as a wake on
+# evc (one is enough: the waiter looks at every message since).
+convevents(fd: ref Sys->FD, evc: chan of int, stop: ref Stop)
+{
+	buf := array[512] of byte;
+	while(!stop.done && (n := sys->read(fd, buf, len buf)) > 0) {
+		ev := string buf[0:n];
+		if(len ev >= 12 && ev[0:12] == "conversation")
+			alt { evc <-= 1 => ; * => ; }
+	}
+}
+
+stagedtimer(tick: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt { tick <-= 1 => ; * => ; }
 }
 
 # --- Utility functions ---

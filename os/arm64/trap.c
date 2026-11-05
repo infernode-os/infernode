@@ -449,3 +449,32 @@ dumpstack(void)
 		fp = *(uintptr*)fp;
 	}
 }
+
+/*
+ * The frames above a process's saved label (one not running): its pc,
+ * then the x29 chain, x29 being the label's last register. For ^T^Tk
+ * (procstacks), bounded as dumpstack is.
+ */
+void
+labelstack(Proc *p)
+{
+	uintptr fp, pc, lo, hi;
+	int i;
+
+	print("  %lux\n", (ulong)p->sched.pc);
+	if(p->kstack == nil)
+		return;
+	/* within the process's own kernel stack, or not followed */
+	lo = (uintptr)p->kstack;
+	hi = lo + KSTACK;
+	fp = p->sched.regs[10];
+	for(i = 0; i < 24; i++){
+		if((fp & 7) != 0 || fp < lo || fp + 16 > hi)
+			break;
+		pc = *(uintptr*)(fp + 8);
+		if(pc == 0)
+			break;
+		print("  %lux\n", (ulong)pc);
+		fp = *(uintptr*)fp;
+	}
+}

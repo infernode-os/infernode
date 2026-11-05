@@ -1,0 +1,5 @@
+# Colemak, the letters.  The format: lib/osk/layouts/dvorak.
+row	q w f p g j l u y ;:
+row	a r s t d h n e i o
+row	shift:1.5 z x c v b k m del:1.5
+row	sym:1.5 next ,< space:4 .> enter:1.5

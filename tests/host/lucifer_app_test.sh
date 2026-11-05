@@ -7,7 +7,8 @@
 # content fills the zone or is centred in it (not in a corner: wm/lens
 # drew a 300x300 image in the zone's top left), it follows a theme
 # switch, and wm/editor and wm/shell take a click and typing through
-# /dev/pointer and /dev/keyboard.  The zone is found from the
+# /dev/pointer and /dev/keyboard.  A program that ends at once is reaped
+# (its process group gone, /prog/n/grpwait), its tab with it.  The zone is found from the
 # screenshots: what the apps changed against the empty zone, together.
 #
 # The tab above the app is not checked here: presentation_tabstrip_test.sh
@@ -86,6 +87,12 @@ theme=brimstone
 		echo "echo 'kill id=$p' > $ui"
 		echo 'sleep 2'
 	done
+	# a program that ends at once: its group gone, Lucifer reaps it
+	# (grpwait), its tab with it
+	# (wm/tetris refuses an option it does not know before any window)
+	echo "echo 'create id=gone type=app label=gone dis=/dis/wm/tetris.dis data=-Z' > $ui"
+	echo 'sleep 3'
+	echo "echo G \`{ls /mnt/ui/activity/0/presentation} > '#c/cons'"
 	echo "echo R done > '#c/cons'"
 	echo 'echo halt > /dev/sysctl'
 } > "$H/tmp/drv.sh"
@@ -103,6 +110,15 @@ SDL_VIDEODRIVER=dummy HOME=$H with_timeout 900 "$EMU" -c1 -pheap=1024m -pmain=10
 	</dev/null >"$LOG" 2>&1 || true
 
 grep -q '^R done' "$LOG" || { echo "FAIL: the driver did not finish"; tail -20 "$LOG"; exit 1; }
+if ! grep -q '^G ' "$LOG"; then
+	echo "FAIL: no list of the zone's artifacts after a program that ends at once"
+	exit 1
+elif grep '^G ' "$LOG" | grep -q '/gone'; then
+	echo "FAIL: a program that ended was not reaped: $(grep '^G ' "$LOG")"
+	exit 1
+else
+	echo "PASS: a program that ends at once is reaped, its tab with it"
+fi
 
 python3 -I - "$ROOT" "$H" "$CX" "$CY" <<'PY'
 import sys, os, re

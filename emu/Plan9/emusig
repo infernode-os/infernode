@@ -74,6 +74,7 @@ init
 root
 	/dev	/
 	/prog	/
+	/prof	/
 	/net	/
 	/net.alt	/
 	/chan	/

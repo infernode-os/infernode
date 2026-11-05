@@ -81,6 +81,10 @@ include "plumbmsg.m";
 	plumbmod: Plumbmsg;
 	Msg: import plumbmod;
 
+include "docengine.m";
+include "docreg.m";
+	docreg: Docreg;
+
 Ftree: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -216,6 +220,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	readdir = load Readdir Readdir->PATH;
 	str = load String String->PATH;
 	stderr = sys->fildes(2);
+	# the kinds of document (only its table: no engine is loaded)
+	docreg = load Docreg Docreg->PATH;
+	if(docreg != nil)
+		docreg->init(nil);
 
 	if(tk == nil || tkclient == nil) {
 		sys->fprint(stderr, "wm/ftree: cannot load Tk: %r\n");
@@ -522,7 +530,7 @@ handlemenu(verb: string)
 	"mrefresh" =>	refreshtree();
 	"mnsmode" =>	togglensmode();
 	"mgoto" =>	startgoto();
-	"mexit" =>	exit;
+	"mexit" =>	tkclient->wmctl(top, "exit");
 	}
 }
 
@@ -557,7 +565,7 @@ handlekey(key: int)
 	Kleft =>
 		collapseselected();
 	'q' & 16r1f =>
-		exit;
+		tkclient->wmctl(top, "exit");
 	'g' & 16r1f =>
 		startgoto();
 	'b' & 16r1f =>
@@ -569,7 +577,7 @@ handlekey(key: int)
 		if(!disallow)
 			unmountselected();
 	'q' or 'Q' =>
-		exit;
+		tkclient->wmctl(top, "exit");
 	'r' or 'R' =>
 		refreshtree();
 	'n' =>
@@ -740,7 +748,7 @@ plumbopen(path: string): int
 }
 
 # Open a file by writing the presentation view directly via /mnt/ui.  Media
-# and document types (pdf, images, markdown) become content artifacts drawn
+# and document types (pdf, images, markdown, mermaid) become content artifacts drawn
 # by presrender; everything else opens in the editor as a presentation-zone
 # app.  This is the fallback when no plumber is available.
 opendirect(path: string)
@@ -761,19 +769,31 @@ opendirect(path: string)
 
 	# atype selects the artifact renderer; readcontent=1 means the data
 	# field carries the file's contents rather than its path.
-	atype := "";
+	# By the kinds Xenith shows as documents (docreg(2)), as lucipres
+	# does a plumbed file; anything else in the editor.
+	atype := "app";
 	readcontent := 0;
-	case ext {
-	"pdf" =>
-		atype = "pdf";
-	"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
-		atype = "image";
-	"md" or "markdown" =>
-		atype = "markdown";
-		readcontent = 1;
-	* =>
-		atype = "app";		# text/source/unknown -> editor
-	}
+	k: ref Docreg->Kind;
+	if(docreg != nil)
+		k = docreg->kind(path, nil);
+	if(k != nil)
+		case k.name {
+		"pdf" or "image" =>
+			atype = k.name;
+		"markdown" or "mermaid" =>
+			atype = k.name;
+			readcontent = 1;
+		}
+	else
+		case ext {
+		"pdf" =>
+			atype = "pdf";
+		"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
+			atype = "image";
+		"md" or "markdown" =>
+			atype = "markdown";
+			readcontent = 1;
+		}
 
 	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", UIMOUNT, actid);
 	if(atype == "app") {
@@ -848,15 +868,20 @@ readfilestr(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	s := "";
+	# The bytes converted whole: a rune cut by the end of one read is
+	# not two bad ones
+	b := array[0] of byte;
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
-		s += string buf[0:n];
+		nb := array[len b + n] of byte;
+		nb[0:] = b;
+		nb[len b:] = buf[0:n];
+		b = nb;
 	}
-	return s;
+	return string b;
 }
 
 safeattrtext(s: string): string

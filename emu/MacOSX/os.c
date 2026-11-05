@@ -185,7 +185,6 @@ x86dump(ucontext_t *uc)
 void
 trapBUS(int signo, siginfo_t *info, void *context)
 {
-    extern REG R;
     USED(signo);
     nilfault(info, context);
     if(info != nil) {

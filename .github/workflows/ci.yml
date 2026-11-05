@@ -111,7 +111,7 @@ jobs:
     - name: Verify libfido2 linkage (/dev/2fa)
       run: |
         # libfido2-dev is installed, so the headless emu must link libfido2 or
-        # the #F device would ship as a stub. Same guard as the GUI jobs.
+        # the #h device would ship as a stub. Same guard as the GUI jobs.
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
     - name: Build runtime tree
@@ -316,6 +316,9 @@ jobs:
         # own FAT32 reader, and by fsck.fat.
         sudo apt-get install -y dosfstools
         ROOT=. bash tests/host/piimage_test.sh
+        # the Raspberry Pi Imager entry each release attaches: the release's
+        # files' sizes and hashes, the reviewed wording, mismatches refused
+        ROOT=. bash tests/host/imagerjson_test.sh
 
     - name: Run codex-gate preflight checks
       run: |
@@ -359,8 +362,8 @@ jobs:
           tests/host/tools9p_result_test.sh tests/host/toolctl_view_test.sh \
           tests/host/wiki9p_test.sh \
           tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
-          tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
-          tests/host/context_window_test.sh
+          tests/host/luciuisrv_closed_test.sh tests/host/luciuisrv_data_test.sh \
+          tests/host/compaction_test.sh tests/host/context_window_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         # /mnt/toolctl's ns, event and view: the agent's name space as it
@@ -377,6 +380,9 @@ jobs:
         ROOT=. bash tests/host/prompt_defaults_test.sh
         # A closed activity refuses writes and the server survives them.
         ROOT=. bash tests/host/luciuisrv_closed_test.sh
+        # An artifact's data written in several 9P messages is kept whole
+        # (a plumbed README showed as its last line).
+        ROOT=. bash tests/host/luciuisrv_data_test.sh
         # A long session is compacted without breaking a turn of tool calls.
         ROOT=. bash tests/host/compaction_test.sh
         ROOT=. bash tests/host/context_window_test.sh
@@ -680,6 +686,27 @@ jobs:
         chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_big_test.sh
+        # Byte / and % from compiled code; a call through a nil module
+        # caught where it is made (both found by tools/disfuzz).
+        ROOT=. sh tests/host/jit_byte_test.sh
+        ROOT=. sh tests/host/jit_nilmod_test.sh
+        # An exception arriving during a builtin call is raised at the
+        # call, caught by the handler around it (tools/sysfuzz).
+        ROOT=. sh tests/host/jit_killcall_test.sh
+        # An exception a builtin raises inside a handler block is caught
+        # in the calling function's frame (tools/sysfuzz -P).
+        ROOT=. sh tests/host/jit_builtinexc_test.sh
+        # A module of fewer than 128 instructions is compiled: the amd64
+        # JIT refused them, so they ran interpreted under -c1.
+        ROOT=. sh tests/host/jit_small_test.sh
+
+    - name: Run system call fuzzing (fixed seeds)
+      run: |
+        # Many Progs making random system calls, killing one another,
+        # exporting and mounting their name spaces (tools/sysfuzz); a
+        # crash, a kernel no longer answering or no end fails. These
+        # seeds found exportfs's freed queue tail and rmcall's stale pc.
+        python3 tools/sysfuzz -n 6 -s 100 -j 2 -t 15
 
     - name: Run cpu(1) session lifetime test
       run: |
@@ -723,24 +750,25 @@ jobs:
           - shard: 1
             tests: >-
               activity_switch_test amd64_jit_typecom_bound_test
-              amd64_jit_typecom_slab_test commands_test dhcp_client_test
+              amd64_jit_typecom_slab_test commands_test devletters_test dhcp_client_test
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
-              factotum_keyfile_test llmctl_test llmsrv_flush_test
-              mail9p_imap_test network_capability_test pathmanage_test
+              factotum_keyfile_test gpsfs_test llmclient_pool_test llmctl_test
+              llmsrv_flush_test llmsrv_models_stall_test location_test sdrfs_test
+              timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test
+              tools9p_integration_test ecc_test secp256k1_test tls_matrix_test
           - shard: 2
             tests: >-
-              amd64_jit_code_leak_test awk_builtins_test calendar9p_test
-              cpu_boundary_test dialogue_test emu_root_test
+              amd64_jit_code_leak_test audioring_test awk_builtins_test calendar9p_test
+              cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test mpexp_test
               emulator_leader_lifecycle_test exec_confinement_test
-              font_regression_test ipchecksum_test iproute_test
+              font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
               listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
-              nsaudit_metadata_test profile_legacykey_test
+              nsaudit_metadata_test nosystemkeyboard_test osk_decoder_test prof_test profile_legacykey_test
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test
               secstore_e2e_test secstore_logon_test secstored_test
               security_check_test serve_llm_smoke_test stale_dis_test
@@ -757,7 +785,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -840,9 +868,23 @@ jobs:
   # Linux AMD64 GUI: SDL3 build from source
   # ─────────────────────────────────────────────
   linux-amd64-gui:
-    name: Linux AMD64 SDL3 GUI Build & Test
+    name: Linux AMD64 SDL3 GUI Build & Test (${{ matrix.part }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # One job ran all three, about 53 minutes of its 60 on a good
+        # runner (the suite alone is 11 to 19), and a slow one ran out of
+        # time in the Xenith step.  Each part builds the same tree and
+        # runs its own tests: suite (the Limbo suite, wallet and
+        # secstore, JIT), about 30 minutes; wm (wm/wm and the programs
+        # under it), about 30; display (Xenith, the SDL renderer,
+        # /dev/wmsize, Charon, video), about 12; osk (the keyboard on
+        # the screen, under wm/wm and in Lucifer, its sizes, themes,
+        # logon, phone layout and fuzzer), about 35, which put wm past
+        # its 60.
+        part: [suite, wm, display, osk]
     permissions:
       contents: read
     env:
@@ -890,7 +932,7 @@ jobs:
     - name: Verify libfido2 linkage (/dev/2fa)
       run: |
         # libfido2-dev was installed above, so the GUI emu must link libfido2 —
-        # otherwise the #F (2fa) device degraded to its stub and YubiKey enroll
+        # otherwise the #h (2fa) device degraded to its stub and YubiKey enroll
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
@@ -948,6 +990,7 @@ jobs:
         fi
 
     - name: Run test suite
+      if: matrix.part == 'suite'
       env:
         SDL_VIDEODRIVER: dummy
       run: |
@@ -992,6 +1035,7 @@ jobs:
         fi
 
     - name: Run wallet and secstore integration tests
+      if: matrix.part == 'suite'
       run: |
         echo "Running host-side integration tests..."
 
@@ -1056,6 +1100,7 @@ jobs:
         fi
 
     - name: Run JIT correctness tests
+      if: matrix.part == 'suite'
       env:
         SDL_VIDEODRIVER: dummy
       run: |
@@ -1070,6 +1115,7 @@ jobs:
         fi
 
     - name: Run JIT boot smoke test
+      if: matrix.part == 'suite'
       env:
         SDL_VIDEODRIVER: dummy
       run: |
@@ -1077,6 +1123,7 @@ jobs:
         SDL_VIDEODRIVER=dummy tests/host/jit_boot_test.sh
 
     - name: Run wm/wm tests
+      if: matrix.part == 'wm'
       env:
         SDL_VIDEODRIVER: dummy
       run: |
@@ -1087,12 +1134,26 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
+          echo "--- $t ---"
+          ROOT=. sh tests/host/$t.sh
+        done
+
+    - name: Run the keyboard on the screen's tests
+      if: matrix.part == 'osk'
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # wm/osk under wm/wm and as Lucifer's keyboard (desktop and
+        # phone layouts), at the screens' sizes, through every theme,
+        # for wm/logon, and ground by its fuzzer.
+        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
 
     - name: Run Xenith and display host tests
+      if: matrix.part == 'display'
       env:
         SDL_VIDEODRIVER: dummy
       run: |
@@ -1120,6 +1181,7 @@ jobs:
         [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
 
     - name: Build tools/vdec (vid9p's decoder)
+      if: matrix.part == 'display'
       run: |
         # FFmpeg 6.1, as the crate is pinned to.  ffmpeg-next's default
         # features link libavdevice, libavfilter and libswresample too;
@@ -1131,6 +1193,7 @@ jobs:
         (cd tools/vdec && cargo build --release)
 
     - name: Run video tests
+      if: matrix.part == 'display'
       env:
         SDL_VIDEODRIVER: dummy
       run: |
@@ -1149,7 +1212,7 @@ jobs:
 
     - name: Upload Linux GUI build artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      if: success()
+      if: success() && matrix.part == 'suite'
       with:
         name: infernode-linux-amd64-gui
         path: |
@@ -1197,7 +1260,7 @@ jobs:
     - name: Verify libfido2 linkage (/dev/2fa)
       run: |
         # libfido2-dev is installed, so the headless emu must link libfido2 or
-        # the #F device would ship as a stub. Same guard as the GUI jobs.
+        # the #h device would ship as a stub. Same guard as the GUI jobs.
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
     - name: Build runtime tree
@@ -1303,6 +1366,7 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -1415,7 +1479,7 @@ jobs:
     - name: Verify libfido2 linkage (/dev/2fa)
       run: |
         # libfido2-dev was installed above, so the GUI emu must link libfido2 —
-        # otherwise the #F (2fa) device degraded to its stub and YubiKey enroll
+        # otherwise the #h (2fa) device degraded to its stub and YubiKey enroll
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
@@ -1902,6 +1966,7 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
+        ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -1986,7 +2051,7 @@ jobs:
         # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
         # here (77).
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test llmsetup_phone_test; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

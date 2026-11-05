@@ -366,10 +366,12 @@ incoming(void* arg)
 	return conv->incall != nil;
 }
 
+/* OEXEC too: without it, omode&3 == 3 read past the table (emu's devip) */
 static int m2p[] = {
 	[OREAD]		4,
 	[OWRITE]	2,
-	[ORDWR]		6
+	[ORDWR]		6,
+	[OEXEC]		1,
 };
 
 static Chan*
@@ -1313,6 +1315,30 @@ retry:
 			p->ac++;
 			c->eq = qopen(1024, Qmsg, 0, 0);
 			(*p->create)(c);
+			/*
+			 * qopen gives nil when malloc refuses it, and the
+			 * protocols' create functions do not look: a Conv
+			 * kept for good with a nil queue faulted at its
+			 * first use. Unseen yet (the protocol is locked),
+			 * it is undone here instead.
+			 */
+			if(c->eq == nil || c->rq == nil || c->wq == nil ||
+			   (c->sq == nil && strcmp(p->name, "ipifc") == 0)){
+				if(c->eq != nil)
+					qfree(c->eq);
+				if(c->rq != nil)
+					qfree(c->rq);
+				if(c->wq != nil)
+					qfree(c->wq);
+				if(c->sq != nil)
+					qfree(c->sq);
+				*pp = nil;
+				p->ac--;
+				qunlock(&c->ql);
+				free(c->ptcl);
+				free(c);
+				error(Enomem);
+			}
 			break;
 		}
 		if(canqlock(&c->ql)){

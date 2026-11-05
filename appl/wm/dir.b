@@ -191,6 +191,9 @@ init(env: ref Draw->Context, argv: list of string)
 	if(plumbmsg != nil && plumbmsg->init(1, nil, 0) >= 0)
 		plumbed = 1;
 
+	# a group of its own: an exit is a killgrp, and the one it was
+	# started in may be wm's
+	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 	dialog->init();
 
@@ -239,8 +242,6 @@ f:	for(;;) alt {
 	s := <-t.ctxt.ctl or
 	s = <-t.wreq or
 	s = <-wmctl =>
-		if (s == "exit")
-			exit;
 		tkclient->wmctl(t, s);
 		if(s == "retheme"){
 			glyphcolour();
@@ -437,7 +438,9 @@ button1(t: ref Toplevel, item: ref Dir)
 
 applinit(mod: Wm, ctxt: ref Draw->Context, args: list of string)
 {
-	sys->pctl(sys->NEWPGRP|sys->FORKFD, nil);
+	# not a copy of this window's connection to wm: it would keep the
+	# window up after this program had gone
+	sys->pctl(sys->NEWPGRP|sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	spawn mod->init(ctxt, args);
 }
 

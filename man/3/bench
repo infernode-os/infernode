@@ -3,7 +3,7 @@
 bench \- microsecond time, for measuring
 .SH SYNOPSIS
 .nf
-.B bind -a #b /dev
+.B bind -a #x /dev
 
 .B /dev/busec
 
@@ -69,7 +69,7 @@ which are not here.
 .IR gpio (3)
 .SH BUGS
 Native kernel only; the hosted emulator has no
-.BR #b .
+.BR #x .
 .SH HISTORY
 Inferno's other native kernels have a
 .B devbench

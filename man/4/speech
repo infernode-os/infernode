@@ -1,285 +1,277 @@
 .TH SPEECH 4
 .SH NAME
-speech \- 9P file server for text-to-speech and speech-to-text
+speech, speechcmd \- speech, both ways, for the whole system
 .SH SYNOPSIS
 .B speech9p
 [
-.B \-D
-] [
-.B \-m
+.B -m
 .I mountpoint
 ] [
-.B \-e
-.I engine
+.B -E
+.I enginedir
+]
+.PP
+.B speechcmd
+[
+.B -m
+.I mountpoint
 ] [
-.B \-k
-.I apikey
+.B -t
+.I ttscmd
 ] [
-.B \-u
-.I apiurl
+.B -r
+.I ttsrate
 ] [
-.B \-v
-.I voice
+.B -s
+.I sttcmd
 ] [
-.B \-l
-.I lang
+.B -M
+.I sttmodel
 ]
 .SH DESCRIPTION
 .I Speech9p
-is a file server that provides text-to-speech (TTS) and
-speech-to-text (STT) capabilities through a 9P filesystem interface.
-It bridges between the Inferno audio device
-.RI ( audio (3))
-and pluggable speech engine backends.
-.PP
-The server mounts a synthetic filesystem (default
-.BR /mnt/speech )
-containing the following files:
+serves speech to every program at
+.B /mnt/speech
+(or
+.IR mountpoint ):
+what is said, heard as text, and text, said.
+It holds no recogniser or synthesiser of its own: those are an
+.IR engine ,
+a directory of files described below, at
+.B /mnt/speechengine
+(or
+.IR enginedir ).
+Sound goes through the shared audio device
+.RI ( audio (3)'s
+mix): the microphone is a stream of its own at 16 kHz, opened only while
+.B talk
+is on, and what is said is a stream with the role
+.BR speech ,
+so a call lowers it and it lowers media.
 .TP
-.B ctl
-Read to display the current configuration.
-Write configuration commands to change settings.
+.B talk
+.B start
+or
+.BR stop :
+push to talk.
+While talk is on the microphone's sound goes to the engine; at
+.B stop
+the engine is told the utterance has ended.
+A read gives
+.B on
+or
+.BR off ;
+each later read on the same open file waits until that changes, so a
+program showing whether the microphone is open (Lucifer's indicator)
+reads it and need not poll.
+.TP
+.B listen
+What is heard, a line a record, as the engine gives it:
+.IP
+.BI "partial confidence=" n " " words
+.br
+.BI "final confidence=" n " " words
+.br
+.BI "error " reason
+.IP
+A partial is a guess while speech goes on; a final is what was said.
+The confidence is the engine's, from 0 to 1, and an engine that has none
+gives none.
+Every reader gets every record from its first read on: dictation, a
+command reader and the dial pad can listen at once.
 .TP
 .B say
-Write UTF-8 text to synthesize and play through
-.BR /dev/audio .
-Read to get the status of the last synthesis operation.
+Text written is queued and spoken, a write an utterance.
+A read gives
+.BI "speaking " text
+or
+.BR idle .
 .TP
-.B hear
-Write
-.B start
-to begin recording from
-.BR /dev/audio .
-Read to get the transcribed text.
-Writing clears any previous transcription and starts a new recording.
+.B cancel
+Any write stops speech now: what is playing and what is queued.
+.TP
+.B chime
+.BR start ,
+.BR stop ,
+.B done
+or
+.BR error :
+a short sound, made here, as a stream with the role
+.BR tone .
+.B Speech9p
+plays none of its own accord; whatever starts or stops talk says so if
+it wants to.
 .TP
 .B voices
-Read to list available voices for the current engine.
-.SS Options
+The engine's voices.
 .TP
-.B \-D
-Enable 9P debug tracing.
-.TP
-.BI \-m " mountpoint"
-Mount the file server at
-.I mountpoint
-(default
-.BR /mnt/speech ).
-.TP
-.BI \-e " engine"
-Select the speech engine backend.
-.B cmd
-(default) uses host OS commands via the cmd device
-.RI ( cmd (3)).
-.B api
-uses an HTTP API (OpenAI-compatible).
-A third backend,
-.BR local ,
-shells out to local ML binaries
-.RB ( piper " for TTS, " whisper-cli " for STT)"
-and is selected automatically on Linux when both binaries are on
-.BR $PATH ;
-the
-.B \-e
-flag itself currently rejects
-.BR local ,
-so set it via
-.B "echo 'engine local' > /mnt/speech/ctl"
-or rely on auto-detection.
-.TP
-.BI \-k " apikey"
-API authentication key (for
-.B api
-engine).
-.TP
-.BI \-u " apiurl"
-Base URL for the API endpoint (default: https://api.openai.com/v1).
-.TP
-.BI \-v " voice"
-Default voice name.
-Platform-specific for the
-.B cmd
-engine;
-.BR alloy ,
-.BR echo ,
-.BR fable ,
-.BR nova ,
-.BR onyx ,
-or
-.B shimmer
-for the
-.B api
-engine.
-.TP
-.BI \-l " lang"
-Language code (default:
-.BR en ).
-.SS Configuration Commands
-Write to
 .B ctl
-to change settings:
+.BI "engine " dir\fR,
+.BI "voice " v\fR,
+.BI "lang " l
+(the last two passed to the engine), and
+.B "duplex half"
+or
+.BR full .
+With
+.B half
+(the default) the microphone's sound is not given to the engine while
+speech plays, so the system does not hear itself; use
+.B full
+only where the hardware cancels its own echo.
+A read gives the settings, whether the engine answers
+.RB ( "engine ok"
+or
+.BR missing ),
+and the states of talk and speaking.
 .TP
-.BI engine " name"
-Switch engine backend
-.RB ( cmd ", " api ", or " local ).
+.B hear
+The interface before this one, for its programs: write
+.BI "start " ms
+(5000 if no time is given) and read: the words of the next final, then
+end of file.
+Talk is turned on for that long, or until the final, unless it was on
+already.
+.SS Engines
+An engine is a directory serving:
 .TP
-.BI voice " name"
-Set the voice.
+.B ctl
+.BR start ,
+.B end
+and
+.B cancel
+bracket an utterance;
+.BI "voice " v
+and
+.BI "lang " l\fR.
+A read gives
+.BI "name " n\fR,
+.BI "rate " r
+(the rate of
+.BR tts 's
+sound) and the engine's settings.
 .TP
-.BI lang " code"
-Set the language.
+.B audio
+The utterance's sound, written between
+.B start
+and
+.BR end :
+16 kHz, mono, 16-bit little-endian.
 .TP
-.BI rate " hz"
-Set audio sample rate (8000\-48000, default 22050).
+.B text
+Records, as
+.B listen
+gives them; every reader from its first read on.
+A final comes at
+.BR end ;
+partials, if the engine makes them, while the audio comes.
 .TP
-.BI chans " n"
-Set channels (1 or 2).
+.B tts
+Write text, then read its sound on the same open file to end of file:
+mono, 16-bit little-endian, at
+.BR ctl 's
+rate.
 .TP
-.BI bits " n"
-Set bits per sample (8 or 16).
-.TP
-.BI cmdtts " command"
-Set the host TTS command (for
-.B cmd
-engine).
-.TP
-.BI cmdstt " command"
-Set the host STT command (for
-.B cmd
-engine).
-.TP
-.BI apiurl " url"
-Set the API endpoint URL.
-.TP
-.BI apikey " key"
-Set the API authentication key.
-.TP
-.BI piperbin " path"
-Path to the
-.I piper
-binary (for the
-.B local
-engine; default
-.IR piper ).
-.TP
-.BI pipermodel " path"
-Path to a Piper
-.I .onnx
-voice model file (for the
-.B local
-engine).
-.TP
-.BI whisperbin " path"
-Path to the
-.I whisper-cli
-binary (for the
-.B local
-engine; default
-.IR whisper-cli ).
-.TP
-.BI whispermodel " path"
-Path to a whisper.cpp
-.I .bin
-GGML model file (for the
-.B local
-engine).
-.SS Platform Support
-The
-.B cmd
-engine auto-detects the host platform:
-.TP
-.B macOS
-Uses the built-in
-.I say
-command for TTS.
-.TP
-.B Linux
-Uses
-.I espeak-ng
-for TTS (install separately).
-Alternatively, set
-.B cmdtts
-to use
-.I piper
-for neural TTS.
-.TP
-.B Windows
-Uses PowerShell
-.I System.Speech
-for TTS.
+.B voices
+A voice a line.
 .PP
-For STT, install
-.I whisper.cpp
-or similar and configure via:
-.IP
-.B "echo 'cmdstt whisper-cli' > /mnt/speech/ctl"
-.SS Veltro Integration
-To give a Veltro agent speech capabilities:
-.IP
-.EX
-# Start speech server
-speech9p -e cmd
-
-# Start tools with say and hear
-tools9p read list say hear
-
-# Run agent with speech tools
-veltro "greet the user verbally"
-.EE
+An engine can be anything that serves these files: one built into the
+emulator, a desktop's own programs
+.RI ( speechcmd ,
+below), or a machine elsewhere, its engine mounted over authenticated
+9P, which is how a device without the computing for recognition (a
+phone, a board) can use one its owner runs.
+.SS Speechcmd
+.I Speechcmd
+is an engine of the host's programs, mounted at
+.B /mnt/speechengine
+(or
+.IR mountpoint ).
+Recognition is whisper.cpp's
+.B whisper-cli
+.RI ( sttcmd ,
+with
+.I sttmodel
+its model) run on a WAV of the utterance written to the host's
+.BR /tmp ;
+it gives finals only.
+Synthesis is, by host: macOS's
+.BR say ,
+.B espeak-ng
+on Linux, or
+.I ttscmd
+(for Piper,
+.BR "piper --model" " " \fImodel\fP,
+whose raw sound is at
+.IR ttsrate ,
+22050 by default).
+Text reaches the synthesiser on its standard input, never in a shell
+line, and a voice or language is letters, digits,
+.BR . ,
+.B -
+and
+.B _
+only.
+The programs are chosen by these options when it starts and cannot be
+changed through
+.BR ctl ,
+which an agent may hold: whoever has
+.B ctl
+cannot choose what runs on the host.
+.PP
+The boot profile
+.RB ( /lib/sh/profile )
+starts both on a desktop.
 .SH EXAMPLE
+Say something, and listen to what is said:
+.IP
 .EX
-# Start speech server with default settings
-speech9p
-
-# Configure voice
-echo 'voice samantha' > /mnt/speech/ctl
-
-# Speak text
-echo 'Hello from Inferno' > /mnt/speech/say
-
-# Listen and transcribe
-echo 'start' > /mnt/speech/hear
-cat /mnt/speech/hear
-
-# Check configuration
-cat /mnt/speech/ctl
-
-# Use API engine with OpenAI
-speech9p -e api -k sk-...
-echo 'voice nova' > /mnt/speech/ctl
-echo 'Hello from the cloud' > /mnt/speech/say
+echo 'Hello.' > /mnt/speech/say
+cat /mnt/speech/listen &
+echo start > /mnt/speech/talk
+# ... speak ...
+echo stop > /mnt/speech/talk
+.EE
+.PP
+The old way, from a program that wants one answer:
+.IP
+.EX
+{echo start 3000 >[1=0]; cat} <> /mnt/speech/hear
 .EE
 .SH FILES
+.TF /mnt/speechengine
 .TP
 .B /mnt/speech
-Default mount point.
 .TP
-.B /dev/audio
-Audio data device (see
-.IR audio (3)).
-.TP
-.B /dev/audioctl
-Audio control device.
-.TP
-.B /cmd
-Host command device (see
-.IR cmd (3)).
+.B /mnt/speechengine
 .SH SOURCE
 .B /appl/veltro/speech9p.b
+.br
+.B /appl/veltro/speechcmd.b
 .SH SEE ALSO
 .IR audio (3),
-.IR cmd (3),
-.IR auplay (1),
-.IR audio (6)
+.IR wm-dialpad (1),
+.IR dialspeech (2)
 .SH BUGS
-The audio device is exclusive-use; speech9p cannot share
-.B /dev/audio
-with other audio clients simultaneously.
-.PP
-The
-.B cmd
-engine requires host-side TTS/STT software to be installed.
-.PP
-HTTPS support requires
-.B /net/ssl
-to be available.
+There is no engine built into the emulator yet, so a phone has speech
+only from an engine mounted from elsewhere.
+.br
+Settings made through
+.B ctl
+last until
+.I speech9p
+restarts.
+.br
+An agent given the
+.B say
+or
+.B hear
+tool is granted all of
+.BR /mnt/speech ;
+it should have
+.B say
+alone, and
+.B listen
+and
+.B talk
+never.

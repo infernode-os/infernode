@@ -220,6 +220,11 @@ are kept, the oldest dropped: what a call fed over a network needs, or it
 drifts behind the speaker.
 The input keeps the newest two seconds, or
 .IR ms .
+.TP
+.B "[in out] flush"
+Drop what the stream holds and has not yet played (or not yet been read):
+a cancel.
+A close plays what is queued to its end instead.
 .PP
 A read of
 .B ctl

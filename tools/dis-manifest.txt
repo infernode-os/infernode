@@ -891,6 +891,7 @@ dis/tests/softkbd_test.dis
 dis/tests/sort_test.dis
 dis/tests/spawn_helpers_test.dis
 dis/tests/spawn_test.dis
+dis/tests/speechfake.dis
 dis/tests/ssl_transport_test.dis
 dis/tests/stderr_test.dis
 dis/tests/strcat_test.dis
@@ -996,6 +997,7 @@ dis/veltro/sources/email.dis
 dis/veltro/sources/mockmail.dis
 dis/veltro/sources/sms.dis
 dis/veltro/speech9p.dis
+dis/veltro/speechcmd.dis
 dis/veltro/subagent.dis
 dis/veltro/taskboard9p.dis
 dis/veltro/tools/browse.dis

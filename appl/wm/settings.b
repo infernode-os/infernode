@@ -82,8 +82,8 @@ Runnable: module
 # ── Categories ─────────────────────────────────────────────────
 
 # What the system does first, how it looks last.
-CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots, CatWeb, CatTheme: con iota;
-NCATS: con 12;
+CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots, CatWeb, CatSpeech, CatTheme: con iota;
+NCATS: con 13;
 
 catnames := array[] of {
 	"LLM Service",
@@ -97,6 +97,7 @@ catnames := array[] of {
 	"Auditing",
 	"Snapshots",
 	"Web Pages",
+	"Speech",
 	"Theme",
 };
 
@@ -115,6 +116,7 @@ catshortnames := array[] of {
 	"audit",
 	"snapshots",
 	"web",
+	"speech",
 	"theme",
 };
 
@@ -368,6 +370,7 @@ buildpanel(cat: int)
 	CatAudit =>	panelaudit();
 	CatSnapshots =>	panelsnapshots();
 	CatWeb =>	panelweb();
+	CatSpeech =>	panelspeech();
 	}
 	tk->cmd(top, "update");
 }
@@ -844,6 +847,122 @@ panelweb()
 	lbl("webnote", "Pages opened from now on follow these.");
 }
 
+# ── Speech panel ───────────────────────────────────────────────
+# speech(4) at /mnt/speech: its own ctl, read and written, nothing kept
+# here.  The engine is shown, not set: it names a mount, which the boot
+# profile makes.  What an agent or a program sets (talk, say) is not here.
+
+speechget(): list of (string, string)
+{
+	st := tread("/mnt/speech/ctl", Waitfile);
+	if(st == nil)
+		return nil;
+	l: list of (string, string);
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		(n, f) := sys->tokenize(hd lines, " ");
+		if(n >= 2)
+			l = (hd f, hd tl f) :: l;
+	}
+	return l;
+}
+
+speechval(l: list of (string, string), k: string): string
+{
+	for(; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return (hd l).t1;
+	return "";
+}
+
+# ctl gives engine twice: its directory, then ok or missing
+speechengine(l: list of (string, string)): (string, int)
+{
+	dir := "";
+	ok := 0;
+	for(; l != nil; l = tl l)
+		if((hd l).t0 == "engine")
+			case (hd l).t1 {
+			"ok" =>	ok = 1;
+			"missing" =>	;
+			* =>	dir = (hd l).t1;
+			}
+	return (dir, ok);
+}
+
+panelspeech()
+{
+	hdr("sph", "Speech (/mnt/speech)");
+	st := speechget();
+	if(st == nil){
+		lbl("spnone", "Speech is not running here (/mnt/speech is not mounted).");
+		return;
+	}
+	(eng, ok) := speechengine(st);
+	if(ok)
+		lbl("spe", "Engine: " + eng + ".");
+	else{
+		lbl("spe", "Engine: " + eng + ", not answering.");
+		lbl("spe2", "Nothing can be heard or said until it does.");
+	}
+	plainentry("spv", "Voice (the engine's: /mnt/speech/voices)", speechval(st, "voice"));
+	btn("spvb", "Set the voice", "spvoice");
+	plainentry("spl", "Language", speechval(st, "lang"));
+	btn("splb", "Set the language", "splang");
+	if(speechval(st, "duplex") == "full"){
+		lbl("spds", "It listens while it speaks (echo cancelled).");
+		btn("spd", "Do not listen while speaking", "spduplex");
+	}else{
+		lbl("spds", "It does not listen while it speaks.");
+		btn("spd", "Listen while speaking (needs echo cancellation)", "spduplex");
+	}
+	btn("spt", "Say a test sentence", "sptest");
+	lbl("spres", "");
+	lbl("spnote", "These apply now, until speech restarts.");
+}
+
+plainentry(name, prompt, val: string)
+{
+	lbl(name + "lab", prompt + ":");
+	tk->cmd(top, sys->sprint("entry .content.%s -background %s -foreground %s",
+		name, c_bg, c_fg));
+	tk->cmd(top, sys->sprint(".content.%s insert 0 %s", name, tk->quote(val)));
+	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -fill x -pady 2", name));
+}
+
+speechset(k, v: string)
+{
+	v = strip(v);
+	if(v == ""){
+		setpanellbl("spres", k + ": nothing given");
+		return;
+	}
+	if((e := twrite("/mnt/speech/ctl", k + " " + v, Waitfile)) != nil)
+		setpanellbl("spres", k + ": " + e);
+	else
+		setpanellbl("spres", k + " is " + v);
+}
+
+speechduplex()
+{
+	d := "full";
+	if(speechval(speechget(), "duplex") == "full")
+		d = "half";
+	if((e := twrite("/mnt/speech/ctl", "duplex " + d, Waitfile)) != nil){
+		setpanellbl("spres", "duplex: " + e);
+		return;
+	}
+	buildpanel(CatSpeech);
+}
+
+speechtest()
+{
+	if((e := twrite("/mnt/speech/say", "This is how I sound.", Waitfile)) != nil)
+		setpanellbl("spres", "say: " + e);
+	else
+		setpanellbl("spres", "Speaking.");
+}
+
 # ── Snapshots panel ────────────────────────────────────────────
 # Daily vac snapshots of the durable /usr into the local venti store
 # (snapd(8)). Enable/disable persist the marker (daemons start at
@@ -1185,6 +1304,10 @@ handleaction(a: string)
 	"webfonts" =>	webtoggle("fonts");
 	"webeffects" =>	webtoggle("effects");
 	"weblight" =>	weblight();
+	"spvoice" =>	speechset("voice", eget(".content.spv"));
+	"splang" =>	speechset("lang", eget(".content.spl"));
+	"spduplex" =>	speechduplex();
+	"sptest" =>	speechtest();
 	"snapenable" =>	dosnapenable();
 	"snapdisable" =>	dosnapdisable();
 	"snapnow" =>	dosnapnow();

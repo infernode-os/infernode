@@ -1,5 +1,14 @@
 # Speech Architecture
 
+> **Superseded (November 2026).** This describes `speech9p` before its rewrite.
+> Speech is now three layers: the shared audio device (`audio(3)`, streams in
+> `/dev/mix`), engines as directories of files (`ctl`, `audio`, `text`, `tts`,
+> `voices`; the desktop's is `speechcmd`, at `/mnt/speechengine`), and
+> `/mnt/speech` over both (`talk`, `listen`, `say`, `cancel`, `chime`,
+> `voices`, `ctl`, and `hear` as before). The current interface is
+> `man/4/speech`; this page is kept for its history.
+
+
 > **Scope.** Architecture of `speech9p`, the 9P file server that presents
 > text-to-speech (TTS) and speech-to-text (STT) as files. Covers its three
 > engine backends, the file/ctl protocol, the host-command bridge, and the

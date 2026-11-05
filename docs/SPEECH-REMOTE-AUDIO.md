@@ -1,5 +1,11 @@
 # Remote Speech: 9P Audio Composition
 
+> **Superseded (November 2026).** `speech9p` was rewritten: it no longer runs
+> engines of its own, and the flags below are gone. A remote engine is now
+> mounted at `/mnt/speechengine` (or named with `speech9p -E`), and audio goes
+> through the shared device's streams (`audio(3)`). See `man/4/speech`.
+
+
 > **Scope.** This document covers *remoting* — putting the speech server on a
 > different host from the audio device, exploiting Plan 9 namespace
 > composition. For the architecture of `speech9p` itself (file tree, engines,

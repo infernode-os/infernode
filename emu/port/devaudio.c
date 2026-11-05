@@ -1071,9 +1071,10 @@ ctlwrite(Stream *s, char *va, long n)
 	Audio_t t;
 	Afmt in, out;
 	char rest[256], *p, *e;
-	int i, role, outms, inms, nrest, v;
+	int i, role, outms, inms, nrest, v, flushin, flushout;
 	ulong tf;
 
+	flushin = flushout = 0;
 	cb = parsecmd(va, n);
 	if(waserror()){
 		free(cb);
@@ -1093,6 +1094,15 @@ ctlwrite(Stream *s, char *va, long n)
 		if(strcmp(cb->f[i], "in") == 0 || strcmp(cb->f[i], "out") == 0){
 			tf |= cb->f[i][0] == 'i' ? AUDIO_IN_FLAG : AUDIO_OUT_FLAG;
 			p = seprint(p, e, "%s ", cb->f[i]);
+			continue;
+		}
+		if(s != nil && strcmp(cb->f[i], "flush") == 0){
+			/* drop what is queued and not yet played (or read): a
+			 * cancel; a close plays its queue to the end instead */
+			if(tf == 0 || (tf & AUDIO_OUT_FLAG))
+				flushout = 1;
+			if(tf == 0 || (tf & AUDIO_IN_FLAG))
+				flushin = 1;
 			continue;
 		}
 		if(i + 1 < cb->nf && strcmp(cb->f[i], "role") == 0){
@@ -1133,6 +1143,13 @@ ctlwrite(Stream *s, char *va, long n)
 		s->role = role;
 		s->outms = outms;
 		s->inms = inms;
+		if(flushout){
+			s->out.len = 0;
+			s->npart = 0;
+			s->primed = 0;
+		}
+		if(flushin)
+			s->in.len = 0;
 	}else{
 		lav = t;
 		lrole = role;
@@ -1149,6 +1166,8 @@ ctlwrite(Stream *s, char *va, long n)
 	unlock(&alk);
 	poperror();
 	free(cb);
+	if(flushout)
+		Wakeup(&s->wr);	/* a writer waiting for room has it */
 }
 
 static long

@@ -521,6 +521,31 @@ testDrain(t: ref T)
 	t.assert(a >= 0 && z - a >= Mixrate * 55 / 100, sys->sprint("0.6 s written and closed at once all played: %d samples", z - a));
 }
 
+# flush drops what is queued: a cancel, not a drain
+testFlush(t: ref T)
+{
+	heard();
+	(c, id) := newstream(t);
+	ctl(t, c, "out rate 48000 chans 2 bits 16 queue 2000");
+	d := sys->open("#A/mix/" + id + "/data", Sys->OWRITE);
+	writeall(t, d, tone(48000, 2, 800.0, 5000.0, 1.5));
+	sys->sleep(200);
+	ctl(t, c, "out flush");
+	sys->sleep(600);
+	s := heard();
+	a := onset(s, 300.0);
+	z := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] > 300.0 || s[i] < -300.0)
+			z = i;
+	t.assert(a >= 0, "it began to play");
+	t.assert(z - a < Mixrate * 45 / 100, sys->sprint("out flush stopped it within a moment of 1.5 s queued: %d samples played", z - a));
+	writeall(t, d, tone(48000, 2, 800.0, 5000.0, 0.2));
+	sys->sleep(500);
+	s = heard();
+	t.assert(onset(s, 300.0) >= 0, "the stream plays again after a flush");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -556,6 +581,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Fanout", testFanout);
 		run("Pace", testPace);
 		run("Drain", testDrain);
+		run("Flush", testFlush);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

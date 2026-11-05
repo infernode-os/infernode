@@ -414,8 +414,12 @@ if {~ $emuhost MacOSX Linux Nt}{
 		}
 	}
 
-	# Start speech file server (TTS/STT via /mnt/speech)
-	/dis/veltro/speech9p.dis -e cmd &
+	# Speech, both ways (speech(4)): the host's programs as the engine
+	# (speechcmd(4), at /mnt/speechengine), and /mnt/speech over it and
+	# the shared audio device.  Both return once mounted.
+	mkdir -p /mnt/speechengine /mnt/speech >[2] /dev/null
+	/dis/veltro/speechcmd.dis >[2] /dev/null
+	/dis/veltro/speech9p.dis >[2] /dev/null
 }{
 	# Non-desktop: mount remote llm9p
 	mount -A 'tcp!llmserver!5640' /mnt/llm >[2] /dev/null

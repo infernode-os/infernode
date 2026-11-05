@@ -1,1652 +1,911 @@
 implement Speech9p;
 
 #
-# speech9p - 9P file server for speech synthesis and recognition
+# speech9p -- speech, both ways, for the whole system: speech(4).
 #
-# Presents TTS/STT as a filesystem, the Plan 9 way.
-# Engine backends are pluggable: host commands or HTTP APIs.
+#	speech9p [-m mountpoint] [-E enginedir]
 #
-# Filesystem structure:
-#   /mnt/speech/
-#   ├── ctl        (rw)  Configuration: engine, voice, lang, etc.
-#   ├── say        (rw)  Write text, read status. Plays audio on /dev/audio.
-#   ├── hear       (rw)  Write "start", read transcribed text from /dev/audio.
-#   └── voices     (r)   List available voices for current engine.
+#	/mnt/speech/
+#		talk	start, stop (push to talk); read: on or off, and a
+#			later read on a fid waits until that changes
+#		listen	what is heard, as the engine gives it, a line each:
+#			partial confidence=N words, final confidence=N
+#			words, error reason; every reader gets every line
+#			from its first read on
+#		say	write text: queued and spoken; read: speaking <text>
+#			or idle
+#		cancel	any write: stop speaking now, the queue dropped
+#		chime	start, stop, done, error: an earcon
+#		voices	the engine's voices
+#		ctl	engine <dir>, voice <v>, lang <l>, duplex half|full;
+#			read: the settings, whether the engine answers, talk
+#			and speaking
+#		hear	the old interface: write start [ms] (5000), read
+#			the words of what was said (the next final), then
+#			end of file
 #
-# Usage:
-#   speech9p                       # Start with defaults
-#   speech9p -D                    # With 9P debug tracing
-#   speech9p -m /mnt/speech          # Custom mount point
-#   speech9p -e cmd                # Use host command engine
-#   speech9p -e api                # Use HTTP API engine
-#   speech9p -e api -k <key>       # API engine with key
+# The engine is a directory -- the native one, a desktop's programs
+# behind speechcmd(4), a machine elsewhere over 9P -- serving ctl,
+# audio, text, tts and voices (speech(4)); speech9p only uses it.  It
+# keeps no engine of its own and no setting the engine has.
 #
-# Examples:
-#   echo 'Hello world' > /mnt/speech/say         # Speak text
-#   echo 'start' > /mnt/speech/hear              # Start listening
-#   cat /mnt/speech/hear                          # Read transcription
-#   echo 'voice alloy' > /mnt/speech/ctl         # Change voice
-#   cat /mnt/speech/voices                        # List voices
-#   cat /mnt/speech/ctl                           # Show current config
+# Sound goes through the shared audio device (audio(3)'s mix): the
+# microphone is a stream of its own at 16 kHz, opened only while talk is
+# on, and what is said is a stream with the role speech, so a call
+# lowers it and it lowers media.  With duplex half (the default) the
+# microphone's sound is not given to the engine while speech plays, so
+# the system does not hear itself; full is for hardware that cancels
+# its own echo.
 #
-# Runtime ctl writes are intentionally limited to inert knobs such as voice,
-# language, and audio shape. Backend selection, host command paths, model
-# paths, API URLs, and API keys are startup/admin configuration because /mnt/speech
-# may be present in an agent namespace.
+# One process owns every setting and file; the microphone's pump, the
+# engine's text, the speaker and the chimes are processes of their own
+# that block on the engine and the device, so a read or write of these
+# files is never held up behind them.
 #
 
 include "sys.m";
 	sys: Sys;
-	Qid: import Sys;
-
 include "draw.m";
-
 include "arg.m";
+include "math.m";
+	math: Math;
 
-include "styx.m";
-	styx: Styx;
-	Tmsg, Rmsg: import styx;
-
-include "styxservers.m";
-	styxservers: Styxservers;
-	Fid, Styxserver, Navigator, Navop: import styxservers;
-	Enotfound, Eperm, Ebadarg: import styxservers;
-
-include "string.m";
-	str: String;
-
-Speech9p: module {
+Speech9p: module
+{
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-# Qid layout for synthetic files
-Qroot, Qctl, Qsay, Qhear, Qvoices: con iota;
-
-# Per-fid state for say and hear operations
-FidState: adt {
-	fid:      int;
-	sayreq:   string;          # Text written to say
-	sayresp:  array of byte;   # Status response from say
-	saydone:  chan of array of byte;  # Completion channel for async TTS
-	hearresp: array of byte;   # Transcription result from hear
-};
-
-# Engine backends
-ENGINE_CMD: con 0;   # Host OS commands via #C (devcmd)
-ENGINE_API: con 1;   # HTTP API (OpenAI, etc.)
-ENGINE_LOCAL: con 2; # Local ML models (Piper TTS, whisper.cpp STT)
-
-# Current configuration
-engine := ENGINE_CMD;
-engineexplicit := 0;
-voice := "";
-lang := "en";
-apiurl := "";
-apikey := "";
-audrate := 22050;
-audchans := 1;
-audbits := 16;
-
-# Platform-specific defaults for cmd engine
-cmdtts := "";    # Set in initplatform()
-cmdstt := "";    # Set in initplatform()
-hearduration := 5000;  # Recording duration in ms (default 5s)
-
-# Local engine configuration (Piper TTS + whisper.cpp STT)
-piperbin := "piper";
-pipermodel := "";    # Path to .onnx voice model
-whisperbin := "whisper-cli";
-whispermodel := "";  # Path to .bin GGML model
+Micrate:	con 16000;
+Micchunk:	con Micrate / 50 * 2;	# 20 ms of 16-bit mono
+Hearms:		con 5000;
 
 stderr: ref Sys->FD;
-user: string;
 mountpt := "/mnt/speech";
-fidstates: list of ref FidState;
+engine := "/mnt/speechengine";
+voice := "";
+lang := "";
+duplex := "half";
 
-nomod(s: string)
-{
-	sys->fprint(stderr, "speech9p: can't load %s: %r\n", s);
-	raise "fail:load";
-}
+talking := 0;
+speaking := 0;		# read by the microphone's pump: what duplex half needs
+speaktext := "";
+micstop: chan of int;
+heartalk := 0;		# talk was started by hear, and hear stops it
 
-usage()
-{
-	sys->fprint(stderr, "Usage: speech9p [-D] [-m mountpoint] [-e engine] [-k apikey]\n");
-	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
-	sys->fprint(stderr, "  -m mountpoint Mount point (default: /mnt/speech)\n");
-	sys->fprint(stderr, "  -e engine     Engine: cmd (default), api, local\n");
-	sys->fprint(stderr, "  -k key        API key (for api engine)\n");
-	sys->fprint(stderr, "  -u url        API base URL\n");
-	sys->fprint(stderr, "  -v voice      Default voice\n");
-	sys->fprint(stderr, "  -l lang       Language code (default: en)\n");
-	raise "fail:usage";
-}
+# a reader of talk: the state its fid was last told, and a read waiting
+Talker: adt {
+	fid:	int;
+	told:	int;		# -1: nothing yet
+	rc:	Sys->Rread;
+};
+talkers: list of ref Talker;
+
+# a reader of listen
+Listener: adt {
+	fid:	int;
+	queue:	list of string;	# oldest first
+	rc:	Sys->Rread;
+	count:	int;
+};
+listeners: list of ref Listener;
+
+# a fid of hear: started, and the words when they come
+Hearer: adt {
+	fid:	int;
+	waiting:	int;
+	words:	string;
+	done:	int;
+	rc:	Sys->Rread;
+};
+hearers: list of ref Hearer;
+
+recc: chan of string;		# records from the engine's text
+spkc: chan of (int, string);	# the speaker: speaking or not, and what
+hearendc: chan of int;		# a hear's time is up (its fid)
+sayc: chan of string;		# what is queued to be said
+chimec: chan of string;
+speakerpid := -1;
+
+# the speech stream, the main process's: the speaker writes its data,
+# a cancel flushes it through ctl
+spkctl, spkdata: ref Sys->FD;
+spkrate := 0;
 
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-	sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
+	math = load Math Math->PATH;
 	stderr = sys->fildes(2);
-
-	styx = load Styx Styx->PATH;
-	if(styx == nil)
-		nomod(Styx->PATH);
-	styx->init();
-
-	styxservers = load Styxservers Styxservers->PATH;
-	if(styxservers == nil)
-		nomod(Styxservers->PATH);
-	styxservers->init(styx);
-
-	str = load String String->PATH;
-	if(str == nil)
-		nomod(String->PATH);
-
 	arg := load Arg Arg->PATH;
-	if(arg == nil)
-		nomod(Arg->PATH);
-	arg->init(args);
-
-	while((o := arg->opt()) != 0)
-		case o {
-		'D' =>	styxservers->traceset(1);
-		'm' =>	mountpt = arg->earg();
-		'e' =>
-			e := arg->earg();
-			case e {
-			"cmd" =>	engine = ENGINE_CMD;
-			"api" =>	engine = ENGINE_API;
-			"local" =>	engine = ENGINE_LOCAL;
-			* =>
-				sys->fprint(stderr, "speech9p: unknown engine '%s'\n", e);
-				usage();
+	if(arg != nil){
+		arg->init(args);
+		arg->setusage("speech9p [-m mountpoint] [-E enginedir]");
+		while((o := arg->opt()) != 0)
+			case o {
+			'm' =>	mountpt = arg->earg();
+			'E' =>	engine = arg->earg();
+			'e' =>	arg->earg();	# the old engines are speechcmd(4)'s now
+			* =>	arg->usage();
 			}
-			engineexplicit = 1;
-		'k' =>	apikey = arg->earg();
-		'u' =>	apiurl = arg->earg();
-		'v' =>
-			v := arg->earg();
-			if(!safename(v)) {
-				sys->fprint(stderr, "speech9p: unsafe voice '%s'\n", v);
-				usage();
-			}
-			voice = v;
-		'l' =>	lang = arg->earg();
-		* =>	usage();
+	}
+	if(sys->bind("#sspeech", mountpt, Sys->MREPL) < 0){
+		sys->fprint(stderr, "speech9p: bind %s: %r\n", mountpt);
+		raise "fail:bind";
+	}
+	f := array[8] of ref Sys->FileIO;
+	names := array[] of {"ctl", "talk", "listen", "say", "cancel", "chime", "voices", "hear"};
+	for(i := 0; i < len names; i++)
+		if((f[i] = sys->file2chan(mountpt, names[i])) == nil){
+			sys->fprint(stderr, "speech9p: file2chan %s: %r\n", names[i]);
+			raise "fail:file2chan";
 		}
-	arg = nil;
-
-	# Detect platform and set defaults
-	initplatform();
-
-	sys->pctl(Sys->FORKFD, nil);
-
-	user = rf("/dev/user");
-	if(user == nil)
-		user = "inferno";
-
-	fds := array[2] of ref Sys->FD;
-	if(sys->pipe(fds) < 0) {
-		sys->fprint(stderr, "speech9p: can't create pipe: %r\n");
-		raise "fail:pipe";
-	}
-
-	navops := chan of ref Navop;
-	spawn navigator(navops);
-
-	(tchan, srv) := Styxserver.new(fds[0], Navigator.new(navops), big Qroot);
-	fds[0] = nil;
-
-	pidc := chan of int;
-	spawn serveloop(tchan, srv, pidc, navops);
-	<-pidc;
-
-	# Ensure mount point exists
-	ensuredir(mountpt);
-
-	if(sys->mount(fds[1], nil, mountpt, Sys->MREPL|Sys->MCREATE, nil) < 0) {
-		sys->fprint(stderr, "speech9p: mount failed: %r\n");
-		raise "fail:mount";
-	}
+	sys->pctl(Sys->NEWPGRP|Sys->FORKFD, nil);
+	recc = chan of string;
+	spkc = chan of (int, string);
+	hearendc = chan of int;
+	sayc = chan[64] of string;
+	chimec = chan[8] of string;
+	spawn textproc();
+	spawn chimeproc();
+	startspeaker();
+	spawn serve(f);
 }
 
-# Detect host platform and set default commands
-initplatform()
+serve(f: array of ref Sys->FileIO)
 {
-	# Read host OS type from /dev/sysctl or infer from emulator
-	# The emulator sets /dev/sysname; we detect platform from
-	# which cmd device paths exist
-	platform := detectplatform();
+	ctl := f[0];
+	talk := f[1];
+	listen := f[2];
+	say := f[3];
+	cancel := f[4];
+	chime := f[5];
+	voices := f[6];
+	hear := f[7];
+	for(;;) alt {
+	(off, nil, nil, rc) := <-ctl.read =>
+		if(rc != nil)
+			rc <-= (slice(array of byte ctlstatus(), off), nil);
+	(nil, data, nil, wc) := <-ctl.write =>
+		if(wc != nil)
+			wc <-= reply(len data, ctlwrite(string data));
 
-	case platform {
-	"macos" =>
-		# macOS: built-in 'say' for TTS, ffmpeg+whisper for STT
-		if(cmdtts == "")
-			cmdtts = "say";
-		if(cmdstt == "")
-			cmdstt = "whisper-cli";
-		if(voice == "")
-			voice = "samantha";
-	"linux" =>
-		# Linux: prefer local ML engine if Piper/whisper are available
-		# On Jetson (ARM64 + GPU), these get CUDA acceleration automatically
-		if(!engineexplicit && engine == ENGINE_CMD && probelocal()) {
-			engine = ENGINE_LOCAL;
-			sys->fprint(stderr, "speech9p: detected local ML tools, using local engine\n");
-		}
-		if(cmdtts == "")
-			cmdtts = "espeak-ng --stdout";
-		if(cmdstt == "")
-			cmdstt = "";  # Needs Whisper or similar
-		if(voice == "")
-			voice = "default";
-	"windows" =>
-		# Windows: PowerShell for TTS
-		if(cmdtts == "")
-			cmdtts = "powershell -Command \"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.SetOutputToWaveFile('/tmp/speech_out.wav'); $s.Speak\"";
-		if(cmdstt == "")
-			cmdstt = "";
-		if(voice == "")
-			voice = "default";
-	* =>
-		# Unknown platform - leave empty, user must configure
-		if(voice == "")
-			voice = "default";
-	}
-
-	# Default API URL for OpenAI-compatible endpoints
-	if(apiurl == "")
-		apiurl = "https://api.openai.com/v1";
-}
-
-# Detect host platform by probing the environment
-detectplatform(): string
-{
-	# The emulator sets emuhost in /env (see emu/port/main.c)
-	emuos := rf("/env/emuhost");
-	if(emuos != nil) {
-		lower := str->tolower(strip(emuos));
-		if(hasprefix(lower, "macosx") || hasprefix(lower, "darwin") || hasprefix(lower, "macos"))
-			return "macos";
-		if(hasprefix(lower, "linux"))
-			return "linux";
-		if(hasprefix(lower, "nt") || hasprefix(lower, "windows"))
-			return "windows";
-	}
-
-	return "unknown";
-}
-
-# Read current config as text
-readconfig(): string
-{
-	ename := "cmd";
-	if(engine == ENGINE_API)
-		ename = "api";
-	else if(engine == ENGINE_LOCAL)
-		ename = "local";
-
-	result := "engine " + ename + "\n";
-	result += "voice " + voice + "\n";
-	result += "lang " + lang + "\n";
-	result += "rate " + string audrate + "\n";
-	result += "chans " + string audchans + "\n";
-	result += "bits " + string audbits + "\n";
-
-	if(engine == ENGINE_CMD) {
-		result += "cmdtts " + cmdtts + "\n";
-		result += "cmdstt " + cmdstt + "\n";
-	}
-
-	if(engine == ENGINE_API) {
-		result += "apiurl " + apiurl + "\n";
-		if(apikey != "")
-			result += "apikey (set)\n";
-		else
-			result += "apikey (not set)\n";
-	}
-
-	if(engine == ENGINE_LOCAL) {
-		result += "piperbin " + piperbin + "\n";
-		result += "pipermodel " + pipermodel + "\n";
-		result += "whisperbin " + whisperbin + "\n";
-		result += "whispermodel " + whispermodel + "\n";
-	}
-
-	return result;
-}
-
-# Parse and apply a configuration command
-applyconfig(cmd: string): string
-{
-	(n, argv) := sys->tokenize(cmd, " \t\n");
-	if(n < 2)
-		return "error: usage: <key> <value>";
-
-	key := hd argv;
-	argv = tl argv;
-
-	# Join remaining as value
-	val := "";
-	for(; argv != nil; argv = tl argv) {
-		if(val != "")
-			val += " ";
-		val += hd argv;
-	}
-
-	case key {
-	"engine" =>
-		return "error: engine is startup-only";
-	"voice" =>
-		if(!safename(val))
-			return "error: unsafe voice";
-		voice = val;
-	"lang" =>
-		if(!safename(val))
-			return "error: unsafe lang";
-		lang = val;
-	"rate" =>
-		r := int val;
-		if(r < 8000 || r > 48000)
-			return "error: rate must be 8000-48000";
-		audrate = r;
-	"chans" =>
-		c := int val;
-		if(c != 1 && c != 2)
-			return "error: chans must be 1 or 2";
-		audchans = c;
-	"bits" =>
-		b := int val;
-		if(b != 8 && b != 16)
-			return "error: bits must be 8 or 16";
-		audbits = b;
-	"cmdtts" =>
-		return "error: cmdtts is startup-only";
-	"cmdstt" =>
-		return "error: cmdstt is startup-only";
-	"apiurl" =>
-		return "error: apiurl is startup-only";
-	"apikey" =>
-		return "error: apikey is startup-only";
-	"piperbin" =>
-		return "error: piperbin is startup-only";
-	"pipermodel" =>
-		return "error: pipermodel is startup-only";
-	"whisperbin" =>
-		return "error: whisperbin is startup-only";
-	"whispermodel" =>
-		return "error: whispermodel is startup-only";
-	* =>
-		return "error: unknown config key: " + key;
-	}
-
-	return "ok";
-}
-
-safename(s: string): int
-{
-	if(s == nil || s == "" || s == "." || s == "..")
-		return 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		   (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+	(nil, nil, fid, rc) := <-talk.read =>
+		t := talker(fid);
+		if(rc == nil){
+			droptalker(fid);
 			continue;
-		return 0;
+		}
+		t.rc = rc;
+		telltalker(t);
+	(nil, data, fid, wc) := <-talk.write =>
+		if(wc == nil){
+			droptalker(fid);
+			continue;
+		}
+		e: string;
+		case word(string data) {
+		"start" =>	e = talkon();
+		"stop" =>	talkoff();
+		* =>	e = "talk is start or stop";
+		}
+		heartalk = 0;	# someone else has the switch now
+		wc <-= reply(len data, e);
+
+	(nil, count, fid, rc) := <-listen.read =>
+		l := listener(fid);
+		if(rc == nil){
+			droplistener(fid);
+			continue;
+		}
+		l.rc = rc;
+		l.count = count;
+		answerlistener(l);
+	(nil, nil, fid, wc) := <-listen.write =>
+		if(wc == nil){
+			droplistener(fid);
+			continue;
+		}
+		wc <-= (0, "listen is read");
+
+	(off, nil, nil, rc) := <-say.read =>
+		if(rc == nil)
+			continue;
+		s := "idle\n";
+		if(speaking)
+			s = "speaking " + speaktext + "\n";
+		rc <-= (slice(array of byte s, off), nil);
+	(nil, data, nil, wc) := <-say.write =>
+		if(wc == nil)
+			continue;
+		text := string data;
+		if(word(text) == nil){
+			wc <-= (len data, nil);
+			continue;
+		}
+		alt {
+		sayc <-= text =>
+			wc <-= (len data, nil);
+		* =>
+			wc <-= (0, "speech: too much queued to say");
+		}
+
+	(nil, nil, nil, rc) := <-cancel.read =>
+		if(rc != nil)
+			rc <-= (nil, "cancel is written");
+	(nil, data, nil, wc) := <-cancel.write =>
+		if(wc == nil)
+			continue;
+		docancel();
+		wc <-= (len data, nil);
+
+	(nil, nil, nil, rc) := <-chime.read =>
+		if(rc != nil)
+			rc <-= (nil, "chime is written");
+	(nil, data, nil, wc) := <-chime.write =>
+		if(wc == nil)
+			continue;
+		c := word(string data);
+		case c {
+		"start" or "stop" or "done" or "error" =>
+			alt {
+			chimec <-= c =>
+				;
+			* =>
+				;
+			}
+			wc <-= (len data, nil);
+		* =>
+			wc <-= (0, "chime is start, stop, done or error");
+		}
+
+	(off, nil, nil, rc) := <-voices.read =>
+		if(rc == nil)
+			continue;
+		(v, e) := readfile(engine + "/voices");
+		if(e != nil)
+			rc <-= (nil, e);
+		else
+			rc <-= (slice(array of byte v, off), nil);
+	(nil, nil, nil, wc) := <-voices.write =>
+		if(wc != nil)
+			wc <-= (0, "voices is read");
+
+	(nil, nil, fid, rc) := <-hear.read =>
+		h := hearer(fid);
+		if(rc == nil){
+			drophearer(fid);
+			continue;
+		}
+		# the words once, then end of file: whatever the offset, which
+		# the write of start has moved (some readers seek back, some not)
+		if(h.done){
+			rc <-= (nil, nil);
+			continue;
+		}
+		if(!h.waiting && h.words == nil){
+			rc <-= (nil, "hear: write start first");
+			continue;
+		}
+		h.rc = rc;
+		answerhearer(h);
+	(nil, data, fid, wc) := <-hear.write =>
+		if(wc == nil){
+			drophearer(fid);
+			continue;
+		}
+		(n, w) := sys->tokenize(string data, " \t\n");
+		if(n < 1 || hd w != "start"){
+			wc <-= (0, "hear: write start [ms]");
+			continue;
+		}
+		ms := Hearms;
+		if(n > 1)
+			ms = int hd tl w;
+		if(ms <= 0 || ms > 60000){
+			wc <-= (0, "hear: start 1 to 60000 ms");
+			continue;
+		}
+		h := hearer(fid);
+		h.waiting = 1;
+		h.words = nil;
+		h.done = 0;
+		e: string;
+		if(!talking){
+			e = talkon();
+			if(e == nil)
+				heartalk = 1;
+		}
+		if(e == nil)
+			spawn hearlimit(fid, ms);
+		else
+			h.waiting = 0;
+		wc <-= reply(len data, e);
+	fid := <-hearendc =>
+		for(l := hearers; l != nil; l = tl l)
+			if((hd l).fid == fid && (hd l).waiting && heartalk){
+				talkoff();
+				heartalk = 0;
+			}
+
+	rec := <-recc =>
+		for(l := listeners; l != nil; l = tl l){
+			(hd l).queue = append((hd l).queue, rec);
+			answerlistener(hd l);
+		}
+		if(prefix("final ", rec) || prefix("error ", rec)){
+			words := finalwords(rec);
+			for(hl := hearers; hl != nil; hl = tl hl){
+				h := hd hl;
+				if(h.waiting){
+					h.waiting = 0;
+					h.words = words;
+					answerhearer(h);
+				}
+			}
+			if(heartalk){
+				talkoff();
+				heartalk = 0;
+			}
+		}
+	(on, text) := <-spkc =>
+		speaking = on;
+		speaktext = text;
 	}
-	return 1;
 }
 
-# List voices for current engine
-listvoices(): string
+reply(n: int, e: string): (int, string)
 {
-	case engine {
-	ENGINE_CMD =>
-		return listcmdvoices();
-	ENGINE_API =>
-		return listapivoices();
-	ENGINE_LOCAL =>
-		return listlocalvoices();
-	}
-	return "";
+	if(e != nil)
+		return (0, e);
+	return (n, nil);
 }
 
-# List voices available from host command
-listcmdvoices(): string
+#
+# ctl
+#
+
+ctlstatus(): string
 {
-	platform := detectplatform();
-	case platform {
-	"macos" =>
-		# macOS: say -v ? lists voices
-		return runcmd("say -v \\?");
-	"linux" =>
-		# espeak-ng: --voices lists available voices
-		return runcmd("espeak-ng --voices");
-	}
-	return "(voice listing not available for this platform)";
+	state := "missing";
+	if(sys->stat(engine + "/ctl").t0 >= 0)
+		state = "ok";
+	s := "engine " + engine + "\n";
+	s += "engine " + state + "\n";
+	if(voice != nil)
+		s += "voice " + voice + "\n";
+	if(lang != nil)
+		s += "lang " + lang + "\n";
+	s += "duplex " + duplex + "\n";
+	s += "talk " + onoff(talking) + "\n";
+	s += "speaking " + string speaking + "\n";
+	return s;
 }
 
-# List voices for API engine
-listapivoices(): string
+ctlwrite(s: string): string
 {
-	# Standard voices for OpenAI-compatible APIs
-	return "alloy\necho\nfable\nnova\nonyx\nshimmer\n";
-}
-
-# List voices for local engine (Piper .onnx model files)
-listlocalvoices(): string
-{
-	if(pipermodel != "")
-		return pipermodel + " (current)\n";
-	# Try to list models in common Piper model directories
-	result := runcmd("ls /opt/piper/models/*.onnx 2>/dev/null; ls /usr/share/piper-voices/*.onnx 2>/dev/null");
-	if(result == "" || hasprefix(result, "error:"))
-		return "(no local voice models found)\nhint: set pipermodel path via ctl\n";
-	return result;
-}
-
-# === TTS: Text to Speech ===
-
-# Async wrapper for TTS — runs in spawned thread so serveloop stays responsive.
-# Sends result on completion channel instead of writing to shared state directly.
-asyncsay(donech: chan of array of byte, text: string)
-{
-	result := dosay(text);
-	donech <-= array of byte result;
-}
-
-# Synthesize text and play through /dev/audio
-dosay(text: string): string
-{
-	if(text == "")
-		return "error: no text to speak";
-
-	case engine {
-	ENGINE_CMD =>
-		return saycmd(text);
-	ENGINE_API =>
-		return sayapi(text);
-	ENGINE_LOCAL =>
-		return saylocal(text);
-	}
-	return "error: no engine configured";
-}
-
-# TTS via host command (platform-specific)
-saycmd(text: string): string
-{
-	if(cmdtts == "")
-		return "error: no TTS command configured for this platform";
-
-	# Sanitize text: replace single quotes to prevent injection
-	safe := sanitize(text);
-
-	platform := detectplatform();
-	case platform {
-	"macos" =>
-		return saycmd_macos(safe);
-	"linux" =>
-		return saycmd_linux(safe);
-	"windows" =>
-		return saycmd_windows(safe);
-	}
-
-	return "error: unsupported platform for cmd engine";
-}
-
-# macOS TTS: use 'say' command directly
-# The 'say' command plays through the host audio device natively
-saycmd_macos(text: string): string
-{
-	# Write text to say's stdin via devcmd data pipe
-	# This avoids shell quoting issues entirely
-	return runcmd_stdin(sys->sprint("say -v %s", voice), text);
-}
-
-# Linux TTS: use espeak-ng or piper
-# Pipe text to stdin to avoid shell quoting issues
-saycmd_linux(text: string): string
-{
-	if(hasprefix(cmdtts, "piper"))
-		return runcmd_stdin(cmdtts + " --output-raw > /dev/fd/1", text);
-	else
-		return runcmd_stdin(sys->sprint("%s -v %s -s 160 --stdin --stdout", cmdtts, voice), text);
-}
-
-# Windows TTS via PowerShell (untested — placeholder)
-saycmd_windows(nil: string): string
-{
-	return "error: Windows TTS not yet implemented";
-}
-
-# TTS via HTTP API (OpenAI-compatible)
-sayapi(text: string): string
-{
-	if(apikey == "")
-		return "error: API key not set (use: echo 'apikey <key>' > /mnt/speech/ctl)";
-
-	# Build JSON request body
-	apivoice := voice;
-	if(apivoice == "" || apivoice == "default" || apivoice == "samantha")
-		apivoice = "alloy";
-
-	body := "{\"model\":\"tts-1\",\"input\":\"" + jsonesc(text) +
-		"\",\"voice\":\"" + apivoice +
-		"\",\"response_format\":\"pcm\"}";
-
-	# Make HTTP POST to TTS endpoint
-	url := apiurl + "/audio/speech";
-	audiodata := apipost(url, body, "application/json");
-	if(audiodata == nil)
-		return "error: API request failed";
-
-	# Write PCM data to /dev/audio
-	return playpcm(audiodata);
-}
-
-# === STT: Speech to Text ===
-
-# Record from /dev/audio and transcribe
-dohear(): string
-{
-	case engine {
-	ENGINE_CMD =>
-		return hearcmd();
-	ENGINE_API =>
-		return hearapi();
-	ENGINE_LOCAL =>
-		return hearlocal();
-	}
-	return "error: no engine configured";
-}
-
-# STT via host commands (record + transcribe, all host-side)
-hearcmd(): string
-{
-	if(cmdstt == "")
-		return "error: no STT command configured\n" +
-			"hint: install whisper-cpp and set: echo 'cmdstt whisper-cli' > /mnt/speech/ctl";
-
-	platform := detectplatform();
-	case platform {
-	"macos" =>
-		return hearcmd_macos();
-	"linux" =>
-		return hearcmd_linux();
-	}
-	return "error: STT not supported on this platform";
-}
-
-# macOS STT: ffmpeg records from mic, whisper-cli transcribes
-hearcmd_macos(): string
-{
-	tmpfile := "/tmp/speech_stt.wav";
-	duration := string (hearduration / 1000);
-
-	# Record from macOS microphone via ffmpeg
-	# -f avfoundation -i :0 = default audio input device
-	# 16kHz mono WAV is what whisper expects
-	reccmd := "ffmpeg -y -f avfoundation -i :0 -t " + duration +
-		" -ar 16000 -ac 1 -sample_fmt s16 " + tmpfile +
-		" </dev/null 2>/dev/null";
-	result := runcmd(reccmd);
-	if(hasprefix(result, "error:"))
-		return result;
-
-	# Transcribe with whisper-cli
-	# -np = no prints (timestamps etc), -nt = no timestamps, just text
-	modelpath := "/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin";
-	wcmd := cmdstt + " -m " + modelpath + " -nt -np -f " + tmpfile +
-		" 2>/dev/null";
-	text := strip(runcmd(wcmd));
-	if(text == "" || hasprefix(text, "error:"))
-		return "error: transcription failed";
-
-	return text;
-}
-
-# Linux STT: arecord + whisper-cli
-hearcmd_linux(): string
-{
-	tmpfile := "/tmp/speech_stt.wav";
-	duration := string (hearduration / 1000);
-
-	# Record via arecord (ALSA)
-	reccmd := "arecord -f S16_LE -r 16000 -c 1 -d " + duration +
-		" " + tmpfile + " 2>/dev/null";
-	result := runcmd(reccmd);
-	if(hasprefix(result, "error:"))
-		return result;
-
-	# Transcribe
-	wcmd := cmdstt + " -nt -np -f " + tmpfile + " 2>/dev/null";
-	text := strip(runcmd(wcmd));
-	if(text == "" || hasprefix(text, "error:"))
-		return "error: transcription failed";
-
-	return text;
-}
-
-# STT via HTTP API (OpenAI Whisper-compatible)
-hearapi(): string
-{
-	if(apikey == "")
-		return "error: API key not set";
-
-	tmpfile := "/tmp/speech_stt.wav";
-
-	# Record audio
-	err := recordaudio(tmpfile, 5000);
-	if(err != nil)
-		return "error: recording failed: " + err;
-
-	# Read recorded file
-	audiodata := readbinaryfile(tmpfile);
-	if(audiodata == nil)
-		return "error: cannot read recorded audio";
-
-	# POST to Whisper API as multipart form
-	url := apiurl + "/audio/transcriptions";
-	result := apitranscribe(url, audiodata);
-	return result;
-}
-
-# === Local ML engine (Piper TTS + whisper.cpp STT) ===
-
-# Probe whether local ML tools are available on the host
-probelocal(): int
-{
-	# Check for piper binary
-	result := runcmd("which piper 2>/dev/null");
-	if(result == "" || hasprefix(result, "error:"))
-		return 0;
-	# Check for whisper binary
-	result = runcmd("which whisper-cli 2>/dev/null");
-	if(result == "" || hasprefix(result, "error:"))
-		return 0;
-	return 1;
-}
-
-# TTS via Piper (local neural TTS)
-# Piper reads text from stdin and outputs raw PCM to stdout.
-# On Jetson with CUDA, Piper uses GPU acceleration automatically
-# when the onnxruntime-gpu package is installed.
-saylocal(text: string): string
-{
-	safe := sanitize(text);
-	if(safe == "")
-		return "error: no speakable text";
-
-	# Build Piper command
-	# --output-raw outputs 16-bit mono PCM at the model's sample rate (usually 22050)
-	cmd := piperbin + " --output-raw";
-	if(pipermodel != "")
-		cmd += " --model " + pipermodel;
-
-	# Pipe text to piper, get raw PCM back
-	pcmdata := runcmd_stdin(cmd, safe);
-	if(pcmdata == "" || pcmdata == "ok")
-		return "error: piper produced no audio";
-	if(hasprefix(pcmdata, "error:"))
-		return pcmdata;
-
-	# Play the raw PCM through /dev/audio
-	return playpcm(array of byte pcmdata);
-}
-
-# STT via whisper.cpp (local speech recognition)
-# On Jetson with CUDA, whisper.cpp uses GPU acceleration automatically
-# when built with CUDA support (GGML_CUDA=1).
-hearlocal(): string
-{
-	tmpfile := "/tmp/speech_stt.wav";
-	duration := string (hearduration / 1000);
-
-	platform := detectplatform();
-	reccmd: string;
-	case platform {
-	"macos" =>
-		reccmd = "ffmpeg -y -f avfoundation -i :0 -t " + duration +
-			" -ar 16000 -ac 1 -sample_fmt s16 " + tmpfile +
-			" </dev/null 2>/dev/null";
-	"linux" =>
-		reccmd = "arecord -f S16_LE -r 16000 -c 1 -d " + duration +
-			" " + tmpfile + " 2>/dev/null";
+	(n, f) := sys->tokenize(s, " \t\n");
+	if(n == 0)
+		return nil;
+	if(n != 2)
+		return "speech: ctl is engine dir, voice v, lang l or duplex half|full";
+	v := hd tl f;
+	case hd f {
+	"engine" =>
+		if(talking)
+			return "speech: not while talk is on";
+		engine = v;
+	"voice" =>
+		if((e := enginectl("voice " + v)) != nil)
+			return e;
+		voice = v;
+	"lang" =>
+		if((e := enginectl("lang " + v)) != nil)
+			return e;
+		lang = v;
+	"duplex" =>
+		if(v != "half" && v != "full")
+			return "speech: duplex is half or full";
+		duplex = v;
 	* =>
-		return "error: recording not supported on this platform";
+		return "speech: no such setting " + hd f;
 	}
-
-	result := runcmd(reccmd);
-	if(hasprefix(result, "error:"))
-		return result;
-
-	# Transcribe with whisper.cpp
-	wcmd := whisperbin + " -nt -np";
-	if(whispermodel != "")
-		wcmd += " -m " + whispermodel;
-	wcmd += " -f " + tmpfile + " 2>/dev/null";
-
-	text := strip(runcmd(wcmd));
-	if(text == "" || hasprefix(text, "error:"))
-		return "error: transcription failed";
-
-	return text;
-}
-
-# === Audio I/O helpers ===
-
-# Configure and play audio data from a file through /dev/audio
-playfile(path: string): string
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r", path);
-
-	# Configure audio output
-	configaudio("out");
-
-	# Open audio device
-	afd := sys->open("/dev/audio", Sys->OWRITE);
-	if(afd == nil)
-		return sys->sprint("error: cannot open /dev/audio: %r");
-
-	# Stream data
-	buf := array[Sys->ATOMICIO] of byte;
-	total := 0;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		if(sys->write(afd, buf, n) < 0)
-			return sys->sprint("error: audio write failed: %r");
-		total += n;
-	}
-
-	return sys->sprint("ok: played %d bytes", total);
-}
-
-# Play raw PCM data through /dev/audio
-playpcm(data: array of byte): string
-{
-	configaudio("out");
-
-	afd := sys->open("/dev/audio", Sys->OWRITE);
-	if(afd == nil)
-		return sys->sprint("error: cannot open /dev/audio: %r");
-
-	if(sys->write(afd, data, len data) < 0)
-		return sys->sprint("error: audio write failed: %r");
-
-	return sys->sprint("ok: played %d bytes", len data);
-}
-
-# Record audio from /dev/audio to file
-# duration_ms: recording duration in milliseconds
-recordaudio(path: string, duration_ms: int): string
-{
-	configaudio("in");
-
-	afd := sys->open("/dev/audio", Sys->OREAD);
-	if(afd == nil)
-		return sys->sprint("cannot open /dev/audio: %r");
-
-	ofd := sys->create(path, Sys->OWRITE, 8r644);
-	if(ofd == nil)
-		return sys->sprint("cannot create %s: %r", path);
-
-	# Write WAV header for compatibility with STT engines
-	wavhdr := makewavheader(duration_ms);
-	if(sys->write(ofd, wavhdr, len wavhdr) < 0)
-		return sys->sprint("cannot write header: %r");
-
-	# Calculate bytes to record
-	bytespersec := audrate * audchans * (audbits / 8);
-	totalbytes := (bytespersec * duration_ms) / 1000;
-
-	buf := array[Sys->ATOMICIO] of byte;
-	recorded := 0;
-	while(recorded < totalbytes) {
-		want := len buf;
-		if(recorded + want > totalbytes)
-			want = totalbytes - recorded;
-		n := sys->read(afd, buf, want);
-		if(n <= 0)
-			break;
-		sys->write(ofd, buf[:n], n);
-		recorded += n;
-	}
-
-	# Update WAV header with actual size
-	updatewavsize(ofd, recorded);
-
 	return nil;
 }
 
-# Configure /dev/audioctl for input or output
-configaudio(direction: string)
+enginectl(s: string): string
 {
-	ctl := sys->open("/dev/audioctl", Sys->OWRITE);
-	if(ctl == nil)
-		return;
-
-	writectl(ctl, sys->sprint("%s rate %d", direction, audrate));
-	writectl(ctl, sys->sprint("%s chans %d", direction, audchans));
-	writectl(ctl, sys->sprint("%s bits %d", direction, audbits));
-	writectl(ctl, sys->sprint("%s enc pcm", direction));
-}
-
-writectl(fd: ref Sys->FD, cmd: string)
-{
-	data := array of byte cmd;
-	sys->write(fd, data, len data);
-}
-
-# Create a minimal WAV header
-makewavheader(duration_ms: int): array of byte
-{
-	bytespersec := audrate * audchans * (audbits / 8);
-	datasize := (bytespersec * duration_ms) / 1000;
-	filesize := datasize + 36;
-	blockalign := audchans * (audbits / 8);
-
-	hdr := array[44] of byte;
-
-	# RIFF header
-	hdr[0:] = array of byte "RIFF";
-	put32le(hdr, 4, filesize);
-	hdr[8:] = array of byte "WAVE";
-
-	# fmt chunk
-	hdr[12:] = array of byte "fmt ";
-	put32le(hdr, 16, 16);          # chunk size
-	put16le(hdr, 20, 1);           # PCM format
-	put16le(hdr, 22, audchans);
-	put32le(hdr, 24, audrate);
-	put32le(hdr, 28, bytespersec);
-	put16le(hdr, 32, blockalign);
-	put16le(hdr, 34, audbits);
-
-	# data chunk
-	hdr[36:] = array of byte "data";
-	put32le(hdr, 40, datasize);
-
-	return hdr;
-}
-
-# Update WAV header data size after recording
-updatewavsize(fd: ref Sys->FD, datasize: int)
-{
-	buf := array[4] of byte;
-
-	# Update RIFF size (offset 4)
-	put32le(buf, 0, datasize + 36);
-	sys->pwrite(fd, buf, 4, big 4);
-
-	# Update data chunk size (offset 40)
-	put32le(buf, 0, datasize);
-	sys->pwrite(fd, buf, 4, big 40);
-}
-
-# Little-endian integer encoding
-put16le(buf: array of byte, off, val: int)
-{
-	buf[off] = byte (val & 16rFF);
-	buf[off+1] = byte ((val >> 8) & 16rFF);
-}
-
-put32le(buf: array of byte, off, val: int)
-{
-	buf[off] = byte (val & 16rFF);
-	buf[off+1] = byte ((val >> 8) & 16rFF);
-	buf[off+2] = byte ((val >> 16) & 16rFF);
-	buf[off+3] = byte ((val >> 24) & 16rFF);
-}
-
-# === Host command execution via #C (devcmd) ===
-
-cmdbound := 0;
-
-# Ensure #C device is bound
-bindcmd()
-{
-	if(cmdbound)
-		return;
-	if(sys->stat("/cmd/clone").t0 == -1)
-		sys->bind("#C", "/", Sys->MBEFORE);
-	cmdbound = 1;
-}
-
-# Run a host command and return output
-runcmd(cmd: string): string
-{
-	bindcmd();
-
-	# Open cmd device
-	cfd := sys->open("/cmd/clone", Sys->ORDWR);
-	if(cfd == nil)
-		return sys->sprint("error: cannot open /cmd/clone: %r");
-
-	# Read the command directory number
-	buf := array[32] of byte;
-	n := sys->read(cfd, buf, len buf);
-	if(n <= 0)
-		return "error: cannot read cmd number";
-
-	dir := "/cmd/" + string buf[0:n];
-
-	# Write exec command to clone fd (this is how devcmd works)
-	execcmd := "exec /bin/sh -c '" + cmd + "'";
-	if(sys->fprint(cfd, "%s", execcmd) < 0)
-		return sys->sprint("error: exec failed: %r");
-
-	# Read stdout from data file
-	outfd := sys->open(dir + "/data", Sys->OREAD);
-	if(outfd == nil)
-		return sys->sprint("error: cannot open %s/data: %r", dir);
-
-	result := "";
-	rbuf := array[8192] of byte;
-	for(;;) {
-		n = sys->read(outfd, rbuf, len rbuf);
-		if(n <= 0)
-			break;
-		result += string rbuf[0:n];
-	}
-
-	return result;
-}
-
-# Run a host command, piping text to its stdin, return stdout
-runcmd_stdin(cmd, input: string): string
-{
-	bindcmd();
-
-	cfd := sys->open("/cmd/clone", Sys->ORDWR);
-	if(cfd == nil)
-		return sys->sprint("error: cannot open /cmd/clone: %r");
-
-	buf := array[32] of byte;
-	n := sys->read(cfd, buf, len buf);
-	if(n <= 0)
-		return "error: cannot read cmd number";
-
-	dir := "/cmd/" + string buf[0:n];
-
-	execcmd := "exec /bin/sh -c '" + cmd + "'";
-	if(sys->fprint(cfd, "%s", execcmd) < 0)
-		return sys->sprint("error: exec failed: %r");
-
-	# Open data for write (stdin) and read (stdout) separately
-	tofd := sys->open(dir + "/data", Sys->OWRITE);
-	if(tofd == nil)
-		return sys->sprint("error: cannot open %s/data for write: %r", dir);
-
-	fromfd := sys->open(dir + "/data", Sys->OREAD);
-	if(fromfd == nil)
-		return sys->sprint("error: cannot open %s/data for read: %r", dir);
-
-	# Open wait file BEFORE reading stdout to avoid race condition:
-	# devcmd's cmdproc() only writes exit status to waitq if it's non-nil.
-	# waitq is created lazily in cmdopen(Qwait). If the child exits before
-	# we open the wait file, cmdproc finds waitq==nil and the status is
-	# lost — qread then blocks forever.
-	waitfd := sys->open(dir + "/wait", Sys->OREAD);
-
-	# Write input to stdin, then close to signal EOF
-	data := array of byte input;
-	sys->write(tofd, data, len data);
-	tofd = nil;
-
-	# Read stdout
-	result := "";
-	rbuf := array[8192] of byte;
-	for(;;) {
-		n = sys->read(fromfd, rbuf, len rbuf);
-		if(n <= 0)
-			break;
-		result += string rbuf[0:n];
-	}
-
-	# Wait for child process to exit
-	if(waitfd != nil) {
-		wbuf := array[256] of byte;
-		sys->read(waitfd, wbuf, len wbuf);
-		waitfd = nil;
-	}
-
-	if(result == "")
-		return "ok";
-	return result;
-}
-
-# === HTTP API helpers ===
-
-# POST JSON to an API endpoint, return response bytes
-apipost(url, body, contenttype: string): array of byte
-{
-	(scheme, host, port, path, err) := parseurl(url);
-	if(err != nil)
-		return nil;
-
-	addr := sys->sprint("tcp!%s!%s", host, port);
-
-	fd: ref Sys->FD;
-	if(scheme == "https") {
-		(sfd, serr) := sslconnect(host, port);
-		if(serr != nil)
-			return nil;
-		fd = sfd;
-	} else {
-		(ok, conn) := sys->dial(addr, nil);
-		if(ok < 0)
-			return nil;
-		fd = conn.dfd;
-	}
-
-	# Build HTTP request
-	request := sys->sprint("POST %s HTTP/1.1\r\nHost: %s\r\n", path, host);
-	request += "Connection: close\r\n";
-	request += sys->sprint("Content-Type: %s\r\n", contenttype);
-	request += sys->sprint("Content-Length: %d\r\n", len body);
-	if(apikey != "")
-		request += "Authorization: Bearer " + apikey + "\r\n";
-	request += "\r\n";
-	request += body;
-
-	reqbytes := array of byte request;
-	if(sys->write(fd, reqbytes, len reqbytes) < 0)
-		return nil;
-
-	# Read response
-	result: list of array of byte;
-	total := 0;
-	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		chunk := array[n] of byte;
-		chunk[0:] = buf[0:n];
-		result = chunk :: result;
-		total += n;
-	}
-
-	# Reassemble response
-	resp := array[total] of byte;
-	off := total;
-	for(; result != nil; result = tl result) {
-		chunk := hd result;
-		off -= len chunk;
-		resp[off:] = chunk;
-	}
-
-	# Strip HTTP headers - find blank line
-	for(i := 0; i < len resp - 3; i++) {
-		if(resp[i] == byte '\r' && resp[i+1] == byte '\n' &&
-		   resp[i+2] == byte '\r' && resp[i+3] == byte '\n')
-			return resp[i+4:];
-	}
-
-	return resp;
-}
-
-# POST audio for transcription (multipart form)
-apitranscribe(url: string, audiodata: array of byte): string
-{
-	(scheme, host, port, path, err) := parseurl(url);
-	if(err != nil)
-		return "error: " + err;
-
-	addr := sys->sprint("tcp!%s!%s", host, port);
-
-	fd: ref Sys->FD;
-	if(scheme == "https") {
-		(sfd, serr) := sslconnect(host, port);
-		if(serr != nil)
-			return "error: " + serr;
-		fd = sfd;
-	} else {
-		(ok, conn) := sys->dial(addr, nil);
-		if(ok < 0)
-			return sys->sprint("error: cannot connect: %r");
-		fd = conn.dfd;
-	}
-
-	# Build multipart form
-	boundary := "----InfernoBoundary9p2000";
-	body := "--" + boundary + "\r\n";
-	body += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n";
-	body += "Content-Type: audio/wav\r\n\r\n";
-
-	suffix := "\r\n--" + boundary + "\r\n";
-	suffix += "Content-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1";
-	suffix += "\r\n--" + boundary + "\r\n";
-	suffix += "Content-Disposition: form-data; name=\"language\"\r\n\r\n" + lang;
-	suffix += "\r\n--" + boundary + "--\r\n";
-
-	bodyprefix := array of byte body;
-	bodysuffix := array of byte suffix;
-	contentlen := len bodyprefix + len audiodata + len bodysuffix;
-
-	# Build HTTP request
-	request := sys->sprint("POST %s HTTP/1.1\r\nHost: %s\r\n", path, host);
-	request += "Connection: close\r\n";
-	request += sys->sprint("Content-Type: multipart/form-data; boundary=%s\r\n", boundary);
-	request += sys->sprint("Content-Length: %d\r\n", contentlen);
-	if(apikey != "")
-		request += "Authorization: Bearer " + apikey + "\r\n";
-	request += "\r\n";
-
-	reqbytes := array of byte request;
-
-	# Write request header + body prefix
-	sys->write(fd, reqbytes, len reqbytes);
-	sys->write(fd, bodyprefix, len bodyprefix);
-	# Write audio data
-	sys->write(fd, audiodata, len audiodata);
-	# Write body suffix
-	sys->write(fd, bodysuffix, len bodysuffix);
-
-	# Read response
-	response := "";
-	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		response += string buf[0:n];
-	}
-
-	# Extract body from HTTP response
-	(nil, nil, rbody) := parseresponse(response);
-
-	# Parse JSON response to extract text
-	# Simple extraction: look for "text" field
-	return extractjsontext(rbody);
-}
-
-# SSL connection
-sslconnect(host, port: string): (ref Sys->FD, string)
-{
-	addr := sys->sprint("tcp!%s!%s", host, port);
-	(ok, conn) := sys->dial(addr, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", addr));
-
-	sslctl := sys->open("/net/ssl/clone", Sys->ORDWR);
-	if(sslctl == nil)
-		return (nil, "HTTPS not available: /net/ssl not found");
-
-	buf := array[32] of byte;
-	n := sys->read(sslctl, buf, len buf);
-	if(n <= 0)
-		return (nil, "cannot read SSL connection number");
-
-	connnum := string buf[0:n];
-
-	ctlpath := "/net/ssl/" + connnum + "/ctl";
-	ctl := sys->open(ctlpath, Sys->OWRITE);
-	if(ctl == nil)
-		return (nil, "cannot open SSL ctl");
-
-	cmd := sys->sprint("fd %d", conn.dfd.fd);
-	if(sys->write(ctl, array of byte cmd, len cmd) < 0)
-		return (nil, "cannot set SSL fd");
-
-	if(sys->write(ctl, array of byte "start", 5) < 0)
-		return (nil, "cannot start SSL");
-
-	datapath := "/net/ssl/" + connnum + "/data";
-	data := sys->open(datapath, Sys->ORDWR);
-	if(data == nil)
-		return (nil, "cannot open SSL data");
-
-	return (data, nil);
-}
-
-# === JSON helpers ===
-
-# Escape a string for JSON
-jsonesc(s: string): string
-{
-	result := "";
-	for(i := 0; i < len s; i++) {
-		case s[i] {
-		'"' =>	result += "\\\"";
-		'\\' =>	result += "\\\\";
-		'\n' =>	result += "\\n";
-		'\r' =>	result += "\\r";
-		'\t' =>	result += "\\t";
-		* =>	result[len result] = s[i];
-		}
-	}
-	return result;
-}
-
-# Extract "text" field from JSON response
-extractjsontext(json: string): string
-{
-	# Look for "text": "..."
-	target := "\"text\"";
-	for(i := 0; i <= len json - len target; i++) {
-		if(json[i:i+len target] == target) {
-			# Skip to value
-			j := i + len target;
-			while(j < len json && (json[j] == ' ' || json[j] == ':'))
-				j++;
-			if(j < len json && json[j] == '"') {
-				j++;
-				result := "";
-				while(j < len json && json[j] != '"') {
-					if(json[j] == '\\' && j+1 < len json) {
-						j++;
-						case json[j] {
-						'n' =>	result[len result] = '\n';
-						'r' =>	result[len result] = '\r';
-						't' =>	result[len result] = '\t';
-						* =>	result[len result] = json[j];
-						}
-					} else {
-						result[len result] = json[j];
-					}
-					j++;
-				}
-				return result;
-			}
-		}
-	}
-	return json;
-}
-
-# === URL parsing ===
-
-parseurl(url: string): (string, string, string, string, string)
-{
-	scheme := "http";
-	port := "80";
-
-	if(len url > 8 && str->tolower(url[0:8]) == "https://") {
-		scheme = "https";
-		port = "443";
-		url = url[8:];
-	} else if(len url > 7 && str->tolower(url[0:7]) == "http://") {
-		url = url[7:];
-	} else {
-		return ("", "", "", "", "invalid URL");
-	}
-
-	path := "/";
-	for(i := 0; i < len url; i++) {
-		if(url[i] == '/') {
-			path = url[i:];
-			url = url[0:i];
-			break;
-		}
-	}
-
-	host := url;
-	for(i = 0; i < len url; i++) {
-		if(url[i] == ':') {
-			host = url[0:i];
-			port = url[i+1:];
-			break;
-		}
-	}
-
-	return (scheme, host, port, path, nil);
-}
-
-# Parse HTTP response
-parseresponse(response: string): (string, string, string)
-{
-	statusend := 0;
-	for(; statusend < len response; statusend++) {
-		if(response[statusend] == '\n')
-			break;
-	}
-	if(statusend == 0)
-		return ("", "", "");
-
-	status := response[0:statusend];
-
-	headersend := statusend + 1;
-	for(; headersend < len response - 1; headersend++) {
-		if(response[headersend] == '\n' &&
-		   (response[headersend+1] == '\n' || response[headersend+1] == '\r'))
-			break;
-	}
-
-	headers := "";
-	if(headersend > statusend + 1)
-		headers = response[statusend+1:headersend];
-
-	bodystart := headersend + 1;
-	if(bodystart < len response && response[bodystart] == '\r')
-		bodystart++;
-	if(bodystart < len response && response[bodystart] == '\n')
-		bodystart++;
-
-	body := "";
-	if(bodystart < len response)
-		body = response[bodystart:];
-
-	return (status, headers, body);
-}
-
-# === Utility functions ===
-
-readbinaryfile(path: string): array of byte
-{
-	fd := sys->open(path, Sys->OREAD);
+	fd := sys->open(engine + "/ctl", Sys->OWRITE);
 	if(fd == nil)
+		return sys->sprint("speech: no engine at %s: %r", engine);
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("speech: engine: %r");
+	return nil;
+}
+
+#
+# talk: the microphone, to the engine
+#
+
+talkon(): string
+{
+	if(talking)
 		return nil;
-
-	chunks: list of array of byte;
-	total := 0;
-	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		chunk := array[n] of byte;
-		chunk[0:] = buf[0:n];
-		chunks = chunk :: chunks;
-		total += n;
+	if((e := enginectl("start")) != nil)
+		return e;
+	(mic, e2) := openmic();
+	if(mic == nil){
+		enginectl("cancel");
+		return e2;
 	}
-
-	result := array[total] of byte;
-	off := total;
-	for(; chunks != nil; chunks = tl chunks) {
-		c := hd chunks;
-		off -= len c;
-		result[off:] = c;
+	afd := sys->open(engine + "/audio", Sys->OWRITE);
+	if(afd == nil){
+		enginectl("cancel");
+		return sys->sprint("speech: engine audio: %r");
 	}
-	return result;
+	micstop = chan[1] of int;
+	spawn micproc(mic, afd, micstop);
+	talking = 1;
+	telltalkers();
+	return nil;
 }
 
-# Sanitize text for shell command arguments
-# Replace characters that could cause shell injection
-sanitize(text: string): string
+talkoff()
 {
-	result := "";
-	for(i := 0; i < len text; i++) {
-		c := text[i];
-		# Only allow safe characters
-		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		   (c >= '0' && c <= '9') || c == ' ' || c == '.' ||
-		   c == ',' || c == '!' || c == '?' || c == '-' ||
-		   c == ':' || c == ';' || c == '(' || c == ')' ||
-		   c == '\'' || c == '\n')
-			result[len result] = c;
-	}
-	return result;
-}
-
-rf(f: string): string
-{
-	fd := sys->open(f, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	b := array[Sys->NAMEMAX] of byte;
-	n := sys->read(fd, b, len b);
-	if(n < 0)
-		return nil;
-	return string b[0:n];
-}
-
-pathexists(path: string): int
-{
-	(ok, nil) := sys->stat(path);
-	return ok >= 0;
-}
-
-ensuredir(path: string)
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd != nil)
+	if(!talking)
 		return;
-	fd = sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
+	micstop <-= 1;
+	talking = 0;
+	enginectl("end");
+	telltalkers();
 }
 
-hasprefix(s, prefix: string): int
+# the microphone as a stream of the shared device's at 16 kHz mono
+openmic(): (ref Sys->FD, string)
 {
-	return len s >= len prefix && s[0:len prefix] == prefix;
-}
-
-strip(s: string): string
-{
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n' || s[j-1] == '\r'))
-		j--;
-	if(i >= j)
-		return "";
-	return s[i:j];
-}
-
-# === Per-fid state management ===
-
-getfidstate(fid: int): ref FidState
-{
-	for(l := fidstates; l != nil; l = tl l) {
-		if((hd l).fid == fid)
-			return hd l;
-	}
-	fs := ref FidState(fid, "", nil, nil, nil);
-	fidstates = fs :: fidstates;
-	return fs;
-}
-
-delfidstate(fid: int)
-{
-	newlist: list of ref FidState;
-	for(l := fidstates; l != nil; l = tl l) {
-		if((hd l).fid != fid)
-			newlist = hd l :: newlist;
-	}
-	fidstates = newlist;
-}
-
-# === 9P Navigator ===
-
-navigator(navops: chan of ref Navop)
-{
-	while((m := <-navops) != nil) {
-		pick n := m {
-		Stat =>
-			n.reply <-= dirgen(int n.path);
-		Walk =>
-			walkto(n);
-		Readdir =>
-			readdir(n, int n.path);
-		}
-	}
-}
-
-walkto(n: ref Navop.Walk)
-{
-	parent := int n.path;
-
-	case parent {
-	Qroot =>
-		case n.name {
-		"ctl" =>
-			n.path = big Qctl;
-			n.reply <-= dirgen(int n.path);
-		"say" =>
-			n.path = big Qsay;
-			n.reply <-= dirgen(int n.path);
-		"hear" =>
-			n.path = big Qhear;
-			n.reply <-= dirgen(int n.path);
-		"voices" =>
-			n.path = big Qvoices;
-			n.reply <-= dirgen(int n.path);
-		* =>
-			n.reply <-= (nil, Enotfound);
-		}
-	* =>
-		n.reply <-= (nil, Enotfound);
-	}
-}
-
-dirgen(path: int): (ref Sys->Dir, string)
-{
-	d := ref sys->zerodir;
-	d.uid = user;
-	d.gid = user;
-	d.muid = user;
-	d.atime = 0;
-	d.mtime = 0;
-
-	case path {
-	Qroot =>
-		d.name = ".";
-		d.mode = Sys->DMDIR | 8r555;
-		d.qid.qtype = Sys->QTDIR;
-	Qctl =>
-		d.name = "ctl";
-		d.mode = 8r666;
-	Qsay =>
-		d.name = "say";
-		d.mode = 8r666;
-	Qhear =>
-		d.name = "hear";
-		d.mode = 8r666;
-	Qvoices =>
-		d.name = "voices";
-		d.mode = 8r444;
-	* =>
-		return (nil, Enotfound);
-	}
-
-	d.qid.path = big path;
+	(c, dir) := newstream();
+	if(c == nil)
+		return (nil, sys->sprint("speech: no audio device: %r"));
+	if(sys->fprint(c, "in rate %d chans 1 bits 16 enc pcm", Micrate) < 0)
+		return (nil, sys->sprint("speech: microphone format: %r"));
+	d := sys->open(dir + "/data", Sys->OREAD);
+	if(d == nil)
+		return (nil, sys->sprint("speech: microphone: %r"));
 	return (d, nil);
 }
 
-readdir(n: ref Navop.Readdir, path: int)
+# a stream of the shared device: its ctl and its directory
+newstream(): (ref Sys->FD, string)
 {
-	case path {
-	Qroot =>
-		entries := array[] of {Qctl, Qsay, Qhear, Qvoices};
-		for(i := 0; i < len entries; i++) {
-			if(i >= n.offset) {
-				(d, err) := dirgen(entries[i]);
-				if(d != nil)
-					n.reply <-= (d, err);
-			}
-		}
+	for(l := "/dev/mix/" :: "#A/mix/" :: nil; l != nil; l = tl l){
+		c := sys->open(hd l + "new", Sys->ORDWR);
+		if(c == nil)
+			continue;
+		b := array[32] of byte;
+		n := sys->read(c, b, len b);
+		if(n <= 0)
+			continue;
+		(nil, w) := sys->tokenize(string b[0:n], " \n");
+		if(w == nil)
+			continue;
+		return (c, hd l + hd w);
 	}
-	n.reply <-= (nil, nil);
+	return (nil, nil);
 }
 
-# === Main 9P serve loop ===
+micproc(mic, afd: ref Sys->FD, stop: chan of int)
+{
+	buf := array[Micchunk] of byte;
+	for(;;){
+		alt {
+		<-stop =>
+			return;
+		* =>
+			;
+		}
+		n := sys->read(mic, buf, len buf);
+		if(n <= 0)
+			return;
+		# duplex half: what plays is not heard back
+		if(speaking && duplex == "half")
+			continue;
+		if(sys->write(afd, buf, n) != n)
+			return;
+	}
+}
 
-serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop)
+#
+# listen: the engine's text
+#
+
+textproc()
+{
+	buf := array[8192] of byte;
+	for(;;){
+		fd := sys->open(engine + "/text", Sys->OREAD);
+		if(fd == nil){
+			sys->sleep(500);
+			continue;
+		}
+		part := "";
+		while((n := sys->read(fd, buf, len buf)) > 0){
+			part += string buf[0:n];
+			for(;;){
+				i := 0;
+				while(i < len part && part[i] != '\n')
+					i++;
+				if(i == len part)
+					break;
+				if(i > 0)
+					recc <-= part[0:i];
+				part = part[i+1:];
+			}
+		}
+		sys->sleep(500);	# the engine went away, or was changed
+	}
+}
+
+finalwords(rec: string): string
+{
+	if(prefix("error ", rec))
+		return "error: " + rec[6:];
+	# final confidence=N words
+	(nil, f) := sys->tokenize(rec, " ");
+	s := "";
+	for(f = tl f; f != nil; f = tl f){
+		if(prefix("confidence=", hd f) && s == "")
+			continue;
+		if(s != "")
+			s += " ";
+		s += hd f;
+	}
+	return s;
+}
+
+#
+# say: the engine's sound, played as speech
+#
+
+startspeaker()
+{
+	pidc := chan of int;
+	spawn speaker(pidc);
+	speakerpid = <-pidc;
+}
+
+speaker(pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
-
-Serve:
-	for(;;) {
-		gm := <-tchan;
-		if(gm == nil)
-			break Serve;
-
-		pick m := gm {
-		Readerror =>
-			break Serve;
-
-		Read =>
-			fid := srv.getfid(m.fid);
-			if(fid == nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
-				continue;
-			}
-
-			path := int fid.path;
-			case path {
-			Qctl =>
-				srv.reply(styxservers->readstr(m, readconfig()));
-			Qsay =>
-				fs := getfidstate(m.fid);
-				# If async TTS is pending, wait for completion
-				if(fs.sayresp == nil && fs.saydone != nil) {
-					fs.sayresp = <-fs.saydone;
-					fs.saydone = nil;
-				}
-				if(fs.sayresp != nil)
-					srv.reply(styxservers->readbytes(m, fs.sayresp));
-				else
-					srv.reply(styxservers->readstr(m, ""));
-			Qhear =>
-				# Trigger listening and return transcription
-				fs := getfidstate(m.fid);
-				if(fs.hearresp == nil) {
-					text := dohear();
-					fs.hearresp = array of byte text;
-				}
-				srv.reply(styxservers->readbytes(m, fs.hearresp));
-			Qvoices =>
-				srv.reply(styxservers->readstr(m, listvoices()));
-			* =>
-				srv.default(gm);
-			}
-
-		Write =>
-			fid := srv.getfid(m.fid);
-			if(fid == nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
-				continue;
-			}
-
-			path := int fid.path;
-			case path {
-			Qctl =>
-				result := applyconfig(string m.data);
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				if(hasprefix(result, "error:"))
-					sys->fprint(stderr, "speech9p: %s\n", result);
-			Qsay =>
-				text := string m.data;
-				fs := getfidstate(m.fid);
-				fs.sayreq = text;
-				fs.sayresp = nil;
-				# Create a new completion channel for this operation
-				fs.saydone = chan of array of byte;
-				# Reply immediately, run TTS in background.
-				# dosay() blocks for the full duration of audio playback
-				# (e.g. 10-15s for macOS 'say'). Running it inline freezes
-				# the serveloop, blocking all other 9P traffic.
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				spawn asyncsay(fs.saydone, strip(text));
-			Qhear =>
-				# Writing to hear resets/starts a new recording
-				# Parse optional duration: "start 10000" = 10 seconds
-				fs := getfidstate(m.fid);
-				fs.hearresp = nil;
-				cmd := strip(string m.data);
-				(nc, argv) := sys->tokenize(cmd, " \t");
-				if(nc >= 2) {
-					dur := int (hd tl argv);
-					if(dur > 0 && dur <= 60000)
-						hearduration = dur;
-				}
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
-			* =>
-				srv.reply(ref Rmsg.Error(m.tag, Eperm));
-			}
-
-		Clunk =>
-			fid := srv.getfid(m.fid);
-			if(fid != nil)
-				delfidstate(m.fid);
-			srv.default(gm);
-
-		* =>
-			srv.default(gm);
-		}
+	for(;;){
+		text := <-sayc;
+		spkc <-= (1, oneline(text));
+		e := speak(text);
+		if(e != nil)
+			sys->fprint(stderr, "speech: %s\n", e);
+		drained();
+		spkc <-= (0, nil);
 	}
-	navops <-= nil;
+}
+
+speak(text: string): string
+{
+	t := sys->open(engine + "/tts", Sys->ORDWR);
+	if(t == nil)
+		return sys->sprint("no engine at %s: %r", engine);
+	b := array of byte text;
+	if(sys->write(t, b, len b) != len b)
+		return sys->sprint("engine tts: %r");
+	rate := enginerate();
+	if((e := speechstream(rate)) != nil)
+		return e;
+	buf := array[8192] of byte;
+	off := big 0;
+	while((n := sys->pread(t, buf, len buf, off)) > 0){
+		off += big n;
+		if(sys->write(spkdata, buf, n) != n)
+			return sys->sprint("speaking: %r");
+	}
+	return nil;
+}
+
+# the engine's sound's rate, from its ctl
+enginerate(): int
+{
+	(s, nil) := readfile(engine + "/ctl");
+	(nil, l) := sys->tokenize(s, "\n");
+	for(; l != nil; l = tl l){
+		(n, f) := sys->tokenize(hd l, " ");
+		if(n == 2 && hd f == "rate")
+			return int hd tl f;
+	}
+	return 16000;
+}
+
+# the speech stream, in the engine's format; kept open between utterances
+speechstream(rate: int): string
+{
+	if(spkdata != nil && rate == spkrate)
+		return nil;
+	if(spkctl == nil){
+		(c, dir) := newstream();
+		if(c == nil)
+			return sys->sprint("no audio device: %r");
+		spkdata = sys->open(dir + "/data", Sys->OWRITE);
+		if(spkdata == nil)
+			return sys->sprint("speech stream: %r");
+		spkctl = c;
+	}
+	if(sys->fprint(spkctl, "out rate %d chans 1 bits 16 enc pcm role speech", rate) < 0)
+		return sys->sprint("speech stream format: %r");
+	spkrate = rate;
+	return nil;
+}
+
+# until the speech stream has played what it holds
+drained()
+{
+	if(spkctl == nil)
+		return;
+	b := array[512] of byte;
+	for(i := 0; i < 600; i++){	# a minute at most
+		n := sys->pread(spkctl, b, len b, big 0);
+		if(n <= 0)
+			return;
+		(nil, l) := sys->tokenize(string b[0:n], "\n");
+		for(; l != nil; l = tl l){
+			(k, f) := sys->tokenize(hd l, " ");
+			if(k == 2 && hd f == "queued" && int hd tl f == 0)
+				return;
+		}
+		sys->sleep(100);
+	}
+}
+
+docancel()
+{
+	# the queue, then what is playing
+	for(;;) alt {
+	<-sayc =>
+		;
+	* =>
+		kill(speakerpid);
+		if(spkctl != nil)
+			sys->fprint(spkctl, "out flush");
+		speaking = 0;
+		speaktext = nil;
+		startspeaker();
+		return;
+	}
+}
+
+#
+# chime: earcons, synthesised here, as a stream with the role tone
+#
+
+chimeproc()
+{
+	fd: ref Sys->FD;
+	ctl: ref Sys->FD;
+	for(;;){
+		c := <-chimec;
+		if(fd == nil){
+			dir: string;
+			(ctl, dir) = newstream();
+			if(ctl == nil)
+				continue;
+			if(sys->fprint(ctl, "out rate %d chans 1 bits 16 enc pcm role tone", Micrate) < 0)
+				continue;
+			fd = sys->open(dir + "/data", Sys->OWRITE);
+			if(fd == nil)
+				continue;
+		}
+		b: array of byte;
+		case c {
+		"start" =>	b = cat(beep(660.0, 70), beep(880.0, 90));
+		"stop" =>	b = cat(beep(880.0, 70), beep(660.0, 90));
+		"done" =>	b = beep(880.0, 120);
+		"error" =>	b = cat(beep(330.0, 120), beep(262.0, 180));
+		}
+		sys->write(fd, b, len b);
+	}
+}
+
+beep(hz: real, ms: int): array of byte
+{
+	n := Micrate * ms / 1000;
+	b := array[2*n] of byte;
+	fade := Micrate * 8 / 1000;
+	for(i := 0; i < n; i++){
+		g := 1.0;
+		if(i < fade)
+			g = real i / real fade;
+		else if(n - i < fade)
+			g = real (n - i) / real fade;
+		v := int (6000.0 * g * math->sin(2.0 * Math->Pi * hz * real i / real Micrate));
+		b[2*i] = byte v;
+		b[2*i+1] = byte (v >> 8);
+	}
+	return b;
+}
+
+cat(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
+}
+
+#
+# the readers
+#
+
+talker(fid: int): ref Talker
+{
+	for(l := talkers; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	t := ref Talker(fid, -1, nil);
+	talkers = t :: talkers;
+	return t;
+}
+
+droptalker(fid: int)
+{
+	n: list of ref Talker;
+	for(l := talkers; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			n = hd l :: n;
+	talkers = n;
+}
+
+telltalker(t: ref Talker)
+{
+	if(t.rc == nil || t.told == talking)
+		return;
+	t.told = talking;
+	t.rc <-= (array of byte (onoff(talking) + "\n"), nil);
+	t.rc = nil;
+}
+
+telltalkers()
+{
+	for(l := talkers; l != nil; l = tl l)
+		telltalker(hd l);
+}
+
+listener(fid: int): ref Listener
+{
+	for(l := listeners; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	r := ref Listener(fid, nil, nil, 0);
+	listeners = r :: listeners;
+	return r;
+}
+
+droplistener(fid: int)
+{
+	n: list of ref Listener;
+	for(l := listeners; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			n = hd l :: n;
+	listeners = n;
+}
+
+answerlistener(r: ref Listener)
+{
+	if(r.rc == nil || r.queue == nil)
+		return;
+	b := array of byte (hd r.queue + "\n");
+	r.queue = tl r.queue;
+	if(len b > r.count)
+		b = b[0:r.count];
+	r.rc <-= (b, nil);
+	r.rc = nil;
+}
+
+hearer(fid: int): ref Hearer
+{
+	for(l := hearers; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	h := ref Hearer(fid, 0, nil, 0, nil);
+	hearers = h :: hearers;
+	return h;
+}
+
+drophearer(fid: int)
+{
+	n: list of ref Hearer;
+	for(l := hearers; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			n = hd l :: n;
+	hearers = n;
+	if(heartalk && n == nil){
+		talkoff();
+		heartalk = 0;
+	}
+}
+
+answerhearer(h: ref Hearer)
+{
+	if(h.rc == nil || h.waiting)
+		return;
+	h.rc <-= (array of byte h.words, nil);
+	h.rc = nil;
+	h.done = 1;
+}
+
+hearlimit(fid, ms: int)
+{
+	sys->sleep(ms);
+	hearendc <-= fid;
+}
+
+#
+# odds and ends
+#
+
+word(s: string): string
+{
+	(nil, f) := sys->tokenize(s, " \t\n");
+	if(f == nil)
+		return nil;
+	return hd f;
+}
+
+oneline(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			s[i] = ' ';
+	return s;
+}
+
+onoff(b: int): string
+{
+	if(b)
+		return "on";
+	return "off";
+}
+
+prefix(p, s: string): int
+{
+	return len s >= len p && s[0:len p] == p;
+}
+
+append(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: append(tl l, s);
+}
+
+slice(b: array of byte, off: int): array of byte
+{
+	if(off >= len b)
+		return nil;
+	return b[off:];
+}
+
+readfile(f: string): (string, string)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return (nil, sys->sprint("%s: %r", f));
+	s := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		s += string buf[0:n];
+	return (s, nil);
+}
+
+kill(pid: int)
+{
+	if(pid < 0)
+		return;
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }

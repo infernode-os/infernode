@@ -28,6 +28,7 @@ TARG=\
 	tooluse_test.dis\
 	awk_test.dis\
 	asyncio_test.dis\
+	speechfake.dis\
 	audiodev_test.dis\
 	bthci_test.dis\
 	l2cap_test.dis\

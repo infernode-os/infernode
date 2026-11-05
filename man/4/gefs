@@ -235,11 +235,39 @@ Get a file back from an hour ago:
 .EX
 cp /n/dump/main@hour.2026.11.05_08:00:04/lib/profile /n/gefs/lib/profile
 .EE
+.PP
+Put the card's userland on it and boot from it
+(see
+.IR osinit (8)'s
+.BR rootpath ):
+.IP
+.EX
+sh -n /n/dos/dis/disk/gefsroot -r nvme0p3
+echo 'gefs nvme0p3
+local' > /n/dos/rootpath
+.EE
+.PP
+.I Gefsroot
+takes a snapshot,
+.BI install. secondsR,
+then copies the card's
+.BR dis ,
+.BR lib ,
+.B fonts
+and
+.B icons
+whole (files the card no longer has go), and
+.B usr
+only when the disk has none.
+Run again to update; the next boot uses the new trees.
 .SH SOURCE
 .B /appl/cmd/disk/gefs
+.br
+.B /dis/disk/gefsroot
 .SH SEE ALSO
 .IR kfs (4),
 .IR sd (3),
+.IR osinit (8),
 .IR mount (1)
 .br
 .IR "GEFS, A Good Enough File System" ,
@@ -251,4 +279,5 @@ in parallel with the writer: a long read holds up the rest.
 .br
 There is no authentication.
 .br
-The Pi cannot yet boot from it; the boot partition stays FAT.
+The firmware reads only FAT, so the kernel and its configuration stay on
+the card's boot partition; the rest of the system can live here.

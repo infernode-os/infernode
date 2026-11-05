@@ -449,6 +449,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `gefs_hash_test.b` | gefs's MetroHash64 and integer hash, pinned: every block pointer on a gefs disk carries the first, 9front's included |
 | `tests/host/gefs_test.sh` | `disk/gefs`: ream, files, persistence across a restart, a snapshot keeping what is changed and removed after it, delsnap, the check at each step |
 | `tests/host/gefs_crash_test.sh` | gefs survives power cuts: disks made from a `-W` journal of every write and flush, torn 4 KB sectors included, must load, check clean, hold only whole or cut-short files, and go on working (`GEFS_CUTS`, default 24) |
+| `tests/host/gefsroot_test.sh` | `disk/gefsroot` fills a gefs root and updates it: a dropped file goes, a new one comes, the machine's `usr/` is kept, a snapshot per install holds the old tree |
 | `tests/host/kernelpins_test.sh` | Bugs only a loaded board shows, held by reading the source: core 0's idle, runproc's retry, nothing named `up`, pool ceilings fitting in memory |
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |

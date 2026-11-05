@@ -512,6 +512,7 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 
 	la = nhgetl(a);
 	q = nil;
+	rlock(&routelock);
 	for(p=f->v4root[V4H(la)]; p;)
 		if(la >= p->v4.address) {
 			if(la <= p->v4.endaddress) {
@@ -530,9 +531,11 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 			v4tov6(gate, q->v4.gate);
 		ifc = findipifc(f, gate, q->type);
 		if(ifc == nil)
-			return nil;
-		q->ifc = ifc;
-		q->ifcid = ifc->ifcid;
+			q = nil;
+		else {
+			q->ifc = ifc;
+			q->ifcid = ifc->ifcid;
+		}
 	}
 
 	if(c != nil){
@@ -540,6 +543,7 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 		c->rgen = v4routegeneration;
 	}
 
+	runlock(&routelock);
 	return q;
 }
 
@@ -566,6 +570,7 @@ v6lookup(Fs *f, uchar *a, Conv *c)
 		la[h] = nhgetl(a+4*h);
 
 	q = 0;
+	rlock(&routelock);
 	for(p=f->v6root[V6H(la)]; p;){
 		for(h = 0; h < IPllen; h++){
 			x = la[h];
@@ -602,15 +607,17 @@ next:		;
 		} else
 			ifc = findipifc(f, q->v6.gate, q->type);
 		if(ifc == nil)
-			return nil;
-		q->ifc = ifc;
-		q->ifcid = ifc->ifcid;
+			q = nil;
+		else {
+			q->ifc = ifc;
+			q->ifcid = ifc->ifcid;
+		}
 	}
 	if(c != nil){
 		c->r = q;
 		c->rgen = v6routegeneration;
 	}
-	
+	runlock(&routelock);
 	return q;
 }
 

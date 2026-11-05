@@ -254,6 +254,7 @@ ipifcstate(Conv *c, char *state, int n)
 
 	ifc = (Ipifc*)c->ptcl;
 
+	rlock(&ifc->rwl);
 	m = snprint(state, n, sfixedformat,
 		ifc->dev, ifc->maxtu, ifc->sendra6, ifc->recvra6,
 		ifc->rp.mflag, ifc->rp.oflag, ifc->rp.maxraint,
@@ -261,7 +262,6 @@ ipifcstate(Conv *c, char *state, int n)
 		ifc->rp.rxmitra, ifc->rp.ttl, ifc->rp.routerlt,
 		ifc->in, ifc->out, ifc->inerr, ifc->outerr);
 
-	rlock(&ifc->rwl);
 	for(lifc = ifc->lifc; lifc && n > m; lifc = lifc->next)
 		m += snprint(state+m, n - m, slineformat,
 			lifc->local, lifc->mask, lifc->remote,
@@ -1730,6 +1730,7 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	uchar	prefix[IPaddrlen];
 	int	plen = 64;
 	Iplifc	lifc;
+	Medium	*m;
 	char	addr[40], preflen[6];
 	char	*params[3];
 
@@ -1767,10 +1768,13 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	)
 		return Ebadarg;
 
-	if(ifc->m->pref2addr!=nil)
-		(*ifc->m->pref2addr)(prefix, ifc->mac);
-	else
+	/* The ctl file is valid before a medium is bound.  Snapshot m before
+	 * testing it: an unbound "addpref6" must be an error, not a nil
+	 * dereference, and teardown must not change the callback we invoke. */
+	m = ifc->m;
+	if(m == nil || m->pref2addr == nil)
 		return Ebadarg;
+	(*m->pref2addr)(prefix, ifc->mac);
 	
 	sprint(addr, "%I", prefix);
 	sprint(preflen, "/%d", plen);

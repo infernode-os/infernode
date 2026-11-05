@@ -17,4 +17,12 @@ if [ -z "$enable" ] || [ -z "$increment" ] || [ "$increment" -le "$enable" ]; th
 	exit 1
 fi
 
-echo "PASS: failed UART enable leaves the open count unchanged"
+ctl=$(sed -n '/^uartctl(/,/^}/p' "$src")
+guard=$(printf '%s\n' "$ctl" | grep -nF 'if(n < 0 || n > 1024*1024)' | cut -d: -f1)
+limit=$(printf '%s\n' "$ctl" | grep -nF 'qsetlimit(p->iq, n);' | cut -d: -f1)
+if [ -z "$guard" ] || [ -z "$limit" ] || [ "$guard" -ge "$limit" ]; then
+	echo "FAIL: UART queue limit is not bounded before qsetlimit" >&2
+	exit 1
+fi
+
+echo "PASS: UART open unwinds failures and queue sizes are bounded"

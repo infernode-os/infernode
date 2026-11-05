@@ -513,6 +513,11 @@ a number on behalf of the agent. The phone's bridge (`MFMessageComposeViewContro
 on iOS, `SmsManager` on Android when INFR-182 lands) is what actually
 talks to the cell network.
 
+`wm/dialpad` (`man/1/wm-dialpad`), the keypad, writes the same
+`dial <number>` to `/phone/phone`, so with the mount up it dials on the
+phone from the desktop's screen; with no `/phone` it says so under the
+number rather than pretending.
+
 Why no desktop stub: a logging "stub bridge" on the developer Mac
 would let `echo 'send …' > /phone/sms` silently "succeed" with no SMS
 sent and no error surfaced. That is strictly worse than no `/phone`

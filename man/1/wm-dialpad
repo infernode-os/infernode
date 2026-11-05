@@ -1,0 +1,103 @@
+.TH WM-DIALPAD 1
+.SH NAME
+wm/dialpad \- telephone keypad
+.SH SYNOPSIS
+.B wm/dialpad
+[
+.B -p
+.I phonedir
+] [
+.B -k
+.I keysfile
+] [
+.I number
+]
+.SH DESCRIPTION
+.I Dialpad
+is a phone's keypad for a touch screen: the twelve keys, each digit
+with its letters, the number typed above them, Call and delete.
+Call dials the number by writing
+.BI "dial " number
+to
+.IB phonedir /phone
+.RB ( /phone ,
+the phone device
+.BR #f ,
+described in
+.BR /docs/HELLAPHONE.md ),
+the file an agent's
+.B dial
+tool writes, so what the radio does with it is the platform's: Android
+places the call and shows its own call screen, iOS asks the user to
+confirm it.
+Where
+.I phonedir
+is a phone's
+.B /phone
+mounted over 9P, the call goes out on the phone.
+A
+.I number
+given is typed in at the start.
+.PP
+A key types when the finger lifts, the key under it then, so a finger
+that lands on the wrong key slides to the right one.
+Held, or with button 3 (what a touch held becomes), 0 types
+.BR + ,
+which is taken only as a number's first character, and delete clears
+the number.
+Call with no number dials the last one again.
+The keyboard types the same: the digits,
+.BR * ,
+.B #
+and
+.BR + ;
+Backspace deletes, Escape clears, Enter calls.
+.PP
+Reads of the phone file are the call's state, a line
+.RI \&" state " " handle " " time \&"
+each.
+While a call is
+.BR dialing ,
+.BR incoming ,
+.B ringing
+or
+.BR connected ,
+Call is a red Hang up, which writes
+.BR hangup ;
+.B disconnected
+makes it Call again.
+Where the platform reports no state, as on Android, whose call screen
+has the call, Call stays Call.
+The line under the number says what happened, or why a dial was
+refused: no
+.BR /phone ,
+the radio's error, or the device's limit of ten dials a minute.
+.PP
+.B -k
+writes the keys' places to
+.I keysfile
+each time they are laid out, a line
+.RI \&" name " " minx " " miny " " maxx " " maxy \&"
+each, as
+.IR wm-osk (1)'s
+.B keys
+file: the digits as themselves,
+.BR star ,
+.BR hash ,
+.B call
+and
+.BR delete .
+.SH FILES
+.TF /phone/phone
+.TP
+.B /phone/phone
+dials, hangs up and reports the call's state
+.SH SOURCE
+.B /appl/wm/dialpad.b
+.SH SEE ALSO
+.IR wm-osk (1)
+.SH BUGS
+It does not send tones (DTMF) during a call, and
+.B answer
+has no key: an incoming call is answered on the platform's own call
+screen.

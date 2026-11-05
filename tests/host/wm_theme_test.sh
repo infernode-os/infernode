@@ -30,6 +30,7 @@ wm/coffee
 wm/colors
 wm/date
 wm/deb
+wm/dialpad 5551234
 wm/dir
 wm/edit
 wm/editor

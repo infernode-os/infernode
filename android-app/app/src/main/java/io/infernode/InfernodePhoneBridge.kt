@@ -88,7 +88,11 @@ object InfernodePhoneBridge {
         }
         Handler(Looper.getMainLooper()).post {
             try {
-                val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")).apply {
+                // fromParts, not parse("tel:$number"): parse reads a '#'
+                // as the start of the URI's fragment, so "*#06#" or a
+                // carrier's "*67#" reached the dialler cut short at it;
+                // fromParts encodes it (%23) as part of the number.
+                val intent = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", number, null)).apply {
                     // FLAG_ACTIVITY_NEW_TASK is mandatory when starting an
                     // Activity from a non-Activity Context (we hold an
                     // applicationContext, not an Activity ref — see attach()).

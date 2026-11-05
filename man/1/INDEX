@@ -223,6 +223,8 @@ wm-road wm-road
 wm-shell wm-shell
 shell wm-shell
 wm-osk wm-osk
+wm-dialpad wm-dialpad
+dialpad wm-dialpad
 osk wm-osk
 xd xd
 yacc yacc

@@ -32,6 +32,7 @@ TARG=\
 	matrix.dis\
 	shell.dis\
 	osk.dis\
+	dialpad.dis\
 	view.dis\
 	page.dis\
 	wm.dis\

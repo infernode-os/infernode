@@ -87,3 +87,7 @@ corner-down-left
 keyboard
 keyboard-hide
 arrow-down
+
+# the telephone keypad (wm/dialpad)
+phone
+phone-off

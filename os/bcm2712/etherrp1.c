@@ -61,6 +61,7 @@ enum
 	Tbqp		= 0x01C,
 	Isr		= 0x024,
 		Irxcomp	= 1<<1,
+		Itxubr	= 1<<3,
 		Itxcomp	= 1<<7,
 	Ier		= 0x028,
 	Idr		= 0x02C,
@@ -138,6 +139,7 @@ struct Ctlr
 	ulong	ntx;
 	ulong	nmdiotimeout;
 	ulong	nkick;		/* transmitter found idle with a frame of ours: TSTART again */
+	ulong	nirqkick;	/* the same, from the interrupt that says it stopped */
 };
 
 static int
@@ -196,6 +198,32 @@ txready(void *arg)
 	return (((volatile Desc*)arg)->ctrl & Txused) != 0;
 }
 
+/*
+ * From the interrupt: the MAC stopped -- it read a descriptor that was
+ * not its own -- or finished a frame. If the descriptor it is now at is
+ * one we have given it since, and it is not going, it missed the
+ * TSTART that came with that frame: start it again, now, rather than
+ * when sendproc or linkproc next looks (txkick, below). This is Linux
+ * macb's macb_tx_restart.
+ */
+static void
+txrestart(Ctlr *ctlr)
+{
+	int i;
+
+	if(GEM(Tsr) & Tgo)
+		return;
+	i = (GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc);
+	if(i < 0 || i >= Ntx || i == ctlr->txhead)
+		return;
+	coherence();
+	if(ctlr->tx[i].ctrl & Txused)
+		return;
+	ctlr->nirqkick++;
+	GEM(Ncr) |= Tstart;
+	(void)GEM(Ncr);
+}
+
 static void
 interrupt(Ureg*, void *arg)
 {
@@ -208,8 +236,10 @@ interrupt(Ureg*, void *arg)
 	ctlr->nintr++;
 	if(s & Irxcomp)
 		wakeup(&ctlr->rr);
-	if(s & Itxcomp)
+	if(s & (Itxcomp|Itxubr)){
+		txrestart(ctlr);
 		wakeup(&ctlr->tr);
+	}
 }
 
 static void
@@ -565,7 +595,7 @@ attach(Ether *edev)
 
 	GEM(Intmod) = 50;
 	rp1intrenable(RP1inteth, interrupt, edev, 1, "rp1eth");
-	GEM(Ier) = Irxcomp | Itxcomp;
+	GEM(Ier) = Irxcomp | Itxcomp | Itxubr;
 	GEM(Ncr) = Mpe | Txen | Rxen;
 
 	ctlr->attached = 1;
@@ -587,11 +617,11 @@ ifstat(Ether *edev, void *a, long n, ulong off)
 	if(p == nil)
 		error(Enomem);
 	snprint(p, READSTR, "rp1 gem mid %#ux\nintr %lud rx %lud rxbad %lud tx %lud mdiotimeout %lud rxtail %d txhead %d\n"
-		"txkick %lud tbqp %d\n"
+		"txkick %lud txirqkick %lud tbqp %d\n"
 		"tsr %#ux rsr %#ux isr %#ux ncfgr %#ux dmacfg %#ux\n"
 		"mac txframes %ud txunder %ud rxframes %ud rxfcs %ud rxalign %ud rxover %ud rxres %ud\n",
 		GEM(Mid), ctlr->nintr, ctlr->nrx, ctlr->nrxbad, ctlr->ntx, ctlr->nmdiotimeout, ctlr->rxtail, ctlr->txhead,
-		ctlr->nkick, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)),
+		ctlr->nkick, ctlr->nirqkick, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)),
 		GEM(Tsr), GEM(0x20), GEM(0x24), GEM(Ncfgr), GEM(Dmacfg),
 		GEM(0x108), GEM(0x134), GEM(0x158), GEM(0x190), GEM(0x194), GEM(0x1A4), GEM(0x1A0));
 	n = readstr(off, a, n, p);

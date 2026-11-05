@@ -115,6 +115,12 @@ def arp_reply():
     return eth(body, 0x0806)
 
 
+def arp_request():
+    body = struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1)
+    body += PEER_MAC + PEER_IP + bytes(6) + GUEST_IP
+    return eth(body, 0x0806, dst=b"\xff" * 6)
+
+
 class Harness:
     def __init__(self, qemu, image):
         self.rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -235,6 +241,25 @@ def configure(h):
     if not h.wait_console("10.0.2.15 mask 255.255.255.0", 20):
         raise RuntimeError("DHCP did not configure the guest")
     h.send(arp_reply())
+
+
+def arp_padding_regression(h):
+    # 9front 4fd1e64e2: Ethernet's minimum frame is larger than Etherarp.
+    # The reply must clear the complete allocation, not just the ARP struct,
+    # or kernel allocator contents become remotely visible as wire padding.
+    h.send(arp_request())
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        frame = h.recv(end)
+        if frame is None or len(frame) < 42 or frame[12:14] != b"\x08\x06":
+            continue
+        if frame[20:22] != b"\x00\x02" or frame[28:32] != GUEST_IP:
+            continue
+        if any(frame[42:]):
+            raise RuntimeError("ARP reply disclosed nonzero Ethernet padding")
+        print("ARP-PADDING-PASS", flush=True)
+        return
+    raise RuntimeError("guest did not answer the ARP padding control")
 
 
 def icmp_regression(h):
@@ -514,7 +539,8 @@ def main():
             raise RuntimeError("guest did not reach its shell")
         configure(h)
         failures = []
-        for name, test in (("fragment", icmp_regression),
+        for name, test in (("arp-padding", arp_padding_regression),
+                           ("fragment", icmp_regression),
                            ("transport", malformed_transport_regression),
                            ("devip", negative_devip_attach_regression),
                            ("tcp-scale", tcp_window_scale_regression),

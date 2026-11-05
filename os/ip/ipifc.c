@@ -1645,10 +1645,9 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 			if(*cp == nil)
 				continue;
 			nifc = (Ipifc*)(*cp)->ptcl;
-			if(nifc == ifc)
+			if(nifc == ifc || !canrlock(&nifc->rwl))
 				continue;
-	
-			rlock(&nifc->rwl);
+
 			m = nifc->m;
 			if(m == nil || m->addmulti == nil) {
 				runlock(&nifc->rwl);
@@ -1678,10 +1677,9 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 			if(*cp == nil)
 				continue;
 			nifc = (Ipifc*)(*cp)->ptcl;
-			if(nifc == ifc)
+			if(nifc == ifc || !canrlock(&nifc->rwl))
 				continue;
-	
-			rlock(&nifc->rwl);
+
 			m = nifc->m;
 			if(m == nil || m->areg == nil){
 				runlock(&nifc->rwl);

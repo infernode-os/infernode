@@ -5049,6 +5049,11 @@ vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv
 # the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
 # and hundreds of one-byte descending TCP segments (head insertion).
 if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
+    if grep -q '^ARP-PADDING-PASS$' <<<"$NETSEC"; then
+        pass "virt: ARP replies do not disclose kernel bytes in Ethernet padding"
+    else
+        fail "virt: ARP reply padding was not cleared -- $NETSEC"
+    fi
     if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
         pass "virt: valid fragmented ICMP is still reassembled"
     else

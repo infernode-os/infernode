@@ -262,10 +262,21 @@ pcie1up(void)
 	B(Harddebug) = (B(Harddebug) & ~(u32int)(Clkreqdbg|L1ss)) | Refclkovrden | Refclkovrdout;
 	B(Rootcap) = (B(Rootcap) & ~0xF8U) | 2<<3;
 
-	/* the bridge */
+	pcie1bridge();
+	return 0;
+}
+
+/*
+ * The bridge: its buses, its window, and memory and bus mastering on.
+ * At boot, and again after the link has gone and come back, which
+ * clears the last of these: a drive reset and reconfigured behind a
+ * bridge left that way reads as ones for ever.
+ */
+void
+pcie1bridge(void)
+{
 	B(0x18) = (B(0x18) & 0xFF000000) | 1<<16 | 1<<8;
 	B(0x20) = Win >> 16 | (Win >> 16) << 16;
 	B(4) = (B(4) & 0xFFFF) | 6;
 	coherence();
-	return 0;
 }

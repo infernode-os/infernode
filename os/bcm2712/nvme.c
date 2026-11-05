@@ -393,6 +393,7 @@ recover1(int step)
 		print("nvme: the drive does not answer its configuration space\n");
 		return -1;
 	}
+	pcie1bridge();
 	devsetup();
 	return enable();
 }

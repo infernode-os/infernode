@@ -49,11 +49,32 @@ metrohash64(key: array of byte, n: int, seed: int): big
 		v1 := hash;
 		v2 := hash;
 		v3 := hash;
+		#
+		# The loop that hashes every block: le64 and rotr written out,
+		# since a Dis call costs more than the arithmetic (this took
+		# half of gefs's time writing, at 12 calls a word), and the
+		# words put together from 32-bit halves, cheaper than 64.
+		#
+		m32 := big 16rFFFFFFFF;
+		r29 := big 16r7FFFFFFFF;	# a logical >> 29 keeps 35 bits
 		do{
-			v0 += le64(key, p) * k0; v0 = rotr(v0, 29) + v2; p += 8;
-			v1 += le64(key, p) * k1; v1 = rotr(v1, 29) + v3; p += 8;
-			v2 += le64(key, p) * k2; v2 = rotr(v2, 29) + v0; p += 8;
-			v3 += le64(key, p) * k3; v3 = rotr(v3, 29) + v1; p += 8;
+			lo := int key[p] | (int key[p+1]<<8) | (int key[p+2]<<16) | (int key[p+3]<<24);
+			hi := int key[p+4] | (int key[p+5]<<8) | (int key[p+6]<<16) | (int key[p+7]<<24);
+			v0 += ((big hi << 32) | (big lo & m32)) * k0;
+			v0 = (((v0 >> 29) & r29) | (v0 << 35)) + v2;
+			lo = int key[p+8] | (int key[p+9]<<8) | (int key[p+10]<<16) | (int key[p+11]<<24);
+			hi = int key[p+12] | (int key[p+13]<<8) | (int key[p+14]<<16) | (int key[p+15]<<24);
+			v1 += ((big hi << 32) | (big lo & m32)) * k1;
+			v1 = (((v1 >> 29) & r29) | (v1 << 35)) + v3;
+			lo = int key[p+16] | (int key[p+17]<<8) | (int key[p+18]<<16) | (int key[p+19]<<24);
+			hi = int key[p+20] | (int key[p+21]<<8) | (int key[p+22]<<16) | (int key[p+23]<<24);
+			v2 += ((big hi << 32) | (big lo & m32)) * k2;
+			v2 = (((v2 >> 29) & r29) | (v2 << 35)) + v0;
+			lo = int key[p+24] | (int key[p+25]<<8) | (int key[p+26]<<16) | (int key[p+27]<<24);
+			hi = int key[p+28] | (int key[p+29]<<8) | (int key[p+30]<<16) | (int key[p+31]<<24);
+			v3 += ((big hi << 32) | (big lo & m32)) * k3;
+			v3 = (((v3 >> 29) & r29) | (v3 << 35)) + v1;
+			p += 32;
 		}while(p <= n-32);
 		t := ((v0 + v3) * k0) + v1; v2 ^= rotr(t, 33) * k1;
 		t = ((v1 + v2) * k1) + v0; v3 ^= rotr(t, 33) * k0;
@@ -80,9 +101,9 @@ metrohash64(key: array of byte, n: int, seed: int): big
 	# superblock are multiples of 8, so the disk never meets these
 	# tails; they are kept exact anyway.
 	#
-	m32 := big 16rFFFFFFFF;
+	t32 := big 16rFFFFFFFF;
 	if(n - p >= 4){
-		hash += (le32(key, p) * k3) & m32; p += 4;
+		hash += (le32(key, p) * k3) & t32; p += 4;
 		hash ^= rotr(hash, 15) * k1;
 	}
 	if(n - p >= 2){

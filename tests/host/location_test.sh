@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# location_test.sh — #g (emu/port/devlocation.c), the host's location
+# location_test.sh — #o (emu/port/devlocation.c), the host's location
 # service as an NMEA receiver, through tests/gps/location.sh: with no
 # service (a desktop) it is there and says unavailable, and opening nmea
 # is refused with the reason; with the stub's fake service
@@ -41,7 +41,7 @@ for r in none fake; do
 	grep -q '^R done' "$D/$r/log" || { fail "the $r driver did not finish"; tail -20 "$D/$r/log"; exit 1; }
 done
 
-[ "$(f none/ls | tr '\n' ' ')" = "#g/nmea #g/status " ] && pass "its files" ||
+[ "$(f none/ls | tr '\n' ' ')" = "#o/nmea #o/status " ] && pass "its files" ||
 	fail "ls: $(f none/ls | tr '\n' ' ')"
 [ "$(f none/status.before)" = unavailable ] && pass "no service: unavailable" ||
 	fail "status: '$(f none/status.before)'"

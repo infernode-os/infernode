@@ -1,7 +1,7 @@
 /*
  * locationbridge — hosts with no location service (desktops).
  *
- * #g is there, and says unavailable.  For tests, and for trying a
+ * #o is there, and says unavailable.  For tests, and for trying a
  * map on a desk, $INFERNODE_LOCATION_FAKE, read when the emulator
  * starts, gives a service that reports a fix a second:
  *
@@ -24,17 +24,19 @@ static int	gen;	/* the running fake's generation; a stop ends it */
 void
 locationbridge_init(void)
 {
-	char *s, *f[4];
+	char buf[128], *s, *f[4];	/* Flawfinder: ignore — buf filled only after strlen(s) < sizeof buf */
 	int n;
+	size_t l;
 
-	s = getenv("INFERNODE_LOCATION_FAKE");
-	if(s == nil || (s = strdup(s)) == nil){
+	/* four numbers: anything longer is not one, and is refused */
+	s = getenv("INFERNODE_LOCATION_FAKE");	/* Flawfinder: ignore — the user's own setting for tests; length checked, fields parsed by strtod */
+	if(s == nil || (l = strlen(s)) >= sizeof buf){	/* Flawfinder: ignore — getenv's string is NUL-terminated */
 		locationbridge_post_state("unavailable");
 		return;
 	}
-	n = getfields(s, f, nelem(f), 1, " \t");
+	memmove(buf, s, l+1);
+	n = getfields(buf, f, nelem(f), 1, " \t");
 	if(n < 2){
-		free(s);
 		locationbridge_post_state("unavailable");
 		return;
 	}
@@ -50,7 +52,6 @@ locationbridge_init(void)
 	fake.speed = 1.0;
 	fake.hascourse = 1;
 	fake.course = 0.0;
-	free(s);
 	hasfake = 1;
 }
 

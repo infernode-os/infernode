@@ -12,7 +12,7 @@
  * Two directions, as phonebridge.h:
  *
  *   1. Device -> bridge: locationbridge_start when the first reader
- *      opens #g/nmea, locationbridge_stop when the last closes, so the
+ *      opens #o/nmea, locationbridge_stop when the last closes, so the
  *      receiver runs only while something listens.  Both are called
  *      from a kproc and must not block: a platform that must start
  *      its service on another thread posts the work there and

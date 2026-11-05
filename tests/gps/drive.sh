@@ -83,9 +83,10 @@ cat $d/feed.nmea > $g/feed
 sleep 1
 sh -c 'cat '^$g^'/position' > $d/position.lost >[2] $d/err.lost
 
-# the agent's gps tool, in a name space without the mount: tools9p
+# the agent's gps tool, in a name space without the mount (waited
+# for, up to 20s, as tools9p's start is not quick): tools9p
 # mounts the posted #sgps/fs for it
-@{pctl forkns; unmount /mnt/gps; path=(/dis/veltro /dis/cmd /dis .); tools9p -m /tool gps &; sleep 2; echo position > /tool/gps/ctl; cat /tool/gps/ctl > $d/tool.position}
+@{pctl forkns; unmount /mnt/gps; path=(/dis/veltro /dis/cmd /dis .); tools9p -m /tool gps &; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 { ftest -e /tool/gps/ctl || sleep 1 }; echo position > /tool/gps/ctl; cat /tool/gps/ctl > $d/tool.position}
 
 gpsfs >[2] $d/again
 echo R done

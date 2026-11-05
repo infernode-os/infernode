@@ -1,18 +1,18 @@
 /*
- * #g / `location` — the host's location service as an NMEA receiver.
+ * #o / `location` — the host's location service as an NMEA receiver.
  *
- *     #g/nmea      (r)  NMEA 0183 sentences, from the open on: an RMC,
+ *     #o/nmea      (r)  NMEA 0183 sentences, from the open on: an RMC,
  *                       a GST and a GGA for each fix the host gives.
  *                       Reads block.  The first open starts the host's
  *                       service, the last close stops it.
- *     #g/status    (r)  the service's state: unavailable (none on this
+ *     #o/status    (r)  the service's state: unavailable (none on this
  *                       host), stopped, waiting (started, no fix yet),
  *                       ok, denied (permission refused), off (location
  *                       services disabled)
  *
  * A phone's location service gives positions, not sentences; they are
  * written here as a receiver would send them, so gpsfs(4) takes the
- * phone as it takes a serial receiver: `source '#g/nmea'`.  The
+ * phone as it takes a serial receiver: `source '#o/nmea'`.  The
  * platform calls live in emu/<plat>/locationbridge.{c,m}
  * (locationbridge.h); this file owns the namespace and the sentences.
  *
@@ -60,7 +60,7 @@ static Listener	*listeners;
 static int	nlisteners;
 static Lock	llock;
 static QLock	startlock;	/* serialises start and stop */
-static char	state[32] = "stopped";
+static char	state[32] = "stopped";	/* Flawfinder: ignore — set only by utfecpy, bounded by sizeof state */
 static int	started;
 
 void
@@ -131,7 +131,7 @@ civil(long long days, int *y, int *m, int *d)
 void
 locationbridge_post_fix(const LocFix *f)
 {
-	char buf[512], body[200], hms[16], dmy[8], *p, *e, *b, *be;
+	char buf[512], body[200], hms[16], dmy[8], *p, *e, *b, *be;	/* Flawfinder: ignore — each written by seprint/snprint bounded by its own end; hms needs 9, dmy 6 */
 	long long t, days;
 	int y, mo, d, s, cs;
 	Listener *l;
@@ -203,7 +203,7 @@ locinit(void)
 static Chan*
 locattach(char *spec)
 {
-	return devattach('g', spec);
+	return devattach('o', spec);
 }
 
 static Walkqid*
@@ -223,7 +223,7 @@ locopen(Chan *c, int omode)
 {
 	Listener *l;
 	Queue *q;
-	char err[ERRMAX];
+	char err[ERRMAX];	/* Flawfinder: ignore — filled by the bridge with snprint(err, sizeof err) */
 
 	c = devopen(c, omode, loctab, nelem(loctab), devgen);
 	if((ulong)c->qid.path != Qnmea)
@@ -301,7 +301,7 @@ locclose(Chan *c)
 static long
 locread(Chan *c, void *va, long n, vlong offset)
 {
-	char buf[64];
+	char buf[64];	/* Flawfinder: ignore — snprint bounded by sizeof buf; state is at most 31 bytes */
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, va, n, loctab, nelem(loctab), devgen);
@@ -330,7 +330,7 @@ locwrite(Chan *c, void *va, long n, vlong offset)
 }
 
 Dev locationdevtab = {
-	'g',
+	'o',
 	"location",
 
 	locinit,

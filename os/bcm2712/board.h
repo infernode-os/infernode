@@ -44,6 +44,7 @@ int	pcie1up(void);
 int	pcie1linked(void);
 char*	pcie1speed(void);
 void	pcie1slow(void);
+int	pcie1perst(void);
 void	nvmeslow(void);
 void	nvmestart(void);
 u32int	pcie1cfgr(int);

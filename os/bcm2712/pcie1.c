@@ -141,6 +141,30 @@ pcie1slow(void)
 	coherence();
 }
 
+/*
+ * The slot reset, as at boot: PERST held for 100ms and let go, and the
+ * link given its time to train. For a drive that the lighter
+ * recoveries did not bring back. 0 if the link came up.
+ */
+int
+pcie1perst(void)
+{
+	int i;
+
+	B(Pciectrl) &= ~Perstb;
+	coherence();
+	microdelay(100000);
+	B(Pciectrl) |= Perstb;
+	coherence();
+	microdelay(100000);
+	for(i = 0; i < Linktries; i++){
+		if(pcie1linked())
+			return 0;
+		microdelay(10000);
+	}
+	return -1;
+}
+
 /* what it runs at, by the bridge's own link status */
 char*
 pcie1speed(void)

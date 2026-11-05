@@ -277,11 +277,12 @@ uartopen(Chan *c, int omode)
 	case Ndataqid:
 		p = uart[NETID(c->qid.path)];
 		qlock(&p->ql);
-		if(p->opens++ == 0 && uartenable(p) == nil){
+		if(p->opens == 0 && uartenable(p) == nil){
 			qunlock(&p->ql);
 			c->flag &= ~COPEN;
 			error(Enodev);
 		}
+		p->opens++;
 		qunlock(&p->ql);
 		break;
 	}

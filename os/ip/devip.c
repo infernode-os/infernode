@@ -675,6 +675,10 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		return readstr(offset, p, n, up->genbuf);
 	case Qremote:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		if(x->remote == nil) {
@@ -682,11 +686,13 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		} else {
 			(*x->remote)(c, buf, Statelen-2);
 		}
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qlocal:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		if(x->local == nil) {
@@ -694,17 +700,17 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		} else {
 			(*x->local)(c, buf, Statelen-2);
 		}
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qstatus:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		(*x->state)(c, buf, Statelen-2);
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qdata:
 		c = f->p[PROTO(ch->qid)]->conv[CONV(ch->qid)];
 		return qread(c->rq, a, n);
@@ -719,9 +725,15 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		if(x->stats == nil)
 			error("stats not implemented");
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		(*x->stats)(x, buf, Statelen);
+	Readstr:
 		rv = readstr(offset, p, n, buf);
 		free(buf);
+		poperror();
 		return rv;
 	}
 }

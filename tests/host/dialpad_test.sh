@@ -30,7 +30,7 @@ trap '[ -n "${KEEP:-}" ] || rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
 # the address book the microphone key's names are found in
 printf 'Mom\tmobile\t+15551230001\nMom\twork\t+15551230002\nSarah Smith\tmobile\t+15551230003\nSarah Smith\twork\t+15551230004\n# contacts: 4 numbers\n' > "$ROOT/$T/contacts"
-SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g800x600 -r"$ROOT" \
+INFERNODE_AUDIO_FAKE=1 SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=512m -pimage=512m -g800x600 -r"$ROOT" \
 	/dis/sh.dis -c "bind -c /$T /tmp; wm/wm sh /tests/dialpad/drive.sh" \
 	</dev/null >"$LOG" 2>&1 || true
 
@@ -174,14 +174,14 @@ fi
 
 # The touch tones, decoded as an exchange decodes them: each step's
 # sound (tests/dialpad/drive.sh keeps it as raw 16-bit stereo) cut into
-# tones where it falls quiet between them, each 10 ms of a tone read by
+# tones where it falls quiet between them, each 20 ms of a tone read by
 # Goertzel at the eight DTMF frequencies, its strongest row and column
 # tone standing well clear of the others; a tone's keys in turn, the
 # tones space-separated, with each tone's length and the loudest sample.
-dtmf() {
-	python3 -I - "$1" <<'PY'
+dtmf() {	# file [rate]
+	python3 -I - "$@" <<'PY'
 import sys, struct, math
-RATE = 44100
+RATE = int(sys.argv[2]) if len(sys.argv) > 2 else 44100
 LOW = [697, 770, 852, 941]; HIGH = [1209, 1336, 1477, 1633]
 GRID = "123A456B789C*0#D"
 def goertzel(x, f):
@@ -210,8 +210,9 @@ if start is not None:
 tones = []; lens = []
 for a, z in segs:
     keys = ''
-    for w in range(a, z - 441 + 1, 441):
-        x = left[w:w + 441]
+    win = RATE // 50	# 20 ms, at any rate: 697 Hz apart from 770 Hz
+    for w in range(a, z - win + 1, win):
+        x = left[w:w + win]
         lo = [goertzel(x, f) for f in LOW]; hi = [goertzel(x, f) for f in HIGH]
         l = max(range(4), key=lambda i: lo[i]); h = max(range(4), key=lambda i: hi[i])
         if lo[l] < 8 * sorted(lo)[-2] or hi[h] < 8 * sorted(hi)[-2]:
@@ -356,6 +357,12 @@ if grep -q '^out rate 44100$' "$ROOT/$T/audioctl" 2>/dev/null && ! grep -v '^out
 else
 	fail "audioctl was written: $(tr '\n' '|' < "$ROOT/$T/audioctl" 2>/dev/null)"
 fi
+
+# Without -a the tones are a stream of audio(3)'s mix, role tone: what
+# the speaker played (the fake hardware, 48 kHz) holds 1 then 9
+r=$(dtmf "$ROOT/$T/mixed.raw" 48000 2>/dev/null | cut -d'|' -f1)
+[ "$r" = "1 9" ] && pass "without -a the tones are a stream of the shared device's, and heard ($r)" ||
+	fail "the shared device's speaker heard '$r', not '1 9'"
 
 # the microphone key asked speech9p's hear to start each time
 n=$(grep -c '^start 5000$' "$ROOT/$T/hearwrites" 2>/dev/null)

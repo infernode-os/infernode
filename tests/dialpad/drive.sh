@@ -161,5 +161,19 @@ taps mic
 sleep 5
 step nobody
 scap /tmp/nobody.img
+
+# Without -a the tones are a stream of the shared device's own (role
+# tone): a second dial pad, the speaker read back from the fake
+# hardware (the test runs emu with $INFERNODE_AUDIO_FAKE)
+dd -if '#A/fakeout' -of /dev/null -bs 65536 >[2] /dev/null
+wm/dialpad -p /chan -k /tmp/keys2 &
+sleep 3
+cp /tmp/keys /tmp/keys1
+cp /tmp/keys2 /tmp/keys
+taps 1 9
+cp /tmp/keys1 /tmp/keys
+sleep 2
+cp '#A/fakeout' /tmp/mixed.raw
+echo R mixed
 scap /tmp/ended.img
 echo R done

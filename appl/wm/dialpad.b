@@ -25,7 +25,8 @@ implement Dialpad;
 # high one, 1209, 1336 or 1477 Hz, the frequencies Bell Labs chose so
 # that no pair is a harmonic of another and speech seldom makes one;
 # the high tone a little louder, as a line loses more of it.  They go
-# to audiodev (/dev/audio, audio(3)) as 16-bit stereo, paced to the
+# to a stream of audio(3)'s mix of their own, role tone (or, with -a,
+# to audiodev, an audio(3) file) as 16-bit stereo, paced to the
 # time they take, so a held key does not fill the device's queue.  -q
 # is silence.  A device that will not open is told once and left.
 #
@@ -130,6 +131,7 @@ hearc: chan of (int, string, string);	# (listening, words, why not)
 dialing := 0;		# a call said, to be dialled when dialc says
 dialc: chan of int;
 audiodev := "/dev/audio";
+audioset := 0;		# -a named the file to write
 quiet := 0;
 tonec: chan of int;		# the key sounding, 0 for none
 keysfile := "";
@@ -170,6 +172,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 			case o {
 			'q' =>	quiet = 1;
 			'a' =>	audiodev = arg->earg();
+				audioset = 1;
 			'p' =>	phonedir = arg->earg();
 			's' =>	speechdir = arg->earg();
 			'k' =>	keysfile = arg->earg();
@@ -746,6 +749,13 @@ sounder()
 
 opendev(): ref Sys->FD
 {
+	# a stream of the shared device's own (audio(3)'s mix), in its own
+	# format and with the role tone, which nothing lowers -- heard over a
+	# call's audio, and changing no one else's format
+	if(!audioset)
+		for(l := "/dev/mix/" :: "#A/mix/" :: nil; l != nil; l = tl l)
+			if((fd := openstream(hd l)) != nil)
+				return fd;
 	fd := sys->open(audiodev, Sys->OWRITE);
 	if(fd == nil){
 		sys->fprint(stderr, "dialpad: %s: %r: no tones\n", audiodev);
@@ -761,6 +771,23 @@ opendev(): ref Sys->FD
 			sys->fprint(cfd, "out rate %d\nout chans 2\nout bits 16\nout enc pcm\n", Rate);
 	}
 	return fd;
+}
+
+openstream(mix: string): ref Sys->FD
+{
+	cfd := sys->open(mix + "new", Sys->ORDWR);
+	if(cfd == nil)
+		return nil;
+	buf := array[64] of byte;
+	n := sys->read(cfd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	(nil, f) := sys->tokenize(string buf[0:n], " \n");
+	if(f == nil)
+		return nil;
+	if(sys->fprint(cfd, "out rate %d chans 2 bits 16 enc pcm role tone", Rate) < 0)
+		return nil;
+	return sys->open(mix + hd f + "/data", Sys->OWRITE);	# the stream lasts while this is open
 }
 
 idle(g: int, c: chan of int)

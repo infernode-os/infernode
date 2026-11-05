@@ -35,6 +35,8 @@ SEED=${SEED:-$(date +%s)}
 ACTIONS=${PHONE_FUZZ_ACTIONS:-240}
 EVERY=${PHONE_FUZZ_EVERY:-30}
 SIZE=${PHONE_FUZZ_SIZE:-1179x2556}
+# -c0 to rerun a failure interpreted, whose stacks name their lines
+JIT=${PHONE_FUZZ_JIT:--c1}
 W=${SIZE%x*} H=${SIZE#*x}
 T=tmp/phone_fuzz_test.$$
 mkdir -p "$ROOT/$T"
@@ -42,7 +44,7 @@ LOG="$ROOT/$T/log"
 trap '[ -n "${KEEP:-}" ] || rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
 echo "seed $SEED, $ACTIONS actions, ${W}x$H"
-SDL_VIDEODRIVER=dummy with_timeout 1200 "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -g${W}x$H -r"$ROOT" \
+SDL_VIDEODRIVER=dummy with_timeout 1200 "$EMU" $JIT -pheap=1024m -pmain=1024m -pimage=1024m -g${W}x$H -r"$ROOT" \
 	/dis/sh.dis -l -c "run /lib/lucifer/boot-mobile.sh --no-logon & sleep 45; bind -c /$T /tmp; seed=$SEED; actions=$ACTIONS; every=$EVERY; w=$W; h=$H; run /tests/osk/phonefuzz.sh" \
 	</dev/null >"$LOG" 2>&1 || true
 
@@ -63,6 +65,10 @@ check('R done' in log.splitlines(), 'the run finished')
 check(re.search(r'^phonefuzz: %d actions' % actions, log, re.M) is not None, '%d random actions' % actions)
 bad = [l for l in log.splitlines() if re.search(r'panic|Broken:|exception|nil dereference|array bounds|out of memory|link typecheck|^tk: ', l)]
 check(not bad, 'nothing panicked or died' + ('' if not bad else ': ' + bad[0]))
+stall = re.search(r'^S stalled at action (\d+)', log, re.M)
+check(stall is None, 'it went on to the end' + ('' if stall is None else ' (stalled at action %s)' % stall.group(1)))
+for b in re.findall(r'^B (.*)$', log, re.M):
+    print('broken: ' + b)
 st = open(d + '/status.end').read() if os.path.exists(d + '/status.end') else ''
 check(st.startswith('state ') or '\nstate ' in st, 'osk still answers')
 check(os.path.exists(d + '/ui.end') and os.path.getsize(d + '/ui.end') > 0, "Lucifer's UI server still answers")

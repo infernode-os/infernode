@@ -39,6 +39,7 @@ H := 0;
 HEADER: con 133;	# Lucifer's phone header (MOBILE_HEADERH + 1)
 TITLE: con 132;		# an accordion title bar (MOBILE_TITLEBARH)
 attached := 0;
+done := 0;
 
 init(ctxt: ref Draw->Context, args: list of string)
 {
@@ -65,8 +66,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 	pointer = sys->open("/dev/pointer", Sys->OWRITE);
 	if(fingers == nil || pointer == nil)
 		raise sys->sprint("fail:/dev/fingers or /dev/pointer: %r");
+	pidc := chan of int;
+	spawn watch(pidc);
+	watcher := <-pidc;
 	cp := 0;
 	for(i := 0; i < n; i++){
+		done = i;
 		act();
 		if((i+1) % every == 0 || i == n-1)
 			checkpoint(ctxt, cp++);
@@ -74,6 +79,67 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(attached)
 		consctl("kbd detach fz0");
 	sys->print("phonefuzz: %d actions, %d checkpoints\n", n, cp);
+	fd := sys->open("/prog/"+string watcher+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+# A program broken (an exception it did not catch) is told with its
+# stack, as "B" and its status; and a run that stops going on (a write
+# to the pointer that nothing reads, once what read it is broken) is
+# told as "S" and ended, so the test fails at once and not at its
+# timeout.  Checkpoints take seconds, so a minute without an action is
+# a stall.
+watch(pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	seen: list of string;
+	last := -1;
+	still := 0;
+	for(;;){
+		sys->sleep(2000);
+		fd := sys->open("/prog", Sys->OREAD);
+		while(fd != nil){
+			(nd, d) := sys->dirread(fd);
+			if(nd <= 0)
+				break;
+			for(j := 0; j < nd; j++){
+				if(member(d[j].name, seen))
+					continue;
+				st := readfile("/prog/"+d[j].name+"/status");
+				if(!contains(st, " broken"))
+					continue;
+				seen = d[j].name :: seen;
+				sys->print("B %s\n%s\n", st, readfile("/prog/"+d[j].name+"/stack"));
+			}
+		}
+		if(done != last){
+			last = done;
+			still = 0;
+		}else if(++still >= 30){
+			sys->print("S stalled at action %d\n", done);
+			fd = sys->open("#c/sysctl", Sys->OWRITE);
+			if(fd != nil)
+				sys->fprint(fd, "halt");
+			return;
+		}
+	}
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
 }
 
 act()

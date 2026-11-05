@@ -754,8 +754,8 @@ opendev(): ref Sys->FD
 	# call's audio, and changing no one else's format
 	if(!audioset)
 		for(l := "/dev/mix/" :: "#A/mix/" :: nil; l != nil; l = tl l)
-			if((fd := openstream(hd l)) != nil)
-				return fd;
+			if((sfd := openstream(hd l)) != nil)
+				return sfd;
 	fd := sys->open(audiodev, Sys->OWRITE);
 	if(fd == nil){
 		sys->fprint(stderr, "dialpad: %s: %r: no tones\n", audiodev);

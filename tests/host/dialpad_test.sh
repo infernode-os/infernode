@@ -361,8 +361,11 @@ fi
 # Without -a the tones are a stream of audio(3)'s mix, role tone: what
 # the speaker played (the fake hardware, 48 kHz) holds 1 then 9
 r=$(dtmf "$ROOT/$T/mixed.raw" 48000 2>/dev/null | cut -d'|' -f1)
-[ "$r" = "1 9" ] && pass "without -a the tones are a stream of the shared device's, and heard ($r)" ||
+[ "$r" = "1 9" ] && pass "without -a the tones heard through the shared device ($r)" ||
 	fail "the shared device's speaker heard '$r', not '1 9'"
+grep -q '^role tone$' "$ROOT/$T/mixctl" 2>/dev/null &&
+	pass "and as a stream of its own, role tone (not /dev/audio)" ||
+	fail "no stream with role tone while the tones played: $(tr '\n' '|' < "$ROOT/$T/mixctl" 2>/dev/null)"
 
 # the microphone key asked speech9p's hear to start each time
 n=$(grep -c '^start 5000$' "$ROOT/$T/hearwrites" 2>/dev/null)

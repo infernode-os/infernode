@@ -171,6 +171,10 @@ sleep 3
 cp /tmp/keys /tmp/keys1
 cp /tmp/keys2 /tmp/keys
 taps 1 9
+# the stream it plays through, while it is open (the sounder keeps it
+# 3 s): a stream of the mixer's with the role tone
+# (/dev/mix, where #A is bound: sh does not glob a #A path)
+for c in /dev/mix/*/ctl { cat $c >> /tmp/mixctl }
 cp /tmp/keys1 /tmp/keys
 sleep 2
 cp '#A/fakeout' /tmp/mixed.raw

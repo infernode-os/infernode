@@ -904,6 +904,36 @@ procdump(void)
 	}
 }
 
+/*
+ * For vmdump (dis.c, the debug key 'v'): every process that runs v's
+ * interpreter -- type Interp, or one that has taken it to run a Prog
+ * -- and what it is doing. The one that has it now is the Interp
+ * process with no saved Prog that is not queueing for it.
+ */
+void
+vmprocdump(struct Vm *v)
+{
+	int i;
+	Proc *p;
+	char *how;
+
+	for(i=0; i<conf.nproc; i++) {
+		p = &procalloc.arena[i];
+		if(p->state == Dead || p->vm != v)
+			continue;
+		if(p->type == Interp && p->iprog == nil && p->state != Queueing)
+			how = "HOLDS THE VM";
+		else if(p->state == Queueing)
+			how = "queued";
+		else if(p->type == Interp)
+			how = "released";
+		else
+			how = "";
+		print("  proc %lud %s %s pc %.8lux qpc %.8lux %s\n",
+			p->pid, p->text, statename[p->state], p->pc, p->qpc, how);
+	}
+}
+
 void
 kproc(char *name, void (*func)(void *), void *arg, int flags)
 {

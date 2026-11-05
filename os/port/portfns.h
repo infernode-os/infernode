@@ -108,6 +108,7 @@ int	vmprogs(struct Vm*);
 void	vmclearwaitq(void*);
 int	vmcount(void);
 struct Vm*	vmn(int);
+void	vmprocdump(struct Vm*);
 struct Vm*	vmget(int);
 int	vmrun(int, int, char**);
 int	progpidn(int);

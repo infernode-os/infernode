@@ -52,6 +52,28 @@ libqunlock(void *l)
 	qunlock(q);
 }
 
+/*
+ * The same lock, owned by the process rather than by a Prog: for a
+ * caller that holds an interpreter but has no Prog running in it --
+ * vmrun loading a command into a VM that has none yet (#944). It does
+ * not let the interpreter go while it waits: whoever holds the lock is
+ * compiling in another VM and needs nothing of this one's to finish.
+ */
+void
+libqlockproc(void *l)
+{
+	qlock((QLock*)l);
+	*QP(l) = nil;
+}
+
+void
+libqunlockproc(void *l)
+{
+	if(*QP(l) != nil)
+		panic("libqunlockproc");
+	qunlock((QLock*)l);
+}
+
 void*
 libqlalloc(void)
 {

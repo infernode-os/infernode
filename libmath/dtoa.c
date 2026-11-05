@@ -1,8 +1,6 @@
 /* derived from /netlib/fp/dtoa.c assuming IEEE, Standard C */
 /* kudos to dmg@bell-labs.com, gripes to ehg@bell-labs.com */
 #include "lib9.h"
-#define ACQUIRE_DTOA_LOCK(n)	/*nothing*/
-#define FREE_DTOA_LOCK(n)	/*nothing*/
 
 /* let's provide reasonable defaults for usual implementation of IEEE f.p. */
 #ifndef DBL_DIG
@@ -89,26 +87,30 @@ Bigint {
 
 typedef struct Bigint Bigint;
 
-static Bigint *freelist[Kmax+1];
-
+/*
+ * No free list. It was one array shared by every caller with
+ * ACQUIRE_DTOA_LOCK defined to nothing, and Sys->print formats its reals
+ * (gfltconv, dtoa) after release(): two Progs printing reals at once,
+ * on two host threads, took the same Bigint off it. Their reals came
+ * back wrong (a real printed with %.17g and read back was not itself,
+ * 193 times in 200), and with eight the list became a cycle and the
+ * emulator hung. More than one Dis VM runs these at once on their own
+ * cores. The list was also indexed by k with nothing keeping k within
+ * Kmax. malloc and free are safe on every thread; the list only saved
+ * their cost.
+ */
 static Bigint *
 Balloc(int k)
 {
 	int	x;
 	Bigint * rv;
 
-	ACQUIRE_DTOA_LOCK(0);
-	if (rv = freelist[k]) {
-		freelist[k] = rv->next;
-	} else {
-		x = 1 << k;
-		rv = (Bigint * )malloc(sizeof(Bigint) + (x - 1) * sizeof(unsigned int));
-		if(rv == nil)
-			return nil;
-		rv->k = k;
-		rv->maxwds = x;
-	}
-	FREE_DTOA_LOCK(0);
+	x = 1 << k;
+	rv = (Bigint * )malloc(sizeof(Bigint) + (x - 1) * sizeof(unsigned int));
+	if(rv == nil)
+		return nil;
+	rv->k = k;
+	rv->maxwds = x;
 	rv->sign = rv->wds = 0;
 	return rv;
 }
@@ -116,12 +118,7 @@ Balloc(int k)
 static void
 Bfree(Bigint *v)
 {
-	if (v) {
-		ACQUIRE_DTOA_LOCK(0);
-		v->next = freelist[v->k];
-		freelist[v->k] = v;
-		FREE_DTOA_LOCK(0);
-	}
+	free(v);
 }
 
 #define Bcopy(x,y) memcpy((char *)&x->sign, (char *)&y->sign, \
@@ -332,7 +329,39 @@ mult(Bigint *a, Bigint *b)
 	return c;
 }
 
+/*
+ * 5^4, 5^8, 5^16, ...: made once, kept, shared by every thread. Each is
+ * published by a compare-and-swap on the link to it, as the lock that
+ * guarded them was nothing; a thread that loses the race frees its own.
+ * Nothing here is ever freed once published.
+ */
 static Bigint *p5s;
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#define	p5load(p)	((Bigint*)_InterlockedCompareExchangePointer((void* volatile*)(p), nil, nil))
+#define	p5cas(p, n)	(_InterlockedCompareExchangePointer((void* volatile*)(p), (n), nil) == nil)
+#else
+#define	p5load(p)	__atomic_load_n((p), __ATOMIC_ACQUIRE)
+static int
+p5cas(Bigint **p, Bigint *n)
+{
+	Bigint *o;
+
+	o = nil;
+	return __atomic_compare_exchange_n(p, &o, n, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+#endif
+
+static Bigint *
+p5publish(Bigint **slot, Bigint *b)
+{
+	b->next = 0;
+	if(p5cas(slot, b))
+		return b;
+	Bfree(b);
+	return p5load(slot);
+}
 
 static Bigint *
 pow5mult(Bigint *b, int k)
@@ -347,15 +376,8 @@ pow5mult(Bigint *b, int k)
 
 	if (!(k >>= 2))
 		return b;
-	if (!(p5 = p5s)) {
-		/* first time */
-		ACQUIRE_DTOA_LOCK(1);
-		if (!(p5 = p5s)) {
-			p5 = p5s = i2b(625);
-			p5->next = 0;
-		}
-		FREE_DTOA_LOCK(1);
-	}
+	if (!(p5 = p5load(&p5s)))
+		p5 = p5publish(&p5s, i2b(625));
 	for (; ; ) {
 		if (k & 1) {
 			b1 = mult(b, p5);
@@ -364,14 +386,8 @@ pow5mult(Bigint *b, int k)
 		}
 		if (!(k >>= 1))
 			break;
-		if (!(p51 = p5->next)) {
-			ACQUIRE_DTOA_LOCK(1);
-			if (!(p51 = p5->next)) {
-				p51 = p5->next = mult(p5, p5);
-				p51->next = 0;
-			}
-			FREE_DTOA_LOCK(1);
-		}
+		if (!(p51 = p5load(&p5->next)))
+			p51 = p5publish(&p5->next, mult(p5, p5));
 		p5 = p51;
 	}
 	return b;
@@ -666,6 +682,8 @@ match(const char **sp, char *t)
 	return 1;
 }
 
+static int	exactstrtod(const char*, int, int, int, double*);
+
 double
 strtod(const char *s00, char **se)
 {
@@ -770,12 +788,16 @@ dig_done:
 				L = c - '0';
 				s1 = s;
 				while ((c = *++s) >= '0' && c <= '9')
-					L = 10 * L + c - '0';
-				if (s - s1 > 8 || L > 19999)
-					/* Avoid confusion from exponents
-					 * so large that e might overflow.
-					 */
-					e = 19999; /* safe for 16 bit ints */
+					if (s - s1 <= 8)
+						L = 10 * L + c - '0';
+				/*
+				 * Avoid confusion from exponents so large that e
+				 * might overflow. It was 19999, for 16-bit ints:
+				 * then 1 and 100000 zeros, e-100000, was 10^80001,
+				 * infinity. Past 8 digits L is no longer added to.
+				 */
+				if (s - s1 > 8 || L > 99999999)
+					e = 99999999;
 				else
 					e = (int)L;
 				if (esign)
@@ -860,6 +882,23 @@ dig_done:
 		}
 	}
 	e1 += nd - k;
+
+	/*
+	 * Below about 1e-240 the correction loop below works on a value
+	 * scaled up by 2^53 and gets the denormals wrong: 4.9e-324 and
+	 * 3e-324 never left it (real "4.9e-324" hung the VM, and limbo
+	 * hung on the literal), 2e-320 came back -7.26e280. And a long run
+	 * of digits went to infinity: 1 and 100000 zeros, e-100000, is 1.
+	 * Those are computed exactly instead (exactstrtod).
+	 */
+	if (nd > 40 || e + nd <= -240) {
+		switch (exactstrtod(s0, nd0, nd, e, &rv)) {
+		case 1:
+			goto ret;
+		case 2:
+			goto ovfl;
+		}
+	}
 
 	scale = 0;
 
@@ -1278,6 +1317,178 @@ freedtoa(char *s)
 	Bigint * b = (Bigint * )((int *)s - 1);
 	b->maxwds = 1 << (b->k = *(int * )b);
 	Bfree(b);
+}
+
+/*
+ * The digits s0 (nd of them, nd0 before a decimal point) times 10^e,
+ * correctly rounded (to nearest, ties to even), by integer arithmetic
+ * alone: the double is m * 2^E, m below 2^53 and E no less than -1074,
+ * and m with one more bit is the integer part of the value over 2^(E-1),
+ * found a bit at a time by comparing products, with the remainder's
+ * being 0 or not deciding a tie.
+ *
+ * Only the first Ndexact digits are used: a halfway point between two
+ * doubles has fewer significant digits than that (767 at most), so a
+ * value whose later digits are not all 0 rounds as those digits with a
+ * 1 after them does.
+ *
+ * Returns 1 with *rv set, 2 for a value too large for a double, 0 when
+ * it could not say (no memory), for the caller's own way.
+ */
+enum {
+	Ndexact = 800,
+};
+
+static Bigint *
+bigcopy(Bigint *b)
+{
+	Bigint *c;
+
+	c = Balloc(b->k);
+	if(c != nil)
+		Bcopy(c, b);
+	return c;
+}
+
+static Bigint *
+multq(Bigint *y, unsigned long long q)	/* y * q */
+{
+	Bigint *b, *r;
+
+	b = Balloc(1);
+	if(b == nil)
+		return nil;
+	b->x[0] = (unsigned int)q;
+	b->x[1] = (unsigned int)(q >> 32);
+	b->wds = b->x[1] != 0 ? 2 : 1;
+	r = mult(y, b);
+	Bfree(b);
+	return r;
+}
+
+static int
+bitlen(Bigint *b)
+{
+	if(b->wds == 0 || (b->wds == 1 && b->x[0] == 0))
+		return 0;
+	return 32*b->wds - hi0bits(b->x[b->wds-1]);
+}
+
+static int
+exactstrtod(const char *s0, int nd0, int nd, int e, double *rv)
+{
+	Bigint *d, *num, *den, *x, *y, *t;
+	const char *s;
+	int i, c, nk, nlen, sticky, E, sh, iter, bit, ok;
+	unsigned long long q, m, w;
+
+	/* the digits, as an integer: at most Ndexact of them */
+	nk = nd < Ndexact ? nd : Ndexact;
+	d = i2b(0);
+	if(d == nil)
+		return 0;
+	s = s0;
+	sticky = 0;
+	for(i = 0; i < nd; i++){
+		if(i == nd0 && nd0 < nd)
+			s++;	/* the decimal point */
+		c = *s++ - '0';
+		if(i < nk)
+			d = multadd(d, 10, c);
+		else if(c != 0)
+			sticky = 1;
+	}
+	e += nd - nk;
+	nlen = nk;
+	if(sticky){
+		d = multadd(d, 10, 1);
+		e--;
+		nlen++;
+	}
+
+	/* 10^(nlen+e-1) <= value < 10^(nlen+e) */
+	if(nlen + e <= -324){	/* below half the least denormal: 0 */
+		Bfree(d);
+		*rv = 0.;
+		return 1;
+	}
+	if(nlen + e - 1 > 309){
+		Bfree(d);
+		return 2;
+	}
+
+	/* value = num / den */
+	if(e >= 0){
+		num = lshift(pow5mult(d, e), e);
+		den = i2b(1);
+	}else{
+		num = d;
+		den = lshift(pow5mult(i2b(1), -e), -e);
+	}
+
+	E = bitlen(num) - bitlen(den) - 52;
+	if(E < -1074)
+		E = -1074;
+	ok = 0;
+	q = 0;
+	sticky = 0;
+	for(iter = 0; iter < 8; iter++){
+		/* q = floor(value / 2^(E-1)) */
+		x = bigcopy(num);
+		y = bigcopy(den);
+		sh = 1 - E;
+		if(sh > 0)
+			x = lshift(x, sh);
+		else if(sh < 0)
+			y = lshift(y, -sh);
+		q = 0;
+		for(bit = 56; bit >= 0; bit--){
+			w = q | (1ULL << bit);
+			t = multq(y, w);
+			if(cmp(t, x) <= 0)
+				q = w;
+			Bfree(t);
+		}
+		sticky = 1;
+		if(q != 0){
+			t = multq(y, q);
+			sticky = cmp(t, x) != 0;
+			Bfree(t);
+		}
+		Bfree(x);
+		Bfree(y);
+		if(q >= (1ULL << 54)){
+			E++;
+			continue;
+		}
+		if(q < (1ULL << 53) && E > -1074){
+			E--;
+			continue;
+		}
+		ok = 1;
+		break;
+	}
+	Bfree(num);
+	Bfree(den);
+	if(!ok)
+		return 0;
+
+	m = q >> 1;
+	if((q & 1) && (sticky || (m & 1)))
+		m++;
+	if(m == (1ULL << 53)){
+		m >>= 1;
+		E++;
+	}
+	if(E + 52 > 1023)
+		return 2;
+	if(m < (1ULL << 52))
+		w = m;		/* a denormal: E is -1074 */
+	else
+		w = ((unsigned long long)(E + 52 + Bias) << 52) | (m & ((1ULL << 52) - 1));
+	word0(*rv) = (unsigned int)(w >> 32);
+	word1(*rv) = (unsigned int)w;
+	return 1;
 }
 
 /* dtoa for IEEE arithmetic (dmg): convert double to ASCII string.

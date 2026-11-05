@@ -93,6 +93,9 @@ ulong	getcallerpc(void*);
 ulong	getFPcontrol(void);
 ulong	getFPstatus(void);
 void		gkbdputc(Queue*, int);
+void		kbdattach(char*, char*);	/* a keyboard is there: id, description (/dev/keyboards) */
+void		kbddetach(char*);
+void		fingertrack(int, int, int, int);	/* a finger: id, x, y, on the screen (/dev/fingers) */
 void		hostopen(char*);
 int		incref(Ref*);
 int		iprint(char*, ...);
@@ -184,6 +187,8 @@ void		qnoblock(Queue*, int);
 Queue*	qopen(int, int, void (*)(void*), void*);
 int		qpass(Queue*, Block*);
 int		qproduce(Queue*, void*, int);
+void		grpwaitadd(int, Queue*);
+void		grpwaitdel(Queue*);
 void		qputback(Queue*, Block*);
 long		qread(Queue*, void*, int);
 Block*	qremove(Queue*);
@@ -236,6 +241,7 @@ vlong		nhgetv(void*);
 ulong		nhgetl(void*);
 ushort		nhgets(void*);
 void*	smalloc(size_t);
+void	waitmem(void);
 void*	kmalloc(size_t);
 
 /* Namespace Emulation */
@@ -267,3 +273,4 @@ void		cnameclose(Cname*);
 
 #pragma varargck argpos iprint 1
 extern	uintptr	(*hostprocpc)(Proc*);
+int	upkilled(void);

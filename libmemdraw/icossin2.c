@@ -226,6 +226,7 @@ icossin2(int x, int y, int *cosp, int *sinp)
 {
 	int sinsign, cossign, tan, tan10, rem;
 	short *stp, *ctp;
+	uint ux, uy;
 
 	if(x == 0){
 		if(y >= 0)
@@ -237,19 +238,21 @@ icossin2(int x, int y, int *cosp, int *sinp)
 	sinsign = cossign = 1;
 	if(x < 0){
 		cossign = -1;
-		x = -x;
-	}
+		ux = -x;
+	}else
+		ux = x;
 	if(y < 0){
 		sinsign = -1;
-		y = -y;
-	}
-	if(y > x){
-		tan = 1000*x/y;
+		uy = -y;
+	}else
+		uy = y;
+	if(uy > ux){
+		tan = 1000*(uvlong)ux/uy;
 		tan10 = tan/10;
 		stp = &cosinus[tan10];
 		ctp = &sinus[tan10];
 	}else{
-		tan = 1000*y/x;
+		tan = 1000*(uvlong)uy/ux;
 		tan10 = tan/10;
 		stp = &sinus[tan10];
 		ctp = &cosinus[tan10];

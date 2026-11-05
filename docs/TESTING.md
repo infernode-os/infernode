@@ -78,6 +78,7 @@ Run inside the Inferno emulator. All compiled to `dis/tests/*.dis`.
 | `x402_test` | x402 v2 payment protocol parsing and authorization (9 tests) | nothing |
 | `tls_crypto_test` | TLS crypto operations | nothing |
 | `tls_protocol_test` | TLS protocol handshake | nothing |
+| `tls_hrr_test` | TLS 1.3 HelloRetryRequest against a scripted server | nothing |
 | `ssl_transport_test` | SSL transport layer | nothing |
 | `tls_live_test` | Live TLS connection | network |
 | `tcp_test` | TCP networking | network |

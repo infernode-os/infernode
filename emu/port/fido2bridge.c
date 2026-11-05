@@ -1,5 +1,5 @@
 /*
- * fido2bridge.c — host-side libfido2 implementation for the InferNode #F
+ * fido2bridge.c — host-side libfido2 implementation for the InferNode #h
  * (2fa) device. Shared across all host platforms (macOS, Linux, Windows): each
  * platform's mkfile-gui-sdl3 / build script defines -DHAVE_FIDO2 and links
  * libfido2 when it is present (see the FIDO2_CFLAGS / FIDO2_LIBS wiring there).

@@ -27,6 +27,7 @@ include "encoding.m";
 	base16: Encoding;
 
 Debug: con 0;
+Authserver_timeout: con 30*1000;
 
 # init, addkey, closekey, write, read, close, keyprompt
 
@@ -178,10 +179,51 @@ p9sk1client(io: ref IO, udom: string): string
 
 getastickets(tr: ref Ticketreq, key: array of byte): (ref Ticket, array of byte)
 {
-	afd := authdial(nil, tr.authdom);
-	if(afd == nil)
+	result := chan[1] of (ref Ticket, array of byte);
+	workerpid := chan[1] of int;
+	timerpid := chan[1] of int;
+	timeout := chan[1] of int;
+	spawn getasticketsproc(workerpid, result, tr, key);
+	wpid := <-workerpid;
+	spawn timeoutproc(timerpid, timeout);
+	tpid := <-timerpid;
+	alt {
+	(tick, serverbits) := <-result =>
+		killproc(tpid);
+		return (tick, serverbits);
+	<-timeout =>
+		killproc(wpid);
+		sys->werrstr("auth server timeout");
 		return (nil, nil);
-	return auth9->_asgetticket(afd, tr, key);
+	}
+}
+
+getasticketsproc(pidc: chan of int, result: chan of (ref Ticket, array of byte),
+	tr: ref Ticketreq, key: array of byte)
+{
+	pidc <-= sys->pctl(0, nil);
+	afd := authdial(nil, tr.authdom);
+	if(afd == nil){
+		result <-= (nil, nil);
+		return;
+	}
+	result <-= auth9->_asgetticket(afd, tr, key);
+}
+
+timeoutproc(pidc, timeout: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	sys->sleep(Authserver_timeout);
+	timeout <-= 1;
+}
+
+killproc(pid: int)
+{
+	if(pid <= 0)
+		return;
+	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
 #

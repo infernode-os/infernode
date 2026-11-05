@@ -33,7 +33,7 @@
 #include "kernel.h"
 
 extern Dev	mntdevtab;	/* #M, the 9P client */
-extern Dev	benchdevtab;	/* #b, microsecond timing */
+extern Dev	benchdevtab;	/* #x, microsecond timing */
 extern Dev	srvdevtab;	/* #s, names a Limbo program serves */
 extern Dev	etherdevtab;	/* #l, the kernel Ethernet data path */
 extern Dev	uartdevtab;	/* #t, serial ports; the console's input arrives through it */
@@ -57,6 +57,10 @@ Conf conf;
 uintptr	dtbptr;
 
 Mach	machs[MAXMACH];
+
+/* R is read as [x28] in libinterp and the JIT: vmreg must be Mach's first word */
+_Static_assert(__builtin_offsetof(Mach, vmreg) == 0, "Mach.vmreg must be at offset 0");
+extern struct Vm vm0;
 
 struct Active active;
 
@@ -1615,7 +1619,7 @@ probecons(void)
 		mntdevtab.reset();
 
 	/*
-	 * #b's reset is what REGISTERS $Bench as a builtin module.
+	 * #x's reset is what REGISTERS $Bench as a builtin module.
 	 *
 	 * A device's reset is not called for its own sake here -- this
 	 * kernel does not run chandevreset() -- so a device whose reset
@@ -2098,6 +2102,7 @@ squidboy(void)
 
 	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
 	m->machno = mpidr & 3;
+	m->vmreg = &vm0;		/* the one VM, until there are more (#944) */
 	m->ticks = 1;		/* nonzero: some code divides by ticks */
 	m->proc = nil;
 
@@ -2392,6 +2397,7 @@ kmain(void)
 	 */
 	m->proc = &mainproc;
 	m->machno = 0;
+	m->vmreg = &vm0;		/* before any Dis runs: R is *m->vmreg (interp.h) */
 
 	/*
 	 * Copy the loaded image before anything writes to .data.
@@ -2585,7 +2591,7 @@ kmain(void)
 
 		mem = (ulong)conf.npage * BY2PG;
 		poolsize(mainmem, mem/MAINDIV, 0);
-		poolsize(heapmem, mem/HEAPDIV, 0);
+		poolsize(heappool, mem/HEAPDIV, 0);
 		poolsize(imagmem, mem/IMAGDIV, 0);
 	}
 
@@ -2618,7 +2624,7 @@ kmain(void)
 	kbind("#G", "/dev", MAFTER);	/* /dev/gpio/N/{ctl,level} */
 
 	/* microsecond timing, for measuring things honestly */
-	kbind("#b", "/dev", MAFTER);
+	kbind("#x", "/dev", MAFTER);
 
 	/*
 	 * #i is deliberately NOT bound here.

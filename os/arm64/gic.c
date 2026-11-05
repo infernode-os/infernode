@@ -553,6 +553,20 @@ irqdispatch(Ureg *u)
 			vctl[irq].count++;
 			vctl[irq].f(u, vctl[irq].a);
 			handled = 1;
+#ifdef CHAOS
+			{
+				ulong r;
+				int k, n;
+
+				/* and another's handler, with nothing for it to do */
+				if(chaosintr(&r))
+					for(n = 0, k = (r >> 4) % Nirq; n < Nirq; n++, k = (k+1) % Nirq)
+						if(k != irq && vctl[k].f != nil){
+							vctl[k].f(u, vctl[k].a);
+							break;
+						}
+			}
+#endif
 		}else{
 			irqorphan[m->machno] = irq;
 			gicdisable(irq);

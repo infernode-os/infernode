@@ -86,6 +86,7 @@ struct TkEntry
 {
 	Rune*	text;
 	int		textlen;
+	int		textcap;		/* runes allocated for text: grown by doubling */
 
 	char*	xscroll;
 	char*	show;
@@ -310,21 +311,32 @@ tkentrytext(Image *i, Rectangle s, Tk *tk, TkEnv *env)
 	Point dp;
 	int s0, s1, xs0, xs1, j;
 	Rectangle r;
-	Rune showr, *text;
+	Rune showr, *vis, *shown;
 
+	/*
+	 * vis is the visible text, v0 to v1: all that is drawn, the
+	 * selection included. For -show it is that many of the show rune,
+	 * not a copy of the whole text: that made every redraw allocate
+	 * 4*(len+1) bytes and fill them, so a held key in a password field
+	 * cost more and more per key, and on the bench 3B+, two days of one
+	 * (83535 characters, a 334144-byte buffer a redraw) fragmented the
+	 * kernel's main pool until nothing could be allocated.
+	 */
 	dp = Pt(s.min.x - (tke->x0 - tke->xv0), s.min.y);
+	shown = nil;
 	if (tke->show) {
 		chartorune(&showr, tke->show);
-		text = mallocz(sizeof(Rune) * (tke->textlen+1), 0);
-		if (text == nil)
+		shown = malloc(sizeof(Rune) * (tke->v1 - tke->v0 + 1));
+		if (shown == nil)
 			return;
-		for (j = 0; j < tke->textlen; j++)
-			text[j] = showr;
+		for (j = 0; j < tke->v1 - tke->v0; j++)
+			shown[j] = showr;
+		vis = shown;
 	} else
-		text = tke->text;
+		vis = tke->text + tke->v0;
 
 	runestringn(i, dp, tkgc(env, TkCforegnd), dp, env->font,
-				text+tke->v0, tke->v1-tke->v0);
+				vis, tke->v1-tke->v0);
 
 	if (tke->sel0 < tke->v1 && tke->sel1 > tke->v0) {
 		if (tke->sel0 < tke->v0) {
@@ -346,7 +358,7 @@ tkentrytext(Image *i, Rectangle s, Tk *tk, TkEnv *env)
 		r = rectaddpt(Rect(xs0, 0, xs1, env->font->height), s.min);
 		tktextsdraw(i, r, env, 1);
 		runestringn(i, r.min, tkgc(env, TkCselectfgnd), r.min, env->font,
-				text+s0, s1-s0);
+				vis+(s0-tke->v0), s1-s0);
 	}
 
 	if((tke->flag&Ecursoron) && tke->icursor >= tke->v0 && tke->icursor <= tke->v1) {
@@ -357,8 +369,7 @@ tkentrytext(Image *i, Rectangle s, Tk *tk, TkEnv *env)
 		/* accent-coloured insertion caret (theme signature colour) */
 		draw(i, rectaddpt(r, s.min), tkgc(env, TkCselect), nil, ZP);
 	}
-	if (tke->show)
-		free(text);
+	free(shown);
 }
 
 char*
@@ -762,7 +773,7 @@ tkentryinsert(Tk *tk, char *arg, char **val)
 {
 	TkTop *top;
 	TkEntry *tke;
-	int ins, i, n, locked;
+	int ins, i, n, locked, cap;
 	char *e, *t, *text, *buf;
 	Rune *etext;
 
@@ -791,12 +802,25 @@ tkentryinsert(Tk *tk, char *arg, char **val)
 
 	tkword(top, arg, text, text+n, nil);
 	n = utflen(text);
-	etext = realloc(tke->text, (tke->textlen+n+1)*sizeof(Rune));
-	if(etext == nil) {
-		free(text);
-		return TkNomem;
+	/*
+	 * Grown by doubling, not to exactly one more each time: a held key
+	 * asked for a block one rune bigger than the one it had just freed,
+	 * which never fits back in the hole.
+	 */
+	if(tke->textlen+n+1 > tke->textcap) {
+		cap = tke->textcap*2;
+		if(cap < tke->textlen+n+1)
+			cap = tke->textlen+n+1;
+		if(cap < 32)
+			cap = 32;
+		etext = realloc(tke->text, cap*sizeof(Rune));
+		if(etext == nil) {
+			free(text);
+			return TkNomem;
+		}
+		tke->text = etext;
+		tke->textcap = cap;
 	}
-	tke->text = etext;
 
 	memmove(tke->text+ins+n, tke->text+ins, (tke->textlen-ins)*sizeof(Rune));
 	t = text;
@@ -894,9 +918,14 @@ tkentrydelete(Tk *tk, char *arg, char **val)
 	memmove(tke->text+d0, tke->text+d1, (tke->textlen-d1)*sizeof(Rune));
 	tke->textlen -= d1 - d0;
 
-	text = realloc(tke->text, (tke->textlen+1) * sizeof(Rune));
-	if (text != nil)
-		tke->text = text;
+	/* given back when three quarters of it is unused, not after every delete */
+	if(tke->textcap > 64 && tke->textlen+1 < tke->textcap/4) {
+		text = realloc(tke->text, (tke->textcap/2) * sizeof(Rune));
+		if(text != nil) {
+			tke->text = text;
+			tke->textcap /= 2;
+		}
+	}
 	tke->sel0 = adjustfordel(d0, d1, tke->sel0);
 	tke->sel1 = adjustfordel(d0, d1, tke->sel1);
 	tke->icursor = adjustfordel(d0, d1, tke->icursor);

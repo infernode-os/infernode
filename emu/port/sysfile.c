@@ -123,7 +123,7 @@ fdclose(Fgrp *f, int fd)
 	Chan *c;
 
 	lock(&f->l);
-	c = f->fd[fd];
+	c = fd >= 0 && fd <= f->maxfd ? f->fd[fd] : nil;
 	if(c == 0) {
 		/* can happen for users with shared fd tables */
 		unlock(&f->l);
@@ -702,6 +702,25 @@ kremove(char *path)
 	return 0;
 }
 
+/*
+ * base+off for a seek, refused if it would overflow a vlong: the sum
+ * was made and then tested for < 0, which signed overflow (undefined)
+ * need not leave negative, and the compiler may drop the test
+ * (UndefinedBehaviorSanitizer, sysfuzz: 4294967296 + 2^63-1). A file's
+ * length comes from its server, which may say anything.
+ */
+static vlong
+seekadd(vlong base, vlong off)
+{
+	vlong max;
+
+	max = (vlong)(~(uvlong)0 >> 1);
+	if(off > 0 && base > max - off)
+		error(Ebadarg);
+	if(off < 0 && base < -max - 1 - off)
+		error(Ebadarg);
+	return base + off;
+}
 vlong
 kseek(int fd, vlong off, int whence)
 {
@@ -737,7 +756,12 @@ kseek(int fd, vlong off, int whence)
 		if(c->qid.type & QTDIR)
 			error(Eisdir);
 		lock(&c->l);	/* lock for read/write update */
-		off += c->offset;
+		if(waserror()){
+			unlock(&c->l);
+			nexterror();
+		}
+		off = seekadd(c->offset, off);
+		poperror();
 		if(off < 0){
 			unlock(&c->l);
 			error(Enegoff);
@@ -752,7 +776,12 @@ kseek(int fd, vlong off, int whence)
 		dir = chandirstat(c);
 		if(dir == nil)
 			error("internal error: stat error in seek");
-		off += dir->length;
+		if(waserror()){
+			free(dir);
+			nexterror();
+		}
+		off = seekadd(dir->length, off);
+		poperror();
 		free(dir);
 		if(off < 0)
 			error(Enegoff);

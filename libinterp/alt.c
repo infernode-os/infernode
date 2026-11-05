@@ -3,7 +3,8 @@
 #include "interp.h"
 #include "raise.h"
 
-#define OP(fn)	void fn(void)
+#include "opreg.h"
+#define OP(fn)	void fn(OPARGS)
 #define W(p)	*((WORD*)(p))
 
 #define CANGET(c)	((c)->size > 0)
@@ -17,7 +18,7 @@ extern	OP(irecv);
  * Set each channel's alt pointer to the owning prog
  */
 static int
-altmark(Channel *c, Prog *p)
+altmark(Channel *c, Prog *p, char **e)
 {
 	int nrdy;
 	Array *a;
@@ -32,7 +33,8 @@ altmark(Channel *c, Prog *p)
 		if(c != H) {
 			if(c->send->prog || CANGET(c))
 				nrdy++;
-			cqadd(&c->recv, p);
+			if(!cqaddok(&c->recv, p))
+				*e = exNomem;
 		}
 		ca++;
 	}
@@ -59,7 +61,7 @@ altunmark(Channel *c, WORD *ptr, Prog *p, int sr, Channel **sel, int dn)
 		if(c != H && c->recv->prog)
 			cqdelp(&c->recv, p);
 		if(sr == 1 && *sel == c) {
-			W(p->R.d) = dn;
+			W(p->reg.d) = dn;
 			p->ptr = ptr + 1;
 			ptr[0] = n;
 			*sel = nil;
@@ -96,11 +98,12 @@ altrdy(Alt *a, Prog *p)
 		}
 		t = D2H(c)->t;
 		if(t == &Tarray)
-			nrdy += altmark(c, p);
+			nrdy += altmark(c, p, &e);
 		else {
 			if(c->send->prog || CANGET(c))
 				nrdy++;
-			cqadd(&c->recv, p);
+			if(!cqaddok(&c->recv, p))
+				e = exNomem;	/* undone by altdone below */
 		}
 	}
 
@@ -120,7 +123,8 @@ altrdy(Alt *a, Prog *p)
 			}
 			nrdy++;
 		}
-		cqadd(&c->send, p);
+		if(!cqaddok(&c->send, p))
+			e = exNomem;
 	}
 
 	if(e != nil) {
@@ -152,7 +156,7 @@ altdone(Alt *a, Prog *p, Channel *sel, int sr)
 				cqdelp(&c->send, p);
 			if(sr == 0 && c == sel) {
 				p->ptr = ac->ptr;
-				W(p->R.d) = n;
+				W(p->reg.d) = n;
 				sel = nil;
 			}
 		}
@@ -172,7 +176,7 @@ altdone(Alt *a, Prog *p, Channel *sel, int sr)
 					cqdelp(&c->recv, p);
 				if(sr == 1 && c == sel) {
 					p->ptr = ac->ptr;
-					W(p->R.d) = n;
+					W(p->reg.d) = n;
 					sel = nil;
 				}
 			}
@@ -188,6 +192,7 @@ altdone(Alt *a, Prog *p, Channel *sel, int sr)
 static void
 altcomm(Alt *a, int which)
 {
+	RPDECL;
 	Type *t;
 	Array *r;
 	int n, an;
@@ -204,7 +209,7 @@ altcomm(Alt *a, int which)
 			W(R.d) = n;
 			R.s = ac->ptr;
 			R.d = &c;
-			isend();
+			isend(OPCALL);
 			return;
 		}
 		ac++;
@@ -228,7 +233,7 @@ altcomm(Alt *a, int which)
 					ptr = ac->ptr;
 					R.d = ptr + 1;
 					ptr[0] = an;
-					irecv();
+					irecv(OPCALL);
 					return;
 				}
 				ca++;
@@ -240,7 +245,7 @@ altcomm(Alt *a, int which)
 			W(R.d) = n;
 			R.s = &c;
 			R.d = ac->ptr;
-			irecv();
+			irecv(OPCALL);
 			return;	
 		}
 		ac++;
@@ -255,7 +260,7 @@ altgone(Prog *p)
 	Alt *a;
 
 	if (p->state == Palt) {
-		a = p->R.s;
+		a = p->reg.s;
 		altdone(a, p, nil, -1);
 		p->kill = "alt channel hungup";
 		addrun(p);
@@ -265,6 +270,7 @@ altgone(Prog *p)
 void
 xecalt(int block)
 {
+	RPDECL;
 	Alt *a;
 	Prog *p;
 	int nrdy;
@@ -277,8 +283,8 @@ xecalt(int block)
 	if(nrdy == 0) {
 		if(block) {
 			delrun(Palt);
-			p->R.s = R.s;
-			p->R.d = R.d;
+			p->reg.s = R.s;
+			p->reg.d = R.d;
 			R.IC = 1;
 			R.t = 1;
 			return;

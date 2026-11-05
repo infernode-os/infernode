@@ -37,6 +37,7 @@ extern Dev bootdevtab;
 extern Dev benchdevtab;
 extern Dev drawdevtab;
 extern Dev srvdevtab;
+extern Dev vmdevtab;
 extern Dev etherdevtab;
 extern Dev ssldevtab;
 extern Dev gpiodevtab;
@@ -59,9 +60,10 @@ Dev*	devtab[] =
 	&pointerdevtab,		/* 'm' -- #m, the pointer */
 	&sddevtab,		/* 'S' -- #S, the SD card as a file */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
-	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
+	&benchdevtab,		/* 'x' -- #x, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
+	&vmdevtab,		/* 'X' -- #X, the Dis VMs, one a core (#944) */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */

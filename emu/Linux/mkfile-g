@@ -57,7 +57,14 @@ SYSLIBS=\
 
 default:V:	$O.$CONF
 
-$O.$CONF:	$OBJ $CONF.c $CONF.root.h # $LIBNAMES
+# The libraries are prerequisites (as emu/MacOSX/mkfile has them):
+# without them the emu was not relinked after a library alone was
+# rebuilt -- a libinterp fix, say -- and tests ran the old one.
+# Named here, not as $LIBFILES: portmkfile, which sets that, is read
+# after this rule.
+EMULIBS=${LIBS:%=$ROOT/$SYSTARG/$OBJTYPE/lib/lib%.a}
+
+$O.$CONF:	$OBJ $CONF.c $CONF.root.h $EMULIBS
 	$CC $CFLAGS '-DKERNDATE='$KERNDATE $CONF.c
 	$LD $LDFLAGS -o $target $OBJ $CONF.$O $LIBFILES $SYSLIBS $FIDO2_LIBS
 

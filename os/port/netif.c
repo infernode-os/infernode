@@ -387,16 +387,21 @@ netifwstat(Netif *nif, Chan *c, uchar *db, int n)
 		error(Eperm);
 
 	dir = smalloc(sizeof(Dir)+n);
-	m = convM2D(db, n, &dir[0], (char*)&dir[1]);
-	if(m == 0){
+	if(waserror()){
 		free(dir);
-		error(Eshortstat);
+		nexterror();
 	}
-	if(!emptystr(dir[0].uid))
-		strncpy(f->owner, dir[0].uid, KNAMELEN);
+	m = convM2D(db, n, &dir[0], (char*)&dir[1]);
+	if(m == 0)
+		error(Eshortstat);
+	if(!emptystr(dir[0].uid)){
+		strncpy(f->owner, dir[0].uid, KNAMELEN-1);
+		f->owner[KNAMELEN-1] = 0;
+	}
 	if(dir[0].mode != ~0UL)
 		f->mode = dir[0].mode;
 	free(dir);
+	poperror();
 	return m;
 }
 
@@ -489,7 +494,8 @@ netown(Netfile *p, char *o, int omode)
 			return -1;
 		}
 	}
-	strncpy(p->owner, o, KNAMELEN);
+	strncpy(p->owner, o, KNAMELEN-1);
+	p->owner[KNAMELEN-1] = 0;
 	p->mode = 0660;
 	unlock(&netlock);
 	return 0;

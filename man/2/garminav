@@ -1,0 +1,65 @@
+.TH GARMINAV 2
+.SH NAME
+garminav \- Garmin's Aviation output
+.SH SYNOPSIS
+.EX
+include "nmea.m";
+include "garminav.m";
+garminav := load Garminav Garminav->PATH;
+Grouper: import garminav;
+
+init:        fn(n: Nmea);
+Grouper.new: fn(): ref Grouper;
+d.feed:      fn(b: array of byte): list of ref Nmea->Fix;
+.EE
+.SH DESCRIPTION
+A Garmin panel or portable aviation GPS (GNS 430 and 530, GTN, the aera
+and the aviation GPSMAPs) sends, on an RS-232 port set to
+.IR Aviation ,
+a group of records once a second for a fuel computer, an autopilot or
+an emergency locator: STX, records of a letter and its data ending CR
+LF, ETX; 9600 baud.
+.I Garminav
+reads it, after the GNS 530 installation manual's appendix C.
+.B Init
+takes a loaded and initialised
+.IR nmea (2).
+.PP
+A
+.B Grouper
+takes bytes in any pieces;
+.B feed
+gives the fixes the groups completed.
+The records read are
+.B z
+(GPS altitude, feet),
+.B A
+and
+.B B
+(latitude and longitude: a hemisphere, degrees, minutes and hundredths),
+.B C
+(track),
+.B D
+(ground speed, knots) and
+.B Q
+(magnetic variation, a hemisphere and tenths of a degree); the
+navigation records (distance, cross track, waypoint, bearing) are
+passed over.
+The track is magnetic unless the unit is set to true, when its
+variation is E00.0; the fix's course is made true with the variation.
+A record of dashes is data the unit does not have; a group without a
+position is a lost fix.
+A group ends at ETX, or at the next
+.B z
+when the ETX was lost.
+A fix has no time: the format gives none, and the caller stamps it.
+.SH SOURCE
+.B /appl/lib/garminav.b
+.SH SEE ALSO
+.IR nmea (2),
+.IR gpsfs (4)
+.SH BUGS
+The manual leaves open whether a record's fields are separated by
+blanks and whether minutes have a decimal point; blanks are ignored and
+a point is taken if there is one.
+This has been checked against the manual, not against a unit.

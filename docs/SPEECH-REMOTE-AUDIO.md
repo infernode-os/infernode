@@ -45,23 +45,28 @@ Lucifer GUI ──── writes to /mnt/speech/say ─────────�
 
 ### Commands
 
-**Mac — export audio device (add to Lucifer launch script):**
+**Mac — export the narrow authenticated audio view:**
 ```sh
-listen -A 'tcp!*!17010' export /dev &
+sh /lib/voice/listen 17010 &
 ```
 
 **Jetson — import Mac audio, start speech9p, export it (Jetson launch script):**
 ```sh
-mount -A 'tcp!<mac-ip>!17010' /n/macaudio
+mount -k /usr/$user/keyring/default 'tcp!<mac-ip>!17010' /n/macaudio
 bind /n/macaudio/audio /dev/audio
 speech9p -e cmd &
-listen -A 'tcp!*!17019' export /mnt/speech &
+listen -k /usr/$user/keyring/default 'tcp!*!17019' {export /mnt/speech} &
 ```
 
 **Mac — mount remote speech service:**
 ```sh
-mount -A 'tcp!<jetson-ip>!17019' /mnt/speech
+mount -k /usr/$user/keyring/default 'tcp!<jetson-ip>!17019' /mnt/speech
 ```
+
+The Mac and Jetson certificates must share a signer; see
+[REMOTE-DESKTOP.md](REMOTE-DESKTOP.md#certificate-setup). Do not substitute
+`-A` on a wildcard listener: audio capture/playback and speech submission are
+remote capabilities, not public services.
 
 Or via the Lucifer catalog: add an entry with `dial=tcp!hephaestus!17019` and click `[+]`.
 

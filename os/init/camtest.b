@@ -11,7 +11,7 @@ implement Camtest;
 #	  debayering, at both row and column parities and at both edges;
 #	  the grey band, and that it moved between two opens
 #	raw: its size and the Bayer samples under three bars
-#	pacing: ten opens at 10 fps take nine frame times or more, by #b
+#	pacing: ten opens at 10 fps take nine frame times or more, by #x
 #	opens refused once the stream is off
 #
 # One line a check, "camtest: ok ..." or "camtest: FAIL ...", then
@@ -246,7 +246,7 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	# pacing: each open waits for the next frame, so ten at 10 fps
 	# take at least nine frame times whatever the machine's speed.
-	# Timed by #b/busec, the processor's counter, which is the clock
+	# Timed by #x/busec, the processor's counter, which is the clock
 	# the sensor keeps: sys->millisec counts the scheduler's ticks,
 	# and an emulator on a busy host drops them (it read 714 ms here
 	# where the counter read a second).
@@ -276,7 +276,7 @@ init(nil: ref Draw->Context, nil: list of string)
 # microseconds by the processor's counter, or -1
 usec(): big
 {
-	(b, nil) := readall("#b/busec");
+	(b, nil) := readall("#x/busec");
 	if(b == nil)
 		return big -1;
 	return big string b;

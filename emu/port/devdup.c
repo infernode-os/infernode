@@ -75,7 +75,9 @@ dupopen(Chan *c, int omode)
 	twicefd = c->qid.path - 1;
 	fd = twicefd/2;
 	if((twicefd & 1)){
-		/* ctl file */
+		/* ctl file: read only, as dupgen says (0400) */
+		if(openmode(omode) != OREAD)
+			error(Eperm);
 		f = c;
 		f->mode = openmode(omode);
 		f->flag |= COPEN;
@@ -118,15 +120,21 @@ dupread(Chan *c, void *va, long n, vlong offset)
 		cclose(c);
 		return readstr((ulong)offset, va, n, buf);
 	}
-	panic("dupread");
-	return 0;
+	error(Egreg);
+	return 0;		/* not reached */
 }
 
 static long
 dupwrite(Chan *c, void *a, long n, vlong o)
 {
+	/*
+	 * Nothing here is written: an fd file's open returns the fd's own
+	 * channel, and a ctl file opens only for reading.  This panicked,
+	 * which a write that got here made a crash of the whole emulator
+	 * (sysfuzz seed 102 on Linux AMD64).
+	 */
 	USED(c); USED(a); USED(n); USED(o);
-	panic("dupwrite");
+	error(Eperm);
 	return 0;		/* not reached */
 }
 

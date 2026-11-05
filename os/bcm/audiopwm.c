@@ -12,7 +12,7 @@
  * them is the waveform. With the range at 2048 the resolution is 11
  * bits, which through this filter is what the jack is good for; a
  * 16-bit sample is shifted down to it. The PWM clock comes from the
- * clock manager: PLLD, 500 MHz on this board, divided (MASH fractional
+ * clock manager: PLLD (AUDIOPLLDHZ: 500 MHz on a 3B+, 750 on a 4B), divided (MASH fractional
  * divider) so that clock / range is the sample rate. Both channels
  * share one FIFO and take words alternately (left, right), so a stereo
  * frame is two words in order.
@@ -58,11 +58,12 @@
 #define Audio_Ulaw_Val		1
 #define Audio_Alaw_Val		2
 #include "../port/audio-tbls.h"
+#include "audioring.h"
 
 enum {
-	PWMREGS		= PHYSIO + 0x20C000,
+	PWMREGS		= PHYSIO + AUDIOPWMOFF,	/* the board's: io.h says which block the jack's pins carry */
 	CMREGS		= PHYSIO + 0x101000,
-	PWMFIFOBUS	= 0x7E20C018,	/* the FIFO as the DMA engine addresses it */
+	PWMFIFOBUS	= 0x7E000000 + AUDIOPWMOFF + 0x18,	/* the FIFO as the DMA engine addresses it */
 
 	/* PWM registers */
 	Pctl		= 0x00,
@@ -100,7 +101,7 @@ enum {
 	Cmkill		= 1<<5,
 	Cmsrcplld	= 6,
 	Cmmash1		= 1<<9,
-	Plldhz		= 500000000,
+	Plldhz		= AUDIOPLLDHZ,
 
 	Range		= 2048,		/* pulse range: 11 bits of level */
 	Silence		= Range/2,
@@ -109,9 +110,8 @@ enum {
 	Gpiopwm1	= 41,		/* PWM1, right */
 
 	Dmachan		= 5,		/* of the ARM's 0-6; SD and USB use none here */
-	Dreqpwm		= 5,		/* the PWM's DREQ line */
+	Dreqpwm		= AUDIODREQ,	/* the PWM's DREQ line (io.h) */
 
-	Nbuf		= 4,		/* the writer may run three buffers ahead */
 	Maxframes	= 2048,		/* stereo frames per buffer: 46 ms at 44.1 kHz; the default, and what is allocated */
 	Minframes	= 64,		/* 1.5 ms */
 	Lowlat		= 256,		/* at or below this the writer keeps ONE buffer ahead, not three */
@@ -147,12 +147,9 @@ struct Ctlr {
 	int	open;
 	Cb	*cb;		/* Nbuf control blocks, 32-byte aligned */
 	u32int	*buf[Nbuf];	/* the ring */
-	int	full[Nbuf];	/* written and not yet played */
-	int	wbuf;		/* the writer's next buffer */
-	int	woff;		/* words already in it */
-	int	pbuf;		/* the buffer the engine is on: counted, not read back */
+	Ring	rg;		/* the engine's place, the writer's, what waits: audioring.h */
+	int	woff;		/* words already in the writer's buffer */
 	int	frames;		/* stereo frames per buffer now: Maxframes unless audioctl's buf said less (#653) */
-	int	ahead;		/* how many buffers the writer may be in front of the engine */
 	ulong	played;		/* buffers played out, for the curious */
 	ulong	underruns;	/* buffers silenced for want of data */
 	Audio_t	av;
@@ -245,15 +242,11 @@ static void
 audiointr(void *a)
 {
 	Ctlr *c;
-	int done;
 
 	c = a;
-	done = c->pbuf;
-	c->pbuf = (done + 1) % Nbuf;
-	c->full[done] = 0;
 	c->played++;
-	if(!c->full[c->pbuf]){
-		fillsilence(c->buf[c->pbuf]);
+	if(ringplayed(&c->rg)){
+		fillsilence(c->buf[c->rg.pbuf]);
 		c->underruns++;
 	}
 	wakeup(&c->r);
@@ -267,7 +260,6 @@ ring(Ctlr *c)
 
 	for(i = 0; i < Nbuf; i++){
 		fillsilence(c->buf[i]);
-		c->full[i] = 0;
 		c->cb[i].ti = Tinten | Tiwaitresp | Tidestdreq | Tisrcinc | (Dreqpwm << Tipermap);
 		c->cb[i].src = BUSADDR(PADDR(c->buf[i]));
 		c->cb[i].dst = PWMFIFOBUS;
@@ -276,9 +268,8 @@ ring(Ctlr *c)
 		c->cb[i].next = BUSADDR(PADDR(&c->cb[(i+1) % Nbuf]));
 	}
 	cachedwbse(c->cb, Nbuf * sizeof(Cb));
-	c->wbuf = 0;
+	ringreset(&c->rg);
 	c->woff = 0;
-	c->pbuf = 0;
 }
 
 /*
@@ -296,12 +287,12 @@ setframes(Ctlr *c, int frames)
 	if(frames == c->frames)
 		return;
 	for(i = 0; i < Nbuf; i++)
-		if(c->full[i] || c->woff != 0)
+		if(c->rg.full[i] || c->woff != 0)
 			error("audio: sound is queued; set buf before writing");
 	if(c->running)
 		dmastop(Dmachan);
 	c->frames = frames;
-	c->ahead = frames <= Lowlat ? 1 : Nbuf - 1;
+	c->rg.ahead = frames <= Lowlat ? 1 : Nbuf - 1;
 	if(c->running){
 		ring(c);
 		dmastart(Dmachan, c->cb);
@@ -351,7 +342,7 @@ audio_file_init(void)
 {
 	audio_info_init(&ctlr.av);
 	ctlr.frames = Maxframes;
-	ctlr.ahead = Nbuf - 1;
+	ctlr.rg.ahead = Nbuf - 1;
 	ctlr.av.out.buf = 100;
 	ctlr.av.out.rate = 44100;
 	ctlr.av.out.chan = 2;
@@ -383,11 +374,27 @@ audio_file_close(Chan *c)
 	USED(c);
 	qlock(&ctlr.lk);
 	ctlr.open = 0;
+	/*
+	 * The last buffer, part written: the rest is silence, and it goes
+	 * to be played. It used to stay as it was -- the end of the sound
+	 * never heard, and the next program to open carrying on in it.
+	 */
+	if(ctlr.woff != 0){
+		u32int *b;
+
+		b = ctlr.buf[ctlr.rg.wbuf];
+		while(ctlr.woff < ctlr.frames * 2)
+			b[ctlr.woff++] = Silence;
+		cachedwbse(b, ctlr.frames * 2 * 4);
+		ringfilled(&ctlr.rg);
+		ctlr.woff = 0;
+	}
 	/* the PWM keeps running at silence: see the comment at the top */
 	if(ctlr.frames != Maxframes && !waserror()){
 		/* a low-latency setting is one program's, for one open */
 		ctlr.woff = 0;
-		memset(ctlr.full, 0, sizeof ctlr.full);
+		memset(ctlr.rg.full, 0, sizeof ctlr.rg.full);
+		ctlr.rg.writing = -1;
 		setframes(&ctlr, Maxframes);
 		ctlr.av.out.buf = 100;
 		poperror();
@@ -412,16 +419,7 @@ audio_file_read(Chan *c, void *va, long count, vlong offset)
 static int
 roomfor(void *a)
 {
-	Ctlr *c;
-	int d;
-
-	c = a;
-	if(c->full[c->wbuf])
-		return 0;
-	if(c->ahead >= Nbuf - 1)
-		return 1;
-	d = (c->wbuf - c->pbuf + Nbuf) % Nbuf;
-	return d <= c->ahead;
+	return ringroom(&((Ctlr*)a)->rg);
 }
 
 /*
@@ -468,16 +466,11 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 	p = va;
 	for(n = 0; n < count; n += ba){
 		if(ctlr.woff == 0){
-			/*
-			 * Low latency: a writer the engine has caught up with
-			 * (it paused, or has only now begun) would be filling
-			 * the buffer being played. It goes to the next one.
-			 */
-			if(ctlr.ahead < Nbuf - 1 && ctlr.wbuf == ctlr.pbuf)
-				ctlr.wbuf = (ctlr.pbuf + 1) % Nbuf;
+			ringbegin(&ctlr.rg);	/* where it starts: audioring.h */
 			/* a fresh buffer: wait for the engine to be done with it */
 			while(!roomfor(&ctlr))
 				sleep(&ctlr.r, roomfor, &ctlr);
+			ringwriting(&ctlr.rg);
 		}
 		if(bits == 16){
 			l = (short)(p[n] | (p[n+1] << 8));
@@ -486,13 +479,12 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 			l = ((int)p[n] - 128) << 8;
 			r = chans == 2? ((int)p[n+1] - 128) << 8 : l;
 		}
-		b = ctlr.buf[ctlr.wbuf];
+		b = ctlr.buf[ctlr.rg.wbuf];
 		b[ctlr.woff++] = level(l, lg);
 		b[ctlr.woff++] = level(r, rg);
 		if(ctlr.woff >= ctlr.frames * 2){
 			cachedwbse(b, ctlr.frames * 2 * 4);
-			ctlr.full[ctlr.wbuf] = 1;
-			ctlr.wbuf = (ctlr.wbuf + 1) % Nbuf;
+			ringfilled(&ctlr.rg);
 			ctlr.woff = 0;
 		}
 	}
@@ -542,5 +534,5 @@ audiostatus(char *buf, char *e)
 {
 	return seprint(buf, e, "audio: %s rate %lud chans %lud bits %lud frames %d ahead %d played %lud underruns %lud\n",
 		ctlr.running? "running" : "idle", ctlr.av.out.rate, ctlr.av.out.chan, ctlr.av.out.bits,
-		ctlr.frames, ctlr.ahead, ctlr.played, ctlr.underruns);
+		ctlr.frames, ctlr.rg.ahead, ctlr.played, ctlr.underruns);
 }

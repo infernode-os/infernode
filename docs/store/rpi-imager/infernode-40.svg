@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 1024 1024">
+  <title>InferNode</title>
+  <rect width="1024" height="1024" fill="#000000"/>
+  <g fill="none" stroke="#FF6633" stroke-width="59" stroke-linecap="round">
+    <circle cx="522" cy="269" r="143"/>
+    <path d="M 264.2 369 A 278 278 0 0 0 779.8 369"/>
+    <path d="M 522 543.0 L 522 896"/>
+    <path d="M 365 744 L 678 744"/>
+  </g>
+</svg>

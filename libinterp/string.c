@@ -4,7 +4,8 @@
 #include "raise.h"
 #include "pool.h"
 
-#define OP(fn)	void fn(void)
+#include "opreg.h"
+#define OP(fn)	void fn(OPARGS)
 #define B(r)	*((BYTE*)(R.r))
 #define W(r)	*((WORD*)(R.r))
 #define F(r)	*((REAL*)(R.r))
@@ -52,7 +53,14 @@ OP(insc)
 	v = W(m);
 	ss = S(d);
 
-	expand = r >= Runeself;
+	/*
+	 * Unsigned: a negative r is no more ASCII than one past Runeself.
+	 * It was kept as a byte, which the interpreter read back through a
+	 * signed char (-77) and compiled code zero-extended (179), and an
+	 * unsigned-char host would have had 179 too; in a string of runes
+	 * it is -77 everywhere.
+	 */
+	expand = (ulong)r >= Runeself;
 
 	if(ss == H) {
 		ss = newstring(0);

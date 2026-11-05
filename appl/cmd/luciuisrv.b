@@ -10,7 +10,7 @@ implement Luciuisrv;
 # Filesystem layout:
 #   /mnt/ui/
 #       ctl                          global control
-#       event                        global events (blocking read)
+#       event                        global events (blocking read; a queue per open)
 #       notification                 write-once-read-once
 #       toast                        write-once-read-once
 #       activity/
@@ -19,7 +19,7 @@ implement Luciuisrv;
 #               label                read/write
 #               status               read/write
 #               urgency              read/write (0=normal, 1=attention, 2=urgent)
-#               event                per-activity blocking read
+#               event                per-activity blocking read (a queue per open)
 #               conversation/
 #                   ctl              write new messages
 #                   input            user text (blocking read)
@@ -30,7 +30,8 @@ implement Luciuisrv;
 #                   {artifact-id}/
 #                       type         artifact type
 #                       label        display name
-#                       data         structured content
+#                       data         structured content (rw; a write at offset 0
+#                                    replaces it, one after adds to it)
 #               context/
 #                   ctl              update resources/gaps/bg tasks
 #                   resources/
@@ -152,6 +153,9 @@ Artifact: adt {
 	idx:	int;		# index in artifacts array
 	dispath:   string;	# "/dis/wm/clock.dis"  (type=app only)
 	appstatus: string;	# "launching"|"running"|"dead"  (type=app only)
+	written:   big;		# bytes written to data since a write at offset 0
+	held:      array of byte;	# their tail not yet in data: a rune cut by
+				# the message's end, a final newline
 };
 
 Resource: adt {
@@ -263,6 +267,20 @@ EventSub: adt {
 	next:	cyclic ref EventSub;
 };
 eventsubs: ref EventSub;
+
+# The same for each open of an activity's event file: every reader has
+# its own queue, so two (Lucifer's, a task tool waiting on a task's
+# reply) both hear each event rather than one taking it from the other.
+# Events with no reader at all wait in the activity's pendingevent for
+# the first to open it.
+ActSub: adt {
+	fid:	int;
+	actid:	int;
+	events:	list of string;
+	n:	int;
+};
+actsubs: list of ref ActSub;
+MAXACTQ: con 512;	# a reader that never reads keeps the newest
 
 # --- Module loading ---
 
@@ -543,10 +561,42 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 		na[0:] = a.artifacts[0:a.nart];
 		a.artifacts = na;
 	}
-	art := ref Artifact(id, atype, label, "", a.nart, "", "");
+	art := ref Artifact(id, atype, label, "", a.nart, "", "", big 0, nil);
 	a.artifacts[a.nart++] = art;
 	vers++;
 	return art;
+}
+
+# A write to an artifact's data file.  Content longer than one 9P
+# message comes as several writes, each at the offset the last ended
+# at: the first (offset 0) replaces the data, the rest add to it.  Each
+# used to replace it, so a plumbed README showed only its last 8K, and
+# only its last line once laid out.  A rune cut by a message's end is
+# held until the next one completes it, as is a final newline (one
+# write's trailing newline is not the data's, as for the other files;
+# one between two writes is).
+writeartdata(art: ref Artifact, off: big, b: array of byte): string
+{
+	base := "";
+	if(off == big 0) {
+		art.held = nil;
+		art.written = big 0;
+	} else if(off == art.written)
+		base = art.data;
+	else
+		return "data written out of order";
+	nb := array[len art.held + len b] of byte;
+	nb[0:] = art.held;
+	nb[len art.held:] = b;
+	n := sys->utfbytes(nb, len nb);
+	if(n > 0 && nb[n-1] == byte '\n')
+		n--;
+	if(len base + n > MAX_DATA_SIZE)
+		return "artifact data too large";
+	art.held = nb[n:];
+	art.written += big len b;
+	art.data = base + string nb[0:n];
+	return nil;
 }
 
 # Append s to the end of list l (FIFO queue push).
@@ -572,34 +622,111 @@ qpush(l: list of string, s: string): list of string
 
 pushevent(actid: int, msg: string)
 {
-	# Wake pending readers on activity event file.
-	# If no reader is waiting, buffer the event so the next read gets it
-	# immediately (prevents streaming update events from being dropped).
+	# Wake pending readers on activity event file; queue it for every
+	# other reader of it; with no reader, keep it for the first to open
+	# it (prevents streaming update events from being dropped).
+	delivered: list of int;
 	prev: ref PendingRead;
 	p := pending;
-	delivered := 0;
 	while(p != nil) {
 		next := p.next;
 		if(p.ft == Qactevent && p.actid == actid) {
 			data := array of byte (msg + "\n");
 			srv_reply_read(p, data);
+			delivered = p.fid :: delivered;
 			# Remove from list
 			if(prev == nil)
 				pending = next;
 			else
 				prev.next = next;
-			delivered = 1;
 			p = next;
 			continue;
 		}
 		prev = p;
 		p = next;
 	}
-	if(!delivered) {
+	subs := 0;
+	for(sl := actsubs; sl != nil; sl = tl sl) {
+		sub := hd sl;
+		if(sub.actid != actid)
+			continue;
+		subs++;
+		if(inlist(sub.fid, delivered))
+			continue;
+		sub.events = qpush(sub.events, msg);
+		if(++sub.n > MAXACTQ) {
+			sub.events = tl sub.events;
+			sub.n--;
+		}
+	}
+	if(subs == 0 && delivered == nil) {
 		a := findactivity(actid);
 		if(a != nil)
 			a.pendingevent = qpush(a.pendingevent, msg);
 	}
+}
+
+# The first reader of an activity's event file takes what waited for one.
+openactsub(fid, actid: int)
+{
+	q: list of string;
+	n := 0;
+	first := 1;
+	for(sl := actsubs; sl != nil; sl = tl sl)
+		if((hd sl).actid == actid)
+			first = 0;
+	a := findactivity(actid);
+	if(first && a != nil) {
+		q = a.pendingevent;
+		a.pendingevent = nil;
+		for(l := q; l != nil; l = tl l)
+			n++;
+	}
+	actsubs = ref ActSub(fid, actid, q, n) :: actsubs;
+}
+
+findactsub(fid: int): ref ActSub
+{
+	for(sl := actsubs; sl != nil; sl = tl sl)
+		if((hd sl).fid == fid)
+			return hd sl;
+	return nil;
+}
+
+# A reader gone: when it was the activity's last, what it had not read
+# waits for the next to open the file, as it would had it never opened.
+removeactsub(fid: int)
+{
+	gone: ref ActSub;
+	keep: list of ref ActSub;
+	for(sl := actsubs; sl != nil; sl = tl sl)
+		if((hd sl).fid != fid)
+			keep = hd sl :: keep;
+		else
+			gone = hd sl;
+	actsubs = keep;
+	if(gone == nil || gone.events == nil)
+		return;
+	for(sl = actsubs; sl != nil; sl = tl sl)
+		if((hd sl).actid == gone.actid)
+			return;
+	a := findactivity(gone.actid);
+	if(a == nil)
+		return;
+	q := gone.events;
+	for(l := a.pendingevent; l != nil; l = tl l)
+		q = qpush(q, hd l);
+	a.pendingevent = q;
+}
+
+# Every reader of the activity's event file loses what it has not read.
+clearactsubs(actid: int)
+{
+	for(sl := actsubs; sl != nil; sl = tl sl)
+		if((hd sl).actid == actid) {
+			(hd sl).events = nil;
+			(hd sl).n = 0;
+		}
 }
 
 pushglobalevent(msg: string)
@@ -689,10 +816,7 @@ removeeventsub(fid: int)
 }
 
 # Send EOF (0-byte Rread) to any existing pending readers for the activity
-# event file of the given actid.  Called when a new reader connects so that
-# at most one goroutine is ever blocked on the event file at a time.  Stale
-# readers (e.g. leftover drain goroutines) exit with n==0 and don't steal
-# events meant for the most-recent reader.
+# event file of the given actid: a write of the file (a flush) ends them.
 kickpendingevent(actid: int)
 {
 	prev: ref PendingRead;
@@ -767,6 +891,8 @@ Serve:
 			# Register per-fid event subscription for reliable broadcast
 			if(FTYPE(c.path) == Qevent)
 				eventsubs = ref EventSub(m.fid, nil, eventsubs);
+			if(FTYPE(c.path) == Qactevent)
+				openactsub(m.fid, ACTID(c.path));
 
 		Read =>
 			(c, err) := srv.canread(m);
@@ -815,6 +941,7 @@ Serve:
 			}
 			# Remove event subscription for this fid
 			removeeventsub(m.fid);
+			removeactsub(m.fid);
 			srv.clunk(m);
 
 		Remove =>
@@ -913,19 +1040,16 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		srv.reply(styxservers->readbytes(m, array of byte (string a.urgency + "\n")));
 
 	Qactevent =>
-		# Return buffered event immediately if available; otherwise block.
-		# Kick any stale pending readers first so only one goroutine ever
-		# waits on this file — prevents drain goroutines from stealing events.
-		a := findactivity(actid);
-		if(a != nil && a.pendingevent != nil) {
-			# pendingevent is in FIFO order (head = oldest). INFR-36.
-			data := array of byte (hd a.pendingevent + "\n");
-			a.pendingevent = tl a.pendingevent;
-			srv.reply(styxservers->readbytes(m, data));
-		} else {
-			kickpendingevent(actid);
+		# This reader's next event, or wait for one.  A stream: the
+		# reply ignores the offset (INFR-28).  Queues are FIFO (head =
+		# oldest). INFR-36.
+		sub := findactsub(m.fid);
+		if(sub != nil && sub.events != nil) {
+			srv.reply(ref Rmsg.Read(m.tag, array of byte (hd sub.events + "\n")));
+			sub.events = tl sub.events;
+			sub.n--;
+		} else
 			addpending(m.fid, m.tag, Qactevent, actid, m);
-		}
 
 	Qconvinput =>
 		a := findactivity(actid);
@@ -1233,6 +1357,7 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			break;
 		}
 		a.pendingevent = nil;
+		clearactsubs(actid);
 		kickpendingevent(actid);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
@@ -1359,7 +1484,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		a.artifacts[subid].data = data;
+		err := writeartdata(a.artifacts[subid], m.offset, m.data);
+		if(err != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, err));
+			break;
+		}
 		vers++;
 		pushevent(actid, "presentation " + a.artifacts[subid].id);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -1463,6 +1592,7 @@ globalctl(data: string): string
 		activities[idx].bgtasks = nil;
 		activities[idx].nbg = 0;
 		activities[idx].pendingevent = nil;
+		clearactsubs(id);
 		activities[idx].inputq = nil;
 		# Its readers are told it is gone (end of file): a task's agent
 		# blocked reading its input used to wait for ever, and every closed
@@ -1608,8 +1738,11 @@ presctl(a: ref Activity, data: string): string
 		if(art == nil)
 			return "unknown artifact: " + id;
 		d := getattr(attrs, "data");
-		if(d != nil)
+		if(d != nil) {
 			art.data = d;
+			art.held = nil;
+			art.written = big 0;
+		}
 		l := getattr(attrs, "label");
 		if(l != nil)
 			art.label = safeattrtext(l);

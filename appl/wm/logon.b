@@ -86,6 +86,12 @@ WmLogon: module
 BODYFONT: con "/fonts/combined/unicode.sans.14.font";
 SMALLFONT: con "/fonts/combined/unicode.sans.12.font";
 FIELDW:   con 300;
+# The longest password the field takes. Not a policy on passwords: a
+# bound on a key held down. Something resting on the bench 3B+'s keyboard
+# typed into this field 27 times a second for two days; Tk's growing
+# copies of the text took the kernel's main pool to its limit, and every
+# keystroke after was "out of memory", printed on the console.
+MAXPW:    con 1024;
 PADDING:  con 16;
 
 # Login states
@@ -214,6 +220,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			done = handleescape();
 		* =>
 			escpending = 0;
+			if(k >= ' ' && k != 16r7F && len fieldtext() >= MAXPW)
+				break;	# full: only editing keys get through
 			tk->keyboard(top, k);
 			tk->cmd(top, "update");
 		}

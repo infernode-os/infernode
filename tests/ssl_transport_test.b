@@ -286,6 +286,43 @@ testSHA256Only(t: ref T)
 	roundtrip(t, "sha256", secret, testdata());
 }
 
+testConversationPermissions(t: ref T)
+{
+	dir := "#D";
+	(rc, nil) := sys->stat("#D/ssl");
+	if(rc >= 0)
+		dir = "#D/ssl";
+	cfd := sys->open(dir+"/clone", Sys->ORDWR);
+	if(cfd == nil) {
+		t.skip("cannot clone SSL conversation");
+		return;
+	}
+	slot := readstring(cfd);
+	if(slot == nil) {
+		t.fatal("cannot read SSL conversation number");
+		return;
+	}
+	d := sys->nulldir;
+	d.mode = 8r600;
+	if(sys->fwstat(cfd, d) < 0) {
+		t.skip("cannot restrict SSL conversation mode");
+		return;
+	}
+	userfd := sys->open("/dev/user", Sys->OWRITE);
+	if(userfd == nil) {
+		t.skip("test is not running as host owner");
+		return;
+	}
+	other := array of byte "ssl-permission-test";
+	if(sys->write(userfd, other, len other) != len other) {
+		t.fatal(sys->sprint("cannot drop identity: %r"));
+		return;
+	}
+	userfd = nil;
+	fd := sys->open(dir+"/"+slot+"/ctl", Sys->ORDWR);
+	t.assert(fd == nil, "non-owner opened owner-only SSL conversation");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -312,6 +349,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AES128_SHA256", testAES128SHA256);
 	run("AES256_Only", testAES256Only);
 	run("SHA256_Only", testSHA256Only);
+	# This deliberately drops the test process identity, so it must run last.
+	run("ConversationPermissions", testConversationPermissions);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

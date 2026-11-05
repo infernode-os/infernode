@@ -35,7 +35,7 @@ Working, in the kernel (`os/bcm2837/devtab.c` holds the device table):
 - **`#l`**: the Ethernet data path in the kernel (~2.6 MB/s in, ~4 MB/s
   out), bound to endpoints a Limbo driver has set up
 - the SD card as a file (`#S`), the running kernel image as a file
-  (`#B/bootimage`), microsecond timing (`#b`), GPIO pins as files
+  (`#B/bootimage`), microsecond timing (`#x`), GPIO pins as files
   (`#G`), the framebuffer console (`fbcons`), the draw device (`#i`),
   the pointer (`#m`), the keyboard on `/dev/keyboard`, SSL (`#D`), a
   hardware-fed entropy pool, a tick-driven sampling profiler

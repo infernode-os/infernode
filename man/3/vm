@@ -1,0 +1,100 @@
+.TH VM 3
+.SH NAME
+vm \- the Dis virtual machines, one a core
+.SH SYNOPSIS
+.nf
+.B bind -a #X /dev
+
+.B /dev/vm/ctl
+.BI /dev/vm/ n /run
+.BI /dev/vm/ n /status
+.fi
+.SH DESCRIPTION
+The native kernel runs more than one Dis virtual machine: up to one a
+processor core, numbered from 0.
+Each has its own interpreter, heap, garbage collector and module table,
+so a program in one VM runs at the same time as a program in another, on
+a different core.
+VM 0 is the one the kernel boots and the desktop runs in; the others are
+made the first time something is run in them.
+.PP
+VMs share the kernel and nothing else: the namespace, devices, files,
+pipes and served names are the same for all of them, but a Dis object \(em
+a channel, an array, a reference of any kind \(em belongs to one VM and
+cannot be passed to another.
+Programs in different VMs therefore talk the way programs on different
+machines do, through files.
+.I Spawn
+stays in its VM; a program is placed in another only by
+.BR run .
+.PP
+.B Ctl
+reads
+.BI "vms " started " max " m
+\(em how many VMs exist and how many there can be.
+.PP
+Writing a command to
+.BI vm/ n /run
+runs it in VM
+.IR n :
+the first word is the path of a Dis module, the rest are its arguments,
+quoted as by
+.IR tokenize (2).
+The module's
+.B init
+is called with a nil context and the words as its argument list; a module
+whose
+.B init
+does not take those is refused.
+The new process has the writer's namespace, environment and file
+descriptors, shared as a
+.B spawn
+shares them, and is given a heap in VM
+.IR n .
+A read of the same open file returns its pid.
+.PP
+.BI vm/ n /status
+reads
+.EX
+	vm \fIn\fP progs \fIp\fP heap \fIused\fP \fImax\fP
+.EE
+or, for a VM not yet made,
+.BI "vm " n " not started" .
+.PP
+.IR Ps (1),
+.IR kill (1)
+and
+.IR prog (3)
+see the processes of every VM.
+.SH EXAMPLES
+Run a program in VM 2 by hand (or use
+.IR vm (1),
+which does the same):
+.EX
+	echo /dis/myserver.dis -p 8080 >/dev/vm/2/run
+.EE
+.SH SOURCE
+.B /os/port/devvm.c
+.br
+.B /os/port/dis.c
+.SH SEE ALSO
+.IR vm (1),
+.IR prog (3),
+.IR osinit (8)
+.SH BUGS
+.B $Tk
+and
+.B $Draw
+are loaded only in VM 0: their state assumes one interpreter.
+.br
+A program written to
+.B run
+from a process whose standard output is that same file has that file as
+its standard output too, which is rarely wanted;
+.IR vm (1)
+opens
+.B run
+on a descriptor of its own for that reason.
+.br
+VMs are not destroyed, and there is no way to move a running process from
+one to another.

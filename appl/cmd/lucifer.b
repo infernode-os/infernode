@@ -336,6 +336,17 @@ M_QUIT:   con 1 << 6;
 cmouse: chan of ref Pointer;
 zpointer: Pointer;
 
+# The keyboard on the screen (wm/osk -s): a client of a window server
+# of its own, given a strip along the bottom of the screen when it asks
+# to be docked; the zones are laid out above it.  Its touches are its
+# own and move no focus: what it types arrives as any keyboard's does
+# (kbdproc), for whichever zone or app has the keyboard.
+dockh := 0;			# the height it asked for; 0: no strip
+dockr: Rect;			# the strip, while there is one
+dockscr: ref Screen;
+dockclient: ref Client;
+dockgrab := 0;			# a press began in the strip
+
 # Screen/sub-image globals — must be module-level to prevent GC.
 # When a Screen is GC'd the draw kernel refills its background area with the
 # parent screen's fill color (White from wmclient putimage).  The separator
@@ -671,6 +682,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn eventproc();
 	spawn mouseproc();
 	spawn kbdproc();
+	startosk();
 	if(actid >= 0)
 		spawn nslistener();
 	spawn globallistener();
@@ -1130,6 +1142,22 @@ reqkbd(on: int)
 {
 	if(!mobile)
 		return;
+	if(softkbd != nil){
+		if(on){
+			# a shell's or an editor's words are not to be put right
+			prose := 1;
+			if(curtaskpres != nil)
+				case curtaskpres.activeappid {
+				"shell" or "sh" or "acme" or "xenith" =>
+					prose = 0;
+				}
+			softkbd->mode(prose);
+			softkbd->show(Softkbd->KEEPTOP);
+		}else
+			softkbd->show(Softkbd->HIDE);
+		softkbd->clear_rect();
+		return;
+	}
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
@@ -1206,6 +1234,137 @@ setexpandedzone(z: int)
 	# until mainloop drains; the wm pointer channel buffers
 	# upstream so taps aren't lost.
 	cmouse <-= ref p;
+}
+
+# --- The keyboard on the screen ---
+
+Oskcmd: module
+{
+	init:	fn(ctxt: ref Draw->Context, args: list of string);
+};
+
+# startosk: wm/osk as the system's keyboard, if it is there and not
+# turned off ($osk is "off"), in a strip of its own along the bottom.
+# Its files are mounted at /mnt/osk here, before any app is launched,
+# so every app's name space has them: softkbd(2) asks it to show
+# itself for a text field.  It shows itself only with no keyboard of
+# the machine's attached, and on a screen whose GUI does not say when a
+# text field has the keyboard (a desktop's), once the screen is touched.
+startosk()
+{
+	o := readfile("/env/osk");
+	if(o != nil && strip(o) == "off")
+		return;
+	(ok, nil) := sys->stat("/dis/wm/osk.dis");
+	if(ok < 0)
+		return;
+	dockwm := load Wmsrv Wmsrv->PATH;
+	if(dockwm == nil)
+		return;
+	(dockchan, djoin, dreq) := dockwm->init("wmctl.osk");
+	if(dockchan == nil)
+		return;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return;
+	spawn dockloop(djoin, dreq);
+	spawn runosk(dockchan, p[1]);
+	spawn mountosk(p[0]);
+}
+
+runosk(wm: chan of (string, chan of (string, ref Draw->Wmcontext)), fd: ref Sys->FD)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("/chan/wmctl.osk", "/chan/wmctl", Sys->MREPL) < 0){
+		sys->fprint(stderr, "lucifer: osk: bind: %r\n");
+		return;
+	}
+	osk := load Oskcmd "/dis/wm/osk.dis";
+	if(osk == nil){
+		sys->fprint(stderr, "lucifer: osk: %r\n");
+		return;
+	}
+	args := "osk" :: "-s" :: "-F" :: string fd.fd :: nil;
+	if(mobile)
+		args = "osk" :: "-s" :: "-m" :: "-F" :: string fd.fd :: nil;
+	osk->init(ref Draw->Context(display, nil, wm), args);
+}
+
+mountosk(fd: ref Sys->FD)
+{
+	if(sys->mount(fd, nil, "/mnt/osk", Sys->MREPL, nil) < 0)
+		sys->fprint(stderr, "lucifer: osk: mount /mnt/osk: %r\n");
+}
+
+# the keyboard's window server: one client, its window the strip
+dockloop(join: chan of (ref Client, chan of string), req: chan of (ref Client, array of byte, Sys->Rwrite))
+{
+	for(;;) alt {
+	(c, rc) := <-join =>
+		dockclient = c;
+		rc <-= nil;
+	(c, data, rc) := <-req =>
+		if(rc == nil){
+			# gone
+			if(c == dockclient)
+				dockclient = nil;
+			c.remove();
+			c.wins = nil;
+			if(c.stop != nil)
+				c.stop <-= 1;
+			setdock(0);
+			continue;
+		}
+		s := string data;
+		n := len data;
+		err: string;
+		(nf, f) := sys->tokenize(s, " ");
+		if(nf > 0)
+		case hd f {
+		"!reshape" or "!onscreen" =>
+			ds := dockscr;
+			if(dockh <= 0 || ds == nil){
+				err = "not docked";
+				break;
+			}
+			img := ds.newwindow(ds.image.r, Draw->Refbackup, Draw->Nofill);
+			if(img == nil){
+				err = "window creation failed";
+				break;
+			}
+			c.setimage("app", img);
+			c.top();
+		"dock" =>
+			if(nf != 3 || hd tl f != "bottom"){
+				err = "usage: dock bottom height";
+				break;
+			}
+			setdock(int hd tl tl f);
+		"delete" =>
+			c.setimage("app", nil);
+		}
+		if(err != nil)
+			n = -1;
+		alt { rc <-= (n, err) => ; * => ; }
+	}
+}
+
+# the strip's height: the zones laid out again above it
+setdock(h: int)
+{
+	if(h < 0)
+		h = 0;
+	if(h == dockh)
+		return;
+	dockh = h;
+	p := zpointer;
+	p.buttons = M_RESIZE;
+	spawn kickresize(ref p);
+}
+
+kickresize(p: ref Pointer)
+{
+	cmouse <-= p;
 }
 
 # --- Per-task presentation zone management ---
@@ -1347,8 +1506,20 @@ teardowntask(id: int)
 			pids = a.pid :: pids;
 	}
 	tp.applock <-= 1;
-	for(t := 0; t < 30 && alive(pids); t++)
-		sys->sleep(100);
+	# each group's grpwait answers when it has gone; three seconds at most
+	n := len pids;
+	gone := chan[n] of int;
+	for(pl := pids; pl != nil; pl = tl pl)
+		spawn waitgrp(hd pl, gone);
+	tick := chan of int;
+	spawn timer(tick, 3000);
+	while(n > 0)
+		alt {
+		<-gone =>
+			n--;
+		<-tick =>
+			n = 0;
+		}
 	for(; pids != nil; pids = tl pids)
 		writetofile(sys->sprint("/prog/%d/ctl", hd pids), "killgrp");
 
@@ -1368,15 +1539,22 @@ actdeleted(id: int): int
 	return st != nil && strip(st) == "hidden";
 }
 
-# alive: whether any of pids is still running.
-alive(pids: list of int): int
+# waitgrp: send on gone when the process group numbered gid has no Prog
+# left (at once if its leader has already gone).
+waitgrp(gid: int, gone: chan of int)
 {
-	for(; pids != nil; pids = tl pids) {
-		(ok, nil) := sys->stat(sys->sprint("/prog/%d/status", hd pids));
-		if(ok >= 0)
-			return 1;
+	fd := sys->open(sys->sprint("/prog/%d/grpwait", gid), Sys->OREAD);
+	if(fd != nil) {
+		buf := array[32] of byte;
+		sys->read(fd, buf, len buf);
 	}
-	return 0;
+	gone <-= 1;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt { c <-= 1 => ; * => ; }
 }
 
 # setslotpid: record app id's main pid in its task's slot.
@@ -2047,6 +2225,11 @@ topexpandedzone()
 handleresize()
 {
 	r := mainwin.r;
+	h := dockh;
+	if(h > r.dy() * 6 / 10)
+		h = r.dy() * 6 / 10;
+	if(h > 0)
+		r.max.y -= h;
 
 	# Mobile accordion toggle: mainwin geometry unchanged, only which
 	# zone is expanded. pressubimg's rect is invariant (presmaxr in
@@ -2099,12 +2282,34 @@ handleresize()
 
 	# Recreate all zone sub-images on a fresh mainscr.
 	# Must happen before drawchrome so separators are drawn on top of the fill.
-	mainscr = Screen.allocate(mainwin, bgcol, 0);
+	#
+	# On a phone the zones are laid out again on the screen they had,
+	# not a fresh one.  The old windows (the presentation zone's, held
+	# by its apps until preswmloop moves them) are freed after the new
+	# ones are drawn; freed from a screen of their own, each painted
+	# its rectangle in that screen's fill over the new zones -- the
+	# Chat title and the chat gone blank each time the keyboard on the
+	# screen showed or hid.  On one screen, a window freed shows what
+	# is beneath it, and the new windows are above.
+	if(!mobile || mainscr == nil)
+		mainscr = Screen.allocate(mainwin, bgcol, 0);
 	if(mainscr == nil)
 		return;
 	convimg = mainscr.newwindow(convr, Draw->Refbackup, Draw->Nofill);
 	ctximg  = mainscr.newwindow(ctxr,  Draw->Refbackup, Draw->Nofill);
 	pressubimg = mainscr.newwindow(presr, Draw->Refbackup, Draw->Nofill);
+	dockscr = nil;
+	if(h > 0){
+		dockr = Rect((mainwin.r.min.x, r.max.y), mainwin.r.max);
+		dockimg := mainscr.newwindow(dockr, Draw->Refbackup, Draw->Nofill);
+		if(dockimg != nil){
+			dockimg.draw(dockr, bgcol, nil, (0, 0));
+			dockscr = Screen.allocate(dockimg, bgcol, 0);
+		}
+		# the keyboard asks again for its window, now there is a strip
+		if(dockclient != nil && dockscr != nil)
+			spawn sendctlmsg(dockclient.ctl, sys->sprint("!reshape . -1 %s", r2s(dockr)));
+	}
 	if(convimg == nil || ctximg == nil || pressubimg == nil) {
 		sys->fprint(sys->fildes(2), "lucifer: handleresize: newwindow failed (mobile=%d expanded=%d) convr=%s presr=%s ctxr=%s\n",
 			mobile, expanded_zone, r2s(convr), r2s(presr), r2s(ctxr));
@@ -2657,6 +2862,14 @@ mouseproc()
 	prevb := 0;
 	for(;;) {
 		p := <-win.ctxt.ptr;
+		# the keyboard on the screen's: a press in its strip and the
+		# rest of that press.  Not taken as where the mouse is, which
+		# decides (on a desktop) which zone has the keyboard.
+		if(dockclient != nil && (dockgrab || dockscr != nil && p.xy.in(dockr))){
+			dockgrab = p.buttons != 0;
+			alt { dockclient.ptr <-= p => ; * => ; }
+			continue;
+		}
 		lastmousex = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
 			wasdown := prevb;
@@ -3424,10 +3637,9 @@ cleanupappslot(c: ref Client)
 
 # appreaper — process-lifecycle backstop for artifact-launched GUI apps.
 #
-# Plan-9 plumbing: read on /prog/<pid>/wait blocks until the proc
-# (and any child procs in its lineage created via spawn) terminate.
-# When that read returns, the app is gone — whether it called exit
-# cleanly, was killed by a note, panicked, segfaulted, or had any
+# A read of /prog/<pid>/grpwait blocks until the app's process group
+# has no Prog left.  When that read returns, the app is gone — whether
+# it called exit cleanly, was killed by a note, panicked, or had any
 # other terminal misfortune.  At that point we write `delete id=<id>`
 # to the activity's presentation/ctl and compact the matching AppSlot.
 #
@@ -3439,40 +3651,23 @@ cleanupappslot(c: ref Client)
 # returns without acting).  appreaper exists because the wmsrv-
 # disconnect path turns out to be unreliable when apps exit via the
 # common `postnote(kill); exit` pattern (editor.b:494 et al.).
-appreaper(actid: int, id: string, pid: int,
+appreaper(actid: int, id: string, grpc: chan of ref Sys->FD,
 	appwm: chan of (string, chan of (string, ref Wmcontext)))
 {
-	# Track the app's MAIN proc by liveness, not by /prog/<pid>/wait.
-	#
-	# /prog/<pid>/wait returns when the FIRST CHILD of <pid> exits —
-	# not when <pid> itself dies.  Every wmclient app spawns a
-	# short-lived `kbddrainer` child (see wmclient.b) that exits
-	# normally the instant the app calls startinput("kbd"), which is
-	# during init.  The old single-read-then-delete logic therefore
-	# reaped every healthy GUI app a few milliseconds after launch:
-	# the artifact was deleted out from under the running app and the
-	# presentation zone autocentered back to the taskboard, so the
-	# app never appeared.  (INFR-119 mobile launch bug.)
-	#
-	# Instead, poll /prog/<pid>/status: it is readable for exactly as
-	# long as the app's main proc is alive.  When the app's event loop
-	# returns (window closed, exec failure, exception) the proc exits,
-	# the status file vanishes, and we clean up.  Child churn is
-	# invisible to this check.
-	statuspath := sys->sprint("/prog/%d/status", pid);
-	for(;;) {
-		sfd := sys->open(statuspath, Sys->OREAD);
-		if(sfd == nil)
-			break;		# main proc gone -> app exited
-		sfd = nil;
-		sys->sleep(500);
+	# The app is gone when its process group is: /prog/<pid>/grpwait,
+	# opened by launchappns once the app has a group of its own, is
+	# read when the last Prog in it ends.  Its main proc's exit is not
+	# the end (xenith spawns its tasks and returns from init), nor is a
+	# child's (/prog/<pid>/wait answers when the first child ends: every
+	# wmclient app's kbddrainer did, at once, INFR-119).  Children that
+	# took groups of their own (wallet9p, webfs) are services, not it.
+	gfd := <-grpc;
+	if(gfd == nil) {
+		sys->fprint(stderr, "lucifer: app %s: no grpwait: it is reaped when its window goes\n", id);
+		return;
 	}
-	# Some apps spawn their tasks and return from init (xenith), so
-	# the main proc is gone while the app runs on.  launchappns gave
-	# the app its own process group, numbered by this pid: wait for
-	# the group to empty.
-	while(groupalive(pid))
-		sys->sleep(500);
+	buf := array[32] of byte;
+	sys->read(gfd, buf, len buf);
 	if(actid >= 0 && id != "") {
 		writetofile(
 			sys->sprint("%s/activity/%d/presentation/ctl", mountpt, actid),
@@ -3481,27 +3676,6 @@ appreaper(actid: int, id: string, pid: int,
 	}
 	# nothing of the app is left to connect: end its relay
 	appwm <-= (nil, nil);
-}
-
-# groupalive: whether any proc in process group gid is still running.
-groupalive(gid: int): int
-{
-	fd := sys->open("/prog", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	for(;;) {
-		(n, d) := sys->dirread(fd);
-		if(n <= 0)
-			return 0;
-		for(i := 0; i < n; i++) {
-			st := readfile("/prog/" + d[i].name + "/status");
-			if(st == nil)
-				continue;
-			(nf, f) := sys->tokenize(st, " ");
-			if(nf >= 2 && int hd tl f == gid)
-				return 1;
-		}
-	}
 }
 
 # cleanupappslotbyid — slot-array twin of cleanupappslot.  Same
@@ -3754,10 +3928,14 @@ launchappns(tp: ref TaskPres, guimod: GuiApp,
 	appwm: chan of (string, chan of (string, ref Wmcontext)))
 {
 	pid := sys->pctl(0, nil);
-	spawn appreaper(tp.actid, id, pid, appwm);
+	# The reaper is spawned before the app's group is made, so it is not
+	# in it; the group's grpwait is opened after, so it is the app's.
+	grpc := chan of ref Sys->FD;
+	spawn appreaper(tp.actid, id, grpc, appwm);
 	# The app's own process group, so ending its activity can kill it
 	# and everything it spawned without touching Lucifer's.
 	sys->pctl(Sys->NEWPGRP, nil);
+	grpc <-= sys->open(sys->sprint("/prog/%d/grpwait", pid), Sys->OREAD);
 	setslotpid(tp, id, pid);
 	# Activity 0 uses the default /chan/wmctl — no FORKNS needed.
 	# Child tasks use /chan/wmctl.N and need FORKNS + bind so apps

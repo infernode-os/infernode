@@ -1,5 +1,5 @@
 #
-# Twofa — Limbo wrapper over the #F (2fa) device (/dev/2fa).
+# Twofa — Limbo wrapper over the #h (2fa) device (/dev/2fa).
 #
 # Provider-agnostic second-factor challenge-response. Callers (logon, factotum,
 # wallet) use this instead of poking the device files directly. See
@@ -11,12 +11,12 @@ Twofa: module
 {
 	PATH:	con "/dis/lib/twofa.dis";
 
-	# Default mountpoint where the #F device is bound.
+	# Default mountpoint where the #h device is bound.
 	Dev:	con "/mnt/2fa";
 
 	init:	fn();
 
-	# Bind '#F' at Dev (creating the mountpoint if needed).
+	# Bind '#h' at Dev (creating the mountpoint if needed).
 	# Returns nil on success, else an error string.
 	mount:	fn(): string;
 

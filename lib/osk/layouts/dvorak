@@ -1,0 +1,16 @@
+# Dvorak, the letters.
+#
+# A row is its keys, left to right.  A key is one or two characters,
+# what it types and what it types shifted (a letter's shift is its
+# capital), or one of: shift del enter space tab esc ctrl next (the
+# next letters' layout) sym more abc (the symbols, more of them, the
+# letters) left right up down home end.  A key ":n" is n keys wide;
+# a row narrower than the widest is centred.  osk(1).
+#
+# Dvorak's own punctuation (' , .) is on its top row, as on a desk;
+# its semicolon, left of q, would make the third row wider than the
+# rest, so it is on the bottom row, where space is.
+row	'" ,< .> p y f g c r l
+row	a o e u i d h t n s
+row	shift q j k x b m w v z del
+row	sym:1.5 next ;: space:4 -_ enter:1.5

@@ -323,9 +323,9 @@ static Chan*
 ipattach(char* spec)
 {
 	Chan *c;
-	int dev;
+	ulong dev;
 
-	dev = atoi(spec);
+	dev = strtoul(spec, nil, 0);
 	if(dev >= Nfs)
 		error("bad specification");
 
@@ -366,10 +366,12 @@ incoming(void* arg)
 	return conv->incall != nil;
 }
 
+/* OEXEC too: without it, omode&3 == 3 read past the table (emu's devip) */
 static int m2p[] = {
 	[OREAD]		4,
 	[OWRITE]	2,
-	[ORDWR]		6
+	[ORDWR]		6,
+	[OEXEC]		1,
 };
 
 static Chan*
@@ -450,15 +452,11 @@ ipopen(Chan* c, int omode)
 			qunlock(&p->ql);
 			nexterror();
 		}
-		if((perm & (cv->perm>>6)) != perm) {
-			if(strcmp(ATTACHER(c), cv->owner) != 0)
-				error(Eperm);
-		 	if((perm & cv->perm) != perm)
-				error(Eperm); 
-
-		}
-		cv->inuse++;
-		if(cv->inuse == 1){
+		if(strcmp(ATTACHER(c), cv->owner) == 0)
+			perm <<= 6;
+		if((perm & cv->perm) != perm && !iseve())
+			error(Eperm);
+		if(++cv->inuse == 1){
 			kstrdup(&cv->owner, ATTACHER(c));
 			cv->perm = 0660;
 		}
@@ -468,25 +466,25 @@ ipopen(Chan* c, int omode)
 		break;
 	case Qlisten:
 		cv = f->p[PROTO(c->qid)]->conv[CONV(c->qid)];
-		if((perm & (cv->perm>>6)) != perm) {
-			if(strcmp(ATTACHER(c), cv->owner) != 0)
-				error(Eperm);
-		 	if((perm & cv->perm) != perm)
-				error(Eperm); 
-
+		qlock(&cv->ql);
+		if(waserror()){
+			qunlock(&cv->ql);
+			nexterror();
 		}
-
+		if(strcmp(ATTACHER(c), cv->owner) == 0)
+			perm <<= 6;
+		if((perm & cv->perm) != perm && !iseve())
+			error(Eperm);
 		if(cv->state != Announced)
 			error("not announced");
+		cv->inuse++;
+		qunlock(&cv->ql);
+		poperror();
 
 		if(waserror()){
 			closeconv(cv);
 			nexterror();
 		}
-		qlock(&cv->ql);
-		cv->inuse++;
-		qunlock(&cv->ql);
-
 		nc = nil;
 		while(nc == nil) {
 			/* give up if we got a hangup */
@@ -507,7 +505,6 @@ ipopen(Chan* c, int omode)
 			if(nc != nil){
 				cv->incall = nc->next;
 				mkqid(&c->qid, QID(PROTO(c->qid), nc->x, Qctl), 0, QTFILE);
-				kstrdup(&cv->owner, ATTACHER(c));
 			}
 			qunlock(&cv->ql);
 
@@ -530,7 +527,6 @@ ipwstat(Chan *c, uchar *dp, int n)
 	Dir *d;
 	Conv *cv;
 	Fs *f;
-	Proto *p;
 
 	f = ipfs[c->dev];
 	switch(TYPE(c->qid)) {
@@ -550,14 +546,23 @@ ipwstat(Chan *c, uchar *dp, int n)
 	n = convM2D(dp, n, d, (char*)&d[1]);
 	if(n == 0)
 		error(Eshortstat);
-	p = f->p[PROTO(c->qid)];
-	cv = p->conv[CONV(c->qid)];
-	if(!iseve() && strcmp(ATTACHER(c), cv->owner) != 0)
+	cv = f->p[PROTO(c->qid)]->conv[CONV(c->qid)];
+	qlock(&cv->ql);
+	if(waserror()){
+		qunlock(&cv->ql);
+		nexterror();
+	}
+	if(strcmp(ATTACHER(c), cv->owner) != 0 && !iseve())
 		error(Eperm);
-	if(!emptystr(d->uid))
+	if(!emptystr(d->uid)){
+		if(strcmp(d->uid, commonuser()) != 0 && !iseve())
+			error(Eperm);
 		kstrdup(&cv->owner, d->uid);
+	}
 	if(d->mode != ~0UL)
-		cv->perm = d->mode & 0777;
+		cv->perm = d->mode & 0666;
+	qunlock(&cv->ql);
+	poperror();
 	poperror();
 	free(d);
 	return n;
@@ -1237,6 +1242,10 @@ Fsproto(Fs *f, Proto *p)
 
 	p->qid.type = QTDIR;
 	p->qid.path = QID(f->np, 0, Qprotodir);
+	if(p->nc > Maskconv+1){
+		print("Fsproto: %s nc %d > %d\n", p->name, p->nc, Maskconv+1);
+		p->nc = Maskconv+1;
+	}
 	p->conv = malloc(sizeof(Conv*)*(p->nc+1));
 	if(p->conv == nil)
 		panic("Fsproto");
@@ -1290,6 +1299,30 @@ retry:
 			p->ac++;
 			c->eq = qopen(1024, Qmsg, 0, 0);
 			(*p->create)(c);
+			/*
+			 * qopen gives nil when malloc refuses it, and the
+			 * protocols' create functions do not look: a Conv
+			 * kept for good with a nil queue faulted at its
+			 * first use. Unseen yet (the protocol is locked),
+			 * it is undone here instead.
+			 */
+			if(c->eq == nil || c->rq == nil || c->wq == nil ||
+			   (c->sq == nil && strcmp(p->name, "ipifc") == 0)){
+				if(c->eq != nil)
+					qfree(c->eq);
+				if(c->rq != nil)
+					qfree(c->rq);
+				if(c->wq != nil)
+					qfree(c->wq);
+				if(c->sq != nil)
+					qfree(c->sq);
+				*pp = nil;
+				p->ac--;
+				qunlock(&c->ql);
+				free(c->ptcl);
+				free(c);
+				error(Enomem);
+			}
 			break;
 		}
 		if(canqlock(&c->ql)){
@@ -1386,7 +1419,7 @@ Fsnewcall(Conv *c, uchar *raddr, ushort rport, uchar *laddr, ushort lport, uchar
 	}
 
 	/* find a free conversation */
-	nc = Fsprotoclone(c->p, network);
+	nc = Fsprotoclone(c->p, c->owner);
 	if(nc == nil) {
 		qunlock(&c->ql);
 		return nil;

@@ -31,6 +31,7 @@ TARG=\
 	dir.dis\
 	matrix.dis\
 	shell.dis\
+	osk.dis\
 	view.dis\
 	page.dis\
 	wm.dis\
@@ -53,6 +54,8 @@ SYSMODULES=\
 	readdir.m\
 	man.m\
 	daytime.m\
+	docengine.m\
+	docreg.m\
 	draw.m\
 	scene.m\
 	factotum.m\
@@ -100,6 +103,8 @@ SYSMODULES=\
 	selectfile.m\
 	sheetview.m\
 	softkbd.m\
+	kbdecode.m\
+	osklayout.m\
 	tabs.m\
 	twofa.m\
 	twofaslot.m\

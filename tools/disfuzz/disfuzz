@@ -1,0 +1,508 @@
+#!/usr/bin/env python3
+#
+# disfuzz -- random Limbo programs run under every Dis VM mode, compared.
+#
+#	disfuzz [-n count] [-s seed] [-j jobs] [-t secs] [-z size]
+#		[-m modes] [-k] [-q]
+#	disfuzz -r FILE.b [-m modes] [-t secs]	cut a failing program down
+#	disfuzz -x FILE.b [-m modes]		run one program, show each mode
+#
+# Each case is a program from tools/disfuzz/gen.py (seed s, s+1, ...),
+# compiled by the native limbo and run by emu under each mode (by default
+# "-c0" and "-c1": the interpreter and the JIT). A case fails when
+#
+#	compile	limbo crashed, hung, or said something other than an error
+#		in the program (a program it rejects is the generator's fault,
+#		counted, not failed)
+#	crash	emu died by a signal, or printed a crash signature (SEGV,
+#		BUS, panic, a broken Prog) under any mode
+#	hang	one mode ran past the time limit and another did not
+#	escape	a program's last line is not "done" under some mode (an
+#		exception got out, or the Prog died, while the program catches
+#		everything it raises)
+#	diverge	the modes printed different lines
+#
+# Before the cases, each JIT mode must compile a small program and a
+# generated one (emu -c4 names what the amd64 and riscv64 JITs compile): a
+# module the JIT refuses runs in the interpreter, and then the modes agree
+# because they are the same. The amd64 JIT refused every module under 128
+# instructions that way.
+#
+# Only a program's own lines ("tag value") are compared; emu's notes and
+# a crash's signature are looked for on stdout and stderr. A mode past the
+# time limit gets four times as long before it is a hang, and is only a
+# hang if another mode finished in a thirtieth of that (the interpreter is
+# often ten times slower).
+#
+# A failed case keeps its source, its output under each mode and the first
+# line where they part in $ROOT/tmp/disfuzz/fail/<seed>/; -r cuts it down
+# (deleting the generator's #< #> chunks while the failure stays the same
+# kind) to <seed>/min.b. Programs run from $ROOT/tmp/disfuzz/w<job>/ as
+# /tmp/disfuzz/w<job>/fz.dis, the path the program loads itself from.
+#
+#	-n	cases (100); 0 for no end
+#	-s	first seed (the time)
+#	-j	cases at once (the CPUs)
+#	-t	seconds for one mode of one case (10)
+#	-z	program size (12): statements in a function, functions/3
+#	-m	modes, ';'-separated emu flags ("-c0;-c1"; e.g. "-c0;-c1;-c1 -m1")
+#	-k	keep going after a failure (stop at the first otherwise)
+#	-q	no progress line
+#
+# Exit status: 0 no failure, 1 a failure, 2 a usage or setup error.
+#
+# Examples:
+#	tools/disfuzz/disfuzz -n 2000 -k	2000 cases, all failures kept
+#	tools/disfuzz/disfuzz -r tmp/disfuzz/fail/1234/fz.b
+#	tools/disfuzz/disfuzz -x tmp/disfuzz/fail/1234/min.b
+#
+# What the programs do, and what is left out so that a correct VM prints
+# the same under every mode, is in gen.py.
+#
+
+import argparse
+import concurrent.futures
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+sys.path.insert(0, HERE)
+import gen  # noqa: E402
+
+CRASH = re.compile(r"SEGV|BUS: addr|panic|sys: trap|bad op|illegal instruction|unhandled|\bfault\b|Broken: \"(?!(zero divide|array bounds error|dereference of nil|negative array size|user:|out of memory|exponent))")
+NOISE = re.compile(r"^fs: fsqid: top-bit dev|^pool [a-z]+: cannot allocate")
+
+
+def host():
+	s = os.uname().sysname
+	m = os.uname().machine
+	h = {"Linux": "Linux", "Darwin": "MacOSX"}.get(s)
+	o = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64", "riscv64": "riscv64"}.get(m)
+	return h, o
+
+
+def tools():
+	h, o = host()
+	emu = os.environ.get("EMU") or os.path.join(ROOT, "emu", h, "o.emu")
+	limbo = os.environ.get("LIMBO") or os.path.join(ROOT, h, o, "bin", "limbo")
+	for p in (emu, limbo):
+		if not os.access(p, os.X_OK):
+			sys.exit("disfuzz: no %s (build the tree first)" % p)
+	return emu, limbo
+
+
+def run(cmd, secs, cwd=None, split=False):
+	# (status, output, timed out); status < 0 is the signal that ended it.
+	# split: output is (stdout, stderr), apart
+	try:
+		p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE if split else subprocess.STDOUT,
+			stdin=subprocess.DEVNULL, cwd=cwd, start_new_session=True)
+	except OSError as e:
+		return -1, (str(e).encode(), b"") if split else str(e).encode(), False
+	to = False
+	try:
+		out, err = p.communicate(timeout=secs)
+	except subprocess.TimeoutExpired:
+		os.killpg(p.pid, signal.SIGKILL)
+		out, err = p.communicate()
+		to = True
+	return p.returncode, (out, err or b"") if split else out, to
+
+
+# This sandbox's shell wrapper sometimes writes its own complaint into a
+# child's output, even mid-line; emu never writes it (strace), so it goes.
+INJECT = re.compile(r"/bin/bash: line [0-9]+: unalias: unsetenv: not found\n?")
+
+
+def clean(out):
+	text = INJECT.sub("", out.decode("utf-8", "replace"))
+	lines = text.splitlines()
+	return [l for l in lines if not NOISE.match(l)]
+
+
+# A program's own lines are "tag value"; emu says other things on stdout
+# that differ between modes by design (a refused allocation's "at pc N"
+# is "(compiled)" under the JIT), and the sandbox's injected text can
+# arrive in pieces. Only the program's lines are compared.
+TAGGED = re.compile(r"^-?[0-9]+ ")
+
+
+INJECTED = "/bin/bash: line 1: unalias: unsetenv: not found"
+
+
+def programlines(lines):
+	# A piece of the injected text, written between two of emu's writes,
+	# can sit in front of a program's line ("/1 line", "alias: unsetenv:
+	# not found44 exc ..."): it goes.
+	out = []
+	for l in lines:
+		if not TAGGED.match(l):
+			for k in range(min(len(l), len(INJECTED)), 0, -1):
+				if l[:k] in INJECTED and TAGGED.match(l[k:]):
+					l = l[k:]
+					break
+		if TAGGED.match(l):
+			out.append(l)
+	return out
+
+
+class Case:
+	def __init__(self, seed):
+		self.seed = seed
+		self.kind = None	# None: passed; "reject": generator's fault
+		self.why = ""
+		self.outs = {}
+		self.errs = {}
+		self.secs = {}
+		self.raw = {}
+		self.src = ""
+
+
+def check(src, wdir, modes, secs, emu, limbo, seed=0):
+	# compile and run src under each mode; the Case says how it went
+	c = Case(seed)
+	c.src = src
+	os.makedirs(wdir, exist_ok=True)
+	b = os.path.join(wdir, "fz.b")
+	d = os.path.join(wdir, "fz.dis")
+	with open(b, "w") as f:
+		f.write(src)
+	if os.path.exists(d):
+		os.unlink(d)
+	st, out, to = run([limbo, "-I", os.path.join(ROOT, "module"), "-o", d, b], 30)
+	text = out.decode("utf-8", "replace")
+	if to:
+		c.kind, c.why = "compile", "limbo hung (30s)"
+		return c
+	if st < 0:
+		c.kind, c.why = "compile", "limbo died by signal %d: %s" % (-st, text[-300:])
+		return c
+	if st != 0:
+		if re.search(r"internal|fatal|assert|botch|can't happen|cannot happen", text, re.I):
+			c.kind, c.why = "compile", "limbo: " + text.strip()[-300:]
+		else:
+			c.kind, c.why = "reject", text.strip()[:300]
+		return c
+	rel = "/" + os.path.relpath(d, ROOT)
+	hung = []
+	for m in modes:
+		# Through sh, which halts emu afterwards: emu does not exit when
+		# the program's Prog dies of an exception. The program's lines are
+		# its stdout, compared; emu's own notes and any crash are on
+		# stderr, searched with stdout for crashes.
+		t0 = time.time()
+		for attempt in range(5):
+			st, (out, err), to = run([emu] + m.split() + ["-r" + ROOT, "/dis/sh.dis", "-c",
+				"%s; echo halt > /dev/sysctl" % rel], secs, split=True)
+			# the injected text in pieces, through a program's line: again
+			if b"unsetenv" not in INJECT.sub("", out.decode("utf-8", "replace")).encode():
+				break
+		if to:
+			# the interpreter is slower: a hang is one that a longer
+			# run does not end either
+			st, (out, err), to = run([emu] + m.split() + ["-r" + ROOT, "/dis/sh.dis", "-c",
+				"%s; echo halt > /dev/sysctl" % rel], secs * 4, split=True)
+		c.secs[m] = time.time() - t0
+		c.raw[m] = out
+		lines = programlines(clean(out))
+		elines = clean(err)
+		c.outs[m] = lines
+		c.errs[m] = elines
+		if to:
+			hung.append(m)
+			continue
+		bad = [l for l in lines + elines if CRASH.search(l)]
+		if st < 0 or bad:
+			c.kind = "crash"
+			c.why = "%s: %s" % (m, ("signal %d" % -st) if st < 0 else bad[0])
+			return c
+	if hung:
+		# the interpreter can be 10 times slower than compiled code:
+		# a hang is a mode stuck where another finished in a fraction
+		# of the time
+		done = [c.secs[m] for m in modes if m not in hung]
+		if done and min(done) * 30 > secs * 4:
+			c.kind, c.why = "reject", "slow (%.0fs under %s)" % (min(done), [m for m in modes if m not in hung][0])
+			return c
+		if len(hung) < len(modes):
+			c.kind, c.why = "hang", "past %ds under %s only" % (secs * 4, ", ".join(hung))
+		else:
+			c.kind, c.why = "reject", "slow under every mode"
+		return c
+	for m in modes:
+		if not c.outs[m] or c.outs[m][-1] != "0 done":
+			c.kind = "escape"
+			c.why = "%s: last line %r" % (m, c.outs[m][-1] if c.outs[m] else "")
+			return c
+	base = modes[0]
+	for m in modes[1:]:
+		a, b2 = c.outs[base], c.outs[m]
+		if a != b2:
+			for i in range(max(len(a), len(b2))):
+				x = a[i] if i < len(a) else "<end>"
+				y = b2[i] if i < len(b2) else "<end>"
+				if x != y:
+					c.kind = "diverge"
+					c.why = "line %d: %s %r, %s %r" % (i + 1, base, x, m, y)
+					return c
+	return c
+
+
+def keep(c, modes):
+	d = os.path.join(ROOT, "tmp", "disfuzz", "fail", str(c.seed))
+	os.makedirs(d, exist_ok=True)
+	with open(os.path.join(d, "fz.b"), "w") as f:
+		f.write(c.src)
+	with open(os.path.join(d, "why"), "w") as f:
+		f.write("%s %s\n" % (c.kind, c.why))
+	for i, m in enumerate(modes):
+		if m in c.outs:
+			with open(os.path.join(d, "out%d" % i), "w") as f:
+				f.write("# emu %s\n" % m)
+				f.write("\n".join(c.outs[m]) + "\n")
+				if c.errs.get(m):
+					f.write("# stderr\n" + "\n".join(c.errs[m]) + "\n")
+			if m in c.raw:
+				with open(os.path.join(d, "raw%d" % i), "wb") as f:
+					f.write(c.raw[m])
+	return d
+
+
+def signature(c):
+	# what must stay the same while a program is cut down: the kind, and
+	# for the compiler what it said (names and numbers aside)
+	if c.kind != "compile":
+		return c.kind
+	w = re.sub(r"[.]?[a-z]+[0-9]+|[0-9]+", "N", c.why)
+	return "compile " + w.split("\n")[0][:60]
+
+
+def chunks(lines):
+	# the (start, end) line ranges of #< ... #> chunks, outermost first
+	st, out = [], []
+	for i, l in enumerate(lines):
+		if l == "#<":
+			st.append(i)
+		elif l == "#>" and st:
+			out.append((st.pop(), i))
+	out.sort(key=lambda r: (r[0], -r[1]))
+	return out
+
+
+def reduce(path, modes, secs, emu, limbo):
+	with open(path) as f:
+		src = f.read()
+	wdir = os.path.join(ROOT, "tmp", "disfuzz", "wr%d" % os.getpid())
+	sp = "/" + os.path.relpath(os.path.join(wdir, "fz.dis"), ROOT)
+	src = re.sub(r'SELF: con "[^"]*";', 'SELF: con "%s";' % sp, src)
+	first = check(src, wdir, modes, secs, emu, limbo)
+	if first.kind in (None, "reject"):
+		sys.exit("disfuzz: %s does not fail here (%s)" % (path, first.kind or "passes"))
+	kind = first.kind
+	sig = signature(first)
+	print("reducing a %s: %s" % (kind, first.why))
+	lines = src.split("\n")
+	tries = 0
+	progress = True
+	while progress:
+		progress = False
+		for (a, b) in chunks(lines):
+			if a >= len(lines) or lines[a] != "#<":
+				continue
+			# find this chunk's end again (earlier cuts moved lines)
+			depth, e = 0, None
+			for i in range(a, len(lines)):
+				if lines[i] == "#<":
+					depth += 1
+				elif lines[i] == "#>":
+					depth -= 1
+					if depth == 0:
+						e = i
+						break
+			if e is None:
+				continue
+			cand = lines[:a] + lines[e + 1:]
+			tries += 1
+			c = check("\n".join(cand), wdir, modes, secs, emu, limbo)
+			if c.kind == kind and signature(c) == sig:
+				lines = cand
+				progress = True
+				first = c
+				break
+	# then single lines, from the end (uses come after declarations), as
+	# long as each cut leaves a program that fails the same way
+	lines = [l for l in lines if l not in ("#<", "#>")]
+	progress = True
+	while progress:
+		progress = False
+		i = len(lines) - 1
+		while i >= 0:
+			l = lines[i].strip()
+			if l and not l.startswith(("implement", "include", "Fz:", "init(", "out(", "FZSELF")):
+				cand = lines[:i] + lines[i + 1:]
+				tries += 1
+				c = check("\n".join(cand), wdir, modes, secs, emu, limbo)
+				if c.kind == kind and signature(c) == sig:
+					lines = cand
+					progress = True
+					first = c
+			i -= 1
+	out = os.path.join(os.path.dirname(os.path.abspath(path)), "min.b")
+	text = "\n".join(l for l in lines if l not in ("#<", "#>"))
+	with open(out, "w") as f:
+		f.write(text)
+	print("%d tries; %d lines left; %s" % (tries, text.count("\n"), first.why))
+	print(out)
+
+
+def jitcheck(modes, emu, limbo, size):
+	# A JIT that refuses a module runs it in the interpreter and says
+	# nothing (comp-amd64.c refused every module under 128 instructions
+	# that way): then -c0 and -c1 agree because both are the interpreter.
+	# So, once: a small program and a generated one, under each JIT mode
+	# with -c4, which makes the JIT name each module it compiles ("dis=
+	# ...: Fz", where the JIT says; arm64's does not).
+	wdir = os.path.join(ROOT, "tmp", "disfuzz", "wj")
+	sp = "/" + os.path.relpath(os.path.join(wdir, "fz.dis"), ROOT)
+	if host()[1] not in SAYS:
+		print("disfuzz: the %s JIT does not say what it compiles: not checked that it does" % host()[1])
+		return True
+	ok = True
+	for name, src in (("small", SMALL), ("generated", gen.Gen(1, sp, size).module())):
+		c = check(src, wdir, ["-c0"], 30, emu, limbo)
+		if c.kind == "compile" or c.kind == "reject":
+			print("disfuzz: the %s check program does not compile: %s" % (name, c.why))
+			return False
+		for m in modes:
+			cm = re.search(r"-c\s*([0-9])", m)
+			if not cm or cm.group(1) == "0":
+				continue
+			flags = re.sub(r"-c\s*[0-9]", "-c4", m).split()
+			st, out, to = run([emu] + flags + ["-r" + ROOT, "/dis/sh.dis", "-c",
+				"%s; echo halt > /dev/sysctl" % ("/" + os.path.relpath(os.path.join(wdir, "fz.dis"), ROOT))], 60)
+			text = out.decode("utf-8", "replace")
+			if not re.search(r"(?m)^dis=.*: Fz$", text):
+				print("disfuzz: %s does not compile the %s check program: it would run interpreted, and agree" % (m, name))
+				ok = False
+	return ok
+
+
+SAYS = ("amd64", "riscv64")	# JITs that print "dis= ...: Module" under -c4
+
+SMALL = """implement Fz;
+include "sys.m";
+	sys: Sys;
+include "draw.m";
+Fz: module
+{
+	init: fn(nil: ref Draw->Context, nil: list of string);
+};
+init(nil: ref Draw->Context, nil: list of string)
+{
+	sys = load Sys Sys->PATH;
+	sys->print("0 done\\n");
+}
+"""
+
+
+def main():
+	ap = argparse.ArgumentParser(add_help=True)
+	ap.add_argument("-n", type=int, default=100)
+	ap.add_argument("-s", type=int, default=None)
+	ap.add_argument("-j", type=int, default=os.cpu_count() or 2)
+	ap.add_argument("-t", type=int, default=10)
+	ap.add_argument("-z", type=int, default=12)
+	ap.add_argument("-m", default="-c0;-c1")
+	ap.add_argument("-k", action="store_true")
+	ap.add_argument("-q", action="store_true")
+	ap.add_argument("-r", metavar="FILE")
+	ap.add_argument("-x", metavar="FILE")
+	a = ap.parse_args()
+	modes = [m.strip() for m in a.m.split(";") if m.strip()]
+	if len(modes) < 1:
+		sys.exit("disfuzz: no modes")
+	emu, limbo = tools()
+
+	if a.r:
+		reduce(a.r, modes, a.t, emu, limbo)
+		return 0
+	if a.x:
+		with open(a.x) as f:
+			src = f.read()
+		wdir = os.path.join(ROOT, "tmp", "disfuzz", "wx")
+		sp = "/" + os.path.relpath(os.path.join(wdir, "fz.dis"), ROOT)
+		src = re.sub(r'SELF: con "[^"]*";', 'SELF: con "%s";' % sp, src)
+		c = check(src, wdir, modes, a.t, emu, limbo)
+		for m in modes:
+			print("== emu %s" % m)
+			print("\n".join(c.outs.get(m, [])))
+			if c.errs.get(m):
+				print("-- stderr\n" + "\n".join(c.errs[m]))
+		print("== %s %s" % (c.kind or "pass", c.why))
+		return 0 if c.kind is None else 1
+
+	if not jitcheck(modes, emu, limbo, a.z):
+		return 2
+	seed = a.s if a.s is not None else int(time.time())
+	print("disfuzz: seeds from %d, modes %s, %d at once" % (seed, " | ".join(modes), a.j), flush=True)
+
+	def one(job, s):
+		wdir = os.path.join(ROOT, "tmp", "disfuzz", "w%d" % job)
+		sp = "/" + os.path.relpath(os.path.join(wdir, "fz.dis"), ROOT)
+		src = gen.Gen(s, sp, a.z).module()
+		return check(src, wdir, modes, a.t, emu, limbo, s)
+
+	counts = {}
+	failed = 0
+	rejects = []
+	start = time.time()
+	n = 0
+	with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
+		free = list(range(a.j))
+		pend = {}
+		nxt = seed
+		stop = False
+		while True:
+			while not stop and free and (a.n == 0 or nxt < seed + a.n):
+				job = free.pop()
+				pend[ex.submit(one, job, nxt)] = job
+				nxt += 1
+			if not pend:
+				break
+			done, _ = concurrent.futures.wait(pend, return_when=concurrent.futures.FIRST_COMPLETED)
+			for fu in done:
+				free.append(pend.pop(fu))
+				c = fu.result()
+				n += 1
+				k = c.kind or "pass"
+				counts[k] = counts.get(k, 0) + 1
+				if k == "reject":
+					rejects.append((c.seed, c.why))
+				elif k != "pass":
+					failed += 1
+					d = keep(c, modes)
+					print("\nFAIL seed %d: %s: %s\n  kept in %s" % (c.seed, k, c.why, d), flush=True)
+					if not a.k:
+						stop = True
+			if not a.q:
+				el = time.time() - start
+				sys.stderr.write("\r%d cases, %.1f/s: %s   " % (n, n / max(el, 0.001),
+					" ".join("%s %d" % kv for kv in sorted(counts.items()))))
+				sys.stderr.flush()
+	if not a.q:
+		sys.stderr.write("\n")
+	print("disfuzz: %d cases: %s" % (n, " ".join("%s %d" % kv for kv in sorted(counts.items()))))
+	if rejects:
+		print("disfuzz: %d programs the compiler refused (the generator's fault), e.g. seed %d: %s"
+			% (len(rejects), rejects[0][0], rejects[0][1]))
+	return 1 if failed else 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

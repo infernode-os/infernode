@@ -417,3 +417,6 @@ wpakey wpakey
 xml xml
 gdl90 gdl90
 garminav garminav
+kbdecode kbdecode
+osklayout kbdecode
+softkbd softkbd

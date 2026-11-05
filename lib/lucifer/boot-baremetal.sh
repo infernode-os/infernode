@@ -179,6 +179,20 @@ if {! sh -c 'read 144 < /dev/draw/new > /dev/null >[2] /dev/null'} {
 skip=0
 if {ftest -f /n/dos/skiplogon} {skip=1}
 if {~ $skiplogon 1} {skip=1}
+# The keyboard on the screen for the password, on a screen with no
+# keyboard (a phone, the Pi's touch panel): it shows itself once the
+# screen is touched with none attached, and in secret mode shows
+# nothing of what is typed and learns none of it (osk(1)).  It goes
+# when the login is done; Lucifer starts its own.  $osk off: not.
+oskpid=()
+if {! ~ $osk off} {
+	if {~ $skip 0} {
+		if {ftest -f /dis/wm/osk.dis} {
+			wm/osk -s -M secret &
+			oskpid=$apid
+		}
+	}
+}
 
 #
 # wm/logon has three outcomes and the shell must tell them apart (the
@@ -226,6 +240,7 @@ if {~ $skip 1} {
 	}
 }
 
+if {! ~ $#oskpid 0} {kill -g $oskpid >[2] /dev/null}
 if {~ $ok 1} {
 	luciuisrv
 	sleep 1

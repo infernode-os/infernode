@@ -4,13 +4,20 @@
 #include "raise.h"
 #include "pool.h"
 
-REG	R;			/* Virtual Machine registers */
+Vm	vm0 = {		/* the VM; R is the running VM's registers (interp.h) */
+	.vgccolor = 3,
+	.marker = 1,
+	.sweeper = 2,
+	.quanta = 50,		/* gc.c's Quanta */
+	.gct = 1,
+};
 String	snil;			/* String known to be zero length */
 
 #define Stmp	*((WORD*)(R.FP+NREG*IBY2WD))
 #define Dtmp	*((WORD*)(R.FP+(NREG+2)*IBY2WD))
 
-#define OP(fn)	void fn(void)
+#include "opreg.h"
+#define OP(fn)	void fn(OPARGS)
 #define B(r)	*((BYTE*)(R.r))
 #define W(r)	*((WORD*)(R.r))
 #define UW(r)	*((UWORD*)(R.r))
@@ -527,18 +534,29 @@ OP(newaz)
 	destroy(at);
 }
 Channel*
-cnewc(Type *t, void (*mover)(void), int len)
+cnewc(Type *t, void (*mover)(OPARGS), int len)
 {
 	Heap *h;
 	Channel *c;
 
 	h = heap(&Tchannel);
 	c = H2D(Channel*, h);
+	c->buf = H;
 	c->send = malloc(sizeof(Progq));
 	c->recv = malloc(sizeof(Progq));
 	if(c->send == nil || c->recv == nil){
+		/*
+		 * The channel, unreferenced, is freed now (freechan): its
+		 * queues nil, not the freed ones, and its buffer H, not
+		 * nil. Left as they were, the collector freed it later
+		 * through freed memory (killcomm; a malloc refused,
+		 * os/port/chaos.c).
+		 */
 		free(c->send);
 		free(c->recv);
+		c->send = c->recv = nil;
+		c->mover = nil;
+		destroy(c);
 		error(exNomem);
 	}
 	c->send->prog = c->recv->prog = nil;
@@ -556,8 +574,9 @@ cnewc(Type *t, void (*mover)(void), int len)
 	return c;
 }
 Channel*
-newc(Type *t, void (*mover)(void))
+newc(Type *t, void (*mover)(OPARGS))
 {
+	RPDECL;
 	Channel **cp, *oldc;
 	WORD len;
 
@@ -771,7 +790,7 @@ OP(spawn)
 	Prog *p;
 
 	p = newprog(currun(), R.M);
-	p->R.PC = *(Inst**)R.d;
+	p->reg.PC = *(Inst**)R.d;
 	newstack(p);
 	unframe();
 }
@@ -789,9 +808,9 @@ OP(mspawn)
 	p = newprog(currun(), ml);
 	o = W(m);
 	if(o >= 0)
-		p->R.PC = ml->links[o].u.pc;
+		p->reg.PC = ml->links[o].u.pc;
 	else
-		p->R.PC = ml->m->ext[-o-1].u.pc;
+		p->reg.PC = ml->m->ext[-o-1].u.pc;
 	newstack(p);
 	unframe();
 }
@@ -801,14 +820,14 @@ OP(mspawn)
  * the compiled code has come back to xec, and it is also certain when
  * another return comes to OP(ret): that call is from another module's
  * code, and the first module has no reference left that could run it.
- * There is one R, and so one of these. Nothing else refers to it, so
+ * Each VM has one R, and so one of these (Vm.vretpending). Nothing else refers to it, so
  * the collector is told of it (gc.c, rootset), or it would be swept.
  */
-Modlink *retpending;		/* a GC root: gc.c, rootset */
 
 static void
 retrelease(void)
 {
+	RPDECL;
 	Modlink *ml;
 
 	ml = retpending;
@@ -1046,6 +1065,7 @@ OP(lenl)
 static int
 cgetb(Channel *c, void *v)
 {
+	RPDECL;
 	Array *a;
 	void *w;
 
@@ -1060,7 +1080,7 @@ cgetb(Channel *c, void *v)
 		R.s = w;
 		R.m = &c->mid;
 		R.d = v;
-		c->mover();
+		c->mover(OPCALL);
 		if(a->t->np){
 			freeptrs(w, a->t);
 			initmem(a->t, w);
@@ -1072,6 +1092,7 @@ cgetb(Channel *c, void *v)
 static int
 cputb(Channel *c, void *v)
 {
+	RPDECL;
 	Array *a;
 	WORD len, r;
 
@@ -1086,7 +1107,7 @@ cputb(Channel *c, void *v)
 		R.s = v;
 		R.m = &c->mid;
 		R.d = a->data+r*a->t->size;
-		c->mover();
+		c->mover(OPCALL);
 		return 1;
 	}
 	return 0;
@@ -1104,23 +1125,39 @@ cqsize(Progq *q)
 	return n;
 }
 */
-void
-cqadd(Progq **q, Prog *p)
+/*
+ * p queued on q, or 0 if there is no memory for it, q as it was. A
+ * caller that has queued p elsewhere, or taken it off the run queue,
+ * must undo that before raising the error: alt's queuing on its
+ * channels, and isend and irecv, raised it with p left on the first
+ * channels (to be woken freed) or off the run queue (its exception
+ * handled with no Prog current). Malloc refused, os/port/chaos.c.
+ */
+int
+cqaddok(Progq **q, Prog *p)
 {
 	Progq *n;
 
 	if((*q)->prog == nil){
 		(*q)->prog = p;
-		return;
+		return 1;
 	}
 	n = (Progq*)malloc(sizeof(Progq));
 	if(n == nil)
-		error(exNomem);
+		return 0;
 	n->prog = p;
 	n->next = nil;
 	for( ; *q != nil; q = &(*q)->next)
 		;
 	*q = n;
+	return 1;
+}
+
+void
+cqadd(Progq **q, Prog *p)
+{
+	if(!cqaddok(q, p))
+		error(exNomem);
 }
 void
 cqdel(Progq **q)
@@ -1167,12 +1204,13 @@ OP(isend)
 	if((p = c->recv->prog) == nil) {
 		if(c->buf != H && cputb(c, R.s))
 			return;
+		/* queued first: refused, nothing has changed (cqaddok) */
+		cqadd(&c->send, currun());
 		p = delrun(Psend);
 		p->ptr = R.s;
 		p->chan = c;	/* for killprog */
-		R.IC = 1;	
+		R.IC = 1;
 		R.t = 1;
-		cqadd(&c->send, p);
 		return;
 	}
 
@@ -1181,12 +1219,12 @@ OP(isend)
 
 	cqdel(&c->recv);
 	if(p->state == Palt)
-		altdone(p->R.s, p, c, 1);
+		altdone(p->reg.s, p, c, 1);
 
 	R.m = &c->mid;
 	R.d = p->ptr;
 	p->ptr = nil;
-	c->mover();
+	c->mover(OPCALL);
 	addrun(p);
 	R.t = 0;
 }
@@ -1202,12 +1240,13 @@ OP(irecv)
 	if((p = c->send->prog) == nil) {
 		if(c->buf != H && cgetb(c, R.d))
 			return;
+		/* queued first: refused, nothing has changed (cqaddok) */
+		cqadd(&c->recv, currun());
 		p = delrun(Precv);
 		p->ptr = R.d;
 		p->chan = c;	/* for killprog */
 		R.IC = 1;
 		R.t = 1;
-		cqadd(&c->recv, p);
 		return;
 	}
 
@@ -1216,7 +1255,7 @@ OP(irecv)
 
 	cqdel(&c->send);
 	if(p->state == Palt)
-		altdone(p->R.s, p, c, 0);
+		altdone(p->reg.s, p, c, 0);
 
 	if(c->buf != H){
 		cgetb(c, R.d);
@@ -1227,7 +1266,7 @@ OP(irecv)
 		R.m = &c->mid;
 		R.s = p->ptr;
 		p->ptr = nil;
-		c->mover();
+		c->mover(OPCALL);
 	}
 	addrun(p);
 	R.t = 0;
@@ -1235,6 +1274,7 @@ OP(irecv)
 int
 csendalt(Channel *c, void *ip, Type *t, int len)
 {
+	RPDECL;
 	REG rsav;
 
 	if(c == H)
@@ -1252,7 +1292,7 @@ csendalt(Channel *c, void *ip, Type *t, int len)
 	rsav = R;
 	R.s = ip;
 	R.d = &c;
-	isend();
+	isend(OPCALL);
 	R = rsav;
 	freeptrs(ip, t);
 	return 1;
@@ -1261,6 +1301,7 @@ csendalt(Channel *c, void *ip, Type *t, int len)
 List*
 cons(ulong size, List **lp)
 {
+	RPDECL;
 	Heap *h;
 	List *lv, *l;
 
@@ -1372,7 +1413,7 @@ OP(headp)
 
 	l = L(s);
 	R.s = l->data;
-	movp();
+	movp(OPCALL);
 }
 OP(headf)
 {
@@ -1394,7 +1435,7 @@ OP(headmp)
 
 	l = L(s);
 	R.s = l->data;
-	movmp();
+	movmp(OPCALL);
 }
 OP(tail)
 {
@@ -1402,7 +1443,7 @@ OP(tail)
 
 	l = L(s);
 	R.s = &l->tail;
-	movp();
+	movp(OPCALL);
 }
 OP(slicea)
 {
@@ -1833,6 +1874,7 @@ destroystack(REG *reg)
 Prog*
 isave(void)
 {
+	RPDECL;
 	Prog *p;
 
 	p = delrun(Prelease);
@@ -1847,21 +1889,22 @@ isave(void)
 		print("BUG: isave: misaligned R.PC=%p in %s (prog %p) saved from %p\n",
 			R.PC, R.M->m ? R.M->m->name : "?", R.M->m ? (void*)R.M->m->prog : nil,
 			getcallerpc(&p));
-	p->R = R;
+	p->reg = R;
 	return p;
 }
 
 void
 irestore(Prog *p)
 {
-	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
-		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->R.PC);
-	R = p->R;
+	RPDECL;
+	if(p->reg.M != nil && p->reg.M != H && p->reg.M->compiled && PC_MISALIGNED(p->reg.PC))
+		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->reg.PC);
+	R = p->reg;
 	R.IC = 1;
 }
 
 void
-movtmp(void)		/* Used by send & receive */
+movtmp(OPARGS)		/* Used by send & receive */
 {
 	Type *t;
 
@@ -1893,6 +1936,9 @@ opinit(void)
 {
 	int i;
 
+	if(vm0.vheap == nil)
+		vm0.vheap = heappool;	/* before modinit and the first load allocate in it */
+
 	for(i = 0; i < 256; i++)
 		if(optab[i] == nil)
 			optab[i] = badop;
@@ -1901,6 +1947,7 @@ opinit(void)
 void
 xec(Prog *p)
 {
+	RPDECL;
 	int op;
 
 	/*
@@ -1916,7 +1963,7 @@ xec(Prog *p)
 	 * their release, so only -c1 did it (a page load opening many
 	 * TLS connections at once, docs/JS-ENGINE.md).
 	 */
-	R = p->R;
+	R = p->reg;
 	retrelease();
 	R.MP = R.M->MP;
 	R.IC = p->quanta;
@@ -1950,10 +1997,10 @@ xec(Prog *p)
 	}
 	else {
 		do {
-		dec[R.PC->add]();
+		dec[R.PC->add](OPCALL);
 		op = R.PC->op;
 		R.PC++;
-		optab[op]();
+		optab[op](OPCALL);
 	} while(--R.IC != 0);
 	}
 
@@ -1976,5 +2023,5 @@ xec(Prog *p)
 			}
 		}
 	}
-	p->R = R;
+	p->reg = R;
 }

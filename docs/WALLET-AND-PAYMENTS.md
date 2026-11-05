@@ -33,14 +33,11 @@ each of them.
 - Transactions are legacy type-0 (EIP-155 gas-price) — accepted on all
   supported networks; EIP-1559 fee-market transactions are a planned
   addition.
-- The secp256k1 field arithmetic reduces through libmp's `mpint`, and
-  the Jacobian point addition contains data-dependent branches: the
-  scalar-multiplication ladder is structurally constant-time but the
-  implementation is not constant-time end to end. RFC 6979 deterministic
-  nonces remove per-signature nonce randomness as an attack surface, and
-  remote timing attacks against ECDSA over 9P/HTTP round-trips are not
-  practical; a co-resident local attacker with high-resolution timing is
-  outside the current threat model.
+- Signing is constant time with respect to the private key and the nonce
+  (`libsec/secp256k1.c`; checked under valgrind by
+  `tests/host/secp256k1_test.sh`), but a key lives in emu's memory and a
+  co-resident attacker who can read that, or a host compromise, is outside
+  the threat model.
 - Accounts are single random keys — there is no BIP-39 mnemonic or
   BIP-32 HD derivation. Backup is via secstore (encrypted, passworded),
   not a seed phrase.
@@ -216,11 +213,16 @@ All keys (wallet, API, email) sync automatically.
 
 ### secp256k1 (libsec/secp256k1.c)
 
-Clean-room implementation of the secp256k1 elliptic curve used by Ethereum and Bitcoin. Follows the same patterns as the existing P-256 implementation in `libsec/ecc.c`.
+Clean-room implementation of the secp256k1 elliptic curve used by Ethereum and Bitcoin, built as `libsec/ecc.c` (P-256, P-384) is: constant time with respect to secret scalars, no libmp.
 
-- **Montgomery ladder** in Jacobian coordinates (structurally constant-time;
-  see the field-arithmetic caveat under [Status and Security Model](#status-and-security-model))
-- **RFC 6979 deterministic k** for reproducible signatures (required by Ethereum)
+- **Montgomery arithmetic** (CIOS) on 64-bit limbs for the field and for the
+  scalars mod n; selects by mask behind an optimization barrier, no branches
+- **Complete projective formulas** for a = 0 (Renes–Costello–Batina 2016,
+  Algorithms 7 and 9) and a fixed 4-bit window read by masked scans
+- **Fermat inversion**: a fixed addition chain for p, a fixed window over
+  n-2 for the nonce; the square root (recovery) a fixed chain for (p+1)/4
+- **RFC 6979 deterministic k** for reproducible signatures (required by Ethereum);
+  the hash is taken mod n first, as RFC 6979 and libsecp256k1 do
 - **Recovery ID** in signatures (byte 65) for `ecrecover`
 - **Low-S normalization** (BIP-62 / EIP-2)
 - **Host OS CSPRNG** (`arc4random_buf` on macOS, `getrandom` on Linux) with
@@ -228,7 +230,10 @@ Clean-room implementation of the secp256k1 elliptic curve used by Ethereum and B
 - **Scalar range validation** — key import, public-key derivation, and signing
   all reject out-of-range private keys (0 or ≥ n)
 - Cross-validated against the EIP-155 specification test vector (byte-identical
-  signed transaction vs go-ethereum)
+  signed transaction vs go-ethereum) and, on the host, against OpenSSL's
+  deterministic ECDSA (`tests/host/secp256k1_test.sh`)
+- About 0.3 ms a key or signature and 0.65 ms a recovery (Linux amd64);
+  the libmp version took 11-18 ms and 23-37 ms
 
 Keyring builtins:
 ```limbo
@@ -329,6 +334,8 @@ The wallet filesystem mounts at `/mnt/wallet/` and provides account management, 
     ├── pay          rw   write: "amount recipient" → read: pending:id
     ├── authorize    rw   write: structured x402 request → read: pending:id;
     │                         signature is returned after trusted approval
+    │                         (on either, a read again at offset 0 on the
+    │                         same fid waits for the outcome)
     ├── ctl          rw   "budget maxpertx maxpersess currency",
     │                     "gasbudget maxpertx maxpersess", "requireapproval on"
     └── history      r    recent transactions (timestamped, capped at 200)
@@ -471,7 +478,9 @@ amounts and balances above 2^63 wei do not wrap.
 
 All accounts require trusted approval. Writing to
 `/mnt/wallet/{account}/pay` or `/mnt/wallet/{account}/authorize` queues a pending
-payment and returns `pending:<id>`. Requests are validated *before* queueing
+payment and returns `pending:<id>` to the first read of that fid; a read
+there again at offset 0 waits until the payment is approved, denied or
+expires, and gives the outcome. Requests are validated *before* queueing
 (malformed or over-budget requests are rejected immediately), and pending
 entries expire after 15 minutes if unapproved.
 
@@ -553,7 +562,7 @@ Implements the x402 v2 specification for HTTP 402 payment flows.
 opt := x402->selectoption(pr, "base");
 
 # Request a signed authorization from wallet9p (policy enforced there);
-# polls up to waitsecs while trusted approval is pending
+# waits on its read, for waitsecs at most, while trusted approval is pending
 (payload, err) := x402->authorize(opt, pr.resource, "myaccount", 90);
 # err == "pending:<id>" if approval did not arrive in time
 
@@ -707,6 +716,7 @@ All transactions verifiable at [sepolia.etherscan.io](https://sepolia.etherscan.
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/x402_test.dis -v         # parsing, EIP-712 type hashes, authdigest
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/publicnet_host_test.dis  # URL host parsing + SSRF blocklist
 ./emu/MacOSX/o.emu -r. -c0 /dis/tests/wallet_capability_test.dis  # agent namespace narrowing
+./tests/host/secp256k1_test.sh    # on the host: OpenSSL-checked answers, constant time (valgrind)
 ```
 
 Notable assertions: the EIP-155 specification test vector must produce a
@@ -787,7 +797,7 @@ export PATH=$PWD/MacOSX/arm64/bin:$PATH
 
 | File | Purpose |
 |------|---------|
-| `libsec/secp256k1.c` | secp256k1 ECDSA (C, constant-time) |
+| `libsec/secp256k1.c` | secp256k1 ECDSA (C, constant time; `tests/host/secp256k1_test.sh`) |
 | `libsec/keccak256.c` | Keccak-256 hash (C) |
 | `include/libsec.h` | C function declarations |
 | `module/keyring.m` | Limbo crypto builtins |

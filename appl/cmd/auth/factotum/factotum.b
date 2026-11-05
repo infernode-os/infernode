@@ -215,6 +215,7 @@ err(s: string)
 }
 
 rlist: list of ref Fid;
+Maxrpc: con 16;
 
 factotumsrv()
 {
@@ -447,6 +448,10 @@ factotumsrv()
 		}
 		r := findfid(fid);
 		if(r == nil){
+			if(len rlist >= Maxrpc){
+				wc <-= (-1, "too much activity");
+				break;
+			}
 			r = ref Fid(fid, 0, nil, nil, chan[1] of (array of byte, Rwrite), chan[1] of (int, Rread), 0, nil);
 			spawn request(r, pidc, donec);
 			r.pid = <-pidc;

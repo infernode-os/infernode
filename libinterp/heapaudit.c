@@ -12,7 +12,6 @@ struct Audit
 	Audit*	hash;
 };
 Audit*	ahash[128];
-extern	Pool*	heapmem;
 extern void conslog(char*, ...);
 #define	conslog	print
 

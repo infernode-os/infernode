@@ -23,6 +23,7 @@ kfs kfs
 lockfs lockfs
 logfile logfile
 mail9p mail9p
+osk osk
 memfs memfs
 mntgen mntgen
 namespace namespace

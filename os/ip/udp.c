@@ -206,6 +206,7 @@ udpkick(void *x, Block *bp)
 	Fs *f;
 	int version;
 	Conv *rc;
+	ushort csum;
 
 	upriv = c->p->priv;
 	f = c->p->f;
@@ -300,8 +301,10 @@ udpkick(void *x, Block *bp)
 		hnputs(uh4->udplen, ptcllen);
 		uh4->udpcksum[0] = 0;
 		uh4->udpcksum[1] = 0;
-		hnputs(uh4->udpcksum, 
-		       ptclcsum(bp, UDP4_PHDR_OFF, dlen+UDP_UDPHDR_SZ+UDP4_PHDR_SZ));
+		csum = ptclcsum(bp, UDP4_PHDR_OFF, dlen+UDP_UDPHDR_SZ+UDP4_PHDR_SZ);
+		if(csum == 0)
+			csum = 0xffff;	/* negative zero, not the IPv4 no-checksum value */
+		hnputs(uh4->udpcksum, csum);
 		uh4->vihl = IP_VER4;
 		ipoput4(f, bp, 0, c->ttl, c->tos, rc);
 		break;
@@ -335,8 +338,10 @@ udpkick(void *x, Block *bp)
 		hnputs(uh6->udplen, ptcllen);
 		uh6->udpcksum[0] = 0;
 		uh6->udpcksum[1] = 0;
-		hnputs(uh6->udpcksum, 
-		       ptclcsum(bp, UDP6_PHDR_OFF, dlen+UDP_UDPHDR_SZ+UDP6_PHDR_SZ));
+		csum = ptclcsum(bp, UDP6_PHDR_OFF, dlen+UDP_UDPHDR_SZ+UDP6_PHDR_SZ);
+		if(csum == 0)
+			csum = 0xffff;
+		hnputs(uh6->udpcksum, csum);
 		memset(uh6, 0, 8);
 		uh6->viclfl[0] = IP_VER6;
 		hnputs(uh6->len, ptcllen);
@@ -490,6 +495,8 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 	/*
 	 * Trim the packet down to data size
 	 */
+	if(len < UDP_UDPHDR_SZ)
+		goto Badlen;
 	len -= UDP_UDPHDR_SZ;
 	switch(version){
 	case V4:
@@ -503,6 +510,7 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 		panic("udpiput4: version %d", version);
 	}
 	if(bp == nil){
+Badlen:
 		qunlock(&c->ql);
 		netlog(f, Logudp, "udp: len err %I.%d -> %I.%d\n", raddr, rport,
 		       laddr, lport);

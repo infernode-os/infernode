@@ -20,6 +20,12 @@
 #include "keys.h"
 
 /*
+ * R here is the signature's curve point, as RFC 8032 names it, never the
+ * Dis VM's registers -- which interp.h makes a macro on the native kernel.
+ */
+#undef R
+
+/*
  * Ed25519 constants
  */
 enum {

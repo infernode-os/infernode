@@ -510,6 +510,142 @@ testKnownAddresses(t: ref T)
 	}
 }
 
+#
+# Known signatures, byte for byte (r || s || v).  Deterministic (RFC 6979)
+# and low S, so a reimplementation must give exactly these.  From
+# tests/host/secp256k1/vectors.txt, whose Python reference is checked
+# against OpenSSL's deterministic ECDSA; the last two hashes are >= n,
+# where RFC 6979 takes the hash mod n.
+#
+testKnownSignatures(t: ref T)
+{
+	vectors := array[] of {
+		("0000000000000000000000000000000000000000000000000000000000000001",
+		 "6a977c14fd44f751e5dbd994f9c6fef9525fbf998910227f68fb1ba6b1de76a5",
+		 "6a22f544f25b74dc86bd341664f6b027bf9cc1dfeefcebacb35dcc6c729b7ba2" +
+		 "1cf88772a888f6071471107c3637e70e4c8bd77e93534bf2ac9bb8e00b64057c00"),
+		("0000000000000000000000000000000000000000000000000000000000000001",
+		 "0000000000000000000000000000000000000000000000000000000000000000",
+		 "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4" +
+		 "11edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce5201"),
+		("0000000000000000000000000000000000000000000000000000000000000002",
+		 "0000000000000000000000000000000000000000000000000000000000000000",
+		 "3fdeb205601c7501de0436c322579c131efd2f45bb1106f6711c906b3ace405d" +
+		 "022801050bee091ac1b8e4a20c9190730346c3c459f54a0fa5c28a520f94db1f00"),
+		("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+		 "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+		 "775b77bfac3c9bb88544cf7ba7da61a4e6123c820a7af482b207e82214e5a4de" +
+		 "57fcc4e78cba69e8728e72df755bb2d9b70c7546461d7fa17754a63a150d124500"),
+		("0000000000000000000000000000000000000000000000000000000000000002",
+		 "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		 "dd926427ae6b3df4a4e9242dc2261363b557b9af5e8c04a171f72bd8b295ebfa" +
+		 "7e9ae9348c12debe52ee3df2557f5220c05df290aa8449025d5d29440411cf3900"),
+		("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+		 "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+		 "919026f3e239ea52cf530eb6d345dc2b56ef0928f1e9ad20d8f360284dc65048" +
+		 "14395e7137e2204f15b69239010f3c34fbb3c858a29b0d106b1fa65bc004726300"),
+	};
+	for(i := 0; i < len vectors; i++) {
+		(pk, h, want) := vectors[i];
+		sig := kr->secp256k1_sign(hexdecode(pk), hexdecode(h));
+		t.assertseq(hexencode(sig), want, "known signature " + string i);
+	}
+}
+
+# ecrecover takes a high S (n - s, v flipped) and gives the same key
+testRecoverHighS(t: ref T)
+{
+	hash := hexdecode("6a977c14fd44f751e5dbd994f9c6fef9525fbf998910227f68fb1ba6b1de76a5");
+	sig := hexdecode("6a22f544f25b74dc86bd341664f6b027bf9cc1dfeefcebacb35dcc6c729b7ba2" +
+		"e307788d577709f8eb8eef83c9c818f06e2305681bf554491336a5acc4d23bc501");
+	pub := kr->secp256k1_recover(hash, sig);
+	t.assert(pub != nil, "recover takes a high S");
+	if(pub != nil)
+		t.assertseq(hexencode(pub[1:33]), "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+			"high S recovers the same key (G)");
+}
+
+# r and s must be in [1, n-1]
+testRecoverBounds(t: ref T)
+{
+	n := "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141";
+	nm1 := "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
+	zero := "0000000000000000000000000000000000000000000000000000000000000000";
+	one := "0000000000000000000000000000000000000000000000000000000000000001";
+	ones := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+	hash := hexdecode("488b16ead6f3cf3748b018bb0bdc51fe5e3de0619539b74b45476d377722ea33");
+	refused := array[] of {
+		(zero, one), (one, zero), (zero, zero), (n, one), (one, n), (ones, one), (one, ones),
+		(nm1, one),	# n-1 is in range, but no point has it as x
+	};
+	for(i := 0; i < len refused; i++) {
+		(r, s) := refused[i];
+		for(v := 0; v < 2; v++) {
+			sig := hexdecode(r + s + sys->sprint("%02x", v));
+			t.assert(kr->secp256k1_recover(hash, sig) == nil,
+				"recover refuses r=" + r[56:] + " s=" + s[56:] + " v=" + string v);
+		}
+	}
+	# s = n-1 is in range
+	sig := hexdecode(one + nm1 + "00");
+	t.assert(kr->secp256k1_recover(hash, sig) != nil, "recover takes s = n-1");
+}
+
+# an r that is no point's x (5^3 + 7 is not a square mod p)
+testRecoverNoPoint(t: ref T)
+{
+	hash := hexdecode("4c1fba09ad77c8d4621ebacf9db407df64090bfbdb3c41e0b9f7fec122093f0c");
+	sig := hexdecode("0000000000000000000000000000000000000000000000000000000000000005" +
+		"000000000000000000000000000000000000000000000000000000000000000100");
+	t.assert(kr->secp256k1_recover(hash, sig) == nil, "recover refuses an r with no point");
+}
+
+#
+# A recovered key at infinity: R = kG and s = e/k make s R = e G, so
+# Q = r^-1 (s R - e G) is the identity, which is no key.  The other
+# parity (R = -kG) is a key.
+#
+testRecoverInfinity(t: ref T)
+{
+	hash := hexdecode("0000000000000000000000000000000000000000000000000000000000000001");
+	vectors := array[] of {
+		# k = 1: R = G, s = 1
+		("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+		 "0000000000000000000000000000000000000000000000000000000000000001",
+		 "39f29c5586f5542b3c01785850e7a32906e19292b9a01c42ab886179418bcab5"),
+		# k = 2: R = 2G, s = 1/2
+		("c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+		 "7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a1",
+		 "77a08182804edcee6092ee1e5a868b9adf4c00f1a4a4e6ebc5c3480bb36ffb07"),
+	};
+	for(i := 0; i < len vectors; i++) {
+		(r, s, otherx) := vectors[i];
+		t.assert(kr->secp256k1_recover(hash, hexdecode(r + s + "00")) == nil,
+			"recover refuses a key at infinity, k=" + string (i+1));
+		pub := kr->secp256k1_recover(hash, hexdecode(r + s + "01"));
+		t.assert(pub != nil, "the other parity is a key, k=" + string (i+1));
+		if(pub != nil)
+			t.assertseq(hexencode(pub[1:33]), otherx, "the other parity's key, k=" + string (i+1));
+	}
+}
+
+# private keys outside [1, n-1] give no key and no signature
+testBadKeys(t: ref T)
+{
+	hash := array[32] of { * => byte 16r11 };
+	bad := array[] of {
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+		"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364142",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	};
+	for(i := 0; i < len bad; i++) {
+		priv := hexdecode(bad[i]);
+		t.assert(kr->secp256k1_pubkey(priv) == nil, "no public key for " + bad[i]);
+		t.assert(kr->secp256k1_sign(priv, hash) == nil, "no signature by " + bad[i]);
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -551,6 +687,14 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Secp256k1/DifferentMessages", testDifferentMessages);
 	run("Secp256k1/DifferentKeys", testDifferentKeys);
 	run("Keccak256/Extended", testKeccak256Extended);
+
+	# Known answers and Wycheproof-style edges
+	run("Secp256k1/KnownSignatures", testKnownSignatures);
+	run("Secp256k1/RecoverHighS", testRecoverHighS);
+	run("Secp256k1/RecoverBounds", testRecoverBounds);
+	run("Secp256k1/RecoverNoPoint", testRecoverNoPoint);
+	run("Secp256k1/RecoverInfinity", testRecoverInfinity);
+	run("Secp256k1/BadKeys", testBadKeys);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

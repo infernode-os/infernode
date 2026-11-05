@@ -541,6 +541,12 @@ testX25519(t: ref T)
 	}
 
 	t.assert(byteseq(shared1, shared2), "x25519 shared secrets match");
+
+	# RFC 7748 requires callers to reject the all-zero shared secret.  A
+	# zero public input is a simple low-order representative.
+	loworder := array[32] of byte;
+	t.assert(kr->x25519(sk1, loworder) == nil,
+		"x25519 rejects an all-zero shared secret");
 }
 
 # ── P-256 ECDH ──────────────────────────────────────────────────────────────
@@ -725,6 +731,60 @@ testMessageFraming(t: ref T)
 	t.assert(msg == nil, "malformed error-frame length rejected");
 }
 
+trycapasother(token: array of byte, done: chan of int)
+{
+	sys->pctl(Sys->FORKENV, nil);
+	ufd := sys->open("/dev/user", Sys->OWRITE);
+	if(ufd == nil) {
+		done <-= -1;
+		return;
+	}
+	other := array of byte "capability-intruder";
+	if(sys->write(ufd, other, len other) != len other) {
+		done <-= -1;
+		return;
+	}
+	cfd := sys->open("#¤/capuse", Sys->OWRITE);
+	if(cfd == nil) {
+		done <-= -1;
+		return;
+	}
+	done <-= sys->write(cfd, token, len token);
+}
+
+testCapabilityWrongUserDoesNotConsume(t: ref T)
+{
+	hfd := sys->open("#¤/caphash", Sys->OWRITE);
+	if(hfd == nil) {
+		t.skip("capability device unavailable or test is not host owner");
+		return;
+	}
+	ufd := sys->open("/dev/user", Sys->OREAD);
+	ubuf := array[128] of byte;
+	nu := sys->read(ufd, ubuf, len ubuf);
+	if(nu <= 0) {
+		t.skip("cannot read current user");
+		return;
+	}
+	from := string ubuf[0:nu];
+	target := "capability-target";
+	key := "one-shot-secret";
+	msg := array of byte (from+"@"+target);
+	digest := array[20] of byte;
+	kr->hmac_sha1(msg, len msg, array of byte key, digest, nil);
+	if(sys->write(hfd, digest, len digest) != len digest) {
+		t.fatal(sys->sprint("cannot install capability: %r"));
+		return;
+	}
+	token := array of byte (from+"@"+target+"@"+key);
+	done := chan of int;
+	spawn trycapasother(token, done);
+	t.assert(<-done < 0, "wrong source user must not use capability");
+	cfd := sys->open("#¤/capuse", Sys->OWRITE);
+	t.assert(cfd != nil && sys->write(cfd, token, len token) == len token,
+		"wrong-user attempt consumed the one-shot capability");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -787,6 +847,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("P256ECDH", testP256ECDH);
 	run("P384ECDH", testP384ECDH);
 	run("P256ECDSA", testP256ECDSA);
+	# This consumes a capability and changes the test process identity.
+	run("CapabilityWrongUserDoesNotConsume", testCapabilityWrongUserDoesNotConsume);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

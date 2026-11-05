@@ -65,6 +65,12 @@ done
 [ -f "$ROOT/usr/inferno/README" ] && [ "$(head -c 1 "$ROOT/usr/inferno/README")" != x ] || { ro=0; fail "the host's README changed"; }
 [ $ro = 1 ] && pass "view is read-only: remove, write and create refused, the host's file unchanged"
 
+if [ -z "$(f afterrm.err)" ]; then
+	pass "refused removes leave the view usable: forty reads after six of them, no errors"
+else
+	fail "after a refused remove: $(f afterrm.err | sort | uniq -c | tr '\n' ' ')"
+fi
+
 if ! f ns.before | grep -q '/usr/inferno' && f ns.after | grep -q '/usr/inferno'; then
 	pass "ns has the grant after bindpath and not before"
 else

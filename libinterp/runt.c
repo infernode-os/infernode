@@ -417,6 +417,34 @@ Sys_char2byte(void *fp)
 	*f->ret = 0;
 }
 
+/*
+ * The builtin modules each VM gets (#944). They are registered once, at
+ * boot, into vm0 -- the xxxmodinit()s also set up what the module's
+ * functions share, its Types among them -- and that registration is
+ * recorded so that a later VM can be given the same modules: a module
+ * table entry and Links of its own, the shared state left where it is.
+ *
+ * Except $Tk and $Draw: their state (the display, Tk's toplevels and
+ * caches) assumes one interpreter, so they stay vm0's, the desktop's.
+ * Another VM that loads one gets "no such module".
+ */
+static struct {
+	char*	name;
+	void*	tab;
+	int	len;
+} builtins[16];
+static int nbuiltin;
+
+void
+vmbuiltins(void)
+{
+	int i;
+
+	for(i = 0; i < nbuiltin; i++)
+		if(strcmp(builtins[i].name, "$Tk") != 0 && strcmp(builtins[i].name, "$Draw") != 0)
+			builtinmod(builtins[i].name, builtins[i].tab, builtins[i].len);
+}
+
 Module *
 builtinmod(char *name, void *vr, int rlen)
 {
@@ -425,6 +453,12 @@ builtinmod(char *name, void *vr, int rlen)
 	Module *m;
 	Link *l;
 
+	if(typesperm && nbuiltin < nelem(builtins)){	/* boot: vm0's, and the record */
+		builtins[nbuiltin].name = name;
+		builtins[nbuiltin].tab = vr;
+		builtins[nbuiltin].len = rlen;
+		nbuiltin++;
+	}
 	m = newmod(name);
 	if(rlen == 0){
 		while(r->name){

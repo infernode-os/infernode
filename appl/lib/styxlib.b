@@ -84,9 +84,15 @@ Styxserver.reply(srv: self ref Styxserver, m: ref Rmsg): int
 {
 	if (DEBUG) 
 		sys->fprint(sys->fildes(2), "%s\n", m.text());
+	if(srv.msize == 0)
+		m = ref Rmsg.Error(m.tag, "Tversion not seen");
 	a := m.pack();
 	if(a == nil)
 		return -1;
+	if(srv.msize != 0 && len a > srv.msize){
+		m = ref Rmsg.Error(m.tag, "Styx reply didn't fit");
+		a = m.pack();
+	}
 	return sys->write(srv.fd, a, len a);
 }
 

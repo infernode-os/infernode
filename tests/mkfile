@@ -255,6 +255,7 @@ TARG=\
 	opus_test.dis\
 	keyringinst_test.dis\
 	wallet_capability_test.dis\
+	sdrdsp_test.dis\
 	secp256k1_test.dis\
 	ethcrypto_test.dis\
 	ethrpc_conv_test.dis\

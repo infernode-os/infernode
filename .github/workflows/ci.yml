@@ -755,6 +755,7 @@ jobs:
               exec_fork_no_panic_test exec_timeout_kill_test
               factotum_keyfile_test gpsfs_test llmclient_pool_test llmctl_test
               llmsrv_flush_test llmsrv_models_stall_test location_test sdrfs_test
+              sdr_demod_test
               timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
@@ -785,7 +786,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind python3-numpy
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |

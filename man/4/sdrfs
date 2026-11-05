@@ -234,6 +234,7 @@ gain 49.6' > /mnt/sdr/ctl
 .SH SOURCE
 .B /appl/cmd/sdrfs.b
 .SH SEE ALSO
+.IR sdr (1),
 .IR gpsfs (4),
 .IR audio (3)
 .br

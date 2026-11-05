@@ -6,11 +6,17 @@ sdrfs \- software-defined radio receiver as a file system
 [
 .B -S
 ] [
+.B -l
+.I seconds
+] [
 .B -m
 .I mountpoint
 ] [
 .B -s
 .I spec
+] [
+.B -t
+.I ms
 ] [
 .B -w
 .I seconds
@@ -52,6 +58,16 @@ client leaves it takes five seconds to take the next.
 .B -w
 is how long a dial waits for the greeting (15 seconds) before it is
 refused as busy.
+So the connection, the source command's dial included, is held
+.B -l
+seconds (10) after the last reader of
+.B iq
+leaves or the last setting is sent, and a reader within that takes it
+at once.
+Hanging up on
+.I rtl_tcp
+while it is still applying settings has crashed it; holding avoids that
+too.
 .SH FILESYSTEM
 .TF status
 .TP
@@ -69,7 +85,11 @@ at
 .IB host ! port\f1,\fP
 or
 .I host
-(port 1234).
+(port 1234);
+.B localhost
+is dialled as
+.BR 127.0.0.1 ,
+which needs no connection server.
 It is dialled at once, to see that it is
 .I rtl_tcp
 and learn its tuner, and the write returns when it has been, or fails
@@ -117,7 +137,7 @@ one line, attr=value:
 .B link=none
 (no source),
 .B idle
-(a source; nothing listening),
+(a source, not held),
 .BR opening ,
 .BR open ,
 .B closed
@@ -133,9 +153,11 @@ the opens of
 .B iq
 reading;
 .BI bytes= n
-received and
+given to readers,
 .BI dropped= n
-lost by readers that fell behind, since start;
+lost by readers that fell behind, and
+.BI skipped= n
+dropped as tuned before a setting took (below), since start;
 .BI error= reason
 for the last that failed.
 .TP
@@ -145,12 +167,22 @@ the tuner's gains, dB, one a line.
 .B iq
 the samples, from the open on: 8-bit unsigned I then Q, two bytes a
 sample, 4.8 MB a second at 2.4M.
-Each read waits for more and gives a whole number of samples when it
-can.
+Each read waits for more and gives as much as is queued, up to its
+count, a whole number of samples when it can.
 The first open dials
 .I rtl_tcp
-and sends every setting; the last close hangs up, so the radio is read
-only while something listens.
+if the connection is not held, and sends every setting; it is hung up
+.B -l
+seconds after the last close, so the radio is read only while something
+listens or has just.
+.I Rtl_tcp
+answers no command and applies them one at a time, in 25 to 120
+milliseconds each, so
+.I sdrfs
+reckons 150 each: samples arriving before the last should be done, and
+.B -t
+milliseconds (300) more, were tuned before it took, and are dropped.
+A hang-up waits for them too.
 Every open has its own queue; one that falls more than 8 MB behind
 loses the oldest, whole samples, counted in
 .BR status .
@@ -193,7 +225,7 @@ In InferNode:
 .EX
 ; sdrfs source localhost
 ; cat /mnt/sdr/status
-link=idle source=tcp!localhost!1234 tuner=R828D gains=29 readers=0 bytes=0 dropped=0
+link=open source=tcp!127.0.0.1!1234 tuner=R828D gains=29 readers=0 bytes=0 dropped=0 skipped=0
 ; echo 'freq 1090M
 rate 2M
 gain 49.6' > /mnt/sdr/ctl
@@ -210,10 +242,9 @@ gain 49.6' > /mnt/sdr/ctl
 Only
 .I rtl_tcp
 is a source; there is no driver of its own for the dongle.
-Since
-.I sdrfs
-hangs up when the last reader goes, the next first reader waits the
-five seconds
+A first reader more than
+.B -l
+seconds after the last waits the five seconds
 .I rtl_tcp
 takes to take a new client.
 .PP

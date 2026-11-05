@@ -724,6 +724,16 @@ consinit(c: chan of int)
 	<-checkend =>
 		consoleout = nil;
 		consc = chan of string;
+		#
+		# A read already waiting for more of the check's output gets
+		# the end of it. It was left waiting, and kfscmd with it, for
+		# ever: "kfscmd check" printed the whole report and never
+		# returned, and from a console the shell it ran in was gone.
+		#
+		if(pending != nil && cdata == nil){
+			pending.rc <-= (nil, nil);
+			pending = nil;
+		}
 	s := <-consc =>
 		#sys->print("<-%s\n", s);
 		req := pending;

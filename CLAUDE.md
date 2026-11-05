@@ -445,6 +445,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/prompt_defaults_test.sh` | The agent prompts copied into `~/.infernode` follow the shipped defaults until the user edits them: every shipped version's hash is in `lib/veltro/prompt-defaults`, an unedited old copy is brought up to date at boot, an edited one is left |
 | `tests/host/audiolevel_test.sh` | The Pis' headphone jack without ears: a spectrum of pure tones through the driver's own conversion, and an integer clock divider. Fails if the rounding carry is removed |
 | `tests/host/wordmem_test.sh` | libkern's memset and memmove, byte and word builds, against libc over alignments and overlaps |
+| `tests/host/kernrandom_test.sh` | The bare-metal kernel's random numbers (os/port/random.c) against a simulated hardware generator: ChaCha20 keyed by SHA-256 of hardware bytes, checked against a model; nothing made with no generator, the Dis VM let go while a key waits, reseeds by time and bytes, ten minutes on the old key when the generator is dry, stuck and repeated seeds refused |
 | `tests/host/kfscheck_test.sh` | `disk/kfscmd check` returns: a read waiting for the end of a check's report was never answered, so kfscmd (and a console's shell) waited for ever |
 | `gefs_hash_test.b` | gefs's MetroHash64 and integer hash, pinned: every block pointer on a gefs disk carries the first, 9front's included |
 | `tests/host/gefs_test.sh` | `disk/gefs`: ream, files, persistence across a restart, a snapshot keeping what is changed and removed after it, delsnap, the check at each step |

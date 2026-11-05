@@ -383,6 +383,12 @@ build_kernel() {
             # os/port and os/ip, and byte-identical to the copy in the
             # local hellaphone tree.
             "/dis/dossrv.dis=$ROOT/dis/dossrv.dis"
+            # The gefs(4) file server, for a root on a disk (rootpath
+            # "gefs part"): what the machine lives on must be reachable,
+            # checkable and repairable from the recovery shell however
+            # the card is, and must be the build that matches the disk.
+            # Everything it loads is here already (arg, daytime, styx).
+            "/dis/disk/gefs.dis=$ROOT/dis/disk/gefs.dis"
             "/dev="
             "/net="
             "/prog="
@@ -422,6 +428,11 @@ build_kernel() {
             # (the listener boot-baremetal.sh starts when the card has
             # cpulisten; docs/REMOTE-DESKTOP.md)
             "/n/client="
+            # ...and a gefs root's three: the file system, its adm tree,
+            # every snapshot -- 9front's places for them
+            "/n/gefs="
+            "/n/gefs.adm="
+            "/n/dump="
             # ...and where diskusb mounts a USB disk's FAT: one per disk
             "/n/usb0="
             "/n/usb1="

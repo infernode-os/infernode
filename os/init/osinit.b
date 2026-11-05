@@ -2549,10 +2549,14 @@ dosmount(dos: string)
 #
 #	local			the card's own dis/ and lib/ trees
 #	net tcp!host!port	a styx server, mounted without auth
+#	gefs part		a gefs(4) disk, #S/part (nvme0p3) or a path
 #
 # One line per source, applied top to bottom, every one a union bind
 # AFTER the kernel root -- so the 47 recovery commands always resolve,
 # and everything they lack falls through to the card or the network.
+# The first source with a usr/ has /usr: "gefs nvme0p3" then "local"
+# is a machine living on its disk with the card's trees behind it, and
+# the card's usr/ must not replace the disk's.
 # No file, or no matching trees, means the machine simply runs its
 # built-in root, which is exactly what it did before this existed.
 #
@@ -2628,11 +2632,57 @@ rootpolicy()
 			}
 			sys->print("init: root server %s on /n/remote\n", addr);
 			rootbind("/n/remote");
+		"gefs" =>
+			if(tl toks == nil){
+				sys->print("init: rootpath: gefs needs a partition\n");
+				continue;
+			}
+			if(gefsroot(hd tl toks))
+				rootbind("/n/gefs");
 		* =>
 			sys->print("init: rootpath: unknown source %s\n", hd toks);
 		}
 	}
 }
+
+#
+# A gefs(4) disk as a root source. The server is the kernel's own copy
+# (/dis/disk/gefs.dis, in the recovery root as dossrv is: the root's
+# file server is part of what boots, and it must match the disk it
+# reads whatever state the card is in). It is CALLED, as dossrv is; it
+# mounts itself and returns, its server left running. Where, as 9front
+# has them: the file system on /n/gefs, its adm tree (users, ctl,
+# status) on /n/gefs.adm, every snapshot on /n/dump. A disk that will
+# not load says why and the next rootpath line is tried.
+#
+gefsroot(part: string): int
+{
+	dev := part;
+	if(dev[0] != '#' && dev[0] != '/')
+		dev = "#S/" + dev;
+	gefs := load Command "/dis/disk/gefs.dis";
+	if(gefs == nil){
+		sys->print("init: rootpath: cannot load /dis/disk/gefs.dis: %r\n");
+		return 0;
+	}
+	{
+		gefs->init(nil, "disk/gefs" :: "-M" :: "main:/n/gefs" ::
+			"-M" :: "adm:/n/gefs.adm" :: "-M" :: "dump:/n/dump" :: dev :: nil);
+	} exception e {
+	"*" =>
+		sys->print("init: rootpath: gefs %s: %s\n", dev, e);
+		return 0;
+	}
+	(ok, d) := sys->stat("/n/gefs");
+	if(ok < 0 || d.dtype != 'M'){
+		sys->print("init: rootpath: gefs %s did not mount\n", dev);
+		return 0;
+	}
+	sys->print("init: gefs %s on /n/gefs\n", dev);
+	return 1;
+}
+
+usrbound := 0;
 
 #
 # Union a root candidate's dis/ and lib/ over the system's, if it has
@@ -2670,11 +2720,13 @@ rootbind(base: string)
 	# the entire purpose is that things get created here.
 	#
 	(ok, nil) := sys->stat(base + "/usr");
-	if(ok >= 0){
+	if(ok >= 0 && !usrbound){
 		if(sys->bind(base + "/usr", "/usr", Sys->MREPL|Sys->MCREATE) < 0)
 			sys->print("init: bind %s/usr: %r\n", base);
-		else
+		else{
 			sys->print("init: /usr from %s/usr (writable)\n", base);
+			usrbound = 1;
+		}
 	}
 }
 

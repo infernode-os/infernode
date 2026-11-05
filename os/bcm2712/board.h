@@ -47,6 +47,7 @@ void	pcie1slow(void);
 int	pcie1perst(void);
 void	pcie1bridge(void);
 void	nvmeslow(void);
+void	nvmeflush(void);
 void	nvmestart(void);
 u32int	pcie1cfgr(int);
 void	pcie1cfgw(int, u32int);

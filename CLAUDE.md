@@ -8,7 +8,10 @@ The design philosophy — namespace-as-capability, file interfaces not APIs,
 text not JSON, mechanism not policy — is in
 [docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md), with wrong/right examples
 from this tree. New services start with a namespace sketch in an issue, not
-with code. Limbo is close to Go:
+with code, and come with their panel in `wm/settings` for whatever a user
+would set (or a stated reason they need none): a client of the service's own
+files, built in the same change (DESIGN-PRINCIPLES.md, "Proposing a new
+service or tool"). Limbo is close to Go:
 [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md).
 Task playbooks (compile loop, tests, headless GUI harness, authoring 9P
 servers, emulator C) are project skills under `.claude/skills/`.

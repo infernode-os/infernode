@@ -159,3 +159,11 @@ remote; consumers never probe for locality. Full stack description:
 - Tests at the right tier: Limbo unit tests for logic, a `tests/inferno/`
   sh test for the namespace contract, a `tests/host/` test only if the host
   boundary matters. See the `limbo-test` skill.
+- Its panel in `wm/settings` (`appl/wm/settings.b`: a `Cat*` entry and its
+  `panel*` function), for the parameters a user would set, or a stated reason
+  in the proposal that it has none. The panel only reads and writes the
+  service's own files (`ctl` for live settings; the file it reads at start,
+  marked "restart required", for persistent ones) and keeps nothing of its
+  own; secrets, paths to binaries and agents' knobs stay off it. Same change
+  as the service. `docs/DESIGN-PRINCIPLES.md`, "Proposing a new service or
+  tool", item 6.

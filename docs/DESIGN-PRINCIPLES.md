@@ -557,6 +557,18 @@ Open an issue before you build, containing:
 5. The test plan — unit tests in Limbo (`module/testing.m`),
    namespace contract tests from Inferno sh, host-side
    integration if it needs the emulator boundary.
+6. Its settings: the parameters a user would set (a device, a
+   voice, a rate, on or off) and the panel in `wm/settings` that
+   sets them; or why it has none, which is a fine answer for a
+   service with nothing a person should tune. The panel is a client
+   of the service's own files, as every panel there is: it reads
+   and writes the service's `ctl` (live) or the file the service
+   reads at start (persistent, marked "restart required"), and keeps
+   no store of its own. So nothing the panel sets is beyond a shell
+   and `echo`, nothing a shell sets is hidden from the panel, and a
+   `ctl` key that is no setting (a secret, a path to a binary, an
+   agent's knob) is not on the panel. It is built with the service,
+   in the same change, not after.
 
 A maintainer can approve, redirect, or point at prior art in one
 pass — before any of your time is spent on implementation.

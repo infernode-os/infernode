@@ -165,6 +165,7 @@ dis/disk/calc.tab.dis
 dis/disk/fdisk.dis
 dis/disk/format.dis
 dis/disk/ftl.dis
+dis/disk/fsbench.dis
 dis/disk/kfs.dis
 dis/disk/kfscmd.dis
 dis/disk/mbr.dis

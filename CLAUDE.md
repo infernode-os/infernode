@@ -445,6 +445,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/prompt_defaults_test.sh` | The agent prompts copied into `~/.infernode` follow the shipped defaults until the user edits them: every shipped version's hash is in `lib/veltro/prompt-defaults`, an unedited old copy is brought up to date at boot, an edited one is left |
 | `tests/host/audiolevel_test.sh` | The Pis' headphone jack without ears: a spectrum of pure tones through the driver's own conversion, and an integer clock divider. Fails if the rounding carry is removed |
 | `tests/host/wordmem_test.sh` | libkern's memset and memmove, byte and word builds, against libc over alignments and overlaps |
+| `tests/host/kfscheck_test.sh` | `disk/kfscmd check` returns: a read waiting for the end of a check's report was never answered, so kfscmd (and a console's shell) waited for ever |
 | `tests/host/kernelpins_test.sh` | Bugs only a loaded board shows, held by reading the source: core 0's idle, runproc's retry, nothing named `up`, pool ceilings fitting in memory |
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |

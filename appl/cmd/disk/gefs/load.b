@@ -11,6 +11,8 @@ newarena(): ref Arena
 	a.logbuf[1] = newblkbuf();
 	a.logbuf[0].flag = Bstatic;
 	a.logbuf[1].flag = Bstatic;
+	a.dsz = -1;
+	a.dlogp = Zb();
 	return a;
 }
 

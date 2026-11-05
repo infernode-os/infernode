@@ -1,0 +1,18 @@
+<$ROOT/mkconfig
+
+TARG=\
+	gefs.dis\
+
+SYSMODULES=\
+	arg.m\
+	daytime.m\
+	draw.m\
+	styx.m\
+	sys.m\
+
+DISBIN=$ROOT/dis/disk
+
+<$ROOT/mkfiles/mkdis
+
+# gefs.b includes the rest: one module, as 9front's is one program
+gefs.dis:	dat.b error.b hash.b pack.b tree.b blk.b snap.b user.b load.b fs.b check.b

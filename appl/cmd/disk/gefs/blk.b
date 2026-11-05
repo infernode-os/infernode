@@ -41,6 +41,10 @@ Arena: adt {
 	nlog:	big;
 	loghd:	Bptr;
 	logtl:	ref Blk;	# end of the log, open for writing
+	# the tail as it is on disk, for rewriting it safely (tailstage)
+	dsz:	int;		# its logsz there, or -1 if it has no copy there
+	dlogp:	Bptr;		# and its chain
+	staged:	int;		# the new contents are there, under the old header
 };
 
 Pend: adt {
@@ -282,6 +286,13 @@ syncblk(b: ref Blk)
 	bassert(b, b.bp.addr >= big 0, "syncblk: no address");
 	if(sys->pwrite(fs.fd, b.buf, Blksz, b.bp.addr) != Blksz)
 		broke(sys->sprint("%bux %s: %r", b.bp.addr, Eio));
+	if(wjfd != nil){
+		r := array[9+Blksz] of byte;
+		r[0] = byte 'W';
+		p64(r, 1, b.bp.addr);
+		r[9:] = b.buf;
+		sys->write(wjfd, r, len r);
+	}
 	b.flag &= ~Bdirty;
 	fs.nwritten++;
 }
@@ -437,11 +448,84 @@ logappend(a: ref Arena, off, ln: big, op: int)
 	if(lb != a.logtl){
 		finalize(lb);
 		syncblk(lb);
-		finalize(a.logtl);
-		syncblk(a.logtl);
+		if(tailstage(a))
+			devflush();
+		tailwrite(a);
 		a.logtl = lb;
+		a.dsz = lb.logsz;
+		a.dlogp = lb.logp;
 		a.nlog++;
 	}
+}
+
+#
+# The log's tail is the one block written again in place after a commit
+# holds it: entries are appended to it, and at the next commit, or when
+# it fills and gets a successor, it is written out whole. A drive
+# promises only that a sector (512 bytes or 4 KB) is written whole when
+# the power goes, not a 16 KB block, so the cut can leave the block part
+# old and part new: the header, in the first sector, new, with an
+# appended entry further on still old. Its hash then fails, the commit's
+# log cannot be read, and the disk cannot be loaded at all. 9front
+# writes it the same way; power-cut tests here (gefs_crash_test.sh) lost
+# whole disks to it.
+#
+# So it goes in two steps with a flush between: first the new contents
+# under the header that is on disk, which covers only the entries both
+# have; then the new header. Every mixture of neighbouring versions is
+# then a block whose header and hashed entries agree, the old commit's
+# or the new. The disk format is unchanged.
+#
+tailstage(a: ref Arena): int
+{
+	b := a.logtl;
+	if(a.dsz < 0 || a.staged || (b.logsz == a.dsz && b.logp.addr == a.dlogp.addr))
+		return 0;
+	if(b.logsz < a.dsz)
+		broke("tailstage: the log tail was cut back and not written");
+	m := newblkbuf();
+	m.buf[0:] = b.buf;
+	m.ty = Tlog;
+	m.data = m.buf[Loghdsz:];
+	m.bp = b.bp;
+	m.logsz = a.dsz;
+	m.logp = a.dlogp;
+	finalize(m);
+	syncblk(m);
+	a.staged = 1;
+	return 1;
+}
+
+# the tail's new header, after tailstage
+tailwrite(a: ref Arena)
+{
+	b := a.logtl;
+	finalize(b);
+	syncblk(b);
+	a.dsz = b.logsz;
+	a.dlogp = b.logp;
+	a.staged = 0;
+}
+
+#
+# After a load the tail in memory stops at the last commit, and the copy
+# on disk may go on past it, with entries that commit did not make. It
+# is written once, cut back, before anything is appended: only its
+# header changes, which a torn write cannot spoil. Not for a read-only
+# file system, which never appends.
+#
+normlogs()
+{
+	n := 0;
+	for(i := 0; i < fs.narena; i++){
+		a := fs.arenas[i];
+		if(a.logtl != nil && (a.logtl.logsz != a.dsz || a.logtl.logp.addr != a.dlogp.addr)){
+			tailwrite(a);
+			n++;
+		}
+	}
+	if(n)
+		devflush();
 }
 
 loadlog(a: ref Arena, bp: Bptr)
@@ -463,6 +547,8 @@ loadlog(a: ref Arena, bp: Bptr)
 				gen := ent >> 8;
 				if(gen >= fs.qgen){
 					if(a.logtl == nil){
+						a.dsz = b.logsz;
+						a.dlogp = b.logp;
 						b.logp = Zb();
 						b.logsz = i;
 						a.logtl = b;
@@ -490,6 +576,8 @@ loadlog(a: ref Arena, bp: Bptr)
 		}
 		if(b.logp.addr == big -1){
 			a.logtl = b;
+			a.dsz = b.logsz;
+			a.dlogp = b.logp;
 			return;
 		}
 		bp = b.logp;
@@ -506,8 +594,9 @@ flushlog(a: ref Arena)
 {
 	if((a.logtl.flag & Bdirty) == 0)
 		return;
-	finalize(a.logtl);
-	syncblk(a.logtl);
+	if(tailstage(a))
+		devflush();
+	tailwrite(a);
 }
 
 compresslog(a: ref Arena)
@@ -548,6 +637,9 @@ compresslog(a: ref Arena)
 	# a valid freelist now: give back the blocks not used
 	a.loghd = Bptr(blks[0], big -1, big -1);
 	a.logtl = b;	# written back by sync() later
+	a.dsz = b.logsz;
+	a.dlogp = b.logp;
+	a.staged = 0;
 	a.nlog = big nlog;
 	a.lastlogsz = big nlog;
 	for(; i < nblks; i++)
@@ -699,6 +791,22 @@ getblk(bp: Bptr, flg: int): ref Blk
 			bassert(b, (b.flag & Bfreed) == 0, "getblk: freed");
 			bassert(b, b.bp.gen == bp.gen, "getblk: wrong generation");
 			return b;
+		}
+		#
+		# An arena's log tail is not in the cache but in one of its
+		# two static buffers, and what is on disk there may be older:
+		# after a crash, loadlog cut the tail back to the last commit,
+		# and the copy on disk still chains on to blocks the lost
+		# commit allocated, which are free again. Reading that copy
+		# would put a free block in the cache (check, walking the
+		# chain, did, and the next allocation of it broke the fs as a
+		# double alloc), so the tail is the one in memory. A scan:
+		# there are few arenas, and a miss reads the disk anyway.
+		#
+		for(i := 0; i < len fs.arenas; i++){
+			a := fs.arenas[i];
+			if(a != nil && a.logtl != nil && a.logtl.bp.addr == bp.addr)
+				return a.logtl;
 		}
 		b = newblkbuf();
 		readblk(b, bp, flg);

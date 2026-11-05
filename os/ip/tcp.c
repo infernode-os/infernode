@@ -186,6 +186,7 @@ struct	Tcp
 	u32int	seq;
 	u32int	ack;
 	uchar	flags;
+	uchar	update;	/* this packet has updated sender state */
 	ushort	ws;	/* window scale option (if not zero) */
 	u32int	wnd;
 	ushort	urg;
@@ -226,6 +227,7 @@ struct Tcpctl
 		u32int	wnd;		/* Tcp send window */
 		u32int	urg;		/* Urgent data pointer */
 		u32int	wl2;
+		u32int	wl1;		/* Seg.seq of last window update */
 		int	scale;		/* how much to left shift peer windows we receive */
 		/* to implement tahoe and reno TCP */
 		u32int	dupacks;	/* number of duplicate acks rcvd */
@@ -1170,6 +1172,7 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	}
 
 	tcph->flags = h->tcpflag[1];
+	tcph->update = 0;
 	tcph->wnd = nhgets(h->tcpwin);
 	tcph->urg = nhgets(h->tcpurg);
 	tcph->mss = 0;
@@ -1239,6 +1242,7 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	}
 
 	tcph->flags = h->tcpflag[1];
+	tcph->update = 0;
 	tcph->wnd = nhgets(h->tcpwin);
 	tcph->urg = nhgets(h->tcpurg);
 	tcph->mss = 0;
@@ -1844,16 +1848,34 @@ update(Conv *s, Tcp *seg)
 
 	tpriv = s->p->priv;
 	tcb = (Tcpctl*)s->ptcl;
-
-	/* if everything has been acked, force output(?) */
-	if(seq_gt(seg->ack, tcb->snd.nxt)) {
-		tcb->flags |= FORCE;
+	if(seg->update)
 		return;
+	seg->update = 1;
+	if((seg->flags & ACK) == 0)
+		return;
+
+	/* An ACK for data not yet sent must not change window or recovery state. */
+	if(seq_gt(seg->ack, tcb->snd.nxt))
+		return;
+
+	/* RFC 793: accept a window update only from a newer segment/ACK pair. */
+	if(seq_gt(seg->seq, tcb->snd.wl1)
+	|| (seg->seq == tcb->snd.wl1
+	&& (seq_gt(seg->ack, tcb->snd.wl2)
+	|| (seg->ack == tcb->snd.wl2 && seg->wnd > tcb->snd.wnd)))){
+		tcb->snd.wl1 = seg->seq;
+		tcb->snd.wl2 = seg->ack;
+		tcb->snd.wnd = seg->wnd;
+		if(tcb->snd.wnd == 0){
+			tcb->snd.dupacks = 0;
+			tcb->snd.recovery = 0;
+		}
 	}
 
 	/* added by Dong Lin for fast retransmission */
 	if(seg->ack == tcb->snd.una
 	&& tcb->snd.una != tcb->snd.nxt
+	&& tcb->snd.wnd != 0
 	&& seg->len == 0
 	&& seg->wnd == tcb->snd.wnd) {
 
@@ -1873,15 +1895,6 @@ update(Conv *s, Tcp *seg)
 		} else {
 			/* do reno tcp here. */
 		}
-	}
-
-	/*
-	 *  update window
-	 */
-	if(seq_gt(seg->ack, tcb->snd.wl2)
-	|| (tcb->snd.wl2 == seg->ack && seg->wnd > tcb->snd.wnd)){
-		tcb->snd.wnd = seg->wnd;
-		tcb->snd.wl2 = seg->ack;
 	}
 
 	if(!seq_gt(seg->ack, tcb->snd.una)){
@@ -2175,6 +2188,8 @@ reset:
 		if(seg.flags & SYN) {
 			procsyn(s, &seg);
 			if(seg.flags & ACK){
+				tcb->snd.wl1 = seg.seq;
+				tcb->snd.wl2 = seg.ack;
 				update(s, &seg);
 				tcpsynackrtt(s);
 				tcpsetstate(s, Established);
@@ -2252,10 +2267,12 @@ reset:
 	 */
 	if(seg.seq != tcb->rcv.nxt)
 	if(length != 0 || (seg.flags & (SYN|FIN))) {
+		/* update() can retransmit and consume FORCE; set it first so one
+		 * input segment cannot provoke a retransmit and a second ACK. */
+		tcb->flags |= FORCE;
 		update(s, &seg);
 		if(addreseq(tcb, tpriv, &seg, bp, length) < 0)
 			print("reseq %I.%d -> %I.%d\n", s->raddr, s->rport, s->laddr, s->lport);
-		tcb->flags |= FORCE;
 		goto output;
 	}
 
@@ -2284,8 +2301,12 @@ reset:
 					"bad seq in Syn_received");
 				goto raise;
 			}
+			tcb->snd.wl1 = seg.seq;
+			tcb->snd.wl2 = seg.ack;
+			tcb->snd.wnd = seg.wnd;
 			update(s, &seg);
 			tcpsetstate(s, Established);
+			break;
 		case Established:
 		case Close_wait:
 			update(s, &seg);
@@ -2531,12 +2552,12 @@ tcpoutput(Conv *s)
 		 * window probes to one
 		 */
 		if(tcb->snd.wnd == 0){
-			if(sent != 0) {
-				if((tcb->flags&FORCE) == 0)
-					break;
-//				tcb->snd.ptr = tcb->snd.una;
-			}
-			usable = 1;
+			/* A forced ACK is not a zero-window probe.  Only a retransmit
+			 * may put the oldest byte on the wire while the window is shut. */
+			if(sent != 0 && (tcb->flags&RETRAN) == 0)
+				usable = 0;
+			else
+				usable = 1;
 		}
 		else {
 			usable = tcb->cwind;

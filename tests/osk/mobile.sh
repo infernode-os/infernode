@@ -3,8 +3,9 @@
 # wm/osk in Lucifer's phone layout (infmobile=1), for
 # tests/host/osk_mobile_test.sh and tablet_layout_test.sh (not a test
 # itself): the chat's field tapped and the keyboard hidden by its
-# strip's icon, twice, the screen captured after each step.  A tap is a finger and the pointer's press
-# made from it, as SDL reports one on a phone.
+# strip's icon, twice, the screen captured after each step.  A tap is a
+# finger and the pointer's press made from it, as SDL reports one on a
+# phone.
 #
 load std expr
 
@@ -38,3 +39,4 @@ for i in 1 2 {
 	snap hidden$i
 }
 echo R done
+echo halt > '#c/sysctl'

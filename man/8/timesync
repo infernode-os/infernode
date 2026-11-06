@@ -1,0 +1,87 @@
+.TH TIMESYNC 8
+.SH NAME
+timesync \- set the clock from a GPS receiver
+.SH SYNOPSIS
+.B timesync
+[
+.B -n
+.I samples
+] [
+.B -o
+.I ms
+] [
+.B -t
+.I ms
+] [
+.B -p
+.I seconds
+] [
+.I timefile
+]
+.SH DESCRIPTION
+.I Timesync
+sets this host's clock from the time a GPS receiver gives, through the
+.B time
+file of
+.IR gpsfs (4)
+(default
+.BR /mnt/gps/time ;
+if that is not mounted here, the posted
+.B #sgps/fs
+is mounted in a name space of the command's own).
+It is for a host with no network time, as
+.IR sntp (8)
+needs, and no clock of its own that keeps time: a board in the field.
+.PP
+The time file pairs the time of the last fix with this host's clock
+when the fix's first sentence began to arrive.
+A sentence arrives after the time it gives, never before, and by a
+delay that varies; so of
+.I samples
+fixes (5, each one second's), the one whose offset is largest was the
+least delayed, and its offset is taken, as Plan 9's
+.I timesync
+does.
+Only fixes marked
+.B sync=yes
+count: never a recording's, a feed's, or one whose time this host
+stamped (a receiver giving none, as GDL 90 and Garmin's Aviation
+output do).
+.PP
+What is left is the receiver's own delay between the second and the
+sentence giving it, tens to hundreds of milliseconds by receiver;
+.B -o
+adds a correction in milliseconds, measured once against a better
+clock.
+.PP
+If the clock is off by more than
+.B -t
+milliseconds (200) it is stepped, through
+.B /dev/time
+.RI ( cons (3)).
+.I Timesync
+says by how much, and whether it set the clock or left it.
+With
+.B -p
+it samples every
+.I seconds
+and steps when it must, saying so only then.
+.SH EXAMPLES
+On a Raspberry Pi with a receiver on its serial port and no network:
+.IP
+.EX
+gpsfs source '#t/eia0' 9600
+timesync -p 600 &
+.EE
+.SH SOURCE
+.B /appl/cmd/timesync.b
+.SH SEE ALSO
+.IR gpsfs (4),
+.IR cons (3),
+.IR sntp (8)
+.SH BUGS
+NMEA gives time to tens of milliseconds at best.
+A receiver's pulse per second, which would give it to microseconds, is
+not read.
+.PP
+The clock is stepped, not slewed.

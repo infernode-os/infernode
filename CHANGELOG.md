@@ -32,6 +32,32 @@ All notable changes to InferNode are documented in this file.
   expires, and gets the outcome; the first read still gives the id at
   once, and a read at another offset does not wait. x402 makes that
   read under its time limit, and hears a denial as it is made.
+- **A service that does not answer no longer stops Settings or llmsrv.**
+  Settings' panels read llmsrv, factotum, msg9p and audit in its one
+  loop; each read, write and stat now has its own proc and a time limit,
+  and the status line names what did not answer. llmsrv asked the backend
+  for `models` in its serve loop, stopping every session behind a slow
+  one; it now does so as it does for `ask`.
+- **Delete on Matrix takes what it hosts; Delete on Task no longer takes
+  wm/wm.** A composition's hosted programs (wm/scene in `scene-demo`) run
+  in groups of their own, so Matrix's exit left them, holding the window
+  with nothing left to take a Delete. wm/task and wm/dir never made a
+  process group of their own, so an exit killed the group they were
+  started in, wm's among them.
+- **Quitting a program leaves nothing of it running.** wm/about, colors,
+  dir, fractals, ftree, keyring, man and wallet ended only their main
+  proc on their own Quit (wm/dir on Delete too), leaving their theme
+  watchers; wm/shell's Delete missed its own. In ftree and shell that
+  also kept their posted files alive.
+- **Settings no longer freezes on its Theme panel, and Delete takes the
+  window of a program that has frozen.** `event`, served in the theme
+  directory since themefs, was listed as a theme: loading it read a file
+  that waits for the next switch, in Settings' main loop, so the Theme
+  panel never came back (and Xenith's `Theme` would have stopped on it).
+  wm/wm's Delete only asks a program to exit, and a stuck one never
+  hears: if the exit is not taken in two seconds the window now leaves
+  the screen. The program itself is not killed (wm does not know its
+  process); it takes the exit if it ever wakes.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's

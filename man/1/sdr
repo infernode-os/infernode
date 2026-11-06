@@ -1,0 +1,147 @@
+.TH SDR 1
+.SH NAME
+sdr/fm, sdr/am \- demodulate a software-defined radio's samples
+.SH SYNOPSIS
+.B sdr/fm
+[
+.B -nw
+] [
+.B -c
+.I chans
+] [
+.B -d
+.I µs
+] [
+.B -g
+.I gain
+] [
+.B -o
+.I rate
+] [
+.B -r
+.I rate
+]
+.PP
+.B sdr/am
+[
+.B -b
+.I hertz
+] [
+.B -c
+.I chans
+] [
+.B -g
+.I gain
+] [
+.B -o
+.I rate
+] [
+.B -r
+.I rate
+]
+.SH DESCRIPTION
+Each reads a radio's samples on its standard input, as
+.IR sdrfs (4)'s
+.B iq
+gives them (8-bit unsigned I then Q), and writes the sound they carry on
+its standard output, as
+.IR audio (3)
+takes it: 16-bit little-endian samples,
+.I chans
+of each, the same sound in every channel.
+The radio is tuned to the station; what is a little off (a frequency
+error, an offset in ppm) is heard all the same.
+They are filters: they read until end of file and keep no state
+elsewhere.
+.PP
+.I Fm
+demodulates FM: wide, broadcast FM, by default (or
+.BR -w ),
+and narrow with
+.B -n
+(marine VHF, 2 m amateur, NOAA weather, the land mobile bands).
+The samples are summed to about 240k a second; narrow, the channel
+(8 kHz either side) is filtered out of them and they are decimated to
+about 48k.
+The angle each turns from the last is the sound.
+Wide, it is de-emphasised,
+.B -d
+microseconds: 50, as broadcast in most of the world, 75 in the Americas,
+0 none (narrow has none unless asked).
+Wide, the sound is kept below 15 kHz (above are the stereo pilot and
+subcarriers, and RDS), and below 0.4 of the rate out; it is mono.
+Full deviation (75 kHz wide, 5 kHz narrow) is 0.7 of full scale.
+.PP
+.I Am
+demodulates AM: the air band (118 to 137 MHz), and the short and medium
+wave broadcasts through direct sampling or an upconverter.
+The samples are summed to about 240k a second, the channel
+.RB ( -b
+hertz either side, 5000) is filtered out and they are decimated to
+about 48k.
+Each one's magnitude over the carrier's (its magnitude averaged over a
+tenth of a second) is the sound, so the level out does not follow the
+signal's strength; full modulation is 0.7 of full scale.
+.PP
+Both take:
+.TP
+.BI -r " rate"
+the rate in: what
+.I sdrfs
+is set to (2048000, its default), with k or M taken (2.4M).
+.TP
+.BI -o " rate"
+the rate out: 8000, what
+.B /dev/audio
+plays until told otherwise; set both higher for broadcast FM (it
+takes 8000, 11025, 22050 and 44100).
+.TP
+.BI -c " chans"
+the channels out (2, as
+.IR audio (3)).
+.TP
+.BI -g " gain"
+the volume multiplied; past full scale is clipped.
+.PP
+A rate out the rate in cannot give is refused.
+.SH EXAMPLES
+A broadcast station, to the speaker:
+.IP
+.EX
+; sdrfs source localhost
+; echo 'freq 98.5M
+rate 2.4M
+gain 20' > /mnt/sdr/ctl
+; echo rate 44100 > /dev/audioctl
+; sdr/fm -r 2.4M -o 44100 < /mnt/sdr/iq > /dev/audio
+.EE
+.PP
+The air band's emergency frequency:
+.IP
+.EX
+; echo freq 121.5M > /mnt/sdr/ctl
+; sdr/am -r 2.4M < /mnt/sdr/iq > /dev/audio
+.EE
+.PP
+A recording made once, demodulated later:
+.IP
+.EX
+; sdr/fm -n -c 1 < /tmp/marine.cu8 > /tmp/marine.pcm
+.EE
+.SH SOURCE
+.B /appl/cmd/sdr/fm.b
+.br
+.B /appl/cmd/sdr/am.b
+.br
+.B /appl/lib/sdrdsp.b
+.SH SEE ALSO
+.IR sdrfs (4),
+.IR audio (3)
+.br
+.B /docs/SDR.md
+.SH BUGS
+The rate out is reached by averaging (the samples at its edges shared),
+not by a proper resampler: a rate out that does not divide the rate
+filtered to (48k) keeps the tone clean to about 50 dB, not 70.
+.PP
+Wide FM is mono: the stereo subcarrier is filtered out, not decoded.

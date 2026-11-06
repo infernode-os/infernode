@@ -11,7 +11,7 @@ load std
 
 d=$1
 s=/mnt/sdr
-sdrfs -w 2
+sdrfs -w 2 -l 2 -t 200
 ls $s > $d/ls
 cat $s/status > $d/status.start
 cat $s/ctl > $d/ctl.start
@@ -23,17 +23,20 @@ echo 'rate 250000
 gain 38' > $s/ctl
 echo ppm -3 > $s/ctl
 
-# a source: dialled to see it is rtl_tcp, then hung up on
+# a source: dialled to see it is rtl_tcp, its settings sent, held
 echo source 127.0.0.1!$2 > $s/ctl
 sleep 1
 cat $s/status > $d/status.idle
 cat $s/ctl > $d/ctl.source
 cat $s/gains > $d/gains
 
-# the first reader dials; reads give whole samples
+# a reader within -l takes the held connection; reads give whole samples
 {read 16384 > $d/iq.1; read 16384 > $d/iq.2; read 16384 > $d/iq.3} < $s/iq
 sleep 1
 cat $s/status > $d/status.closed1
+# -l after the last reader: hung up
+sleep 3
+cat $s/status > $d/status.hungup
 
 # two readers; a setting written while they read is sent at once
 cat $s/iq > /dev/null &
@@ -44,10 +47,13 @@ sleep 1
 cat $s/status > $d/status.two
 echo freq 162.025M > $s/ctl
 echo biastee on > $s/ctl
+echo direct off > $s/ctl
 sleep 1
 kill $p1 $p2 > /dev/null
 sleep 1
 cat $s/status > $d/status.gone
+sleep 3
+cat $s/status > $d/status.gone2
 
 # a reader that does not read falls behind and loses the oldest
 echo rate 2.4M > $s/ctl
@@ -67,6 +73,10 @@ sh -c 'echo bogus 1 > '^$s^'/ctl' >[2] $d/err.bogus
 sh -c 'echo ''freq 98M
 rate 1'' > '^$s^'/ctl' >[2] $d/err.half
 cat $s/ctl > $d/ctl.after
+
+# localhost is 127.0.0.1, with no connection server
+sh -c 'echo source localhost!'^$2^' > '^$s^'/ctl' >[2] $d/err.localhost
+cat $s/ctl > $d/ctl.localhost
 
 echo stop > $s/ctl
 cat $s/status > $d/status.stop

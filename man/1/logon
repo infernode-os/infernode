@@ -85,9 +85,22 @@ overlay and are created with
 .IR newuser (8).
 The original behaviour documented above still describes upstream
 Inferno and native ports.
+.PP
+On a screen with no keyboard (a phone, the Raspberry Pi's touch panel)
+the boot starts the keyboard on the screen,
+.IR wm-osk (1),
+beside it.
+.I Wm/logon
+reads
+.BR /mnt/osk/status
+and, while the keyboard shows, lays its form out in the screen above
+the keyboard's strip, leaving out the logo and the lines along the
+bottom when the room left is too little for them; when it goes the form
+has the screen again.
 .SH SOURCE
 .B /appl/wm/logon.b
 .SH SEE ALSO
 .IR toolbar (1),
+.IR wm-osk (1),
 .IR wm (1),
 .IR namespace (6)

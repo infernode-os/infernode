@@ -156,7 +156,7 @@ Status reports and debugging logs from the 64-bit port, the SDL3 GUI and early C
 
 ## Formal Verification
 
-See [formal-verification/README.md](../formal-verification/README.md) for TLA+, SPIN, and CBMC verification of namespace isolation (3 tools, 11 properties, 3.17B+ states explored).
+See [formal-verification/README.md](../formal-verification/README.md) for the TLA+ specification of the namespace copy (model-checked exhaustively at small scale; the 3.17B-state medium run is incomplete), the SPIN race models and the CBMC harnesses on `pgrpcpy`, with a statement of what they do and do not establish.
 
 ## The Key 64-bit Fix
 

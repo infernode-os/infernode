@@ -12,6 +12,7 @@ Keys:  adt {
 	ctrfile: string;
 };
 relay: fn(addr: string, keys: ref Keys, fd: ref Sys->FD): string;
+ctrnext: fn(f: string, now: big): (big, string);
 .EE
 .SH DESCRIPTION
 .B Sdg
@@ -44,9 +45,44 @@ and the session until
 .I fd
 is closed.
 .I Keys.ctrfile
-names a file that keeps the handshake counter increasing across restarts
-and clock steps.
+names the handshake counter's store (see
+.B ctrnext
+below).
 It returns nil, or an error if the handshake failed.
+Before anything is sent it refuses keys that are not 32 bytes each, a
+server key that gives no shared secret with ours (a low-order point:
+X25519's all-zero result), and a counter that cannot be committed; and
+it drops a response whose ephemeral key gives no shared secret, as one
+that does not authenticate.
+.PP
+.B Ctrnext
+gives the next handshake counter for the store
+.IR f :
+at least
+.I now
+(nanoseconds since the epoch; the clock's, when
+.B relay
+asks), and more than any value it has given before, so it never repeats
+or goes back across restarts and clock steps.
+The store is two files,
+.IB f .a
+and
+.IB f .b ,
+each a line holding a value and a check of it; a new value is written
+over the older, synced, and read back before it is returned, so a crash
+or a short write spoils only the file being written, whose value was
+never sent.
+Callers take turns through
+.IB f .lock ,
+made exclusively; a lock older than 30 seconds is taken as left by a
+crash.
+A file
+.I f
+holding a bare value, as earlier versions kept it, is read as well.
+It returns an error, and no value, when the store cannot be written or
+read back, or holds nothing it can trust (no valid file, and a damaged
+one): the server refuses a counter not newer than the last it accepted,
+so a value is not guessed.
 Typically
 .I fd
 is one end of a pipe whose other end is given to

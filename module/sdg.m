@@ -30,6 +30,13 @@ Sdg: module
 	# handshake failed.
 	relay:	fn(addr: string, keys: ref Keys, fd: ref Sys->FD): string;
 
+	# The next handshake counter kept in f (Keys.ctrfile): at least now
+	# (ns since the epoch), more than any value it returned before, and
+	# committed (written, synced and read back, in f.a or f.b, under the
+	# lock f.lock) before it is returned.  An error means nothing may be
+	# sent: the store could not be written, or holds nothing to trust.
+	ctrnext:	fn(f: string, now: big): (big, string);
+
 	# Timing (milliseconds): request deadline, first retransmission
 	# interval and its cap, retransmission while pending, the silence that
 	# means the link is down, and the idle time before a keepalive.

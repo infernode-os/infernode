@@ -61,7 +61,7 @@ Hs: adt {
 	mixkeyandhash:	fn(hs: self ref Hs, ikm: array of byte);
 	encrypthash:	fn(hs: self ref Hs, p: array of byte): array of byte;
 	decrypthash:	fn(hs: self ref Hs, c: array of byte): array of byte;
-	dh:	fn(hs: self ref Hs, priv, pub: array of byte);
+	dh:	fn(hs: self ref Hs, priv, pub: array of byte): int;
 };
 
 sha256(a: array of byte): array of byte
@@ -149,11 +149,45 @@ Hs.decrypthash(hs: self ref Hs, c: array of byte): array of byte
 	return p;
 }
 
-Hs.dh(hs: self ref Hs, priv, pub: array of byte)
+# Mix in DH(priv, pub); 0 if it gives no shared secret.  x25519 is nil
+# for a low-order pub (the all-zero result, refused as RFC 7748 6.1
+# allows) and raises on a key that is not 32 bytes.  Mixing nil in
+# instead, as this did, takes the DH out of the key: Noise IK's static
+# DH would then authenticate nothing, leaving the PSK alone.
+Hs.dh(hs: self ref Hs, priv, pub: array of byte): int
 {
-	hs.mixkey(keyring->x25519(priv, pub));
+	ss: array of byte;
+	{
+		ss = keyring->x25519(priv, pub);
+	} exception {
+	* =>
+		ss = nil;
+	}
+	if(ss == nil || len ss != 32)
+		return 0;
+	hs.mixkey(ss);
+	return 1;
 }
 
+# Every key a handshake uses is 32 bytes.
+keyserr(k: ref Keys): string
+{
+	if(k == nil)
+		return "sdg: no keys";
+	if(len k.key != 32)
+		return "sdg: our private key is not 32 bytes";
+	if(len k.server != 32)
+		return "sdg: the server's public key is not 32 bytes";
+	if(len k.psk != 32)
+		return "sdg: the pre-shared key is not 32 bytes";
+	if(k.ctrfile == nil)
+		return "sdg: no counter file";
+	return nil;
+}
+
+# Message 1, or nil if the server's key gives no shared secret with
+# ours or with the ephemeral (es, ss): a fault in the keys configured,
+# not in anything received.
 handshake1(k: ref Keys, payload: array of byte): (ref Hs, array of byte)
 {
 	hs := ref Hs;
@@ -170,14 +204,17 @@ handshake1(k: ref Keys, payload: array of byte): (ref Hs, array of byte)
 	m := hs.epub;
 	hs.mixhash(hs.epub);		# e (and, in a psk handshake, MixKey too)
 	hs.mixkey(hs.epub);
-	hs.dh(hs.e, hs.rs);		# es
+	if(!hs.dh(hs.e, hs.rs))		# es
+		return (nil, nil);
 	m = cat(m, hs.encrypthash(hs.spub));	# s
-	hs.dh(hs.s, hs.rs);		# ss
+	if(!hs.dh(hs.s, hs.rs))		# ss
+		return (nil, nil);
 	m = cat(m, hs.encrypthash(payload));
 	return (hs, m);
 }
 
-# Message 2: returns its payload, or nil if it does not authenticate.
+# Message 2: returns its payload, or nil if it does not authenticate,
+# a responder's ephemeral key giving no shared secret (ee, se) among it.
 handshake2(hs: ref Hs, m: array of byte): array of byte
 {
 	if(len m < 32 + 16 + 1)
@@ -185,8 +222,10 @@ handshake2(hs: ref Hs, m: array of byte): array of byte
 	hs.re = m[0:32];
 	hs.mixhash(hs.re);
 	hs.mixkey(hs.re);
-	hs.dh(hs.e, hs.re);		# ee
-	hs.dh(hs.s, hs.re);		# se
+	if(!hs.dh(hs.e, hs.re))		# ee
+		return nil;
+	if(!hs.dh(hs.s, hs.re))		# se
+		return nil;
 	hs.mixkeyandhash(hs.psk);	# psk
 	return hs.decrypthash(m[32:]);
 }
@@ -249,8 +288,8 @@ Sess.fresh(s: self ref Sess, c: big): int
 }
 
 # The initiation counter: the clock in ns, but never less than one more
-# than the last value used, persisted before it is sent.
-counter(f: string): array of byte
+# than the last value used, committed before it is sent.
+counter(f: string): (array of byte, string)
 {
 	now := big 0;
 	if((fd := sys->open("/dev/time", Sys->OREAD)) != nil){
@@ -259,18 +298,9 @@ counter(f: string): array of byte
 		if(n > 0)
 			now = big string buf[0:n] * big 1000;	# microseconds to ns
 	}
-	last := big 0;
-	if((fd = sys->open(f, Sys->OREAD)) != nil){
-		buf := array[64] of byte;
-		n := sys->read(fd, buf, len buf);
-		if(n > 0)
-			last = big string buf[0:n];
-	}
-	v := now;
-	if(v <= last)
-		v = last + big 1;
-	if((fd = sys->create(f, Sys->OWRITE, 8r600)) != nil)
-		sys->fprint(fd, "%bd\n", v);
+	(v, err) := ctrnext(f, now);
+	if(err != nil)
+		return (nil, err);
 	b := array[12] of byte;
 	secs := v / big 1000000000;
 	ns := v % big 1000000000;
@@ -278,7 +308,192 @@ counter(f: string): array of byte
 		b[i] = byte (secs >> (8*(7-i)));
 	for(i = 0; i < 4; i++)
 		b[8+i] = byte (ns >> (8*(3-i)));
-	return b;
+	return (b, nil);
+}
+
+#
+# The counter's store: two slots, f.a and f.b, each one line "value
+# check", check the first 16 hex digits of SHA-256("sdg counter " value).
+# A new value goes into the slot not holding the last one, is synced and
+# read back, and only then is it returned to be sent; so a crash or a
+# short write can spoil only the slot being written, whose value was
+# never sent, and the other still holds the last.  Allocators, in this
+# process or another sharing the directory, take turns through f.lock,
+# made exclusively (OEXCL).  A file f of the old format, a bare value, is
+# read as a slot until the first is written.
+#
+CTRLOCKWAIT:	con 5000;	# ms to wait for the lock
+CTRLOCKSTALE:	con 30;	# s after which a lock left by a crash is taken
+
+ctrnext(f: string, now: big): (big, string)
+{
+	if(f == nil)
+		return (big 0, "sdg: no counter file");
+	lerr := ctrlock(f + ".lock");
+	if(lerr != nil)
+		return (big 0, lerr);
+	(v, err) := ctrnext0(f, now);
+	sys->remove(f + ".lock");
+	return (v, err);
+}
+
+ctrnext0(f: string, now: big): (big, string)
+{
+	(sa, va) := ctrslot(f + ".a");
+	(sb, vb) := ctrslot(f + ".b");
+	(sl, vl) := ctrlegacy(f);
+	if(sa != Svalid && sb != Svalid && (sa == Scorrupt || sb == Scorrupt || sl == Scorrupt))
+		return (big 0, "sdg: counter " + f + " unreadable: no slot holds a value it can trust; the brick refuses a counter not newer than the last, so restore the file, or pair again");
+	last := big 0;
+	if(sl == Svalid)
+		last = vl;
+	if(sa == Svalid && va > last)
+		last = va;
+	if(sb == Svalid && vb > last)
+		last = vb;
+	v := now;
+	if(v <= last)
+		v = last + big 1;
+	# Write over the older slot, so the newer is kept if this fails.
+	target := f + ".a";
+	if(sa == Svalid && (sb != Svalid || va > vb))
+		target = f + ".b";
+	werr := ctrwrite(target, v);
+	if(werr != nil)
+		return (big 0, werr);
+	(st, got) := ctrslot(target);
+	if(st != Svalid || got != v)
+		return (big 0, "sdg: counter " + target + " did not read back what was written");
+	return (v, nil);
+}
+
+Sabsent, Svalid, Scorrupt: con iota;
+
+ctrcheck(v: big): string
+{
+	d := sha256(array of byte sys->sprint("sdg counter %bd", v));
+	s := "";
+	for(i := 0; i < 8; i++)
+		s += sys->sprint("%.2ux", int d[i]);
+	return s;
+}
+
+# A slot's state and value.
+ctrslot(f: string): (int, big)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil){
+		(ok, nil) := sys->stat(f);
+		if(ok < 0)
+			return (Sabsent, big 0);
+		return (Scorrupt, big 0);	# there, but not readable
+	}
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0 || n == len buf || int buf[n-1] != '\n')
+		return (Scorrupt, big 0);
+	(nf, fl) := sys->tokenize(string buf[0:n-1], " ");
+	if(nf != 2 || !isdecimal(hd fl))
+		return (Scorrupt, big 0);
+	v := big hd fl;
+	if(v <= big 0 || ctrcheck(v) != hd tl fl)
+		return (Scorrupt, big 0);
+	return (Svalid, v);
+}
+
+# The old single-file counter: a bare decimal value and a newline.
+ctrlegacy(f: string): (int, big)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil){
+		(ok, nil) := sys->stat(f);
+		if(ok < 0)
+			return (Sabsent, big 0);
+		return (Scorrupt, big 0);
+	}
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0 || n == len buf)
+		return (Scorrupt, big 0);
+	t := string buf[0:n];
+	if(t[len t - 1] == '\n')
+		t = t[0:len t - 1];
+	if(!isdecimal(t))
+		return (Scorrupt, big 0);
+	return (Svalid, big t);
+}
+
+isdecimal(s: string): int
+{
+	if(s == nil || len s > 19)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+ctrwrite(f: string, v: big): string
+{
+	fd := sys->create(f, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return sys->sprint("sdg: can't write counter %s: %r", f);
+	b := array of byte sys->sprint("%bd %s\n", v, ctrcheck(v));
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("sdg: short write to counter %s: %r", f);
+	# A wstat changing nothing is a sync (fsync on the host).
+	if(sys->fwstat(fd, sys->nulldir) < 0)
+		return sys->sprint("sdg: can't sync counter %s: %r", f);
+	return nil;
+}
+
+ctrlock(lf: string): string
+{
+	t0 := sys->millisec();
+	gone := 0;
+	for(;;){
+		fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL, 8r600);
+		if(fd != nil)
+			return nil;
+		err := sys->sprint("%r");
+		(ok, d) := sys->stat(lf);
+		if(ok < 0){
+			# Not made, and not there to be waited for: the directory
+			# refuses it (a holder that has just let go is retried).
+			if(++gone >= 3)
+				return sys->sprint("sdg: can't make counter lock %s: %s", lf, err);
+		}else{
+			gone = 0;
+			# One left by a crash: taken once it is old.  The lock is
+			# held for milliseconds, so a lock this old has no holder.
+			if(epochsecs() - d.mtime > CTRLOCKSTALE)
+				sys->remove(lf);
+		}
+		if(sys->millisec() - t0 > CTRLOCKWAIT)
+			return sys->sprint("sdg: counter lock %s held for %d ms", lf, CTRLOCKWAIT);
+		sys->sleep(10);
+	}
+}
+
+# Seconds since the epoch, as stat's mtime.
+epochsecs(): int
+{
+	fd := sys->open("/dev/time", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	return int (big string buf[0:n] / big 1000000);
+}
+
+dirname(f: string): string
+{
+	for(i := len f - 1; i > 0; i--)
+		if(f[i] == '/')
+			return f[0:i];
+	return ".";
 }
 
 mac16(key, data: array of byte): array of byte
@@ -288,6 +503,9 @@ mac16(key, data: array of byte): array of byte
 
 connect(addr: string, k: ref Keys): (ref Sess, string)
 {
+	kerr := keyserr(k);
+	if(kerr != nil)
+		return (nil, kerr);
 	(ok, c) := sys->dial(addr, nil);
 	if(ok < 0)
 		return (nil, sys->sprint("can't dial %s: %r", addr));
@@ -307,7 +525,16 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	while(sys->millisec() < deadline){
 		# A fresh initiation each try (an accepted one would be refused as old).
 		me := get4(random->randombuf(Random->ReallyRandom, 4), 0);
-		(hs, m1) := handshake1(k, counter(k.ctrfile));
+		(ictr, cerr) := counter(k.ctrfile);
+		if(cerr != nil){
+			kill(reader);
+			return (nil, cerr);
+		}
+		(hs, m1) := handshake1(k, ictr);
+		if(hs == nil){
+			kill(reader);
+			return (nil, "sdg: the server's key gives no shared secret with ours (a low-order point?)");
+		}
 		p := array[1 + 4] of byte;
 		p[0] = byte Pinit;
 		put4(p, 1, me);

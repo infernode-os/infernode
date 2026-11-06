@@ -24,7 +24,7 @@ implement Brick;
 #	sdg.key	our X25519 private key, hex (mode 600)
 #	sdg.psk	the pre-shared key we gave the brick, hex (mode 600)
 #	sdg.brick	the brick's X25519 public key, hex
-#	sdg.ctr	the datagram handshake counter
+#	sdg.ctr.a, .b	the datagram handshake counter (sdg(2)'s ctrnext)
 #	d2.key	the D2 safety key we gave the brick, hex (mode 600)
 #
 

@@ -305,8 +305,13 @@ the pre-shared key given to the brick, hex (mode 600)
 .B sdg.brick
 the brick's X25519 public key
 .TP
-.B sdg.ctr
-the datagram handshake counter, which never repeats or goes back.
+.BR sdg.ctr.a ", " sdg.ctr.b
+the datagram handshake counter, which never repeats or goes back
+(two files, written in turn; see
+.IR sdg (2)),
+and
+.BR sdg.ctr.lock
+while one is being written.
 The brick refuses a handshake whose counter is not newer than the last it
 accepted for that key, so each commander needs its own
 .BR sdg.key :

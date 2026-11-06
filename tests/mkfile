@@ -256,6 +256,7 @@ TARG=\
 	keyringinst_test.dis\
 	wallet_capability_test.dis\
 	secp256k1_test.dis\
+	sdg_test.dis\
 	ethcrypto_test.dis\
 	ethrpc_conv_test.dis\
 	publicnet_host_test.dis\
@@ -432,6 +433,7 @@ SYSMODULES=\
 	styxlib.m\
 	9p.m\
 	ipints.m\
+	sdg.m\
 
 DISBIN=$ROOT/dis/tests
 

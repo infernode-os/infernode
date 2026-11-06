@@ -3257,6 +3257,10 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	p = malloc(512);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	l = 0;
 	l += snprint(p+l, 512-l, "radio: %s\n", ctl->present? "present" : "absent");
 	if(ctl->present)
@@ -3276,6 +3280,7 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	USED(l);
 	n = readstr(offset, a, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

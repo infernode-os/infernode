@@ -279,6 +279,10 @@ trimblock(Block *bp, int offset, int len)
 	ulong l;
 	Block *nb, *startb;
 
+	if(offset < 0 || len < 0){
+		freeblist(bp);
+		return nil;
+	}
 	QDEBUG checkb(bp, "trimblock 1");
 	if(blocklen(bp) < offset+len) {
 		freeblist(bp);
@@ -1172,6 +1176,7 @@ ulong noblockcnt;
 long
 qbwrite(Queue *q, Block *b)
 {
+	void (*bypass)(void*, Block*);
 	int n, dowakeup;
 	/*
 	 * The handler frees the block unless it has been queued, and
@@ -1188,8 +1193,8 @@ qbwrite(Queue *q, Block *b)
 
 	n = BLEN(b);
 
-	if(q->bypass){
-		(*q->bypass)(q->arg, b);
+	if((bypass = q->bypass) != nil){
+		(*bypass)(q->arg, b);
 		return n;
 	}
 	cb.b = b;
@@ -1209,6 +1214,25 @@ qbwrite(Queue *q, Block *b)
 	if(q->state & Qclosed){
 		iunlock(&q->l);
 		error(q->err);
+	}
+
+	/*
+	 * Do not allocate another queue entry after an interrupted writer has
+	 * already filled the queue.  Flow control normally happens after the
+	 * Block is queued so that a note cannot make a protocol write partial;
+	 * a caller that retries such a write used to add another Block before
+	 * sleeping again and could grow the queue without bound.  The writer
+	 * lock serializes this preflight with every other producer.
+	 */
+	while(q->len >= q->limit && q->noblock == 0){
+		q->state |= Qflow;
+		iunlock(&q->l);
+		sleep(&q->wr, qnotfull, q);
+		ilock(&q->l);
+		if(q->state & Qclosed){
+			iunlock(&q->l);
+			error(q->err);
+		}
 	}
 
 	/* if nonblocking, don't queue over the limit */
@@ -1323,6 +1347,7 @@ qwrite(Queue *q, void *vp, int len)
 int
 qiwrite(Queue *q, void *vp, int len)
 {
+	void (*bypass)(void*, Block*);
 	int n, sofar, dowakeup;
 	Block *b;
 	uchar *p = vp;
@@ -1341,9 +1366,20 @@ qiwrite(Queue *q, void *vp, int len)
 		memmove(b->wp, p+sofar, n);
 		b->wp += n;
 
+		if((bypass = q->bypass) != nil){
+			sofar += n;
+			(*bypass)(q->arg, b);
+			continue;
+		}
+
 		ilock(&q->l);
 
 		QDEBUG checkb(b, "qiwrite");
+		if((q->state & Qclosed) != 0 || q->len >= q->limit){
+			iunlock(&q->l);
+			freeb(b);
+			break;
+		}
 		if(q->bfirst)
 			q->blast->next = b;
 		else

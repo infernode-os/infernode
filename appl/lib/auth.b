@@ -29,7 +29,23 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 		return (nil, sys->sprint("%r"));
 
 	# mutual authentication
-	(id_or_err, secret) := kr->auth(fd, ai, setid); 
+	# Keyring.auth changes /dev/user before returning when setid is true.
+	# Keep the service identity until the accepted network conversation has
+	# been handed to the authenticated peer: otherwise the old service owner
+	# can still reopen, snoop, or hang up that peer's connection, while the
+	# peer itself cannot name it.  This is the Inferno counterpart of
+	# 9front's setnetuser() in its authenticated network servers.
+	(id_or_err, secret) := kr->auth(fd, ai, 0);
+	if(setid){
+		if(secret != nil){
+			d := sys->nulldir;
+			d.uid = id_or_err;
+			d.mode = 8r660;
+			sys->fwstat(fd, d);
+			setuser(id_or_err);
+		}else
+			setuser("nobody");
+	}
 
 	if(secret == nil){
 		if(ai == nil && id_or_err == "no authentication information")
@@ -90,6 +106,16 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	if(c == nil)
 		return (nil, "push ssl: " + err);
 	return (c, id_or_err);
+}
+
+# Match Keyring.auth's documented setid behaviour.  Failure is deliberately
+# ignored: changing identity has historically been best-effort for callers
+# without permission to write /dev/user.
+setuser(user: string)
+{
+	ufd := sys->open("/dev/user", Sys->OWRITE);
+	if(ufd != nil)
+		sys->write(ufd, array of byte user, len user);
 }
 
 member(s: string, l: list of string): int

@@ -203,7 +203,7 @@ whose
 .B n
 has exactly
 .I nbits
-(default 1024)
+(default 4096)
 significant bits.
 The key has the following attributes:
 .RS

@@ -300,6 +300,10 @@ vnetifstat(Ether *e, void *a, long n, ulong off)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	snprint(p, READSTR,
 		"virtio-net slot %d irq %d %s transport, header %d bytes\n"
 		"intrs %lud rx %lud tx %lud rxdrop %lud txfull %lud refill %lud\n"
@@ -309,6 +313,7 @@ vnetifstat(Ether *e, void *a, long n, ulong off)
 		vqroom(c->rx), vqroom(c->tx), qlen(e->oq));
 	n = readstr(off, a, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

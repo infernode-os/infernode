@@ -803,6 +803,7 @@ dis/tests/keyring_test.dis
 dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/kill_deadserver_test.dis
+dis/tests/kill_uncalled_test.dis
 dis/tests/killblocked_test.dis
 dis/tests/l2cap_test.dis
 dis/tests/limbo_asgcall_test.dis

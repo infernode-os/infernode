@@ -59,6 +59,7 @@ TARG=\
 	osk_accuracy.dis\
 	keyboards_test.dis\
 	osk_fuzz.dis\
+	phone_fuzz.dis\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\
@@ -144,6 +145,7 @@ TARG=\
 	publicnet_test.dis\
 	interop_test.dis\
 	authneg_test.dis\
+	keyring_sweep_test.dis\
 	cipher_matrix_test.dis\
 	crypto_props_test.dis\
 	interrupt_test.dis\

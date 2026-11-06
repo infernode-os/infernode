@@ -171,10 +171,30 @@ restricttoolns(caps: ref Capabilities): string
 	return restrictnsx(caps, 1);
 }
 
+# The current directory is a channel taken before the restriction: left
+# so, a relative name was resolved outside it, from the directory the
+# process started in (an agent asked for ../file read beside its grant,
+# in the host's own tree).  It is taken again, by its name, in the
+# restricted name space, or / if that name is not there.
 restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 {
 	if(sys == nil)
 		init();
+	dot := "";
+	dfd := sys->open(".", Sys->OREAD);
+	if(dfd != nil)
+		dot = sys->fd2path(dfd);
+	dfd = nil;
+	err := restrictnsx0(caps, hidemetadata);
+	if(err != nil)
+		return err;
+	if(dot == "" || sys->chdir(dot) < 0)
+		sys->chdir("/");
+	return nil;
+}
+
+restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
+{
 
 	# Preserve only the append capability while constructing the namespace.
 	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;

@@ -1,6 +1,20 @@
 # Phase 4: Verification Run Results
 
-*Date: 2026-03-04 (updated 2026-03-07 with TLC medium results)*
+*Date: 2026-03-04 (updated 2026-03-07 with TLC medium results; reviewed 2026-11-06)*
+
+> **Review note (2026-11-06).** The "Small Configuration (exhaustive)" run
+> below, with `MaxChannels=3`, never executed a namespace copy: the first
+> process takes two channels and `ForkWithForkNS`/`ForkWithNewNS` need two
+> more. TLC over the same configuration with the invariant
+> `\A pg : pgrp_parent[pg] = 0` completes with no violation over the same
+> 19,307,332 states, so every isolation invariant it reports was vacuous.
+> The configuration is now `MaxPgrps=2, MaxChannels=4` and `run-verification.sh` checks
+> reachability of a copy before running; the replacement run is recorded in
+> "Small Configuration (2026-11)" below. The medium run is incomplete and is
+> described as such. "Verified constant-time" below should read "verified
+> functionally"; CBMC does not check timing. "Lock ordering is verified" and
+> "Export boundary is verified" describe assertions that cannot fail in
+> those models; see README.md, Known Limitations 5 to 9.
 
 ## SPIN Model Checking Results
 
@@ -184,7 +198,42 @@ The `--slice-formula` flag was critical for tractability. Without it, CBMC gener
 
 ## TLA+ / TLC Model Checking Results
 
-### Small Configuration (exhaustive)
+### Small Configuration (2026-11, current: MaxPgrps=2, MaxChannels=4)
+
+Run 2026-11-06 with `./run-verification.sh small` on a 4-core, 16 GB host.
+The vacuity guard ran first: `CopyNeverHappened` violated after 147 distinct
+states, `LivePostCopyMountNeverHappened` after 924 (traces in
+`tlc_vacuity_small_*.txt`). The main run was done in two parts: two hours to
+a TLC checkpoint, then resumed with `RECOVER=` for four more; the recorded
+`tlc_output_small.txt` is the resumed part.
+
+| Parameter | Value |
+|-----------|-------|
+| MaxProcesses | 2 |
+| MaxPgrps | 2 |
+| MaxChannels | 4 |
+| MaxPaths | 1 |
+| MaxMountId | 4 |
+| MaxChanRef | 2 |
+
+| Metric | Value |
+|--------|-------|
+| States generated | 7,103,910,408 |
+| Distinct states | 429,048,790 |
+| Search depth | 30 |
+| States left on queue | 0 (complete) |
+| Time | about 5 h on 4 cores (checkpointed and resumed) |
+| Workers | 4 |
+| Memory | 8 GB heap + 19 GB disk state |
+| Violations | 0 (all 11 invariants) |
+| TLC version | 2026.10.30.154139 |
+
+The same configuration under the previous implicit refcount bound
+(`MaxProcesses + MaxPgrps + MaxChannels` = 8) reached 250M distinct states at
+depth 16 with 21 GB of state and the queue still growing before it was
+stopped; 5 channels or 2 paths grew faster still. See METHODOLOGY.md §4.7.
+
+### Small Configuration (2026-03, exhaustive but vacuous: MaxChannels=3)
 
 | Parameter | Value |
 |-----------|-------|

@@ -338,10 +338,20 @@ LOG=$(mktemp -t infernode-ios-verify)
 # STARTWAIT seconds is stopped and made again, up to LAUNCHES times; one
 # that has started is given the whole cap. A real fault still fails: the
 # last attempt's log, and what the simulator says, are printed.
+#
+# "Nothing written" counts simctl's own "bundle: pid" line as nothing: on
+# a run of PR #1071 it printed that and then not a line of the app's for
+# the whole cap, not even "InferNode: emu_run", which main_ios.m prints
+# before emu starts -- the app had not run, and the launch was not made
+# again because the log was not empty.
 STARTWAIT=20
 CAP=60
 LAUNCHES=3
 attempt=0
+# the app has written a line of its own (anything but simctl's pid line)
+appstarted() {
+	grep -vqE '^[A-Za-z0-9._-]+: [0-9]+$' "$LOG" 2>/dev/null
+}
 while :; do
 	attempt=$((attempt + 1))
 	: >"$LOG"
@@ -350,7 +360,7 @@ while :; do
 	LAUNCH_PID=$!
 	waited=0
 	while kill -0 "$LAUNCH_PID" 2>/dev/null && [ "$waited" -lt "$CAP" ]; do
-		if [ "$waited" -ge "$STARTWAIT" ] && [ ! -s "$LOG" ]; then
+		if [ "$waited" -ge "$STARTWAIT" ] && ! appstarted; then
 			break
 		fi
 		sleep 1
@@ -358,10 +368,10 @@ while :; do
 	done
 	kill "$LAUNCH_PID" 2>/dev/null || true
 	wait "$LAUNCH_PID" 2>/dev/null || true
-	if [ -s "$LOG" ] || [ "$attempt" -ge "$LAUNCHES" ]; then
+	if appstarted || [ "$attempt" -ge "$LAUNCHES" ]; then
 		break
 	fi
-	echo "launch $attempt: simctl started nothing in ${STARTWAIT}s; stopping it and launching again"
+	echo "launch $attempt: the app wrote nothing in ${STARTWAIT}s ($(tr '\n' ' ' <"$LOG")); stopping it and launching again"
 	xcrun simctl terminate booted "$BUNDLE_ID" >/dev/null 2>&1 || true
 done
 

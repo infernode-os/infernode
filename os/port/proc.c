@@ -666,7 +666,13 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 	 * if killed or condition happened, never mind; or interrupted
 	 * while it was not asleep (intpend: swiproc)
 	 */
-	if(up->killed || up->intpend || f(arg)){
+	/*
+	 * A device layer may translate the first Eintr before a released Prog
+	 * returns to the VM.  Revocation is durable, so it may not sleep again
+	 * in that original call.  Exit cleanup uses bounded device-specific
+	 * waits under up->killing and is deliberately exempt here.
+	 */
+	if(up->killed || up->intpend || (up->killing == 0 && upkilled()) || f(arg)){
 		unlock(&r->l);
 	}else{
 
@@ -693,7 +699,7 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 		up->r = nil;
 	}
 
-	if(up->killed || up->swipend || up->intpend) {
+	if(up->killed || up->swipend || up->intpend || (up->killing == 0 && upkilled())) {
 		up->killed = 0;
 		up->swipend = 0;
 		up->intpend = 0;
@@ -853,6 +859,42 @@ swiproc(Proc *p, int interp)
 	}
 	unlock(&p->rlock);
 	splx(s);
+}
+
+/* Interrupt p only while it still carries this exact released Prog. */
+int
+swiprogproc(Proc *p, void *iprog)
+{
+	ulong s;
+	Rendez *r;
+
+	if(p == nil)
+		return 0;
+	s = splhi();
+	lock(&p->rlock);
+	if(p->iprog != iprog){
+		unlock(&p->rlock);
+		splx(s);
+		return 0;
+	}
+	p->intpend = 1;
+	r = p->r;
+	if(r != nil){
+		lock(&r->l);
+		if(r->p == p){
+			p->swipend = 1;
+			r->p = nil;
+			unlock(&r->l);
+			unlock(&p->rlock);
+			ready(p);
+			splx(s);
+			return 1;
+		}
+		unlock(&r->l);
+	}
+	unlock(&p->rlock);
+	splx(s);
+	return 1;
 }
 
 void

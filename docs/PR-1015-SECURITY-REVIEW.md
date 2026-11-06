@@ -54,26 +54,33 @@ Required change:
 
 - Persist all four secrets in secstore and hold them at runtime in factotum,
   selected by stable public attributes such as device identity and purpose.
-- At minimum for the first mergeable increment, a scoped `proto=brick` may
-  release the required material only to the trusted commander process.  This
-  removes ordinary cleartext files and supplies encrypted persistence.
-- Move D2 HMAC into factotum in the same increment if practical; it is one
-  operation per command and is the most consequential key.
-- Follow with factotum-owned P-256 CertificateVerify and the Noise handshake,
-  so the TLS scalar, X25519 scalar, and PSK do not enter `brick` at all.  This
-  needs an operation interface, not a readable secret file.
+- Do not add a generic `proto=brick` secret-fetch operation.  Mode restrictions
+  on the caller do not turn raw key export into attenuation: the commander
+  would still possess every authority represented by the exported credential.
+- Add operation-specific factotum protocols for P-256 CertificateVerify, D2
+  HMAC, and the Noise handshake.  The commander supplies the exact transcript
+  or command covered by the operation and receives only the signature, MAC, or
+  completed protocol result.  The TLS scalar, X25519 scalar, PSK, and D2 key
+  must never enter `brick`.
+- Keep those RPC capabilities out of agent namespaces by default and delegate
+  only the particular brick/device operation required.  Factotum's `ctl` and
+  stored key attributes remain outside the delegated namespace.
 
 The following are public or non-secret state and may remain ordinary files:
 the TLS/SPKI pin, the brick X25519 public key, the client certificate, and the
 sdg monotonic counter.  The counter still needs the durability changes in
-P1015-04.  Wi-Fi credentials should be obtained from factotum or an explicitly
-ephemeral provisioning input; examples must not normalize a persistent
-cleartext `creds` file.
+P1015-04.  Wi-Fi credentials must be factotum/secstore-backed.  The existing
+`wpapsk` protocol returns a passphrase transiently to the trusted supplicant and
+records that as technical debt; it is not precedent for a persistent cleartext
+`creds` file or for exporting the brick's stronger signing and actuation keys.
+The preferred endpoint derives the WPA session material inside factotum as
+well.
 
 Tests required: secstore restart round trip; factotum key selection by device;
-absence of the four secrets from the ordinary namespace; denial when the
-factotum capability is absent; and confirmation that a confined agent cannot
-name factotum's control surface or the commander credentials.
+absence of the four secrets from the ordinary namespace and commander memory;
+denial when the operation capability is absent; protocol tests proving that no
+RPC returns raw key material; and confirmation that a confined agent cannot
+name factotum's control surface or ungranted brick operations.
 
 ### P1015-02 — High: an in-flight renewal can undo `release`
 

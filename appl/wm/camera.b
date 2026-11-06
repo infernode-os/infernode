@@ -5,7 +5,9 @@ implement Camera;
 #
 # Shows the feed at /mnt/video/0, a vid9p-schema stream, starting
 # camsrv(4) there if nothing is mounted. Holding the feed open is what
-# keeps the camera on; exit and, if nothing else is reading, it goes off.
+# keeps the camera on: hidden (the window manager says "visible 0") it
+# lets go of the feed, and if nothing else is reading the camera goes
+# off; shown again, it takes the feed back. Exit, and the same.
 #
 #	+, -	move the lens's focus
 #	a	autofocus, once
@@ -17,7 +19,7 @@ include "sys.m";
 
 include "draw.m";
 	draw: Draw;
-	Display, Image, Point, Rect: import draw;
+	Display, Font, Image, Point, Rect: import draw;
 
 include "wmclient.m";
 	wmclient: Wmclient;
@@ -58,10 +60,17 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			sh->system(ctxt, "mount -A {camsrv} /mnt/video");
 		(w, h) = readfmt();
 	}
-	if(w == 0)
-		fatal("no feed at " + FEED);
-
 	win := wmclient->window(ctxt, "camera", Wmclient->Appl);
+	if(w == 0){
+		# no feed: say so in the window rather than vanish
+		w = 576;
+		h = 324;
+		win.reshape(Rect((0, 0), (w, h)));
+		win.startinput("kbd" :: "ptr" :: nil);
+		win.onscreen(nil);
+		note(win, "no camera: nothing at " + FEED);
+		idle(win);
+	}
 	display := win.display;
 	r := Rect((0, 0), (w, h));
 	frame := display.newimage(r, Draw->RGB24, 0, Draw->Black);
@@ -77,11 +86,26 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	buf := array[w*h + 2*cs] of byte;
 	got := chan of string;
 	more := chan of int;
-	spawn reader(buf, got, more);
+	resume := chan of int;
+	spawn reader(buf, got, more, resume);
+	shown := 1;
+	released := 0;		# the reader has let go of the feed and waits for resume
 
 	for(;;) alt{
 	c := <-win.ctl or
 	c = <-win.ctxt.ctl =>
+		# Hidden, the feed is let go at the next frame (the reader is in
+		# the middle of one); shown again, it is taken back only if it was
+		# let go -- a hide and a show between two frames change nothing.
+		if(c == "visible 0")
+			shown = 0;
+		else if(c == "visible 1"){
+			shown = 1;
+			if(released){
+				released = 0;
+				resume <-= 1;
+			}
+		}
 		win.wmctl(c);
 		# a new size is a new image, none of it ours yet
 		if(c != nil && c[0] == '!'){
@@ -102,8 +126,17 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	p := <-win.ctxt.ptr =>
 		win.pointer(*p);
 	e := <-got =>
-		if(e != nil)
-			fatal(e);
+		if(e != nil){
+			# the camera went, or was never there: the reason, in the
+			# window, until it is closed
+			note(win, "no camera: " + e);
+			idle(win);
+		}
+		if(!shown){
+			more <-= 0;	# let go of the feed: the camera may go off
+			released = 1;
+			continue;
+		}
 		i420->rgb24(buf[0:w*h], buf[w*h:w*h+cs], buf[w*h+cs:w*h+2*cs], w, h, rgb);
 		frame.writepixels(r, rgb);
 		show(win, frame);
@@ -119,26 +152,33 @@ show(w: ref Window, frame: ref Image)
 	i.flush(Draw->Flushnow);
 }
 
-# the server paces this: a read waits for the next frame
-reader(buf: array of byte, got: chan of string, more: chan of int)
+# The server paces this: a read waits for the next frame. After each
+# frame it waits to be told to go on (1) or to let go of the feed (0),
+# in which case it closes it and waits for resume.
+reader(buf: array of byte, got: chan of string, more, resume: chan of int)
 {
-	fd := sys->open(FEED + "/frame", Sys->OREAD);
-	if(fd == nil){
-		got <-= sys->sprint("%s/frame: %r", FEED);
-		return;
-	}
 	for(;;){
-		n := 0;
-		while(n < len buf){
-			m := sys->read(fd, buf[n:], len buf - n);
-			if(m <= 0){
-				got <-= sys->sprint("camera: %r");
-				return;
-			}
-			n += m;
+		fd := sys->open(FEED + "/frame", Sys->OREAD);
+		if(fd == nil){
+			got <-= sys->sprint("%s/frame: %r", FEED);
+			return;
 		}
-		got <-= nil;
-		<-more;
+		for(;;){
+			n := 0;
+			while(n < len buf){
+				m := sys->read(fd, buf[n:], len buf - n);
+				if(m <= 0){
+					got <-= sys->sprint("camera: %r");
+					return;
+				}
+				n += m;
+			}
+			got <-= nil;
+			if(<-more == 0)
+				break;
+		}
+		fd = nil;		# the feed let go: the camera may go off
+		<-resume;
 	}
 }
 
@@ -197,4 +237,34 @@ fatal(s: string)
 {
 	sys->fprint(sys->fildes(2), "wm/camera: %s\n", s);
 	raise "fail:error";
+}
+
+# a line of text where the picture would be
+note(win: ref Window, msg: string)
+{
+	i := win.image;
+	d := win.display;
+	i.draw(i.r, d.black, nil, Point(0, 0));
+	f := Font.open(d, "*default*");
+	if(f != nil){
+		p := i.r.min.add(Point(8, i.r.dy()/2 - f.height/2));
+		i.text(p, d.white, Point(0, 0), f, msg);
+	}
+	i.flush(Draw->Flushnow);
+	sys->fprint(sys->fildes(2), "wm/camera: %s\n", msg);
+}
+
+# nothing more to show: keep the window, with its message, until it goes
+idle(win: ref Window)
+{
+	for(;;) alt{
+	c := <-win.ctl or
+	c = <-win.ctxt.ctl =>
+		win.wmctl(c);
+	k := <-win.ctxt.kbd =>
+		if(k == 'q')
+			win.wmctl("exit");
+	p := <-win.ctxt.ptr =>
+		win.pointer(*p);
+	}
 }

@@ -9,8 +9,9 @@ shows the feed at
 .B /mnt/video/0
 in a window, mounting
 .IR camsrv (4)
-there if nothing is. Holding the feed open keeps the camera on; when
-the window goes and nothing else is reading, it goes off.
+there if nothing is. Holding the feed open keeps the camera on: hidden by the window
+manager, or closed, it lets go, and when nothing else is reading the
+camera goes off. Shown again, it takes the feed back.
 .PP
 The keys
 .B +
@@ -21,10 +22,14 @@ move the lens's focus,
 runs autofocus once, and
 .B q
 exits.
+.PP
+With no camera, or when the camera goes, the window stays and says why;
+.B q
+closes it.
 .SH SOURCE
 .B /appl/wm/camera.b
 .SH SEE ALSO
 .IR camsrv (4)
 .SH BUGS
 Resizing the window does not scale the picture, which stays in the
-middle of it. A hidden window keeps the camera on.
+middle of it.

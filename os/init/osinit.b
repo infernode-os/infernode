@@ -2268,9 +2268,19 @@ wifiaddr(): string
 		sys->print("init: wifi: no address yet; asking again\n");
 		sys->sleep(5000);
 	}
+	#
+	# Not given up on. This returned nil here, and nothing asked again:
+	# a Pi 5 soak's radio authenticated after re-associating mid-
+	# handshake, got no lease in either try, and had no address for the
+	# rest of the boot -- while ip/dhcp run by hand a little later got
+	# one at once. Authentication already keeps trying (above); the
+	# address now does too, every 30 seconds, and the watcher starts
+	# when it comes.
+	#
 	if(!hasaddress(ifcno)){
-		sys->print("init: wifi: associated but no address\n");
-		return nil;
+		sys->print("init: wifi: associated but no address yet; asking every 30 s\n");
+		while(!wifidhcp(ifcno))
+			sys->sleep(30*1000);
 	}
 	(ndb, nil) := slurp("/net/ndb");
 	sys->print("init: wifi: %s\n", ndb);

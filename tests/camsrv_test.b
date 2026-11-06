@@ -164,6 +164,32 @@ testRaw(t: ref T)
 	t.asserteq(int b[o] | int b[o+1]<<8, 1023, "a raw sample of the white bar");
 }
 
+# A camera on its side: the feed served turned, sized as turned.
+testRotate(t: ref T)
+{
+	t.assert(ctl("rotate 45") < 0, "only quarter turns");
+	t.assert(ctl("rotate 90") > 0, "rotate 90 taken");
+	t.assert(has(file("fmt"), sys->sprint("%d %d i420", H, W)), "fmt is turned: " + file("fmt"));
+	t.assert(has(file("ctl"), "rotate 90"), "ctl reads back");
+	t.assert(has(file("ctl"), sys->sprint("mode %d %d", H, W)), "the mode as served");
+	t.assert(ctl(sys->sprint("mode %d %d", W, H)) < 0, "a mode asked unturned is no mode");
+	fd := sys->open(MNT + "/0/frame", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open frame: %r"));
+	a := array[FS] of byte;
+	t.asserteq(readframe(fd, a), FS, "a whole frame, turned");
+	t.assert(ctl("rotate 0") < 0, "no turning while streaming");
+	# turned clockwise, the bars run top (white) to bottom (black), and
+	# the picture's bottom, away from the moving band, is at the left
+	col := 7;
+	t.assert(int a[(W/16)*H + col] > 200, sys->sprint("white bar at the top: %d", int a[(W/16)*H + col]));
+	t.assert(int a[(W-W/16)*H + col] < 30, sys->sprint("black bar at the bottom: %d", int a[(W-W/16)*H + col]));
+	fd = nil;
+	sys->sleep(300);
+	t.assert(ctl("rotate 0") > 0, "rotate 0 once the stream is off");
+	t.assert(has(file("fmt"), sys->sprint("%d %d i420", W, H)), "and fmt is as it was");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -187,6 +213,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Stop", testStop);
 		run("Ctl", testCtl);
 		run("Raw", testRaw);
+		run("Rotate", testRotate);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -9,6 +9,11 @@ implement Camera;
 # lets go of the feed, and if nothing else is reading the camera goes
 # off; shown again, it takes the feed back. Exit, and the same.
 #
+# How the camera is mounted is not this window's business: whoever
+# starts camsrv says (its -r; on a board, the card's camera file), and
+# the feed comes upright. The window takes the feed's size as fmt gives
+# it, each time it takes the feed.
+#
 #	+, -	move the lens's focus
 #	a	autofocus, once
 #	q	exit
@@ -36,6 +41,12 @@ Camera: module
 };
 
 FEED: con "/mnt/video/0";
+
+# a frame, as the reader got it
+Pic: adt {
+	w, h:	int;
+	buf:	array of byte;
+};
 FOCUSSTEP: con 32;
 
 focus := 512;
@@ -82,12 +93,10 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	rgb := array[3*w*h] of byte;
 	focus = readfocus();
-	cs := (w/2)*(h/2);
-	buf := array[w*h + 2*cs] of byte;
-	got := chan of string;
+	got := chan of (string, ref Pic);
 	more := chan of int;
 	resume := chan of int;
-	spawn reader(buf, got, more, resume);
+	spawn reader(got, more, resume);
 	shown := 1;
 	released := 0;		# the reader has let go of the feed and waits for resume
 
@@ -125,7 +134,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		}
 	p := <-win.ctxt.ptr =>
 		win.pointer(*p);
-	e := <-got =>
+	(e, pic) := <-got =>
 		if(e != nil){
 			# the camera went, or was never there: the reason, in the
 			# window, until it is closed
@@ -137,6 +146,20 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			released = 1;
 			continue;
 		}
+		if(pic.w != w || pic.h != h){
+			# the feed changed size while it was let go (turned, or
+			# another mode): a new frame, and the window to fit it
+			w = pic.w;
+			h = pic.h;
+			r = Rect((0, 0), (w, h));
+			frame = display.newimage(r, Draw->RGB24, 0, Draw->Black);
+			if(frame == nil)
+				fatal(sys->sprint("cannot allocate a frame: %r"));
+			rgb = array[3*w*h] of byte;
+			win.reshape(r.addpt(win.image.r.min));	# where it is, the new size
+		}
+		buf := pic.buf;
+		cs := (w/2)*(h/2);
 		i420->rgb24(buf[0:w*h], buf[w*h:w*h+cs], buf[w*h+cs:w*h+2*cs], w, h, rgb);
 		frame.writepixels(r, rgb);
 		show(win, frame);
@@ -154,13 +177,21 @@ show(w: ref Window, frame: ref Image)
 
 # The server paces this: a read waits for the next frame. After each
 # frame it waits to be told to go on (1) or to let go of the feed (0),
-# in which case it closes it and waits for resume.
-reader(buf: array of byte, got: chan of string, more, resume: chan of int)
+# in which case it closes it and waits for resume. Each time it takes
+# the feed it asks its size, which may have changed meanwhile.
+reader(got: chan of (string, ref Pic), more, resume: chan of int)
 {
 	for(;;){
+		(w, h) := readfmt();
+		if(w == 0){
+			got <-= (sys->sprint("%s/fmt: %r", FEED), nil);
+			return;
+		}
+		pic := ref Pic(w, h, array[w*h + 2*(w/2)*(h/2)] of byte);
+		buf := pic.buf;
 		fd := sys->open(FEED + "/frame", Sys->OREAD);
 		if(fd == nil){
-			got <-= sys->sprint("%s/frame: %r", FEED);
+			got <-= (sys->sprint("%s/frame: %r", FEED), nil);
 			return;
 		}
 		for(;;){
@@ -168,12 +199,12 @@ reader(buf: array of byte, got: chan of string, more, resume: chan of int)
 			while(n < len buf){
 				m := sys->read(fd, buf[n:], len buf - n);
 				if(m <= 0){
-					got <-= sys->sprint("camera: %r");
+					got <-= (sys->sprint("camera: %r"), nil);
 					return;
 				}
 				n += m;
 			}
-			got <-= nil;
+			got <-= (nil, pic);
 			if(<-more == 0)
 				break;
 		}

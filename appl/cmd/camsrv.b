@@ -15,6 +15,7 @@ implement Camsrv;
 #                               and vidplay9p read
 #   /mnt/video/0/ctl      write mode W H | fps N | exposure LINES (0 = auto)
 #                               gain CODE | focus N | focus auto | flip N
+#                               rotate 0|90|180|270
 #
 # The schema is vid9p's, so everything that shows a vid9p feed shows this.
 # The sensor is on only while something has frame or raw open: the last
@@ -25,6 +26,15 @@ implement Camsrv;
 #        mount {camsrv -t} /mnt/video     a simulated sensor, for tests
 #        mount {camsrv -l file} ...       append the status line to file
 #                                         once a minute, for a soak
+#        mount {camsrv -r 90} ...         a camera mounted a quarter turn
+#                                         anticlockwise: the picture is
+#                                         turned clockwise to stand up
+#
+# How the camera is mounted is the installation's to say, not this
+# server's: whoever starts it gives -r, and every reader of the feed
+# then gets the picture the right way up, sized as turned (fmt says).
+# flip is the sensor's own mirror register, as the module reads out;
+# rotate turns what that gives, as it is merged.
 #
 # The kernel gives raw frames (#V) and an I2C bus (#J); all that is known
 # about the Camera Module 3 is here. The bus is shared with the firmware,
@@ -77,6 +87,7 @@ fps := 30;
 exposure := 0;		# lines; 0 is automatic
 gain := 512;
 flip := 3;		# as the module sits in its usual mount: right way up
+rotate := 0;		# degrees clockwise, applied after the sensor
 focus := -1;
 afrun := 0;
 
@@ -124,6 +135,12 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd args == "-l" && tl args != nil){
 			args = tl args;
 			logfile = hd args;
+		}else if(hd args == "-r" && tl args != nil){
+			args = tl args;
+			if(!rotation(hd args)){
+				sys->fprint(sys->fildes(2), "camsrv: -r 0|90|180|270\n");
+				raise "fail:usage";
+			}
 		}else if(hd args == "-t"){
 			sim = 1;
 			width = 288;
@@ -160,6 +177,31 @@ dir(name: string, perm, path: int): Sys->Dir
 	if(perm & Sys->DMDIR)
 		d.qid.qtype = Sys->QTDIR;
 	return d;
+}
+
+# the picture as served: turned a quarter, its sides swap
+fw(): int
+{
+	if(rotate%180)
+		return height;
+	return width;
+}
+
+fh(): int
+{
+	if(rotate%180)
+		return width;
+	return height;
+}
+
+rotation(a: string): int
+{
+	case a {
+	"0" or "90" or "180" or "270" =>
+		rotate = int a;
+		return 1;
+	}
+	return 0;
 }
 
 framesize(): int
@@ -207,7 +249,7 @@ serve(tree: ref Tree)
 			Qroot or Qstream =>
 				srv.read(tm);
 			Qfmt =>
-				srv.reply(styxservers->readstr(tm, sys->sprint("%d %d i420 %d\n", width, height, fps)));
+				srv.reply(styxservers->readstr(tm, sys->sprint("%d %d i420 %d\n", fw(), fh(), fps)));
 			Qstatus =>
 				srv.reply(styxservers->readstr(tm, status()));
 			Qctl =>
@@ -376,7 +418,7 @@ status(): string
 	on := "off";
 	if(users > 0)
 		on = "on";
-	s := sys->sprint("camera w=%d h=%d framesize=%d frames=%d stream=%s", width, height, fsize, seq, on);
+	s := sys->sprint("camera w=%d h=%d framesize=%d frames=%d stream=%s", fw(), fh(), fsize, seq, on);
 	if(sim)
 		s += " sim=1";
 	s += sys->sprint(" rawformat=rggb10:%d:%d", Sw/simdivr(), Sh/simdivr());
@@ -401,8 +443,8 @@ simdivr(): int
 
 settings(): string
 {
-	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nfocus %d\n",
-		width, height, fps, exposure, gain, flip, focus);
+	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\n",
+		fw(), fh(), fps, exposure, gain, flip, rotate, focus);
 }
 
 doctl(s: string): string
@@ -418,6 +460,8 @@ doctl(s: string): string
 			return "camsrv: in use";
 		w := int hd tl f;
 		h := int hd tl tl f;
+		if(rotate%180)
+			(w, h) = (h, w);	# asked as served; merged as the sensor sees
 		rw := Sw/simdivr();
 		rh := Sh/simdivr();
 		if(w <= 0 || h <= 0 || rw%w != 0)
@@ -468,6 +512,14 @@ doctl(s: string): string
 		if(users > 0)
 			return "camsrv: in use";
 		flip = v;
+	"rotate" =>
+		if(n != 2)
+			return "camsrv: rotate 0|90|180|270";
+		if(users > 0)
+			return "camsrv: in use";
+		if(!rotation(hd tl f))
+			return "camsrv: rotate 0|90|180|270";
+		latest = nil;
 	* =>
 		return "camsrv: unknown ctl " + hd f;
 	}
@@ -583,7 +635,7 @@ capture(stop: chan of int)
 			watchlink();
 		}
 		(y, cb, cr) = planes();
-		bayer->merge(raw, Sw, Sh, scale, flip, lr, lg, lb, y, cb, cr, mean);
+		bayer->merge(raw, Sw, Sh, scale, flip, rotate/90, lr, lg, lb, y, cb, cr, mean);
 		framec <-= y[0:fsize];
 		if(lastrawwanted())
 			rawc <-= raw[0:];
@@ -868,9 +920,11 @@ afresult := "";
 moved(a, b: array of byte): int
 {
 	s := n := 0;
-	for(r := 0; r < height; r += 8)
-		for(c := 0; c < width; c += 8){
-			s += abs(int a[r*width+c] - int b[r*width+c]);
+	w := fw();
+	h := fh();
+	for(r := 0; r < h; r += 8)
+		for(c := 0; c < w; c += 8){
+			s += abs(int a[r*w+c] - int b[r*w+c]);
 			n++;
 		}
 	return s/n;
@@ -879,11 +933,13 @@ moved(a, b: array of byte): int
 sharp(y: array of byte): int
 {
 	s := 0;
-	for(r := height/8; r < 7*height/8; r += 2){
-		o := r*width + width/8;
-		for(i := 0; i < 3*width/4; i++){
+	w := fw();
+	h := fh();
+	for(r := h/8; r < 7*h/8; r += 2){
+		o := r*w + w/8;
+		for(i := 0; i < 3*w/4; i++){
 			d := int y[o+i] - int y[o+i+1];
-			e := int y[o+i] - int y[o+i+width];
+			e := int y[o+i] - int y[o+i+w];
 			s += d*d + e*e;
 		}
 	}
@@ -914,7 +970,7 @@ simulate(stop: chan of int)
 		fill(raw, w, h, band);
 		band = (band+4) % h;
 		(y, cb, cr) = planes();
-		bayer->merge(raw, w, h, scale, 0, lr, lg, lb, y, cb, cr, mean);
+		bayer->merge(raw, w, h, scale, 0, rotate/90, lr, lg, lb, y, cb, cr, mean);
 		framec <-= y[0:fsize];
 		if(lastrawwanted())
 			rawc <-= raw[0:];

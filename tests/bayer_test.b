@@ -86,7 +86,7 @@ testOrders(t: ref T)
 		cb := array[4*4] of byte;
 		cr := array[4*4] of byte;
 		mean := array[3] of int;
-		bayer->merge(raw, 16, 16, 2, red, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 16, 16, 2, red, 0, lut, lut, lut, y, cb, cr, mean);
 		t.asserteq(mean[0], 800, sys->sprint("red %d: red mean", red));
 		t.asserteq(mean[1], 400, sys->sprint("red %d: green mean", red));
 		t.asserteq(mean[2], 200, sys->sprint("red %d: blue mean", red));
@@ -107,10 +107,10 @@ testSaturated(t: ref T)
 	cb := array[4*4] of byte;
 	cr := array[4*4] of byte;
 	mean := array[3] of int;
-	bayer->merge(frame(16, 16, 0, 1023, 0, 0), 16, 16, 2, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(frame(16, 16, 0, 1023, 0, 0), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
 	t.asserteq(int cr[0], 255, "full red: cr");
 	t.assert(int cb[0] < 128, "full red: cb");
-	bayer->merge(frame(16, 16, 0, 0, 0, 1023), 16, 16, 2, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(frame(16, 16, 0, 0, 0, 1023), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
 	t.asserteq(int cb[0], 255, "full blue: cb");
 	t.assert(int cr[0] < 128, "full blue: cr");
 }
@@ -125,10 +125,70 @@ testScale(t: ref T)
 	cb := array[2*2] of byte;
 	cr := array[2*2] of byte;
 	mean := array[3] of int;
-	bayer->merge(raw, 16, 16, 4, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(raw, 16, 16, 4, 0, 0, lut, lut, lut, y, cb, cr, mean);
 	t.assert(int y[0] > int y[1], "the pixel over the hot sample is the brighter");
 	t.asserteq(int cb[3], 128, "grey has no colour");
 	t.asserteq(int cr[3], 128, "grey has no colour");
+}
+
+# Each output pixel a different grey, so that where each lands says how
+# the picture was turned: 8 by 4 before, 4 by 8 after a quarter turn.
+testRotate(t: ref T)
+{
+	lut := identity();
+	w := 8;
+	h := 4;
+	raw := array[2*w*2*h*2] of byte;
+	for(sy := 0; sy < 2*h; sy++)
+		for(sx := 0; sx < 2*w; sx++)
+			put(raw, 2*w, sx, sy, 4*(1 + sx/2 + w*(sy/2)));
+	mean := array[3] of int;
+	for(rot := 0; rot < 4; rot++){
+		y := array[w*h] of byte;
+		cb := array[(w/2)*(h/2)] of byte;
+		cr := array[(w/2)*(h/2)] of byte;
+		bayer->merge(raw, 2*w, 2*h, 2, 0, rot, lut, lut, lut, y, cb, cr, mean);
+		ow := w;
+		if(rot&1)
+			ow = h;
+		bad := 0;
+		for(py := 0; py < h; py++)
+			for(px := 0; px < w; px++){
+				(ox, oy) := (px, py);
+				case rot {
+				1 =>	(ox, oy) = (h-1-py, px);
+				2 =>	(ox, oy) = (w-1-px, h-1-py);
+				3 =>	(ox, oy) = (py, w-1-px);
+				}
+				if(int y[oy*ow+ox] != 1 + px + w*py)
+					bad++;
+			}
+		t.asserteq(bad, 0, sys->sprint("rot %d: pixels out of place", rot));
+	}
+
+	# a red corner, top left; turned clockwise its colour is top right
+	raw = frame(2*w, 2*h, 0, 400, 400, 400);
+	for(sy = 0; sy < 4; sy++)
+		for(sx = 0; sx < 4; sx++)
+			if((sy&1) == 0 && (sx&1) == 0)
+				put(raw, 2*w, sx, sy, 1000);
+			else
+				put(raw, 2*w, sx, sy, 64);
+	y := array[w*h] of byte;
+	cb := array[(w/2)*(h/2)] of byte;
+	cr := array[(w/2)*(h/2)] of byte;
+	bayer->merge(raw, 2*w, 2*h, 2, 0, 1, lut, lut, lut, y, cb, cr, mean);
+	t.assert(int cr[h/2-1] > 200, sys->sprint("rot 1: red at the top right: cr %d", int cr[h/2-1]));
+	t.asserteq(int cr[0], 128, "rot 1: grey at the top left");
+	t.assert(int y[h-1] < int y[0], "rot 1: the red corner's luma, top right");
+	refused := 0;
+	{
+		bayer->merge(raw, 2*w, 2*h, 2, 0, 4, lut, lut, lut, y, cb, cr, mean);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a fifth quarter is refused");
 }
 
 testBounds(t: ref T)
@@ -141,7 +201,7 @@ testBounds(t: ref T)
 	mean := array[3] of int;
 	refused := 0;
 	{
-		bayer->merge(raw, 8, 8, 2, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 8, 8, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
 	} exception {
 	* =>
 		refused = 1;
@@ -149,7 +209,7 @@ testBounds(t: ref T)
 	t.assert(refused, "planes too small are refused");
 	refused = 0;
 	{
-		bayer->merge(raw, 8, 8, 3, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 8, 8, 3, 0, 0, lut, lut, lut, y, cb, cr, mean);
 	} exception {
 	* =>
 		refused = 1;
@@ -172,6 +232,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Orders", testOrders);
 		run("Saturated", testSaturated);
 		run("Scale", testScale);
+		run("Rotate", testRotate);
 		run("Bounds", testBounds);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -11,7 +11,18 @@ in a window, mounting
 .IR camsrv (4)
 there if nothing is. Holding the feed open keeps the camera on: hidden by the window
 manager, or closed, it lets go, and when nothing else is reading the
-camera goes off. Shown again, it takes the feed back.
+camera goes off. Shown again, it takes the feed back, at the size
+.B fmt
+then gives: a feed turned meanwhile is shown turned.
+.PP
+How the camera is mounted is not the window's to say: the feed comes
+the right way up from whoever started
+.IR camsrv (4)
+\(em its
+.BR -r ,
+or on a bare-metal board the card's
+.B camera
+file.
 .PP
 The keys
 .B +

@@ -23,7 +23,10 @@ menu 900 100 172
 click 150 120 4
 sleep 3
 status hidden
+# turned while let go: shown again, the window takes the turned size
+echo rotate 90 > /mnt/video/0/ctl
 # the hidden window is the menu's sixth item
 menu 900 100 190
 sleep 3
 status unhidden
+echo R turned `{cat /chan/wmwindows}

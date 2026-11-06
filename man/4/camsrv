@@ -9,6 +9,10 @@ camsrv \- a camera as a live video feed
 .B mount {camsrv -l
 .I file
 .B } /mnt/video
+.br
+.B mount {camsrv -r
+.I degrees
+.B } /mnt/video
 .SH DESCRIPTION
 .I Camsrv
 serves a Raspberry Pi Camera Module 3 in the schema of
@@ -31,6 +35,26 @@ line to
 .IR file ,
 seconds since boot first, once a minute, which is how a soak reads it
 from outside the namespace the feed is mounted in.
+.PP
+With
+.BR -r ,
+the picture is turned clockwise by
+.IR degrees ,
+0, 90, 180 or 270, for a camera mounted on its side or upside down;
+the same as
+.B rotate
+below, from the start. How the camera is mounted is a fact about the
+installation, so it is whoever starts
+.I camsrv
+that says so, not the readers: each of them gets the picture the right
+way up, sized as turned. On a bare-metal Pi 4 the card's
+.B camera
+file is where that is said: the system starts
+.I camsrv
+on
+.B /mnt/video
+at boot and writes the file's lines to
+.BR ctl .
 .PP
 .I Camsrv
 is the only thing that knows the sensor. It drives it over
@@ -75,7 +99,8 @@ Writes, one at a time; reading gives the settings.
 .PD 0
 .TP
 .BI mode " w h
-Picture size: 576 324 or 1152 648. Not while streaming.
+Picture size: 576 324 or 1152 648, or 324 576 or 648 1152 turned a
+quarter. Not while streaming.
 .TP
 .BI fps " n
 1 to 56. Not while streaming.
@@ -99,7 +124,15 @@ says which.
 .TP
 .BI flip " n
 1 mirrors, 2 turns upside down. 3, the default, is right way up as the
-module usually sits. Not while streaming.
+module usually sits. This is the sensor's own register: it changes the
+raw frames too. Not while streaming.
+.TP
+.BI rotate " degrees
+Turn the picture clockwise: 0, 90, 180 or 270. A quarter turn swaps
+.B fmt 's
+width and height.
+.B raw
+is not turned. Not while streaming.
 .PD
 .RE
 .SH EXAMPLES

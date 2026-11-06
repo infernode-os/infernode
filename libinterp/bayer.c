@@ -13,6 +13,10 @@
  * video, and quieter than one sample of each.
  *
  * Full-range coefficients, the inverse of libinterp/i420.c's.
+ *
+ * The picture can be turned as it is written, for a camera mounted on
+ * its side: each pixel goes where the turn puts it, a step of dx for
+ * the next pixel along a row and dy for the next row, from base.
  */
 
 enum
@@ -22,6 +26,25 @@ enum
 };
 
 /* chroma can reach 256 for a primary at full strength: in a byte that is 0 */
+static void
+turn(int rot, int w, int h, int *base, int *dx, int *dy)
+{
+	switch(rot){
+	case 0:
+		*base = 0; *dx = 1; *dy = w;
+		break;
+	case 1:	/* clockwise: the top left corner goes to the top right */
+		*base = h-1; *dx = h; *dy = -1;
+		break;
+	case 2:
+		*base = w*h-1; *dx = -1; *dy = -w;
+		break;
+	case 3:
+		*base = (w-1)*h; *dx = -h; *dy = 1;
+		break;
+	}
+}
+
 static uchar
 clampc(int v)
 {
@@ -43,7 +66,8 @@ Bayer_merge(void *fp)
 {
 	F_Bayer_merge *f;
 	ushort *raw, *c;
-	uchar *lr, *lg, *lb, *y, *cb, *cr;
+	uchar *lr, *lg, *lb, *y, *cb, *cr, *yr, *cbr, *crr;
+	int yb, ydx, ydy, cbase, cdx, cdy;
 	WORD *mean;
 	int rw, rh, s, cells, n, w, h, x, y0, cx, cy, ro, bo, g1, g2, nl;
 	int r, g, b, pr, pg, pb, sr[2], sg[2], sb[2];
@@ -56,7 +80,8 @@ Bayer_merge(void *fp)
 	rw = f->rw;
 	rh = f->rh;
 	s = f->scale;
-	if(rw <= 0 || rh <= 0 || s < 2 || (s&1) || f->red < 0 || f->red > 3)
+	if(rw <= 0 || rh <= 0 || s < 2 || (s&1) || f->red < 0 || f->red > 3
+	|| f->rot < 0 || f->rot > 3)
 		error(exBounds);
 	w = rw/s;
 	h = rh/s;
@@ -75,6 +100,8 @@ Bayer_merge(void *fp)
 	y = f->y->data;
 	cb = f->cb->data;
 	cr = f->cr->data;
+	turn(f->rot, w, h, &yb, &ydx, &ydy);
+	turn(f->rot, w/2, h/2, &cbase, &cdx, &cdy);
 
 	/* the cell, as offsets: red and blue are opposite corners */
 	ro = (f->red>>1)*rw + (f->red&1);
@@ -86,6 +113,9 @@ Bayer_merge(void *fp)
 	tr = tg = tb = 0;
 
 	for(y0 = 0; y0 < h; y0++){
+		yr = y + yb + y0*ydy;
+		cbr = cb + cbase + (y0>>1)*cdy;
+		crr = cr + cbase + (y0>>1)*cdy;
 		sr[0] = sr[1] = sg[0] = sg[1] = sb[0] = sb[1] = 0;
 		for(x = 0; x < w; x++){
 			r = g = b = 0;
@@ -107,7 +137,8 @@ Bayer_merge(void *fp)
 			pr = lr[r < nl? r: nl-1];
 			pg = lg[g < nl? g: nl-1];
 			pb = lb[b < nl? b: nl-1];
-			*y++ = (19595*pr + 38470*pg + 7471*pb + Half) >> B;
+			*yr = (19595*pr + 38470*pg + 7471*pb + Half) >> B;
+			yr += ydx;
 			sr[x&1] = pr;
 			sg[x&1] = pg;
 			sb[x&1] = pb;
@@ -117,8 +148,10 @@ Bayer_merge(void *fp)
 				pg = (sg[0]+sg[1])/2;
 				pb = (sb[0]+sb[1])/2;
 				if((y0&1) == 0){
-					*cb++ = clampc(128 + ((-11059*pr - 21709*pg + 32768*pb + Half) >> B));
-					*cr++ = clampc(128 + ((32768*pr - 27439*pg - 5329*pb + Half) >> B));
+					*cbr = clampc(128 + ((-11059*pr - 21709*pg + 32768*pb + Half) >> B));
+					*crr = clampc(128 + ((32768*pr - 27439*pg - 5329*pb + Half) >> B));
+					cbr += cdx;
+					crr += cdx;
 				}
 			}
 		}

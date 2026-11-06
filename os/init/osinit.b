@@ -3382,8 +3382,31 @@ hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array 
 				continue;
 			}
 			now := (status & HPpresent) != 0;
-			if(now == was[port])
+			if(now == was[port]){
+				#
+				# Present before and present now is not "nothing
+				# happened". A device that drops off the bus and
+				# comes back between two looks reads present both
+				# times, and the port it left has disabled itself
+				# (xHCI does on any disconnect, as a USB 2.0 hub
+				# does): every transfer to it after that is a
+				# Transaction Error, and nothing resets the port.
+				# A Pi 5 soak lost its USB Ethernet so, 80 minutes
+				# in, for the rest of the boot: PORTSC 0x206e1,
+				# connected, disabled, its connect change never
+				# acknowledged. A port with a device set up on it
+				# that is present but no longer enabled is that
+				# device gone and back; it is set up again as an
+				# attach would be. xHCI only, as above (#679).
+				#
+				if(havexhci && now && devs[port] != "" && (status & HPenable) == 0){
+					sys->print("init: %s%s port %d: %s fell off the bus and came back; setting it up again\n",
+						indent, name, port, devs[port]);
+					detachdev(devs[port]);
+					devs[port] = portsetup(d, name, port, indent);
+				}
 				continue;
+			}
 			was[port] = now;
 
 			if(now){

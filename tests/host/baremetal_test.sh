@@ -5990,6 +5990,85 @@ fi
 vrefute "hotplug: nothing panics"                      "panic:"
 
 #
+# A device that drops off the bus and comes back between two of the
+# watcher's looks (one a second): present before, present after, and
+# the port it left disabled -- so every transfer after is a Transaction
+# Error and, until the watcher looked at the port's enable as well as
+# its presence, nothing ever set it up again. A Pi 5 soak lost its USB
+# Ethernet that way for the rest of the boot. Here a keyboard in a root
+# port is pulled and put back within a few milliseconds.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-bqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-blip.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-device", "usb-mouse,port=4", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if buf.find(what, start) >= 0:
+            return True
+        time.sleep(0.2)
+    return False
+def q(f, o):
+    f.write(json.dumps(o) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r:
+            return r
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def keys(f, text):
+    for ch in text:
+        q(f, {"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": QCODE.get(ch, ch.lower())}], "hold-time": 40}})
+        time.sleep(0.12)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"mouseusb: ep", 30)
+    time.sleep(3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw"); f.readline()
+    q(f, {"execute": "qmp_capabilities"})
+    mark = len(buf)
+    q(f, {"execute": "device_add", "arguments": {"driver": "usb-kbd", "id": "b1", "bus": "usb-bus.0", "port": "3"}})
+    waitfor(b"kbdusb: ep", 25, mark); time.sleep(1.5)
+    keys(f, "echo before-blip\n"); time.sleep(2)
+    mark = len(buf)
+    q(f, {"execute": "device_del", "arguments": {"id": "b1"}})
+    r = q(f, {"execute": "device_add", "arguments": {"driver": "usb-kbd", "id": "b2", "bus": "usb-bus.0", "port": "3"}})
+    print("BLIP-READD %s" % ("ok" if "return" in r else r))
+    waitfor(b"setting it up again", 20, mark)
+    waitfor(b"kbdusb: ep", 25, buf.find(b"setting it up again", mark) if buf.find(b"setting it up again", mark) >= 0 else mark)
+    time.sleep(1.5)
+    keys(f, "echo after-blip\n"); time.sleep(2)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-blip.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "hotplug: a keyboard in a root port works before the blip" "before-blip"
+if grep -aq '^BLIP-READD ok' <<<"$OUT"; then
+    vcheck "hotplug: a device gone and back between two looks is noticed" "fell off the bus and came back; setting it up again"
+    vcheck "hotplug: and set up again: keys typed on it reach the shell" "after-blip"
+else
+    skip "hotplug: QEMU would not put the keyboard back at once ($(grep -a '^BLIP-READD' <<<"$OUT"))"
+fi
+vrefute "hotplug: the blip panics nothing" "panic:"
+
+#
 # A keyboard in report protocol. Every boot keyboard is read with the
 # boot protocol unless it is asked otherwise, and QEMU offers no other
 # kind; "kbdusb=report" on the command line asks, so the report-

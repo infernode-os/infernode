@@ -250,6 +250,7 @@ struct Ctlr
 	Lock	txwinlock;	/* the flow-control pair, written by rproc */
 	Rendez	cmdr;
 	Rendez	joinr;
+	QLock	joinlock;	/* one join at a time: joinr has room for one sleeper */
 	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 	Block	*scanb;		/* the scan being assembled, one line per network */
@@ -2314,8 +2315,31 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
  * happened. The parameter block is the firmware's "join" iovar: the
  * ssid, a scan specification, and either one channel or none.
  */
+/*
+ * One join at a time. Each waits on joinr for the firmware's answer, and
+ * a Rendez holds one sleeper: a second join written while the first was
+ * waiting -- the supplicant re-associating after "link lost" while
+ * osinit's Wi-Fi watch asked for a join of its own -- panicked the kernel
+ * with "double sleep" (2026-10-14, the access point unplugged). The
+ * second now waits for the first to finish, then joins.
+ */
+static void wljoin1(Ctlr*, char*, int);
+
 static void
 wljoin(Ctlr *ctl, char *ssid, int chan)
+{
+	qlock(&ctl->joinlock);
+	if(waserror()){
+		qunlock(&ctl->joinlock);
+		nexterror();
+	}
+	wljoin1(ctl, ssid, chan);
+	qunlock(&ctl->joinlock);
+	poperror();
+}
+
+static void
+wljoin1(Ctlr *ctl, char *ssid, int chan)
 {
 	uchar params[72];
 	uchar *p;

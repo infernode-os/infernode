@@ -2041,7 +2041,7 @@ wifijoin(essid, pass: string)
 	sys->sleep(1000);
 	ifcno := wifiaddr();
 	if(ifcno != nil)
-		wifiwatch(ifcno);
+		wifiwatch(ifcno, essid);
 }
 
 #
@@ -2051,11 +2051,68 @@ wifijoin(essid, pass: string)
 # each time it finishes a handshake: one more than last time is a
 # re-join, and the address is asked for again.
 #
-wifiwatch(ifcno: string)
+wifiwatch(ifcno, essid: string)
 {
 	seen := keycount();
+	rx := rxcount();
+	quiet := 0;		# ms since the radio last delivered a frame
+	deaf := Deaf;		# how long that may last before joining again
+	sincejoin := Deaf;	# ms since this watcher last asked for a join
 	for(;;){
-		sys->sleep(10*1000);
+		sys->sleep(Livepoll);
+		sincejoin += Livepoll;
+
+		#
+		# A radio can be associated and hear nothing. An access point
+		# that restarts forgets its stations; the station learns it
+		# only when it next transmits and is turned away, and this
+		# board, with its wired interface on the same subnet, sends
+		# its replies out the wire: 31 frames on the radio in a day.
+		# So the firmware kept the access point's beacons, reported
+		# nothing, and the board was deaf on Wi-Fi from 10:20 until a
+		# join was asked for by hand at 21:30 (2026-10-11). The
+		# network is quiet at times, so silence alone proves
+		# nothing: after Probeafter of it the gateway is asked for
+		# its address, out of the radio, and a live link answers.
+		# After deaf of silence the network is joined again, as the
+		# supplicant itself does after "link lost"; the handshake
+		# that follows is counted below as a re-join, and the
+		# address is asked for again. A join that does not help
+		# makes the next wait twice as long, so a network that is
+		# simply gone is not joined every minute.
+		#
+		#
+		# Only a radio that says it is associated. One that says it is
+		# not has reported its loss, and the supplicant is already
+		# joining: this watch joining as well raced it (the kernel's
+		# "double sleep", before ether4330 took one join at a time)
+		# and, once the network was back, made a second join and a
+		# second address request (2026-10-14, the 5 GHz radio
+		# switched off at the router for five minutes).
+		#
+		r := rxcount();
+		if(wifistatus() != "associated"){
+			rx = r;
+			quiet = 0;
+		}else if(r != rx){
+			rx = r;
+			quiet = 0;
+			if(sincejoin > Deaf)
+				deaf = Deaf;	# heard, and not just the handshake a join brings
+		}else if(r >= 0){
+			quiet += Livepoll;
+			if(quiet >= deaf){
+				sys->print("init: wifi: nothing heard on %s for %d s; joining %s again\n",
+					Wifidev, quiet/1000, essid);
+				rejoin(essid);
+				quiet = 0;
+				sincejoin = 0;
+				if(deaf < Deafmax)
+					deaf *= 2;
+			}else if(quiet >= Probeafter)
+				arpprobe(ifcno);
+		}
+
 		n := keycount();
 		if(n <= seen){
 			seen = n;	# a supplicant restarted with a new log
@@ -2070,6 +2127,155 @@ wifiwatch(ifcno: string)
 		}else
 			sys->print("init: wifi: re-joined but no address\n");
 	}
+}
+
+Wifidev: con "/net/ether1";
+Livepoll: con 10*1000;
+Probeafter: con 30*1000;
+Deaf: con 60*1000;
+Deafmax: con 16*60*1000;
+
+# the driver's "status:" line in ifstats: associated, connecting, ...
+wifistatus(): string
+{
+	(st, nil) := slurp(Wifidev + "/ifstats");
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "status:")
+			return hd tl f;
+	}
+	return nil;
+}
+
+# frames the radio has delivered: "in: n" in its stats; -1 if unreadable
+rxcount(): int
+{
+	(st, nil) := slurp(Wifidev + "/stats");
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "in:")
+			return int hd tl f;
+	}
+	return -1;
+}
+
+# what the supplicant writes after "link lost": the firmware joins again
+rejoin(essid: string)
+{
+	fd := sys->open(Wifidev + "/clone", Sys->ORDWR);
+	if(fd == nil || sys->fprint(fd, "essid %s", essid) < 0)
+		sys->print("init: wifi: essid %s: %r\n", essid);
+}
+
+#
+# "Who has the gateway?", broadcast out of the radio itself rather than
+# wherever the routes would send it, from the radio's own address. Its
+# answer is a frame the radio delivers, which is all that is wanted.
+#
+arpprobe(ifcno: string)
+{
+	me := ifcaddr(ifcno);
+	gw := defaultgw();
+	mac := wifimac();
+	if(me == nil || gw == nil || mac == nil)
+		return;
+	fd := sys->open(Wifidev + "/clone", Sys->ORDWR);
+	if(fd == nil)
+		return;
+	b := array[16] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0 || sys->fprint(fd, "connect %d", 16r0806) < 0)
+		return;
+	(nil, conv) := sys->tokenize(string b[0:n], " \t\n");
+	if(conv == nil)
+		return;
+	data := sys->open(Wifidev + "/" + hd conv + "/data", Sys->OWRITE);
+	if(data == nil)
+		return;
+	f := array[14+28] of { * => byte 0 };
+	for(i := 0; i < 6; i++){
+		f[i] = byte 16rff;		# to everyone
+		f[6+i] = mac[i];
+		f[22+i] = mac[i];		# sender hardware address
+	}
+	f[12] = byte 16r08; f[13] = byte 16r06;	# ARP
+	f[15] = byte 1;				# Ethernet
+	f[16] = byte 16r08;			# IPv4
+	f[18] = byte 6; f[19] = byte 4;
+	f[21] = byte 1;				# a request
+	f[28:] = me;				# sender protocol address
+	f[38:] = gw;				# target protocol address
+	sys->write(data, f, len f);
+}
+
+# the interface's first IPv4 address, as 4 bytes
+ifcaddr(ifcno: string): array of byte
+{
+	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		l := hd lines;
+		if(l != "" && l[0] == '\t'){
+			(nil, f) := sys->tokenize(l, " \t");
+			return ip4(hd f);
+		}
+	}
+	return nil;
+}
+
+# the default route's gateway: "0.0.0.0 /96 <gateway> ..." in /net/iproute
+defaultgw(): array of byte
+{
+	(rt, nil) := slurp("/net/iproute");
+	(nil, lines) := sys->tokenize(rt, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf >= 3 && hd f == "0.0.0.0" && hd tl f == "/96")
+			return ip4(hd tl tl f);
+	}
+	return nil;
+}
+
+wifimac(): array of byte
+{
+	(a, nil) := slurp(Wifidev + "/addr");
+	if(len a < 12)
+		return nil;
+	m := array[6] of byte;
+	for(i := 0; i < 6; i++){
+		hi := hexval(a[2*i]);
+		lo := hexval(a[2*i+1]);
+		if(hi < 0 || lo < 0)
+			return nil;
+		m[i] = byte (hi<<4 | lo);
+	}
+	return m;
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+ip4(s: string): array of byte
+{
+	(n, f) := sys->tokenize(s, ".");
+	if(n != 4)
+		return nil;
+	b := array[4] of byte;
+	for(i := 0; i < 4; i++){
+		b[i] = byte int hd f;
+		f = tl f;
+	}
+	return b;
 }
 
 keycount(): int

@@ -50,7 +50,7 @@ namespace policy*, not as bolted-on subsystems.
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **NIST SP 800-63B AAL3** | Hardware authenticator + verifier-impersonation resistance | FIDO2 key + **UV (PIN)** + touch via factotum (the PIV/CAC model) | 1 |
-| **FIDO2 / CTAP2 / WebAuthn** | Origin-bound, phishing-resistant | `#F`/`/dev/2fa` device + `twofa` (built); generalize to auth surfaces | 0→1 |
+| **FIDO2 / CTAP2 / WebAuthn** | Origin-bound, phishing-resistant | `#h`/`/dev/2fa` device + `twofa` (built); generalize to auth surfaces | 0→1 |
 | **OMB M-22-09 / EO 14028 — phishing-resistant MFA** | FIDO2/WebAuthn or PIV; no replayable shared secret | **Shipped**: hardware-key login (UV + touch) is phishing-resistant by construction — credential-bound `hmac-secret`, nothing replayable ever leaves the key | 1 |
 | **FIPS 201 PIV / SP 800-157 Derived PIV** | Smartcard identity; mobile derived creds | PIV applet via factotum; derived PIV on the NFC key + `/phone` bridge | 1 |
 | **X.509 / mTLS** | Authenticated encrypted transport | `devssl` + 9P-over-TLS, uniform | 0 |

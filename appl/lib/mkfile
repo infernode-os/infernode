@@ -110,6 +110,9 @@ TARG=\
 	names.dis\
 	nametree.dis\
 	newns.dis\
+	nmea.dis\
+	gdl90.dis\
+	garminav.dis\
 	ninep.dis\
 	oldauth.dis\
 	parseman.dis\
@@ -188,6 +191,8 @@ TARG=\
 	bioauth.dis\
 	keyringinst.dis\
 	softkbd.dis\
+	kbdecode.dis\
+	osklayout.dis\
 	viewport.dis\
 
 
@@ -283,6 +288,9 @@ SYSMODULES=\
 	msgio.m\
 	names.m\
 	newns.m\
+	nmea.m\
+	gdl90.m\
+	garminav.m\
 	oldauth.m\
 	pkcs.m\
 	plumbing.m\
@@ -360,6 +368,8 @@ SYSMODULES=\
 	scoretable.m\
 	selectfile.m\
 	softkbd.m\
+	kbdecode.m\
+	osklayout.m\
 	tabs.m\
 	tkclient.m\
 	tls.m\
@@ -367,6 +377,7 @@ SYSMODULES=\
 	wmdeb.m\
 	post9p.m\
 	appfs.m\
+	keyboard.m\
 	sdg.m\
 
 

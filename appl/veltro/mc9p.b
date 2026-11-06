@@ -7,6 +7,7 @@ implement Mc9p;
 # Write request to file, read response from file.
 #
 # Example:
+#   mc9p -r /srv/model-input fs
 #   echo "https://example.com" > /mnt/mcp/http/get
 #   cat /mnt/mcp/http/get  -> HTTP response body
 #
@@ -90,6 +91,7 @@ providername := "mc9p";
 providerversion := "1.0";
 mountpt := "/mnt/mcp";	# application mount point — we author the schema (docs/NAMESPACE-LAYOUT.md)
 hasnet := 0;
+fsroot: string;
 
 nomod(s: string)
 {
@@ -99,10 +101,11 @@ nomod(s: string)
 
 usage()
 {
-	sys->fprint(stderr, "Usage: mc9p [-D] [-m mountpoint] [-n] domain [domain ...]\n");
+	sys->fprint(stderr, "Usage: mc9p [-D] [-m mountpoint] [-n] [-r fsroot] domain [domain ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /mnt/mcp)\n");
 	sys->fprint(stderr, "  -n            Enable network access (for http domain)\n");
+	sys->fprint(stderr, "  -r fsroot     Clamp fs endpoints to this directory (required for fs)\n");
 	sys->fprint(stderr, "\n");
 	sys->fprint(stderr, "Available domains:\n");
 	sys->fprint(stderr, "  http  - HTTP client (get, post, headers)\n");
@@ -144,6 +147,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'D' =>	styxservers->traceset(1);
 		'm' =>	mountpt = arg->earg();
 		'n' =>	hasnet = 1;
+		'r' =>	fsroot = strip(arg->earg());
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -158,6 +162,17 @@ init(nil: ref Draw->Context, args: list of string)
 	if(domains == nil) {
 		sys->fprint(stderr, "mc9p: no valid domains specified\n");
 		raise "fail:no domains";
+	}
+	if(finddomain("fs") != nil) {
+		if(!validabspath(fsroot) || fsroot == "/") {
+			sys->fprint(stderr, "mc9p: fs requires a non-root absolute -r directory\n");
+			raise "fail:fs root";
+		}
+		(ok, d) := sys->stat(fsroot);
+		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
+			sys->fprint(stderr, "mc9p: invalid fs root %s: %r\n", fsroot);
+			raise "fail:fs root";
+		}
 	}
 
 	sys->pctl(Sys->FORKFD, nil);
@@ -189,6 +204,9 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "mc9p: mount failed: %r\n");
 		raise "fail:mount";
 	}
+	# The server has attached every device it needs. Refuse later host-device
+	# walks so a symlink inside fsroot cannot escape the lexical root clamp.
+	sys->pctl(Sys->NODEVS, nil);
 }
 
 # Initialize domains from argument list
@@ -623,6 +641,8 @@ exechttp(endpoint, request: string): string
 execfs(endpoint, request: string): string
 {
 	path := strip(request);
+	if(!validabspath(path) || !pathwithin(fsroot, path))
+		return "error: path outside configured fs root";
 
 	case endpoint {
 	"read" =>
@@ -633,6 +653,29 @@ execfs(endpoint, request: string): string
 		return statpath(path);
 	}
 	return "error: unknown endpoint";
+}
+
+validabspath(path: string): int
+{
+	if(path == nil || len path == 0 || path[0] != '/')
+		return 0;
+	start := 1;
+	for(i := 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			part := path[start:i];
+			if(part == "" || part == "." || part == "..")
+				return 0;
+			start = i + 1;
+		}
+	}
+	return 1;
+}
+
+pathwithin(root, path: string): int
+{
+	if(path == root)
+		return 1;
+	return len path > len root && path[0:len root] == root && path[len root] == '/';
 }
 
 # HTTP GET request

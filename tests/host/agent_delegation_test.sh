@@ -228,7 +228,7 @@ waitfor 0 'Was told to grant it'
 echo 'SCENARIO:backend_down go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Model unavailable'
 
-echo 'SCENARIO:step_cap go' > /mnt/ui/activity/0/conversation/input
+echo 'SCENARIO:slow_loop go' > /mnt/ui/activity/0/conversation/input
 sleep 4
 echo 'SCENARIO:text_only typed during the turn' > /mnt/ui/activity/0/conversation/input
 sleep 2

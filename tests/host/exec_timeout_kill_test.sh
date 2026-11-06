@@ -27,9 +27,10 @@ set -u
 fails=0
 E="$ROOT/appl/veltro/tools/exec.b"
 grep -q 'sys->pctl(Sys->NEWPGRP, nil)'          "$E" || { echo "FAIL: exec.b worker is not a process-group leader"; fails=$((fails+1)); }
-grep -q 'killtree(workerpid)'                   "$E" || { echo "FAIL: exec.b does not kill the worker tree when still running"; fails=$((fails+1)); }
-grep -q 'killtree(pid: int)'                    "$E" || { echo "FAIL: exec.b has no killtree helper"; fails=$((fails+1)); }
+grep -q 'killtree(groupctl)'                    "$E" || { echo "FAIL: exec.b does not kill the worker tree on return"; fails=$((fails+1)); }
+grep -q 'killtree(ctl: ref Sys->FD)'            "$E" || { echo "FAIL: exec.b has no retained-control killtree helper"; fails=$((fails+1)); }
 grep -q '"killtree"'                            "$E" || { echo "FAIL: exec.b killtree does not write the killtree control message"; fails=$((fails+1)); }
+grep -Fq "c == '&'"                            "$E" || { echo "FAIL: exec.b does not reject shell backgrounding"; fails=$((fails+1)); }
 [ "$fails" -eq 0 ] && echo "PASS: source contract (exec.b kills the worker tree on timeout/overrun)"
 
 [ -x "$EMU" ] || { echo "SKIP: emu not found at $EMU"; [ "$fails" -eq 0 ] && exit 0 || exit 1; }

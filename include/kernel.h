@@ -10,6 +10,8 @@ extern	void*	libqlalloc(void);
 extern	void	libqlfree(void*);
 extern	void	libqlock(void*);
 extern	void	libqunlock(void*);
+extern	void	libqlockproc(void*);
+extern	void	libqunlockproc(void*);
 extern	void*	libqlowner(void*);
 extern	void*	libfdtochan(int, int);
 extern	void	libchanclose(void*);

@@ -83,6 +83,19 @@ struct Vq
 	int	nfree;
 	u16int	lastused;	/* how far into used->ring we have read */
 	void	*cookie[Vqmax];	/* per chain, by head: whatever the driver passed */
+
+	/*
+	 * The driver's own copy of what it put in the shared structures,
+	 * which the device can write: the descriptors' links (the free
+	 * list's and each chain's), each chain's length by head, and which
+	 * heads are the device's now. A used entry is checked against
+	 * these, and a chain freed by them, never by what the device left
+	 * in desc[] (see vqcollect).
+	 */
+	u16int	snext[Vqmax];
+	uchar	nchain[Vqmax];
+	uchar	busy[Vqmax];
+	ulong	nbogus;		/* used entries refused */
 };
 
 struct Vdev

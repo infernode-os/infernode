@@ -641,7 +641,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags sysstat sysname user jit` … | both |
 | `#S` | `/dev` | `sdcard` (the whole device), `sdctl`, and one file per named range | both |
 | `#B` | `/dev` | `bootimage` (the running kernel, byte for byte), `bootargs` | both |
-| `#b` | `/dev` | `busec` — microseconds, for timing things honestly | both |
+| `#x` | `/dev` | `busec` — microseconds, for timing things honestly | both |
 | `#m` | `/dev` | `pointer` | both |
 | `#i` | — | the draw device. **Not bound at boot**: attaching it takes the screen from the text console. `bind '#i' /dev` when you mean it. | both |
 | `#l` | `/net/ether0` | `clone addr stats ifstats n/{data,ctl,type}` — wired Ethernet | both |
@@ -654,6 +654,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
 | `#V` | `/dev/camera/` | `ctl` (`source`, `mode W H`, `fps N`, `stream on\|off`; read for the state), `modes`, `frame` (one frame an open, an uncompressed `image(6)`), `raw` (the same, Bayer samples). Only the simulated sensor so far: a test pattern, as a Camera Module 3 would deliver it | both |
+| `#X` | `/dev/vm` | `ctl`, and `N/run`, `N/status` for each Dis VM: `vm(3)` | both |
 | `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
 
 **The camera** (`os/port/devcam.c`, infernode-os/infernode#1005) has one

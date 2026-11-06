@@ -67,6 +67,7 @@
 | [xenith-window-manipulation.md](xenith-window-manipulation.md) | Xenith window manipulation API at `/mnt/xenith` |
 | [xenith-tempfiles.md](xenith-tempfiles.md) | How Xenith and Acme manage their temporary buffer files |
 | [NODE-INTEROP-TESTING.md](NODE-INTEROP-TESTING.md) | Node-to-node interoperability testing: cert auth and post-quantum transport |
+| [9FRONT-SECURITY-AUDIT.md](9FRONT-SECURITY-AUDIT.md) | Pinned source-by-source audit of applicable 9front security fixes |
 | [veltro-llm-bridge-bug-taxonomy.md](veltro-llm-bridge-bug-taxonomy.md) | Catalogue of defect classes in the Anthropic/OpenAI LLM bridge |
 
 ## Wallet & Payments

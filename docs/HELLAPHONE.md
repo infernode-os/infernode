@@ -234,7 +234,7 @@ bind -ac /n/host/termux-home /n/home
 # storage permission). /n/home serves your Termux $HOME. /n/host
 # stays available for the whole -r tree if you want it.
 
-listen -A 'tcp!*!17564' {exportfs -r /} &
+listen -k /usr/$user/keyring/default 'tcp!*!17564' {exportfs -r /} &
 # Keep the kernel alive — `listen` is in the background, and
 # without something blocking in the foreground the shell would
 # exit and emu with it.
@@ -323,18 +323,18 @@ From inside any other InferNode (host laptop, Jetson, whatever):
   (as in the recipe above) to widen the surface deliberately, one
   path at a time.
 
-* **There is no authentication on the listener as written.** Anyone
-  who can TCP-connect to the port reads (and writes — `exportfs` is
-  read-write by default) the exported namespace. For a dev machine
-  on a private network this is usually fine. For anything else,
-  wrap the listener in TLS and require a client cert:
+* **The listener requires keyring authentication.** Anyone admitted by that
+  signer can read and write the exported namespace (`exportfs` is read-write
+  by default), so give this service a dedicated signer or export a narrower
+  root. Do not weaken it to `-A`, even on a development LAN:
 
   ```
-  # Inferno-side — pseudo, requires factotum + cert setup
-  listen -A -s 'tcp!*!17564' tls {... exportfs -r /n/host}
+  listen -k /usr/$user/keyring/default 'tcp!*!17564' {exportfs -r /n/host}
   ```
 
-  And mount client-side via `mount -A 'tls!host!port'`.
+  Mount client-side with `mount -k /usr/$user/keyring/default
+  'tcp!host!17564' /n/phone`. Certificate provisioning is described in
+  [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md#certificate-setup).
 
 * **Termux's own permission boundary still applies.** Even if you
   mount everything from your client, you can only read paths Termux
@@ -491,17 +491,17 @@ phone, but the bytes travel across the wire to the radio.
 On the **phone**, export `/phone` over a TCP port:
 
 ```
-; listen -A 'tcp!*!17564' {export /phone} &
+; listen -k /usr/$user/keyring/default 'tcp!*!17564' {export /phone} &
 ```
 
-(Wrap in TLS + a keyring listener for anything beyond a private dev
-network. The token `17564` matches the Phase 0 daemon recipe at the
+(The keyring is mandatory even on a private development network. The token
+`17564` matches the Phase 0 daemon recipe at the
 top of this document; pick any free port.)
 
 On the **desktop** (Mac or Linux InferNode), mount it:
 
 ```
-; mount -A 'tcp!<phone-ip>!17564' /phone
+; mount -k /usr/$user/keyring/default 'tcp!<phone-ip>!17564' /phone
 ; cat /phone/status
 ; echo 'send +44... hello' > /phone/sms
 ```

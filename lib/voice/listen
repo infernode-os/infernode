@@ -23,6 +23,8 @@ if {~ $#port 0} {
 	port=7070
 }
 addr='tcp!*!'$port
+user=`{cat /dev/user}
+key='/usr/'^$user^'/keyring/default'
 
 # devaudio onto /dev (idempotent — bind -a is a no-op if already there)
 bind -a '#A' /dev
@@ -36,7 +38,7 @@ echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 
 # Build a fresh, two-file export instead of handing a remote peer /dev.
 mkdir -p /tmp/voice-export
-mount {memfs} /tmp/voice-export
+memfs /tmp/voice-export
 touch /tmp/voice-export/audio /tmp/voice-export/audioctl
 bind /dev/audio /tmp/voice-export/audio
 bind /dev/audioctl /tmp/voice-export/audioctl
@@ -50,7 +52,7 @@ bind /dev/audioctl /tmp/voice-export/audioctl
 # the export worker can't reach a usable SDL state on macOS even
 # with SDL_Init / SDL_QuitSubSystem / SDL_Init retry.
 echo 'voice/listen:' $addr 'exporting authenticated audio/audioctl (pre-warmed)'
-listen $addr {
+listen -k $key $addr {
 	{sleep 99999 > /dev/audio} &
 	{sleep 99999 < /dev/audio > /dev/null} &
 	sleep 1

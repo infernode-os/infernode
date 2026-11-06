@@ -44,6 +44,7 @@ Maxerr:		con 100;	# consecutive failed reads before giving up
 Framelen:	con 64;
 Maxpoints:	con 10;
 Consumed:	con 99;
+Evlift:		con 1;		# a point's event: 0 down, 1 up, 2 contact
 Width:		con 800;
 Height:		con 480;
 
@@ -66,8 +67,59 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->print("touch: cannot open /dev/pointer: %r\n");
 		return;
 	}
+	# Every finger, for a program that needs them all (a keyboard on
+	# the screen typed with two thumbs): /dev/fingers, pointer(3).  A
+	# kernel without it still has the pointer.
+	fingers = sys->open("/dev/fingers", Sys->OWRITE);
 	sys->print("touch: ready, polling /dev/touch every %dms\n", Pollms);
 	poll(fd, ptr);
+}
+
+fingers: ref Sys->FD;
+Maxid: con 16;			# touch ids are four bits
+fon := array[Maxid] of {* => 0};
+fx := array[Maxid] of {* => 0};
+fy := array[Maxid] of {* => 0};
+
+#
+# The frame's points to /dev/fingers: each id on the panel at its
+# place, and each id that was and is not, or whose event is a lift,
+# lifted.  The panel's ids are the fingers' for as long as they touch.
+#
+postfingers(buf: array of byte, np: int)
+{
+	if(fingers == nil)
+		return;
+	seen := array[Maxid] of {* => 0};
+	for(i := 0; i < np; i++){
+		(x, y, id, ev) := decode(buf, i);
+		if(x < 0 || id < 0 || id >= Maxid)
+			continue;
+		if(ev == Evlift)
+			continue;
+		seen[id] = 1;
+		if(!fon[id] || fx[id] != x || fy[id] != y){
+			fon[id] = 1;
+			fx[id] = x;
+			fy[id] = y;
+			postfinger(id, x, y, 1);
+		}
+	}
+	for(id := 0; id < Maxid; id++)
+		if(fon[id] && !seen[id]){
+			fon[id] = 0;
+			postfinger(id, fx[id], fy[id], 0);
+		}
+}
+
+postfinger(id, x, y, on: int)
+{
+	s := sys->sprint("f%d %d %d %d", id, x, y, on);
+	a := array of byte s;
+	if(sys->write(fingers, a, len a) < 0){
+		sys->print("touch: write to /dev/fingers failed: %r\n");
+		fingers = nil;
+	}
 }
 
 poll(fd, ptr: ref Sys->FD)
@@ -93,6 +145,7 @@ poll(fd, ptr: ref Sys->FD)
 			continue;
 		if(np > Maxpoints)
 			continue;	# torn or garbage frame; the next one is 16ms away
+		postfingers(buf, np);
 		if(np == 0){
 			if(down){
 				if(!post(ptr, lastx, lasty, 0))

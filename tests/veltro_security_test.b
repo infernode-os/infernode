@@ -2313,6 +2313,21 @@ invalidGrantPathsWorker(result: chan of string)
 	sys->pctl(Sys->FORKNS, nil);
 
 	bad := array[] of {
+		"/mnt",
+		"/chan",
+		"/chan/snarf",
+		"/fd",
+		"/fd/0",
+		"/usr",
+		"/usr/inferno/keyring",
+		"/usr/inferno/secstore",
+		"/mnt/toolctl.7",
+		"/tool.7",
+		"/MNT",
+		"/Mnt/msg/approve",
+		"/CHAN",
+		"/FD/0",
+		"/tmp/veltro/COW",
 		"/",
 		"/n/local/project/../secret",
 		"/n/local/project/./secret",

@@ -1,0 +1,95 @@
+#!/bin/bash
+#
+# sanemu -- build the hosted emulator with AddressSanitizer and
+# UndefinedBehaviorSanitizer, and run it.
+#
+#	tools/sanemu build		build $ROOT/tmp/sanemu/o.emu
+#	tools/sanemu run EMUARGS...	run it, as emu/Linux/o.emu is run
+#	tools/sanemu env		print the sanitizer settings it runs with
+#
+# The C sources (as they are in the tree, edits and all) are copied to
+# $ROOT/tmp/sanemu/src and built there with -fsanitize=address,undefined
+# and -DSANMALLOC, which gives C's own allocations to the sanitizer's
+# allocator (emu/port/alloc.c): a pool knows no block's bounds, so an
+# overrun or a use after free in the kernel's C was never seen. The Dis
+# heap and images stay in their pools. The instrumented emu runs against
+# the tree's own dis/ (-r$ROOT), so build that first, as for o.emu.
+#
+# It runs with ASAN_OPTIONS that leave SIGSEGV, SIGBUS and SIGFPE to emu
+# (a nil dereference and a zero divide in compiled code are its own
+# traps), zero-fill every allocation (Inferno's malloc does, and C code
+# here relies on it), and report into $SANLOG (default
+# $ROOT/tmp/sanemu/log/) one file per process, so a run's findings stay
+# when the run is long or killed. UBSan reports and goes on; ASan stops
+# the process at the first error, with its report.
+#
+# Linux amd64 and arm64, with gcc or clang (CC). The build takes a few
+# minutes; the instrumented emu runs two to four times slower.
+#
+set -e
+
+ROOT=${ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+case "$(uname -m)" in
+x86_64|amd64)	OBJTYPE=amd64 ;;
+aarch64|arm64)	OBJTYPE=arm64 ;;
+*)		echo "sanemu: $(uname -m): no build" >&2; exit 2 ;;
+esac
+[ "$(uname -s)" = Linux ] || { echo "sanemu: Linux only" >&2; exit 2; }
+
+S=$ROOT/tmp/sanemu
+SRC=$S/src
+SANLOG=${SANLOG:-$S/log}
+CC=${CC:-gcc}
+SANFLAGS="-fsanitize=address,undefined -fno-sanitize=alignment -fno-omit-frame-pointer -DSANMALLOC"
+
+sanenv() {
+	mkdir -p "$SANLOG"
+	export ASAN_OPTIONS="handle_segv=0:handle_sigbus=0:handle_sigfpe=0:allow_user_segv_handler=1:malloc_fill_byte=0:max_malloc_fill_size=2147483647:detect_leaks=0:log_path=$SANLOG/asan:log_exe_name=1:abort_on_error=0:detect_stack_use_after_return=0"
+	export UBSAN_OPTIONS="print_stacktrace=1:log_path=$SANLOG/ubsan:halt_on_error=0"
+}
+
+build() {
+	mk=$ROOT/Linux/$OBJTYPE/bin/mk
+	[ -x "$mk" ] || { echo "sanemu: no $mk: build the tree first" >&2; exit 2; }
+	mkdir -p "$SRC"
+	# the C the emulator is made of, as it is in the working tree
+	dirs="include Linux/$OBJTYPE/include mkfiles mkconfig utils/include lib9 libbio libmp libsec libmath libfreetype libmemdraw libmemlayer libdraw libtk libinterp libkeyring emu/port emu/Linux module port"
+	(cd "$ROOT" && git ls-files -co --exclude-standard -- $dirs | tar -cf - -T -) | (cd "$SRC" && tar -xf -)
+	mkdir -p "$SRC/Linux/$OBJTYPE/bin" "$SRC/Linux/$OBJTYPE/lib"
+	cp "$mk" "$ROOT/Linux/$OBJTYPE/bin/limbo" "$SRC/Linux/$OBJTYPE/bin/"
+	# the sanitizer's flags, compiling and linking; FORTIFY is the
+	# sanitizer's job now and the two quarrel
+	m=$SRC/mkfiles/mkfile-Linux-$OBJTYPE
+	sed -i -e 's/-D_FORTIFY_SOURCE=2//' \
+		-e "s|^CC=.*|CC=		$CC -c|" \
+		-e "s|^LD=.*|LD=		$CC|" "$m"
+	printf 'CFLAGS=$CFLAGS %s\nLDFLAGS=$LDFLAGS -fsanitize=address,undefined\n' "$SANFLAGS" >>"$m"
+	export ROOT=$SRC SYSHOST=Linux OBJTYPE SYSTARG=Linux SHELL=/bin/sh SHELLNAME=sh AWK=awk
+	export PATH=$SRC/Linux/$OBJTYPE/bin:$PATH
+	for l in lib9 libbio libmp libsec libmath libfreetype libmemdraw libmemlayer libdraw libtk libinterp libkeyring; do
+		[ -d "$SRC/$l" ] || continue
+		echo "sanemu: $l"
+		(cd "$SRC/$l" && mk install >"$S/build-$l.log" 2>&1) || { echo "sanemu: $l failed: $S/build-$l.log" >&2; tail -20 "$S/build-$l.log" >&2; exit 1; }
+	done
+	echo "sanemu: emu"
+	(cd "$SRC/emu/Linux" && rm -f *.o o.emu && mk -f mkfile-g >"$S/build-emu.log" 2>&1) || { echo "sanemu: emu failed: $S/build-emu.log" >&2; tail -20 "$S/build-emu.log" >&2; exit 1; }
+	cp "$SRC/emu/Linux/o.emu" "$S/o.emu"
+	echo "sanemu: built $S/o.emu"
+}
+
+case "$1" in
+build)
+	build ;;
+run)
+	shift
+	[ -x "$S/o.emu" ] || { echo "sanemu: no $S/o.emu: tools/sanemu build" >&2; exit 2; }
+	sanenv
+	exec "$S/o.emu" "$@" ;;
+env)
+	sanenv
+	echo "ASAN_OPTIONS=$ASAN_OPTIONS"
+	echo "UBSAN_OPTIONS=$UBSAN_OPTIONS" ;;
+*)
+	echo "usage: tools/sanemu build | run EMUARGS... | env" >&2
+	exit 2 ;;
+esac

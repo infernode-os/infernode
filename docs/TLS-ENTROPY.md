@@ -6,10 +6,10 @@ Inferno's cons driver (`#c`) serves two entropy devices:
 
 | Device | Implementation | Throughput | Use case |
 |--------|---------------|------------|----------|
-| `#c/random` | Timing jitter between two kprocs | ~80ms/byte | Bare-metal Inferno |
-| `#c/notquiterandom` | `prng()` in `libsec/prng.c` | nanoseconds/byte | emu on macOS/Linux |
+| `#c/random` | Timing jitter between two kprocs (emu); the board's hardware generator (bare metal) | ~80ms/byte (emu) | Bare-metal Inferno |
+| `#c/notquiterandom` | `prng()` in `libsec/prng.c` (emu); the hardware generator (bare metal) | nanoseconds/byte | emu on macOS/Linux, and bare metal |
 
-## How `#c/random` works
+## How `#c/random` works in emu
 
 Two kernel processes run concurrently: `genrandom` spins counting a free-running
 counter, and `randomclock` wakes every 20ms and samples that counter.  The timing
@@ -19,8 +19,7 @@ scheduler jitter on real hardware is unpredictable.
 One byte is written to the ring buffer every 4 clock ticks (80ms).  Generating
 64 bytes of key material (two 32-byte values for a TLS handshake) takes ~5 seconds.
 
-On bare-metal Inferno this is appropriate: there is no OS underneath providing
-a better source, and the jitter is real.
+The bare-metal kernels no longer do this; see "Bare-metal Inferno" below.
 
 ## How `#c/notquiterandom` works
 
@@ -63,21 +62,33 @@ startup latency without improving entropy quality.
 
 ## Bare-metal Inferno
 
-On the bare-metal kernels (`os/`), both files come from the board's
-hardware generator, `hwrandom()`, which every board's `random.c` supplies:
+On the bare-metal kernels (`os/`), both files, and libsec's key
+generators, are served by one generator in `os/port/random.c`, keyed from
+the board's hardware generator `hwrandom()` alone (the Pi 3's in
+`os/bcm2837/random.c`, the Pi 4's and Pi 5's RNG200 in `os/bcm/rng200.c`,
+virtio-rng on QEMU's virt):
 
-- `#c/notquiterandom` calls the board's `genrandom()` (`os/port/devcons.c`).
-  It does not pad a short read: it waits until the hardware has produced
-  every byte, printing on the console every few seconds while it waits
-  (e.g. `os/bcm2837/random.c`, `os/virt/random.c`). The board's `prng()`,
-  which libsec calls, delegates to the same `genrandom()`.
-- `#c/random` is `randomread()` (`os/port/random.c`): a 1 KB pool primed
-  from `hwrandom()` at boot and refilled from it by a background kproc.
-  Upstream's clock-jitter producer is still linked but no longer feeds
-  the pool.
+- It is ChaCha20 with "fast key erasure", the construction libsec's hosted
+  `genrandom.c` and 9front use: each request first takes 32 bytes of
+  keystream as the next key and forgets the state it came from, so what a
+  request returned cannot be recovered from memory afterwards.
+- Its key is SHA-256 of 32 bytes of the old stream and 32 bytes from the
+  hardware, renewed every second or every megabyte. Until the first 32
+  hardware bytes have come, nothing is returned: readers wait, and the
+  console says why every five seconds. If the hardware goes dry the old
+  key serves for at most ten minutes, then readers wait again.
+- A machine with no generator makes no key. `hwrandom()` says so (-1)
+  rather than make bytes up, and every reader waits, saying why, unless
+  the boot command line holds `insecurerandom`, which keys the generator
+  from a labelled counter for an emulator with nothing better. A Dis
+  program waiting in a key generator lets go of the VM while it waits.
+- ChaCha20 is checked against RFC 8439's test vector before its first use.
+- `#c/notquiterandom` (`genrandom()`) and `#c/random` (`randomread()`) are
+  the same generator; the two names stay for what reads them. On a Pi 5
+  it gives about 236 MB/s in 64 KB reads, and 7 µs a 32-byte read.
 
 So the order in `tls.b` is right on bare metal too: `#c/notquiterandom`
-opens and is backed by the hardware generator.
+opens and is the kernel's generator.
 
 ## Performance impact
 
@@ -94,6 +105,7 @@ reuse TLS 1.3 session tickets and take only network RTT (~100ms).
 
 ## References
 
-- `emu/port/random.c` — `#c/random` implementation and design comments
+- `emu/port/random.c` — emu's `#c/random` implementation and design comments
+- `os/port/random.c` — the bare-metal pool, `genrandom`, `prng`, `prngtry`
 - `libsec/prng.c` — `prng()` platform implementations
 - `appl/lib/crypt/tls.b` — entropy selection in `init()` and `randombuf()`

@@ -1,0 +1,60 @@
+.TH SOFTKBD 2
+.SH NAME
+softkbd \- ask for a keyboard on the screen
+.SH SYNOPSIS
+.EX
+include "softkbd.m";
+softkbd := load Softkbd Softkbd->PATH;
+
+init:       fn(): string;
+show:       fn(mode: int);
+set_rect:   fn(x, y, w, h: int);
+clear_rect: fn();
+mode:       fn(prose: int);
+.EE
+.SH DESCRIPTION
+A program whose text field takes the keyboard, on a screen with no
+keyboard of the machine's, asks for one on the screen with
+.IR softkbd .
+.B Show
+with
+.B SLIDE
+(a field at the bottom of the screen: the view may be moved up to keep
+it above the keyboard) or
+.B KEEPTOP
+(a field filling the screen: the top stays) asks for it;
+.B HIDE
+says no field has the keyboard.
+.B Set_rect
+says where the field is, in screen pixels, for a keyboard the view must
+be moved above;
+.B clear_rect
+takes that back.
+.B Mode
+says what the field holds: prose (1), whose words a keyboard may put
+right and capitalise, or not (0: a shell's commands, code).
+.PP
+The requests are InferNode's own keyboard's
+.RI ( wm-osk (1),
+its files at
+.BR /mnt/osk ,
+.IR osk (4)):
+.BR show ,
+.BR hide ,
+.BR rect ,
+.BR mode .
+With it not running they are
+.BR /dev/consctl 's
+.B kbd
+verbs, which do nothing: the system's keyboard (iOS's, Android's) is
+never shown, whatever asks for it (the emulator's SDL backend sees to
+that), and
+.B mode
+is not sent.  The environment variable
+.B SOFTKBD_PATH
+names another file for them, for a test.
+.SH SOURCE
+.B /appl/lib/softkbd.b
+.SH SEE ALSO
+.IR wm-osk (1),
+.IR osk (4)

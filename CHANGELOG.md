@@ -6,6 +6,58 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
+  `/prog` (#1019).** Lucifer looked for an app's main process every
+  half second, then read every process's status every half second
+  until none was in the app's group; closing a task polled the same way
+  for up to three seconds. A read of the new `grpwait` file (prog(3))
+  waits until the process group has no process left, in the emulator
+  and the native kernel alike; Lucifer opens it once the app has its
+  group and waits on it.
+- **An activity's `event` file has a queue for each reader; the task
+  tool's Apply and Discard wait on it (#1019).** luciuisrv let one
+  reader wait on `activity/N/event` at a time: a second reader ended
+  the first's read, and an event went to one of them. So the task tool,
+  after sending a task `/promote` or `/revert`, re-read the task's
+  conversation every quarter second for its answer. Each open now has
+  its own queue, as the global `event` file's always had; events with
+  no reader still wait for the first to open the file, and what the
+  last reader leaves unread waits for the next. The task tool waits on
+  the task's events for its answer, five seconds at most as before.
+- **A payment's requester waits on its read for the decision; nothing
+  polls (#1019).** x402's `authorize` (payfetch) re-read its fid every
+  two seconds, for up to 90, while a payment waited for a person to
+  approve it. A fid told `pending:<id>` that reads `pay` or `authorize`
+  again at offset 0 now waits until the payment is approved, denied or
+  expires, and gets the outcome; the first read still gives the id at
+  once, and a read at another offset does not wait. x402 makes that
+  read under its time limit, and hears a denial as it is made.
+- **A service that does not answer no longer stops Settings or llmsrv.**
+  Settings' panels read llmsrv, factotum, msg9p and audit in its one
+  loop; each read, write and stat now has its own proc and a time limit,
+  and the status line names what did not answer. llmsrv asked the backend
+  for `models` in its serve loop, stopping every session behind a slow
+  one; it now does so as it does for `ask`.
+- **Delete on Matrix takes what it hosts; Delete on Task no longer takes
+  wm/wm.** A composition's hosted programs (wm/scene in `scene-demo`) run
+  in groups of their own, so Matrix's exit left them, holding the window
+  with nothing left to take a Delete. wm/task and wm/dir never made a
+  process group of their own, so an exit killed the group they were
+  started in, wm's among them.
+- **Quitting a program leaves nothing of it running.** wm/about, colors,
+  dir, fractals, ftree, keyring, man and wallet ended only their main
+  proc on their own Quit (wm/dir on Delete too), leaving their theme
+  watchers; wm/shell's Delete missed its own. In ftree and shell that
+  also kept their posted files alive.
+- **Settings no longer freezes on its Theme panel, and Delete takes the
+  window of a program that has frozen.** `event`, served in the theme
+  directory since themefs, was listed as a theme: loading it read a file
+  that waits for the next switch, in Settings' main loop, so the Theme
+  panel never came back (and Xenith's `Theme` would have stopped on it).
+  wm/wm's Delete only asks a program to exit, and a stuck one never
+  hears: if the exit is not taken in two seconds the window now leaves
+  the screen. The program itself is not killed (wm does not know its
+  process); it takes the exit if it ever wakes.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's
@@ -169,6 +221,41 @@ All notable changes to InferNode are documented in this file.
   `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
   `wm/edit`'s.
 
+### Security
+
+- **Bare metal: a key is made only from a hardware generator.** A board
+  with no working generator (the Pi 4's RNG200 not answering, the
+  PolarFire's nonce service refusing, a QEMU virt without virtio-rng)
+  handed libsec's key generators, `#c/notquiterandom` and `#c/random` a
+  counter stirred with the time, after one line on the console; the
+  PolarFire did the same, silently, if its service stopped after boot.
+  On a board that means a driver or address map at fault, and on a Pi 5,
+  which no emulator models, it could only mean that. Now `hwrandom`
+  never makes bytes up: it says -1 when there is no generator, and
+  `genrandom`, `prng` and `prngtry`, which every board copied, are
+  `os/port/random.c`'s, waiting for real bytes and saying why every five
+  seconds (`prngtry` answers -1 at once, as libsec.h says). The kernel
+  still boots and its network still works: nrand, for port and sequence
+  numbers, no longer waits on the pool. What reads `/dev/random` waits
+  with the keys: the first-boot login, and DNS, whose query ids come
+  from it. An emulator that has nothing better passes `insecurerandom`
+  on its command line and gets the counter, labelled; the harness and
+  `tests/host/piimage_boot_test.sh` do for QEMU's `raspi4b`, and the
+  Icicle Kit's tree says it. A `virt` boot with no virtio-rng checks
+  both ways.
+- **Bare metal: the Pi's generator is read one word at a time under a
+  lock.** The Pi 3 and Pi 4 drivers tested for a word and read it with
+  no lock, on four cores with preemption: two readers could both see
+  one word waiting and both read it, and what an empty FIFO reads as is
+  not documented. The test and the read are now one step under a spin
+  lock, as `virt` and the PolarFire already did.
+- **Bare metal: the RNG200's own health test is heeded.** The Pi 4's
+  generator says in its interrupt status when its NIST health test has
+  failed; nothing read the register. As Linux's driver does, a failure
+  now resets the block before another word is taken from it, and says
+  so. The driver is `os/bcm/rng200.c`, for the Pi 4 and the Pi 5, with
+  the board's `io.h` naming where it is.
+
 ## [0.9.1] - 2026-10-30
 
 This security patch release fixes remotely reachable IPv4 reassembly and voice
@@ -191,13 +278,59 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
   limit, including segments inserted at the head of the resequencing queue.
   This is an upstream Inferno omission; 9front has carried the limits since
   2013.
+- **Malformed transport and ICMPv6 packets are rejected before indexed or
+  trimmed access.** UDP lengths smaller than the UDP header, TCP data offsets
+  larger than the IP payload, and truncated neighbor solicitation or
+  advertisement bodies are dropped. These checks port applicable 9front fixes
+  `7838d689` and `9211c6c5`.
+- **Inherited IP and mount boundary checks are current.** Negative IP device
+  attaches are rejected before indexing a stack, conversation permissions and
+  accepted-call ownership are enforced under lock, authentication fids must
+  belong to the mounted connection, mount-cache data comes from immutable
+  kernel replies rather than mutable caller buffers, and completion cannot race
+  request recycling. Protocol conversation counts are capped to the qid field;
+  IPv6 lifetime comparisons cannot wrap, TCP backoff cannot roll over, and UDP
+  transmits checksum negative zero as `ffff` rather than the IPv4 “no checksum”
+  value.
+- **Interface teardown and authentication proxy errors fail cleanly.** Native
+  IP configuration now releases interface/self-cache locks when medium hooks
+  fail, completes fallible address removal before publishing an unbound
+  conversation, and does not leak IPv6 prefix metadata. Factotum proxy framing
+  rejects a non-growing `toosmall` request instead of constructing an invalid
+  input slice, and internal fd close rejects out-of-range descriptors.
+- **Inherited SSL, capability, and 9P identity checks are current.** Opening an
+  existing SSL conversation now applies its owner/other mode correctly;
+  presenting a capability as the wrong source user cannot consume it; legacy
+  Styx servers bound oversized replies to the negotiated message size; and
+  persistent 9P authentication verifies factotum's caller identity.
+- **Authentication RPC concurrency is bounded.** Factotum refuses a seventeenth
+  active RPC worker, preventing unauthenticated connection attempts from
+  pinning an unbounded number of protocol processes.
+- **Untrusted image data cannot cross decoder or geometry bounds.** Compressed
+  image transforms stop at the supplied buffer, the LZ history starts zeroed
+  instead of disclosing stack contents, and image allocation/load paths reject
+  rectangles whose size or offsets overflow. Window stacking checks every image
+  before dereferencing its layer, and zero or negative full-circle arcs take
+  bounded special paths. This ports the applicable 9front draw hardening through
+  `e252b1b9`, `c4f5b99c`, `d7538ebb`, `e8228856`, and `0fea8e09`.
+- **Certificate and X25519 inputs fail closed.** BER decoding stops at a fixed
+  recursion depth instead of allowing a crafted certificate to exhaust the
+  interpreter stack, and the common X25519 primitive rejects low-order peer
+  keys that produce the RFC 7748 all-zero shared secret. This covers TLS 1.2,
+  TLS 1.3, and hybrid key agreement callers.
+- **The common cryptographic generator uses rekeyed ChaCha20.** The inherited
+  two-key 3DES X9.17 state has been replaced with a 256-bit ChaCha20 state that
+  rekeys itself before each response and advances a per-call nonce. Hosted
+  seeds come from the operating-system CSPRNG; native seeds come from the
+  platform hardware generator.
 - **Voice exports require keyring authentication and expose audio only.** The
   original `voice/listen` script anonymously exported all of `/dev`, allowing
   a network peer to inject input and operate control devices. It now constructs
-  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners,
-  dialers, and loopback tests no longer pass `-A`. There is no anonymous mode in
-  the shipped voice scripts. Provision a signer and peer auth information with
-  `auth/createsignerkey` and `getauthinfo` before using voice on a fresh node.
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners
+  and dialers explicitly select their keyring. There is no anonymous remote
+  mode in the shipped voice scripts; acceptance tests use a process-local 9P
+  pipe and open no listener. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `auth/mkauthinfo` before using voice on a fresh node.
 - **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
   `killtree`, which kills N's group and every descendant group. The exec tool
   uses it on deadlines and output caps, so a confined command cannot survive by
@@ -209,11 +342,14 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
 - **Namespace checks match the host filesystem and actual parent authority.**
   Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
   bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
-  aliases are rejected. A parent root grant no longer authorizes a child path
-  the parent cannot see. Confined `NODEVS` processes cannot follow host symlinks
+  and `/tool.*` aliases are rejected. A parent root grant no longer authorizes
+  a child path the parent cannot see, and `/usr` grants mask both keyring and
+  secstore credentials. Confined `NODEVS` processes cannot follow host symlinks
   out of a granted tree.
-- **mc9p responses are private to the requesting fid.** One client can no
-  longer read or replace another client's endpoint response.
+- **mc9p responses and filesystem authority are scoped.** One client can no
+  longer read or replace another client's endpoint response. The `fs` domain
+  requires a non-root `-r` directory, rejects requests outside it, and applies
+  `NODEVS` so host symlinks cannot escape it.
 
 ## [0.9.0] - 2026-10-29
 

@@ -9,8 +9,16 @@ enum
 	PTRHASH		= (1<<5)
 };
 
-static int quanta = Quanta;
-static int gce, gct = 1;
+/* the running VM's collector (interp.h, struct Vm): initial values are vm0's in xec.c */
+#define	quanta	(VM->quanta)
+#define	gce	(VM->gce)
+#define	gct	(VM->gct)
+#define	marker	(VM->marker)
+#define	sweeper	(VM->sweeper)
+#define	visit	(VM->visit)
+#define	base	(*(Bhdr**)&VM->gcbase)
+#define	limit	(*(Bhdr**)&VM->gclimit)
+#define	ptr	(*(Bhdr**)&VM->gcptr)
 
 typedef struct Ptrhash Ptrhash;
 struct Ptrhash
@@ -19,29 +27,9 @@ struct Ptrhash
 	Ptrhash	*next;
 };
 
-	int	nprop;
-	int	gchalt;
 	int	mflag;
-	int	mutator = 0;
-	int	gccolor = 3;
-
-	ulong	gcnruns;
-	ulong	gcsweeps;
-	ulong	gcbroken;
-	ulong	gchalted;
-	ulong	gcepochs;
-	uvlong	gcdestroys;
-	uvlong	gcinspects;
-
-static	int	marker  = 1;
-static	int	sweeper = 2;
-static	Bhdr*	base;
-static	Bhdr*	limit;
-Bhdr*	ptr;
-static	int	visit;
-extern	Pool*	heapmem;
-static	Ptrhash	*ptrtab[PTRHASH];
-static	Ptrhash	*ptrfree;
+#define	ptrtab	((Ptrhash**)VM->ptrtab)	/* PTRHASH of them: interp.h's 32 */
+#define	ptrfree	(*(Ptrhash**)&VM->ptrfree)
 
 #define	HASHPTR(p)	(((ulong)(p) >> 6) & (PTRHASH - 1))
 
@@ -99,7 +87,7 @@ noptrs(Type *t, void *vw)
 	USED(vw);
 }
 
-static int markdepth;
+#define	markdepth	(VM->markdepth)	/* the running VM's */
 
 /* code simpler with a depth search compared to a width search*/
 void
@@ -196,7 +184,6 @@ marklist(Type *t, void *vw)
 	}
 }
 
-extern Modlink *retpending;	/* xec.c */
 
 static void
 rootset(Prog *root)
@@ -214,7 +201,7 @@ rootset(Prog *root)
 	sweeper = (gccolor-2)%3;
 
 	while(root != nil) {
-		ml = root->R.M;
+		ml = root->reg.M;
 		h = D2H(ml);
 		Setmark(h);
 		mp = ml->MP;
@@ -223,8 +210,8 @@ rootset(Prog *root)
 			Setmark(h);
 		}
 
-		sp = root->R.SP;
-		ex = root->R.EX;
+		sp = root->reg.SP;
+		ex = root->reg.EX;
 		while(ex != nil) {
 			sx = (Stkext*)ex;
 			fp = sx->reg.tos.fu;
@@ -323,8 +310,10 @@ rungc(Prog *p)
 		return;
 	}
 	if(base == nil) {
-		gcsweeps++;
 		b = poolchain(heapmem);
+		if(b == nil)
+			return;		/* nothing allocated yet: a VM's pool before its first object (#944) */
+		gcsweeps++;
 		base = b;
 		ptr = b;
 		limit = B2LIMIT(b);

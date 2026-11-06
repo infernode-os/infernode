@@ -18,6 +18,7 @@ fs fs
 gpio gpio
 indir indir
 ip ip
+location location
 mnt mnt
 pipe pipe
 pointer pointer
@@ -30,3 +31,4 @@ srv srv
 srv9 srv9
 ssl ssl
 touch touch
+vm vm

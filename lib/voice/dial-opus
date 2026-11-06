@@ -28,6 +28,8 @@ if {~ $#peer 0} {
 	echo 'usage: voice/dial-opus peer-addr  (e.g. tcp!127.0.0.1!7070)' >[1=2]
 	exit usage
 }
+user=`{cat /dev/user}
+key='/usr/'^$user^'/keyring/default'
 
 bind -a '#A' /dev
 mkdir -p /n/opus
@@ -44,7 +46,7 @@ echo 'chans 1' > /dev/audioctl
 echo 'bits 16' > /dev/audioctl
 
 mkdir -p /n/peer
-if {! mount $peer /n/peer} {
+if {! mount -k $key $peer /n/peer} {
 	echo 'voice/dial-opus: mount' $peer 'failed' >[1=2]
 	exit mount
 }

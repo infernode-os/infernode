@@ -1,0 +1,76 @@
+.TH GDL90 2
+.SH NAME
+gdl90 \- an ADS-B receiver's own-ship and traffic reports
+.SH SYNOPSIS
+.EX
+include "nmea.m";
+include "gdl90.m";
+gdl90 := load Gdl90 Gdl90->PATH;
+Framer: import gdl90;
+
+init:      fn(n: Nmea);
+crc:       fn(b: array of byte): int;
+frame:     fn(msg: array of byte): array of byte;
+
+Framer.new:  fn(): ref Framer;
+d.feed:      fn(b: array of byte): (list of ref Nmea->Fix, list of ref Nmea->Target);
+d.bad:       int;
+.EE
+.SH DESCRIPTION
+GDL 90 is what an ADS-B receiver (Stratux, Stratus, SkyEcho and the
+like) sends an electronic flight bag, usually as UDP datagrams to port
+4000.
+.I Gdl90
+reads it, after Garmin's GDL 90 Data Interface Specification.
+.B Init
+takes a loaded and initialised
+.IR nmea (2),
+whose types it gives.
+.PP
+A
+.B Framer
+takes bytes in any pieces: frames between 0x7E flags, 0x7D escaping
+the byte after it, each ending in its CRC.
+.B Feed
+gives the own-ship fixes and the traffic the bytes completed.
+A frame whose CRC is wrong is dropped and counted in
+.BR bad .
+The messages read are the heartbeat (whether the GPS position is
+valid), the own-ship report and the traffic report.
+.PP
+An own-ship fix has the position, the pressure altitude
+.RB ( baroalt ),
+the speed, the track
+.RB ( course ,
+or
+.B heading
+when the report says the direction is a true heading), and
+.B err
+at half the 95% bound the report's NACp gives.
+It is valid only after a heartbeat says the GPS position is valid.
+It has no
+.B alt
+(the own-ship geometric altitude is above the WGS-84 ellipsoid, not
+mean sea level) and no time (the caller stamps it).
+.PP
+A traffic report is a
+.B Target
+of kind
+.BR adsb ,
+its id the 24-bit address in hex, with its position, pressure altitude,
+speed, track, vertical speed
+.RB ( climb ),
+call sign
+.RB ( name )
+and emitter category.
+.PP
+.B Crc
+is the CRC-16-CCITT the format uses;
+.B frame
+frames a message (its id first): the CRC, low byte first, the escapes
+and the flags.
+.SH SOURCE
+.B /appl/lib/gdl90.b
+.SH SEE ALSO
+.IR nmea (2),
+.IR gpsfs (4)

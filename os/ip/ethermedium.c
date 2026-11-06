@@ -160,7 +160,6 @@ static char *nbmsg = "nonblocking";
 
 /*
  *  called to bind an IP ifc to an ethernet device
- *  called with ifc wlock'd
  */
 static void
 etherbind(Ipifc *ifc, int argc, char **argv)
@@ -286,6 +285,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	devtab[v.cchan6->type]->write(v.cchan6, nbmsg, strlen(nbmsg), 0);
 
 	er = smalloc(sizeof(*er));
+	er->read4p = er->read6p = er->arpp = (void*)-1;
 	er->mchan4 = v.mchan4;
 	er->cchan4 = v.cchan4;
 	er->achan = v.achan;
@@ -302,13 +302,14 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	kproc("etherread6", etherread6, ifc, 0);
 }
 
-/*
- *  called with ifc wlock'd
- */
 static void
 etherunbind(Ipifc *ifc)
 {
 	Etherrock *er = ifc->arg;
+
+	/* Do not free the shared rock before newly created readers publish up. */
+	while(er->arpp == (void*)-1 || er->read4p == (void*)-1 || er->read6p == (void*)-1)
+		tsleep(&up->sleep, return0, 0, 300);
 
 	if(er->read4p)
 		postnote(er->read4p, 1, "unbind", 0);
@@ -728,7 +729,7 @@ recvarp(Ipifc *ifc)
 			n = ifc->mintu;
 		rbp = allocb(n);
 		r = (Etherarp*)rbp->rp;
-		memset(r, 0, sizeof(Etherarp));
+		memset(r, 0, n);
 		hnputs(r->type, ETARP);
 		hnputs(r->hrd, 1);
 		hnputs(r->pro, ETIP4);

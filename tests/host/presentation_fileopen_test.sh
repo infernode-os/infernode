@@ -15,6 +15,10 @@
 #      f2187a09).
 #   3. The plumber or its lucipres consumer not coming up at all.
 #   4. A web URL plumbed on the desktop not reaching Charon.
+#   5. A plumbed Markdown file reaching the view as its last 8K (the
+#      data file kept only the last 9P message of the write), so
+#      README.md showed as its last line; and the kinds Xenith shows
+#      as documents (docreg(2): an SVG image here) opening in the editor.
 #
 # Boots the full Lucifer GUI headless (SDL dummy driver, skiplogon) and
 # asserts the /mnt/ui presentation namespace contract — deterministic, no
@@ -100,6 +104,16 @@ echo CHARONURL `{cat /tmp/prestest-charon/url}
 unmount /tmp/prestest-charon
 echo CHARONS; ls /mnt/ui/activity/0/presentation | grep charon
 echo R_WEB_END
+plumb -t text /README.md
+plumb -t text /icons/ui/alert-circle.svg
+sleep 3
+echo R_MD_BEGIN
+cat /mnt/ui/activity/0/presentation/plumb-3/type
+echo MD5 `{md5sum < /mnt/ui/activity/0/presentation/plumb-3/data}
+echo R_MD_END
+echo R_SVG_BEGIN
+cat /mnt/ui/activity/0/presentation/plumb-4/type
+echo R_SVG_END
 echo R_PDF_BEGIN
 cat /mnt/ui/activity/0/presentation/plumb-1/type
 echo R_PDF_END
@@ -142,6 +156,20 @@ else
     section R_CFG_BEGIN R_CFG_END | grep -q 'app' \
         && pass "plumbed non-media -> editor (type=app)" \
         || fail "plumbed non-media routed wrong (expected type=app)"
+    section R_MD_BEGIN R_MD_END | grep -qx 'markdown' \
+        && pass "plumbed Markdown -> type=markdown" \
+        || fail "plumbed Markdown did NOT become a markdown artifact"
+    # the data is the file whole, less the final newline (one write's
+    # trailing newline is not the data's)
+    nbytes=$(wc -c < "$ROOT/README.md")
+    nbytes=$((nbytes - 1))
+    want=$(dd if="$ROOT/README.md" bs=1 count="$nbytes" 2>/dev/null | md5sum | cut -d' ' -f1)
+    section R_MD_BEGIN R_MD_END | grep -q "^MD5 $want" \
+        && pass "plumbed Markdown's data is the whole file (README.md, several 9P messages)" \
+        || fail "plumbed Markdown's data is not the file ($(section R_MD_BEGIN R_MD_END | grep MD5), want $want)"
+    section R_SVG_BEGIN R_SVG_END | grep -qx 'image' \
+        && pass "plumbed SVG -> type=image, as Xenith shows it (docreg kinds)" \
+        || fail "plumbed SVG did not become an image artifact"
     section R_WEB_BEGIN R_WEB_END | grep -q '/dis/wm/charon.dis' \
         && pass "plumbed web URL -> Charon in the presentation view" \
         || fail "plumbed web URL did not open Charon"

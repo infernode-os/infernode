@@ -91,6 +91,8 @@ TARG=\
 	getline.dis\
 	gettar.dis\
 	gif2bit.dis\
+	gpsfs.dis\
+	sdrfs.dis\
 	gpusrv.dis\
 	llmctl9p.dis\
 	llmsrv.dis\
@@ -187,6 +189,7 @@ TARG=\
 	tcs.dis\
 	tee.dis\
 	themefs.dis\
+	timesync.dis\
 	telnet.dis\
 	test.dis\
 	time.dis\
@@ -209,6 +212,7 @@ TARG=\
 	ventisrv.dis\
 	vid9p.dis\
 	wav2iaf.dis\
+	vm.dis\
 	wc.dis\
 	webfs.dis\
 	webgrab.dis\
@@ -223,6 +227,7 @@ TARG=\
 	gateprobe.dis\
 	jitbench.dis\
 	jitbench2.dis\
+	vmstress.dis\
 	jitbug.dis\
 	jitbug2.dis\
 	jitcrash.dis\
@@ -317,6 +322,7 @@ SYSMODULES=\
 	lock.m\
 	mailparse.m\
 	mermaid.m\
+	nmea.m\
 	nsconstruct.m\
 	pdf.m\
 	rfcomm.m\
@@ -332,6 +338,9 @@ SYSMODULES=\
 	viewport.m\
 	webclient.m\
 	wmsrv.m\
+	garminav.m\
+	gdl90.m\
+	post9p.m\
 	sdg.m\
 
 DISBIN=$ROOT/dis

@@ -615,6 +615,30 @@ testErrorTruncated(t: ref T)
 	t.log("error: " + err);
 }
 
+nestedseq(depth: int): array of byte
+{
+	# These small fixtures need only one-byte definite lengths.  The
+	# innermost value is NULL.
+	a := array[depth*2 + 2] of byte;
+	for(i := 0; i < depth; i++) {
+		a[i*2] = byte 16r30;
+		a[i*2+1] = byte (len a - i*2 - 2);
+	}
+	off := depth*2;
+	a[off] = byte 16r05;
+	a[off+1] = byte 0;
+	return a;
+}
+
+testErrorExcessiveNesting(t: ref T)
+{
+	(err, nil) := asn1->decode(nestedseq(34));
+	t.assert(err != nil && len err > 0, "excessively nested BER should return error");
+
+	(ok, e) := asn1->decode(nestedseq(32));
+	t.assert(ok == nil && e != nil, "BER at nesting limit should decode");
+}
+
 # ============================================================
 # init
 # ============================================================
@@ -709,6 +733,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Error Handling
 	run("Error/Garbage", testErrorGarbage);
 	run("Error/Truncated", testErrorTruncated);
+	run("Error/ExcessiveNesting", testErrorExcessiveNesting);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

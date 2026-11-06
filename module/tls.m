@@ -50,12 +50,71 @@ TLS: module {
 		pinspki:	array of byte;	# SHA-256 of the server's SubjectPublicKeyInfo: replaces chain and name checks
 	};
 
+	# A connection's state, its keys among it: tls.b's alone.  It is
+	# held by its Conn, not in a table of the module's, so it goes when
+	# the Conn does, however its holder stopped (a reader killed
+	# mid-read never closes it), and no lock is taken on a read.
+	State: adt {
+		fd:		ref Sys->FD;
+		version:	int;		# negotiated version
+		suite:		int;		# negotiated cipher suite
+		group:		int;		# TLS 1.3 key-exchange group; 0 under TLS 1.2
+
+		# AEAD keys
+		writekey:	array of byte;
+		writeiv:	array of byte;
+		readkey:	array of byte;
+		readiv:		array of byte;
+
+		# Sequence numbers
+		writeseq:	big;
+		readseq:	big;
+
+		# Read buffer (decrypted application data)
+		rbuf:		array of byte;
+		roff:		int;
+		rlen:		int;
+
+		# The handshake transcript, kept whole for each hash until the suite
+		# is known (after a HelloRetryRequest they differ: each begins with
+		# message_hash(ClientHello1) by its own hash); hashed when needed
+		tr256:		array of byte;	# for SHA-256 suites
+		tr384:		array of byte;	# for SHA-384 suites
+
+		# TLS 1.3 traffic secrets
+		cts:		array of byte;	# client traffic secret
+		sts:		array of byte;	# server traffic secret
+
+		# Server name for cert verification
+		servername:	string;
+		insecure:	int;
+		pinspki:	array of byte;	# pinned server key (Config.pinspki)
+
+		# TLS 1.3: whether handshake is encrypted
+		hsencrypted:	int;
+
+		# Handshake message buffer (multiple msgs may arrive in one record)
+		hsbuf:		array of byte;
+		hsoff:		int;
+
+		# Ephemeral CNSA hybrid (SecP384r1MLKEM1024) private material; nil otherwise
+		eph_p384_priv:	array of byte;
+		eph_mlkem_sk:	array of byte;
+
+		# Ephemeral ML-KEM-768 secret key for the X25519MLKEM768 share; nil otherwise
+		eph_mlkem768_sk:	array of byte;
+
+		# Ephemeral P-256 private key for the TLS 1.3 secp256r1 key share; nil otherwise
+		eph_p256_priv:	array of byte;
+	};
+
 	# Connection (read/write after handshake)
 	Conn: adt {
 		version:	int;		# negotiated TLS version
 		suite:		int;		# negotiated cipher suite
 		group:		int;		# TLS 1.3 key-exchange group (X25519MLKEM768, ...); 0 under TLS 1.2
 		servername:	string;		# peer name
+		st:		ref State;	# nil once closed
 
 		read:	fn(c: self ref Conn, buf: array of byte, n: int): int;
 		write:	fn(c: self ref Conn, buf: array of byte, n: int): int;

@@ -138,8 +138,6 @@ init(nil: ref Draw->Context, args: list of string)
 	random = load Random Random->PATH;
 	if(random == nil)
 		cantload(Random->PATH);
-	dnsid = random->randomint(Random->ReallyRandom);	# avoid clashes
-	random = nil;
 	myname = sysname();
 	stderr = sys->fildes(2);
 	readservers();
@@ -1696,13 +1694,18 @@ rrtypename(t: int): string
 # format of UDP head read and written in `headers' mode
 #
 Udphdrsize: con Udphdrlen;
-dnsid := 1;
 
 mkquery(qtype: int, qclass: int, name: string): (int, array of byte, string)
 {
 	qd := ref QR(name, qtype, qclass);
 	dm := ref DNSmsg;
-	dm.id = dnsid++;	# doesn't matter if two different procs use it (different fds)
+	# A query id of its own, unpredictable, so that an answer must have
+	# seen the query to be taken for its reply. It is read here and not
+	# once at startup, which also kept the ids that followed in sequence:
+	# on a machine with no generator #c/random waits for ever, and a
+	# dns that read it at startup kept the profile that starts it, and
+	# so the console's shell, waiting with it. Now only lookups wait.
+	dm.id = random->randomint(Random->ReallyRandom);
 	dm.flags = Oquery;
 	if(referdns || !debug)
 		dm.flags |= Frecurse;

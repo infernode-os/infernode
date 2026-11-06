@@ -1,0 +1,460 @@
+.TH GPSFS 4
+.SH NAME
+gpsfs \- GPS receiver as a file system
+.SH SYNOPSIS
+.B gpsfs
+[
+.B -S
+] [
+.B -m
+.I mountpoint
+] [
+.B -s
+.I spec
+] [
+.I command ...
+]
+.SH DESCRIPTION
+.I Gpsfs
+reads the NMEA 0183 sentences a GPS receiver sends, assembles them into
+fixes with
+.IR nmea (2),
+and serves the receiver's position, and the traffic it hears, as
+files, mounted by default at
+.BR /mnt/gps .
+A receiver is a byte stream: a serial port
+.RI ( eia (3)),
+a phone's own location service
+.RI ( location (3)),
+a network feed (a phone application serving NMEA over TCP,
+.IR gpsd ,
+a marine gateway's UDP), or a recorded log; and anything else writes
+sentences to
+.BR feed .
+.PP
+Besides NMEA, two formats are read: Garmin's Aviation output, from a
+panel or portable aviation GPS
+.RI ( garminav (2)),
+and GDL 90, from an ADS-B receiver
+.RI ( gdl90 (2)).
+A fix from either is written as the NMEA sentences a receiver would
+send for it, and read as those, so every file below means the same
+whatever the receiver, and
+.B nmea
+gives NMEA from any of them.
+The
+.I command
+words, if given, are written to
+.B ctl
+once the files are mounted.
+.PP
+The files are also posted as
+.B #sgps/fs
+.RI ( post9p (2);
+.B -s
+names another spec,
+.B -S
+posts none), so a process that did not see the mount, an application
+started by Lucifer or an agent's tool, can mount them:
+.IP
+.EX
+mount -A '#sgps/fs' /mnt/gps
+.EE
+.PP
+.IR Wm-road (1)
+and
+.IR tools9p (8),
+for the
+.B gps
+tool, do so themselves.
+Not posted, gpsfs exits when the mount goes.
+.SH FILESYSTEM
+.TF satellites
+.TP
+.B ctl
+read: the source command in use, or nothing.
+write: one command.
+A source command returns once the source is open, or fails with the
+reason it could not be opened; the previous source is stopped either
+way.
+.RS
+.TP
+.BI source " \fR[\fPformat\fR]\fP path \fR[\fPbaud\fR]"
+a file or serial port, read to its end.
+.I Format
+is
+.B nmea
+(the default),
+.B garmin
+or
+.BR gdl90 .
+If
+.I baud
+is given,
+.BI b baud
+is written to
+.IB path ctl
+first, as
+.IR eia (3)
+expects.
+.TP
+.BI source " \fR[\fPformat\fR]\fP net\fB!\fPhost\fB!\fPport"
+a network connection, as
+.IR dial (2)
+makes.
+With host
+.BR * ,
+.BI udp!*! port
+is listened to: the datagrams any sender sends to that port, as a
+marine gateway (port 10110) or an ADS-B receiver (port 4000) sends
+them; an NMEA datagram is whole, a newline or not.
+.TP
+.BI "source gpsd" " host"
+.IR gpsd ,
+at
+.IR host ,
+.IB host ! port ,
+or a full dial address; port 2947 by default.
+It is asked for NMEA with
+.BR ?WATCH ;
+its JSON lines are passed over.
+.TP
+.BI replay " path"
+a recorded NMEA log, its sentences sent at the pace of their times (no
+gap longer than five seconds).
+.TP
+.B stop
+no source.
+.RE
+.TP
+.B status
+one line, attr=value:
+.B state=fix
+(the last fix is a position),
+.B nofix
+or
+.BR nosource ;
+.B link=none
+.RB ( opening ,
+.BR open ,
+.B closed
+when the source ended,
+.BR error );
+.BI source= address;
+.BI origin= recorded
+for a recording;
+.BI sentences= n ,
+.BI bad= n
+and
+.BI suspect= n
+(positions held back as glitches) counted since start;
+.BI age= seconds
+since the last position;
+.BI error= reason
+for the last source that failed, quoted as
+.IR tokenize
+(see
+.IR sys-tokenize (2))
+expects.
+.TP
+.B position
+.I "latitude longitude"
+in decimal degrees, north and east positive, six places.
+A read is an error,
+.BR "no fix" ,
+when the receiver has no position.
+.TP
+.B fix
+the last fix, one line of attr=value fields, each given only when the
+receiver sent it:
+.BR time
+(RFC 3339, UTC),
+.BR lat ,
+.BR lon ,
+.B alt
+(metres above mean sea level),
+.B baroalt
+(pressure altitude, metres: Garmin's PGRMZ or GDL 90's own-ship report),
+.B speed
+(metres a second over the ground),
+.B course
+(over the ground, degrees true),
+.B mcourse
+(the same, magnetic),
+.B heading
+(where the bow or nose points, degrees true, from a compass: HDT, HDG,
+HDM),
+.B mheading
+(the same, magnetic),
+.B mode
+.RB ( none ,
+.BR 2d ,
+.BR 3d ),
+.B q
+(how it was found:
+.BR gps ,
+.BR dgps ,
+.BR pps ,
+.BR rtk ,
+.BR float ,
+.B dr
+for dead reckoning,
+.BR manual ,
+.BR sim ),
+.B sats
+(satellites used),
+.BR hdop ,
+.BR vdop ,
+.BR pdop ,
+.B err
+and
+.B verr
+(horizontal and vertical error estimates, metres, one sigma: GST, else
+Garmin's PGRME),
+.B magvar
+(the magnetic variation, degrees, east positive), and
+.B origin
+.RB ( recorded
+for a fix from a recording, a
+.B replay
+or a source that is a file with a length;
+.B fed
+for one written to
+.BR feed ;
+none for a live receiver).
+Magnetic directions are given only when the receiver gives the
+variation.
+A position more than a degree from the last is held back as a glitch,
+up to three in a row (a receiver that has moved is believed at the
+fourth), and counted in
+.BR status .
+With no fix the line is the time and
+.BR mode=none .
+.TP
+.B event
+each read waits for the next fix and gives it, as
+.B fix
+would, or the fixes since the last read.
+Every open has its own; a reader that falls far behind loses the
+oldest.
+A fix is given once the receiver has sent all it sends for one time,
+or a sentence for the next time has come; a lost fix is told once.
+The first fix from a new source is given at its first position
+sentence, before the receiver is known to send others.
+.TP
+.B satellites
+one line a satellite in view:
+.I "system prn elevation azimuth snr used"
+where
+.I system
+is
+.BR gps ,
+.BR sbas ,
+.BR glonass ,
+.BR galileo ,
+.BR beidou ,
+.BR qzss ,
+.B navic
+or
+.BR gnss ;
+.B -
+stands for a value not known (an
+.I snr
+for a satellite not tracked), and
+.I used
+is 1 for a satellite in the fix.
+.TP
+.B traffic
+one line a craft heard in the last ten minutes, nearest first, of
+attr=value fields:
+.B kind
+.RB ( ais
+for a ship,
+.B adsb
+or
+.B flarm
+for an aircraft),
+.B id
+(an MMSI, or an ICAO or FLARM address in hex),
+.BR lat ,
+.BR lon ,
+.B alt
+(metres; pressure altitude by ADS-B, above this fix's altitude by FLARM),
+.BR speed ,
+.BR course ,
+.BR heading ,
+.B climb
+(metres a second),
+.B name
+(a ship's name, a flight's call sign),
+.B callsign
+(a ship's radio call sign),
+.B cat
+(a ship's type:
+.BR cargo ,
+.BR tanker ,
+.BR passenger ,
+.BR fishing ,
+.BR sailing ,
+.BR pleasure ,
+.BR tug ,
+\&...; an aircraft's:
+.BR light ,
+.BR large ,
+.BR heavy ,
+.BR rotorcraft ,
+.BR glider ,
+.BR uav ,
+\&...) and
+.B age
+(seconds since last heard).
+Ships come from AIS sentences (messages 1, 2, 3, 5, 18, 19 and 24;
+those of more than one sentence put together), aircraft from GDL 90's
+traffic reports and FLARM's PFLAA, which FLARM gives relative to this
+position.
+A name with blanks is quoted.
+.TP
+.B time
+the last fix's time beside this host's clock when the fix's first
+sentence began to arrive, as attr=value:
+.B time
+(RFC 3339),
+.B gps
+and
+.B local
+(microseconds since the epoch),
+.B offset
+(their difference) and
+.BR sync .
+The arrival is the read's time less what the bytes after the
+sentence's first took at the line's baud rate, when it is given.
+.B Sync=yes
+only for a live receiver speaking NMEA; a recording, a feed, and a
+receiver whose fixes this host stamps (garmin, gdl90) say
+.BR no .
+.IR Timesync (8)
+sets the clock from it.
+.TP
+.B nmea
+the sentences, as received (AIS's, beginning
+.BR ! ,
+too), one a line, from the open on; each read waits for more.
+Sentences that fail their checksum are not passed on.
+.TP
+.B feed
+write-only: sentences written here are taken as the receiver's.
+A write with a sentence that is not one (no
+.B $
+or
+.BR ! ,
+a bad checksum) fails, naming the fault; the others in it are taken.
+.SH CAPABILITY MODEL
+Following the receiver and changing what it says are separate files,
+so what a process may do is what is bound in its name space:
+.BR position ,
+.BR fix ,
+.BR event ,
+.BR satellites ,
+.BR traffic ,
+.B time
+and
+.B nmea
+let it follow the receiver;
+.B ctl
+and
+.B feed
+let it choose the source or supply a position.
+A process that should only know where it is gets the first seven.
+.PP
+.I Gpsfs
+opens sources in the name space it was started in.
+A serial port can always be named in the kernel's own syntax,
+.BR #t/eia0 .
+.SH EXAMPLES
+On a phone:
+.IP
+.EX
+; gpsfs source '#o/nmea'
+.EE
+.PP
+A USB receiver on Linux, which
+.IR eia (3)
+finds after the
+.B ttyS
+ports:
+.IP
+.EX
+; cat '#t/eia4status'
+opens 0 ferr 0 oerr 0 baud 9600 ... dev /dev/ttyACM0
+; gpsfs source '#t/eia4' 9600
+; cat /mnt/gps/position
+40.784000 -74.416667
+.EE
+.PP
+A phone serving NMEA on port 11123, and a moving map's loop:
+.IP
+.EX
+; echo source tcp!phone!11123 > /mnt/gps/ctl
+; cat /mnt/gps/event
+time=2026-10-31T14:32:05Z lat=40.784000 lon=-74.416667 alt=76.0 ...
+.EE
+.PP
+A boat: a gateway on the boat's network sending NMEA 0183 (from its
+NMEA 2000 bus) to port 10110, the position, heading and AIS ships in
+one stream:
+.IP
+.EX
+; echo source udp!*!10110 > /mnt/gps/ctl
+; cat /mnt/gps/traffic
+kind=ais id=211234560 lat=53.543200 lon=9.987600 speed=6.3 course=87.6 heading=88 name='MV EXAMPLE' callsign=DABC cat=cargo age=4.2
+.EE
+.PP
+An aircraft: an ADS-B receiver (Stratux and the like) broadcasting GDL
+90, and a panel GPS's Aviation output on a serial port:
+.IP
+.EX
+; echo source gdl90 udp!*!4000 > /mnt/gps/ctl
+; echo source garmin '#t/eia0' 9600 > /mnt/gps/ctl
+.EE
+.PP
+A day's drive, again:
+.IP
+.EX
+; cat /mnt/gps/nmea > /usr/$user/track.nmea &
+\&...
+; echo replay /usr/$user/track.nmea > /mnt/gps/ctl
+.EE
+.SH SOURCE
+.B /appl/cmd/gpsfs.b
+.br
+.B /appl/lib/nmea.b
+.br
+.B /appl/lib/gdl90.b
+.br
+.B /appl/lib/garminav.b
+.SH SEE ALSO
+.IR nmea (2),
+.IR gdl90 (2),
+.IR garminav (2),
+.IR eia (3),
+.IR location (3),
+.IR wm-road (1),
+.IR timesync (8)
+.br
+Plan 9's
+.IR gpsfs (8),
+whose
+.B time
+file and glitch rejection this one follows
+.SH BUGS
+One source at a time.
+A source that ends or fails is not reopened; write the command again.
+.PP
+Neither Garmin's Aviation output nor GDL 90 gives the date and time
+with each fix, so gpsfs stamps them with this host's clock.
+.PP
+It is not navigation equipment: nothing here is certified, there is no
+integrity monitoring (RAIM), and a phone's position may come from
+Wi-Fi.
+A pressure altitude is as the device gives it; it is not corrected
+for the local altimeter setting.

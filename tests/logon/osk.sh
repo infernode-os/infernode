@@ -30,3 +30,4 @@ shot typed
 echo toggle > /mnt/osk/ctl
 shot handle
 echo R done
+echo halt > '#c/sysctl'

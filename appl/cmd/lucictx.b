@@ -181,6 +181,7 @@ ntoolentryrects := 0;
 browserect: Rect;
 mobile := 0;		# /env/infmobile=1 — floor browser/list rows at a tap target
 TAPMIN: con 132;	# 44pt at a 3x device
+Dragmin: con 10;	# px a press moves before it is a drag (a scroll), not a tap
 
 # File browser state (module-level to avoid stack allocation in inner loop)
 brow_dirrects:  array of Rect;
@@ -300,11 +301,10 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	# motion under button-1 and convert it into ctx_scroll deltas
 	# ourselves. To keep tap-on-headers working we DEFER click handlers
 	# to button-1 release and skip them if the gesture committed to a
-	# drag (|delta| > DRAG_THRESHOLD).
+	# drag (|delta| > Dragmin).
 	press_xy: Draw->Point;
 	drag_lasty := 0;
 	dragstarted := 0;
-	DRAG_THRESHOLD := 10;	# px before a touch becomes a drag (not a tap)
 	for(;;) alt {
 	p := <-mouse =>
 		wasdown := prevbuttons;
@@ -353,7 +353,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			if(!dragstarted) {
 				total_dy := p.xy.y - press_xy.y;
 				if(total_dy < 0) total_dy = -total_dy;
-				if(total_dy > DRAG_THRESHOLD)
+				if(total_dy > Dragmin)
 					dragstarted = 1;
 			}
 			if(dragstarted) {
@@ -372,11 +372,17 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			continue;
 		}
 
-		# Button-1 RELEASE: if the gesture stayed within DRAG_THRESHOLD
+		# Button-1 RELEASE: if the gesture stayed within Dragmin
 		# treat it as a tap and run the click handlers at the PRESS
 		# location (press_xy). If it dragged, just reset state — the
 		# scroll already happened on the held branch above.
-		if(!(p.buttons & 1) && (wasdown & 1)) {
+		#
+		# Button 1 going up as button 3 goes down is a finger held
+		# still (os/init/touch.b, emu/port/draw-sdl3.c): the context
+		# menu below, not a tap as well.
+		if(!(p.buttons & 1) && (wasdown & 1) && (p.buttons & 4)) {
+			dragstarted = 0;
+		} else if(!(p.buttons & 1) && (wasdown & 1)) {
 			if(dragstarted) {
 				dragstarted = 0;
 				continue;
@@ -1227,15 +1233,22 @@ drawcentertext(r: Rect, text: string)
 
 # --- File browser ---
 
+# The browser's row height
+browlineh(): int
+{
+	h := mainfont.height + 2;
+	if(mobile && h < TAPMIN)
+		h = TAPMIN;	# 44pt finger tap target for browser entries
+	return h;
+}
+
 drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 {
 	if(mainwin == nil)
 		return;
 	zone := mainwin.r;
 	pad := 8;
-	lineH := mainfont.height + 2;
-	if(mobile && lineH < TAPMIN)
-		lineH = TAPMIN;	# 44pt finger tap target for browser entries
+	lineH := browlineh();
 	y := zone.min.y + pad;
 
 	#
@@ -1496,6 +1509,10 @@ filebrowser(startpath: string): string
 	scroll := 0;
 	result := "";
 	prevbut := 0;
+	press: Point;		# where button 1 went down
+	draglasty := 0;
+	dragacc := 0;		# pixels dragged not yet a row
+	dragging := 0;
 
 	#
 	# The directory is read when the path changes and the view is
@@ -1580,14 +1597,74 @@ filebrowser(startpath: string): string
 			continue;
 		}
 
-		# Button-3: cancel
+		# Button-3: cancel.  Not a finger held still (button 1 up as
+		# button 3 comes down): a finger resting before it drags
+		# would close the browser under it.
 		if((p.buttons & 4) != 0 && (wasdown2 & 4) == 0) {
+			if(wasdown2 & 1) {
+				dragging = 0;
+				continue;
+			}
 			result = nil;
 			break;
 		}
 
-		# Button-1 just pressed
+		#
+		# A finger scrolls by dragging, as the context view below it
+		# does: a touch screen has no wheel, and this view acted on
+		# every press, so a directory longer than the zone (/dis/wm on
+		# the Pi's panel) could never be scrolled and what was past its
+		# end could never be reached.  So button 1 decides at release:
+		# a press that moved less than Dragmin is a tap, taken at
+		# where it was pressed; one that moved more scrolled the rows
+		# under it, a row for each row's height dragged, and does
+		# nothing else.
+		#
 		if((p.buttons & 1) && !(wasdown2 & 1)) {
+			press = p.xy;
+			draglasty = p.xy.y;
+			dragacc = 0;
+			dragging = 0;
+			continue;
+		}
+		if((p.buttons & 1) && (wasdown2 & 1)) {
+			if(!dragging) {
+				dy := p.xy.y - press.y;
+				if(dy < 0)
+					dy = -dy;
+				if(dy > Dragmin)
+					dragging = 1;
+			}
+			if(dragging) {
+				# drag up (y falls): the rows move up, later ones show
+				dragacc += draglasty - p.xy.y;
+				draglasty = p.xy.y;
+				rowh := browlineh();
+				was := scroll;
+				while(dragacc >= rowh) {
+					dragacc -= rowh;
+					if(scroll < brow_maxscroll)
+						scroll++;
+				}
+				while(dragacc <= -rowh) {
+					dragacc += rowh;
+					if(scroll > 0)
+						scroll--;
+				}
+				if(scroll != was)
+					needdraw = 1;
+			}
+			continue;
+		}
+
+		# Button 1 released: a tap, unless it dragged (button 3 coming
+		# down as it goes up, a finger held still, was passed over above)
+		if(!(p.buttons & 1) && (wasdown2 & 1)) {
+			if(dragging) {
+				dragging = 0;
+				continue;
+			}
+			p = ref Pointer(p.buttons, press, p.msec);
 			# Cancel button
 			if(brow_cancelrect.max.x > brow_cancelrect.min.x &&
 					brow_cancelrect.contains(p.xy)) {

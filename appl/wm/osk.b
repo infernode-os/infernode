@@ -299,8 +299,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 		ctxt = wmclient->makedrawcontext();
 	display = ctxt.display;
 	loadcolours();
-	if(icon != nil && icon->init(display) != nil)
+	if(icon == nil)
+		glypherr(sys->sprint("cannot load %s: %r", Icon->PATH));
+	else if((e := icon->init(display)) != nil){
+		glypherr(e);
 		icon = nil;
+	}
 
 	loadlayouts(first);
 	ignore = readlines(IGNORE);
@@ -769,10 +773,22 @@ glyph(name: string, r: Rect, col: int): int
 	if(icon == nil)
 		return 0;
 	(i, m, err) := icon->paint(name, r.dx(), col);
-	if(err != nil || i == nil)
+	if(err != nil || i == nil){
+		glypherr(err);
 		return 0;
+	}
 	img.draw(r, i, m, (0, 0));
 	return 1;
+}
+
+# Why a glyph (the handle's keyboard, shift, delete) is not drawn, said
+# once: the cause is the machine's as a rule (no /icons/ui on the card).
+glyphsaid := 0;
+glypherr(e: string)
+{
+	if(glyphsaid++)
+		return;
+	sys->fprint(stderr, "osk: no glyphs: %s\n", e);
 }
 
 keylabel(k: ref Lkey): (string, string)	# text, or glyph name

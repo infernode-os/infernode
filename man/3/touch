@@ -44,6 +44,15 @@ starts, reads it and writes pointer events to
 .B /dev/pointer
 (see
 .IR pointer (3)).
+The first finger is the pointer, button 1 held while it is down.
+A panel has no other buttons and no wheel, so two gestures stand for
+them, as the hosted emulator makes them of a phone's touches:
+a finger held still for half a second is button 3 (button 1 goes up),
+held until it lifts, which is every context menu: hold, slide to an item,
+lift to choose it; and two fingers dragged are the wheel, a button 8 or 16
+press and release for each 40 pixels they move, up showing what is below.
+.B touch -t
+checks these, and the decoder, with no panel.
 What is in the kernel is what a program cannot do: ask the firmware for
 the buffer, reach memory the firmware shares, and keep the cache honest
 about it.

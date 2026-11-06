@@ -351,10 +351,16 @@ tkenterleave(TkTop *t)
  * them itself, as X11 does (DblTime in win-x11a.c), or no
  * <Double-Button-1> binding ever fired.  Events with no time stamp
  * (msec 0, made by a program) are never doubles.
+ *
+ * Near is a finger's near, not a mouse's: a second tap lands a few
+ * millimetres from the first, which on the Pi's 7" panel is 20 pixels
+ * or more, and on a phone at 3x more again.  At 12 a double tap was
+ * two single ones, and wm/dir's folders and ftree's files would not
+ * open.  X11, timing them itself, asks nothing about distance at all.
  */
 enum {
 	Dblmsec	= 300,
-	Dbldist	= 12,
+	Dbldist	= 32,
 };
 
 static int

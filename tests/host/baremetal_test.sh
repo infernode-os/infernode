@@ -4552,7 +4552,7 @@ printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
-check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
+check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel; a held finger is button 3, two dragged the wheel"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
 check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded"

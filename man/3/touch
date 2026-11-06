@@ -44,15 +44,16 @@ starts, reads it and writes pointer events to
 .B /dev/pointer
 (see
 .IR pointer (3)).
-The first finger is the pointer, button 1 held while it is down.
-A panel has no other buttons and no wheel, so two gestures stand for
-them, as the hosted emulator makes them of a phone's touches:
-a finger held still for half a second is button 3 (button 1 goes up),
-held until it lifts, which is every context menu: hold, slide to an item,
-lift to choose it; and two fingers dragged are the wheel, a button 8 or 16
-press and release for each 40 pixels they move, up showing what is below.
+The first finger is the pointer, button 1 held while it is down; a
+finger held still is button 3 and two dragged are the wheel, as
+.IR touchgest (2)
+makes them for every touch screen (here, two fingers move 40 pixels for a
+tick).
+Each finger is written to
+.B /dev/fingers
+as well.
 .B touch -t
-checks these, and the decoder, with no panel.
+checks the decoder, and that its frames reach the gestures, with no panel.
 What is in the kernel is what a program cannot do: ask the firmware for
 the buffer, reach memory the firmware shares, and keep the cache honest
 about it.
@@ -64,6 +65,7 @@ there is no file.
 .br
 .B /os/init/touch.b
 .SH SEE ALSO
+.IR touchgest (2),
 .IR pointer (3),
 .IR osinit (8)
 .SH BUGS

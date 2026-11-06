@@ -159,6 +159,7 @@ build_kernel() {
         "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
         "/dis/diskusb.dis=$BUILD/diskusb.dis"
         "/dis/touch.dis=$BUILD/touch.dis"
+        "/dis/lib/touchgest.dis=$ROOT/dis/lib/touchgest.dis"
         "/dis/drawtest.dis=$BUILD/drawtest.dis"
         "/dis/tktest.dis=$BUILD/tktest.dis"
         "/dis/isotest.dis=$BUILD/isotest.dis"

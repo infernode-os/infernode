@@ -471,6 +471,7 @@ dis/lib/tftp.dis
 dis/lib/timers.dis
 dis/lib/titlebar.dis
 dis/lib/tkclient.dis
+dis/lib/touchgest.dis
 dis/lib/translate.dis
 dis/lib/twofa.dis
 dis/lib/twofaslot.dis
@@ -926,6 +927,7 @@ dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
+dis/tests/touchgest_test.dis
 dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
 dis/tests/styx_pack_test.dis

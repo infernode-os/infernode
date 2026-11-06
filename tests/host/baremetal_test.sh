@@ -364,6 +364,10 @@ build_kernel() {
             # osinit asks it whether an interface that names no boot
             # protocol is a keyboard
             "/dis/lib/hid.dis=$ROOT/dis/lib/hid.dis"
+            # what a finger on a touch screen means (touchgest(2)): the
+            # touch panel's driver and mouseusb's for a USB touchscreen
+            # both load it, and may start before the card is read
+            "/dis/lib/touchgest.dis=$ROOT/dis/lib/touchgest.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
@@ -4552,10 +4556,10 @@ printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
-check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel; a held finger is button 3, two dragged the wheel"
+check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel; its frames reach touchgest (a held finger is button 3)"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
-check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded"
+check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded; a multi-touch digitizer's fingers, its frames (hybrid too) and device mode, through touchgest; the tablet no touch screen"
 OUT="$OUT_SAVED"
 
 #

@@ -29,28 +29,18 @@ implement Touch;
 # orientation: if the board shows the panel mirrored or rotated, that is
 # an inversion flag in this program, never a change to the kernel file.
 #
-# A panel has no buttons 2 and 3 and no wheel, so two gestures stand in
-# for them, the ones the hosted emulator makes of a phone's touches
-# (emu/port/draw-sdl3.c, INFR-163 and INFR-121), so a finger means the
-# same on a Pi as on a phone:
-#
-#	A finger held still for Longms is button 3: button 1 goes up and
-#	button 3 down where the finger is, held until it lifts. That is
-#	every context menu (ftree's, wm/dir's, Xenith's, Lucifer's): hold,
-#	the menu shows, slide to an item, lift to choose it. Moving more
-#	than Slop before then makes it a drag; a lift before then, a tap.
-#
-#	Two fingers dragged are the wheel: a tick, button 8 or 16 pressed
-#	and released (as mouseusb delivers a wheel), at where the fingers
-#	are, for each Tick pixels they move; up shows what is below, as a
-#	phone scrolls. Button 1, if the first finger had pressed it, goes
-#	up first. The gesture lasts until every finger has lifted, so the
-#	last one up does not press button 1 where it happens to be.
+# A panel has no buttons 2 and 3 and no wheel, so a finger held still is
+# button 3 and two dragged are the wheel: touchgest(2) makes them, for
+# this panel and a USB touchscreen (mouseusb) alike, and as the hosted
+# emulator makes them of a phone's touches.
 #
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
+include "touchgest.m";
+	touchgest: Touchgest;
+	Gest: import touchgest;
 
 Touch: module
 {
@@ -66,16 +56,19 @@ Evlift:		con 1;		# a point's event: 0 down, 1 up, 2 contact
 Width:		con 800;
 Height:		con 480;
 
-# the gestures: emu/port/draw-sdl3.c's LONGPRESS_MS and LONGPRESS_SLOP_PX,
-# and a tick shorter than its TOUCH_SCROLL_TICK_PX (50), the panel being
-# only 480 high
-Longms:		con 500;	# a finger held this long is button 3
+# the gestures' distances, in this panel's pixels: emu/port/draw-sdl3.c's
+# slop, and a step shorter than its 50, the panel being only 480 high
 Slop:		con 16;		# pixels a held finger may wander and still be held
-Tick:		con 40;		# pixels two fingers move for a wheel tick
+Step:		con 40;		# pixels two fingers move for a wheel tick
 
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	touchgest = load Touchgest Touchgest->PATH;
+	if(touchgest == nil){
+		sys->print("touch: cannot load %s: %r\n", Touchgest->PATH);
+		return;
+	}
 
 	if(args != nil && tl args != nil && hd tl args == "-t"){
 		selftest();
@@ -151,7 +144,7 @@ poll(fd, ptr: ref Sys->FD)
 {
 	buf := array[Framelen] of byte;
 	nerr := 0;
-	g := ref Gest;
+	g := Gest.new("m", Slop, Step);
 	for(;;){
 		sys->sleep(Pollms);
 		n := sys->read(fd, buf, len buf);
@@ -188,110 +181,6 @@ points(buf: array of byte, np: int): list of (int, int)
 		l = (x, y) :: l;
 	}
 	return l;
-}
-
-#
-# The pointer's state machine: the fingers of each frame in, what to
-# write to /dev/pointer out. Apart from the panel and the clock, so
-# selftest can drive it.
-#
-Gest: adt {
-	down:	int;	# a button is held: btn
-	btn:	int;	# 1, or 4 once a held finger became button 3
-	armed:	int;	# the finger may yet be held long enough
-	t0:	int;	# when it landed
-	x0, y0:	int;	# where
-	multi:	int;	# a two-finger drag, until every finger is up
-	nf:	int;	# fingers in the last frame
-	sy:	int;	# the fingers' y when last counted
-	acc:	int;	# pixels moved not yet a tick
-	x, y:	int;	# where the pointer is
-
-	frame:	fn(g: self ref Gest, pts: list of (int, int), now: int): list of string;
-	tick:	fn(g: self ref Gest, now: int): list of string;
-};
-
-Gest.frame(g: self ref Gest, pts: list of (int, int), now: int): list of string
-{
-	out: list of string;
-	nf := len pts;
-	if(nf == 0){
-		if(g.down)
-			out = m(g.x, g.y, 0) :: out;
-		g.down = g.armed = g.multi = 0;
-		g.nf = 0;
-		return rev(out);
-	}
-	if(nf >= 2 || g.multi){
-		if(!g.multi){
-			if(g.down)
-				out = m(g.x, g.y, 0) :: out;
-			g.down = g.armed = 0;
-			g.multi = 1;
-			g.acc = 0;
-		}
-		if(nf >= 2){
-			(x1, y1) := hd pts;
-			(x2, y2) := hd tl pts;
-			cy := (y1 + y2) / 2;
-			if(nf != g.nf)
-				g.sy = cy;	# a finger came or went: the middle jumps
-			g.x = (x1 + x2) / 2;
-			g.y = cy;
-			g.acc += cy - g.sy;
-			g.sy = cy;
-			# fingers up (y falls): what is below shows, the wheel's down
-			for(; g.acc <= -Tick; g.acc += Tick)
-				out = m(g.x, g.y, 0) :: m(g.x, g.y, 16) :: out;
-			for(; g.acc >= Tick; g.acc -= Tick)
-				out = m(g.x, g.y, 0) :: m(g.x, g.y, 8) :: out;
-		}
-		g.nf = nf;
-		return rev(out);
-	}
-	g.nf = nf;
-	(x, y) := hd pts;
-	if(!g.down){
-		g.down = 1;
-		g.btn = 1;
-		g.armed = 1;
-		g.t0 = now;
-		(g.x0, g.y0) = (x, y);
-		(g.x, g.y) = (x, y);
-		return m(x, y, 1) :: nil;
-	}
-	if(g.armed && (x-g.x0)*(x-g.x0) + (y-g.y0)*(y-g.y0) > Slop*Slop)
-		g.armed = 0;
-	if(x != g.x || y != g.y){
-		(g.x, g.y) = (x, y);
-		out = m(x, y, g.btn) :: out;
-	}
-	for(t := g.tick(now); t != nil; t = tl t)
-		out = hd t :: out;	# after the move
-	return rev(out);
-}
-
-Gest.tick(g: self ref Gest, now: int): list of string
-{
-	if(g.down && g.armed && g.btn == 1 && now - g.t0 >= Longms){
-		g.armed = 0;
-		g.btn = 4;
-		return m(g.x, g.y, 4) :: nil;	# button 1 up, button 3 down
-	}
-	return nil;
-}
-
-m(x, y, b: int): string
-{
-	return sys->sprint("m %d %d %d", x, y, b);
-}
-
-rev(l: list of string): list of string
-{
-	r: list of string;
-	for(; l != nil; l = tl l)
-		r = hd l :: r;
-	return r;
 }
 
 post(ptr: ref Sys->FD, s: string): int
@@ -358,41 +247,19 @@ selftest()
 		return;
 	}
 
-	# the gestures: each a run of frames, at times, and what it posts
-	one := (100, 200) :: nil;
-	g := ref Gest;
-	e := expect("a tap", g.frame(one, 0), "m 100 200 1") +
-		expect("its lift", g.frame(nil, 50), "m 100 200 0");
-	g = ref Gest;
-	g.frame(one, 0);
-	e += expect("held, not yet long", g.tick(Longms-1), nil) +
-		expect("held long: button 3", g.tick(Longms), "m 100 200 4") +
-		expect("then nothing more", g.tick(2*Longms), nil) +
-		expect("sliding to an item", g.frame((100, 260) :: nil, 2*Longms), "m 100 260 4") +
-		expect("lifting chooses it", g.frame(nil, 2*Longms), "m 100 260 0");
-	g = ref Gest;
-	g.frame(one, 0);
-	e += expect("wobbling within the slop", g.frame((110, 205) :: nil, 100), "m 110 205 1") +
-		expect("still held", g.frame((110, 205) :: nil, Longms), "m 110 205 4");
-	g = ref Gest;
-	g.frame(one, 0);
-	e += expect("a drag", g.frame((100, 230) :: nil, 100), "m 100 230 1") +
-		expect("a drag is no hold", g.tick(5*Longms), nil);
-	g = ref Gest;
-	g.frame(one, 0);
-	e += expect("a second finger lets button 1 go",
-			g.frame((100, 200) :: (200, 200) :: nil, 30), "m 100 200 0") +
-		expect("up a tick: the wheel's down",
-			g.frame((100, 200-Tick) :: (200, 200-Tick) :: nil, 60),
-			"m 150 160 16 m 150 160 0") +
-		expect("down two ticks: the wheel's up, twice",
-			g.frame((100, 200+Tick) :: (200, 200+Tick) :: nil, 90),
-			"m 150 240 8 m 150 240 0 m 150 240 8 m 150 240 0") +
-		expect("no hold while scrolling", g.tick(5*Longms), nil) +
-		expect("one finger left: nothing", g.frame((100, 300) :: nil, 120), nil) +
-		expect("nor while it rests", g.tick(10*Longms), nil) +
-		expect("all up: nothing to release", g.frame(nil, 150), nil) +
-		expect("the next touch is a press", g.frame(one, 200), "m 100 200 1");
+	# the gestures are touchgest(2)'s, tested on their own
+	# (tests/touchgest_test.b); here, that this panel's frames reach
+	# them: a frame's fingers, and a hold
+	buf[2] = byte 1;
+	buf[3] = byte (16r80 | 0);
+	buf[4] = byte 100;
+	buf[5] = byte 0;
+	buf[6] = byte 200;
+	g := Gest.new("m", Slop, Step);
+	e := expect("a tap", g.frame(points(buf, 1), 0), "m 100 200 1") +
+		expect("held", g.tick(Touchgest->Longms), "m 100 200 4");
+	buf[3] = byte (16r40 | 0);	# event 1: lifted
+	e += expect("a lifted point is no finger", g.frame(points(buf, 1), 0), "m 100 200 0");
 
 	if(e == nil)
 		sys->print("touch: selftest OK\n");

@@ -1,9 +1,9 @@
 #!/dis/sh.dis
 #
 # wm/osk in Lucifer's phone layout (infmobile=1), for
-# tests/host/osk_mobile_test.sh (not a test itself): the chat's field
-# tapped and the keyboard hidden by its strip's icon, twice, the screen
-# captured after each step.  A tap is a finger and the pointer's press
+# tests/host/osk_mobile_test.sh and tablet_layout_test.sh (not a test
+# itself): the chat's field tapped and the keyboard hidden by its
+# strip's icon, twice, the screen captured after each step.  A tap is a finger and the pointer's press
 # made from it, as SDL reports one on a phone.
 #
 load std expr
@@ -26,10 +26,13 @@ fn hide {
 	tapat $x $y
 }
 
+# where the chat's field is tapped: a third of the way across (the
+# accordion's chat is the screen's width), or $tapx (a tablet's columns)
+if {~ $#tapx 0} {tapx=${expr $w 3 /}}
 while {! grep -s '^words [1-9]' /mnt/osk/status} {sleep 1}
 snap boot
 for i in 1 2 {
-	tapat ${expr $w 3 /} ${expr $h 50 -}
+	tapat $tapx ${expr $h 50 -}
 	snap shown$i
 	hide
 	snap hidden$i

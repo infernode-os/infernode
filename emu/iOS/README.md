@@ -166,7 +166,20 @@ to the simulator.
 **iPadOS.** The app is universal (`UIDeviceFamily` 1 and 2): the same
 build installs on an iPad, simulator or device, with no separate target.
 On iPad it offers all four orientations (`UISupportedInterfaceOrientations~ipad`),
-as Split View and Slide Over need. To run it on an iPad simulator, boot one
+as Split View and Slide Over need. `main_ios_gui.m` passes `--tablet` to
+`boot-mobile.sh` on an iPad, and Lucifer lays it out by its shape: on its
+side, the desktop's three columns; upright, the phone's accordion
+(`chooselayout` in `appl/cmd/lucifer.b`). Touch sizing (the tall task
+bar, finger-sized targets, the keyboard on the screen) stays in both.
+
+**Rotation.** Turning the device (or an iPad's Split View) resizes the
+app's window. The screen follows it as a desktop window's resize does:
+the buffer is square, as long as the display's longer side, the safe area
+is read again and shown one to one, and its size posted to `/dev/wmsize`,
+which Lucifer reads (`emu/port/draw-sdl3.c`). It used to keep its first
+size, letterboxed against the safe area of launch, so a turned screen was
+cut off. `tests/host/tablet_layout_test.sh` turns one under Xvfb with an
+emulator built `EMUOPTIONS=-DMOBILE_TOUCH=1` (`TOUCH_EMU`). To run it on an iPad simulator, boot one
 (and only one: the script installs on `booted`) and build as above:
 
 ```sh

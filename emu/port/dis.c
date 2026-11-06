@@ -1500,6 +1500,19 @@ vmachine(void *a)
 	startup();
 
 	while(waserror()) {
+		/*
+		 * An error out of the collector (execatidle, the busy pass
+		 * below: a type's free function raising) is no Prog's
+		 * exception. currun() is this proc's own up->prog then, with
+		 * no registers and a nil exval, and handler() faulted reading
+		 * them ("SYS: process dis faults" at handler+0x60, as
+		 * keyring's freeSK did when a sweep had freed its SigAlg
+		 * first). The collector's state is half-way through a block;
+		 * say what was raised and stop, as os/port/dis.c does.
+		 */
+		if(up->type != Interp)
+			panic("vmachine: error in the garbage collector (type %#x): %s",
+				up->type, up->env->errstr);
 		if(up->iprog != nil)
 			acquire();
 		if(handler(up->env->errstr) == 0) {

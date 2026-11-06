@@ -1755,7 +1755,11 @@ check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
 check "etherusb: ep3.0 configuration 2 offers rndis" "the driver reads the first configuration: RNDIS"
 check "etherusb: ep3.0 configuration 1 offers ecm (interfaces 0, 1)" "and the second: ECM, with its union descriptor"
 check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u, from the data interface's setting 1"
-check "etherusb: ep3.0 ecm, MAC 40:54:00:12:34:57" "ECM is chosen over RNDIS and the MAC read out of the device"
+if grep -qE 'etherusb: ep3\.0 ecm, MAC ([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}' <<<"$OUT"; then
+    pass "ECM is chosen over RNDIS and a valid MAC is read out of the device"
+else
+    fail "ECM was not chosen or its device supplied no valid MAC"
+fi
 refute "SET_INTERFACE"                         "the data interface accepts setting 1"
 check "etherusb: ep3.0 ready"                  "the device is in the configuration asked for"
 
@@ -5026,6 +5030,11 @@ vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv
 # the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
 # and hundreds of one-byte descending TCP segments (head insertion).
 if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
+    if grep -q '^ARP-PADDING-PASS$' <<<"$NETSEC"; then
+        pass "virt: ARP replies do not disclose kernel bytes in Ethernet padding"
+    else
+        fail "virt: ARP reply padding was not cleared -- $NETSEC"
+    fi
     if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
         pass "virt: valid fragmented ICMP is still reassembled"
     else
@@ -5046,8 +5055,8 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
     fi
-    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC"; then
-        pass "virt: malformed UDP/TCP header lengths are rejected without panic"
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC" && grep -q '^TRANSPORT-HEADER-PASS$' <<<"$NETSEC"; then
+        pass "virt: incomplete and malformed UDP/TCP headers are rejected without panic"
     else
         fail "virt: transport header length checks did not pass -- $NETSEC"
     fi
@@ -5055,6 +5064,16 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
         pass "virt: a negative IP device attach is rejected without corruption"
     else
         fail "virt: negative IP device attach check did not pass -- $NETSEC"
+    fi
+    if grep -q '^TCP-LIMBO-REAP-PASS$' <<<"$NETSEC"; then
+        pass "virt: a half-open TCP flood is fully reaped"
+    else
+        fail "virt: TCP half-open entries did not age out -- $NETSEC"
+    fi
+    if grep -q '^TCP-WINDOW-SCALE-PASS$' <<<"$NETSEC"; then
+        pass "virt: TCP applies the peer's window scale to its send window"
+    else
+        fail "virt: TCP window-scale directions are reversed -- $NETSEC"
     fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"

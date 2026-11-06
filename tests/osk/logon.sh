@@ -49,3 +49,4 @@ if {ftest -e /mnt/osk/status} {
 } {echo R gone}
 cp /tmp/trace /tmp/trace.copy
 echo R done
+echo halt > '#c/sysctl'

@@ -18,3 +18,4 @@ for l in qwerty dvorak colemak {
 cat /mnt/osk/status > /tmp/status
 cat /chan/wmwindows > /tmp/windows
 echo R done
+echo halt > '#c/sysctl'

@@ -34,12 +34,13 @@ n=$(echo "$reports" | grep -c .)
 [ "$n" = 10 ] || fail "$n refusals reported, want the first 10 only"
 
 first=$(echo "$reports" | head -1)
-pat="^pool main: cannot allocate 3355[0-9]* bytes \(beyond the pool's maxsize\) for [^ ]+\+0x[0-9a-f]+: cursize [0-9]+ arenasize [0-9]+ maxsize 8388608 largest free [0-9]+; asked by \\\$Keyring; refusal 1$"
+pat="^pool main: cannot allocate 3355[0-9]* bytes \(beyond the pool's maxsize\) for ([^ ]+\+0x[0-9a-f]+|pc 0x[0-9a-f]+): cursize [0-9]+ arenasize [0-9]+ maxsize 8388608 largest free [0-9]+; asked by \\\$Keyring; refusal 1$"
 echo "$first" | grep -Eq "$pat" || fail "first report not as expected: $first"
 echo "$reports" | tail -1 | grep -q 'refusal 10, now reporting every 1000th$' || fail "the tenth report does not say what follows"
 
-# The caller is the malloc in Keyring_aesgcmencrypt, where addr2line can say.
-if command -v addr2line >/dev/null 2>&1; then
+# When the emulator can turn the PC into image+offset, addr2line must identify
+# the allocator.  PIE builds on macOS deliberately fall back to a raw PC.
+if command -v addr2line >/dev/null 2>&1 && echo "$first" | grep -q ' for [^ ]*+0x'; then
 	off=$(echo "$first" | sed -n 's/.* for [^ ]*+\(0x[0-9a-f]*\):.*/\1/p')
 	fn=$(addr2line -f -e "$EMU" "$off" 2>/dev/null | head -1)
 	[ "$fn" = Keyring_aesgcmencrypt ] || fail "caller $off resolves to '$fn', want Keyring_aesgcmencrypt"

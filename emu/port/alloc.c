@@ -826,6 +826,17 @@ msize(void *v)
 	return malloc_usable_size(v);
 }
 
+/* as below: a must-have allocation refused waits a moment */
+void
+waitmem(void)
+{
+	if(up != nil)
+		osenter();
+	osmillisleep(100);
+	if(up != nil)
+		osleave();
+}
+
 #else
 
 static int smallocwarned;

@@ -214,7 +214,16 @@ init(nil: ref Draw->Context, args: list of string)
 		usage();
 
 	w := Win.wnew();
-	w.wname("/+Agent");
+	# Named in the directory it works in, as acme's win is, so that a
+	# file named in the conversation (src/x.b:32) is looked up there; as
+	# /+Agent its directory was /, and button 3 on one found nothing.
+	wdir := "";
+	if((dfd := sys->open(".", OREAD)) != nil)
+		wdir = sys->fd2path(dfd);
+	dfd = nil;
+	if(wdir == "/")
+		wdir = "";
+	w.wname(wdir + "/+Agent");
 	w.wtagwrite(" Send Stop Reset Render Allow Deny Apply Discard");
 	w.openbody(OWRITE);
 
@@ -264,7 +273,9 @@ briefing(paths: string): string
 				dir = dir[0:len dir - 3];
 			b += " The user's working directory is " + dir + ": a relative " +
 				"path the user names is relative to it, and in replies name " +
-				"files relative to it.";
+				"files relative to it. Name a place in a file as path:line " +
+				"(src/x.b:32), with no quotes or backticks around it: the user " +
+				"opens it by clicking it.";
 		}
 	}
 	return b;

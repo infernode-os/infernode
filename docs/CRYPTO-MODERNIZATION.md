@@ -436,7 +436,11 @@ peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike`).
 The policy is the environment of the process that started the emulator, so
 set it where every way of starting one sees it: on macOS, both launchd
 (`launchctl setenv`, which a LaunchAgent makes last) for the Dock and Finder,
-and the shell's profile for a terminal. Certificates follow the
+and the shell's profile for a terminal. A bare-metal board has no host
+environment: a file `cnsamode` on its card turns the mode on at boot
+([BAREMETAL.md](BAREMETAL.md) section 5), through a kernel switch that
+only turns on, and only before anything has authenticated, so no process
+can make its own connections weaker than the machine's policy. Certificates follow the
 signing key's strength (#304): `createsignerkey` and the other signer sites
 choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
 record the choice in the certificate's `ha` field, which verifiers re-hash

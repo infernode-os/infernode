@@ -243,6 +243,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **A bare-metal board can join a CNSA-mode fleet.** The handshake asks
+  for `CNSAMODE` through `getenv`, which on bare metal always said no, so
+  a Pi used ML-KEM-768 and could not authenticate with any CNSA-mode node
+  (`bad ml-kem public key length: this node is in CNSA mode`, from the
+  other side). A file `cnsamode` on the card now turns strict mode on at
+  boot, through a kernel switch (`cnsamode on` on `/dev/sysctl`) that is
+  one way and refused once anything has authenticated without it; boot
+  also sets `/env/cnsamode`, as the hosted emulator does.
 - **Bare metal: a key is made only from a hardware generator.** A board
   with no working generator (the Pi 4's RNG200 not answering, the
   PolarFire's nonce service refusing, a QEMU virt without virtio-rng)

@@ -497,6 +497,7 @@ bench machine depending on what these say. All are optional.
 |-|-|-|
 | `rootpath` | lines: `local`, or `net tcp!host!port` | Where userspace comes from, applied top to bottom. `local` unions the card's `dis/ lib/ fonts/ icons/` *after* the kernel's recovery root and binds `usr/` writable over `/usr`. `net …` mounts a Styx server (**no authentication**) on `/n/remote` and does the same from there. Absent = `local`. |
 | `skiplogon` | existence only | The desktop starts without `wm/logon`, factotum or secstore. Keys will not persist. Delete it for the login screen. |
+| `cnsamode` | existence only | CNSA 2.0 strict authentication: every authenticated connection (mount, `listen`, `cpu`, the cpu listener) uses ML-KEM-1024 instead of ML-KEM-768, as `CNSAMODE` does for the hosted emulator, so the board can be one of a CNSA-mode fleet. Every node must agree; a mixed pair fails, and the error says which side is in CNSA mode. Read straight after the card is mounted, before anything can authenticate; it throws the kernel's one-way switch (`cnsamode on` on `/dev/sysctl`) and sets `/env/cnsamode` for `createsignerkey` and `signer`. Absent = ML-KEM-768. See [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md). |
 | `wifi` | `essid <name>` and `password <phrase>`, one per line; the value is the rest of the line | Join at boot, before anyone logs in. **The card is FAT: no permissions, and this is a passphrase in clear text.** Absent = the radio is left alone. |
 | `bt` | one `/net/bt` ctl line per line (`#` comments). Typically `firmware /n/dos/firmware/BCM4345C0.hcd`, `up`, `name …`, `pairable on`, `discoverable on`, `baud 3000000` | Bluetooth, via `bt9p` on `/dev/eia0`. `firmware` must precede `up`; `baud` follows it (115200 without it: about 94 kbit/s). Absent = no Bluetooth. See [BLUETOOTH.md](BLUETOOTH.md). |
 | `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
@@ -536,7 +537,7 @@ the secondary cores; the Dis VM, running `/osinit.dis`.
 **`osinit`** (`os/init/osinit.b`), in order: a few more self-checks (the
 kernel image's SHA-1, GPIO, every core ticking, a JIT stress run) → bind
 `#I #p #e #u #s #A` → loopback → **read the card's partition table, name
-the partitions to `#S`, start `dossrv`, mount `/n/dos`** → apply
+the partitions to `#S`, start `dossrv`, mount `/n/dos`** → `cnsamode` → apply
 `rootpath` → hand the Wi-Fi firmware to the radio → an 8 MB memory
 filesystem on `/tmp` → `wifi` → `bt` → `camera` → the touch panel → a kernel network
 card, if there is one (virt) → *spawn* the USB bus walk (keyboard, mouse,

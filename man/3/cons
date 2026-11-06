@@ -294,6 +294,17 @@ being destroyed,
 writing
 .B broken
 ensures that they are left in this state to allow debugging (the default).
+On a native kernel,
+.B "cnsamode on"
+makes every authentication from then on CNSA 2.0 strict (ML-KEM-1024),
+as the host's
+.B CNSAMODE
+does for the emulator: one way, for the whole machine, and refused once
+an authentication has run without it.
+.IR osinit (8)
+writes it at boot when the card has a
+.B cnsamode
+file.
 Only the privileged user is allowed to write to this file.
 .PP
 The

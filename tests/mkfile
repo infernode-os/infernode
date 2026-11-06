@@ -432,6 +432,7 @@ SYSMODULES=\
 	styxlib.m\
 	9p.m\
 	ipints.m\
+	sdrdsp.m\
 
 DISBIN=$ROOT/dis/tests
 

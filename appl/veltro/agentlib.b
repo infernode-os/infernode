@@ -1024,10 +1024,12 @@ positional(tool, inputjson: string): string
 			return "-v " + voice + " " + jval(vals, "text");
 		return jval(vals, "text");
 	"vision" =>
-		b := jval(vals, "backend");
-		if(b != "" && !hasprefix(b, "--"))
-			b = "--" + b;
-		return joinargs(b :: jval(vals, "imagepath") :: jval(vals, "prompt") :: nil);
+		a := jval(vals, "imagepath") :: nil;
+		if((t := jval(vals, "thresh")) != "")
+			a = "-t" :: t :: a;
+		if((c := jval(vals, "classes")) != "")
+			a = "-c" :: c :: a;
+		return joinargs(a);
 	"limbo" =>
 		path := jval(vals, "path");
 		if(path != "")

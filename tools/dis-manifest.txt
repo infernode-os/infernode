@@ -226,7 +226,6 @@ dis/getline.dis
 dis/gettar.dis
 dis/gif2bit.dis
 dis/gpsfs.dis
-dis/gpusrv.dis
 dis/grep.dis
 dis/grid/lib/announce.dis
 dis/grid/register.dis
@@ -757,9 +756,6 @@ dis/tests/grpwait_test.dis
 dis/tests/goroutine_leak_test.dis
 dis/tests/gdl90_test.dis
 dis/tests/gps_capability_test.dis
-dis/tests/gpu_bench.dis
-dis/tests/gpu_smoke.dis
-dis/tests/gpu_test.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis
@@ -1016,7 +1012,6 @@ dis/veltro/tools/fractal.dis
 dis/veltro/tools/gap.dis
 dis/veltro/tools/git.dis
 dis/veltro/tools/gps.dis
-dis/veltro/tools/gpu.dis
 dis/veltro/tools/grep.dis
 dis/veltro/tools/hear.dis
 dis/veltro/tools/http.dis

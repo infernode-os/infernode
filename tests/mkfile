@@ -70,7 +70,6 @@ TARG=\
 	font_format_test.dis\
 	git_test.dis\
 	goroutine_leak_test.dis\
-	gpu_test.dis\
 	hello_test.dis\
 	appfs_fake.dis\
 	intsem_test.dis\
@@ -274,8 +273,6 @@ TARG=\
 	bioauth_test.dis\
 	softkbd_test.dis\
 	voice_scripts_test.dis\
-	gpu_bench.dis\
-	gpu_smoke.dis\
 	llmclient_sse_fallback_test.dis\
 	llmclient_proxy_test.dis\
 	llmclient_pool_test.dis\
@@ -346,7 +343,6 @@ SYSMODULES=\
 	draw.m\
 	lucitheme.m\
 	git.m\
-	gpu.m\
 	json.m\
 	js.m\
 	jslex.m\

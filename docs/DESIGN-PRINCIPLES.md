@@ -221,12 +221,13 @@ surface that, never swallow it.
 **Sessions via the clone pattern.** When clients need per-session
 state, serve a `clone` file: reading it allocates a session and
 returns its id, and a directory of that name appears with the
-session's files. Study `appl/cmd/gpusrv.b` — its 35-line header
-comment is the best tutorial on this idiom in the tree — and
-`appl/cmd/webfs.b`.
+session's files, gone when they are all closed. Study
+`appl/cmd/visionfs.b` — its header comment and `man/4/visionfs` say
+what each file does, and its sessions show both waiting reads and a
+reader's own place in a stream — and `appl/cmd/webfs.b`.
 
 **Exemplars worth studying** before writing your own:
-`gpusrv.b` (clone multiplexing), `webfs.b` (remote-backed
+`visionfs.b` (clone multiplexing), `webfs.b` (remote-backed
 `/mnt` service), `auditfs.b` (a five-file surface whose header
 comment explains every design choice), `man/4/mail9p` (the man
 page format a service should ship with), and
@@ -609,7 +610,7 @@ In reading order for a new contributor:
   and its Plan 9 lineage.
 - [LIMBO-FOR-GO-PROGRAMMERS.md](LIMBO-FOR-GO-PROGRAMMERS.md) —
   the language, mapped from what you already know.
-- `man/2/styxservers`, `man/4/mail9p`, `appl/cmd/gpusrv.b` —
+- `man/2/styxservers`, `man/4/mail9p`, `appl/cmd/visionfs.b` —
   how to write and document a file server.
 - `doc/limbo/limbo.ms`, `doc/styx.ms`, `doc/sh.ms` — the
   original Bell Labs papers, in-tree.

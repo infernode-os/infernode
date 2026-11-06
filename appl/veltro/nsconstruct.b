@@ -390,12 +390,16 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 		   !inlist("wsys", mntpaths))
 			mntpaths = "wsys" :: mntpaths;
 	}
-	# GPU inference is fixed-function service authority. The gpu and vision
-	# tools receive it per-invocation; generic path grants cannot.
-	if(inlist("gpu", caps.tools) || inlist("vision", caps.tools)) {
-		(gpuok, nil) := sys->stat("/mnt/gpu");
-		if(gpuok >= 0 && !inlist("gpu", mntpaths))
-			mntpaths = "gpu" :: mntpaths;
+	# /mnt/vision — recognition (visionfs(4)). Fixed-function service
+	# authority: the vision tool receives it per-invocation; generic path
+	# grants cannot. It is a picture's words, not a camera's frames:
+	# /mnt/video is never granted with it. The whole mount, as sessions
+	# appear in it after the name space is built (a restricted directory
+	# would hide them).
+	if(inlist("vision", caps.tools)) {
+		(visok, nil) := sys->stat("/mnt/vision");
+		if(visok >= 0 && !inlist("vision", mntpaths))
+			mntpaths = "vision" :: mntpaths;
 	}
 	# /mnt/gps — the GPS receiver (gpsfs(4)). Fixed-function: only the gps
 	# tool, and only its read files (narrowed below), never ctl or feed, so
@@ -444,8 +448,7 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 	# shell could query unrelated credentials stored in the shared factotum.
 	# Mixed grants fail closed: websearch reports its key unavailable. A future
 	# per-credential broker may safely remove this incompatibility (INFR-363).
-	if((inlist("git", caps.tools) || inlist("websearch", caps.tools) ||
-	    inlist("vision", caps.tools)) &&
+	if((inlist("git", caps.tools) || inlist("websearch", caps.tools)) &&
 	   !inlist("exec", caps.tools) && !inlist("shell", caps.tools)) {
 		(facok, nil) := sys->stat("/mnt/factotum");
 		if(facok >= 0 && !inlist("factotum", mntpaths))
@@ -1030,7 +1033,7 @@ restrictmcptools(toolsdir: string, deny: list of string): string
 needsnet(tools: list of string): int
 {
 	networktools := "browse" :: "git" :: "http" :: "payfetch" ::
-		"vision" :: "webfetch" :: "websearch" :: nil;
+		"webfetch" :: "websearch" :: nil;
 	for(; tools != nil; tools = tl tools)
 		if(inlist(hd tools, networktools))
 			return 1;
@@ -1382,7 +1385,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/wsys" || prefix(path, "/mnt/wsys/") ||
 		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
-		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/vision" || prefix(path, "/mnt/vision/") ||
 		path == "/mnt/gps" || prefix(path, "/mnt/gps/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
@@ -1674,7 +1677,7 @@ emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
 		("/mnt/mcp",  "MCP Providers",    "rw"),
 		("/mnt/matrix", "Matrix Runtime", "rw"),
 		("/mnt/wsys", "Window Pictures", "ro"),
-		("/mnt/gpu", "GPU Service", "rw"),
+		("/mnt/vision", "Vision Service", "rw"),
 		("/mnt/gps", "GPS Receiver", "ro"),
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),

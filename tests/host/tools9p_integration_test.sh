@@ -562,22 +562,22 @@ else
 fi
 
 if emu_c "bindpath_fixed_service_rejected" 12 \
-    "mkdir -p /mnt/matrix /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/video/0/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/gpu:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/gpu/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/web:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/web/clone:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/web:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/web/clone:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wiki:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wiki/new:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wikia:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wikia/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/wikia:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/wikia/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "mkdir -p /mnt/matrix /mnt/vision/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/vision/clone /mnt/vision/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/video/0/ctl /phone/sms; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/matrix:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/vision:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/vision/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/web:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/web/clone:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/web:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/web/clone:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wiki:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wiki/new:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wikia:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wikia/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/wikia:rw' > /mnt/toolctl/ctl; echo 'bindpath /n/wikia/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/video/0/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone:rw' > /mnt/toolctl/ctl; echo 'bindpath /phone/sms:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "fixed-service bindpath probe did not establish a valid baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/mnt/gpu" || echo "$OUTPUT" | grep -q "^/mnt/web" || echo "$OUTPUT" | grep -q "^/n/web" || echo "$OUTPUT" | grep -q "^/mnt/wiki" || echo "$OUTPUT" | grep -q "^/n/wikia" || echo "$OUTPUT" | grep -q "^/mnt/video" || echo "$OUTPUT" | grep -q "^/phone"; then
+    elif echo "$OUTPUT" | grep -q "^/mnt/matrix" || echo "$OUTPUT" | grep -q "^/mnt/vision" || echo "$OUTPUT" | grep -q "^/mnt/web" || echo "$OUTPUT" | grep -q "^/n/web" || echo "$OUTPUT" | grep -q "^/mnt/wiki" || echo "$OUTPUT" | grep -q "^/n/wikia" || echo "$OUTPUT" | grep -q "^/mnt/video" || echo "$OUTPUT" | grep -q "^/phone"; then
         fail "bindpath accepted a fixed-service control tree (output: $OUTPUT)"
     else
-        pass "bindpath rejects Matrix, Git, GPU, web, wiki, video, and phone service trees"
+        pass "bindpath rejects Matrix, Git, vision, web, wiki, video, and phone service trees"
     fi
 else
     fail "fixed-service bindpath rejection probe failed"
 fi
 
 if emu_c "startup_fixed_service_rejected" 12 \
-    "mkdir -p /mnt/matrix /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/video/0/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /mnt/gpu:rw -p /mnt/gpu/0/ctl:rw -p /mnt/web:rw -p /mnt/web/clone:rw -p /n/web:rw -p /n/web/clone:rw -p /mnt/wiki:rw -p /mnt/wiki/new:rw -p /mnt/wikia:rw -p /mnt/wikia/ctl:rw -p /n/wikia:rw -p /n/wikia/ctl:rw -p /mnt/video:rw -p /mnt/video/0/ctl:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
-    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/mnt/gpu" && ! echo "$OUTPUT" | grep -q "^/mnt/web" && ! echo "$OUTPUT" | grep -q "^/n/web" && ! echo "$OUTPUT" | grep -q "^/mnt/wiki" && ! echo "$OUTPUT" | grep -q "^/n/wikia" && ! echo "$OUTPUT" | grep -q "^/mnt/video" && ! echo "$OUTPUT" | grep -q "^/phone"; then
-        pass "startup -p rejects Matrix, Git, GPU, web, wiki, video, and phone service trees"
+    "mkdir -p /mnt/matrix /mnt/vision/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/video/0 /phone; touch /mnt/matrix/ctl /mnt/vision/clone /mnt/vision/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/video/0/ctl /phone/sms; tools9p -p /mnt/matrix:rw -p /mnt/vision:rw -p /mnt/vision/0/ctl:rw -p /mnt/web:rw -p /mnt/web/clone:rw -p /n/web:rw -p /n/web/clone:rw -p /mnt/wiki:rw -p /mnt/wiki/new:rw -p /mnt/wikia:rw -p /mnt/wikia/ctl:rw -p /n/wikia:rw -p /n/wikia/ctl:rw -p /mnt/video:rw -p /mnt/video/0/ctl:rw -p /phone:rw -p /phone/sms:rw read; cat /tool/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q "privileged -p path not grantable" && ! echo "$OUTPUT" | grep -q "^/mnt/matrix" && ! echo "$OUTPUT" | grep -q "^/mnt/vision" && ! echo "$OUTPUT" | grep -q "^/mnt/web" && ! echo "$OUTPUT" | grep -q "^/n/web" && ! echo "$OUTPUT" | grep -q "^/mnt/wiki" && ! echo "$OUTPUT" | grep -q "^/n/wikia" && ! echo "$OUTPUT" | grep -q "^/mnt/video" && ! echo "$OUTPUT" | grep -q "^/phone"; then
+        pass "startup -p rejects Matrix, Git, vision, web, wiki, video, and phone service trees"
     else
         fail "startup -p accepted a fixed-service control tree (output: $OUTPUT)"
     fi
@@ -586,21 +586,21 @@ else
 fi
 
 if emu_c "fixed_service_tool_derived" 15 \
-    "mkdir -p /mnt/matrix /mnt/gpu/models /mnt/wikia /phone; echo 'runtime: test' > /mnt/matrix/ctl; echo 'fake gpu info' > /mnt/gpu/ctl; echo 'wiki status ok' > /mnt/wikia/status; touch /mnt/wikia/ctl /phone/sms; tools9p sms matrix gpu wiki read & sleep 2; echo '15551234 test' > /tool/sms/ctl; cat /tool/sms/ctl; echo PHONE; cat /phone/sms; echo status > /tool/matrix/ctl; cat /tool/matrix/ctl; echo info > /tool/gpu/ctl; cat /tool/gpu/ctl; echo status > /tool/wiki/ctl; cat /tool/wiki/ctl; echo /phone/sms > /tool/read/ctl; echo GENERICPHONE; cat /tool/read/ctl; echo /mnt/gpu/ctl > /tool/read/ctl; echo GENERICGPU; cat /tool/read/ctl; echo /mnt/wikia/status > /tool/read/ctl; echo GENERICWIKI; cat /tool/read/ctl"; then
+    "mkdir -p /mnt/matrix /mnt/vision/0 /mnt/vision/models /mnt/wikia /phone; echo 'runtime: test' > /mnt/matrix/ctl; echo 0 > /mnt/vision/clone; touch /mnt/vision/0/image; echo 'class=fakedog score=0.9 x0=1 y0=2 x1=3 y1=4' > /mnt/vision/0/detections; echo pic > /mnt/vision/models/pic; echo 'wiki status ok' > /mnt/wikia/status; touch /mnt/wikia/ctl /phone/sms; tools9p sms matrix vision wiki read & sleep 2; echo '15551234 test' > /tool/sms/ctl; cat /tool/sms/ctl; echo PHONE; cat /phone/sms; echo status > /tool/matrix/ctl; cat /tool/matrix/ctl; echo /mnt/vision/models/pic > /tool/vision/ctl; cat /tool/vision/ctl; echo status > /tool/wiki/ctl; cat /tool/wiki/ctl; echo /phone/sms > /tool/read/ctl; echo GENERICPHONE; cat /tool/read/ctl; echo /mnt/vision/clone > /tool/read/ctl; echo GENERICVISION; cat /tool/read/ctl; echo /mnt/wikia/status > /tool/read/ctl; echo GENERICWIKI; cat /tool/read/ctl"; then
     if ! echo "$OUTPUT" | grep -q "sms: queued to 15551234" ||
        ! echo "$OUTPUT" | grep -q "send 15551234 test" ||
        ! echo "$OUTPUT" | grep -q "runtime:" ||
-       ! echo "$OUTPUT" | grep -q "fake gpu info" ||
+       ! echo "$OUTPUT" | grep -q "class=fakedog score=0.9" ||
        ! echo "$OUTPUT" | grep -q "wiki status ok"; then
-        fail "fixed tools lost their derived Matrix/GPU/wiki/phone capabilities (output: $OUTPUT)"
+        fail "fixed tools lost their derived Matrix/vision/wiki/phone capabilities (output: $OUTPUT)"
     elif ! echo "$OUTPUT" | grep -q "error: cannot open /phone/sms"; then
         fail "generic read inherited the phone tool's derived capability (output: $OUTPUT)"
-    elif ! echo "$OUTPUT" | grep -q "error: cannot open /mnt/gpu/ctl"; then
-        fail "generic read inherited the GPU tool's derived capability (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -q "error: cannot open /mnt/vision/clone"; then
+        fail "generic read inherited the vision tool's derived capability (output: $OUTPUT)"
     elif ! echo "$OUTPUT" | grep -q "error: cannot open /mnt/wikia/status"; then
         fail "generic read inherited the wiki tool's derived capability (output: $OUTPUT)"
     else
-        pass "fixed tools receive Matrix/GPU/wiki/phone while generic read remains isolated"
+        pass "fixed tools receive Matrix/vision/wiki/phone while generic read remains isolated"
     fi
 else
     fail "fixed-service derived capability probe failed"

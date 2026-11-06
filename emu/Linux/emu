@@ -52,7 +52,6 @@ mod
 	keyring
 	i420
 	tensor
-#	gpu
 #	loader
 #	freetype
 

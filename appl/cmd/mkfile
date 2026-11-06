@@ -94,7 +94,6 @@ TARG=\
 	gif2bit.dis\
 	gpsfs.dis\
 	sdrfs.dis\
-	gpusrv.dis\
 	llmctl9p.dis\
 	llmsrv.dis\
 	mail9p.dis\
@@ -267,7 +266,6 @@ SYSMODULES=\
 	filter.m\
 	fslib.m\
 	ftrans.m\
-	gpu.m\
 	llmclient.m\
 	hash.m\
 	imagefile.m\

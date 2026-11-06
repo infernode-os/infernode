@@ -173,12 +173,10 @@ TOOL_PATHS := array[] of {
 	("charon",    "/dis/veltro/tools/charon.dis"),
 	# Where this machine is (requires gpsfs at /mnt/gps; read only)
 	("gps",     "/dis/veltro/tools/gps.dis"),
-	# GPU inference (requires gpusrv mounted at /mnt/gpu)
-	("gpu",     "/dis/veltro/tools/gpu.dis"),
 	# Speech tools (require /mnt/speech via speech9p)
 	("say",     "/dis/veltro/tools/say.dis"),
 	("hear",    "/dis/veltro/tools/hear.dis"),
-	# Vision (local GPU or Anthropic cloud API)
+	# What is in a picture (requires visionfs at /mnt/vision)
 	("vision",  "/dis/veltro/tools/vision.dis"),
 	("editor", "/dis/veltro/tools/editor.dis"),
 	("shell", "/dis/veltro/tools/shell.dis"),

@@ -48,7 +48,6 @@
 | [draw-geometry.md](draw-geometry.md) | Anti-aliased geometry in the draw device |
 | [scene-design.md](scene-design.md) | Scene: a general 2-D situation display (`lib/scene`, `scenefs`, `wm/scene`) |
 | [H264-9P-BRIDGE.md](H264-9P-BRIDGE.md) | H.264-over-9P video bridge (`vid9p`) |
-| [ML-VISION-9P.md](ML-VISION-9P.md) | Design exploration: ML vision inference as composable 9P services |
 | [INFR-119-design.md](INFR-119-design.md) | Design proposal: split the mobile zones into wm windows and a generic pager |
 
 ## For Developers

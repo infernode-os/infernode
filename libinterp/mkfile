@@ -29,7 +29,6 @@ OFILES=\
 	das-$OBJTYPE.$O\
 	keyring.$O\
 	string.$O\
-	gpu-stub.$O\
 	i420.$O\
 	tensor.$O\
 
@@ -50,8 +49,6 @@ MODULES=\
 	$ROOT/module/ipints.m\
 	$ROOT/module/crypt.m\
 	keyringif.m\
-	$ROOT/module/gpu.m\
-	gpuif.m\
 	$ROOT/module/i420.m\
 	i420if.m\
 	$ROOT/module/tensor.m\
@@ -90,12 +87,6 @@ tkmod.h:D: $MODULES
 keyringif.h:D: $MODULES keyringif.m
 	rm -f $target && limbo -a  -I$ROOT/module keyringif.m > $target
 
-gpu.h:D: $MODULES gpuif.m
-	rm -f $target && limbo -t GPU -I$ROOT/module gpuif.m > $target
-
-gpuif.h:D: $MODULES gpuif.m
-	rm -f $target && limbo -a -I$ROOT/module gpuif.m > $target
-
 i420mod.h:D: $MODULES i420if.m
 	rm -f $target && limbo -t I420 -I$ROOT/module i420if.m > $target
 
@@ -119,10 +110,6 @@ tensormod.h:D: $MODULES tensorif.m
 tensorif.h:D: $MODULES tensorif.m
 	rm -f $target && limbo -a -I$ROOT/module tensorif.m > $target
 
-# GPU support: default uses gpu-stub.$O (no-op).
-# For Jetson with TensorRT, replace gpu-stub.$O with gpu.$O in OFILES above
-# and rebuild: mk nuke && mk install
-gpu.$O:		gpu.h gpuif.h trt-wrapper.h
 ipint.$O:	ipint.h ipintsmod.h
 crypt.$O:	ipint.h runt.h cryptmod.h
 loader.$O:	loadermod.h
@@ -143,9 +130,6 @@ kif.$O: kif.c
 #	Do not remove optab.h, because the script that builds
 #	it works only on UNIX and Plan 9.
 
-trt-wrapper.$O: trt-wrapper.cpp trt-wrapper.h
-	g++ -c -O2 -I/usr/local/cuda/include -I/usr/include/aarch64-linux-gnu trt-wrapper.cpp -o trt-wrapper.$O
-
 nuke:EV:	nuke-std
-	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c cryptmod.h keyringif.h ipintsmod.h gpu.h gpuif.h
+	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c cryptmod.h keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
 

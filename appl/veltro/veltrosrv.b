@@ -757,7 +757,7 @@ collect(c: ref Call): string
 tooltimeout(name: string): int
 {
 	case str->tolower(name) {
-	"limbo" or "spawn" or "wiki" or "vision" =>
+	"limbo" or "spawn" or "wiki" =>
 		return LLM_READ_TIMEOUT;
 	}
 	return TOOL_TIMEOUT;

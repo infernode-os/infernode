@@ -1,4 +1,4 @@
 tool=vision
-	description='AI vision over local GPU or the Anthropic API'
-	authorities='reads_fs dials_net sends_llm'
-	notes='Local GPU backend stays on-device; the cloud backend sends the image to the Anthropic Messages API (dials_net + sends_llm egress).'
+	description='What is in a picture, from vision(4) at /mnt/vision'
+	authorities='reads_fs'
+	notes='The picture goes only to whatever server is mounted at /mnt/vision, the fixed-function grant this tool alone receives; no network egress of its own, no credentials, never /mnt/video. The grant is the whole mount, so the tool can also write its ctl (load or unload a model).'

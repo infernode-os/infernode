@@ -1,11 +1,12 @@
 /*
  * emu/port/lock.c (the emulator's Lock, QLock and RWlock) on the host,
  * built by tests/host/emu_rwlock_test.sh, under real concurrency. Each
- * thread is a Proc with a semaphore of its own, as emu's kprocs are:
- * osblock() waits on it and osready() posts it (emu/Linux/os-clone.c,
- * emu/port/kproc-pthreads.c), so qlock really blocks. _tas, osyield and
- * osmillisleep are the host's. The structs are the platform lib9.h's
- * own, extracted by the script, and the code is lock.c itself.
+ * thread is a Proc with a queued condition wake of its own: osblock()
+ * waits on it and osready() posts it, so qlock really blocks.  This has
+ * the semantics of Linux's per-Proc semaphore and macOS's erendezvous;
+ * macOS does not implement unnamed sem_init(3).  _tas, osyield and
+ * osmillisleep are the host's. The structs are the platform lib9.h's own,
+ * extracted by the script, and the code is lock.c itself.
  *
  *   readers	threads taking the lock with canrlock while others take
  *		it with rlock (passing through x): with no writer anywhere,
@@ -20,7 +21,6 @@
  *		the writers are gone.
  */
 #include <pthread.h>
-#include <semaphore.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +36,9 @@ struct Proc
 {
 	Proc	*qnext;
 	int	nlocks;
-	sem_t	sem;
+	pthread_mutex_t	mu;
+	pthread_cond_t	cv;
+	int	ready;
 };
 
 #include "structs.h"	/* Lock, QLock, RWLock from the platform's lib9.h */
@@ -48,8 +50,24 @@ static __thread Proc *thisproc;
 static int _tas(int *v){ return __atomic_exchange_n(v, 1, __ATOMIC_ACQUIRE); }
 static void osyield(void){ sched_yield(); }
 static int osmillisleep(ulong ms){ usleep(ms*1000); return 0; }
-static void osblock(void){ while(sem_wait(&up->sem) != 0) ; }
-static void osready(Proc *p){ sem_post(&p->sem); }
+static void
+osblock(void)
+{
+	pthread_mutex_lock(&up->mu);
+	while(up->ready == 0)
+		pthread_cond_wait(&up->cv, &up->mu);
+	up->ready--;
+	pthread_mutex_unlock(&up->mu);
+}
+
+static void
+osready(Proc *p)
+{
+	pthread_mutex_lock(&p->mu);
+	p->ready++;
+	pthread_cond_signal(&p->cv);
+	pthread_mutex_unlock(&p->mu);
+}
 
 /* emu/port/lock.c, its includes stripped by the script */
 #include "lock_body.c"
@@ -58,13 +76,19 @@ static RWlock rw;
 static volatile int inwrite, inread;
 static volatile int stop, wdone;
 static long canfail, canok, writes, badexcl;
+/*
+ * Enough overlap to exercise every state without turning this correctness
+ * regression into a multi-minute scheduler benchmark on macOS.  Writers run
+ * iters/50 times each and six reader threads contend throughout.
+ */
 static int iters = 200000;
 
 static void
 procinit(void)
 {
 	thisproc = calloc(1, sizeof(Proc));
-	sem_init(&thisproc->sem, 0, 0);
+	pthread_mutex_init(&thisproc->mu, nil);
+	pthread_cond_init(&thisproc->cv, nil);
 }
 
 static void*

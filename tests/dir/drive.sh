@@ -63,3 +63,4 @@ ptr 50 46 4; ptr 50 46 0
 sleep 3
 show dir-deleted
 echo R done
+echo halt > '#c/sysctl'

@@ -540,7 +540,7 @@ extern void	unlockdisplay(Display*);
 extern int		drawlsetrefresh(ulong, int, void*, void*);
 
 /* Compositing operator utility */
-extern void	_setdrawop(Display*, Drawop);
+extern uchar*	_bufimageop(Display*, int, Drawop);
 
 /*
  * Predefined 

@@ -647,6 +647,106 @@ Tensor_letterbox(void *fp)
 	acquire();
 }
 
+/*
+ * The same from an I420 frame: each output pixel's Y, Cb and Cr
+ * sampled bilinearly from their planes, then turned to red, green and
+ * blue with $I420's full-range (JPEG) coefficients, clamped.
+ */
+static float
+bilin(uchar *p, int w, int h, float sx, float sy)
+{
+	int x0, y0, x1, y1;
+	float fx, fy;
+
+	if(sx < 0)
+		sx = 0;
+	if(sy < 0)
+		sy = 0;
+	x0 = (int)sx;
+	y0 = (int)sy;
+	if(x0 > w-1)
+		x0 = w-1;
+	if(y0 > h-1)
+		y0 = h-1;
+	x1 = x0+1 < w ? x0+1 : w-1;
+	y1 = y0+1 < h ? y0+1 : h-1;
+	fx = sx - x0;
+	fy = sy - y0;
+	return (1-fy)*((1-fx)*p[y0*w + x0] + fx*p[y0*w + x1]) + fy*((1-fx)*p[y1*w + x0] + fx*p[y1*w + x1]);
+}
+
+static float
+clamp255(float v)
+{
+	if(v < 0)
+		return 0;
+	if(v > 255)
+		return 255;
+	return v;
+}
+
+void
+Tensor_letterboxi420(void *fp)
+{
+	F_Tensor_letterboxi420 *f;
+	uchar *py, *pu, *pv;
+	float *o, fill, sy, sx, yy, u, v, rgb[3];
+	int w, h, w2, h2, ow, oh, rw, rh, x, y, ch, bgr;
+	double scale;
+
+	f = fp;
+	w = f->w; h = f->h; ow = f->ow; oh = f->oh;
+	scale = f->scale;
+	bgr = f->bgr;
+	dims(3, h, w);
+	dims(3, oh, ow);
+	if(f->y == H || f->cb == H || f->cr == H)
+		error(exNilref);
+	if((w|h) & 1)
+		error(exBounds);
+	w2 = w/2;
+	h2 = h/2;
+	if(!(scale > 0 && scale < 1e6) || f->fill < 0 || f->fill > 255 ||
+	   (uvlong)f->y->len < (uvlong)w*h || (uvlong)f->cb->len < (uvlong)w2*h2 || (uvlong)f->cr->len < (uvlong)w2*h2)
+		error(exBounds);
+	py = f->y->data;
+	pu = f->cb->data;
+	pv = f->cr->data;
+	o = floats(f->out, (uvlong)3*ow*oh);
+	rw = (int)(w * scale);
+	rh = (int)(h * scale);
+	if(rw > ow)
+		rw = ow;
+	if(rh > oh)
+		rh = oh;
+	if(rw < 1)
+		rw = 1;
+	if(rh < 1)
+		rh = 1;
+	fill = f->fill;
+	release();
+	for(y = 0; y < oh; y++)
+		for(x = 0; x < ow; x++){
+			if(y >= rh || x >= rw){
+				for(ch = 0; ch < 3; ch++)
+					o[((uvlong)ch*oh + y)*ow + x] = fill;
+				continue;
+			}
+			sy = (y + 0.5f) * h / rh - 0.5f;
+			sx = (x + 0.5f) * w / rw - 0.5f;
+			yy = bilin(py, w, h, sx, sy);
+			/* chroma sits between each 2x2 of luma */
+			u = bilin(pu, w2, h2, (sx - 0.5f) / 2, (sy - 0.5f) / 2) - 128;
+			v = bilin(pv, w2, h2, (sx - 0.5f) / 2, (sy - 0.5f) / 2) - 128;
+			rgb[0] = clamp255(yy + 1.402f*v);
+			rgb[1] = clamp255(yy - 0.34414f*u - 0.71414f*v);
+			rgb[2] = clamp255(yy + 1.772f*u);
+			for(ch = 0; ch < 3; ch++)
+				o[((uvlong)ch*oh + y)*ow + x] = rgb[bgr ? 2-ch : ch];
+		}
+	acquire();
+}
+
 void
 Tensor_toreal(void *fp)
 {

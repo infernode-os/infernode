@@ -292,6 +292,102 @@ testLetterbox(t: ref T)
 		t.error(sys->sprint("scaled (0,1) red %g not between", r[1]));
 }
 
+clamp255(v: real): real
+{
+	if(v < 0.0)
+		return 0.0;
+	if(v > 255.0)
+		return 255.0;
+	return v;
+}
+
+bilin(p: array of byte, w, h: int, sx, sy: real): real
+{
+	if(sx < 0.0)
+		sx = 0.0;
+	if(sy < 0.0)
+		sy = 0.0;
+	x0 := int sx;
+	if(real x0 > sx)
+		x0--;
+	y0 := int sy;
+	if(real y0 > sy)
+		y0--;
+	if(x0 > w-1)
+		x0 = w-1;
+	if(y0 > h-1)
+		y0 = h-1;
+	x1 := x0+1;
+	if(x1 > w-1)
+		x1 = w-1;
+	y1 := y0+1;
+	if(y1 > h-1)
+		y1 = h-1;
+	fx := sx - real x0;
+	fy := sy - real y0;
+	return (1.0-fy)*((1.0-fx)*real p[y0*w+x0] + fx*real p[y0*w+x1]) + fy*((1.0-fx)*real p[y1*w+x0] + fx*real p[y1*w+x1]);
+}
+
+testLetterboxI420(t: ref T)
+{
+	(w, h) := (8, 6);
+	y := array[w*h] of byte;
+	cb := array[(w/2)*(h/2)] of byte;
+	cr := array[(w/2)*(h/2)] of byte;
+	for(i := 0; i < len y; i++)
+		y[i] = byte (16 + 9*i);
+	for(i = 0; i < len cb; i++){
+		cb[i] = byte (40 + 15*i);
+		cr[i] = byte (220 - 13*i);
+	}
+	(ow, oh) := (12, 12);
+	scale := 1.5;	# 12x9, the rest fill
+	out := array[4*3*ow*oh] of byte;
+	tensor->letterboxi420(y, cb, cr, w, h, scale, 114, 0, out, ow, oh);
+	got := toreals(out);
+	want := array[3*ow*oh] of real;
+	(rw, rh) := (int (real w*scale), int (real h*scale));
+	if(real rw > real w*scale)
+		rw--;
+	if(real rh > real h*scale)
+		rh--;
+	for(yy := 0; yy < oh; yy++)
+		for(xx := 0; xx < ow; xx++){
+			if(yy >= rh || xx >= rw){
+				for(c := 0; c < 3; c++)
+					want[(c*oh + yy)*ow + xx] = 114.0;
+				continue;
+			}
+			sy := (real yy + 0.5) * real h / real rh - 0.5;
+			sx := (real xx + 0.5) * real w / real rw - 0.5;
+			l := bilin(y, w, h, sx, sy);
+			u := bilin(cb, w/2, h/2, (sx - 0.5)/2.0, (sy - 0.5)/2.0) - 128.0;
+			v := bilin(cr, w/2, h/2, (sx - 0.5)/2.0, (sy - 0.5)/2.0) - 128.0;
+			want[(0*oh + yy)*ow + xx] = clamp255(l + 1.402*v);
+			want[(1*oh + yy)*ow + xx] = clamp255(l - 0.34414*u - 0.71414*v);
+			want[(2*oh + yy)*ow + xx] = clamp255(l + 1.772*u);
+		}
+	close(t, got, want, 1.0e-3, "letterboxi420 against the reference");
+	# pure red, as full-range JPEG gives it: Y 76, Cb 85, Cr 255
+	for(i = 0; i < len y; i++)
+		y[i] = byte 76;
+	for(i = 0; i < len cb; i++){
+		cb[i] = byte 85;
+		cr[i] = byte 255;
+	}
+	tensor->letterboxi420(y, cb, cr, w, h, 1.0, 0, 0, out[0:4*3*w*h], w, h);
+	r := toreals(out[0:4*3*w*h]);
+	if(r[0] < 250.0 || r[w*h] > 5.0 || r[2*w*h] > 5.0)
+		t.error(sys->sprint("red came out %g %g %g", r[0], r[w*h], r[2*w*h]));
+	tensor->letterboxi420(y, cb, cr, w, h, 1.0, 0, 1, out[0:4*3*w*h], w, h);
+	r = toreals(out[0:4*3*w*h]);
+	if(r[2*w*h] < 250.0 || r[0] > 5.0)
+		t.error(sys->sprint("red, bgr, came out %g .. %g", r[0], r[2*w*h]));
+}
+
+i420odd()	{ tensor->letterboxi420(array[15] of byte, array[4] of byte, array[4] of byte, 5, 3, 1.0, 0, 0, ob, 2, 2); }
+i420short()	{ tensor->letterboxi420(array[15] of byte, array[4] of byte, array[4] of byte, 4, 4, 1.0, 0, 0, ob, 2, 2); }
+
 refused(t: ref T, what: string, f: ref fn())
 {
 	{
@@ -353,6 +449,8 @@ testRefusals(t: ref T)
 	refused(t, "letterbox, short picture", lbshort);
 	refused(t, "letterbox, negative scale", lbscale);
 	refused(t, "toreal, lengths differ", realen);
+	refused(t, "letterboxi420, odd width", i420odd);
+	refused(t, "letterboxi420, short luma", i420short);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -381,6 +479,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Pool", testPool);
 	run("Up2S2d", testUpS2d);
 	run("Letterbox", testLetterbox);
+	run("LetterboxI420", testLetterboxI420);
 	run("Refusals", testRefusals);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

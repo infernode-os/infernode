@@ -56,6 +56,10 @@ Visnet: module
 		# thresh or more, overlaps of iou or more of one class kept
 		# once, best first
 		detect:	fn(n: self ref Net, pix: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string);
+		scale:	fn(n: self ref Net, w, h: int): real;
+		found:	fn(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: real): (array of ref Det, string);
+		# the same from an I420 frame's planes (w and h even)
+		detecti420:	fn(n: self ref Net, y, cb, cr: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string);
 	};
 
 	init:	fn(): string;

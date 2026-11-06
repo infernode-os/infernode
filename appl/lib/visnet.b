@@ -433,19 +433,44 @@ Net.detect(n: self ref Net, pix: array of byte, w, h: int, thresh, iou: real): (
 {
 	if(w < 1 || h < 1 || len pix < 3*w*h)
 		return (nil, "picture smaller than its size");
-	scale := real n.inw / real w;
-	if(real n.inh / real h < scale)
-		scale = real n.inh / real h;
+	scale := n.scale(w, h);
 	input := array[4*3*n.inw*n.inh] of byte;
-	bgr := 0;
-	if(n.order == "bgr")
-		bgr = 1;
 	{
-		tensor->letterbox(pix, w, h, scale, n.fill, bgr, input, n.inw, n.inh);
+		tensor->letterbox(pix, w, h, scale, n.fill, n.order == "bgr", input, n.inw, n.inh);
 	} exception e {
 	"*" =>
 		return (nil, "letterbox: " + e);
 	}
+	return n.found(input, w, h, scale, thresh, iou);
+}
+
+Net.detecti420(n: self ref Net, y, cb, cr: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string)
+{
+	if(w < 2 || h < 2 || (w|h) & 1 || len y < w*h || len cb < (w/2)*(h/2) || len cr < (w/2)*(h/2))
+		return (nil, "frame smaller than its size, or odd");
+	scale := n.scale(w, h);
+	input := array[4*3*n.inw*n.inh] of byte;
+	{
+		tensor->letterboxi420(y, cb, cr, w, h, scale, n.fill, n.order == "bgr", input, n.inw, n.inh);
+	} exception e {
+	"*" =>
+		return (nil, "letterbox: " + e);
+	}
+	return n.found(input, w, h, scale, thresh, iou);
+}
+
+# the scale that fits a w by h picture into the input, aspect kept
+Net.scale(n: self ref Net, w, h: int): real
+{
+	scale := real n.inw / real w;
+	if(real n.inh / real h < scale)
+		scale = real n.inh / real h;
+	return scale;
+}
+
+# the network on an input made from a w by h picture by scale: what it found there
+Net.found(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: real): (array of ref Det, string)
+{
 	(heads, err) := n.run(input);
 	if(err != nil)
 		return (nil, err);

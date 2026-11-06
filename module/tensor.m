@@ -50,6 +50,11 @@ Tensor: module
 	letterbox:	fn(pix: array of byte, w, h: int, scale: real,
 		fill, bgr: int, out: array of byte, ow, oh: int);
 
+	# the same from an I420 frame, w by h (both even): its Y plane w by
+	# h, Cb and Cr w/2 by h/2, full range as $I420 takes them
+	letterboxi420:	fn(y, cb, cr: array of byte, w, h: int, scale: real,
+		fill, bgr: int, out: array of byte, ow, oh: int);
+
 	# a tensor's floats to reals, and back; out as long as in
 	toreal:	fn(t: array of byte, out: array of real);
 	fromreal:	fn(r: array of real, out: array of byte);

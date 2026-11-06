@@ -76,9 +76,8 @@ NEUTRAL_SYSTEM = "You are a helpful assistant."
 # directory), the organisation's.  The gate's working directory is
 # wherever it was started, the InferNode checkout as often as not, and
 # every agent served was given that checkout's memory index (the host
-# user's notes) as context, and could repeat it.  Sessions run in an
-# empty directory of their own, with memory off.
-SESSION_DIR = tempfile.mkdtemp(prefix="claude-gate-")
+# user's notes) as context, and could repeat it.  Each turn runs in a
+# different empty directory, removed when the turn ends, with memory off.
 SESSION_ENV = {
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
     "CLAUDE_CODE_DISABLE_ORG_MEMORY": "1",
@@ -116,6 +115,7 @@ class Turn:
         self.id_to_argkey = {}             # tool_use id -> argkey
         self.task = None                   # backend driver task
         self.last_activity = time.monotonic()
+        self.workdir = tempfile.TemporaryDirectory(prefix="claude-gate-")
 
     def touch(self):
         self.last_activity = time.monotonic()
@@ -162,6 +162,18 @@ class Turn:
         if self.task is not None and not self.task.done():
             self.task.cancel()
 
+    def close(self):
+        if self.workdir is not None:
+            workdir = self.workdir
+            self.workdir = None
+            # A final event can be consumed just before the SDK generator's
+            # task returns.  Let its teardown finish with a valid cwd, then
+            # remove the directory; cancelled held turns take the same path.
+            if self.task is not None and not self.task.done():
+                self.task.add_done_callback(lambda _task: workdir.cleanup())
+            else:
+                workdir.cleanup()
+
 
 class TurnTable:
     """Held turns, addressable by tool_call id for continuation requests."""
@@ -182,6 +194,7 @@ class TurnTable:
         self.turns.discard(turn)
         for tid in [t for t, v in self.by_toolcall.items() if v is turn]:
             del self.by_toolcall[tid]
+        turn.close()
 
     async def reap_stale(self):
         while True:
@@ -442,7 +455,7 @@ if not MOCK:
                 strict_mcp_config=True,          # ignore host MCP configs
                 max_turns=100,
                 include_partial_messages=COALESCE,
-                cwd=SESSION_DIR,
+                cwd=turn.workdir.name,
                 env={**SESSION_ENV,
                      "MCP_TOOL_TIMEOUT": str(int(HOLD_TIMEOUT * 1000))},
             )
@@ -562,6 +575,7 @@ async def chat_completions(request):
     turn = Turn(model)
     prompt = render_transcript(history)
     if not prompt:
+        turn.close()
         return web.json_response(
             {"error": {"message": "no user content in messages"}}, status=400)
 

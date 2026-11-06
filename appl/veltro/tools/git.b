@@ -46,6 +46,7 @@ Gitfs: module {
 
 gitavail := 0;
 workeravail := 0;
+gitdir: string;		# the repository's .git, an absolute path
 workcmd: chan of (string, chan of string);
 
 init(): string
@@ -64,9 +65,15 @@ init(): string
 		return "cannot load Factotum";
 	factotum->init();
 
-	# Check for git repo
-	(ok, nil) := sys->stat("/.git");
-	if(ok < 0)
+	# The repository is the one the tool server was started in, found
+	# as git finds it: the directory's .git, or its parent's, up to the
+	# root.  It was /.git, the root of the name space (a development
+	# tree's own repository, or none), whatever the agent was working
+	# in, while writes went to the one found from here: in Xenith's
+	# Agent window git status described another repository than the
+	# one git add changed.
+	gitdir = findrepo();
+	if(gitdir == nil)
 		return nil;  # No repo; exec() will return errors
 
 	# Mount git/fs at /mnt/git before namespace restriction
@@ -87,6 +94,30 @@ init(): string
 	return nil;
 }
 
+# The .git of the repository the current directory is in, absolute.
+findrepo(): string
+{
+	fd := sys->open(".", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	dir := sys->fd2path(fd);
+	fd = nil;
+	while(dir != nil && dir != "") {
+		(ok, d) := sys->stat(dir + "/.git");
+		if(ok >= 0 && (d.mode & Sys->DMDIR))
+			return dir + "/.git";
+		if(dir == "/")
+			break;
+		i := len dir - 1;
+		while(i > 0 && dir[i] != '/')
+			i--;
+		dir = dir[0:i];
+		if(dir == "")
+			dir = "/";
+	}
+	return nil;
+}
+
 mountgitfs(ready: chan of int)
 {
 	gitfs := load Gitfs "/dis/cmd/git/fs.dis";
@@ -95,8 +126,17 @@ mountgitfs(ready: chan of int)
 		return;
 	}
 
+	# git/fs says where it mounted on standard output, which in Xenith
+	# is the +Errors window: an Agent window opened one, saying it.
+	# (A file descriptor group of its own: the tool server's stdout is
+	# left alone.)
+	sys->pctl(Sys->FORKFD, nil);
+	null := sys->open("/dev/null", Sys->OWRITE);
+	if(null != nil)
+		sys->dup(null.fd, 1);
+	null = nil;
 	{
-		gitfs->init(nil, "git/fs" :: "-m" :: "/mnt/git" :: "/.git" :: nil);
+		gitfs->init(nil, "git/fs" :: "-m" :: "/mnt/git" :: gitdir :: nil);
 		ready <-= 1;
 	} exception {
 	"*" =>
@@ -118,15 +158,13 @@ gitworker(ready: chan of int)
 		ready <-= 0;
 		return;
 	}
+	# Repo's and Hash's methods are called through git, the module they
+	# are imported from: nil until now, so every commit failed with
+	# "module not loaded" (repo.head()).
+	git = wgit;
 
 	wdaytime := load Daytime Daytime->PATH;
 	if(wdaytime == nil) {
-		ready <-= 0;
-		return;
-	}
-
-	gitdir := wgit->findgitdir(".");
-	if(gitdir == nil) {
 		ready <-= 0;
 		return;
 	}
@@ -641,7 +679,9 @@ workcommit(wgit: Git, wdaytime: Daytime, repo: ref Repo, gitdir, msg: string): s
 	if(len headref > 11 && headref[:11] == "refs/heads/")
 		branch = headref[11:];
 
-	return sprint("[%s %s] %s\n %d file(s) changed",
+	# (nfiles is the whole index, every file of the tree, not what
+	# changed: it was given as "files changed".)
+	return sprint("[%s %s] %s\n %d file(s) in the tree",
 		branch, commithash.hex()[:7], msg, nfiles);
 }
 

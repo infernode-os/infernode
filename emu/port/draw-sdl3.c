@@ -1650,6 +1650,13 @@ handle_key_down(SDL_Event *event)
 	if ((mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) && kc >= 'a' && kc <= 'z')
 		key = kc - 'a' + 1;
 
+	/* Ctrl+Space -> NUL, as a terminal sends it: Lucifer's microphone
+	 * (speech(4)'s talk).  0 is "no key" below, so it is sent here. */
+	if ((mods & SDL_KMOD_CTRL) && kc == SDLK_SPACE) {
+		gkbdputc(gkbdq, 0);
+		return;
+	}
+
 	/* Special/non-printable keys only */
 	if (key == 0)
 	switch (event->key.scancode) {

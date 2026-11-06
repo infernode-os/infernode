@@ -48,6 +48,14 @@ include "softkbd.m";
 include "keyboard.m";
 	softkbd: Softkbd;
 
+include "tk.m";
+include "icon.m";
+	icon: Icon;
+
+Dictatecmd: module {
+	init: fn(ctxt: ref Draw->Context, args: list of string);
+};
+
 Lucifer: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
@@ -689,6 +697,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn themewatcher();
 	blinkwake = chan[1] of int;
 	spawn tileblinker();
+	spawn micwatcher();
 
 	# Main loop (header redraws + quit/resize)
 	mainloop();
@@ -942,6 +951,13 @@ drawchrome(r: Rect)
 		}
 		tiley := headerr.min.y + (headerh - tileh) / 2;
 		tilestripx := textx;	# start of tile strip (after logo)
+		# the microphone, at the right, while there is speech
+		stripend := r.max.x;
+		if(micstate != nil) {
+			micx0 = r.max.x - headerh;
+			stripend = micx0;
+		} else
+			micx0 = -1;
 
 		if(ntiles > 0) {
 			tx := tilestripx - tilescrollx;
@@ -968,7 +984,7 @@ drawchrome(r: Rect)
 				t.w = tw;
 
 				# Only draw if visible in the strip
-				if(tx + tw > tilestripx && tx < r.max.x) {
+				if(tx + tw > tilestripx && tx < stripend) {
 					# Determine tile colors
 					tilefg: ref Image;
 					tilebg: ref Image;
@@ -1026,7 +1042,7 @@ drawchrome(r: Rect)
 			}
 			# Cache total tile width for scroll cap
 			totalw := tx - (tilestripx - tilescrollx);
-			visiblew := r.max.x - tilestripx;
+			visiblew := stripend - tilestripx;
 			if(totalw > visiblew)
 				tiletotalw = totalw - visiblew;
 			else
@@ -1043,6 +1059,9 @@ drawchrome(r: Rect)
 			mainwin.text((textx, texty), textcol, (0, 0), mainfont, title);
 		}
 	}
+
+	if(micx0 >= 0)
+		drawmic(Rect((micx0, headerr.min.y), (r.max.x, headerr.max.y)));
 
 	# Header/zone separator — drawn with headercol so it blends with the
 	# header bar above instead of standing out as a brighter line.
@@ -1071,6 +1090,104 @@ drawchrome(r: Rect)
 	}
 
 	mainwin.flush(Draw->Flushnow);
+}
+
+#
+# The microphone: speech(4)'s talk, shown and switched.  Dim while off,
+# red while on, and on the accent while an agent waits for an answer
+# (talk reads "off asked").  A tap on it, or Ctrl+Space, switches it:
+# off if it is on; on to answer the agent if one asks; otherwise on for
+# dictate(1), which types what is said where the keyboard types.
+#
+
+micstate: string;	# talk's state; nil while there is no speech
+micx0 := -1;		# where the microphone's square begins, -1 if not drawn
+speechdir := "/mnt/speech";
+
+drawmic(r: Rect)
+{
+	mainwin.draw(r, headercol, nil, (0, 0));
+	col := dimcol;
+	if(hasprefix(micstate, "on"))
+		col = redcol;
+	else if(contains(micstate, "asked")) {
+		# something wants an answer: the square lit
+		pad := r.dy() / 8;
+		mainwin.draw(r.inset(pad), accentcol, nil, (0, 0));
+		col = headercol;
+	}
+	if(icon == nil) {
+		icon = load Icon Icon->PATH;
+		if(icon != nil && icon->init(display) != nil)
+			icon = nil;
+	}
+	if(icon == nil)
+		return;
+	size := r.dy() * 5 / 8;
+	(m, nil) := icon->mask("microphone", size);
+	if(m == nil)
+		return;
+	o := Point(r.min.x + (r.dx() - size) / 2, r.min.y + (r.dy() - size) / 2);
+	mainwin.draw(Rect(o, o.add((size, size))), col, m, (0, 0));
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i + len t] == t)
+			return 1;
+	return 0;
+}
+
+# talk's state, read as it changes (each read waits for a change); while
+# there is no speech, looked for again now and then
+micwatcher()
+{
+	b := array[64] of byte;
+	for(;;) {
+		fd := sys->open(speechdir + "/talk", Sys->OREAD);
+		while(fd != nil && (n := sys->read(fd, b, len b)) > 0) {
+			micstate = strip(string b[0:n]);
+			alt { uievent <-= 1 => ; * => ; }
+		}
+		if(micstate != nil) {
+			micstate = nil;
+			alt { uievent <-= 1 => ; * => ; }
+		}
+		sys->sleep(5000);
+	}
+}
+
+togglemic()
+{
+	st := micstate;
+	if(st == nil)
+		return;
+	if(hasprefix(st, "on")) {
+		writefile(speechdir + "/talk", "stop");
+		writefile(speechdir + "/chime", "stop");
+		return;
+	}
+	micstate = "on";	# a second press now stops it, rather than starting twice
+	alt { uievent <-= 1 => ; * => ; }
+	writefile(speechdir + "/chime", "start");
+	sys->sleep(250);	# the chime played before the microphone opens
+	if(contains(st, "asked")) {
+		# the answer is the agent's (ask), not typed
+		writefile(speechdir + "/talk", "start");
+		return;
+	}
+	d := load Dictatecmd "/dis/dictate.dis";
+	if(d == nil) {
+		sys->fprint(sys->fildes(2), "lucifer: cannot load dictate: %r\n");
+		return;
+	}
+	{
+		d->init(nil, "dictate" :: "-m" :: speechdir :: nil);
+	} exception {
+	"*" =>
+		writefile(speechdir + "/chime", "error");
+	}
 }
 
 # KLUDGE-MOBILE-ACCORDION-INFR-119
@@ -2899,6 +3016,12 @@ mouseproc()
 					continue;
 				}
 			}
+			# The microphone: a press on it switches talk
+			if(micx0 >= 0 && (p.buttons & 1) && (wasdown & 1) == 0 &&
+			   p.xy.y < mainwin.r.min.y + headerh && p.xy.x >= micx0) {
+				spawn togglemic();
+				continue;
+			}
 			# Mobile: tile-strip (activity bar) touch gesture.  A press
 			# in the header arms; a horizontal drag scrolls the strip; a
 			# release without a drag switches the activity.  This defers
@@ -3039,6 +3162,12 @@ kbdproc()
 
 	for(;;) {
 		c := <-win.ctxt.kbd;
+
+		# Ctrl+Space, anywhere: the microphone (togglemic)
+		if(c == 0 && escstate == 0) {
+			spawn togglemic();
+			continue;
+		}
 
 		# Decode ANSI escape sequences (a serial console's) to
 		# keyboard.h's keys, as the emulator and the native kernel send

@@ -71,6 +71,8 @@ while an agent waits on
 each later read on the same open file waits until that changes, so a
 program showing whether the microphone is open, or that something
 wants an answer (Lucifer's indicator), reads it and need not poll.
+Lucifer's is the microphone in its header
+.RI ( dictate (1)).
 .TP
 .B listen
 What is heard, a line a record, as the engine gives it:
@@ -318,6 +320,7 @@ A path grant of /mnt/speech gives nothing.
 .br
 .B /appl/veltro/tools/hear.b
 .SH SEE ALSO
+.IR dictate (1),
 .IR audio (3),
 .IR wm-dialpad (1),
 .IR dialspeech (2)

@@ -353,7 +353,8 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	k := <-kbd =>
 		case k {
 		0 =>
-			# Ctrl+Space — toggle voice input
+			# NUL.  Ctrl+Space is Lucifer's microphone (dictate(1)),
+			# taken before keys are routed, so it does not come here
 			startvoice();
 		1 =>
 			# Ctrl-A — beginning of line

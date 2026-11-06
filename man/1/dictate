@@ -1,0 +1,62 @@
+.TH DICTATE 1
+.SH NAME
+dictate \- type what is said
+.SH SYNOPSIS
+.B dictate
+[
+.B -w
+] [
+.B -m
+.I speechdir
+] [
+.B -o
+.I file
+]
+.SH DESCRIPTION
+.I Dictate
+turns
+.IR speech (4)'s
+.B talk
+on (with
+.BR -w ,
+waits for it to be turned on), waits for it to be turned off, and types
+the words of that utterance's final into
+.I file
+.RB ( /dev/keyboard ,
+so they go wherever the keyboard types:
+.IR cons (3)),
+followed by a space.
+Talk is turned off by whoever turns it off: a key, a tap, push to talk.
+.I Speechdir
+is
+.B /mnt/speech
+unless given.
+.PP
+It hears one utterance, the one it began (or, with
+.BR -w ,
+the next to begin), and refuses if talk is on already.
+An error from the engine is printed and nothing is typed.
+.SS Lucifer
+Lucifer's header shows the microphone, at its right, while there is
+speech: dim while talk is off, red while it is on, and lit in the
+theme's accent while an agent waits for an answer (speech's
+.BR ask ).
+Ctrl+Space, or a tap on the microphone, switches it: off if it is on;
+on to answer the agent, if one asks (the words are the agent's, not
+typed); otherwise on for
+.IR dictate ,
+which types the words where the keyboard types once it is switched
+off.
+A chime marks each.
+.SH EXAMPLE
+Dictate from a shell; turn talk off from elsewhere when done:
+.IP
+.EX
+dictate &
+echo stop > /mnt/speech/talk
+.EE
+.SH SOURCE
+.B /appl/cmd/dictate.b
+.SH SEE ALSO
+.IR speech (4),
+.IR cons (3)

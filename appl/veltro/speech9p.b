@@ -119,6 +119,7 @@ hearendc: chan of (int, int);	# a hear's or ask's time is up (fid, ask)
 sayc: chan of string;		# what is queued to be said
 chimec: chan of string;
 speakerpid := -1;
+textpid := -1;
 
 # the speech stream, the main process's: the speaker writes its data,
 # a cancel flushes it through ctl
@@ -163,7 +164,7 @@ init(nil: ref Draw->Context, args: list of string)
 	hearendc = chan of (int, int);
 	sayc = chan[64] of string;
 	chimec = chan[8] of string;
-	spawn textproc();
+	starttext();
 	spawn chimeproc();
 	startspeaker();
 	spawn serve(f);
@@ -465,6 +466,9 @@ ctlwrite(s: string): string
 		if(talking)
 			return "speech: not while talk is on";
 		engine = v;
+		# its text read from now on, not the old engine's
+		kill(textpid);
+		starttext();
 	"voice" =>
 		if((e := enginectl("voice " + v)) != nil)
 			return e;
@@ -680,8 +684,16 @@ micproc(mic, afd: ref Sys->FD, stop: chan of int)
 # listen: the engine's text
 #
 
-textproc()
+starttext()
 {
+	pidc := chan of int;
+	spawn textproc(pidc);
+	textpid = <-pidc;
+}
+
+textproc(pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
 	buf := array[8192] of byte;
 	for(;;){
 		fd := sys->open(engine + "/text", Sys->OREAD);

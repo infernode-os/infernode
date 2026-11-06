@@ -59,6 +59,7 @@ TARG=\
 	cut.dis\
 	crypt.dis\
 	date.dis\
+	dictate.dis\
 	dbfs.dis\
 	dcr.dis\
 	dd.dis\
@@ -340,6 +341,7 @@ SYSMODULES=\
 	garminav.m\
 	gdl90.m\
 	post9p.m\
+	icon.m\
 
 DISBIN=$ROOT/dis
 

@@ -137,6 +137,7 @@ dis/cpu.dis
 dis/crypt.dis
 dis/cut.dis
 dis/date.dis
+dis/dictate.dis
 dis/dbfs.dis
 dis/dbm/delete.dis
 dis/dbm/fetch.dis

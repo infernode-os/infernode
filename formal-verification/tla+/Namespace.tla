@@ -30,7 +30,10 @@ CONSTANTS
     MaxPgrps,           \* Maximum number of process groups (e.g., 5)
     MaxChannels,        \* Maximum number of channels (e.g., 6)
     MaxPaths,           \* Maximum number of distinct paths (e.g., 3)
-    MaxMountId          \* Maximum mount ID for bounded checking
+    MaxMountId,         \* Maximum mount ID for bounded checking
+    MaxChanRef          \* Bound on a channel's refcount (model artifact; see IncRefChannel)
+
+ASSUME MaxChanRef \in 1..(MaxProcesses + MaxPgrps + MaxChannels)
 
 \* Type aliases for readability
 ProcessId == 1..MaxProcesses
@@ -186,11 +189,17 @@ AllocChannel ==
                    next_pgrp_id, copy_snapshot, pgrp_parent, post_copy_mounts>>
 
 \* Increment channel reference (models incref(&c->r))
-\* Bounded to stay within RefCountVal (model-checking artifact; real refcounts
-\* are bounded by the finite number of references in the system)
+\* Bounded by MaxChanRef (model-checking artifact; real refcounts are bounded
+\* by the finite number of references in the system).  IncRef/DecRef are free
+\* actions here, not tied to Mount or the copy, so every value of every
+\* channel's refcount multiplies the state space without bearing on the
+\* isolation invariants: with the old implicit bound of
+\* MaxProcesses + MaxPgrps + MaxChannels the smallest non-vacuous
+\* configuration passed 250M distinct states on a 16 GB host without
+\* finishing.  The bound is a CONSTANT so that the configuration states it.
 IncRefChannel(cid) ==
     /\ ChanInUse(cid)
-    /\ chan_refcount[cid] < MaxProcesses + MaxPgrps + MaxChannels
+    /\ chan_refcount[cid] < MaxChanRef
     /\ chan_refcount' = [chan_refcount EXCEPT ![cid] = @ + 1]
     /\ UNCHANGED <<processes, process_pgrp, pgrp_exists, pgrp_refcount,
                    mount_table, pgrp_slash, pgrp_dot, pgrp_nodevs, chan_exists,

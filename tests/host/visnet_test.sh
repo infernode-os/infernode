@@ -66,7 +66,7 @@ EOF
 
 for c in 1 0; do
 	for pic in "$T/pic.ppm" "$VISION_PICTURE"; do
-		with_timeout 300 "$EMU" -c$c -r"$ROOT" sh -c "mkdir -p /tmp/h; bind '#U*' /tmp/h; /tests/visnet_run.dis $(host "$VISION_MODEL") $(host "$pic"); echo DONE" > "$T/got" 2>"$T/err"
+		with_timeout 300 "$EMU" -c$c -r"$ROOT" sh -c "mkdir -p /tmp/h; bind '#U*' /tmp/h; /tests/visnet_run.dis $(host "$VISION_MODEL") $(host "$pic"); echo DONE; echo halt > '#c/sysctl'" > "$T/got" 2>"$T/err"
 		what="-c$c $(basename "$pic")"
 		if ! grep -q '^DONE' "$T/got"; then
 			echo "FAIL: $what: no end ($(grep -v fsqid "$T/err" | tail -1))"

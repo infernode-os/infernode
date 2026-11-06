@@ -228,3 +228,7 @@ xd xd
 yacc yacc
 zeros zeros
 sam sam
+vision vision
+vision/detect vision
+vision/draw vision
+vision/crop vision

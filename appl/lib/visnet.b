@@ -205,6 +205,8 @@ Net.open(dir: string): (ref Net, string)
 	if(sl == nil)
 		return (nil, dir + "/sha256: empty");
 	n.sha256 = hd sl;
+	if(len n.sha256 != 64)
+		return (nil, dir + "/sha256: not a sha256");
 	(wts, werr) := readfile(dir + "/weights");
 	if(werr != nil)
 		return (nil, werr);
@@ -213,7 +215,9 @@ Net.open(dir: string): (ref Net, string)
 	digest := array[Keyring->SHA256dlen] of byte;
 	keyring->sha256(wts, len wts, digest, nil);
 	if(hex(digest) != str->tolower(n.sha256))
-		return (nil, dir + "/weights: sha256 is " + hex(digest) + ", not " + n.sha256 + "; refused");
+		# short: an error string holds about 128 bytes
+		return (nil, sys->sprint("weights do not match their sha256 (%s..., want %s...): refused",
+			hex(digest)[0:16], str->tolower(n.sha256)[0:16]));
 	n.wts = wts;
 	n.nweights = len wts / 4;
 

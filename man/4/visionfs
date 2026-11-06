@@ -1,0 +1,182 @@
+.TH VISIONFS 4
+.SH NAME
+visionfs \- recognition as files
+.SH SYNOPSIS
+.B visionfs
+[
+.B -S
+] [
+.B -m
+.I mountpoint
+] [
+.B -s
+.I spec
+] [
+.B load
+.I name dir
+]
+.SH DESCRIPTION
+.I Visionfs
+serves recognition models as files, mounted by default at
+.BR /mnt/vision :
+a program, a person at the shell, or an agent writes a picture and
+reads back what is in it, one record a line.
+Which machine does the looking is which server is mounted there: this
+one, or another's, over 9P.
+.PP
+A model is a directory made by
+.BR tools/vision/onnx2vis.py :
+.BR graph ,
+.BR weights ,
+.BR classes ,
+.B info
+and
+.BR sha256 .
+Its weights are refused unless their SHA-256 is the one recorded, and
+its graph is checked, every operation's numbers and every tensor's
+shape, before anything runs.
+It is run by
+.B /dis/lib/visnet.dis
+on
+.BR $Tensor ,
+the processor's arithmetic (see
+.IR tensor (2)).
+.PP
+.B -s
+posts the server in
+.BR #s
+as
+.I spec
+(default
+.BR vision ),
+so a VM other than the one it runs in can mount it (see
+.IR vm (1));
+.B -S
+posts nothing.
+.I Load
+loads a model as the server starts, as
+.B ctl
+does.
+.SS Files
+.TF models/\fIname\fP/classes
+.TP
+.B ctl
+Written:
+.BI load " name dir"
+loads the model in
+.I dir
+as
+.IR name ;
+.BI unload " name"
+lets it go, refused while a session uses it.
+Read: the engine
+.RB ( "engine cpu" ),
+where a session may run
+.RB ( "places cpu" ),
+and each model,
+.BI model " name dir" .
+.TP
+.BI models/ name /info
+.B kind=detect decode=yolox input=416x416 classes=80 order=bgr fill=114 places=cpu sha256=...
+.TP
+.BI models/ name /classes
+One class name a line, in index order.
+.TP
+.B clone
+Read: a new session's number,
+.IR N .
+The session lasts while any of its files is open, this one included.
+.TP
+.IB N /ctl
+A setting a line, written as read:
+.BI model " name" \fR,
+.B place cpu\fR,
+.BI thresh " r"
+(0 to 1; 0.30 at first),
+.BI iou " r"
+(boxes of one class overlapping by this or more are kept once; 0.45),
+.BI classes " name ..."
+or
+.BR "classes all" .
+Every line of a write is checked before any is done, and a refusal says
+why.
+A new session has the first model loaded.
+.TP
+.IB N /image
+A picture, in any format
+.IR imgload (2)
+reads or a binary PPM, in as many writes as it takes from its start; it
+is looked at when the file is closed.
+.TP
+.IB N /detections
+What was found in the last picture, best first, one record a line:
+.IP
+.EX
+class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
+.EE
+.IP
+in the picture's pixels,
+.B x0 y0
+inside the box and
+.B x1 y1
+just past it.
+A read waits while the picture is looked at.
+Nothing found is nothing read.
+.TP
+.IB N /layer/vision. N
+The same records, as a layer to bind into a video's stack.
+.TP
+.IB N /status
+.BI state= state
+.RB ( idle ,
+.BR running ,
+.BR ready ,
+.BR error )
+and
+.BI model= name\fR,
+with
+.BI reason= ...
+when something is wrong.
+.TP
+.IB N /stats
+.BI images= n
+looked at,
+.BI found= n
+in the last,
+.BI ms= n
+it took.
+.PD
+.PP
+Each picture is looked at in a process of its own, so one session's
+never holds up another's, nor the server.
+.SH EXAMPLE
+.EX
+; visionfs load nano /lib/vision/yolox-nano
+; {
+	id=`{read}
+	cat photo.jpg > /mnt/vision/$id/image
+	cat /mnt/vision/$id/detections
+} < /mnt/vision/clone
+class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
+class=bicycle score=0.80 x0=54 y0=137 x1=572 y1=423
+.EE
+.PP
+On a machine with no model of its own, another's:
+.EX
+; mount tcp!orin!vision /mnt/vision
+.EE
+.SH SOURCE
+.B /appl/cmd/visionfs.b
+.br
+.B /appl/lib/visnet.b
+.br
+.B /tools/vision/onnx2vis.py
+.SH SEE ALSO
+.IR vision (1),
+.IR tensor (2)
+.SH BUGS
+Pictures only: following a video feed
+.RB ( src )
+is refused, saying so, until it is served.
+Only detectors of the YOLOX family are converted, and only the
+processor's engine is served here.

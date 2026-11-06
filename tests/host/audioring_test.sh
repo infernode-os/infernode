@@ -21,6 +21,12 @@
 #      over a writer that had begun it: the first frames of a sound begun
 #      just as the engine finished the buffer before. (Found by this
 #      test, not by ear.)
+#   4. The fix for 3 left a begun buffer alone whether or not its writer
+#      was still writing. A writer that returned part way through a
+#      buffer and was late with the rest (sdr/fm from a network mount,
+#      2026-11-07) had that buffer played once a lap: its frames, then
+#      the stale rest of the buffer, uncounted by audiostat. The second
+#      simulation below is such a writer.
 #
 # And the Pi 4 was silent: its jack's pins are the SECOND PWM block's,
 # and the driver, written for the 3B+, drove the first.
@@ -88,7 +94,7 @@ tick(void)
 {
 	played[np++] = torn[r.pbuf] ? Torn : tag[r.pbuf];
 	torn[r.pbuf] = 0;
-	if(ringplayed(&r)){
+	if(ringplayed(&r) != Rplay){	/* no writer here stops part way: never Rmove */
 		if(r.pbuf == r.writing)
 			torn[r.pbuf] = 1;	/* silence over a buffer the writer had begun */
 		else
@@ -202,6 +208,173 @@ main(void)
 	return ok ? 0 : 1;
 }
 EOF
+    # A writer that stops part way through buffers. Each buffer is Q
+    # quarters; the writer writes a few quarters at a time and goes
+    # away while the engine plays a few buffers, as a program reading
+    # from the network does. Every quarter is numbered. What is played
+    # must be every quarter once, in order (nothing stale, nothing
+    # twice), and the gaps the driver counts (Rsilence and Rmove while
+    # sounding) must be the silent buffers played inside the stream.
+    cat > "$BUILD/s.c" <<EOF
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "$PWD/$RING"
+
+enum { Q = 4, Silence = -1, Quarters = 3000 };
+
+static Ring r;
+static int buf[Nbuf][Q];	/* what each buffer holds, quarter by quarter */
+static int woff;		/* quarters written in the writer's buffer */
+static int sounding;
+static int counted;		/* gaps the driver counts */
+static int played[Quarters*20 + 100000];
+static int np;
+static int ntick;		/* ticks so far */
+
+static void
+tick(void)
+{
+	int i, d;
+
+	for(i = 0; i < Q; i++)
+		played[np++] = buf[r.pbuf][i];
+	ntick++;
+	d = ringplayed(&r);
+	if(d == Rmove){
+		memmove(buf[(r.pbuf + 1) % Nbuf], buf[r.pbuf], woff * sizeof buf[0][0]);
+		ringmove(&r);
+	}
+	if(d != Rplay){
+		for(i = 0; i < Q; i++)
+			buf[r.pbuf][i] = Silence;
+		if(sounding)
+			counted++;
+	}
+}
+
+static int
+run(int ahead, unsigned seed, char *why, int nwhy)
+{
+	int i, j, k, next, want, first, last, inside, gaps, b, closed;
+
+	srand(seed);
+	ringreset(&r);
+	r.ahead = ahead;
+	for(i = 0; i < Nbuf; i++)
+		for(j = 0; j < Q; j++)
+			buf[i][j] = Silence;	/* as ring() leaves them; what is stale later is this sound's own, played again */
+	woff = 0;
+	sounding = 0;
+	counted = 0;
+	np = 0;
+	ntick = 0;
+	for(i = rand() % 7; i > 0; i--)
+		tick();
+	next = 0;
+	while(next < Quarters){
+		ringunpark(&r);
+		for(k = 1 + rand() % 7; k > 0 && next < Quarters; k--){
+			if(woff == 0){
+				ringbegin(&r);
+				while(!ringroom(&r))
+					tick();
+				ringwriting(&r);
+			}
+			buf[r.wbuf][woff++] = next++;
+			if(woff == Q){
+				ringfilled(&r);
+				woff = 0;
+				sounding = 1;
+			}
+		}
+		ringpark(&r);
+		/* away: the network was slow */
+		for(i = rand() % 8; i > 0; i--)
+			tick();
+	}
+	/* the close: the part-filled buffer padded with silence and queued */
+	if(woff != 0){
+		for(; woff < Q; woff++)
+			buf[r.wbuf][woff] = Silence;
+		ringfilled(&r);
+		woff = 0;
+	}
+	sounding = 0;
+	closed = ntick;	/* the last buffer decided while open is played at tick closed */
+	for(i = 0; i < 2*Nbuf; i++)
+		tick();
+
+	want = 0;
+	first = last = -1;
+	for(i = 0; i < np; i++){
+		if(played[i] == Silence)
+			continue;
+		if(played[i] != want){
+			snprintf(why, nwhy, "quarter %d of the playing: played %d, wanted %d%s", i, played[i], want,
+				played[i] < want ? " (again: stale, what the buffer held a lap before)" : " (one skipped)");
+			return 0;
+		}
+		if(first < 0)
+			first = i;
+		last = i;
+		want++;
+	}
+	if(want != Quarters){
+		snprintf(why, nwhy, "%d of %d quarters played", want, Quarters);
+		return 0;
+	}
+	/*
+	 * A gap is a silent buffer played after the sound began and decided
+	 * on while the device was open: between its parts, and after the
+	 * last of it if the writer was slow to close. The device ran dry
+	 * while open, which is what an underrun is; the driver cannot tell
+	 * the end of a sound from a pause.
+	 */
+	gaps = 0;
+	for(b = first/Q + 1; b <= closed && b < np/Q; b++){
+		inside = 1;
+		for(j = 0; j < Q; j++)
+			if(played[b*Q + j] != Silence)
+				inside = 0;
+		gaps += inside;
+	}
+	if(gaps != counted){
+		snprintf(why, nwhy, "%d silent buffers played inside the sound, %d counted", gaps, counted);
+		return 0;
+	}
+	return 1;
+}
+
+int
+main(void)
+{
+	char why[200];
+	unsigned seed;
+	int ahead, ok;
+
+	ok = 1;
+	for(ahead = 1; ahead <= Nbuf - 1; ahead += Nbuf - 2)
+		for(seed = 1; seed <= 50; seed++)
+			if(!run(ahead, seed, why, sizeof why)){
+				printf("ahead %d, seed %u: %s\n", ahead, seed, why);
+				ok = 0;
+				break;
+			}
+	return ok ? 0 : 1;
+}
+EOF
+    if "$CC" -O2 -Wall -o "$BUILD/s" "$BUILD/s.c" 2>"$BUILD/cc2.log"; then
+        if out="$("$BUILD/s")"; then
+            pass "a writer that stops part way through buffers: every frame played once and in order, none stale, and every gap counted (3000 quarters, 50 seeds, default and low-latency)"
+        else
+            fail "a writer that stops part way: $out"
+        fi
+    else
+        fail "the stalled-writer test did not compile"
+        sed 's/^/    /' "$BUILD/cc2.log" | head -12
+    fi
+
     if "$CC" -O2 -Wall -o "$BUILD/t" "$BUILD/t.c" 2>"$BUILD/cc.log"; then
         if out="$("$BUILD/t")"; then
             pass "every sound plays whole, in order, and as soon as the buffer playing ends (400 sounds of 6 buffers, 50 seeds, default and low-latency)"

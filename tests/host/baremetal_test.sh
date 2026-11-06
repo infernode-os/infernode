@@ -1862,6 +1862,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /net/iproute' \
         'cat /net/tcp/stats' \
         'iplocktest' \
+        'cat /dev/audiostat' \
         'niltest' \
         'cd /dis; pwd; cd /' \
         'date' \
@@ -1991,6 +1992,18 @@ if grep -q "iplocktest: PASS" <<<"$SHOUT"; then
     pass "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)"
 else
     fail "os/ip: interface lock leaked by the ICMPv6 unreachable reply -- $(grep -a 'iplocktest:' <<<"$SHOUT" | tail -1)"
+fi
+
+# #A/audiostat: what the jack has done (os/port/devaudio.c, the board's
+# line from os/bcm/audiopwm.c). QEMU has no PWM, so nothing is played
+# here: the file is bound in /dev, and at boot nothing is open and
+# nothing has been missed. Underruns used to count the silence the
+# engine plays after the last close, about 21 a second for ever; a
+# board run is what checks that they no longer do.
+if grep -a -q "engine idle open 0 rate 44100 chans 2 bits 16 frames [0-9]* ahead [0-9]* played 0 underruns 0" <<<"$SHOUT"; then
+    pass "#A/audiostat is in /dev: the jack idle, nothing played, no underruns"
+else
+    fail "#A/audiostat -- $(grep -a -E 'engine |audiostat' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
 fi
 
 # A nil dereference in JIT-compiled code is the program's exception.

@@ -47,3 +47,4 @@ snap detached
 echo -n x > /dev/keyboard
 snap typedhard
 echo R done
+echo halt > '#c/sysctl'

@@ -13,3 +13,4 @@ while {! ftest -f /mnt/ui/activity/0/conversation/2} {sleep 1}
 sleep 1
 cat /mnt/ui/activity/0/conversation/2 > /tmp/answer
 echo R done
+echo halt > '#c/sysctl'

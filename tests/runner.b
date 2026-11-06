@@ -120,10 +120,23 @@ init(drawctxt: ref Draw->Context, args: list of string)
 
 	if(totalfailed > 0) {
 		sys->fprint(sys->fildes(2), "\nFAIL\n");
+		haltemulator();
 		raise "fail:tests failed";
 	}
 
 	sys->fprint(sys->fildes(2), "\nPASS\n");
+	haltemulator();
+}
+
+# runner.dis is an emulator entry point.  A first Prog exiting used to stop
+# the hosted runtime, but the multi-VM kernel deliberately keeps the host
+# alive for other VMs.  End the test machine explicitly once the complete
+# summary has been written.
+haltemulator()
+{
+	fd := sys->open("/dev/sysctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "halt");
 }
 
 # runlimbotests: discover and run *_test.dis files

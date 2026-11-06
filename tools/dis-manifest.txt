@@ -1054,6 +1054,7 @@ dis/veltro/wallet9p.dis
 dis/veltro/wiki9p.dis
 dis/ventisrv.dis
 dis/vid9p.dis
+dis/visionfs.dis
 dis/wav2iaf.dis
 dis/vm.dis
 dis/vmstress.dis

@@ -211,6 +211,7 @@ TARG=\
 	vacput.dis\
 	ventisrv.dis\
 	vid9p.dis\
+	visionfs.dis\
 	wav2iaf.dis\
 	vm.dis\
 	wc.dis\
@@ -242,6 +243,7 @@ MODULES=\
 	$ROOT/appl/veltro/veltrosrv.m\
 
 SYSMODULES=\
+	visnet.m\
 	arg.m\
 	bufio.m\
 	convcs.m\

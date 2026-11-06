@@ -1,0 +1,93 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=42039 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+TLC2 Version 2026.10.30.154139 (rev: 090e85c)
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 118 and seed -141014529695472972 with 4 workers on 4 cores with 2048MB heap and 64MB offheap memory [pid: 7916] (Linux 6.18.44-fc-v242 amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /home/user/infernode/formal-verification/tla+/MC_Namespace.tla
+Parsing file /home/user/infernode/formal-verification/tla+/NamespaceProperties.tla
+Parsing file /home/user/infernode/formal-verification/tla+/IsolationProof.tla
+Parsing file /tmp/tlc-1114384567071715469/TLC.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-1114384567071715469/_TLCTrace.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /home/user/infernode/formal-verification/tla+/Namespace.tla
+Parsing file /tmp/tlc-1114384567071715469/Integers.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /tmp/tlc-1114384567071715469/Sequences.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-1114384567071715469/FiniteSets.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-1114384567071715469/Naturals.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-1114384567071715469/TLCExt.tla (jar:file:/home/user/infernode/formal-verification/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Namespace
+Semantic processing of module NamespaceProperties
+Semantic processing of module IsolationProof
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module MC_Namespace
+Linting of module Namespace
+Linting of module NamespaceProperties
+Linting of module IsolationProof
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module MC_Namespace
+Starting... (2026-11-06 09:40:12)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-06 09:40:12.
+Error: Invariant CopyNeverHappened is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ mount_table = <<<<{}>>, <<{}>>>>
+/\ pgrp_slash = <<0, 0>>
+/\ next_pgrp_id = 1
+/\ next_chan_id = 1
+/\ post_copy_mounts = <<{}, {}>>
+/\ pgrp_refcount = <<0, 0>>
+/\ process_pgrp = <<0, 0>>
+/\ pgrp_dot = <<0, 0>>
+/\ chan_refcount = <<0, 0, 0, 0>>
+/\ pgrp_exists = <<FALSE, FALSE>>
+/\ chan_exists = <<FALSE, FALSE, FALSE, FALSE>>
+/\ processes = {}
+/\ pgrp_parent = <<0, 0>>
+/\ pgrp_nodevs = <<FALSE, FALSE>>
+/\ copy_snapshot = <<<<{}>>, <<{}>>>>
+
+State 2: <CreateProcess line 416, col 5 to line 439, col 90 of module Namespace>
+/\ mount_table = <<<<{}>>, <<{}>>>>
+/\ pgrp_slash = <<1, 0>>
+/\ next_pgrp_id = 2
+/\ next_chan_id = 3
+/\ post_copy_mounts = <<{}, {}>>
+/\ pgrp_refcount = <<1, 0>>
+/\ process_pgrp = <<1, 0>>
+/\ pgrp_dot = <<2, 0>>
+/\ chan_refcount = <<1, 1, 0, 0>>
+/\ pgrp_exists = <<TRUE, FALSE>>
+/\ chan_exists = <<TRUE, TRUE, FALSE, FALSE>>
+/\ processes = {1}
+/\ pgrp_parent = <<0, 0>>
+/\ pgrp_nodevs = <<FALSE, FALSE>>
+/\ copy_snapshot = <<<<{}>>, <<{}>>>>
+
+State 3: <Next line 588, col 8 to line 588, col 49 of module Namespace>
+/\ mount_table = <<<<{}>>, <<{}>>>>
+/\ pgrp_slash = <<1, 1>>
+/\ next_pgrp_id = 3
+/\ next_chan_id = 5
+/\ post_copy_mounts = <<{}, {}>>
+/\ pgrp_refcount = <<0, 1>>
+/\ process_pgrp = <<2, 0>>
+/\ pgrp_dot = <<2, 2>>
+/\ chan_refcount = <<1, 1, 1, 1>>
+/\ pgrp_exists = <<TRUE, TRUE>>
+/\ chan_exists = <<TRUE, TRUE, TRUE, TRUE>>
+/\ processes = {1}
+/\ pgrp_parent = <<0, 1>>
+/\ pgrp_nodevs = <<FALSE, FALSE>>
+/\ copy_snapshot = <<<<{}>>, <<{}>>>>
+
+163 states generated, 147 distinct states found, 135 states left on queue.
+The depth of the complete state graph search is 5.
+Finished in 00s at (2026-11-06 09:40:12)
+Trace exploration spec path: ./MC_Namespace_TTrace_1793958011.tla

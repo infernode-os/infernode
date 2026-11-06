@@ -90,11 +90,11 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 
 - **Lightweight** — 15–30 MB RAM, 2-second startup, ~10 MB on disk.
 - **JIT compiled** — native code generation on AMD64, ARM64 and RISC-V; interpreter fallback everywhere.
-- **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 44 tool modules, LLM integration via 9P, and formally verified containment.
+- **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 44 tool modules, LLM integration via 9P, and model-checked namespace copy semantics.
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucia) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
-- **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
+- **Formal methods** — the namespace copy (`pgrpcpy`) is specified in TLA+ and model-checked exhaustively at small scale, its deep-copy structure is bounded-checked in CBMC on the C, and three fixed name-space races are confirmed in SPIN. These are checks of a model and of one function, not a proof of isolation; see [formal-verification/README.md](formal-verification/README.md#what-this-does-and-does-not-establish).
 - **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).
 - **Complete** — 1,100+ Limbo source files, a full shell, TCP/IP, 9P, and over 1,000 compiled Dis modules.
 
@@ -168,7 +168,7 @@ InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/spon
 
 ## About
 
-InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
+InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with model-checked namespace isolation primitives, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
 
 ## Acknowledgements
 

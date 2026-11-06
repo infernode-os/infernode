@@ -39,6 +39,7 @@ import dataclasses
 import json
 import logging
 import os
+import tempfile
 import time
 import uuid
 
@@ -69,6 +70,19 @@ BUILTIN_TOOLS = [
 # What a request with no system prompt of its own is given (llmsrv's
 # summary request is one).
 NEUTRAL_SYSTEM = "You are a helpful assistant."
+
+# A session runs the CLI, which brings in what it finds for its working
+# directory and its user: the project's auto-memory (keyed by the
+# directory), the organisation's.  The gate's working directory is
+# wherever it was started, the InferNode checkout as often as not, and
+# every agent served was given that checkout's memory index (the host
+# user's notes) as context, and could repeat it.  Sessions run in an
+# empty directory of their own, with memory off.
+SESSION_DIR = tempfile.mkdtemp(prefix="claude-gate-")
+SESSION_ENV = {
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "CLAUDE_CODE_DISABLE_ORG_MEMORY": "1",
+}
 
 
 # ── turn state ─────────────────────────────────────────────────────
@@ -428,7 +442,9 @@ if not MOCK:
                 strict_mcp_config=True,          # ignore host MCP configs
                 max_turns=100,
                 include_partial_messages=COALESCE,
-                env={"MCP_TOOL_TIMEOUT": str(int(HOLD_TIMEOUT * 1000))},
+                cwd=SESSION_DIR,
+                env={**SESSION_ENV,
+                     "MCP_TOOL_TIMEOUT": str(int(HOLD_TIMEOUT * 1000))},
             )
 
             usage_tokens = 0

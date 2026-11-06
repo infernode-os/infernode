@@ -135,7 +135,7 @@ A boot with
 .B skiplogon=1
 starts Lucia whatever was chosen, and one with
 .BI interface= name
-starts that interface; a phone offers Lucia alone.
+starts that interface; a phone or tablet offers Lucia alone.
 .SH SOURCE
 .B /appl/wm/logon.b
 .SH SEE ALSO

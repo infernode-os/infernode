@@ -17,6 +17,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #include <SDL3/SDL_main.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -353,11 +354,15 @@ main(int argc, char *argv[])
 		char a_l[]    = "-l";
 		char a_boot[] = "/lib/lucifer/boot-mobile.sh";
 		char a_nolog[]= "--no-logon";
+		/* On an iPad, Lucifer takes the desktop's columns while it is
+		 * held on its side (boot-mobile.sh --tablet). */
+		char a_tablet[] = "--tablet";
+		int ipad = [UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad;
 		char *av[] = {
 			a_name, a_c0, a_ph, a_pm, a_pi, a_r, a_dot,
-			a_sh, a_l, a_boot, a_nolog, NULL
+			a_sh, a_l, a_boot, a_nolog, ipad ? a_tablet : NULL, NULL
 		};
-		int ac = (int)(sizeof(av) / sizeof(av[0])) - 1;
+		int ac = (int)(sizeof(av) / sizeof(av[0])) - 1 - !ipad;
 
 		fprintf(stderr, "InferNode GUI: emu_run booting lucifer (-c0), root=%s\n", root);
 		return emu_run(ac, av);

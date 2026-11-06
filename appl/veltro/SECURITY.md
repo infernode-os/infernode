@@ -549,17 +549,20 @@ Concurrency tests in `tests/veltro_concurrent_test.b`:
 
 ### Not verification — syntactic analysis
 
-The existing `formal-verification/` tree proves properties of the kernel's
-namespace primitives: 3.17 billion TLA+ states, SPIN model checks, CBMC
-harnesses over `pgrpcpy` and friends. Those proofs are about the mechanism.
+The existing `formal-verification/` tree model-checks a TLA+ specification
+of the kernel's namespace copy, bounded-checks `pgrpcpy`'s deep copy in CBMC
+and confirms three fixed races in SPIN. Those checks are about the mechanism,
+and they are checks of a model and of one function, not a proof that the
+mechanism isolates (see `formal-verification/README.md`, "What this does and
+does not establish").
 
 `nsaudit` is about the *configuration* that feeds the mechanism. It parses a
 capability configuration, looks up each tool in a per-tool authority
 manifest, and applies pattern-match rules over the resulting authority set.
 No symbolic execution, no theorem, no proof. This is syntactic analysis —
 closer to a linter or a type checker than to TLA+. The two efforts are
-complementary: `formal-verification/` proves the kernel does what it's
-told; `nsaudit` checks that what you're telling it is what you meant.
+complementary: `formal-verification/` checks the kernel's copy does what
+the spec says; `nsaudit` checks that what you're telling it is what you meant.
 
 ### The question it answers
 

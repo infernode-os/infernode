@@ -149,14 +149,17 @@ catalogue. The enforcement mechanism and the agent's
 self-knowledge are the same object. There is no concept of an
 "unavailable" tool — an ungranted tool simply isn't there.
 
-### This is verified, not asserted
+### This is checked, not merely asserted
 
 The namespace isolation property — that a mount performed in one
 process group never appears in another's mount table except by
-its own action — has been model-checked exhaustively at small
-scale and to 3.17 billion distinct states at medium scale, with
-supporting SPIN models for the concurrent code and CBMC proofs
-over the C implementation (`formal-verification/`). The claim
+its own action — is stated as a TLA+ invariant and model-checked
+exhaustively at small scale (the medium run is incomplete), with
+SPIN models of the locking and of three fixed races and CBMC
+harnesses over `pgrpcpy` (`formal-verification/`). Those are checks
+of a specification and of one function's deep copy; the TLA+ model
+cannot express shared mount structure, so it does not by itself
+rule out the C bug. The claim
 "a small TCB you can actually verify" is the project's thesis;
 design that respects the chokepoint keeps the thesis true.
 Design that adds a second enforcement path dilutes it.

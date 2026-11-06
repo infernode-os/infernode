@@ -40,7 +40,7 @@ if {! ~ $osk off} {
 # next time.  It is the login screen's: with $skiplogon (the tests',
 # a developer's) the interface is Lucia, as it always was, whatever was
 # chosen there.  $interface, set before this runs, starts that one
-# either way.  A phone has Lucia alone: wm/wm's windows are not for a
+# either way.  A phone or tablet has Lucia alone: wm/wm's windows are not for a
 # touch screen.
 interfaces=(Lucia Desktop)
 if {~ $infmobile 1} {interfaces=(Lucia)}

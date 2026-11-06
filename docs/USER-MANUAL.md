@@ -574,7 +574,7 @@ Under the password field the login screen offers two interfaces:
 - **Lucia** — the agent's three zones (conversation, presentation, context). The default.
 - **Desktop** — windows, under `wm/wm`, with a shell to begin with. Button 3 on the background gives New (another shell), Resize, Move, Delete and Hide. A file plumbed there opens in a window of its own: a text file or directory in Xenith, a web page in Charon, an image in `wm/view`, a PDF in `wm/page` (`/lib/wm/plumbing`; your own rules in `/usr/<user>/lib/plumbing` come first).
 
-Click one, or use the **Up** and **Down** arrow keys, before pressing Enter (or skipping with Escape). The choice is kept, so the next login screen offers the same one. Closing the emulator's window ends either interface, as Lucia's Quit does. A phone offers Lucia alone.
+Click one, or use the **Up** and **Down** arrow keys, before pressing Enter (or skipping with Escape). The choice is kept, so the next login screen offers the same one. Closing the emulator's window ends either interface, as Lucia's Quit does. A phone or tablet offers Lucia alone.
 
 ### Skipping Login
 

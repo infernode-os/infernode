@@ -54,6 +54,18 @@ as merged code rather than accepted on that basis alone.
 - **Hardware entropy is fail-closed.** Native key generation now requires the
   platform hardware generator instead of silently treating timing-derived
   output as equivalent entropy.  Platform generator access is serialized.
+- **The subsequent kernel CSPRNG merge preserves and strengthens that rule.**
+  A single qlocked ChaCha20 generator now serves every native random entry
+  point.  Its first key still requires 32 accepted hardware bytes; it performs
+  fast key erasure before returning output, reseeds after one second or one
+  megabyte, refuses a repeated 32-byte seed and a repeated 32-bit word, and
+  stops serving an old key after ten minutes without hardware recovery.  The
+  explicit QEMU-only `insecurerandom` escape remains loudly marked and is not
+  enabled on boards.  Waiters release the Dis VM, so an empty generator cannot
+  freeze unrelated Progs.  DNS now draws a fresh unpredictable id for every
+  query instead of exposing a startup-seeded sequence.  Review of the lock,
+  counter, rekey, reseed, stale-key and failure paths found no widening or
+  fallback to unauthenticated entropy.
 - **The merged network and device paths retain this branch's checks.** The
   devip ownership/permission, negative-attach, conversation bounds, state
   unwind, route/interface lifetime, transport-length, TCP sequencing and IP
@@ -145,3 +157,9 @@ longer idle to the deadline.
 macOS build also regenerated the checked-in device and root tables, adding the
 incoming location device and `/prof` root entry that their source
 configuration already declared.
+
+After the kernel CSPRNG merge, its independent host model passes all nine
+cases: no source, non-VM waiter, explicit insecure mode, construction,
+long-request rekeying, dry-after-seed expiry, stuck source, repeated seed and
+4,096 distinct requests.  The post-merge hook also rebuilt the changed DNS
+module successfully.

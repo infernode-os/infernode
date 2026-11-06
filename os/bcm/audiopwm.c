@@ -145,13 +145,14 @@ struct Ctlr {
 	Rendez	r;
 	int	running;	/* clock, PWM and DMA are up */
 	int	open;
+	int	sounding;	/* written to since this open: a silenced buffer now is a gap */
 	Cb	*cb;		/* Nbuf control blocks, 32-byte aligned */
 	u32int	*buf[Nbuf];	/* the ring */
 	Ring	rg;		/* the engine's place, the writer's, what waits: audioring.h */
 	int	woff;		/* words already in the writer's buffer */
 	int	frames;		/* stereo frames per buffer now: Maxframes unless audioctl's buf said less (#653) */
-	ulong	played;		/* buffers played out, for the curious */
-	ulong	underruns;	/* buffers silenced for want of data */
+	ulong	played;		/* buffers played out, open or not */
+	ulong	underruns;	/* buffers silenced for want of data while sounding: gaps heard */
 	Audio_t	av;
 };
 
@@ -247,7 +248,15 @@ audiointr(void *a)
 	c->played++;
 	if(ringplayed(&c->rg)){
 		fillsilence(c->buf[c->rg.pbuf]);
-		c->underruns++;
+		/*
+		 * A gap only while someone is playing. The engine runs on,
+		 * silent, after the last close (the comment at the top), and
+		 * before a program's first write; counting those made this
+		 * about 21 a second for ever after the first open, and the
+		 * number meant nothing.
+		 */
+		if(c->open && c->sounding)
+			c->underruns++;
 	}
 	wakeup(&c->r);
 }
@@ -363,6 +372,7 @@ audio_file_open(Chan *c, int omode)
 	if(ctlr.open)
 		error(Einuse);
 	start(&ctlr);
+	ctlr.sounding = 0;
 	ctlr.open = 1;
 	poperror();
 	qunlock(&ctlr.lk);
@@ -374,6 +384,7 @@ audio_file_close(Chan *c)
 	USED(c);
 	qlock(&ctlr.lk);
 	ctlr.open = 0;
+	ctlr.sounding = 0;
 	/*
 	 * The last buffer, part written: the rest is silence, and it goes
 	 * to be played. It used to stay as it was -- the end of the sound
@@ -486,6 +497,7 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 			cachedwbse(b, ctlr.frames * 2 * 4);
 			ringfilled(&ctlr.rg);
 			ctlr.woff = 0;
+			ctlr.sounding = 1;	/* the first buffer is the engine's: from here a silenced one is a gap */
 		}
 	}
 	poperror();
@@ -528,11 +540,19 @@ audio_ctl_write(Chan *c, void *va, long count, vlong offset)
 	return count;
 }
 
-/* for devcons's "audio" line, and the battery */
+/*
+ * #A/audiostat: what the jack has done, one line of names and values.
+ * engine is whether the clock, PWM and DMA are up (they stay up, at
+ * silence, after the first open); open, whether a program has
+ * /dev/audio; played, the buffers the engine has finished since boot;
+ * underruns, those of them that were silence in the middle of a sound
+ * (open, and written to since), each a gap of frames/rate seconds that
+ * was heard. Counts only go up: a program compares two readings.
+ */
 char*
 audiostatus(char *buf, char *e)
 {
-	return seprint(buf, e, "audio: %s rate %lud chans %lud bits %lud frames %d ahead %d played %lud underruns %lud\n",
-		ctlr.running? "running" : "idle", ctlr.av.out.rate, ctlr.av.out.chan, ctlr.av.out.bits,
+	return seprint(buf, e, "engine %s open %d rate %lud chans %lud bits %lud frames %d ahead %d played %lud underruns %lud\n",
+		ctlr.running? "running" : "idle", ctlr.open, ctlr.av.out.rate, ctlr.av.out.chan, ctlr.av.out.bits,
 		ctlr.frames, ctlr.rg.ahead, ctlr.played, ctlr.underruns);
 }

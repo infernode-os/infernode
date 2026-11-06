@@ -321,6 +321,7 @@ newSK(SigAlg *sa, String *owner, int increfsa)
 	}
 	k->x.owner = owner;
 	k->key = 0;
+	k->vec = sa->vec;
 	return k;
 }
 
@@ -328,12 +329,10 @@ static void
 freeSK(Heap *h, int swept)
 {
 	SK *k;
-	SigAlg *sa;
 
 	k = H2D(SK*, h);
-	sa = checkSigAlg(k->x.sa);
-	if(k->key)
-		(*sa->vec->skfree)(k->key);
+	if(k->key != nil && k->vec != nil)
+		(*k->vec->skfree)(k->key);
 	freeheap(h, swept);
 }
 
@@ -549,6 +548,7 @@ newPK(SigAlg *sa, String *owner, int increfsa)
 	}
 	k->x.owner = owner;
 	k->key = 0;
+	k->vec = sa->vec;
 	return k;
 }
 
@@ -574,12 +574,10 @@ void
 freePK(Heap *h, int swept)
 {
 	PK *k;
-	SigAlg *sa;
 
 	k = H2D(PK*, h);
-	sa = checkSigAlg(k->x.sa);
-	if(k->key)
-		(*sa->vec->pkfree)(k->key);
+	if(k->key != nil && k->vec != nil)
+		(*k->vec->pkfree)(k->key);
 	freeheap(h, swept);
 }
 
@@ -760,6 +758,7 @@ newCertificate(SigAlg *sa, String *ha, String *signer, long exp, int increfsa)
 	c->x.ha = ha;
 	c->x.exp = exp;
 	c->signa = 0;
+	c->vec = sa->vec;
 
 	return c;
 }
@@ -768,12 +767,10 @@ void
 freeCertificate(Heap *h, int swept)
 {
 	Certificate *c;
-	SigAlg *sa;
 
 	c = H2D(Certificate*, h);
-	sa = checkSigAlg(c->x.sa);
-	if(c->signa)
-		(*sa->vec->sigfree)(c->signa);
+	if(c->signa != nil && c->vec != nil)
+		(*c->vec->sigfree)(c->signa);
 	freeheap(h, swept);
 }
 

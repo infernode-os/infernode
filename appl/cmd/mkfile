@@ -11,6 +11,7 @@ DIRS=\
 	limbo\
 	mk\
 	ndb\
+	sdr\
 	sh\
 	wikifs\
 	fs\

@@ -687,7 +687,17 @@ pickfonts()
 	sfont = pickfont(rowh * 36 / 100, 0);
 }
 
-fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36};
+# Go's sizes, then DejaVu Sans's 48 (the phones' sizes: rows of 120
+# pixels on a phone's screen want labels of 54, and Go stops at 36,
+# which left them a third the height of the keys)
+fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36, 48};
+
+fontpath(size: int): string
+{
+	if(size > 36)
+		return sys->sprint("/fonts/combined/unicode.sans.%d.font", size);
+	return sys->sprint("/fonts/combined/go.%d.font", size);
+}
 
 pickfont(px, nil: int): ref Font
 {
@@ -695,7 +705,9 @@ pickfont(px, nil: int): ref Font
 	for(i := 0; i < len fontsizes; i++)
 		if(fontsizes[i] <= px)
 			best = fontsizes[i];
-	f := Font.open(display, sys->sprint("/fonts/combined/go.%d.font", best));
+	f := Font.open(display, fontpath(best));
+	if(f == nil && best > 36)
+		f = Font.open(display, fontpath(36));
 	if(f == nil)
 		f = Font.open(display, "*default*");
 	return f;
@@ -704,6 +716,17 @@ pickfont(px, nil: int): ref Font
 #
 # Drawing
 #
+
+# what is drawn shown; nothing while there is no window: a touch's
+# events, a long press's tick, a stroke's word and the suggester's
+# answer can all come after a keyboard attached has hidden it (img nil,
+# and Image.flush raised "nil Image": osk broke, and with it the phone's
+# only keyboard)
+flush()
+{
+	if(img != nil)
+		img.flush(Draw->Flushnow);
+}
 
 colour(c: int): ref Image
 {
@@ -723,14 +746,14 @@ redraw()
 	img.draw(handlerect, colour(kc.board), nil, (0, 0));
 	if(state == Handle){
 		drawhandle();
-		img.flush(Draw->Flushnow);
+		flush();
 		return;
 	}
 	drawstrip();
 	for(i := 0; i < len layer.rows; i++)
 		for(j := 0; j < len layer.rows[i]; j++)
 			drawkey(layer.rows[i][j], 0);
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 drawhandle()
@@ -898,6 +921,8 @@ drawlongpress(t: ref Tch)
 
 lpindex(t: ref Tch, p: Point): int
 {
+	if(img == nil)		# hidden while held
+		return t.lpsel;
 	n := len t.lpalts;
 	w := rowh * 9 / 10;
 	x := t.key.r.min.x;
@@ -976,7 +1001,7 @@ drawtrail(a, b: Point)
 	if(r < 2)
 		r = 2;
 	img.line(a, b, Draw->Enddisc, Draw->Enddisc, r, colour(kc.auto), (0, 0));
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 #
@@ -1188,7 +1213,7 @@ touchdown(id: int, p: Point, ms: int): ref Tch
 		if(t.key != nil){
 			drawkey(t.key, 1);
 			drawpreview(t.key);
-			img.flush(Draw->Flushnow);
+			flush();
 			case t.key.kind {
 			Osklayout->Kchar =>
 				if(altsfor(t.key.c) != nil)
@@ -1217,7 +1242,7 @@ touchmove(t: ref Tch, p: Point)
 		if(i != t.lpsel){
 			t.lpsel = i;
 			drawlongpress(t);
-			img.flush(Draw->Flushnow);
+			flush();
 		}
 		t.last = p;
 		return;
@@ -1243,7 +1268,7 @@ touchmove(t: ref Tch, p: Point)
 				drawkey(k, 1);
 				drawpreview(k);
 			}
-			img.flush(Draw->Flushnow);
+			flush();
 		}
 	}
 	t.last = p;
@@ -1435,7 +1460,7 @@ tick(g: int)
 			redraw();	# the preview goes
 			drawkey(t.key, 1);
 			drawlongpress(t);
-			img.flush(Draw->Flushnow);
+			flush();
 		Osklayout->Kdel =>
 			t.repeating++;
 			if(t.repeating > 12 && wlit == nil)
@@ -1910,7 +1935,7 @@ swipeword(c: array of ref Cand)
 		sugg[i-1] = c[i].word;
 	suggauto = -1;
 	drawstrip();
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 # a suggestion touched: it in place of the word typed (or swiped)
@@ -2053,7 +2078,7 @@ suggested(g: int, c: array of ref Cand, corr: string)
 		sugg[j++] = w;
 	}
 	drawstrip();
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 clearsugg()
@@ -2062,7 +2087,7 @@ clearsugg()
 	suggauto = -1;
 	if(img != nil && state == Shown){
 		drawstrip();
-		img.flush(Draw->Flushnow);
+		flush();
 	}
 }
 

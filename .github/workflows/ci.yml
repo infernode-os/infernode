@@ -755,6 +755,7 @@ jobs:
               exec_fork_no_panic_test exec_timeout_kill_test
               factotum_keyfile_test gpsfs_test llmclient_pool_test llmctl_test
               llmsrv_flush_test llmsrv_models_stall_test location_test sdrfs_test
+              sdr_demod_test
               timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
@@ -785,7 +786,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind python3-numpy
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -1146,8 +1147,9 @@ jobs:
       run: |
         # wm/osk under wm/wm and as Lucifer's keyboard (desktop and
         # phone layouts), at the screens' sizes, through every theme,
-        # for wm/logon, and ground by its fuzzer.
-        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test; do
+        # for wm/logon, and ground by its fuzzer; Lucifer's phone layout
+        # ground with it (phone_fuzz_test).
+        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test phone_fuzz_test tablet_layout_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -2071,7 +2073,7 @@ jobs:
         # LD_PRELOAD and skips here (77).
         case $GUI in
         wm)	tests="wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
-        osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test" ;;
+        osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test phone_fuzz_test tablet_layout_test" ;;
         esac
         failed=
         for t in $tests; do
@@ -2153,6 +2155,46 @@ jobs:
         grep -vE '^$' /tmp/ios-gui.log | tail -40
         grep -q 'lucipres: plumb consumer listening' /tmp/ios-gui.log || {
           echo "::error::Lucifer did not finish booting in the iOS Simulator"; exit 1; }
+
+    # iPadOS: the same universal app (UIDeviceFamily 1 and 2) on an iPad
+    # simulator. The iPhone is shut down first: build-ios-app.sh installs
+    # on "booted", which must name one device.
+    - name: Switch to an iPad simulator
+      run: |
+        xcrun simctl shutdown all
+        UDID=$(xcrun simctl list devices available | grep -m1 -E '^ +iPad' | grep -oE '[0-9A-F-]{36}')
+        test -n "$UDID" || { echo "::error::no iPad simulator available"; exit 1; }
+        xcrun simctl list devices available | grep "$UDID"
+        xcrun simctl boot "$UDID"
+        xcrun simctl bootstatus "$UDID"
+
+    - name: GUI app boots Lucifer on iPad
+      run: |
+        ./build-ios-app.sh --gui
+        xcrun simctl terminate booted os.infernode.ios || true
+        ( xcrun simctl launch --console-pty booted os.infernode.ios > /tmp/ipad-gui.log 2>&1 ) &
+        for i in $(seq 1 24); do
+          grep -q 'lucipres: plumb consumer listening' /tmp/ipad-gui.log && break
+          sleep 5
+        done
+        grep -vE '^$' /tmp/ipad-gui.log | tail -40
+        grep -q 'lucipres: plumb consumer listening' /tmp/ipad-gui.log || {
+          echo "::error::Lucifer did not finish booting in the iPad Simulator"; exit 1; }
+        sleep 10
+        mkdir -p /tmp/ipad
+        xcrun simctl io booted screenshot /tmp/ipad/ipad-lucifer.png || true
+        (cd iOS/arm64 && ditto -c -k --keepParent InferNode.app /tmp/ipad/InferNode-iPad-simulator.app.zip)
+
+    - name: Headless app runs a test inside iPadOS
+      run: ./build-ios-app.sh --verify
+
+    - name: Upload the iPad build
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ipados-simulator-build
+        path: /tmp/ipad/
+        if-no-files-found: ignore
 
     # Device slice: compile only. Installing needs signing and hardware.
     - name: Cross-build the device slice

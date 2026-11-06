@@ -150,9 +150,13 @@ request sets:
 enlarged under the finger, nothing learned, and a trace says only that
 a key was typed).  The boot starts
 .B wm/osk -s -M secret
-for the login screen, with no window manager: it draws along the
-bottom of the screen and takes only the touches there, and is killed
-when the login is done, Lucifer starting its own.
+for the login screen, with no window manager: its window is the strip
+along the bottom of the screen, and it takes only the touches there;
+.B height
+in its status is the strip's, which
+.I wm/logon
+follows, laying its form out above it.  It is killed when the login is
+done, Lucifer starting its own.
 .PP
 .B -l
 .I layout

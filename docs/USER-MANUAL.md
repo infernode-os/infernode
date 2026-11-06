@@ -567,14 +567,14 @@ The login screen prompts for your secstore password. On successful authenticatio
 
 If the password is incorrect, the login screen stays up and shows the error with a choice: press **Enter** to try again, or **Escape** to continue without secstore. The Escape option warns that keys and secrets will not be available and AI integration may not work.
 
-### Choosing a Session
+### Choosing an Interface
 
-Under the password field the login screen offers two sessions:
+Under the password field the login screen offers two interfaces:
 
 - **Lucia** — the agent's three zones (conversation, presentation, context). The default.
 - **Desktop** — windows, under `wm/wm`, with a shell to begin with. Button 3 on the background gives New (another shell), Resize, Move, Delete and Hide. A file plumbed there opens in a window of its own: a text file or directory in Xenith, a web page in Charon, an image in `wm/view`, a PDF in `wm/page` (`/lib/wm/plumbing`; your own rules in `/usr/<user>/lib/plumbing` come first).
 
-Click one, or use the **Up** and **Down** arrow keys, before pressing Enter (or skipping with Escape). The choice is kept, so the next login screen offers the same one. Closing the emulator's window ends either session, as Lucia's Quit does. A phone offers Lucia alone.
+Click one, or use the **Up** and **Down** arrow keys, before pressing Enter (or skipping with Escape). The choice is kept, so the next login screen offers the same one. Closing the emulator's window ends either interface, as Lucia's Quit does. A phone offers Lucia alone.
 
 ### Skipping Login
 

@@ -37,9 +37,9 @@ From the repository root, run the emulator for your platform with the boot scrip
 
 Windows uses `.\emu\Nt\o.emu.exe` with `-r%CD%`; see [CLAUDE.md](../CLAUDE.md) and [QUICKSTART.md](../QUICKSTART.md#running-for-development). Add `-g WxH` for a custom window size. The `-p` flags set the memory limits. `sh -l` runs `lib/sh/profile` first, which starts `speech9p` (TTS/STT, mounted at `/mnt/speech`). `lib/lucifer/boot.sh` then:
 
-1. Runs the login screen (`wm/logon`) unless `skiplogon=1`. It offers two sessions, Lucia and Desktop (`wm/wm`), and keeps the one chosen in `/usr/inferno/lib/session` (in `~/.infernode`); `session=Desktop` or `session=Lucia` set before the boot picks one without it, and `skiplogon=1` alone starts Lucia.
+1. Runs the login screen (`wm/logon`) unless `skiplogon=1`. It offers two interfaces, Lucia and Desktop (`wm/wm`), and keeps the one chosen in `/usr/inferno/lib/interface` (in `~/.infernode`); `interface=Desktop` or `interface=Lucia` set before the boot picks one without it, and `skiplogon=1` alone starts Lucia.
 2. Starts the LLM service in the background (`lib/lucifer/llmsrv.sh`).
-3. Starts `wallet9p` and `msg9p`. For the Desktop session it then starts `wm/wm`, whose first command (`lib/wm/desktop.sh`) starts a plumber on `/lib/wm/plumbing` and a shell, and none of the steps below.
+3. Starts `wallet9p` and `msg9p`. For the Desktop interface it then starts `wm/wm`, whose first command (`lib/wm/desktop.sh`) starts a plumber on `/lib/wm/plumbing` and a shell, and none of the steps below.
 4. Starts `luciuisrv` (the UI 9P filesystem at `/mnt/ui`) and creates the `Main` activity.
 5. Starts `tools9p` (tool registry at `/tool` with the default capability budget — see below).
 6. Starts `lucibridge` (Lucia's client of the agent harness, `veltrosrv`) in the background.

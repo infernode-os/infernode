@@ -1,4 +1,4 @@
-# plumbing rules for the Desktop session (wm/wm; lib/lucifer/boot.sh)
+# plumbing rules for the Desktop interface (wm/wm; lib/lucifer/boot.sh)
 #
 # The windows are wm/wm's, so a message nobody has open starts the
 # program for it, in a window of its own: a file or a directory in

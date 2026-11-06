@@ -98,17 +98,17 @@ the keyboard's strip, leaving out the logo and the lines along the
 bottom when the room left is too little for them; when it goes the form
 has the screen again.
 .PP
-It also offers the sessions the boot can start:
+It also offers the interfaces the boot can start:
 .IP
 .B wm/logon
 [
-.BI -s " file"
+.BI -i " file"
 ] [
-.I session ...
+.I interface ...
 ]
 .PP
 Given two or more
-.I session
+.I interface
 names it shows them under the password field, the one named in
 .I file
 chosen (the first if it names none of them); a click, or the up and
@@ -120,22 +120,22 @@ one line of text.
 .I Wm/logon
 starts nothing itself: the boot script,
 .BR /lib/lucifer/boot.sh ,
-names the sessions
+names the interfaces
 .RB ( Lucia ,
 the agent's three zones, and
 .BR Desktop ,
 .IR wm (1)
 with a shell) and starts the one the file names.
 It keeps the file in
-.BR /usr/\fIuser\fP/lib/session ,
+.BR /usr/\fIuser\fP/lib/interface ,
 or
-.B /usr/inferno/lib/session
+.B /usr/inferno/lib/interface
 for a user with no home of their own.
 A boot with
 .B skiplogon=1
 starts Lucia whatever was chosen, and one with
-.BI session= name
-starts that session; a phone offers Lucia alone.
+.BI interface= name
+starts that interface; a phone offers Lucia alone.
 .SH SOURCE
 .B /appl/wm/logon.b
 .SH SEE ALSO

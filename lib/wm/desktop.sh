@@ -1,5 +1,5 @@
 #!/dis/sh.dis
-# desktop.sh — the Desktop session's first command: wm/wm runs it
+# desktop.sh — the Desktop interface's first command: wm/wm runs it
 # (lib/lucifer/boot.sh), so it and what it starts have wm/wm's draw
 # context.  The plumber is started here, not before wm/wm, for that:
 # a program it starts gets the plumber's context, and one with none

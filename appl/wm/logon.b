@@ -43,19 +43,19 @@ implement WmLogon;
 # boot script -- which starts the desktop on success -- could not tell
 # a login from a login screen that had died before it drew.
 #
-# The session.  The boot script may name the sessions it can start,
+# The interface.  The boot script may name the interfaces it can start,
 # and a file the choice is kept in:
 #
-#	wm/logon [-s file] [session ...]
+#	wm/logon [-i file] [interface ...]
 #
 # With two or more, the form shows them under the field, the one the
 # file names chosen (the first if it names none of them); a click or
 # the up and down arrows choose another.  When the screen ends with a
 # login or a skip, the name chosen is written to the file, a line of
 # text, for the boot script to read and start.  This screen starts
-# nothing itself and knows nothing of what a session is: which there
+# nothing itself and knows nothing of what an interface is: which there
 # are and how each is started is the boot script's.  Ended any other
-# way, never shown (factotum already had keys), or with one session
+# way, never shown (factotum already had keys), or with one interface
 # or none to offer, the file is left as it was.
 #
 
@@ -146,9 +146,9 @@ escpending: int;
 outcome: string;
 SKIPPED: con "skipped";
 
-# The sessions the boot script named, and the file the choice is kept in.
-sessions: array of string;
-sessionfile: string;
+# The interfaces the boot script named, and the file the choice is kept in.
+interfaces: array of string;
+interfacefile: string;
 
 stderr: ref Sys->FD;
 
@@ -250,11 +250,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			passbuf = fieldtext();
 			done = handleenter();
 		Keyboard->Up or Keyboard->Down =>
-			# the field has no use for them: they choose the session
+			# the field has no use for them: they choose the interface
 			if(k == Keyboard->Up)
-				nextsession(-1);
+				nextinterface(-1);
 			else
-				nextsession(1);
+				nextinterface(1);
 		27 =>	# Escape
 			passbuf = fieldtext();
 			done = handleescape();
@@ -267,7 +267,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		}
 	p := <-ptrch =>
 		tk->pointer(top, *p);
-		# a click on a session must not take the keys from the field
+		# a click on an interface must not take the keys from the field
 		if(state != STATE_LOGIN_FAILED)
 			tk->cmd(top, "focus .f.pw");
 		tk->cmd(top, "update");
@@ -285,14 +285,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		kill(ptrpid);
 
 	if(outcome == nil || outcome == SKIPPED)
-		savesession();
+		saveinterface();
 	if(outcome != nil)
 		raise "fail:" + outcome;
 }
 
 usage()
 {
-	sys->fprint(stderr, "usage: wm/logon [-s file] [session ...]\n");
+	sys->fprint(stderr, "usage: wm/logon [-i file] [interface ...]\n");
 	raise "fail:usage";
 }
 
@@ -304,59 +304,59 @@ args(argv: list of string)
 	arg->init(argv);
 	while((o := arg->opt()) != 0)
 		case o {
-		's' =>	sessionfile = arg->earg();
+		'i' =>	interfacefile = arg->earg();
 		* =>	usage();
 		}
 	l := arg->argv();
-	sessions = array[len l] of string;
+	interfaces = array[len l] of string;
 	for(i := 0; l != nil; l = tl l)
-		sessions[i++] = hd l;
+		interfaces[i++] = hd l;
 }
 
-# The session the form shows chosen.
-chosensession(): string
+# The interface the form shows chosen.
+choseninterface(): string
 {
-	if(len sessions == 0)
+	if(len interfaces == 0)
 		return nil;
-	if(top != nil && len sessions > 1){
-		v := tk->cmd(top, "variable session");
-		for(i := 0; i < len sessions; i++)
-			if(sessions[i] == v)
+	if(top != nil && len interfaces > 1){
+		v := tk->cmd(top, "variable interface");
+		for(i := 0; i < len interfaces; i++)
+			if(interfaces[i] == v)
 				return v;
 	}
 	# the one kept, if it is still one of them
-	if(sessionfile != nil && (kept := rf(sessionfile)) != nil)
-		for(i := 0; i < len sessions; i++)
-			if(sessions[i] == kept)
+	if(interfacefile != nil && (kept := rf(interfacefile)) != nil)
+		for(i := 0; i < len interfaces; i++)
+			if(interfaces[i] == kept)
 				return kept;
-	return sessions[0];
+	return interfaces[0];
 }
 
-# The next session (d 1) or the one before (d -1), round.
-nextsession(d: int)
+# The next interface (d 1) or the one before (d -1), round.
+nextinterface(d: int)
 {
-	n := len sessions;
+	n := len interfaces;
 	if(n < 2 || top == nil)
 		return;
-	cur := chosensession();
+	cur := choseninterface();
 	i := 0;
-	while(i < n && sessions[i] != cur)
+	while(i < n && interfaces[i] != cur)
 		i++;
 	i = (i + d + n) % n;
-	tk->cmd(top, ".f.sess.s" + string i + " invoke");
+	tk->cmd(top, ".f.iface.s" + string i + " invoke");
 	tk->cmd(top, "update");
 }
 
-# Only when there was a choice to make: one session offered (a phone's)
+# Only when there was a choice to make: one interface offered (a phone's)
 # is not one chosen, and leaves the file as it was.
-savesession()
+saveinterface()
 {
-	if(sessionfile == nil || len sessions < 2)
+	if(interfacefile == nil || len interfaces < 2)
 		return;
-	s := chosensession();
-	fd := sys->create(sessionfile, Sys->OWRITE, 8r644);
+	s := choseninterface();
+	fd := sys->create(interfacefile, Sys->OWRITE, 8r644);
 	if(fd == nil || sys->fprint(fd, "%s\n", s) < 0)
-		sys->fprint(stderr, "logon: cannot keep the session in %s: %r\n", sessionfile);
+		sys->fprint(stderr, "logon: cannot keep the interface in %s: %r\n", interfacefile);
 }
 
 # Fail before the input loop ever ran: nothing to kill, nothing on
@@ -736,10 +736,10 @@ buildform(): int
 			+ " -text {Keys and secrets will not be available.}",
 		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
 			+ " -text {AI integration may not work.}",
-		"frame .f.sess -bd 0 -bg " + tkcol(bg),
-		"label .f.sess.l -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf
-			+ " -text {Session:}",
-		"pack .f.sess.l -side left -padx 6",
+		"frame .f.iface -bd 0 -bg " + tkcol(bg),
+		"label .f.iface.l -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf
+			+ " -text {Interface:}",
+		"pack .f.iface.l -side left -padx 6",
 		"frame .b -bd 0 -bg " + tkcol(bg),
 		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
 		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
@@ -765,19 +765,19 @@ buildform(): int
 		tk->putimage(top, "logo", logo_g, nil);
 		tk->cmd(top, "label .f.logo -bd 0 -image logo -bg " + tkcol(bg));
 	}
-	# The sessions, one beside the other, the one to start chosen.
-	if(len sessions > 1){
-		chosen := chosensession();
-		for(si := 0; si < len sessions; si++){
-			w := ".f.sess.s" + string si;
-			tk->cmd(top, "radiobutton " + w + " -variable session"
-				+ " -value " + tk->quote(sessions[si])
-				+ " -text " + tk->quote(sessions[si])
+	# The interfaces, one beside the other, the one to start chosen.
+	if(len interfaces > 1){
+		chosen := choseninterface();
+		for(si := 0; si < len interfaces; si++){
+			w := ".f.iface.s" + string si;
+			tk->cmd(top, "radiobutton " + w + " -variable interface"
+				+ " -value " + tk->quote(interfaces[si])
+				+ " -text " + tk->quote(interfaces[si])
 				+ " -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text)
 				+ " -activebackground " + tkcol(bg) + " -activeforeground " + tkcol(accent)
 				+ " -selectcolor " + tkcol(accent) + bodyf);
 			tk->cmd(top, "pack " + w + " -side left -padx 6");
-			if(sessions[si] == chosen)
+			if(interfaces[si] == chosen)
 				tk->cmd(top, w + " invoke");
 		}
 	}
@@ -801,7 +801,7 @@ redraw()
 	if(top == nil)
 		return;
 
-	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2", ".f.sess"}; w != nil; w = tl w)
+	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2", ".f.iface"}; w != nil; w = tl w)
 		tk->cmd(top, "pack forget " + hd w);
 
 	# Above a keyboard on a small screen (the Pi's 800x480 panel) the
@@ -854,9 +854,9 @@ redraw()
 			tk->cmd(top, "pack .f.status -side top -pady " + string PADDING);
 		tk->cmd(top, "focus .f.pw");
 	}
-	# whatever the state: a skip starts the session chosen too
-	if(len sessions > 1)
-		tk->cmd(top, "pack .f.sess -side top -pady " + string PADDING);
+	# whatever the state: a skip starts the interface chosen too
+	if(len interfaces > 1)
+		tk->cmd(top, "pack .f.iface -side top -pady " + string PADDING);
 	tk->cmd(top, "update");
 }
 

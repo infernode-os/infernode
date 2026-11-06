@@ -10,6 +10,9 @@ implement Osk;
 # (through /dev/kbdin, cons(3)), and it never takes the keyboard
 # itself -- it asks the window manager for the pointer only, and to be
 # docked ("dock bottom <height>"), which wm/wm and Lucifer honour.
+# With -s and no window manager (beside the login screen) it leaves
+# the pointer to the program it types for and is touched through
+# /dev/fingers alone.
 #
 # A key types when the finger LIFTS, the key under it then: a finger
 # that lands on the wrong key slides to the right one.  Words are
@@ -325,7 +328,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 	startserver(servefd);
 
 	win = wmclient->window(ctxt, "osk", Wmclient->Plain);
-	win.startinput("ptr" :: nil);	# never the keyboard: it types to whoever has it
+	# Never the keyboard: it types to whoever has it.  The pointer from
+	# a window manager, which shares it out; but the system's keyboard
+	# with none is beside a program that has the screen (the login
+	# screen), and /dev/pointer has one reader: whichever opened it
+	# first had every click and tap, and the login screen, opening it
+	# second, none.  That program's, then: touches come from
+	# /dev/fingers, which this reads whatever else it has.
+	if(ctxt.wm != nil || !sysmode)
+		win.startinput("ptr" :: nil);
 
 	if(sysmode){
 		want = 0;

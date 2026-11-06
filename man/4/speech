@@ -4,8 +4,13 @@ speech, speechcmd \- speech, both ways, for the whole system
 .SH SYNOPSIS
 .B speech9p
 [
+.B -o
+] [
 .B -m
 .I mountpoint
+] [
+.B -a
+.I audiodir
 ] [
 .B -E
 .I enginedir
@@ -67,7 +72,10 @@ or
 followed by
 .B asked
 while an agent waits on
-.BR ask ;
+.BR ask ,
+and
+.B wake
+while the microphone is open for the wake phrase;
 each later read on the same open file waits until that changes, so a
 program showing whether the microphone is open, or that something
 wants an answer (Lucifer's indicator), reads it and need not poll.
@@ -82,8 +90,11 @@ What is heard, a line a record, as the engine gives it:
 .BI "final confidence=" n " " words
 .br
 .BI "error " reason
+.br
+.BI "command " words
 .IP
-A partial is a guess while speech goes on; a final is what was said.
+A partial is a guess while speech goes on; a final is what was said;
+a command is what was said after the wake phrase (below).
 The confidence is the engine's, from 0 to 1, and an engine that has none
 gives none.
 Every reader gets every record from its first read on: dictation, a
@@ -126,7 +137,11 @@ or
 and
 .B "agentmic off"
 or
-.BR on .
+.BR on ,
+and
+.B "wake off"
+or
+.BI "wake " phrase\fR.
 With
 .B half
 (the default) the microphone's sound is not given to the engine while
@@ -145,7 +160,7 @@ or
 .BR missing ),
 the settings file, the states of talk and speaking, and how many asks
 wait.
-The voice, language, model, duplex and agentmic are kept in the settings file
+The voice, language, model, duplex, agentmic and wake phrase are kept in the settings file
 .RI ( settingsfile ,
 or
 .BI /usr/ user /lib/speech\fR),
@@ -179,6 +194,81 @@ Talk is turned on for that long, or until the final, unless it was on
 already.
 It is for a program the user has just asked to listen (a key pressed in
 it), and is not an agent's.
+.SS Lines
+Speech is not only the room's.
+A
+.I speech9p
+serves one audio path: this machine's, the shared device's mix, unless
+.I audiodir
+names another, a directory serving
+.IR audio (3)'s
+.B new
+and its streams (a call's sound, a radio's).
+Each path has a
+.I speech9p
+of its own, mounted where it is wanted
+.RB ( /mnt/voice/ "line, say)"
+with these same files, so what can talk and listen to the user can
+talk and listen to whoever, or whatever agent, is on the line.
+With
+.B -o
+the line is open: nobody there presses a key, so every utterance is
+cut out at its silences (as for the wake phrase) and its final posted
+to
+.BR listen ,
+and to an
+.B ask
+begun before it; talk reads
+.B off
+.BR line .
+.B -o
+and
+.B -a
+are given by whoever starts the line, and cannot be set through
+.BR ctl .
+Whether an agent may use a line is its name space's: a line is
+granted, or not, as
+.B /mnt/speech
+is.
+.PP
+A
+.I speech9p
+posts only what is of its own utterances: an engine shared by two
+lines gives its text to both, and each takes its own.
+.SS The wake phrase
+It is off unless the user sets it
+.RB ( "wake hey veltro" ,
+a phrase of one to four words); then the microphone opens only for
+talk, at the user's word (a key, a tap).
+Set, and while talk is off, the microphone stays open: what is said
+is cut into utterances at its silences (a 20 ms stretch louder than
+the quiet, a few of them to begin, 800 ms of quiet or 10 s to end) and
+each is given to the engine.
+Of each final only the words after the phrase go anywhere: as
+.BI "command " words
+to the readers of
+.BR listen ;
+a final without the phrase, and any partial, is dropped unread.
+The phrase is heard a little loosely (a word a quarter of its letters
+off), and one beginning
+.BR hey ,
+.BR ok
+or
+.B hi
+is heard without it too
+.RB ( Veltro
+for
+.BR "hey Veltro" ).
+Said alone, a chime answers and the next utterance, within 6 s, is all
+command.
+With
+.B "duplex half"
+nothing is begun while speech plays.
+Talk turned on closes it until talk is off again.
+Every utterance goes to the engine, which on a machine elsewhere means
+what is said in the room goes there; the emulator's own engine
+.RI ( speech (3))
+keeps it on the machine.
 .SS Engines
 An engine is a directory serving:
 .TP
@@ -342,5 +432,12 @@ hears an utterance a user makes for an agent's
 .BR ask ,
 as it hears every other.
 .br
-There is no wake word: an agent hears only what is said once the
-microphone is opened, by the user or, with agentmic on, by the agent.
+An agent hears only what is said once the microphone is opened: by
+the user, by the agent with agentmic on, or, with the wake phrase set,
+what follows the phrase, as a command.
+.br
+An engine has one utterance at a time: two lines sharing one engine
+must not hear at once.
+.br
+Speech playing over the wake phrase is not heard (there is no
+barge-in), under duplex half.

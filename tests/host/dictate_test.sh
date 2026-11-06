@@ -62,16 +62,21 @@ if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q sdl3_mainloop; then
 	exit $failed
 fi
 [ -f "$ROOT/dis/lucifer.dis" ] || { fail "lucifer.dis not built"; exit 1; }
-printf 'call sarah at work\ncall bob\nthe answer is yes\n' > "$T/script"
+printf 'call sarah at work\ncall bob\nthe answer is yes\nhey veltro what is on my calendar\n' > "$T/script"
 printf '\0' > "$T/nul"
+# the profile's speech9p keeps its settings in the tree's usr/<user>
+# (the wake phrase is set and unset here): put back as they were
+SETF="$ROOT/usr/$(id -un)/lib/speech"
+[ -f "$SETF" ] && cp "$SETF" "$T/settings.saved"
 INFERNODE_AUDIO_FAKE=1 SDL_VIDEODRIVER=dummy with_timeout 200 "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 -r"$ROOT" \
 	/dis/sh.dis -l -c "skiplogon=1; run /lib/lucifer/boot.sh & sleep 45; bind -c /$T /tmp; run /tests/dictate/lucifer.sh" \
 	</dev/null >"$T/log.lucifer" 2>&1 || true
+if [ -f "$T/settings.saved" ]; then cp "$T/settings.saved" "$SETF"; else rm -f "$SETF"; fi
 grep -q '^R done' "$T/log.lucifer" || { fail "the Lucifer driver did not finish"; grep -v '^fs:' "$T/log.lucifer" | tail -20; exit 1; }
 
 # the microphone's square, the header's last 40 pixels: how many pixels
 # of the theme's dim, red and accent colours
-for s in off on asked after; do
+for s in off on asked after wake wakeoff; do
 	python3 -I tools/p9img2png.py "$T/$s.img" "$T/$s.png" >/dev/null 2>&1 || true
 done
 count() {
@@ -85,17 +90,17 @@ for l in open(sys.argv[2]):
     if len(w) == 2 and len(w[1]) == 6 and all(c in '0123456789abcdefABCDEF' for c in w[1]):
         th[w[0]] = tuple(int(w[1][i:i+2], 16) for i in (0, 2, 4))
 W = im.size[0]
-n = {'dim': 0, 'red': 0, 'accent': 0}
+n = {'dim': 0, 'red': 0, 'accent': 0, 'yellow': 0}
 for y in range(0, 40):
     for x in range(W - 40, W):
         p = im.getpixel((x, y))
         for k in n:
             if all(abs(p[i] - th[k][i]) <= 12 for i in range(3)):
                 n[k] += 1
-print(n['dim'], n['red'], n['accent'])
+print(n['dim'], n['red'], n['accent'], n['yellow'])
 PY
 }
-set -- $(count off 2>/dev/null || echo 0 0 0); d=$1; r=$2; a=$3
+set -- $(count off 2>/dev/null || echo 0 0 0 0); d=$1; r=$2; a=$3
 [ "$d" -ge 20 ] && [ "$r" -lt 5 ] && [ "$a" -lt 20 ] && pass "the microphone at the header's right, dim while off ($d pixels)" ||
 	fail "off: dim $d red $r accent $a"
 set -- $(count on 2>/dev/null || echo 0 0 0); d=$1; r=$2; a=$3
@@ -113,5 +118,15 @@ has ctl.tap '^talk on' && grep -q 'call bob' "$T/sent.tap" 2>/dev/null &&
 has ctl.answer '^talk on' && [ "$(f ask.words)" = "the answer is yes" ] &&
 	pass "while an agent asks, a tap answers it" || fail "answer: $(f ctl.answer | grep talk), ask got '$(f ask.words)'"
 grep -q 'answer is yes' "$T/sent.ask" 2>/dev/null && fail "the answer was typed into the chat too" || pass "and the answer is not typed"
+set -- $(count wake 2>/dev/null || echo 0 0 0 0); y=$4; d=$1
+[ "$y" -ge 20 ] && pass "yellow while it listens for the wake phrase ($y pixels)" || fail "wake: dim $d yellow $y"
+set -- $(count wakeoff 2>/dev/null || echo 0 0 0 0); y=$4; d=$1
+[ "$y" -lt 5 ] && [ "$d" -ge 20 ] && pass "dim again with it off" || fail "wake off: dim $d yellow $y"
+[ "$(f sent.wake)" = "what is on my calendar" ] && pass "a command after the wake phrase is the activity's message: $(f sent.wake)" ||
+	fail "the chat was sent '$(f sent.wake)'"
+has ctl.wake '^wake hey veltro' && pass "set through speech's ctl" || fail "ctl: $(f ctl.wake | grep wake)"
+if [ -f "$T/settings.saved" ]; then cmp -s "$T/settings.saved" "$SETF"; else [ ! -f "$SETF" ]; fi &&
+	pass "the user's speech settings left as they were" || fail "the speech settings file was changed"
+
 
 exit $failed

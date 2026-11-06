@@ -862,8 +862,12 @@ speechget(): list of (string, string)
 	(nil, lines) := sys->tokenize(st, "\n");
 	for(; lines != nil; lines = tl lines){
 		(n, f) := sys->tokenize(hd lines, " ");
-		if(n >= 2)
-			l = (hd f, hd tl f) :: l;
+		if(n >= 2){
+			v := hd tl f;	# the rest of the line: a wake phrase is words
+			for(r := tl tl f; r != nil; r = tl r)
+				v += " " + hd r;
+			l = (hd f, v) :: l;
+		}
 	}
 	return l;
 }
@@ -902,59 +906,65 @@ panelspeech()
 	(eng, ok) := speechengine(st);
 	if(ok)
 		lbl("spe", "Engine: " + eng + ".");
-	else{
-		lbl("spe", "Engine: " + eng + ", not answering.");
-		lbl("spe2", "Nothing can be heard or said until it does.");
-	}
-	plainentry("spv", "Voice (the engine's: /mnt/speech/voices)", speechval(st, "voice"));
-	btn("spvb", "Set the voice", "spvoice");
-	plainentry("spl", "Language", speechval(st, "lang"));
-	btn("splb", "Set the language", "splang");
+	else
+		lbl("spe", "Engine: " + eng + ": not answering.");
+	speechrow("spv", "Voice", speechval(st, "voice"), "Set", "spvoice");
+	speechrow("spl", "Language", speechval(st, "lang"), "Set", "splang");
 	# the engine's own models, where it has them (#W built with whisper.cpp)
 	if(hasline(tread(eng + "/ctl", Waitfile), "stt whisper")){
 		speechmodels = modelfiles();
 		cur := speechval(st, "model");
 		if(speechmodels == nil)
-			lbl("spm", "No recognition model fetched (tools/speech-models.sh, on the host).");
-		else{
-			lbl("spml", "Recognition model (/lib/speech/models):");
+			lbl("spm", "No model fetched (tools/speech-models.sh).");
+		else
 			for(i := 0; i < len speechmodels; i++){
-				t := speechmodels[i];
-				if(t == cur)
+				t := "Model " + speechmodels[i];
+				if(speechmodels[i] == cur)
 					t += " (in use)";
 				btn("spm" + string i, t, "spmodel " + string i);
 			}
-		}
 	}
-	if(speechval(st, "duplex") == "full"){
-		lbl("spds", "It listens while it speaks (echo cancelled).");
-		btn("spd", "Do not listen while speaking", "spduplex");
-	}else{
-		lbl("spds", "It does not listen while it speaks.");
-		btn("spd", "Listen while speaking (needs echo cancellation)", "spduplex");
-	}
+	if(speechval(st, "duplex") == "full")
+		btn("spd", "Listens while speaking: stop that", "spduplex");
+	else
+		btn("spd", "Listen while speaking (echo cancelled)", "spduplex");
 	hdr("spah", "Agents");
 	if(speechval(st, "agentmic") == "on"){
 		lbl("spas", "Agents may open the microphone themselves.");
-		lbl("spas2", "They hear all that is said while it is open.");
-		btn("spa", "Agents hear only what I choose to say to them", "spagentmic");
+		btn("spa", "Only when I press its key", "spagentmic");
 	}else{
-		lbl("spas", "Agents hear only what you choose to say to them.");
-		lbl("spas2", "When one asks, press the microphone key and speak.");
-		btn("spa", "Let agents open the microphone themselves", "spagentmic");
+		lbl("spas", "Agents hear you only after you press the key.");
+		btn("spa", "Let agents open the microphone", "spagentmic");
+	}
+	hdr("spwh", "Wake word");
+	wk := speechval(st, "wake");
+	if(wk == "" || wk == "off"){
+		lbl("spws", "Off: only the key (Ctrl+Space) opens it.");
+		speechrow("spw", "Wake word", "Hey Veltro", "Listen for it", "spwake");
+	}else{
+		lbl("spws", "On: always listening for \"" + wk + "\" (yellow).");
+		lbl("spws2", "Speech goes to the engine; only what follows");
+		lbl("spws3", "the wake word is kept, as a command.");
+		if((why := speechval(st, "standby")) != "")
+			lbl("spws4", "Not listening yet: " + why);
+		btn("spwb", "Turn it off", "spwakeoff");
 	}
 	btn("spt", "Say a test sentence", "sptest");
 	lbl("spres", "");
-	lbl("spnote", "These apply now and are kept (" + speechval(st, "settings") + ").");
 }
 
-plainentry(name, prompt, val: string)
+# a label, an entry and its button on one row: .content.<name>f.e is the entry
+speechrow(name, prompt, val, btext, verb: string)
 {
-	lbl(name + "lab", prompt + ":");
-	tk->cmd(top, sys->sprint("entry .content.%s -background %s -foreground %s",
-		name, c_bg, c_fg));
-	tk->cmd(top, sys->sprint(".content.%s insert 0 %s", name, tk->quote(val)));
-	tk->cmd(top, sys->sprint("pack .content.%s -side top -anchor w -fill x -pady 2", name));
+	f := ".content." + name + "f";
+	tk->cmd(top, "frame " + f + " -background " + c_bg);
+	tk->cmd(top, sys->sprint("label %s.l -width 85 -anchor w -background %s -foreground %s -text %s",
+		f, c_bg, c_dim, tk->quote(prompt)));
+	tk->cmd(top, sys->sprint("entry %s.e -width 150 -background %s -foreground %s", f, c_bg, c_fg));
+	tk->cmd(top, sys->sprint("%s.e insert 0 %s", f, tk->quote(val)));
+	tk->cmd(top, sys->sprint("button %s.b -text %s -command {send act %s}", f, tk->quote(btext), verb));
+	tk->cmd(top, "pack " + f + ".l " + f + ".e " + f + ".b -side left -padx 2");
+	tk->cmd(top, "pack " + f + " -side top -anchor w -pady 2");
 }
 
 speechset(k, v: string)
@@ -1003,6 +1013,18 @@ hasline(s, line: string): int
 		if(hd l == line)
 			return 1;
 	return 0;
+}
+
+speechwake(w: string)
+{
+	w = strip(w);
+	if(w == "")
+		w = "Hey Veltro";
+	if((e := twrite("/mnt/speech/ctl", "wake " + w, Waitfile)) != nil){
+		setpanellbl("spres", "wake word: " + e);
+		return;
+	}
+	buildpanel(CatSpeech);
 }
 
 speechmodel(i: int)
@@ -1389,11 +1411,13 @@ handleaction(a: string)
 	"webfonts" =>	webtoggle("fonts");
 	"webeffects" =>	webtoggle("effects");
 	"weblight" =>	weblight();
-	"spvoice" =>	speechset("voice", eget(".content.spv"));
-	"splang" =>	speechset("lang", eget(".content.spl"));
+	"spvoice" =>	speechset("voice", eget(".content.spvf.e"));
+	"splang" =>	speechset("lang", eget(".content.splf.e"));
 	"spduplex" =>	speechduplex();
 	"spagentmic" =>	speechagentmic();
 	"spmodel" =>	speechmodel(arg);
+	"spwake" =>	speechwake(eget(".content.spwf.e"));
+	"spwakeoff" =>	speechwake("off");
 	"sptest" =>	speechtest();
 	"snapenable" =>	dosnapenable();
 	"snapdisable" =>	dosnapdisable();

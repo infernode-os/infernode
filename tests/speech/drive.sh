@@ -145,6 +145,45 @@ echo agentmic off > /mnt/speech/ctl
 echo duplex half > /mnt/speech/ctl
 echo R settings
 
+# the wake phrase: off unless set; set, standby, and only the words
+# after the phrase go anywhere
+cat /mnt/speech/ctl > /tmp/ctl.wakeoff
+cat /mnt/speech/listen > /tmp/listen.wake &
+cat /mnt/speech/talk > /tmp/talk.wake &
+sleep 0
+echo wake hey veltro > /mnt/speech/ctl
+sleep 1
+cat /mnt/speech/ctl > /tmp/ctl.wakeon
+cp /tmp/settings /tmp/settings.wake
+mic
+sleep 2
+mic
+sleep 2
+mic
+sleep 2
+mic
+sleep 2
+mic
+sleep 2
+mic
+sleep 2
+# push to talk while it waits: as ever, and standby again after
+echo start > /mnt/speech/talk
+mic
+sleep 1
+echo stop > /mnt/speech/talk
+sleep 2
+mic
+sleep 2
+echo wake off > /mnt/speech/ctl
+sleep 1
+cat /mnt/speech/ctl > /tmp/ctl.wakeoff2
+engctl wake.before
+mic
+sleep 2
+engctl wake.after
+echo R wake
+
 cat /mnt/speech/voices > /tmp/voices
 {echo duplex sideways > /mnt/speech/ctl} >[2] /tmp/ctl.bad
 {echo shout > /mnt/speech/talk} >[2] /tmp/talk.bad

@@ -41,6 +41,11 @@ Lucifer's header shows the microphone, at its right, while there is
 speech: dim while talk is off, red while it is on, and lit in the
 theme's accent while an agent waits for an answer (speech's
 .BR ask ).
+It is yellow while it listens for the wake phrase, if the user has set
+one
+.RI ( speech (4));
+a command said after it is the current activity's next message, as
+if typed and sent.
 Ctrl+Space, or a tap on the microphone, switches it: off if it is on;
 on to answer the agent, if one asks (the words are the agent's, not
 typed); otherwise on for

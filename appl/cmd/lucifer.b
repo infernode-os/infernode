@@ -698,6 +698,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	blinkwake = chan[1] of int;
 	spawn tileblinker();
 	spawn micwatcher();
+	spawn commandwatcher();
 
 	# Main loop (header redraws + quit/resize)
 	mainloop();
@@ -1094,8 +1095,10 @@ drawchrome(r: Rect)
 
 #
 # The microphone: speech(4)'s talk, shown and switched.  Dim while off,
-# red while on, and on the accent while an agent waits for an answer
-# (talk reads "off asked").  A tap on it, or Ctrl+Space, switches it:
+# red while on, yellow while it listens for the wake phrase (an opt-in
+# setting: talk reads "off wake"), and on the accent while an agent
+# waits for an answer (talk reads "off asked").  A command said after
+# the wake phrase is the current activity's next message.  A tap on it, or Ctrl+Space, switches it:
 # off if it is on; on to answer the agent if one asks; otherwise on for
 # dictate(1), which types what is said where the keyboard types.
 #
@@ -1110,6 +1113,8 @@ drawmic(r: Rect)
 	col := dimcol;
 	if(hasprefix(micstate, "on"))
 		col = redcol;
+	else if(contains(micstate, "wake") && !contains(micstate, "asked"))
+		col = yellowcol;
 	else if(contains(micstate, "asked")) {
 		# something wants an answer: the square lit
 		pad := r.dy() / 8;
@@ -1153,6 +1158,33 @@ micwatcher()
 		if(micstate != nil) {
 			micstate = nil;
 			alt { uievent <-= 1 => ; * => ; }
+		}
+		sys->sleep(5000);
+	}
+}
+
+# commands said after the wake phrase (speech's listen: "command
+# words"), each the current activity's message, as if typed and sent
+commandwatcher()
+{
+	b := array[8192] of byte;
+	for(;;) {
+		fd := sys->open(speechdir + "/listen", Sys->OREAD);
+		part := "";
+		while(fd != nil && (n := sys->read(fd, b, len b)) > 0) {
+			part += string b[0:n];
+			for(;;) {
+				i := 0;
+				while(i < len part && part[i] != '\n')
+					i++;
+				if(i == len part)
+					break;
+				line := part[0:i];
+				part = part[i+1:];
+				if(hasprefix(line, "command ") && actid >= 0)
+					writefile(sys->sprint("%s/activity/%d/conversation/input", mountpt, actid),
+						line[len "command ":]);
+			}
 		}
 		sys->sleep(5000);
 	}

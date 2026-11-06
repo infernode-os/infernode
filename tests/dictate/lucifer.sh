@@ -67,4 +67,15 @@ sent ask
 echo > /dev/keyboard
 sleep 3
 shot after
+
+# the wake phrase (opt-in): the microphone yellow while it listens; a
+# command said after it is the activity's next message
+echo wake hey veltro > /mnt/speech/ctl
+sent wake
+shot wake
+mic
+sleep 4
+cat /mnt/speech/ctl > /tmp/ctl.wake
+echo wake off > /mnt/speech/ctl
+shot wakeoff
 echo R done

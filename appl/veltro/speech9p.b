@@ -76,6 +76,9 @@ lang := "";
 model := "";		# the recogniser's, for an engine that has models (#W)
 duplex := "half";
 agentmic := 0;		# may an ask turn talk on itself
+wake := "";		# the wake phrase, lower case; nil: off, the default
+audiodir := "";		# the audio path's directory (as audio(3)'s mix); nil: this machine's
+openline := 0;		# -o: a line (a call, a radio): every utterance heard, as the wake phrase's are, and posted
 settings := "";
 
 talking := 0;
@@ -84,6 +87,26 @@ speaktext := "";
 micstop: chan of int;
 heartalk := 0;		# talk was started by hear (or ask), and stops with it
 talkseq := 0;		# talk's starts, counted: the utterance a final is of
+
+# The wake phrase (opt-in): while it is set and talk is off, the
+# microphone is open in standby; what is said is cut into utterances at
+# its silences and each given to the engine, and of each final only the
+# words after the wake phrase go anywhere, as "command <words>" to the
+# readers of listen.  The rest is dropped unread.
+Wakethresh:	con 700;	# a 20 ms chunk's RMS above this is speech
+Wakeloud:	con 3;		# chunks of it to begin an utterance
+Wakequiet:	con 40;		# chunks of quiet (800 ms) to end one
+Wakemax:	con 500;	# and 10 s at most
+Wakepre:	con 15;		# chunks kept from before it began (300 ms)
+Wakeawait:	con 6000;	# ms after the phrase alone for its command
+standby := 0;			# the standby process runs
+standbywhy := "";		# why it could not start
+standbystop: chan of chan of int;
+wakec: chan of int;		# from standby: 1 an utterance began, 0 ended, -1 dropped
+owners: list of string;		# whose each utterance ended with the engine is, oldest first
+segmenting := 0;		# standby's utterance is with the engine: no partials posted
+awaitcmd := 0;			# until when (millisec) an utterance is all command
+retryc: chan of int;
 
 # a reader of talk: the state its fid was last told, and a read waiting
 Talker: adt {
@@ -135,12 +158,14 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("speech9p [-m mountpoint] [-E enginedir] [-s settingsfile]");
+		arg->setusage("speech9p [-o] [-m mountpoint] [-E enginedir] [-a audiodir] [-s settingsfile]");
 		while((o := arg->opt()) != 0)
 			case o {
 			'm' =>	mountpt = arg->earg();
 			'E' =>	engine = arg->earg();
 			's' =>	settings = arg->earg();
+			'a' =>	audiodir = arg->earg();
+			'o' =>	openline = 1;
 			'e' =>	arg->earg();	# the old engines are speechcmd(4)'s now
 			* =>	arg->usage();
 			}
@@ -148,7 +173,8 @@ init(nil: ref Draw->Context, args: list of string)
 	if(settings == nil)
 		settings = "/usr/" + user() + "/lib/speech";
 	loadsettings();
-	if(sys->bind("#sspeech", mountpt, Sys->MREPL) < 0){
+	# a directory of its own: another speech9p (another line) has its own
+	if(sys->bind("#sspeech." + string sys->pctl(0, nil), mountpt, Sys->MREPL) < 0){
 		sys->fprint(stderr, "speech9p: bind %s: %r\n", mountpt);
 		raise "fail:bind";
 	}
@@ -163,12 +189,26 @@ init(nil: ref Draw->Context, args: list of string)
 	recc = chan of string;
 	spkc = chan of (int, string);
 	hearendc = chan of (int, int);
+	wakec = chan of int;	# unbuffered: the main loop knows before the engine hears
+	retryc = chan of int;
 	sayc = chan[64] of string;
 	chimec = chan[8] of string;
 	starttext();
 	spawn chimeproc();
 	startspeaker();
+	spawn retrier();
+	startstandby();		# the wake phrase kept, if it is on
 	spawn serve(f);
+}
+
+# now and then, standby if it should be and is not (the engine or the
+# audio device was not there)
+retrier()
+{
+	for(;;){
+		sys->sleep(5000);
+		retryc <-= 1;
+	}
 }
 
 serve(f: array of ref Sys->FileIO)
@@ -301,13 +341,31 @@ serve(f: array of ref Sys->FileIO)
 		hearwrite(fid, 1, data, wc);
 	(fid, isask) := <-hearendc =>
 		hearend(fid, isask);
+	w := <-wakec =>
+		wakeevent(w);
+	<-retryc =>
+		if((wake != nil || openline) && !standby && !talking)
+			startstandby();
 
 	rec := <-recc =>
-		for(l := listeners; l != nil; l = tl l){
-			(hd l).queue = append((hd l).queue, rec);
-			answerlistener(hd l);
+		final := prefix("final ", rec) || prefix("error ", rec);
+		# whose: standby's are the wake phrase's, never posted as they are
+		# only what is ours: an engine may serve another line's speech9p
+		# too, and its text goes to every reader
+		if(!final && !(talking || segmenting && openline))
+			continue;
+		if(final && owners == nil)
+			continue;
+		if(final){
+			o := hd owners;
+			owners = tl owners;
+			if(o == "wake"){
+				wakefinal(rec);
+				continue;
+			}
 		}
-		if(prefix("final ", rec) || prefix("error ", rec)){
+		post(rec);
+		if(final){
 			words := finalwords(rec);
 			for(hl := hearers; hl != nil; hl = tl hl){
 				h := hd hl;
@@ -423,6 +481,329 @@ hearend(fid, isask: int)
 	telltalkers();
 }
 
+# a record to every reader of listen
+post(rec: string)
+{
+	for(l := listeners; l != nil; l = tl l){
+		(hd l).queue = append((hd l).queue, rec);
+		answerlistener(hd l);
+	}
+}
+
+#
+# The wake phrase
+#
+
+startstandby()
+{
+	if(standby || talking || wake == nil && !openline)
+		return;
+	(mic, e) := openmic();
+	if(mic == nil){
+		standbywhy = e;
+		return;
+	}
+	afd := sys->open(engine + "/audio", Sys->OWRITE);
+	if(afd == nil){
+		standbywhy = sys->sprint("speech: engine audio: %r");
+		return;
+	}
+	standbywhy = nil;
+	standbystop = chan of chan of int;
+	spawn standbyproc(mic, afd, standbystop);
+	standby = 1;
+	telltalkers();
+}
+
+# standby stopped, its utterance (if any) cancelled, before anything
+# else uses the microphone or the engine
+stopstandby()
+{
+	if(!standby)
+		return;
+	ack := chan of int;
+	for(sent := 0; !sent; ) alt {
+	standbystop <-= ack =>
+		sent = 1;
+	w := <-wakec =>
+		wakeevent(w);
+	}
+	for(done := 0; !done; ) alt {
+	<-ack =>
+		done = 1;
+	w := <-wakec =>
+		wakeevent(w);
+	}
+	standby = 0;
+	segmenting = 0;
+	telltalkers();
+}
+
+wakeevent(w: int)
+{
+	case w {
+	1 =>
+		segmenting = 1;
+		if(openline)
+			talkseq++;	# an utterance begun, as ask counts them
+	0 =>
+		if(openline)
+			owners = append(owners, "line");
+		else
+			owners = append(owners, "wake");
+		segmenting = 0;
+	* =>
+		segmenting = 0;
+	}
+}
+
+standbyproc(mic, afd: ref Sys->FD, stop: chan of chan of int)
+{
+	buf := array[Micchunk] of byte;
+	pre := array[Wakepre] of array of byte;
+	npre := 0;
+	inseg := 0;
+	loud := 0;
+	quiet := 0;
+	nseg := 0;
+	for(;;){
+		alt {
+		ack := <-stop =>
+			if(inseg){
+				enginectl("cancel");
+				wakec <-= -1;
+			}
+			ack <-= 1;
+			return;
+		* =>
+			;
+		}
+		n := sys->read(mic, buf, len buf);
+		if(n <= 0){
+			sys->sleep(20);
+			continue;
+		}
+		if(speaking && duplex == "half"){
+			# what plays is not heard: no utterance begins in it
+			loud = 0;
+			npre = 0;
+			continue;
+		}
+		r := rms(buf[0:n]);
+		if(!inseg){
+			if(npre == Wakepre){
+				pre[0:] = pre[1:];
+				npre--;
+			}
+			pre[npre++] = array[n] of byte;
+			pre[npre-1][0:] = buf[0:n];
+			if(r > Wakethresh)
+				loud++;
+			else
+				loud = 0;
+			if(loud < Wakeloud)
+				continue;
+			wakec <-= 1;
+			syncengine();
+			if(enginectl("start") != nil){
+				wakec <-= -1;
+				loud = 0;
+				npre = 0;
+				continue;
+			}
+			inseg = 1;
+			quiet = 0;
+			nseg = 0;
+			for(i := 0; i < npre; i++)
+				sys->write(afd, pre[i], len pre[i]);
+			npre = 0;
+			continue;
+		}
+		sys->write(afd, buf, n);
+		nseg++;
+		if(r > Wakethresh)
+			quiet = 0;
+		else
+			quiet++;
+		if(quiet >= Wakequiet || nseg >= Wakemax){
+			# the owner known before the final can come
+			wakec <-= 0;
+			enginectl("end");
+			inseg = 0;
+			loud = 0;
+		}
+	}
+}
+
+rms(b: array of byte): int
+{
+	s := 0.0;
+	k := 0;
+	for(i := 0; i + 1 < len b; i += 2){
+		v := int b[i] | (int b[i+1] << 8);
+		if(v >= 32768)
+			v -= 65536;
+		s += real (v * v);
+		k++;
+	}
+	if(k == 0)
+		return 0;
+	return int math->sqrt(s / real k);
+}
+
+# a final of standby's: a command if it begins with the wake phrase, or
+# follows the phrase said alone; else nothing
+wakefinal(rec: string)
+{
+	if(!prefix("final ", rec))
+		return;
+	(orig, norm) := wakewords(finalwords(rec));
+	now := sys->millisec();
+	if(awaitcmd != 0 && now < awaitcmd){
+		awaitcmd = 0;
+		if(orig != nil)
+			command(join(orig));
+		return;
+	}
+	awaitcmd = 0;
+	(nil, phrase) := sys->tokenize(wake, " ");
+	k := matchwake(norm, phrase);
+	if(k < 0 && len phrase > 1 && isgreeting(hd phrase))
+		k = matchwake(norm, tl phrase);	# "Veltro" for "hey Veltro"
+	if(k < 0)
+		return;
+	for(; k > 0; k--)
+		orig = tl orig;
+	if(orig == nil){
+		# the phrase alone: the next utterance is the command
+		chime("start");
+		awaitcmd = now + Wakeawait;
+		return;
+	}
+	command(join(orig));
+}
+
+command(s: string)
+{
+	post("command " + s);
+	chime("done");
+}
+
+chime(c: string)
+{
+	alt {
+	chimec <-= c =>
+		;
+	* =>
+		;
+	}
+}
+
+isgreeting(w: string): int
+{
+	return w == "hey" || w == "ok" || w == "okay" || w == "hi";
+}
+
+# how many of words the phrase takes at their start, or -1
+matchwake(words, phrase: list of string): int
+{
+	k := 0;
+	for(; phrase != nil; phrase = tl phrase){
+		if(words == nil || !near(hd words, hd phrase))
+			return -1;
+		words = tl words;
+		k++;
+	}
+	return k;
+}
+
+# a word heard as the word wanted: the same, or a few letters off
+# (Voltro, Veltra), a quarter of its length at most
+near(a, b: string): int
+{
+	if(a == b)
+		return 1;
+	d := len b / 4;
+	if(d < 1)
+		d = 1;
+	if(len b < 4)
+		d = 0;
+	return editdist(a, b) <= d;
+}
+
+editdist(a, b: string): int
+{
+	prev := array[len b + 1] of int;
+	cur := array[len b + 1] of int;
+	for(j := 0; j <= len b; j++)
+		prev[j] = j;
+	for(i := 1; i <= len a; i++){
+		cur[0] = i;
+		for(j = 1; j <= len b; j++){
+			c := prev[j-1];
+			if(a[i-1] != b[j-1])
+				c++;
+			if(prev[j] + 1 < c)
+				c = prev[j] + 1;
+			if(cur[j-1] + 1 < c)
+				c = cur[j-1] + 1;
+			cur[j] = c;
+		}
+		(prev, cur) = (cur, prev);
+	}
+	return prev[len b];
+}
+
+# the words of a final, as said (their edges' punctuation off) and in
+# lower case, letters and digits only, for matching
+wakewords(s: string): (list of string, list of string)
+{
+	(nil, l) := sys->tokenize(s, " \t");
+	ro, rn: list of string;
+	for(; l != nil; l = tl l){
+		w := hd l;
+		while(len w > 0 && !alnum(w[0]))
+			w = w[1:];
+		while(len w > 0 && !alnum(w[len w - 1]))
+			w = w[0:len w - 1];
+		n := "";
+		for(i := 0; i < len w; i++)
+			if(alnum(w[i])){
+				c := w[i];
+				if(c >= 'A' && c <= 'Z')
+					c += 'a' - 'A';
+				n[len n] = c;
+			}
+		if(n == "")
+			continue;
+		ro = w :: ro;
+		rn = n :: rn;
+	}
+	o, nl: list of string;
+	for(; ro != nil; ro = tl ro){
+		o = hd ro :: o;
+		nl = hd rn :: nl;
+		rn = tl rn;
+	}
+	return (o, nl);
+}
+
+alnum(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c >= 16r80;
+}
+
+join(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l){
+		if(s != "")
+			s += " ";
+		s += hd l;
+	}
+	return s;
+}
+
 reply(n: int, e: string): (int, string)
 {
 	if(e != nil)
@@ -449,6 +830,16 @@ ctlstatus(): string
 		s += "model " + model + "\n";
 	s += "duplex " + duplex + "\n";
 	s += "agentmic " + onoff(agentmic) + "\n";
+	if(openline)
+		s += "line open\n";
+	if(audiodir != nil)
+		s += "audio " + audiodir + "\n";
+	if(wake == nil)
+		s += "wake off\n";
+	else
+		s += "wake " + wake + "\n";
+	if(wake != nil && !standby && standbywhy != nil)
+		s += "standby " + standbywhy + "\n";
 	s += "settings " + settings + "\n";
 	s += "talk " + onoff(talking) + "\n";
 	s += "asked " + string asking() + "\n";
@@ -461,17 +852,24 @@ ctlwrite(s: string): string
 	(n, f) := sys->tokenize(s, " \t\n");
 	if(n == 0)
 		return nil;
+	if(hd f == "wake"){
+		if((e := setwake(tl f, 1)) != nil)
+			return e;
+		return savesettings();
+	}
 	if(n != 2)
-		return "speech: ctl is engine dir, voice v, lang l, model m, duplex half|full or agentmic off|on";
+		return "speech: ctl is engine dir, voice v, lang l, model m, duplex half|full, agentmic off|on or wake off|phrase";
 	v := hd tl f;
 	case hd f {
 	"engine" =>
 		if(talking)
 			return "speech: not while talk is on";
+		stopstandby();
 		engine = v;
 		# its text read from now on, not the old engine's
 		kill(textpid);
 		starttext();
+		startstandby();
 	"voice" =>
 		if((e := enginectl("voice " + v)) != nil)
 			return e;
@@ -502,6 +900,37 @@ ctlwrite(s: string): string
 	return nil;
 }
 
+# wake off, or wake and its phrase: a word to four of letters and digits
+setwake(w: list of string, start: int): string
+{
+	if(w == nil)
+		return "speech: wake off, or wake and its words";
+	if(hd w == "off" && tl w == nil){
+		wake = nil;
+		if(!openline)
+			stopstandby();
+		awaitcmd = 0;
+		return nil;
+	}
+	p := "";
+	n := 0;
+	for(; w != nil; w = tl w){
+		(nil, l) := wakewords(hd w);
+		if(l == nil || tl l != nil || n >= 4)
+			return "speech: a wake phrase is one to four words";
+		if(p != "")
+			p += " ";
+		p += hd l;
+		n++;
+	}
+	wake = p;
+	if(start){
+		stopstandby();
+		startstandby();
+	}
+	return nil;
+}
+
 # the settings kept, as ctl lines
 loadsettings()
 {
@@ -511,6 +940,10 @@ loadsettings()
 	(nil, l) := sys->tokenize(s, "\n");
 	for(; l != nil; l = tl l){
 		(n, f) := sys->tokenize(hd l, " \t");
+		if(n >= 2 && hd f == "wake"){
+			setwake(tl f, 0);	# started once serve runs
+			continue;
+		}
 		if(n != 2)
 			continue;
 		v := hd tl f;
@@ -544,6 +977,8 @@ savesettings(): string
 		s += "model " + model + "\n";
 	s += "duplex " + duplex + "\n";
 	s += "agentmic " + onoff(agentmic) + "\n";
+	if(wake != nil)
+		s += "wake " + wake + "\n";
 	fd := sys->create(settings, Sys->OWRITE, 8r600);
 	if(fd == nil){
 		# its directory, once
@@ -611,9 +1046,12 @@ talkon(): string
 {
 	if(talking)
 		return nil;
+	stopstandby();
 	syncengine();
-	if((e := enginectl("start")) != nil)
+	if((e := enginectl("start")) != nil){
+		startstandby();
 		return e;
+	}
 	(mic, e2) := openmic();
 	if(mic == nil){
 		enginectl("cancel");
@@ -638,7 +1076,9 @@ talkoff()
 		return;
 	micstop <-= 1;
 	talking = 0;
+	owners = append(owners, "talk");
 	enginectl("end");
+	startstandby();
 	telltalkers();
 }
 
@@ -659,7 +1099,10 @@ openmic(): (ref Sys->FD, string)
 # a stream of the shared device: its ctl and its directory
 newstream(): (ref Sys->FD, string)
 {
-	for(l := "/dev/mix/" :: "#A/mix/" :: nil; l != nil; l = tl l){
+	l := "/dev/mix/" :: "#A/mix/" :: nil;
+	if(audiodir != nil)
+		l = audiodir + "/" :: nil;
+	for(; l != nil; l = tl l){
 		c := sys->open(hd l + "new", Sys->ORDWR);
 		if(c == nil)
 			continue;
@@ -826,8 +1269,9 @@ speechstream(rate: int): string
 			return sys->sprint("speech stream: %r");
 		spkctl = c;
 	}
-	if(sys->fprint(spkctl, "out rate %d chans 1 bits 16 enc pcm role speech", rate) < 0)
+	if(sys->fprint(spkctl, "out rate %d chans 1 bits 16 enc pcm", rate) < 0)
 		return sys->sprint("speech stream format: %r");
+	sys->fprint(spkctl, "role speech");	# a line that has no roles says no
 	spkrate = rate;
 	return nil;
 }
@@ -884,8 +1328,9 @@ chimeproc()
 			(ctl, dir) = newstream();
 			if(ctl == nil)
 				continue;
-			if(sys->fprint(ctl, "out rate %d chans 1 bits 16 enc pcm role tone", Micrate) < 0)
+			if(sys->fprint(ctl, "out rate %d chans 1 bits 16 enc pcm", Micrate) < 0)
 				continue;
+			sys->fprint(ctl, "role tone");
 			fd = sys->open(dir + "/data", Sys->OWRITE);
 			if(fd == nil)
 				continue;
@@ -967,6 +1412,10 @@ talkstate(): string
 	s := onoff(talking);
 	if(asking())
 		s += " asked";
+	if(standby && openline)
+		s += " line";
+	else if(standby)
+		s += " wake";
 	return s;
 }
 

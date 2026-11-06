@@ -32,7 +32,7 @@ mkdir -p "$ROOT/$T"
 LOG="$ROOT/$T/log"
 trap '[ -n "${KEEP:-}" ] || rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
-printf 'call sarah at work\nhalf\nfull\nhello there\nwhat time is it\ndictated before\nagent opened\n' > "$T/script"
+printf 'call sarah at work\nhalf\nfull\nhello there\nwhat time is it\ndictated before\nagent opened\nhey veltro what time is it\nthe weather is nice\nhey veltro\nopen the mail\nHey, Voltro. Call home.\nVeltro, read my messages\na dictated line\nveltro stop the music\nnot heard\n' > "$T/script"
 python3 -I - "$T/tone.raw" <<'PY'
 import sys, struct, math
 with open(sys.argv[1], 'wb') as f:
@@ -134,10 +134,51 @@ has second.engine '^voice fakevoice' && has second.engine '^lang fr' && has seco
 	pass "and gives the engine the voice, language and model before an utterance" || fail "the engine after: $(f second.engine | tr '\n' '|')"
 grep -qx 'agentmic off' "$T/settings" && pass "agentmic back off, kept" || fail "settings at the end: $(f settings | tr '\n' '|')"
 
+# the wake phrase
+has ctl.wakeoff '^wake off$' && pass "the wake phrase is off unless set" || fail "ctl: $(f ctl.wakeoff | grep wake)"
+has ctl.wakeon '^wake hey veltro$' && grep -qx 'wake hey veltro' "$T/settings.wake" &&
+	pass "set, and kept" || fail "wake on: $(f ctl.wakeon | grep wake), kept: $(f settings.wake | grep wake)"
+[ "$(head -2 "$T/talk.wake" | tr '\n' '|')" = "off|off wake|" ] && pass "talk reads off wake while it listens for it (the indicator's cue)" ||
+	fail "talk: $(f talk.wake | tr '\n' '|')"
+cmds=$(grep '^command ' "$T/listen.wake" | tr '\n' '|')
+[ "$cmds" = "command what time is it|command open the mail|command Call home|command read my messages|command stop the music|" ] &&
+	pass "the words after the phrase, as commands: $cmds" || fail "commands: $cmds"
+grep -q 'weather\|hey veltro\|not heard' "$T/listen.wake" && fail "what was not for it reached listen: $(grep 'weather\|hey veltro\|not heard' "$T/listen.wake" | tr '\n' '|')" ||
+	pass "nothing else said reached listen (not the phrase, not what had none)"
+grep -q '^partial' "$T/listen.wake" && ! grep -q '^partial confidence=0.40 a$' "$T/listen.wake" &&
+	fail "standby's partials reached listen: $(grep '^partial' "$T/listen.wake" | tr '\n' '|')" ||
+	pass "standby's partials not posted"
+grep -qx 'final confidence=0.93 a dictated line' "$T/listen.wake" && pass "push to talk while it waits as ever" || fail "talk's final: $(f listen.wake | tr '\n' '|')"
+grep -q 'on wake\|^on$' "$T/talk.wake" && tail -1 "$T/talk.wake" | grep -qx off && pass "standby again after talk, off at the end" ||
+	fail "talk: $(f talk.wake | tr '\n' '|')"
+has ctl.wakeoff2 '^wake off$' && [ "$(num wake.before.engine starts)" = "$(num wake.after.engine starts)" ] &&
+	pass "off: the microphone shut, nothing more to the engine" ||
+	fail "wake off: $(f ctl.wakeoff2 | grep wake), engine starts $(num wake.before.engine starts) then $(num wake.after.engine starts)"
+
 [ "$(f voices)" = "fake" ] && pass "voices are the engine's" || fail "voices: $(f voices)"
 [ -s "$T/ctl.bad" ] && pass "a bad ctl write refused" || fail "duplex sideways was taken"
 [ -s "$T/talk.bad" ] && pass "a bad talk write refused" || fail "talk shout was taken"
 has ctl.end '^duplex half' && has ctl.end '^talk off' && pass "nothing bad changed a setting" || fail "ctl at the end: $(f ctl.end | tr '\n' '|')"
+
+# A line: an open line on an audio path of its own, beside the room's
+printf 'hello is anyone there\nthe second thing\n' > "$T/script.line"
+INFERNODE_AUDIO_FAKE=1 SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c1 -r"$ROOT" \
+	/dis/sh.dis -c "bind -c /$T /tmp; run /tests/speech/line.sh" \
+	</dev/null >"$T/log.line" 2>&1 || true
+if grep -q '^R done' "$T/log.line"; then
+	has l.ctl '^line open$' && has l.ctl '^audio #A/mix$' && has l.ctl '^duplex half$' && has l.roomctl '^duplex full$' &&
+		pass "a line beside the room's speech: its own files and settings, open, on the audio path named" ||
+		fail "line ctl: $(f l.ctl | tr '\n' '|'); room: $(f l.roomctl | grep duplex)"
+	[ "$(head -1 "$T/l.talk")" = "off line" ] && pass "its talk reads off line" || fail "line talk: $(f l.talk | tr '\n' '|')"
+	grep -qx 'final confidence=0.93 hello is anyone there' "$T/l.listen" && grep -qx 'final confidence=0.93 the second thing' "$T/l.listen" &&
+		pass "every utterance on the line heard with no key, to its listen" || fail "line listen: $(f l.listen | tr '\n' '|')"
+	[ "$(f l.ask)" = "hello is anyone there" ] && pass "an agent's ask on the line answered by the far end" || fail "line ask: '$(f l.ask)'"
+	[ ! -s "$T/l.roomlisten" ] && pass "the room's listen heard none of it" || fail "the room heard: $(f l.roomlisten | tr '\n' '|')"
+	ms=$(tonems "$T/l.say.raw" 440)
+	[ "$ms" -ge 240 ] && pass "say on the line played on its audio path (${ms} ms)" || fail "line say: ${ms} ms"
+else
+	fail "the line driver did not finish"; tail -5 "$T/log.line"
+fi
 
 # The host's programs, through speechcmd(4): espeak-ng speaking for
 # real, and a stand-in for whisper-cli answering with the size of the

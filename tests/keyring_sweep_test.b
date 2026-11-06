@@ -140,7 +140,10 @@ sentinel(p: string): int
 
 # blocks the size of a SigAlg, filled with what is no SigAlgVec,
 # allocated for as long as the sweeps go on: a freed SigAlg's memory is
-# soon one of these
+# soon one of these. A burst, then a sleep: with the VM never idle only
+# the busy collector ran, and a slow machine (macOS AMD64 CI) took more
+# than half a minute to sweep; idle, the collector runs between bursts,
+# and each burst still allocates between its passes
 Junk: adt {
 	a, b:	big;
 };
@@ -156,7 +159,7 @@ churn(stop: chan of int, pidc: chan of int)
 			<-stop =>
 				return;
 			* =>
-				sys->sleep(0);
+				sys->sleep(2);
 			}
 		}
 	}
@@ -186,7 +189,9 @@ sweep(t: ref T, alg: string)
 			t.fatal(err);
 		t.asserteq(sentinel(p), 0, "sentinel made");
 		# the collector runs when the VM is idle
-		t.assert(gone(p, 30), sys->sprint("round %d: the collector swept the cycles", round));
+		t0 := sys->millisec();
+		t.assert(gone(p, 60), sys->sprint("round %d: the collector swept the cycles", round));
+		t.log(sys->sprint("round %d: swept in %dms", round, sys->millisec()-t0));
 		sys->sleep(200);
 	}
 	stop <-= 1;

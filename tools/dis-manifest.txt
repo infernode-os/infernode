@@ -441,6 +441,7 @@ dis/lib/rfcomm.dis
 dis/lib/scene.dis
 dis/lib/scoretable.dis
 dis/lib/sdp.dis
+dis/lib/sdrdsp.dis
 dis/lib/secstore.dis
 dis/lib/selectfile.dis
 dis/lib/sets.dis
@@ -635,6 +636,8 @@ dis/scap.dis
 dis/scenedemo.dis
 dis/scenefs.dis
 dis/scenereplay.dis
+dis/sdr/am.dis
+dis/sdr/fm.dis
 dis/sdrfs.dis
 dis/sed.dis
 dis/sendmail.dis
@@ -873,6 +876,7 @@ dis/tests/runner.dis
 dis/tests/sam_test.dis
 dis/tests/scene_test.dis
 dis/tests/sdl3_test.dis
+dis/tests/sdrdsp_test.dis
 dis/tests/sdp_test.dis
 dis/tests/secp256k1_test.dis
 dis/tests/secstore_abort_probe.dis

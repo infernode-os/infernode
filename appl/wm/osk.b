@@ -51,7 +51,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display, Image, Font, Rect, Point, Pointer: import draw;
+	Display, Image, Font, Rect, Point, Pointer, Screen: import draw;
 include "wmclient.m";
 	wmclient: Wmclient;
 	Window: import wmclient;
@@ -107,6 +107,7 @@ stderr: ref Sys->FD;
 display: ref Display;
 win: ref Window;
 img: ref Image;			# the window's, nil while not on the screen
+ownscr: ref Screen;		# no window manager: a screen of its own over the display's
 theme: ref Lucitheme->Theme;
 
 # The keyboard's colours: a theme's roles, unless its file sets keys of
@@ -615,6 +616,33 @@ place()
 	rowh = computerowh(sr);
 	pickfonts();
 	h := height();
+	if(win.ctxt.connfd == nil){
+		# No window manager (a login screen's).  A window of its own,
+		# only the strip, on a screen of its own over the display's:
+		# what draws the rest of the screen (wm/logon) is not covered,
+		# and draws its own window above the strip, the height status
+		# gives (wm/logon follows it).  The window wmclient would make
+		# is the whole screen, which hid what was there and was drawn
+		# over by it.
+		if(h == 0){
+			img = nil;
+			return;
+		}
+		r := Rect((sr.min.x, sr.max.y - h), sr.max);
+		if(img == nil || !img.r.eq(r)){
+			if(ownscr == nil)
+				ownscr = Screen.allocate(display.image, display.color(kc.board), 0);
+			if(ownscr != nil)
+				img = ownscr.newwindow(r, Draw->Refbackup, Draw->Nofill);
+			# drawn again once what shares the screen has made room
+			# (its old window freed paints its screen's fill here)
+			spawn timer(400, -1);
+			spawn timer(1200, -1);
+		}
+		geometry();
+		redraw();
+		return;
+	}
 	e := win.wmctl(sys->sprint("dock bottom %d", h));
 	dockok = e == nil;
 	if(h == 0){
@@ -659,7 +687,17 @@ pickfonts()
 	sfont = pickfont(rowh * 36 / 100, 0);
 }
 
-fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36};
+# Go's sizes, then DejaVu Sans's 48 (the phones' sizes: rows of 120
+# pixels on a phone's screen want labels of 54, and Go stops at 36,
+# which left them a third the height of the keys)
+fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36, 48};
+
+fontpath(size: int): string
+{
+	if(size > 36)
+		return sys->sprint("/fonts/combined/unicode.sans.%d.font", size);
+	return sys->sprint("/fonts/combined/go.%d.font", size);
+}
 
 pickfont(px, nil: int): ref Font
 {
@@ -667,7 +705,9 @@ pickfont(px, nil: int): ref Font
 	for(i := 0; i < len fontsizes; i++)
 		if(fontsizes[i] <= px)
 			best = fontsizes[i];
-	f := Font.open(display, sys->sprint("/fonts/combined/go.%d.font", best));
+	f := Font.open(display, fontpath(best));
+	if(f == nil && best > 36)
+		f = Font.open(display, fontpath(36));
 	if(f == nil)
 		f = Font.open(display, "*default*");
 	return f;
@@ -1255,6 +1295,10 @@ touchup(t: ref Tch, p: Point)
 		return;
 	}
 	if(t.stroke){
+		# the trail drawn over the keys goes with the finger, whatever
+		# the stroke turns out to be (a word, delete's words, a hide,
+		# the key it ended on)
+		redraw();
 		strokeup(t);
 		return;
 	}

@@ -20,6 +20,7 @@ TARG=\
 	auditverify_test.dis\
 	alpha_test.dis\
 	i420_test.dis\
+	tensor_test.dis\
 	agentlib_test.dis\
 	agentlib_mcp_test.dis\
 	agent_test.dis\
@@ -313,6 +314,7 @@ MODULES=\
 	$ROOT/appl/xenith/xfid.m
 
 SYSMODULES=\
+	tensor.m\
 	woff2.m\
 	kbdecode.m\
 	osklayout.m\

@@ -264,6 +264,7 @@ extern void drawmodinit(void);
 extern void tkmodinit(void);
 extern void mathmodinit(void);
 extern void keyringmodinit(void);
+extern void tensormodinit(void);
 
 void
 modinit(void)
@@ -273,6 +274,7 @@ modinit(void)
 	tkmodinit();
 	mathmodinit();
 	keyringmodinit();
+	tensormodinit();
 }
 
 

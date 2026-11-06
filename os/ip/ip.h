@@ -647,6 +647,7 @@ extern uchar IPallbits[IPaddrlen];
 extern Medium	ethermedium;
 extern Medium	nullmedium;
 extern Medium	pktmedium;
+extern Medium	unboundmedium;
 extern Medium	tripmedium;
 
 /*

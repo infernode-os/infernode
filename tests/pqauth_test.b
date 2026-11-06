@@ -69,6 +69,14 @@ Result: adt {
 	err:	string;
 };
 
+Handoff: adt {
+	who:	string;
+	user:	string;
+	owner:	string;
+	mode:	int;
+	err:	string;
+};
+
 run(name: string, testfn: ref fn(t: ref T))
 {
 	t := testing->newTsrc(name, SRCFILE);
@@ -369,6 +377,87 @@ testTcpChannel(t: ref T)
 	t.log("9P-style payload decrypted intact over hybrid-keyed ssl channel (tcp)");
 }
 
+readfile(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[256] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return nil;
+	return string b[0:n];
+}
+
+handoffserver(ac: Sys->Connection, ai: ref Keyring->Authinfo,
+		rc: chan of ref Handoff)
+{
+	r := ref Handoff;
+	# Keyring's setid must affect only this authenticated handler.
+	sys->pctl(Sys->FORKENV, nil);
+	(lok, nc) := sys->listen(ac);
+	if(lok < 0){
+		r.err = sys->sprint("listen failed: %r");
+		rc <-= r;
+		return;
+	}
+	dfd := sys->open(nc.dir + "/data", Sys->ORDWR);
+	if(dfd == nil){
+		r.err = sys->sprint("open data failed: %r");
+		rc <-= r;
+		return;
+	}
+	wrapped: ref Sys->FD;
+	(wrapped, r.who) = auth->server("none" :: nil, ai, dfd, 1);
+	if(wrapped == nil){
+		r.err = "server auth failed: " + r.who;
+		rc <-= r;
+		return;
+	}
+	r.user = readfile("/dev/user");
+	(ok, d) := sys->stat(nc.dir + "/data");
+	if(ok < 0)
+		r.err = sys->sprint("stat accepted connection: %r");
+	else {
+		r.owner = d.uid;
+		r.mode = d.mode & 8r777;
+	}
+	rc <-= r;
+}
+
+# An authenticated listener must hand the accepted IP conversation to the
+# peer identity before changing /dev/user.  Otherwise the service account
+# retains authority to reopen or hang up the session (9front 07d033de).
+testAuthenticatedConnectionHandoff(t: ref T)
+{
+	if(auth == nil || (e := auth->init()) != nil)
+		t.fatal("auth init failed");
+
+	addr := "tcp!127.0.0.1!19898";
+	(aok, ac) := sys->announce(addr);
+	if(aok < 0){
+		t.skip(sys->sprint("network unavailable: %r"));
+		return;
+	}
+	(alice, bob) := setupPair(t, "ed25519", 0);
+	rc := chan of ref Handoff;
+	spawn handoffserver(ac, bob, rc);
+
+	(dok, dc) := sys->dial(addr, nil);
+	if(dok < 0)
+		t.fatal(sys->sprint("dial failed: %r"));
+	(wrapped, err) := auth->client("none", alice, dc.dfd);
+	if(wrapped == nil)
+		t.fatal("client auth failed: " + err);
+	r := <-rc;
+	if(r.err != nil)
+		t.fatal(r.err);
+	t.assertseq(r.who, "alice", "server authenticates the client identity");
+	t.assertseq(r.user, "alice", "authenticated handler changes identity");
+	t.assertseq(r.owner, "alice", "accepted connection belongs to authenticated client");
+	t.asserteq(r.mode, 8r660, "accepted connection mode after handoff");
+}
+
 # ---- negative / security tests -------------------------------------------
 
 # pump one direction of the wire, optionally corrupting a target frame.
@@ -651,6 +740,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HybridHandshakeMLDSA", testHandshakeMLDSA);
 	run("HybridEncryptedChannel", testEncryptedChannel);
 	run("HybridTcpChannel", testTcpChannel);
+	run("AuthenticatedConnectionHandoff", testAuthenticatedConnectionHandoff);
 	run("DowngradeRejected", testDowngradeRejected);
 	run("TamperedEkRejected", testTamperedEk);
 	run("MalformedEkRejected", testMalformedEk);

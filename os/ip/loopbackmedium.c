@@ -41,6 +41,7 @@ loopbackbind(Ipifc *ifc, int, char**)
 	LB *lb;
 
 	lb = smalloc(sizeof(*lb));
+	lb->readp = (void*)-1;
 	lb->f = ifc->conv->p->f;
 	/* TO DO: make queue size a function of kernel memory */
 	lb->q = qopen(128*1024, Qmsg, nil, nil);
@@ -55,6 +56,10 @@ static void
 loopbackunbind(Ipifc *ifc)
 {
 	LB *lb = ifc->arg;
+
+	/* Do not free the shared rock before the new reader publishes up. */
+	while(lb->readp == (void*)-1)
+		tsleep(&up->sleep, return0, 0, 300);
 
 	if(lb->readp)
 		postnote(lb->readp, 1, "unbind", 0);

@@ -33,3 +33,4 @@ for th in $themes {
 }
 echo -n $first > /lib/lucifer/theme/current
 echo R done
+echo halt > '#c/sysctl'

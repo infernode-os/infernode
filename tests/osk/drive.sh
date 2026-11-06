@@ -143,9 +143,15 @@ echo f0 $xy 0 > /dev/fingers
 taps enter
 snap echo
 
-# a stroke through a word's letters types it
+# a stroke through a word's letters types it, and its trail goes when
+# the finger lifts: the keys as they were before it (screens kept
+# before the enter, whose tap would draw the keys again)
 taps e c h o space
+sleep 1
+scap /tmp/keys.before.img
 stroke h e l o
+sleep 1
+scap /tmp/keys.after.img
 taps enter
 snap swipe
 
@@ -185,3 +191,4 @@ tapat 0 400 470
 snap shownagain
 
 echo R done
+echo halt > '#c/sysctl'

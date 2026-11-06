@@ -93,6 +93,7 @@ FIELDW:   con 300;
 # keystroke after was "out of memory", printed on the console.
 MAXPW:    con 1024;
 PADDING:  con 16;
+ROOMY:	con 360;	# pixels the form needs to show the logo and the lines below
 
 # Login states
 STATE_LOGIN:		con 0;
@@ -105,6 +106,9 @@ STATE_FIDOPIN:		con 5;
 display_g: ref Display;
 top: ref Tk->Toplevel;
 logo_g: ref Image;	# cached brand image
+scr_g: ref Screen;	# the screen its window is on
+win_g: ref Image;	# its window: the screen less the keyboard's strip
+kbh := 0;		# the keyboard on the screen's strip, pixels (osk(1)'s status)
 
 # Password state
 passbuf: string;
@@ -191,6 +195,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	pids := chan of int;
 	spawn kbdreader(kbdfd, kbdch, pids);
 	kbdpid := <-pids;
+	# the keyboard on the screen (osk(1), started by the boot for a
+	# touch screen): the form above its strip, the screen again when
+	# it goes
+	kbhch := chan of int;
+	spawn oskwatch(kbhch, pids);
+	oskpid := <-pids;
 	ptrpid := -1;
 	if(ptrfd != nil){
 		spawn ptrreader(ptrfd, ptrch, pids);
@@ -228,6 +238,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	p := <-ptrch =>
 		tk->pointer(top, *p);
 		tk->cmd(top, "update");
+	h := <-kbhch =>
+		relayout(h);
 	}
 
 	# The readers are blocked in read; left alone they would go on
@@ -235,6 +247,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	# Killed BEFORE the raise below, on every path: a raise leaves
 	# init at once and would otherwise leave them running.
 	kill(kbdpid);
+	kill(oskpid);
 	if(ptrpid >= 0)
 		kill(ptrpid);
 
@@ -285,6 +298,71 @@ ptrreader(fd: ref Sys->FD, out: chan of ref Pointer, pids: chan of int)
 		y := int hd f; f = tl f;
 		b := int hd f;
 		out <-= ref Pointer(b, Point(x, y), 0);
+	}
+}
+
+# where the form goes: the screen above the keyboard's strip
+formr(): Rect
+{
+	r := display_g.image.r;
+	if(kbh > 0 && kbh < r.dy())
+		r.max.y -= kbh;
+	return r;
+}
+
+# The keyboard's strip changed: the form's window made again above it.
+relayout(h: int)
+{
+	if(h == kbh || scr_g == nil || top == nil)
+		return;
+	kbh = h;
+	win := scr_g.newwindow(formr(), Draw->Refbackup, Draw->Nofill);
+	if(win == nil)
+		return;
+	win_g = win;
+	top.screenr = win.r;
+	if(tk->putimage(top, ".", win, nil) != nil)
+		return;
+	tk->cmd(top, ". configure -width " + string win.r.dx() + " -height " + string win.r.dy());
+	redraw();
+}
+
+# osk's status, followed: a read after the first waits for a change.
+# Sends the strip's height (0 when hidden) whenever it changes.  osk
+# may mount its files a moment after this starts.
+oskwatch(out: chan of int, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	fd: ref Sys->FD;
+	for(i := 0; i < 40 && fd == nil; i++){
+		fd = sys->open("/mnt/osk/status", Sys->OREAD);
+		if(fd == nil)
+			sys->sleep(250);
+	}
+	if(fd == nil)
+		return;
+	buf := array[512] of byte;
+	last := -1;
+	for(;;){
+		n := sys->pread(fd, buf, len buf, big 0);
+		if(n <= 0)
+			return;
+		(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+		st := "";
+		h := 0;
+		for(; lines != nil; lines = tl lines){
+			(nf, f) := sys->tokenize(hd lines, " ");
+			if(nf == 2 && hd f == "state")
+				st = hd tl f;
+			else if(nf == 2 && hd f == "height")
+				h = int hd tl f;
+		}
+		if(st == "hidden")
+			h = 0;
+		if(h != last){
+			last = h;
+			out <-= h;
+		}
 	}
 }
 
@@ -510,14 +588,16 @@ buildform(): int
 	if(scr == nil)
 		return 0;
 	di.draw(di.r, scr.fill, nil, scr.fill.r.min);
-	win := scr.newwindow(di.r, Draw->Refbackup, bg);
+	win := scr.newwindow(formr(), Draw->Refbackup, bg);
 	if(win == nil)
 		return 0;
+	scr_g = scr;
+	win_g = win;
 
 	top = tk->toplevel(display_g, "-bd 0 -bg " + tkcol(bg));
 	if(top == nil)
 		return 0;
-	top.screenr = di.r;
+	top.screenr = win.r;
 	e := tk->putimage(top, ".", win, nil);
 	if(e != nil){
 		sys->fprint(stderr, "logon: tk window: %s\n", e);
@@ -536,7 +616,7 @@ buildform(): int
 	smallf := fontopt(SMALLFONT);
 
 	cmds := array[] of {
-		". configure -width " + string di.r.dx() + " -height " + string di.r.dy(),
+		". configure -width " + string win.r.dx() + " -height " + string win.r.dy(),
 		"pack propagate . 0",
 		"frame .f -bd 0 -bg " + tkcol(bg),
 		"label .f.prompt -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf,
@@ -600,8 +680,16 @@ redraw()
 	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2"}; w != nil; w = tl w)
 		tk->cmd(top, "pack forget " + hd w);
 
-	if(logo_g != nil)
+	# Above a keyboard on a small screen (the Pi's 800x480 panel) the
+	# logo and the lines along the bottom go: the password field is
+	# what must show.
+	roomy := win_g == nil || win_g.r.dy() >= ROOMY;
+	if(logo_g != nil && roomy)
 		tk->cmd(top, "pack .f.logo -side top -pady " + string PADDING);
+	if(roomy)
+		tk->cmd(top, "pack .b -side bottom -pady " + string PADDING + " -before .f");
+	else
+		tk->cmd(top, "pack forget .b");
 
 	if(state == STATE_LOGIN_FAILED) {
 		# Failed state: show error and choices, no password field

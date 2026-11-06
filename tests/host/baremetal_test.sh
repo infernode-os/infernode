@@ -1886,6 +1886,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
         'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis' \
+        'echo cnsamode on > /dev/sysctl; echo CNSALATE-$status' \
+        'echo console > /dev/sysctl; echo CONSOLEARGS-$status' \
         'ls /dev/camera' \
         'cat /dev/camera/modes' \
         'camtest')"
@@ -1978,6 +1980,23 @@ if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SH
     pass "an authenticated 9P mount (Keyring->auth both ends, ML-KEM + ed25519) works on the kernel (#725)"
 else
     fail "authenticated 9P mount failed -- $(grep -a -E 'AUTHMOUNT|mount:|listen:|auth' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# CNSA strict mode is the machine's, fixed before anything authenticates
+# (os/port/devcons.c): after the ML-KEM-768 mount above, turning it on
+# is refused, since the handshake's answer is already given. virt turns
+# it on before its mount, and authenticates in it.
+if grep -q 'too late, an authentication has already run without it' <<<"$SHOUT" && grep -q '^CNSALATE-..*' <<<"$SHOUT"; then
+    pass "cnsamode is refused once an authentication has run without it"
+else
+    fail "cnsamode after an authentication -- $(grep -a -E 'CNSALATE|cnsamode' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# sysctl's console verb takes on or off: lookupcmd counts the verb, and
+# with a count of 1 "console off" was refused and a bare "console" read
+# past its arguments in the kernel (upstream's, from 2006)
+if grep -q 'wrong #args in control message "console"' <<<"$SHOUT" && grep -q '^CONSOLEARGS-..*' <<<"$SHOUT"; then
+    pass "sysctl: console with no on or off is refused"
+else
+    fail "sysctl: console with no argument -- $(grep -a -E 'CONSOLEARGS|console' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
 fi
 
 # The interface lock after an unanswerable IPv6 datagram (#721).
@@ -5232,8 +5251,13 @@ try:
     end = time.time() + 60
     while time.time() < end and b"camtest: PASS" not in buf and b"camtest: FAILED" not in buf:
         time.sleep(0.2)
+    # CNSA strict mode on before anything authenticates, as osinit does
+    # from the card's cnsamode file: the mount below is then ML-KEM-1024
+    # both ways, on kernel stacks (the bcm2837 boot keeps ML-KEM-768)
+    typed("echo cnsamode off > /dev/sysctl; echo CNSAOFF-$status")
+    typed("echo cnsamode on > /dev/sysctl; echo CNSAON-$status")
     typed("listen 'tcp!*!17030' export / &")
-    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 4)
+    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 6)
     typed("cat /dev/sdctl")
     typed("echo VIRT-DATE `{date}")
 
@@ -5295,6 +5319,16 @@ vcheck "init finds the kernel link driver"         "init: ether0 is a kernel lin
 # an authenticated 9P mount, both ends on this kernel (#725; the bcm2837
 # check tells the story)
 vcheck "os/ip + keyring: an authenticated 9P mount works on the kernel (#725)" "/n/remote/dis/sh.dis"
+if tr -d '\r' <<<"$OUT" | grep -qx 'CNSAON-'; then
+    pass "cnsamode on is taken before anything has authenticated; the mount above ran in it (ML-KEM-1024)"
+else
+    fail "cnsamode on -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAON|cnsamode' | head -2 | tr '\n' ' ')"
+fi
+if tr -d '\r' <<<"$OUT" | grep -q 'cnsamode: only on' && tr -d '\r' <<<"$OUT" | grep -qx 'CNSAOFF-..*'; then
+    pass "cnsamode cannot be turned off"
+else
+    fail "cnsamode off was not refused -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAOFF|cnsamode' | head -2 | tr '\n' ' ')"
+fi
 # os/init/iplocktest.b, typed at the shell: the interface lock is balanced
 # after an ICMPv6 unreachable reply (#721; see the bcm2837 check for the story)
 vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)" "iplocktest: PASS"

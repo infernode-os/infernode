@@ -21,6 +21,7 @@ TARG=\
 	alpha_test.dis\
 	i420_test.dis\
 	tensor_test.dis\
+	visnet_run.dis\
 	agentlib_test.dis\
 	agentlib_mcp_test.dis\
 	agent_test.dis\
@@ -315,6 +316,7 @@ MODULES=\
 
 SYSMODULES=\
 	tensor.m\
+	visnet.m\
 	woff2.m\
 	kbdecode.m\
 	osklayout.m\

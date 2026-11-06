@@ -480,6 +480,7 @@ dis/lib/vac.dis
 dis/lib/venti.dis
 dis/lib/viewport.dis
 dis/lib/virgil.dis
+dis/lib/visnet.dis
 dis/lib/w3c/css.dis
 dis/lib/w3c/uris.dis
 dis/lib/w3c/xpointers.dis

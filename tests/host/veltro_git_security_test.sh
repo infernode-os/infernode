@@ -24,12 +24,12 @@ trap cleanup EXIT HUP INT TERM
 mkdir -p "$ROOT/tmp/veltro-git-security"
 ln -s ../veltro-git-secret "$ROOT/tmp/veltro-git-security/escape"
 
-CMD="load std; echo secret > /tmp/veltro-git-secret; cmd/git/init /tmp/veltro-git-security; cd /tmp/veltro-git-security; echo ok > ok; /dis/veltro/tools9p.dis -m /tool git & sleep 1; echo add ../veltro-git-secret > /tool/git/ctl; echo TRAVERSAL_ADD; cat /tool/git/ctl; echo add /tmp/veltro-git-secret > /tool/git/ctl; echo ABSOLUTE_ADD; cat /tool/git/ctl; echo rm ../veltro-git-secret > /tool/git/ctl; echo TRAVERSAL_RM; cat /tool/git/ctl; echo cat ../veltro-git-secret > /tool/git/ctl; echo TRAVERSAL_CAT; cat /tool/git/ctl; echo merge ../outside > /tool/git/ctl; echo TRAVERSAL_REF; cat /tool/git/ctl; echo add escape > /tool/git/ctl; echo SYMLINK_ADD; cat /tool/git/ctl; echo add ok > /tool/git/ctl; echo LEGITIMATE_ADD; cat /tool/git/ctl; echo SECRET_STILL_PRESENT; cat /tmp/veltro-git-secret; echo GIT_SECURITY_DONE"
+CMD="load std; echo secret > /tmp/veltro-git-secret; cmd/git/init /tmp/veltro-git-security; cd /tmp/veltro-git-security; echo ok > ok; /dis/veltro/tools9p.dis -m /tool git & for i in 1 2 3 4 5 6 7 8 9 10 { if {! ftest -f /tool/git/ctl} { sleep 1 } }; echo add ../veltro-git-secret > /tool/git/ctl; echo TRAVERSAL_ADD; cat /tool/git/ctl; echo add /tmp/veltro-git-secret > /tool/git/ctl; echo ABSOLUTE_ADD; cat /tool/git/ctl; echo rm ../veltro-git-secret > /tool/git/ctl; echo TRAVERSAL_RM; cat /tool/git/ctl; echo cat ../veltro-git-secret > /tool/git/ctl; echo TRAVERSAL_CAT; cat /tool/git/ctl; echo merge ../outside > /tool/git/ctl; echo TRAVERSAL_REF; cat /tool/git/ctl; echo add escape > /tool/git/ctl; echo SYMLINK_ADD; cat /tool/git/ctl; echo add ok > /tool/git/ctl; echo LEGITIMATE_ADD; cat /tool/git/ctl; echo SECRET_STILL_PRESENT; cat /tmp/veltro-git-secret; echo GIT_SECURITY_DONE"
 "$EMU" -r"$ROOT" sh -c "$CMD" >"$OUT" 2>&1 &
 EMU_PID=$!
 
 i=0
-while ! grep -q '^GIT_SECURITY_DONE$' "$OUT" && [ "$i" -lt 100 ]; do
+while ! grep -q '^GIT_SECURITY_DONE$' "$OUT" && [ "$i" -lt 200 ]; do
 	sleep 0.1
 	i=$((i + 1))
 done

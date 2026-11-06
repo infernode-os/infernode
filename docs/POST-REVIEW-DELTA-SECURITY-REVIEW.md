@@ -1,8 +1,10 @@
 # Security review: post-report remote delta
 
-**Reviewed range:** InferNode `008e74363..c7d892104`  
+**Reviewed range:** InferNode `008e74363..c7d892104`
+
 **Disposition:** two agent-containment defects fixed on
-`security/0.9.0-patch` by `dc2a35402`; focused gates pass  
+`security/0.9.0-patch` by `dc2a35402`; focused gates pass
+
 **Method:** source review and model-free target/control tests; no live-model
 campaign
 

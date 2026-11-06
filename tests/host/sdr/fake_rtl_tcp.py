@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """A fake rtl_tcp, for tests/host/sdrfs_test.sh.
 
-    fake_rtl_tcp.py serve LOG [TUNER]   listen on 127.0.0.1, print the port,
+    fake_rtl_tcp.py serve LOG [TUNER [IQ]]
+                                        listen on 127.0.0.1, print the port,
                                         serve one client at a time as rtl_tcp
-                                        does, logging to LOG
+                                        does, logging to LOG; the samples
+                                        are IQ's, over and over, if given
     fake_rtl_tcp.py http                listen and answer as something that is
                                         not rtl_tcp; print the port
     fake_rtl_tcp.py busy                listen, accept and say nothing, as
@@ -49,7 +51,16 @@ def listen():
     return s
 
 
-def serve(logpath, tuner):
+def piece(src, off, k):
+    """k bytes of src from off, src repeated"""
+    off %= len(src)
+    out = src[off:off + k]
+    while len(out) < k:
+        out += src[:k - len(out)]
+    return out
+
+
+def serve(logpath, tuner, samples):
     s = listen()
     log = open(logpath, "a", buffering=1)
     n = 0
@@ -57,10 +68,10 @@ def serve(logpath, tuner):
         c, _ = s.accept()
         n += 1
         log.write("connect %d\n" % n)
-        client(c, n, tuner, log)
+        client(c, n, tuner, log, samples)
 
 
-def client(c, n, tuner, log):
+def client(c, n, tuner, log, samples):
     state = {"rate": 2048000, "done": False}
     lock = threading.Lock()
 
@@ -101,9 +112,7 @@ def client(c, n, tuner, log):
                 time.sleep(0.005)
                 continue
             k = 16384
-            off = sent % len(PATTERN)
-            chunk = (PATTERN[off:] + PATTERN * 65)[:k]
-            c.sendall(chunk)
+            c.sendall(piece(samples, sent, k))
             sent += k
     except OSError:
         pass
@@ -133,13 +142,17 @@ def busy():
 
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "serve":
-        serve(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 5)
+        samples = PATTERN
+        if len(sys.argv) > 4:
+            with open(sys.argv[4], "rb") as f:
+                samples = f.read()
+        serve(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 5, samples)
     elif len(sys.argv) == 2 and sys.argv[1] == "http":
         http()
     elif len(sys.argv) == 2 and sys.argv[1] == "busy":
         busy()
     else:
-        sys.exit("usage: fake_rtl_tcp.py serve LOG [TUNER] | http | busy")
+        sys.exit("usage: fake_rtl_tcp.py serve LOG [TUNER [IQ]] | http | busy")
 
 
 if __name__ == "__main__":

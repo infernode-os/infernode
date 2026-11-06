@@ -111,6 +111,7 @@ TARG=\
 	newns.dis\
 	nmea.dis\
 	gdl90.dis\
+	sdrdsp.dis\
 	garminav.dis\
 	ninep.dis\
 	oldauth.dis\
@@ -289,6 +290,7 @@ SYSMODULES=\
 	newns.m\
 	nmea.m\
 	gdl90.m\
+	sdrdsp.m\
 	garminav.m\
 	oldauth.m\
 	pkcs.m\

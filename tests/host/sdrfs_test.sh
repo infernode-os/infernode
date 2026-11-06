@@ -4,11 +4,13 @@
 # a fake rtl_tcp (tests/host/sdr/fake_rtl_tcp.py), through
 # tests/sdr/drive.sh: its files; settings kept before a source and sent
 # whole when it is dialled; a source dialled to see it is rtl_tcp (its
-# tuner and gains) and hung up on while nothing listens; the first reader
-# of iq dialling and the last hanging up; reads in whole samples, in
-# order; two readers on one stream, a setting written while they read
-# sent at once; a reader that does not read losing the oldest, still in
-# whole samples; refused: something that is not rtl_tcp, nothing
+# tuner and gains), its settings sent and the connection held; a reader
+# within -l taking it, and -l after the last reader a hang-up (rtl_tcp
+# takes 5s to take a new client); reads in whole samples, in order,
+# bytes= what readers were given; two readers on one stream, a setting
+# written while they read sent at once and the samples tuned before it
+# skipped; a reader that does not read losing the oldest, still in
+# whole samples; localhost dialled as 127.0.0.1; refused: something that is not rtl_tcp, nothing
 # listening, an rtl_tcp that does not greet (busy with another
 # client), bad settings, a write with one bad line (none of it done);
 # stop; a second sdrfs finds it served.
@@ -70,26 +72,25 @@ grep -q '^R done' "$D/log" || { fail "the driver did not finish"; tail -20 "$D/l
 
 [ "$(f ls | tr '\n' ' ')" = "/mnt/sdr/ctl /mnt/sdr/gains /mnt/sdr/iq /mnt/sdr/status " ] &&
 	pass "its files" || fail "ls: $(f ls | tr '\n' ' ')"
-[ "$(f status.start)" = "link=none readers=0 bytes=0 dropped=0" ] &&
+[ "$(f status.start)" = "link=none readers=0 bytes=0 dropped=0 skipped=0" ] &&
 	pass "nothing at first" || fail "status: $(f status.start)"
 [ "$(f ctl.start | tr '\n' '|')" = "freq 100000000|rate 2048000|gain auto|ppm 0|agc off|direct off|biastee off|" ] &&
 	pass "ctl gives every setting (rtl_tcp's defaults)" || fail "ctl: $(f ctl.start | tr '\n' '|')"
 [ -z "$(f iq.nosource)" ] && has err.nosource "no source" &&
 	pass "iq with no source refused" || fail "iq: '$(f err.nosource)'"
 
-has status.idle "^link=idle source=tcp!127.0.0.1!$PR tuner=R828D gains=29 readers=0 " &&
-	pass "a source dialled: rtl_tcp, its tuner and number of gains" || fail "status: $(f status.idle)"
+has status.idle "^link=open source=tcp!127.0.0.1!$PR tuner=R828D gains=29 readers=0 " &&
+	pass "a source dialled: rtl_tcp, its tuner and number of gains; held" || fail "status: $(f status.idle)"
 [ "$(f ctl.source | tr '\n' '|')" = "source tcp!127.0.0.1!$PR|freq 1090000000|rate 250000|gain 38.6|ppm -3|agc off|direct off|biastee off|" ] &&
 	pass "settings kept; the gain the nearest the tuner has" || fail "ctl: $(f ctl.source | tr '\n' '|')"
 [ "$(f gains | wc -l | tr -d ' ')" = 29 ] && [ "$(f gains | head -1)" = 0.0 ] && [ "$(f gains | tail -1)" = 49.6 ] &&
 	pass "gains: the R828D's 29" || fail "gains: $(f gains | tr '\n' ' ')"
-! conn 1 | grep -q '^cmd' && conn 1 | grep -q '^hangup 1 ' &&
-	pass "the source command's dial, hung up with nothing listening" || fail "conn 1: $(conn 1 | tr '\n' '|')"
 
-want="cmd rate 250000|cmd freq 1090000000|cmd gainmode 1|cmd gain 386|cmd ppm -3|cmd agc 0|cmd direct 0|cmd biastee 0|"
-[ "$(conn 2 | grep '^cmd' | tr '\n' '|')" = "$want" ] &&
-	pass "the first reader dials; every setting sent" || fail "conn 2: $(conn 2 | tr '\n' '|')"
-conn 2 | grep -q '^hangup 2 ' && pass "the last reader gone: hung up" || fail "conn 2 not hung up: $(conn 2 | tr '\n' '|')"
+want="cmd rate 250000|cmd freq 1090000000|cmd ppm -3|cmd biastee 0|cmd agc 0|cmd direct 0|cmd gainmode 1|cmd gain 386|"
+[ "$(conn 1 | grep '^cmd' | tr '\n' '|')" = "$want" ] &&
+	pass "the source's dial: every setting sent, the gain last" || fail "conn 1: $(conn 1 | tr '\n' '|')"
+[ "$(grep -c '^connect' "$D/rtl.log")" = 4 ] &&
+	pass "the reader took the held connection: one dial a phase" || fail "connects: $(grep '^connect' "$D/rtl.log" | tr '\n' ' ')"
 for i in 1 2 3; do
 	[ "$(samples iq.$i)" = ok ] || fail "iq.$i: $(samples iq.$i)"
 done
@@ -98,14 +99,24 @@ import sys
 b = b"".join(open(sys.argv[1] + "/iq.%d" % i, "rb").read() for i in (1, 2, 3))
 sys.exit(0 if len(b) >= 3 * 1024 and all(b[i] + b[i+1] == 255 and (i == 0 or b[i] == (b[i-2] + 1) % 256) for i in range(0, len(b), 2)) else 1)
 EOF
-has status.closed1 "^link=idle .* readers=0 bytes=[1-9]" && pass "status: idle again, bytes counted" ||
-	fail "status: $(f status.closed1)"
+n=$(cat "$D/iq.1" "$D/iq.2" "$D/iq.3" | wc -c | tr -d ' ')
+has status.closed1 "^link=open .* readers=0 bytes=$n " && pass "the reader gone: still held; bytes= what it was given ($n)" ||
+	fail "status: $(f status.closed1) (read $n)"
+[ "$(f iq.1 | wc -c | tr -d ' ')" = 16384 ] && pass "a read filled from several of the stream's pieces" ||
+	fail "iq.1: $(f iq.1 | wc -c) bytes"
+has status.hungup "^link=idle .* readers=0 " && conn 1 | grep -q '^hangup 1 ' &&
+	pass "-l after the last reader: hung up" || fail "status: $(f status.hungup); conn 1: $(conn 1 | tail -1)"
 
 has status.two "link=open .* readers=2 " && pass "two readers on one stream" || fail "status: $(f status.two)"
-[ "$(conn 3 | grep -c '^connect')" = 1 ] && conn 3 | grep -q '^cmd freq 162025000$' && conn 3 | grep -q '^cmd biastee 1$' &&
-	pass "one dial for both; settings written while they read sent at once" || fail "conn 3: $(conn 3 | tr '\n' '|')"
-has status.gone "^link=idle .* readers=0 " && conn 3 | grep -q '^hangup 3 ' &&
-	pass "both gone: hung up" || fail "status: $(f status.gone); conn 3: $(conn 3 | tail -1)"
+[ "$(conn 2 | grep -c '^connect')" = 1 ] && conn 2 | grep -q '^cmd freq 162025000$' && conn 2 | grep -q '^cmd biastee 1$' &&
+	pass "one dial for both; settings written while they read sent at once" || fail "conn 2: $(conn 2 | tr '\n' '|')"
+conn 2 | grep '^cmd' | tr '\n' '|' | grep -q "cmd direct 0|cmd gainmode 1|cmd gain 386|$" &&
+	pass "direct written: the gain sent again after it" || fail "conn 2: $(conn 2 | grep '^cmd' | tr '\n' '|')"
+has status.gone "skipped=[1-9]" && pass "samples arriving as a setting took: skipped" || fail "status: $(f status.gone)"
+has status.gone "^link=open .* readers=0 " &&
+	pass "both gone: held" || fail "status: $(f status.gone)"
+has status.gone2 "^link=idle .* readers=0 " && conn 2 | grep -q '^hangup 2 ' &&
+	pass "then hung up" || fail "status: $(f status.gone2); conn 2: $(conn 2 | tail -1)"
 
 has status.dropped "dropped=[1-9]" && pass "a reader that does not read loses the oldest" ||
 	fail "status: $(f status.dropped)"
@@ -125,6 +136,8 @@ has err.half "bad rate 1" && has ctl.after "^freq 162025000$" &&
 
 [ "$(f status.stop | cut -d' ' -f1)" = link=none ] && ! has status.stop "source=" && pass "stop" ||
 	fail "stop: $(f status.stop)"
+[ -z "$(f err.localhost)" ] && has ctl.localhost "^source tcp!127.0.0.1!$PR$" &&
+	pass "localhost dialled as 127.0.0.1" || fail "localhost: '$(f err.localhost)' $(f ctl.localhost | head -1)"
 has again "served already" && pass "a second sdrfs finds it served" || fail "again: '$(f again)'"
 
 [ $failed = 0 ] && echo "sdrfs_test: PASS"

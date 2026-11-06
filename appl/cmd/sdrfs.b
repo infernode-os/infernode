@@ -20,14 +20,21 @@ implement Sdrfs;
 #                  direct off | i | q   direct sampling, for HF
 #                  biastee off | on 5 V on the antenna
 #   status  (r)  attr=value: link=none|idle|opening|open|closed|error
-#                source= tuner= gains= readers= bytes= dropped= error=
+#                source= tuner= gains= readers= bytes= dropped=
+#                skipped= error=
 #   gains   (r)  the tuner's gains, dB, one a line
 #   iq      (r)  the samples from the open on, 8-bit unsigned I then Q;
 #                each read waits for more.  The first open dials
-#                rtl_tcp and the last close hangs up, so the radio is
-#                read only while something listens.  Every open has its
-#                own queue; one that falls behind loses the oldest,
-#                counted in status as dropped=.  When the radio's
+#                rtl_tcp if it is not held, and once the last reader
+#                and the last setting are -l seconds gone it hangs up,
+#                so the radio is read only while something listens or
+#                has just.  Every open has its own queue; one that
+#                falls behind loses the oldest, counted in status as
+#                dropped=.  rtl_tcp answers no command and applies
+#                them one at a time, so sdrfs reckons 150ms each; samples
+#                arriving before then and -t milliseconds (300) more
+#                were tuned before they took, and are dropped, counted
+#                as skipped=.  A hang-up waits for them too.  When the radio's
 #                stream ends, a read gives what was queued, then end
 #                of file.
 #
@@ -45,9 +52,13 @@ implement Sdrfs;
 #
 # -w is how long to wait for rtl_tcp's greeting (15 seconds): while
 # another client holds it, rtl_tcp answers a dial but does not greet,
-# and after one leaves it takes five seconds to take the next.
+# and after one leaves it takes five seconds to take the next.  So the
+# connection is held -l seconds (10) after it is last used, and a
+# source's dial is held as the stream's: reopening iq within that
+# costs nothing.  Hanging up while rtl_tcp is still applying settings
+# has crashed it (librtlsdr 2.0.1, macOS); holding avoids that too.
 #
-# Usage:	sdrfs [-S] [-m mountpoint] [-s spec] [-w seconds] [command ...]
+# Usage:	sdrfs [-S] [-l seconds] [-m mountpoint] [-s spec] [-t ms] [-w seconds] [command ...]
 #
 
 include "sys.m";
@@ -155,6 +166,11 @@ directs := array[] of {"off", "i", "q"};
 
 user := "sdr";
 greetwait := 15*1000;	# rtl_tcp takes 5s to take a new client after the last
+lingerms := 10*1000;	# the connection held after its last reader or setting
+settlems := 300;	# samples dropped after rtl_tcp has applied a setting
+Cmdms: con 150;		# rtl_tcp applies a command in 25-120ms, one at a time
+given := big 0;		# bytes the readers of iq were given
+ncmds := 0;		# commands sent to rtl_tcp
 stderr: ref Sys->FD;
 
 init(nil: ref Draw->Context, argv: list of string)
@@ -172,7 +188,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	mnt := "/mnt/sdr";
 	spec := "sdr";
 	arg->init(argv);
-	arg->setusage("sdrfs [-S] [-m mountpoint] [-s spec] [-w seconds] [command ...]");
+	arg->setusage("sdrfs [-S] [-l seconds] [-m mountpoint] [-s spec] [-t ms] [-w seconds] [command ...]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'm' =>
@@ -181,6 +197,14 @@ init(nil: ref Draw->Context, argv: list of string)
 			spec = arg->earg();
 		'S' =>
 			spec = nil;
+		'l' =>
+			lingerms = int arg->earg() * 1000;
+			if(lingerms < 0)
+				arg->usage();
+		't' =>
+			settlems = int arg->earg();
+			if(settlems < 0)
+				arg->usage();
 		'w' =>
 			greetwait = int arg->earg() * 1000;
 			if(greetwait <= 0)
@@ -286,8 +310,13 @@ server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop,
 	ngains := 0;
 	link := "none";
 	srcerr := "";
-	total := big 0;
 	dropped := big 0;
+	skipped := big 0;
+	settleuntil := sys->millisec();	# samples before this were tuned before a setting took
+	busyuntil := settleuntil;	# rtl_tcp still applying commands until about this
+	n0 := 0;
+	lingerc := chan of int;
+	ltok := 0;		# the linger timer that counts; a later one replaces it
 	clients: list of ref Client;
 
 	evc := chan of ref Event;
@@ -335,16 +364,16 @@ Serve:
 			tuner = ev.tuner;
 			ngains = ev.ngains;
 			set.gain = nearest(tuner, set.gain);
-			if(listening(clients) == 0) {
-				# a source command's dial, with nobody listening
-				link = "idle";
-				gen++;
-				break;
-			}
+			# kept as the stream's, even for a source command's
+			# dial with nobody listening: rtl_tcp takes 5s to
+			# take the next client
 			conn = ev.conn;
 			link = "open";
-			if((e := sendall(conn.dfd, set)) != nil) {
-				hangup(conn, readerpid);
+			n0 = ncmds;
+			e := sendall(conn.dfd, set);
+			(busyuntil, settleuntil) = sent(ncmds - n0, busyuntil);
+			if(e != nil) {
+				hangup(conn, readerpid, settleuntil);
 				conn = nil;
 				link = "error";
 				srcerr = e;
@@ -356,8 +385,13 @@ Serve:
 			rpidc := chan of int;
 			spawn reader(gen, conn.dfd, evc, rpidc);
 			readerpid = <-rpidc;
+			if(listening(clients) == 0)
+				spawn lingertimer(++ltok, lingerms, lingerc);
 		Ddata =>
-			total += big len ev.data;
+			if(sys->millisec() - settleuntil < 0) {
+				skipped += big len ev.data;
+				break;
+			}
 			for(l := clients; l != nil; l = tl l)
 				dropped += big (hd l).put(ev.data);
 		Dend =>
@@ -373,6 +407,16 @@ Serve:
 				(hd l).end(ev.err);
 		}
 
+	t := <-lingerc =>
+		# held long enough with nothing listening: hang up
+		if(t != ltok || conn == nil || listening(clients) > 0)
+			break;
+		hangup(conn, readerpid, settleuntil);
+		conn = nil;
+		readerpid = -1;
+		gen++;
+		link = "idle";
+
 	r := <-reqc =>
 		srv := r.srv;
 		if(r.m == nil) {
@@ -383,13 +427,8 @@ Serve:
 			clients = nl;
 			if(ctlsrv == srv)
 				ctlwait = nil;
-			if(listening(clients) == 0 && conn != nil) {
-				hangup(conn, readerpid);
-				conn = nil;
-				readerpid = -1;
-				gen++;
-				link = "idle";
-			}
+			if(listening(clients) == 0 && conn != nil)
+				spawn lingertimer(++ltok, lingerms, lingerc);
 			if(--nconn == 0 && !posted)
 				break Serve;
 			break;
@@ -430,7 +469,7 @@ Serve:
 					s += " source=" + quote(source);
 				if(tuner >= 0)
 					s += sys->sprint(" tuner=%s gains=%d", tunername(tuner), ngains);
-				s += sys->sprint(" readers=%d bytes=%bd dropped=%bd", listening(clients), total, dropped);
+				s += sys->sprint(" readers=%d bytes=%bd dropped=%bd skipped=%bd", listening(clients), given, dropped, skipped);
 				if(srcerr != nil)
 					s += " error=" + quote(srcerr);
 				srv.reply(styxservers->readstr(m, s + "\n"));
@@ -509,13 +548,28 @@ Serve:
 			}
 			*set = *nset;
 			if(conn != nil) {
+				# the gain last, and again after direct or agc,
+				# which lose it (sendall)
 				e: string;
-				for(l := rev(changed); l != nil && e == nil; l = tl l)
-					e = sendone(conn.dfd, set, hd l);
+				regain := 0;
+				n0 = ncmds;
+				for(l := rev(changed); l != nil && e == nil; l = tl l) {
+					case hd l {
+					Cgainmode or Cdirect or Cagc =>
+						regain = 1;
+					}
+					if(hd l != Cgainmode)
+						e = sendone(conn.dfd, set, hd l);
+				}
+				if(regain && e == nil)
+					e = sendone(conn.dfd, set, Cgainmode);
+				(busyuntil, settleuntil) = sent(ncmds - n0, busyuntil);
 				if(e != nil) {
 					srv.reply(ref Rmsg.Error(m.tag, e));
 					break;
 				}
+				if(changed != nil && listening(clients) == 0)
+					spawn lingertimer(++ltok, lingerms, lingerc);
 			}
 			if(!stop && nsrc == "") {
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -523,7 +577,7 @@ Serve:
 			}
 			# a new source, or none: hang up the old
 			if(conn != nil)
-				hangup(conn, readerpid);
+				hangup(conn, readerpid, settleuntil);
 			conn = nil;
 			readerpid = -1;
 			dialling = 0;
@@ -561,14 +615,10 @@ Serve:
 					nl = hd l :: nl;
 			clients = nl;
 			srv.clunk(m);
-			# the last listener gone: hang up
-			if(listening(clients) == 0 && conn != nil) {
-				hangup(conn, readerpid);
-				conn = nil;
-				readerpid = -1;
-				gen++;
-				link = "idle";
-			}
+			# the last listener gone: hang up once it has been
+			# gone a while
+			if(listening(clients) == 0 && conn != nil)
+				spawn lingertimer(++ltok, lingerms, lingerc);
 		* =>
 			srv.default(r.m);
 		}
@@ -635,8 +685,9 @@ Client.end(c: self ref Client, err: string)
 	c.reply();
 }
 
-# a waiting read given what is queued, a whole number of samples when
-# it can be; a stream, not a file, so the offset is not looked at
+# a waiting read given what is queued, up to its count and from as
+# many chunks as that takes, a whole number of samples when it can be;
+# a stream, not a file, so the offset is not looked at
 Client.reply(c: self ref Client)
 {
 	if(c.rd == nil)
@@ -655,28 +706,62 @@ Client.reply(c: self ref Client)
 		for(; c.back != nil; c.back = tl c.back)
 			c.front = hd c.back :: c.front;
 	}
+	want := c.rd.count;
+	if(want > c.n)
+		want = c.n;
+	if(want > 1)
+		want &= ~1;
 	b := hd c.front;
-	k := len b - c.off;
-	if(k > c.rd.count) {
-		k = c.rd.count;
-		if(k > 1)
-			k &= ~1;
+	out: array of byte;
+	if(len b - c.off >= want) {
+		out = b[c.off:c.off+want];	# within one chunk: no copy
+		c.off += want;
+		if(c.off == len b) {
+			c.front = tl c.front;
+			c.off = 0;
+		}
+	} else {
+		out = array[want] of byte;
+		for(o := 0; o < want; ) {
+			if(c.front == nil) {
+				for(; c.back != nil; c.back = tl c.back)
+					c.front = hd c.back :: c.front;
+			}
+			b = hd c.front;
+			k := len b - c.off;
+			if(k > want - o)
+				k = want - o;
+			out[o:] = b[c.off:c.off+k];
+			o += k;
+			c.off += k;
+			if(c.off == len b) {
+				c.front = tl c.front;
+				c.off = 0;
+			}
+		}
 	}
-	c.srv.reply(ref Rmsg.Read(c.rd.tag, b[c.off:c.off+k]));
+	c.srv.reply(ref Rmsg.Read(c.rd.tag, out));
 	c.rd = nil;
-	c.n -= k;
-	c.off += k;
-	if(c.off == len b) {
-		c.front = tl c.front;
-		c.off = 0;
-	}
+	c.n -= want;
+	given += big want;
 }
 
 #
 # rtl_tcp
 #
 
+# localhost is dialled as 127.0.0.1, where rtl_tcp should listen: with
+# no connection server (sh without -l) the name is not resolved
 dialaddr(a: string): string
+{
+	a = canon(a);
+	(n, f) := sys->tokenize(a, "!");
+	if(n == 3 && hd tl f == "localhost")
+		return hd f + "!127.0.0.1!" + hd tl tl f;
+	return a;
+}
+
+canon(a: string): string
 {
 	n := 0;
 	for(i := 0; i < len a; i++)
@@ -745,6 +830,12 @@ greeting(fd: ref Sys->FD, gc: chan of (array of byte, string))
 	gc <-= (b, nil);
 }
 
+lingertimer(tok: int, ms: int, lc: chan of int)
+{
+	sys->sleep(ms);
+	lc <-= tok;
+}
+
 timer(ms: int, tc: chan of int)
 {
 	sys->sleep(ms);
@@ -779,15 +870,28 @@ reader(gen: int, fd: ref Sys->FD, evc: chan of ref Event, pidc: chan of int)
 	}
 }
 
-hangup(c: ref Sys->Connection, readerpid: int)
+# the reader stopped now; the connection hung up once settings sent
+# before until have been applied: rtl_tcp (librtlsdr 2.0.1) has crashed
+# hung up on while still applying them
+hangup(c: ref Sys->Connection, readerpid: int, until: int)
 {
 	if(readerpid >= 0) {
 		fd := sys->open("/prog/" + string readerpid + "/ctl", Sys->OWRITE);
 		if(fd != nil)
 			sys->fprint(fd, "kill");
 	}
-	if(c.cfd != nil)
+	if(c.cfd == nil)
+		return;
+	if((d := until - sys->millisec()) > 0)
+		spawn latehangup(c.cfd, d);
+	else
 		sys->fprint(c.cfd, "hangup");
+}
+
+latehangup(cfd: ref Sys->FD, ms: int)
+{
+	sys->sleep(ms);
+	sys->fprint(cfd, "hangup");
 }
 
 get32(b: array of byte, i: int): int
@@ -795,8 +899,20 @@ get32(b: array of byte, i: int): int
 	return (int b[i] << 24) | (int b[i+1] << 16) | (int b[i+2] << 8) | int b[i+3];
 }
 
+# n commands just sent: when rtl_tcp should be done with them, and
+# when samples are tuned as they say
+sent(n: int, busy: int): (int, int)
+{
+	now := sys->millisec();
+	if(busy - now < 0)
+		busy = now;
+	busy += n * Cmdms;
+	return (busy, busy + settlems);
+}
+
 command(fd: ref Sys->FD, code: int, v: int): string
 {
+	ncmds++;
 	b := array[5] of byte;
 	b[0] = byte code;
 	b[1] = byte (v >> 24);
@@ -808,10 +924,15 @@ command(fd: ref Sys->FD, code: int, v: int): string
 	return nil;
 }
 
-# every setting, in the order librtlsdr's own tools set them
+# every setting, the gain last.  On an RTL-SDR Blog V4 (R828D) through
+# librtlsdr 2.0, direct sampling set (even off, as it was) leaves the
+# tuner's gain at its least, about 45 dB down, and the RTL2832U's AGC
+# turned on and off can leave it stuck high; the gain set after them
+# puts it right.  rtl_tcp keeps a dongle's settings from one client to
+# the next, so all are sent.
 sendall(fd: ref Sys->FD, s: ref Settings): string
 {
-	for(l := Crate :: Cfreq :: Cgainmode :: Cppm :: Cagc :: Cdirect :: Cbiastee :: nil; l != nil; l = tl l)
+	for(l := Crate :: Cfreq :: Cppm :: Cbiastee :: Cagc :: Cdirect :: Cgainmode :: nil; l != nil; l = tl l)
 		if((e := sendone(fd, s, hd l)) != nil)
 			return e;
 	return nil;

@@ -91,5 +91,16 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- iPad: all four orientations. Split View and Slide Over need every
+	     one (or UIRequiresFullScreen), and App Store validation refuses an
+	     iPad build that offers multitasking without them. An iPad is held
+	     either way up; the phone keeps its three. -->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>

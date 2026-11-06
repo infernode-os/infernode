@@ -1862,6 +1862,9 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /net/iproute' \
         'cat /net/tcp/stats' \
         'iplocktest' \
+        "dial 'tcp!nosuchhost!9' echo DIALBAD-connected &" \
+        "dial 'tcp!0.0.0.0!9' echo DIALZERO-connected &" \
+        "dial 'tcp!127.0.0.1!9' echo DIALLOOP-connected &" \
         'niltest' \
         'cd /dis; pwd; cd /' \
         'date' \
@@ -1991,6 +1994,24 @@ if grep -q "iplocktest: PASS" <<<"$SHOUT"; then
     pass "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)"
 else
     fail "os/ip: interface lock leaked by the ICMPv6 unreachable reply -- $(grep -a 'iplocktest:' <<<"$SHOUT" | tail -1)"
+fi
+
+# A connect to something that is not an IP address fails at once.
+# parseip reads a name it cannot ("localhost", with no connection
+# server) as 0.0.0.0, and TCP sent its SYN there and sat in Syn_sent
+# for ever: an old sdrfs's "source localhost" hung on a Pi 4 that way.
+# Dialled in the background, so a hang is a missing line, not a wedged
+# shell. A closed port on loopback is refused, as it always was.
+if grep -a -q "cannot dial tcp!nosuchhost!9.*invalid IP address" <<<"$SHOUT" &&
+   grep -a -q "cannot dial tcp!0.0.0.0!9.*invalid IP address" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a name or to 0.0.0.0 is refused as an invalid IP address, not sent to 0.0.0.0"
+else
+    fail "os/ip: connect to a non-address -- $(grep -a -E 'DIAL|cannot dial tcp!(nosuchhost|0\.0\.0\.0)' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+if grep -a -q "cannot dial tcp!127.0.0.1!9.*connection refused" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a closed loopback port is refused"
+else
+    fail "os/ip: loopback connect to a closed port -- $(grep -a -E 'DIALLOOP|cannot dial tcp!127' <<<"$SHOUT" | head -1)"
 fi
 
 # A nil dereference in JIT-compiled code is the program's exception.

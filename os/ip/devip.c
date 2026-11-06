@@ -907,6 +907,33 @@ setladdrport(Conv* c, char* str, int announcing)
 	return rv;
 }
 
+/*
+ * Is s written as an address parseip can read: hex digits, dots and
+ * colons only, and a dot or a colon in it unless it is all decimal
+ * digits (an IPv4 address as one number). So "fe80::1", "::1" and
+ * "10.0.2.2" are, and "localhost" is not, nor a name that happens
+ * to be hex, such as "cafe".
+ */
+static int
+isipaddr(char *s)
+{
+	char *p;
+	int sep, hex;
+
+	if(*s == 0)
+		return 0;
+	sep = hex = 0;
+	for(p = s; *p; p++){
+		if(*p == '.' || *p == ':')
+			sep = 1;
+		else if((*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F'))
+			hex = 1;
+		else if(!(*p >= '0' && *p <= '9'))
+			return 0;
+	}
+	return sep || !hex;
+}
+
 static char*
 setraddrport(Conv* c, char* str)
 {
@@ -916,7 +943,20 @@ setraddrport(Conv* c, char* str)
 	if(p == nil)
 		return "malformed address";
 	*p++ = 0;
+	/*
+	 * parseip takes anything: a name it cannot read ("localhost",
+	 * with no connection server to translate it) comes back as
+	 * 0.0.0.0, and a TCP connect then sent its SYN there and waited
+	 * in Syn_sent for ever, where it should have failed at once.
+	 * So the address must be one, and not the unspecified address,
+	 * which names no destination: the hosted emulator's devip
+	 * refuses both with this message, and now this one does too.
+	 */
+	if(!isipaddr(str))
+		return "invalid IP address";
 	parseip(c->raddr, str);
+	if(ipcmp(c->raddr, IPnoaddr) == 0 || ipcmp(c->raddr, v4prefix) == 0)
+		return "invalid IP address";
 	c->rport = atoi(p);
 	p = strchr(p, '!');
 	if(p){

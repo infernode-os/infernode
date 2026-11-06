@@ -228,9 +228,31 @@ init(nil: ref Draw->Context, args: list of string)
 		mainwin(w, 0, "");
 		return;
 	}
+	# Where the user is: the agent was told the paths it holds, not
+	# that the first is the directory the user works in, so a relative
+	# name (src/x.b) was guessed at and replies spelt out whole paths.
+	writefile(sess + "/ctl", "brief " + briefing(paths));
 	w.wwritebody("");
 	w.ctlwrite("clean");
 	mainwin(w, 1, first);
+}
+
+briefing(paths: string): string
+{
+	b := "You are talking with the user in an Agent window in Xenith, " +
+		"an editor like acme. Your replies are shown there as Markdown.";
+	if(paths != "") {
+		(nil, l) := sys->tokenize(paths, ",");
+		if(l != nil) {
+			dir := hd l;
+			if(len dir > 3 && (dir[len dir - 3:] == ":ro" || dir[len dir - 3:] == ":rw"))
+				dir = dir[0:len dir - 3];
+			b += " The user's working directory is " + dir + ": a relative " +
+				"path the user names is relative to it, and in replies name " +
+				"files relative to it.";
+		}
+	}
+	return b;
 }
 
 # Follow the session's text from offset until the turn is over.

@@ -43,6 +43,21 @@ implement WmLogon;
 # boot script -- which starts the desktop on success -- could not tell
 # a login from a login screen that had died before it drew.
 #
+# The session.  The boot script may name the sessions it can start,
+# and a file the choice is kept in:
+#
+#	wm/logon [-s file] [session ...]
+#
+# With two or more, the form shows them under the field, the one the
+# file names chosen (the first if it names none of them); a click or
+# the up and down arrows choose another.  When the screen ends with a
+# login or a skip, the name chosen is written to the file, a line of
+# text, for the boot script to read and start.  This screen starts
+# nothing itself and knows nothing of what a session is: which there
+# are and how each is started is the boot script's.  Ended any other
+# way, never shown (factotum already had keys), or with one session
+# or none to offer, the file is left as it was.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -77,6 +92,10 @@ include "factotum.m";
 include "twofaslot.m";
 
 include "sh.m";
+
+include "arg.m";
+
+include "keyboard.m";
 
 WmLogon: module
 {
@@ -127,12 +146,17 @@ escpending: int;
 outcome: string;
 SKIPPED: con "skipped";
 
+# The sessions the boot script named, and the file the choice is kept in.
+sessions: array of string;
+sessionfile: string;
+
 stderr: ref Sys->FD;
 
-init(ctxt: ref Draw->Context, nil: list of string)
+init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
+	args(argv);
 	draw = load Draw Draw->PATH;
 	tk = load Tk Tk->PATH;
 	bufio = load Bufio Bufio->PATH;
@@ -225,6 +249,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			escpending = 0;
 			passbuf = fieldtext();
 			done = handleenter();
+		Keyboard->Up or Keyboard->Down =>
+			# the field has no use for them: they choose the session
+			if(k == Keyboard->Up)
+				nextsession(-1);
+			else
+				nextsession(1);
 		27 =>	# Escape
 			passbuf = fieldtext();
 			done = handleescape();
@@ -237,6 +267,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		}
 	p := <-ptrch =>
 		tk->pointer(top, *p);
+		# a click on a session must not take the keys from the field
+		if(state != STATE_LOGIN_FAILED)
+			tk->cmd(top, "focus .f.pw");
 		tk->cmd(top, "update");
 	h := <-kbhch =>
 		relayout(h);
@@ -251,8 +284,79 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	if(ptrpid >= 0)
 		kill(ptrpid);
 
+	if(outcome == nil || outcome == SKIPPED)
+		savesession();
 	if(outcome != nil)
 		raise "fail:" + outcome;
+}
+
+usage()
+{
+	sys->fprint(stderr, "usage: wm/logon [-s file] [session ...]\n");
+	raise "fail:usage";
+}
+
+args(argv: list of string)
+{
+	arg := load Arg Arg->PATH;
+	if(arg == nil)
+		return;
+	arg->init(argv);
+	while((o := arg->opt()) != 0)
+		case o {
+		's' =>	sessionfile = arg->earg();
+		* =>	usage();
+		}
+	l := arg->argv();
+	sessions = array[len l] of string;
+	for(i := 0; l != nil; l = tl l)
+		sessions[i++] = hd l;
+}
+
+# The session the form shows chosen.
+chosensession(): string
+{
+	if(len sessions == 0)
+		return nil;
+	if(top != nil && len sessions > 1){
+		v := tk->cmd(top, "variable session");
+		for(i := 0; i < len sessions; i++)
+			if(sessions[i] == v)
+				return v;
+	}
+	# the one kept, if it is still one of them
+	if(sessionfile != nil && (kept := rf(sessionfile)) != nil)
+		for(i := 0; i < len sessions; i++)
+			if(sessions[i] == kept)
+				return kept;
+	return sessions[0];
+}
+
+# The next session (d 1) or the one before (d -1), round.
+nextsession(d: int)
+{
+	n := len sessions;
+	if(n < 2 || top == nil)
+		return;
+	cur := chosensession();
+	i := 0;
+	while(i < n && sessions[i] != cur)
+		i++;
+	i = (i + d + n) % n;
+	tk->cmd(top, ".f.sess.s" + string i + " invoke");
+	tk->cmd(top, "update");
+}
+
+# Only when there was a choice to make: one session offered (a phone's)
+# is not one chosen, and leaves the file as it was.
+savesession()
+{
+	if(sessionfile == nil || len sessions < 2)
+		return;
+	s := chosensession();
+	fd := sys->create(sessionfile, Sys->OWRITE, 8r644);
+	if(fd == nil || sys->fprint(fd, "%s\n", s) < 0)
+		sys->fprint(stderr, "logon: cannot keep the session in %s: %r\n", sessionfile);
 }
 
 # Fail before the input loop ever ran: nothing to kill, nothing on
@@ -632,6 +736,10 @@ buildform(): int
 			+ " -text {Keys and secrets will not be available.}",
 		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
 			+ " -text {AI integration may not work.}",
+		"frame .f.sess -bd 0 -bg " + tkcol(bg),
+		"label .f.sess.l -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf
+			+ " -text {Session:}",
+		"pack .f.sess.l -side left -padx 6",
 		"frame .b -bd 0 -bg " + tkcol(bg),
 		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
 		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
@@ -657,6 +765,22 @@ buildform(): int
 		tk->putimage(top, "logo", logo_g, nil);
 		tk->cmd(top, "label .f.logo -bd 0 -image logo -bg " + tkcol(bg));
 	}
+	# The sessions, one beside the other, the one to start chosen.
+	if(len sessions > 1){
+		chosen := chosensession();
+		for(si := 0; si < len sessions; si++){
+			w := ".f.sess.s" + string si;
+			tk->cmd(top, "radiobutton " + w + " -variable session"
+				+ " -value " + tk->quote(sessions[si])
+				+ " -text " + tk->quote(sessions[si])
+				+ " -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text)
+				+ " -activebackground " + tkcol(bg) + " -activeforeground " + tkcol(accent)
+				+ " -selectcolor " + tkcol(accent) + bodyf);
+			tk->cmd(top, "pack " + w + " -side left -padx 6");
+			if(sessions[si] == chosen)
+				tk->cmd(top, w + " invoke");
+		}
+	}
 	# There is no window manager to say so: this window has the keyboard.
 	tk->cmd(top, "focus -global 1");
 
@@ -677,7 +801,7 @@ redraw()
 	if(top == nil)
 		return;
 
-	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2"}; w != nil; w = tl w)
+	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2", ".f.sess"}; w != nil; w = tl w)
 		tk->cmd(top, "pack forget " + hd w);
 
 	# Above a keyboard on a small screen (the Pi's 800x480 panel) the
@@ -730,6 +854,9 @@ redraw()
 			tk->cmd(top, "pack .f.status -side top -pady " + string PADDING);
 		tk->cmd(top, "focus .f.pw");
 	}
+	# whatever the state: a skip starts the session chosen too
+	if(len sessions > 1)
+		tk->cmd(top, "pack .f.sess -side top -pady " + string PADDING);
 	tk->cmd(top, "update");
 }
 

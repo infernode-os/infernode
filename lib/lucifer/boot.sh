@@ -26,6 +26,30 @@ if {! ~ $osk off} {
 	}
 }
 
+# The sessions the login screen offers, and the file the one chosen is
+# kept in:
+#
+#	Lucia	the agent's three zones (lucifer), the default
+#	Desktop	windows (wm/wm), a shell to begin with
+#
+# wm/logon shows them and writes the name chosen to $sessionfile; it
+# knows nothing of what each is, which is this script's, below.  The
+# file is the user's (/usr/<user>/lib or, for a user with no home of
+# their own, /usr/inferno/lib, kept in ~/.infernode as the plumbing
+# rules are), so the session chosen is the one the screen offers
+# next time.  It is the login screen's: with $skiplogon (the tests',
+# a developer's) the session is Lucia, as it always was, whatever was
+# chosen there.  $session, set before this runs, starts that one
+# either way.  A phone has Lucia alone: wm/wm's windows are not for a
+# touch screen.
+sessions=(Lucia Desktop)
+if {~ $infmobile 1} {sessions=(Lucia)}
+sessionfile=/usr/^$user^/lib/session
+if {! ftest -d /usr/^$user^/lib} {
+	mkdir -p /usr/inferno/lib >[2] /dev/null
+	sessionfile=/usr/inferno/lib/session
+}
+
 # Login screen (unlocks secstore, loads keys into factotum).
 #
 # Skippable via $skiplogon. Mobile dev iteration (hellaphone) sets
@@ -47,7 +71,7 @@ if {! ~ $osk off} {
 # one with. ($status is copied first: `if` resets it from every
 # condition it evaluates, the `~` included.)
 if {! ~ $skiplogon 1} {
-	if {wm/logon} {
+	if {wm/logon -s $sessionfile $sessions} {
 		echo 'boot: logged in — secstore keys are in factotum'
 	}{
 		why=$status
@@ -61,6 +85,17 @@ if {! ~ $skiplogon 1} {
 	echo 'boot: skiplogon=1 — wm/logon bypassed (dev mode; no factotum, no secstore)'
 }
 if {! ~ $#oskpid 0} {kill -g $oskpid >[2] /dev/null}
+
+# The session to start: $session if it was set, else the one chosen
+# at the login screen, else the first; and one of $sessions
+# whichever it is.
+if {~ $#session 0} {
+	if {! ~ $skiplogon 1} {session=`{cat $sessionfile >[2] /dev/null}}
+}
+known=0
+for offered in $sessions {if {~ $offered $session} {known=1}}
+if {~ $known 0} {session=${hd $sessions}}
+echo 'boot: session' $session
 
 # (Re-)start LLM service in the background: lib/lucifer/llmsrv.sh,
 # which a standalone Xenith runs too.  Backgrounded so the desktop
@@ -96,7 +131,24 @@ if {ftest -f /lib/veltro/sources/email.conf} {
 	echo register email /dis/veltro/sources/email.dis `{cat /lib/veltro/sources/email.conf} > /mnt/msg/ctl
 }
 
-# GUI services
+# Desktop: windows, the way Inferno always had them.  wm/wm, its first
+# command /lib/wm/desktop.sh: a plumber on the desktop's rules, which
+# start a program for what nobody has open (a file in Xenith, a web
+# page in Charon) where Lucia's send everything to its presentation
+# zone, then a shell.  The plumber's /chan is bound here, before
+# wm/wm, so that wm/wm's /chan/wmctl and the plumber's ports are in
+# the one directory everything started sees.  Nothing of Lucia's
+# below is started.  wm/wm at the top has no Quit (closing the emu's
+# window ends it); should it return, the emu halts, as Lucia's Quit
+# halts it, rather than leave a display nothing draws on.
+if {~ $session Desktop} {
+	bind -bc '#splumber' /chan
+	wm/wm sh /lib/wm/desktop.sh
+	echo halt > /dev/sysctl
+	exit
+}
+
+# Lucia: the GUI services, then lucifer.
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
 # The messages are activity 0's to hand on: /mnt/msg is the read-only

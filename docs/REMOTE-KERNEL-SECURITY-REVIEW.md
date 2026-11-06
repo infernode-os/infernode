@@ -131,6 +131,16 @@ after writing its complete result.  The authoritative network-enabled run is
 run's three localhost failures were reproduced as sandbox `EPERM` and all
 passed when localhost announce/dial was allowed.
 
+The same lifecycle rule exposed eleven GUI drivers that printed their final
+success marker but left a window manager or service alive, so macOS waited for
+each host-side deadline.  Those drivers now halt explicitly after their last
+artifact and marker, matching the GUI drivers that already did so.  Focused
+macOS ARM64 reruns pass for edit, dir, ftree, OSK core, login, four display
+sizes, all themes, a 400-action fuzz run, full Lucifer and mobile boots.  The
+four-size OSK check now completes in 22 seconds rather than four 120-second
+deadline waits; full Lucifer cases retain their intentional boot delay but no
+longer idle to the deadline.
+
 `tools/verify-dis-build.sh` produced all **1,171** manifest modules.  The
 macOS build also regenerated the checked-in device and root tables, adding the
 incoming location device and `/prof` root entry that their source

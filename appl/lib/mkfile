@@ -195,12 +195,15 @@ TARG=\
 	osklayout.dis\
 	viewport.dis\
 	visnet.dis\
+	visrec.dis\
 
 
 MODULES=
 SYSMODULES=\
 	bidi.m\
 	visnet.m\
+	visrec.m\
+	filter.m\
 	tensor.m\
 	imgload.m\
 	imagefile.m\

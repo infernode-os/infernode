@@ -481,6 +481,7 @@ dis/lib/venti.dis
 dis/lib/viewport.dis
 dis/lib/virgil.dis
 dis/lib/visnet.dis
+dis/lib/visrec.dis
 dis/lib/w3c/css.dis
 dis/lib/w3c/uris.dis
 dis/lib/w3c/xpointers.dis
@@ -1054,6 +1055,9 @@ dis/veltro/wallet9p.dis
 dis/veltro/wiki9p.dis
 dis/ventisrv.dis
 dis/vid9p.dis
+dis/vision/crop.dis
+dis/vision/detect.dis
+dis/vision/draw.dis
 dis/visionfs.dis
 dis/wav2iaf.dis
 dis/vm.dis

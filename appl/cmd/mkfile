@@ -12,6 +12,7 @@ DIRS=\
 	mk\
 	ndb\
 	sdr\
+	vision\
 	sh\
 	wikifs\
 	fs\

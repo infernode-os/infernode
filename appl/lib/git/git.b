@@ -2169,18 +2169,99 @@ sorttreeentries(entries: array of TreeEntry)
 # Index (exported)
 # =====================================================================
 
+# What is staged is kept in .git/inferno-index, "mode hash path" a line.
+# It was kept in .git/index, which is git's own index, binary (DIRC): in
+# a repository a host's git shares (any under /n/local), an add replaced
+# git's index with this list of what was staged alone, so git found the
+# index corrupt, and a commit removed it.  git's index is now left
+# alone; one in this format there, left by an older InferNode, is read
+# and then retired.
+STAGEFILE: con "/inferno-index";
+
+# With nothing staged, the index is HEAD's tree, as git's is: a commit
+# is made of the whole index, so one begun from an empty index (none
+# yet, or cleared by the commit before) was made of the files added for
+# it alone, and every other file in the tree was gone from it.
+headindex(repopath: string): (list of IndexEntry, string)
+{
+	(repo, err) := openrepo(repopath);
+	if(err != nil)
+		return (nil, nil);
+	(headref, herr) := repo.head();
+	if(herr != nil)
+		return (nil, nil);
+	(h, rerr) := repo.readref(headref);
+	if(rerr != nil || h.isnil())
+		return (nil, nil);	# no commit yet: nothing in the tree
+	(otype, data, oerr) := repo.readobj(h);
+	if(oerr != nil || otype != OBJ_COMMIT)
+		return (nil, "HEAD is not a commit");
+	(c, cerr) := parsecommit(data);
+	if(cerr != nil)
+		return (nil, "HEAD: " + cerr);
+	(rev, terr) := treeindex(repo, c.tree, "", nil);
+	if(terr != nil)
+		return (nil, terr);
+	result: list of IndexEntry;
+	for(; rev != nil; rev = tl rev)
+		result = hd rev :: result;
+	return (result, nil);
+}
+
+# The files of tree h under prefix, prepended to acc in reverse
+treeindex(repo: ref Repo, h: Hash, prefix: string, acc: list of IndexEntry): (list of IndexEntry, string)
+{
+	(otype, data, err) := repo.readobj(h);
+	if(err != nil)
+		return (nil, "tree " + h.hex() + ": " + err);
+	if(otype != OBJ_TREE)
+		return (nil, "tree " + h.hex() + ": not a tree");
+	(ents, perr) := parsetree(data);
+	if(perr != nil)
+		return (nil, "tree " + h.hex() + ": " + perr);
+	for(i := 0; i < len ents; i++) {
+		te := ents[i];
+		path := prefix + te.name;
+		if(te.mode == 8r40000) {
+			(acc, err) = treeindex(repo, te.hash, path + "/", acc);
+			if(err != nil)
+				return (nil, err);
+			continue;
+		}
+		e: IndexEntry;
+		e.mode = te.mode;
+		e.hash = te.hash;
+		e.path = path;
+		acc = e :: acc;
+	}
+	return (acc, nil);
+}
+
+# The index at path is git's own (binary), not a list of ours
+gitsindex(path: string): int
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[4] of byte;
+	return sys->read(fd, b, 4) == 4 && string b == "DIRC";
+}
+
 loadindex(repopath: string): (list of IndexEntry, string)
 {
-	fd := sys->open(repopath + "/index", Sys->OREAD);
+	fd := sys->open(repopath + STAGEFILE, Sys->OREAD);
+	if(fd == nil && !gitsindex(repopath + "/index"))
+		fd = sys->open(repopath + "/index", Sys->OREAD);
 	if(fd == nil)
-		return (nil, nil);  # no index is not an error
+		return headindex(repopath);
 
+	s := "";
 	buf := array [65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		s += string buf[:n];
+	if(s == "")
 		return (nil, nil);
 
-	s := string buf[:n];
 	entries: list of IndexEntry;
 	for(;;) {
 		(line, rest) := splitline(s);
@@ -2220,20 +2301,33 @@ saveindex(repopath: string, entries: list of IndexEntry): string
 		s += sprint("%06o", e.mode) + " " + e.hash.hex() + " " + e.path + "\n";
 	}
 
-	fd := sys->create(repopath + "/index", Sys->OWRITE, 8r644);
+	fd := sys->create(repopath + STAGEFILE, Sys->OWRITE, 8r644);
 	if(fd == nil)
 		return sprint("create index: %r");
 	data := array of byte s;
 	if(sys->write(fd, data, len data) != len data)
 		return sprint("write index: %r");
+	retireoldindex(repopath);
 	return nil;
 }
 
 clearindex(repopath: string): string
 {
-	if(sys->remove(repopath + "/index") < 0)
+	(ok, nil) := sys->stat(repopath + STAGEFILE);
+	if(ok >= 0 && sys->remove(repopath + STAGEFILE) < 0)
 		return sprint("remove index: %r");
+	retireoldindex(repopath);
 	return nil;
+}
+
+# An index of ours in git's place, from before: gone, its entries now
+# in STAGEFILE.  git's own is never touched.
+retireoldindex(repopath: string)
+{
+	p := repopath + "/index";
+	(ok, nil) := sys->stat(p);
+	if(ok >= 0 && !gitsindex(p))
+		sys->remove(p);
 }
 
 parseoctal(s: string): int

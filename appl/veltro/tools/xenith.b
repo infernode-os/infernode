@@ -93,8 +93,9 @@ doc(): string
 		"path must be accessible in the agent's namespace. Modifications\n" +
 		"are restricted to windows created by this agent.\n\n" +
 		"Status states: ok (green), warn (yellow), error (red), info (blue), reset\n\n" +
-		"Control commands (for ctl):\n" +
-		"  name <string>    Set window name/title\n" +
+		"Windows you create are named /+label (create's name is a label,\n" +
+		"not a file).  To change a file, use write or edit.\n\n" +
+		"Control commands (for ctl): layout and display only\n" +
 		"  clean            Mark as unmodified\n" +
 		"  show             Scroll to cursor position\n" +
 		"  grow             Moderate growth in column\n" +
@@ -105,7 +106,7 @@ doc(): string
 		"  noscroll         Disable auto-scroll on write\n" +
 		"  scroll           Enable auto-scroll\n\n" +
 		"Examples:\n" +
-		"  xenith create output        Create window named 'output'\n" +
+		"  xenith create output        Create window named /+output\n" +
 		"  xenith write 3 body Hello   Write 'Hello' to window 3 body\n" +
 		"  xenith status 3 ok          Set green status on window 3\n" +
 		"  xenith ctl 3 growmax        Maximize window 3\n";
@@ -156,15 +157,70 @@ checkbodyaccess(winid: string): string
 	if(ok >= 0)
 		return nil;  # path accessible — allow body read
 
-	# For synthetic windows (+Errors, +Veltro, etc.), check parent dir
-	parent := dirname(wpath);
-	if(parent != wpath) {
-		(ok2, nil) := sys->stat(parent);
+	# A directory's +Errors window (a command's output there) is readable
+	# when the directory is.  Nothing else is taken on its parent: the
+	# directories above a grant are in the namespace (to reach it), so a
+	# file the user has open beside the project, outside it, was read on
+	# the strength of its directory; and an /+Agent window (another
+	# conversation) on the strength of /.
+	if(len wpath > 7 && wpath[len wpath - 7:] == "/+Errors") {
+		(ok2, nil) := sys->stat(dirname(wpath));
 		if(ok2 >= 0)
-			return nil;  # parent dir accessible — allow body read
+			return nil;
 	}
 
 	return sys->sprint("error: access denied — %s is outside agent namespace", wpath);
+}
+
+# What an agent's window is called: a label, shown as /+label.  Xenith
+# reads and writes a window's file in its own name space, not the
+# agent's: a window the agent named after a file was one Get read and
+# Put wrote, the user's Put and Putall included, wherever the agent
+# could name, inside its grant or out of it.
+windowlabel(name: string): (string, string)
+{
+	if(name == "")
+		return ("", nil);
+	if(len name >= 2 && name[0:2] == "/+")
+		name = name[2:];
+	else if(name[0] == '+')
+		name = name[1:];
+	for(i := 0; i < len name; i++)
+		if(name[i] == '/')
+			return (nil, "error: a window's name is a label, not a file: " + name +
+				" (windows you create are named /+label; to change a file, use write or edit)");
+	name = ctlfield(name);
+	return ("/+" + name, nil);
+}
+
+# The control commands an agent may give its own windows: layout and
+# display.  Not name, get, put, dump, dumpdir, image or content: each
+# makes Xenith read or write a file, or later run a command, in its own
+# name space, outside the agent's.
+CTLOK := array[] of {
+	"clean", "dirty", "show", "dot=addr", "addr=dot", "limit=addr",
+	"mark", "nomark", "menu", "nomenu", "scroll", "noscroll", "cleartag",
+	"echo", "noecho", "clearimage", "clearcontent", "contentcmd",
+	"growfull", "growmax", "grow", "moveto", "tocol", "newcol",
+	"delete", "del",
+};
+
+ctlallowed(cmds: string): string
+{
+	(nil, lines) := sys->tokenize(cmds, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(verb, nil) := splitfirst(hd lines);
+		if(verb == "")
+			continue;
+		ok := 0;
+		for(i := 0; i < len CTLOK; i++)
+			if(verb == CTLOK[i])
+				ok = 1;
+		if(!ok)
+			return "error: ctl " + verb + " is not allowed: an agent's windows take " +
+				"layout and display commands only (to name a window, give create a label)";
+	}
+	return nil;
 }
 
 # Extract parent directory from path
@@ -232,7 +288,9 @@ exec(args: string): string
 # Create a new window
 docreate(args: string): string
 {
-	winname := strip(args);
+	(winname, err) := windowlabel(strip(args));
+	if(err != nil)
+		return err;
 
 	# Create window by writing to new/ctl
 	newctl := XENITH_ROOT + "/new/ctl";
@@ -384,6 +442,9 @@ doctl(args: string): string
 
 	if(!isowned(winid))
 		return sys->sprint("error: permission denied — window %s not owned by agent", winid);
+	err := ctlallowed(cmds);
+	if(err != nil)
+		return err;
 
 	filepath := sys->sprint("%s/%s/ctl", XENITH_ROOT, winid);
 	fd := sys->open(filepath, Sys->OWRITE);

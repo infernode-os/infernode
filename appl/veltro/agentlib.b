@@ -1003,6 +1003,11 @@ positional(tool, inputjson: string): string
 	# exec's timeout, by name: before the command, as exec takes it.
 	if(t == "exec" && jval(vals, "timeout") != nil && jval(vals, "command") != nil)
 		return "-t " + jval(vals, "timeout") + " " + jval(vals, "command");
+	# git's first argument is its subcommand, named so: taken as one of
+	# the others, it went after args ({"subcommand":"add","args":"f"}
+	# ran "f add", an unknown subcommand).
+	if(t == "git" && jval(vals, "subcommand") != nil)
+		return joinargs(jval(vals, "subcommand") :: jval(vals, "args") :: nil);
 	if(jval(vals, "args") != nil || jval(vals, "command") != nil)
 		return extracttoolargs(inputjson);
 	order: list of string;

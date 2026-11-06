@@ -1893,7 +1893,54 @@ verifypin(pin: array of byte, leaf: array of byte): string
 	keyring->sha256(spki, len spki, digest, nil);
 	if(!bytescmp(digest, pin))
 		return "tls: server key does not match the pinned key";
+
+	# The pinned key must be the key the server's signature is checked
+	# with.  certspki finds the bytes the pin is over; the signature is
+	# checked (verifyserversig) with the key X509 reads from the same
+	# certificate.  A certificate the two read differently could pass
+	# the pin on one key and sign with another, so the key bits and
+	# algorithm the pinned bytes hold are matched against X509's.
+	(oid, bits) := spkikey(spki);
+	if(bits == nil)
+		return "tls: the pinned SubjectPublicKeyInfo does not parse";
+	(serr, signed) := x509->Signed.decode(leaf);
+	if(serr != nil)
+		return "tls: decode cert: " + serr;
+	(cerr, cert) := x509->Certificate.decode(signed.tobe_signed);
+	if(cerr != nil)
+		return "tls: decode TBSCert: " + cerr;
+	pk := cert.subject_pkinfo;
+	if(pk == nil || pk.alg_id == nil || !oideq(pk.alg_id.oid, oid) ||
+	   !bytescmp(pk.subject_pk, bits))
+		return "tls: the pinned key is not the certificate's key";
 	return nil;
+}
+
+# The algorithm and key bits of a DER SubjectPublicKeyInfo, read as
+# X509's parse_pkinfo reads one: SEQUENCE { AlgorithmIdentifier
+# SEQUENCE { OID, ... }, BIT STRING with no unused bits }.
+spkikey(spki: array of byte): (ref ASN1->Oid, array of byte)
+{
+	(err, e) := asn1->decode(spki);
+	if(err != nil || e == nil)
+		return (nil, nil);
+	(ok, el) := e.is_seq();
+	if(!ok || len el != 2)
+		return (nil, nil);
+	al: list of ref ASN1->Elem;
+	(ok, al) = (hd el).is_seq();
+	if(!ok || al == nil)
+		return (nil, nil);
+	oid: ref ASN1->Oid;
+	(ok, oid) = (hd al).is_oid();
+	if(!ok || oid == nil)
+		return (nil, nil);
+	unused: int;
+	bits: array of byte;
+	(ok, unused, bits) = (hd tl el).is_bitstring();
+	if(!ok || unused != 0 || bits == nil)
+		return (nil, nil);
+	return (oid, bits);
 }
 
 # The DER header at a[off]: (tag, header length, content length), or

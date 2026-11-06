@@ -694,6 +694,90 @@ testSortTreeEntries(t: ref T)
 
 # --- Index Tests ---
 
+# git's own index (binary, DIRC) in a repository shared with a host's
+# git: what is staged here is kept beside it, and it is left as it was
+testIndexBesideGits(t: ref T)
+{
+	tmpdir := "/tmp/git_test_gitsindex";
+	cleanup(tmpdir);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(nil, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	gits := array of byte "DIRC........host index";
+	for(i := 4; i < 12; i++)
+		gits[i] = byte 0;
+	gits[7] = byte 2;
+	fd := sys->create(gitdir + "/index", Sys->OWRITE, 8r644);
+	sys->write(fd, gits, len gits);
+	fd = nil;
+
+	(h1, nil) := git->parsehash("ce013625030ba8dba906f756967f9e9ca394464a");
+	e1: IndexEntry;
+	e1.mode = 8r100644;
+	e1.hash = h1;
+	e1.path = "hello.txt";
+	t.assertnil(git->saveindex(gitdir, e1 :: nil), "saveindex should succeed");
+	(loaded, lerr) := git->loadindex(gitdir);
+	t.assertnil(lerr, "loadindex should succeed");
+	t.assert(loaded != nil && (hd loaded).path == "hello.txt", "staged entry read back");
+	t.assertnil(git->clearindex(gitdir), "clearindex should succeed");
+
+	got := readbytes(gitdir + "/index");
+	same := len got == len gits;
+	for(j := 0; same && j < len got; j++)
+		same = got[j] == gits[j];
+	t.assert(same, "git's own index is left as it was");
+	cleanup(tmpdir);
+}
+
+# With nothing staged the index is HEAD's tree: a commit made of it
+# keeps the files not added for it
+testIndexFromHead(t: ref T)
+{
+	tmpdir := "/tmp/git_test_headindex";
+	cleanup(tmpdir);
+	sys->create(tmpdir, Sys->OREAD, Sys->DMDIR | 8r755);
+	gitdir := tmpdir + "/.git";
+	(repo, ierr) := git->initrepo(gitdir, 0);
+	t.assertnil(ierr, "initrepo should succeed");
+
+	(ba, nil) := git->writelooseobj(gitdir, git->OBJ_BLOB, array of byte "a\n");
+	(bb, nil) := git->writelooseobj(gitdir, git->OBJ_BLOB, array of byte "b\n");
+	sub := array[1] of TreeEntry;
+	sub[0] = TreeEntry(8r100755, "b.sh", bb);
+	(st, nil) := git->writelooseobj(gitdir, git->OBJ_TREE, git->encodetree(sub));
+	top := array[2] of TreeEntry;
+	top[0] = TreeEntry(8r100644, "a.txt", ba);
+	top[1] = TreeEntry(8r40000, "src", st);
+	git->sorttreeentries(top);
+	(root, nil) := git->writelooseobj(gitdir, git->OBJ_TREE, git->encodetree(top));
+	ctext := "tree " + root.hex() + "\nauthor T <t@e> 0 +0000\ncommitter T <t@e> 0 +0000\n\nfirst\n";
+	(ch, cerr) := git->writelooseobj(gitdir, git->OBJ_COMMIT, array of byte ctext);
+	t.assertnil(cerr, "commit object written");
+	(headref, herr) := repo.head();
+	t.assertnil(herr, "HEAD names a branch");
+	git->writeref(gitdir, headref, ch);
+
+	(loaded, lerr) := git->loadindex(gitdir);
+	t.assertnil(lerr, "loadindex should succeed");
+	n := 0;
+	paths := "";
+	for(el := loaded; el != nil; el = tl el) {
+		n++;
+		paths += " " + (hd el).path;
+	}
+	t.asserteq(n, 2, "the index holds HEAD's files");
+	t.assert(paths == " a.txt src/b.sh" || paths == " src/b.sh a.txt", "HEAD's paths:" + paths);
+	for(el = loaded; el != nil; el = tl el)
+		if((hd el).path == "src/b.sh") {
+			t.asserteq((hd el).mode, 8r100755, "a file's mode from the tree");
+			t.assert((hd el).hash.eq(bb), "a file's hash from the tree");
+		}
+	cleanup(tmpdir);
+}
+
 testIndexReadWrite(t: ref T)
 {
 	tmpdir := "/tmp/git_test_idx_" + string sys->pctl(0, nil);
@@ -1041,6 +1125,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Encodetree", testEncodetree);
 	run("SortTreeEntries", testSortTreeEntries);
 	run("IndexReadWrite", testIndexReadWrite);
+	run("IndexBesideGits", testIndexBesideGits);
+	run("IndexFromHead", testIndexFromHead);
 	run("WriteSymref", testWriteSymref);
 	run("IsClean", testIsClean);
 	run("IsAncestorBFS", testIsAncestorBFS);
@@ -1049,4 +1135,16 @@ init(nil: ref Draw->Context, args: list of string)
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
+}
+
+readbytes(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return buf[0:n];
 }

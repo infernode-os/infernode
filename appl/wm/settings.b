@@ -848,9 +848,10 @@ panelweb()
 }
 
 # ── Speech panel ───────────────────────────────────────────────
-# speech(4) at /mnt/speech: its own ctl, read and written, nothing kept
-# here.  The engine is shown, not set: it names a mount, which the boot
-# profile makes.  What an agent or a program sets (talk, say) is not here.
+# speech(4) at /mnt/speech: its own ctl, read and written; speech9p keeps
+# what is set (its settings file).  The engine is shown, not set: it
+# names a mount, which the boot profile makes.  What an agent or a
+# program does (talk, say) is not here.
 
 speechget(): list of (string, string)
 {
@@ -916,9 +917,19 @@ panelspeech()
 		lbl("spds", "It does not listen while it speaks.");
 		btn("spd", "Listen while speaking (needs echo cancellation)", "spduplex");
 	}
+	hdr("spah", "Agents");
+	if(speechval(st, "agentmic") == "on"){
+		lbl("spas", "Agents may open the microphone themselves.");
+		lbl("spas2", "They hear all that is said while it is open.");
+		btn("spa", "Agents hear only what I choose to say to them", "spagentmic");
+	}else{
+		lbl("spas", "Agents hear only what you choose to say to them.");
+		lbl("spas2", "When one asks, press the microphone key and speak.");
+		btn("spa", "Let agents open the microphone themselves", "spagentmic");
+	}
 	btn("spt", "Say a test sentence", "sptest");
 	lbl("spres", "");
-	lbl("spnote", "These apply now, until speech restarts.");
+	lbl("spnote", "These apply now and are kept (" + speechval(st, "settings") + ").");
 }
 
 plainentry(name, prompt, val: string)
@@ -950,6 +961,18 @@ speechduplex()
 		d = "half";
 	if((e := twrite("/mnt/speech/ctl", "duplex " + d, Waitfile)) != nil){
 		setpanellbl("spres", "duplex: " + e);
+		return;
+	}
+	buildpanel(CatSpeech);
+}
+
+speechagentmic()
+{
+	v := "on";
+	if(speechval(speechget(), "agentmic") == "on")
+		v = "off";
+	if((e := twrite("/mnt/speech/ctl", "agentmic " + v, Waitfile)) != nil){
+		setpanellbl("spres", "agentmic: " + e);
 		return;
 	}
 	buildpanel(CatSpeech);
@@ -1307,6 +1330,7 @@ handleaction(a: string)
 	"spvoice" =>	speechset("voice", eget(".content.spv"));
 	"splang" =>	speechset("lang", eget(".content.spl"));
 	"spduplex" =>	speechduplex();
+	"spagentmic" =>	speechagentmic();
 	"sptest" =>	speechtest();
 	"snapenable" =>	dosnapenable();
 	"snapdisable" =>	dosnapdisable();

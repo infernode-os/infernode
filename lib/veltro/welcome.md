@@ -99,13 +99,18 @@ For heavy sessions (GUI + Veltro + apps), increase pool sizes:
 
 ### Speech
 
-Speech starts automatically from the profile. To configure
-voice and language at runtime:
+Speech starts automatically from the profile. Set the voice and
+language in Settings (Speech), or through its files; either way they are
+kept:
 
 ```
-echo 'voice alloy' > /mnt/speech/ctl
+echo 'voice en-us' > /mnt/speech/ctl
 echo 'lang es' > /mnt/speech/ctl
 ```
+
+An agent hears you only when you choose to answer it: when it asks,
+press the microphone key and speak. Settings can let agents open the
+microphone themselves; it is off until you turn it on.
 
 ## Key concepts
 

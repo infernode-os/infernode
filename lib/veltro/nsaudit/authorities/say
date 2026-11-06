@@ -1,4 +1,4 @@
 tool=say
-	description='Text-to-speech via /dev/audio and speech9p'
+	description='Text to speech, through the say file of speech(4)'
 	authorities='writes_fs'
-	notes='Emits audio to the user (an output channel). Requires /mnt/speech.'
+	notes='Writes /mnt/speech/say (an output channel to the user) and reads voices. Never ctl: the voice, language and engine belong to the user.'

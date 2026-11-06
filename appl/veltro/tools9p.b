@@ -1917,9 +1917,6 @@ emitmanifestnow(mpath: string, ready: chan of int)
 	for(bp := boundpaths; bp != nil; bp = tl bp)
 		if(!strlist_contains(allpaths, (hd bp).path))
 			allpaths = (hd bp).path :: allpaths;
-	if(findtool("say") != nil || findtool("hear") != nil)
-		if(!strlist_contains(allpaths, "/mnt/speech"))
-			allpaths = "/mnt/speech" :: allpaths;
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/mnt/wallet"))
 			allpaths = "/mnt/wallet" :: allpaths;
@@ -1989,12 +1986,8 @@ applynsrestriction(invokedtool: string): string
 		for(bp2 := boundpaths; bp2 != nil; bp2 = tl bp2)
 			if(!strlist_contains(allpaths, (hd bp2).path))
 				allpaths = (hd bp2).path :: allpaths;
-	# Auto-grant /mnt/speech when say or hear tool is registered.
-	# speech9p mounts /mnt/speech in the shared namespace; without this,
-	# restrictns() hides it entirely and say/hear tools fail silently.
-	if(invokedtool == "say" || invokedtool == "hear")
-		if(!strlist_contains(allpaths, "/mnt/speech"))
-			allpaths = "/mnt/speech" :: allpaths;
+	# /mnt/speech is not a path grant: nsconstruct derives it from the say
+	# and hear tools, narrowed to their files (say, voices; ask).
 	# Auto-grant /mnt/wallet when wallet or payfetch tool is registered.
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/mnt/wallet"))

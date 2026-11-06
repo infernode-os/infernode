@@ -1,15 +1,11 @@
-hear - Listen and transcribe speech (speech-to-text)
+hear - What the user says next (speech-to-text)
 
 Usage:
-  hear                       Listen and transcribe (default 5s)
-  hear <duration_ms>         Listen for specified duration
+  hear                       Wait up to 30 s for the user to speak
+  hear <ms>                  Wait up to ms (at most 120000)
 
-Arguments:
-  duration_ms - Recording duration in milliseconds (default: 5000)
+The user answers by pressing the microphone key and speaking; you get
+the words of what they say. Ask them first (say), since nothing is
+heard unless they choose to answer.
 
-Examples:
-  hear                       Listen for 5 seconds
-  hear 10000                 Listen for 10 seconds
-
-Requires /mnt/speech (run speech9p first).
-Configure STT engine via: echo 'engine api' > /mnt/speech/ctl
+Requires speech(4) at /mnt/speech.

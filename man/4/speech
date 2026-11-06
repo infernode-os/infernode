@@ -9,6 +9,9 @@ speech, speechcmd \- speech, both ways, for the whole system
 ] [
 .B -E
 .I enginedir
+] [
+.B -s
+.I settingsfile
 ]
 .PP
 .B speechcmd
@@ -60,10 +63,14 @@ the engine is told the utterance has ended.
 A read gives
 .B on
 or
-.BR off ;
+.BR off ,
+followed by
+.B asked
+while an agent waits on
+.BR ask ;
 each later read on the same open file waits until that changes, so a
-program showing whether the microphone is open (Lucifer's indicator)
-reads it and need not poll.
+program showing whether the microphone is open, or that something
+wants an answer (Lucifer's indicator), reads it and need not poll.
 .TP
 .B listen
 What is heard, a line a record, as the engine gives it:
@@ -109,21 +116,56 @@ The engine's voices.
 .BI "engine " dir\fR,
 .BI "voice " v\fR,
 .BI "lang " l
-(the last two passed to the engine), and
+(the last two passed to the engine),
 .B "duplex half"
 or
-.BR full .
+.BR full ,
+and
+.B "agentmic off"
+or
+.BR on .
 With
 .B half
 (the default) the microphone's sound is not given to the engine while
 speech plays, so the system does not hear itself; use
 .B full
 only where the hardware cancels its own echo.
+.B Agentmic
+says whether an
+.B ask
+may open the microphone itself; it is
+.B off
+unless the user turns it on.
 A read gives the settings, whether the engine answers
 .RB ( "engine ok"
 or
 .BR missing ),
-and the states of talk and speaking.
+the settings file, the states of talk and speaking, and how many asks
+wait.
+The voice, language, duplex and agentmic are kept in the settings file
+.RI ( settingsfile ,
+or
+.BI /usr/ user /lib/speechR),
+as ctl lines, read when
+.I speech9p
+starts and written whenever one is set; they are given to the engine
+before each utterance and each thing said, so an engine started later,
+or again, has them.
+.TP
+.B ask
+An agent's ear: write
+.BI "start " ms
+(30000 if no time is given, at most 120000) and read: the words of the
+next utterance the user begins, then end of file; or end of file alone
+if they begin none in time.
+It does not turn talk on: the user answers by turning it on (a
+microphone key, push to talk), and an utterance begun before the ask is
+not given to it.
+With
+.B "agentmic on"
+it turns talk on for its time, as
+.B hear
+does.
 .TP
 .B hear
 The interface before this one, for its programs: write
@@ -132,6 +174,8 @@ The interface before this one, for its programs: write
 end of file.
 Talk is turned on for that long, or until the final, unless it was on
 already.
+It is for a program the user has just asked to listen (a key pressed in
+it), and is not an agent's.
 .SS Engines
 An engine is a directory serving:
 .TP
@@ -244,10 +288,35 @@ The old way, from a program that wants one answer:
 .B /mnt/speech
 .TP
 .B /mnt/speechengine
+.SS Agents
+The Veltro tools
+.B say
+and
+.B hear
+are given /mnt/speech's
+.B say
+and
+.BR voices ,
+and
+.BR ask ,
+and nothing else of it: not
+.B listen
+(everything said, to anything),
+.B talk
+(the microphone's switch),
+.B hear
+(which turns it on) or
+.B ctl
+(the engine, and so where the microphone's sound goes).
+A path grant of /mnt/speech gives nothing.
 .SH SOURCE
 .B /appl/veltro/speech9p.b
 .br
 .B /appl/veltro/speechcmd.b
+.br
+.B /appl/veltro/tools/say.b
+.br
+.B /appl/veltro/tools/hear.b
 .SH SEE ALSO
 .IR audio (3),
 .IR wm-dialpad (1),
@@ -256,22 +325,11 @@ The old way, from a program that wants one answer:
 There is no engine built into the emulator yet, so a phone has speech
 only from an engine mounted from elsewhere.
 .br
-Settings made through
-.B ctl
-last until
-.I speech9p
-restarts.
-.br
-An agent given the
-.B say
-or
-.B hear
-tool is granted all of
-.BR /mnt/speech ;
-it should have
-.B say
-alone, and
+Every reader of
 .B listen
-and
-.B talk
-never.
+hears an utterance a user makes for an agent's
+.BR ask ,
+as it hears every other.
+.br
+There is no wake word: an agent hears only what is said once the
+microphone is opened, by the user or, with agentmic on, by the agent.

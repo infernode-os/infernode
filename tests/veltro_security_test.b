@@ -1376,9 +1376,10 @@ wikiaGenericHiddenWorker(result: chan of string)
 
 
 # speech9p mounts at /mnt/speech (migrated from /n/speech per
-# docs/NAMESPACE-LAYOUT.md, INFR-403). tools9p grants "/mnt/speech" as a path
-# to say and hear; that grant must expose it and no sibling under /mnt, and a
-# tool without the grant must not see it.
+# docs/NAMESPACE-LAYOUT.md, INFR-403). It is the say and hear tools' own
+# grant, not a path: the say tool must see it and no sibling under /mnt, a
+# tool without either must not see it, and a path grant of it is refused.
+# Which of its files each tool sees is tests/speech_capability_test.b's.
 testRestrictNsSpeechGrant(t: ref T)
 {
 	made: list of string;
@@ -1415,7 +1416,7 @@ speechGrantedWorker(result: chan of string)
 	sys->pctl(Sys->FORKNS, nil);
 	caps := ref NsConstruct->Capabilities(
 		"say" :: nil,
-		"/mnt/speech" :: nil, nil, nil,
+		nil, nil, nil,
 		0 :: 1 :: 2 :: nil,
 		nil, 0, 0, -1, nil
 	, nil);
@@ -1454,6 +1455,16 @@ speechHiddenWorker(result: chan of string)
 	(speechok, nil) := sys->stat("/mnt/speech");
 	if(speechok >= 0) {
 		result <-= "/mnt/speech visible to a tool without the speech grant";
+		return;
+	}
+	pcaps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		"/mnt/speech" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	if(nsconstruct->restrictns(pcaps) == nil && sys->stat("/mnt/speech").t0 >= 0) {
+		result <-= "a path grant of /mnt/speech exposed it";
 		return;
 	}
 	result <-= "";

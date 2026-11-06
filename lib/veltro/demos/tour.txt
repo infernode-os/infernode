@@ -227,14 +227,14 @@ SECTION 8: Persistence — I Remember
 
 SECTION 9: Voice
   - say: I can speak. You have been hearing me throughout this tour.
-  - say: I can also listen — the hear tool captures speech-to-text.
+  - say: I can also listen, when you choose: with the hear tool I ask, and you press the microphone key and speak.
   - present write tour:
     # Voice Interface
 
     | Tool | Path | Purpose |
     |------|------|---------|
     | `say` | `/mnt/speech/say` | Text-to-speech |
-    | `hear` | `/mnt/speech/hear` | Speech-to-text |
+    | `hear` | `/mnt/speech/ask` | What you say next, when you press the microphone key |
 
     Both are backed by the speech 9P server at `/mnt/speech`.
     You can talk to me by voice if a microphone is available.

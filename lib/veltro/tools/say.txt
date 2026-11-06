@@ -2,16 +2,10 @@ say - Speak text aloud (text-to-speech)
 
 Usage:
   say <text>                 Speak the given text
-  say -v <voice> <text>      Speak with a specific voice
-
-Arguments:
-  text  - Text to speak aloud
-  voice - Voice name (engine-specific)
 
 Examples:
   say Hello, I am Veltro.
-  say -v echo The task is complete.
   say I found 3 files matching your query.
 
-Requires /mnt/speech (run speech9p first).
-Configure via: echo 'voice <name>' > /mnt/speech/ctl
+The voice and language are the user's, chosen in Settings.
+Requires speech(4) at /mnt/speech.

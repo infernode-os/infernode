@@ -192,10 +192,10 @@ tools/todo.dis: tools/todo.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.
 	limbo $LIMBOFLAGS -gw -o tools/todo.dis tools/todo.b
 
 # Speech tools
-tools/say.dis: tools/say.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
+tools/say.dis: tools/say.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/say.dis tools/say.b
 
-tools/hear.dis: tools/hear.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
+tools/hear.dis: tools/hear.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/hear.dis tools/hear.b
 
 # Phone tools (devphone — /phone/sms and /phone/phone)

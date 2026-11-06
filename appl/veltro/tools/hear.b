@@ -1,31 +1,26 @@
 implement ToolHear;
 
 #
-# hear - Speech-to-text tool for Veltro agent
+# hear - what the user says next, for a Veltro agent, through speech(4)
 #
-# Listens via /dev/audio and returns transcribed text via the
-# speech9p file server. Requires /mnt/speech to be mounted.
+#	hear [ms]
 #
-# Usage:
-#   hear                          # Listen and transcribe (default 5s)
-#   hear <duration_ms>            # Listen for specified duration
+# The tool asks (/mnt/speech/ask) and waits, up to ms (30000), for the
+# user to speak: they press the microphone key, or push to talk, and the
+# words of that utterance are the answer.  It does not open the
+# microphone: an agent hears only what the user chooses to say once it
+# has asked, never what was said before or to something else, unless
+# the user has let agents open the microphone themselves (Settings,
+# Speech).  While it waits, /mnt/speech/talk reads "off asked", so the
+# microphone's indicator can show that something wants an answer.
 #
-# Examples:
-#   hear                          # Listen for 5 seconds
-#   hear 10000                    # Listen for 10 seconds
-#
-# The tool writes a start command to /mnt/speech/hear, then reads
-# back the transcribed text. The speech9p server handles the
-# actual recording and STT engine interaction.
+# This tool's grant is ask alone: not listen, talk or ctl.
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
-
-include "string.m";
-	str: String;
 
 include "../tool.m";
 
@@ -37,17 +32,15 @@ ToolHear: module {
 	schema: fn(): string;
 };
 
-SPEECH_HEAR: con "/mnt/speech/hear";
-SPEECH_CTL: con "/mnt/speech/ctl";
+SPEECH_ASK: con "/mnt/speech/ask";
+Defms: con 30000;
+Maxms: con 120000;
 
 init(): string
 {
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "cannot load Sys";
-	str = load String String->PATH;
-	if(str == nil)
-		return "cannot load String";
 	return nil;
 }
 
@@ -58,28 +51,25 @@ name(): string
 
 doc(): string
 {
-	return "Hear - Listen and transcribe speech (speech-to-text)\n\n" +
+	return "Hear - What the user says next (speech-to-text)\n\n" +
 		"Usage:\n" +
-		"  hear                       Listen and transcribe (default 5s)\n" +
-		"  hear <duration_ms>         Listen for specified duration\n\n" +
-		"Arguments:\n" +
-		"  duration_ms - Recording duration in milliseconds (default: 5000)\n\n" +
-		"Examples:\n" +
-		"  hear                       Listen for 5 seconds\n" +
-		"  hear 10000                 Listen for 10 seconds\n\n" +
-		"Requires /mnt/speech (run speech9p first).\n" +
-		"Configure STT engine via: echo 'engine api' > /mnt/speech/ctl";
+		"  hear                       Wait up to 30 s for the user to speak\n" +
+		"  hear <ms>                  Wait up to ms (at most 120000)\n\n" +
+		"The user answers by pressing the microphone key and speaking;\n" +
+		"you get the words of what they say. Ask them first (say), since\n" +
+		"nothing is heard unless they choose to answer.\n\n" +
+		"Requires speech(4) at /mnt/speech.";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"hear\"," +
-		"\"description\":\"Listen and transcribe speech via /mnt/speech (run speech9p first).\"," +
+		"\"description\":\"Wait for the user to answer aloud: they press the microphone key and speak, and you get their words. Ask them first.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"duration_ms\":{\"type\":\"string\",\"description\":\"Recording duration in milliseconds. Optional; default 5000, max 60000.\"}" +
+				"\"duration_ms\":{\"type\":\"string\",\"description\":\"How long to wait for them, in milliseconds. Optional; default 30000, max 120000.\"}" +
 			"}," +
 			"\"required\":[]" +
 		"}" +
@@ -91,60 +81,25 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	# Check that speech9p is mounted
-	(ok, nil) := sys->stat(SPEECH_HEAR);
-	if(ok < 0)
-		return "error: /mnt/speech not mounted (run speech9p first)";
-
-	# Parse optional duration
-	duration := "5000";
-	args = strip(args);
-	if(args != "") {
-		d := int args;
-		if(d > 0 && d <= 60000)
-			duration = string d;
-		else if(d > 60000)
-			return "error: duration must be <= 60000ms (60 seconds)";
+	ms := Defms;
+	(n, f) := sys->tokenize(args, " \t\n");
+	if(n > 0) {
+		ms = int hd f;
+		if(ms <= 0 || ms > Maxms)
+			return sys->sprint("error: wait 1 to %d ms", Maxms);
 	}
-
-	# Write start command to /mnt/speech/hear to begin recording
-	fd := sys->open(SPEECH_HEAR, Sys->ORDWR);
+	fd := sys->open(SPEECH_ASK, Sys->ORDWR);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r", SPEECH_HEAR);
-
-	# Write triggers a new recording
-	cmd := array of byte ("start " + duration);
-	wn := sys->write(fd, cmd, len cmd);
-	if(wn < 0)
-		return sys->sprint("error: write to hear failed: %r");
-
-	# Read transcription result
-	sys->seek(fd, big 0, Sys->SEEKSTART);
+		return sys->sprint("error: cannot open %s: %r", SPEECH_ASK);
+	if(sys->fprint(fd, "start %d", ms) < 0)
+		return sys->sprint("error: hear: %r");
 	result := "";
 	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-	}
-
+	while((k := sys->read(fd, buf, len buf)) > 0)
+		result += string buf[0:k];
+	if(k < 0)
+		return sys->sprint("error: hear: %r");
 	if(result == "")
-		return "(no speech detected)";
-
+		return "(the user said nothing)";
 	return result;
-}
-
-# Strip leading/trailing whitespace
-strip(s: string): string
-{
-	i := 0;
-	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n'))
-		i++;
-	j := len s;
-	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n'))
-		j--;
-	if(i >= j)
-		return "";
-	return s[i:j];
 }

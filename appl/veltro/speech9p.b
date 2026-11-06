@@ -3,11 +3,12 @@ implement Speech9p;
 #
 # speech9p -- speech, both ways, for the whole system: speech(4).
 #
-#	speech9p [-m mountpoint] [-E enginedir]
+#	speech9p [-m mountpoint] [-E enginedir] [-s settingsfile]
 #
 #	/mnt/speech/
-#		talk	start, stop (push to talk); read: on or off, and a
-#			later read on a fid waits until that changes
+#		talk	start, stop (push to talk); read: on or off, then
+#			asked while a program waits on ask, and a later read
+#			on a fid waits until that changes
 #		listen	what is heard, as the engine gives it, a line each:
 #			partial confidence=N words, final confidence=N
 #			words, error reason; every reader gets every line
@@ -17,12 +18,19 @@ implement Speech9p;
 #		cancel	any write: stop speaking now, the queue dropped
 #		chime	start, stop, done, error: an earcon
 #		voices	the engine's voices
-#		ctl	engine <dir>, voice <v>, lang <l>, duplex half|full;
-#			read: the settings, whether the engine answers, talk
-#			and speaking
+#		ctl	engine <dir>, voice <v>, lang <l>, duplex half|full,
+#			agentmic off|on; read: the settings, whether the
+#			engine answers, talk and speaking
 #		hear	the old interface: write start [ms] (5000), read
 #			the words of what was said (the next final), then
 #			end of file
+#		ask	an agent's: write start [ms] (30000), read the words
+#			of the next utterance the user begins, then end of
+#			file; it never turns talk on unless agentmic is on
+#
+# Voice, lang, duplex and agentmic are kept in the settings file
+# (/usr/<user>/lib/speech) as ctl lines, read when speech9p starts and
+# written whenever one changes.
 #
 # The engine is a directory -- the native one, a desktop's programs
 # behind speechcmd(4), a machine elsewhere over 9P -- serving ctl,
@@ -58,6 +66,7 @@ Speech9p: module
 Micrate:	con 16000;
 Micchunk:	con Micrate / 50 * 2;	# 20 ms of 16-bit mono
 Hearms:		con 5000;
+Askms:		con 30000;
 
 stderr: ref Sys->FD;
 mountpt := "/mnt/speech";
@@ -65,17 +74,20 @@ engine := "/mnt/speechengine";
 voice := "";
 lang := "";
 duplex := "half";
+agentmic := 0;		# may an ask turn talk on itself
+settings := "";
 
 talking := 0;
 speaking := 0;		# read by the microphone's pump: what duplex half needs
 speaktext := "";
 micstop: chan of int;
-heartalk := 0;		# talk was started by hear, and hear stops it
+heartalk := 0;		# talk was started by hear (or ask), and stops with it
+talkseq := 0;		# talk's starts, counted: the utterance a final is of
 
 # a reader of talk: the state its fid was last told, and a read waiting
 Talker: adt {
 	fid:	int;
-	told:	int;		# -1: nothing yet
+	told:	string;	# nil: nothing yet
 	rc:	Sys->Rread;
 };
 talkers: list of ref Talker;
@@ -89,9 +101,11 @@ Listener: adt {
 };
 listeners: list of ref Listener;
 
-# a fid of hear: started, and the words when they come
+# a fid of hear or ask: started, and the words when they come
 Hearer: adt {
 	fid:	int;
+	ask:	int;		# of ask: only an utterance begun after seq
+	seq:	int;
 	waiting:	int;
 	words:	string;
 	done:	int;
@@ -101,7 +115,7 @@ hearers: list of ref Hearer;
 
 recc: chan of string;		# records from the engine's text
 spkc: chan of (int, string);	# the speaker: speaking or not, and what
-hearendc: chan of int;		# a hear's time is up (its fid)
+hearendc: chan of (int, int);	# a hear's or ask's time is up (fid, ask)
 sayc: chan of string;		# what is queued to be said
 chimec: chan of string;
 speakerpid := -1;
@@ -119,21 +133,25 @@ init(nil: ref Draw->Context, args: list of string)
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("speech9p [-m mountpoint] [-E enginedir]");
+		arg->setusage("speech9p [-m mountpoint] [-E enginedir] [-s settingsfile]");
 		while((o := arg->opt()) != 0)
 			case o {
 			'm' =>	mountpt = arg->earg();
 			'E' =>	engine = arg->earg();
+			's' =>	settings = arg->earg();
 			'e' =>	arg->earg();	# the old engines are speechcmd(4)'s now
 			* =>	arg->usage();
 			}
 	}
+	if(settings == nil)
+		settings = "/usr/" + user() + "/lib/speech";
+	loadsettings();
 	if(sys->bind("#sspeech", mountpt, Sys->MREPL) < 0){
 		sys->fprint(stderr, "speech9p: bind %s: %r\n", mountpt);
 		raise "fail:bind";
 	}
-	f := array[8] of ref Sys->FileIO;
-	names := array[] of {"ctl", "talk", "listen", "say", "cancel", "chime", "voices", "hear"};
+	f := array[9] of ref Sys->FileIO;
+	names := array[] of {"ctl", "talk", "listen", "say", "cancel", "chime", "voices", "hear", "ask"};
 	for(i := 0; i < len names; i++)
 		if((f[i] = sys->file2chan(mountpt, names[i])) == nil){
 			sys->fprint(stderr, "speech9p: file2chan %s: %r\n", names[i]);
@@ -142,7 +160,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP|Sys->FORKFD, nil);
 	recc = chan of string;
 	spkc = chan of (int, string);
-	hearendc = chan of int;
+	hearendc = chan of (int, int);
 	sayc = chan[64] of string;
 	chimec = chan[8] of string;
 	spawn textproc();
@@ -161,6 +179,7 @@ serve(f: array of ref Sys->FileIO)
 	chime := f[5];
 	voices := f[6];
 	hear := f[7];
+	ask := f[8];
 	for(;;) alt {
 	(off, nil, nil, rc) := <-ctl.read =>
 		if(rc != nil)
@@ -271,61 +290,15 @@ serve(f: array of ref Sys->FileIO)
 			wc <-= (0, "voices is read");
 
 	(nil, nil, fid, rc) := <-hear.read =>
-		h := hearer(fid);
-		if(rc == nil){
-			drophearer(fid);
-			continue;
-		}
-		# the words once, then end of file: whatever the offset, which
-		# the write of start has moved (some readers seek back, some not)
-		if(h.done){
-			rc <-= (nil, nil);
-			continue;
-		}
-		if(!h.waiting && h.words == nil){
-			rc <-= (nil, "hear: write start first");
-			continue;
-		}
-		h.rc = rc;
-		answerhearer(h);
+		hearread(fid, 0, rc);
 	(nil, data, fid, wc) := <-hear.write =>
-		if(wc == nil){
-			drophearer(fid);
-			continue;
-		}
-		(n, w) := sys->tokenize(string data, " \t\n");
-		if(n < 1 || hd w != "start"){
-			wc <-= (0, "hear: write start [ms]");
-			continue;
-		}
-		ms := Hearms;
-		if(n > 1)
-			ms = int hd tl w;
-		if(ms <= 0 || ms > 60000){
-			wc <-= (0, "hear: start 1 to 60000 ms");
-			continue;
-		}
-		h := hearer(fid);
-		h.waiting = 1;
-		h.words = nil;
-		h.done = 0;
-		e: string;
-		if(!talking){
-			e = talkon();
-			if(e == nil)
-				heartalk = 1;
-		}
-		if(e == nil)
-			spawn hearlimit(fid, ms);
-		else
-			h.waiting = 0;
-		wc <-= reply(len data, e);
-	fid := <-hearendc =>
-		for(l := hearers; l != nil; l = tl l)
-			if((hd l).fid == fid && (hd l).waiting && heartalk){
-				talkoff();
-				heartalk = 0;
-			}
+		hearwrite(fid, 0, data, wc);
+	(nil, nil, fid, rc) := <-ask.read =>
+		hearread(fid, 1, rc);
+	(nil, data, fid, wc) := <-ask.write =>
+		hearwrite(fid, 1, data, wc);
+	(fid, isask) := <-hearendc =>
+		hearend(fid, isask);
 
 	rec := <-recc =>
 		for(l := listeners; l != nil; l = tl l){
@@ -336,7 +309,8 @@ serve(f: array of ref Sys->FileIO)
 			words := finalwords(rec);
 			for(hl := hearers; hl != nil; hl = tl hl){
 				h := hd hl;
-				if(h.waiting){
+				# an ask hears only what the user began after it
+				if(h.waiting && (!h.ask || talkseq > h.seq)){
 					h.waiting = 0;
 					h.words = words;
 					answerhearer(h);
@@ -346,11 +320,105 @@ serve(f: array of ref Sys->FileIO)
 				talkoff();
 				heartalk = 0;
 			}
+			telltalkers();
 		}
 	(on, text) := <-spkc =>
 		speaking = on;
 		speaktext = text;
 	}
+}
+
+#
+# hear and ask
+#
+
+hearread(fid, isask: int, rc: Sys->Rread)
+{
+	h := hearer(fid, isask);
+	if(rc == nil){
+		drophearer(fid, isask);
+		return;
+	}
+	# the words once, then end of file: whatever the offset, which
+	# the write of start has moved (some readers seek back, some not)
+	if(h.done){
+		rc <-= (nil, nil);
+		return;
+	}
+	if(!h.waiting && h.words == nil){
+		rc <-= (nil, "speech: write start first");
+		return;
+	}
+	h.rc = rc;
+	answerhearer(h);
+}
+
+hearwrite(fid, isask: int, data: array of byte, wc: Sys->Rwrite)
+{
+	if(wc == nil){
+		drophearer(fid, isask);
+		return;
+	}
+	(n, w) := sys->tokenize(string data, " \t\n");
+	what := "hear";
+	if(isask)
+		what = "ask";
+	if(n < 1 || hd w != "start"){
+		wc <-= (0, what + ": write start [ms]");
+		return;
+	}
+	ms := Hearms;
+	max := 60000;
+	if(isask){
+		ms = Askms;
+		max = 120000;
+	}
+	if(n > 1)
+		ms = int hd tl w;
+	if(ms <= 0 || ms > max){
+		wc <-= (0, sys->sprint("%s: start 1 to %d ms", what, max));
+		return;
+	}
+	h := hearer(fid, isask);
+	h.waiting = 1;
+	h.words = nil;
+	h.done = 0;
+	h.seq = talkseq;
+	e: string;
+	# hear is the user's (a key pressed in the program that wrote it);
+	# an ask is an agent's, and opens the microphone only if the user
+	# has said agents may
+	if(!talking && (!isask || agentmic)){
+		e = talkon();
+		if(e == nil)
+			heartalk = 1;
+	}
+	if(e == nil)
+		spawn hearlimit(fid, isask, ms);
+	else
+		h.waiting = 0;
+	telltalkers();
+	wc <-= reply(len data, e);
+}
+
+hearend(fid, isask: int)
+{
+	for(l := hearers; l != nil; l = tl l){
+		h := hd l;
+		if(h.fid != fid || h.ask != isask || !h.waiting)
+			continue;
+		if(heartalk){
+			# the final, when it comes, answers
+			talkoff();
+			heartalk = 0;
+		}else if(isask && !(talking && talkseq > h.seq)){
+			# nothing begun in time: nothing heard
+			h.waiting = 0;
+			h.words = nil;
+			answerhearer(h);
+		}
+	}
+	telltalkers();
 }
 
 reply(n: int, e: string): (int, string)
@@ -376,7 +444,10 @@ ctlstatus(): string
 	if(lang != nil)
 		s += "lang " + lang + "\n";
 	s += "duplex " + duplex + "\n";
+	s += "agentmic " + onoff(agentmic) + "\n";
+	s += "settings " + settings + "\n";
 	s += "talk " + onoff(talking) + "\n";
+	s += "asked " + string asking() + "\n";
 	s += "speaking " + string speaking + "\n";
 	return s;
 }
@@ -387,7 +458,7 @@ ctlwrite(s: string): string
 	if(n == 0)
 		return nil;
 	if(n != 2)
-		return "speech: ctl is engine dir, voice v, lang l or duplex half|full";
+		return "speech: ctl is engine dir, voice v, lang l, duplex half|full or agentmic off|on";
 	v := hd tl f;
 	case hd f {
 	"engine" =>
@@ -406,10 +477,99 @@ ctlwrite(s: string): string
 		if(v != "half" && v != "full")
 			return "speech: duplex is half or full";
 		duplex = v;
+	"agentmic" =>
+		if(v != "on" && v != "off")
+			return "speech: agentmic is off or on";
+		agentmic = v == "on";
 	* =>
 		return "speech: no such setting " + hd f;
 	}
+	if(hd f != "engine")
+		return savesettings();
 	return nil;
+}
+
+# the settings kept, as ctl lines
+loadsettings()
+{
+	(s, e) := readfile(settings);
+	if(e != nil)
+		return;
+	(nil, l) := sys->tokenize(s, "\n");
+	for(; l != nil; l = tl l){
+		(n, f) := sys->tokenize(hd l, " \t");
+		if(n != 2)
+			continue;
+		v := hd tl f;
+		case hd f {
+		"voice" =>
+			if(safename(v))
+				voice = v;
+		"lang" =>
+			if(safename(v))
+				lang = v;
+		"duplex" =>
+			if(v == "half" || v == "full")
+				duplex = v;
+		"agentmic" =>
+			agentmic = v == "on";
+		}
+	}
+}
+
+savesettings(): string
+{
+	s := "";
+	if(voice != nil)
+		s += "voice " + voice + "\n";
+	if(lang != nil)
+		s += "lang " + lang + "\n";
+	s += "duplex " + duplex + "\n";
+	s += "agentmic " + onoff(agentmic) + "\n";
+	fd := sys->create(settings, Sys->OWRITE, 8r600);
+	if(fd == nil){
+		# its directory, once
+		for(i := len settings - 1; i > 0 && settings[i] != '/'; i--)
+			;
+		if(i > 0)
+			sys->create(settings[0:i], Sys->OREAD, Sys->DMDIR | 8r700);
+		fd = sys->create(settings, Sys->OWRITE, 8r600);
+	}
+	b := array of byte s;
+	if(fd == nil || sys->write(fd, b, len b) != len b)
+		return sys->sprint("speech: set, but not kept in %s: %r", settings);
+	return nil;
+}
+
+# what speech9p tells an engine of its own accord: the voice and language
+# kept, which an engine started after them, or started again, has not had
+syncengine()
+{
+	if(voice != nil)
+		enginectl("voice " + voice);
+	if(lang != nil)
+		enginectl("lang " + lang);
+}
+
+safename(s: string): int
+{
+	if(s == nil || len s > 64)
+		return 0;
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		if(!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		     c == '.' || c == '-' || c == '_'))
+			return 0;
+	}
+	return 1;
+}
+
+user(): string
+{
+	(s, nil) := readfile("/dev/user");
+	if(s == nil)
+		return "inferno";
+	return s;
 }
 
 enginectl(s: string): string
@@ -431,6 +591,7 @@ talkon(): string
 {
 	if(talking)
 		return nil;
+	syncengine();
 	if((e := enginectl("start")) != nil)
 		return e;
 	(mic, e2) := openmic();
@@ -446,6 +607,7 @@ talkon(): string
 	micstop = chan[1] of int;
 	spawn micproc(mic, afd, micstop);
 	talking = 1;
+	talkseq++;
 	telltalkers();
 	return nil;
 }
@@ -589,6 +751,7 @@ speaker(pidc: chan of int)
 
 speak(text: string): string
 {
+	syncengine();
 	t := sys->open(engine + "/tts", Sys->ORDWR);
 	if(t == nil)
 		return sys->sprint("no engine at %s: %r", engine);
@@ -745,7 +908,7 @@ talker(fid: int): ref Talker
 	for(l := talkers; l != nil; l = tl l)
 		if((hd l).fid == fid)
 			return hd l;
-	t := ref Talker(fid, -1, nil);
+	t := ref Talker(fid, nil, nil);
 	talkers = t :: talkers;
 	return t;
 }
@@ -761,11 +924,31 @@ droptalker(fid: int)
 
 telltalker(t: ref Talker)
 {
-	if(t.rc == nil || t.told == talking)
+	st := talkstate();
+	if(t.rc == nil || t.told == st)
 		return;
-	t.told = talking;
-	t.rc <-= (array of byte (onoff(talking) + "\n"), nil);
+	t.told = st;
+	t.rc <-= (array of byte (st + "\n"), nil);
 	t.rc = nil;
+}
+
+# on or off, and asked while an agent waits to hear the user: what a
+# microphone indicator shows
+talkstate(): string
+{
+	s := onoff(talking);
+	if(asking())
+		s += " asked";
+	return s;
+}
+
+asking(): int
+{
+	n := 0;
+	for(l := hearers; l != nil; l = tl l)
+		if((hd l).ask && (hd l).waiting)
+			n++;
+	return n;
 }
 
 telltalkers()
@@ -805,27 +988,28 @@ answerlistener(r: ref Listener)
 	r.rc = nil;
 }
 
-hearer(fid: int): ref Hearer
+hearer(fid, isask: int): ref Hearer
 {
 	for(l := hearers; l != nil; l = tl l)
-		if((hd l).fid == fid)
+		if((hd l).fid == fid && (hd l).ask == isask)
 			return hd l;
-	h := ref Hearer(fid, 0, nil, 0, nil);
+	h := ref Hearer(fid, isask, 0, 0, nil, 0, nil);
 	hearers = h :: hearers;
 	return h;
 }
 
-drophearer(fid: int)
+drophearer(fid, isask: int)
 {
 	n: list of ref Hearer;
 	for(l := hearers; l != nil; l = tl l)
-		if((hd l).fid != fid)
+		if((hd l).fid != fid || (hd l).ask != isask)
 			n = hd l :: n;
 	hearers = n;
 	if(heartalk && n == nil){
 		talkoff();
 		heartalk = 0;
 	}
+	telltalkers();
 }
 
 answerhearer(h: ref Hearer)
@@ -837,10 +1021,10 @@ answerhearer(h: ref Hearer)
 	h.done = 1;
 }
 
-hearlimit(fid, ms: int)
+hearlimit(fid, isask, ms: int)
 {
 	sys->sleep(ms);
-	hearendc <-= fid;
+	hearendc <-= (fid, isask);
 }
 
 #

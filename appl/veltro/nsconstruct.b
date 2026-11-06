@@ -255,8 +255,8 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
-	# NB: speech9p moved to /mnt/speech (INFR-403): a "/mnt/speech" path grant is
-	# handled by the /mnt machinery in step 5b like any other.
+	# NB: speech9p moved to /mnt/speech (INFR-403); it is a fixed-function
+	# grant of the say and hear tools, narrowed in step 5b.
 	# NB: wallet9p moved to /mnt/wallet (INFR-400); its filtered view is built
 	# in step 5b.
 	# NB: the LLM (llm9p) and the UI presentation surface (luciuisrv) are no longer
@@ -389,6 +389,24 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 			gpsmnt = 1;
 		}
 	}
+	# /mnt/speech — speech(4). Fixed-function: the say tool gets say and
+	# voices, the hear tool ask, which waits for the user to choose to speak
+	# and never opens the microphone itself. Never listen (everything the
+	# user says, to anything), talk (the microphone's switch) or ctl (the
+	# engine: point it elsewhere and the microphone goes there). Generic
+	# path grants cannot reach it.
+	speechallow: list of string;
+	if(inlist("say", caps.tools))
+		speechallow = "say" :: "voices" :: speechallow;
+	if(inlist("hear", caps.tools))
+		speechallow = "ask" :: speechallow;
+	if(speechallow != nil) {
+		(spok, nil) := sys->stat("/mnt/speech");
+		if(spok >= 0 && !inlist("speech", mntpaths))
+			mntpaths = "speech" :: mntpaths;
+		else if(spok < 0)
+			speechallow = nil;
+	}
 	# /mnt/git — fixed-function git service (git/fs, mounted by the git tool
 	# during trusted init; migrated from /n/git per docs/NAMESPACE-LAYOUT.md,
 	# INFR-401). Derived only from the git tool; generic path grants cannot
@@ -452,6 +470,12 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 				uerr := filterdir("/mnt/ui", uiallow, 0);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
+			# /mnt/speech sub-restriction: the tools' files only.
+			if(speechallow != nil) {
+				serr := filterdir("/mnt/speech", speechallow, 0);
+				if(serr != nil)
+					return sys->sprint("restrict /mnt/speech: %s", serr);
 			}
 			# /mnt/gps sub-restriction: the read files only.
 			if(gpsmnt) {
@@ -1364,6 +1388,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
 		path == "/mnt/gps" || prefix(path, "/mnt/gps/") ||
+		path == "/mnt/speech" || prefix(path, "/mnt/speech/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||

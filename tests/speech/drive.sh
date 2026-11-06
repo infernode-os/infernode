@@ -15,7 +15,7 @@ fn engctl { cat /mnt/speechengine/ctl > /tmp/$1.engine }
 
 mkdir -p /mnt/speechengine /mnt/speech
 /tests/speechfake.dis /mnt/speechengine /tmp/script
-/dis/veltro/speech9p.dis -E /mnt/speechengine
+/dis/veltro/speech9p.dis -E /mnt/speechengine -s /tmp/settings
 cat /mnt/speech/ctl > /tmp/ctl.start
 echo R started
 
@@ -93,6 +93,56 @@ sleep 0
 mic
 sleep 3
 echo R hear
+
+# ask, an agent's: it waits for the user to begin an utterance, and does
+# not open the microphone
+cat /mnt/speech/talk > /tmp/talk.ask &
+sleep 0
+engctl ask.before
+{echo start 1500 >[1=0]; cat} <> /mnt/speech/ask > /tmp/ask.none &
+sleep 0
+cat /mnt/speech/ctl > /tmp/ctl.asking
+sleep 2
+engctl ask.none
+echo R ask.none
+
+# the user answers: pushes to talk after the ask
+{echo start 8000 >[1=0]; cat} <> /mnt/speech/ask > /tmp/ask.words &
+sleep 1
+echo start > /mnt/speech/talk
+mic
+sleep 1
+echo stop > /mnt/speech/talk
+sleep 1
+echo R ask.words
+
+# what the user began before the ask is not the agent's
+echo start > /mnt/speech/talk
+{echo start 2500 >[1=0]; cat} <> /mnt/speech/ask > /tmp/ask.earlier &
+sleep 0
+mic
+sleep 1
+echo stop > /mnt/speech/talk
+sleep 3
+echo R ask.earlier
+
+# agentmic on: an ask opens the microphone itself, for its time
+echo agentmic on > /mnt/speech/ctl
+{echo start 1500 >[1=0]; cat} <> /mnt/speech/ask > /tmp/ask.open &
+sleep 0
+mic
+sleep 3
+echo R ask.open
+
+# the settings kept (speech_test.sh starts speech9p again on them, in an
+# emulator of its own: sh keeps a module it has loaded, globals and all)
+echo voice fakevoice > /mnt/speech/ctl
+echo lang fr > /mnt/speech/ctl
+echo duplex full > /mnt/speech/ctl
+cp /tmp/settings /tmp/settings.kept
+echo agentmic off > /mnt/speech/ctl
+echo duplex half > /mnt/speech/ctl
+echo R settings
 
 cat /mnt/speech/voices > /tmp/voices
 {echo duplex sideways > /mnt/speech/ctl} >[2] /tmp/ctl.bad

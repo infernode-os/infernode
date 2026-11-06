@@ -110,7 +110,7 @@ Lucia stitches together several 9P services. Once the UI is up, you can `cat` an
 |--------------|-------------|------------------|
 | `/mnt/ui`      | luciuisrv   | All UI state. `/mnt/ui/ctl` to create/delete activities; `/mnt/ui/activity/N/{conversation,presentation,context}` for each zone. |
 | `/mnt/llm`     | llmsrv      | LLM sessions. `/mnt/llm/new` clones a fresh session; each `/mnt/llm/N/` exposes `ask`, `stream`, `model`, `thinking`, `system`, `compact`, `context`. |
-| `/mnt/speech`  | speech9p    | `say` (write text → TTS), `hear` (write `start`, then read transcription), `voices`, `ctl`. |
+| `/mnt/speech`  | speech9p    | speech(4): `talk`, `listen`, `say`, `cancel`, `chime`, `voices`, `ctl`, `hear` (write `start`, then read the words), `ask` (an agent's: the user's next utterance). Agents get `say`, `voices` and `ask` only. |
 | `/tool`      | tools9p     | Tool registry. `/tool/tools` lists tools; `/tool/paths` lists exposed host paths; `/tool/ctl` toggles state. |
 | `/n/local`   | (lucibridge)| Read-only host paths plus per-activity writable directories. |
 

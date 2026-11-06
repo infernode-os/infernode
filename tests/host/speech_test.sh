@@ -10,8 +10,12 @@
 # speaker played); with duplex half the microphone not given to the
 # engine while speech plays, with full it is; cancel stopping speech at
 # once and dropping the queue; a chime played; hear, the old interface,
-# giving the words of the next final; the engine's voices; bad ctl and
-# talk writes refused.
+# giving the words of the next final; ask, an agent's, waiting for the
+# user without opening the microphone (talk reads "off asked"), given
+# only an utterance begun after it, and opening the microphone itself
+# only with agentmic on; the settings kept in a file and read by a
+# speech9p started again; the engine's voices; bad ctl and talk writes
+# refused.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -28,7 +32,7 @@ mkdir -p "$ROOT/$T"
 LOG="$ROOT/$T/log"
 trap '[ -n "${KEEP:-}" ] || rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
-printf 'call sarah at work\nhalf\nfull\nhello there\n' > "$T/script"
+printf 'call sarah at work\nhalf\nfull\nhello there\nwhat time is it\ndictated before\nagent opened\n' > "$T/script"
 python3 -I - "$T/tone.raw" <<'PY'
 import sys, struct, math
 with open(sys.argv[1], 'wb') as f:
@@ -107,6 +111,29 @@ a=$(tonems "$T/chime.raw" 660); b=$(tonems "$T/chime.raw" 880)
 [ "$a" -ge 40 ] && [ "$b" -ge 40 ] && pass "chime start played (660 then 880 Hz)" || fail "chime: 660 Hz ${a} ms, 880 Hz ${b} ms"
 
 [ "$(f hear.words)" = "hello there" ] && pass "hear, the old interface: the words of what was said" || fail "hear gave '$(f hear.words)'"
+# ask: an agent's, waiting for the user
+[ "$(head -2 "$T/talk.ask" 2>/dev/null | tr '\n' '|')" = "off|off asked|" ] &&
+	pass "talk reads off asked while an agent waits (the indicator's cue)" || fail "talk while asked: $(f talk.ask | tr '\n' '|')"
+has ctl.asking '^asked 1' && has ctl.asking '^talk off' && pass "ctl: asked 1, talk still off" || fail "ctl while asked: $(f ctl.asking | tr '\n' '|')"
+[ "$(num ask.before.engine starts)" = "$(num ask.none.engine starts)" ] && [ ! -s "$T/ask.none" ] &&
+	pass "ask with nothing said: the microphone not opened, nothing heard" ||
+	fail "ask alone: engine starts $(num ask.before.engine starts) to $(num ask.none.engine starts), heard '$(f ask.none)'"
+[ "$(f ask.words)" = "what time is it" ] && pass "ask: the words of what the user said after it" || fail "ask gave '$(f ask.words)'"
+[ ! -s "$T/ask.earlier" ] && pass "ask: an utterance begun before it is not given to it" || fail "ask was given '$(f ask.earlier)'"
+[ "$(f ask.open)" = "agent opened" ] && pass "agentmic on: an ask opens the microphone itself" || fail "agentmic on: ask gave '$(f ask.open)'"
+grep -qx 'voice fakevoice' "$T/settings.kept" && grep -qx 'lang fr' "$T/settings.kept" &&
+	grep -qx 'duplex full' "$T/settings.kept" && grep -qx 'agentmic on' "$T/settings.kept" &&
+	pass "the settings kept in the settings file" || fail "settings file: $(f settings.kept | tr '\n' '|')"
+cp "$T/settings.kept" "$T/settings.again"
+INFERNODE_AUDIO_FAKE=1 SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c1 -r"$ROOT" \
+	/dis/sh.dis -c "bind -c /$T /tmp; mkdir -p /mnt/speechengine /mnt/speech; /tests/speechfake.dis /mnt/speechengine; /dis/veltro/speech9p.dis -s /tmp/settings.again; cat /mnt/speech/ctl > /tmp/ctl.second; echo start > /mnt/speech/talk; echo stop > /mnt/speech/talk; cat /mnt/speechengine/ctl > /tmp/second.engine; echo R second" \
+	</dev/null >"$ROOT/$T/log.second" 2>&1 || true
+has ctl.second '^voice fakevoice' && has ctl.second '^lang fr' && has ctl.second '^duplex full' && has ctl.second '^agentmic on' &&
+	pass "a speech9p started again has them" || fail "the second speech9p: $(f ctl.second | tr '\n' '|')"
+has second.engine '^voice fakevoice' && has second.engine '^lang fr' &&
+	pass "and gives the engine the voice and language before an utterance" || fail "the engine after: $(f second.engine | tr '\n' '|')"
+grep -qx 'agentmic off' "$T/settings" && pass "agentmic back off, kept" || fail "settings at the end: $(f settings | tr '\n' '|')"
+
 [ "$(f voices)" = "fake" ] && pass "voices are the engine's" || fail "voices: $(f voices)"
 [ -s "$T/ctl.bad" ] && pass "a bad ctl write refused" || fail "duplex sideways was taken"
 [ -s "$T/talk.bad" ] && pass "a bad talk write refused" || fail "talk shout was taken"

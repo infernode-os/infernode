@@ -1,28 +1,21 @@
 implement ToolSay;
 
 #
-# say - Text-to-speech tool for Veltro agent
+# say - text to speech for a Veltro agent, through speech(4)
 #
-# Speaks text aloud through /dev/audio via the speech9p file server.
-# Requires /mnt/speech to be mounted (run speech9p first).
+#	say <text>
 #
-# Usage:
-#   say <text>                    # Speak the given text
-#   say -v <voice> <text>         # Speak with specific voice
-#
-# Examples:
-#   say Hello, I am Veltro.
-#   say -v echo The task is complete.
-#   say I found 3 files matching your query.
+# The text is written to /mnt/speech/say, queued and spoken.  This tool's
+# grant is that file and voices, nothing else of /mnt/speech: the voice,
+# the language and the engine are the user's, set in wm/settings.  A
+# -v <voice> left by an older prompt is refused if it is not a plain
+# name and otherwise ignored, and the answer says so.
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
-
-include "string.m";
-	str: String;
 
 include "../tool.m";
 
@@ -35,16 +28,12 @@ ToolSay: module {
 };
 
 SPEECH_SAY: con "/mnt/speech/say";
-SPEECH_CTL: con "/mnt/speech/ctl";
 
 init(): string
 {
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "cannot load Sys";
-	str = load String String->PATH;
-	if(str == nil)
-		return "cannot load String";
 	return nil;
 }
 
@@ -57,27 +46,22 @@ doc(): string
 {
 	return "Say - Speak text aloud (text-to-speech)\n\n" +
 		"Usage:\n" +
-		"  say <text>                 Speak the given text\n" +
-		"  say -v <voice> <text>      Speak with a specific voice\n\n" +
-		"Arguments:\n" +
-		"  text  - Text to speak aloud\n" +
-		"  voice - Voice name (engine-specific)\n\n" +
+		"  say <text>                 Speak the given text\n\n" +
 		"Examples:\n" +
 		"  say Hello, I am Veltro.\n" +
-		"  say -v echo The task is complete.\n\n" +
-		"Requires /mnt/speech (run speech9p first).\n" +
-		"Configure via: echo 'voice <name>' > /mnt/speech/ctl";
+		"  say The task is complete.\n\n" +
+		"The voice and language are the user's, chosen in Settings.\n" +
+		"Requires speech(4) at /mnt/speech.";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"say\"," +
-		"\"description\":\"Speak text aloud via /mnt/speech (run speech9p first). Optionally select a voice with -v <name>.\"," +
+		"\"description\":\"Speak text aloud to the user, in the voice they chose.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"voice\":{\"type\":\"string\",\"description\":\"Optional voice selector: pass '-v <name>' (literal -v followed by the voice name). Omit for the default voice.\"}," +
 				"\"text\":{\"type\":\"string\",\"description\":\"The text to speak.\"}" +
 			"}," +
 			"\"required\":[\"text\"]" +
@@ -90,61 +74,36 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	if(args == nil || len args == 0)
-		return "error: usage: say <text>";
-
-	# Parse optional -v flag
-	text := args;
-	(n, argv) := sys->tokenize(args, " \t");
-	if(n >= 3 && hd argv == "-v") {
-		argv = tl argv;
-		newvoice := hd argv;
-		if(!safename(newvoice))
+	text := strip(args);
+	note := "";
+	(n, argv) := sys->tokenize(text, " \t");
+	if(n >= 2 && hd argv == "-v") {
+		v := hd tl argv;
+		if(!safename(v))
 			return "error: unsafe voice name";
-		argv = tl argv;
-
-		# Set voice via ctl
-		ctlfd := sys->open(SPEECH_CTL, Sys->OWRITE);
-		if(ctlfd != nil) {
-			cmd := array of byte ("voice " + newvoice);
-			sys->write(ctlfd, cmd, len cmd);
-		}
-
-		# Rejoin remaining args as text
+		note = " (the voice is the user's, set in Settings: -v " + v + " ignored)";
 		text = "";
-		for(; argv != nil; argv = tl argv) {
+		for(argv = tl tl argv; argv != nil; argv = tl argv) {
 			if(text != "")
 				text += " ";
 			text += hd argv;
 		}
 	}
-
-	text = strip(text);
 	if(text == "")
-		return "error: no text to speak";
+		return "error: usage: say <text>";
 
-	# Check that speech9p is mounted
-	(ok, nil) := sys->stat(SPEECH_SAY);
-	if(ok < 0)
-		return "error: /mnt/speech not mounted (run speech9p first)";
-
-	# Write text to /mnt/speech/say — fire and forget.
-	# speech9p runs TTS in a background thread; the write returns immediately.
 	fd := sys->open(SPEECH_SAY, Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r", SPEECH_SAY);
-
-	data := array of byte text;
-	wn := sys->write(fd, data, len data);
-	if(wn < 0)
-		return sys->sprint("error: write to say failed: %r");
-
-	return "ok";
+	b := array of byte text;
+	if(sys->write(fd, b, len b) < 0)
+		return sys->sprint("error: say: %r");
+	return "ok" + note;
 }
 
 safename(s: string): int
 {
-	if(s == nil || s == "" || s == "." || s == "..")
+	if(s == nil || s == "." || s == "..")
 		return 0;
 	for(i := 0; i < len s; i++) {
 		c := s[i];
@@ -156,7 +115,6 @@ safename(s: string): int
 	return 1;
 }
 
-# Strip leading/trailing whitespace
 strip(s: string): string
 {
 	i := 0;
@@ -165,7 +123,5 @@ strip(s: string): string
 	j := len s;
 	while(j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n'))
 		j--;
-	if(i >= j)
-		return "";
 	return s[i:j];
 }

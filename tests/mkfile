@@ -14,6 +14,7 @@ TARG=\
 	nmea_test.dis\
 	gdl90_test.dis\
 	gps_capability_test.dis\
+	speech_capability_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
 	auditsign_test.dis\

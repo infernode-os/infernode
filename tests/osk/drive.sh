@@ -185,3 +185,4 @@ tapat 0 400 470
 snap shownagain
 
 echo R done
+echo halt > '#c/sysctl'

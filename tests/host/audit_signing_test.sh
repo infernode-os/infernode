@@ -34,6 +34,9 @@ echo 'genkey written'
 
 # Start the audit log; it will drive factotum to sign checkpoints.
 mkdir -p /usr/inferno/audit
+# Each run mints a fresh signer key.  Do not replay checkpoints signed by a
+# previous run and then try to verify them with the new public key.
+rm /usr/inferno/audit/log >[2] /dev/null
 mkdir -p /mnt/audit
 mount {auditfs} /mnt/audit
 sleep 1

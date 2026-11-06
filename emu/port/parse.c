@@ -37,6 +37,9 @@ parsecmd(char *p, int n)
 	int nf;
 	char *sp;
 
+	if(up != nil && (uint)n > READSTR)
+		error("control message too big");
+
 	nf = ncmdfield(p, n);
 
 	/* allocate Cmdbuf plus string pointers plus copy of string including \0 */

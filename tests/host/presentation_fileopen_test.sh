@@ -161,7 +161,9 @@ else
         || fail "plumbed Markdown did NOT become a markdown artifact"
     # the data is the file whole, less the final newline (one write's
     # trailing newline is not the data's)
-    want=$(head -c -1 "$ROOT/README.md" | md5sum | cut -d' ' -f1)
+    nbytes=$(wc -c < "$ROOT/README.md")
+    nbytes=$((nbytes - 1))
+    want=$(dd if="$ROOT/README.md" bs=1 count="$nbytes" 2>/dev/null | md5sum | cut -d' ' -f1)
     section R_MD_BEGIN R_MD_END | grep -q "^MD5 $want" \
         && pass "plumbed Markdown's data is the whole file (README.md, several 9P messages)" \
         || fail "plumbed Markdown's data is not the file ($(section R_MD_BEGIN R_MD_END | grep MD5), want $want)"

@@ -6,7 +6,7 @@ implement Speechfake;
 #
 #	speechfake mountpoint [scriptfile]
 #
-#	ctl	start, end, cancel, voice v, lang l; read: name fake,
+#	ctl	start, end, cancel, voice v, lang l, model m; read: name fake,
 #		rate 16000, voice, lang, and what the last utterance
 #		brought: heard <ms> of audio, peak <sample>, starts,
 #		cancels
@@ -50,6 +50,7 @@ readers: list of ref Reader;
 script: list of string;
 voice := "fake";
 lang := "en";
+model := "none";
 active := 0;
 heardbytes := 0;
 lastheard := 0;
@@ -103,8 +104,8 @@ serve(ctl, audio, text, tts, voices: ref Sys->FileIO)
 	(off, nil, nil, rc) := <-ctl.read =>
 		if(rc != nil)
 			rc <-= (slice(array of byte sys->sprint(
-				"name fake\nrate %d\nvoice %s\nlang %s\nheard %d\npeak %d\nstarts %d\ncancels %d\n",
-				Rate, voice, lang, lastheard, lastpeak, starts, cancels), off), nil);
+				"name fake\nrate %d\nvoice %s\nlang %s\nmodel %s\nheard %d\npeak %d\nstarts %d\ncancels %d\n",
+				Rate, voice, lang, model, lastheard, lastpeak, starts, cancels), off), nil);
 	(nil, data, nil, wc) := <-ctl.write =>
 		if(wc != nil)
 			wc <-= ctlwrite(string data);
@@ -207,6 +208,10 @@ ctlwrite(s: string): (int, string)
 		if(tl f == nil)
 			return (0, "lang what");
 		lang = hd tl f;
+	"model" =>
+		if(tl f == nil)
+			return (0, "model what");
+		model = hd tl f;
 	* =>
 		return (0, "unknown ctl " + hd f);
 	}

@@ -910,6 +910,22 @@ panelspeech()
 	btn("spvb", "Set the voice", "spvoice");
 	plainentry("spl", "Language", speechval(st, "lang"));
 	btn("splb", "Set the language", "splang");
+	# the engine's own models, where it has them (#W built with whisper.cpp)
+	if(hasline(tread(eng + "/ctl", Waitfile), "stt whisper")){
+		speechmodels = modelfiles();
+		cur := speechval(st, "model");
+		if(speechmodels == nil)
+			lbl("spm", "No recognition model fetched (tools/speech-models.sh, on the host).");
+		else{
+			lbl("spml", "Recognition model (/lib/speech/models):");
+			for(i := 0; i < len speechmodels; i++){
+				t := speechmodels[i];
+				if(t == cur)
+					t += " (in use)";
+				btn("spm" + string i, t, "spmodel " + string i);
+			}
+		}
+	}
 	if(speechval(st, "duplex") == "full"){
 		lbl("spds", "It listens while it speaks (echo cancelled).");
 		btn("spd", "Do not listen while speaking", "spduplex");
@@ -952,6 +968,52 @@ speechset(k, v: string)
 		setpanellbl("spres", k + ": " + e);
 	else
 		setpanellbl("spres", k + " is " + v);
+}
+
+speechmodels: array of string;
+
+# the models fetched for the engine's recogniser
+modelfiles(): array of string
+{
+	fd := sys->open("/lib/speech/models", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	l: list of string;
+	n := 0;
+	for(;;){
+		(k, d) := sys->dirread(fd);
+		if(k <= 0)
+			break;
+		for(i := 0; i < k; i++)
+			if(len d[i].name > 4 && d[i].name[len d[i].name-4:] == ".bin"){
+				l = d[i].name :: l;
+				n++;
+			}
+	}
+	a := array[n] of string;
+	for(; l != nil; l = tl l)
+		a[--n] = hd l;
+	return a;
+}
+
+hasline(s, line: string): int
+{
+	(nil, l) := sys->tokenize(s, "\n");
+	for(; l != nil; l = tl l)
+		if(hd l == line)
+			return 1;
+	return 0;
+}
+
+speechmodel(i: int)
+{
+	if(i < 0 || i >= len speechmodels)
+		return;
+	if((e := twrite("/mnt/speech/ctl", "model " + speechmodels[i], Waitfile)) != nil){
+		setpanellbl("spres", "model: " + e);
+		return;
+	}
+	buildpanel(CatSpeech);
 }
 
 speechduplex()
@@ -1331,6 +1393,7 @@ handleaction(a: string)
 	"splang" =>	speechset("lang", eget(".content.spl"));
 	"spduplex" =>	speechduplex();
 	"spagentmic" =>	speechagentmic();
+	"spmodel" =>	speechmodel(arg);
 	"sptest" =>	speechtest();
 	"snapenable" =>	dosnapenable();
 	"snapdisable" =>	dosnapdisable();

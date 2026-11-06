@@ -166,7 +166,7 @@ a read of it gives
 .I n
 on its first line.
 The stream's directory,
-.BI mix/ nR,
+.BI mix/ n\fR,
 holds
 .B data
 and

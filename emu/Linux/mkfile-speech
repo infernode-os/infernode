@@ -1,0 +1,18 @@
+# The speech engine built in (#W, devspeech.c), for both GUI backends.
+# Same conditional pattern as libfido2: each half is built in only where
+# its library is present, so a host without them still builds an emu
+# whose #W says stt none / tts none.
+#
+# flite (BSD-style licence; apt install flite1-dev): synthesis, linked
+# statically so the emulator does not need it at run time (its ALSA
+# player, never used here, wants libasound).
+FLITE_CFLAGS=`if test -f /usr/include/flite/flite.h; then echo -DHAVE_FLITE; fi`
+FLITE_LIBS=`if test -f /usr/include/flite/flite.h; then echo -Wl,-Bstatic -lflite_cmu_us_slt -lflite_cmu_us_rms -lflite_cmu_us_awb -lflite_cmu_us_kal16 -lflite_usenglish -lflite_cmulex -lflite -Wl,-Bdynamic; if ls /usr/lib/*/libasound.so.2 >/dev/null 2>&1; then echo -l:libasound.so.2; fi; fi`
+# whisper.cpp (MIT): recognition, where it is installed with its
+# pkg-config file (cmake --install of whisper.cpp; set PKG_CONFIG_PATH
+# to its lib/pkgconfig).  It is C++: libstdc++ comes with it.
+WHISPER_CFLAGS=`if pkg-config --exists whisper 2>/dev/null; then echo -DHAVE_WHISPER; pkg-config --cflags whisper; fi`
+WHISPER_LIBS=`if pkg-config --exists whisper 2>/dev/null; then pkg-config --libs --static whisper; echo -lstdc++; fi`
+
+SPEECHFLAGS=$FLITE_CFLAGS $WHISPER_CFLAGS
+SPEECHLIBS=$WHISPER_LIBS $FLITE_LIBS

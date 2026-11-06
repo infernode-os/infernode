@@ -1,0 +1,4 @@
+whisper.cpp's models for the emulator's own speech engine (#W,
+devspeech; speech(4)).  None is in the tree: tools/speech-models.sh
+fetches them, each checked against a pinned SHA-256.  The engine names
+a model from this directory alone (its ctl's model m).

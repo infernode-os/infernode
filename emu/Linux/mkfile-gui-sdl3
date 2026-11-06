@@ -20,5 +20,7 @@ SDL3_LIBS=-L/usr/local/lib -lSDL3
 FIDO2_CFLAGS=`if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; fi`
 FIDO2_LIBS=`if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; fi`
 
-GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $FIDO2_CFLAGS
-GUILIBS=$SDL3_LIBS $FIDO2_LIBS
+<mkfile-speech
+
+GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $FIDO2_CFLAGS $SPEECHFLAGS
+GUILIBS=$SDL3_LIBS $FIDO2_LIBS $SPEECHLIBS

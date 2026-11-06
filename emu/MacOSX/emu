@@ -26,6 +26,7 @@ dev
 	mem
 	tfa	fido2bridge
 	location	locationbridge-stub
+	speech
 
 lib
 	interp

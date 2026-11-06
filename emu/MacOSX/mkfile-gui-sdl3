@@ -33,5 +33,14 @@ OPUS_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists opus 2
 FIDO2_CFLAGS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; elif test -f $HOMEBREW/include/fido.h; then echo "-DHAVE_FIDO2 -I$HOMEBREW/include"; fi`
 FIDO2_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; elif test -f $HOMEBREW/include/fido.h; then echo "-L$HOMEBREW/lib -lfido2"; fi`
 
-GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $OPUS_CFLAGS $FIDO2_CFLAGS
-GUILIBS=$SDL3_LIBS $OPUS_LIBS $FIDO2_LIBS
+# The speech engine built in (#W, devspeech.c), each half only where its
+# library is: flite for synthesis (brew install flite), whisper.cpp for
+# recognition (brew install whisper-cpp, or its cmake install with
+# PKG_CONFIG_PATH set).  Without them #W says stt none / tts none.
+FLITE_CFLAGS=`if test -f $HOMEBREW/include/flite/flite.h; then echo "-DHAVE_FLITE -I$HOMEBREW/include"; fi`
+FLITE_LIBS=`if test -f $HOMEBREW/include/flite/flite.h; then echo "-L$HOMEBREW/lib -lflite_cmu_us_slt -lflite_cmu_us_rms -lflite_cmu_us_awb -lflite_cmu_us_kal16 -lflite_usenglish -lflite_cmulex -lflite"; fi`
+WHISPER_CFLAGS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists whisper 2>/dev/null; then echo -DHAVE_WHISPER; pkg-config --cflags whisper; fi`
+WHISPER_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists whisper 2>/dev/null; then pkg-config --libs whisper; echo -lc++; fi`
+
+GUIFLAGS=-DGUI_SDL3 $SDL3_CFLAGS $OPUS_CFLAGS $FIDO2_CFLAGS $FLITE_CFLAGS $WHISPER_CFLAGS
+GUILIBS=$SDL3_LIBS $OPUS_LIBS $FIDO2_LIBS $WHISPER_LIBS $FLITE_LIBS

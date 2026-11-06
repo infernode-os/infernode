@@ -121,7 +121,7 @@ has ctl.asking '^asked 1' && has ctl.asking '^talk off' && pass "ctl: asked 1, t
 [ "$(f ask.words)" = "what time is it" ] && pass "ask: the words of what the user said after it" || fail "ask gave '$(f ask.words)'"
 [ ! -s "$T/ask.earlier" ] && pass "ask: an utterance begun before it is not given to it" || fail "ask was given '$(f ask.earlier)'"
 [ "$(f ask.open)" = "agent opened" ] && pass "agentmic on: an ask opens the microphone itself" || fail "agentmic on: ask gave '$(f ask.open)'"
-grep -qx 'voice fakevoice' "$T/settings.kept" && grep -qx 'lang fr' "$T/settings.kept" &&
+grep -qx 'voice fakevoice' "$T/settings.kept" && grep -qx 'lang fr' "$T/settings.kept" && grep -qx 'model ggml-tiny.en.bin' "$T/settings.kept" &&
 	grep -qx 'duplex full' "$T/settings.kept" && grep -qx 'agentmic on' "$T/settings.kept" &&
 	pass "the settings kept in the settings file" || fail "settings file: $(f settings.kept | tr '\n' '|')"
 cp "$T/settings.kept" "$T/settings.again"
@@ -130,8 +130,8 @@ INFERNODE_AUDIO_FAKE=1 SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c1 -r"$ROOT
 	</dev/null >"$ROOT/$T/log.second" 2>&1 || true
 has ctl.second '^voice fakevoice' && has ctl.second '^lang fr' && has ctl.second '^duplex full' && has ctl.second '^agentmic on' &&
 	pass "a speech9p started again has them" || fail "the second speech9p: $(f ctl.second | tr '\n' '|')"
-has second.engine '^voice fakevoice' && has second.engine '^lang fr' &&
-	pass "and gives the engine the voice and language before an utterance" || fail "the engine after: $(f second.engine | tr '\n' '|')"
+has second.engine '^voice fakevoice' && has second.engine '^lang fr' && has second.engine '^model ggml-tiny.en.bin' &&
+	pass "and gives the engine the voice, language and model before an utterance" || fail "the engine after: $(f second.engine | tr '\n' '|')"
 grep -qx 'agentmic off' "$T/settings" && pass "agentmic back off, kept" || fail "settings at the end: $(f settings | tr '\n' '|')"
 
 [ "$(f voices)" = "fake" ] && pass "voices are the engine's" || fail "voices: $(f voices)"

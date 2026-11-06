@@ -32,6 +32,14 @@ infmobile = 1
 mkdir /phone >[2] /dev/null
 bind -a '#f' /phone >[2] /dev/null
 
+# ── Speech: the emulator's own engine ────────────────────────
+# A phone has no host programs for speechcmd(4) to run, so speech(4)'s
+# engine is #W (devspeech) whenever it has anything built in, though
+# the profile chose the host's (hosttype is Linux here).
+if {grep -s '^(stt whisper|tts flite)' '#W/ctl' >[2] /dev/null} {
+	echo engine '#W' > /mnt/speech/ctl >[2] /dev/null
+}
+
 # Bigger fonts for phone screens.
 #
 # Lucifer and most UI elements (wm/shell, wm/editor, acme, xenith,

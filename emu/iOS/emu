@@ -25,6 +25,7 @@ dev
 	mem
 	phone	phonebridge
 	location	locationbridge
+	speech
 
 lib
 	interp

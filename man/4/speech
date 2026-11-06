@@ -117,8 +117,9 @@ The engine's voices.
 .B ctl
 .BI "engine " dir\fR,
 .BI "voice " v\fR,
-.BI "lang " l
-(the last two passed to the engine),
+.BI "lang " l\fR,
+.BI "model " m
+(the last three passed to the engine),
 .B "duplex half"
 or
 .BR full ,
@@ -144,10 +145,10 @@ or
 .BR missing ),
 the settings file, the states of talk and speaking, and how many asks
 wait.
-The voice, language, duplex and agentmic are kept in the settings file
+The voice, language, model, duplex and agentmic are kept in the settings file
 .RI ( settingsfile ,
 or
-.BI /usr/ user /lib/speechR),
+.BI /usr/ user /lib/speech\fR),
 as ctl lines, read when
 .I speech9p
 starts and written whenever one is set; they are given to the engine
@@ -221,8 +222,11 @@ rate.
 .B voices
 A voice a line.
 .PP
-An engine can be anything that serves these files: one built into the
-emulator, a desktop's own programs
+An engine can be anything that serves these files: the one built into
+the emulator
+.RI ( speech (3),
+.BR #W ),
+a desktop's own programs
 .RI ( speechcmd ,
 below), or a machine elsewhere, its engine mounted over authenticated
 9P, which is how a device without the computing for recognition (a
@@ -267,7 +271,8 @@ cannot choose what runs on the host.
 .PP
 The boot profile
 .RB ( /lib/sh/profile )
-starts both on a desktop.
+starts both on a desktop, unless the emulator's own engine can hear,
+when it is the engine instead.
 .SH EXAMPLE
 Say something, and listen to what is said:
 .IP
@@ -321,12 +326,15 @@ A path grant of /mnt/speech gives nothing.
 .B /appl/veltro/tools/hear.b
 .SH SEE ALSO
 .IR dictate (1),
+.IR speech (3),
 .IR audio (3),
 .IR wm-dialpad (1),
 .IR dialspeech (2)
 .SH BUGS
-There is no engine built into the emulator yet, so a phone has speech
-only from an engine mounted from elsewhere.
+A phone has speech of its own only where its emulator was built with
+whisper.cpp and flite
+.RI ( speech (3));
+otherwise from an engine mounted from elsewhere.
 .br
 Every reader of
 .B listen

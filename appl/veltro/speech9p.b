@@ -73,6 +73,7 @@ mountpt := "/mnt/speech";
 engine := "/mnt/speechengine";
 voice := "";
 lang := "";
+model := "";		# the recogniser's, for an engine that has models (#W)
 duplex := "half";
 agentmic := 0;		# may an ask turn talk on itself
 settings := "";
@@ -444,6 +445,8 @@ ctlstatus(): string
 		s += "voice " + voice + "\n";
 	if(lang != nil)
 		s += "lang " + lang + "\n";
+	if(model != nil)
+		s += "model " + model + "\n";
 	s += "duplex " + duplex + "\n";
 	s += "agentmic " + onoff(agentmic) + "\n";
 	s += "settings " + settings + "\n";
@@ -459,7 +462,7 @@ ctlwrite(s: string): string
 	if(n == 0)
 		return nil;
 	if(n != 2)
-		return "speech: ctl is engine dir, voice v, lang l, duplex half|full or agentmic off|on";
+		return "speech: ctl is engine dir, voice v, lang l, model m, duplex half|full or agentmic off|on";
 	v := hd tl f;
 	case hd f {
 	"engine" =>
@@ -477,6 +480,12 @@ ctlwrite(s: string): string
 		if((e := enginectl("lang " + v)) != nil)
 			return e;
 		lang = v;
+	"model" =>
+		if(!safename(v))
+			return "speech: a model is a name";
+		if((e := enginectl("model " + v)) != nil)
+			return e;
+		model = v;
 	"duplex" =>
 		if(v != "half" && v != "full")
 			return "speech: duplex is half or full";
@@ -512,6 +521,9 @@ loadsettings()
 		"lang" =>
 			if(safename(v))
 				lang = v;
+		"model" =>
+			if(safename(v))
+				model = v;
 		"duplex" =>
 			if(v == "half" || v == "full")
 				duplex = v;
@@ -528,6 +540,8 @@ savesettings(): string
 		s += "voice " + voice + "\n";
 	if(lang != nil)
 		s += "lang " + lang + "\n";
+	if(model != nil)
+		s += "model " + model + "\n";
 	s += "duplex " + duplex + "\n";
 	s += "agentmic " + onoff(agentmic) + "\n";
 	fd := sys->create(settings, Sys->OWRITE, 8r600);
@@ -553,6 +567,8 @@ syncengine()
 		enginectl("voice " + voice);
 	if(lang != nil)
 		enginectl("lang " + lang);
+	if(model != nil)
+		enginectl("model " + model);
 }
 
 safename(s: string): int

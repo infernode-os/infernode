@@ -138,6 +138,7 @@ echo R ask.open
 # emulator of its own: sh keeps a module it has loaded, globals and all)
 echo voice fakevoice > /mnt/speech/ctl
 echo lang fr > /mnt/speech/ctl
+echo model ggml-tiny.en.bin > /mnt/speech/ctl
 echo duplex full > /mnt/speech/ctl
 cp /tmp/settings /tmp/settings.kept
 echo agentmic off > /mnt/speech/ctl

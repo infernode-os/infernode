@@ -1,0 +1,139 @@
+.TH SPEECH 3
+.SH NAME
+speech \- the emulator's own speech engine
+.SH SYNOPSIS
+.nf
+.B bind -a #W /mnt/speechengine
+.sp 0.3v
+.B #W/ctl
+.B #W/audio
+.B #W/text
+.B #W/tts
+.B #W/voices
+.fi
+.SH DESCRIPTION
+The device is an engine of
+.IR speech (4):
+it serves the files that interface asks of one, so
+.I speech9p
+can use it
+.RB ( "speech9p -E '#W'" ,
+or its ctl's
+.BR "engine #W" )
+on a machine with no host program to hear or speak for it, a phone
+among them.
+.TP
+.B ctl
+.BR start ,
+.B end
+and
+.B cancel
+bracket an utterance;
+.BI "voice " v
+(one of
+.BR voices ),
+.BI "lang " l
+and
+.BI "model " m\fR.
+A read gives
+.BR "name native" ,
+.B "rate 16000"
+(the rate of
+.BR tts 's
+sound),
+.B stt
+and
+.BR tts ,
+each the engine built in
+.RB ( whisper ,
+.BR flite )
+or
+.BR none ,
+the model and whether it is loaded, the voice, the language, and how
+many utterances and finals there have been.
+.TP
+.B audio
+The utterance's sound, written between
+.B start
+and
+.BR end :
+16 kHz, mono, 16-bit little-endian; a minute of it at most.
+.TP
+.B text
+Records, a line each, to every reader from its open on:
+.BI "final confidence=" n " " words
+when an utterance's end has been recognised, or
+.BI "error " reason\fR.
+There are no partials.
+.TP
+.B tts
+Write text, at most 4096 bytes; then read its sound on the same open
+file to end of file: 16 kHz, mono, 16-bit little-endian.
+The reads follow on from the write, whatever their offset.
+.TP
+.B voices
+The voices built in, a line each.
+.PP
+Recognition is whisper.cpp's, on the utterance once it has ended, in a
+process of its own, so
+.B end
+returns at once and its final comes when it is done.
+A model is a file of
+.B /lib/speech/models
+named by
+.BR model ,
+loaded at the first utterance after it is set
+.RB ( ggml-base.en.bin
+unless set).
+None is in the tree:
+.B tools/speech-models.sh
+fetches them, each checked against a SHA-256 it pins.
+A model is a name of letters, digits,
+.BR . ,
+.B -
+and
+.B _
+only, so whoever holds
+.B ctl
+cannot have the device read anything else.
+.PP
+Synthesis is flite's, with its voices
+.B slt
+(the default),
+.BR rms ,
+.B awb
+and
+.BR kal16 .
+.PP
+Each half is built in only where its library is when the emulator is
+built (whisper.cpp's pkg-config file; flite's headers).
+Without one,
+.B ctl
+says
+.B none
+for it; an utterance's end gives
+.BR "error no recogniser built in" ,
+and a write of
+.B tts
+is refused.
+The boot profile makes the device
+.IR speech (4)'s
+engine when it can hear; a phone's boot makes it the engine whenever
+it has either half.
+.SH SOURCE
+.B /emu/port/devspeech.c
+.br
+.B /tools/speech-models.sh
+.SH SEE ALSO
+.IR audio (3),
+.IR speech (4),
+.IR dictate (1)
+.SH BUGS
+Recognition gives finals only, after the utterance, not words as they
+are said.
+.br
+One utterance is recognised at a time; an end while one is being
+recognised gives
+.BR "error the recogniser is busy" .
+.br
+The phone builds do not yet build whisper.cpp or flite in.

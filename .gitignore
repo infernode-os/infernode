@@ -384,3 +384,5 @@ LICENCE.broadcom
 # agentloop_characterization_test.sh scratch (removed when the test exits)
 /usr/agentloop/
 /tests/inferno/.agentloop-char.*
+lib/speech/models/*.bin
+lib/speech/models/.*.part

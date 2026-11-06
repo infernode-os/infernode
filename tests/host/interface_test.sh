@@ -16,6 +16,10 @@
 #     shown by a touch (wm/osk, as the boot starts it): the picker above
 #     its strip, a touch on Desktop choosing it, a word tapped on the
 #     keys going to the field, the keyboard still shown
+#   - a password: set on the first boot with Desktop chosen, a key put
+#     in factotum and saved to secstore; the next boot, Lucia chosen,
+#     unlocks with it and has the key; a wrong one refused (factotum
+#     still empty) and the right one after it taken
 #   - with $skiplogon the boot starts Lucia whatever was chosen;
 #     $interface starts that one; a phone ($infmobile) has Lucia alone
 #
@@ -130,6 +134,13 @@ boot skip 'phase=which; skiplogon=1;'
 boot override 'phase=which; skiplogon=1; interface=Desktop;'
 boot phone 'phase=which; skiplogon=1; interface=Desktop; infmobile=1;'
 
+# a password, in a home where none was set
+home=home3
+mkdir -p "$ROOT/$T/$home"
+boot setpw 'phase=setpw;'
+boot unlock 'phase=unlock;'
+boot retry 'phase=retry;'
+
 # at the Pi's panel, the keyboard on the screen shown; a home where
 # nothing was chosen yet
 TW=800
@@ -146,6 +157,10 @@ check $? "a touch shows the keyboard (a strip of ${KH:-0}) and the picker above 
 boot touch "phase=touch; x=$TX; y=$TY;" ${TW}x$TH
 [ "$(sed -n 's/^state //p' "$ROOT/$T/status.keyed")" = shown ]
 check $? 'the keyboard still shown after the picker and its keys are touched'
+
+# the checks: each says what it found, and one failing does not stop
+# the rest
+set +e
 
 python3 - "$ROOT" "$T" "$W" "$PY0" "$PY1" "$FY" <<'PY' || failed=1
 import sys, os
@@ -206,7 +221,13 @@ has pick '^R windows 2$'; check $? 'a file plumbed on the Desktop opens in a win
 has skip '^R started Lucia$'; check $? 'with $skiplogon the boot starts Lucia, whatever was chosen'
 has override '^R started Desktop$'; check $? '$interface starts the interface it names'
 has phone '^R started Lucia$'; check $? 'a phone ($infmobile) has Lucia alone'
-for b in pick again skip override phone shown touch; do
+has setpw 'boot: logged in' && has setpw 'boot: interface Desktop' && [ "$(grep '^R key' "$ROOT/$T/setpw.log" | tr '\n' ' ')" = 'R key no R key yes ' ]
+check $? 'a password set on the first boot logs in to the Desktop, and a key added there is in factotum'
+has unlock 'logon: loaded 1 keys from secstore' && has unlock 'boot: interface Lucia' && has unlock '^R key yes$'
+check $? 'the next boot, Lucia chosen, unlocks with the password and has the key back from secstore'
+[ "$(sed -n '/^R_WAITING/{n;p;}' "$ROOT/$T/retry.log")" = 'R key no' ] && has retry 'boot: logged in' && [ "$(grep '^R key' "$ROOT/$T/retry.log" | tail -1)" = 'R key yes' ]
+check $? 'a wrong password is refused (factotum empty while the screen waits), the right one after it taken'
+for b in pick again skip override phone shown touch setpw unlock retry; do
 	if grep -q 'R timeout' "$ROOT/$T/$b.log"; then
 		echo "FAIL: the $b boot timed out: $(grep 'R timeout' "$ROOT/$T/$b.log")"
 		failed=1

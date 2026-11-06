@@ -16,6 +16,14 @@
 #		boot starts it for the login screen)
 #	touch	that, then the interface chosen by a touch at $x $y and
 #		a word tapped on the keyboard's keys
+#	setpw	the first boot's password set (typed twice) with Desktop
+#		chosen; a key added to factotum and saved to secstore
+#	unlock	the password typed with Lucia chosen
+#	retry	a wrong password typed, then the right one
+#
+# For the three with a password the driver reports whether factotum
+# holds the key (R key yes|no) once the interface has started, and for
+# retry also while the screen waits after the wrong one.
 #
 # A touch is what the screen sends for one: a finger down and up on
 # /dev/fingers with a pointer press and release between.
@@ -39,6 +47,10 @@ fn touch {
 	echo m $1 $2 1 > /dev/pointer
 	echo m $1 $2 0 > /dev/pointer
 	echo f0 $1 $2 0 > /dev/fingers
+}
+fn typeline { echo -n $1 > /dev/keyboard; sleep 1; echo > /dev/keyboard }
+fn haskey {
+	if {grep -s 'service=infernode-interface-test' /mnt/factotum/ctl} {echo R key yes} {echo R key no}
 }
 fn tapkey {
 	# (the pattern made outside the backquote: in its block $1 is empty)
@@ -90,6 +102,43 @@ if {~ $phase touch} {
 	for k in h u n t {tapkey $k}
 	shot keyed
 	cat /mnt/osk/status > /tmp/status.keyed
+}
+PW=hunter2
+if {~ $phase setpw} {
+	sleep 10
+	unicode -t e013 > /dev/keyboard
+	typeline $PW
+	sleep 2
+	typeline $PW
+	waitfor desktop {ftest -e /chan/wmwindows}
+	haskey
+	echo 'key proto=pass service=infernode-interface-test user=tester !password=s3cret' > /mnt/factotum/ctl
+	echo sync > /mnt/factotum/ctl
+	haskey
+	# Saved once secstored has written it: the sync returns when the
+	# key is sent, and secstored truncates the file before it writes, so
+	# halting at once could leave the store empty (the next boot then
+	# loads no keys).
+	waitfor saved {ftest -s /usr/inferno/secstore/^`{cat /dev/user}^/factotum}
+}
+if {~ $phase unlock} {
+	sleep 10
+	unicode -t e012 > /dev/keyboard
+	typeline $PW
+	waitfor lucia {ftest -e /mnt/ui/ctl}
+	haskey
+}
+if {~ $phase retry} {
+	sleep 10
+	typeline wrongpass
+	sleep 6
+	echo R_WAITING
+	haskey
+	echo > /dev/keyboard
+	sleep 1
+	typeline $PW
+	waitfor lucia {ftest -e /mnt/ui/ctl}
+	haskey
 }
 if {~ $phase which} {
 	waitfor interface {or {ftest -e /chan/wmwindows} {ftest -e /mnt/ui/ctl}}

@@ -80,6 +80,11 @@ f(n: int): int
 	a5 := 16r46464646 + n;
 	a6 := 16r47474747 + n;
 	a7 := 16r48484848 + n;
+	# a backward branch: compiled code ends its time slice only at one,
+	# and with none but the victim's outer loop a slice lasted 2048
+	# runs of f(300) (the test ran past the runner's 900s on Linux ARM64)
+	for(j := 0; j < 1; j++)
+		;
 	if(n <= 0)
 		return a0;
 	r: int;
@@ -129,11 +134,14 @@ kill(pid: int): int
 }
 
 Nkills: con 3000;
+Budget: con 120*1000;	# ms: a slow machine stops early, saying how far it got
 
 testKilledAnywhere(t: ref T)
 {
 	pidc := chan of int;
-	for(i := 0; i < Nkills; i++){
+	t0 := sys->millisec();
+	i: int;
+	for(i = 0; i < Nkills && sys->millisec() - t0 < Budget; i++){
 		spawn victim(pidc, i);
 		pid := <-pidc;
 		# let it run a slice or a few: it is ready, not running, when
@@ -144,6 +152,8 @@ testKilledAnywhere(t: ref T)
 			t.fatal(sys->sprint("kill %d: %r", pid));
 	}
 	# and the VM still runs Limbo
+	t.log(sys->sprint("%d kills in %dms", i, sys->millisec() - t0));
+	t.assert(i >= 100, sys->sprint("killed %d times within the budget", i));
 	t.asserteq(f(10), f(10), "the recursion after the kills");
 }
 

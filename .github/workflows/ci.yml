@@ -1725,10 +1725,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The GUI tests are split between two Apple silicon runners, as
+          # the Linux GUI job's parts are: run after the suite in one job,
+          # wm's and osk's together ran past its 75 minutes, and from
+          # 2026-11-05 every run on master was cancelled in them.  gui
+          # names the half each runs; the osk half runs nothing else.
           - arch: arm64
             label: ARM64
             runner: macos-15
             backstop: 1500  # the suite runs interpreted here (no -c1)
+            gui: wm
+          - arch: arm64
+            label: ARM64 GUI (osk)
+            runner: macos-15
+            backstop: 1500
+            gui: osk
           # Intel Macs (#786).  macos-15-intel is GitHub's last Intel
           # macOS image; the job goes when it does.
           - arch: amd64
@@ -1893,6 +1904,7 @@ jobs:
         fi
 
     - name: Run memdraw rasteriser and fast-path checks
+      if: matrix.gui != 'osk'
       run: |
         # libmemdraw/aatest.c: exact coverage, fill rules, strokes, and the
         # special cases (coverdraw, blenddraw) against the general alphadraw
@@ -1903,6 +1915,7 @@ jobs:
         ROOT=. sh tests/host/aa_test.sh
 
     - name: Run sh script-execution check
+      if: matrix.gui != 'osk'
       run: |
         # A script without the execute bit must be reported as such,
         # not as a missing .dis module (what Xenith's B2 showed), and
@@ -1913,6 +1926,7 @@ jobs:
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run test suite
+      if: matrix.gui != 'osk'
       run: |
         # Create /tmp inside Inferno root for tmp_writable test
         mkdir -p tmp
@@ -1953,11 +1967,13 @@ jobs:
         fi
 
     - name: Run port verification
+      if: matrix.gui != 'osk'
       run: |
         chmod +x verify-port.sh
         ./verify-port.sh
 
     - name: Run JIT fault and bounds tests (JIT and interpreter)
+      if: matrix.gui != 'osk'
       run: |
         # Gating, unlike the suite above: faults raised from compiled
         # code must be the interpreter's exceptions, caught by the
@@ -1970,6 +1986,7 @@ jobs:
         ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
+      if: matrix.gui != 'osk'
       run: |
         # Decompose sees values derived from the signing key, so it must
         # not divide (a hardware divide's time depends on its operands;
@@ -1978,6 +1995,7 @@ jobs:
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
     - name: Run wallet and secstore integration tests
+      if: matrix.gui != 'osk'
       run: |
         echo "Running host-side integration tests..."
 
@@ -2017,7 +2035,7 @@ jobs:
 
     - name: Upload macOS build artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      if: success()
+      if: success() && matrix.gui != 'osk'
       with:
         name: infernode-macos-${{ matrix.arch }}
         path: |
@@ -2033,7 +2051,7 @@ jobs:
     # own: macos-15 runners are scarce at busy hours, and a job left
     # queued for one is cancelled.
     - name: Build SDL3 GUI emulator
-      if: matrix.arch == 'arm64'
+      if: matrix.gui != ''
       run: |
         export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         (cd libfreetype && mk install) || true
@@ -2045,14 +2063,19 @@ jobs:
         nm o.emu | grep -q sdl3_mainloop || { echo "o.emu is not the SDL3 build"; exit 1; }
 
     - name: Run GUI tests
-      if: matrix.arch == 'arm64'
+      if: matrix.gui != ''
       env:
         SDL_VIDEODRIVER: dummy
+        GUI: ${{ matrix.gui }}
       run: |
-        # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
-        # here (77).
+        # As the Linux GUI job's wm and osk parts; wm_cursor_test needs
+        # LD_PRELOAD and skips here (77).
+        case $GUI in
+        wm)	tests="wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
+        osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test" ;;
+        esac
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test llmsetup_phone_test; do
+        for t in $tests; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

@@ -803,9 +803,11 @@ wakeup(Rendez *r)
 		r->p = nil;
 		if(p->state != Wakeme)
 			panic("wakeup: state");
-		ready(p);
 	}
 	unlock(&r->l);
+	/* The awakened process can run now: hands off r before ready(). */
+	if(p)
+		ready(p);
 	splx(s);
 	return p != nil;
 }
@@ -829,7 +831,12 @@ swiproc(Proc *p, int interp)
 		if(r->p == p){
 			p->swipend = 1;
 			r->p = nil;
+			unlock(&r->l);
+			unlock(&p->rlock);
+			/* The interrupted process can run now: hands off r and p. */
 			ready(p);
+			splx(s);
+			return;
 		}
 		unlock(&r->l);
 	}else if(interp && p->iprog != nil){

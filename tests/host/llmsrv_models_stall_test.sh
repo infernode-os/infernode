@@ -57,8 +57,15 @@ sleep 2
 cat /mnt/llm/models > /dev/null &
 sleep 1
 # llmsrv answers while that read waits
-{ cat /mnt/llm/new > /dev/null; echo R answered } &
-sleep 3
+rm -f /tmp/llmsrv-answered
+{ cat /mnt/llm/new > /dev/null; echo R answered; echo yes > /tmp/llmsrv-answered } &
+# A single-CPU emulator can take several seconds to schedule the network
+# reader and the independent 9P request.  Wait for the result, not a fixed
+# three-second race; the backend remains stalled for the whole test.
+for (i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15) {
+	if {ftest -f /tmp/llmsrv-answered} { break }
+	sleep 1
+}
 echo R done
 echo halt > '#c/sysctl'
 EOF

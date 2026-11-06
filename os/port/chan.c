@@ -99,20 +99,19 @@ kstrcpy(char *s, char *t, int ns)
 	if(s == nil || t == nil || ns <= 0)
 		return;
 	nt = strlen(t);
-	if(nt+1 <= ns){
-		memmove(s, t, nt+1);
+	if(nt < ns){
+		memmove(s, t, nt);
+		s[nt] = 0;
 		return;
 	}
-	/* too long */
-	if(ns < 4){
-		/* but very short! */
-		strncpy(s, t, ns);
+	/* too long: truncate, always leaving a terminator */
+	nt = ns-1;
+	memmove(s, t, nt);
+	s[nt] = 0;
+	if(ns < 4)
 		return;
-	}
 	/* truncate with ... at character boundary (very rare case) */
-	memmove(s, t, ns-4);
 	ns -= 4;
-	s[ns] = '\0';
 	/* look for first byte of UTF-8 sequence by skipping continuation bytes */
 	while(ns>0 && (s[--ns]&0xC0)==0x80)
 		;
@@ -688,9 +687,9 @@ cunmount(Chan *mnt, Chan *mounted)
 
 	/*
 	 * It _can_ happen that mounted->umh is non-nil, 
-	 * because mounted is the result of namec(Aopen)
+	 * because mounted is the result of namec(Aunmount)
 	 * (see sysfile.c:/^sysunmount).
-	 * If we open a union directory, it will have a umh.
+	 * A union directory preserves its walked Qid and its union head.
 	 * Although surprising, this is okay, since the
 	 * cclose will take care of freeing the umh.
 	 */
@@ -1517,6 +1516,16 @@ namec(char *aname, int amode, int omode, ulong perm)
 		putmhead(m);
 		break;
 
+	case Aunmount:
+		/*
+		 * A directory bind records the Qid returned by walk.  Opening it
+		 * here could substitute a server-specific Qid and make cunmount
+		 * miss the mount.  Non-directories still need open semantics for
+		 * indirections such as /srv/cs and /fd/0.
+		 */
+		if(!(c->qid.type & QTDIR))
+			goto Open;
+		/* fall through */
 	case Abind:
 		m = nil;
 		if(!nomount && domountc(&c, &m, nil))
@@ -1565,6 +1574,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 		case Aopen:
 		case Acreate:
+		case Aunmount:
 			if((c->mflag & MREADONLY) && mutatingmode(omode)){
 				putmhead(m);
 				error(Eperm);

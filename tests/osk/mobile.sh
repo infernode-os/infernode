@@ -35,3 +35,4 @@ for i in 1 2 {
 	snap hidden$i
 }
 echo R done
+echo halt > '#c/sysctl'

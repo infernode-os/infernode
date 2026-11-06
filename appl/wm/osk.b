@@ -687,7 +687,17 @@ pickfonts()
 	sfont = pickfont(rowh * 36 / 100, 0);
 }
 
-fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36};
+# Go's sizes, then DejaVu Sans's 48 (the phones' sizes: rows of 120
+# pixels on a phone's screen want labels of 54, and Go stops at 36,
+# which left them a third the height of the keys)
+fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36, 48};
+
+fontpath(size: int): string
+{
+	if(size > 36)
+		return sys->sprint("/fonts/combined/unicode.sans.%d.font", size);
+	return sys->sprint("/fonts/combined/go.%d.font", size);
+}
 
 pickfont(px, nil: int): ref Font
 {
@@ -695,7 +705,9 @@ pickfont(px, nil: int): ref Font
 	for(i := 0; i < len fontsizes; i++)
 		if(fontsizes[i] <= px)
 			best = fontsizes[i];
-	f := Font.open(display, sys->sprint("/fonts/combined/go.%d.font", best));
+	f := Font.open(display, fontpath(best));
+	if(f == nil && best > 36)
+		f = Font.open(display, fontpath(36));
 	if(f == nil)
 		f = Font.open(display, "*default*");
 	return f;

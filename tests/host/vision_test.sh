@@ -8,7 +8,7 @@
 #     classes, a session from clone, its settings as read, a picture
 #     written to image and its detections (and its layer), the same with
 #     a class filter, status and stats; refusals for an unknown model,
-#     class, setting and threshold, a feed (not served yet), a second load
+#     class, setting and threshold, a feed that is not there, a second load
 #     of one name, and a model whose weights are not the ones recorded;
 #     the session gone when its files are closed
 #   - the pipelines: vision/detect over a directory with two sessions at
@@ -117,7 +117,7 @@ has "an unknown model is refused" 'write error: no model nosuch'
 has "an unknown class is refused" 'write error: classes: m has no class unicorn'
 has "a threshold past 1 is refused" 'write error: thresh: a number from 0 to 1'
 has "an unknown setting is refused" 'write error: unknown setting colour'
-has "a feed is refused, saying why" 'write error: src: following a feed is not served yet'
+has "a feed that is not there is refused, saying why" 'write error: src: /mnt/video/0/fmt'
 sed -n '/^-- in the tree/,/^-- after/p' "$W/log" | grep -q '^/mnt/vision/1$' && ok "the session is in the tree" || bad "the session is not in the tree"
 sed -n '/^-- after/,/^-- detect/p' "$W/log" | grep -q '^/mnt/vision/1$' && bad "the session outlived its files" || ok "the session goes with its files"
 n=$(sed -n '/^-- detect/,/^-- draw/p' "$W/log" | grep -c '^file=')

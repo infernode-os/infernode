@@ -89,6 +89,17 @@ The session lasts while any of its files is open, this one included.
 .TP
 .IB N /ctl
 A setting a line, written as read:
+.BI src " feed"
+(a directory of the
+.IR vid9p (1)
+schema:
+.BR fmt ,
+.BR frame ,
+.BR status )
+or
+.BR "src none" ,
+.BI rate " fps"
+(frames a second at most; 0, as many as it can),
 .BI model " name" \fR,
 .B place cpu\fR,
 .BI thresh " r"
@@ -109,7 +120,17 @@ reads or a binary PPM, in as many writes as it takes from its start; it
 is looked at when the file is closed.
 .TP
 .IB N /detections
-What was found in the last picture, best first, one record a line:
+Following a feed, each read is one frame's records, every line beginning
+.BI frame= n
+.BI pts= ms\fR,
+a frame with nothing in it that alone; a read waits for the next frame,
+a reader that opens it late starts at the next frame, one that has fallen
+behind what is kept is first told
+.BI gap " n=k" \fR,
+and the end of the feed is the end of the file.
+The detector takes the newest frame each time it is ready for one and
+never holds the feed back; a clip that has ended is looked at whole.
+Otherwise, what was found in the last picture, best first, one record a line:
 .IP
 .EX
 class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
@@ -139,6 +160,20 @@ with
 when something is wrong.
 .TP
 .IB N /stats
+Following a feed:
+.BI in= n
+frames,
+.BI inferred= n
+looked at,
+.BI skipped= n
+not,
+.BI fps_infer= r\fR,
+.B ms_p50=
+and
+.B ms_p95=
+a frame,
+.BI readers= n\fR.
+Otherwise
 .BI images= n
 looked at,
 .BI found= n
@@ -175,8 +210,12 @@ On a machine with no model of its own, another's:
 .IR vision (1),
 .IR tensor (2)
 .SH BUGS
-Pictures only: following a video feed
-.RB ( src )
-is refused, saying so, until it is served.
 Only detectors of the YOLOX family are converted, and only the
 processor's engine is served here.
+A feed's frame numbers are its own only where its
+.B status
+counts them
+.RB ( frames= ,
+as
+.IR vid9p (1)'s
+does); elsewhere they are counted from the start of following.

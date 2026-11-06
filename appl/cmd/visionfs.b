@@ -10,19 +10,29 @@ implement Visionfs;
 #		models/NAME/classes	one class name a line
 #		clone		read: a new session's number, N
 #		N/ctl		rw model NAME | thresh R | iou R | classes A B ... | classes all
+#				   src FEED | src none | rate FPS
 #		N/image		w  one picture (JPEG, PNG, ..., a P6 PPM), in as many
 #				   writes as it takes; it is looked at when the file is closed
 #		N/detections	r  what was found, one record a line, best first:
 #				   class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
-#				   a read waits while the picture is looked at
+#				   a read waits while the picture is looked at.  Following
+#				   a feed, each read is one frame's records, each line
+#				   beginning frame=N pts=MS, a frame with nothing found
+#				   that alone; a read waits for the next frame
 #		N/layer/vision.N	the same, as a layer (#1095)
-#		N/status	state=idle|running|ready|error model=NAME [reason=...]
-#		N/stats		images= ms= found=
+#		N/status	state=idle|running|ready|following|ended|error model=NAME ...
+#		N/stats		images= ms= found=, or for a feed in= inferred= skipped= ...
 #
 # The models are vision(4) model directories (tools/vision/onnx2vis.py),
 # run by appl/lib/visnet.b on $Tensor. A session lasts while any of its
-# files is open. Each picture is looked at in a proc of its own, so one
-# session's picture never holds up another's, nor the server.
+# files is open. Each picture, and each feed, is looked at in a proc of
+# its own, so one session never holds up another, nor the server.
+#
+# A feed is a directory of the vid9p schema (fmt, frame, status):
+# vid9p(1)'s, camsrv(4)'s, or another machine's mounted. The detector
+# never holds the feed back: it takes the newest frame when it is ready
+# for one and counts the frames it never saw (skipped=); a clip that has
+# ended (eof=1) is looked at frame by frame, every one.
 #
 #	visionfs [-m mountpoint] [-s spec] [-S] [load NAME DIR]
 #
@@ -58,6 +68,8 @@ Qroot, Qctl, Qclone, Qmodels, Qmodel, Qminfo, Qmclasses,
 Qsess, Qsctl, Qsimage, Qsdet, Qsstatus, Qsstats, Qslayer, Qslayerf: con iota;
 
 Maximage: con 64*1024*1024;
+Ringsz: con 16;		# a feed's frames whose records are kept for readers behind
+Nms: con 64;		# the times kept for stats
 
 stderr: ref Sys->FD;
 user := "inferno";
@@ -85,12 +97,36 @@ Session: adt {
 	classes:	list of string;	# nil: all
 	state:	string;
 	err:	string;
+
+	# a picture
 	text:	string;			# the records
 	gen:	int;			# which picture's answer is wanted
 	reads:	list of (ref Styxserver, ref Tmsg.Read);
 	images:	int;
 	found:	int;
 	ms:	int;
+
+	# a feed
+	src:	string;
+	rate:	int;			# frames a second at most, 0 as many as it can
+	fgen:	int;			# which follower's frames are wanted
+	fpid:	int;
+	ring:	array of (int, string);	# the last frames' records, by sequence
+	nseq:	int;			# the next frame's sequence number
+	ended:	int;
+	nin, inferred, skipped:	int;
+	mss:	array of int;		# the last times taken
+	stamps:	array of int;		# when the last frames were done
+	nms:	int;
+};
+
+# a reader of a session's detections, with its place in a feed
+Freader: adt {
+	srv:	ref Styxserver;
+	fid:	int;
+	sess:	int;
+	next:	int;
+	rd:	ref Tmsg.Read;
 };
 
 Openf: adt {
@@ -108,6 +144,13 @@ Result: adt {
 	sess, gen:	int;
 	text, err:	string;
 	found, ms:	int;
+};
+
+Frameres: adt {
+	sess, fgen:	int;
+	text, err:	string;
+	ms, skipped:	int;
+	ended:	int;
 };
 
 Loaded: adt {
@@ -190,7 +233,7 @@ readfile(f: string): string
 	fd := sys->open(f, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	b := array[256] of byte;
+	b := array[512] of byte;
 	n := sys->read(fd, b, len b);
 	if(n <= 0)
 		return nil;
@@ -214,8 +257,10 @@ forward(srv: ref Styxserver, tchan: chan of ref Tmsg, reqc: chan of ref Req)
 models: list of ref Model;
 sessions: list of ref Session;
 opens: list of ref Openf;
+freaders: list of ref Freader;
 nextmodel := 1;
 nextsess := 1;
+framec: chan of ref Frameres;
 
 server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop, mfd: ref Sys->FD, pidc: chan of int)
 {
@@ -239,6 +284,7 @@ server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop, mfd: ref 
 	pidc <-= pid;
 	resc := chan of ref Result;
 	loadc := chan of ref Loaded;
+	framec = chan of ref Frameres;
 	nconn := 1;
 
 Serve:
@@ -266,6 +312,33 @@ Serve:
 			answer(s, (hd l).t0, (hd l).t1);
 		s.reads = nil;
 
+	fr := <-framec =>
+		s := session(fr.sess);
+		if(s == nil || s.fgen != fr.fgen)
+			break;
+		if(fr.err != nil || fr.ended){
+			s.ended = 1;
+			s.fpid = -1;
+			if(fr.err != nil){
+				s.state = "error";
+				s.err = fr.err;
+			} else
+				s.state = "ended";
+		} else {
+			s.ring[s.nseq % Ringsz] = (s.nseq, fr.text);
+			s.nseq++;
+			s.inferred++;
+			s.nin += 1 + fr.skipped;
+			s.skipped += fr.skipped;
+			s.mss[s.nms % Nms] = fr.ms;
+			s.stamps[s.nms % Nms] = sys->millisec();
+			s.nms++;
+			s.state = "following";
+		}
+		for(fl := freaders; fl != nil; fl = tl fl)
+			if((hd fl).sess == s.id && (hd fl).rd != nil)
+				deliver(s, hd fl);
+
 	l := <-loadc =>
 		if(l.err != nil){
 			l.srv.reply(ref Rmsg.Error(l.tag, l.err));
@@ -290,6 +363,11 @@ Serve:
 				else
 					nl = hd o :: nl;
 			opens = nl;
+			nf: list of ref Freader;
+			for(f := freaders; f != nil; f = tl f)
+				if((hd f).srv != srv)
+					nf = hd f :: nf;
+			freaders = nf;
 			for(sl := sessions; sl != nil; sl = tl sl){
 				rl: list of (ref Styxserver, ref Tmsg.Read);
 				for(q := (hd sl).reads; q != nil; q = tl q)
@@ -310,10 +388,7 @@ Serve:
 			id := int (f.path >> 8);
 			case t {
 			Qclone =>
-				s := ref Session(nextsess++, 0, nil, 0.3, 0.45, nil, "idle", nil, nil, 0, nil, 0, 0, 0);
-				if(models != nil)
-					s.model = hd lastof(models);
-				sessions = s :: sessions;
+				s := newsession();
 				s.refs++;
 				opens = ref Openf(srv, m.fid, s.id) :: opens;
 				f.data = array of byte sys->sprint("%d\n", s.id);
@@ -326,6 +401,8 @@ Serve:
 				opens = ref Openf(srv, m.fid, s.id) :: opens;
 				if(t == Qsimage)
 					f.data = array[0] of byte;
+				if(t == Qsdet || t == Qslayerf)
+					freaders = ref Freader(srv, m.fid, s.id, s.nseq, nil) :: freaders;
 			}
 		Read =>
 			(f, err) := srv.canread(m);
@@ -362,34 +439,36 @@ Serve:
 				for(i := 0; i < len md.net.classes; i++)
 					s += md.net.classes[i] + "\n";
 				srv.reply(styxservers->readstr(m, s));
-			Qsctl =>
+			Qsctl or Qsstatus or Qsstats =>
 				s := session(id);
 				if(s == nil){
 					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Enotfound));
 					break;
 				}
-				srv.reply(styxservers->readstr(m, settings(s)));
-			Qsstatus =>
-				s := session(id);
-				if(s == nil){
-					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Enotfound));
-					break;
+				case t {
+				Qsctl =>	srv.reply(styxservers->readstr(m, settings(s)));
+				Qsstatus =>	srv.reply(styxservers->readstr(m, status(s)));
+				Qsstats =>	srv.reply(styxservers->readstr(m, stats(s)));
 				}
-				srv.reply(styxservers->readstr(m, status(s)));
-			Qsstats =>
-				s := session(id);
-				if(s == nil){
-					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Enotfound));
-					break;
-				}
-				srv.reply(styxservers->readstr(m, sys->sprint("images=%d found=%d ms=%d\n", s.images, s.found, s.ms)));
 			Qsdet or Qslayerf =>
 				s := session(id);
 				if(s == nil){
 					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Enotfound));
 					break;
 				}
-				if(s.state == "running")
+				if(s.src != nil){
+					fr := freader(srv, m.fid);
+					if(fr == nil){
+						srv.reply(ref Rmsg.Error(m.tag, Styxservers->Ebadfid));
+						break;
+					}
+					if(fr.rd != nil){
+						srv.reply(ref Rmsg.Error(m.tag, "a read is already waiting"));
+						break;
+					}
+					fr.rd = m;
+					deliver(s, fr);
+				} else if(s.state == "running")
 					s.reads = (srv, m) :: s.reads;
 				else
 					answer(s, srv, m);
@@ -421,6 +500,11 @@ Serve:
 				else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qsimage =>
+				s := session(id);
+				if(s != nil && s.src != nil){
+					srv.reply(ref Rmsg.Error(m.tag, "following a feed: src none first"));
+					break;
+				}
 				if(m.offset != big len f.data){
 					srv.reply(ref Rmsg.Error(m.tag, "write the picture in order, from the start"));
 					break;
@@ -445,14 +529,22 @@ Serve:
 						rl = hd q :: rl;
 				(hd sl).reads = rl;
 			}
+			for(fl := freaders; fl != nil; fl = tl fl)
+				if((hd fl).srv == srv && (hd fl).rd != nil && (hd fl).rd.tag == m.oldtag)
+					(hd fl).rd = nil;
 			srv.default(r.m);
 		Clunk =>
 			f := srv.getfid(m.fid);
 			if(f != nil && f.isopen && (int f.path & 16rFF) == Qsimage && len f.data > 0){
 				s := session(int (f.path >> 8));
-				if(s != nil)
+				if(s != nil && s.src == nil)
 					look(s, f.data, resc);
 			}
+			nf: list of ref Freader;
+			for(fl := freaders; fl != nil; fl = tl fl)
+				if((hd fl).srv != srv || (hd fl).fid != m.fid)
+					nf = hd fl :: nf;
+			freaders = nf;
 			nl: list of ref Openf;
 			for(o := opens; o != nil; o = tl o)
 				if((hd o).srv == srv && (hd o).fid == m.fid)
@@ -467,6 +559,23 @@ Serve:
 	}
 }
 
+newsession(): ref Session
+{
+	s := ref Session;
+	s.id = nextsess++;
+	s.thresh = 0.3;
+	s.iou = 0.45;
+	s.state = "idle";
+	if(models != nil)
+		s.model = hd lastof(models);
+	s.ring = array[Ringsz] of (int, string);
+	s.mss = array[Nms] of int;
+	s.stamps = array[Nms] of int;
+	s.fpid = -1;
+	sessions = s :: sessions;
+	return s;
+}
+
 lastof(l: list of ref Model): list of ref Model
 {
 	r: list of ref Model;
@@ -479,6 +588,14 @@ session(id: int): ref Session
 {
 	for(l := sessions; l != nil; l = tl l)
 		if((hd l).id == id)
+			return hd l;
+	return nil;
+}
+
+freader(srv: ref Styxserver, fid: int): ref Freader
+{
+	for(l := freaders; l != nil; l = tl l)
+		if((hd l).srv == srv && (hd l).fid == fid)
 			return hd l;
 	return nil;
 }
@@ -504,6 +621,7 @@ unref(id: int)
 	s := session(id);
 	if(s == nil || --s.refs > 0)
 		return;
+	stopfeed(s);
 	nl: list of ref Session;
 	for(l := sessions; l != nil; l = tl l)
 		if(hd l != s)
@@ -535,6 +653,40 @@ answer(s: ref Session, srv: ref Styxserver, m: ref Tmsg.Read)
 	}
 }
 
+# a feed's reader: the next frame's records, a gap first if it fell
+# behind what is kept, end of file once the feed has ended
+deliver(s: ref Session, fr: ref Freader)
+{
+	m := fr.rd;
+	if(m == nil)
+		return;
+	oldest := s.nseq - Ringsz;
+	if(oldest < 0)
+		oldest = 0;
+	text := "";
+	if(fr.next < oldest){
+		text = sys->sprint("gap n=%d\n", oldest - fr.next);
+		fr.next = oldest;
+	}
+	if(fr.next < s.nseq){
+		(nil, t) := s.ring[fr.next % Ringsz];
+		text += t;
+		fr.next++;
+	} else if(!s.ended){
+		if(text == nil)
+			return;		# waits for the next frame
+	} else if(s.state == "error" && text == nil){
+		fr.rd = nil;
+		fr.srv.reply(ref Rmsg.Error(m.tag, s.err));
+		return;
+	}
+	fr.rd = nil;
+	d := array of byte text;
+	if(len d > m.count)
+		d = d[0:m.count];
+	fr.srv.reply(ref Rmsg.Read(m.tag, d));
+}
+
 settings(s: ref Session): string
 {
 	m := "none";
@@ -547,7 +699,11 @@ settings(s: ref Session): string
 			c += " " + hd l;
 		c = c[1:];
 	}
-	return sys->sprint("model %s\nplace cpu\nthresh %.2f\niou %.2f\nclasses %s\n", m, s.thresh, s.iou, c);
+	src := "none";
+	if(s.src != nil)
+		src = s.src;
+	return sys->sprint("model %s\nplace cpu\nthresh %.2f\niou %.2f\nclasses %s\nsrc %s\nrate %d\n",
+		m, s.thresh, s.iou, c, src, s.rate);
 }
 
 status(s: ref Session): string
@@ -556,9 +712,54 @@ status(s: ref Session): string
 	if(s.model != nil)
 		m = s.model.name;
 	st := "state=" + s.state + " model=" + m;
+	if(s.src != nil)
+		st += " src=" + quote(s.src);
 	if(s.err != nil)
 		st += " reason=" + quote(s.err);
 	return st + "\n";
+}
+
+stats(s: ref Session): string
+{
+	if(s.src == nil && s.nms == 0)
+		return sys->sprint("images=%d found=%d ms=%d\n", s.images, s.found, s.ms);
+	n := s.nms;
+	if(n > Nms)
+		n = Nms;
+	t := array[n] of int;
+	t[0:] = s.mss[0:n];
+	sort(t);
+	(p50, p95) := (0, 0);
+	if(n > 0){
+		p50 = t[n/2];
+		p95 = t[(n*95)/100];
+	}
+	fps := 0.0;
+	if(n > 1){
+		newest := s.stamps[(s.nms-1) % Nms];
+		oldest := s.stamps[(s.nms-n) % Nms];
+		if(newest > oldest)
+			fps = real (n-1) * 1000.0 / real (newest - oldest);
+	}
+	nr := 0;
+	for(l := freaders; l != nil; l = tl l)
+		if((hd l).sess == s.id)
+			nr++;
+	return sys->sprint("in=%d inferred=%d skipped=%d fps_infer=%.1f ms_p50=%d ms_p95=%d readers=%d\n",
+		s.nin, s.inferred, s.skipped, fps, p50, p95, nr);
+}
+
+sort(a: array of int)
+{
+	for(i := 1; i < len a; i++){
+		v := a[i];
+		j := i - 1;
+		while(j >= 0 && a[j] > v){
+			a[j+1] = a[j];
+			j--;
+		}
+		a[j+1] = v;
+	}
 }
 
 quote(s: string): string
@@ -624,11 +825,13 @@ loader(srv: ref Styxserver, tag: int, name, dir: string, loadc: chan of ref Load
 	loadc <-= ref Loaded(srv, tag, name, dir, n, err);
 }
 
-# every line checked before any is done
+# every line checked before any is done; a feed restarted if what it
+# is looked at with changed
 sessctl(s: ref Session, data: string): string
 {
 	(nil, lines) := sys->tokenize(data, "\n");
 	ns := ref *s;
+	srcset := 0;
 	for(; lines != nil; lines = tl lines){
 		(nil, w) := sys->tokenize(hd lines, " \t\r");
 		if(w == nil)
@@ -670,18 +873,58 @@ sessctl(s: ref Session, data: string): string
 		"place" =>
 			if(len w != 2 || hd tl w != "cpu")
 				return "place: this server has only cpu";
-		"src" or "rate" =>
-			return hd w + ": following a feed is not served yet (#1086 step 3)";
+		"src" =>
+			if(len w != 2)
+				return "usage: src feed | src none";
+			if(hd tl w == "none")
+				ns.src = nil;
+			else {
+				(e, nil, nil, nil) := readfmt(hd tl w + "/fmt");
+				if(e != nil)
+					return "src: " + e;
+				ns.src = hd tl w;
+			}
+			srcset = 1;
+		"rate" =>
+			if(len w != 2)
+				return "usage: rate frames-a-second (0 as fast as it can)";
+			(v, rest) := str->toint(hd tl w, 10);
+			if(rest != nil || v < 0 || v > 1000)
+				return "rate: frames a second, 0 to 1000";
+			ns.rate = v;
 		* =>
-			return "unknown setting " + hd w + ": model, place, thresh, iou, classes";
+			return "unknown setting " + hd w + ": model, place, thresh, iou, classes, src, rate";
 		}
 	}
 	if(ns.classes != nil && ns.model != s.model)
 		for(c := ns.classes; c != nil; c = tl c)
 			if(classindex(ns.model.net, hd c) < 0)
 				return "classes: " + ns.model.name + " has no class " + hd c;
+	if(ns.src != nil && ns.model == nil)
+		return "src: no model to look with: load one";
+	if(ns.src != nil && s.state == "running")
+		return "src: a picture is being looked at";
+	restart := ns.src != nil && (srcset || ns.model != s.model || ns.thresh != s.thresh ||
+		ns.iou != s.iou || !samelist(ns.classes, s.classes) || ns.rate != s.rate);
 	*s = *ns;
+	if(srcset && s.src == nil){
+		stopfeed(s);
+		s.state = "idle";
+		s.err = nil;
+	}
+	if(restart){
+		stopfeed(s);
+		startfeed(s);
+	}
 	return nil;
+}
+
+samelist(a, b: list of string): int
+{
+	for(; a != nil && b != nil; (a, b) = (tl a, tl b))
+		if(hd a != hd b)
+			return 0;
+	return a == nil && b == nil;
 }
 
 classindex(n: ref Net, name: string): int
@@ -690,6 +933,35 @@ classindex(n: ref Net, name: string): int
 		if(n.classes[i] == name)
 			return i;
 	return -1;
+}
+
+startfeed(s: ref Session)
+{
+	s.fgen++;
+	s.ended = 0;
+	# stats are of the feed now followed
+	(s.nin, s.inferred, s.skipped, s.nms) = (0, 0, 0, 0);
+	s.err = nil;
+	s.state = "following";
+	pidc := chan of int;
+	spawn follower(s.id, s.fgen, s.src, s.model.net, s.thresh, s.iou, s.classes, s.rate, framec, pidc);
+	s.fpid = <-pidc;
+}
+
+stopfeed(s: ref Session)
+{
+	s.fgen++;
+	if(s.fpid >= 0){
+		fd := sys->open("/prog/" + string s.fpid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+	}
+	s.fpid = -1;
+	s.ended = 1;
+	# readers waiting on the old feed are told it ended
+	for(fl := freaders; fl != nil; fl = tl fl)
+		if((hd fl).sess == s.id && (hd fl).rd != nil)
+			deliver(s, hd fl);
 }
 
 # a picture written: looked at in a proc of its own
@@ -707,6 +979,22 @@ look(s: ref Session, data: array of byte, resc: chan of ref Result)
 	spawn detector(s.id, s.gen, s.model.net, data, s.thresh, s.iou, s.classes, resc);
 }
 
+records(prefix: string, n: ref Net, dets: array of ref Det, classes: list of string): (string, int)
+{
+	text := "";
+	found := 0;
+	for(i := 0; i < len dets; i++){
+		d := dets[i];
+		name := n.classes[d.class];
+		if(classes != nil && !member(name, classes))
+			continue;
+		text += sys->sprint("%sclass=%s score=%.2f x0=%d y0=%d x1=%d y1=%d\n",
+			prefix, name, d.score, round(d.x0), round(d.y0), round(d.x1), round(d.y1));
+		found++;
+	}
+	return (text, found);
+}
+
 detector(id, gen: int, n: ref Net, data: array of byte, thresh, iou: real, classes: list of string, resc: chan of ref Result)
 {
 	t0 := sys->millisec();
@@ -721,18 +1009,126 @@ detector(id, gen: int, n: ref Net, data: array of byte, thresh, iou: real, class
 		resc <-= ref Result(id, gen, nil, err, 0, 0);
 		return;
 	}
-	text := "";
-	found := 0;
-	for(i := 0; i < len dets; i++){
-		d := dets[i];
-		name := n.classes[d.class];
-		if(classes != nil && !member(name, classes))
-			continue;
-		text += sys->sprint("class=%s score=%.2f x0=%d y0=%d x1=%d y1=%d\n",
-			name, d.score, round(d.x0), round(d.y0), round(d.x1), round(d.y1));
-		found++;
-	}
+	(text, found) := records("", n, dets, classes);
 	resc <-= ref Result(id, gen, text, nil, found, sys->millisec() - t0);
+}
+
+# a feed's fmt: (error, w, h, fps)
+readfmt(f: string): (string, int, int, int)
+{
+	s := readfile(f);
+	if(s == nil)
+		return (sys->sprint("%s: %r", f), 0, 0, 0);
+	(n, w) := sys->tokenize(s, " \t\n");
+	if(n < 4 || hd tl tl w != "i420")
+		return (f + ": not a feed's fmt (w h i420 fps)", 0, 0, 0);
+	wd := int hd w;
+	ht := int hd tl w;
+	fps := int hd tl tl tl w;
+	if(wd < 2 || ht < 2 || (wd|ht) & 1 || wd > 1<<14 || ht > 1<<14)
+		return (f + ": a frame of no size, odd, or too large", 0, 0, 0);
+	if(fps < 1)
+		fps = 1;
+	return (nil, wd, ht, fps);
+}
+
+# what a feed's status says of its frames: (has a count, frames, first, eof)
+feedcount(src: string): (int, int, int, int)
+{
+	s := readfile(src + "/status");
+	(nil, w) := sys->tokenize(s, " \t\n");
+	(has, frames, first, eof) := (0, 0, 0, 0);
+	for(; w != nil; w = tl w){
+		(k, v) := str->splitl(hd w, "=");
+		if(v == nil)
+			continue;
+		v = v[1:];
+		case k {
+		"frames" =>	(has, frames) = (1, int v);
+		"first" =>	first = int v;
+		"eof" =>	eof = int v;
+		}
+	}
+	return (has, frames, first, eof);
+}
+
+# a feed, followed: each frame it is ready for looked at, the frames it
+# was not ready for counted
+follower(id, fgen: int, src: string, n: ref Net, thresh, iou: real, classes: list of string, rate: int,
+	framec: chan of ref Frameres, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	(err, w, h, fps) := readfmt(src + "/fmt");
+	if(err != nil){
+		framec <-= ref Frameres(id, fgen, nil, err, 0, 0, 1);
+		return;
+	}
+	fd := sys->open(src + "/frame", Sys->OREAD);
+	if(fd == nil){
+		framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s/frame: %r", src), 0, 0, 1);
+		return;
+	}
+	fs := w*h + 2*(w/2)*(h/2);
+	buf := array[fs] of byte;
+	(counted, frames, first, eof) := feedcount(src);
+	next := 0;		# the feed's frame number to look at next
+	if(counted){
+		next = first;
+		if(!eof && frames > 0)
+			next = frames - 1;	# live: from now on
+	}
+	last := 0;
+	for(;;){
+		if(rate > 0 && last != 0){
+			wait := 1000/rate - (sys->millisec() - last);
+			if(wait > 0)
+				sys->sleep(wait);
+		}
+		last = sys->millisec();
+		if(counted && eof && next >= frames){
+			framec <-= ref Frameres(id, fgen, nil, nil, 0, 0, 1);
+			return;
+		}
+		got := 0;
+		off := big next * big fs;
+		while(got < fs){
+			k := sys->pread(fd, buf[got:], fs - got, off + big got);
+			if(k < 0){
+				framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s/frame: %r", src), 0, 0, 1);
+				return;
+			}
+			if(k == 0)
+				break;
+			got += k;
+		}
+		if(got < fs){
+			# the feed has ended
+			framec <-= ref Frameres(id, fgen, nil, nil, 0, 0, 1);
+			return;
+		}
+		t0 := sys->millisec();
+		(dets, derr) := n.detecti420(buf[0:w*h], buf[w*h:w*h + (w/2)*(h/2)], buf[w*h + (w/2)*(h/2):fs], w, h, thresh, iou);
+		if(derr != nil){
+			framec <-= ref Frameres(id, fgen, nil, derr, 0, 0, 1);
+			return;
+		}
+		ms := sys->millisec() - t0;
+		prefix := sys->sprint("frame=%d pts=%d ", next, int (big next * big 1000 / big fps));
+		(text, nil) := records(prefix, n, dets, classes);
+		if(text == nil)
+			text = prefix[0:len prefix - 1] + "\n";
+		skipped := 0;
+		if(counted){
+			(nil, frames, first, eof) = feedcount(src);
+			if(!eof && frames - 1 > next + 1){
+				skipped = frames - 1 - (next + 1);
+				next = frames - 1;
+			} else
+				next++;
+		} else
+			next++;
+		framec <-= ref Frameres(id, fgen, text, nil, ms, skipped, 0);
+	}
 }
 
 member(s: string, l: list of string): int

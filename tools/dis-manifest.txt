@@ -795,6 +795,7 @@ dis/tests/js_engine_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis
 dis/tests/kbdecode_test.dis
+dis/tests/keyring_sa_swap_test.dis
 dis/tests/keyring_test.dis
 dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis

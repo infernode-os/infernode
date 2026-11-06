@@ -20,6 +20,7 @@ struct Certificate
 {
 	Keyring_Certificate x;
 	void		*signa;	/* actual signature */
+	SigAlgVec	*vec;	/* signa's algorithm; x.sa is Limbo's to assign */
 };
 
 /* generic public key */
@@ -27,6 +28,7 @@ struct PK
 {
 	Keyring_PK	x;
 	void		*key;	/* key and system parameters */
+	SigAlgVec	*vec;	/* key's algorithm; x.sa is Limbo's to assign */
 };
 
 /* digest state */
@@ -93,6 +95,7 @@ struct SK
 {
 	Keyring_SK	x;
 	void		*key;	/* key and system parameters */
+	SigAlgVec	*vec;	/* key's algorithm; x.sa is Limbo's to assign */
 };
 
 struct SigAlgVec {

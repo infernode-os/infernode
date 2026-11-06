@@ -81,6 +81,7 @@ static char exBadSA[]	= "bad signature algorithm";
 static char exBadSK[]	= "bad secret key";
 static char exBadPK[]	= "bad public key";
 static char exBadCert[]	= "bad certificate";
+static char exSAMismatch[]	= "signature algorithm is not the key's";
 static char exBadBsize[]	= "data not multiple of block size";
 static char exBadKey[]	= "bad encryption key";
 static char exBadDigest[]	= "bad digest value";
@@ -263,19 +264,55 @@ strtoalg(char *str, char **strp)
 	return nil;
 }
 
+/*
+ * A SigAlg is genuine only if keyring made it: Limbo can make one of
+ * its own (ref SigAlg("rsa")), which has no vec (reading one reads past
+ * its block), or put nil where one should be.
+ */
 static SigAlg*
-checkSigAlg(Keyring_SigAlg *ksa)
+validSigAlg(Keyring_SigAlg *ksa)
 {
 	SigAlgVec **sap;
 	SigAlg *sa;
 
 	sa = (SigAlg*)ksa;
-
-	for(sap = algs; sap < &algs[Maxalg]; sap++)
+	if(sa == H || sa == nil || D2H(sa)->t != TSigAlg)
+		return nil;
+	for(sap = algs; sap < &algs[nalg]; sap++)
 		if(sa->vec == *sap)
 			return sa;
-	errorf("%s: %s", exType, exBadSA);
 	return nil;
+}
+
+static SigAlg*
+checkSigAlg(Keyring_SigAlg *ksa)
+{
+	SigAlg *sa;
+
+	sa = validSigAlg(ksa);
+	if(sa == nil)
+		errorf("%s: %s", exType, exBadSA);
+	return sa;
+}
+
+/*
+ * The algorithm a key, signature or certificate was made with is its
+ * own vec, set when it was made; x.sa is a field Limbo can assign
+ * (sk.sa = otherkey.sa). An object whose x.sa is not a genuine SigAlg
+ * of that algorithm is refused, not used: with another algorithm's
+ * vec, C would hand one algorithm's key or signature to another's code.
+ */
+static SigAlg*
+samealg(Keyring_SigAlg *ksa, SigAlgVec *vec)
+{
+	SigAlg *sa;
+
+	sa = checkSigAlg(ksa);
+	if(sa->vec != vec){
+		errorf("%s: %s", exType, exSAMismatch);
+		return nil;
+	}
+	return sa;
 }
 
 /*
@@ -314,6 +351,7 @@ newSK(SigAlg *sa, String *owner, int increfsa)
 	h = heap(TSK);
 	k = H2D(SK*, h);
 	k->x.sa = (Keyring_SigAlg*)sa;
+	k->vec = sa->vec;
 	if(increfsa) {
 		h = D2H(sa);
 		h->ref++;
@@ -328,13 +366,27 @@ static void
 freeSK(Heap *h, int swept)
 {
 	SK *k;
-	SigAlg *sa;
 
 	k = H2D(SK*, h);
-	sa = checkSigAlg(k->x.sa);
 	if(k->key)
-		(*sa->vec->skfree)(k->key);
+		(*k->vec->skfree)(k->key);
 	freeheap(h, swept);
+}
+
+/* an SK keyring made, its x.sa its own algorithm's; or H */
+static SK*
+validSK(Keyring_SK *k)
+{
+	SK *sk;
+	SigAlg *sa;
+
+	sk = (SK*)k;
+	if(sk == H || sk == nil || sk->key == 0 || D2H(sk)->t != TSK)
+		return H;
+	sa = validSigAlg(sk->x.sa);
+	if(sa == nil || sa->vec != sk->vec)
+		return H;
+	return sk;
 }
 
 static SK*
@@ -347,6 +399,7 @@ checkSK(Keyring_SK *k)
 		errorf("%s: %s", exType, exBadSK);
 		return nil;
 	}
+	samealg(sk->x.sa, sk->vec);
 	return sk;
 }
 
@@ -370,7 +423,7 @@ Keyring_genSK(void *fp)
 	sk = newSK(sa, stringdup(f->owner), 0);
 	*f->ret = (Keyring_SK*)sk;
 	release();
-	sk->key = (*sa->vec->gensk)(f->length);
+	sk->key = (*sk->vec->gensk)(f->length);
 	acquire();
 	/*
 	 * gensk returns nil when key generation fails (e.g. an invalid key
@@ -397,11 +450,11 @@ Keyring_genSKfromPK(void *fp)
 	destroy(v);
 
 	pk = checkPK(f->pk);
-	sa = checkSigAlg(pk->x.sa);
+	sa = (SigAlg*)pk->x.sa;	/* checkPK: pk->vec's */
 	sk = newSK(sa, stringdup(f->owner), 1);
 	*f->ret = (Keyring_SK*)sk;
 	release();
-	sk->key = (*sa->vec->genskfrompk)(pk->key);
+	sk->key = (*pk->vec->genskfrompk)(pk->key);
 	acquire();
 }
 
@@ -435,25 +488,25 @@ Keyring_sktoattr(void *fp)
 {
 	F_Keyring_sktoattr *f;
 	char *val, *buf, *owner;
-	SigAlg *sa;
+	SigAlgVec *vec;
 	Fmt o;
 	SK *sk;
 
 	f = fp;
 	sk = checkSK(f->sk);
-	sa = checkSigAlg(sk->x.sa);
+	vec = sk->vec;
 	buf = malloc(Maxbuf);
 	if(buf == nil){
 		retstr(nil, f->ret);
 		return;
 	}
-	(*sa->vec->sk2str)(sk->key, buf, Maxbuf);
+	(*vec->sk2str)(sk->key, buf, Maxbuf);
 	fmtstrinit(&o);
-	fmtprint(&o, "alg=%q", string2c(sa->x.name));
+	fmtprint(&o, "alg=%q", vec->name);
 	owner = string2c(sk->x.owner);
 	if(*owner)
 		fmtprint(&o, " owner=%q", owner);
-	val = bigs2attr(&o, buf, sa->vec->skattr);
+	val = bigs2attr(&o, buf, vec->skattr);
 	free(buf);
 	retstr(val, f->ret);
 	free(val);
@@ -463,25 +516,25 @@ static int
 sktostr(SK *sk, char *buf, int len)
 {
 	int n;
-	SigAlg *sa;
 
-	sa = checkSigAlg(sk->x.sa);
-	n = snprint(buf, len, "%s\n%s\n", string2c(sa->x.name),
+	n = snprint(buf, len, "%s\n%s\n", sk->vec->name,
 			string2c(sk->x.owner));
-	return n + (*sa->vec->sk2str)(sk->key, buf+n, len - n);
+	return n + (*sk->vec->sk2str)(sk->key, buf+n, len - n);
 }
 
 void
 Keyring_sktostr(void *fp)
 {
 	F_Keyring_sktostr *f;
+	SK *o;
 	char *buf;
 
 	f = fp;
+	o = checkSK(f->sk);	/* may raise: before buf */
 	buf = malloc(Maxbuf);
 
 	if(buf)
-		sktostr(checkSK(f->sk), buf, Maxbuf);
+		sktostr(o, buf, Maxbuf);
 	retstr(buf, f->ret);
 
 	free(buf);
@@ -542,6 +595,7 @@ newPK(SigAlg *sa, String *owner, int increfsa)
 	h = heap(TPK);
 	k = H2D(PK*, h);
 	k->x.sa = (Keyring_SigAlg*)sa;
+	k->vec = sa->vec;
 	if(increfsa) {
 		h = D2H(sa);
 		h->ref++;
@@ -574,13 +628,27 @@ void
 freePK(Heap *h, int swept)
 {
 	PK *k;
-	SigAlg *sa;
 
 	k = H2D(PK*, h);
-	sa = checkSigAlg(k->x.sa);
 	if(k->key)
-		(*sa->vec->pkfree)(k->key);
+		(*k->vec->pkfree)(k->key);
 	freeheap(h, swept);
+}
+
+/* a PK keyring made, its x.sa its own algorithm's; or H */
+static PK*
+validPK(Keyring_PK *k)
+{
+	PK *pk;
+	SigAlg *sa;
+
+	pk = (PK*)k;
+	if(pk == H || pk == nil || pk->key == 0 || D2H(pk)->t != TPK)
+		return H;
+	sa = validSigAlg(pk->x.sa);
+	if(sa == nil || sa->vec != pk->vec)
+		return H;
+	return pk;
 }
 
 static PK*
@@ -593,6 +661,7 @@ checkPK(Keyring_PK *k)
 		errorf("%s: %s", exType, exBadPK);
 		return nil;
 	}
+	samealg(pk->x.sa, pk->vec);
 	return pk;
 }
 
@@ -611,9 +680,9 @@ Keyring_sktopk(void *fp)
 	destroy(r);
 
 	sk = checkSK(f->sk);
-	sa = checkSigAlg(sk->x.sa);
+	sa = (SigAlg*)sk->x.sa;	/* checkSK: sk->vec's */
 	pk = newPK(sa, stringdup(sk->x.owner), 1);
-	pk->key = (*sa->vec->sk2pk)(sk->key);
+	pk->key = (*sk->vec->sk2pk)(sk->key);
 	*f->ret = (Keyring_PK*)pk;
 }
 
@@ -621,24 +690,24 @@ static int
 pktostr(PK *pk, char *buf, int len)
 {
 	int n;
-	SigAlg *sa;
 
-	sa = checkSigAlg(pk->x.sa);
-	n = snprint(buf, len, "%s\n%s\n", string2c(sa->x.name), string2c(pk->x.owner));
-	return n + (*sa->vec->pk2str)(pk->key, buf+n, len - n);
+	n = snprint(buf, len, "%s\n%s\n", pk->vec->name, string2c(pk->x.owner));
+	return n + (*pk->vec->pk2str)(pk->key, buf+n, len - n);
 }
 
 void
 Keyring_pktostr(void *fp)
 {
 	F_Keyring_pktostr *f;
+	PK *o;
 	char *buf;
 
 	f = fp;
+	o = checkPK(f->pk);	/* may raise: before buf */
 	buf = malloc(Maxbuf);
 
 	if(buf)
-		pktostr(checkPK(f->pk), buf, Maxbuf);
+		pktostr(o, buf, Maxbuf);
 	retstr(buf, f->ret);
 
 	free(buf);
@@ -649,25 +718,25 @@ Keyring_pktoattr(void *fp)
 {
 	F_Keyring_pktoattr *f;
 	char *val, *buf, *owner;
-	SigAlg *sa;
+	SigAlgVec *vec;
 	Fmt o;
 	PK *pk;
 
 	f = fp;
 	pk = checkPK(f->pk);
-	sa = checkSigAlg(pk->x.sa);
+	vec = pk->vec;
 	buf = malloc(Maxbuf);
 	if(buf == nil){
 		retstr(nil, f->ret);
 		return;
 	}
-	(*sa->vec->pk2str)(pk->key, buf, Maxbuf);
+	(*vec->pk2str)(pk->key, buf, Maxbuf);
 	fmtstrinit(&o);
-	fmtprint(&o, "alg=%q", string2c(sa->x.name));
+	fmtprint(&o, "alg=%q", vec->name);
 	owner = string2c(pk->x.owner);
 	if(*owner)
 		fmtprint(&o, " owner=%q", owner);
-	val = bigs2attr(&o, buf, sa->vec->pkattr);
+	val = bigs2attr(&o, buf, vec->pkattr);
 	free(buf);
 	retstr(val, f->ret);
 	free(val);
@@ -751,6 +820,7 @@ newCertificate(SigAlg *sa, String *ha, String *signer, long exp, int increfsa)
 	h = heap(TCertificate);
 	c = H2D(Certificate*, h);
 	c->x.sa = (Keyring_SigAlg*)sa;
+	c->vec = sa->vec;
 	if(increfsa) {
 		h = D2H(sa);
 		h->ref++;
@@ -768,13 +838,27 @@ void
 freeCertificate(Heap *h, int swept)
 {
 	Certificate *c;
-	SigAlg *sa;
 
 	c = H2D(Certificate*, h);
-	sa = checkSigAlg(c->x.sa);
 	if(c->signa)
-		(*sa->vec->sigfree)(c->signa);
+		(*c->vec->sigfree)(c->signa);
 	freeheap(h, swept);
+}
+
+/* a Certificate keyring made, its x.sa its own algorithm's; or H */
+static Certificate*
+validCertificate(Keyring_Certificate *c)
+{
+	Certificate *cert;
+	SigAlg *sa;
+
+	cert = (Certificate*)c;
+	if(cert == H || cert == nil || cert->signa == 0 || D2H(cert)->t != TCertificate)
+		return H;
+	sa = validSigAlg(cert->x.sa);
+	if(sa == nil || sa->vec != cert->vec)
+		return H;
+	return cert;
 }
 
 Certificate*
@@ -787,32 +871,33 @@ checkCertificate(Keyring_Certificate *c)
 		errorf("%s: %s", exType, exBadCert);
 		return nil;
 	}
+	samealg(cert->x.sa, cert->vec);
 	return cert;
 }
 
 static int
 certtostr(Certificate *c, char *buf, int len)
 {
-	SigAlg *sa;
 	int n;
 
-	sa = checkSigAlg(c->x.sa);
-	n = snprint(buf, len, "%s\n%s\n%s\n%d\n", string2c(sa->x.name),
+	n = snprint(buf, len, "%s\n%s\n%s\n%d\n", c->vec->name,
 		string2c(c->x.ha), string2c(c->x.signer), c->x.exp);
-	return n + (*sa->vec->sig2str)(c->signa, buf+n, len - n);
+	return n + (*c->vec->sig2str)(c->signa, buf+n, len - n);
 }
 
 void
 Keyring_certtostr(void *fp)
 {
 	F_Keyring_certtostr *f;
+	Certificate *o;
 	char *buf;
 
 	f = fp;
+	o = checkCertificate(f->c);	/* may raise: before buf */
 	buf = malloc(Maxbuf);
 
 	if(buf)
-		certtostr(checkCertificate(f->c), buf, Maxbuf);
+		certtostr(o, buf, Maxbuf);
 	retstr(buf, f->ret);
 
 	free(buf);
@@ -823,26 +908,26 @@ Keyring_certtoattr(void *fp)
 {
 	F_Keyring_certtoattr *f;
 	char *val, *buf, *ha;
-	SigAlg *sa;
+	SigAlgVec *vec;
 	Fmt o;
 	Certificate *c;
 
 	f = fp;
 	c = checkCertificate(f->c);
-	sa = checkSigAlg(c->x.sa);
+	vec = c->vec;
 	buf = malloc(Maxbuf);
 	if(buf == nil){
 		retstr(nil, f->ret);
 		return;
 	}
-	(*sa->vec->sig2str)(c->signa, buf, Maxbuf);
+	(*vec->sig2str)(c->signa, buf, Maxbuf);
 	ha = string2c(c->x.ha);
 	if(strcmp(ha, "sha") == 0)
 		ha = "sha1";	/* normalise */
 	fmtstrinit(&o);
-	fmtprint(&o, "sigalg=%q-%q signer=%q expires=%ud", string2c(sa->x.name), ha,
+	fmtprint(&o, "sigalg=%q-%q signer=%q expires=%ud", vec->name, ha,
 		string2c(c->x.signer), c->x.exp);
-	val = bigs2attr(&o, buf, sa->vec->sigattr);
+	val = bigs2attr(&o, buf, vec->sigattr);
 	free(buf);
 	retstr(val, f->ret);
 	free(val);
@@ -918,7 +1003,13 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	String *hastr;
 
 	hastr = H;
-	sa = checkSigAlg(sk->x.sa);
+	/*
+	 * Not samealg: auth calls this long after checking sk, having let
+	 * other threads run, and must not raise with its buffers held.
+	 */
+	sa = validSigAlg(sk->x.sa);
+	if(sa == nil || sa->vec != sk->vec)
+		return nil;
 	buf = malloc(Maxbuf);
 	if(buf == nil)
 		return nil;
@@ -957,7 +1048,7 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	c = newCertificate(sa, hastr, stringdup(sk->x.owner), exp, 1);
 	certimmutable(c);		/* hide from the garbage collector */
 	release();
-	c->signa = (*sa->vec->sign)(b, sk->key);
+	c->signa = (*sk->vec->sign)(b, sk->key);
 	acquire();
 	mpfree(b);
 
@@ -984,7 +1075,7 @@ Keyring_sign(void *fp)
 	destroy(v);
 
 	sk = checkSK(f->sk);
-	sa = checkSigAlg(sk->x.sa);
+	sa = (SigAlg*)sk->x.sa;	/* checkSK: sk->vec's */
 
 	/* add signer name and expiration time to hash */
 	if(f->state == H)
@@ -1027,7 +1118,7 @@ Keyring_sign(void *fp)
 	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), f->exp, 1);
 	*f->ret = (Keyring_Certificate*)c;
 	release();
-	c->signa = (*sa->vec->sign)(b, sk->key);
+	c->signa = (*sk->vec->sign)(b, sk->key);
 	acquire();
 	mpfree(b);
 }
@@ -1048,7 +1139,7 @@ Keyring_signm(void *fp)
 	destroy(v);
 
 	sk = checkSK(f->sk);
-	sa = checkSigAlg(sk->x.sa);
+	sa = (SigAlg*)sk->x.sa;	/* checkSK: sk->vec's */
 
 	if(f->m == H)
 		return;
@@ -1058,7 +1149,7 @@ Keyring_signm(void *fp)
 	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), 0, 1);
 	*f->ret = (Keyring_Certificate*)c;
 	release();
-	c->signa = (*sa->vec->sign)(b, sk->key);
+	c->signa = (*sk->vec->sign)(b, sk->key);
 	acquire();
 }
 
@@ -1067,15 +1158,15 @@ verify(PK *pk, Certificate *c, char *a, int len)
 {
 	mpint *b;
 	int n;
-	SigAlg *sa, *pksa;
 	DigestState *ds;
 	uchar digest[SHA512dlen];
 	char *buf;
 
-	sa = checkSigAlg(c->x.sa);
-	pksa = checkSigAlg(pk->x.sa);
-	if(sa->vec != pksa->vec)
+	/* not samealg: auth calls this, as sign, and must not raise */
+	if(validCertificate((Keyring_Certificate*)c) == H || validPK((Keyring_PK*)pk) == H)
 		return 0;
+	if(c->vec != pk->vec)
+		return 0;	/* not this key's signature */
 
 	/* add signer name and expiration time to hash */
 	buf = malloc(Maxbuf);
@@ -1118,7 +1209,7 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		return 0;
 	/* verify */
 	release();
-	n = (*sa->vec->verify)(b, c->signa, pk->key);
+	n = (*c->vec->verify)(b, c->signa, pk->key);
 	acquire();
 
 	mpfree(b);
@@ -1132,7 +1223,6 @@ Keyring_verify(void *fp)
 	Certificate *c;
 	mpint *b;
 	int n;
-	SigAlg *sa, *pksa;
 	PK *pk;
 	XDigestState *ds;
 	uchar digest[SHA512dlen];
@@ -1142,11 +1232,9 @@ Keyring_verify(void *fp)
 	*f->ret = 0;
 
 	c = checkCertificate(f->cert);
-	sa = checkSigAlg(c->x.sa);
 	pk = checkPK(f->pk);
-	pksa = checkSigAlg(pk->x.sa);
-	if(sa->vec != pksa->vec)
-		return;
+	if(c->vec != pk->vec)
+		return;	/* not this key's signature */
 
 	/* add signer name and expiration time to hash */
 	if(f->state == H)
@@ -1188,7 +1276,7 @@ Keyring_verify(void *fp)
 
 	/* verify */
 	release();
-	*f->ret = (*sa->vec->verify)(b, c->signa, pk->key);
+	*f->ret = (*c->vec->verify)(b, c->signa, pk->key);
 	acquire();
 
 	mpfree(b);
@@ -1199,24 +1287,21 @@ Keyring_verifym(void *fp)
 {
 	F_Keyring_verifym *f;
 	Certificate *c;
-	SigAlg *sa, *pksa;
 	PK *pk;
 
 	f = fp;
 	*f->ret = 0;
 
 	c = checkCertificate(f->cert);
-	sa = checkSigAlg(c->x.sa);
 	pk = checkPK(f->pk);
-	pksa = checkSigAlg(pk->x.sa);
-	if(sa->vec != pksa->vec)
-		return;
+	if(c->vec != pk->vec)
+		return;	/* not this key's signature */
 
 	if(f->m == H)
 		return;
 
 	release();
-	*f->ret = (*sa->vec->verify)(checkIPint(f->m), c->signa, pk->key);
+	*f->ret = (*c->vec->verify)(checkIPint(f->m), c->signa, pk->key);
 	acquire();
 }
 
@@ -1970,22 +2055,23 @@ Keyring_auth(void *fp)
 		err = "missing diffie hellman base";
 		goto out;
 	}
-	mysk = checkSK(f->info->mysk);
+	/* refused through the result: buf and kem are allocated */
+	mysk = validSK(f->info->mysk);
 	if(mysk == H){
 		err = "bad sk arg";
 		goto out;
 	}
-	mypk = checkPK(f->info->mypk);
+	mypk = validPK(f->info->mypk);
 	if(mypk == H){
 		err = "bad pk arg";
 		goto out;
 	}
-	cert = checkCertificate(f->info->cert);
+	cert = validCertificate(f->info->cert);
 	if(cert == H){
 		err = "bad certificate arg";
 		goto out;
 	}
-	spk = checkPK(f->info->spk);
+	spk = validPK(f->info->spk);
 	if(spk == H){
 		err = "bad signer key arg";
 		goto out;
@@ -2199,6 +2285,11 @@ Keyring_auth(void *fp)
 	memmove(buf+n, myek, pklen); n += pklen;
 	memmove(buf+n, hisek, pklen); n += pklen;
 	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
+	if(alphacert == nil){
+		alphacert = H;
+		err = "cannot sign";
+		goto out;
+	}
 	n = certtostr(alphacert, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
 		err = MSG;
@@ -2506,9 +2597,9 @@ Keyring_readauthinfo(void *fp)
 	ai->mysk = (Keyring_SK*)mysk;
 	if(mysk == H)
 		goto out;
-	sa = checkSigAlg(mysk->x.sa);
+	sa = (SigAlg*)mysk->x.sa;	/* strtosk made it: mysk->vec's */
 	mypk = newPK(sa, stringdup(mysk->x.owner), 1);
-	mypk->key = (*sa->vec->sk2pk)(mysk->key);
+	mypk->key = (*mysk->vec->sk2pk)(mysk->key);
 	ai->mypk = (Keyring_PK*)mypk;
 
 	/* diffie hellman base */

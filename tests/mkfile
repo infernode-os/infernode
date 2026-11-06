@@ -117,6 +117,7 @@ TARG=\
 	llmclient_anthropic_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
+	keyring_sa_swap_test.dis\
 	ipint_expmod_test.dis\
 	mail_provision_test.dis\
 	lists_test.dis\

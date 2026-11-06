@@ -8,7 +8,7 @@ is resolved against the actual diff and the corresponding InferNode call path.
 ## Baseline and method
 
 The review is pinned to 9front commit
-`fe19492531980b1772e2912de8163e17f95dfd5e` (2026-10-29). The GitHub tree is
+`f5df6bc0a4024b0e9764a49e4fd103e2ac31d42f` (2026-11-03). The GitHub tree is
 the project's nightly mirror; commit identities are checked against its full
 history. The initial candidate set covers the shared kernel, network, draw,
 authentication, cryptographic, 9P, and export paths:
@@ -240,6 +240,10 @@ Every row records one of four outcomes:
 | `00ea2689cd9e51886b663fbce5a4ff966a3dd066` | `freeb` returns stale `next`/`list` links to custom Block pools | ported | Hosted and native free paths clear both linkage fields before invoking a custom callback and poison both before ordinary free. No current driver installs a custom Block callback, but preserving the invariant prevents future DMA pools from inheriting queue links; the host regression covers both implementations. |
 | `47a7dba17c1d56bbd1902a18a9d9797a332ded4f` | interface bind/unbind holds its write lock while medium callbacks walk `/net`, deadlocking namespace readers | ported | Native `ipifc` publishes a non-operational `unboundmedium`, drops `ifc->rwl` around real medium bind/unbind callbacks, rejects a concurrent transition, and reacquires the lock before publishing or clearing state. The existing reader-lifetime safeguards remain inside the unlocked teardown callback. The source regression pins placeholder/drop/callback/relock ordering, while loopback, Ethernet, hot-plug and raw-wire QEMU tests exercise repeated binding. |
 | `63af27554985ac921223edc7d6788a47dc98b629` | `findipifc` returns an interface whose logical-address chain can be concurrently replaced | ported without the unrelated command renames | `findipifc` now inspects each interface under its read lock, records the winning generation, and returns only a read-locked interface whose `ifcid` still matches. TCP MTU selection and both route lookups release that ownership; cached routes are inspected under `routelock` and validate the interface generation under `ifc->rwl` before reuse. The source regression pins the ownership contract and every native network scenario exercises the compiled paths. |
+| `350266104f1fed81c78c3d05fa44f523bec0ae4d` | add ThinkPad battery charge thresholds to `aux/acpi` | affected utility not present | InferNode has no Plan 9 `aux/acpi` file server or AML/ThinkPad charge-control path. Its platform power and battery interfaces do not parse this new `pmctl` command. The change adds functionality rather than repairing a shared security construction. |
+| `74ae37b2ef0e557d9520b39247136536f3ab7aa4` | read the ARM64 GIC redistributor's 64-bit `GICR_TYPER` atomically | already present | InferNode's independently implemented GICv3 path declares `Rtyper` as 64-bit and `findrdist()` reads it once through a `volatile u64int *` before testing both affinity and `Last`. It never performs the two 32-bit accesses corrected by this commit. |
+| `9610f85bab9e03f8c183ce43fc31d8ac5da41384` | remove unused `gefs` configuration helper | affected file system not present | InferNode does not ship `gefs`; the deleted function was dead code and introduces no applicable behavior or fix. |
+| `f5df6bc0a4024b0e9764a49e4fd103e2ac31d42f` | document `readtags` in the zuke manual | affected application not present | InferNode does not ship zuke or this manual page. The commit is documentation-only and has no security-bearing code change. |
 
 ## Completion boundary
 

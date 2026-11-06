@@ -11,7 +11,7 @@ fn fakespeaker { dd -if '#A/fakeout' -of /dev/null -bs 65536 >[2] /dev/null }
 
 mkdir -p /mnt/speechengine /mnt/speech
 /dis/veltro/speechcmd.dis -t espeak-ng -s $sttcmd
-/dis/veltro/speech9p.dis -E /mnt/speechengine
+/dis/veltro/speech9p.dis -E /mnt/speechengine -s /tmp/settings.cmd
 cat /mnt/speechengine/ctl > /tmp/cmd.ctl
 cat /mnt/speech/listen > /tmp/cmd.listen &
 sleep 1

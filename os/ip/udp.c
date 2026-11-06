@@ -384,6 +384,14 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 	 */
 	switch(version) {
 	case V4:
+		if(BLEN(bp) < UDP4_IPHDR_SZ+UDP_UDPHDR_SZ){
+	Badhdr:
+			upriv->lenerr++;
+			upriv->ustats.udpInErrors++;
+			netlog(f, Logudp, "udp: bad header\n");
+			freeblist(bp);
+			return;
+		}
 		ottl = uh4->Unused;
 		uh4->Unused = 0;
 		len = nhgets(uh4->udplen);
@@ -408,6 +416,8 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 		hnputs(uh4->udpplen, olen);
 		break;
 	case V6:
+		if(BLEN(bp) < UDP6_IPHDR_SZ+UDP_UDPHDR_SZ)
+			goto Badhdr;
 		uh6 = (Udp6hdr*)(bp->rp);
 		len = nhgets(uh6->udplen);
 		oviclfl = nhgetl(uh6->viclfl);

@@ -158,7 +158,6 @@ sendpath(Image *dst, int c, uchar *path, int n, int *f, int nf, Image *src, Poin
 	uchar *a;
 	int i, hdr;
 
-	_setdrawop(dst->display, op);
 	while(n > Pathchunk){
 		a = bufimage(dst->display, 1+2+Pathchunk);
 		if(a == nil){
@@ -172,7 +171,7 @@ sendpath(Image *dst, int c, uchar *path, int n, int *f, int nf, Image *src, Poin
 		n -= Pathchunk;
 	}
 	hdr = 1+4+4+2*4+4*nf+2;
-	a = bufimage(dst->display, hdr+n);
+	a = _bufimageop(dst->display, hdr+n, op);
 	if(a == nil){
 		_drawprint(2, "image path: %r\n");
 		return;

@@ -29,7 +29,11 @@ FAILED_CASES=""
 # subshell's stderr (via `exec 2>/dev/null`) and only assert on stdout.
 check() {
     name=$1; want=$2; prog=$3
-    got=$(exec 2>/dev/null; "$EMU" -r"$ROOT" /dis/awk.dis "$prog" | tr -d '\r')
+    # A command module no longer necessarily tears down the multi-VM
+    # emulator when its first Prog exits (#944).  Bound the emulator instead
+    # of relying on the old incidental SIGKILL; its stdout is complete as
+    # soon as the BEGIN action returns.
+    got=$(exec 2>/dev/null; with_timeout 2 "$EMU" -r"$ROOT" /dis/awk.dis "$prog" | tr -d '\r')
     if [ "$got" = "$want" ]; then
         PASS=$((PASS + 1))
         printf '  PASS  %s\n' "$name"

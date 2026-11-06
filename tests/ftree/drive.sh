@@ -76,3 +76,4 @@ mount -A '#sftree/fs' /mnt/ftree
 tell bind $d/tree/a $d/tree/c.txt
 show disallowed
 echo R done
+echo halt > '#c/sysctl'

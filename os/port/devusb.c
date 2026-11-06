@@ -193,7 +193,6 @@ static Hci*	hcis[Nhcis];
 static QLock	epslck;		/* add, del, lookup endpoints */
 static Ep*	eps[Neps];	/* all endpoints known */
 static int	epmax;		/* 1 + last endpoint index used  */
-static int	usbidgen;	/* device address generator */
 
 /*
  * Is there something like this in a library? should it be?
@@ -351,27 +350,32 @@ epalloc(Hci *hp)
 	Ep *ep;
 	int i;
 
-	ep = smalloc(sizeof(Ep));
-	ep->r.ref = 1;
-	qlock(&epslck);
 	for(i = 0; i < Neps; i++)
 		if(eps[i] == nil)
 			break;
-	if(i == Neps){
-		qunlock(&epslck);
-		free(ep);
-		panic("usb: epalloc: too few endpoints (%d)", Neps);
-	}
+	if(i == Neps)
+		error("out of endpoints");
+
+	ep = malloc(sizeof(Ep));
+	if(ep == nil)
+		error(Enomem);
+	ep->r.ref = 1;
 	ep->idx = i;
-	if(epmax <= i)
-		epmax = i+1;
-	eps[i] = ep;
 	ep->hp = hp;
 	ep->maxpkt = 8;
 	ep->ntds = 1;
 	ep->samplesz = ep->pollival = ep->hz = 0; /* make them void */
-	qunlock(&epslck);
 	return ep;
+}
+
+/* called with epslck held, after every externally visible field is set */
+static void
+eppublish(Ep *ep)
+{
+	assert(eps[ep->idx] == nil);
+	eps[ep->idx] = ep;
+	if(epmax <= ep->idx)
+		epmax = ep->idx+1;
 }
 
 static Ep*
@@ -379,10 +383,13 @@ getep(int i)
 {
 	Ep *ep;
 
-	if(i < 0 || i >= epmax || eps[i] == nil)
+	if(i < 0)
 		return nil;
 	qlock(&epslck);
-	ep = eps[i];
+	if(i >= epmax)
+		ep = nil;
+	else
+		ep = eps[i];
 	if(ep != nil)
 		incref(&ep->r);
 	qunlock(&epslck);
@@ -397,18 +404,17 @@ putep(Ep *ep)
 	if(ep != nil && decref(&ep->r) == 0){
 		d = ep->dev;
 		deprint("usb: ep%d.%d %#p released\n", d->nb, ep->nb, ep);
+		qlock(&ep->ep0->ql);
 		qlock(&epslck);
+		assert(d->eps[ep->nb] == ep);
+		d->eps[ep->nb] = nil;
+		assert(eps[ep->idx] == ep);
 		eps[ep->idx] = nil;
 		if(ep->idx == epmax-1)
-			epmax--;
-		if(ep == ep->ep0 && ep->dev != nil && ep->dev->nb == usbidgen)
-			usbidgen--;
+			while(epmax > 0 && eps[epmax-1] == nil)
+				epmax--;
 		qunlock(&epslck);
-		if(d != nil){
-			qlock(&ep->ep0->ql);
-			d->eps[ep->nb] = nil;
-			qunlock(&ep->ep0->ql);
-		}
+		qunlock(&ep->ep0->ql);
 		if(ep->ep0 != ep){
 			putep(ep->ep0);
 			ep->ep0 = nil;
@@ -473,13 +479,26 @@ dumpeps(void)
 static int
 newusbid(Hci *)
 {
-	int id;
+	char used[128];
+	Ep *ep;
+	int i, id;
 
-	qlock(&epslck);
-	id = ++usbidgen;
-	if(id >= 0x7F)
-		print("#u: too many device addresses; reuse them more\n");
-	qunlock(&epslck);
+	memset(used, 0, sizeof(used));
+	used[0] = 1;
+	id = 1;
+	for(i = 0; i < epmax; i++){
+		if((ep = eps[i]) == nil)
+			continue;
+		used[ep->dev->nb % nelem(used)] = 1;
+		if(ep->dev->nb >= id)
+			id = ep->dev->nb + 1;
+	}
+	if(id >= nelem(used))
+		for(id = 1; id < nelem(used); id++)
+			if(used[id] == 0)
+				break;
+	if(id >= nelem(used))
+		error("out of device addresses");
 	return id;
 }
 
@@ -492,12 +511,9 @@ newdev(Hci *hp, int ishub, int isroot)
 	Ep *ep;
 	Udev *d;
 
-	ep = epalloc(hp);
-	d = ep->dev = smalloc(sizeof(Udev));
-	d->nb = newusbid(hp);
-	d->eps[0] = ep;
-	ep->nb = 0;
-	ep->toggle[0] = ep->toggle[1] = 0;
+	d = malloc(sizeof(Udev));
+	if(d == nil)
+		error(Enomem);
 	d->ishub = ishub;
 	d->isroot = isroot;
 	d->depth = -1;			/* a root hub's; newdev's caller says otherwise */
@@ -506,11 +522,28 @@ newdev(Hci *hp, int ishub, int isroot)
 	else
 		d->speed = Fullspeed;
 	d->state = Dconfig;		/* address not yet set */
+
+	qlock(&epslck);
+	if(waserror()){
+		qunlock(&epslck);
+		free(d);
+		nexterror();
+	}
+	d->nb = newusbid(hp);
+	ep = epalloc(hp);
+	ep->nb = 0;
+	ep->toggle[0] = ep->toggle[1] = 0;
 	ep->dev = d;
 	ep->ep0 = ep;			/* no ref counted here */
 	ep->ttype = Tctl;
 	ep->tmout = Xfertmout;
 	ep->mode = ORDWR;
+	d->eps[0] = ep;
+	incref(&ep->r);			/* reference returned to the caller */
+	eppublish(ep);
+	qunlock(&epslck);
+	poperror();
+
 	dprint("newdev %#p ep%d.%d %#p\n", d, d->nb, ep->nb, ep);
 	return ep;
 }
@@ -550,40 +583,55 @@ settopology(Udev *d, Udev *hub)
  * accessed via the given endpoint 0.
  */
 static Ep*
-newdevep(Ep *ep, int i, int tt, int mode)
+newdevep(Ep *ep0, int i, int tt, int mode)
 {
-	Ep *nep;
+	Ep *ep;
 	Udev *d;
 
-	d = ep->dev;
+	qlock(&ep0->ql);
+	qlock(&epslck);
+	if(waserror()){
+		qunlock(&epslck);
+		qunlock(&ep0->ql);
+		nexterror();
+	}
+
+	d = ep0->dev;
 	if(d->eps[i] != nil)
 		error("endpoint already in use");
-	nep = epalloc(ep->hp);
-	incref(&ep->r);
-	d->eps[i] = nep;
-	nep->nb = i;
-	nep->toggle[0] = nep->toggle[1] = 0;
-	nep->ep0 = ep;
-	nep->dev = ep->dev;
-	nep->mode = mode;
-	nep->ttype = tt;
-	nep->debug = ep->debug;
+	ep = epalloc(ep0->hp);
+	ep->nb = i;
+	ep->toggle[0] = ep->toggle[1] = 0;
+	ep->ep0 = ep0;
+	ep->dev = d;
+	ep->mode = mode;
+	ep->ttype = tt;
+	ep->debug = ep0->debug;
 	/* set defaults */
 	switch(tt){
 	case Tctl:
-		nep->tmout = Xfertmout;
+		ep->tmout = Xfertmout;
 		break;
 	case Tintr:
-		nep->pollival = 10;
+		ep->pollival = 10;
 		break;
 	case Tiso:
-		nep->tmout = Xfertmout;
-		nep->pollival = 10;
-		nep->samplesz = 4;
-		nep->hz = 44100;
+		ep->tmout = Xfertmout;
+		ep->pollival = 10;
+		ep->samplesz = 4;
+		ep->hz = 44100;
 		break;
 	}
-	deprint("newdevep ep%d.%d %#p\n", d->nb, nep->nb, nep);
+	d->eps[i] = ep;
+	incref(&ep0->r);
+	incref(&ep->r);			/* reference returned to the caller */
+	eppublish(ep);
+
+	qunlock(&epslck);
+	qunlock(&ep0->ql);
+	poperror();
+
+	deprint("newdevep ep%d.%d %#p\n", d->nb, ep->nb, ep);
 	return ep;
 }
 
@@ -834,6 +882,7 @@ usbinit(void)
 			d->maxpkt = 64;
 			snprint(info, sizeof(info), "ports %d", hp->nports);
 			kstrdup(&d->info, info);
+			putep(d);
 		}
 	}
 }
@@ -1232,7 +1281,8 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 		mode = name2mode(cb->f[3]);
 		if(mode < 0)
 			error("unknown i/o mode");
-		newdevep(ep, nb, tt, mode);
+		nep = newdevep(ep->ep0, nb, tt, mode);
+		putep(nep);
 		break;
 	case CMnewdev:
 		deprint("usb epctl %s\n", cb->f[0]);
@@ -1264,6 +1314,7 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 		 * it is the same class of silent type confusion that the
 		 * anonymous-member handling exists to catch.
 		 */
+		putep(nep);
 		kstrdup((char**)&c->aux, up->genbuf);
 		break;
 	case CMhub:

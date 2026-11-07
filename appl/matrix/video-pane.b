@@ -32,14 +32,13 @@ implement VideoPane;
 # drives update() at frame cadence.  A status strip along the pane's
 # bottom edge shows state and position.
 #
-# LIVE SEQUENTIAL SOURCES: a mount whose status carries no transport
-# (no "pos=" — e.g. a vision service's /mnt/vision/feeds/<id>, serving the
-# vid9p fmt/frame schema with join-live ring semantics and reads that
-# park until the next frame) is played as a stream: a reader proc
-# consumes framesize-byte chunks sequentially — the SERVER paces it —
-# and the pane blits the newest frame each tick.  No transport keys;
-# the strip shows LIVE.  camsrv(4)'s camera is such a feed, and so is
-# one mounted from another machine.
+# LIVE SOURCES: a mount whose status carries no transport (no "pos=":
+# camsrv(4)'s camera, here or mounted from another machine) is played
+# as a stream: a reader proc starts at the newest frame (status frames=
+# less one, frames numbered as vid9p's), reads each next one at its
+# offset (the read parks until it exists: the SERVER paces it), goes
+# on from the newest when it falls behind, and the pane blits the
+# newest frame each tick.  No transport keys; the strip shows LIVE.
 #
 # LAYERS: what is drawn over the frames is the feed's layer/ directory
 # as this name space has it (#1095, layers(2)): each file a layer of
@@ -51,9 +50,8 @@ implement VideoPane;
 #     unmount /mnt/vision/1/layer /mnt/video/0/layer
 #
 # On frame F each layer's records for its newest frame up to F are
-# drawn, and its frame=* records.  A live sequential feed names no
-# frames, so on one only frame=* records are drawn: a record is never
-# put on a frame it may not be for.
+# drawn, and its frame=* records.  Frames are numbered by the feed, a
+# live one's too (camsrv's), so a detector's frame=N is drawn on N.
 #
 
 include "sys.m";
@@ -121,7 +119,7 @@ haveframe: int;			# a frame has been decoded into `frame`
 # live-sequential source state (status without pos= / no status at all)
 seqmode := 0;			# 1: stream the frame file, server-paced
 seqprobed := 0;			# transport-vs-stream decided
-framech: chan of array of byte;	# reader -> pane, filled frames
+framech: chan of (int, array of byte);	# reader -> pane, filled frames and their numbers
 freech: chan of array of byte;	# pane -> reader, recycled buffers
 rdpid := -1;			# reader proc, killed on shutdown
 stopreader := 0;
@@ -248,7 +246,7 @@ ensureopen(): int
 			seqprobed = 1;
 		}
 		if(seqprobed && seqmode) {
-			framech = chan[1] of array of byte;
+			framech = chan[1] of (int, array of byte);
 			freech = chan[2] of array of byte;
 			freech <-= array[framesize] of byte;
 			freech <-= array[framesize] of byte;
@@ -268,40 +266,75 @@ contains(s, sub: string): int
 	return 0;
 }
 
-# Sequential reader for live sources: consume framesize-byte chunks
-# from <mount>/frame on a private fd (per-fid join-live semantics),
-# hand full frames to update() over a two-buffer ping-pong.  Blocking
-# is the design: the server parks the read until a new frame exists.
+# Reader for live sources.  Frames are numbered, as vid9p's are (frame
+# n at n*framesize, #1095): it starts at the newest, reads each next
+# one at its offset, and goes on from the newest again when it falls
+# behind ("frame expired").  Full frames go to update() with their
+# numbers over a two-buffer ping-pong.  Blocking is the design: the
+# server parks the read until the frame exists.
 streamreader()
 {
 	rdpid = sys->pctl(0, nil);
 	fd := sys->open(mountpath + "/frame", Sys->OREAD);
+	f := livestart();
 	for(;;) {
 		if(stopreader)
 			return;
 		if(fd == nil) {
 			sys->sleep(500);
 			fd = sys->open(mountpath + "/frame", Sys->OREAD);
+			f = livestart();
 			continue;
 		}
 		fb := <-freech;
 		got := 0;
+		e := "";
 		while(got < framesize) {
-			n := sys->read(fd, fb[got:], framesize-got);
-			if(n <= 0) {
-				fd = nil;	# source went away; reopen joins live
+			n := sys->pread(fd, fb[got:], framesize-got, big f * big framesize + big got);
+			if(n < 0)
+				e = sys->sprint("%r");
+			if(n <= 0)
 				break;
-			}
 			got += n;
 		}
 		if(got < framesize) {
 			freech <-= fb;
+			if(e == "frame expired")
+				f = livestart();
+			else
+				fd = nil;	# source went away; reopen joins live
 			continue;
 		}
 		if(stopreader)
 			return;
-		framech <-= fb;
+		framech <-= (f++, fb);
 	}
+}
+
+# where a live reader starts: the newest frame (status frames= less one)
+# if it is still kept (not below first=), else the next, which a read
+# waits for
+livestart(): int
+{
+	fd := sys->open(mountpath + "/status", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[512] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return 0;
+	(frames, first) := (0, 0);
+	(nil, toks) := sys->tokenize(string b[0:n], " \t\n");
+	for(; toks != nil; toks = tl toks) {
+		t := hd toks;
+		if(len t > 7 && t[0:7] == "frames=")
+			frames = int t[7:];
+		else if(len t > 6 && t[0:6] == "first=")
+			first = int t[6:];
+	}
+	if(frames > first)
+		return frames - 1;
+	return frames;
 }
 
 # Parse <mount>/status: "<src> w= h= framesize= frames= eof= state= pos= t= follow=".
@@ -413,8 +446,9 @@ update(): int
 		# arrived since the last tick; never block the GUI loop.
 		changed := 0;
 		alt {
-		fb := <-framech =>
+		(fno, fb) := <-framech =>
 			convertframe(fb);
+			lastshown = fno;
 			freech <-= fb;
 			changed = 1;
 		* =>
@@ -438,12 +472,9 @@ update(): int
 	return layerschanged() || changed || statestr != was;
 }
 
-# the frame the layers are drawn for: the one shown, or for a live
-# sequential feed, which names none, none (only frame=* is due)
+# the frame the layers are drawn for: the one shown, by its number
 layerframe(): int
 {
-	if(seqmode)
-		return -1;
 	return lastshown;
 }
 

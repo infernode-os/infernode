@@ -155,9 +155,11 @@ order. `vidplay9p` and `video-pane` both draw it, through `layers.m`:
 ; unmount /mnt/vision/1/layer /mnt/video/0/layer    # gone
 ```
 
-A layer's `frame=N` is the feed's frame N, as the frame file numbers it. A
-feed that names no frames (camsrv's camera, with no `pos=`) gets only
-`frame=*` records drawn until it does.
+A layer's `frame=N` is the feed's frame N, as the frame file numbers it, the
+same for every reader on every machine. A live feed (camsrv's camera, with no
+`pos=`) numbers its frames the same way: it keeps the last few, `status` gives
+`frames=` (one past the newest) and `first=`, and a live reader starts at the
+newest and skips ahead when it falls behind ("frame expired").
 
 The player and the feed wall are **crystallisations**, not applications:
 `/lib/matrix/compositions/video-player` (pane + ctl over one mount) and

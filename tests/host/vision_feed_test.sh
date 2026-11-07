@@ -11,6 +11,9 @@
 #     20 frames a second): the session joins at the newest frame, takes
 #     the newest each time it is ready, counts the rest as skipped, never
 #     holds the feed back, and ends when the source does
+#   - a camera (camsrv -t): the session's frame= numbers are the
+#     camera's own (in order, within what camsrv has made), so a viewer
+#     of the camera elsewhere draws them on the frames they were found in
 #   - src none back to idle; a feed that is not one refused
 #
 # Needs a model directory and a picture of a dog (as vision_test.sh) and
@@ -29,7 +32,7 @@ for v in VISION_MODEL VISION_PICTURE; do
 done
 "$PY" -c 'import numpy, PIL' 2>/dev/null || { echo "SKIP: $PY lacks numpy or Pillow"; exit 77; }
 [ -x "$EMU" ] || { echo "SKIP: no emulator at $EMU"; exit 77; }
-for f in visionfs.dis vid9p.dis; do
+for f in visionfs.dis vid9p.dis camsrv.dis; do
 	[ -f "$ROOT/dis/$f" ] || { echo "SKIP: dis/$f not built"; exit 77; }
 done
 
@@ -43,8 +46,9 @@ M=/tmp/h$VISION_MODEL
 E=/tmp/h$W
 cat > "$W/run.sh" <<RUN
 load std
-mkdir -p /mnt/video /mnt/live
+mkdir -p /mnt/video /mnt/live /mnt/cam
 mount {vid9p $E/clip.y4m} /mnt/video
+mount -A {camsrv -t} /mnt/cam
 mount {vid9p -c $PYABS $ROOT/tests/host/vision/live.py $W/clip.y4m} /mnt/live
 visionfs -S load m $M
 {
@@ -64,6 +68,13 @@ visionfs -S load m $M
 		cat
 	} < /mnt/vision/\$id/detections
 	echo '-- live status'; cat /mnt/vision/\$id/status /mnt/vision/\$id/stats
+	{
+		echo src /mnt/cam/0 > /mnt/vision/\$id/ctl
+		echo '-- cam'
+		for i in 1 2 3 4 5 { read }
+		echo '-- cam status'; cat /mnt/cam/0/status
+	} < /mnt/vision/\$id/detections
+	echo src none > /mnt/vision/\$id/ctl
 } < /mnt/vision/clone
 echo '-- END'
 echo halt > '#c/sysctl'
@@ -94,4 +105,8 @@ sk=$(echo "$st" | sed -n 's/.*skipped=\([0-9]*\).*/\1/p')
 inf=$(echo "$st" | sed -n 's/.*inferred=\([0-9]*\).*/\1/p')
 [ -n "$sk" ] && [ "$sk" -gt 0 ] && [ "$inf" = "$nlive" ] && ok "live: the frames it was not ready for skipped ($st)" || bad "live stats: $st"
 part 'live status' | grep -q '^state=ended ' && ok "live: ended with the source" || bad "live status: $(part 'live status' | head -1)"
+cam=$(part cam | cut -d' ' -f1 | sed 's/frame=//' | tr '\n' ' ')
+camframes=$(part 'cam status' | sed -n 's/.* frames=\([0-9]*\).*/\1/p')
+okcam=$(echo "$cam" | awk -v f="$camframes" '{n=0; for(i=1;i<=NF;i++){ if($i !~ /^[0-9]+$/ || $i >= f || (i>1 && $i <= p)) bad=1; p=$i; n++ } } END {print (n==5 && !bad && f != "") ? 1 : 0}')
+[ "$okcam" = 1 ] && ok "a camera: the session's frames are the camera's own numbers ($cam< frames=$camframes)" || bad "a camera's frames: '$cam' camsrv frames=$camframes"
 exit $fail

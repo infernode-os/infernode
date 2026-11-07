@@ -37,9 +37,14 @@ takes it off, while the window is up:
 .IP
 .B bind -a /mnt/vision/1/layer /mnt/video/0/layer
 .PP
-The camera's feed names no frames, so only a layer's
+Frames are numbered by the feed, so each is drawn with its layers'
+records for it (a detector's
+.BI frame= N
+on frame
+.IR N ),
+and their
 .B frame=*
-records are drawn.
+records.
 .PP
 The keys
 .B +

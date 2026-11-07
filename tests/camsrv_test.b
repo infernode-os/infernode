@@ -82,7 +82,8 @@ has(s, t: string): int
 	return 0;
 }
 
-readframe(fd: ref Sys->FD, b: array of byte): int
+# a file read whole from where it is (raw, which is not numbered)
+readall(fd: ref Sys->FD, b: array of byte): int
 {
 	n := 0;
 	while(n < len b){
@@ -92,6 +93,56 @@ readframe(fd: ref Sys->FD, b: array of byte): int
 		n += m;
 	}
 	return n;
+}
+
+# frame n, read whole at its offset: (bytes, error)
+readat(fd: ref Sys->FD, b: array of byte, n: int): (int, string)
+{
+	got := 0;
+	while(got < len b){
+		m := sys->pread(fd, b[got:], len b - got, big n * big len b + big got);
+		if(m < 0)
+			return (got, sys->sprint("%r"));
+		if(m == 0)
+			break;
+		got += m;
+	}
+	return (got, nil);
+}
+
+# a value of status, as a number (-1 if absent)
+statusnum(k: string): int
+{
+	(nil, f) := sys->tokenize(file("status"), " \t\n");
+	for(; f != nil; f = tl f)
+		if(len hd f > len k + 1 && (hd f)[0:len k + 1] == k + "=")
+			return int (hd f)[len k + 1:];
+	return -1;
+}
+
+# where a live reader starts: the newest frame if still kept, else the
+# next, which a read waits for
+newest(): int
+{
+	frames := statusnum("frames");
+	first := statusnum("first");
+	if(frames < 0)
+		return -1;
+	if(frames > first)
+		return frames - 1;
+	return frames;
+}
+
+# the newest frame, as a live reader takes it
+readframe(fd: ref Sys->FD, b: array of byte): int
+{
+	n := newest();
+	if(n < 0)
+		return 0;
+	(got, e) := readat(fd, b, n);
+	if(e != nil)
+		sys->fprint(sys->fildes(2), "readframe %d: %s\n", n, e);
+	return got;
 }
 
 testSchema(t: ref T)
@@ -111,8 +162,31 @@ testFrames(t: ref T)
 	a := array[FS] of byte;
 	b := array[FS] of byte;
 	t.asserteq(readframe(fd, a), FS, "a whole frame");
-	t.asserteq(readframe(fd, b), FS, "and the next");
+	n := newest();
+	(got, e) := readat(fd, b, n + 1);
+	t.asserteq(got, FS, "and the next, waited for: " + e);
 	t.assert(has(file("status"), "stream=on"), "a reader, a stream");
+
+	# numbered as vid9p's: frame n is the same frame for every reader
+	fd2 := sys->open(MNT + "/0/frame", Sys->OREAD);
+	c := array[FS] of byte;
+	(got, e) = readat(fd2, c, n + 1);
+	t.asserteq(got, FS, "a second reader, the same frame: " + e);
+	same := 1;
+	for(j := 0; j < FS; j++)
+		if(b[j] != c[j]){
+			same = 0;
+			break;
+		}
+	t.assert(same, "frame n is the same bytes to both readers");
+	fd2 = nil;
+	# kept: the last few; below them, refused
+	sys->sleep(500);
+	first := statusnum("first");
+	frames := statusnum("frames");
+	t.assert(first >= 0 && frames > first && frames - first <= 8, sys->sprint("status first=%d frames=%d", first, frames));
+	(got, e) = readat(fd, c, first - 1);
+	t.assert(first == 0 || e == "frame expired", "a frame no longer kept: " + e);
 	y := a[0:W*H];
 	# the first bar is white, the last black, away from the moving band
 	row := H-8;
@@ -158,7 +232,7 @@ testRaw(t: ref T)
 	if(fd == nil)
 		t.fatal(sys->sprint("open raw: %r"));
 	b := array[1152*648*2] of byte;
-	t.asserteq(readframe(fd, b), len b, "raw is the sensor's size");
+	t.asserteq(readall(fd, b), len b, "raw is the sensor's size");
 	# RGGB, white bar: 1023 in every cell at the top left of the frame's bottom
 	o := (640*1152 + 8)*2;
 	t.asserteq(int b[o] | int b[o+1]<<8, 1023, "a raw sample of the white bar");

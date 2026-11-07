@@ -46,13 +46,15 @@ DESCRIPTION
 	feed in the composition (see the video-player and video-live
 	crystallisations in /lib/matrix/compositions).
 
-	LIVE SEQUENTIAL SOURCES.  A mount whose status carries no
-	transport (no "pos=" field: camsrv(4)'s camera, here or mounted
-	from another machine) is played as a stream: a reader proc
-	consumes framesize-byte chunks sequentially, paced by the SERVER
-	(reads park until the next frame; a slow link skips frames, never
-	blocks), and the pane blits the newest frame each tick.  The strip
-	shows "LIVE <w>x<h> stream"; transport keys are inert.
+	LIVE SOURCES.  A mount whose status carries no transport (no
+	"pos=" field: camsrv(4)'s camera, here or mounted from another
+	machine) is played as a stream.  Its frames are numbered as
+	vid9p's are (frame N at N*framesize): a reader proc starts at
+	the newest (status frames= less one), reads each next frame at
+	its offset, paced by the SERVER (the read parks until the frame
+	exists), and goes on from the newest when it falls behind
+	("frame expired"); the pane blits the newest frame each tick.
+	The strip shows "LIVE <w>x<h> stream"; transport keys are inert.
 
 	LAYERS.  What is drawn over the frames is the feed's layer/
 	directory as the composition's name space has it (#1095,
@@ -67,8 +69,8 @@ DESCRIPTION
 
 	A bind or unmount shows within half a second.  On frame F each
 	layer's records for its newest frame up to F are drawn, and its
-	frame=* records.  A live sequential feed names no frames, so on
-	one only frame=* records are drawn.  All panes of one Matrix
+	frame=* records, F being the feed's own frame number, so a
+	detector's frame=N is drawn on frame N.  All panes of one Matrix
 	share its name space, so they see the same stack of a feed; a
 	viewer in another name space sees its own.
 

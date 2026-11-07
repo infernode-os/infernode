@@ -17,9 +17,11 @@ implement VidPlay9p;
 #
 #   bind -a /mnt/vision/1/layer /mnt/video/0/layer
 #
-# Frame N is the Nth read from the start, as vid9p numbers them. A feed
-# whose status has no playhead (pos=), as camsrv(4)'s camera, names no
-# frames: on it only frame=* records are drawn.
+# Frames are numbered by the feed (frame N at N*framesize, #1095): a
+# clip plays from frame 0; a live feed (status with no playhead, pos=,
+# as camsrv(4)'s camera) from its newest frame, going on from the newest
+# again when it falls behind. Each frame is drawn with its layers'
+# records for it.
 #
 # usage: vidplay9p [-shape oval|rect] /mnt/video/0
 #
@@ -77,7 +79,7 @@ init(ctxt: ref Draw->Context, args: list of string)
     (w, h, rate) := readfmt(mnt + "/fmt");
     if(w <= 0 || h <= 0){ sys->fprint(stderr, "vidplay9p: bad/empty fmt at %s\n", mnt); return; }
 
-    numbered := hasplayhead(mnt + "/status");
+    live := !hasplayhead(mnt + "/status");
     stack := Stack.watch(mnt + "/layer");
     font := Font.open(display, "*default*");
     (accent, colours) := layers->themed(display);
@@ -113,16 +115,21 @@ init(ctxt: ref Draw->Context, args: list of string)
     # frames keep to a deadline, one every delay ms, whatever the drawing
     # took (a live feed also paces itself: its reads wait for frames)
     next := sys->millisec();
-    for(n := 0;; n++){
-        if(!readfull(ffd, buf))
+    n := 0;
+    if(live)
+        n = livestart(mnt + "/status");
+    for(;; n++){
+        (ok, e) := readat(ffd, buf, n);
+        if(!ok && live && e == "frame expired"){
+            n = livestart(mnt + "/status") - 1;
+            continue;
+        }
+        if(!ok)
             break;                          # EOF / short read = end of stream
         p := ref YCbCr(buf[0:wh], buf[wh:wh+csz], buf[wh+csz:wh+2*csz]);
         frame.writepixels(vr, remap->remap(p));
         win.image.draw(dst, frame, matte, vr.min);
-        f := -1;                            # a feed naming no frames: frame=* alone
-        if(numbered)
-            f = n;
-        layers->draw(stack.due(f), win.image, dst, w, h, font, accent, colours);
+        layers->draw(stack.due(n), win.image, dst, w, h, font, accent, colours);
         win.image.flush(Draw->Flushnow);
         alt {
         c := <-win.ctl => win.wmctl(c);
@@ -179,16 +186,45 @@ readfmt(path: string): (int, int, int)
     return (w, h, rate);
 }
 
-readfull(fd: ref Sys->FD, buf: array of byte): int
+# frame n, whole, at its offset: (1 if whole, the error if any)
+readat(fd: ref Sys->FD, buf: array of byte, n: int): (int, string)
 {
     got := 0;
     while(got < len buf){
-        n := sys->read(fd, buf[got:], len buf - got);
-        if(n <= 0)
-            return 0;
-        got += n;
+        k := sys->pread(fd, buf[got:], len buf - got, big n * big len buf + big got);
+        if(k < 0)
+            return (0, sys->sprint("%r"));
+        if(k == 0)
+            return (0, nil);
+        got += k;
     }
-    return 1;
+    return (1, nil);
+}
+
+# where a live reader starts: the newest frame (status frames= less one)
+# if it is still kept (not below first=), else the next, which a read
+# waits for
+livestart(path: string): int
+{
+    fd := sys->open(path, Sys->OREAD);
+    if(fd == nil)
+        return 0;
+    b := array[512] of byte;
+    k := sys->read(fd, b, len b);
+    if(k <= 0)
+        return 0;
+    (frames, first) := (0, 0);
+    (nil, toks) := sys->tokenize(string b[0:k], " \t\n");
+    for(; toks != nil; toks = tl toks){
+        t := hd toks;
+        if(len t > 7 && t[0:7] == "frames=")
+            frames = int t[7:];
+        else if(len t > 6 && t[0:6] == "first=")
+            first = int t[6:];
+    }
+    if(frames > first)
+        return frames - 1;
+    return frames;
 }
 
 # GREY8 matte: 0 hidden, 255 visible. rect -> plain full-frame blit.

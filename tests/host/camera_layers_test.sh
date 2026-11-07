@@ -11,8 +11,9 @@
 #   2. a magenta box layer (frame=*) bound: drawn (magenta pixels
 #      beyond the pattern's own)
 #   3. unmounted: back to the pattern alone
-#   4. a layer keyed to a frame number: not drawn (the camera's feed
-#      names no frames, so only frame=* is)
+#   4. a layer keyed to a frame far ahead: not drawn yet
+#   5. one keyed to frame 1: drawn (the camera numbers its frames, so a
+#      record for frame N is drawn from N on)
 #
 # Needs the SDL emulator (SDL's dummy driver keeps it headless).
 #
@@ -30,12 +31,13 @@ command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3"; exit 77; }
 
 W="$ROOT/tmp/camera_layers_test.$$"
 rm -rf "$W"
-mkdir -p "$W/box" "$W/keyed"
+mkdir -p "$W/box" "$W/keyed" "$W/early"
 trap 'rm -rf "$W"' EXIT
 E=/tmp/camera_layers_test.$$
 
 echo 'frame=* box x0=20 y0=20 x1=140 y1=100 label=door colour=ff00ff' > "$W/box/door"
-echo 'frame=3 box x0=20 y0=20 x1=140 y1=100 label=three colour=ff00ff' > "$W/keyed/three"
+echo 'frame=100000000 box x0=20 y0=20 x1=140 y1=100 label=later colour=ff00ff' > "$W/keyed/later"
+echo 'frame=1 box x0=20 y0=20 x1=140 y1=100 label=one colour=ff00ff' > "$W/early/one"
 
 cat > "$W/run.sh" <<RUN
 mount -ac {mntgen} /mnt
@@ -53,6 +55,10 @@ scap $E/3.img
 bind -a $E/keyed /mnt/video/0/layer
 sleep 2
 scap $E/4.img
+unmount $E/keyed /mnt/video/0/layer
+bind -a $E/early /mnt/video/0/layer
+sleep 2
+scap $E/5.img
 echo LAYERS-DONE
 echo halt > '#c/sysctl'
 RUN
@@ -73,7 +79,7 @@ counts=$(python3 - "$ROOT/tools" "$W" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from p9img2png import load
-for n in "1234":
+for n in "12345":
     rgb = load("%s/%s.img" % (sys.argv[2], n)).rgb
     m = 0
     for p in range(0, len(rgb), 3):
@@ -85,7 +91,8 @@ PY
 )
 base=$(echo "$counts" | awk '$1 == 1 {print $2}')
 for line in "2|a frame=* box layer bound: drawn|some" \
-	"3|unmounted: gone|none" "4|a layer keyed to a frame number: not drawn on a feed that names none|none"; do
+	"3|unmounted: gone|none" "4|a layer keyed to a frame far ahead: not drawn yet|none" \
+	"5|a layer keyed to frame 1: drawn on the frames after it|some"; do
 	IFS='|' read -r n what want <<<"$line"
 	m=$(echo "$counts" | awk -v n="$n" '$1 == n {print $2}')
 	d=$((m - base))

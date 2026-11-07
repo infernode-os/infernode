@@ -1076,8 +1076,8 @@ follower(id, fgen: int, src: string, n: ref Net, thresh, iou: real, classes: lis
 	next := 0;		# the feed's frame number to look at next
 	if(counted){
 		next = first;
-		if(!eof && frames > 0)
-			next = frames - 1;	# live: from now on
+		if(!eof)
+			next = livestart(frames, first);	# live: from now on
 	}
 	last := 0;
 	for(;;){
@@ -1092,16 +1092,28 @@ follower(id, fgen: int, src: string, n: ref Net, thresh, iou: real, classes: lis
 			return;
 		}
 		got := 0;
+		expired := 0;
 		off := big next * big fs;
 		while(got < fs){
 			k := sys->pread(fd, buf[got:], fs - got, off + big got);
 			if(k < 0){
-				framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s/frame: %r", src), 0, 0, 1);
+				e := sys->sprint("%r");
+				if(e == "frame expired" && counted && !eof){
+					expired = 1;	# fallen behind a live feed
+					break;
+				}
+				framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s/frame: %s", src, e), 0, 0, 1);
 				return;
 			}
 			if(k == 0)
 				break;
 			got += k;
+		}
+		if(expired){
+			# gone before it was read: go on from the newest
+			(nil, frames, first, eof) = feedcount(src);
+			next = livestart(frames, first);
+			continue;
 		}
 		if(got < fs){
 			# the feed has ended
@@ -1131,6 +1143,15 @@ follower(id, fgen: int, src: string, n: ref Net, thresh, iou: real, classes: lis
 			next++;
 		framec <-= ref Frameres(id, fgen, text, nil, ms, skipped, 0);
 	}
+}
+
+# where a live reader starts: the newest frame (frames= less one) if it
+# is still kept (not below first=), else the next, which a read waits for
+livestart(frames, first: int): int
+{
+	if(frames > first)
+		return frames - 1;
+	return frames;
 }
 
 member(s: string, l: list of string): int

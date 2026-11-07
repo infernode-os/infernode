@@ -76,8 +76,26 @@ open, and the last close powers it down.
 .IR fps ''.
 .TP
 .B 0/frame
-I420, full range. Each open joins live: a read at a frame's start takes
-the newest frame this open has not had, waiting for one.
+I420, full range, numbered as
+.IR vid9p 's
+frames are: frame
+.I N
+is the frame size's bytes at offset
+.IR N ×framesize,
+the same for every reader, so a record keyed
+.BI frame= N
+.RI ( layers (2))
+means the same frame to all of them.
+The last eight frames are kept; a read below them is refused with
+.LR "frame expired" ,
+and a read past the newest waits for that frame.
+A live reader starts at the newest
+.RB ( status 's
+.B frames=
+less one, if that is not below
+.BR first= )
+and goes on from the newest again when it falls behind.
+Numbers run on across the sensor going off and on.
 .TP
 .B 0/raw
 A frame as the sensor gave it, 16 bits a sample, little-endian, at the
@@ -86,8 +104,11 @@ size and mosaic in
 .TP
 .B 0/status
 One line of
-.IB key = value\f1,
-with no
+.IB key = value\f1:
+.B frames=
+(one past the newest frame) and
+.B first=
+(the oldest kept), and no
 .BR pos= :
 this is what marks a feed live to its readers.
 .BR autofocus=

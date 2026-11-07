@@ -4,15 +4,21 @@ implement Camsrv;
 # camsrv - a camera, as a live video feed.
 #
 #   /mnt/video/0/fmt      read  "<w> <h> i420 <fps>"
-#   /mnt/video/0/frame    read  I420, sequentially, each open joining live:
-#                               a read at a frame's start takes the newest
-#                               frame this fid has not had, waiting for one
+#   /mnt/video/0/frame    read  I420, numbered as vid9p's are (#1095): frame N
+#                               is the framesize bytes at offset N*framesize,
+#                               the same for every reader. The last Ring
+#                               frames are kept; a read below them errors
+#                               "frame expired", one past the newest waits
+#                               for it. A live reader starts at the newest
+#                               (status frames= less one) and skips ahead
+#                               when it falls behind. Numbers run on across
+#                               the sensor going off and on.
 #   /mnt/video/0/raw      read  one frame as the sensor gave it, 16 bits a
 #                               sample little-endian, w*2 by h*2 pixels
 #                               scaled; its format is in status
-#   /mnt/video/0/status   read  one line of key=value, with no pos=: this
-#                               is the live sequential source video-pane(1)
-#                               and vidplay9p read
+#   /mnt/video/0/status   read  one line of key=value: frames= (one past
+#                               the newest frame) and first= (the oldest
+#                               kept), and no pos=: a live feed
 #   /mnt/video/0/ctl      write mode W H | fps N | exposure LINES (0 = auto)
 #                               gain CODE | focus N | focus auto | flip N
 #                               rotate 0|90|180|270
@@ -94,7 +100,10 @@ focus := -1;
 afrun := 0;
 
 fsize := 0;
-seq := 0;		# frames made since the sensor came on
+seq := 0;		# frames made since camsrv started: the next frame's number
+base := 0;		# the first frame since the sensor last came on
+Ring: con 8;		# the frames kept, at 30 fps a quarter second
+ring := array[Ring] of (int, array of byte);
 latest: array of byte;
 lastraw: array of byte;
 err := "";
@@ -285,6 +294,7 @@ serve(tree: ref Tree)
 		}
 	fr := <-framec =>
 		latest = fr;
+		ring[seq % Ring] = (seq, fr);
 		seq++;
 		wake();
 	r := <-rawc =>
@@ -375,22 +385,33 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 	fs := fsize;
 	if(s.path == Qraw)
 		fs = Sw*Sh*2/simdiv();
+	if(fs <= 0)
+		return 0;
 	foff := int (tm.offset % big fs);
 	if(s.path == Qraw && tm.offset >= big fs){
 		srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
 		return 1;
 	}
-	if(foff == 0 || s.fr == nil){
-		if(s.path == Qframe){
-			if(latest == nil || s.seq == seq || len latest != fs)
-				return 0;
-			s.fr = latest;
-			s.seq = seq;
-		}else{
-			if(lastraw == nil)
-				return 0;
-			s.fr = lastraw;
+	if(s.path == Qframe){
+		# frame n, as every reader numbers it
+		n := int (tm.offset / big fs);
+		if(n >= seq)
+			return 0;	# not made yet: wait for it
+		(sn, fr) := ring[n % Ring];
+		if(sn != n || fr == nil || len fr != fs){
+			srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
+			return 1;
 		}
+		k := tm.count;
+		if(foff + k > fs)
+			k = fs - foff;
+		srv.reply(ref Rmsg.Read(tm.tag, fr[foff:foff+k]));
+		return 1;
+	}
+	if(foff == 0 || s.fr == nil){
+		if(lastraw == nil)
+			return 0;
+		s.fr = lastraw;
 	}
 	n := tm.count;
 	if(foff + n > len s.fr)
@@ -422,7 +443,10 @@ status(): string
 	on := "off";
 	if(users > 0)
 		on = "on";
-	s := sys->sprint("camera w=%d h=%d framesize=%d frames=%d stream=%s", fw(), fh(), fsize, seq, on);
+	first := seq - Ring;
+	if(first < base)
+		first = base;
+	s := sys->sprint("camera w=%d h=%d framesize=%d frames=%d first=%d stream=%s", fw(), fh(), fsize, seq, first, on);
 	if(sim)
 		s += " sim=1";
 	s += sys->sprint(" rawformat=rggb10:%d:%d", Sw/simdivr(), Sh/simdivr());
@@ -567,7 +591,10 @@ stopcapture()
 
 launch()
 {
-	seq = 0;
+	# the numbers run on; the frames of before are not kept
+	base = seq;
+	for(i := 0; i < Ring; i++)
+		ring[i] = (-1, nil);
 	latest = nil;
 	lastraw = nil;
 	capstop = chan[1] of int;

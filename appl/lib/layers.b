@@ -153,22 +153,29 @@ Stack.due(s: self ref Stack, frame: int): list of ref Mark
 watcher(s: ref Stack)
 {
 	pidc := chan of int;
+	stamps: list of (string, string);
 	for(;;){
-		names := listing(s.dir);
+		(names, st) := listing(s.dir);
 		old := s.layers;
 		nl := array[len names] of ref Layer;
 		for(i := 0; i < len names; i++){
 			for(j := 0; j < len old; j++)
 				if(old[j] != nil && old[j].name == names[i])
 					break;
-			if(j < len old)
+			if(j < len old && stampof(stamps, names[i]) == st[i])
 				nl[i] = old[j];
 			else {
+				# new, or rewritten: a reader of its own, the old one let go
+				if(j < len old)
+					s.pids = stopreader(s.pids, names[i]);
 				nl[i] = ref Layer(names[i], nil, array[0] of (int, list of ref Mark));
 				spawn reader(s.dir + "/" + names[i], nl[i], pidc);
 				s.pids = (names[i], <-pidc) :: s.pids;
 			}
 		}
+		stamps = nil;
+		for(i = 0; i < len names; i++)
+			stamps = (names[i], st[i]) :: stamps;
 		# the readers of layers gone
 		np: list of (string, int);
 		for(p := s.pids; p != nil; p = tl p){
@@ -197,12 +204,14 @@ watcher(s: ref Stack)
 	}
 }
 
-listing(dir: string): array of string
+# the directory's files in the union's order, each with a stamp of its
+# version and time: a file rewritten (echo > layer/roi) is read again
+listing(dir: string): (array of string, array of string)
 {
 	fd := sys->open(dir, Sys->OREAD);
 	if(fd == nil)
-		return array[0] of string;
-	names: list of string;
+		return (array[0] of string, array[0] of string);
+	names, stamps: list of string;
 	n := 0;
 	for(;;){
 		(k, d) := sys->dirread(fd);
@@ -211,13 +220,36 @@ listing(dir: string): array of string
 		for(i := 0; i < k; i++)
 			if((d[i].mode & Sys->DMDIR) == 0 && !member(d[i].name, names)){
 				names = d[i].name :: names;
+				stamps = sys->sprint("%d.%d.%bd", d[i].qid.vers, d[i].mtime, d[i].length) :: stamps;
 				n++;
 			}
 	}
 	a := array[n] of string;
-	for(; names != nil; names = tl names)
+	st := array[n] of string;
+	for(; names != nil; (names, stamps) = (tl names, tl stamps)){
 		a[--n] = hd names;
-	return a;
+		st[n] = hd stamps;
+	}
+	return (a, st);
+}
+
+stampof(l: list of (string, string), name: string): string
+{
+	for(; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	return nil;
+}
+
+stopreader(pids: list of (string, int), name: string): list of (string, int)
+{
+	np: list of (string, int);
+	for(; pids != nil; pids = tl pids)
+		if((hd pids).t0 == name)
+			kill((hd pids).t1);
+		else
+			np = hd pids :: np;
+	return np;
 }
 
 member(s: string, l: list of string): int

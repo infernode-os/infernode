@@ -158,6 +158,12 @@ testStack(t: ref T)
 	sys->unmount(d + "/b", d + "/stack");
 	sys->sleep(1200);
 	t.assertseq(labels(s.due(6)), "door three", "unmounted: the count gone");
+
+	# a layer file rewritten is read again
+	sys->sleep(1100);	# a new modification time
+	writefile(t, d + "/a/doors", "frame=* box x0=1 y0=1 x1=9 y1=9 label=gate\n");
+	sys->sleep(1200);
+	t.assertseq(labels(s.due(6)), "gate", "rewritten: the new records, the old gone");
 	s.stop();
 	sys->unmount(d + "/a", d + "/stack");
 	for(l = (d + "/a/doors") :: (d + "/b/count") :: (d + "/a") :: (d + "/b") :: (d + "/stack") :: d :: nil; l != nil; l = tl l)

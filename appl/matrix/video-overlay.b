@@ -49,19 +49,17 @@ remap: Remap;
 include "keyboard.m";
 
 
-# annotations: <visiondir>/boxes, one detection per line, frame coords:
-#   x0 y0 x1 y1 label...
-# visiondir is the mount with /video/ swapped for /vision/ (the
-# INFR-277 convention: ML inference as a composable 9P service beside
-# the stream it describes).
-visiondir: string;
-Box: adt {
-	x0, y0, x1, y1: int;
-	label: string;
-};
-boxes: array of ref Box;
-lastboxes: string;
+# annotations: the feed's layers, <mount>/layer/, a file each, stacked
+# by the name space (#1095, layers(2)): bind a vision session's layer,
+# or any file of records, there and it is drawn over the frames, each
+# frame with what its layers say of it.
+include "layers.m";
+	layers: Layers;
+	Stack, Mark: import layers;
+stack: ref Stack;
+drawn: string;			# what was last drawn, to know when to draw again
 acol: ref Draw->Image;
+colours: list of (string, ref Draw->Image);
 
 include "lucitheme.m";
 
@@ -130,13 +128,12 @@ init(display: ref Display, font: ref Font, mount: string): string
 	haveframe = 0;
 	loadcolors();
 
-	# /mnt/video/0 -> /mnt/vision/0 (annotation service beside stream)
-	visiondir = mount;
-	for(vi := 0; vi + 6 <= len visiondir; vi++)
-		if(visiondir[vi:vi+6] == "/video") {
-			visiondir = visiondir[0:vi] + "/vision" + visiondir[vi+6:];
-			break;
-		}
+	layers = load Layers Layers->PATH;
+	if(layers == nil)
+		return sys->sprint("cannot load %s: %r", Layers->PATH);
+	if((e := layers->init()) != nil)
+		return e;
+	stack = Stack.watch(mount + "/layer");
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	acc := int 16rE8553AFF;
 	if(lucitheme != nil)
@@ -318,55 +315,51 @@ update(): int
 	if(pos != lastshown && pos < nf && showframe(pos))
 		changed = 1;
 	setstate(strm, nf, playing, tms, fol);
-	if(readboxes())
+	if((sig := signature(stack.due(lastshown))) != drawn) {
+		drawn = sig;
 		changed = 1;
+	}
 	return changed || statestr != was;
 }
 
-# Re-read <visiondir>/boxes when its content changes.
-readboxes(): int
+# what a list of marks would draw, as a string: equal, nothing to draw again
+signature(ml: list of ref Mark): string
 {
-	fd := sys->open(visiondir + "/boxes", Sys->OREAD);
-	if(fd == nil) {
-		if(boxes != nil) {
-			boxes = nil;
-			lastboxes = "";
-			return 1;
-		}
-		return 0;
+	sig := "";
+	for(; ml != nil; ml = tl ml) {
+		m := hd ml;
+		sig += sys->sprint("%d %d %d %d %d %s %s\n", m.kind, m.x0, m.y0, m.x1, m.y1, m.label, m.colour);
 	}
-	rb := array[4096] of byte;
-	n := sys->read(fd, rb, len rb);
-	if(n <= 0)
-		return 0;
-	s := string rb[0:n];
-	if(s == lastboxes)
-		return 0;
-	lastboxes = s;
-	bl: list of ref Box;
-	(nil, lines) := sys->tokenize(s, "\n");
-	for(; lines != nil; lines = tl lines) {
-		(nt, toks) := sys->tokenize(hd lines, " \t");
-		if(nt < 4)
-			continue;
-		b := ref Box;
-		b.x0 = int hd toks; toks = tl toks;
-		b.y0 = int hd toks; toks = tl toks;
-		b.x1 = int hd toks; toks = tl toks;
-		b.y1 = int hd toks; toks = tl toks;
-		for(; toks != nil; toks = tl toks) {
-			if(b.label != "")
-				b.label += " ";
-			b.label += hd toks;
-		}
-		bl = b :: bl;
+	return sig;
+}
+
+# a mark's colour: the theme's accent, or rrggbb
+colourof(name: string): ref Draw->Image
+{
+	if(name == nil || name == "accent")
+		return acol;
+	for(l := colours; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	if(len name != 6)
+		return acol;
+	v := 0;
+	for(i := 0; i < 6; i++) {
+		c := name[i];
+		d: int;
+		if(c >= '0' && c <= '9')
+			d = c - '0';
+		else if(c >= 'a' && c <= 'f')
+			d = c - 'a' + 10;
+		else if(c >= 'A' && c <= 'F')
+			d = c - 'A' + 10;
+		else
+			return acol;
+		v = v*16 + d;
 	}
-	boxes = array[len bl] of ref Box;
-	for(i := len boxes - 1; i >= 0; i--) {
-		boxes[i] = hd bl;
-		bl = tl bl;
-	}
-	return 1;
+	im := display_g.color((v << 8) | 16rFF);
+	colours = (name, im) :: colours;
+	return im;
 }
 
 draw(dst: ref Image)
@@ -407,20 +400,32 @@ draw(dst: ref Image)
 	sp := Point(ir.min.x - pane.min.x, ir.min.y - pane.min.y);
 	dst.draw(ir, frame, nil, sp);
 
-	# annotations over the live frame: boxes and labels, frame
-	# coords -> pane coords via the same centring offset.  A box is
-	# on pixel corners, so its 2-pixel sides are crisp.
-	for(bi := 0; bi < len boxes; bi++) {
-		b := boxes[bi];
-		x0 := real (offx + b.x0);
-		y0 := real (offy + b.y0);
-		x1 := real (offx + b.x1);
-		y1 := real (offy + b.y1);
-		box := Path.new().moveto(x0, y0).lineto(x1, y0).lineto(x1, y1).lineto(x0, y1).close();
-		dst.strokepath(box, 2.0, Draw->Capbutt, Draw->Joinmiter, acol, (0, 0));
-		if(b.label != "" && font_g != nil)
-			dst.text(Point(offx + b.x0, offy + b.y0 - font_g.height - 2),
-				acol, (0, 0), font_g, b.label);
+	# the layers over the live frame, bottom first: frame coords ->
+	# pane coords via the same centring offset.  A box is on pixel
+	# corners, so its 2-pixel sides are crisp.
+	for(ml := stack.due(lastshown); ml != nil; ml = tl ml) {
+		m := hd ml;
+		col := colourof(m.colour);
+		x0 := real (offx + m.x0);
+		y0 := real (offy + m.y0);
+		x1 := real (offx + m.x1);
+		y1 := real (offy + m.y1);
+		case m.kind {
+		Layers->Box =>
+			box := Path.new().moveto(x0, y0).lineto(x1, y0).lineto(x1, y1).lineto(x0, y1).close();
+			dst.strokepath(box, 2.0, Draw->Capbutt, Draw->Joinmiter, col, (0, 0));
+			if(m.label != "" && font_g != nil)
+				dst.text(Point(offx + m.x0, offy + m.y0 - font_g.height - 2),
+					col, (0, 0), font_g, m.label);
+		Layers->Line =>
+			ln := Path.new().moveto(x0, y0).lineto(x1, y1);
+			dst.strokepath(ln, 2.0, Draw->Capround, Draw->Joinround, col, (0, 0));
+		Layers->Text =>
+			if(m.label != "" && font_g != nil)
+				dst.text(Point(offx + m.x0, offy + m.y0), col, (0, 0), font_g, m.label);
+		Layers->Point =>
+			dst.draw(Rect((offx + m.x0 - 2, offy + m.y0 - 2), (offx + m.x0 + 3, offy + m.y0 + 3)), col, nil, (0, 0));
+		}
 	}
 
 	# thin border so the pane reads as a framed feed
@@ -484,6 +489,9 @@ retheme(display: ref Display)
 
 shutdown()
 {
+	if(stack != nil)
+		stack.stop();
+	stack = nil;
 	ffd = nil;
 	sfd = nil;
 	cfd = nil;

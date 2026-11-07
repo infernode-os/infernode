@@ -166,6 +166,7 @@ marklist(Type *t, void *vw)
 	Heap *h;
 
 	USED(t);
+
 	l = vw;
 	markheap(l->t, l->data);
 	while(visit > 0) {
@@ -297,6 +298,57 @@ domflag(Heap *h)
 		abort();
 }
 
+/*
+ * What the last whole traversal found propagator, by type: an epoch ends
+ * only at a traversal that finds none, so whatever is here traversal
+ * after traversal is what keeps the epoch from ending.  Read through
+ * /dev/heaptypes (heapaudit.c).  A diagnostic, kept for one VM's
+ * collector at a time.
+ */
+enum { Ngcprop = 16 };
+Type*	gcproptype[Ngcprop];
+ulong	gcpropn[Ngcprop];
+ulong	gcproptot, gcpropother;
+static Type*	curproptype[Ngcprop];
+static ulong	curpropn[Ngcprop];
+static ulong	curproptot, curpropother;
+
+static void
+propnote(Type *t)
+{
+	int i;
+
+	curproptot++;
+	for(i = 0; i < Ngcprop; i++){
+		if(curproptype[i] == t){
+			curpropn[i]++;
+			return;
+		}
+		if(curproptype[i] == nil){
+			curproptype[i] = t;
+			curpropn[i] = 1;
+			return;
+		}
+	}
+	curpropother++;
+}
+
+static void
+propdone(void)
+{
+	int i;
+
+	for(i = 0; i < Ngcprop; i++){
+		gcproptype[i] = curproptype[i];
+		gcpropn[i] = curpropn[i];
+		curproptype[i] = nil;
+		curpropn[i] = 0;
+	}
+	gcproptot = curproptot;
+	gcpropother = curpropother;
+	curproptot = curpropother = 0;
+}
+
 void
 rungc(Prog *p)
 {
@@ -335,6 +387,7 @@ rungc(Prog *p)
 			t = h->t;
 			if(h->color == propagator) {
 				gce--;
+				propnote(t);
 				h->color = mutator;
 				if(t != nil)
 					t->mark(t, H2D(void*, h));
@@ -374,6 +427,7 @@ rungc(Prog *p)
 
 	if(base != nil)		/* Completed this iteration ? */
 		return;
+	propdone();
 	if(nprop == 0) {	/* Completed the epoch ? */
 		gcepochs++;
 		gccolor++;

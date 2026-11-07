@@ -6,6 +6,8 @@
 #include	"libsec.h"
 #include	"keyboard.h"
 
+extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
+
 extern int cflag;
 int	exdebug;
 extern int keepbroken;
@@ -17,6 +19,7 @@ enum
 	Qconsctl,
 	Qdrivers,
 	Qhostopen,
+	Qheaptypes,
 	Qhostowner,
 	Qhoststdin,
 	Qhoststdout,
@@ -44,6 +47,7 @@ Dirtab contab[] =
 	"cons",		{Qcons},	0,	0666,
 	"consctl",	{Qconsctl},	0,	0222,
 	"drivers",	{Qdrivers},	0,	0444,
+	"heaptypes",	{Qheaptypes},	0,	0444,
 	"hostopen",	{Qhostopen},	0,	0444,
 	"hostowner",	{Qhostowner},	0,	0644,
 	"hoststdin",	{Qhoststdin},	0,	0444,
@@ -507,6 +511,11 @@ consclose(Chan *c)
 		kprintq.q = nil;
 		wunlock(&kprintq.l);
 		break;
+
+	case Qheaptypes:
+		free(c->aux);
+		c->aux = nil;
+		break;
 	}
 }
 
@@ -573,6 +582,19 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	case Qmemory:
 		return poolread(va, n, offset);
+
+	/*
+	 * The heap's live objects by type and module (libinterp/heapaudit.c):
+	 * made at offset 0, the rest of the reads take the same text.
+	 */
+	case Qheaptypes:
+		if(offset == 0 || c->aux == nil){
+			free(c->aux);
+			c->aux = heapaudittext();
+			if(c->aux == nil)
+				error(Enomem);
+		}
+		return readstr(offset, va, n, c->aux);
 
 	case Qnull:
 		return 0;

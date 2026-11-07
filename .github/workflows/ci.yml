@@ -764,6 +764,7 @@ jobs:
             tests: >-
               amd64_jit_code_leak_test audioring_test kernrandom_test awk_builtins_test calendar9p_test
               cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test mpexp_test
+              libkern_copy_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
@@ -1147,9 +1148,10 @@ jobs:
       run: |
         # wm/osk under wm/wm and as Lucifer's keyboard (desktop and
         # phone layouts), at the screens' sizes, through every theme,
-        # for wm/logon, and ground by its fuzzer; Lucifer's phone layout
+        # for wm/logon (and its choice of interface, interface_test), and
+        # ground by its fuzzer; Lucifer's phone layout
         # ground with it (phone_fuzz_test).
-        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test phone_fuzz_test tablet_layout_test; do
+        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -2073,7 +2075,7 @@ jobs:
         # LD_PRELOAD and skips here (77).
         case $GUI in
         wm)	tests="wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
-        osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test phone_fuzz_test tablet_layout_test" ;;
+        osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test" ;;
         esac
         failed=
         for t in $tests; do

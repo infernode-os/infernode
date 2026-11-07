@@ -360,6 +360,7 @@ int		spllo(void);
 void		splx(int);
 void	splxpc(int);
 void		swiproc(Proc*, int);
+int		swiprogproc(Proc*, void*);
 ulong		_tas(ulong*);
 void		timeradd(Timer*);
 void		timerdel(Timer*);

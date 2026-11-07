@@ -774,6 +774,21 @@ smalloc(size_t size)
 	return v;
 }
 
+/*
+ * As the pools' (below): kproc and addprog wait with it for memory. Here
+ * malloc fails only when the host has none, and it is waited for the
+ * same way. Missing, the sanitizer build did not link.
+ */
+void
+waitmem(void)
+{
+	if(up != nil)
+		osenter();
+	osmillisleep(100);
+	if(up != nil)
+		osleave();
+}
+
 void*
 kmalloc(size_t size)
 {

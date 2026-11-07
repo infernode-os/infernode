@@ -296,6 +296,14 @@ init()
 	sdsetup();
 
 	#
+	# CNSA 2.0 strict authentication, if the card asks for it: straight
+	# after the card, before anything that could authenticate (the Wi-Fi
+	# join's factotum, Bluetooth, the network console, the desktop's cpu
+	# listener) has had the chance to.
+	#
+	cnsasetup();
+
+	#
 	# The radio's firmware lives on the card just mounted. The kernel
 	# names no path: this is where the paths come from.
 	#
@@ -2598,6 +2606,33 @@ sdsetup()
 # "local", a bench machine writes "local" and binds a development
 # server over it by hand.
 #
+#
+# CNSA 2.0 strict mode. A file /n/dos/cnsamode (its contents are not
+# read) makes every authentication on this machine use ML-KEM-1024, as
+# CNSAMODE does for the hosted emulator, so a board can be one of a
+# CNSA-mode fleet: every node must agree, and a mixed pair fails, by
+# design. The kernel's switch is what the handshake obeys (one way, for
+# the whole machine: os/port/devcons.c); /env/cnsamode is set as well,
+# as the hosted emulator sets it, for the programs that read it there
+# (createsignerkey, signer). No file, no change: ML-KEM-768.
+#
+Cnsafile: con "/n/dos/cnsamode";
+
+cnsasetup()
+{
+	if(sys->stat(Cnsafile).t0 < 0)
+		return;
+	fd := sys->open("#c/sysctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "cnsamode on") < 0){
+		sys->print("init: cnsamode: the kernel refused strict mode: %r\n");
+		return;
+	}
+	fd = sys->create("/env/cnsamode", Sys->OWRITE, 8r664);
+	if(fd == nil || sys->fprint(fd, "1") < 0)
+		sys->print("init: cnsamode: /env/cnsamode: %r\n");
+	sys->print("init: cnsamode: CNSA 2.0 strict (ML-KEM-1024) for every authentication\n");
+}
+
 rootpolicy()
 {
 	spec := "local";

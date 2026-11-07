@@ -34,7 +34,8 @@ Sleep(Rendez *r, int (*f)(void*), void *arg)
 	/*
 	 * if interrupted or condition happened, never mind
 	 */
-	if(up->killed || up->intpend || f(arg)) {
+	/* A revoked released Prog may not sleep again before returning to its VM. */
+	if(up->killed || up->intpend || (up->killing == 0 && upkilled()) || f(arg)) {
 		unlock(&r->l);
 	}else{
 		if(r->p != nil)
@@ -52,7 +53,7 @@ Sleep(Rendez *r, int (*f)(void*), void *arg)
 		up->r = nil;
 	}
 
-	if(up->killed || up->swipend || up->intpend) {
+	if(up->killed || up->swipend || up->intpend || (up->killing == 0 && upkilled())) {
 		up->killed = 0;
 		up->swipend = 0;
 		up->intpend = 0;
@@ -127,6 +128,46 @@ swiproc(Proc *p, int interp)
 		return;	
 	}
 	unlock(&p->sysio);
+}
+
+/* Interrupt p only while it still carries this exact released Prog. */
+int
+swiprogproc(Proc *p, void *iprog)
+{
+	Rendez *r;
+
+	if(p == nil)
+		return 0;
+	lock(&p->rlock);
+	if(p->iprog != iprog){
+		unlock(&p->rlock);
+		return 0;
+	}
+	p->intpend = 1;
+	r = p->r;
+	if(r != nil){
+		lock(&r->l);
+		if(r->p == p){
+			p->swipend = 1;
+			r->p = nil;
+			osready(p);
+		}
+		unlock(&r->l);
+		unlock(&p->rlock);
+		return 1;
+	}
+	unlock(&p->rlock);
+
+	lock(&p->sysio);
+	if(p->syscall && p->intwait == 0){
+		p->swipend = 1;
+		p->intwait = 1;
+		unlock(&p->sysio);
+		oshostintr(p);
+		return 1;
+	}
+	unlock(&p->sysio);
+	return 1;
 }
 
 void

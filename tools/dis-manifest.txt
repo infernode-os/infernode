@@ -131,6 +131,7 @@ dis/cmd/git/push.dis
 dis/cmd/git/rm.dis
 dis/cmp.dis
 dis/comm.dis
+dis/copybench.dis
 dis/countfs.dis
 dis/cp.dis
 dis/cprof.dis
@@ -472,6 +473,7 @@ dis/lib/tftp.dis
 dis/lib/timers.dis
 dis/lib/titlebar.dis
 dis/lib/tkclient.dis
+dis/lib/touchgest.dis
 dis/lib/translate.dis
 dis/lib/twofa.dis
 dis/lib/twofaslot.dis
@@ -806,6 +808,7 @@ dis/tests/keyring_test.dis
 dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/kill_deadserver_test.dis
+dis/tests/kill_uncalled_test.dis
 dis/tests/killblocked_test.dis
 dis/tests/l2cap_test.dis
 dis/tests/limbo_asgcall_test.dis
@@ -929,6 +932,7 @@ dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
+dis/tests/touchgest_test.dis
 dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
 dis/tests/styx_pack_test.dis

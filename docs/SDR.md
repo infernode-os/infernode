@@ -195,7 +195,7 @@ samples at 2.4 MS/s from a file:
 | `sdr/am` | 0.43 s, 23x | 4.3 s, 2.3x |
 
 So Limbo keeps up, interpreted too, and no builtin is needed here; the
-arm64 and riscv64 JITs are still to be measured. The demodulators are
+riscv64 JIT is still to be measured (arm64 is below). The demodulators are
 plain Limbo: an integer boxcar to about 240k a second, then a
 windowed-sinc FIR for the narrow channel (narrow FM, AM; 96 taps) or for
 the 15 kHz audio (128) (wide FM, keeping out the 19 kHz pilot and the stereo
@@ -208,6 +208,19 @@ and a carrier as strong 400 kHz up), the tone comes back with a SINAD of
 station at 2.4 MS/s, 15 seconds, all 72 MB read (`dropped=0`) and
 demodulated as it came, its stereo pilot 19.00 kHz in the sound before
 the audio filter and 40 dB down after.
+
+**Across the network** (precedent 7): the V4 on a Linux amd64 machine,
+`sdrfs` there exporting `/mnt/sdr` over authenticated 9P, and a
+Raspberry Pi 4 running InferNode on bare metal mounting it over gigabit
+Ethernet, 2.4 MS/s. `cat /mnt/sdr/iq` on the Pi keeps up (`dropped=0`).
+`sdr/fm` did not: it read, then worked, then read again, so every
+read's round trip was time not spent on the arithmetic, and it fell
+12-22% behind (14.6 MB of 109 MB dropped in 25 s) with the CPU mostly
+idle. Piped through `cat`, which overlaps the two, 1.5% was dropped.
+Now `sdr/fm` and `sdr/am` read in a process of their own, four 64 KB
+chunks ahead: 113 MB in 24 s, `dropped=0`, and `sdr/fm` (wide, 44.1k
+out) used 5.7 s of one Cortex-A72 for those 24 s, about 4x real time
+under the arm64 JIT.
 
 ## The question this raises for gpsfs
 

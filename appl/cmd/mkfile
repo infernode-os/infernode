@@ -53,6 +53,7 @@ TARG=\
 	cleanname.dis\
 	cmp.dis\
 	comm.dis\
+	copybench.dis\
 	countfs.dis\
 	cp.dis\
 	cprof.dis\

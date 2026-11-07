@@ -1845,6 +1845,43 @@ destroystack(REG *reg)
 
 	ex = reg->EX;
 	reg->EX = nil;
+
+	/*
+	 * A frame not yet called on top: a Prog's time slice can end
+	 * between a frame instruction and its call, and a Prog killed while
+	 * ready is destroyed as it stood (killprog). Freed first, as
+	 * handler() frees one, so what is left is called frames only. When
+	 * the frame began an extension of its own, R.FP is still in the one
+	 * before: the walk below took the new extension's type -- the
+	 * uncalled frame's -- for the first frame of every extension it
+	 * went down through, and freed as pointers what those frames held
+	 * as anything else (a callee frame's address, "alloc:D2B ... in
+	 * main", macOS CI's web_browser_test; an integer: a SEGV).
+	 * tests/kill_uncalled_test.b.
+	 */
+	if(ex != nil && reg->FP != nil) {
+		sx = (Stkext*)ex;
+		/* FP may belong to the preceding separately allocated extension;
+		 * compare addresses as integers, not unrelated C pointers. */
+		if((uintptr)reg->FP < (uintptr)ex || (uintptr)reg->FP >= (uintptr)reg->TS) {
+			t = sx->reg.TR;		/* the extension's only frame */
+			if(t->np)
+				freeptrs(sx->reg.tos.fr, t);
+			ex = sx->reg.EX;
+			free(sx);
+		} else {
+			f = (Frame*)reg->FP;
+			t = f->t;
+			if(t == nil)
+				t = sx->reg.TR;
+			if(reg->FP + t->size < reg->SP) {
+				f = (Frame*)(reg->FP + t->size);	/* frame and mframe set its type */
+				if(f->t != nil && f->t->np)
+					freeptrs(f, f->t);
+			}
+		}
+	}
+
 	while(ex != nil) {
 		sx = (Stkext*)ex;
 		fp = sx->reg.tos.fr;

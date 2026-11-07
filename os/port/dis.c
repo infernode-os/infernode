@@ -43,6 +43,12 @@ struct Isched
 	Proc*	vmqt;
 	Proc*	idlevmq;	/* queue of procs wanting work */
 	Atidle*	idletasks;
+	/* the idle collector's place: execatidle, idlegc */
+	ulong	idleseen;	/* heapactivity() when it last went all the way round */
+	int	idleknown;
+	int	inround;	/* a round of idle collection is under way */
+	int	idlefrom;	/* gccolor when it began */
+	ulong	idlenext;	/* MACHP(0)->ticks before which no new round starts */
 };
 static	Isched	sched0;		/* vm0's */
 #define	VMSCHED(v)	((Isched*)(v)->vsched)
@@ -401,6 +407,107 @@ accountant(void)
 #ifndef Vmcycles
 #define Vmcycles 2
 #endif
+
+/*
+ * How long the scheduler must have had nothing to run before the idle
+ * collector finishes its epochs, in milliseconds.
+ *
+ * The bounded slice in execatidle (Idlequanta) is right for the gaps
+ * between one packet and the next, and slow on its own: an epoch ends
+ * only at a traversal of the heap in which the write barrier saw
+ * nothing, and a cycle -- every shell, through its $self -- is freed only
+ * at an epoch's end. With wm/osk's lexicon in the heap (some 250000
+ * objects, 54 traversals an epoch before marklist took a list whole) the
+ * Pi 4 ended an epoch about every 4.5 minutes at idle and 4 in 17 minutes
+ * under soak.py's loads, so a shell's 27 objects waited minutes to be
+ * freed and a load built a backlog of some 200. Under QEMU's emulated
+ * cores no epoch ended at all. Upstream ran up to three epochs at every
+ * idle moment (the 28 KB/s of the note above); emu still does.
+ *
+ * Here the scheduler, with nothing to run and collection outstanding,
+ * sleeps Idlegcms rather than for ever. If nothing has woken it by
+ * then, the machine is idle in fact -- a packet gap is far shorter --
+ * and the collector goes round as emu's does, three epochs, stopping the
+ * moment there is work and taking up the round where it was next time.
+ *
+ * Not again for Idlegcgap after a round is finished, though. An idle
+ * desktop is never still -- something allocates and frees a few dozen
+ * objects a second -- so "the heap has changed" is always true, and
+ * emu's rule alone kept a core collecting for as long as the board sat
+ * there (QEMU: 185 epochs in two quiet minutes). Epochs need to end,
+ * not to end continuously: a cycle now waits at most about Idlegcgap
+ * to be freed, and the collector rests between rounds.
+ */
+#ifndef Idlegcms
+#define Idlegcms 10
+#endif
+#ifndef Idlegcgap
+#define Idlegcgap 10000
+#endif
+
+/* whether the heap has changed since the collector last went all the way round it */
+static int
+idlegcpending(void)
+{
+	return gcruns() && !(isched.idleknown && heapactivity() == isched.idleseen);
+}
+
+/* how long until a round may start, in milliseconds, or -1 for none pending */
+static int
+idlegcwait(void)
+{
+	long d;
+
+	if(!idlegcpending())
+		return -1;
+	d = (long)(isched.idlenext - MACHP(0)->ticks);
+	if(d <= 0)
+		return 0;
+	return TK2MS(d);
+}
+
+static void
+idlegc(void)
+{
+	int done;
+
+	if(tready(nil) || idlegcwait() != 0)
+		return;
+	/*
+	 * Three epochs from where the round began, however the heap changes
+	 * meanwhile. Counted from the last change instead (emu's rule), a
+	 * desktop that allocates a few times a second restarted the count
+	 * at every idle moment, the round never ended and the gap after it
+	 * never began.
+	 */
+	if(!isched.inround) {
+		isched.inround = 1;
+		isched.idlefrom = gccolor;
+	}
+	gcidle++;
+	up->type = IdleGC;
+	up->iprog = nil;
+	addrun(up->prog);
+	done = isched.idlefrom+3;
+	while(gccolor < done && gcruns()) {
+		if(isched.vmq != nil || isched.runhd != isched.runtl) {
+			gcpartial++;
+			break;
+		}
+		rungc(isched.head);
+		gcidlepass++;
+		if(((ulong)gcidlepass&0xFF) == 0)
+			sched();
+	}
+	if(gccolor >= done) {	/* three epochs: whatever was garbage when it began is freed */
+		isched.inround = 0;
+		isched.idleseen = heapactivity();
+		isched.idleknown = 1;
+		isched.idlenext = MACHP(0)->ticks + MS2TK(Idlegcgap);
+	}
+	up->type = Interp;
+	delrunq(up->prog);
+}
 
 static void
 execatidle(void)
@@ -1927,12 +2034,18 @@ vmachine(void*)
 
 	cycles = 0;
 	for(;;) {
-		int pid;
+		int pid, w;
 		char *modname;
 
 		if(tready(nil) == 0) {
 			execatidle();
-			sleep(&isched.irend, tready, 0);
+			if((w = idlegcwait()) >= 0) {
+				/* quiet for Idlegcms, and the gap since the last round over */
+				tsleep(&isched.irend, tready, 0, w > Idlegcms ? w : Idlegcms);
+				idlegc();
+			}
+			if(tready(nil) == 0)
+				sleep(&isched.irend, tready, 0);
 		}
 
 		if(isched.vmq != nil && (isched.runhd == nil || ++cycles > Vmcycles)){

@@ -65,6 +65,8 @@ tests/soak/
 
 **The TLS server** is shared: one CA and one certificate in `~/soak/tls`, and one `openssl s_server` on the Jetson's port 8443, started by whichever run needs it first and left up for the others. The Jetson's firewall lets the LAN reach 8443 but not other ports such as 8444 or 8460, so per-board ports failed.
 
+**Where the loads run.** The network sink and source, and the samplers, stay in VM 0. On a board with several VMs, the stress loops run in VM 1, once a probe shows that VM 1 sees `/tmp/soak`, `/n/dos` and `/net`. In VM 0 the loops share its interpreter with the sink. That cut a Pi 4's inbound rate from about 920 to about 150 Mbit/s on every kernel since 10-29 (infernode-e5's bisection, 2026-11-08). The old soaks' push rates therefore measured their own loops, not the network. The VM is recorded as `loopsvm`, and `--loops-vm` overrides it.
+
 **Board identity** comes from `~/pitools/boards`, found by MAC through `boardip.py` and by serial port through its by-path name, never `ttyUSBn`. The runner records the kernel's size and sha1 from `/dev/bootimage` and the card's `/dis` state: md5s against the build, with the number that differ. A run on a stale card says so in its header ([[bench-card-dis-stale]]).
 
 ## The load catalogue

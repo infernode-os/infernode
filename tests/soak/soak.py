@@ -497,11 +497,25 @@ class Run:
         r['opt:flood'] = (self.a.flood, '--flood')
         return r
 
+    def choosevm(self):
+        """VM 1 for the loops if it exists and sees /tmp/soak, /n/dos and /net as VM 0 does"""
+        if self.a.loops_vm is not None:
+            return self.a.loops_vm
+        if not self.res.get('vm', (False,))[0]:
+            return 0
+        out = self.sh("vm 1 sh -c 'load std; for(f in /tmp/soak /n/dos /net/tcp) { ftest -e $f && echo VMSEES $f >> /tmp/soak/vmprobe }'",
+                      'sleep 3', 'cat /tmp/soak/vmprobe >[2] /dev/null', 'rm -f /tmp/soak/vmprobe', limit=40)
+        seen = set(re.findall(r'VMSEES (\S+)', out))
+        if seen >= {'/tmp/soak', '/n/dos', '/net/tcp'}:
+            return 1
+        self.log('VM 1 does not see %s; loops stay in VM 0' % ', '.join(sorted({'/tmp/soak', '/n/dos', '/net/tcp'} - seen)))
+        return 0
+
     def options(self):
         a = self.a
-        return 'hours=%g profile=%s stress=%s vmstress=%s flood=%s batteries=%s scratch=%s' % (
+        return 'hours=%g profile=%s stress=%s vmstress=%s flood=%s batteries=%s scratch=%s loopsvm=%s' % (
             a.hours, a.profile, ','.join(a.stress) or '-', a.vmstress, a.flood, a.batteries,
-            ','.join(a.scratch) or '-')
+            ','.join(a.scratch) or '-', getattr(self, 'loopsvm', 'auto' if a.loops_vm is None else a.loops_vm))
 
     def gate(self, load, r):
         miss = [n for n in load['needs'] if not r.get(n, (False, n + ' unknown'))[0]]
@@ -571,8 +585,6 @@ class Run:
         for l in loads:
             body += '{ while {run} {%s\n} } &\n' % l['board']
         # the host loads' listeners, held by this session too
-        body += "listen -A 'tcp!*!8702' {cat > /dev/null} &\n"
-        body += "listen -A 'tcp!*!8703' {zeros 65536 1024} &\n"
         body += 'echo soakd-up\n'
         body += 'while {run} {sleep 30}\n'
         return body
@@ -866,13 +878,28 @@ class Run:
         if self.stop.is_set():
             self.log('stopped during setup (SIGTERM)'); return
         self.memtags('start')
+        self.loopsvm = self.choosevm()
+        self.log('board loops in VM %d%s' % (self.loopsvm, '' if self.loopsvm else ' (with the sink and the samplers)'))
         # the board loops, held by one session
         board = [l for l in sel if l['board'] and self.state[l['name']] == 'run']
         self.soakd(board)
-        if self.cons:
-            self.holdhost('soakd', 'sh /tmp/soak/soakd.sh')
+        # The network sink and source stay in VM 0 with the samplers; the stress
+        # loops go to VM 1 when the board has one that sees what they need. In
+        # VM 0 the loops share its interpreter with the sink and cut a Pi 4's
+        # inbound rate from ~920 to ~150 Mbit/s (infernode-e5's bisection,
+        # 2026-11-08), so a push measured beside them measures the loops.
+        sinks = ("listen -A 'tcp!*!8702' {cat > /dev/null} &; listen -A 'tcp!*!8703' {zeros 65536 1024} &; "
+                 "while {ftest -e /tmp/soak/run} {sleep 30}")
+        if self.loopsvm:
+            loops = 'vm %d sh /tmp/soak/soakd.sh; while {ftest -e /tmp/soak/run} {sleep 30}' % self.loopsvm
         else:
-            self.drv.hold('sh /tmp/soak/soakd.sh')
+            loops = 'sh /tmp/soak/soakd.sh'
+        if self.cons:
+            self.holdhost('sinks', sinks)
+            self.holdhost('soakd', loops)
+        else:
+            self.drv.hold(sinks)
+            self.drv.hold(loops)
         time.sleep(20)
         # host loads
         st = lambda n: self.state.get(n, '') == 'run'
@@ -883,7 +910,9 @@ class Run:
         if st('usbnet'): self.every(600, self.h_usbnet, 'usbnet', first=300)
         if st('bt'): self.every(600, self.h_bt, 'bt', first=420)
         if st('console'): self.every(3600, self.h_console, 'console', first=600)
-        if st('vm'): self.holdhost('vm', "vm 1 sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; vm 2 sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; while {ftest -e /tmp/soak/run} {sleep 30}")
+        if st('vm'):
+            va, vb = (2, 3) if self.loopsvm == 1 else (1, 2)
+            self.holdhost('vm', "vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; while {ftest -e /tmp/soak/run} {sleep 30}" % (va, vb))
         if st('vmstress'): self.holdhost('vmstress', 'vmstress /tmp/soak/vs')
         if st('flood'):
             def flood():
@@ -1060,6 +1089,7 @@ def main():
     p.add_argument('--batteries', action='store_true', help='Ethernet, Bluetooth and GPIO batteries before and after')
     p.add_argument('--card', action='store_true', help='card.py against this tree first')
     p.add_argument('--serial-only', action='store_true')
+    p.add_argument('--loops-vm', type=int, default=None, help='VM for the board loops (default: 1 when the board has one that sees what they need, else 0)')
     p.add_argument('--dry', action='store_true', help='probe and print the plan; change nothing on the board')
     p.add_argument('--loads', type=lambda s: s.split(','), default=None)
     p.add_argument('--skip', type=lambda s: s.split(','), default=[])

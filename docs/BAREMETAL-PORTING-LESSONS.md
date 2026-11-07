@@ -251,6 +251,14 @@ Build these early on a new board. Each found something nothing else did.
   dies with its session, so a soak holds one connection per loop.
 - **`/dev/memtags`**: live main-pool blocks by allocating PC. It turned
   #641 from a theory into a list of call sites in one read.
+- **`/dev/heaptypes`**: the Dis heap's live objects by type and the
+  module that declared it, most numerous first, under the collector's
+  counters (runs, epochs, sweeps) and what its last traversal found to
+  propagate. Two reads an hour apart, diffed, named the soak's slow creep
+  (an sh instance per console shell), and the epoch count standing still
+  while sweeps climbed named why: the collector never finished an epoch
+  with wm/osk's lexicon in the heap, so no cycle was freed. `ps` could not
+  have said: its sizes are stacks.
 - **`lan78stats`**: the NIC's statistics block, and `reg addr [value]` to
   read or write device registers on a live link. The bulk-in delay sweep
   and the gigabit retest took minutes, against six per point by reboot.

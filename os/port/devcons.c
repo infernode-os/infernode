@@ -12,6 +12,8 @@
 #include	"fns.h"
 #include	"../port/error.h"
 #include	<version.h>
+
+extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
 #include	"mp.h"
 #include	"libsec.h"
 #include	"keyboard.h"
@@ -659,6 +661,7 @@ enum{
 	Qscancode,
 	Qmemory,
 	Qmemtags,
+	Qheaptypes,
 	Qmsec,
 	Qnull,
 	Qrandom,
@@ -687,6 +690,7 @@ static Dirtab consdir[]=
 	"scancode",	{Qscancode},	0,		0444,
 	"memory",	{Qmemory},	0,		0444,
 	"memtags",	{Qmemtags},	0,		0444,
+	"heaptypes",	{Qheaptypes},	0,		0444,
 	"msec",		{Qmsec},	NUMSIZE,	0444,
 	"null",		{Qnull},	0,		0666,
 	"random",	{Qrandom},	0,		0444,
@@ -1212,6 +1216,11 @@ consclose(Chan *c)
 		kprintq.q = nil;
 		wunlock(&kprintq.rw);
 		break;
+
+	case Qheaptypes:
+		free(c->aux);
+		c->aux = nil;
+		break;
 	}
 }
 
@@ -1359,6 +1368,21 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	 */
 	case Qmemtags:
 		return pooltagsread(buf, n, offset);
+
+	/*
+	 * The heap's objects, as memtags is the main pool's blocks: the
+	 * reader's VM's live objects by type and the module that declared
+	 * it (libinterp/heapaudit.c). Made at offset 0; the later reads of
+	 * the same open take the same text.
+	 */
+	case Qheaptypes:
+		if(offset == 0 || c->aux == nil){
+			free(c->aux);
+			c->aux = heapaudittext();
+			if(c->aux == nil)
+				error(Enomem);
+		}
+		return readstr(offset, buf, n, c->aux);
 
 	/*
 	 * One line per running core: its tick count, how many clock

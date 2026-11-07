@@ -41,6 +41,8 @@ Am: module
 };
 
 Chunk: con 64*1024;
+Ahead: con 4;		# chunks read ahead of the arithmetic (readahead)
+readerpid := -1;
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -117,20 +119,26 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	stdin := sys->fildes(0);
 	stdout := sys->fildes(1);
-	buf := array[Chunk] of byte;
+	buf := array[Chunk+1] of byte;	# a byte carried, and a chunk
 	i := array[Chunk/2] of real;
 	q := array[Chunk/2] of real;
 	out := array[Chunk/2 * 2 * chans + 16] of byte;
 	have := 0;
 	carrier := 0.0;
+	rc := chan[Ahead] of (array of byte, string);
+	pidc := chan of int;
+	spawn readahead(stdin, rc, pidc);
+	readerpid = <-pidc;
 	for(;;) {
-		k := sys->read(stdin, buf[have:], len buf - have);
-		if(k <= 0) {
-			if(k < 0)
-				fatal(sys->sprint("read: %r"));
+		(b, err) := <-rc;
+		if(b == nil) {
+			readerpid = -1;
+			if(err != nil)
+				fatal("read: " + err);
 			break;
 		}
-		k += have;
+		buf[have:] = b;
+		k := have + len b;
 		m := d.run(buf, k, i, q);
 		if(k & 1) {
 			buf[0] = buf[k-1];
@@ -160,8 +168,45 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 }
 
+#
+# The reads, in a process of their own and a few chunks ahead, so the
+# arithmetic never waits on one.  Over a network mount each read waits
+# a round trip; sdr/fm read, then worked, then read again, and on a Pi 4
+# reading another machine's /mnt/sdr at 2.4M it fell 12-22% behind
+# sdrfs's stream, which dropped the rest (status's dropped=).  This
+# loop was the same.  A chunk each send, nil at the end, with the
+# error if there was one.
+#
+readahead(fd: ref Sys->FD, c: chan of (array of byte, string), pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	for(;;) {
+		b := array[Chunk] of byte;
+		n := sys->read(fd, b, len b);
+		if(n <= 0) {
+			e: string;
+			if(n < 0)
+				e = sys->sprint("%r");
+			c <-= (nil, e);
+			return;
+		}
+		c <-= (b[0:n], nil);
+	}
+}
+
+stopreader()
+{
+	if(readerpid < 0)
+		return;
+	fd := sys->open("/prog/" + string readerpid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+	readerpid = -1;
+}
+
 fatal(s: string)
 {
+	stopreader();
 	sys->fprint(sys->fildes(2), "sdr/am: %s\n", s);
 	raise "fail:" + s;
 }

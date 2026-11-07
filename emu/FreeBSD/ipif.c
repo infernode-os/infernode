@@ -342,9 +342,10 @@ so_hangup(int fd, int linger)
 	osenter();
 	if(linger)
 		setsockopt(fd, SOL_SOCKET, SO_LINGER, (char*)&l, sizeof(l));
-	r = shutdown(fd, 2);
-	if(r >= 0)
-		r = close(fd);
+	/* shutdown can reject an announced socket with ENOTCONN; close still owns
+	 * the actual teardown and must not be skipped. */
+	shutdown(fd, 2);
+	r = close(fd);
 	osleave();
 	return r;
 }

@@ -67,6 +67,7 @@ enum
 	CMbroken,
 	CMnobroken,
 	CMconsole,
+	CMcnsamode,
 };
 
 static Cmdtab sysctlcmd[] =
@@ -76,10 +77,27 @@ static Cmdtab sysctlcmd[] =
 	CMbooted,	"booted",	0,	/* the boot is over: release its watchdog */
 	CMhalt,	"halt", 0,
 	CMpanic,	"panic", 0,
-	CMconsole,	"console", 1,
+	CMconsole,	"console", 2,	/* lookupcmd counts the verb: console on|off */
 	CMbroken,	"broken", 0,
 	CMnobroken,	"nobroken", 0,
+	CMcnsamode,	"cnsamode", 2,	/* cnsamode on: CNSA 2.0 strict authentication, from now on */
 };
+
+/*
+ * CNSA 2.0 strict mode, for the machine: ML-KEM-1024 in every
+ * authentication instead of ML-KEM-768 (libinterp/keyring.c). The hosted
+ * emulator takes it from the host's CNSAMODE, fixed for its life; here
+ * there is no host, so osinit throws this switch at boot when the card
+ * has a cnsamode file. One way only, and for the whole machine: not the
+ * environment, which every process may rewrite for itself, because a
+ * process that could clear it could make its own connections weaker
+ * than the machine's policy. keyring.c asks once, through getenv, and
+ * keeps the answer, so the switch is refused once that answer was "no":
+ * set after an authentication, it would say a mode the handshake is not
+ * using.
+ */
+int	cnsastrict;
+int	cnsaasked;
 
 void
 printinit(void)
@@ -1614,6 +1632,13 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		case CMnobroken:
 			keepbroken = 0;
+			break;
+		case CMcnsamode:
+			if(strcmp(cb->f[1], "on") != 0)
+				error("cnsamode: only on; it is off until the machine restarts");
+			if(cnsaasked && !cnsastrict)
+				error("cnsamode: too late, an authentication has already run without it");
+			cnsastrict = 1;
 			break;
 		}
 		poperror();

@@ -65,7 +65,10 @@ With no card this is silent.
 .IP 5.
 Applies
 .BR /n/dos/rootpath :
-see below.
+see below. If
+.B /n/dos/cnsamode
+exists, turns on CNSA 2.0 strict authentication before anything can
+authenticate.
 .IP 6.
 Gives the Wi-Fi driver the names of its firmware files in
 .BR /n/dos/firmware .
@@ -192,6 +195,16 @@ Control lines for
 written in order; blank lines and lines beginning
 .B #
 are skipped.
+.TP
+.B cnsamode
+Its existence: every authentication on the machine uses ML-KEM-1024, as
+.B CNSAMODE
+does for the emulator. Writes
+.B "cnsamode on"
+to
+.B #c/sysctl
+and sets
+.BR /env/cnsamode .
 .TP
 .B btkeys
 Where

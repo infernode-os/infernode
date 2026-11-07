@@ -323,7 +323,7 @@ LOADS = [
 	rm -f /n/dos/soak.tmp /tmp/soak/sd-write/x
 	tick sd-write; sleep $sdwevery''', needs=['dd', 'budget:sd']),
     L('tls', 'TLS to openssl s_server on the Jetson, verified against the run\'s CA, every 2 min', core=True, board=r'''
-	@{ bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://$jetson:8443/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err }
+	@{ bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://$jetson:$tlsport/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err }
 	grep -s 'HTTP 200' /tmp/soak/tls/out || bad tls handshake-or-get
 	tick tls; sleep 120''', needs=['tlsperf', 'tlsserver', 'clock', 'console']),
     L('net', '64 MB into the board and 64 MB out, every 10 min; rates logged', core=True,
@@ -403,6 +403,8 @@ class Run:
         self.rates = {}
         self.kernel = None
         self.gpiopairs = None
+        names = [l.split()[0] for l in open(os.path.join(PITOOLS, 'boards')) if l.split() and not l.startswith('#')]
+        self.tlsport = 8443 + (names.index(a.board) if a.board in names else 50)
         self.lat = []
         self.churnres = []
         # intensity: the profile, raised to 'stress' in the areas named
@@ -484,7 +486,7 @@ class Run:
         bt = int(m.group(1)) if m else 0
         r['clock'] = (abs(bt - time.time()) < 300, 'board clock %s' % (time.strftime('%Y-%m-%d %H:%M', time.gmtime(bt)) if m else '?'))
         r['internet'] = (subprocess.run(['ping', '-c1', '-W2', '1.1.1.1'], capture_output=True).returncode == 0, 'Jetson reaches 1.1.1.1')
-        r['tlsserver'] = (getattr(self, 'tlsproc', None) is not None and self.tlsproc.poll() is None, 'openssl s_server on %s:8443' % self.jetson)
+        r['tlsserver'] = (getattr(self, 'tlsproc', None) is not None and self.tlsproc.poll() is None, 'openssl s_server on %s:%d' % (self.jetson, self.tlsport))
         r['gpiojig'] = (getattr(self, 'gpiopairs', None) is not None, 'loopback jig fitted' if getattr(self, 'gpiopairs', None) else 'no loopback jig')
         r['opt:vmstress'] = (self.a.vmstress or 'vm' in self.a.stress, '--vmstress or --stress vm')
         r['opt:fuzz'] = (self.iv['fuzz_every'] > 0, '--stress fuzz or --profile stress')
@@ -526,7 +528,7 @@ class Run:
         o('req', '-new', '-key', 'srv.key', '-subj', '/CN=%s' % self.jetson, '-out', 'srv.csr')
         o('x509', '-req', '-in', 'srv.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '3', '-extfile', 'san.ext', '-out', 'srv.pem')
         o('x509', '-in', 'ca.pem', '-outform', 'der', '-out', 'ca.der')
-        self.tlsproc = subprocess.Popen(['openssl', 's_server', '-accept', '8443', '-cert', 'srv.pem', '-key', 'srv.key', '-www', '-quiet'],
+        self.tlsproc = subprocess.Popen(['openssl', 's_server', '-accept', str(self.tlsport), '-cert', 'srv.pem', '-key', 'srv.key', '-www', '-quiet'],
                                         cwd=d, stdout=open(os.path.join(d, 's_server.log'), 'w'), stderr=subprocess.STDOUT)
         time.sleep(1)
         if self.cons:
@@ -540,7 +542,7 @@ class Run:
 
     def soakd_text(self, loads):
         body = SOAKD_HEAD
-        body += 'sdraw = %s\njetson = %s\n' % (self.sdraw or "''", self.jetson)
+        body += 'sdraw = %s\njetson = %s\ntlsport = %d\n' % (self.sdraw or "''", self.jetson, self.tlsport)
         iv = self.iv
         body += ('sdrcount = %d\nsdrevery = %d\nsdwkb = %d\nsdwevery = %d\nnvrcount = %d\nnvrevery = %d\n'
                  'nvwblocks = %d\nnvwevery = %d\nnvscratch = %s\njitevery = %d\nrsaevery = %d\nrngcount = %d\nfuzzevery = %d\n') % (
@@ -838,8 +840,12 @@ class Run:
             miss = self.gate(l, r)
             self.state[l['name']] = 'run' if not miss else 'skip: ' + '; '.join(r.get(n, (0, n))[1] for n in miss)
             self.log('load %-9s %s%s' % (l['name'], 'RUN ' if not miss else 'SKIP', '' if not miss else '  (' + self.state[l['name']][6:] + ')'))
+        if self.stop.is_set():
+            self.log('stopped during setup (SIGTERM)'); return
         if a.batteries:
             self.batteries('before')
+        if self.stop.is_set():
+            self.log('stopped during setup (SIGTERM)'); return
         self.memtags('start')
         # the board loops, held by one session
         board = [l for l in sel if l['board'] and self.state[l['name']] == 'run']

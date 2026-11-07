@@ -1,27 +1,27 @@
 # InferNode analytics
 
-Snapshot captured `2026-11-06T11:10:17+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-11-07T10:23:06+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
 | Metric | Current | Δ 7d | Δ 30d |
 |---|---:|---:|---:|
-| Stars | 33 | +1 | — |
+| Stars | 32 | 0 | — |
 | Forks | 5 | 0 | — |
-| Watchers | 33 | +1 | — |
+| Watchers | 32 | 0 | — |
 | Subscribers | 2 | 0 | — |
 
 ## Issues & pull requests
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 34 | 13 |
-| Merged | — | 981 |
+| Open | 37 | 13 |
+| Merged | — | 994 |
 | Closed (unmerged) | 30 | 27 |
 
 ## Release downloads
 
-Lifetime downloads across published releases: **1054** (Δ 7d +16, Δ 30d —).
+Lifetime downloads across published releases: **1054** (Δ 7d +12, Δ 30d —).
 
 | Release | Published | Downloads |
 |---|---|---:|
@@ -66,15 +66,15 @@ Lifetime downloads across published releases: **1054** (Δ 7d +16, Δ 30d —).
 
 ## Traffic (last 14 days)
 
-- Views: **983** total, **366** unique visitors
-- Clones: **15103** total, **1063** unique cloners
+- Views: **1037** total, **365** unique visitors
+- Clones: **17446** total, **1169** unique cloners
 
 ### Top referrers
 
 | Referrer | Views | Uniques |
 |---|---:|---:|
 | aocr.org | 319 | 321 |
-| github.com | 57 | 12 |
+| github.com | 56 | 10 |
 | infernode.io | 17 | 10 |
 | Google | 11 | 10 |
 | Baidu | 1 | 1 |
@@ -85,8 +85,8 @@ Lifetime downloads across published releases: **1054** (Δ 7d +16, Δ 30d —).
 
 | Path | Views | Uniques |
 |---|---:|---:|
-| `/infernode-os/infernode/pulls` | 260 | 6 |
-| `/infernode-os/infernode` | 91 | 36 |
+| `/infernode-os/infernode/pulls` | 307 | 6 |
+| `/infernode-os/infernode` | 89 | 34 |
 | `/infernode-os/infernode/releases/tag/v0.9.0` | 17 | 8 |
 | `/infernode-os/infernode/pull/1067` | 10 | 1 |
 | `/infernode-os/infernode/pull/1032` | 9 | 1 |

@@ -8,6 +8,10 @@ include "sys.m";
 	sys: Sys;
 include "string.m";
 	str: String;
+include "draw.m";
+	drawm: Draw;
+	Display, Image, Font, Path, Rect: import drawm;
+include "lucitheme.m";
 include "layers.m";
 
 Keep: con 64;		# the frames a layer keeps the records of
@@ -17,7 +21,8 @@ init(): string
 {
 	sys = load Sys Sys->PATH;
 	str = load String String->PATH;
-	if(str == nil)
+	drawm = load Draw Draw->PATH;
+	if(str == nil || drawm == nil)
 		return sys->sprint("cannot load a library: %r");
 	return nil;
 }
@@ -377,4 +382,96 @@ put(l: ref Layer, frame: int, marks: list of ref Mark)
 			break;
 	}
 	l.frames = nf[j+1:];
+}
+
+# ---- drawing ----
+
+themed(d: ref Draw->Display): (ref Image, list of (string, ref Image))
+{
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme == nil)
+		return (d.color(int 16rE8553AFF), nil);
+	t := lucitheme->gettheme();
+	names := array[] of {
+		("accent", t.accent), ("border", t.border), ("text", t.text), ("text2", t.text2),
+		("dim", t.dim), ("label", t.label), ("header", t.header), ("bg", t.bg),
+		("red", t.red), ("green", t.green), ("yellow", t.yellow),
+	};
+	l: list of (string, ref Image);
+	for(i := len names - 1; i >= 0; i--)
+		l = (names[i].t0, d.color(names[i].t1)) :: l;
+	return ((hd l).t1, l);
+}
+
+# rrggbb colours made, kept per display
+made: list of (string, ref Image);
+
+draw(marks: list of ref Mark, dst: ref Image, r: Rect, fw, fh: int,
+	font: ref Font, accent: ref Image, colours: list of (string, ref Image))
+{
+	if(dst == nil || fw <= 0 || fh <= 0 || r.dx() <= 0 || r.dy() <= 0)
+		return;
+	if(accent == nil)
+		accent = dst.display.color(Draw->Red);
+	sx := real r.dx() / real fw;
+	sy := real r.dy() / real fh;
+	for(; marks != nil; marks = tl marks){
+		m := hd marks;
+		col := colourof(dst, m.colour, accent, colours);
+		x0 := real r.min.x + real m.x0 * sx;
+		y0 := real r.min.y + real m.y0 * sy;
+		x1 := real r.min.x + real m.x1 * sx;
+		y1 := real r.min.y + real m.y1 * sy;
+		p0 := Draw->Point(int x0, int y0);
+		case m.kind {
+		Box =>
+			box := Path.new().moveto(x0, y0).lineto(x1, y0).lineto(x1, y1).lineto(x0, y1).close();
+			dst.strokepath(box, 2.0, Draw->Capbutt, Draw->Joinmiter, col, (0, 0));
+			if(m.label != nil && font != nil){
+				lp := Draw->Point(p0.x, p0.y - font.height - 2);
+				if(lp.y < r.min.y)
+					lp.y = p0.y + 2;
+				dst.text(lp, col, (0, 0), font, m.label);
+			}
+		Line =>
+			ln := Path.new().moveto(x0, y0).lineto(x1, y1);
+			dst.strokepath(ln, 2.0, Draw->Capround, Draw->Joinround, col, (0, 0));
+		Text =>
+			if(m.label != nil && font != nil)
+				dst.text(p0, col, (0, 0), font, m.label);
+		Point =>
+			dst.draw(Rect((p0.x - 2, p0.y - 2), (p0.x + 3, p0.y + 3)), col, nil, (0, 0));
+		}
+	}
+}
+
+colourof(dst: ref Image, name: string, accent: ref Image, colours: list of (string, ref Image)): ref Image
+{
+	if(name == nil || name == "accent")
+		return accent;
+	for(l := colours; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	if(len name != 6)
+		return accent;
+	v := 0;
+	for(i := 0; i < 6; i++){
+		c := name[i];
+		d: int;
+		if(c >= '0' && c <= '9')
+			d = c - '0';
+		else if(c >= 'a' && c <= 'f')
+			d = c - 'a' + 10;
+		else if(c >= 'A' && c <= 'F')
+			d = c - 'A' + 10;
+		else
+			return accent;
+		v = v*16 + d;
+	}
+	for(l = made; l != nil; l = tl l)
+		if((hd l).t0 == name && (hd l).t1.display == dst.display)
+			return (hd l).t1;
+	im := dst.display.color((v << 8) | 16rFF);
+	made = (name, im) :: made;
+	return im;
 }

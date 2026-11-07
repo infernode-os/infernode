@@ -38,10 +38,22 @@ implement VideoPane;
 # park until the next frame) is played as a stream: a reader proc
 # consumes framesize-byte chunks sequentially — the SERVER paces it —
 # and the pane blits the newest frame each tick.  No transport keys;
-# the strip shows LIVE.  This is the remote-camera path: a perception
-# service ingests a camera stream and re-serves annotated I420 over
-# 9P; this pane mounts it from any reachable host (see
-# docs/H264-9P-BRIDGE.md).
+# the strip shows LIVE.  camsrv(4)'s camera is such a feed, and so is
+# one mounted from another machine.
+#
+# LAYERS: what is drawn over the frames is the feed's layer/ directory
+# as this name space has it (#1095, layers(2)): each file a layer of
+# text records, stacked in the union's order, so a layer is added with
+# bind -a (on top) or bind -b (underneath) and taken off with unmount,
+# while the pane runs:
+#
+#     bind -a /mnt/vision/1/layer /mnt/video/0/layer    # detections
+#     unmount /mnt/vision/1/layer /mnt/video/0/layer
+#
+# On frame F each layer's records for its newest frame up to F are
+# drawn, and its frame=* records.  A live sequential feed names no
+# frames, so on one only frame=* records are drawn: a record is never
+# put on a frame it may not be for.
 #
 
 include "sys.m";
@@ -62,6 +74,14 @@ include "keyboard.m";
 include "lucitheme.m";
 
 include "matrix.m";
+
+include "layers.m";
+	layers: Layers;
+	Stack, Mark: import layers;
+stack: ref Stack;
+acol: ref Image;			# the theme's accent, for marks with no colour
+colours: list of (string, ref Image);	# the theme's colours by name
+drawn := "";				# what the layers last drew
 
 VideoPane: module
 {
@@ -133,6 +153,14 @@ init(display: ref Display, font: ref Font, mount: string): string
 	mountpath = mount;
 	haveframe = 0;
 	loadcolors();
+
+	layers = load Layers Layers->PATH;
+	if(layers == nil)
+		return sys->sprint("cannot load %s: %r", Layers->PATH);
+	if((e := layers->init()) != nil)
+		return e;
+	stack = Stack.watch(mount + "/layer");
+	(acol, colours) = layers->themed(display);
 
 	# fmt/frame may not be ready yet (the feed can start after the pane);
 	# ensureopen() retries lazily from update(), so a missing source here
@@ -397,7 +425,7 @@ update(): int
 			statestr = ns;
 			changed = 1;
 		}
-		return changed;
+		return layerschanged() || changed;
 	}
 	(strm, nf, playing, pos, tms, fol) := readstatus();
 	if(nf <= 0)
@@ -407,7 +435,29 @@ update(): int
 	if(pos != lastshown && pos < nf && showframe(pos))
 		changed = 1;
 	setstate(strm, nf, playing, tms, fol);
-	return changed || statestr != was;
+	return layerschanged() || changed || statestr != was;
+}
+
+# the frame the layers are drawn for: the one shown, or for a live
+# sequential feed, which names none, none (only frame=* is due)
+layerframe(): int
+{
+	if(seqmode)
+		return -1;
+	return lastshown;
+}
+
+layerschanged(): int
+{
+	sig := "";
+	for(ml := stack.due(layerframe()); ml != nil; ml = tl ml) {
+		m := hd ml;
+		sig += sys->sprint("%d %d %d %d %d %s %s\n", m.kind, m.x0, m.y0, m.x1, m.y1, m.label, m.colour);
+	}
+	if(sig == drawn)
+		return 0;
+	drawn = sig;
+	return 1;
 }
 
 draw(dst: ref Image)
@@ -447,6 +497,9 @@ draw(dst: ref Image)
 	# source point in frame space aligned to ir.min
 	sp := Point(ir.min.x - pane.min.x, ir.min.y - pane.min.y);
 	dst.draw(ir, frame, nil, sp);
+
+	# the feed's layers over the frame, bottom first, where it is drawn
+	layers->draw(stack.due(layerframe()), dst, pane, vw, vh, font_g, acol, colours);
 
 	# thin border so the pane reads as a framed feed
 	dst.draw(Rect((r_g.min.x, r_g.min.y), (r_g.max.x, r_g.min.y+1)), bordercol, nil, (0,0));
@@ -507,10 +560,14 @@ retheme(display: ref Display)
 {
 	display_g = display;
 	loadcolors();
+	(acol, colours) = layers->themed(display);
 }
 
 shutdown()
 {
+	if(stack != nil)
+		stack.stop();
+	stack = nil;
 	stopreader = 1;
 	if(rdpid >= 0) {
 		# The reader may be parked in a server-paced read; kill it

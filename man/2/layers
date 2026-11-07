@@ -108,7 +108,7 @@ bind -a /tmp/horizon /mnt/video/0/layer
 .SH SOURCE
 .B /appl/lib/layers.b
 .br
-.B /appl/matrix/video-overlay.b
+.B /appl/matrix/video-pane.b
 .SH SEE ALSO
 .IR vision (1),
 .IR visionfs (4)

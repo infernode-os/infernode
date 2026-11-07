@@ -23,6 +23,7 @@
 #
 Layers: module
 {
+	# (needs draw.m)
 	PATH:	con	"/dis/lib/layers.dis";
 
 	Box, Line, Text, Point: con iota;
@@ -53,6 +54,17 @@ Layers: module
 	};
 
 	init:	fn(): string;
+
+	# marks drawn into dst, bottom first, where a frame fw by fh is drawn
+	# at r (scaled to it): boxes with their labels above, lines, text,
+	# points, each in its colour (a name from colours, rrggbb, or else
+	# accent). font may be nil (no labels).
+	# the theme's colours by name (accent, border, text, red, green,
+	# yellow, ...) and its accent, for draw; the accent alone if there
+	# is no theme
+	themed:	fn(d: ref Draw->Display): (ref Draw->Image, list of (string, ref Draw->Image));
+	draw:	fn(marks: list of ref Mark, dst: ref Draw->Image, r: Draw->Rect, fw, fh: int,
+		font: ref Draw->Font, accent: ref Draw->Image, colours: list of (string, ref Draw->Image));
 
 	# a line as a mark: (frame, mark); frame -1 for frame=*, and -2 for
 	# a line that is no mark; mark nil for a frame's key alone

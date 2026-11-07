@@ -2,8 +2,8 @@
 #
 # tests/host/layers_view_test.sh
 #
-# Matrix's video-overlay draws its feed's layers (#1095) as the name space
-# stacks them, by pixel: wm/matrix on the video-overlay composition over a
+# Matrix's video-pane draws its feed's layers (#1095) as the name space
+# stacks them, by pixel: wm/matrix on the video-player composition over a
 # grey vid9p clip, the screen captured (scap) after each change:
 #
 #   1. no layers: nothing red or green
@@ -22,7 +22,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$(dirname "$0")/common.sh"
 
 [ -x "$EMU" ] || { echo "SKIP: no emulator at $EMU"; exit 77; }
-for f in matrix/video-overlay.dis vid9p.dis lib/layers.dis scap.dis; do
+for f in matrix/video-pane.dis vid9p.dis lib/layers.dis scap.dis; do
 	[ -f "$ROOT/dis/$f" ] || { echo "SKIP: dis/$f not built"; exit 77; }
 done
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3"; exit 77; }
@@ -47,7 +47,7 @@ echo 'frame=* line x0=10 y0=60 x1=150 y1=60 colour=00ff00' > "$W/green/horizon"
 cat > "$W/run.sh" <<RUN
 mkdir -p /mnt/video
 mount {vid9p $E/grey.y4m} /mnt/video
-wm/matrix -g 800x600 /lib/matrix/compositions/video-overlay &
+wm/matrix -g 800x600 /lib/matrix/compositions/video-player &
 sleep 5
 scap $E/1.img
 bind -a $E/red /mnt/video/0/layer

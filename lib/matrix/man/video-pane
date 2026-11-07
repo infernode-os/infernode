@@ -1,5 +1,5 @@
 NAME
-	video-pane (display) - render a decoded video feed from a vid9p stream directory, compositing I420 frames through the mpeg remap24 path into the pane
+	video-pane (display) - render a decoded video feed from a vid9p stream directory, compositing I420 frames through the mpeg remap24 path into the pane, with the layers bound into the feed's layer/ directory drawn over them
 
 INTERFACE
 	display (MatrixDisplay)
@@ -11,6 +11,9 @@ READS
 
 WRITES
 	none (renders only)
+
+	<mount>/layer/	read: each file a layer of records drawn over the
+			frames, stacked in the union's order (layers(2))
 
 DESCRIPTION
 	The mount path is a vid9p stream directory (e.g. /mnt/video/0)
@@ -44,18 +47,33 @@ DESCRIPTION
 	crystallisations in /lib/matrix/compositions).
 
 	LIVE SEQUENTIAL SOURCES.  A mount whose status carries no
-	transport (no "pos=" field — e.g. a vision service's /mnt/vision/feeds/<id>,
-	which serves the vid9p fmt/frame schema with join-live ring
-	semantics) is played as a stream: a reader proc consumes
-	framesize-byte chunks sequentially, paced by the SERVER (reads
-	park until the next frame; a slow link skips frames, never
-	blocks), and the pane blits the newest frame each tick.  The
-	strip shows "LIVE <w>x<h> stream"; transport keys are inert.
-	This is the remote-camera path: mount a perception host's 9P
-	vision tree from any reachable host and point a leaf at a feed
-	directory.
+	transport (no "pos=" field: camsrv(4)'s camera, here or mounted
+	from another machine) is played as a stream: a reader proc
+	consumes framesize-byte chunks sequentially, paced by the SERVER
+	(reads park until the next frame; a slow link skips frames, never
+	blocks), and the pane blits the newest frame each tick.  The strip
+	shows "LIVE <w>x<h> stream"; transport keys are inert.
+
+	LAYERS.  What is drawn over the frames is the feed's layer/
+	directory as the composition's name space has it (#1095,
+	layers(2)): each file there is a layer of text records (box,
+	line, text, point; vision(4)'s detections are boxes as they
+	come), drawn bottom first in the union's order.  Composing them
+	is the name space's business, done while the pane runs:
+
+	bind -a /mnt/vision/1/layer /mnt/video/0/layer	detections on top
+	bind -b /n/remote/mask /mnt/video/0/layer	a layer underneath
+	unmount /mnt/vision/1/layer /mnt/video/0/layer	gone
+
+	A bind or unmount shows within half a second.  On frame F each
+	layer's records for its newest frame up to F are drawn, and its
+	frame=* records.  A live sequential feed names no frames, so on
+	one only frame=* records are drawn.  All panes of one Matrix
+	share its name space, so they see the same stack of a feed; a
+	viewer in another name space sees its own.
 
 SEE ALSO
 	vid9p (appl/cmd/vid9p.b — serves /mnt/video/<id>)
 	vidplay9p (appl/mpeg — standalone windowed player, same feed)
+	layers(2), visionfs(4)
 	docs/H264-9P-BRIDGE.md, docs/history/MULTIPLEXED-VIDEO-SPIKE.md

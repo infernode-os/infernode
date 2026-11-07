@@ -3,7 +3,7 @@
 # demo-overlay.sh — video with live annotations: a canned clip through
 # vid9p and a synthetic "tracker" rewriting a layer file of one moving
 # box, bound into the feed's layer/ directory and drawn over the frames
-# by the video-overlay module (layers(2), #1095).
+# by the video-pane module (layers(2), #1095).
 #
 # The tracker runs HERE on the host: the emu root is this directory, so
 # tmp/demo-overlay/track IS /tmp/demo-overlay/track inside, and the
@@ -38,7 +38,7 @@ DRIVER='
 mkdir -p /mnt/video
 mount {vid9p /video-demo-media/clipC.y4m} /mnt/video
 bind -a /tmp/demo-overlay /mnt/video/0/layer
-wm/matrix -g 800x600 /lib/matrix/compositions/video-overlay &
+wm/matrix -g 800x600 /lib/matrix/compositions/video-player &
 sleep 100000
 '
 "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -g900x600 -r"$ROOT" \

@@ -271,6 +271,202 @@ grabrange(a: ref Arena, off, ln: big)
 
 # ---- blocks ----
 
+blkerr(b: ref Blk, why: string)
+{
+	error(sys->sprint("%s: block %bux: %s", Ecorrupt, b.bp.addr, why));
+}
+
+validaddr(addr: big): int
+{
+	return addr >= big 0
+		&& (addr % big Blksz) == big 0
+		&& fs.devsz >= big Blksz
+		&& addr <= fs.devsz - big Blksz;
+}
+
+# A checksum detects accidental damage, but is not a structural validator:
+# it is unkeyed and an image producer can recompute it. Check every offset and
+# length before any getter turns it into a Limbo slice.
+validdkey(b: ref Blk, k: array of byte)
+{
+	if(len k < 12 || int k[0] != Kent)
+		blkerr(b, "invalid directory key");
+	n := g16(k, 9);
+	if(n > Maxname || len k != 12+n || int k[len k-1] != 0)
+		blkerr(b, "invalid directory name");
+}
+
+validkey(b: ref Blk, k: array of byte)
+{
+	if(len k == 0)
+		blkerr(b, "empty key");
+	case int k[0] {
+	Kdat =>
+		if(len k != Offksz) blkerr(b, "invalid data key");
+	Kent =>
+		validdkey(b, k);
+	Kup =>
+		if(len k != Upksz) blkerr(b, "invalid parent key");
+	Klabel =>
+		;
+	Ksnap =>
+		if(len k != Snapsz) blkerr(b, "invalid snapshot key");
+	Kdlist =>
+		if(len k != Dlksz) blkerr(b, "invalid deadlist key");
+	Kconf =>
+		;
+	* =>
+		blkerr(b, "invalid key type");
+	}
+}
+
+validleafval(b: ref Blk, k, v: array of byte)
+{
+	case int k[0] {
+	Kdat =>
+		if(len v != Ptrsz || !validdataaddr(g64(v, 0)))
+			blkerr(b, "invalid data pointer");
+	Kent =>
+		if(len v != Xdirsz || g64(v, 41) < big 0)
+			blkerr(b, "invalid directory value");
+		mode := g32(v, 21);
+		if(mode & ~(Sys->DMDIR|Sys->DMAPPEND|Sys->DMEXCL|Sys->DMTMP|8r777))
+			blkerr(b, "invalid directory mode");
+	Kup =>
+		validdkey(b, v);
+	Klabel =>
+		if(len v != 1+8+4 || int v[0] != Ksnap || (g32(v, 9) & ~Lmut) != 0)
+			blkerr(b, "invalid label value");
+	Ksnap =>
+		if(len v != Treesz)
+			blkerr(b, "invalid snapshot value");
+		unpacktree(v, 0);
+	Kdlist =>
+		if(len v != Dlvsz)
+			blkerr(b, "invalid deadlist value");
+		h := g64(v, 0);
+		t := g64(v, Ptrsz);
+		if((h != big -1 && !validdataaddr(h)) || (t != big -1 && !validdataaddr(t)))
+			blkerr(b, "deadlist pointer outside an arena");
+	Kconf =>
+		;
+	}
+}
+
+validval(b: ref Blk, o, e: int): int
+{
+	if(o < 0 || o > e || e-o < 4)
+		blkerr(b, "short value");
+	nk := g16(b.data, o);
+	if(nk <= 0 || nk > Keymax || e-o-2 < nk+2)
+		blkerr(b, "invalid key length");
+	p := o+2+nk;
+	nv := g16(b.data, p);
+	if(nv > Inlmax || e-p-2 < nv)
+		blkerr(b, "invalid value length");
+	k := b.data[o+2:o+2+nk];
+	v := b.data[p+2:p+2+nv];
+	validkey(b, k);
+	if(b.ty == Tpivot && nv != Ptrsz+2)
+		blkerr(b, "invalid pivot pointer");
+	if(b.ty == Tpivot && !validdataaddr(g64(b.data, p+2)))
+		blkerr(b, "pivot pointer outside an arena");
+	if(b.ty == Tleaf)
+		validleafval(b, k, v);
+	return 2+nk+2+nv;
+}
+
+validmsg(b: ref Blk, o, e: int): int
+{
+	if(o < 0 || o > e || e-o < 5)
+		blkerr(b, "short message");
+	op := int b.data[o++];
+	if(op <= Onop || op >= Nmsgtype)
+		blkerr(b, "invalid message operation");
+	nk := g16(b.data, o);
+	if(nk <= 0 || nk > Keymax || e-o-2 < nk+2)
+		blkerr(b, "invalid message key length");
+	o += 2+nk;
+	nv := g16(b.data, o);
+	if(nv > Inlmax || e-o-2 < nv)
+		blkerr(b, "invalid message value length");
+	p := o+2;
+	k := b.data[p-nk-2:p-2];
+	v := b.data[p:p+nv];
+	validkey(b, k);
+	case op {
+	Oinsert =>
+		validleafval(b, k, v);
+	Oclearb or Oclobber =>
+		if(nv != 0)
+			blkerr(b, "invalid clear message");
+	Owstat =>
+		if(nv < 1)
+			blkerr(b, "short stat message");
+		flg := int b.data[p];
+		if(flg & ~(Owsize|Owmode|Owmtime|Owatime|Owuid|Owgid|Owmuid|Owqpath))
+			blkerr(b, "invalid stat message flags");
+		n := 1;
+		if(flg & Owsize){
+			if(g64(b.data, p+n) < big 0)
+				blkerr(b, "negative stat length");
+			n += 8;
+		}
+		if(flg & Owmode) n += 4;
+		if(flg & Owmtime) n += 8;
+		if(flg & Owatime) n += 8;
+		if(flg & Owuid) n += 4;
+		if(flg & Owgid) n += 4;
+		if(flg & Owmuid) n += 4;
+		if(flg & Owqpath) n += 8;
+		if(n != nv)
+			blkerr(b, "invalid stat message length");
+	Orelink or Oreprev or Oincref =>
+		if(int k[0] != Ksnap || nv != 10)
+			blkerr(b, "invalid tree message");
+	}
+	return 1+2+nk+2+nv;
+}
+
+validtreeblk(b: ref Blk)
+{
+	spc := Pivspc;
+	if(b.ty == Tleaf)
+		spc = Leafspc;
+	if(b.nval <= 0 || b.nval > spc/2)
+		blkerr(b, "invalid value count");
+	tab := 2*b.nval;
+	if(b.valsz > spc-tab)
+		blkerr(b, "invalid value bytes");
+	lo := spc-b.valsz;
+	n := 0;
+	for(i := 0; i < b.nval; i++){
+		o := g16(b.data, 2*i);
+		if(o < lo || o >= spc)
+			blkerr(b, "invalid value offset");
+		n += validval(b, o, spc);
+	}
+	if(n != b.valsz)
+		blkerr(b, "inconsistent value bytes");
+	if(b.ty != Tpivot)
+		return;
+	if(b.nbuf > Bufspc/2)
+		blkerr(b, "invalid message count");
+	tab = 2*b.nbuf;
+	if(b.bufsz > Bufspc-tab)
+		blkerr(b, "invalid message bytes");
+	lo = Bufspc-b.bufsz;
+	n = 0;
+	for(i = 0; i < b.nbuf; i++){
+		o := g16(b.data, Pivspc+2*i);
+		if(o < lo || o >= Bufspc)
+			blkerr(b, "invalid message offset");
+		n += validmsg(b, Pivspc+o, Pivspc+Bufspc);
+	}
+	if(n != b.bufsz)
+		blkerr(b, "inconsistent message bytes");
+}
+
 newblkbuf(): ref Blk
 {
 	b := ref Blk;
@@ -283,7 +479,7 @@ newblkbuf(): ref Blk
 syncblk(b: ref Blk)
 {
 	bassert(b, (b.flag & Bfinal) != 0, "syncblk: not finalized");
-	bassert(b, b.bp.addr >= big 0, "syncblk: no address");
+	bassert(b, validaddr(b.bp.addr), "syncblk: invalid address");
 	if(sys->pwrite(fs.fd, b.buf, Blksz, b.bp.addr) != Blksz)
 		broke(sys->sprint("%bux %s: %r", b.bp.addr, Eio));
 	if(wjfd != nil){
@@ -299,6 +495,8 @@ syncblk(b: ref Blk)
 
 readblk(b: ref Blk, bp: Bptr, flg: int)
 {
+	if(!validaddr(bp.addr))
+		error(sys->sprint("%s: invalid block address %bux", Ecorrupt, bp.addr));
 	off := bp.addr;
 	rem := Blksz;
 	o := 0;
@@ -328,6 +526,8 @@ readblk(b: ref Blk, bp: Bptr, flg: int)
 		b.data = b.buf[2:];
 	Tdlist or Tlog =>
 		b.logsz = g16(b.buf, 2);
+		if(b.logsz > Logspc || (b.logsz & 7) != 0)
+			blkerr(b, "invalid log length");
 		b.logh = g64(b.buf, 4);
 		b.logp = unpackbp(b.buf, 12);
 		b.data = b.buf[Loghdsz:];
@@ -354,6 +554,12 @@ readblk(b: ref Blk, bp: Bptr, flg: int)
 	}
 	if((flg & GBnochk) == 0 && ck != xh)
 		error(sys->sprint("%s: %bux %bux != %bux", Ecorrupt, bp.addr, xh, ck));
+	if(b.ty == Tlog || b.ty == Tdlist)
+		b.bp.hash = bp.hash;
+	else
+		b.bp.hash = ck;
+	if(b.ty == Tpivot || b.ty == Tleaf)
+		validtreeblk(b);
 }
 
 pickarena(ty, hint, tries: int): ref Arena
@@ -384,11 +590,20 @@ getarena(b: big): ref Arena
 		ahi := alo + a.size + big (2*Blksz);
 		if(b < alo)
 			hi = mid-1;
-		else if(b > ahi)
+		else if(b >= ahi)
 			lo = mid+1;
 		else
 			return a;
 	}
+}
+
+validdataaddr(addr: big): int
+{
+	if(!validaddr(addr))
+		return 0;
+	a := getarena(addr);
+	return addr >= a.h0.bp.addr + big (2*Blksz)
+		&& addr < a.h0.bp.addr + big (2*Blksz) + a.size;
 }
 
 mklogblk(a: ref Arena, o: big): ref Blk
@@ -531,8 +746,24 @@ normlogs()
 loadlog(a: ref Arena, bp: Bptr)
 {
 	b := a.logbuf[0];
+	start := a.h0.bp.addr + big (2*Blksz);
+	end := a.h0.bp.addr + a.size + big (2*Blksz);
+	maxlog := (end-start)/big Blksz;
+	nlog := big 0;
+	seen: list of big;
 	for(;;){
+		if(bp.addr < start || bp.addr >= end || !validaddr(bp.addr))
+			error(sys->sprint("%s: log block outside arena: %bux", Ecorrupt, bp.addr));
+		for(s := seen; s != nil; s = tl s)
+			if(hd s == bp.addr)
+				error(sys->sprint("%s: cyclic arena log at %bux", Ecorrupt, bp.addr));
+		seen = bp.addr :: seen;
+		nlog++;
+		if(nlog > maxlog)
+			error(sys->sprint("%s: cyclic or overlong log", Ecorrupt));
 		readblk(b, bp, 0);
+		if(b.ty != Tlog)
+			blkerr(b, "non-log in arena log chain");
 		a.nlog++;
 		n := 0;
 		for(i := 0; i < b.logsz; i += n){
@@ -540,8 +771,12 @@ loadlog(a: ref Arena, bp: Bptr)
 			op := int (ent & big 16rff);
 			off := ent & ~big 16rff;
 			n = 8;
-			if(op >= Log2wide)
+			if(op == LogAlloc || op == LogFree){
+				if(b.logsz-i < 16)
+					blkerr(b, "short wide log entry");
 				n = 16;
+			}else if(op != LogSync && op != LogAlloc1 && op != LogFree1)
+				blkerr(b, "invalid log operation");
 			case op {
 			LogSync =>
 				gen := ent >> 8;
@@ -560,18 +795,22 @@ loadlog(a: ref Arena, bp: Bptr)
 				}
 			LogAlloc or LogAlloc1 =>
 				ln := big Blksz;
-				if(op >= Log2wide)
+				if(op == LogAlloc)
 					ln = g64(b.data, i+8);
+				if(ln <= big 0 || (ln % big Blksz) != big 0
+				|| off < start || off >= end || ln > end-off)
+					blkerr(b, "allocation outside arena");
 				grabrange(a, off, ln);
 				a.used += ln;
 			LogFree or LogFree1 =>
 				ln := big Blksz;
-				if(op >= Log2wide)
+				if(op == LogFree)
 					ln = g64(b.data, i+8);
+				if(ln <= big 0 || (ln % big Blksz) != big 0
+				|| off < start || off >= end || ln > end-off)
+					blkerr(b, "free outside arena");
 				freerange(a, off, ln);
 				a.used -= ln;
-			* =>
-				broke(sys->sprint("loadlog: log op %d", op));
 			}
 		}
 		if(b.logp.addr == big -1){
@@ -790,6 +1029,8 @@ getblk(bp: Bptr, flg: int): ref Blk
 		if(b != nil){
 			bassert(b, (b.flag & Bfreed) == 0, "getblk: freed");
 			bassert(b, b.bp.gen == bp.gen, "getblk: wrong generation");
+			if(bp.hash != big -1 && b.bp.hash != big -1 && bp.hash != b.bp.hash)
+				error(sys->sprint("%s: cached block hash mismatch at %bux", Ecorrupt, bp.addr));
 			return b;
 		}
 		#

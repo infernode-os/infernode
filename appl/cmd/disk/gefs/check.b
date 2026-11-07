@@ -137,14 +137,31 @@ checktree(b: ref Blk, h: int, pred: big, lo, hi: array of byte): int
 	return fail;
 }
 
-checklog(head, tail: Bptr): int
+checklog(head, tail: Bptr, ty: int): int
 {
 	pb := Zb();
 	nb: Bptr;
+	seen: list of big;
+	nblk := big 0;
 	for(bp := head; bp.addr != big -1; bp = nb){
+		for(s := seen; s != nil; s = tl s)
+			if(hd s == bp.addr){
+				ckprint(sys->sprint("cyclic log chain at %bux\n", bp.addr));
+				return 0;
+			}
+		seen = bp.addr :: seen;
+		nblk++;
+		if(nblk > fs.devsz/big Blksz){
+			ckprint("overlong log chain\n");
+			return 0;
+		}
 		{
 			pb = bp;
 			b := getblk(bp, 0);
+			if(b.ty != ty){
+				ckprint(sys->sprint("wrong block type in log chain at %bux\n", bp.addr));
+				return 0;
+			}
 			nb = b.logp;
 		} exception {
 		"gefs:*" =>
@@ -179,7 +196,7 @@ checkfree(): int
 			}
 			r = n;
 		}
-		if(!checklog(a.loghd, Zb())){
+		if(!checklog(a.loghd, Zb(), Tlog)){
 			ckprint(sys->sprint("arena %d: broken freelist\n", i));
 			ok = 0;
 		}
@@ -190,7 +207,7 @@ checkfree(): int
 checkdlist(): int
 {
 	ok := 1;
-	if(!checklog(fs.snapdl.head, fs.snapdl.tail)){
+	if(!checklog(fs.snapdl.head, fs.snapdl.tail, Tdlist)){
 		ckprint("bad snap dlist\n");
 		ok = 0;
 	}
@@ -201,7 +218,7 @@ checkdlist(): int
 		if(kv == nil)
 			break;
 		dl := kv2dlist(*kv);
-		if(!checklog(dl.head, dl.tail)){
+		if(!checklog(dl.head, dl.tail, Tdlist)){
 			ckprint(sys->sprint("bad dlist %s\n", keystr(kv.k)));
 			ok = 0;
 		}

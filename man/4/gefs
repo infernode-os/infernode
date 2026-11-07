@@ -39,6 +39,10 @@ nothing on the disk is overwritten while it is in use:
 a power cut or a crash leaves the disk as it was at the last commit,
 and a block that comes back from the disk other than as it was written
 is found by its hash and refused rather than served.
+The hash is an unkeyed corruption checksum, not a cryptographic
+authenticator: a hostile image can recompute it, so
+.I gefs
+also validates the lengths, offsets, pointers and chains it covers.
 Any number of snapshots cost only the blocks that differ.
 The disk format is 9front's, byte for byte: a disk made by either
 is read and written by the other.
@@ -108,6 +112,15 @@ A reamed disk has
 and
 .IR user .
 There is no authentication; the user is the attach's.
+Consequently the 9P stream is for a local namespace or an already
+authenticated, trusted transport, not direct exposure to an untrusted
+network peer.
+Remote authentication belongs in the surrounding export and in
+.IR factotum (4)
+and
+.IR secstore (1),
+not in credential files owned by
+.IR gefs .
 .PP
 Writes are committed every five seconds, and by
 .B sync
@@ -207,7 +220,8 @@ read only.
 .TP
 .B -S
 anyone may attach to
-.BR adm .
+.BR adm ;
+it must not be used where an untrusted peer can reach the 9P stream.
 .TP
 .BI -m " cachemb"
 the size of the block cache, in megabytes (default 64).

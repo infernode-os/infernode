@@ -275,6 +275,9 @@ unpacktree(b: array of byte, o: int): ref Tree
 	t.succ = g64(b, o+32);
 	t.base = g64(b, o+40);
 	t.bp = Bptr(g64(b, o+48), g64(b, o+56), g64(b, o+64));
+	if(t.nref < 0 || t.nlbl < 0 || t.ht <= 0 || t.ht >= Maxheight
+	|| (t.flag & ~Lmut) != 0 || !validaddr(t.bp.addr))
+		broke(Efs+": invalid tree");
 	return t;
 }
 
@@ -367,5 +370,16 @@ unpacksb(b: array of byte): int
 	dh := g64(b, o);
 	if(dh != xh)
 		error(sys->sprint("corrupt superblock: %bux != %bux", dh, xh));
+	if(fs.blksz != Blksz || fs.bufspc != Bufspc)
+		error("corrupt superblock: incompatible block geometry");
+	if(fs.snap.ht <= 0 || fs.snap.ht >= Maxheight || !validaddr(fs.snap.bp.addr))
+		error("corrupt superblock: invalid snapshot tree");
+	for(i = 0; i < fs.narena; i++)
+		if(!validaddr(fs.arenabp[i].addr))
+			error("corrupt superblock: invalid arena pointer");
+	if(fs.snapdl.head.addr != big -1 && !validaddr(fs.snapdl.head.addr))
+		error("corrupt superblock: invalid deadlist head");
+	if(fs.snapdl.tail.addr != big -1 && !validaddr(fs.snapdl.tail.addr))
+		error("corrupt superblock: invalid deadlist tail");
 	return o+8;
 }

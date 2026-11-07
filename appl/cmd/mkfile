@@ -153,6 +153,7 @@ TARG=\
 	pipefs.dis\
 	plumb.dis\
 	plumber.dis\
+	post.dis\
 	procstorm.dis\
 	prof.dis\
 	ps.dis\

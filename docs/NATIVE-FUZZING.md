@@ -49,7 +49,7 @@ A run fails on a panic or the kernel's own complaints (lock loop, double
 sleep, a corrupt pool, an unhandled exception), on QEMU exiting, on a
 sysfuzz whose check at the end fails (`wedged`), on not every sysfuzz
 finishing (`hang`), on the shell not answering afterwards (`dead`), and on
-Progs left in VMs 1-3 (`leaked`).
+Progs beyond sysfuzz's three harness-owned Progs left in VMs 1-3 (`leaked`).
 
 ## On the board
 
@@ -66,7 +66,9 @@ vm 3 /dis/tests/sysfuzz.dis -s 13 -t 600 -e 5 -p 6 -d /tmp
 
 Each prints `hb SECONDS OPS` every second and `sysfuzz: done` at the end
 (`sysfuzz: wedged: ...` if the kernel stopped answering). Then `vm` should
-show no Progs left in VMs 1-3.
+show exactly three Progs in each of VMs 1-3: the root and files scratch
+exporters plus `check()`'s nonblocking 20-second timer.  After that timer
+expires the count falls to two. Any additional Prog is failed epoch cleanup.
 
 ## The chaos build
 

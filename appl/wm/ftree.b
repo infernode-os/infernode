@@ -39,7 +39,9 @@ implement Ftree;
 #   r/R          refresh tree (what was open stays open)
 #
 # Mouse:
-#   Button 1     select; click indicator to expand/collapse
+#   Button 1     select; click indicator to expand/collapse (the
+#                indicator's target takes in the name's first letters,
+#                for a finger)
 #   Button 2     open selected file in presentation view
 #   Button 3     context menu: open, copy, paste into, remove, bind,
 #                unmount, expand/collapse all, refresh, goto
@@ -105,6 +107,7 @@ DEVCOL:	con int 16r668844FF;	# device path colour
 MARGIN:		con 6;
 INDENT:		con 16;
 ICON_W:		con 14;
+Tapw:		con 36;	# the expand/collapse target's least width: a fingertip's
 
 # Key constants: keyboard.h's, as every emu driver and the native
 # kernel deliver them.  They were X11 keysyms (16rFF52 for Up), which
@@ -1522,9 +1525,18 @@ onindicator(x: int): int
 	indent := "";
 	for(j := 0; j < n.depth; j++)
 		indent += "  ";
-	w := listfont.width(indent) + listfont.width(sys->sprint("%c ", 16r25B8));
+	start := listfont.width(indent);
+	w := start + listfont.width(sys->sprint("%c ", 16r25B8));
 	# +4px tolerance for the listbox border/inset ahead of the text origin.
-	return x <= w + 4;
+	w += 4;
+	# A finger needs more than the triangle: it is some 14 pixels
+	# wide, under 3mm on the Pi's 7" panel, and a tap there almost
+	# never landed on it, so a directory could not be opened by touch.
+	# The target is at least Tapw wide from where the triangle starts,
+	# taking the first letters of the name; the rest of it selects.
+	if(w < start + Tapw)
+		w = start + Tapw;
+	return x <= w;
 }
 
 # A tree row rendered as listbox text: depth indent, an expand/collapse

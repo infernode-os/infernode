@@ -5,6 +5,7 @@
 #
 #	tools/sanemu build		build $ROOT/tmp/sanemu/o.emu
 #	tools/sanemu run EMUARGS...	run it, as emu/Linux/o.emu is run
+#	tools/sanemu suite [-c0|-c1]	run the test suite under it (below)
 #	tools/sanemu env		print the sanitizer settings it runs with
 #
 # The C sources (as they are in the tree, edits and all) are copied to
@@ -77,9 +78,63 @@ build() {
 	echo "sanemu: built $S/o.emu"
 }
 
+# The test suite (/tests/runner.dis) under the sanitizers' emu, as CI
+# runs it under o.emu: waited for until the runner's Total: line, then
+# stopped (emu does not exit). It fails if the suite did not finish
+# within SANEMU_BACKSTOP seconds (default 5400), a test failed, or the
+# run left a sanitizer report in $SANLOG; each report is printed. Tests
+# get SANEMU_TESTTIME seconds each (default 1800: they run two to four
+# times slower). The scheduled sanitize workflow runs it.
+suite() {
+	mode=${1:--c1}
+	[ -x "$S/o.emu" ] || { echo "sanemu: no $S/o.emu: tools/sanemu build" >&2; exit 2; }
+	sanenv
+	mkdir -p "$ROOT/tmp"
+	out=$S/suite$mode.txt
+	stamp=$S/suite$mode.stamp
+	: >"$stamp"
+	cd "$ROOT"
+	"$S/o.emu" $mode -r "$ROOT" /tests/runner.dis -v -t "${SANEMU_TESTTIME:-1800}" >"$out" 2>&1 &
+	pid=$!
+	start=$SECONDS
+	backstop=${SANEMU_BACKSTOP:-5400}
+	while kill -0 $pid 2>/dev/null; do
+		grep -q '^Total:' "$out" && break
+		[ $((SECONDS-start)) -ge "$backstop" ] && break
+		sleep 5
+	done
+	kill -9 $pid 2>/dev/null || true
+	wait $pid 2>/dev/null || true
+	cat "$out"
+	rc=0
+	if ! grep -q '^Total:' "$out"; then
+		echo "sanemu: the suite did not finish ($mode, $((SECONDS-start))s); last test started:"
+		grep '^=== RUN' "$out" | tail -1 || true
+		rc=1
+	fi
+	if grep -q '^--- FAIL:' "$out"; then
+		echo "sanemu: failing tests ($mode):"
+		grep '^--- FAIL:' "$out"
+		rc=1
+	fi
+	new=$(find "$SANLOG" -type f -newer "$stamp" 2>/dev/null | sort)
+	if [ -n "$new" ]; then
+		echo "sanemu: sanitizer reports ($mode):"
+		for f in $new; do
+			echo "== $f"
+			head -80 "$f"
+		done
+		rc=1
+	fi
+	return $rc
+}
+
 case "$1" in
 build)
 	build ;;
+suite)
+	shift
+	suite "$@" ;;
 run)
 	shift
 	[ -x "$S/o.emu" ] || { echo "sanemu: no $S/o.emu: tools/sanemu build" >&2; exit 2; }
@@ -90,6 +145,6 @@ env)
 	echo "ASAN_OPTIONS=$ASAN_OPTIONS"
 	echo "UBSAN_OPTIONS=$UBSAN_OPTIONS" ;;
 *)
-	echo "usage: tools/sanemu build | run EMUARGS... | env" >&2
+	echo "usage: tools/sanemu build | run EMUARGS... | suite [-c0|-c1] | env" >&2
 	exit 2 ;;
 esac

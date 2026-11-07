@@ -135,6 +135,14 @@ is
 on iOS and Android the system's keyboard is never shown, whether this
 runs or not, and a keyboard attached to the device types as it always
 did.
+With
+.B -s
+and no window manager (the boot starts it so beside
+.IR logon (1)'s
+login screen) it does not read the pointer: that has one reader, the
+program it types for, and its own touches come from
+.B /dev/fingers
+alone.
 .PP
 .B -M
 sets the mode

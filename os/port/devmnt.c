@@ -1053,10 +1053,11 @@ mountio(Mnt *m, Mntrpc *r)
 	int n;
 	Mwatch w;
 	volatile int watched;
-	int fired;
+	int armed, fired;
 
 	watched = 0;
 	while(waserror()) {
+		armed = watched;
 		fired = 0;
 		if(watched){
 			fired = w.fired;
@@ -1080,7 +1081,14 @@ mountio(Mnt *m, Mntrpc *r)
 		 * an epoch's workers serving each other). Unanswered in time,
 		 * the call is left on the queue, its tag held, for its reply.
 		 */
-		if(upkilled() && fired){
+		/*
+		 * One flush is enough.  A second interrupt while its watchdog is
+		 * armed (including durable Prog revocation refusing the next sleep)
+		 * abandons the chain immediately instead of allocating flushes until
+		 * the mount RPC pool is exhausted.  The watchdog remains the fallback
+		 * when no second interrupt arrives.
+		 */
+		if(upkilled() && (armed || fired)){
 			mntorphan(m, r);
 			nexterror();
 		}

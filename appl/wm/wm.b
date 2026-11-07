@@ -1231,6 +1231,9 @@ hide(c: ref Client)
 	hidden = c :: hidden;
 	if(kbdfocus == c)
 		setkbdfocus(wmsrv->top());
+	# what it draws is off the screen: an app that costs something while
+	# it is seen (a camera, an animation) can stop
+	spawn sendctl(c.ctl, "visible 0");
 }
 
 unhide(c: ref Client)
@@ -1262,6 +1265,7 @@ unhide(c: ref Client)
 	}
 	totop(c);
 	setkbdfocus(c);
+	spawn sendctl(c.ctl, "visible 1");
 }
 
 # Window labels (rio's /dev/label), from the clients' "label" requests.

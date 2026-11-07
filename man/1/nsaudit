@@ -119,6 +119,10 @@ trusted control files such as
 .B /mnt/msg/approve
 imply
 .BR privileged_control_path ,
+a video feed at
+.B /mnt/video
+(which may be a live camera) implies
+.BR reads_video ,
 and raw mail9p send surfaces such as
 .B /mnt/mail
 or paths containing

@@ -273,6 +273,11 @@ Window.wmctl(w: self ref Window, req: string): string
 	"haskbdfocus" =>
 		w.focused = int qword(req, next).t0;
 		drawborder(w);
+	"visible" =>
+		# "visible 0" from the window manager: the window is out of view
+		# (wm/wm's Hide), "visible 1" when it is back. A notice, not a
+		# request: an app that cares acts on it before calling wmctl.
+		;
 	"retheme" =>
 		# a live theme switch (Lucifer sends it to the apps it hosts)
 		retheme(w);

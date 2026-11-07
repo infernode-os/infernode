@@ -109,6 +109,7 @@ dis/bytes.dis
 dis/cal.dis
 dis/calc.dis
 dis/calendar9p.dis
+dis/camsrv.dis
 dis/cat.dis
 dis/cd.dis
 dis/cddb.dis
@@ -712,11 +713,13 @@ dis/tests/auditverify_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
 dis/tests/awk_test.dis
+dis/tests/bayer_test.dis
 dis/tests/bidi_test.dis
 dis/tests/bioauth_test.dis
 dis/tests/brotli_test.dis
 dis/tests/bthci_test.dis
 dis/tests/bufio_test.dis
+dis/tests/camsrv_test.dis
 dis/tests/casel_test.dis
 dis/tests/charonbatch.dis
 dis/tests/charonshot.dis
@@ -1067,6 +1070,7 @@ dis/wiki.dis
 dis/wikifs.dis
 dis/wm/about.dis
 dis/wm/bounce.dis
+dis/wm/camera.dis
 dis/wm/charon.dis
 dis/wm/clock.dis
 dis/wm/coffee.dis

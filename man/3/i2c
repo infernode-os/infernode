@@ -1,0 +1,38 @@
+.TH I2C 3
+.SH NAME
+i2c \- the Raspberry Pi 4's camera and display I2C bus
+.SH SYNOPSIS
+.nf
+.B bind -a #J /dev
+
+.B /dev/i2c0ctl
+.B /dev/i2c0data
+.fi
+.SH DESCRIPTION
+The device serves BSC0 on GPIO 44 and 45, the bus on the Pi 4's two
+ribbon connectors, as a polled master at 400 kHz with 7-bit addresses.
+.PP
+Writing
+.BI addr " n
+to
+.B i2c0ctl
+sets the device to talk to, and
+.BI subaddress " n
+how many bytes of register address it takes, 0 to 4. Reading gives them.
+.PP
+Reads and writes of
+.B i2c0data
+are transfers with the device. With a subaddress, the file offset is
+the register, sent high byte first; a read sends it, stops, and reads.
+An address nothing answers is the error
+.LR "no device" .
+.SH SOURCE
+.B /os/bcm2711/devi2c.c
+.SH SEE ALSO
+.IR camera (3),
+.IR gpio (3)
+.SH BUGS
+The VideoCore polls a DSI panel's touch controller on this bus and
+there is no way to take turns. With a panel attached a transfer can
+fail, and a read or a write can be silently wrong: a program that
+matters reads its writes back.

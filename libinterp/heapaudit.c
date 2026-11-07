@@ -274,6 +274,9 @@ heapauditread(void *va, long count, ulong offset)
 	p = auditext;
 	e = auditext + Auditext - 128;
 	p += snprint(p, e-p, "heap live %d types %d untyped %d\n", nlive, ntype, lost);
+	/* the collector's own counts, this VM's: an epoch that never ends frees nothing */
+	p += snprint(p, e-p, "gc runs %lud epochs %lud sweeps %lud halted %lud broken %lud destroys %llud inspects %llud\n",
+		gcnruns, gcepochs, gcsweeps, gchalted, gcbroken, gcdestroys, gcinspects);
 	/* a type is printed once: its count is cleared as it is */
 	for(m = modules; m != nil; m = m->link)
 		for(i = 0; i < m->ntype && p < e; i++)

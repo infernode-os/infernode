@@ -12,6 +12,9 @@ SYSMODULES=\
 
 DISBIN=$ROOT/dis/disk
 
+# no modules of its own: gefs.b includes its parts (below)
+MODULES=
+
 <$ROOT/mkfiles/mkdis
 
 # gefs.b includes the rest: one module, as 9front's is one program

@@ -491,7 +491,6 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/luciuisrv_data_test.sh` | An artifact's `data` written in several 9P messages (any file larger than one, as a plumbed file is written) is kept whole and in order, a rune cut by a message's end and a newline at one's end included; a write at offset 0 replaces it. Each message replaced it, so a plumbed README showed in Lucifer as its last line |
 | `tests/host/prompt_defaults_test.sh` | The agent prompts copied into `~/.infernode` follow the shipped defaults until the user edits them: every shipped version's hash is in `lib/veltro/prompt-defaults`, an unedited old copy is brought up to date at boot, an edited one is left |
 | `tests/host/audiolevel_test.sh` | The Pis' headphone jack without ears: a spectrum of pure tones through the driver's own conversion, and an integer clock divider. Fails if the rounding carry is removed |
-| `tests/host/wordmem_test.sh` | libkern's memset and memmove, byte and word builds, against libc over alignments and overlaps |
 | `tests/host/kfscheck_test.sh` | `disk/kfscmd check` returns: a read waiting for the end of a check's report was never answered, so kfscmd (and a console's shell) waited for ever |
 | `gefs_hash_test.b` | gefs's MetroHash64 and integer hash, pinned: every block pointer on a gefs disk carries the first, 9front's included |
 | `tests/host/gefs_test.sh` | `disk/gefs`: ream, files, persistence across a restart, a snapshot keeping what is changed and removed after it, delsnap, the check at each step |

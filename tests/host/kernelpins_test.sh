@@ -13,7 +13,8 @@
 #                ready() starved until lock() panicked "lock loop".
 #   lock window  a proc preempted between winning a lock and recording it,
 #                pinned to a core with a spinner at PriLock: deadlock,
-#                "lock loop ... held by pc 0x0", within the hour.
+#                "lock loop ... held by pc 0x0", within the hour (#640,
+#                closed in master by taking PriLock before the tas).
 #   up           a parameter called up: it is a macro, and clang then
 #                deleted the rest of the function, loop exit and all.
 #   kfs idle     kfs marks itself clean only when idle for longer than a
@@ -42,7 +43,13 @@ if echo "$retry" | grep -q 'spllo' && echo "$retry" | grep -q 'microdelay'; then
 else no "runproc's retry spins on the run queue lock"; fi
 
 l=$(sed -n '/^lock(Lock/,/^}/p' os/port/taslock.c | grep -v '^[[:space:]]*\*\|/\*')
+# Closed either way: interrupts off from the test-and-set until the
+# priority is raised, or (master's #640) PriLock raised before it, so a
+# holder preempted after winning is already in line with the spinner.
+tasline=$(echo "$l" | grep -n '_tas(&l->key) == 0' | tail -1 | cut -d: -f1)	# the loop's, not the early no-process path's
+priline=$(echo "$l" | grep -n 'up->pri = PriLock' | head -1 | cut -d: -f1)
 if echo "$l" | grep -B1 '_tas(&l->key) == 0' | grep -q 'splhi' && echo "$l" | tail -3 | grep -q 'splx'; then ok "a lock is taken and recorded with interrupts off"
+elif [ -n "$tasline" ] && [ -n "$priline" ] && [ "$priline" -lt "$tasline" ]; then ok "a lock is taken at PriLock: the holder cannot be passed over by a spinner"
 else no "lock() can be preempted between taking a lock and recording it"; fi
 
 bad=$(grep -rnE '\b(int|long|ulong|uint|char\*?|void\*?|Proc\*?|\*)[[:space:]]+\*?up[[:space:]]*[,);]' \

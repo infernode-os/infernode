@@ -114,7 +114,10 @@ Auth:
 		filekey = secstore->mkfilekey(pass);
 		for(i := 0; i < len pass; i++)
 			pass[i] = 0;	# clear it
-		(conn, srvname, diag) := secstore->connect2(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2);
+		# conn assigned, not declared: a := here made a conn of the
+		# loop's own, and every operation below used the outer one, nil
+		srvname, diag: string;
+		(conn, srvname, diag) = secstore->connect2(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2);
 		if(srvname == nil){
 			sys->fprint(stderr, "secstore: authentication failed: %s\n",  diag);
 			if(iflag)

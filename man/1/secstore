@@ -43,6 +43,10 @@ after encrypting them.
 In each case, the file name on the server is the last component of the local file name
 (ie, everything after the final
 .RB ` / ').
+InferNode's server replaces a file whole or not at all: it writes the new
+contents beside the old, then renames them over it, so a server stopped
+part way leaves the old file, or the new one complete, never an empty one.
+Names beginning with a dot are the server's own and are refused.
 .TP
 .B t
 List a table of contents of

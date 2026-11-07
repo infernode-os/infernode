@@ -102,6 +102,21 @@ Acctguard: adt {
 };
 guards: list of ref Acctguard;
 
+# A user's files are replaced whole or not at all.  A PUT is written
+# beside the file it replaces, as .NAME.tmp; once written and checked
+# it is renamed .NAME.new, so a .new is always complete; then it is
+# renamed over NAME.  A file was created in place and written after,
+# and creating it truncated it: a server stopped between the two (the
+# emulator halted by Lucia's Quit straight after factotum's sync) left
+# an empty factotum file, the next login loaded no keys from it, and
+# the next save wrote over it with only the keys added since.  Stopped
+# anywhere now, it leaves the old file, or a .new that recoverfile()
+# puts in place before the next GET or PUT.  Names beginning with a dot
+# are the server's (safename refuses them).  The lock keeps two
+# connections' file operations apart: unlike the guards above, they
+# block, and another proc runs while they do.
+storelock: chan of int;
+
 # PAK parameters — same as client (from secstore.b)
 PAKparams: adt {
 	q:	ref IPint;
@@ -260,6 +275,9 @@ init(nil: ref Draw->Context, args: list of string)
 		if(args != nil)
 			arg->usage();
 	}
+
+	storelock = chan[1] of int;
+	storelock <-= 1;
 
 	# Ensure store directory exists
 	sys->create(storedir, Sys->OREAD, Sys->DMDIR | 8r700);
@@ -598,8 +616,11 @@ doget(fd: ref Sys->FD, user: string, name: string)
 	}
 
 	path := userpath(user, name);
+	<-storelock;
+	recoverfile(user, name);
 	rfd := sys->open(path, Sys->OREAD);
 	if(rfd == nil){
+		storelock <-= 1;
 		sys->fprint(fd, "-1");
 		return;
 	}
@@ -613,6 +634,8 @@ doget(fd: ref Sys->FD, user: string, name: string)
 			break;
 		total += n;
 	}
+	rfd = nil;
+	storelock <-= 1;
 
 	if(debug)
 		log(sys->sprint("GET %s: %d bytes", name, total));
@@ -659,14 +682,87 @@ doput(fd: ref Sys->FD, user: string, name: string)
 	# Ensure user directory exists
 	sys->create(userpath(user, ""), Sys->OREAD, Sys->DMDIR | 8r700);
 
-	# Write file
-	path := userpath(user, name);
-	wfd := sys->create(path, Sys->OWRITE, 8r600);
-	if(wfd == nil){
-		log(sys->sprint("can't create %s: %r", path));
-		return;
+	<-storelock;
+	recoverfile(user, name);
+	e := savefile(user, name, data);
+	storelock <-= 1;
+	if(e != nil)
+		log(sys->sprint("PUT %s: %s; the file is as it was", name, e));
+}
+
+tmpname(name: string): string
+{
+	return "." + name + ".tmp";
+}
+
+newname(name: string): string
+{
+	return "." + name + ".new";
+}
+
+# Write data as NAME: beside it, then over it.  Nil, or what failed.
+savefile(user, name: string, data: array of byte): string
+{
+	tmp := userpath(user, tmpname(name));
+	wfd := sys->create(tmp, Sys->OWRITE, 8r600);
+	if(wfd == nil)
+		return sys->sprint("can't create %s: %r", tmp);
+	if(sys->write(wfd, data, len data) != len data){
+		e := sys->sprint("can't write %s: %r", tmp);
+		wfd = nil;
+		sys->remove(tmp);
+		return e;
 	}
-	sys->write(wfd, data, len data);
+	wfd = nil;
+
+	# complete: the .new recoverfile() may put in place
+	sys->remove(userpath(user, newname(name)));
+	if(rename(tmp, newname(name)) < 0){
+		e := sys->sprint("can't rename %s: %r", tmp);
+		sys->remove(tmp);
+		return e;
+	}
+	return commitfile(user, name);
+}
+
+# Put the complete .NAME.new in place of NAME.  A host whose rename
+# replaces what it is renamed over (POSIX's) does it in one step; one
+# that refuses (Windows, a Plan 9 file server) has NAME removed first,
+# and stopped between the two leaves the .new alone, which
+# recoverfile() puts in place.
+commitfile(user, name: string): string
+{
+	new := userpath(user, newname(name));
+	if(rename(new, name) >= 0)
+		return nil;
+	sys->remove(userpath(user, name));
+	if(rename(new, name) < 0)
+		return sys->sprint("can't rename %s to %s: %r", new, name);
+	return nil;
+}
+
+# A .NAME.new left by a server stopped before it was in place is
+# complete and newer than NAME: it goes in place now.  A .NAME.tmp is
+# a write that did not finish, and is dropped.
+recoverfile(user, name: string)
+{
+	sys->remove(userpath(user, tmpname(name)));
+	(ok, nil) := sys->stat(userpath(user, newname(name)));
+	if(ok < 0)
+		return;
+	e := commitfile(user, name);
+	if(e != nil)
+		log("recover " + name + ": " + e);
+	else
+		log("recovered " + name + " from a save that was stopped before it was in place");
+}
+
+# Rename path, in its own directory, to name.
+rename(path, name: string): int
+{
+	d := sys->nulldir;
+	d.name = name;
+	return sys->wstat(path, d);
 }
 
 dorm(user: string, name: string)
@@ -677,8 +773,12 @@ dorm(user: string, name: string)
 	if(debug)
 		log("RM " + name);
 
-	path := userpath(user, name);
-	sys->remove(path);
+	# a .new left behind would put the file back at the next GET
+	<-storelock;
+	sys->remove(userpath(user, newname(name)));
+	sys->remove(userpath(user, tmpname(name)));
+	sys->remove(userpath(user, name));
+	storelock <-= 1;
 }
 
 # ── PAK Crypto (mirrors secstore.b client code) ──────────────
@@ -870,6 +970,9 @@ safename(name: string): int
 	if(name == nil || len name == 0)
 		return 0;
 	if(name == ".." || name[0] == '/')
+		return 0;
+	# .NAME.tmp and .NAME.new are the server's own, made by a PUT
+	if(len name > 1 && name[0] == '.')
 		return 0;
 	for(i := 0; i < len name; i++)
 		if(name[i] == '/' || name[i] == 0)

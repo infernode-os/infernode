@@ -296,7 +296,7 @@ build_kernel() {
         comp-*.c) continue;;
         das-*.c) continue;;
         gpu.c|crypt.c) continue;;
-        i420.c) continue;;			# $I420: registered by the emulators only
+        i420.c|bayer.c) continue;;		# $I420, $Bayer: registered by the emulators and the Pi kernels
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
         "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1

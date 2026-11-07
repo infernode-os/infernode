@@ -9,6 +9,7 @@ TARG=\
 	date.dis\
 	bounce.dis\
 	logon.dis\
+	camera.dis\
 	clock.dis\
 	colors.dis\
 	ftree.dis\
@@ -116,6 +117,7 @@ SYSMODULES=\
 	names.m\
 	post9p.m\
 	appfs.m\
+	i420.m\
 
 DISBIN=$ROOT/dis/wm
 

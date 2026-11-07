@@ -58,7 +58,7 @@ and `#Z` opus (hosted; Inferno's test device).
 ## Reserved
 
 For devices this tree is likely to grow, at their precedents' letters:
-`#r` real-time clock, `#J` I2C, `#Q` SPI, `#$` PCI, `#v` display or
+`#r` real-time clock, `#Q` SPI, `#$` PCI, `#v` display or
 video out, `#W` PWM, `#N` CAN.
 
 ## The table
@@ -78,7 +78,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `G` | gpio (native) |  | gpio | fpga, gpio | in use |  |
 | `H` |  |  |  | ata | free here |  |
 | `I` | ip (hosted/native) | ip | ip | ip | in use |  |
-| `J` |  |  | i2c | i2c | reserved | I2C, as 9front and Inferno |
+| `J` | i2c (native) |  | i2c | i2c | in use | I2C, as 9front and Inferno |
 | `K` | prof (hosted) | kprof | kprof | kprof | in use | the hosted profiler, moved from #P (#1037): kprof in all three |
 | `L` |  | lpt | lpt | ds1620, lpt | free here |  |
 | `M` | mnt (hosted/native) | mnt | mnt | mnt | in use |  |

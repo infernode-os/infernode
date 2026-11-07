@@ -1861,7 +1861,9 @@ destroystack(REG *reg)
 	 */
 	if(ex != nil && reg->FP != nil) {
 		sx = (Stkext*)ex;
-		if(reg->FP < ex || reg->FP >= reg->TS) {
+		/* FP may belong to the preceding separately allocated extension;
+		 * compare addresses as integers, not unrelated C pointers. */
+		if((uintptr)reg->FP < (uintptr)ex || (uintptr)reg->FP >= (uintptr)reg->TS) {
 			t = sx->reg.TR;		/* the extension's only frame */
 			if(t->np)
 				freeptrs(sx->reg.tos.fr, t);

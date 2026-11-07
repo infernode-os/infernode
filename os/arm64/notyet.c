@@ -255,14 +255,20 @@ extern void sysmodinit(void);
  * no longer change it.
  */
 extern int cnsastrict, cnsaasked;
+extern Lock cnsalk;
 
 char*
 getenv(char *name)
 {
+	int strict;
+
 	if(strcmp(name, "CNSAMODE") != 0)
 		return nil;
+	lock(&cnsalk);
 	cnsaasked = 1;
-	return cnsastrict? "1": nil;
+	strict = cnsastrict;
+	unlock(&cnsalk);
+	return strict? "1": nil;
 }
 
 extern void drawmodinit(void);

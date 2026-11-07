@@ -10,11 +10,22 @@ implement VidPlay9p;
 # remap24 (YCbCr->RGB24) + masked-pane draw path the MPEG player uses, so there
 # is no new rendering code. Multiplex by launching one VidPlay9p per feed.
 #
+# What is drawn over the frames is the feed's layer/ directory as this
+# name space has it (#1095, layers(2)): each file a layer of records,
+# stacked in the union's order by bind -a and bind -b, taken off by
+# unmount, while it plays:
+#
+#   bind -a /mnt/vision/1/layer /mnt/video/0/layer
+#
+# Frame N is the Nth read from the start, as vid9p numbers them. A feed
+# whose status has no playhead (pos=), as camsrv(4)'s camera, names no
+# frames: on it only frame=* records are drawn.
+#
 # usage: vidplay9p [-shape oval|rect] /mnt/video/0
 #
 include "sys.m";    sys: Sys;
 include "draw.m";   draw: Draw;
-    Display, Image, Rect, Point: import draw;
+    Display, Font, Image, Rect, Point: import draw;
 include "wmclient.m"; wmclient: Wmclient;
     Window: import wmclient;
 include "mpegio.m";
@@ -22,6 +33,9 @@ include "mpegio.m";
     Mpegi, YCbCr: import mio;
 
 remap: Remap;
+include "layers.m";
+    layers: Layers;
+    Stack: import layers;
 
 VidPlay9p: module { init: fn(ctxt: ref Draw->Context, args: list of string); };
 
@@ -35,6 +49,15 @@ init(ctxt: ref Draw->Context, args: list of string)
     wmclient = load Wmclient Wmclient->PATH;
     mio = load Mpegio Mpegio->PATH;
     remap = load Remap Remap->PATH24;
+    layers = load Layers Layers->PATH;
+    if(layers == nil){
+        sys->fprint(stderr, "vidplay9p: cannot load %s: %r\n", Layers->PATH);
+        return;
+    }
+    if((le := layers->init()) != nil){
+        sys->fprint(stderr, "vidplay9p: %s\n", le);
+        return;
+    }
     stderr = sys->fildes(2);
     if(ctxt == nil){ sys->fprint(stderr, "vidplay9p: needs a window context\n"); return; }
     wmclient->init();
@@ -53,6 +76,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 
     (w, h, rate) := readfmt(mnt + "/fmt");
     if(w <= 0 || h <= 0){ sys->fprint(stderr, "vidplay9p: bad/empty fmt at %s\n", mnt); return; }
+
+    numbered := hasplayhead(mnt + "/status");
+    stack := Stack.watch(mnt + "/layer");
+    font := Font.open(display, "*default*");
+    (accent, colours) := layers->themed(display);
 
     ffd := sys->open(mnt + "/frame", Sys->OREAD);
     if(ffd == nil){ sys->fprint(stderr, "vidplay9p: open %s/frame: %r\n", mnt); return; }
@@ -85,12 +113,16 @@ init(ctxt: ref Draw->Context, args: list of string)
     # frames keep to a deadline, one every delay ms, whatever the drawing
     # took (a live feed also paces itself: its reads wait for frames)
     next := sys->millisec();
-    for(;;){
+    for(n := 0;; n++){
         if(!readfull(ffd, buf))
             break;                          # EOF / short read = end of stream
         p := ref YCbCr(buf[0:wh], buf[wh:wh+csz], buf[wh+csz:wh+2*csz]);
         frame.writepixels(vr, remap->remap(p));
         win.image.draw(dst, frame, matte, vr.min);
+        f := -1;                            # a feed naming no frames: frame=* alone
+        if(numbered)
+            f = n;
+        layers->draw(stack.due(f), win.image, dst, w, h, font, accent, colours);
         win.image.flush(Draw->Flushnow);
         alt {
         c := <-win.ctl => win.wmctl(c);
@@ -104,7 +136,26 @@ init(ctxt: ref Draw->Context, args: list of string)
         else
             next = sys->millisec();         # behind: go on without bursting
     }
+    stack.stop();
     sys->fprint(stderr, "vidplay9p: end of stream\n");
+}
+
+# whether the feed's status has a playhead (pos=), as vid9p's does:
+# such a feed's frames are numbered by their place in the frame file
+hasplayhead(path: string): int
+{
+    fd := sys->open(path, Sys->OREAD);
+    if(fd == nil)
+        return 0;
+    b := array[512] of byte;
+    n := sys->read(fd, b, len b);
+    if(n <= 0)
+        return 0;
+    (nil, toks) := sys->tokenize(string b[0:n], " \t\n");
+    for(; toks != nil; toks = tl toks)
+        if(len hd toks > 4 && (hd toks)[0:4] == "pos=")
+            return 1;
+    return 0;
 }
 
 # read "<w> <h> i420 <fps>" from the fmt file

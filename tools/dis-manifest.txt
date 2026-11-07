@@ -130,6 +130,7 @@ dis/cmd/git/push.dis
 dis/cmd/git/rm.dis
 dis/cmp.dis
 dis/comm.dis
+dis/copybench.dis
 dis/countfs.dis
 dis/cp.dis
 dis/cprof.dis

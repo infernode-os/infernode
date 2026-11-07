@@ -2,12 +2,69 @@
 
 Status: **changes requested — do not promote from draft or merge**
 
-This review is pinned to InferNode PR #1015 head
-`08846129d207c1d535682e0ad37ca883a4e75c57`, whose merge base for the
-feature is `3ba3f9b`.  The companion firmware baseline is styxbrick
-`review-3`, `93a90ba`; the later styxbrick commits through `438c0c7` add
-review reports and proposed specification revisions, not the required
-firmware fixes.
+This review was first pinned to InferNode PR #1015 head
+`08846129d207c1d535682e0ad37ca883a4e75c57` and was re-reviewed at
+`b66d0f2944ca98ecd141d21f483c021b4b64478d` on 2026-11-07.  The original
+companion firmware baseline was styxbrick `review-3`, `93a90ba`.  The completed
+requirements re-review also covers current styxbrick main
+`e23114cb675b5ada72f60f3903596cdfc44d0525` and the divergent review-follow-up
+documents at `438c0c7e974e168021da5b10c2f1a6f23716c83e`; see
+[PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md](PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md).
+
+## 2026-11-07 re-review
+
+The disposition is unchanged: **do not promote from draft or merge**.
+The new head makes material progress, but it does not touch `brick.b`'s
+credential ownership or D2 state machine.  A read-only merge check against
+current master `507950f90` still produces a real conflict in `tests/mkfile`;
+the commits after the earlier `858fcb50d` review pin do not change the
+factotum, TLS or #1015 provider analysis.
+
+| Finding | New-head status |
+|---|---|
+| P1015-01 ordinary secret files | **Open blocker**; storage finding unchanged, prescribed provider boundary revised after styxbrick requirements review |
+| P1015-02 release/renew ordering | **Open high**; unchanged |
+| P1015-03 low-order X25519 | **Fixed at this pin** by `b66d0f294`; 16-case SDG regression passed |
+| P1015-04 counter durability/serialization | **Partially fixed**; writes now fail closed and use two synced slots, but stale-lock reclamation is not ownership-safe |
+| P1015-05 transport lapse state | **Open medium**; unchanged |
+| P1015-06 authenticated reply framing | **Open medium**; unchanged |
+| P1015-07 local frame bound | **Open medium**; unchanged |
+| P1015-08 TLS baseline/parser agreement | **Partially fixed** by the master merge and `5ebd00abe`; current-master conflict and differential-DER coverage remain |
+| P1015-09 release gates | **Partially fixed**; `sdg_test.dis` is runner-discovered, but the TLS script and D2 oracle are still not gates |
+| P1015-10 through P1015-12 | **Open**; unchanged |
+
+Post-review remediation exists locally at
+`4f7e8d2b7ebef99fcc5b4f4d5cf2b3bb361c7d5a` on
+`security/pr1015-state-framing`.  It is not part of the reviewed PR pin and is
+not treated as published.  It serializes/invalidate D2 state snapshots,
+removes timestamp-based counter-lock stealing, marks transport loss non-live,
+bounds and validates both sides of the sdg 9P relay, refuses unsafe lease
+intervals, and rolls back failed staged writes.  Its focused D2 target/control
+test passed 1/1, the expanded sdg suite passed 19/19, and the full Dis build
+produced all 1,176 manifest modules.  It must be rebased with #1015 and reviewed
+in that final tree before P1015-02 and P1015-04 through P1015-07, P1015-11 and
+P1015-12 can be closed.
+
+The counter lock needs one owner, not an age-only lock file.  At present a
+process paused for more than 30 seconds can still own the critical section
+while another allocator removes its lock as stale and enters.  The first can
+then resume and remove the replacement owner's lock.  A forward wall-clock
+step can trigger the same reclamation.  This invalidates the unconditional
+claim that allocators “take turns.”  Prefer a single factotum-owned allocator
+along with the Noise credential, or remove stale reclamation and fail closed;
+an ownership token helps only if replacement/removal can be made conditional
+on the same file identity.
+
+Evidence added for this pin:
+
+- `sdg_test.dis -v`: 16 passed, 0 failed (counter failure/concurrency and
+  honest, wrong-PSK, malformed-key, and low-order handshake cases).
+- `tests/host/tls_matrix_test.sh`: 12 passed, including TLS 1.2/1.3, HRR,
+  P-256/P-384, refusal of wrong name/root/signature.
+- `tests/tls_clientauth_test.sh`: 6 passed, including correct pin/client key
+  and refusal of missing client certificate, wrong pin, and wrong key.
+- Source re-check confirmed the remaining frame, D2, pairing, lease, and
+  credential findings below are unchanged.  No hardware actuation was run.
 
 The review covers the new credential lifecycle, TLS client authentication and
 pinning, the Noise IKpsk2 client, the datagram-to-9P relay, and the D2 commander.
@@ -21,7 +78,10 @@ the final safety boundary, but the commander is not ready to merge.  Four gates
 are decisive:
 
 1. Secret commander credentials are ordinary files.  This contradicts
-   InferNode's factotum/secstore architecture and is a merge blocker.
+   InferNode's factotum/secstore architecture and is a merge blocker.  The
+   exact provider boundary remains an architecture decision after the
+   styxbrick requirements review; operation-only factotum for every use is no
+   longer asserted as a merge requirement.
 2. A renewal can overtake `release` and reassert the released output until its
    lease expires.  The commander therefore does not presently keep the
    documented immediate-release contract.
@@ -52,35 +112,39 @@ should receive the operation, not the private key.
 
 Required change:
 
-- Persist all four secrets in secstore and hold them at runtime in factotum,
-  selected by stable public attributes such as device identity and purpose.
-- Do not add a generic `proto=brick` secret-fetch operation.  Mode restrictions
-  on the caller do not turn raw key export into attenuation: the commander
-  would still possess every authority represented by the exported credential.
-- Add operation-specific factotum protocols for P-256 CertificateVerify, D2
-  HMAC, and the Noise handshake.  The commander supplies the exact transcript
-  or command covered by the operation and receives only the signature, MAC, or
-  completed protocol result.  The TLS scalar, X25519 scalar, PSK, and D2 key
-  must never enter `brick`.
-- Keep those RPC capabilities out of agent namespaces by default and delegate
-  only the particular brick/device operation required.  Factotum's `ctl` and
-  stored key attributes remain outside the delegated namespace.
+- Persist all four secrets through factotum's protected persistence rather
+  than ordinary files, selected by stable public attributes such as device
+  identity and purpose.
+- Keep factotum, provisioning and unrestricted D2 authority out of agent
+  namespaces.  Run the trusted controller in a deliberately narrow namespace.
+- Fix factotum `sync` so persistence failure reaches the writer, then make
+  pairing local-first and retryable from one immutable, durably verified
+  candidate before modifying the brick.
+- Choose the runtime provider boundary explicitly.  A narrowly confined
+  trusted controller retrieving runtime keys is consistent with styxbrick's
+  present commander trust model.  Operation-only TLS or Noise providers are
+  possible hardening.  Putting factotum in every D2 renewal is a real-time
+  safety dependency and requires timing, overload, restart and multi-brick
+  evidence; it is not required by this review without that evidence.
 
 The following are public or non-secret state and may remain ordinary files:
 the TLS/SPKI pin, the brick X25519 public key, the client certificate, and the
 sdg monotonic counter.  The counter still needs the durability changes in
 P1015-04.  Wi-Fi credentials must be factotum/secstore-backed.  The existing
 `wpapsk` protocol returns a passphrase transiently to the trusted supplicant and
-records that as technical debt; it is not precedent for a persistent cleartext
-`creds` file or for exporting the brick's stronger signing and actuation keys.
-The preferred endpoint derives the WPA session material inside factotum as
-well.
+records that as technical debt; it is not precedent for persistent cleartext
+`brick` credential files.
 
-Tests required: secstore restart round trip; factotum key selection by device;
-absence of the four secrets from the ordinary namespace and commander memory;
-denial when the operation capability is absent; protocol tests proving that no
-RPC returns raw key material; and confirmation that a confined agent cannot
-name factotum's control surface or ungranted brick operations.
+Tests required in every design: protected-store restart round trip; factotum
+key selection by device; persistence-error propagation; interrupted pairing
+and idempotent retry; absence of the four secrets from the ordinary namespace;
+and confirmation that a confined agent cannot name factotum's control surface,
+USB provisioning or ungranted brick operations.  An operation-only design must
+also prove no RPC returns raw runtime key material.  A raw-runtime-key design
+must prove that only the trusted controller namespace receives factotum and
+that key buffers are not exposed through its served file tree.  See the
+companion requirements review for the alternatives and their additional
+gates.
 
 ### P1015-02 — High: an in-flight renewal can undo `release`
 

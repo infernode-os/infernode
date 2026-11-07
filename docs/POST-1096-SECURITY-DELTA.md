@@ -102,9 +102,13 @@ and arithmetic review before promotion.
 
 PR #1015 has also advanced beyond the reviewed head.  Its Noise-DH, counter,
 and TLS pinning fixes do not clear the existing merge block: the commander
-credentials still must move from ordinary files into operation-specific
-factotum/secstore protocols, and the D2 renewal/release barrier still needs
-closure and regression evidence.  Its delta will be rechecked separately.
+credentials still must move from ordinary files into protected
+factotum/secstore persistence, and the D2 renewal/release barrier still needs
+closure and regression evidence.  The later cross-repository requirements
+review leaves the exact runtime provider boundary open rather than requiring
+operation-specific factotum for the D2 hot path; see
+`PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md`.  Its delta will be rechecked
+separately.
 
 ## Verification
 

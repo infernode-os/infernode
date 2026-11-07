@@ -16,6 +16,25 @@ newarena(): ref Arena
 	return a;
 }
 
+validarena(a: ref Arena, head: Bptr)
+{
+	if(!validaddr(head.addr) || head.addr < big Blksz)
+		error(sys->sprint("%s: invalid arena header %bux", Ecorrupt, head.addr));
+	if(a.size < big Blksz || (a.size % big Blksz) != big 0)
+		error(sys->sprint("%s: invalid arena size %bd", Ecorrupt, a.size));
+	# Leave the final whole block for the backup superblock. Written this
+	# way, the check cannot wrap even for a hostile signed 64-bit size.
+	if(head.addr > fs.devsz-big Blksz-big (2*Blksz)
+	|| a.size > fs.devsz-big Blksz-big (2*Blksz)-head.addr)
+		error(sys->sprint("%s: arena outside device", Ecorrupt));
+	if(a.used < big 0 || a.used > a.size)
+		error(sys->sprint("%s: invalid arena usage", Ecorrupt));
+	start := head.addr + big (2*Blksz);
+	end := start + a.size;
+	if(a.loghd.addr < start || a.loghd.addr >= end || !validaddr(a.loghd.addr))
+		error(sys->sprint("%s: invalid arena log head %bux", Ecorrupt, a.loghd.addr));
+}
+
 loadarena(a: ref Arena, head: Bptr)
 {
 	# the header or the footer: one is enough
@@ -40,6 +59,7 @@ loadarena(a: ref Arena, head: Bptr)
 	logbuf := a.logbuf;
 	unpackarena(a, b.data, 0);
 	a.logbuf = logbuf;
+	validarena(a, head);
 	a.free = nil;
 	a.h0 = h0;
 	a.h1 = h1;
@@ -68,8 +88,11 @@ loadfs(dev: string)
 	fs.fd = sys->open(dev, Sys->ORDWR);
 	if(fs.fd == nil)
 		error(sys->sprint("open %s: %r", dev));
-	eb := devsize(fs.fd);
-	eb = eb - (eb % big Blksz) - big Blksz;
+	fs.devsz = devsize(fs.fd);
+	fs.devsz -= fs.devsz % big Blksz;
+	if(fs.devsz < big (2*Blksz))
+		error("device too small");
+	eb := fs.devsz - big Blksz;
 	fs.sb0 = getblk(Bptr(big 0, big -1, big -1), GBnochk);
 	fs.sb1 = getblk(Bptr(eb, big -1, big -1), GBnochk);
 	{
@@ -80,10 +103,14 @@ loadfs(dev: string)
 		unpacksb(fs.sb1.buf);
 	}
 	fs.arenas = array[fs.narena] of ref Arena;
+	prevend := big Blksz;
 	for(i := 0; i < fs.narena; i++){
 		a := newarena();
 		fs.arenas[i] = a;
 		loadarena(a, fs.arenabp[i]);
+		if(a.h0.bp.addr < prevend)
+			error(sys->sprint("%s: overlapping or unsorted arenas", Ecorrupt));
+		prevend = a.h0.bp.addr + big (2*Blksz) + a.size;
 		a.reserve = a.size / big 1024;
 		if(a.reserve < big 512*KiB)
 			a.reserve = big 512*KiB;
@@ -260,6 +287,7 @@ reamfs(dev: string)
 	if(fs.fd == nil)
 		error(sys->sprint("open %s: %r", dev));
 	sz := devsize(fs.fd);
+	fs.devsz = sz - sz % big Blksz;
 	sys->fprint(sys->fildes(2), "gefs: reaming %s\n", dev);
 	if(sz < big 128*MiB + big Blksz)
 		error("ream: disk too small");

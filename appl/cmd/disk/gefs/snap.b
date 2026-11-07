@@ -127,9 +127,41 @@ putdl(dl: ref Dlist)
 	fs.dlhead = dl;
 }
 
+# Validate the complete chain before freeing any of it: discovering a cycle
+# after partially applying an attacker-controlled deadlist is too late.
+validatedl(dl: ref Dlist)
+{
+	bp := dl.head;
+	seen: list of big;
+	done := 0;
+	nblk := big 0;
+	while(bp.addr != big -1 && !done){
+		for(s := seen; s != nil; s = tl s)
+			if(hd s == bp.addr)
+				broke(sys->sprint("cyclic deadlist at %bux", bp.addr));
+		seen = bp.addr :: seen;
+		nblk++;
+		if(nblk > fs.devsz/big Blksz)
+			broke("overlong deadlist");
+		if(!validdataaddr(bp.addr))
+			broke(sys->sprint("deadlist block outside an arena: %bux", bp.addr));
+		b := getblk(bp, 0);
+		if(b.ty != Tdlist)
+			broke(sys->sprint("non-deadlist block at %bux", bp.addr));
+		for(p := 0; p < b.logsz; p += 8)
+			if(!validdataaddr(g64(b.data, p)))
+				broke(sys->sprint("invalid block in deadlist at %bux", bp.addr));
+		done = (bp.addr == dl.tail.addr);
+		bp = b.logp;
+	}
+	if(dl.tail.addr != big -1 && !done)
+		broke("truncated deadlist");
+}
+
 # give back a deadlist's blocks, and with dofree the blocks it lists
 freedl(dl: ref Dlist, dofree: int)
 {
+	validatedl(dl);
 	bp := dl.head;
 	done := 0;
 	while(bp.addr != big -1 && !done){

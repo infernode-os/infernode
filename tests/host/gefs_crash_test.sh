@@ -73,6 +73,14 @@ if ! printf '%s\n' "$out" | grep -q WORKDONE; then
     printf '%s\n' "$out" | tail -20
     exit 1
 fi
+if ! python3 - "$dir/journal" <<'PY'
+import os, sys
+raise SystemExit(0 if os.stat(sys.argv[1]).st_mode & 0o077 == 0 else 1)
+PY
+then
+    echo "FAIL: gefs_crash: raw-block journal is accessible to group/other"
+    exit 1
+fi
 
 fail=0
 i=0

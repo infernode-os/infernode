@@ -86,6 +86,7 @@ Fs: adt {
 	roundrobin: int;
 	fd:	ref Sys->FD;
 	dev:	string;
+	devsz:	big;		# whole blocks; the last is the backup superblock
 	rdonly:	int;
 	users:	array of ref User;
 	mounts:	list of ref Mount;
@@ -151,7 +152,9 @@ init(nil: ref Draw->Context, argv: list of string)
 		'm' =>	cachemb = int arg->earg();
 		'W' =>
 			wj := arg->earg();
-			wjfd = sys->create(wj, Sys->OWRITE, 8r644);
+			# The journal contains raw filesystem blocks and is test evidence,
+			# not a public log.
+			wjfd = sys->create(wj, Sys->OWRITE, 8r600);
 			if(wjfd == nil){
 				sys->fprint(sys->fildes(2), "gefs: %s: %r\n", wj);
 				raise "fail:journal";

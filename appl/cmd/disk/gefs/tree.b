@@ -1051,7 +1051,10 @@ btupsert(t: ref Tree, msg: array of Msg)
 getroot(t: ref Tree): (ref Blk, int)
 {
 	fsassert(t.ht < Maxheight, "getroot: height");
-	return (getblk(t.bp, 0), t.ht);
+	b := getblk(t.bp, 0);
+	if((t.ht == 1 && b.ty != Tleaf) || (t.ht > 1 && b.ty != Tpivot))
+		broke("getroot: invalid root block type");
+	return (b, t.ht);
 }
 
 # the value at k, with every message pending for it applied

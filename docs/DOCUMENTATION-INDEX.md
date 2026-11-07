@@ -93,6 +93,7 @@
 | [SECURITY.md (Veltro)](../appl/veltro/SECURITY.md) | Veltro agent namespace security model (v3) |
 | [InferNode Escape Room](https://github.com/infernode-os/infernode-escape-room) | External live adversarial-model protocol and campaign harness for testing namespace containment |
 | [VELTRO-ESCAPE-ROOM.md](VELTRO-ESCAPE-ROOM.md) | Where the escape-room harness lives and what InferNode still owns |
+| [GEFS-SECURITY-REVIEW.md](GEFS-SECURITY-REVIEW.md) | Pinned hostile-media and 9P trust-boundary review for GEFS promotion |
 | [security-standards-roadmap.md](security-standards-roadmap.md) | The standards InferNode aims at and the mechanism that meets each |
 
 ## Cryptography

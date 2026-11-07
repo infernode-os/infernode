@@ -382,6 +382,7 @@ dis/lib/kbdecode.dis
 dis/lib/keyringinst.dis
 dis/lib/keyset.dis
 dis/lib/l2cap.dis
+dis/lib/layers.dis
 dis/lib/libc.dis
 dis/lib/libc0.dis
 dis/lib/lists.dis
@@ -784,6 +785,7 @@ dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/keyring_sweep_test.dis
+dis/tests/layers_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis

@@ -194,6 +194,7 @@ TARG=\
 	kbdecode.dis\
 	osklayout.dis\
 	viewport.dis\
+	layers.dis\
 	visnet.dis\
 	visrec.dis\
 
@@ -201,6 +202,7 @@ TARG=\
 MODULES=
 SYSMODULES=\
 	bidi.m\
+	layers.m\
 	visnet.m\
 	visrec.m\
 	filter.m\

@@ -192,7 +192,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	for(argv = arg->argv(); argv != nil; argv = tl argv)
 		cmd += " " + hd argv;
 
-	if(sys->stat(mnt + "/clone").t0 >= 0)
+	# served already: a clone there that is a mount, not a file left behind
+	(cok, cd) := sys->stat(mnt + "/clone");
+	if(cok >= 0 && cd.dtype == 'M')
 		fatal(mnt + " is served already");
 	if(sys->stat(mnt).t0 < 0)
 		sys->create(mnt, Sys->OREAD, Sys->DMDIR|8r775);

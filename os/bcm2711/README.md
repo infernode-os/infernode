@@ -34,15 +34,14 @@ beside `os/ipaq1110` and `os/cerf1110`). What is here:
 |-|-|
 | `io.h` | the peripheral window (`0xFE000000`), the GIC's addresses, and **the interrupt numbers**: VideoCore interrupt *n* is GIC interrupt 96+*n*; "ARMC" source *n* is 64+*n*; the timer is 30 |
 | `mem.h` | the BCM2837's, but for `MAPGB` (4) and the SD controller choice |
-| `random.c` | the RNG200 — a different generator from the BCM2837's |
+| `io.h`'s `RNG200REGS` | where the RNG200 is: a different generator from the BCM2837's, driven by `../bcm/rng200.c` |
 | `emmc2.c` | the card's SDHCI controller: a second instance of `../bcm/emmc.c`, six lines |
 | `ethergenet.c` | the gigabit Ethernet MAC, from 9front; runs on the board |
 | `pcibcm.c` | the PCIe bridge, from 9front; runs on the board |
 | `soc.c` | the probe for what this SoC has and the family does not |
 | `intr.c` | not the controller (that is `../arm64/gic.c`), only the boot-time question asked of it |
-| `devtab.c` | the device list: the Pi 3B+'s, and `#P` |
+| `devtab.c` | the device list: the Pi 3B+'s (`#P`, the firmware's temperature, is in both: `os/bcm/devarch.c`) |
 | `recover.c` | offers the serial loader, `../bcm2837/serialboot.c` built at this SoC's base |
-| `devarch.c` | `#P`: `cputemp`, `maxtemp`, `throttled`, from the firmware |
 | `kernel.ld`, `board.h` | the BCM2837's |
 
 ## Running it
@@ -83,11 +82,13 @@ world it found itself in:
   one: `sd: no card on the board's SD controller; one on the OTHER…`.
   On a board that line must not appear.
 - **The random-number generator.** There is none in the model, and a
-  read of a register that is not there is an external abort. `random.c`
-  asks first (`probe32`, `../arm64/trap.c`) and, finding nothing,
-  announces **NO ENTROPY SOURCE** in capitals and hands out a labelled
-  counter. On a board that line must not appear either — and if it
-  does, the RNG200's address or layout here is wrong.
+  read of a register that is not there is an external abort.
+  `../bcm/rng200.c` asks first (`probe32`, `../arm64/trap.c`) and,
+  finding nothing, announces **NO ENTROPY SOURCE** in capitals; the
+  kernel then makes no key unless the command line says
+  `insecurerandom`, which the harness passes to `raspi4b` and which
+  gets a labelled counter instead. On a board that line must not appear
+  either — and if it does, the RNG200's address or layout here is wrong.
 - **The interrupt probe.** The kernel proves interrupts work by making a
   system-timer channel match. QEMU's `raspi4b` does not connect that
   timer's interrupt to its GIC (the timer matches; nothing becomes

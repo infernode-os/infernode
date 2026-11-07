@@ -1,0 +1,43 @@
+# tools/pi-bootfw-manifest.txt -- the Raspberry Pi boot firmware a card
+# image carries, pinned by commit and SHA256.  Read by tools/pi-firmware.sh
+# (--manifest), which tools/mkpiimage.sh runs.
+#
+# Format: tools/pi-firmware-manifest.txt's.
+#     commit <sha1 of raspberrypi/firmware>
+#     file <name> <sha256> <bytes> <licence> <revision URL>
+#
+# WHAT THESE ARE
+#
+# The VideoCore firmware that boots a Pi before any ARM code runs, and
+# loads the kernel named in config.txt.  A Pi 3B+ wants bootcode.bin,
+# start.elf and fixup.dat; a Pi 4B boots from its EEPROM and wants
+# start4.elf, fixup4.dat and its device tree (the kernel reads no device
+# tree -- it asks the mailbox -- but the firmware wants the file there).
+# tools/mkpiimage.sh puts on each card the ones its board needs.
+#
+# WHY THEY MAY BE IN THE PI CARD IMAGES
+#
+# LICENCE.broadcom permits redistribution in binary form, unmodified,
+# for running a Raspberry Pi, provided the notice goes with it: so the
+# card images carry it beside them, and no hosted release carries them.
+# The CYW43455 radio's firmware takes the same road for the same kind of
+# reason (tools/pi-firmware-manifest.txt).  Neither is committed to this
+# tree.
+#
+# REPINNING
+#
+# As tools/pi-firmware-manifest.txt says: change the commit and the
+# URLs, run tools/pi-firmware.sh --manifest this-file into a scratch
+# directory, and take the hashes from a download you made yourself.
+#
+# Pinned: raspberrypi/firmware tag 1.20260915.
+
+commit 6f0881cba8bea8ec24956a5718714730e9936ec5
+
+file bootcode.bin 4245ec23b58158dc3e55f3e065eb4ecc0c0705d76c8db506e9f824941feee32e 52624 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/bootcode.bin
+file start.elf 32f990801e7765bae6fe5cb940ba5eeff02dd0dac8dc5474db5b3fd345281790 3023104 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/start.elf
+file fixup.dat 7853f2b51e4489f8b3ce6f9c52fd0afdda38c7383961524e0883d34afcb4827b 7381 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/fixup.dat
+file start4.elf 560ead37044d849325755d3684ac1f74654b3ce6450604a42df6dd832cda9ede 2298912 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/start4.elf
+file fixup4.dat d181d5055daebac22513d6904fa9ce21d1e99b852cc391af095ade6f0b45c400 5510 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/fixup4.dat
+file bcm2711-rpi-4-b.dtb 75761b73c284e26623e4d1624bff13e67bce2ae620880efd81d6571a3739fcfb 56407 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/bcm2711-rpi-4-b.dtb
+file LICENCE.broadcom c7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b 1594 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/LICENCE.broadcom

@@ -1,12 +1,10 @@
 /*
  * (This file was os/bcm2837/fbcons.c. It moved here when a second
  * board, os/virt, needed it whole. What it asks of a board is an
- * Fbinfo, fbfill(), and two questions a board answers however it can:
- * fbdisplay(), select a display, and fbvoffset(), move the scanout
- * window down the buffer. bcm2837 answers both through the VideoCore
- * mailbox; a board with no movable window says no, which sends
- * scrolling down the copying path that already exists for a second
- * display.)
+ * Fbinfo, fbfill(), and fbdisplay() and fbvoffset(), which select a
+ * display and put its scanout window at the top of its buffer -- once,
+ * at start. The console scrolls by copying pixels and never moves the
+ * window: see screenscroll for why.)
  *
  * A console on the framebuffer.
  *
@@ -300,11 +298,8 @@ typedef struct Screen Screen;
 struct Screen
 {
 	Fbinfo	*fb;
-	int	voff;		/* where the visible window sits in the buffer */
 	int	w, h;		/* what this screen gives the console */
 	int	cx, cy;		/* this screen's cursor, in pixels */
-	int	hwscroll;	/* firmware will move the window for us */
-	int	vh;		/* usable scanlines in the allocation */
 	int	scrollpix;	/* how far one scroll moves this screen */
 };
 
@@ -324,7 +319,6 @@ static int nscreens;
  * top of the window system's framebuffer -- once per poll.
  */
 static int released;
-static int	frozenvoff;	/* display 0's window at release; see fbconsstop */
 
 /*
  * One writer OR the release, never both. The scanout offset is shared
@@ -391,24 +385,36 @@ fbcls(void)
 
 	for(i = 0; i < nscreens; i++){
 		fbfill(screens[i].fb, Bg);
-		screens[i].voff = 0;
 		screens[i].cx = 0;
 		screens[i].cy = 0;
-		if(screens[i].hwscroll){
-			fbdisplay(screens[i].fb->disp);
-			fbvoffset(0, 0);
-		}
 	}
 }
 
 /*
- * Scroll one screen, moving the window if the firmware will and copying
- * pixels if it will not.
+ * Scroll one screen, by copying its pixels up.
+ *
+ * Never by moving the GPU's scanout window, though that is free and
+ * this is not. The console did scroll that way, down a buffer twice the
+ * screen's height, and the draw device then had to be told where the
+ * window was left so as to paint where the glass was looking. On a
+ * 1280x800 HDMI panel on a 3B+ the glass and the bookkeeping disagreed:
+ * the console's last moves of the window, after a fold back to the
+ * top, did not all reach the scanout, the login screen was painted at
+ * row 80 of a buffer the glass showed from higher up, and a strip of
+ * console text sat above a login screen shifted down by as much --
+ * with the cursor shifted with it, off the finger on the touch panel.
+ * On the 7" panel the release itself had shown the same thing. The
+ * window's position is the firmware's, it is not reliably told and it
+ * cannot reliably be read back, so it is not used: the buffer is the
+ * size of the screen (mboxfballoc), the window is at the top and stays
+ * there, and everything that draws -- this console, then the desktop
+ * -- draws at row 0 of what is on the glass.
+ *
+ * The cost is the copy, Scrolllines lines at a time.
  */
 static void
 screenscroll(Screen *s)
 {
-	static int folded;
 	uchar *base;
 	ulong linebytes, movebytes;
 	int y, x, stride, newcy;
@@ -418,53 +424,6 @@ screenscroll(Screen *s)
 	if(newcy < 0)
 		newcy = 0;
 
-	if(s->hwscroll){
-		if(s->voff + s->h + s->scrollpix > s->vh){
-			/*
-			 * Fold: the window is as far down the buffer as it
-			 * goes, so the visible content moves back to the
-			 * top. This is the whole-screen move that used to
-			 * happen for every line; it now happens once per
-			 * screenful.
-			 */
-			if(!folded){
-				folded = 1;
-				uartputstr("fb:   window folded once\n");
-			}
-			memmove(base, base + (ulong)s->voff * s->fb->pitch,
-				(ulong)s->h * s->fb->pitch);
-			s->voff = 0;
-			fbdisplay(s->fb->disp);
-			fbvoffset(0, 0);
-		}
-		s->voff += s->scrollpix;
-
-		if(s->voff + newcy + s->scrollpix > s->vh
-		|| s->voff + s->h > s->vh){
-			uartputstr("fb:   SCROLL OUT OF RANGE, reverting to copy\n");
-			s->hwscroll = 0;
-			s->voff = 0;
-			fbdisplay(s->fb->disp);
-			fbvoffset(0, 0);
-			s->cy = newcy;
-			return;
-		}
-
-		fbclearlines(s, s->voff + newcy, s->scrollpix);
-
-		/*
-		 * Select the display before moving its window: the offset
-		 * tag applies to whichever display the firmware has
-		 * current, so with two screens the second one's offset
-		 * would otherwise be written to the first.
-		 */
-		fbdisplay(s->fb->disp);
-		fbvoffset(0, s->voff);
-		s->cy = newcy;
-		return;
-	}
-
-	/* the slow path: move the pixels */
 	linebytes = s->fb->pitch * (ulong)s->scrollpix;
 	if(linebytes > s->fb->pitch * (ulong)s->h)
 		linebytes = s->fb->pitch * (ulong)s->h;
@@ -501,7 +460,7 @@ screenclearcell(Screen *s)
 		for(x = 0; x < Fw; x++){
 			if(s->cx + x >= s->w)
 				break;
-			p[(s->voff + s->cy + y) * stride + s->cx + x] = Bg;
+			p[(s->cy + y) * stride + s->cx + x] = Bg;
 		}
 	}
 }
@@ -534,7 +493,7 @@ screenglyph(Screen *s, uchar *g)
 			if(s->cx + x >= s->w)
 				break;
 			if(g[y] & (0x80 >> x))
-				p[(s->voff + s->cy + y) * stride + s->cx + x] = Fg;
+				p[(s->cy + y) * stride + s->cx + x] = Fg;
 		}
 	}
 }
@@ -706,71 +665,26 @@ fbconsadd(Fbinfo *fb)
 
 	s = &screens[nscreens];
 	s->fb = fb;
-	s->voff = 0;
-	s->vh = (int)(fb->size / fb->pitch);
 	s->w = (int)fb->width;
 	s->h = (int)fb->height;
-#ifdef FBSCROLLTEST
-	/*
-	 * Give the console only half of this screen so the other half
-	 * becomes the scrolling headroom.
-	 *
-	 * QEMU grants the offset but reports a screen-sized allocation,
-	 * so the gate below -- correctly -- keeps the fast path off
-	 * there, and the code that only runs on hardware would be the
-	 * code no test ever touches. Halving makes the headroom real
-	 * WITHIN the allocation the emulator did give us, so the offset
-	 * arithmetic, the fold and the clearing all execute under test.
-	 */
-	s->h /= 2;
-	s->h -= s->h % Fh;
-#endif
 	s->h -= s->h % Fh;
 
 	/*
-	 * Two things must hold before this screen's window may be moved,
-	 * and only one of them is about scrolling.
-	 *
-	 * The buffer must be taller than the display, because once the
-	 * window moves down, glyphs and cleared lines are written BELOW
-	 * the visible height -- straight past the end of the allocation
-	 * if the firmware quietly gave a screen-sized buffer anyway. That
-	 * check is what keeps a refused request from turning into memory
-	 * corruption, so it comes first, and the headroom is taken from
-	 * the size REPORTED rather than the size asked for.
-	 *
-	 * Then the offset itself: accepting the tag is not the test,
-	 * since a firmware with nowhere to move the window clamps the
-	 * offset to zero and still reports success, and a console
-	 * scrolled with an offset that never moves shows one screenful
-	 * for ever. Ask for one line down and require that exact answer.
+	 * Put the first screen's scanout window at the top of its buffer,
+	 * once, whatever the firmware left it at; after this nothing here
+	 * moves it (see screenscroll). The buffer is the screen's size, so
+	 * there is nowhere else for it to be -- this is the belt to that
+	 * pair of braces.
 	 */
-	/*
-	 * Hardware scrolling for the FIRST screen only. A mirror scrolls
-	 * by copying pixels, never by moving a scanout window, because
-	 * the display-select tag proved unreliable: a mirror's offset
-	 * writes landed on the primary panel, whose window then drifted
-	 * to wherever the mirror's console had scrolled -- and a login
-	 * screen painted where the primary's bookkeeping said the
-	 * window was appeared on the glass as two footer lines above a
-	 * page of stale console text. One display moves its window;
-	 * every other one copies.
-	 */
-	s->hwscroll = 0;
 	if(nscreens == 0){
 		fbdisplay(fb->disp);
-		if(s->vh >= s->h + Fh && fbvoffset(0, Fh) == Fh)
-			s->hwscroll = 1;
 		fbvoffset(0, 0);
 	}
 
 	/*
-	 * One line at a time when the window can be moved, because that
-	 * is free; several at a time when pixels have to be copied,
-	 * because that is where the cost is. Per screen, since one
-	 * display can have the fast path while the other does not.
+	 * Several lines a scroll, because each one copies the screen.
 	 */
-	s->scrollpix = s->hwscroll? Fh : Fh * Scrolllines;
+	s->scrollpix = Fh * Scrolllines;
 
 	nscreens++;
 
@@ -780,8 +694,7 @@ fbconsadd(Fbinfo *fb)
 	uartputd(s->w);
 	uartputstr("x");
 	uartputd(s->h);
-	uartputstr(screens[nscreens-1].hwscroll?
-		" (scroll by GPU offset)\n" : " (scroll by copy)\n");
+	uartputstr(" (scroll by copy)\n");
 	return 0;
 }
 
@@ -834,28 +747,6 @@ fbconsreleased(void)
 }
 
 /*
- * How far down the buffer the visible window currently sits.
- *
- * The console scrolls by moving the GPU's scanout offset, so the top of
- * the framebuffer is NOT what the panel is showing. Anything reading
- * the framebuffer back to see what a person sees has to add this --
- * screendump did not, and reported a blank screen while the console
- * was full of text.
- *
- * Zero once the draw device has the screen: fbconsstop puts the window
- * back before letting go.
- */
-int
-fbconsvoff(void)
-{
-	if(released)
-		return frozenvoff;	/* where the glass was when the draw device took over */
-	if(nscreens == 0)
-		return 0;
-	return screens[0].voff;
-}
-
-/*
  * Give up the framebuffer.
  *
  * Called when the draw device attaches: two things cannot own the same
@@ -868,72 +759,27 @@ fbconsvoff(void)
  * devcons stops calling here at all rather than calling into a function
  * that would only return.
  *
- * PUT THE SCANOUT WINDOW BACK FIRST, and this is not tidying.
- *
- * This console scrolls by moving the GPU's virtual offset rather than
- * by copying pixels: the buffer is twice the height of the display and
- * the visible window slides down it. After a boot's worth of messages
- * that window is a long way from the top.
- *
- * The draw device knows nothing about that. attachscreen hands it the
- * base of the buffer and it draws at 0,0 -- which is off the top of
- * what the panel is showing. Everything worked and nothing appeared:
- * the pixels were in the framebuffer, readpixels found them there
- * because it reads the same memory, and the screen showed a region of
- * the buffer nobody was drawing in.
+ * The desktop paints at row 0 of the buffer, and the glass shows row 0:
+ * the console never moved the scanout window (screenscroll), so there
+ * is no window position to hand over. That is the whole design of the
+ * release -- the one it replaces, which froze a moved window and told
+ * the draw device where, is what put a login screen 80 rows below the
+ * glass on an HDMI panel.
  */
 void
 fbconsstop(void)
 {
-	int i, n;
-
 	/*
-	 * Stop the console FIRST, then reset the scanout offsets --
-	 * in that order, with a barrier and a settle between.
-	 *
-	 * The other order lost the screen: a print in flight on another
-	 * core could scroll and push the GPU offset back nonzero AFTER
-	 * the reset here, and nothing ever resets it again -- the glass
-	 * scans the old console window forever while the draw client
-	 * paints, correctly, at offset zero. Software said login
-	 * screen; the panel said frozen console; both were telling the
-	 * truth about different offsets. Timing-dependent, so some
-	 * boots worked and the ones with boot spew still streaming did
-	 * not.
+	 * Under the console's lock, so that a print in flight on another
+	 * core finishes before the desktop starts drawing over it.
 	 */
 	if(!fbconslock())
 		uartputstr("fb:   console writer stuck; releasing anyway\n");
-	n = nscreens;
 	screenputs = nil;
 	released = 1;
 	nscreens = 0;
 	coherence();
 
-	/*
-	 * The scanout window is NOT moved. It is frozen where it is and
-	 * its position handed to the draw device, which paints THERE.
-	 *
-	 * Every attempt to put the window back to zero at this point
-	 * failed on real firmware while reporting success: the offset
-	 * SET tag did not move the panel, the GET tag answers zero for
-	 * every display id whether or not it is true, and the display-
-	 * select tag takes firmware ids (0 main LCD, 2 HDMI0) that do
-	 * not match our enumeration. The glass kept showing a scrolled
-	 * console window under a login screen painted at row zero,
-	 * shifted by one more text line per boot as the spew varied.
-	 *
-	 * The console's own software offset, by contrast, is the one
-	 * number proven true: it is what put the console where a person
-	 * could read it. So the draw device inherits that window.
-	 * Alignment by construction, no mailbox in the loop.
-	 */
-	frozenvoff = 0;
-	if(n > 0)
-		frozenvoff = screens[0].voff;
-	USED(i);
-
 	fbconsunlock();
-	uartputstr("fb:   console released to the draw device at row ");
-	uartputd(frozenvoff);
-	uartputstr("\n");
+	uartputstr("fb:   console released to the draw device\n");
 }

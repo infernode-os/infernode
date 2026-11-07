@@ -3,13 +3,13 @@ implement EditorTest;
 #
 # editor_test - Tests for the wm/editor text editing logic
 #
-# Tests document operations via the editor's 9P ctl commands
-# and real-file IPC interface at /tmp/veltro/editor/.
-# These tests exercise the editor's core functions: text manipulation,
-# undo/redo, find/replace, cursor movement, and selection.
+# Tests document operations through the editor's 9P files, posted as
+# #seditor/fs (post9p(2)) and mounted here: text manipulation,
+# find/replace, cursor movement.  A command is done when its write
+# returns, so nothing waits.
 #
-# NOTE: These tests require the editor to be running.
-# They communicate via /tmp/veltro/editor/ state files.
+# NOTE: These tests require the editor to be running; with none
+# posted they skip.
 #
 
 include "sys.m";
@@ -32,8 +32,9 @@ passed := 0;
 failed := 0;
 skipped := 0;
 
-EDIT_DIR:  con "/tmp/veltro/editor";
-EDIT_INST: con "/tmp/veltro/editor/1";
+EDIT_DIR:  con "/tmp/editor_test";
+EDIT_INST: con "/tmp/editor_test/1";
+posted := 0;	# #seditor/fs mounted at EDIT_DIR
 
 run(name: string, testfn: ref fn(t: ref T))
 {
@@ -61,7 +62,7 @@ run(name: string, testfn: ref fn(t: ref T))
 
 writefile(path, data: string): int
 {
-	fd := sys->create(path, Sys->OWRITE, 8r666);
+	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
 		return -1;
 	b := array of byte data;
@@ -87,11 +88,10 @@ readfile(path: string): string
 	return result;
 }
 
-# Send a ctl command and wait for it to be picked up
+# Send a ctl command: done when the write returns
 sendctl(path, cmd: string)
 {
 	writefile(path, cmd);
-	sys->sleep(600);	# editor polls every ~500ms
 }
 
 # Send doc ctl command
@@ -106,11 +106,10 @@ gctl(cmd: string)
 	sendctl(EDIT_DIR + "/ctl", cmd);
 }
 
-# Set body via body.in
+# Set body: a write of body replaces the text
 setbody(text: string)
 {
-	writefile(EDIT_INST + "/body.in", text);
-	sys->sleep(600);
+	writefile(EDIT_INST + "/body", text);
 }
 
 # Read body
@@ -132,11 +131,18 @@ getaddr(): string
 # Check if editor is running
 editorRunning(): int
 {
-	fd := sys->open(EDIT_INST + "/body", Sys->OREAD);
+	return posted;
+}
+
+# the editor's posted server, mounted at EDIT_DIR in this name space
+mounteditor(): int
+{
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
 	if(fd == nil)
 		return 0;
-	fd = nil;
-	return 1;
+	sys->create(EDIT_DIR, Sys->OREAD, Sys->DMDIR|8r755);
+	return sys->mount(fd, nil, EDIT_DIR, Sys->MREPL, nil) >= 0;
 }
 
 # ----------------------------------------------------------------
@@ -247,8 +253,8 @@ testInsert(t: ref T)
 	if(!editorRunning())
 		t.skip("editor not running");
 	setbody("hello world");
-	docctl("insert 1 6 beautiful ");
-	sys->sleep(200);
+	# columns count from 1: column 7 is the w
+	docctl("insert 1 7 beautiful ");
 	body := getbody();
 	t.assertseq(body, "hello beautiful world", "insert should add text at position");
 }
@@ -261,7 +267,6 @@ testDelete(t: ref T)
 	setbody("hello beautiful world");
 	# Delete "beautiful " (cols 6-15 on line 1)
 	docctl("delete 1 6 1 16");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "hello world", "delete should remove text range");
 }
@@ -297,13 +302,11 @@ testCleanDirty(t: ref T)
 	t.assert(idx != nil, "index should be readable");
 
 	docctl("clean");
-	sys->sleep(200);
 	idx = readfile(EDIT_DIR + "/index");
 	# Last field should be 0 (not dirty)
 	t.assert(idx != nil, "index after clean should be readable");
 
 	docctl("dirty");
-	sys->sleep(200);
 	idx = readfile(EDIT_DIR + "/index");
 	t.assert(idx != nil, "index after dirty should be readable");
 }
@@ -316,7 +319,6 @@ testReplace(t: ref T)
 	setbody("the cat sat on the mat");
 	docctl("goto 1");
 	docctl("replace cat\tdog");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "the dog sat on the mat", "replace should substitute first match");
 }
@@ -328,7 +330,6 @@ testReplaceAll(t: ref T)
 		t.skip("editor not running");
 	setbody("foo bar foo baz foo");
 	docctl("replaceall foo\tqux");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "qux bar qux baz qux", "replaceall should substitute all matches");
 }
@@ -363,7 +364,6 @@ testInsertAtEnd(t: ref T)
 		t.skip("editor not running");
 	setbody("hello");
 	docctl("insert 1 6 !");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "hello!", "insert at end should append to line");
 }
@@ -376,7 +376,6 @@ testDeleteAcrossLines(t: ref T)
 	setbody("aaa\nbbb\nccc");
 	# Delete from line 1 col 2 to line 3 col 2 (everything in middle)
 	docctl("delete 1 2 3 2");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "acc", "cross-line delete should merge remaining text");
 }
@@ -389,7 +388,6 @@ testReplaceEmpty(t: ref T)
 	setbody("hello world");
 	docctl("goto 1");
 	docctl("replace world\t");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "hello ", "replace with empty should delete the match");
 }
@@ -402,9 +400,68 @@ testReplaceNotFound(t: ref T)
 	setbody("hello world");
 	docctl("goto 1");
 	docctl("replace xyz\tabc");
-	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "hello world", "replace with no match should leave body unchanged");
+}
+
+# A text longer than one 9P message arrives in pieces: the body is all
+# of it, and reads back whole
+testLongBody(t: ref T)
+{
+	if(!editorRunning())
+		t.skip("editor not running");
+	line := "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz\n";
+	text := "";
+	for(i := 0; i < 400; i++)
+		text += line;	# 29600 bytes, several messages
+	setbody(text);
+	body := getbody();
+	t.asserteq(len body, len text, "a long body is all of it");
+	t.assert(body == text, "and reads back as written");
+}
+
+# Each open of event gets every event: two readers both see an edit
+# (they took turns from one channel, and a read held the server)
+testEventPerOpen(t: ref T)
+{
+	if(!editorRunning())
+		t.skip("editor not running");
+	got := chan of string;
+	for(i := 0; i < 2; i++) {
+		fd := sys->open(EDIT_INST + "/event", Sys->OREAD);
+		if(fd == nil)
+			t.fatal(sys->sprint("open event: %r"));
+		spawn evreader(fd, got);
+	}
+	sys->sleep(100);	# both readers waiting
+	setbody("x");
+	docctl("insert 1 1 y");
+	timeout := chan of int;
+	spawn timer(timeout, 3000);
+	n := 0;
+	while(n < 2)
+		alt {
+		e := <-got =>
+			t.assertnotnil(e, "an event line");
+			n++;
+		<-timeout =>
+			t.fatal(sys->sprint("%d of 2 readers got an event", n));
+		}
+	t.asserteq(n, 2, "both readers got the event");
+}
+
+evreader(fd: ref Sys->FD, got: chan of string)
+{
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n > 0)
+		got <-= string buf[0:n];
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -423,6 +480,8 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 	}
+
+	posted = mounteditor();
 
 	# Run tests
 	run("EditorRunning", testEditorRunning);
@@ -446,6 +505,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DeleteAcrossLines", testDeleteAcrossLines);
 	run("ReplaceEmpty", testReplaceEmpty);
 	run("ReplaceNotFound", testReplaceNotFound);
+	run("LongBody", testLongBody);
+	run("EventPerOpen", testEventPerOpen);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

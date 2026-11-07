@@ -36,6 +36,7 @@ include "sys.m";
 include "draw.m";
 
 include "string.m";
+include "nsconstruct.m";
 	str: String;
 
 include "arg.m";
@@ -85,6 +86,9 @@ BRIDGE_SUFFIX: con "\n\nYou are %AGENT%, the AI agent in a Lucifer activity. " +
 # the conversation, instead of polling task status in a loop the human can
 # neither see the end of nor interrupt.
 TASKEVENT: con "[task-event] ";
+# A message arrived (msgwatch, with its triage policy): a turn for the agent,
+# shown to the user as a short notice, never as the user's own words.
+MSGEVENT: con "[message-event] ";
 TASKEVENT_MAX: con 7600;	# the whole event: one 9P write (msize 8K) is one message
 TASKEVENT_FILEMAX: con 3500;	# bytes of the task's files carried in the event
 
@@ -304,14 +308,30 @@ substall(s, pat, repl: string): string
 	return out;
 }
 
-writemsg(role, text: string)
+# Messages are written from several processes in a turn (the reply as it
+# streams, the user's words as they come); each takes the next index, and
+# the lock keeps two from taking the same one.
+convlock: chan of int;
+
+# Write a message; its index, or -1.
+writemsg(role, text: string): int
+{
+	return writeconv("role=" + role + " text=" + text);
+}
+
+writeconv(msg: string): int
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
-	msg := "role=" + role + " text=" + text;
+	if(convlock == nil)
+		convlock = chan[1] of int;
+	convlock <-= 1;
+	idx := -1;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: write to %s failed: %r\n", path);
 	else
-		convcount++;
+		idx = convcount++;
+	<-convlock;
+	return idx;
 }
 
 # Sync convcount with the server's actual message count.
@@ -331,7 +351,6 @@ syncconvcount()
 # Returns the message index for later updates (e.g. progress).
 writedialogue(title, text, progress, options: string): int
 {
-	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "role=veltro dtype=dialogue";
 	if(title != "")
 		msg += " title=" + title;
@@ -340,12 +359,9 @@ writedialogue(title, text, progress, options: string): int
 	if(options != "")
 		msg += " options=" + options;
 	msg += " text=" + text;
-	if(writefile(path, msg) < 0) {
-		sys->fprint(stderr, "lucibridge: writedialogue failed: %r\n");
-		return -1;
-	}
-	idx := convcount;
-	convcount++;
+	idx := writeconv(msg);
+	if(idx < 0)
+		sys->fprint(stderr, "lucibridge: writedialogue failed\n");
 	return idx;
 }
 
@@ -363,6 +379,11 @@ writedialogue(title, text, progress, options: string): int
 # NOTE: the dialogue returns the clicked LABEL as the choice string, so
 # the labels in the option list below and the choice comparisons further
 # down MUST stay in sync.  If you rename a button, rename its comparison.
+#
+# On a phone (infmobile) the two CLI options are not offered: there is no
+# host there to run a gateway or the CLI it serves (iOS cannot run one at
+# all), so choosing one only ever ended at "can't reach it".  A phone
+# reaches a computer's CLI login through Remote 9P instead, and says so.
 runsetupwizard()
 {
 	greeting := agentlib->readfile(SETUP_GREETING_PATH);
@@ -370,9 +391,15 @@ runsetupwizard()
 		greeting = "Welcome to InferNode! I'm **Veltro**, your AI agent.\n\n" +
 			"I need an LLM connection to get started. Choose an option below:";
 	writemsg("veltro", agentlib->strip(greeting));
+	options := "Remote API,Local model,Claude CLI,Codex CLI,Remote 9P";
+	optionlist := "Remote API / Local model / Claude CLI / Codex CLI / Remote 9P";
+	if(onphone()){
+		options = "Remote API,Local model,Remote 9P";
+		optionlist = "Remote API / Local model / Remote 9P";
+	}
 	writedialogue("LLM Setup",
 		"Choose how to connect to an AI model:",
-		"", "Remote API,Local model,Claude CLI,Codex CLI,Remote 9P");
+		"", options);
 	log("displayed LLM setup dialogue");
 
 	pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
@@ -389,7 +416,6 @@ runsetupwizard()
 
 		if(choice == "Remote API") {
 			writefile(pctl, "create id=keyring type=app dis=/dis/wm/keyring.dis label=Keyring");
-			sys->sleep(500);
 			writefile(pctl, "center id=keyring");
 			writemsg("veltro",
 				"Keyring is open. Select API Key, enter `anthropic` as the service, paste your key. " +
@@ -399,7 +425,6 @@ runsetupwizard()
 			# remainder of the line). -c llm tells wm/settings to open
 			# directly on the LLM Service panel — INFR-100.
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the Ollama backend, " +
@@ -417,7 +442,6 @@ runsetupwizard()
 				gate = "codex-gate";
 			}
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the " +
@@ -429,11 +453,11 @@ runsetupwizard()
 				"Then close InferNode and relaunch it.");
 		} else if(choice == "Remote 9P") {
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
 				"dial address (`tcp!host!port`) of an InferNode exporting `/mnt/llm`. " +
+				phonecli() +
 				"Then close InferNode and relaunch it.");
 		} else {
 			# A typed message (not one of the option buttons) before any
@@ -442,15 +466,38 @@ runsetupwizard()
 			writemsg("user", choice);
 			writemsg("veltro",
 				"I'm not connected to an LLM yet, so I can't reply. Choose an option above " +
-				"(Remote API / Local model / Claude CLI / Codex CLI / Remote 9P) to set one " +
+				"(" + optionlist + ") to set one " +
 				"up — or, if you already configured it in Settings, close InferNode and " +
 				"relaunch so the change takes effect.");
 			continue;	# keep listening; don't park
 		}
 		# A configurator was opened — park until the user quits and relaunches.
-		for(;;)
-			sys->sleep(60000);
+		<-chan of int;
 	}
+}
+
+# Lucifer's phone layout (iOS, Android): boot-mobile.sh sets infmobile.
+onphone(): int
+{
+	s := agentlib->readfile("/env/infmobile");
+	return s != nil && s[0] == '1';
+}
+
+# how a phone uses a computer's Claude or Codex CLI login, for the
+# Remote 9P guidance; nothing elsewhere
+phonecli(): string
+{
+	if(!onphone())
+		return "";
+	return "To use the Claude or Codex CLI from this phone, run InferNode on a " +
+		"computer set up for one and enter that computer's address here. ";
+}
+
+gatelabel(backend: string): string
+{
+	if(backend == "codex")
+		return "Codex CLI gateway";
+	return "Claude CLI gateway";
 }
 
 # Update a dialogue tile in-place (e.g. progress bar update).
@@ -467,14 +514,97 @@ updatedialogue(idx: int, progress, title, text: string)
 	writefile(path, msg);
 }
 
-# Read a single user input from the conversation input file (blocking).
-readuserinput(): string
+# The activity's input is read by one process for the agent's life, so
+# what the user types while a turn runs is seen at once: /stop stops the
+# turn, an answer goes to the dialogue that asked, anything else is shown
+# and kept for after the turn.  Read only between turns, it sat unseen
+# until the turn ended, and nothing could stop a turn.
+inputc: chan of string;		# nil once the input is closed
+answerc: chan of string;		# a dialogue's answer, while one is awaited
+awaiting := 0;
+Queued: adt {
+	text:	string;
+	shown:	int;		# already shown as the human's
+};
+queued: list of ref Queued;
+inputclosed := 0;
+
+inputreader()
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return "";
-	return blockread(fd);
+	for(;;) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil) {
+			inputc <-= nil;
+			return;
+		}
+		m := blockread(fd);
+		fd = nil;
+		inputc <-= m;
+		if(m == nil)
+			return;
+	}
+}
+
+# The next input: one that came during a turn first, in order.
+nextinput(): (string, int)
+{
+	if(queued != nil) {
+		q := hd queued;
+		queued = tl queued;
+		return (q.text, q.shown);
+	}
+	if(inputclosed)
+		return (nil, 0);
+	m := <-inputc;
+	if(m == nil)
+		inputclosed = 1;
+	return (m, 0);
+}
+
+# Input that came while a turn ran.
+turninput(m: string)
+{
+	if(m == nil) {
+		inputclosed = 1;
+		ctl("cancel");
+		return;
+	}
+	# Delivered task/message events are subsequent turns, never answers to a
+	# permission dialogue. Only the user's own input can resolve the tile.
+	if(awaiting && !agentlib->hasprefix(m, TASKEVENT) &&
+	   !agentlib->hasprefix(m, MSGEVENT)) {
+		answerc <-= m;
+		return;
+	}
+	if(m == "/stop") {
+		log("human: /stop");
+		ctl("cancel");
+		writemsg("veltro", "(stopping)");
+		return;
+	}
+	shown := 0;
+	if(!agentlib->hasprefix(m, TASKEVENT) && !agentlib->hasprefix(m, MSGEVENT) &&
+	   (len m == 0 || m[0] != '/')) {
+		writemsg("human", m);
+		shown = 1;
+	}
+	r: list of ref Queued;
+	for(l := queued; l != nil; l = tl l)
+		r = hd l :: r;
+	r = ref Queued(m, shown) :: r;
+	queued = nil;
+	for(; r != nil; r = tl r)
+		queued = hd r :: queued;
+}
+
+# An answer to a dialogue, during a turn.
+readuserinput(): string
+{
+	awaiting = 1;
+	r := <-answerc;
+	awaiting = 0;
+	return r;
 }
 
 setstatus(status: string)
@@ -860,8 +990,17 @@ handleslash(cmd: string): int
 		ack = cowpromote(cmdarg);
 	"revert" =>
 		ack = cowrevert(cmdarg);
+	"kept" =>
+		(nil, w) := sys->tokenize(cmdarg, " ");
+		if(w == nil)
+			ack = keptlist();
+		else if(tl w != nil && (hd w == "apply" || hd w == "discard"))
+			ack = keptdo(hd w, int hd tl w);
+		else
+			ack = "usage: /kept, /kept apply <n>, /kept discard <n>";
 	"help" =>
-		ack = "/bind <path>  — add namespace path\n" +
+		ack = "/stop  — stop what the agent is doing (type it while it works)\n" +
+		      "/bind <path>  — add namespace path\n" +
 		      "/unbind <path>  — remove namespace path\n" +
 		      "/tools +name  — add tool\n" +
 		      "/tools -name  — remove tool\n" +
@@ -869,11 +1008,14 @@ handleslash(cmd: string): int
 		      "/voice <name>  — change voice\n" +
 		      "/diff  — show cowfs changes\n" +
 		      "/promote [path]  — promote cowfs changes\n" +
-		      "/revert [path]  — revert cowfs changes";
+		      "/revert [path]  — revert cowfs changes\n" +
+		      "/kept [apply|discard <n>]  — changes from an earlier session, not applied";
 	* =>
 		return 0;	# unknown slash: pass to agent
 	}
-	writemsg("assistant", ack);
+	# As the agent's: luciuisrv takes no "assistant" role, and every slash
+	# command's answer (/help, /bind, /promote, ...) was refused and lost.
+	writemsg("veltro", ack);
 	return 1;
 }
 
@@ -888,13 +1030,16 @@ Cowfs: module {
 	revertfile:  fn(overlaydir, relpath: string): string;
 };
 
-cowfindoverlay(): string
+# The overlays an activity stages its changes in, one for each folder it
+# may write: /tmp/veltro/cow/<actid>-<key of the folder>.  Only the first
+# was found, so a task given two folders had the changes to one of them
+# reported, promoted and reverted, and the other's left behind.
+cowoverlays(prefix: string): list of string
 {
-	# Overlay dir is /tmp/veltro/cow/{actid}-*
-	prefix := sys->sprint("%d-", actid);
 	fd := sys->open("/tmp/veltro/cow", Sys->OREAD);
 	if(fd == nil)
 		return nil;
+	l: list of string;
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -902,10 +1047,37 @@ cowfindoverlay(): string
 		for(i := 0; i < n; i++) {
 			nm := dirs[i].name;
 			if(len nm >= len prefix && nm[0:len prefix] == prefix)
-				return "/tmp/veltro/cow/" + nm;
+				l = "/tmp/veltro/cow/" + nm :: l;
 		}
 	}
-	return nil;
+	return l;
+}
+
+myoverlays(): list of string
+{
+	return cowoverlays(sys->sprint("%d-", actid));
+}
+
+# An overlay's changes as lines, each with the folder it is in.
+overlaychanges(cowfs: Cowfs, overlay: string): list of string
+{
+	base := cowbasepath(overlay);
+	out: list of string;
+	for(c := cowfs->diff(overlay); c != nil; c = tl c) {
+		l := hd c;
+		if(base != nil && len l > 2 && l[1] == ' ')
+			l = l[0:2] + base + "/" + l[2:];
+		out = l :: out;
+	}
+	return revl(out);
+}
+
+revl(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 cowdiff(): string
@@ -913,19 +1085,33 @@ cowdiff(): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
-	changes := cowfs->diff(overlay);
-	if(changes == nil)
-		return "no changes";
 	result := "";
-	for(; changes != nil; changes = tl changes) {
-		if(result != "")
-			result += "\n";
-		result += hd changes;
-	}
+	for(; ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c) {
+			if(result != "")
+				result += "\n";
+			result += hd c;
+		}
+	if(result == "")
+		return "no changes";
 	return result;
+}
+
+# The overlay a file named for /promote or /revert is in: by its full path
+# (under a folder's base), or by a path in the folder (the only overlay).
+cowfilein(ovs: list of string, arg: string): (string, string)
+{
+	for(o := ovs; o != nil; o = tl o) {
+		base := cowbasepath(hd o);
+		if(base != nil && agentlib->hasprefix(arg, base + "/"))
+			return (hd o, arg[len base + 1:]);
+	}
+	if(len ovs == 1 && arg != "" && arg[0] != '/')
+		return (hd ovs, arg);
+	return (nil, nil);
 }
 
 cowpromote(arg: string): string
@@ -933,28 +1119,65 @@ cowpromote(arg: string): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
-	# Read basepath from .cowmeta
-	basepath := agentlib->readfile(overlay + "/.cowmeta");
-	if(basepath != nil) {
-		# Trim trailing whitespace/newlines
-		while(len basepath > 0 && (basepath[len basepath - 1] == '\n' || basepath[len basepath - 1] == ' '))
-			basepath = basepath[0:len basepath - 1];
-	}
-	if(basepath == nil || basepath == "")
-		return "error: cannot determine base path";
 	if(arg != "") {
-		err := cowfs->promotefile(basepath, overlay, arg);
+		(overlay, rel) := cowfilein(ovs, arg);
+		if(overlay == nil)
+			return "error: " + arg + " is not in a folder this activity changed";
+		err := cowfs->promotefile(cowbasepath(overlay), overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "promoted: " + arg;
 	}
-	(n, err) := cowfs->promote(basepath, overlay);
-	if(err != nil)
-		return "error: " + err;
-	return sys->sprint("promoted %d file(s)", n);
+	total := 0;
+	conflicts := "";
+	for(; ovs != nil; ovs = tl ovs) {
+		basepath := cowbasepath(hd ovs);
+		if(basepath == nil)
+			return "error: cannot determine base path of " + hd ovs;
+		(n, err) := cowfs->promote(basepath, hd ovs);
+		total += n;
+		if(err != nil && agentlib->hasprefix(err, "not applied"))
+			conflicts += sys->sprint("\n%s (in %s)", err, basepath);
+		else if(err != nil)
+			return sys->sprint("error: %s (%d file(s) promoted)", err, total);
+	}
+	# This goes back to the agent that asked for it.  It used to begin
+	# "promoted N file(s)", which a model read as done and told the user so,
+	# and it said to ask the task again, which the task tool cannot do.
+	if(conflicts != "") {
+		applied := "";
+		if(total > 0)
+			applied = sys->sprint(" (%d other file(s) were applied)", total);
+		return sys->sprint("NOT applied%s:%s\n" +
+			"Someone changed those files after this task copied them, so its version would " +
+			"undo that change.  They are left as they are now, without the task's change, which " +
+			"stays staged.  Tell the user it was not applied and why.  To make the change on " +
+			"the current file: \"task revert %d\", then create a new task with the same brief; " +
+			"it starts from the file as it is now.", applied, conflicts, actid);
+	}
+	return sys->sprint("promoted %d file(s)", total);
+}
+
+# The folder an overlay stages changes for: the basepath= line of its
+# .cowmeta.  The whole file used to be taken for the path, so a promote
+# wrote "basepath=/n/local/..." relative to wherever it ran, and saved that
+# as the base, doubling the prefix.  Only an absolute path is a base.
+cowbasepath(overlay: string): string
+{
+	(nil, lines) := sys->tokenize(agentlib->readfile(overlay + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines) {
+		v := agentlib->strip(hd lines);
+		if(!agentlib->hasprefix(v, "basepath="))
+			continue;
+		while(agentlib->hasprefix(v, "basepath="))
+			v = v[len "basepath=":];
+		if(len v > 1 && v[0] == '/')
+			return v;
+	}
+	return nil;
 }
 
 cowrevert(arg: string): string
@@ -962,19 +1185,146 @@ cowrevert(arg: string): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
 	if(arg != "") {
-		err := cowfs->revertfile(overlay, arg);
+		(overlay, rel) := cowfilein(ovs, arg);
+		if(overlay == nil)
+			return "error: " + arg + " is not in a folder this activity changed";
+		err := cowfs->revertfile(overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "reverted: " + arg;
 	}
-	err := cowfs->revert(overlay);
-	if(err != nil)
-		return "error: " + err;
+	for(; ovs != nil; ovs = tl ovs) {
+		err := cowfs->revert(hd ovs);
+		if(err != nil)
+			return "error: " + err;
+	}
 	return "all changes reverted";
+}
+
+# Changes a task staged and the user neither applied nor discarded before
+# InferNode quit are kept (nsconstruct names their overlay kept-...), not
+# applied, not lost.  Activity 0 offers them back at start, as Acme's Load
+# brings back what was open: each with Apply and Discard, the agent told so
+# it can answer for them.  Left unanswered, they are offered again next time.
+kept: list of (int, string, int);	# (number, overlay, dialogue)
+keptnote := "";				# for the agent, with the first message
+
+offerkept()
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return;
+	# This start's tasks have none yet: an overlay named for an activity is
+	# an earlier start's, until it is set aside when a task of this one is
+	# given the folder.  Set aside now, so its changes are offered.
+	ns := load NsConstruct NsConstruct->PATH;
+	if(ns != nil)
+		for(ovs := cowoverlays(""); ovs != nil; ovs = tl ovs)
+			if(!agentlib->hasprefix(hd ovs, "/tmp/veltro/cow/kept-"))
+				ns->setasidestale(hd ovs);
+	n := 0;
+	about := "";
+	for(ovs = revl(cowoverlays("kept-")); ovs != nil; ovs = tl ovs) {
+		changes := overlaychanges(cowfs, hd ovs);
+		if(changes == nil)
+			continue;
+		if(n == 0)
+			writemsg("veltro", "Some changes a task made in your files last time were never applied. " +
+				"They are kept as they were: apply or discard each below, or leave them for later.");
+		n++;
+		text := "";
+		for(c := changes; c != nil; c = tl c)
+			text += hd c + "\n";
+		text = agentlib->strip(text);
+		didx := writedialogue(sys->sprint("Not applied, from your last session (%d)", n),
+			text, "", sys->sprint("Apply %d,Discard %d", n, n));
+		kept = (n, hd ovs, didx) :: kept;
+		about += sys->sprint("  %d: %s\n", n, agentlib->strip(text));
+	}
+	if(n == 0)
+		return;
+	keptnote = "[Changes a task staged to the user's files in an earlier session were never applied " +
+		"nor discarded; the user is shown each with Apply and Discard. They are:\n" + about +
+		"Only the user applies or discards them (the buttons, or typing /kept apply <n> or " +
+		"/kept discard <n>); you cannot. Mention them if it helps the user.]\n\n";
+	log(sys->sprint("offered %d kept change set(s)", n));
+}
+
+# Apply or discard kept change set n.  Returns what happened.
+keptdo(verb: string, n: int): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "error: cannot load cowfs module";
+	rest: list of (int, string, int);
+	result := "";
+	for(l := kept; l != nil; l = tl l) {
+		(k, overlay, didx) := hd l;
+		if(k != n) {
+			rest = hd l :: rest;
+			continue;
+		}
+		base := cowbasepath(overlay);
+		if(verb == "apply") {
+			if(base == nil)
+				return "error: cannot determine the folder of these changes";
+			(nf, err) := cowfs->promote(base, overlay);
+			if(err != nil && agentlib->hasprefix(err, "not applied"))
+				return sys->sprint("applied %d file(s) to %s, but %s: those files were changed " +
+					"since, and these changes would undo that. Discard %d drops them.", nf, base, err, n);
+			if(err != nil)
+				return "error: " + err;
+			result = sys->sprint("applied %d file(s) to %s", nf, base);
+			updatedialogue(didx, "", sys->sprint("Applied (%d)", n), "");
+		} else {
+			err := cowfs->revert(overlay);
+			if(err != nil)
+				return "error: " + err;
+			result = "discarded the changes to " + base;
+			updatedialogue(didx, "", sys->sprint("Discarded (%d)", n), "");
+		}
+		sys->remove(overlay + "/.cowmeta");
+		sys->remove(overlay);
+	}
+	if(result == "")
+		return sys->sprint("no kept changes numbered %d", n);
+	kept = rest;
+	if(kept == nil)
+		keptnote = "";
+	return result;
+}
+
+keptlist(): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(kept == nil || cowfs == nil)
+		return "no changes kept from an earlier session";
+	out := "";
+	for(l := kept; l != nil; l = tl l) {
+		(k, overlay, nil) := hd l;
+		out += sys->sprint("%d:\n", k);
+		for(c := overlaychanges(cowfs, overlay); c != nil; c = tl c)
+			out += "  " + hd c + "\n";
+	}
+	return agentlib->strip(out) + "\n/kept apply <n> or /kept discard <n>";
+}
+
+# "Apply 2", "Discard 2": a kept change set's buttons.
+handlekeptchoice(input: string): int
+{
+	(n, words) := sys->tokenize(input, " ");
+	if(n != 2 || kept == nil)
+		return 0;
+	verb := hd words;
+	(k, rest) := str->toint(hd tl words, 10);
+	if(rest != "" || (verb != "Apply" && verb != "Discard"))
+		return 0;
+	writemsg("veltro", keptdo(str->tolower(verb), k));
+	return 1;
 }
 
 # --- The harness ---
@@ -1065,14 +1415,6 @@ configuresession(): (string, string)
 		else
 			ctl("brief " + substall(substall(BRIDGE_SUFFIX, "%AGENT%", agentname), "%OS%", osname));
 	} else {
-		modelname := agentlib->strip(agentlib->readfile(
-			sys->sprint("/tmp/veltro/tasks/model.%d", actid)));
-		if(modelname != "") {
-			if(ctl("model " + modelname) >= 0)
-				log("session model set to " + modelname);
-			else
-				log("session model write failed for " + modelname);
-		}
 		atype = agentlib->strip(agentlib->readfile(
 			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
 		role := "task";
@@ -1114,9 +1456,13 @@ configuresession(): (string, string)
 # --- One turn: the agent's files, rendered into the UI ---
 
 # Shared between the followers of one turn.
+laststop := "";		# how the last turn ended (veltrosrv's stop=)
 placeholder := -1;		# the ▌ bubble shown while the first reply is awaited
 placeholderused := 0;
 curstep := 0;
+stepoff := big 0;		# how far logstep has read the log this turn
+logcur := 0;			# the last step it found there
+step1chunks := -1;		# step 1's stream's chunks: -1 not done, -2 no stream
 
 # Follow text from offset until the session goes idle, rendering each
 # message as it arrives: the first reply of a turn fills the placeholder,
@@ -1203,12 +1549,65 @@ beginmessage(role, title: string): int
 {
 	if(role != "veltro")
 		return -1;
-	if(title != "say" && placeholder >= 0 && !placeholderused && curstep <= 1) {
+	if(title != "say" && placeholder >= 0 && !placeholderused && stepone()) {
 		placeholderused = 1;
 		return placeholder;
 	}
-	writemsg("veltro", "");
-	return convcount - 1;
+	return writemsg("veltro", "");
+}
+
+# Whether a veltro message just begun is step 1's reply, which takes
+# the placeholder, by the log as it is now.  logfollow's curstep can lag
+# the text: the agent logs "step 2: writing" before it asks the model
+# again, but a quick reply's text can be read before logfollow has read
+# that line.  Nor is the step now the message's: step 1's text can be
+# read after step 2 has begun.  What settles it is step 1's stream: a
+# veltro message is begun at a stream's first chunk, and the log says
+# how many chunks step 1's stream had once it is done.  Not done yet,
+# the message is step 1's; done with none, it is a later step's.
+# Without a stream (an llmsrv that has none) the step is all there is.
+# The log is read up to its length, as served, so the read does not wait.
+stepone(): int
+{
+	end := filelen(sess + "/log");
+	if(end > stepoff && (fd := sys->open(sess + "/log", Sys->OREAD)) != nil) {
+		b := array[int (end - stepoff)] of byte;
+		n := 0;
+		while(n < len b) {
+			m := sys->pread(fd, b[n:], len b - n, stepoff + big n);
+			if(m <= 0)
+				break;
+			n += m;
+		}
+		t := string b[0:n];
+		# whole lines only: the rest is read next time
+		for(last := len t; last > 0 && t[last-1] != '\n'; last--)
+			;
+		stepoff += big len array of byte t[0:last];
+		(nil, lines) := sys->tokenize(t[0:last], "\n");
+		for(l := lines; l != nil; l = tl l) {
+			line := hd l;
+			if(agentlib->hasprefix(line, "step ") && agentlib->contains(line, ": writing ")) {
+				(k, nil) := str->toint(line[5:], 10);
+				if(k > logcur)
+					logcur = k;
+			} else if(logcur == 1 && step1chunks < 0) {
+				if(agentlib->hasprefix(line, "stream: done ("))
+					(step1chunks, nil) = str->toint(line[len "stream: done (":], 10);
+				else if(agentlib->hasprefix(line, "stream: not available"))
+					step1chunks = -2;
+			}
+		}
+	}
+	case step1chunks {
+	-1 =>
+		return 1;
+	-2 =>
+		return curstep <= 1 && logcur <= 1;
+	0 =>
+		return 0;
+	}
+	return 1;
 }
 
 endmessage(role, title, body: string, idx: int)
@@ -1242,6 +1641,7 @@ logfollow(offset: big, done: chan of int)
 	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	curtool := "";
 	curpath := "";
+	s1chunks := -1;		# step 1's stream's chunks, once it is done
 	for(;;) {
 		n := sys->pread(fd, buf, len buf, offset);
 		if(n <= 0)
@@ -1254,15 +1654,23 @@ logfollow(offset: big, done: chan of int)
 				break;
 			partial = rest[1:];
 			log(line);
+			if(agentlib->hasprefix(line, "turn done stop=")) {
+				(st, nil) := str->splitl(line[len "turn done stop=":], " ");
+				laststop = st;
+			}
 			if(agentlib->hasprefix(line, "step ") && agentlib->contains(line, ": writing ")) {
 				(stepno, nil) := str->toint(line[5:], 10);
 				curstep = stepno;
 				# A tool-only first step leaves the placeholder empty:
-				# clear it rather than show a stale cursor.
-				if(curstep >= 2 && placeholder >= 0 && !placeholderused) {
+				# clear it rather than show a stale cursor.  One whose
+				# stream had text has it, or textfollow is about to put
+				# it there (stepone).
+				if(curstep >= 2 && placeholder >= 0 && !placeholderused && s1chunks <= 0) {
 					placeholderused = 1;
 					updateliveconvmsg(placeholder, "");
 				}
+			} else if(curstep == 1 && s1chunks < 0 && agentlib->hasprefix(line, "stream: done (")) {
+				(s1chunks, nil) = str->toint(line[len "stream: done (":], 10);
 			} else if(agentlib->hasprefix(line, "tool ")) {
 				(nm, rest2) := str->splitl(line[5:], ":");
 				nm = str->tolower(nm);
@@ -1315,6 +1723,13 @@ headlessdeny(): int
 	return ok >= 0;
 }
 
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
 # Answer the agent's requests for approval with a dialogue tile.
 approver(done: chan of int)
 {
@@ -1333,11 +1748,11 @@ approver(done: chan of int)
 			writefile(sess + "/approve", "deny " + callid + " headless");
 			continue;
 		}
-		didx := writedialogue("Permission required", rest, "", "Allow,Deny");
+		(tool, what) := str->splitl(rest, " ");
+		awaiting = 1;	# before the tile: a quick answer is the tile's
+		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
 		response := readuserinput();
-		answer := "allow";
-		if(response == "Deny" || response == "deny" || response == "no")
-			answer = "deny";
+		answer := approvalanswer(response);
 		writefile(sess + "/approve", answer + " " + callid);
 		if(didx >= 0) {
 			if(answer == "deny")
@@ -1374,13 +1789,18 @@ notifyparent()
 	if(report == "")
 		report = "(it gave no report)";
 
-	ev := TASKEVENT + sys->sprint("Task %d \"%s\" has finished its assignment (status: %s). " +
+	done := "has finished its assignment";
+	if(agentlib->hasprefix(status, "failed"))
+		done = "could not finish its assignment";
+	ev := TASKEVENT + sys->sprint("Task %d \"%s\" %s (status: %s). " +
 		"This is a notification from the harness, not a message from the user.\n\n" +
-		"Its report:\n%s\n", actid, label, status, report);
-	files := taskfiles();
+		"Its report:\n%s\n", actid, label, done, status, report);
+	files := taskartifacts() + stagedchanges() + taskfiles();
 	tail := "\nTell the user the outcome now, briefly: what was done, and the result " +
 		"(show it when it is short, or what the files hold). If the task asked a " +
-		"question, relay it: the user can answer in the task's own tab.";
+		"question, relay it: the user can answer in the task's own tab. If you " +
+		"have already told the user this outcome (they asked, and you looked), say " +
+		"nothing more about it than that it is done.";
 	# Fit one write: the files give way first, then the report.
 	room := TASKEVENT_MAX - len array of byte (ev + tail);
 	if(len array of byte files > room) {
@@ -1397,6 +1817,58 @@ notifyparent()
 		log("notified activity 0 of completion");
 }
 
+# What the task changed in the user's folders: staged in its overlay, not in
+# the folders, until promoted.  Said in the report, or the user was told a
+# file had been changed when it had not.
+stagedchanges(): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "";
+	changes: list of string;
+	for(ovs := myoverlays(); ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c)
+			changes = hd c :: changes;
+	if(changes == nil)
+		return "";
+	out := sys->sprint("\nIts changes to the user's files are STAGED, not yet in the files " +
+		"(\"task promote %d\" applies them once the user agrees; \"task revert %d\" " +
+		"discards them):\n", actid, actid);
+	for(changes = revl(changes); changes != nil; changes = tl changes)
+		out += "  " + hd changes + "\n";
+	return out;
+}
+
+# What the user is shown of an arrived message: who, what, a preview.
+msgnotice(ev: string): string
+{
+	out := "";
+	(nil, lines) := sys->tokenize(ev, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		if(agentlib->hasprefix(l, "From: ") || agentlib->hasprefix(l, "Subject: ") ||
+		   agentlib->hasprefix(l, "Preview: "))
+			out += l + "\n";
+	}
+	if(out == "")
+		out = "A message arrived.";
+	return agentlib->strip(out);
+}
+
+# What a task event says for the user: the event less its instructions to
+# the agent.
+eventreport(ev: string): string
+{
+	ev = ev[len TASKEVENT:];
+	(head, nil) := str->splitstrl(ev, "\nTell the user the outcome now");
+	(first, rest) := str->splitstrl(head, " This is a notification from the harness");
+	if(rest != nil) {
+		(nil, after) := str->splitstrl(rest, "\n");
+		head = first + after;
+	}
+	return agentlib->strip(head);
+}
+
 # s cut to at most n bytes, on a character boundary.
 clipbytes(s: string, n: int): string
 {
@@ -1409,6 +1881,18 @@ clipbytes(s: string, n: int): string
 }
 
 # The files a task left in its workspace, with what they hold (bounded).
+# stepN.txt: a tool result too long for the model, kept for it to read
+# (veltrosrv), not something the task made.
+spillfile(nm: string): int
+{
+	if(!agentlib->hasprefix(nm, "step") || len nm < 9 || nm[len nm - 4:] != ".txt")
+		return 0;
+	for(i := 4; i < len nm - 4; i++)
+		if(nm[i] < '0' || nm[i] > '9')
+			return 0;
+	return 1;
+}
+
 taskfiles(): string
 {
 	dir := sys->sprint("%s/%d", AgentLib->SCRATCH_PATH, actid);
@@ -1423,7 +1907,7 @@ taskfiles(): string
 			break;
 		for(i := 0; i < n; i++) {
 			nm := d[i].name;
-			if(nm == "" || nm[0] == '.' || (d[i].mode & Sys->DMDIR))
+			if(nm == "" || nm[0] == '.' || (d[i].mode & Sys->DMDIR) || spillfile(nm))
 				continue;
 			out += sys->sprint("\n--- %s/%s (%bd bytes; in the task's workspace) ---\n",
 				AgentLib->SCRATCH_PATH, nm, d[i].length);
@@ -1443,6 +1927,85 @@ taskfiles(): string
 	if(out == "")
 		return "";
 	return "\nFiles it wrote:" + out;
+}
+
+# The documents the task put in its presentation view: they are in its own
+# tab, not activity 0's.  Unsaid, activity 0 told the user a task's
+# document was "in the presentation zone" and offered to bring it forward
+# there, where it is not.
+taskartifacts(): string
+{
+	dir := sys->sprint("/mnt/ui/activity/%d/presentation", actid);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if(!(d[i].mode & Sys->DMDIR))
+				continue;
+			id := d[i].name;
+			label := agentlib->strip(agentlib->readfile(dir + "/" + id + "/label"));
+			typ := agentlib->strip(agentlib->readfile(dir + "/" + id + "/type"));
+			out += sys->sprint("  %s \"%s\" (%s)\n", id, label, typ);
+		}
+	}
+	if(out == "")
+		return "";
+	return sys->sprint("\nIt made these documents, shown in its own tab (task %d, \"%s\"), " +
+		"not in yours; the user opens that tab to read them:\n%s", actid,
+		agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/label", actid))), out);
+}
+
+# A task closed while it works stops working: its turn is cancelled, not
+# left to run on with no one to see it.  The close is luciuisrv's global
+# event "activity delete N"; the watcher blocks reading it.
+closewatch(turnover: chan of int)
+{
+	closed := chan of int;
+	pidc := chan of int;
+	spawn closereader(pidc, closed);
+	pid := <-pidc;
+	alt {
+	<-turnover =>
+		kill(pid);
+	<-closed =>
+		log("activity closed: cancelling the turn");
+		ctl("cancel");
+		<-turnover;
+	}
+}
+
+closereader(pidc: chan of int, closed: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	# Opened before the status is read, so a close between the two is
+	# still heard.
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
+	if(agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/status", actid))) == "hidden") {
+		closed <-= 1;
+		return;
+	}
+	if(fd == nil)
+		return;
+	want := sys->sprint("activity delete %d", actid);
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0) {
+		if(agentlib->strip(string buf[0:n]) == want) {
+			closed <-= 1;
+			return;
+		}
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
 filelen(path: string): big
@@ -1466,27 +2029,38 @@ agentturn(input: string)
 	placeholder = -1;
 	placeholderused = 0;
 	curstep = 0;
+	laststop = "";
 
 	# Where this turn starts in text and log: taken before the input is
 	# written, so a quick reply is not skipped.
 	textoff := filelen(sess + "/text");
 	logoff := filelen(sess + "/log");
+	stepoff = logoff;
+	logcur = 0;
+	step1chunks = -1;
 	if(writefile(sess + "/input", input) < 0) {
 		writemsg("veltro", sys->sprint("(the agent is unavailable: %r)"));
 		setstatus("idle");
 		return;
 	}
 	# Show activity at once: a cursor while the first reply is awaited.
-	placeholder = convcount;
-	writemsg("veltro", "▌");
+	placeholder = writemsg("veltro", "▌");
 
 	done := chan of int;
 	spawn textfollow(textoff, done);
 	spawn logfollow(logoff, done);
 	spawn approver(done);
-	<-done;
-	<-done;
-	<-done;
+	turnover := chan[1] of int;
+	if(actid > 0)
+		spawn closewatch(turnover);
+	for(ndone := 0; ndone < 3; ) alt {
+	<-done =>
+		ndone++;
+	m := <-inputc =>
+		turninput(m);
+	}
+	if(actid > 0)
+		turnover <-= 1;
 
 	if(placeholder >= 0 && !placeholderused)
 		updateliveconvmsg(placeholder, "");
@@ -1495,7 +2069,9 @@ agentturn(input: string)
 	# autonomous turn.  Once the user has sent a message, further
 	# completions don't raise urgency — the user is already engaged.
 	# "complete" tells the MA this TA finished its autonomous assignment.
-	if(actid > 0 && !userinteracted)
+	if(laststop == "llm-error" && actid > 0)
+		setstatus("failed: the model service could not be reached");
+	else if(actid > 0 && !userinteracted)
 		setstatus("complete");
 	else
 		setstatus("idle");
@@ -1646,6 +2222,12 @@ init(nil: ref Draw->Context, args: list of string)
 					"Common causes: an invalid key, blocked network access to api.anthropic.com, " +
 					"or a startup error logged at /tmp/lucibridge.log. " +
 					"Open Settings → LLM Service, then close InferNode and relaunch it.");
+			else if((backend == "cli" || backend == "codex") && onphone())
+				writemsg("veltro",
+					"The " + gatelabel(backend) + " is configured, but a phone has no host " +
+					"to run its gateway. Open Settings → LLM Service and choose Remote API, " +
+					"Local model or Remote (9P). " + phonecli() +
+					"Then close InferNode and relaunch it.");
 			else if(backend == "cli")
 				writemsg("veltro",
 					"The Claude CLI gateway is configured, but I can't reach it. " +
@@ -1676,9 +2258,13 @@ init(nil: ref Draw->Context, args: list of string)
 					pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
 					# Open directly on the LLM Service panel (INFR-100).
 					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-					sys->sleep(500);
 					writefile(pctl, "center id=settings");
 					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
+				} else if(agentlib->hasprefix(choice, TASKEVENT) || agentlib->hasprefix(choice, MSGEVENT)) {
+					# A task's report or an arrived message, not the user:
+					# there is no model to give it to, and saying so to each
+					# one only filled the chat with the same line.
+					continue;
 				} else {
 					# A typed message while the LLM is unreachable: echo it
 					# and explain, instead of silently eating it.
@@ -1689,7 +2275,7 @@ init(nil: ref Draw->Context, args: list of string)
 						"relaunch — or tap Open Settings above.");
 					continue;	# keep listening; don't park
 				}
-				for(;;) sys->sleep(60000);
+				<-chan of int;	# parked until quit and relaunch
 			}
 			fatal("/mnt/llm/ not mounted — LLM service unreachable");
 		}
@@ -1717,6 +2303,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# Offer guided tour on second launch (keys configured, not first boot)
 	if(actid == 0)
 		offertour();
+	if(actid == 0)
+		offerkept();
 
 	# Sync convcount with messages already in the conversation.
 	syncconvcount();
@@ -1752,8 +2340,6 @@ init(nil: ref Draw->Context, args: list of string)
 	# Register namespace entries (services, devices, filesystems) as resources
 	registernamespace();
 
-	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
-
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sess, maxsteps, convcount));
 
@@ -1766,6 +2352,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# This turn is NOT recorded with writemsg(), so it is invisible in the UI;
 	# only the agent's response is shown. Fires on brief OR instructions so an
 	# instructions-only task still auto-starts.
+	inputc = chan of string;
+	answerc = chan of string;
+	spawn inputreader();
+
 	if(taskbrief != "" || taskinstr != "") {
 		kickoff := "You have been started automatically to carry out an assigned task.";
 		if(taskbrief != "")
@@ -1781,23 +2371,30 @@ init(nil: ref Draw->Context, args: list of string)
 		notifyparent();
 	}
 
-	# Main loop: re-open input fd each iteration because 9P offset
-	# advances after read, causing subsequent reads to return EOF.
 	for(;;) {
-		inputfd := sys->open(inputpath, Sys->OREAD);
-		if(inputfd == nil)
-			fatal("cannot open " + inputpath);
-		human := blockread(inputfd);
-		inputfd = nil;
+		(human, shown) := nextinput();
 		if(human == nil) {
+			# The activity is closed: stop the agent and give back its
+			# model session, so nothing of it keeps running.
 			log("input closed");
+			ctl("cancel");
+			ctl("close");
 			break;
 		}
 		log("human: " + human);
 
 		# A task's report: a turn for the agent, not words from the human.
+		if(actid == 0 && agentlib->hasprefix(human, MSGEVENT)) {
+			writedialogue("New message", msgnotice(human), "", "");
+			agentturn(human);
+			continue;
+		}
 		if(actid == 0 && agentlib->hasprefix(human, TASKEVENT)) {
 			agentturn(human);
+			# The model could not take it: the outcome is the user's all
+			# the same, so it is shown as the task gave it.
+			if(laststop == "llm-error")
+				writedialogue("Task report", eventreport(human), "", "");
 			continue;
 		}
 
@@ -1809,16 +2406,20 @@ init(nil: ref Draw->Context, args: list of string)
 		# Tour dialogue button clicks (non-blocking — user can also just chat)
 		if(handletourchoice(human))
 			continue;
+		if(handlekeptchoice(human))
+			continue;
 
-		# Record human message in UI
-		writemsg("human", human);
+		# Record human message in UI (unless it was, as it came)
+		if(!shown)
+			writemsg("human", human);
 		# Revert "complete" → "idle" once the human engages this TA.
 		if(!userinteracted)
 			setstatus("idle");
 		userinteracted = 1;
 
-		# Run agent turn
-		agentturn(human);
+		# Run agent turn; the first is told of changes kept from before.
+		agentturn(keptnote + human);
+		keptnote = "";
 	}
 }
 

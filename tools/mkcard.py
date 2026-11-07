@@ -20,8 +20,9 @@
 #
 # Long names are always written for anything that is not already an
 # upper-case 8.3 name, which in an Inferno tree is everything: dossrv
-# reads the long entry, and the generated short alias (NAME~1.EXT) is
-# there because the format requires one.
+# reads the long entry. The short name beside it is the upper-cased
+# name when that is 8.3 (config.txt is CONFIG.TXT, which is all a Pi 3's
+# boot ROM can read) and a generated alias (NAME~1.EXT) otherwise.
 import os, struct, sys
 
 SEC = 512
@@ -90,12 +91,18 @@ def pack83(base, ext):
 
 def shortname(name, taken):
     """The 11-byte short name, unique in its directory, and whether long entries are needed."""
-    if is83(name):
-        base, _, ext = name.partition(".")
+    # A name that is 8.3 once upper-cased gets that as its short name,
+    # not a NAME~1 alias: a Pi 3's boot ROM reads only short names, and
+    # looks for BOOTCODE.BIN exactly (a card whose bootcode.bin was
+    # BOOTCO~1.BIN showed a steady red LED and nothing else). The long
+    # entry still carries the case, for dossrv and everyone else.
+    up = name.upper()
+    if is83(up):
+        base, _, ext = up.partition(".")
         s = pack83(base, ext)
         if s not in taken:
             taken.add(s)
-            return s, False
+            return s, up != name
     stem, dot, ext = name.rpartition(".")
     if not dot or not stem:
         stem, ext = name, ""

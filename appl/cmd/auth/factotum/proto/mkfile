@@ -19,9 +19,15 @@ SYSMODULES=\
 	draw.m\
 	bufio.m\
 	string.m\
+	auth9.m\
+	daytime.m\
+	encoding.m\
+	sexprs.m\
+	spki.m\
 
 MODULES=\
 	../authio.m\
+	keyreps.m\
 
 DISBIN=$ROOT/dis/auth/proto
 

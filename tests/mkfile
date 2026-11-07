@@ -11,12 +11,17 @@ TARG=\
 	gentmpl.dis\
 	originfs_test.dis\
 	9p_export_test.dis\
+	nmea_test.dis\
+	gdl90_test.dis\
+	gps_capability_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
 	auditsign_test.dis\
 	auditverify_test.dis\
 	alpha_test.dis\
 	i420_test.dis\
+	bayer_test.dis\
+	camsrv_test.dis\
 	agentlib_test.dis\
 	agentlib_mcp_test.dis\
 	agent_test.dis\
@@ -35,6 +40,7 @@ TARG=\
 	hostplumb_test.dis\
 	exception_test.dis\
 	fltfmt_test.dis\
+	nan_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\
@@ -51,6 +57,11 @@ TARG=\
 	edit_test.dis\
 	editor_test.dis\
 	example_test.dis\
+	kbdecode_test.dis\
+	osk_accuracy.dis\
+	keyboards_test.dis\
+	osk_fuzz.dis\
+	phone_fuzz.dis\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\
@@ -61,9 +72,12 @@ TARG=\
 	goroutine_leak_test.dis\
 	gpu_test.dis\
 	hello_test.dis\
+	appfs_fake.dis\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	icon_test.dis\
+	touchgest_test.dis\
 	docengine_test.dis\
 	pdfrender.dis\
 	pdftext_test.dis\
@@ -79,20 +93,35 @@ TARG=\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_real_test.dis\
+	realconv_test.dis\
 	jit_big_test.dis\
+	jit_byte_test.dis\
+	sysfuzz.dis\
+	jit_nilmod_test.dis\
+	jit_killcall_test.dis\
+	jit_builtinexc_test.dis\
+	ipint_release_test.dis\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
+	jit_small_helper.dis\
 	pool_nomem_helper.dis\
+	xenith_race_helper.dis\
+	xenith_fuzz.dis\
+	wmapp_fuzz.dis\
+	wm_frozen.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
+	jit_small_test.dis\
 	jit_test.dis\
 	js_engine_test.dis\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
 	llmclient_reqshape_test.dis\
+	llmclient_anthropic_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
+	ipint_expmod_test.dis\
 	mail_provision_test.dis\
 	lists_test.dis\
 	lucifer_flicker_test.dis\
@@ -110,19 +139,23 @@ TARG=\
 	lucitheme_test.dis\
 	rlayout_test.dis\
 	luciuisrv_test.dis\
+	grpwait_test.dis\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
 	pqauth_test.dis\
+	p9any_timeout_test.dis\
 	publicnet_test.dis\
 	interop_test.dis\
 	authneg_test.dis\
+	keyring_sweep_test.dis\
 	cipher_matrix_test.dis\
 	crypto_props_test.dis\
 	interrupt_test.dis\
 	concurrent_auth_test.dis\
 	handshake_fuzz_test.dis\
 	limbo_inline_test.dis\
+	limbo_fold_test.dis\
 	limbo_ldt_test.dis\
 	limbo_asgcall_test.dis\
 	refadt_zero_test.dis\
@@ -137,10 +170,13 @@ TARG=\
 	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
+	memdraw_far_test.dis\
+	strcat_test.dis\
 	string_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
 	textwidget_test.dis\
+	tk_entry_growth_test.dis\
 	tk_test.dis\
 	fractals_zoombox_test.dis\
 	tkimgrender.dis\
@@ -162,9 +198,17 @@ TARG=\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
+	tls_hrr_test.dis\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
+	styx_pack_test.dis\
+	ninep_pack_test.dis\
+	devprog_read_test.dis\
+	devprog_nslock_test.dis\
+	kill_deadserver_test.dis\
+	kill_uncalled_test.dis\
+	env_rclose_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_charon_security_test.dis\
@@ -174,6 +218,7 @@ TARG=\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
+	veltro_edit_test.dis\
 	pathmanage_test.dis\
 	tools9p_test.dis\
 	pres_launch_test.dis\
@@ -216,6 +261,7 @@ TARG=\
 	opus_test.dis\
 	keyringinst_test.dis\
 	wallet_capability_test.dis\
+	sdrdsp_test.dis\
 	secp256k1_test.dis\
 	ethcrypto_test.dis\
 	ethrpc_conv_test.dis\
@@ -234,14 +280,47 @@ TARG=\
 	gpu_smoke.dis\
 	llmclient_sse_fallback_test.dis\
 	llmclient_proxy_test.dis\
+	llmclient_pool_test.dis\
 	tlsclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\
 
-MODULES=
+MODULES=\
+	$ROOT/appl/mpeg/mpegio.m\
+	$ROOT/appl/xenith/asyncio.m\
+	$ROOT/appl/xenith/buff.m\
+	$ROOT/appl/xenith/col.m\
+	$ROOT/appl/xenith/dat.m\
+	$ROOT/appl/xenith/disk.m\
+	$ROOT/appl/xenith/docview.m\
+	$ROOT/appl/xenith/ecmd.m\
+	$ROOT/appl/xenith/edit.m\
+	$ROOT/appl/xenith/elog.m\
+	$ROOT/appl/xenith/exec.m\
+	$ROOT/appl/xenith/file.m\
+	$ROOT/appl/xenith/format.m\
+	$ROOT/appl/xenith/frame.m\
+	$ROOT/appl/xenith/fsys.m\
+	$ROOT/appl/xenith/graph.m\
+	$ROOT/appl/xenith/gui.m\
+	$ROOT/appl/xenith/look.m\
+	$ROOT/appl/xenith/regx.m\
+	$ROOT/appl/xenith/row.m\
+	$ROOT/appl/xenith/scrl.m\
+	$ROOT/appl/xenith/styxaux.m\
+	$ROOT/appl/xenith/text.m\
+	$ROOT/appl/xenith/time.m\
+	$ROOT/appl/xenith/util.m\
+	$ROOT/appl/xenith/wind.m\
+	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/cmd/auth/factotum/authio.m\
+	$ROOT/appl/xenith/xfid.m
 
 SYSMODULES=\
 	woff2.m\
+	touchgest.m\
+	kbdecode.m\
+	osklayout.m\
 	bidi.m\
 	brotli.m\
 	web/dom.m\
@@ -266,6 +345,7 @@ SYSMODULES=\
 	bufio.m\
 	daytime.m\
 	draw.m\
+	lucitheme.m\
 	git.m\
 	gpu.m\
 	json.m\
@@ -296,6 +376,7 @@ SYSMODULES=\
 	string.m\
 	sys.m\
 	testing.m\
+	nmea.m\
 	textwidget.m\
 	tk.m\
 	tls.m\
@@ -303,30 +384,122 @@ SYSMODULES=\
 	wpakey.m\
 	x509.m\
 	xml.m\
+	agentlib.m\
+	att.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	bthci.m\
+	btmock.m\
+	convcs.m\
+	dhcp.m\
+	dialnorm.m\
+	dis.m\
+	encoding.m\
+	ethcrypto.m\
+	ethrpc.m\
+	formatter.m\
+	hid.m\
+	i420.m\
+	bayer.m\
+	imagefile.m\
+	imgload.m\
+	keyringinst.m\
+	l2cap.m\
+	mailparse.m\
+	memfs.m\
+	msgsrc.m\
+	plumbmsg.m\
+	publicnet.m\
+	rand.m\
+	rfc3339.m\
+	rfcomm.m\
+	rlayout.m\
+	sdp.m\
+	secstore.m\
+	sheetview.m\
+	smp.m\
+	softkbd.m\
+	styx.m\
+	styxservers.m\
+	tool.m\
+	twofaslot.m\
+	url.m\
+	venti.m\
+	web/originfs.m\
+	wirefmt.m\
+	workdir.m\
+	x402.m\
+	icon.m\
+	appfs.m\
+	garminav.m\
+	gdl90.m\
+	keyboard.m\
+	wmclient.m\
+	auth9.m\
+	styxlib.m\
+	9p.m\
+	ipints.m\
+	sdrdsp.m\
 
 DISBIN=$ROOT/dis/tests
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
 
-# agentlib_test needs -I for appl/veltro/agentlib.m
-agentlib_test.dis: agentlib_test.b $ROOT/appl/veltro/agentlib.m
+# xenith_frame_test and its suite include Xenith's own interfaces
+# (../appl/xenith/*.m): built again when one of them changes. Left as
+# they were, they no longer loaded (link typecheck) after a change to
+# one, until the tests were built again from nothing
+XENITHM=\
+	$ROOT/appl/xenith/asyncio.m\
+	$ROOT/appl/xenith/buff.m\
+	$ROOT/appl/xenith/col.m\
+	$ROOT/appl/xenith/dat.m\
+	$ROOT/appl/xenith/disk.m\
+	$ROOT/appl/xenith/docview.m\
+	$ROOT/appl/xenith/ecmd.m\
+	$ROOT/appl/xenith/edit.m\
+	$ROOT/appl/xenith/elog.m\
+	$ROOT/appl/xenith/exec.m\
+	$ROOT/appl/xenith/file.m\
+	$ROOT/appl/xenith/format.m\
+	$ROOT/appl/xenith/frame.m\
+	$ROOT/appl/xenith/fsys.m\
+	$ROOT/appl/xenith/graph.m\
+	$ROOT/appl/xenith/gui.m\
+	$ROOT/appl/xenith/look.m\
+	$ROOT/appl/xenith/regx.m\
+	$ROOT/appl/xenith/row.m\
+	$ROOT/appl/xenith/scrl.m\
+	$ROOT/appl/xenith/styxaux.m\
+	$ROOT/appl/xenith/text.m\
+	$ROOT/appl/xenith/time.m\
+	$ROOT/appl/xenith/util.m\
+	$ROOT/appl/xenith/wind.m\
+	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/xenith/xfid.m\
+
+xenith_frame_test.dis xenith_framesuite.dis:	$XENITHM
+
+# agentlib_test needs -I for appl/veltro (tool.m)
+agentlib_test.dis: agentlib_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_test.b
 
 # agentlib_mcp_test exercises the shared MCP router in agentlib.m (INFR-247)
-agentlib_mcp_test.dis: agentlib_mcp_test.b $ROOT/appl/veltro/agentlib.m
+agentlib_mcp_test.dis: agentlib_mcp_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_mcp_test.b
 
-# tooluse_test needs -I for appl/veltro/agentlib.m
-tooluse_test.dis: tooluse_test.b $ROOT/appl/veltro/agentlib.m
+# tooluse_test needs -I for appl/veltro (tool.m)
+tooluse_test.dis: tooluse_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tooluse_test.b
 
-# tooldoc_test needs -I for appl/veltro/agentlib.m
-tooldoc_test.dis: tooldoc_test.b $ROOT/appl/veltro/agentlib.m
+# tooldoc_test needs -I for appl/veltro (tool.m)
+tooldoc_test.dis: tooldoc_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tooldoc_test.b
 
 # tool_schema_test (INFR-126) needs -I for appl/veltro/{agentlib,tool}.m
-tool_schema_test.dis: tool_schema_test.b $ROOT/appl/veltro/agentlib.m $ROOT/appl/veltro/tool.m
+tool_schema_test.dis: tool_schema_test.b $ROOT/module/agentlib.m $ROOT/appl/veltro/tool.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tool_schema_test.b
 
 # pres_launch_test uses nsconstruct.m (canonical copy in module/)

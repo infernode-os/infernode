@@ -32,6 +32,19 @@ fail() { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); }
 [[ -f "$ROOT/dis/tests/veltro_security_test.dis" ]] || { echo "SKIP: veltro_security_test.dis not found"; exit 77; }
 
 BAD_PRIV=(
+	"/chan"
+	"/chan/cons"
+	"/fd"
+	"/usr"
+	"/usr/inferno/keyring"
+	"/usr/inferno/secstore"
+	"/keyring/signer"
+	"/USR/INFERNO/KEYRING"
+	"/MNT/FACTOTUM"
+	"/TMP/VELTRO/COW"
+	"/mnt/toolctl.17"
+	"/tool.17"
+	"/MNT/TOOLCTL.17/CTL"
   "/mnt/ui"
   "/mnt/ui/activity/0/presentation"
   "/mnt/factotum"
@@ -53,15 +66,15 @@ BAD_PRIV=(
   "/mnt/wallet/alice/sign"
   "/n/wallet/alice/ctl"
   "/n/wallet/ctl"
-  "/tmp/veltro/ftree"
+  "/mnt/ftree"
   "/tmp/veltro/.ns"
   "/tmp/veltro/cow"
   "/tmp/veltro/tasks"
   "/tmp/veltro/browser"
-  "/tmp/veltro/editor"
-  "/tmp/veltro/shell"
-  "/tmp/veltro/fractal"
-  "/tmp/veltro/man"
+  "/mnt/editor"
+  "/mnt/shell"
+  "/mnt/fractal"
+  "/mnt/man"
   "/mnt/matrix"
   "/n/git"
   "/n/git/ctl"
@@ -103,6 +116,7 @@ BAD_INVALID=(
 
 GOOD=(
   "/tmp"
+	"/usr/inferno"
   "/tmp/veltro/scratch"
   "/mnt/msg"
   "/mnt/msg/draft"
@@ -184,7 +198,7 @@ for p in "${GOOD[@]}"; do
 done
 
 mkpaths() {
-    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /llm /mnt/audit /mnt/msg/ctl /mnt/wallet/alice/ctl /n/wallet/alice /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /n/git /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/keys/alice /mnt/keysrv /mnt/registry /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /llm/ctl /llm/status /mnt/audit/ctl /mnt/audit/chain /mnt/audit/log /mnt/audit/head /mnt/msg/ctl/session /mnt/wallet/alice/ctl/session /mnt/wallet/alice/sign /n/wallet/alice/ctl /n/wallet/ctl /tmp/veltro/ftree/ctl /mnt/matrix/ctl /n/git/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/keys/alice/secret /mnt/keysrv/secret /mnt/registry/new /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
+    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /llm /mnt/audit /mnt/msg/ctl /mnt/wallet/alice/ctl /n/wallet/alice /mnt/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /mnt/editor /mnt/shell /mnt/fractal /mnt/man /mnt/matrix /n/git /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/keys/alice /mnt/keysrv /mnt/registry /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /llm/ctl /llm/status /mnt/audit/ctl /mnt/audit/chain /mnt/audit/log /mnt/audit/head /mnt/msg/ctl/session /mnt/wallet/alice/ctl/session /mnt/wallet/alice/sign /n/wallet/alice/ctl /n/wallet/ctl /mnt/ftree/ctl /mnt/matrix/ctl /n/git/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/keys/alice/secret /mnt/keysrv/secret /mnt/registry/new /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
 }
 
 # Startup -p parsing is an ingress smoke test. The full bad corpus is checked
@@ -199,7 +213,7 @@ STARTUP_BAD=(
   "/mnt/ui"
   "/mnt/msg/ctl"
   "/mnt/wallet/alice/ctl"
-  "/tmp/veltro/ftree"
+  "/mnt/ftree"
   "/mnt/matrix"
   "/mnt/mail/accounts/alice/compose"
   "/"
@@ -278,6 +292,18 @@ if emu_c "nsconstruct-direct" 30 "/dis/tests/veltro_security_test.dis"; then
     fi
 else
     fail "nsconstruct direct policy test failed (output: $OUTPUT)"
+fi
+
+if emu_c "usr-credential-mask" 20 \
+    "mkdir -p /tmp/nshome/keyring /tmp/nshome/secstore; echo public > /tmp/nshome/public; echo secret > /tmp/nshome/keyring/default; echo secret > /tmp/nshome/secstore/state; bind /tmp/nshome /usr/inferno; tools9p -p /usr/inferno:ro read & sleep 3; echo /usr/inferno/public > /tool/read/run; sleep 1; echo PUBLIC; cat /tool/read/run; echo /usr/inferno/keyring/default > /tool/read/run; sleep 1; echo KEYRING; cat /tool/read/run; echo /usr/inferno/secstore/state > /tool/read/run; sleep 1; echo SECSTORE; cat /tool/read/run"; then
+    if echo "$OUTPUT" | grep -q 'public' &&
+       ! echo "$OUTPUT" | grep -q '^secret$'; then
+        pass "home grants retain public files but mask keyring and secstore"
+    else
+        fail "home grant exposed credentials or lost its public file (output: $OUTPUT)"
+    fi
+else
+    fail "home credential masking probe failed (output: $OUTPUT)"
 fi
 
 echo ""

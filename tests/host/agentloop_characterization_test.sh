@@ -2,9 +2,9 @@
 #
 # agentloop_characterization_test.sh — pin what the Veltro agent loops do.
 #
-# The agent loop is written out in veltro.b (agentloop) and lucibridge.b
-# (agentturn).  Before either is moved, this test records what each does
-# against a scripted model, and fails if that changes.  It runs the real
+# The agent loop is veltrosrv's; veltro and lucibridge are its clients.
+# This test records what it does, through each, against a scripted model,
+# and fails if that changes.  It runs the real
 # loops, the real llmsrv and llmclient, and the real tools: only the model
 # is scripted (agentloop/mock_openai.py), so the test sees exactly what each
 # loop sends back to the model after every tool call, and what it shows the
@@ -37,7 +37,8 @@ UPDATE=${UPDATE:-0}
 
 SCENARIOS="text_only single_read text_and_tool two_reads many_reads dup_read dup_in_batch
 big_output unknown_tool error_streak say write_then_read approval_deny
-approval_deny_json approval_headless read_write_read step_cap"
+approval_deny_json approval_headless read_write_read step_cap
+cut_call cut_text announce"
 [ $# -gt 0 ] && SCENARIOS="$*"
 
 TOOLS="read list write say"

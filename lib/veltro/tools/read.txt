@@ -1,13 +1,17 @@
 read - Read file contents
 
 Usage:
-  read <path>                  Read file (default: 100 lines max)
-  read <path> <offset>         Start from line offset
+  read <path>                  Read file (at most 2000 lines or 30000 bytes)
+  read <path> <offset>         Start after offset lines
   read <path> <offset> <limit> Read limit lines from offset
 
 Arguments:
   path   - File path to read
-  offset - Starting line (0-indexed, default: 0)
-  limit  - Max lines (default: 100, max: 1000)
+  offset - Lines to skip first (0 starts at line 1, 40 at line 41)
+  limit  - Max lines (default: 2000, max: 5000)
 
-Returns file contents with line numbers, or error message.
+Returns file contents with line numbers.  The numbers are not part of
+the file: leave them out of the text you give edit.  A read that stops
+before the end of the file ends with the offset to read from next:
+
+  [lines 1-2000 of 5400.  To read on, read again with offset 2000.]

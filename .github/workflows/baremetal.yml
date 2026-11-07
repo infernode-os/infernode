@@ -76,6 +76,11 @@ on:
       - 'tools/mkrootfs.py'
       - 'tools/mkcard.py'
       - 'tools/mkbootscr.py'
+      - 'tools/mkpiimage.sh'
+      - 'tools/piromcheck.py'
+      - 'tools/pi-firmware.sh'
+      - 'tools/pi-*manifest.txt'
+      - 'tests/host/piimage_boot_test.sh'
       - 'tests/host/qemu/**'
       - '.github/workflows/baremetal.yml'
   push:
@@ -85,6 +90,12 @@ on:
       - 'libinterp/**'
       - 'tests/host/baremetal_test.sh'
       - 'tests/host/baremetal_riscv64_test.sh'
+      - 'tools/mkcard.py'
+      - 'tools/mkpiimage.sh'
+      - 'tools/piromcheck.py'
+      - 'tools/pi-firmware.sh'
+      - 'tools/pi-*manifest.txt'
+      - 'tests/host/piimage_boot_test.sh'
       - '.github/workflows/baremetal.yml'
   workflow_dispatch:
 
@@ -274,6 +285,28 @@ jobs:
         [ "$passed" -ge "$LEAST" ] || { echo "::error::only $passed checks passed; $PLATFORM should manage at least $LEAST"; exit 1; }
         grep -qF -- "$LAST" "$log.plain" \
           || { echo "::error::the run never reached: $LAST"; exit 1; }
+
+    # The card a release ships for this board, made as release.yml makes
+    # it (the pinned firmware, downloaded and checked), read as the boot
+    # ROM reads it, and booted to the login screen off this job's kernel.
+    # What the harness's own cards cannot say: that the release's card,
+    # as a whole, is one a board boots. Each line of both was first
+    # learned on a board (tools/piromcheck.py, tests/host/piimage_boot_test.sh).
+    - name: Read the release's card as the boot ROM does, and boot it
+      if: matrix.platform == 'bcm2837' || matrix.platform == 'bcm2711'
+      run: |
+        set -e
+        case $PLATFORM in bcm2837) b=rpi3bplus ;; bcm2711) b=rpi4b ;; esac
+        k="$RUNNER_TEMP/bm/$PLATFORM-kernel.img" img="$RUNNER_TEMP/bm/$b-card.img"
+        sh tools/mkpiimage.sh "$b" "$k" "$img"
+        python3 tools/piromcheck.py "$b" "$img"
+        set +e
+        sh tests/host/piimage_boot_test.sh "$b" "$img" "$k" | tee "$RUNNER_TEMP/bm/$b-cardboot.txt"
+        st=${PIPESTATUS[0]}
+        set -e
+        rm -f "$img"
+        # 77 is a skip -- no QEMU with the machine -- and here that is a failure
+        [ "$st" = 0 ] || { echo "::error::the release's $b card did not boot as a board boots it (status $st)"; exit 1; }
 
     # What a failure needs to be understood: every boot's serial log,
     # the compiler's, and the screens as QEMU saw them. The kernel

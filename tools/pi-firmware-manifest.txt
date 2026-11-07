@@ -7,25 +7,42 @@
 # Every URL must name the commit; the tool refuses a manifest where one
 # file has floated to a different revision.
 #
-# WHY THESE FILES ARE NOT IN THE TREE
+# WHY THESE FILES ARE NOT IN THE TREE, AND ARE IN ONLY ONE RELEASE
 #
 # The .bin and .clm_blob are Cypress Semiconductor's, distributed under
 # the "CYPRESS WIRELESS CONNECTIVITY DEVICES DRIVER END USER LICENSE
-# AGREEMENT" (debian/copyright names it binary-redist-Cypress): object
-# form only, for use with Cypress integrated circuits only, no
-# derivative works.  That is not MIT and cannot be re-licensed by us, so
-# the blobs are never committed and never packed into a release
-# artefact.  They live on the card's FAT partition, where the driver
-# reads them from /n/dos/firmware, and this manifest plus the fetch tool
-# are the whole of what the tree carries.  .gitignore refuses the
-# filenames as a second guard.
+# AGREEMENT" (debian/copyright names it binary-redist-Cypress; its text
+# is os/bcm/card/LICENCE.cypress): reproduction and distribution in
+# object form, unmodified, "solely for use in connection with Cypress
+# integrated circuit products".
+#
+# Not in the tree: it is not MIT and cannot be re-licensed by us, and
+# whatever is placed in the tree's runtime directories goes into every
+# release (docs/DESIGN-PRINCIPLES.md, "Placement is shipping").  So the
+# blobs are never committed; .gitignore refuses the filenames as a
+# second guard, and this manifest plus the fetch tool are the whole of
+# what the tree carries.
+#
+# Not in the hosted releases -- the tarballs, the .app, the .zip: they
+# run on computers with no Cypress part, which is outside the licence's
+# purpose.
+#
+# In the Raspberry Pi card images (tools/mkpiimage.sh, release.yml's
+# raspberry-pi job), under firmware/ with LICENCE.cypress beside them:
+# a card for a Pi 3B+ or 4B is for a board whose radio IS the Cypress
+# CYW43455, which is the licence's purpose, as Raspberry Pi OS and
+# Debian ship them.  The driver reads them from /n/dos/firmware; a card
+# made by hand gets them from tools/pi-firmware.sh.  The radio's
+# Bluetooth patch, under the same licence from another repository, has
+# its own manifest (tools/pi-btfw-manifest.txt) and takes this road too.
 #
 # The NVRAM .txt is the board's radio calibration.  In linux-firmware
 # the same file (brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt)
 # is listed under "Licence: GPLv2" in WHENCE; in RPi-Distro's packaging
 # every debian/config/brcm80211/*/*43455* path is under the Cypress
-# stanza.  Either way it is not MIT, so it takes the same route: card
-# only.
+# stanza.  Either way it is not MIT, so it takes the same route as the
+# blobs; it is plain text, its own source, should GPLv2 be the licence
+# that applies.
 #
 # WHICH BUILD
 #

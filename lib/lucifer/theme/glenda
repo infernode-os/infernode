@@ -57,6 +57,8 @@ editstatus EAFFFF	# acme's tag
 editstattext 000000
 editscroll 99994C	# acme scroll bar: the body's BORD, DYellowgreen
 editthumb FFFFEA	# acme scroll thumb: the body's BACK
+editunfocused 666666	# rio's darkgrey: a window without the keyboard
+edithold 000099	# DMedblue: rio's hold-mode text
 
 # Diagrams, in Plan 9's palette
 diagbg FFFFEA
@@ -99,3 +101,17 @@ xenith-mod-but-0 000099		# DMedblue
 xenith-bord-col-0 000000	# display->black
 xenith-bord-row-0 000000
 xenith-bg-col-0 FFFFFF		# display->white
+
+# The keyboard on the screen (wm/osk): set in acme's tag. Its typing
+# keys stand out, white, and its own keys (shift, delete, the layers)
+# recede, in the tag's colour; what is pressed, and the word a space
+# would put in, are marked as acme marks what is selected in a body.
+osk-board 9EEEEE	# DPalegreygreen: acme's tag, selected
+osk-key FFFFFF		# a rio window
+osk-meta EAFFFF		# acme's tag: allocimagemix(DPalebluegreen, DWhite)
+osk-metatext 444444	# colour-map grey
+osk-press EEEE9E	# DDarkyellow: acme's selection in a body
+osk-presstext 000000
+osk-word 444444		# colour-map grey
+osk-auto 000000
+osk-autobg EEEE9E	# DDarkyellow

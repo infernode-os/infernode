@@ -66,11 +66,15 @@ include "nsconstruct.m";
 
 Tools9p: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
+	# A child task's tools9p, started by its parent's provisionrun: ready
+	# is sent "" once its first name space is made, or why it was not.
+	provisioned: fn(args: list of string, ready: chan of string);
 };
 
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
-	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable: con iota;
+	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable,
+	Qns, Qevent, Qview: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -132,6 +136,8 @@ ProvisionState: adt {
 provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifestgate: chan of int;  # Closed startup manifest phase before tool calls
+provready: chan of string;	# a provisioned child's parent, told when it is ready
+evpostc: chan of string;    # events posted by procs other than serveloop
 
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
@@ -165,6 +171,8 @@ TOOL_PATHS := array[] of {
 	# Web browsing
 	("browse",    "/dis/veltro/tools/browse.dis"),
 	("charon",    "/dis/veltro/tools/charon.dis"),
+	# Where this machine is (requires gpsfs at /mnt/gps; read only)
+	("gps",     "/dis/veltro/tools/gps.dis"),
 	# GPU inference (requires gpusrv mounted at /mnt/gpu)
 	("gpu",     "/dis/veltro/tools/gpu.dis"),
 	# Speech tools (require /mnt/speech via speech9p)
@@ -342,6 +350,7 @@ init(nil: ref Draw->Context, args: list of string)
 	cleanupchan = chan[32] of int;
 	taskcreatelock = chan[1] of int;
 	manifestgate = chan[1] of int;
+	evpostc = chan[4] of string;
 	cleanshadows();
 	spawn shadowcleanloop();
 
@@ -402,6 +411,12 @@ init(nil: ref Draw->Context, args: list of string)
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
 	spawn emitmanifestnow(manifestpath(mountpt), manifestgate);
+}
+
+provisioned(args: list of string, ready: chan of string)
+{
+	provready = ready;
+	init(nil, args);
 }
 
 # Look up tool path by name
@@ -682,6 +697,17 @@ splitpathperm(s: string): (string, string)
 	return (s, "rw");
 }
 
+# Paths every agent's namespace has, read-only (nsconstruct's infra list).
+baselinepath(p: string): int
+{
+	base := array[] of {"/lib/veltro", "/lib/certs", "/dis/veltro",
+		"/dev/time", "/dev/cons", "/dev/null"};
+	for(i := 0; i < len base; i++)
+		if(pathwithin(base[i], p))
+			return 1;
+	return 0;
+}
+
 pathwithin(grant, want: string): int
 {
 	if(grant == want)
@@ -729,13 +755,16 @@ childbudget(): list of string
 
 childpathallowed(path: string): int
 {
+	check := asciilower(path);
 	# Trusted control endpoints are never delegatable through child task
 	# provisioning. A broad parent grant such as /mnt/msg or /mnt/wallet may be
 	# intentionally attenuated by nsconstruct; it must not become lexical
 	# authority to mint hidden controller files in a child namespace.
-	if(privilegedcontrolpath(path))
+	if(privilegedcontrolpath(check))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 
 	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
@@ -751,21 +780,46 @@ childpathallowed(path: string): int
 		return 0;
 	}
 	for(ep := extpaths; ep != nil; ep = tl ep)
-		if(pathwithin(hd ep, path))
+		if(grantcovers(hd ep, path))
 			return 1;
 	for(bp := boundpaths; bp != nil; bp = tl bp)
-		if(pathwithin((hd bp).path, path))
+		if(grantcovers((hd bp).path, path))
 			return 1;
 	return 0;
 }
 
 bindpathallowed(path: string): int
 {
-	if(privilegedcontrolpath(path))
+	check := asciilower(path);
+	if(privilegedcontrolpath(check))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 	return 1;
+}
+
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientauthoritypath(path: string): int
+{
+	if(path == "/chan" || prefix(path, "/chan/") ||
+	   path == "/fd" || prefix(path, "/fd/"))
+		return 1;
+	if(path == "/usr")
+		return 1;
+	return (pathhascomponent(path, "keyring") || pathhascomponent(path, "secstore")) &&
+		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 path == "/secstore" || prefix(path, "/secstore/") ||
+		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
 }
 
 directmailsendpath(path: string): int
@@ -836,81 +890,36 @@ componentcount(path: string): int
 
 privilegedcontrolpath(path: string): int
 {
-	dangerous := array[] of {
-		"/tool/ctl",
-		"/mnt/toolctl",
-		"/mnt/toolctl/ctl",
-		"/mnt/factotum",
-		"/mnt/ui/ctl",
-		"/mnt/msg/ctl",
-		"/mnt/msg/pending",
-		"/mnt/msg/approve",
-		"/mnt/msg/deny",
-		"/mnt/wallet/ctl",
-		"/mnt/wallet/pending",
-		"/mnt/wallet/new",
-		"/n/wallet/ctl",
-		"/n/wallet/pending",
-		"/n/wallet/new",
-	};
-	for(i := 0; i < len dangerous; i++)
-		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
-			return 1;
-	if(walletaccountcontrolpath(path))
-		return 1;
-	if(ftreecontrolpath(path))
-		return 1;
-	if(tmpveltrointernalpath(path))
-		return 1;
-	if(appipccontrolpath(path))
-		return 1;
-	if(uiagentcontrolpath(path))
-		return 1;
-	if(llmctlcontrolpath(path))
-		return 1;
-	if(auditcontrolpath(path))
-		return 1;
-	if(calendarcontrolpath(path))
-		return 1;
-	if(fixedservicecontrolpath(path))
-		return 1;
-	return 0;
-}
-
-# Delegate to nsconstruct's single definition. A local copy of this
-# predicate drifted once already: nsconstruct learned that per-account
-# "sign" is privileged while this copy still allowed it, which would
-# have let an agent bind the raw signing oracle as a capability.
-walletaccountcontrolpath(path: string): int
-{
 	if(nsc == nil) {
 		nsc = load NsConstruct NsConstruct->PATH;
 		if(nsc == nil)
-			return 1;	# fail closed: cannot verify, so deny
+			return 1;
 		nsc->init();
 	}
-	return nsc->walletcontrolpath(path);
+	return nsc->privilegedcontrolpath(path, nil);
 }
 
-ftreecontrolpath(path: string): int
+grantcovers(grant, path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl file can bind and
-	# unmount in the user's GUI namespace, so it is never an agent grant.
-	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+	if(!pathwithin(grant, path))
+		return 0;
+	if(grant != path) {
+		if(nsc == nil) {
+			nsc = load NsConstruct NsConstruct->PATH;
+			if(nsc == nil)
+				return 0;
+			nsc->init();
+		}
+		if(nsc->policyroot(grant))
+			return 0;
+	}
+	# A lexical ancestor is not authority to invent a child the parent cannot
+	# currently name. This also preserves attenuation for non-policy roots.
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
 }
 
-tmpveltrointernalpath(path: string): int
-{
-	# Internal Veltro state roots are managed by trusted code. Exposing them as
-	# path grants lets an agent spoof manifests, tamper with COW overlays, or
-	# read/write task briefs outside the task tool's mediation.
-	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
-		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
-		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
-}
-
-# Mount the running browser's session at /mnt/charon in this (forked)
-# name space. No browser, no mount: the tool says charon is not running.
+# Mount the running browser's session at /mnt/charon in this forked namespace.
 mountcharon()
 {
 	fd := sys->open("#scharon/fs", Sys->ORDWR);
@@ -920,78 +929,25 @@ mountcharon()
 		sys->fprint(stderr, "tools9p: mount charon: %r\n");
 }
 
-appipccontrolpath(path: string): int
+# Mount a server posted in #s (post9p(2)) for this invocation: the
+# editor's, shell's, man's, fractals' and gpsfs's, for their tools.  None posted, no mount: the tool says
+# it is not running.
+mountposted(posted, mnt: string)
 {
-	# These real-file IPC trees are capabilities of their fixed-function tools,
-	# not generic path grants. A raw write/exec grant to them bypasses tool-level
-	# mediation and can drive GUI apps or browser navigation directly.
-	# /mnt/charon is the browser's served session (charonfs), mounted per
-	# charon invocation only.
-	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
-		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
-		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
-		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
-		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
-}
-
-uiagentcontrolpath(path: string): int
-{
-	# /mnt/ui is granted internally to fixed-function UI tools. A generic path
-	# grant would also hand write/exec every per-activity ctl file.
-	return path == "/mnt/ui" || prefix(path, "/mnt/ui/");
-}
-
-llmctlcontrolpath(path: string): int
-{
-	# /llm/ctl switches host LLM backends through llmctl9p. Keep that Settings
-	# control surface out of caller-supplied path grants.
-	return path == "/llm" || path == "/llm/ctl" || prefix(path, "/llm/ctl/");
-}
-
-auditcontrolpath(path: string): int
-{
-	# /mnt/audit/log is the append-only subject capability. A raw root or chain
-	# grant leaks log history; ctl can force signed checkpoints.
-	return path == "/mnt/audit" ||
-		path == "/mnt/audit/ctl" || prefix(path, "/mnt/audit/ctl/") ||
-		path == "/mnt/audit/chain" || prefix(path, "/mnt/audit/chain/");
-}
-
-calendarcontrolpath(path: string): int
-{
-	# Calendar depth grants may name exact read/query subtrees, but broad roots
-	# expose writable ctl files that configure accounts and CalDAV operations.
-	if(path == "/mnt/cal" || path == "/mnt/cal/ctl" || path == "/mnt/cal/accounts")
-		return 1;
-	if(prefix(path, "/mnt/cal/accounts/")) {
-		if(componentcount(path) <= 4)
-			return 1;
-		if(pathhascomponent(path, "ctl"))
-			return 1;
+	ensuredir(mnt);
+	fd := sys->open(posted, Sys->ORDWR);
+	if(fd == nil) {
+		# nothing posted: the srv directory, empty, over the mount
+		# point, so the tool sees no files there (not whatever an
+		# earlier run left in the host's directory) and says so
+		(dir, nil) := str->splitstrr(posted, "/");
+		if(dir != nil)
+			sys->bind(dir[0:len dir - 1], mnt, Sys->MREPL);
+		return;
 	}
-	return 0;
+	if(sys->mount(fd, nil, mnt, Sys->MREPL, nil) < 0)
+		sys->fprint(stderr, "tools9p: mount %s: %r\n", posted);
 }
-
-fixedservicecontrolpath(path: string): int
-{
-	return path == "/mnt/matrix" || prefix(path, "/mnt/matrix/") ||
-		path == "/mnt/wsys" || prefix(path, "/mnt/wsys/") ||
-		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
-		path == "/n/git" || prefix(path, "/n/git/") ||
-		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
-		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
-		path == "/n/web" || prefix(path, "/n/web/") ||
-		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
-		path == "/mnt/wikia" || prefix(path, "/mnt/wikia/") ||
-		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
-		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
-		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||
-		path == "/mnt/registry" || prefix(path, "/mnt/registry/") ||
-		path == "/mnt/video" || prefix(path, "/mnt/video/") ||
-		path == "/phone" || prefix(path, "/phone/");
-}
-
 pathperm(path: string): string
 {
 	if(path == "/tmp/veltro/scratch")
@@ -1381,6 +1337,14 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	# mount has to happen here, before NODEVS shuts device attachment off.
 	if(ti.name == "charon")
 		mountcharon();
+	case ti.name {
+	"editor" or "shell" or "man" or "fractal" =>
+		mountposted("#s" + ti.name + "/fs", "/mnt/" + ti.name);
+	"gps" =>
+		# gpsfs mounted where tools9p was started, or posted
+		if(sys->stat("/mnt/gps/position").t0 < 0)
+			mountposted("#sgps/fs", "/mnt/gps");
+	}
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
@@ -1679,14 +1643,26 @@ provisionparse(args: string): (int, string, list of string, string)
 			if(raw == "")
 				return (id, nil, nil, "empty path in paths=");
 			(ppath, pperm) := splitpathperm(raw);
+			# Validated before anything is skipped: a name with ".." in it
+			# within the scratch prefix was dropped as the scratch, not
+			# refused, and the request went through.
+			perr := validatepath(ppath);
+			if(perr != nil)
+				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
 			# Every task has its own workspace at /tmp/veltro/scratch
 			# already; asking for it is asking for what it has.  Refused,
 			# it cost a retry and left a dead activity behind.
 			if(pathwithin("/tmp/veltro/scratch", ppath))
 				continue;
-			perr := validatepath(ppath);
-			if(perr != nil)
-				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
+			# Nor to read what every agent reads already (its baseline:
+			# /lib/veltro, /lib/certs, /dis/veltro, the clock and console).
+			# Asked for, it was refused as outside this agent's grants.
+			# Write access to them is another matter, checked as any grant.
+			# (A grant names no permission more often than not, and that
+			# reads as rw: only an rw asked for is a request to write.)
+			explicitrw := len raw > 3 && (raw[len raw - 3:] == ":rw" || raw[len raw - 3:] == " rw");
+			if(!explicitrw && baselinepath(ppath))
+				continue;
 			if(!childpathallowed(ppath))
 				return (id, nil, nil, sys->sprint("denied path %s (outside this agent's grants)", ppath));
 			if(pathperm(ppath) == "ro")
@@ -1780,19 +1756,49 @@ provisionfail(id: int, mpt, reason: string): string
 
 runprovisionedagent(lb: ShCommand, id: int, lbargs: list of string)
 {
+	# The agent runs in a process of its own: it forks its namespace, and
+	# the unmount below must happen in this one, where the mount is.
+	done := chan of int;
+	spawn runlucibridge(lb, id, lbargs, done);
+	if(!<-done)
+		return;	# it failed: left as it was, its status says so
+	# The task's agent is done, its activity closed: its tool server goes
+	# too, unmounted here, its last reference.
+	setprovisionstate(id, "closed");
+	provisioncleanup("/tool." + string id);
+	if(verbose)
+		sys->fprint(stderr, "tools9p: activity %d closed\n", id);
+}
+
+runlucibridge(lb: ShCommand, id: int, lbargs: list of string, done: chan of int)
+{
 	{
 		lb->init(nil, lbargs);
 	} exception e {
 	"*" =>
 		provisionstatus(id, "failed: task agent exited");
 		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
+		done <-= 0;
+		return;
 	}
+	done <-= 1;
 }
 
 # Launch the validated child and publish a narrow lifecycle result only after
 # the namespace manifest exists. This keeps trusted readiness metadata out of
 # the task tool's namespace.
-provisionrun(id: int, mpt: string, rargs: list of string)
+# The write that asked for it is answered here, when the child is ready
+# or has failed: the task tool waits on its write, not on the state.
+provisionrun(srv: ref Styxserver, tag, n: int, id: int, mpt: string, rargs: list of string)
+{
+	err := provisionstart(id, mpt, rargs);
+	if(err != nil)
+		srv.reply(ref Rmsg.Error(tag, err));
+	else
+		srv.reply(ref Rmsg.Write(tag, n));
+}
+
+provisionstart(id: int, mpt: string, rargs: list of string): string
 {
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
 	mpath := manifestpath(mpt);
@@ -1802,54 +1808,39 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	# every earlier session's task 1 there, and reported them as its own.
 	removeshadowdir(sys->sprint("/tmp/veltro/scratch/%d", id));
 
-	t9p := load ShCommand "/dis/veltro/tools9p.dis";
+	t9p := load Tools9p "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load tools9p.dis: %r\n");
-		provisionfail(id, mpt, "cannot load tools9p");
-		return;
+		return provisionfail(id, mpt, "cannot load tools9p");
 	}
 	lb := load ShCommand "/dis/lucibridge.dis";
 	if(lb == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
-		provisionfail(id, mpt, "cannot load lucibridge");
-		return;
+		return provisionfail(id, mpt, "cannot load lucibridge");
 	}
-	spawn t9p->init(nil, rargs);
-
-	ctlpath := controlmount(mpt) + "/ctl";
-	ready := 0;
-	for(i := 0; i < 20; i++) {
-		sys->sleep(500);
-		(ok, nil) := sys->stat(ctlpath);
-		if(ok >= 0) {
-			ready = 1;
-			break;
-		}
+	# The child says when its tree is mounted and its name space made;
+	# one that fails says why, and one that hangs is given up on.
+	ready := chan[1] of string;
+	spawn childtools(t9p, rargs, ready);
+	tick := chan of int;
+	spawn provisiontimer(tick, 30*1000);
+	why: string;
+	alt {
+	why = <-ready =>
+		;
+	<-tick =>
+		why = "child did not finish namespace setup";
 	}
-	if(!ready) {
-		sys->fprint(stderr, "tools9p: provision: %s did not mount after 10s\n", mpt);
-		provisionfail(id, mpt, "child tool service did not mount");
-		return;
-	}
-
-	nsready := 0;
-	for(i = 0; i < 400; i++) {
-		(ok, nil) := sys->stat(mpath);
-		if(ok >= 0) {
-			nsready = 1;
-			break;
-		}
-		sys->sleep(50);
-	}
-	if(!nsready) {
-		sys->fprint(stderr, "tools9p: provision: activity %d did not finish namespace setup\n", id);
-		provisionfail(id, mpt, "child did not finish namespace setup");
-		return;
+	if(why == nil && sys->stat(mpath).t0 < 0)
+		why = "child did not finish namespace setup";
+	if(why != nil) {
+		sys->fprint(stderr, "tools9p: provision: activity %d: %s\n", id, why);
+		return provisionfail(id, mpt, why);
 	}
 
 	if(getprovisionstate(id) == "cancelled") {
 		provisioncleanup(mpt);
-		return;
+		return "provision failed: provisioning cancelled";
 	}
 	sys->fprint(stderr, "tools9p: provision: %s confined\n", mpt);
 	setprovisionstate(id, "ready");
@@ -1858,6 +1849,33 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	if(verbose)
 		lbargs = "lucibridge" :: "-v" :: "-a" :: string id :: "-s" :: nil;
 	spawn runprovisionedagent(lb, id, lbargs);
+	return nil;
+}
+
+provisionbg(id: int, mpt: string, rargs: list of string)
+{
+	provisionstart(id, mpt, rargs);
+}
+
+childtools(t9p: Tools9p, args: list of string, ready: chan of string)
+{
+	{
+		t9p->provisioned(args, ready);
+	} exception e {
+	"*" =>
+		ready <-= "child tool service did not start: " + e;
+	}
+}
+
+provisiontimer(tick: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	tick <-= 1 =>
+		;
+	* =>
+		;
+	}
 }
 
 # Return manifest file path for a given tools9p mount point.
@@ -1882,6 +1900,8 @@ emitmanifestnow(mpath: string, ready: chan of int)
 	nsconstruct := load NsConstruct NsConstruct->PATH;
 	if(nsconstruct == nil) {
 		ready <-= 1;
+		if(provready != nil)
+			provready <-= "cannot load nsconstruct";
 		return;
 	}
 	nsconstruct->init();
@@ -1909,17 +1929,23 @@ emitmanifestnow(mpath: string, ready: chan of int)
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	, nil);
 	{
+		mfd := nsconstruct->openmanifest(mpath);
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil)
 			sys->fprint(stderr, "tools9p: manifest restrictns failed: %s\n", nserr);
 		else {
-			nsconstruct->emitmanifest(caps, mpath);
+			nsconstruct->emitmanifest(caps, mfd);
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: manifest exception: %s\n", e);
 	}
 	ready <-= 1;
+	if(provready != nil)
+		provready <-= "";
+	# the first name space is made: a reader of event (lucictx) reads
+	# the manifest now rather than looking for it
+	evpostc <-= "paths";
 }
 
 # Apply namespace restriction to the current (already-forked) namespace.
@@ -2003,14 +2029,24 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	"charon" =>
 		return addpath(paths, "/mnt/charon");
 	"editor" =>
-		return addpath(paths, "/tmp/veltro/editor");
+		return addpath(paths, "/mnt/editor");
 	"shell" =>
-		return addpath(paths, "/tmp/veltro/shell");
+		return addpath(paths, "/mnt/shell");
 	"fractal" =>
-		return addpath(paths, "/tmp/veltro/fractal");
+		return addpath(paths, "/mnt/fractal");
 	"man" =>
-		return addpath(paths, "/tmp/veltro/man");
+		return addpath(paths, "/mnt/man");
+	"spawn" =>
+		# Each child's own model session, opened (/mnt/llm/new) before
+		# the child's namespace is narrowed; the child keeps only its
+		# open files.  Without it no child had a model, and every spawn
+		# failed "LLM returned empty response".
+		return addpath(paths, "/mnt/llm");
 	"limbo" =>
+		# The model it asks, and the compiler and interfaces its compile
+		# gate needs (without them the gate could not run).
+		paths = addpath(paths, "/dis/limbo.dis");
+		paths = addpath(paths, "/module");
 		return addpath(paths, "/mnt/llm");
 	}
 	return paths;
@@ -2030,7 +2066,17 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 	restricted := 0;
 
 Serve:
-	while((gm := <-tchan) != nil) {
+	for(;;) {
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			;
+		w := <-evpostc =>
+			postevent(srv, w);
+			continue;
+		}
+		if(gm == nil)
+			break;
 		# Wait for mount completion before allowing tool invocations.
 		# Restriction is applied per-invocation in asyncexec() so that
 		# paths bound after startup are always captured at call time.
@@ -2066,6 +2112,14 @@ Serve:
 
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
+			if(TYPE(c.path) == Qevent)
+				evfids = ref Evfid(m.fid, nil, nil) :: evfids;
+			if(TYPE(c.path) == Qview) {
+				v := ref View(m.fid, chan[32] of array of byte, chan[1] of ref Tmsg.Read,
+					chan[8] of int, chan[1] of int);
+				views = v :: views;
+				spawn viewproc(srv, v);
+			}
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
 
 		Read =>
@@ -2110,6 +2164,24 @@ Serve:
 
 			Qpaths =>
 				srv.reply(styxservers->readbytes(m, array of byte genpathlist()));
+
+			Qns =>
+				# Built once per open, at its first read, so a reader
+				# taking it in pieces sees one name space.  Building it
+				# walks /tool, which this loop serves: off the loop.
+				if(c.data == nil)
+					spawn nsview(srv, m, c);
+				else
+					srv.reply(styxservers->readbytes(m, c.data));
+
+			Qevent =>
+				evread(srv, m);
+
+			Qview =>
+				if((v := findview(m.fid)) != nil)
+					v.rc <-= m;
+				else
+					srv.reply(ref Rmsg.Error(m.tag, "view not open"));
 
 			Qbudget =>
 				srv.reply(styxservers->readbytes(m, array of byte genbudgetlist()));
@@ -2186,6 +2258,14 @@ Serve:
 				data = data[0:len data - 1];
 
 			case qtype {
+			Qview =>
+				# 9P messages for the agent's name space: to its proc
+				if((v := findview(m.fid)) != nil) {
+					v.wc <-= m.data;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				} else
+					srv.reply(ref Rmsg.Error(m.tag, "view not open"));
+
 			Qhelp =>
 				# Write tool name, store documentation globally
 				# (so a different fid's read sees it)
@@ -2202,11 +2282,14 @@ Serve:
 					cerr := ctladd(data[4:]);
 					if(cerr != nil)
 						srv.reply(ref Rmsg.Error(m.tag, cerr));
-					else
+					else {
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						postevent(srv, "tools");
+					}
 				} else if(len data > 7 && data[0:7] == "remove ") {
 					ctlremove(data[7:]);
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "tools");
 				} else if(len data > 9 && data[0:9] == "bindpath ") {
 					# "bindpath <path> [ro|rw]" — default perm is "rw"
 					rest := data[9:];
@@ -2230,6 +2313,7 @@ Serve:
 					else
 						boundpaths = ref BoundPath(bpath, bperm) :: boundpaths;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "paths");
 				} else if(len data > 11 && data[0:11] == "unbindpath ") {
 					p := data[11:];
 					perr := validatepath(p);
@@ -2243,6 +2327,7 @@ Serve:
 							nl = hd bl :: nl;
 					boundpaths = nl;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "paths");
 				} else if(len data > 8 && data[0:8] == "setperm ") {
 					# "setperm <path> <ro|rw>" — change perm on existing bound path
 					rest := data[8:];
@@ -2256,6 +2341,7 @@ Serve:
 					if(existing2 != nil) {
 						existing2.perm = sperm;
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						postevent(srv, "paths");
 					} else {
 						srv.reply(ref Rmsg.Error(m.tag, "path not bound: " + spath));
 					}
@@ -2268,6 +2354,7 @@ Serve:
 					if(!strlist_contains(budget, bname))
 						budget = bname :: budget;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "budget");
 				} else if(len data > 14 && data[0:14] == "budget-remove ") {
 					bname := data[14:];
 					nbl: list of string;
@@ -2276,6 +2363,7 @@ Serve:
 							nbl = hd bbl :: nbl;
 					budget = nbl;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "budget");
 				} else if(len data > 10 && data[0:10] == "provision ") {
 					# "provision <id> [tools=<csv>] [paths=<csv>]"
 					# Validate inline so a refused delegation fails THIS write
@@ -2288,7 +2376,9 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
 					} else {
 						setprovisionstate(pid0, "starting");
-						spawn provisionrun(pid0, pmpt, prargs);
+						# lucifer's loop writes this one: it is not kept
+						# waiting; the activity's status says how it went
+						spawn provisionbg(pid0, pmpt, prargs);
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					}
 				} else {
@@ -2317,8 +2407,7 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
 					} else {
 						setprovisionstate(qid0, "starting");
-						spawn provisionrun(qid0, qmpt, qrargs);
-						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						spawn provisionrun(srv, m.tag, len m.data, qid0, qmpt, qrargs);
 					}
 				}
 
@@ -2363,16 +2452,371 @@ Serve:
 				if(f != nil && (ti := findtoolbyqid(TYPE(f.path))) != nil)
 					spawn asyncexec(srv, ref Callreply(m.tag, 0, nil, 1), ti, nil, argstring(args));
 			}
+			evclunk(m.fid);
+			viewclunk(m.fid);
 			srv.clunk(m);
 
 		Remove =>
 			srv.remove(m);
+
+		Flush =>
+			evflush(m.oldtag);
+			for(vl := views; vl != nil; vl = tl vl)
+				alt {
+				(hd vl).fc <-= m.oldtag =>
+					;
+				* =>
+					;
+				}
+			srv.default(gm);
 
 		* =>
 			srv.default(gm);
 		}
 	}
 	navops <-= nil;  # shut down navigator
+}
+
+#
+# event: one word a line, 'tools', 'paths' or 'budget', when that list
+# changes through ctl.  Each open fid has its own queue, so a reader
+# misses nothing between its reads; a read with nothing queued waits.
+#
+Evfid: adt {
+	fid:	int;
+	q:	list of string;		# words not yet read, oldest first
+	rd:	ref Tmsg.Read;		# the read waiting, if any
+};
+evfids: list of ref Evfid;
+
+findevfid(fid: int): ref Evfid
+{
+	for(l := evfids; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+evread(srv: ref Styxserver, m: ref Tmsg.Read)
+{
+	e := findevfid(m.fid);
+	if(e == nil) {
+		srv.reply(ref Rmsg.Error(m.tag, "event not open"));
+		return;
+	}
+	if(e.q == nil) {
+		e.rd = m;
+		return;
+	}
+	evreply(srv, e, m);
+}
+
+evreply(srv: ref Styxserver, e: ref Evfid, m: ref Tmsg.Read)
+{
+	s := "";
+	for(l := e.q; l != nil; l = tl l)
+		s += hd l + "\n";
+	e.q = nil;
+	b := array of byte s;
+	if(len b > m.count)
+		b = b[0:m.count];
+	srv.reply(ref Rmsg.Read(m.tag, b));
+}
+
+postevent(srv: ref Styxserver, w: string)
+{
+	for(l := evfids; l != nil; l = tl l) {
+		e := hd l;
+		if(!strlist_contains(e.q, w))
+			e.q = appendstr(e.q, w);
+		if(e.rd != nil) {
+			m := e.rd;
+			e.rd = nil;
+			evreply(srv, e, m);
+		}
+	}
+}
+
+appendstr(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
+}
+
+evclunk(fid: int)
+{
+	nl: list of ref Evfid;
+	for(l := evfids; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			nl = hd l :: nl;
+	evfids = nl;
+}
+
+evflush(tag: int)
+{
+	for(l := evfids; l != nil; l = tl l)
+		if((hd l).rd != nil && (hd l).rd.tag == tag)
+			(hd l).rd = nil;
+}
+
+#
+# ns: the name space a tool call gets, as ns(1) prints it.  It is made
+# as a call's is (asyncexec), by applynsrestriction, for read: a tool
+# that adds no paths of its own, so what is in it is the grants every
+# call has.  (exec is given only the rw grants; a few tools add their
+# own, as charon adds /mnt/charon.)  The proc is gone after the read.
+#
+NSVIEWTOOL: con "read";
+
+nsview(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
+{
+	<-manifestgate;
+	manifestgate <-= 1;
+	mypid := sys->pctl(Sys->FORKNS, nil);
+	err := isolateenv();
+	if(err == nil && sys->pctl(Sys->NODEVS, nil) < 0)
+		err = sys->sprint("cannot disable device attachment: %r");
+	if(err == nil && mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0)
+		err = sys->sprint("cannot bind %s: %r", mountpt_g);
+	if(err == nil)
+		err = applynsrestriction(NSVIEWTOOL);
+	ns: string;
+	if(err == nil) {
+		ns = readfile(sys->sprint("/prog/%d/ns", mypid));
+		if(ns == nil)
+			err = sys->sprint("cannot read the name space: %r");
+	}
+	if(err != nil)
+		srv.reply(ref Rmsg.Error(m.tag, err));
+	else {
+		c.data = array of byte ns;
+		srv.reply(styxservers->readbytes(m, c.data));
+	}
+	cleanupchan <-= mypid;
+}
+
+#
+# view: the name space a tool call gets, served.  Opening it makes that
+# name space as nsview does, in a proc of its own, and exports its root
+# over a pipe; what is written to the file is 9P to that export and what
+# is read is its replies, so
+#	mount /mnt/toolctl/view /n/agent
+# shows the agent's world as it is.  It is read-only: a message that
+# would change a file (create, remove, wstat, write, an open for
+# writing) is answered here, with an error, and not passed on.  The
+# proc, and the name space, go with the fid.
+#
+View: adt {
+	fid:	int;
+	wc:	chan of array of byte;	# 9P from the client
+	rc:	chan of ref Tmsg.Read;	# the client's read for replies
+	fc:	chan of int;		# a flushed tag
+	done:	chan of int;		# the fid clunked
+};
+views: list of ref View;
+
+findview(fid: int): ref View
+{
+	for(l := views; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+viewclunk(fid: int)
+{
+	nl: list of ref View;
+	for(l := views; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			(hd l).done <-= 1;
+		else
+			nl = hd l :: nl;
+	views = nl;
+}
+
+viewproc(srv: ref Styxserver, v: ref View)
+{
+	<-manifestgate;
+	manifestgate <-= 1;
+	sys->pctl(Sys->NEWPGRP, nil);
+	mypid := sys->pctl(Sys->FORKNS, nil);
+	err := isolateenv();
+	if(err == nil && sys->pctl(Sys->NODEVS, nil) < 0)
+		err = sys->sprint("cannot disable device attachment: %r");
+	if(err == nil && mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0)
+		err = sys->sprint("cannot bind %s: %r", mountpt_g);
+	if(err == nil)
+		err = applynsrestriction(NSVIEWTOOL);
+	fds := array[2] of ref Sys->FD;
+	if(err == nil && sys->pipe(fds) < 0)
+		err = sys->sprint("pipe: %r");
+	if(err == nil && sys->export(fds[0], "/", Sys->EXPASYNC) < 0)
+		err = sys->sprint("export: %r");
+	inq := chan of array of byte;
+	if(err == nil) {
+		fds[0] = nil;
+		spawn viewpipe(fds[1], inq);
+	}
+
+	out: array of byte;	# whole replies not yet read
+	cin: array of byte;	# a message from the client not yet whole
+	xin: array of byte;	# a reply from the export not yet whole
+	rd: ref Tmsg.Read;
+	removes: list of (int, string);	# refused removes the export is clunking: tag, refusal
+	dead := err != nil;
+Loop:
+	for(;;) {
+		alt {
+		b := <-v.wc =>
+			if(dead)
+				break;
+			cin = catbytes(cin, b);
+			while(len cin > 0) {
+				(n, t) := Tmsg.unpack(cin);
+				if(n <= 0)
+					break;
+				if(t != nil && (e := viewrefuse(t)) != nil) {
+					pick m := t {
+					Remove =>
+						# A remove clunks its fid even when it fails
+						# (remove(5)), so the export must let the fid
+						# go as well: refused here and never passed on,
+						# the export kept it, and the client's next use
+						# of that number was "fid in use". It is passed
+						# on as a clunk, whose reply goes back as this
+						# refusal.
+						c := (ref Tmsg.Clunk(m.tag, m.fid)).pack();
+						if(sys->write(fds[1], c, len c) != len c) {
+							dead = 1;
+							if(err == nil)
+								err = sys->sprint("export: %r");
+						} else
+							removes = (m.tag, e) :: removes;
+					* =>
+						out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
+					}
+				} else if(sys->write(fds[1], cin[0:n], n) != n) {
+					dead = 1;
+					if(err == nil)
+						err = sys->sprint("export: %r");
+				}
+				cin = cin[n:];
+			}
+		m := <-v.rc =>
+			rd = m;
+		b := <-inq =>
+			if(b == nil)
+				dead = 1;
+			else {
+				# only whole replies join out, so one made here
+				# never lands inside one of the export's
+				xin = catbytes(xin, b);
+				while(len xin >= 4 && (n := msgsize(xin)) <= len xin) {
+					if(n < 7) {	# not 9P: give up on it
+						dead = 1;
+						break;
+					}
+					reply := xin[0:n];
+					if(removes != nil) {
+						(nil, r) := Rmsg.unpack(reply);
+						if(r != nil) {
+							e: string;
+							(removes, e) = takeremove(removes, r.tag);
+							if(e != nil)
+								reply = (ref Rmsg.Error(r.tag, e)).pack();
+						}
+					}
+					out = catbytes(out, reply);
+					xin = xin[n:];
+				}
+			}
+		tag := <-v.fc =>
+			if(rd != nil && rd.tag == tag)
+				rd = nil;
+		<-v.done =>
+			break Loop;
+		}
+		if(rd != nil && len out > 0) {
+			n := len out;
+			if(n > rd.count)
+				n = rd.count;
+			srv.reply(ref Rmsg.Read(rd.tag, out[0:n]));
+			out = out[n:];
+			rd = nil;
+		} else if(rd != nil && dead) {
+			if(err != nil)
+				srv.reply(ref Rmsg.Error(rd.tag, err));
+			else
+				srv.reply(ref Rmsg.Read(rd.tag, nil));
+			rd = nil;
+		}
+	}
+	cleanupchan <-= mypid;
+	# the pipe's reader and this proc: the export hangs up when they go
+	fd := sys->open(sys->sprint("/prog/%d/ctl", mypid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# The refusal a refused remove's reply carries, if tag is one, and the list without it.
+takeremove(l: list of (int, string), tag: int): (list of (int, string), string)
+{
+	r: list of (int, string);
+	e: string;
+	for(; l != nil; l = tl l) {
+		(t, s) := hd l;
+		if(t == tag && e == nil)
+			e = s;
+		else
+			r = hd l :: r;
+	}
+	return (r, e);
+}
+
+viewpipe(fd: ref Sys->FD, inq: chan of array of byte)
+{
+	buf := array[Styx->MAXRPC] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		inq <-= buf[0:n];
+	inq <-= nil;
+}
+
+# Why a message for the read-only view is refused, or nil to pass it on.
+viewrefuse(t: ref Tmsg): string
+{
+	ro := "the agent's name space is read-only here";
+	pick m := t {
+	Create =>
+		return ro;
+	Remove =>
+		return ro;
+	Wstat =>
+		return ro;
+	Write =>
+		return ro;
+	Open =>
+		# OREAD, or 3 (exec); not OWRITE, ORDWR, OTRUNC or ORCLOSE
+		if((m.mode & 3) == Sys->OWRITE || (m.mode & 3) == Sys->ORDWR || (m.mode & (Sys->OTRUNC|Sys->ORCLOSE)))
+			return ro;
+	}
+	return nil;
+}
+
+# the size a 9P message says it is, from its first four bytes
+msgsize(b: array of byte): int
+{
+	return int b[0] | int b[1]<<8 | int b[2]<<16 | int b[3]<<24;
+}
+
+catbytes(a, b: array of byte): array of byte
+{
+	if(len a == 0)
+		return b;
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
 }
 
 dir(qid: Sys->Qid, name: string, length: big, perm: int): ref Sys->Dir
@@ -2434,6 +2878,15 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "actid", big 0, 8r444), nil);
 	Qmetanodevs =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "nodevs", big 0, 8r444), nil);
+
+	Qns =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "ns", big 0, 8r444), nil);
+
+	Qevent =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "event", big 0, 8r444), nil);
+
+	Qview =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "view", big 0, 8r644), nil);
 	}
 
 	# Check if it's a tool directory or subfile
@@ -2491,6 +2944,12 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qactivity;
 				"meta" =>
 					n.path = big Qmeta;
+				"ns" =>
+					n.path = big Qns;
+				"event" =>
+					n.path = big Qevent;
+				"view" =>
+					n.path = big Qview;
 				"provision" =>
 					if(findtool("task") == nil) {
 						n.reply <-= (nil, Enotfound);
@@ -2625,16 +3084,34 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
-				if(findtool("task") != nil && i <= 9 && count > 0) {
+				# Entries 9 and 10: the name space a tool call gets, and
+				# changes to the lists (#1020)
+				if(i <= 9 && count > 0) {
+					n.reply <-= dirgen(big Qns);
+					count--;
+					i++;
+				}
+				if(i <= 10 && count > 0) {
+					n.reply <-= dirgen(big Qevent);
+					count--;
+					i++;
+				}
+				if(i <= 11 && count > 0) {
+					n.reply <-= dirgen(big Qview);
+					count--;
+					i++;
+				}
+
+				if(findtool("task") != nil && i <= 12 && count > 0) {
 					n.reply <-= dirgen(big Qprovision);
 					count--;
 					i++;
 				}
 
 				# Remaining entries: registered tool directories
-				baseoff := 9;
+				baseoff := 12;
 				if(findtool("task") != nil)
-					baseoff = 10;
+					baseoff = 13;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;

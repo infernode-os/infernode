@@ -438,6 +438,7 @@ extern int		cmap2rgb(int);
 extern int		cmap2rgba(int);
 extern void		icossin(int, int*, int*);
 extern void		icossin2(int, int, int*, int*);
+extern int		badrect(Rectangle);
 
 /*
  * Graphics
@@ -539,7 +540,7 @@ extern void	unlockdisplay(Display*);
 extern int		drawlsetrefresh(ulong, int, void*, void*);
 
 /* Compositing operator utility */
-extern void	_setdrawop(Display*, Drawop);
+extern uchar*	_bufimageop(Display*, int, Drawop);
 
 /*
  * Predefined 

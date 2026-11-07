@@ -23,9 +23,17 @@ implement Command;
 #            vendor protocol, which is Microsoft's signature.
 #   LAN78xx  the Pi 3B+'s actual LAN7515, which is a hub with an
 #            Ethernet function behind it and its own register protocol.
+#   ECM      CDC's Ethernet Control Model: a frame per bulk transfer,
+#            nothing around it. QEMU's usb-net offers it as a second
+#            configuration; many adapters and phones speak it.
+#   NCM      CDC's Network Control Model: frames gathered into NTBs.
+#            What a Linux gadget (the Jetson's) and newer adapters
+#            and phones offer, and the fastest of the standard ones.
 #
-# Neither is a superset of the other, so the family is chosen from the
-# descriptors rather than assumed.
+# None is a superset of another, so the family is chosen from the
+# descriptors rather than assumed: LAN78xx by its vendor's id, the
+# others by the interface class they declare, in whichever of the
+# device's configurations offers the best one (see chooseconfig).
 #
 
 include "sys.m";
@@ -84,6 +92,33 @@ Oidfilter:	con 16r0001010E;	# OID_GEN_CURRENT_PACKET_FILTER
 Filterdefault:	con 16r0000000D;
 
 Maxctl:		con 1024;
+
+#
+# CDC: the class codes and requests ECM and NCM are spoken with.
+#
+Clcomm:		con 2;		# interface class: communications
+Clwireless:	con 16rE0;	# ...wireless controller (RNDIS's other guise)
+Sacm:		con 2;		# subclass: abstract control model
+Secm:		con 6;		# ...Ethernet control model
+Sncm:		con 13;		# ...network control model
+Prndis:		con 255;	# ACM with Microsoft's vendor protocol: RNDIS
+Dstring:	con 3;		# descriptor type: string
+Diface:		con 4;		# ...interface
+Dendpoint:	con 5;		# ...endpoint
+Dcsiface:	con 16r24;	# ...class-specific interface (CDC functional)
+Funion:		con 6;		# functional descriptor: union (control + data)
+Fether:		con 16r0F;	# ...Ethernet networking (the MAC's string)
+Rsetiface:	con 11;		# SET_INTERFACE
+Rsetfilter:	con 16r43;	# SET_ETHERNET_PACKET_FILTER
+Rgetntb:	con 16r80;	# NCM: GET_NTB_PARAMETERS
+Rsetntbin:	con 16r86;	# NCM: SET_NTB_INPUT_SIZE
+Pfdirected:	con 1<<2;	# packet filter: frames to our address
+Pfbcast:	con 1<<3;	# ...broadcast
+Pfallmulti:	con 1<<1;	# ...every multicast (IPv6's neighbour discovery needs some)
+Ecmburst:	con 2048;	# what one ECM transfer may carry: a frame, and room
+Ncmrxmax:	con 16*1024;	# the largest NTB asked for: a TCP window of frames
+Ncmtxmax:	con 32*1024;	# and the largest sent, whatever the device allows
+Byclass:	con -2;		# a family's vid: chosen by interface class, never by id
 
 #
 # LAN78xx -- the Microchip family behind the Pi 3B+'s LAN7515, which
@@ -276,6 +311,35 @@ Family: adt {
 families: array of Family;
 family: Family;
 
+#
+# Where the chosen function lives in its configuration. ctlif is the
+# interface class requests go to (the control interface; 0 for the
+# id-chosen families, as it always was), dataif the one carrying the
+# bulk endpoints in setting dataalt (-1: the configuration's first bulk
+# pair, as before), macidx the string holding an ECM or NCM device's MAC.
+#
+ctlif := 0;
+dataif := -1;
+dataalt := 0;
+macidx := 0;
+bulkmp := 0;			# the bulk endpoints' packet size
+
+# NCM's GET_NTB_PARAMETERS answer, what the kernel's framing works to
+ntbinmax := Ncmrxmax;
+ntboutmax := 2048;
+ndpdiv := 4;
+ndprem := 0;
+ndpalign := 4;
+ndpmaxdg := 0;
+
+#
+# The #l instance this device's data path went to and where it is
+# served. 0 unless something already has it -- a Pi 4's GENET, a
+# virtio card, another adapter -- and then a spare (devether.c).
+#
+netinst := 0;
+netdir := "/net/ether0";
+
 mac := array[6] of byte;
 bulkfd: ref Sys->FD;		# bulk IN
 bulkoutfd: ref Sys->FD;		# bulk OUT; the same fd when one endpoint serves both
@@ -335,7 +399,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	families = array[] of {
-		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap),
+		Family("rndis", Byclass, 0, rndissetup, rndiswrap, rndisunwrap),
+		Family("ecm", Byclass, 0, ecmsetup, ecmwrap, ecmunwrap),
+		Family("ncm", Byclass, 0, ncmsetup, ncmwrap, ncmunwrap),
 		#
 		# Microchip. -1 matches any product because the 3B+ carries a
 		# LAN7515 while the family covers 7800 and 7850 too, and
@@ -352,15 +418,36 @@ init(nil: ref Draw->Context, argv: list of string)
 	# rather than driven with the wrong protocol -- which on a NIC
 	# means a link that comes up and silently carries nothing.
 	#
-	(vid, pid) := devid();
+	(vid, pid, ncfg) := devid();
 	found := 0;
 	for(i := 0; i < len families; i++)
-		if((families[i].vid < 0 || families[i].vid == vid) &&
+		if(families[i].vid != Byclass &&
+		   (families[i].vid < 0 || families[i].vid == vid) &&
 		   (families[i].pid < 0 || families[i].pid == pid)){
 			family = families[i];
 			found = 1;
 			break;
 		}
+	cfg: array of byte;
+	if(!found){
+		#
+		# Not one we know by name: what its configurations say
+		# they are. A device may offer several -- QEMU's usb-net
+		# is RNDIS in its first and ECM in its second -- and the
+		# best is taken: NCM, then ECM, then RNDIS. That is
+		# Linux's choice too (usb_choose_configuration passes
+		# over RNDIS when there is another), and for the same
+		# reasons: the two CDC models are open standards, NCM
+		# batches frames, and RNDIS is Microsoft's.
+		#
+		fname: string;
+		(fname, cfg) = chooseconfig(ncfg);
+		for(i = 0; fname != nil && i < len families; i++)
+			if(families[i].name == fname){
+				family = families[i];
+				found = 1;
+			}
+	}
 	if(!found){
 		sys->print("etherusb: %s is %#4.4x:%#4.4x, no driver family\n",
 			dev, vid, pid);
@@ -378,7 +465,11 @@ init(nil: ref Draw->Context, argv: list of string)
 	# have. The device kept the configuration it already had and the
 	# only symptom was a line saying so.
 	#
-	cfgval := configvalue();
+	cfgval: int;
+	if(cfg != nil)
+		cfgval = int cfg[5];
+	else
+		cfgval = configvalue();
 	if(cfgval < 0)
 		return;
 	if(ctlout(Rh2d, Rsetconf, cfgval, 0, nil) < 0){
@@ -403,11 +494,13 @@ init(nil: ref Draw->Context, argv: list of string)
 	# is already a pair of pipes, and asking for two on the same
 	# number is rejected as already in use.
 	#
-	cfg := confdesc();
+	if(cfg == nil)
+		cfg = confdesc(0);
 	if(cfg == nil)
 		return;
 	dumpendpoints(cfg);
-	(inep, outep, mp) := bulkeps(cfg);
+	(inep, outep, mp) := bulkeps(cfg, dataif, dataalt);
+	bulkmp = mp;
 	if(inep < 0 || outep < 0){
 		sys->print("etherusb: no pair of bulk endpoints\n");
 		return;
@@ -584,39 +677,85 @@ init(nil: ref Draw->Context, argv: list of string)
 		bulkfd = nil;
 		bulkoutfd = nil;
 		burst := 3116;			# two RNDIS messages' worth
-		if(family.name == "lan78xx")
+		extra := "";
+		case family.name {
+		"lan78xx" =>
 			burst = Rxburst;
+		"ecm" =>
+			burst = Ecmburst;
+			extra = sys->sprint(" maxpkt=%d", bulkmp);
+		"ncm" =>
+			burst = ntbinmax;
+			extra = sys->sprint(" maxpkt=%d txmax=%d div=%d rem=%d align=%d maxdgrams=%d",
+				bulkmp, ntboutmax, ndpdiv, ndprem, ndpalign, ndpmaxdg);
+		}
 		macstr := sys->sprint("%2.2x%2.2x%2.2x%2.2x%2.2x%2.2x",
 			int mac[0], int mac[1], int mac[2],
 			int mac[3], int mac[4], int mac[5]);
 		inpath := "/usb/usb/" + inname + "/data";
 		outpath := "/usb/usb/" + outname + "/data";
-		cfd := sys->open("#l/ether0/clone", Sys->ORDWR);
-		if(cfd == nil){
-			sys->print("etherusb: cannot open #l clone: %r\n");
-			return;
-		}
-		if(sys->fprint(cfd, "bind %s %s %d %d %s %s",
-		    family.name, macstr, phymbps, burst, inpath, outpath) < 0){
-			sys->print("etherusb: kernel bind failed: %r\n");
-			return;
-		}
-		cfd = nil;
+		bindmsg := sys->sprint("bind %s %s %d %d %s %s%s",
+		    family.name, macstr, phymbps, burst, inpath, outpath, extra);
 		#
-		# Bind the kernel interface EXACTLY over the mount-point
-		# stub. The compiled-in root carries an empty /net/ether0
-		# as a place to put it, and a union bind of #l
-		# after /net leaves that stub in front: the walk finds the
-		# empty directory, not the netif behind it, and everything
-		# downstream reports "clone does not exist" about a tree
-		# that is entirely present. Replacing the stub itself has
-		# no order to get wrong.
+		# The first instance that takes it. ether0 is the USB
+		# path's on a board whose Ethernet is USB (the 3B+), and
+		# taken on one whose Ethernet is a kernel driver (a Pi 4's
+		# GENET, virt's virtio card) -- which refuses a bind "in
+		# use", as does an instance another adapter already has.
+		# Then the spares. 1 is the radio's and never a USB path.
 		#
-		if(sys->bind("#l/ether0", "/net/ether0", Sys->MREPL) < 0){
-			sys->print("etherusb: cannot bind #l/ether0: %r\n");
+		netinst = -1;
+		for(il := 0 :: 2 :: 3 :: nil; il != nil; il = tl il){
+			spec := "#l";
+			if(hd il != 0)
+				spec += string hd il;
+			cfd := sys->open(sys->sprint("%s/ether%d/clone", spec, hd il), Sys->ORDWR);
+			if(cfd == nil)
+				continue;	# no such instance in this kernel
+			if(sys->fprint(cfd, "%s", bindmsg) >= 0){
+				netinst = hd il;
+				break;
+			}
+			if(!isinuse()){
+				sys->print("etherusb: kernel bind failed: %r\n");
+				return;
+			}
+		}
+		if(netinst < 0){
+			sys->print("etherusb: every #l instance is in use; nothing will move this device's frames\n");
 			return;
 		}
-		sys->print("etherusb: serving /net/ether0 (kernel data path)\n");
+		netdir = sys->sprint("/net/ether%d", netinst);
+		if(netinst == 0){
+			#
+			# Bind the kernel interface EXACTLY over the
+			# mount-point stub. The compiled-in root carries
+			# an empty /net/ether0 as a place to put it, and a
+			# union bind of #l after /net leaves that stub in
+			# front: the walk finds the empty directory, not
+			# the netif behind it, and everything downstream
+			# reports "clone does not exist" about a tree that
+			# is entirely present. Replacing the stub itself
+			# has no order to get wrong.
+			#
+			if(sys->bind("#l/ether0", "/net/ether0", Sys->MREPL) < 0){
+				sys->print("etherusb: cannot bind #l/ether0: %r\n");
+				return;
+			}
+		}else{
+			#
+			# A spare has no stub, so it joins /net the way the
+			# radio's ether1 does: after it, in the union. Once:
+			# a device plugged in again finds its instance
+			# there already.
+			#
+			(ok, nil) := sys->stat(netdir + "/clone");
+			if(ok < 0 && sys->bind(sys->sprint("#l%d", netinst), "/net", Sys->MAFTER) < 0){
+				sys->print("etherusb: cannot bind #l%d: %r\n", netinst);
+				return;
+			}
+		}
+		sys->print("etherusb: serving %s (kernel data path)\n", netdir);
 		#
 		# The same interface configuration the 9P path runs from
 		# mountproc: bind the ipifc, speak DHCP, install routes.
@@ -692,12 +831,12 @@ confshape(d: array of byte): int
 	return 1;
 }
 
-confdesc(): array of byte
+confdesc(index: int): array of byte
 {
 	hdr := array[9] of byte;
 	n := 0;
 	for(try := 0; try < Confretries; try++){
-		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr)) == len hdr){
+		if((n = ctlin(Rd2h, Rgetdesc, (Dconf << 8) | index, 0, hdr)) == len hdr){
 			if(int hdr[0] == 9 && int hdr[1] == Dconf)
 				break;
 			sys->print("etherusb: configuration descriptor header is not one: %s\n", descbytes(hdr));
@@ -716,7 +855,7 @@ confdesc(): array of byte
 	}
 	cfg := array[total] of byte;
 	for(try = 0; try < Confretries; try++){
-		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg)) == total){
+		if((n = ctlin(Rd2h, Rgetdesc, (Dconf << 8) | index, 0, cfg)) == total){
 			if(confshape(cfg))
 				return cfg;
 			sys->print("etherusb: configuration descriptor of %d bytes is not one: %s\n", total, descbytes(cfg));
@@ -775,17 +914,25 @@ dumpendpoints(cfg: array of byte)
 # Walked rather than indexed: a configuration is a run of
 # variable-length descriptors packed end to end, each "length, type".
 #
-bulkeps(cfg: array of byte): (int, int, int)
+# With iface >= 0, only the endpoints of that interface in that setting.
+# A composite device -- the Jetson's gadget is RNDIS, NCM, a serial
+# port and a disk in one configuration -- has several bulk pairs, and
+# the first is not necessarily the chosen function's.
+#
+bulkeps(cfg: array of byte, iface, setting: int): (int, int, int)
 {
 	total := len cfg;
 	inep := -1;
 	outep := -1;
 	mp := -1;
+	mine := iface < 0;
 	for(i := 0; i + 2 <= total; ){
 		dlen := int cfg[i];
 		if(dlen < 2)
 			break;
-		if(int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2){
+		if(iface >= 0 && int cfg[i+1] == Diface && i + 4 <= total)
+			mine = int cfg[i+2] == iface && int cfg[i+3] == setting;
+		if(mine && int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2){
 			addr := int cfg[i+2];
 			sz := int cfg[i+4] | (int cfg[i+5] << 8);
 			if(addr & 16r80){
@@ -912,7 +1059,7 @@ netconfig()
 	# interfaces on one wire and the live one is not the one routes
 	# point at.
 	#
-	unbindstale("/net/ether0");
+	unbindstale(netdir + " ");
 
 	ifc := sys->open("/net/ipifc/clone", Sys->ORDWR);
 	if(ifc == nil){
@@ -928,7 +1075,7 @@ netconfig()
 	}
 	ifcno := string nbuf[0:n];
 
-	if(sys->fprint(ifc, "bind ether /net/ether0") < 0){
+	if(sys->fprint(ifc, "bind ether %s", netdir) < 0){
 		sys->print("etherusb: bind ether failed: %r\n");
 		return;
 	}
@@ -952,10 +1099,35 @@ netconfig()
 	if(!nocarrier && linkstate() == 0)
 		nocarrier = 1;
 	if(nocarrier){
-		sys->print("etherusb: no carrier; leaving /net/ether0 unconfigured until a link comes up\n");
+		sys->print("etherusb: no carrier; leaving %s unconfigured until a link comes up\n", netdir);
 		return;
 	}
 	ifcup(1, ifcno);
+}
+
+#
+# Is there a default route already (0.0.0.0, mask nothing)? Read as
+# os/ip prints it: target, mask, gateway, one route a line.
+#
+hasdefault(): int
+{
+	fd := sys->open("/net/iproute", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8192] of byte;
+	s := "";
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		s += string buf[0:n];
+	(nil, lines) := sys->tokenize(s, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf < 3 || hd f != "0.0.0.0")
+			continue;
+		m := hd tl f;
+		if(m == "/96" || m == "/0" || m == "0.0.0.0")
+			return 1;
+	}
+	return 0;
 }
 
 #
@@ -968,14 +1140,49 @@ netconfig()
 ifcup(first: int, ifcno: string): int
 {
 	ifc := ipifc;
-	if(sys->fprint(ifc, "add 0.0.0.0 0.0.0.0") < 0){
+	#
+	# Port 68 first, and only then the null address: while this
+	# interface waits its turn behind another's exchange it must not
+	# hold an address. The null address with a null mask is a route
+	# to everywhere, and an adapter on a spare instance holding one
+	# took the machine's own traffic for as long as it waited (virt,
+	# virtio-net's pings unanswered behind a usb-net's DHCP). A spare
+	# asks with a narrow mask: os/ip accepts every packet for an
+	# interface with the null address whatever its mask, and
+	# broadcasts from it still leave by it, but nothing else is routed
+	# its way. ether0 keeps the null mask it has always used.
+	#
+	# 255.0.0.0, not a host mask. 255.255.255.255 was the first try
+	# and carried nothing: os/ip makes an interface with an all-ones
+	# mask point-to-point, sends everything to its "peer" -- here
+	# 0.0.0.0 -- and the DISCOVERs sat behind an ARP for 0.0.0.0 that
+	# nothing answers (a packet capture of the adapter's network held
+	# that ARP and nothing else). 0.0.0.0/8 is an ordinary broadcast
+	# interface whose route covers only addresses nobody uses.
+	#
+	(dc, dconv) := dhcpconn();
+	if(dc == nil)
+		return -1;
+	nullmask := "0.0.0.0";
+	if(netinst != 0)
+		nullmask = "255.0.0.0";
+	if(sys->fprint(ifc, "add 0.0.0.0 %s", nullmask) < 0){
 		sys->print("etherusb: add 0.0.0.0 failed: %r\n");
 		return -1;
 	}
-	(addr, mask, gw) := dhcp();
+	(addr, mask, gw) := dhcp(dc, dconv);
+	dc = nil;	# port 68 is the next interface's now
 	if(addr == nil){
-		if(!first){
-			sys->fprint(ifc, "remove 0.0.0.0 0.0.0.0");
+		#
+		# QEMU's addresses are a guess about ether0 under QEMU
+		# and nothing else: an adapter on a spare instance that
+		# was not answered is left unconfigured, not given an
+		# address that may well be another interface's.
+		#
+		if(!first || netinst != 0){
+			sys->fprint(ifc, "remove 0.0.0.0 %s", nullmask);
+			if(netinst != 0)
+				sys->print("etherusb: no DHCP answer on %s; left unconfigured\n", netdir);
 			return -1;
 		}
 		sys->print("etherusb: no DHCP answer; falling back to QEMU's addresses\n");
@@ -984,7 +1191,7 @@ ifcup(first: int, ifcno: string): int
 		gw = "10.0.2.2";
 	}
 
-	sys->fprint(ifc, "remove 0.0.0.0 0.0.0.0");
+	sys->fprint(ifc, "remove 0.0.0.0 %s", nullmask);
 	if(sys->fprint(ifc, "add %s %s", addr, mask) < 0){
 		sys->print("etherusb: add address failed: %r\n");
 		return -1;
@@ -992,6 +1199,21 @@ ifcup(first: int, ifcno: string): int
 	ipaddr = addr;
 	ipmask = mask;
 	sys->print("etherusb: %s mask %s on ipifc %s\n", addr, mask, ifcno);
+
+	#
+	# An adapter on a spare instance is a second interface: the
+	# machine's own (GENET, the radio, the first adapter) keeps the
+	# default route and the name servers, and this one adds its
+	# subnet. Plugging a phone or a gadget into a Pi 4 must not
+	# take the board off its own network. With no default route
+	# anywhere, it is the only way out and takes it.
+	#
+	if(netinst != 0 && gw != "" && hasdefault()){
+		sys->print("etherusb: %s: the default route stays where it is; %s is reached here\n",
+			netdir, gw);
+		pingout(gw);
+		return 0;
+	}
 	writendb(addr, mask, gw);
 
 	if(gw != ""){
@@ -1119,22 +1341,22 @@ linkwatch(ifcno: string)
 ours(n: string): int
 {
 	st := readfile("/net/ipifc/" + n + "/status");
-	want := "device /net/ether0 ";
+	want := "device " + netdir + " ";
 	return len st >= len want && st[0:len want] == want;
 }
 
 # "link: 1" in the kernel driver's netif stats
 niflink(): int
 {
-	st := readfile("/net/ether0/stats");
+	st := readfile(netdir + "/stats");
 	if(st == nil){
-		sys->werrstr("no /net/ether0/stats");
+		sys->werrstr("no " + netdir + "/stats");
 		return -1;
 	}
 	for(i := 0; i + 6 < len st; i++)
 		if((i == 0 || st[i-1] == '\n') && st[i:i+6] == "link: ")
 			return st[i+6] == '1';
-	sys->werrstr("no link line in /net/ether0/stats");
+	sys->werrstr("no link line in " + netdir + "/stats");
 	return -1;
 }
 
@@ -1147,7 +1369,7 @@ ifcdown()
 	if(sys->fprint(ipifc, "remove %s %s", ipaddr, ipmask) < 0)
 		sys->print("etherusb: link down; removing %s failed: %r\n", ipaddr);
 	else
-		sys->print("etherusb: link down; %s removed from /net/ether0\n", ipaddr);
+		sys->print("etherusb: link down; %s removed from %s\n", ipaddr, netdir);
 	ipaddr = ipmask = nil;
 }
 
@@ -1184,6 +1406,12 @@ linkstate(): int
 			return 1;
 		return 0;
 	}
+	#
+	# ECM and NCM report the link with notifications on their
+	# interrupt endpoint, which this driver does not read: so far
+	# their devices have been a host's gadget and an adapter whose
+	# cable is the thing plugged in. Nothing to watch, said once.
+	#
 	sys->werrstr("no link state for " + family.name);
 	return -1;
 }
@@ -1404,24 +1632,54 @@ revstr(l: list of string): list of string
 	return r;
 }
 
-dhcp(): (string, string, string)
+#
+# A UDP conversation announced on port 68, the client's, with headers.
+# nil if there is none to be had.
+#
+dhcpconn(): (ref Sys->FD, string)
 {
-	c := sys->open("/net/udp/clone", Sys->ORDWR);
-	if(c == nil){
-		sys->print("etherusb: cannot clone udp: %r\n");
-		return (nil, nil, nil);
+	#
+	# One DHCP client at a time has port 68, and two interfaces
+	# coming up together -- a Pi 4's GENET and a USB adapter, or the
+	# radio -- each run one. The second waits its turn rather than
+	# giving up, which at boot meant an interface left unconfigured
+	# (or, on ether0, given QEMU's addresses) because the other was
+	# mid-exchange. Each try is a new conversation: one whose
+	# announce failed is left announcing in devip, and refuses every
+	# later announce as "connection in use" -- which is how the first
+	# cut of this waited out its whole limit behind a port that had
+	# been free for a minute.
+	#
+	for(wait := 0; ; wait++){
+		c := sys->open("/net/udp/clone", Sys->ORDWR);
+		if(c == nil){
+			sys->print("etherusb: cannot clone udp: %r\n");
+			return (nil, nil);
+		}
+		nbuf := array[32] of byte;
+		nn := sys->read(c, nbuf, len nbuf);
+		if(nn <= 0)
+			return (nil, nil);
+		conv := string nbuf[0:nn];
+		if(sys->fprint(c, "headers") < 0){
+			sys->print("etherusb: udp setup failed: %r\n");
+			return (nil, nil);
+		}
+		if(sys->fprint(c, "announce 68") >= 0)
+			return (c, conv);
+		if(!isinuse() || wait >= 180){
+			sys->print("etherusb: udp setup failed: %r\n");
+			return (nil, nil);
+		}
+		if(wait == 0)
+			sys->print("etherusb: %s: another DHCP client has port 68; waiting\n", netdir);
+		c = nil;
+		sys->sleep(1000);
 	}
-	nbuf := array[32] of byte;
-	nn := sys->read(c, nbuf, len nbuf);
-	if(nn <= 0)
-		return (nil, nil, nil);
-	conv := string nbuf[0:nn];
+}
 
-	if(sys->fprint(c, "headers") < 0 ||
-	   sys->fprint(c, "announce 68") < 0){
-		sys->print("etherusb: udp setup failed: %r\n");
-		return (nil, nil, nil);
-	}
+dhcp(c: ref Sys->FD, conv: string): (string, string, string)
+{
 
 	d := sys->open("/net/udp/" + conv + "/data", Sys->ORDWR);
 	if(d == nil){
@@ -1819,7 +2077,7 @@ ctlin(rtype, req, value, index: int, data: array of byte): int
 #
 rndis(msg: array of byte, reply: array of byte): int
 {
-	if(ctlout(Rh2d|Rclass|Riface, Rsendenc, 0, 0, msg) < 0)
+	if(ctlout(Rh2d|Rclass|Riface, Rsendenc, 0, ctlif, msg) < 0)
 		return -1;
 
 	#
@@ -1829,7 +2087,7 @@ rndis(msg: array of byte, reply: array of byte): int
 	# flight, fetching it directly is correct and saves opening the
 	# interrupt endpoint at all.
 	#
-	return ctlin(Rd2h|Rclass|Riface, Rgetenc, 0, 0, reply);
+	return ctlin(Rd2h|Rclass|Riface, Rgetenc, 0, ctlif, reply);
 }
 
 rndisinit(): int
@@ -2068,14 +2326,319 @@ rndisunwrap(buf: array of byte, n, nil: int): (int, array of byte)
 # than passed down, so this program does not depend on whoever started
 # it having got the identity right.
 #
-devid(): (int, int)
+devid(): (int, int, int)
 {
 	desc := array[18] of byte;
 
 	if(ctlin(Rd2h, Rgetdesc, Ddev << 8, 0, desc) < len desc)
-		return (-1, -1);
+		return (-1, -1, 0);
 	return (int desc[8] | (int desc[9] << 8),
-		int desc[10] | (int desc[11] << 8));
+		int desc[10] | (int desc[11] << 8), int desc[17]);
+}
+
+#
+# The CDC Ethernet functions a configuration offers: for each, its
+# family, control and data interfaces, and the MAC's string index. A
+# composite device can offer several in one configuration (the
+# Jetson's gadget has RNDIS and NCM side by side). The class-specific
+# descriptors that follow a control interface say which data
+# interface is its partner (the union) and where the MAC is (Ethernet
+# networking); without a union the data interface is taken to be the
+# next one, which is how every device seen so far numbers them.
+#
+Cdcfn: adt {
+	fam:	string;
+	ctlif:	int;
+	dataif:	int;
+	macidx:	int;
+};
+
+cdcfunctions(cfg: array of byte): list of ref Cdcfn
+{
+	fns: list of ref Cdcfn;
+	cur: ref Cdcfn;
+	for(i := 0; i + 2 <= len cfg; ){
+		dlen := int cfg[i];
+		if(dlen < 2 || i + dlen > len cfg)
+			break;
+		case int cfg[i+1] {
+		Diface =>
+			if(dlen < 9)
+				break;
+			cur = nil;
+			(c, sc, pr) := (int cfg[i+5], int cfg[i+6], int cfg[i+7]);
+			f: string;
+			if(c == Clcomm && sc == Sncm)
+				f = "ncm";
+			else if(c == Clcomm && sc == Secm)
+				f = "ecm";
+			else if(c == Clcomm && sc == Sacm && pr == Prndis ||
+				c == Clwireless && sc == 1 && pr == 3)
+				f = "rndis";
+			if(f != nil && int cfg[i+3] == 0){
+				cur = ref Cdcfn(f, int cfg[i+2], -1, 0);
+				fns = cur :: fns;
+			}
+		Dcsiface =>
+			if(cur == nil || dlen < 3)
+				break;
+			case int cfg[i+2] {
+			Funion =>
+				if(dlen >= 5)
+					cur.dataif = int cfg[i+4];
+			Fether =>
+				if(dlen >= 4)
+					cur.macidx = int cfg[i+3];
+			}
+		}
+		i += dlen;
+	}
+	for(l := fns; l != nil; l = tl l)
+		if((hd l).dataif < 0)
+			(hd l).dataif = (hd l).ctlif + 1;
+	return fns;
+}
+
+#
+# Which configuration, and which family in it. Every configuration
+# the device has is read and the best function taken (NCM, ECM,
+# RNDIS); "etherusb=ecm" (or ncm, rndis) in the kernel's arguments
+# puts that one first, which is how the harness keeps RNDIS tested on
+# a QEMU usb-net that offers ECM as well. Sets ctlif, dataif, dataalt
+# and macidx for the setup to come. (nil, nil) if no configuration
+# has one.
+#
+chooseconfig(ncfg: int): (string, array of byte)
+{
+	want := "";
+	ba := readfile("/dev/bootargs");
+	if(ba != nil){
+		(nil, w) := sys->tokenize(ba, " \t\n");
+		for(; w != nil; w = tl w)
+			if(len hd w > 9 && (hd w)[0:9] == "etherusb=")
+				want = (hd w)[9:];
+	}
+	if(ncfg < 1)
+		ncfg = 1;
+	if(ncfg > 8)
+		ncfg = 8;
+	best := -1;
+	bestfam: string;
+	bestcfg: array of byte;
+	for(k := 0; k < ncfg; k++){
+		cfg := confdesc(k);
+		if(cfg == nil)
+			continue;
+		for(fl := cdcfunctions(cfg); fl != nil; fl = tl fl){
+			cf := hd fl;
+			rank := 0;
+			case cf.fam {
+			"ncm" =>	rank = 3;
+			"ecm" =>	rank = 2;
+			"rndis" =>	rank = 1;
+			}
+			if(cf.fam == want)
+				rank = 10;
+			sys->print("etherusb: %s configuration %d offers %s (interfaces %d, %d)\n",
+				dev, int cfg[5], cf.fam, cf.ctlif, cf.dataif);
+			#
+			# >= within a configuration, whose list is in
+			# reverse, so the first function of a rank wins
+			# there; > across them, so the first
+			# configuration does.
+			#
+			if(rank > best || rank == best && cfg == bestcfg){
+				best = rank;
+				bestfam = cf.fam;
+				bestcfg = cfg;
+				ctlif = cf.ctlif;
+				dataif = cf.dataif;
+				macidx = cf.macidx;
+			}
+		}
+	}
+	#
+	# RNDIS's data interface has its endpoints in its only setting;
+	# ECM's and NCM's have none in setting 0, which is what keeps a
+	# host that has not set the device up from receiving frames, and
+	# the pair in setting 1.
+	#
+	dataalt = 0;
+	if(bestfam == "ecm" || bestfam == "ncm")
+		dataalt = 1;
+	return (bestfam, bestcfg);
+}
+
+#
+# The ECM and NCM families.
+#
+# Both are CDC: a control interface that takes class requests and a
+# data interface whose setting 1 has the bulk pair. Setting 0 has no
+# endpoints and is where the device waits, so the last step of either
+# setup is SET_INTERFACE to 1 -- the device's signal that the host is
+# ready for frames (a Linux gadget brings its link up on it).
+#
+# The MAC is a string descriptor: twelve hex digits, in UTF-16. It is
+# the address the device's end of the link uses, and the frames this
+# side sends carry it, as Linux's cdc_ether does.
+#
+cdcmac(): int
+{
+	if(macidx == 0){
+		sys->werrstr("no iMACAddress in the Ethernet functional descriptor");
+		return -1;
+	}
+	d := array[2 + 2*12] of byte;
+	n := ctlin(Rd2h, Rgetdesc, (Dstring << 8) | macidx, 16r0409, d);
+	if(n < len d || int d[1] != Dstring){
+		sys->werrstr(sys->sprint("MAC string %d: %d bytes", macidx, n));
+		return -1;
+	}
+	for(i := 0; i < 6; i++){
+		hi := hexval(int d[2 + 4*i]);
+		lo := hexval(int d[2 + 4*i + 2]);
+		if(hi < 0 || lo < 0){
+			sys->werrstr("MAC string is not hex");
+			return -1;
+		}
+		mac[i] = byte (hi*16 + lo);
+	}
+	return 0;
+}
+
+cdcfilter()
+{
+	#
+	# Optional in both models: a device that refuses it delivers
+	# what it was going to anyway, which for a point-to-point
+	# gadget is everything. Said, not fatal.
+	#
+	if(ctlout(Rh2d|Rclass|Riface, Rsetfilter, Pfdirected|Pfbcast|Pfallmulti, ctlif, nil) < 0)
+		sys->print("etherusb: %s: packet filter refused: %r\n", dev);
+}
+
+setalt(setting: int): int
+{
+	if(ctlout(Rh2d|Riface, Rsetiface, setting, dataif, nil) < 0){
+		sys->print("etherusb: SET_INTERFACE %d on interface %d failed: %r\n", setting, dataif);
+		return -1;
+	}
+	return 0;
+}
+
+ecmsetup(): int
+{
+	if(cdcmac() < 0){
+		sys->print("etherusb: cannot read the MAC address: %r\n");
+		return -1;
+	}
+	if(setalt(0) < 0 || setalt(1) < 0)
+		return -1;
+	cdcfilter();
+	return 0;
+}
+
+ecmwrap(frame: array of byte): array of byte
+{
+	return frame;
+}
+
+ecmunwrap(buf: array of byte, n, nil: int): (int, array of byte)
+{
+	if(n < 14)
+		return (n, nil);
+	frame := array[n] of byte;
+	frame[0:] = buf[0:n];
+	return (n, frame);
+}
+
+#
+# NCM. GET_NTB_PARAMETERS says how big an NTB each way may be and
+# where in one a datagram may start; those numbers go to the kernel,
+# whose framing packs to them. The device's IN size is asked down to
+# Ncmrxmax when it offers more, since that is the read the kernel
+# posts. The parameters are read in setting 0, as the spec has it,
+# before the data interface is brought up.
+#
+ncmsetup(): int
+{
+	if(cdcmac() < 0){
+		sys->print("etherusb: cannot read the MAC address: %r\n");
+		return -1;
+	}
+	if(setalt(0) < 0)
+		return -1;
+	p := array[28] of byte;
+	if(ctlin(Rd2h|Rclass|Riface, Rgetntb, 0, ctlif, p) < len p){
+		sys->print("etherusb: GET_NTB_PARAMETERS failed: %r\n");
+		return -1;
+	}
+	if((int p[2] & 1) == 0){
+		sys->print("etherusb: %s does not do 16-bit NTBs\n", dev);
+		return -1;
+	}
+	inmax := int get4(p, 4);
+	ntboutmax = int get4(p, 16);
+	ndpdiv = int p[20] | (int p[21] << 8);
+	ndprem = int p[22] | (int p[23] << 8);
+	ndpalign = int p[24] | (int p[25] << 8);
+	ndpmaxdg = int p[26] | (int p[27] << 8);
+	if(ndpdiv < 1)
+		ndpdiv = 4;
+	if(ndprem >= ndpdiv)
+		ndprem %= ndpdiv;
+	if(ndpalign < 4 || (ndpalign & (ndpalign - 1)) != 0)
+		ndpalign = 4;
+	if(ntboutmax > Ncmtxmax)
+		ntboutmax = Ncmtxmax;
+	ntbinmax = inmax;
+	if(inmax > Ncmrxmax || inmax <= 0){
+		v := array[4] of byte;
+		put4(v, 0, Ncmrxmax);
+		if(ctlout(Rh2d|Rclass|Riface, Rsetntbin, 0, ctlif, v) < 0){
+			sys->print("etherusb: SET_NTB_INPUT_SIZE %d failed: %r\n", Ncmrxmax);
+			return -1;
+		}
+		ntbinmax = Ncmrxmax;
+	}
+	if(ntbinmax < 2048)
+		ntbinmax = 2048;
+	sys->print("etherusb: %s NTB in %d out %d, datagrams at %d mod %d, NDP align %d\n",
+		dev, ntbinmax, ntboutmax, ndprem, ndpdiv, ndpalign);
+	if(setalt(1) < 0)
+		return -1;
+	cdcfilter();
+	return 0;
+}
+
+#
+# One frame in an NTB of its own: what the self-test path would send.
+# The kernel packs real traffic many to a block.
+#
+ncmwrap(frame: array of byte): array of byte
+{
+	d := 16;			# after the NTH, on any divisor up to 16
+	ndp := (d + len frame + 3) & ~3;
+	n := ndp + 16;
+	b := array[n] of { * => byte 0 };
+	put4(b, 0, 16r484D434E);	# "NCMH"
+	b[4] = byte 12;
+	b[8] = byte n;
+	b[9] = byte (n >> 8);
+	b[10] = byte ndp;
+	b[11] = byte (ndp >> 8);
+	b[d:] = frame;
+	put4(b, ndp, 16r304D434E);	# "NCM0"
+	b[ndp+4] = byte 16;
+	b[ndp+8] = byte d;
+	b[ndp+10] = byte len frame;
+	b[ndp+11] = byte (len frame >> 8);
+	return b;
+}
+
+ncmunwrap(nil: array of byte, n, nil: int): (int, array of byte)
+{
+	return (n, nil);	# the kernel walks NTBs; nothing here reads them
 }
 
 #

@@ -1,4 +1,4 @@
-# voice/dial — mount a peer InferNode's exported /dev and bridge
+# voice/dial — mount a peer InferNode's narrow audio export and bridge
 #               audio across the 9P link. INFR-185 v0.
 #
 # After voice/listen is running on the peer, both sides can run this
@@ -20,6 +20,8 @@ if {~ $#peer 0} {
 	echo 'usage: voice/dial peer-addr  (e.g. tcp!localhost!7070)' >[1=2]
 	exit usage
 }
+user=`{cat /dev/user}
+key='/usr/'^$user^'/keyring/default'
 
 # Local /dev/audio must exist before we route bytes to it.
 bind -a '#A' /dev
@@ -30,10 +32,9 @@ bind -a '#A' /dev
 echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
 echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 
-# Mount the peer's exported /dev tree at /n/voice. -A skips TLS — same
-# rationale as voice/listen.
+# Mount the peer's authenticated, encrypted audio export at /n/voice.
 mkdir -p /n/voice
-if {! mount -A $peer /n/voice} {
+if {! mount -k $key $peer /n/voice} {
 	echo 'voice/dial: mount' $peer 'failed' >[1=2]
 	exit mount
 }

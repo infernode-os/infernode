@@ -47,7 +47,7 @@ if {! ~ $"m ''} {
 # Alias resolved on write.
 echo opus > /mnt/llm/$id/model
 m=`{cat /mnt/llm/$id/model}
-if {! ~ $"m claude-opus-4-5-20251101} {
+if {! ~ $"m claude-opus-5-5} {
 	raise 'fail:opus alias not resolved on write: '^$"m
 }
 
@@ -61,7 +61,7 @@ if {! ~ $"m my-custom-model-xyz} {
 # Write is repeatable; second alias resolves too.
 echo haiku > /mnt/llm/$id/model
 m=`{cat /mnt/llm/$id/model}
-if {! ~ $"m claude-haiku-4-5-20251001} {
+if {! ~ $"m claude-haiku-5-5} {
 	raise 'fail:haiku alias not resolved on write: '^$"m
 }
 

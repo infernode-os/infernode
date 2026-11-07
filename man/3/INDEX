@@ -3,6 +3,7 @@ arch arch
 audio audio
 bench bench
 boot boot
+camera camera
 cap cap
 cmd cmd
 cons cons
@@ -15,8 +16,10 @@ env env
 ether ether
 fs fs
 gpio gpio
+i2c i2c
 indir indir
 ip ip
+location location
 mnt mnt
 pipe pipe
 pointer pointer
@@ -29,3 +32,4 @@ srv srv
 srv9 srv9
 ssl ssl
 touch touch
+vm vm

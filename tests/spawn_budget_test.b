@@ -101,7 +101,7 @@ testBudgetToolLoads(t: ref T)
 {
 	r := spawn9p(t, "timeout=8 -- tools=plan :: say hello");
 	t.log("spawn said: " + r);
-	t.assert(!contains(r, "cannot load tool"),
+	t.assert(!contains(r, "cannot load tool") && !contains(r, "may not be given"),
 		"a child granted plan, in the budget, loads it: " + r);
 }
 
@@ -110,7 +110,7 @@ testDefaultToolLoads(t: ref T)
 	# A child given no tools gets plan: the JSON call a model makes.
 	r := spawn9p(t, "{\"task\": \"say hello\", \"timeout\": 8}");
 	t.log("spawn said: " + r);
-	t.assert(!contains(r, "cannot load tool") && !contains(r, "missing"),
+	t.assert(!contains(r, "cannot load tool") && !contains(r, "may not be given") && !contains(r, "missing"),
 		"a child given no tools loads its default, plan: " + r);
 }
 
@@ -118,8 +118,9 @@ testOutsideBudgetRefused(t: ref T)
 {
 	r := spawn9p(t, "timeout=8 -- tools=exec :: say hello");
 	t.log("spawn said: " + r);
-	t.assert(contains(r, "cannot load tool exec"),
-		"a child asking for exec, outside the budget, cannot load it: " + r);
+	t.assert(contains(r, "tool exec may not be given to a child") &&
+		contains(r, "delegation budget"),
+		"a child asking for exec, outside the budget, is refused, and told why: " + r);
 }
 
 init(nil: ref Draw->Context, args: list of string)

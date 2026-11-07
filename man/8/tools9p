@@ -43,6 +43,51 @@ and is constructed specially. Passing that path with
 does not recursively grant or stage it. Tools and ordinary path capabilities
 are selected explicitly on the command line; child provisioning can only
 narrow the declared delegation budget.
+.PP
+The control alias
+.BR /mnt/toolctl
+(for
+.BI /tool. N\fR,
+.BI /mnt/toolctl. N\fR)
+is the same tree, outside every agent's name space, with three files a
+tool call's
+.B /tool
+does not have:
+.TP
+.B ns
+The name space a tool call gets, as
+.IR ns (1)
+prints it, made at the first read of an open by the restriction a call
+uses, for a tool that adds no paths of its own.
+.TP
+.B event
+A read waits for a change to the lists, then gives one word a line:
+.B paths
+after
+.BR bindpath ,
+.B unbindpath
+or
+.BR setperm ;
+.B tools
+after
+.B add
+or
+.BR remove ;
+.B budget
+after
+.B budget-add
+or
+.BR budget-remove .
+Each open has its own queue: nothing is missed between reads.
+.TP
+.B view
+The same name space, served: an open makes it, and what is written to
+the file is 9P to it, so
+.B mount -A /mnt/toolctl/view /n/agent
+shows the agent's world as a tool call sees it.
+It is read-only (a create, remove, wstat, write or open for writing is
+refused), and it goes when the file is closed; a new mount shows changes
+made since.
 .SH OPTIONS
 .TP
 .B -D
@@ -86,6 +131,8 @@ Add an ordinary filesystem capability. Repeat as needed.
 	tools9p read list find grep
 	tools9p -p /mnt/msg:ro -p /mnt/msg/draft:rw read write
 	nsaudit -m /tool
+	echo bindpath /usr/inferno ro > /mnt/toolctl/ctl
+	mount -A /mnt/toolctl/view /n/agent; ls /n/agent/usr
 .fi
 .SH FILES
 .TP

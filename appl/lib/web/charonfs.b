@@ -27,6 +27,9 @@ include "web/page.m";
 include "web/browser.m";
 	browser: Browser;
 	Session: import browser;
+include "post9p.m";
+	post9p: Post9p;
+	Post: import post9p;
 include "web/charonfs.m";
 
 Qroot, Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent,
@@ -98,7 +101,7 @@ serveconn(fd: ref Sys->FD)
 	<-pidc;
 }
 
-# ---- posting: /srv, Inferno style ----
+# ---- posting: /srv, Inferno style (post9p(2)) ----
 #
 # #s<spec> is one directory per spec (and user) across every name
 # space, so a file posted in #scharon is where any process of this
@@ -106,22 +109,21 @@ serveconn(fd: ref Sys->FD)
 #	mount -A '#scharon/fs' /mnt/charon
 # Each open of the posted file is its own 9P connection.
 
+posting: ref Post;
+
 post(spec: string): (string, string)
 {
 	if(sess == nil)
 		return (nil, "not serving");
-	dir := "#s" + spec;
-	name := "fs";
-	io: ref Sys->FileIO;
-	for(i := 1; i < 32; i++) {
-		(ok, nil) := sys->stat(dir + "/" + name);
-		if(ok < 0 && (io = sys->file2chan(dir, name)) != nil)
-			break;
-		name = "fs." + string i;
-	}
-	if(io == nil)
-		return (nil, sys->sprint("file2chan: %r"));
-	posted(io, dir + "/" + name);
+	if(post9p == nil && (lerr := loadpost9p()) != nil)
+		return (nil, lerr);
+	conns := chan of ref Sys->FD;
+	(p, err) := post9p->post(spec, conns);
+	if(p == nil)
+		return (nil, err);
+	spawn connserver(conns, p.quit);
+	posting = p;
+	(nil, name) := splitlast(p.path);
 	return (name, nil);
 }
 
@@ -129,136 +131,47 @@ postas(spec, name: string): string
 {
 	if(sess == nil)
 		return "not serving";
-	dir := "#s" + spec;
-	(ok, nil) := sys->stat(dir + "/" + name);
-	if(ok >= 0)
-		return dir + "/" + name + ": already posted";
-	io := sys->file2chan(dir, name);
-	if(io == nil)
-		return sys->sprint("file2chan: %r");
-	posted(io, dir + "/" + name);
+	if(post9p == nil && (lerr := loadpost9p()) != nil)
+		return lerr;
+	conns := chan of ref Sys->FD;
+	(p, err) := post9p->postas(spec, name, conns);
+	if(p == nil)
+		return err;
+	spawn connserver(conns, p.quit);
+	posting = p;
 	return nil;
-}
-
-postpath: string;
-unposted: chan of int;
-
-posted(io: ref Sys->FileIO, path: string)
-{
-	postpath = path;
-	unposted = chan[1] of int;
-	spawn poster(io, unposted);
 }
 
 unpost()
 {
-	if(postpath == nil)
+	if(posting == nil)
 		return;
-	sys->remove(postpath);
-	postpath = nil;
-	alt {
-	unposted <-= 1 =>	;
-	* =>	;
-	}
+	posting.unpost();
+	posting = nil;
 }
 
-Conn: adt {
-	fid:	int;
-	fd:	ref Sys->FD;	# our end of the connection's pipe
-	rq:	chan of (int, Sys->Rread);
-	wq:	chan of (array of byte, Sys->Rwrite);
-};
-
-poster(io: ref Sys->FileIO, quit: chan of int)
+loadpost9p(): string
 {
-	conns: list of ref Conn;
-	for(;;) alt {
-	<-quit =>
-		return;
-	(nil, count, fid, rc) := <-io.read =>
-		if(rc == nil) {
-			conns = hangup(conns, fid);
-			continue;
-		}
-		c: ref Conn;
-		(conns, c) = conn(conns, fid);
-		if(c == nil)
-			rc <-= (nil, "cannot connect");
-		else
-			c.rq <-= (count, rc);
-	(nil, data, fid, wc) := <-io.write =>
-		if(wc == nil) {
-			conns = hangup(conns, fid);
-			continue;
-		}
-		c: ref Conn;
-		(conns, c) = conn(conns, fid);
-		if(c == nil)
-			wc <-= (0, "cannot connect");
-		else
-			c.wq <-= (data, wc);
-	}
+	post9p = load Post9p Post9p->PATH;
+	if(post9p == nil)
+		return sys->sprint("cannot load %s: %r", Post9p->PATH);
+	post9p->init();
+	return nil;
 }
 
-conn(l: list of ref Conn, fid: int): (list of ref Conn, ref Conn)
+# each connection made through the posted file, served
+connserver(conns: chan of ref Sys->FD, nil: chan of int)
 {
-	for(t := l; t != nil; t = tl t)
-		if((hd t).fid == fid)
-			return (l, hd t);
-	fds := array[2] of ref Sys->FD;
-	if(sys->pipe(fds) < 0)
-		return (l, nil);
-	c := ref Conn(fid, fds[1], chan[4] of (int, Sys->Rread), chan[16] of (array of byte, Sys->Rwrite));
-	serveconn(fds[0]);
-	spawn connreader(c);
-	spawn connwriter(c);
-	return (c :: l, c);
+	for(;;)
+		serveconn(<-conns);
 }
 
-hangup(l: list of ref Conn, fid: int): list of ref Conn
+splitlast(p: string): (string, string)
 {
-	r: list of ref Conn;
-	for(; l != nil; l = tl l) {
-		c := hd l;
-		if(c.fid != fid) {
-			r = c :: r;
-			continue;
-		}
-		c.rq <-= (-1, nil);
-		c.wq <-= (nil, nil);
-	}
-	return r;
-}
-
-connreader(c: ref Conn)
-{
-	for(;;) {
-		(count, rc) := <-c.rq;
-		if(rc == nil)
-			return;
-		buf := array[count] of byte;
-		n := sys->read(c.fd, buf, len buf);
-		if(n < 0)
-			rc <-= (nil, sys->sprint("%r"));
-		else
-			rc <-= (buf[0:n], nil);
-	}
-}
-
-connwriter(c: ref Conn)
-{
-	for(;;) {
-		(data, wc) := <-c.wq;
-		if(wc == nil) {
-			c.fd = nil;	# the server sees end of file
-			return;
-		}
-		n := sys->write(c.fd, data, len data);
-		if(n < 0)
-			wc <-= (0, sys->sprint("%r"));
-		else
-			wc <-= (n, nil);
-	}
+	for(i := len p - 1; i >= 0; i--)
+		if(p[i] == '/')
+			return (p[0:i], p[i+1:]);
+	return (nil, p);
 }
 
 path(n, t: int): big

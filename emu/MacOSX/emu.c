@@ -6,7 +6,7 @@
 
 #include "emu.root.h"
 
-ulong ndevs = 32;
+ulong ndevs = 33;
 
 extern Dev rootdevtab;
 extern Dev consdevtab;
@@ -32,6 +32,7 @@ extern Dev audiodevtab;
 extern Dev opusdevtab;
 extern Dev memdevtab;
 extern Dev tfadevtab;
+extern Dev locationdevtab;
 Dev* devtab[]={
 	&rootdevtab,
 	&consdevtab,
@@ -57,6 +58,7 @@ Dev* devtab[]={
 	&opusdevtab,
 	&memdevtab,
 	&tfadevtab,
+	&locationdevtab,
 	nil,
 	nil,
 	nil,
@@ -78,6 +80,7 @@ extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
 extern void i420modinit(void);
+extern void bayermodinit(void);
 void modinit(void){
 	sysmodinit();
 	drawmodinit();
@@ -86,6 +89,7 @@ void modinit(void){
 	srvmodinit();
 	keyringmodinit();
 	i420modinit();
+	bayermodinit();
 }
 
 	int	dontcompile = 0;

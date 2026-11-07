@@ -22,7 +22,9 @@ enum
 	Qhoststdout,
 	Qhoststderr,
 	Qjit,
+	Qkbdin,
 	Qkeyboard,
+	Qkeyboards,
 	Qkprint,
 	Qmemory,
 	Qmsec,
@@ -48,7 +50,9 @@ Dirtab contab[] =
 	"hoststdout",	{Qhoststdout},	0,	0222,
 	"hoststderr",	{Qhoststderr},	0,	0222,
 	"jit",	{Qjit},	0,	0666,
+	"kbdin",	{Qkbdin},	0,	0222,
 	"keyboard",	{Qkeyboard},	0,	0666,
+	"keyboards",	{Qkeyboards},	0,	0444,
 	"kprint",	{Qkprint},	0,	0444,
 	"memory",	{Qmemory},	0,	0444,
 	"msec",		{Qmsec},	NUMSIZE,	0444,
@@ -128,6 +132,194 @@ kbdslave(void *a)
 	/* pexit("kbdslave", 0); */	/* not reached */
 }
 
+/*
+ * The keyboards attached, and which kind typed last.
+ *
+ * A keyboard on the screen (wm/osk) types through /dev/kbdin; every
+ * other source of keys -- the host's keyboard through the GUI backend,
+ * a driver or test writing /dev/keyboard -- is a keyboard of the
+ * machine's.  Both feed the one queue, so a program reading keys cannot
+ * tell them apart and need not.  What the screen keyboard needs to
+ * know, it reads from /dev/keyboards: one line per keyboard attached,
+ *
+ *	keyboard <id> <description>
+ *
+ * as whatever found it says (kbdattach: the GUI backend's hotplug, or
+ * a driver's "kbd attach" on /dev/consctl), then
+ *
+ *	last none|hard|soft
+ *
+ * for which typed last.  The first read of an open file answers at
+ * once; each later one waits until something it said has changed.  The
+ * kind changes when typing moves from one kind of keyboard to the
+ * other, not with every key, so a reader waiting here is not woken by
+ * typing.  What to do about it -- show a keyboard on the screen, hide
+ * it -- is the reader's to say.
+ */
+enum
+{
+	Nkbds	= 16,
+	Kbdnone	= 0,
+	Kbdhard,
+	Kbdsoft,
+};
+
+static struct
+{
+	Lock	l;
+	QLock	rq;		/* one reader waits at a time; the rest queue */
+	Rendez	r;
+	char*	id[Nkbds];
+	char*	desc[Nkbds];
+	int	last;
+	ulong	gen;
+} kbds;
+
+static int
+kbdschanged(void *a)
+{
+	return kbds.gen != *(ulong*)a;
+}
+
+static void
+kbdsbump(void)
+{
+	kbds.gen++;
+	Wakeup(&kbds.r);
+}
+
+static void
+kbdtyped(int kind)
+{
+	if(kbds.last == kind)
+		return;
+	lock(&kbds.l);
+	kbds.last = kind;
+	unlock(&kbds.l);
+	kbdsbump();
+}
+
+/*
+ * A keyboard is there (id, which must be unique to it, and what it
+ * calls itself).  From any thread: the GUI backend's main loop calls
+ * it, as does the "kbd attach" verb.  A second attach of an id only
+ * renames it.
+ */
+void
+kbdattach(char *id, char *desc)
+{
+	int i, slot;
+	char *nid, *ndesc, *oid, *odesc;
+
+	if(id == nil || *id == 0)
+		return;
+	if(desc == nil)
+		desc = "";
+	nid = strdup(id);
+	ndesc = strdup(desc);
+	if(nid == nil || ndesc == nil){
+		free(nid);
+		free(ndesc);
+		return;
+	}
+	oid = nil;
+	odesc = nil;
+	lock(&kbds.l);
+	slot = -1;
+	for(i = 0; i < Nkbds; i++){
+		if(kbds.id[i] != nil && strcmp(kbds.id[i], id) == 0)
+			break;
+		if(kbds.id[i] == nil && slot < 0)
+			slot = i;
+	}
+	if(i < Nkbds){
+		oid = nid;
+		odesc = kbds.desc[i];
+		kbds.desc[i] = ndesc;
+	}else if(slot >= 0){
+		kbds.id[slot] = nid;
+		kbds.desc[slot] = ndesc;
+	}else{
+		oid = nid;
+		odesc = ndesc;
+	}
+	unlock(&kbds.l);
+	free(oid);
+	free(odesc);
+	kbdsbump();
+}
+
+void
+kbddetach(char *id)
+{
+	int i;
+	char *oid, *odesc;
+
+	if(id == nil)
+		return;
+	oid = nil;
+	odesc = nil;
+	lock(&kbds.l);
+	for(i = 0; i < Nkbds; i++)
+		if(kbds.id[i] != nil && strcmp(kbds.id[i], id) == 0){
+			oid = kbds.id[i];
+			odesc = kbds.desc[i];
+			kbds.id[i] = nil;
+			kbds.desc[i] = nil;
+			break;
+		}
+	unlock(&kbds.l);
+	if(oid == nil)
+		return;
+	free(oid);
+	free(odesc);
+	kbdsbump();
+}
+
+static long
+kbdsread(Chan *c, void *va, long n)
+{
+	char *buf, *p, *e;
+	ulong seen;
+	int i;
+	static char *kinds[] = {"none", "hard", "soft"};
+
+	qlock(&kbds.rq);
+	if(waserror()){
+		qunlock(&kbds.rq);
+		nexterror();
+	}
+	/* c->aux: 0 before the first read, else 1 + the generation read */
+	if(c->aux != nil){
+		seen = (ulong)(uintptr)c->aux - 1;
+		Sleep(&kbds.r, kbdschanged, &seen);
+	}
+	poperror();
+	qunlock(&kbds.rq);
+
+	buf = malloc(Nkbds*(16+2*KNAMELEN+64)+32);
+	if(buf == nil)
+		error(Enomem);
+	p = buf;
+	e = buf + Nkbds*(16+2*KNAMELEN+64)+32;
+	lock(&kbds.l);
+	seen = kbds.gen;
+	for(i = 0; i < Nkbds; i++)
+		if(kbds.id[i] != nil)
+			if(kbds.desc[i][0] != 0)
+				p = seprint(p, e, "keyboard %.*s %.*s\n", 2*KNAMELEN, kbds.id[i], 64, kbds.desc[i]);
+			else
+				p = seprint(p, e, "keyboard %.*s\n", 2*KNAMELEN, kbds.id[i]);
+	p = seprint(p, e, "last %s\n", kinds[kbds.last]);
+	unlock(&kbds.l);
+	c->aux = (void*)(uintptr)(seen + 1);
+	if(n > p - buf)
+		n = p - buf;
+	memmove(va, buf, n);
+	free(buf);
+	return n;
+}
+
 void
 gkbdputc(Queue *q, int ch)
 {
@@ -137,6 +329,7 @@ gkbdputc(Queue *q, int ch)
 	static int nk, collecting = 0;
 	char buf[UTFmax];
 
+	kbdtyped(Kbdhard);
 	r = ch;
 	if(r == Latin) {
 		collecting = 1;
@@ -246,7 +439,15 @@ consopen(Chan *c, int omode)
 	case Qscancode:
 		qlock(&kbd.gq);
 		if(gkscanq != nil || gkscanid == nil) {
-			qunlock(&kbd.q);
+			/*
+			 * gq, the lock just taken. This was kbd.q: gq stayed
+			 * locked, so the next open of scancode waited for it
+			 * for ever, unkillable (a qlock is not interruptible),
+			 * and the console reader's kbd.q was let go under it.
+			 * Every open on a host without scan codes (gkscanid
+			 * nil) took this path (tools/sysfuzz -d, memfs).
+			 */
+			qunlock(&kbd.gq);
 			c->flag &= ~COPEN;
 			if(gkscanq)
 				error(Einuse);
@@ -448,6 +649,9 @@ consread(Chan *c, void *va, long n, vlong offset)
 	case Qkeyboard:
 		return qread(gkbdq, va, n);
 
+	case Qkeyboards:
+		return kbdsread(c, va, n);
+
 	case Qhostopen:
 		return qread(hostopenq, va, n);
 
@@ -512,6 +716,37 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 				qwrite(kbdq, &ch, 1);
 			} else if(strncmp(buf, "rawoff", 6) == 0){
 				kbd.raw = 0;
+			} else if(strncmp(a, "kbd attach ", 11) == 0 ||
+				  strncmp(a, "kbd detach ", 11) == 0){
+				/*
+				 * A keyboard driver that is a program (the native
+				 * kernel's kbdusb, bthid) says a keyboard came or
+				 * went: "kbd attach <id> [description]",
+				 * "kbd detach <id>".  The rest of the line is
+				 * the keyboard's, so nothing after it is a verb.
+				 */
+				char *id, *d, *nl;
+				int attach = a[4] == 'a';
+				id = a + 11;
+				while(*id == ' ' || *id == '\t')
+					id++;
+				if((nl = strchr(id, '\n')) != nil)
+					*nl = 0;
+				d = id;
+				while(*d != 0 && *d != ' ' && *d != '\t')
+					d++;
+				if(*d != 0){
+					*d++ = 0;
+					while(*d == ' ' || *d == '\t')
+						d++;
+				}
+				if(*id == 0)
+					error(Ebadarg);
+				if(attach)
+					kbdattach(id, d);
+				else
+					kbddetach(id);
+				break;
 			} else if(strncmp(a, "kbd ontop", 9) == 0){
 				/* workspace text app focused — raise the keyboard but
 				 * keep the top pinned (don't slide the view up). */
@@ -573,6 +808,25 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			Rune r;
 			x += chartorune(&r, &((char*)va)[x]);
 			gkbdputc(gkbdq, r);
+		}
+		break;
+
+	case Qkbdin:
+		/*
+		 * Keys from a keyboard on the screen: the same queue as
+		 * /dev/keyboard's, whole runes as written (no compose: the
+		 * keyboard composes for itself), marked as typed by a screen
+		 * keyboard in /dev/keyboards.
+		 */
+		kbdtyped(Kbdsoft);
+		for(x=0; x<n; ) {
+			Rune r;
+			char ubuf[UTFmax];
+			int l;
+			x += chartorune(&r, &((char*)va)[x]);
+			l = runetochar(ubuf, &r);
+			if(l > 0)
+				qproduce(gkbdq, ubuf, l);
 		}
 		break;
 
@@ -640,7 +894,7 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 	case Qsysname:
 		if(offset != 0)
 			error(Ebadarg);
-		if(n < 0 || n >= sizeof(buf))
+		if(n <= 0 || n >= sizeof(buf))
 			error(Ebadarg);
 		strncpy(buf, va, n);
 		buf[n] = '\0';

@@ -120,5 +120,15 @@ assuming it exercises behavior.
 - Gating: nsaudit fixture checks, wallet/secstore integration, the
   presentation file-open GUI regression, JIT correctness and boot smoke,
   `verify-dis-build`, `verify-sh-exec`, and the ring-fence job.
+- **A host test runs in CI only if a step names it.** Nothing globs
+  `tests/host/`: a new script goes into a step's list in the same PR —
+  the `linux-amd64-host` job's for headless tests, the GUI job's
+  "Xenith and display host tests" for those needing the SDL emulator.
+  Both fail on a skip (exit 77) as on a failure. An audit found 92
+  scripts no workflow ran; some had been broken for months (a scaffold
+  test outliving the code it tested, a test that always exited 124, one
+  that printed SUCCESS over its own errors). Those left out need a live
+  service, a key, a funded account or hardware, and say so when they
+  skip.
 - Benchmarks (`tests/bench/`), stress (`tests/stress/`), and interop
   (`tests/interop/`) are deliberately outside the auto-run suite.

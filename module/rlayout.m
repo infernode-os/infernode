@@ -76,6 +76,22 @@ Rlayout: module {
 	# drawn, where: for hit-testing and showing what a search found.
 	renderwords: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int, array of Word);
 
+	# A document laid out and not drawn: its height (margin and all),
+	# the y each block starts at, the words, where, and the Mermaid
+	# diagrams drawn for it, which drawband draws from
+	Laid: adt {
+		height: int;
+		ys: array of int;
+		words: array of Word;
+		diagrams: list of (ref DocNode, ref Draw->Image);
+	};
+	measure: fn(doc: list of ref DocNode, style: ref Style): ref Laid;
+
+	# The part of the document dst's rectangle covers (dst.r is in the
+	# document's coordinates), drawn on dst: a strip of a long
+	# document, with no image of the whole of it
+	drawband: fn(doc: list of ref DocNode, style: ref Style, dst: ref Draw->Image, laid: ref Laid);
+
 	# Extract plain text from a document tree (for AI/body buffer).
 	totext: fn(doc: list of ref DocNode): string;
 };

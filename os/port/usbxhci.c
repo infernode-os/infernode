@@ -580,6 +580,8 @@ xhciinit(Hci *hp)
 	int i, j;
 
 	ctlr = hp->aux;
+	if(ctlr->x.mmio[CAPLENGTH] == (u32int)-1)
+		error("controller vanished");
 	ctlr->opr = &ctlr->x.mmio[(ctlr->x.mmio[CAPLENGTH]&0xFF)/4];
 	ctlr->dba = &ctlr->x.mmio[ctlr->x.mmio[DBOFF]/4];
 	ctlr->rts = &ctlr->x.mmio[ctlr->x.mmio[RTSOFF]/4];

@@ -139,8 +139,9 @@ knowntoolnames: list of string;
 pinnedpaths: list of ref PinnedPath;
 
 # Path and tool change tracking for timer-based namespace refresh
-lastpathsraw := "";
-lasttoolsraw := "";
+watchmount := "";	# the toolctl tree whose event file toolwatch reads, or nil
+watchpid := -1;
+fading := 0;		# fadetimer running
 
 # Channel references (for filebrowser access)
 mousech_g: chan of ref Pointer;
@@ -180,6 +181,7 @@ ntoolentryrects := 0;
 browserect: Rect;
 mobile := 0;		# /env/infmobile=1 — floor browser/list rows at a tap target
 TAPMIN: con 132;	# 44pt at a 3x device
+Dragmin: con 10;	# px a press moves before it is a drag (a scroll), not a tap
 
 # File browser state (module-level to avoid stack allocation in inner loop)
 brow_dirrects:  array of Rect;
@@ -285,21 +287,11 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	loadpinnedpaths();
 	loadmanifest();
 
-	# Snapshot current paths and tools so timer detects future changes
-	raw := readfile(toolmount_g + "/paths");
-	if(raw == nil) raw = "";
-	lastpathsraw = raw;
-	toolsrc := toolmount_g + "/tools";
-	if(actid_g == 0)
-		toolsrc = toolmount_g + "/budget";
-	traw := readfile(toolsrc);
-	if(traw == nil) traw = "";
-	lasttoolsraw = traw;
-
 	redrawctx();
 
-	# Context flash timer (animate activity indicator fade-out)
-	spawn ctxtimer(evch);
+	# tools9p says when its lists change (#1020); nothing is polled
+	startwatch(evch);
+	startfade(evch);
 
 	# Event loop
 	prevbuttons := 0;
@@ -309,11 +301,10 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	# motion under button-1 and convert it into ctx_scroll deltas
 	# ourselves. To keep tap-on-headers working we DEFER click handlers
 	# to button-1 release and skip them if the gesture committed to a
-	# drag (|delta| > DRAG_THRESHOLD).
+	# drag (|delta| > Dragmin).
 	press_xy: Draw->Point;
 	drag_lasty := 0;
 	dragstarted := 0;
-	DRAG_THRESHOLD := 10;	# px before a touch becomes a drag (not a tap)
 	for(;;) alt {
 	p := <-mouse =>
 		wasdown := prevbuttons;
@@ -362,7 +353,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			if(!dragstarted) {
 				total_dy := p.xy.y - press_xy.y;
 				if(total_dy < 0) total_dy = -total_dy;
-				if(total_dy > DRAG_THRESHOLD)
+				if(total_dy > Dragmin)
 					dragstarted = 1;
 			}
 			if(dragstarted) {
@@ -381,11 +372,17 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			continue;
 		}
 
-		# Button-1 RELEASE: if the gesture stayed within DRAG_THRESHOLD
+		# Button-1 RELEASE: if the gesture stayed within Dragmin
 		# treat it as a tap and run the click handlers at the PRESS
 		# location (press_xy). If it dragged, just reset state — the
 		# scroll already happened on the held branch above.
-		if(!(p.buttons & 1) && (wasdown & 1)) {
+		#
+		# Button 1 going up as button 3 goes down is a finger held
+		# still (os/init/touch.b, emu/port/draw-sdl3.c): the context
+		# menu below, not a tap as well.
+		if(!(p.buttons & 1) && (wasdown & 1) && (p.buttons & 4)) {
+			dragstarted = 0;
+		} else if(!(p.buttons & 1) && (wasdown & 1)) {
 			if(dragstarted) {
 				dragstarted = 0;
 				continue;
@@ -624,66 +621,70 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	}
 }
 
-ctxtimer(evch: chan of string)
+# Read the current activity's /mnt/toolctl*/event, a tick for each
+# change tools9p reports.  Started again on a switch of activity; if
+# tools9p is not up yet, at the next context event.
+startwatch(evch: chan of string)
 {
-	# Poll interval: fast (1s) while waiting for manifest to appear,
-	# slower (5s) once it's loaded and only resource activity needs refresh.
-	for(;;) {
-		interval := 5000;
-		if(nsmanifest == nil)
-			interval = 1000;	# poll faster until manifest appears
-
-		sys->sleep(interval);
-
-		needtick := 0;
-
-		# Always tick if manifest hasn't loaded yet
-		if(nsmanifest == nil) {
-			mp := "/tmp/veltro/.ns/manifest";
-			if(actid_g > 0)
-				mp = "/tmp/veltro/.ns/manifest." + string actid_g;
-			(ok, nil) := sys->stat(mp);
-			if(ok >= 0)
-				needtick = 1;
-		}
-
-		# Tick if /tool/paths changed (namespace bind/unbind from any source)
-		if(!needtick) {
-			curpaths := readfile(toolmount_g + "/paths");
-			if(curpaths == nil)
-				curpaths = "";
-			if(curpaths != lastpathsraw) {
-				lastpathsraw = curpaths;
-				needtick = 1;
-			}
-		}
-
-		# Tick if /tool/tools changed (tool add/remove via ctl)
-		if(!needtick) {
-			curtools := readfile(toolmount_g + "/tools");
-			if(curtools == nil)
-				curtools = "";
-			if(curtools != lasttoolsraw) {
-				lasttoolsraw = curtools;
-				needtick = 1;
-			}
-		}
-
-		# Also tick for resource activity animation
-		if(!needtick) {
-			now := sys->millisec();
-			for(r := resources; r != nil; r = tl r) {
-				res := hd r;
-				if(res.status == "active" || (res.lastused > 0 && now - res.lastused < RES_ACTIVE_FADE_MS)) {
-					needtick = 1;
-					break;
-				}
-			}
-		}
-
-		if(needtick)
-			alt { evch <-= "tick" => ; * => ; }
+	mnt := toolctlmount();
+	if(mnt == watchmount)
+		return;
+	if(watchpid >= 0) {
+		fd := sys->open(sys->sprint("/prog/%d/ctl", watchpid), Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+		watchpid = -1;
 	}
+	watchmount = nil;
+	fd := sys->open(mnt + "/event", Sys->OREAD);
+	if(fd == nil)
+		return;
+	watchmount = mnt;
+	pidc := chan of int;
+	spawn toolwatch(evch, fd, mnt, pidc);
+	watchpid = <-pidc;
+}
+
+toolwatch(evch: chan of string, fd: ref Sys->FD, mnt: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	buf := array[256] of byte;
+	while(sys->read(fd, buf, len buf) > 0)
+		evch <-= "tick";
+	if(watchmount == mnt) {
+		watchmount = nil;
+		watchpid = -1;
+	}
+}
+
+# The activity indicator fades over RES_ACTIVE_FADE_MS: a redraw a
+# second while a resource is active or fading, and no timer otherwise.
+startfade(evch: chan of string)
+{
+	if(fading || !anyfading())
+		return;
+	fading = 1;
+	spawn fadetimer(evch);
+}
+
+fadetimer(evch: chan of string)
+{
+	while(anyfading()) {
+		sys->sleep(1000);
+		evch <-= "fade";
+	}
+	fading = 0;
+}
+
+anyfading(): int
+{
+	now := sys->millisec();
+	for(r := resources; r != nil; r = tl r) {
+		res := hd r;
+		if(res.status == "active" || (res.lastused > 0 && now - res.lastused < RES_ACTIVE_FADE_MS))
+			return 1;
+	}
+	return 0;
 }
 
 # Return the tools9p mount point for the current activity.
@@ -735,26 +736,19 @@ handleevent(ev: string)
 		newid := strtoint(ev[len "switchactivity ":]);
 		if(newid >= 0) {
 			actid_g = newid;
-			editor_launched = 0;
 			updatetoolmount();
 			reloadtools();
 			loadcontext();
 			loadcatalog();
 			loadpinnedpaths();
 			loadmanifest();
-			# Snapshot new activity's state so timer detects changes
-			raw2 := readfile(toolmount_g + "/paths");
-			if(raw2 == nil) raw2 = "";
-			lastpathsraw = raw2;
-			toolsrc2 := toolmount_g + "/tools";
-			if(actid_g == 0)
-				toolsrc2 = toolmount_g + "/budget";
-			traw2 := readfile(toolsrc2);
-			if(traw2 == nil) traw2 = "";
-			lasttoolsraw = traw2;
+			startwatch(evch_g);
+			startfade(evch_g);
 		}
 		return;
 	}
+	if(ev == "fade")
+		return;	# a redraw only
 	if(ev == "catalog" || ev == "tick")
 		loadcatalog();
 	if(ev == "catalog")
@@ -766,6 +760,8 @@ handleevent(ev: string)
 		loadpinnedpaths();
 		loadmanifest();
 		loadagentname();
+		startwatch(evch_g);	# if tools9p was not up before
+		startfade(evch_g);
 	}
 	if(hasprefix(ev, "theme "))
 		reloadcolors();
@@ -1237,15 +1233,22 @@ drawcentertext(r: Rect, text: string)
 
 # --- File browser ---
 
+# The browser's row height
+browlineh(): int
+{
+	h := mainfont.height + 2;
+	if(mobile && h < TAPMIN)
+		h = TAPMIN;	# 44pt finger tap target for browser entries
+	return h;
+}
+
 drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 {
 	if(mainwin == nil)
 		return;
 	zone := mainwin.r;
 	pad := 8;
-	lineH := mainfont.height + 2;
-	if(mobile && lineH < TAPMIN)
-		lineH = TAPMIN;	# 44pt finger tap target for browser entries
+	lineH := browlineh();
 	y := zone.min.y + pad;
 
 	#
@@ -1506,6 +1509,10 @@ filebrowser(startpath: string): string
 	scroll := 0;
 	result := "";
 	prevbut := 0;
+	press: Point;		# where button 1 went down
+	draglasty := 0;
+	dragacc := 0;		# pixels dragged not yet a row
+	dragging := 0;
 
 	#
 	# The directory is read when the path changes and the view is
@@ -1590,14 +1597,74 @@ filebrowser(startpath: string): string
 			continue;
 		}
 
-		# Button-3: cancel
+		# Button-3: cancel.  Not a finger held still (button 1 up as
+		# button 3 comes down): a finger resting before it drags
+		# would close the browser under it.
 		if((p.buttons & 4) != 0 && (wasdown2 & 4) == 0) {
+			if(wasdown2 & 1) {
+				dragging = 0;
+				continue;
+			}
 			result = nil;
 			break;
 		}
 
-		# Button-1 just pressed
+		#
+		# A finger scrolls by dragging, as the context view below it
+		# does: a touch screen has no wheel, and this view acted on
+		# every press, so a directory longer than the zone (/dis/wm on
+		# the Pi's panel) could never be scrolled and what was past its
+		# end could never be reached.  So button 1 decides at release:
+		# a press that moved less than Dragmin is a tap, taken at
+		# where it was pressed; one that moved more scrolled the rows
+		# under it, a row for each row's height dragged, and does
+		# nothing else.
+		#
 		if((p.buttons & 1) && !(wasdown2 & 1)) {
+			press = p.xy;
+			draglasty = p.xy.y;
+			dragacc = 0;
+			dragging = 0;
+			continue;
+		}
+		if((p.buttons & 1) && (wasdown2 & 1)) {
+			if(!dragging) {
+				dy := p.xy.y - press.y;
+				if(dy < 0)
+					dy = -dy;
+				if(dy > Dragmin)
+					dragging = 1;
+			}
+			if(dragging) {
+				# drag up (y falls): the rows move up, later ones show
+				dragacc += draglasty - p.xy.y;
+				draglasty = p.xy.y;
+				rowh := browlineh();
+				was := scroll;
+				while(dragacc >= rowh) {
+					dragacc -= rowh;
+					if(scroll < brow_maxscroll)
+						scroll++;
+				}
+				while(dragacc <= -rowh) {
+					dragacc += rowh;
+					if(scroll > 0)
+						scroll--;
+				}
+				if(scroll != was)
+					needdraw = 1;
+			}
+			continue;
+		}
+
+		# Button 1 released: a tap, unless it dragged (button 3 coming
+		# down as it goes up, a finger held still, was passed over above)
+		if(!(p.buttons & 1) && (wasdown2 & 1)) {
+			if(dragging) {
+				dragging = 0;
+				continue;
+			}
+			p = ref Pointer(p.buttons, press, p.msec);
 			# Cancel button
 			if(brow_cancelrect.max.x > brow_cancelrect.min.x &&
 					brow_cancelrect.contains(p.xy)) {
@@ -1649,8 +1716,7 @@ filebrowser(startpath: string): string
 						sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", fpath);
 					else if(!plumbopenfile(fpath, curpath)) {
 						# No plumber — fall back to opening in the editor.
-						has9p := ensureeditor();
-						openineditor(fpath, has9p);
+						openineditor(fpath);
 					}
 					break;
 				}
@@ -2068,8 +2134,7 @@ openpath(path: string)
 		sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", path);
 	} else {
 		# File: open in edit (ensure it's running first)
-		has9p := ensureeditor();
-		openineditor(path, has9p);
+		openineditor(path);
 	}
 }
 
@@ -2136,7 +2201,6 @@ launchdisapp(path: string)
 	writetofile(pctl, "center id=" + name);
 }
 
-# Send "open <path>" to edit. Use 9P if available, else real-file IPC.
 # Plumb a file-open so the plumber routes it to the presentation view by
 # type (pdf/image/markdown -> content, text/source -> editor) — the same
 # shared path ftree uses.  Returns 1 if the plumber accepted it, 0 if none
@@ -2158,64 +2222,29 @@ plumbopenfile(path, dir: string): int
 	return 1;
 }
 
-openineditor(path: string, has9p: int)
+# Open path in the editor: through its posted server (#seditor/fs,
+# post9p(2)) when one runs, mounted in a name space of the proc's own;
+# else start one on the file.  Nothing waits for it to appear.
+openineditor(path: string)
 {
-	cmd := "open " + path;
-	if(has9p) {
-		fd := sys->open("/edit/ctl", Sys->OWRITE);
-		if(fd != nil) {
-			b := array of byte cmd;
-			n := sys->write(fd, b, len b);
-			if(n == len b)
-				return;
-		}
-		sys->fprint(sys->fildes(2), "lucictx: openineditor 9P failed, using real-file: %r\n");
-	}
-	# Real-file IPC: edit polls /tmp/veltro/editor/ctl on timer ticks
-	wfd := sys->create("/tmp/veltro/editor/ctl", Sys->OWRITE, 8r666);
-	if(wfd != nil) {
-		b := array of byte cmd;
-		sys->write(wfd, b, len b);
-	}
+	done := chan of int;
+	spawn editoropen(path, done);
+	if(<-done)
+		return;
+	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	writetofile(pctl, "create id=editor type=app dis=/dis/wm/editor.dis label=editor data=" + path);
+	writetofile(pctl, "center id=editor");
 }
 
-# Ensure edit is running. If /edit/ctl doesn't exist, create a
-# presentation artifact to launch it in the presentation zone.
-# Guards against re-entry: once we've tried to launch, don't retry
-# until the activity changes (switchactivity resets the flag).
-editor_launched := 0;	# 1 = already attempted launch for this activity
-
-ensureeditor(): int
+editoropen(path: string, done: chan of int)
 {
-	# Check 9P path first (fast, instant open)
-	fd := sys->open("/edit/ctl", Sys->OREAD);
-	if(fd != nil) {
-		fd = nil;
-		editor_launched = 1;
-		return 1;	# 9P available
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
+		done <-= 0;
+		return;
 	}
-	# If we already tried launching, don't spam creation attempts
-	if(editor_launched)
-		return 0;
-	editor_launched = 1;
-	# Launch via presentation system
-	sys->fprint(sys->fildes(2), "lucictx: ensureeditor: launching editor\n");
-	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-	cmd := "create id=editor type=app dis=/dis/wm/editor.dis label=editor";
-	writetofile(pctl, cmd);
-	writetofile(pctl, "center id=editor");
-	# Poll until /edit/ctl appears
-	for(i := 0; i < 20; i++) {
-		sys->sleep(250);
-		fd = sys->open("/edit/ctl", Sys->OREAD);
-		if(fd != nil) {
-			fd = nil;
-			sys->fprint(sys->fildes(2), "lucictx: ensureeditor: 9P ready after %dms\n", (i+1)*250);
-			return 1;
-		}
-	}
-	sys->fprint(sys->fildes(2), "lucictx: ensureeditor: no 9P, using real-file IPC\n");
-	return 0;
+	done <-= writetofile("/mnt/editor/ctl", "open " + path) > 0;
 }
 
 # Find a PinnedPath matching the given source path, or nil if not found.

@@ -1,0 +1,6 @@
+# Numbers and symbols, for every letters' layout (its sym key).  The
+# format: lib/osk/layouts/dvorak.
+row	1 2 3 4 5 6 7 8 9 0
+row	@ # $ % & - + ( ) /
+row	more:1.5 * " ' : ; ! ? del:1.5
+row	abc:1.5 next , space:4 . enter:1.5

@@ -25,6 +25,9 @@ SYSMODULES=\
 
 DISBIN=$ROOT/dis/lib/js
 
+MODULES=\
+	jsjit.m\
+
 <$ROOT/mkfiles/mkdis
 
 jsre.dis:	jsrx.b

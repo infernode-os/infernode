@@ -86,11 +86,14 @@ Dat : module {
 	Lock : adt {
 		cnt : int;
 		chann : chan of int;
+		pid : int;	# the holder's
 
 		init : fn() : ref Lock;
 		lock : fn(l : self ref Lock);
 		unlock : fn(l : self ref Lock);
 		locked : fn(l : self ref Lock) : int;
+		held : fn(l : self ref Lock) : int;
+		trylock : fn(l : self ref Lock) : int;
 	};
 
 # 	Lockx : adt {
@@ -188,6 +191,7 @@ Dat : module {
 		mntdir : ref Mntdir;
 		nrpart : int;
 		rpart : array of byte;
+		snap : array of byte;	# a doc text or links read's answer, for the reads after it
 	};
 
 	Rangeset : type array of Range;

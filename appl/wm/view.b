@@ -49,13 +49,18 @@ View: module
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
+	sys = load Sys Sys->PATH;
+	# a group of its own, made before the spawn so realinit is in it
+	# (one made in realinit left the group Lucifer had given init, and
+	# Lucifer took view for ended as it opened); where init leads its
+	# group already (Lucifer's) this changes nothing
+	sys->pctl(Sys->NEWPGRP, nil);
 	spawn realinit(ctxt, argv);
 }
 
 
 realinit(ctxt: ref Draw->Context, argv: list of string)
 {
-	sys = load Sys Sys->PATH;
 	if (ctxt == nil) {
 		sys->fprint(sys->fildes(2), "view: no window context\n");
 		raise "fail:bad context";
@@ -67,7 +72,6 @@ realinit(ctxt: ref Draw->Context, argv: list of string)
 
 	menu = ref Menu(array[] of {"orig size", "zoom in", "fit window", "rotate 90", "upside down", "next", "prev", "exit"}, nil, 0);
 	
-	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
 
 	stderr = sys->fildes(2);

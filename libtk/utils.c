@@ -584,7 +584,8 @@ tkdupenv(TkEnv **env)
  * (the frame's windowborder among them) are refreshed too, and only the
  * colours an option set are kept.  Without this a live theme switch only
  * reached toplevels created AFTER the switch, and a window whose "." had
- * a -background kept its old frame.
+ * a -background kept its old frame.  A canvas's items are refreshed the
+ * same way (tkcvsretheme).
  */
 static char*
 tkretheme(TkTop *t, char *arg, char **ret)
@@ -598,6 +599,8 @@ tkretheme(TkTop *t, char *arg, char **ret)
 	for(tk = t->root; tk != nil; tk = tk->siblings) {
 		if(tk->env != nil && tk->env != t->env)
 			tksetenvcolours(tk->env);
+		if(tk->type == TKcanvas)
+			tkcvsretheme(tk);
 		tk->dirty = tkrect(tk, 1);
 		tkdirty(tk);
 	}

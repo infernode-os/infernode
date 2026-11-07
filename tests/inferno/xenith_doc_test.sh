@@ -11,9 +11,13 @@
 #	Markdown opens as text and Render shows it set (doc/ctl, doc/text),
 #	Render again goes back to the text;
 #	a source document (Markdown, HTML) shown beside its text (Zerox)
-#	is not set again at each edit, but on Put and doc/ctl refresh;
+#	is set again on Put and doc/ctl refresh; Live (in either window's
+#	tag, or doc/ctl live) sets it again a moment after each edit too,
+#	at once if its text changed meanwhile; Live in a window showing
+#	only the text opens one below it, showing the document, live;
 #	a large one (saved in the background) Put beside its document is
 #	written whole;
+#	Markdown far longer than any one image of it is set all the same;
 #	an image looked at is a document of one sheet its size;
 #	a PDF's links listed in doc/links, button 3 on one to a page goes
 #	to it, on one to a URI browses it in a window of Xenith's and does
@@ -145,6 +149,11 @@ b=`{read 16 < $W/body}
 check 'its body is its text, not its bytes' $"b '240 West Center'
 t=`{read 16 < $W/doc/text}
 check 'doc/text is its text' $"t '240 West Center'
+# read in pieces from one open, all of it: made once, at the start
+{while {read 100} {}} < $W/doc/text > /tmp/xdoc.text
+cat $W/body > /tmp/xdoc.body
+if {cmp /tmp/xdoc.text /tmp/xdoc.body} {ok 'doc/text read in pieces is all its text'} {bad 'doc/text read in pieces is not its text'}
+rm -f /tmp/xdoc.text /tmp/xdoc.body
 img=`{cat $W/image}
 check 'the image file names it' ${index 1 $img} $PDF
 
@@ -340,7 +349,7 @@ c=`{cat $M/doc/ctl}
 check 'Render again goes back to the text' $#c 0
 
 # ---- a source document shown beside its text (Zerox): set again ----
-# ---- on Put and on doc/ctl refresh, not at each edit ----
+# ---- live, as its text is edited; or (nolive) on Put and refresh ----
 
 # Execute a word in a window's tag, as B2 does (lower-case events are
 # the tag's): tagexec id word
@@ -349,9 +358,14 @@ fn tagexec {
 	wid := ${index 1 $a}
 	word := ${index 2 $a}
 	echo -n ' '^$word >> $XENITH/$wid/tag
-	n=`{cat $XENITH/$wid/tag | wc -c}
 	w=`{echo -n $word | wc -c}
-	echo 'Mx'^${expr $n $w -}^' '^$n > $XENITH/$wid/event
+	# the tag measured with the event file open: opening it takes the
+	# file's menu (Undo, Put) from the tag, as Acme does for a program
+	# reading the window's events
+	{
+		n=`{cat $XENITH/$wid/tag | wc -c}
+		echo 'Mx'^${expr $n $w -}^' '^$n
+	} > $XENITH/$wid/event
 }
 
 # Wait until a window's doc/text has a string: hasdoctext id string
@@ -401,10 +415,34 @@ for kind in md html {
 		echo render > $XENITH/$bid/doc/ctl
 		loaded $bid
 		hasdoctext $bid First
+		# not live (as it opens): only Put and doc/ctl refresh set it again
+		check $kind^': not live as it opens' `{attr $bid live} 0
+		echo ' Early' >> $XENITH/$aid/body
+		sleep 3
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Early*} {bad $kind^': an edit set the document again (not live)'} {ok $kind^': not live, an edit in its twin does not set the document again'}
+		# Live in its tag: set again now (its text changed), then once
+		# the editing in its twin pauses
+		tagexec $bid Live
+		check $kind^': Live' `{attr $bid live} 1
+		hasdoctext $bid Early
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Early*} {ok $kind^': Live sets it again from the edits made before'} {bad $kind^': Live:' $"t}
+		echo ' Live' >> $XENITH/$aid/body
+		hasdoctext $bid Live
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Live*} {ok $kind^': live, an edit in its twin sets it again from the unsaved text'} {bad $kind^': live:' $"t}
+		# Live again, in the text's window: turned off
+		tagexec $aid Live
+		check $kind^': Live in the twin turns it off' `{attr $bid live} 0
+		echo live > $XENITH/$bid/doc/ctl
+		check $kind^': doc/ctl live' `{attr $bid live} 1
+		echo nolive > $XENITH/$bid/doc/ctl
+		check $kind^': doc/ctl nolive' `{attr $bid live} 0
 		echo ' Unsaved' >> $XENITH/$aid/body
 		sleep 3
 		t=`{cat $XENITH/$bid/doc/text}
-		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again'} {ok $kind^': an edit in its twin does not set the document again'}
+		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again (nolive)'} {ok $kind^': nolive, an edit does not set it again'}
 		echo refresh > $XENITH/$bid/doc/ctl
 		hasdoctext $bid Unsaved
 		t=`{cat $XENITH/$bid/doc/text}
@@ -434,6 +472,10 @@ for kind in md html {
 		hasdoctext $bid Typed
 		t=`{cat $XENITH/$bid/doc/text}
 		if {~ $"t *Typed*} {ok $kind^': refresh takes typing not yet committed'} {bad $kind^': refresh after typing:' $"t}
+		# each window on the file holds a copy of the typing; it goes
+		# into the text once, not once for each window
+		b=`{cat $XENITH/$aid/body}
+		if {~ $"b *Typed*Typed* *yped*yped*} {bad $kind^': the typing went into the text twice:' $"b} {ok $kind^': the typing went into the text once'}
 		echo ' Saved' >> $XENITH/$aid/body
 		sleep 2
 		t=`{cat $XENITH/$bid/doc/text}
@@ -447,6 +489,42 @@ for kind in md html {
 	}
 	rm -f $SRC
 }
+# Live in a window showing only the text: a window opened below it
+# showing the document, live
+SRC=/tmp/xenith_doc_live.md
+echo '# Alone' > $SRC
+look $SRC
+aid=()
+for i in 1 2 3 4 5 6 7 8 9 10 {
+	if {~ $#aid 0} {
+		aid=`{winof xenith_doc_live.md}
+		if {~ $#aid 0} {sleep 1}
+	}
+}
+tagexec $aid Live
+bid=()
+for i in 1 2 3 4 5 6 7 8 9 10 {
+	if {~ $#bid 0} {
+		bid=`{other xenith_doc_live.md $aid}
+		if {~ $#bid 0} {sleep 1}
+	}
+}
+if {~ $#bid 0} {
+	bad 'Live in a text window opened no window for its document'
+} {
+	loaded $bid
+	check 'Live opens a window showing the document' `{attr $bid shown} 1
+	check 'and it is live' `{attr $bid live} 1
+	echo 'Beside' >> $XENITH/$aid/body
+	hasdoctext $bid Beside
+	t=`{cat $XENITH/$bid/doc/text}
+	if {~ $"t *Alone*Beside*} {ok 'and follows the text'} {bad 'Live window:' $"t}
+	echo clean > $XENITH/$bid/ctl
+	echo delete > $XENITH/$bid/ctl
+}
+echo clean > $XENITH/$aid/ctl
+echo delete > $XENITH/$aid/ctl
+rm -f $SRC
 # ---- a large file (written in the background) Put beside its ----
 # ---- document: the writer read the window's Buffer as the document ----
 # ---- was set again from it, and the file was written empty ----
@@ -499,25 +577,24 @@ rm -f /tmp/xenith_doc_big.want
 
 if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'} {ok 'refresh on a window showing its text is refused'}
 
-# ---- a source document too long to set: its text, not the error ----
+# ---- a source document longer than any one image of it: set ----
 # a program's window, its kind named (render markdown), its text far
-# too long for an image of it: the window shows its text again
+# too long for one image of it (6 CHANGELOGs, 120000 pixels tall at
+# this width, over the 256MB the image pool has): it is laid out and
+# drawn a strip at a time, not refused for want of image memory
+# (allocimage, as it was)
 (lid rest) = `{cat $XENITH/new/ctl}
 echo name /+Long > $XENITH/$lid/ctl
 rm -f /tmp/xenith_doc_long.md
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 {
+for i in 1 2 3 4 5 6 {
 	cat /CHANGELOG.md >> /tmp/xenith_doc_long.md
 }
 cat /tmp/xenith_doc_long.md > $XENITH/$lid/body
 if {echo render markdown > $XENITH/$lid/doc/ctl} {ok 'render markdown taken by a window named for no kind'} {bad 'render markdown refused'}
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
-	if {grep -s '^loading|^kind' $XENITH/$lid/doc/ctl} {sleep 1}
-}
-if {grep -s . $XENITH/$lid/doc/ctl} {
-	bad 'a document too long to set is still the window''s:' `{cat $XENITH/$lid/doc/ctl}
-} {
-	ok 'a document too long to set gives the window its text again'
-}
+loaded $lid
+check 'a document longer than any image of it is set' `{attr $lid sheets} 1
+col=`{attr $lid column}
+if {ntest ${expr ${index 2 $col} 100000 '>'}} {ok 'as tall as its text needs:' $col} {bad 'its column:' $col}
 check 'and the text is whole' `{wc -c < $XENITH/$lid/body} `{wc -c < /tmp/xenith_doc_long.md}
 echo delete > $XENITH/$lid/ctl
 rm -f /tmp/xenith_doc_long.md

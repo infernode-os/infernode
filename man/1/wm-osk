@@ -1,0 +1,240 @@
+.TH WM-OSK 1
+.SH NAME
+wm/osk \- a keyboard on the screen
+.SH SYNOPSIS
+.B wm/osk
+[
+.B -sm
+] [
+.B -M
+.BR text | plain | secret
+] [
+.B -l
+.I layout
+] [
+.B -F
+.I fd
+] [
+.B -r
+.I tracefile
+]
+.SH DESCRIPTION
+.I Osk
+draws a keyboard along the bottom of the screen, to be typed on with
+fingers.  Its keys type into whatever has the keyboard, as a keyboard's
+do (through
+.BR /dev/kbdin ,
+.IR cons (3)),
+and it never takes the keyboard itself: it asks the window manager for
+the pointer only and to be docked, and
+.IR wm (1)
+and Lucifer give it a strip of its own, the windows (or Lucifer's
+zones) above it.
+.PP
+A key types when the finger lifts: the key under it then.  A finger
+that lands on the wrong key slides to the right one; the key under a
+finger is shown large above it.  Two fingers may be down at once (two
+thumbs, one key still held as the next is touched): each is its own
+touch
+.RB ( /dev/fingers ,
+.IR pointer (3)).
+A mouse's clicks type too.
+.PP
+As a word is typed, the likeliest words for its touches are shown above
+the keys
+.RI ( kbdecode (2)):
+the touches against the keys, where a finger lands and how it slips,
+and a word list
+.RB ( /lib/osk/en.words ,
+and the words learned).  When the word ends (a space, punctuation, a
+new line) a slip onto the next key, a letter missed or doubled, two
+swapped, or an apostrophe left out
+.RB ( dont )
+is put right, if the word meant is clearly likelier than what was
+typed; a word in the list, a single letter, one with a digit is left.
+A delete straight after takes the correction back, and the word is not
+put right again.  The first of the words shown is what was typed, in
+quotes; the one a space would put in is in the accent colour; a touch on
+one puts it in.  Two spaces after a word end a sentence (a full stop),
+and a sentence's first letter is a capital.
+.PP
+A stroke through a word's letters, without lifting, types the word
+(a swipe), with a space before it after another word; the next likeliest
+are shown, and a touch on one puts it in its place.  A delete straight
+after a swiped word deletes it whole.
+.PP
+The keys of its own:
+.TF shift
+.TP
+.B shift
+the next letter a capital; twice quickly, capitals until shift again
+.TP
+.B del
+delete; held, it repeats, and after a while deletes words.  A stroke
+left from it deletes a word for every three keys' width.
+.TP
+.B ?123
+numbers and symbols, and from them
+.B =\e<
+more: Esc, Tab, Ctrl (the next key a control character), the arrows,
+Home and End;
+.B abc
+the letters again
+.TP
+.I globe
+the next letters' layout
+.TP
+.I space
+shows the layout's name
+.PD
+.PP
+A long press on a key offers its accents and alternates
+.RB ( /lib/osk/alternates );
+the finger slides to one and lifts.  A swipe down from above the keys,
+or a touch on the keyboard glyph at the right of the words, hides the
+keyboard to a handle along the bottom; a touch on the handle shows it.
+.PP
+The layouts are QWERTY, Dvorak and Colemak, the letters, and the
+symbols, each a text file in
+.B /lib/osk/layouts
+(the format is at the head of
+.BR /lib/osk/layouts/dvorak );
+.B /lib/osk/order
+lists the letters' layouts in the order the globe key goes through them.
+The layout last used is kept in
+.BR $home/lib/osk/layout ,
+the words learned in
+.BR $home/lib/osk/words ,
+and where the typist's touches land on each key, learned as words are
+typed and not taken back, in
+.BR $home/lib/osk/offsets. \fIlayout\fR.
+A word not in the list that is typed and kept twice is learned, as is a
+word whose correction was taken back and that is then kept.
+.PP
+Without
+.BR -s ,
+.I osk
+is shown from the start, whatever else is attached: it was asked for.
+With
+.B -s
+it is the system's keyboard, as Lucifer starts it: hidden while a
+keyboard of the machine's is attached
+.RB ( /dev/keyboards ,
+less the devices
+.B /lib/osk/ignore
+names that only call themselves keyboards) or has just been typed on,
+and otherwise shown once the screen is touched.  With
+.B -m
+as well (Lucifer on a phone or tablet), it is shown only when asked
+(a text field taking the keyboard asks, through
+.IR softkbd (2)).
+Lucifer starts it unless the environment variable
+.B osk
+is
+.BR off ;
+on iOS and Android the system's keyboard is never shown, whether this
+runs or not, and a keyboard attached to the device types as it always
+did.
+With
+.B -s
+and no window manager (the boot starts it so beside
+.IR logon (1)'s
+login screen) it does not read the pointer: that has one reader, the
+program it types for, and its own touches come from
+.B /dev/fingers
+alone.
+.PP
+.B -M
+sets the mode
+.IR osk (4)'s
+.B mode
+request sets:
+.B text
+(prose: words put right, sentences begun with a capital),
+.B plain
+(a shell's or code's: words offered, never put right) or
+.B secret
+(a password's: nothing put right, nothing shown above the keys or
+enlarged under the finger, nothing learned, and a trace says only that
+a key was typed).  The boot starts
+.B wm/osk -s -M secret
+for the login screen, with no window manager: its window is the strip
+along the bottom of the screen, and it takes only the touches there;
+.B height
+in its status is the strip's, which
+.I wm/logon
+follows, laying its form out above it.  It is killed when the login is
+done, Lucifer starting its own.
+.PP
+.B -l
+.I layout
+starts with that letters' layout.
+.B -F
+.I fd
+serves
+.IR osk (4)'s
+files on file descriptor
+.I fd
+(for the program that started it to mount) instead of mounting them at
+.BR /mnt/osk .
+.B -r
+.I tracefile
+records every touch, what was typed for it and every word put right or
+swiped, a line each, from the start (as
+.B record
+on its ctl file does): the traces a typist's own typing makes, to test
+and tune it by.
+.SH FILES
+.TF /lib/osk/layouts/*
+.TP
+.B /lib/osk/layouts/*
+the layouts
+.TP
+.B /lib/osk/en.words
+the word list: SCOWL's words, counted in Google Books Ngram
+.RB ( /lib/osk/NOTICE ;
+.B tools/osk/mkwords.sh
+makes it)
+.TP
+.B /lib/lucifer/theme/*
+its colours: a theme's roles (header, input, border, accent, text),
+unless the theme sets the keyboard's own,
+.BR osk-board ,
+.BR osk-key ,
+.B osk-meta
+(shift, delete, the layers),
+.BR osk-text ,
+.BR osk-metatext ,
+.B osk-press
+(a key held down),
+.BR osk-presstext ,
+.B osk-word
+(the words shown),
+.B osk-auto
+and
+.B osk-autobg
+(the word a space would put in, and behind it), as Glenda does
+.TP
+.B $home/lib/osk/*
+what it has learned
+.PD
+.SH SOURCE
+.B /appl/wm/osk.b
+.br
+.B /appl/lib/kbdecode.b
+.br
+.B /appl/lib/osklayout.b
+.SH SEE ALSO
+.IR wm (1),
+.IR kbdecode (2),
+.IR softkbd (2),
+.IR cons (3),
+.IR pointer (3),
+.IR osk (4)
+.SH BUGS
+It knows only what it typed: where the caret is, and what is in front of
+it, are the application's.  A touch elsewhere, a key of the machine's,
+an arrow key, and the word being typed is forgotten, and the next delete
+is a plain one.
+.br
+English only.

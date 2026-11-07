@@ -17,6 +17,8 @@ SYSMODULES=\
 	sys.m\
 	url.m\
 	webclient.m\
+	crc.m\
+	draw.m\
 
 DISBIN=$ROOT/dis/lib/git
 

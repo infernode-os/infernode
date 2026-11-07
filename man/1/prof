@@ -133,8 +133,12 @@ is present.
 .IR prof (2),
 .IR prof (3)
 .SH BUGS
-.I Prof
-cannot profile compiled limbo programs.
+Compiled Limbo
+.RB ( "emu -c1" )
+is profiled only on macOS hosts, where the emulator asks the host where
+compiled code is at each sample; elsewhere compiled code does not keep
+the program counter the samples read, and its time lands on the last
+interpreted instruction.
 
 
 

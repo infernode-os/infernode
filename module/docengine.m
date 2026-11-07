@@ -20,7 +20,8 @@
 Docengine: module
 {
 	# What a document is set in: a flowing document is laid out to
-	# width; the colours are the window's (or the theme's).
+	# width; the colours are the window's (or the theme's).  Height
+	# is the view's, a web page's viewport (0: not known).
 	Style: adt {
 		width:	int;
 		font:	ref Draw->Font;
@@ -29,6 +30,7 @@ Docengine: module
 		bg:	ref Draw->Image;
 		accent:	ref Draw->Image;
 		codebg:	ref Draw->Image;
+		height:	int;
 	};
 
 	# A word as drawn, where it is on its sheet

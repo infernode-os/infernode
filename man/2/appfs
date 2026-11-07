@@ -1,0 +1,81 @@
+.TH APPFS 2
+.SH NAME
+appfs \- serve a program's own files, posted
+.SH SYNOPSIS
+.EX
+include "appfs.m";
+appfs := load Appfs Appfs->PATH;
+
+Req: adt {
+	file:	string;
+	data:	string;
+	reply:	chan of string;
+};
+
+init:	fn(): string;
+serve:	fn(spec: string, files: array of string, reqs: chan of ref Req):
+		(string, ref Sys->FD, string);
+event:	fn(msg: string);
+.EE
+.SH DESCRIPTION
+A program with something to show another, an agent's tool or Lucifer,
+names its
+.IR files ;
+.B serve
+serves them, with
+.B event
+beside them, as a 9P tree posted as
+.BI #s spec /fs
+.RB ( fs.1
+for a second instance; see
+.IR post9p (2)).
+It returns the path posted and a tether, or
+.B nil
+and the reason.
+.PP
+A read or write of one of the files reaches the program as a
+.B Req
+on
+.IR reqs ,
+to be answered in its own loop from what it holds at that moment.
+For a read
+.B data
+is nil and the program replies with the text; a read is made once an
+open, at its offset 0, so a reader taking it in pieces sees one text.
+For a write
+.B data
+is what was written, and the program replies nil when it is done or a
+reason, which is the write's error.
+Nothing is written ahead of time and nothing is polled.
+.PP
+.B Event
+gives every reader of
+.B event
+the line
+.IR msg :
+a read of
+.B event
+waits for the next, each open has its own queue, and a line already
+waiting in it is not queued again.
+.PP
+The program keeps the tether.
+appfs's processes are in a group and file descriptor table of their
+own; when the program goes, or drops the tether, the posted file is
+taken away and they go too.
+.SH EXAMPLES
+wm/man serves
+.BR ctl ,
+.B state
+and
+.BR view ;
+.IR tools9p (8)
+mounts
+.B #sman/fs
+at
+.B /mnt/man
+for the man tool.
+.SH SOURCE
+.B /appl/lib/appfs.b
+.SH SEE ALSO
+.IR post9p (2),
+.IR styxservers (2)

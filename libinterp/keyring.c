@@ -321,6 +321,7 @@ newSK(SigAlg *sa, String *owner, int increfsa)
 	}
 	k->x.owner = owner;
 	k->key = 0;
+	k->vec = sa->vec;
 	return k;
 }
 
@@ -328,12 +329,10 @@ static void
 freeSK(Heap *h, int swept)
 {
 	SK *k;
-	SigAlg *sa;
 
 	k = H2D(SK*, h);
-	sa = checkSigAlg(k->x.sa);
-	if(k->key)
-		(*sa->vec->skfree)(k->key);
+	if(k->key != nil && k->vec != nil)
+		(*k->vec->skfree)(k->key);
 	freeheap(h, swept);
 }
 
@@ -549,6 +548,7 @@ newPK(SigAlg *sa, String *owner, int increfsa)
 	}
 	k->x.owner = owner;
 	k->key = 0;
+	k->vec = sa->vec;
 	return k;
 }
 
@@ -574,12 +574,10 @@ void
 freePK(Heap *h, int swept)
 {
 	PK *k;
-	SigAlg *sa;
 
 	k = H2D(PK*, h);
-	sa = checkSigAlg(k->x.sa);
-	if(k->key)
-		(*sa->vec->pkfree)(k->key);
+	if(k->key != nil && k->vec != nil)
+		(*k->vec->pkfree)(k->key);
 	freeheap(h, swept);
 }
 
@@ -760,6 +758,7 @@ newCertificate(SigAlg *sa, String *ha, String *signer, long exp, int increfsa)
 	c->x.ha = ha;
 	c->x.exp = exp;
 	c->signa = 0;
+	c->vec = sa->vec;
 
 	return c;
 }
@@ -768,12 +767,10 @@ void
 freeCertificate(Heap *h, int swept)
 {
 	Certificate *c;
-	SigAlg *sa;
 
 	c = H2D(Certificate*, h);
-	sa = checkSigAlg(c->x.sa);
-	if(c->signa)
-		(*sa->vec->sigfree)(c->signa);
+	if(c->signa != nil && c->vec != nil)
+		(*c->vec->sigfree)(c->signa);
 	freeheap(h, swept);
 }
 
@@ -1825,7 +1822,9 @@ Keyring_getmsg(void *fp)
 
 /*
  * CNSA 2.0 strict mode — fleet-wide policy via the host CNSAMODE env var
- * (the emu also reflects it into Inferno /env/cnsamode for Limbo tools).
+ * (the emu also reflects it into Inferno /env/cnsamode for Limbo tools);
+ * on bare metal, getenv answers from the kernel's switch, which boot
+ * throws when the card has a cnsamode file (os/arm64/notyet.c).
  * When on, the native STS handshake uses ML-KEM-1024 (FIPS 203, NIST
  * Category 5) instead of ML-KEM-768. Every node in a CNSA-mode fleet must
  * agree; a mixed 768/1024 pair fails the public-key length check, by design
@@ -3601,6 +3600,7 @@ Keyring_x25519(void *fp)
 	F_Keyring_x25519 *f;
 	uchar out[32];
 	void *r;
+	int i, nz;
 
 	f = fp;
 	r = *f->ret;
@@ -3613,8 +3613,16 @@ Keyring_x25519(void *fp)
 		error(exBadKey);
 
 	x25519(out, f->scalar->data, f->point->data);
+	nz = 0;
+	for(i = 0; i < nelem(out); i++)
+		nz |= out[i];
+	if(nz == 0){
+		memset(out, 0, sizeof(out));
+		return;
+	}
 
 	*f->ret = mem2array(out, 32);
+	memset(out, 0, sizeof(out));
 }
 
 void

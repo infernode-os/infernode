@@ -37,6 +37,17 @@ Medium nullmedium =
 .bwrite=	nullbwrite,
 };
 
+/* Published while a real medium's bind/unbind callback runs without the
+ * interface lock.  It rejects traffic and makes a concurrent unbind fail
+ * instead of observing partially constructed medium state. */
+Medium unboundmedium =
+{
+.name=		"unbound",
+.bind=		nullbind,
+.unbind=	nullunbind,
+.bwrite=	nullbwrite,
+};
+
 void
 nullmediumlink(void)
 {

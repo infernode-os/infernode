@@ -1487,8 +1487,8 @@ plumbreceiver()
 }
 
 # Open a file path into the presentation view, choosing the renderer by
-# type: pdf/image/markdown become content artifacts, everything else opens
-# in the editor.  Mirrors ftree's direct path so both routes behave the
+# its kind (plumbkind): pdf, image, markdown and mermaid become content
+# artifacts, everything else opens in the editor.  Mirrors ftree's direct path so both routes behave the
 # same.
 openintopres(path: string)
 {
@@ -1506,19 +1506,7 @@ openintopres(path: string)
 	plumbseq++;
 	id := sys->sprint("plumb-%d", plumbseq);
 
-	atype := "";
-	readcontent := 0;
-	case ext {
-	"pdf" =>
-		atype = "pdf";
-	"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
-		atype = "image";
-	"md" or "markdown" =>
-		atype = "markdown";
-		readcontent = 1;
-	* =>
-		atype = "app";		# text/source/unknown -> editor
-	}
+	(atype, readcontent) := plumbkind(path, ext);
 
 	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
 	if(atype == "app") {
@@ -1541,6 +1529,43 @@ openintopres(path: string)
 			mountpt_g, actid_g, id), data);
 	}
 	writetofile(ctlpath, "center id=" + id);
+}
+
+# The artifact a plumbed file becomes, and whether its text is its
+# data (else its path is): by the kinds Xenith shows as documents
+# (docreg(2), /lib/xenith/doctypes), so a file Xenith shows as one is
+# shown here as one.  HTML, which Xenith sets beside its text, opens
+# in the editor; anything else does too.
+plumbkind(path, ext: string): (string, int)
+{
+	if(docreg != nil) {
+		head: array of byte;
+		if((fd := sys->open(path, Sys->OREAD)) != nil) {
+			head = array[16] of byte;
+			n := sys->read(fd, head, len head);
+			if(n < 0)
+				n = 0;
+			head = head[0:n];
+		}
+		k := docreg->kind(path, head);
+		if(k != nil)
+			case k.name {
+			"pdf" or "image" =>
+				return (k.name, 0);
+			"markdown" or "mermaid" =>
+				return (k.name, 1);
+			}
+		return ("app", 0);
+	}
+	case ext {
+	"pdf" =>
+		return ("pdf", 0);
+	"png" or "jpg" or "jpeg" or "gif" or "bit" or "ppm" =>
+		return ("image", 0);
+	"md" or "markdown" =>
+		return ("markdown", 1);
+	}
+	return ("app", 0);		# text/source/unknown -> editor
 }
 
 # A web page, in Charon: the running one, told to open it through its
@@ -1692,7 +1717,7 @@ renderart(art: ref Artifact, contentw: int): ref Image
 		if(art.atype == "image")
 			w = contentw * artzoom(art) / 100;
 		st := ref Docengine->Style(w, mainfont, monofont_g,
-			textcol, bgcol, accentcol, codebgcol_g);
+			textcol, bgcol, accentcol, codebgcol_g, 0);
 		(img, err) := docreg->picture(hint, data, st);
 		if(img == nil)
 			sys->fprint(stderr, "%s: render %s: %s\n", "lucipres", art.atype, err);
@@ -2362,20 +2387,12 @@ writetosnarf(text: string)
 
 readfile(path: string): string
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
+	# Converted whole: a rune cut by the end of one read is not two
+	# bad ones
+	b := readfilebytes(path);
+	if(b == nil)
 		return nil;
-	result := "";
-	buf := array[8192] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		result += string buf[0:n];
-	}
-	if(result == "")
-		return nil;
-	return result;
+	return string b;
 }
 
 readfilebytes(path: string): array of byte

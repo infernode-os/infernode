@@ -1,0 +1,6 @@
+rule=VIDEO_WITH_EGRESS
+	severity=high
+	require='reads_video'
+	andone='dials_net sends_llm spawns_proc calls_mcp'
+	message='The agent can read a video feed, which may be a live camera seeing the room the machine is in, and has a way to send data off the machine. Sensitive reads plus egress is exfiltration risk (infernode-os/infernode#1005).'
+	fix='remove /mnt/video from caps.paths, or remove the egress; for vision, keep frames on the machine (a local model with no network or LLM egress)'

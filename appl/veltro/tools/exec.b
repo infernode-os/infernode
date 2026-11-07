@@ -45,9 +45,10 @@ ToolExec: module {
 };
 
 # Limits
-DEFAULT_TIMEOUT: con 5000;   # 5 seconds
-MAX_TIMEOUT: con 30000;      # 30 seconds
-MAX_OUTPUT: con 16384;       # 16KB max output
+DEFAULT_TIMEOUT: con 30000;  # 30 seconds; 5 cut off a build half way
+MAX_TIMEOUT: con 120000;     # 120 seconds, under the harness's bound on a call
+MAX_OUTPUT: con 16384;       # 16KB max output kept
+HEAD_OUTPUT: con 4096;       # of it, from the start; the rest is the end
 
 init(): string
 {
@@ -85,8 +86,10 @@ doc(): string
 		"IMPORTANT: Inferno shell syntax, not POSIX:\n" +
 		"  - No &&, ||; use ; to sequence\n" +
 		"  - Single quotes for strings\n\n" +
-		"Returns program output.\n" +
-		"Default timeout: 5 seconds (max 30s).";
+		"Returns program output: all of it, or, when it is long, its start\n" +
+		"and its end (where errors are), and how much was left out.\n" +
+		"Default timeout: 30 seconds; -t <seconds> before the command sets\n" +
+		"another (at most 120).";
 }
 
 schema(): string
@@ -97,7 +100,8 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. '/dis/bind.dis -a /mnt/foo /n/bar'.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. '/dis/bind.dis -a /mnt/foo /n/bar'.\"}," +
+				"\"timeout\":{\"type\":\"string\",\"description\":\"Seconds to let it run. Optional; default 30, at most 120.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -121,6 +125,25 @@ exec(args: string): string
 	# Strip leading/trailing whitespace
 	while(len cmd > 0 && (cmd[0] == ' ' || cmd[0] == '\t'))
 		cmd = cmd[1:];
+
+	# -t <seconds>: how long it may run
+	timeoutms := DEFAULT_TIMEOUT;
+	if(len cmd > 3 && cmd[0:3] == "-t ") {
+		i := 3;
+		while(i < len cmd && cmd[i] == ' ')
+			i++;
+		secs := 0;
+		for(; i < len cmd && cmd[i] >= '0' && cmd[i] <= '9'; i++)
+			secs = secs * 10 + cmd[i] - '0';
+		if(secs > 0) {
+			timeoutms = secs * 1000;
+			if(secs > MAX_TIMEOUT / 1000)
+				timeoutms = MAX_TIMEOUT;
+			while(i < len cmd && (cmd[i] == ' ' || cmd[i] == '\t'))
+				i++;
+			cmd = cmd[i:];
+		}
+	}
 	while(len cmd > 0 && (cmd[len cmd - 1] == ' ' || cmd[len cmd - 1] == '\t' || cmd[len cmd - 1] == '\n'))
 		cmd = cmd[0:len cmd - 1];
 
@@ -210,25 +233,29 @@ exec(args: string): string
 	# Buffered capacity 1: goroutines can complete their send and exit
 	# even after the alt has moved on, preventing indefinite blocking.
 	result := chan[1] of string;
-	pidch := chan[1] of int;
-	spawn runcommand(cmd, fds[1], result, pidch);
+	ctlch := chan[1] of ref Sys->FD;
+	spawn runcommand(cmd, fds[1], result, ctlch);
 	fds[1] = nil;
 
-	# The worker reports its process-group id before it execs anything, so a
-	# timed-out or over-long command can be killed as a unit below rather
-	# than abandoned to keep running after this tool returns (INFR-421).
-	workerpid := <-pidch;
+	# Hold an already-open capability to the worker's process control. The
+	# leader remains alive until cleanup, so descendants cannot make the group
+	# unnameable by letting the leader exit first.
+	groupctl := <-ctlch;
 
 	# Read output with timeout
 	output := "";
 	done := 0;
 
 	timeout := chan[1] of int;
-	spawn timer(timeout, DEFAULT_TIMEOUT);
+	spawn timer(timeout, timeoutms);
 
 	reader := chan[1] of string;
 	spawn readoutput(fds[0], reader);
 
+	# A long output is kept as its start and its end, and the command
+	# runs to its finish: cut off at the cap, a build or a test run was
+	# killed half way, and its errors, at the end, were lost.
+	omitted := 0;
 	while(!done) {
 		alt {
 		s := <-reader =>
@@ -236,16 +263,26 @@ exec(args: string): string
 				done = 1;
 			} else {
 				output += s;
-				if(len output > MAX_OUTPUT) {
-					output = output[0:MAX_OUTPUT] + "\n... (output truncated)";
-					done = 1;
+				if(len output > 2 * MAX_OUTPUT) {
+					drop := len output - (MAX_OUTPUT - HEAD_OUTPUT);
+					omitted += drop - HEAD_OUTPUT;
+					output = output[0:HEAD_OUTPUT] + output[drop:];
 				}
 			}
 		<-timeout =>
-			output += "\n... (timeout after 5 seconds)";
+			output += sys->sprint("\n... (timeout after %d seconds)", timeoutms / 1000);
 			done = 1;
 		}
 	}
+	if(len output > MAX_OUTPUT) {
+		drop := len output - (MAX_OUTPUT - HEAD_OUTPUT);
+		omitted += drop - HEAD_OUTPUT;
+		output = output[0:HEAD_OUTPUT] + output[drop:];
+	}
+	if(omitted > 0)
+		output = output[0:HEAD_OUTPUT] +
+			sys->sprint("\n... [%d bytes of output left out] ...\n", omitted) +
+			output[HEAD_OUTPUT:];
 
 	# Close read fd to unblock readoutput goroutine if still blocked on read
 	fds[0] = nil;
@@ -255,15 +292,24 @@ exec(args: string): string
 	# leaving it alive orphans a process outside this tool's accounting.
 	# Two abandoned limbo.dis compiles left this way are what faulted the
 	# emulator in the escape campaign (INFR-421).  Kill the worker's whole
-	# process group so nothing survives the return; a killed group leader
+	# descendant process tree so a command cannot escape cleanup with NEWPGRP;
+	# a killed group leader
 	# will not report back, so do not block waiting for it.
 	err := "";
+	finished := 0;
 	alt {
 	e := <-result =>
 		err = e;
+		finished = 1;
 	* =>
-		killgrp(workerpid);
-		output += "\n... (command still running at return; process group terminated)";
+		;
+	}
+	killed := killtree(groupctl);
+	if(!finished) {
+		if(killed)
+			output += "\n... (command still running at return; process tree terminated)";
+		else
+			output += "\n... (command still running at return; process tree could not be terminated)";
 	}
 
 	if(output == "" && err != "")
@@ -280,13 +326,19 @@ exec(args: string): string
 
 # Run command in a separate thread with isolated fd group.
 # NEWFD prevents dup from affecting other goroutines' stdout/stderr.
-runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan of int)
+runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan of ref Sys->FD)
 {
 	# Become a process-group leader so the parent can kill this command and
 	# everything it spawns as one unit if it overruns its deadline (INFR-421).
 	# NEWPGRP returns this proc's pid, which is also the new group id.
 	pid := sys->pctl(Sys->NEWPGRP, nil);
-	pidch <-= pid;
+	ctl := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	ctlch <-= ctl;
+	if(ctl == nil) {
+		result <-= sys->sprint("cannot open private process control: %r");
+		return;
+	}
+	ctl = nil;
 
 	# Open this worker's wait channel before NODEVS. The shell normally reaches
 	# it through #p or ambient /prog; retaining this one FD lets the namespace
@@ -313,20 +365,22 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan 
 
 	err := sh->systemfd(nil, cmd, waitfd);
 	result <-= err;
+
+	# Keep the leader alive until the parent has reaped the whole tree. Drop
+	# every descriptor first so the output reader reaches EOF.
+	waitfd = nil;
+	sys->pctl(Sys->NEWFD, nil);
+	park := chan of int;
+	<-park;
 }
 
-# Kill a worker's whole process group.  The exec tool is exempt from the
-# NODEVS restriction that hides /prog from other tools, so it can write here;
-# best-effort, so if /prog is absent the command keeps the pre-fix behaviour.
-killgrp(pid: int)
+# Kill through the ctl opened before the worker dropped device attachment.
+killtree(ctl: ref Sys->FD): int
 {
-	if(pid <= 0)
-		return;
-	ctl := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(ctl == nil)
-		return;
-	msg := array of byte "killgrp";
-	sys->write(ctl, msg, len msg);
+		return 0;
+	msg := array of byte "killtree";
+	return sys->write(ctl, msg, len msg) == len msg;
 }
 
 # Timer thread
@@ -413,8 +467,8 @@ convertquotes(s: string): string
 #   >{cmd}   — process substitution (write end)
 #
 # Note: Inferno does NOT support bash's $() syntax or bare backticks.
-# Semicolons and pipes are stripped to prevent command chaining that could
-# discover paths outside the agent's declared namespace (defense-in-depth).
+# Semicolons, pipes, and ampersands are stripped to prevent command chaining
+# or backgrounding outside the tool call's lifetime (defense-in-depth).
 sanitizecmd(s: string): string
 {
 	result := "";
@@ -459,9 +513,8 @@ sanitizecmd(s: string): string
 			continue;
 		}
 
-		# Strip semicolons and pipes — prevents command chaining
-		# that could discover namespace contents outside declared scope
-		if(c == ';' || c == '|') {
+		# Strip chaining and backgrounding operators.
+		if(c == ';' || c == '|' || c == '&') {
 			i++;
 			continue;
 		}

@@ -431,19 +431,19 @@ testStreamChannelOrder(t: ref T)
 testModelAliasHaiku(t: ref T)
 {
 	got := resolvemodel("haiku");
-	t.assertseq(got, "claude-haiku-4-5-20251001", "haiku alias");
+	t.assertseq(got, "claude-haiku-5-5", "haiku alias");
 }
 
 testModelAliasSonnet(t: ref T)
 {
 	got := resolvemodel("sonnet");
-	t.assertseq(got, "claude-sonnet-4-5-20250929", "sonnet alias");
+	t.assertseq(got, "claude-sonnet-5-5", "sonnet alias");
 }
 
 testModelAliasOpus(t: ref T)
 {
 	got := resolvemodel("opus");
-	t.assertseq(got, "claude-opus-4-5-20251101", "opus alias");
+	t.assertseq(got, "claude-opus-5-5", "opus alias");
 }
 
 testModelAliasPassthrough(t: ref T)
@@ -586,7 +586,7 @@ newTestSession(): ref TestSession
 		nil,    # messages
 		"",     # lastresponse
 		0,      # totaltokens
-		"claude-sonnet-4-5-20250929",  # model
+		"claude-sonnet-5-5",  # model
 		0.7,    # temperature
 		"",     # systemprompt
 		0,      # thinkingtokens
@@ -632,7 +632,7 @@ testSessionResetClearsTokens(t: ref T)
 testSessionResetPreservesSettings(t: ref T)
 {
 	sess := newTestSession();
-	sess.model = "claude-opus-4-5-20251101";
+	sess.model = "claude-opus-5-5";
 	sess.temperature = 1.5;
 	sess.systemprompt = "Be helpful";
 	sess.thinkingtokens = 5000;
@@ -649,7 +649,7 @@ testSessionResetPreservesSettings(t: ref T)
 	t.asserteq(sess.totaltokens, 0, "tokens cleared");
 
 	# Settings should be preserved
-	t.assertseq(sess.model, "claude-opus-4-5-20251101", "model preserved");
+	t.assertseq(sess.model, "claude-opus-5-5", "model preserved");
 	t.assert(fapprox(sess.temperature, 1.5), "temperature preserved");
 	t.assertseq(sess.systemprompt, "Be helpful", "systemprompt preserved");
 	t.asserteq(sess.thinkingtokens, 5000, "thinkingtokens preserved");
@@ -661,7 +661,7 @@ testSessionResetPreservesSettings(t: ref T)
 testContextLimitDefault(t: ref T)
 {
 	# Default context limit is 200000
-	t.asserteq(contextlimit("claude-sonnet-4-5-20250929"), 200000, "default context limit");
+	t.asserteq(contextlimit("claude-sonnet-5-5"), 200000, "default context limit");
 }
 
 testContextLimitForModel(t: ref T)
@@ -852,9 +852,9 @@ resolvemodel(name: string): string
 {
 	lname := str->tolower(name);
 	case lname {
-	"haiku" =>  return "claude-haiku-4-5-20251001";
-	"sonnet" => return "claude-sonnet-4-5-20250929";
-	"opus" =>   return "claude-opus-4-5-20251101";
+	"haiku" =>  return "claude-haiku-5-5";
+	"sonnet" => return "claude-sonnet-5-5";
+	"opus" =>   return "claude-opus-5-5";
 	}
 	return name;
 }

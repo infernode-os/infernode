@@ -1,0 +1,12 @@
+# What a Pi 4's boot EEPROM reads instead of config.txt after a tryboot
+# reset: config.txt with the kernel and command line of the candidate.
+# docs/BAREMETAL.md, section 4.
+arm_64bit=1
+enable_uart=1
+init_uart_clock=48000000
+kernel=tryboot.img
+cmdline=tryboot.cmd
+max_framebuffers=2
+arm_boost=1
+core_freq=500
+core_freq_min=500

@@ -68,10 +68,12 @@ extern int CFRunLoopRunInMode(CFStringRef mode, double seconds, unsigned char re
  * text-field focus. On desktop there is no soft keyboard and text input is
  * simply left enabled, so typing (SDL_EVENT_TEXT_INPUT) always works.
  */
+#ifndef MOBILE_TOUCH	/* -DMOBILE_TOUCH=1 tries the touch path on a desktop */
 #if (defined(__APPLE__) && TARGET_OS_IOS) || defined(__ANDROID__)
 #define MOBILE_TOUCH 1
 #else
 #define MOBILE_TOUCH 0
+#endif
 #endif
 
 /* External keyboard queue (from devcons.c) */
@@ -272,8 +274,12 @@ static SDL_FRect dest_rect = {0, 0, 0, 0};
  * left, one to one: a resize changes what is shown and is posted to
  * /dev/wmsize, and programs lay themselves out to it (Acme-SAC's design;
  * Xenith and Lucifer read it). Nothing is scaled, and there are no
- * margins. On the touch platforms the screen is the safe area, shown
- * whole, as before.
+ * margins. The touch platforms do the same with the safe area: the
+ * buffer is square, as long as the display's longer side, so the screen
+ * fits it upright or on its side, and the part shown is the safe area.
+ * A rotation, or an iPad's Split View or Slide Over, changes the safe
+ * area: the new one is shown and posted to /dev/wmsize, as a desktop
+ * window's resize is.
  */
 static SDL_FRect src_rect = {0, 0, 0, 0};
 static int window_width = 0;
@@ -292,8 +298,6 @@ static int safe_x = 0, safe_y = 0, safe_w = 0, safe_h = 0;
 static void
 calc_dest_rect(void)
 {
-	float scale_x, scale_y, scale;
-	float dest_w, dest_h;
 	int aw = safe_w, ah = safe_h, ax = safe_x, ay = safe_y;
 
 #if !MOBILE_TOUCH
@@ -308,39 +312,23 @@ calc_dest_rect(void)
 		return;
 	}
 #endif
-	src_rect.x = 0;
-	src_rect.y = 0;
-	src_rect.w = (float)sdl_width;
-	src_rect.h = (float)sdl_height;
-
-	/* Present into the safe area, not the full window, so the iOS status
-	 * bar / home indicator don't occlude the UI. Fall back to the full
-	 * window if the safe area isn't known yet. */
+	/* The safe area (the whole window if it is not known yet), shown
+	 * one to one from the screen's top left, in the safe area's place. */
 	if (aw <= 0 || ah <= 0) {
 		aw = window_width; ah = window_height; ax = 0; ay = 0;
 	}
-
-	if (aw <= 0 || ah <= 0 || sdl_width <= 0 || sdl_height <= 0) {
-		dest_rect.x = (float)ax;
-		dest_rect.y = (float)ay;
-		dest_rect.w = (float)sdl_width;
-		dest_rect.h = (float)sdl_height;
-		return;
-	}
-
-	/* Scale to fit the surface in the safe area, preserving aspect. */
-	scale_x = (float)aw / (float)sdl_width;
-	scale_y = (float)ah / (float)sdl_height;
-	scale = (scale_x < scale_y) ? scale_x : scale_y;
-
-	dest_w = (float)sdl_width * scale;
-	dest_h = (float)sdl_height * scale;
-
-	/* Centre within the safe area (offset by the safe-area origin). */
-	dest_rect.x = (float)ax + ((float)aw - dest_w) / 2.0f;
-	dest_rect.y = (float)ay + ((float)ah - dest_h) / 2.0f;
-	dest_rect.w = dest_w;
-	dest_rect.h = dest_h;
+	if (aw <= 0 || aw > sdl_width)
+		aw = sdl_width;
+	if (ah <= 0 || ah > sdl_height)
+		ah = sdl_height;
+	src_rect.x = 0;
+	src_rect.y = 0;
+	src_rect.w = (float)aw;
+	src_rect.h = (float)ah;
+	dest_rect.x = (float)ax;
+	dest_rect.y = (float)ay;
+	dest_rect.w = (float)aw;
+	dest_rect.h = (float)ah;
 }
 
 /*
@@ -368,11 +356,12 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
 	x = (int)(src_rect.x + rel_x * src_rect.w / dest_rect.w);
 	y = (int)(src_rect.y + rel_y * src_rect.h / dest_rect.h);
 
-	/* Clamp to texture bounds */
+	/* Clamp to the part shown (a touch in the iOS status bar lands on
+	 * the screen's edge, not in the part of the buffer not shown) */
 	if (x < 0) x = 0;
 	if (y < 0) y = 0;
-	if (x >= sdl_width) x = sdl_width - 1;
-	if (y >= sdl_height) y = sdl_height - 1;
+	if (x >= (int)src_rect.w) x = (int)src_rect.w - 1;
+	if (y >= (int)src_rect.h) y = (int)src_rect.h - 1;
 
 	*tex_x = x;
 	*tex_y = y;
@@ -383,7 +372,6 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
  * Updates sdl_width/sdl_height to physical pixels for crisp HiDPI rendering.
  * Must be called after sdl_window is created and before texture creation.
  */
-static void update_text_input_area(void);
 
 /*
  * Desktop: the Inferno screen's size, in the window's pixels: the
@@ -463,14 +451,12 @@ wmszproc(void *a)
 static void
 postwmsize(void)
 {
-#if !MOBILE_TOUCH
 	if (src_rect.w > 0 && src_rect.h > 0) {
 		wmsz_w = (int)src_rect.w;
 		wmsz_h = (int)src_rect.h;
 		wmsz_pending = 1;
 		Wakeup(&wmszr);
 	}
-#endif
 }
 
 /*
@@ -516,6 +502,28 @@ hidpiflag(void)
 	return hidpiwanted() ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0;
 }
 
+/*
+ * Safe area (logical points) -> physical pixels. On iOS this excludes
+ * the status bar / Dynamic Island / home indicator, and changes when the
+ * device is turned or an iPad's window is resized; on desktop it is the
+ * whole window. The screen programs see is the safe area, so the UI is
+ * not drawn under those system regions.
+ */
+static void
+read_safe_area(void)
+{
+	SDL_Rect safe;
+
+	if (SDL_GetWindowSafeArea(sdl_window, &safe) && safe.w > 0 && safe.h > 0) {
+		safe_x = (int)(safe.x * display_scale);
+		safe_y = (int)(safe.y * display_scale);
+		safe_w = (int)(safe.w * display_scale);
+		safe_h = (int)(safe.h * display_scale);
+	} else {
+		safe_x = 0; safe_y = 0; safe_w = window_width; safe_h = window_height;
+	}
+}
+
 static void
 init_hidpi(void)
 {
@@ -537,230 +545,95 @@ init_hidpi(void)
 
 	window_width = pix_w;
 	window_height = pix_h;
-
-	/* Safe area (logical points) -> physical pixels. On iOS this excludes
-	 * the status bar / Dynamic Island / home indicator; on desktop it is
-	 * the whole window. The Inferno screen is sized to the safe area so
-	 * the UI isn't drawn under those system regions. */
-	{
-		SDL_Rect safe;
-		if (SDL_GetWindowSafeArea(sdl_window, &safe) && safe.w > 0 && safe.h > 0) {
-			safe_x = (int)(safe.x * display_scale);
-			safe_y = (int)(safe.y * display_scale);
-			safe_w = (int)(safe.w * display_scale);
-			safe_h = (int)(safe.h * display_scale);
-		} else {
-			safe_x = 0; safe_y = 0; safe_w = pix_w; safe_h = pix_h;
-		}
-	}
+	read_safe_area();
 
 #if MOBILE_TOUCH
-	sdl_width = safe_w;
-	sdl_height = safe_h;
+	/* Square, as long as the longest side of the display or the window:
+	 * the screen fits it however the device is turned (see src_rect). */
+	{
+		int mw, mh, m;
+
+		screenmax(&mw, &mh);
+		m = mw > mh ? mw : mh;
+		sdl_width = m;
+		sdl_height = m;
+	}
 #else
 	screenmax(&sdl_width, &sdl_height);
 #endif
 	calc_dest_rect();
-	update_text_input_area();	/* window may have resized/rotated */
 	postwmsize();
 }
 
-/* Keep the top pinned (don't slide) for the focused input; set when the
- * GUI requests the keyboard for a workspace text app. See setsoftkbd.
- * Written from the devcons worker thread, read on the main thread. */
-static volatile int softkbd_keeptop = 0;
-
-/* Explicit focused-widget rect in INFERNO SCREEN PIXELS, set by the GUI
- * via /dev/consctl "kbd rect x y w h" (see setsoftkbd_rect). Pixels are
- * the only coordinate system Limbo has (see attachscreen); update_text_
- * input_area maps them to window points before handing them to SDL.
- * When w*h > 0 this overrides the hard-coded top/bottom rect in
- * update_text_input_area — SDL slides the view so the *actual* widget
- * stays above the keyboard, regardless of where the cursor is or
- * whether keeptop is set. Cleared with "kbd rect 0 0 0 0". Plain ints
- * read by the main thread, written from the devcons worker thread;
- * the one-frame race is harmless. */
-static volatile int softkbd_rect_x = 0;
-static volatile int softkbd_rect_y = 0;
-static volatile int softkbd_rect_w = 0;
-static volatile int softkbd_rect_h = 0;
-
 /*
- * iOS soft-keyboard avoidance via SDL_SetTextInputArea, which tells UIKit
- * where the caret is (window POINTS); SDL then slides the view up so that
- * rect stays above the keyboard. The rect is position-aware:
+ * The system's keyboard (iOS's, Android's) is never shown: InferNode
+ * types with a keyboard of its own (wm/osk), and the system's covered the
+ * screen, slid the view and fought the GUI for focus.  Three locks:
  *
- *   keeptop == 0 (chat input, at the very bottom): put the rect at the
- *     bottom so SDL slides the input up into view.
- *   keeptop == 1 (a workspace text app — editor/man/settings, which fill
- *     the upper area below the header): put the rect at the TOP. It's
- *     already above the keyboard, so SDL does NOT slide — the top stays
- *     pinned and a cursor near the top no longer scrolls off-screen. The
- *     keyboard simply overlays the lower part of the app.
+ *  - SDL_HINT_ENABLE_SCREEN_KEYBOARD "0", before SDL_Init (sdl3_preinit):
+ *    SDL never asks for it, whoever starts text input (on Android that
+ *    is the whole of it: its keyboard is shown only when asked for).
+ *  - Text input is started only while SDL knows of a hardware keyboard,
+ *    whose keys it turns into text (apply_softkbd); stopped the moment
+ *    the last one goes (SDL_EVENT_KEYBOARD_REMOVED).  On iOS starting it
+ *    makes SDL's text field the first responder, and UIKit shows its
+ *    keyboard for a first responder with no hardware keyboard attached.
+ *  - On iOS that field's input view is an empty one
+ *    (emu/iOS/nokeyboard.m, ios_nosystemkeyboard), so UIKit has no
+ *    keyboard to show even then, and the hardware keyboard still types.
  *
- * When the GUI has supplied an explicit "kbd rect" (softkbd_rect_*, in
- * Inferno screen pixels) it wins over both heuristics: we map it to
- * window points and let SDL slide the real widget above the keyboard.
- * This is what lets the workspace shell prompt — which sits at the
- * bottom of the zone — stay visible so you can see what you're typing.
- *
- * No-op on macOS/Linux (no soft keyboard).
+ * Without text input, a hardware keyboard SDL does not know of (Android
+ * reports none) still types: handle_key_down takes its printable keys.
+ * The GUI's requests for the system's keyboard ("kbd on", "kbd rect" on
+ * /dev/consctl: setsoftkbd, setsoftkbd_rect) are accepted and do
+ * nothing; softkbd(2) asks wm/osk instead.
  */
-static void
-update_text_input_area(void)
-{
 #if defined(__APPLE__) && TARGET_OS_IOS
-	int win_w = 0, win_h = 0;
-	SDL_Rect r;
-	int ih;
-
-	if (!sdl_window)
-		return;
-	SDL_GetWindowSize(sdl_window, &win_w, &win_h);	/* points */
-	if (win_w <= 0 || win_h <= 0)
-		return;
-	if (softkbd_rect_w > 0 && softkbd_rect_h > 0) {
-		/* Explicit focused-widget rect from the GUI (INFR-166).
-		 *
-		 * It arrives in Inferno SCREEN PIXELS — the only coordinate
-		 * system Limbo draws in. SDL_SetTextInputArea wants window
-		 * POINTS, so map it exactly the way the renderer maps the
-		 * texture: texture pixels -> window pixels through dest_rect
-		 * (which already carries the safe-area origin and any
-		 * letterbox scale), then -> points by dividing out
-		 * display_scale. This is the inverse of the mouse path's
-		 * window_to_texture_coords. Without it the rect was 2-3x
-		 * oversized on every HiDPI device, got clamped to a degenerate
-		 * strip, and SDL never slid the caret above the keyboard — so
-		 * the workspace shell prompt stayed covered and you couldn't
-		 * see what you typed.
-		 *
-		 * Clamp to the window afterwards so a transient out-of-window
-		 * value (e.g. a rotation caught mid-update) doesn't round-trip
-		 * a degenerate rect to UIKit. */
-		float sx, sy, fx, fy, fw, fh;
-		if (dest_rect.w <= 0 || dest_rect.h <= 0 ||
-		    src_rect.w <= 0 || src_rect.h <= 0 || display_scale <= 0.0f)
-			return;
-		sx = dest_rect.w / src_rect.w;	/* texture px -> window px */
-		sy = dest_rect.h / src_rect.h;
-		fx = (dest_rect.x + ((float)softkbd_rect_x - src_rect.x) * sx) / display_scale;
-		fy = (dest_rect.y + ((float)softkbd_rect_y - src_rect.y) * sy) / display_scale;
-		fw = ((float)softkbd_rect_w * sx) / display_scale;
-		fh = ((float)softkbd_rect_h * sy) / display_scale;
-		r.x = fx < 0.0f ? 0 : (int)fx;
-		r.y = fy < 0.0f ? 0 : (int)fy;
-		r.w = (int)(fw + 0.5f);
-		r.h = (int)(fh + 0.5f);
-		if (r.x + r.w > win_w) r.w = win_w - r.x;
-		if (r.y + r.h > win_h) r.h = win_h - r.y;
-		if (r.w <= 0 || r.h <= 0)
-			return;
-	} else {
-		ih = 56;				/* input row height, points */
-		r.x = 0;
-		r.w = win_w;
-		r.h = ih;
-		if (softkbd_keeptop)
-			r.y = 0;			/* top — SDL won't need to slide */
-		else
-			r.y = win_h - ih;		/* bottom input row — SDL slides it up */
-	}
-	SDL_SetTextInputArea(sdl_window, &r, 0);
+extern void	ios_nosystemkeyboard(SDL_Window*);
+#define nosystemkeyboard()	ios_nosystemkeyboard(sdl_window)
+#else
+#define nosystemkeyboard()
 #endif
-}
 
-/*
- * Soft-keyboard control, driven from Limbo via /dev/consctl ("kbd on" /
- * "kbd off"). The keyboard must surface only while a text field is
- * focused — not on every tap — so text input is no longer started
- * unconditionally; the GUI requests it on focus and drops it on blur.
- *
- * setsoftkbd runs on an Inferno worker thread (the devcons write), but
- * SDL_StartTextInput/StopTextInput touch UIKit and MUST run on the main
- * thread — calling them here crashes on device. So setsoftkbd only sets
- * a desired-state flag; sdl3_mainloop (main thread) reconciles it. The
- * flag is a plain int written from one thread and read from another: the
- * only race is a one-frame delay, which is harmless.
- */
-static volatile int softkbd_want = 0;	/* desired state (set from any thread) */
-static int softkbd_applied = 0;		/* last state pushed to SDL (main thread) */
+#if MOBILE_TOUCH
+static int softkbd_applied = 0;		/* text input started (main thread) */
+#endif
 
-/*
- * on: 0 = hide, 1 = show (bottom input — slide to keep it above the
- * keyboard), 2 = show + keep the top pinned (workspace text app — don't
- * slide). Encoded in the int so the headless stubs and the signature
- * stay unchanged.
- */
 void
 setsoftkbd(int on)
 {
-#if MOBILE_TOUCH
-	softkbd_want = on ? 1 : 0;
-	softkbd_keeptop = (on == 2);
-#else
-	/* Desktop: text input stays enabled; nothing to toggle. */
 	USED(on);
-#endif
 }
 
-/*
- * Override the keyboard-avoidance rect with the focused widget's actual
- * bounds (window POINTS). Called from /dev/consctl "kbd rect x y w h"
- * (devcons.c) — Limbo helper is appl/lib/softkbd.b. When the rect is
- * non-empty it wins over the legacy keeptop hint; (0,0,0,0) clears
- * the override and the hard-coded top/bottom rect comes back into
- * play. apply_softkbd will re-push the area on the main thread.
- */
 void
 setsoftkbd_rect(int x, int y, int w, int h)
 {
-#if MOBILE_TOUCH
-	softkbd_rect_x = x;
-	softkbd_rect_y = y;
-	softkbd_rect_w = (w > 0) ? w : 0;
-	softkbd_rect_h = (h > 0) ? h : 0;
-#else
 	USED(x); USED(y); USED(w); USED(h);
-#endif
 }
 
 /*
- * Apply a pending soft-keyboard request. MUST be called on the main
- * (SDL/UIKit) thread — sdl3_mainloop calls it each iteration.
+ * Text input on while a hardware keyboard is attached, off while none
+ * is.  MUST be called on the main (SDL/UIKit) thread -- sdl3_mainloop
+ * calls it each iteration, and as a keyboard comes or goes.
  */
 static void
 apply_softkbd(void)
 {
 #if MOBILE_TOUCH
-	static int applied_keeptop = 0;
-	static int applied_rx = 0, applied_ry = 0, applied_rw = 0, applied_rh = 0;
+	int want;
+
 	if (!sdl_window)
 		return;
-	if (softkbd_want != softkbd_applied) {
-		softkbd_applied = softkbd_want;
-		if (softkbd_applied) {
-			SDL_StartTextInput(sdl_window);
-			update_text_input_area();
-		} else {
-			SDL_StopTextInput(sdl_window);
-		}
-	} else if (softkbd_want &&
-		   (softkbd_keeptop != applied_keeptop ||
-		    softkbd_rect_x != applied_rx ||
-		    softkbd_rect_y != applied_ry ||
-		    softkbd_rect_w != applied_rw ||
-		    softkbd_rect_h != applied_rh)) {
-		/* keyboard already up but the mode or the focused-widget
-		 * rect changed (focus moved between chat and a workspace
-		 * app, or the cursor moved within the same app — INFR-166). */
-		update_text_input_area();
-	}
-	applied_keeptop = softkbd_keeptop;
-	applied_rx = softkbd_rect_x;
-	applied_ry = softkbd_rect_y;
-	applied_rw = softkbd_rect_w;
-	applied_rh = softkbd_rect_h;
+	want = SDL_HasKeyboard();
+	if (want == softkbd_applied)
+		return;
+	softkbd_applied = want;
+	if (want) {
+		nosystemkeyboard();
+		SDL_StartTextInput(sdl_window);
+		nosystemkeyboard();
+	} else
+		SDL_StopTextInput(sdl_window);
 #endif
 }
 
@@ -808,14 +681,14 @@ create_renderer_and_texture(void)
 
 	SDL_SetTextureScaleMode(sdl_texture, SDL_SCALEMODE_NEAREST);
 	SDL_ShowWindow(sdl_window);
-#if !MOBILE_TOUCH
-	/* Desktop: no soft keyboard, so leave text input enabled — typing
-	 * (SDL_EVENT_TEXT_INPUT) needs it. On mobile we deliberately do NOT
-	 * start it here; the keyboard must appear only on text-field focus
-	 * (the GUI calls setsoftkbd via /dev/consctl). */
+#if MOBILE_TOUCH
+	/* the system's keyboard never shown, from the first: see apply_softkbd */
+	nosystemkeyboard();
+#else
+	/* Desktop: no keyboard on the screen, so text input stays on:
+	 * typing (SDL_EVENT_TEXT_INPUT) needs it. */
 	SDL_StartTextInput(sdl_window);
 #endif
-	update_text_input_area();
 	return 1;
 }
 
@@ -929,6 +802,92 @@ touch_finger_to_pixels(const SDL_TouchFingerEvent *ev, float *px, float *py)
 }
 
 /*
+ * Every finger, for /dev/fingers (devpointer's fingertrack): SDL's
+ * finger ids are opaque (pointers on iOS), so each finger on the
+ * screen gets the lowest free small id for as long as it is there.
+ * Coordinates go to the screen's pixels as the mouse path's do.  This
+ * is all a backend does with fingers: what they mean is for the
+ * reader.
+ */
+static SDL_FingerID finger_sdlid[TOUCH_MAX_FINGERS];
+static int finger_used[TOUCH_MAX_FINGERS];
+
+static int
+finger_slot(SDL_FingerID id, int alloc)
+{
+	int i;
+
+	for(i = 0; i < TOUCH_MAX_FINGERS; i++)
+		if(finger_used[i] && finger_sdlid[i] == id)
+			return i;
+	if(!alloc)
+		return -1;
+	for(i = 0; i < TOUCH_MAX_FINGERS; i++)
+		if(!finger_used[i]){
+			finger_used[i] = 1;
+			finger_sdlid[i] = id;
+			return i;
+		}
+	return -1;
+}
+
+static void
+finger_event(const SDL_TouchFingerEvent *ev, int on)
+{
+	float px, py;
+	int slot, x, y;
+
+	slot = finger_slot(ev->fingerID, on);
+	if(slot < 0)
+		return;
+	touch_finger_to_pixels(ev, &px, &py);
+	window_to_texture_coords(px, py, &x, &y);
+	fingertrack(slot, x, y, on);
+	if(!on)
+		finger_used[slot] = 0;
+}
+
+/*
+ * The keyboards SDL knows of, for /dev/keyboards (devcons's
+ * kbdattach): at start and as they come and go.  SDL is one source of
+ * them; the native kernel's drivers say the same through
+ * /dev/consctl.
+ */
+static void
+keyboard_attach(SDL_KeyboardID kid)
+{
+	char id[32];
+	const char *name;
+
+	snprint(id, sizeof id, "sdl%ud", (unsigned)kid);
+	name = SDL_GetKeyboardNameForID(kid);
+	kbdattach(id, (char*)(name != NULL ? name : ""));
+}
+
+static void
+keyboard_detach(SDL_KeyboardID kid)
+{
+	char id[32];
+
+	snprint(id, sizeof id, "sdl%ud", (unsigned)kid);
+	kbddetach(id);
+}
+
+static void
+keyboards_init(void)
+{
+	SDL_KeyboardID *ids;
+	int i, n;
+
+	ids = SDL_GetKeyboards(&n);
+	if(ids == NULL)
+		return;
+	for(i = 0; i < n; i++)
+		keyboard_attach(ids[i]);
+	SDL_free(ids);
+}
+
+/*
  * Pre-initialize SDL3 on main thread
  * Called from main() before threading starts
  */
@@ -951,6 +910,10 @@ sdl3_preinit(void)
 	 * touchscreen laptops behave the same way.
 	 */
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
+#if MOBILE_TOUCH
+	/* The system's keyboard is never shown: see apply_softkbd. */
+	SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
+#endif
 
 	/*
 	 * Initialize SDL3 on the main thread.
@@ -975,6 +938,7 @@ sdl3_preinit(void)
 	/* Register cleanup handler to ensure window closes on exit */
 	atexit(sdl_atexit_handler);
 
+	keyboards_init();
 	sdl_initialized = 1;
 	return 1;
 }
@@ -1103,15 +1067,14 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	/* Initialize buffer to white (InferNode default) */
 	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
-	/* Return screen parameters to InferNode. On desktop the screen is
-	 * the part the window shows (the buffer, and the stride, are the
-	 * largest display's: wmszproc grows the rectangle in place). */
+	/* Return screen parameters to InferNode. The screen is the part the
+	 * window shows (the buffer, and the stride, are the largest display's,
+	 * square on the touch platforms: wmszproc changes the rectangle in
+	 * place). */
 	*r = Rect(0, 0, sdl_width, sdl_height);
-#if !MOBILE_TOUCH
 	if (src_rect.w > 0 && src_rect.h > 0)
 		*r = Rect(0, 0, (int)src_rect.w, (int)src_rect.h);
 	kproc("wmsz", wmszproc, nil, 0);
-#endif
 	*chan = XRGB32;
 	*d = 32;
 	/*
@@ -1181,14 +1144,51 @@ flushmemscreen(Rectangle r)
 /*
  * Set mouse pointer position
  * Coordinates from InferNode are in texture space; we convert to window space.
+ *
+ * setpointer runs on the thread that wrote /dev/pointer (wmlib's "ptr"
+ * request), but SDL allows a warp only on its main thread, and the
+ * conversion reads the window's geometry, which the main thread changes
+ * on a resize.  So setpointer records where the pointer is to go and
+ * sdl3_mainloop moves it (apply_warp), as for the cursor.
  */
+static SDL_SpinLock warp_lock = 0;
+static int warp_pending;	/* a warp is waiting for the main thread */
+static int warp_x, warp_y;	/* where to, in texture coordinates */
+
 void
 setpointer(int x, int y)
 {
-	float win_x, win_y;
-
 	if (!sdl_running)
 		return;
+
+	SDL_LockSpinlock(&warp_lock);
+	warp_x = x;
+	warp_y = y;
+	warp_pending = 1;
+	SDL_UnlockSpinlock(&warp_lock);
+	mouse_x = x;
+	mouse_y = y;
+}
+
+/*
+ * Move the host's pointer where setpointer last asked.  MUST be called
+ * on the main thread; sdl3_mainloop calls it each iteration.
+ */
+static void
+apply_warp(void)
+{
+	float win_x, win_y;
+	int x, y;
+
+	SDL_LockSpinlock(&warp_lock);
+	if (!warp_pending) {
+		SDL_UnlockSpinlock(&warp_lock);
+		return;
+	}
+	warp_pending = 0;
+	x = warp_x;
+	y = warp_y;
+	SDL_UnlockSpinlock(&warp_lock);
 
 	/*
 	 * Convert from texture coordinates to window coordinates.
@@ -1213,8 +1213,6 @@ setpointer(int x, int y)
 	}
 
 	SDL_WarpMouseInWindow(sdl_window, win_x, win_y);
-	mouse_x = x;
-	mouse_y = y;
 }
 
 /*
@@ -1229,58 +1227,101 @@ setpointer(int x, int y)
  *   (1,1)=black  (0,1)=white  (0,0)=transparent  (1,0)=inverted
  *
  * Mapping: data = set bits, mask = set | clr bits.
+ *
+ * drawcursor runs on the thread that wrote /dev/cursor, but SDL's
+ * cursor calls must be made on the main thread: on macOS the window's
+ * cursor rectangles are rebuilt there from SDL's current cursor, and a
+ * cursor changed under them from another thread could be lost (wm/wm's
+ * cross after New, its gunsight, its box).  So drawcursor only records
+ * the cursor wanted, copied (the bits are the writer's buffer), and
+ * sdl3_mainloop makes it current, as for the soft keyboard.
  */
 enum { MaxCursorSize = 32 };
+
+static SDL_SpinLock cursor_lock = 0;
+static int cursor_pending;	/* a cursor is waiting for the main thread */
+static int cursor_none;		/* it is the default cursor */
+static int cursor_hotx, cursor_hoty;
+static uchar cursor_data[MaxCursorSize * MaxCursorSize / 8];
+static uchar cursor_mask[MaxCursorSize * MaxCursorSize / 8];
 
 void
 drawcursor(Drawcursor *c)
 {
-	static SDL_Cursor *sdl_cursor = NULL;
 	uchar data[MaxCursorSize * MaxCursorSize / 8];
 	uchar mask[MaxCursorSize * MaxCursorSize / 8];
 	uchar *bc, *bs;
 	int i, j, h, w, bpl, stride;
 
-	if (c->data == nil) {
-		/* Reset to default cursor */
-		if (sdl_cursor) {
-			SDL_DestroyCursor(sdl_cursor);
-			sdl_cursor = NULL;
-		}
-		SDL_SetCursor(NULL);
-		return;
-	}
-
-	h = (c->maxy - c->miny) / 2;	/* bounds include image + mask */
-	if (h > MaxCursorSize)
-		h = MaxCursorSize;
-	bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
-	w = bpl;
-	if (w > MaxCursorSize / 8)
-		w = MaxCursorSize / 8;
-
 	memset(data, 0, sizeof(data));
 	memset(mask, 0, sizeof(mask));
+	if (c->data != nil) {
+		h = (c->maxy - c->miny) / 2;	/* bounds include image + mask */
+		if (h > MaxCursorSize)
+			h = MaxCursorSize;
+		bpl = bytesperline(Rect(c->minx, c->miny, c->maxx, c->maxy), 1);
+		w = bpl;
+		if (w > MaxCursorSize / 8)
+			w = MaxCursorSize / 8;
 
-	stride = MaxCursorSize / 8;
-	bc = c->data;
-	bs = c->data + h * bpl;
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			data[i * stride + j] = bs[j];
-			mask[i * stride + j] = bs[j] | bc[j];
+		stride = MaxCursorSize / 8;
+		bc = c->data;
+		bs = c->data + h * bpl;
+		for (i = 0; i < h; i++) {
+			for (j = 0; j < w; j++) {
+				data[i * stride + j] = bs[j];
+				mask[i * stride + j] = bs[j] | bc[j];
+			}
+			bs += bpl;
+			bc += bpl;
 		}
-		bs += bpl;
-		bc += bpl;
 	}
 
+	SDL_LockSpinlock(&cursor_lock);
+	cursor_none = c->data == nil;
+	cursor_hotx = c->hotx;
+	cursor_hoty = c->hoty;
+	memmove(cursor_data, data, sizeof(data));
+	memmove(cursor_mask, mask, sizeof(mask));
+	cursor_pending = 1;
+	SDL_UnlockSpinlock(&cursor_lock);
+}
+
+/*
+ * Make the cursor drawcursor last recorded SDL's current cursor.
+ * MUST be called on the main thread; sdl3_mainloop calls it each
+ * iteration.
+ */
+static void
+apply_cursor(void)
+{
+	static SDL_Cursor *sdl_cursor = NULL;
+	uchar data[MaxCursorSize * MaxCursorSize / 8];
+	uchar mask[MaxCursorSize * MaxCursorSize / 8];
+	int none, hotx, hoty;
+
+	SDL_LockSpinlock(&cursor_lock);
+	if (!cursor_pending) {
+		SDL_UnlockSpinlock(&cursor_lock);
+		return;
+	}
+	cursor_pending = 0;
+	none = cursor_none;
+	hotx = cursor_hotx;
+	hoty = cursor_hoty;
+	memmove(data, cursor_data, sizeof(data));
+	memmove(mask, cursor_mask, sizeof(mask));
+	SDL_UnlockSpinlock(&cursor_lock);
+
 	if (sdl_cursor) {
+		/* the default cursor comes back as this one goes */
 		SDL_DestroyCursor(sdl_cursor);
 		sdl_cursor = NULL;
 	}
-
+	if (none)
+		return;
 	sdl_cursor = SDL_CreateCursor(data, mask,
-		MaxCursorSize, MaxCursorSize, -c->hotx, -c->hoty);
+		MaxCursorSize, MaxCursorSize, -hotx, -hoty);
 	if (sdl_cursor)
 		SDL_SetCursor(sdl_cursor);
 }
@@ -1644,6 +1685,20 @@ handle_key_down(SDL_Event *event)
 		break;
 	}
 
+#if MOBILE_TOUCH
+	/*
+	 * A hardware keyboard's printable keys, while text input is off (no
+	 * keyboard SDL knows of: Android reports none): what the key types
+	 * with its modifiers, from SDL's keymap.  With text input on they
+	 * come as SDL_EVENT_TEXT_INPUT, and are not taken here as well.
+	 */
+	if (key == 0 && sdl_window != NULL && !SDL_TextInputActive(sdl_window) &&
+	    (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI | SDL_KMOD_ALT)) == 0) {
+		SDL_Keycode k = SDL_GetKeyFromScancode(event->key.scancode, mods, true);
+		if ((k & SDLK_SCANCODE_MASK) == 0 && k >= ' ' && k != 0x7F && k < 0x110000)
+			key = (int)k;
+	}
+#endif
 	if (key != 0)
 		gkbdputc(gkbdq, key);
 }
@@ -1689,6 +1744,11 @@ sdl3_mainloop(void)
 		/* Apply any pending soft-keyboard request on the main thread
 		 * (setsoftkbd, called from a worker thread, only set a flag). */
 		apply_softkbd();
+
+		/* and any cursor change (drawcursor only recorded it) */
+		apply_cursor();
+		/* and any warp of the pointer (setpointer only recorded it) */
+		apply_warp();
 
 		/*
 		 * Long-press fire: a single finger held still past the threshold
@@ -1737,19 +1797,6 @@ sdl3_mainloop(void)
 					Uint32 mask = button_event_mask(event.button.button);
 					if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 						sdl_button_state |= mask;
-						/*
-						 * Re-assert text input on a press ONLY while a
-						 * text field is focused (softkbd_want, set by the
-						 * GUI via setsoftkbd). A system gesture (back,
-						 * swipe-down, a permission dialog) can dismiss
-						 * the IME and SDL won't restore it; re-asserting
-						 * on the next tap brings it back. When no field
-						 * is focused this is skipped, so a tap no longer
-						 * pops the keyboard. (On desktop, no IME.) This
-						 * runs on the main thread, so the SDL call is safe.
-						 */
-						if (softkbd_want)
-							SDL_StartTextInput(sdl_window);
 					} else
 						sdl_button_state &= ~mask;
 
@@ -1789,6 +1836,7 @@ sdl3_mainloop(void)
 				float px, py;
 				if (!touchscreen(event.tfinger.touchID))
 					break;
+				finger_event(&event.tfinger, 1);
 				touch_finger_to_pixels(&event.tfinger, &px, &py);
 				if (touch_finger_count < TOUCH_MAX_FINGERS) {
 					touch_fingers[touch_finger_count].id = event.tfinger.fingerID;
@@ -1826,10 +1874,12 @@ sdl3_mainloop(void)
 				break;
 			}
 
+			case SDL_EVENT_FINGER_CANCELED:
 			case SDL_EVENT_FINGER_UP: {
 				int idx;
 				if (!touchscreen(event.tfinger.touchID))
 					break;
+				finger_event(&event.tfinger, 0);
 				idx = touch_finger_index(event.tfinger.fingerID);
 				touch_finger_remove_at(idx);
 				if (touch_finger_count < 2)
@@ -1854,6 +1904,7 @@ sdl3_mainloop(void)
 				float px, py, dx, dy;
 				if (!touchscreen(event.tfinger.touchID))
 					break;
+				finger_event(&event.tfinger, 1);
 				idx = touch_finger_index(event.tfinger.fingerID);
 				if (idx < 0)
 					break;
@@ -1908,6 +1959,16 @@ sdl3_mainloop(void)
 				handle_text_input(event.text.text);
 				break;
 
+			case SDL_EVENT_KEYBOARD_ADDED:
+				keyboard_attach(event.kdevice.which);
+				apply_softkbd();
+				break;
+
+			case SDL_EVENT_KEYBOARD_REMOVED:
+				keyboard_detach(event.kdevice.which);
+				apply_softkbd();	/* now, not on the next iteration */
+				break;
+
 			case SDL_EVENT_KEY_DOWN:
 				handle_key_down(&event);
 				break;
@@ -1921,17 +1982,19 @@ sdl3_mainloop(void)
 
 			case SDL_EVENT_WINDOW_RESIZED:
 			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+			case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
 				{
 					int pix_w;
 					int pix_h;
 
 					/*
-					 * Window size changed (e.g., full-screen toggle).
-					 * Desktop: show that much of the screen, one to one,
-					 * and post the size to /dev/wmsize. Touch platforms:
-					 * recalculate the centred, letterboxed dest rect.
-					 * Use physical pixel dimensions to match renderer
-					 * coordinate space. The texture keeps its size.
+					 * Window size changed (a full-screen toggle; on
+					 * iOS and Android the device turned, or an iPad's
+					 * Split View). Show that much of the screen, one
+					 * to one (the safe area on the touch platforms),
+					 * and post the size to /dev/wmsize. Use physical
+					 * pixel dimensions to match renderer coordinate
+					 * space. The texture keeps its size.
 					 */
 					SDL_GetWindowSizeInPixels(sdl_window, &pix_w, &pix_h);
 					window_width = pix_w;
@@ -1946,6 +2009,7 @@ sdl3_mainloop(void)
 						else
 							display_scale = 1.0f;
 					}
+					read_safe_area();
 					calc_dest_rect();
 					postwmsize();
 				}

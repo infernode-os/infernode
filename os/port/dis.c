@@ -21,7 +21,14 @@
 
 	void	vmachine(void*);
 
-struct
+/*
+ * A VM's scheduler (#944): the interpreter token, which procs queue for
+ * in acquire(), its run queue and its Progs. isched is the one of the
+ * VM the current process belongs to -- not the core's, because acquire()
+ * is called by a process that does not hold any yet.
+ */
+typedef struct Isched Isched;
+struct Isched
 {
 	Lock	l;
 	Prog*	runhd;
@@ -36,7 +43,10 @@ struct
 	Proc*	vmqt;
 	Proc*	idlevmq;	/* queue of procs wanting work */
 	Atidle*	idletasks;
-} isched;
+};
+static	Isched	sched0;		/* vm0's */
+#define	VMSCHED(v)	((Isched*)(v)->vsched)
+#define	isched	(*VMSCHED(up->vm))
 
 int	bflag = 1;	/* JIT array bounds checks; emu -B clears it */
 int	cflag;
@@ -46,6 +56,12 @@ uvlong	gcidlepass;
 uvlong	gcpartial;
 int keepbroken = 1;
 static Prog*	proghash[64];
+/*
+ * pids are unique across every VM, and the pid hash is global: kill,
+ * /prog and wait look a Prog up by pid from anywhere. So they have a
+ * lock of their own; each VM's lists are under its interpreter (#944).
+ */
+static Lock	pidlk;
 
 /*
  * Every Prog pointer stored into the run queue must point at RAM, and
@@ -89,7 +105,101 @@ tready(void *a)
 Prog*
 progpid(int pid)
 {
-	return *pidlook(pid);
+	Prog *p;
+
+	lock(&pidlk);
+	p = *pidlook(pid);
+	unlock(&pidlk);
+	return p;
+}
+
+/*
+ * The VMs (#944). vm0 is the boot VM, the desktop's; the others are
+ * made when something is first run in them (/dev/vm, devvm.c). A VM
+ * is never destroyed.
+ */
+static Vm*	vms[MAXVM] = { &vm0 };
+static int	nvms = 1;
+static Lock	vmlk;
+
+int
+vmcount(void)
+{
+	return nvms;
+}
+
+Vm*
+vmn(int n)
+{
+	if(n < 0 || n >= MAXVM)
+		return nil;
+	return vms[n];
+}
+
+/*
+ * The n'th Prog of all of them, in VM order. Under pidlk, which every
+ * VM's list changes take, so the walk is safe from another VM's
+ * newprog and delprog; the Prog itself is only safe to touch under its
+ * own VM (devprog's pacquire).
+ */
+static Prog*
+prognlocked(int n)
+{
+	int i;
+	Prog *p;
+
+	for(i = 0; i < nvms; i++)
+		if(vms[i] != nil)
+			for(p = VMSCHED(vms[i])->head; p != nil; p = p->next)
+				if(n-- == 0)
+					return p;
+	return nil;
+}
+
+/*
+ * ^T^Td: every VM's Progs, from the console's debug keys: pid, VM (and
+ * the VM it is under, if another's), state, group, a kill pending, and
+ * its module. Racy by design -- it is for a kernel that has stopped
+ * answering, where nothing else can be asked -- so pidlk only if it
+ * can be had, and a Prog's module only if it looks like one.
+ */
+/* the pid of a released interpreter's Prog (Proc.iprog), for ^T^Tk */
+int
+iprogpid(void *iprog)
+{
+	return ((Prog*)iprog)->pid;
+}
+
+static void
+progdump(void)
+{
+	static char *st[] = {"alt", "send", "recv", "debug", "ready", "release", "exiting", "broken"};
+	int i, locked;
+	Prog *p;
+	Modlink *m;
+	char *name;
+
+	locked = canlock(&pidlk);
+	if(!locked)
+		print("progdump: pidlk is held; walking without it\n");
+	for(i = 0; i < nvms; i++){
+		if(vms[i] == nil)
+			continue;
+		print("vm %d:\n", i);
+		for(p = VMSCHED(vms[i])->head; p != nil; p = p->next){
+			m = p->reg.M;
+			name = "?";
+			if(m != H && m != nil && m->m != nil && m->m->name != nil)
+				name = m->m->name;
+			print("  %6d vm %d/%d %-8s grp %d%s %s\n", p->pid,
+				p->vm != nil? p->vm->id: -1, p->curvm != nil? p->curvm->id: -1,
+				p->state >= 0 && p->state < nelem(st)? st[p->state]: "?",
+				p->group != nil? p->group->id: 0,
+				p->kill != nil? " killed": "", name);
+		}
+	}
+	if(locked)
+		unlock(&pidlk);
 }
 
 Prog*
@@ -97,20 +207,104 @@ progn(int n)
 {
 	Prog *p;
 
-	for(p = isched.head; p && n--; p = p->next)
-		;
+	lock(&pidlk);
+	p = prognlocked(n);
+	unlock(&pidlk);
 	return p;
 }
 
+/* the pid of the n'th Prog, or -1: what can be kept after the lock */
 int
-nprog(void)
+progpidn(int n)
+{
+	Prog *p;
+	int pid;
+
+	lock(&pidlk);
+	p = prognlocked(n);
+	pid = p != nil ? p->pid : -1;
+	unlock(&pidlk);
+	return pid;
+}
+
+/* the VM a pid's Prog runs in, or nil if there is no such Prog */
+Vm*
+pidvm(int pid)
+{
+	Prog *p;
+	Vm *v;
+
+	lock(&pidlk);
+	p = *pidlook(pid);
+	v = p != nil ? p->vm : nil;
+	unlock(&pidlk);
+	return v;
+}
+
+/*
+ * Forget a wait queue that is being freed: no Prog in any VM may
+ * still point at it as its waitq or childq. Each VM's Progs are walked
+ * in one go under that VM's interpreter, never one Prog at a time: a
+ * Prog that runs between two steps of such a walk can spawn a child
+ * that inherits the queue, behind the walk, and the child's exit then
+ * writes into a freed Queue -- found as a corrupt main pool by the
+ * bcm2837 scheduler soak (#944). A child is always in its parent's VM,
+ * so each walk is complete.
+ */
+void
+vmclearwaitq(void *q)
+{
+	int i;
+	Vm *home, *v;
+	Prog *p;
+	Osenv *o;
+
+	home = up->vm;
+	for(i = 0; i < MAXVM; i++){
+		if((v = vms[i]) == nil)
+			continue;
+		up->vm = v;
+		acquire();
+		for(p = VMSCHED(v)->head; p != nil; p = p->next){
+			o = p->osenv;
+			if(o->waitq == q)
+				o->waitq = nil;
+			if(o->childq == q)
+				o->childq = nil;
+		}
+		release();
+	}
+	up->vm = home;
+}
+
+/* how many Progs one VM has */
+int
+vmprogs(Vm *v)
 {
 	int n;
 	Prog *p;
 
 	n = 0;
-	for(p = isched.head; p; p = p->next)
+	lock(&pidlk);
+	for(p = VMSCHED(v)->head; p != nil; p = p->next)
 		n++;
+	unlock(&pidlk);
+	return n;
+}
+
+int
+nprog(void)
+{
+	int i, n;
+	Prog *p;
+
+	n = 0;
+	lock(&pidlk);
+	for(i = 0; i < nvms; i++)
+		if(vms[i] != nil)
+			for(p = VMSCHED(vms[i])->head; p != nil; p = p->next)
+				n++;
+	unlock(&pidlk);
 	return n;
 }
 
@@ -119,9 +313,16 @@ accountant(void)
 {
 	Prog *p;
 
-	p = isched.runhd;
-	if(p != nil)
-		p->ticks++;
+	int i;
+
+	/* on the clock, in whatever process it interrupted: every VM's */
+	for(i = 0; i < nvms; i++){
+		if(vms[i] == nil)
+			continue;
+		p = VMSCHED(vms[i])->runhd;
+		if(p != nil)
+			p->ticks++;
+	}
 }
 
 /*
@@ -247,17 +448,24 @@ newprog(Prog *p, Modlink *m)
 	}
 	n = malloc(sizeof(Prog)+sizeof(Osenv));
 	if(n == 0){
-		if(p == nil)
+		/*
+		 * A first Prog, with no parent, from boot (no error label:
+		 * panic) or from #X's vmrun (a write, which can fail; it
+		 * panicked the machine when malloc refused, chaos.c).
+		 */
+		if(p == nil && (up == nil || up->nerrlab == 0))
 			panic("no memory");
-		else
-			error(exNomem);
+		error(exNomem);
 	}
 
+	n->vm = up->vm;
+	n->curvm = up->vm;
+	n->group = nil;
+
+	lock(&pidlk);
 	n->pid = ++pidnum;
 	if(n->pid <= 0)
 		panic("no pids");
-	n->group = nil;
-
 	if(isched.tail != nil) {
 		n->prev = isched.tail;
 		isched.tail->next = n;
@@ -267,12 +475,12 @@ newprog(Prog *p, Modlink *m)
 		n->prev = nil;
 	}
 	isched.tail = n;
-
 	ph = pidlook(n->pid);
 	if(*ph != nil)
 		panic("dup pid");
 	n->pidlink = nil;
 	*ph = n;
+	unlock(&pidlk);
 
 	n->osenv = (Osenv*)((uchar*)n + sizeof(Prog));
 	n->xec = xec;
@@ -283,8 +491,8 @@ newprog(Prog *p, Modlink *m)
 	h = D2H(m);
 	h->ref++;
 	Setmark(h);
-	n->R.M = m;
-	n->R.MP = m->MP;
+	n->reg.M = m;
+	n->reg.MP = m->MP;
 	if(m->MP != H)
 		Setmark(D2H(m->MP));
 	addrun(n);
@@ -330,28 +538,16 @@ delprog(Prog *p, char *msg)
 	tellsomeone(p, msg);	/* call before being removed from prog list */
 	n1 = up->nerrlab;
 
-	o = p->osenv;
-	release();
-	closepgrp(o->pgrp);
-	n2 = up->nerrlab;
-	closefgrp(o->fgrp);
-	n3 = up->nerrlab;
-	closeegrp(o->egrp);
-	closesigs(o->sigs);
-	acquire();
 	/*
-	 * The one place a kproc runs kernel code for a Prog that is
-	 * gone, released, with closes that block on other Progs and a
-	 * kill that can land as Eintr in the middle. Every error-stack
-	 * imbalance the board has caught came with a Prog exiting in
-	 * that quantum, so: which of these left the stack off?
+	 * Unlinked before its groups are closed with the VM let go, as emu
+	 * does (INFR-373): devprog finds a Prog by pid, through the list or
+	 * its group, holding its VM, and reads its fd table and name space.
+	 * Still listed, it read a table being freed under it (a nil load and
+	 * the kernel's panic; nativefuzz).
 	 */
-	if(up->nerrlab != n0)
-		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closepgrp %d -> closefgrp %d -> %d\n",
-			p->pid, msg, n0, n1, n2, n3, up->nerrlab);
-
 	delgrp(p);
 
+	lock(&pidlk);
 	if(p->prev)
 		p->prev->next = p->next;
 	else
@@ -366,6 +562,34 @@ delprog(Prog *p, char *msg)
 	if(*ph == nil)
 		panic("lost pid");
 	*ph = p->pidlink;
+	unlock(&pidlk);
+
+	o = p->osenv;
+	release();
+	/*
+	 * The fds before the name space: a Prog that mounted a pipe and
+	 * holds its other end (or shares a table that does) waited in the
+	 * name space's close for a clunk only that end's close could
+	 * answer, with a hangup, and never exited (nativefuzz). n2 and n3
+	 * keep their names: after the first close and after the second.
+	 */
+	closefgrp(o->fgrp);
+	n2 = up->nerrlab;
+	closepgrp(o->pgrp);
+	n3 = up->nerrlab;
+	closeegrp(o->egrp);
+	closesigs(o->sigs);
+	acquire();
+	/*
+	 * The one place a kproc runs kernel code for a Prog that is
+	 * gone, released, with closes that block on other Progs and a
+	 * kill that can land as Eintr in the middle. Every error-stack
+	 * imbalance the board has caught came with a Prog exiting in
+	 * that quantum, so: which of these left the stack off?
+	 */
+	if(up->nerrlab != n0)
+		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closefgrp %d -> closepgrp %d -> %d\n",
+			p->pid, msg, n0, n1, n2, n3, up->nerrlab);
 
 	if(p == isched.runhd) {
 		isched.runhd = p->link;
@@ -415,12 +639,9 @@ swiprog(Prog *p)
 	Proc *q, *eq;
 
 	q = proctab(0);
-	for(eq = q+conf.nproc; q < eq; q++) {
-		if(q->iprog == p) {
-			swiproc(q, 1);
+	for(eq = q+conf.nproc; q < eq; q++)
+		if(swiprogproc(q, p))
 			return;
-		}
-	}
 	/*print("didn't find\n");*/
 }
 
@@ -441,7 +662,7 @@ exprog(Prog *p, char *exc)
 {
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -509,11 +730,54 @@ propex(Prog *p, char *estr)
 		exprog(pgl, estr);
 }
 
+/*
+ * Is the Prog this proc works for being killed (devmnt: a killed
+ * Prog's 9P calls are abandoned, not waited for)? Its kill, set and
+ * not yet raised, or raised and exiting.
+ */
+int
+upkilled(void)
+{
+	Prog *p;
+
+	if(up == nil)
+		return 0;
+	if(up->killing)
+		return 1;	/* closing a dying Prog's groups: killprog, progexit */
+	if(up->type != Interp)
+		return 0;
+	p = up->iprog;
+	if(p == nil)
+		p = isched.runhd;
+	if(p == nil)
+		return 0;
+	return p->kill != nil || (p->flags & Pkilled) != 0;
+}
+
 int
 killprog(Prog *p, char *cause)
 {
 	Osenv *env;
 	char msg[ERRMAX+2*KNAMELEN];
+	int okilling;
+
+	/*
+	 * A Prog inside a file another VM serves (devsrv) is on that VM's
+	 * run queue, under that VM's interpreter, not the one held here
+	 * (devprog takes the Prog's own). Its state, its run-queue link and
+	 * its stack are that VM's to change: unlinking it from this VM's
+	 * queue and freeing its stack while the other ran it corrupted both
+	 * VMs' heaps (vmstress, killing its clients at the end, on virt).
+	 * So only mark it, as a kill in a system call is marked, and wake it
+	 * if it sleeps: it raises the kill under its own VM when it next
+	 * runs there (xec), and cdone will not let it sleep meanwhile.
+	 */
+	if(p->curvm != nil && p->curvm != up->vm) {
+		p->kill = "";
+		p->flags |= Pkilled;
+		swiprog(p);
+		return 0;
+	}
 
 	if(p == isched.runhd) {
 		p->kill = "";
@@ -524,7 +788,7 @@ killprog(Prog *p, char *cause)
 
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -540,8 +804,14 @@ killprog(Prog *p, char *cause)
 		p->flags |= Pkilled;
 		p->state = Pexiting;
 		swiprog(p);
-		/* No break */
+		return 0;
 	case Pexiting:
+		/*
+		 * A previous wake can have lost the release/publication race.
+		 * A later group kill is the owner's retry; do not leave an
+		 * already-marked Prog asleep in the system call it must leave.
+		 */
+		swiprog(p);
 		return 0;
 	case Pbroken:
 	case Pdebug:
@@ -565,15 +835,26 @@ killprog(Prog *p, char *cause)
 		return 0;
 	}
 
+
 	propex(p, "killed");
 
-	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
+	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
 	p->state = Pexiting;
+	/*
+	 * Destroyed here, in the killer: its closes are a killed Prog's,
+	 * and a 9P clunk among them is sent and not waited for (devmnt,
+	 * upkilled). Waited for, one on a server that never answers held
+	 * the killer -- a shell's kill, a group's leader -- for good
+	 * (tools/sysfuzz).
+	 */
+	okilling = up->killing;
+	up->killing = 1;
 	gclock();
-	destroystack(&p->R);
+	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
+	up->killing = okilling;
 
 	return 1;
 }
@@ -621,6 +902,63 @@ addgrp(Prog *n, Prog *p)
 	}
 }
 
+/*
+ * A read of /prog/n/grpwait waits for n's process group, as it was when
+ * the file was opened, to have no Prog left: delgrp posts to each such
+ * reader's queue as it frees the group (a group is freed with its last
+ * Prog, and group ids are pids, never reused).  The list is changed and
+ * walked with the interpreter held.
+ */
+typedef struct Grpwait Grpwait;
+struct Grpwait
+{
+	int	gid;
+	Queue*	q;
+	Grpwait*	next;
+};
+static Grpwait *grpwaits;
+
+void
+grpwaitadd(int gid, Queue *q)
+{
+	Grpwait *w;
+
+	w = malloc(sizeof(*w));
+	if(w == nil)
+		error(Enomem);
+	w->gid = gid;
+	w->q = q;
+	w->next = grpwaits;
+	grpwaits = w;
+}
+
+void
+grpwaitdel(Queue *q)
+{
+	Grpwait **l, *w;
+
+	for(l = &grpwaits; (w = *l) != nil; ){
+		if(w->q == q){
+			*l = w->next;
+			free(w);
+		}else
+			l = &w->next;
+	}
+}
+
+static void
+grpgone(int gid)
+{
+	Grpwait *w;
+	char buf[16];	/* Flawfinder: ignore — an int's decimal, bounded by sizeof buf below */
+	int n;
+
+	n = snprint(buf, sizeof(buf), "%d", gid);
+	for(w = grpwaits; w != nil; w = w->next)
+		if(w->gid == gid)
+			qproduce(w->q, buf, n);
+}
+
 static Progs*
 delgrp(Prog *p)
 {
@@ -658,6 +996,7 @@ delgrp(Prog *p)
 					pg->child = cg;
 				}
 			}
+			grpgone(g->id);
 			free(g);
 		}while((g = pg) != nil && g->head == nil);
 	}
@@ -680,10 +1019,27 @@ printgrp(Prog *p, char *v)
 	print("]\n");
 }
 
+/*
+ * The group with id gid, found without allocating a pid list.  Group ids are
+ * pids and are never reused.  killprog can release the VM and free the target
+ * group, so a caller must reacquire it by identity afterwards rather than
+ * retain its pointer.
+ */
+static Progs*
+grpbyidall(int gid)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && f->group->id == gid)
+			return f->group;
+	return nil;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
-	int i, npid, *pids;
+	int i, npid, *pids, pid, gid;
 	Prog *f;
 	Progs *g;
 
@@ -691,9 +1047,14 @@ killgrp(Prog *p, char *msg)
 	g = p->group;
 	if(g == nil || g->head == nil)
 		return 0;
+	pid = p->pid;
+	gid = g->id;
 	while(g->flags & Pkilled){
 		release();
 		acquire();
+		/* p, and its group, may be gone while the VM was released */
+		if((p = progpid(pid)) == nil || (g = p->group) == nil || g->id != gid || g->head == nil)
+			return 0;
 	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
@@ -703,14 +1064,44 @@ killgrp(Prog *p, char *msg)
 			npid++;
 	/* use pids not Prog* because state can change during killprog (eg, in delprog) */
 	pids = malloc(npid*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list: kill them anyway, the first not
+		 * yet killed each time round (killprog can change the
+		 * group), as many times as it had Progs. A kill refused
+		 * for want of memory left a group running when killing
+		 * it is how memory is got back (os/port/chaos.c: a
+		 * sysfuzz epoch's hundreds of Progs, never killed).
+		 */
+		g->flags |= Pkilled;
+		if(waserror()){
+			if((g = grpbyidall(gid)) != nil)
+				g->flags &= ~Pkilled;
+			nexterror();
+		}
+		for(i = 0; i < npid; i++){
+			for(f = g->head; f != nil; f = f->grpnext)
+				if(f != currun() && (f->flags & Pkilled) == 0 &&
+				   f->state != Pexiting && f->state != Pbroken)
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+			if((g = grpbyidall(gid)) == nil)
+				break;
+		}
+		poperror();
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
+		return 1;
+	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
 		pids[npid++] = f->pid;
 	g->flags |= Pkilled;
 	if(waserror()) {
-		g->flags &= ~Pkilled;
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
 		free(pids);
 		nexterror();
 	}
@@ -720,9 +1111,75 @@ killgrp(Prog *p, char *msg)
 			killprog(f, msg);
 	}
 	poperror();
-	g->flags &= ~Pkilled;
+	if((g = grpbyidall(gid)) != nil)
+		g->flags &= ~Pkilled;
 	free(pids);
 	return 1;
+}
+
+static int
+grptreedescendant(Progs *g, Progs *root)
+{
+	for(; g != nil; g = g->parent)
+		if(g == root)
+			return 1;
+	return 0;
+}
+
+static void
+cleargrptreekilled(int *gids, int n)
+{
+	int i;
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		for(i = 0; i < n; i++)
+			if(f->group != nil && f->group->id == gids[i]){
+				f->group->flags &= ~Pkilled;
+				break;
+			}
+}
+
+int
+killgrptree(Prog *p, char *msg)
+{
+	int i, n, *gids, *pids;
+	Prog *f;
+	Progs *g;
+
+	g = p->group;
+	if(g == nil)
+		return 0;
+	/* Do not recurse on attacker-controlled NEWPGRP depth. */
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g))
+			n++;
+	pids = malloc(2*n*sizeof(int));
+	if(pids == nil)
+		error(Enomem);
+	gids = pids+n;
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g)){
+			f->group->flags |= Pkilled;
+			pids[n] = f->pid;
+			gids[n++] = f->group->id;
+		}
+	if(waserror()){
+		cleargrptreekilled(gids, n);
+		free(pids);
+		nexterror();
+	}
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f != nil && f != currun())
+			killprog(f, msg);
+	}
+	poperror();
+	cleargrptreekilled(gids, n);
+	free(pids);
+	return 0;
 }
 
 char	changup[] = "channel hangup";
@@ -762,9 +1219,21 @@ addprog(Proc *p)
 	Prog *n;
 
 	if((n = p->prog) == nil) {
-		n = malloc(sizeof(Prog));
-		if(n == nil)
-			panic("no memory");
+		/*
+		 * Waited for, not panicked over, and not with an error:
+		 * newproc can be given no error to raise, and release()
+		 * makes a VM's next kproc here with isched.creating set,
+		 * which an error out of it would leave set for good (no
+		 * kproc made again, the VM stopped). A pool short for a
+		 * moment -- every malloc can be refused (os/port/chaos.c)
+		 * -- panicked the machine. Not tsleep: a sleep can be
+		 * interrupted.
+		 */
+		while((n = malloc(sizeof(Prog))) == nil){
+			if(up == nil)
+				panic("no memory");
+			microdelay(1000);
+		}
 		p->prog = n;
 	} else
 		memset(n, 0, sizeof(Prog));
@@ -834,10 +1303,10 @@ addrun(Prog *p)
 	 * nil->compiled quietly returned junk; with no memory there (RISC-V,
 	 * no paging) it is a load access fault in the boot's first addrun.
 	 */
-	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && ((uintptr)p->R.PC & 3))
+	if(p->reg.M != nil && p->reg.M != H && p->reg.M->compiled && ((uintptr)p->reg.PC & 3))
 		print("BUG: addrun: prog %d %s R.PC=%p (prog %p) from %#p\n",
-			p->pid, p->R.M->m? p->R.M->m->name : "?", p->R.PC,
-			p->R.M->m? (void*)p->R.M->m->prog : nil, getcallerpc(&p));
+			p->pid, p->reg.M->m? p->reg.M->m->name : "?", p->reg.PC,
+			p->reg.M->m? (void*)p->reg.M->m->prog : nil, getcallerpc(&p));
 	chkprog(p, "addrun");
 	chkprog(isched.runtl, "addrun.tl");
 	if(isched.runhd == nil)
@@ -926,14 +1395,177 @@ schedmod(Module *m)
 	p = newprog(nil, ml);
 	h = D2H(ml);
 	h->ref--;
-	p->R.PC = m->entry;
-	fp = &f;
+	p->reg.PC = m->entry;
+	/*
+	 * newstack copies the frame it is given, t->size bytes of it: a
+	 * Frame on this stack is only its 32-byte header, so the rest of
+	 * the entry frame was whatever followed it here (initmem resets
+	 * the pointers, not the rest), read past f (AddressSanitizer:
+	 * stack-buffer-overflow, 136 bytes from 32). Given a zeroed frame
+	 * of the entry type's size, the Prog starts with one.
+	 */
+	t = m->entryt;
+	if(t != nil && t->size > sizeof(Frame)){
+		fp = mallocz(t->size, 1);
+		if(fp == nil)
+			error(exNomem);
+	}else{
+		memset(&f, 0, sizeof(f));
+		fp = &f;
+	}
+	fp->t = t;
 	R.s = &fp;
-	f.t = m->entryt;
+	if(waserror()){
+		if(fp != &f)
+			free(fp);
+		nexterror();
+	}
 	newstack(p);
-	initmem(m->entryt, p->R.FP);
+	poperror();
+	if(fp != &f)
+		free(fp);
+	initmem(m->entryt, p->reg.FP);
 
 	return p;
+}
+
+/*
+ * VM n, made if it is not there yet (#944): a scheduler whose
+ * interpreter is free, a heap pool of its own, a collector at the
+ * start of its first epoch. Its builtin modules are registered by the
+ * first vmrun, under its interpreter. nil if n is out of range or the
+ * pools are all taken.
+ */
+Vm*
+vmget(int n)
+{
+	static char names[MAXVM][8];
+	Vm *v;
+	Isched *s;
+
+	if(n < 0 || n >= MAXVM)
+		return nil;
+	lock(&vmlk);
+	v = vms[n];
+	if(v == nil){
+		v = mallocz(sizeof(Vm), 1);
+		s = mallocz(sizeof(Isched), 1);
+		snprint(names[n], sizeof names[n], "heap%d", n);
+		if(v == nil || s == nil || (v->vheap = heappoolnew(names[n])) == nil){
+			unlock(&vmlk);
+			free(v);
+			free(s);
+			return nil;
+		}
+		v->id = n;
+		v->vgccolor = 3;	/* as vm0's (xec.c) */
+		v->marker = 1;
+		v->sweeper = 2;
+		v->quanta = 50;
+		v->gct = 1;
+		s->idle = 1;		/* the interpreter is free: the first acquire takes it */
+		v->vsched = s;
+		vms[n] = v;
+		if(n >= nvms)
+			nvms = n+1;
+	}
+	unlock(&vmlk);
+	return v;
+}
+
+/*
+ * Run a module in VM n: init(nil, argv), with the caller's namespace,
+ * environment and file descriptors as a spawn would share them, and
+ * its own heap there. Returns the new pid. The caller is in a system
+ * call, holding no interpreter; it takes VM n's for the length of the
+ * load, as a crossing does (#944), and the release that ends it starts
+ * the VM's first interpreter process if it has none.
+ *
+ * init's parameters are where the Limbo compiler puts a function's
+ * first two: MaxTemp, (NREG+3) words into the frame (limbo/limbo.h).
+ * The frame type is checked to say both are pointers, so a module
+ * whose init is not init(ctxt, argv) is refused, not mis-called.
+ */
+int
+vmrun(int n, int argc, char **argv)
+{
+	Vm *v, *home;
+	Module *root;
+	Prog *p;
+	Osenv *o;
+	Type *t;
+	List *l;
+	String *s;
+	uchar *fp;
+	int i, pid, w;
+
+	if(argc < 1)
+		error(Ebadarg);
+	v = vmget(n);
+	if(v == nil)
+		error("no such VM");
+	home = up->vm;
+	up->vm = v;
+	acquire();
+	if(waserror()){
+		release();
+		up->vm = home;
+		nexterror();
+	}
+	if(!v->ready){
+		vmbuiltins();
+		v->ready = 1;
+	}
+	/*
+	 * As OP(load) does it, not as load() does: the interpreter is let
+	 * go while the file is read, because the file may be served by a
+	 * Dis program -- /dis on the card is dossrv's, in vm0 -- which must
+	 * run to answer. Held, that is a deadlock.
+	 */
+	root = readmod(argv[0], lookmod(argv[0]), 1);
+	if(root == nil){
+		kgerrstr(up->genbuf, sizeof up->genbuf);
+		error(up->genbuf);
+	}
+	t = root->entryt;
+	w = NREG+3;
+	if(t == nil || t->np <= (w+1)/8 || (t->map[w/8] & (0x80>>(w%8))) == 0 || (t->map[(w+1)/8] & (0x80>>((w+1)%8))) == 0)
+		error("not a command: init is not init(ctxt, argv)");
+	p = schedmod(root);
+
+	l = (List*)H;
+	for(i = argc-1; i >= 0; i--){
+		s = c2string(argv[i], strlen(argv[i]));
+		l = cons(IBY2WD, &l);
+		l->t = &Tptr;
+		Tptr.ref++;
+		*(String**)l->data = s;
+	}
+	fp = p->reg.FP;
+	*(WORD**)(fp + w*IBY2WD) = H;		/* ctxt: nil */
+	*(List**)(fp + (w+1)*IBY2WD) = l;	/* argv */
+
+	memmove(p->osenv, up->env, sizeof(Osenv));
+	o = p->osenv;
+	incref(&o->pgrp->r);
+	incref(&o->fgrp->r);
+	if(o->egrp != nil)
+		incref(&o->egrp->r);
+	if(o->sigs != nil)
+		incref(&o->sigs->r);
+	o->user = nil;
+	kstrdup(&o->user, up->env->user);
+	o->errstr = o->errbuf0;
+	o->syserrstr = o->errbuf1;
+	o->waitq = nil;
+	o->childq = nil;
+	o->debug = nil;
+	pid = p->pid;
+
+	poperror();
+	release();
+	up->vm = home;
+	return pid;
 }
 
 /*
@@ -948,6 +1580,16 @@ acquire(void)
 {
 	int empty;
 	Prog *p;
+
+	/*
+	 * Say which VM this process's Prog is about to be under, before
+	 * it is: devsrv and devprog take another VM's interpreter for a
+	 * Prog that is not that VM's, and a kill from the Prog's own VM
+	 * must then leave it alone (killprog).
+	 */
+	p = up->type == Interp ? up->iprog : up->prog;
+	if(p != nil)
+		p->curvm = up->vm;
 
 	lock(&isched.l);
 	if(isched.idle) {
@@ -973,9 +1615,20 @@ acquire(void)
 		sched();
 	}
 
+#ifdef VMREGPERMACH
+	/*
+	 * This core now runs this process's VM: R must be its registers
+	 * before irestore loads them (interp.h). sched() does the same on a
+	 * switch; this is the path that takes a free interpreter without one.
+	 */
+	m->vmreg = up->vm;
+#endif
 	if(up->type == Interp) {
+		lock(&up->rlock);	/* with swiproc */
 		p = up->iprog;
 		up->iprog = nil;
+		up->intpend = 0;	/* a kill pending for p is p's, raised in the VM; not the next Prog's */
+		unlock(&up->rlock);
 		irestore(p);
 	}
 	else
@@ -993,12 +1646,25 @@ void
 release(void)
 {
 	Proc *p, **pq;
+	Prog *r;
 	int f;
 
 	if(up->type == Interp){
 		if(up->iprog != nil)
 			panic("Double release (Interp)?");
-		up->iprog = isave();
+		r = isave();
+		lock(&up->rlock);
+		up->iprog = r;
+		/*
+		 * A kill from another VM can race this publication: swiprog
+		 * sees neither a released iprog nor a sleeping Proc, then the
+		 * Prog enters the system call and sleeps with no interrupt
+		 * pending.  Preserve the already-recorded revocation for the
+		 * first sleep after release.
+		 */
+		if(r->kill != nil || (r->flags & Pkilled) != 0)
+			up->intpend = 1;
+		unlock(&up->rlock);
 	}else{
 		if(((Prog *)up->prog)->state != Pready) panic("double release (GC)?");
 		delrun(Prelease);
@@ -1120,10 +1786,19 @@ progexit(void)
 		return;
 	}
 
+	/*
+	 * Its closes are a dying Prog's, killed or not: a 9P clunk among
+	 * them is sent and waited for Mntexitms at most (devmnt,
+	 * upkilled). Waited for without end, Progs exiting on servers that
+	 * never answer held their kprocs until none was left (nativefuzz,
+	 * "no procs").
+	 */
+	up->killing = upkilled() ? 1 : 2;
 	gclock();
 	destroystack(&R);
 	delprog(r, msg);
 	gcunlock();
+	up->killing = 0;
 	if(up->nerrlab != n0)
 		print("progexit: error stack %d -> %d\n", n0, up->nerrlab);
 }
@@ -1211,7 +1886,16 @@ vmachine(void*)
 		}
 		if(up->iprog != nil)
 			acquire();
-		if(handler(up->env->errstr) == 0) {
+		/*
+		 * A ctl kill is ownership revocation, not an exception the
+		 * target may decline.  In particular, a catch-all around a
+		 * blocking system call must not consume the interrupt and enter
+		 * another call: no interrupt is then pending to wake that call,
+		 * and a killed Prog can retain its Proc and namespace forever.
+		 * Pkilled distinguishes that case from an ordinary, catchable
+		 * exception delivered through the same machinery.
+		 */
+		if((currun()->flags & Pkilled) != 0 || handler(up->env->errstr) == 0) {
 			propex(currun(), up->env->errstr);
 			progexit();
 		}
@@ -1269,7 +1953,7 @@ vmachine(void*)
 			 * read these two fields first.
 			 */
 			pid = r->pid;
-			modname = r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?";
+			modname = r->reg.M != nil && r->reg.M->m != nil ? r->reg.M->m->name : "?";
 
 			FPrestore(&o->fpu);
 			r->xec(r);
@@ -1286,11 +1970,11 @@ vmachine(void*)
 			{
 				Prog *q;
 				for(q = isched.runhd; q != nil; q = q->link)
-					if(q != r && q->R.M != nil && q->R.M != H && q->R.M->compiled && ((uintptr)q->R.PC & 3) && !(q->flags & Pbadpc)){
+					if(q != r && q->reg.M != nil && q->reg.M != H && q->reg.M->compiled && ((uintptr)q->reg.PC & 3) && !(q->flags & Pbadpc)){
 						q->flags |= Pbadpc;
 						print("BUG: prog %d %s R.PC=%p (prog %p) went bad during the quantum of prog %d %s at pc %p (prog %p, state %d)\n",
-							q->pid, q->R.M->m? q->R.M->m->name : "?", q->R.PC, q->R.M->m? (void*)q->R.M->m->prog : nil,
-							pid, modname, r->R.PC, r->R.M != H && r->R.M->m? (void*)r->R.M->m->prog : nil, r->state);
+							q->pid, q->reg.M->m? q->reg.M->m->name : "?", q->reg.PC, q->reg.M->m? (void*)q->reg.M->m->prog : nil,
+							pid, modname, r->reg.PC, r->reg.M != H && r->reg.M->m? (void*)r->reg.M->m->prog : nil, r->state);
 					}
 			}
 
@@ -1409,8 +2093,13 @@ disinit(void *a)
 	Module *root;
 	char *initmod = a;
 
+	debugkey('d', "Dis Progs", progdump, 0);
+
 	if(waserror())
 		panic("disinit error: %r");
+
+	vm0.vsched = &sched0;
+	up->vm = &vm0;
 
 	print("Initial Dis: \"%s\"\n", initmod);
 
@@ -1423,6 +2112,7 @@ disinit(void *a)
 
 	opinit();
 	modinit();
+	typesperm = 0;		/* builtin types are shared and permanent; a module's are its VM's (interp.h) */
 	excinit();
 
 	root = load(initmod);

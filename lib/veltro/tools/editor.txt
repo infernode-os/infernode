@@ -29,11 +29,10 @@ an editor that is already visible in the presentation zone.
 If the user says "launch the editor" or "open the editor", use
 the launch tool, not this tool.
 
-How it works: send subcommands as the args string to this tool. The
-editor polls for commands every 500ms, so there is a brief delay
-between sending a command and it taking effect. Internal file paths
-under /tmp/veltro/editor/ are an implementation detail used by this
-tool internally — never address them directly from your tool calls.
+How it works: send subcommands as the args string to this tool. A
+command has taken effect when the tool returns, and one the editor
+refuses comes back as an error. The editor's files (/mnt/editor) are
+mounted for this tool alone — never address them from other tools.
 The only paths you ever pass to this tool are real files for the
 "open" and "name" subcommands.
 

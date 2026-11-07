@@ -113,9 +113,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	key := <-top.ctxt.kbd =>
 		# Ctrl-Q / Del quits; everything else is ignored.
-		Kdel: con 16rFF9F;
-		if(key == 'q' - 16r60 || key == Kdel)
-			return;
+		# Delete: DEL as SDL sends it, or keyboard.h's (16rE064)
+		if(key == 'q' - 16r60 || key == 16r7F || key == 16rE064)
+			tkclient->wmctl(top, "exit");
 		tk->keyboard(top, key);
 
 	p := <-top.ctxt.ptr =>

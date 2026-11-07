@@ -229,6 +229,10 @@ netifread(Netif *nif, Chan *c, void *a, long n, ulong offset)
 		p = malloc(READSTR);
 		if(p == nil)
 			return 0;
+		if(waserror()){
+			free(p);
+			nexterror();
+		}
 		j = snprint(p, READSTR, "in: %d\n", nif->inpackets);
 		j += snprint(p+j, READSTR-j, "link: %d\n", nif->link);
 		j += snprint(p+j, READSTR-j, "out: %d\n", nif->outpackets);
@@ -246,16 +250,22 @@ netifread(Netif *nif, Chan *c, void *a, long n, ulong offset)
 		snprint(p+j, READSTR-j, "\n");
 		n = readstr(offset, a, n, p);
 		free(p);
+		poperror();
 		return n;
 	case Naddrqid:
 		p = malloc(READSTR);
 		if(p == nil)
 			return 0;
+		if(waserror()){
+			free(p);
+			nexterror();
+		}
 		j = 0;
 		for(i = 0; i < nif->alen; i++)
 			j += snprint(p+j, READSTR-j, "%2.2ux", nif->addr[i]);
 		n = readstr(offset, a, n, p);
 		free(p);
+		poperror();
 		return n;
 	case Ntypeqid:
 		f = nif->f[NETID(c->qid.path)];
@@ -387,16 +397,21 @@ netifwstat(Netif *nif, Chan *c, uchar *db, int n)
 		error(Eperm);
 
 	dir = smalloc(sizeof(Dir)+n);
-	m = convM2D(db, n, &dir[0], (char*)&dir[1]);
-	if(m == 0){
+	if(waserror()){
 		free(dir);
-		error(Eshortstat);
+		nexterror();
 	}
-	if(!emptystr(dir[0].uid))
-		strncpy(f->owner, dir[0].uid, KNAMELEN);
+	m = convM2D(db, n, &dir[0], (char*)&dir[1]);
+	if(m == 0)
+		error(Eshortstat);
+	if(!emptystr(dir[0].uid)){
+		strncpy(f->owner, dir[0].uid, KNAMELEN-1);
+		f->owner[KNAMELEN-1] = 0;
+	}
 	if(dir[0].mode != ~0UL)
 		f->mode = dir[0].mode;
 	free(dir);
+	poperror();
 	return m;
 }
 
@@ -489,7 +504,8 @@ netown(Netfile *p, char *o, int omode)
 			return -1;
 		}
 	}
-	strncpy(p->owner, o, KNAMELEN);
+	strncpy(p->owner, o, KNAMELEN-1);
+	p->owner[KNAMELEN-1] = 0;
 	p->mode = 0660;
 	unlock(&netlock);
 	return 0;

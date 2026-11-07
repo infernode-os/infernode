@@ -7,6 +7,7 @@ implement Mc9p;
 # Write request to file, read response from file.
 #
 # Example:
+#   mc9p -r /srv/model-input fs
 #   echo "https://example.com" > /mnt/mcp/http/get
 #   cat /mnt/mcp/http/get  -> HTTP response body
 #
@@ -69,18 +70,11 @@ Qdomainbase: con 100;
 # Endpoints start at 1000
 Qendpointbase: con 1000;
 
-# Endpoint state (per-fid)
-EndpointState: adt {
-	request:  array of byte;
-	response: array of byte;
-};
-
 # Endpoint info
 EndpointInfo: adt {
 	name:   string;
 	domain: string;
 	qid:    int;
-	state:  ref EndpointState;
 };
 
 # Domain info
@@ -97,6 +91,7 @@ providername := "mc9p";
 providerversion := "1.0";
 mountpt := "/mnt/mcp";	# application mount point — we author the schema (docs/NAMESPACE-LAYOUT.md)
 hasnet := 0;
+fsroot: string;
 
 nomod(s: string)
 {
@@ -106,10 +101,11 @@ nomod(s: string)
 
 usage()
 {
-	sys->fprint(stderr, "Usage: mc9p [-D] [-m mountpoint] [-n] domain [domain ...]\n");
+	sys->fprint(stderr, "Usage: mc9p [-D] [-m mountpoint] [-n] [-r fsroot] domain [domain ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /mnt/mcp)\n");
 	sys->fprint(stderr, "  -n            Enable network access (for http domain)\n");
+	sys->fprint(stderr, "  -r fsroot     Clamp fs endpoints to this directory (required for fs)\n");
 	sys->fprint(stderr, "\n");
 	sys->fprint(stderr, "Available domains:\n");
 	sys->fprint(stderr, "  http  - HTTP client (get, post, headers)\n");
@@ -151,6 +147,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'D' =>	styxservers->traceset(1);
 		'm' =>	mountpt = arg->earg();
 		'n' =>	hasnet = 1;
+		'r' =>	fsroot = strip(arg->earg());
 		* =>	usage();
 		}
 	args = arg->argv();
@@ -165,6 +162,17 @@ init(nil: ref Draw->Context, args: list of string)
 	if(domains == nil) {
 		sys->fprint(stderr, "mc9p: no valid domains specified\n");
 		raise "fail:no domains";
+	}
+	if(finddomain("fs") != nil) {
+		if(!validabspath(fsroot) || fsroot == "/") {
+			sys->fprint(stderr, "mc9p: fs requires a non-root absolute -r directory\n");
+			raise "fail:fs root";
+		}
+		(ok, d) := sys->stat(fsroot);
+		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
+			sys->fprint(stderr, "mc9p: invalid fs root %s: %r\n", fsroot);
+			raise "fail:fs root";
+		}
 	}
 
 	sys->pctl(Sys->FORKFD, nil);
@@ -196,6 +204,9 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "mc9p: mount failed: %r\n");
 		raise "fail:mount";
 	}
+	# The server has attached every device it needs. Refuse later host-device
+	# walks so a symlink inside fsroot cannot escape the lexical root clamp.
+	sys->pctl(Sys->NODEVS, nil);
 }
 
 # Initialize domains from argument list
@@ -221,7 +232,7 @@ initdomains(args: list of string)
 		eplist: list of ref EndpointInfo;
 		for(; eps != nil; eps = tl eps) {
 			epname := hd eps;
-			ep := ref EndpointInfo(epname, name, epqid, ref EndpointState(nil, nil));
+			ep := ref EndpointInfo(epname, name, epqid);
 			eplist = ep :: eplist;
 			epqid++;
 		}
@@ -440,8 +451,7 @@ dirgen(path: int): (ref Sys->Dir, string)
 			if(ep != nil) {
 				d.name = ep.name;
 				d.mode = 8r666;  # Read/write
-				if(ep.state.response != nil)
-					d.length = big len ep.state.response;
+				# Response length is fid-specific and is reported by reads.
 			} else {
 				return (nil, Enotfound);
 			}
@@ -529,8 +539,9 @@ Serve:
 			* =>
 				if(path >= Qendpointbase) {
 					ep := findendpointbyqid(path);
-					if(ep != nil && ep.state.response != nil) {
-						srv.reply(styxservers->readbytes(m, ep.state.response));
+					response := fidresponse(fid, path);
+					if(ep != nil && response != nil) {
+						srv.reply(styxservers->readbytes(m, response));
 					} else {
 						srv.reply(styxservers->readbytes(m, nil));
 					}
@@ -550,9 +561,8 @@ Serve:
 			if(path >= Qendpointbase) {
 				ep := findendpointbyqid(path);
 				if(ep != nil) {
-					# Store request and execute
-					ep.state.request = m.data;
-					ep.state.response = executeendpoint(ep);
+					# Execute this fid's request and retain only this fid's response.
+					fid.data = tagresponse(path, executeendpoint(ep, m.data));
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
@@ -568,10 +578,36 @@ Serve:
 	navops <-= nil;
 }
 
-# Execute an endpoint and return response
-executeendpoint(ep: ref EndpointInfo): array of byte
+# Prefix a response with its endpoint qid. A fid may subsequently walk to a
+# different endpoint; the tag prevents a stale response following that walk.
+tagresponse(path: int, response: array of byte): array of byte
 {
-	request := string ep.state.request;
+	if(response == nil)
+		response = array[0] of byte;
+	r := array[len response + 4] of byte;
+	r[0] = byte (path >> 24);
+	r[1] = byte (path >> 16);
+	r[2] = byte (path >> 8);
+	r[3] = byte path;
+	r[4:] = response;
+	return r;
+}
+
+fidresponse(fid: ref Styxservers->Fid, path: int): array of byte
+{
+	r := fid.data;
+	if(r == nil || len r < 4)
+		return nil;
+	tag := (int r[0] << 24) | (int r[1] << 16) | (int r[2] << 8) | int r[3];
+	if(tag != path)
+		return nil;
+	return r[4:];
+}
+
+# Execute an endpoint and return response
+executeendpoint(ep: ref EndpointInfo, data: array of byte): array of byte
+{
+	request := string data;
 
 	case ep.domain {
 	"http" =>
@@ -605,6 +641,8 @@ exechttp(endpoint, request: string): string
 execfs(endpoint, request: string): string
 {
 	path := strip(request);
+	if(!validabspath(path) || !pathwithin(fsroot, path))
+		return "error: path outside configured fs root";
 
 	case endpoint {
 	"read" =>
@@ -615,6 +653,29 @@ execfs(endpoint, request: string): string
 		return statpath(path);
 	}
 	return "error: unknown endpoint";
+}
+
+validabspath(path: string): int
+{
+	if(path == nil || len path == 0 || path[0] != '/')
+		return 0;
+	start := 1;
+	for(i := 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			part := path[start:i];
+			if(part == "" || part == "." || part == "..")
+				return 0;
+			start = i + 1;
+		}
+	}
+	return 1;
+}
+
+pathwithin(root, path: string): int
+{
+	if(path == root)
+		return 1;
+	return len path > len root && path[0:len root] == root && path[len root] == '/';
 }
 
 # HTTP GET request

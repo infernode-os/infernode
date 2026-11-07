@@ -77,6 +77,8 @@ TARG=\
 	html.dis\
 	imap.dis\
 	imageremap.dis\
+	icon.dis\
+	touchgest.dis\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
@@ -108,11 +110,17 @@ TARG=\
 	names.dis\
 	nametree.dis\
 	newns.dis\
+	nmea.dis\
+	gdl90.dis\
+	sdrdsp.dis\
+	garminav.dis\
 	ninep.dis\
 	oldauth.dis\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
+	post9p.dis\
+	appfs.dis\
 	pop3.dis\
 	profile.dis\
 	publicnet.dis\
@@ -184,6 +192,8 @@ TARG=\
 	bioauth.dis\
 	keyringinst.dis\
 	softkbd.dis\
+	kbdecode.dis\
+	osklayout.dis\
 	viewport.dis\
 
 
@@ -246,6 +256,8 @@ SYSMODULES=\
 	hash.m\
 	html.m\
 	imap.m\
+	icon.m\
+	touchgest.m\
 	imagefile.m\
 	imgload.m\
 	pngload.m\
@@ -278,6 +290,10 @@ SYSMODULES=\
 	msgio.m\
 	names.m\
 	newns.m\
+	nmea.m\
+	gdl90.m\
+	sdrdsp.m\
+	garminav.m\
 	oldauth.m\
 	pkcs.m\
 	plumbing.m\
@@ -340,6 +356,31 @@ SYSMODULES=\
 	wpakey.m\
 	x402.m\
 	xml.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	dhcp.m\
+	dialog.m\
+	docreg.m\
+	keyringinst.m\
+	mailparse.m\
+	mermaid.m\
+	popup.m\
+	publicnet.m\
+	scoretable.m\
+	selectfile.m\
+	softkbd.m\
+	kbdecode.m\
+	osklayout.m\
+	tabs.m\
+	tkclient.m\
+	tls.m\
+	viewport.m\
+	wmdeb.m\
+	post9p.m\
+	appfs.m\
+	keyboard.m\
 
 
 

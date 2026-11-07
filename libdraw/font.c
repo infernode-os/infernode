@@ -26,7 +26,13 @@ cachechars(Font *f, char **ss, Rune **rr, ushort *cp, int max, int *wp, char **s
 	}
 	wid = 0;
 	*subfontname = 0;
-	for(i=0; (*sp || *rp) && i<max; sp+=w, rp+=rw){
+	/*
+	 * The count first: a rune array need not end in 0 (Tk's entry passes
+	 * one Rune for a hidden entry's every character, and its text
+	 * unterminated), and *rp past the max-th was a read past its end
+	 * (AddressSanitizer: stack-buffer-overflow, 4 bytes past a Rune).
+	 */
+	for(i=0; i<max && (*sp || *rp); sp+=w, rp+=rw){
 		if(ss){
 			r = *(uchar*)sp;
 			if(r < Runeself)
@@ -130,8 +136,7 @@ agefont(Font *f)
 			if(s->age){
 				if(s->age<SUBFAGE && s->cf->name != nil){
 					/* clean up */
-/*					if(s->f != display->defaultsubfont) */	/* plan 9 uses this */
-					if(s->f)
+					if(f->display == nil || s->f != f->display->defaultsubfont)
 						freesubfont(s->f);
 					s->cf = nil;
 					s->f = nil;
@@ -220,16 +225,14 @@ loadchar(Font *f, Rune r, Cacheinfo *c, int h, int noflush, char **subfontname)
 			subf->age = 0;
 		}else{				/* too recent; grow instead */
 			of = f->subf;
-			f->subf = malloc((f->nsubf+DSUBF)*sizeof *subf);
+			f->subf = realloc(of, (f->nsubf+DSUBF)*sizeof *subf);
 			if(f->subf == nil){
 				f->subf = of;
 				goto Toss;
 			}
-			memmove(f->subf, of, (f->nsubf+DSUBF)*sizeof *subf);
-			memset(f->subf+f->nsubf, 0, DSUBF*sizeof *subf);
 			subf = &f->subf[f->nsubf];
+			memset(subf, 0, DSUBF*sizeof *subf);
 			f->nsubf += DSUBF;
-			free(of);
 		}
 	}
 	subf->age = 0;

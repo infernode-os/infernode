@@ -88,12 +88,12 @@ Refs: Security in Plan 9 (9p.io/sys/doc/auth.html), `factotum(4)`,
 
 ## 5. Architecture: the pluggable authenticator
 
-### 5.1 A provider-agnostic device: `#F` → `/dev/2fa`
+### 5.1 A provider-agnostic device: `#h` → `/dev/2fa`
 
 Expose second factors the Inferno way — as a file server — so callers
 (`logon`, factotum, wallet) never link a device library. As built this is the
-**`#F` device** (`emu/port/devtfa.c`), bound into the namespace at `/dev/2fa`
-(`bind "#F" /dev/2fa`, see `appl/lib/twofa.b`). Its synthetic file tree:
+**`#h` device** (`emu/port/devtfa.c`), bound into the namespace at `/dev/2fa`
+(`bind "#h" /dev/2fa`, see `appl/lib/twofa.b`). Its synthetic file tree:
 
 ```
 /dev/2fa/
@@ -113,7 +113,7 @@ reduces to "given this salt, return a stable device-bound secret after proving
 presence." That secret (`R`) is wrapped into the secstore key-slots (§6).
 
 > *Design note:* the original draft proposed `/mnt/2fa` with `challenge` +
-> `status` files and a `#²` device. The shipped form uses `#F` → `/dev/2fa` and
+> `status` files and a `#²` device. The shipped form uses `#h` → `/dev/2fa` and
 > folds challenge/response into the read-write `derive` file (plus a `cred` file
 > for the enrolled credential id). The semantics are identical; the names differ.
 
@@ -135,7 +135,7 @@ interface already accommodates.)
 ### 5.3 The emu host bridge
 
 Inferno runs inside the `emu` host emulator, which has **no** native USB/HID
-access. The `#F` device is a deliberately thin **text relay**: `devtfa.c` parses
+access. The `#h` device is a deliberately thin **text relay**: `devtfa.c` parses
 one line and calls the host-side bridge — it does no crypto and no USB itself.
 
 - The bridge: `emu/port/fido2bridge.c`, pure C against **libfido2** with *no
@@ -217,7 +217,7 @@ Properties:
 
 | File | As-built role |
 |------|---------------|
-| `emu/port/devtfa.c` | the `#F` device; serves `/dev/2fa` (text relay) |
+| `emu/port/devtfa.c` | the `#h` device; serves `/dev/2fa` (text relay) |
 | `emu/port/fido2bridge.c` | host bridge → libfido2 (hmac-secret, USB HID); shared by macOS/Linux/Windows |
 | `emu/{MacOSX,Linux}/emu`, `emu/Nt/emu-gui` | `tfa fido2bridge` device line → registers `tfadevtab` |
 | `module/twofa.m`, `appl/lib/twofa.b` | Limbo file interface to `/dev/2fa` |
@@ -247,7 +247,7 @@ Properties:
 
 - **Phase 0 — Host PoC (no Inferno):** ✅ done. FIDO2 `hmac-secret` round-trips
   deterministically with the real YubiKey via host libfido2.
-- **Phase 1 — emu bridge + device:** ✅ done. `devtfa.c` (`#F` → `/dev/2fa`),
+- **Phase 1 — emu bridge + device:** ✅ done. `devtfa.c` (`#h` → `/dev/2fa`),
   `fido2bridge.c`, `providers` + `derive` against a real YubiKey; Limbo `twofa`.
 - **Phase 2 — secstore key-slots + logon:** ✅ done. `twofaslot` key-slots;
   enroll / unlock / backup / recovery in `logon.b`; **UV/AAL3** (FIDO PIN); and a

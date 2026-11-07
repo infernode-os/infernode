@@ -45,7 +45,7 @@ struct Memimage
 	Memcmap	*cmap;
 
 	Memdata	*data;	/* pointer to data; shared by windows in this image */
-	int		zero;		/* data->bdata+zero==&byte containing (0,0) */
+	vlong	zero;		/* data->bdata+zero==&byte containing (0,0); vlong: an image far down its coordinates passes an int */
 	ulong	width;	/* width in words of a single scan line */
 	Memlayer	*layer;	/* nil if not a layer*/
 	ulong	flags;
@@ -126,6 +126,7 @@ extern int		cloadmemimage(Memimage*, Rectangle, uchar*, int);
 extern int		unloadmemimage(Memimage*, Rectangle, uchar*, int);
 extern ulong*	wordaddr(Memimage*, Point);
 extern uchar*	byteaddr(Memimage*, Point);
+extern int		_drawclip(Rectangle*, Rectangle*, Rectangle*, Memimage*, Point*, Memimage*, Point*, Rectangle*, Rectangle*);
 extern int		drawclip(Memimage*, Rectangle*, Memimage*, Point*, Memimage*, Point*, Rectangle*, Rectangle*);
 extern void	memfillcolor(Memimage*, ulong);
 extern int		memsetchan(Memimage*, ulong);

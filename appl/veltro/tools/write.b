@@ -63,12 +63,12 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"write\"," +
-		"\"description\":\"Write content to a file, creating it if needed. Use \\\\n inside content for newlines.\"," +
+		"\"description\":\"Write content to a file, creating it if needed.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"path\":{\"type\":\"string\",\"description\":\"File path to create or overwrite (use /tmp/veltro/scratch/ for temporary files).\"}," +
-				"\"content\":{\"type\":\"string\",\"description\":\"Content to write. May contain newlines and quotes; escape sequences like \\\\n are processed.\"}" +
+				"\"content\":{\"type\":\"string\",\"description\":\"What the file is to hold, exactly: line breaks as line breaks, quotes as quotes. Nothing in it is unescaped.\"}" +
 			"}," +
 			"\"required\":[\"path\",\"content\"]" +
 		"}" +
@@ -80,8 +80,18 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	# Parse path and content
-	(path, content) := parseargs(args);
+	# -r <path> <content>: the content is exactly what follows the path and
+	# one separator, escapes and all.  A native call's content is already
+	# what the file is to hold: unescaped again, "%d\\n" in a string in a
+	# program became a line break, a leading quote cut it short, and its
+	# leading blank lines were lost.
+	raw := 0;
+	path, content: string;
+	if(len args > 3 && args[0:3] == "-r ") {
+		raw = 1;
+		(path, content) = rawargs(args[3:]);
+	} else
+		(path, content) = parseargs(args);
 	if(path == "")
 		return "error: usage: Write <path> <content>";
 	if(content == "")
@@ -93,7 +103,8 @@ exec(args: string): string
 		return roerr;
 
 	# Process escape sequences in content
-	content = unescape(content);
+	if(!raw)
+		content = unescape(content);
 
 	# Ensure parent directory exists
 	ensureparent(path);
@@ -176,6 +187,17 @@ parseargs(s: string): (string, string)
 	}
 
 	return (path, content);
+}
+
+# <path><one blank or newline><content, verbatim>
+rawargs(s: string): (string, string)
+{
+	i := 0;
+	while(i < len s && s[i] != ' ' && s[i] != '\t' && s[i] != '\n')
+		i++;
+	if(i >= len s)
+		return (s, "");
+	return (s[0:i], s[i+1:]);
 }
 
 # Process escape sequences

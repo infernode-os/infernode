@@ -9,6 +9,7 @@ TARG=\
 	date.dis\
 	bounce.dis\
 	logon.dis\
+	camera.dis\
 	clock.dis\
 	colors.dis\
 	ftree.dis\
@@ -20,14 +21,18 @@ TARG=\
 	settings.dis\
 	scene.dis\
 	editor.dis\
+	edit.dis\
 	fractals.dis\
 	tetris.dis\
 	coffee.dis\
 	memory.dis\
+	road.dis\
 	rt.dis\
 	deb.dis\
+	dir.dis\
 	matrix.dis\
 	shell.dis\
+	osk.dis\
 	view.dis\
 	page.dis\
 	wm.dis\
@@ -50,6 +55,8 @@ SYSMODULES=\
 	readdir.m\
 	man.m\
 	daytime.m\
+	docengine.m\
+	docreg.m\
 	draw.m\
 	scene.m\
 	factotum.m\
@@ -79,6 +86,38 @@ SYSMODULES=\
 	wmclient.m\
 	wmlib.m\
 	wmsrv.m\
+	bioauth.m\
+	debug.m\
+	dial.m\
+	dialnorm.m\
+	dialog.m\
+	dis.m\
+	docengine.m\
+	docreg.m\
+	keyring.m\
+	keyringinst.m\
+	pdf.m\
+	rand.m\
+	rlayout.m\
+	secstore.m\
+	security.m\
+	selectfile.m\
+	sheetview.m\
+	softkbd.m\
+	kbdecode.m\
+	osklayout.m\
+	tabs.m\
+	twofa.m\
+	twofaslot.m\
+	viewport.m\
+	wmdeb.m\
+	workdir.m\
+	cptree.m\
+	icon.m\
+	names.m\
+	post9p.m\
+	appfs.m\
+	i420.m\
 
 DISBIN=$ROOT/dis/wm
 

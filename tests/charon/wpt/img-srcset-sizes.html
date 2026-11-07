@@ -1,0 +1,9 @@
+<!doctype html><title>srcset with sizes chooses the candidate for the size shown</title>
+<style>body{margin:0} img{display:block;width:50px;height:50px} .r{display:flex}</style>
+<div class=r>
+<img srcset="support/red.svg 2000w, support/green.svg 300w" sizes="200px">
+<img srcset="support/red.svg 2000w, support/green.svg 300w" sizes="(max-width: 10px) 3000px, calc(10vw + 10px)">
+</div><div class=r>
+<img srcset="support/green.svg 300w, support/red.svg 2000w" sizes="min(100vw, 250px)">
+<picture><source srcset="support/red.svg 2000w, support/green.svg 300w" sizes="12em"><img src="support/red.svg"></picture>
+</div>

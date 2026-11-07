@@ -2,17 +2,22 @@
 
 ## Abstract
 
-We present a multi-tool formal verification of namespace isolation in the
-Inferno operating system kernel. Using TLA+/TLC for abstract specification
-(369M states), SPIN for concurrent protocol verification (131K states), and
-CBMC for bounded model checking of C implementation code, we verify that
-Inferno's per-process namespace mechanism correctly isolates mount tables
-after `pgrpcpy()` operations. Our verification covers 11 safety invariants
-including a non-trivial Namespace Isolation Theorem proved via history
-variables. Additionally, our SPIN race model formally confirms three
-previously undocumented use-after-free race conditions in the emulator's
-host threading layer. The complete verification suite runs in under 10
-minutes on commodity hardware.
+We present a multi-tool model-checking study of namespace isolation in the
+Inferno operating system kernel. Using TLA+/TLC for an abstract
+specification (429 million distinct states, exhaustive, small
+configuration), SPIN for concurrent protocol models (130K states), and CBMC
+for bounded checking of a copy of the `pgrpcpy()` C code, we check that the
+specification's per-process mount tables stay independent after a copy, and
+that the C copy allocates its own mount heads. The TLA+ invariants are
+stated with history variables so that they are not syntactic tautologies;
+they remain properties of the specification, whose state cannot express the
+shared-structure bug the C could have. The SPIN race model confirms three
+use-after-free races in the pre-fix emulator code, all since fixed. The
+SPIN and CBMC suites run in minutes on commodity hardware; the TLC small
+run takes about five hours on four cores. Section 10 lists the
+limits; a 2026-11 review found the earlier small configuration vacuous (no
+copy was reachable) and the medium run incomplete, and this document was
+revised accordingly.
 
 ---
 
@@ -40,17 +45,18 @@ entire resource access model would be compromised.
    specification (TLA+), concurrent protocol (SPIN), and C implementation
    (CBMC).
 
-2. **Non-trivial isolation theorem** proved via history variables and
-   exhaustive state space exploration — not merely checking structural
-   properties but verifying behavioral correctness across all reachable
-   states.
+2. **Non-tautological isolation invariants** stated via history variables
+   and checked over all reachable states of the specification. They are
+   properties of the model: the model's mount tables are disjoint by
+   construction, so they check the specification's bookkeeping, not the C.
 
-3. **Discovery of three real race conditions** in the kernel's host
-   threading layer, formally confirmed by model checking with LTL
-   counterexamples.
+3. **Confirmation of three real race conditions** in the kernel's host
+   threading layer, suspected from reading the C and confirmed by model
+   checking with LTL counterexamples (`-DUNFIXED`); all three are fixed.
 
-4. **Reproducible verification pipeline** integrated into CI/CD, running
-   in under 10 minutes on a 16-core machine.
+4. **Reproducible pipeline**: SPIN quick and CBMC quick in CI; SPIN full
+   and CBMC full by hand in minutes; TLC small by hand in about five hours
+   on 4 cores with 8 GB of heap and 19 GB of disk.
 
 ### 1.3 Scope
 
@@ -265,12 +271,15 @@ NamespaceIsolationTheorem ==
                       ⟨path, cid⟩ ∈ post_copy_mounts[pg_child]))
 ```
 
-**Why this is non-trivial**: This property is *not* a tautology. It could
-be violated if:
-- `Mount` incorrectly modified multiple pgrps' mount tables
-- `PgrpCopy` used pointer sharing instead of deep copy
-- `post_copy_mounts` tracking was incomplete
-- History variables drifted from actual state
+**What it can and cannot catch**: the property is not a syntactic
+tautology. It would be violated if the specification's `Mount` modified more
+than one pgrp's table, or if the history variables drifted from the state.
+It cannot be violated by "pointer sharing instead of deep copy": the
+specification has no pointers. `mount_table` is a function from pgrp id, so
+two pgrps' tables are distinct values whatever `PgrpCopy` does. The C
+failure this is meant to evoke, `pgrpcpy` leaving `to` and `from` sharing an
+`Mhead` or `Mount`, is outside the model's vocabulary and is addressed only
+by the CBMC harness (§6).
 
 ### 4.5 Supporting Invariants
 
@@ -306,17 +315,44 @@ The theorem is proved by induction over all possible state transitions:
 
 ### 4.7 TLC Model Checking Results
 
-| Configuration | MaxProc | MaxPgrp | MaxChan | MaxPath | States Gen. | Distinct | Time | Heap |
-|---------------|---------|---------|---------|---------|-------------|----------|------|------|
-| Small | 2 | 3 | 3 | 2 | 369,414,154 | 19,307,332 | 7m 57s | 4 GB |
-| Medium | 3 | 4 | 4 | 3 | 200M+ (partial) | 36M+ (partial) | >6 min | 16 GB rec. |
-| Large | 4 | 5 | 5 | 3 | pending | pending | pending | 32 GB rec. |
+| Configuration | MaxProc | MaxPgrp | MaxChan | MaxPath | MaxChanRef | States Gen. | Distinct | Depth | Time | Heap |
+|---------------|---------|---------|---------|---------|------------|-------------|----------|-------|------|------|
+| Small (2026-11, current) | 2 | 2 | 4 | 1 | 2 | 7,103,910,408 | 429,048,790 | 30 | about 5 h on 4 cores (checkpointed and resumed) | 8 GB heap + 19 GB disk state |
+| Small (2026-03, **vacuous**) | 2 | 3 | 3 | 2 | 8 (implicit) | 369,414,154 | 19,307,332 | 39 | 7m 57s | 4 GB |
+| Medium (**incomplete**) | 3 | 4 | 4 | 3 | 11 (implicit) | 26,515,255,632 | 3,168,821,335 | 12 (13 in progress) | 10h 50m | 50 GB + 341 GB disk |
+| Large | 4 | 5 | 5 | 3 | 3 | not run | | | | |
 
-All 11 invariants verified in the small configuration with **zero violations**
-across 19.3 million distinct states. Search depth: 27. Complete (0 states
-left on queue). Medium and large require a dedicated host with sufficient
-memory; see `REMAINING-RUNS.md` for instructions. No invariant violations
-were found in any partial medium run (200M+ states generated, depth 11).
+In the current small configuration all 11 invariants hold in every reachable
+state, the search is complete (0 states left on queue), and the vacuity
+guard in `run-verification.sh` confirmed first that a copy, and a post-copy
+mount while parent and child are both live, are reachable (their traces
+are `results/tlc_vacuity_small_*.txt`). The run was done in two parts on a
+16 GB host: two hours, a TLC checkpoint, then four hours resumed from it
+(`RECOVER=`), so `results/tlc_output_small.txt` is the resumed part.
+`MaxChanRef`
+is new: the channel refcount bound used to be the implicit
+`MaxProcesses + MaxPgrps + MaxChannels`, and because `IncRefChannel` and
+`DecRefChannel` are free actions, every refcount value of every channel
+multiplied the state space without bearing on isolation. Under the implicit
+bound this same 2/2/4/1 configuration passed 250M distinct states at depth
+16 (21 GB of state) on a 16 GB host without finishing, and the 2026-03
+medium run on a 64 GB host did not finish either. The bound is now a
+constant the configuration states.
+
+The 2026-03 small configuration had `MaxChannels=3`. Each pgrp costs two
+channels (slash and dot) and `ForkWithForkNS`/`ForkWithNewNS` are enabled
+only while two channel ids remain, so after `CreateProcess` no copy could
+ever fire. TLC over that configuration with the invariant
+`\A pg : pgrp_parent[pg] = 0` completes with no violation over the same
+19,307,332 states: every isolation invariant was vacuous in the run that
+earlier versions of this document called an exhaustive proof.
+
+The medium run is an incomplete breadth-first search: depth 12 finished,
+depth 13 in progress, 2.56 billion states queued and growing when it was
+stopped for disk. Under its constants a copy is reachable (TLC finds one at
+depth 5) but it consumes the last two channels, so every post-copy mount is
+of a slash or dot channel. Its state count is not a verification result for
+the medium configuration. See `REMAINING-RUNS.md`.
 
 ---
 
@@ -353,14 +389,25 @@ table *after* the copy completes (not from the parent *before*), because
 `pgrpcpy` holds `wlock(&from->ns)` which serializes with concurrent
 mounters.
 
-**Lock ordering**: Verified via structural inline assertions rather than
-LTL (SPIN's parser cannot handle struct array indexing in LTL formulas):
+**Lock ordering**: stated as inline assertions rather than LTL (SPIN's
+parser cannot handle struct array indexing in LTL formulas):
 
 ```promela
 /* Assert ns lock is held before acquiring mhead lock */
 assert(proc[id].holds_ns_write[pg] || proc[id].holds_ns_read[pg]);
 wlock_mh(pg, mh);
 ```
+
+Each such assertion immediately follows the statement that sets the flag it
+tests, so it cannot fail; the model establishes deadlock freedom on its
+eight scenarios, not lock ordering. The real RWlock (`emu/port/lock.c`: two
+QLocks and a reader count, writers preferred through `l->x`) is not what the
+model implements.
+
+**Isolation assertions**: `mount_table[MT_IDX(pg, path)]` are distinct
+bytes and Promela assignments are atomic, so the cross-namespace assertions
+in the two isolation models cannot fail either; what those models exercise
+is the lock protocol between `pgrp_copy` and concurrent mounters.
 
 ### 5.3 Race Conditions Found
 
@@ -379,7 +426,12 @@ races in the code as it was:
 now the fixed code, in which the three LTL properties hold and no end
 state deadlocks; `-DUNFIXED` models the code before, in which SPIN
 still finds the dot and pgrp use-after-frees, so the model can see
-them. `verify-all.sh full` checks both.
+them. `verify-all.sh full` checks both; CI runs `quick`, which compiles
+the LTL claims out (`-DNOCLAIM`), so a green CI says nothing about the
+races. In the fixed model the reader holds the VM lock for its whole
+read, which matches devprog but not a Prog's own `namec`; the latter is
+safe because only the owning Prog swaps its own `o->pgrp`, an argument the
+model does not encode.
 
 Exercising the fix on a running emu (`tests/pgrp_race_test.b`: one Prog
 swapping its name space, fd group and dot while others read its
@@ -429,10 +481,21 @@ open.
 
 ### 6.1 Approach
 
-CBMC verifies properties of **actual C source code** from the kernel.
-We extract the exact `pgrpcpy()`, `newpgrp()`, `newmount()`, and
-`pgrpinsert()` implementations from `pgrp.c` and verify them against
-property-annotated harnesses with minimal stubs.
+CBMC checks a **textual copy of C source code** from the kernel: the
+`pgrpcpy()`, `newpgrp()`, `newmount()`, and `pgrpinsert()` bodies from
+`pgrp.c` (differing only in `mallocz` → `malloc`+`memset` and the error
+string; drift is not detected automatically), against property-annotated
+harnesses with minimal stubs. The two isolation harnesses contain no
+nondeterministic input: they are one concrete execution of one mount in
+one hash bucket, instrumented for pointer and bounds safety, which is why
+their property count is the same at every `MNTLOG` and they finish in
+under a second. The bounds harness has a symbolic `qid`. `error()` and
+`nexterror()` are no-ops in `stubs.h` and malloc is never allowed to fail,
+so the kernel's allocation-failure path is not exercised;
+`harness_pgrpcpy_error.c` checks a rewritten `pgrpcpy_safe` with return
+codes instead. A mutation that makes the copy share the parent's `Mhead`
+(`mh = f`) fails `harness_basic_isolation`, so the harness does see that
+class of bug.
 
 ### 6.2 Stub Design
 
@@ -533,12 +596,13 @@ The verification suite is integrated into GitHub Actions
 (`.github/workflows/formal-verification.yml`):
 
 ```yaml
-- SPIN: ./verify-all.sh quick  # 5 models
-- CBMC: ./verify-all.sh quick  # 3 kernel harnesses + PQC crypto harnesses
+- SPIN: ./verify-all.sh quick  # 5 models, assertions + deadlock only (no LTL)
+- CBMC: ./verify-all.sh quick  # 3 model harnesses + PQC crypto harnesses (no pgrpcpy)
 ```
 
-TLA+ (`./run-verification.sh small`) is run by hand; the workflow has no
-TLA+ job.
+TLA+ (`./run-verification.sh small`), SPIN `full` (the race LTL properties
+and `-DUNFIXED` checks) and CBMC `full` (the `pgrpcpy` harnesses) are run
+by hand; the workflow has no job for them.
 
 ### 8.2 Reproducibility
 
@@ -609,29 +673,59 @@ Total verification code: **4,929 lines** (1,440 Promela + 1,198 TLA+ +
    `PostCopyMountsSound` as a separate invariant to confirm tracking
    completeness.
 
-5. **Scope limitation**: We verify the namespace subsystem only, not the
+5. **Scope limitation**: We model the namespace copy only, not the
    entire kernel. Cross-subsystem interactions (e.g., device drivers
    modifying mount tables) are out of scope.
+
+6. **Model expressiveness (the main threat)**: neither the TLA+ nor the
+   Promela state can represent two pgrps sharing an `Mhead` or `Mount`.
+   The isolation invariants therefore cannot fail on the implementation
+   bug they describe; they check the specification against itself. The
+   CBMC harness is the only artefact that sees pointers, and it covers one
+   concrete shape.
+
+7. **Vacuity**: the 2026-03 small run reached no copy at all (§4.7).
+   `run-verification.sh` now checks reachability of a copy and of a live
+   post-copy mount before the main run. The medium constants allow one copy
+   per behaviour and no fresh channel after it.
+
+8. **Incomplete runs**: the medium run is a partial BFS (depth 13). It
+   is evidence that no shallow counterexample exists under those constants,
+   nothing more.
+
+9. **What is not modelled at all**: channel use-after-free (channels are
+   never freed in the TLA+ model and `DecRefChannel` can reach 0 while
+   mounted), `cmount`'s union-mount copying, `cunmount`, the `nodevs`
+   device gate, `restrictdir`/`restrictns`, binds of an ancestor inside an
+   exported tree (the exportfs model's `walk_down` always descends), the
+   cname stack that now governs `..`, the Dis VM and JIT.
+
+10. **Constant time**: CBMC checks functional properties of the crypto
+    code. Nothing here establishes constant-time execution.
+
+11. **Provenance**: the fix commits cited (89db5178, fa93471d) are not in
+    the current repository history; the code as it stands matches their
+    description and `tests/pgrp_race_test.b` exercises the fixes.
 
 ---
 
 ## 11. Conclusion
 
-We have formally verified the namespace isolation property of the Inferno
-operating system kernel using three complementary model checking tools.
-The TLA+ specification provides the strongest result: an exhaustive proof
-across 19.3 million distinct states that the Namespace Isolation Theorem
-holds — no mount operation in one namespace can affect another namespace
-unless both independently perform the same operation. The SPIN models
-verify concurrent locking protocols and discover real race conditions. The
-CBMC harnesses confirm that the actual C implementation of `pgrpcpy()`
-correctly produces independent mount tables.
+We have model-checked a TLA+ specification of Inferno's namespace copy,
+exhaustively at small scale with a guard that the copy is reached, and
+found its 11 invariants hold. We have bounded-checked a copy of the
+`pgrpcpy()` C code on one concrete mount and shown it allocates its own
+mount heads, shares and increfs channels, and clones slash and dot; an
+aliasing mutation is caught. We have confirmed three use-after-free races
+in the pre-fix emulator with SPIN and shown a model of the fixed code free
+of them.
 
-The multi-tool approach — abstract specification, concurrent protocol
-verification, and implementation-level bounded model checking — provides
-high confidence through diversity. Each tool catches different classes
-of bugs, and the combination addresses threats to validity that any
-single tool would leave open.
+What this is not is a proof that the C implementation isolates
+namespaces. The abstract models cannot express the shared-structure
+failure, the C check covers one shape, and the only run large enough to be
+interesting is incomplete. The right citation is: a model-checked
+specification of the namespace copy, a bounded unit-level check of
+`pgrpcpy`'s deep copy, and SPIN confirmation of three fixed races.
 
 ---
 
@@ -641,7 +735,7 @@ single tool would leave open.
 |------|---------|
 | TLC (TLA+ model checker) | 2026.03.02.213938 |
 | SPIN | 6.5+ |
-| CBMC | 5.x |
+| CBMC | 5.95.1 (CI pin; 6.7.1 used for the 2026-01 results) |
 | Java (for TLC) | OpenJDK 21 |
 
 ## Appendix B: Reproduction Instructions
@@ -658,9 +752,10 @@ curl -L -o tla2tools.jar \
   "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar"
 
 # Run all verification
-./spin/verify-all.sh           # SPIN models (~30s)
-./cbmc/verify-all.sh quick     # CBMC quick mode (~1m)
-./run-verification.sh small    # TLA+ small (~8m)
+./spin/verify-all.sh full      # SPIN models incl. race LTL + -DUNFIXED (~1m)
+./cbmc/verify-all.sh quick     # CBMC quick mode (~15s)
+CBMC_MNTLOG=5 ./cbmc/verify-all.sh full   # + pgrpcpy harnesses (~20s)
+./run-verification.sh small    # TLA+ small, with vacuity guard (~5 h on 4 cores, 8 GB heap, ~19 GB disk)
 
 # Full verification (dedicated host, see REMAINING-RUNS.md)
 CBMC_MNTLOG=2 ./cbmc/verify-all.sh full    # CBMC pgrpcpy, MNTHASH=4 (~20m, 12GB)

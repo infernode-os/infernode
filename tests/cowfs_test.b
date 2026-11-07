@@ -106,6 +106,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DiffListing", testDiffListing);
 	run("PerFilePromote", testPerFilePromote);
 	run("SecurityBaseIsolation", testSecurityBaseIsolation);
+	run("CreateDupWriteRead", testCreateDupWriteRead);
+	run("RemoveNewFile", testRemoveNewFile);
+	run("PromoteConflict", testPromoteConflict);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -586,4 +589,86 @@ listlen(l: list of string): int
 	for(; l != nil; l = tl l)
 		n++;
 	return n;
+}
+
+# A file created through cowfs, written through a descriptor dup'd onto fd 2
+# (how a tool captures a command's errors), reads back what was written once
+# that descriptor is gone.
+testCreateDupWriteRead(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup(t, "dupwrite");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	path := mntpoint + "/errs.txt";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create through cowfs: %r"));
+	saved := sys->dup(2, -1);
+	sys->dup(fd.fd, 2);
+	fd = nil;
+	e := sys->fildes(2);
+	sys->fprint(e, "line one\n");
+	sys->fprint(e, "line two\n");
+	e = nil;
+	sys->dup(saved, 2);
+
+	t.assertseq(readfile(path), "line one\nline two\n", "written through fd 2, read back");
+}
+
+# A file that is only in the overlay goes when removed.
+testRemoveNewFile(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup(t, "removenew");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	path := mntpoint + "/scratch.b";
+	writefile(path, "temporary");
+	t.assert(fileexists(overlaydir + "/scratch.b"), "new file in overlay");
+	if(sys->remove(path) < 0)
+		t.fatal(sys->sprint("remove through cowfs: %r"));
+	t.assert(!fileexists(path), "removed file gone through cowfs");
+	t.assert(!fileexists(overlaydir + "/scratch.b"), "removed file gone from overlay");
+}
+
+# A file changed in the base after the task's copy of it was made (the user
+# edited it; an earlier change was applied) is not promoted over: the
+# change would be lost.  It stays staged; the rest is promoted; once it is
+# reverted and made again on the new text, it promotes.
+testPromoteConflict(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup(t, "conflict");
+
+	writefile(basedir + "/f.txt", "v1");
+	writefile(basedir + "/g.txt", "g1");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	writefile(mntpoint + "/f.txt", "v1 task");
+	writefile(mntpoint + "/g.txt", "g1 task");
+	sys->sleep(1100);	# a later mtime, as an edit at another time has
+	writefile(basedir + "/f.txt", "v1 user edit");
+
+	t.assert(cowfs->promotefile(basedir, overlaydir, "f.txt") != nil, "per-file promote refuses a changed base");
+	(n, err) := cowfs->promote(basedir, overlaydir);
+	t.assert(err != nil, "promote reports the conflict");
+	t.assert(err != nil && contains(err, "f.txt"), "the conflict names the file");
+	t.asserteq(n, 1, "the other file is promoted");
+	t.assertseq(readfile(basedir + "/f.txt"), "v1 user edit", "the user's edit is kept");
+	t.assertseq(readfile(basedir + "/g.txt"), "g1 task", "the unconflicted change is applied");
+	t.assert(fileexists(overlaydir + "/f.txt"), "the conflicted change stays staged");
+
+	cowfs->revertfile(overlaydir, "f.txt");
+	writefile(mntpoint + "/f.txt", "v1 user edit + task");
+	(nil, err2) := cowfs->promote(basedir, overlaydir);
+	t.assert(err2 == nil, "made again on the new text, it promotes");
+	t.assertseq(readfile(basedir + "/f.txt"), "v1 user edit + task", "the redone change is applied");
+
+	sys->unmount(nil, mntpoint);
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }

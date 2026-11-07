@@ -51,6 +51,9 @@ include "attrdb.m";
 
 include "arg.m";
 
+include "nsconstruct.m";
+	nsc: NsConstruct;
+
 Nsaudit: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -85,6 +88,7 @@ Caps: adt {
 	# key off them fire). Sources named in SECURITY.md "Authority axes".
 	shellcmds:    list of string;  # caps.shellcmds — exec allowlist
 	mcproviders:  list of string;  # caps.mcproviders — permitted net peers
+	budget:       list of string;  # /tool/budget — delegatable child tools
 };
 
 # Per-tool manifest entry loaded from the authorities dir.
@@ -240,6 +244,7 @@ parseCaps(dir: string): ref Caps
 	# the lists nil / the scalar "", which the rules read as unconstrained.
 	c.shellcmds = readLines(dir + "/shellcmds");
 	c.mcproviders = readLines(dir + "/mcproviders");
+	c.budget = readLines(dir + "/budget");
 	return c;
 }
 
@@ -485,6 +490,14 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 				inv.auths = "sends_llm" :: inv.auths;
 			inv.sources = ("sends_llm", "via path " + p) :: inv.sources;
 		}
+		# A video feed may be a live camera: reading it sees the room the
+		# machine is in (camsrv(4), infernode-os/infernode#1005). A grant
+		# above /mnt/video reaches it as well.
+		if(pathwithin("/mnt/video", p) || pathwithin(p, "/mnt/video")) {
+			if(!contains(inv.auths, "reads_video"))
+				inv.auths = "reads_video" :: inv.auths;
+			inv.sources = ("reads_video", "via path " + p) :: inv.sources;
+		}
 		if(pathwithin("/mnt/mcp", p)) {
 			if(!contains(inv.auths, "calls_mcp"))
 				inv.auths = "calls_mcp" :: inv.auths;
@@ -539,124 +552,13 @@ invalidGrantPath(p: string): string
 
 privilegedControlGrant(p: string): int
 {
-	dangerous := array[] of {
-		"/tool/ctl",
-		"/mnt/toolctl",
-		"/mnt/toolctl/ctl",
-		"/mnt/factotum",
-		"/mnt/ui/ctl",
-		"/mnt/msg/ctl",
-		"/mnt/msg/pending",
-		"/mnt/msg/approve",
-		"/mnt/msg/deny",
-		"/mnt/wallet/ctl",
-		"/mnt/wallet/pending",
-		"/mnt/wallet/new",
-		"/n/wallet/ctl",
-		"/n/wallet/pending",
-		"/n/wallet/new",
-	};
-	for(i := 0; i < len dangerous; i++)
-		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
-			return 1;
-	if(walletAccountControlGrant(p))
-		return 1;
-	if(ftreeControlGrant(p))
-		return 1;
-	if(tmpVeltroInternalGrant(p))
-		return 1;
-	if(appIpcControlGrant(p))
-		return 1;
-	if(uiAgentControlGrant(p))
-		return 1;
-	if(llmCtlControlGrant(p))
-		return 1;
-	if(auditControlGrant(p))
-		return 1;
-	if(calendarControlGrant(p))
-		return 1;
-	if(fixedServiceControlGrant(p))
-		return 1;
-	return 0;
-}
-
-# nsconstruct's walletcontrolpath: per-account ctl and sign, under the
-# mount (/mnt/wallet) and where it was before INFR-400 (/n/wallet).
-walletAccountControlGrant(p: string): int
-{
-	if(!prefix(p, "/mnt/wallet/") && !prefix(p, "/n/wallet/"))
-		return 0;
-	return componentcount(p) >= 4 &&
-		(pathhascomponent(p, "ctl") || pathhascomponent(p, "sign"));
-}
-
-ftreeControlGrant(p: string): int
-{
-	return p == "/tmp/veltro/ftree" || prefix(p, "/tmp/veltro/ftree/");
-}
-
-tmpVeltroInternalGrant(p: string): int
-{
-	return p == "/tmp/veltro/.ns" || prefix(p, "/tmp/veltro/.ns/") ||
-		p == "/tmp/veltro/cow" || prefix(p, "/tmp/veltro/cow/") ||
-		p == "/tmp/veltro/tasks" || prefix(p, "/tmp/veltro/tasks/");
-}
-
-appIpcControlGrant(p: string): int
-{
-	return p == "/mnt/charon" || prefix(p, "/mnt/charon/") ||
-		p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
-		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
-		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
-		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
-		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");
-}
-
-uiAgentControlGrant(p: string): int
-{
-	return p == "/mnt/ui" || prefix(p, "/mnt/ui/");
-}
-
-llmCtlControlGrant(p: string): int
-{
-	return p == "/llm" || p == "/llm/ctl" || prefix(p, "/llm/ctl/");
-}
-
-auditControlGrant(p: string): int
-{
-	return p == "/mnt/audit" ||
-		p == "/mnt/audit/ctl" || prefix(p, "/mnt/audit/ctl/") ||
-		p == "/mnt/audit/chain" || prefix(p, "/mnt/audit/chain/");
-}
-
-calendarControlGrant(p: string): int
-{
-	if(p == "/mnt/cal" || p == "/mnt/cal/ctl" || p == "/mnt/cal/accounts")
-		return 1;
-	if(prefix(p, "/mnt/cal/accounts/")) {
-		if(componentcount(p) <= 4)
-			return 1;
-		if(pathhascomponent(p, "ctl"))
-			return 1;
+	if(nsc == nil) {
+		nsc = load NsConstruct NsConstruct->PATH;
+		if(nsc == nil)
+			fatal(sys->sprint("cannot load %s: %r", NsConstruct->PATH));
+		nsc->init();
 	}
-	return 0;
-}
-
-fixedServiceControlGrant(p: string): int
-{
-	return p == "/mnt/matrix" || prefix(p, "/mnt/matrix/") ||
-		p == "/n/git" || prefix(p, "/n/git/") ||
-		p == "/mnt/gpu" || prefix(p, "/mnt/gpu/") ||
-		p == "/mnt/web" || prefix(p, "/mnt/web/") ||
-		p == "/n/web" || prefix(p, "/n/web/") ||
-		p == "/mnt/wiki" || prefix(p, "/mnt/wiki/") ||
-		p == "/mnt/wikia" || prefix(p, "/mnt/wikia/") ||
-		p == "/n/wikia" || prefix(p, "/n/wikia/") ||
-		p == "/mnt/keys" || prefix(p, "/mnt/keys/") ||
-		p == "/mnt/keysrv" || prefix(p, "/mnt/keysrv/") ||
-		p == "/mnt/registry" || prefix(p, "/mnt/registry/") ||
-		p == "/mnt/video" || prefix(p, "/mnt/video/") ||
-		p == "/phone" || prefix(p, "/phone/");
+	return nsc->privilegedcontrolpath(p, nil);
 }
 
 directMailSendGrant(p: string): int
@@ -835,6 +737,7 @@ evaluateOne(inv: ref Inventory, r: ref Rule): int
 #   role=toplevel, role=child                  caps role match
 #   nodevs=set, nodevs=unset                   caps nodevs match
 #   has_tool_<name>                            tool present in caps.tools
+#   delegates_tool_<name>                      task present and tool in budget
 #   <authority_name>                           authority present in inv.auths
 conditionTrue(inv: ref Inventory, cond: string): int
 {
@@ -851,6 +754,10 @@ conditionTrue(inv: ref Inventory, cond: string): int
 	if(prefix(cond, "has_tool_")) {
 		want := cond[9:];
 		return contains(inv.caps.tools, want);
+	}
+	if(prefix(cond, "delegates_tool_")) {
+		want := cond[15:];
+		return contains(inv.caps.tools, "task") && contains(inv.caps.budget, want);
 	}
 	# Caps-level "constraint is absent" predicates. An empty/missing
 	# allowlist means the corresponding authority is unconstrained.

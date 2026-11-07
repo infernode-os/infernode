@@ -229,12 +229,30 @@ buildindex(s: ref Styles, env: ref Env): ref Index
 			findlayers(ix, (hd sl).t0.rules, (hd sl).t2, "");
 	for(sl = sheets; sl != nil; sl = tl sl) {
 		(sh, origin, base) := hd sl;
+		if(againlater(tl sl, sh, origin, base))
+			continue;
 		indexrules(ix, sh.rules, origin, nil, base, 0);
 	}
 	ix.idx.n = ix.order;
 	for(ll := ix.layerpos; ll != nil; ll = tl ll)
 		ix.idx.layers = (hd ll).t0 :: ix.idx.layers;
 	return ix.idx;
+}
+
+# Whether a sheet is used again later in the cascade: the same parsed
+# sheet, origin and base.  Each of its rules there comes later than here
+# with the same specificity and declarations, so its rules here never
+# win: they are not indexed.  (GitHub links some sheets two and three
+# times; every element was matched against each copy.)  Layers keep
+# their order, which findlayers has taken from every copy.
+againlater(l: list of (ref Sheet, int, string), sh: ref Sheet, origin: int, base: string): int
+{
+	for(; l != nil; l = tl l) {
+		(s2, o2, b2) := hd l;
+		if(s2 == sh && o2 == origin && b2 == base)
+			return 1;
+	}
+	return 0;
 }
 
 findlayers(ix: ref Ix, rs: array of ref Rule, base, pfx: string)
@@ -1057,6 +1075,13 @@ parentel(d: ref Doc, n: int): int
 	return 0;
 }
 
+# the document's element: its parent is the document, where one at the
+# top of a shadow tree (Pharos's <slot name="top">) has none either
+isroot(d: ref Doc, n: int): int
+{
+	return d.nodes[n].parent == 1;
+}
+
 prevel(d: ref Doc, n: int): int
 {
 	for(n = d.nodes[n].prev; n != 0; n = d.nodes[n].prev)
@@ -1297,9 +1322,9 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"scope" =>
 		if(m.scope > 0)
 			return n == m.scope;
-		return parentel(d, n) == 0;
+		return isroot(d, n);
 	"root" =>
-		return parentel(d, n) == 0;
+		return isroot(d, n);
 	"is" or "where" =>
 		for(i := 0; i < len x.sub; i++)
 			if(matchsel(m, x.sub[i], n))
@@ -4162,7 +4187,7 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 		Dflex or Dinlineflex or Dgrid or Dinlinegrid or Dgridlanes or Dinlinegridlanes =>
 			blockify = 1;
 		}
-	if(d != nil && parentel(d, n) == 0)
+	if(d != nil && isroot(d, n))
 		blockify = 1;
 	if(blockify) {
 		case st.display {
@@ -4184,7 +4209,7 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 			st.display = Dtable;
 		}
 	}
-	if(d != nil && parentel(d, n) == 0 && st.display == Dcontents)
+	if(d != nil && isroot(d, n) && st.display == Dcontents)
 		st.display = Dblock;
 }
 

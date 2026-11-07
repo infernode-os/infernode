@@ -236,18 +236,18 @@ DBG print("alphadraw handled\n");
  * Return zero if the final rectangle is null.
  */
 int
-drawclip(Memimage *dst, Rectangle *r, Memimage *src, Point *p0, Memimage *mask, Point *p1, Rectangle *sr, Rectangle *mr)
+_drawclip(Rectangle *dr, Rectangle *dclipr, Rectangle *r, Memimage *src, Point *p0, Memimage *mask, Point *p1, Rectangle *sr, Rectangle *mr)
 {
 	Point rmin, delta;
 	int splitcoords;
 	Rectangle omr;
 
-	if(r->min.x>=r->max.x || r->min.y>=r->max.y)
+	if(badrect(*r))
 		return 0;
 	splitcoords = (p0->x!=p1->x) || (p0->y!=p1->y);
 	/* clip to destination */
 	rmin = r->min;
-	if(!rectclip(r, dst->r) || !rectclip(r, dst->clipr))
+	if(!rectclip(r, *dr) || !rectclip(r, *dclipr))
 		return 0;
 	/* move mask point */
 	p1->x += r->min.x-rmin.x;
@@ -321,9 +321,15 @@ drawclip(Memimage *dst, Rectangle *r, Memimage *src, Point *p0, Memimage *mask, 
 	assert(Dy(*sr) == Dy(*mr) && Dy(*mr) == Dy(*r));
 	assert(ptinrect(*p0, src->r));
 	assert(ptinrect(*p1, mask->r));
-	assert(ptinrect(r->min, dst->r));
+	assert(ptinrect(r->min, *dr));
 
 	return 1;
+}
+
+int
+drawclip(Memimage *dst, Rectangle *r, Memimage *src, Point *p0, Memimage *mask, Point *p1, Rectangle *sr, Rectangle *mr)
+{
+	return _drawclip(&dst->r, &dst->clipr, r, src, p0, mask, p1, sr, mr);
 }
 
 /*

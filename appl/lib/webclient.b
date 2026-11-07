@@ -106,12 +106,24 @@ tlsdial(addr, servername: string): (ref Sys->FD, string)
 	if(c == nil)
 		return (nil, sys->sprint("dial %s: %r", addr));
 
+	return tlsclient(c.dfd, servername);
+}
+
+tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
+{
+	err := loadtls();
+	if(err != nil)
+		return (nil, err);
+
 	cfg := tls->defaultconfig();
 	cfg.servername = servername;
 
-	(conn, terr) := tls->client(c.dfd, cfg);
-	if(terr != nil)
-		return (nil, "tls: " + terr);
+	(conn, terr) := tls->client(fd, cfg);
+	if(terr != nil) {
+		if(len terr < 4 || terr[0:4] != "tls:")
+			terr = "tls: " + terr;
+		return (nil, terr);
+	}
 
 	# Wrap TLS conn as a pipe-like FD pair
 	return tlsconnfd(conn);
@@ -136,12 +148,19 @@ tlsconnfd(conn: ref Conn): (ref Sys->FD, string)
 tlsreadpump(conn: ref Conn, fd: ref Sys->FD)
 {
 	buf := array [16384] of byte;
-	for(;;) {
-		n := conn.read(buf, len buf);
-		if(n <= 0)
-			break;
-		if(sys->write(fd, buf[:n], n) != n)
-			break;
+	{
+		for(;;) {
+			n := conn.read(buf, len buf);
+			if(n <= 0)
+				break;
+			if(sys->write(fd, buf[:n], n) != n)
+				break;
+		}
+	} exception {
+	"write on closed pipe" =>
+		# the caller closed its end while the server still sent
+		# (an SMTP server's 221 after QUIT): nobody to read it
+		;
 	}
 	# Signal EOF by closing our end
 	fd = nil;

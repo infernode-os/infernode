@@ -13,6 +13,7 @@ SYSMODULES= \
 	regex.m\
 	daytime.m\
 	libc0.m\
+	sh.m\
 
 DISBIN=$ROOT/dis
 

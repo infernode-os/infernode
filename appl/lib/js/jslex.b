@@ -126,8 +126,10 @@ skip(l: ref Lex): int
 	s := l.src;
 	n := len s;
 	nl := 0;
-	# --> begins a comment where only white space and comments precede it on its line
-	startline := l.pos == 0 || atlinestart(l);
+	# --> begins a comment where only white space and comments precede
+	# it on its line: whether they did before entry is found when one is
+	# seen, not for every token
+	entry := l.pos;
 	while(l.pos < n) {
 		c := s[l.pos];
 		if(isws(c)) {
@@ -172,7 +174,7 @@ skip(l: ref Lex): int
 					l.pos++;
 				continue;
 			}
-			if(c == '-' && (nl || startline) && l.pos + 2 < n && s[l.pos+1] == '-' && s[l.pos+2] == '>') {
+			if(c == '-' && l.pos + 2 < n && s[l.pos+1] == '-' && s[l.pos+2] == '>' && (nl || entry == 0 || atlinestart(s, entry))) {
 				while(l.pos < n && !islt(s[l.pos]))
 					l.pos++;
 				continue;
@@ -183,11 +185,10 @@ skip(l: ref Lex): int
 	return nl;
 }
 
-# whether only white space and comments lie between the last line terminator and l.pos
-atlinestart(l: ref Lex): int
+# whether only white space lies between the last line terminator and pos
+atlinestart(s: string, pos: int): int
 {
-	s := l.src;
-	for(i := l.pos - 1; i >= 0; i--) {
+	for(i := pos - 1; i >= 0; i--) {
 		c := s[i];
 		if(islt(c))
 			return 1;
@@ -528,9 +529,25 @@ putcp(s: string, c: int): string
 # UTF-8 to UTF-16; what is not well-formed becomes U+FFFD
 utf16(b: array of byte): string
 {
-	s := "";
+	# Usually the decoder in C does: when each character it made is
+	# below U+FFFD, outside the surrogates, and the characters encode
+	# back to as many bytes as there were, the bytes were well formed
+	# (a malformed sequence comes out as U+FFFD, an overlong one encodes
+	# back shorter) and no character needs a surrogate pair
+	s := string b;
+	ok := 1;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= 16rD800 && (c <= 16rDFFF || c >= 16rFFFD)) {
+			ok = 0;
+			break;
+		}
+	}
+	if(ok && (len s == len b || len array of byte s == len b))
+		return s;
+	s = "";
 	n := len b;
-	for(i := 0; i < n; ) {
+	for(i = 0; i < n; ) {
 		c := int b[i];
 		need := 0;
 		min := 0;

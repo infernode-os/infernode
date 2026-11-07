@@ -65,7 +65,10 @@ With no card this is silent.
 .IP 5.
 Applies
 .BR /n/dos/rootpath :
-see below.
+see below. If
+.B /n/dos/cnsamode
+exists, turns on CNSA 2.0 strict authentication before anything can
+authenticate.
 .IP 6.
 Gives the Wi-Fi driver the names of its firmware files in
 .BR /n/dos/firmware .
@@ -101,13 +104,19 @@ and, on a machine with an xHCI controller,
 (a mass-storage device served as
 .B /chan/usbdiskN
 and mounted on
-.BR /n/usbN ;
+.BR /n/usbN ,
+one of each per logical unit with a medium in it, so a card reader's
+slots are disks of their own and an empty slot is served when a card
+goes in;
 the console shell, whose namespace was forked before the driver ran,
 mounts it itself with
 .BR "dossrv -f /chan/usbdisk0 -m /n/usb0" )
 for what it finds and watching hubs for changes; and, if
 .B /n/dos/netconsole
-exists, serves a shell on TCP port 17010.
+exists, serves a shell on TCP port 17010; and, if
+.B /n/dos/vms
+exists, starts the programs it names in the Dis VMs it names
+(see below).
 .IP 11.
 Writes
 .B booted
@@ -187,6 +196,16 @@ written in order; blank lines and lines beginning
 .B #
 are skipped.
 .TP
+.B cnsamode
+Its existence: every authentication on the machine uses ML-KEM-1024, as
+.B CNSAMODE
+does for the emulator. Writes
+.B "cnsamode on"
+to
+.B #c/sysctl
+and sets
+.BR /env/cnsamode .
+.TP
 .B btkeys
 Where
 .I bt9p
@@ -201,6 +220,25 @@ says so loudly.
 With a token, at most four checks may be in progress, each has a 15-second
 deadline, and no more than eight attempts per second enter the check.
 Comparison takes fixed work across the bounded 256-byte input.
+.TP
+.B vms
+Programs to start at boot in Dis VMs of their own (see
+.IR vm (3)),
+one a line:
+a VM number, a command \(em a path, or a name in
+.B /dis
+as for
+.IR vm (1)
+\(em and its arguments, which are words, unquoted.
+Lines beginning
+.B #
+are skipped.
+Each runs with
+.IR osinit 's
+namespace and console, and
+.I osinit
+prints its pid.
+With no file, every program runs in VM 0.
 .TP
 .B skiplogon
 Its existence starts the desktop without
@@ -233,6 +271,8 @@ narrows the namespace; starts the desktop if there is a screen
 .IR bt9p (4),
 .IR dossrv (4),
 .IR init (8),
+.IR vm (1),
+.IR vm (3),
 .IR wpa (8)
 .br
 .B /docs/BAREMETAL.md

@@ -323,6 +323,31 @@ tkcvsconf(Tk *tk, char *arg, char **val)
 	return nil;
 }
 
+/*
+ * A theme switch (retheme): an item given a colour of its own has its
+ * own copy of the environment, made when the option was set, with the
+ * theme's other colours as they were then -- a rectangle given -fill
+ * kept the old theme's outline.  Refresh those copies as retheme does a
+ * widget's (the colours an option set are kept) and repaint it all.
+ */
+void
+tkcvsretheme(Tk *tk)
+{
+	TkCanvas *c;
+	TkCitem *i;
+	Rectangle r;
+
+	c = TKobj(TkCanvas, tk);
+	for(i = c->head; i != nil; i = i->next)
+		if(i->env != nil && i->env != tk->env)
+			tksetenvcolours(i->env);
+	r.min = c->view;
+	r.max.x = r.min.x+tk->act.width;
+	r.max.y = r.min.y+tk->act.height;
+	tkbbmax(&c->update, &r);
+	tkbbmax(&c->update, &c->region);
+}
+
 void
 tkcvsfreeitem(TkCitem *i)
 {

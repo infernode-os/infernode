@@ -1,0 +1,141 @@
+# Device letters
+
+A kernel device is named by one character after `#`: `#c` is the
+console, `#I` the IP stack. The character is the first member of the
+device's `Dev` table, and a kernel finds a device by it alone, so two
+devices with one letter in one build leave one of them unreachable.
+That happened: the camera (#1005) took `#V` on master while the Dis
+VMs had it on their branch (#944), and nothing noticed until the merge.
+
+This is the registry: every letter, what it is here, and what it is in
+the three systems this one descends from or sits beside -- Plan 9 (4th
+edition), 9front and Inferno -- read from their sources (every
+`dev*.c` `Dev` table in [plan9foundation/plan9](https://github.com/plan9foundation/plan9),
+[9front/9front](https://github.com/9front/9front) and
+[inferno-os/inferno-os](https://github.com/inferno-os/inferno-os), October 2026).
+
+## The rule
+
+- **One letter, one device**, in every build: each native kernel's
+  `os/*/devtab.c` and each emulator's `emu/*/emu*` configuration.
+- **Precedent first.** A new device takes the letter Plan 9, 9front or
+  Inferno gave the same kind of device. Where they have none, a letter
+  free in all three; where the ASCII ones run out, Greek, as 9front's
+  newer devices do (`#Δ` dtracy, `#λ` loopback, `#σ` shr).
+- **The letter comes with the device**: a PR that adds a device adds its
+  row here, and `tools/devletters.py --check` (run by
+  `tests/host/devletters_test.sh` in CI) fails a build that puts one
+  letter on two devices, or uses a letter this table does not give that
+  device.
+- **Differences are written down**, here, with what is to become of them.
+  Where this tree differs from its precedents and nothing outside
+  depends on the difference -- the bare-metal kernels have no users to
+  break yet -- it moves to the precedent. The hosted emulator's letters
+  are in programs and scripts people run, so its moves are made one at a
+  time, each its own change.
+
+## Moves made
+
+| From | To | Why |
+|---|---|---|
+| `#V` Dis VMs (branch) | `#X` (#1038) | the camera has `#V`; `#X` is 9front's vmx, its virtual machines |
+| `#b` bench (native) | `#x` (#1039) | Inferno's bench; `#b` is Inferno's dbg |
+| `#P` prof (hosted) | `#K` (#1037) | kprof in all three; now `#P` is arch everywhere |
+| `#w` wmsz (hosted) | `#z` (#1040) | `#w` is the watchdog in Plan 9 and 9front; `#z` for size, free in all three |
+| `#F` 2fa (hosted) | `#h` (#1040) | `#F` is flash in all three; `#h` for a hardware key, free in all three |
+
+A move is the device's `Dev` table, its row here, **and every place that
+names the old letter**: the emulator's own binds at boot
+(`emu/port/main.c`), profiles and scripts that bind it, and programs that
+open it by letter. #1040 moved wmsz and left `main.c` binding `#w`, so
+`/dev/wmsize` was gone and nothing said so until the GUI job's
+`wmsize_test`; `tools/devletters.py --check` now refuses a letter
+`main.c` binds or opens that no hosted build has.
+
+Left as they are, written down: `#f` phone (hosted; floppy elsewhere)
+and `#Z` opus (hosted; Inferno's test device).
+
+## Reserved
+
+For devices this tree is likely to grow, at their precedents' letters:
+`#r` real-time clock, `#Q` SPI, `#$` PCI, `#v` display or
+video out, `#W` PWM, `#N` CAN.
+
+## The table
+
+"Here" is what the device tables and build lists in this tree say,
+native or hosted; the three columns after are the precedents.
+Regenerate the facts with `tools/devletters.py --builds`.
+
+| Letter | Here | Plan 9 | 9front | Inferno | Status | Notes |
+|---|---|---|---|---|---|---|
+| `A` | audio (hosted/native) | audio | audio | audio | in use |  |
+| `B` | boot (native) | bridge | bridge | boot, bridge | in use | as Inferno (bridge in Plan 9 and 9front) |
+| `C` | cmd (hosted) | channel element |  | cmd | in use |  |
+| `D` | ssl (hosted/native) | ssl |  | ssl | in use |  |
+| `E` |  | sdp |  | mpeg | free here |  |
+| `F` |  | flash | flash | flash, tinyfs | free here | flash in all three; 2fa, which had it, moved to #h (#1040) |
+| `G` | gpio (native) |  | gpio | fpga, gpio | in use |  |
+| `H` |  |  |  | ata | free here |  |
+| `I` | ip (hosted/native) | ip | ip | ip | in use |  |
+| `J` | i2c (native) |  | i2c | i2c | in use | I2C, as 9front and Inferno |
+| `K` | prof (hosted) | kprof | kprof | kprof | in use | the hosted profiler, moved from #P (#1037): kprof in all three |
+| `L` |  | lpt | lpt | ds1620, lpt | free here |  |
+| `M` | mnt (hosted/native) | mnt | mnt | mnt | in use |  |
+| `N` |  |  |  |  | reserved | CAN: free in all three |
+| `P` | arch (native) | arch | arch | arch, prof | in use | arch everywhere; the hosted profiler moved to #K (#1037) |
+| `Q` |  |  | qspi |  | reserved | SPI: 9front's qspi |
+| `S` | sd (native) | sd | sd | sd | in use |  |
+| `T` | touch (native) | lm78 |  | cerf, ipaq, lm78, touch | in use | as Inferno (lm78 in Plan 9) |
+| `U` | fs (hosted) |  |  | fs, usb | in use | as Inferno |
+| `V` | cam (native) | tv | tv | tv | in use | video in, as tv in all three; the Dis VMs, which had it on their branch, moved to #X |
+| `W` |  |  |  |  | reserved | PWM: free in all three |
+| `X` | vm (native) | loopback | vmx | loopback | in use | the Dis VMs (#944, #1038): 9front's vmx is its virtual machines. Plan 9 and Inferno had loopback here, which 9front moved to #λ |
+| `Y` |  | cardbus | cardbus | cardbus | free here |  |
+| `Z` | opus (hosted) |  |  | test | divergence | Inferno's test device |
+| `a` |  | tls | tls | arch | free here | tls in Plan 9 and 9front. emu/Nt/devarch.c says #a, and no build includes it |
+| `b` |  | irq | irq, kbd | dbg | free here | Inferno's dbg; bench, which had it, moved to #x (#1039) |
+| `c` | cons (hosted/native) | cons | cons | cons | in use |  |
+| `d` | dup (hosted) | dup | dup | dup | in use |  |
+| `e` | env (hosted/native) | env | env | env | in use |  |
+| `f` | phone (hosted) | floppy | floppy | floppy | divergence | floppy elsewhere, which nothing here will need |
+| `g` |  | segment | segment |  | free here |  |
+| `h` | tfa (hosted) |  |  |  | in use | 2fa, moved from #F (#1040): a hardware key; free in all three |
+| `i` | draw (hosted/native) | draw | draw | draw | in use |  |
+| `k` |  | fs | fs | ds | free here | Inferno's ds (man/3/ds, no source here); fs in Plan 9 and 9front |
+| `l` | ether (native) | ether | ether | ether | in use |  |
+| `m` | pointer (hosted/native) | mouse | mouse | pointer | in use | pointer, as Inferno (mouse in Plan 9 and 9front) |
+| `o` | location (hosted) |  |  |  | in use | the host's location service as an NMEA receiver (location(3)); free in all three. It was #g on its branch, segment in Plan 9 and 9front |
+| `p` | prog (hosted/native) | proc | proc | prog | in use | prog, as Inferno (proc in Plan 9 and 9front) |
+| `r` |  | rtc | rtc | pcf8563, rtc | reserved | real-time clock, as all three |
+| `s` | srv (hosted/native) | srv | srv | srv | in use |  |
+| `t` | eia (hosted), uart (native) | uart | uart | ns16552, uart | in use | serial lines: uart (native) and eia (hosted) serve the same eia(3) files |
+| `u` | usb (native) | usb | usb |  | in use | as Plan 9 and 9front (Inferno #U) |
+| `v` |  | dss, vga | dss, vga | vga | reserved | display or video out: vga in all three |
+| `w` |  | watchdog | watchdog |  | free here | the watchdog in Plan 9 and 9front; wmsz, which had it, moved to #z (#1040) |
+| `x` | bench (native) |  | xenstore | bench | in use | bench, moved from #b (#1039), as Inferno |
+| `y` |  | i82365 | i82365 | i82365, pcmcia | free here |  |
+| `z` | wmsz (hosted) |  |  |  | in use | wmsz, moved from #w (#1040): size; free in all three |
+| `$` |  | pnp | pci, pnp | pci, pnp | reserved | PCI, as all three |
+| `%` | mem (hosted) |  |  | mem | in use |  |
+| `*` | indir (hosted) |  |  | indir | in use |  |
+| `/` | root (hosted/native) | root | root | root | in use |  |
+| `^` | snarf (hosted) |  |  | snarf | in use |  |
+| `|` | pipe (hosted/native) | pipe | pipe | pipe | in use |  |
+| `¤` | cap (hosted) | cap | cap | cap | in use |  |
+| `²` |  |  | twsi |  | free here |  |
+| `¶` |  |  | swap |  | free here |  |
+| `æ` |  | aoe | aoe |  | free here |  |
+| `Δ` |  |  | dtracy |  | free here |  |
+| `Ι` |  | kbin |  |  | free here |  |
+| `Λ` |  | video | video |  | free here |  |
+| `Σ` |  |  |  | sign | free here | Inferno's sign (man/3/sign, no source here) |
+| `Φ` |  |  | mii |  | free here |  |
+| `κ` |  | kbmap |  |  | free here |  |
+| `λ` |  |  | loopback |  | free here |  |
+| `σ` |  |  | shr |  | free here |  |
+| `τ` |  |  |  | tk | free here |  |
+| `⁲` |  | twsi |  |  | free here |  |
+| `₪` | srv9 (hosted) |  |  | srv9 | in use |  |
+| `↓` |  |  |  | power | free here |  |
+| `☹` |  | bios |  |  | free here |  |

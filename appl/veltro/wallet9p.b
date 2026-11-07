@@ -12,6 +12,8 @@ implement Wallet9p;
 #       accounts     r:  newline-separated account names
 #       default      r:  default account name
 #       new          rw: write "eth base myaccount" → read account name
+#       pending      r:  payments awaiting approval
+#       event        r:  "pending" whenever that list changes (blocking)
 #       {name}/          per-account directory
 #           address  r:  public address
 #           balance  r:  balance (queries chain/API)
@@ -78,6 +80,7 @@ Qnew:      con 3;
 Qpending:  con 4;
 Qdefault:  con 5;
 Qnetwork:  con 6;
+Qevent:    con 7;
 # Per-account files start at 16
 Qacctdir:  con 16;
 Qaddress:  con 17;
@@ -102,6 +105,16 @@ NACCTFILES: con 7;	# files per account dir
 MAXHISTORY: con 200;	# history entries kept per account
 PENDTTL:    con 900;	# seconds before an unapproved payment expires
 MAXPENDING: con 100;	# total pending-payment records kept
+
+# A reader of event: what it has not read yet, and its read if it waits.
+EvFid: adt {
+	fid:	int;
+	q:	list of string;
+	rd:	ref Tmsg.Read;
+};
+evfids: list of ref EvFid;
+evsrv: ref Styxserver;
+expirec: chan of int;	# a pending payment's time is up
 
 # Account state
 AcctState: adt {
@@ -253,9 +266,16 @@ delnewstate(fid: int)
 # Per-fid result state for the pay and authorize files.
 # Results are bound to the writing fid so concurrent clients never
 # read each other's transaction results.
+#
+# A fid told "pending:<id>" that reads again at offset 0 waits for the
+# outcome: its read is kept in wait, and answered when the payment is
+# approved, denied or expires.  The first read still answers at once,
+# so the requester learns the id.
 FidResult: adt {
 	fid:    int;
 	result: string;
+	told:   int;			# "pending:<id>" was read
+	wait:   ref Tmsg.Read;	# a read waiting for the outcome
 };
 paystates: list of ref FidResult;
 authstates: list of ref FidResult;
@@ -273,9 +293,10 @@ setpaystate(fid: int, result: string)
 	fr := getfidresult(paystates, fid);
 	if(fr != nil) {
 		fr.result = result;
+		fr.told = 0;
 		return;
 	}
-	paystates = ref FidResult(fid, result) :: paystates;
+	paystates = ref FidResult(fid, result, 0, nil) :: paystates;
 }
 
 setauthstate(fid: int, result: string)
@@ -283,9 +304,10 @@ setauthstate(fid: int, result: string)
 	fr := getfidresult(authstates, fid);
 	if(fr != nil) {
 		fr.result = result;
+		fr.told = 0;
 		return;
 	}
-	authstates = ref FidResult(fid, result) :: authstates;
+	authstates = ref FidResult(fid, result, 0, nil) :: authstates;
 }
 
 delfidresult(fid: int)
@@ -300,6 +322,60 @@ delfidresult(fid: int)
 		if((hd l).fid != fid)
 			nl = hd l :: nl;
 	authstates = nl;
+}
+
+readresult(srv: ref Styxserver, m: ref Tmsg.Read, fr: ref FidResult)
+{
+	if(fr == nil || fr.result == nil) {
+		readstr(srv, m, "");
+		return;
+	}
+	r := resolvefidresult(fr.result);
+	if(ispending(r)) {
+		if(fr.told && m.offset == big 0) {
+			fr.wait = m;
+			return;
+		}
+		fr.told = 1;
+	}
+	readstr(srv, m, r + "\n");
+}
+
+ispending(r: string): int
+{
+	return len r > 8 && r[0:8] == "pending:";
+}
+
+# A pending payment's outcome is known: the reads waiting for it are
+# answered.
+wakeresults()
+{
+	for(l := paystates; l != nil; l = tl l)
+		wakeresult(hd l);
+	for(l = authstates; l != nil; l = tl l)
+		wakeresult(hd l);
+}
+
+wakeresult(fr: ref FidResult)
+{
+	if(fr.wait == nil)
+		return;
+	r := resolvefidresult(fr.result);
+	if(ispending(r))
+		return;
+	m := fr.wait;
+	fr.wait = nil;
+	readstr(evsrv, m, r + "\n");
+}
+
+flushresult(tag: int)
+{
+	for(l := paystates; l != nil; l = tl l)
+		if((hd l).wait != nil && (hd l).wait.tag == tag)
+			(hd l).wait = nil;
+	for(l = authstates; l != nil; l = tl l)
+		if((hd l).wait != nil && (hd l).wait.tag == tag)
+			(hd l).wait = nil;
 }
 
 #
@@ -490,6 +566,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Start debounced sync thread
 	initsyncthread();
 
+	expirec = chan[8] of int;
 	fds := array[2] of ref Sys->FD;
 	sys->pipe(fds);
 
@@ -532,7 +609,23 @@ readuser(): string
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 {
-	while((gm := <-tchan) != nil) {
+	evsrv = srv;
+	for(;;) {
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			;
+		id := <-expirec =>
+			# an unapproved payment left the list when its time ran out
+			if((pp := findpending(id)) != nil && pp.result == nil) {
+				checkpendingexpiry(pp);
+				if(pp.result != nil)
+					postevent("pending");
+			}
+			continue;
+		}
+		if(gm == nil)
+			break;
 		pick m := gm {
 		Readerror =>
 			return;
@@ -543,6 +636,8 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 				ft := FTYPE(c.path);
 				if(ft == Qnew)
 					setnewstate(m.fid, "");
+				if(ft == Qevent)
+					evfids = ref EvFid(m.fid, nil, nil) :: evfids;
 			}
 			srv.default(gm);
 
@@ -555,12 +650,65 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 		Clunk =>
 			delnewstate(m.fid);
 			delfidresult(m.fid);
+			delevfid(m.fid);
+			srv.default(gm);
+
+		Flush =>
+			flushresult(m.oldtag);
+			for(el := evfids; el != nil; el = tl el)
+				if((hd el).rd != nil && (hd el).rd.tag == m.oldtag)
+					(hd el).rd = nil;
 			srv.default(gm);
 
 		* =>
 			srv.default(gm);
 		}
 	}
+}
+
+# Every reader of event is told; one not reading has it queued, once.
+# Each change to the pending list may settle a waiting read too.
+postevent(msg: string)
+{
+	wakeresults();
+	for(el := evfids; el != nil; el = tl el) {
+		ef := hd el;
+		if(ef.rd != nil) {
+			evsrv.reply(ref Rmsg.Read(ef.rd.tag, array of byte (msg + "\n")));
+			ef.rd = nil;
+		} else if(!inlist(msg, ef.q))
+			ef.q = appendstr(ef.q, msg);
+	}
+}
+
+appendstr(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
+}
+
+findevfid(fid: int): ref EvFid
+{
+	for(el := evfids; el != nil; el = tl el)
+		if((hd el).fid == fid)
+			return hd el;
+	return nil;
+}
+
+delevfid(fid: int)
+{
+	keep: list of ref EvFid;
+	for(el := evfids; el != nil; el = tl el)
+		if((hd el).fid != fid)
+			keep = hd el :: keep;
+	evfids = keep;
+}
+
+expirytimer(id: int)
+{
+	sys->sleep((PENDTTL + 1) * 1000);
+	expirec <-= id;
 }
 
 doread(srv: ref Styxserver, m: ref Tmsg.Read)
@@ -605,6 +753,17 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 			readstr(srv, m, ns.result + "\n");
 		else
 			readstr(srv, m, "");
+
+	Qevent =>
+		# a stream: each read is the next event, waited for
+		ef := findevfid(m.fid);
+		if(ef == nil)
+			srv.reply(ref Rmsg.Error(m.tag, "event not open"));
+		else if(ef.q != nil) {
+			srv.reply(ref Rmsg.Read(m.tag, array of byte (hd ef.q + "\n")));
+			ef.q = tl ef.q;
+		} else
+			ef.rd = m;
 
 	Qpending =>
 		s := "";
@@ -668,11 +827,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		# every agent's bound view, so an account-level fallback would
 		# hand another principal's txhash (or pending id) to whoever
 		# opened the file next.
-		fr := getfidresult(paystates, m.fid);
-		if(fr != nil && fr.result != nil)
-			readstr(srv, m, resolvefidresult(fr.result) + "\n");
-		else
-			readstr(srv, m, "");
+		readresult(srv, m, getfidresult(paystates, m.fid));
 
 	Qauthorize =>
 		as := findacctbyid(aid);
@@ -683,11 +838,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 		# Per-fid ONLY — see Qpay above.  A signed EIP-3009
 		# authorization is a replayable bearer credential; handing one
 		# to a reader that did not request it is a fund-moving leak.
-		fr := getfidresult(authstates, m.fid);
-		if(fr != nil && fr.result != nil)
-			readstr(srv, m, resolvefidresult(fr.result) + "\n");
-		else
-			readstr(srv, m, "");
+		readresult(srv, m, getfidresult(authstates, m.fid));
 
 	Qacctctl =>
 		as := findacctbyid(aid);
@@ -1125,6 +1276,8 @@ newpending(kind, acct, amount, recipient, token: string): (ref PendingPay, strin
 	np := ref PendingPay(nextpendingid++, kind, acct, amount, recipient,
 		token, "agent", t, "", "", "", 0, "", nil);
 	pendingpays = np :: pendingpays;
+	spawn expirytimer(np.id);
+	postevent("pending");
 	return (np, nil);
 }
 
@@ -1188,6 +1341,13 @@ hascontrol(s: string): int
 
 approvepending(id: int): string
 {
+	err := approvepending0(id);
+	postevent("pending");
+	return err;
+}
+
+approvepending0(id: int): string
+{
 	pp := findpending(id);
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
@@ -1242,6 +1402,7 @@ denypending(id: int): string
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
 	pp.result = "denied";
+	postevent("pending");
 	return nil;
 }
 
@@ -2054,6 +2215,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, Qpending);
 				else if(name == "network")
 					n.path = MKPATH(0, Qnetwork);
+				else if(name == "event")
+					n.path = MKPATH(0, Qevent);
 				else {
 					# Look for account name
 					id := acctidbyname(name);
@@ -2101,6 +2264,7 @@ navigator(navops: chan of ref Navop)
 
 			if(ft == Qroot) {
 				# Root: ctl, accounts, new, pending, network, then account dirs
+				entries = MKPATH(0, Qevent) :: entries;
 				entries = MKPATH(0, Qnetwork) :: entries;
 				entries = MKPATH(0, Qpending) :: entries;
 				entries = MKPATH(0, Qnew) :: entries;
@@ -2172,6 +2336,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 		perm = 8r444;
 	Qnetwork =>
 		name = "network";
+		perm = 8r444;
+	Qevent =>
+		name = "event";
 		perm = 8r444;
 	Qacctdir =>
 		as := findacctbyid(aid);

@@ -141,6 +141,17 @@ per control, with
 .B checked
 appended to a checked box; a select's options follow it on lines
 beginning with a tab.
+A control is in the form HTML puts it in: the one round it, or the one
+its
+.B form
+attribute names; it is in form 0 if none.
+Controls in a template's content are not listed.
+A password field's value is
+.B ********
+when it holds anything, here and in its
+.BR attrs :
+the files say that it is filled, not with what.
+The page's scripts, and the form when sent, have the value.
 .TP
 .B find
 Write text; read the lines of
@@ -211,6 +222,26 @@ at
 .BR /mnt/web ,
 starting one if none is mounted, so what it can reach, and with which
 cookies, is that mount.
+.SS Downloads
+A page navigated to that Charon does not show, a PDF or an archive,
+is saved in
+.B $home/Downloads
+(or
+.B /tmp
+if there is none) under the name the server gives it, or the last
+element of its URL, with any character but letters, digits,
+.BR . ,
+.B -
+and
+.B _
+made
+.BR _ ;
+a file already there is kept, and the new one named
+.IB name -1. ext\fR,
+and so on.
+The path is then plumbed, so whatever opens files (Xenith, Lucifer)
+opens it, and the page shown says where it went.
+A frame's document is never saved.
 .SS Xenith
 A browser window in Xenith (a URL opened there) is the same session,
 served the same way: each window's page is posted as

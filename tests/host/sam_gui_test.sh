@@ -1,9 +1,10 @@
 #!/bin/sh
 #
 # wm/sam end to end through the GUI: boot a headless wm/wm, start sam
-# on a file, and drive it with synthetic input through /chan/uitest —
-# type a command in the command window, double-click a word in the file
-# window, change it, write.  Checks the file sam wrote, not pixels.
+# on a file, and drive it with synthetic input through /dev/pointer and
+# /dev/keyboard — open a window on the file from menu 3, type a command
+# in the command window, double-click words in the file window, change
+# them, write.  Checks the file sam wrote, not pixels.
 #
 # Covers what the protocol-level tests/sam_test.b cannot: that samterm
 # pumps keyboard and mouse into Tk, that command output leaves the
@@ -25,28 +26,48 @@ trap 'rm -rf "$DIR"' EXIT
 
 printf 'The quick brown fox\njumps over\nthe lazy dog.\n' > "$DIR/fox.txt"
 
-# Windows: the command window at the top, the file window below it; the
-# third line of the file is at y=182, "lazy" at x=60.  A press with
-# button bit 8 (257) is how the pointer device reports a double click.
+# As in Plan 9, sam starts with the command window alone, across the
+# top fifth of its 640x480 window (y 5 to 100); the file is listed in
+# menu 3, the newest entry, which the menu posts under the pointer.
+# Releasing button 3 there picks it, and a click of button 3, not a
+# sweep, gives the new window the space below the command window: its
+# first line is at y=111, "quick" at x=70, its third at y=143, "lazy"
+# at x=60.  Button 1 in a window that is not current only makes it
+# current.  "lazy" is double-clicked as SDL reports one, two plain
+# clicks, which samterm times as Plan 9's does; "quick" with the
+# second press marked by button bit 8 (257), as X11 reports one.
 cat > "$DIR/drive.sh" <<EOF
 load std
 wm/wm wm/sam /$T/fox.txt &
 sleep 5
-fn click { echo ptr \$1 \$2 1 > /chan/uitest; echo ptr \$1 \$2 0 > /chan/uitest }
-fn type { for c in \$* { echo key \$c > /chan/uitest } }
-click 300 120
+fn click { echo m \$1 \$2 1 > /dev/pointer; echo m \$1 \$2 0 > /dev/pointer }
+echo m 300 300 4 > /dev/pointer
 sleep 1
-type 44 115 47 111 47 48 47 103 10
+echo m 300 300 0 > /dev/pointer
 sleep 1
-click 60 182
+echo m 300 300 4 > /dev/pointer; echo m 300 300 0 > /dev/pointer
 sleep 1
-click 60 182; echo ptr 60 182 257 > /chan/uitest; echo ptr 60 182 0 > /chan/uitest
+click 300 50
 sleep 1
-click 300 120
+echo ',s/o/0/g' > /dev/keyboard
 sleep 1
-type 99 47 115 108 101 101 112 121 47 10
+click 60 143
 sleep 1
-type 119 10
+click 60 143; click 60 143
+sleep 1
+click 300 50
+sleep 1
+echo 'c/sleepy/' > /dev/keyboard
+sleep 1
+click 70 111
+sleep 1
+click 70 111; echo m 70 111 257 > /dev/pointer; echo m 70 111 0 > /dev/pointer
+sleep 1
+click 300 50
+sleep 1
+echo 'c/slow/' > /dev/keyboard
+sleep 1
+echo w > /dev/keyboard
 sleep 2
 echo R_DONE
 EOF
@@ -69,7 +90,7 @@ if ! grep -q R_DONE "$LOG"; then
     exit 1
 fi
 
-want='The quick br0wn f0x
+want='The slow br0wn f0x
 jumps 0ver
 the sleepy d0g.'
 got=$(cat "$DIR/fox.txt")

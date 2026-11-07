@@ -9,6 +9,7 @@ prog \- running programs
 .BI /prog/ n /dbgctl
 .BI /prog/ n /exception
 .BI /prog/ n /fd
+.BI /prog/ n /grpwait
 .BI /prog/ n /heap
 .BI /prog/ n /ns
 .BI /prog/ n /nsgrp
@@ -87,6 +88,22 @@ and a possibly empty error message.
 The error message will contain at most 64 characters.
 .PP
 The read-only
+.B grpwait
+file waits for a process group to end.
+Opening it notes the group the process is in at that moment;
+a read blocks until that group has no process left in it,
+then returns the group's number.
+The process itself, once it has exited, does not hold the read:
+a group whose leader returned while others it spawned run on
+is not gone until they have gone too.
+Processes that put themselves in a group of their own
+.RB ( NEWPGRP ;
+see
+.IR sys-pctl (2))
+have left the group and do not hold it either.
+Each open is a waiter of its own.
+.PP
+The read-only
 .B fd
 file
 describes the open file descriptors in the
@@ -116,7 +133,7 @@ result is the empty string.
 Messages written to the
 .B ctl
 file control the execution of the process.
-.TF killgrp
+.TF killtree
 .PD
 .TP
 .B kill
@@ -125,6 +142,13 @@ Kill the process.
 .B killgrp
 Kill all processes in the same group as the process.
 A process writing to its own ctl file does not kill itself.
+.TP
+.B killtree
+Kill all processes in the process group and in every descendant process group.
+This is intended for supervisors that must reclaim a command tree even when a
+confined command has used
+.I sys->pctl(Sys->NEWPGRP, ...)
+to create another group.
 .TP
 .B exceptions propagate
 Applies to process group leaders only (ie any process that executes a system

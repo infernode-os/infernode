@@ -1,0 +1,39 @@
+# veltrosrv cut_text
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant: The first half,
+user: 
+  | [harness: your reply was cut off at the output limit.  Continue exactly where it stopped; do not repeat what you already wrote.]
+
+== output
+  | == user
+  | SCENARIO:cut_text go
+  | == veltro
+  | The first half,
+  | == veltro
+  |  and the second.
+  | == log
+  | session <llm>, prompt 13019 bytes
+  | step 1: writing 20 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 15 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 32 bytes
+  | llm: STOP:max_tokens
+  | The first half,
+  | 
+  | harness: reply reached the output limit
+  | step 2: writing 128 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 16 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 31 bytes
+  | llm: STOP:end_turn
+  |  and the second.
+  | 
+  | turn done stop=end_turn steps=2

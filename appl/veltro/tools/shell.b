@@ -3,8 +3,9 @@ implement ToolShell;
 #
 # shell - Veltro tool for observing the shell terminal
 #
-# Provides read-only access to the shell terminal via its file-based
-# interface at /tmp/veltro/shell/.  For safety, Veltro can only read the
+# Provides read-only access to the shell terminal through its served
+# files (#sshell/fs, mounted at /mnt/shell by tools9p for this tool
+# alone).  For safety, Veltro can only read the
 # shell transcript and current input line — it cannot send commands.
 # Instead, Veltro should propose commands in Chat for the user to run.
 #
@@ -33,7 +34,7 @@ ToolShell: module {
 	schema: fn(): string;
 };
 
-SHELL_ROOT: con "/tmp/veltro/shell";
+SHELL_ROOT: con "/mnt/shell";
 
 init(): string
 {
@@ -195,7 +196,7 @@ readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r (is shell running?)", path);
+		return sys->sprint("error: cannot open %s: %r (is the shell running? start it with 'launch shell')", path);
 
 	result := "";
 	buf := array[8192] of byte;

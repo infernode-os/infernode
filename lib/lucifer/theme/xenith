@@ -74,6 +74,8 @@ editstatus 181825
 editstattext BAC2DE
 editscroll 313244
 editthumb 54566E
+editunfocused A6ADC8	# 7.4:1, the floor for secondary text
+edithold 89B4FA	# 7.8:1, Mocha blue
 
 # Diagrams: areas and lines, not text; Mocha's pastels
 diagbg 1E1E2E

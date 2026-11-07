@@ -1,0 +1,195 @@
+#!/bin/bash
+#
+# xenith-fuzz — grind Xenith with random use until it breaks.
+#
+#	xenith-fuzz [-n runs] [-s seed] [-t secs] [-j jobs] [-i] [-l] [-k]
+#		[-- fuzz options]
+#
+# Each run starts a headless Xenith (the SDL dummy driver), standalone or
+# inside Lucifer (-l), whose start-up command runs tests/xenith_fuzz.b: a
+# storm of random clicks, drags, chords, wheel and scroll-bar use and
+# typing through the pointer and keyboard devices, while a client changes
+# windows through /mnt/xenith and plumbs to it, as an agent does (a
+# plumber is started for a standalone Xenith); then checks that Xenith
+# still answers, that each window's text reads back whole, that Put writes
+# what a window holds and that undo and redo restore a window's text.
+#
+#	-n	runs (8); their seeds are seed, seed+1, ...
+#	-s	the first seed (the time)
+#	-t	seconds of input in each run (30)
+#	-j	runs at once (the CPUs)
+#	-i	the interpreter (emu -c0), whose stacks say where; the JIT
+#		(-c1) otherwise
+#	-l	Xenith inside Lucifer, as the presentation zone's app, the input
+#		kept to its zone; the standalone Xenith otherwise
+#	-k	keep the run's directory and log even when it passed
+#
+# Options after -- go to the fuzzer (xenith_fuzz.b), e.g. -k for keys
+# alone. Each run's output is in $ROOT/tmp/xenith-fuzz/logs/<seed>.log;
+# a run that failed keeps it, with the stacks of Xenith's procs when it
+# hung mapped to source lines where the .sbl files are at hand.
+# The emulator's root is a copy of what Xenith needs, made afresh under
+# $ROOT/tmp/xenith-fuzz/root, so what random use opens and Puts is never
+# the tree's. Exit status 1 if any run
+# failed: froze (HUNG, STUCK), lost a proc (BROKEN), left (no outcome),
+# or lost text (DATA).
+#
+# Needs the SDL GUI emulator and the tests built (cd tests; mk install).
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tests/host/common.sh"
+cd "$ROOT"
+
+runs=8
+seed=$(date +%s)
+secs=30
+jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null || echo 2)
+flag=-c1
+lucifer=0
+keep=0
+while getopts n:s:t:j:ilk c; do
+	case $c in
+	n)	runs=$OPTARG ;;
+	s)	seed=$OPTARG ;;
+	t)	secs=$OPTARG ;;
+	j)	jobs=$OPTARG ;;
+	i)	flag=-c0 ;;
+	l)	lucifer=1 ;;
+	k)	keep=1 ;;
+	*)	sed -n '3,/^$/s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
+	esac
+done
+shift $((OPTIND - 1))
+extra="$*"
+
+[ -x "$EMU" ] || { echo "xenith-fuzz: no emulator at $EMU" >&2; exit 2; }
+if command -v nm >/dev/null 2>&1 && ! nm "$EMU" 2>/dev/null | grep -q sdl3_mainloop; then
+	echo "xenith-fuzz: $EMU is a headless build; the SDL GUI emulator is needed" >&2
+	exit 2
+fi
+[ -f dis/tests/xenith_fuzz.dis ] || { echo "xenith-fuzz: build the tests first (cd tests; mk install)" >&2; exit 2; }
+
+top=$ROOT/tmp/xenith-fuzz
+logs=$top/logs
+mkdir -p "$logs"
+
+# The emulator's root: a copy of what Xenith and Lucifer need, and the
+# other directories empty, as mount points. Random use opens files by
+# name and Puts them (a directory's listing, B3 on a name in it, typing,
+# Put), so in the tree itself it changed tracked files.
+sandbox=$top/root
+rm -rf "${sandbox:?}"
+mkdir -p "$sandbox/tmp" "$sandbox/tests"
+for d in "$ROOT"/*/; do
+	d=$(basename "$d")
+	case $d in
+	dis|lib|fonts|icons|locale|usr|mnt|n)	cp -a "$ROOT/$d" "$sandbox/$d" ;;
+	tmp|tests)	;;
+	*)	mkdir -p "$sandbox/$d" ;;
+	esac
+done
+for d in page imgload xenith; do
+	cp -a "$ROOT/tests/$d" "$sandbox/tests/$d"
+done
+mkdir -p "$sandbox/usr/$(id -un)"	# a home, for Dump and Load
+
+# The stacks in a log (lines "fp pc mp prog type path") as source lines,
+# through the .sbl files mk leaves beside each .b
+mapstacks() {
+	command -v python3 >/dev/null 2>&1 || { cat "$1"; return; }
+	python3 - "$ROOT" "$1" <<'EOF'
+import re, sys, os
+root, log = sys.argv[1], sys.argv[2]
+cache = {}
+def sbl(dis):
+	if dis in cache:
+		return cache[dis]
+	m = dis.replace('/dis/', '', 1)[:-4]
+	pcs = None
+	for c in (root+'/appl/'+m+'.sbl', root+'/appl/xenith/'+os.path.basename(m)+'.sbl',
+	          root+'/appl/'+m+'/'+os.path.basename(m)+'.sbl', root+'/'+m+'.sbl'):
+		try:
+			L = open(c).read().split('\n')
+		except OSError:
+			continue
+		n = int(L[2]); files = L[3:3+n]; i = 3+n; npc = int(L[i]); i += 1
+		lf = ll = 0; pcs = []
+		for k in range(npc):
+			a, b = L[i+k].rsplit(' ', 1)[0].split(',')
+			def part(x, f, l):
+				if ':' in x: f, x = x.split(':'); f = int(f)
+				if '.' in x: l, x = x.split('.'); l = int(l)
+				return f, l
+			sf, sl = part(a, lf, ll); ef, el = part(b, sf, sl)
+			pcs.append('%s:%d' % (files[sf], sl)); lf, ll = ef, el
+		break
+	cache[dis] = pcs
+	return pcs
+for line in open(log, errors='replace'):
+	m = re.match(r'^\S+ ([0-9a-f]{8}) \S+ \S+ \S+ (\S+\.dis)\s*$', line)
+	if m:
+		pcs = sbl(m.group(2)); pc = int(m.group(1), 16)
+		print('\t' + (pcs[pc] if pcs and pc < len(pcs) else '%s pc %d' % (m.group(2), pc)))
+	else:
+		print(line, end='')
+EOF
+}
+
+one() {
+	s=$1
+	r=$sandbox/tmp/xenith-fuzz/r$s
+	rm -rf "${r:?}"
+	mkdir -p "$r/w"
+	# the start-up command: run from Xenith, so it sees /mnt/xenith
+	{
+		echo /tmp/xenith-fuzz/r$s/w; echo; echo
+		printf '%11d \n' 0
+		printf 'e%11d %11d %11d %11d %11d \n' 0 0 0 0 0
+		echo; echo /tmp/xenith-fuzz/r$s/w
+		echo "sh /tmp/xenith-fuzz/r$s/run"
+	} > "$r/dump"
+	region=
+	[ $lucifer = 1 ] && region="-R 312 92 766 766"
+	echo "/dis/tests/xenith_fuzz.dis -s $s -t $secs -d /tmp/xenith-fuzz/r$s/files $region $extra >'#c/cons' >[2=1]" > "$r/run"
+	log=$logs/$s.log
+	if [ $lucifer = 1 ]; then
+		SDL_VIDEODRIVER=dummy with_timeout $((secs+180)) "$EMU" $flag \
+			-pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 -r"$sandbox" /dis/sh.dis -l -c "
+skiplogon=1; cd /tmp/xenith-fuzz/r$s/w; run /lib/lucifer/boot.sh & sleep 45
+echo 'create id=xenith type=app dis=/dis/xenith/xenith.dis label=Xenith data=-c 1 -E -l /tmp/xenith-fuzz/r$s/dump' > /mnt/ui/activity/0/presentation/ctl
+echo 'center id=xenith' > /mnt/ui/activity/0/presentation/ctl
+sleep $((secs+100)); echo 'fuzz: NO OUTCOME'; echo halt > /dev/sysctl" </dev/null > "$log" 2>&1
+	else
+		SDL_VIDEODRIVER=dummy with_timeout $((secs+90)) "$EMU" $flag -g800x600 -r"$sandbox" \
+			/dis/sh.dis -c "load std
+bind -bc '#splumber' /chan; plumber /tests/xenith/plumbing & sleep 1
+cd /tmp/xenith-fuzz/r$s/w; xenith -l /tmp/xenith-fuzz/r$s/dump" </dev/null > "$log" 2>&1
+	fi
+	# Xenith's buffer file, left by the halt
+	find "$sandbox/tmp" -maxdepth 1 -name '*xenith' -newer "$r/dump" -exec rm -f {} + 2>/dev/null
+	bad=$(grep -E '^fuzz: (HUNG|BROKEN|STUCK|DATA|NO OUTCOME)|^xenith: ' "$log" | head -4)
+	if [ -z "$bad" ] && ! grep -q '^fuzz: INTEGRITY ok' "$log"; then
+		bad="no outcome: $(grep -v '^fs: fsqid' "$log" | tail -2 | tr '\n' ' ')"
+	fi
+	if [ -n "$bad" ]; then
+		mapstacks "$log" > "$log.map" && mv "$log.map" "$log"
+		echo "seed $s: FAIL"; printf '%s\n' "$bad" | sed 's/^/	/'
+		return 1
+	fi
+	echo "seed $s: ok ($(sed -n 's/^fuzz: RESPONSIVE (\(.*\))/\1/p' "$log"))"
+	[ $keep = 1 ] || rm -rf "${r:?}" "${log:?}"
+	return 0
+}
+
+failed=0
+pids=
+for i in $(seq 0 $((runs - 1))); do
+	one $((seed + i)) &
+	pids="$pids $!"
+	while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do sleep 1; done
+done
+for p in $pids; do
+	wait $p || failed=$((failed + 1))
+done
+echo "xenith-fuzz: $runs runs, $failed failed (logs in $logs)"
+[ $failed = 0 ]

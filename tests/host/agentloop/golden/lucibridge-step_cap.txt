@@ -23,13 +23,13 @@ tool-result call_step_cap_0_0:
 tools: list read write
 assistant-call call_step_cap_1_0 list {"args": "\/usr\/agentloop"}
 tool-result call_step_cap_1_0:
-  | (skipped: identical `list {"args": "/usr/agentloop"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+  | (skipped: you already made the call `list {"args": "/usr/agentloop"}` in this turn, and nothing has changed anything since, so its output is the same as then)
 
 == request 99 (turn 99)
 tools: list read write
 assistant-call call_step_cap_98_0 list {"args": "\/usr\/agentloop"}
 tool-result call_step_cap_98_0:
-  | (skipped: identical `list {"args": "/usr/agentloop"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+  | (skipped: you already made the call `list {"args": "/usr/agentloop"}` in this turn, and nothing has changed anything since, so its output is the same as then)
 
 == output
   | msg 0

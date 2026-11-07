@@ -39,6 +39,7 @@ extern Dev bootdevtab;
 extern Dev benchdevtab;
 extern Dev drawdevtab;
 extern Dev srvdevtab;
+extern Dev vmdevtab;
 extern Dev etherdevtab;
 extern Dev ssldevtab;
 extern Dev gpiodevtab;
@@ -46,6 +47,8 @@ extern Dev touchdevtab;
 extern Dev uartdevtab;
 extern Dev audiodevtab;
 extern Dev archdevtab;
+extern Dev camdevtab;
+extern Dev i2cdevtab;
 
 Dev*	devtab[] =
 {
@@ -60,15 +63,18 @@ Dev*	devtab[] =
 	&pointerdevtab,		/* 'm' -- #m, the pointer */
 	&sddevtab,		/* 'S' -- #S, the SD card as a file */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
-	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
+	&benchdevtab,		/* 'x' -- #x, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
+	&vmdevtab,		/* 'X' -- #X, the Dis VMs, one a core (#944) */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */
 	&touchdevtab,		/* 'T' -- #T, the DSI panel's touch buffer */
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, eia1 the mini-UART */
 	&audiodevtab,		/* 'A' -- #A, /dev/audio: the jack, PWM through DMA (os/bcm/audiopwm.c) */
-	&archdevtab,		/* 'P' -- #P, the firmware's temperature and throttling flags (devarch.c) */
+	&archdevtab,		/* 'P' -- #P, the firmware's temperature and throttling flags (os/bcm/devarch.c) */
+	&camdevtab,		/* 'V' -- #V, the camera receiver */
+	&i2cdevtab,		/* 'J' -- #J, I2C on the ribbon connectors */
 	nil,
 };

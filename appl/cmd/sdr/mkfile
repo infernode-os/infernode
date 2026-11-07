@@ -1,0 +1,18 @@
+<$ROOT/mkconfig
+
+TARG=\
+	am.dis\
+	fm.dis\
+
+SYSMODULES=\
+	arg.m\
+	draw.m\
+	math.m\
+	sys.m\
+
+MODULES=\
+	$ROOT/module/sdrdsp.m\
+
+DISBIN=$ROOT/dis/sdr
+
+<$ROOT/mkfiles/mkdis

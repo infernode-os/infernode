@@ -1,15 +1,28 @@
 edit - Edit file contents (find/replace)
 
 Usage:
-  edit <path> <old> <new>       Replace first occurrence
+  edit <path> <old> <new>       Replace the one occurrence
   edit <path> <old> <new> all   Replace all occurrences
 
 Arguments:
-  path - File to edit
-  old  - Text to find (quote if contains spaces)
-  new  - Replacement text
-  all  - Optional: replace all
+  path  - File to edit
+  old   - Text to find (quote if contains spaces)
+  new   - Replacement text
+  all   - Optional: replace all
+  edits - Several changes to one file in one call, instead of old and
+          new: a list of {old, new}
 
-Use \n for newlines, \t for tabs.
+Called with arguments by name (path, old, new, edits), old and new are the
+text itself: line breaks as line breaks, nothing unescaped.  Only the
+one-line form above takes \n for a newline and \t for a tab.
 
-Fails if old text not found. Without 'all', fails if multiple matches.
+Each old is the text exactly as the file holds it before this call, and
+must match one place (give more of the text around it, or all).  Several
+changes in one call are each found in the file as it was before the call,
+and must not overlap: make changes that touch into one.  Keep old as
+short as makes it unique.
+
+Text that differs from the file only by the line numbers read shows,
+trailing blanks, or curly quotes and dashes is still found, and the result
+says so.  When old is not found, the result says where its first line is,
+if it is anywhere.

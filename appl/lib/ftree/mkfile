@@ -5,10 +5,10 @@ TARG=\
 	items.dis\
 
 MODULES=\
-	cptree.m\
 	items.m\
 
 SYSMODULES=\
+	cptree.m\
 	draw.m\
 	readdir.m\
 	string.m\

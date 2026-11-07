@@ -22,6 +22,7 @@ ulong	miniconsinit(void);
 void	miniputc(int);
 int	minigetc(void);
 int	minitxidle(void);
+int	minitxrdy(void);
 
 /* uart.c: console policy over it */
 int	consuartputc(Queue*, int);
@@ -133,7 +134,6 @@ int	fbconsinit(Fbinfo*);
 int	fbconsadd(Fbinfo*);
 int	fbconsscreens(void);
 int	fbconsreleased(void);
-int	fbconsvoff(void);
 void	fbconsstop(void);
 
 /*

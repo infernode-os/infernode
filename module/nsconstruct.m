@@ -76,10 +76,12 @@ NsConstruct: module {
 	# later shadow construction can recreate the private backing tree.
 	restricttoolns: fn(caps: ref Capabilities): string;
 
-	# Emit namespace manifest for the UI to display.
-	# Writes to mpath — one entry per line.
-	# Must be called AFTER restrictns() from the restricted namespace.
-	emitmanifest: fn(caps: ref Capabilities, mpath: string);
+	# Emit namespace manifest for the UI to display, one entry per line.
+	# Called AFTER restrictns() from the restricted namespace, on a file
+	# made by openmanifest BEFORE it: an agent granted /tmp has a /tmp of
+	# its own, and a manifest made there is not where the UI reads it.
+	openmanifest: fn(mpath: string): ref Sys->FD;
+	emitmanifest: fn(caps: ref Capabilities, fd: ref Sys->FD);
 
 	# Verify namespace matches expected security policy
 	# Reads /prog/$pid/ns and checks for dangerous paths
@@ -98,7 +100,21 @@ NsConstruct: module {
 	# that disagree mean one of them re-opens what the other closed.
 	walletcontrolpath: fn(path: string): int;
 
+	# Shared caller-grant policy. Runtime construction, tools9p delegation,
+	# and nsaudit must use one predicate so a newly protected endpoint cannot
+	# remain grantable through a stale copy elsewhere.
+	privilegedcontrolpath: fn(path: string, tools: list of string): int;
+
+	# Roots whose descendants are derived from policy, not from a grant of the
+	# root. A bare grant authorises only that root when delegating to a child.
+	policyroot: fn(path: string): int;
+
 	# Clean up shadow directories for the current process.
 	# Call on agent exit to reclaim /tmp/.veltro-ns/shadow/{pid}-* entries.
 	cleanup: fn();
+
+	# An overlay (/tmp/veltro/cow/<actid>-<key>) made in an earlier start
+	# of the emulator, with changes in it, renamed kept-<start>-<name>:
+	# returns its new path, or "" when it is this start's or empty.
+	setasidestale: fn(overlaydir: string): string;
 };

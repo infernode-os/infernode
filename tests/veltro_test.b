@@ -253,7 +253,9 @@ testReadExec(t: ref T)
 
 	# Read this test file
 	result := tool->exec("/tests/veltro_test.b");
-	t.assert(!hassubstr(result, "error:"), "read should not return error");
+	# The whole file is read now, and it says "error:" itself: an
+	# error is a result that begins so.
+	t.assert(len result < 6 || result[0:6] != "error:", "read should not return error");
 	t.assert(hassubstr(result, "VeltroTest"), "should read file content");
 }
 

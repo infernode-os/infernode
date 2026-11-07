@@ -87,6 +87,10 @@ Settled with the project owner:
   directly into Veltro/lucibridge. Nothing in the agent stack may couple
   to a specific engine.
 
+Follow-up (2026-10-28): macOS 27 and iOS 27 ship a rebuilt on-device
+model. [ONDEVICE-LLM.md](ONDEVICE-LLM.md) proposes using it under exactly
+these terms, as a provider behind the seam (an `fm-gate`), never the basis.
+
 ## Engine choice: MLX vs llama.cpp (the real decision)
 
 | | MLX (Swift) | llama.cpp (C/C++) |

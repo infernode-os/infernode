@@ -24,7 +24,7 @@ Wm: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-Ptrstarted, Kbdstarted, Controlstarted, Controller, Fixedorigin, Framed: con 1<<iota;
+Ptrstarted, Kbdstarted, Controlstarted, Controller, Fixedorigin, Framed, Docked: con 1<<iota;
 Bdwidth: con 3;
 # a window is at least this big (9front's goodrect: 100 wide, a line of
 # text and its borders high)
@@ -39,8 +39,10 @@ screen: ref Screen;
 display: ref Display;
 ptrfocus: ref Client;
 kbdfocus: ref Client;
+docked: ref Client;	# a keyboard on the screen ("dock"), above every other window
 controller: ref Client;
 allowcontrol := 1;
+forcec: chan of ref Client;		# a Delete the client did not take
 fakekbd: chan of string;
 fakekbdin: chan of string;
 buttons := 0;
@@ -93,11 +95,23 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# /lib/lucifer/theme/current) reaches the windows.  Under Lucifer
 	# it sends "retheme" itself; at the top, wm/wm watches.
 	themec := chan of string;
-	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil)
+	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil) {
+		lucitheme->serve();	# a session's root; done already under a profile
 		themec = lucitheme->watch();
+	}
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
-	wmclient->win.reshape(((0, 0), (100, 100)));
+	# Run as another wm/wm's client, a desktop in a window: room for a
+	# window or two, as a shell's (it asked for 100x100, an empty square
+	# in the corner).  At the top, or in Lucifer's zone, it is given the
+	# display or the zone whatever it asks.
+	wr := Rect((0, 0), (640, 480));
+	dr := display.image.r;
+	if(wr.dx() > dr.dx())
+		wr.max.x = dr.dx();
+	if(wr.dy() > dr.dy())
+		wr.max.y = dr.dy();
+	wmclient->win.reshape(wr);
 	wmclient->win.onscreen("place");
 	if(win.image == nil){
 		sys->fprint(sys->fildes(2), "wm: cannot get image to draw on\n");
@@ -130,15 +144,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	wmsize := startwmsize();
 	fakekbd = chan of string;
 	exitc := chan of int;
+	forcec = chan of ref Client;
 
-	# UI test driver: synthetic input via /chan/uitest, so interaction
-	# is scriptable and CI-testable (tests/host).  Writes, one command
-	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal)  |
-	# "text STRING".
-	# Events enter the exact channels the real devices feed.
-	uitest := sys->file2chan("/chan", "uitest");
-	if(uitest != nil)
-		spawn uitestproc(uitest, wmctxt.ptr);
+	# The windows, as a file (/chan/wmwindows, and /mnt/wm/wmwindows).
+	wmwindows := sys->file2chan("/chan", "wmwindows");
+	if(wmwindows != nil)
+		spawn wmwindowsproc(wmwindows);
 	for(;;) alt {
 	wmsz := <-wmsize =>
 		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
@@ -172,6 +183,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		retheme();
 	<-exitc =>
 		wmclient->win.wmctl("exit");
+	c := <-forcec =>
+		dropwindows(c);
 	c := <-wmctxt.kbd or
 	c = int <-fakekbd =>
 		if(kbdfocus != nil)
@@ -194,7 +207,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				# 2 reshapes from the nearest edge or corner, 3 moves
 				# -- one drag while the button is held, no mode.  The
 				# client never sees the press.
-				hc.top();
+				totop(hc);
 				setkbdfocus(hc);
 				buttons = p.buttons;
 				if(p.buttons & 4)
@@ -205,12 +218,16 @@ init(ctxt: ref Draw->Context, argv: list of string)
 				break;
 			}
 			c := wmsrv->find(p.xy);
-			if(c != nil){
+			if(c != nil && (c.flags & Docked) != 0){
+				# a keyboard on the screen: its presses are its own,
+				# and the keyboard stays with the window that has it
+				ptrfocus = c;
+			}else if(c != nil){
 				if(c != kbdfocus && p.buttons == 1){
 					# rio: button 1 in a window that is not the
 					# current one only makes it current; the click
 					# goes no further
-					c.top();
+					totop(c);
 					setkbdfocus(c);
 					held = 1;
 					break;
@@ -249,20 +266,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(c, data, rc) := <-req =>
 		# if client leaving
 		if(rc == nil){
-			c.remove();
-			forgethidden(c);
-			setclientlabel(c, nil);
-			if(c == ptrfocus)
-				ptrfocus = nil;
-			if(c == kbdfocus)
-				kbdfocus = nil;
-			if(c == controller)
-				controller = nil;
+			forgetclient(c);
 			controlevent("delclient " + string c.id);
-			for(z := wmsrv->top(); z != nil; z = z.znext)
-				if(z.flags & Kbdstarted)
-					break;
-			setkbdfocus(z);
 			c.stop <-= 1;
 			break;
 		}
@@ -388,7 +393,7 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		if(c.wins == nil && c == kbdfocus)
 			setkbdfocus(nil);
 	"raise" =>
-		c.top();
+		totop(c);
 	"lower" =>
 		c.bottom();
 	"!move" or
@@ -412,6 +417,22 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 			if(n != 5)
 				return "bad arg count";
 			return sizewin(wmctxt.ptr, c, w, Point(int hd args, int hd tl args), presspt, 1);
+		}
+	"dock" =>
+		# dock bottom <height>: a keyboard on the screen (wm/osk).  It
+		# places itself along the bottom; here it is kept above every
+		# window, and a press in it goes to it without taking the
+		# keyboard from the window that has it.  Height 0: undocked.
+		if(n != 3 || hd tl args != "bottom")
+			return "usage: dock bottom height";
+		if(int hd tl tl args > 0){
+			c.flags |= Docked;
+			docked = c;
+			c.top();
+		}else{
+			c.flags &= ~Docked;
+			if(docked == c)
+				docked = nil;
 		}
 	"fixedorigin" =>
 		c.flags |= Fixedorigin;
@@ -672,8 +693,16 @@ reshape(c: ref Client, tag: string, r: Rect): string
 		if(c.setimage(tag, img) == -1)
 			return "can't do two at once";
 	}
-	c.top();
+	totop(c);
 	return nil;
+}
+
+# c to the top, under a docked keyboard
+totop(c: ref Client)
+{
+	c.top();
+	if(docked != nil && docked != c)
+		docked.top();
 }
 
 sweep(ptr: chan of ref Pointer, r: Rect, offset: Point, borders: array of ref Image, move, show: int, min: Point): Rect
@@ -730,7 +759,10 @@ showborders(b: array of ref Image, r: Rect, show: int)
 
 showborder(b: ref Image, show: int, r: Rect): ref Image
 {
-	if(!show)
+	# a sweep just begun is narrower than two borders: the top and
+	# bottom edges between the sides are empty, and a window that size
+	# is refused
+	if(!show || r.dx() <= 0 || r.dy() <= 0)
 		return nil;
 	if(b != nil && b.r.size().eq(r.size()))
 		b.origin(r.min, r.min);
@@ -890,7 +922,7 @@ command(ctxt: ref Draw->Context, args: list of string, sync: chan of string)
 startwmsize(): chan of Rect
 {
 	rchan := chan of Rect;
-	fd := sys->open("#w/wmsize", Sys->OREAD);
+	fd := sys->open("#z/wmsize", Sys->OREAD);
 	if(fd == nil)
 		return rchan;
 	sync := chan of int;
@@ -947,14 +979,13 @@ exportproc(fd: ref Sys->FD)
 }
 
 
-# Synthetic input for tests: parse "/chan/uitest" writes and feed the
-# same channels real input arrives on.  Reads list the windows (above).
-uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
+# /chan/wmwindows: the windows, topmost first, "id minx miny maxx maxy"
+# a line, hidden ones not listed.  Input for a test is written to
+# /dev/pointer and /dev/keyboard, as for anything else on the screen.
+wmwindowsproc(f: ref Sys->FileIO)
 {
 	for(;;) alt {
 	(off, nil, nil, rc) := <-f.read =>
-		# the windows, topmost first: "id minx miny maxx maxy" each,
-		# so a test can check where moves and reshapes left them
 		if(rc == nil)
 			break;
 		t := "";
@@ -965,31 +996,9 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 		if(off > len b)
 			off = len b;
 		rc <-= (b[off:], nil);
-	(nil, data, nil, wc) := <-f.write =>
-		if(wc == nil)
-			break;
-		(n, toks) := sys->tokenize(string data, " \t\n");
-		err := "";
-		if(n >= 4 && hd toks == "ptr") {
-			x := int hd tl toks;
-			y := int hd tl tl toks;
-			b := int hd tl tl tl toks;
-			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
-		} else if(n >= 2 && hd toks == "key")
-			fakekbd <-= hd tl toks;
-		else if(n >= 2 && hd toks == "text"){
-			# the rest of the line, a rune at a time, as typed
-			t := string data;
-			if(t[len t - 1] == '\n')
-				t = t[0:len t - 1];
-			for(i := len "text "; i < len t; i++)
-				fakekbd <-= string t[i];
-		} else
-			err = "usage: ptr X Y BUTTONS | key RUNE | text STRING";
-		if(err != "")
-			wc <-= (0, err);
-		else
-			wc <-= (len data, nil);
+	(nil, nil, nil, wc) := <-f.write =>
+		if(wc != nil)
+			wc <-= (0, "wmwindows is read only");
 	}
 }
 
@@ -1000,6 +1009,7 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 # pointer, New, as rio's does: it only changes the cursor, and any button
 # but 3 cancels.  Returns whether the button is still down.
 
+Exitgrace: con 2000;	# ms for a client to take a Delete's exit
 Rnew, Rresize, Rmove, Rdelete, Rhide: con iota;
 menu3 := array[] of {"New", "Resize", "Move", "Delete", "Hide"};
 
@@ -1021,7 +1031,7 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 		r := sweepout(ptr, mc.buttons);
 		if(!r.eq(Rect((0, 0), (0, 0)))){
 			sweptr = r;
-			spawn command(clientctxt, "wm/sh" :: nil, nil);
+			spawn command(clientctxt, "wm/shell" :: nil, nil);
 		}
 	Rresize =>
 		(c, nil) := pointto(ptr, 1, mc.buttons);
@@ -1033,7 +1043,7 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 	Rmove =>
 		(c, at) := pointto(ptr, 0, mc.buttons);
 		if(c != nil && (w := c.window(".")) != nil){
-			c.top();
+			totop(c);
 			setcursor(boxcursor);
 			buttons = 4;
 			dragwin(ptr, c, w, at.sub(w.r.min), 0);
@@ -1129,9 +1139,57 @@ retheme()
 		spawn tellctl((hd hl).ctl, "retheme");
 }
 
+# A client takes its exit in its own loop; wm cannot kill it, not knowing
+# its process.  One that has not taken it in Exitgrace is stuck (a read
+# that never ends, say) and its window goes from the screen, or Delete
+# would do nothing; it keeps the exit, and leaves if it ever wakes.  One
+# that took it and stays is asking its user something, and stays.
 tellexit(c: ref Client)
 {
 	c.ctl <-= "exit";
+	sys->sleep(Exitgrace);
+	if(c.ctlwaiting > 0)
+		forcec <-= c;
+}
+
+dropwindows(c: ref Client)
+{
+	for(z := wmsrv->top(); z != nil && z != c; z = z.znext)
+		;
+	if(z == nil)
+		return;	# it left, or was hidden and is on the menu
+	off := screen.image.r.max.add((10000, 10000));
+	for(wl := c.wins; wl != nil; wl = tl wl){
+		w := hd wl;
+		if(w.img != nil)
+			w.img.origin(w.img.r.min, off);
+	}
+	forgetclient(c);
+	c.znext = nil;		# top() relinks it: remove() leaves it set
+}
+
+forgetclient(c: ref Client)
+{
+	c.remove();
+	forgethidden(c);
+	setclientlabel(c, nil);
+	if(c == ptrfocus)
+		ptrfocus = nil;
+	if(c == kbdfocus)
+		kbdfocus = nil;
+	if(c == controller)
+		controller = nil;
+	if(c == docked)
+		docked = nil;
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		if(z.flags & Kbdstarted)
+			break;
+	setkbdfocus(z);
+	# A window leaves the screen when its image is freed.  tellexit
+	# holds c through Exitgrace, so the images go now, not then.
+	for(wl := c.wins; wl != nil; wl = tl wl)
+		(hd wl).img = nil;
+	c.wins = nil;
 }
 
 # exitwhenempty: tell the main loop to exit once every window has gone
@@ -1173,6 +1231,9 @@ hide(c: ref Client)
 	hidden = c :: hidden;
 	if(kbdfocus == c)
 		setkbdfocus(wmsrv->top());
+	# what it draws is off the screen: an app that costs something while
+	# it is seen (a camera, an animation) can stop
+	spawn sendctl(c.ctl, "visible 0");
 }
 
 unhide(c: ref Client)
@@ -1202,8 +1263,9 @@ unhide(c: ref Client)
 		if(w.img != nil)
 			w.img.origin(w.img.r.min, w.r.min);
 	}
-	c.top();
+	totop(c);
 	setkbdfocus(c);
+	spawn sendctl(c.ctl, "visible 1");
 }
 
 # Window labels (rio's /dev/label), from the clients' "label" requests.

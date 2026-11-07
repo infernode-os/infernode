@@ -26,9 +26,8 @@ TMPD=$(mktemp -d)
 EMUPID=
 trap 'rm -rf "$OUT" "$TMPD"; [ -n "$EMUPID" ] && kill "$EMUPID" 2>/dev/null; true' EXIT HUP INT TERM
 
-# The editor keeps its state under /tmp/veltro/editor and leaves it when
-# killed; give it a /tmp of its own, or editor_test, run later in the same
-# tree, takes the files left for a running editor.
+# A /tmp of its own, so nothing the editor or the test makes stays in the
+# tree's.
 # emu does not exit while the editor runs: wait for the marker, then stop it.
 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c \
 	"bind -c '#U*$TMPD' /tmp; wm/editor & sleep 2; echo 'body 365' > /edit/1/body; echo '=== WROTE'; cat /edit/1/body; echo '=== READ'; sleep 3600" \

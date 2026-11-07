@@ -3,9 +3,11 @@ implement ToolEditor;
 #
 # editor - Veltro tool for controlling the Edit text editor
 #
-# Provides AI control over the Edit editor via its 9P filesystem
-# interface at /edit/. Supports reading/writing document body, cursor
-# positioning, search, and file operations.
+# Provides AI control over the Edit editor via its 9P filesystem,
+# posted as #seditor/fs and mounted at /mnt/editor by tools9p for this
+# tool alone. Supports reading/writing document body, cursor
+# positioning, search, and file operations. A command is carried out
+# before its write returns, and one the editor refuses is an error.
 #
 # Commands:
 #   read [body|addr]           Read document body or cursor address
@@ -43,7 +45,7 @@ ToolEditor: module {
 	schema: fn(): string;
 };
 
-EDIT_ROOT: con "/tmp/veltro/editor";
+EDIT_ROOT: con "/mnt/editor";
 
 init(): string
 {
@@ -67,9 +69,9 @@ doc(): string
 		"NOTE: This tool does NOT launch the editor. To START the editor,\n" +
 		"use the launch tool: 'launch editor'. This tool sends commands\n" +
 		"to an editor that is already visible in the presentation zone.\n\n" +
-		"How it works: The Editor app exposes its state as files under\n" +
-		"/tmp/veltro/editor/. This tool reads and writes those files.\n" +
-		"The editor polls for commands every 500ms.\n\n" +
+		"How it works: The Editor app serves its document as files\n" +
+		"(posted as #seditor/fs, mounted at /mnt/editor for this tool).\n" +
+		"A command is done when it returns; one refused is an error.\n\n" +
 		"Commands (only work after 'launch editor'):\n" +
 		"  read [body]              Read document body text\n" +
 		"  read addr                Read cursor position\n" +
@@ -97,7 +99,7 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"editor\"," +
-		"\"description\":\"Remote-control a running Editor app (launch with 'launch editor' first). Reads and writes /tmp/veltro/editor/ control files at ~500ms polling.\"," +
+		"\"description\":\"Remote-control a running Editor app (launch with 'launch editor' first). Its document is served as files; a command is done when it returns.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -178,20 +180,19 @@ dowrite(text: string): string
 {
 	if(text == "")
 		return "error: usage: write <text>";
-	# Write to body.in — edit polls this and replaces its buffer
-	return writefile(sys->sprint("%s/1/body.in", EDIT_ROOT), text);
+	# a write of body replaces the text
+	return writefile(sys->sprint("%s/1/body", EDIT_ROOT), text);
 }
 
 doappend(text: string): string
 {
 	if(text == "")
 		return "error: usage: append <text>";
-	# Read current state, append, submit via body.in
 	body := readfile(sys->sprint("%s/1/body", EDIT_ROOT));
 	if(len body >= 6 && body[0:6] == "error:")
 		return body;
 	newbody := body + text;
-	return writefile(sys->sprint("%s/1/body.in", EDIT_ROOT), newbody);
+	return writefile(sys->sprint("%s/1/body", EDIT_ROOT), newbody);
 }
 
 dosave(): string
@@ -301,7 +302,7 @@ readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r (is edit running?)", path);
+		return notrunning(path);
 
 	result := "";
 	buf := array[8192] of byte;
@@ -317,19 +318,28 @@ readfile(path: string): string
 
 writefile(path, data: string): string
 {
-	# Use create to handle both new files (ctl, body.in) and existing ones
-	fd := sys->create(path, Sys->OWRITE, 8r666);
+	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
-		return sys->sprint("error: cannot create %s: %r (is edit running?)", path);
+		return notrunning(path);
 
 	b := array of byte data;
 	n := sys->write(fd, b, len b);
 	fd = nil;
 
 	if(n != len b)
-		return sys->sprint("error: write failed: %r");
+		return sys->sprint("error: %r");
 
 	return "ok";
+}
+
+# The editor's files are there only while it runs (tools9p mounts its
+# posted server for this tool).
+notrunning(path: string): string
+{
+	(ok, nil) := sys->stat(EDIT_ROOT + "/ctl");
+	if(ok < 0)
+		return "error: the editor is not running (start it with 'launch editor')";
+	return sys->sprint("error: cannot open %s: %r", path);
 }
 
 currentpath(): string

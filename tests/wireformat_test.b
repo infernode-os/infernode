@@ -37,7 +37,7 @@ include "testing.m";
 include "wirefmt.m";
 	wirefmt: WireFmt;
 
-include "../appl/veltro/agentlib.m";
+include "agentlib.m";
 	agentlib: AgentLib;
 
 WireformatTest: module

@@ -48,6 +48,10 @@ FLMARGIN:	con 4;
 FLSCROLLWID:	con 12;
 FLGAP:		con 4;
 
+# samterm/flayer.c: two clicks at one place within this many
+# milliseconds are a double click
+Clicktime:	con 1000;
+
 # libdraw's getrect: the width of the rubber band
 Borderwidth:	con 4;
 
@@ -235,7 +239,8 @@ newflayer(tag, tp: int, r: Rect): ref Flayer
 		-1,		# typepoint
 		id,		# id
 		w,		# w
-		r		# r
+		r,		# r
+		0		# click
 	);
 	ctxt.flayers[n] = f;
 	ctxt.order = f :: ctxt.order;	# llinsert
@@ -794,20 +799,33 @@ buttonselect(fl: ref Flayer, s: string): int
 	}
 
 	if (hd l == "2") {
-		# Double click
+		# Double click, as Tk reports it: a press with bit 8 of the
+		# buttons set, which only X11's pointer marks
 		l = tl tl l;
 		s = tk->cmd(fl.t, fl.w + ".t index @" + hd l + "," + hd tl l);
 		fl.dot.first = fl.dot.last = coord2pos(t, fl, s);
+		fl.click = 0;
 		return 1;
 	}
 
 	rg := tk->cmd(fl.t, fl.w + ".t tag ranges sel");
 	if (rg == "") {
 		# Nothing selected, find insertion point
+		p0 := fl.dot.first;
 		l = tl tl l;
 		s = tk->cmd(fl.t, fl.w + ".t index @" + hd l + "," + hd tl l);
 		fl.dot.first = fl.dot.last = coord2pos(t, fl, s);
+		# flselect: a click where the last one left dot, within
+		# Clicktime of it, is a double click.  SDL's pointer never
+		# marks one, so this is how sam sees it there.
+		now := sys->millisec();
+		if (fl.click != 0 && now - fl.click < Clicktime && fl.dot.first == p0) {
+			fl.click = 0;
+			return 1;
+		}
+		fl.click = now;
 	} else {
+		fl.click = 0;
 		(n, l) = sys->tokenize(rg, " ");
 		#if (n == 4 && hd tl l == hd tl tl l)
 		#	lst := hd tl tl tl l;

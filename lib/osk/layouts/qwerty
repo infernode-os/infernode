@@ -1,0 +1,5 @@
+# QWERTY, the letters.  The format: lib/osk/layouts/dvorak.
+row	q w e r t y u i o p
+row	a s d f g h j k l
+row	shift:1.5 z x c v b n m del:1.5
+row	sym:1.5 next ,< space:4 .> enter:1.5

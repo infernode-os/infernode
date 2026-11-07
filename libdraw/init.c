@@ -17,11 +17,15 @@ int
 gengetwindow(Display *d, char *winname, Image **winp, Screen **scrp, int ref)
 {
 	int n, fd;
-	char buf[64+1];
+	char buf[64+1], obuf[64+1];
 	Image *image;
 
+	obuf[0] = 0;
+Retry:
 	fd = libopen(winname, OREAD);
 	if(fd<0 || (n=libread(fd, buf, sizeof buf-1))<=0){
+		if(fd >= 0)
+			libclose(fd);
 		*winp = d->image;
 		assert(*winp && (*winp)->chan != 0);
 		return 1;
@@ -30,12 +34,22 @@ gengetwindow(Display *d, char *winname, Image **winp, Screen **scrp, int ref)
 	buf[n] = '\0';
 	if(*winp != nil){
 		_freeimage1(*winp);
+		*winp = nil;
 		freeimage((*scrp)->image);
 		freescreen(*scrp);
 		*scrp = nil;
 	}
 	image = namedimage(d, buf);
 	if(image == 0){
+		/*
+		 * The name can change between reading it and attaching to the
+		 * image.  Retry while it is changing, but do not spin forever on
+		 * a stable invalid name.
+		 */
+		if(strcmp(buf, obuf) != 0){
+			strcpy(obuf, buf);
+			goto Retry;
+		}
 		*winp = nil;
 		return -1;
 	}

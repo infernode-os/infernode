@@ -48,6 +48,39 @@ rxdata(v: V): ref Data.Regexp
 	return nil;
 }
 
+# Patterns parsed, by source and flags: a regular expression literal
+# makes a new object each time it is evaluated, and each parsed and
+# compiled its pattern again (a literal in a function called for every
+# element of a list).  A pattern does not change once compiled; the
+# state of a match, lastIndex among it, is the object's.
+Npatcache: con 256;
+Maxpatcache: con 2048;
+patcache: array of list of (string, string, ref Jsre->Pattern);
+npatcache := 0;
+
+cachedpat(ps, fs: string): ref Jsre->Pattern
+{
+	if(patcache == nil)
+		return nil;
+	for(l := patcache[strhash(ps) % Npatcache]; l != nil; l = tl l) {
+		(s, f, p) := hd l;
+		if(s == ps && f == fs)
+			return p;
+	}
+	return nil;
+}
+
+cachepat(ps, fs: string, p: ref Jsre->Pattern)
+{
+	if(patcache == nil || npatcache >= Maxpatcache) {
+		patcache = array[Npatcache] of list of (string, string, ref Jsre->Pattern);
+		npatcache = 0;
+	}
+	b := strhash(ps) % Npatcache;
+	patcache[b] = (ps, fs, p) :: patcache[b];
+	npatcache++;
+}
+
 # RegExpInitialize
 rxinit(h: int, p, f: V): V
 {
@@ -57,12 +90,17 @@ rxinit(h: int, p, f: V): V
 	fs := "";
 	if(f.t != Tundef)
 		fs = tostring(f);
-	(fl, ferr) := jsre->parseflags(fs);
-	if(ferr != nil)
-		throwerr(SyntaxError, "invalid regular expression flags: " + ferr);
-	(pat, err) := jsre->parse(ps, fl);
-	if(err != nil)
-		throwerr(SyntaxError, err);
+	pat := cachedpat(ps, fs);
+	if(pat == nil) {
+		(fl, ferr) := jsre->parseflags(fs);
+		if(ferr != nil)
+			throwerr(SyntaxError, "invalid regular expression flags: " + ferr);
+		err: string;
+		(pat, err) = jsre->parse(ps, fl);
+		if(err != nil)
+			throwerr(SyntaxError, err);
+		cachepat(ps, fs, pat);
+	}
 	odata[h] = ref Data.Regexp(pat, ps, fs, nil);
 	setv(objv(h), alastindex, num(0.0), 1);
 	return objv(h);

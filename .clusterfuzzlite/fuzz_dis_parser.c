@@ -24,6 +24,32 @@ char exNomem[] = "out of memory";
 int cflag;
 Type Tarray = { 1, nil, nil, sizeof(Array) };
 
+/*
+ * load.c names the first VM, and takes a lock around compiling (#944); the
+ * parser runs in neither, so the VM is empty and the lock is nothing.
+ */
+Vm vm0;
+
+void*
+libqlalloc(void)
+{
+	static char lock;
+
+	return &lock;
+}
+
+void
+libqlockproc(void *l)
+{
+	USED(l);
+}
+
+void
+libqunlockproc(void *l)
+{
+	USED(l);
+}
+
 void*
 mallocz(ulong n, int clear)
 {

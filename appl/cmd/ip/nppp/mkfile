@@ -18,6 +18,11 @@ SYSMODULES=\
 	dict.m\
 	string.m\
 	lock.m\
+	arg.m\
+	cfgfile.m\
+	sh.m\
+	translate.m\
+	wmlib.m\
 
 DISBIN=$ROOT/dis/ip/nppp
 

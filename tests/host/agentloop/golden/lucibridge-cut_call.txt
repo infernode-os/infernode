@@ -1,0 +1,22 @@
+# lucibridge cut_call
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_cut_call_0_0 write {"path": "\/usr\/agentloop\/cut.txt", "content": "half"}
+tool-result call_cut_call_0_0:
+  | error: not run: your reply reached the output limit while this call was being written, so its arguments may be cut off.  Send the call again, complete.  If it is a large write, write the file in smaller parts.
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:cut_call go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Sent again.
+  | 

@@ -90,9 +90,17 @@ nprog(void)
  * been allocated or freed since, and a heap of a few hundred MB (a web
  * page laid out) took a core to do it, over and over, for as long as
  * the emulator sat idle.
+ *
+ * Going round is counted over however many idle moments it takes, while
+ * the heap does not change between them (idlemark, idlefrom): a program
+ * that wakes now and then to do nothing (Charon's) cuts each moment
+ * short, and counted afresh in each one the three colours were never
+ * reached, so the collector went round for ever.
  */
 static ulong idleseen;
 static int idleknown;
+static ulong idlemark;	/* the heap's activity when idlefrom was taken */
+static int idlefrom;	/* gccolor then */
 
 static void
 execatidle(void)
@@ -103,12 +111,16 @@ execatidle(void)
 		return;
 	if(idleknown && heapactivity() == idleseen)
 		return;
+	if(heapactivity() != idlemark) {
+		idlemark = heapactivity();
+		idlefrom = gccolor;
+	}
 
 	gcidle++;
 	up->type = IdleGC;
 	up->iprog = nil;
 	addrun(up->prog);
-	done = gccolor+3;
+	done = idlefrom+3;
 	while(gccolor < done && gcruns()) {
 		if(isched.vmq != nil || isched.runhd != isched.runtl) {
 			gcpartial++;
@@ -119,10 +131,11 @@ execatidle(void)
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
 	}
-	if(gccolor >= done) {	/* all the way round, not cut short */
+	if(gccolor >= done) {	/* all the way round since the heap last changed */
 		idleseen = heapactivity();
 		idleknown = 1;
 	}
+	idlemark = heapactivity();	/* what this pass freed is not a change */
 	up->type = Interp;
 	delrunq(up->prog);
 }
@@ -145,10 +158,14 @@ newprog(Prog *p, Modlink *m)
 	}
 	n = malloc(sizeof(Prog)+sizeof(Osenv));
 	if(n == 0){
-		if(p == nil)
+		/*
+		 * A first Prog, with no parent: at boot, with no error
+		 * label, a panic; from a call that can fail, its error (as
+		 * the native kernel's #X vmrun needs).
+		 */
+		if(p == nil && (up == nil || up->nerr == 0))
 			panic("no memory");
-		else
-			error(exNomem);
+		error(exNomem);
 	}
 
 	n->pid = ++pidnum;
@@ -181,8 +198,8 @@ newprog(Prog *p, Modlink *m)
 	h = D2H(m);
 	h->ref++;
 	Setmark(h);
-	n->R.M = m;
-	n->R.MP = m->MP;
+	n->reg.M = m;
+	n->reg.MP = m->MP;
 	if(m->MP != H)
 		Setmark(D2H(m->MP));
 	addrun(n);
@@ -247,8 +264,14 @@ delprog(Prog *p, char *msg)
 
 	o = p->osenv;
 	release();
-	closepgrp(o->pgrp);
+	/*
+	 * The fds before the name space: a Prog that mounted a pipe and
+	 * holds its other end (or shares a table that does) waited in the
+	 * name space's close for a clunk only that end's close could
+	 * answer, with a hangup, and never exited (nativefuzz).
+	 */
 	closefgrp(o->fgrp);
+	closepgrp(o->pgrp);
 	closeegrp(o->egrp);
 	closesigs(o->sigs);
 	acquire();
@@ -302,9 +325,8 @@ swiprog(Prog *p)
 
 	lock(&procs.l);
 	for(q = procs.head; q; q = q->next) {
-		if(q->iprog == p) {
+		if(swiprogproc(q, p)) {
 			unlock(&procs.l);
-			swiproc(q, 1);
 			return;
 		}
 	}
@@ -330,7 +352,7 @@ exprog(Prog *p, char *exc)
 	/* similar code to killprog but not quite */
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -426,11 +448,36 @@ propex(Prog *p, char *estr)
 		exprog(pgl, estr);
 }
 
+/*
+ * Is the Prog this proc works for being killed (devmnt: a killed
+ * Prog's 9P calls are abandoned, not waited for)? Its kill, set and
+ * not yet raised, or raised and exiting.
+ */
+int
+upkilled(void)
+{
+	Prog *p;
+
+	if(up == nil)
+		return 0;
+	if(up->killing)
+		return 1;	/* closing a dying Prog's groups: killprog, progexit */
+	if(up->type != Interp)
+		return 0;
+	p = up->iprog;
+	if(p == nil)
+		p = isched.runhd;
+	if(p == nil)
+		return 0;
+	return p->kill != nil || (p->flags & Pkilled) != 0;
+}
+
 int
 killprog(Prog *p, char *cause)
 {
 	Osenv *env;
 	char msg[ERRMAX+2*KNAMELEN];
+	int okilling;
 
 	if(p == isched.runhd) {
 		p->kill = "";
@@ -441,7 +488,7 @@ killprog(Prog *p, char *cause)
 
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -457,8 +504,9 @@ killprog(Prog *p, char *cause)
 		p->flags |= Pkilled;
 		p->state = Pexiting;
 		swiprog(p);
-		/* No break */
+		return 0;
 	case Pexiting:
+		swiprog(p);
 		return 0;
 	case Pbroken:
 	case Pdebug:
@@ -482,6 +530,7 @@ killprog(Prog *p, char *cause)
 		return 0;
 	}
 
+
 	/*
 	 * Exiting before propex: killing the group's others can release the
 	 * VM (delprog), and a killprog or exprog of p from another thread
@@ -490,12 +539,22 @@ killprog(Prog *p, char *cause)
 	p->state = Pexiting;
 	propex(p, "killed");
 
-	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
+	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
+	/*
+	 * Destroyed here, in the killer: its closes are a killed Prog's,
+	 * and a 9P clunk among them is sent and not waited for (devmnt,
+	 * upkilled). Waited for, one on a server that never answers held
+	 * the killer -- a shell's kill, a group's leader -- for good
+	 * (tools/sysfuzz).
+	 */
+	okilling = up->killing;
+	up->killing = 1;
 	gclock();
-	destroystack(&p->R);
+	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
+	up->killing = okilling;
 
 	return 1;
 }
@@ -545,6 +604,63 @@ addgrp(Prog *n, Prog *p)
 	}
 }
 
+/*
+ * A read of /prog/n/grpwait waits for n's process group, as it was when
+ * the file was opened, to have no Prog left: delgrp posts to each such
+ * reader's queue as it frees the group (a group is freed with its last
+ * Prog, and group ids are pids, never reused).  The list is changed and
+ * walked with the interpreter held.
+ */
+typedef struct Grpwait Grpwait;
+struct Grpwait
+{
+	int	gid;
+	Queue*	q;
+	Grpwait*	next;
+};
+static Grpwait *grpwaits;
+
+void
+grpwaitadd(int gid, Queue *q)
+{
+	Grpwait *w;
+
+	w = malloc(sizeof(*w));
+	if(w == nil)
+		error(Enomem);
+	w->gid = gid;
+	w->q = q;
+	w->next = grpwaits;
+	grpwaits = w;
+}
+
+void
+grpwaitdel(Queue *q)
+{
+	Grpwait **l, *w;
+
+	for(l = &grpwaits; (w = *l) != nil; ){
+		if(w->q == q){
+			*l = w->next;
+			free(w);
+		}else
+			l = &w->next;
+	}
+}
+
+static void
+grpgone(int gid)
+{
+	Grpwait *w;
+	char buf[16];	/* Flawfinder: ignore — an int's decimal, bounded by sizeof buf below */
+	int n;
+
+	n = snprint(buf, sizeof(buf), "%d", gid);
+	for(w = grpwaits; w != nil; w = w->next)
+		if(w->gid == gid)
+			qproduce(w->q, buf, n);
+}
+
 static Progs*
 delgrp(Prog *p)
 {
@@ -582,6 +698,7 @@ delgrp(Prog *p)
 					pg->child = cg;
 				}
 			}
+			grpgone(g->id);
 			free(g);
 		}while((g = pg) != nil && g->head == nil);
 	}
@@ -625,6 +742,23 @@ grpbyid(int gid, int *pids, int npid)
 	return nil;
 }
 
+/*
+ * The group with id gid, found without allocating a pid list.  Group ids are
+ * pids and are never reused.  This is the low-memory killgrp path: killprog
+ * can release the VM and free the target group, so that path must reacquire
+ * the group by identity after every kill rather than retain its pointer.
+ */
+static Progs*
+grpbyidall(int gid)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && f->group->id == gid)
+			return f->group;
+	return nil;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
@@ -653,8 +787,37 @@ killgrp(Prog *p, char *msg)
 			npid++;
 	/* use pids not Prog* because state can change during killprog (eg, in delprog) */
 	pids = malloc(npid*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list: kill them anyway, the first not
+		 * yet killed each time round (killprog can change the
+		 * group), as many times as it had Progs. A kill refused
+		 * for want of memory left a group running when killing
+		 * it is how memory is got back (os/port/chaos.c: a
+		 * sysfuzz epoch's hundreds of Progs, never killed).
+		 */
+		g->flags |= Pkilled;
+		if(waserror()){
+			if((g = grpbyidall(gid)) != nil)
+				g->flags &= ~Pkilled;
+			nexterror();
+		}
+		for(i = 0; i < npid; i++){
+			for(f = g->head; f != nil; f = f->grpnext)
+				if(f != currun() && (f->flags & Pkilled) == 0 &&
+				   f->state != Pexiting && f->state != Pbroken)
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+			if((g = grpbyidall(gid)) == nil)
+				break;
+		}
+		poperror();
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
+		return 1;
+	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
 		pids[npid++] = f->pid;
@@ -675,6 +838,76 @@ killgrp(Prog *p, char *msg)
 		g->flags &= ~Pkilled;
 	free(pids);
 	return 1;
+}
+
+static int
+grptreedescendant(Progs *g, Progs *root)
+{
+	for(; g != nil; g = g->parent)
+		if(g == root)
+			return 1;
+	return 0;
+}
+
+static void
+cleargrptreekilled(int *gids, int n)
+{
+	int i;
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		for(i = 0; i < n; i++)
+			if(f->group != nil && f->group->id == gids[i]){
+				f->group->flags &= ~Pkilled;
+				break;
+			}
+}
+
+/* Kill a cleanup domain, including groups made with NEWPGRP below it. */
+int
+killgrptree(Prog *p, char *msg)
+{
+	int i, n, *gids, *pids;
+	Prog *f;
+	Progs *g;
+
+	g = p->group;
+	if(g == nil)
+		return 0;
+	/*
+	 * Scan the VM's flat Prog list rather than recursing through child groups:
+	 * an adversary can build a deep NEWPGRP chain, and cleanup must not turn
+	 * that into a C-stack overflow.
+	 */
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g))
+			n++;
+	pids = malloc(2*n*sizeof(int));
+	if(pids == nil)
+		error(Enomem);
+	gids = pids+n;
+	n = 0;
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g)){
+			f->group->flags |= Pkilled;
+			pids[n] = f->pid;
+			gids[n++] = f->group->id;
+		}
+	if(waserror()){
+		cleargrptreekilled(gids, n);
+		free(pids);
+		nexterror();
+	}
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f != nil && f != currun())
+			killprog(f, msg);
+	}
+	poperror();
+	cleargrptreekilled(gids, n);
+	free(pids);
+	return 0;
 }
 
 char	changup[] = "channel hangup";
@@ -713,9 +946,14 @@ addprog(Proc *p)
 {
 	Prog *n;
 
-	n = malloc(sizeof(Prog));
-	if(n == nil)
-		panic("no memory");
+	/*
+	 * Waited for, not panicked over, and not with an error: release()
+	 * makes a VM's next kproc with isched.creating set, which an error
+	 * would leave set (no kproc made again). A main pool too small
+	 * (-pmain) panicked the emulator here.
+	 */
+	while((n = malloc(sizeof(Prog))) == nil)
+		waitmem();
 	p->prog = n;
 	n->osenv = p->env;
 }
@@ -857,12 +1095,36 @@ schedmod(Module *m)
 	p = newprog(nil, ml);
 	h = D2H(ml);
 	h->ref--;
-	p->R.PC = m->entry;
-	fp = &f;
+	p->reg.PC = m->entry;
+	/*
+	 * newstack copies the frame it is given, t->size bytes of it: a
+	 * Frame on this stack is only its 32-byte header, so the rest of
+	 * the entry frame was whatever followed it here (initmem resets
+	 * the pointers, not the rest), read past f (AddressSanitizer:
+	 * stack-buffer-overflow, 136 bytes from 32). Given a zeroed frame
+	 * of the entry type's size, the Prog starts with one.
+	 */
+	t = m->entryt;
+	if(t != nil && t->size > sizeof(Frame)){
+		fp = mallocz(t->size, 1);
+		if(fp == nil)
+			error(exNomem);
+	}else{
+		memset(&f, 0, sizeof(f));
+		fp = &f;
+	}
+	fp->t = t;
 	R.s = &fp;
-	f.t = m->entryt;
+	if(waserror()){
+		if(fp != &f)
+			free(fp);
+		nexterror();
+	}
 	newstack(p);
-	initmem(m->entryt, p->R.FP);
+	poperror();
+	if(fp != &f)
+		free(fp);
+	initmem(m->entryt, p->reg.FP);
 
 	return p;
 }
@@ -872,9 +1134,9 @@ static char*
 m(Prog *p)
 {
 	if(p)
-		if(p->R.M)
-			if(p->R.M->m)
-				return p->R.M->m->name;
+		if(p->reg.M)
+			if(p->reg.M->m)
+				return p->reg.M->m->name;
 	return "nil";
 }
 */
@@ -889,6 +1151,12 @@ m(Prog *p)
  * culprit when starvation is detected.
  */
 Proc*	vmowner;
+/*
+ * where a proc is in native code: its program counter, from a host that
+ * can interrupt it (the profiler's view of compiled code, whose R.PC is
+ * not kept as it runs); nil where the host cannot
+ */
+uintptr	(*hostprocpc)(Proc*);
 char	vmownertext[KNAMELEN];
 ulong	vmownerms;
 
@@ -984,12 +1252,19 @@ void
 release(void)
 {
 	Proc *p, **pq;
+	Prog *r;
 	int f;
 
 	vmclearowner();
 
-	if(up->type == Interp)
-		up->iprog = isave();
+	if(up->type == Interp){
+		r = isave();
+		lock(&up->rlock);
+		up->iprog = r;
+		if(r->kill != nil || (r->flags & Pkilled) != 0)
+			up->intpend = 1;
+		unlock(&up->rlock);
+	}
 	else
 		delrun(Prelease);
 
@@ -1097,7 +1372,7 @@ progexit(void)
 			char *pc = strstr(estr, "pc=");
 
 			if(pc != nil)
-				R.PC = r->R.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
+				R.PC = r->reg.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
 		}
 		print("[%s] Broken: \"%s\"\n", m->name, estr);
 	}
@@ -1118,10 +1393,19 @@ progexit(void)
 		return;
 	}
 
+	/*
+	 * Its closes are a dying Prog's, killed or not: a 9P clunk among
+	 * them is sent and waited for Mntexitms at most (devmnt,
+	 * upkilled). Waited for without end, Progs exiting on servers that
+	 * never answer held their kprocs until none was left (nativefuzz,
+	 * "no procs").
+	 */
+	up->killing = upkilled() ? 1 : 2;
 	gclock();
 	destroystack(&R);
 	delprog(r, msg);
 	gcunlock();
+	up->killing = 0;
 
 	if(isched.head == nil)
 		cleanexit(0);
@@ -1244,9 +1528,23 @@ vmachine(void *a)
 	startup();
 
 	while(waserror()) {
+		/*
+		 * An error out of the collector (execatidle, the busy pass
+		 * below: a type's free function raising) is no Prog's
+		 * exception. currun() is this proc's own up->prog then, with
+		 * no registers and a nil exval, and handler() faulted reading
+		 * them ("SYS: process dis faults" at handler+0x60, as
+		 * keyring's freeSK did when a sweep had freed its SigAlg
+		 * first). The collector's state is half-way through a block;
+		 * say what was raised and stop, as os/port/dis.c does.
+		 */
+		if(up->type != Interp)
+			panic("vmachine: error in the garbage collector (type %#x): %s",
+				up->type, up->env->errstr);
 		if(up->iprog != nil)
 			acquire();
-		if(handler(up->env->errstr) == 0) {
+		/* A ctl kill revokes the Prog; a catch-all cannot retain it. */
+		if((currun()->flags & Pkilled) != 0 || handler(up->env->errstr) == 0) {
 			propex(currun(), up->env->errstr);
 			progexit();
 		}
@@ -1320,6 +1618,7 @@ disinit(void *a)
 
 	opinit();
 	modinit();
+	typesperm = 0;		/* builtin types are shared and permanent; a module's are its VM's (interp.h) */
 	excinit();
 
 	root = load(initmod);

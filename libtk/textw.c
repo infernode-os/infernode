@@ -2989,16 +2989,23 @@ tktextinserti(Tk *tk, char *arg, char **val)
 	tbuf = nil;
 	n = strlen(arg) + 1;
 	if(n < Tkmaxitem)
-		tkword(tk->env->top, arg, buf, buf+sizeof(buf), nil);
+		tkword(tk->env->top, arg, buf, buf+Tkmaxitem, nil);
 	else {
 		tbuf = malloc(n);
 		if(tbuf == nil) {
 			free(buf);
 			return TkNomem;
 		}
-		tkword(tk->env->top, arg, tbuf, buf+n, nil);
+		tkword(tk->env->top, arg, tbuf, tbuf+n, nil);
 	}
-	if(*buf == '\0')
+	/*
+	 * A key that is not a character (an arrow, a function key: the
+	 * range keyboard.h gives them) was typed as one, a private-use
+	 * glyph, when no binding of its own took it.  It types nothing,
+	 * and leaves the selection alone.
+	 */
+	tkdropkeys(tbuf==nil ? buf : tbuf);
+	if(*(tbuf==nil ? buf : tbuf) == '\0')
 		goto Ret;
 	if(!tktmarkind(tk, "insert", &ix)) {
 		print("tktextinserti: botch\n");

@@ -3,8 +3,10 @@ implement ToolFractal;
 #
 # fractal - Veltro tool for controlling the Mandelbrot/Julia viewer
 #
-# Provides AI control over the fractal viewer via real-file IPC
-# at /tmp/veltro/fractal/. The viewer must be running (launch fractals).
+# Provides AI control over the fractal viewer through its served files
+# (#sfractal/fs, mounted at /mnt/fractal by tools9p for this tool
+# alone).  The viewer must be running (launch fractals).  A command is
+# done when it returns; one the viewer refuses is an error.
 #
 # Commands:
 #   state                          Read fractal state (type, coords, depth)
@@ -34,7 +36,7 @@ ToolFractal: module {
 	schema: fn(): string;
 };
 
-FRACT_ROOT: con "/tmp/veltro/fractal";
+FRACT_ROOT: con "/mnt/fractal";
 
 init(): string
 {
@@ -64,8 +66,8 @@ doc(): string
 		"  fill on|off                    Toggle fill mode\n" +
 		"  restart                        Restart computation\n\n" +
 		"The fractal viewer must be running. Use 'launch fractals' to start it.\n" +
-		"Commands are processed once per tick (~500ms). Send one command\n" +
-		"at a time and wait for a state change before sending the next.\n\n" +
+		"A command is done when the tool returns (the image may still be\n" +
+		"computing: state says 'computing 1'); a bad one is an error.\n\n" +
 		"Coordinates are in the complex plane (clamped to ±4):\n" +
 		"  Full Mandelbrot: x=[-2, 1] y=[-1.5, 1.5]\n" +
 		"  Interesting spots:\n" +
@@ -170,7 +172,7 @@ readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r (is fractals running?)", path);
+		return notrunning(path);
 
 	result := "";
 	buf := array[8192] of byte;
@@ -186,18 +188,27 @@ readfile(path: string): string
 
 writefile(path, data: string): string
 {
-	fd := sys->create(path, Sys->OWRITE, 8r666);
+	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
-		return sys->sprint("error: cannot create %s: %r (is fractals running?)", path);
+		return notrunning(path);
 
 	b := array of byte data;
 	n := sys->write(fd, b, len b);
 	fd = nil;
 
 	if(n != len b)
-		return sys->sprint("error: write failed: %r");
+		return sys->sprint("error: %r");
 
 	return nil;
+}
+
+# The viewer's files are there only while it runs.
+notrunning(path: string): string
+{
+	(ok, nil) := sys->stat(FRACT_ROOT + "/ctl");
+	if(ok < 0)
+		return "error: fractals is not running (start it with 'launch fractals')";
+	return sys->sprint("error: cannot open %s: %r", path);
 }
 
 # --- String helpers ---

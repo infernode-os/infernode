@@ -192,7 +192,7 @@ profgen(Chan *c, char *name, Dirtab *d, int nd, int s, Dir *dp)
 
 	if(s == DEVDOTDOT) {
 		mkqid(&qid, Qdir, 0, QTDIR);
-		devdir(c, qid, "#P", 0, eve, 0555, dp);
+		devdir(c, qid, "#K", 0, eve, 0555, dp);
 		return 1;
 	}
 
@@ -241,7 +241,7 @@ profgen(Chan *c, char *name, Dirtab *d, int nd, int s, Dir *dp)
 static Chan*
 profattach(char *spec)
 {
-	return devattach('P', spec);
+	return devattach('K', spec);
 }
 
 static Walkqid*
@@ -566,13 +566,28 @@ mlook(Module *m, int limbo, int vm, int scale, int origin)
 	return nil;
 }
 
+extern	Proc*	vmowner;	/* modules, the module list, is interp.h's: a VM's own (#944) */
+
+/* the compiled module whose code holds pc */
+static Module*
+jitmodule(uintptr pc)
+{
+	Module *m;
+
+	for(m = modules; m != nil; m = m->link)
+		if(m->compiled && m->pctab != nil && pc >= (uintptr)m->prog && pc < (uintptr)m->prog + m->jitsize)
+			return m;
+	return nil;
+}
+
 static void
 sampler(void* a)
 {
 	int i;
-	Module *m;
+	Module *m, *jm;
 	Record *r;
 	Inst *p;
+	uintptr pc;
 
 	USED(a);
 	for(;;) {
@@ -586,6 +601,14 @@ sampler(void* a)
 			continue;
 		}
 		p = R.PC;
+		/*
+		 * compiled code does not keep R.PC as it runs: where the
+		 * VM's proc is, from the host, if it is in a compiled module
+		 */
+		if(hostprocpc != nil && vmowner != nil && (pc = hostprocpc(vmowner)) != 0 && (jm = jitmodule(pc)) != nil){
+			m = jm;
+			p = (Inst*)pc;
+		}
 		r = mlook(m, 0, 0, 1, 0);
 		if(r == nil){
 			unlock(&profile.l);
@@ -613,7 +636,7 @@ cpxec(Prog *p)
 	Record *r;
 	Prog *n;
 
-	R = p->R;
+	R = p->reg;
 	R.MP = R.M->MP;
 	R.IC = p->quanta;
 
@@ -651,7 +674,7 @@ cpxec(Prog *p)
 		}while(--R.IC != 0);
 	}
 
-	p->R = R;
+	p->reg = R;
 }
 
 /* memory profiling */
@@ -798,7 +821,7 @@ memprofmi(int c, ulong pc, ulong v, ulong n)
 }
 
 Dev profdevtab = {
-	'P',
+	'K',	/* kprof's letter in Plan 9, 9front and Inferno's native kernels; #P is arch (docs/DEVICE-LETTERS.md) */
 	"prof",
 
 	devinit,

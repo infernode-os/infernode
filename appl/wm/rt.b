@@ -56,7 +56,7 @@ rt_cfg := array[] of {
 	"pack .m.open .m.view .m.prop -side left",
 	"pack .m.l -side right",
 	"frame .b",
-	"text .b.t -width 12c -height 7c -yscrollcommand {.b.s set} -bg white",
+	"text .b.t -width 12c -height 7c -yscrollcommand {.b.s set}",
 	"scrollbar .b.s -command {.b.t yview}",
 	"pack .b.s -fill y -side left",
 	"pack .b.t -fill both -expand 1",

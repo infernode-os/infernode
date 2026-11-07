@@ -51,7 +51,6 @@ int	fbconsinit(Fbinfo*);
 int	fbconsadd(Fbinfo*);
 int	fbconsscreens(void);
 int	fbconsreleased(void);
-int	fbconsvoff(void);
 void	fbconsstop(void);
 void	fbconsputs(char*, int);
 void	swcursorat(int, int);

@@ -6,6 +6,8 @@ pointer \- mouse and stylus interface
 .PP
 .B /dev/cursor
 .br
+.B /dev/fingers
+.br
 .B /dev/pointer
 .SH DESCRIPTION
 The
@@ -50,15 +52,76 @@ is a time stamp in milliseconds.
 .PP
 Writing a record of the above form to
 .B pointer
-moves the displayed cursor to the given
+sends that pointer event, as if from the device:
+.I buttons
+held at
+.I x
+and
+.IR y ;
+.I msec
+is ignored.
+Under
+.IR emu (1)
+each such write is delivered as an event of its own, motion included,
+in the order written, where the host's own pointer reports only its
+latest position between changes of buttons; a write waits if events
+are waiting to be read.
+So a press, a move and a release written one after another reach the
+reader as a drag.
+The host's pointer is not moved.
+A record with only
 .I x
 and
 .I y
-position;
-.I buttons
+moves the pointer there, the host's too, with the buttons as they are.
+.PP
+A touch screen's fingers, every one, are read from
+.BR fingers ,
+an event a read:
+.IP
+.BI f "id x y on msec"
+.PP
+in the fixed-width fields
+.B pointer
+uses.
+.I On
+is 1 while the finger is on the screen (as it lands, and as it moves)
+and 0 when it lifts;
+.I id
+is the finger's from the event it lands until the one it lifts, a small
+number free again after.
+.B Pointer
+is the first finger as a mouse, for every program that reads it; a
+program that needs every finger, a keyboard on the screen typed with
+two thumbs whose touches overlap
+.RI ( wm-osk (1)),
+reads
+.B fingers
+as well.  One program reads it at a time; while none does, touches are
+dropped, not kept for a reader who comes later.  A write of
+.BI f "id x y on"
+is such an event, from a driver that is a program (the native kernel's
+touch panel,
+.BR os/init/touch.b )
+or a test; a write waits for room in the queue, where an event from
+the GUI backend, which may not wait, is dropped (room is kept for
+fingers lifting).
+On the native kernel a write of
+.BI a "id x y on"
+is the same with
+.I x
 and
-.I msec
-are ignored.
+.I y
+fractions of the screen, 0 to 65535, as
+.B pointer
+takes
+.BI a "x y buttons"
+there: a USB touchscreen's driver knows where on its surface it is
+touched but not how big the screen is, and the kernel scales them.
+Either kind of touch screen's driver makes the pointer of its fingers
+by
+.IR touchgest (2):
+a finger held still is button 3, two dragged the wheel.
 .PP
 Writing an
 .IR image (6)
@@ -77,4 +140,5 @@ format.
 .SH SEE ALSO
 .IR wm (1),
 .IR draw-intro (2),
+.IR touchgest (2),
 .IR image (6)

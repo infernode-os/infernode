@@ -514,7 +514,7 @@ send(msg: ref Message): string
 			smtppass = sp;
 		}
 	}
-	(ok, serr) := smtp->authopen(smtpuser, smtppass, smtpserver, 1);
+	(ok, serr) := smtp->authopen(smtpuser, smtppass, smtpserver, Smtp->IMPLICIT_TLS);
 	if(ok < 0)
 		return "SMTP connect: " + serr;
 

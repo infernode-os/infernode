@@ -11,6 +11,45 @@ if {! ~ $user ''} {
 	ls /usr/inferno/secstore/$user >[2] /dev/null
 }
 
+# The keyboard on the screen for the password, on a screen with no
+# keyboard (a phone, the Pi's touch panel): it shows itself once the
+# screen is touched with none attached, and in secret mode shows
+# nothing of what is typed and learns none of it (osk(1)).  It goes
+# when the login is done; Lucifer starts its own.  $osk off: not.
+oskpid=()
+if {! ~ $osk off} {
+	if {! ~ $skiplogon 1} {
+		if {ftest -f /dis/wm/osk.dis} {
+			wm/osk -s -M secret &
+			oskpid=$apid
+		}
+	}
+}
+
+# The interfaces the login screen offers, and the file the one chosen is
+# kept in:
+#
+#	Lucia	the agent's three zones (lucifer), the default
+#	Desktop	windows (wm/wm), a shell to begin with
+#
+# wm/logon shows them and writes the name chosen to $interfacefile; it
+# knows nothing of what each is, which is this script's, below.  The
+# file is the user's (/usr/<user>/lib or, for a user with no home of
+# their own, /usr/inferno/lib, kept in ~/.infernode as the plumbing
+# rules are), so the interface chosen is the one the screen offers
+# next time.  It is the login screen's: with $skiplogon (the tests',
+# a developer's) the interface is Lucia, as it always was, whatever was
+# chosen there.  $interface, set before this runs, starts that one
+# either way.  A phone or tablet has Lucia alone: wm/wm's windows are not for a
+# touch screen.
+interfaces=(Lucia Desktop)
+if {~ $infmobile 1} {interfaces=(Lucia)}
+interfacefile=/usr/^$user^/lib/interface
+if {! ftest -d /usr/^$user^/lib} {
+	mkdir -p /usr/inferno/lib >[2] /dev/null
+	interfacefile=/usr/inferno/lib/interface
+}
+
 # Login screen (unlocks secstore, loads keys into factotum).
 #
 # Skippable via $skiplogon. Mobile dev iteration (hellaphone) sets
@@ -32,7 +71,7 @@ if {! ~ $user ''} {
 # one with. ($status is copied first: `if` resets it from every
 # condition it evaluates, the `~` included.)
 if {! ~ $skiplogon 1} {
-	if {wm/logon} {
+	if {wm/logon -i $interfacefile $interfaces} {
 		echo 'boot: logged in — secstore keys are in factotum'
 	}{
 		why=$status
@@ -45,6 +84,18 @@ if {! ~ $skiplogon 1} {
 }{
 	echo 'boot: skiplogon=1 — wm/logon bypassed (dev mode; no factotum, no secstore)'
 }
+if {! ~ $#oskpid 0} {kill -g $oskpid >[2] /dev/null}
+
+# The interface to start: $interface if it was set, else the one chosen
+# at the login screen, else the first; and one of $interfaces
+# whichever it is.
+if {~ $#interface 0} {
+	if {! ~ $skiplogon 1} {interface=`{cat $interfacefile >[2] /dev/null}}
+}
+known=0
+for offered in $interfaces {if {~ $offered $interface} {known=1}}
+if {~ $known 0} {interface=${hd $interfaces}}
+echo 'boot: interface' $interface
 
 # (Re-)start LLM service in the background: lib/lucifer/llmsrv.sh,
 # which a standalone Xenith runs too.  Backgrounded so the desktop
@@ -80,14 +131,32 @@ if {ftest -f /lib/veltro/sources/email.conf} {
 	echo register email /dis/veltro/sources/email.dis `{cat /lib/veltro/sources/email.conf} > /mnt/msg/ctl
 }
 
-# GUI services
+# Desktop: windows, the way Inferno always had them.  wm/wm, its first
+# command /lib/wm/desktop.sh: a plumber on the desktop's rules, which
+# start a program for what nobody has open (a file in Xenith, a web
+# page in Charon) where Lucia's send everything to its presentation
+# zone, then a shell.  The plumber's /chan is bound here, before
+# wm/wm, so that wm/wm's /chan/wmctl and the plumber's ports are in
+# the one directory everything started sees.  Nothing of Lucia's
+# below is started.  wm/wm at the top has no Quit (closing the emu's
+# window ends it); should it return, the emu halts, as Lucia's Quit
+# halts it, rather than leave a display nothing draws on.
+if {~ $interface Desktop} {
+	bind -bc '#splumber' /chan
+	wm/wm sh /lib/wm/desktop.sh
+	echo halt > /dev/sysctl
+	exit
+}
+
+# Lucia: the GUI services, then lucifer.
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
 # The messages are activity 0's to hand on: /mnt/msg is the read-only
 # summary (status), /mnt/msg/draft the proposal endpoint a task writes a
-# draft to (queued for the user, never sent by itself).  nsconstruct keeps
-# each to that.  Without them meta.txt's way to delegate mail was refused.
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
+# draft to (queued for the user, never sent by itself), /mnt/msg/flag where
+# a message is marked seen.  nsconstruct keeps each to that.  Without them
+# meta.txt's and the message policy's ways to delegate mail were refused.
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw -p /mnt/msg/flag:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 # /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
 # cases where it silently failed and the redirect below produced no log
 # file (GH #230 sphynkx report). Force /tmp into existence and pre-create
@@ -100,6 +169,13 @@ mkdir -p /tmp
 # a sleep between them only made this order likely.
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
+
+# Incoming messages reach the agent only when the user has turned it on
+# (/lib/veltro/messaging.conf watch=on; shipped off).  After luciuisrv and
+# activity 0, which msgwatch hands each message to.
+if {grep -s '^watch=on' /lib/veltro/messaging.conf} {
+	/dis/veltro/msgwatch.dis >[2] /tmp/msgwatch.log &
+}
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno
 # plumber matches the user's rules (/usr/<user>/lib/plumbing) and then

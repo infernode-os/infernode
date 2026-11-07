@@ -14,6 +14,9 @@ include "tk.m";
 	tk: Tk;
 include "tkclient.m";
 	tkclient: Tkclient;
+
+include "icon.m";
+	icon: Icon;
 include "math.m";
 	math: Math;
 include "rand.m";
@@ -42,14 +45,36 @@ gamecmds := array[] of {
 "bind .c <Button-1> {send cmd 1 %x %y}",
 "bind .c <Button-2> {send cmd 2 %x %y}",
 "frame .f",
-"button .f.left -bitmap small_color_left.bit -bd 0 -command {send cmd k -1}",
-"button .f.right -bitmap small_color_right.bit -bd 0 -command {send cmd k 1}",
+"button .f.left -image Left -bd 0 -command {send cmd k -1}",
+"button .f.right -image Right -bd 0 -command {send cmd k 1}",
 "label .f.l -text {8 balls}",
 "pack .f.left .f.right -side left",
 "pack .f.l -side left",
 "pack .f -fill x",
 "pack .c -fill both -expand 1",
 };
+
+# the buttons that take a ball away and add one: icon(2)'s arrows
+arrows := array[] of {("Left", "arrow-left", 18), ("Right", "arrow-right", 18)};
+
+# The arrows in the theme's text colour; made blank if they cannot be
+# drawn, so the buttons are still made.
+glyphs(win: ref Tk->Toplevel)
+{
+	if(icon == nil){
+		icon = load Icon Icon->PATH;
+		if(icon != nil && icon->init(win.display) != nil)
+			icon = nil;
+	}
+	if(icon != nil){
+		icon->tkglyphs(win, arrows);
+		return;
+	}
+	for(i := 0; i < len arrows; i++){
+		(tkname, nil, nil) := arrows[i];
+		tk->cmd(win, "image create bitmap " + tkname);
+	}
+}
 
 randch: chan of int;
 lines: list of (int, Line);
@@ -93,6 +118,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(win, wmctl) := tkclient->toplevel(ctxt, nil, "Bounce", 0);
 	cmdch := chan of string;
 	tk->namechan(win, cmdch, "cmd");
+	glyphs(win);
 	for (i := 0; i < len gamecmds; i++)
 		cmd(win, gamecmds[i]);
 	cmd(win, ".c configure -width 400 -height 400");
@@ -128,6 +154,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	s = <-win.wreq or
 	s = <-wmctl =>
 		tkclient->wmctl(win, s);
+		if(s == "retheme")
+			glyphs(win);
 	c := <-cmdch =>
 		(nil, toks) := sys->tokenize(c, " ");
 		if (hd toks != "k") {

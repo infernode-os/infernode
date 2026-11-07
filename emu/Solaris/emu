@@ -81,6 +81,7 @@ root
 	/dev	/
 	/fd	/
 	/prog	/
+	/prof	/
 	/net	/
 	/net.alt	/
 	/chan	/

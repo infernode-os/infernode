@@ -35,6 +35,10 @@ Xenith : module {
 	get : fn(p, q, r : int, b : string) : ref Dat->Reffont;
 	close : fn(r : ref Dat->Reffont);
 	xenithexit : fn(err : string);
+	internalerror : fn(s : string);
+	recovering : fn();
+	norecover : fn();
+	recovered : fn(e : string) : string;
 	getsnarf : fn(); 
 	putsnarf : fn();
 	themecmd : fn(name : string);

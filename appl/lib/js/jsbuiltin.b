@@ -1210,11 +1210,17 @@ codeplace(c: ref Code, pc: int): string
 		return file;
 	if(pc > 0)
 		pc--;
-	if(pc >= len c.pos)
-		pc = len c.pos - 1;
-	if(pc < 0)
-		pc = 0;
-	p := c.pos[pc];
+	# the last run beginning at or before pc
+	lo := 0;
+	hi := len c.pos / 2 - 1;
+	while(lo < hi) {
+		mid := (lo + hi + 1) / 2;
+		if(c.pos[2 * mid] <= pc)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	p := c.pos[2 * lo + 1];
 	s := c.whole;
 	line := 1;
 	col := 1;

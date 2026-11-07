@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# uitest_transport_test.sh — synthetic-input driver end to end: boot the
-# GUI, drive the Matrix video-player crystallisation with injected
-# events (/chan/uitest in wm/wm), and assert the vid9p playhead obeys.
-# Exercises: uitest driver -> wm -> matrix focus routing -> video-pane
-# keys -> ctl wire -> vid9p server transport.
+# uitest_transport_test.sh — synthetic input end to end: boot the GUI,
+# drive the Matrix video-player crystallisation with events written to
+# /dev/pointer and /dev/keyboard, and assert the vid9p playhead obeys.
+# Exercises: emu's input queues -> wm -> matrix focus routing ->
+# video-pane keys -> ctl wire -> vid9p server transport.
 #
 # Prereqs as vid9p_test.sh; SKIP (exit 77) if absent.  Needs a GUI
 # window; SDL dummy keeps it headless.
@@ -27,7 +27,6 @@ command -v ffmpeg >/dev/null 2>&1 || { echo "uitest_transport_test: SKIP (no ffm
 [ -n "$VDEC" ] || { echo "uitest_transport_test: SKIP (no vdec)"; exit 77; }
 [ -x "$EMU" ]  || { echo "uitest_transport_test: SKIP (no emu)"; exit 77; }
 
-echo "uitest_transport_test: SKIP (driver ships; synthetic-event routing into hosted Tk regions not yet verified — enable after the routing investigation)"; exit 77
 TMP="$(mktemp -d)"
 trap 'rm -f "$ROOT"/.uitest.y4m "$ROOT"/.uitest.sh; rm -rf "$TMP"' EXIT
 
@@ -37,23 +36,23 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=160x120:rate=10
 "$VDEC" "$TMP/clip.mp4" --y4m "$ROOT/.uitest.y4m" --quiet
 
 # In-emu driver: player composition, then synthetic input.
-# key 32 = space (pause/play); key 57365 = Keyboard->Right (seek +5s).
+# space pauses and plays; Right (Keyboard->Right, e015) seeks +5s.
 cat > "$ROOT/.uitest.sh" <<'ISH'
 mkdir -p /mnt/video
 mount {vid9p /.uitest.y4m} /mnt/video
 wm/matrix -g 800x600 /lib/matrix/compositions/video-player &
 sleep 8
-echo ptr 400 280 1 > /chan/uitest
+echo m 400 280 1 > /dev/pointer
 sleep 1
-echo ptr 400 280 0 > /chan/uitest
+echo m 400 280 0 > /dev/pointer
 sleep 1
-echo key 32 > /chan/uitest
+echo -n ' ' > /dev/keyboard
 sleep 1
 echo U1 `{cat /mnt/video/0/status}
-echo key 57365 > /chan/uitest
+unicode -t e015 > /dev/keyboard
 sleep 1
 echo U2 `{cat /mnt/video/0/status}
-echo key 32 > /chan/uitest
+echo -n ' ' > /dev/keyboard
 sleep 1
 echo U3 `{cat /mnt/video/0/status}
 ISH

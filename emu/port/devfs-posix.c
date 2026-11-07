@@ -120,6 +120,19 @@ fsattrfd(Chan *c, struct stat *expected)
 static int
 xstat(char *f, struct stat *sb)
 {
+	struct stat lst;
+
+	/*
+	 * A restricted Veltro namespace may contain host-backed trees.  Following
+	 * a host symlink there lets a lexical grant escape its root before cowfs
+	 * can apply its overlay policy.  NODEVS is the confinement transition, so
+	 * refuse symlink traversal after it while retaining normal host semantics
+	 * for the desktop and other unrestricted namespaces.
+	 */
+	if(up->env->pgrp->nodevs && lstat(f, &lst) >= 0 && S_ISLNK(lst.st_mode)){
+		errno = EACCES;
+		return -1;
+	}
 	if(stat(f, sb) >= 0)
 		return 0;
 	/* could possibly generate ->name as rob once suggested */

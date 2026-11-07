@@ -35,7 +35,7 @@ Working, in the kernel (`os/bcm2837/devtab.c` holds the device table):
 - **`#l`**: the Ethernet data path in the kernel (~2.6 MB/s in, ~4 MB/s
   out), bound to endpoints a Limbo driver has set up
 - the SD card as a file (`#S`), the running kernel image as a file
-  (`#B/bootimage`), microsecond timing (`#b`), GPIO pins as files
+  (`#B/bootimage`), microsecond timing (`#x`), GPIO pins as files
   (`#G`), the framebuffer console (`fbcons`), the draw device (`#i`),
   the pointer (`#m`), the keyboard on `/dev/keyboard`, SSL (`#D`), a
   hardware-fed entropy pool, a tick-driven sampling profiler
@@ -1147,10 +1147,11 @@ itself -- so the loader is unaffected:
 
 `tryboot.cmd` holds the single word `tryboot`; `cmdline.txt` may be
 empty or absent. The `[tryboot]` section is the firmware's conditional
-filter for a boot made with the flag set; on firmware old enough not to
-know it, a `tryboot.txt` that is a copy of `config.txt` with the two
-`[tryboot]` lines in place of the two above it does the same job, and
-that is the file the firmware documentation historically described.
+filter for a boot made with the flag set, but the firmware release cards
+are made with (`raspberrypi/firmware` 1.20260915) ignores it and reads a
+`tryboot.txt` instead -- a copy of `config.txt` with the two `[tryboot]`
+lines in place of the two above it -- so every card carries one,
+`os/bcm2837/card/tryboot.txt` (docs/BAREMETAL.md, section 4).
 For a card with no kernel yet, `kernel=serialboot.img` in place of the
 `kernel=infernode8.img` line, and the first candidate is installed from
 a serial-fed kernel exactly as above.
@@ -1558,8 +1559,8 @@ value). ALT3 means nothing to it. So "reclaim the Arasan" is ALT3 on
 the board and 0 under emulation, and a runtime switch between the two
 would pass the harness and fail on the board or the reverse. That is
 why the choice is made at build time — `sdmmc.c` holds one pointer,
-SDHOST by default, `-DSDCARD_ARASAN` for the other, the same shape as
-`-DFBSCROLLTEST` — and why the Arasan backend does not write the mux
+SDHOST by default, `-DSDCARD_ARASAN` for the other, chosen when the kernel
+is built — and why the Arasan backend does not write the mux
 at all: "as the firmware left them" is the one setting that is right
 in both places. The other reason there is no runtime choice is that
 there is nothing to make it from: this port parses neither the device
@@ -1702,6 +1703,12 @@ fetch tool and a manifest of pins: a commit of
 `RPi-Distro/firmware-nonfree`, a revision URL per file, and a SHA256
 per file, per `docs/DESIGN-PRINCIPLES.md` ("The host boundary" —
 anything fetched is pinned and verified before it is installed).
+(2026-10-25: the release's Raspberry Pi card images now carry them, in
+`firmware/` with the licence's text, and the hosted packages still do
+not. "Not MIT" kept them out of the tree; what kept them out of the
+tarball, `.app` and `.zip` is that those run on computers with no
+Cypress part, and a card for a 3B+ or 4B is for one that has it.
+`tools/pi-firmware-manifest.txt` has the reasoning.)
 
 **Which build.** Raspberry Pi ships two tunings of the 43455 image.
 `standard` keeps roaming, DFS channels and antenna diversity;
@@ -1859,7 +1866,8 @@ counted data frames and dropped them. Both are filled in by milestones
 `.txt` (NVRAM) and `.clm_blob` (regulatory) are Cypress binaries under
 `binary-redist-Cypress` -- object form only, Cypress ICs only, no
 derivative works -- and are not MIT, so they are not in this tree and
-must never be packed into a release ("placement is shipping"). What is
+must never be packed into a hosted release ("placement is shipping";
+the Pi card images carry them, see "Why the card" above). What is
 committed is `tools/pi-firmware-manifest.txt`, pinning the commit of
 `RPi-Distro/firmware-nonfree` they come from and the SHA256 of each,
 and `tools/pi-firmware.sh`, which fetches them by that commit,

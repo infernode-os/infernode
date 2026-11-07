@@ -637,7 +637,7 @@ tmpVeltroTrustedIpcNotGrantableWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	caps := ref NsConstruct->Capabilities(
-		"read" :: nil, "/tmp/veltro/ftree" :: nil, nil, nil,
+		"read" :: nil, "/mnt/ftree" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
@@ -2313,6 +2313,21 @@ invalidGrantPathsWorker(result: chan of string)
 	sys->pctl(Sys->FORKNS, nil);
 
 	bad := array[] of {
+		"/mnt",
+		"/chan",
+		"/chan/snarf",
+		"/fd",
+		"/fd/0",
+		"/usr",
+		"/usr/inferno/keyring",
+		"/usr/inferno/secstore",
+		"/mnt/toolctl.7",
+		"/tool.7",
+		"/MNT",
+		"/Mnt/msg/approve",
+		"/CHAN",
+		"/FD/0",
+		"/tmp/veltro/COW",
 		"/",
 		"/n/local/project/../secret",
 		"/n/local/project/./secret",
@@ -2491,10 +2506,10 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/tmp/veltro/browser",
 		"/mnt/charon",
 		"/mnt/charon/ctl",
-		"/tmp/veltro/editor",
-		"/tmp/veltro/shell",
-		"/tmp/veltro/fractal",
-		"/tmp/veltro/man",
+		"/mnt/editor",
+		"/mnt/shell",
+		"/mnt/fractal",
+		"/mnt/man",
 	};
 
 	for(i := 0; i < len bad; i++) {
@@ -2631,7 +2646,7 @@ testStagedWriteOverlay(t: ref T)
 		base :: nil
 	, nil);
 
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, nsconstruct->openmanifest(manifest));
 	mdata := readfilecontent(manifest);
 	t.assert(contains(mdata, "path=" + base), "manifest includes writable granted path");
 	t.assert(contains(mdata, "perm=cow"), "manifest marks writable path as cow");
@@ -2677,7 +2692,7 @@ directwritemanifest1(t: ref T)
 		nil, 0, 0, 42,
 		"/mnt/msg/draft" :: nil
 	, nil);
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, nsconstruct->openmanifest(manifest));
 	mdata := readfilecontent(manifest);
 	t.assert(contains(mdata, "path=/mnt/msg/draft"), "manifest includes transactional endpoint");
 	t.assert(contains(mdata, "path=/mnt/msg/draft label=mnt/msg/draft perm=rw"),

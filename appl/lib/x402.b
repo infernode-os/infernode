@@ -212,25 +212,29 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 	if(n <= 0)
 		return (nil, sys->sprint("authorize request failed: %r"));
 
-	# Poll the same fid: wallet9p returns "pending:<id>" until the
-	# payment is approved (or denied/expired) by a trusted controller.
-	result := "";
-	waited := 0;
-	for(;;) {
-		rbuf := array[2048] of byte;
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		rn := sys->read(fd, rbuf, len rbuf);
-		if(rn <= 0)
-			return (nil, "no authorization returned");
-		result = strip(string rbuf[0:rn]);
-		if(len result >= 8 && result[0:8] == "pending:") {
-			if(waited >= waitsecs)
-				return ("", result);	# still pending; caller may retry later
-			sys->sleep(2000);
-			waited += 2;
-			continue;
+	# The first read gives "pending:<id>" while a trusted controller has
+	# not yet approved it; a read again at offset 0 on the same fid waits
+	# for the outcome (approved, denied, expired), for waitsecs at most.
+	result := readauth(fd);
+	if(result == nil)
+		return (nil, "no authorization returned");
+	if(len result >= 8 && result[0:8] == "pending:") {
+		if(waitsecs <= 0)
+			return ("", result);
+		# its reader ends when the payment is decided or expires, its
+		# answer left in rc (an agent's /prog has only its own pid)
+		rc := chan[1] of string;
+		spawn waitauth(fd, rc);
+		tick := chan of int;
+		spawn authtimer(tick, waitsecs * 1000);
+		alt {
+		r := <-rc =>
+			if(r == nil)
+				return (nil, "no authorization returned");
+			result = r;
+		<-tick =>
+			return ("", result);	# still pending; caller may retry later
 		}
-		break;
 	}
 	if(result == "denied")
 		return (nil, "payment denied by wallet controller");
@@ -606,6 +610,27 @@ strip(s: string): string
 }
 
 #
+readauth(fd: ref Sys->FD): string
+{
+	rbuf := array[2048] of byte;
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	rn := sys->read(fd, rbuf, len rbuf);
+	if(rn <= 0)
+		return nil;
+	return strip(string rbuf[0:rn]);
+}
+
+waitauth(fd: ref Sys->FD, rc: chan of string)
+{
+	rc <-= readauth(fd);
+}
+
+authtimer(tick: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt { tick <-= 1 => ; * => ; }
+}
+
 # Field validators for the wallet authorize protocol.
 #
 # The protocol is line-oriented "key value", so no field may contain a

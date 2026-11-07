@@ -45,7 +45,7 @@ init(mods : ref Dat->Mods)
 
 Lock.init() : ref Lock
 {
-	return ref Lock(0, chan[1] of int);
+	return ref Lock(0, chan[1] of int, 0);
 	# return ref Lock(0, chan of int);
 }
 
@@ -53,12 +53,14 @@ Lock.lock(l : self ref Lock)
 {
 	l.cnt++;
 	l.chann <-= 0;
+	l.pid = sys->pctl(0, nil);
 	# lc <-= l;
 	# <- l.chann;
 }
 
 Lock.unlock(l : self ref Lock)
 {
+	l.pid = 0;
 	<-l.chann;
 	l.cnt--;
 	# uc <-= l;
@@ -67,6 +69,26 @@ Lock.unlock(l : self ref Lock)
 Lock.locked(l : self ref Lock) : int
 {
 	return l.cnt > 0;
+}
+
+# held by the caller's proc: what a proc dying of an exception must
+# let go, as nobody else will
+Lock.held(l : self ref Lock) : int
+{
+	return l.pid != 0 && l.pid == sys->pctl(0, nil);
+}
+
+# taken if nobody holds it, without waiting
+Lock.trylock(l : self ref Lock) : int
+{
+	alt{
+	l.chann <-= 0 =>
+		l.cnt++;
+		l.pid = sys->pctl(0, nil);
+		return 1;
+	* =>
+		return 0;
+	}
 }
 
 Ref.init() : ref Ref

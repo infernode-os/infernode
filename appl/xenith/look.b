@@ -162,6 +162,10 @@ look3(t : ref Text, q0 : int, q1 : int, external : int)
 		ct = t.w.body;
 		if(t.w != ct.w)
 			ct.w.lock('M');
+		# the body's typing put in its file before it is searched: a
+		# B3 in the tag commits the tag alone
+		if(t != ct)
+			ct.w.commit(ct);
 		if(t == ct)
 			ct.setselect(e.q1, e.q1);
 		n = e.q1 - e.q0;
@@ -345,7 +349,7 @@ plumbshow(m : ref Msg)
 
 search(ct : ref Text, r : string, n : int) : int
 {
-	q, nb, maxn : int;
+	q, q1, nb, maxn : int;
 	around : int;
 	s : ref Astring;
 	b, c : int;
@@ -360,7 +364,13 @@ search(ct : ref Text, r : string, n : int) : int
 	s = utils->stralloc(BUFSIZE);
 	b = nb = 0;
 	around = 0;
-	q = ct.q1;
+	# from the end of the selection, round to it: one past the file
+	# (typing not yet in it) was never reached, and the search went
+	# round for ever holding the row
+	q1 = ct.q1;
+	if(q1 > ct.file.buf.nc)
+		q1 = ct.file.buf.nc;
+	q = q1;
 	for(;;){
 		if(q >= ct.file.buf.nc){
 			q = 0;
@@ -374,7 +384,7 @@ search(ct : ref Text, r : string, n : int) : int
 			if(c >= nb){
 				q += nb;
 				nb = 0;
-				if(around && q>=ct.q1)
+				if(around && q>=q1)
 					break;
 				continue;
 			}
@@ -403,11 +413,14 @@ search(ct : ref Text, r : string, n : int) : int
 			s = nil;
 			return TRUE;
 		}
-		if(around && q>=ct.q1)
-			break;
+		# round to where it began tested after the step, as Acme
+		# does: tested before it, a search begun at the end of the
+		# file stepped onto the end, wrapped, and went round for ever
 		--nb;
 		b++;
 		q++;
+		if(around && q>=q1)
+			break;
 	}
 	utils->strfree(s);
 	s = nil;

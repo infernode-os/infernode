@@ -11,6 +11,7 @@ DIRS=\
 	limbo\
 	mk\
 	ndb\
+	sdr\
 	sh\
 	wikifs\
 	fs\
@@ -36,6 +37,7 @@ TARG=\
 	bit2gif.dis\
 	broke.dis\
 	bt9p.dis\
+	btboardaddr.dis\
 	bthid.dis\
 	btmock.dis\
 	bytes.dis\
@@ -51,6 +53,7 @@ TARG=\
 	cleanname.dis\
 	cmp.dis\
 	comm.dis\
+	copybench.dis\
 	countfs.dis\
 	cp.dis\
 	cprof.dis\
@@ -89,6 +92,8 @@ TARG=\
 	getline.dis\
 	gettar.dis\
 	gif2bit.dis\
+	gpsfs.dis\
+	sdrfs.dis\
 	gpusrv.dis\
 	llmctl9p.dis\
 	llmsrv.dis\
@@ -184,6 +189,8 @@ TARG=\
 	tarfs.dis\
 	tcs.dis\
 	tee.dis\
+	themefs.dis\
+	timesync.dis\
 	telnet.dis\
 	test.dis\
 	time.dis\
@@ -205,7 +212,9 @@ TARG=\
 	vacput.dis\
 	ventisrv.dis\
 	vid9p.dis\
+	camsrv.dis\
 	wav2iaf.dis\
+	vm.dis\
 	wc.dis\
 	webfs.dis\
 	webgrab.dis\
@@ -220,6 +229,7 @@ TARG=\
 	gateprobe.dis\
 	jitbench.dis\
 	jitbench2.dis\
+	vmstress.dis\
 	jitbug.dis\
 	jitbug2.dis\
 	jitcrash.dis\
@@ -231,6 +241,7 @@ TARG=\
 
 
 MODULES=\
+	$ROOT/appl/veltro/veltrosrv.m\
 
 SYSMODULES=\
 	arg.m\
@@ -297,12 +308,48 @@ SYSMODULES=\
 	wmclient.m\
 	wmlib.m\
 	workdir.m\
+	agentlib.m\
+	att.m\
+	attrdb.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	bthci.m\
+	btmock.m\
+	hid.m\
+	imap.m\
+	json.m\
+	l2cap.m\
+	lock.m\
+	mailparse.m\
+	mermaid.m\
+	nmea.m\
+	nsconstruct.m\
+	pdf.m\
+	rfcomm.m\
+	rlayout.m\
+	sdp.m\
+	secstore.m\
+	smp.m\
+	softkbd.m\
+	srv.m\
+	tls.m\
+	twofa.m\
+	twofaslot.m\
+	viewport.m\
+	webclient.m\
+	wmsrv.m\
+	garminav.m\
+	gdl90.m\
+	post9p.m\
+	bayer.m\
 
 DISBIN=$ROOT/dis
 
 <$ROOT/mkfiles/mkdis
 
-# lucibridge.b needs agentlib.m from appl/veltro
+# lucibridge.b includes veltro interfaces from appl/veltro (agentlib.m is in module/)
 LIMBOFLAGS=$LIMBOFLAGS -I$ROOT/appl/veltro
 <$ROOT/mkfiles/mksubdirs
 

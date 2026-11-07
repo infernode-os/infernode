@@ -1,0 +1,70 @@
+# veltrosrv announce
+requests 4
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant: Let me read the file:
+user: 
+  | [harness: you said what you would do next, but made no tool call, so nothing was done.  If there is more to do, make the call now; if the work is finished, say so plainly.]
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_announce_1_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_announce_1_0:
+  |     1	alpha
+
+== request 3 (turn 3)
+tools: list read write
+user: 
+  | [harness: your reply was empty.  Answer the user, or make the tool call you meant to make.]
+
+== output
+  | == user
+  | SCENARIO:announce go
+  | == veltro
+  | Let me read the file:
+  | == veltro
+  | It says alpha.
+  | == log
+  | session <llm>, prompt 13019 bytes
+  | step 1: writing 20 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 21 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 36 bytes
+  | llm: STOP:end_turn
+  | Let me read the file:
+  | 
+  | harness: nudge: [harness: you said what you would do next, but made no tool call, so nothing was...
+  | step 2: writing 172 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 76 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_announce_1_0:read:{"args"\: "/usr/agentloop/a.txt"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/a.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: done,     1	alpha
+  | 
+  | step 3: writing 48 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 3: waiting for LLM response...
+  | step 3: LLM response 14 bytes
+  | llm: STOP:end_turn
+  | 
+  | harness: nudge: [harness: your reply was empty.  Answer the user, or make the tool call you mean...
+  | step 4: writing 91 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 14 bytes)
+  | step 4: waiting for LLM response...
+  | step 4: LLM response 29 bytes
+  | llm: STOP:end_turn
+  | It says alpha.
+  | 
+  | turn done stop=end_turn steps=4

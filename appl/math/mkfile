@@ -38,6 +38,13 @@ SYSMODULES=\
 	bufio.m\
 	math/polyfill.m\
 	math/polyhedra.m\
+	arg.m\
+	daytime.m\
+	ffts.m\
+	keyring.m\
+	lock.m\
+	math/geodesy.m\
+	tkclient.m\
 
 DISBIN=$ROOT/dis/math
 

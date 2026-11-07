@@ -581,6 +581,7 @@ rootshape: ref Shape;
 
 Linear: con 8;		# shapes this small are searched, larger ones hashed
 Dictmin: con 64;		# shapes that grow this large become dictionaries
+Nokey: con 16r7FFFFFFF;	# a slot in a shape's arrays no shape has taken
 
 shapeinit()
 {
@@ -595,8 +596,10 @@ keyhash(k: int, n: int): int
 slotof(sh: ref Shape, k: int): int
 {
 	if(sh.index != nil) {
+		# the index may be shared with shapes after sh on its chain: a
+		# slot at or beyond sh.n is theirs
 		for(l := sh.index[keyhash(k, len sh.index)]; l != nil; l = tl l)
-			if((hd l).t0 == k)
+			if((hd l).t0 == k && (hd l).t1 < sh.n)
 				return (hd l).t1;
 		return -1;
 	}
@@ -654,10 +657,32 @@ addkey(sh: ref Shape, k, attrs: int): ref Shape
 			return ts;
 	}
 	n := sh.n + 1;
-	nk := array[n] of int;
+	if(n < Dictmin && sh.n < len sh.keys && sh.keys[sh.n] == Nokey) {
+		# the arrays sh shares with the shapes before it have room, and no
+		# other shape after sh has taken it: share them, and the index, so
+		# a chain of n keys costs n words, not n*n/2 and an index each
+		sh.keys[sh.n] = k;
+		sh.attrs[sh.n] = attrs;
+		ns := ref Shape(sh.keys, sh.attrs, n, sh.index, nil, 0, 0, 0, nil);
+		if(ns.index != nil && n <= len ns.index) {
+			b := keyhash(k, len ns.index);
+			ns.index[b] = (k, sh.n) :: ns.index[b];
+		} else
+			reindex(ns);
+		addtrans(sh, k, attrs, ns);
+		return ns;
+	}
+	m := n;
+	if(n < Dictmin)
+		m = 2 * n + 4;
+	if(m > Dictmin)
+		m = Dictmin;
+	if(m < n)
+		m = n;
+	nk := array[m] of {* => Nokey};
 	nk[0:] = sh.keys[0:sh.n];
 	nk[sh.n] = k;
-	na := array[n] of int;
+	na := array[m] of int;
 	na[0:] = sh.attrs[0:sh.n];
 	na[sh.n] = attrs;
 	ns := ref Shape(nk, na, n, nil, nil, n >= Dictmin, 0, 0, nil);
@@ -742,8 +767,12 @@ addelem(h, i: int, v: V): int
 		e[i] = v;
 		return 1;
 	}
-	if(i > 2 * n + 16)
-		return 0;	# sparse: in the shape instead
+	# sparse: in the shape instead.  The gap is bounded by the elements
+	# there are, not the index: a flags enum (e[e.A = 1<<23] = "A"; ...)
+	# passed a test of i against 2n at every power of two, and the
+	# elements doubled, nearly all holes, until memory ran out
+	if(i - n > 16 + n / 8)
+		return 0;
 	if(e == nil || i >= len e) {
 		ne := array[2 * i + 8] of V;
 		if(e != nil)

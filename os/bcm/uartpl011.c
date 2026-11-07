@@ -395,6 +395,10 @@ status(Uart *uart, void *buf, long n, long offset)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	/*
 	 * The third and fourth lines are the hardware and the path as
 	 * they stand: the raw flag, control, interrupt-mask and
@@ -424,6 +428,7 @@ status(Uart *uart, void *buf, long n, long offset)
 		uart->nhold, uart->rxheld ? ", now" : "");
 	n = readstr(offset, buf, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

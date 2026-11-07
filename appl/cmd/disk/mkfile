@@ -18,8 +18,13 @@ SYSMODULES=\
 	draw.m\
 	bufio.m\
 	string.m\
+	daytime.m\
+	disks.m\
+	styx.m\
 
 DISBIN=$ROOT/dis/disk
+
+MODULES=
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs

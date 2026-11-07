@@ -24,7 +24,16 @@ MODULES=\
 	alarms.m\
 	cgiparse.m\
 
-SYSMODULES=
+SYSMODULES=\
+	bufio.m\
+	daytime.m\
+	draw.m\
+	encoding.m\
+	rand.m\
+	readdir.m\
+	sh.m\
+	string.m\
+	sys.m
 
 LOGS=	httpd.debug\
 	httpd.log\

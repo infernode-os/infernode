@@ -1,9 +1,9 @@
 #!/dis/sh.dis
 #
-# wm/wm driven by the pointer (/chan/uitest): rio's button-3 menu (New,
+# wm/wm driven by the pointer (/dev/pointer): rio's button-3 menu (New,
 # Resize, Move, Delete, Hide and the hidden windows), the frame's move
 # and reshape, click to focus, and the background.  After each step it
-# prints R, the step's name and the windows (a read of /chan/uitest:
+# prints R, the step's name and the windows (a read of /chan/wmwindows:
 # id minx miny maxx maxy, topmost first); tests/host/wm_test.sh checks
 # them (not a test: the runner runs every script in tests/inferno).
 #
@@ -15,8 +15,8 @@
 #
 load std
 
-fn ptr { echo ptr $1 $2 $3 > /chan/uitest }
-fn show { sleep 2; echo R $1 `{cat /chan/uitest} }
+fn ptr { echo m $1 $2 $3 > /dev/pointer }
+fn show { sleep 2; echo R $1 `{cat /chan/wmwindows} }
 # button 3 pressed at x y, moved to y2, released: the item there
 fn menu { ptr $1 $2 4; ptr $1 $3 4; ptr $1 $3 0 }
 # a click of buttons b at x y

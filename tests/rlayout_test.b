@@ -169,6 +169,57 @@ testStrikeAndAutolink(t: ref T)
 	t.assertseq((hd l.children).text, "https://go.dev", "showing the url");
 }
 
+# The text a run of inline nodes shows, a line break as \n
+shown(nodes: list of ref DocNode): string
+{
+	s := "";
+	for(; nodes != nil; nodes = tl nodes){
+		n := hd nodes;
+		if(n.kind == Rlayout->Nnewline)
+			s += "\n";
+		else if(n.children != nil)
+			s += shown(n.children);
+		else
+			s += n.text;
+	}
+	return s;
+}
+
+# Inline HTML is not shown as its markup (README.md's last line,
+# <sub>...</sub>, was, in Xenith and in Lucifer's presentation view)
+testInlineHTML(t: ref T)
+{
+	p := block(t, "<sub>Inferno® is owned by Vita Nuova®.</sub>", Rlayout->Npara);
+	t.assertseq(shown(p.children), "Inferno® is owned by Vita Nuova®.", "<sub> dropped, its text kept");
+
+	p = block(t, "a <span class=\"x > y\">b</span> c", Rlayout->Npara);
+	t.assertseq(shown(p.children), "a b c", "a tag with a quoted > in an attribute");
+
+	p = block(t, "x <!-- not shown --> y", Rlayout->Npara);
+	t.assertseq(shown(p.children), "x  y", "a comment dropped whole");
+
+	p = block(t, "one<br>two<BR/>three", Rlayout->Npara);
+	t.assertseq(shown(p.children), "one\ntwo\nthree", "<br> breaks the line");
+
+	p = block(t, "<b>bold</b> <EM>it</EM> <code>a<b</code> <del>x</del>", Rlayout->Npara);
+	k := p.children;
+	t.asserteq((hd k).kind, Rlayout->Nbold, "<b> is bold");
+	t.assertseq(shown((hd k).children), "bold", "its text");
+	k = tl tl k;
+	t.asserteq((hd k).kind, Rlayout->Nitalic, "<EM> is italic, any case");
+	k = tl tl k;
+	t.asserteq((hd k).kind, Rlayout->Ncode, "<code> is code");
+	t.assertseq((hd k).text, "a<b", "code's text as it is");
+	k = tl tl k;
+	t.asserteq((hd k).kind, Rlayout->Nstrike, "<del> strikes");
+
+	p = block(t, "a < b, 1<2, <3 and <unclosed", Rlayout->Npara);
+	t.assertseq(shown(p.children), "a < b, 1<2, <3 and <unclosed", "a < that begins no tag is text");
+
+	p = block(t, "`<sub>` stays", Rlayout->Npara);
+	t.assertseq((hd p.children).text, "<sub>", "markup in a code span is shown");
+}
+
 testEscapedPipe(t: ref T)
 {
 	n := block(t, "| a | b |\n|---|---|\n| `x \\| y` | z |\n", Rlayout->Ntable);
@@ -206,6 +257,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("QuoteDepth", testQuoteDepth);
 	run("StrikeAndAutolink", testStrikeAndAutolink);
 	run("EscapedPipe", testEscapedPipe);
+	run("InlineHTML", testInlineHTML);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

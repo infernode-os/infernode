@@ -68,7 +68,7 @@ extern	char*	poolname(Pool*);
 extern	int	poolread(char*, int, ulong);
 extern	int	pooltagsread(char*, int, ulong);
 extern	void*	poolrealloc(Pool*, void*, ulong);
-extern	int	poolsetsize(char*, int);
+extern	int	poolsetsize(char*, ulong);
 extern	void	poolsetcompact(Pool*, void (*)(void*, void*));
 extern	char*	poolaudit(char*(*)(int, Bhdr *));
 

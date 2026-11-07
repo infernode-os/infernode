@@ -132,13 +132,19 @@ if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" ]]; then
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
-if [[ -z "$QEMU" ]]; then
+# BAREMETAL_BUILD_ONLY builds the kernels and boots nothing, so it needs
+# no QEMU: it is how the release job (.github/workflows/release.yml,
+# raspberry-pi) makes the kernels for the card images on a runner that
+# has none.
+BUILDONLY="${BAREMETAL_BUILD_ONLY:-}"
+if [[ -z "$QEMU" && -z "$BUILDONLY" ]]; then
     skip "qemu-system-aarch64 not installed"
     echo ""
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
 for mach in raspi3b; do
+    [[ -n "$BUILDONLY" ]] && break
     if ! "$QEMU" -machine help 2>/dev/null | grep -q "^$mach"; then
         skip "this QEMU build has no $mach machine model"
         echo ""
@@ -239,6 +245,12 @@ build_kernel() {
         "$LIMBO" -t Draw -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/drawmod.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Tk -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/tkmod.h" 2>>"$BUILD/cc.log" || return 1
 
+        # $I420 and $Bayer, the video pixel loops.
+        "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/i420if.m" > "$BUILD/i420if.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t I420 -I"$ROOT/module" "$ROOT/libinterp/i420if.m" > "$BUILD/i420mod.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/bayerif.m" > "$BUILD/bayerif.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t Bayer -I"$ROOT/module" "$ROOT/libinterp/bayerif.m" > "$BUILD/bayermod.h" 2>>"$BUILD/cc.log" || return 1
+
         # $Keyring's C view, and $IPints' -- the bignum module keyring's
         # public-key paths stand on. Same recipe as every other builtin.
         "$LIMBO" -t Keyring -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/keyringmod.h" 2>>"$BUILD/cc.log" || return 1
@@ -285,10 +297,9 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/etherusb.dis" \
             "$ROOT/os/init/etherusb.b" 2>>"$BUILD/cc.log" || return 1
 
-        # The HID boot keyboard, likewise a program. Boot protocol only:
-        # parsing a report descriptor is real work, and the boot
-        # protocol exists so a machine that has just started can read a
-        # keyboard without doing any of it.
+        # The HID keyboard, likewise a program: the boot protocol when
+        # the keyboard has one, its report descriptor (through the Hid
+        # library, /dis/lib/hid.dis) when it has not or is asked to.
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/kbdusb.dis" \
             "$ROOT/os/init/kbdusb.b" 2>>"$BUILD/cc.log" || return 1
 
@@ -349,6 +360,15 @@ build_kernel() {
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            # the HID report-descriptor library: kbdusb reads a keyboard's
+            # reports by it when they are not the boot protocol's, and
+            # osinit asks it whether an interface that names no boot
+            # protocol is a keyboard
+            "/dis/lib/hid.dis=$ROOT/dis/lib/hid.dis"
+            # what a finger on a touch screen means (touchgest(2)): the
+            # touch panel's driver and mouseusb's for a USB touchscreen
+            # both load it, and may start before the card is read
+            "/dis/lib/touchgest.dis=$ROOT/dis/lib/touchgest.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
@@ -591,6 +611,8 @@ build_kernel() {
             "/dis/tests/exception_test.dis=$ROOT/dis/tests/exception_test.dis"
             # formats and parses reals in the kernel's own VM (os/port/printfp.c)
             "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
+            # NaN and infinity in the kernel's own VM (libkernfp/nan.c)
+            "/dis/tests/nan_test.dis=$ROOT/dis/tests/nan_test.dis"
             # 150 threads blocked in sys->sleep at once -- 150 concurrent
             # kprocs (os/port/dis.c release()) -- proves conf.nproc holds
             # more than the 100 that hung the board under a real GUI
@@ -925,11 +947,10 @@ SBEOF
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
         gpu.c|crypt.c) continue;;
-        i420.c) continue;;			# $I420: registered by the emulators only
         # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
-        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types -Wno-error=incompatible-pointer-types-discards-qualifiers -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 
@@ -959,7 +980,7 @@ SBEOF
     for f in "$ROOT"/libkernfp/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/libkernfp-$(basename "$f").o"
-        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -Werror=incompatible-function-pointer-types -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 
@@ -1396,7 +1417,7 @@ QEMUARGS="$2"
 # globals, the platforms run one after another in one shell, and a value
 # left over from the last machine is a kernel built from the wrong files.
 SHARED="$ROOT/os/bcm"
-SHAREDSKIP=""
+SHAREDSKIP="rng200.c"		# the BCM2837 has the BCM2835's generator: os/bcm2837/random.c
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
 PORTSKIP="ethermii.c pci.c usbxhci.c usbxhcipci.c"	# a PHY library, a bus and what is on it: this board has none
 SERIALARGS="-serial null -serial stdio"
@@ -1473,6 +1494,8 @@ if [[ -x "$NM" ]]; then
 else
     skip "llvm-nm not available for alignment check"
 fi
+
+[[ -n "$BUILDONLY" ]] && return
 
 #
 # 3. It boots and reports.
@@ -1679,8 +1702,18 @@ check "present"                          "the root hub sees the attached device"
 # a two-element array and wrote eight words back over the caller's stack
 # frame -- and discarded the result, so none of it showed. Asserting the
 # reply is what makes the contract testable rather than assumed.
+#
+# osinit's setpower line goes out a character at a time (os/bcm/uart.c:
+# a process's console output, interrupts on), and the secondaries' boot
+# iprints -- "CLKn ctl=..." and "cpuN: up" -- can land in the middle of
+# it, a line inside a line: "setpower: devcpu3: up" then " 3 -> ... ON"
+# three lines on. Match against the boot with those lines taken out,
+# wherever they fell, so the line is whole again.
+USBOUT="$(perl -0pe 's/CLK[0-9]+ ctl=[^\n]*\n//g; s/cpu[0-9]+: up\r?\n//g' <<<"$OUT")"
+OUT_SAVED="$OUT"; OUT="$USBOUT"
 check "setpower: dev 3"                  "the USB power domain is requested by id"
 check "setpower: dev 3 .* ON"            "the firmware confirms the USB block is powered"
+OUT="$OUT_SAVED"
 refute "FIRMWARE REFUSED"                "the USB block is not left unpowered"
 
 check "USB port 1 after reset"           "SET_FEATURE(PORT_RESET) enables the port"
@@ -1702,7 +1735,7 @@ check "class 2 maxpkt 64 usb 2.0"        "it is the CDC Ethernet adapter, at hig
 # complete, so the endpoint lines are checked rather than just the
 # header.
 check "config: 2 interface(s), 67 bytes"  "the full configuration descriptor reads back"
-check "if 0 alt 0: class 2.2.255"        "interface 0 is CDC control, vendor protocol (RNDIS)"
+check "if 0 alt 0: class 2.2.255"        "interface 0 of the first configuration is CDC control, vendor protocol (RNDIS)"
 check "if 1 alt 0: class 10.0.0"         "interface 1 is CDC data"
 check "ep2 in bulk maxpkt 64"            "the bulk IN endpoint is described"
 check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
@@ -1711,15 +1744,28 @@ check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
 # into the kernel. See the driver-placement decision in
 # os/bcm2837/README.md.
 #
+# QEMU's usb-net has two configurations: RNDIS first, then CDC ECM.
+# The driver reads both and takes ECM, the open standard, as Linux
+# does; RNDIS is kept tested by the boots that ask for it by name
+# (etherusb=rndis on the command line: the hot-plug boot below and
+# virt's MSI boot).
+#
 # The MAC is the load-bearing check: it is not a constant anywhere in
-# this tree, it is queried out of the device over RNDIS, so a correct
-# answer means the whole chain worked -- SET_CONFIGURATION, a bulk
-# endpoint created through #u, and an RNDIS request/response pair
-# carried on class control transfers to an interface.
-check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u"
-check "etherusb: RNDIS 1.0, max transfer 1580" "the RNDIS handshake completes"
-check "etherusb: ep3.0 rndis, MAC 52:54:00:12:34:57" "the family is chosen and the MAC read out of the device"
-check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
+# this tree, it is read out of the device -- for ECM, the string its
+# Ethernet functional descriptor names -- so a correct answer means
+# the whole chain worked: both configuration descriptors, the union
+# and Ethernet descriptors walked, SET_CONFIGURATION to the second,
+# a string descriptor in UTF-16, and the data interface's setting 1.
+check "etherusb: ep3.0 configuration 2 offers rndis" "the driver reads the first configuration: RNDIS"
+check "etherusb: ep3.0 configuration 1 offers ecm (interfaces 0, 1)" "and the second: ECM, with its union descriptor"
+check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u, from the data interface's setting 1"
+if grep -qE 'etherusb: ep3\.0 ecm, MAC ([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}' <<<"$OUT"; then
+    pass "ECM is chosen over RNDIS and a valid MAC is read out of the device"
+else
+    fail "ECM was not chosen or its device supplied no valid MAC"
+fi
+refute "SET_INTERFACE"                         "the data interface accepts setting 1"
+check "etherusb: ep3.0 ready"                  "the device is in the configuration asked for"
 
 # The file interface, and the interface bound to it. "configured"
 # only appears if ethermedium dialled /net/ether0, opened its three
@@ -1734,6 +1780,7 @@ check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 # The reply comes back too, now; the race that once ate it is under
 # "Networking works, intermittently (RESOLVED)" in os/bcm2837/README.md.
 check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
+check "ether0: kernel data path bound (ecm,"     "the kernel frames ECM: a transfer is a frame"
 # The kernel data path specifically. The endpoints are exclusive-open,
 # so this line only appears if etherusb's "fd = nil" actually closed
 # them before #l tried to take them -- the "init: fd:" destructor
@@ -1805,6 +1852,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         '/dis/tests/exception_test.dis' \
         '/dis/tests/fltfmt_test.dis' \
         'echo 0 > /dev/jit; /dis/tests/fltfmt_test.dis; echo 1 > /dev/jit' \
+        '/dis/tests/nan_test.dis' \
+        'echo 0 > /dev/jit; /dis/tests/nan_test.dis; echo 1 > /dev/jit' \
         '/dis/procstorm.dis 150' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
@@ -1816,6 +1865,10 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /net/iproute' \
         'cat /net/tcp/stats' \
         'iplocktest' \
+        'cat /dev/audiostat' \
+        "dial 'tcp!nosuchhost!9' echo DIALBAD-connected &" \
+        "dial 'tcp!0.0.0.0!9' echo DIALZERO-connected &" \
+        "dial 'tcp!127.0.0.1!9' echo DIALLOOP-connected &" \
         'niltest' \
         'cd /dis; pwd; cd /' \
         'date' \
@@ -1829,14 +1882,20 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'for(i in x y z){ echo loop2-$i }' \
         "ls '#G/gpio/128' '#G/gpio/135'" \
         "ls '#G/gpio/136'" \
+        "ls '#G/gpio'" \
         "cat '#G/gpio/128/level'" \
         "echo 1 > '#G/gpio/128/level'" \
         "cat '#G/gpio/128/level'" \
         "echo 0 > '#G/gpio/129/level'" \
         "echo function out > '#G/gpio/128/ctl'" \
         "cat '#G/gpio/129/ctl'" \
+        "echo PTEMP; cat '#P/cputemp'" \
+        "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
-        'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis')"
+        'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis' \
+        'echo cnsamode on > /dev/sysctl; echo CNSALATE-$status' \
+        'echo console > /dev/sysctl; echo CONSOLEARGS-$status' \
+        'echo SHELL-ENDS')"
 
 # Strip carriage returns once, here.
 #
@@ -1845,7 +1904,44 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
 # broken. Two checks below were written, failed, and were investigated
 # before the cause turned out to be the terminal rather than the shell.
 SHOUT="$(tr -d '\r' <<<"$SHOUT")"
+# Keep the transcript. Dozens of checks below grep it, and a check that
+# fails in CI says only FAIL unless the artifact has what it grepped
+# (CI uploads $BUILD/*.txt). The other sessions are kept the same way,
+# as $PLAT-shell-*.txt.
+printf '%s\n' "$SHOUT" > "$BUILD/$PLAT-shell.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
+
+# What the shell said in reply to one typed command: the lines after
+# its echo, up to the next line the shell starts with a prompt. The
+# n'th time the command was typed if it was typed more than once.
+#
+# Not "the line that starts '; cmd' and the next two". The kernel
+# writes to the same console whenever it likes -- etherusb's link
+# watcher, its time-server timeout, a ping's reply -- and a line of its
+# that lands just after a prompt takes the prompt with it:
+#
+#     ; etherusb: link watch ended: no link state for ecm
+#     cat '#G/gpio/128/level'
+#     ?
+#
+# That is from a run of this session on a loaded host, and the check
+# anchored on "^; cat '#G/gpio/128/level'" took the SECOND cat for the
+# first and read 1 where it wanted ?. One landing between an echo and
+# its reply pushes the reply out of a fixed window the same way. The
+# echo is found with or without prompts in front of it, compared
+# whole, and the reply's own lines can be anywhere in it.
+reply_to() {
+    CMD="$2" N="${3:-1}" awk '
+        inreply && /^; / { exit }
+        inreply { print; next }
+        {
+            l = $0
+            while (substr(l, 1, 2) == "; ")
+                l = substr(l, 3)
+            if (l == ENVIRON["CMD"] && ++seen == ENVIRON["N"])
+                inreply = 1
+        }' <<<"$1"
+}
 
 # The marker appears twice: once as the terminal echo of what was
 # typed, and once as the command's output. Only the second is evidence,
@@ -1873,10 +1969,39 @@ fi
 # took the machine down (#725). "AUTHMOUNT-" with nothing after it is
 # sh's $status for a mount that succeeded; the ls proves the export is
 # served through it.
+# #P, the firmware's temperature and throttle flags (os/bcm/devarch.c),
+# shared with the Pi 4 so a soak can watch both boards' heat. QEMU's
+# firmware model answers the temperature tag; the line after the marker
+# must be a number of degrees.
+R="$(reply_to "$SHOUT" "echo PTEMP; cat '#P/cputemp'")"
+if grep -qxE '[0-9]+\.[0-9]' <<<"$R"; then
+    pass "#P/cputemp reads the firmware's temperature ($(grep -xE '[0-9]+\.[0-9]' <<<"$R") C)"
+else
+    fail "#P/cputemp -- $(tr '\n' ' ' <<<"$R")"
+fi
+echo "  #P/throttled under QEMU: $(reply_to "$SHOUT" "echo PTHROT; cat '#P/throttled'" | grep -vx PTHROT | tr '\n' ' ')"
+
 if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SHOUT"; then
     pass "an authenticated 9P mount (Keyring->auth both ends, ML-KEM + ed25519) works on the kernel (#725)"
 else
     fail "authenticated 9P mount failed -- $(grep -a -E 'AUTHMOUNT|mount:|listen:|auth' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# CNSA strict mode is the machine's, fixed before anything authenticates
+# (os/port/devcons.c): after the ML-KEM-768 mount above, turning it on
+# is refused, since the handshake's answer is already given. virt turns
+# it on before its mount, and authenticates in it.
+if grep -q 'too late, an authentication has already run without it' <<<"$SHOUT" && grep -q '^CNSALATE-..*' <<<"$SHOUT"; then
+    pass "cnsamode is refused once an authentication has run without it"
+else
+    fail "cnsamode after an authentication -- $(grep -a -E 'CNSALATE|cnsamode' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# sysctl's console verb takes on or off: lookupcmd counts the verb, and
+# with a count of 1 "console off" was refused and a bare "console" read
+# past its arguments in the kernel (upstream's, from 2006)
+if grep -q 'wrong #args in control message "console"' <<<"$SHOUT" && grep -q '^CONSOLEARGS-..*' <<<"$SHOUT"; then
+    pass "sysctl: console with no on or off is refused"
+else
+    fail "sysctl: console with no argument -- $(grep -a -E 'CONSOLEARGS|console' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
 fi
 
 # The interface lock after an unanswerable IPv6 datagram (#721).
@@ -1890,6 +2015,35 @@ if grep -q "iplocktest: PASS" <<<"$SHOUT"; then
     pass "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)"
 else
     fail "os/ip: interface lock leaked by the ICMPv6 unreachable reply -- $(grep -a 'iplocktest:' <<<"$SHOUT" | tail -1)"
+fi
+
+# #A/audiostat: what the jack has done (os/port/devaudio.c, the board's
+# line from os/bcm/audiopwm.c). QEMU has no PWM, so nothing is played
+# here: the file is bound in /dev, and at boot nothing is open and
+# nothing has been missed. Underruns used to count the silence the
+# engine plays after the last close, about 21 a second for ever; a
+# board run is what checks that they no longer do.
+if grep -a -q "engine idle open 0 rate 44100 chans 2 bits 16 frames [0-9]* ahead [0-9]* played 0 underruns 0" <<<"$SHOUT"; then
+    pass "#A/audiostat is in /dev: the jack idle, nothing played, no underruns"
+else
+    fail "#A/audiostat -- $(grep -a -E 'engine |audiostat' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# A connect to something that is not an IP address fails at once.
+# parseip reads a name it cannot ("localhost", with no connection
+# server) as 0.0.0.0, and TCP sent its SYN there and sat in Syn_sent
+# for ever: an old sdrfs's "source localhost" hung on a Pi 4 that way.
+# Dialled in the background, so a hang is a missing line, not a wedged
+# shell. A closed port on loopback is refused, as it always was.
+if grep -a -q "cannot dial tcp!nosuchhost!9.*invalid IP address" <<<"$SHOUT" &&
+   grep -a -q "cannot dial tcp!0.0.0.0!9.*invalid IP address" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a name or to 0.0.0.0 is refused as an invalid IP address, not sent to 0.0.0.0"
+else
+    fail "os/ip: connect to a non-address -- $(grep -a -E 'DIAL|cannot dial tcp!(nosuchhost|0\.0\.0\.0)' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+if grep -a -q "cannot dial tcp!127.0.0.1!9.*connection refused" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a closed loopback port is refused"
+else
+    fail "os/ip: loopback connect to a closed port -- $(grep -a -E 'DIALLOOP|cannot dial tcp!127' <<<"$SHOUT" | head -1)"
 fi
 
 # A nil dereference in JIT-compiled code is the program's exception.
@@ -1932,6 +2086,17 @@ if [[ "$(grep -c '^8 passed$' <<<"$SHOUT")" -ge 2 ]]; then
     pass "fltfmt_test: %g, %f, %e, string and real of a string are right in the kernel, JIT and interpreter (8 passed twice)"
 else
     fail "fltfmt_test did not report 8 passed with the JIT and without: $(grep -E 'passed|got ' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
+fi
+
+# NaN and infinity in the kernel's VM. libkernfp/nan.c took a double as
+# two longs -- 64-bit each on this kernel -- so isnan never saw a NaN,
+# NaN() was a denormal, Inf() was 0.0, and the Limbo compiler run on a
+# board died at startup ("bad canonical NaN"). Two "4 passed": JIT and
+# interpreter.
+if [[ "$(grep -c '^4 passed$' <<<"$SHOUT")" -ge 2 ]]; then
+    pass "nan_test: isnan, the canonical NaN, real of \"NaN\" and \"Inf\", and Infinity's bits are right in the kernel, JIT and interpreter (4 passed twice)"
+else
+    fail "nan_test did not report 4 passed with the JIT and without: $(grep -aE 'nan_test|passed|FAIL|assert' <<<"$SHOUT" | head -6 | tr '\n' ' ')"
 fi
 
 # 150 Limbo threads blocked in sys->sleep at once, so the kernel holds
@@ -2154,6 +2319,7 @@ OUT="$OUT_SAVED"
 # and this block does not pretend otherwise.
 TBOUT="$(shell_session "$BUILD/$PLAT-kernel.img" 'echo tryboot > /dev/sysctl')"
 TBOUT="$(tr -d '\r' <<<"$TBOUT")"
+printf '%s\n' "$TBOUT" > "$BUILD/$PLAT-shell-tryboot.txt"
 OUT_SAVED="$OUT"; OUT="$TBOUT"
 check "tryboot: resetting; next boot is the CANDIDATE kernel" \
       "tryboot on /dev/sysctl reaches the board's reset path (pre-existing path, pinned)"
@@ -2399,35 +2565,33 @@ else
 fi
 
 #
-# 3b. Scrolling by moving the window, not by moving the pixels.
+# 3b. Scrolling by copying the pixels, never by moving the window.
 #
-#     Console writes measured 570-770ms on hardware and all of it was
-#     the full-screen memmove -- which put a keystroke's echo the better
-#     part of a second behind the key. The framebuffer is now allocated
-#     taller than the display and scrolling sets a GPU offset instead.
+#     The console used to scroll by moving the GPU's scanout window down
+#     a buffer twice the screen's height, and the draw device then had
+#     to paint where the window was left. On real firmware the window
+#     did not reliably go where it was told: a login screen painted 80
+#     rows below what a 1280x800 HDMI panel on a 3B+ showed, with
+#     console text above it and the cursor off the touch. So the buffer
+#     is now the screen's size, the window stays at 0,0, and the console
+#     copies. What is checked is that design: the console says it
+#     copies, and the allocation the firmware returned has no room for
+#     the window to be anywhere else.
 #
-#     That path cannot run under a plain emulated boot: QEMU grants the
-#     offset but reports a screen-sized allocation, so the safety gate
-#     -- rightly -- keeps the fast path off, and the code that only runs
-#     on hardware would be the code nothing tests. So build a variant
-#     that gives the console half the panel and uses the other half as
-#     headroom. The offset arithmetic, the fold, and the line clearing
-#     then all execute inside the allocation QEMU really did give us.
-#
-#     What this proves is bounded but is the part that matters: the
-#     window moves, a full cycle folds back to the top, no write lands
-#     outside the buffer, and the kernel still finishes booting.
-#
-if build_kernel "$BUILD/$PLAT-fbscroll.img" "" "-DFBSCROLLTEST"; then
-    FBOUT="$(boot_kernel "$BUILD/$PLAT-fbscroll.img" 20)"
-    OUT_SAVED="$OUT"; OUT="$FBOUT"
-    check "console on display .*scroll by GPU offset" "the console scrolls by moving the window, not the pixels"
-    check "fb:   window folded once"   "the window walks to the end of the buffer and folds back"
-    refute "SCROLL OUT OF RANGE"       "no scroll writes outside the framebuffer allocation"
-    check "boot OK"                    "the kernel boots through a full scroll cycle without faulting"
-    OUT="$OUT_SAVED"
+check "console on display 0, .*(scroll by copy)" "the console scrolls by copying, not by moving the scanout window"
+refute "scroll by GPU offset"                     "nothing moves the scanout window"
+fbline="$(grep -aoE 'fb:   [0-9]+x[0-9]+x32 pitch=[0-9]+ base=0x[0-9a-f]+ size=[0-9]+' <<<"$OUT" | head -1)"
+if [[ -z "$fbline" ]]; then
+    fail "no framebuffer allocation line in the boot log"
 else
-    fail "the framebuffer-scroll variant failed to build"
+    fbh="$(sed -E 's/fb:   [0-9]+x([0-9]+)x32.*/\1/' <<<"$fbline")"
+    fbpitch="$(sed -E 's/.*pitch=([0-9]+).*/\1/' <<<"$fbline")"
+    fbsize="$(sed -E 's/.*size=([0-9]+).*/\1/' <<<"$fbline")"
+    if [[ "$fbsize" -lt $((fbpitch * fbh * 2)) ]]; then
+        pass "the framebuffer is the screen's size, not taller: nowhere for the window to move ($fbline)"
+    else
+        fail "the framebuffer is still at least twice the screen's height: $fbline"
+    fi
 fi
 
 #
@@ -2510,40 +2674,58 @@ fi
 #     until something is written and the last write afterwards; on a
 #     board the firmware answers and the "?" never appears.
 #
-if grep -A4 "ls '#G/gpio/128' '#G/gpio/135'" <<<"$SHOUT" | grep -q '#G/gpio/135/level'; then
+R="$(reply_to "$SHOUT" "ls '#G/gpio/128' '#G/gpio/135'")"
+if grep -q '#G/gpio/135/level' <<<"$R"; then
     pass "expander lines are pins 128..135 in #G/gpio, each with ctl and level"
 else
-    fail "#G/gpio/128 and 135 did not list as pin directories"
+    fail "#G/gpio/128 and 135 did not list as pin directories -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "ls '#G/gpio/136'" <<<"$SHOUT" | grep -q 'does not exist\|file does not exist\|not found'; then
+# A listing names every pin: gpiogen gave devdir a name in a buffer on
+# its own stack, and devdir keeps the pointer, so by the time the
+# directory was packed the names were whatever the stack held next.
+# A walk to a pin by name compared it sooner and mostly got away with it.
+R="$(reply_to "$SHOUT" "ls '#G/gpio'")"
+ng="$(tr -d '\r' <<<"$R" | grep -cE '^#G/gpio/([0-9]|[1-4][0-9]|5[0-3]|12[89]|13[0-5])$')"
+if [[ "$ng" -eq 62 ]]; then
+    pass "ls '#G/gpio' names all 62 pins, 0..53 and 128..135 (a name devdir keeps outlives the generator)"
+else
+    fail "ls '#G/gpio' named $ng of 62 pins: $(head -4 <<<"$R" | tr '\n' ' ')"
+fi
+R="$(reply_to "$SHOUT" "ls '#G/gpio/136'")"
+if grep -q 'does not exist\|file does not exist\|not found' <<<"$R"; then
     pass "the expander stops at 135: #G/gpio/136 does not exist"
 else
-    fail "#G/gpio/136 should not exist"
+    fail "#G/gpio/136 should not exist -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | head -2 | grep -q '^?$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/128/level'" 1)"
+if grep -qx '?' <<<"$R"; then
     pass "an expander level the firmware will not report and nothing has written reads as ?"
 else
-    fail "#G/gpio/128/level did not read ? before the first write under QEMU"
+    fail "#G/gpio/128/level did not read ? before the first write under QEMU -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | tail -1 | grep -q '^1$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/128/level'" 2)"
+if grep -qx '1' <<<"$R"; then
     pass "writing 1 to #G/gpio/128/level (BT_ON) goes to the firmware and reads back"
 else
-    fail "#G/gpio/128/level did not read 1 after the write"
+    fail "#G/gpio/128/level did not read 1 after the write -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "echo 0 > '#G/gpio/129/level'" <<<"$SHOUT" | grep -q 'in use by ether4330'; then
+R="$(reply_to "$SHOUT" "echo 0 > '#G/gpio/129/level'")"
+if grep -q 'in use by ether4330' <<<"$R"; then
     pass "#G/gpio/129 (WL_ON) is claimed by ether4330: the radio's power cannot be pulled from under its driver"
 else
-    fail "a write to #G/gpio/129/level was not refused as ether4330's"
+    fail "a write to #G/gpio/129/level was not refused as ether4330's -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "echo function out > '#G/gpio/128/ctl'" <<<"$SHOUT" | grep -q 'no function select'; then
+R="$(reply_to "$SHOUT" "echo function out > '#G/gpio/128/ctl'")"
+if grep -q 'no function select' <<<"$R"; then
     pass "an expander line's ctl refuses function/pull truthfully: the hardware has neither"
 else
-    fail "#G/gpio/128/ctl did not refuse a function write"
+    fail "#G/gpio/128/ctl did not refuse a function write -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A2 "^; cat '#G/gpio/129/ctl'" <<<"$SHOUT" | grep -q '^function \(unknown\|out\|in\)$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/129/ctl'")"
+if grep -q '^function \(unknown\|out\|in\)$' <<<"$R"; then
     pass "an expander line's ctl reads its configuration as the firmware reports it (or unknown, under QEMU)"
 else
-    fail "#G/gpio/129/ctl did not read as a function/pull report"
+    fail "#G/gpio/129/ctl did not read as a function/pull report -- $(tr '\n' ' ' <<<"$R")"
 fi
 
 #
@@ -2588,6 +2770,7 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         'echo 0 > /dev/jit; /dis/echo.dis JIT-TO-INTERP-HANDOFF-OK; echo 1 > /dev/jit' \
         'ls -d /mnt/mntprobe; /dis/echo.dis MNT-PROBE-DONE')"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
+printf '%s\n' "$PLOUT" > "$BUILD/$PLAT-shell-pl011.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$PLOUT"
@@ -2775,6 +2958,7 @@ if [[ -n "$KBDEP" ]]; then
             "cat /usb/usb/$KBDEP/ctl")"
     QEMUARGS="$SAVEDARGS"
     DETOUT="$(tr -d '\r' <<<"$DETOUT")"
+    printf '%s\n' "$DETOUT" > "$BUILD/$PLAT-shell-detach.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- double detach ---"; echo "$DETOUT"; }
     if grep -q "kbdusb: $KBDEP detached" <<<"$DETOUT"; then
         pass "detach written at the shell detaches the keyboard and its driver exits"
@@ -2997,6 +3181,98 @@ else
 fi
 
 #
+# 3f2. A touchscreen that calls itself a mouse (#927).
+#
+#     QEMU's usb-tablet is a HID mouse interface whose reports are
+#     ABSOLUTE positions, 0..32767 -- the Waveshare panel's kind of
+#     device. The pointer driver must read the report descriptor,
+#     notice, and write "a" (a fraction of the screen) rather than
+#     treating the numbers as movement. Half-way across and a quarter
+#     of the way down must land there on the screen, whatever its size.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-tablet.txt" 2>&1
+import subprocess, socket, json, time, sys, threading, os, re
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+PORT = int(os.environ["QMPBASE"]) + 5
+p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-tablet",
+                     "-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+try:
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); p.kill(); sys.exit(0)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    deadline = time.time() + 60
+    while time.time() < deadline and b"mouseusb: " not in buf:
+        time.sleep(0.2)
+    if b"mouseusb: " not in buf:
+        print("SKIP pointer driver never started"); p.kill(); sys.exit(0)
+    time.sleep(3)
+    p.stdin.write(b"path=(/dis .)\r"); p.stdin.flush()
+    time.sleep(1.5)
+    p.stdin.write(b"cat /dev/pointer\r"); p.stdin.flush()
+    time.sleep(2)
+    for _ in range(3):
+        f.write(json.dumps({"execute": "input-send-event", "arguments":
+            {"events": [{"type": "abs", "data": {"axis": "x", "value": 16384}},
+                        {"type": "abs", "data": {"axis": "y", "value": 8192}}]}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.5)
+    time.sleep(2)
+    p.stdin.write(b"cat /dev/fbinfo >[2] /dev/null\r"); p.stdin.flush()
+    time.sleep(1)
+    s.close()
+finally:
+    p.kill(); p.wait()
+txt = bytes(buf).decode("utf-8", "replace")
+print("ABSOLUTE-OK" if re.search(r"mouseusb: \S+ ready on endpoint .*absolute", txt) else "ABSOLUTE-MISSING")
+fb = re.search(r"fb:\s+(\d+)x(\d+)x", txt)
+w, h = (int(fb.group(1)), int(fb.group(2))) if fb else (0, 0)
+rep = re.findall(r"m\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)", txt)
+print("SCREEN %dx%d LAST %s" % (w, h, rep[-1][:2] if rep else "none"))
+if w and rep:
+    x, y = int(rep[-1][0]), int(rep[-1][1])
+    print("PLACED-OK" if abs(x - w//2) <= 3 and abs(y - h//4) <= 3 else "PLACED-WRONG")
+else:
+    print("PLACED-NONE")
+PYEOF
+
+TABOUT="$(cat "$BUILD/$PLAT-tablet.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- tablet ---"; echo "$TABOUT"; }
+if grep -q '^SKIP' <<<"$TABOUT"; then
+    skip "tablet ($(grep '^SKIP' <<<"$TABOUT" | head -1))"
+else
+    if grep -q 'ABSOLUTE-OK' <<<"$TABOUT"; then
+        pass "the pointer driver reads a tablet's report descriptor and finds absolute X and Y"
+    else
+        fail "the pointer driver did not take the tablet as absolute"
+    fi
+    if grep -q 'PLACED-OK' <<<"$TABOUT"; then
+        pass "a tablet position lands at that fraction of the screen ($(grep -o 'SCREEN.*' <<<"$TABOUT"))"
+    else
+        fail "a tablet position did not land where it should ($(grep -o 'SCREEN.*' <<<"$TABOUT"))"
+    fi
+fi
+
+#
 # 3g. The SD card, as blocks.
 #
 #     QEMU's raspi3b models both of the SoC's SD controllers -- the
@@ -3165,6 +3441,7 @@ FSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat '\''#l/ether0/addr'\''')"
 QEMUARGS="$SAVEDARGS"
 FSOUT="$(tr -d '\r' <<<"$FSOUT")"
+printf '%s\n' "$FSOUT" > "$BUILD/$PLAT-shell-fs.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- filesystem ---"; echo "$FSOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$FSOUT"
@@ -3301,6 +3578,7 @@ QEMUARGS="$SAVEDARGS"
 # checks that the transcript itself showed passing went red on the
 # anchored match. So leading prompt fragments are stripped before any
 # line is matched. An output line never begins with "; ".
+tr -d '\r' <<<"$NSOUT" > "$BUILD/$PLAT-shell-ns.txt"
 NSOUT="$(tr -d '\r' <<<"$NSOUT" | sed 's/^\(; \)*//')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- namespace ---"; echo "$NSOUT"; }
 
@@ -3432,6 +3710,7 @@ CLOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'rm -f /n/dos/cpulisten' \
         'echo CPUL-END')"
 CLOUT="$(tr -d '\r' <<<"$CLOUT")"
+printf '%s\n' "$CLOUT" > "$BUILD/$PLAT-shell-cpulisten.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- cpu listener session ---"; echo "$CLOUT"; }
 CLOFF="$(sed -n '/^CPUL-OFF$/,/^CPUL-NOKEY$/p' <<<"$CLOUT")"
 CLNOKEY="$(sed -n '/^CPUL-NOKEY$/,/^CPUL-ON$/p' <<<"$CLOUT")"
@@ -3551,6 +3830,9 @@ NC3="$(shell_session "$BUILD/$PLAT-kernel.img" \
 unset SESSION_DRAIN
 kill $NCHOST 2>/dev/null; wait $NCHOST 2>/dev/null
 NC2="$(tr -d '\r' <<<"$NC2")"; NC3="$(tr -d '\r' <<<"$NC3")"
+tr -d '\r' <<<"$NC1" > "$BUILD/$PLAT-shell-netcons1.txt"
+printf '%s\n' "$NC2" > "$BUILD/$PLAT-shell-netcons2.txt"
+printf '%s\n' "$NC3" > "$BUILD/$PLAT-shell-netcons3.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- network console, boot 2 ---"; echo "$NC2"; echo "  --- boot 3 ---"; echo "$NC3"; }
 if grep -q 'init: network console on tcp!\*!17010 (every interface), token required' <<<"$NC2" \
    && grep -q 'NETCONS-LO-SERVED$' <<<"$NC2" \
@@ -3616,6 +3898,7 @@ qemu, img, sd = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 14   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu, "-M", "raspi3b", "-netdev", "user,id=n0", "-device", "usb-net,netdev=n0,id=usbnet0",
                       "-drive", "file=%s,if=sd,format=raw" % sd, "-kernel", img, "-display", "none",
+                      "-append", "etherusb=rndis",   # the link watcher asks RNDIS; ECM has no link to ask
                       "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % PORT, "-serial", "null", "-serial", "stdio"],
                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -3778,6 +4061,7 @@ FS32="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /n/dos')"
 QEMUARGS="$SAVEDARGS"
 FS32="$(tr -d '\r' <<<"$FS32")"
+printf '%s\n' "$FS32" > "$BUILD/$PLAT-shell-fat32.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- fat32 ---"; echo "$FS32"; }
 
 if grep -q 'fat32 works on bare metal' <<<"$FS32"; then
@@ -4227,6 +4511,7 @@ DRAWOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /dev/draw' \
         'cat /dev/draw/new')"
 DRAWOUT="$(tr -d '\r' <<<"$DRAWOUT")"
+printf '%s\n' "$DRAWOUT" > "$BUILD/$PLAT-shell-draw.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- draw ---"; echo "$DRAWOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$DRAWOUT"
@@ -4255,6 +4540,7 @@ DRAW2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "bind '#i' /dev" \
         'drawtest')"
 DRAW2="$(tr -d '\r' <<<"$DRAW2")"
+printf '%s\n' "$DRAW2" > "$BUILD/$PLAT-shell-drawtest.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- drawtest ---"; echo "$DRAW2"; }
 
 OUT_SAVED="$OUT"; OUT="$DRAW2"
@@ -4281,14 +4567,17 @@ TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'touch -t' \
         'usbserial -t' \
+        'mouseusb -t' \
         'ls /dev/touch')"
 TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
+printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
-check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
+check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel; its frames reach touchgest (a held finger is button 3)"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
+check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded; a multi-touch digitizer's fingers, its frames (hybrid too) and device mode, through touchgest; the tablet no touch screen"
 OUT="$OUT_SAVED"
 
 #
@@ -4311,6 +4600,7 @@ TKOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "bind '#i' /dev" \
         'tktest')"
 TKOUT="$(tr -d '\r' <<<"$TKOUT")"
+printf '%s\n' "$TKOUT" > "$BUILD/$PLAT-shell-tktest.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- tktest ---"; echo "$TKOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$TKOUT"
@@ -4522,6 +4812,7 @@ if build_kernel "$BUILD/$PLAT-wifi.img" "" "-DETHER4330STUB"; then
         'echo WIFI8; echo wibble 1 > /net/ether1/0/ctl' \
         'echo WIFI9; cat /net/ether1/ifstats')"
     WOUT="$(tr -d '\r' <<<"$WOUT")"
+    printf '%s\n' "$WOUT" > "$BUILD/$PLAT-shell-wifi.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- radio ctl ---"; echo "$WOUT"; }
 
     # The text a session produced between one marker and the next.
@@ -4628,6 +4919,7 @@ if [[ "$SOAKSECS" -gt 0 ]]; then
         '{while {~ 1 1} {cat /dis/sh.dis /dis/sh.dis > /tmp/big; cat /tmp/big > /dev/null; rm /tmp/big}} &' \
         "sleep $SOAKSECS")"
     SOAKOUT="$(tr -d '\r' <<<"$SOAKOUT")"
+    printf '%s\n' "$SOAKOUT" > "$BUILD/$PLAT-shell-soak.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- soak session ---"; echo "$SOAKOUT" | tail -20; }
     if ! grep -q "dRaInEd" <<<"$SOAKOUT"; then
         fail "scheduler soak: the shell did not come back after $SOAKSECS s of load (wedged, or the drain deadline is too short)"
@@ -4727,7 +5019,7 @@ platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
+if [[ -z "$BUILDONLY" ]] && ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
     skip "this QEMU build has no virt machine model"
     return
 fi
@@ -4739,7 +5031,7 @@ else
     grep -m 20 'error:\|undefined symbol' "$BUILD/cc.log"
     return
 fi
-[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+[[ -n "$BUILDONLY" ]] && return
 
 OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 60)"
 printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
@@ -4788,6 +5080,65 @@ fi
 vrefute "nothing panics"                           "panic:"
 vcheck "init reaches the shell"                    "init: starting the shell"
 vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv2"
+
+# Raw Ethernet from a UDP socket netdev gives the native stack packets the
+# host kernel cannot normalise first. Keep the valid fragmented control beside
+# the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
+# and hundreds of one-byte descending TCP segments (head insertion).
+if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
+    if grep -q '^ARP-PADDING-PASS$' <<<"$NETSEC"; then
+        pass "virt: ARP replies do not disclose kernel bytes in Ethernet padding"
+    else
+        fail "virt: ARP reply padding was not cleared -- $NETSEC"
+    fi
+    if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
+        pass "virt: valid fragmented ICMP is still reassembled"
+    else
+        fail "virt: raw network control did not pass -- $NETSEC"
+    fi
+    if grep -q '^FRAGMENT-DF-PASS$' <<<"$NETSEC"; then
+        pass "virt: DF-only IPv4 packets do not disturb fragment queues"
+    else
+        fail "virt: DF flag was mistaken for fragmentation -- $NETSEC"
+    fi
+    if grep -q '^FRAGMENT-LIE-PASS$' <<<"$NETSEC"; then
+        pass "virt: IPv4 reassembly rejects a total length beyond received bytes"
+    else
+        fail "virt: lying IPv4 fragment was not rejected -- $NETSEC"
+    fi
+    if grep -q '^IPV4-IHL-PASS$' <<<"$NETSEC" && grep -q '^IPV4-TRIM-PASS$' <<<"$NETSEC"; then
+        pass "virt: IPv4 validates IHL before checksum and trims link padding"
+    else
+        fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
+    fi
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC" && grep -q '^TRANSPORT-HEADER-PASS$' <<<"$NETSEC"; then
+        pass "virt: incomplete and malformed UDP/TCP headers are rejected without panic"
+    else
+        fail "virt: transport header length checks did not pass -- $NETSEC"
+    fi
+    if grep -q '^DEVIP-NEGATIVE-PASS$' <<<"$NETSEC"; then
+        pass "virt: a negative IP device attach is rejected without corruption"
+    else
+        fail "virt: negative IP device attach check did not pass -- $NETSEC"
+    fi
+    if grep -q '^TCP-LIMBO-REAP-PASS$' <<<"$NETSEC"; then
+        pass "virt: a half-open TCP flood is fully reaped"
+    else
+        fail "virt: TCP half-open entries did not age out -- $NETSEC"
+    fi
+    if grep -q '^TCP-WINDOW-SCALE-PASS$' <<<"$NETSEC"; then
+        pass "virt: TCP applies the peer's window scale to its send window"
+    else
+        fail "virt: TCP window-scale directions are reversed -- $NETSEC"
+    fi
+    if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
+        pass "virt: descending one-byte TCP segments hit the packet-count limit"
+    else
+        fail "virt: TCP resequencing packet limit was not observed -- $NETSEC"
+    fi
+else
+    fail "virt: raw network security regressions failed -- $NETSEC"
+fi
 
 #
 # The same boot on a GICv3: the interrupt controller of the Orin, the
@@ -4840,6 +5191,10 @@ args = [qemu] + extra.split() + [
     "-kernel", img, "-display", "none", "-serial", "stdio",
     "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
     "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    # a USB adapter beside it, on a network of its own: ether0 is the
+    # kernel's virtio driver, so this is the Pi 4's case (GENET has
+    # ether0) and must land on a spare instance
+    "-netdev", "user,id=n1,net=10.0.3.0/24", "-device", "usb-net,netdev=n1",
     "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device",
     "-qmp", "unix:%s,server,nowait" % qmp]
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -4880,15 +5235,25 @@ try:
     waitfor(b"init: starting the shell", 90)
     # DHCP runs in its own thread after the shell starts; give it its time
     waitfor(b"etherusb: default route", 30)
+    # the USB adapter's turn at port 68 comes after virtio's
+    waitfor(b"is reached here", 120)
+    waitfor(b"ICMP echo reply from 10.0.3.2", 20)
     time.sleep(1.5)
+    typed("cat /net/ether2/addr; echo")
+    typed("cat /net/iproute")
     typed("cat /n/dos/HELLO.TXT")
     typed("echo written-through-virtio > /n/dos/virt.txt; cat /n/dos/virt.txt", 2.5)
     typed("cat /net/ether0/addr; echo")
     typed("cat /net/ether0/ifstats")
     typed("iplocktest", 3)
     typed("niltest", 2)
+    # CNSA strict mode on before anything authenticates, as osinit does
+    # from the card's cnsamode file: the mount below is then ML-KEM-1024
+    # both ways, on kernel stacks (the bcm2837 boot keeps ML-KEM-768)
+    typed("echo cnsamode off > /dev/sysctl; echo CNSAOFF-$status")
+    typed("echo cnsamode on > /dev/sysctl; echo CNSAON-$status")
     typed("listen 'tcp!*!17030' export / &")
-    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 4)
+    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 6)
     typed("cat /dev/sdctl")
     typed("echo VIRT-DATE `{date}")
 
@@ -4950,6 +5315,16 @@ vcheck "init finds the kernel link driver"         "init: ether0 is a kernel lin
 # an authenticated 9P mount, both ends on this kernel (#725; the bcm2837
 # check tells the story)
 vcheck "os/ip + keyring: an authenticated 9P mount works on the kernel (#725)" "/n/remote/dis/sh.dis"
+if tr -d '\r' <<<"$OUT" | grep -qx 'CNSAON-'; then
+    pass "cnsamode on is taken before anything has authenticated; the mount above ran in it (ML-KEM-1024)"
+else
+    fail "cnsamode on -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAON|cnsamode' | head -2 | tr '\n' ' ')"
+fi
+if tr -d '\r' <<<"$OUT" | grep -q 'cnsamode: only on' && tr -d '\r' <<<"$OUT" | grep -qx 'CNSAOFF-..*'; then
+    pass "cnsamode cannot be turned off"
+else
+    fail "cnsamode off was not refused -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAOFF|cnsamode' | head -2 | tr '\n' ' ')"
+fi
 # os/init/iplocktest.b, typed at the shell: the interface lock is balanced
 # after an ICMPv6 unreachable reply (#721; see the bcm2837 check for the story)
 vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)" "iplocktest: PASS"
@@ -4959,6 +5334,15 @@ vcheck "a nil dereference in JIT code is the program's exception, not a panic" "
 vcheck "page zero is not mapped: a nil ref's later field faults too (#735)" "niltest: OFFSET CAUGHT dereference of nil"
 vcheck "DHCP answers over virtio-net"              "etherusb: 10.0.2.15 mask"
 vcheck "a default route is installed"              "etherusb: default route via 10.0.2.2"
+# The USB adapter beside virtio-net: ether0 is the kernel driver's and
+# refuses the bind, so the adapter takes the first spare, gets its own
+# network's address, and leaves the default route where it was.
+vcheck "usb: a USB adapter on a machine whose ether0 is a kernel driver goes to a spare" "etherusb: serving /net/ether2 (kernel data path)"
+vcheck "usb: the spare is framed for ECM"           "ether2: kernel data path bound (ecm,"
+vcheck "usb: DHCP answers on the adapter's own network" "etherusb: 10.0.3.15 mask"
+vcheck "usb: the default route stays with ether0"   "the default route stays where it is; 10.0.3.2 is reached here"
+vcheck "usb: the adapter's gateway answers a ping over it" "ICMP echo reply from 10.0.3.2"
+vrefute "usb: the adapter takes no default route"   "default route via 10.0.3.2"
 # Hot plugging over a kernel link driver: etherusb -k's link watcher
 # reads the link from the netif (/net/ether0/stats), which virtio-net now
 # keeps from the device's own status (VIRTIO_NET_F_STATUS); it was set
@@ -4966,7 +5350,7 @@ vcheck "a default route is installed"              "etherusb: default route via 
 # patch. The same watcher covers GENET (Pi 4) and GEM (PolarFire), whose
 # drivers already kept nif.link from their PHYs.
 cp "$VSD" "$BUILD/$PLAT-hotplug-sd.img"
-VHPOUT="$(python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hotplug-sd.img" <<'PYEOF'
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hotplug-sd.img" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt"
 import subprocess, socket, time, json, os, sys, threading
 qemu, img, extra, sd = sys.argv[1:5]
 PORT = int(os.environ["QMPBASE"]) + 16   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
@@ -5011,7 +5395,7 @@ finally:
     p.kill()
 sys.stdout.write(buf.decode(errors="replace").replace("\r", ""))
 PYEOF
-)"
+VHPOUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
 if ! grep -q '^VHP-ADDRESS-AT-BOOT$' <<<"$VHPOUT"; then
     fail "virt: hot plug: ether0 got no address at boot, so the link could not be pulled"
 else
@@ -5068,16 +5452,17 @@ fi
 # under, where PCI devices reach the first gigabyte only -- so that the
 # bounce path is run by this harness and not first on a board.
 #
-# virt_usb_boot <machine args> <log>: the boot described above
+# virt_usb_boot <machine args> <log> [words]: the boot described above;
+# the words join pcibounce on the kernel's command line
 virt_usb_boot() {
 cp "$VSD" "$BUILD/$PLAT-usbdisk.img"
-python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" "$BUILD/$PLAT-usbdisk.img" <<'PYEOF' > "$2" 2>&1
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" "$BUILD/$PLAT-usbdisk.img" "pcibounce ${3:-}" <<'PYEOF' > "$2" 2>&1
 import json, os, socket, subprocess, sys, threading, time
-qemu, img, extra, qmp, udisk = sys.argv[1:6]
+qemu, img, extra, qmp, udisk, append = sys.argv[1:7]
 if os.path.exists(qmp):
     os.unlink(qmp)
 args = [qemu] + extra.split() + [
-    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", append.strip(),
     "-device", "usb-hub,port=1", "-device", "usb-kbd,port=1.2", "-device", "usb-mouse,port=2",
     "-netdev", "user,id=u0", "-device", "usb-net,netdev=u0,port=3",
     "-drive", "if=none,id=ud,file=%s,format=raw" % udisk, "-device", "usb-storage,drive=ud,port=4",
@@ -5167,6 +5552,7 @@ vcheck "xhci: a keyboard BEHIND the hub is claimed"    "kbdusb: ep"
 vcheck "xhci: a mouse is claimed"                      "mouseusb: ep"
 vcheck "xhci: keys typed on the USB keyboard reach the shell (interrupt IN, through the hub)" "Xhci-Keys"
 vcheck "xhci: USB Ethernet comes up as ether0 (bulk endpoints)" "etherusb: serving /net/ether0 (kernel data path)"
+vcheck "xhci: usb-net's ECM configuration is chosen over its RNDIS one" "ether0: kernel data path bound (ecm,"
 # a USB disk (os/init/diskusb.b): mass storage, bulk-only, SCSI. Served as
 # a block file and mounted by dossrv -- for init's namespace by the
 # driver, for the console shell's by the shell, which is what is typed.
@@ -5210,7 +5596,9 @@ vcheck "xhci: qemu-xhci has no MSI, and is given a wire" "usbxhci interrupts by 
 # interrupt -- one that must have been made edge-triggered first.
 #
 if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
-    virt_usb_boot "${VIRTARGS/qemu-xhci/nec-usb-xhci}" "$BUILD/$PLAT-xhci-msi.txt"
+    # and the RNDIS family, asked for by name: usb-net offers ECM too,
+    # which every other boot here takes
+    virt_usb_boot "${VIRTARGS/qemu-xhci/nec-usb-xhci}" "$BUILD/$PLAT-xhci-msi.txt" etherusb=rndis
     OUT="$(cat "$BUILD/$PLAT-xhci-msi.txt")"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
     vcheck "msi: the GIC's MSI frame is found"             "pci: MSI frame at 0x8020000: interrupts 80-"
@@ -5218,12 +5606,118 @@ if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
     vcheck "msi: a keyboard behind a hub is claimed"       "kbdusb: ep"
     vcheck "msi: keys typed on it reach the shell"         "Xhci-Keys"
     vcheck "msi: the gateway answers a ping over USB Ethernet" "ICMP echo reply from 10.0.2.2"
+    vcheck "msi: etherusb=rndis picks usb-net's RNDIS configuration" "ether0: kernel data path bound (rndis,"
+    vcheck "msi: the RNDIS handshake completes"            "RNDIS 1.0, max transfer 1580"
+    vcheck "msi: the MAC is queried out of the device over RNDIS" "rndis, MAC 52:54:00:12:34:"
     vcheck "msi: the USB disk reads and writes"            "written-over-usb"
     vcheck "msi: isochronous writes are paced"             ": PACED, 0 errors"
     vrefute "msi: nothing panics"                          "panic:"
 else
     skip "virt: this QEMU has no nec-usb-xhci, the xHCI model with MSI"
 fi
+
+#
+# A card reader: one USB device with several logical units, which is
+# what a reader with an SD, a microSD and a CF slot is. QEMU's usb-bot
+# is the bulk-only transport with SCSI units behind it: two disks on
+# LUNs 0 and 1, and a CD drive with no disc on LUN 2 -- the empty slot.
+# The driver must serve both disks as disks of their own (the second's
+# FAT reached and written, landing on its image and not the first's),
+# watch the empty slot, serve it when QMP puts a medium in, and say so
+# when the medium is taken out.
+#
+cp "$VSD" "$BUILD/$PLAT-lun0.img"
+cp "$VSD" "$BUILD/$PLAT-lun1.img"
+dd if=/dev/zero of="$BUILD/$PLAT-lun2.iso" bs=1M count=1 status=none
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-lqmp.sock" "$BUILD" "$PLAT" <<'PYEOF' > "$BUILD/$PLAT-lun.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp, build, plat = sys.argv[1:7]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+img0, img1, iso = ["%s/%s-%s" % (build, plat, f) for f in ("lun0.img", "lun1.img", "lun2.iso")]
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-device", "usb-bot,id=bot,port=1",
+    "-drive", "if=none,id=l0,file=%s,format=raw" % img0, "-device", "scsi-hd,bus=bot.0,scsi-id=0,lun=0,drive=l0",
+    "-drive", "if=none,id=l1,file=%s,format=raw" % img1, "-device", "scsi-hd,bus=bot.0,scsi-id=0,lun=1,drive=l1",
+    "-drive", "if=none,id=l2", "-device", "scsi-cd,id=cd,bus=bot.0,scsi-id=0,lun=2,drive=l2",
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"served as /chan/usbdisk1", 30)
+    waitfor(b"mounted on /n/usb1", 10)
+    time.sleep(2)
+    # the second unit's FAT, from the console shell (diskusb.b says why by hand)
+    typed("dossrv -f /chan/usbdisk1 -m /n/usb1", 3)
+    typed("cat /n/usb1/HELLO.TXT")
+    typed("echo written-to-lun1 > /n/usb1/lun1.txt; cat /n/usb1/lun1.txt", 3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    # a medium into the empty slot
+    f.write(json.dumps({"execute": "blockdev-change-medium",
+        "arguments": {"id": "cd", "filename": iso, "format": "raw"}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"served as /chan/usbdisk2", 20)
+    time.sleep(3)
+    # and out again
+    f.write(json.dumps({"execute": "eject", "arguments": {"id": "cd", "force": True}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"medium removed", 20)
+    time.sleep(1)
+    # and back: the same unit, the same name, its size read again
+    f.write(json.dumps({"execute": "blockdev-change-medium",
+        "arguments": {"id": "cd", "filename": iso, "format": "raw"}}) + "\n"); f.flush(); f.readline()
+    end = time.time() + 20
+    while time.time() < end and buf.count(b"served as /chan/usbdisk2") < 2:
+        time.sleep(0.2)
+    time.sleep(1)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-lun.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "lun: GET MAX LUN finds the reader's three units"       "has 3 logical units"
+vcheck "lun: unit 0 is a disk of its own"                     "LUN 0 QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk0"
+vcheck "lun: unit 1 is another, the next number"              "LUN 1 QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk1"
+vcheck "lun: the empty slot is watched, not a failure"        "LUN 2 (QEMU QEMU CD-ROM): not ready, no medium: no medium; watched for one"
+vcheck "lun: both FATs are mounted for init"                  "diskusb: /chan/usbdisk1 mounted on /n/usb1"
+vcheck "lun: the second unit's FAT reads from the shell"      "hello from the SD card"
+vcheck "lun: and writes"                                      "written-to-lun1"
+if grep -aq "written-to-lun1" "$BUILD/$PLAT-lun1.img" && ! grep -aq "written-to-lun1" "$BUILD/$PLAT-lun0.img"; then
+    pass "virt: lun: the write reached unit 1's image and not unit 0's (the LUN is in every command)"
+else
+    fail "virt: lun: the write to /n/usb1 is not on unit 1's image alone"
+fi
+vcheck "lun: a medium put into the empty slot is served"      "LUN 2 QEMU QEMU CD-ROM: 512 blocks of 2048 bytes (1 MB), served as /chan/usbdisk2"
+vcheck "lun: taking it out is noticed"                        "LUN 2: medium removed; /chan/usbdisk2 fails until one is back"
+if [[ "$(grep -ac 'LUN 2 QEMU QEMU CD-ROM: 512 blocks of 2048 bytes (1 MB), served as /chan/usbdisk2' <<<"$OUT")" -ge 2 ]]; then
+    pass "virt: lun: a medium put back is read again, under the same name"
+else
+    fail "virt: lun: the medium put back was not served again"
+fi
+vrefute "lun: nothing panics"                                 "panic:"
+vrefute "lun: no exception goes unhandled"                    "unhandled exception"
+rm -f "$BUILD/$PLAT-lun0.img" "$BUILD/$PLAT-lun1.img" "$BUILD/$PLAT-lun2.iso"
 
 #
 # A USB serial adapter, on xHCI: QEMU's usb-serial is an FTDI FT232BM,
@@ -5452,6 +5946,74 @@ fi
 vrefute "hotplug: nothing panics"                      "panic:"
 
 #
+# A keyboard in report protocol. Every boot keyboard is read with the
+# boot protocol unless it is asked otherwise, and QEMU offers no other
+# kind; "kbdusb=report" on the command line asks, so the report-
+# descriptor path -- descriptor read, parsed by the Hid library,
+# SET_PROTOCOL(report), reports decoded by it -- runs on a real device
+# model. usb-kbd's descriptor is the HID spec's boot keyboard, so its
+# reports are the same eight bytes either way; what this proves is the
+# decoding path, and the shifted letters prove the modifier bits come
+# through it.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-rqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-kbdreport.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "kbdusb=report",
+    "-device", "usb-kbd,port=1", "-device", "usb-mouse,port=2", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def qkey(f, ch):
+    shift = ch.isupper()
+    keys = (["shift"] if shift else []) + [QCODE.get(ch, ch.lower())]
+    for down in (True, False):
+        ev = [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
+              for k in (keys if down else reversed(keys))]
+        f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.05)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"kbdusb: ep", 30)
+    time.sleep(2)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    for ch in "echo Report-Keys\n":
+        qkey(f, ch)
+    time.sleep(3)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-kbdreport.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "kbdreport: kbdusb=report puts the keyboard in report protocol, decoded by its descriptor" "(report protocol, report 0)"
+vrefute "kbdreport: the keyboard accepts SET_PROTOCOL(report)" "SET_PROTOCOL(report) failed"
+vcheck "kbdreport: keys typed in report protocol reach the shell, shifted ones too" "Report-Keys"
+vrefute "kbdreport: nothing panics"                     "panic:"
+
+#
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)
 # unless told otherwise, and everything above ran on that; a modern one
 # finds its queues by three addresses instead of a page number, insists
@@ -5667,8 +6229,209 @@ PYEOF
     vrefute "headless: nothing claims a desktop exited"     "the desktop has exited"
     vcheck "headless: the machine is up -- shell and network" "etherusb: 10.0.2.15 mask"
     vrefute "headless: nothing panics"                      "panic:"
+
+    #
+    # More than one Dis VM (#944): #X, the vm command, programs in VMs 1
+    # and 2 at once, and the two places the kernel crosses between VMs --
+    # a VM 1 client of a file a VM 0 program serves through file2chan
+    # (devsrv), and a VM 0 kill of a VM 1 Prog (devprog). Correctness
+    # here; how much faster four VMs are is measured on the board, which
+    # TCG is no stopwatch for.
+    #
+    # its own card: the desktop's, with a vms file placing one program
+    # at boot and naming one that is not there
+    printf '# boot placement (#944)\n1 sleep 600\n3 nosuchprogram\n' > "$BUILD/vms"
+    python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-card-vm.img" 192 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr= \
+        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" /vms="$BUILD/vms" > "$BUILD/mkcard-vm.txt" 2>&1
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-card-vm.img" <<'PYEOF' > "$BUILD/$PLAT-vm.txt" 2>&1
+import re, subprocess, sys, threading, time
+qemu, img, extra, card = sys.argv[1:5]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % card, "-device", "virtio-blk-device,drive=sd"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def rd():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=rd, daemon=True).start()
+def waitfor(pat, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if re.search(pat, bytes(buf[start:])):
+            return True
+        time.sleep(0.3)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(rb"init: starting the shell", 150)
+    time.sleep(8)
+    typed("vm")
+    m = len(buf)
+    typed("vm 1 jitbench2", 0.5)
+    typed("vm 2 jitbench2", 0.5)
+    end = time.time() + 300
+    while len(re.findall(rb"Total Time: \d+ ms", bytes(buf[m:]))) < 2 and time.time() < end:
+        time.sleep(0.5)
+    time.sleep(1)
+    # Three VMs loading the same module at the same instant: the loads
+    # contend for the JIT's compile lock, and the one that waited used
+    # to let its interpreter go, so its VM's collector swept the module
+    # being parsed (libinterp/load.c, lockedcompile). The Pi 4's soak
+    # panicked on this a minute in. sh is loaded in none of the three
+    # yet, so all three parse and compile it.
+    m = len(buf)
+    typed("load std; for(n in 1 2 3) { vm $n sh -c 'load std; for(i in 1 2 3 4 5 6 7 8){ sleep 0 }; echo CONCSH-ok' & }", 0.5)
+    end = time.time() + 60
+    while bytes(buf[m:]).count(b"\nCONCSH-ok") < 3 and time.time() < end:
+        time.sleep(0.5)
+    time.sleep(1)
+    typed("ramfile /chan/vmrf served-from-vm0", 1)
+    typed("vm 1 cat /chan/vmrf", 3)
+    typed("vm 1 sh -c 'echo written-by-vm1 > /chan/vmrf'", 3)
+    typed("echo VMRF `{cat /chan/vmrf}", 2)
+    # not pid=`{vm 1 sleep 300}: the sleep shares vm's output, which
+    # there is the substitution's pipe, held open for the 300 seconds
+    typed("ramfile /chan/vmpid", 1)
+    typed("vm 1 sleep 300 > /chan/vmpid", 2)
+    typed("pid=`{cat /chan/vmpid}; echo VMSLEEP pid $pid", 2)
+    typed("ps; echo VMPSBEFORE", 3)
+    typed("kill $pid; sleep 1; echo VMPS; ps; echo VMKILLED", 3)
+    typed("vm 1 sh -c 'load tk'", 4)
+    # the VM directories by name, as a listing gives them: vmgen once
+    # gave devdir a name on its own stack, dead by the time devdirread
+    # packed it -- every listing came back garbage
+    typed("ls '#X/vm'; echo VMLSEND", 2)
+    # vmstress: echo servers and allocators in VMs 1-3, traffic to them
+    # from VM 0 and between them, a job started every 300 ms, bursts
+    # in all four at once, sleepers killed across VMs; every count
+    m = len(buf)
+    typed("vmstress run /tmp/vs 75", 0.5)
+    waitfor(rb"vmstress: stopped", 200, m)
+    # its end kills, from VM 0, clients that may be inside a file another
+    # VM serves: each must die, in its own VM, and nothing else may break
+    time.sleep(10)
+    typed("echo VSAFTER; for(i in 2 3){cat '#X/vm/'^$i^/status}; ps | grep Vmstress; echo VSAFTEREND", 3)
+    typed("vm")
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+    rm -f "$BUILD/$PLAT-card-vm.img"
+    OUT="$(cat "$BUILD/$PLAT-vm.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "vm: the card's vms file starts a program in VM 1 at boot" "init: vm 1: /dis/sleep.dis 600, pid "
+    vcheck "vm: and says so when one it names is not there"   "init: vms: /dis/nosuchprogram.dis in VM 3:"
+    vcheck "vm: #X lists the VMs: 0, and 1 and 3 from the card" "vms 3 max 4"
+    vcheck "vm: the boot-placed program is in VM 1"           "vm 1 progs 1 "
+    nt="$(grep -ac 'Total Time: [0-9]* ms' <<<"$OUT")"
+    if [[ "$nt" -ge 2 ]]; then
+        pass "virt: vm: jitbench2 in VM 1 and VM 2 at once, both to the end ($(grep -ao 'Total Time: [0-9]* ms' <<<"$OUT" | tr '\n' ' '))"
+    else
+        fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
+    fi
+    vcheck "vm: with VM 2, four"                              "vms 4 max 4"
+    nc="$(tr -d '\r' <<<"$OUT" | grep -ac '^CONCSH-ok')"
+    if [[ "$nc" -ge 3 ]]; then
+        pass "virt: vm: sh started in VMs 1, 2 and 3 at the same instant -- three loads contending for the compiler -- all three run to the end"
+    else
+        fail "virt: vm: sh in VMs 1-3 at once: $nc of 3 finished"
+    fi
+    vcheck "vm: a VM 1 program reads a file a VM 0 program serves (file2chan across VMs)" "served-from-vm0"
+    vcheck "vm: and writes it"                                "VMRF written-by-vm1"
+    if grep -aqE "^VMSLEEP pid [0-9]+" <<<"$(tr -d '\r' <<<"$OUT")"; then
+        pass "virt: vm: a VM 1 Prog is given a pid"
+    else
+        fail "virt: vm: vm 1 sleep gave no pid"
+    fi
+    VMOUT="$(tr -d '\r' <<<"$OUT")"
+    if sed -n '/echo VMPSBEFORE/,/^VMPSBEFORE/p' <<<"$VMOUT" | grep -aq "Sleep"; then
+        pass "virt: vm: ps lists the VM 1 Prog among VM 0's (/prog across VMs)"
+    else
+        fail "virt: vm: ps does not show the VM 1 sleep"
+    fi
+    # by pid: the sleep the card's vms file started at boot is a Sleep too
+    killpid="$(grep -aoE '^VMSLEEP pid [0-9]+' <<<"$VMOUT" | grep -oE '[0-9]+$' | head -1)"
+    if [[ -z "$killpid" ]]; then
+        fail "virt: vm: no pid to kill"
+    elif sed -n '/^VMPS$/,/^VMKILLED$/p' <<<"$VMOUT" | grep -aqE "^ *$killpid "; then
+        fail "virt: vm: VM 1's sleep (pid $killpid) outlived its kill from VM 0"
+    else
+        pass "virt: vm: VM 0 kills it (devprog across VMs)"
+    fi
+    vcheck "vm: \$Tk stays VM 0's: VM 1's shell cannot load it" "not built-in"
+    vls="$(sed -n "/ls .#X\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | grep -acE '^#X/vm/[0-3]$')"
+    if [[ "$vls" -eq 4 ]]; then
+        pass "virt: vm: ls '#X/vm' names VMs 0-3 (a name devdir keeps outlives the generator)"
+    else
+        fail "virt: vm: ls '#X/vm' gave $vls of 4 VM names: $(sed -n "/ls .#X\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | head -6 | tr '\n' ' ')"
+    fi
+    vs="$(grep -aE '^vmstress: [0-9]+s starts' <<<"$VMOUT" | tail -1)"
+    if [[ -z "$vs" ]]; then
+        fail "virt: vmstress: no report (did it start? $(grep -a 'vmstress:' <<<"$VMOUT" | head -2 | tr '\n' ' '))"
+    elif grep -qE 'startfail 0 .*burstfail 0 kills [1-9][0-9]* killfail 0 traffic ok [1-9][0-9]* bad 0;' <<<"$vs" &&
+        ! grep -qE 'starts 0 |done 0 |bursts 0 ' <<<"$vs" && grep -aq '^vmstress: stopped' <<<"$VMOUT"; then
+        pass "virt: vmstress: churn, bursts, kills and traffic across four VMs, nothing failed (${vs%%;*})"
+    else
+        fail "virt: vmstress: $vs"
+    fi
+    vsafter="$(sed -n '/^VSAFTER$/,/^VSAFTEREND$/p' <<<"$VMOUT")"
+    if grep -aq '^vm 2 progs 0 ' <<<"$vsafter" && grep -aq '^vm 3 progs 0 ' <<<"$vsafter" && ! grep -aq 'Vmstress' <<<"$vsafter"; then
+        pass "virt: vmstress: everything it started is gone 10 s after it stops -- clients killed from VM 0 while inside another VM's served file included"
+    else
+        fail "virt: vmstress: left behind after its end: $(tr '\n' ' ' <<<"$vsafter")"
+    fi
+    vrefute "vm: nothing panics"                              "panic:"
+    vrefute "vm: no exception goes unhandled"                 "unhandled exception"
 else
     fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
+fi
+
+# No entropy source: the machine fails closed (os/port/random.c).
+#
+# The same kernel without virtio-rng, on a cortex-a53, which has no
+# RNDR: no generator at all. It must still boot to its shell (nrand,
+# which picks port numbers, never waits), make no key material -- a read
+# of #c/notquiterandom, what libsec's key generators are, waits and says
+# why -- and leave #c/random's readers waiting too. Then the same with
+# "insecurerandom" on the command line, when the counter is handed out
+# and labelled. Every board without a generator used to hand it out
+# silently but for one line. A marker is printed as A^B so the typed
+# line, which the console echoes, cannot be taken for the output.
+NORNGARGS="${VIRTARGS/ -device virtio-rng-device/}"
+savedargs="$QEMUARGS"
+QEMUARGS="$NORNGARGS"
+NROUT="$(SESSION_DRAIN=20 shell_session "$BUILD/$PLAT-kernel.img" \
+    '{read 32 < /dev/notquiterandom > /dev/null; echo KEY^BYTES-MADE} &' \
+    '{read 16 < /dev/random > /dev/null; echo POOL^BYTES-MADE} &' \
+    'sleep 9' \
+    'echo NORNG^SHELL-ALIVE')"
+QEMUARGS="$NORNGARGS -append insecurerandom"
+INSOUT="$(SESSION_DRAIN=20 shell_session "$BUILD/$PLAT-kernel.img" \
+    'read 32 < /dev/notquiterandom > /dev/null; echo WEAKKEY^BYTES-MADE' \
+    'read 16 < /dev/random > /dev/null; echo WEAKPOOL^BYTES-MADE')"
+QEMUARGS="$savedargs"
+printf '%s\n' "$NROUT" > "$BUILD/$PLAT-norng.txt"
+printf '%s\n' "$INSOUT" > "$BUILD/$PLAT-insecure.txt"
+nrcheck() { if grep -qaF -- "$2" <<<"$NROUT"; then pass "virt: no rng: $1"; else fail "virt: no rng: $1 -- no '$2' (see $BUILD/$PLAT-norng.txt)"; fi; }
+nrrefute() { if grep -qaF -- "$2" <<<"$NROUT"; then fail "virt: no rng: $1 -- '$2' (see $BUILD/$PLAT-norng.txt)"; else pass "virt: no rng: $1"; fi; }
+nrcheck "the kernel says there is no entropy source" "rng:  NO ENTROPY SOURCE"
+nrcheck "it still reaches its shell" "NORNGSHELL-ALIVE"
+nrcheck "key material waits, and says why" "there is NO ENTROPY SOURCE on this machine; 32 bytes of key material have waited"
+nrcheck "a reader of #c/random waits, and says why" "a reader of #c/random has waited"
+nrrefute "no key material is made" "KEYBYTES-MADE"
+nrrefute "nothing is read from #c/random" "POOLBYTES-MADE"
+nrrefute "no counter is handed out" "PREDICTABLE"
+nrrefute "nothing panics" "panic:"
+if grep -qaF "Keys made on it are PREDICTABLE" <<<"$INSOUT" && grep -qaF "WEAKKEYBYTES-MADE" <<<"$INSOUT" \
+   && grep -qaF "WEAKPOOLBYTES-MADE" <<<"$INSOUT"; then
+    pass "virt: no rng: with insecurerandom, both files answer with the counter, and the console says what it is"
+else
+    fail "virt: no rng: with insecurerandom -- $(grep -a 'random\|BYTES-MADE' <<<"$INSOUT" | head -4 | tr '\n' ' ') (see $BUILD/$PLAT-insecure.txt)"
 fi
 
 echo ""
@@ -5698,7 +6461,13 @@ fi
 # board's four USB-A ports, and NO random-number generator -- the kernel
 # finds that out for itself and says so (os/bcm2711/random.c).
 #
-PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
+# insecurerandom: QEMU's raspi4b has no RNG200, so this machine has no
+# entropy source, and without the word the kernel makes no key on it
+# (os/port/random.c) -- which is right on a board and would stop the
+# desktop here. The word lets it hand out a labelled counter instead;
+# the check below sees the label. It reaches the kernel as the
+# firmware command line, as cmdline.txt does on a board.
+PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0 -append insecurerandom"
 
 run_bcm2711() {
 PLAT=bcm2711
@@ -5715,7 +6484,7 @@ platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
+if [[ -z "$BUILDONLY" ]] && ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
     skip "bcm2711: this QEMU has no raspi4b machine (it arrived in 9.0)"
     return
 fi
@@ -5745,7 +6514,7 @@ else
     tail -5 "$BUILD/cc.log"
     return
 fi
-[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+[[ -n "$BUILDONLY" ]] && return
 
 # A blank USB disk on the DWC OTG: this controller is not an xHCI, so the
 # walker must name it and leave it alone (os/init/osinit.b, the gate on
@@ -5779,6 +6548,7 @@ else
     fail "bcm2711: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
 fi
 pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS"
+pcheck "with insecurerandom, the counter that stands in for it says what it is" "Keys made on it are PREDICTABLE"
 # With no card in it, the Arasan is the radio's and the radio's driver
 # probes it -- which on this board means two instances of one SDHCI
 # driver alive at once (os/bcm2711/emmc2.c). QEMU models no radio, so

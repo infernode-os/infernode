@@ -61,6 +61,29 @@ INVARIANT_PostCopySoundness == PostCopyMountsSound
 INVARIANT_NoViolation == NoIsolationViolation
 
 \* =========================================================================
+\* VACUITY PROBES (run-verification.sh requires TLC to VIOLATE these)
+\* =========================================================================
+
+\* Every isolation invariant above is an implication whose antecedent needs a
+\* pgrp with a parent.  If no copy is reachable under the chosen constants,
+\* they all hold vacuously.  That happened: with MaxChannels=3 the first
+\* process took both channels and ForkWithForkNS was never enabled, so the
+\* exhaustive 19.3M-state small run checked the theorem on zero copies.
+\* run-verification.sh model-checks each probe first and refuses to run
+\* unless TLC finds a violation (i.e. the state is reachable).
+
+CopyNeverHappened == \A pg \in PgrpId : pgrp_parent[pg] = 0
+
+LivePostCopyMountNeverHappened ==
+    ~(\E pg_child \in PgrpId :
+        LET pg_parent == pgrp_parent[pg_child] IN
+        /\ PgrpInUse(pg_child) /\ pg_parent # 0 /\ PgrpInUse(pg_parent)
+        /\ \E path \in PathId, cid \in ChannelId :
+            /\ <<path, cid>> \in post_copy_mounts[pg_parent]
+            /\ cid \notin copy_snapshot[pg_child][path]
+            /\ cid \in mount_table[pg_parent][path])
+
+\* =========================================================================
 \* PROPERTIES TO CHECK
 \* =========================================================================
 

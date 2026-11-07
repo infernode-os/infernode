@@ -70,4 +70,6 @@ Webclient: module {
 
 	# TLS-integrated dial: connect TCP + TLS handshake
 	tlsdial:	fn(addr, servername: string): (ref Sys->FD, string);
+	# TLS on a connection already open (STARTTLS); fd is not to be used after
+	tlsclient:	fn(fd: ref Sys->FD, servername: string): (ref Sys->FD, string);
 };

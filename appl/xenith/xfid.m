@@ -16,6 +16,7 @@ Xfidm : module {
 		f : cyclic ref Dat->Fid;
 		buf : array of byte;
 		flushed : int; 
+		responded : int;	# its request answered
 
 		ctl : fn(x : self ref Xfid);
 		flush: fn(x : self ref Xfid);
@@ -32,5 +33,6 @@ Xfidm : module {
 		runeread: fn(x : self ref Xfid, t : ref Textm->Text, m : int, n : int) : int;
 		colorswrite: fn(x : self ref Xfid, w : ref Windowm->Window);
 		imagewrite: fn(x : self ref Xfid, w : ref Windowm->Window);
+		recover: fn(x : self ref Xfid, e : string);
 	};
 };

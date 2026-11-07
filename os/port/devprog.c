@@ -55,6 +55,7 @@ enum
 	Qwait,
 	Qfd,
 	Qexception,
+	Qgrpwait,
 };
 
 /*
@@ -74,12 +75,14 @@ Dirtab progdir[] =
 	"wait",		{Qwait},	0,			0400,
 	"fd",		{Qfd},		0,			0400,
 	"exception",	{Qexception},	0,	0400,
+	"grpwait",	{Qgrpwait},	0,	0444,
 };
 
 enum
 {
 	CMkill,
 	CMkillgrp,
+	CMkilltree,
 	CMrestricted,
 	CMexceptions,
 	CMprivate
@@ -89,6 +92,7 @@ static
 Cmdtab progcmd[] = {
 	CMkill,	"kill",	1,
 	CMkillgrp,	"killgrp",	1,
+	CMkilltree,	"killtree",	1,
 	CMrestricted, "restricted", 1,
 	CMexceptions, "exceptions", 2,
 	CMprivate, "private",	1,
@@ -173,13 +177,61 @@ static	void	dbgstart(Prog*);
 static	void	freebpts(Bpt*);
 static	Bpt*	delbpt(Bpt*, char*, int);
 static	Bpt*	setbpt(Bpt*, char*, int);
-static	void	mntscan(Mntwalk*, Pgrp*);
+/*
+ * snprint for a listing made in the reader's buffer, a line at a time:
+ * no room is 0, not snprint's -1. Added to the count, the -1 moved it
+ * back, and the next line was written before the buffer (a nil write
+ * and the native kernel's panic, from a /prog read of 0 or 1 bytes;
+ * tools/nativefuzz).
+ */
+static int
+psnprint(char *s, int n, char *fmt, ...)
+{
+	va_list arg;
+
+	if(n <= 0)
+		return 0;
+	va_start(arg, fmt);
+	n = vsnprint(s, n, fmt, arg);
+	va_end(arg);
+	return n < 0? 0: n;
+}
+
+enum { Nsline = 2048 };	/* the most of a line of ns */
+static	int	mntscan(Mntwalk*, Pgrp*, char*, int);
+static	int	progdot(Pgrp*, char*, int);
 extern	Type	*Trdchan;
 extern	Type	*Twrchan;
-extern	Module*	modules;
 static  char 	Emisalign[] = "misaligned address";
 
-static int
+static /*
+ * A Prog is touched only under its own VM's interpreter (#944): its
+ * VM may be running it, or freeing it, on another core. So devprog
+ * takes the VM of the Prog it is asked about, and gives the caller's
+ * own back after. pid 0 (the directory) needs no particular VM.
+ */
+static void
+pacquire(ulong pid)
+{
+	Vm *v;
+
+	v = nil;
+	if(pid != 0)
+		v = pidvm(pid);
+	up->vmhome = up->vm;
+	if(v != nil)
+		up->vm = v;
+	acquire();
+}
+
+static void
+prelease(void)
+{
+	release();
+	up->vm = up->vmhome;
+}
+
+int
 proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 {
 	Qid qid;
@@ -202,17 +254,20 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 			pid = strtoul(name, &e, 0);
 			if(pid == 0 || *e != '\0')
 				return -1;
-			acquire();
+			pacquire(pid);
 			p = progpid(pid);
 			if(p == nil){
-				release();
+				prelease();
 				return -1;
 			}
 		}else{
-			acquire();
-			p = progn(s);
+			pid = progpidn(s);
+			if(pid < 0)
+				return -1;
+			pacquire(pid);
+			p = progpid(pid);
 			if(p == nil) {
-				release();
+				prelease();
 				return -1;
 			}
 			pid = p->pid;
@@ -220,12 +275,12 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 		o = p->osenv;
 		sprint(up->genbuf, "%lud", pid);
 		if(name != nil && strcmp(name, up->genbuf) != 0){
-			release();
+			prelease();
 			return -1;
 		}
 		mkqid(&qid, pid<<QSHIFT, pid, QTDIR);
 		devdir(c, qid, up->genbuf, 0, o->user, DMDIR|0555, dp);
-		release();
+		prelease();
 		return 1;
 	}
 
@@ -234,10 +289,10 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 	tab = &progdir[s];
 	path = PATH(c->qid);
 
-	acquire();
+	pacquire(PID(c->qid));
 	p = progpid(PID(c->qid));
 	if(p == nil) {
-		release();
+		prelease();
 		return -1;
 	}
 
@@ -250,7 +305,7 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 	len = tab->length;
 	mkqid(&qid, path|tab->qid.path, c->qid.vers, QTFILE);
 	devdir(c, qid, tab->name, len, o->user, perm, dp);
-	release();
+	prelease();
 	return 1;
 }
 
@@ -283,9 +338,9 @@ progopen(Chan *c, int omode)
 	if(c->qid.type & QTDIR)
 		return devopen(c, omode, 0, 0, proggen);
 
-	acquire();
+	pacquire(PID(c->qid));
 	if (waserror()) {
-		release();
+		prelease();
 		nexterror();
 	}
 	p = progpid(PID(c->qid));
@@ -315,6 +370,16 @@ progopen(Chan *c, int omode)
 		if(c->aux == nil)
 			error(Enomem);
 		o->childq = c->aux;
+		break;
+	case Qgrpwait:
+		/* waits for the group the Prog is in now to have no Prog left */
+		c->aux = qopen(64, Qmsg, nil, nil);
+		if(c->aux == nil)
+			error(Enomem);
+		if(p->group != nil)
+			grpwaitadd(p->group->id, c->aux);
+		else
+			qproduce(c->aux, "0", 1);
 		break;
 	case Qns:
 		c->aux = malloc(sizeof(Mntwalk));
@@ -348,7 +413,7 @@ progopen(Chan *c, int omode)
 		c->qid.vers = p->pid;
 
 	poperror();
-	release();
+	prelease();
 	c->offset = 0;
 	c->mode = omode;
 	c->flag |= COPEN;
@@ -365,28 +430,28 @@ progwstat(Chan *c, uchar *db, int n)
 
 	if(c->qid.type&QTDIR)
 		error(Eperm);
-	acquire();
+	pacquire(PID(c->qid));
 	p = progpid(PID(c->qid));
 	if(p == nil) {
-		release();
+		prelease();
 		error(Ethread);
 	}
 
 	u = up->env->user;
 	o = p->osenv;
 	if(strcmp(u, o->user) != 0 && strcmp(u, eve) != 0) {
-		release();
+		prelease();
 		error(Eperm);
 	}
 
 	n = convM2D(db, n, &d, nil);
 	if(n == 0){
-		release();
+		prelease();
 		error(Eshortstat);
 	}
 	if(d.mode != ~0UL)
 		o->pgrp->progmode = d.mode&0777;
-	release();
+	prelease();
 	return n;
 }
 
@@ -412,9 +477,6 @@ closedbgctl(Progctl *ctl, Prog *p)
 static void
 progclose(Chan *c)
 {
-	int i;
-	Prog *f;
-	Osenv *o;
 	Progctl *ctl;
 
 	switch(QID(c->qid)) {
@@ -426,25 +488,22 @@ progclose(Chan *c)
 		if((c->flag & COPEN) == 0)
 			return;
 		ctl = c->aux;
-		acquire();
+		pacquire(PID(c->qid));
 		closedbgctl(ctl, progpid(PID(c->qid)));
-		release();
+		prelease();
 		break;
 	case Qwait:
+		vmclearwaitq(c->aux);	/* every VM's Progs, each VM in one go (dis.c) */
+		qfree(c->aux);
+		break;
+	case Qgrpwait:
+		if((c->flag & COPEN) == 0)
+			return;
 		acquire();
-		i = 0;
-		for(;;) {
-			f = progn(i++);
-			if(f == nil)
-				break;
-			o = f->osenv;
-			if(o->waitq == c->aux)
-				o->waitq = nil;
-			if(o->childq == c->aux)
-				o->childq = nil;
-		}
+		grpwaitdel(c->aux);
 		release();
 		qfree(c->aux);
+		break;
 	}
 }
 
@@ -456,7 +515,7 @@ progsize(Prog *p)
 	uchar *fp;
 	Modlink *m;
 
-	m = p->R.M;
+	m = p->reg.M;
 	size = 0;
 	if(m->MP != H)
 		size += hmsize(D2H(m->MP));
@@ -472,7 +531,7 @@ progsize(Prog *p)
 	if(m->prog != nil && !m->compiled)
 		size += msize(m->prog);
 
-	fp = p->R.FP;
+	fp = p->reg.FP;
 	while(fp != nil) {
 		f = (Frame*)fp;
 		fp = f->fp;
@@ -486,21 +545,6 @@ progsize(Prog *p)
 			size += msize(SEXTYPE(f));
 	}
 	return size/1024;
-}
-
-static long
-progoffset(long offset, char *va, int *np)
-{
-	if(offset > 0) {
-		offset -= *np;
-		if(offset < 0) {
-			memmove(va, va+*np+offset, -offset);
-			*np = -offset;
-		}
-		else
-			*np = 0;
-	}
-	return offset;
 }
 
 static int
@@ -523,38 +567,111 @@ progfdprint(Chan *c, int fd, int w, char *s, int ns)
 		&"r w rw"[(c->mode&3)<<1],
 		devtab[c->type]->dc, c->dev,
 		c->qid.path, w, c->qid.vers, c->qid.type,
-		c->iounit, c->offset, c->name->s);
+		c->iounit, c->offset, c->name != nil? c->name->s : "");
+	if(n < 0)
+		n = 0;
 	return n;
 }
 
-static int
-progfds(Osenv *o, char *va, int count, long offset)
+/*
+ * A Prog's fd table, copied with a reference to each Chan, under its
+ * VM; printed, with its dot, and its Chans closed, with the VM let go.
+ * Nothing that takes a name space's lock is done holding a VM: a
+ * mount waits for a Mhead's lock holding its name space's, and a union
+ * directory's read holds the Mhead's across a 9P read that may never
+ * be answered, so a read of fd or ns stopped a VM for good
+ * (tools/nativefuzz). Natively the table is locked as it is copied:
+ * holding the Prog's VM does not hold its fd table, which vm(1) shares
+ * with a Prog in another VM.
+ */
+typedef struct Fdsnap Fdsnap;
+struct Fdsnap
 {
-	Fgrp *f;
-	Chan *c;
-	int n, i, w, ww;
+	int	n;
+	Chan**	c;
+	int*	fd;
+};
 
-	f = o->fgrp;	/* f is not locked because we've acquired */
-	n = readstr(0, va, count, o->pgrp->dot->name->s);
-	n += snprint(va+n, count-n, "\n");
-	offset = progoffset(offset, va, &n);
-	/* compute width of qid.path */
-	w = 0;
-	for(i = 0; i <= f->maxfd; i++) {
+static void
+fdsnap(Fgrp *f, Fdsnap *s)
+{
+	int i, m;
+	Chan *c;
+
+	s->n = 0;
+	lock(&f->l);
+	m = f->maxfd+1;
+	unlock(&f->l);
+	if(m < 1)
+		m = 1;
+	s->c = malloc(m*sizeof(Chan*));
+	s->fd = malloc(m*sizeof(int));
+	if(s->c == nil || s->fd == nil){
+		free(s->c);
+		free(s->fd);
+		s->c = nil;
+		s->fd = nil;
+		error(Enomem);
+	}
+	lock(&f->l);
+	for(i = 0; i <= f->maxfd && s->n < m; i++) {
 		c = f->fd[i];
 		if(c == nil)
 			continue;
-		ww = progqidwidth(c);
+		incref(&c->r);
+		s->c[s->n] = c;
+		s->fd[s->n++] = i;
+	}
+	unlock(&f->l);
+}
+
+static void
+fdsnapfree(Fdsnap *s)
+{
+	int i;
+
+	for(i = 0; i < s->n; i++)
+		cclose(s->c[i]);
+	free(s->c);
+	free(s->fd);
+	s->n = 0;
+	s->c = nil;
+	s->fd = nil;
+}
+
+/*
+ * The listing is made whole in a buffer of its own, sized for it, and
+ * the read's part taken from it. Made in the reader's buffer, a line
+ * that did not fit was snprint's -1 (no room), added to the count: the
+ * next line went before the buffer, over the heap.
+ */
+static int
+progfds(Pgrp *pg, Fdsnap *s, char *va, int count, vlong offset)
+{
+	int n, i, w, ww, size, k;
+	char *buf;
+
+	size = 1024;
+	for(i = 0; i < s->n; i++)
+		size += 96 + (s->c[i]->name != nil? s->c[i]->name->len : 0);	/* len is strlen(s), kept by every Cname change */
+	buf = malloc(size);
+	if(buf == nil)
+		error(Enomem);
+	k = progdot(pg, buf, 1000);
+	buf[k++] = '\n';
+	buf[k] = 0;
+	/* compute width of qid.path */
+	w = 0;
+	for(i = 0; i < s->n; i++) {
+		ww = progqidwidth(s->c[i]);
 		if(ww > w)
 			w = ww;
 	}
-	for(i = 0; i <= f->maxfd; i++) {
-		c = f->fd[i];
-		if(c == nil)
-			continue;
-		n += progfdprint(c, i, w, va+n, count-n);
-		offset = progoffset(offset, va, &n);
-	}
+	for(i = 0; i < s->n && k < size - 1; i++)
+		k += progfdprint(s->c[i], s->fd[i], w, buf+k, size-k);
+	buf[k] = 0;
+	n = readstr(offset, va, count, buf);
+	free(buf);
 	return n;
 }
 
@@ -606,7 +723,7 @@ progstack(REG *reg, int state, char *va, int count, long offset)
 
 	while(fp != nil) {
 		f = (Frame*)fp;
-		n += snprint(va+n, count-n, "%.8lux %.8lux %.8lux %.8lux %d %s\n",
+		n += psnprint(va+n, count-n, "%.8lux %.8lux %.8lux %.8lux %d %s\n",
 				(ulong)f,		/* FP */
 				(ulong)(pc - m->prog),	/* PC in dis instructions */
 				(ulong)m->MP,		/* MP */
@@ -674,11 +791,11 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 		case 'W':
 			if(addr & 3)
 				return -1;
-			n += snprint(va+n, count-n, "%d\n", *(WORD*)addr);
+			n += psnprint(va+n, count-n, "%d\n", *(WORD*)addr);
 			s = sizeof(WORD);
 			break;
 		case 'B':
-			n += snprint(va+n, count-n, "%d\n", *(BYTE*)addr);
+			n += psnprint(va+n, count-n, "%d\n", *(BYTE*)addr);
 			s = sizeof(BYTE);
 			break;
 		case 'V':
@@ -687,7 +804,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			w = (WORD*)addr;
 			rock.w[0] = w[0];
 			rock.w[1] = w[1];
-			n += snprint(va+n, count-n, "%lld\n", rock.l);
+			n += psnprint(va+n, count-n, "%lld\n", rock.l);
 			s = sizeof(LONG);
 			break;
 		case 'R':
@@ -696,7 +813,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			w = (WORD*)addr;
 			rock.w[0] = w[0];
 			rock.w[1] = w[1];
-			n += snprint(va+n, count-n, "%g\n", rock.r);
+			n += psnprint(va+n, count-n, "%g\n", rock.r);
 			s = sizeof(REAL);
 			break;
 		case 'I':
@@ -708,7 +825,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			if(m == nil)
 				error(Ebadctl);
 			addr = (ulong)(m->prog+addr);
-			n += snprint(va+n, count-n, "%D\n", (Inst*)addr);
+			n += psnprint(va+n, count-n, "%D\n", (Inst*)addr);
 			s = sizeof(Inst);
 			break;
 		case 'P':
@@ -718,7 +835,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			fmt = "nil\n";
 			if(p != H)
 				fmt = "%lux\n";
-			n += snprint(va+n, count-n, fmt, p);
+			n += psnprint(va+n, count-n, fmt, p);
 			s = sizeof(WORD);
 			break;
 		case 'L':
@@ -727,7 +844,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			hd = *(List**)addr;
 			if(hd == H || D2H(hd)->t != &Tlist)
 				return -1;
-			n += snprint(va+n, count-n, "%lux.%lux\n", (ulong)&hd->tail, (ulong)hd->data);
+			n += psnprint(va+n, count-n, "%lux.%lux\n", (ulong)&hd->tail, (ulong)hd->data);
 			s = sizeof(WORD);
 			break;
 		case 'A':
@@ -735,11 +852,11 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 				return -1;
 			a = *(Array**)addr;
 			if(a == H)
-				n += snprint(va+n, count-n, "nil\n");
+				n += psnprint(va+n, count-n, "nil\n");
 			else {
 				if(D2H(a)->t != &Tarray)
 					return -1;
-				n += snprint(va+n, count-n, "%d.%lux\n", a->len, (ulong)a->data);
+				n += psnprint(va+n, count-n, "%d.%lux\n", a->len, (ulong)a->data);
 			}
 			s = sizeof(WORD);
 			break;
@@ -752,7 +869,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			else
 			if(D2H(ss)->t != &Tstring)
 				return -1;
-			n += snprint(va+n, count-n, "%d.", abs(ss->len));
+			n += psnprint(va+n, count-n, "%d.", abs(ss->len));
 			str = string2c(ss);
 			len = strlen(str);
 			if(count-n < len)
@@ -767,7 +884,7 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 				return -1;
 			ml = *(Modlink**)addr;
 			fmt = ml == H ? "nil\n" : "%lux\n";
-			n += snprint(va+n, count-n, fmt, ml->MP);
+			n += psnprint(va+n, count-n, fmt, ml->MP);
 			s = sizeof(WORD);
 			break;
 		case 'c':
@@ -775,15 +892,15 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 				return -1;
 			c = *(Channel**)addr;
 			if(c == H)
-				n += snprint(va+n, count-n, "nil\n");
+				n += psnprint(va+n, count-n, "nil\n");
 			else{
 				t = D2H(c)->t;
 				if(t != &Tchannel && t != Trdchan && t != Twrchan)
 					return -1;
 				if(c->buf == H)
-					n += snprint(va+n, count-n, "0.%lux\n", (ulong)c);
+					n += psnprint(va+n, count-n, "0.%lux\n", (ulong)c);
 				else
-					n += snprint(va+n, count-n, "%d.%lux.%d.%d\n", c->buf->len, (ulong)c->buf->data, c->front, c->size);
+					n += psnprint(va+n, count-n, "%d.%lux.%d.%d\n", c->buf->len, (ulong)c->buf->data, c->front, c->size);
 			}
 			break;
 			
@@ -866,9 +983,11 @@ progread(Chan *c, void *va, long n, vlong offset)
 	Mntwalk *mw;
 	ulong grpid;
 	char *a = va;
+	char *nsl;
+	Pgrp *pg;
+	Fdsnap fs;
 	Progctl *ctl;
 	char mbuf[64], timebuf[12];
-	char flag[10];
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, a, n, 0, 0, proggen);
@@ -878,10 +997,10 @@ progread(Chan *c, void *va, long n, vlong offset)
 		ctl = c->aux;
 		return qread(ctl->q, va, n);
 	case Qstatus:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
-		if(p == nil || p->state == Pexiting || p->R.M == H) {
-			release();
+		if(p == nil || p->state == Pexiting || p->reg.M == H) {
+			prelease();
 			snprint(up->genbuf, sizeof(up->genbuf), "%8lud %8d %10s %s %10s %5dK %s",
 				PID(c->qid),
 				0,
@@ -892,7 +1011,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 				"[$Sys]");
 			return readstr(offset, va, n, up->genbuf);
 		}
-		modstatus(&p->R, mbuf, sizeof(mbuf));
+		modstatus(&p->reg, mbuf, sizeof(mbuf));
 		o = p->osenv;
 		snprint(up->genbuf, sizeof(up->genbuf), "%8d %8d %10s %s %10s %5dK %s",
 			p->pid,
@@ -902,14 +1021,15 @@ progread(Chan *c, void *va, long n, vlong offset)
 			progstate[p->state],
 			progsize(p),
 			mbuf);
-		release();
+		prelease();
 		return readstr(offset, va, n, up->genbuf);
 	case Qwait:
+	case Qgrpwait:
 		return qread(c->aux, va, n);
 	case Qns:
-		acquire();
+		pacquire(PID(c->qid));
 		if(waserror()){
-			release();
+			prelease();
 			nexterror();
 		}
 		p = progpid(PID(c->qid));
@@ -918,141 +1038,188 @@ progread(Chan *c, void *va, long n, vlong offset)
 		mw = c->aux;
 		if(mw->cddone){
 			poperror();
-			release();
+			prelease();
 			return 0;
 		}
 		o = p->osenv;
-		mntscan(mw, o->pgrp);
-		if(mw->mh == 0) {
-			mw->cddone = 1;
-			i = snprint(a, n, "cd %s\n", o->pgrp->dot->name->s);
-			poperror();
-			release();
-			return i;
-		}
-		int2flag(mw->cm->mflag, flag);
-		if(strcmp(mw->cm->to->name->s, "#M") == 0){
-			i = snprint(a, n, "mount %s %s %s %s\n", flag,
-				mw->cm->to->mchan->name->s,
-				mw->mh->from->name->s, mw->cm->spec? mw->cm->spec : "");
-		}else
-			i = snprint(a, n, "bind %s %s %s\n", flag,
-				mw->cm->to->name->s, mw->mh->from->name->s);
+		/* the name space, held, its locks taken with the VM let go: see fdsnap */
+		pg = o->pgrp;
+		incref(&pg->r);
 		poperror();
-		release();
+		prelease();
+		/*
+		 * A line, made in a buffer of its own and as much of it given
+		 * as the read has room for. Made in the reader's, a read too
+		 * short for "cd " had snprint's -1 (no room) added to its
+		 * count, and dot's name went before the buffer (a nil write,
+		 * the kernel's panic; tools/nativefuzz). The mount is found and
+		 * its line made under the name space's lock: a Mount kept past
+		 * the lock can be freed by an unmount on another core.
+		 */
+		if(n <= 0){
+			closepgrp(pg);
+			return 0;
+		}
+		nsl = malloc(Nsline);
+		if(nsl == nil){
+			closepgrp(pg);
+			error(Enomem);
+		}
+		i = mntscan(mw, pg, nsl, Nsline);
+		if(i < 0) {
+			mw->cddone = 1;
+			i = snprint(nsl, Nsline, "cd ");
+			i += progdot(pg, nsl+i, Nsline-i-2);
+			nsl[i++] = '\n';
+		}
+		if(i > n)
+			i = n;
+		memmove(a, nsl, i);
+		free(nsl);
+		closepgrp(pg);
 		return i;
 	case Qnsgrp:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		grpid = ((Osenv *)p->osenv)->pgrp->pgrpid;
-		release();
+		prelease();
 		return readnum(offset, va, n, grpid, NUMSIZE);
 	case Qpgrp:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		grpid = p->group!=nil? p->group->id: 0;
-		release();
+		prelease();
 		return readnum(offset, va, n, grpid, NUMSIZE);
 	case Qstack:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
-		if(p == nil || p->state == Pexiting) {
-			release();
+		/* M is H in a Prog with no frame left to run: nothing to show (a nil walk of H, the kernel's panic) */
+		if(p == nil || p->state == Pexiting || p->reg.M == H) {
+			prelease();
 			error(Ethread);
 		}
 		if(p->state == Pready) {
-			release();
+			prelease();
 			error(Estopped);
 		}
-		n = progstack(&p->R, p->state, va, n, offset);
-		release();
+		n = progstack(&p->reg, p->state, va, n, offset);
+		prelease();
 		return n;
 	case Qheap:
-		acquire();
+		pacquire(PID(c->qid));
 		if(waserror()){
-			release();
+			prelease();
 			nexterror();
 		}
 		n = progheap(c->aux, va, n, offset);
 		if(n == -1)
 			error(Emisalign);
 		poperror();
-		release();
+		prelease();
 		return n;
 	case Qfd:
-		acquire();
+		pacquire(PID(c->qid));
 		if(waserror()) {
-			release();
+			prelease();
 			nexterror();
 		}
 		p = progpid(PID(c->qid));
 		if(p == nil)
 			error(Ethread);
 		o = p->osenv;
-		n = progfds(o, va, n, offset);
+		fdsnap(o->fgrp, &fs);
+		pg = o->pgrp;
+		incref(&pg->r);
 		poperror();
-		release();
+		prelease();
+		if(waserror()) {
+			fdsnapfree(&fs);
+			closepgrp(pg);
+			nexterror();
+		}
+		n = progfds(pg, &fs, va, n, offset);
+		poperror();
+		fdsnapfree(&fs);
+		closepgrp(pg);
 		return n;
 	case Qexception:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		if(p->exstr == nil)
 			up->genbuf[0] = 0;
 		else
 			snprint(up->genbuf, sizeof(up->genbuf), p->exstr);
-		release();
+		prelease();
 		return readstr(offset, va, n, up->genbuf);
 	}
 	error(Egreg);
 	return 0;
 }
 
-static void
-mntscan(Mntwalk *mw, Pgrp *pg)
+/* the next mount after mw's, as a line of ns; -1 when there is none */
+static int
+mntscan(Mntwalk *mw, Pgrp *pg, char *a, int n)
 {
 	Mount *t;
 	Mhead *f;
-	int nxt, i;
-	ulong last, bestmid;
+	int i, r;
+	ulong best;
+	char flag[10];
 
+	r = -1;
+	best = 0;
 	rlock(&pg->ns);
-
-	nxt = 0;
-	bestmid = ~0;
-
-	last = 0;
-	if(mw->mh)
-		last = mw->cm->mountid;
-
 	for(i = 0; i < MNTHASH; i++) {
 		for(f = pg->mnthash[i]; f; f = f->hash) {
+			rlock(&f->lock);
 			for(t = f->mount; t; t = t->next) {
-				if(mw->mh == 0 ||
-				  (t->mountid > last && t->mountid < bestmid)) {
-					mw->cm = t;
-					mw->mh = f;
-					bestmid = mw->cm->mountid;
-					nxt = 1;
-				}
+				if(mw->started && t->mountid <= mw->id)
+					continue;
+				if(r >= 0 && t->mountid >= best)
+					continue;
+				best = t->mountid;
+				int2flag(t->mflag, flag);
+				if(strcmp(t->to->name->s, "#M") == 0)
+					r = snprint(a, n, "mount %s %s %s %s\n", flag,
+						t->to->mchan->name->s,
+						f->from->name->s, t->spec? t->spec : "");
+				else
+					r = snprint(a, n, "bind %s %s %s\n", flag,
+						t->to->name->s, f->from->name->s);
 			}
+			runlock(&f->lock);
 		}
 	}
-	if(nxt == 0)
-		mw->mh = 0;
-
 	runlock(&pg->ns);
+	if(r >= 0) {
+		mw->started = 1;
+		mw->id = best;
+	}
+	return r;
+}
+
+/* dot's name, read under the lock chdir changes it under: its old Chan is closed after */
+static int
+progdot(Pgrp *pg, char *va, int count)
+{
+	int n;
+
+	rlock(&pg->ns);
+	n = readstr(0, va, count, pg->dot->name->s);
+	runlock(&pg->ns);
+	return n;
 }
 
 static long
@@ -1073,9 +1240,9 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 	if(c->qid.type & QTDIR)
 		error(Eisdir);
 
-	acquire();
+	pacquire(PID(c->qid));
 	if(waserror()) {
-		release();
+		prelease();
 		nexterror();
 	}
 	p = progpid(PID(c->qid));
@@ -1093,6 +1260,9 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 		switch(ct->index){
 		case CMkillgrp:
 			killgrp(p, "killed");
+			break;
+		case CMkilltree:
+			killgrptree(p, "killed");
 			break;
 		case CMkill:
 			killprog(p, "killed");
@@ -1137,10 +1307,10 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		case CDtoret:
 			f = currun();
-			i = calldepth(&p->R);
+			i = calldepth(&p->reg);
 			while(f->kill == nil) {
 				dbgstep(c->aux, p, 1024);
-				if(i > calldepth(&p->R))
+				if(i > calldepth(&p->reg))
 					break;
 			}
 			break;
@@ -1202,7 +1372,7 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 		error(Egreg);
 	}
 	poperror();
-	release();
+	prelease();
 	return n;
 }
 
@@ -1423,7 +1593,6 @@ dbgxec(Prog *p)
 	Progctl *ctl;
 	int op, pc, n;
 	char buf[ERRMAX+10];
-	extern void (*dec[])(void);
 
 	env = p->osenv;
 	ctl = env->debug;
@@ -1433,7 +1602,7 @@ dbgxec(Prog *p)
 		nexterror();
 	}
 
-	R = p->R;
+	R = p->reg;
 	R.MP = R.M->MP;
 
 	R.IC = p->quanta;
@@ -1457,10 +1626,10 @@ dbgxec(Prog *p)
 			print("step: %lux: %s %4ld %D\n",
 				(ulong)p, R.M->m->name, R.PC-R.M->prog, R.PC);
 
-		dec[R.PC->add]();
+		dec[R.PC->add](OPCALLR);
 		op = R.PC->op;
 		R.PC++;
-		optab[op]();
+		optab[op](OPCALLR);
 
 		/*
 		 * check notification about new progs
@@ -1510,7 +1679,7 @@ save:
 	if(ctl->stop)
 		strcpy(buf, "stopped");
 
-	p->R = R;
+	p->reg = R;
 
 	if(env->debug == nil) {
 		poperror();

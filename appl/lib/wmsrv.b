@@ -117,6 +117,7 @@ wm(ctlio: ref Sys->FileIO,
 				chan of string,
 				nil,
 				0,
+				0,
 				nil,
 				nil,
 				nil,
@@ -204,6 +205,7 @@ Reply:
 	}
 
 	for(;;){
+		c.ctlwaiting = ctlq.nonempty();
 		outkbd := dummykbd;
 		key := -1;
 		if(kbdq.nonempty()){

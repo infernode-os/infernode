@@ -33,8 +33,14 @@ SYSMODULES=\
 	matrixtk.m\
 	scene.m\
 	tk.m\
+	keyboard.m\
+	readdir.m\
+	sh.m\
 
 DISBIN=$ROOT/dis/matrix
+
+MODULES=\
+	$ROOT/appl/mpeg/mpegio.m\
 
 <$ROOT/mkfiles/mkdis
 

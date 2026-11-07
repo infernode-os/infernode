@@ -58,6 +58,20 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("pending request ID missing");
 		return;
 	}
+	if(pending != "1 email security-test 13 approved body\n") {
+		fail("pending view did not show the exact immutable body: " + pending);
+		return;
+	}
+	request2 := "email\nsecurity-test\nchanged-body!";
+	if(writefile("/mnt/msg/draft", request2) < 0) {
+		fail("second equal-length draft was rejected");
+		return;
+	}
+	pending = readfile("/mnt/msg/pending");
+	if(pending == nil || !contains(pending, "2 email security-test 13 changed-body!\n")) {
+		fail("equal-length proposals were not distinguishable: " + pending);
+		return;
+	}
 	if(writefile("/mnt/msg/approve", "approve 1") < 0) {
 		fail("trusted approval failed");
 		return;
@@ -72,8 +86,25 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 	if(readfile("/mnt/msg/pending") != nil) {
-		fail("consumed request remains pending");
+		pending = readfile("/mnt/msg/pending");
+		if(pending == nil || !contains(pending, "2 email security-test 13 changed-body!\n")) {
+			fail("approval consumed or changed the other immutable proposal");
+			return;
+		}
+	}
+	if(writefile("/mnt/msg/deny", "deny 2") < 0) {
+		fail("trusted denial failed");
 		return;
 	}
 	sys->print("MSGAPPROVAL PASS: draft, exact approval, consume, replay denial\n");
+}
+
+contains(s, sub: string): int
+{
+	if(len sub == 0)
+		return 1;
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }

@@ -10,7 +10,9 @@ cons \- console device
 .B /dev/drivers
 .B /dev/hostopen
 .B /dev/jit
+.B /dev/kbdin
 .B /dev/keyboard
+.B /dev/keyboards
 .B /dev/klog
 .B /dev/kprint
 .B /dev/memory
@@ -106,6 +108,59 @@ file returns the underlying tokens produced by the keyboard hardware as they
 are produced; in the emulation environment, it is like an always-raw
 .B cons
 file.
+.PP
+A
+.B write
+to
+.B keyboard
+gives the characters written (UTF-8) as keys typed, to whatever reads
+it: a window system, which hands them to the window with the keyboard.
+A keyboard driver that is a program (the native kernel's USB keyboard)
+types this way, as does a test.  A keyboard on the screen
+.RI ( wm-osk (1))
+writes
+.B kbdin
+instead: its keys go where
+.BR keyboard 's
+go, and a reader cannot tell them apart, but
+.B keyboards
+records them as a screen keyboard's.
+.PP
+A read of
+.B keyboards
+gives the keyboards attached, a line each,
+.IP
+.BI keyboard " id description"
+.PP
+and then
+.IP
+.BR last " none" | hard | soft
+.PP
+saying which kind typed last: a keyboard of the machine's
+.RB ( hard :
+through the host's keyboard, or a write to
+.BR keyboard )
+or one on the screen
+.RB ( soft :
+a write to
+.BR kbdin ).
+The first read of an open file answers at once; each later read waits
+until what it would say has changed: a keyboard attached or detached,
+or typing gone from one kind of keyboard to the other.  Typing on the
+same kind wakes no reader, so a reader waits without polling and is
+not woken by every key.  Under the emulator the host's keyboards are
+listed as the GUI backend finds them and as they come and go (SDL's
+hotplug: macOS, Linux, Windows and iOS report it; Android does not,
+and there only
+.B last
+says a keyboard was typed on).  A driver that is a program says so on
+.BR consctl ,
+with
+.BI "kbd attach" " id description"
+and
+.BI "kbd detach" " id" R;
+the rest of the line is the keyboard's.  What to do about a keyboard
+attached (not to show one on the screen) is for the reader.
 .PP
 The
 .B hostopen
@@ -239,6 +294,17 @@ being destroyed,
 writing
 .B broken
 ensures that they are left in this state to allow debugging (the default).
+On a native kernel,
+.B "cnsamode on"
+makes every authentication from then on CNSA 2.0 strict (ML-KEM-1024),
+as the host's
+.B CNSAMODE
+does for the emulator: one way, for the whole machine, and refused once
+an authentication has run without it.
+.IR osinit (8)
+writes it at boot when the card has a
+.B cnsamode
+file.
 Only the privileged user is allowed to write to this file.
 .PP
 The

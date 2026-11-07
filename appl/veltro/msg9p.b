@@ -551,9 +551,31 @@ genpending(): string
 		ps := hd p;
 		(src, r1) := splitfirst(ps.data, '\n');
 		(origid, body) := splitfirst(r1, '\n');
-		result += sys->sprint("%d %s %s %d\n", ps.id, msgstrip(src), msgstrip(origid), len body);
+		result += sys->sprint("%d %s %s %d %s\n", ps.id, msgstrip(src),
+			msgstrip(origid), len body, pendingescape(body));
 	}
 	return result;
+}
+
+# Lossless single-line rendering for the trusted approval surface.  Length
+# alone made equal-sized proposals indistinguishable to the approver.
+pendingescape(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		case c := s[i] {
+		'\\' => out += "\\\\";
+		'\n' => out += "\\n";
+		'\r' => out += "\\r";
+		'\t' => out += "\\t";
+		* =>
+			if(c < ' ' || c == 16r7f)
+				out += sys->sprint("\\x%.2ux", c);
+			else
+				out += s[i:i+1];
+		}
+	}
+	return out;
 }
 
 approvalid(data, verb: string): (int, string)

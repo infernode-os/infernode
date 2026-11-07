@@ -25,6 +25,7 @@ include "draw.m";
 include "nsconstruct.m";
 
 include "cowfs.m";
+include "daytime.m";
 
 include "keyring.m";
 	kr: Keyring;
@@ -170,10 +171,30 @@ restricttoolns(caps: ref Capabilities): string
 	return restrictnsx(caps, 1);
 }
 
+# The current directory is a channel taken before the restriction: left
+# so, a relative name was resolved outside it, from the directory the
+# process started in (an agent asked for ../file read beside its grant,
+# in the host's own tree).  It is taken again, by its name, in the
+# restricted name space, or / if that name is not there.
 restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 {
 	if(sys == nil)
 		init();
+	dot := "";
+	dfd := sys->open(".", Sys->OREAD);
+	if(dfd != nil)
+		dot = sys->fd2path(dfd);
+	dfd = nil;
+	err := restrictnsx0(caps, hidemetadata);
+	if(err != nil)
+		return err;
+	if(dot == "" || sys->chdir(dot) < 0)
+		sys->chdir("/");
+	return nil;
+}
+
+restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
+{
 
 	# Preserve only the append capability while constructing the namespace.
 	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;
@@ -376,6 +397,18 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		if(gpuok >= 0 && !inlist("gpu", mntpaths))
 			mntpaths = "gpu" :: mntpaths;
 	}
+	# /mnt/gps — the GPS receiver (gpsfs(4)). Fixed-function: only the gps
+	# tool, and only its read files (narrowed below), never ctl or feed, so
+	# an agent can learn where it is but cannot choose the receiver or put a
+	# position in. Generic path grants cannot reach it.
+	gpsmnt := 0;
+	if(inlist("gps", caps.tools)) {
+		(gpsok, nil) := sys->stat("/mnt/gps");
+		if(gpsok >= 0 && !inlist("gps", mntpaths)) {
+			mntpaths = "gps" :: mntpaths;
+			gpsmnt = 1;
+		}
+	}
 	# /mnt/git — fixed-function git service (git/fs, mounted by the git tool
 	# during trusted init; migrated from /n/git per docs/NAMESPACE-LAYOUT.md,
 	# INFR-401). Derived only from the git tool; generic path grants cannot
@@ -439,6 +472,13 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 				uerr := filterdir("/mnt/ui", uiallow, 0);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
+			# /mnt/gps sub-restriction: the read files only.
+			if(gpsmnt) {
+				gerr := restrictdir("/mnt/gps",
+					"position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "time" :: "status" :: nil, 0);
+				if(gerr != nil)
+					return sys->sprint("restrict /mnt/gps: %s", gerr);
 			}
 			# /mnt/msg sub-restriction: granting "/mnt/msg" exposes only the READ
 			# surface (status — the inbox). The proposal endpoint (draft), trusted
@@ -581,9 +621,9 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		(first, nil) := splitfirst(p[1:]);
 		if(first == "")
 			continue;
-		# Skip top-level dirs already in safe or handled by steps 1–7
-		if(inlist(first, safe) || first == "net" || first == "net.alt" ||
-		   first == "mnt")
+		# Gated roots enter safe only through their dedicated capability above.
+		# A differently-cased path grant must not re-add the real root here.
+		if(inlist(first, safe) || reservedroot(first))
 			continue;
 		if(!inlist(first, extradirs))
 			extradirs = first :: extradirs;
@@ -628,6 +668,16 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 			if(ederr != nil)
 				return sys->sprint("restrict %s: %s", topdir, ederr);
 		}
+	}
+
+	# Home-directory grants must not carry authentication material. Hide both
+	# credential stores after the requested /usr view has been constructed.
+	for(ud := extradirs; ud != nil; ud = tl ud) {
+		if(asciilower(hd ud) != "usr")
+			continue;
+		err = hideusercredentials("/" + hd ud);
+		if(err != nil)
+			return sys->sprint("restrict /%s credentials: %s", hd ud, err);
 	}
 
 	if(caps.actid >= 0 && caps.writepaths != nil) {
@@ -752,6 +802,32 @@ tmpveltroallow(caps: ref Capabilities): list of string
 # Filter paths that start with a given prefix, stripping the prefix.
 # E.g., filterpaths(("/n/local/Users/pdfinn/tmp"::nil), "/n/local/")
 # returns ("Users/pdfinn/tmp"::nil)
+hideusercredentials(root: string): string
+{
+	fd := sys->open(root, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if((dirs[i].mode & Sys->DMDIR) == 0)
+				continue;
+			for(c := "keyring" :: "secstore" :: nil; c != nil; c = tl c) {
+				p := root + "/" + dirs[i].name + "/" + hd c;
+				(ok, d) := sys->stat(p);
+				if(ok >= 0 && (d.mode & Sys->DMDIR)) {
+					err := restrictdir(p, nil, 0);
+					if(err != nil)
+						return err;
+				}
+			}
+		}
+	}
+	return nil;
+}
+
 filterpaths(paths: list of string, prefix: string): list of string
 {
 	result: list of string;
@@ -1069,17 +1145,48 @@ validatepath(p: string): string
 
 grantpathallowed(path: string, tools: list of string): int
 {
-	if(privilegedcontrolpath(path, tools))
+	check := asciilower(path);
+	if(privilegedcontrolpath(check, tools))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 	return 1;
 }
 
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientauthoritypath(path: string): int
+{
+	if(path == "/chan" || prefix(path, "/chan/") ||
+	   path == "/fd" || prefix(path, "/fd/"))
+		return 1;
+	if(path == "/usr")
+		return 1;
+	return (pathhascomponent(path, "keyring") || pathhascomponent(path, "secstore")) &&
+		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 path == "/secstore" || prefix(path, "/secstore/") ||
+		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
+}
+
 privilegedcontrolpath(path: string, tools: list of string): int
 {
+	path = asciilower(path);
+	if(ambientauthoritypath(path))
+		return 1;
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -1098,7 +1205,17 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
+	# Each tools9p instance also publishes its trusted controller as
+	# /mnt/toolctl.<id>.  Treat numbered aliases exactly like the canonical
+	# mount; otherwise a caller can grant the same controller under a name the
+	# policy did not recognise.
+	if(prefix(path, "/mnt/toolctl."))
+		return 1;
+	if(reservedrootpath(path) || controlaliaspath(path))
+		return 1;
 	if(walletcontrolpath(path))
+		return 1;
+	if(cameradevicepath(path))
 		return 1;
 	if(ftreecontrolpath(path))
 		return 1;
@@ -1119,6 +1236,36 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	return 0;
 }
 
+reservedroot(first: string): int
+{
+	first = asciilower(first);
+	return first == "mnt" || first == "chan" || first == "phone" ||
+		first == "net" || first == "net.alt" || first == "fd";
+}
+
+reservedrootpath(path: string): int
+{
+	return path == "/mnt" ||
+		path == "/chan" || prefix(path, "/chan/") ||
+		path == "/fd" || prefix(path, "/fd/");
+}
+
+controlaliaspath(path: string): int
+{
+	return prefix(path, "/mnt/toolctl.") || prefix(path, "/tool.");
+}
+
+policyroot(path: string): int
+{
+	case asciilower(path) {
+	"/dev" or "/dis" or "/env" or "/lib" or "/n" or "/n/local" or "/prog" or
+	"/tmp" or "/tmp/veltro" or "/tool" or "/mnt" or "/chan" or "/fd" or
+	"/phone" or "/net" or "/net.alt" =>
+		return 1;
+	}
+	return 0;
+}
+
 #
 # Exported (NsConstruct->walletcontrolpath) so every namespace gate
 # uses ONE definition of this predicate; tools9p calls this rather
@@ -1128,6 +1275,18 @@ privilegedcontrolpath(path: string, tools: list of string): int
 # the guard costs nothing and keeps the oracle closed if it is ever
 # reintroduced.
 #
+# The camera's hardware: the receiver (camera(3)) and the I2C bus the
+# sensor is driven over (i2c(3)). Whoever has these can power the
+# sensor, reprogram it and take its frames whatever any feed says. An
+# agent that needs vision is given a video feed (camsrv(4) at
+# /mnt/video), never the device under it (infernode-os/infernode#1005).
+#
+cameradevicepath(path: string): int
+{
+	return path == "/dev/unicam" || prefix(path, "/dev/unicam/") ||
+		path == "/dev/i2c0ctl" || path == "/dev/i2c0data";
+}
+
 walletcontrolpath(path: string): int
 {
 	# /n/wallet is where wallet9p mounted before INFR-400; it stays denied.
@@ -1142,9 +1301,9 @@ walletcontrolpath(path: string): int
 
 ftreecontrolpath(path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl file can bind and
-	# unmount in the user's GUI namespace, so it is never an agent grant.
-	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+	# ftree is a trusted user namespace browser. Its ctl (#sftree, mounted at
+	# /mnt/ftree) binds and unmounts in ftree's name space: never an agent grant.
+	return path == "/mnt/ftree" || prefix(path, "/mnt/ftree/");
 }
 
 tmpveltrointernalpath(path: string): int
@@ -1163,10 +1322,10 @@ appipccontrolpath(path: string): int
 	# path grant would let generic filesystem/shell tools drive the app protocol.
 	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
 		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
-		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
-		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
-		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
+		path == "/mnt/shell" || prefix(path, "/mnt/shell/") ||
+		path == "/mnt/fractal" || prefix(path, "/mnt/fractal/") ||
+		path == "/mnt/man" || prefix(path, "/mnt/man/");
 }
 
 appipctoolpath(path: string, tools: list of string): int
@@ -1177,16 +1336,16 @@ appipctoolpath(path: string, tools: list of string): int
 	if((path == "/mnt/charon" || prefix(path, "/mnt/charon/")) &&
 	   inlist("charon", tools))
 		return 1;
-	if((path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/")) &&
+	if((path == "/mnt/editor" || prefix(path, "/mnt/editor/")) &&
 	   inlist("editor", tools))
 		return 1;
-	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&
+	if((path == "/mnt/shell" || prefix(path, "/mnt/shell/")) &&
 	   inlist("shell", tools))
 		return 1;
-	if((path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/")) &&
+	if((path == "/mnt/fractal" || prefix(path, "/mnt/fractal/")) &&
 	   inlist("fractal", tools))
 		return 1;
-	if((path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/")) &&
+	if((path == "/mnt/man" || prefix(path, "/mnt/man/")) &&
 	   inlist("man", tools))
 		return 1;
 	return 0;
@@ -1238,6 +1397,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/gps" || prefix(path, "/mnt/gps/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
@@ -1338,6 +1498,95 @@ overlaykey(path: string): string
 	return sys->sprint("%8.8ux", h);
 }
 
+# An overlay is this session's or an earlier one's: activity ids start
+# again at 1 when InferNode does, and /tmp persists, so a new task 1 given
+# the folder an earlier task 1 had took over its overlay, with changes the
+# user had not approved in it, to be shown as its own and promoted with
+# its own.  The overlay notes when the emulator it was made in started
+# (boot= in .cowmeta, which cowfs keeps from the agent); one from another
+# start, with changes in it, is set aside, not deleted: they were never
+# approved, nor refused.  Within one start, every tool server of the activity
+# shares the overlay as before.
+BOOTSLACK: con 2;	# seconds: the start time is worked out, not read
+
+bootstamp(): int
+{
+	daytime := load Daytime Daytime->PATH;
+	if(daytime == nil)
+		return 0;
+	return daytime->now() - sys->millisec() / 1000;
+}
+
+markboot(overlaydir: string, boot: int)
+{
+	if(boot == 0)
+		return;
+	meta := "";
+	(nil, lines) := sys->tokenize(readfile(overlaydir + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(!prefix(hd lines, "boot="))
+			meta += hd lines + "\n";
+	fd := sys->create(overlaydir + "/.cowmeta", Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return;
+	sys->fprint(fd, "%sboot=%d\n", meta, boot);
+}
+
+setasidestale(overlaydir: string): string
+{
+	init();
+	return setaside(overlaydir, bootstamp());
+}
+
+setaside(overlaydir: string, boot: int): string
+{
+	(ok, nil) := sys->stat(overlaydir);
+	if(ok < 0 || boot == 0)
+		return "";
+	was := 0;
+	(nil, lines) := sys->tokenize(readfile(overlaydir + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(prefix(hd lines, "boot="))
+			was = int (hd lines)[len "boot=":];
+	if(was != 0 && was - boot <= BOOTSLACK && boot - was <= BOOTSLACK)
+		return "";
+	# Nothing staged in it: nothing to keep.
+	staged := 0;
+	fd := sys->open(overlaydir, Sys->OREAD);
+	if(fd != nil) {
+		for(;;) {
+			(n, d) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++)
+				if(d[i].name != ".cowmeta")
+					staged = 1;
+		}
+		fd = nil;
+	}
+	if(!staged)
+		return "";	# nothing in it to keep apart: used as it is
+	# Kept beside the others, under a name no activity's overlay has.
+	(nil, base) := splitlast(overlaydir);
+	dir := sys->nulldir;
+	dir.name = sys->sprint("kept-%d-%s", was, base);
+	if(sys->wstat(overlaydir, dir) < 0) {
+		sys->fprint(sys->fildes(2), "nsconstruct: cannot set aside %s: %r\n", overlaydir);
+		return "";
+	}
+	sys->fprint(sys->fildes(2), "nsconstruct: %s is from an earlier session: kept as %s, not used\n", overlaydir, dir.name);
+	(parent, nil) := splitlast(overlaydir);
+	return parent + "/" + dir.name;
+}
+
+splitlast(path: string): (string, string)
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return (path[0:i], path[i+1:]);
+	return ("", path);
+}
+
 overlaywritepaths(paths: list of string, actid: int): string
 {
 	cowfs: Cowfs;
@@ -1360,6 +1609,8 @@ overlaywritepaths(paths: list of string, actid: int): string
 		# Keyed by (activity, path) so every tool that is granted the same
 		# writable path shares one overlay and sees the same files.
 		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%s", actid, overlaykey(fullpath));
+		boot := bootstamp();
+		setaside(overlaydir, boot);
 		merr := mkdirp(overlaydir);
 		if(merr != nil)
 			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
@@ -1367,6 +1618,7 @@ overlaywritepaths(paths: list of string, actid: int): string
 		(mntfd, cerr) := cowfs->start(fullpath, overlaydir);
 		if(cerr != nil)
 			return sys->sprint("cowfs %s: %s", fullpath, cerr);
+		markboot(overlaydir, boot);
 
 		# MCREATE here is safe in a way it is NOT for the plain MREPL
 		# binds above (which restrict MCREATE to /tmp): every mutation
@@ -1384,19 +1636,25 @@ overlaywritepaths(paths: list of string, actid: int): string
 	return nil;
 }
 
-# Emit namespace manifest for the UI to display.
-# Writes to /tmp/veltro/.ns/manifest — one entry per line:
-#   path=/dev/time label=System Clock perm=ro
-# Must be called AFTER restrictns() from the restricted namespace
-# so stat checks reflect exactly what the agent can access.
-emitmanifest(caps: ref Capabilities, mpath: string)
+# The manifest's file, made in the name space the UI reads: called
+# before restrictns, which may give the agent a /tmp of its own.
+openmanifest(mpath: string): ref Sys->FD
 {
 	if(sys == nil)
 		init();
-
 	mkdirp("/tmp/veltro/.ns");
+	return sys->create(mpath, Sys->OWRITE, FILE_MODE);
+}
 
-	fd := sys->create(mpath, Sys->OWRITE, FILE_MODE);
+# Emit namespace manifest for the UI to display, on fd (openmanifest's),
+# one entry per line:
+#   path=/dev/time label=System Clock perm=ro
+# Must be called AFTER restrictns() from the restricted namespace
+# so stat checks reflect exactly what the agent can access.
+emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
+{
+	if(sys == nil)
+		init();
 	if(fd == nil)
 		return;
 
@@ -1431,6 +1689,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/matrix", "Matrix Runtime", "rw"),
 		("/mnt/wsys", "Window Pictures", "ro"),
 		("/mnt/gpu", "GPU Service", "rw"),
+		("/mnt/gps", "GPS Receiver", "ro"),
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),
@@ -1534,6 +1793,9 @@ verifyns(expected: list of string): string
 		"/.git",
 		"/CLAUDE.md",
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/msg/ctl",

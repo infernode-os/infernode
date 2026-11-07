@@ -115,7 +115,7 @@ poolopt(char *str)
 		usage();
 	*str++ = '\0';
 	n = strlen(str);
-	x = atoi(str);
+	x = strtoul(str, nil, 10);
 	switch(str[n - 1]){
 	case 'k':
 	case 'K':
@@ -124,6 +124,10 @@ poolopt(char *str)
 	case 'm':
 	case 'M':
 		x *= 1024*1024;
+		break;
+	case 'g':
+	case 'G':
+		x *= 1024*1024*1024;
 		break;
 	}
 	if(poolsetsize(var, x) == 0)
@@ -368,7 +372,7 @@ emuinit(void *imod)
 	kbind("#^", "/dev", MBEFORE);	/* snarf */
 	kbind("#^", "/chan", MBEFORE);
 	kbind("#m", "/dev", MBEFORE);	/* pointer */
-	kbind("#w", "/dev", MBEFORE);	/* host window size: /dev/wmsize; no-op without devwmsz */
+	kbind("#z", "/dev", MBEFORE);	/* host window size: /dev/wmsize; no-op without devwmsz */
 	kbind("#c", "/dev", MBEFORE);
 	kbind("#A", "/dev", MBEFORE);	/* audio; no-op on hosts without devaudio */
 	kbind("#p", "/prog", MREPL);

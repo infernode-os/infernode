@@ -66,7 +66,7 @@ init(): int
 	debug->init();
 	(ok, nil) := sys->stat(PROF + "/ctl");
 	if (ok == -1) {
-		if(sys->bind("#P", PROF, Sys->MREPL|Sys->MCREATE) < 0){
+		if(sys->bind("#K", PROF, Sys->MREPL|Sys->MCREATE) < 0){
 			error(sys->sprint("cannot bind prof device to /prof"));
 			return -1;
 		}

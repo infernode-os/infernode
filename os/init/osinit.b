@@ -34,6 +34,8 @@ include "bench.m";
 include "sh.m";
 include "keyring.m";
 
+include "hid.m";
+
 Init: module
 {
 	init:	fn();
@@ -132,6 +134,17 @@ init()
 		sys->print("init: cannot bind #I on /net: %r\n");
 
 	#
+	# The spare Ethernet instances, #l2 and #l3, where a USB adapter
+	# goes when ether0 is a kernel driver's (a Pi 4's GENET). Bound
+	# here, before anything forks the namespace, so the console shell
+	# sees /net/ether2 too; etherusb's own bind happens after the shell
+	# has its copy. Empty until an adapter binds one. A kernel without
+	# them refuses the attach, and nothing is lost.
+	#
+	sys->bind("#l2", "/net", Sys->MAFTER);
+	sys->bind("#l3", "/net", Sys->MAFTER);
+
+	#
 	# And the process device on /prog. sh reaches it as #p directly
 	# for its wait file, so nothing has needed the conventional path
 	# until now -- but a system you cannot list the processes of is
@@ -194,6 +207,15 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
+	# And the camera receiver and its I2C, where the board has them
+	# (the Pi 4), likewise after /dev: nothing runs until a program
+	# powers it, so they cost nothing to have bound.
+	#
+	for(devs := "#V" :: "#J" :: nil; devs != nil; devs = tl devs)
+		if(sys->stat(hd devs).t0 >= 0 && sys->bind(hd devs, "/dev", Sys->MAFTER) < 0)
+			sys->print("init: cannot bind %s on /dev: %r\n", hd devs);
+
+	#
 	# And where USB serial ports appear: usbserial makes eiaU0 and its
 	# ctl and status files in #seia, a #s of their own, and that is
 	# bound after /dev now, at boot, so that every namespace forked from
@@ -202,6 +224,14 @@ init()
 	#
 	if(sys->bind("#seia", "/dev", Sys->MAFTER) < 0)
 		sys->print("init: cannot bind #seia on /dev: %r\n");
+
+	#
+	# And the Dis VMs, /dev/vm (#944): one a core, each running
+	# programs alongside the others. Here so every namespace forked from
+	# init has them; vm(1) reaches #X directly anyway.
+	#
+	if(sys->bind("#X", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #X on /dev: %r\n");
 
 	#
 	# Bring up loopback.
@@ -266,6 +296,14 @@ init()
 	sdsetup();
 
 	#
+	# CNSA 2.0 strict authentication, if the card asks for it: straight
+	# after the card, before anything that could authenticate (the Wi-Fi
+	# join's factotum, Bluetooth, the network console, the desktop's cpu
+	# listener) has had the chance to.
+	#
+	cnsasetup();
+
+	#
 	# The radio's firmware lives on the card just mounted. The kernel
 	# names no path: this is where the paths come from.
 	#
@@ -325,6 +363,12 @@ init()
 	btsetup();
 
 	#
+	# The camera, where the board has one and the card says how it is
+	# mounted: camsrv on /mnt/video for every session, as Bluetooth is.
+	#
+	camerasetup();
+
+	#
 	# The touch panel, if the kernel found one. Spawned because it is
 	# a poll loop; it exits with one line on every machine without the
 	# ribbon, which is expected and not an error.
@@ -338,6 +382,13 @@ init()
 	kernelether();
 
 	spawn usbprobe();
+
+	#
+	# Programs the card says to start in VMs of their own: a server
+	# that should not share a core with the desktop, say. Spawned, as
+	# loading them can take a moment and the shell need not wait.
+	#
+	spawn vmsetup();
 
 	#
 	# A console over the network, so the serial cable is not the only
@@ -589,6 +640,8 @@ Rd2h:		con 16r80;	# device to host
 Rh2d:		con 16r00;	# host to device
 Rclass:		con 16r20;	# class request
 Rother:		con 3;		# recipient: other (a port)
+Riface:		con 1;		# recipient: an interface
+Dreport:	con 16r22;	# descriptor type: a HID report descriptor
 
 Rgetstatus:	con 0;
 Rsetfeature:	con 3;
@@ -735,6 +788,9 @@ isvendorif := 0;	# ...a vendor-specific interface
 hidep := -1;
 hidmaxpkt := 0;
 hidival := 0;
+hidiface := 0;	# the HID interface's number: its report descriptor is asked for by it
+hidsub := 0;	# its subclass: 1 if it can speak the boot protocol
+ishid := 0;	# dumpconfig saw a HID interface, whatever protocol it declared
 
 speedname(status: int): string
 {
@@ -779,7 +835,7 @@ kernelether()
 	for(i := 0; i < 12; i++)
 		if(int buf[i] != '0'){
 			sys->print("init: ether0 is a kernel link driver (%s)\n", string buf[0:12]);
-			runstart("/dis/etherusb.dis", "-k", -1, 0, 0);
+			runstart("/dis/etherusb.dis", "-k", -1, 0, 0, nil);
 			return;
 		}
 }
@@ -1197,12 +1253,29 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 
 	hidproto = 0;
+	hidiface = 0;
+	hidsub = 0;
+	ishid = 0;
 	isdisk = 0;
 	isacm = 0;
 	isether = 0;
 	isvendorif = 0;
 	hidep = -1;
 	dumpconfig(d, indent + "  ");
+
+	#
+	# A HID interface that names no boot protocol (0) is a pointer
+	# OR a keyboard, and only its report descriptor says which: a
+	# keyboard without the boot protocol declares none, as do most
+	# touchscreens and tablets. It used to go to mouseusb whatever it
+	# was, which turned such a keyboard away as "not a pointer". Ask
+	# the descriptor now, while the control endpoint is still ours --
+	# only for these interfaces, so a boot keyboard or mouse costs no
+	# extra transfer.
+	#
+	kbdbydesc := 0;
+	if(ishid && hidproto == 0 && hidep >= 0)
+		kbdbydesc = iskeyboard(d, hidiface, indent);
 
 	#
 	# Let go of the device's control endpoint and ctl file BEFORE the
@@ -1224,10 +1297,25 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# twice doubled the chance of a device coming up without a driver,
 	# and the second attempt happens later, when the bus is busier.
 	#
-	if(hidproto == Hidkbd)
-		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival);
-	else if(hidproto == Hidmouse)
-		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival);
+	#
+	# The keyboard driver, like the pointer's, is told the interface
+	# (its class requests go to it), the vid:pid (for the quirks
+	# file) and the subclass (whether it has a boot protocol at all).
+	#
+	if(hidproto == Hidkbd || kbdbydesc)
+		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival,
+			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
+			string hidsub :: nil);
+	else if(ishid && hidep >= 0)
+		#
+		# The pointer driver reads the interface's report descriptor
+		# (a touchscreen calls itself a mouse and reports positions),
+		# so it is told which interface, and the device's vid:pid for
+		# the card's quirks file.
+		#
+		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival,
+			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
+			string hidproto :: nil);
 	#
 	# A disk. Only on a machine with an xHCI controller, for now: the
 	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
@@ -1235,7 +1323,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# On a Pi 3 the disk is enumerated, listed, and left alone.
 	#
 	else if(isdisk && havexhci)
-		startdriver("/dis/diskusb.dis", name, -1, 0, 0);
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 	else if(isdisk)
 		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
 
@@ -1271,9 +1359,20 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	serial := (isacm && !isether) ||
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
 	if(serial && havexhci)
-		startdriver("/dis/usbserial.dis", name, -1, 0, 0);
-	else if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
-		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
+		startdriver("/dis/usbserial.dis", name, -1, 0, 0, nil);
+	#
+	# Ethernet by the device's class (2), or by an Ethernet interface
+	# in a device that declares itself a composite (class 0 or 239,
+	# "see the interfaces"): a phone or a Linux gadget offering
+	# Ethernet beside a serial port went undriven while only the
+	# device class was asked. Not when the device is a disk as well
+	# (the Jetson's stock gadget is RNDIS, NCM, a serial port and a
+	# disk): diskusb has it, and a second driver would race it for
+	# the control endpoint, which is exclusive -- whichever lost
+	# would get nothing. Sharing one is not done yet.
+	#
+	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
+		startdriver("/dis/etherusb.dis", name, -1, 0, 0, nil);
 	if(serial && !havexhci)
 		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
@@ -1632,6 +1731,7 @@ Wififile: con "/n/dos/wifi";
 Btfile: con "/n/dos/bt";
 Btkeys: con "/n/dos/btkeys";
 Btfactotum: con "/tmp/factotum";
+Camerafile: con "/n/dos/camera";
 
 radiosetup()
 {
@@ -1787,6 +1887,89 @@ btjoin(txt: string)
 		sys->print("init: bt: /net/bt/ctl: %r\n");
 		return;
 	}
+	ownaddr := 0;
+	for(i := 0; i < len txt;){
+		j := i;
+		while(j < len txt && txt[j] != '\n')
+			j++;
+		line := txt[i:j];
+		i = j + 1;
+		if(line == nil || line[0] == '#')
+			continue;
+		if(len line > 7 && line[0:7] == "bdaddr ")
+			ownaddr = 1;
+		if(sys->fprint(fd, "%s", line) < 0)
+			sys->print("init: bt: %s: %r\n", line);
+	}
+	#
+	# A 3B+'s controller has no address of its own: after the patch it
+	# reports the patch's default, the same on every board, so two of
+	# them would be one device to everything they pair with. Unless the
+	# bt file named one, btboardaddr gives it the board's, as Raspberry
+	# Pi OS does; a 4B's controller has its own and is left alone.
+	#
+	if(!ownaddr){
+		ba := load Command "/dis/btboardaddr.dis";
+		if(ba == nil)
+			sys->print("init: bt: cannot load /dis/btboardaddr.dis: %r\n");
+		else{
+			{
+				ba->init(nil, "btboardaddr" :: nil);
+			} exception e {
+			"fail:*" =>
+				sys->print("init: bt: btboardaddr: %s; add a bdaddr line to %s\n", e[5:], Btfile);
+			}
+		}
+	}
+	(a, got) := slurp("/net/bt/addr");
+	if(got)
+		sys->print("init: bt: %s", a);
+}
+
+#
+# The camera. /n/dos/camera holds ctl lines for camsrv(4), one per
+# line, written in order once it is mounted -- for a camera mounted on
+# its side, say,
+#
+#	rotate 90
+#
+# How the camera sits is a fact about this installation, so it is the
+# card's to say, as the radio's settings are; the same kernel and the
+# same camsrv serve any mounting. No file, nothing started here, and
+# wm/camera starts camsrv for itself as on any other machine. No
+# receiver (#V: a board other than the Pi 4), the file is not read.
+#
+# In THIS namespace, as /net/bt is, so the console shell, the network
+# console and the desktop all inherit /mnt/video/0; the mount point
+# appears on reference, mntsetup() having put mntgen after /mnt.
+# camsrv costs nothing idle: the sensor is powered only while
+# something reads a frame. The lines are DATA, ctl verbs that camsrv
+# checks; nothing in the file is run.
+#
+camerasetup()
+{
+	if(sys->stat("#V").t0 < 0)
+		return;
+	(txt, found) := slurp(Camerafile);
+	if(!found)
+		return;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("init: camera: pipe: %r\n");
+		return;
+	}
+	spawn camserve(p[1]);
+	p[1] = nil;
+	if(sys->mount(p[0], nil, "/mnt/video", Sys->MREPL, "") < 0){
+		sys->print("init: camera: mount on /mnt/video: %r\n");
+		return;
+	}
+	p[0] = nil;
+	fd := sys->open("/mnt/video/0/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: camera: /mnt/video/0/ctl: %r\n");
+		return;
+	}
 	for(i := 0; i < len txt;){
 		j := i;
 		while(j < len txt && txt[j] != '\n')
@@ -1796,11 +1979,34 @@ btjoin(txt: string)
 		if(line == nil || line[0] == '#')
 			continue;
 		if(sys->fprint(fd, "%s", line) < 0)
-			sys->print("init: bt: %s: %r\n", line);
+			sys->print("init: camera: %s: %r\n", line);
 	}
-	(a, got) := slurp("/net/bt/addr");
+	(f, got) := slurp("/mnt/video/0/fmt");
 	if(got)
-		sys->print("init: bt: %s", a);
+		sys->print("init: camera: /mnt/video %s", f);
+}
+
+# camsrv serves 9P on its standard input
+camserve(fd: ref Sys->FD)
+{
+	# the pipe's other end stays with the mount alone
+	sys->pctl(Sys->NEWFD, fd.fd :: 1 :: 2 :: nil);
+	if(sys->dup(fd.fd, 0) < 0){
+		sys->print("init: camera: dup: %r\n");
+		return;
+	}
+	fd = nil;
+	cam := load Command "/dis/camsrv.dis";
+	if(cam == nil){
+		sys->print("init: camera: cannot load /dis/camsrv.dis: %r\n");
+		return;
+	}
+	{
+		cam->init(nil, "camsrv" :: nil);
+	} exception e {
+	"fail:*" =>
+		sys->print("init: camera: camsrv: %s\n", e[5:]);
+	}
 }
 
 #
@@ -2060,6 +2266,68 @@ associated(): int
 # A whole small file, and whether it was there at all -- the two are
 # different questions and an empty file answers only the second.
 #
+#
+# Boot placement in the Dis VMs (#944). /n/dos/vms, if the card has it,
+# says what to start where, one program a line:
+#
+#	# vm  command and its arguments
+#	1     svc/httpd/httpd -p 80
+#	2     myserver
+#
+# A command is found as vm(1) finds it -- /dis/<name>.dis unless it is a
+# path -- and runs with init's namespace and console. Arguments are
+# words: there is no quoting here. Which programs go where, if anywhere,
+# is the card's to say; with no file every program runs in VM 0, as on
+# every kernel before there were VMs.
+#
+Vmsfile: con "/n/dos/vms";
+
+vmsetup()
+{
+	(txt, found) := slurp(Vmsfile);
+	if(!found)
+		return;
+	(nil, lines) := sys->tokenize(txt, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, w) := sys->tokenize(hd lines, " \t\r");
+		if(w == nil || (hd w)[0] == '#')
+			continue;
+		if(tl w == nil){
+			sys->print("init: vms: \"%s\" names no command\n", hd lines);
+			continue;
+		}
+		n := int hd w;
+		if(string n != hd w){
+			sys->print("init: vms: \"%s\": %s is not a VM number\n", hd lines, hd w);
+			continue;
+		}
+		cmd := hd tl w;
+		if(len cmd < 4 || cmd[len cmd - 4:] != ".dis")
+			cmd += ".dis";
+		if(cmd[0] != '/' && (len cmd < 2 || cmd[0:2] != "./"))
+			cmd = "/dis/" + cmd;
+		line := cmd;
+		for(a := tl tl w; a != nil; a = tl a)
+			line += " " + hd a;
+		fd := sys->open("#X/vm/" + string n + "/run", Sys->ORDWR);
+		if(fd == nil){
+			sys->print("init: vms: no VM %d: %r\n", n);
+			continue;
+		}
+		b := array of byte line;
+		if(sys->write(fd, b, len b) != len b){
+			sys->print("init: vms: %s in VM %d: %r\n", cmd, n);
+			continue;
+		}
+		pid := array[16] of byte;
+		r := sys->pread(fd, pid, len pid, big 0);
+		p := "?";
+		if(r > 0)
+			p = string pid[0:r-1];
+		sys->print("init: vm %d: %s, pid %s\n", n, line, p);
+	}
+}
+
 slurp(name: string): (string, int)
 {
 	fd := sys->open(name, Sys->OREAD);
@@ -2338,6 +2606,33 @@ sdsetup()
 # "local", a bench machine writes "local" and binds a development
 # server over it by hand.
 #
+#
+# CNSA 2.0 strict mode. A file /n/dos/cnsamode (its contents are not
+# read) makes every authentication on this machine use ML-KEM-1024, as
+# CNSAMODE does for the hosted emulator, so a board can be one of a
+# CNSA-mode fleet: every node must agree, and a mixed pair fails, by
+# design. The kernel's switch is what the handshake obeys (one way, for
+# the whole machine: os/port/devcons.c); /env/cnsamode is set as well,
+# as the hosted emulator sets it, for the programs that read it there
+# (createsignerkey, signer). No file, no change: ML-KEM-768.
+#
+Cnsafile: con "/n/dos/cnsamode";
+
+cnsasetup()
+{
+	if(sys->stat(Cnsafile).t0 < 0)
+		return;
+	fd := sys->open("#c/sysctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "cnsamode on") < 0){
+		sys->print("init: cnsamode: the kernel refused strict mode: %r\n");
+		return;
+	}
+	fd = sys->create("/env/cnsamode", Sys->OWRITE, 8r664);
+	if(fd == nil || sys->fprint(fd, "1") < 0)
+		sys->print("init: cnsamode: /env/cnsamode: %r\n");
+	sys->print("init: cnsamode: CNSA 2.0 strict (ML-KEM-1024) for every authentication\n");
+}
+
 rootpolicy()
 {
 	spec := "local";
@@ -2396,17 +2691,15 @@ rootbind(base: string)
 	if(rootunion(base + "/fonts", "/fonts"))
 		sys->print("init: /fonts grown from %s/fonts\n", base);
 	#
-	# Artwork, and it belongs here rather than in the kernel. The
-	# icons tree is 1.6MB against a 2.1MB kernel, so compiling it in
-	# would nearly double the image and the time every serial load
-	# takes, to save a card read of a bitmap nobody opens twice.
+	# Artwork, and it belongs here rather than in the kernel, beside
+	# the fonts: a card read rather than kernel bytes every serial
+	# load carries.
 	#
-	# Without this /icons is empty on the board and the failures are
-	# not obviously about a missing file: coffee opens
-	# /icons/coffee0.bit, gets nil, and prints "failed to allocate
-	# image", and Tk turns -bitmap small_color_left.bit into
-	# /icons/tk/small_color_left.bit and reports a bitmap it could
-	# not load. Both read like memory trouble and are not.
+	# Without this /icons is empty on the board: icon(2) finds no
+	# /icons/ui/*.svg, so wm/dir, wm/deb and the rest show blank
+	# buttons and no icons, Tk's cursors (/icons/tk) are missing, and
+	# coffee opens /icons/coffee0.bit, gets nil, and prints "failed to
+	# allocate image", which reads like memory trouble and is not.
 	#
 	if(rootunion(base + "/icons", "/icons"))
 		sys->print("init: /icons grown from %s/icons\n", base);
@@ -2507,18 +2800,39 @@ rootunion(src, dst: string): int
 # at all, since nothing drains the queue outside a walk.
 #
 walking := 0;
-pending: list of (string, string, int, int, int);
+pending: list of (string, string, int, int, int, list of string);
 
-startdriver(path, name: string, ep, maxpkt, ival: int)
+#
+# Does this HID interface's report descriptor describe a keyboard? The
+# Hid library is loaded only when there is such an interface to ask
+# about, which on most machines is never.
+#
+iskeyboard(d: ref Sys->FD, iface: int, indent: string): int
 {
-	if(walking){
-		pending = (path, name, ep, maxpkt, ival) :: pending;
-		return;
-	}
-	runstart(path, name, ep, maxpkt, ival);
+	hid := load Hid Hid->PATH;
+	if(hid == nil)
+		return 0;
+	hid->init();
+	buf := array[1024] of byte;
+	n := ctlreq(d, Rd2h|Riface, Rgetdesc, Dreport << 8, iface, len buf, buf);
+	if(n <= 0)
+		return 0;
+	if(hid->keyboard(buf[0:n]) == nil)
+		return 0;
+	sys->print("init: %s  if %d declares no boot protocol; its report descriptor is a keyboard's\n", indent, iface);
+	return 1;
 }
 
-runstart(path, name: string, ep, maxpkt, ival: int)
+startdriver(path, name: string, ep, maxpkt, ival: int, extra: list of string)
+{
+	if(walking){
+		pending = (path, name, ep, maxpkt, ival, extra) :: pending;
+		return;
+	}
+	runstart(path, name, ep, maxpkt, ival, extra);
+}
+
+runstart(path, name: string, ep, maxpkt, ival: int, extra: list of string)
 {
 	drv := load Command path;
 	if(drv == nil){
@@ -2526,9 +2840,8 @@ runstart(path, name: string, ep, maxpkt, ival: int)
 		return;
 	}
 	argv := path :: name :: nil;
-	if(ep >= 0)
-		argv = path :: name :: string ep :: string maxpkt ::
-			string ival :: nil;
+	if(ep >= 0)	# endpoint, packet size, interval, then what else the driver was given
+		argv = path :: name :: string ep :: string maxpkt :: string ival :: extra;
 	spawn drv->init(nil, argv);
 }
 
@@ -2543,13 +2856,13 @@ runstart(path, name: string, ep, maxpkt, ival: int)
 startpending()
 {
 	walking = 0;
-	l: list of (string, string, int, int, int);
+	l: list of (string, string, int, int, int, list of string);
 	for(p := pending; p != nil; p = tl p)
 		l = hd p :: l;
 	pending = nil;
 	for(; l != nil; l = tl l){
-		(path, name, ep, maxpkt, ival) := hd l;
-		runstart(path, name, ep, maxpkt, ival);
+		(path, name, ep, maxpkt, ival, extra) := hd l;
+		runstart(path, name, ep, maxpkt, ival, extra);
 	}
 }
 
@@ -2716,8 +3029,17 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				# the device class alone therefore never sees
 				# an input device at all.
 				#
-				if(int cfg[i+5] == Clhid && hidproto == 0)
+				#
+				# The first HID interface, whatever its
+				# protocol: a touchscreen or tablet often
+				# declares none (0), not boot mouse (2).
+				#
+				if(int cfg[i+5] == Clhid && !ishid){
+					ishid = 1;
 					hidproto = int cfg[i+7];
+					hidiface = int cfg[i+2];
+					hidsub = int cfg[i+6];
+				}
 				if(int cfg[i+5] == Clstorage && int cfg[i+6] == Sscsi && int cfg[i+7] == Pbulkonly)
 					isdisk = 1;
 				#
@@ -2755,7 +3077,7 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				# and the first is the one a boot-protocol
 				# device reports on.
 				#
-				if(hidproto != 0 && hidep < 0
+				if(ishid && hidep < 0
 				&& (addr & 16r80) && (attr & 3) == 3){
 					hidep = addr & 16rF;
 					hidmaxpkt = mx;

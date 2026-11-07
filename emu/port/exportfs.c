@@ -355,6 +355,26 @@ exportproc(void *a)
 		pexit("mount shut down", 0);
 }
 
+
+/*
+ * exq.tail again, after requests were taken out of exq: called with exq.l
+ * held. exshutdown and exflushed unlinked them and left tail on one they
+ * had freed, when it was the last; exportproc's next request was then put
+ * after it (exq.tail->next = q), into freed memory. sysfuzz, under
+ * AddressSanitizer: heap-use-after-free, Progs exporting their name
+ * spaces and killed; without it, the allocator's free list corrupted
+ * (a nil fault in pooldel).
+ */
+static void
+exqtail(void)
+{
+	Exq *q;
+
+	exq.tail = nil;
+	for(q = exq.head; q != nil; q = q->next)
+		exq.tail = q;
+}
+
 static int
 exflushed(Export *fs, Exq *fq)
 {
@@ -366,6 +386,7 @@ exflushed(Export *fs, Exq *fq)
 	for(last = &exq.head; (q = *last) != nil; last = &q->next)
 		if(q->export == fs && q->in.tag == fq->in.oldtag){
 			*last = q->next;
+			exqtail();
 			unlock(&exq.l);
 			/* not yet started: discard, and Rflush */
 			exfreeq(q);
@@ -435,6 +456,7 @@ exshutdown(Export *fs)
 			exfreeq(q);
 		}else
 			last = &q->next;
+	exqtail();
 	unlock(&exq.l);
 
 	/* tell slaves to abandon work in progress */

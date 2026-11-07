@@ -40,7 +40,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(n) or b"{}")
+        raw = self.rfile.read(n) or b"{}"
+        # chat completions only: llmsrv also asks Ollama's /api/show for
+        # a model's window, which this server is not
+        if not self.path.endswith("/chat/completions"):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = json.loads(raw)
         users = [m.get("content") for m in body.get("messages", [])
                  if m.get("role") == "user" and isinstance(m.get("content"), str)]
         text = reply(users[-1] if users else "")

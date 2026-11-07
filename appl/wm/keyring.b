@@ -198,8 +198,9 @@ buildbase()
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 
-		# select a key with B1, raise the menu with B3 (at the pointer)
-		"bind .top.lb <Button-1> {%C}",
+		# B1 selects a key (the listbox's own); B3 raises the menu at the
+		# pointer.  A B1 binding of {%C} ran the command "C", an error
+		# on every click: %C is no substitution of Tk's
 		"bind .top.lb <Button-3> {send act menu %X %Y}",
 		"bind . <Button-3> {send act menu %X %Y}",
 	};
@@ -567,10 +568,13 @@ secstorelocked(): int
 
 handlekey(k: int)
 {
-	Kdel: con 16rFF9F;
+	# Delete: DEL as SDL sends it, or keyboard.h's (16rFF9F, an X11
+	# keysym, was never sent: Delete did nothing)
+	Kdel: con 16rE064;	# Keyboard->Del
+	DEL: con 16r7F;
 	# Ctrl-Q quits
 	if(k == 'q' - 16r60){
-		exit;
+		tkclient->wmctl(top, "exit");
 	}
 	# Escape cancels the form / clears selection
 	if(k == 27){
@@ -592,7 +596,7 @@ handlekey(k: int)
 		return;
 	}
 	# Delete removes the selected key in list mode
-	if(k == Kdel && mode == ModeList){
+	if((k == Kdel || k == DEL) && mode == ModeList){
 		deleteselected();
 		return;
 	}

@@ -29,6 +29,7 @@ extern Dev bootdevtab;
 extern Dev benchdevtab;
 extern Dev drawdevtab;
 extern Dev srvdevtab;
+extern Dev vmdevtab;
 extern Dev etherdevtab;
 extern Dev ssldevtab;
 extern Dev uartdevtab;
@@ -46,9 +47,10 @@ Dev*	devtab[] =
 	&pointerdevtab,		/* 'm' -- #m, the pointer */
 	&sddevtab,		/* 'S' -- #S, the disk as a file: a virtio block device */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
-	&benchdevtab,		/* 'b' -- #b, microsecond timing for benchmarks */
+	&benchdevtab,		/* 'x' -- #x, microsecond timing for benchmarks */
 	&drawdevtab,		/* 'i' -- #i, the draw device */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
+	&vmdevtab,		/* 'X' -- #X, the Dis VMs, one a core (#944) */
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, the console */

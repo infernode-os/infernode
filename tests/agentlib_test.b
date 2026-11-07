@@ -21,7 +21,7 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
-include "../appl/veltro/agentlib.m";
+include "agentlib.m";
 	agentlib: AgentLib;
 
 AgentlibTest: module
@@ -500,6 +500,28 @@ testBuildToolDefsEmpty(t: ref T)
 	t.assertseq(json, "[]", "empty list → []");
 }
 
+# A native call carrying the text protocol's heredoc: the markers are
+# unwrapped, as parseaction does, not handed to the tool as content.
+testToolArgsHeredoc(t: ref T)
+{
+	args := agentlib->toolargs("xenith", "{\"command\":\"write\",\"args\":\"4 body <<EOF\\n# Title\\n\\n- one\\n- two\\nEOF\"}");
+	t.assertseq(args, "write 4 body # Title\n\n- one\n- two", "heredoc: markers unwrapped");
+}
+
+# A heredoc with no closing delimiter is left as it came.
+testToolArgsHeredocOpen(t: ref T)
+{
+	args := agentlib->toolargs("xenith", "{\"command\":\"append\",\"args\":\"4 <<EOF\\nline\"}");
+	t.assertseq(args, "append 4 <<EOF\nline", "open heredoc: unchanged");
+}
+
+# Shell commands keep their heredocs.
+testToolArgsHeredocExec(t: ref T)
+{
+	args := agentlib->toolargs("exec", "{\"command\":\"cat <<EOF\\nhi\\nEOF\"}");
+	t.assertseq(args, "cat <<EOF\nhi\nEOF", "exec heredoc: unchanged");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -565,6 +587,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ParseLLMTwoTools", testParseLLMTwoTools);
 	run("ParseLLMEscapedNewline", testParseLLMEscapedNewline);
 	run("ParseLLMToolWithText", testParseLLMToolWithText);
+	run("ToolArgsHeredoc", testToolArgsHeredoc);
+	run("ToolArgsHeredocOpen", testToolArgsHeredocOpen);
+	run("ToolArgsHeredocExec", testToolArgsHeredocExec);
 
 	# buildtoolresults
 	run("BuildToolResultsOne", testBuildToolResultsOne);

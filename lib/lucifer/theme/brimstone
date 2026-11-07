@@ -43,6 +43,8 @@ editstatus 0A0A0A
 editstattext 999999
 editscroll 1A1A1A
 editthumb 444444
+editunfocused 8A8A8A		# 5.6:1 on editbg
+edithold 6FA3E0		# 7.4:1
 
 # Mermaid diagrams
 diagbg 1E1E2E

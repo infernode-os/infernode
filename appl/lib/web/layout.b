@@ -414,6 +414,7 @@ growt(a: array of string, n: int): array of string
 
 build(d: ref Doc, c: ref Computed): ref Box
 {
+	nbuilt++;
 	curdoc = d;
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
@@ -5900,6 +5901,17 @@ autolo(t: array of ref Track, a0, a1: int): int
 	return 1;
 }
 
+# whether a track spanned has a min-content or max-content minimum,
+# which an item's min-content contribution sizes, not its automatic
+# minimum
+contentlo(t: array of ref Track, a0, a1: int): int
+{
+	for(j := a0; j < a1 && j < len t; j++)
+		if(t[j].lo.kind == Tmin || t[j].lo.kind == Tmax)
+			return 1;
+	return 0;
+}
+
 sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap: int, b: ref Box)
 {
 	n := len t;
@@ -5960,8 +5972,8 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 				mn = mx = 0;
 			else if(cols) {
 				(mn, mx) = contribution(k);
-				if(k.st.minwidth.kind == Style->Lauto && isscroller(k) && autolo(t, a0, a1))
-					mn = mgs(k) + hextra(k);	# auto minimums: a scroll container's is zero (§6.6; MDN's homepage mandala held the hero's column to its 560px)
+				if(k.st.minwidth.kind == Style->Lauto && isscroller(k) && !contentlo(t, a0, a1))
+					mn = mgs(k) + hextra(k);	# auto minimums: a scroll container's is zero, whatever else it spans (§6.6; MDN's homepage mandala held the hero's column to its 560px; JSTOR's hero, spanning its margins, its 35000px slides)
 				else if((k.st.minwidth.kind == Style->Lpx || k.st.minwidth.kind == Style->Lcalc) &&
 				   k.st.width.kind == Style->Lauto && a1 - a0 == 1 && autolo(t, a0, a1) && !issubgrid(k, cols)) {
 					# an auto minimum track takes the item's minimum
@@ -8468,10 +8480,10 @@ imgsrc(d: ref Doc, n: int): string
 				continue;	# a source for another viewport (apple.com's hero, by width and height)
 			if(d.hasattr(c, "type") && !decodes(d.attr(c, "type")))
 				continue;
-			if((u := srcset(d.attr(c, "srcset"))) != nil)
+			if((u := srcset(d.attr(c, "srcset"), slotwidth(d.attr(c, "sizes")))) != nil)
 				return u;
 		}
-	if((u := srcset(d.attr(n, "srcset"))) != nil)
+	if((u := srcset(d.attr(n, "srcset"), slotwidth(d.attr(n, "sizes")))) != nil)
 		return u;
 	return d.attr(n, "src");
 }
@@ -8489,8 +8501,9 @@ decodes(t: string): int
 
 # The candidate of a srcset for a 1x display: among density
 # descriptors the one nearest 1x; among width descriptors the
-# narrowest that is at least a typical viewport wide, else the widest.
-srcset(s: string): string
+# narrowest that is at least slot wide (in device pixels), else the
+# widest.
+srcset(s: string, slot: int): string
 {
 	best := "";
 	bestd := 0.0;
@@ -8538,7 +8551,7 @@ srcset(s: string): string
 			}
 		}
 		if(w > 0) {
-			if(bestw == 0 || bestw < SRCSETW && w > bestw || w >= SRCSETW && w < bestw) {
+			if(bestw == 0 || bestw < slot && w > bestw || w >= slot && w < bestw) {
 				best = u;
 				bestw = w;
 			}
@@ -8560,7 +8573,215 @@ srcset(s: string): string
 	return best;
 }
 
-SRCSETW: con 1024;	# the width a w-descriptor candidate should cover
+SRCSETW: con 1024;	# the width a w-descriptor candidate should cover, at most
+
+# The width an image will be shown at, from its sizes attribute (HTML
+# §4.8.4.2.2): the length of the first entry whose media condition
+# holds, in device pixels; never more than SRCSETW, which is what was
+# taken before sizes was read (a thumbnail shown 150px wide took a
+# 1024px candidate, fetched and decoded at seven times its pixels).
+# Without sizes, or with one not understood (auto among them), SRCSETW.
+slotwidth(sizes: string): int
+{
+	if(trimsp(sizes) == "" || layenv == nil)
+		return SRCSETW;
+	toks := css->tokenize(sizes);
+	st := 0;
+	for(i := 0; i <= len toks; i++) {
+		if(i < len toks && toks[i].kind != Css->Kcomma)
+			continue;
+		part := trimtoks(toks[st:i]);
+		st = i + 1;
+		if(len part == 0)
+			continue;
+		cond := trimtoks(part[0:len part - 1]);
+		if(len cond > 0 && !style->mediamatch(cond, layenv))
+			continue;
+		v := sizelen(part[len part - 1]);
+		if(v < 0.0)
+			return SRCSETW;
+		w := int v;	# (int rounds)
+		if(w > SRCSETW)
+			w = SRCSETW;
+		if(w < 1)
+			w = 1;
+		return w;
+	}
+	return SRCSETW;
+}
+
+trimtoks(t: array of ref Css->Tok): array of ref Css->Tok
+{
+	a := 0;
+	b := len t;
+	while(a < b && t[a].kind == Css->Kws)
+		a++;
+	while(b > a && t[b-1].kind == Css->Kws)
+		b--;
+	return t[a:b];
+}
+
+# a sizes length in device pixels, or -1 for one not understood
+sizelen(t: ref Css->Tok): real
+{
+	case t.kind {
+	Css->Knumber =>
+		if(t.n == 0.0)
+			return 0.0;
+	Css->Kdimension =>
+		(ok, v) := unitlen(t.n, t.s);
+		if(ok && v >= 0.0)
+			return v;
+	Css->Kfunction =>
+		args := splitcomma(t.kids);
+		case t.s {
+		"calc" =>
+			if(len args == 1)
+				return sizecalc(args[0]);
+		"min" or "max" =>
+			r := -1.0;
+			for(k := 0; k < len args; k++) {
+				v := sizecalc(args[k]);
+				if(v < 0.0)
+					return -1.0;
+				if(r < 0.0 || t.s == "min" && v < r || t.s == "max" && v > r)
+					r = v;
+			}
+			return r;
+		"clamp" =>
+			if(len args == 3) {
+				lo := sizecalc(args[0]);
+				v := sizecalc(args[1]);
+				hi := sizecalc(args[2]);
+				if(lo < 0.0 || v < 0.0 || hi < 0.0)
+					return -1.0;
+				if(v > hi)
+					v = hi;
+				if(v < lo)
+					v = lo;
+				return v;
+			}
+		}
+	}
+	return -1.0;
+}
+
+splitcomma(t: array of ref Css->Tok): array of array of ref Css->Tok
+{
+	l: list of array of ref Css->Tok;
+	n := 0;
+	st := 0;
+	for(i := 0; i <= len t; i++)
+		if(i == len t || t[i].kind == Css->Kcomma) {
+			l = trimtoks(t[st:i]) :: l;
+			n++;
+			st = i + 1;
+		}
+	a := array[n] of array of ref Css->Tok;
+	for(; l != nil; l = tl l)
+		a[--n] = hd l;
+	return a;
+}
+
+# n of a unit, in device pixels: (understood, length)
+unitlen(n: real, u: string): (int, real)
+{
+	dpr := layenv.dpr;
+	if(dpr <= 0.0)
+		dpr = 1.0;
+	case u {
+	"px" =>	return (1, n * dpr);
+	"em" or "rem" =>	return (1, n * 16.0 * dpr);
+	"vw" =>	return (1, n * real layenv.width / 100.0);
+	"vh" =>	return (1, n * real layenv.height / 100.0);
+	"vmin" =>
+		m := layenv.width;
+		if(layenv.height < m)
+			m = layenv.height;
+		return (1, n * real m / 100.0);
+	"vmax" =>
+		m := layenv.width;
+		if(layenv.height > m)
+			m = layenv.height;
+		return (1, n * real m / 100.0);
+	}
+	return (0, 0.0);
+}
+
+# a calc() sum of products: lengths, numbers, + - * / and parentheses;
+# -1 for anything else (a percentage has no basis here)
+sizecalc(t: array of ref Css->Tok): real
+{
+	(v, i, ok) := sizesum(t, 0);
+	if(!ok || i != len t || v < 0.0)
+		return -1.0;
+	return v;
+}
+
+sizesum(t: array of ref Css->Tok, i: int): (real, int, int)
+{
+	(v, j, ok) := sizeprod(t, i);
+	while(ok) {
+		while(j < len t && t[j].kind == Css->Kws)
+			j++;
+		if(j >= len t || t[j].kind != Css->Kdelim || t[j].s != "+" && t[j].s != "-")
+			break;
+		op := t[j].s;
+		w: real;
+		(w, j, ok) = sizeprod(t, j + 1);
+		if(op == "+")
+			v += w;
+		else
+			v -= w;
+	}
+	return (v, j, ok);
+}
+
+sizeprod(t: array of ref Css->Tok, i: int): (real, int, int)
+{
+	(v, j, ok) := sizeterm(t, i);
+	while(ok) {
+		while(j < len t && t[j].kind == Css->Kws)
+			j++;
+		if(j >= len t || t[j].kind != Css->Kdelim || t[j].s != "*" && t[j].s != "/")
+			break;
+		op := t[j].s;
+		w: real;
+		(w, j, ok) = sizeterm(t, j + 1);
+		if(op == "*")
+			v *= w;
+		else if(w != 0.0)
+			v /= w;
+		else
+			ok = 0;
+	}
+	return (v, j, ok);
+}
+
+sizeterm(t: array of ref Css->Tok, i: int): (real, int, int)
+{
+	while(i < len t && t[i].kind == Css->Kws)
+		i++;
+	if(i >= len t)
+		return (0.0, i, 0);
+	x := t[i];
+	case x.kind {
+	Css->Knumber =>
+		return (x.n, i + 1, 1);
+	Css->Kblock =>
+		if(x.s == "(") {
+			(v, j, ok) := sizesum(x.kids, 0);
+			return (v, i + 1, ok && j == len x.kids);
+		}
+	Css->Kdimension =>
+		(ok, v) := unitlen(x.n, x.s);
+		return (v, i + 1, ok);
+	Css->Kfunction =>
+		v := sizelen(x);
+		return (v, i + 1, v >= 0.0);
+	}
+	return (0.0, i, 0);
+}
 
 isblank(c: int): int
 {
@@ -11563,7 +11784,7 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 		case it.kind {
 		Iword or Ispace =>
 			for(i := 0; i < len it.text; i++)
-				if(it.text[i] >= 16r590) {
+				if(it.text[i] >= 16r590 && rtlish(it.text[i])) {
 					need = 1;
 					break;
 				}
@@ -11674,6 +11895,24 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 	for(; r != nil; r = tl r)
 		out = hd r :: out;
 	return (out, para);
+}
+
+# whether c can make a left-to-right paragraph's levels other than 0:
+# a strong right-to-left character, an Arabic number, or an explicit
+# embedding, override or isolate.  Without one, every level is 0 (UAX
+# #9: W7 makes European numbers L, N1 and N2 give neutrals the
+# paragraph's direction), so dashes, quotes and the like above U+0590
+# do not need the algorithm, which was a tenth of the time Wikipedia's
+# English pages took
+rtlish(c: int): int
+{
+	case bidi->class(c) {
+	Bidi->R or Bidi->AL or Bidi->AN or
+	Bidi->LRE or Bidi->LRO or Bidi->RLE or Bidi->RLO or Bidi->PDF or
+	Bidi->LRI or Bidi->RLI or Bidi->FSI or Bidi->PDI =>
+		return 1;
+	}
+	return 0;
 }
 
 # the width of a word's characters [a:e), letter-spacing included
@@ -16281,19 +16520,51 @@ clipshit(b: ref Box): int
 	return b.st.overflowx != Style->Ovisible || b.st.overflowy != Style->Ovisible;
 }
 
+# The boxes of the tree built last, by node: a page's scripts ask where
+# its elements are hundreds of times (getBoundingClientRect, observers),
+# and each asked walked every box (JSTOR's search results, 534 times).
+# Only build changes which boxes a tree has, so an index made after it
+# holds until the next.  One value, swapped whole, as sessions share
+# this module.
+Index: adt {
+	root:	ref Box;
+	gen:	int;
+	a:	array of list of ref Box;
+};
+index: ref Index;
+nbuilt := 0;	# builds so far
+
 boxes(root: ref Box, n: int): list of ref Box
 {
 	setdoc(root);
-	return collect(root, n, nil);
+	x := index;
+	if(x == nil || x.root != root || x.gen != nbuilt){
+		x = ref Index(root, nbuilt, nil);
+		x.a = array[maxnode(root, 0) + 1] of list of ref Box;
+		indexed(root, x.a);
+		index = x;
+	}
+	if(n < 0 || n >= len x.a)
+		return nil;
+	return x.a[n];
 }
 
-collect(b: ref Box, n: int, acc: list of ref Box): list of ref Box
+maxnode(b: ref Box, m: int): int
 {
-	if(b.node == n && b.kind != Ktext)
-		acc = b :: acc;
+	if(b.node > m)
+		m = b.node;
 	for(i := 0; i < len b.kids; i++)
-		acc = collect(b.kids[i], n, acc);
-	return acc;
+		m = maxnode(b.kids[i], m);
+	return m;
+}
+
+# each node's boxes as collect gives them
+indexed(b: ref Box, a: array of list of ref Box)
+{
+	if(b.node >= 0 && b.kind != Ktext)
+		a[b.node] = b :: a[b.node];
+	for(i := 0; i < len b.kids; i++)
+		indexed(b.kids[i], a);
 }
 
 kindnames := array[] of {"block", "inline", "text", "br", "replaced", "flex", "grid", "table", "row", "cell", "marker"};

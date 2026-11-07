@@ -10,8 +10,8 @@ implement Veltro;
 # session directory that -r resumes from, and answering the agent's
 # approval requests on the terminal.
 #
-#	veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>
-#	veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] -r <name> [extra]
+#	veltro [-v] [-t] [-y] [-a type] [-p paths] <task>
+#	veltro [-v] [-t] [-y] [-a type] [-p paths] -r <name> [extra]
 #
 
 include "sys.m";
@@ -62,9 +62,8 @@ maxsteps := DEFAULT_MAX_STEPS;
 # research, explore, plan). Empty = the default Veltro behaviour.
 agenttype := "";
 
-# -m <model>: override the LLM model for this run. Empty = the server's
-# default. Used for multi-model evaluation without reconfiguring the server.
-model := "";
+# The model is the server's (llmsrv -M): to run another, serve another.
+# -m is taken, for old scripts, and ignored.
 
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
@@ -78,14 +77,13 @@ stdout: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-y] [-a type] [-p paths] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] [-y] [-a type] [-p paths] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output (the agent's trajectory)\n");
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -y          Answer the agent's approval requests yes (no gate)\n");
 	sys->fprint(stderr, "  -a type     Run as agent persona /lib/veltro/agents/<type>.txt (e.g. research)\n");
-	sys->fprint(stderr, "  -m model    Override the LLM model for this run (e.g. mistral-small3.2:24b)\n");
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
@@ -471,17 +469,43 @@ writefile(path, content: string): string
 	return nil;
 }
 
-# Read entire file contents; returns "" silently on error
+# Read entire file contents; returns "" silently on error.  To its end:
+# one read of a served file is a 9P message's worth, and a transcript
+# saved from one read stopped at 8 KB.
 readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
+	out := "";
 	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	return string buf[0:n];
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		out += string buf[0:n];
+	return out;
+}
+
+# Write to a file that exists (a served one: it cannot be created).
+putfile(path, content: string): string
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("cannot open %s: %r", path);
+	data := array of byte content;
+	if(sys->write(fd, data, len data) != len data)
+		return sys->sprint("write %s failed: %r", path);
+	return nil;
+}
+
+# What the session keeps of a turn: the conversation as the user saw it,
+# and as the model has it, which -r gives back to the model.
+savesession(sdir: string)
+{
+	if(sdir == "")
+		return;
+	writefile(sdir + "/transcript", readfile(sess + "/text"));
+	ctx := readfile(sess + "/context");
+	if(ctx != "")
+		writefile(sdir + "/context", ctx);
 }
 
 setenv(name, val: string)
@@ -706,16 +730,13 @@ runagent(task: string)
 
 	# Assemble initial prompt (system prompt already set separately)
 	prompt: string;
-	if(plan != "") {
-		prompt = "Plan:\n" + plan +
-			"\n\nNow begin execution. Respond with your first tool invocation or DONE if already complete.";
-	} else {
-		prompt = "== Task ==\n" + task + "\n\nBegin. Respond with your first tool call or DONE.";
-	}
+	if(plan != "")
+		prompt = "== Task ==\n" + task + "\n\n== Plan ==\n" + plan + "\n\nCarry out the plan.";
+	else
+		prompt = "== Task ==\n" + task;
 
 	turn(prompt);
-	if(sdir != "")
-		writefile(sdir + "/transcript", readfile(sess + "/text"));
+	savesession(sdir);
 }
 
 # ---- Resume session ----
@@ -751,10 +772,20 @@ runresume(name, extra: string)
 	if(extra != "" && verbose)
 		sys->fprint(stderr, "veltro: extra instruction: %s\n", extra);
 
-	# Build resume context as the initial prompt
-	prompt := buildresumecontext(task, plan, logcontent, extra);
+	# The conversation as the model had it, when it was saved: given
+	# back, the model takes up the work where it was.  A session saved
+	# before there was one is resumed, as it was, from its task, plan
+	# and log.
+	prompt: string;
+	ctx := readfile(sdir + "/context");
+	if(ctx != "" && putfile(sess + "/context", ctx) == nil) {
+		prompt = "Continue the task where you left off.";
+		if(extra != "")
+			prompt = extra;
+	} else
+		prompt = buildresumecontext(task, plan, logcontent, extra);
 	turn(prompt);
-	writefile(sdir + "/transcript", readfile(sess + "/text"));
+	savesession(sdir);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -786,7 +817,8 @@ init(nil: ref Draw->Context, args: list of string)
 		'y' =>	nogate = 1;
 		'r' =>	resumename = arg->earg();
 		'a' =>	agenttype = arg->earg();
-		'm' =>	model = arg->earg();
+		'm' =>	arg->earg();
+			sys->fprint(stderr, "veltro: -m ignored: the model is the server's (llmsrv -M)\n");
 		'p' =>
 			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
@@ -830,8 +862,6 @@ init(nil: ref Draw->Context, args: list of string)
 	startharness(pathlist);
 	if(agenttype != "" && ctl("persona " + agenttype) < 0)
 		sys->fprint(stderr, "veltro: warning: persona '%s' empty or unreadable\n", agenttype);
-	if(model != "" && ctl("model " + model) >= 0 && verbose)
-		sys->fprint(stderr, "veltro: model set to %s\n", model);
 	if(thinkbudget > 0 && ctl("think " + string thinkbudget) >= 0 && verbose)
 		sys->fprint(stderr, "veltro: thinking budget: %d tokens\n", thinkbudget);
 	if(nogate)

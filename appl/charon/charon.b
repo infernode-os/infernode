@@ -194,13 +194,27 @@ startwebfs(): string
 	webfs := load Command "/dis/webfs.dis";
 	if(webfs == nil)
 		return sys->sprint("cannot load webfs: %r");
-	spawn webfs->init(nil, "webfs" :: nil);
-	for(i := 0; i < 100; i++) {
-		if(webfsup())
-			return nil;
-		sys->sleep(20);
+	# its init returns mounted; in a proc of its own, as it takes a
+	# process group of its own
+	done := chan of string;
+	spawn runwebfs(webfs, done);
+	if((e := <-done) != nil)
+		return "webfs did not start: " + e;
+	if(!webfsup())
+		return "webfs did not start";
+	return nil;
+}
+
+runwebfs(webfs: Command, done: chan of string)
+{
+	{
+		webfs->init(nil, "webfs" :: nil);
+	} exception e {
+	"*" =>
+		done <-= e;
+		return;
 	}
-	return "webfs did not start";
+	done <-= nil;
 }
 
 fatal(s: string)
@@ -610,14 +624,18 @@ report(err: string)
 findmode := 0;
 findbuf := "";
 
-Kup: con 16rFF52;
-Kdown: con 16rFF54;
-Kleft: con 16rFF51;
-Kright: con 16rFF53;
-Kpgup: con 16rFF55;
-Kpgdown: con 16rFF56;
-Khome: con 16rFF61;
-Kend: con 16rFF57;
+include "keyboard.m";
+
+# keyboard.h's keys, as the emulator and the native kernel send them
+# (they were X11 keysyms, which nothing sends: the keys did nothing)
+Kup: con Keyboard->Up;
+Kdown: con Keyboard->Down;
+Kleft: con Keyboard->Left;
+Kright: con Keyboard->Right;
+Kpgup: con Keyboard->Pgup;
+Kpgdown: con Keyboard->Pgdown;
+Khome: con Keyboard->Home;
+Kend: con Keyboard->End;
 Kesc: con 27;
 Kbs: con 8;
 
@@ -681,7 +699,8 @@ findkey(k: int)
 			findbuf = findbuf[0:len findbuf - 1];
 		status("Find: " + findbuf);
 	* =>
-		if(k >= ' ') {
+		# a character, not DEL nor a key keyboard.h gives (an arrow)
+		if(k >= ' ' && k != 16r7F && !(k >= Keyboard->Spec && k <= Keyboard->Specend)) {
 			findbuf[len findbuf] = k;
 			status("Find: " + findbuf);
 		}

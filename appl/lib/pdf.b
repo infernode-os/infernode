@@ -194,6 +194,7 @@ colorcache: list of ref ColorCacheEntry;
 
 
 inflatelock: chan of int;	# filtermod loaded and initialised once
+doctablock: chan of int;	# doctab: two documents opened at once took one slot
 
 init(d: ref Display): string
 {
@@ -207,6 +208,8 @@ init(d: ref Display): string
 	colorcache = nil;
 	if(inflatelock == nil)
 		inflatelock = chan[1] of int;
+	if(doctablock == nil)
+		doctablock = chan[1] of int;
 
 	outlinefont = load OutlineFont OutlineFont->PATH;
 	if(outlinefont != nil)
@@ -262,6 +265,14 @@ ndocs := 0;
 
 adddoc(pdoc: ref PdfDoc): int
 {
+	doctablock <-= 1;
+	idx := adddoc0(pdoc);
+	<-doctablock;
+	return idx;
+}
+
+adddoc0(pdoc: ref PdfDoc): int
+{
 	if(doctab == nil)
 		doctab = array[4] of ref PdfDoc;
 	if(ndocs >= len doctab){
@@ -290,7 +301,9 @@ Doc.close(d: self ref Doc)
 			for(l := pdoc.fonts; l != nil; l = tl l)
 				if((hd l).t1.embedded != nil)
 					(hd l).t1.embedded.close();
+		doctablock <-= 1;
 		doctab[d.idx] = nil;
+		<-doctablock;
 	}
 	d.idx = -1;
 }

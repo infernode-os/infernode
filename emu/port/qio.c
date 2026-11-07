@@ -69,12 +69,15 @@ freeb(Block *b)
 	 * pool of uncached buffers and provide their own free routine.
 	 */
 	if(b->free) {
+		b->next = nil;
+		b->list = nil;
 		b->free(b);
 		return;
 	}
 
 	/* poison the block in case someone is still holding onto it */
 	b->next = (void*)0xdeadbabe;
+	b->list = (void*)0xdeadbabe;
 	b->rp = (void*)0xdeadbabe;
 	b->wp = (void*)0xdeadbabe;
 	b->lim = (void*)0xdeadbabe;
@@ -281,6 +284,10 @@ trimblock(Block *bp, int offset, int len)
 	ulong l;
 	Block *nb, *startb;
 
+	if(offset < 0 || len < 0){
+		freeblist(bp);
+		return nil;
+	}
 	if(blocklen(bp) < offset+len) {
 		freeblist(bp);
 		return nil;
@@ -1193,13 +1200,14 @@ qnotfull(void *a)
 long
 qbwrite(Queue *q, Block *b)
 {
+	void (*bypass)(void*, Block*);
 	int n, dowakeup;
 	volatile struct {Block *b;} cb;
 
 	dowakeup = 0;
 	n = BLEN(b);
-	if(q->bypass){
-		(*q->bypass)(q->arg, b);
+	if((bypass = q->bypass) != nil){
+		(*bypass)(q->arg, b);
 		return n;
 	}
 	cb.b = b;
@@ -1326,6 +1334,7 @@ qwrite(Queue *q, void *vp, int len)
 int
 qiwrite(Queue *q, void *vp, int len)
 {
+	void (*bypass)(void*, Block*);
 	int n, sofar, dowakeup;
 	Block *b;
 	uchar *p = vp;
@@ -1345,6 +1354,12 @@ qiwrite(Queue *q, void *vp, int len)
 		}
 		memmove(b->wp, p+sofar, n);
 		b->wp += n;
+
+		if((bypass = q->bypass) != nil){
+			sofar += n;
+			(*bypass)(q->arg, b);
+			continue;
+		}
 
 		lock(&q->l);
 

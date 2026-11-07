@@ -36,8 +36,13 @@ SYSMODULES=\
 	sys.m\
 	tk.m\
 	tkclient.m\
+	arg.m\
+	keyring.m\
+	regex.m\
 
 DISBIN=$ROOT/dis/sh
+
+MODULES=
 
 <$ROOT/mkfiles/mkdis
 

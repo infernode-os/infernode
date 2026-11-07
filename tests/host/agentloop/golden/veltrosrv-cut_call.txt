@@ -1,0 +1,37 @@
+# veltrosrv cut_call
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_cut_call_0_0 write {"path": "\/usr\/agentloop\/cut.txt", "content": "half"}
+tool-result call_cut_call_0_0:
+  | error: not run: your reply reached the output limit while this call was being written, so its arguments may be cut off.  Send the call again, complete.  If it is a large write, write the file in smaller parts.
+
+== output
+  | == user
+  | SCENARIO:cut_call go
+  | == veltro
+  | Sent again.
+  | == log
+  | session <llm>, prompt 13019 bytes
+  | step 1: writing 20 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 101 bytes
+  | llm: STOP:max_tokens
+  | TOOL:call_cut_call_0_0:write:{"path"\: "/usr/agentloop/cut.txt", "content"\: "half"}
+  | 
+  | harness: reply reached the output limit
+  | step 2: writing 245 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 11 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 26 bytes
+  | llm: STOP:end_turn
+  | Sent again.
+  | 
+  | turn done stop=end_turn steps=2

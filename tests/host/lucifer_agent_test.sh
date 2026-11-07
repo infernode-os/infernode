@@ -7,7 +7,8 @@
 # starts llmsrv, tools9p and lucibridge as it would for a user; then
 # sends a message through /mnt/ui and reads the conversation back.  The
 # message must be answered with a tool call made and the reply shown,
-# through the same files Lucia itself reads.
+# through the same files Lucia itself reads.  Incoming messages, shipped
+# off, must not be watched.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -48,7 +49,7 @@ echo alpha > "$ROOT/usr/agentloop/a.txt"
 
 # boot.sh reads /lib/ndb/llm; stage one naming the scripted backend and
 # bind it over before the boot (the driver runs in the boot's shell).
-DRIVER="mkdir -p /tmp/lucindb; echo 'mode=local' > /tmp/lucindb/llm; echo 'backend=openai' >> /tmp/lucindb/llm; echo 'url=http://127.0.0.1:$PORT/v1' >> /tmp/lucindb/llm; echo 'model=mock' >> /tmp/lucindb/llm; bind -bc /tmp/lucindb /lib/ndb; skiplogon=1; run /lib/lucifer/boot.sh & sleep 45; echo '@@ status'; cat /mnt/ui/activity/0/status; echo; echo 'SCENARIO:read_system go' > /mnt/ui/activity/0/conversation/input; sleep 15; echo '@@ conversation'; for i in 0 1 2 3 4 5 6 7 8 9 { if {ftest -e /mnt/ui/activity/0/conversation/\$i} { echo msg \$i; cat /mnt/ui/activity/0/conversation/\$i; echo } }; echo '@@ end'; echo DRIVER_DONE"
+DRIVER="mkdir -p /tmp/lucindb; echo 'mode=local' > /tmp/lucindb/llm; echo 'backend=openai' >> /tmp/lucindb/llm; echo 'url=http://127.0.0.1:$PORT/v1' >> /tmp/lucindb/llm; echo 'model=mock' >> /tmp/lucindb/llm; bind -bc /tmp/lucindb /lib/ndb; skiplogon=1; run /lib/lucifer/boot.sh & sleep 45; echo '@@ status'; cat /mnt/ui/activity/0/status; echo; echo 'SCENARIO:read_system go' > /mnt/ui/activity/0/conversation/input; sleep 15; echo '@@ conversation'; for i in 0 1 2 3 4 5 6 7 8 9 { if {ftest -e /mnt/ui/activity/0/conversation/\$i} { echo msg \$i; cat /mnt/ui/activity/0/conversation/\$i; echo } }; echo '@@ msgwatch'; ps | grep Msgwatch; echo '@@ end'; echo DRIVER_DONE"
 
 SDL_VIDEODRIVER=dummy OPENAI_API_KEY=test "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 \
 	-r"$ROOT" /dis/sh.dis -l -c "$DRIVER" </dev/null > "$WORK/emu.log" 2>&1 &
@@ -78,6 +79,9 @@ expect() {
 expect "activity 0 came up" status '^\(idle\|active\)$'
 expect "the human message is recorded" conversation 'role=human text=SCENARIO:read_system go'
 expect "the reply is shown" conversation 'role=veltro text=Read the system prompt.'
+# Incoming messages ship off (lib/veltro/messaging.conf): the boot starts
+# no msgwatch until the user turns it on.
+[ -z "$(section msgwatch)" ] && echo "PASS: incoming messages are off as shipped" || { echo "FAIL: msgwatch started at boot"; FAILED=$((FAILED + 1)); }
 grep -q 'call_read_system_0_0' "$WORK/req.log" && echo "PASS: the model saw the tool result" || { echo "FAIL: no tool round trip in the model's requests"; FAILED=$((FAILED + 1)); }
 grep -q '"role": "tool", "content": "error' "$WORK/req.log" && { echo "FAIL: the read failed in the agent's namespace"; FAILED=$((FAILED + 1)); } || echo "PASS: the read succeeded in the agent's namespace"
 

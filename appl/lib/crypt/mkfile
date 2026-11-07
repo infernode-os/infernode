@@ -20,6 +20,8 @@ SYSMODULES= \
 	sys.m\
 	tls.m\
 	x509.m\
+	draw.m\
+	ip.m\
 
 DISBIN=$ROOT/dis/lib/crypt
 

@@ -7,8 +7,10 @@
 # (the dongle image), .txt (the board's NVRAM) and .clm_blob (the
 # regulatory table).  Those files are Cypress's and are licensed for
 # binary redistribution with Cypress parts only, so they are never
-# committed to this tree and never appear in a release; they live on the
-# card, and this tool is how they get there.
+# committed to this tree and never in a hosted release; they live on the
+# card.  The release's Pi card images carry them (tools/mkpiimage.sh
+# runs this tool); for a card made by hand, this tool is how they get
+# there.
 #
 # Everything it fetches is pinned: the manifest names one commit of
 # RPi-Distro/firmware-nonfree, one revision URL per file, and one SHA256
@@ -36,6 +38,11 @@
 # Needs only sh, curl (unless --from) and shasum or sha256sum.  Runs as
 # whoever mounted the card; it never asks for sudo, and if the card is
 # not writable by that user it says so and stops.
+#
+# The same tool fetches the Pi's boot firmware for a card image, and the
+# radio's Bluetooth patch, from their own manifests: --manifest
+# tools/pi-bootfw-manifest.txt or tools/pi-btfw-manifest.txt (see
+# tools/mkpiimage.sh).
 #
 # Exit status: 0 done; 1 a hash did not match (nothing was installed);
 # 2 usage or setup problem (no curl, unreadable manifest, download
@@ -280,5 +287,6 @@ echo "$FILES" | {
 } || exit $?
 
 echo "pi-firmware: done; $(echo "$FILES" | wc -l | tr -d ' ') files under $FWDIR"
-echo "pi-firmware: these files are Cypress binary-redistribution licensed; they belong on the card, not in the tree"
+licences=$(echo "$FILES" | awk '{print $5}' | sort -u | tr '\n' ' ' | sed 's/ $//')
+echo "pi-firmware: these files are under binary-redistribution licences ($licences; see $MANIFEST); they belong on the card, not in the tree"
 exit 0

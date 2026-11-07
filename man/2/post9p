@@ -1,0 +1,69 @@
+.TH POST9P 2
+.SH NAME
+post9p \- post a 9P server in the srv device
+.SH SYNOPSIS
+.EX
+include "post9p.m";
+post9p := load Post9p Post9p->PATH;
+
+Post: adt {
+	path:	string;
+	unpost:	fn(p: self ref Post);
+};
+
+init:	fn();
+post:	fn(spec: string, conns: chan of ref Sys->FD): (ref Post, string);
+postas:	fn(spec, name: string, conns: chan of ref Sys->FD): (ref Post, string);
+.EE
+.SH DESCRIPTION
+.B #s
+.I spec
+is one directory per
+.I spec
+(and user) across every name space: a file posted there is where any
+process of the user finds a server, whatever its name space was built
+from, as Plan 9 programs find one in
+.BR /srv :
+.IP
+.EX
+mount -A '#seditor/fs' /mnt/editor
+.EE
+.PP
+.B Post
+posts a file in
+.BI #s spec
+named
+.BR fs ,
+or
+.BR fs.1 ,
+.BR fs.2 ...
+when one is taken (a second instance of the program); it returns the
+.B Post
+or the reason it could not.
+.B Postas
+posts it under the caller's
+.IR name .
+Each open of the posted file is a 9P connection of its own: the server
+end of a pipe for it is sent on
+.IR conns ,
+and the caller serves 9P on it (a
+.B Styxserver
+each, say, sharing the program's state).
+The posted file goes when the program does, or at
+.BR unpost ;
+connections made through it stay until their clients go.
+.PP
+A process with
+.B NODEVS
+cannot attach
+.BI #s spec\f1,
+so an agent's tools reach a posted server only through a trusted
+wrapper that mounts it for them (as
+.IR tools9p (8)
+does for the editor and Charon).
+.SH SOURCE
+.B /appl/lib/post9p.b
+.SH SEE ALSO
+.IR sys-file2chan (2),
+.IR styxservers (2),
+.IR editor (1)

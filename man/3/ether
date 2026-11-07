@@ -5,6 +5,7 @@ ether \- Ethernet and Wi-Fi interfaces of the native kernel
 .nf
 .B bind #l/ether0 /net/ether0
 .B bind -a #l1 /net
+.B bind -a #l2 /net
 
 .BI /net/ether n /clone
 .BI /net/ether n /addr
@@ -24,11 +25,19 @@ wired Ethernet;
 .B #l1
 is
 .BR ether1 ,
-the Raspberry Pi's Wi-Fi.
-An interface with nothing behind it refuses to attach, so a kernel with no
+the Raspberry Pi's Wi-Fi;
+.B #l2
+and
+.B #l3
+are spares for USB adapters, used when
+.B ether0
+is taken (a Pi 4's GENET, a virtio card, a first adapter).
+.B Ether1
+with nothing behind it refuses to attach, so a kernel with no
 radio has no
 .B /net/ether1
-rather than an empty one.
+rather than an empty one; a spare attaches, empty, until an adapter
+binds it.
 .PP
 The files are those of every Inferno and Plan 9 network interface.
 Opening
@@ -78,7 +87,8 @@ written to an
 Three different things, none of which a user of the files can see.
 .TP
 A USB Ethernet adapter (Raspberry Pi)
-The board's LAN7515, or an RNDIS gadget under QEMU, is brought up by a
+The board's LAN7515, a CDC ECM or NCM adapter, phone or gadget, or an
+RNDIS one, is brought up by a
 Limbo program,
 .B /dis/etherusb.dis
 \- registers, PHY negotiation, address \- which then hands the kernel
@@ -86,20 +96,45 @@ the adapter's two open bulk endpoints with
 .RS
 .IP
 .EX
-bind \fIfamily mac mbps burst inpath outpath\fP
+bind \fIfamily mac mbps burst inpath outpath\fP [\fIname\fB=\fIvalue\fR ...]
 .EE
 .PP
 written to any
 .B ctl
 of
-.BR #l/ether0 .
+.B #l/ether0
+or a spare.
 .I Family
 is
-.B lan78xx
-or
+.BR lan78xx ,
 .BR rndis ,
+.B ecm
+(a bulk transfer is a frame) or
+.B ncm
+(a transfer is an NTB-16 of frames),
 naming the framing the kernel is to apply; the paths are resolved in the
 writer's namespace.
+The optional words are what the framing needs to know of the device:
+.B maxpkt
+(the bulk packet size; a frame or block that would end on a packet
+boundary is sent a byte longer instead of needing a zero-length packet)
+for ECM and NCM, and for NCM the device's
+.B GET_NTB_PARAMETERS
+answer \-
+.B txmax
+(the largest NTB it takes),
+.B div
+and
+.B rem
+(where in one a datagram may start),
+.B align
+(the NDP's alignment) and
+.B maxdgrams
+(datagrams per NTB, 0 for any).
+A bind on an instance a kernel driver has is refused as in use, which is
+how
+.B etherusb
+finds the first free one.
 From then on frames move inside the kernel.
 .B unbind
 releases the endpoints.

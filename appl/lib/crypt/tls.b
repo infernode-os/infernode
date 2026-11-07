@@ -21,6 +21,10 @@ include "x509.m";
 	x509: X509;
 	Signed, Certificate, SubjectPKInfo, PublicKey, ExtClass: import x509;
 
+include "ip.m";
+	ip: IP;
+	IPaddr: import ip;
+
 include "tls.m";
 
 # Record content types
@@ -41,6 +45,7 @@ HT_SERVER_HELLO_DONE:		con 14;
 HT_CERTIFICATE_VERIFY:		con 15;
 HT_CLIENT_KEY_EXCHANGE:		con 16;
 HT_FINISHED:			con 20;
+HT_MESSAGE_HASH:		con 254;	# RFC 8446 §4.4.1: stands for ClientHello1 after a HelloRetryRequest
 
 # Alert levels
 ALERT_WARNING:	con 1;
@@ -66,6 +71,7 @@ EXT_SERVER_NAME:		con 0;
 EXT_SUPPORTED_GROUPS:		con 10;
 EXT_SIGNATURE_ALGORITHMS:	con 13;
 EXT_SUPPORTED_VERSIONS:		con 43;
+EXT_COOKIE:			con 44;
 EXT_KEY_SHARE:			con 51;
 
 # Named groups
@@ -80,6 +86,10 @@ MLKEM768_CTLEN:		con 1088;	# ML-KEM-768 ciphertext
 MLKEM1024_EKLEN:	con 1568;	# ML-KEM-1024 encapsulation key
 MLKEM1024_CTLEN:	con 1568;	# ML-KEM-1024 ciphertext
 
+# A ServerHello with this random is a HelloRetryRequest (RFC 8446 §4.1.3):
+# SHA-256("HelloRetryRequest")
+HRRRANDOM: con "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c";
+
 # Max record size
 MAXRECORD:	con 16384;
 MAXHSMSG:	con 1<<18;	# a handshake message, however many records it takes (certificate chains run to tens of kilobytes)
@@ -88,58 +98,9 @@ MAXFRAGMENT:	con 16384 + 256;	# room for overhead
 # TLS 1.2 record version
 RECVERSION: con 16r0303;
 
-# Internal connection state
-ConnState: adt {
-	fd:		ref Sys->FD;
-	version:	int;		# negotiated version
-	suite:		int;		# negotiated cipher suite
-	group:		int;		# TLS 1.3 key-exchange group; 0 under TLS 1.2
-
-	# AEAD keys
-	writekey:	array of byte;
-	writeiv:	array of byte;
-	readkey:	array of byte;
-	readiv:		array of byte;
-
-	# Sequence numbers
-	writeseq:	big;
-	readseq:	big;
-
-	# Read buffer (decrypted application data)
-	rbuf:		array of byte;
-	roff:		int;
-	rlen:		int;
-
-	# Handshake transcript hash — both algorithms run in parallel until suite is known
-	handhash:	ref Keyring->DigestState;	# SHA-256 transcript (for TLS_AES_128_GCM_SHA256)
-
-	handhash384:	ref Keyring->DigestState;	# SHA-384 transcript
-
-	# TLS 1.3 traffic secrets
-	cts:		array of byte;	# client traffic secret
-	sts:		array of byte;	# server traffic secret
-
-	# Server name for cert verification
-	servername:	string;
-	insecure:	int;
-
-	# TLS 1.3: whether handshake is encrypted
-	hsencrypted:	int;
-
-	# Handshake message buffer (multiple msgs may arrive in one record)
-	hsbuf:		array of byte;
-	hsoff:		int;
-
-	# Ephemeral CNSA hybrid (SecP384r1MLKEM1024) private material; nil otherwise
-	eph_p384_priv:	array of byte;
-	eph_mlkem_sk:	array of byte;
-
-	# Ephemeral ML-KEM-768 secret key for the X25519MLKEM768 share; nil otherwise
-	eph_mlkem768_sk:	array of byte;
-
-	# Ephemeral P-256 private key for the TLS 1.3 secp256r1 key share; nil otherwise
-	eph_p256_priv:	array of byte;
-};
+# A connection's state is TLS->State (tls.m), held by its Conn: dropped
+# with it, wherever its holder stops (a reader killed mid-read included).
+ConnState: type State;
 
 # Entropy source fd, opened once in init() and reused for all randombuf() calls.
 #
@@ -177,8 +138,6 @@ init(): string
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "tls: cannot load Sys";
-	if(connlk == nil)
-		connlk = chan[1] of int;
 
 	keyring = load Keyring Keyring->PATH;
 	if(keyring == nil)
@@ -240,8 +199,8 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	cs.rbuf = nil;
 	cs.roff = 0;
 	cs.rlen = 0;
-	cs.handhash = nil;
-	cs.handhash384 = nil;
+	cs.tr256 = nil;
+	cs.tr384 = nil;
 	cs.cts = nil;
 	cs.sts = nil;
 	cs.servername = config.servername;
@@ -259,66 +218,14 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	conn.suite = cs.suite;
 	conn.group = cs.group;
 	conn.servername = cs.servername;
-
-	# Stash ConnState in a global for the conn methods to access
-	addconn(conn, cs);
+	conn.st = cs;
 
 	return (conn, nil);
 }
 
-# ================================================================
-# Connection pool - maps Conn refs to internal ConnState
-# ================================================================
-
-Connentry: adt {
-	conn:	ref Conn;
-	cs:	ref ConnState;
-};
-
-# Connections are made, used and closed by many processes at once
-# (webfs fetches in parallel): the pool is changed only under connlk,
-# else one change loses another's and a live connection's state is
-# gone (its reads fail, as an empty response).
-connpool: list of ref Connentry;
-connlk: chan of int;
-
-addconn(conn: ref Conn, cs: ref ConnState)
-{
-	connlk <-= 1;
-	connpool = ref Connentry(conn, cs) :: connpool;
-	<-connlk;
-}
-
-findconn(conn: ref Conn): ref ConnState
-{
-	connlk <-= 1;
-	for(l := connpool; l != nil; l = tl l) {
-		e := hd l;
-		if(e.conn == conn) {
-			<-connlk;
-			return e.cs;
-		}
-	}
-	<-connlk;
-	return nil;
-}
-
-delconn(conn: ref Conn)
-{
-	connlk <-= 1;
-	nl: list of ref Connentry;
-	for(l := connpool; l != nil; l = tl l) {
-		e := hd l;
-		if(e.conn != conn)
-			nl = e :: nl;
-	}
-	connpool = nl;
-	<-connlk;
-}
-
 Conn.read(conn: self ref Conn, buf: array of byte, n: int): int
 {
-	cs := findconn(conn);
+	cs := conn.st;
 	if(cs == nil)
 		return -1;
 
@@ -370,7 +277,7 @@ Conn.read(conn: self ref Conn, buf: array of byte, n: int): int
 
 Conn.write(conn: self ref Conn, buf: array of byte, n: int): int
 {
-	cs := findconn(conn);
+	cs := conn.st;
 	if(cs == nil)
 		return -1;
 
@@ -389,17 +296,16 @@ Conn.write(conn: self ref Conn, buf: array of byte, n: int): int
 
 Conn.close(conn: self ref Conn): string
 {
-	cs := findconn(conn);
+	cs := conn.st;
 	if(cs == nil)
-		return "tls: connection not found";
+		return "tls: connection closed";
 
 	# Send close_notify alert
 	alert := array [2] of byte;
 	alert[0] = byte ALERT_WARNING;
 	alert[1] = byte ALERT_CLOSE_NOTIFY;
+	conn.st = nil;
 	writerecord(cs, CT_ALERT, alert);
-
-	delconn(conn);
 	return nil;
 }
 
@@ -705,22 +611,25 @@ handshake(cs: ref ConnState, config: ref Config): string
 
 handshake0(cs: ref ConnState, config: ref Config): string
 {
-	# Initialize handshake hash (SHA-256 for most suites)
-	cs.handhash = nil;
-	cs.handhash384 = nil;
+	# A new transcript
+	cs.tr256 = nil;
+	cs.tr384 = nil;
 
-	# Generate client random
+	# Generate client random, and the legacy session id, both of which
+	# a second ClientHello after a HelloRetryRequest repeats
 	client_random := randombytes(32);
+	session_id := randombytes(32);
 
 	# Key exchange: only the CNSA hybrid (SecP384r1MLKEM1024) when
-	# /env/cnsatls is set; else the X25519MLKEM768 hybrid first, with
-	# X25519, P-256 and P-384 for servers that do not take it.
+	# /env/cnsatls is set; else the X25519MLKEM768 hybrid first, then
+	# X25519.  P-256 and P-384 are offered in supported_groups but get
+	# no share until a server asks for one by HelloRetryRequest: a
+	# share costs a scalar multiplication, and most servers take
+	# X25519 or the hybrid.
 	x25519_priv: array of byte;
 	x25519_pub: array of byte;
-	hybridshare: array of byte;
-	pqshare: array of byte;
-	p256share: array of byte;
-	p384share: array of byte;
+	groups: list of int;			# supported_groups, in preference order
+	shares: list of (int, array of byte);	# key_share entries sent
 	cnsa := cnsatls();
 	if(cnsa){
 		strictcnsaconfig(config);
@@ -731,37 +640,26 @@ handshake0(cs: ref ConnState, config: ref Config): string
 		cs.eph_p384_priv = p384priv;
 		cs.eph_mlkem_sk = mlkem_sk;
 		# key_share entry: P-384 point (97) || ML-KEM-1024 ek (1568)
-		hybridshare = catbytes(p384pub, mlkem_ek);
+		groups = GROUP_SECP384R1MLKEM1024 :: nil;
+		shares = (GROUP_SECP384R1MLKEM1024, catbytes(p384pub, mlkem_ek)) :: nil;
 	}else{
 		x25519_priv = randombytes(32);
 		x25519_pub = keyring->x25519_base(x25519_priv);
+		groups = GROUP_X25519 :: GROUP_SECP256R1 :: GROUP_SECP384R1 :: nil;
+		shares = (GROUP_X25519, x25519_pub) :: nil;
 		# The post-quantum hybrid, preferred: ML-KEM-768 ek (1184) ||
 		# X25519 (32), the X25519 key shared with the plain X25519
 		# share (draft-ietf-tls-ecdhe-mlkem allows it, as browsers do).
 		(mlkem_ek, mlkem_sk) := keyring->mlkem768_keygen();
 		if(mlkem_ek != nil && mlkem_sk != nil) {
 			cs.eph_mlkem768_sk = mlkem_sk;
-			pqshare = catbytes(mlkem_ek, x25519_pub);
-		}
-		# Also offer a secp256r1 share, so TLS 1.3 servers that prefer
-		# P-256 (e.g. www.nist.gov) accept it without a HelloRetryRequest.
-		(p256priv, p256pt) := keyring->p256_keygen();
-		if(p256priv != nil && p256pt != nil) {
-			cs.eph_p256_priv = p256priv;
-			p256share = keyring->p256_point_bytes(p256pt);
-		}
-		# and secp384r1, for servers that take nothing else
-		# (pantip.com); with no HelloRetryRequest here, the share
-		# has to be in the first hello
-		(p384priv, p384pub) := keyring->p384_keygen();
-		if(p384priv != nil && p384pub != nil) {
-			cs.eph_p384_priv = p384priv;
-			p384share = p384pub;
+			groups = GROUP_X25519MLKEM768 :: groups;
+			shares = (GROUP_X25519MLKEM768, catbytes(mlkem_ek, x25519_pub)) :: shares;
 		}
 	}
 
 	# Build and send ClientHello
-	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, pqshare, p256share, p384share);
+	hello := buildclienthello(config, client_random, session_id, groups, shares, nil);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
 	if(err != nil)
 		return err;
@@ -773,15 +671,67 @@ handshake0(cs: ref ConnState, config: ref Config): string
 	if(shtype != HT_SERVER_HELLO)
 		return "tls: expected ServerHello";
 
+	# A HelloRetryRequest (RFC 8446 §4.1.4): the server wants a share
+	# for another group we offered, a cookie echoed, or both.  Answer
+	# with a second ClientHello, the same but for those (§4.1.2).
+	hrrsuite := 0;
+	hrrgroup := 0;
+	if(ishrr(shdata)) {
+		(suite, group, cookie, herr) := parsehrr(shdata, session_id, config, groups, shares);
+		if(herr != nil)
+			return herr;
+		hrrsuite = suite;
+		hrrgroup = group;
+		cs.suite = suite;
+		cs.version = TLS13;
+
+		# the transcript begins again: ClientHello1 stands as its
+		# hash in a message_hash message, then the HRR (§4.4.1)
+		hrrtranscript(cs, hsmsg(HT_CLIENT_HELLO, hello), hsmsg(HT_SERVER_HELLO, shdata));
+
+		if(group != 0) {
+			(share, serr) := keyshare(cs, group);
+			if(serr != nil)
+				return serr;
+			shares = (group, share) :: nil;
+		}
+		hello = buildclienthello(config, client_random, session_id, groups, shares, cookie);
+		err = sendhsmsg(cs, HT_CLIENT_HELLO, hello);
+		if(err != nil)
+			return err;
+
+		(shtype, shdata, sherr) = readhsmsg(cs);
+		if(sherr != nil)
+			return sherr;
+		if(shtype != HT_SERVER_HELLO)
+			return "tls: expected ServerHello";
+		if(ishrr(shdata))
+			return "tls: second HelloRetryRequest";
+	}
+
 	# Parse ServerHello
 	(server_random, server_suite, server_version, key_share_group, key_share_data, pherr) := parseserverhello(shdata, config);
 	if(pherr != nil)
 		return pherr;
 
+	if(hrrsuite != 0) {
+		# §4.1.4: the ServerHello must agree with the HRR
+		if(server_version != TLS13)
+			return "tls: ServerHello after HelloRetryRequest is not TLS 1.3";
+		if(server_suite != hrrsuite)
+			return "tls: ServerHello cipher suite differs from HelloRetryRequest's";
+		if(hrrgroup != 0 && key_share_group != hrrgroup)
+			return "tls: ServerHello key share differs from HelloRetryRequest's group";
+	}
+
 	cs.version = server_version;
 	cs.suite = server_suite;
-	if(cs.version == TLS13)
+	if(cs.version == TLS13) {
 		cs.group = key_share_group;
+		# the server's share must answer one we sent (§4.2.8)
+		if(sharefor(shares, key_share_group) == nil)
+			return sys->sprint("tls: server chose key share group 0x%04x, which we did not send", key_share_group);
+	}
 
 	if(cnsa) {
 		if(cs.version != TLS13)
@@ -797,6 +747,169 @@ handshake0(cs: ref ConnState, config: ref Config): string
 			x25519_priv, key_share_group, key_share_data);
 	return handshake12(cs, config, client_random, server_random,
 		x25519_priv);
+}
+
+# ================================================================
+# HelloRetryRequest (RFC 8446 §4.1.4)
+# ================================================================
+
+ishrr(shdata: array of byte): int
+{
+	if(len shdata < 34)
+		return 0;
+	return hexstr(shdata[2:34]) == HRRRANDOM;
+}
+
+hexstr(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%02x", int a[i]);
+	return s;
+}
+
+# The share entry sent for group, or nil.
+sharefor(shares: list of (int, array of byte), group: int): array of byte
+{
+	for(; shares != nil; shares = tl shares) {
+		(g, d) := hd shares;
+		if(g == group)
+			return d;
+	}
+	return nil;
+}
+
+# Parse a HelloRetryRequest: (cipher suite, selected group or 0, cookie or nil, error).
+# It must name a TLS 1.3 suite we offered, echo our session id, carry only
+# extensions we sent, and change something in the ClientHello: select a
+# group we offered without a share, or send a cookie, or both.
+parsehrr(data: array of byte, session_id: array of byte, config: ref Config,
+	groups: list of int, shares: list of (int, array of byte)): (int, int, array of byte, string)
+{
+	if(len data < 38)
+		return (0, 0, nil, "tls: HelloRetryRequest too short");
+	off := 34;	# legacy_version(2) + random(32)
+	sid_len := int data[off++];
+	if(off + sid_len + 3 > len data)
+		return (0, 0, nil, "tls: HelloRetryRequest truncated");
+	if(!bytescmp(data[off:off+sid_len], session_id))
+		return (0, 0, nil, "tls: HelloRetryRequest does not echo our session id");
+	off += sid_len;
+	suite := get16(data, off);
+	off += 2;
+	if(int data[off++] != 0)
+		return (0, 0, nil, "tls: non-null compression");
+
+	if(off + 2 > len data)
+		return (0, 0, nil, "tls: HelloRetryRequest has no extensions");
+	ext_end := off + 2 + get16(data, off);
+	off += 2;
+	if(ext_end != len data)
+		return (0, 0, nil, "tls: HelloRetryRequest extensions truncated");
+
+	version := 0;
+	group := 0;
+	cookie: array of byte;
+	seen := 0;
+	while(off < ext_end) {
+		if(off + 4 > ext_end)
+			return (0, 0, nil, "tls: HelloRetryRequest extension truncated");
+		etype := get16(data, off);
+		elen := get16(data, off + 2);
+		off += 4;
+		if(off + elen > ext_end)
+			return (0, 0, nil, "tls: HelloRetryRequest extension truncated");
+		bit := 0;
+		case etype {
+		EXT_SUPPORTED_VERSIONS =>
+			bit = 1;
+			if(elen != 2)
+				return (0, 0, nil, "tls: bad supported_versions in HelloRetryRequest");
+			version = get16(data, off);
+		EXT_KEY_SHARE =>
+			bit = 2;
+			if(elen != 2)
+				return (0, 0, nil, "tls: bad key_share in HelloRetryRequest");
+			group = get16(data, off);
+		EXT_COOKIE =>
+			bit = 4;
+			if(elen < 3 || get16(data, off) != elen - 2)
+				return (0, 0, nil, "tls: bad cookie in HelloRetryRequest");
+			cookie = data[off+2:off+elen];
+		* =>
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest has extension %d we did not send", etype));
+		}
+		if(seen & bit)
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest repeats extension %d", etype));
+		seen |= bit;
+		off += elen;
+	}
+
+	if(version != TLS13)
+		return (0, 0, nil, "tls: HelloRetryRequest is not TLS 1.3");
+	if((suite >> 8) != 16r13 || !member(config.suites, suite))
+		return (0, 0, nil, sys->sprint("tls: HelloRetryRequest chose unsupported suite 0x%04x", suite));
+	if(group != 0) {
+		if(!member(groups, group))
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest selected group 0x%04x, which we did not offer", group));
+		if(sharefor(shares, group) != nil)
+			return (0, 0, nil, sys->sprint("tls: HelloRetryRequest selected group 0x%04x, which we sent a share for", group));
+	}else if(cookie == nil)
+		return (0, 0, nil, "tls: HelloRetryRequest asks for no change");
+	return (suite, group, cookie, nil);
+}
+
+member(l: list of int, x: int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == x)
+			return 1;
+	return 0;
+}
+
+# A share for group, made when a HelloRetryRequest asks for it.
+keyshare(cs: ref ConnState, group: int): (array of byte, string)
+{
+	case group {
+	GROUP_SECP256R1 =>
+		(priv, pt) := keyring->p256_keygen();
+		if(priv == nil || pt == nil)
+			return (nil, "tls: P-256 key generation failed");
+		cs.eph_p256_priv = priv;
+		return (keyring->p256_point_bytes(pt), nil);
+	GROUP_SECP384R1 =>
+		(priv, pub) := keyring->p384_keygen();
+		if(priv == nil || pub == nil)
+			return (nil, "tls: P-384 key generation failed");
+		cs.eph_p384_priv = priv;
+		return (pub, nil);
+	}
+	return (nil, sys->sprint("tls: no key share for group 0x%04x", group));
+}
+
+# After a HelloRetryRequest the transcript is message_hash(ClientHello1)
+# followed by the HRR (RFC 8446 §4.4.1), each transcript hashing
+# ClientHello1 with its own algorithm.
+hrrtranscript(cs: ref ConnState, ch1, hrr: array of byte)
+{
+	h256 := array[Keyring->SHA256dlen] of byte;
+	keyring->sha256(ch1, len ch1, h256, nil);
+	h384 := array[Keyring->SHA384dlen] of byte;
+	keyring->sha384(ch1, len ch1, h384, nil);
+	m256 := hsmsg(HT_MESSAGE_HASH, h256);
+	m384 := hsmsg(HT_MESSAGE_HASH, h384);
+	cs.tr256 = trcat(m256, hrr);
+	cs.tr384 = trcat(m384, hrr);
+}
+
+# A handshake message: type(1) + length(3) + body
+hsmsg(mtype: int, data: array of byte): array of byte
+{
+	msg := array [4 + len data] of byte;
+	msg[0] = byte mtype;
+	put24(msg, 1, len data);
+	msg[4:] = data;
+	return msg;
 }
 
 # ================================================================
@@ -1264,12 +1377,11 @@ handshake13(cs: ref ConnState, config: ref Config,
 # Handshake Message Building
 # ================================================================
 
-buildclienthello(config: ref Config, random: array of byte,
-	x25519_pub: array of byte, hybridshare: array of byte, pqshare: array of byte,
-	p256share: array of byte, p384share: array of byte): array of byte
+buildclienthello(config: ref Config, random, session_id: array of byte,
+	groups: list of int, shares: list of (int, array of byte),
+	cookie: array of byte): array of byte
 {
 	# Build extensions
-	exts: array of byte;
 
 	# SNI extension
 	sni: array of byte;
@@ -1280,14 +1392,17 @@ buildclienthello(config: ref Config, random: array of byte,
 
 	# Supported groups + key share: the CNSA hybrid alone, or the
 	# X25519MLKEM768 hybrid ahead of the classical groups.
-	groups: array of byte;
-	keyshare: array of byte;
-	if(hybridshare != nil){
-		groups = buildsupportedgroups_cnsa();
-		keyshare = buildkeyshare_group(GROUP_SECP384R1MLKEM1024, hybridshare);
-	}else{
-		groups = buildsupportedgroups(pqshare != nil);
-		keyshare = buildkeyshare(pqshare, x25519_pub, p256share, p384share);
+	groupsext := buildsupportedgroups(groups);
+	keyshare := buildkeyshare(shares);
+
+	# Cookie, echoed from a HelloRetryRequest (RFC 8446 §4.2.2)
+	cookieext: array of byte;
+	if(cookie != nil) {
+		cookieext = array[4 + 2 + len cookie] of byte;
+		put16(cookieext, 0, EXT_COOKIE);
+		put16(cookieext, 2, 2 + len cookie);
+		put16(cookieext, 4, len cookie);
+		cookieext[6:] = cookie;
 	}
 
 	# Signature algorithms extension
@@ -1301,11 +1416,8 @@ buildclienthello(config: ref Config, random: array of byte,
 		suppver = nil;
 
 	# Concatenate extensions
-	extlist := catbytes(sni, catbytes(groups, catbytes(sigalgs,
-		catbytes(suppver, keyshare))));
-
-	# Session ID (32 bytes for compatibility)
-	session_id := randombytes(32);
+	extlist := catbytes(sni, catbytes(groupsext, catbytes(sigalgs,
+		catbytes(suppver, catbytes(cookieext, keyshare)))));
 
 	# Cipher suites
 	suitebytes := buildsuites(config.suites);
@@ -1368,12 +1480,8 @@ buildsniext(name: string): array of byte
 	return ext;
 }
 
-buildsupportedgroups(pq: int): array of byte
+buildsupportedgroups(groups: list of int): array of byte
 {
-	# [x25519mlkem768,] x25519, secp256r1, secp384r1
-	groups := GROUP_X25519 :: GROUP_SECP256R1 :: GROUP_SECP384R1 :: nil;
-	if(pq)
-		groups = GROUP_X25519MLKEM768 :: groups;
 	n := 2 * len groups;
 	ext := array [4 + 2 + n] of byte;
 	put16(ext, 0, EXT_SUPPORTED_GROUPS);
@@ -1384,31 +1492,6 @@ buildsupportedgroups(pq: int): array of byte
 		put16(ext, off, hd groups);
 		off += 2;
 	}
-	return ext;
-}
-
-buildsupportedgroups_cnsa(): array of byte
-{
-	# CNSA strict: offer only SecP384r1MLKEM1024 (no classical downgrade)
-	ext := array [4 + 2 + 2] of byte;
-	put16(ext, 0, EXT_SUPPORTED_GROUPS);
-	put16(ext, 2, 2 + 2);
-	put16(ext, 4, 2);
-	put16(ext, 6, GROUP_SECP384R1MLKEM1024);
-	return ext;
-}
-
-buildkeyshare_group(group: int, share: array of byte): array of byte
-{
-	# one key_share entry: group(2) + key_len(2) + key
-	listlen := 2 + 2 + len share;
-	ext := array [4 + 2 + listlen] of byte;
-	put16(ext, 0, EXT_KEY_SHARE);
-	put16(ext, 2, 2 + listlen);
-	put16(ext, 4, listlen);
-	put16(ext, 6, group);
-	put16(ext, 8, len share);
-	ext[10:] = share;
 	return ext;
 }
 
@@ -1464,46 +1547,26 @@ buildsupportedversions(config: ref Config): array of byte
 	return ext;
 }
 
-buildkeyshare(pq_pub, x25519_pub, p256_pub, p384_pub: array of byte): array of byte
+buildkeyshare(shares: list of (int, array of byte)): array of byte
 {
-	# X25519MLKEM768 first (preferred) if we have it, then X25519,
-	# then secp256r1 and secp384r1 if we have them
-	listlen := 2 + 2 + 32;	# group(2) + keylen(2) + data(32)
-	if(pq_pub != nil)
-		listlen += 2 + 2 + len pq_pub;
-	if(p256_pub != nil)
-		listlen += 2 + 2 + len p256_pub;
-	if(p384_pub != nil)
-		listlen += 2 + 2 + len p384_pub;
-
+	# one entry per share: group(2) + key_len(2) + key
+	listlen := 0;
+	for(l := shares; l != nil; l = tl l) {
+		(nil, d) := hd l;
+		listlen += 2 + 2 + len d;
+	}
 	ext := array [4 + 2 + listlen] of byte;
 	put16(ext, 0, EXT_KEY_SHARE);
 	put16(ext, 2, 2 + listlen);
 	put16(ext, 4, listlen);
-
 	off := 6;
-	if(pq_pub != nil) {
-		put16(ext, off, GROUP_X25519MLKEM768);
-		put16(ext, off+2, len pq_pub);
-		ext[off+4:] = pq_pub;
-		off += 4 + len pq_pub;
+	for(l = shares; l != nil; l = tl l) {
+		(g, d) := hd l;
+		put16(ext, off, g);
+		put16(ext, off+2, len d);
+		ext[off+4:] = d;
+		off += 4 + len d;
 	}
-	put16(ext, off, GROUP_X25519);
-	put16(ext, off+2, 32);
-	ext[off+4:] = x25519_pub;
-	off += 4 + 32;
-	if(p256_pub != nil) {
-		put16(ext, off, GROUP_SECP256R1);
-		put16(ext, off+2, len p256_pub);
-		ext[off+4:] = p256_pub;
-		off += 4 + len p256_pub;
-	}
-	if(p384_pub != nil) {
-		put16(ext, off, GROUP_SECP384R1);
-		put16(ext, off+2, len p384_pub);
-		ext[off+4:] = p384_pub;
-	}
-
 	return ext;
 }
 
@@ -1800,6 +1863,11 @@ verifyhostname(hostname: string, certder: array of byte): string
 	if(cerr != nil)
 		return "tls: hostname verify: decode TBSCert: " + cerr;
 
+	# An IP address is matched against the SAN's iPAddress entries
+	# alone, a name against its dNSName entries and then the CN
+	# (RFC 6125 1.7.2, 6.2.1).
+	(isip, addr) := ipliteral(hostname);
+
 	# SubjectAltName first (RFC 6125). Decode only that extension, so an
 	# unrelated extension this x509 cannot parse does not hide it, and
 	# fail closed: a SAN that is present but undecodable is an error.
@@ -1817,9 +1885,12 @@ verifyhostname(hostname: string, certder: array of byte): string
 			san_checked = 1;
 			for(al := san.alias; al != nil; al = tl al) {
 				gn := hd al;
-				pick dns := gn {
+				pick g := gn {
 				dNSName =>
-					if(matchhostname(hostname, dns.str))
+					if(!isip && matchhostname(hostname, g.str))
+						return nil;
+				iPAddress =>
+					if(isip && ipmatch(addr, g.ip))
 						return nil;
 				}
 			}
@@ -1830,7 +1901,9 @@ verifyhostname(hostname: string, certder: array of byte): string
 
 	# If SAN was present but didn't match, fail (RFC 6125 §6.4.4)
 	if(san_checked)
-		return sys->sprint("tls: hostname %s does not match any SAN dNSName", hostname);
+		return sys->sprint("tls: hostname %s does not match any subjectAltName", hostname);
+	if(isip)
+		return sys->sprint("tls: certificate names no IP address %s", hostname);
 
 	# Fall back to CN in subject
 	for(rdl := cert.subject.rd_names; rdl != nil; rdl = tl rdl) {
@@ -1849,6 +1922,52 @@ verifyhostname(hostname: string, certder: array of byte): string
 	}
 
 	return sys->sprint("tls: hostname %s does not match certificate", hostname);
+}
+
+# An IPv4 or IPv6 address written as text, as a reference identity: one
+# with a colon, or digits and dots (IPaddr.parse alone would take an
+# all-hex name, a host called cafe, for an IPv6 address)
+ipliteral(s: string): (int, IPaddr)
+{
+	colon := 0;
+	numeric := 1;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == ':')
+			colon = 1;
+		else if(c != '.' && (c < '0' || c > '9'))
+			numeric = 0;
+	}
+	if(!colon && !numeric || s == "")
+		return (0, IPaddr(nil));
+	if(ip == nil) {
+		ip = load IP IP->PATH;
+		if(ip == nil)
+			return (0, IPaddr(nil));
+		ip->init();
+	}
+	(ok, a) := IPaddr.parse(s);
+	if(ok < 0)
+		return (0, a);
+	return (1, a);
+}
+
+# An iPAddress entry is the address's 4 or 16 bytes (RFC 5280 4.2.1.6)
+ipmatch(a: IPaddr, b: array of byte): int
+{
+	case len b {
+	4 =>
+		if(!a.isv4())
+			return 0;
+		v := a.v4();
+		for(i := 0; i < 4; i++)
+			if(v[i] != b[i])
+				return 0;
+		return 1;
+	16 =>
+		return a.eq(IPaddr.newv6(b));
+	}
+	return 0;
 }
 
 oideq(a, b: ref ASN1->Oid): int
@@ -2395,11 +2514,7 @@ parse_ecdsa_der_sig_p384(sig: array of byte): array of byte
 
 sendhsmsg(cs: ref ConnState, mtype: int, data: array of byte): string
 {
-	# Handshake header: type(1) + length(3)
-	msg := array [4 + len data] of byte;
-	msg[0] = byte mtype;
-	put24(msg, 1, len data);
-	msg[4:] = data;
+	msg := hsmsg(mtype, data);
 
 	# Hash the handshake message
 	updatehash(cs, msg);
@@ -2476,28 +2591,32 @@ readhsmsg(cs: ref ConnState): (int, array of byte, string)
 
 updatehash(cs: ref ConnState, data: array of byte)
 {
-	# Maintain both SHA-256 and SHA-384 transcripts until the suite is known.
-	# hashcurrent() selects the right one based on cs.suite.
-	cs.handhash = keyring->sha256(data, len data, nil, cs.handhash);
-	cs.handhash384 = keyring->sha384(data, len data, nil, cs.handhash384);
+	# Both transcripts until the suite is known; hashcurrent() hashes
+	# the one cs.suite needs.
+	cs.tr256 = trcat(cs.tr256, data);
+	cs.tr384 = trcat(cs.tr384, data);
+}
+
+# a then b, in a new array: the transcript shares no bytes with a
+# buffer the record layer reuses.
+trcat(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
 }
 
 hashcurrent(cs: ref ConnState): array of byte
 {
-	# Return the transcript hash appropriate for the negotiated suite
+	# The transcript hash for the negotiated suite
 	if(hashlength(cs.suite) == 48) {
 		digest := array [Keyring->SHA384dlen] of byte;
-		if(cs.handhash384 != nil) {
-			ds := cs.handhash384.copy();
-			keyring->sha384(nil, 0, digest, ds);
-		}
+		keyring->sha384(cs.tr384, len cs.tr384, digest, nil);
 		return digest;
 	}
 	digest := array [Keyring->SHA256dlen] of byte;
-	if(cs.handhash != nil) {
-		ds := cs.handhash.copy();
-		keyring->sha256(nil, 0, digest, ds);
-	}
+	keyring->sha256(cs.tr256, len cs.tr256, digest, nil);
 	return digest;
 }
 

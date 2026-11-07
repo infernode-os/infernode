@@ -123,7 +123,7 @@ Sheetview: module {
 
 		handle:	fn(v: self ref View, e: ref Ev): ref Note;
 
-		flowing:	fn(v: self ref View): int;	# set to the width, one sheet
+		flowing:	fn(v: self ref View): int;	# set to the width, one sheet (a source not painted at any scale)
 		draw:	fn(v: self ref View);
 		layout:	fn(v: self ref View);	# for r, scale and style as they are now
 		scroll:	fn(v: self ref View, dy: int);

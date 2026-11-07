@@ -1939,7 +1939,18 @@ newconv(): ref Conv
 	thetree.create(big CPATH(id, Qcdir), dir("status", 8r444, CPATH(id, Qcstatus)));
 	thetree.create(big CPATH(id, Qcdir), dir("local", 8r444, CPATH(id, Qclocal)));
 	thetree.create(big CPATH(id, Qcdir), dir("remote", 8r444, CPATH(id, Qcremote)));
-	thetree.create(big CPATH(id, Qcdir), dir("listen", 8r444, CPATH(id, Qclisten)));
+	#
+	# 8r666, as devip's listen is: dial(2)'s listen() opens it ORDWR.
+	# It was 8r444, and that was invisible while a listener was always
+	# waiting -- listenwake completes a waiting open without asking
+	# Styxservers about modes -- but a call that arrives first is
+	# queued, and the next open then goes through srv.open, which
+	# checked the mode and said "permission denied". listen(1) exits on
+	# that, and with no listener the PSM refuses every call after: under
+	# a multi-VM soak's load the L2CAP storm got 3 connections in 20 s
+	# where it gets 350.
+	#
+	thetree.create(big CPATH(id, Qcdir), dir("listen", 8r666, CPATH(id, Qclisten)));
 	return cv;
 }
 
@@ -2073,7 +2084,7 @@ listenwake(srv: ref Styxserver, cv: ref Conv)
 	taken(hd cv.lq);
 	clonefids = (tm.fid, hd cv.lq) :: clonefids;
 	cv.lq = tl cv.lq;
-	c.open(Styx->OREAD, Sys->Qid(big CPATH(cv.id, Qclisten), 0, Sys->QTFILE));
+	c.open(tm.mode, Sys->Qid(big CPATH(cv.id, Qclisten), 0, Sys->QTFILE));
 	srv.reply(ref Rmsg.Open(tm.tag, Sys->Qid(big CPATH(cv.id, Qclisten), 0, Sys->QTFILE), srv.iounit()));
 }
 

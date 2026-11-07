@@ -14,7 +14,7 @@ set -e
 set -u
 
 [ -x "$EMU" ] || { echo "SKIP: emulator not found at $EMU"; exit 77; }
-for f in dis/wm/wm.dis dis/wm/sh.dis dis/lib/menuhit.dis; do
+for f in dis/wm/wm.dis dis/wm/shell.dis dis/lib/menuhit.dis; do
 	[ -f "$ROOT/$f" ] || { echo "SKIP: $f not built"; exit 77; }
 done
 syms=$(nm "$EMU" 2>/dev/null || true)

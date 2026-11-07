@@ -67,6 +67,12 @@
 | [xenith-window-manipulation.md](xenith-window-manipulation.md) | Xenith window manipulation API at `/mnt/xenith` |
 | [xenith-tempfiles.md](xenith-tempfiles.md) | How Xenith and Acme manage their temporary buffer files |
 | [NODE-INTEROP-TESTING.md](NODE-INTEROP-TESTING.md) | Node-to-node interoperability testing: cert auth and post-quantum transport |
+| [SECURITY-REVIEW-LEDGER.md](SECURITY-REVIEW-LEDGER.md) | Pinned index of completed, blocked, and queued security reviews |
+| [PR-1015-SECURITY-REVIEW.md](PR-1015-SECURITY-REVIEW.md) | Security disposition and required changes for the styxbrick commander, sdg, TLS pinning, and D2 |
+| [CAMERA-SECURITY-REVIEW.md](CAMERA-SECURITY-REVIEW.md) | Security review and pre-real-sensor gates for the native `#V` camera interface |
+| [FUZZ-HARDENING-SECURITY-REVIEW.md](FUZZ-HARDENING-SECURITY-REVIEW.md) | Source-pinned review of PR #1069's fuzz-derived kernel, JIT, OOM, 9P, and virtio hardening |
+| [POST-REVIEW-DELTA-SECURITY-REVIEW.md](POST-REVIEW-DELTA-SECURITY-REVIEW.md) | Pinned review of the post-report Veltro, keyring, Claude-gate, mobile, and formal-verification delta |
+| [9FRONT-SECURITY-AUDIT.md](9FRONT-SECURITY-AUDIT.md) | Pinned source-by-source audit of applicable 9front security fixes |
 | [veltro-llm-bridge-bug-taxonomy.md](veltro-llm-bridge-bug-taxonomy.md) | Catalogue of defect classes in the Anthropic/OpenAI LLM bridge |
 
 ## Wallet & Payments
@@ -110,6 +116,7 @@
 | [HELLAPHONE.md](HELLAPHONE.md) | InferNode on a phone: Android (Termux) |
 | [IOS.md](IOS.md) | InferNode on iOS: design plan and build spec |
 | [IOS-ONDEVICE-LLM.md](IOS-ONDEVICE-LLM.md) | On-device LLM inference on iOS behind `/mnt/llm` |
+| [ONDEVICE-LLM.md](ONDEVICE-LLM.md) | On-device models behind `/mnt/llm`: Apple Foundation Models on macOS 27, gates, a mount per provider (design) |
 | [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |
@@ -150,7 +157,7 @@ Status reports and debugging logs from the 64-bit port, the SDL3 GUI and early C
 
 ## Formal Verification
 
-See [formal-verification/README.md](../formal-verification/README.md) for TLA+, SPIN, and CBMC verification of namespace isolation (3 tools, 11 properties, 3.17B+ states explored).
+See [formal-verification/README.md](../formal-verification/README.md) for the TLA+ specification of the namespace copy (model-checked exhaustively at small scale; the 3.17B-state medium run is incomplete), the SPIN race models and the CBMC harnesses on `pgrpcpy`, with a statement of what they do and do not establish.
 
 ## The Key 64-bit Fix
 

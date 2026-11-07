@@ -37,6 +37,14 @@ SYSMODULES=\
 	draw.m\
 	bufio.m\
 	string.m\
+	crc.m\
+	daytime.m\
+	fslib.m\
+	fsproto.m\
+	keyring.m\
+	readdir.m\
+	sh.m\
+	styx.m\
 
 DISBIN=$ROOT/dis/install
 

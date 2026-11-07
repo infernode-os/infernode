@@ -24,6 +24,7 @@ dev
 	audio	audio-oss
 	mem
 	tfa	fido2bridge
+	location	locationbridge-stub
 
 lib
 	interp
@@ -50,6 +51,7 @@ mod
 	srv	srv
 	keyring
 	i420
+	bayer
 #	gpu
 #	loader
 #	freetype
@@ -89,6 +91,7 @@ root
 	/dev	/
 	/fd	/
 	/prog	/
+	/prof	/
 	/net	/
 	/net.alt	/
 	/chan	/

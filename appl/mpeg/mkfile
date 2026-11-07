@@ -19,6 +19,7 @@ SYSMODULES=\
 	sys.m\
 	draw.m\
 	wmclient.m\
+	i420.m\
 
 DISBIN=$ROOT/dis/mpeg
 

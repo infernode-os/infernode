@@ -11,6 +11,8 @@ include "draw.m";
 include "tk.m";
 	tk: Tk;
 
+include "keyboard.m";
+
 include "tkclient.m";
 	tkclient: Tkclient;
 
@@ -24,6 +26,8 @@ include "string.m";
 	str: String;
 
 include "arg.m";
+
+include "lucitheme.m";
 
 WmSh: module
 {
@@ -62,7 +66,7 @@ shwin_cfg := array[] of {
 	"frame .b -bd 1 -relief ridge",
 	"frame .ft -bd 0",
 	"scrollbar .ft.scroll -command {send scroll t}",
-	"text .ft.t -bd 1 -relief flat -yscrollcommand {send scroll s} -bg white -selectforeground black -selectbackground #CCCCCC",
+	"text .ft.t -bd 1 -relief flat -yscrollcommand {send scroll s}",
 	".ft.t tag configure sel -relief flat",
 	"pack .ft.scroll -side left -fill y",
 	"pack .ft.t -fill both -expand 1",
@@ -267,6 +271,8 @@ main(ctxt: ref Draw->Context, argv: list of string)
 			setcols(t);
 		}
 		tkclient->wmctl(t, c);
+		if(c == "retheme")
+			setcols(t);
 	ecmd := <-edit =>
 		editor(t, ecmd);
 		sendinput(t);
@@ -275,7 +281,10 @@ main(ctxt: ref Draw->Context, argv: list of string)
 		char := c[1];
 		if(char == '\\')
 			char = c[2];
-		if(char != ESC)
+		# a key that is not a character (an arrow, a function key)
+		# goes to a program reading raw, and otherwise types nothing
+		spec := char >= Keyboard->Spec && char <= Keyboard->Specend;
+		if(char != ESC && !spec)
 			cut(t, 1);
 		if(rawon){
 			if(int cmd(t, ".ft.t compare insert >= outpoint")){
@@ -284,6 +293,8 @@ main(ctxt: ref Draw->Context, argv: list of string)
 				break;
 			}
 		}
+		if(spec)
+			break;
 		case char {
 		* =>
 			cmd(t, ".ft.t insert insert "+c);
@@ -503,22 +514,36 @@ setholding(t: ref Tk->Toplevel, hold: int)
 	setcols(t);
 }
 
+# The text in the theme's colours (read again each time, so a theme
+# switch is followed): its text with the keyboard, editunfocused
+# without, edithold while holding.  They were rio's black, grey and
+# blues, black on a dark theme's background.
 setcols(t: ref Tk->Toplevel)
 {
-	fgcol := "black";
-	if(holding){
-		if(haskbdfocus)
-			fgcol = "#000099FF";	# DMedblue
-		else
-			fgcol = "#005DBBFF";	# DGreyblue
-	}else{
-		if(haskbdfocus)
-			fgcol = "black";
-		else
-			fgcol = "#666666FF";	# dark grey
+	(fg, unfocused, hold) := ("#000000FF", "#666666FF", "#000099FF");
+	(selbg, selfg) := ("#005DBBFF", "#FFFFFFFF");
+	lucitheme := load Lucitheme Lucitheme->PATH;
+	if(lucitheme != nil){
+		th := lucitheme->gettheme();
+		(fg, unfocused, hold) = (col(th.text), col(th.editunfocused), col(th.edithold));
+		(selbg, selfg) = (col(th.accent), col(th.bg));
 	}
-	cmd(t, ".ft.t configure -foreground "+fgcol+" -selectforeground "+fgcol);
-	cmd(t, ".ft.t tag configure sel -foreground "+fgcol);
+	fgcol := fg;
+	if(holding)
+		fgcol = hold;
+	else if(!haskbdfocus)
+		fgcol = unfocused;
+	cmd(t, ".ft.t configure -foreground "+fgcol);
+	# the selection the theme's, as Tk draws one: its bg on its
+	# accent.  Tk draws it with the sel tag, which keeps the colours
+	# it was made with (the first theme's) unless they are set.
+	cmd(t, ".ft.t configure -selectbackground "+selbg+" -selectforeground "+selfg);
+	cmd(t, ".ft.t tag configure sel -background "+selbg+" -foreground "+selfg);
+}
+
+col(v: int): string
+{
+	return sys->sprint("#%06xff", (v >> 8) & 16rFFFFFF);
 }
 
 tkunquote(s: string): string

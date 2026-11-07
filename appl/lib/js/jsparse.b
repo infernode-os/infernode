@@ -260,8 +260,25 @@ lazyouter(p: ref P): int
 
 dedup(l: list of string): list of string
 {
-	tab := array[211] of list of string;
+	# most functions name a few: compared with what is kept, with no
+	# table made and cleared for each (it was a seventh of parsing
+	# TypeScript's compiler)
+	n := 0;
+	for(t := l; t != nil && n <= Dedupsmall; t = tl t)
+		n++;
 	r: list of string;
+	if(n <= Dedupsmall) {
+		for(; l != nil; l = tl l) {
+			s := hd l;
+			for(m := r; m != nil; m = tl m)
+				if(hd m == s)
+					break;
+			if(m == nil)
+				r = s :: r;
+		}
+		return r;
+	}
+	tab := array[211] of list of string;
 	for(; l != nil; l = tl l) {
 		s := hd l;
 		h := 0;
@@ -278,6 +295,8 @@ dedup(l: list of string): list of string
 	}
 	return r;
 }
+
+Dedupsmall: con 16;
 
 lasttab: ref Lazytab;
 

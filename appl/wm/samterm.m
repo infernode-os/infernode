@@ -33,6 +33,7 @@ Samterm: module
 		id:		int;	# unique; names the layer's widgets and channels
 		w:		string;	# .c.f<id>.i; its text is w.t, its scroll bar w.s
 		r:		Draw->Rect;	# sam's l->entire, in canvas coordinates
+		click:		int;	# when button 1 last made a null selection, or 0
 	};
 
 	Text: adt {

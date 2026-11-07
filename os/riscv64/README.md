@@ -34,8 +34,8 @@ cross build, clean before building for the host again
 What says the JIT is right:
 
 - `appl/cmd/jittest.b` (installed as `/dis/jittest.dis`): 182 opcode cases.
-- `tests/jit_fault_test.b`: zero divide, bounds, nil, unwinding, and
-  which handler catches.
+- `tests/jit_fault_test.b`: zero divide, bounds, nil, unwinding,
+  which handler catches, and an exception a built-in raises in C.
 - `tests/host/jit_boot_test.sh` and `jit_interp_handoff`.
 
 Under qemu-user a full `runner.dis -c1` pass is slow but works. The one
@@ -205,8 +205,10 @@ The kernel lines worth searching for first, in order:
 - **Entropy, on silicon.** `os/mpfs/random.c` asks the system
   controller's nonce service (a TRNG-seeded DRBG) through the mailbox.
   QEMU fails every service, so only the refusal path is proved: the
-  kernel then says loudly that it has NO ENTROPY SOURCE. The success
-  path has not run on a board yet.
+  kernel then says loudly that it has NO ENTROPY SOURCE and makes no
+  key (QEMU's tree, `os/mpfs/qemu-icicle.dts`, says `insecurerandom`,
+  for a labelled counter instead). The success path has not run on a
+  board yet.
 - **RTC.** The MSS RTC is not read, so the time of day comes from the
   network or not at all.
 - **GEM PHY, on silicon.** `ethergem.c` finds the PHY over MDIO

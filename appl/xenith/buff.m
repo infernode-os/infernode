@@ -15,6 +15,7 @@ Bufferm : module {
 		cbi : int;		# index of cache Block
 		bl : array of ref Dat->Block;	# array of blocks
 		nbl : int;		# number of blocks
+		nchange : int;	# insertions, deletions and resets made
 
 		insert : fn(b : self ref Buffer, n : int, s : string, m : int);
 		delete : fn(b : self ref Buffer, n : int, m : int);

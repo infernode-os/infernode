@@ -643,7 +643,18 @@ handle(srv: ref Styxserver, gm: ref Tmsg)
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				conn.postdata = m.data;
+				# a body larger than one message comes in several
+				# writes: each lands at its offset, and offset 0
+				# starts a new body
+				off := int m.offset;
+				if(off < 0 || off > len conn.postdata)
+					off = len conn.postdata;
+				if(m.offset == big 0)
+					off = 0;
+				body := array[off + len m.data] of byte;
+				body[0:] = conn.postdata[0:off];
+				body[off:] = m.data;
+				conn.postdata = body;
 				conn.fetched = 0;
 				conn.gen++;
 				vers++;

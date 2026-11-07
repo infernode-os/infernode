@@ -80,10 +80,16 @@ if echo "$CLEAN_OUTPUT" | grep -qE "typecheck|does not exist|cannot open|fail:";
 fi
 pass "tools9p starts and /tool/paths is readable"
 
+# /tool/paths has a line a path, "path mode" ("/tmp rw"), and holds
+# defaults of its own ("/tmp/veltro/scratch cow"): a path is one whose
+# first field is it, not any line it begins
+haspath() { echo "$OUTPUT" | awk -v p="$1" '$1 == p { n++ } END { exit !n }'; }
+countpath() { echo "$OUTPUT" | awk -v p="$1" '$1 == p { n++ } END { print n + 0 }'; }
+
 # bindpath adds a path — just cat the paths file; bash does the grep
 if emu_c "bind1" 10 \
     "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
-    if echo "$OUTPUT" | grep -q "/tmp"; then
+    if haspath /tmp; then
         pass "bindpath adds path to /tool/paths"
     else
         fail "bindpath: /tmp not found in /tool/paths (got: $OUTPUT)"
@@ -95,7 +101,7 @@ fi
 # Idempotent: bind same path twice — cat the file; bash counts
 if emu_c "bind_idem" 10 \
     "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; echo bindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
-    COUNT=$(echo "$OUTPUT" | grep -c "/tmp" || echo 0)
+    COUNT=$(countpath /tmp)
     if [[ "$COUNT" = "1" ]]; then
         pass "duplicate bindpath not duplicated (count=1)"
     else
@@ -108,7 +114,7 @@ fi
 # unbindpath removes the path — cat paths after unbind; bash checks absence
 if emu_c "unbind1" 10 \
     "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; echo unbindpath /tmp > /mnt/toolctl/ctl; cat /tool/paths"; then
-    if echo "$OUTPUT" | grep -q "/tmp"; then
+    if haspath /tmp; then
         fail "unbindpath: /tmp still in /tool/paths (got: $OUTPUT)"
     else
         pass "unbindpath removes path from /tool/paths"
@@ -120,9 +126,9 @@ fi
 # Multiple paths: add three, remove the middle one
 if emu_c "multi" 12 \
     "tools9p read & sleep 2; echo bindpath /tmp > /mnt/toolctl/ctl; echo bindpath /lib > /mnt/toolctl/ctl; echo bindpath /dis > /mnt/toolctl/ctl; echo unbindpath /lib > /mnt/toolctl/ctl; cat /tool/paths"; then
-    if echo "$OUTPUT" | grep -q "/tmp" && echo "$OUTPUT" | grep -q "/dis" && ! echo "$OUTPUT" | grep -q "/lib"; then
+    if haspath /tmp && haspath /dis && ! haspath /lib; then
         pass "multiple paths: selective unbind preserves others"
-    elif echo "$OUTPUT" | grep -q "/lib"; then
+    elif haspath /lib; then
         fail "multiple paths: /lib still present after unbind"
     else
         fail "multiple paths: unexpected output: $OUTPUT"
@@ -138,7 +144,7 @@ echo "── namespace bind plumbing ──"
 # /n/local requires the profile (trfs '#U*' /n/local), so skip cleanly if absent.
 if emu_c "localbind" 8 \
     "tools9p read &sleep 3; echo bindpath /dis > /mnt/toolctl/ctl; cat /tool/paths"; then
-    if echo "$OUTPUT" | grep -q "/dis"; then
+    if haspath /dis; then
         pass "bind /dis: path registered and visible in /tool/paths"
     else
         skip "/n/local/ plumbing not tested in bare emu (no profile)"

@@ -8,6 +8,7 @@ TARG=\
 
 MODULES=\
 	pedit.m\
+	calc.tab.m\
 
 SYSMODULES=\
 	arg.m\

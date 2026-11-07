@@ -55,7 +55,28 @@ Command: module {
 # /model on the new session, leaving llmsrv on its configured default).
 LIMBO_MODEL_DEFAULT: con "devstral-limbo-v3:latest";
 LIMBO_MODEL_FILE:    con "/lib/veltro/limbo-model";
+GATEDIR:             con "/tmp/veltro/scratch";	# the tool's workspace: its namespace's writable /tmp
 LIMBO_SYSTEM:   con "You are an expert Limbo programmer for the Inferno operating system. When given a description, respond with one complete, compilable Limbo source file inside a single ```limbo code fence. Do not add explanation outside the code fence.";
+
+# With no Limbo-trained author, the session's own model writes the file, and
+# told only the line above, gpt-oss wrote Go (import "fmt", main(), do ... od):
+# none of six compiled.  With the rules below and one whole program, five of
+# six did.  The trained author is given the line it was trained on.
+LIMBO_PRIMER: con "\n\nLimbo is not Go, C or Python. Its rules:\n" +
+	"- A file begins `implement Name;`, includes the modules it uses (`include \"sys.m\"; sys: Sys;`, `include \"draw.m\";`), and declares itself: `Name: module { init: fn(ctxt: ref Draw->Context, argv: list of string); };`\n" +
+	"- Execution starts in init; modules are loaded there: `sys = load Sys Sys->PATH;`\n" +
+	"- Print with sys->print(\"%d\\n\", x) (-> calls a module's function). There is no fmt, no import of packages, no main.\n" +
+	"- Declarations: `x := 0;` declares and assigns; `x: int;` declares; `x = 1;` assigns. Statements end with ;\n" +
+	"- Loops and conditions are C-like with parentheses and braces: for(i := 0; i < n; i++) { ... }  if(x > 0) { ... } else { ... }\n" +
+	"- Comments begin with # and run to the end of the line.\n" +
+	"- Command-line arguments: argv is a list of string; tl argv skips the program name, hd gives the first; int s converts a string.\n" +
+	"- big is a 64-bit integer: a := big 0; printed with %bd.\n\n" +
+	"A complete example:\n```limbo\nimplement Count;\n\ninclude \"sys.m\";\n\tsys: Sys;\ninclude \"draw.m\";\n\n" +
+	"Count: module\n{\n\tinit: fn(ctxt: ref Draw->Context, argv: list of string);\n};\n\n" +
+	"# Print 1..n, n from the first argument (default 5).\n" +
+	"init(nil: ref Draw->Context, argv: list of string)\n{\n\tsys = load Sys Sys->PATH;\n\tn := 5;\n" +
+	"\tif(argv != nil && tl argv != nil)\n\t\tn = int hd tl argv;\n" +
+	"\tfor(i := 1; i <= n; i++)\n\t\tsys->print(\"%d\\n\", i);\n}\n```";
 
 LLMROOT: con "/mnt/llm";
 MAX_RESPONSE: con 65536;
@@ -83,14 +104,16 @@ doc(): string
 		"Returns: the source code in a ```limbo code fence.\n\n" +
 		"Use this whenever the user asks for Limbo, .b files, Inferno modules, " +
 		"or any code that needs to run on Inferno.\n\n" +
-		"DO NOT attempt to write Limbo yourself — the orchestrator's training " +
-		"is general-purpose and will produce Go-style or Python-style code " +
-		"the Inferno compiler rejects (verified 0/10 compile-pass). The " +
-		"limbo tool dispatches to a dedicated Limbo-trained model that " +
-		"produces compileable code (10/10 on the same scenarios).\n\n" +
+		"A new file is written by a Limbo-trained model when one is " +
+		"configured (/lib/veltro/limbo-model), else by the session's model " +
+		"with Limbo's rules in hand, and is compiled before it is returned. " +
+		"A file you have may be edited directly; limbo compile checks it.\n\n" +
 		"Example:\n" +
 		"  limbo a Cat command that copies stdin to stdout if argv is " +
-		"empty, or concatenates each named file to stdout otherwise";
+		"empty, or concatenates each named file to stdout otherwise\n\n" +
+		"To check a Limbo file you have (written, edited, been given):\n" +
+		"  limbo compile /tmp/veltro/scratch/cat.b\n" +
+		"reports whether it compiles, with the compiler's errors.";
 }
 
 # Returns a non-empty token-name if the description looks like code
@@ -196,11 +219,12 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"limbo\"," +
-		"\"description\":\"Author a complete, compilable Limbo source file. Delegates to a dedicated Limbo-trained model. Use this whenever the user asks for Limbo, .b files, or any code that must run on Inferno \\u2014 DO NOT attempt to write Limbo yourself.\"," +
+		"\"description\":\"Write a new Limbo source file from a description (it is compiled before it is returned), or check that a Limbo file compiles: compile <path>. Use it for new Limbo, .b files and Inferno modules; a file you have may be edited directly, then compiled with this tool.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies.\"}" +
+				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies. Or, to check a Limbo file you already have: compile <absolute path of the .b file>, which reports whether it compiles, with the compiler's errors.\"}," +
+				"\"path\":{\"type\":\"string\",\"description\":\"Where to save the new file, e.g. /tmp/veltro/scratch/fib.b. Without it the source is only returned, not saved anywhere.\"}" +
 			"}," +
 			"\"required\":[\"description\"]" +
 		"}" +
@@ -222,7 +246,33 @@ exec(args: string): string
 		desc = desc[:len desc - 1];
 
 	if(desc == "")
-		return "error: usage: limbo <description-of-what-to-write>";
+		return "error: usage: limbo [-o <file.b>] <description-of-what-to-write> | limbo compile <file.b>";
+
+	# -o <file.b>: save what is written there.  Asked to "save it as
+	# fib.b", the tool returned the source and saved nothing; gpt-oss took
+	# the file to exist, wrote nothing itself, and told the user it did.
+	outpath := "";
+	if(len desc > 3 && desc[0:3] == "-o ") {
+		rest := desc[3:];
+		for(k := 0; k < len rest && rest[k] != ' '; k++)
+			;
+		outpath = rest[0:k];
+		desc = rest[k:];
+		while(len desc > 0 && desc[0] == ' ')
+			desc = desc[1:];
+		if(desc == "")
+			return "error: usage: limbo -o <file.b> <description-of-what-to-write>";
+	}
+
+	# compile <path>: check a Limbo source file the agent has (written,
+	# edited, been given) with the hosted compiler.  The way to know code
+	# compiles without a shell: no command runs but the compiler.
+	if(len desc > 8 && desc[0:8] == "compile ") {
+		path := desc[8:];
+		while(len path > 0 && (path[0] == ' ' || path[0] == '\t'))
+			path = path[1:];
+		return compilefile(path);
+	}
 
 	# 0. Args validation — orchestrators trained for code generation
 	#    sometimes pass their own (wrong-language) source as args
@@ -257,6 +307,17 @@ exec(args: string): string
 		return "error: /mnt/llm/new returned empty session id";
 
 	sessdir := sys->sprint("%s/%s", LLMROOT, idstr);
+	# The session is the tool's for this call alone: closed after, on every
+	# way out.  Left open, each call kept one, and on a gateway shared by
+	# many clients they reached its limit (128) and every agent after was
+	# refused a session ("cannot allocate session").
+	r := author(sessdir, idstr, desc, outpath);
+	writefile(sessdir + "/ctl", "close");
+	return r;
+}
+
+author(sessdir, idstr, desc, outpath: string): string
+{
 
 	# 2. Optionally override the session model. If the user has configured
 	#    a dedicated Limbo author at /lib/veltro/limbo-model, use it.
@@ -281,7 +342,10 @@ exec(args: string): string
 		return werr;
 
 	# 3. Set the focused system prompt for code authoring.
-	werr = writefile(sessdir + "/system", LIMBO_SYSTEM);
+	system := LIMBO_SYSTEM;
+	if(limbomodel == "")
+		system += LIMBO_PRIMER;
+	werr = writefile(sessdir + "/system", system);
 	if(werr != nil)
 		return werr;
 
@@ -313,10 +377,26 @@ exec(args: string): string
 	#    follow-up (would require pushing failure context into the same
 	#    /mnt/llm/<sid> conversation rather than re-entering at the tool
 	#    boundary).
-	gateerr := gate(resp, idstr);
-	if(gateerr == "")
-		return resp;
-	return resp + "\n\n" + gateerr;
+	return resp + "\n\n" + gate(resp, idstr) + save(resp, outpath);
+}
+
+# Save the source written, or say it was not.
+save(resp, outpath: string): string
+{
+	if(outpath == "")
+		return "\nNot saved: this source is only in this reply. Save it with the write tool, or call limbo again with a path to have it saved.";
+	code := extractblock(resp);
+	if(code == "")
+		return "\nNot saved to " + outpath + ": there was no ```limbo block to save.";
+	if(outpath[0] != '/' || len outpath < 3 || outpath[len outpath - 2:] != ".b")
+		return "\nNot saved: the path must be an absolute path ending in .b (" + outpath + ").";
+	fd := sys->create(outpath, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sys->sprint("\nNot saved to %s: %r", outpath);
+	b := array of byte code;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("\nNot saved to %s: %r", outpath);
+	return "\nSaved to " + outpath + " (change it with edit, check it with limbo compile " + outpath + ").";
 }
 
 # Extract the first ```limbo ... ``` block from a model response.
@@ -349,73 +429,145 @@ extractblock(s: string): string
 	return "";
 }
 
-# Compile-gate the response. Returns "" on pass (or skip), or a
-# diagnostic block on fail. Uses the hosted /dis/limbo.dis compiler;
-# stderr is redirected to a temp file via sys->dup so we can recover
-# the diagnostic text and surface it to the orchestrator.
+# Compile-gate the response with the hosted compiler (/dis/limbo.dis), and
+# say what happened, always: compiled, failed with the compiler's errors,
+# or not checked and why.  A pass and a skip used to look the same (the
+# source, and nothing else), and the gate wrote under /tmp, which a tool's
+# namespace does not have: it never ran, and an agent asked for code that
+# compiles went looking for a compiler it could not reach.
 gate(resp: string, sid: string): string
 {
 	code := extractblock(resp);
 	if(code == "")
-		return "";
+		return gatenote("not compiled: no ```limbo block in the response");
 
-	srcpath := sys->sprint("/tmp/limbo-gate-%s.b", sid);
-	werr := writefile(srcpath, code);
-	if(werr != nil)
-		return "";
+	srcpath := sys->sprint("%s/limbo-gate-%s.b", GATEDIR, sid);
+	fd := sys->create(srcpath, Sys->OWRITE, 8r644);
+	if(fd == nil || sys->write(fd, b := array of byte code, len b) != len b)
+		return gatenote(sys->sprint("not compiled: cannot write %s: %r", srcpath));
+	fd = nil;
+	r := compileat(srcpath, sid, "The source above compiles.",
+		"The emitted Limbo did not compile. Re-call /tool/limbo with a description that avoids the above errors, or quote the failing line back to the user if the error is unfixable.");
+	sys->remove(srcpath);
+	return r;
+}
 
-	errpath := sys->sprint("/tmp/limbo-gate-%s.err", sid);
-	dispath := srcpath[:len srcpath - 2] + ".dis";
+# Compile the Limbo source at srcpath with the hosted compiler, into a
+# scratch .dis that is removed after, and say what happened.
+compileat(srcpath, sid, passmsg, failmsg: string): string
+{
+	dispath := sys->sprint("%s/limbo-gate-%s.dis", GATEDIR, sid);
+	incdir := "/";
+	for(k := len srcpath - 1; k > 0; k--)
+		if(srcpath[k] == '/') {
+			incdir = srcpath[0:k];
+			break;
+		}
 
-	saved := sys->dup(2, -1);
-	if(saved < 0) {
-		sys->remove(srcpath);
-		return "";
+	limbo := load Command "/dis/limbo.dis";
+	if(limbo == nil)
+		return gatenote(sys->sprint("not compiled: cannot load /dis/limbo.dis: %r"));
+
+	# The compiler's diagnostics (its output and its error output) go to a
+	# pipe that drain() empties as they come, so a long list of errors
+	# cannot block it.  (A file in the workspace, written through the
+	# dup'd descriptor, read back empty.)
+	p := array[2] of ref Sys->FD;
+	saved1 := sys->dup(1, -1);
+	saved2 := sys->dup(2, -1);
+	if(sys->pipe(p) < 0 || saved1 < 0 || saved2 < 0) {
+		return gatenote(sys->sprint("not compiled: cannot capture the compiler's errors: %r"));
 	}
-	errfd := sys->create(errpath, Sys->OWRITE, 8r644);
-	if(errfd == nil) {
-		sys->dup(saved, 2);
-		sys->remove(srcpath);
-		return "";
-	}
-	sys->dup(errfd.fd, 2);
-	errfd = nil;
+	diag := chan[1] of string;
+	spawn drain(p[0], diag);
+	p[0] = nil;
+	sys->dup(p[1].fd, 1);
+	sys->dup(p[1].fd, 2);
+	p[1] = nil;
 
 	ok := 1;
-	limbo := load Command "/dis/limbo.dis";
-	if(limbo == nil) {
+	raised := "";
+	{
+		limbo->init(nil, "limbo" :: "-I" :: "/module" :: "-I" :: incdir :: "-o" :: dispath :: srcpath :: nil);
+	} exception e {
+	"*" =>
 		ok = 0;
-	} else {
-		{
-			limbo->init(nil, "limbo" :: "-I" :: "/module" :: srcpath :: nil);
-		} exception {
-		"*" =>
-			ok = 0;
-		}
+		raised = e;
 	}
 	limbo = nil;
+
+	sys->dup(saved1, 1);	# the pipe's last writers gone: drain sees its end
+	sys->dup(saved2, 2);
+	errtxt := <-diag;
 
 	(stok, nil) := sys->stat(dispath);
 	if(stok < 0)
 		ok = 0;
-
-	sys->dup(saved, 2);
 	sys->remove(dispath);
+	if(errtxt == "" && raised != "")
+		errtxt = raised + "\n";
 
-	if(ok) {
-		sys->remove(srcpath);
-		sys->remove(errpath);
-		return "";
-	}
-
-	(errtxt, _) := readfile(errpath);
-	sys->remove(srcpath);
-	sys->remove(errpath);
-
+	if(ok)
+		return "<gate>\nstatus: compiled\ncompiler: hosted limbo (/dis/limbo.dis)\n</gate>\n" + passmsg;
 	return "<gate>\n" +
 		"status: failed\n" +
 		"compiler: hosted limbo (/dis/limbo.dis)\n" +
-		"stderr:\n" + errtxt +
-		"</gate>\n" +
-		"The emitted Limbo did not compile. Re-call /tool/limbo with a description that avoids the above errors, or quote the failing line back to the user if the error is unfixable.";
+		"stderr:\n" + errtxt + srchints(srcpath) +
+		"</gate>\n" + failmsg;
+}
+
+# What a model writing Limbo from other languages gets wrong that the
+# compiler's "near ` / ` : syntax error" does not say.  A task wrote a
+# comment as // and then as /* */, compiled sixteen times, failed each
+# time, and told the user it compiled.
+srchints(srcpath: string): string
+{
+	fd := sys->open(srcpath, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	src := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		src += string buf[0:n];
+	(nil, lines) := sys->tokenize(src, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		i := 0;
+		while(i < len l && (l[i] == ' ' || l[i] == '\t'))
+			i++;
+		if(i + 1 < len l && l[i] == '/' && (l[i+1] == '/' || l[i+1] == '*'))
+			return "hint: Limbo comments begin with # and run to the end of the line; " +
+				"// and /* */ are not comments in Limbo.\n";
+	}
+	return "";
+}
+
+compilefile(path: string): string
+{
+	if(path == "" || path[0] != '/' || len path < 3 || path[len path - 2:] != ".b")
+		return "error: limbo compile takes the absolute path of a .b file";
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return sys->sprint("error: cannot compile %s: %r", path);
+	if(d.mode & Sys->DMDIR)
+		return "error: " + path + " is a directory";
+	return compileat(path, sys->sprint("c%d", sys->pctl(0, nil)),
+		path + " compiles.",
+		path + " does not compile: fix the lines named above and compile it again.");
+}
+
+drain(fd: ref Sys->FD, out: chan of string)
+{
+	s := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		if(len s < 16384)
+			s += string buf[0:n];
+	out <-= s;
+}
+
+gatenote(why: string): string
+{
+	return "<gate>\nstatus: " + why + "\n</gate>\n" +
+		"Whether the source above compiles is unknown.";
 }

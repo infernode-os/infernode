@@ -3,63 +3,45 @@
 #include <mp.h>
 #include <libsec.h>
 
-typedef struct State{
-	int		seeded;
-	uvlong		seed;
-	DES3state	des3;
-} State;
-static State x917state;
-
 static void
-X917(uchar *rand, int nrand)
+init(ChaChastate *cs)
 {
-	int i, m, n8;
-	uvlong I, x;
+	u32int seed[11];
+	int i;
 
-	/* 1. Compute intermediate value I = Ek(time). */
-	I = nsec();
-	triple_block_cipher(x917state.des3.expanded, (uchar*)&I, 0); /* two-key EDE */
-
-	/* 2. x[i] = Ek(I^seed);  seed = Ek(x[i]^I); */
-	m = (nrand+7)/8;
-	for(i=0; i<m; i++){
-		x = I ^ x917state.seed;
-		triple_block_cipher(x917state.des3.expanded, (uchar*)&x, 0);
-		n8 = (nrand>8) ? 8 : nrand;
-		memcpy(rand, (uchar*)&x, n8);
-		rand += 8;
-		nrand -= 8;
-		x ^= I;
-		triple_block_cipher(x917state.des3.expanded, (uchar*)&x, 0);
-		x917state.seed = x;
-	}
+	for(i = 0; i < nelem(seed); i++)
+		seed[i] = truerand();
+	setupChaChastate(cs, (uchar*)seed, 32, (uchar*)&seed[8], 12, 20);
+	memset(seed, 0, sizeof(seed));
 }
 
 static void
-X917init(void)
+fill(ChaChastate *cs, uchar *p, int n)
 {
-	int n;
-	uchar mix[128];
-	uchar key3[3][8];
-	u32int *ulp;
+	ChaChastate c;
 
-	/* truerand() yields 32 bits. Filling ulong-sized (8-byte on LP64)
-	 * slots left the high half of every slot zero -- 12 of the 24 key
-	 * bytes -- halving the X9.17 PRNG's 3DES key entropy. */
-	ulp = (u32int*)key3;
-	for(n = 0; n < sizeof(key3)/sizeof(u32int); n++)
-		ulp[n] = truerand();
-	setupDES3state(&x917state.des3, key3, nil);
-	X917(mix, sizeof mix);
-	x917state.seeded = 1;
+	c = *cs;
+	/* Rekey before exposing output, then partition calls by nonce. */
+	chacha_encrypt((uchar*)&cs->state[4], 32, &c);
+	if(++cs->state[13] == 0)
+		if(++cs->state[14] == 0)
+			++cs->state[15];
+	memset(p, 0, n);
+	chacha_encrypt(p, n, &c);
+	memset(&c, 0, sizeof(c));
 }
 
 void
 genrandom(uchar *p, int n)
 {
+	static ChaChastate cs;
+
+	if(n <= 0)
+		return;
 	_genrandomqlock();
-	if(x917state.seeded == 0)
-		X917init();
-	X917(p, n);
+	if(cs.rounds == 0)
+		init(&cs);
+	cs.state[4] ^= getpid();	/* fork protection */
+	fill(&cs, p, n);
 	_genrandomqunlock();
 }

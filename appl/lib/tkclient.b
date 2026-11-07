@@ -135,7 +135,8 @@ wmctl(top: ref Tk->Toplevel, req: string): string
 		minsz := titlebar->minsize(top);
 		titlebar->sendctl(top, "!size . -1 " + string minsz.x + " " + string minsz.y);
 	"ok" or
-	"help" =>
+	"help" or
+	"visible" =>		# "visible 0|1": wm/wm's Hide and its undoing; a notice
 		;
 	"rect" =>
 		r: Rect;

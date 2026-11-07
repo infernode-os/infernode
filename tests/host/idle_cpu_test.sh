@@ -34,10 +34,28 @@ cpusecs() {
 
 # the emulator itself (not under timeout(1): its pid is the one measured)
 SDL_VIDEODRIVER=dummy "$EMU" -c1 -pheap=1536m -r"$ROOT" /dis/sh.dis -c \
-	"load std; wm/charon -h file:///tmp/idle_cpu_page.html & sleep 70; echo halt > /dev/sysctl" \
+	"load std; wm/charon -h file:///tmp/idle_cpu_page.html & sleep 130; echo halt > /dev/sysctl" \
 	</dev/null >/dev/null 2>&1 &
 pid=$!
-sleep 30	# laid out, and whatever that left collected
+# Laid out, and whatever that left collected, before it is measured: a
+# fixed 30 seconds was not always enough on a loaded CI runner, and the
+# measurement took in the layout (15s of CPU in 15s).  Wait for a quiet
+# 5 seconds, up to 90; an emulator that never goes quiet is the failure.
+sleep 10
+quiet=0
+waited=10
+while [ $waited -lt 90 ]; do
+	q0=$(cpusecs $pid)
+	sleep 5
+	waited=$((waited + 5))
+	q1=$(cpusecs $pid)
+	if [ $((q1 - q0)) -le 1 ]; then quiet=1; break; fi
+done
+if [ $quiet = 0 ]; then
+	kill $pid 2>/dev/null
+	echo "FAIL: idle with a page loaded: still busy after ${waited}s"
+	exit 1
+fi
 a=$(cpusecs $pid)
 sleep 15
 b=$(cpusecs $pid)

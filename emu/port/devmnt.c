@@ -1009,10 +1009,11 @@ mountio(Mnt *m, Mntrpc *r)
 	int n;
 	Mwatch w;
 	volatile int watched;
-	int fired;
+	int armed, fired;
 
 	watched = 0;
 	while(waserror()) {
+		armed = watched;
 		fired = 0;
 		if(watched){
 			fired = w.fired;
@@ -1036,7 +1037,8 @@ mountio(Mnt *m, Mntrpc *r)
 		 * an epoch's workers serving each other). Unanswered in time,
 		 * the call is left on the queue, its tag held, for its reply.
 		 */
-		if(upkilled() && fired){
+		/* A killed call sends at most one flush before abandoning the chain. */
+		if(upkilled() && (armed || fired)){
 			mntorphan(m, r);
 			nexterror();
 		}

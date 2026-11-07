@@ -200,7 +200,7 @@ windowlabel(name: string): (string, string)
 CTLOK := array[] of {
 	"clean", "dirty", "show", "dot=addr", "addr=dot", "limit=addr",
 	"mark", "nomark", "menu", "nomenu", "scroll", "noscroll", "cleartag",
-	"echo", "noecho", "clearimage", "clearcontent", "contentcmd",
+	"echo", "noecho", "clearimage", "clearcontent",
 	"growfull", "growmax", "grow", "moveto", "tocol", "newcol",
 	"delete", "del",
 };

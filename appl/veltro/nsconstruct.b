@@ -1218,6 +1218,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		return 1;
 	if(walletcontrolpath(path))
 		return 1;
+	if(cameradevicepath(path))
+		return 1;
 	if(ftreecontrolpath(path))
 		return 1;
 	if(tmpveltrointernalpath(path))
@@ -1276,6 +1278,18 @@ policyroot(path: string): int
 # the guard costs nothing and keeps the oracle closed if it is ever
 # reintroduced.
 #
+# The camera's hardware: the receiver (camera(3)) and the I2C bus the
+# sensor is driven over (i2c(3)). Whoever has these can power the
+# sensor, reprogram it and take its frames whatever any feed says. An
+# agent that needs vision is given a video feed (camsrv(4) at
+# /mnt/video), never the device under it (infernode-os/infernode#1005).
+#
+cameradevicepath(path: string): int
+{
+	return path == "/dev/unicam" || prefix(path, "/dev/unicam/") ||
+		path == "/dev/i2c0ctl" || path == "/dev/i2c0data";
+}
+
 walletcontrolpath(path: string): int
 {
 	# /n/wallet is where wallet9p mounted before INFR-400; it stays denied.

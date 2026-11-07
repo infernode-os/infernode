@@ -66,6 +66,11 @@
 | [xenith-window-manipulation.md](xenith-window-manipulation.md) | Xenith window manipulation API at `/mnt/xenith` |
 | [xenith-tempfiles.md](xenith-tempfiles.md) | How Xenith and Acme manage their temporary buffer files |
 | [NODE-INTEROP-TESTING.md](NODE-INTEROP-TESTING.md) | Node-to-node interoperability testing: cert auth and post-quantum transport |
+| [SECURITY-REVIEW-LEDGER.md](SECURITY-REVIEW-LEDGER.md) | Pinned index of completed, blocked, and queued security reviews |
+| [PR-1015-SECURITY-REVIEW.md](PR-1015-SECURITY-REVIEW.md) | Security disposition and required changes for the styxbrick commander, sdg, TLS pinning, and D2 |
+| [CAMERA-SECURITY-REVIEW.md](CAMERA-SECURITY-REVIEW.md) | Security review and pre-real-sensor gates for the native `#V` camera interface |
+| [FUZZ-HARDENING-SECURITY-REVIEW.md](FUZZ-HARDENING-SECURITY-REVIEW.md) | Source-pinned review of PR #1069's fuzz-derived kernel, JIT, OOM, 9P, and virtio hardening |
+| [POST-REVIEW-DELTA-SECURITY-REVIEW.md](POST-REVIEW-DELTA-SECURITY-REVIEW.md) | Pinned review of the post-report Veltro, keyring, Claude-gate, mobile, and formal-verification delta |
 | [9FRONT-SECURITY-AUDIT.md](9FRONT-SECURITY-AUDIT.md) | Pinned source-by-source audit of applicable 9front security fixes |
 | [veltro-llm-bridge-bug-taxonomy.md](veltro-llm-bridge-bug-taxonomy.md) | Catalogue of defect classes in the Anthropic/OpenAI LLM bridge |
 

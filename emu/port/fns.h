@@ -213,6 +213,7 @@ void	setsoftkbd_rect(int x, int y, int w, int h);	/* focused-widget rect, window
 char*	skipslash(char*);
 void		srvrtinit(void);
 void		swiproc(Proc*, int);
+int		swiprogproc(Proc*, void*);
 Block*	trimblock(Block*, int, int);
 long		unionread(Chan*, void*, long);
 void		unlock(Lock*);

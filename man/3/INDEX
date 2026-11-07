@@ -16,6 +16,7 @@ env env
 ether ether
 fs fs
 gpio gpio
+i2c i2c
 indir indir
 ip ip
 location location

@@ -1,0 +1,65 @@
+.TH WM-CAMERA 1
+.SH NAME
+camera \- show the camera, live
+.SH SYNOPSIS
+.B wm/camera
+.SH DESCRIPTION
+.I Camera
+shows the feed at
+.B /mnt/video/0
+in a window, mounting
+.IR camsrv (4)
+there if nothing is. Holding the feed open keeps the camera on: hidden by the window
+manager, or closed, it lets go, and when nothing else is reading the
+camera goes off. Shown again, it takes the feed back, at the size
+.B fmt
+then gives: a feed turned meanwhile is shown turned.
+.PP
+How the camera is mounted is not the window's to say: the feed comes
+the right way up from whoever started
+.IR camsrv (4)
+\(em its
+.BR -r ,
+or on a bare-metal board the card's
+.B camera
+file.
+.PP
+What is drawn over the picture is the feed's
+.B layer
+directory as the window's name space has it
+.RI ( layers (2)):
+.B bind -a
+puts a layer on top,
+.B bind -b
+underneath, and
+.B unmount
+takes it off, while the window is up:
+.IP
+.B bind -a /mnt/vision/1/layer /mnt/video/0/layer
+.PP
+The camera's feed names no frames, so only a layer's
+.B frame=*
+records are drawn.
+.PP
+The keys
+.B +
+and
+.B -
+move the lens's focus,
+.B a
+runs autofocus once, and
+.B q
+exits.
+.PP
+With no camera, or when the camera goes, the window stays and says why;
+.B q
+closes it.
+.SH SOURCE
+.B /appl/wm/camera.b
+.SH SEE ALSO
+.IR camsrv (4),
+.IR layers (2),
+.IR visionfs (4)
+.SH BUGS
+Resizing the window does not scale the picture, which stays in the
+middle of it.

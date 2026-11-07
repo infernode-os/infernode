@@ -245,19 +245,30 @@ clockcheck(void)
  */
 extern void sysmodinit(void);
 /*
- * getenv, for the ONE call libinterp makes: keyring.c consults
- * CNSAMODE to decide whether to refuse non-CNSA algorithms. The
- * hosted emulator answers from the host environment; this kernel has
- * no environment at C level and no deployment has asked for strict
- * mode on bare metal yet, so the answer is nil -- CNSA gating off.
- * When a deployment wants it, the honest source is the env device
- * (#e), read at boot; a build flag would be policy in the binary.
+ * getenv, for the ONE call libinterp makes: keyring.c's cnsamode() asks
+ * for CNSAMODE, CNSA 2.0 strict authentication (ML-KEM-1024). The hosted
+ * emulator answers from the host environment. This kernel has none at C
+ * level; it answers from the machine's switch, cnsastrict, which osinit
+ * throws through sysctl at boot when the card has a cnsamode file
+ * (os/port/devcons.c says why a switch and not the environment). The
+ * question is remembered: once keyring.c has its answer, the switch can
+ * no longer change it.
  */
+extern int cnsastrict, cnsaasked;
+extern Lock cnsalk;
+
 char*
 getenv(char *name)
 {
-	USED(name);
-	return nil;
+	int strict;
+
+	if(strcmp(name, "CNSAMODE") != 0)
+		return nil;
+	lock(&cnsalk);
+	cnsaasked = 1;
+	strict = cnsastrict;
+	unlock(&cnsalk);
+	return strict? "1": nil;
 }
 
 extern void drawmodinit(void);
@@ -265,6 +276,8 @@ extern void tkmodinit(void);
 extern void mathmodinit(void);
 extern void keyringmodinit(void);
 extern void tensormodinit(void);
+extern void i420modinit(void);
+extern void bayermodinit(void);
 
 void
 modinit(void)
@@ -275,6 +288,8 @@ modinit(void)
 	mathmodinit();
 	keyringmodinit();
 	tensormodinit();
+	i420modinit();
+	bayermodinit();
 }
 
 

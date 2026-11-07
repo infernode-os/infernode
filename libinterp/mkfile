@@ -31,6 +31,7 @@ OFILES=\
 	string.$O\
 	i420.$O\
 	tensor.$O\
+	bayer.$O\
 
 HFILES=\
 	../include/interp.h\
@@ -53,6 +54,8 @@ MODULES=\
 	i420if.m\
 	$ROOT/module/tensor.m\
 	tensorif.m\
+	$ROOT/module/bayer.m\
+	bayerif.m\
 
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE
@@ -93,6 +96,12 @@ i420mod.h:D: $MODULES i420if.m
 i420if.h:D: $MODULES i420if.m
 	rm -f $target && limbo -a -I$ROOT/module i420if.m > $target
 
+bayermod.h:D: $MODULES bayerif.m
+	rm -f $target && limbo -t Bayer -I$ROOT/module bayerif.m > $target
+
+bayerif.h:D: $MODULES bayerif.m
+	rm -f $target && limbo -a -I$ROOT/module bayerif.m > $target
+
 xec.$O:		optab.h  ../include/pool.h
 draw.$O: 	../include/draw.h ../include/drawif.h
 
@@ -109,6 +118,8 @@ tensormod.h:D: $MODULES tensorif.m
 
 tensorif.h:D: $MODULES tensorif.m
 	rm -f $target && limbo -a -I$ROOT/module tensorif.m > $target
+
+bayer.$O:	bayermod.h bayerif.h
 
 ipint.$O:	ipint.h ipintsmod.h
 crypt.$O:	ipint.h runt.h cryptmod.h

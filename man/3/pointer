@@ -106,6 +106,22 @@ touch panel,
 or a test; a write waits for room in the queue, where an event from
 the GUI backend, which may not wait, is dropped (room is kept for
 fingers lifting).
+On the native kernel a write of
+.BI a "id x y on"
+is the same with
+.I x
+and
+.I y
+fractions of the screen, 0 to 65535, as
+.B pointer
+takes
+.BI a "x y buttons"
+there: a USB touchscreen's driver knows where on its surface it is
+touched but not how big the screen is, and the kernel scales them.
+Either kind of touch screen's driver makes the pointer of its fingers
+by
+.IR touchgest (2):
+a finger held still is button 3, two dragged the wheel.
 .PP
 Writing an
 .IR image (6)
@@ -124,4 +140,5 @@ format.
 .SH SEE ALSO
 .IR wm (1),
 .IR draw-intro (2),
+.IR touchgest (2),
 .IR image (6)

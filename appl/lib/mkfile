@@ -78,6 +78,7 @@ TARG=\
 	imap.dis\
 	imageremap.dis\
 	icon.dis\
+	touchgest.dis\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
@@ -266,6 +267,7 @@ SYSMODULES=\
 	html.m\
 	imap.m\
 	icon.m\
+	touchgest.m\
 	imagefile.m\
 	imgload.m\
 	pngload.m\

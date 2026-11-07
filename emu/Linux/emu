@@ -52,6 +52,7 @@ mod
 	keyring
 	i420
 	tensor
+	bayer
 #	loader
 #	freetype
 

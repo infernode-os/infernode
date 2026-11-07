@@ -54,6 +54,7 @@ TARG=\
 	cleanname.dis\
 	cmp.dis\
 	comm.dis\
+	copybench.dis\
 	countfs.dis\
 	cp.dis\
 	cprof.dis\
@@ -212,6 +213,7 @@ TARG=\
 	ventisrv.dis\
 	vid9p.dis\
 	visionfs.dis\
+	camsrv.dis\
 	wav2iaf.dis\
 	vm.dis\
 	wc.dis\
@@ -342,6 +344,7 @@ SYSMODULES=\
 	garminav.m\
 	gdl90.m\
 	post9p.m\
+	bayer.m\
 
 DISBIN=$ROOT/dis
 

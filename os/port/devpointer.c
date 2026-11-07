@@ -469,7 +469,14 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 			n = sizeof buf -1;
 		memmove(buf, va, n);
 		buf[n] = 0;
-		if(buf[0] != 'f')
+		/*
+		 * "f<id> x y on" in the screen's pixels, the touch panel's;
+		 * "a<id> x y on" in fractions of it, 0..65535, a USB
+		 * touchscreen's (os/init/mouseusb.b), scaled as /dev/pointer's
+		 * "a x y b" is, and dropped as it is before the console has
+		 * said how big the screen is.
+		 */
+		if(buf[0] != 'f' && buf[0] != 'a')
 			error(Ebadarg);
 		a = buf + 1;
 		b = strtoul(a, &a, 0);		/* the finger's id */
@@ -478,6 +485,16 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 		if(*a == 0)
 			error(Eshort);
 		isdelta = strtoul(a, 0, 0);	/* on the screen */
+		if(buf[0] == 'a'){
+			if(mouse.maxx <= 0 || mouse.maxy <= 0)
+				break;
+			if(x > 65535)
+				x = 65535;
+			if(y > 65535)
+				y = 65535;
+			x = (int)(((vlong)x * mouse.maxx) / 65536);
+			y = (int)(((vlong)y * mouse.maxy) / 65536);
+		}
 		qlock(&fq.wq);
 		if(waserror()){
 			qunlock(&fq.wq);

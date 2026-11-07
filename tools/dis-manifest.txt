@@ -109,6 +109,7 @@ dis/bytes.dis
 dis/cal.dis
 dis/calc.dis
 dis/calendar9p.dis
+dis/camsrv.dis
 dis/cat.dis
 dis/cd.dis
 dis/cddb.dis
@@ -130,6 +131,7 @@ dis/cmd/git/push.dis
 dis/cmd/git/rm.dis
 dis/cmp.dis
 dis/comm.dis
+dis/copybench.dis
 dis/countfs.dis
 dis/cp.dis
 dis/cprof.dis
@@ -471,6 +473,7 @@ dis/lib/tftp.dis
 dis/lib/timers.dis
 dis/lib/titlebar.dis
 dis/lib/tkclient.dis
+dis/lib/touchgest.dis
 dis/lib/translate.dis
 dis/lib/twofa.dis
 dis/lib/twofaslot.dis
@@ -711,11 +714,13 @@ dis/tests/auditverify_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
 dis/tests/awk_test.dis
+dis/tests/bayer_test.dis
 dis/tests/bidi_test.dis
 dis/tests/bioauth_test.dis
 dis/tests/brotli_test.dis
 dis/tests/bthci_test.dis
 dis/tests/bufio_test.dis
+dis/tests/camsrv_test.dis
 dis/tests/casel_test.dis
 dis/tests/charonbatch.dis
 dis/tests/charonshot.dis
@@ -802,6 +807,7 @@ dis/tests/keyring_test.dis
 dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/kill_deadserver_test.dis
+dis/tests/kill_uncalled_test.dis
 dis/tests/killblocked_test.dis
 dis/tests/l2cap_test.dis
 dis/tests/limbo_asgcall_test.dis
@@ -925,6 +931,7 @@ dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
+dis/tests/touchgest_test.dis
 dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
 dis/tests/styx_pack_test.dis
@@ -1065,6 +1072,7 @@ dis/wiki.dis
 dis/wikifs.dis
 dis/wm/about.dis
 dis/wm/bounce.dis
+dis/wm/camera.dis
 dis/wm/charon.dis
 dis/wm/clock.dis
 dis/wm/coffee.dis

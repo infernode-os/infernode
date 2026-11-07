@@ -32,6 +32,9 @@ implement Camsrv;
 #
 # usage: mount {camsrv} /mnt/video
 #        mount {camsrv -t} /mnt/video     a simulated sensor, for tests
+#        vm 1 camsrv -s cam               posted in #scam/fs instead, and
+#                                         served to each that opens it:
+#        mount -A '#scam/fs' /mnt/video   from any VM (vm(1), #1086)
 #        mount {camsrv -l file} ...       append the status line to file
 #                                         once a minute, for a soak
 #        mount {camsrv -r 90} ...         a camera mounted a quarter turn
@@ -62,6 +65,8 @@ include "styxservers.m";
 	Styxserver, Navigator: import styxservers;
 	nametree: Nametree;
 	Tree: import nametree;
+include "post9p.m";
+	post9p: Post9p;
 include "bayer.m";
 	bayer: Bayer;
 
@@ -85,8 +90,10 @@ Lens: con 16r0C;
 
 Sim: con 2;		# the simulated sensor's raw is this much smaller
 
-srv: ref Styxserver;
-tc: chan of ref Tmsg;
+srv: ref Styxserver;		# the connection of the message being served
+mainsrv: ref Styxserver;	# standard input's, unless posted
+posted := 0;
+reqc: chan of (ref Styxserver, ref Tmsg);
 sim := 0;
 
 width := 576;
@@ -109,6 +116,7 @@ lastraw: array of byte;
 err := "";
 
 Fsess: adt {
+	srv:	ref Styxserver;	# the connection it is on
 	fid:	int;
 	path:	int;
 	seq:	int;		# the last frame this fid took
@@ -142,6 +150,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# helpers together: killing the first alone leaves the mount wedged
 	sys->pctl(Sys->NEWPGRP, nil);
 	logfile := "";
+	spec := "";
 	for(args = tl args; args != nil; args = tl args)
 		if(hd args == "-l" && tl args != nil){
 			args = tl args;
@@ -152,6 +161,9 @@ init(nil: ref Draw->Context, args: list of string)
 				sys->fprint(sys->fildes(2), "camsrv: -r 0|90|180|270\n");
 				raise "fail:usage";
 			}
+		}else if(hd args == "-s" && tl args != nil){
+			args = tl args;
+			spec = hd args;
 		}else if(hd args == "-t"){
 			sim = 1;
 			width = 288;
@@ -174,10 +186,69 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 	# empty as served: where the feed's layers are bound (#1095)
 	tree.create(big Qstream, dir("layer", Sys->DMDIR|8r555, Qlayer));
-	(tc, srv) = Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
+	reqc = chan of (ref Styxserver, ref Tmsg);
+	if(spec != nil){
+		# posted: served to each that opens #s<spec>/fs, from any VM;
+		# standard input is not a 9P channel then
+		post9p = load Post9p Post9p->PATH;
+		if(post9p == nil){
+			sys->fprint(sys->fildes(2), "camsrv: cannot load post9p: %r\n");
+			raise "fail:load";
+		}
+		post9p->init();
+		conns := chan of ref Sys->FD;
+		(nil, perr) := post9p->post(spec, conns);
+		if(perr != nil){
+			sys->fprint(sys->fildes(2), "camsrv: post #s%s: %s\n", spec, perr);
+			raise "fail:post";
+		}
+		posted = 1;
+		spawn accept(conns, treeop);
+	} else {
+		(tc, s) := Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
+		mainsrv = s;
+		spawn forward(s, tc);
+	}
 	if(logfile != nil)
 		spawn statuslog(logfile);
 	serve(tree);
+}
+
+# each connection's messages into the one serve loop, with its server
+forward(s: ref Styxserver, tc: chan of ref Tmsg)
+{
+	for(;;){
+		m := <-tc;
+		reqc <-= (s, m);
+		if(m == nil)
+			return;
+		pick r := m {
+		Readerror =>
+			return;
+		}
+	}
+}
+
+accept(conns: chan of ref Sys->FD, treeop: chan of ref Styxservers->Navop)
+{
+	for(;;){
+		fd := <-conns;
+		(tc, s) := Styxserver.new(fd, Navigator.new(treeop), big Qroot);
+		spawn forward(s, tc);
+	}
+}
+
+# a connection gone: its readers with it; the mount's, everything
+connend(tree: ref Tree): int
+{
+	if(srv == mainsrv && !posted){
+		shutdown(tree);
+		return 1;
+	}
+	for(l := sess; l != nil; l = tl l)
+		if((hd l).srv == srv)
+			drop((hd l).fid);
+	return 0;
 }
 
 dir(name: string, perm, path: int): Sys->Dir
@@ -225,15 +296,17 @@ framesize(): int
 serve(tree: ref Tree)
 {
 	for(;;) alt {
-	tmsg := <-tc =>
+	(csrv, tmsg) := <-reqc =>
+		srv = csrv;
 		if(tmsg == nil){
-			shutdown(tree);
-			return;
+			if(connend(tree))
+				return;
+			break;
 		}
 		pick tm := tmsg {
 		Readerror =>
-			shutdown(tree);
-			return;
+			if(connend(tree))
+				return;
 		Open =>
 			c := srv.getfid(tm.fid);
 			path := -1;
@@ -242,7 +315,7 @@ serve(tree: ref Tree)
 			if((path == Qframe || path == Qraw) && err != "" && users == 0)
 				err = "";
 			if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
-				sess = ref Fsess(tm.fid, path, seq, nil) :: sess;
+				sess = ref Fsess(srv, tm.fid, path, seq, nil) :: sess;
 				if(users++ == 0)
 					startcapture();
 			}
@@ -349,7 +422,7 @@ statuslog(file: string)
 find(fid: int): ref Fsess
 {
 	for(l := sess; l != nil; l = tl l)
-		if((hd l).fid == fid)
+		if((hd l).fid == fid && (hd l).srv == srv)
 			return hd l;
 	return nil;
 }
@@ -379,7 +452,7 @@ drop(fid: int)
 reply(tm: ref Tmsg.Read, s: ref Fsess): int
 {
 	if(err != ""){
-		srv.reply(ref Rmsg.Error(tm.tag, err));
+		s.srv.reply(ref Rmsg.Error(tm.tag, err));
 		return 1;
 	}
 	fs := fsize;
@@ -389,7 +462,7 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		return 0;
 	foff := int (tm.offset % big fs);
 	if(s.path == Qraw && tm.offset >= big fs){
-		srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
+		s.srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
 		return 1;
 	}
 	if(s.path == Qframe){
@@ -399,13 +472,13 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 			return 0;	# not made yet: wait for it
 		(sn, fr) := ring[n % Ring];
 		if(sn != n || fr == nil || len fr != fs){
-			srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
+			s.srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
 			return 1;
 		}
 		k := tm.count;
 		if(foff + k > fs)
 			k = fs - foff;
-		srv.reply(ref Rmsg.Read(tm.tag, fr[foff:foff+k]));
+		s.srv.reply(ref Rmsg.Read(tm.tag, fr[foff:foff+k]));
 		return 1;
 	}
 	if(foff == 0 || s.fr == nil){
@@ -416,7 +489,7 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 	n := tm.count;
 	if(foff + n > len s.fr)
 		n = len s.fr - foff;
-	srv.reply(ref Rmsg.Read(tm.tag, s.fr[foff:foff+n]));
+	s.srv.reply(ref Rmsg.Read(tm.tag, s.fr[foff:foff+n]));
 	return 1;
 }
 

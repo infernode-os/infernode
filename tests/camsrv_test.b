@@ -288,9 +288,89 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Ctl", testCtl);
 		run("Raw", testRaw);
 		run("Rotate", testRotate);
+		run("Posted", testPosted);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
+}
+
+# camsrv posted (-s), its pid (the leader of its group) sent first
+postserver(spec: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	cam := load CamsrvMod "/dis/camsrv.dis";
+	cam->init(nil, "camsrv" :: "-t" :: "-s" :: spec :: nil);
+}
+
+# posted in #s, served to each that opens it: two connections, one camera
+testPosted(t: ref T)
+{
+	spec := sys->sprint("camsrv_test.%d", sys->pctl(0, nil));
+	pidc := chan of int;
+	spawn postserver(spec, pidc);
+	pid := <-pidc;
+	f := "#s" + spec + "/fs";
+	for(i := 0; i < 40 && sys->stat(f).t0 < 0; i++)
+		sys->sleep(50);
+	da := "/tmp/camsrv_test.a";
+	db := "/tmp/camsrv_test.b";
+	sys->create(da, Sys->OREAD, Sys->DMDIR|8r777);
+	sys->create(db, Sys->OREAD, Sys->DMDIR|8r777);
+	for(l := da :: db :: nil; l != nil; l = tl l){
+		fd := sys->open(f, Sys->ORDWR);
+		if(fd == nil || sys->mount(fd, nil, hd l, Sys->MREPL, "") < 0){
+			t.fatal(sys->sprint("mount %s on %s: %r", f, hd l));
+			return;
+		}
+	}
+	t.assertseq(rd(da + "/0/fmt"), rd(db + "/0/fmt"), "one camera to both connections");
+	t.assert(has(rd(da + "/0/fmt"), sys->sprint("%d %d i420", W, H)), "its fmt: " + rd(da + "/0/fmt"));
+	fa := sys->open(da + "/0/frame", Sys->OREAD);
+	fb := sys->open(db + "/0/frame", Sys->OREAD);
+	a := array[FS] of byte;
+	b := array[FS] of byte;
+	n := -1;
+	for(i = 0; i < 40 && n < 0; i++){
+		(nil, w) := sys->tokenize(rd(da + "/0/status"), " \t\n");
+		for(; w != nil; w = tl w)
+			if(len hd w > 7 && (hd w)[0:7] == "frames=" && int (hd w)[7:] > 0)
+				n = int (hd w)[7:];
+		sys->sleep(50);
+	}
+	(ga, ea) := readat(fa, a, n);
+	(gb, eb) := readat(fb, b, n);
+	t.asserteq(ga, FS, "frame n on the first connection: " + ea);
+	t.asserteq(gb, FS, "frame n on the second: " + eb);
+	same := 1;
+	for(j := 0; j < FS; j++)
+		if(a[j] != b[j]){
+			same = 0;
+			break;
+		}
+	t.assert(same, "frame n is the same bytes on both connections");
+	# the second gone, the first reads on
+	fb = nil;
+	sys->unmount(nil, db);
+	sys->sleep(200);
+	(ga, ea) = readat(fa, a, n + 1);
+	t.asserteq(ga, FS, "one connection gone, the other reads on: " + ea);
+	fa = nil;
+	sys->unmount(nil, da);
+	k := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(k != nil)
+		sys->fprint(k, "killgrp");
+}
+
+rd(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }
 
 server(fd: ref Sys->FD)

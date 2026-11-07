@@ -13,6 +13,11 @@ camsrv \- a camera as a live video feed
 .B mount {camsrv -r
 .I degrees
 .B } /mnt/video
+.br
+.B vm 1 camsrv -s
+.I spec
+.br
+.B mount -A '#s\fIspec\fP/fs' /mnt/video
 .SH DESCRIPTION
 .I Camsrv
 serves a Raspberry Pi Camera Module 3 in the schema of
@@ -26,6 +31,20 @@ With
 .B -t
 it serves a simulated sensor, on any machine: colour bars and a moving
 band, as raw samples, through the same code.
+.PP
+With
+.B -s
+it serves no standard input: it posts itself in
+.BI #s spec /fs
+.RI ( post9p (2))
+and serves each that opens that file, as a connection of its own, so the
+camera can run in one Dis VM
+.RI ( vm (1))
+and be mounted from any other, on another core.
+Every connection sees the one camera: frame
+.I N
+is the same frame on all of them, and the sensor runs while any of them
+reads it.
 .PP
 With
 .B -l

@@ -1,0 +1,73 @@
+# plumbing rules for the Desktop interface (wm/wm; lib/lucifer/boot.sh)
+#
+# The windows are wm/wm's, so a message nobody has open starts the
+# program for it, in a window of its own: a file or a directory in
+# Xenith (the edit port, which a running Xenith takes instead), a web
+# page in Charon, an image in wm/view, a PDF in wm/page.  The user's
+# rules (/usr/<user>/lib/plumbing) are read first (lib/sh/plumbrules).
+
+# a file the host asked to have opened (Finder's Open With, the Dock
+# icon, a file dropped on the window; hostplumb -p): the whole data is
+# the path, spaces and all
+src is hostopen
+kind is text
+data matches '.+'
+data isfile	$0
+data set	$file
+attr set	'action=showfile'
+plumb to edit
+plumb start /dis/xenith.dis -c1 $file
+
+src is hostopen
+kind is text
+data matches '.+'
+data isdir	$0
+data set	$dir
+plumb to edit
+plumb start /dis/xenith.dis -c1 $dir
+
+# web pages
+kind is text
+data matches 'https?://[^ ]+'
+plumb to web
+plumb start /dis/wm/charon.dis $0
+
+# images
+kind is text
+data matches '[a-zA-Z¡-￿0-9_\-./]+\.([pP][nN][gG]|[jJ][pP][eE]?[gG]|[gG][iI][fF]|[bB][iI][tT])'
+data isfile	$0
+plumb to view
+plumb start /dis/wm/view.dis -i $0
+
+# PDFs
+kind is text
+data matches '[a-zA-Z¡-￿0-9_\-./]+\.[pP][dD][fF]'
+data isfile	$0
+plumb to none
+plumb start /dis/wm/page.dis $0
+
+# a file, perhaps with an address (file.b:12, file.b:/pattern/)
+kind is text
+data matches '([.a-zA-Z0-9_/\-]+[a-zA-Z0-9_/\-])(:(((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$])([,;+\-]((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$]))*))?'
+data isfile	$1
+data set	$file
+attr set	'action=showfile	addr=$3'
+plumb to edit
+plumb start /dis/xenith.dis -c1 $file
+
+# a directory
+kind is text
+data matches '[a-zA-Z¡-￿0-9_./\-]+'
+data isdir	$0
+data set	$dir
+plumb to edit
+plumb start /dis/xenith.dis -c1 $dir
+
+# a module's interface by name (draw.m)
+kind is text
+data matches '([a-zA-Z0-9]+\.m)(:(((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$])([,;+\-]((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$]))*))?'
+data isfile	/module/$1
+data set	$file
+attr set	'action=showfile	addr=$3'
+plumb to edit
+plumb start /dis/xenith.dis -c1 $file

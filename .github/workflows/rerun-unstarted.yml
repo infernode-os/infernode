@@ -1,0 +1,61 @@
+name: Re-run unstarted CI jobs
+
+# A CI job left queued for a runner that never comes is cancelled by
+# GitHub after 15 to 20 minutes, with no reason given, and the run goes
+# red with no job failed.  macos-15 (Apple silicon) runners are the ones
+# short at busy hours.  This re-runs such a run's jobs once, when that
+# is all that went wrong: every job not passed or skipped was cancelled
+# without ever having a runner.  A job that failed, or was cancelled
+# after it started, is left as it is, and a run whose commit is no longer
+# its branch's head (one a later push superseded) is not re-run.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  rerun:
+    name: Re-run jobs that never got a runner
+    # The first attempt only: once is enough, and a second cancellation
+    # is reported, not hidden.  This repository's own branches only.
+    if: >-
+      github.event.workflow_run.run_attempt == 1 &&
+      (github.event.workflow_run.conclusion == 'failure' ||
+       github.event.workflow_run.conclusion == 'cancelled') &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN: ${{ github.event.workflow_run.id }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+    steps:
+    - name: Re-run if every unfinished job never started
+      run: |
+        jobs=$(gh api --paginate "repos/$REPO/actions/runs/$RUN/jobs?per_page=100" \
+          --jq '.jobs[] | [.name, .conclusion, ((.runner_id // 0) | tostring)] | @tsv')
+        printf '%s\n' "$jobs"
+        # not passed or skipped: what went wrong
+        bad=$(printf '%s\n' "$jobs" | awk -F'\t' '$2 != "success" && $2 != "skipped"')
+        unstarted=$(printf '%s\n' "$bad" | awk -F'\t' '$2 == "cancelled" && $3 == "0"')
+        if [ -z "$bad" ] || [ "$bad" != "$unstarted" ]; then
+          echo "Not re-run: a job failed or was cancelled after it started, or none went wrong."
+          exit 0
+        fi
+        # a branch deleted since (a merged PR's) has moved on too
+        head=$(gh api "repos/$REPO/commits/$BRANCH" --jq .sha 2>/dev/null || true)
+        if [ "$head" != "$SHA" ]; then
+          echo "Not re-run: $BRANCH is no longer at $SHA."
+          exit 0
+        fi
+        echo "Re-running the jobs that never got a runner:"
+        printf '%s\n' "$unstarted" | cut -f1
+        gh api -X POST "repos/$REPO/actions/runs/$RUN/rerun-failed-jobs"

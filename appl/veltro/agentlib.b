@@ -972,6 +972,11 @@ editquote(s: string): string
 # arguments already positional, as before.
 toolargs(tool, inputjson: string): string
 {
+	return nativeheredoc(str->tolower(tool), positional(tool, inputjson));
+}
+
+positional(tool, inputjson: string): string
+{
 	t := str->tolower(tool);
 	if(t == "edit")
 		return editargs(inputjson);
@@ -998,6 +1003,11 @@ toolargs(tool, inputjson: string): string
 	# exec's timeout, by name: before the command, as exec takes it.
 	if(t == "exec" && jval(vals, "timeout") != nil && jval(vals, "command") != nil)
 		return "-t " + jval(vals, "timeout") + " " + jval(vals, "command");
+	# git's first argument is its subcommand, named so: taken as one of
+	# the others, it went after args ({"subcommand":"add","args":"f"}
+	# ran "f add", an unknown subcommand).
+	if(t == "git" && jval(vals, "subcommand") != nil)
+		return joinargs(jval(vals, "subcommand") :: jval(vals, "args") :: nil);
 	if(jval(vals, "args") != nil || jval(vals, "command") != nil)
 		return extracttoolargs(inputjson);
 	order: list of string;
@@ -1254,6 +1264,41 @@ splitlines(s: string): list of string
 	for(; result != nil; result = tl result)
 		rev = hd result :: rev;
 	return rev;
+}
+
+# A native call's arguments, flattened, are one string, newlines and all.
+# Models taught the text protocol's heredoc (the reminders teach it) send
+# it there too, and the tool would get the markers as content.  Unwrap a
+# whole one, as parseaction does: the marker on the first line and its
+# delimiter the last line.  Shell commands keep theirs.
+nativeheredoc(name, args: string): string
+{
+	if(name == "exec" || name == "shell")
+		return args;
+	nl := -1;
+	for(i := 0; i < len args; i++)
+		if(args[i] == '\n') {
+			nl = i;
+			break;
+		}
+	if(nl < 0)
+		return args;
+	first := args[0:nl];
+	mp := findheredoc(first);
+	if(mp < 0)
+		return args;
+	(delim, nil) := splitfirst(str->drop(first[mp+2:], " \t"));
+	if(delim == "")
+		delim = "EOF";
+	lines := splitlines(args[nl+1:]);
+	last := "";
+	for(l := lines; l != nil; l = tl l)
+		if(strip(hd l) != "")
+			last = strip(hd l);
+	if(last != delim)
+		return args;
+	(res, nil) := parseheredoc(first, lines);
+	return res;
 }
 
 # Find heredoc marker << in string, returns position or -1

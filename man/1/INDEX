@@ -219,8 +219,11 @@ vm vm
 wc wc
 webgrab webgrab
 wm wm
+wm-road wm-road
 wm-shell wm-shell
 shell wm-shell
+wm-osk wm-osk
+osk wm-osk
 xd xd
 yacc yacc
 zeros zeros

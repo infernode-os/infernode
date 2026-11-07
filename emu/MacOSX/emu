@@ -25,6 +25,7 @@ dev
 	opus
 	mem
 	tfa	fido2bridge
+	location	locationbridge-stub
 
 lib
 	interp

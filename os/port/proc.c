@@ -32,6 +32,8 @@ struct
 	Proc*	free;
 }procalloc;
 
+static void	procstacks(void);
+
 typedef struct
 {
 	Lock	l;
@@ -574,6 +576,7 @@ newproc(void)
 	p->kp = 0;
 	p->killed = 0;
 	p->swipend = 0;
+	p->intpend = 0;
 	p->mp = 0;
 	p->wired = nil;		/* stale wiring on a recycled Proc is a proc
 				 * no core will ever agree to run */
@@ -648,6 +651,8 @@ procinit(void)
 	p->qnext = 0;
 
 	debugkey('p', "processes", procdump, 0);
+	debugkey('k', "kernel stacks", procstacks, 0);
+	alarminit();
 }
 
 void
@@ -657,6 +662,9 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 
 	if(up == nil)
 		panic("sleep() not in process (%lux)", getcallerpc(&r));
+#ifdef CHAOS
+	chaossleep();
+#endif
 	/*
 	 * spl is to allow lock to be called
 	 * at interrupt time. lock is mutual exclusion
@@ -667,9 +675,16 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 	lock(&r->l);
 
 	/*
-	 * if killed or condition happened, never mind
+	 * if killed or condition happened, never mind; or interrupted
+	 * while it was not asleep (intpend: swiproc)
 	 */
-	if(up->killed || f(arg)){
+	/*
+	 * A device layer may translate the first Eintr before a released Prog
+	 * returns to the VM.  Revocation is durable, so it may not sleep again
+	 * in that original call.  Exit cleanup uses bounded device-specific
+	 * waits under up->killing and is deliberately exempt here.
+	 */
+	if(up->killed || up->intpend || (up->killing == 0 && upkilled()) || f(arg)){
 		unlock(&r->l);
 	}else{
 
@@ -696,9 +711,10 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 		up->r = nil;
 	}
 
-	if(up->killed || up->swipend) {
+	if(up->killed || up->swipend || up->intpend || (up->killing == 0 && upkilled())) {
 		up->killed = 0;
 		up->swipend = 0;
+		up->intpend = 0;
 		unlock(&up->rlock);
 		splx(s);
 		error(Eintr);
@@ -805,9 +821,11 @@ wakeup(Rendez *r)
 		r->p = nil;
 		if(p->state != Wakeme)
 			panic("wakeup: state");
-		ready(p);
 	}
 	unlock(&r->l);
+	/* The awakened process can run now: hands off r before ready(). */
+	if(p)
+		ready(p);
 	splx(s);
 	return p != nil;
 }
@@ -831,12 +849,64 @@ swiproc(Proc *p, int interp)
 		if(r->p == p){
 			p->swipend = 1;
 			r->p = nil;
+			unlock(&r->l);
+			unlock(&p->rlock);
+			/* The interrupted process can run now: hands off r and p. */
 			ready(p);
+			splx(s);
+			return;
+		}
+		unlock(&r->l);
+	}else if(interp && p->iprog != nil){
+		/*
+		 * Not asleep: a released Prog's kill came while its proc ran
+		 * the kernel between sleeps, and was lost; the proc then slept
+		 * in the read or the mount it went on to, unkillable, until
+		 * that returned of its own accord (a console read: when the
+		 * next line was typed, taking it from the shell; nativefuzz).
+		 * Kept for its next sleep, as emu does. Only for a Prog,
+		 * released and not yet back in the VM: acquire clears it.
+		 */
+		p->intpend = 1;
+	}
+	unlock(&p->rlock);
+	splx(s);
+}
+
+/* Interrupt p only while it still carries this exact released Prog. */
+int
+swiprogproc(Proc *p, void *iprog)
+{
+	ulong s;
+	Rendez *r;
+
+	if(p == nil)
+		return 0;
+	s = splhi();
+	lock(&p->rlock);
+	if(p->iprog != iprog){
+		unlock(&p->rlock);
+		splx(s);
+		return 0;
+	}
+	p->intpend = 1;
+	r = p->r;
+	if(r != nil){
+		lock(&r->l);
+		if(r->p == p){
+			p->swipend = 1;
+			r->p = nil;
+			unlock(&r->l);
+			unlock(&p->rlock);
+			ready(p);
+			splx(s);
+			return 1;
 		}
 		unlock(&r->l);
 	}
 	unlock(&p->rlock);
 	splx(s);
+	return 1;
 }
 
 void
@@ -901,6 +971,32 @@ procdump(void)
 			*tmp = '\0';
 		print("%lux:%3lud:%14s pc %.8lux %s/%s qpc %.8lux pri %d%s\n",
 			p, p->pid, p->text, p->pc, s, statename[p->state], p->qpc, p->pri, tmp);
+	}
+}
+
+/*
+ * ^T^Tk: each process that is not running, and where in the kernel it
+ * stopped: its saved label's pc and the frames above it (labelstack,
+ * the architecture's walk of the frame-pointer chain from the label).
+ * For a hang, where ^T^Tp says only which processes sleep, and on
+ * what: tools/nativefuzz types it when the kernel stops answering,
+ * and it works the same at a board's serial console.
+ */
+static void
+procstacks(void)
+{
+	int i;
+	Proc *p;
+
+	for(i=0; i<conf.nproc; i++) {
+		p = &procalloc.arena[i];
+		if(p->state == Dead || p->state == Running)
+			continue;
+		print("%lud:%s %s qpc %#p r %#p", p->pid, p->text, statename[p->state], p->qpc, p->r);
+		if(p->iprog != nil)	/* the Prog it carries, released: ^T^Td's pid */
+			print(" prog %d", iprogpid(p->iprog));
+		print("\n");
+		labelstack(p);
 	}
 }
 

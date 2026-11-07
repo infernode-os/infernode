@@ -562,12 +562,12 @@ kunmount(char *old, char *new)
 	cmount.c = namec(new, Amount, 0, 0);
 	if(old != nil && old[0] != '\0') {
 		/*
-		 * This has to be namec(..., Aopen, ...) because
-		 * if arg[0] is something like /srv/cs or /fd/0,
-		 * opening it is the only way to get at the real
-		 * Chan underneath.
+		 * Aunmount opens non-directories such as /srv/cs and /fd/0 to
+		 * reach the underlying Chan, but preserves a directory's walked
+		 * Qid.  A remote server may change a directory Qid on open; the
+		 * bind recorded the walked Qid and unmount must compare that one.
 		 */
-		cmounted.c = namec(old, Aopen, OREAD, 0);
+		cmounted.c = namec(old, Aunmount, OREAD, 0);
 	}
 
 	cunmount(cmount.c, cmounted.c);
@@ -752,6 +752,25 @@ kremove(char *path)
 	return 0;
 }
 
+/*
+ * base+off for a seek, refused if it would overflow a vlong: the sum
+ * was made and then tested for < 0, which signed overflow (undefined)
+ * need not leave negative, and the compiler may drop the test
+ * (UndefinedBehaviorSanitizer, sysfuzz: 4294967296 + 2^63-1). A file's
+ * length comes from its server, which may say anything.
+ */
+static vlong
+seekadd(vlong base, vlong off)
+{
+	vlong max;
+
+	max = (vlong)(~(uvlong)0 >> 1);
+	if(off > 0 && base > max - off)
+		error(Ebadarg);
+	if(off < 0 && base < -max - 1 - off)
+		error(Ebadarg);
+	return base + off;
+}
 vlong
 kseek(int fd, vlong off, int whence)
 {
@@ -787,7 +806,12 @@ kseek(int fd, vlong off, int whence)
 		if(c->qid.type & QTDIR)
 			error(Eisdir);
 		lock(&c->l);	/* lock for read/write update */
-		off += c->offset;
+		if(waserror()){
+			unlock(&c->l);
+			nexterror();
+		}
+		off = seekadd(c->offset, off);
+		poperror();
 		if(off < 0){
 			unlock(&c->l);
 			error(Enegoff);
@@ -802,7 +826,12 @@ kseek(int fd, vlong off, int whence)
 		dir = chandirstat(c);
 		if(dir == nil)
 			error("internal error: stat error in seek");
-		off += dir->length;
+		if(waserror()){
+			free(dir);
+			nexterror();
+		}
+		off = seekadd(dir->length, off);
+		poperror();
 		free(dir);
 		if(off < 0)
 			error(Enegoff);

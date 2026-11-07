@@ -236,8 +236,28 @@ Native implementations of NIST post-quantum standards, with no external dependen
 #### Hybrid TLS 1.3 Key Exchange
 
 X25519MLKEM768 (IANA group 0x11EC, 4588 decimal) hybrid key exchange per
-draft-ietf-tls-ecdhe-mlkem. The client offers it first, with X25519, P-256
-and P-384 shares beside it for servers that do not take it.
+draft-ietf-tls-ecdhe-mlkem. The client offers it first, with an X25519 share
+beside it. P-256 and P-384 are offered in `supported_groups` without a share:
+a server that takes only one of them asks for it by HelloRetryRequest
+(RFC 8446 §4.1.4), and the client makes that share then. A share costs a
+scalar multiplication, so a handshake no longer pays for two it rarely uses.
+
+P-256 and P-384 themselves (`libsec/ecc.c`, under keyring's `p256_*` and
+`p384_*`) are constant time with respect to secret scalars: Montgomery
+arithmetic on 64-bit limbs (no libmp), complete projective formulas
+(Renes–Costello–Batina 2016, a = -3), a fixed 4-bit window read by masked
+scans, Fermat inversion. A key generation takes about 0.3 ms (P-256) and
+0.9 ms (P-384), where the libmp version took 11 and 27.
+`tests/host/ecc_test.sh` checks known answers from OpenSSL and, under
+valgrind, that no branch or address depends on a secret.
+
+secp256k1 (`libsec/secp256k1.c`, keyring's `secp256k1_*`: Ethereum keys and
+transaction signatures) is built the same way for its p and n, with the
+complete formulas for a = 0 (Algorithms 7 and 9) and the nonce inverted by
+Fermat; a key generation or signature takes about 0.3 ms, a recovery 0.65,
+where the libmp version took 11 and 23. `tests/host/secp256k1_test.sh`
+checks signatures byte for byte against a reference checked against
+OpenSSL, recovery's edges, and the same constant-time property.
 
 Until October 2026 the constant was 0x4588, the decimal codepoint read as
 hex, and the share was never sent: TLS was classical X25519 in practice.
@@ -416,7 +436,11 @@ peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike`).
 The policy is the environment of the process that started the emulator, so
 set it where every way of starting one sees it: on macOS, both launchd
 (`launchctl setenv`, which a LaunchAgent makes last) for the Dock and Finder,
-and the shell's profile for a terminal. Certificates follow the
+and the shell's profile for a terminal. A bare-metal board has no host
+environment: a file `cnsamode` on its card turns the mode on at boot
+([BAREMETAL.md](BAREMETAL.md) section 5), through a kernel switch that
+only turns on, and only before anything has authenticated, so no process
+can make its own connections weaker than the machine's policy. Certificates follow the
 signing key's strength (#304): `createsignerkey` and the other signer sites
 choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
 record the choice in the certificate's `ha` field, which verifiers re-hash

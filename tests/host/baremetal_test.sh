@@ -364,6 +364,10 @@ build_kernel() {
             # osinit asks it whether an interface that names no boot
             # protocol is a keyboard
             "/dis/lib/hid.dis=$ROOT/dis/lib/hid.dis"
+            # what a finger on a touch screen means (touchgest(2)): the
+            # touch panel's driver and mouseusb's for a USB touchscreen
+            # both load it, and may start before the card is read
+            "/dis/lib/touchgest.dis=$ROOT/dis/lib/touchgest.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
@@ -1414,7 +1418,7 @@ QEMUARGS="$2"
 # globals, the platforms run one after another in one shell, and a value
 # left over from the last machine is a kernel built from the wrong files.
 SHARED="$ROOT/os/bcm"
-SHAREDSKIP=""
+SHAREDSKIP="rng200.c"		# the BCM2837 has the BCM2835's generator: os/bcm2837/random.c
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
 PORTSKIP="ethermii.c pci.c usbxhci.c usbxhcipci.c"	# a PHY library, a bus and what is on it: this board has none
 SERIALARGS="-serial null -serial stdio"
@@ -1699,8 +1703,18 @@ check "present"                          "the root hub sees the attached device"
 # a two-element array and wrote eight words back over the caller's stack
 # frame -- and discarded the result, so none of it showed. Asserting the
 # reply is what makes the contract testable rather than assumed.
+#
+# osinit's setpower line goes out a character at a time (os/bcm/uart.c:
+# a process's console output, interrupts on), and the secondaries' boot
+# iprints -- "CLKn ctl=..." and "cpuN: up" -- can land in the middle of
+# it, a line inside a line: "setpower: devcpu3: up" then " 3 -> ... ON"
+# three lines on. Match against the boot with those lines taken out,
+# wherever they fell, so the line is whole again.
+USBOUT="$(perl -0pe 's/CLK[0-9]+ ctl=[^\n]*\n//g; s/cpu[0-9]+: up\r?\n//g' <<<"$OUT")"
+OUT_SAVED="$OUT"; OUT="$USBOUT"
 check "setpower: dev 3"                  "the USB power domain is requested by id"
 check "setpower: dev 3 .* ON"            "the firmware confirms the USB block is powered"
+OUT="$OUT_SAVED"
 refute "FIRMWARE REFUSED"                "the USB block is not left unpowered"
 
 check "USB port 1 after reset"           "SET_FEATURE(PORT_RESET) enables the port"
@@ -1746,7 +1760,11 @@ check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
 check "etherusb: ep3.0 configuration 2 offers rndis" "the driver reads the first configuration: RNDIS"
 check "etherusb: ep3.0 configuration 1 offers ecm (interfaces 0, 1)" "and the second: ECM, with its union descriptor"
 check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u, from the data interface's setting 1"
-check "etherusb: ep3.0 ecm, MAC 40:54:00:12:34:57" "ECM is chosen over RNDIS and the MAC read out of the device"
+if grep -qE 'etherusb: ep3\.0 ecm, MAC ([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}' <<<"$OUT"; then
+    pass "ECM is chosen over RNDIS and a valid MAC is read out of the device"
+else
+    fail "ECM was not chosen or its device supplied no valid MAC"
+fi
 refute "SET_INTERFACE"                         "the data interface accepts setting 1"
 check "etherusb: ep3.0 ready"                  "the device is in the configuration asked for"
 
@@ -1848,6 +1866,9 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /net/iproute' \
         'cat /net/tcp/stats' \
         'iplocktest' \
+        "dial 'tcp!nosuchhost!9' echo DIALBAD-connected &" \
+        "dial 'tcp!0.0.0.0!9' echo DIALZERO-connected &" \
+        "dial 'tcp!127.0.0.1!9' echo DIALLOOP-connected &" \
         'niltest' \
         'cd /dis; pwd; cd /' \
         'date' \
@@ -1872,6 +1893,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
         'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis' \
+        'echo cnsamode on > /dev/sysctl; echo CNSALATE-$status' \
+        'echo console > /dev/sysctl; echo CONSOLEARGS-$status' \
         'ls /dev/camera' \
         'cat /dev/camera/modes' \
         'camtest')"
@@ -1965,6 +1988,23 @@ if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SH
 else
     fail "authenticated 9P mount failed -- $(grep -a -E 'AUTHMOUNT|mount:|listen:|auth' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
 fi
+# CNSA strict mode is the machine's, fixed before anything authenticates
+# (os/port/devcons.c): after the ML-KEM-768 mount above, turning it on
+# is refused, since the handshake's answer is already given. virt turns
+# it on before its mount, and authenticates in it.
+if grep -q 'too late, an authentication has already run without it' <<<"$SHOUT" && grep -q '^CNSALATE-..*' <<<"$SHOUT"; then
+    pass "cnsamode is refused once an authentication has run without it"
+else
+    fail "cnsamode after an authentication -- $(grep -a -E 'CNSALATE|cnsamode' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# sysctl's console verb takes on or off: lookupcmd counts the verb, and
+# with a count of 1 "console off" was refused and a bare "console" read
+# past its arguments in the kernel (upstream's, from 2006)
+if grep -q 'wrong #args in control message "console"' <<<"$SHOUT" && grep -q '^CONSOLEARGS-..*' <<<"$SHOUT"; then
+    pass "sysctl: console with no on or off is refused"
+else
+    fail "sysctl: console with no argument -- $(grep -a -E 'CONSOLEARGS|console' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
 
 # The interface lock after an unanswerable IPv6 datagram (#721).
 # os/init/iplocktest.b: a loopback interface of its own, ::1, one UDP
@@ -1977,6 +2017,24 @@ if grep -q "iplocktest: PASS" <<<"$SHOUT"; then
     pass "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)"
 else
     fail "os/ip: interface lock leaked by the ICMPv6 unreachable reply -- $(grep -a 'iplocktest:' <<<"$SHOUT" | tail -1)"
+fi
+
+# A connect to something that is not an IP address fails at once.
+# parseip reads a name it cannot ("localhost", with no connection
+# server) as 0.0.0.0, and TCP sent its SYN there and sat in Syn_sent
+# for ever: an old sdrfs's "source localhost" hung on a Pi 4 that way.
+# Dialled in the background, so a hang is a missing line, not a wedged
+# shell. A closed port on loopback is refused, as it always was.
+if grep -a -q "cannot dial tcp!nosuchhost!9.*invalid IP address" <<<"$SHOUT" &&
+   grep -a -q "cannot dial tcp!0.0.0.0!9.*invalid IP address" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a name or to 0.0.0.0 is refused as an invalid IP address, not sent to 0.0.0.0"
+else
+    fail "os/ip: connect to a non-address -- $(grep -a -E 'DIAL|cannot dial tcp!(nosuchhost|0\.0\.0\.0)' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+if grep -a -q "cannot dial tcp!127.0.0.1!9.*connection refused" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a closed loopback port is refused"
+else
+    fail "os/ip: loopback connect to a closed port -- $(grep -a -E 'DIALLOOP|cannot dial tcp!127' <<<"$SHOUT" | head -1)"
 fi
 
 # A nil dereference in JIT-compiled code is the program's exception.
@@ -2006,9 +2064,14 @@ fi
 # refusals, one "camtest:" line each.
 # Typed after the authenticated mount, so ls answers while the shell is
 # still printing prompts for the lines typed ahead of it: its first
-# name came back as "; /dev/camera/ctl". The prompts are taken off.
-CAMLS="$(sed 's/^\(; \)*//' <<<"$SHOUT")"
-if grep -qx '/dev/camera/frame' <<<"$CAMLS" && grep -qx '/dev/camera/ctl' <<<"$CAMLS"; then
+# name came back as "; /dev/camera/ctl". And the harness's drain line,
+# typed as ls prints, is echoed into its output: one run had
+# "; e/dev/camera/ctl", then "cho dRaInEd" after the listing (#1050's
+# bcm2837 job). So a name is looked for anywhere in a line, not as the
+# whole line; camtest's lines, which name these files when they fail,
+# are left out, and camtest is checked on its own below.
+CAMLS="$(grep -v '^\(; \)*camtest:' <<<"$SHOUT")"
+if grep -q '\(^\|[^/]\)/dev/camera/frame' <<<"$CAMLS" && grep -q '\(^\|[^/]\)/dev/camera/ctl' <<<"$CAMLS"; then
     pass "#V is bound after /dev: /dev/camera/ctl and frame"
 else
     fail "/dev/camera -- $(reply_to "$SHOUT" 'ls /dev/camera' | head -3 | tr '\n' ' ')"
@@ -4533,10 +4596,10 @@ printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
-check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
+check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel; its frames reach touchgest (a held finger is button 3)"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
-check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded"
+check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded; a multi-touch digitizer's fingers, its frames (hybrid too) and device mode, through touchgest; the tablet no touch screen"
 OUT="$OUT_SAVED"
 
 #
@@ -5045,6 +5108,11 @@ vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv
 # the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
 # and hundreds of one-byte descending TCP segments (head insertion).
 if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
+    if grep -q '^ARP-PADDING-PASS$' <<<"$NETSEC"; then
+        pass "virt: ARP replies do not disclose kernel bytes in Ethernet padding"
+    else
+        fail "virt: ARP reply padding was not cleared -- $NETSEC"
+    fi
     if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
         pass "virt: valid fragmented ICMP is still reassembled"
     else
@@ -5065,8 +5133,8 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
     fi
-    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC"; then
-        pass "virt: malformed UDP/TCP header lengths are rejected without panic"
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC" && grep -q '^TRANSPORT-HEADER-PASS$' <<<"$NETSEC"; then
+        pass "virt: incomplete and malformed UDP/TCP headers are rejected without panic"
     else
         fail "virt: transport header length checks did not pass -- $NETSEC"
     fi
@@ -5074,6 +5142,16 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
         pass "virt: a negative IP device attach is rejected without corruption"
     else
         fail "virt: negative IP device attach check did not pass -- $NETSEC"
+    fi
+    if grep -q '^TCP-LIMBO-REAP-PASS$' <<<"$NETSEC"; then
+        pass "virt: a half-open TCP flood is fully reaped"
+    else
+        fail "virt: TCP half-open entries did not age out -- $NETSEC"
+    fi
+    if grep -q '^TCP-WINDOW-SCALE-PASS$' <<<"$NETSEC"; then
+        pass "virt: TCP applies the peer's window scale to its send window"
+    else
+        fail "virt: TCP window-scale directions are reversed -- $NETSEC"
     fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"
@@ -5198,8 +5276,13 @@ try:
     end = time.time() + 60
     while time.time() < end and b"camtest: PASS" not in buf and b"camtest: FAILED" not in buf:
         time.sleep(0.2)
+    # CNSA strict mode on before anything authenticates, as osinit does
+    # from the card's cnsamode file: the mount below is then ML-KEM-1024
+    # both ways, on kernel stacks (the bcm2837 boot keeps ML-KEM-768)
+    typed("echo cnsamode off > /dev/sysctl; echo CNSAOFF-$status")
+    typed("echo cnsamode on > /dev/sysctl; echo CNSAON-$status")
     typed("listen 'tcp!*!17030' export / &")
-    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 4)
+    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 6)
     typed("cat /dev/sdctl")
     typed("echo VIRT-DATE `{date}")
 
@@ -5261,6 +5344,16 @@ vcheck "init finds the kernel link driver"         "init: ether0 is a kernel lin
 # an authenticated 9P mount, both ends on this kernel (#725; the bcm2837
 # check tells the story)
 vcheck "os/ip + keyring: an authenticated 9P mount works on the kernel (#725)" "/n/remote/dis/sh.dis"
+if tr -d '\r' <<<"$OUT" | grep -qx 'CNSAON-'; then
+    pass "cnsamode on is taken before anything has authenticated; the mount above ran in it (ML-KEM-1024)"
+else
+    fail "cnsamode on -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAON|cnsamode' | head -2 | tr '\n' ' ')"
+fi
+if tr -d '\r' <<<"$OUT" | grep -q 'cnsamode: only on' && tr -d '\r' <<<"$OUT" | grep -qx 'CNSAOFF-..*'; then
+    pass "cnsamode cannot be turned off"
+else
+    fail "cnsamode off was not refused -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAOFF|cnsamode' | head -2 | tr '\n' ' ')"
+fi
 # os/init/iplocktest.b, typed at the shell: the interface lock is balanced
 # after an ICMPv6 unreachable reply (#721; see the bcm2837 check for the story)
 vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)" "iplocktest: PASS"
@@ -6331,6 +6424,49 @@ else
     fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
 fi
 
+# No entropy source: the machine fails closed (os/port/random.c).
+#
+# The same kernel without virtio-rng, on a cortex-a53, which has no
+# RNDR: no generator at all. It must still boot to its shell (nrand,
+# which picks port numbers, never waits), make no key material -- a read
+# of #c/notquiterandom, what libsec's key generators are, waits and says
+# why -- and leave #c/random's readers waiting too. Then the same with
+# "insecurerandom" on the command line, when the counter is handed out
+# and labelled. Every board without a generator used to hand it out
+# silently but for one line. A marker is printed as A^B so the typed
+# line, which the console echoes, cannot be taken for the output.
+NORNGARGS="${VIRTARGS/ -device virtio-rng-device/}"
+savedargs="$QEMUARGS"
+QEMUARGS="$NORNGARGS"
+NROUT="$(SESSION_DRAIN=20 shell_session "$BUILD/$PLAT-kernel.img" \
+    '{read 32 < /dev/notquiterandom > /dev/null; echo KEY^BYTES-MADE} &' \
+    '{read 16 < /dev/random > /dev/null; echo POOL^BYTES-MADE} &' \
+    'sleep 9' \
+    'echo NORNG^SHELL-ALIVE')"
+QEMUARGS="$NORNGARGS -append insecurerandom"
+INSOUT="$(SESSION_DRAIN=20 shell_session "$BUILD/$PLAT-kernel.img" \
+    'read 32 < /dev/notquiterandom > /dev/null; echo WEAKKEY^BYTES-MADE' \
+    'read 16 < /dev/random > /dev/null; echo WEAKPOOL^BYTES-MADE')"
+QEMUARGS="$savedargs"
+printf '%s\n' "$NROUT" > "$BUILD/$PLAT-norng.txt"
+printf '%s\n' "$INSOUT" > "$BUILD/$PLAT-insecure.txt"
+nrcheck() { if grep -qaF -- "$2" <<<"$NROUT"; then pass "virt: no rng: $1"; else fail "virt: no rng: $1 -- no '$2' (see $BUILD/$PLAT-norng.txt)"; fi; }
+nrrefute() { if grep -qaF -- "$2" <<<"$NROUT"; then fail "virt: no rng: $1 -- '$2' (see $BUILD/$PLAT-norng.txt)"; else pass "virt: no rng: $1"; fi; }
+nrcheck "the kernel says there is no entropy source" "rng:  NO ENTROPY SOURCE"
+nrcheck "it still reaches its shell" "NORNGSHELL-ALIVE"
+nrcheck "key material waits, and says why" "there is NO ENTROPY SOURCE on this machine; 32 bytes of key material have waited"
+nrcheck "a reader of #c/random waits, and says why" "a reader of #c/random has waited"
+nrrefute "no key material is made" "KEYBYTES-MADE"
+nrrefute "nothing is read from #c/random" "POOLBYTES-MADE"
+nrrefute "no counter is handed out" "PREDICTABLE"
+nrrefute "nothing panics" "panic:"
+if grep -qaF "Keys made on it are PREDICTABLE" <<<"$INSOUT" && grep -qaF "WEAKKEYBYTES-MADE" <<<"$INSOUT" \
+   && grep -qaF "WEAKPOOLBYTES-MADE" <<<"$INSOUT"; then
+    pass "virt: no rng: with insecurerandom, both files answer with the counter, and the console says what it is"
+else
+    fail "virt: no rng: with insecurerandom -- $(grep -a 'random\|BYTES-MADE' <<<"$INSOUT" | head -4 | tr '\n' ' ') (see $BUILD/$PLAT-insecure.txt)"
+fi
+
 echo ""
 }
 
@@ -6358,7 +6494,13 @@ fi
 # board's four USB-A ports, and NO random-number generator -- the kernel
 # finds that out for itself and says so (os/bcm2711/random.c).
 #
-PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
+# insecurerandom: QEMU's raspi4b has no RNG200, so this machine has no
+# entropy source, and without the word the kernel makes no key on it
+# (os/port/random.c) -- which is right on a board and would stop the
+# desktop here. The word lets it hand out a labelled counter instead;
+# the check below sees the label. It reaches the kernel as the
+# firmware command line, as cmdline.txt does on a board.
+PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0 -append insecurerandom"
 
 run_bcm2711() {
 PLAT=bcm2711
@@ -6439,6 +6581,7 @@ else
     fail "bcm2711: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
 fi
 pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS"
+pcheck "with insecurerandom, the counter that stands in for it says what it is" "Keys made on it are PREDICTABLE"
 # With no card in it, the Arasan is the radio's and the radio's driver
 # probes it -- which on this board means two instances of one SDHCI
 # driver alive at once (os/bcm2711/emmc2.c). QEMU models no radio, so

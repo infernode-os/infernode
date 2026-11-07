@@ -19,6 +19,7 @@ i2c i2c
 indir indir
 intro 0intro
 ip ip
+location location
 mnt mnt
 pipe pipe
 pointer pointer

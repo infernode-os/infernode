@@ -541,11 +541,22 @@ cnewc(Type *t, void (*mover)(OPARGS), int len)
 
 	h = heap(&Tchannel);
 	c = H2D(Channel*, h);
+	c->buf = H;
 	c->send = malloc(sizeof(Progq));
 	c->recv = malloc(sizeof(Progq));
 	if(c->send == nil || c->recv == nil){
+		/*
+		 * The channel, unreferenced, is freed now (freechan): its
+		 * queues nil, not the freed ones, and its buffer H, not
+		 * nil. Left as they were, the collector freed it later
+		 * through freed memory (killcomm; a malloc refused,
+		 * os/port/chaos.c).
+		 */
 		free(c->send);
 		free(c->recv);
+		c->send = c->recv = nil;
+		c->mover = nil;
+		destroy(c);
 		error(exNomem);
 	}
 	c->send->prog = c->recv->prog = nil;
@@ -1114,23 +1125,39 @@ cqsize(Progq *q)
 	return n;
 }
 */
-void
-cqadd(Progq **q, Prog *p)
+/*
+ * p queued on q, or 0 if there is no memory for it, q as it was. A
+ * caller that has queued p elsewhere, or taken it off the run queue,
+ * must undo that before raising the error: alt's queuing on its
+ * channels, and isend and irecv, raised it with p left on the first
+ * channels (to be woken freed) or off the run queue (its exception
+ * handled with no Prog current). Malloc refused, os/port/chaos.c.
+ */
+int
+cqaddok(Progq **q, Prog *p)
 {
 	Progq *n;
 
 	if((*q)->prog == nil){
 		(*q)->prog = p;
-		return;
+		return 1;
 	}
 	n = (Progq*)malloc(sizeof(Progq));
 	if(n == nil)
-		error(exNomem);
+		return 0;
 	n->prog = p;
 	n->next = nil;
 	for( ; *q != nil; q = &(*q)->next)
 		;
 	*q = n;
+	return 1;
+}
+
+void
+cqadd(Progq **q, Prog *p)
+{
+	if(!cqaddok(q, p))
+		error(exNomem);
 }
 void
 cqdel(Progq **q)
@@ -1177,12 +1204,13 @@ OP(isend)
 	if((p = c->recv->prog) == nil) {
 		if(c->buf != H && cputb(c, R.s))
 			return;
+		/* queued first: refused, nothing has changed (cqaddok) */
+		cqadd(&c->send, currun());
 		p = delrun(Psend);
 		p->ptr = R.s;
 		p->chan = c;	/* for killprog */
-		R.IC = 1;	
+		R.IC = 1;
 		R.t = 1;
-		cqadd(&c->send, p);
 		return;
 	}
 
@@ -1212,12 +1240,13 @@ OP(irecv)
 	if((p = c->send->prog) == nil) {
 		if(c->buf != H && cgetb(c, R.d))
 			return;
+		/* queued first: refused, nothing has changed (cqaddok) */
+		cqadd(&c->recv, currun());
 		p = delrun(Precv);
 		p->ptr = R.d;
 		p->chan = c;	/* for killprog */
 		R.IC = 1;
 		R.t = 1;
-		cqadd(&c->recv, p);
 		return;
 	}
 
@@ -1816,6 +1845,43 @@ destroystack(REG *reg)
 
 	ex = reg->EX;
 	reg->EX = nil;
+
+	/*
+	 * A frame not yet called on top: a Prog's time slice can end
+	 * between a frame instruction and its call, and a Prog killed while
+	 * ready is destroyed as it stood (killprog). Freed first, as
+	 * handler() frees one, so what is left is called frames only. When
+	 * the frame began an extension of its own, R.FP is still in the one
+	 * before: the walk below took the new extension's type -- the
+	 * uncalled frame's -- for the first frame of every extension it
+	 * went down through, and freed as pointers what those frames held
+	 * as anything else (a callee frame's address, "alloc:D2B ... in
+	 * main", macOS CI's web_browser_test; an integer: a SEGV).
+	 * tests/kill_uncalled_test.b.
+	 */
+	if(ex != nil && reg->FP != nil) {
+		sx = (Stkext*)ex;
+		/* FP may belong to the preceding separately allocated extension;
+		 * compare addresses as integers, not unrelated C pointers. */
+		if((uintptr)reg->FP < (uintptr)ex || (uintptr)reg->FP >= (uintptr)reg->TS) {
+			t = sx->reg.TR;		/* the extension's only frame */
+			if(t->np)
+				freeptrs(sx->reg.tos.fr, t);
+			ex = sx->reg.EX;
+			free(sx);
+		} else {
+			f = (Frame*)reg->FP;
+			t = f->t;
+			if(t == nil)
+				t = sx->reg.TR;
+			if(reg->FP + t->size < reg->SP) {
+				f = (Frame*)(reg->FP + t->size);	/* frame and mframe set its type */
+				if(f->t != nil && f->t->np)
+					freeptrs(f, f->t);
+			}
+		}
+	}
+
 	while(ex != nil) {
 		sx = (Stkext*)ex;
 		fp = sx->reg.tos.fr;

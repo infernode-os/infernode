@@ -558,6 +558,26 @@ exportproc(void *a)
 		pexit("mount shut down", 0);
 }
 
+
+/*
+ * exq.tail again, after requests were taken out of exq: called with exq.l
+ * held. exshutdown and exflushed unlinked them and left tail on one they
+ * had freed, when it was the last; exportproc's next request was then put
+ * after it (exq.tail->next = q), into freed memory. sysfuzz, under
+ * AddressSanitizer: heap-use-after-free, Progs exporting their name
+ * spaces and killed; without it, the allocator's free list corrupted
+ * (a nil fault in pooldel).
+ */
+static void
+exqtail(void)
+{
+	Exq *q;
+
+	exq.tail = nil;
+	for(q = exq.head; q != nil; q = q->next)
+		exq.tail = q;
+}
+
 static int
 exflushed(Export *fs, Exq *fq)
 {
@@ -569,6 +589,7 @@ exflushed(Export *fs, Exq *fq)
 	for(last = &exq.head; (q = *last) != nil; last = &q->next)
 		if(q->export == fs && q->in.tag == fq->in.oldtag){
 			*last = q->next;
+			exqtail();
 			unlock(&exq.l);
 			/* not yet started: discard, and Rflush */
 			exfreeq(q);
@@ -638,6 +659,7 @@ exshutdown(Export *fs)
 			exfreeq(q);
 		}else
 			last = &q->next;
+	exqtail();
 	unlock(&exq.l);
 
 	/* tell slaves to abandon work in progress */
@@ -703,6 +725,9 @@ exslave(void *a)
 	Export *fs;
 	Exq *q, *t, *fq, **last;
 	char *err;
+	Pgrp *opg;
+	Egrp *oeg;
+	Fgrp *ofg;
 
 	USED(a);
 
@@ -770,10 +795,6 @@ exslave(void *a)
 		 * to be adopted.
 		 */
 		{
-			Pgrp *opg;
-			Egrp *oeg;
-			Fgrp *ofg;
-
 			incref(&q->export->pgrp->r);
 			incref(&q->export->egrp->r);
 			incref(&q->export->fgrp->r);
@@ -786,9 +807,14 @@ exslave(void *a)
 			up->env->egrp = q->export->egrp;
 			up->env->fgrp = q->export->fgrp;
 
-			closepgrp(opg);
-			closeegrp(oeg);
-			closefgrp(ofg);
+			/*
+			 * What it held before is let go once this request has
+			 * been answered (the end of the loop), not here: a close
+			 * waits on whatever the old name space mounted, and one
+			 * on a server that never answers held the slave, and
+			 * the request it had just taken -- a client's walk, a
+			 * shell's open -- for good (nativefuzz).
+			 */
 		}
 		up->env->uid = q->export->uid;
 		up->env->gid = q->export->gid;
@@ -861,6 +887,10 @@ exslave(void *a)
 
 		notkilled();
 		exfreeq(q);
+
+		closepgrp(opg);
+		closeegrp(oeg);
+		closefgrp(ofg);
 	}
 }
 

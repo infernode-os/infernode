@@ -284,6 +284,14 @@ pres_pct := 45;
 # the zone whose body is visible (0 = conv, 1 = pres, 2 = ctx); the
 # other two zones collapse to a tappable title bar. Title bar geometry
 # is recorded on every layout pass so mouseproc can route taps.
+#
+# touch is $infmobile itself: finger-sized header, tiles and tab strips,
+# and the keyboard on the screen.  mobile is the accordion layout, chosen
+# by chooselayout() from the screen's shape: always on a phone; on a
+# tablet ($inftablet, boot-mobile.sh --tablet: an iPad) only while it is
+# held upright, the desktop's three columns while it is on its side.
+touch := 0;
+tablet := 0;
 mobile := 0;
 expanded_zone := 0;
 mobile_conv_title_y := 0;
@@ -336,6 +344,17 @@ M_QUIT:   con 1 << 6;
 cmouse: chan of ref Pointer;
 zpointer: Pointer;
 
+# The keyboard on the screen (wm/osk -s): a client of a window server
+# of its own, given a strip along the bottom of the screen when it asks
+# to be docked; the zones are laid out above it.  Its touches are its
+# own and move no focus: what it types arrives as any keyboard's does
+# (kbdproc), for whichever zone or app has the keyboard.
+dockh := 0;			# the height it asked for; 0: no strip
+dockr: Rect;			# the strip, while there is one
+dockscr: ref Screen;
+dockclient: ref Client;
+dockgrab := 0;			# a press began in the strip
+
 # Screen/sub-image globals — must be module-level to prevent GC.
 # When a Screen is GC'd the draw kernel refills its background area with the
 # parent screen's fill color (White from wmclient putimage).  The separator
@@ -386,8 +405,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# split-zones + pager refactor lands.
 	mobenv := readfile("/env/infmobile");
 	if(mobenv != nil && strip(mobenv) == "1") {
-		mobile = 1;
-		sys->fprint(stderr, "lucifer: mobile=1 (accordion layout)\n");
+		touch = 1;
+		tabenv := readfile("/env/inftablet");
+		tablet = tabenv != nil && strip(tabenv) == "1";
+		sys->fprint(stderr, "lucifer: touch=1 tablet=%d\n", tablet);
 	}
 
 	buildstamp := readfile("/lib/lucifer/buildstamp");
@@ -550,6 +571,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	# Layout zones and allocate sub-images + wmsrv
 	r := mainwin.r;
+	chooselayout(r);
+	if(!mobile)	# chooselayout says only when the accordion is chosen
+		sys->fprint(stderr, "lucifer: layout columns (%dx%d)\n", r.dx(), r.dy());
 	(convr, presr, ctxr) := zonerects(r);
 	preszone = presr;
 
@@ -671,6 +695,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn eventproc();
 	spawn mouseproc();
 	spawn kbdproc();
+	startosk();
 	if(actid >= 0)
 		spawn nslistener();
 	spawn globallistener();
@@ -683,6 +708,33 @@ init(ctxt: ref Draw->Context, args: list of string)
 }
 
 # --- Zone layout ---
+
+# The task bar's height: taller on a touch screen, for the tiles' sake.
+headerheight(): int
+{
+	if(touch)
+		return MOBILE_HEADERH;
+	return 40;
+}
+
+# Choose the layout for a screen of r's shape (see touch above).  When it
+# changes, what the old one kept is let go: the accordion's title bars,
+# and the geometry that lets a zone toggle skip the full layout.
+chooselayout(r: Rect)
+{
+	m := touch && !(tablet && r.dx() > r.dy());
+	if(m == mobile)
+		return;
+	mobile = m;
+	titleconv_img = nil;
+	titlepres_img = nil;
+	titlectx_img = nil;
+	lastlaidout = Rect((0, 0), (0, 0));
+	how := "columns";
+	if(mobile)
+		how = "accordion";
+	sys->fprint(stderr, "lucifer: layout %s (%dx%d)\n", how, r.dx(), r.dy());
+}
 
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
@@ -759,7 +811,7 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 	}
 
 	# Desktop: classic three-column.
-	headerh := 40;
+	headerh := headerheight();
 	zonety := r.min.y + headerh + 1;
 	w := r.dx();
 	convw := w * conv_pct / 100;
@@ -884,9 +936,7 @@ drawchrome(r: Rect)
 	# Only clear and redraw the header area — never clear zone areas.
 	# The full-window clear would blank all zone sub-images and leave them
 	# black until the next user interaction triggers a zone redraw.
-	headerh := 40;
-	if(mobile)
-		headerh = MOBILE_HEADERH;
+	headerh := headerheight();
 	headerr := Rect((r.min.x, r.min.y), (r.max.x, r.min.y + headerh));
 	mainwin.draw(headerr, headercol, nil, (0, 0));
 
@@ -901,7 +951,7 @@ drawchrome(r: Rect)
 			# Mobile: draw an enlarged copy (built once, cached in
 			# logobig). Desktop draws the logo at native size.
 			limg := logoimg;
-			if(mobile) {
+			if(touch) {
 				if(logobig == nil)
 					logobig = biglogo(logoimg);
 				limg = logobig;
@@ -921,7 +971,7 @@ drawchrome(r: Rect)
 		tileh := 28;
 		tilepad := 8;	# horizontal text padding per side
 		tilegap := 4;	# gap between tiles
-		if(mobile) {
+		if(touch) {
 			# Fill most of the header so the tile is a ~44pt tap target
 			# (MOBILE_HEADERH is 132 = 44pt; leave a thin margin).
 			tileh = MOBILE_HEADERH - 12;
@@ -946,7 +996,7 @@ drawchrome(r: Rect)
 					tlabel += " · " + t.status;
 				tw := mainfont.width(tlabel) + tilepad * 2;
 				mintw := 60;
-				if(mobile)
+				if(touch)
 					mintw = 140;	# thumb-target minimum
 				if(tw < mintw)
 					tw = mintw;
@@ -1128,8 +1178,24 @@ drawmobiletitle(target: ref Image, label: string, expanded: int)
 # SDL slides it above the keyboard.
 reqkbd(on: int)
 {
-	if(!mobile)
+	if(!touch)
 		return;
+	if(softkbd != nil){
+		if(on){
+			# a shell's or an editor's words are not to be put right
+			prose := 1;
+			if(curtaskpres != nil)
+				case curtaskpres.activeappid {
+				"shell" or "sh" or "acme" or "xenith" =>
+					prose = 0;
+				}
+			softkbd->mode(prose);
+			softkbd->show(Softkbd->KEEPTOP);
+		}else
+			softkbd->show(Softkbd->HIDE);
+		softkbd->clear_rect();
+		return;
+	}
 	fd := sys->open("/dev/consctl", Sys->OWRITE);
 	if(fd == nil)
 		return;
@@ -1206,6 +1272,137 @@ setexpandedzone(z: int)
 	# until mainloop drains; the wm pointer channel buffers
 	# upstream so taps aren't lost.
 	cmouse <-= ref p;
+}
+
+# --- The keyboard on the screen ---
+
+Oskcmd: module
+{
+	init:	fn(ctxt: ref Draw->Context, args: list of string);
+};
+
+# startosk: wm/osk as the system's keyboard, if it is there and not
+# turned off ($osk is "off"), in a strip of its own along the bottom.
+# Its files are mounted at /mnt/osk here, before any app is launched,
+# so every app's name space has them: softkbd(2) asks it to show
+# itself for a text field.  It shows itself only with no keyboard of
+# the machine's attached, and on a screen whose GUI does not say when a
+# text field has the keyboard (a desktop's), once the screen is touched.
+startosk()
+{
+	o := readfile("/env/osk");
+	if(o != nil && strip(o) == "off")
+		return;
+	(ok, nil) := sys->stat("/dis/wm/osk.dis");
+	if(ok < 0)
+		return;
+	dockwm := load Wmsrv Wmsrv->PATH;
+	if(dockwm == nil)
+		return;
+	(dockchan, djoin, dreq) := dockwm->init("wmctl.osk");
+	if(dockchan == nil)
+		return;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return;
+	spawn dockloop(djoin, dreq);
+	spawn runosk(dockchan, p[1]);
+	spawn mountosk(p[0]);
+}
+
+runosk(wm: chan of (string, chan of (string, ref Draw->Wmcontext)), fd: ref Sys->FD)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("/chan/wmctl.osk", "/chan/wmctl", Sys->MREPL) < 0){
+		sys->fprint(stderr, "lucifer: osk: bind: %r\n");
+		return;
+	}
+	osk := load Oskcmd "/dis/wm/osk.dis";
+	if(osk == nil){
+		sys->fprint(stderr, "lucifer: osk: %r\n");
+		return;
+	}
+	args := "osk" :: "-s" :: "-F" :: string fd.fd :: nil;
+	if(touch)
+		args = "osk" :: "-s" :: "-m" :: "-F" :: string fd.fd :: nil;
+	osk->init(ref Draw->Context(display, nil, wm), args);
+}
+
+mountosk(fd: ref Sys->FD)
+{
+	if(sys->mount(fd, nil, "/mnt/osk", Sys->MREPL, nil) < 0)
+		sys->fprint(stderr, "lucifer: osk: mount /mnt/osk: %r\n");
+}
+
+# the keyboard's window server: one client, its window the strip
+dockloop(join: chan of (ref Client, chan of string), req: chan of (ref Client, array of byte, Sys->Rwrite))
+{
+	for(;;) alt {
+	(c, rc) := <-join =>
+		dockclient = c;
+		rc <-= nil;
+	(c, data, rc) := <-req =>
+		if(rc == nil){
+			# gone
+			if(c == dockclient)
+				dockclient = nil;
+			c.remove();
+			c.wins = nil;
+			if(c.stop != nil)
+				c.stop <-= 1;
+			setdock(0);
+			continue;
+		}
+		s := string data;
+		n := len data;
+		err: string;
+		(nf, f) := sys->tokenize(s, " ");
+		if(nf > 0)
+		case hd f {
+		"!reshape" or "!onscreen" =>
+			ds := dockscr;
+			if(dockh <= 0 || ds == nil){
+				err = "not docked";
+				break;
+			}
+			img := ds.newwindow(ds.image.r, Draw->Refbackup, Draw->Nofill);
+			if(img == nil){
+				err = "window creation failed";
+				break;
+			}
+			c.setimage("app", img);
+			c.top();
+		"dock" =>
+			if(nf != 3 || hd tl f != "bottom"){
+				err = "usage: dock bottom height";
+				break;
+			}
+			setdock(int hd tl tl f);
+		"delete" =>
+			c.setimage("app", nil);
+		}
+		if(err != nil)
+			n = -1;
+		alt { rc <-= (n, err) => ; * => ; }
+	}
+}
+
+# the strip's height: the zones laid out again above it
+setdock(h: int)
+{
+	if(h < 0)
+		h = 0;
+	if(h == dockh)
+		return;
+	dockh = h;
+	p := zpointer;
+	p.buttons = M_RESIZE;
+	spawn kickresize(ref p);
+}
+
+kickresize(p: ref Pointer)
+{
+	cmouse <-= p;
 }
 
 # --- Per-task presentation zone management ---
@@ -1603,7 +1800,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					if(c.image("app") == nil) {
 						ptabh := 0;
 						if(mainfont != nil) ptabh = mainfont.height + 13;
-						if(mobile && ptabh < MOBILE_TAPMIN) ptabh = MOBILE_TAPMIN;
+						if(touch && ptabh < MOBILE_TAPMIN) ptabh = MOBILE_TAPMIN;
 						pr := Rect((curzone.min.x, curzone.min.y + ptabh), curzone.max);
 						pimg := scr.newwindow(pr, Draw->Refbackup, Draw->Nofill);
 						if(pimg == nil) {
@@ -1797,7 +1994,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		# Resize ALL tasks' app windows (content area)
 		tabh3 := 0;
 		if(mainfont != nil) tabh3 = mainfont.height + 13;
-		if(mobile && tabh3 < MOBILE_TAPMIN) tabh3 = MOBILE_TAPMIN;
+		if(touch && tabh3 < MOBILE_TAPMIN) tabh3 = MOBILE_TAPMIN;
 		appr2 := Rect((curzone.min.x, curzone.min.y + tabh3), curzone.max);
 		for(rtpi := 0; rtpi < ntaskpres; rtpi++) {
 			rtp := taskpres[rtpi];
@@ -1846,7 +2043,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		# content area routes to active app or lucipres.
 		tabh_m := 0;
 		if(mainfont != nil) tabh_m = mainfont.height + 13;
-		if(mobile && tabh_m < MOBILE_TAPMIN) tabh_m = MOBILE_TAPMIN;
+		if(touch && tabh_m < MOBILE_TAPMIN) tabh_m = MOBILE_TAPMIN;
 		if(p.xy.y < curzone.min.y + tabh_m) {
 			# Tab strip: always deliver to lucipres
 			if(lucipresclient != nil)
@@ -2066,6 +2263,12 @@ topexpandedzone()
 handleresize()
 {
 	r := mainwin.r;
+	chooselayout(r);
+	h := dockh;
+	if(h > r.dy() * 6 / 10)
+		h = r.dy() * 6 / 10;
+	if(h > 0)
+		r.max.y -= h;
 
 	# Mobile accordion toggle: mainwin geometry unchanged, only which
 	# zone is expanded. pressubimg's rect is invariant (presmaxr in
@@ -2118,12 +2321,38 @@ handleresize()
 
 	# Recreate all zone sub-images on a fresh mainscr.
 	# Must happen before drawchrome so separators are drawn on top of the fill.
-	mainscr = Screen.allocate(mainwin, bgcol, 0);
+	#
+	# The zones are laid out again on the screen they had, not a fresh
+	# one (first seen on a phone; the desktop's columns had it as soon
+	# as a tablet docked the keyboard on the screen under them).  The
+	# old windows (the presentation zone's, held by its apps until
+	# preswmloop moves them) are freed after the new ones are drawn; freed from a screen of their own, each painted
+	# its rectangle in that screen's fill over the new zones -- the
+	# Chat title and the chat gone blank each time the keyboard on the
+	# screen showed or hid.  On one screen, a window freed shows what
+	# is beneath it, and the new windows are above.  A screen turned (a
+	# phone's or tablet's rotation, an iPad's Split View) replaces the
+	# window itself, and the old screen is clipped to the old window's
+	# size: the zones go on a screen of the new one.
+	if(mainscr == nil || mainscr.image != mainwin)
+		mainscr = Screen.allocate(mainwin, bgcol, 0);
 	if(mainscr == nil)
 		return;
 	convimg = mainscr.newwindow(convr, Draw->Refbackup, Draw->Nofill);
 	ctximg  = mainscr.newwindow(ctxr,  Draw->Refbackup, Draw->Nofill);
 	pressubimg = mainscr.newwindow(presr, Draw->Refbackup, Draw->Nofill);
+	dockscr = nil;
+	if(h > 0){
+		dockr = Rect((mainwin.r.min.x, r.max.y), mainwin.r.max);
+		dockimg := mainscr.newwindow(dockr, Draw->Refbackup, Draw->Nofill);
+		if(dockimg != nil){
+			dockimg.draw(dockr, bgcol, nil, (0, 0));
+			dockscr = Screen.allocate(dockimg, bgcol, 0);
+		}
+		# the keyboard asks again for its window, now there is a strip
+		if(dockclient != nil && dockscr != nil)
+			spawn sendctlmsg(dockclient.ctl, sys->sprint("!reshape . -1 %s", r2s(dockr)));
+	}
 	if(convimg == nil || ctximg == nil || pressubimg == nil) {
 		sys->fprint(sys->fildes(2), "lucifer: handleresize: newwindow failed (mobile=%d expanded=%d) convr=%s presr=%s ctxr=%s\n",
 			mobile, expanded_zone, r2s(convr), r2s(presr), r2s(ctxr));
@@ -2676,16 +2905,22 @@ mouseproc()
 	prevb := 0;
 	for(;;) {
 		p := <-win.ctxt.ptr;
+		# the keyboard on the screen's: a press in its strip and the
+		# rest of that press.  Not taken as where the mouse is, which
+		# decides (on a desktop) which zone has the keyboard.
+		if(dockclient != nil && (dockgrab || dockscr != nil && p.xy.in(dockr))){
+			dockgrab = p.buttons != 0;
+			alt { dockclient.ptr <-= p => ; * => ; }
+			continue;
+		}
 		lastmousex = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
 			wasdown := prevb;
 			prevb = p.buttons;
-			headerh := 40;
+			headerh := headerheight();
 			titleh  := 0;
-			if(mobile) {
-				headerh = MOBILE_HEADERH;
+			if(mobile)
 				titleh  = MOBILE_TITLEBARH;
-			}
 			# KLUDGE-MOBILE-ACCORDION-INFR-119 — title-bar tap →
 			# switch expanded zone. Check this before falling through
 			# to header / zone routing so a tap in a title bar can't
@@ -2705,12 +2940,12 @@ mouseproc()
 					continue;
 				}
 			}
-			# Mobile: tile-strip (activity bar) touch gesture.  A press
+			# Touch: tile-strip (activity bar) touch gesture.  A press
 			# in the header arms; a horizontal drag scrolls the strip; a
 			# release without a drag switches the activity.  This defers
 			# the switch off button-1 down so a swipe never activates the
 			# tile under the finger.  Desktop keeps switch-on-press below.
-			if(mobile) {
+			if(touch) {
 				inheader := p.xy.y < mainwin.r.min.y + headerh;
 				if((p.buttons & 1) && (wasdown & 1) == 0 && inheader) {
 					cid := -1;
@@ -3383,7 +3618,7 @@ contentarea(zone: Rect): Rect
 	tabh := 0;
 	if(mainfont != nil)
 		tabh = mainfont.height + 13;
-	if(mobile && tabh < MOBILE_TAPMIN)
+	if(touch && tabh < MOBILE_TAPMIN)
 		tabh = MOBILE_TAPMIN;
 	return Rect((zone.min.x, zone.min.y + tabh), zone.max);
 }

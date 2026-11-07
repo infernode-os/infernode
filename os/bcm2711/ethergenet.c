@@ -1118,6 +1118,10 @@ genetifstat(Ether *edev, void *a, long n, ulong off)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	phy = ctlr->mii->curphy;
 	l = snprint(p, READSTR,
 		"genet rev %#ux at %#p irq %d,%d %s\n"
@@ -1133,6 +1137,7 @@ genetifstat(Ether *edev, void *a, long n, ulong off)
 		snprint(p+l, READSTR-l, "no phy\n");
 	n = readstr(off, a, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

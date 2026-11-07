@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+#
+# nativefuzz -- the native kernel under QEMU's virt machine, made to run
+# sysfuzz (tests/sysfuzz.b) in every Dis VM at once, on a machine chosen
+# at random for each seed, and watched for what goes wrong.
+#
+#	tools/nativefuzz [-n runs] [-s seed] [-j jobs] [-t secs] [-e epochsecs]
+#		[-p procs] [-k] [-K kernel] [-m machine] [-x ops] [-v]
+#		[-C chaos]
+#
+# Each run boots the kernel (tests/host/baremetal_test.sh builds it:
+# BAREMETAL_PLATFORMS=virt BAREMETAL_BUILD_DIR=$ROOT/tmp/bm) with a card
+# holding the tree's dis/, waits for the shell on the serial console and
+# types at it: sysfuzz in VM 0 and, through #X (vm(1)), in each other VM
+# the machine has cores for, each with its own seed, scratch in the
+# kernel's memory file system (-d /tmp). The machine is the seed's: the
+# core (cortex-a53, a57, a72, max), how many cores (1 to 4), the GIC (v2
+# or v3), memory, and whether QEMU counts instructions (-icount, one
+# thread, the cores interleaved by a shift QEMU is given) or runs each
+# core on a host thread as fast as it goes. -m fixes it instead, as
+# "cpu,smp,gic,memMB,icount" (icount -1 for none). A run fails when
+#
+#	crash	the console shows a panic, an unhandled exception, a lock
+#		loop, a double sleep, a corrupt pool or the scheduler's own
+#		complaints
+#	died	QEMU exited (the kernel reset or halted the machine)
+#	boot	no shell prompt
+#	wedged	a sysfuzz's check at the end failed: the kernel did not
+#		answer (a file, a pipe, a spawn) once its Progs were killed
+#	hang	not every sysfuzz said done, their heartbeats stopped for a
+#		minute (or twelve times secs + 120 seconds passed: -icount
+#		runs take many times their seconds)
+#	dead	the shell did not answer afterwards
+#	leaked	with -L, Progs beyond sysfuzz's three harness Progs (two
+#		scratch exporters and check's 20-second timer) left in VMs 1-3;
+#		without it they are noted on the pass line, with the console's
+#		^T^Td to say which
+#
+# A failed run keeps the console and the machine in
+# $ROOT/tmp/nativefuzz/fail/<seed>/; rerun it with -n 1 -s <seed>. The
+# machine is the same for a seed; under -icount so is much of the
+# timing, though the console's typing is not.
+#
+#	-n	runs (4); 0 for no end
+#	-s	first seed (the time)
+#	-j	QEMUs at once (the CPUs / 4)
+#	-t	seconds of operations in a sysfuzz (30)
+#	-e	seconds in an epoch (5)
+#	-p	Progs in an epoch, per VM (6)
+#	-k	keep going after a failure
+#	-K	the kernel ($ROOT/tmp/bm/virt-kernel.img)
+#	-m	the machine, instead of the seed's
+#	-x	sysfuzz operations to leave out
+#	-v	sysfuzz says when each epoch is over
+#	-L	Progs left behind fail the run
+#	-C	a chaos kernel's faults (os/port/chaos.c, built with
+#		EXTRACFLAGS=-DCHAOS), as "malloc=2000,sleep=300,lock=500,yield=500":
+#		on in VMs 1-3 and the kernel's own procs while sysfuzz runs,
+#		VM 0 (the shell, and its sysfuzz) spared. Their sysfuzz may die
+#		of what is injected, so only crash, died, boot and dead fail a
+#		chaos run; hang, wedged and Progs left are noted
+#
+# Exit status: 0 no failure, 1 a failure, 2 a setup error.
+#
+# The same commands, typed at a Raspberry Pi's serial console with the
+# tree's dis/ on its card, are this campaign on the board; see
+# docs/NATIVE-FUZZING.md.
+#
+
+import argparse
+import concurrent.futures
+import os
+import random
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+QEMU = shutil.which("qemu-system-aarch64")
+CRASH = re.compile(rb"panic|unhandled exception|lock loop|not locked|double sleep|runproc|dequeued|"
+	rb"waserror:|poperror:|nexterror:|CORRUPT|not in pools|arena too large|(?m:^no free [a-z])|"
+	rb"is (?:Running|Ready|Wakeme|Scheding) on cpu|sys: trap|SEGV|bad op|illegal instruction")
+# Under -C, what malloc refusing gives: exhausted()'s "no free ..." is the
+# kernel failing a call as it should, not a crash
+CRASHCHAOS = re.compile(CRASH.pattern.replace(rb"(?m:^no free [a-z])|", b""))
+PROMPT = b"; "
+
+
+def machine(seed, fixed):
+	if fixed:
+		cpu, smp, gic, mem, ic = fixed.split(",")
+		return dict(cpu=cpu, smp=int(smp), gic=int(gic), mem=int(mem), icount=int(ic))
+	r = random.Random(seed)
+	return dict(cpu=r.choice(["cortex-a53", "cortex-a57", "cortex-a72", "max"]),
+		smp=r.choice([1, 2, 2, 3, 4, 4, 4]),
+		gic=r.choice([2, 3]),
+		mem=r.choice([512, 1024, 1024, 2048]),
+		icount=r.choice([-1, -1, -1, 0, 2, 5]))
+
+
+def describe(m):
+	return "%s smp %d gicv%d %dMB %s" % (m["cpu"], m["smp"], m["gic"], m["mem"],
+		"icount %d" % m["icount"] if m["icount"] >= 0 else "mttcg")
+
+
+class Console:
+	def __init__(self, p):
+		self.p = p
+		self.buf = bytearray()
+		self.fd = p.stdout.fileno()
+
+	def pump(self, secs):
+		end = time.monotonic() + secs
+		while True:
+			left = end - time.monotonic()
+			if left <= 0:
+				return True
+			r, _, _ = select.select([self.fd], [], [], min(left, 0.5))
+			if r:
+				d = os.read(self.fd, 65536)
+				if not d:
+					return False
+				self.buf.extend(d)
+
+	def waitfor(self, pat, secs, start=0):
+		end = time.monotonic() + secs
+		while time.monotonic() < end:
+			if re.search(pat, bytes(self.buf[start:])):
+				return True
+			if CRASH.search(bytes(self.buf[start:])):
+				return False
+			if not self.pump(0.5):
+				return False
+		return False
+
+	def typed(self, line):
+		# slowly: the console's input queue is small, and a line typed
+		# all at once can lose characters to a busy kernel
+		for i in range(0, len(line), 16):
+			self.p.stdin.write(line[i:i+16].encode())
+			self.p.stdin.flush()
+			self.pump(0.05)
+		self.p.stdin.write(b"\r")
+		self.p.stdin.flush()
+
+
+def one(seed, a, card):
+	m = machine(seed, a.m)
+	args = [QEMU, "-M", "virt,gic-version=%d" % m["gic"], "-cpu", m["cpu"], "-smp", str(m["smp"]),
+		"-m", str(m["mem"]), "-device", "virtio-rng-device",
+		"-drive", "file=%s,if=none,format=raw,id=sd,snapshot=on" % card, "-device", "virtio-blk-device,drive=sd",
+		"-kernel", a.K, "-display", "none", "-serial", "stdio", "-monitor", "none", "-nic", "none"]
+	if m["icount"] >= 0:
+		# sleep=off jumps the clock to the next deadline when every core
+		# is idle; with one core, QEMU (8.2) then never runs its main
+		# loop again: no serial input, no monitor, the guest idling in
+		# wfi as it should. One core sleeps in real time instead.
+		sleep = os.environ.get("NF_ICOUNT_SLEEP", "on" if m["smp"] == 1 else "off")
+		args += ["-icount", "shift=%d,align=off,sleep=%s" % (m["icount"], sleep)]
+	else:
+		args += ["-accel", "tcg,thread=multi"]
+	p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+	c = Console(p)
+	kind, why = None, ""
+	note = ""
+	nvm = 0
+	try:
+		# slow under -icount: the boot runs the JIT's stress and a benchmark
+		# (one core under -icount 0 sleeping in real time: past 240s)
+		boot = 600 if m["icount"] >= 0 else 150
+		if not c.waitfor(rb"init: starting the shell", boot) or not c.waitfor(re.escape(PROMPT), 60):
+			kind, why = "boot", "no shell prompt"
+			raise StopIteration
+		c.pump(3)
+		c.typed("cat /dev/memory; echo MEMBEFORE")
+		c.waitfor(rb"\nMEMBEFORE", 20)
+		if a.C:
+			cmds = ["echo seed %d > /dev/chaos" % seed, "echo vms 0x8000000e > /dev/chaos"]
+			for kv in a.C.split(","):
+				k, v = kv.split("=")
+				cmds.append("echo %s %s > /dev/chaos" % (k, v))
+			c.typed("; ".join(cmds) + "; cat /dev/chaos; echo CHAOSON")
+			if not c.waitfor(rb"\nCHAOSON", 30):
+				kind, why = "boot", "could not set /dev/chaos (a chaos kernel?)"
+				raise StopIteration
+		x = (" -x " + a.x) if a.x else ""
+		if a.v:
+			x += " -v"
+		sf = "/dis/tests/sysfuzz.dis -t %d -e %d -p %d -d /tmp%s" % (a.t, a.e, a.p, x)
+		nvm = m["smp"]
+		mark = len(c.buf)
+		# one line: a line typed once one is running could be read by
+		# its workers (they read /dev/cons) and not the shell. VM 0's
+		# in the background, so the shell answers while they run
+		line = "".join("vm %d %s -s %d; " % (v, sf, seed * 10 + v) for v in range(1, nvm))
+		c.typed(line + "{%s -s %d; echo VM0END} &" % (sf, seed * 10))
+		# Waited for while the heartbeats go on, not for a fixed time:
+		# under -icount 0 every instruction is a nanosecond of the
+		# machine's time and all cores share one host thread, so a run
+		# takes many times its seconds, and one still beating is not
+		# hung. A run whose heartbeats stop for a minute is; and none
+		# goes on for ever.
+		start = time.monotonic()
+		end = start + a.t + 120
+		cap = start + (a.t + 120) * 12
+		beats = 0
+		while time.monotonic() < end:
+			out = bytes(c.buf[mark:])
+			nb = out.count(b"hb ")
+			if nb > beats:
+				beats = nb
+				end = min(max(end, time.monotonic() + 60), cap)
+			if CRASH.search(out) or p.poll() is not None:
+				break
+			if out.count(b"sysfuzz: done") + out.count(b"sysfuzz: wedged") + out.count(b"sysfuzz: cannot") + out.count(b"sysfuzz: died") >= nvm and b"\nVM0END" in out:
+				break
+			if a.C and b"\nVM0END" in out:
+				# VM 0, spared, has finished; the others may never
+				c.pump(10)
+				break
+			if not c.pump(1):
+				break
+		out = bytes(c.buf[mark:])
+		if CRASH.search(out):
+			raise StopIteration
+		if p.poll() is not None:
+			kind, why = "died", "QEMU exited %d" % p.returncode
+			raise StopIteration
+		if a.C:
+			cm = len(c.buf)
+			# slow, not dead, with hundreds of Progs left on servers
+			# that will never answer: the shell gets five minutes. And
+			# typed again every half minute: Progs whose epoch's kill
+			# was refused (chaos) still read /dev/cons, and take a line
+			# the shell never sees
+			ok = False
+			for _ in range(10):
+				c.typed("echo off > /dev/chaos; cat /dev/chaos; echo CHAOSOFF")
+				if c.waitfor(rb"\nCHAOSOFF", 30, cm):
+					ok = True
+					break
+				if CRASH.search(bytes(c.buf[cm:])) or p.poll() is not None:
+					break
+			if not ok:
+				if not CRASH.search(bytes(c.buf[cm:])):
+					kind, why = "dead", "the shell did not answer once chaos was off"
+				raise StopIteration
+			hits = re.findall(rb"\n(malloc|sleep|lock|yield|device|intr) (\d+) (\d+)", bytes(c.buf[cm:]))
+			note = "chaos " + " ".join("%s %s" % (k.decode(), h.decode()) for k, r, h in hits)
+		w = re.search(rb"sysfuzz: (wedged|cannot|died)[^\r\n]*", out)
+		if w and a.C:
+			note += "; " + w.group(0).decode(errors="replace")
+		elif w:
+			kind, why = "wedged", w.group(0).decode(errors="replace")
+			raise StopIteration
+		nd = out.count(b"sysfuzz: done")
+		if nd < nvm and a.C:
+			note += "; %d of %d sysfuzz done" % (nd, nvm)
+		elif nd < nvm:
+			kind, why = "hang", "%d of %d sysfuzz done, no heartbeat for a minute (or %ds in all)" % (nd, nvm, (a.t + 120) * 12)
+			raise StopIteration
+		c.pump(10)
+		mark = len(c.buf)
+		c.typed("echo ALIVE; vm; cat /dev/memory; echo MEMAFTER")
+		ok = c.waitfor(rb"\nMEMAFTER", 300 if m["icount"] >= 0 else 60, mark)
+		for _ in range(9 if a.C and not ok else 0):
+			c.typed("echo ALIVE; vm; cat /dev/memory; echo MEMAFTER")
+			ok = c.waitfor(rb"\nMEMAFTER", 30, mark)
+			if ok or CRASH.search(bytes(c.buf[mark:])):
+				break
+		if not ok:
+			if not CRASH.search(bytes(c.buf[mark:])):
+				kind, why = "dead", "the shell did not answer"
+			raise StopIteration
+		# setup() leaves two scratch exporters, and check()'s nonblocking
+		# timer lives for 20 seconds while this count is taken after 10.
+		# These three are the harness baseline, not failed epoch cleanup.
+		counts = re.findall(rb"vm ([1-9]) progs ([1-9][0-9]*)", bytes(c.buf[mark:]))
+		left = [(v, str(int(n)-3).encode()) for v, n in counts if int(n) > 3]
+		if left:
+			# Progs left behind: killed ones still in a 9P call to a
+			# server that will not answer (another of their epoch's,
+			# itself stuck: the mount driver waits for a flush's reply
+			# uninterruptibly). Noted, with ^T^Td for which, not failed:
+			# -L fails the run on it
+			left = "Progs left: " + ", ".join("VM %s %s" % (v.decode(), n.decode()) for v, n in left)
+			if a.C:
+				note += "; " + left
+				c.buf.extend(b"\n--- nativefuzz: Progs left: ^T^Tk ^T^Td ---\n")
+				for k in (b"k", b"d"):
+					p.stdin.write(b"\x14\x14" + k)
+					p.stdin.flush()
+					c.pump(5)
+			elif a.L:
+				kind, why = "leaked", left
+			else:
+				note = left
+				p.stdin.write(b"\x14\x14d")
+				p.stdin.flush()
+				c.pump(3)
+	except StopIteration:
+		pass
+	finally:
+		if kind in ("hang", "dead", "boot", "leaked") and p.poll() is None:
+			# what the kernel's processes are doing, from the console's
+			# debug keys (devcons.c): ^T^Tp the processes, ^T^Tm the pools,
+			# ^T^Tk the kernel stacks of those not running, ^T^Td the Progs;
+			# and whether the shell still answers
+			try:
+				c.buf.extend(b"\n--- nativefuzz: ^T^Tp ^T^Tm ^T^Tk ^T^Td, then lines typed ---\n")
+				for k in (b"p", b"m", b"k", b"d", b"a"):
+					p.stdin.write(b"\x14\x14" + k)
+					p.stdin.flush()
+					c.pump(3)
+				c.typed("echo STILLALIVE; ps")
+				c.pump(5)
+				# the Dis side: each Sysfuzz Prog's status and stack
+				c.typed("load std; for p in `{ls /prog} { cat $p/status; cat $p/stack; grep -s Sysfuzz $p/status && cat $p/fd; echo }; echo STACKSEND")
+				c.waitfor(rb"\nSTACKSEND", 60, len(c.buf))
+				c.pump(2)
+			except (BrokenPipeError, OSError):
+				pass
+		if p.poll() is None:
+			p.kill()
+		try:
+			rest, _ = p.communicate(timeout=10)
+			c.buf.extend(rest or b"")
+		except subprocess.TimeoutExpired:
+			pass
+	text = bytes(c.buf)
+	if kind is None:
+		cr = CRASH.search(text)
+		if cr:
+			s = text.rfind(b"\n", 0, cr.start()) + 1
+			e = text.find(b"\n", cr.end())
+			kind, why = "crash", text[s:e if e >= 0 else len(text)].decode(errors="replace").strip()[:200]
+	return seed, m, nvm, kind, why or note, text.decode(errors="replace")
+
+
+def mkcard(path):
+	r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mkcard.py"), path, "64",
+		"/dis=" + os.path.join(ROOT, "dis"), "/rootpath=" + os.path.join(os.path.dirname(path), "rootpath")],
+		capture_output=True, text=True)
+	if r.returncode != 0:
+		sys.exit("nativefuzz: mkcard: " + r.stderr.strip())
+
+
+def main():
+	ap = argparse.ArgumentParser()
+	ap.add_argument("-n", type=int, default=4)
+	ap.add_argument("-s", type=int, default=None)
+	ap.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 4) // 4))
+	ap.add_argument("-t", type=int, default=30)
+	ap.add_argument("-e", type=int, default=5)
+	ap.add_argument("-p", type=int, default=6)
+	ap.add_argument("-k", action="store_true")
+	ap.add_argument("-K", default=os.path.join(ROOT, "tmp", "bm", "virt-kernel.img"))
+	ap.add_argument("-m", default=None)
+	ap.add_argument("-x", default=None)
+	ap.add_argument("-v", action="store_true")
+	ap.add_argument("-L", action="store_true")
+	ap.add_argument("-C", default=None)
+	a = ap.parse_args()
+	if a.C:
+		global CRASH
+		CRASH = CRASHCHAOS
+
+	if QEMU is None:
+		print("nativefuzz: no qemu-system-aarch64")
+		return 2
+	for f in (a.K, os.path.join(ROOT, "dis", "tests", "sysfuzz.dis"), os.path.join(ROOT, "dis", "vm.dis")):
+		if not os.path.exists(f):
+			print("nativefuzz: no %s (build it first)" % f)
+			return 2
+	work = os.path.join(ROOT, "tmp", "nativefuzz")
+	os.makedirs(work, exist_ok=True)
+	with open(os.path.join(work, "rootpath"), "w") as f:
+		f.write("local\n")
+	card = os.path.join(work, "card.img")
+	mkcard(card)
+	seed = a.s if a.s is not None else int(time.time()) % 1000000
+	print("nativefuzz: seeds from %d, %d at once, %ds each, kernel %s" % (seed, a.j, a.t, a.K), flush=True)
+
+	failed = 0
+	counts = {}
+	n = 0
+	with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
+		pend = set()
+		nxt = seed
+		stop = False
+		while True:
+			while not stop and len(pend) < a.j and (a.n == 0 or nxt < seed + a.n):
+				pend.add(ex.submit(one, nxt, a, card))
+				nxt += 1
+			if not pend:
+				break
+			done, pend = concurrent.futures.wait(pend, return_when=concurrent.futures.FIRST_COMPLETED)
+			for fu in done:
+				s, m, nvm, kind, why, text = fu.result()
+				n += 1
+				k = kind or "pass"
+				counts[k] = counts.get(k, 0) + 1
+				d = os.path.join(work, "fail" if kind else "pass", str(s))
+				os.makedirs(d, exist_ok=True)
+				with open(os.path.join(d, "console"), "w") as f:
+					f.write(text)
+				with open(os.path.join(d, "machine"), "w") as f:
+					f.write("%s,%d,%d,%d,%d\n" % (m["cpu"], m["smp"], m["gic"], m["mem"], m["icount"]))
+				if kind:
+					failed += 1
+					with open(os.path.join(d, "why"), "w") as f:
+						f.write("%s %s\n" % (kind, why))
+					print("FAIL seed %d (%s): %s: %s\n  kept in %s" % (s, describe(m), kind, why, d), flush=True)
+					if not a.k:
+						stop = True
+				else:
+					print("seed %d (%s, %d VMs): pass%s" % (s, describe(m), nvm, " (" + why + ")" if why else ""), flush=True)
+	print("nativefuzz: %d runs: %s" % (n, " ".join("%s %d" % kv for kv in sorted(counts.items()))))
+	return 1 if failed else 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

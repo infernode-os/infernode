@@ -70,6 +70,7 @@ enum
 	CMbroken,
 	CMnobroken,
 	CMconsole,
+	CMcnsamode,
 };
 
 static Cmdtab sysctlcmd[] =
@@ -79,10 +80,28 @@ static Cmdtab sysctlcmd[] =
 	CMbooted,	"booted",	0,	/* the boot is over: release its watchdog */
 	CMhalt,	"halt", 0,
 	CMpanic,	"panic", 0,
-	CMconsole,	"console", 1,
+	CMconsole,	"console", 2,	/* lookupcmd counts the verb: console on|off */
 	CMbroken,	"broken", 0,
 	CMnobroken,	"nobroken", 0,
+	CMcnsamode,	"cnsamode", 2,	/* cnsamode on: CNSA 2.0 strict authentication, from now on */
 };
+
+/*
+ * CNSA 2.0 strict mode, for the machine: ML-KEM-1024 in every
+ * authentication instead of ML-KEM-768 (libinterp/keyring.c). The hosted
+ * emulator takes it from the host's CNSAMODE, fixed for its life; here
+ * there is no host, so osinit throws this switch at boot when the card
+ * has a cnsamode file. One way only, and for the whole machine: not the
+ * environment, which every process may rewrite for itself, because a
+ * process that could clear it could make its own connections weaker
+ * than the machine's policy. keyring.c asks once, through getenv, and
+ * keeps the answer, so the switch is refused once that answer was "no":
+ * set after an authentication, it would say a mode the handshake is not
+ * using.
+ */
+int	cnsastrict;
+int	cnsaasked;
+Lock	cnsalk;
 
 void
 printinit(void)
@@ -636,7 +655,9 @@ enum{
 	Qconsctl,
 	Qdrivers,
 	Qhostowner,
+	Qkbdin,
 	Qkeyboard,
+	Qkeyboards,
 	Qklog,
 	Qkprint,
 	Qscancode,
@@ -651,6 +672,7 @@ enum{
 	Quser,
 	Qjit,
 	Qsysstat,
+	Qchaos,
 };
 
 static Dirtab consdir[]=
@@ -661,7 +683,9 @@ static Dirtab consdir[]=
 	"sysctl",	{Qsysctl},	0,		0644,
 	"drivers",	{Qdrivers},	0,		0444,
 	"hostowner",	{Qhostowner},	0,	0644,
+	"kbdin",	{Qkbdin},	0,		0222,
 	"keyboard",	{Qkeyboard},	0,		0666,
+	"keyboards",	{Qkeyboards},	0,		0444,
 	"klog",		{Qklog},	0,		0444,
 	"kprint",		{Qkprint},	0,		0444,
 	"scancode",	{Qscancode},	0,		0444,
@@ -676,7 +700,207 @@ static Dirtab consdir[]=
 	"user",		{Quser},	0,	0644,
 	"jit",		{Qjit},	0,	0666,
 	"sysstat",	{Qsysstat},	0,	0444,
+#ifdef CHAOS
+	"chaos",	{Qchaos},	0,	0664,	/* chaos.c: faults made often */
+#endif
 };
+
+/*
+ * The keyboards attached, and which kind typed last: as emu's
+ * (emu/port/devcons.c), whose comment says why.  The keyboard drivers
+ * here are programs (kbdusb, bthid): each says when its keyboard comes
+ * and goes with "kbd attach <id> [description]" and "kbd detach <id>"
+ * on /dev/consctl, and types through /dev/keyboard; a keyboard on the
+ * screen types through /dev/kbdin.  /dev/keyboards lists them,
+ *
+ *	keyboard <id> [description]
+ *	...
+ *	last none|hard|soft
+ *
+ * and each read after a file's first waits until it would say
+ * something else.
+ */
+enum
+{
+	Nkbds	= 16,
+	Kbdnone	= 0,
+	Kbdhard,
+	Kbdsoft,
+};
+
+static struct
+{
+	Lock	l;
+	QLock	rq;		/* one reader waits at a time; the rest queue */
+	Rendez	r;
+	char*	id[Nkbds];
+	char*	desc[Nkbds];
+	int	last;
+	ulong	gen;
+} kbds;
+
+static int
+kbdschanged(void *a)
+{
+	return kbds.gen != *(ulong*)a;
+}
+
+static void
+kbdsbump(void)
+{
+	ilock(&kbds.l);
+	kbds.gen++;
+	iunlock(&kbds.l);
+	wakeup(&kbds.r);
+}
+
+static void
+kbdtyped(int kind)
+{
+	if(kbds.last == kind)
+		return;
+	kbds.last = kind;
+	kbdsbump();
+}
+
+static void
+kbdattach(char *id, char *desc)
+{
+	int i, slot;
+	char *nid, *ndesc, *oid, *odesc;
+
+	if(id == nil || *id == 0)
+		error(Ebadarg);
+	if(desc == nil)
+		desc = "";
+	nid = nil;
+	ndesc = nil;
+	kstrdup(&nid, id);
+	kstrdup(&ndesc, desc);
+	oid = nil;
+	odesc = nil;
+	ilock(&kbds.l);
+	slot = -1;
+	for(i = 0; i < Nkbds; i++){
+		if(kbds.id[i] != nil && strcmp(kbds.id[i], id) == 0)
+			break;
+		if(kbds.id[i] == nil && slot < 0)
+			slot = i;
+	}
+	if(i < Nkbds){
+		oid = nid;
+		odesc = kbds.desc[i];
+		kbds.desc[i] = ndesc;
+	}else if(slot >= 0){
+		kbds.id[slot] = nid;
+		kbds.desc[slot] = ndesc;
+	}else{
+		oid = nid;
+		odesc = ndesc;
+	}
+	iunlock(&kbds.l);
+	free(oid);
+	free(odesc);
+	kbdsbump();
+}
+
+static void
+kbddetach(char *id)
+{
+	int i;
+	char *oid, *odesc;
+
+	oid = nil;
+	odesc = nil;
+	ilock(&kbds.l);
+	for(i = 0; i < Nkbds; i++)
+		if(kbds.id[i] != nil && strcmp(kbds.id[i], id) == 0){
+			oid = kbds.id[i];
+			odesc = kbds.desc[i];
+			kbds.id[i] = nil;
+			kbds.desc[i] = nil;
+			break;
+		}
+	iunlock(&kbds.l);
+	if(oid == nil)
+		return;
+	free(oid);
+	free(odesc);
+	kbdsbump();
+}
+
+/* "kbd attach <id> [description]" or "kbd detach <id>", NUL-terminated */
+static void
+kbdctl(char *a)
+{
+	char *id, *d, *nl;
+	int attach;
+
+	attach = a[4] == 'a';
+	id = a + 11;
+	while(*id == ' ' || *id == '\t')
+		id++;
+	if((nl = strchr(id, '\n')) != nil)
+		*nl = 0;
+	d = id;
+	while(*d != 0 && *d != ' ' && *d != '\t')
+		d++;
+	if(*d != 0){
+		*d++ = 0;
+		while(*d == ' ' || *d == '\t')
+			d++;
+	}
+	if(*id == 0)
+		error(Ebadarg);
+	if(attach)
+		kbdattach(id, d);
+	else
+		kbddetach(id);
+}
+
+static long
+kbdsread(Chan *c, void *va, long n)
+{
+	char *buf, *p, *e;
+	ulong seen;
+	int i, len;
+	static char *kinds[] = {"none", "hard", "soft"};
+
+	qlock(&kbds.rq);
+	if(waserror()){
+		qunlock(&kbds.rq);
+		nexterror();
+	}
+	/* c->aux: nil before the first read, else 1 + the generation read */
+	if(c->aux != nil){
+		seen = (ulong)(uintptr)c->aux - 1;
+		sleep(&kbds.r, kbdschanged, &seen);
+	}
+	poperror();
+	qunlock(&kbds.rq);
+
+	len = Nkbds*(16+2*KNAMELEN+64)+32;
+	buf = smalloc(len);
+	p = buf;
+	e = buf + len;
+	ilock(&kbds.l);
+	seen = kbds.gen;
+	for(i = 0; i < Nkbds; i++)
+		if(kbds.id[i] != nil){
+			if(kbds.desc[i][0] != 0)
+				p = seprint(p, e, "keyboard %.*s %.*s\n", 2*KNAMELEN, kbds.id[i], 64, kbds.desc[i]);
+			else
+				p = seprint(p, e, "keyboard %.*s\n", 2*KNAMELEN, kbds.id[i]);
+		}
+	p = seprint(p, e, "last %s\n", kinds[kbds.last]);
+	iunlock(&kbds.l);
+	c->aux = (void*)(uintptr)(seen + 1);
+	if(n > p - buf)
+		n = p - buf;
+	memmove(va, buf, n);
+	free(buf);
+	return n;
+}
 
 ulong	boottime;		/* seconds since epoch at boot */
 
@@ -1015,6 +1239,8 @@ consread(Chan *c, void *buf, long n, vlong offset)
 		return readstr(offset, buf, n, VERSION);
 	case Qkeyboard:
 		return qread(kbdrawq, buf, n);
+	case Qkeyboards:
+		return kbdsread(c, buf, n);
 	case Qcons:
 		/*
 		 * kbd.q is NOT held across the blocking reads below.
@@ -1103,6 +1329,11 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	case Qjit:
 		snprint(tmp, sizeof(tmp), "%d", cflag);
 		return readstr(offset, buf, n, tmp);
+
+#ifdef CHAOS
+	case Qchaos:
+		return chaosread(buf, n, offset);
+#endif
 
 	case Qnull:
 		return 0;
@@ -1249,6 +1480,11 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 				kbd.raw = 0;
 				kbd.x = 0;
 				qunlock(&kbd.q);
+			} else if(strncmp(a, "kbd attach ", 11) == 0 ||
+				  strncmp(a, "kbd detach ", 11) == 0){
+				/* the rest of the line is the keyboard's */
+				kbdctl(a);
+				break;
 			}
 			if(a = strchr(a, ' '))
 				a++;
@@ -1267,6 +1503,25 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		 * console regardless, which is what keeps a serial session
 		 * from typing into somebody's password field.
 		 */
+		kbdtyped(Kbdhard);
+		if(kbd.kbdr > 0){
+			qproduce(kbdrawq, a, n);
+			break;
+		}
+		for(x=0; x<n; ) {
+			Rune r;
+			x += chartorune(&r, &a[x]);
+			kbdputc(kbdq, r);
+		}
+		break;
+
+	case Qkbdin:
+		/*
+		 * Keys from a keyboard on the screen: delivered as the
+		 * local keyboard's are, marked in /dev/keyboards as typed
+		 * by a screen keyboard.
+		 */
+		kbdtyped(Kbdsoft);
 		if(kbd.kbdr > 0){
 			qproduce(kbdrawq, a, n);
 			break;
@@ -1320,6 +1575,11 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			buf[n-1] = 0;
 		kstrdup(&up->env->user, buf);
 		break;
+
+#ifdef CHAOS
+	case Qchaos:
+		return chaoswrite(va, n);
+#endif
 
 	case Qjit:
 		if(n >= sizeof(buf))
@@ -1380,6 +1640,17 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		case CMnobroken:
 			keepbroken = 0;
 			break;
+		case CMcnsamode:
+			if(strcmp(cb->f[1], "on") != 0)
+				error("cnsamode: only on; it is off until the machine restarts");
+			lock(&cnsalk);
+			if(cnsaasked && !cnsastrict){
+				unlock(&cnsalk);
+				error("cnsamode: too late, an authentication has already run without it");
+			}
+			cnsastrict = 1;
+			unlock(&cnsalk);
+			break;
 		}
 		poperror();
 		free(cb);
@@ -1415,10 +1686,25 @@ Dev consdevtab = {
 
 static	ulong	randn;
 
+/*
+ * nrand's seed: port numbers and TCP sequence numbers, not secrets --
+ * nrand is an LCG over the clock, as upstream's is. So it must never
+ * wait: it used to read the pool, which on a machine with no entropy
+ * source (os/port/random.c) now waits for ever, and the first network
+ * conversation would have waited with it. The generator if it has a
+ * word, and the clock with it either way.
+ */
 static void
 seedrand(void)
 {
-	randomread((void*)&randn, sizeof(randn));
+	ulong r;
+
+	r = 0;
+	if(hwrandom((uchar*)&r, sizeof(r)) < 0)
+		r = 0;
+	randn = r ^ (ulong)fastticks(nil);
+	if(randn == 0)
+		randn = 1;
 }
 
 int

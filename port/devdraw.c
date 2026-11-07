@@ -623,6 +623,7 @@ drawdelname(DName *name)
 {
 	int i;
 
+	free(name->name);
 	i = name-sdraw.name;
 	memmove(name, name+1, (sdraw.nname-(i+1))*sizeof(DName));
 	sdraw.nname--;
@@ -791,7 +792,8 @@ drawnewclient(void)
 		cp = malloc((sdraw.nclient+1)*sizeof(Client*));
 		if(cp == 0)
 			return 0;
-		memmove(cp, sdraw.client, sdraw.nclient*sizeof(Client*));
+		if(sdraw.nclient > 0)
+			memmove(cp, sdraw.client, sdraw.nclient*sizeof(Client*));
 		free(sdraw.client);
 		sdraw.client = cp;
 		sdraw.nclient++;
@@ -1191,6 +1193,21 @@ drawreadscreen(void *a, long n, vlong off)
 	return have;
 }
 
+static int
+drawctlformat(void *a, Client *cl, Memimage *i)
+{
+	char buf[16];
+	int n;
+
+	/* sprint writes a terminator; append the record's final space by hand. */
+	n = sprint(a, "%11d %11d %11s %11d %11d %11d %11d %11d %11d %11d %11d %11d",
+		cl->clientid, cl->infoid, chantostr(buf, i->chan), (i->flags&Frepl)==Frepl,
+		i->r.min.x, i->r.min.y, i->r.max.x, i->r.max.y,
+		i->clipr.min.x, i->clipr.min.y, i->clipr.max.x, i->clipr.max.y);
+	((char*)a)[n++] = ' ';
+	return n;
+}
+
 long
 drawread(Chan *c, void *a, long n, vlong off)
 {
@@ -1204,7 +1221,6 @@ drawread(Chan *c, void *a, long n, vlong off)
 	DImage *di;
 	Memimage *i;
 	ulong offset = off;
-	char buf[16];
 
 	USED(offset);
 	if(c->qid.type & QTDIR)
@@ -1260,10 +1276,7 @@ drawread(Chan *c, void *a, long n, vlong off)
 				error(Enodrawimage);
 			i = di->image;
 		}
-		n = sprint(a, "%11d %11d %11s %11d %11d %11d %11d %11d %11d %11d %11d %11d ",
-			cl->clientid, cl->infoid, chantostr(buf, i->chan), (i->flags&Frepl)==Frepl,
-			i->r.min.x, i->r.min.y, i->r.max.x, i->r.max.y,
-			i->clipr.min.x, i->clipr.min.y, i->clipr.max.x, i->clipr.max.y);
+		n = drawctlformat(a, cl, i);
 		cl->infoid = -1;
 		break;
 

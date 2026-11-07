@@ -149,10 +149,16 @@ poolsetsize(char *s, ulong size)
 
 	for(i = 0; i < table.n; i++) {
 		if(strcmp(table.pool[i].name, s) == 0) {
+			/*
+			 * A pool smaller than its reserve cannot run: say which
+			 * and how small is too small. It was "not enough memory"
+			 * and nothing more, with ressize already wrapped round.
+			 */
+			if(size < RESERVED)
+				panic("pool %s: -p%s=%lud is less than its reserve of %d bytes; give it more",
+					s, s, size, RESERVED);
 			table.pool[i].maxsize = size;
 			table.pool[i].ressize = size-RESERVED;
-			if(size < RESERVED)
-				panic("not enough memory");
 			return 1;
 		}
 	}
@@ -746,20 +752,150 @@ poolread(char *va, int count, ulong offset)
 	return n;
 }
 
+#ifdef SANMALLOC
+/*
+ * A sanitizer build (-DSANMALLOC, with -fsanitize=address): C's own
+ * allocations go to the C library's allocator, the sanitizer's, which
+ * knows each block's bounds and lifetime; a pool knows neither, so an
+ * overrun or a use after free in the kernel's C went unseen. Only
+ * mainmem goes: the Dis heap and images stay in their pools, which the
+ * collector and the draw code walk. Inferno's malloc zero-fills: run
+ * with ASAN_OPTIONS=malloc_fill_byte=0:max_malloc_fill_size=2147483647
+ * so the sanitizer's does too (tools/sanemu sets it).
+ */
+void*
+smalloc(size_t size)
+{
+	void *v;
+
+	v = calloc(1, size != 0? size: 1);
+	if(v == nil)
+		panic("smalloc: out of memory allocating %lud bytes", (ulong)size);
+	return v;
+}
+
+/*
+ * As the pools' (below): kproc and addprog wait with it for memory. Here
+ * malloc fails only when the host has none, and it is waited for the
+ * same way. Missing, the sanitizer build did not link.
+ */
+void
+waitmem(void)
+{
+	if(up != nil)
+		osenter();
+	osmillisleep(100);
+	if(up != nil)
+		osleave();
+}
+
+void*
+kmalloc(size_t size)
+{
+	return calloc(1, size != 0? size: 1);
+}
+
+void*
+mallocz(ulong size, int clr)
+{
+	if(clr)
+		return calloc(1, size != 0? size: 1);
+	return malloc(size != 0? size: 1);
+}
+
+void
+setmalloctag(void *v, ulong pc)
+{
+	USED(v);
+	USED(pc);
+}
+
+ulong
+getmalloctag(void *v)
+{
+	USED(v);
+	return ~0;
+}
+
+void
+setrealloctag(void *v, ulong pc)
+{
+	USED(v);
+	USED(pc);
+}
+
+ulong
+getrealloctag(void *v)
+{
+	USED(v);
+	return ~0;
+}
+
+extern size_t malloc_usable_size(void*);
+
+ulong
+msize(void *v)
+{
+	if(v == nil)
+		return 0;
+	return malloc_usable_size(v);
+}
+
+#else
+
+static int smallocwarned;
+
+/*
+ * A must-have allocation refused: say so once, and wait a moment for
+ * something to free memory. Uninterruptible; for callers that can raise
+ * no error (kproc, addprog). smalloc is the interruptible one.
+ */
+void
+waitmem(void)
+{
+	if(smallocwarned++ == 0)
+		print("pool %s exhausted, waiting (-p%s= too small?)\n", mainmem->name, mainmem->name);
+	if(up != nil)
+		osenter();
+	osmillisleep(100);
+	if(up != nil)
+		osleave();
+}
+
 void*
 smalloc(size_t size)
 {
 	void *v;
 	int retries;
 
+	/*
+	 * Waited for, for as long as it takes, as the native kernel's
+	 * smalloc waits: what is needed is freed when something exits or
+	 * is killed. It panicked after ten seconds, and a main pool set
+	 * too small (-pmain, anyone's to set) took the whole emulator down
+	 * at the first busy moment (tools/sysfuzz -P). The wait says so
+	 * once, so a pool too small for what is run is not a silent hang,
+	 * and a kill of the Prog waiting interrupts it, as a kill
+	 * interrupts any sleep, where there is an error label to take it.
+	 */
 	for(retries = 0;; retries++){
 		v = malloc(size);
 		if(v != nil)
 			break;
-		if(retries > 100)
-			panic("smalloc: out of memory allocating %lud bytes", (ulong)size);
-		if(0)
-			print("smalloc waiting from %lux\n", getcallerpc(&size));
+		if(retries == 0 && smallocwarned++ == 0)
+			print("pool %s exhausted, waiting (-p%s= too small?)\n",
+				mainmem->name, mainmem->name);
+		if(up != nil && up->nerr > 0){
+			lock(&up->rlock);
+			if(up->killed || up->swipend || up->intpend){
+				up->killed = 0;
+				up->swipend = 0;
+				up->intpend = 0;
+				unlock(&up->rlock);
+				error(Eintr);
+			}
+			unlock(&up->rlock);
+		}
 		osenter();
 		osmillisleep(100);
 		osleave();
@@ -997,6 +1133,8 @@ calloc(size_t n, size_t szelem)
 		return nil;
 	return malloc(n*szelem);
 }
+
+#endif	/* SANMALLOC */
 
 /*
 void

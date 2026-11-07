@@ -366,10 +366,12 @@ incoming(void* arg)
 	return conv->incall != nil;
 }
 
+/* OEXEC too: without it, omode&3 == 3 read past the table (emu's devip) */
 static int m2p[] = {
 	[OREAD]		4,
 	[OWRITE]	2,
-	[ORDWR]		6
+	[ORDWR]		6,
+	[OEXEC]		1,
 };
 
 static Chan*
@@ -675,6 +677,10 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		return readstr(offset, p, n, up->genbuf);
 	case Qremote:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		if(x->remote == nil) {
@@ -682,11 +688,13 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		} else {
 			(*x->remote)(c, buf, Statelen-2);
 		}
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qlocal:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		if(x->local == nil) {
@@ -694,17 +702,17 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		} else {
 			(*x->local)(c, buf, Statelen-2);
 		}
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qstatus:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		(*x->state)(c, buf, Statelen-2);
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qdata:
 		c = f->p[PROTO(ch->qid)]->conv[CONV(ch->qid)];
 		return qread(c->rq, a, n);
@@ -719,9 +727,15 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		if(x->stats == nil)
 			error("stats not implemented");
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		(*x->stats)(x, buf, Statelen);
+	Readstr:
 		rv = readstr(offset, p, n, buf);
 		free(buf);
+		poperror();
 		return rv;
 	}
 }
@@ -893,6 +907,33 @@ setladdrport(Conv* c, char* str, int announcing)
 	return rv;
 }
 
+/*
+ * Is s written as an address parseip can read: hex digits, dots and
+ * colons only, and a dot or a colon in it unless it is all decimal
+ * digits (an IPv4 address as one number). So "fe80::1", "::1" and
+ * "10.0.2.2" are, and "localhost" is not, nor a name that happens
+ * to be hex, such as "cafe".
+ */
+static int
+isipaddr(char *s)
+{
+	char *p;
+	int sep, hex;
+
+	if(*s == 0)
+		return 0;
+	sep = hex = 0;
+	for(p = s; *p; p++){
+		if(*p == '.' || *p == ':')
+			sep = 1;
+		else if((*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F'))
+			hex = 1;
+		else if(!(*p >= '0' && *p <= '9'))
+			return 0;
+	}
+	return sep || !hex;
+}
+
 static char*
 setraddrport(Conv* c, char* str)
 {
@@ -902,7 +943,20 @@ setraddrport(Conv* c, char* str)
 	if(p == nil)
 		return "malformed address";
 	*p++ = 0;
+	/*
+	 * parseip takes anything: a name it cannot read ("localhost",
+	 * with no connection server to translate it) comes back as
+	 * 0.0.0.0, and a TCP connect then sent its SYN there and waited
+	 * in Syn_sent for ever, where it should have failed at once.
+	 * So the address must be one, and not the unspecified address,
+	 * which names no destination: the hosted emulator's devip
+	 * refuses both with this message, and now this one does too.
+	 */
+	if(!isipaddr(str))
+		return "invalid IP address";
 	parseip(c->raddr, str);
+	if(ipcmp(c->raddr, IPnoaddr) == 0 || ipcmp(c->raddr, v4prefix) == 0)
+		return "invalid IP address";
 	c->rport = atoi(p);
 	p = strchr(p, '!');
 	if(p){
@@ -963,13 +1017,15 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 
 	if(c->state != 0)
 		error(Econinuse);
-	c->state = Connecting;
-	c->cerr[0] = '\0';
 	if(x->connect == nil)
 		error("connect not supported");
+	c->cerr[0] = '\0';
+	c->state = Connecting;
 	p = x->connect(c, cb->f, cb->nf);
-	if(p != nil)
+	if(p != nil){
+		c->state = Idle;
 		error(p);
+	}
 
 	qunlock(&c->ql);
 	if(waserror()){
@@ -1015,13 +1071,15 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 
 	if(c->state != 0)
 		error(Econinuse);
-	c->state = Announcing;
-	c->cerr[0] = '\0';
 	if(x->announce == nil)
 		error("announce not supported");
+	c->cerr[0] = '\0';
+	c->state = Announcing;
 	p = x->announce(c, cb->f, cb->nf);
-	if(p != nil)
+	if(p != nil){
+		c->state = Idle;
 		error(p);
+	}
 
 	qunlock(&c->ql);
 	if(waserror()){
@@ -1297,6 +1355,30 @@ retry:
 			p->ac++;
 			c->eq = qopen(1024, Qmsg, 0, 0);
 			(*p->create)(c);
+			/*
+			 * qopen gives nil when malloc refuses it, and the
+			 * protocols' create functions do not look: a Conv
+			 * kept for good with a nil queue faulted at its
+			 * first use. Unseen yet (the protocol is locked),
+			 * it is undone here instead.
+			 */
+			if(c->eq == nil || c->rq == nil || c->wq == nil ||
+			   (c->sq == nil && strcmp(p->name, "ipifc") == 0)){
+				if(c->eq != nil)
+					qfree(c->eq);
+				if(c->rq != nil)
+					qfree(c->rq);
+				if(c->wq != nil)
+					qfree(c->wq);
+				if(c->sq != nil)
+					qfree(c->sq);
+				*pp = nil;
+				p->ac--;
+				qunlock(&c->ql);
+				free(c->ptcl);
+				free(c);
+				error(Enomem);
+			}
 			break;
 		}
 		if(canqlock(&c->ql)){

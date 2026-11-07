@@ -105,6 +105,7 @@ Regenerate the facts with `tools/devletters.py --builds`.
 | `k` |  | fs | fs | ds | free here | Inferno's ds (man/3/ds, no source here); fs in Plan 9 and 9front |
 | `l` | ether (native) | ether | ether | ether | in use |  |
 | `m` | pointer (hosted/native) | mouse | mouse | pointer | in use | pointer, as Inferno (mouse in Plan 9 and 9front) |
+| `o` | location (hosted) |  |  |  | in use | the host's location service as an NMEA receiver (location(3)); free in all three. It was #g on its branch, segment in Plan 9 and 9front |
 | `p` | prog (hosted/native) | proc | proc | prog | in use | prog, as Inferno (proc in Plan 9 and 9front) |
 | `r` | rtc (native) | rtc | rtc | pcf8563, rtc | in use | real-time clock, as all three: Pi 5 |
 | `s` | srv (hosted/native) | srv | srv | srv | in use |  |

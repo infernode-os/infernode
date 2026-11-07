@@ -171,10 +171,30 @@ restricttoolns(caps: ref Capabilities): string
 	return restrictnsx(caps, 1);
 }
 
+# The current directory is a channel taken before the restriction: left
+# so, a relative name was resolved outside it, from the directory the
+# process started in (an agent asked for ../file read beside its grant,
+# in the host's own tree).  It is taken again, by its name, in the
+# restricted name space, or / if that name is not there.
 restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 {
 	if(sys == nil)
 		init();
+	dot := "";
+	dfd := sys->open(".", Sys->OREAD);
+	if(dfd != nil)
+		dot = sys->fd2path(dfd);
+	dfd = nil;
+	err := restrictnsx0(caps, hidemetadata);
+	if(err != nil)
+		return err;
+	if(dot == "" || sys->chdir(dot) < 0)
+		sys->chdir("/");
+	return nil;
+}
+
+restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
+{
 
 	# Preserve only the append capability while constructing the namespace.
 	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;
@@ -377,6 +397,18 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		if(gpuok >= 0 && !inlist("gpu", mntpaths))
 			mntpaths = "gpu" :: mntpaths;
 	}
+	# /mnt/gps — the GPS receiver (gpsfs(4)). Fixed-function: only the gps
+	# tool, and only its read files (narrowed below), never ctl or feed, so
+	# an agent can learn where it is but cannot choose the receiver or put a
+	# position in. Generic path grants cannot reach it.
+	gpsmnt := 0;
+	if(inlist("gps", caps.tools)) {
+		(gpsok, nil) := sys->stat("/mnt/gps");
+		if(gpsok >= 0 && !inlist("gps", mntpaths)) {
+			mntpaths = "gps" :: mntpaths;
+			gpsmnt = 1;
+		}
+	}
 	# /mnt/git — fixed-function git service (git/fs, mounted by the git tool
 	# during trusted init; migrated from /n/git per docs/NAMESPACE-LAYOUT.md,
 	# INFR-401). Derived only from the git tool; generic path grants cannot
@@ -440,6 +472,13 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 				uerr := filterdir("/mnt/ui", uiallow, 0);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
+			# /mnt/gps sub-restriction: the read files only.
+			if(gpsmnt) {
+				gerr := restrictdir("/mnt/gps",
+					"position" :: "fix" :: "event" :: "satellites" :: "traffic" :: "time" :: "status" :: nil, 0);
+				if(gerr != nil)
+					return sys->sprint("restrict /mnt/gps: %s", gerr);
 			}
 			# /mnt/msg sub-restriction: granting "/mnt/msg" exposes only the READ
 			# surface (status — the inbox). The proposal endpoint (draft), trusted
@@ -1344,6 +1383,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/gps" || prefix(path, "/mnt/gps/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
@@ -1635,6 +1675,7 @@ emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
 		("/mnt/matrix", "Matrix Runtime", "rw"),
 		("/mnt/wsys", "Window Pictures", "ro"),
 		("/mnt/gpu", "GPU Service", "rw"),
+		("/mnt/gps", "GPS Receiver", "ro"),
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),

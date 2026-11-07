@@ -70,6 +70,7 @@ struct Mntrpc
 	uint		rpclen;	/* len of buffer */
 	Block	*b;		/* reply blocks */
 	char	done;		/* Rpc completed */
+	char	orphan;		/* abandoned by a killed caller: 1, that caller still holds it; 2, whoever takes its reply frees it (mntorphan) */
 	uvlong	stime;		/* start time for mnt statistics */
 	ulong	reqlen;		/* request length for mnt statistics */
 	ulong	replen;		/* reply length for mnt statistics */
@@ -174,6 +175,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	Fcall f;
 	uchar *msg;
 	Mnt *m;
+	Queue *q;
 	char *v;
 	long k, l;
 	uvlong oo;
@@ -273,7 +275,14 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	if(!versioncompatible(v, f.version))
 		error("bad 9P version returned from server");
 
-	/* now build Mnt associated with this connection */
+	/*
+	 * now build Mnt associated with this connection; its queue first,
+	 * outside the lock: qopen gives nil when malloc refuses it, and a
+	 * Mnt with none faulted at its first reply (mntrpcread's qlen)
+	 */
+	q = qopen(10*MAXRPC, 0, nil, nil);
+	if(q == nil)
+		exhausted("mount queue");
 	lock(&mntalloc.l);
 	m = mntalloc.mntfree;
 	if(m != 0)
@@ -282,6 +291,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 		m = malloc(sizeof(Mnt));
 		if(m == 0) {
 			unlock(&mntalloc.l);
+			qfree(q);
 			exhausted("mount devices");
 		}
 	}
@@ -290,7 +300,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	m->version = nil;
 	kstrdup(&m->version, f.version);
 	m->id = mntalloc.id++;
-	m->q = qopen(10*MAXRPC, 0, nil, nil);
+	m->q = q;
 	m->msize = f.msize;
 	unlock(&mntalloc.l);
 
@@ -506,7 +516,8 @@ mntwalk(Chan *c, Chan *nc, char **name, int nname)
 	r->request.fid = c->fid;
 	r->request.newfid = nc->fid;
 	r->request.nwname = nname;
-	memmove(r->request.wname, name, nname*sizeof(char*));
+	if(nname > 0)
+		memmove(r->request.wname, name, nname*sizeof(char*));
 
 	mountrpc(m, r);
 
@@ -653,6 +664,13 @@ muxclose(Mnt *m)
 
 	for(q = m->queue; q; q = r) {
 		r = q->list;
+		if(q->orphan == 1){
+			/* abandoned, its caller still holding it: that caller frees it */
+			q->orphan = 0;
+			q->done = 1;
+			continue;
+		}
+		q->orphan = 0;
 		mntfree(q);
 	}
 	m->id = 0;
@@ -866,19 +884,233 @@ mountrpc(Mnt *m, Mntrpc *r)
 	}
 }
 
+/*
+ * A killed Prog's clunks, and its killer's for it (killprog), are waited
+ * for a while and no longer: a kill is synchronous, so a server that
+ * answers has clunked by the time the kill returns (a killed listener's
+ * announcement gone), and one that never answers does not hold the
+ * killer or the dying Prog for good. mntwatchproc interrupts a wait
+ * that has gone on past its time; mountio then leaves the call orphaned
+ * (mntorphan) and goes.
+ */
+/*
+ * How long a dying Prog's call is waited for: a killed one's, and the
+ * flush of one killed in a call, Mntwaitms; one exiting of itself
+ * (up->killing 2), whose next command may depend on what the server
+ * does at the clunk, a ctl file's action, Mntexitms.
+ */
+enum { Mntwaitms = 1000, Mntexitms = 5000 };
+
+typedef struct Mwatch Mwatch;
+struct Mwatch
+{
+	Proc*	p;
+	ulong	deadline;
+	int	fired;
+	Mwatch*	next;
+};
+
+static struct
+{
+	Lock	l;
+	Mwatch*	list;
+	int	started;
+} mwatch;
+
+static void
+mntwatchproc(void *a)
+{
+	Mwatch *w;
+	ulong now;
+
+	USED(a);
+	for(;;){
+		tsleep(&up->sleep, return0, nil, 100);
+		now = TK2MS(MACHP(0)->ticks);
+		lock(&mwatch.l);
+		for(w = mwatch.list; w != nil; w = w->next)
+			if(!w->fired && (long)(now - w->deadline) >= 0){
+				w->fired = 1;
+				swiproc(w->p, 0);
+			}
+		unlock(&mwatch.l);
+	}
+}
+
+static void
+mntwatch(Mwatch *w)
+{
+	int start;
+
+	w->p = up;
+	w->deadline = TK2MS(MACHP(0)->ticks) + (up->killing == 2 ? Mntexitms : Mntwaitms);
+	w->fired = 0;
+	lock(&mwatch.l);
+	w->next = mwatch.list;
+	mwatch.list = w;
+	start = !mwatch.started;
+	mwatch.started = 1;
+	unlock(&mwatch.l);
+	if(start)
+		kproc("mntwatch", mntwatchproc, nil, 0);
+}
+
+/* off the list; a watch that fired leaves no interrupt behind for a later sleep */
+static void
+mntunwatch(Mwatch *w)
+{
+	Mwatch **l;
+
+	lock(&mwatch.l);
+	for(l = &mwatch.list; *l != nil; l = &(*l)->next)
+		if(*l == w){
+			*l = w->next;
+			break;
+		}
+	unlock(&mwatch.l);
+	if(w->fired)
+		notkilled();
+}
+
+/*
+ * A call abandoned by a killed caller (mountio). Each Mntrpc of its
+ * chain -- the request and the flushes sent for it -- stays on the
+ * queue holding its tag until its own reply comes, so the tag is not
+ * used again while the server may still answer it; whoever reads that
+ * reply frees it (mntorphanreply). The request is its caller's to free
+ * as well (orphan 1: mntfree then leaves it to its reply), the flushes
+ * nobody's (orphan 2). Flushes already answered are freed now. The
+ * chain is not walked again: each orphan stands alone.
+ */
+static void
+mntorphan(Mnt *m, Mntrpc *r)
+{
+	Mntrpc *f, *nf, *fl;
+
+	fl = nil;
+	lock(&m->l);
+	for(f = r; f != nil; f = nf){
+		nf = f->flushed;
+		f->flushed = nil;
+		if(f->done){
+			if(f->request.type == Tflush){	/* mountio's own: freed now */
+				f->list = fl;
+				fl = f;
+			}
+			continue;
+		}
+		f->orphan = f->request.type == Tflush? 2: 1;
+	}
+	unlock(&m->l);
+	for(; fl != nil; fl = nf){
+		nf = fl->list;
+		mntfree(fl);
+	}
+}
+
+/*
+ * The reply to an orphan, called by mountmux holding m->l with q taken
+ * off the queue: q is done. An answered flush means what it flushed will
+ * not be answered: that request, found by its tag among the orphans
+ * still queued, is done too.
+ */
+static void
+mntorphanreply(Mnt *m, Mntrpc *q)
+{
+	Mntrpc **l, *g, *fl;
+
+	fl = nil;
+	if(q->request.type == Tflush){
+		for(l = &m->queue; (g = *l) != nil; l = &g->list)
+			if(g->orphan && g->request.tag == q->request.oldtag){
+				*l = g->list;
+				g->done = 1;
+				if(g->orphan == 2){
+					g->orphan = 0;
+					g->list = fl;
+					fl = g;
+				}else
+					g->orphan = 0;	/* its caller frees it */
+				break;
+			}
+	}
+	if(q->orphan == 2){
+		q->orphan = 0;
+		q->list = fl;
+		fl = q;
+	}else
+		q->orphan = 0;
+	unlock(&m->l);
+	for(; fl != nil; fl = g){
+		g = fl->list;
+		mntfree(fl);
+	}
+}
+
 void
 mountio(Mnt *m, Mntrpc *r)
 {
 	int n;
+	Mwatch w;
+	volatile int watched;
+	int armed, fired;
 
+	watched = 0;
 	while(waserror()) {
+		armed = watched;
+		fired = 0;
+		if(watched){
+			fired = w.fired;
+			mntunwatch(&w);
+			watched = 0;
+		}
 		if(m->rip == up)
 			mntgate(m);
 		if(strcmp(up->env->errstr, Eintr) != 0){
 			mntflushfree(m, r);
 			nexterror();
 		}
+		/*
+		 * Killed: flushed, as anyone's call is -- the server learns the
+		 * call is over, and lets go of what it held for it (a killed
+		 * listener's announcement) -- but the flush's answer waited
+		 * for Mntwaitms at most. Waited for without end, as it was, a
+		 * server that never answers held the killed Prog in the call
+		 * for good, and with it whatever it held: fd tables holding
+		 * the far ends of other servers' pipes, the same (nativefuzz,
+		 * an epoch's workers serving each other). Unanswered in time,
+		 * the call is left on the queue, its tag held, for its reply.
+		 */
+		/*
+		 * One flush is enough.  A second interrupt while its watchdog is
+		 * armed (including durable Prog revocation refusing the next sleep)
+		 * abandons the chain immediately instead of allocating flushes until
+		 * the mount RPC pool is exhausted.  The watchdog remains the fallback
+		 * when no second interrupt arrives.
+		 */
+		if(upkilled() && (armed || fired)){
+			mntorphan(m, r);
+			nexterror();
+		}
+		/*
+		 * The flush made before the watch is set: refused memory
+		 * (exhausted, in mntralloc), the error left this function
+		 * with w, on this stack, still on the watchdog's list, and
+		 * the call on the queue for whoever freed it (the native
+		 * chaos build: mntunwatch walking a stack long gone). The
+		 * call is left on the queue for its answer, as one given
+		 * up on.
+		 */
+		if(waserror()){
+			mntorphan(m, r);
+			nexterror();
+		}
 		r = mntflushalloc(r, m->msize);
+		poperror();
+		if(upkilled()){
+			mntwatch(&w);
+			watched = 1;
+		}
 	}
 
 	lock(&m->l);
@@ -886,6 +1118,19 @@ mountio(Mnt *m, Mntrpc *r)
 	r->list = m->queue;
 	m->queue = r;
 	unlock(&m->l);
+
+	/*
+	 * A dying Prog's clunk or remove (a close in its exit, killed or
+	 * not, or in its killer's thread) is waited for Mntwaitms at most,
+	 * its write to a server that has stopped reading too: then the wait
+	 * is interrupted and the call orphaned above. The fid is gone
+	 * whatever the server says, and a server that never answered held
+	 * the dying Prog, or its killer, for good.
+	 */
+	if(!watched && (r->request.type == Tclunk || r->request.type == Tremove) && upkilled()){
+		mntwatch(&w);
+		watched = 1;
+	}
 
 	/* Transmit a file system rpc */
 	if(m->msize == 0)
@@ -898,6 +1143,7 @@ mountio(Mnt *m, Mntrpc *r)
 /*	r->stime = fastticks(nil); */
 	r->reqlen = n;
 
+
 	/* Gate readers onto the mount point one at a time */
 	for(;;) {
 		lock(&m->l);
@@ -906,6 +1152,8 @@ mountio(Mnt *m, Mntrpc *r)
 		unlock(&m->l);
 		sleep(&r->r, rpcattn, r);
 		if(r->done){
+			if(watched)
+				mntunwatch(&w);
 			poperror();
 			mntflushfree(m, r);
 			return;
@@ -919,6 +1167,8 @@ mountio(Mnt *m, Mntrpc *r)
 		mountmux(m, r);
 	}
 	mntgate(m);
+	if(watched)
+		mntunwatch(&w);
 	poperror();
 	mntflushfree(m, r);
 }
@@ -1062,6 +1312,10 @@ mountmux(Mnt *m, Mntrpc *r)
 			 * it cannot recycle q while this path is still waking its owner.
 			 */
 			q->done = 1;
+			if(q->orphan){
+				mntorphanreply(m, q);	/* unlocks m->l */
+				return;
+			}
 			if(q != r)
 				wakeup(&q->r);
 			unlock(&m->l);
@@ -1212,6 +1466,7 @@ mntralloc(Chan *c, ulong msize)
 	unlock(&mntalloc.l);
 	new->c = c;
 	new->done = 0;
+	new->orphan = 0;
 	new->flushed = nil;
 	new->b = nil;
 	return new;
@@ -1220,6 +1475,16 @@ mntralloc(Chan *c, ulong msize)
 void
 mntfree(Mntrpc *r)
 {
+	if(r->orphan){
+		lock(&r->m->l);
+		if(r->orphan == 1){
+			/* its caller is done with it; it waits on the queue for its reply */
+			r->orphan = 2;
+			unlock(&r->m->l);
+			return;
+		}
+		unlock(&r->m->l);
+	}
 	if(r->b != nil)
 		freeblist(r->b);
 	lock(&mntalloc.l);

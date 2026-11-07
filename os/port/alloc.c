@@ -791,6 +791,10 @@ malloc(ulong size)
 {
 	void *v;
 
+#ifdef CHAOS
+	if(chaosmalloc())
+		return nil;
+#endif
 	v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
 	if(v != nil){
 		if(Npadlong){
@@ -828,6 +832,10 @@ mallocz(ulong size, int clr)
 {
 	void *v;
 
+#ifdef CHAOS
+	if(chaosmalloc())
+		return nil;
+#endif
 	v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
 	if(v != nil){
 		if(Npadlong){
@@ -861,6 +869,10 @@ realloc(void *v, ulong size)
 
 	if(size == 0)
 		return malloc(size);	/* temporary change until realloc calls can be checked */
+#ifdef CHAOS
+	if(chaosmalloc())
+		return nil;
+#endif
 	if(v != nil)
 		v = (ulong*)v-Npadlong;
 	if(Npadlong!=0 && size!=0)

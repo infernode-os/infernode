@@ -1,738 +1,834 @@
 /*
- * secp256k1 ECDSA (Ethereum/Bitcoin).
- * Uses 64-bit limbs with __int128 for intermediate products.
+ * secp256k1 (SEC 2, 2.4.1; Ethereum, Bitcoin): ECDSA signing with
+ * RFC 6979 nonces, low S and a recovery id; public key recovery
+ * (ecrecover); verification.
  *
- * Field arithmetic over GF(p) where p = 2^256 - 2^32 - 977.
- * Curve: y^2 = x^3 + 7 (a = 0, b = 7).
- * Point multiplication uses a constant-time Montgomery ladder in Jacobian coordinates.
- * ECDSA scalar arithmetic uses libmp's mpint for mod-n operations.
+ * The structure is libsec/ecc.c's (P-256, P-384), and so is the claim:
+ * constant time with respect to secret scalars and field elements.
  *
- * Follows the same structure as ecc.c (P-256) for consistency and auditability.
+ *  - Field and scalar arithmetic is Montgomery multiplication (CIOS) on
+ *    four 64-bit limbs through uint128.h, one routine for both moduli
+ *    (the field prime p and the group order n).  Every loop runs a fixed
+ *    number of times; the final subtraction, modular addition and
+ *    subtraction select their result by mask, not by branch.
+ *  - Points are projective (X:Y:Z) and added and doubled by the complete
+ *    formulas for a = 0 of Renes, Costello and Batina, "Complete addition
+ *    formulas for prime order elliptic curves" (EUROCRYPT 2016),
+ *    Algorithms 7 and 9.  They have no exceptional cases (the identity,
+ *    P + P and P + -P all go through the same instructions), so no branch
+ *    depends on a point.
+ *  - Scalar multiplication is a fixed 4-bit window over every bit of the
+ *    scalar, its table entry chosen by scanning all 16 entries under masks.
+ *  - Inversion is Fermat's: a^(p-2) by a fixed addition chain in the
+ *    field, a^(n-2) by a fixed window over the (public) exponent for the
+ *    nonce.  The square root, (p+1)/4, is a fixed chain too.
+ *  - Every mask made from a bit goes through bitmask(), whose barrier hides
+ *    from the compiler that it is 0 or all ones: clang otherwise turns a
+ *    masked select back into a branch.
+ *
+ * What may branch is public: a signature or a public key given to us
+ * (recovery, verification), a candidate scalar rejected as out of range
+ * (the one kept tells nothing), whether a result is the identity, r or s
+ * being zero (both are published).
+ *
+ * libmp is not used: its reduction and inversion take time that depends on
+ * the operands.  tests/host/secp256k1_test.sh checks all of this on the
+ * host, under valgrind.
  *
  * References:
  *   SEC 2: Recommended Elliptic Curve Domain Parameters, v2.0
+ *   RFC 6979: Deterministic Usage of DSA and ECDSA
  *   go-ethereum: github.com/ethereum/go-ethereum/crypto
- *   bitcoin-core/libsecp256k1 (test vectors)
+ *   bitcoin-core/libsecp256k1 (the square root's addition chain)
  */
 #include "os.h"
 #include <mp.h>
 #include <libsec.h>
 #include "uint128.h"
 
-typedef u64int k1fe[4];	/* field element: 4x64-bit limbs, little-endian */
+enum {
+	NLIMB = 4,	/* 256 bits */
+	WBITS = 4,	/* window width */
+};
 
-/*
- * Curve parameters (SEC 2, section 2.7.1)
- *
- * p = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
- *   = 2^256 - 2^32 - 977
- */
-static const k1fe K1_P = {
-	0xFFFFFFFEFFFFFC2FULL,
-	0xFFFFFFFFFFFFFFFFULL,
-	0xFFFFFFFFFFFFFFFFULL,
-	0xFFFFFFFFFFFFFFFFULL
+typedef u64int limb;
+typedef limb felem[NLIMB];
+
+/* an odd modulus and its Montgomery constants (R = 2^256) */
+typedef struct Mont Mont;
+struct Mont {
+	limb	m[NLIMB];	/* modulus, little-endian limbs */
+	limb	minv;		/* -m^-1 mod 2^64 */
+	limb	rr[NLIMB];	/* R^2 mod m */
+};
+
+/* p = 2^256 - 2^32 - 977 */
+static const Mont K1P = {
+	{0xFFFFFFFEFFFFFC2FULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL},
+	0xD838091DD2253531ULL,
+	{0x000007A2000E90A1ULL, 0x0000000000000001ULL, 0x0000000000000000ULL, 0x0000000000000000ULL},
+};
+
+/* n, the order of G */
+static const Mont K1N = {
+	{0xBFD25E8CD0364141ULL, 0xBAAEDCE6AF48A03BULL, 0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFFFFFULL},
+	0x4B0DFF665588B13FULL,
+	{0x896CF21467D7D140ULL, 0x741496C20E7CF878ULL, 0xE697F5E45BCD07C6ULL, 0x9D671CD581C69BC5ULL},
+};
+
+/* y^2 = x^3 + 7: 3b, for the complete formulas */
+static const felem K1B = {7, 0, 0, 0};
+static const felem K1B3 = {21, 0, 0, 0};
+
+static const felem K1Gx = {
+	0x59F2815B16F81798ULL, 0x029BFCDB2DCE28D9ULL, 0x55A06295CE870B07ULL, 0x79BE667EF9DCBBACULL
+};
+static const felem K1Gy = {
+	0x9C47D08FFB10D4B8ULL, 0xFD17B448A6855419ULL, 0x5DA4FBFC0E1108A8ULL, 0x483ADA7726A3C465ULL
+};
+
+/* n/2 (rounded down): s above it is high (BIP-62, EIP-2) */
+static const felem K1HALFN = {
+	0xDFE92F46681B20A0ULL, 0x5D576E7357A4501DULL, 0xFFFFFFFFFFFFFFFFULL, 0x7FFFFFFFFFFFFFFFULL
 };
 
 /*
- * n = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
- */
-static const k1fe K1_N = {
-	0xBFD25E8CD0364141ULL,
-	0xBAAEDCE6AF48A03BULL,
-	0xFFFFFFFFFFFFFFFEULL,
-	0xFFFFFFFFFFFFFFFFULL
-};
-
-/* b = 7 */
-static const k1fe K1_B = {
-	0x0000000000000007ULL,
-	0x0000000000000000ULL,
-	0x0000000000000000ULL,
-	0x0000000000000000ULL
-};
-
-/* base point G */
-static const k1fe K1_Gx = {
-	0x59F2815B16F81798ULL,
-	0x029BFCDB2DCE28D9ULL,
-	0x55A06295CE870B07ULL,
-	0x79BE667EF9DCBBACULL
-};
-static const k1fe K1_Gy = {
-	0x9C47D08FFB10D4B8ULL,
-	0xFD17B448A6855419ULL,
-	0x5DA4FBFC0E1108A8ULL,
-	0x483ADA7726A3C465ULL
-};
-
-/* n/2, precomputed for low-S normalization */
-static const k1fe K1_HALFN = {
-	0xDFE92F46681B20A0ULL,
-	0x5D576E7357A4501DULL,
-	0xFFFFFFFFFFFFFFFFULL,
-	0x7FFFFFFFFFFFFFFFULL
-};
-
-/*
- * Basic field element helpers (identical to ecc.c)
+ * Limb vectors
  */
 
-static void
-k1_fe_copy(k1fe r, const k1fe a)
+/* x, as far as the optimizer can tell, any value */
+static limb
+barrier(limb x)
 {
-	r[0] = a[0]; r[1] = a[1]; r[2] = a[2]; r[3] = a[3];
+#if defined(__GNUC__) || defined(__clang__)
+	__asm__("" : "+r"(x));
+	return x;
+#else
+	volatile limb v;
+
+	v = x;
+	return v;
+#endif
+}
+
+/* all ones if bit (0 or 1) is 1, else 0 */
+static limb
+bitmask(limb bit)
+{
+	return barrier((limb)0 - bit);
 }
 
 static void
-k1_fe_zero(k1fe r)
+fcopy(limb *r, const limb *a)
 {
-	r[0] = 0; r[1] = 0; r[2] = 0; r[3] = 0;
-}
-
-static int
-k1_fe_is_zero(const k1fe a)
-{
-	return (a[0] | a[1] | a[2] | a[3]) == 0;
-}
-
-static int
-k1_fe_eq(const k1fe a, const k1fe b)
-{
-	return ((a[0]^b[0]) | (a[1]^b[1]) | (a[2]^b[2]) | (a[3]^b[3])) == 0;
-}
-
-/* constant-time conditional swap */
-static void
-k1_fe_cswap(k1fe a, k1fe b, int bit)
-{
-	u64int mask = (u64int)0 - (u64int)bit;
-	u64int t;
 	int i;
 
-	for(i = 0; i < 4; i++){
-		t = mask & (a[i] ^ b[i]);
-		a[i] ^= t;
-		b[i] ^= t;
-	}
+	for(i = 0; i < NLIMB; i++)
+		r[i] = a[i];
 }
 
-/* return 1 if a >= b, 0 otherwise */
-static int
-k1_fe_gte(const k1fe a, const k1fe b)
-{
-	int i;
-	u64int borrow = 0;
-
-	for(i = 0; i < 4; i++){
-		u128 t = SUB128_64(SUB128(U128_FROM64(a[i]), U128_FROM64(b[i])), borrow);
-		borrow = HI128(t) & 1;
-	}
-	return borrow == 0;
-}
-
-/* conditional subtract: r = a mod p, assumes a < 2*p */
 static void
-k1_fe_mod(k1fe r, const k1fe a, const k1fe p)
+fzero(limb *r)
 {
-	k1fe t;
-	u64int borrow = 0;
-	u64int mask;
 	int i;
 
-	for(i = 0; i < 4; i++){
-		u128 v = SUB128_64(SUB128(U128_FROM64(a[i]), U128_FROM64(p[i])), borrow);
-		t[i] = LO128(v);
+	for(i = 0; i < NLIMB; i++)
+		r[i] = 0;
+}
+
+/* all ones if a == 0, else 0 */
+static limb
+fiszero(const limb *a)
+{
+	limb d;
+	int i;
+
+	d = 0;
+	for(i = 0; i < NLIMB; i++)
+		d |= a[i];
+	return bitmask(((d | ((limb)0 - d)) >> 63) ^ 1);
+}
+
+/* all ones if a == b, else 0 */
+static limb
+fequal(const limb *a, const limb *b)
+{
+	felem t;
+	int i;
+
+	for(i = 0; i < NLIMB; i++)
+		t[i] = a[i] ^ b[i];
+	return fiszero(t);
+}
+
+/* r = a - b, returning the borrow (0 or 1) */
+static limb
+fsubb(limb *r, const limb *a, const limb *b)
+{
+	limb borrow;
+	u128 v;
+	int i;
+
+	borrow = 0;
+	for(i = 0; i < NLIMB; i++){
+		v = SUB128_64(SUB128_64(U128_FROM64(a[i]), b[i]), borrow);
+		r[i] = LO128(v);
 		borrow = HI128(v) & 1;
 	}
-	/* if borrow, a < p, use a; else use t */
-	mask = (u64int)0 - borrow;
-	for(i = 0; i < 4; i++)
-		r[i] = (a[i] & mask) | (t[i] & ~mask);
+	return borrow;
 }
 
-/* r = a + b mod p, handles carry when a + b >= 2^256 */
-static void
-k1_fe_add(k1fe r, const k1fe a, const k1fe b, const k1fe p)
+/* all ones if a < b, else 0 */
+static limb
+fless(const limb *a, const limb *b)
 {
-	u128 c = U128_FROM64(0);
-	k1fe t, t2;
-	int i;
-	u64int carry, borrow, mask;
+	felem t;
 
-	for(i = 0; i < 4; i++){
+	return bitmask(fsubb(t, a, b));
+}
+
+/* r = mask ? a : b */
+static void
+fselect(limb *r, limb mask, const limb *a, const limb *b)
+{
+	int i;
+
+	mask = barrier(mask);
+	for(i = 0; i < NLIMB; i++)
+		r[i] = (a[i] & mask) | (b[i] & ~mask);
+}
+
+/* r = a mod m, for a < 2m */
+static void
+freduce(const Mont *M, limb *r, const limb *a)
+{
+	felem t;
+	limb borrow;
+
+	borrow = fsubb(t, a, M->m);
+	fselect(r, bitmask(borrow), a, t);
+}
+
+/* 32-byte big-endian <-> little-endian limbs */
+static void
+bytestof(limb *r, const uchar *b)
+{
+	int i, j, k;
+
+	for(i = 0; i < NLIMB; i++){
+		k = (NLIMB - 1 - i) * 8;
+		r[i] = 0;
+		for(j = 0; j < 8; j++)
+			r[i] = r[i] << 8 | b[k + j];
+	}
+}
+
+static void
+ftobytes(uchar *b, const limb *a)
+{
+	int i, j, k;
+
+	for(i = 0; i < NLIMB; i++){
+		k = (NLIMB - 1 - i) * 8;
+		for(j = 0; j < 8; j++)
+			b[k + j] = a[i] >> (56 - 8*j);
+	}
+}
+
+/*
+ * Arithmetic mod M->m.  Inputs are < m; so are outputs.
+ */
+
+/* r = a + b */
+static void
+madd(const Mont *M, limb *r, const limb *a, const limb *b)
+{
+	felem t, s;
+	limb carry, borrow;
+	u128 c;
+	int i;
+
+	c = U128_FROM64(0);
+	for(i = 0; i < NLIMB; i++){
 		c = ADD128_64(ADD128_64(c, a[i]), b[i]);
 		t[i] = LO128(c);
 		c = U128_FROM64(SHR128_64(c));
 	}
 	carry = LO128(c);
-
-	/* subtract p from (carry:t) */
-	borrow = 0;
-	for(i = 0; i < 4; i++){
-		u128 v = SUB128_64(SUB128(U128_FROM64(t[i]), U128_FROM64(p[i])), borrow);
-		t2[i] = LO128(v);
-		borrow = HI128(v) & 1;
-	}
-	/* underflow if carry < borrow: means (carry:t) < p, use t */
-	mask = (u64int)0 - (carry < borrow);
-	for(i = 0; i < 4; i++)
-		r[i] = (t[i] & mask) | (t2[i] & ~mask);
+	borrow = fsubb(s, t, M->m);
+	/* (carry:t) < m exactly when the subtraction borrows past the carry */
+	fselect(r, bitmask(borrow & (carry ^ 1)), t, s);
 }
 
-/* r = a - b mod p */
+/* r = a - b */
 static void
-k1_fe_sub(k1fe r, const k1fe a, const k1fe b, const k1fe p)
+msub(const Mont *M, limb *r, const limb *a, const limb *b)
 {
-	u64int borrow = 0;
-	u64int mask;
+	felem t;
+	limb mask;
 	u128 c;
-	k1fe t;
 	int i;
 
-	for(i = 0; i < 4; i++){
-		u128 v = SUB128_64(SUB128(U128_FROM64(a[i]), U128_FROM64(b[i])), borrow);
-		t[i] = LO128(v);
-		borrow = HI128(v) & 1;
-	}
-	/* if borrow, add p */
-	mask = (u64int)0 - borrow;
+	mask = bitmask(fsubb(t, a, b));
 	c = U128_FROM64(0);
-	for(i = 0; i < 4; i++){
-		c = ADD128_64(ADD128_64(c, t[i]), p[i] & mask);
+	for(i = 0; i < NLIMB; i++){
+		c = ADD128_64(ADD128_64(c, t[i]), M->m[i] & mask);
 		r[i] = LO128(c);
 		c = U128_FROM64(SHR128_64(c));
 	}
 }
 
-/* forward declarations */
-static void k1_bytes_to_fe(k1fe r, const uchar *b);
-static void k1_fe_to_bytes(uchar *b, const k1fe a);
-
-/*
- * Reduce a 512-bit product mod p using mpint.
- *
- * secp256k1's prime p = 2^256 - 2^32 - 977 allows efficient
- * special reduction, but we use mpint for correctness first.
- */
+/* r = -a */
 static void
-k1_reduce(k1fe r, const u64int res[8])
+mneg(const Mont *M, limb *r, const limb *a)
 {
-	mpint *mres, *mp;
-	uchar rbuf[64], outbuf[33];
-	uchar pbuf[32];
-	int i, n;
+	felem z;
 
-	/* convert 512-bit LE result to big-endian bytes */
-	for(i = 0; i < 8; i++){
-		int j = (7-i)*8;
-		rbuf[j]   = res[i]>>56; rbuf[j+1] = res[i]>>48;
-		rbuf[j+2] = res[i]>>40; rbuf[j+3] = res[i]>>32;
-		rbuf[j+4] = res[i]>>24; rbuf[j+5] = res[i]>>16;
-		rbuf[j+6] = res[i]>>8;  rbuf[j+7] = res[i];
-	}
-	k1_fe_to_bytes(pbuf, K1_P);
-	mres = betomp(rbuf, 64, nil);
-	mp = betomp(pbuf, 32, nil);
-	mpmod(mres, mp, mres);
-
-	memset(pbuf, 0, 32);
-	n = mptobe(mres, outbuf, sizeof(outbuf), nil);
-	if(n > 0 && n <= 32)
-		memmove(pbuf + 32 - n, outbuf, n);
-	else if(n > 32)
-		memmove(pbuf, outbuf + n - 32, 32);
-	k1_bytes_to_fe(r, pbuf);
-	mpfree(mres);
-	mpfree(mp);
+	fzero(z);
+	msub(M, r, z, a);
 }
 
-/*
- * r = a * b mod p
- * Uses operand scanning (same as ecc.c).
- */
+/* r = a * b * R^-1 (CIOS) */
 static void
-k1_fe_mul(k1fe r, const k1fe a, const k1fe b, const k1fe p)
+mmul(const Mont *M, limb *r, const limb *a, const limb *b)
 {
-	u64int res[8];
-	u128 acc;
-	int i, j, k;
+	limb t[NLIMB + 2], s[NLIMB], m, c, borrow;
+	u128 x;
+	int i, j;
 
-	USED(p);
-	memset(res, 0, sizeof(res));
-
-	for(i = 0; i < 4; i++){
-		acc = U128_FROM64(0);
-		for(j = 0; j < 4; j++){
-			acc = ADD128(ADD128_64(acc, res[i+j]), MUL128(a[i], b[j]));
-			res[i+j] = LO128(acc);
-			acc = U128_FROM64(SHR128_64(acc));
+	for(i = 0; i < NLIMB + 2; i++)
+		t[i] = 0;
+	for(i = 0; i < NLIMB; i++){
+		c = 0;
+		for(j = 0; j < NLIMB; j++){
+			x = ADD128_64(ADD128_64(MUL128(a[j], b[i]), t[j]), c);
+			t[j] = LO128(x);
+			c = HI128(x);
 		}
-		for(k = i+4; !IS_ZERO128(acc) && k < 8; k++){
-			acc = ADD128_64(acc, res[k]);
-			res[k] = LO128(acc);
-			acc = U128_FROM64(SHR128_64(acc));
+		x = ADD128_64(U128_FROM64(t[NLIMB]), c);
+		t[NLIMB] = LO128(x);
+		t[NLIMB+1] = HI128(x);
+
+		m = t[0] * M->minv;
+		x = ADD128_64(MUL128(m, M->m[0]), t[0]);
+		c = HI128(x);
+		for(j = 1; j < NLIMB; j++){
+			x = ADD128_64(ADD128_64(MUL128(m, M->m[j]), t[j]), c);
+			t[j-1] = LO128(x);
+			c = HI128(x);
+		}
+		x = ADD128_64(U128_FROM64(t[NLIMB]), c);
+		t[NLIMB-1] = LO128(x);
+		t[NLIMB] = t[NLIMB+1] + HI128(x);
+	}
+	/* t < 2m: take t - m unless that borrows past t[NLIMB] */
+	borrow = fsubb(s, t, M->m);
+	borrow = (borrow & (t[NLIMB] ^ 1)) & 1;
+	fselect(r, bitmask(borrow), t, s);
+}
+
+static void
+msqr(const Mont *M, limb *r, const limb *a)
+{
+	mmul(M, r, a, a);
+}
+
+/* r = a^(2^k) */
+static void
+msqrn(const Mont *M, limb *r, const limb *a, int k)
+{
+	fcopy(r, a);
+	while(k-- > 0)
+		msqr(M, r, r);
+}
+
+/* into and out of the Montgomery domain */
+static void
+mto(const Mont *M, limb *r, const limb *a)
+{
+	mmul(M, r, a, M->rr);
+}
+
+static void
+mfrom(const Mont *M, limb *r, const limb *a)
+{
+	felem one;
+
+	fzero(one);
+	one[0] = 1;
+	mmul(M, r, a, one);
+}
+
+/* R mod m: one, in the Montgomery domain */
+static void
+mone(const Mont *M, limb *r)
+{
+	felem one;
+
+	fzero(one);
+	one[0] = 1;
+	mto(M, r, one);
+}
+
+/*
+ * r = a^e for a public exponent e: a fixed 4-bit window, the table
+ * indexed by the exponent's digits.  a and r in the Montgomery domain.
+ */
+static void
+mpow(const Mont *M, limb *r, const limb *a, const limb *e)
+{
+	felem tab[1<<WBITS], x;
+	int i, j, w;
+
+	mone(M, tab[0]);
+	fcopy(tab[1], a);
+	for(i = 2; i < (1<<WBITS); i++)
+		mmul(M, tab[i], tab[i-1], a);
+	mone(M, x);
+	for(i = 256/WBITS - 1; i >= 0; i--){
+		for(j = 0; j < WBITS; j++)
+			msqr(M, x, x);
+		w = (e[i*WBITS/64] >> ((i*WBITS) % 64)) & ((1<<WBITS) - 1);
+		mmul(M, x, x, tab[w]);
+	}
+	fcopy(r, x);
+	memset(tab, 0, sizeof tab);
+}
+
+/*
+ * x2 = a^(2^2-1), x3 = a^(2^3-1), x22 = a^(2^22-1), x223 = a^(2^223-1):
+ * the common head of the field's inversion and square root chains.
+ */
+static void
+pchain(limb *x2, limb *x3, limb *x22, limb *x223, const limb *a)
+{
+	const Mont *F;
+	felem x6, x9, x11, x44, x88, x176, x220, t;
+
+	F = &K1P;
+	msqr(F, x2, a);
+	mmul(F, x2, x2, a);
+	msqr(F, x3, x2);
+	mmul(F, x3, x3, a);
+	msqrn(F, t, x3, 3);
+	mmul(F, x6, t, x3);
+	msqrn(F, t, x6, 3);
+	mmul(F, x9, t, x3);
+	msqrn(F, t, x9, 2);
+	mmul(F, x11, t, x2);
+	msqrn(F, t, x11, 11);
+	mmul(F, x22, t, x11);
+	msqrn(F, t, x22, 22);
+	mmul(F, x44, t, x22);
+	msqrn(F, t, x44, 44);
+	mmul(F, x88, t, x44);
+	msqrn(F, t, x88, 88);
+	mmul(F, x176, t, x88);
+	msqrn(F, t, x176, 44);
+	mmul(F, x220, t, x44);
+	msqrn(F, t, x220, 3);
+	mmul(F, x223, t, x3);
+}
+
+/*
+ * r = a^(p-2) = a^-1 (0 if a is 0), in the Montgomery domain.
+ * p-2 = ((((2^223-1) << 23 | 2^22-1) << 5 | 1) << 3 | 3) << 2 | 1.
+ */
+static void
+pinv(limb *r, const limb *a)
+{
+	const Mont *F;
+	felem x2, x3, x22, x223, t;
+
+	F = &K1P;
+	pchain(x2, x3, x22, x223, a);
+	msqrn(F, t, x223, 23);
+	mmul(F, t, t, x22);
+	msqrn(F, t, t, 5);
+	mmul(F, t, t, a);
+	msqrn(F, t, t, 3);
+	mmul(F, t, t, x2);
+	msqrn(F, t, t, 2);
+	mmul(F, r, t, a);
+}
+
+/*
+ * r = a^((p+1)/4), a square root of a if it has one (p = 3 mod 4), in the
+ * Montgomery domain.  (p+1)/4 = (((2^223-1) << 23 | 2^22-1) << 6 | 3) << 2.
+ */
+static void
+psqrt(limb *r, const limb *a)
+{
+	const Mont *F;
+	felem x2, x3, x22, x223, t;
+
+	F = &K1P;
+	pchain(x2, x3, x22, x223, a);
+	msqrn(F, t, x223, 23);
+	mmul(F, t, t, x22);
+	msqrn(F, t, t, 6);
+	mmul(F, t, t, x2);
+	msqrn(F, r, t, 2);
+}
+
+/* r = a^(n-2) = a^-1 mod n (0 if a is 0), in the Montgomery domain */
+static void
+ninv(limb *r, const limb *a)
+{
+	felem e, two;
+
+	fzero(two);
+	two[0] = 2;
+	fsubb(e, K1N.m, two);
+	mpow(&K1N, r, a, e);
+}
+
+/*
+ * Points: projective (X:Y:Z), coordinates in the Montgomery domain;
+ * the identity is (0:1:0).
+ */
+typedef struct Pt Pt;
+struct Pt {
+	felem	x;
+	felem	y;
+	felem	z;
+};
+
+static void
+ptidentity(Pt *r)
+{
+	fzero(r->x);
+	mone(&K1P, r->y);
+	fzero(r->z);
+}
+
+/* 3b in the Montgomery domain */
+static void
+b3mont(limb *r)
+{
+	mto(&K1P, r, K1B3);
+}
+
+/*
+ * r = a + b, complete (RCB16 Algorithm 7, a = 0); b3 is 3b in the
+ * Montgomery domain.  r may be a or b.
+ */
+static void
+ptadd(Pt *r, const Pt *a, const Pt *b, const limb *b3)
+{
+	const Mont *F;
+	felem t0, t1, t2, t3, t4, X3, Y3, Z3;
+
+	F = &K1P;
+	mmul(F, t0, a->x, b->x);
+	mmul(F, t1, a->y, b->y);
+	mmul(F, t2, a->z, b->z);
+	madd(F, t3, a->x, a->y);
+	madd(F, t4, b->x, b->y);
+	mmul(F, t3, t3, t4);
+	madd(F, t4, t0, t1);
+	msub(F, t3, t3, t4);
+	madd(F, t4, a->y, a->z);
+	madd(F, X3, b->y, b->z);
+	mmul(F, t4, t4, X3);
+	madd(F, X3, t1, t2);
+	msub(F, t4, t4, X3);
+	madd(F, X3, a->x, a->z);
+	madd(F, Y3, b->x, b->z);
+	mmul(F, X3, X3, Y3);
+	madd(F, Y3, t0, t2);
+	msub(F, Y3, X3, Y3);
+	madd(F, X3, t0, t0);
+	madd(F, t0, X3, t0);
+	mmul(F, t2, b3, t2);
+	madd(F, Z3, t1, t2);
+	msub(F, t1, t1, t2);
+	mmul(F, Y3, b3, Y3);
+	mmul(F, X3, t4, Y3);
+	mmul(F, t2, t3, t1);
+	msub(F, X3, t2, X3);
+	mmul(F, Y3, Y3, t0);
+	mmul(F, t1, t1, Z3);
+	madd(F, Y3, t1, Y3);
+	mmul(F, t0, t0, t3);
+	mmul(F, Z3, Z3, t4);
+	madd(F, Z3, Z3, t0);
+	fcopy(r->x, X3);
+	fcopy(r->y, Y3);
+	fcopy(r->z, Z3);
+}
+
+/* r = 2a, complete (RCB16 Algorithm 9, a = 0).  r may be a. */
+static void
+ptdouble(Pt *r, const Pt *a, const limb *b3)
+{
+	const Mont *F;
+	felem t0, t1, t2, X3, Y3, Z3;
+
+	F = &K1P;
+	msqr(F, t0, a->y);
+	madd(F, Z3, t0, t0);
+	madd(F, Z3, Z3, Z3);
+	madd(F, Z3, Z3, Z3);
+	mmul(F, t1, a->y, a->z);
+	msqr(F, t2, a->z);
+	mmul(F, t2, b3, t2);
+	mmul(F, X3, t2, Z3);
+	madd(F, Y3, t0, t2);
+	mmul(F, Z3, t1, Z3);
+	madd(F, t1, t2, t2);
+	madd(F, t2, t1, t2);
+	msub(F, t0, t0, t2);
+	mmul(F, Y3, t0, Y3);
+	madd(F, Y3, X3, Y3);
+	mmul(F, t1, a->x, a->y);
+	mmul(F, X3, t0, t1);
+	madd(F, X3, X3, X3);
+	fcopy(r->x, X3);
+	fcopy(r->y, Y3);
+	fcopy(r->z, Z3);
+}
+
+/* r = tab[w], reading every entry */
+static void
+ptselect(Pt *r, const Pt tab[1<<WBITS], int w)
+{
+	limb mask, d;
+	int i, j;
+
+	fzero(r->x);
+	fzero(r->y);
+	fzero(r->z);
+	for(i = 0; i < (1<<WBITS); i++){
+		d = (limb)(i ^ w);
+		mask = bitmask((d - 1) >> 63);	/* all ones iff d == 0 */
+		for(j = 0; j < NLIMB; j++){
+			r->x[j] |= tab[i].x[j] & mask;
+			r->y[j] |= tab[i].y[j] & mask;
+			r->z[j] |= tab[i].z[j] & mask;
 		}
 	}
-
-	k1_reduce(r, res);
-}
-
-/* r = a^2 mod p */
-static void
-k1_fe_sqr(k1fe r, const k1fe a)
-{
-	k1_fe_mul(r, a, a, K1_P);
 }
 
 /*
- * r = a^(p-2) mod p (modular inverse via Fermat's little theorem).
- *
- * For secp256k1, p-2 = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2D
- * We use an addition chain optimized for this specific prime.
+ * r = k * a, k 32 bytes big-endian: a fixed 4-bit window, all 64 digits
+ * of k, each one's multiple of a added (the identity's for a 0 digit)
+ * after four doublings.
  */
 static void
-k1_fe_inv(k1fe r, const k1fe a)
+ptmul(Pt *r, const uchar *k, const Pt *a)
 {
-	k1fe x2, x3, x6, x9, x11, x22, x44, x88, x176, x220, x223, e;
-	int i;
+	Pt tab[1<<WBITS], acc, t;
+	felem b3;
+	int i, j, w;
 
-	/* x2 = a^3 */
-	k1_fe_sqr(x2, a);
-	k1_fe_mul(x2, x2, a, K1_P);
+	b3mont(b3);
+	ptidentity(&tab[0]);
+	tab[1] = *a;
+	for(i = 2; i < (1<<WBITS); i++){
+		if(i & 1)
+			ptadd(&tab[i], &tab[i-1], a, b3);
+		else
+			ptdouble(&tab[i], &tab[i/2], b3);
+	}
+	ptidentity(&acc);
+	for(i = 0; i < 64; i++){
+		if(i != 0)
+			for(j = 0; j < WBITS; j++)
+				ptdouble(&acc, &acc, b3);
+		w = (k[i/2] >> (i & 1 ? 0 : 4)) & 0xF;
+		ptselect(&t, tab, w);
+		ptadd(&acc, &acc, &t, b3);
+	}
+	*r = acc;
+	memset(tab, 0, sizeof tab);
+	memset(&t, 0, sizeof t);
+}
 
-	/* x3 = a^7 */
-	k1_fe_sqr(x3, x2);
-	k1_fe_mul(x3, x3, a, K1_P);
-
-	/* x6 = a^(2^6 - 1) */
-	k1_fe_copy(e, x3);
-	for(i = 0; i < 3; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x6, e, x3, K1_P);
-
-	/* x9 = a^(2^9 - 1) */
-	k1_fe_copy(e, x6);
-	for(i = 0; i < 3; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x9, e, x3, K1_P);
-
-	/* x11 = a^(2^11 - 1) */
-	k1_fe_copy(e, x9);
-	for(i = 0; i < 2; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x11, e, x2, K1_P);
-
-	/* x22 = a^(2^22 - 1) */
-	k1_fe_copy(e, x11);
-	for(i = 0; i < 11; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x22, e, x11, K1_P);
-
-	/* x44 = a^(2^44 - 1) */
-	k1_fe_copy(e, x22);
-	for(i = 0; i < 22; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x44, e, x22, K1_P);
-
-	/* x88 = a^(2^88 - 1) */
-	k1_fe_copy(e, x44);
-	for(i = 0; i < 44; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x88, e, x44, K1_P);
-
-	/* x176 = a^(2^176 - 1) */
-	k1_fe_copy(e, x88);
-	for(i = 0; i < 88; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x176, e, x88, K1_P);
-
-	/* x220 = a^(2^220 - 1) */
-	k1_fe_copy(e, x176);
-	for(i = 0; i < 44; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x220, e, x44, K1_P);
-
-	/* x223 = a^(2^223 - 1) */
-	k1_fe_copy(e, x220);
-	for(i = 0; i < 3; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(x223, e, x3, K1_P);
-
-	/*
-	 * p - 2 = 2^256 - 2^32 - 979
-	 *       = (2^223 - 1) * 2^33 + 2^32 - 979
-	 *
-	 * Decomposition:
-	 *   e = x223 * 2^23    (shift left 23 bits)
-	 *   e *= a^(2^10 - 979) ... but simpler to use the known chain:
-	 *
-	 * p-2 in hex: FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2D
-	 * Low 32 bits of p-2: FFFFFC2D = 11111111 11111111 11111100 00101101
-	 *
-	 * Chain: x223, then <<33, then apply low bits pattern.
-	 */
-	k1_fe_copy(e, x223);
-	for(i = 0; i < 23; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(e, e, x22, K1_P);
-	for(i = 0; i < 5; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(e, e, a, K1_P);
-	for(i = 0; i < 3; i++) k1_fe_sqr(e, e);
-	k1_fe_mul(e, e, x2, K1_P);
-	k1_fe_sqr(e, e);
-	k1_fe_sqr(e, e);
-	k1_fe_mul(r, e, a, K1_P);
+/* the base point */
+static void
+ptbase(Pt *r)
+{
+	mto(&K1P, r->x, K1Gx);
+	mto(&K1P, r->y, K1Gy);
+	mone(&K1P, r->z);
 }
 
 /*
- * Byte conversion (32-byte big-endian <-> k1fe little-endian 64-bit limbs)
+ * affine (x, y), out of the Montgomery domain; -1 for the identity
+ * (whether the result is the identity is public)
  */
-
-static void
-k1_bytes_to_fe(k1fe r, const uchar *b)
-{
-	int i;
-	for(i = 0; i < 4; i++){
-		int j = (3-i)*8;
-		r[i] = (u64int)b[j]<<56 | (u64int)b[j+1]<<48
-		     | (u64int)b[j+2]<<40 | (u64int)b[j+3]<<32
-		     | (u64int)b[j+4]<<24 | (u64int)b[j+5]<<16
-		     | (u64int)b[j+6]<<8 | (u64int)b[j+7];
-	}
-}
-
-static void
-k1_fe_to_bytes(uchar *b, const k1fe a)
-{
-	int i;
-	for(i = 0; i < 4; i++){
-		int j = (3-i)*8;
-		b[j]   = a[i]>>56; b[j+1] = a[i]>>48;
-		b[j+2] = a[i]>>40; b[j+3] = a[i]>>32;
-		b[j+4] = a[i]>>24; b[j+5] = a[i]>>16;
-		b[j+6] = a[i]>>8;  b[j+7] = a[i];
-	}
-}
-
-/*
- * Jacobian point operations.
- * A point (X, Y, Z) represents affine (X/Z^2, Y/Z^3).
- * Point at infinity: Z = 0.
- * Curve: y^2 = x^3 + 7 (a = 0).
- */
-
-/*
- * Point doubling: R = 2*P
- * For a = 0: alpha = 3*X1^2 (not 3*(X1-delta)*(X1+delta))
- * Cost: 4M + 4S
- */
-static void
-k1_point_double(k1fe X3, k1fe Y3, k1fe Z3,
-	const k1fe X1, const k1fe Y1, const k1fe Z1)
-{
-	k1fe gamma, beta, alpha, t1, t2;
-
-	if(k1_fe_is_zero(Z1)){
-		k1_fe_zero(X3); k1_fe_zero(Y3); k1_fe_zero(Z3);
-		return;
-	}
-
-	k1_fe_sqr(gamma, Y1);			/* gamma = Y1^2 */
-	k1_fe_mul(beta, X1, gamma, K1_P);	/* beta = X1 * gamma */
-
-	/* alpha = 3*X1^2 (since a = 0, no delta terms needed) */
-	k1_fe_sqr(alpha, X1);
-	k1_fe_add(t1, alpha, alpha, K1_P);
-	k1_fe_add(alpha, t1, alpha, K1_P);	/* alpha = 3 * X1^2 */
-
-	/* X3 = alpha^2 - 8*beta */
-	k1_fe_sqr(X3, alpha);
-	k1_fe_add(t1, beta, beta, K1_P);	/* 2*beta */
-	k1_fe_add(t1, t1, t1, K1_P);		/* 4*beta */
-	k1_fe_add(t2, t1, t1, K1_P);		/* 8*beta */
-	k1_fe_sub(X3, X3, t2, K1_P);
-
-	/* Z3 = 2*Y1*Z1 */
-	k1_fe_mul(Z3, Y1, Z1, K1_P);
-	k1_fe_add(Z3, Z3, Z3, K1_P);
-
-	/* Y3 = alpha*(4*beta - X3) - 8*gamma^2 */
-	k1_fe_sub(t2, t1, X3, K1_P);		/* 4*beta - X3 */
-	k1_fe_mul(Y3, alpha, t2, K1_P);
-	k1_fe_sqr(t1, gamma);			/* gamma^2 */
-	k1_fe_add(t1, t1, t1, K1_P);		/* 2*gamma^2 */
-	k1_fe_add(t1, t1, t1, K1_P);		/* 4*gamma^2 */
-	k1_fe_add(t1, t1, t1, K1_P);		/* 8*gamma^2 */
-	k1_fe_sub(Y3, Y3, t1, K1_P);
-}
-
-/* point addition: R = P + Q, cost: 11M + 5S */
-static void
-k1_point_add(k1fe X3, k1fe Y3, k1fe Z3,
-	const k1fe X1, const k1fe Y1, const k1fe Z1,
-	const k1fe X2, const k1fe Y2, const k1fe Z2)
-{
-	k1fe Z1Z1, Z2Z2, U1, U2, S1, S2, H, I, J, rr, V, t;
-
-	if(k1_fe_is_zero(Z1)){
-		k1_fe_copy(X3, X2); k1_fe_copy(Y3, Y2); k1_fe_copy(Z3, Z2);
-		return;
-	}
-	if(k1_fe_is_zero(Z2)){
-		k1_fe_copy(X3, X1); k1_fe_copy(Y3, Y1); k1_fe_copy(Z3, Z1);
-		return;
-	}
-
-	k1_fe_sqr(Z1Z1, Z1);
-	k1_fe_sqr(Z2Z2, Z2);
-	k1_fe_mul(U1, X1, Z2Z2, K1_P);
-	k1_fe_mul(U2, X2, Z1Z1, K1_P);
-	k1_fe_mul(S1, Y1, Z2, K1_P);
-	k1_fe_mul(S1, S1, Z2Z2, K1_P);
-	k1_fe_mul(S2, Y2, Z1, K1_P);
-	k1_fe_mul(S2, S2, Z1Z1, K1_P);
-
-	k1_fe_sub(H, U2, U1, K1_P);
-	if(k1_fe_is_zero(H)){
-		k1_fe_sub(t, S2, S1, K1_P);
-		if(k1_fe_is_zero(t)){
-			k1_point_double(X3, Y3, Z3, X1, Y1, Z1);
-			return;
-		}
-		k1_fe_zero(X3); k1_fe_zero(Y3); k1_fe_zero(Z3);
-		return;
-	}
-
-	k1_fe_add(I, H, H, K1_P);
-	k1_fe_sqr(I, I);			/* I = (2*H)^2 */
-	k1_fe_mul(J, H, I, K1_P);		/* J = H * I */
-	k1_fe_sub(rr, S2, S1, K1_P);
-	k1_fe_add(rr, rr, rr, K1_P);		/* rr = 2*(S2 - S1) */
-	k1_fe_mul(V, U1, I, K1_P);
-
-	/* X3 = rr^2 - J - 2*V */
-	k1_fe_sqr(X3, rr);
-	k1_fe_sub(X3, X3, J, K1_P);
-	k1_fe_sub(X3, X3, V, K1_P);
-	k1_fe_sub(X3, X3, V, K1_P);
-
-	/* Y3 = rr*(V - X3) - 2*S1*J */
-	k1_fe_sub(t, V, X3, K1_P);
-	k1_fe_mul(Y3, rr, t, K1_P);
-	k1_fe_mul(t, S1, J, K1_P);
-	k1_fe_add(t, t, t, K1_P);
-	k1_fe_sub(Y3, Y3, t, K1_P);
-
-	/* Z3 = ((Z1+Z2)^2 - Z1Z1 - Z2Z2) * H */
-	k1_fe_add(Z3, Z1, Z2, K1_P);
-	k1_fe_sqr(Z3, Z3);
-	k1_fe_sub(Z3, Z3, Z1Z1, K1_P);
-	k1_fe_sub(Z3, Z3, Z2Z2, K1_P);
-	k1_fe_mul(Z3, Z3, H, K1_P);
-}
-
-/* convert Jacobian to affine coordinates */
-static void
-k1_point_to_affine(uchar outx[32], uchar outy[32],
-	const k1fe X, const k1fe Y, const k1fe Z)
-{
-	k1fe zinv, zinv2, zinv3, ax, ay;
-
-	k1_fe_inv(zinv, Z);
-	k1_fe_sqr(zinv2, zinv);
-	k1_fe_mul(zinv3, zinv2, zinv, K1_P);
-	k1_fe_mul(ax, X, zinv2, K1_P);
-	k1_fe_mul(ay, Y, zinv3, K1_P);
-	k1_fe_to_bytes(outx, ax);
-	k1_fe_to_bytes(outy, ay);
-}
-
-/*
- * Constant-time Montgomery ladder scalar multiplication.
- * Processes bits from MSB to LSB.
- * scalar is 32 bytes, big-endian.
- */
-static void
-k1_point_mul(k1fe RX, k1fe RY, k1fe RZ,
-	const uchar scalar[32],
-	const k1fe PX, const k1fe PY, const k1fe PZ)
-{
-	k1fe R0X, R0Y, R0Z;
-	k1fe R1X, R1Y, R1Z;
-	int i, bit, swap;
-
-	/* R0 = infinity, R1 = P */
-	k1_fe_zero(R0X); k1_fe_zero(R0Y); k1_fe_zero(R0Z);
-	k1_fe_copy(R1X, PX); k1_fe_copy(R1Y, PY); k1_fe_copy(R1Z, PZ);
-
-	swap = 0;
-	for(i = 255; i >= 0; i--){
-		bit = (scalar[31 - i/8] >> (i & 7)) & 1;
-		swap ^= bit;
-		k1_fe_cswap(R0X, R1X, swap);
-		k1_fe_cswap(R0Y, R1Y, swap);
-		k1_fe_cswap(R0Z, R1Z, swap);
-		swap = bit;
-
-		k1_point_add(R1X, R1Y, R1Z,
-			R0X, R0Y, R0Z, R1X, R1Y, R1Z);
-		k1_point_double(R0X, R0Y, R0Z,
-			R0X, R0Y, R0Z);
-	}
-	k1_fe_cswap(R0X, R1X, swap);
-	k1_fe_cswap(R0Y, R1Y, swap);
-	k1_fe_cswap(R0Z, R1Z, swap);
-
-	k1_fe_copy(RX, R0X);
-	k1_fe_copy(RY, R0Y);
-	k1_fe_copy(RZ, R0Z);
-}
-
-/* check that affine point (x, y) is on the curve: y^2 = x^3 + 7 */
 static int
-k1_point_on_curve(const k1fe x, const k1fe y)
+ptaffine(limb *x, limb *y, const Pt *a)
 {
-	k1fe lhs, rhs;
+	const Mont *F;
+	felem zi, t;
 
-	k1_fe_sqr(lhs, y);			/* y^2 */
-	k1_fe_sqr(rhs, x);
-	k1_fe_mul(rhs, rhs, x, K1_P);		/* x^3 */
-	k1_fe_add(rhs, rhs, K1_B, K1_P);	/* x^3 + 7 */
-	return k1_fe_eq(lhs, rhs);
+	F = &K1P;
+	if(fiszero(a->z))
+		return -1;
+	pinv(zi, a->z);
+	mmul(F, t, a->x, zi);
+	mfrom(F, x, t);
+	if(y != nil){
+		mmul(F, t, a->y, zi);
+		mfrom(F, y, t);
+	}
+	return 0;
+}
+
+/* x^3 + 7, all in the Montgomery domain */
+static void
+curverhs(limb *r, const limb *x)
+{
+	felem b;
+
+	msqr(&K1P, r, x);
+	mmul(&K1P, r, r, x);
+	mto(&K1P, b, K1B);
+	madd(&K1P, r, r, b);
 }
 
 /*
- * mpint helpers for scalar arithmetic mod n
+ * A public affine point (big-endian x, y): each coordinate < p and the
+ * point on the curve (which also excludes the identity, having no affine
+ * form), else -1.
  */
-
-static mpint*
-k1_fe_to_mp(const k1fe a)
+static int
+ptload(Pt *r, const uchar *bx, const uchar *by)
 {
-	uchar buf[32];
-	k1_fe_to_bytes(buf, a);
-	return betomp(buf, 32, nil);
+	const Mont *F;
+	felem x, y, lhs, rhs;
+
+	F = &K1P;
+	bytestof(x, bx);
+	bytestof(y, by);
+	if(!fless(x, F->m) || !fless(y, F->m))
+		return -1;
+	mto(F, r->x, x);
+	mto(F, r->y, y);
+	mone(F, r->z);
+	msqr(F, lhs, r->y);
+	curverhs(rhs, r->x);
+	if(!fequal(lhs, rhs))
+		return -1;
+	return 0;
 }
 
-static void
-k1_mp_to_bytes(uchar out[32], mpint *m)
+/* all ones if 0 < a < n (a, 32 bytes big-endian), else 0 */
+static limb
+scalarok(const uchar *a)
 {
-	uchar buf[33];
-	int n;
+	felem s;
+	limb ok;
 
-	memset(out, 0, 32);
-	n = mptobe(m, buf, sizeof(buf), nil);
-	if(n > 0 && n <= 32)
-		memmove(out + 32 - n, buf, n);
-	else if(n > 32)
-		memmove(out, buf + n - 32, 32);
+	bytestof(s, a);
+	ok = ~fiszero(s) & fless(s, K1N.m);
+	memset(s, 0, sizeof s);
+	return ok;
+}
+
+/* the leftmost 32 bytes of hash (left-padded if shorter), and that mod n */
+static void
+hashtoscalar(uchar h[32], limb *e, const uchar *hash, int hashlen)
+{
+	memset(h, 0, 32);
+	if(hashlen >= 32)
+		memmove(h, hash, 32);
+	else if(hashlen > 0)
+		memmove(h + 32 - hashlen, hash, hashlen);
+	bytestof(e, h);
+	freduce(&K1N, e, e);	/* e < 2^256 < 2n */
+}
+
+/* (x, y) as 0x04 || x || y */
+static void
+pubbytes(uchar pub[65], const limb *x, const limb *y)
+{
+	pub[0] = 0x04;
+	ftobytes(pub + 1, x);
+	ftobytes(pub + 33, y);
+}
+
+/* pub = priv * G; -1 if priv is out of range */
+static int
+pubfrompriv(uchar pub[65], const uchar priv[32])
+{
+	Pt g, r;
+	felem x, y;
+
+	if(!scalarok(priv))
+		return -1;
+	ptbase(&g);
+	ptmul(&r, priv, &g);
+	if(ptaffine(x, y, &r) < 0)
+		return -1;
+	pubbytes(pub, x, y);
+	memset(&r, 0, sizeof r);
+	/* a fault check: the public key must be on the curve */
+	if(ptload(&g, pub + 1, pub + 33) < 0)
+		return -1;
+	return 0;
 }
 
 /*
- * RFC 6979 deterministic k generation.
- * Required for Ethereum transaction signing (deterministic signatures).
- *
- * Uses HMAC-SHA256 as the DRBG, per RFC 6979 Section 3.2.
+ * RFC 6979 (3.2) with HMAC-SHA256: k from the private key and
+ * h1 = int2octets(bits2int(hash) mod n).  A candidate out of [1, n-1] is
+ * dropped, and says nothing about the one kept.
  */
-static void
-k1_rfc6979_k(uchar kout[32], const uchar privkey[32], const uchar hash[32])
+static int
+rfc6979(uchar kout[32], const uchar priv[32], const uchar h1[32])
 {
-	uchar V[32], K[32], tmp[32];
-	uchar buf[32+1+32+32];  /* V || 0x00/0x01 || privkey || hash */
-	int i;
+	uchar V[32], K[32], buf[32+1+32+32];
+	int i, rv;
 
-	/* Step a: V = 0x01 0x01 ... (32 bytes) */
 	memset(V, 0x01, 32);
-
-	/* Step b: K = 0x00 0x00 ... (32 bytes) */
 	memset(K, 0x00, 32);
-
-	/* Step d: K = HMAC_K(V || 0x00 || privkey || hash) */
 	memmove(buf, V, 32);
 	buf[32] = 0x00;
-	memmove(buf+33, privkey, 32);
-	memmove(buf+65, hash, 32);
-	hmac_sha256(buf, 97, K, 32, tmp, nil);
-	memmove(K, tmp, 32);
-
-	/* Step e: V = HMAC_K(V) */
-	hmac_sha256(V, 32, K, 32, tmp, nil);
-	memmove(V, tmp, 32);
-
-	/* Step f: K = HMAC_K(V || 0x01 || privkey || hash) */
+	memmove(buf+33, priv, 32);
+	memmove(buf+65, h1, 32);
+	hmac_sha256(buf, 97, K, 32, K, nil);
+	hmac_sha256(V, 32, K, 32, V, nil);
 	memmove(buf, V, 32);
 	buf[32] = 0x01;
-	memmove(buf+33, privkey, 32);
-	memmove(buf+65, hash, 32);
-	hmac_sha256(buf, 97, K, 32, tmp, nil);
-	memmove(K, tmp, 32);
+	hmac_sha256(buf, 97, K, 32, K, nil);
+	hmac_sha256(V, 32, K, 32, V, nil);
 
-	/* Step g: V = HMAC_K(V) */
-	hmac_sha256(V, 32, K, 32, tmp, nil);
-	memmove(V, tmp, 32);
-
-	/* Step h: generate k candidates until valid */
+	rv = -1;
 	for(i = 0; i < 100; i++){
-		mpint *km, *nm;
-		uchar nbuf[32];
-
-		/* V = HMAC_K(V) */
-		hmac_sha256(V, 32, K, 32, tmp, nil);
-		memmove(V, tmp, 32);
-
-		/* check 0 < k < n */
-		km = betomp(V, 32, nil);
-		k1_fe_to_bytes(nbuf, K1_N);
-		nm = betomp(nbuf, 32, nil);
-		if(mpcmp(km, mpzero) > 0 && mpcmp(km, nm) < 0){
+		hmac_sha256(V, 32, K, 32, V, nil);
+		if(scalarok(V)){
 			memmove(kout, V, 32);
-			mpfree(km);
-			mpfree(nm);
-			/* zero temporaries */
-			secureZero(V, 32);
-			secureZero(K, 32);
-			secureZero(tmp, 32);
-			secureZero(buf, sizeof(buf));
-			return;
+			rv = 0;
+			break;
 		}
-		mpfree(km);
-		mpfree(nm);
-
-		/* K = HMAC_K(V || 0x00) */
 		memmove(buf, V, 32);
 		buf[32] = 0x00;
-		hmac_sha256(buf, 33, K, 32, tmp, nil);
-		memmove(K, tmp, 32);
-
-		/* V = HMAC_K(V) */
-		hmac_sha256(V, 32, K, 32, tmp, nil);
-		memmove(V, tmp, 32);
+		hmac_sha256(buf, 33, K, 32, K, nil);
+		hmac_sha256(V, 32, K, 32, V, nil);
 	}
-
-	/* should never reach here; fallback to random */
-	prng(kout, 32);
-	secureZero(V, 32);
-	secureZero(K, 32);
-	secureZero(tmp, 32);
-	secureZero(buf, sizeof(buf));
+	secureZero(V, sizeof V);
+	secureZero(K, sizeof K);
+	secureZero(buf, sizeof buf);
+	return rv;
 }
 
 /*
  * Public API
  */
 
-/*
- * A private key is valid iff 0 < priv < n (curve order).
- * Returns 1 if valid, 0 otherwise.
- */
+/* 1 if 0 < priv < n, else 0 */
 int
 secp256k1_privkey_valid(uchar priv[32])
 {
-	k1fe kfe;
-	int ok;
-
-	k1_bytes_to_fe(kfe, priv);
-	ok = !k1_fe_is_zero(kfe) && !k1_fe_gte(kfe, K1_N);
-	secureZero(kfe, sizeof(kfe));
-	return ok;
+	return scalarok(priv) != 0;
 }
 
 int
 secp256k1_keygen(uchar priv[32], uchar pub[65])
 {
-	k1fe one;
-	k1fe RX, RY, RZ;
-	uchar kbuf[32];
+	uchar k[32];
 	int i;
 
 	/*
@@ -740,400 +836,203 @@ secp256k1_keygen(uchar priv[32], uchar pub[65])
 	 * probability is ~2^-128, so one draw is virtually always enough;
 	 * the loop bound only guards against a broken CSPRNG.
 	 */
-	for(i = 0; ; i++){
-		if(i >= 64){
-			secureZero(kbuf, sizeof(kbuf));
-			return -1;
-		}
-		prng(kbuf, 32);
-		if(secp256k1_privkey_valid(kbuf))
+	for(i = 0; i < 64; i++){
+		prng(k, 32);
+		if(scalarok(k))
 			break;
 	}
-
-	memmove(priv, kbuf, 32);
-
-	/* compute public key = k * G */
-	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
-	k1_point_mul(RX, RY, RZ, priv, K1_Gx, K1_Gy, one);
-
-	if(k1_fe_is_zero(RZ)){
-		secureZero(kbuf, sizeof(kbuf));
-		secureZero(priv, 32);
+	if(i == 64 || pubfrompriv(pub, k) < 0){
+		secureZero(k, sizeof k);
 		return -1;
 	}
-
-	/* uncompressed format: 0x04 || x || y */
-	pub[0] = 0x04;
-	k1_point_to_affine(pub + 1, pub + 33, RX, RY, RZ);
-
-	/* validate generated point is on curve */
-	{
-		k1fe chkx, chky;
-		k1_bytes_to_fe(chkx, pub + 1);
-		k1_bytes_to_fe(chky, pub + 33);
-		if(!k1_point_on_curve(chkx, chky)){
-			secureZero(kbuf, sizeof(kbuf));
-			secureZero(priv, 32);
-			return -1;
-		}
-	}
-
-	secureZero(kbuf, sizeof(kbuf));
+	memmove(priv, k, 32);
+	secureZero(k, sizeof k);
 	return 0;
 }
 
 int
 secp256k1_pubkey(uchar pub[65], uchar priv[32])
 {
-	k1fe one, RX, RY, RZ;
-
-	if(!secp256k1_privkey_valid(priv))
-		return -1;
-
-	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
-	k1_point_mul(RX, RY, RZ, priv, K1_Gx, K1_Gy, one);
-
-	if(k1_fe_is_zero(RZ))
-		return -1;
-
-	pub[0] = 0x04;
-	k1_point_to_affine(pub + 1, pub + 33, RX, RY, RZ);
-	return 0;
+	return pubfrompriv(pub, priv);
 }
 
 /*
  * ECDSA sign with recovery ID.
- * sig[65] = r[32] || s[32] || v[1]
- * v = recovery ID (0 or 1), used by Ethereum's ecrecover.
- *
- * Uses RFC 6979 deterministic k for Ethereum compatibility.
- * Applies low-S normalization (BIP-62 / EIP-2).
+ * sig[65] = r[32] || s[32] || v[1], v the recovery id (0 or 1: R's y
+ * parity), as Ethereum's ecrecover takes it.  Deterministic (RFC 6979),
+ * and S is low (BIP-62, EIP-2): s > n/2 is replaced by n - s, and v
+ * flipped with it.
  */
 int
 secp256k1_sign(uchar sig[65], uchar priv[32], uchar *hash, int hashlen)
 {
-	mpint *n, *k, *r, *s, *e, *d, *kinv, *t, *halfn;
-	k1fe one, RX, RY, RZ;
-	uchar kbuf[32], xbuf[32], ybuf[32];
-	uchar hbuf[32], nbuf[32];
-	int recid;
+	const Mont *Q;
+	uchar k[32], h1[32];
+	felem e, d, r, s, km, t, x, y;
+	limb high, recid;
+	Pt g, R;
+	int rv;
 
-	/* reject out-of-range keys before deriving anything from them */
-	if(!secp256k1_privkey_valid(priv))
+	if(!scalarok(priv))
 		return -1;
+	Q = &K1N;
+	rv = -1;
+	hashtoscalar(h1, e, hash, hashlen);
+	ftobytes(h1, e);
+	if(rfc6979(k, priv, h1) < 0)
+		goto out;
 
-	/* load curve order */
-	k1_fe_to_bytes(nbuf, K1_N);
-	n = betomp(nbuf, 32, nil);
+	/* R = kG; r = x(R) mod n (x < p < 2n), v = y(R) mod 2 */
+	ptbase(&g);
+	ptmul(&R, k, &g);
+	if(ptaffine(x, y, &R) < 0)
+		goto out;
+	recid = y[0] & 1;
+	freduce(Q, r, x);
+	if(fiszero(r))
+		goto out;
 
-	/* load private key */
-	d = betomp(priv, 32, nil);
+	/* s = k^-1 (e + r d) mod n */
+	bytestof(d, priv);
+	mto(Q, d, d);
+	mto(Q, t, r);
+	mmul(Q, t, t, d);
+	mto(Q, e, e);
+	madd(Q, t, t, e);
+	bytestof(km, k);
+	mto(Q, km, km);
+	ninv(km, km);
+	mmul(Q, s, km, t);
+	mfrom(Q, s, s);
+	if(fiszero(s))
+		goto out;
 
-	/* truncate hash to 256 bits */
-	if(hashlen >= 32)
-		memmove(hbuf, hash, 32);
-	else{
-		memset(hbuf, 0, 32);
-		memmove(hbuf + 32 - hashlen, hash, hashlen);
-	}
-	e = betomp(hbuf, 32, nil);
-	mpmod(e, n, e);
+	/* low S */
+	high = fless(K1HALFN, s);
+	mneg(Q, t, s);
+	fselect(s, high, t, s);
+	recid ^= high & 1;
 
-	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
-	r = mpnew(256);
-	s = mpnew(256);
-	kinv = mpnew(256);
-	t = mpnew(512);
-
-	/* load n/2 for low-S check */
-	k1_fe_to_bytes(nbuf, K1_HALFN);
-	halfn = betomp(nbuf, 32, nil);
-
-	/* RFC 6979 deterministic k */
-	k1_rfc6979_k(kbuf, priv, hbuf);
-	k = betomp(kbuf, 32, nil);
-
-	/* compute (x1, y1) = k * G */
-	k1_point_mul(RX, RY, RZ, kbuf, K1_Gx, K1_Gy, one);
-	if(k1_fe_is_zero(RZ))
-		goto fail;
-
-	/* r = x1 mod n */
-	k1_point_to_affine(xbuf, ybuf, RX, RY, RZ);
-	mpfree(r);
-	r = betomp(xbuf, 32, nil);
-
-	/* recovery ID: bit 0 = y1 parity */
-	recid = ybuf[31] & 1;
-
-	k1_fe_to_bytes(nbuf, K1_N);
-	mpfree(n);
-	n = betomp(nbuf, 32, nil);
-	mpmod(r, n, r);
-	if(mpcmp(r, mpzero) == 0)
-		goto fail;
-
-	/* s = k^(-1) * (e + r*d) mod n */
-	mpinvert(k, n, kinv);
-	mpmul(r, d, t);		/* t = r * d */
-	mpmod(t, n, t);
-	mpadd(e, t, t);		/* t = e + r*d */
-	mpmod(t, n, t);
-	mpmul(kinv, t, s);		/* s = kinv * (e + r*d) */
-	mpmod(s, n, s);
-
-	if(mpcmp(s, mpzero) == 0)
-		goto fail;
-
-	/* low-S normalization (BIP-62 / EIP-2): if s > n/2, s = n - s */
-	if(mpcmp(s, halfn) > 0){
-		mpsub(n, s, s);
-		recid ^= 1;	/* flip recovery ID */
-	}
-
-	/* output (r, s, v) */
-	k1_mp_to_bytes(sig, r);
-	k1_mp_to_bytes(sig + 32, s);
+	ftobytes(sig, r);
+	ftobytes(sig + 32, s);
 	sig[64] = recid;
+	rv = 0;
+out:
+	secureZero(k, sizeof k);
+	secureZero(d, sizeof d);
+	secureZero(km, sizeof km);
+	secureZero(t, sizeof t);
+	secureZero(&R, sizeof R);
+	return rv;
+}
 
-	mpfree(r); mpfree(s); mpfree(kinv); mpfree(t);
-	mpfree(n); mpfree(d); mpfree(e); mpfree(k); mpfree(halfn);
-	secureZero(kbuf, sizeof(kbuf));
-	secureZero(hbuf, sizeof(hbuf));
+/* (r, s) from sig, each in [1, n-1], else -1; all public */
+static int
+sigload(limb *r, limb *s, const uchar *sig)
+{
+	bytestof(r, sig);
+	bytestof(s, sig + 32);
+	if(fiszero(r) || fiszero(s) || !fless(r, K1N.m) || !fless(s, K1N.m))
+		return -1;
 	return 0;
+}
 
-fail:
-	mpfree(r); mpfree(s); mpfree(kinv); mpfree(t);
-	mpfree(n); mpfree(d); mpfree(e); mpfree(k); mpfree(halfn);
-	secureZero(kbuf, sizeof(kbuf));
-	secureZero(hbuf, sizeof(hbuf));
-	return -1;
+/* u1*G + u2*P, its affine x and y; -1 if it is the identity.  All public. */
+static int
+dualmul(limb *x, limb *y, const limb *u1, const limb *u2, const Pt *P)
+{
+	uchar b1[32], b2[32];
+	Pt g, p1, p2;
+	felem b3;
+
+	ftobytes(b1, u1);
+	ftobytes(b2, u2);
+	ptbase(&g);
+	ptmul(&p1, b1, &g);
+	ptmul(&p2, b2, P);
+	b3mont(b3);
+	ptadd(&p1, &p1, &p2, b3);
+	return ptaffine(x, y, &p1);
 }
 
 /*
- * Recover public key from signature and hash.
- * sig[65] = r[32] || s[32] || v[1]
+ * Recover the public key from a signature and hash (ecrecover).
+ * sig[65] = r[32] || s[32] || v[1] (v's low bit is R's y parity)
  * pub[65] = 0x04 || x[32] || y[32]
- *
- * Returns 0 on success, -1 on failure.
+ * Returns 0 on success, -1 on failure.  Everything here is public.
  */
 int
 secp256k1_recover(uchar pub[65], uchar *hash, int hashlen, uchar sig[65])
 {
-	mpint *n, *r, *s, *e, *rinv, *u1m, *u2m;
-	k1fe px, py, one;
-	k1fe P1X, P1Y, P1Z, P2X, P2Y, P2Z, RX, RY, RZ;
-	uchar xbuf[32], ybuf[32], u1buf[32], u2buf[32], hbuf[32], nbuf[32];
-	k1fe rx, t1;
-	int recid;
+	const Mont *F, *Q;
+	uchar h[32];
+	felem r, s, e, rm, y2, y, t, u1, u2, qx, qy;
+	Pt R;
 
-	recid = sig[64] & 1;
-
-	/* load signature (r, s) */
-	r = betomp(sig, 32, nil);
-	s = betomp(sig + 32, 32, nil);
-
-	/* load curve order */
-	k1_fe_to_bytes(nbuf, K1_N);
-	n = betomp(nbuf, 32, nil);
-
-	/* validate r, s in [1, n-1] */
-	if(mpcmp(r, mpzero) <= 0 || mpcmp(r, n) >= 0 ||
-	   mpcmp(s, mpzero) <= 0 || mpcmp(s, n) >= 0){
-		mpfree(r); mpfree(s); mpfree(n);
+	F = &K1P;
+	Q = &K1N;
+	if(sigload(r, s, sig) < 0)
 		return -1;
-	}
 
-	/* recover R point: x = r, compute y from curve equation */
-	k1_mp_to_bytes(xbuf, r);
-	k1_bytes_to_fe(rx, xbuf);
+	/* R = (r, y), y^2 = r^3 + 7, y's parity v; r < n < p */
+	mto(F, R.x, r);
+	curverhs(y2, R.x);
+	psqrt(y, y2);
+	msqr(F, t, y);
+	if(!fequal(t, y2))
+		return -1;	/* r is no point's x */
+	mfrom(F, t, y);
+	if((t[0] & 1) != (sig[64] & 1))
+		mneg(F, y, y);
+	fcopy(R.y, y);
+	mone(F, R.z);
 
-	/* y^2 = x^3 + 7 mod p */
-	k1_fe_sqr(t1, rx);
-	k1_fe_mul(t1, t1, rx, K1_P);
-	k1_fe_add(t1, t1, K1_B, K1_P);
-
-	/*
-	 * Compute square root: y = t1^((p+1)/4) mod p
-	 * This works because p ≡ 3 (mod 4) for secp256k1.
-	 */
-	{
-		mpint *ymp, *pmp, *exp;
-		uchar pbuf[32], ybuf2[33];
-		int nn;
-
-		k1_fe_to_bytes(pbuf, K1_P);
-		pmp = betomp(pbuf, 32, nil);
-
-		/* exp = (p + 1) / 4 */
-		exp = mpcopy(pmp);
-		mpadd(exp, mpone, exp);
-		mpright(exp, 2, exp);
-
-		k1_fe_to_bytes(pbuf, t1);
-		ymp = betomp(pbuf, 32, nil);
-		mpexp(ymp, exp, pmp, ymp);
-
-		memset(ybuf, 0, 32);
-		nn = mptobe(ymp, ybuf2, sizeof(ybuf2), nil);
-		if(nn > 0 && nn <= 32)
-			memmove(ybuf + 32 - nn, ybuf2, nn);
-		else if(nn > 32)
-			memmove(ybuf, ybuf2 + nn - 32, 32);
-
-		/* choose correct y parity */
-		if((ybuf[31] & 1) != recid){
-			/* y = p - y */
-			k1fe yfe;
-			k1_bytes_to_fe(yfe, ybuf);
-			k1_fe_sub(yfe, K1_P, yfe, K1_P);
-			k1_fe_to_bytes(ybuf, yfe);
-		}
-
-		mpfree(ymp); mpfree(pmp); mpfree(exp);
-	}
-
-	/* validate recovered point */
-	k1_bytes_to_fe(px, xbuf);
-	k1_bytes_to_fe(py, ybuf);
-	if(!k1_point_on_curve(px, py)){
-		mpfree(r); mpfree(s); mpfree(n);
+	/* Q = r^-1 (s R - e G): u1 = -e r^-1, u2 = s r^-1 (mod n) */
+	hashtoscalar(h, e, hash, hashlen);
+	mto(Q, rm, r);
+	ninv(rm, rm);
+	mto(Q, u1, e);
+	mmul(Q, u1, u1, rm);
+	mfrom(Q, u1, u1);
+	mneg(Q, u1, u1);
+	mto(Q, u2, s);
+	mmul(Q, u2, u2, rm);
+	mfrom(Q, u2, u2);
+	if(dualmul(qx, qy, u1, u2, &R) < 0)
 		return -1;
-	}
-
-	/* load hash */
-	if(hashlen >= 32)
-		memmove(hbuf, hash, 32);
-	else{
-		memset(hbuf, 0, 32);
-		memmove(hbuf + 32 - hashlen, hash, hashlen);
-	}
-	e = betomp(hbuf, 32, nil);
-	mpmod(e, n, e);
-
-	/* r^(-1) mod n */
-	rinv = mpnew(256);
-	mpinvert(r, n, rinv);
-
-	/* u1 = -e * r^(-1) mod n, u2 = s * r^(-1) mod n */
-	u1m = mpnew(512);
-	u2m = mpnew(512);
-	mpmul(e, rinv, u1m);
-	mpmod(u1m, n, u1m);
-	mpsub(n, u1m, u1m);	/* u1 = n - (e * rinv mod n) = -e * rinv mod n */
-	mpmul(s, rinv, u2m);
-	mpmod(u2m, n, u2m);
-
-	k1_mp_to_bytes(u1buf, u1m);
-	k1_mp_to_bytes(u2buf, u2m);
-
-	/* Q = u1*G + u2*R */
-	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
-	k1_point_mul(P1X, P1Y, P1Z, u1buf, K1_Gx, K1_Gy, one);
-	k1_point_mul(P2X, P2Y, P2Z, u2buf, px, py, one);
-	k1_point_add(RX, RY, RZ, P1X, P1Y, P1Z, P2X, P2Y, P2Z);
-
-	if(k1_fe_is_zero(RZ)){
-		mpfree(r); mpfree(s); mpfree(n); mpfree(e);
-		mpfree(rinv); mpfree(u1m); mpfree(u2m);
-		return -1;
-	}
-
-	pub[0] = 0x04;
-	k1_point_to_affine(pub + 1, pub + 33, RX, RY, RZ);
-
-	mpfree(r); mpfree(s); mpfree(n); mpfree(e);
-	mpfree(rinv); mpfree(u1m); mpfree(u2m);
+	pubbytes(pub, qx, qy);
 	return 0;
 }
 
+/* 1 if sig[64] = r || s is pub's signature of hash, else 0 */
 int
 secp256k1_verify(uchar sig[64], uchar pub[65], uchar *hash, int hashlen)
 {
-	mpint *n, *r, *s, *e, *w, *u1m, *u2m;
-	k1fe px, py, one;
-	k1fe P1X, P1Y, P1Z, P2X, P2Y, P2Z, RX, RY, RZ;
-	k1fe zinv, zinv2, ax;
-	uchar u1buf[32], u2buf[32], hbuf[32], nbuf[32];
-	int ok;
+	const Mont *Q;
+	uchar h[32];
+	felem r, s, e, w, u1, u2, x, y;
+	Pt P;
 
-	/* pub must start with 0x04 (uncompressed) */
+	Q = &K1N;
 	if(pub[0] != 0x04)
 		return 0;
-
-	/* load signature (r, s) */
-	r = betomp(sig, 32, nil);
-	s = betomp(sig + 32, 32, nil);
-
-	/* load curve order */
-	k1_fe_to_bytes(nbuf, K1_N);
-	n = betomp(nbuf, 32, nil);
-
-	/* check 1 <= r, s <= n-1 */
-	if(mpcmp(r, mpzero) <= 0 || mpcmp(r, n) >= 0 ||
-	   mpcmp(s, mpzero) <= 0 || mpcmp(s, n) >= 0){
-		mpfree(r); mpfree(s); mpfree(n);
+	if(sigload(r, s, sig) < 0)
 		return 0;
-	}
-
-	/* load hash */
-	if(hashlen >= 32)
-		memmove(hbuf, hash, 32);
-	else{
-		memset(hbuf, 0, 32);
-		memmove(hbuf + 32 - hashlen, hash, hashlen);
-	}
-	e = betomp(hbuf, 32, nil);
-	mpmod(e, n, e);
-
-	/* w = s^(-1) mod n */
-	w = mpnew(256);
-	mpinvert(s, n, w);
-
-	/* u1 = e * w mod n, u2 = r * w mod n */
-	u1m = mpnew(512);
-	u2m = mpnew(512);
-	mpmul(e, w, u1m);
-	mpmod(u1m, n, u1m);
-	mpmul(r, w, u2m);
-	mpmod(u2m, n, u2m);
-
-	k1_mp_to_bytes(u1buf, u1m);
-	k1_mp_to_bytes(u2buf, u2m);
-
-	/* validate public key */
-	k1_bytes_to_fe(px, pub + 1);
-	k1_bytes_to_fe(py, pub + 33);
-	if(!k1_point_on_curve(px, py)){
-		mpfree(r); mpfree(s); mpfree(n); mpfree(e);
-		mpfree(w); mpfree(u1m); mpfree(u2m);
+	if(ptload(&P, pub + 1, pub + 33) < 0)
 		return 0;
-	}
+	hashtoscalar(h, e, hash, hashlen);
 
-	/* compute u1*G + u2*Q */
-	one[0] = 1; one[1] = 0; one[2] = 0; one[3] = 0;
-	k1_point_mul(P1X, P1Y, P1Z, u1buf, K1_Gx, K1_Gy, one);
-	k1_point_mul(P2X, P2Y, P2Z, u2buf, px, py, one);
-	k1_point_add(RX, RY, RZ, P1X, P1Y, P1Z, P2X, P2Y, P2Z);
-
-	ok = 0;
-	if(!k1_fe_is_zero(RZ)){
-		/* x1 = X / Z^2 */
-		k1_fe_inv(zinv, RZ);
-		k1_fe_sqr(zinv2, zinv);
-		k1_fe_mul(ax, RX, zinv2, K1_P);
-
-		/* check x1 mod n == r */
-		k1_fe_to_bytes(u1buf, ax);
-		{
-			mpint *xmp = betomp(u1buf, 32, nil);
-			mpmod(xmp, n, xmp);
-			ok = mpcmp(xmp, r) == 0;
-			mpfree(xmp);
-		}
-	}
-
-	mpfree(r); mpfree(s); mpfree(n); mpfree(e);
-	mpfree(w); mpfree(u1m); mpfree(u2m);
-	return ok;
+	/* w = s^-1, u1 = e w, u2 = r w (mod n) */
+	mto(Q, w, s);
+	ninv(w, w);
+	mto(Q, u1, e);
+	mmul(Q, u1, u1, w);
+	mfrom(Q, u1, u1);
+	mto(Q, u2, r);
+	mmul(Q, u2, u2, w);
+	mfrom(Q, u2, u2);
+	if(dualmul(x, y, u1, u2, &P) < 0)
+		return 0;
+	freduce(Q, x, x);	/* x < p < 2n */
+	return fequal(x, r) != 0;
 }

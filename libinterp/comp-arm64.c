@@ -379,6 +379,7 @@ rmcall(void)
 {
 	Frame *f;
 	Prog *p;
+	Inst *lr;
 
 	if((void*)R.dt == H)
 		error(exModule);
@@ -388,7 +389,21 @@ rmcall(void)
 		error(exModule);
 
 	f->mr = nil;
+	/*
+	 * R.PC before the caller's every handler, while the builtin runs:
+	 * an exception it raises (exBounds from utfbytes, out of memory,
+	 * an interrupted call) is then matched not with this frame, the
+	 * builtin's, but through its lr with the caller's pc and frame, as
+	 * the interpreter's mcall has it. R.PC was whatever was last
+	 * punted: inside the caller's handler block, the handler was taken
+	 * with this frame for the caller's, its locals' zeroing and the
+	 * exception written into the builtin's frame, and the caller went
+	 * on in it (destroy of nil; a nil R.FP in compiled code: tests
+	 * jit_builtinexc_test.b, tools/sysfuzz -P, the native chaos build).
+	 */
+	R.PC = (Inst*)R.M->prog;
 	((void(*)(Frame*))R.dt)(f);
+	lr = f->lr;
 	R.SP = (uchar*)f;
 	R.FP = f->fp;
 	if(f->t == nil)
@@ -396,8 +411,22 @@ rmcall(void)
 	else
 		freeptrs(f, f->t);
 	p = currun();
-	if(p->kill != nil)
+	if(p->kill != nil){
+		/*
+		 * A kill that came while the call blocked (exprog, killprog
+		 * of a released Prog) is raised here, in the caller's frame,
+		 * as OP(mcall) raises it. Compiled code keeps the pc in a
+		 * register, and R.PC was whatever it last was: the handler
+		 * matched that with this frame, took another function's
+		 * handler for it, and freed what that function's locals
+		 * would be, here C addresses and nils (destroy of nil:
+		 * sysfuzz, kill with exceptions propagate while a group's
+		 * Progs export and mount). The call's return address is the
+		 * caller's pc.
+		 */
+		R.PC = lr;
 		error(p->kill);
+	}
 }
 
 static void
@@ -1214,10 +1243,11 @@ commframe(Inst *i)
 	PATCH_BCOND(mlnil);
 	con(RELPC(patch[i - mod->prog + 1]), RA1);
 	mem(Stw, O(REG, st), RREG, RA1);
+	mem(Stw, O(REG, PC), RREG, RA1);	/* R.PC as punt writes it: rmfram can raise (comp-amd64.c framepc) */
 	bramac(MacMFRA);
 
 	PATCH_BCOND(punt_lab);
-	blmac(MacFRAM);
+	blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 	opwst(i, Stw, RA2);
 }
 
@@ -1353,7 +1383,7 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3);
-		blmac(MacFRAM);
+		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 		opwst(i, Stw, RA2);
 		return;
 	case ICASE:
@@ -2015,7 +2045,7 @@ comp(Inst *i)
 		}
 		tinit[i->s.imm] = 1;
 		con((uvlong)mod->type[i->s.imm], RA3);
-		blmac(MacFRAM);
+		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
 		opwst(i, Stw, RA2);
 		break;
 
@@ -2222,14 +2252,14 @@ comp(Inst *i)
 /*
  * preamble — comvec entry/exit trampoline (allocated once).
  */
-static void
+static int
 preamble(void)
 {
 	ulong sz;
 	u32int *start, *xpc_loc, *epilogue;
 
 	if(comvec)
-		return;
+		return 1;
 
 	sz = 64 * sizeof(u32int);
 #ifdef INFERNO_NATIVE
@@ -2244,13 +2274,13 @@ preamble(void)
 	 */
 	comvec = malloc(sz);
 	if(comvec == nil)
-		error(exNomem);
+		return 0;
 #elif defined(APPLE_JIT)
 	comvec = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
-		error(exNomem);
+		return 0;
 	}
 	pthread_jit_write_protect_np(0);
 #else
@@ -2258,7 +2288,7 @@ preamble(void)
 			MAP_PRIVATE|MAP_ANON, -1, 0);
 	if(comvec == MAP_FAILED) {
 		comvec = nil;
-		error(exNomem);
+		return 0;
 	}
 #endif
 
@@ -2316,6 +2346,7 @@ preamble(void)
 		for(k = 0; k < code - start; k++)
 			print("  %.8p  %.8ux\n", &start[k], start[k]);
 	}
+	return 1;
 }
 
 /*
@@ -2637,6 +2668,16 @@ macfram(void)
 	mem(Stw, O(REG, s), RREG, RA3);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, st), RREG, 30);
+	/*
+	 * R.PC for extend, whose allocation refused raises "out of memory"
+	 * and is looked for at R.PC (stale, another frame's handler took
+	 * it: comp-amd64.c framepc). The return address is inside the
+	 * IFRAME or MFRAME that called, as good to the handler as punt's
+	 * next instruction, and stored here, on the rare path: stored
+	 * before every call it cost recursive calls 6% (jitbench2's fib
+	 * on the native kernel under -icount).
+	 */
+	mem(Stw, O(REG, PC), RREG, 30);
 	con((uvlong)extend, RTA);
 	BLR_REG(RTA);
 	LOADRREG();
@@ -2774,6 +2815,9 @@ comd(Type *t)
 
 #define Typejithdr	16	/* the mapping's length, in front of a type's code; keeps the code 16-aligned */
 
+/* a type whose code typecom could not make for want of memory: compile fails, the module interpreted */
+static int typecomfailed;
+
 void
 typecom(Type *t)
 {
@@ -2794,12 +2838,12 @@ typecom(Type *t)
 	 * (INFR-421; the amd64 side of the same defect faulted outright).
 	 */
 	if(t->np < 0 || (uvlong)t->np * 8 * TYPECOM_PERPTR > 16*1024*1024)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 	need = TYPECOM_FIXED + (ulong)t->np * 8 * TYPECOM_PERPTR;
 
 	tmp = mallocz((need + TYPECOM_SLACK) * sizeof(u32int), 0);
 	if(tmp == nil)
-		error(exNomem);
+		{ typecomfailed = 1; return; }
 
 	code = tmp;
 	comi(t);
@@ -2951,22 +2995,17 @@ compile(Module *m, int size, Modlink *ml)
 	base = nil;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
-	/* Size tmp buffer proportional to module: each Dis instruction can
-	 * expand to many ARM64 instructions (especially case statements).
-	 * Use 64 ARM64 instructions per Dis instruction as upper bound,
-	 * with a minimum of 8192. */
-	if(size > 0 && (ulong)size > ((ulong)-1) / 64) {
-		/* overflow check */
-		goto bad;
-	}
-	tmpsize = size * 64;
-	if(tmpsize < 8192)
-		tmpsize = 8192;
+	/* Pass 0 generates each instruction, then each macro, into tmp
+	 * from its start to measure it, so tmp holds one at a time and its
+	 * size does not depend on the module's (upstream's is 4096 words).
+	 * One that does not fit is caught below. */
+	tmpsize = 8192;
 	tmp = malloc(tmpsize * sizeof(u32int));
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
 
-	preamble();
+	if(!preamble())
+		goto bad;
 
 	mod = m;
 	n = 0;
@@ -3006,6 +3045,11 @@ compile(Module *m, int size, Modlink *ml)
 		codeoff = n;
 		code = tmp;
 		mactab[i].gen();
+		if(code - tmp >= (int)tmpsize) {
+			print("JIT: macro %d overflow tmp buffer (%lud >= %lud)\n",
+				i, (ulong)(code - tmp), tmpsize);
+			goto bad;
+		}
 		macro[mactab[i].idx] = n;
 		n += code - tmp;
 	}
@@ -3106,6 +3150,25 @@ compile(Module *m, int size, Modlink *ml)
 	 * of #635, found by the tripwire below on the board: "compile IP:
 	 * export .mp pc index -1". The sentinel stays a sentinel.
 	 */
+	/*
+	 * Every type's code first, before a link is changed: typecom
+	 * refused memory leaves the module interpreted and whole. It
+	 * raised "out of memory" from in here, and lockedcompile's lock
+	 * was never let go: every module load after it waited, each
+	 * holding its VM (the native chaos build; a VM stopped for good).
+	 */
+	typecomfailed = 0;
+	for(l = m->ext; l->name; l++)
+		typecom(l->frame);
+	if(ml != nil)
+		for(i = 0; i < ml->nlinks; i++)
+			typecom(ml->links[i].frame);
+	for(i = 0; i < m->ntype; i++)
+		if(tinit[i] != 0)
+			typecom(m->type[i]);
+	if(typecomfailed)
+		goto bad;
+
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc - m->prog == -1){
 			l->u.pc = (Inst*)-1;

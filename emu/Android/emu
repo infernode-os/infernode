@@ -24,6 +24,7 @@ dev
 	audio	audio-sdl3
 	mem
 	phone	phonebridge
+	location	locationbridge
 
 lib
 	interp

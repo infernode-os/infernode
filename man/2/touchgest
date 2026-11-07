@@ -1,0 +1,92 @@
+.TH TOUCHGEST 2
+.SH NAME
+touchgest \- a touch screen's fingers as pointer events
+.SH SYNOPSIS
+.EX
+include "touchgest.m";
+touchgest := load Touchgest Touchgest->PATH;
+Gest: import touchgest;
+
+Longms: con 500;
+
+Gest: adt {
+    new:   fn(verb: string, slop, step: int): ref Gest;
+    frame: fn(g: self ref Gest, pts: list of (int, int), now: int):
+               list of string;
+    tick:  fn(g: self ref Gest, now: int): list of string;
+    due:   fn(g: self ref Gest): int;
+};
+.EE
+.SH DESCRIPTION
+A touch screen has a finger where a mouse has a button, and no other
+buttons and no wheel.
+.I Touchgest
+says what its fingers are as a pointer, for a driver that reads a touch
+screen and writes
+.B /dev/pointer
+(see
+.IR pointer (3)),
+so that a finger means the same on every touch screen: the Raspberry Pi's
+panel
+.RB ( os/init/touch.b ,
+see
+.IR touch (3)),
+a USB touchscreen
+.RB ( os/init/mouseusb.b ),
+and, made the same way by
+.IR emu (1)'s
+SDL backend, a phone's or a tablet's.
+.TP
+One finger
+is button 1, held while it is down, the pointer following it.
+.TP
+One held still
+for
+.B Longms
+milliseconds is button 3: button 1 goes up and button 3 down where the
+finger is, held until it lifts.
+That is every context menu: hold, the menu shows, slide to an item, lift
+to choose it.
+A finger that moves more than
+.I slop
+before then is a drag, and one that lifts before then a tap.
+.TP
+Two dragged
+are the wheel: for each
+.I step
+the fingers move together, button 8 (they moved down) or 16 (up) pressed
+and released where they are; moving them up shows what is below, as a
+phone scrolls.
+Button 1, if the first finger pressed it, goes up first.
+The gesture lasts until every finger has lifted, so the last one up does
+not press button 1 where it happens to be.
+.PP
+.B Gest.new
+makes one for a screen, whose events are written with
+.I verb
+.RB ( m
+for positions in the screen's pixels,
+.B a
+for fractions of it, 0 to 65535, for a driver that does not know how big
+the screen is);
+.I slop
+and
+.I step
+are in the same units.
+.B Frame
+is given each frame's fingers, the first the pointer, and the time in
+milliseconds, and returns the events to write, in order; an empty list of
+fingers is none down.
+A finger held still sends no new frame, so
+.B due
+says when a hold falls due (or \-1 when none is waiting to), and
+.B tick
+is called then, or at any time, and returns button 3's event when it is.
+.SH SOURCE
+.B /appl/lib/touchgest.b
+.br
+.B /module/touchgest.m
+.SH SEE ALSO
+.IR pointer (3),
+.IR touch (3),
+.IR wm-osk (1)

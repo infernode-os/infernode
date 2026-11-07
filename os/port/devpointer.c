@@ -46,6 +46,7 @@ enum{
 	Qdir,
 	Qpointer,
 	Qcursor,
+	Qfingers,
 };
 
 typedef struct Pointer Pointer;
@@ -72,6 +73,7 @@ Dirtab pointertab[]={
 	".",		{Qdir, 0, QTDIR},	0,	0555,
 	"pointer",	{Qpointer},		0,	0666,
 	"cursor",	{Qcursor},		0,	0222,
+	"fingers",	{Qfingers},		0,	0666,
 };
 
 enum {
@@ -172,6 +174,85 @@ mousetrack(int b, int x, int y, int isdelta)
 	wakeup(&ptrq.r);
 }
 
+/*
+ * /dev/fingers: every finger on a touch screen, each a pointer of its
+ * own, as emu's (emu/port/devpointer.c, whose comment says why).  Here
+ * the only source is a write: the touch panel's driver is a program
+ * (os/init/touch.b), which writes "f<id> <x> <y> <on>" for each finger
+ * it reads, as it writes the first one to /dev/pointer.  Each read is
+ * one event, "f<id> <x> <y> <on> <msec>"; one reader at a time; with
+ * none, events are dropped.
+ */
+typedef struct Finger Finger;
+struct Finger
+{
+	int	id;
+	int	x;
+	int	y;
+	int	on;
+	ulong	msec;
+};
+
+enum
+{
+	Nfinger	= 128,
+	Nfingerlift = 16,	/* of those, kept for lifts */
+};
+
+static struct
+{
+	Lock	l;
+	QLock	rq;		/* procs sharing the reader's fd read one at a time */
+	QLock	wq;		/* writers wait for room one at a time */
+	Rendez	r;		/* the reader waits for an event */
+	Rendez	w;		/* a writer waits for room */
+	int	reading;	/* a reader has it open */
+	Finger	e[Nfinger];
+	int	rd;
+	int	n;
+} fq;
+
+/* 1 if queued or dropped for want of a reader, 0 if there is no room */
+static int
+fingerput(int id, int x, int y, int on)
+{
+	Finger *f;
+
+	ilock(&fq.l);
+	if(!fq.reading){
+		iunlock(&fq.l);
+		return 1;
+	}
+	if(fq.n >= (on ? Nfinger-Nfingerlift : Nfinger)){
+		iunlock(&fq.l);
+		return 0;
+	}
+	f = &fq.e[(fq.rd+fq.n) % Nfinger];
+	f->id = id;
+	f->x = x;
+	f->y = y;
+	f->on = on != 0;
+	f->msec = TK2MS(MACHP(0)->ticks);
+	fq.n++;
+	iunlock(&fq.l);
+	wakeup(&fq.r);
+	return 1;
+}
+
+static int
+fingerready(void *a)
+{
+	USED(a);
+	return fq.n > 0;
+}
+
+static int
+fingerroom(void *a)
+{
+	USED(a);
+	return !fq.reading || fq.n < Nfinger-Nfingerlift;
+}
+
 static int
 ptrqnotempty(void *x)
 {
@@ -222,6 +303,17 @@ pointeropen(Chan* c, int omode)
 		error(Eperm);
 	if((ulong)c->qid.path == Qpointer && (omode & 3) != OWRITE)
 		incref(&mouse.ref);
+	if((ulong)c->qid.path == Qfingers && (omode & 3) != OWRITE){
+		ilock(&fq.l);
+		if(fq.reading){
+			iunlock(&fq.l);
+			c->flag &= ~COPEN;
+			error(Einuse);
+		}
+		fq.reading = 1;
+		fq.n = 0;
+		iunlock(&fq.l);
+	}
 	return c;
 }
 
@@ -230,6 +322,16 @@ pointerclose(Chan* c)
 {
 	if((c->flag & COPEN) == 0)
 		return;
+	if((ulong)c->qid.path == Qfingers){
+		if((c->mode & 3) == OWRITE)
+			return;
+		ilock(&fq.l);
+		fq.reading = 0;
+		fq.n = 0;
+		iunlock(&fq.l);
+		wakeup(&fq.w);
+		return;
+	}
 	if((ulong)c->qid.path != Qpointer)
 		return;
 	/*
@@ -248,7 +350,8 @@ static long
 pointerread(Chan* c, void* a, long n, vlong off)
 {
 	Pointer mt;
-	char buf[1+4*12+1];
+	Finger f;
+	char buf[1+5*12+1];
 	int l;
 
 	USED(off);
@@ -266,6 +369,31 @@ pointerread(Chan* c, void* a, long n, vlong off)
 		qunlock(&mouse.q);
 		l = snprint(buf, sizeof(buf), "m%11d %11d %11d %11lud ",
 			mt.x, mt.y, mt.b, mt.msec);
+		if(l < n)
+			n = l;
+		memmove(a, buf, n);
+		break;
+	case Qfingers:
+		qlock(&fq.rq);
+		if(waserror()){
+			qunlock(&fq.rq);
+			nexterror();
+		}
+		sleep(&fq.r, fingerready, nil);
+		poperror();
+		qunlock(&fq.rq);
+		ilock(&fq.l);
+		if(fq.n == 0){
+			iunlock(&fq.l);
+			return 0;
+		}
+		f = fq.e[fq.rd];
+		fq.rd = (fq.rd+1) % Nfinger;
+		fq.n--;
+		iunlock(&fq.l);
+		wakeup(&fq.w);
+		l = snprint(buf, sizeof(buf), "f%11d %11d %11d %11d %11lud ",
+			f.id, f.x, f.y, f.on, f.msec);
 		if(l < n)
 			n = l;
 		memmove(a, buf, n);
@@ -334,6 +462,48 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 			y = (int)(((vlong)y * mouse.maxy) / 65536);
 		}
 		mousetrack(b, x, y, isdelta);
+		break;
+
+	case Qfingers:
+		if(n > sizeof buf-1)
+			n = sizeof buf -1;
+		memmove(buf, va, n);
+		buf[n] = 0;
+		/*
+		 * "f<id> x y on" in the screen's pixels, the touch panel's;
+		 * "a<id> x y on" in fractions of it, 0..65535, a USB
+		 * touchscreen's (os/init/mouseusb.b), scaled as /dev/pointer's
+		 * "a x y b" is, and dropped as it is before the console has
+		 * said how big the screen is.
+		 */
+		if(buf[0] != 'f' && buf[0] != 'a')
+			error(Ebadarg);
+		a = buf + 1;
+		b = strtoul(a, &a, 0);		/* the finger's id */
+		x = strtoul(a, &a, 0);
+		y = strtoul(a, &a, 0);
+		if(*a == 0)
+			error(Eshort);
+		isdelta = strtoul(a, 0, 0);	/* on the screen */
+		if(buf[0] == 'a'){
+			if(mouse.maxx <= 0 || mouse.maxy <= 0)
+				break;
+			if(x > 65535)
+				x = 65535;
+			if(y > 65535)
+				y = 65535;
+			x = (int)(((vlong)x * mouse.maxx) / 65536);
+			y = (int)(((vlong)y * mouse.maxy) / 65536);
+		}
+		qlock(&fq.wq);
+		if(waserror()){
+			qunlock(&fq.wq);
+			nexterror();
+		}
+		while(!fingerput(b, x, y, isdelta))
+			sleep(&fq.w, fingerroom, nil);
+		poperror();
+		qunlock(&fq.wq);
 		break;
 
 	case Qcursor:

@@ -179,6 +179,7 @@ void*		malloc(ulong);
 void*		mallocz(ulong, int);
 Block*		mem2bl(uchar*, int);
 int			memlow(void);
+ulong			heapactivity(void);
 int			memusehigh(void);
 void		microdelay(int);
 #ifdef CHAOS

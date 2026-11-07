@@ -2,12 +2,54 @@
 
 Status: **changes requested — do not promote from draft or merge**
 
-This review is pinned to InferNode PR #1015 head
-`08846129d207c1d535682e0ad37ca883a4e75c57`, whose merge base for the
-feature is `3ba3f9b`.  The companion firmware baseline is styxbrick
+This review was first pinned to InferNode PR #1015 head
+`08846129d207c1d535682e0ad37ca883a4e75c57` and was re-reviewed at
+`b66d0f2944ca98ecd141d21f483c021b4b64478d` on 2026-11-07.  The companion
+firmware baseline is styxbrick
 `review-3`, `93a90ba`; the later styxbrick commits through `438c0c7` add
 review reports and proposed specification revisions, not the required
 firmware fixes.
+
+## 2026-11-07 re-review
+
+The disposition is unchanged: **do not promote from draft or merge**.
+The new head makes material progress, but it does not touch `brick.b`'s
+credential ownership or D2 state machine, and GitHub still reports the PR as
+conflicting with current master (`858fcb50d` at review time).
+
+| Finding | New-head status |
+|---|---|
+| P1015-01 ordinary secret files | **Open blocker**; unchanged |
+| P1015-02 release/renew ordering | **Open high**; unchanged |
+| P1015-03 low-order X25519 | **Fixed at this pin** by `b66d0f294`; 16-case SDG regression passed |
+| P1015-04 counter durability/serialization | **Partially fixed**; writes now fail closed and use two synced slots, but stale-lock reclamation is not ownership-safe |
+| P1015-05 transport lapse state | **Open medium**; unchanged |
+| P1015-06 authenticated reply framing | **Open medium**; unchanged |
+| P1015-07 local frame bound | **Open medium**; unchanged |
+| P1015-08 TLS baseline/parser agreement | **Partially fixed** by the master merge and `5ebd00abe`; current-master conflict and differential-DER coverage remain |
+| P1015-09 release gates | **Partially fixed**; `sdg_test.dis` is runner-discovered, but the TLS script and D2 oracle are still not gates |
+| P1015-10 through P1015-12 | **Open**; unchanged |
+
+The counter lock needs one owner, not an age-only lock file.  At present a
+process paused for more than 30 seconds can still own the critical section
+while another allocator removes its lock as stale and enters.  The first can
+then resume and remove the replacement owner's lock.  A forward wall-clock
+step can trigger the same reclamation.  This invalidates the unconditional
+claim that allocators “take turns.”  Prefer a single factotum-owned allocator
+along with the Noise credential, or remove stale reclamation and fail closed;
+an ownership token helps only if replacement/removal can be made conditional
+on the same file identity.
+
+Evidence added for this pin:
+
+- `sdg_test.dis -v`: 16 passed, 0 failed (counter failure/concurrency and
+  honest, wrong-PSK, malformed-key, and low-order handshake cases).
+- `tests/host/tls_matrix_test.sh`: 12 passed, including TLS 1.2/1.3, HRR,
+  P-256/P-384, refusal of wrong name/root/signature.
+- `tests/tls_clientauth_test.sh`: 6 passed, including correct pin/client key
+  and refusal of missing client certificate, wrong pin, and wrong key.
+- Source re-check confirmed the remaining frame, D2, pairing, lease, and
+  credential findings below are unchanged.  No hardware actuation was run.
 
 The review covers the new credential lifecycle, TLS client authentication and
 pinning, the Noise IKpsk2 client, the datagram-to-9P relay, and the D2 commander.
@@ -25,11 +67,11 @@ are decisive:
 2. A renewal can overtake `release` and reassert the released output until its
    lease expires.  The commander therefore does not presently keep the
    documented immediate-release contract.
-3. The sdg client does not reject failed/low-order X25519 exchanges and does not
-   fail closed when it cannot durably advance its initiation counter.
-4. The branch conflicts with a substantially hardened and redesigned TLS
-   implementation on master.  It needs a clean rebase and a fresh review of the
-   resulting TLS path, not a mechanical conflict resolution.
+3. The counter now fails closed, but its age-reclaimed lock does not guarantee
+   serialization across a paused owner or a forward wall-clock step.
+4. The branch merged one hardened TLS baseline, but has fallen behind and again
+   conflicts with current master.  It needs a clean rebase and final review of
+   the resulting TLS path, not a mechanical conflict resolution.
 
 ## Findings
 
@@ -106,7 +148,14 @@ read, applies `release`, then resumes the renewal.  No later command may contain
 the released output, and the device oracle must remain at failsafe.  Exercise
 the same barrier for `safe`, reconnect, and session replacement.
 
-### P1015-03 — Medium: failed X25519 exchanges are mixed into the Noise state
+### P1015-03 — Fixed at `b66d0f294`: failed X25519 exchanges are refused
+
+The current reviewed head rejects nil/non-32-byte DH results at every Noise
+DH step and validates configured key lengths before sending.  Its independent
+responder regression covers low-order configured static and received ephemeral
+keys.  The test passed in this re-review.  Keep it as a release gate.
+
+Original finding:
 
 `appl/lib/sdg.b:152-155` unconditionally passes `keyring->x25519()` to
 `mixkey()`.  Current master deliberately returns nil for an all-zero shared
@@ -128,7 +177,23 @@ Tests required: the X25519 low-order representatives for both the configured
 responder static key and message-2 ephemeral key; malformed key lengths; and a
 valid Noise interoperability vector after the change.
 
-### P1015-04 — Medium: the initiation counter fails open and is not serialized
+### P1015-04 — Medium, partially fixed: counter lock ownership is unsafe
+
+The new two-slot implementation fixes the original fail-open write, torn-slot,
+backward-clock, and ordinary concurrent-allocation cases and reads each write
+back before sending.  It does not fully fix serialization: `ctrlock` removes
+any lock whose mtime is more than 30 seconds old without proving its owner is
+dead.  A paused live owner can therefore overlap its successor and later
+remove that successor's lock.  A forward wall-clock step has the same effect.
+The owner also removes the lock by pathname without verifying it is still the
+file it created.
+
+Required change: make the counter/handshake a single-owner service (naturally
+factotum when it owns the Noise secret), or fail closed on an existing lock.
+Do not advertise crash recovery unless takeover and release are conditional on
+the same lock identity.  Add a deterministic parked-owner/takeover regression.
+
+Original finding:
 
 `appl/lib/sdg.b:251-281` claims the counter is persisted before transmission,
 but ignores create and write failure and returns the new counter anyway.  The
@@ -192,7 +257,16 @@ finding is containment/robustness rather than a remote exploit.  Enforce
 `7 <= size <= MSIZE` as soon as four bytes exist, terminate the relay on a bad
 frame, and cap buffered bytes.  Add zero, 1..6, high-bit, and `MSIZE+1` tests.
 
-### P1015-08 — Blocker: the TLS patch targets an obsolete security baseline
+### P1015-08 — Blocker, partially fixed: TLS must be rebased once more
+
+The branch merged master in `42719f8e` and `5ebd00abe` now checks that the
+algorithm and public-key bits selected by the pin parser equal those selected
+by X509 for signature verification.  Both TLS matrices passed.  However, the
+PR is again conflicting with current master, and there is still no malformed
+certificate exercising a disagreement between the two DER paths.  The final
+rebased result remains the object that must be reviewed.
+
+Original finding:
 
 Current master and #1015 both modify `appl/lib/crypt/tls.b`, `module/tls.m`,
 their mkfiles, the test manifest, and the Dis manifest.  Git reports the PR as
@@ -216,7 +290,15 @@ replaces CA/name validation, and proof of possession still comes from the
 server's CertificateVerify.  The comparison at the reviewed pin is
 fixed-length rather than early-exit.
 
-### P1015-09 — Blocker: the security tests are not release gates
+### P1015-09 — Blocker, partially fixed: security tests are not all release gates
+
+`tests/sdg_test.b` is now built through `tests/mkfile`, listed in the Dis
+manifest, and discovered by the standard runner.  That resolves the SDG unit
+test wiring at this pin.  `tests/tls_clientauth_test.sh` remains outside
+`tests/host`, no workflow names it, and no D2 ordering/state oracle exists.
+The gate is therefore still open.
+
+Original finding:
 
 The PR adds only TLS interoperability coverage.  There are no InferNode tests
 for the sdg handshake/relay or D2 commander.  `tests/tls_clientauth_test.sh` is

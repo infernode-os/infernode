@@ -323,7 +323,9 @@ LOADS = [
 	rm -f /n/dos/soak.tmp /tmp/soak/sd-write/x
 	tick sd-write; sleep $sdwevery''', needs=['dd', 'budget:sd']),
     L('tls', 'TLS to openssl s_server on the Jetson, verified against the run\'s CA, every 2 min', core=True, board=r'''
-	@{ bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://$jetson:$tlsport/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err }
+	# sh -c, not @{}: @ does not fork the name space, and the bind leaked over the
+	# loops' /lib/certs (tls-live then failed against the run's CA alone, 2026-11-07)
+	sh -c 'bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://'^$jetson^':'^$tlsport^'/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err'
 	grep -s 'HTTP 200' /tmp/soak/tls/out || bad tls handshake-or-get
 	tick tls; sleep 120''', needs=['tlsperf', 'tlsserver', 'clock', 'console']),
     L('net', '64 MB into the board and 64 MB out, every 10 min; rates logged', core=True,
@@ -367,7 +369,7 @@ LOADS = [
     L('wifi', '32 MB pushed to the Wi-Fi address every 10 min', host='wifi', needs=['wifi']),
     L('usbnet', '32 MB each way over the USB gadget link every 10 min (gadget reserved)', host='usbnet', needs=['usbnet']),
     L('draw', 'drawbench every 30 s', board=r'''
-	@{ bind -a '#i' /dev; drawbench > /tmp/soak/draw/out >[2] /tmp/soak/draw/err } || bad draw drawbench
+	sh -c 'bind -a ''#i'' /dev; drawbench > /tmp/soak/draw/out >[2] /tmp/soak/draw/err' || bad draw drawbench
 	tick draw; sleep 30''', needs=['drawbench', 'display']),
     L('board', 'RTC, fan, NVMe status reads', board=r'''
 	for(f in '#r/rtc' '#P/fanrpm' '#S/nvmestat') { ftest -e $f && { cat $f > /dev/null >[2] /tmp/soak/board/err || bad board $f } }
@@ -403,8 +405,9 @@ class Run:
         self.rates = {}
         self.kernel = None
         self.gpiopairs = None
-        names = [l.split()[0] for l in open(os.path.join(PITOOLS, 'boards')) if l.split() and not l.startswith('#')]
-        self.tlsport = 8443 + (names.index(a.board) if a.board in names else 50)
+        # One TLS server for every run, on 8443: the Jetson's firewall lets the LAN
+        # reach 8443 and refused 8444 and 8460 (2026-11-07), so per-board ports fail.
+        self.tlsport = 8443
         self.lat = []
         self.churnres = []
         # intensity: the profile, raised to 'stress' in the areas named
@@ -486,7 +489,8 @@ class Run:
         bt = int(m.group(1)) if m else 0
         r['clock'] = (abs(bt - time.time()) < 300, 'board clock %s' % (time.strftime('%Y-%m-%d %H:%M', time.gmtime(bt)) if m else '?'))
         r['internet'] = (subprocess.run(['ping', '-c1', '-W2', '1.1.1.1'], capture_output=True).returncode == 0, 'Jetson reaches 1.1.1.1')
-        r['tlsserver'] = (getattr(self, 'tlsproc', None) is not None and self.tlsproc.poll() is None, 'openssl s_server on %s:%d' % (self.jetson, self.tlsport))
+        r['tlsserver'] = (getattr(self, 'tlsup', False) and ':%d ' % self.tlsport in subprocess.run(['ss', '-ltn'], capture_output=True, text=True).stdout,
+                          'openssl s_server on %s:%d' % (self.jetson, self.tlsport))
         r['gpiojig'] = (getattr(self, 'gpiopairs', None) is not None, 'loopback jig fitted' if getattr(self, 'gpiopairs', None) else 'no loopback jig')
         r['opt:vmstress'] = (self.a.vmstress or 'vm' in self.a.stress, '--vmstress or --stress vm')
         r['opt:fuzz'] = (self.iv['fuzz_every'] > 0, '--stress fuzz or --profile stress')
@@ -519,18 +523,28 @@ class Run:
         self.gpiopairs = fitted or None
 
     def tlsserver(self):
-        d = os.path.join(self.dir, 'tls'); os.makedirs(d, exist_ok=True)
+        """the shared test server: ~/soak/tls holds one CA and one server certificate
+        (made once, valid 10 years); the server is started if nothing listens on the
+        port, detached so that it outlives this run and serves the others"""
+        d = os.path.join(SOAKHOME, 'tls'); os.makedirs(d, exist_ok=True)
         def o(*args):
             subprocess.run(['openssl'] + list(args), cwd=d, capture_output=True, check=True)
-        open(os.path.join(d, 'san.ext'), 'w').write('subjectAltName=IP:%s\n' % self.jetson)
-        o('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '3', '-subj', '/CN=SoakCA')
-        o('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'srv.key')
-        o('req', '-new', '-key', 'srv.key', '-subj', '/CN=%s' % self.jetson, '-out', 'srv.csr')
-        o('x509', '-req', '-in', 'srv.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '3', '-extfile', 'san.ext', '-out', 'srv.pem')
-        o('x509', '-in', 'ca.pem', '-outform', 'der', '-out', 'ca.der')
-        self.tlsproc = subprocess.Popen(['openssl', 's_server', '-accept', str(self.tlsport), '-cert', 'srv.pem', '-key', 'srv.key', '-www', '-quiet'],
-                                        cwd=d, stdout=open(os.path.join(d, 's_server.log'), 'w'), stderr=subprocess.STDOUT)
-        time.sleep(1)
+        if not os.path.exists(os.path.join(d, 'ca.der')):
+            open(os.path.join(d, 'san.ext'), 'w').write('subjectAltName=IP:%s\n' % self.jetson)
+            o('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '3650', '-subj', '/CN=SoakCA')
+            o('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'srv.key')
+            o('req', '-new', '-key', 'srv.key', '-subj', '/CN=%s' % self.jetson, '-out', 'srv.csr')
+            o('x509', '-req', '-in', 'srv.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '3650', '-extfile', 'san.ext', '-out', 'srv.pem')
+            o('x509', '-in', 'ca.pem', '-outform', 'der', '-out', 'ca.der')
+        listening = ':%d ' % self.tlsport in subprocess.run(['ss', '-ltn'], capture_output=True, text=True).stdout
+        if not listening:
+            subprocess.Popen(['setsid', 'openssl', 's_server', '-accept', str(self.tlsport), '-cert', 'srv.pem', '-key', 'srv.key', '-www', '-quiet'],
+                             cwd=d, stdout=open(os.path.join(d, 's_server.log'), 'a'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            time.sleep(1)
+            self.log('TLS server started on %s:%d (shared; it stays up for other runs)' % (self.jetson, self.tlsport))
+        else:
+            self.log('TLS server already up on :%d (shared)' % self.tlsport)
+        self.tlsup = True
         if self.cons:
             self.cons.sh(['mkdir -p /tmp/soak/certs'])
             self.cons.put('/tmp/soak/certs/ca.der', open(os.path.join(d, 'ca.der'), 'rb').read())
@@ -676,9 +690,12 @@ class Run:
         mark = 'chk%d' % int(time.time())
         log = self.info.caplog(); off = os.path.getsize(log)
         Serial(self.info)._type('echo x-%s | tr x y' % mark)
-        time.sleep(5)
-        with open(log, errors='replace') as f:
-            f.seek(off); got = f.read()
+        # a line idle for an hour can take several seconds to answer (5 s was too short)
+        t0 = time.time(); got = ''
+        while time.time() - t0 < 30 and 'y-' + mark not in got:
+            time.sleep(2)
+            with open(log, errors='replace') as f:
+                f.seek(off); got = f.read()
         full = len(re.findall(r'kbd: input queue full', got))
         return ('y-' + mark in got), ('serial shell runs commands' if 'y-' + mark in got else 'SERIAL SHELL DOES NOT RUN COMMANDS') + (' (input queue full x%d)' % full if full else '')
 
@@ -921,8 +938,6 @@ class Run:
             self.sh('rm -f /tmp/soak/run', limit=20)
         except Exception:
             pass
-        if getattr(self, 'tlsproc', None):
-            self.tlsproc.terminate()
         time.sleep(40)
         try:
             self.sample(n + 1)
@@ -956,7 +971,7 @@ class Run:
         ticks = json.loads(last[7]) if last and len(last) > 7 and last[7] else {}
         for l in sel:
             s = self.state.get(l['name'], '?'); kind = s.split(':')[0].split(' ')[0]
-            passes = ticks.get(l['name'], self.hostpass.get(l['name'], 0))
+            passes = ticks.get(l['name'], self.hostpass.get(l['name'], 'held' if l['name'] in ('vm', 'vmstress', 'flood') else 0))
             out.append('%-10s %-6s %8s %8s  %s' % (l['name'], kind, passes if kind == 'run' or kind == 'lost' else '-',
                        self.failcount.get(l['name'], 0) if kind != 'skip' else '-', s[len(kind):].lstrip(': ') or l['what']))
         out.append('')
@@ -984,7 +999,7 @@ class Run:
         for k, v in self.rates.items():
             ins = sorted(x[0] for x in v); outs = sorted(x[1] for x in v)
             out.append('%-7s %d transfers; median in %.0f, out %.0f Mbit/s' % (k, len(v), ins[len(ins) // 2], outs[len(outs) // 2]))
-        tags = sorted(glob.glob(os.path.join(self.dir, 'memtags', '*.txt')))
+        tags = sorted(glob.glob(os.path.join(self.dir, 'memtags', '*.txt')), key=os.path.getmtime)
         if len(tags) >= 2:
             out.append('')
             out.append('call sites that grew most (memtags %s -> %s):' % (os.path.basename(tags[1] if len(tags) > 2 else tags[0]), os.path.basename(tags[-1])))

@@ -59,6 +59,12 @@ tests/soak/
 
 **Talking to the board.** Every load and sampler works over either transport. The network console is preferred: serial cables are scarce, and a console can hold several sessions at once. Serial is the fallback, for boards without a console or with a broken network. It always *reads* the serial line through the capture (`sercap.py`), never a second reader. The board-side loops (`soakd.sh`) run in a namespace of their own and stop when `/tmp/soak/run` goes (not `soak.py`'s `/tmp/soak.run`, so the two can never stop each other). That fixes the 2026-10-18 problem of loops outliving the soak. Each loop writes `tick`, `bad`, `.out` and `.err` files under `/tmp/soak/<load>/`, as `soak5.sh` does, but each failure goes to `/tmp/soak/<load>/fail-<n>`, so nothing is overwritten.
 
+**Two board-side traps found on the first runs:**
+- In Inferno's shell, `@{ }` does not fork the namespace. A bind inside one leaks into the loops' shared namespace, and the run's TLS CA replaced every trusted root. Use `sh -c '...'`, which forks the namespace by default.
+- A braced block has its own arguments, so `$1` is empty inside it. Take arguments into variables first.
+
+**The TLS server** is shared: one CA and one certificate in `~/soak/tls`, and one `openssl s_server` on the Jetson's port 8443, started by whichever run needs it first and left up for the others. The Jetson's firewall lets the LAN reach 8443 but not other ports such as 8444 or 8460, so per-board ports failed.
+
 **Board identity** comes from `~/pitools/boards`, found by MAC through `boardip.py` and by serial port through its by-path name, never `ttyUSBn`. The runner records the kernel's size and sha1 from `/dev/bootimage` and the card's `/dis` state: md5s against the build, with the number that differ. A run on a stale card says so in its header ([[bench-card-dis-stale]]).
 
 ## The load catalogue

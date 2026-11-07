@@ -167,21 +167,32 @@ marklist(Type *t, void *vw)
 
 	USED(t);
 
+	/*
+	 * The whole list at once, as markarray does an array, charged to
+	 * the quantum. It stopped when the quantum ran out and left the
+	 * next cell propagator, to be taken up when the sweep reached it;
+	 * but a list made by prepending has its cells below its head,
+	 * behind the sweep, so a list went one quantum's cells a traversal
+	 * and an epoch took as many traversals as the longest list has
+	 * quanta: with wm/osk's lexicon in the heap, some 57.
+	 *
+	 * A cell already the mutator's colour has been marked, or was made
+	 * this epoch by cons(), which marks the tail it is given; a list
+	 * does not change after, so the rest is seen to and the walk stops.
+	 */
 	l = vw;
 	markheap(l->t, l->data);
-	while(visit > 0) {
+	for(;;) {
 		l = l->tail;
 		if(l == H)
 			return;
 		h = D2H(l);
-		Setmark(h);
+		if(h->color == mutator)
+			return;
+		gce--;
+		h->color = mutator;
 		markheap(l->t, l->data);
 		visit--;
-	}
-	l = l->tail;
-	if(l != H) {
-		D2H(l)->color = propagator;
-		nprop = 1;
 	}
 }
 

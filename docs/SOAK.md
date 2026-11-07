@@ -1,6 +1,6 @@
 # One soak for every Raspberry Pi — design
 
-Status: proposal, 2026-11-07. Nothing here is built yet. It replaces three harnesses that drifted apart; build it after the three soaks running today (3B+, Pi 4, Pi 5) have finished.
+Status: agreed 2026-11-07; first cut of the runner in `tests/soak/soak.py`, to be test-run on the 3B+ once today's soaks end. It replaces three harnesses that drifted apart.
 
 ## Why
 
@@ -57,7 +57,7 @@ tests/soak/
                                        copied to the ledger's store at the end)
 ```
 
-**Talking to the board.** The runner uses the network console when the board has one, and the serial line otherwise. It always *reads* the serial line through the capture (`sercap.py`), never a second reader. The board-side loops (`soakd.sh`) run in a namespace of their own and stop when `/tmp/soak.run` goes, as `soak.py`'s loops do now. That fixes the 2026-10-18 problem of loops outliving the soak. Each loop writes `tick`, `bad`, `.out` and `.err` files under `/tmp/soak/<load>/`, as `soak5.sh` does, but each failure goes to `/tmp/soak/<load>/fail-<n>`, so nothing is overwritten.
+**Talking to the board.** Every load and sampler works over either transport. The network console is preferred: serial cables are scarce, and a console can hold several sessions at once. Serial is the fallback, for boards without a console or with a broken network. It always *reads* the serial line through the capture (`sercap.py`), never a second reader. The board-side loops (`soakd.sh`) run in a namespace of their own and stop when `/tmp/soak/run` goes (not `soak.py`'s `/tmp/soak.run`, so the two can never stop each other). That fixes the 2026-10-18 problem of loops outliving the soak. Each loop writes `tick`, `bad`, `.out` and `.err` files under `/tmp/soak/<load>/`, as `soak5.sh` does, but each failure goes to `/tmp/soak/<load>/fail-<n>`, so nothing is overwritten.
 
 **Board identity** comes from `~/pitools/boards`, found by MAC through `boardip.py` and by serial port through its by-path name, never `ttyUSBn`. The runner records the kernel's size and sha1 from `/dev/bootimage` and the card's `/dis` state: md5s against the build, with the number that differ. A run on a stale card says so in its header ([[bench-card-dis-stale]]).
 
@@ -147,9 +147,21 @@ Probed, not declared. The table shows only what each board would get as things s
 3. **Check equivalence.** Run the new harness on all three boards side by side for 2 hours each, with the old harness's loads switched on. Its rates, counts and pool slopes must match the old harness's on each board; where they don't, find out why before going on.
 4. **Retire the old harnesses.** `soak.py`, `soak5.*`, `extras.py`, `radios.py`, `soakwatch.py`, `failwatch.py`, `tagsnap.sh` and `serialwatch.sh` go to `~/pitools/attic/`, with a note in the ledger of the run that replaced each.
 
+## The debug probe
+
+There will be one SWD/JTAG debug probe. It is a reserved resource like the gadget cable: one board holds it, and the holder is recorded in the run header. The runner doesn't use it in normal running. When a board panics, hangs or stops answering, the run that holds the probe first takes a capture: registers and stacks of every core. Only then does anything reset the board.
+
+Wiring the probe up is a gated item in each board's profile:
+- 3B+ and Pi 4: JTAG on the GPIO header (`enable_jtag_gpio=1`).
+- Pi 5: its debug connector.
+
+Each board's support is confirmed on the board when the probe arrives, not assumed.
+
+## The ledger
+
+The pi-store is offline. The ledger goes in a small private repository of its own (`infernode-bench`, to be made), together with each run's `summary.txt` and memtags diff. That is small text only; raw logs stay on the Jetson. Each run pushes when it ends, so the record is off this machine at once. Bench details such as MACs and home-network addresses stay out of the public repo, and run churn stays out of master's history. Until that repository exists, the runner writes `~/soak/ledger.tsv` and the run directories, and they are copied to minipc as a second copy.
+
 ## Open questions
 
-- Does the Pi 5 keep driving over serial (its bring-up loop), or move to the network console like the others, with serial as a fallback?
-- Where does the ledger live so it survives the next disk failure: in the repo (`tests/soak/ledger.tsv`, pushed) or on the pi-store?
 - What should the TLS server be: OpenSSL `s_server` on the Jetson, or the tree's own TLS server in emu, which would test both ends?
 - Which of today's ad-hoc probes become loads: `bootloop.py` (boot counts per run), `flood.py` (console flood as a load, `--flood`)?

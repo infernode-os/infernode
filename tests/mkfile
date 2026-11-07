@@ -204,6 +204,7 @@ TARG=\
 	devprog_read_test.dis\
 	devprog_nslock_test.dis\
 	kill_deadserver_test.dis\
+	kill_uncalled_test.dis\
 	env_rclose_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\

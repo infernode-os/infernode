@@ -746,6 +746,7 @@ dis/tests/exception_test.dis
 dis/tests/factotum_grant_test.dis
 dis/tests/factotum_test.dis
 dis/tests/fdclose_test.dis
+dis/tests/gc_cycle_test.dis
 dis/tests/fltfmt_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis

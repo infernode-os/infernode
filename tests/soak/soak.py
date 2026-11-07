@@ -245,6 +245,30 @@ fn run { ftest -e /tmp/soak/run }
 def L(name, what, board=None, host=None, needs=(), core=False, every=None):
     return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every)
 
+# Intensity. Reads are cheap and stay frequent; writes to flash are small,
+# verified and budgeted (bytes per day at each profile in the comments).
+# --profile sets every area; --stress AREA[,AREA] raises single areas to
+# 'stress'. Raw block writes need --scratch DEV=PART: without it no raw
+# device is ever written (the Pi 5's NVMe is a store with data on it).
+PROFILES = {
+    'gentle': dict(sdr_mb=16, sdr_every=600, sdw_kb=0,    sdw_every=0,    nvr_mb=64,  nvr_every=600, nvw_kb=0,     nvw_every=0,
+                   net_mb=16, net_every=1800, churn=50,  half=2,  jit_every=900, rsa_every=600, rng_kb=256,   fuzz_every=0),
+    'normal': dict(sdr_mb=16, sdr_every=120, sdw_kb=1024, sdw_every=600,  nvr_mb=64,  nvr_every=120, nvw_kb=1024,  nvw_every=300,
+                   net_mb=64, net_every=600,  churn=200, half=8,  jit_every=300, rsa_every=60,  rng_kb=4096,  fuzz_every=0),
+    'stress': dict(sdr_mb=64, sdr_every=30,  sdw_kb=4096, sdw_every=120,  nvr_mb=256, nvr_every=30,  nvw_kb=16384, nvw_every=60,
+                   net_mb=64, net_every=60,   churn=1000, half=32, jit_every=60,  rsa_every=10,  rng_kb=16384, fuzz_every=3600),
+}
+# SD writes per day: normal 144 MB, stress 2.9 GB; NVMe (scratch only): normal 288 MB, stress 23 GB.
+AREAS = {'storage': ('sdr_mb', 'sdr_every', 'sdw_kb', 'sdw_every', 'nvr_mb', 'nvr_every', 'nvw_kb', 'nvw_every'),
+         'net': ('net_mb', 'net_every', 'churn', 'half'),
+         'cpu': ('jit_every', 'rsa_every', 'rng_kb'),
+         'fuzz': ('fuzz_every',),
+         'vm': ()}
+
+# Kernel complaints worth a line in the summary (an alarm only for the first group).
+ALARMS = r'\b(panic|PANIC|unhandled)\b|exception:|lock loop|miller is a lazy git'
+COMPLAINTS = r'out of memory|won.t halt|will not halt|ether0rx|input queue full|arena too large|no free|wedged'
+
 LOADS = [
     # core: every board
     L('fs', 'file churn: copy, ls, write/read/remove on /tmp; /dev/memory reads', core=True, board=r'''
@@ -253,24 +277,26 @@ LOADS = [
 	echo hello > /tmp/soak/fs/b; cat /tmp/soak/fs/b > /tmp/soak/fs/out; ~ `{cat /tmp/soak/fs/out} hello || bad fs readback; rm /tmp/soak/fs/b
 	cat /dev/memory > /dev/null
 	tick fs'''),
-    L('rng', '/dev/random 4 MB a minute; two reads never equal', core=True, board=r'''
-	dd -if /dev/random -of /dev/null -bs 65536 -count 64 >[2] /tmp/soak/rng/err || bad rng read
+    L('rng', '/dev/random read every minute (profile sets the size); two reads never equal', core=True, board=r'''
+	dd -if /dev/random -of /dev/null -bs 65536 -count $rngcount >[2] /tmp/soak/rng/err || bad rng read
 	read 32 < /dev/random > /tmp/soak/rng/a; read 32 < /dev/random > /tmp/soak/rng/b
 	cmp -s /tmp/soak/rng/a /tmp/soak/rng/b && bad rng duplicate
-	tick rng; sleep 1''', needs=['dd']),
-    L('rsa', 'auth/rsagen -b 1024 every minute', core=True, board=r'''
+	tick rng; sleep 60''', needs=['dd']),
+    L('rsa', 'auth/rsagen -b 1024 (every minute at normal)', core=True, board=r'''
 	auth/rsagen -b 1024 > /tmp/soak/rsa/out >[2] /tmp/soak/rsa/err || bad rsa rsagen
-	tick rsa; sleep 60''', needs=['rsagen']),
-    L('jit', 'jitbench every 5 min, timed', core=True, board=r'''
+	tick rsa; sleep $rsaevery''', needs=['rsagen']),
+    L('jit', 'jitbench, timed (every 5 min at normal)', core=True, board=r'''
 	t0 = `{date -n}; jitbench > /tmp/soak/jit/out >[2] /tmp/soak/jit/err || bad jit jitbench
 	echo $t0 `{date -n} >> /tmp/soak/jit/times
-	tick jit; sleep 300''', needs=['jitbench']),
-    L('sd', 'SD card: read 64 MB raw; write, verify, remove 1 MB on /n/dos', core=True, board=r'''
-	dd -if $sdraw -of /dev/null -bs 65536 -count 1024 >[2] /tmp/soak/sd/err || bad sd read
-	dd -if /dev/random -of /tmp/soak/sd/x -bs 65536 -count 16 >[2] /dev/null
-	cp /tmp/soak/sd/x /n/dos/soak.tmp >[2] /tmp/soak/sd/err; cmp /tmp/soak/sd/x /n/dos/soak.tmp > /tmp/soak/sd/out >[2=1] || bad sd verify
-	rm -f /n/dos/soak.tmp /tmp/soak/sd/x
-	tick sd; sleep 5''', needs=['sdraw', 'dd']),
+	tick jit; sleep $jitevery''', needs=['jitbench']),
+    L('sd', 'SD card raw reads (16 MB every 2 min at normal); never writes the raw device', core=True, board=r'''
+	dd -if $sdraw -of /dev/null -bs 65536 -count $sdrcount >[2] /tmp/soak/sd/err || bad sd read
+	tick sd; sleep $sdrevery''', needs=['sdraw', 'dd']),
+    L('sd-write', 'a file on the card written, read back, compared and removed (1 MB every 10 min at normal: 144 MB a day)', core=True, board=r'''
+	dd -if /dev/random -of /tmp/soak/sd-write/x -bs 1024 -count $sdwkb >[2] /dev/null
+	cp /tmp/soak/sd-write/x /n/dos/soak.tmp >[2] /tmp/soak/sd-write/err; cmp /tmp/soak/sd-write/x /n/dos/soak.tmp > /tmp/soak/sd-write/out >[2=1] || bad sd-write verify
+	rm -f /n/dos/soak.tmp /tmp/soak/sd-write/x
+	tick sd-write; sleep $sdwevery''', needs=['dd', 'budget:sd']),
     L('tls', 'TLS to openssl s_server on the Jetson, verified against the run\'s CA, every 2 min', core=True, board=r'''
 	@{ bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://$jetson:8443/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err }
 	grep -s ' 200 ' /tmp/soak/tls/out || bad tls handshake-or-get
@@ -283,12 +309,16 @@ LOADS = [
     L('tls-live', 'tls_live_test against example.com and cloudflare.com every 10 min (flagged, not judged)', board=r'''
 	/dis/tests/tls_live_test.dis > /tmp/soak/tls-live/out >[2] /tmp/soak/tls-live/err || bad tls-live
 	tick tls-live; sleep 600''', needs=['tls_live_test', 'clock', 'internet']),
-    L('nvme', 'NVMe: raw read; write+verify on p2; kfs on p3', board=r'''
-	dd -if '#S/nvme0' -of /dev/null -bs 131072 -count 2048 >[2] /tmp/soak/nvme/err || bad nvme read
-	dd -if /dev/random -of /tmp/soak/nvme/x -bs 8192 -count 128 >[2] /dev/null
-	dd -if /tmp/soak/nvme/x -of '#S/nvme0p2' -bs 8192 >[2] /tmp/soak/nvme/err; dd -if '#S/nvme0p2' -of /tmp/soak/nvme/y -bs 8192 -count 128 >>[2] /tmp/soak/nvme/err
-	cmp /tmp/soak/nvme/x /tmp/soak/nvme/y > /tmp/soak/nvme/out >[2=1] || bad nvme verify
-	tick nvme; sleep 1''', needs=['nvme', 'dd']),
+    L('nvme', 'NVMe raw reads (64 MB every 2 min at normal); never writes', board=r'''
+	dd -if '#S/nvme0' -of /dev/null -bs 131072 -count $nvrcount >[2] /tmp/soak/nvme/err || bad nvme read
+	tick nvme; sleep $nvrevery''', needs=['nvme', 'dd']),
+    L('nvme-write', 'write, read back, compare on the declared scratch partition only (--scratch nvme=PART; 1 MB every 5 min at normal)', board=r'''
+	dd -if /dev/random -of /tmp/soak/nvme-write/x -bs 8192 -count $nvwblocks >[2] /dev/null
+	dd -if /tmp/soak/nvme-write/x -of $nvscratch -bs 8192 >[2] /tmp/soak/nvme-write/err
+	dd -if $nvscratch -of /tmp/soak/nvme-write/y -bs 8192 -count $nvwblocks >>[2] /tmp/soak/nvme-write/err
+	cmp /tmp/soak/nvme-write/x /tmp/soak/nvme-write/y > /tmp/soak/nvme-write/out >[2=1] || bad nvme-write verify
+	rm -f /tmp/soak/nvme-write/x /tmp/soak/nvme-write/y
+	tick nvme-write; sleep $nvwevery''', needs=['nvme', 'dd', 'scratch:nvme', 'budget:nvme']),
     L('spi', 'SPI loopback compare', board=r'''
 	read 8192 < /dis/sh.dis > /tmp/soak/spi/s; cat /tmp/soak/spi/s > '#Q/spi0'; cat '#Q/spi0' > /tmp/soak/spi/r
 	cmp /tmp/soak/spi/s /tmp/soak/spi/r > /tmp/soak/spi/out >[2=1] || bad spi compare
@@ -312,13 +342,21 @@ LOADS = [
     L('wifi', '32 MB pushed to the Wi-Fi address every 10 min', host='wifi', needs=['wifi']),
     L('usbnet', '32 MB each way over the USB gadget link every 10 min (gadget reserved)', host='usbnet', needs=['usbnet']),
     L('draw', 'drawbench every 30 s', board=r'''
-	drawbench > /tmp/soak/draw/out >[2] /tmp/soak/draw/err || bad draw drawbench
+	@{ bind -a '#i' /dev; drawbench > /tmp/soak/draw/out >[2] /tmp/soak/draw/err } || bad draw drawbench
 	tick draw; sleep 30''', needs=['drawbench', 'display']),
     L('board', 'RTC, fan, NVMe status reads', board=r'''
 	for(f in '#r/rtc' '#P/fanrpm' '#S/nvmestat') { ftest -e $f && { cat $f > /dev/null >[2] /tmp/soak/board/err || bad board $f } }
 	tick board; sleep 10''', needs=['boarddevs']),
     L('vm', 'jitbench held in VMs 1 and 2', host='vm', needs=['vm', 'jitbench']),
     L('vmstress', 'vmstress(1) across VMs (--vmstress)', host='vmstress', needs=['vm', 'vmstress', 'opt:vmstress']),
+    L('churn', 'TCP connection churn: connects and closes, and half-open connections held 60 s (200 and 8 every 10 min at normal); the board conversations must come back', core=True,
+      host='churn', needs=['wired']),
+    L('latency', 'ping the wired address every minute: average and maximum round trip', core=True, host='latency', needs=['wired']),
+    L('fuzz', 'sysfuzz for 10 min an hour, scratch in /tmp (no flash writes) (--stress fuzz)', board=r'''
+	/dis/tests/sysfuzz.dis -s `{date -n} -t 600 -e 5 -p 6 -d /tmp/soak/fuzz/scratch > /tmp/soak/fuzz/out >[2] /tmp/soak/fuzz/err
+	grep -s 'sysfuzz: done' /tmp/soak/fuzz/out || bad fuzz not-done
+	rm -rf /tmp/soak/fuzz/scratch; mkdir -p /tmp/soak/fuzz/scratch
+	tick fuzz; sleep $fuzzevery''', needs=['sysfuzz', 'opt:fuzz']),
     L('flood', 'console flood: 80-column lines to #c/cons as fast as the UART takes them (--flood)', host='flood',
       needs=['console', 'opt:flood']),
 ]
@@ -339,6 +377,17 @@ class Run:
         self.hostpass = {}
         self.rates = {}
         self.kernel = None
+        self.gpiopairs = None
+        self.lat = []
+        self.churnres = []
+        # intensity: the profile, raised to 'stress' in the areas named
+        self.iv = dict(PROFILES[a.profile])
+        for area in a.stress:
+            if area not in AREAS:
+                sys.exit('soak: no stress area %r (have %s)' % (area, ', '.join(AREAS)))
+            for k in AREAS[area]:
+                self.iv[k] = PROFILES['stress'][k]
+        self.scratch = dict(x.split('=', 1) for x in a.scratch)
 
     # transport ----------------------------------------------------------
     def connect(self):
@@ -365,12 +414,12 @@ class Run:
         r['serial'] = (self.ser is not None, 'captured serial line' if self.ser else
                        ('no serial cable in ~/pitools/boards' if not self.info.port else 'serial not captured (start sercap.py)'))
         out = self.sh(
-            "for(f in jitbench drawbench memtouch auth/rsagen vm zeros tlsperf vmstress tests/tls_live_test dd cmp) { ftest -e /dis/$f.dis && echo HAVE $f }",
-            "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' /dev/memtags /dev/heapaudit /net/bt/status /dev/draw) { ftest -e $f && echo DEV $f }",
+            "for(f in jitbench drawbench memtouch auth/rsagen vm zeros tlsperf vmstress tests/tls_live_test tests/sysfuzz dd cmp) { ftest -e /dis/$f.dis && echo HAVE $f }",
+            "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' /dev/memtags /dev/heapaudit /net/bt/status '#i/draw') { ftest -e $f && echo DEV $f }",
             "ls '#X' >[2] /dev/null > /dev/null && echo DEV vm",
             "cat /net/bt/status >[2] /dev/null | sed 1q",
             "cat /net/ipifc/*/status | grep '^device|^	[0-9]'",
-            "date -n",
+            "echo BOARDTIME `{date -n}",
             limit=60)
         have = set(re.findall(r'HAVE (\S+)', out)); dev = set(re.findall(r'DEV (\S+)', out))
         def tool(n):
@@ -379,6 +428,10 @@ class Run:
             r[n] = tool(n)
         r['rsagen'] = tool('auth/rsagen')
         r['tls_live_test'] = tool('tests/tls_live_test')
+        r['sysfuzz'] = tool('tests/sysfuzz')
+        r['budget:sd'] = (self.iv['sdw_kb'] > 0, 'profile %s writes no files to the card' % self.a.profile)
+        r['budget:nvme'] = (self.iv['nvw_kb'] > 0, 'profile %s writes nothing to NVMe' % self.a.profile)
+        r['scratch:nvme'] = ('nvme' in self.scratch, 'no --scratch nvme=PART (NVMe is never written without one)')
         sd = [d for d in ("'#S/sdcard'", "'#S/sd0'") if d.strip("'") in dev]
         r['sdraw'] = (bool(sd), sd[0].strip("'") if sd else 'no raw SD device (#S/sdcard, #S/sd0)')
         self.sdraw = sd[0] if sd else None
@@ -388,7 +441,7 @@ class Run:
         r['memtags'] = ('/dev/memtags' in dev, '/dev/memtags')
         r['heapaudit'] = ('/dev/heapaudit' in dev, '/dev/heapaudit')
         r['cputemp'] = ('#P/cputemp' in dev, '#P/cputemp')
-        r['display'] = ('/dev/draw' in dev, '/dev/draw')
+        r['display'] = ('#i/draw' in dev, '#i/draw (a display)')
         r['vm'] = ('vm' in dev and 'vm' in have, '#X and /dis/vm.dis')
         r['bt'] = ('up 1' in out, '/net/bt up' if 'up 1' in out else '/net/bt not up (no /n/dos/bt?)')
         r['bdaddr'] = (self.info.bdaddr is not None, 'Bluetooth address in ~/pitools/boards')
@@ -397,19 +450,27 @@ class Run:
         ifs = list(zip(devs, addrs))
         self.wired = self.info.addr
         self.usbaddr = next((a for d, a in ifs if a.startswith('192.168.57.')), None)
-        self.wifiaddr = next((a for d, a in ifs if a != self.info.addr and not a.startswith('192.168.57.')), None)
+        self.wifiaddr = next((a for d, a in ifs if a != self.info.addr and not a.startswith(('192.168.57.', '127.'))
+                              and 'loopback' not in d and d != '/net/ether0'), None)
         r['wired'] = (self.info.addr in addrs if self.info.addr else False, 'wired address %s' % self.info.addr)
         r['usbnet'] = (self.usbaddr is not None, 'gadget link %s' % (self.usbaddr or 'down'))
         r['wifi'] = (self.wifiaddr is not None, 'Wi-Fi %s' % (self.wifiaddr or 'not associated'))
-        m = re.search(r'^(\d{9,})$', out, re.M)
+        m = re.search(r'BOARDTIME (\d+)', out)
         bt = int(m.group(1)) if m else 0
-        r['clock'] = (abs(bt - time.time()) < 300, 'board clock %s' % (time.strftime('%Y-%m-%d %H:%M', time.gmtime(bt)) if bt else '?'))
+        r['clock'] = (abs(bt - time.time()) < 300, 'board clock %s' % (time.strftime('%Y-%m-%d %H:%M', time.gmtime(bt)) if m else '?'))
         r['internet'] = (subprocess.run(['ping', '-c1', '-W2', '1.1.1.1'], capture_output=True).returncode == 0, 'Jetson reaches 1.1.1.1')
         r['tlsserver'] = (getattr(self, 'tlsproc', None) is not None and self.tlsproc.poll() is None, 'openssl s_server on %s:8443' % self.jetson)
         r['gpiojig'] = (getattr(self, 'gpiopairs', None) is not None, 'loopback jig fitted' if getattr(self, 'gpiopairs', None) else 'no loopback jig')
-        r['opt:vmstress'] = (self.a.vmstress, '--vmstress')
+        r['opt:vmstress'] = (self.a.vmstress or 'vm' in self.a.stress, '--vmstress or --stress vm')
+        r['opt:fuzz'] = (self.iv['fuzz_every'] > 0, '--stress fuzz or --profile stress')
         r['opt:flood'] = (self.a.flood, '--flood')
         return r
+
+    def options(self):
+        a = self.a
+        return 'hours=%g profile=%s stress=%s vmstress=%s flood=%s batteries=%s scratch=%s' % (
+            a.hours, a.profile, ','.join(a.stress) or '-', a.vmstress, a.flood, a.batteries,
+            ','.join(a.scratch) or '-')
 
     def gate(self, load, r):
         miss = [n for n in load['needs'] if not r.get(n, (False, n + ' unknown'))[0]]
@@ -448,11 +509,23 @@ class Run:
             self.cons.put('/tmp/soak/certs/ca.der', open(os.path.join(d, 'ca.der'), 'rb').read())
 
     def soakd(self, loads):
+        body = self.soakd_text(loads)
+        self.drv.put('/tmp/soak/soakd.sh', body.encode())
+        return body
+
+    def soakd_text(self, loads):
         body = SOAKD_HEAD
         body += 'sdraw = %s\njetson = %s\n' % (self.sdraw or "''", self.jetson)
+        iv = self.iv
+        body += ('sdrcount = %d\nsdrevery = %d\nsdwkb = %d\nsdwevery = %d\nnvrcount = %d\nnvrevery = %d\n'
+                 'nvwblocks = %d\nnvwevery = %d\nnvscratch = %s\njitevery = %d\nrsaevery = %d\nrngcount = %d\nfuzzevery = %d\n') % (
+            iv['sdr_mb'] * 16, iv['sdr_every'], iv['sdw_kb'], max(iv['sdw_every'], 1), iv['nvr_mb'] * 8, iv['nvr_every'],
+            iv['nvw_kb'] // 8, max(iv['nvw_every'], 1), rcq(self.scratch.get('nvme', '/dev/null')), iv['jit_every'],
+            iv['rsa_every'], max(iv['rng_kb'] // 64, 1), max(iv['fuzz_every'] - 600, 60))
         body += 'gpiopairs = (%s)\n' % ' '.join('%d:%d' % p for p in (self.gpiopairs or []))
         for l in loads:
             body += 'mkdir -p /tmp/soak/%s\n' % l['name']
+        body += 'mkdir -p /tmp/soak/fuzz/scratch\n'
         body += 'echo > /tmp/soak/run\n'
         for l in loads:
             body += '{ while {run} {%s\n} } &\n' % l['board']
@@ -461,7 +534,6 @@ class Run:
         body += "listen -A 'tcp!*!8703' {zeros 65536 1024} &\n"
         body += 'echo soakd-up\n'
         body += 'while {run} {sleep 30}\n'
-        self.drv.put('/tmp/soak/soakd.sh', body.encode())
         return body
 
     # host loads ----------------------------------------------------------
@@ -511,7 +583,46 @@ class Run:
         return True, 'in %d MB at %.1f Mbit/s, out %d MB at %.1f Mbit/s' % (mb, rin, n >> 20, rout)
 
     def h_net(self):
-        return self.push(self.info.addr, 64, 'net')
+        return self.push(self.info.addr, self.iv['net_mb'], 'net')
+
+    def tcpconvs(self):
+        out = self.sh("ls /net/tcp | grep '^[0-9]' | wc -l", limit=30)
+        m = re.search(r'(\d+)', out)
+        return int(m.group(1)) if m else -1
+
+    def h_churn(self):
+        before = self.tcpconvs()
+        n = self.iv['churn']; bad = 0
+        for i in range(n):
+            try:
+                c = socket.create_connection((self.info.addr, 8702), timeout=5); c.sendall(b'x'); c.close()
+            except OSError:
+                bad += 1
+        half = []
+        for i in range(self.iv['half']):
+            try:
+                half.append(socket.create_connection((self.info.addr, 8702), timeout=5))
+            except OSError:
+                bad += 1
+        self.stop.wait(60)
+        for c in half:
+            try:
+                c.close()
+            except OSError:
+                pass
+        self.stop.wait(90)
+        after = self.tcpconvs()
+        self.churnres.append((before, after, bad))
+        grew = after - before
+        ok = bad == 0 and grew <= 4
+        return ok, '%d connects, %d half-open held 60 s, %d refused; board conversations %d -> %d' % (n, len(half), bad, before, after)
+
+    def h_latency(self):
+        r = subprocess.run(['ping', '-q', '-c', '5', '-i', '0.2', '-W', '2', self.info.addr], capture_output=True, text=True)
+        m = re.search(r'= [\d.]+/([\d.]+)/([\d.]+)', r.stdout); l = re.search(r'(\d+)% packet loss', r.stdout)
+        if m:
+            self.lat.append((float(m.group(1)), float(m.group(2)), int(l.group(1)) if l else 0))
+        return (m is not None and (not l or l.group(1) != '100')), ''
 
     def h_wifi(self):
         return self.push(self.wifiaddr, 32, 'wifi')
@@ -566,6 +677,7 @@ class Run:
     # samplers -----------------------------------------------------------
     def sample(self, n):
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
+                      "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{ls /net/tcp | grep '^[0-9]' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
                       'wc -l /tmp/soak/*/ticks >[2] /dev/null', 'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
@@ -574,10 +686,14 @@ class Run:
         size = re.search(r' (\d+) [A-Z][a-z][a-z] .*bootimage', out)
         temp = re.findall(r'^(\d+\.\d+)', out, re.M)
         running = 'RUNNING' in out
-        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+        g = lambda k: (re.search(k + r' (\d+)', out) or [None, ''])[1]
+        bt = g('BOARDTIME'); drift = '%d' % (int(bt) - int(time.time())) if bt else ''
+        lat = self.lat[-1] if self.lat else ('', '', '')
+        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
             now(), int(time.time() - self.t0),
             pools.get('main', ('', ''))[0], pools.get('heap', ('', ''))[0], pools.get('image', ('', ''))[0],
-            size.group(1) if size else '', temp[0] if temp else '', json.dumps(ticks)))
+            size.group(1) if size else '', temp[0] if temp else '', json.dumps(ticks),
+            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1]))
         self.samples.flush()
         fails = re.findall(r'(/tmp/soak/[\w-]+/fail-\d+)', out)
         for f in fails:
@@ -599,16 +715,25 @@ class Run:
         self.failcount[name] = self.failcount.get(name, 0) + 1
 
     def serialscan(self):
-        """panic lines on the serial capture since the start"""
+        """alarm lines (panics) and complaints on the serial capture since the start"""
         if not self.ser:
             return []
-        bad = []
+        bad = []; self.complaints = {}
+        t0 = time.strftime('%H:%M:%S', time.localtime(self.t0)); d0 = time.strftime('%Y-%m-%d', time.localtime(self.t0))
         for log in sorted(glob.glob(self.info.capdir + '/2*.log')):
-            if os.path.getmtime(log) < self.t0 - 60:
+            if os.path.basename(log)[:10] < d0:
                 continue
+            first = os.path.basename(log)[:10] == d0
             for l in open(log, errors='replace'):
-                if re.search(r'\b(panic|PANIC|unhandled)\b|exception:|lock loop', l) and 'exception path' not in l:
+                if first and l[:8] < t0:
+                    continue
+                if 'soak flood' in l:
+                    continue
+                if re.search(ALARMS, l) and 'exception path' not in l:
                     bad.append(l.strip())
+                m = re.search(COMPLAINTS, l)
+                if m:
+                    self.complaints[m.group(0)] = self.complaints.get(m.group(0), 0) + 1
         return bad
 
     # batteries ------------------------------------------------------------
@@ -641,12 +766,13 @@ class Run:
         os.makedirs(os.path.join(self.dir, 'memtags'), exist_ok=True)
         self.log = Log(os.path.join(self.dir, 'soak.log'))
         self.samples = open(os.path.join(self.dir, 'samples.tsv'), 'a')
-        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\n')
+        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\n')
         self.hres = HostRes(self.info.name, self.log)
         self.failcount = {}; self.batt = {}
-        self.log('soak %s: kernel %s bytes sha1 %s; driven over %s; serial %s; options: hours=%g vmstress=%s flood=%s batteries=%s' % (
+        self.log('soak %s: kernel %s bytes sha1 %s; driven over %s; serial %s; options: %s' % (
             self.info.name, self.kernel[0], self.kernel[1], 'network console' if self.cons else 'serial',
-            'captured' if self.ser else 'none', a.hours, a.vmstress, a.flood, a.batteries))
+            'captured' if self.ser else 'none', self.options()))
+        self.log('intensity: ' + ' '.join('%s=%s' % kv for kv in sorted(self.iv.items())))
         if a.card:
             r = subprocess.run(['python3', os.path.join(ACCEPT, 'card.py'), '--board', self.info.addr,
                                 '--root', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')],
@@ -654,6 +780,16 @@ class Run:
             open(os.path.join(self.dir, 'card.txt'), 'w').write(r.stdout + r.stderr)
             summ = [l for l in (r.stdout).splitlines() if l.startswith('Passed')]
             self.log('card against this tree: %s' % (summ[0] if summ else 'rc=%d' % r.returncode))
+        if a.dry:
+            r = self.res = self.probe()
+            sel = [l for l in LOADS if (not a.loads or l['name'] in a.loads) and l['name'] not in a.skip]
+            for l in sel:
+                miss = self.gate(l, r)
+                self.log('load %-10s %s%s' % (l['name'], 'RUN ' if not miss else 'SKIP',
+                         '' if not miss else '  (' + '; '.join(r.get(n, (0, n))[1] for n in miss) + ')'))
+            self.log('dry run: nothing was changed on the board (no clock set, no jig driven, no TLS server, no loops)')
+            print(self.soakd_text([l for l in sel if l['board'] and not self.gate(l, r)]))
+            return
         # leftovers of an earlier run
         self.sh('rm -f /tmp/soak/run', limit=20); time.sleep(35)
         self.sh('rm -rf /tmp/soak', 'mkdir -p /tmp/soak', limit=30)
@@ -685,7 +821,9 @@ class Run:
         time.sleep(20)
         # host loads
         st = lambda n: self.state.get(n, '') == 'run'
-        if st('net'): self.every(600, self.h_net, 'net', first=60)
+        if st('net'): self.every(self.iv['net_every'], self.h_net, 'net', first=60)
+        if st('churn'): self.every(600, self.h_churn, 'churn', first=240)
+        if st('latency'): self.every(60, self.h_latency, 'latency', first=20)
         if st('wifi'): self.every(600, self.h_wifi, 'wifi', first=180)
         if st('usbnet'): self.every(600, self.h_usbnet, 'usbnet', first=300)
         if st('bt'): self.every(600, self.h_bt, 'bt', first=420)
@@ -770,8 +908,7 @@ class Run:
         out.append('soak %s %s' % (self.info.name, os.path.basename(self.dir)))
         out.append('kernel %s bytes, sha1 %s; driven over %s; %s' % (self.kernel[0], self.kernel[1],
                    'network console' if self.cons else 'serial', 'ALARM: ' + alarm if alarm else 'no alarm'))
-        out.append('options: hours=%g vmstress=%s flood=%s batteries=%s; length %.1f h' % (
-            self.a.hours, self.a.vmstress, self.a.flood, self.a.batteries, (time.time() - self.t0) / 3600))
+        out.append('options: %s; length %.1f h' % (self.options(), (time.time() - self.t0) / 3600))
         if self.hres.waits:
             out.append('host contention: ' + ', '.join('%s %.0f s' % kv for kv in self.hres.waits.items()))
         out.append('')
@@ -790,6 +927,21 @@ class Run:
                 a, b = floor(s, s[min(10, len(s) - 1)][0]), floor(s, s[-1][0])
                 hrs = max((s[-1][0] - s[min(10, len(s) - 1)][0]) / 3600, 0.01)
                 out.append('%-5s floor %d -> %d bytes, %+.0f bytes/h' % (name, a, b, (b - a) / hrs))
+        wt = ticks.get('sd-write', 0) * self.iv['sdw_kb'] * 1024; nt = ticks.get('nvme-write', 0) * self.iv['nvw_kb'] * 1024
+        out.append('written: SD %.1f MB (files), NVMe %.1f MB (%s); raw SD never' % (
+            wt / 1e6, nt / 1e6, self.scratch.get('nvme', 'no scratch: never')))
+        if self.lat:
+            avgs = sorted(x[0] for x in self.lat); mx = max(x[1] for x in self.lat)
+            out.append('latency  %d samples; median avg %.2f ms, worst max %.2f ms, samples with loss %d' % (
+                len(self.lat), avgs[len(avgs) // 2], mx, sum(1 for x in self.lat if x[2])))
+        if self.churnres:
+            out.append('churn    %d rounds; conversations %s' % (len(self.churnres), ' '.join('%d->%d' % (b, a) for b, a, _ in self.churnres[-6:])))
+        for col, name in ((8, 'procs'), (9, 'tcp conversations'), (10, 'clock drift (s)')):
+            s = [r[col] for r in rows if len(r) > col and r[col].lstrip('-').isdigit()]
+            if s:
+                out.append('%-17s first %s, last %s, min %s, max %s' % (name, s[0], s[-1], min(s, key=int), max(s, key=int)))
+        if getattr(self, 'complaints', None):
+            out.append('kernel complaints on serial: ' + ', '.join('%s x%d' % kv for kv in self.complaints.items()))
         for k, v in self.rates.items():
             ins = sorted(x[0] for x in v); outs = sorted(x[1] for x in v)
             out.append('%-7s %d transfers; median in %.0f, out %.0f Mbit/s' % (k, len(v), ins[len(ins) // 2], outs[len(outs) // 2]))
@@ -816,7 +968,7 @@ class Run:
                 a, b = floor(s, s[10][0]), floor(s, s[-1][0]); slope = '%.0f' % ((b - a) / max((s[-1][0] - s[10][0]) / 3600, 0.01))
             f.write('%s\t%s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
                 time.strftime('%Y-%m-%d %H:%M', time.localtime(self.t0)), self.info.name, self.kernel[1], self.kernel[0],
-                (time.time() - self.t0) / 3600, 'vmstress=%s,flood=%s' % (self.a.vmstress, self.a.flood),
+                (time.time() - self.t0) / 3600, self.options().replace(' ', ','),
                 'ALARM' if alarm else 'ok', sum(self.failcount.values()), slope,
                 ','.join(n for n, s in self.state.items() if s.startswith('skip')), self.dir))
 
@@ -844,11 +996,15 @@ def main():
     p = argparse.ArgumentParser(description='one soak for every Raspberry Pi (docs/SOAK.md)')
     p.add_argument('--board', required=True, help='a name in ~/pitools/boards')
     p.add_argument('--hours', type=float, default=12)
+    p.add_argument('--profile', choices=sorted(PROFILES), default='normal', help='intensity of every area')
+    p.add_argument('--stress', type=lambda s: s.split(','), default=[], help='areas raised to stress: ' + ','.join(AREAS))
+    p.add_argument('--scratch', action='append', default=[], help='DEV=PART that may be written raw, e.g. nvme=#S/nvme0p2')
     p.add_argument('--vmstress', action='store_true')
     p.add_argument('--flood', action='store_true', help='console flood as a load')
     p.add_argument('--batteries', action='store_true', help='Ethernet, Bluetooth and GPIO batteries before and after')
     p.add_argument('--card', action='store_true', help='card.py against this tree first')
     p.add_argument('--serial-only', action='store_true')
+    p.add_argument('--dry', action='store_true', help='probe and print the plan; change nothing on the board')
     p.add_argument('--loads', type=lambda s: s.split(','), default=None)
     p.add_argument('--skip', type=lambda s: s.split(','), default=[])
     p.add_argument('--elf', help='the running kernel\'s ELF, to name memtags call sites')

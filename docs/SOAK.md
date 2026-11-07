@@ -93,6 +93,36 @@ Core loads run on every board. Gated loads run where their resource exists.
 
 Batteries (Ethernet, Bluetooth, GPIO) run at the start and the end of every run, whatever its length, and daily in long runs. That way a 12-hour run has before and after results, unlike today, where the daily battery never fires in 12 hours.
 
+## Intensity, and not wearing out the hardware
+
+The aim is to test the hardware, not wear it out. The rules:
+- **Reads are cheap**, so they stay frequent.
+- **Writes to flash are small, verified and budgeted.** Each run reports what it wrote to each device.
+- **Raw block devices are never written** unless `--scratch DEV=PART` names a partition for it. The Pi 5's NVMe is a store with data on it.
+
+`--profile gentle|normal|stress` sets every area. `--stress storage,net,cpu,vm,fuzz` raises single areas to stress. Both are recorded in the header, summary and ledger.
+
+| | gentle | normal | stress |
+|---|---|---|---|
+| SD raw reads | 16 MB / 10 min | 16 MB / 2 min | 64 MB / 30 s |
+| SD file writes (verified, removed) | none | 1 MB / 10 min = 144 MB a day | 4 MB / 2 min = 2.9 GB a day |
+| NVMe raw reads | 64 MB / 10 min | 64 MB / 2 min | 256 MB / 30 s |
+| NVMe writes (scratch partition only) | none | 1 MB / 5 min = 288 MB a day | 16 MB / min = 23 GB a day |
+| network pushes | 16 MB / 30 min | 64 MB each way / 10 min | 64 MB each way / min |
+| connection churn | 50 + 2 half-open | 200 + 8 half-open / 10 min | 1000 + 32 half-open |
+| JIT, RSA keys, random | every 15 min / 10 min / 256 KB | 5 min / 1 min / 4 MB | 1 min / 10 s / 16 MB |
+| sysfuzz | off | off | 10 min an hour, scratch in `/tmp` |
+
+## Loads added for the security and fuzzing work
+
+These cover what no harness exercised before:
+- **churn:** TCP connects and closes, and half-open connections held for 60 s. The board's conversation count must come back down afterwards. This exercises the fixes for reaping half-open TCP state, bounding queues and pre-auth limits.
+- **latency:** a ping every minute, average and maximum. #1033's problem was latency, and nothing measured it continuously.
+- **tls:** handshakes and reads against a local server (above).
+- **fuzz:** `sysfuzz` on the board, opt-in. It is the tool that found many of the bugs the kernel work fixed, and the boards never ran it.
+- **samplers:** process count, TCP conversations and board-clock drift every minute. A slow growth in processes or conversations is a leak that pool sizes can hide.
+- **serial detectors:** besides panics, the kernel's complaints (`out of memory`, `won't halt`, `ether0rx`, a full input queue, `wedged`) are counted in the summary.
+
 ## Samplers
 
 The same intervals on every board:

@@ -250,13 +250,18 @@ class HostRes:
 SOAKD_HEAD = r'''load std
 mkdir -p /tmp/soak
 fn tick { echo x >> /tmp/soak/$1/ticks }
+# A braced block (a backquote's, an if's body) has its own arguments: $1 is
+# empty inside one, and "null list in concatenation" kills the whole loop
+# (it did, for every load's first failure, 2026-11-07). So the name is taken
+# into a variable first.
 fn bad {
-	n = `{ls /tmp/soak/$1 | grep fail | wc -l}
-	echo $1 >> /tmp/soak/bad
+	name = $1; why = $*
+	n = `{ls /tmp/soak/$name | grep fail | wc -l}
+	echo $name >> /tmp/soak/bad
 	if {! ~ $n 20 21 22 23 24 25} {
-		f = /tmp/soak/$1/fail-`{date -n}
-		echo $* > $f
-		for(o in /tmp/soak/$1/out /tmp/soak/$1/err) { ftest -e $o && { echo '== '^$o >> $f; cat $o >> $f } }
+		f = /tmp/soak/$name/fail-`{date -n}
+		echo $why > $f
+		for(o in /tmp/soak/$name/out /tmp/soak/$name/err) { ftest -e $o && { echo '== '^$o >> $f; cat $o >> $f } }
 	}
 }
 fn run { ftest -e /tmp/soak/run }
@@ -319,7 +324,7 @@ LOADS = [
 	tick sd-write; sleep $sdwevery''', needs=['dd', 'budget:sd']),
     L('tls', 'TLS to openssl s_server on the Jetson, verified against the run\'s CA, every 2 min', core=True, board=r'''
 	@{ bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://$jetson:8443/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err }
-	grep -s ' 200 ' /tmp/soak/tls/out || bad tls handshake-or-get
+	grep -s 'HTTP 200' /tmp/soak/tls/out || bad tls handshake-or-get
 	tick tls; sleep 120''', needs=['tlsperf', 'tlsserver', 'clock', 'console']),
     L('net', '64 MB into the board and 64 MB out, every 10 min; rates logged', core=True,
       host='net', needs=['wired']),
@@ -606,7 +611,8 @@ class Run:
         return self.push(self.info.addr, self.iv['net_mb'], 'net')
 
     def tcpconvs(self):
-        out = self.sh("ls /net/tcp | grep '^[0-9]' | wc -l", limit=30)
+        # open conversations: /net/tcp lists every one ever allocated, Closed ones included
+        out = self.sh("cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l", limit=30)
         m = re.search(r'(\d+)', out)
         return int(m.group(1)) if m else -1
 
@@ -682,10 +688,14 @@ class Run:
                     c = self.cons.hold('load std; ' + cmd)
                     self.log('%s: held' % name)
                     c.settimeout(60)
+                    # what the session prints (a loop's shell error among it) is kept
+                    held = open(os.path.join(self.dir, 'held-%s.txt' % name), 'ab', 0)
                     while not self.stop.is_set():
                         try:
-                            if not c.recv(65536):
+                            b = c.recv(65536)
+                            if not b:
                                 break
+                            held.write(b)
                         except socket.timeout:
                             pass
                 except OSError:
@@ -697,11 +707,11 @@ class Run:
     # samplers -----------------------------------------------------------
     def sample(self, n):
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
-                      "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{ls /net/tcp | grep '^[0-9]' | wc -l}; echo BOARDTIME `{date -n}",
+                      "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
                       'wc -l /tmp/soak/*/ticks >[2] /dev/null', 'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
-                 re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)', out, re.M)}
+                 re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)\s*$', out, re.M)}
         ticks = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/ticks', out)}
         size = re.search(r' (\d+) [A-Z][a-z][a-z] .*bootimage', out)
         temp = re.findall(r'^(\d+\.\d+)', out, re.M)
@@ -898,7 +908,8 @@ class Run:
             self.log('ALARM: ' + alarm)
         elif self.stop.is_set():
             self.log('stopped early (SIGTERM)')
-        # the end
+        # the end (stopped early: no batteries after, so a SIGTERM ends it quickly)
+        early = self.stop.is_set()
         self.stop.set()
         try:
             self.sh('rm -f /tmp/soak/run', limit=20)
@@ -912,7 +923,7 @@ class Run:
         except Exception:
             pass
         self.memtags('end')
-        if a.batteries and not alarm:
+        if a.batteries and not alarm and not early:
             self.batteries('after')
         self.summary(alarm, sel)
 

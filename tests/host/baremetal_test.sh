@@ -6231,6 +6231,61 @@ PYEOF
     vrefute "headless: nothing panics"                      "panic:"
 
     #
+    # The collector frees cycles with the desktop up. An object in a
+    # cycle -- every sh, which holds itself -- is freed only at the end
+    # of a collector epoch, and with the keyboard's lexicon in the heap
+    # (wm/osk, some 250000 objects) an epoch took 54 traversals of it:
+    # on the Pi 4 one ended every 4.5 minutes at idle and a load left a
+    # backlog, and here, under TCG, none ended at all. gc_cycle_test drops
+    # 1000 cycles and waits a minute for them to go, at the console of
+    # this desktop, osk's lexicon and all.
+    #
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$VCARD" <<'PYEOF' > "$BUILD/$PLAT-gccycle.txt" 2>&1
+import re, subprocess, sys, threading, time
+qemu, img, extra, card = sys.argv[1:5]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % card, "-device", "virtio-blk-device,drive=sd",
+    "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def rd():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=rd, daemon=True).start()
+def waitfor(pat, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if re.search(pat, bytes(buf[start:])):
+            return True
+        time.sleep(0.3)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(rb"lucifer: INIT", 180)
+    time.sleep(30)		# the desktop up, osk's lexicon loaded
+    typed("echo OSKPROCS `{ps | grep Osk | wc -l}")
+    m = len(buf)
+    typed("/dis/tests/gc_cycle_test.dis -v", 0.5)
+    waitfor(rb"\n(PASS|FAIL)\r?\n", 150, m)
+    time.sleep(1)
+finally:
+    p.kill()
+sys.stdout.write(buf.decode("utf-8", "replace"))
+PYEOF
+    OUT="$(tr -d '\r' < "$BUILD/$PLAT-gccycle.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    # without osk the heap is small and the old collector passed too
+    if grep -qE '(^|; )OSKPROCS [1-9]' <<<"$OUT"; then pass "virt: gc: osk is up, its lexicon in the heap"
+    else fail "virt: gc: osk is up, its lexicon in the heap -- $(grep -a OSKPROCS <<<"$OUT" | tail -1)"; fi
+    vcheck "gc: 1000 cycles are freed with the desktop up" "PASS: CyclesFreed"
+    vrefute "gc: nothing panics"                        "panic:"
+
+    #
     # More than one Dis VM (#944): #X, the vm command, programs in VMs 1
     # and 2 at once, and the two places the kernel crosses between VMs --
     # a VM 1 client of a file a VM 0 program serves through file2chan

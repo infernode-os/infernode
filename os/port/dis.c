@@ -437,12 +437,18 @@ accountant(void)
  * there (QEMU: 185 epochs in two quiet minutes). Epochs need to end,
  * not to end continuously: a cycle now waits at most about Idlegcgap
  * to be freed, and the collector rests between rounds.
+ *
+ * Idlegcgap sets what idle collection costs. At 10 s the Pi 4 inspected
+ * 22.6M objects a minute at idle, against 3.3M on the kernel before (and
+ * QEMU 22.5M); at 60 s, under QEMU, 3.9M, with a dropped cycle freed in
+ * 20-30 s. Under load it hardly matters: what keeps up there is
+ * marklist taking a list whole (gc.c), 5 traversals an epoch, not 54.
  */
 #ifndef Idlegcms
 #define Idlegcms 10
 #endif
 #ifndef Idlegcgap
-#define Idlegcgap 10000
+#define Idlegcgap 60000
 #endif
 
 /* whether the heap has changed since the collector last went all the way round it */

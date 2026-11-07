@@ -94,6 +94,7 @@ class Console:
     """the network console: one connection per command, held ones for loops"""
     def __init__(self, addr, token):
         self.addr, self.tok = addr, token
+        self.c = None; self.lk = threading.Lock(); self.sessions = 0
 
     def open(self, timeout=15):
         c = socket.create_connection((self.addr, 17010), timeout=timeout)
@@ -110,11 +111,30 @@ class Console:
         return c
 
     def sh(self, cmds, limit=60):
-        """run commands in one fresh session; returns the output (std loaded)"""
-        c = self.open()
+        """run commands in the one kept session (std loaded); a new session only when it drops.
+        Every session is a shell on the board, and with a large live heap the native
+        collector may never free one (2026-11-07), so a sampler that opened one a
+        minute would grow the heap it measures."""
+        with self.lk:
+            for attempt in (0, 1):
+                try:
+                    if self.c is None:
+                        self.c = self.open(); self.sessions += 1
+                        self._run(self.c, ['load std'], 30)
+                    return self._run(self.c, list(cmds), limit)
+                except OSError:
+                    try:
+                        self.c.close()
+                    except Exception:
+                        pass
+                    self.c = None
+                    if attempt:
+                        raise
+
+    def _run(self, c, cmds, limit):
         out = b''
-        try:
-            for cmd in ['load std'] + list(cmds):
+        if True:
+            for cmd in cmds:
                 c.sendall((cmd + '; echo @@SOAKEND@@\n').encode())
                 t0 = time.time(); buf = b''
                 while b'@@SOAKEND@@' not in buf.replace(b'echo @@SOAKEND@@', b'') and time.time() - t0 < limit:
@@ -125,9 +145,9 @@ class Console:
                         buf += d
                     except socket.timeout:
                         pass
+                if b'@@SOAKEND@@' not in buf.replace(b'echo @@SOAKEND@@', b''):
+                    raise OSError('no answer to %r in %d s' % (cmd[:40], limit))
                 out += buf.replace(b'echo @@SOAKEND@@', b'').replace(b'@@SOAKEND@@', b'')
-        finally:
-            c.close()
         return out.decode(errors='replace').replace('\r', '')
 
     def put(self, path, data):
@@ -909,6 +929,8 @@ class Run:
         out.append('kernel %s bytes, sha1 %s; driven over %s; %s' % (self.kernel[0], self.kernel[1],
                    'network console' if self.cons else 'serial', 'ALARM: ' + alarm if alarm else 'no alarm'))
         out.append('options: %s; length %.1f h' % (self.options(), (time.time() - self.t0) / 3600))
+        if self.cons:
+            out.append('console sessions opened by this run: %d (one kept for commands, plus one per held load and upload)' % self.cons.sessions)
         if self.hres.waits:
             out.append('host contention: ' + ', '.join('%s %.0f s' % kv for kv in self.hres.waits.items()))
         out.append('')

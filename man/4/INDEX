@@ -21,6 +21,7 @@ import import
 keyfs keyfs
 keysrv keysrv
 kfs kfs
+layerfs layerfs
 lockfs lockfs
 logfile logfile
 mail9p mail9p

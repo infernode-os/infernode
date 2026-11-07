@@ -280,6 +280,7 @@ dis/jsfs.dis
 dis/kill.dis
 dis/ktrans.dis
 dis/lan78stats.dis
+dis/layerfs.dis
 dis/lib/acmewin.dis
 dis/lib/arg.dis
 dis/lib/asn1.dis

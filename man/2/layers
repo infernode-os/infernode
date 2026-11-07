@@ -74,6 +74,10 @@ Attributes it does not know are ignored, and a line that is no record is
 skipped.
 .PP
 A file that ends is read once and kept; one rewritten is read again.
+.IR Layerfs (4),
+union-mounted with create over a
+.B layer
+directory, makes any file written there a layer.
 A file that waits (a session's detections, a pipe) is read as it comes,
 a frame's records a read.
 .PP
@@ -111,4 +115,5 @@ bind -a /tmp/horizon /mnt/video/0/layer
 .B /appl/matrix/video-pane.b
 .SH SEE ALSO
 .IR vision (1),
-.IR visionfs (4)
+.IR visionfs (4),
+.IR layerfs (4)

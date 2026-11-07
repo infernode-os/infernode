@@ -110,6 +110,7 @@ TARG=\
 	jsfs.dis\
 	kill.dis\
 	lan78stats.dis\
+	layerfs.dis\
 	ktrans.dis\
 	limbtest.dis\
 	listen.dis\
@@ -345,6 +346,7 @@ SYSMODULES=\
 	gdl90.m\
 	post9p.m\
 	bayer.m\
+	layers.m\
 
 DISBIN=$ROOT/dis
 

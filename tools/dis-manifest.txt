@@ -711,6 +711,7 @@ dis/tests/authnode.dis
 dis/tests/awk_test.dis
 dis/tests/bidi_test.dis
 dis/tests/bioauth_test.dis
+dis/tests/brick_d2_test.dis
 dis/tests/brotli_test.dis
 dis/tests/bthci_test.dis
 dis/tests/bufio_test.dis

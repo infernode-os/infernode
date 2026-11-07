@@ -54,6 +54,7 @@ udp := 0;
 leasems := 500;
 reconnaddr: string;	# brick d2 -r: the brick's address, to mount again after a loss
 RECONNMS: con 2000;	# transport failing this long: mount again
+MINLEASE: con 250;	# grant service issues at most 20/s; renew at lease/5
 window := 1;		# brick fetch: reads in flight
 nbytes := big 0;	# brick fetch: bytes wanted (0: to end of file)
 
@@ -353,10 +354,13 @@ D2: adt {
 	bmnt:	string;	# where the brick is mounted
 	failsince:	int;	# when commands began failing on the transport (0: they are not)
 	lapserec:	int;	# a d2lapse is recorded for this armed period
+	gen:	int;	# invalidates commands made from an older state snapshot
 };
 
 d2serve(bmnt, dir: string)
 {
+	if(leasems < MINLEASE)
+		fail("d2", sys->sprint("lease must be at least %d ms", MINLEASE));
 	key := unhex(trim(readfile0(keydir + "/d2.key")));
 	if(key == nil || len key != 32)
 		fail("d2", "no D2 key in " + keydir + "; run brick pair");
@@ -376,6 +380,8 @@ d2serve(bmnt, dir: string)
 			for(g := f; g != nil && tl g != nil; g = tl g)
 				if(hd g == "max")
 					m = int hd tl g;
+			if(m < MINLEASE)
+				fail("d2", sys->sprint("%s reports unsafe lease maximum %d ms", hd f, m));
 			outs = ref Out(hd f, 0, 0, nil, m) :: outs;
 			if(m < leasems)
 				leasems = m;	# one lease for all, so the shortest
@@ -514,7 +520,8 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			if(e != nil)
 				d.last = e;
 			else{
-				e = d2send(d, "arm", held(o), 1);
+				g := newgen(d);
+				e = d2send(d, "arm", held(o), 1, g);
 				# The outcome too: d2arm alone cannot tell a refused arm from one that took.
 				if(e == nil)
 					auditlog("d2armed", d2what(d, held(o)));
@@ -528,9 +535,10 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			}
 			wc <-= (len data, e);
 		"safe" =>
+			g := newgen(d);
 			for(i := 0; i < len o; i++)
 				o[i].held = 0;
-			e := d2send(d, "safe", nil, 0);
+			e := d2send(d, "safe", nil, 0, g);
 			d.armed = 0;
 			d.lapsed = "safe";
 			auditlog("d2safe", d2what(d, nil));	# after: safe never waits on, or fails for, the record
@@ -552,10 +560,11 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 		if(v == "release" || v == "off"){
 			# An orderly release: to failsafe now, the others untouched
 			# (a lapsed lease would disarm everything).
+			g := newgen(d);
 			o[i].held = 0;
 			e: string;
 			if(d.armed)
-				e = d2send(d, "release", sys->sprint("%s=0", o[i].name) :: nil, 0);
+				e = d2send(d, "release", sys->sprint("%s=0", o[i].name) :: nil, 0, g);
 			wc <-= (len data, e);
 			break;
 		}
@@ -563,21 +572,29 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			wc <-= (0, "want a value, or release");
 			break;
 		}
+		oldval := o[i].val;
+		oldheld := o[i].held;
 		o[i].val = int v;
 		o[i].held = 1;
+		g := newgen(d);
 		# Apply at once (and so learn at once if it is refused).
 		e: string;
 		if(d.armed)
-			e = d2send(d, "set", held(o), 1);
+			e = d2send(d, "set", held(o), 1, g);
 		else
 			e = "not armed: write arm to ctl";
+		if(e != nil){
+			o[i].val = oldval;
+			o[i].held = oldheld;
+		}
 		wc <-= (len data, e);
 	<-tick =>
 		# Renew whatever is held, before its lease runs out - in another
 		# process, so that ctl (safe above all) never waits behind a
-		# renewal stuck on the link.  One at a time; d2send's state
-		# (seq, armed) is shared, and only a renewal and a ctl or value
-		# write can overlap, which the brick orders by seq.
+		# renewal stuck on the link.  One at a time; a ctl or value write
+		# advances gen, so the old snapshot cannot pass d2send's final
+		# check.  If it was already in write, its lower sequence precedes
+		# the newer command at the brick or is refused as old.
 		h := held(o);
 		if(reconnaddr != nil && d.failsince != 0 && !renewing &&
 		   sys->millisec() - d.failsince > RECONNMS){
@@ -585,17 +602,23 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			spawn reconnect(d, renewed);
 		}else if(d.armed && h != nil && !renewing){
 			renewing = 1;
-			spawn renew(d, h, renewed);
+			spawn renew(d, h, d.gen, renewed);
 		}
 	<-renewed =>
 		renewing = 0;
 	}
 }
 
-renew(d: ref D2, h: list of string, done: chan of int)
+renew(d: ref D2, h: list of string, gen: int, done: chan of int)
 {
-	d2send(d, "set", h, 1);
+	d2send(d, "set", h, 1, gen);
 	done <-= 1;
+}
+
+newgen(d: ref D2): int
+{
+	d.gen++;
+	return d.gen;
 }
 
 held(o: array of ref Out): list of string
@@ -608,8 +631,10 @@ held(o: array of ref Out): list of string
 }
 
 # One D2 command under a fresh grant; nil, or why it was refused.
-d2send(d: ref D2, kind: string, outs: list of string, lease: int): string
+d2send(d: ref D2, kind: string, outs: list of string, lease, gen: int): string
 {
+	if(gen != d.gen)
+		return nil;
 	gid := 0;
 	if(kind != "safe" && kind != "release"){
 		buf := array[64] of byte;
@@ -623,6 +648,8 @@ d2send(d: ref D2, kind: string, outs: list of string, lease: int): string
 				break;
 			sys->sleep(55);
 		}
+		if(gen != d.gen)
+			return nil;
 		if(n <= 0)
 			return d2refused(d, sys->sprint("grant: %r"));
 		d.failsince = 0;
@@ -641,9 +668,15 @@ d2send(d: ref D2, kind: string, outs: list of string, lease: int): string
 	mac := array[Keyring->SHA256dlen] of byte;
 	keyring->hmac_sha256(b, len b, d.key, mac, nil);
 	m := array of byte (body + " " + hex(mac[0:16]));
+	# A release/safe/value write may have overtaken a renewal while its
+	# grant read blocked.  Never let that old snapshot reach the device.
+	if(gen != d.gen)
+		return nil;
 	if(sys->write(d.cmd, m, len m) != len m)
-		return d2refused(d, sys->sprint("%r"));
-	d.last = "ok";
+		if(gen == d.gen)
+			return d2refused(d, sys->sprint("%r"));
+	if(gen == d.gen)
+		d.last = "ok";
 	return nil;
 }
 
@@ -655,7 +688,9 @@ d2refused(d: ref D2, e: string): string
 		if(d.failsince == 0)
 			d.failsince = sys->millisec();
 		# Authority is unprovable from here: the brick will fail safe within a lease.
-		lapse(d, "link: " + e);
+		d.lapsed = "link: " + e;
+		lapse(d, d.lapsed);
+		d.armed = 0;
 		return e;
 	}
 	if(contains(e, "not armed") || contains(e, "session") || contains(e, "holding") ||

@@ -74,8 +74,9 @@ or a short write spoils only the file being written, whose value was
 never sent.
 Callers take turns through
 .IB f .lock ,
-made exclusively; a lock older than 30 seconds is taken as left by a
-crash.
+made exclusively and remove-on-close, so the exact owner's exit removes it.
+The lock is never reclaimed merely because its timestamp is old: a paused
+owner and a wall-clock step must not create two counter allocators.
 A file
 .I f
 holding a bare value, as earlier versions kept it, is read as well.
@@ -88,6 +89,14 @@ Typically
 is one end of a pipe whose other end is given to
 .IR sys-bind (2)'s
 .BR mount .
+.B Relay
+accepts only complete 9P request frames between 7 bytes and
+.B MSIZE
+and only authenticated replies whose inner length is exact, whose tag is the
+pending request's, and whose type is that request's reply or
+.BR Rerror .
+A structural violation ends the session; authentication does not make an
+ambiguous byte stream safe to pass to the mount driver.
 .PP
 Every request gets an answer: the server's reply; or, made by
 .BR relay ,

@@ -31,6 +31,7 @@ Tversion:	con 100;
 Rerror:	con 107;
 Tflush:	con 108;
 Twrite:	con 118;
+Tmax:	con 126;
 Rflushtype:	con 109;
 
 init(): string
@@ -319,21 +320,21 @@ counter(f: string): (array of byte, string)
 # short write can spoil only the slot being written, whose value was
 # never sent, and the other still holds the last.  Allocators, in this
 # process or another sharing the directory, take turns through f.lock,
-# made exclusively (OEXCL).  A file f of the old format, a bare value, is
+# made exclusively (OEXCL) and remove-on-close, so a dead owner cannot
+# leave it behind.  A file f of the old format, a bare value, is
 # read as a slot until the first is written.
 #
 CTRLOCKWAIT:	con 5000;	# ms to wait for the lock
-CTRLOCKSTALE:	con 30;	# s after which a lock left by a crash is taken
 
 ctrnext(f: string, now: big): (big, string)
 {
 	if(f == nil)
 		return (big 0, "sdg: no counter file");
-	lerr := ctrlock(f + ".lock");
+	(lock, lerr) := ctrlock(f + ".lock");
 	if(lerr != nil)
 		return (big 0, lerr);
 	(v, err) := ctrnext0(f, now);
-	sys->remove(f + ".lock");
+	lock = nil;	# ORCLOSE removes only the file this owner opened
 	return (v, err);
 }
 
@@ -447,45 +448,27 @@ ctrwrite(f: string, v: big): string
 	return nil;
 }
 
-ctrlock(lf: string): string
+ctrlock(lf: string): (ref Sys->FD, string)
 {
 	t0 := sys->millisec();
 	gone := 0;
 	for(;;){
-		fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL, 8r600);
+		fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
 		if(fd != nil)
-			return nil;
+			return (fd, nil);
 		err := sys->sprint("%r");
-		(ok, d) := sys->stat(lf);
+		(ok, nil) := sys->stat(lf);
 		if(ok < 0){
 			# Not made, and not there to be waited for: the directory
 			# refuses it (a holder that has just let go is retried).
 			if(++gone >= 3)
-				return sys->sprint("sdg: can't make counter lock %s: %s", lf, err);
-		}else{
+				return (nil, sys->sprint("sdg: can't make counter lock %s: %s", lf, err));
+		}else
 			gone = 0;
-			# One left by a crash: taken once it is old.  The lock is
-			# held for milliseconds, so a lock this old has no holder.
-			if(epochsecs() - d.mtime > CTRLOCKSTALE)
-				sys->remove(lf);
-		}
 		if(sys->millisec() - t0 > CTRLOCKWAIT)
-			return sys->sprint("sdg: counter lock %s held for %d ms", lf, CTRLOCKWAIT);
+			return (nil, sys->sprint("sdg: counter lock %s held for %d ms", lf, CTRLOCKWAIT));
 		sys->sleep(10);
 	}
-}
-
-# Seconds since the epoch, as stat's mtime.
-epochsecs(): int
-{
-	fd := sys->open("/dev/time", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	buf := array[64] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return 0;
-	return int (big string buf[0:n] / big 1000000);
 }
 
 dirname(f: string): string
@@ -634,6 +617,7 @@ ticker(c: chan of int, ms: int)
 Req: adt {
 	rid:	int;
 	tag:	int;
+	typ:	int;	# request type; its ordinary reply is typ+1
 	flushing:	int;	# its Tflush is on the way: keep it until the Rflush
 	cancels:	int;	# for a Tflush: the tag it cancels (else -1)
 	write:	int;	# a Twrite: its outcome is unknown if it times out
@@ -671,10 +655,19 @@ pipereader(fd: ref Sys->FD, reqs: chan of array of byte, pids: chan of int)
 	buf := array[0] of byte;
 	tmp := array[Sys->ATOMICIO] of byte;
 	for(;;){
-		while(len buf >= 4 && len buf >= get4(buf, 0)){
+		while(len buf >= 4){
 			n := get4(buf, 0);
-			if(n < 7)
+			if(n < 7 || n > MSIZE){
+				reqs <-= nil;
+				return;
+			}
+			if(len buf < n)
 				break;
+			typ := int buf[4];
+			if(typ < Tversion || typ > Tmax || (typ & 1) != 0){
+				reqs <-= nil;
+				return;
+			}
 			m := array[n] of byte;
 			m[0:] = buf[0:n];
 			reqs <-= m;
@@ -741,8 +734,7 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 	for(;;) alt {
 	m := <-reqs =>
 		if(m == nil){		# unmounted
-			for(; pids != nil; pids = tl pids)
-				kill(hd pids);
+			killall(pids);
 			return;
 		}
 		typ := int m[4];
@@ -760,7 +752,7 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 		}
 		rid++;
 		now := sys->millisec();
-		r := ref Req(rid, tag, 0, cancels, typ == Twrite, cat(le4(rid), m), now + DEADLINE, now + RTO, 1, 0, now);
+		r := ref Req(rid, tag, typ, 0, cancels, typ == Twrite, cat(le4(rid), m), now + DEADLINE, now + RTO, 1, 0, now);
 		pend = r :: pend;
 		s.send(r.pkt);
 	pc := <-pkts =>
@@ -793,7 +785,19 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 				else
 					rerror(fd, r.tag, "reply gone");
 			}else{
-				sys->write(fd, p[4:], len p - 4);
+				m := p[4:];
+				# Authentication is not framing.  Refuse an ambiguous 9P
+				# message rather than desynchronising the mount byte stream.
+				if(len m < 7 || len m > MSIZE || get4(m, 0) != len m ||
+				   (int m[5] | int m[6] << 8) != r.tag ||
+				   (int m[4] != Rerror && int m[4] != r.typ + 1)){
+					killall(pids);
+					return;
+				}
+				if(sys->write(fd, m, len m) != len m){
+					killall(pids);
+					return;
+				}
 				pend = remove(pend, r);
 				if(r.cancels >= 0)	# the Rflush: the flushed request is done
 					pend = drop(pend, r.cancels, 1);
@@ -807,8 +811,7 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 			# brick rebooted, or another commander took over.  Its 9P
 			# state is gone either way, so hang up: callers get an error
 			# and can mount again, rather than timing out for ever.
-			for(; pids != nil; pids = tl pids)
-				kill(hd pids);
+			killall(pids);
 			return;
 		}
 		for(l := pend; l != nil; l = tl l){
@@ -839,6 +842,12 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 		if(now - s.lastsend > IDLE)
 			s.send(le4(0));		# keepalive: rid 0 is never a request
 	}
+}
+
+killall(pids: list of int)
+{
+	for(; pids != nil; pids = tl pids)
+		kill(hd pids);
 }
 
 # Five fast retransmissions, then backing off by 1.5x to RTOMAX.

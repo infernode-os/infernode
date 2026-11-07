@@ -178,6 +178,8 @@ Writing a value (a pulse width in microseconds, or a level) to an output's
 file holds the output at that value: it is renewed under fresh grants every
 .IR leasems /5
 (default lease 500 ms).
+The commander refuses a lease below 250 ms: it renews at one fifth of the
+lease and the brick issues at most 20 grants per second.
 Writing
 .B release
 ends its use: it goes to failsafe at once, and the others are untouched.

@@ -115,6 +115,14 @@ exists(f: string): int
 	return ok >= 0;
 }
 
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
 # ===================================================================
 # P1015-04: the counter
 # ===================================================================
@@ -251,16 +259,23 @@ testCounterWriteFails(t: ref T)
 	t.assert(err == nil && v == big 51, sys->sprint("writable again: on from the last committed, %bd %s", v, err));
 }
 
-testCounterStaleLock(t: ref T)
+testCounterCrashLock(t: ref T)
 {
 	f := scratch(t) + "/sdg.ctr";
-	writefile(f + ".lock", "");
-	dir := sys->nulldir;
-	dir.mtime = 1000000;	# 1970: left by a crash
-	if(sys->wstat(f + ".lock", dir) < 0)
-		t.fatal(sys->sprint("can't age the lock: %r"));
+	done := chan of int;
+	spawn lockowner(f + ".lock", done);
+	if(<-done == 0)
+		t.fatal(sys->sprint("can't make crash lock: %r"));
+	# The owner returned without explicitly removing anything.  ORCLOSE
+	# ties cleanup to its open file, not an age guess or a pathname race.
 	(v, err) := sdg->ctrnext(f, big 7);
-	t.assert(err == nil && v == big 7, sys->sprint("a lock left by a crash is taken: %bd %s", v, err));
+	t.assert(err == nil && v == big 7, sys->sprint("a dead owner's lock is gone: %bd %s", v, err));
+}
+
+lockowner(f: string, done: chan of int)
+{
+	fd := sys->create(f, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+	done <-= (fd != nil);
 }
 
 testCounterHeldLock(t: ref T)
@@ -402,14 +417,19 @@ decrypt(s: ref Ss, c: array of byte): array of byte
 	return p;
 }
 
-# What the responder does with message 2's DHs.
+# What the responder does with message 2's DHs and later 9P replies.
 Mhonest, Mloworder: con iota;
+Replyok, Replybadlen, Replybadtag, Replybadtype: con iota;
 
 Responder: adt {
 	priv, pub, psk:	array of byte;
 	mode:	int;
+	replymode:	int;
 	inits:	int;		# initiations received
 	datas:	int;		# packets after the handshake
+	me, them:	int;
+	ksend, krecv:	array of byte;
+	ctr:	big;
 };
 
 # Answer initiations on fd until told to stop; report what was seen.
@@ -435,8 +455,10 @@ responder(r: ref Responder, fd: ref Sys->FD, stop: chan of int, done: chan of re
 				out := cat(hdr, resp);
 				sys->write(fd, out, len out);
 			}
-		}else
+		}else if(len m > 0 && int m[0] == 3){
 			r.datas++;
+			datareply(r, fd, hdr, m);
+		}
 	}
 }
 
@@ -506,7 +528,76 @@ answer(r: ref Responder, m: array of byte): array of byte
 	out[0] = byte Presp;
 	out[1:] = array[] of {byte 16r21, byte 16r43, byte 16r65, byte 16r07};	# our index
 	out[5:] = sender;
+	r.me = 16r07654321;
+	r.them = int sender[0] | int sender[1] << 8 | int sender[2] << 16 | int sender[3] << 24;
+	(r.krecv, r.ksend, nil) = hkdf(s.ck, nil);
 	return cat(cat(out, re), c);
+}
+
+datanonce(n: big): array of byte
+{
+	b := array[12] of {* => byte 0};
+	for(i := 0; i < 8; i++)
+		b[4+i] = byte (n >> (8*i));
+	return b;
+}
+
+dataseal(k: array of byte, n: big, ad, p: array of byte): array of byte
+{
+	(c, tag) := keyring->ccpolyencrypt(p, ad, k, datanonce(n));
+	return cat(c, tag);
+}
+
+dataunseal(k: array of byte, n: big, ad, c: array of byte): array of byte
+{
+	if(len c <= 16)
+		return nil;
+	return keyring->ccpolydecrypt(c[0:len c - 16], ad, c[len c - 16:], k, datanonce(n));
+}
+
+# Answer one authenticated request.  The bad modes are authenticated on
+# purpose: framing remains a boundary after peer authentication.
+datareply(r: ref Responder, fd: ref Sys->FD, udphdr, m: array of byte)
+{
+	if(len m < 13 + 16 || int m[0] != 3 || get4t(m, 1) != r.me)
+		return;
+	n := big 0;
+	for(i := 0; i < 8; i++)
+		n |= big m[5+i] << (8*i);
+	p := dataunseal(r.krecv, n, m[0:13], m[13:]);
+	if(p == nil || len p < 11)
+		return;
+	rid := p[0:4];
+	tag0 := p[9];
+	tag1 := p[10];
+	reply := array[7] of {byte 7, byte 0, byte 0, byte 0, byte 125, tag0, tag1};
+	case r.replymode {
+	Replybadlen =>
+		reply[0] = byte 8;
+	Replybadtag =>
+		reply[5]++;
+	Replybadtype =>
+		reply[4] = byte 119;
+	}
+	plain := cat(rid, reply);
+	h := array[13] of byte;
+	h[0] = byte 3;
+	put4t(h, 1, r.them);
+	for(i = 0; i < 8; i++)
+		h[5+i] = byte (r.ctr >> (8*i));
+	pkt := cat(h, dataseal(r.ksend, r.ctr++, h, plain));
+	sys->write(fd, cat(udphdr, pkt), len udphdr + len pkt);
+}
+
+get4t(a: array of byte, o: int): int
+{
+	return int a[o] | int a[o+1] << 8 | int a[o+2] << 16 | int a[o+3] << 24;
+}
+
+put4t(a: array of byte, o, v: int)
+{
+	for(i := 0; i < 4; i++)
+		a[o+i] = byte (v >> (8*i));
 }
 
 Rig: adt {
@@ -632,7 +723,7 @@ timer(c: chan of int, ms: int)
 testHandshakeHonest(t: ref T)
 {
 	p := pair(t);
-	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest, 0, 0);
+	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest, Replyok, 0, 0, 0, 0, nil, nil, big 0);
 	(res, got) := handshake(t, r, keys(p), 15000);
 	t.assertnil(res.err, "a responder following the specification: the handshake completes");
 	t.assert(got.inits >= 1, sys->sprint("it saw an initiation (%d)", got.inits));
@@ -641,7 +732,7 @@ testHandshakeHonest(t: ref T)
 testHandshakeWrongPSK(t: ref T)
 {
 	p := pair(t);
-	r := ref Responder(p.brick.priv, p.brick.pub, random->randombuf(Random->NotQuiteRandom, 32), Mhonest, 0, 0);
+	r := ref Responder(p.brick.priv, p.brick.pub, random->randombuf(Random->NotQuiteRandom, 32), Mhonest, Replyok, 0, 0, 0, 0, nil, nil, big 0);
 	(res, nil) := handshake(t, r, keys(p), 15000);
 	t.assertnotnil(res.err, "a responder with another PSK: refused");
 }
@@ -652,7 +743,7 @@ testHandshakeWrongPSK(t: ref T)
 testHandshakeLowOrderEphemeral(t: ref T)
 {
 	p := pair(t);
-	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mloworder, 0, 0);
+	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mloworder, Replyok, 0, 0, 0, 0, nil, nil, big 0);
 	(res, got) := handshake(t, r, keys(p), 15000);
 	t.assertnotnil(res.err, "message 2 with a low-order ephemeral key: refused");
 	t.log(sys->sprint("%s after %d ms, %d initiations", res.err, res.ms, got.inits));
@@ -674,13 +765,13 @@ testHandshakeLowOrderStatic(t: ref T)
 	for(i := 0; i < len lows; i++){
 		p := pair(t);
 		p.brick.pub = lows[i];
-		r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest, 0, 0);
-		(res, got) := handshake(t, r, keys(p), 5000);
+		r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest, Replyok, 0, 0, 0, 0, nil, nil, big 0);
+		(res, got) := handshake(t, r, keys(p), 15000);
 		t.assertnotnil(res.err, sys->sprint("low-order server key %d: refused", i));
-		# Refused before anything is sent, not after the handshake's
-		# deadline as an unanswered one is (the time is sdg's own
-		# random index and ephemeral key, slow from ReallyRandom).
-		t.assert(res.ms < Sdg->HSDEADLINE, sys->sprint("low-order server key %d: refused before the deadline (%d ms): %s", i, res.ms, res.err));
+		# Require the local DH rejection itself.  A harness timeout shorter
+		# than HSDEADLINE used to make this pass without reaching it.
+		t.assert(contains(res.err, "low-order point"),
+			sys->sprint("low-order server key %d: the DH refusal, got %s after %d ms", i, res.err, res.ms));
 		t.asserteq(got.inits, 0, sys->sprint("low-order server key %d: nothing sent", i));
 	}
 }
@@ -710,10 +801,111 @@ testHandshakeCounterRefused(t: ref T)
 {
 	p := pair(t);
 	writefile(p.ctr + ".a", "");
-	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest, 0, 0);
+	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest, Replyok, 0, 0, 0, 0, nil, nil, big 0);
 	(res, got) := handshake(t, r, keys(p), 5000);
 	t.assertnotnil(res.err, "a counter store holding nothing to trust: refused");
 	t.asserteq(got.inits, 0, "nothing sent");
+}
+
+Readres: adt {
+	n:	int;
+	b:	array of byte;
+};
+
+readone(fd: ref Sys->FD, c: chan of ref Readres)
+{
+	b := array[256] of byte;
+	n := sys->read(fd, b, len b);
+	if(n > 0)
+		b = b[0:n];
+	else
+		b = nil;
+	c <-= ref Readres(n, b);
+}
+
+readwithin(fd: ref Sys->FD, ms: int): ref Readres
+{
+	c := chan of ref Readres;
+	spawn readone(fd, c);
+	tick := chan of int;
+	spawn timer(tick, ms);
+	alt {
+	r := <-c =>
+		return r;
+	<-tick =>
+		return ref Readres(-2, nil);
+	}
+}
+
+newresponder(p: ref Pair, replymode: int): ref Responder
+{
+	return ref Responder(p.brick.priv, p.brick.pub, p.psk, Mhonest,
+		replymode, 0, 0, 0, 0, nil, nil, big 0);
+}
+
+# A relay and its paired test server.  The returned pipe end is the mount
+# side: write T messages and read R messages there.
+startrelay(t: ref T, replymode: int): (ref Rig, ref Sys->FD)
+{
+	pairing := pair(t);
+	g := rig(newresponder(pairing, replymode));
+	if(g == nil)
+		t.skip(sys->sprint("no UDP on the loopback: %r"));
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		t.fatal(sys->sprint("pipe: %r"));
+	err := sdg->relay(g.addr, keys(pairing), p[1]);
+	if(err != nil)
+		t.fatal("relay: " + err);
+	p[1] = nil;
+	return (g, p[0]);
+}
+
+stoprelay(g: ref Rig, fd: ref Sys->FD)
+{
+	fd = nil;
+	g.stop <-= 1;
+	<-g.done;
+}
+
+testReplyFrameValid(t: ref T)
+{
+	(g, fd) := startrelay(t, Replyok);
+	req := array[7] of {byte 7, byte 0, byte 0, byte 0, byte 124, byte 16r34, byte 16r12};
+	t.assert(sys->write(fd, req, len req) == len req, "write request");
+	r := readwithin(fd, 3000);
+	t.assert(r.n == 7, sys->sprint("one complete reply, got %d", r.n));
+	if(r.n == 7){
+		t.asserteq(int r.b[4], 125, "Rstat type");
+		t.assert(int r.b[5] == 16r34 && int r.b[6] == 16r12, "request tag preserved");
+	}
+	stoprelay(g, fd);
+}
+
+testReplyFramesMalformed(t: ref T)
+{
+	modes := Replybadlen :: Replybadtag :: Replybadtype :: nil;
+	for(; modes != nil; modes = tl modes){
+		(g, fd) := startrelay(t, hd modes);
+		req := array[7] of {byte 7, byte 0, byte 0, byte 0, byte 124, byte 9, byte 0};
+		t.assert(sys->write(fd, req, len req) == len req, "write request");
+		r := readwithin(fd, 3000);
+		t.assert(r.n <= 0 && r.n != -2,
+			sys->sprint("authenticated malformed reply %d closed the relay, got %d", hd modes, r.n));
+		stoprelay(g, fd);
+	}
+}
+
+testRequestFrameBounds(t: ref T)
+{
+	(g, fd) := startrelay(t, Replyok);
+	# Four bytes are enough to reject a size above one-datagram MSIZE;
+	# the old reader retained this prefix and grew without bound.
+	bad := array[] of {byte 16rff, byte 16rff, byte 16rff, byte 16r7f};
+	t.assert(sys->write(fd, bad, len bad) == len bad, "write bad size");
+	r := readwithin(fd, 3000);
+	t.assert(r.n <= 0 && r.n != -2, sys->sprint("oversize request closed the relay, got %d", r.n));
+	stoprelay(g, fd);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -744,7 +936,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CounterCorrupt", testCounterCorrupt);
 	run("CounterUnwritable", testCounterUnwritable);
 	run("CounterWriteFails", testCounterWriteFails);
-	run("CounterStaleLock", testCounterStaleLock);
+	run("CounterCrashLock", testCounterCrashLock);
 	run("CounterHeldLock", testCounterHeldLock);
 	run("CounterConcurrent", testCounterConcurrent);
 	run("HandshakeHonest", testHandshakeHonest);
@@ -753,6 +945,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HandshakeLowOrderStatic", testHandshakeLowOrderStatic);
 	run("HandshakeKeyLengths", testHandshakeKeyLengths);
 	run("HandshakeCounterRefused", testHandshakeCounterRefused);
+	run("ReplyFrameValid", testReplyFrameValid);
+	run("ReplyFramesMalformed", testReplyFramesMalformed);
+	run("RequestFrameBounds", testRequestFrameBounds);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

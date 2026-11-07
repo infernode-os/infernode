@@ -68,10 +68,12 @@ extern int CFRunLoopRunInMode(CFStringRef mode, double seconds, unsigned char re
  * text-field focus. On desktop there is no soft keyboard and text input is
  * simply left enabled, so typing (SDL_EVENT_TEXT_INPUT) always works.
  */
+#ifndef MOBILE_TOUCH	/* -DMOBILE_TOUCH=1 tries the touch path on a desktop */
 #if (defined(__APPLE__) && TARGET_OS_IOS) || defined(__ANDROID__)
 #define MOBILE_TOUCH 1
 #else
 #define MOBILE_TOUCH 0
+#endif
 #endif
 
 /* External keyboard queue (from devcons.c) */
@@ -272,8 +274,12 @@ static SDL_FRect dest_rect = {0, 0, 0, 0};
  * left, one to one: a resize changes what is shown and is posted to
  * /dev/wmsize, and programs lay themselves out to it (Acme-SAC's design;
  * Xenith and Lucifer read it). Nothing is scaled, and there are no
- * margins. On the touch platforms the screen is the safe area, shown
- * whole, as before.
+ * margins. The touch platforms do the same with the safe area: the
+ * buffer is square, as long as the display's longer side, so the screen
+ * fits it upright or on its side, and the part shown is the safe area.
+ * A rotation, or an iPad's Split View or Slide Over, changes the safe
+ * area: the new one is shown and posted to /dev/wmsize, as a desktop
+ * window's resize is.
  */
 static SDL_FRect src_rect = {0, 0, 0, 0};
 static int window_width = 0;
@@ -292,8 +298,6 @@ static int safe_x = 0, safe_y = 0, safe_w = 0, safe_h = 0;
 static void
 calc_dest_rect(void)
 {
-	float scale_x, scale_y, scale;
-	float dest_w, dest_h;
 	int aw = safe_w, ah = safe_h, ax = safe_x, ay = safe_y;
 
 #if !MOBILE_TOUCH
@@ -308,39 +312,23 @@ calc_dest_rect(void)
 		return;
 	}
 #endif
-	src_rect.x = 0;
-	src_rect.y = 0;
-	src_rect.w = (float)sdl_width;
-	src_rect.h = (float)sdl_height;
-
-	/* Present into the safe area, not the full window, so the iOS status
-	 * bar / home indicator don't occlude the UI. Fall back to the full
-	 * window if the safe area isn't known yet. */
+	/* The safe area (the whole window if it is not known yet), shown
+	 * one to one from the screen's top left, in the safe area's place. */
 	if (aw <= 0 || ah <= 0) {
 		aw = window_width; ah = window_height; ax = 0; ay = 0;
 	}
-
-	if (aw <= 0 || ah <= 0 || sdl_width <= 0 || sdl_height <= 0) {
-		dest_rect.x = (float)ax;
-		dest_rect.y = (float)ay;
-		dest_rect.w = (float)sdl_width;
-		dest_rect.h = (float)sdl_height;
-		return;
-	}
-
-	/* Scale to fit the surface in the safe area, preserving aspect. */
-	scale_x = (float)aw / (float)sdl_width;
-	scale_y = (float)ah / (float)sdl_height;
-	scale = (scale_x < scale_y) ? scale_x : scale_y;
-
-	dest_w = (float)sdl_width * scale;
-	dest_h = (float)sdl_height * scale;
-
-	/* Centre within the safe area (offset by the safe-area origin). */
-	dest_rect.x = (float)ax + ((float)aw - dest_w) / 2.0f;
-	dest_rect.y = (float)ay + ((float)ah - dest_h) / 2.0f;
-	dest_rect.w = dest_w;
-	dest_rect.h = dest_h;
+	if (aw <= 0 || aw > sdl_width)
+		aw = sdl_width;
+	if (ah <= 0 || ah > sdl_height)
+		ah = sdl_height;
+	src_rect.x = 0;
+	src_rect.y = 0;
+	src_rect.w = (float)aw;
+	src_rect.h = (float)ah;
+	dest_rect.x = (float)ax;
+	dest_rect.y = (float)ay;
+	dest_rect.w = (float)aw;
+	dest_rect.h = (float)ah;
 }
 
 /*
@@ -368,11 +356,12 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
 	x = (int)(src_rect.x + rel_x * src_rect.w / dest_rect.w);
 	y = (int)(src_rect.y + rel_y * src_rect.h / dest_rect.h);
 
-	/* Clamp to texture bounds */
+	/* Clamp to the part shown (a touch in the iOS status bar lands on
+	 * the screen's edge, not in the part of the buffer not shown) */
 	if (x < 0) x = 0;
 	if (y < 0) y = 0;
-	if (x >= sdl_width) x = sdl_width - 1;
-	if (y >= sdl_height) y = sdl_height - 1;
+	if (x >= (int)src_rect.w) x = (int)src_rect.w - 1;
+	if (y >= (int)src_rect.h) y = (int)src_rect.h - 1;
 
 	*tex_x = x;
 	*tex_y = y;
@@ -462,14 +451,12 @@ wmszproc(void *a)
 static void
 postwmsize(void)
 {
-#if !MOBILE_TOUCH
 	if (src_rect.w > 0 && src_rect.h > 0) {
 		wmsz_w = (int)src_rect.w;
 		wmsz_h = (int)src_rect.h;
 		wmsz_pending = 1;
 		Wakeup(&wmszr);
 	}
-#endif
 }
 
 /*
@@ -515,6 +502,28 @@ hidpiflag(void)
 	return hidpiwanted() ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0;
 }
 
+/*
+ * Safe area (logical points) -> physical pixels. On iOS this excludes
+ * the status bar / Dynamic Island / home indicator, and changes when the
+ * device is turned or an iPad's window is resized; on desktop it is the
+ * whole window. The screen programs see is the safe area, so the UI is
+ * not drawn under those system regions.
+ */
+static void
+read_safe_area(void)
+{
+	SDL_Rect safe;
+
+	if (SDL_GetWindowSafeArea(sdl_window, &safe) && safe.w > 0 && safe.h > 0) {
+		safe_x = (int)(safe.x * display_scale);
+		safe_y = (int)(safe.y * display_scale);
+		safe_w = (int)(safe.w * display_scale);
+		safe_h = (int)(safe.h * display_scale);
+	} else {
+		safe_x = 0; safe_y = 0; safe_w = window_width; safe_h = window_height;
+	}
+}
+
 static void
 init_hidpi(void)
 {
@@ -536,26 +545,19 @@ init_hidpi(void)
 
 	window_width = pix_w;
 	window_height = pix_h;
-
-	/* Safe area (logical points) -> physical pixels. On iOS this excludes
-	 * the status bar / Dynamic Island / home indicator; on desktop it is
-	 * the whole window. The Inferno screen is sized to the safe area so
-	 * the UI isn't drawn under those system regions. */
-	{
-		SDL_Rect safe;
-		if (SDL_GetWindowSafeArea(sdl_window, &safe) && safe.w > 0 && safe.h > 0) {
-			safe_x = (int)(safe.x * display_scale);
-			safe_y = (int)(safe.y * display_scale);
-			safe_w = (int)(safe.w * display_scale);
-			safe_h = (int)(safe.h * display_scale);
-		} else {
-			safe_x = 0; safe_y = 0; safe_w = pix_w; safe_h = pix_h;
-		}
-	}
+	read_safe_area();
 
 #if MOBILE_TOUCH
-	sdl_width = safe_w;
-	sdl_height = safe_h;
+	/* Square, as long as the longest side of the display or the window:
+	 * the screen fits it however the device is turned (see src_rect). */
+	{
+		int mw, mh, m;
+
+		screenmax(&mw, &mh);
+		m = mw > mh ? mw : mh;
+		sdl_width = m;
+		sdl_height = m;
+	}
 #else
 	screenmax(&sdl_width, &sdl_height);
 #endif
@@ -1065,15 +1067,14 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	/* Initialize buffer to white (InferNode default) */
 	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
-	/* Return screen parameters to InferNode. On desktop the screen is
-	 * the part the window shows (the buffer, and the stride, are the
-	 * largest display's: wmszproc grows the rectangle in place). */
+	/* Return screen parameters to InferNode. The screen is the part the
+	 * window shows (the buffer, and the stride, are the largest display's,
+	 * square on the touch platforms: wmszproc changes the rectangle in
+	 * place). */
 	*r = Rect(0, 0, sdl_width, sdl_height);
-#if !MOBILE_TOUCH
 	if (src_rect.w > 0 && src_rect.h > 0)
 		*r = Rect(0, 0, (int)src_rect.w, (int)src_rect.h);
 	kproc("wmsz", wmszproc, nil, 0);
-#endif
 	*chan = XRGB32;
 	*d = 32;
 	/*
@@ -1981,17 +1982,19 @@ sdl3_mainloop(void)
 
 			case SDL_EVENT_WINDOW_RESIZED:
 			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+			case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
 				{
 					int pix_w;
 					int pix_h;
 
 					/*
-					 * Window size changed (e.g., full-screen toggle).
-					 * Desktop: show that much of the screen, one to one,
-					 * and post the size to /dev/wmsize. Touch platforms:
-					 * recalculate the centred, letterboxed dest rect.
-					 * Use physical pixel dimensions to match renderer
-					 * coordinate space. The texture keeps its size.
+					 * Window size changed (a full-screen toggle; on
+					 * iOS and Android the device turned, or an iPad's
+					 * Split View). Show that much of the screen, one
+					 * to one (the safe area on the touch platforms),
+					 * and post the size to /dev/wmsize. Use physical
+					 * pixel dimensions to match renderer coordinate
+					 * space. The texture keeps its size.
 					 */
 					SDL_GetWindowSizeInPixels(sdl_window, &pix_w, &pix_h);
 					window_width = pix_w;
@@ -2006,6 +2009,7 @@ sdl3_mainloop(void)
 						else
 							display_scale = 1.0f;
 					}
+					read_safe_area();
 					calc_dest_rect();
 					postwmsize();
 				}

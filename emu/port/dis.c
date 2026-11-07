@@ -325,9 +325,8 @@ swiprog(Prog *p)
 
 	lock(&procs.l);
 	for(q = procs.head; q; q = q->next) {
-		if(q->iprog == p) {
+		if(swiprogproc(q, p)) {
 			unlock(&procs.l);
-			swiproc(q, 1);
 			return;
 		}
 	}
@@ -505,8 +504,9 @@ killprog(Prog *p, char *cause)
 		p->flags |= Pkilled;
 		p->state = Pexiting;
 		swiprog(p);
-		/* No break */
+		return 0;
 	case Pexiting:
+		swiprog(p);
 		return 0;
 	case Pbroken:
 	case Pdebug:
@@ -742,6 +742,23 @@ grpbyid(int gid, int *pids, int npid)
 	return nil;
 }
 
+/*
+ * The group with id gid, found without allocating a pid list.  Group ids are
+ * pids and are never reused.  This is the low-memory killgrp path: killprog
+ * can release the VM and free the target group, so that path must reacquire
+ * the group by identity after every kill rather than retain its pointer.
+ */
+static Progs*
+grpbyidall(int gid)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && f->group->id == gid)
+			return f->group;
+	return nil;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
@@ -781,7 +798,8 @@ killgrp(Prog *p, char *msg)
 		 */
 		g->flags |= Pkilled;
 		if(waserror()){
-			g->flags &= ~Pkilled;
+			if((g = grpbyidall(gid)) != nil)
+				g->flags &= ~Pkilled;
 			nexterror();
 		}
 		for(i = 0; i < npid; i++){
@@ -792,9 +810,12 @@ killgrp(Prog *p, char *msg)
 			if(f == nil)
 				break;
 			killprog(f, msg);
+			if((g = grpbyidall(gid)) == nil)
+				break;
 		}
 		poperror();
-		g->flags &= ~Pkilled;
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
 		return 1;
 	}
 	npid = 0;
@@ -1231,12 +1252,19 @@ void
 release(void)
 {
 	Proc *p, **pq;
+	Prog *r;
 	int f;
 
 	vmclearowner();
 
-	if(up->type == Interp)
-		up->iprog = isave();
+	if(up->type == Interp){
+		r = isave();
+		lock(&up->rlock);
+		up->iprog = r;
+		if(r->kill != nil || (r->flags & Pkilled) != 0)
+			up->intpend = 1;
+		unlock(&up->rlock);
+	}
 	else
 		delrun(Prelease);
 
@@ -1500,9 +1528,23 @@ vmachine(void *a)
 	startup();
 
 	while(waserror()) {
+		/*
+		 * An error out of the collector (execatidle, the busy pass
+		 * below: a type's free function raising) is no Prog's
+		 * exception. currun() is this proc's own up->prog then, with
+		 * no registers and a nil exval, and handler() faulted reading
+		 * them ("SYS: process dis faults" at handler+0x60, as
+		 * keyring's freeSK did when a sweep had freed its SigAlg
+		 * first). The collector's state is half-way through a block;
+		 * say what was raised and stop, as os/port/dis.c does.
+		 */
+		if(up->type != Interp)
+			panic("vmachine: error in the garbage collector (type %#x): %s",
+				up->type, up->env->errstr);
 		if(up->iprog != nil)
 			acquire();
-		if(handler(up->env->errstr) == 0) {
+		/* A ctl kill revokes the Prog; a catch-all cannot retain it. */
+		if((currun()->flags & Pkilled) != 0 || handler(up->env->errstr) == 0) {
 			propex(currun(), up->env->errstr);
 			progexit();
 		}

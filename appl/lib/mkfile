@@ -79,6 +79,7 @@ TARG=\
 	imap.dis\
 	imageremap.dis\
 	icon.dis\
+	touchgest.dis\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
@@ -112,6 +113,7 @@ TARG=\
 	newns.dis\
 	nmea.dis\
 	gdl90.dis\
+	sdrdsp.dis\
 	garminav.dis\
 	ninep.dis\
 	oldauth.dis\
@@ -256,6 +258,7 @@ SYSMODULES=\
 	html.m\
 	imap.m\
 	icon.m\
+	touchgest.m\
 	imagefile.m\
 	imgload.m\
 	pngload.m\
@@ -290,6 +293,7 @@ SYSMODULES=\
 	newns.m\
 	nmea.m\
 	gdl90.m\
+	sdrdsp.m\
 	garminav.m\
 	oldauth.m\
 	pkcs.m\

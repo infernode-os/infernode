@@ -1,8 +1,13 @@
 # Software-defined radio for InferNode
 
-Status: M0 built: `sdrfs(4)` serves the file interface below over
+Status: M0 and M1 built. `sdrfs(4)` serves the file interface below over
 `rtl_tcp` (`appl/cmd/sdrfs.b`, tested by `tests/host/sdrfs_test.sh`
-against a fake `rtl_tcp`). The rest is the design, written before the
+against a fake `rtl_tcp`); `sdr/fm` and `sdr/am` (`sdr(1)`,
+`appl/cmd/sdr/`, the arithmetic in `appl/lib/sdrdsp.b`) demodulate its
+`iq` to `/dev/audio`'s samples (tested by `tests/host/sdr_demod_test.sh`
+on synthetic signals and `tests/sdrdsp_test.b`). `sdrfs` has been run on
+an RTL-SDR Blog V4 (R828D) on macOS arm64 and Linux amd64, the
+demodulators on Linux amd64; see [Measured](#measured). The rest is the design, written before the
 code, as [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) asks: the file
 interface is the design, so review that first. The first
 receiver is an RTL-SDR (an RTL2832U with an R820T2 or R828D tuner, the
@@ -10,8 +15,8 @@ common USB dongle, 24–1766 MHz).
 
 ## What exists, and what does not
 
-**In this tree: nothing.** No file mentions RTL-SDR, rtl_tcp, IQ samples
-or software-defined radio.
+**In this tree, before this design: nothing.** No file mentioned
+RTL-SDR, rtl_tcp, IQ samples or software-defined radio.
 
 **In the Plan 9 family's original releases: nothing either.** Plan 9
 1E–4E and Inferno 1E–4E have no SDR, no ham radio (AX.25, APRS, Morse,
@@ -178,6 +183,45 @@ have. M1 gets it. If Limbo cannot, the hot loop (decimation, the
 magnitude, the discriminator) becomes a builtin module in C, as `Math`
 is, with the protocol still in Limbo.
 
+### Measured
+
+M1's answer, on Linux amd64 (an AMD Ryzen 7 255), 10 seconds of
+samples at 2.4 MS/s from a file:
+
+| | JIT (`-c1`) | interpreter (`-c0`) |
+|---|---|---|
+| `sdr/fm` (wide, 48k out) | 0.37 s, 26x real time | 3.9 s, 2.6x |
+| `sdr/fm -n` | 0.36 s, 27x | 4.4 s, 2.3x |
+| `sdr/am` | 0.43 s, 23x | 4.3 s, 2.3x |
+
+So Limbo keeps up, interpreted too, and no builtin is needed here; the
+riscv64 JIT is still to be measured (arm64 is below). The demodulators are
+plain Limbo: an integer boxcar to about 240k a second, then a
+windowed-sinc FIR for the narrow channel (narrow FM, AM; 96 taps) or for
+the 15 kHz audio (128) (wide FM, keeping out the 19 kHz pilot and the stereo
+subcarrier), `Math->atan2` for the discriminator.
+
+On synthetic signals (`tests/host/sdr/synth_iq.py`: noise 40 dB down
+and a carrier as strong 400 kHz up), the tone comes back with a SINAD of
+69 dB wide (48k out; about 52 at 8k, 22.05k and 44.1k), 41 dB narrow and
+47 dB AM. Live, through `sdrfs` from `rtl_tcp` on the V4: a broadcast
+station at 2.4 MS/s, 15 seconds, all 72 MB read (`dropped=0`) and
+demodulated as it came, its stereo pilot 19.00 kHz in the sound before
+the audio filter and 40 dB down after.
+
+**Across the network** (precedent 7): the V4 on a Linux amd64 machine,
+`sdrfs` there exporting `/mnt/sdr` over authenticated 9P, and a
+Raspberry Pi 4 running InferNode on bare metal mounting it over gigabit
+Ethernet, 2.4 MS/s. `cat /mnt/sdr/iq` on the Pi keeps up (`dropped=0`).
+`sdr/fm` did not: it read, then worked, then read again, so every
+read's round trip was time not spent on the arithmetic, and it fell
+12-22% behind (14.6 MB of 109 MB dropped in 25 s) with the CPU mostly
+idle. Piped through `cat`, which overlaps the two, 1.5% was dropped.
+Now `sdr/fm` and `sdr/am` read in a process of their own, four 64 KB
+chunks ahead: 113 MB in 24 s, `dropped=0`, and `sdr/fm` (wide, 44.1k
+out) used 5.7 s of one Cortex-A72 for those 24 s, about 4x real time
+under the arm64 JIT.
+
 ## The question this raises for gpsfs
 
 `gpsfs` reads **one** source. With a GPS puck for our own position and a
@@ -222,8 +266,8 @@ separate server can still be split out later if something other than
 
 | | What | Test |
 |---|---|---|
-| M0 | `sdrfs` over `rtl_tcp`: ctl, status, gains, iq; start on first open | against a fake `rtl_tcp` in Python (`tests/host/sdr/`), as `gpsfs` is tested against fake feeds |
-| M1 | `sdr/fm` and `sdr/am` to `/dev/audio`; **measure** Limbo's throughput | a synthetic FM carrier's tone recovered; samples a second on each JIT |
+| M0 (done) | `sdrfs` over `rtl_tcp`: ctl, status, gains, iq; start on first open | against a fake `rtl_tcp` in Python (`tests/host/sdr/`), as `gpsfs` is tested against fake feeds |
+| M1 (done) | `sdr/fm` and `sdr/am` to `/dev/audio`; **measure** Limbo's throughput | a synthetic FM carrier's tone recovered; samples a second on each JIT |
 | M2 | `gpsfs` format `avr`, and `ctl traffic` | dump1090's AVR from a fixture; ADS-B and a GPS at once |
 | M3 | `sdr/adsb` | recorded IQ with known aircraft (a fixture), decoded as dump1090 decodes it |
 | M4 | `sdr/ais`, `sdr/aprs` | recorded IQ fixtures |

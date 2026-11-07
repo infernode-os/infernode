@@ -198,8 +198,9 @@ buildbase()
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 
-		# select a key with B1, raise the menu with B3 (at the pointer)
-		"bind .top.lb <Button-1> {%C}",
+		# B1 selects a key (the listbox's own); B3 raises the menu at the
+		# pointer.  A B1 binding of {%C} ran the command "C", an error
+		# on every click: %C is no substitution of Tk's
 		"bind .top.lb <Button-3> {send act menu %X %Y}",
 		"bind . <Button-3> {send act menu %X %Y}",
 	};

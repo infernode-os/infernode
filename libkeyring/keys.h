@@ -20,6 +20,7 @@ struct Certificate
 {
 	Keyring_Certificate x;
 	void		*signa;	/* actual signature */
+	SigAlgVec	*vec;	/* the algorithm signa is for: see SK */
 };
 
 /* generic public key */
@@ -27,6 +28,7 @@ struct PK
 {
 	Keyring_PK	x;
 	void		*key;	/* key and system parameters */
+	SigAlgVec	*vec;	/* the algorithm key is for: see SK */
 };
 
 /* digest state */
@@ -93,6 +95,14 @@ struct SK
 {
 	Keyring_SK	x;
 	void		*key;	/* key and system parameters */
+	/*
+	 * The algorithm it was made by, for freeing it. Not x.sa's vec: a
+	 * sweep frees an SK and its SigAlg together, in either order, and
+	 * the SigAlg's may be gone already (checkSigAlg then raised
+	 * "bad signature algorithm" in the collector, and emu faulted in
+	 * handler()).
+	 */
+	SigAlgVec	*vec;
 };
 
 struct SigAlgVec {

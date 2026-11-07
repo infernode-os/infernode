@@ -4,6 +4,26 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **The formal-verification claims are narrowed to what the artefacts
+  establish, and the TLA+ small configuration now reaches a copy.** The
+  exhaustive small TLC run (2 processes, 3 pgrps, 3 channels) never
+  executed a namespace copy: each pgrp costs two channels and a fork is
+  enabled only while two remain, so `pgrp_parent` was 0 in all 19.3M
+  states and every isolation invariant held vacuously. The small
+  configuration is now 2 processes, 2 pgrps, 5 channels, and
+  `run-verification.sh` refuses to run unless TLC can reach a copy and a
+  post-copy mount (probes in `MC_Namespace.tla`). The 3.17B-state medium
+  run is described as the incomplete breadth-first search it is. The
+  READMEs, `METHODOLOGY.md`, `SECURITY.md` and `DESIGN-PRINCIPLES.md` no
+  longer say "proven" or "formally verified containment": the TLA+ and
+  Promela models cannot express shared mount structure, the CBMC
+  `pgrpcpy` harnesses are one concrete mount each, the lock-ordering and
+  exportfs assertions cannot fail, CBMC does not check constant time,
+  and CI runs no LTL. `formal-verification/README.md` has a "What this
+  does and does not establish" section to cite instead.
+
 ### Applications
 
 - **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
@@ -223,6 +243,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **A bare-metal board can join a CNSA-mode fleet.** The handshake asks
+  for `CNSAMODE` through `getenv`, which on bare metal always said no, so
+  a Pi used ML-KEM-768 and could not authenticate with any CNSA-mode node
+  (`bad ml-kem public key length: this node is in CNSA mode`, from the
+  other side). A file `cnsamode` on the card now turns strict mode on at
+  boot, through a kernel switch (`cnsamode on` on `/dev/sysctl`) that is
+  one way and refused once anything has authenticated without it; boot
+  also sets `/env/cnsamode`, as the hosted emulator does.
 - **Bare metal: a key is made only from a hardware generator.** A board
   with no working generator (the Pi 4's RNG200 not answering, the
   PolarFire's nonce service refusing, a QEMU virt without virtio-rng)

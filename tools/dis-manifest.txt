@@ -131,6 +131,7 @@ dis/cmd/git/push.dis
 dis/cmd/git/rm.dis
 dis/cmp.dis
 dis/comm.dis
+dis/copybench.dis
 dis/countfs.dis
 dis/cp.dis
 dis/cprof.dis
@@ -443,6 +444,7 @@ dis/lib/rfcomm.dis
 dis/lib/scene.dis
 dis/lib/scoretable.dis
 dis/lib/sdp.dis
+dis/lib/sdrdsp.dis
 dis/lib/secstore.dis
 dis/lib/selectfile.dis
 dis/lib/sets.dis
@@ -472,6 +474,7 @@ dis/lib/tftp.dis
 dis/lib/timers.dis
 dis/lib/titlebar.dis
 dis/lib/tkclient.dis
+dis/lib/touchgest.dis
 dis/lib/translate.dis
 dis/lib/twofa.dis
 dis/lib/twofaslot.dis
@@ -637,6 +640,8 @@ dis/scap.dis
 dis/scenedemo.dis
 dis/scenefs.dis
 dis/scenereplay.dis
+dis/sdr/am.dis
+dis/sdr/fm.dis
 dis/sdrfs.dis
 dis/sed.dis
 dis/sendmail.dis
@@ -785,6 +790,7 @@ dis/tests/jit_retslice_test.dis
 dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
+dis/tests/keyring_sweep_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
@@ -802,6 +808,7 @@ dis/tests/keyring_test.dis
 dis/tests/keyboards_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/kill_deadserver_test.dis
+dis/tests/kill_uncalled_test.dis
 dis/tests/killblocked_test.dis
 dis/tests/l2cap_test.dis
 dis/tests/limbo_asgcall_test.dis
@@ -852,6 +859,7 @@ dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis
 dis/tests/outlinefont_test.dis
 dis/tests/pathmanage_test.dis
+dis/tests/phone_fuzz.dis
 dis/tests/pdf_conformance_test.dis
 dis/tests/pdf_test.dis
 dis/tests/pdfrender.dis
@@ -876,6 +884,7 @@ dis/tests/runner.dis
 dis/tests/sam_test.dis
 dis/tests/scene_test.dis
 dis/tests/sdl3_test.dis
+dis/tests/sdrdsp_test.dis
 dis/tests/sdp_test.dis
 dis/tests/sdg_test.dis
 dis/tests/secp256k1_test.dis
@@ -925,6 +934,7 @@ dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
+dis/tests/touchgest_test.dis
 dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
 dis/tests/styx_pack_test.dis

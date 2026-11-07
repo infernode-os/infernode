@@ -179,6 +179,21 @@ if {! sh -c 'read 144 < /dev/draw/new > /dev/null >[2] /dev/null'} {
 skip=0
 if {ftest -f /n/dos/skiplogon} {skip=1}
 if {~ $skiplogon 1} {skip=1}
+
+# The interfaces the login screen offers, as lib/lucifer/boot.sh's:
+# Lucia, the default, or Desktop (wm/wm, a shell to begin with).
+# wm/logon keeps the one chosen in $interfacefile, on the card, and
+# the next boot offers it again.  With skiplogon the interface is
+# Lucia whatever was chosen; $interface, set before this runs, starts
+# the one it names either way.
+interfaces=(Lucia Desktop)
+user=`{cat /dev/user}
+interfacefile=/usr/^$user^/lib/interface
+if {! ftest -d /usr/^$user^/lib} {
+	mkdir -p /usr/inferno/lib >[2] /dev/null
+	interfacefile=/usr/inferno/lib/interface
+}
+
 # The keyboard on the screen for the password, on a screen with no
 # keyboard (a phone, the Pi's touch panel): it shows itself once the
 # screen is touched with none attached, and in secret mode shows
@@ -224,7 +239,7 @@ if {~ $skip 1} {
 }{
 	for i in 1 2 3 {
 		if {~ $ok 0} {
-			if {wm/logon} {
+			if {wm/logon -i $interfacefile $interfaces} {
 				ok=1
 			}{
 				why=$status
@@ -241,6 +256,29 @@ if {~ $skip 1} {
 }
 
 if {! ~ $#oskpid 0} {kill -g $oskpid >[2] /dev/null}
+
+# The interface to start: $interface if it was set, else the one
+# chosen at the login screen, else the first; one of $interfaces.
+if {~ $#interface 0} {
+	if {~ $skip 0} {interface=`{cat $interfacefile >[2] /dev/null}}
+}
+known=0
+for offered in $interfaces {if {~ $offered $interface} {known=1}}
+if {~ $known 0} {interface=${hd $interfaces}}
+if {~ $ok 1} {echo 'boot: interface' $interface}
+
+# Desktop: wm/wm, its first command lib/wm/desktop.sh, a shell; no
+# plumber here, as Lucia has none here (see the top of this script).
+# wm/wm has no Quit; should it return, the board is up, as after
+# Lucia's.
+if {~ $ok 1} {
+	if {~ $interface Desktop} {
+		noplumber=1
+		wm/wm sh /lib/wm/desktop.sh
+		echo 'boot: the desktop has exited. The machine is still up. Halt or reboot from the serial console.'
+		exit
+	}
+}
 if {~ $ok 1} {
 	luciuisrv
 	sleep 1

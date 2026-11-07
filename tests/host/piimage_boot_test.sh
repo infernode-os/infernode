@@ -32,6 +32,11 @@
 # QEMU=path picks the emulator (default qemu-system-aarch64), and
 # BOOT_TIMEOUT the seconds the boot may take (default 300).
 #
+# INTERFACE=Desktop chooses Desktop on the login screen (the down arrow,
+# before the password) where the default is Lucia; either way the boot
+# must say it starts the interface chosen and ps must show it running
+# (Wm for Desktop, Lucifer for Lucia).
+#
 # STUCKKEY=1 makes the first-boot password a key HELD DOWN, twice, for
 # STUCKSECS (default 60) each -- what something resting on the keyboard
 # types. wm/logon takes MAXPW (1024) characters and drops the rest, so
@@ -66,9 +71,15 @@ cp "$IMAGE" "$tmp/card.img" || exit 1
 # The boot, driven from Python for the timeouts: the console is the
 # second -serial on both machines (the first is the PL011, the radio's).
 # Wait for the milestones, then type to the shell and read its answer.
-python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" "$tmp/qmp" "${STUCKKEY:-0}" "${STUCKSECS:-60}" > "$tmp/console.txt" 2> "$tmp/driver.txt" <<'EOF'
+INTERFACE=${INTERFACE:-Lucia}
+case $INTERFACE in
+Lucia) MODULE=Lucifer ;;
+Desktop) MODULE=Wm ;;
+*) echo "piimage_boot_test: INTERFACE is Lucia or Desktop" >&2; exit 2 ;;
+esac
+python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" "$tmp/qmp" "${STUCKKEY:-0}" "${STUCKSECS:-60}" "$INTERFACE" > "$tmp/console.txt" 2> "$tmp/driver.txt" <<'EOF'
 import json, socket, subprocess, sys, threading, time
-qemu, mach, card, kernel, limit, qmp, stuck, stucksecs = sys.argv[1:9]
+qemu, mach, card, kernel, limit, qmp, stuck, stucksecs, interface = sys.argv[1:10]
 limit = int(limit)
 # QEMU's raspi4b has no RNG200, so the machine has no entropy source,
 # and without "insecurerandom" the kernel makes no key on it
@@ -129,6 +140,10 @@ if b"console released to the draw device" in buf:
         f = s.makefile("rw"); f.readline()
         f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
         time.sleep(3)
+        if interface == "Desktop":
+            # the interface after Lucia, under the password field
+            qkey(f, "down")
+            time.sleep(1)
         if stuck == "1":
             # a key held down, not typed: down, the repeat runs, up
             for entry in range(2):
@@ -159,6 +174,12 @@ if b"console released to the draw device" in buf:
         if b"/usr/inferno/secstore/inferno/PAK\r\n" in buf or b"/usr/inferno/secstore/inferno/PAK\n" in buf:
             break
         time.sleep(4)
+    # the interface the boot started, running: ps lists its module
+    wait([b"boot: interface"], min(end, time.time() + 60))
+    time.sleep(10)
+    p.stdin.write(b"ps; echo PS-DONE\r")
+    p.stdin.flush()
+    wait([b"\nPS-DONE"], min(end, time.time() + 30))
     time.sleep(1)
 p.kill()
 p.wait()
@@ -198,6 +219,12 @@ if tr -d '\r' < "$C" | grep -qx '/usr/inferno/secstore/inferno/PAK'; then
 	pass "the first-boot login made its secstore account on the card"
 else
 	failed "the first-boot login made no secstore account ($(tr -d '\r' < "$C" | grep -v 'PAK-CHECKED' | grep -m1 -E 'cannot create|does not exist|logon:' || echo 'no PAK'))"
+fi
+need "the boot started the interface chosen at the login screen ($INTERFACE)" "boot: interface $INTERFACE"
+if tr -d '\r' < "$C" | grep -q " $MODULE\$"; then
+	pass "$INTERFACE is running ($MODULE in ps)"
+else
+	failed "$INTERFACE is not running (no $MODULE in ps)"
 fi
 if grep -q 'wm/logon failed' "$C"; then
 	failed "logon failed: $(grep -m1 'wm/logon failed' "$C")"

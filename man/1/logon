@@ -119,7 +119,9 @@ written to
 one line of text.
 .I Wm/logon
 starts nothing itself: the boot script,
-.BR /lib/lucifer/boot.sh ,
+.B /lib/lucifer/boot.sh
+(on a Raspberry Pi,
+.BR /lib/lucifer/boot-baremetal.sh ),
 names the interfaces
 .RB ( Lucia ,
 the agent's three zones, and

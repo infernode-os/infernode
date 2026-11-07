@@ -87,8 +87,10 @@ an Inferno system, so `listen`, `styxlisten` and `mount` are how it
 offers and takes services. Nothing about it is degraded.
 
 **With a desktop**: a screen is present, so the same boot goes on to
-`wm/logon` (or straight past it, with `skiplogon`) and the Lucia
-desktop. The serial console is *still* a shell with the full namespace —
+`wm/logon` (or straight past it, with `skiplogon`) and the interface
+chosen there: Lucia, or Desktop (`wm/wm` and a shell). The choice is
+kept on the card and offered again at the next boot; `skiplogon` starts
+Lucia. The serial console is *still* a shell with the full namespace —
 the desktop runs in a narrowed copy (section 6) — so a machine with a
 desktop is a headless machine with a desktop as well.
 
@@ -552,7 +554,8 @@ GPIO pins, `/dev/sysctl` and `/dev/hostowner` out of it** — then check
 that they are really gone, and refuse to start the desktop if not. Then
 ask the draw device whether there is a screen: **if not, say so in one
 line and stop — the machine is headless.** Otherwise `wm/logon` (three
-attempts; or `skiplogon`), `luciuisrv`, `lucifer`.
+attempts; or `skiplogon`), then the interface chosen there: `luciuisrv`
+and `lucifer`, or `wm/wm` with a shell (`lib/wm/desktop.sh`, no plumber).
 When the desktop exits the machine is still up: its `/dev/sysctl` is
 null, so it cannot halt the board. The serial console can.
 

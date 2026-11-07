@@ -301,7 +301,11 @@ jobs:
         sh tools/mkpiimage.sh "$b" "$k" "$img"
         python3 tools/piromcheck.py "$b" "$img"
         set +e
-        sh tests/host/piimage_boot_test.sh "$b" "$img" "$k" | tee "$RUNNER_TEMP/bm/$b-cardboot.txt"
+        # the login screen's two interfaces, one each: the boards share
+        # lib/lucifer/boot-baremetal.sh, and a second boot each would
+        # double the step
+        case $b in rpi3bplus) iface=Desktop ;; *) iface=Lucia ;; esac
+        INTERFACE=$iface sh tests/host/piimage_boot_test.sh "$b" "$img" "$k" | tee "$RUNNER_TEMP/bm/$b-cardboot.txt"
         st=${PIPESTATUS[0]}
         set -e
         rm -f "$img"

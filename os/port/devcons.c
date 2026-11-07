@@ -16,6 +16,9 @@
 #include	"libsec.h"
 #include	"keyboard.h"
 
+long	heapauditread(void*, long, ulong);	/* libinterp/heapaudit.c */
+static QLock heapauditlk;
+
 extern int cflag;
 extern int keepbroken;
 extern ulong intrcount[];	/* portclock.c: clock interrupts, per core */
@@ -659,6 +662,7 @@ enum{
 	Qscancode,
 	Qmemory,
 	Qmemtags,
+	Qheapaudit,
 	Qmsec,
 	Qnull,
 	Qrandom,
@@ -687,6 +691,7 @@ static Dirtab consdir[]=
 	"scancode",	{Qscancode},	0,		0444,
 	"memory",	{Qmemory},	0,		0444,
 	"memtags",	{Qmemtags},	0,		0444,
+	"heapaudit",	{Qheapaudit},	0,		0444,
 	"msec",		{Qmsec},	NUMSIZE,	0444,
 	"null",		{Qnull},	0,		0666,
 	"random",	{Qrandom},	0,		0444,
@@ -1359,6 +1364,17 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	 */
 	case Qmemtags:
 		return pooltagsread(buf, n, offset);
+	case Qheapaudit:
+		/* the reader's VM's Dis heap by type (libinterp/heapaudit.c): a diagnostic, for a leak */
+		qlock(&heapauditlk);
+		if(waserror()){
+			qunlock(&heapauditlk);
+			nexterror();
+		}
+		n = heapauditread(buf, n, offset);
+		poperror();
+		qunlock(&heapauditlk);
+		return n;
 
 	/*
 	 * One line per running core: its tick count, how many clock

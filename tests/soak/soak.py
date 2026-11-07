@@ -793,8 +793,10 @@ class Run:
             out = os.path.join(self.dir, 'battery-%s-%s.txt' % (bat, when))
             lk = self.hres.take('hci0') if bat == 'bluetooth' else None
             try:
+                # 10 min each: the GPIO battery hung to its limit on the Pi 4 (2026-11-07,
+                # edge events never reported), and a hung battery should not eat the run
                 rc = subprocess.call(['python3', '-u', os.path.join(ACCEPT, bat + '.py'), '--board', self.info.addr] + args,
-                                     stdout=open(out, 'w'), stderr=subprocess.STDOUT, timeout=1800)
+                                     stdout=open(out, 'w'), stderr=subprocess.STDOUT, timeout=600 if bat == 'gpio' else 1200)
             except subprocess.TimeoutExpired:
                 rc = -1
             finally:

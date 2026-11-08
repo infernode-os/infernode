@@ -1,6 +1,29 @@
 # PR #1015: styxbrick requirements and credential-boundary review
 
-Status: **requirements review complete; architecture decision open**
+Status: **requirements review complete; Choice A selected for the initial release**
+
+## Decision recorded 2026-11-08
+
+Candidate `424683092ca21e4a22b8eb7b29b06424d45092b9` adopts Choice A below as
+an explicit interim boundary:
+
+- `brick` is a trusted controller and may retrieve its TLS, sdg, PSK and D2
+  secrets from factotum into private runtime buffers;
+- generic Veltro agent namespaces receive neither raw factotum nor ambient USB
+  provisioning/D2 authority;
+- factotum/secstore owns persistence, while factotum is kept out of D2's hot
+  renewal path;
+- pairing uses one complete local-first candidate, a synchronous persistence
+  barrier, and idempotent USB retry; device-side atomic staging is deferred;
+- operation-only TLS/Noise providers are follow-on hardening, not a prerequisite
+  for this first candidate.
+
+Provisioning and rotation now refuse to proceed without a working encrypted
+keyfile or secstore backend.  An unlocked bare-metal factotum may still receive
+boot-injected keys for runtime operation, but it cannot honestly satisfy the
+pairing durability barrier.  Supporting unattended bare-metal pairing therefore
+requires a protected noninteractive persistence/unlock design or an explicit
+decision that pairing occurs on a hosted commander.
 
 This is the cross-repository review requested before changing PR #1015's
 credential design.  It deliberately separates requirements from a preferred
@@ -158,25 +181,25 @@ secstore prompt is not viable.
 | **C. Fully operation-only factotum**: factotum performs TLS, Noise, D2 MAC and provisioning | Strongest separation from the controller process if RPC capabilities are also narrowly delegated | Large redesign; factotum becomes a real-time safety dependency; current provisioning cannot satisfy it without direct USB access or firmware changes; must prove timing and recovery on multi-brick workloads |
 | **D. Pairing/owner-credential redesign** | Can reduce cable operations, improve revocation and eventually remove some shared-secret provisioning | Cross-repository wire and firmware change; overlaps styxbrick's post-1.0 owner-key roadmap; should be a deliberate protocol revision, not an incidental PR #1015 fix |
 
-These are not mutually exclusive over time.  The review supports A as the
-minimum correction and identifies B as a plausible hardening direction, but
-does not select between them.  C or D require new threat, timing and deployment
-evidence before they can replace the present design.
+These are not mutually exclusive over time.  Choice A is selected as the
+minimum correction for the initial release and B remains a plausible hardening
+direction.  C or D require new threat, timing and deployment evidence before
+they can replace the present design.
 
-## Decisions required before implementation
+## Decision answers for the current candidate
 
-1. Is the trusted `brick` controller inside the commander trust boundary, as
-   styxbrick specifies, or is same-user process compromise a new threat that
-   #1015 must resist?
-2. Which platforms must support persistent unattended keys at first release?
-3. Is factotum allowed in the D2 renewal path, and what measured latency and
-   failure budget would make that acceptable?
-4. Is PR #1015 allowed a narrow provisioning export, or must provisioning be
-   redesigned with styxbrick now?
-5. Should TLS and sdg provider APIs be part of #1015, or follow after the
-   storage, pairing and containment fixes?
-6. Do we first add device-side staging/commit, or accept documented local-first
-   recovery for the initial release?
+1. The trusted `brick` controller is inside the current commander trust
+   boundary.  Same-user process compromise is not newly claimed to be resisted.
+2. Hosted encrypted-keyfile/secstore operation is implemented.  Unattended
+   bare-metal provisioning remains an explicit release/deployment decision.
+3. Factotum is not in the D2 renewal path.  Moving it there later requires the
+   timing and failure evidence described above.
+4. The trusted controller retains the narrow USB provisioning path for the
+   current wire protocol.
+5. Operation-only TLS and sdg providers follow after the storage, pairing and
+   containment correction.
+6. Documented and tested local-first recovery is accepted initially;
+   device-side staging/commit is deferred to a styxbrick interface revision.
 
 ## Corrections to the original security disposition
 

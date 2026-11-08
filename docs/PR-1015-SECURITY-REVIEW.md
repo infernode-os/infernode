@@ -1,6 +1,6 @@
 # Security review: PR #1015 (`brick`, sdg, and TLS pinning)
 
-Status: **changes requested — do not promote from draft or merge**
+Status: **candidate remediation implemented; remaining gates block promotion**
 
 This review was first pinned to InferNode PR #1015 head
 `08846129d207c1d535682e0ad37ca883a4e75c57` and was re-reviewed at
@@ -10,6 +10,66 @@ requirements re-review also covers current styxbrick main
 `e23114cb675b5ada72f60f3903596cdfc44d0525` and the divergent review-follow-up
 documents at `438c0c7e974e168021da5b10c2f1a6f23716c83e`; see
 [PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md](PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md).
+
+## 2026-11-08 remediation review
+
+The current candidate is `424683092ca21e4a22b8eb7b29b06424d45092b9` on
+`security/pr1015-factotum`.  It combines the reviewed PR head with the D2/sdg
+fix `4f7e8d2b7`, current-master integration at `4b90a0248` (master pin
+`507950f90`), the requirements record, and the factotum/pairing fix
+`424683092`.  This is a candidate branch, not the published PR head.
+
+The architecture decision is now explicit: Choice A from the requirements
+review is accepted for the initial release.  A trusted, narrowly confined
+`brick` controller may retrieve runtime secrets from factotum; factotum is not
+in the D2 renewal hot path.  Operation-only TLS/Noise providers remain a
+possible later hardening step, not a claim about this implementation.
+
+| Finding | Candidate status |
+|---|---|
+| P1015-01 ordinary secret files | **Fixed in candidate.** Four purpose-scoped secrets persist through factotum; the profile contains public state only; draft cleartext files migrate only after a successful save. |
+| P1015-02 release/renew ordering | **Fixed in candidate** by serialized, generation-checked D2 state and the parked-renewal regression. |
+| P1015-03 low-order X25519 | **Fixed** at the reviewed PR pin and retained after integration. |
+| P1015-04 counter durability/serialization | **Fixed in candidate.** Failed writes fail closed, two slots survive torn state, and the lock is ownership-safe rather than age-stolen. |
+| P1015-05 through P1015-07 | **Fixed in candidate** by transport invalidation and strict local/remote frame bounds. |
+| P1015-08 TLS baseline/parser agreement | **Partially fixed.** The current-master conflict is resolved, but the client-auth/pinning interop test still needs conversion to the factotum profile and CI gating; differential malformed-DER coverage remains an exit gate. |
+| P1015-09 release gates | **Partially fixed.** D2, sdg and factotum/pairing regressions are build/CI gates.  The old `tests/tls_clientauth_test.sh` is not a host gate and still assumes the removed `client.key` file. |
+| P1015-10 pairing transaction | **Fixed to the accepted minimum.** Pairing persists one complete local candidate before USB writes and retries idempotently.  True device-side atomic staging remains a future styxbrick interface change. |
+| P1015-11 and P1015-12 | **Fixed in candidate** by rollback/non-live state and lease validation. |
+
+The new factotum contract makes `sync` a real durability barrier: no backend
+and backend I/O failures are returned to the ctl writer, and dirty state is
+retained after a failed save.  `brick pair` and `brick key` serialize on an
+`ORCLOSE` profile lock.  Pairing first validates the device's public state,
+constructs the complete local TLS/sdg/PSK/D2 candidate, synchronously saves it,
+and only then performs idempotent USB writes.  `-R` is the only implicit-key
+replacement path.
+
+Evidence on this exact candidate:
+
+- `tests/host/brick_factotum_test.sh`: 31 passed, 0 failed, twice.  This covers
+  backend-less refusal, an actual encrypted-keyfile write failure, unchanged
+  USB configuration on both failures, lock cleanup, public-only profiles,
+  secret elision, idempotent retry, restart recovery, explicit rotation, and
+  post-save migration/removal of all four draft cleartext files.
+- `brick_d2_test.dis -v`: 1 passed, including a renewal parked across release.
+- `sdg_test.dis -v`: 19 passed with localhost UDP enabled, including counter
+  failure/concurrency, low-order DH and malformed local/remote frames.
+- `factotum_test.dis -v`: 13 passed, 2 skipped because that unit invocation did
+  not mount a live service.
+- `tests/host/secstore_logon_test.sh`: 12 passed with localhost enabled,
+  including persistence and fresh-process reload.
+- namespace fail-closed and live nsaudit profile checks passed; the complete
+  Dis manifest build produced all 1,186 required modules; all 362 tracked test
+  scripts have executable mode.
+
+This is not yet a promotion clearance.  Convert and gate the TLS client-auth
+test against the factotum-backed profile, add its malformed-DER cases, run the
+full branch CI, and record the named styxbrick firmware/bench baseline.  If
+bare-metal pairing or rotation must work unattended in this release, it also
+needs a protected noninteractive persistence backend; the present unlocked,
+injected-key boot supports runtime use but deliberately refuses provisioning
+that cannot prove persistence.
 
 ## 2026-11-07 re-review
 

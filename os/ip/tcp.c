@@ -519,6 +519,9 @@ tcpclose(Conv *c)
 
 	tcb = (Tcpctl*)c->ptcl;
 
+	/* DIAG 2026-11-08 */
+	netlog(c->p->f, Logtcp, "DIAG tcpclose %I.%d->%d state %s rq %d\n",
+		c->raddr, c->rport, c->lport, tcpstates[tcb->state], qlen(c->rq));
 	qhangup(c->rq, nil);
 	qhangup(c->wq, nil);
 	qhangup(c->eq, nil);
@@ -749,6 +752,9 @@ localclose(Conv *s, char *reason)	/* called with tcb locked */
 	tpriv = s->p->priv;
 	tcb = (Tcpctl*)s->ptcl;
 
+	/* DIAG 2026-11-08: who closes a conversation, and why (inbound resets) */
+	netlog(s->p->f, Logtcp, "DIAG localclose %I.%d->%d state %s reason %s rcvnxt %lux\n",
+		s->raddr, s->rport, s->lport, tcpstates[tcb->state], reason != nil ? reason : "nil", tcb->rcv.nxt);
 	iphtrem(&tpriv->ht, s);
 
 	tcphalt(tpriv, &tcb->timer);

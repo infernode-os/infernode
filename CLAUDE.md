@@ -319,6 +319,7 @@ The `T` adt provides these methods:
 | `t.error(msg)` | Report failure but continue test |
 | `t.fatal(msg)` | Report failure and stop test |
 | `t.skip(msg)` | Skip this test |
+| `t.refused(why)` | The far end answered and said no (a server we do not run: HTTP 4xx/5xx, a rate limit, a challenge page, a quota). Reported `--- REFUSED:` and counted apart from FAIL; stops the test as skip does; a failure already recorded outranks it |
 | `t.assert(cond, msg)` | Assert condition is true |
 | `t.asserteq(got, want, msg)` | Assert integers are equal |
 | `t.assertne(got, notexpect, msg)` | Assert integers are not equal |

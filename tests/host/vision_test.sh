@@ -52,7 +52,7 @@ M=/tmp/h$VISION_MODEL
 cat > "$W/run.sh" <<EOF
 mkdir -p /tmp/h
 bind '#U*' /tmp/h
-visionfs -S load m $M
+visionfs load m $M
 echo '-- ctl'; cat /mnt/vision/ctl
 echo '-- info'; cat /mnt/vision/models/m/info
 echo '-- nclasses'; cat /mnt/vision/models/m/classes | wc -l

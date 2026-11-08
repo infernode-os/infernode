@@ -32,9 +32,8 @@ implement Camsrv;
 #
 # usage: mount {camsrv} /mnt/video
 #        mount {camsrv -t} /mnt/video     a simulated sensor, for tests
-#        vm 1 camsrv -s cam               posted in #scam/fs instead, and
-#                                         served to each that opens it:
-#        mount -A '#scam/fs' /mnt/video   from any VM (vm(1), #1086)
+#        post cam /mnt/video             then from any VM (post(1), vm(1)):
+#        mount -A '#scam/fs' /mnt/video
 #        mount {camsrv -l file} ...       append the status line to file
 #                                         once a minute, for a soak
 #        mount {camsrv -r 90} ...         a camera mounted a quarter turn
@@ -65,8 +64,6 @@ include "styxservers.m";
 	Styxserver, Navigator: import styxservers;
 	nametree: Nametree;
 	Tree: import nametree;
-include "post9p.m";
-	post9p: Post9p;
 include "bayer.m";
 	bayer: Bayer;
 
@@ -91,8 +88,6 @@ Lens: con 16r0C;
 Sim: con 2;		# the simulated sensor's raw is this much smaller
 
 srv: ref Styxserver;		# the connection of the message being served
-mainsrv: ref Styxserver;	# standard input's, unless posted
-posted := 0;
 reqc: chan of (ref Styxserver, ref Tmsg);
 sim := 0;
 
@@ -150,7 +145,6 @@ init(nil: ref Draw->Context, args: list of string)
 	# helpers together: killing the first alone leaves the mount wedged
 	sys->pctl(Sys->NEWPGRP, nil);
 	logfile := "";
-	spec := "";
 	for(args = tl args; args != nil; args = tl args)
 		if(hd args == "-l" && tl args != nil){
 			args = tl args;
@@ -161,9 +155,6 @@ init(nil: ref Draw->Context, args: list of string)
 				sys->fprint(sys->fildes(2), "camsrv: -r 0|90|180|270\n");
 				raise "fail:usage";
 			}
-		}else if(hd args == "-s" && tl args != nil){
-			args = tl args;
-			spec = hd args;
 		}else if(hd args == "-t"){
 			sim = 1;
 			width = 288;
@@ -187,28 +178,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# empty as served: where the feed's layers are bound (#1095)
 	tree.create(big Qstream, dir("layer", Sys->DMDIR|8r555, Qlayer));
 	reqc = chan of (ref Styxserver, ref Tmsg);
-	if(spec != nil){
-		# posted: served to each that opens #s<spec>/fs, from any VM;
-		# standard input is not a 9P channel then
-		post9p = load Post9p Post9p->PATH;
-		if(post9p == nil){
-			sys->fprint(sys->fildes(2), "camsrv: cannot load post9p: %r\n");
-			raise "fail:load";
-		}
-		post9p->init();
-		conns := chan of ref Sys->FD;
-		(nil, perr) := post9p->post(spec, conns);
-		if(perr != nil){
-			sys->fprint(sys->fildes(2), "camsrv: post #s%s: %s\n", spec, perr);
-			raise "fail:post";
-		}
-		posted = 1;
-		spawn accept(conns, treeop);
-	} else {
-		(tc, s) := Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
-		mainsrv = s;
-		spawn forward(s, tc);
-	}
+	(tc, s) := Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
+	spawn forward(s, tc);
 	if(logfile != nil)
 		spawn statuslog(logfile);
 	serve(tree);
@@ -229,26 +200,12 @@ forward(s: ref Styxserver, tc: chan of ref Tmsg)
 	}
 }
 
-accept(conns: chan of ref Sys->FD, treeop: chan of ref Styxservers->Navop)
-{
-	for(;;){
-		fd := <-conns;
-		(tc, s) := Styxserver.new(fd, Navigator.new(treeop), big Qroot);
-		spawn forward(s, tc);
-	}
-}
 
-# a connection gone: its readers with it; the mount's, everything
+# the mount gone: everything with it
 connend(tree: ref Tree): int
 {
-	if(srv == mainsrv && !posted){
-		shutdown(tree);
-		return 1;
-	}
-	for(l := sess; l != nil; l = tl l)
-		if((hd l).srv == srv)
-			drop((hd l).fid);
-	return 0;
+	shutdown(tree);
+	return 1;
 }
 
 dir(name: string, perm, path: int): Sys->Dir

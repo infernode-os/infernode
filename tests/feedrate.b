@@ -5,7 +5,7 @@ implement Feedrate;
 # seconds: from the newest frame, each next one whole at its offset, on
 # from the newest when it falls behind ("frame expired"). Prints
 #	frames=N secs=S fps=F missed=M mbps=B
-# For comparing ways of reaching a feed (direct, camsrv -s, post(1)).
+# For comparing ways of reaching a feed (direct, or through post(1)).
 #
 
 include "sys.m";

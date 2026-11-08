@@ -34,10 +34,10 @@ implement Visionfs;
 # for one and counts the frames it never saw (skipped=); a clip that has
 # ended (eof=1) is looked at frame by frame, every one.
 #
-#	visionfs [-m mountpoint] [-s spec] [-S] [load NAME DIR]
+#	visionfs [-m mountpoint] [load NAME DIR]
 #
-# -s posts the server in #s as spec (default vision), so a VM other than
-# the one it runs in can mount it; -S posts nothing.
+# To mount it from another Dis VM, post its mount (post(1)):
+#	post vision /mnt/vision
 #
 
 include "sys.m";
@@ -53,8 +53,6 @@ include "styx.m";
 include "styxservers.m";
 	styxservers: Styxservers;
 	Styxserver, Navigator, Navop: import styxservers;
-include "post9p.m";
-	post9p: Post9p;
 include "visnet.m";
 	visnet: Visnet;
 	Net, Det: import visnet;
@@ -178,14 +176,11 @@ init(nil: ref Draw->Context, argv: list of string)
 	styxservers->init(styx);
 
 	mnt := "/mnt/vision";
-	spec := "vision";
 	arg->init(argv);
-	arg->setusage("visionfs [-m mountpoint] [-s spec] [-S] [load name dir]");
+	arg->setusage("visionfs [-m mountpoint] [load name dir]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'm' =>	mnt = arg->earg();
-		's' =>	spec = arg->earg();
-		'S' =>	spec = nil;
 		* =>	arg->usage();
 		}
 	cmd := "";
@@ -212,7 +207,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	fds[0] = nil;
 	spawn forward(srv, tchan, reqc);
 	pidc := chan of int;
-	spawn server(reqc, spec, navops, srv.fd, pidc);
+	spawn server(reqc, navops, srv.fd, pidc);
 	<-pidc;
 	if(sys->mount(fds[1], nil, mnt, Sys->MREPL, nil) < 0)
 		fatal(sys->sprint("mount %s: %r", mnt));
@@ -264,25 +259,11 @@ nextmodel := 1;
 nextsess := 1;
 framec: chan of ref Frameres;
 
-server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop, mfd: ref Sys->FD, pidc: chan of int)
+server(reqc: chan of ref Req, navops: chan of ref Navop, mfd: ref Sys->FD, pidc: chan of int)
 {
 	pid := sys->pctl(Sys->NEWFD, mfd.fd :: 2 :: nil);
 	stderr = sys->fildes(2);
-	conns := chan of ref Sys->FD;
-	posted := 0;
-	if(spec != nil){
-		post9p = load Post9p Post9p->PATH;
-		if(post9p == nil)
-			sys->fprint(stderr, "visionfs: cannot load post9p: %r: not posted\n");
-		else {
-			post9p->init();
-			(nil, perr) := post9p->post(spec, conns);
-			if(perr != nil)
-				sys->fprint(stderr, "visionfs: post #s%s: %s\n", spec, perr);
-			else
-				posted = 1;
-		}
-	}
+	conns := chan of ref Sys->FD;	# none come: post(1) reaches it from elsewhere
 	pidc <-= pid;
 	resc := chan of ref Result;
 	loadc := chan of ref Loaded;
@@ -377,7 +358,7 @@ Serve:
 						rl = hd q :: rl;
 				(hd sl).reads = rl;
 			}
-			if(--nconn == 0 && !posted)
+			if(--nconn == 0)
 				break Serve;
 			break;
 		}

@@ -4,13 +4,8 @@ visionfs \- recognition as files
 .SH SYNOPSIS
 .B visionfs
 [
-.B -S
-] [
 .B -m
 .I mountpoint
-] [
-.B -s
-.I spec
 ] [
 .B load
 .I name dir
@@ -42,17 +37,11 @@ on
 the processor's arithmetic (see
 .IR tensor (2)).
 .PP
-.B -s
-posts the server in
-.BR #s
-as
-.I spec
-(default
-.BR vision ),
-so a VM other than the one it runs in can mount it (see
-.IR vm (1));
-.B -S
-posts nothing.
+To mount it from another Dis VM
+.RI ( vm (1)),
+post its mount:
+.B post vision /mnt/vision
+.RI ( post (1)).
 .I Load
 loads a model as the server starts, as
 .B ctl

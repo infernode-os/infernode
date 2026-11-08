@@ -50,7 +50,7 @@ mkdir -p /mnt/video /mnt/live /mnt/cam
 mount {vid9p $E/clip.y4m} /mnt/video
 mount -A {camsrv -t} /mnt/cam
 mount {vid9p -c $PYABS $ROOT/tests/host/vision/live.py $W/clip.y4m} /mnt/live
-visionfs -S load m $M
+visionfs load m $M
 {
 	id=\`{read}
 	{

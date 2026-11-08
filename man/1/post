@@ -46,5 +46,7 @@ mount -A '#svideo/fs' /mnt/video
 Every message passes through an export as well as the relay, so reading
 through
 .I post
-is slower than reading a server posted by itself: about half the rate,
-measured hosted and under QEMU.
+costs more than reading the server directly: about half the rate of a
+clip read as fast as it can be, hosted and under QEMU; for a camera on
+the Raspberry Pi 4 (30 frames a second of 280 KB), the full rate, for
+2.3 points of the processors' time against 12 read directly.

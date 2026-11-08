@@ -294,20 +294,29 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:tests failed";
 }
 
-# camsrv posted (-s), its pid (the leader of its group) sent first
-postserver(spec: string, pidc: chan of int)
+PostMod: module {
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+# post(1) of a mounted camsrv, its pid (the leader of its group) sent first
+postserver(spec, dir: string, pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
-	cam := load CamsrvMod "/dis/camsrv.dis";
-	cam->init(nil, "camsrv" :: "-t" :: "-s" :: spec :: nil);
+	p := load PostMod "/dis/post.dis";
+	if(p == nil){
+		sys->fprint(sys->fildes(2), "load post: %r\n");
+		return;
+	}
+	p->init(nil, "post" :: spec :: dir :: nil);
 }
 
-# posted in #s, served to each that opens it: two connections, one camera
+# its mount posted (post(1)), served to each that opens it: two
+# connections, one camera
 testPosted(t: ref T)
 {
 	spec := sys->sprint("camsrv_test.%d", sys->pctl(0, nil));
 	pidc := chan of int;
-	spawn postserver(spec, pidc);
+	spawn postserver(spec, MNT, pidc);
 	pid := <-pidc;
 	f := "#s" + spec + "/fs";
 	for(i := 0; i < 40 && sys->stat(f).t0 < 0; i++)

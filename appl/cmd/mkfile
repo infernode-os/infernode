@@ -9,6 +9,7 @@ DIRS=\
 	install\
 	ip\
 	limbo\
+	md\
 	mk\
 	ndb\
 	sdr\

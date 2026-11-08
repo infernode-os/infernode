@@ -580,6 +580,7 @@ dis/matrix/tk-notes.dis
 dis/matrix/video-ctl.dis
 dis/matrix/video-overlay.dis
 dis/matrix/video-pane.dis
+dis/md/fmt.dis
 dis/mc.dis
 dis/md5sum.dis
 dis/mdb.dis
@@ -839,6 +840,7 @@ dis/tests/mail_provision_test.dis
 dis/tests/matrix_perfdashboard_test.dis
 dis/tests/matrix_sysmon_test.dis
 dis/tests/matrix_test.dis
+dis/tests/mdfmt_test.dis
 dis/tests/memdraw_far_test.dis
 dis/tests/memfs_test.dis
 dis/tests/menu_test.dis

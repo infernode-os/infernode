@@ -29,7 +29,7 @@ Unlike JSON-RPC protocols (MCP) or REST APIs, Xenith exposes everything as files
     ├── data             # Text at addr, reading on to the end of the file
     ├── xdata            # Like data, but a read stops at the end of addr
     ├── errors           # Writes append to this directory's +Errors window
-    ├── ctl              # Control commands (incl. dirty, menu, nomenu)
+    ├── ctl              # Control commands (incl. dirty, menu, nomenu, wrap)
     ├── event            # Event stream
     ├── colors           # Per-window theming
     └── image            # Image display control
@@ -162,6 +162,34 @@ wide as their text, aligned as the separator row says, and ruled above,
 below and under the header. Where a family lacks a style (DejaVu has
 bold but no italic built), bold is drawn twice a pixel apart and italic
 is underlined.
+
+### Wrapping
+
+A line longer than its window goes on in the next line of the window.
+As in Acme, it is cut where the window ends, inside a word if one is
+there. For prose and documentation, `Wrap` (in a tag, as `Indent`)
+breaks a window's lines between words instead:
+
+| Command | Effect |
+|---|---|
+| `Wrap` | this window the other way from how it wraps now |
+| `Wrap word` | this window between words |
+| `Wrap char` | this window anywhere, as Acme does |
+| `Wrap WORD` | every window and new ones between words |
+| `Wrap CHAR` | every window and new ones anywhere |
+
+`xenith -w` starts with `Wrap WORD`, and Zerox keeps the window's way.
+A word wider than the window is cut where the window ends. Blanks
+that do not fit stay at the end of the line, so the next starts with
+a word. Only the display changes: the file is as it was, and a line,
+to an address (`:12`, `addr`, Edit) and to `Put`, is still what a
+newline ends. To change the file instead, fill it: `|fmt` for plain
+text, `|md/fmt` for Markdown (`fmt(1)`, `md(1)`).
+
+A client sets it with `wrap word` or `wrap char` written to the
+window's `ctl`, and reads it there after Acme's eight fields (`word`
+or `char`), so a plumbing rule or a script can choose it for the files
+it opens: Xenith keeps no list of which files are prose.
 
 ### Documents
 
@@ -360,6 +388,9 @@ xenith -t xenith
 
 # With a specific font
 xenith -f /fonts/combined/serif.14.font
+
+# Every window wrapping its lines between words (Wrap WORD)
+xenith -w
 ```
 
 ### Agent Interaction Example

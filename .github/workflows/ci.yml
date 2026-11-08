@@ -1175,7 +1175,7 @@ jobs:
             xenith_event_test xenith_image_test xenith_browse_test \
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
-            xenith_race_test xenith_doc_test; do
+            xenith_race_test xenith_doc_test xenith_wrap_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?

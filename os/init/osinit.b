@@ -456,6 +456,18 @@ Echoreq:	con 8;		# ICMP type: echo request
 Echoreply:	con 0;		# ICMP type: echo reply
 Ipsize:		con 20;		# icmp.c ICMP_IPSIZE
 Hdrsize:	con 8;		# icmp.c ICMP_HDRSIZE
+Pingwait:	con 20*1000;	# ms for the echo reply
+
+pingread(d: ref Sys->FD, rep: array of byte, got: chan of int)
+{
+	got <-= sys->read(d, rep, len rep);
+}
+
+pingtimer(tmo: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	tmo <-= 1;
+}
 
 pingit()
 {
@@ -503,8 +515,25 @@ pingit()
 		return;
 	}
 
+	#
+	# The reply is waited for, not for ever: a lost one used to leave
+	# this thread blocked in read and print nothing at all, so a boot
+	# missing its "echo reply" line said nothing about why.  Loopback
+	# answers in a millisecond; 20 seconds is for QEMU's TCG on a busy
+	# runner.
+	#
 	rep := array[256] of byte;
-	n = sys->read(d, rep, len rep);
+	got := chan[1] of int;
+	spawn pingread(d, rep, got);
+	tmo := chan[1] of int;
+	spawn pingtimer(tmo, Pingwait);
+	alt {
+	n = <-got =>
+		;
+	<-tmo =>
+		sys->print("init: no ICMP echo reply after %d ms\n", Pingwait);
+		return;
+	}
 	if(n < Ipsize + Hdrsize){
 		sys->print("init: no echo reply (read %d): %r\n", n);
 		return;

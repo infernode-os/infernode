@@ -1219,6 +1219,56 @@ probeqlock(void)
 	print("qlok: qlock/rwlock %s\n", ok ? "OK (uncontended paths)" : "BROKEN");
 
 	/*
+	 * canrlock punts for a writer, and only for one. Each case is the
+	 * state another core would leave the lock in, made here by hand:
+	 * a reader passing through rlock holds x, and anyone touching x
+	 * holds its spinlock. canrlock failed in both, and os/ip drops a
+	 * packet when it fails (an ICMP echo over loopback was lost).
+	 */
+	ok = 1;
+	qlock(&rw.x);			/* a reader inside rlock, on another core */
+	if(canrlock(&rw))
+		runlock(&rw);
+	else
+		ok = 0;
+	qunlock(&rw.x);
+	lock(&rw.x.use);		/* x's spinlock held a moment */
+	if(canrlock(&rw))
+		runlock(&rw);
+	else
+		ok = 0;
+	unlock(&rw.x.use);
+	rlock(&rw);			/* readers do not exclude it */
+	if(canrlock(&rw))
+		runlock(&rw);
+	else
+		ok = 0;
+	runlock(&rw);
+	wlock(&rw);			/* a writer does */
+	if(canrlock(&rw)){
+		runlock(&rw);
+		ok = 0;
+	}
+	wunlock(&rw);
+	lock(&rw.l);			/* a writer waiting for x or for readers */
+	rw.writers++;
+	unlock(&rw.l);
+	if(canrlock(&rw)){
+		runlock(&rw);
+		ok = 0;
+	}
+	lock(&rw.l);
+	rw.writers--;
+	unlock(&rw.l);
+	if(!canrlock(&rw))		/* and none is left behind */
+		ok = 0;
+	else
+		runlock(&rw);
+	if(rw.readers != 0 || rw.writers != 0)
+		ok = 0;
+	print("qlok: canrlock %s\n", ok ? "punts for a writer only" : "BROKEN");
+
+	/*
 	 * pgrp.c: a process group is the root of a namespace, so this is
 	 * the first structure that will hold mounts once chan.c lands.
 	 */

@@ -759,7 +759,7 @@ jobs:
               timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test ecc_test secp256k1_test tls_matrix_test
+              tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test

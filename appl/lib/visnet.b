@@ -377,9 +377,16 @@ Net.run(n: self ref Net, input: array of byte): (array of ref Head, string)
 	for(i := 0; i < n.nops; i++){
 		o := n.ops[i];
 		p := o.p;
+		pt := big 0;
+		if(profon)
+			pt = pnow();
 		if(o.out >= 0 && o.op != Oinput){
 			(c, h, w) := n.shapes[o.out];
 			t[o.out] = array[4*c*h*w] of byte;
+		}
+		if(profon){
+			pacc(Palloc, pt);
+			pt = pnow();
 		}
 		{
 			case o.op {
@@ -419,6 +426,8 @@ Net.run(n: self ref Net, input: array of byte): (array of ref Head, string)
 		"*" =>
 			return (nil, sys->sprint("operation %d: %s", i, e));
 		}
+		if(profon)
+			pacc(opkind(n, o), pt);
 		for(j := 0; j < len o.ins; j++)
 			if(n.last[o.ins[j]] == i)
 				t[o.ins[j]] = nil;
@@ -435,12 +444,17 @@ Net.detect(n: self ref Net, pix: array of byte, w, h: int, thresh, iou: real): (
 		return (nil, "picture smaller than its size");
 	scale := n.scale(w, h);
 	input := array[4*3*n.inw*n.inh] of byte;
+	lt := big 0;
+	if(profon)
+		lt = pnow();
 	{
 		tensor->letterbox(pix, w, h, scale, n.fill, n.order == "bgr", input, n.inw, n.inh);
 	} exception e {
 	"*" =>
 		return (nil, "letterbox: " + e);
 	}
+	if(profon)
+		pacc(Pletterbox, lt);
 	return n.found(input, w, h, scale, thresh, iou);
 }
 
@@ -450,13 +464,42 @@ Net.detecti420(n: self ref Net, y, cb, cr: array of byte, w, h: int, thresh, iou
 		return (nil, "frame smaller than its size, or odd");
 	scale := n.scale(w, h);
 	input := array[4*3*n.inw*n.inh] of byte;
+	lt := big 0;
+	if(profon)
+		lt = pnow();
 	{
 		tensor->letterboxi420(y, cb, cr, w, h, scale, n.fill, n.order == "bgr", input, n.inw, n.inh);
 	} exception e {
 	"*" =>
 		return (nil, "letterbox: " + e);
 	}
+	if(profon)
+		pacc(Pletterbox, lt);
 	return n.found(input, w, h, scale, thresh, iou);
+}
+
+# the kind an operation is counted as, profiling
+opkind(n: ref Net, o: ref Op): int
+{
+	case o.op {
+	Oconv =>
+		(c, nil, nil) := n.shapes[o.ins[0]];
+		(kh, kw, g) := (o.p[1], o.p[2], o.p[5]);
+		if(g > 1 && g == c)
+			return Pconvdw;
+		if(kh == 1 && kw == 1)
+			return Pconv1;
+		if(kh == 3 && kw == 3)
+			return Pconv3;
+		return Pconvo;
+	Oadd =>	return Padd;
+	Oact =>	return Pact;
+	Omaxpool =>	return Pmaxpool;
+	Oup2 =>	return Pup2;
+	Os2d =>	return Ps2d;
+	Oconcat =>	return Pconcat;
+	}
+	return Pconvo;
 }
 
 # the scale that fits a w by h picture into the input, aspect kept
@@ -474,6 +517,9 @@ Net.found(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: 
 	(heads, err) := n.run(input);
 	if(err != nil)
 		return (nil, err);
+	pt := big 0;
+	if(profon)
+		pt = pnow();
 	dets: list of ref Det;
 	nd := 0;
 	for(k := 0; k < len heads; k++){
@@ -511,7 +557,10 @@ Net.found(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: 
 			nd++;
 		}
 	}
-	return (nms(dets, nd, iou), nil);
+	found := nms(dets, nd, iou);
+	if(profon)
+		pacc(Pdecode, pt);
+	return (found, nil);
 }
 
 clamp(v, max: real): real
@@ -702,4 +751,67 @@ readppm(data: array of byte, hint: string): (array of byte, int, int, string)
 		pix[3*p+2] = data[i + 3*p];
 	}
 	return (pix, w, h, nil);
+}
+
+# ---- profiling ----
+
+Pkinds := array[] of {
+	"alloc", "conv 1x1", "conv 3x3", "conv depthwise", "conv other", "add", "act",
+	"maxpool", "up2", "s2d", "concat", "letterbox", "decode and nms", "timer",
+};
+Palloc, Pconv1, Pconv3, Pconvdw, Pconvo, Padd, Pact, Pmaxpool, Pup2, Ps2d, Pconcat, Pletterbox, Pdecode, Ptimer: con iota;
+profon := 0;
+pfd: ref Sys->FD;
+pus := array[14] of big;
+pn := array[14] of int;
+pbuf := array[32] of byte;
+
+profile(on: int)
+{
+	profon = on;
+	if(on && pfd == nil)
+		pfd = sys->open("/dev/time", Sys->OREAD);
+	if(pfd == nil)
+		profon = 0;
+	for(i := 0; i < len pus; i++){
+		pus[i] = big 0;
+		pn[i] = 0;
+	}
+}
+
+pnow(): big
+{
+	n := sys->pread(pfd, pbuf, len pbuf, big 0);
+	if(n <= 0)
+		return big 0;
+	return big string pbuf[0:n];
+}
+
+pacc(k: int, t0: big)
+{
+	t1 := pnow();
+	pus[k] += t1 - t0;
+	pn[k]++;
+	# what a reading of the clock costs, counted apart
+	t2 := pnow();
+	pus[Ptimer] += t2 - t1;
+	pn[Ptimer]++;
+}
+
+profiled(): string
+{
+	tot := big 0;
+	for(i := 0; i < len pus; i++)
+		tot += pus[i];
+	s := "";
+	for(i = 0; i < len pus; i++)
+		if(pn[i] > 0)
+			s += sys->sprint("kind=%q n=%d us=%bd pct=%.1f\n", Pkinds[i], pn[i], pus[i],
+				100.0 * real pus[i] / real (tot + big 1));
+	s += sys->sprint("total us=%bd\n", tot);
+	for(i = 0; i < len pus; i++){
+		pus[i] = big 0;
+		pn[i] = 0;
+	}
+	return s;
 }

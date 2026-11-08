@@ -64,6 +64,12 @@ Visnet: module
 
 	init:	fn(): string;
 
+	# with profiling on, where detections spend their time: profiled()
+	# gives a line a kind (kind= n= us= pct=) and the total, and starts
+	# the count again. Off, nothing is timed.
+	profile:	fn(on: int);
+	profiled:	fn(): string;
+
 	# a picture file's pixels, as detect takes them: (pixels, w, h, error)
 	readpixels:	fn(path: string): (array of byte, int, int, string);
 	readpixelsdata:	fn(data: array of byte, hint: string): (array of byte, int, int, string);

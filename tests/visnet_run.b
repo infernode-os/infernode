@@ -10,6 +10,10 @@ implement VisnetRun;
 #	class=dog score=0.9123 x0=123.4 y0=... x1=... y1=...
 #	time reps=10 ms=118.2
 #
+# With -p as well, after the times, where the reps spent theirs, a line
+# a kind of operation (visnet's profile):
+#	kind="conv 3x3" n=180 us=812345 pct=41.2
+#
 
 include "sys.m";
 	sys: Sys;
@@ -39,6 +43,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 	thresh := 0.3;
 	reps := 0;
+	prof := 0;
 	argv = tl argv;
 	while(argv != nil && len hd argv > 1 && (hd argv)[0] == '-'){
 		case hd argv {
@@ -48,14 +53,16 @@ init(nil: ref Draw->Context, argv: list of string)
 		"-n" =>
 			argv = tl argv;
 			reps = int hd argv;
+		"-p" =>
+			prof = 1;
 		* =>
-			sys->fprint(stderr, "usage: visnet_run [-t thresh] [-n reps] modeldir picture ...\n");
+			sys->fprint(stderr, "usage: visnet_run [-p] [-t thresh] [-n reps] modeldir picture ...\n");
 			raise "fail:usage";
 		}
 		argv = tl argv;
 	}
 	if(len argv < 2){
-		sys->fprint(stderr, "usage: visnet_run [-t thresh] [-n reps] modeldir picture ...\n");
+		sys->fprint(stderr, "usage: visnet_run [-p] [-t thresh] [-n reps] modeldir picture ...\n");
 		raise "fail:usage";
 	}
 	t0 := sys->millisec();
@@ -86,6 +93,13 @@ init(nil: ref Draw->Context, argv: list of string)
 			for(r := 0; r < reps; r++)
 				n.detect(pix, w, h, thresh, 0.45);
 			sys->print("time reps=%d ms=%.1f\n", reps, real (sys->millisec() - t0) / real reps);
+			if(prof){
+				visnet->profile(1);
+				for(r = 0; r < reps; r++)
+					n.detect(pix, w, h, thresh, 0.45);
+				sys->print("%s", visnet->profiled());
+				visnet->profile(0);
+			}
 		}
 	}
 }

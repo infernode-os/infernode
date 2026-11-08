@@ -49,7 +49,6 @@ extern Dev drawdevtab;
 extern Dev srvdevtab;
 extern Dev ssldevtab;
 extern Dev archdevtab;
-extern Dev camdevtab;
 
 Dev*	devtab[] =
 {
@@ -77,6 +76,5 @@ Dev*	devtab[] =
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&archdevtab,		/* 'P' -- #P, the firmware's temperature and throttling flags (os/bcm/devarch.c) */
-	&camdevtab,		/* 'V' -- #V, the camera: the simulated sensor so far (os/port/devcam.c, campattern.c) */
 	nil,
 };

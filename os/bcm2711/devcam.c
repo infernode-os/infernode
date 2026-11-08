@@ -36,6 +36,20 @@
  * THREE BUFFERS: one being written, the newest complete, and the one a
  * reader is in, so the receiver always has one nobody is reading. The
  * next buffer is set at a frame's start and taken at the following one.
+ *
+ * PROVENANCE. Not a clean-room implementation. Broadcom publishes no
+ * document for Unicam or for the camera's regulator, and the code is
+ * this tree's, but the facts below were read from Linux drivers in
+ * Raspberry Pi's tree (rpi-6.6.y): the Unicam register map, offsets and
+ * bit fields, from drivers/media/platform/bcm2835/vc4-regs-unicam.h and
+ * bcm2835-unicam.c (GPL-2.0-only); PM_CAM1 at 0x48 and its CTRLEN,
+ * LDOLPEN and LDOHPEN bits from drivers/pmdomain/bcm/bcm2835-power.c
+ * (GPL-2.0+); the firmware's domain 13 from
+ * include/dt-bindings/power/raspberrypi-power.h (GPL-2.0). Where the
+ * camera clock's registers (CM_CAM1CTL, CM_CAM1DIV) came from was not
+ * recorded. That the domain alone leaves the lanes deaf, the low-power
+ * regulator breaking packets, and the minimum off time are this tree's
+ * own measurements.
  */
 #include "u.h"
 #include "../port/lib.h"

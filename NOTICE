@@ -29,6 +29,20 @@ os/bcm/emmc.c, os/bcm/sdhost.c, os/bcm/sdmmc.c and os/bcm/ether4330.c derive
 from Richard Miller's Plan 9 Raspberry Pi work. These terms do not differ from
 the MIT licence above; they are recorded here so the provenance is not lost.
 
+The Raspberry Pi 4 camera support is not a clean-room implementation. Its
+code is this tree's and carries no GPL terms, but Sony publishes no register
+manual for the Camera Module 3's IMX708 sensor and Broadcom none for the
+board's camera receiver, and facts it depends on were read from GPL-licensed
+Linux drivers in Raspberry Pi's kernel tree: the sensor's mode values (PLL
+settings, line length, pixel rate, blanking, exposure offset, gain range, and
+registers 0x0902, 0x3200 and 0x3201) from drivers/media/i2c/imx708.c
+(GPL-2.0), used in appl/cmd/camsrv.b; and the camera receiver's register map,
+its power regulator's bits and its firmware power domain from bcm2835-unicam.c,
+vc4-regs-unicam.h, bcm2835-power.c and raspberrypi-power.h (GPL-2.0 and
+GPL-2.0+), used in os/bcm2711/devcam.c. Each file lists what came from where.
+Deriving these values independently, and dropping what cannot be, is open
+work.
+
 Inferno and Limbo are registered trademarks of Vita Nuova Holdings Limited in
 the USA and other countries. Plan 9 is a registered trademark of Southsuite
 Inc in the USA. Portions of this software were originally authored by employees

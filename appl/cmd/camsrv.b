@@ -1216,14 +1216,30 @@ sensoron(): string
 
 # The mode, as CCS registers. Each was tested by leaving it out, on the
 # sensor, against the same picture (2026-11-03), and those that changed
-# nothing are not written. Of the rest, the registers' meanings are the
-# standard's, but these VALUES were read from the Linux imx708 driver,
-# which is GPL, and are not yet derived independently:
-#	the PLLs (0301 0303 0305 0306, 030B 030D 030E), the line length
-#	(0342, so Linelen and Pixrate), and 3200/3201, which are not CCS:
-#	without them the binned frame has no colour.
-# Left at the sensor's own timing the stream drops frames, so the PLLs
-# and line length stay; frame length is worked out from them.
+# nothing are not written. Left at the sensor's own timing the stream
+# drops frames, so the PLLs and line length stay; frame length is worked
+# out from them.
+#
+# PROVENANCE. This is not a clean-room implementation. The code is this
+# tree's, but Sony publishes no IMX708 register manual, and these VALUES
+# were read from the Linux driver drivers/media/i2c/imx708.c (Raspberry
+# Pi's tree, rpi-6.6.y; GPL-2.0), its 2x2 binned mode, value for value:
+#	the PLLs: 0301=5 0303=2 0305=2 0306=122 030B=2 030D=4 0310=1, and
+#	  030E=300, its 450 MHz link frequency
+#	the line length 0342=7824 (Linelen) and the pixel rate 585600000
+#	  (Pixrate) that goes with it
+#	the minimum vertical blank, 40 lines (Vblankmin)
+#	the exposure offset, 48 lines (Exposureoff), and the analogue
+#	  gain's ceiling, code 960
+#	0902=8, and 3200=3201=0x41, which are not CCS: without the last two
+#	  the binned frame has no colour
+# The registers' meanings, and the rest of what is written here (the
+# clock 0136, RAW10 0112, the lanes 0114, binning 0900/0901, the crop
+# and output size, the chip's id at 0016), are the MIPI CCS standard's.
+# The lens's address, 0x0C, and the 24 MHz clock are from Raspberry Pi's
+# imx708 device-tree overlay (GPL-2.0-only); where the lens's register
+# numbers (2, 3 and 4) came from was not recorded. Deriving the values
+# above independently, and dropping what cannot be, is open.
 sensormode(): int
 {
 	written = nil;

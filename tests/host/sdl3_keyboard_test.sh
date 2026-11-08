@@ -15,6 +15,9 @@
 # 3. Plan 9 latin1 composition (press Option, release, type two chars)
 #    - Alt/Option release sends Latin key (0xE06F) to enter compose mode
 #    - Subsequent keypresses compose via latin1.h table
+#    - Only when Alt was tapped alone: Option used as a modifier (Option-
+#      Shift-hyphen for an em dash, Option-click for button 2) must not
+#      leave compose armed (the next space and space became U+2423)
 #
 # 4. UTF-8 support in TEXT_INPUT
 #    - Full UTF-8 decoding via Plan 9 chartorune() (handles 1-4 byte sequences)
@@ -100,6 +103,12 @@ check "Latin key sent on KEY_UP for Alt" \
 # Test 9: Alt scancodes (LALT/RALT) handled in KEY_UP
 check "LALT/RALT handled in KEY_UP handler" \
     "grep -A10 'SDL_EVENT_KEY_UP' '$SDL3_FILE' | grep -q 'SDL_SCANCODE_LALT\|SDL_SCANCODE_RALT'"
+
+# Test 9b: Latin only when Alt was tapped alone
+check "Latin on Alt release only if Alt was alone" \
+    "grep -A8 'case SDL_EVENT_KEY_UP' '$SDL3_FILE' | grep -B1 'gkbdputc(gkbdq, Latin)' | grep -q 'if (alt_alone)'"
+check "other keys, text and buttons cancel Alt alone" \
+    "test \$(grep -c 'alt_alone = 0;' '$SDL3_FILE') -ge 4"
 
 # Test 10: Latin key NOT sent on Alt KEY_DOWN (would interfere with macOS composition)
 # Look for Alt->Latin in the KEY_DOWN switch, which should NOT be there

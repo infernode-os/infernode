@@ -262,6 +262,12 @@ mainreq: chan of (ref Client, array of byte, Sys->Rwrite);
 
 # Last known mouse X — updated by mouseproc, used by kbdproc for focus-follows-mouse
 lastmousex := 0;
+# Where the last press outside the keyboard on the screen was, and
+# whether the pointer is in its strip now.  Typing on that keyboard,
+# the pointer is on it, and where the mouse crossed into its strip
+# says nothing: the keys go where the last click put the caret.
+lastpressx := 0;
+ptrindock := 0;
 
 # Zone layout percentages (default; modified by ctx expand/restore)
 conv_pct := 30;
@@ -1335,6 +1341,66 @@ mountosk(fd: ref Sys->FD)
 }
 
 # the keyboard's window server: one client, its window the strip
+# appcursor: a "cursor" request from an app, made the cursor.  The form
+# is wmlib's: "cursor" alone for the default, or "cursor hotx hoty
+# width height bits", the bits in hex (clear then set, width/8*height
+# bytes each), written to /dev/cursor as wmlib's wptrproc writes it.
+appcursor(s: string): string
+{
+	(nf, f) := sys->tokenize(s, " ");
+	buf: array of byte;
+	if(nf == 1)
+		buf = array[0] of byte;
+	else if(nf == 6){
+		hx := int hd tl f;
+		hy := int hd tl tl f;
+		w := int hd tl tl tl f;
+		h := int hd tl tl tl tl f;
+		bits := hd tl tl tl tl tl f;
+		if(w <= 0 || h <= 0 || w > 64 || h > 64 || w % 8 != 0)
+			return "bad cursor size";
+		nb := w/8*h;
+		if(len bits != 2*nb)
+			return "inconsistent cursor image data";
+		buf = array[4*4 + nb] of byte;
+		j := 0;
+		for(l := hx :: hy :: w :: h :: nil; l != nil; l = tl l){
+			v := hd l;	# low byte first, as wmlib's bplong
+			buf[j++] = byte v;
+			buf[j++] = byte (v >> 8);
+			buf[j++] = byte (v >> 16);
+			buf[j++] = byte (v >> 24);
+		}
+		for(i := 0; i < len bits; i += 2){
+			hi := hexval(bits[i]);
+			lo := hexval(bits[i+1]);
+			if(hi < 0 || lo < 0)
+				return "bad cursor image data";
+			buf[j++] = byte ((hi << 4) | lo);
+		}
+	}else
+		return "usage: cursor [hotx hoty width height bits]";
+	fd := sys->open("/dev/cursor", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("cannot open /dev/cursor: %r");
+	if(sys->write(fd, buf, len buf) != len buf)
+		return sys->sprint("%r");
+	return nil;
+}
+
+hexval(c: int): int
+{
+	case c {
+	'0' to '9' =>
+		return c - '0';
+	'a' to 'f' =>
+		return c - 'a' + 10;
+	'A' to 'F' =>
+		return c - 'A' + 10;
+	}
+	return -1;
+}
+
 dockloop(join: chan of (ref Client, chan of string), req: chan of (ref Client, array of byte, Sys->Rwrite))
 {
 	for(;;) alt {
@@ -1958,6 +2024,13 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			if((len s >= 5 && s[0:5] == "!move" || len s >= 5 && s[0:5] == "!size") &&
 			   (existimg := c.image("app")) != nil)
 				c.setimage("app", existimg);
+			# "cursor": the app's cursor made the pointer's, as wmlib makes
+			# it with no window manager (wm/wm's cross, box and gunsight).
+			# Answered OK and dropped, it was never seen under Lucifer.
+			if(len s >= 6 && s[0:6] == "cursor" && (len s == 6 || s[6] == ' ')) {
+				if((err = appcursor(s)) != nil)
+					n = -1;
+			}
 			# "embedded" (wmlib->embedded): yes, the zone frames and places
 			# its windows, so the client draws no frame of its own.  The OK
 			# below is the answer.
@@ -2910,10 +2983,14 @@ mouseproc()
 		# decides (on a desktop) which zone has the keyboard.
 		if(dockclient != nil && (dockgrab || dockscr != nil && p.xy.in(dockr))){
 			dockgrab = p.buttons != 0;
+			ptrindock = 1;
 			alt { dockclient.ptr <-= p => ; * => ; }
 			continue;
 		}
+		ptrindock = 0;
 		lastmousex = p.xy.x;
+		if(p.buttons)
+			lastpressx = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
 			wasdown := prevb;
 			prevb = p.buttons;
@@ -3147,9 +3224,15 @@ kbdproc()
 		if(mobile) {
 			if(expanded_zone == 1 && ktp != nil && ktp.activeappid != "")
 				towkapp = 1;
-		} else if(pres_zone_minx > 0 && lastmousex >= pres_zone_minx &&
-				lastmousex < pres_zone_maxx && ktp != nil && ktp.activeappid != "") {
-			towkapp = 1;
+		} else {
+			# the mouse decides, except on the keyboard on the screen:
+			# then the last click does
+			kx := lastmousex;
+			if(ptrindock && dockscr != nil)
+				kx = lastpressx;
+			if(pres_zone_minx > 0 && kx >= pres_zone_minx &&
+					kx < pres_zone_maxx && ktp != nil && ktp.activeappid != "")
+				towkapp = 1;
 		}
 		if(towkapp) {
 			routed := 0;
@@ -3978,11 +4061,15 @@ launchappns(tp: ref TaskPres, guimod: GuiApp,
 	sys->pctl(Sys->NEWPGRP, nil);
 	grpc <-= sys->open(sys->sprint("/prog/%d/grpwait", pid), Sys->OREAD);
 	setslotpid(tp, id, pid);
-	# Activity 0 uses the default /chan/wmctl — no FORKNS needed.
-	# Child tasks use /chan/wmctl.N and need FORKNS + bind so apps
-	# find the task's wmsrv at the well-known /chan/wmctl path.
+	# A namespace of its own, for every app: what it binds is its own.
+	# wm/wm, run as an app, puts a window server of its own over
+	# /chan/wmctl; in Lucifer's namespace every app started after it
+	# was its client, not Lucifer's (a black tab, no typing, wm/wm
+	# broken when one went).  Activity 0 uses the default /chan/wmctl;
+	# child tasks use /chan/wmctl.N, bound so apps find the task's
+	# wmsrv at the well-known /chan/wmctl path.
+	sys->pctl(Sys->FORKNS, nil);
 	if(tp.actid != 0) {
-		sys->pctl(Sys->FORKNS, nil);
 		wmname := "wmctl." + string tp.actid;
 		srcpath := "/chan/" + wmname;
 		# Verify source file exists before bind

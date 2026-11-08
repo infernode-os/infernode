@@ -9,7 +9,10 @@
 # type in the order they landed; a mouse's click types; a stroke
 # through a word's letters types the word; the symbols; in plain mode
 # nothing is put right; Dvorak's keys, the layout kept for next time;
-# a swipe down hides it to a handle, a touch on the handle shows it.
+# the keys go to the window clicked in last (a wm/editor, then the
+# shell), by finger and by the mouse, whichever window the mouse crossed
+# on its way to them; a swipe down hides it to a handle, a touch on the
+# handle shows it.
 # Needs the SDL emulator (SDL_VIDEODRIVER=dummy) and the word list.
 #
 set -e
@@ -121,6 +124,14 @@ else
 fi
 grep -qx dvorak "$ROOT/$T/savedlayout" 2>/dev/null && pass "the layout kept for next time" ||
 	fail "layout kept: $(cat "$ROOT/$T/savedlayout" 2>/dev/null)"
+# the keys to the window clicked in last, not the one the mouse crossed
+eb=$(tr -d '\n' < "$ROOT/$T/editor.body" 2>/dev/null)
+[ "$eb" = xyz ] && pass "to the editor clicked in, by finger and by the mouse over the shell" ||
+	fail "to the editor: its body '$eb', the shell '$(out toeditor)'"
+eb2=$(tr -d '\n' < "$ROOT/$T/editor.body2" 2>/dev/null)
+[ "$(out toshell)" = focus ] && [ "$eb2" = xyz ] &&
+	pass "to the shell clicked in, by the mouse over the editor" ||
+	fail "to the shell: '$(out toshell)', the editor '$eb2'"
 [ "$(st hidden state)" = handle ] && pass "a swipe down hides it to a handle" ||
 	fail "hidden: state $(st hidden state)"
 set -- $(windows hidden)

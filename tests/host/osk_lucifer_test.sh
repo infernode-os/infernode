@@ -4,7 +4,9 @@
 # Lucifer and hidden, shown in a strip along the bottom once the screen
 # is touched with no keyboard attached, the zones laid out above it;
 # what is typed on it reaches the zone with the keyboard (the chat) and
-# is sent; a keyboard attached hides it and gives the zones the screen
+# is sent; with the mouse, the keys go where the last click was, not
+# where the mouse crossed into the strip (the chat, a shell in the
+# presentation zone, wm/wm's shell there); a keyboard attached hides it and gives the zones the screen
 # back, detached shows it again; the machine's keyboard typed on hides
 # it to its handle.  Needs the SDL emulator (SDL_VIDEODRIVER=dummy).
 #
@@ -57,6 +59,21 @@ nb=$(tr -dc 0-9 < "$ROOT/$T/nconv.before" 2>/dev/null)
 na=$(tr -dc 0-9 < "$ROOT/$T/nconv.after" 2>/dev/null)
 [ -n "$nb" ] && [ -n "$na" ] && [ "$na" -gt "$nb" ] && pass "typed into the chat and sent" ||
 	fail "the conversation did not grow: $nb then $na"
+# with the mouse, typed where the last click was (not where the mouse
+# crossed into the strip): the chat, a shell in the zone, wm/wm's shell
+# in the zone
+out() { grep -v '^;' "$ROOT/$T/body.$1" 2>/dev/null | tail -1; }
+nc=$(tr -dc 0-9 < "$ROOT/$T/nconv.tochat" 2>/dev/null)
+[ -n "$na" ] && [ -n "$nc" ] && [ "$nc" -gt "$na" ] && ! grep -q hi "$ROOT/$T/body.tochat" &&
+	pass "with the mouse: to the chat clicked in, not the shell crossed" ||
+	fail "with the mouse to the chat: the conversation $na then $nc, the shell '$(out tochat)'"
+ns=$(tr -dc 0-9 < "$ROOT/$T/nconv.toshell" 2>/dev/null)
+[ "$(out toshell)" = ok ] && [ "$ns" = "$nc" ] &&
+	pass "with the mouse: to the shell clicked in, not the chat crossed" ||
+	fail "with the mouse to the shell: '$(out toshell)', the conversation $nc then $ns"
+[ "$(out towm)" = wm ] &&
+	pass "with the mouse: to wm/wm's shell clicked in, in the zone" ||
+	fail "with the mouse to wm/wm's shell: '$(out towm)'"
 [ "$(st attached state)" = hidden ] && pass "a keyboard attached hides it" ||
 	fail "attached: state '$(st attached state)'"
 [ ! -s "$ROOT/$T/keys.attached" ] && pass "and its strip is gone" || fail "attached: keys still shown"

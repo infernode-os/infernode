@@ -51,6 +51,15 @@ fn stroke {
 	}
 	echo f0 $px $py 0 > /dev/fingers
 }
+# taps on keys by name with the mouse: button 1 down and up on each
+fn mtaps {
+	for k in $* {
+		xy=`{centre $k}
+		echo m $xy 0 > /dev/pointer
+		echo m $xy 1 > /dev/pointer
+		echo m $xy 0 > /dev/pointer
+	}
+}
 fn snap {
 	sleep 2
 	cp /mnt/shell/body /tmp/body.$1
@@ -71,6 +80,8 @@ x=${expr ${index 2 $w} 40 +}
 y=${expr ${index 3 $w} 40 +}
 echo m $x $y 1 > /dev/pointer
 echo m $x $y 0 > /dev/pointer
+sx=$x
+sy=$y
 sleep 1
 
 wm/osk &
@@ -177,6 +188,43 @@ cp /tmp/keys /tmp/dvorak.keys
 taps e c h o space d v o r a k enter
 snap dvorak
 cat $home/lib/osk/layout > /tmp/savedlayout
+echo layout qwerty > /mnt/osk/ctl
+sleep 1
+keys
+
+# the keys go to the window clicked in last, whatever the pointer
+# crossed on its way to them: a wm/editor opened over the shell,
+# clicked in, typed into by finger and by the mouse (moved over the
+# shell first); then the shell clicked in, typed into by the mouse
+# (moved over the editor first).  Plain mode: nothing put right.
+echo mode plain > /mnt/osk/ctl
+wm/editor &
+sleep 4
+echo R editor `{cat /chan/wmwindows}
+# the editor's window: the second listed, under the keyboard
+ew=`{sed -n 2p /chan/wmwindows}
+ex=${expr ${index 2 $ew} ${index 4 $ew} + 2 /}
+ey=${expr ${index 3 $ew} 30 +}
+echo m $ex $ey 1 > /dev/pointer
+echo m $ex $ey 0 > /dev/pointer
+sleep 1
+taps x y
+# (a moment after the last finger, as for the mouse's click above)
+sleep 1
+echo m $sx $sy 0 > /dev/pointer
+mtaps z
+sleep 2
+cat /edit/1/body > /tmp/editor.body
+snap toeditor
+# the shell, where the editor is not: the shell's top left corner
+echo m $sx $sy 1 > /dev/pointer
+echo m $sx $sy 0 > /dev/pointer
+sleep 1
+echo m $ex $ey 0 > /dev/pointer
+mtaps e c h o space f o c u s enter
+snap toshell
+cat /edit/1/body > /tmp/editor.body2
+echo mode text > /mnt/osk/ctl
 
 # a swipe down from above the keys hides it to a handle; a touch on
 # the handle shows it again

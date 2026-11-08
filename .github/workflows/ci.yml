@@ -1225,6 +1225,22 @@ jobs:
           Linux/amd64/bin/mk
         retention-days: 14
 
+  # The required check master's ruleset names.  The GUI job above was
+  # split into parts, each reported as "... (part)"; no job reported the
+  # plain name any more, so the ruleset waited on it for ever.  This job
+  # reports it, and passes only when every part passed.
+  linux-amd64-gui-gate:
+    name: Linux AMD64 SDL3 GUI Build & Test
+    needs: linux-amd64-gui
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+    - name: Every part passed
+      run: |
+        echo "linux-amd64-gui: ${{ needs.linux-amd64-gui.result }}"
+        test "${{ needs.linux-amd64-gui.result }}" = success
+
   # ─────────────────────────────────────────────
   # Linux ARM64: Full bootstrap build from source
   # ─────────────────────────────────────────────

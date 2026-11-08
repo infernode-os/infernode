@@ -10,9 +10,16 @@ i2c \- I2C buses, as files
 .fi
 .SH DESCRIPTION
 .I I2c
-is a polled master, with 7-bit addresses, on the Raspberry Pi 5's header:
-bus 0 on GPIO 0 and 1, bus 1 on GPIO 2 and 3.
+is a polled master with 7-bit addresses. Which buses it serves is the
+board's:
+.TP
+Raspberry Pi 5
+bus 0 on GPIO 0 and 1, bus 1 on GPIO 2 and 3, on the header.
 The pins become I2C's at the first open.
+.TP
+Raspberry Pi 4
+bus 0 only: BSC0 on GPIO 44 and 45, the bus on the two ribbon
+connectors (the camera's and the display's), at 400 kHz.
 .PP
 Writing the control file sets:
 .TP
@@ -22,11 +29,12 @@ the device to talk to.
 .BI subaddress " n"
 that each transfer starts with the file offset, in
 .I n
-bytes, high first, and that a read then uses a repeated start: how most
+bytes (0 to 4), high first, and that a read then sends it, and reads
+after a repeated start (the Pi 5) or a stop (the Pi 4): how most
 register and EEPROM devices are read.
 .TP
 .BI speed " n"
-100000 or 400000.
+100000 or 400000 (the Pi 5; the Pi 4's bus is fixed at 400 kHz).
 .PP
 Reading it returns those settings.
 Reads and writes of the data file are one transfer each with the device at
@@ -38,6 +46,16 @@ An address nothing answers gives the error
 which is how to scan a bus.
 .SH SOURCE
 .B /os/bcm2712/devi2c.c
+(the Pi 5)
+.br
+.B /os/bcm2711/devi2c.c
+(the Pi 4)
 .SH SEE ALSO
+.IR camera (3),
 .IR gpio (3),
 .IR spi (3)
+.SH BUGS
+On the Pi 4 the VideoCore polls a DSI panel's touch controller on the
+same bus, and there is no way to take turns. With a panel attached a
+transfer can fail, and a read or a write can be silently wrong: a
+program that matters reads its writes back.

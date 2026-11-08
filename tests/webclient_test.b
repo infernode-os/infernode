@@ -46,6 +46,15 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
+# The server answered, but with a status of its own policy (4xx or 5xx:
+# example.com's and httpbin.org's bot and rate limits, httpbin's 502s).
+# That is them saying no, not our client failing: REFUSED, not FAIL.
+remoteno(t: ref T, host: string, code: int)
+{
+	if(code >= 400)
+		t.refused(sys->sprint("%s answered HTTP %d", host, code));
+}
+
 testHttpsGet(t: ref T)
 {
 	(resp, err) := webclient->get("https://example.com");
@@ -54,6 +63,7 @@ testHttpsGet(t: ref T)
 		return;
 	}
 	t.assert(resp != nil, "response not nil");
+	remoteno(t, "example.com", resp.statuscode);
 	t.asserteq(resp.statuscode, 200, "status code");
 	t.assert(resp.body != nil && len resp.body > 0, "body not empty");
 	t.log("body length: " + string len resp.body);
@@ -68,6 +78,7 @@ testRedirect(t: ref T)
 		return;
 	}
 	t.assert(resp != nil, "response not nil");
+	remoteno(t, "example.com", resp.statuscode);
 	# example.com may or may not redirect; just check we got a response
 	t.assert(resp.statuscode == 200 || resp.statuscode == 301 || resp.statuscode == 302,
 		"reasonable status: " + string resp.statuscode);
@@ -105,6 +116,7 @@ testPost(t: ref T)
 		return;
 	}
 	t.assert(resp != nil, "response not nil");
+	remoteno(t, "httpbin.org", resp.statuscode);
 	t.asserteq(resp.statuscode, 200, "status code");
 	t.assert(resp.body != nil && len resp.body > 0, "body not empty");
 }

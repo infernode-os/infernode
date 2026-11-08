@@ -207,12 +207,13 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
-	# And the camera, /dev/camera (os/port/devcam.c), likewise after
-	# /dev. Nothing runs until something writes "stream on" to its
-	# ctl, so it costs nothing to have bound.
+	# And the camera receiver and its I2C, where the board has them
+	# (the Pi 4), likewise after /dev: nothing runs until a program
+	# powers it, so they cost nothing to have bound.
 	#
-	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
-		sys->print("init: cannot bind #V on /dev: %r\n");
+	for(devs := "#V" :: "#J" :: nil; devs != nil; devs = tl devs)
+		if(sys->stat(hd devs).t0 >= 0 && sys->bind(hd devs, "/dev", Sys->MAFTER) < 0)
+			sys->print("init: cannot bind %s on /dev: %r\n", hd devs);
 
 	#
 	# And where USB serial ports appear: usbserial makes eiaU0 and its
@@ -361,6 +362,12 @@ init()
 	# wait on a radio.
 	#
 	btsetup();
+
+	#
+	# The camera, where the board has one and the card says how it is
+	# mounted: camsrv on /mnt/video for every session, as Bluetooth is.
+	#
+	camerasetup();
 
 	#
 	# The touch panel, if the kernel found one. Spawned because it is
@@ -1725,6 +1732,7 @@ Wififile: con "/n/dos/wifi";
 Btfile: con "/n/dos/bt";
 Btkeys: con "/n/dos/btkeys";
 Btfactotum: con "/tmp/factotum";
+Camerafile: con "/n/dos/camera";
 
 radiosetup()
 {
@@ -1917,6 +1925,89 @@ btjoin(txt: string)
 	(a, got) := slurp("/net/bt/addr");
 	if(got)
 		sys->print("init: bt: %s", a);
+}
+
+#
+# The camera. /n/dos/camera holds ctl lines for camsrv(4), one per
+# line, written in order once it is mounted -- for a camera mounted on
+# its side, say,
+#
+#	rotate 90
+#
+# How the camera sits is a fact about this installation, so it is the
+# card's to say, as the radio's settings are; the same kernel and the
+# same camsrv serve any mounting. No file, nothing started here, and
+# wm/camera starts camsrv for itself as on any other machine. No
+# receiver (#V: a board other than the Pi 4), the file is not read.
+#
+# In THIS namespace, as /net/bt is, so the console shell, the network
+# console and the desktop all inherit /mnt/video/0; the mount point
+# appears on reference, mntsetup() having put mntgen after /mnt.
+# camsrv costs nothing idle: the sensor is powered only while
+# something reads a frame. The lines are DATA, ctl verbs that camsrv
+# checks; nothing in the file is run.
+#
+camerasetup()
+{
+	if(sys->stat("#V").t0 < 0)
+		return;
+	(txt, found) := slurp(Camerafile);
+	if(!found)
+		return;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("init: camera: pipe: %r\n");
+		return;
+	}
+	spawn camserve(p[1]);
+	p[1] = nil;
+	if(sys->mount(p[0], nil, "/mnt/video", Sys->MREPL, "") < 0){
+		sys->print("init: camera: mount on /mnt/video: %r\n");
+		return;
+	}
+	p[0] = nil;
+	fd := sys->open("/mnt/video/0/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: camera: /mnt/video/0/ctl: %r\n");
+		return;
+	}
+	for(i := 0; i < len txt;){
+		j := i;
+		while(j < len txt && txt[j] != '\n')
+			j++;
+		line := txt[i:j];
+		i = j + 1;
+		if(line == nil || line[0] == '#')
+			continue;
+		if(sys->fprint(fd, "%s", line) < 0)
+			sys->print("init: camera: %s: %r\n", line);
+	}
+	(f, got) := slurp("/mnt/video/0/fmt");
+	if(got)
+		sys->print("init: camera: /mnt/video %s", f);
+}
+
+# camsrv serves 9P on its standard input
+camserve(fd: ref Sys->FD)
+{
+	# the pipe's other end stays with the mount alone
+	sys->pctl(Sys->NEWFD, fd.fd :: 1 :: 2 :: nil);
+	if(sys->dup(fd.fd, 0) < 0){
+		sys->print("init: camera: dup: %r\n");
+		return;
+	}
+	fd = nil;
+	cam := load Command "/dis/camsrv.dis";
+	if(cam == nil){
+		sys->print("init: camera: cannot load /dis/camsrv.dis: %r\n");
+		return;
+	}
+	{
+		cam->init(nil, "camsrv" :: nil);
+	} exception e {
+	"fail:*" =>
+		sys->print("init: camera: camsrv: %s\n", e[5:]);
+	}
 }
 
 #

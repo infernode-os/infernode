@@ -11,6 +11,7 @@ Testing: module
 		skipped: int;
 		output:  list of string;	# accumulated log output
 		start:   int;			# start time in milliseconds
+		refusal: string;		# why the far end said no (refused), or nil; last, so a T built from a tuple only gains a nil
 
 		# Logging
 		log:     fn(t: self ref T, msg: string);
@@ -23,6 +24,12 @@ Testing: module
 
 		# Skip test (stops test via exception)
 		skip:    fn(t: self ref T, msg: string);
+		# The far end answered and said no: a server we do not run
+		# refused (HTTP 4xx/5xx, a rate limit, a challenge page, an
+		# API's quota). Not a failure of ours: counted and reported
+		# apart from FAIL, and stops the test as skip does. A failure
+		# already recorded outranks it.
+		refused: fn(t: self ref T, why: string);
 
 		# Assertions - return 1 on success, 0 on failure (and mark test failed)
 		assert:     fn(t: self ref T, cond: int, msg: string): int;

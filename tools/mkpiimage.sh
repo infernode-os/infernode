@@ -51,8 +51,9 @@
 #   - usr/inferno, the home a hosted tree carries, as git tracks it but
 #     for keyring/default (a test key): it is the machine's writable
 #     home, and the first boot makes its secstore account under it.
-# No skiplogon, wifi, netconsole or rootpath: a new card starts the
-# login screen and offers nothing on the network.
+# No file boot reads as a setting (skiplogon, wifi, netconsole, rootpath,
+# cnsamode, camera, cpulisten, bt, btkeys, vms, usbquirks): a new card
+# starts the login screen and offers nothing on the network.
 #
 # Needs sh, git, python3, and curl unless --firmware is given.
 #

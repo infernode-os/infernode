@@ -130,7 +130,8 @@ struct Ctlr {
 	Dwcregs	*regs;		/* controller registers */
 	int	nchan;		/* number of host channels */
 	ulong	chanbusy;	/* bitmap of in-use channels */
-	ulong	chandead;	/* channels that would not halt: never handed out again (#641) */
+	ulong	chandead;	/* channels that would not halt: handed out again only once halted (#641, #723) */
+	int	reclaimed;	/* retired channels that halted late and came back (#723) */
 	QLock	chanlock;	/* serialise access to chanbusy */
 	Lock	masklock;	/* haintmsk is shared by every channel; see chanwait */
 	QLock	split;		/* serialise split transactions */
@@ -263,33 +264,84 @@ static char Ebadlen[] = "bad usb request length";
 static void clog(Ep *ep, Hostchan *hc);
 static void logdump(Ep *ep);
 
+/*
+ * A retired channel (one that would not halt, chanrelease) whose enable
+ * has since cleared has halted after all: its DMA engine is idle, so
+ * handing it out again cannot write into anybody's memory. Its buffer
+ * stays retired with the transfer that owned it; only the channel comes
+ * back. A bulk IN channel on the 3B+'s LAN7515 that would not halt on a
+ * NAK within Chandislimit did halt later, once the device had data again
+ * (#723). Called with chanlock held.
+ */
+static int
+chanreclaim(Ctlr *ctlr)
+{
+	int i, n;
+	Hostchan *hc;
+
+	n = 0;
+	for(i = 0; i < ctlr->nchan; i++){
+		if((ctlr->chandead & (1<<i)) == 0)
+			continue;
+		hc = &ctlr->regs->hchan[i];
+		if(hc->hcchar & Chen)
+			continue;
+		hc->hcint = hc->hcint;	/* clear what the late halt left */
+		ctlr->chandead &= ~(1<<i);
+		ctlr->chanbusy &= ~(1<<i);
+		ctlr->reclaimed++;
+		n++;
+		print("usbotg: channel %d halted late; back in service (%d so far)\n",
+			i, ctlr->reclaimed);
+	}
+	return n;
+}
+
 static Hostchan*
 chanalloc(Ep *ep)
 {
 	Ctlr *ctlr;
-	int bitmap, i;
+	int bitmap, i, waited;
 
 	ctlr = ep->hp->aux;
-	qlock(&ctlr->chanlock);
-	bitmap = ctlr->chanbusy | ctlr->chandead;
-	for(i = 0; i < ctlr->nchan; i++)
-		if((bitmap & (1<<i)) == 0){
-			ctlr->chanbusy = bitmap | 1<<i;
+	for(waited = 0;; waited++){
+		qlock(&ctlr->chanlock);
+		bitmap = ctlr->chanbusy | ctlr->chandead;
+		for(i = 0; i < ctlr->nchan; i++)
+			if((bitmap & (1<<i)) == 0){
+				ctlr->chanbusy = bitmap | 1<<i;
+				qunlock(&ctlr->chanlock);
+				/*
+				 * A channel leaving the free pool with its enable
+				 * still set is a transfer somebody abandoned with
+				 * the DMA engine live -- the next completion lands
+				 * in whoever owns that memory now.
+				 */
+				if(ctlr->regs->hchan[i].hcchar & Chen)
+					panic("chanalloc: channel %d still enabled hcchar %8.8ux cpu%d",
+						i, ctlr->regs->hchan[i].hcchar, m->machno);
+				return &ctlr->regs->hchan[i];
+			}
+		/*
+		 * None free. This used to panic ("miller is a lazy git"),
+		 * but a busy channel is only in use: it comes back when its
+		 * transfer ends, in microseconds. With channels retired the
+		 * rest were all busy for a moment under load, and the board
+		 * went down for it (#723). So take back any retired channel
+		 * that has halted since, and otherwise wait for one. Only
+		 * when every channel is retired and none comes back does the
+		 * transfer fail -- an error its reader can handle, not a
+		 * panic.
+		 */
+		if(chanreclaim(ctlr) == 0 && ctlr->chandead == (1<<ctlr->nchan)-1 && waited >= 2000){
 			qunlock(&ctlr->chanlock);
-			/*
-			 * A channel leaving the free pool with its enable
-			 * still set is a transfer somebody abandoned with
-			 * the DMA engine live -- the next completion lands
-			 * in whoever owns that memory now.
-			 */
-			if(ctlr->regs->hchan[i].hcchar & Chen)
-				panic("chanalloc: channel %d still enabled hcchar %8.8ux cpu%d",
-					i, ctlr->regs->hchan[i].hcchar, m->machno);
-			return &ctlr->regs->hchan[i];
+			print("usbotg: ep%d.%d no host channel: all %d retired\n",
+				ep->dev->nb, ep->nb, ctlr->nchan);
+			error(Eio);
 		}
-	qunlock(&ctlr->chanlock);
-	panic("miller is a lazy git");
-	return nil;
+		qunlock(&ctlr->chanlock);
+		tsleep(&up->sleep, return0, 0, 1);
+	}
 }
 
 static void

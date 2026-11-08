@@ -58,6 +58,8 @@ Visnet: module
 		detect:	fn(n: self ref Net, pix: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string);
 		scale:	fn(n: self ref Net, w, h: int): real;
 		found:	fn(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: real): (array of ref Det, string);
+		# the heads (from this engine or another) as what was found
+		fromheads:	fn(n: self ref Net, heads: array of ref Head, w, h: int, scale, thresh, iou: real): (array of ref Det, string);
 		# the same from an I420 frame's planes (w and h even)
 		detecti420:	fn(n: self ref Net, y, cb, cr: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string);
 	};

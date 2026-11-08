@@ -517,6 +517,13 @@ Net.found(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: 
 	(heads, err) := n.run(input);
 	if(err != nil)
 		return (nil, err);
+	return n.fromheads(heads, w, h, scale, thresh, iou);
+}
+
+# the network's heads, from whichever engine ran it, as what was found in
+# a w by h picture letterboxed by scale
+Net.fromheads(n: self ref Net, heads: array of ref Head, w, h: int, scale, thresh, iou: real): (array of ref Det, string)
+{
 	pt := big 0;
 	if(profon)
 		pt = pnow();

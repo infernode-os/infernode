@@ -1,0 +1,15 @@
+[package]
+name = "trtsrv"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "TensorRT engines on the Jetson's GPU and DLAs as a 9P file tree on standard input and output, for vision(4) (#1086)"
+license = "MIT"
+publish = false
+
+[dependencies]
+styx9p = { git = "https://github.com/pdfinn/styx9p", rev = "f87ea4d9a29dbcdad1c971d12f7fe40b12336100" }
+tokio = { version = "1.40", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync"] }
+
+[profile.release]
+opt-level = 3

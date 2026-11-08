@@ -12,6 +12,7 @@
  * This was the body of os/bcm2837/io.h until a second SoC needed it.
  */
 
+#ifndef BCMBLOCKS	/* a BCM2712's io.h: they are above 4GB, and not at these offsets */
 enum
 {
 	GPIOREGS	= PHYSIO+0x200000,
@@ -20,6 +21,7 @@ enum
 	MBOXREGS	= PHYSIO+0x00B880,	/* VideoCore mailbox */
 	SYSTIMERREGS	= PHYSIO+0x003000,	/* free-running 1MHz counter */
 };
+#endif
 
 /* BCM system timer: a 64-bit free-running counter ticking at 1MHz */
 enum
@@ -42,10 +44,12 @@ enum
  */
 enum
 {
+#ifndef BCMBLOCKS
 	ARMTIMERREGS	= PHYSIO+0x00B400,
 	PMREGS		= PHYSIO+0x100000,	/* power management / watchdog */
 	SDHOSTREGS	= PHYSIO+0x202000,	/* BCM2835 SDHOST: the card */
 	EMMCREGS	= PHYSIO+0x300000,	/* Arasan SDHCI: the radio's, unless the card is built onto it */
+#endif
 
 	/*
 	 * The watchdog, which is how this SoC reboots: there is no reset

@@ -1,0 +1,91 @@
+#!/dis/sh -n
+#
+# disk/gefsroot [-r] [-s src] part -- put a userland on a gefs root
+#
+# Copies the card's dis/ lib/ fonts/ icons/ (or src's) onto the gefs(4)
+# file system on part (#S/part, as rootpath names it, or a path), so
+# that rootpath's "gefs part" line boots from it. A snapshot is taken
+# first, install.<seconds>, so an update can be undone from /n/dump.
+# usr/ is copied only when the disk has none: it is the machine's own,
+# never overwritten.
+#
+# Each tree is copied whole beside the old one and then put in its
+# place, so files the new tree no longer has go too. A running gefs
+# root still has the old trees bound, so the new ones are used from the
+# next boot.
+#
+# It runs in the caller's namespace (sh -n), so a disk it mounts stays
+# on /n/gefs, /n/gefs.adm and /n/dump afterwards, as at boot.
+#
+# -r reams part first (a new, empty file system owned by this user);
+# not allowed on a mounted disk.
+#
+load std
+
+ream=no
+src=/n/dos
+args=$*
+while {~ ${hd $args} -*} {
+	if {~ ${hd $args} -r} {
+		ream=yes
+		args=${tl $args}
+	} {~ ${hd $args} -s} {
+		args=${tl $args}
+		src=${hd $args}
+		args=${tl $args}
+	} {
+		echo 'usage: disk/gefsroot [-r] [-s src] part' >[1=2]
+		raise usage
+	}
+}
+if {! ~ $#args 1} {
+	echo 'usage: disk/gefsroot [-r] [-s src] part' >[1=2]
+	raise usage
+}
+part=$args
+dev=$part
+if {! ftest -e $dev} {
+	dev='#S/'^$dev
+}
+
+if {ftest -e /n/gefs.adm/ctl} {
+	if {~ $ream yes} {
+		echo 'gefsroot: a gefs is mounted on /n/gefs: will not ream' >[1=2]
+		raise mounted
+	}
+	echo gefsroot: using the gefs on /n/gefs
+} {
+	if {~ $ream yes} {
+		disk/gefs -r `{cat /dev/user} $dev
+	}
+	disk/gefs -M main:/n/gefs -M adm:/n/gefs.adm -M dump:/n/dump $dev
+	if {! ftest -e /n/gefs.adm/ctl} {
+		echo 'gefsroot: cannot mount '^$dev >[1=2]
+		raise mount
+	}
+}
+
+snap=install.`{date -n}
+echo snap main $snap > /n/gefs.adm/ctl
+echo gefsroot: snapshot $snap, in /n/dump/$snap
+
+for(d in dis lib fonts icons) {
+	if {ftest -d $src/$d} {
+		echo gefsroot: $d
+		rm -rf /n/gefs/$d.new
+		cp -r $src/$d /n/gefs/$d.new
+		rm -rf /n/gefs/$d
+		mv /n/gefs/$d.new /n/gefs/$d
+	}
+}
+if {ftest -d $src/usr} {
+	if {! ftest -d /n/gefs/usr} {
+		echo gefsroot: usr, the first time
+		cp -r $src/usr /n/gefs/usr
+	}
+}
+echo sync > /n/gefs.adm/ctl
+du -s /n/gefs
+echo 'gefsroot: done. To boot from it, /n/dos/rootpath reads:'
+echo '	gefs '^$part
+echo '	local'

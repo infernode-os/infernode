@@ -272,6 +272,21 @@ xhole(ulong addr, ulong size)
 	iunlock(&xlists.l);
 }
 
+/* how much is free, in all */
+ulong
+xbytesfree(void)
+{
+	Hole *h;
+	ulong n;
+
+	n = 0;
+	ilock(&xlists.l);
+	for(h = xlists.table; h; h = h->link)
+		n += h->size;
+	iunlock(&xlists.l);
+	return n;
+}
+
 void
 xsummary(void)
 {

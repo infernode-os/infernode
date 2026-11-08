@@ -490,6 +490,14 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 				inv.auths = "sends_llm" :: inv.auths;
 			inv.sources = ("sends_llm", "via path " + p) :: inv.sources;
 		}
+		# A video feed may be a live camera: reading it sees the room the
+		# machine is in (camsrv(4), infernode-os/infernode#1005). A grant
+		# above /mnt/video reaches it as well.
+		if(pathwithin("/mnt/video", p) || pathwithin(p, "/mnt/video")) {
+			if(!contains(inv.auths, "reads_video"))
+				inv.auths = "reads_video" :: inv.auths;
+			inv.sources = ("reads_video", "via path " + p) :: inv.sources;
+		}
 		if(pathwithin("/mnt/mcp", p)) {
 			if(!contains(inv.auths, "calls_mcp"))
 				inv.auths = "calls_mcp" :: inv.auths;

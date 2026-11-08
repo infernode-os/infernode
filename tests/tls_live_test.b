@@ -151,9 +151,13 @@ testTLSInsecure(t: ref T)
 	t.assert(len response > 0, "got HTTP response");
 	t.assert(hasprefix(response, "HTTP/"), "response starts with HTTP/");
 
+	# Any status read back is the record layer working both ways, which is
+	# what this tests; which one is the server's policy. example.com's
+	# answered a soak's GET with 403 one time in about forty, and that was
+	# counted as TLS failing, on a handshake that had succeeded.
 	status := getstatus(response);
 	t.log(sys->sprint("HTTP status: %d", status));
-	t.assert(status >= 200 && status < 400, "HTTP status 2xx/3xx");
+	t.assert(status >= 100 && status < 600, "an HTTP status read back");
 }
 
 # ============================================================
@@ -190,9 +194,13 @@ testTLSVerified(t: ref T)
 
 	t.assert(hasprefix(response, "HTTP/"), "response starts with HTTP/");
 
+	# Any status read back is the record layer working both ways, which is
+	# what this tests; which one is the server's policy. example.com's
+	# answered a soak's GET with 403 one time in about forty, and that was
+	# counted as TLS failing, on a handshake that had succeeded.
 	status := getstatus(response);
 	t.log(sys->sprint("HTTP status: %d", status));
-	t.assert(status >= 200 && status < 400, "HTTP status 2xx/3xx");
+	t.assert(status >= 100 && status < 600, "an HTTP status read back");
 }
 
 # ============================================================

@@ -213,6 +213,7 @@ TARG=\
 	vacput.dis\
 	ventisrv.dis\
 	vid9p.dis\
+	camsrv.dis\
 	wav2iaf.dis\
 	vm.dis\
 	wc.dis\
@@ -344,6 +345,7 @@ SYSMODULES=\
 	gdl90.m\
 	post9p.m\
 	sdg.m\
+	bayer.m\
 
 DISBIN=$ROOT/dis
 

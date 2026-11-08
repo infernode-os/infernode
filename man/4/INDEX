@@ -4,6 +4,7 @@ acme acme
 archfs archfs
 bt9p bt9p
 btmock bt9p
+camsrv camsrv
 countfs countfs
 cpu cpu
 dbfs dbfs

@@ -729,6 +729,15 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Emulator and the Dis VM
 
+- **Option and Alt are the compose key only when tapped alone (#1113).**
+  The SDL3 display started a compose sequence on every Alt or Option
+  release, so after typing a character with Option (Option-Shift-hyphen
+  for an em dash on macOS), Option-clicking, or using AltGr on a
+  European layout, the next keys were read as a compose sequence: two
+  spaces became `␣`, and other keys were swallowed or came out in a
+  burst. Compose now starts only when Alt goes down and up with no other
+  key, typed text or mouse button between, as Plan 9's compose key is
+  used; tapping Option then `e` `m` still gives an em dash.
 - **Fixes from fuzzing the kernels and JITs (#1069).** A kill no longer
   hangs on a 9P server that never answers. A compile refused memory no
   longer leaves the JIT's lock held, stopping every later module load.

@@ -239,8 +239,8 @@ installation, especially bare-metal nodes and systems that ran
   (`#J`), SPI (`#Q`), PWM (`#W`), the real-time clock, the fan, the
   power button, NVMe at PCIe gen 2 (370 MB/s read) and booting from
   it, and Lucifer on either HDMI port. `jitbench` takes 6.0 s, against
-  a Pi 4's 10.4. One board has run it, a Pi 5 8GB rev 1.0, for 24
-  hours with every device busy and no panic. `os/bcm2712/README.md` is
+  a Pi 4's 10.4. One board has run it, a Pi 5 8GB rev 1.0, in two
+  12-hour soaks with every device busy and no panic. `os/bcm2712/README.md` is
   the guide and `os/bcm2712/INVENTORY.md` says what is proved, feature
   by feature. No emulator models a Pi 5, so CI builds the kernel but
   cannot boot it.
@@ -258,7 +258,7 @@ installation, especially bare-metal nodes and systems that ran
   `runproc` no longer spins on the run-queue lock at `splhi`, starving
   `ready()`. A process preempted between winning a spin lock and
   raising its priority no longer deadlocks a spinner on its core
-  (`lock loop ... held by pc 0x0`, #640). The audio jack's fuzz, a
+  (`lock loop ... held by pc 0x0`, #640, #1069). The audio jack's fuzz, a
   fractional clock divider, is gone. kfs marks itself clean when idle,
   so a reboot or a power cut while idle needs no check.
 - **Dis on every core (#1038).** The native kernel runs one Dis VM per
@@ -835,17 +835,20 @@ installation, especially bare-metal nodes and systems that ran
   networks, and drift a few seconds an hour.** Certificate checks need
   a correct date, so set the clock if a board will make verified TLS
   connections.
-- **On a Pi 5, a network interface can stop passing traffic for good
-  under heavy load (#1120),** when a writer waits behind IP output
-  blocked in a device write. Restart the board if it happens.
+- **A network interface can stop passing traffic for good under heavy
+  load (#1120),** when a writer waits behind IP output blocked in a
+  device write. It has been seen once, on a Pi 5 after 74 minutes; a
+  later 85-minute run of the same kernel did not. The code is shared by
+  every board, but the trigger seen was the Pi 5's Ethernet stalling.
+  Restart the board if it happens.
 - **The Pi 5 has run on one board.** The D0 stepping's pin tables have
   run only as a dry run, Pi 5s with 1 to 4 GB have been simulated with
   `memlimit=`, and the bench board logs under-voltage at boot. Pools
   keep what they grow to, so after one VM's runaway the others have
   little.
 - **A remote camera mount can still drop now and then.** #1110 fixes
-  the inbound TCP resets behind most drops, but one reset in two hours
-  remained on the Pi 5. Mount again if it happens.
+  the inbound TCP resets behind most drops, but one reset remained in a
+  two-hour Pi 5 soak. Mount again if it happens.
 - **The remote camera lags.** Frames travel uncompressed, about 8 MB/s
   at 30 frames a second, so over the network the picture trails the
   camera, worse on Wi-Fi than wired. Setting `fps 15` halves the data:

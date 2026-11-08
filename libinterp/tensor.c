@@ -351,35 +351,115 @@ convgemm(Conv *v)
 }
 
 /* a depthwise convolution: each channel by its own kh x kw */
+/* one output of a depthwise convolution, the window clipped to the input */
+static float
+dw1(Conv *v, float *in, float *k, int oy, int ox)
+{
+	int ky, kx, iy, ix, y0, x0;
+	float s;
+
+	y0 = oy*v->stride - v->pad;
+	x0 = ox*v->stride - v->pad;
+	s = 0;
+	for(ky = 0; ky < v->kh; ky++){
+		iy = y0 + ky;
+		if(iy < 0 || iy >= v->h)
+			continue;
+		for(kx = 0; kx < v->kw; kx++){
+			ix = x0 + kx;
+			if(ix < 0 || ix >= v->w)
+				continue;
+			s += in[iy*v->w + ix] * k[ky*v->kw + kx];
+		}
+	}
+	return s;
+}
+
+#ifdef NEON
+/*
+ * a row of a 3x3 depthwise convolution, four outputs at a time, from ox
+ * while every input it loads is in its row (no load past a row's end);
+ * the outputs it did not reach are left to the caller. Rows r0 r1 r2 are
+ * the window's, whole (the row is not at an edge).
+ */
+static int
+dw3row(float *r0, float *r1, float *r2, int w, int stride, int pad, float *k, float *o, int ox, int ow)
+{
+	float32x4_t a, k0, k1, k2, k3, k4, k5, k6, k7, k8;
+	float32x4x2_t e0, e1, e2, f0, f1, f2;
+	int x0;
+
+	k0 = vdupq_n_f32(k[0]); k1 = vdupq_n_f32(k[1]); k2 = vdupq_n_f32(k[2]);
+	k3 = vdupq_n_f32(k[3]); k4 = vdupq_n_f32(k[4]); k5 = vdupq_n_f32(k[5]);
+	k6 = vdupq_n_f32(k[6]); k7 = vdupq_n_f32(k[7]); k8 = vdupq_n_f32(k[8]);
+	for(; ox + 4 <= ow; ox += 4){
+		x0 = ox*stride - pad;
+		if(x0 < 0)
+			break;
+		if(stride == 1){
+			if(x0 + 5 >= w)	/* reads x0 .. x0+5 */
+				break;
+			a = vmulq_f32(vld1q_f32(r0+x0), k0);
+			a = vfmaq_f32(a, vld1q_f32(r0+x0+1), k1);
+			a = vfmaq_f32(a, vld1q_f32(r0+x0+2), k2);
+			a = vfmaq_f32(a, vld1q_f32(r1+x0), k3);
+			a = vfmaq_f32(a, vld1q_f32(r1+x0+1), k4);
+			a = vfmaq_f32(a, vld1q_f32(r1+x0+2), k5);
+			a = vfmaq_f32(a, vld1q_f32(r2+x0), k6);
+			a = vfmaq_f32(a, vld1q_f32(r2+x0+1), k7);
+			a = vfmaq_f32(a, vld1q_f32(r2+x0+2), k8);
+		}else{
+			if(x0 + 9 >= w)	/* reads x0 .. x0+9 */
+				break;
+			/* even and odd columns: x0, x0+2, ... and x0+1, x0+3, ...;
+			 * from x0+2, the window's third column */
+			e0 = vld2q_f32(r0+x0); f0 = vld2q_f32(r0+x0+2);
+			e1 = vld2q_f32(r1+x0); f1 = vld2q_f32(r1+x0+2);
+			e2 = vld2q_f32(r2+x0); f2 = vld2q_f32(r2+x0+2);
+			a = vmulq_f32(e0.val[0], k0);
+			a = vfmaq_f32(a, e0.val[1], k1);
+			a = vfmaq_f32(a, f0.val[0], k2);
+			a = vfmaq_f32(a, e1.val[0], k3);
+			a = vfmaq_f32(a, e1.val[1], k4);
+			a = vfmaq_f32(a, f1.val[0], k5);
+			a = vfmaq_f32(a, e2.val[0], k6);
+			a = vfmaq_f32(a, e2.val[1], k7);
+			a = vfmaq_f32(a, f2.val[0], k8);
+		}
+		vst1q_f32(o+ox, a);
+	}
+	return ox;
+}
+#endif
+
 static void
 convdw(Conv *v)
 {
-	int ch, oy, ox, ky, kx, iy, ix, y0, x0, edge;
-	float *in, *k, *o, s;
+	int ch, oy, ox, y0, fast;
+	float *in, *k, *o, *r;
 
+	fast = v->kh == 3 && v->kw == 3 && (v->stride == 1 || v->stride == 2);
 	for(ch = 0; ch < v->c; ch++){
 		in = v->in + (uvlong)ch * v->h * v->w;
 		k = v->wt + (uvlong)ch * v->kh * v->kw;
 		o = v->out + (uvlong)ch * v->oh * v->ow;
 		for(oy = 0; oy < v->oh; oy++){
+			r = o + (uvlong)oy * v->ow;
 			y0 = oy*v->stride - v->pad;
-			for(ox = 0; ox < v->ow; ox++){
-				x0 = ox*v->stride - v->pad;
-				edge = y0 < 0 || x0 < 0 || y0+v->kh > v->h || x0+v->kw > v->w;
-				s = 0;
-				for(ky = 0; ky < v->kh; ky++){
-					iy = y0 + ky;
-					if(edge && (iy < 0 || iy >= v->h))
-						continue;
-					for(kx = 0; kx < v->kw; kx++){
-						ix = x0 + kx;
-						if(edge && (ix < 0 || ix >= v->w))
-							continue;
-						s += in[iy*v->w + ix] * k[ky*v->kw + kx];
-					}
+			ox = 0;
+			if(fast && y0 >= 0 && y0 + 3 <= v->h){
+				/* the left edge, then the interior four at a time */
+				while(ox < v->ow && ox*v->stride - v->pad < 0){
+					r[ox] = dw1(v, in, k, oy, ox);
+					ox++;
 				}
-				o[oy*v->ow + ox] = s;
+#ifdef NEON
+				ox = dw3row(in + (uvlong)y0*v->w, in + (uvlong)(y0+1)*v->w, in + (uvlong)(y0+2)*v->w,
+					v->w, v->stride, v->pad, k, r, ox, v->ow);
+#endif
 			}
+			for(; ox < v->ow; ox++)
+				r[ox] = dw1(v, in, k, oy, ox);
 		}
 		biasact(o, v->oh * v->ow, v->bias[ch], v->act);
 	}
@@ -485,8 +565,8 @@ void
 Tensor_maxpool(void *fp)
 {
 	F_Tensor_maxpool *f;
-	float *in, *o, m, x;
-	int c, h, w, k, s, p, oh, ow, ch, oy, ox, ky, kx, iy, ix;
+	float *in, *o, *col, *src, m;
+	int c, h, w, k, s, p, oh, ow, ch, oy, ox, ky, kx, iy, ix, x0, first;
 
 	f = fp;
 	c = f->c; h = f->h; w = f->w; k = f->k; s = f->stride; p = f->pad;
@@ -499,27 +579,46 @@ Tensor_maxpool(void *fp)
 	o = floats(f->out, (uvlong)c*oh*ow);
 	if(f->in == f->out)
 		error(exBounds);
+	col = malloc((uvlong)w * sizeof(float));
+	if(col == nil)
+		error(exNomem);
 	release();
+	/*
+	 * separably: for each output row, the column maxima over the
+	 * window's rows (those in the input), then the row maxima of those
+	 * over the window's columns: the same maximum, for 2k comparisons an
+	 * output where the window has k*k
+	 */
 	for(ch = 0; ch < c; ch++)
-		for(oy = 0; oy < oh; oy++)
+		for(oy = 0; oy < oh; oy++){
+			first = 1;
+			for(ky = 0; ky < k; ky++){
+				iy = oy*s - p + ky;
+				if(iy < 0 || iy >= h)
+					continue;
+				src = in + ((uvlong)ch*h + iy)*w;
+				if(first){
+					for(ix = 0; ix < w; ix++)
+						col[ix] = src[ix];
+					first = 0;
+				}else
+					for(ix = 0; ix < w; ix++)
+						if(src[ix] > col[ix])
+							col[ix] = src[ix];
+			}
 			for(ox = 0; ox < ow; ox++){
+				x0 = ox*s - p;
 				m = -3.4e38f;
-				for(ky = 0; ky < k; ky++){
-					iy = oy*s - p + ky;
-					if(iy < 0 || iy >= h)
-						continue;
-					for(kx = 0; kx < k; kx++){
-						ix = ox*s - p + kx;
-						if(ix < 0 || ix >= w)
-							continue;
-						x = in[((uvlong)ch*h + iy)*w + ix];
-						if(x > m)
-							m = x;
-					}
+				for(kx = 0; kx < k; kx++){
+					ix = x0 + kx;
+					if(ix >= 0 && ix < w && col[ix] > m)
+						m = col[ix];
 				}
 				o[((uvlong)ch*oh + oy)*ow + ox] = m;
 			}
+		}
 	acquire();
+	free(col);
 }
 
 void

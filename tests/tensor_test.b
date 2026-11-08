@@ -161,6 +161,10 @@ testConv(t: ref T)
 		Shape(300, 3, 50, 17, 1, 1, 1, 0, 1, Tensor->Silu),	# K=300, N=150
 		Shape(6, 9, 11, 6, 3, 3, 2, 1, 6, Tensor->Silu),	# depthwise, stride 2
 		Shape(8, 6, 6, 8, 5, 5, 1, 2, 8, Tensor->None),		# depthwise 5x5
+		Shape(5, 16, 23, 5, 3, 3, 1, 1, 5, Tensor->Silu),	# depthwise 3x3 s1, NEON's interior, odd width
+		Shape(4, 17, 30, 4, 3, 3, 2, 1, 4, Tensor->Silu),	# depthwise 3x3 s2, NEON's interior
+		Shape(3, 9, 41, 3, 3, 3, 2, 1, 3, Tensor->None),	# s2, an odd width, row end
+		Shape(2, 4, 4, 2, 3, 3, 1, 0, 2, Tensor->None),		# no padding, small
 		Shape(1, 1, 1, 1, 1, 1, 1, 0, 1, Tensor->None),
 		Shape(4, 8, 8, 85, 1, 1, 1, 0, 1, Tensor->Sigmoid),	# a head's 85 outputs
 	};
@@ -212,26 +216,30 @@ testElementwise(t: ref T)
 
 testPool(t: ref T)
 {
-	(c, h, w) := (3, 7, 6);
+	(c, h, w) := (3, 15, 14);
 	in := rnds(c*h*w);
-	for(k := 1; k <= 5; k += 2){
-		p := k/2;
-		out := array[4*c*h*w] of byte;
-		tensor->maxpool(tobytes(in), c, h, w, k, 1, p, out);
-		want := array[c*h*w] of real;
+	# the SPP block's 5, 9 and 13, with padding; and stride 2, no padding
+	cases := array[] of {(1, 1, 0), (3, 1, 1), (5, 1, 2), (9, 1, 4), (13, 1, 6), (2, 2, 0), (3, 2, 1)};
+	for(i := 0; i < len cases; i++){
+		(k, s, p) := cases[i];
+		oh := (h + 2*p - k) / s + 1;
+		ow := (w + 2*p - k) / s + 1;
+		out := array[4*c*oh*ow] of byte;
+		tensor->maxpool(tobytes(in), c, h, w, k, s, p, out);
+		want := array[c*oh*ow] of real;
 		for(ch := 0; ch < c; ch++)
-			for(y := 0; y < h; y++)
-				for(x := 0; x < w; x++){
+			for(y := 0; y < oh; y++)
+				for(x := 0; x < ow; x++){
 					m := -1.0e30;
-					for(dy := -p; dy <= p; dy++)
-						for(dx := -p; dx <= p; dx++){
-							(iy, ix) := (y+dy, x+dx);
+					for(dy := 0; dy < k; dy++)
+						for(dx := 0; dx < k; dx++){
+							(iy, ix) := (y*s - p + dy, x*s - p + dx);
 							if(iy >= 0 && iy < h && ix >= 0 && ix < w && in[(ch*h+iy)*w+ix] > m)
 								m = in[(ch*h+iy)*w+ix];
 						}
-					want[(ch*h+y)*w+x] = m;
+					want[(ch*oh+y)*ow+x] = m;
 				}
-		close(t, toreals(out), want, 1.0e-6, sys->sprint("maxpool %d", k));
+		close(t, toreals(out), want, 0.0, sys->sprint("maxpool %d stride %d", k, s));
 	}
 }
 

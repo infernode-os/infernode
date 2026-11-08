@@ -4,7 +4,7 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
-## [VERSION] - 2026-11-08
+## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis
 on every core of a board: one VM a core, each with its own heap and
@@ -245,7 +245,7 @@ installation, especially bare-metal nodes and systems that ran
   by feature. No emulator models a Pi 5, so CI builds the kernel but
   cannot boot it.
 - **A Pi 5 card image is attached to the release.**
-  `infernode-VERSION-rpi5.img.xz` is built by the release job and
+  `infernode-0.10.0-rpi5.img.xz` is built by the release job and
   checked as the boot ROM and firmware read a card (`piromcheck`), and
   by `piimage_test` as the other boards' cards are (#1125). It is not in
   Raspberry Pi Imager, whose entry lists the 3B+ and 4B only, and it
@@ -389,6 +389,12 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Applications
 
+- **Xenith's Get updates a live document of a file changed outside it
+  (#1114).** When an agent or another program changed a file, Get read
+  the new text into the window but left its Live view or Zerox twin
+  showing the old document. Get now counts as an edit: a small file's
+  document is set again at once, and a large one's when the background
+  read finishes. A document that is not live is left until `Live`.
 - **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
   `/prog` (#1019).** Lucifer looked for an app's main process every
   half second, then read every process's status every half second

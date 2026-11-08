@@ -38,6 +38,60 @@ taps h e l l o enter
 sleep 3
 ls /mnt/ui/activity/0/conversation | wc -l > /tmp/nconv.after
 
+# With the mouse, the keys go where the last click was, not where the
+# mouse crossed into the strip on its way down to them.  A shell in the
+# presentation zone (its transcript #sshell/fs's body, copied to
+# /tmp/body.<step>), in plain mode (nothing put right).
+echo mode plain > /mnt/osk/ctl
+fn mtaps {
+	for k in $* {
+		xy=`{centre $k}
+		echo m $xy 0 > /dev/pointer
+		echo m $xy 1 > /dev/pointer
+		echo m $xy 0 > /dev/pointer
+	}
+}
+fn click { echo m $1 $2 1 > /dev/pointer; echo m $1 $2 0 > /dev/pointer }
+fn body {
+	sleep 3
+	cp /tmp/mshell/body /tmp/body.$1
+	ls /mnt/ui/activity/0/conversation | wc -l > /tmp/nconv.$1
+	echo R $1
+}
+mkdir -p /tmp/mshell
+echo 'create id=shell type=app dis=/dis/wm/shell.dis label=shell' > /mnt/ui/activity/0/presentation/ctl
+echo 'center id=shell' > /mnt/ui/activity/0/presentation/ctl
+sleep 5
+mount -A '#sshell/fs' /tmp/mshell
+# a click in the chat, then over the shell to the keys: to the chat
+click 100 400
+echo m 540 300 0 > /dev/pointer
+keys
+mtaps h i enter
+body tochat
+# a click in the shell, then over the chat to the keys: to the shell
+click 540 300
+echo m 100 300 0 > /dev/pointer
+mtaps e c h o space o k enter
+body toshell
+echo 'kill id=shell' > /mnt/ui/activity/0/presentation/ctl
+unmount /tmp/mshell
+sleep 2
+# wm/wm in the zone with a shell of its own: a click in it, then over
+# the chat to the keys: to wm/wm's shell
+echo 'create id=wm type=app dis=/dis/wm/wm.dis label=wm data=wm/shell' > /mnt/ui/activity/0/presentation/ctl
+echo 'center id=wm' > /mnt/ui/activity/0/presentation/ctl
+sleep 6
+mount -A '#sshell/fs' /tmp/mshell
+scap /tmp/wm.img
+click 540 300
+echo m 100 300 0 > /dev/pointer
+mtaps e c h o space w m enter
+body towm
+echo 'kill id=wm' > /mnt/ui/activity/0/presentation/ctl
+unmount /tmp/mshell
+echo mode text > /mnt/osk/ctl
+
 # a keyboard attached: it goes, and the zones have the screen
 echo kbd attach kt9 Test Keyboard > /dev/consctl
 snap attached

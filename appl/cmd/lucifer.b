@@ -262,6 +262,12 @@ mainreq: chan of (ref Client, array of byte, Sys->Rwrite);
 
 # Last known mouse X — updated by mouseproc, used by kbdproc for focus-follows-mouse
 lastmousex := 0;
+# Where the last press outside the keyboard on the screen was, and
+# whether the pointer is in its strip now.  Typing on that keyboard,
+# the pointer is on it, and where the mouse crossed into its strip
+# says nothing: the keys go where the last click put the caret.
+lastpressx := 0;
+ptrindock := 0;
 
 # Zone layout percentages (default; modified by ctx expand/restore)
 conv_pct := 30;
@@ -2977,10 +2983,14 @@ mouseproc()
 		# decides (on a desktop) which zone has the keyboard.
 		if(dockclient != nil && (dockgrab || dockscr != nil && p.xy.in(dockr))){
 			dockgrab = p.buttons != 0;
+			ptrindock = 1;
 			alt { dockclient.ptr <-= p => ; * => ; }
 			continue;
 		}
+		ptrindock = 0;
 		lastmousex = p.xy.x;
+		if(p.buttons)
+			lastpressx = p.xy.x;
 		if(wmclient->win.pointer(*p) == 0) {
 			wasdown := prevb;
 			prevb = p.buttons;
@@ -3214,9 +3224,15 @@ kbdproc()
 		if(mobile) {
 			if(expanded_zone == 1 && ktp != nil && ktp.activeappid != "")
 				towkapp = 1;
-		} else if(pres_zone_minx > 0 && lastmousex >= pres_zone_minx &&
-				lastmousex < pres_zone_maxx && ktp != nil && ktp.activeappid != "") {
-			towkapp = 1;
+		} else {
+			# the mouse decides, except on the keyboard on the screen:
+			# then the last click does
+			kx := lastmousex;
+			if(ptrindock && dockscr != nil)
+				kx = lastpressx;
+			if(pres_zone_minx > 0 && kx >= pres_zone_minx &&
+					kx < pres_zone_maxx && ktp != nil && ktp.activeappid != "")
+				towkapp = 1;
 		}
 		if(towkapp) {
 			routed := 0;

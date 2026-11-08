@@ -1026,6 +1026,21 @@ ctlcmd2(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		w.limit.q1 = w.addr.q1;
 		return (TRUE, 10, nil, FALSE);
 	}
+	if(strncmp(p, "wrap ", 5) == 0){	# wrap word|char: lines by word or anywhere
+		pp := p[5:];
+		q := utils->strchr(pp, '\n');
+		if(q < 0)
+			q = len pp;
+		case pp[0:q] {
+		"word" or "char" =>
+			w.setwrap(pp[0:q] == "word");
+		* =>
+			return (TRUE, 0, Ebadctl, FALSE);
+		}
+		if(q < len pp)
+			q++;
+		return (TRUE, 5 + q, nil, FALSE);
+	}
 	if(strncmp(p, "nomark", 6) == 0){	# turn off automatic marking
 		w.nomark = TRUE;
 		return (TRUE, 6, nil, FALSE);

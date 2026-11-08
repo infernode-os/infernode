@@ -8,8 +8,9 @@
 #     tools/mkpiimage.sh [--size MB] [--firmware DIR] [--manifest FILE] [--radio-manifest FILE]
 #                        [--bt-manifest FILE] BOARD KERNEL OUT.img
 #
-#     BOARD      rpi3bplus (the kernel is bcm2837-kernel.img) or
-#                rpi4b (bcm2711-kernel.img). One board per image: the
+#     BOARD      rpi3bplus (the kernel is bcm2837-kernel.img),
+#                rpi4b (bcm2711-kernel.img) or
+#                rpi5 (bcm2712-kernel.img). One board per image: the
 #                kernels differ, and so do the firmware and config.txt.
 #     KERNEL     the kernel, as tests/host/baremetal_test.sh leaves it in
 #                BAREMETAL_BUILD_DIR; it goes on the card as infernode8.img.
@@ -51,8 +52,9 @@
 #   - usr/inferno, the home a hosted tree carries, as git tracks it but
 #     for keyring/default (a test key): it is the machine's writable
 #     home, and the first boot makes its secstore account under it.
-# No skiplogon, wifi, netconsole or rootpath: a new card starts the
-# login screen and offers nothing on the network.
+# No file boot reads as a setting (skiplogon, wifi, netconsole, rootpath,
+# cnsamode, camera, cpulisten, bt, btkeys, vms, usbquirks): a new card
+# starts the login screen and offers nothing on the network.
 #
 # Needs sh, git, python3, and curl unless --firmware is given.
 #
@@ -120,8 +122,12 @@ rpi4b)
 	SOC=bcm2711
 	FIRMWARE="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"
 	CARDFILES="config.txt tryboot.txt tryboot.cmd" ;;
+rpi5)
+	SOC=bcm2712
+	FIRMWARE="bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb"
+	CARDFILES="config.txt tryboot.txt tryboot.cmd" ;;
 *)
-	echo "mkpiimage: unknown board $BOARD (rpi3bplus or rpi4b)" >&2
+	echo "mkpiimage: unknown board $BOARD (rpi3bplus, rpi4b or rpi5)" >&2
 	usage ;;
 esac
 

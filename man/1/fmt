@@ -45,3 +45,6 @@ Empty lines are inserted between input files.
 is idempotent: it leaves already formatted text unchanged.
 .SH SOURCE
 .B /appl/cmd/fmt.b
+.SH SEE ALSO
+.IR md (1),
+which fills Markdown.

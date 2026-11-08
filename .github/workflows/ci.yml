@@ -759,10 +759,10 @@ jobs:
               timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test ecc_test secp256k1_test tls_matrix_test
+              tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
           - shard: 2
             tests: >-
-              amd64_jit_code_leak_test audioring_test kernrandom_test awk_builtins_test calendar9p_test
+              amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
               cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test mpexp_test
               libkern_copy_test
               emulator_leader_lifecycle_test exec_confinement_test
@@ -1175,7 +1175,7 @@ jobs:
             xenith_event_test xenith_image_test xenith_browse_test \
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
-            xenith_race_test xenith_doc_test; do
+            xenith_race_test xenith_doc_test xenith_wrap_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1224,6 +1224,22 @@ jobs:
           Linux/amd64/bin/limbo
           Linux/amd64/bin/mk
         retention-days: 14
+
+  # The required check master's ruleset names.  The GUI job above was
+  # split into parts, each reported as "... (part)"; no job reported the
+  # plain name any more, so the ruleset waited on it for ever.  This job
+  # reports it, and passes only when every part passed.
+  linux-amd64-gui-gate:
+    name: Linux AMD64 SDL3 GUI Build & Test
+    needs: linux-amd64-gui
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+    - name: Every part passed
+      run: |
+        echo "linux-amd64-gui: ${{ needs.linux-amd64-gui.result }}"
+        test "${{ needs.linux-amd64-gui.result }}" = success
 
   # ─────────────────────────────────────────────
   # Linux ARM64: Full bootstrap build from source

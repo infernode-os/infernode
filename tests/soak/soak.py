@@ -267,10 +267,11 @@ fn bad {
 fn run { ftest -e /tmp/soak/run }
 '''
 
-def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=False):
+def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=False, setup=None):
     # vm0: the load starts a new sh (sh -c), which cannot load Sh in another VM
     # ("Sh": module not loaded, 2026-11-08), so it stays in VM 0 with the sink
-    return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every, vm0=vm0)
+    # setup: sh lines run once before the loops (a device's mode, as soak5.sh set them)
+    return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every, vm0=vm0, setup=setup)
 
 # Intensity. Reads are cheap and stay frequent; writes to flash are small,
 # verified and budgeted (bytes per day at each profile in the comments).
@@ -351,10 +352,10 @@ LOADS = [
     L('spi', 'SPI loopback compare', board=r'''
 	read 8192 < /dis/sh.dis > /tmp/soak/spi/s; cat /tmp/soak/spi/s > '#Q/spi0'; cat '#Q/spi0' > /tmp/soak/spi/r
 	cmp /tmp/soak/spi/s /tmp/soak/spi/r > /tmp/soak/spi/out >[2=1] || bad spi compare
-	tick spi; sleep 1''', needs=['spi']),
+	tick spi; sleep 1''', needs=['spi'], setup="echo loop 1 > '#Q/spictl'"),
     L('i2c', 'I2C reads', board=r'''
 	read 1 < '#J/i2c1data' > /dev/null >[2] /tmp/soak/i2c/err || bad i2c read
-	tick i2c; sleep 1''', needs=['i2c']),
+	tick i2c; sleep 1''', needs=['i2c'], setup="echo addr 0x50 > '#J/i2c1ctl'"),
     L('gpio', 'the loopback jig: drive each pair both ways', board=r'''
 	for(p in $gpiopairs) {
 		x = `{echo $p | sed 's/:.*//'}; y = `{echo $p | sed 's/.*://'}
@@ -588,6 +589,8 @@ class Run:
         body += 'gpiopairs = (%s)\n' % ' '.join('%d:%d' % p for p in (self.gpiopairs or []))
         for l in loads:
             body += 'mkdir -p /tmp/soak/%s\n' % l['name']
+            if l.get('setup'):
+                body += l['setup'] + ' >[2] /tmp/soak/%s/setup.err\n' % l['name']
         body += 'mkdir -p /tmp/soak/fuzz/scratch\n'
         body += 'echo > /tmp/soak/run\n'
         for l in loads:
@@ -778,10 +781,12 @@ class Run:
         open(os.path.join(self.dir, 'memtags', '%s.txt' % tag), 'w').write(out)
 
     def fail(self, name, text):
-        d = os.path.join(self.dir, 'fails'); os.makedirs(d, exist_ok=True)
-        n = len(glob.glob(os.path.join(d, name + '-*')))
-        open(os.path.join(d, '%s-%03d.txt' % (name, n)), 'w').write('%s\n%s\n' % (now(), text))
+        # every failure is counted; the first 50 of each load are kept whole
         self.failcount[name] = self.failcount.get(name, 0) + 1
+        if self.failcount[name] > 50:
+            return
+        d = os.path.join(self.dir, 'fails'); os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, '%s-%03d.txt' % (name, self.failcount[name] - 1)), 'w').write('%s\n%s\n' % (now(), text))
 
     def serialscan(self):
         """alarm lines (panics) and complaints on the serial capture since the start"""
@@ -809,7 +814,8 @@ class Run:
     def batteries(self, when):
         for bat, args in (('ethernet', ['--frag-via', 'minipc']), ('bluetooth', ['--bdaddr', self.info.bdaddr or '']), ('gpio', [])):
             if bat == 'bluetooth' and not (self.res['bt'][0] and self.info.bdaddr):
-                self.log('battery %s %s: skipped (%s)' % (bat, when, self.res['bt'][1])); continue
+                why = self.res['bt'][1] if not self.res['bt'][0] else 'no Bluetooth address in ~/pitools/boards'
+                self.log('battery %s %s: skipped (%s)' % (bat, when, why)); continue
             out = os.path.join(self.dir, 'battery-%s-%s.txt' % (bat, when))
             lk = self.hres.take('hci0') if bat == 'bluetooth' else None
             try:

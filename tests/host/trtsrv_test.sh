@@ -4,15 +4,18 @@
 #
 # trtsrv (tools/trtsrv), the Jetson's GPU and DLAs as 9P files for
 # vision(4) (#1086), mounted from InferNode on the pipe of its host
-# command (mount -A {os trtsrv ... >[1=0]}), never on the network:
+# command (mount -A {os trtsrv >[1=0]}), never on the network; engines
+# put in through its files, never by a host path:
 #
 #   - each engine of the model directory (engines/, from mkengines.sh)
-#     loaded on its place, listed in ctl with its shapes and hash
+#     copied into trtsrv's engines/ and loaded on its place, listed in ctl
+#     with its type, shapes and hash, and its upload gone once loaded
 #   - on each place, gpu, dla0 and dla1, the picture's detections the CPU
 #     engine's (tests/trtcheck: the same classes, scores within 0.02,
 #     boxes within 6 pixels), and the round trip timed
 #   - an engine not the one recorded refused; a DLA engine asked to run
-#     on the GPU, and the GPU engine asked for a DLA, refused
+#     on the GPU, and the GPU engine asked for a DLA, refused; a load with
+#     no engine written refused
 #
 # Needs a Jetson: trtsrv built (cargo build --release in tools/trtsrv),
 # VISION_MODEL with engines/ (tools/trtsrv/mkengines.sh) and
@@ -39,20 +42,25 @@ ln -s "$VISION_MODEL" "$W/model"
 cp "$VISION_PICTURE" "$W/picture"
 loads=""
 while read -r sha place; do
-	loads="$loads load $place $place $VISION_MODEL/engines/$place.plan $sha"
+	loads="$loads
+cp $E/model/engines/$place.plan /mnt/trt/engines/$place
+echo load $place $place $sha > /mnt/trt/ctl"
 done < "$VISION_MODEL/engines/sha256"
 dsha=$(awk '$2 == "dla0" {print $1}' "$VISION_MODEL/engines/sha256")
 gsha=$(awk '$2 == "gpu" {print $1}' "$VISION_MODEL/engines/sha256")
 cat > "$W/run.sh" <<RUN
 load std
 mkdir -p /mnt/trt
-mount -A {os $T$loads >[1=0]} /mnt/trt
+mount -A {os $T >[1=0]} /mnt/trt
+$loads
+echo '-- uploads'; ls /mnt/trt/engines
 echo '-- ctl'; cat /mnt/trt/ctl
 for p in gpu dla0 dla1 { echo '-- '\$p; /dis/tests/trtcheck.dis $E/model $E/picture /mnt/trt \$p 10 }
 echo '-- refusals'
-echo load x gpu $VISION_MODEL/engines/gpu.plan 0000 > /mnt/trt/ctl; echo HASH-\$status
-echo load x gpu $VISION_MODEL/engines/dla0.plan $dsha > /mnt/trt/ctl; echo DLAONGPU-\$status
-echo load x dla0 $VISION_MODEL/engines/gpu.plan $gsha > /mnt/trt/ctl; echo GPUONDLA-\$status
+cp $E/model/engines/gpu.plan /mnt/trt/engines/x; echo load x gpu 0000 > /mnt/trt/ctl; echo HASH-\$status
+rm /mnt/trt/engines/x; cp $E/model/engines/dla0.plan /mnt/trt/engines/x; echo load x gpu $dsha > /mnt/trt/ctl; echo DLAONGPU-\$status
+rm /mnt/trt/engines/x; cp $E/model/engines/gpu.plan /mnt/trt/engines/x; echo load x dla0 $gsha > /mnt/trt/ctl; echo GPUONDLA-\$status
+echo load y gpu $gsha > /mnt/trt/ctl; echo NOUPLOAD-\$status
 echo TRT-DONE
 echo halt > '#c/sysctl'
 RUN
@@ -62,6 +70,7 @@ ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 part() { sed -n "/^-- $1\$/,/^-- /p" "$W/log" | grep -v '^-- '; }
 grep -q '^TRT-DONE' "$W/log" || { echo "FAIL: the session did not finish"; grep -v fsqid "$W/log" | tail -15; exit 1; }
+[ -z "$(part uploads)" ] && ok "each upload gone once loaded" || bad "uploads left: $(part uploads | tr '\n' ' ')"
 for p in gpu dla0 dla1; do
 	part ctl | grep -E -q "^model $p place=$p type=f(16|32) in=3x416x416 out=85x52x52,85x26x26,85x13x13 sha256=" && ok "$p: loaded on its place, its shapes and hash in ctl" || bad "$p: ctl: $(part ctl | grep "model $p")"
 	f=$(part $p | grep '^found')
@@ -82,4 +91,5 @@ done
 grep -q '^HASH-..*' "$W/log" && ok "an engine not the one recorded refused" || bad "hash: $(grep '^HASH-' "$W/log")"
 grep -q '^DLAONGPU-..*' "$W/log" && ok "a DLA engine asked to run on the GPU refused" || bad "$(grep '^DLAONGPU-' "$W/log")"
 grep -q '^GPUONDLA-..*' "$W/log" && ok "the GPU engine asked for a DLA refused" || bad "$(grep '^GPUONDLA-' "$W/log")"
+grep -q '^NOUPLOAD-..*' "$W/log" && ok "a load with no engine written refused" || bad "$(grep '^NOUPLOAD-' "$W/log")"
 exit $fail

@@ -1,14 +1,17 @@
 //! trtsrv: TensorRT engines on the Jetson's GPU and DLAs as a 9P file tree
 //! on standard input and output, for vision(4) (#1086).
 //!
-//! vision(4) starts it through the host command device and mounts the pipe,
-//! so it is never on the network and only vision(4) is exported. Decoding a
+//! The namespace starts it, mounting it on its host command's pipe
+//! (mount -A {os trtsrv >[1=0]} /mnt/trt), so it is never on the network,
+//! and engines reach it through its files, never by a host path. Decoding a
 //! picture, the letterbox, the detector's own decoding and NMS stay in
 //! vision(4), shared with the Pi's engine; here a tensor goes in and tensors
 //! come out.
 //!
 //! ```text
-//! ctl        w  load NAME PLACE ENGINE SHA256   (PLACE gpu | dla0 | dla1)
+//! engines/   create engines/NAME and write an engine's bytes into it
+//! ctl        w  load NAME PLACE SHA256   (PLACE gpu | dla0 | dla1): the
+//!               engine written as engines/NAME, its bytes then dropped
 //!               unload NAME
 //!            r  a line a model: model NAME place=dla0 type=f16 in=3x416x416
 //!               out=85x52x52,85x26x26,85x13x13 sha256=...  (type: f32 or
@@ -39,6 +42,10 @@ use trt::{Engine, Place};
 const QROOT: u64 = 0;
 const QCTL: u64 = 1;
 const QCLONE: u64 = 2;
+const QENGINES: u64 = 3;
+// an engine being written: UPLOAD | its number
+const UPLOAD: u64 = 1 << 48;
+const MAXENGINE: usize = 256 << 20;
 // a session N's files: N << 8 | kind
 const KDIR: u64 = 0;
 const KCTL: u64 = 1;
@@ -67,6 +74,8 @@ struct State {
     models: HashMap<String, Model>,
     sessions: HashMap<u64, Arc<Mutex<Session>>>,
     next: u64,
+    uploads: HashMap<String, (u64, Vec<u8>)>, // engines/NAME: its number, its bytes
+    nextup: u64,
 }
 
 #[derive(Default, Clone)]
@@ -87,9 +96,12 @@ impl Trt {
     fn ctl(&self, line: &str) -> std::result::Result<(), String> {
         let w: Vec<&str> = line.split_whitespace().collect();
         match w.as_slice() {
-            ["load", name, place, path, sha] => {
+            ["load", name, place, sha] => {
                 let place = Place::parse(place).ok_or_else(|| format!("{place}: not gpu, dla0 or dla1"))?;
-                let blob = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+                let blob = match self.st.lock().unwrap().uploads.get(*name) {
+                    Some((_, b)) => b.clone(),
+                    None => return Err(format!("{name}: no engine written as engines/{name}")),
+                };
                 let got = sha256::hex(&blob);
                 if got != *sha {
                     return Err(format!("{name}: engine is not the one recorded"));
@@ -108,7 +120,9 @@ impl Trt {
                     return Err(format!("{name}: its tensors are of more than one type"));
                 }
                 let m = Model { engine: Arc::new(engine), place, sha: got };
-                self.st.lock().unwrap().models.insert(name.to_string(), m);
+                let mut st = self.st.lock().unwrap();
+                st.models.insert(name.to_string(), m);
+                st.uploads.remove(*name);
                 Ok(())
             }
             ["unload", name] => match self.st.lock().unwrap().models.remove(*name) {
@@ -178,6 +192,7 @@ fn placed(e: &Engine, place: Place) -> std::result::Result<(), String> {
 }
 
 enum Kind {
+    Upload(String, Trt),
     Text(Mutex<Answer>, Option<(Trt, Option<u64>)>), // ctl: Some((fs, session)); else read only
     Clone(u64, Trt),
     Run(u64, Trt, Mutex<RunState>),
@@ -200,7 +215,7 @@ impl Drop for TrtFile {
         let (n, fs) = match &self.kind {
             Kind::Clone(n, fs) | Kind::Run(n, fs, _) | Kind::Hold(n, fs) => (*n, fs),
             Kind::Text(_, Some((fs, Some(n)))) => (*n, fs),
-            _ => return,
+            _ => return,	// ctl, an upload
         };
         let mut st = fs.st.lock().unwrap();
         let gone = match st.sessions.get(&n) {
@@ -225,10 +240,20 @@ impl Filesystem for Trt {
     }
 
     fn walk1(&self, _: &Ctx, dir: Qid, name: &str) -> Result<Qid> {
+        if dir.path == QENGINES {
+            if name == ".." {
+                return Ok(Qid::dir(QROOT));
+            }
+            return match self.st.lock().unwrap().uploads.get(name) {
+                Some((id, _)) => Ok(Qid::file(UPLOAD | id)),
+                None => Err(errors::NOT_FOUND.into()),
+            };
+        }
         if dir.path == QROOT {
             return match name {
                 "ctl" => Ok(Qid::file(QCTL)),
                 "clone" => Ok(Qid::file(QCLONE)),
+                "engines" => Ok(Qid::dir(QENGINES)),
                 ".." => Ok(Qid::dir(QROOT)),
                 _ => match name.parse::<u64>() {
                     Ok(n) if self.session(n).is_some() => Ok(qsess(n, KDIR)),
@@ -251,6 +276,14 @@ impl Filesystem for Trt {
             QROOT => Stat::new("/", q, 0o555, 0),
             QCTL => Stat::new("ctl", q, 0o644, 0),
             QCLONE => Stat::new("clone", q, 0o444, 0),
+            QENGINES => Stat::new("engines", q, 0o777, 0),
+            p if p & UPLOAD != 0 => {
+                let st = self.st.lock().unwrap();
+                match st.uploads.iter().find(|(_, (id, _))| UPLOAD | id == p) {
+                    Some((name, (_, b))) => Stat::new(name.clone(), q, 0o666, b.len() as u64),
+                    None => return Err(errors::NOT_FOUND.into()),
+                }
+            }
             p => {
                 let n = p >> 8;
                 match p & 0xff {
@@ -264,8 +297,13 @@ impl Filesystem for Trt {
     }
 
     fn readdir(&self, ctx: &Ctx, dir: Qid) -> Result<Vec<Stat>> {
+        if dir.path == QENGINES {
+            let ids: Vec<u64> = self.st.lock().unwrap().uploads.values().map(|(id, _)| *id).collect();
+            return ids.iter().map(|id| self.stat(ctx, Qid::file(UPLOAD | id))).collect();
+        }
         if dir.path == QROOT {
-            let mut v = vec![self.stat(ctx, Qid::file(QCTL))?, self.stat(ctx, Qid::file(QCLONE))?];
+            let mut v = vec![self.stat(ctx, Qid::file(QCTL))?, self.stat(ctx, Qid::file(QCLONE))?,
+                self.stat(ctx, Qid::dir(QENGINES))?];
             let mut ns: Vec<u64> = self.st.lock().unwrap().sessions.keys().copied().collect();
             ns.sort();
             for n in ns {
@@ -277,6 +315,33 @@ impl Filesystem for Trt {
         [KCTL, KRUN, KSTATUS].iter().map(|k| self.stat(ctx, qsess(n, *k))).collect()
     }
 
+    fn create(&self, _: &Ctx, dir: Qid, name: &str, perm: u32, _mode: u8) -> Result<(Qid, TrtFile)> {
+        if dir.path != QENGINES {
+            return Err(errors::PERM.into());
+        }
+        if perm & styx9p::proto::DMDIR != 0 || name.is_empty() || name.contains('/') || name == "." || name == ".." {
+            return Err("an engine is a file named for its model".into());
+        }
+        let mut st = self.st.lock().unwrap();
+        if st.uploads.contains_key(name) {
+            return Err("file already exists".into());
+        }
+        st.nextup += 1;
+        let id = st.nextup;
+        st.uploads.insert(name.to_string(), (id, Vec::new()));
+        Ok((Qid::file(UPLOAD | id), TrtFile { kind: Kind::Upload(name.to_string(), self.clone()) }))
+    }
+
+    fn remove(&self, _: &Ctx, q: Qid) -> Result<()> {
+        if q.path & UPLOAD == 0 {
+            return Err(errors::PERM.into());
+        }
+        let mut st = self.st.lock().unwrap();
+        let name = st.uploads.iter().find(|(_, (id, _))| UPLOAD | id == q.path).map(|(n, _)| n.clone()).ok_or(errors::NOT_FOUND)?;
+        st.uploads.remove(&name);
+        Ok(())
+    }
+
     fn open(&self, _: &Ctx, q: Qid, _mode: u8) -> Result<TrtFile> {
         let hold = |n: u64| -> Result<()> {
             let s = self.session(n).ok_or(errors::NOT_FOUND)?;
@@ -284,6 +349,11 @@ impl Filesystem for Trt {
             Ok(())
         };
         let kind = match q.path {
+            p if p & UPLOAD != 0 => {
+                let st = self.st.lock().unwrap();
+                let name = st.uploads.iter().find(|(_, (id, _))| UPLOAD | id == p).map(|(n, _)| n.clone()).ok_or(errors::NOT_FOUND)?;
+                Kind::Upload(name, self.clone())
+            }
             QCTL => Kind::Text(Mutex::new(Answer::default()), Some((self.clone(), None))),
             QCLONE => {
                 let mut st = self.st.lock().unwrap();
@@ -401,6 +471,13 @@ impl File for TrtFile {
                 Ok(b)
             }
             Kind::Text(_, None) => Ok(Vec::new()),
+            Kind::Upload(name, fs) => {
+                let st = fs.st.lock().unwrap();
+                match st.uploads.get(name) {
+                    Some((_, b)) => Ok(read_at(b, offset, count)),
+                    None => Err(errors::NOT_FOUND.into()),
+                }
+            }
         }
     }
 
@@ -452,6 +529,20 @@ impl File for TrtFile {
                 r.input.extend_from_slice(data);
                 Ok(data.len() as u32)
             }
+            Kind::Upload(name, fs) => {
+                let mut st = fs.st.lock().unwrap();
+                let (_, b) = st.uploads.get_mut(name).ok_or(errors::NOT_FOUND)?;
+                let at = offset as usize;
+                if at > b.len() {
+                    return Err("an engine is written in order".into());
+                }
+                if at + data.len() > MAXENGINE {
+                    return Err(format!("an engine is at most {} MB", MAXENGINE >> 20).into());
+                }
+                b.truncate(at);
+                b.extend_from_slice(data);
+                Ok(data.len() as u32)
+            }
             _ => Err(errors::PERM.into()),
         }
     }
@@ -460,22 +551,9 @@ impl File for TrtFile {
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> std::io::Result<()> {
     let fs = Trt::default();
-    let mut args = std::env::args().skip(1);
-    // trtsrv [load NAME PLACE ENGINE SHA256]...: models loaded before serving
-    while let Some(a) = args.next() {
-        if a != "load" {
-            eprintln!("usage: trtsrv [load NAME PLACE ENGINE SHA256]...");
-            std::process::exit(2);
-        }
-        let w: Vec<String> = (&mut args).take(4).collect();
-        if w.len() != 4 {
-            eprintln!("trtsrv: load NAME PLACE ENGINE SHA256");
-            std::process::exit(2);
-        }
-        if let Err(e) = fs.ctl(&format!("load {}", w.join(" "))) {
-            eprintln!("trtsrv: {e}");
-            std::process::exit(1);
-        }
+    if std::env::args().len() > 1 {
+        eprintln!("usage: trtsrv  (engines are written into its engines/ directory)");
+        std::process::exit(2);
     }
     // 9P on standard input and output, which are the pipe vision(4) mounts.
     // Not tokio's Stdout: it buffers, and styx9p does not flush (a socket

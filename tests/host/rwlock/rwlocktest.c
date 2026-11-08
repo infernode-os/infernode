@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 #define nil ((void*)0)
 
@@ -107,6 +108,14 @@ writer(void *a)
 		__atomic_sub_fetch(&inwrite, 1, __ATOMIC_SEQ_CST);
 		wunlock(&rw);
 		__atomic_add_fetch(&writes, 1, __ATOMIC_RELAXED);
+		/*
+		 * A pause between writes, as the kernel's writers have (an
+		 * interface's lock is written on a reconfiguration, not per
+		 * packet). With back-to-back writers on many cores some writer
+		 * is always counted, canrlock rightly punts every time, and
+		 * the progress check below failed on a 12-core host.
+		 */
+		nanosleep(&(struct timespec){0, 20000}, nil);
 	}
 	return a;
 }

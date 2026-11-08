@@ -558,6 +558,26 @@ jobs:
           fi
         fi
 
+        # styxbrick commander credentials: persistence is a USB provisioning
+        # barrier, retries are idempotent, and no raw key remains in /usr.
+        if [ -f tests/host/brick_factotum_test.sh ]; then
+          echo "--- brick factotum test ---"
+          chmod +x tests/host/brick_factotum_test.sh
+          set +e
+          ROOT=. sh tests/host/brick_factotum_test.sh > brick-factotum-test.txt 2>&1
+          rc=$?
+          set -e
+          cat brick-factotum-test.txt
+          if [ $rc -eq 0 ]; then
+            echo "brick factotum test: PASS"
+          elif [ $rc -eq 77 ]; then
+            echo "brick factotum test: SKIP (emu not built)"
+          else
+            echo "brick factotum test: FAIL"
+            exit 1
+          fi
+        fi
+
         # wallet persistence (secstore round-trip)
         if [ -f tests/host/wallet_persist_test.sh ]; then
           echo "--- wallet persistence test ---"

@@ -13,8 +13,14 @@ include "draw.m";
 include "testing.m";
 	testing: Testing;
 	T: import testing;
+include "keyring.m";
+	keyring: Keyring;
 
 Brick: module {
+	init: fn(nil: ref Draw->Context, args: list of string);
+};
+
+AuthFactotum: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
@@ -187,6 +193,25 @@ has(s, sub: string): int
 	return 0;
 }
 
+hex(a: array of byte): string
+{
+	digits := "0123456789abcdef";
+	s := array[2*len a] of byte;
+	for(i := 0; i < len a; i++){
+		s[2*i] = byte digits[int a[i] >> 4 & 16rf];
+		s[2*i+1] = byte digits[int a[i] & 16rf];
+	}
+	return string s;
+}
+
+brickslot(keydir: string): string
+{
+	d := array[Keyring->SHA256dlen] of byte;
+	b := array of byte keydir;
+	keyring->sha256(b, len b, d, nil);
+	return hex(d);
+}
+
 testReleaseBarrier(t: ref T)
 {
 	brick := load Brick "/dis/brick.dis";
@@ -197,8 +222,11 @@ testReleaseBarrier(t: ref T)
 	badlease := chan of string;
 	spawn runbrick(brick, "brick" :: "d2" :: "-l" :: "1" :: "/no" :: "/no" :: nil, badlease);
 	le := <-badlease;
-	t.assert(has(le, "at least 250"),
-		"a lease below the safe grant interval is specifically refused: " + le);
+	# brick prints the detailed reason on stderr and raises only the stable
+	# command status, so the in-process harness can assert the early D2 refusal
+	# but cannot recover the prose diagnostic.
+	t.assert(le == "fail:d2",
+		"a lease below the safe grant interval is refused before setup: " + le);
 	base := "/tmp/brick_d2_test." + runid();
 	bmnt := base + "/brick";
 	d2 := bmnt + "/d2";
@@ -210,9 +238,22 @@ testReleaseBarrier(t: ref T)
 		t.fatal(sys->sprint("make test tree: %r"));
 	if(!putfile(d2 + "/status", "pwm/2 max 1000\n") ||
 	   !putfile(d2 + "/clone", "") || !putfile(d2 + "/grant", "") ||
-	   !putfile(d2 + "/cmd", "") ||
-	   !putfile(keys + "/d2.key", "0000000000000000000000000000000000000000000000000000000000000000\n"))
+	   !putfile(d2 + "/cmd", ""))
 		t.fatal(sys->sprint("make test files: %r"));
+	if(!exists("/mnt/factotum") && !mkdir("/mnt/factotum"))
+		t.fatal(sys->sprint("make factotum mount point: %r"));
+	authfactotum := load AuthFactotum "/dis/auth/factotum.dis";
+	if(authfactotum == nil)
+		t.fatal(sys->sprint("load factotum: %r"));
+	authfactotum->init(nil,
+		"auth/factotum" :: "-f" :: base + "/factotum.keys" ::
+		"-p" :: "testpass" :: nil);
+	if(!waitfile("/mnt/factotum/ctl", 2000))
+		t.fatal("factotum ctl did not appear");
+	keyline := "key proto=pass service=brick role=client slot=" +
+		brickslot(keys) + " purpose=d2 user=brick !password=" +
+		"0000000000000000000000000000000000000000000000000000000000000000";
+	t.assertnil(writefile("/mnt/factotum/ctl", keyline), "install D2 key in factotum");
 	if(sys->bind("#s", srv, Sys->MREPL) < 0)
 		t.fatal(sys->sprint("bind srv: %r"));
 	clone := sys->file2chan(srv, "brickd2clone");
@@ -284,7 +325,8 @@ init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
 	testing = load Testing Testing->PATH;
-	if(sys == nil || testing == nil)
+	keyring = load Keyring Keyring->PATH;
+	if(sys == nil || testing == nil || keyring == nil)
 		raise "fail:load";
 	testing->init();
 	t := testing->newTsrc("ReleaseBarrier", SRCFILE);

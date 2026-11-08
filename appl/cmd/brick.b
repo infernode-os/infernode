@@ -5,7 +5,7 @@ implement Brick;
 # serving its hardware as a Styx file tree.
 #
 #	brick key [-d keydir]
-#	brick pair [-d keydir] usbmnt
+#	brick pair [-R] [-d keydir] usbmnt
 #	brick wifi usbmnt  <creds
 #	brick mount [-abu] [-d keydir] addr mountpoint
 #	brick d2 [-u] [-d keydir] [-l leasems] [-r addr] brickmnt dir
@@ -17,15 +17,15 @@ implement Brick;
 # mount, exchanges the keys.  Nothing about the keys crosses the network
 # unverified.
 #
-# keydir (default /usr/$user/keyring/brick) holds:
-#	client.key	our P-256 private scalar, 64 hex digits (mode 600)
+# Private keys live in factotum, selected by the public hash of keydir and
+# purpose.  keydir (default /usr/$user/keyring/brick) holds only:
 #	client.crt	our self-signed X.509 certificate, DER
 #	brick.spki	the brick's pin: SHA-256 of its SubjectPublicKeyInfo, hex
-#	sdg.key	our X25519 private key, hex (mode 600)
-#	sdg.psk	the pre-shared key we gave the brick, hex (mode 600)
 #	sdg.brick	the brick's X25519 public key, hex
 #	sdg.ctr.a, .b	the datagram handshake counter (sdg(2)'s ctrnext)
-#	d2.key	the D2 safety key we gave the brick, hex (mode 600)
+#
+# -R replaces the complete commander credential set.  The replacement is
+# synchronously persisted before any USB configuration is changed.
 #
 
 include "sys.m";
@@ -43,6 +43,8 @@ include "sdg.m";
 	sdg: Sdg;
 include "audit.m";
 	audit: Audit;
+include "factotum.m";
+	factotum: Factotum;
 
 Brick: module
 {
@@ -57,6 +59,7 @@ RECONNMS: con 2000;	# transport failing this long: mount again
 MINLEASE: con 250;	# grant service issues at most 20/s; renew at lease/5
 window := 1;		# brick fetch: reads in flight
 nbytes := big 0;	# brick fetch: bytes wanted (0: to end of file)
+rotate := 0;		# pair -R: replace the complete persisted candidate
 
 keydir: string;
 
@@ -93,6 +96,8 @@ init(nil: ref Draw->Context, args: list of string)
 			leasems = int arg->earg();
 		'r' =>
 			reconnaddr = arg->earg();
+		'R' =>
+			rotate = 1;
 		'w' =>
 			window = int arg->earg();
 		'n' =>
@@ -107,29 +112,33 @@ init(nil: ref Draw->Context, args: list of string)
 	"key" =>
 		if(args != nil)
 			usage();
-		(nil, cert) := loadkeys(1);
+		keylock := pairlock();
+		if(rotate)
+			delsecret("tls");
+		(nil, cert) := loadkeys(1, 1);
 		sys->print("%s\n", hex(certpin(cert)));
+		keylock = nil;
 	"pair" =>
 		if(len args != 1)
 			usage();
 		pair(hd args);
 	"wifi" =>
-		if(len args != 1)
+		if(rotate || len args != 1)
 			usage();
 		wifi(hd args);
 	"mount" =>
-		if(len args != 2)
+		if(rotate || len args != 2)
 			usage();
 		if(udp)
 			dmount(hd args, hd tl args, flags);
 		else
 			mount(hd args, hd tl args, flags);
 	"d2" =>
-		if(len args != 2)
+		if(rotate || len args != 2)
 			usage();
 		d2serve(hd args, hd tl args);
 	"fetch" =>
-		if(len args != 1)
+		if(rotate || len args != 1)
 			usage();
 		fetch(hd args, window, nbytes);
 	* =>
@@ -139,8 +148,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(sys->fildes(2), "usage:\tbrick key [-d keydir]\n" +
-		"\tbrick pair [-d keydir] usbmnt\n" +
+	sys->fprint(sys->fildes(2), "usage:\tbrick key [-R] [-d keydir]\n" +
+		"\tbrick pair [-R] [-d keydir] usbmnt\n" +
 		"\tbrick wifi usbmnt <creds\n" +
 		"\tbrick mount [-abu] [-d keydir] addr mountpoint\n" +
 		"\tbrick d2 [-u] [-d keydir] [-l leasems] [-r addr] brickmnt dir\n" +
@@ -159,57 +168,78 @@ fail(status, msg: string)
 #
 pair(mnt: string)
 {
-	(nil, cert) := loadkeys(1);
-	mine := hex(certpin(cert));
-	if((e := auditlog("pair", "keydir=" + keydir + " pin=" + mine)) != nil)
-		fail("pair", e);
-	writefile(mnt + "/config/peer", mine + "\n");
-
+	lock := pairlock();
 	theirs := readfile(mnt + "/config/spki");
 	if(len theirs > 0 && theirs[len theirs - 1] == '\n')
 		theirs = theirs[0:len theirs - 1];
 	if(unhex(theirs) == nil || len theirs != 64)
 		fail("pair", "bad pin from brick: " + theirs);
-	createfile(keydir + "/brick.spki", theirs + "\n", 8r644);
-	sys->print("our pin   %s\nbrick pin %s\n", mine, theirs);
 
-	# The datagram transport too, if the brick has one: our X25519 public
-	# key and a fresh PSK go to it, its public key comes back.
-	if(sys->stat(mnt + "/config/sdg").t0 < 0){
-		auditlog("paired", "keydir=" + keydir + " brick=" + theirs);
-		return;
-	}
-	random = load Random Random->PATH;
-	if(random == nil)
-		fail("load", sys->sprint("can't load %s: %r", Random->PATH));
-	key := unhex(trim(readfile0(keydir + "/sdg.key")));
-	if(key == nil || len key != 32){
-		key = random->randombuf(Random->ReallyRandom, 32);
-		createfile(keydir + "/sdg.key", hex(key) + "\n", 8r600);
-	}
-	psk := random->randombuf(Random->ReallyRandom, 32);
-	writefile(mnt + "/config/sdg", "peer " + hex(keyring->x25519_base(key)));
-	writefile(mnt + "/config/sdg", "psk " + hex(psk));
-	createfile(keydir + "/sdg.psk", hex(psk) + "\n", 8r600);
+	hassdg := sys->stat(mnt + "/config/sdg").t0 >= 0;
+	hasd2 := sys->stat(mnt + "/config/d2").t0 >= 0;
 	pub := "";
-	(nil, lines) := sys->tokenize(readfile(mnt + "/config/sdg"), "\n");
-	for(; lines != nil; lines = tl lines)
-		if(hasprefix(hd lines, "pub "))
-			pub = (hd lines)[4:];
-	if(unhex(pub) == nil || len pub != 64)
-		fail("pair", "bad datagram key from brick: " + pub);
-	createfile(keydir + "/sdg.brick", pub + "\n", 8r644);
-	sys->print("datagram  %s\n", pub);
+	if(hassdg){
+		(nil, lines) := sys->tokenize(readfile(mnt + "/config/sdg"), "\n");
+		for(; lines != nil; lines = tl lines)
+			if(hasprefix(hd lines, "pub "))
+				pub = (hd lines)[4:];
+		if(unhex(pub) == nil || len pub != 64)
+			fail("pair", "bad datagram key from brick: " + pub);
+	}
 
-	# And D2's safety key, if the brick has safety outputs to configure.
-	if(sys->stat(mnt + "/config/d2").t0 >= 0){
-		d2key := random->randombuf(Random->ReallyRandom, 32);
+	# Construct the complete commander-side candidate before touching USB.
+	# -R replaces it as one factotum save; without -R, an interrupted pair
+	# reuses the same candidate on retry.
+	if(rotate){
+		delsecret("tls");
+		delsecret("sdg-key");
+		delsecret("sdg-psk");
+		delsecret("d2");
+	}
+	(nil, cert) := loadkeys(1, 0);
+	mine := hex(certpin(cert));
+	key, psk, d2key: array of byte;
+	if(hassdg){
+		key = loadraw("sdg-key", keydir + "/sdg.key", 1);
+		psk = loadraw("sdg-psk", keydir + "/sdg.psk", 1);
+	}
+	if(hasd2)
+		d2key = loadraw("d2", keydir + "/d2.key", 1);
+	# This is the commit point.  sync must prove that the candidate reached
+	# the configured encrypted keyfile/secstore before the brick is changed.
+	syncsecrets(1);
+
+	# Public, reconstructible state may live in the ordinary namespace.
+	mkdirs(keydir);
+	createbytes(keydir + "/client.crt", cert, 8r644);
+	createfile(keydir + "/brick.spki", theirs + "\n", 8r644);
+	if(hassdg)
+		createfile(keydir + "/sdg.brick", pub + "\n", 8r644);
+	if((e := auditlog("pair", "keydir=" + keydir + " pin=" + mine)) != nil)
+		fail("pair", e);
+
+	# Every following write is idempotent with the persisted candidate.  A
+	# power loss can leave a partial device configuration, but retry completes
+	# it without silently replacing any key.
+	writefile(mnt + "/config/peer", mine + "\n");
+	if(hassdg){
+		writefile(mnt + "/config/sdg", "peer " + hex(keyring->x25519_base(key)));
+		writefile(mnt + "/config/sdg", "psk " + hex(psk));
+	}
+	if(hasd2)
 		writefile(mnt + "/config/d2", "key " + hex(d2key));
-		createfile(keydir + "/d2.key", hex(d2key) + "\n", 8r600);
+
+	sys->print("our pin   %s\nbrick pin %s\n", mine, theirs);
+	if(hassdg)
+		sys->print("datagram  %s\n", pub);
+	if(hasd2)
 		sys->print("d2 key    set\n");
-		auditlog("paired", "keydir=" + keydir + " brick=" + theirs + " sdg=" + pub + " d2key=new");
-	}else
-		auditlog("paired", "keydir=" + keydir + " brick=" + theirs + " sdg=" + pub);
+	d2status := "absent";
+	if(hasd2)
+		d2status = "set";
+	auditlog("paired", "keydir=" + keydir + " brick=" + theirs + " sdg=" + pub +
+		" d2key=" + d2status);
+	lock = nil;
 }
 
 wifi(mnt: string)
@@ -238,7 +268,8 @@ mount(addr, mntpt: string, flags: int)
 	if((e := tls->init()) != nil)
 		fail("load", e);
 
-	(key, cert) := loadkeys(0);
+	(key, cert) := loadkeys(0, 0);
+	syncsecrets(0);
 	s := readfile(keydir + "/brick.spki");
 	if(len s > 0 && s[len s - 1] == '\n')
 		s = s[0:len s - 1];
@@ -296,9 +327,10 @@ dmount(addr, mntpt: string, flags: int)
 	if((e := sdg->init()) != nil)
 		fail("load", e);
 	k := ref Sdg->Keys;
-	k.key = unhex(trim(readfile0(keydir + "/sdg.key")));
+	k.key = loadraw("sdg-key", keydir + "/sdg.key", 0);
 	k.server = unhex(trim(readfile0(keydir + "/sdg.brick")));
-	k.psk = unhex(trim(readfile0(keydir + "/sdg.psk")));
+	k.psk = loadraw("sdg-psk", keydir + "/sdg.psk", 0);
+	syncsecrets(0);
 	k.ctrfile = keydir + "/sdg.ctr";
 	if(len k.key != 32 || len k.server != 32 || len k.psk != 32)
 		fail("mount", "no datagram keys in " + keydir + "; run brick pair");
@@ -361,7 +393,8 @@ d2serve(bmnt, dir: string)
 {
 	if(leasems < MINLEASE)
 		fail("d2", sys->sprint("lease must be at least %d ms", MINLEASE));
-	key := unhex(trim(readfile0(keydir + "/d2.key")));
+	key := loadraw("d2", keydir + "/d2.key", 0);
+	syncsecrets(0);
 	if(key == nil || len key != 32)
 		fail("d2", "no D2 key in " + keydir + "; run brick pair");
 	d := ref D2;
@@ -812,27 +845,183 @@ kill(pid: int)
 }
 
 #
-# Keys.
+# Keys.  Factotum is the persistent and runtime owner; keydir is only a
+# public profile.  The slot is a stable, non-secret hash of that profile.
 #
-# Our key and self-signed certificate, made if need be (when `make`).
-loadkeys(make: int): (array of byte, array of byte)
-{
-	key := unhex(trim(readfile0(keydir + "/client.key")));
-	cert := readbytes(keydir + "/client.crt");
-	if(key != nil && len key == 32 && cert != nil)
-		return (key, cert);
-	if(!make)
-		fail("keys", "no client key in " + keydir + "; run brick pair");
+secretsdirty := 0;
+legacyremove: list of string;
 
-	(priv, pt) := keyring->p256_keygen();
-	if(priv == nil || pt == nil)
-		fail("keys", "P-256 key generation failed");
-	pub := keyring->p256_point_bytes(pt);
-	cert = mkcert(priv, pub, "infernode-" + user());
+pairlock(): ref Sys->FD
+{
 	mkdirs(keydir);
-	createfile(keydir + "/client.key", hex(priv) + "\n", 8r600);
+	fd := sys->create(keydir + "/pair.lock",
+		Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+	if(fd == nil)
+		fail("keys", "another brick key or pair operation owns " + keydir);
+	return fd;
+}
+
+ftinit()
+{
+	if(factotum != nil)
+		return;
+	factotum = load Factotum Factotum->PATH;
+	if(factotum == nil)
+		fail("load", sys->sprint("can't load %s: %r", Factotum->PATH));
+	factotum->init();
+}
+
+slotid(): string
+{
+	return hex(sha256(array of byte keydir));
+}
+
+secretattrs(purpose: string): string
+{
+	return "proto=pass service=brick role=client slot=" + slotid() +
+		" purpose=" + purpose;
+}
+
+getsecret(purpose: string): string
+{
+	ftinit();
+	(nil, value) := factotum->getuserpasswd(secretattrs(purpose));
+	return value;
+}
+
+ftwrite(s: string)
+{
+	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);
+	if(fd == nil)
+		fail("keys", sys->sprint("cannot open factotum ctl: %r"));
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		fail("keys", sys->sprint("factotum ctl: %r"));
+}
+
+addsecret(purpose, value: string)
+{
+	ftwrite("key " + secretattrs(purpose) + " user=brick !password=" + value);
+	secretsdirty = 1;
+}
+
+delsecret(purpose: string)
+{
+	if(getsecret(purpose) == nil)
+		return;
+	ftwrite("delkey " + secretattrs(purpose));
+	secretsdirty = 1;
+}
+
+queuelegacy(path: string)
+{
+	legacyremove = path :: legacyremove;
+}
+
+# Synchronize before provisioning even when this invocation added nothing:
+# injected keys in an unlocked, backend-less factotum are valid for runtime
+# use but are not a durable pairing candidate.
+syncsecrets(force: int)
+{
+	if(!force && !secretsdirty)
+		return;
+	ftwrite("sync");
+	secretsdirty = 0;
+	for(; legacyremove != nil; legacyremove = tl legacyremove){
+		path := hd legacyremove;
+		sys->remove(path);
+		if(sys->stat(path).t0 >= 0)
+			fail("keys", "persisted legacy secret but cannot remove " + path);
+	}
+}
+
+rand32(): array of byte
+{
+	if(random == nil)
+		random = load Random Random->PATH;
+	if(random == nil)
+		fail("load", sys->sprint("can't load %s: %r", Random->PATH));
+	return random->randombuf(Random->ReallyRandom, 32);
+}
+
+# A 32-byte raw secret.  Legacy cleartext files are imported, synchronously
+# persisted by the caller, and removed only after that save succeeds.
+loadraw(purpose, legacy: string, make: int): array of byte
+{
+	s := getsecret(purpose);
+	if(s != nil){
+		key := unhex(s);
+		if(key == nil || len key != 32)
+			fail("keys", "invalid " + purpose + " key in factotum");
+		if(sys->stat(legacy).t0 >= 0){
+			queuelegacy(legacy);
+			secretsdirty = 1;
+		}
+		return key;
+	}
+	s = trim(readfile0(legacy));
+	if(s != nil){
+		key := unhex(s);
+		if(key == nil || len key != 32)
+			fail("keys", "invalid legacy secret " + legacy);
+		addsecret(purpose, s);
+		queuelegacy(legacy);
+		return key;
+	}
+	if(!make)
+		fail("keys", "no " + purpose + " key in factotum; run brick pair");
+	key := rand32();
+	addsecret(purpose, hex(key));
+	return key;
+}
+
+# Our TLS private key and certificate are one factotum value.  Keeping the
+# reconstructible certificate beside the scalar makes a save interruption
+# recoverable without needing a P-256 "derive public" interface.
+loadkeys(make, commit: int): (array of byte, array of byte)
+{
+	bundle := getsecret("tls");
+	key, cert: array of byte;
+	if(bundle != nil){
+		for(i := 0; i < len bundle && bundle[i] != ':'; i++)
+			;
+		if(i < len bundle){
+			key = unhex(bundle[0:i]);
+			cert = unhex(bundle[i+1:]);
+		}
+		if(key == nil || len key != 32 || cert == nil)
+			fail("keys", "invalid TLS credential in factotum");
+		legacy := keydir + "/client.key";
+		if(sys->stat(legacy).t0 >= 0){
+			queuelegacy(legacy);
+			secretsdirty = 1;
+		}
+	}else{
+		# One-time migration from #1015's draft cleartext scalar.
+		legacy := keydir + "/client.key";
+		key = unhex(trim(readfile0(legacy)));
+		cert = readbytes(keydir + "/client.crt");
+		if(key != nil && len key == 32 && cert != nil){
+			addsecret("tls", hex(key) + ":" + hex(cert));
+			queuelegacy(legacy);
+		}else{
+			if(!make)
+				fail("keys", "no TLS credential in factotum; run brick pair");
+
+			(ptkey, pt) := keyring->p256_keygen();
+			if(ptkey == nil || pt == nil)
+				fail("keys", "P-256 key generation failed");
+			key = ptkey;
+			pub := keyring->p256_point_bytes(pt);
+			cert = mkcert(key, pub, "infernode-" + user());
+			addsecret("tls", hex(key) + ":" + hex(cert));
+		}
+	}
+	if(commit)
+		syncsecrets(1);
+	mkdirs(keydir);
 	createbytes(keydir + "/client.crt", cert, 8r644);
-	return (priv, cert);
+	return (key, cert);
 }
 
 # The pin of a certificate: SHA-256 of its SubjectPublicKeyInfo.

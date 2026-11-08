@@ -4,12 +4,16 @@ brick \- pair with, configure and mount a styxbrick
 .SH SYNOPSIS
 .B brick key
 [
+.B -R
+] [
 .B -d
 .I keydir
 ]
 .br
 .B brick pair
 [
+.B -R
+] [
 .B -d
 .I keydir
 ]
@@ -79,6 +83,17 @@ No certificate authority is involved.
 .PP
 .B "brick key"
 prints our pin, making a key and certificate first if there are none.
+The private key is selected in
+.IR factotum (4)
+by a public hash of
+.I keydir
+and purpose; only the certificate is written to
+.IR keydir .
+Making or replacing a key requires factotum to have an encrypted keyfile or
+secstore persistence backend, and the command fails if a synchronous save
+cannot be proved.
+.B -R
+replaces the TLS identity.
 .PP
 .B "brick pair"
 gives the brick mounted over USB at
@@ -91,13 +106,20 @@ as
 .IB keydir /brick.spki\fR.
 If the brick serves datagrams
 .RB ( /config/sdg ),
-it also gives the brick our X25519 public key and a fresh pre-shared key,
+it also gives the brick our X25519 public key and a pre-shared key,
 and saves the brick's public key;
-and a fresh D2 safety key
+and gives it a D2 safety key
 .RB ( /config/d2 ).
-Each pairing replaces the brick's datagram peer and its D2 key, so
-pairing a second commander leaves the first one's keys useless; the brick
-holds one commander at a time.
+Before changing any USB configuration, the complete commander candidate is
+synchronously saved through factotum.  A failed save changes nothing on the
+brick.  An interrupted USB sequence is completed by retrying
+.B pair
+with the same candidate; it does not silently generate another PSK or D2 key.
+.B -R
+replaces the complete TLS, X25519, PSK and D2 candidate in one factotum save,
+then installs it on the brick.  This is the explicit rotation operation.
+The brick holds one commander at a time, so a successful rotation leaves the
+old commander's keys useless.
 Because all of it travels over the USB cable, nothing the network
 could alter is trusted.
 A brick that reports
@@ -287,22 +309,13 @@ It suits files addressed by offset, such as the brick's
 .I Keydir
 defaults to
 .BI /usr/ user /keyring/brick
-and holds
-.TP
-.B client.key
-our P-256 private key, as 64 hex digits (mode 600)
+and is a public profile.  It holds
 .TP
 .B client.crt
 our self-signed X.509 certificate, in DER
 .TP
 .B brick.spki
 the brick's pin
-.TP
-.B sdg.key
-our X25519 private key, hex (mode 600)
-.TP
-.B sdg.psk
-the pre-shared key given to the brick, hex (mode 600)
 .TP
 .B sdg.brick
 the brick's X25519 public key
@@ -315,12 +328,30 @@ and
 .BR sdg.ctr.lock
 while one is being written.
 The brick refuses a handshake whose counter is not newer than the last it
-accepted for that key, so each commander needs its own
-.BR sdg.key :
-two sharing one lock each other out whenever their counters disagree
-.TP
-.B d2.key
-the D2 safety key given to the brick, hex (mode 600)
+accepted for that key, so independent commanders must not share the factotum
+slot and counter profile: two sharing one lock each other out whenever their
+counters disagree.
+.PP
+The P-256 scalar and certificate bundle, X25519 scalar, PSK and D2 key are
+stored as four purpose-scoped factotum keys.  Their selectors contain
+.BR service=brick ,
+.BR role=client ,
+a public
+.B slot
+hash of
+.IR keydir ,
+and one of
+.BR purpose=tls ,
+.BR sdg-key ,
+.BR sdg-psk
+or
+.BR d2 .
+Their secret values are never served in the profile.  A transient exclusive
+.B pair.lock
+serializes key and pairing operations and is removed when its owner closes or
+dies.  Cleartext secret files made by the draft implementation are imported,
+synchronously persisted and removed on first use; removal never precedes a
+successful save.
 .SH EXAMPLE
 Pair over USB, give the brick its network, then use it from anywhere:
 .EX
@@ -346,4 +377,5 @@ Hold a servo on a safety output, then let it go:
 .SH SEE ALSO
 .IR mount (1),
 .IR bind (1),
+.IR factotum (4),
 .IR sdg (2)

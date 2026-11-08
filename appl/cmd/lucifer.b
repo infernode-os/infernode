@@ -3978,11 +3978,15 @@ launchappns(tp: ref TaskPres, guimod: GuiApp,
 	sys->pctl(Sys->NEWPGRP, nil);
 	grpc <-= sys->open(sys->sprint("/prog/%d/grpwait", pid), Sys->OREAD);
 	setslotpid(tp, id, pid);
-	# Activity 0 uses the default /chan/wmctl — no FORKNS needed.
-	# Child tasks use /chan/wmctl.N and need FORKNS + bind so apps
-	# find the task's wmsrv at the well-known /chan/wmctl path.
+	# A namespace of its own, for every app: what it binds is its own.
+	# wm/wm, run as an app, puts a window server of its own over
+	# /chan/wmctl; in Lucifer's namespace every app started after it
+	# was its client, not Lucifer's (a black tab, no typing, wm/wm
+	# broken when one went).  Activity 0 uses the default /chan/wmctl;
+	# child tasks use /chan/wmctl.N, bound so apps find the task's
+	# wmsrv at the well-known /chan/wmctl path.
+	sys->pctl(Sys->FORKNS, nil);
 	if(tp.actid != 0) {
-		sys->pctl(Sys->FORKNS, nil);
 		wmname := "wmctl." + string tp.actid;
 		srcpath := "/chan/" + wmname;
 		# Verify source file exists before bind

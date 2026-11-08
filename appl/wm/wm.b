@@ -268,7 +268,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		if(rc == nil){
 			forgetclient(c);
 			controlevent("delclient " + string c.id);
-			c.stop <-= 1;
+			# a client that read its token and went without joining
+			# has no minder to stop
+			if(c.stop != nil)
+				c.stop <-= 1;
 			break;
 		}
 		err := handlerequest(win, wmctxt, c, string data);

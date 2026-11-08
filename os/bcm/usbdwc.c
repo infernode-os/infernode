@@ -323,21 +323,26 @@ chanalloc(Ep *ep)
 				return &ctlr->regs->hchan[i];
 			}
 		/*
-		 * None free. This used to panic ("miller is a lazy git"),
-		 * but a busy channel is only in use: it comes back when its
-		 * transfer ends, in microseconds. With channels retired the
-		 * rest were all busy for a moment under load, and the board
-		 * went down for it (#723). So take back any retired channel
-		 * that has halted since, and otherwise wait for one. Only
-		 * when every channel is retired and none comes back does the
-		 * transfer fail -- an error its reader can handle, not a
-		 * panic.
+		 * None free. This used to panic at once ("miller is a lazy
+		 * git"), but a busy channel is only in use: it comes back
+		 * when its transfer ends, in microseconds. With channels
+		 * retired the rest were all busy for a moment under load,
+		 * and the board went down for it (#723). So take back any
+		 * retired channel that has halted since, and otherwise wait
+		 * for one.
+		 *
+		 * When every channel is retired and none comes back, nothing
+		 * on this controller works again without a reset: on the
+		 * 3B+ a retired bulk IN channel never halted later (30 min
+		 * of two senders, 2026-11-08), and failing each transfer
+		 * left the board up with no Ethernet until someone came to
+		 * reboot it. Resetting the machine, as the panic always did,
+		 * brings the network back on its own.
 		 */
 		if(chanreclaim(ctlr) == 0 && ctlr->chandead == (1<<ctlr->nchan)-1 && waited >= 2000){
 			qunlock(&ctlr->chanlock);
-			print("usbotg: ep%d.%d no host channel: all %d retired\n",
-				ep->dev->nb, ep->nb, ctlr->nchan);
-			error(Eio);
+			panic("usbotg: every host channel retired (would not halt) and none came back; "
+				"resetting (#723)");
 		}
 		qunlock(&ctlr->chanlock);
 		tsleep(&up->sleep, return0, 0, 1);

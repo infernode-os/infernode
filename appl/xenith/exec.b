@@ -684,6 +684,14 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		u.w.tag.setselect(u.w.tag.file.buf.nc, u.w.tag.file.buf.nc);
 		scrl->scrdraw(u);
 	}
+	# the text read again is a change to it: a window showing the file
+	# as a source document (Live's, a Zerox twin's) set again if live,
+	# stale if not.  Text.reset and the load go round Text.insert and
+	# Text.delete, so nothing told them, and a Live window kept showing
+	# the text from before (a file an agent changed, then Get).  A file
+	# loading in the background is told at its end (TextComplete).
+	if(w.asyncload == nil)
+		docview->edited(w);
 }
 
 # the text of buf from q0 to q1, as UTF-8

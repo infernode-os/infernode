@@ -929,6 +929,9 @@ mousetask()
 								# Ensure frame is fully populated and displayed
 								w.body.fill();
 								scrl->scrdraw(w.body);
+								# a source document shown of it set
+								# again, all of it here now (get)
+								docview->edited(w);
 							}
 						}
 						row.qlock.unlock();

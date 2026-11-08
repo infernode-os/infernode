@@ -4,8 +4,9 @@
 # release ships, read back by a FAT32 reader of this test's own (not
 # mkcard's, whose writer it checks):
 #
-#	each board's card has its own firmware, config.txt and tryboot
-#	files and not the other board's, and the files are the tree's;
+#	each board's card (the 3B+'s, the 4's, the 5's) has its own
+#	firmware, config.txt and tryboot files and none of the others',
+#	and the files are the tree's;
 #	the kernel is on it as infernode8.img, byte for byte;
 #	dis/ is the built tree's; lib/, fonts/ and icons/ hold what git
 #	tracks and nothing else (an untracked file in lib/ stays off);
@@ -49,7 +50,7 @@ commit=0123456789abcdef0123456789abcdef01234567
 mkdir -p "$tmp/fw"
 {
 	echo "commit $commit"
-	for f in bootcode.bin start.elf fixup.dat start4.elf fixup4.dat bcm2711-rpi-4-b.dtb LICENCE.broadcom; do
+	for f in bootcode.bin start.elf fixup.dat start4.elf fixup4.dat bcm2711-rpi-4-b.dtb bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb LICENCE.broadcom; do
 		echo "stand-in $f" > "$tmp/fw/$f"
 		sha=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/fw/$f")
 		echo "file $f $sha $(wc -c < "$tmp/fw/$f" | tr -d ' ') test https://example.invalid/$commit/boot/$f"
@@ -144,10 +145,13 @@ has() {
 	return 1
 }
 
-for board in rpi3bplus rpi4b; do
+for board in rpi3bplus rpi4b rpi5; do
 	case $board in
-	rpi3bplus) soc=bcm2837; own="bootcode.bin start.elf fixup.dat"; other="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb" ;;
-	rpi4b)     soc=bcm2711; own="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"; other="bootcode.bin start.elf fixup.dat" ;;
+	rpi3bplus) soc=bcm2837; own="bootcode.bin start.elf fixup.dat"; other="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb" ;;
+	rpi4b)     soc=bcm2711; own="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"; other="bootcode.bin start.elf fixup.dat bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb" ;;
+	# the Pi 5 boots from its EEPROM's firmware: on the card only its
+	# device trees (the C1 and D0 steppings), and none of the others' boot files
+	rpi5)      soc=bcm2712; own="bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb"; other="bootcode.bin start.elf fixup.dat start4.elf fixup4.dat bcm2711-rpi-4-b.dtb" ;;
 	esac
 	img=$tmp/$board.img
 	if sh tools/mkpiimage.sh --size 256 --firmware "$tmp/fw" --manifest "$tmp/manifest" \

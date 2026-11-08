@@ -88,6 +88,11 @@ In Xenith, select a list or a paragraph of a Markdown file and execute
 .PP
 or fill the whole file with
 .B Edit ,|md/fmt
+.PP
+To wrap a window's lines between words without changing the file,
+execute
+.B Wrap word
+in its tag instead.
 .SH SOURCE
 .B /appl/cmd/md/fmt.b
 .SH SEE ALSO

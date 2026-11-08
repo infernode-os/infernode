@@ -73,7 +73,7 @@ Exectab : adt {
 	flag2 : int;
 };
 
-F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_LIVE, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
+F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_LIVE, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB, F_WRAP : con iota;
 
 exectab := array[] of {
 	Exectab ( "Alphabet",	F_ALPHABET,	FALSE,	XXX,		XXX		),
@@ -113,6 +113,7 @@ exectab := array[] of {
 	Exectab ( "Tab",		F_TAB,		FALSE,	XXX,		XXX		),
 	Exectab ( "Theme",		F_THEME,		FALSE,	XXX,		XXX		),
 	Exectab ( "Undo",		F_UNDO,		FALSE,	TRUE,	XXX		),
+	Exectab ( "Wrap",		F_WRAP,		FALSE,	XXX,		XXX		),
 	Exectab ( "Zerox",		F_ZEROX,		FALSE,	XXX,		XXX		),
 	Exectab ( nil, 			0,			0,		0,		0		),
 };
@@ -133,6 +134,7 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_ID 		=> id(et);
 		F_INCL 		=> incl(et, argt, arg, narg);
 		F_INDENT	=> indent(et, argt, arg, narg);
+		F_WRAP	=> wrap(et, argt, arg, narg);
 		F_KILL 		=> kill(argt, arg, narg);
 		F_LIMBO		=> limbo(et);
 		F_LINENO		=> lineno(et);
@@ -1557,6 +1559,45 @@ indent(et : ref Text, argt : ref Text, arg : string, narg : int)
 		w.autoindent = autoindent;
 }
 
+
+# Wrap: this window's lines by word or anywhere, as Indent's on and off:
+#	Wrap		the other way from how it wraps now
+#	Wrap word	between words (and inside one wider than the window)
+#	Wrap char	anywhere, as Acme does
+#	Wrap WORD	every window and new ones by word
+#	Wrap CHAR	every window and new ones anywhere
+wrap(et : ref Text, argt : ref Text, arg : string, narg : int)
+{
+	r : string;
+	leng, na : int;
+	a : string;
+
+	w : ref Window;
+	if(et!=nil && et.w!=nil)
+		w = et.w;
+	(nil, r, leng) = getarg(argt, FALSE, TRUE);
+	if(r == nil || leng == 0){
+		(a, na) = findbl(arg, narg);
+		if(a != arg)
+			(r, leng) = (arg[0:narg-na], narg-na);
+	}
+	if(r != nil)
+		r = r[0:leng];
+	case r {
+	"" =>
+		if(w != nil)
+			w.setwrap(!w.body.frame.wrapword);
+	"word" or "char" =>
+		if(w != nil)
+			w.setwrap(r == "word");
+	"WORD" or "CHAR" =>
+		dat->globalwrapword = r == "WORD";
+		warning(nil, "Wrap " + r + "\n");
+		allwindows(Edit->FIXWRAP, nil);
+	* =>
+		warning(nil, "Wrap: word, char, WORD or CHAR\n");
+	}
+}
 
 tab(et : ref Text, argt : ref Text, arg : string, narg : int)
 {

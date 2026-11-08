@@ -241,6 +241,8 @@ main(argl : list of string)
 		dat->globalautoindent = TRUE;
 	'b' =>
 		dat->bartflag = TRUE;
+	'w' =>
+		dat->globalwrapword = TRUE;
 	'c' =>
 		ncol = int argf(arg);
 	'f' =>

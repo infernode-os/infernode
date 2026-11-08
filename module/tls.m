@@ -124,4 +124,8 @@ TLS: module {
 	# Primary API
 	client:		fn(fd: ref Sys->FD, config: ref Config): (ref Conn, string);
 	defaultconfig:	fn(): ref Config;
+	# Validate an exact SHA-256 SubjectPublicKeyInfo pin against one DER
+	# certificate.  Exposed so provisioning and regression tools use the
+	# identical strict parser as the handshake.
+	verifyspkipin:	fn(pin, cert: array of byte): string;
 };

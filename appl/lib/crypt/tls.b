@@ -1868,7 +1868,7 @@ verifycerts(cs: ref ConnState, certs: list of array of byte): string
 	# A pinned key stands in for the chain and the name: the peer is
 	# whoever holds that key (its CertificateVerify is checked apart).
 	if(cs.pinspki != nil)
-		return verifypin(cs.pinspki, hd certs);
+		return verifyspkipin(cs.pinspki, hd certs);
 
 	# Use X509 to verify certificate chain
 	(ok, err) := x509->verify_certchain(certs);
@@ -1884,7 +1884,7 @@ verifycerts(cs: ref ConnState, certs: list of array of byte): string
 	return nil;
 }
 
-verifypin(pin: array of byte, leaf: array of byte): string
+verifyspkipin(pin: array of byte, leaf: array of byte): string
 {
 	spki := certspki(leaf);
 	if(spki == nil)
@@ -1958,9 +1958,16 @@ dertlv(a: array of byte, off: int): (int, int, int)
 		k := n & 16r7F;
 		if(k == 0 || k > 3 || off + 2 + k > len a)
 			return (-1, 0, 0);
+		# DER lengths are shortest-form: no leading zero and no long form
+		# for a value below 128.  Reject BER alternatives so the raw bytes
+		# hashed for a pin have exactly one structural interpretation.
+		if(a[off+2] == byte 0)
+			return (-1, 0, 0);
 		n = 0;
 		for(i := 0; i < k; i++)
 			n = (n << 8) | int a[off+2+i];
+		if(n < 128)
+			return (-1, 0, 0);
 		hdr += k;
 	}
 	if(n > len a - off - hdr)
@@ -1974,7 +1981,7 @@ dertlv(a: array of byte, off: int): (int, int, int)
 certspki(der: array of byte): array of byte
 {
 	(t, h, n) := dertlv(der, 0);
-	if(t != 16r30)
+	if(t != 16r30 || h + n != len der)
 		return nil;
 	off := h;
 	(t, h, n) = dertlv(der, off);	# tbsCertificate

@@ -81,17 +81,33 @@ rlock(RWlock *l)
 	qunlock(&l->x);
 }
 
-/* same as rlock but punts if there are any writers waiting */
+/*
+ * Same as rlock but punts if a writer holds the lock or waits for it,
+ * and only then.
+ *
+ * It used to punt whenever canqlock(&l->x) failed, but every reader
+ * takes x too, for the few instructions of rlock and canrlock, and
+ * canqlock also fails while anyone holds x's spinlock. So on several
+ * cores canrlock failed at random beside another reader, and its
+ * callers in os/ip (ipoput4, the loopback and ether readers) drop the
+ * packet when it fails: an ICMP echo over loopback, sent while TCP
+ * moved packets over the same interface, was lost and its reader never
+ * woke (bcm2837 CI). Writers are counted under l from before they wait
+ * for x until they have let go of it, so the answer here is decided
+ * under l alone and x is never touched: with no writer counted, k is
+ * free or held by readers, and nothing else is touching it.
+ */
 int
 canrlock(RWlock *l)
 {
-	if (!canqlock(&l->x))
-		return 0;
 	lock(&l->l);
+	if(l->writers){
+		unlock(&l->l);
+		return 0;
+	}
 	l->readers++;
 	canqlock(&l->k);	/* block writers if we are the first reader */
 	unlock(&l->l);
-	qunlock(&l->x);
 	return 1;
 }
 
@@ -107,6 +123,9 @@ runlock(RWlock *l)
 void
 wlock(RWlock *l)
 {
+	lock(&l->l);
+	l->writers++;		/* canrlock punts from here on */
+	unlock(&l->l);
 	qlock(&l->x);		/* wait here for writers and exclusion */
 	qlock(&l->k);		/* wait here for last reader */
 }
@@ -116,4 +135,7 @@ wunlock(RWlock *l)
 {
 	qunlock(&l->k);
 	qunlock(&l->x);
+	lock(&l->l);
+	l->writers--;
+	unlock(&l->l);
 }

@@ -127,6 +127,7 @@ struct RWlock
 	QLock	x;			/* Mutual exclusion lock */
 	QLock	k;			/* Lock for waiting writers */
 	int	readers;		/* Count of readers in lock */
+	int	writers;		/* writers holding or waiting, under l */
 };
 
 struct Talarm

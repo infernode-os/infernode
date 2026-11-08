@@ -1990,13 +1990,13 @@ jobs:
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         mkdir -p "$RUNNER_TEMP/bm"
         set +e
-        BAREMETAL_BUILD_ONLY=1 BAREMETAL_PLATFORMS="bcm2837 bcm2711" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
+        BAREMETAL_BUILD_ONLY=1 BAREMETAL_PLATFORMS="bcm2837 bcm2711 bcm2712" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
           ./tests/host/baremetal_test.sh 2>&1 | tee "$RUNNER_TEMP/bm/harness.log"
         st=${PIPESTATUS[0]}
         set -e
         [ "$st" = 0 ] || { tail -20 "$RUNNER_TEMP/bm/cc.log"; echo "::error::the harness exited $st"; exit 1; }
         grep -q 'Skipped: 0' "$RUNNER_TEMP/bm/harness.log" || { echo "::error::the harness skipped something"; exit 1; }
-        for k in bcm2837 bcm2711; do
+        for k in bcm2837 bcm2711 bcm2712; do
           test -s "$RUNNER_TEMP/bm/$k-kernel.img" || { echo "::error::no $k kernel"; exit 1; }
         done
 
@@ -2010,9 +2010,9 @@ jobs:
 
         # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
         # ring-fence rule. Here the stage is what the images are made of.
-        if find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+        if find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card os/bcm2712/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
           echo "FATAL: testing-only harness files found in what a card carries:" >&2
-          find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card os/bcm2712/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
           exit 1
         fi
 
@@ -2022,7 +2022,7 @@ jobs:
         mkdir -p "$RUNNER_TEMP/bootfw"
         sh tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt "$RUNNER_TEMP/bootfw"
 
-        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64; do
+        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64 rpi5:bcm2712:none; do
           b=${board%%:*} rest=${board#*:} soc=${rest%%:*} qemu=${rest#*:}
           img="infernode-$VERSION-$b.img"
           sh tools/mkpiimage.sh "$b" "$RUNNER_TEMP/bm/$soc-kernel.img" "$img"
@@ -2034,6 +2034,8 @@ jobs:
           # login screen. Either failing stops the release here; neither
           # may skip.
           python3 tools/piromcheck.py --firmware "$RUNNER_TEMP/bootfw/firmware" "$b" "$img"
+          # no emulator models a Pi 5: it has only the check above
+          [ "$qemu" = none ] && { xz -T0 -9 "$img"; continue; }
           set +e
           QEMU="$qemu" sh tests/host/piimage_boot_test.sh "$b" "$img" "$RUNNER_TEMP/bm/$soc-kernel.img"
           st=$?

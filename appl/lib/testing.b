@@ -6,6 +6,7 @@ include "sys.m";
 include "testing.m";
 
 verbosemode := 0;
+nrefused := 0;		# tests the far end refused (T.refused), counted by done()
 
 init()
 {
@@ -25,7 +26,7 @@ getverbose(): int
 newT(name: string): ref T
 {
 	sys->fprint(sys->fildes(2), "=== RUN   %s\n", name);
-	return ref T(name, nil, 0, 0, nil, sys->millisec());
+	return ref T(name, nil, 0, 0, nil, sys->millisec(), nil);
 }
 
 # newTsrc: create test with source file for clickable addresses
@@ -33,7 +34,7 @@ newT(name: string): ref T
 newTsrc(name, srcfile: string): ref T
 {
 	sys->fprint(sys->fildes(2), "=== RUN   %s\n", name);
-	return ref T(name, srcfile, 0, 0, nil, sys->millisec());
+	return ref T(name, srcfile, 0, 0, nil, sys->millisec(), nil);
 }
 
 # T.log: add message to test output
@@ -74,6 +75,27 @@ T.skip(t: self ref T, msg: string)
 	if(!t.failed)
 		t.skipped = 1;
 	t.log(msg);
+	raise "fail:skip";
+}
+
+# T.refused: the far end answered, and said no
+#
+# A refusal by a server we do not run -- an HTTP 403 or 429, a rate
+# limit, a challenge page, an exhausted quota -- is that server's
+# policy, not a failure of the code under test, and kept being chased
+# as one: a soak's "TLS failures" were example.com answering a GET
+# with 403 on handshakes that had succeeded. It is reported as REFUSED,
+# counted apart, and never fails a run. It stops the test as skip does
+# (and is tallied with the skips by every test file's run() helper,
+# which catches "fail:skip"), and like skip it cannot retract a
+# failure already recorded.
+T.refused(t: self ref T, why: string)
+{
+	if(!t.failed){
+		t.skipped = 1;
+		t.refusal = why;
+	}
+	t.log("refused by the far end: " + why);
 	raise "fail:skip";
 }
 
@@ -183,6 +205,10 @@ done(t: ref T): int
 		if(!verbosemode && t.output != nil)
 			printoutput(t);
 		return 0;
+	} else if(t.skipped && t.refusal != nil) {
+		nrefused++;
+		sys->fprint(sys->fildes(2), "--- REFUSED: %s (%.2fs): %s\n", t.name, elapsedSec, t.refusal);
+		return 0;
 	} else if(t.skipped) {
 		sys->fprint(sys->fildes(2), "--- SKIP: %s (%.2fs)\n", t.name, elapsedSec);
 		if(!verbosemode && t.output != nil)
@@ -201,6 +227,7 @@ summary(passed, failed, skipped: int): int
 	if(failed > 0) {
 		sys->fprint(sys->fildes(2), "FAIL\n");
 		sys->fprint(sys->fildes(2), "%d passed, %d failed, %d skipped\n", passed, failed, skipped);
+		refusedline();
 		return failed;
 	}
 
@@ -209,5 +236,14 @@ summary(passed, failed, skipped: int): int
 		sys->fprint(sys->fildes(2), "%d passed, %d skipped\n", passed, skipped);
 	else
 		sys->fprint(sys->fildes(2), "%d passed\n", passed);
+	refusedline();
 	return 0;
+}
+
+# Its own line, after the counts scripts read: of the skipped, how many
+# were the far end saying no rather than something missing here.
+refusedline()
+{
+	if(nrefused > 0)
+		sys->fprint(sys->fildes(2), "%d of the skipped refused by the far end (REFUSED above)\n", nrefused);
 }

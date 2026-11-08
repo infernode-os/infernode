@@ -122,6 +122,64 @@ static Vm*	vms[MAXVM] = { &vm0 };
 static int	nvms = 1;
 static Lock	vmlk;
 
+static char *pstate[] = {
+	[Palt]	"alt",	[Psend]	"send",	[Precv]	"recv",	[Pdebug] "debug",
+	[Pready] "ready", [Prelease] "release", [Pexiting] "exiting", [Pbroken] "broken",
+};
+
+static char*
+modpath(Modlink *ml)
+{
+	if(ml == nil || ml == H || ml->m == nil)
+		return "?";
+	return ml->m->path;
+}
+
+/*
+ * The debug key 'v': for each VM, who has its interpreter, who waits
+ * for it, and each of its Progs -- its state, the module it is in and
+ * the module that called that one (a builtin's caller: the Dis code
+ * that is waiting). Read without the VM's locks, as procdump is: it is
+ * for a machine that has stopped.
+ */
+static void
+vmdump(void)
+{
+	int i, n;
+	Vm *v;
+	Isched *s;
+	Prog *p;
+	Proc *q;
+	Frame *f;
+	char *st, *caller;
+
+	for(i = 0; i < nvms; i++){
+		v = vms[i];
+		s = VMSCHED(v);
+		print("vm%d: idle %d creating %d nyield %d runhd %d\n", i, s->idle, s->creating, s->nyield,
+			s->runhd != nil ? s->runhd->pid : -1);
+		print("  vmq:");
+		for(q = s->vmq, n = 0; q != nil && n < 64; q = q->qnext, n++)
+			print(" %lud", q->pid);
+		print("\n  idlevmq:");
+		for(q = s->idlevmq, n = 0; q != nil && n < 64; q = q->qnext, n++)
+			print(" %lud", q->pid);
+		print("\n");
+		vmprocdump(v);
+		for(p = s->head, n = 0; p != nil && n < 512; p = p->next, n++){
+			st = p->state >= 0 && p->state < nelem(pstate) && pstate[p->state] != nil ? pstate[p->state] : "?";
+			caller = "";
+			for(f = (Frame*)p->reg.FP; f != nil && (uintptr)f > 0x1000; f = (Frame*)f->fp)
+				if(f->mr != nil){
+					caller = modpath(f->mr);
+					break;
+				}
+			print("  prog %d %s %s <- %s%s\n", p->pid, st, modpath(p->reg.M), caller,
+				p->kill != nil ? " (killed)" : "");
+		}
+	}
+}
+
 int
 vmcount(void)
 {
@@ -2100,6 +2158,7 @@ disinit(void *a)
 
 	vm0.vsched = &sched0;
 	up->vm = &vm0;
+	debugkey('v', "Dis VMs and their progs", vmdump, 0);
 
 	print("Initial Dis: \"%s\"\n", initmod);
 

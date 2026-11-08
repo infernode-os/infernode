@@ -1,0 +1,30 @@
+.TH PWM 3
+.SH NAME
+pwm \- pulse-width modulation, as files
+.SH SYNOPSIS
+.nf
+.B bind -a #W /dev
+
+.BI /dev/pwm N
+.fi
+.SH DESCRIPTION
+.I Pwm
+serves the four channels of the Raspberry Pi 5's PWM0, on GPIO 12, 13, 18
+and 19.
+Times are in nanoseconds, in steps of 20, to 85 seconds.
+A write to a channel holds any of
+.BI period " ns" ,
+.BI duty " ns" ,
+.B on
+and
+.BR off ;
+a read returns them.
+A pin becomes PWM's at
+.BR on ,
+and one in use by something else refuses:
+GPIO 12 and 13 are the kernel's second console.
+.SH SOURCE
+.B /os/bcm2712/devpwm.c
+.SH SEE ALSO
+.IR gpio (3),
+.IR spi (3)

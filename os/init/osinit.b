@@ -207,12 +207,13 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
-	# And the camera, /dev/camera (os/port/devcam.c), likewise after
-	# /dev. Nothing runs until something writes "stream on" to its
-	# ctl, so it costs nothing to have bound.
+	# And the camera receiver and its I2C, where the board has them
+	# (the Pi 4), likewise after /dev: nothing runs until a program
+	# powers it, so they cost nothing to have bound.
 	#
-	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
-		sys->print("init: cannot bind #V on /dev: %r\n");
+	for(devs := "#V" :: "#J" :: nil; devs != nil; devs = tl devs)
+		if(sys->stat(hd devs).t0 >= 0 && sys->bind(hd devs, "/dev", Sys->MAFTER) < 0)
+			sys->print("init: cannot bind %s on /dev: %r\n", hd devs);
 
 	#
 	# And where USB serial ports appear: usbserial makes eiaU0 and its
@@ -295,6 +296,14 @@ init()
 	sdsetup();
 
 	#
+	# CNSA 2.0 strict authentication, if the card asks for it: straight
+	# after the card, before anything that could authenticate (the Wi-Fi
+	# join's factotum, Bluetooth, the network console, the desktop's cpu
+	# listener) has had the chance to.
+	#
+	cnsasetup();
+
+	#
 	# The radio's firmware lives on the card just mounted. The kernel
 	# names no path: this is where the paths come from.
 	#
@@ -344,6 +353,7 @@ init()
 	# into the kernel. Ordered wrongly it announced itself only as
 	# factotum failing to bind, which is a long way from the cause.
 	#
+	spawn buttonwatch();
 	wifisetup();
 
 	#
@@ -352,6 +362,12 @@ init()
 	# wait on a radio.
 	#
 	btsetup();
+
+	#
+	# The camera, where the board has one and the card says how it is
+	# mounted: camsrv on /mnt/video for every session, as Bluetooth is.
+	#
+	camerasetup();
 
 	#
 	# The touch panel, if the kernel found one. Spawned because it is
@@ -440,6 +456,18 @@ Echoreq:	con 8;		# ICMP type: echo request
 Echoreply:	con 0;		# ICMP type: echo reply
 Ipsize:		con 20;		# icmp.c ICMP_IPSIZE
 Hdrsize:	con 8;		# icmp.c ICMP_HDRSIZE
+Pingwait:	con 20*1000;	# ms for the echo reply
+
+pingread(d: ref Sys->FD, rep: array of byte, got: chan of int)
+{
+	got <-= sys->read(d, rep, len rep);
+}
+
+pingtimer(tmo: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	tmo <-= 1;
+}
 
 pingit()
 {
@@ -487,8 +515,25 @@ pingit()
 		return;
 	}
 
+	#
+	# The reply is waited for, not for ever: a lost one used to leave
+	# this thread blocked in read and print nothing at all, so a boot
+	# missing its "echo reply" line said nothing about why.  Loopback
+	# answers in a millisecond; 20 seconds is for QEMU's TCG on a busy
+	# runner.
+	#
 	rep := array[256] of byte;
-	n = sys->read(d, rep, len rep);
+	got := chan[1] of int;
+	spawn pingread(d, rep, got);
+	tmo := chan[1] of int;
+	spawn pingtimer(tmo, Pingwait);
+	alt {
+	n = <-got =>
+		;
+	<-tmo =>
+		sys->print("init: no ICMP echo reply after %d ms\n", Pingwait);
+		return;
+	}
 	if(n < Ipsize + Hdrsize){
 		sys->print("init: no echo reply (read %d): %r\n", n);
 		return;
@@ -1716,6 +1761,7 @@ Wififile: con "/n/dos/wifi";
 Btfile: con "/n/dos/bt";
 Btkeys: con "/n/dos/btkeys";
 Btfactotum: con "/tmp/factotum";
+Camerafile: con "/n/dos/camera";
 
 radiosetup()
 {
@@ -1911,6 +1957,89 @@ btjoin(txt: string)
 }
 
 #
+# The camera. /n/dos/camera holds ctl lines for camsrv(4), one per
+# line, written in order once it is mounted -- for a camera mounted on
+# its side, say,
+#
+#	rotate 90
+#
+# How the camera sits is a fact about this installation, so it is the
+# card's to say, as the radio's settings are; the same kernel and the
+# same camsrv serve any mounting. No file, nothing started here, and
+# wm/camera starts camsrv for itself as on any other machine. No
+# receiver (#V: a board other than the Pi 4), the file is not read.
+#
+# In THIS namespace, as /net/bt is, so the console shell, the network
+# console and the desktop all inherit /mnt/video/0; the mount point
+# appears on reference, mntsetup() having put mntgen after /mnt.
+# camsrv costs nothing idle: the sensor is powered only while
+# something reads a frame. The lines are DATA, ctl verbs that camsrv
+# checks; nothing in the file is run.
+#
+camerasetup()
+{
+	if(sys->stat("#V").t0 < 0)
+		return;
+	(txt, found) := slurp(Camerafile);
+	if(!found)
+		return;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		sys->print("init: camera: pipe: %r\n");
+		return;
+	}
+	spawn camserve(p[1]);
+	p[1] = nil;
+	if(sys->mount(p[0], nil, "/mnt/video", Sys->MREPL, "") < 0){
+		sys->print("init: camera: mount on /mnt/video: %r\n");
+		return;
+	}
+	p[0] = nil;
+	fd := sys->open("/mnt/video/0/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: camera: /mnt/video/0/ctl: %r\n");
+		return;
+	}
+	for(i := 0; i < len txt;){
+		j := i;
+		while(j < len txt && txt[j] != '\n')
+			j++;
+		line := txt[i:j];
+		i = j + 1;
+		if(line == nil || line[0] == '#')
+			continue;
+		if(sys->fprint(fd, "%s", line) < 0)
+			sys->print("init: camera: %s: %r\n", line);
+	}
+	(f, got) := slurp("/mnt/video/0/fmt");
+	if(got)
+		sys->print("init: camera: /mnt/video %s", f);
+}
+
+# camsrv serves 9P on its standard input
+camserve(fd: ref Sys->FD)
+{
+	# the pipe's other end stays with the mount alone
+	sys->pctl(Sys->NEWFD, fd.fd :: 1 :: 2 :: nil);
+	if(sys->dup(fd.fd, 0) < 0){
+		sys->print("init: camera: dup: %r\n");
+		return;
+	}
+	fd = nil;
+	cam := load Command "/dis/camsrv.dis";
+	if(cam == nil){
+		sys->print("init: camera: cannot load /dis/camsrv.dis: %r\n");
+		return;
+	}
+	{
+		cam->init(nil, "camsrv" :: nil);
+	} exception e {
+	"fail:*" =>
+		sys->print("init: camera: camsrv: %s\n", e[5:]);
+	}
+}
+
+#
 # One "name value" line at a time; the value is the rest of the line,
 # because a network name and a passphrase may both contain spaces.
 #
@@ -2045,13 +2174,22 @@ wifijoin(essid, pass: string)
 }
 
 #
-# A re-join after a lost link is new keys; it may be a different
-# network, or the same one after its lease ran out. The address was
-# asked for once, so it went stale. The supplicant writes "group key"
-# each time it finishes a handshake: one more than last time is a
-# re-join, and the address is asked for again.
+# A re-join after a lost link is a new four-way handshake, and the
+# supplicant writes "pairwise transmit key installed" once in each. It
+# is counted, and said, and nothing else is done: the address and the
+# routes are left as they are.
 #
-wifiwatch(ifcno: string)
+# This counted "group key" lines, and dropped the address and started
+# a new DHCP client at each one. But a router sends new group keys to a
+# station that never left -- a routine rekey -- and every one of those
+# was taken for a re-join: the address went, every connection on Wi-Fi
+# broke, and removing the address took the default route with it, which
+# is ether0's, on the same subnet, so nothing off the subnet was reached
+# again until a reboot. A Pi 5 under a soak did it from the first rekey.
+# The lease needs nothing from here: ip/dhcp -m runs for as long as it
+# does, and renews it, or finds another, by itself.
+#
+wifiwatch(nil: string)
 {
 	seen := keycount();
 	for(;;){
@@ -2062,13 +2200,7 @@ wifiwatch(ifcno: string)
 			continue;
 		}
 		seen = n;
-		sys->print("init: wifi: re-joined; asking for an address again\n");
-		dropaddress(ifcno);
-		if(wifidhcp(ifcno)){
-			(ndb, nil) := slurp("/net/ndb");
-			sys->print("init: wifi: %s\n", ndb);
-		}else
-			sys->print("init: wifi: re-joined but no address\n");
+		sys->print("init: wifi: re-joined; the address and its lease are left to ip/dhcp\n");
 	}
 }
 
@@ -2076,28 +2208,10 @@ keycount(): int
 {
 	(log, nil) := slurp(Wpalog);
 	n := 0;
-	for(i := 0; i + 9 <= len log; i++)
-		if(log[i:i+9] == "group key")
+	for(i := 0; i + 21 <= len log; i++)
+		if(log[i:i+21] == "pairwise transmit key")
 			n++;
 	return n;
-}
-
-# remove whatever addresses the interface has: "\taddr /mask ..." lines of its status
-dropaddress(ifcno: string)
-{
-	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
-	ctl := sys->open("/net/ipifc/" + ifcno + "/ctl", Sys->OWRITE);
-	if(ctl == nil)
-		return;
-	(nil, lines) := sys->tokenize(st, "\n");
-	for(; lines != nil; lines = tl lines){
-		l := hd lines;
-		if(l == "" || l[0] != '\t')
-			continue;
-		(nf, f) := sys->tokenize(l, " \t");
-		if(nf >= 2)
-			sys->fprint(ctl, "remove %s %s", hd f, hd tl f);
-	}
 }
 
 Wpalog: con "/tmp/wpa.log";
@@ -2274,9 +2388,19 @@ wifiaddr(): string
 		sys->print("init: wifi: no address yet; asking again\n");
 		sys->sleep(5000);
 	}
+	#
+	# Not given up on. This returned nil here, and nothing asked again:
+	# a Pi 5 soak's radio authenticated after re-associating mid-
+	# handshake, got no lease in either try, and had no address for the
+	# rest of the boot -- while ip/dhcp run by hand a little later got
+	# one at once. Authentication already keeps trying (above); the
+	# address now does too, every 30 seconds, and the watcher starts
+	# when it comes.
+	#
 	if(!hasaddress(ifcno)){
-		sys->print("init: wifi: associated but no address\n");
-		return nil;
+		sys->print("init: wifi: associated but no address yet; asking every 30 s\n");
+		while(!wifidhcp(ifcno))
+			sys->sleep(30*1000);
 	}
 	(ndb, nil) := slurp("/net/ndb");
 	sys->print("init: wifi: %s\n", ndb);
@@ -2352,6 +2476,37 @@ tmpsetup()
 }
 
 #
+# A press of the power button, where a board has one, is a clean halt:
+# #P says whether it is down, and what it means is decided here. kfs and
+# dossrv write through, and kfs marks itself clean when idle, so there is
+# nothing to tell them.
+#
+buttonwatch()
+{
+	fd := sys->open("#P/button", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[8] of byte;
+	held := 0;
+	for(;;){
+		sys->sleep(100);
+		if(sys->pread(fd, buf, len buf, big 0) < 1)
+			return;
+		if(buf[0] != byte '1'){
+			held = 0;
+			continue;
+		}
+		if(++held < 2)
+			continue;
+		sys->print("init: power button: halting\n");
+		ctl := sys->open("/dev/sysctl", Sys->OWRITE);
+		if(ctl != nil)
+			sys->fprint(ctl, "halt");
+		return;
+	}
+}
+
+#
 # Mount points on demand, under /mnt.
 #
 # The root is the kernel's own, read only, and its /mnt holds the few
@@ -2401,6 +2556,17 @@ mntgenproc(mg: Command, fd: ref Sys->FD)
 sdsetup()
 {
 	fd := sys->open("/dev/sdcard", Sys->OREAD);
+
+	#
+	# A board that booted from a drive and has no card, or was told
+	# to on the command line, has this on the drive's first partition.
+	# Only a drive's partition table names it, so elsewhere it is not
+	# there.
+	#
+	if((fd == nil || bootword("nvmeroot")) && sys->stat("/dev/nvme0p1").t0 >= 0){
+		dosmount("nvme0p1");
+		return;
+	}
 	if(fd == nil)
 		return;			# no card, which is not an error
 
@@ -2453,7 +2619,28 @@ sdsetup()
 
 	if(dos == "")
 		return;
+	dosmount(dos);
+}
 
+# Whether the command line has this word.
+bootword(w: string): int
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, l) := sys->tokenize(string buf[0:n], " \t\r\n");
+	for(; l != nil; l = tl l)
+		if(hd l == w)
+			return 1;
+	return 0;
+}
+
+dosmount(dos: string)
+{
 	srv := load Command "/dis/dossrv.dis";
 	if(srv == nil){
 		sys->print("init: cannot load dossrv: %r\n");
@@ -2492,10 +2679,14 @@ sdsetup()
 #
 #	local			the card's own dis/ and lib/ trees
 #	net tcp!host!port	a styx server, mounted without auth
+#	gefs part		a gefs(4) disk, #S/part (nvme0p3) or a path
 #
 # One line per source, applied top to bottom, every one a union bind
 # AFTER the kernel root -- so the 47 recovery commands always resolve,
 # and everything they lack falls through to the card or the network.
+# The first source with a usr/ has /usr: "gefs nvme0p3" then "local"
+# is a machine living on its disk with the card's trees behind it, and
+# the card's usr/ must not replace the disk's.
 # No file, or no matching trees, means the machine simply runs its
 # built-in root, which is exactly what it did before this existed.
 #
@@ -2507,6 +2698,33 @@ sdsetup()
 # "local", a bench machine writes "local" and binds a development
 # server over it by hand.
 #
+#
+# CNSA 2.0 strict mode. A file /n/dos/cnsamode (its contents are not
+# read) makes every authentication on this machine use ML-KEM-1024, as
+# CNSAMODE does for the hosted emulator, so a board can be one of a
+# CNSA-mode fleet: every node must agree, and a mixed pair fails, by
+# design. The kernel's switch is what the handshake obeys (one way, for
+# the whole machine: os/port/devcons.c); /env/cnsamode is set as well,
+# as the hosted emulator sets it, for the programs that read it there
+# (createsignerkey, signer). No file, no change: ML-KEM-768.
+#
+Cnsafile: con "/n/dos/cnsamode";
+
+cnsasetup()
+{
+	if(sys->stat(Cnsafile).t0 < 0)
+		return;
+	fd := sys->open("#c/sysctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "cnsamode on") < 0){
+		sys->print("init: cnsamode: the kernel refused strict mode: %r\n");
+		return;
+	}
+	fd = sys->create("/env/cnsamode", Sys->OWRITE, 8r664);
+	if(fd == nil || sys->fprint(fd, "1") < 0)
+		sys->print("init: cnsamode: /env/cnsamode: %r\n");
+	sys->print("init: cnsamode: CNSA 2.0 strict (ML-KEM-1024) for every authentication\n");
+}
+
 rootpolicy()
 {
 	spec := "local";
@@ -2544,11 +2762,57 @@ rootpolicy()
 			}
 			sys->print("init: root server %s on /n/remote\n", addr);
 			rootbind("/n/remote");
+		"gefs" =>
+			if(tl toks == nil){
+				sys->print("init: rootpath: gefs needs a partition\n");
+				continue;
+			}
+			if(gefsroot(hd tl toks))
+				rootbind("/n/gefs");
 		* =>
 			sys->print("init: rootpath: unknown source %s\n", hd toks);
 		}
 	}
 }
+
+#
+# A gefs(4) disk as a root source. The server is the kernel's own copy
+# (/dis/disk/gefs.dis, in the recovery root as dossrv is: the root's
+# file server is part of what boots, and it must match the disk it
+# reads whatever state the card is in). It is CALLED, as dossrv is; it
+# mounts itself and returns, its server left running. Where, as 9front
+# has them: the file system on /n/gefs, its adm tree (users, ctl,
+# status) on /n/gefs.adm, every snapshot on /n/dump. A disk that will
+# not load says why and the next rootpath line is tried.
+#
+gefsroot(part: string): int
+{
+	dev := part;
+	if(dev[0] != '#' && dev[0] != '/')
+		dev = "#S/" + dev;
+	gefs := load Command "/dis/disk/gefs.dis";
+	if(gefs == nil){
+		sys->print("init: rootpath: cannot load /dis/disk/gefs.dis: %r\n");
+		return 0;
+	}
+	{
+		gefs->init(nil, "disk/gefs" :: "-M" :: "main:/n/gefs" ::
+			"-M" :: "adm:/n/gefs.adm" :: "-M" :: "dump:/n/dump" :: dev :: nil);
+	} exception e {
+	"*" =>
+		sys->print("init: rootpath: gefs %s: %s\n", dev, e);
+		return 0;
+	}
+	(ok, d) := sys->stat("/n/gefs");
+	if(ok < 0 || d.dtype != 'M'){
+		sys->print("init: rootpath: gefs %s did not mount\n", dev);
+		return 0;
+	}
+	sys->print("init: gefs %s on /n/gefs\n", dev);
+	return 1;
+}
+
+usrbound := 0;
 
 #
 # Union a root candidate's dis/ and lib/ over the system's, if it has
@@ -2586,11 +2850,13 @@ rootbind(base: string)
 	# the entire purpose is that things get created here.
 	#
 	(ok, nil) := sys->stat(base + "/usr");
-	if(ok >= 0){
+	if(ok >= 0 && !usrbound){
 		if(sys->bind(base + "/usr", "/usr", Sys->MREPL|Sys->MCREATE) < 0)
 			sys->print("init: bind %s/usr: %r\n", base);
-		else
+		else{
 			sys->print("init: /usr from %s/usr (writable)\n", base);
+			usrbound = 1;
+		}
 	}
 }
 
@@ -3246,8 +3512,31 @@ hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array 
 				continue;
 			}
 			now := (status & HPpresent) != 0;
-			if(now == was[port])
+			if(now == was[port]){
+				#
+				# Present before and present now is not "nothing
+				# happened". A device that drops off the bus and
+				# comes back between two looks reads present both
+				# times, and the port it left has disabled itself
+				# (xHCI does on any disconnect, as a USB 2.0 hub
+				# does): every transfer to it after that is a
+				# Transaction Error, and nothing resets the port.
+				# A Pi 5 soak lost its USB Ethernet so, 80 minutes
+				# in, for the rest of the boot: PORTSC 0x206e1,
+				# connected, disabled, its connect change never
+				# acknowledged. A port with a device set up on it
+				# that is present but no longer enabled is that
+				# device gone and back; it is set up again as an
+				# attach would be. xHCI only, as above (#679).
+				#
+				if(havexhci && now && devs[port] != "" && (status & HPenable) == 0){
+					sys->print("init: %s%s port %d: %s fell off the bus and came back; setting it up again\n",
+						indent, name, port, devs[port]);
+					detachdev(devs[port]);
+					devs[port] = portsetup(d, name, port, indent);
+				}
 				continue;
+			}
 			was[port] = now;
 
 			if(now){

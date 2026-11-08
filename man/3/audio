@@ -7,10 +7,15 @@ audio \- digital audio input and output
 .B /dev/audio
 .br
 .B /dev/audioctl
+.br
+.B /dev/audiostat
 .SH DESCRIPTION
 The
 .I audio
-device serves a one-level directory containing two files,
+device serves a one-level directory containing two files
+(three on the native Raspberry Pi kernels; see
+.B Audiostat
+below),
 giving access to the host or native audio device in a platform-independent way.
 .PP
 .B Audio
@@ -142,6 +147,37 @@ is one of
 .BR line ,
 .BR aux1 ,
 .BR loop .
+.PP
+.B Audiostat
+is read-only, and says what the device has done rather than what it is
+set to: one line of names and values,
+.IP
+.EX
+engine running open 1 rate 44100 chans 2 bits 16 frames 2048 ahead 3 played 1722 underruns 4
+.EE
+.PP
+.B engine
+is whether the output is running (on a Raspberry Pi it stays running, at
+silence, from the first open on);
+.BR open ,
+whether a program has
+.BR audio ;
+.B frames
+the length of a buffer
+.RB ( audioctl 's
+.B buf
+sets it) and
+.B ahead
+how many the writer may run in front of the output;
+.B played
+the buffers played since boot;
+.B underruns
+those of them that were silence in the middle of a sound (the device open
+and written to since), each a gap of
+.IR frames / rate
+seconds that was heard.
+The counts only go up: a program that wants a rate compares two readings.
+Only the native Raspberry Pi kernels serve it.
 .SH SOURCE
 .B /emu/port/devaudio*.c
 .br

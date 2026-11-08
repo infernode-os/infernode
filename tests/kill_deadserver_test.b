@@ -56,6 +56,8 @@ run(name: string)
 			testKillerNotHeld(t);
 		"KilledNotHeld" =>
 			testKilledNotHeld(t);
+		"CaughtKillDoesNotSurvive" =>
+			testCaughtKillDoesNotSurvive(t);
 		"ExiterNotHeld" =>
 			testExiterNotHeld(t);
 		}
@@ -296,6 +298,51 @@ testKilledNotHeld(t: ref T)
 	t.assert(sys->open(st, Sys->OREAD) == nil, "the killed reader is gone within 5s, its read unanswered");
 }
 
+# A ctl kill is revocation, not a catchable application exception.  Before
+# this regression, the first read was interrupted, exception "*" consumed
+# the empty kill, and the Prog entered another read with no interrupt pending;
+# neither the mount watchdog nor another owner could make it leave.
+defiantreader(dir: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	fd := sys->open(dir + "/f", Sys->OREAD);
+	if(fd == nil)
+		return;
+	b := array[10] of byte;
+	for(;;){
+		{
+			sys->read(fd, b, len b);
+		} exception {
+		"*" =>
+			;
+		}
+	}
+}
+
+testCaughtKillDoesNotSurvive(t: ref T)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	dir := "/tmp/killdead4";
+	mountstall(t, dir);
+	pidc := chan of int;
+	spawn defiantreader(dir, pidc);
+	pid := <-pidc;
+	sys->sleep(300);
+	st := sys->sprint("/prog/%d/status", pid);
+	ctl := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(ctl == nil)
+		t.fatal(sys->sprint("open ctl: %r"));
+	sys->fprint(ctl, "kill");
+	ctl = nil;
+	for(i := 0; i < 50; i++){
+		if(sys->open(st, Sys->OREAD) == nil)
+			break;
+		sys->sleep(100);
+	}
+	t.assert(sys->open(st, Sys->OREAD) == nil,
+		"a catch-all cannot consume ctl kill and retain the Prog");
+}
+
 # a Prog exiting of itself, not killed, its name space's close clunking
 # the mount: it waited for the clunk without end, and on servers that
 # never answer exiting Progs held their kprocs until there were none
@@ -338,6 +385,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("KillerNotHeld");
 	run("KilledNotHeld");
+	run("CaughtKillDoesNotSurvive");
 	run("ExiterNotHeld");
 
 	for(; stalls != nil; stalls = tl stalls)

@@ -1822,7 +1822,9 @@ Keyring_getmsg(void *fp)
 
 /*
  * CNSA 2.0 strict mode — fleet-wide policy via the host CNSAMODE env var
- * (the emu also reflects it into Inferno /env/cnsamode for Limbo tools).
+ * (the emu also reflects it into Inferno /env/cnsamode for Limbo tools);
+ * on bare metal, getenv answers from the kernel's switch, which boot
+ * throws when the card has a cnsamode file (os/arm64/notyet.c).
  * When on, the native STS handshake uses ML-KEM-1024 (FIPS 203, NIST
  * Category 5) instead of ML-KEM-768. Every node in a CNSA-mode fleet must
  * agree; a mixed 768/1024 pair fails the public-key length check, by design

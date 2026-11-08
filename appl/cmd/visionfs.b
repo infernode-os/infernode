@@ -53,9 +53,11 @@ include "styx.m";
 include "styxservers.m";
 	styxservers: Styxservers;
 	Styxserver, Navigator, Navop: import styxservers;
+include "tensor.m";
+	tensor: Tensor;
 include "visnet.m";
 	visnet: Visnet;
-	Net, Det: import visnet;
+	Net, Det, Head: import visnet;
 
 Visionfs: module
 {
@@ -91,6 +93,7 @@ Session: adt {
 	id:	int;
 	refs:	int;
 	model:	ref Model;
+	place:	string;		# cpu, or one of the engine tree's: gpu dla0 dla1
 	thresh, iou:	real;
 	classes:	list of string;	# nil: all
 	state:	string;
@@ -168,7 +171,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	styx = load Styx Styx->PATH;
 	styxservers = load Styxservers Styxservers->PATH;
 	visnet = load Visnet Visnet->PATH;
-	if(arg == nil || str == nil || styx == nil || styxservers == nil || visnet == nil)
+	tensor = load Tensor Tensor->PATH;
+	if(arg == nil || str == nil || styx == nil || styxservers == nil || visnet == nil || tensor == nil)
 		fatal(sys->sprint("cannot load modules: %r"));
 	if((e := visnet->init()) != nil)
 		fatal(e);
@@ -225,13 +229,21 @@ fatal(s: string)
 	raise "fail:" + s;
 }
 
+# a file read to its end, up to 64 KB (one read was enough for status and
+# fmt, not for an engine tree's ctl)
 readfile(f: string): string
 {
 	fd := sys->open(f, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	b := array[512] of byte;
-	n := sys->read(fd, b, len b);
+	b := array[65536] of byte;
+	n := 0;
+	while(n < len b){
+		k := sys->read(fd, b[n:], len b - n);
+		if(k <= 0)
+			break;
+		n += k;
+	}
 	if(n <= 0)
 		return nil;
 	return string b[0:n];
@@ -397,7 +409,11 @@ Serve:
 			id := int (f.path >> 8);
 			case t {
 			Qctl =>
-				s := "engine cpu\nplaces cpu\n";
+				s := "engine cpu\n";
+				if(trtdir != nil)
+					s += "engine trt " + trtdir + "\nplaces cpu gpu dla0 dla1\n";
+				else
+					s += "places cpu\n";
 				for(ml := lastof(models); ml != nil; ml = tl ml)
 					s += "model " + (hd ml).name + " " + (hd ml).dir + "\n";
 				srv.reply(styxservers->readstr(m, s));
@@ -410,8 +426,8 @@ Serve:
 					break;
 				}
 				n := md.net;
-				srv.reply(styxservers->readstr(m, sys->sprint("kind=%s decode=%s input=%dx%d classes=%d order=%s fill=%d places=cpu sha256=%s\n",
-					n.kind, n.decode, n.inw, n.inh, n.nclass, n.order, n.fill, n.sha256)));
+				srv.reply(styxservers->readstr(m, sys->sprint("kind=%s decode=%s input=%dx%d classes=%d order=%s fill=%d places=%s sha256=%s\n",
+					n.kind, n.decode, n.inw, n.inh, n.nclass, n.order, n.fill, joinc(places(md)), n.sha256)));
 			Qmclasses =>
 				md := modelid(id);
 				if(md == nil){
@@ -548,6 +564,7 @@ newsession(): ref Session
 	s.id = nextsess++;
 	s.thresh = 0.3;
 	s.iou = 0.45;
+	s.place = "cpu";
 	s.state = "idle";
 	if(models != nil)
 		s.model = hd lastof(models);
@@ -695,6 +712,8 @@ status(s: ref Session): string
 	if(s.model != nil)
 		m = s.model.name;
 	st := "state=" + s.state + " model=" + m;
+	if(s.place != "cpu")
+		st += " place=" + s.place;
 	if(s.src != nil)
 		st += " src=" + quote(s.src);
 	if(s.err != nil)
@@ -769,6 +788,24 @@ rootctl(srv: ref Styxserver, m: ref Tmsg.Write, loadc: chan of ref Loaded): stri
 			return "model " + name + " is loaded already";
 		spawn loader(srv, m.tag, name, hd tl tl w, loadc);
 		return nil;
+	"engine" =>
+		if(len w != 2)
+			return "usage: engine dir | engine none";
+		if(hd tl w == "none"){
+			for(l := sessions; l != nil; l = tl l)
+				if((hd l).place != "cpu")
+					return sys->sprint("session %d is on %s", (hd l).id, (hd l).place);
+			trtdir = nil;
+			trtloaded = nil;
+		} else {
+			(ok, nil) := sys->stat(hd tl w + "/ctl");
+			if(ok < 0 || sys->stat(hd tl w + "/engines").t0 < 0)
+				return hd tl w + ": no engine tree there (trtsrv's ctl and engines/)";
+			trtdir = hd tl w;
+			trtloaded = nil;
+		}
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		return nil;
 	"unload" =>
 		if(len w != 2)
 			return "usage: unload name";
@@ -787,7 +824,7 @@ rootctl(srv: ref Styxserver, m: ref Tmsg.Write, loadc: chan of ref Loaded): stri
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		return nil;
 	}
-	return "unknown command " + hd w + ": load, unload";
+	return "unknown command " + hd w + ": load, unload, engine";
 }
 
 goodname(s: string): int
@@ -854,8 +891,9 @@ sessctl(s: ref Session, data: string): string
 			}
 			ns.classes = cl;
 		"place" =>
-			if(len w != 2 || hd tl w != "cpu")
-				return "place: this server has only cpu";
+			if(len w != 2)
+				return "usage: place cpu | gpu | dla0 | dla1";
+			ns.place = hd tl w;
 		"src" =>
 			if(len w != 2)
 				return "usage: src feed | src none";
@@ -887,8 +925,10 @@ sessctl(s: ref Session, data: string): string
 		return "src: no model to look with: load one";
 	if(ns.src != nil && s.state == "running")
 		return "src: a picture is being looked at";
+	if(ns.place != "cpu" && (ns.model == nil || !member(ns.place, places(ns.model))))
+		return sys->sprint("place %s: not one of %s", ns.place, joined(places(ns.model)));
 	restart := ns.src != nil && (srcset || ns.model != s.model || ns.thresh != s.thresh ||
-		ns.iou != s.iou || !samelist(ns.classes, s.classes) || ns.rate != s.rate);
+		ns.iou != s.iou || !samelist(ns.classes, s.classes) || ns.rate != s.rate || ns.place != s.place);
 	*s = *ns;
 	if(srcset && s.src == nil){
 		stopfeed(s);
@@ -927,7 +967,7 @@ startfeed(s: ref Session)
 	s.err = nil;
 	s.state = "following";
 	pidc := chan of int;
-	spawn follower(s.id, s.fgen, s.src, s.model.net, s.thresh, s.iou, s.classes, s.rate, framec, pidc);
+	spawn follower(s.id, s.fgen, s.src, s.model.net, engof(s), s.thresh, s.iou, s.classes, s.rate, framec, pidc);
 	s.fpid = <-pidc;
 }
 
@@ -959,7 +999,7 @@ look(s: ref Session, data: array of byte, resc: chan of ref Result)
 	s.state = "running";
 	s.err = nil;
 	s.images++;
-	spawn detector(s.id, s.gen, s.model.net, data, s.thresh, s.iou, s.classes, resc);
+	spawn detector(s.id, s.gen, s.model.net, engof(s), data, s.thresh, s.iou, s.classes, resc);
 }
 
 records(prefix: string, n: ref Net, dets: array of ref Det, classes: list of string): (string, int)
@@ -978,7 +1018,7 @@ records(prefix: string, n: ref Net, dets: array of ref Det, classes: list of str
 	return (text, found);
 }
 
-detector(id, gen: int, n: ref Net, data: array of byte, thresh, iou: real, classes: list of string, resc: chan of ref Result)
+detector(id, gen: int, n: ref Net, eng: ref Eng, data: array of byte, thresh, iou: real, classes: list of string, resc: chan of ref Result)
 {
 	t0 := sys->millisec();
 	(pix, w, h, err) := visnet->readpixelsdata(data, "image");
@@ -987,7 +1027,7 @@ detector(id, gen: int, n: ref Net, data: array of byte, thresh, iou: real, class
 		return;
 	}
 	dets: array of ref Det;
-	(dets, err) = n.detect(pix, w, h, thresh, iou);
+	(dets, err) = engdetect(eng, n, pix, w, h, thresh, iou);
 	if(err != nil){
 		resc <-= ref Result(id, gen, nil, err, 0, 0);
 		return;
@@ -1037,7 +1077,7 @@ feedcount(src: string): (int, int, int, int)
 
 # a feed, followed: each frame it is ready for looked at, the frames it
 # was not ready for counted
-follower(id, fgen: int, src: string, n: ref Net, thresh, iou: real, classes: list of string, rate: int,
+follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real, classes: list of string, rate: int,
 	framec: chan of ref Frameres, pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
@@ -1102,7 +1142,7 @@ follower(id, fgen: int, src: string, n: ref Net, thresh, iou: real, classes: lis
 			return;
 		}
 		t0 := sys->millisec();
-		(dets, derr) := n.detecti420(buf[0:w*h], buf[w*h:w*h + (w/2)*(h/2)], buf[w*h + (w/2)*(h/2):fs], w, h, thresh, iou);
+		(dets, derr) := engdetecti420(eng, n, buf[0:w*h], buf[w*h:w*h + (w/2)*(h/2)], buf[w*h + (w/2)*(h/2):fs], w, h, thresh, iou);
 		if(derr != nil){
 			framec <-= ref Frameres(id, fgen, nil, derr, 0, 0, 1);
 			return;
@@ -1276,4 +1316,287 @@ memberi(x: int, l: list of int): int
 		if(hd l == x)
 			return 1;
 	return 0;
+}
+
+# ---- an engine tree (trtsrv(1)): a session's network on the Jetson's GPU or DLAs ----
+
+trtdir: string;			# the engine tree, nil for none
+trtloaded: list of string;	# engines loaded into it, as model.place
+trtlock: chan of int;		# one loader at a time
+
+# where a model's network can run: cpu, and the places it has engines for
+# when there is an engine tree
+places(md: ref Model): list of string
+{
+	p := "cpu" :: nil;
+	if(md == nil || trtdir == nil)
+		return p;
+	(nil, lines) := sys->tokenize(readfile(md.dir + "/engines/sha256"), "\n");
+	for(; lines != nil; lines = tl lines){
+		(nw, f) := sys->tokenize(hd lines, " \t");
+		if(nw == 2)
+			p = hd tl f :: p;
+	}
+	r: list of string;
+	for(; p != nil; p = tl p)
+		r = hd p :: r;
+	return r;
+}
+
+joined(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l)
+		s += " " + hd l;
+	if(s != nil)
+		s = s[1:];
+	return s;
+}
+
+joinc(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l)
+		s += "," + hd l;
+	if(s != nil)
+		s = s[1:];
+	return s;
+}
+
+# a session's network somewhere other than here; nil on the CPU
+Eng: adt {
+	md:	ref Model;
+	place:	string;
+	dir:	string;		# the engine tree
+	sdir:	string;		# its session, once opened
+	cfd:	ref Sys->FD;	# holding that session
+	half:	int;
+	outs:	list of array of int;
+	err:	string;
+};
+
+engof(s: ref Session): ref Eng
+{
+	if(s.place == "cpu" || trtdir == nil)
+		return nil;
+	return ref Eng(s.model, s.place, trtdir, nil, nil, 0, nil, nil);
+}
+
+engdetect(e: ref Eng, n: ref Net, pix: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string)
+{
+	if(e == nil)
+		return n.detect(pix, w, h, thresh, iou);
+	if(w < 1 || h < 1 || len pix < 3*w*h)
+		return (nil, "picture smaller than its size");
+	scale := n.scale(w, h);
+	input := array[4*3*n.inw*n.inh] of byte;
+	{
+		tensor->letterbox(pix, w, h, scale, n.fill, n.order == "bgr", input, n.inw, n.inh);
+	} exception x {
+	"*" =>
+		return (nil, "letterbox: " + x);
+	}
+	return engfound(e, n, input, w, h, scale, thresh, iou);
+}
+
+engdetecti420(e: ref Eng, n: ref Net, y, cb, cr: array of byte, w, h: int, thresh, iou: real): (array of ref Det, string)
+{
+	if(e == nil)
+		return n.detecti420(y, cb, cr, w, h, thresh, iou);
+	if(w < 2 || h < 2 || (w|h) & 1 || len y < w*h || len cb < (w/2)*(h/2) || len cr < (w/2)*(h/2))
+		return (nil, "frame smaller than its size, or odd");
+	scale := n.scale(w, h);
+	input := array[4*3*n.inw*n.inh] of byte;
+	{
+		tensor->letterboxi420(y, cb, cr, w, h, scale, n.fill, n.order == "bgr", input, n.inw, n.inh);
+	} exception x {
+	"*" =>
+		return (nil, "letterbox: " + x);
+	}
+	return engfound(e, n, input, w, h, scale, thresh, iou);
+}
+
+# the network on the engine tree, its heads decoded here as on the CPU
+engfound(e: ref Eng, n: ref Net, input: array of byte, w, h: int, scale, thresh, iou: real): (array of ref Det, string)
+{
+	if(e.sdir == nil && (err := engopen(e)) != nil)
+		return (nil, err);
+	tin := input;
+	es := 4;
+	if(e.half){
+		tin = array[len input / 2] of byte;
+		tensor->tohalf(input, tin);
+		es = 2;
+	}
+	nout := 0;
+	for(l := e.outs; l != nil; l = tl l)
+		nout += es * prod(hd l);
+	out := array[nout] of byte;
+	fd := sys->open(e.sdir + "/run", Sys->ORDWR);
+	if(fd == nil)
+		return (nil, sys->sprint("%s/run: %r", e.sdir));
+	if(sys->write(fd, tin, len tin) != len tin)
+		return (nil, sys->sprint("%s: %r", e.place));
+	got := 0;
+	while(got < nout){
+		k := sys->read(fd, out[got:], nout - got);
+		if(k < 0)
+			return (nil, sys->sprint("%s: %r", e.place));
+		if(k == 0)
+			break;
+		got += k;
+	}
+	if(got != nout)
+		return (nil, sys->sprint("%s: %d bytes of its outputs' %d", e.place, got, nout));
+	if(e.half){
+		o32 := array[2 * nout] of byte;
+		tensor->fromhalf(out, o32);
+		out = o32;
+	}
+	# each output is the head of its shape
+	tmpl := n.heads();
+	heads := array[len tmpl] of ref Head;
+	off := 0;
+	for(l = e.outs; l != nil; l = tl l){
+		d := hd l;
+		nb := 4 * prod(d);
+		for(j := 0; j < len tmpl; j++)
+			if(heads[j] == nil && len d == 3 && tmpl[j].c == d[0] && tmpl[j].h == d[1] && tmpl[j].w == d[2]){
+				heads[j] = ref Head(tmpl[j].name, out[off:off+nb], d[0], d[1], d[2], tmpl[j].stride);
+				break;
+			}
+		off += nb;
+	}
+	for(j := 0; j < len heads; j++)
+		if(heads[j] == nil)
+			return (nil, e.place + ": its outputs are not the model's heads");
+	return n.fromheads(heads, w, h, scale, thresh, iou);
+}
+
+# the engine loaded into the tree (once), and a session of the tree's own
+engopen(e: ref Eng): string
+{
+	name := e.md.name + "." + e.place;
+	if(trtlock == nil)
+		trtlock = chan[1] of int;
+	trtlock <-= 1;
+	err := engload(e, name);
+	<-trtlock;
+	if(err != nil)
+		return err;
+	ctl := readfile(e.dir + "/ctl");
+	(e.half, e.outs) = engshape(ctl, name);
+	if(e.outs == nil)
+		return name + ": not in " + e.dir + "/ctl";
+	e.cfd = sys->open(e.dir + "/clone", Sys->OREAD);
+	if(e.cfd == nil)
+		return sys->sprint("%s/clone: %r", e.dir);
+	b := array[32] of byte;
+	k := sys->read(e.cfd, b, len b);
+	if(k <= 0)
+		return sys->sprint("%s/clone: %r", e.dir);
+	id := string b[0:k];
+	if(id != nil && id[len id - 1] == '\n')
+		id = id[0:len id - 1];
+	sdir := e.dir + "/" + id;
+	if(writefile(sdir + "/ctl", "model " + name) != nil)
+		return sys->sprint("%s: model %s: %r", e.place, name);
+	e.sdir = sdir;
+	return nil;
+}
+
+engload(e: ref Eng, name: string): string
+{
+	if(member(name, trtloaded) || hasmodel(readfile(e.dir + "/ctl"), name)){
+		if(!member(name, trtloaded))
+			trtloaded = name :: trtloaded;
+		return nil;
+	}
+	sha := "";
+	(nil, lines) := sys->tokenize(readfile(e.md.dir + "/engines/sha256"), "\n");
+	for(; lines != nil; lines = tl lines){
+		(nw, f) := sys->tokenize(hd lines, " \t");
+		if(nw == 2 && hd tl f == e.place)
+			sha = hd f;
+	}
+	if(sha == nil)
+		return e.md.name + ": no engine for " + e.place;
+	src := sys->open(e.md.dir + "/engines/" + e.place + ".plan", Sys->OREAD);
+	if(src == nil)
+		return sys->sprint("%s: %r", e.place);
+	dst := sys->create(e.dir + "/engines/" + name, Sys->OWRITE, 8r666);
+	if(dst == nil)
+		return sys->sprint("%s/engines/%s: %r", e.dir, name);
+	buf := array[Sys->ATOMICIO] of byte;
+	while((k := sys->read(src, buf, len buf)) > 0)
+		if(sys->write(dst, buf, k) != k)
+			return sys->sprint("%s/engines/%s: %r", e.dir, name);
+	dst = nil;
+	if(writefile(e.dir + "/ctl", sys->sprint("load %s %s %s", name, e.place, sha)) != nil)
+		return sys->sprint("%s: %r", e.place);
+	trtloaded = name :: trtloaded;
+	return nil;
+}
+
+hasmodel(ctl, name: string): int
+{
+	(nil, lines) := sys->tokenize(ctl, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, w) := sys->tokenize(hd lines, " ");
+		if(len w >= 2 && hd w == "model" && hd tl w == name)
+			return 1;
+	}
+	return 0;
+}
+
+# a model's line in the tree's ctl: (whether float16, its outputs' shapes)
+engshape(ctl, name: string): (int, list of array of int)
+{
+	(nil, lines) := sys->tokenize(ctl, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, w) := sys->tokenize(hd lines, " ");
+		if(len w < 2 || hd w != "model" || hd tl w != name)
+			continue;
+		half := 0;
+		outs: list of array of int;
+		for(; w != nil; w = tl w){
+			f := hd w;
+			if(f == "type=f16")
+				half = 1;
+			else if(len f > 4 && f[0:4] == "out="){
+				(nil, parts) := sys->tokenize(f[4:], ",");
+				r: list of array of int;
+				for(; parts != nil; parts = tl parts){
+					(nd, ds) := sys->tokenize(hd parts, "x");
+					a := array[nd] of int;
+					for(i := 0; ds != nil; ds = tl ds)
+						a[i++] = int hd ds;
+					r = a :: r;
+				}
+				for(; r != nil; r = tl r)
+					outs = hd r :: outs;
+			}
+		}
+		return (half, outs);
+	}
+	return (0, nil);
+}
+
+prod(d: array of int): int
+{
+	p := 1;
+	for(i := 0; i < len d; i++)
+		p *= d[i];
+	return p;
+}
+
+writefile(path, s: string): string
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("%r");
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("%r");
+	return nil;
 }

@@ -13,6 +13,12 @@
 #   - on each place, gpu, dla0 and dla1, the picture's detections the CPU
 #     engine's (tests/trtcheck: the same classes, scores within 0.02,
 #     boxes within 6 pixels), and the round trip timed
+#   - through vision(4): `engine /mnt/trt` to its ctl, places and a
+#     model's info listing gpu dla0 dla1; a session on each place finding
+#     the picture's records as a CPU session does (the same classes,
+#     scores within 0.02); a session on the GPU following a clip, every
+#     frame looked at; a place with no engine refused; `engine none`
+#     refused while a session is on a place
 #   - an engine not the one recorded refused; a DLA engine asked to run
 #     on the GPU, and the GPU engine asked for a DLA, refused; a load with
 #     no engine written refused
@@ -40,6 +46,7 @@ rm -rf "$W"; mkdir -p "$W"; trap 'rm -rf "$W"' EXIT
 E=/tmp/trtsrv_test.$$
 ln -s "$VISION_MODEL" "$W/model"
 cp "$VISION_PICTURE" "$W/picture"
+"${VISION_PYTHON:-python3}" -I "$ROOT/tests/host/vision/mkclip.py" "$VISION_PICTURE" "$W/clip.y4m" 5 >/dev/null 2>&1 || { echo "SKIP: cannot make the clip (VISION_PYTHON with numpy and Pillow)"; exit 77; }
 loads=""
 while read -r sha place; do
 	loads="$loads
@@ -56,6 +63,29 @@ $loads
 echo '-- uploads'; ls /mnt/trt/engines
 echo '-- ctl'; cat /mnt/trt/ctl
 for p in gpu dla0 dla1 { echo '-- '\$p; /dis/tests/trtcheck.dis $E/model $E/picture /mnt/trt \$p 10 }
+echo '-- vision'
+visionfs load m $E/model
+echo engine /mnt/trt > /mnt/vision/ctl; echo ENGINE-\$status
+cat /mnt/vision/ctl /mnt/vision/models/m/info
+for p in cpu gpu dla0 dla1 {
+	{
+		id=\`{read}
+		echo place \$p > /mnt/vision/\$id/ctl
+		cat $E/picture > /mnt/vision/\$id/image
+		echo '-- vis-'\$p; cat /mnt/vision/\$id/detections
+		echo '-- visstatus-'\$p; cat /mnt/vision/\$id/status
+	} < /mnt/vision/clone
+}
+mkdir -p /mnt/video; mount {vid9p $E/clip.y4m} /mnt/video
+{
+	id=\`{read}
+	echo place gpu > /mnt/vision/\$id/ctl
+	{ echo src /mnt/video/0 > /mnt/vision/\$id/ctl; echo '-- visfeed'; cat } < /mnt/vision/\$id/detections
+	echo '-- visfeedstats'; cat /mnt/vision/\$id/stats
+	echo place nowhere > /mnt/vision/\$id/ctl; echo NOPLACE-\$status
+	echo place dla0 > /mnt/vision/\$id/ctl
+	echo engine none > /mnt/vision/ctl; echo INUSE-\$status
+} < /mnt/vision/clone
 echo '-- refusals'
 cp $E/model/engines/gpu.plan /mnt/trt/engines/x; echo load x gpu 0000 > /mnt/trt/ctl; echo HASH-\$status
 rm /mnt/trt/engines/x; cp $E/model/engines/dla0.plan /mnt/trt/engines/x; echo load x gpu $dsha > /mnt/trt/ctl; echo DLAONGPU-\$status
@@ -88,6 +118,23 @@ print(ok)')
 	[ "$n" -ge 1 ] && [ "$same" = "$n" ] && ok "$p: the CPU engine's $n detections, scores within 0.02, boxes within 6 px" || bad "$p: detections differ: $f"
 	echo "      $(part $p | grep '^place=' | cut -c1-200)"
 done
+grep -q '^ENGINE-$' "$W/log" && grep -q '^engine trt /mnt/trt$' "$W/log" && grep -q '^places cpu gpu dla0 dla1$' "$W/log" && ok "vision(4): the engine tree attached, its places listed" || bad "vision ctl: $(grep -E '^ENGINE-|^engine|^places' "$W/log" | tr '\n' ' ')"
+grep -q 'places=cpu,gpu,dla0,dla1 ' "$W/log" && ok "vision(4): the model's info lists its places" || bad "info: $(grep 'places=' "$W/log")"
+for p in gpu dla0 dla1; do
+	c=$(part vis-cpu | sed 's/ x0=.*//' | sort)
+	g=$(part vis-$p | sed 's/ x0=.*//' | sort)
+	same=$(python3 -c '
+import sys
+a=[l.split() for l in sys.argv[1].splitlines() if l]; b=[l.split() for l in sys.argv[2].splitlines() if l]
+ok = len(a) == len(b) and len(a) > 0 and all(x[0] == y[0] and abs(float(x[1][6:]) - float(y[1][6:])) <= 0.02 for x, y in zip(a, b))
+print(1 if ok else 0)' "$c" "$g")
+	[ "$same" = 1 ] && part visstatus-$p | grep -q "place=$p" && ok "vision(4): a session on $p finds what one on the CPU does" || bad "vision $p: $(part vis-$p | tr '\n' '|') against $(part vis-cpu | tr '\n' '|'); $(part visstatus-$p)"
+done
+frames=$(part visfeed | cut -d' ' -f1 | uniq | tr '\n' ' ')
+[ "$frames" = "frame=0 frame=1 frame=2 frame=3 frame=4 " ] && part visfeed | grep -q '^frame=3 pts=300 class=dog' && ok "vision(4): a session on the GPU follows a clip, every frame" || bad "feed on gpu: $frames; $(part visfeedstats)"
+echo "      $(part visfeedstats)"
+grep -q '^NOPLACE-..*' "$W/log" && ok "vision(4): a place with no engine refused" || bad "$(grep '^NOPLACE-' "$W/log")"
+grep -q '^INUSE-..*' "$W/log" && ok "vision(4): engine none refused while a session is on a place" || bad "$(grep '^INUSE-' "$W/log")"
 grep -q '^HASH-..*' "$W/log" && ok "an engine not the one recorded refused" || bad "hash: $(grep '^HASH-' "$W/log")"
 grep -q '^DLAONGPU-..*' "$W/log" && ok "a DLA engine asked to run on the GPU refused" || bad "$(grep '^DLAONGPU-' "$W/log")"
 grep -q '^GPUONDLA-..*' "$W/log" && ok "the GPU engine asked for a DLA refused" || bad "$(grep '^GPUONDLA-' "$W/log")"

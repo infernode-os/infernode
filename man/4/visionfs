@@ -58,15 +58,37 @@ as
 .IR name ;
 .BI unload " name"
 lets it go, refused while a session uses it.
+.BI engine " dir"
+attaches an engine tree mounted at
+.IR dir :
+the Jetson's GPU and DLAs, served by
+.B trtsrv
+.RB ( tools/trtsrv )
+on its host command's pipe and mounted by whoever builds the name space;
+.B "engine none"
+lets it go, refused while a session is on one of its places.
 Read: the engine
-.RB ( "engine cpu" ),
-where a session may run
-.RB ( "places cpu" ),
-and each model,
+.RB ( "engine cpu" ,
+and
+.BI "engine trt " dir
+with one), where a session may run
+.RB ( "places cpu" ,
+or
+.B "places cpu gpu dla0 dla1"
+with an engine tree), and each model,
 .BI model " name dir" .
 .TP
 .BI models/ name /info
 .B kind=detect decode=yolox input=416x416 classes=80 order=bgr fill=114 places=cpu sha256=...
+.br
+.B places
+lists
+.B cpu
+and, with an engine tree, the places the model's directory has engines
+for
+.RB ( engines/sha256 ,
+from
+.BR tools/trtsrv/mkengines.sh ).
 .TP
 .BI models/ name /classes
 One class name a line, in index order.
@@ -90,7 +112,12 @@ or
 .BI rate " fps"
 (frames a second at most; 0, as many as it can),
 .BI model " name" \fR,
-.B place cpu\fR,
+.BI place " p"
+(where its network runs:
+.B cpu
+at first, or one of the model's places; on another, its engine is put into
+the engine tree the first time a session asks for it, and the heads it
+gives are decoded here as on the processor),
 .BI thresh " r"
 (0 to 1; 0.30 at first),
 .BI iou " r"
@@ -195,12 +222,32 @@ On a machine with no model of its own, another's:
 .B /appl/lib/visnet.b
 .br
 .B /tools/vision/onnx2vis.py
+.SH EXAMPLES
+Recognition on the Jetson's first DLA:
+.IP
+.EX
+mount -A {os trtsrv >[1=0]} /mnt/trt
+visionfs load yolox /lib/vision/yolox-nano
+echo engine /mnt/trt > /mnt/vision/ctl
+{
+	id=`{read}
+	echo place dla0 > /mnt/vision/$id/ctl
+	cat dog.jpg > /mnt/vision/$id/image
+	cat /mnt/vision/$id/detections
+} < /mnt/vision/clone
+.EE
+.PP
+.B >[1=0]
+joins the host command's output to the channel
+.B mount
+gives it on its input.
 .SH SEE ALSO
 .IR vision (1),
 .IR tensor (2)
 .SH BUGS
-Only detectors of the YOLOX family are converted, and only the
-processor's engine is served here.
+Only detectors of the YOLOX family are converted.
+On an engine tree a picture's tensors cross 9P (about 1.6 MB a picture in
+FP16), which costs more than the GPU's inference.
 A feed's frame numbers are its own only where its
 .B status
 counts them

@@ -520,6 +520,24 @@ Net.found(n: self ref Net, input: array of byte, w, h: int, scale, thresh, iou: 
 	return n.fromheads(heads, w, h, scale, thresh, iou);
 }
 
+Net.heads(n: self ref Net): array of ref Head
+{
+	l: list of ref Head;
+	k := 0;
+	for(i := 0; i < n.nops; i++){
+		o := n.ops[i];
+		if(o.op == Ooutput){
+			(c, h, w) := n.shapes[o.ins[0]];
+			l = ref Head(o.name, nil, c, h, w, o.p[0]) :: l;
+			k++;
+		}
+	}
+	a := array[k] of ref Head;
+	for(; l != nil; l = tl l)
+		a[--k] = hd l;
+	return a;
+}
+
 # the network's heads, from whichever engine ran it, as what was found in
 # a w by h picture letterboxed by scale
 Net.fromheads(n: self ref Net, heads: array of ref Head, w, h: int, scale, thresh, iou: real): (array of ref Det, string)

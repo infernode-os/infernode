@@ -165,6 +165,8 @@ dis/disdump.dis
 dis/disk/calc.tab.dis
 dis/disk/fdisk.dis
 dis/disk/format.dis
+dis/disk/fsbench.dis
+dis/disk/gefs.dis
 dis/disk/ftl.dis
 dis/disk/kfs.dis
 dis/disk/kfscmd.dis
@@ -753,6 +755,7 @@ dis/tests/fdclose_test.dis
 dis/tests/fltfmt_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
+dis/tests/gefs_hash_test.dis
 dis/tests/gentmpl.dis
 dis/tests/geomap_test.dis
 dis/tests/git_test.dis

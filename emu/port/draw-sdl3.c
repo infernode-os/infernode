@@ -202,6 +202,16 @@ static float touch_scroll_accum_y = 0.0f;
 static int touch_in_multi_gesture = 0;
 
 /*
+ * Alt (Option on macOS) tapped alone is the compose key: its release sends
+ * Latin, and devcons composes the next keys (latin1.h).  Only alone: on
+ * macOS Option is how Option-Shift-hyphen types an em dash, and Option-click
+ * is button 2, and a release after those used to leave compose armed, so the
+ * next keys were taken for a sequence (a space then a space became U+2423).
+ * Set when Alt goes down; cleared by any other key, text or button meanwhile.
+ */
+static int alt_alone = 0;
+
+/*
  * Long-press → context-menu (button-3) synthesis. INFR-163/160/162.
  *
  * A touchscreen produces no button-2/3, so the Plan 9 context menus across
@@ -1793,6 +1803,7 @@ sdl3_mainloop(void)
 
 			case SDL_EVENT_MOUSE_BUTTON_DOWN:
 			case SDL_EVENT_MOUSE_BUTTON_UP:
+				alt_alone = 0;
 				{
 					Uint32 mask = button_event_mask(event.button.button);
 					if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
@@ -1956,6 +1967,7 @@ sdl3_mainloop(void)
 			}
 
 			case SDL_EVENT_TEXT_INPUT:
+				alt_alone = 0;
 				handle_text_input(event.text.text);
 				break;
 
@@ -1970,13 +1982,21 @@ sdl3_mainloop(void)
 				break;
 
 			case SDL_EVENT_KEY_DOWN:
+				if (event.key.scancode == SDL_SCANCODE_LALT ||
+				    event.key.scancode == SDL_SCANCODE_RALT) {
+					if (!event.key.repeat)
+						alt_alone = 1;
+				} else
+					alt_alone = 0;
 				handle_key_down(&event);
 				break;
 
 			case SDL_EVENT_KEY_UP:
 				if (event.key.scancode == SDL_SCANCODE_LALT ||
 				    event.key.scancode == SDL_SCANCODE_RALT) {
-					gkbdputc(gkbdq, Latin);
+					if (alt_alone)
+						gkbdputc(gkbdq, Latin);
+					alt_alone = 0;
 				}
 				break;
 

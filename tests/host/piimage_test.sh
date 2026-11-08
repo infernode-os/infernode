@@ -16,8 +16,9 @@
 #	display, a kernel= that is on the card);
 #	and piromcheck refuses a card with each fault a board has shown --
 #	so the check that stands in for the board cannot quietly pass;
-#	usr/inferno is the tree's home, less its test key; no skiplogon, wifi,
-#	netconsole or rootpath;
+#	usr/inferno is the tree's home, less its test key; no file boot reads
+#	as a setting (skiplogon, wifi, netconsole, rootpath, cnsamode, camera,
+#	cpulisten, bt, btkeys, vms, usbquirks);
 #	firmware/ holds the radio's firmware under the names the driver
 #	asks for, its Bluetooth patch, and the licence they are
 #	distributed under;
@@ -177,7 +178,11 @@ for board in rpi3bplus rpi4b; do
 	[ $ok = 1 ] && pass "$board: firmware/ is the radio's firmware, by the driver's names, its Bluetooth patch, and LICENCE.cypress" \
 		|| failed "$board: the radio's firmware"
 	ok=1
-	for f in $other skiplogon wifi netconsole rootpath cmdline.txt; do
+	# every file on the card that boot reads as a setting (BAREMETAL.md
+	# section 5; osinit, boot-baremetal.sh): a bench card's, never a
+	# release's, which starts the login screen and offers nothing
+	for f in $other skiplogon wifi netconsole rootpath cmdline.txt \
+		cnsamode camera cpulisten bt btkeys vms usbquirks; do
 		grep -q "^/$f\( \|$\)" "$L" && { echo "    /$f is on the card"; ok=0; }
 	done
 	[ $ok = 1 ] && pass "$board: nothing of the other board's, and no control file" || failed "$board: the card has what it should not"

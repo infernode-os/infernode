@@ -179,6 +179,28 @@ mounts the file server at dial string
 unauthenticated, on
 .B /n/remote
 and does the same from there.
+.BI "gefs " part
+starts the kernel's
+.IR gefs (4)
+on
+.BI #S/ part
+(or a path), mounts it on
+.B /n/gefs
+(its adm tree on
+.BR /n/gefs.adm ,
+every snapshot on
+.BR /n/dump ,
+where 9front has them) and does the same from there;
+a disk that will not load is passed over.
+The first source with a
+.B usr
+has
+.BR /usr ,
+so
+.B "gefs nvme0p3"
+followed by
+.B local
+keeps the disk's home with the card's trees behind it.
 Without the file the policy is
 .BR local .
 .TP

@@ -199,6 +199,22 @@ Each board's support is confirmed on the board when the probe arrives, not assum
 
 The pi-store is offline. The ledger goes in a small private repository of its own (`infernode-bench`, to be made), together with each run's `summary.txt` and memtags diff. That is small text only; raw logs stay on the Jetson. Each run pushes when it ends, so the record is off this machine at once. Bench details such as MACs and home-network addresses stay out of the public repo, and run churn stays out of master's history. Until that repository exists, the runner writes `~/soak/ledger.tsv` and the run directories, and they are copied to minipc as a second copy.
 
+## Validation so far
+
+On the 3B+, master c7d892104, 2026-11-07, the old `soak.py` (12 h) and this runner (2.2 h):
+
+| | old soak.py | tests/soak/soak.py |
+|---|---|---|
+| inbound 64 MB push, median | 83.9 Mbit/s (69 pushes) | 83.8 Mbit/s (11) |
+| batteries | Ethernet 14/2, Bluetooth 22/0, GPIO 21/0 | the same, before and after |
+| main pool | flat, about 9.4 MB | falling (-0.55 MB/h), about 13.4 MB |
+
+The pool level differs because the runner loads more: TLS, draw, the VM loads and Bluetooth scans. Where both harnesses measure the same thing, they agree.
+
+The Pi 4 has had one run (2.6 h, no alarm), before the TLS fixes. The Pi 5 has had none yet. The stress loops in VM 1 have not yet run on a board.
+
+The runner's first runs found the inbound TCP resets that #1110 fixes.
+
 ## Open questions
 
 - What should the TLS server be: OpenSSL `s_server` on the Jetson, or the tree's own TLS server in emu, which would test both ends?

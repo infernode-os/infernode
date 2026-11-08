@@ -250,12 +250,19 @@ class HostRes:
 SOAKD_HEAD = r'''load std
 mkdir -p /tmp/soak
 fn tick { echo x >> /tmp/soak/$1/ticks }
+# An iteration passes only if nothing in it failed: begin counts a run and
+# sets passok, bad clears it, done ticks only if it is still set. A plain
+# tick after "cmd || bad" counted failed iterations as passes (the Pi 5's
+# i2c: "490 passed" with every read failing, 2026-11-08). done takes its
+# argument into a variable first: inside the if block $1 is empty.
+fn begin { passok = 1; echo x >> /tmp/soak/$1/runs }
+fn done { name = $1; if {~ $passok 1} {echo x >> /tmp/soak/$name/ticks} }
 # A braced block (a backquote's, an if's body) has its own arguments: $1 is
 # empty inside one, and "null list in concatenation" kills the whole loop
 # (it did, for every load's first failure, 2026-11-07). So the name is taken
 # into a variable first.
 fn bad {
-	name = $1; why = $*
+	name = $1; why = $*; passok = 0
 	n = `{ls /tmp/soak/$name | grep fail | wc -l}
 	echo $name >> /tmp/soak/bad
 	if {! ~ $n 20 21 22 23 24 25} {
@@ -355,7 +362,7 @@ LOADS = [
 	tick spi; sleep 1''', needs=['spi'], setup="echo loop 1 > '#Q/spictl'"),
     L('i2c', 'I2C reads', board=r'''
 	read 1 < '#J/i2c1data' > /dev/null >[2] /tmp/soak/i2c/err || bad i2c read
-	tick i2c; sleep 1''', needs=['i2c'], setup="echo addr 0x50 > '#J/i2c1ctl'"),
+	tick i2c; sleep 1''', needs=['i2c', 'i2cdev'], setup="echo addr $i2caddr > '#J/i2c1ctl'"),
     L('gpio', 'the loopback jig: drive each pair both ways', board=r'''
 	for(p in $gpiopairs) {
 		x = `{echo $p | sed 's/:.*//'}; y = `{echo $p | sed 's/.*://'}
@@ -471,6 +478,14 @@ class Run:
         for k, d in (('nvme', '#S/nvme0'), ('spi', '#Q/spi0'), ('i2c', '#J/i2c1data')):
             r[k] = (d in dev, d + ('' if d in dev else ' missing'))
         r['boarddevs'] = (any(d in dev for d in ('#r/rtc', '#P/fanrpm', '#S/nvmestat')), 'RTC/fan/nvmestat')
+        # an I2C load needs a device that answers; a bus with nothing on it is absent hardware
+        if r['i2c'][0]:
+            o = self.sh("echo addr %s > '#J/i2c1ctl' >[2] /dev/null; read 1 < '#J/i2c1data' > /dev/null >[2=1] && echo I2CACK" % self.a.i2c_addr, limit=20)
+            r['i2cdev'] = ('I2CACK' in o, ('a device at %s on i2c1' % self.a.i2c_addr) if 'I2CACK' in o else
+                           ('no device acknowledges at %s on i2c1; a real test needs one fitted, e.g. a 24Cxx EEPROM at 0x50 '
+                            '(or --i2c-addr for another device)' % self.a.i2c_addr))
+        else:
+            r['i2cdev'] = (False, 'no i2c1')
         r['memtags'] = ('/dev/memtags' in dev, '/dev/memtags')
         r['heapaudit'] = ('/dev/heapaudit' in dev, '/dev/heapaudit')
         r['cputemp'] = ('#P/cputemp' in dev, '#P/cputemp')
@@ -579,7 +594,7 @@ class Run:
 
     def soakd_text(self, loads):
         body = SOAKD_HEAD
-        body += 'sdraw = %s\njetson = %s\ntlsport = %d\n' % (self.sdraw or "''", self.jetson, self.tlsport)
+        body += 'sdraw = %s\njetson = %s\ntlsport = %d\ni2caddr = %s\n' % (self.sdraw or "''", self.jetson, self.tlsport, self.a.i2c_addr)
         iv = self.iv
         body += ('sdrcount = %d\nsdrevery = %d\nsdwkb = %d\nsdwevery = %d\nnvrcount = %d\nnvrevery = %d\n'
                  'nvwblocks = %d\nnvwevery = %d\nnvscratch = %s\njitevery = %d\nrsaevery = %d\nrngcount = %d\nfuzzevery = %d\n') % (
@@ -594,7 +609,10 @@ class Run:
         body += 'mkdir -p /tmp/soak/fuzz/scratch\n'
         body += 'echo > /tmp/soak/run\n'
         for l in loads:
-            body += '{ while {run} {%s\n} } &\n' % l['board']
+            b = l['board'].replace('tick %s;' % l['name'], 'done %s;' % l['name'])
+            b = re.sub(r'tick %s\s*$' % re.escape(l['name']), 'done %s' % l['name'], b)
+            assert 'done %s' % l['name'] in b and 'tick ' not in b, 'load %s: no single tick to make a done' % l['name']
+            body += '{ while {run} {\n\tbegin %s%s\n} } &\n' % (l['name'], b)
         # the host loads' listeners, held by this session too
         body += 'echo soakd-up\n'
         body += 'while {run} {sleep 30}\n'
@@ -751,10 +769,12 @@ class Run:
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
-                      'wc -l /tmp/soak/*/ticks >[2] /dev/null', 'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
+                      'wc -l /tmp/soak/*/ticks >[2] /dev/null', 'wc -l /tmp/soak/*/runs >[2] /dev/null | sed ''s/runs$/RUNS/''',
+                      'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
                  re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)\s*$', out, re.M)}
         ticks = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/ticks', out)}
+        self.runs = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/RUNS', out)} or getattr(self, 'runs', {})
         size = re.search(r' (\d+) [A-Z][a-z][a-z] .*bootimage', out)
         temp = re.findall(r'^(\d+\.\d+)', out, re.M)
         running = 'RUNNING' in out
@@ -1015,13 +1035,15 @@ class Run:
         if self.hres.waits:
             out.append('host contention: ' + ', '.join('%s %.0f s' % kv for kv in self.hres.waits.items()))
         out.append('')
-        out.append('%-10s %-6s %8s %8s  %s' % ('load', 'state', 'passes', 'fails', 'note'))
+        out.append('%-10s %-6s %8s %8s %8s  %s' % ('load', 'state', 'runs', 'passes', 'fails', 'note'))
         last = rows[-1] if rows else None
         ticks = json.loads(last[7]) if last and len(last) > 7 and last[7] else {}
         for l in sel:
             s = self.state.get(l['name'], '?'); kind = s.split(':')[0].split(' ')[0]
             passes = ticks.get(l['name'], self.hostpass.get(l['name'], 'held' if l['name'] in ('vm', 'vmstress', 'flood') else 0))
-            out.append('%-10s %-6s %8s %8s  %s' % (l['name'], kind, passes if kind == 'run' or kind == 'lost' else '-',
+            runs = getattr(self, 'runs', {}).get(l['name'], '-' if not l['board'] else 0)
+            out.append('%-10s %-6s %8s %8s %8s  %s' % (l['name'], kind, runs if kind != 'skip' else '-',
+                       passes if kind == 'run' or kind == 'lost' else '-',
                        self.failcount.get(l['name'], 0) if kind != 'skip' else '-', s[len(kind):].lstrip(': ') or l['what']))
         out.append('')
         for col, name in ((2, 'main'), (3, 'heap'), (4, 'image')):
@@ -1107,6 +1129,7 @@ def main():
     p.add_argument('--batteries', action='store_true', help='Ethernet, Bluetooth and GPIO batteries before and after')
     p.add_argument('--card', action='store_true', help='card.py against this tree first')
     p.add_argument('--serial-only', action='store_true')
+    p.add_argument('--i2c-addr', default='0x50', help='the I2C device the i2c load reads (it must acknowledge)')
     p.add_argument('--loops-vm', type=int, default=None, help='VM for the board loops (default: 1 when the board has one that sees what they need, else 0)')
     p.add_argument('--dry', action='store_true', help='probe and print the plan; change nothing on the board')
     p.add_argument('--loads', type=lambda s: s.split(','), default=None)

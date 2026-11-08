@@ -63,6 +63,12 @@ tests/soak/
 - In Inferno's shell, `@{ }` does not fork the namespace. A bind inside one leaks into the loops' shared namespace, and the run's TLS CA replaced every trusted root. Use `sh -c '...'`, which forks the namespace by default.
 - A braced block has its own arguments, so `$1` is empty inside it. Take arguments into variables first.
 
+**Passes are counted, not iterations.** Each board loop iteration starts with `begin NAME`, which counts a run and sets `passok`. Any `bad` clears `passok`. The iteration ends with `done NAME`, which ticks a pass only if nothing in it failed. The summary shows runs, passes and fails. The runner refuses a load whose body does not end in exactly one `tick` it can turn into a `done`.
+
+Before this fix every load ticked unconditionally, so failed iterations counted as passes. The Pi 5's I2C showed "490 passed" while every read failed.
+
+**I2C needs a device.** The i2c load runs only if a device acknowledges at `--i2c-addr` (0x50 by default) on i2c1. A bus with nothing on it is absent hardware, skipped with that reason. A real test needs a device fitted, such as a 24Cxx EEPROM at 0x50. The Pi 5's header buses have none: infernode-63 found nothing acknowledging from 3 to 119.
+
 **The TLS server** is shared: one CA and one certificate in `~/soak/tls`, and one `openssl s_server` on the Jetson's port 8443, started by whichever run needs it first and left up for the others. The Jetson's firewall lets the LAN reach 8443 but not other ports such as 8444 or 8460, so per-board ports failed.
 
 **Where the loads run.** The network sink and source, and the samplers, stay in VM 0. On a board with several VMs, the stress loops run in VM 1, once a probe shows that VM 1 sees `/tmp/soak`, `/n/dos` and `/net`. In VM 0 the loops share its interpreter with the sink. That cut a Pi 4's inbound rate from about 920 to about 150 Mbit/s on every kernel since 10-29 (infernode-e5's bisection, 2026-11-08). The old soaks' push rates therefore measured their own loops, not the network. The VM is recorded as `loopsvm`, and `--loops-vm` overrides it.

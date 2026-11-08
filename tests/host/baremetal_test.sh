@@ -6237,7 +6237,7 @@ PYEOF
     # (wm/osk, some 250000 objects) an epoch took 54 traversals of it:
     # on the Pi 4 one ended every 4.5 minutes at idle and a load left a
     # backlog, and here, under TCG, none ended at all. gc_cycle_test drops
-    # 1000 cycles and waits a minute for them to go, at the console of
+    # 1000 cycles and waits two minutes (twice Idlegcgap) for them to go, at the console of
     # this desktop, osk's lexicon and all.
     #
     python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$VCARD" <<'PYEOF' > "$BUILD/$PLAT-gccycle.txt" 2>&1
@@ -6271,7 +6271,7 @@ try:
     typed("echo OSKPROCS `{ps | grep Osk | wc -l}")
     m = len(buf)
     typed("/dis/tests/gc_cycle_test.dis -v", 0.5)
-    waitfor(rb"\n(PASS|FAIL)\r?\n", 150, m)
+    waitfor(rb"\n(PASS|FAIL)\r?\n", 240, m)
     time.sleep(1)
 finally:
     p.kill()

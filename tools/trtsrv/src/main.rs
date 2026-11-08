@@ -10,14 +10,15 @@
 //! ```text
 //! ctl        w  load NAME PLACE ENGINE SHA256   (PLACE gpu | dla0 | dla1)
 //!               unload NAME
-//!            r  a line a model: model NAME place=dla0 in=3x416x416
-//!               out=85x52x52,85x26x26,85x13x13 sha256=...
+//!            r  a line a model: model NAME place=dla0 type=f16 in=3x416x416
+//!               out=85x52x52,85x26x26,85x13x13 sha256=...  (type: f32 or
+//!               f16, all of an engine's tensors)
 //! clone      r  a new session's number, N; the session lasts while one of
 //!               its files is open
 //! N/ctl      rw model NAME
-//! N/run      rw an inference an open: write the input tensor (float32,
-//!               exactly the model's input), then read its outputs, the
-//!               heads in the engine's order, float32
+//! N/run      rw an inference an open: write the input tensor (of the
+//!               model's type, exactly its size), then read its outputs,
+//!               the heads in the engine's order
 //! N/status   r  state=ready model=NAME place=dla0 runs=N ms_p50= ms_p95=
 //! ```
 //!
@@ -103,6 +104,9 @@ impl Trt {
                 if engine.inputs().count() != 1 {
                     return Err(format!("{name}: one input wanted"));
                 }
+                if engine.tensors.iter().any(|t| t.esize != engine.tensors[0].esize) {
+                    return Err(format!("{name}: its tensors are of more than one type"));
+                }
                 let m = Model { engine: Arc::new(engine), place, sha: got };
                 self.st.lock().unwrap().models.insert(name.to_string(), m);
                 Ok(())
@@ -124,7 +128,8 @@ impl Trt {
             let m = &st.models[n];
             let ins: Vec<String> = m.engine.inputs().map(|t| t.shape()).collect();
             let outs: Vec<String> = m.engine.outputs().map(|t| t.shape()).collect();
-            s += &format!("model {n} place={} in={} out={} sha256={}\n", m.place.name(), ins.join(","), outs.join(","), m.sha);
+            let kind = m.engine.tensors.first().map(|t| t.kind()).unwrap_or("f32");
+            s += &format!("model {n} place={} type={kind} in={} out={} sha256={}\n", m.place.name(), ins.join(","), outs.join(","), m.sha);
         }
         s
     }

@@ -49,6 +49,7 @@ struct TrtEngine {
 	nvinfer1::ICudaEngine* eng = nullptr;
 	std::vector<std::string> names;		// I/O tensors, in the engine's order
 	std::vector<int> isinput;
+	std::vector<int> esize;			// 4 float32, 2 float16
 	std::vector<size_t> bytes;
 };
 
@@ -57,9 +58,14 @@ struct TrtCtx {
 	nvinfer1::IExecutionContext* ctx = nullptr;
 	cudaStream_t stream = nullptr;
 	std::vector<void*> dev;
+	void* hin = nullptr;			// pinned host buffers, made once:
+	void* hout = nullptr;			// the copies to and from the device are DMA
+	size_t nin = 0, nout = 0;
 };
 
 extern "C" {
+
+void trt_ctxfree(TrtCtx* c);
 
 // the engine in blob (len bytes), on DLA core dla (-1: the GPU)
 int trt_load(void const* blob, size_t len, int dla, TrtEngine** out, char* err, int errlen)
@@ -91,15 +97,17 @@ int trt_load(void const* blob, size_t len, int dla, TrtEngine** out, char* err, 
 	int n = e->eng->getNbIOTensors();
 	for(int i = 0; i < n; i++){
 		char const* name = e->eng->getIOTensorName(i);
-		if(e->eng->getTensorDataType(name) != nvinfer1::DataType::kFLOAT){
+		nvinfer1::DataType dt = e->eng->getTensorDataType(name);
+		int es = dt == nvinfer1::DataType::kFLOAT ? 4 : dt == nvinfer1::DataType::kHALF ? 2 : 0;
+		if(es == 0){
 			delete e->eng;
 			delete e->rt;
 			delete e;
-			seterr(err, errlen, std::string("tensor ") + name + " is not float32");
+			seterr(err, errlen, std::string("tensor ") + name + " is neither float32 nor float16");
 			return -1;
 		}
 		nvinfer1::Dims d = e->eng->getTensorShape(name);
-		size_t b = 4;
+		size_t b = es;
 		for(int k = 0; k < d.nbDims; k++){
 			if(d.d[k] <= 0){
 				delete e->eng;
@@ -112,6 +120,7 @@ int trt_load(void const* blob, size_t len, int dla, TrtEngine** out, char* err, 
 		}
 		e->names.push_back(name);
 		e->isinput.push_back(e->eng->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT);
+		e->esize.push_back(es);
 		e->bytes.push_back(b);
 	}
 	*out = e;
@@ -132,14 +141,15 @@ int trt_ntensors(TrtEngine* e)
 	return (int)e->names.size();
 }
 
-// tensor i: its name (NUL-terminated into name), whether an input, its
-// dimensions (into dims, at most 8), how many
-int trt_tensor(TrtEngine* e, int i, char* name, int namelen, int* isinput, int* dims, int* ndims)
+// tensor i: its name (NUL-terminated into name), whether an input, the
+// bytes of an element (4, 2), its dimensions (into dims, at most 8), how many
+int trt_tensor(TrtEngine* e, int i, char* name, int namelen, int* isinput, int* esize, int* dims, int* ndims)
 {
 	if(i < 0 || i >= (int)e->names.size())
 		return -1;
 	std::snprintf(name, (size_t)namelen, "%s", e->names[i].c_str());
 	*isinput = e->isinput[i];
+	*esize = e->esize[i];
 	nvinfer1::Dims d = e->eng->getTensorShape(e->names[i].c_str());
 	int n = d.nbDims < 8 ? d.nbDims : 8;
 	for(int k = 0; k < n; k++)
@@ -203,6 +213,12 @@ int trt_ctx(TrtEngine* e, TrtCtx** out, char* err, int errlen)
 		}
 		c->dev.push_back(p);
 		c->ctx->setTensorAddress(e->names[i].c_str(), p);
+		(e->isinput[i] ? c->nin : c->nout) += e->bytes[i];
+	}
+	if((ce = cudaMallocHost(&c->hin, c->nin)) != cudaSuccess || (ce = cudaMallocHost(&c->hout, c->nout)) != cudaSuccess){
+		trt_ctxfree(c);
+		seterr(err, errlen, cudaerr("pinned memory", ce));
+		return -1;
 	}
 	*out = c;
 	return 0;
@@ -212,6 +228,10 @@ void trt_ctxfree(TrtCtx* c)
 {
 	if(c == nullptr)
 		return;
+	if(c->hin != nullptr)
+		cudaFreeHost(c->hin);
+	if(c->hout != nullptr)
+		cudaFreeHost(c->hout);
 	for(void* q : c->dev)
 		cudaFree(q);
 	if(c->stream != nullptr)
@@ -232,10 +252,11 @@ int trt_run(TrtCtx* c, void const* in, size_t inlen, void* out, size_t outlen, c
 		seterr(err, errlen, "sizes are not the engine's");
 		return -1;
 	}
+	std::memcpy(c->hin, in, inlen);
 	size_t ino = 0;
 	for(size_t i = 0; i < e->names.size(); i++)
 		if(e->isinput[i]){
-			cudaError_t ce = cudaMemcpyAsync(c->dev[i], (char const*)in + ino, e->bytes[i], cudaMemcpyHostToDevice, c->stream);
+			cudaError_t ce = cudaMemcpyAsync(c->dev[i], (char const*)c->hin + ino, e->bytes[i], cudaMemcpyHostToDevice, c->stream);
 			if(ce != cudaSuccess){
 				seterr(err, errlen, cudaerr("copy in", ce));
 				return -1;
@@ -249,7 +270,7 @@ int trt_run(TrtCtx* c, void const* in, size_t inlen, void* out, size_t outlen, c
 	size_t outo = 0;
 	for(size_t i = 0; i < e->names.size(); i++)
 		if(!e->isinput[i]){
-			cudaError_t ce = cudaMemcpyAsync((char*)out + outo, c->dev[i], e->bytes[i], cudaMemcpyDeviceToHost, c->stream);
+			cudaError_t ce = cudaMemcpyAsync((char*)c->hout + outo, c->dev[i], e->bytes[i], cudaMemcpyDeviceToHost, c->stream);
 			if(ce != cudaSuccess){
 				seterr(err, errlen, cudaerr("copy out", ce));
 				return -1;
@@ -261,6 +282,7 @@ int trt_run(TrtCtx* c, void const* in, size_t inlen, void* out, size_t outlen, c
 		seterr(err, errlen, cudaerr("run", ce));
 		return -1;
 	}
+	std::memcpy(out, c->hout, outlen);
 	return 0;
 }
 

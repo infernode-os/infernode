@@ -59,6 +59,12 @@ Tensor: module
 	toreal:	fn(t: array of byte, out: array of real);
 	fromreal:	fn(r: array of real, out: array of byte);
 
+	# float32 to IEEE half (round to nearest even), and back: a tensor at
+	# half the bytes, for an engine elsewhere (trtsrv); out half or twice
+	# as long as in
+	tohalf:	fn(t, out: array of byte);
+	fromhalf:	fn(h, out: array of byte);
+
 	# "neon" or "c": what the arithmetic was compiled as
 	kind:	fn(): string;
 };

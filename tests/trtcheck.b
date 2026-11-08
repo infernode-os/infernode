@@ -71,9 +71,19 @@ init(nil: ref Draw->Context, args: list of string)
 	if(outs == nil)
 		fail("no model " + name + " in " + tdir + "/ctl");
 	place := field(rd(tdir + "/ctl"), name, "place");
+	half := field(rd(tdir + "/ctl"), name, "type") == "f16";
+	es := 4;
+	if(half)
+		es = 2;
 	nout := 0;
 	for(l := outs; l != nil; l = tl l)
-		nout += 4 * prod(hd l);
+		nout += es * prod(hd l);
+	# what goes over 9P: the input in the engine's type
+	tin := input;
+	if(half){
+		tin = array[len input / 2] of byte;
+		tensor->tohalf(input, tin);
+	}
 
 	cfd := sys->open(tdir + "/clone", Sys->OREAD);
 	if(cfd == nil)
@@ -94,7 +104,7 @@ init(nil: ref Draw->Context, args: list of string)
 	mn := 1000000;
 	for(r := 0; r < reps + 1; r++){
 		t0 := sys->millisec();
-		e := infer(sdir + "/run", input, out);
+		e := infer(sdir + "/run", tin, out);
 		if(e != nil)
 			fail(e);
 		dt := sys->millisec() - t0;
@@ -105,6 +115,12 @@ init(nil: ref Draw->Context, args: list of string)
 			mn = dt;
 	}
 
+	# the outputs as float32, whatever went over 9P
+	if(half){
+		o32 := array[2 * len out] of byte;
+		tensor->fromhalf(out, o32);
+		out = o32;
+	}
 	# each output against the CPU head of its shape
 	off := 0;
 	i := 0;

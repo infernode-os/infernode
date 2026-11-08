@@ -20,7 +20,7 @@ unsafe extern "C" {
     fn trt_load(blob: *const c_void, len: usize, dla: c_int, out: *mut *mut TrtEngine, err: *mut c_char, errlen: c_int) -> c_int;
     fn trt_free(e: *mut TrtEngine);
     fn trt_ntensors(e: *mut TrtEngine) -> c_int;
-    fn trt_tensor(e: *mut TrtEngine, i: c_int, name: *mut c_char, namelen: c_int, isinput: *mut c_int, dims: *mut c_int, ndims: *mut c_int) -> c_int;
+    fn trt_tensor(e: *mut TrtEngine, i: c_int, name: *mut c_char, namelen: c_int, isinput: *mut c_int, esize: *mut c_int, dims: *mut c_int, ndims: *mut c_int) -> c_int;
     fn trt_layers(e: *mut TrtEngine, buf: *mut c_char, buflen: c_int) -> c_int;
     fn trt_ctx(e: *mut TrtEngine, out: *mut *mut TrtCtx, err: *mut c_char, errlen: c_int) -> c_int;
     fn trt_ctxfree(c: *mut TrtCtx);
@@ -56,12 +56,17 @@ impl Place {
 pub struct Tensor {
     pub name: String,
     pub input: bool,
+    pub esize: usize, // 4 float32, 2 float16
     pub dims: Vec<usize>,
 }
 
 impl Tensor {
     pub fn bytes(&self) -> usize {
-        4 * self.dims.iter().product::<usize>()
+        self.esize * self.dims.iter().product::<usize>()
+    }
+    /// its element type as ctl says it
+    pub fn kind(&self) -> &'static str {
+        if self.esize == 2 { "f16" } else { "f32" }
     }
     /// its shape as vision(4) writes it, the batch of one left out
     pub fn shape(&self) -> String {
@@ -106,15 +111,16 @@ impl Engine {
         for i in 0..n {
             let mut name = [0 as c_char; 256];
             let mut dims = [0 as c_int; 8];
-            let (mut isin, mut nd) = (0 as c_int, 0 as c_int);
+            let (mut isin, mut es, mut nd) = (0 as c_int, 0 as c_int, 0 as c_int);
             // SAFETY: every buffer is the size passed
-            let r = unsafe { trt_tensor(e, i, name.as_mut_ptr(), 256, &mut isin, dims.as_mut_ptr(), &mut nd) };
+            let r = unsafe { trt_tensor(e, i, name.as_mut_ptr(), 256, &mut isin, &mut es, dims.as_mut_ptr(), &mut nd) };
             if r != 0 {
                 return Err("cannot read the engine's tensors".into());
             }
             eng.tensors.push(Tensor {
                 name: errstr(&name),
                 input: isin != 0,
+                esize: es as usize,
                 dims: dims[..nd as usize].iter().map(|&d| d as usize).collect(),
             });
         }

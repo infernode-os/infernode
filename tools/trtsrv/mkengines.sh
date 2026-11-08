@@ -7,7 +7,8 @@
 #
 # The network is first made ready for the DLAs by tools/vision/trtonnx.py
 # (cut at its heads, the SPP pools as 5x5 chains, space to depth as a
-# convolution; checked exact against the original). Engines are FP16, built
+# convolution; checked exact against the original). Engines are FP16, their
+# input and outputs too (half the bytes over 9P; pixels are exact in it), built
 # with detailed profiling so that trtsrv can see where every layer runs; a
 # DLA engine whose layers are not all the DLA's (but the reformatting
 # copies at its edges) is not kept.
@@ -32,6 +33,7 @@ for place in gpu dla0 dla1; do
 	dla*)	x="--useDLACore=${place#dla} --allowGPUFallback" ;;
 	esac
 	"$trtexec" --onnx="$heads" --saveEngine="$dir/engines/$place.plan" --fp16 \
+		--inputIOFormats=fp16:chw --outputIOFormats=fp16:chw \
 		--profilingVerbosity=detailed --exportLayerInfo="$dir/engines/$place.layers.json" $x \
 		> "$dir/engines/$place.log" 2>&1 || { echo "mkengines: $place: trtexec failed: $dir/engines/$place.log" >&2; exit 1; }
 	"$py" -I - "$dir/engines/$place.layers.json" "$place" <<'PY'

@@ -866,6 +866,131 @@ Tensor_toreal(void *fp)
 		r[i] = t[i];
 }
 
+/* whether two arrays' bytes overlap: a slice is another array over the same */
+static int
+overlap(Array *a, Array *b)
+{
+	uchar *p, *q;
+
+	p = a->data;
+	q = b->data;
+	return p < q + b->len && q < p + a->len;
+}
+
+/* IEEE half, without the hardware's conversions where there are none */
+static ushort
+f2h(float x)
+{
+	union { float f; u32int u; } v;
+	u32int u, sign, mant, r;
+	int e;
+
+	v.f = x;
+	u = v.u;
+	sign = (u >> 16) & 0x8000;
+	e = ((u >> 23) & 0xff) - 127 + 15;
+	mant = u & 0x7fffff;
+	if(((u >> 23) & 0xff) == 0xff)		/* inf, nan */
+		return sign | 0x7c00 | (mant ? 0x200 : 0);
+	if(e >= 31)
+		return sign | 0x7c00;
+	if(e <= 0){
+		if(e < -10)
+			return sign;
+		mant |= 0x800000;
+		r = mant >> (14 - e);
+		if((mant >> (13 - e)) & 1 && ((mant & ((1u << (13 - e)) - 1)) || (r & 1)))
+			r++;
+		return sign | r;
+	}
+	r = sign | (e << 10) | (mant >> 13);
+	if((mant & 0x1000) && ((mant & 0xfff) || (r & 1)))
+		r++;	/* may carry into the exponent, which is right */
+	return r;
+}
+
+static float
+h2f(ushort h)
+{
+	union { float f; u32int u; } v;
+	u32int sign, e, mant;
+
+	sign = (u32int)(h & 0x8000) << 16;
+	e = (h >> 10) & 0x1f;
+	mant = h & 0x3ff;
+	if(e == 0){
+		if(mant == 0){
+			v.u = sign;
+			return v.f;
+		}
+		while((mant & 0x400) == 0){
+			mant <<= 1;
+			e--;
+		}
+		e++;
+		mant &= 0x3ff;
+	}else if(e == 31){
+		v.u = sign | 0x7f800000 | (mant << 13);
+		return v.f;
+	}
+	v.u = sign | ((e + 127 - 15) << 23) | (mant << 13);
+	return v.f;
+}
+
+void
+Tensor_tohalf(void *fp)
+{
+	F_Tensor_tohalf *f;
+	float *t;
+	ushort *o;
+	uvlong i, n;
+
+	f = fp;
+	if(f->t == H || f->out == H)
+		error(exNilref);
+	if((f->t->len & 3) != 0 || f->out->len != f->t->len/2 || overlap(f->t, f->out))
+		error(exBounds);
+	n = f->t->len / 4;
+	t = floats(f->t, n);
+	o = (ushort*)f->out->data;
+	release();
+	i = 0;
+#ifdef NEON
+	for(; i + 4 <= n; i += 4)
+		vst1_u16(o+i, vreinterpret_u16_f16(vcvt_f16_f32(vld1q_f32(t+i))));
+#endif
+	for(; i < n; i++)
+		o[i] = f2h(t[i]);
+	acquire();
+}
+
+void
+Tensor_fromhalf(void *fp)
+{
+	F_Tensor_fromhalf *f;
+	ushort *h;
+	float *o;
+	uvlong i, n;
+
+	f = fp;
+	if(f->h == H || f->out == H)
+		error(exNilref);
+	if((f->h->len & 1) != 0 || f->out->len != 2*f->h->len || overlap(f->h, f->out))
+		error(exBounds);
+	n = f->h->len / 2;
+	h = (ushort*)f->h->data;
+	o = floats(f->out, n);
+	release();
+	i = 0;
+#ifdef NEON
+	for(; i + 4 <= n; i += 4)
+		vst1q_f32(o+i, vcvt_f32_f16(vreinterpret_f16_u16(vld1_u16(h+i))));
+#endif
+	for(; i < n; i++)
+		o[i] = h2f(h[i]);
+	acquire();
+}
+
 void
 Tensor_fromreal(void *fp)
 {

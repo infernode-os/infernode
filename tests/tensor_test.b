@@ -243,6 +243,45 @@ testPool(t: ref T)
 	}
 }
 
+# IEEE half: known patterns, integers exact, both the NEON loop and the C
+# tail (a length of 4n+3), and back
+testHalf(t: ref T)
+{
+	vals := array[] of {1.0, -2.0, 0.0, 65504.0, 1.0e6, 0.1, 5.96046447753906e-8, 0.333333333, -0.0, 2049.0, 2051.0};
+	want := array[] of {16r3c00, 16rc000, 16r0000, 16r7bff, 16r7c00, 16r2e66, 16r0001, 16r3555, 16r8000, 16r6800, 16r6802};
+	for(rep := 0; rep < 2; rep++){
+		# twice: alone (the C tail) and as the first of 12 (NEON's)
+		n := len vals;
+		if(rep)
+			n = 12;
+		r := array[n] of real;
+		for(i := 0; i < n; i++)
+			r[i] = vals[i % len vals];
+		hb := array[2*n] of byte;
+		tensor->tohalf(tobytes(r), hb);
+		for(i = 0; i < len vals; i++){
+			got := int hb[2*i] | int hb[2*i+1] << 8;
+			t.asserteq(got, want[i], sys->sprint("half of %g (pass %d)", vals[i], rep));
+		}
+	}
+	# 0 .. 2048 exact both ways, 2051 elements: NEON and the tail
+	n := 2051;
+	r := array[n] of real;
+	for(i := 0; i < n; i++)
+		r[i] = real (i % 2049);
+	hb := array[2*n] of byte;
+	tensor->tohalf(tobytes(r), hb);
+	back := array[4*n] of byte;
+	tensor->fromhalf(hb, back);
+	close(t, toreals(back), r, 0.0, "integers to 2048 through half");
+	# and a real's rounding error within half's
+	for(i = 0; i < n; i++)
+		r[i] = real i * 0.0137 - 9.0;
+	tensor->tohalf(tobytes(r), hb);
+	tensor->fromhalf(hb, back);
+	close(t, toreals(back), r, 0.0005, "reals through half");
+}
+
 testUpS2d(t: ref T)
 {
 	(c, h, w) := (2, 3, 4);
@@ -432,6 +471,8 @@ s2dodd()	{ tensor->s2d(ib, 2, 3, 4, ob); }
 lbshort()	{ tensor->letterbox(array[5] of byte, 2, 2, 1.0, 0, 0, ob, 2, 2); }
 lbscale()	{ tensor->letterbox(array[12] of byte, 2, 2, -1.0, 0, 0, ob, 2, 2); }
 realen()	{ tensor->toreal(ib, array[3] of real); }
+halflen()	{ tensor->tohalf(array[16] of byte, array[6] of byte); }
+halfsame()	{ b := array[16] of byte; tensor->fromhalf(b[0:8], b); }
 
 testRefusals(t: ref T)
 {
@@ -457,6 +498,8 @@ testRefusals(t: ref T)
 	refused(t, "letterbox, short picture", lbshort);
 	refused(t, "letterbox, negative scale", lbscale);
 	refused(t, "toreal, lengths differ", realen);
+	refused(t, "tohalf, lengths differ", halflen);
+	refused(t, "fromhalf into its own array", halfsame);
 	refused(t, "letterboxi420, odd width", i420odd);
 	refused(t, "letterboxi420, short luma", i420short);
 }
@@ -486,6 +529,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Elementwise", testElementwise);
 	run("Pool", testPool);
 	run("Up2S2d", testUpS2d);
+	run("Half", testHalf);
 	run("Letterbox", testLetterbox);
 	run("LetterboxI420", testLetterboxI420);
 	run("Refusals", testRefusals);

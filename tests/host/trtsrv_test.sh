@@ -63,7 +63,7 @@ bad() { echo "FAIL: $1"; fail=1; }
 part() { sed -n "/^-- $1\$/,/^-- /p" "$W/log" | grep -v '^-- '; }
 grep -q '^TRT-DONE' "$W/log" || { echo "FAIL: the session did not finish"; grep -v fsqid "$W/log" | tail -15; exit 1; }
 for p in gpu dla0 dla1; do
-	part ctl | grep -q "^model $p place=$p in=3x416x416 out=85x52x52,85x26x26,85x13x13 sha256=" && ok "$p: loaded on its place, its shapes and hash in ctl" || bad "$p: ctl: $(part ctl | grep "model $p")"
+	part ctl | grep -E -q "^model $p place=$p type=f(16|32) in=3x416x416 out=85x52x52,85x26x26,85x13x13 sha256=" && ok "$p: loaded on its place, its shapes and hash in ctl" || bad "$p: ctl: $(part ctl | grep "model $p")"
 	f=$(part $p | grep '^found')
 	n=$(echo "$f" | grep -c .)
 	same=$(echo "$f" | python3 -c '

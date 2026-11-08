@@ -267,8 +267,10 @@ fn bad {
 fn run { ftest -e /tmp/soak/run }
 '''
 
-def L(name, what, board=None, host=None, needs=(), core=False, every=None):
-    return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every)
+def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=False):
+    # vm0: the load starts a new sh (sh -c), which cannot load Sh in another VM
+    # ("Sh": module not loaded, 2026-11-08), so it stays in VM 0 with the sink
+    return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every, vm0=vm0)
 
 # Intensity. Reads are cheap and stay frequent; writes to flash are small,
 # verified and budgeted (bytes per day at each profile in the comments).
@@ -327,7 +329,7 @@ LOADS = [
 	# loops' /lib/certs (tls-live then failed against the run's CA alone, 2026-11-07)
 	sh -c 'bind /tmp/soak/certs /lib/certs; tlsperf -n 1 https://'^$jetson^':'^$tlsport^'/ > /tmp/soak/tls/out >[2] /tmp/soak/tls/err'
 	grep -s 'HTTP 200' /tmp/soak/tls/out || bad tls handshake-or-get
-	tick tls; sleep 120''', needs=['tlsperf', 'tlsserver', 'clock', 'console']),
+	tick tls; sleep 120''', needs=['tlsperf', 'tlsserver', 'clock', 'console'], vm0=True),
     L('net', '64 MB into the board and 64 MB out, every 10 min; rates logged', core=True,
       host='net', needs=['wired']),
     L('console', 'the serial shell still runs a command, hourly (the 2026-11-07 wedge)', core=True,
@@ -370,7 +372,7 @@ LOADS = [
     L('usbnet', '32 MB each way over the USB gadget link every 10 min (gadget reserved)', host='usbnet', needs=['usbnet']),
     L('draw', 'drawbench every 30 s', board=r'''
 	sh -c 'bind -a ''#i'' /dev; drawbench > /tmp/soak/draw/out >[2] /tmp/soak/draw/err' || bad draw drawbench
-	tick draw; sleep 30''', needs=['drawbench', 'display']),
+	tick draw; sleep 30''', needs=['drawbench', 'display'], vm0=True),
     L('board', 'RTC, fan, NVMe status reads', board=r'''
 	for(f in '#r/rtc' '#P/fanrpm' '#S/nvmestat') { ftest -e $f && { cat $f > /dev/null >[2] /tmp/soak/board/err || bad board $f } }
 	tick board; sleep 10''', needs=['boarddevs']),
@@ -564,8 +566,14 @@ class Run:
             self.cons.put('/tmp/soak/certs/ca.der', open(os.path.join(d, 'ca.der'), 'rb').read())
 
     def soakd(self, loads):
-        body = self.soakd_text(loads)
+        # loads that must stay in VM 0 get a script of their own when the rest go elsewhere
+        here = [l for l in loads if l.get('vm0')] if self.loopsvm else []
+        rest = [l for l in loads if l not in here]
+        body = self.soakd_text(rest)
         self.drv.put('/tmp/soak/soakd.sh', body.encode())
+        self.vm0loads = bool(here)
+        if here:
+            self.drv.put('/tmp/soak/soakd0.sh', self.soakd_text(here).encode())
         return body
 
     def soakd_text(self, loads):
@@ -897,9 +905,13 @@ class Run:
         if self.cons:
             self.holdhost('sinks', sinks)
             self.holdhost('soakd', loops)
+            if getattr(self, 'vm0loads', False):
+                self.holdhost('soakd0', 'sh /tmp/soak/soakd0.sh')
         else:
             self.drv.hold(sinks)
             self.drv.hold(loops)
+            if getattr(self, 'vm0loads', False):
+                self.drv.hold('sh /tmp/soak/soakd0.sh')
         time.sleep(20)
         # host loads
         st = lambda n: self.state.get(n, '') == 'run'

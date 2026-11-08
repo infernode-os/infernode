@@ -4,7 +4,7 @@ Status: **requirements review complete; Choice A selected for the initial releas
 
 ## Decision recorded 2026-11-08
 
-Candidate `424683092ca21e4a22b8eb7b29b06424d45092b9` adopts Choice A below as
+Candidate `170a0b3413c478794fb019c25c329ba2bc7a4950` adopts Choice A below as
 an explicit interim boundary:
 
 - `brick` is a trusted controller and may retrieve its TLS, sdg, PSK and D2
@@ -49,10 +49,19 @@ accounting for styxbrick's provisioning and real-time requirements.
 The review traced `brick pair`, TLS, sdg, D2, factotum persistence and
 namespace construction against styxbrick's README, `D2-SPEC.md`,
 `STYX-DGRAM.md`, `DEPLOYMENT.md`, `SECURITY-MODEL.md`, review reports, source,
-and committed bench records.  A local styxbrick test run was attempted, but
-the required mbedTLS archive was not installed and its host Makefile expects a
-Linux libstdc++ layout; the committed review-fix evidence was therefore
-source-checked but not independently rerun on this macOS host.
+and committed bench records.  The exact implementation pin was also rebuilt
+against mbedTLS 3.6.6 in Ubuntu 24 amd64.  Its unchanged host suite passed
+under ASan/UBSan, all mutation-suite mutants were caught, and 10-second
+libFuzzer smoke campaigns for Styx, sdg and configuration completed without a
+crash.  This independently confirms the host evidence; it does not substitute
+for the committed board/bench measurements.
+
+The firmware review retains two bounded residuals: optional BLE admission F2
+is not fixed when BLE is compiled, and the F6 initiation-flood result is an
+availability policy rather than a cryptographic bypass.  The measured flood
+did not lapse D2, but same-address reconnect-slot consumption and roughly
+7.6-second delays for other reconnects remain an explicit deployment/design
+decision.
 
 ## Requirements established by styxbrick
 
@@ -217,5 +226,6 @@ they can replace the present design.
 - **New review gate if factotum enters D2's hot path:** bench timing, overload,
   restart, multi-brick and false-failsafe evidence.
 
-This review changes the proposed remedy, not the finding that #1015 is not yet
-ready to promote or merge.
+This review changed the proposed remedy.  The candidate now implements that
+remedy and its local security gates; published-branch CI and the required
+hardware acceptance record remain the normal promotion evidence.

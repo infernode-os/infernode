@@ -1,6 +1,6 @@
 # Security review: PR #1015 (`brick`, sdg, and TLS pinning)
 
-Status: **candidate remediation implemented; remaining gates block promotion**
+Status: **candidate remediation complete; publication CI and hardware acceptance remain**
 
 This review was first pinned to InferNode PR #1015 head
 `08846129d207c1d535682e0ad37ca883a4e75c57` and was re-reviewed at
@@ -13,11 +13,12 @@ documents at `438c0c7e974e168021da5b10c2f1a6f23716c83e`; see
 
 ## 2026-11-08 remediation review
 
-The current candidate is `424683092ca21e4a22b8eb7b29b06424d45092b9` on
+The current candidate is `170a0b3413c478794fb019c25c329ba2bc7a4950` on
 `security/pr1015-factotum`.  It combines the reviewed PR head with the D2/sdg
 fix `4f7e8d2b7`, current-master integration at `4b90a0248` (master pin
 `507950f90`), the requirements record, and the factotum/pairing fix
-`424683092`.  This is a candidate branch, not the published PR head.
+`424683092`.  Commit `170a0b341` closes the TLS parser and release-gate work.
+This is a candidate branch, not the published PR head.
 
 The architecture decision is now explicit: Choice A from the requirements
 review is accepted for the initial release.  A trusted, narrowly confined
@@ -32,8 +33,8 @@ possible later hardening step, not a claim about this implementation.
 | P1015-03 low-order X25519 | **Fixed** at the reviewed PR pin and retained after integration. |
 | P1015-04 counter durability/serialization | **Fixed in candidate.** Failed writes fail closed, two slots survive torn state, and the lock is ownership-safe rather than age-stolen. |
 | P1015-05 through P1015-07 | **Fixed in candidate** by transport invalidation and strict local/remote frame bounds. |
-| P1015-08 TLS baseline/parser agreement | **Partially fixed.** The current-master conflict is resolved, but the client-auth/pinning interop test still needs conversion to the factotum profile and CI gating; differential malformed-DER coverage remains an exit gate. |
-| P1015-09 release gates | **Partially fixed.** D2, sdg and factotum/pairing regressions are build/CI gates.  The old `tests/tls_clientauth_test.sh` is not a host gate and still assumes the removed `client.key` file. |
+| P1015-08 TLS baseline/parser agreement | **Fixed in candidate.** The merged TLS path is the current-master implementation.  The handshake and provisioning regression share one strict SPKI-pin verifier, which rejects truncated/trailing certificates, non-minimal DER lengths, a wrong SPKI tag and nonzero BIT STRING unused bits. |
+| P1015-09 release gates | **Fixed in candidate.** D2, sdg, factotum/pairing and factotum-backed TLS client-auth regressions are build/CI gates.  Every TLS case reloads an encrypted keyfile in a fresh emulator; no private scalar is read from the namespace. |
 | P1015-10 pairing transaction | **Fixed to the accepted minimum.** Pairing persists one complete local candidate before USB writes and retries idempotently.  True device-side atomic staging remains a future styxbrick interface change. |
 | P1015-11 and P1015-12 | **Fixed in candidate** by rollback/non-live state and lease validation. |
 
@@ -59,17 +60,32 @@ Evidence on this exact candidate:
   not mount a live service.
 - `tests/host/secstore_logon_test.sh`: 12 passed with localhost enabled,
   including persistence and fresh-process reload.
+- `tests/host/tls_clientauth_test.sh`: 12 passed, 0 failed.  Six live TLS 1.3
+  cases cover the correct credential/pin, P-256 plus ChaCha20, absent client
+  certificate, wrong pin, mismatched key/certificate and pin-only operation.
+  Six exact-verifier cases cover a valid certificate and five malformed DER
+  constructions.  The test is in Linux host CI shard 1.
+- `tests/host/tls_matrix_test.sh`: 12 passed, 0 failed; the malformed-server
+  regression passed 3/3.
 - namespace fail-closed and live nsaudit profile checks passed; the complete
-  Dis manifest build produced all 1,186 required modules; all 362 tracked test
+  Dis manifest build produced all 1,186 required modules; all 365 tracked test
   scripts have executable mode.
 
-This is not yet a promotion clearance.  Convert and gate the TLS client-auth
-test against the factotum-backed profile, add its malformed-DER cases, run the
-full branch CI, and record the named styxbrick firmware/bench baseline.  If
-bare-metal pairing or rotation must work unattended in this release, it also
-needs a protected noninteractive persistence backend; the present unlocked,
-injected-key boot supports runtime use but deliberately refuses provisioning
-that cannot prove persistence.
+A local all-tests invocation was also attempted, but is not recorded as green:
+the pre-existing `baremetal_test.sh` FAT32 fixture exists immediately after its
+QEMU session and then disappears before the adjacent offline readback, causing
+four cascading harness failures.  The same cluster reproduced in an isolated
+bcm2837-only run; it does not exercise the files changed by this candidate.
+The required published-branch CI result remains the authority for the complete
+matrix rather than silently converting that harness failure into a pass.
+
+The source-level security blockers and candidate-local release gates are now
+closed.  Promotion still requires the ordinary published-branch CI result and
+the hardware acceptance evidence required by the repository guidelines; no
+hardware actuation is claimed here.  If bare-metal pairing or rotation must
+work unattended in this release, it also needs a protected noninteractive
+persistence backend; the present unlocked, injected-key boot supports runtime
+use but deliberately refuses provisioning that cannot prove persistence.
 
 ## 2026-11-07 re-review
 
@@ -395,17 +411,23 @@ nonzero clock interval, and test the boundary values.
 
 ## Companion firmware dependencies
 
-The two independent styxbrick Gate 4 reports are useful evidence, but they are
-not a release clearance.  At styxbrick `origin/main`/`review-3`, their requested
-changes are still open; the later local branch records proposed revisions.
-Before calling the combined feature production-ready, resolve at least:
+The current styxbrick implementation pin
+`e23114cb675b5ada72f60f3903596cdfc44d0525` closes G1, G2, F3/S1, F4 and F5.
+It was independently rebuilt against mbedTLS 3.6.6 and rerun in Ubuntu 24
+amd64: the unchanged host suite passed under ASan/UBSan, including Styx, D2,
+sdg, configuration A/B recovery, X25519 and admission; all mutation-suite
+mutants were caught; and 10-second libFuzzer smoke campaigns for Styx, sdg and
+configuration completed without a crash (622,882, 992 and 305,737 executions,
+respectively).
 
-- safe-mode configuration writes and preservation of the D2 lock (G1);
-- stored D2 configuration validation (G2);
-- BLE channel admission (F2, when BLE is built);
-- deferred sdg session promotion and counter commit (F3/S1);
-- non-lossy flush/tag floors (F4/F5); and
-- the board D2-under-sdg initiation-flood measurement (F6).
+Two bounded firmware residuals remain explicit.  BLE admission F2 is relevant
+only when the optional BLE transport is built and is not fixed at this pin.
+The committed F6 initiation-flood measurement did not lapse D2, but a
+same-address attacker can consume reconnect slots (4/8 observed) and delays
+other reconnections by about 7.6 seconds; changing that availability policy is
+a firmware design decision, not an InferNode client patch.  Neither residual
+grants an unauthenticated actuator command.  Hardware/bench actuation was not
+independently rerun for this InferNode review.
 
 These device findings do not excuse the InferNode client findings above.  The
 black-channel design deliberately requires each side to keep its own invariants.
@@ -421,9 +443,12 @@ black-channel design deliberately requires each side to keep its own invariants.
   macOS arm64.  This proves compilation only.
 - Merge-tree review against current master, including the overlapping TLS and
   manifest paths.
+- Independent styxbrick `e23114c` host rebuild with mbedTLS 3.6.6, ASan/UBSan,
+  the complete mutation suite and three libFuzzer smoke campaigns.
 
-Not run and not claimed: a live model campaign, hardware/bench actuation,
-hostbrick D2 integration, sdg impairment tests, or the unwired TLS shell test.
+Not run and not claimed: a live model campaign, hardware/bench actuation, or
+hostbrick D2 integration.  The sdg impairment and wired TLS host gates are
+covered by the candidate regressions above.
 
 ## Exit criteria
 

@@ -1,10 +1,12 @@
 <$ROOT/mkconfig
 
 DIRS=\
+	gefs\
 	prep\
 
 TARG=\
 	kfs.dis\
+	fsbench.dis\
 	mbr.dis\
 	mkext.dis\
 	mkfs.dis\

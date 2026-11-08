@@ -13,6 +13,8 @@
 # start.elf and fixup.dat; a Pi 4B boots from its EEPROM and wants
 # start4.elf, fixup4.dat and its device tree (the kernel reads no device
 # tree -- it asks the mailbox -- but the firmware wants the file there).
+# A Pi 5 wants only its device trees, one for each stepping: its firmware
+# is in its EEPROM.
 # tools/mkpiimage.sh puts on each card the ones its board needs.
 #
 # WHY THEY MAY BE IN THE PI CARD IMAGES
@@ -40,4 +42,6 @@ file fixup.dat 7853f2b51e4489f8b3ce6f9c52fd0afdda38c7383961524e0883d34afcb4827b 
 file start4.elf 560ead37044d849325755d3684ac1f74654b3ce6450604a42df6dd832cda9ede 2298912 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/start4.elf
 file fixup4.dat d181d5055daebac22513d6904fa9ce21d1e99b852cc391af095ade6f0b45c400 5510 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/fixup4.dat
 file bcm2711-rpi-4-b.dtb 75761b73c284e26623e4d1624bff13e67bce2ae620880efd81d6571a3739fcfb 56407 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/bcm2711-rpi-4-b.dtb
+file bcm2712-rpi-5-b.dtb a5165cb562035f479ea9f5a81cedf7b6596ea32a0598608c4dc3b77ada909c60 78740 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/bcm2712-rpi-5-b.dtb
+file bcm2712d0-rpi-5-b.dtb 4082ebf6aa3203728e6d58449a8162550d06f76b994f590605aaa8638128c6a1 78744 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/bcm2712d0-rpi-5-b.dtb
 file LICENCE.broadcom c7283ff51f863d93a275c66e3b4cb08021a5dd4d8c1e7acc47d872fbe52d3d6b 1594 LICENCE.broadcom https://raw.githubusercontent.com/raspberrypi/firmware/6f0881cba8bea8ec24956a5718714730e9936ec5/boot/LICENCE.broadcom

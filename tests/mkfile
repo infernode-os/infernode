@@ -67,6 +67,7 @@ TARG=\
 	osk_accuracy.dis\
 	ninep_bench.dis\
 	ninep_msize_test.dis\
+	crypto_bench.dis\
 	keyboards_test.dis\
 	osk_fuzz.dis\
 	phone_fuzz.dis\

@@ -21,7 +21,20 @@ implement NinepBench;
 #	msize=N readers=R shared=S run=I bytes=B ms=T stat_us=U
 #
 # bytes is every reader's together; a reader that got less than the file
-# is an error, printed and counted.
+# is an error, printed and counted.  A run that takes longer than -t
+# seconds (120) prints stalled=1 in place of its measurements, is killed
+# and is followed by the next; the stalls are counted at the end.
+#
+# -f secs reads a feed instead (vid9p(4), camsrv(4)): path is the feed's
+# directory, and each reader does what wm/camera does: read fmt, start at
+# the newest frame (-0: at frame 0, so a loaded clip is read as fast as
+# it can be, unpaced), and read each frame after it whole, one pread at
+# its offset, for secs seconds.  One line a run:
+#
+#	msize=N readers=R shared=S run=I frames=F ms=T framebytes=B p50_ms=P p95_ms=Q lost=L
+#
+# frames is every reader's together; p50 and p95 are of one frame's read;
+# lost counts frames that expired before they were read.
 #
 
 include "sys.m";
@@ -45,6 +58,11 @@ alg := "aes_256_cbc/sha256";
 keyfile := "";
 nstats := 50;
 errors := 0;
+stalls := 0;
+deadline := 120;	# seconds a run may take before it is called stalled
+feedsecs := 0;		# -f: read a feed for this long
+fromzero := 0;		# -0: from frame 0, not the newest
+mntbase := "/n/bench";	# -D: where the mounts go (a machine's /n may not take one)
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -57,7 +75,7 @@ init(nil: ref Draw->Context, args: list of string)
 	runs := 5;
 	separate := 0;
 	arg->init(args);
-	arg->setusage("ninep_bench [-A] [-C alg] [-k keyfile] [-m msize,...] [-c readers,...] [-n runs] [-s] [-l stats] addr path");
+	arg->setusage("ninep_bench [-A] [-C alg] [-k keyfile] [-m msize,...] [-c readers,...] [-n runs] [-s] [-l stats] [-t secs] [-f secs [-0]] [-D dir] addr path");
 	while((o := arg->opt()) != 0)
 		case o {
 		'A' =>	noauth = 1;
@@ -68,6 +86,10 @@ init(nil: ref Draw->Context, args: list of string)
 		'n' =>	runs = int arg->earg();
 		's' =>	separate = 1;
 		'l' =>	nstats = int arg->earg();
+		't' =>	deadline = int arg->earg();
+		'f' =>	feedsecs = int arg->earg();
+		'0' =>	fromzero = 1;
+		'D' =>	mntbase = arg->earg() + "/bench";
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -94,8 +116,10 @@ init(nil: ref Draw->Context, args: list of string)
 	for(i := 1; i <= runs; i++)
 		for(k = 0; k < len ca; k++){
 			(msize, nr) := ca[(k + i - 1) % len ca];
-			run(addr, path, msize, nr, separate, i);
+			timed(addr, path, msize, nr, separate, i);
 		}
+	if(stalls)
+		sys->print("stalls=%d\n", stalls);
 	if(errors)
 		raise "fail:errors";
 }
@@ -152,14 +176,56 @@ keyname(): string
 	return "/usr/" + user + "/keyring/" + keyfile;
 }
 
+# a run under a deadline: one that does not finish is reported, its
+# process group (readers and all) killed, and the next begun
+timed(addr, path: string, msize, nreaders, separate, i: int)
+{
+	pidc := chan of int;
+	done := chan of int;
+	spawn runner(addr, path, msize, nreaders, separate, i, pidc, done);
+	pid := <-pidc;
+	tick := chan of int;
+	spawn timer(tick, deadline*1000);
+	alt {
+	<-done =>
+		;
+	<-tick =>
+		stalls++;
+		sys->print("msize=%d readers=%d shared=%d run=%d stalled=1 secs=%d\n",
+			msize, nreaders, !separate, i, deadline);
+		if((fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE)) != nil)
+			sys->fprint(fd, "killgrp");
+		for(r := 0; r < nreaders; r++)
+			sys->unmount(nil, mntbase + string r);
+	}
+}
+
+runner(addr, path: string, msize, nreaders, separate, i: int, pidc, done: chan of int)
+{
+	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
+	run(addr, path, msize, nreaders, separate, i);
+	done <-= 1;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
 run(addr, path: string, msize, nreaders, separate, i: int)
 {
 	dirs := array[nreaders] of string;
 	got := 0;
 	for(r := 0; r < nreaders; r++){
-		dirs[r] = "/n/bench0";
+		dirs[r] = mntbase + "0";
 		if(separate)
-			dirs[r] = "/n/bench" + string r;
+			dirs[r] = mntbase + string r;
 		if(r == 0 || separate){
 			sys->create(dirs[r], Sys->OREAD, Sys->DMDIR|8r777);
 			got = connect(addr, msize, dirs[r]);
@@ -168,6 +234,13 @@ run(addr, path: string, msize, nreaders, separate, i: int)
 				return;
 			}
 		}
+	}
+	if(feedsecs > 0){
+		feedrun(dirs, path, got, nreaders, separate, i);
+		for(r = 0; r < nreaders; r++)
+			if(r == 0 || separate)
+				sys->unmount(nil, dirs[r]);
+		return;
 	}
 	(ok, d) := sys->stat(dirs[0] + path);
 	if(ok < 0){
@@ -202,6 +275,142 @@ run(addr, path: string, msize, nreaders, separate, i: int)
 	for(r = 0; r < nreaders; r++)
 		if(r == 0 || separate)
 			sys->unmount(nil, dirs[r]);
+}
+
+feedrun(dirs: array of string, path: string, msize, nreaders, separate, i: int)
+{
+	(w, h) := feedfmt(dirs[0] + path + "/fmt");
+	if(w <= 0){
+		sys->fprint(sys->fildes(2), "ninep_bench: %s/fmt: %r\n", path);
+		errors++;
+		return;
+	}
+	size := w*h + 2*(w/2)*(h/2);
+	go := chan of int;
+	done := chan of (int, int, list of int);
+	for(r := 0; r < nreaders; r++)
+		spawn feedreader(dirs[r] + path, size, go, done);
+	t0 := sys->millisec();
+	for(r = 0; r < nreaders; r++)
+		go <-= t0 + feedsecs*1000;
+	frames := 0;
+	lost := 0;
+	times: list of int;
+	for(r = 0; r < nreaders; r++){
+		(n, l, ts) := <-done;
+		frames += n;
+		lost += l;
+		for(; ts != nil; ts = tl ts)
+			times = hd ts :: times;
+	}
+	ms := sys->millisec() - t0;
+	a := array[len times] of int;
+	for(k := 0; times != nil; times = tl times)
+		a[k++] = hd times;
+	sort(a);
+	(p50, p95) := (0, 0);
+	if(len a > 0){
+		p50 = a[len a / 2];
+		p95 = a[len a * 95 / 100];
+	}
+	sys->print("msize=%d readers=%d shared=%d run=%d frames=%d ms=%d framebytes=%d p50_ms=%d p95_ms=%d lost=%d\n",
+		msize, nreaders, !separate, i, frames, ms, size, p50, p95, lost);
+}
+
+# wm/camera's reader, without the drawing: frames in order from the
+# newest (or 0), each whole at its offset, until the deadline
+feedreader(dir: string, size: int, go: chan of int, done: chan of (int, int, list of int))
+{
+	fd := sys->open(dir + "/frame", Sys->OREAD);
+	buf := array[size] of byte;
+	f := 0;
+	if(!fromzero)
+		f = newest(dir + "/status");
+	end := <-go;
+	n := 0;
+	lost := 0;
+	times: list of int;
+	while(fd != nil && sys->millisec() < end){
+		t := sys->millisec();
+		got := 0;
+		e := "";
+		while(got < size){
+			m := sys->pread(fd, buf[got:], size - got, big f * big size + big got);
+			if(m < 0){
+				e = sys->sprint("%r");
+				break;
+			}
+			if(m == 0)
+				break;
+			got += m;
+		}
+		if(got < size){
+			if(e == "frame expired"){
+				lost++;
+				f = newest(dir + "/status");
+				continue;
+			}
+			# the feed ended (a loaded clip read to its end), or failed:
+			# said, so a short run is not taken for a fast one
+			if(e != nil && e != "")
+				sys->fprint(sys->fildes(2), "ninep_bench: reader stopped at frame %d after %d: %s\n", f, n, e);
+			break;
+		}
+		times = (sys->millisec() - t) :: times;
+		n++;
+		f++;
+	}
+	done <-= (n, lost, times);
+}
+
+feedfmt(file: string): (int, int)
+{
+	fd := sys->open(file, Sys->OREAD);
+	if(fd == nil)
+		return (0, 0);
+	b := array[128] of byte;
+	k := sys->read(fd, b, len b);
+	if(k <= 0)
+		return (0, 0);
+	(nil, t) := sys->tokenize(string b[0:k], " \t\n");
+	if(len t < 2)
+		return (0, 0);
+	return (int hd t, int hd tl t);
+}
+
+# the newest frame kept, as wm/camera finds it (status frames= less one)
+newest(file: string): int
+{
+	fd := sys->open(file, Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[512] of byte;
+	k := sys->read(fd, b, len b);
+	if(k <= 0)
+		return 0;
+	(frames, first) := (0, 0);
+	(nil, t) := sys->tokenize(string b[0:k], " \t\n");
+	for(; t != nil; t = tl t){
+		s := hd t;
+		for(j := 0; j < len s; j++)
+			if(s[j] == '='){
+				case s[0:j] {
+				"frames" =>	frames = int s[j+1:];
+				"first" =>	first = int s[j+1:];
+				}
+				break;
+			}
+	}
+	if(frames > first)
+		return frames - 1;
+	return frames;
+}
+
+sort(a: array of int)
+{
+	for(i := 1; i < len a; i++)
+		for(j := i; j > 0 && a[j-1] > a[j]; j--)
+			(a[j-1], a[j]) = (a[j], a[j-1]);
 }
 
 reader(file: string, size: int, go: chan of int, done: chan of int)

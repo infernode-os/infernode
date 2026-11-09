@@ -9,7 +9,10 @@ All notable changes to InferNode are documented in this file.
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis
 on every core of a board: one VM a core, each with its own heap and
 collector. A Camera Module 3 on a Pi 4 is a live video feed at
-`/mnt/video/0`, and a file on the card puts a board in CNSA 2.0 mode.
+`/mnt/video/0`, and object recognition is a file system,
+`/mnt/vision`, on a board's CPU or a Jetson's GPU; the old `$GPU` and
+`gpusrv` are gone (see Breaking & behavior changes). A file on the card
+puts a board in CNSA 2.0 mode.
 A keyboard on the screen, `wm/osk`, makes touch screens usable on the
 Pi, iOS and Android, and on the Pi a finger now scrolls and reaches
 context menus. GPS receivers and RTL-SDR radios are served as files,

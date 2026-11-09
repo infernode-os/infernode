@@ -34,6 +34,16 @@ Twrite:	con 118;
 Tmax:	con 126;
 Rflushtype:	con 109;
 
+# Where each try's ephemeral key and index come from.  Under emu,
+# #c/random is clock jitter, about 80 ms a byte and slower on macOS:
+# the 36 bytes a try takes cost 2.5 s on Linux and 11 to 14 s on CI's
+# macOS runners, so the tries' 250 ms .. 2 s back-off was never what
+# paced them, and one try took the whole of HSDEADLINE.
+# #c/notquiterandom is the host's CSPRNG (getrandom, arc4random_buf),
+# and on the native kernel the same keyed generator as #c/random (see
+# docs/TLS-ENTROPY.md; tls.b reads it for the same reason).
+KEYRANDOM:	con Random->NotQuiteRandom;
+
 init(): string
 {
 	sys = load Sys Sys->PATH;
@@ -200,7 +210,7 @@ handshake1(k: ref Keys, payload: array of byte): (ref Hs, array of byte)
 	hs.rs = k.server;
 	hs.psk = k.psk;
 	hs.mixhash(hs.rs);		# pre-message: the responder's static key
-	hs.e = random->randombuf(Random->ReallyRandom, 32);
+	hs.e = random->randombuf(KEYRANDOM, 32);
 	hs.epub = keyring->x25519_base(hs.e);
 	m := hs.epub;
 	hs.mixhash(hs.epub);		# e (and, in a psk handshake, MixKey too)
@@ -507,7 +517,7 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	wait := 250;
 	while(sys->millisec() < deadline){
 		# A fresh initiation each try (an accepted one would be refused as old).
-		me := get4(random->randombuf(Random->ReallyRandom, 4), 0);
+		me := get4(random->randombuf(KEYRANDOM, 4), 0);
 		(ictr, cerr) := counter(k.ctrfile);
 		if(cerr != nil){
 			kill(reader);

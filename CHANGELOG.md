@@ -4,6 +4,19 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Performance
+
+- **AES and SHA-256 by the ARMv8 instructions.** On Apple Silicon and
+  on arm64 Linux and Android processors that have them (getauxval's
+  `HWCAP_AES`, `HWCAP_SHA2`), libsec's AES-CBC, AES blocks and SHA-256
+  use the Cryptography Extension instead of tables and C. On an M-series
+  Mac AES-256-CBC went from 234 to 1640 MB/s and SHA-256 from 442 to
+  2298 MB/s; an encrypted devssl session (AES-256-CBC with SHA-256)
+  from 140 to 579 MB/s. On a Jetson Orin, AES-256-CBC 138 to 1077 MB/s
+  encrypting and 142 to 2118 decrypting, SHA-256 163 to 828. Results
+  are byte for byte the C's (`tests/host/armcrypto_test.sh`). The native
+  kernels keep the C: their code may not touch the FP/SIMD registers.
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

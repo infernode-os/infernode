@@ -47,6 +47,12 @@ static int rijndaelKeySetup(u32 erk[/*4*(Nr + 1)*/], u32 drk[/*4*(Nr + 1)*/], co
 static void	rijndaelEncrypt(const u32int rk[], int Nr, const uchar pt[16], uchar ct[16]);
 static void	rijndaelDecrypt(const u32int rk[], int Nr, const uchar ct[16], uchar pt[16]);
 
+/* aesarm64.c: the ARMv8 instructions, where the processor has them */
+int	aesarm64ok(void);
+void	aesarm64encryptblock(const u32int*, int, const uchar*, uchar*);
+void	aesarm64cbcencrypt(uchar*, int, const u32int*, int, uchar*);
+void	aesarm64cbcdecrypt(uchar*, int, const u32int*, int, uchar*);
+
 void
 setupAESstate(AESstate *s, uchar key[], int keybytes, uchar *ivec)
 {
@@ -72,6 +78,11 @@ aesCBCencrypt(uchar *p, int len, AESstate *s)
 	uchar *p2, *ip, *eip;
 	uchar q[AESbsize];
 
+	if(len >= AESbsize && aesarm64ok()){
+		aesarm64cbcencrypt(p, len/AESbsize, s->ekey, s->rounds, s->ivec);
+		p += len - len%AESbsize;
+		len %= AESbsize;
+	}
 	for(; len >= AESbsize; len -= AESbsize){
 		p2 = p;
 		ip = s->ivec;
@@ -98,6 +109,11 @@ aesCBCdecrypt(uchar *p, int len, AESstate *s)
 	uchar *ip, *eip, *tp;
 	uchar tmp[AESbsize], q[AESbsize];
 
+	if(len >= AESbsize && aesarm64ok()){
+		aesarm64cbcdecrypt(p, len/AESbsize, s->dkey, s->rounds, s->ivec);
+		p += len - len%AESbsize;
+		len %= AESbsize;
+	}
 	for(; len >= AESbsize; len -= AESbsize){
 		memmove(tmp, p, AESbsize);
 		rijndaelDecrypt(s->dkey, s->rounds, p, q);
@@ -123,6 +139,10 @@ aesCBCdecrypt(uchar *p, int len, AESstate *s)
 void
 aesEncryptBlock(AESstate *s, uchar pt[16], uchar ct[16])
 {
+	if(aesarm64ok()){
+		aesarm64encryptblock(s->ekey, s->rounds, pt, ct);
+		return;
+	}
 	rijndaelEncrypt(s->ekey, s->rounds, pt, ct);
 }
 

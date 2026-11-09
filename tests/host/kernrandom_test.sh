@@ -25,7 +25,7 @@ done
 cp "$ROOT/tests/host/kernrandom_shim.h" "$TMP/port/"
 cp "$ROOT/os/port/random.c" "$TMP/port/random.c"
 
-LIBSEC="$ROOT/libsec/chacha.c $ROOT/libsec/sha2.c $ROOT/libsec/sha256block.c $ROOT/libsec/sha512block.c"
+LIBSEC="$ROOT/libsec/chacha.c $ROOT/libsec/sha2.c $ROOT/libsec/sha256block.c $ROOT/libsec/sha256arm64.c $ROOT/libsec/sha512block.c"
 for f in $LIBSEC; do
 	cc -I"$ROOT/$EMUHOST/$OBJTYPE/include" -I"$ROOT/include" -I"$ROOT/libmp" \
 		-c "$f" -o "$TMP/$(basename "$f" .c).o"

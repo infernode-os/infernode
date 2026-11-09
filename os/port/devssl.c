@@ -87,7 +87,8 @@ enum{
 	Qsecretin,
 	Qsecretout,
 	Qencalgs,
-	Qhashalgs
+	Qhashalgs,
+	Qlower			/* the name of the channel pushed under it */
 };
 
 #define TYPE(x) 	((ulong)(x).path & 0xf)
@@ -184,6 +185,10 @@ sslgen(Chan *c, char *dname, Dirtab *d, int nd, int s, Dir *dp)
 			q.path = QID(CONV(c->qid), Qhashalgs);
 			p = "hashalgs";
 			break;
+		case 6:
+			q.path = QID(CONV(c->qid), Qlower);
+			devdir(c, q, "lower", 0, nm, 0444, dp);
+			return 1;
 		}
 		devdir(c, q, p, 0, nm, 0660, dp);
 		return 1;
@@ -261,6 +266,7 @@ sslopen(Chan *c, int omode)
 		break;
 	case Qencalgs:
 	case Qhashalgs:
+	case Qlower:
 		if(omode != OREAD)
 			error(Eperm);
 		break;
@@ -573,6 +579,28 @@ sslread(Chan *c, void *a, long n, vlong offset)
 		return readstr(offset, a, n, encalgs);
 	case Qhashalgs:
 		return readstr(offset, a, n, hashalgs);
+	case Qlower:
+		/*
+		 * the channel the conversation was pushed onto (its fd ctl):
+		 * a mount's source in a name space is the conversation's
+		 * data file, and this is how a reader of /prog/n/ns finds
+		 * the connection under it (/net/tcp/3/data)
+		 */
+		{
+			Dstate *ds;
+			char nm[256];
+
+			/* copied under dslock: a close takes the
+			 * conversation out of dstate under it, and
+			 * frees it, its channel too, after */
+			nm[0] = 0;
+			lock(&dslock);
+			ds = dstate[CONV(c->qid)];
+			if(ds != 0 && ds->c != 0)
+				snprint(nm, sizeof(nm), "%s", channame(ds->c));
+			unlock(&dslock);
+			return readstr(offset, a, n, nm);
+		}
 	}
 
 	n = 0;

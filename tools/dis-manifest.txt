@@ -619,6 +619,7 @@ dis/netstat.dis
 dis/newer.dis
 dis/newuser.dis
 dis/ns.dis
+dis/ns2mmd.dis
 dis/nsaudit.dis
 dis/nsbuild.dis
 dis/os.dis

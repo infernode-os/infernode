@@ -167,6 +167,17 @@ memusehigh(void)
  * used for years against a heap it can grow; here the heap is fixed at
  * 16MB, so the reserve this leaves is a real 8MB rather than a hint.
  */
+/*
+ * How much the running VM's heap has been used: its allocations and
+ * frees so far. The idle collector (dis.c, idlegc) does not go round
+ * the whole heap again while this has not changed; emu/port/alloc.c's.
+ */
+ulong
+heapactivity(void)
+{
+	return heapmem->nalloc + heapmem->nfree;
+}
+
 int
 memlow(void)
 {

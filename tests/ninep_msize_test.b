@@ -11,11 +11,21 @@ implement NinepMsizeTest;
 #    directory and reads a file whole (the same wrap broke the first two
 #    when the mount offered IOHDRSZ+64K, against the exportfs every
 #    machine was running)
+#  - eight readers at once through one encrypted mount at 64K
+#    (devssl, aes_256_cbc and sha256, as mount -C sets it) each read the
+#    file byte for byte: devssl wrote a reply longer than its record
+#    limit (about 32K) as pieces locked one at a time, two of exportfs's
+#    workers replying at once interleaved them, and replies reached the
+#    wrong tags ("unexpected reply tag", "mnt: proc released ...
+#    mismatch"), then the mount wedged
 #
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
+include "keyring.m";
+include "security.m";
+	ssl: SSL;
 include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import styx;
@@ -62,6 +72,24 @@ run(name: string, testfn: ref fn(t: ref T))
 # unit, a pipe's 32K, and the wrap needs more than 65544
 exported(t: ref T): ref Sys->FD
 {
+	return exportedalg(t, nil);
+}
+
+ALG: con "aes_256_cbc sha256";
+SECRETA: array of byte;	# aes_256 wants a long secret; set in init
+SECRETB: array of byte;
+
+secret(seed: int): array of byte
+{
+	b := array[64] of byte;
+	for(i := 0; i < len b; i++)
+		b[i] = byte (seed + 7*i);
+	return b;
+}
+
+# as exported(), with devssl pushed on both ends when alg is set
+exportedalg(t: ref T, alg: string): ref Sys->FD
+{
 	(ok, ac) := sys->announce("tcp!127.0.0.1!0");
 	if(ok < 0){
 		t.fatal(sys->sprint("announce: %r"));
@@ -73,33 +101,63 @@ exported(t: ref T): ref Sys->FD
 		t.fatal("no local address: " + local);
 		return nil;
 	}
-	ready := chan of int;
-	spawn serve(ac, ready);
+	ready := chan of string;
+	spawn serve(ac, alg, ready);
 	(dok, c) := sys->dial("tcp!127.0.0.1!" + hd tl f, nil);
 	if(dok < 0){
 		t.fatal(sys->sprint("dial: %r"));
 		return nil;
 	}
-	if(<-ready < 0){
-		t.fatal(sys->sprint("export: %r"));
+	if((e := <-ready) != nil){
+		t.fatal("export: " + e);
 		return nil;
 	}
-	return c.dfd;
+	if(alg == nil)
+		return c.dfd;
+	(fd, err) := pushssl(c.dfd, SECRETB, SECRETA, alg);
+	if(fd == nil)
+		t.fatal("client ssl: " + err);
+	return fd;
 }
 
-serve(ac: Sys->Connection, ready: chan of int)
+pushssl(fd: ref Sys->FD, secretin, secretout: array of byte, alg: string): (ref Sys->FD, string)
+{
+	(err, c) := ssl->connect(fd);
+	if(err != nil)
+		return (nil, err);
+	err = ssl->secret(c, secretin, secretout);
+	if(err != nil)
+		return (nil, err);
+	if(sys->fprint(c.cfd, "alg %s", alg) < 0)
+		return (nil, sys->sprint("alg %s: %r", alg));
+	return (c.dfd, nil);
+}
+
+serve(ac: Sys->Connection, alg: string, ready: chan of string)
 {
 	(ok, c) := sys->listen(ac);
 	if(ok < 0){
-		ready <-= -1;
+		ready <-= sys->sprint("listen: %r");
 		return;
 	}
 	dfd := sys->open(c.dir + "/data", Sys->ORDWR);
-	if(dfd == nil || sys->export(dfd, DIR, Sys->EXPASYNC) < 0){
-		ready <-= -1;
+	if(dfd == nil){
+		ready <-= sys->sprint("open data: %r");
 		return;
 	}
-	ready <-= 0;
+	if(alg != nil){
+		err: string;
+		(dfd, err) = pushssl(dfd, SECRETA, SECRETB, alg);
+		if(dfd == nil){
+			ready <-= "server ssl: " + err;
+			return;
+		}
+	}
+	if(sys->export(dfd, DIR, Sys->EXPASYNC) < 0){
+		ready <-= sys->sprint("%r");
+		return;
+	}
+	ready <-= nil;
 }
 
 readfile(f: string): string
@@ -199,10 +257,77 @@ testMount(t: ref T)
 	sys->remove(mnt);
 }
 
+NREADERS: con 8;
+
+testEncryptedReaders(t: ref T)
+{
+	fd := exportedalg(t, ALG);
+	(got, nil) := sys->fversion(fd, 65536, "9P2000");
+	t.asserteq(got, 65536, "the encrypted connection takes 64K");
+	mnt := DIR + ".enc";
+	sys->create(mnt, Sys->OREAD, Sys->DMDIR|8r777);
+	if(sys->mount(fd, nil, mnt, Sys->MREPL, nil) < 0){
+		t.fatal(sys->sprint("mount: %r"));
+		return;
+	}
+	done := chan of string;
+	for(i := 0; i < NREADERS; i++)
+		spawn readwhole(mnt + "/f", done);
+	tick := chan of int;
+	spawn timer(tick, 30000);
+	ok := 0;
+	for(i = 0; i < NREADERS; i++)
+		alt {
+		e := <-done =>
+			if(e == nil)
+				ok++;
+			else
+				t.error(e);
+		<-tick =>
+			t.error(sys->sprint("%d of %d readers not done after 30s", NREADERS - i, NREADERS));
+			i = NREADERS;
+		}
+	t.asserteq(ok, NREADERS, "every reader read the file whole and right");
+	sys->unmount(nil, mnt);
+	sys->remove(mnt);
+}
+
+readwhole(f: string, done: chan of string)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil){
+		done <-= sys->sprint("open: %r");
+		return;
+	}
+	buf := array[len filedata] of byte;
+	k := 0;
+	while(k < len buf && (m := sys->read(fd, buf[k:], len buf - k)) > 0)
+		k += m;
+	if(k != len filedata){
+		done <-= sys->sprint("read %d of %d: %r", k, len filedata);
+		return;
+	}
+	for(i := 0; i < k; i++)
+		if(buf[i] != filedata[i]){
+			done <-= sys->sprint("byte %d differs", i);
+			return;
+		}
+	done <-= nil;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	styx = load Styx Styx->PATH;
+	ssl = load SSL SSL->PATH;
+	SECRETA = secret(1);
+	SECRETB = secret(101);
 	testing = load Testing Testing->PATH;
 	testing->init();
 	styx->init();
@@ -218,6 +343,7 @@ init(nil: ref Draw->Context, args: list of string)
 	fd = nil;
 	run("LargeOffer", testLargeOffer);
 	run("Mount", testMount);
+	run("EncryptedReaders", testEncryptedReaders);
 	sys->remove(DIR + "/f");
 	sys->remove(DIR);
 	if(testing->summary(passed, failed, skipped) > 0)

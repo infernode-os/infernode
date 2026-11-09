@@ -789,7 +789,7 @@ jobs:
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
-              listen_rate_fairness_test mail9p_test
+              listen_announce_test listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
               nsaudit_metadata_test nosystemkeyboard_test osk_decoder_test prof_test profile_legacykey_test
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test

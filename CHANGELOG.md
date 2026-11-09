@@ -4,6 +4,16 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **listen(1) can be started again while a connection it made is
+  open.** Each authenticated connection kept a copy of the listener's
+  file descriptors, the announcement's among them, so a listen killed
+  and started again on the same address was refused ("address in
+  use") until every connection it had made ended, and the address
+  stayed announced with nothing taking connections. A connection now
+  keeps only its own files.
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

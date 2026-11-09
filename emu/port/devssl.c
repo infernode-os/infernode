@@ -604,6 +604,7 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 {
 	volatile struct { Dstate *s; } s;
 	volatile struct { Block *b; } bb;
+	volatile struct { int begun; } r;
 	Block *nb;
 	int h, n, m, pad, rv;
 	uchar *p;
@@ -617,17 +618,35 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		error(Ebadusefd);
 	}
 
+	/*
+	 * A record begun and not sent whole leaves the connection out of
+	 * step: its sequence number and the cipher's state advanced, or
+	 * part of it on the wire.  Only then is it hung up.  An error
+	 * between records leaves the stream at a record's end, and the
+	 * connection goes on.
+	 */
+	r.begun = 0;
 	if(waserror()){
 		qunlock(&s.s->out.q);
 		if(bb.b)
 			freeb(bb.b);
-		sslhangup(s.s);
+		if(r.begun)
+			sslhangup(s.s);
 		nexterror();
 	}
 	qlock(&s.s->out.q);
 
 	rv = 0;
 	while(bb.b){
+		/*
+		 * An interrupt pending (a Prog killed in a 9P call over this
+		 * connection, whose flush comes here) is raised now, before
+		 * the record is begun: raised by the host write's osenter, it
+		 * hung up a connection every other user of the mount needed.
+		 */
+		osenter();
+		osleave();
+		r.begun = 1;
 		m = n = BLEN(bb.b);
 		h = s.s->diglen + 2;
 
@@ -698,6 +717,7 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		m = BLEN(nb);
 		devtab[s.s->c->type]->bwrite(s.s->c, nb, s.s->c->offset);
 		s.s->c->offset += m;
+		r.begun = 0;
 	}
 	qunlock(&s.s->out.q);
 	poperror();

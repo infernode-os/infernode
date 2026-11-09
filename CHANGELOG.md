@@ -48,6 +48,18 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Security
 
+- **A Prog killed in a 9P call over an encrypted mount no longer takes
+  the mount down for everyone else.** The killed call's flush is written
+  through devssl, and the kill, still pending, interrupted that write
+  before any of the record was sent; devssl hung the connection up for
+  any error in a write, so every later request on the mount failed with
+  "inappropriate use of fd". A pending interrupt is now raised before a
+  record is begun, and only a record begun and not sent whole hangs the
+  connection up. Changing a vision(4) session's `place` while it follows
+  a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
+  checks it. The native kernel's devssl has the same write path; it is
+  not changed here.
+
 - **`brick(1)` keeps a styxbrick's credentials in factotum, and its TLS
   and lease handling are hardened (#1111).** The four commander secrets
   move out of ordinary profile files into purpose-scoped factotum keys;

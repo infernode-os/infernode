@@ -100,6 +100,7 @@ dis/bdf2subfont.dis
 dis/bind.dis
 dis/bioget.dis
 dis/bit2gif.dis
+dis/brick.dis
 dis/broke.dis
 dis/bt9p.dis
 dis/btboardaddr.dis
@@ -414,6 +415,7 @@ dis/lib/outlinefont.dis
 dis/lib/parseman.dis
 dis/lib/pdf.dis
 dis/lib/pdfenc.dis
+dis/lib/sdg.dis
 dis/lib/sheetview.dis
 dis/lib/plumbing.dis
 dis/lib/plumbmsg.dis
@@ -722,6 +724,7 @@ dis/tests/awk_test.dis
 dis/tests/bayer_test.dis
 dis/tests/bidi_test.dis
 dis/tests/bioauth_test.dis
+dis/tests/brick_d2_test.dis
 dis/tests/brotli_test.dis
 dis/tests/bthci_test.dis
 dis/tests/bufio_test.dis
@@ -756,6 +759,7 @@ dis/tests/exception_test.dis
 dis/tests/factotum_grant_test.dis
 dis/tests/factotum_test.dis
 dis/tests/fdclose_test.dis
+dis/tests/gc_cycle_test.dis
 dis/tests/fltfmt_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
@@ -892,6 +896,7 @@ dis/tests/scene_test.dis
 dis/tests/sdl3_test.dis
 dis/tests/sdrdsp_test.dis
 dis/tests/sdp_test.dis
+dis/tests/sdg_test.dis
 dis/tests/secp256k1_test.dis
 dis/tests/secstore_abort_probe.dis
 dis/tests/secstore_crypto_test.dis
@@ -934,6 +939,7 @@ dis/tests/tls_live_test.dis
 dis/tests/tls_pq_test.dis
 dis/tests/tls_protocol_test.dis
 dis/tests/tlsclient.dis
+dis/tests/tlspinclient.dis
 dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis

@@ -4,6 +4,18 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Performance
+
+- **The native kernels' TCP recovers from loss faster.** After a
+  retransmission the slow-start threshold is half what was in flight
+  (RFC 5681), not one segment, so the window doubles back instead of
+  growing a segment a round trip; and the least retransmission timeout
+  is 200 ms (Linux's), not 500. Reading 720p frames from a Raspberry
+  Pi 5 with four reads in flight while a bulk download shared its path,
+  65 frames came through in the time master's kernel took 46 and 48,
+  and the slowest frame took 2.4 s to master's 3.3 and 5.4. With no
+  competing traffic nothing changed.
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

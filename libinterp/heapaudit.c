@@ -65,29 +65,38 @@ static struct
 	{nil,	nil}
 };
 
-extern Type* TDisplay;
-extern Type* TFont;
-extern Type* TImage;
-extern Type* TScreen;
 extern Type* TFD;
 extern Type* TFileIO;
-extern Type* fakeTkTop;
 
+/*
+ * The built-in modules' types, by name.  Sys's are always linked; the
+ * others (Draw's, Tk's) are told here by their module's init, through
+ * heapaudittype, so naming them does not pull draw.c and tk.c into an
+ * emu built without them (Windows' headless emu has neither).
+ */
 static struct
 {
 	char*	name;
 	Type**	ptr;
-} ptypes[] =
+} ptypes[16] =
 {
-	{"Display",	&TDisplay},
-	{"Font",	&TFont},
-	{"Image",	&TImage},
-	{"Screen",	&TScreen},
 	{"FD",		&TFD},
 	{"FileIO",	&TFileIO},
-	{"TkTop",	&fakeTkTop},
 	{nil,	nil}
 };
+
+void
+heapaudittype(char *name, Type **t)
+{
+	int i;
+
+	for(i = 0; i < nelem(ptypes)-1; i++)
+		if(ptypes[i].name == nil){
+			ptypes[i].ptr = t;
+			ptypes[i].name = name;
+			return;
+		}
+}
 
 static char *kindname[] = { "obj", "list", "array" };
 

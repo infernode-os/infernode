@@ -22,6 +22,9 @@
 #                ahead of the data it speaks for.
 #   ceilings     the pools' ceilings must not add up to more than there
 #                is, and no heap may take the kernel's share.
+#   loopback     the loopback queue holds several of TCP's 512K windows:
+#                at 128K it dropped 95% of a Pi 4's loopback traffic
+#                (2026-11-10).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -60,6 +63,10 @@ m=$(sed -n '/#ifdef POOLBYNEED/,/#else/p' os/arm64/main.c)
 if echo "$m" | grep -q 'mem - mainmax - imagmax' && echo "$m" | grep -q 'heapreserve = mainmax + imagmax'; then ok "the pools fit in memory, and the heaps leave the kernel its share"
 else no "POOLBYNEED: the ceilings no longer fit in memory"; fi
 if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the reserve"; else no "poolalloc ignores heapreserve"; fi
+
+lbq=$(sed -n 's/.*lb->q = qopen(\([0-9*]*\), Qmsg.*/\1/p' os/ip/loopbackmedium.c)
+if [ -n "$lbq" ] && [ $(( lbq )) -ge $(( 4*512*1024 )) ]; then ok "the loopback queue holds four 512K windows ($(( lbq )) bytes)"
+else no "the loopback queue is ${lbq:-not found}: less than four of TCP's 512K windows"; fi
 
 idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)

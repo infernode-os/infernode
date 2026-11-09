@@ -4,6 +4,16 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **TCP over a native kernel's loopback no longer drops most of what it
+  sends.** The loopback interface's queue held 128K for both directions
+  of every conversation while TCP's windows are 512K, so a bulk transfer
+  overflowed it: on a Raspberry Pi 4, 95% of loopback packets were
+  dropped and TCP spent its time retransmitting. With a 2 MB queue none
+  are dropped, and a transfer between two programs on one board went
+  from 9-30 MB/s to about 500.
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

@@ -22,6 +22,27 @@ reset partway through. Upgrading is recommended for every 0.9.0
 installation, especially bare-metal nodes and systems that ran
 `voice/listen`.
 
+### Breaking & behavior changes
+
+- **The February GPU experiment is removed: `$GPU`, `gpusrv`,
+  `/mnt/gpu` and the Veltro `gpu` tool (#1115).** vision(4) replaces
+  them: `/mnt/vision` in place of `/mnt/gpu`, `visionfs` in place of
+  `gpusrv`, and on a Jetson `trtsrv` in place of the TensorRT `$GPU`
+  module. Agents use the `vision` tool. The emulator no longer has a
+  GPU build option (`emu/Linux/mkfile-gpu-*`), and `lib/gpu`'s plans
+  are gone. A TensorRT engine for trtsrv is built with `mkengines.sh`.
+- **The Veltro `vision` tool no longer sends pictures to the cloud
+  (#1115).** It used to describe a picture through the Anthropic API
+  (`--cloud`, and as a fallback when no GPU was mounted), or run a
+  model on `/mnt/gpu` (`--local`). Now it returns only what the
+  detector at `/mnt/vision` finds, as records, and fails if nothing is
+  mounted there. There is no fallback. Its options are `-c` (classes)
+  and `-t` (threshold).
+- **Matrix's `video-overlay` is retired (#1115).** A bound layer
+  replaces it. Load `video-player` or `video-live`, and
+  `bind -a DIR /mnt/video/0/layer` whatever is to be drawn on top. The
+  composition's comments show the line.
+
 ### Security
 
 - **`brick(1)` keeps a styxbrick's credentials in factotum, and its TLS
@@ -398,6 +419,61 @@ installation, especially bare-metal nodes and systems that ran
   built, so `releases/latest/download/os_list_infernode.json` follows
   every release with no hand edit. The trademark policy's logo is
   orange `#FF6633`, as every icon has used, not red.
+
+### Vision and video
+
+- **Recognition as files: vision(4) at `/mnt/vision` (#1115).** `visionfs`
+  serves object detectors as files. A model is a directory
+  (`models/NAME/info`, `classes`). A session comes from `clone`: write a
+  picture to its `image` file, read `detections`, one `class=dog
+  score=0.86 x0=... y0=... x1=... y1=...` record a line. A session can
+  also follow a live feed: write `src /mnt/video/0` to its `ctl`, and
+  each read gives one frame's records, keyed by `frame=` and `pts=`. A
+  detector slower than the camera takes the newest frame and counts the
+  frames it skipped (`stats`). Because it is files, a picture can be
+  recognised by a server on another machine, mounted at `/mnt/vision`
+  like a local one. `vision/detect`, `vision/draw` and `vision/crop` are
+  filters over it for batches of pictures (`-j` runs sessions in
+  parallel). The Veltro `vision` tool is now a client of `/mnt/vision`.
+  The CPU engine is `$Tensor`, a built-in module with NEON on arm64, in
+  the emulators and the native kernels alike. See visionfs(4) and
+  vision(1).
+- **On a Pi 4, one core finds the objects in a 416x416 picture in
+  276 ms (#1115).** That is YOLOX-nano on the native kernel. On the
+  live camera, one detector kept up about 2 detections a second while
+  the camera stayed at 30 frames a second. That was measured before the
+  last speed-up, so it is now somewhat higher. Four detectors, one a
+  core, handled three times as many pictures as one.
+- **The Jetson's GPU and DLAs as a vision engine: `trtsrv` (#1115).**
+  On a Jetson, `trtsrv` (`tools/trtsrv`, in Rust) serves TensorRT
+  engines as 9P on its standard input and output. The name space mounts
+  it, so it is never on the network. A visionfs session's `place` is
+  then `gpu`, `dla0` or `dla1` as well as `cpu`, and finds the same
+  objects as the CPU. Engines are written into it through its files.
+  It refuses one whose SHA-256 is not recorded, or whose layers are not
+  where its place says. `mkengines.sh` builds the three engines from a
+  model. On an Orin, one inference takes 1.3 ms on the GPU and 8.4 ms
+  on a DLA. A whole picture through the files takes 54 to 62 ms, most
+  of it in moving the picture over 9P.
+- **What is drawn over a video is composed by the name space: a feed's
+  `layer/` directory (#1095, #1115).** vid9p and camsrv feeds each have
+  a `layer/` directory. Every file in it is a layer of marks drawn over
+  the frames: boxes, lines, text and points, each keyed to a frame
+  number. `bind -a` adds a layer, `bind -b` puts one underneath, and
+  `unmount` takes it off. Each viewer draws what its own name space
+  has, so two viewers of one feed can show different layers. For
+  example, `bind -a /mnt/vision/1/layer /mnt/video/0/layer` puts a
+  session's detections over the picture while it plays. Matrix's
+  video-pane, vidplay9p and wm/camera draw layers. camsrv numbers its
+  frames as vid9p does, so a record for frame N lands on frame N in any
+  viewer. `layerfs` makes any file written into a stack a layer. See
+  layers(2) and layerfs(4).
+- **`post`: a mounted directory offered to other name spaces (#1115).**
+  `post NAME DIR` posts DIR in `#s`, where any other name space on the
+  machine, or another Dis VM, mounts it with `mount -A '#sNAME/fs'`.
+  This replaces the posting option each server had: camsrv's and
+  visionfs's `-s` are gone. Use `post` after mounting the server. See
+  post(1).
 
 ### Applications
 
@@ -911,6 +987,12 @@ installation, especially bare-metal nodes and systems that ran
   is reading it.
 - **The remote camera has to be offered by hand,** as above; there is
   no card setting for it yet, and a reboot ends it.
+- **No model ships with the release (#1115).** visionfs needs a model
+  directory. The examples' `/lib/vision/yolox-nano` is not in the
+  package: make one from YOLOX-nano's ONNX file with
+  `tools/vision/onnx2vis.py`, and on a Jetson its engines with
+  `tools/trtsrv/mkengines.sh`. Until a model is loaded, a session refuses
+  a picture and the `vision` tool reports the error.
 
 ## [0.9.0] - 2026-10-29
 

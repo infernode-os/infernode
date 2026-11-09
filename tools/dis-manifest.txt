@@ -231,7 +231,6 @@ dis/getline.dis
 dis/gettar.dis
 dis/gif2bit.dis
 dis/gpsfs.dis
-dis/gpusrv.dis
 dis/grep.dis
 dis/grid/lib/announce.dis
 dis/grid/register.dis
@@ -284,6 +283,7 @@ dis/jsfs.dis
 dis/kill.dis
 dis/ktrans.dis
 dis/lan78stats.dis
+dis/layerfs.dis
 dis/lib/acmewin.dis
 dis/lib/arg.dis
 dis/lib/asn1.dis
@@ -388,6 +388,7 @@ dis/lib/kbdecode.dis
 dis/lib/keyringinst.dis
 dis/lib/keyset.dis
 dis/lib/l2cap.dis
+dis/lib/layers.dis
 dis/lib/libc.dis
 dis/lib/libc0.dis
 dis/lib/lists.dis
@@ -487,6 +488,8 @@ dis/lib/vac.dis
 dis/lib/venti.dis
 dis/lib/viewport.dis
 dis/lib/virgil.dis
+dis/lib/visnet.dis
+dis/lib/visrec.dis
 dis/lib/w3c/css.dis
 dis/lib/w3c/uris.dis
 dis/lib/w3c/xpointers.dis
@@ -580,7 +583,6 @@ dis/matrix/sparkline.dis
 dis/matrix/sysmon-svc.dis
 dis/matrix/tk-notes.dis
 dis/matrix/video-ctl.dis
-dis/matrix/video-overlay.dis
 dis/matrix/video-pane.dis
 dis/md/fmt.dis
 dis/mc.dis
@@ -626,6 +628,7 @@ dis/pipefile.dis
 dis/pipefs.dis
 dis/plumb.dis
 dis/plumber.dis
+dis/post.dis
 dis/procstorm.dis
 dis/prof.dis
 dis/ps.dis
@@ -768,9 +771,6 @@ dis/tests/grpwait_test.dis
 dis/tests/goroutine_leak_test.dis
 dis/tests/gdl90_test.dis
 dis/tests/gps_capability_test.dis
-dis/tests/gpu_bench.dis
-dis/tests/gpu_smoke.dis
-dis/tests/gpu_test.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis
@@ -799,6 +799,7 @@ dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/keyring_sweep_test.dis
+dis/tests/layers_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
@@ -1032,7 +1033,6 @@ dis/veltro/tools/fractal.dis
 dis/veltro/tools/gap.dis
 dis/veltro/tools/git.dis
 dis/veltro/tools/gps.dis
-dis/veltro/tools/gpu.dis
 dis/veltro/tools/grep.dis
 dis/veltro/tools/hear.dis
 dis/veltro/tools/http.dis
@@ -1071,6 +1071,10 @@ dis/veltro/wallet9p.dis
 dis/veltro/wiki9p.dis
 dis/ventisrv.dis
 dis/vid9p.dis
+dis/vision/crop.dis
+dis/vision/detect.dis
+dis/vision/draw.dis
+dis/visionfs.dis
 dis/wav2iaf.dis
 dis/vm.dis
 dis/vmstress.dis

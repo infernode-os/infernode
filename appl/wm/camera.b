@@ -14,6 +14,18 @@ implement Camera;
 # the feed comes upright. The window takes the feed's size as fmt gives
 # it, each time it takes the feed.
 #
+# What is drawn over the picture is the feed's layer/ directory as this
+# name space has it (#1095, layers(2)): each file a layer of records,
+# stacked in the union's order by bind -a and bind -b, taken off by
+# unmount, while the window is up:
+#
+#	bind -a /mnt/vision/1/layer /mnt/video/0/layer
+#
+# The feed numbers its frames, as vid9p does: each frame is drawn with
+# the records its layers have for it (the newest up to it), and their
+# frame=* ones. The window starts at the newest frame and skips ahead
+# when it falls behind.
+#
 #	+, -	move the lens's focus
 #	a	autofocus, once
 #	q	exit
@@ -35,6 +47,14 @@ include "sh.m";
 include "i420.m";
 	i420: I420;
 
+include "layers.m";
+	layers: Layers;
+	Stack: import layers;
+stack: ref Stack;
+font: ref Font;
+accent: ref Image;
+colours: list of (string, ref Image);
+
 Camera: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -46,7 +66,9 @@ FEED: con "/mnt/video/0";
 Pic: adt {
 	w, h:	int;
 	buf:	array of byte;
+	n:	int;		# its number in the feed
 };
+shownframe := -1;		# the number of the frame shown
 FOCUSSTEP: con 32;
 
 focus := 512;
@@ -59,6 +81,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	i420 = load I420 I420->PATH;
 	if(i420 == nil)
 		fatal("cannot load $I420");
+	layers = load Layers Layers->PATH;
+	if(layers == nil)
+		fatal(sys->sprint("cannot load %s: %r", Layers->PATH));
+	if((le := layers->init()) != nil)
+		fatal(le);
 	sys->pctl(Sys->NEWPGRP, nil);
 	wmclient->init();
 	if(ctxt == nil)
@@ -83,6 +110,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		idle(win);
 	}
 	display := win.display;
+	stack = Stack.watch(FEED + "/layer");
+	font = Font.open(display, "*default*");
+	(accent, colours) = layers->themed(display);
 	r := Rect((0, 0), (w, h));
 	frame := display.newimage(r, Draw->RGB24, 0, Draw->Black);
 	if(frame == nil)
@@ -162,6 +192,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		cs := (w/2)*(h/2);
 		i420->rgb24(buf[0:w*h], buf[w*h:w*h+cs], buf[w*h+cs:w*h+2*cs], w, h, rgb);
 		frame.writepixels(r, rgb);
+		shownframe = pic.n;
 		show(win, frame);
 		more <-= 1;
 	}
@@ -172,13 +203,18 @@ show(w: ref Window, frame: ref Image)
 	i := w.image;
 	o := i.r.min.add(Point((i.r.dx()-frame.r.dx())/2, (i.r.dy()-frame.r.dy())/2));
 	i.draw(frame.r.addpt(o), frame, nil, frame.r.min);
+	# the feed's layers over it, as they are for this frame
+	if(stack != nil)
+		layers->draw(stack.due(shownframe), i, frame.r.addpt(o), frame.r.dx(), frame.r.dy(), font, accent, colours);
 	i.flush(Draw->Flushnow);
 }
 
-# The server paces this: a read waits for the next frame. After each
-# frame it waits to be told to go on (1) or to let go of the feed (0),
-# in which case it closes it and waits for resume. Each time it takes
-# the feed it asks its size, which may have changed meanwhile.
+# The server paces this: a read of the next frame waits for it. Frames
+# are numbered (frame n at n*framesize): it starts at the newest and,
+# if it falls behind ("frame expired"), goes on from the newest again.
+# After each frame it waits to be told to go on (1) or to let go of the
+# feed (0), in which case it closes it and waits for resume. Each time
+# it takes the feed it asks its size, which may have changed meanwhile.
 reader(got: chan of (string, ref Pic), more, resume: chan of int)
 {
 	for(;;){
@@ -187,23 +223,27 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 			got <-= (sys->sprint("%s/fmt: %r", FEED), nil);
 			return;
 		}
-		pic := ref Pic(w, h, array[w*h + 2*(w/2)*(h/2)] of byte);
+		pic := ref Pic(w, h, array[w*h + 2*(w/2)*(h/2)] of byte, 0);
 		buf := pic.buf;
 		fd := sys->open(FEED + "/frame", Sys->OREAD);
 		if(fd == nil){
 			got <-= (sys->sprint("%s/frame: %r", FEED), nil);
 			return;
 		}
+		f := newest();
 		for(;;){
-			n := 0;
-			while(n < len buf){
-				m := sys->read(fd, buf[n:], len buf - n);
-				if(m <= 0){
-					got <-= (sys->sprint("camera: %r"), nil);
-					return;
-				}
-				n += m;
+			(n, e) := readat(fd, buf, f);
+			if(e == "frame expired"){
+				f = newest();
+				continue;
 			}
+			if(n < len buf){
+				if(e == nil)
+					e = "end of the feed";
+				got <-= ("camera: " + e, nil);
+				return;
+			}
+			pic.n = f++;
 			got <-= (nil, pic);
 			if(<-more == 0)
 				break;
@@ -211,6 +251,55 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 		fd = nil;		# the feed let go: the camera may go off
 		<-resume;
 	}
+}
+
+# frame f, whole, at its offset: (bytes, error)
+readat(fd: ref Sys->FD, b: array of byte, f: int): (int, string)
+{
+	got := 0;
+	while(got < len b){
+		m := sys->pread(fd, b[got:], len b - got, big f * big len b + big got);
+		if(m < 0)
+			return (got, sys->sprint("%r"));
+		if(m == 0)
+			break;
+		got += m;
+	}
+	return (got, nil);
+}
+
+# where a live reader starts: the newest frame (status frames= less one)
+# if it is still kept (not below first=), else the next, which a read
+# waits for
+newest(): int
+{
+	fd := sys->open(FEED + "/status", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[512] of byte;
+	k := sys->read(fd, b, len b);
+	if(k <= 0)
+		return 0;
+	(frames, first) := (0, 0);
+	(nil, t) := sys->tokenize(string b[0:k], " \t\n");
+	for(; t != nil; t = tl t){
+		(key, v) := splitkv(hd t);
+		case key {
+		"frames" =>	frames = int v;
+		"first" =>	first = int v;
+		}
+	}
+	if(frames > first)
+		return frames - 1;
+	return frames;
+}
+
+splitkv(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '=')
+			return (s[0:i], s[i+1:]);
+	return (s, nil);
 }
 
 readfmt(): (int, int)

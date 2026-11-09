@@ -24,6 +24,8 @@ implement Vid9p;
 #   /mnt/video/0/status   read  one line of key=value state: geometry,
 #                               frames=/first= (retained range), eof=,
 #                               state=/pos=/t=/follow= (playhead)
+#   /mnt/video/0/layer/   empty as served: what is drawn over the frames is
+#                         bound here, a file a layer (#1095, layers(2))
 #
 # TRANSPORT: the playhead (state=/pos=) lives in this server and is paced
 # here at the stream's fps, so every consumer renders the same frame and
@@ -72,7 +74,7 @@ Command: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus: con iota;
+Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus, Qlayer: con iota;
 
 tc: chan of ref Tmsg;
 srv: ref Styxserver;
@@ -178,6 +180,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("fmt",    8r444, Qfmt));
 	tree.create(big Qstream, dir("frame",  8r444, Qframe));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
+	# empty as served: where a feed's layers are bound (#1095)
+	tree.create(big Qstream, dir("layer",  Sys->DMDIR|8r555, Qlayer));
 
 	(tc, srv) = Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
 	tickc = chan of int;
@@ -249,7 +253,7 @@ serve(tree: ref Tree)
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
 			} else {
 				case int c.path {
-				Qroot or Qstream =>
+				Qroot or Qstream or Qlayer =>
 					srv.read(tm);
 				Qfmt =>
 					srv.reply(styxservers->readstr(tm, fmtstr()));

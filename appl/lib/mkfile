@@ -196,11 +196,21 @@ TARG=\
 	kbdecode.dis\
 	osklayout.dis\
 	viewport.dis\
+	layers.dis\
+	visnet.dis\
+	visrec.dis\
 
 
 MODULES=
 SYSMODULES=\
 	bidi.m\
+	layers.m\
+	visnet.m\
+	visrec.m\
+	filter.m\
+	tensor.m\
+	imgload.m\
+	imagefile.m\
 	woff2.m\
 	brotli.m\
 	9p.m\

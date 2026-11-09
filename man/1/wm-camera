@@ -24,6 +24,28 @@ or on a bare-metal board the card's
 .B camera
 file.
 .PP
+What is drawn over the picture is the feed's
+.B layer
+directory as the window's name space has it
+.RI ( layers (2)):
+.B bind -a
+puts a layer on top,
+.B bind -b
+underneath, and
+.B unmount
+takes it off, while the window is up:
+.IP
+.B bind -a /mnt/vision/1/layer /mnt/video/0/layer
+.PP
+Frames are numbered by the feed, so each is drawn with its layers'
+records for it (a detector's
+.BI frame= N
+on frame
+.IR N ),
+and their
+.B frame=*
+records.
+.PP
 The keys
 .B +
 and
@@ -40,7 +62,9 @@ closes it.
 .SH SOURCE
 .B /appl/wm/camera.b
 .SH SEE ALSO
-.IR camsrv (4)
+.IR camsrv (4),
+.IR layers (2),
+.IR visionfs (4)
 .SH BUGS
 Resizing the window does not scale the picture, which stays in the
 middle of it.

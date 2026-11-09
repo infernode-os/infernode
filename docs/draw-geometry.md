@@ -132,7 +132,7 @@ a cache slot is replaced, not composited over) where the emulator used
   `Joinround`, `Joinbevel`.  Existing `.dis` files run unchanged.
 
 Users: Tk's canvas lines, ovals and radio indicators, `lib/scene`,
-Matrix's `line-plot`, `sparkline` and `video-overlay`.
+Matrix's `line-plot` and `sparkline`, and the layers(2) a video view draws over its frames.
 
 ## 6. The GPU: measured, not kept
 

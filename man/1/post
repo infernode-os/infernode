@@ -1,0 +1,52 @@
+.TH POST 1
+.SH NAME
+post \- post a directory of the name space for any other to mount
+.SH SYNOPSIS
+.B post
+.I spec dir
+.SH DESCRIPTION
+.I Post
+posts
+.BI #s spec /fs
+.RI ( post9p (2))
+and serves each open of it as a connection of its own, by exporting
+.I dir
+as
+.IR post 's
+name space has it
+.RI ( sys-export (2)).
+So a server mounted in one name space, or in one Dis virtual machine
+.RI ( vm (1)),
+can be mounted from any other, with no option of the server's own for
+it.
+A
+.I spec
+whose
+.B fs
+is already posted is refused.
+.PP
+.I Post
+runs until killed, in a process group of its own.
+Its connections pass through it (the srv device relays them, as it does
+for every posted server), so killing it ends them too.
+.SH EXAMPLES
+A recorded video served in VM 1 and played in VM 0:
+.IP
+.EX
+vm 1 sh -c 'mount {vid9p clip.y4m} /mnt/video; post video /mnt/video'
+mount -A '#svideo/fs' /mnt/video
+.EE
+.SH SOURCE
+.B /appl/cmd/post.b
+.SH SEE ALSO
+.IR vm (1),
+.IR export (4),
+.IR post9p (2)
+.SH BUGS
+Every message passes through an export as well as the relay, so reading
+through
+.I post
+costs more than reading the server directly: about half the rate of a
+clip read as fast as it can be, hosted and under QEMU; for a camera on
+the Raspberry Pi 4 (30 frames a second of 280 KB), the full rate, for
+2.3 points of the processors' time against 12 read directly.

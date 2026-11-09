@@ -420,3 +420,6 @@ garminav garminav
 kbdecode kbdecode
 osklayout kbdecode
 softkbd softkbd
+layers layers
+tensor tensor
+letterbox tensor

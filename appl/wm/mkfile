@@ -118,6 +118,7 @@ SYSMODULES=\
 	post9p.m\
 	appfs.m\
 	i420.m\
+	layers.m\
 
 DISBIN=$ROOT/dis/wm
 

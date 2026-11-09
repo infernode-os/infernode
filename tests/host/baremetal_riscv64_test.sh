@@ -147,6 +147,9 @@ build_kernel() {
     "$LIMBO" -t Keyring -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/keyringmod.h" 2>>"$BUILD/cc.log" || return 1
     "$LIMBO" -t IPints -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/ipintsmod.h" 2>>"$BUILD/cc.log" || return 1
     "$LIMBO" -t Math -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/mathmod.h" 2>>"$BUILD/cc.log" || return 1
+    # $Tensor, a network's arithmetic for vision(4) (#1086).
+    "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensorif.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Tensor -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensormod.h" 2>>"$BUILD/cc.log" || return 1
 
     # init and the programs it may start, then the root filesystem
     for f in osinit etherusb kbdusb mouseusb diskusb touch drawtest tktest isotest; do

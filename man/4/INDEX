@@ -22,6 +22,7 @@ import import
 keyfs keyfs
 keysrv keysrv
 kfs kfs
+layerfs layerfs
 lockfs lockfs
 logfile logfile
 mail9p mail9p
@@ -36,3 +37,4 @@ scenefs scenefs
 sdrfs sdrfs
 tarfs tarfs
 veltrosrv veltrosrv
+visionfs visionfs

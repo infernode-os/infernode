@@ -581,8 +581,7 @@ $interpSrc = @(
     "alt.c", "conv.c", "crypt.c", "dec.c", "draw.c", "gc.c", "geom.c",
     "heap.c", "heapaudit.c", "ipint.c", "link.c", "load.c", "math.c",
     "raise.c", "readmod.c", "runt.c", "sign.c", "stack.c", "tk.c",
-    "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c",
-    "gpu-stub.c"
+    "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c"
 )
 $interpFlags = @(
     "/DEMU", "/I.", "/I$ROOT\include",

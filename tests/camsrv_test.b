@@ -82,7 +82,8 @@ has(s, t: string): int
 	return 0;
 }
 
-readframe(fd: ref Sys->FD, b: array of byte): int
+# a file read whole from where it is (raw, which is not numbered)
+readall(fd: ref Sys->FD, b: array of byte): int
 {
 	n := 0;
 	while(n < len b){
@@ -92,6 +93,81 @@ readframe(fd: ref Sys->FD, b: array of byte): int
 		n += m;
 	}
 	return n;
+}
+
+# frame n, read whole at its offset: (bytes, error)
+readat(fd: ref Sys->FD, b: array of byte, n: int): (int, string)
+{
+	got := 0;
+	while(got < len b){
+		m := sys->pread(fd, b[got:], len b - got, big n * big len b + big got);
+		if(m < 0)
+			return (got, sys->sprint("%r"));
+		if(m == 0)
+			break;
+		got += m;
+	}
+	return (got, nil);
+}
+
+# a value of status, as a number (-1 if absent)
+statusnum(k: string): int
+{
+	(nil, f) := sys->tokenize(file("status"), " \t\n");
+	for(; f != nil; f = tl f)
+		if(len hd f > len k + 1 && (hd f)[0:len k + 1] == k + "=")
+			return int (hd f)[len k + 1:];
+	return -1;
+}
+
+# where a live reader starts: the newest frame if still kept, else the
+# next, which a read waits for
+newest(): int
+{
+	frames := statusnum("frames");
+	first := statusnum("first");
+	if(frames < 0)
+		return -1;
+	if(frames > first)
+		return frames - 1;
+	return frames;
+}
+
+# newest() of a camsrv mounted at dir
+postednewest(dir: string): int
+{
+	(frames, first) := (-1, 0);
+	(nil, w) := sys->tokenize(rd(dir + "/0/status"), " \t\n");
+	for(; w != nil; w = tl w){
+		if(len hd w > 7 && (hd w)[0:7] == "frames=")
+			frames = int (hd w)[7:];
+		if(len hd w > 6 && (hd w)[0:6] == "first=")
+			first = int (hd w)[6:];
+	}
+	if(frames > first)
+		return frames - 1;
+	return frames;
+}
+
+# the newest frame, as a live reader takes it: one fallen behind (a
+# slow machine; the ring keeps 8 frames) goes on from the newest again,
+# as wm/camera and video-pane do
+readframe(fd: ref Sys->FD, b: array of byte): int
+{
+	got := 0;
+	for(try := 0; try < 5; try++){
+		n := newest();
+		if(n < 0)
+			return 0;
+		e: string;
+		(got, e) = readat(fd, b, n);
+		if(e != "frame expired"){
+			if(e != nil)
+				sys->fprint(sys->fildes(2), "readframe %d: %s\n", n, e);
+			return got;
+		}
+	}
+	return got;
 }
 
 testSchema(t: ref T)
@@ -111,8 +187,31 @@ testFrames(t: ref T)
 	a := array[FS] of byte;
 	b := array[FS] of byte;
 	t.asserteq(readframe(fd, a), FS, "a whole frame");
-	t.asserteq(readframe(fd, b), FS, "and the next");
+	n := newest();
+	(got, e) := readat(fd, b, n + 1);
+	t.asserteq(got, FS, "and the next, waited for: " + e);
 	t.assert(has(file("status"), "stream=on"), "a reader, a stream");
+
+	# numbered as vid9p's: frame n is the same frame for every reader
+	fd2 := sys->open(MNT + "/0/frame", Sys->OREAD);
+	c := array[FS] of byte;
+	(got, e) = readat(fd2, c, n + 1);
+	t.asserteq(got, FS, "a second reader, the same frame: " + e);
+	same := 1;
+	for(j := 0; j < FS; j++)
+		if(b[j] != c[j]){
+			same = 0;
+			break;
+		}
+	t.assert(same, "frame n is the same bytes to both readers");
+	fd2 = nil;
+	# kept: the last few; below them, refused
+	sys->sleep(500);
+	first := statusnum("first");
+	frames := statusnum("frames");
+	t.assert(first >= 0 && frames > first && frames - first <= 8, sys->sprint("status first=%d frames=%d", first, frames));
+	(got, e) = readat(fd, c, first - 1);
+	t.assert(first == 0 || e == "frame expired", "a frame no longer kept: " + e);
 	y := a[0:W*H];
 	# the first bar is white, the last black, away from the moving band
 	row := H-8;
@@ -158,7 +257,7 @@ testRaw(t: ref T)
 	if(fd == nil)
 		t.fatal(sys->sprint("open raw: %r"));
 	b := array[1152*648*2] of byte;
-	t.asserteq(readframe(fd, b), len b, "raw is the sensor's size");
+	t.asserteq(readall(fd, b), len b, "raw is the sensor's size");
 	# RGGB, white bar: 1023 in every cell at the top left of the frame's bottom
 	o := (640*1152 + 8)*2;
 	t.asserteq(int b[o] | int b[o+1]<<8, 1023, "a raw sample of the white bar");
@@ -214,9 +313,106 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Ctl", testCtl);
 		run("Raw", testRaw);
 		run("Rotate", testRotate);
+		run("Posted", testPosted);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
+}
+
+PostMod: module {
+	init:	fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
+# post(1) of a mounted camsrv, its pid (the leader of its group) sent first
+postserver(spec, dir: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	p := load PostMod "/dis/post.dis";
+	if(p == nil){
+		sys->fprint(sys->fildes(2), "load post: %r\n");
+		return;
+	}
+	p->init(nil, "post" :: spec :: dir :: nil);
+}
+
+# its mount posted (post(1)), served to each that opens it: two
+# connections, one camera
+testPosted(t: ref T)
+{
+	spec := sys->sprint("camsrv_test.%d", sys->pctl(0, nil));
+	pidc := chan of int;
+	spawn postserver(spec, MNT, pidc);
+	pid := <-pidc;
+	f := "#s" + spec + "/fs";
+	for(i := 0; i < 40 && sys->stat(f).t0 < 0; i++)
+		sys->sleep(50);
+	da := "/tmp/camsrv_test.a";
+	db := "/tmp/camsrv_test.b";
+	sys->create(da, Sys->OREAD, Sys->DMDIR|8r777);
+	sys->create(db, Sys->OREAD, Sys->DMDIR|8r777);
+	for(l := da :: db :: nil; l != nil; l = tl l){
+		fd := sys->open(f, Sys->ORDWR);
+		if(fd == nil || sys->mount(fd, nil, hd l, Sys->MREPL, "") < 0){
+			t.fatal(sys->sprint("mount %s on %s: %r", f, hd l));
+			return;
+		}
+	}
+	t.assertseq(rd(da + "/0/fmt"), rd(db + "/0/fmt"), "one camera to both connections");
+	t.assert(has(rd(da + "/0/fmt"), sys->sprint("%d %d i420", W, H)), "its fmt: " + rd(da + "/0/fmt"));
+	fa := sys->open(da + "/0/frame", Sys->OREAD);
+	fb := sys->open(db + "/0/frame", Sys->OREAD);
+	a := array[FS] of byte;
+	b := array[FS] of byte;
+	n := -1;
+	for(i = 0; i < 40 && n < 0; i++){
+		(nil, w) := sys->tokenize(rd(da + "/0/status"), " \t\n");
+		for(; w != nil; w = tl w)
+			if(len hd w > 7 && (hd w)[0:7] == "frames=" && int (hd w)[7:] > 0)
+				n = int (hd w)[7:];
+		sys->sleep(50);
+	}
+	# frame n through both connections; fallen behind the ring on a
+	# slow machine, a newer n
+	(ga, ea, gb, eb) := (0, "", 0, "");
+	for(try := 0; try < 5; try++){
+		(ga, ea) = readat(fa, a, n);
+		(gb, eb) = readat(fb, b, n);
+		if(ea != "frame expired" && eb != "frame expired")
+			break;
+		n = postednewest(da);
+	}
+	t.asserteq(ga, FS, "frame n on the first connection: " + ea);
+	t.asserteq(gb, FS, "frame n on the second: " + eb);
+	same := 1;
+	for(j := 0; j < FS; j++)
+		if(a[j] != b[j]){
+			same = 0;
+			break;
+		}
+	t.assert(same, "frame n is the same bytes on both connections");
+	# the second gone, the first reads on
+	fb = nil;
+	sys->unmount(nil, db);
+	sys->sleep(200);
+	(ga, ea) = readat(fa, a, postednewest(da));
+	t.asserteq(ga, FS, "one connection gone, the other reads on: " + ea);
+	fa = nil;
+	sys->unmount(nil, da);
+	k := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(k != nil)
+		sys->fprint(k, "killgrp");
+}
+
+rd(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }
 
 server(fd: ref Sys->FD)

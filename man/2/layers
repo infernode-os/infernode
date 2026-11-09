@@ -1,0 +1,119 @@
+.TH LAYERS 2
+.SH NAME
+layers \- what is drawn over a video, stacked by the name space
+.SH SYNOPSIS
+.EX
+include "layers.m";
+layers := load Layers Layers->PATH;
+Mark, Stack: import layers;
+
+Box, Line, Text, Point: con iota;
+
+init:  fn(): string;
+parse: fn(line: string): (int, ref Mark);
+
+Stack.watch: fn(dir: string): ref Stack;
+Stack.due:   fn(s: self ref Stack, frame: int): list of ref Mark;
+Stack.stop:  fn(s: self ref Stack);
+.EE
+.SH DESCRIPTION
+A video feed's
+.B layer
+directory holds what is drawn over it, a file a layer.
+The name space stacks them:
+the layers are in the order the directory's union lists them, the first
+at the bottom, so
+.B bind -b
+puts a directory's layers underneath,
+.B bind -a
+on top, and
+.B unmount
+takes them away.
+Each viewer draws the stack its own name space has.
+.PP
+A layer is text, a record a line, each
+.IB attr = value\fR:
+.IP
+.EX
+frame=1234 box x0=320 y0=180 x1=384 y1=320 label=person
+frame=1234 line x0=10 y0=400 x1=630 y1=400 colour=accent
+frame=1234 text x=10 y=10 label='3 people'
+frame=1234 point x=200 y=150
+frame=* box x0=100 y0=80 x1=500 y1=400 label=door
+frame=1235
+.EE
+.PP
+Coordinates are the frame's pixels.
+.B frame=*
+is every frame; a frame's key alone is nothing on that frame.
+On frame
+.I F
+a layer shows its records for the newest frame up to
+.IR F ,
+and its
+.B frame=*
+records.
+A record with
+.B x0 y0 x1 y1
+and no kind is a box, labelled by
+.BR label= ,
+or else by
+.B class=
+and
+.BR score= ,
+so the detections of
+.IR visionfs (4)
+are a layer as they come.
+.B colour=
+is a theme's name
+.RB ( accent ,
+.BR red ,
+\&...) or
+.IR rrggbb .
+Attributes it does not know are ignored, and a line that is no record is
+skipped.
+.PP
+A file that ends is read once and kept; one rewritten is read again.
+.IR Layerfs (4),
+union-mounted with create over a
+.B layer
+directory, makes any file written there a layer.
+A file that waits (a session's detections, a pipe) is read as it comes,
+a frame's records a read.
+.PP
+.B Stack.watch
+follows the layer directory
+.IR dir ,
+listing it every half second for layers bound and unmounted, with a
+process reading each layer.
+.B Stack.due
+gives the marks due on
+.IR frame ,
+bottom layer first.
+.B Stack.stop
+stops its processes.
+.B Parse
+reads a line as
+.RI ( frame ,\  mark ):
+.I frame
+is \-1 for
+.B frame=*
+and \-2 for a line that is no record;
+.I mark
+is nil for a frame's key alone.
+.SH EXAMPLES
+Detections over the camera, then a hand-drawn line above them:
+.IP
+.EX
+bind -a /mnt/vision/1/layer /mnt/video/0/layer
+echo 'frame=* line x0=0 y0=300 x1=640 y1=300' > /tmp/horizon/h
+bind -a /tmp/horizon /mnt/video/0/layer
+.EE
+.SH SOURCE
+.B /appl/lib/layers.b
+.br
+.B /appl/matrix/video-pane.b
+.SH SEE ALSO
+.IR vision (1),
+.IR visionfs (4),
+.IR layerfs (4)

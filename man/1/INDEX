@@ -226,7 +226,12 @@ wm-shell wm-shell
 shell wm-shell
 wm-osk wm-osk
 osk wm-osk
+post post
 xd xd
 yacc yacc
 zeros zeros
 sam sam
+vision vision
+vision/detect vision
+vision/draw vision
+vision/crop vision

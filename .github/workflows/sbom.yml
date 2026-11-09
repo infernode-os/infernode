@@ -28,7 +28,26 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+    # sbom-action downloads syft from GitHub's release CDN on every run,
+    # and that download fails now and then with a 500 or 504 that has
+    # nothing to do with this tree. One failed try waits and tries again;
+    # a second failure is real.
     - name: Generate SPDX SBOM (syft)
+      id: sbom1
+      continue-on-error: true
+      uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      with:
+        path: .
+        format: spdx-json
+        output-file: infernode.spdx.json
+        upload-artifact: false
+
+    - name: Wait before trying again
+      if: steps.sbom1.outcome == 'failure'
+      run: sleep 60
+
+    - name: Generate SPDX SBOM (syft), second try
+      if: steps.sbom1.outcome == 'failure'
       uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       with:
         path: .

@@ -355,7 +355,7 @@ Push-Location "$ROOT\libdraw"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $drawSrc = @(
-    "alloc.c", "allocimagemix.c", "arith.c", "bezier.c", "border.c",
+    "alloc.c", "allocimagemix.c", "arith.c", "badrect.c", "bezier.c", "border.c",
     "buildfont.c", "bytesperline.c", "chan.c", "cloadimage.c", "computil.c",
     "creadimage.c", "defont.c", "draw.c", "drawrepl.c", "ellipse.c",
     "font.c", "freesubfont.c", "getdefont.c", "getsubfont.c", "init.c",

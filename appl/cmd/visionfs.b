@@ -702,8 +702,8 @@ settings(s: ref Session): string
 	src := "none";
 	if(s.src != nil)
 		src = s.src;
-	return sys->sprint("model %s\nplace cpu\nthresh %.2f\niou %.2f\nclasses %s\nsrc %s\nrate %d\n",
-		m, s.thresh, s.iou, c, src, s.rate);
+	return sys->sprint("model %s\nplace %s\nthresh %.2f\niou %.2f\nclasses %s\nsrc %s\nrate %d\n",
+		m, s.place, s.thresh, s.iou, c, src, s.rate);
 }
 
 status(s: ref Session): string

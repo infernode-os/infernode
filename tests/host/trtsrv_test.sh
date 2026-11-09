@@ -71,6 +71,7 @@ for p in cpu gpu dla0 dla1 {
 	{
 		id=\`{read}
 		echo place \$p > /mnt/vision/\$id/ctl
+		echo '-- visctl-'\$p; grep '^place ' /mnt/vision/\$id/ctl
 		cat $E/picture > /mnt/vision/\$id/image
 		echo '-- vis-'\$p; cat /mnt/vision/\$id/detections
 		echo '-- visstatus-'\$p; cat /mnt/vision/\$id/status
@@ -128,6 +129,7 @@ import sys
 a=[l.split() for l in sys.argv[1].splitlines() if l]; b=[l.split() for l in sys.argv[2].splitlines() if l]
 ok = len(a) == len(b) and len(a) > 0 and all(x[0] == y[0] and abs(float(x[1][6:]) - float(y[1][6:])) <= 0.02 for x, y in zip(a, b))
 print(1 if ok else 0)' "$c" "$g")
+	[ "$(part visctl-$p)" = "place $p" ] && ok "vision(4): a session's ctl reads back place $p" || bad "vision $p: ctl reads back '$(part visctl-$p)'"
 	[ "$same" = 1 ] && part visstatus-$p | grep -q "place=$p" && ok "vision(4): a session on $p finds what one on the CPU does" || bad "vision $p: $(part vis-$p | tr '\n' '|') against $(part vis-cpu | tr '\n' '|'); $(part visstatus-$p)"
 done
 frames=$(part visfeed | cut -d' ' -f1 | uniq | tr '\n' ' ')

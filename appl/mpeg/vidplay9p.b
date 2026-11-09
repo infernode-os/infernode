@@ -26,6 +26,7 @@ implement VidPlay9p;
 # usage: vidplay9p [-shape oval|rect] /mnt/video/0
 #
 include "sys.m";    sys: Sys;
+include "parread.m";    parread: Parread;
 include "draw.m";   draw: Draw;
     Display, Font, Image, Rect, Point: import draw;
 include "wmclient.m"; wmclient: Wmclient;
@@ -47,6 +48,11 @@ stderr: ref Sys->FD;
 init(ctxt: ref Draw->Context, args: list of string)
 {
     sys = load Sys Sys->PATH;
+    parread = load Parread Parread->PATH;
+    if(parread == nil){
+        sys->fprint(sys->fildes(2), "vidplay9p: cannot load %s: %r\n", Parread->PATH);
+        raise "fail:load";
+    }
     draw = load Draw Draw->PATH;
     wmclient = load Wmclient Wmclient->PATH;
     mio = load Mpegio Mpegio->PATH;
@@ -186,18 +192,14 @@ readfmt(path: string): (int, int, int)
     return (w, h, rate);
 }
 
-# frame n, whole, at its offset: (1 if whole, the error if any)
+# frame n, whole, at its offset, with WAYS reads in flight (parread(2)):
+# (1 if whole, the error if any)
+WAYS: con 4;
 readat(fd: ref Sys->FD, buf: array of byte, n: int): (int, string)
 {
-    got := 0;
-    while(got < len buf){
-        k := sys->pread(fd, buf[got:], len buf - got, big n * big len buf + big got);
-        if(k < 0)
-            return (0, sys->sprint("%r"));
-        if(k == 0)
-            return (0, nil);
-        got += k;
-    }
+    (got, e) := parread->pread(fd, buf, big n * big len buf, WAYS);
+    if(got < len buf)
+        return (0, e);
     return (1, nil);
 }
 

@@ -4,6 +4,15 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Performance
+
+- **Video feeds are read with several reads in flight.** wm/camera,
+  vidplay9p, Matrix's video pane and vision(4)'s feed follower read a
+  frame as four reads of its pieces at once (`parread(2)`), so a frame
+  over the network waits about one round trip, not one per message. A
+  Raspberry Pi 4 reading 720p from a Pi 5 over an encrypted mount went
+  from 67 to 39 ms a frame (15 to 25 frames a second).
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

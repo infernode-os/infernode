@@ -43,6 +43,10 @@ implement Visionfs;
 include "sys.m";
 	sys: Sys;
 	Qid: import Sys;
+include "parread.m";
+	parread: Parread;
+
+WAYS: con 4;	# a frame's reads in flight at once (parread(2))
 include "draw.m";
 include "arg.m";
 include "string.m";
@@ -165,6 +169,11 @@ Loaded: adt {
 init(nil: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
+	parread = load Parread Parread->PATH;
+	if(parread == nil){
+		sys->fprint(sys->fildes(2), "visionfs: cannot load %s: %r\n", Parread->PATH);
+		raise "fail:load";
+	}
 	stderr = sys->fildes(2);
 	arg := load Arg Arg->PATH;
 	str = load String String->PATH;
@@ -1112,23 +1121,17 @@ follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real
 			framec <-= ref Frameres(id, fgen, nil, nil, 0, 0, 1);
 			return;
 		}
-		got := 0;
 		expired := 0;
-		off := big next * big fs;
-		while(got < fs){
-			k := sys->pread(fd, buf[got:], fs - got, off + big got);
-			if(k < 0){
-				e := sys->sprint("%r");
-				if(e == "frame expired" && counted && !eof){
-					expired = 1;	# fallen behind a live feed
-					break;
-				}
+		# the frame with WAYS reads in flight (parread(2)): over a
+		# network each is a round trip, overlapped
+		(got, e) := parread->pread(fd, buf[0:fs], big next * big fs, WAYS);
+		if(got < fs && e != nil){
+			if(e == "frame expired" && counted && !eof)
+				expired = 1;	# fallen behind a live feed
+			else{
 				framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s/frame: %s", src, e), 0, 0, 1);
 				return;
 			}
-			if(k == 0)
-				break;
-			got += k;
 		}
 		if(expired){
 			# gone before it was read: go on from the newest

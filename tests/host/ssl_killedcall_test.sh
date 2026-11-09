@@ -9,10 +9,17 @@
 # session's follower (place gpu to dla0) on a feed mounted from another
 # machine did exactly this.
 #
+# And the flush must be sent: the pending interrupt was a second one
+# for a kill already delivered (killprog interrupts a Prog that is
+# already exiting).  Not sent, the server kept the killed read's fid,
+# the client gave the fid's number to its next walk, and the file could
+# not be opened again ("clone failed: fid in use").
+#
 # One emu: a pipe exported by listen with certificates (a signer and
 # its certificate made for the test) and AES/SHA-256, mounted back over
 # the loopback; a reader blocked in the pipe is killed; the mount must
-# still answer.
+# still answer; then five more readers each opened and killed, and none
+# of their opens refused.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -46,11 +53,19 @@ sleep 1
 echo kill > /prog/\$pid/ctl
 sleep 1
 echo R after \`{ls /n/sslk >[2=1]} >> /.ssl_killedcall_test.out
+for i in 1 2 3 4 5 {
+	cat /n/sslk/data1 > /dev/null >[2] /tmp/sslk/err.\$i &
+	pid=\$apid
+	sleep 1
+	echo kill > /prog/\$pid/ctl
+	sleep 1
+}
+echo R reopen \`{cat /tmp/sslk/err.*} >> /.ssl_killedcall_test.out
 echo R done >> /.ssl_killedcall_test.out
 echo halt > /dev/sysctl
 ISH
 
-timeout 60 "$EMU" -c1 -r"$ROOT" /dis/sh.dis /.ssl_killedcall_test.sh </dev/null >/dev/null 2>&1 || true
+timeout 90 "$EMU" -c1 -r"$ROOT" /dis/sh.dis /.ssl_killedcall_test.sh </dev/null >/dev/null 2>&1 || true
 
 failed=0
 fail() { echo "FAIL: $*"; failed=1; }
@@ -65,6 +80,10 @@ case "$before" in
 esac
 [ -n "$after" ] && [ "$after" = "$before" ] && echo "PASS: the mount still answers after a reader in it was killed" ||
 	fail "after a reader in it was killed the mount gives '$after', want '$before'"
+
+reopen=$(printf '%s\n' "$out" | sed -n 's/^R reopen *//p')
+[ -z "$reopen" ] && echo "PASS: the file opened again after each of five readers was killed" ||
+	fail "a file opened again after a killed reader: $reopen"
 
 if [ $failed = 0 ]; then echo "ssl_killedcall_test: ALL PASS"; exit 0; fi
 exit 1

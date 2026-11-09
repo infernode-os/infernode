@@ -55,7 +55,12 @@ installation, especially bare-metal nodes and systems that ran
   any error in a write, so every later request on the mount failed with
   "inappropriate use of fd". A pending interrupt is now raised before a
   record is begun, and only a record begun and not sent whole hangs the
-  connection up. Changing a vision(4) session's `place` while it follows
+  connection up. And the flush is sent: what was pending was a second
+  interrupt for the kill already being handled, and devmnt now clears it
+  before a killed call's flush, clunk or remove, which its watch still
+  bounds. Unsent, the server kept the killed read's fid and the client
+  gave its number to the next walk, so the file could not be opened
+  again ("fid in use"), over any mount. Changing a vision(4) session's `place` while it follows
   a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
   checks it. The native kernel's devssl has the same write path; it is
   not changed here.

@@ -46,6 +46,10 @@ read -o 0 $FSZ < /mnt/video/0/frame > /.vid9p_replay_test.f0
 read -o $((8*FSZ)) $FSZ < /mnt/video/0/frame > /.vid9p_replay_test.f8
 read -o $((13*FSZ)) $FSZ < /mnt/video/0/frame > /.vid9p_replay_test.f13
 cat /mnt/video/0/status > /.vid9p_replay_test.st2
+mkdir -p /tmp/v2
+mount {vid9p -w 1 -r /.vid9p_replay_test.y4m} /tmp/v2
+sleep 3
+read -o 0 $FSZ < /tmp/v2/0/frame > /dev/null >[2] /.vid9p_replay_test.exp
 echo halt > /dev/sysctl
 ISH
 timeout 60 "$EMU" -r"$ROOT" /dis/sh.dis /.vid9p_replay_test.sh >"$TMP/emu.log" 2>&1
@@ -79,6 +83,15 @@ st2=$(cat "$P.st2" 2>/dev/null)
 n2=$(printf '%s\n' "$st2" | sed -n 's/.* frames=\([0-9]*\) .*/\1/p')
 [ -n "$n2" ] && [ "$n2" -gt "$N" ] && echo "PASS: numbered on past the file's end ($n2 frames)" ||
 	fail "frames=$n2, want more than the file's $N"
+
+# a frame past the window: "frame expired", as camsrv says it and as
+# every reader (wm/camera, vision(4), vidplay9p, Matrix) matches it to
+# go on from the newest; with more after it they gave up instead
+exp=$(cat "$P.exp" 2>/dev/null)
+case "$exp" in
+*': frame expired') echo "PASS: a frame past the window is \"frame expired\"" ;;
+*) fail "a frame past the window: '$exp', want it to end \"frame expired\"" ;;
+esac
 
 if [ $failed = 0 ]; then echo "vid9p_replay_test: ALL PASS"; exit 0; fi
 tail -5 "$TMP/emu.log"

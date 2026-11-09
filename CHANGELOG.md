@@ -486,7 +486,11 @@ installation, especially bare-metal nodes and systems that ran
   reads the feed (vision(4), wm/camera, Matrix) sees a live source, as
   from camsrv or a host decoder, with `-w`'s window kept. It needs no
   host decoder, so a bare-metal board with no camera can serve one.
-  `tests/host/vid9p_replay_test.sh` checks it.
+  A frame read past a live feed's window is now refused as `frame
+  expired`, as camsrv refuses it: vid9p added ` (retention window)`, and
+  wm/camera, vision(4), vidplay9p and Matrix's video pane, which match
+  the words to go on from the newest frame, stopped instead (wm/camera
+  showed "no camera"). `tests/host/vid9p_replay_test.sh` checks both.
 
 - **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
   words (#1112).** Plain `fmt` joins everything between blank lines,

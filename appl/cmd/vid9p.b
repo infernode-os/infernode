@@ -383,7 +383,7 @@ replyframe(tm: ref Tmsg.Read): int
 	base := big fbase * big framesize;
 	off := tm.offset;
 	if(off < base) {
-		srv.reply(ref Rmsg.Error(tm.tag, "frame expired (retention window)"));
+		srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
 		return 1;
 	}
 	if(off >= base + big used) {

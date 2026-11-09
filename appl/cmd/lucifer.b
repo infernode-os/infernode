@@ -1668,6 +1668,12 @@ preswmloop(scr: ref Screen, zoner: Rect,
 	curzone := zoner;
 	ptrgrab: ref Client;	# the window a press in the content area began in
 	ptrbuttons := 0;	# the buttons down at the last pointer event there
+	# Cursors: each window's last "cursor" request, and the one shown,
+	# that of the window the pointer goes to (wm/wm's gunsight for
+	# Delete, its box, its cross).  Out of the zone, the arrow.
+	cursors: list of (ref Client, string);
+	ptrto: ref Client;	# where the pointer went; nil out of the zone
+	shown := "cursor";
 	for(;;) alt {
 	(c, rc) := <-join =>
 		if(lucipresclient == nil && c.token == lucipretoken) {
@@ -1734,6 +1740,10 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			# Client disconnected — clear from lucipres slot or app slot.
 			# MUST NOT fall through to the reply code below: rc is nil,
 			# and alt send on a nil channel is a fatal Dis error.
+			cursors = dropcursor(cursors, c);
+			if(c == ptrto)
+				ptrto = nil;
+			shown = showcursor(cursorof(cursors, ptrto), shown);
 			if(c == lucipresclient) {
 				lucipresclient = nil;
 				break;	# lucipres gone — presentation zone dead, exit loop
@@ -1768,6 +1778,14 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			oshown := 0;
 			if(c != lucipresclient && c != presrenderclient)
 				(oa, oshown) = otherslot(c);
+			# "cursor ..." (wmlib's request; "cursor" alone, the
+			# arrow): kept for the window, shown while the pointer
+			# goes to it.  Lucifer's own window changes the screen's.
+			if(s == "cursor" || len s > 7 && s[0:7] == "cursor ") {
+				cursors = setcursor(cursors, c, s);
+				if(c == ptrto)
+					shown = showcursor(s, shown);
+			}
 			if(len s >= 8 && s[0:8] == "!reshape" ||
 			   len s >= 9 && s[0:9] == "!onscreen") {
 				if(c == lucipresclient) {
@@ -2044,8 +2062,14 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		tabh_m := 0;
 		if(mainfont != nil) tabh_m = mainfont.height + 13;
 		if(touch && tabh_m < MOBILE_TAPMIN) tabh_m = MOBILE_TAPMIN;
-		if(p.xy.y < curzone.min.y + tabh_m) {
+		if(p.buttons < 0) {
+			# mouseproc: the pointer has left the zone
+			ptrto = nil;
+			shown = showcursor("cursor", shown);
+		} else if(p.xy.y < curzone.min.y + tabh_m) {
 			# Tab strip: always deliver to lucipres
+			ptrto = lucipresclient;
+			shown = showcursor(cursorof(cursors, ptrto), shown);
 			if(lucipresclient != nil)
 				alt { lucipresclient.ptr <-= p => ; * => ; }
 		} else {
@@ -2088,10 +2112,51 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				else
 					actclient = lucipresclient;
 			}
+			ptrto = actclient;
+			shown = showcursor(cursorof(cursors, ptrto), shown);
 			if(actclient != nil)
 				alt { actclient.ptr <-= p => ; * => ; }
 		}
 	}
+}
+
+# A window's cursor in the zone: its last "cursor" request, else the
+# arrow ("cursor" alone).
+cursorof(l: list of (ref Client, string), c: ref Client): string
+{
+	if(c != nil)
+		for(; l != nil; l = tl l)
+			if((hd l).t0 == c)
+				return (hd l).t1;
+	return "cursor";
+}
+
+setcursor(l: list of (ref Client, string), c: ref Client, s: string): list of (ref Client, string)
+{
+	l = dropcursor(l, c);
+	if(s != "cursor")
+		l = (c, s) :: l;
+	return l;
+}
+
+dropcursor(l: list of (ref Client, string), c: ref Client): list of (ref Client, string)
+{
+	r: list of (ref Client, string);
+	for(; l != nil; l = tl l)
+		if((hd l).t0 != c)
+			r = hd l :: r;
+	return r;
+}
+
+# The screen's cursor made want, through Lucifer's own window, if it
+# is not already; the cursor now shown.
+showcursor(want, shown: string): string
+{
+	if(want == shown)
+		return shown;
+	if(wmclient->win.wmctl(want) != nil)
+		return shown;
+	return want;
 }
 
 # --- Main loop ---
@@ -2903,8 +2968,22 @@ mouseproc()
 	tilepressed := 0;	# a button-1 press is active in the tile strip
 	SLOP: con 20;
 	prevb := 0;
+	inpres := 0;	# the last event went to the presentation zone
 	for(;;) {
 		p := <-win.ctxt.ptr;
+		# Leaving the zone, buttons up: its cursor goes (preswmloop
+		# shows the cursor of the app the pointer is in).  A press
+		# begun there keeps it until let go, as a window's grab does.
+		if(inpres && p.buttons == 0 &&
+		   (!p.xy.in(preszone) || mobile && expanded_zone != 1 ||
+		    dockclient != nil && dockscr != nil && p.xy.in(dockr))) {
+			alt {
+			presMouseCh <-= ref Pointer(-1, p.xy, p.msec) =>
+				inpres = 0;
+			* =>
+				;	# full: told with the next event
+			}
+		}
 		# the keyboard on the screen's: a press in its strip and the
 		# rest of that press.  Not taken as where the mouse is, which
 		# decides (on a desktop) which zone has the keyboard.
@@ -3050,7 +3129,7 @@ mouseproc()
 				# zone gets pointer events; the collapsed ones have
 				# zero body height anyway.
 				case expanded_zone {
-				1 => alt { presMouseCh <-= p => ; * => ; }
+				1 => alt { presMouseCh <-= p => inpres = 1; * => ; }
 				2 => alt { ctxMouseCh  <-= p => ; * => ; }
 				*  => alt { convMouseCh <-= p => ; * => ; }
 				}
@@ -3059,7 +3138,7 @@ mouseproc()
 				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx &&
 						p.xy.x < pres_zone_maxx) {
 					# Presentation zone
-					alt { presMouseCh <-= p => ; * => ; }
+					alt { presMouseCh <-= p => inpres = 1; * => ; }
 				} else if(ctx_zone_minx > 0 && p.xy.x >= ctx_zone_minx) {
 					# Context zone
 					alt { ctxMouseCh <-= p => ; * => ; }

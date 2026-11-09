@@ -26,6 +26,16 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **An app's cursor in Lucifer's presentation zone is shown.** wm/wm run
+  as an app under Lucia showed only the arrow for New's cross, Delete's
+  gunsight and the box: it asks for its cursor through wmlib's `cursor`
+  request, as at the top, and Lucifer's window server answered OK and did
+  nothing with it. Lucifer now keeps each window's last cursor request
+  and shows the cursor of the window the pointer goes to, the arrow on
+  the tab strip and once the pointer leaves the zone (a press begun in
+  the zone keeps it until let go). `tests/host/lucifer_cursor_test.sh`
+  drives wm/wm in the zone with `wm_cursor_test.sh`'s shim.
+
 - **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
   `/prog` (#1019).** Lucifer looked for an app's main process every
   half second, then read every process's status every half second

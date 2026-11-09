@@ -2874,17 +2874,23 @@ void
 tcprxmit(Conv *s)
 {
 	Tcpctl *tcb;
+	u32int flight;
 
 	tcb = (Tcpctl*)s->ptcl;
 
+	/*
+	 *  Half what was in flight, at least two segments (RFC 5681 3.1).
+	 *  It was set to one segment: after any loss the window then grew
+	 *  by a segment a round trip from one, never doubling, and a link
+	 *  that loses now and then (WiFi) kept it a few segments wide.
+	 */
+	flight = tcb->snd.nxt - tcb->snd.una;
+	tcb->ssthresh = flight/2;
+	if(tcb->ssthresh < 2*tcb->mss)
+		tcb->ssthresh = 2*tcb->mss;
+
 	tcb->flags |= RETRAN|FORCE;
 	tcb->snd.ptr = tcb->snd.una;
-
-	/*
-	 *  We should be halving the slow start threshhold (down to one
-	 *  mss) but leaving it at mss seems to work well enough
-	 */
- 	tcb->ssthresh = tcb->mss;
 
 	/*
 	 *  pull window down to a single packet

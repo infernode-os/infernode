@@ -23,6 +23,7 @@ TARG=\
 	i420_test.dis\
 	tensor_test.dis\
 	layers_test.dis\
+	mermaid_flow_test.dis\
 	visnet_run.dis\
 	feedrate.dis\
 	trtcheck.dis\
@@ -452,6 +453,7 @@ SYSMODULES=\
 	ipints.m\
 	sdg.m\
 	sdrdsp.m\
+	mermaid.m\
 
 DISBIN=$ROOT/dis/tests
 

@@ -480,6 +480,17 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Applications
 
+- **Mermaid flowcharts: quoted labels, `<br>` line breaks, edges round
+  the nodes in their way, and room for edge labels.** A label in quotes
+  (`a["a [b]"]`, `-- "AES-256" -->`) is read to its closing quote, so it
+  may hold brackets, pipes and dashes; it kept its quotes, and a dash in
+  an edge's quoted label lost the edge. `<br>` and `<br/>` break a
+  label's lines, in nodes and on edges. An edge that skips a layer goes
+  round the side, as one against the flow does: it ran straight under
+  the node between, hidden. The gap between layers is wide enough for
+  the edge labels in it, which the nodes either side were drawn over.
+  `tests/mermaid_flow_test.b` checks each.
+
 - **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
   words (#1112).** Plain `fmt` joins everything between blank lines,
   so a list became one paragraph and code, tables and headings were

@@ -763,13 +763,13 @@ parsefcnode(s: string, i: int): (string, string, int, int)
 		# Check [[subroutine]] or [regular]
 		if(i+1 < n && s[i+1] == '[') {
 			i += 2;
-			(label, i) = readuntil(s, i, ']');
+			(label, i) = readlabel(s, i, ']');
 			if(i+1 < n && s[i+1] == ']') i += 2;
 			else if(i < n && s[i] == ']') i++;
 			shape = SH_SUBR;
 		} else {
 			i++;
-			(label, i) = readuntil(s, i, ']');
+			(label, i) = readlabel(s, i, ']');
 			if(i < n && s[i] == ']') i++;
 			shape = SH_RECT;
 		}
@@ -777,20 +777,20 @@ parsefcnode(s: string, i: int): (string, string, int, int)
 		# ((circle)) or ([stadium]) or (round)
 		if(i+1 < n && s[i+1] == '(') {
 			i += 2;
-			(label, i) = readuntil(s, i, ')');
+			(label, i) = readlabel(s, i, ')');
 			if(i+1 < n && s[i+1] == ')') i += 2;
 			else if(i < n && s[i] == ')') i++;
 			shape = SH_CIRCLE;
 		} else if(i+1 < n && s[i+1] == '[') {
 			i += 2;
-			(label, i) = readuntil(s, i, ']');
+			(label, i) = readlabel(s, i, ']');
 			# expect ])
 			if(i < n && s[i] == ']') i++;
 			if(i < n && s[i] == ')') i++;
 			shape = SH_STADIUM;
 		} else {
 			i++;
-			(label, i) = readuntil(s, i, ')');
+			(label, i) = readlabel(s, i, ')');
 			if(i < n && s[i] == ')') i++;
 			shape = SH_ROUND;
 		}
@@ -798,19 +798,19 @@ parsefcnode(s: string, i: int): (string, string, int, int)
 		# {{hex}} or {diamond}
 		if(i+1 < n && s[i+1] == '{') {
 			i += 2;
-			(label, i) = readuntil(s, i, '}');
+			(label, i) = readlabel(s, i, '}');
 			if(i+1 < n && s[i+1] == '}') i += 2;
 			else if(i < n && s[i] == '}') i++;
 			shape = SH_HEX;
 		} else {
 			i++;
-			(label, i) = readuntil(s, i, '}');
+			(label, i) = readlabel(s, i, '}');
 			if(i < n && s[i] == '}') i++;
 			shape = SH_DIAMOND;
 		}
 	'>' =>
 		i++;
-		(label, i) = readuntil(s, i, ']');
+		(label, i) = readlabel(s, i, ']');
 		if(i < n && s[i] == ']') i++;
 		shape = SH_FLAG;
 	}
@@ -842,14 +842,24 @@ parseedgeop(s: string, i: int): (int, int, string, int)
 	} else if(i+3 <= n && s[i:i+3] == "---") {
 		style = ES_LINE; hasarrow = 0; i += 3;
 	} else if(i+2 <= n && s[i:i+2] == "--") {
-		# --text-->: scan for -->
+		# --text--> or -- "text" -->: the label to the -->, past a
+		# quoted label's closing quote (a "-" in it, AES-256, is text)
 		j := i + 2;
-		for(; j < n && s[j] != '-'; j++)
+		while(j < n && (s[j] == ' ' || s[j] == '\t'))
+			j++;
+		if(j < n && s[j] == '"'){
+			j++;
+			while(j < n && s[j] != '"')
+				j++;
+		}
+		for(; j+2 < n && s[j:j+3] != "-->"; j++)
 			;
 		if(j+2 < n && s[j:j+3] == "-->") {
-			label = trimstr(s[i+2:j]);
+			label = brlines(unquote(trimstr(s[i+2:j])));
 			style = ES_SOLID; i = j + 3;
 		} else {
+			for(j = i + 2; j < n && s[j] != '-'; j++)
+				;
 			style = ES_SOLID; i = j;
 			if(i < n && s[i] == '>') { i++; }
 		}
@@ -863,7 +873,7 @@ parseedgeop(s: string, i: int): (int, int, string, int)
 		i++;
 	if(i < n && s[i] == '|' && label == "") {
 		i++;
-		(label, i) = readuntil(s, i, '|');
+		(label, i) = readlabel(s, i, '|');
 		if(i < n && s[i] == '|') i++;
 	}
 	return (style, hasarrow, label, i);
@@ -911,10 +921,10 @@ layoutflow(g: ref FCGraph, imgw: int)
 	# Compute node pixel dimensions
 	for(nl = nodes; nl != nil; nl = tl nl) {
 		nd := hd nl;
-		tw := mfont.width(nd.label);
+		tw := lblw(nd.label);
 		nd.w = tw + 2*HPAD;
 		if(nd.w < MINNODEW) nd.w = MINNODEW;
-		nd.h = mfont.height + 2*VPAD;
+		nd.h = lblh(nd.label) + 2*VPAD;
 		if(nd.h < MINNODEH) nd.h = MINNODEH;
 		# Diamond/hex need more room
 		if(nd.shape == SH_DIAMOND || nd.shape == SH_HEX) {
@@ -1017,6 +1027,21 @@ layoutflow(g: ref FCGraph, imgw: int)
 	iw := layerw + 2 * MARGIN;
 	if(iw < imgw) iw = imgw;
 
+	# The gap between layers: room for the widest edge label (the
+	# tallest, top-down) between them, which the nodes either side
+	# were drawn over
+	lg := VGAP;
+	for(el = edges; el != nil; el = tl el) {
+		e := hd el;
+		if(e.label == "")
+			continue;
+		need := lblh(e.label) + 12;
+		if(g.dir == DIRN_LR || g.dir == DIRN_RL)
+			need = lblw(e.label) + 24;
+		if(need > lg)
+			lg = need;
+	}
+
 	# Assign pixel coordinates
 	for(j = 0; j < g.nnodes; j++) {
 		l := layer[j];
@@ -1031,9 +1056,9 @@ layoutflow(g: ref FCGraph, imgw: int)
 		if(g.dir == DIRN_LR || g.dir == DIRN_RL) {
 			# LR: layers go left→right, nodes stack top→bottom
 			if(g.dir == DIRN_RL)
-				nd.x = iw - MARGIN - l * (maxnodew + VGAP) - maxnodew/2;
+				nd.x = iw - MARGIN - l * (maxnodew + lg) - maxnodew/2;
 			else
-				nd.x = MARGIN + l * (maxnodew + VGAP) + maxnodew/2;
+				nd.x = MARGIN + l * (maxnodew + lg) + maxnodew/2;
 			lh := cnt * (maxnodeh + HGAP) - HGAP;
 			ih := lh + 2 * MARGIN;
 			starty := (ih - lh) / 2;
@@ -1041,9 +1066,9 @@ layoutflow(g: ref FCGraph, imgw: int)
 		} else {
 			# TD or BT
 			if(g.dir == DIRN_BT)
-				nd.y = 2*MARGIN + (nlayers - 1 - l) * (maxnodeh + VGAP) + maxnodeh/2;
+				nd.y = 2*MARGIN + (nlayers - 1 - l) * (maxnodeh + lg) + maxnodeh/2;
 			else
-				nd.y = MARGIN + l * (maxnodeh + VGAP) + maxnodeh/2;
+				nd.y = MARGIN + l * (maxnodeh + lg) + maxnodeh/2;
 			nd.x = startx + c * (maxnodew + HGAP) + maxnodew/2;
 		}
 		nd.layer = layer[j];
@@ -1087,19 +1112,19 @@ flowimgdims(g: ref FCGraph, imgw: int): (int, int)
 		e := hd el;
 		src := findnode(na, g.nnodes, e.src);
 		dst := findnode(na, g.nnodes, e.dst);
-		if(src == nil || dst == nil || !backedge(src, dst, g.dir))
+		if(src == nil || dst == nil || !around(na, g.nnodes, src, dst, g.dir))
 			continue;
 		if(g.dir == DIRN_LR || g.dir == DIRN_RL) {
 			y := src.y + src.h/2;
 			if(dst.y + dst.h/2 > y)
 				y = dst.y + dst.h/2;
-			y += VGAP + mfont.height + MARGIN/2;
+			y += VGAP + lblh(e.label)/2 + mfont.height/2 + MARGIN/2;
 			if(y > maxy) maxy = y;
 		} else {
 			x := src.x + src.w/2;
 			if(dst.x + dst.w/2 > x)
 				x = dst.x + dst.w/2;
-			x += 2*HGAP + mfont.width(e.label) + 8 + MARGIN/2;
+			x += 2*HGAP + lblw(e.label) + 8 + MARGIN/2;
 			if(x > maxx) maxx = x;
 		}
 	}
@@ -1136,7 +1161,7 @@ renderflow(lines: list of string, width: int): (ref Image, string)
 		src := findnode(na, g.nnodes, e.src);
 		dst := findnode(na, g.nnodes, e.dst);
 		if(src == nil || dst == nil) continue;
-		drawfcedge(img, src, dst, e, g.dir);
+		drawfcedge(img, src, dst, e, g.dir, around(na, g.nnodes, src, dst, g.dir));
 	}
 
 	# Draw nodes on top
@@ -1179,13 +1204,10 @@ drawfcnode(img: ref Image, nd: ref FCNode)
 	}
 
 	# Label
-	lw := mfont.width(nd.label);
-	lx := cx - lw/2;
-	ly := cy - mfont.height/2;
-	img.text(Point(lx, ly), ctext, Point(0,0), mfont, nd.label);
+	drawlbl(img, Point(cx, cy - lblh(nd.label)/2), ctext, nd.label);
 }
 
-drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int)
+drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir, round: int)
 {
 	sp := Point(0,0);
 
@@ -1211,8 +1233,9 @@ drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int)
 	if(e.style == ES_THICK) thick = 1;
 
 	# An edge against the flow (one closing a cycle) goes round the
-	# side, so it does not run back over the edges with the flow
-	if(backedge(src, dst, dir)) {
+	# side, so it does not run back over the edges with the flow, and
+	# so does one with a node in its way
+	if(round) {
 		drawbackedge(img, src, dst, e, dir, col, thick);
 		return;
 	}
@@ -1250,14 +1273,49 @@ drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int)
 
 	# Edge label at midpoint of middle segment
 	if(e.label != "") {
+		# on the line, in a box of its own
 		mx := (p0.x + p1.x) / 2;
-		my := (p0.y + p1.y) / 2 - mfont.height - 2;
-		lw := mfont.width(e.label);
-		img.draw(Rect((mx-lw/2-2, my-1), (mx+lw/2+2, my+mfont.height+1)),
+		my := (p0.y + p1.y) / 2 - lblh(e.label)/2;
+		lw := lblw(e.label);
+		img.draw(Rect((mx-lw/2-2, my-1), (mx+lw/2+2, my+lblh(e.label)+1)),
 			cnode, nil, (0,0));
-		img.text(Point(mx-lw/2, my), ctext2, Point(0,0), mfont, e.label);
+		drawlbl(img, Point(mx, my), ctext2, e.label);
 	}
 	sp = sp;	# suppress unused warning
+}
+
+# Whether an edge goes round the side: against the flow, or with a
+# node of a layer between its ends in the way of the straight route
+# (Pi -> Mac past Orin, in Pi -> Orin -> Mac, ran under Orin's box)
+around(na: array of ref FCNode, n: int, src, dst: ref FCNode, dir: int): int
+{
+	if(backedge(src, dst, dir))
+		return 1;
+	lo := src.layer;
+	hi := dst.layer;
+	if(lo > hi)
+		(lo, hi) = (hi, lo);
+	if(hi - lo < 2)
+		return 0;
+	for(i := 0; i < n; i++){
+		m := na[i];
+		if(m == src || m == dst || m.layer <= lo || m.layer >= hi)
+			continue;
+		if(dir == DIRN_LR || dir == DIRN_RL){
+			(a, b) := (src.y, dst.y);
+			if(a > b)
+				(a, b) = (b, a);
+			if(m.y + m.h/2 >= a && m.y - m.h/2 <= b)
+				return 1;
+		} else {
+			(a, b) := (src.x, dst.x);
+			if(a > b)
+				(a, b) = (b, a);
+			if(m.x + m.w/2 >= a && m.x - m.w/2 <= b)
+				return 1;
+		}
+	}
+	return 0;
 }
 
 backedge(src, dst: ref FCNode, dir: int): int
@@ -1304,14 +1362,15 @@ drawbackedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int, col:
 	if(e.arrow)
 		drawarrowhead(img, p1, adir, col);
 	if(e.label != "") {
-		lw := mfont.width(e.label);
+		lw := lblw(e.label);
+		lh := lblh(e.label);
 		mx := (a.x + b.x) / 2;
-		my := (a.y + b.y) / 2 - mfont.height/2;
+		my := (a.y + b.y) / 2 - lh/2;
 		if(dir != DIRN_LR && dir != DIRN_RL)
 			mx += lw/2 + 4;	# beside the upward run
-		img.draw(Rect((mx-lw/2-2, my-1), (mx+lw/2+2, my+mfont.height+1)),
+		img.draw(Rect((mx-lw/2-2, my-1), (mx+lw/2+2, my+lh+1)),
 			cnode, nil, (0,0));
-		img.text(Point(mx-lw/2, my), ctext2, Point(0,0), mfont, e.label);
+		drawlbl(img, Point(mx, my), ctext2, e.label);
 	}
 }
 
@@ -2254,7 +2313,7 @@ renderfcgraph(g: ref FCGraph, width: int): (ref Image, string)
 		src := findnode(na, g.nnodes, e.src);
 		dst := findnode(na, g.nnodes, e.dst);
 		if(src == nil || dst == nil) continue;
-		drawfcedge(img, src, dst, e, g.dir);
+		drawfcedge(img, src, dst, e, g.dir, around(na, g.nnodes, src, dst, g.dir));
 	}
 	for(k = 0; k < g.nnodes; k++)
 		drawfcnode(img, na[k]);
@@ -3868,6 +3927,96 @@ hasprefix(s, pfx: string): int
 
 # Read until stop character; return (content, new_i).
 # i should point to first char of content (after opening delimiter).
+# A node's or an edge's label up to stop: "quoted", so it may hold the
+# stop character, or not; <br> and <br/> break its lines
+readlabel(s: string, i: int, stop: int): (string, int)
+{
+	n := len s;
+	j := i;
+	while(j < n && (s[j] == ' ' || s[j] == '\t'))
+		j++;
+	if(j < n && s[j] == '"'){
+		k := j + 1;
+		while(k < n && s[k] != '"')
+			k++;
+		if(k < n){
+			lbl := s[j+1:k];
+			k++;
+			while(k < n && s[k] != stop)
+				k++;
+			return (brlines(lbl), k);
+		}
+	}
+	(lbl, e) := readuntil(s, i, stop);
+	return (brlines(lbl), e);
+}
+
+unquote(s: string): string
+{
+	if(len s >= 2 && s[0] == '"' && s[len s - 1] == '"')
+		return s[1:len s - 1];
+	return s;
+}
+
+# <br>, <br/>, <br /> (any case) as line breaks
+brlines(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++){
+		if(s[i] == '<' && i+3 < len s && (s[i+1] == 'b' || s[i+1] == 'B') && (s[i+2] == 'r' || s[i+2] == 'R')){
+			j := i + 3;
+			while(j < len s && (s[j] == ' ' || s[j] == '/'))
+				j++;
+			if(j < len s && s[j] == '>'){
+				r[len r] = '\n';
+				i = j;
+				continue;
+			}
+		}
+		r[len r] = s[i];
+	}
+	return r;
+}
+
+lbllines(s: string): list of string
+{
+	l: list of string;
+	start := 0;
+	for(i := 0; i <= len s; i++)
+		if(i == len s || s[i] == '\n'){
+			l = trimstr(s[start:i]) :: l;
+			start = i + 1;
+		}
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+lblw(s: string): int
+{
+	w := 0;
+	for(l := lbllines(s); l != nil; l = tl l)
+		if((x := mfont.width(hd l)) > w)
+			w = x;
+	return w;
+}
+
+lblh(s: string): int
+{
+	return len lbllines(s) * mfont.height;
+}
+
+# a label's lines, each centred on c.x, the first at c.y
+drawlbl(img: ref Image, c: Point, col: ref Image, s: string)
+{
+	y := c.y;
+	for(l := lbllines(s); l != nil; l = tl l){
+		img.text(Point(c.x - mfont.width(hd l)/2, y), col, Point(0,0), mfont, hd l);
+		y += mfont.height;
+	}
+}
+
 readuntil(s: string, i: int, stop: int): (string, int)
 {
 	n := len s;

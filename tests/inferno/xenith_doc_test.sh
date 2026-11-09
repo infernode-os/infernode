@@ -15,6 +15,8 @@
 #	tag, or doc/ctl live) sets it again a moment after each edit too,
 #	at once if its text changed meanwhile; Live in a window showing
 #	only the text opens one below it, showing the document, live;
+#	Get of the file changed outside Xenith sets it again (small and
+#	read in the background), not live, Live then does;
 #	a large one (saved in the background) Put beside its document is
 #	written whole;
 #	Markdown far longer than any one image of it is set all the same;
@@ -519,6 +521,40 @@ if {~ $#bid 0} {
 	hasdoctext $bid Beside
 	t=`{cat $XENITH/$bid/doc/text}
 	if {~ $"t *Alone*Beside*} {ok 'and follows the text'} {bad 'Live window:' $"t}
+	# the file changed outside Xenith (an agent's write), then Get in
+	# the text's window: the live document follows the text read again
+	# (Get's reset and load went round the edits it is told of, and it
+	# kept the text from before until the window was closed)
+	echo clean > $XENITH/$aid/ctl
+	echo '# Outside' > $SRC
+	tagexec $aid Get
+	hasdoctext $bid Outside
+	t=`{cat $XENITH/$bid/doc/text}
+	if {~ $"t *Outside*} {ok 'Get of a file changed outside sets the live document again'} {bad 'live after Get:' $"t}
+	if {~ $"t *Beside*} {bad 'live after Get: still the old text:' $"t} {}
+	# a file large enough to be read in the background: set again once
+	# all of it is in
+	{
+		echo '# Large'
+		for i in `{seq 1 400} {echo 'line '^$i^' of a file read in the background'}
+		echo 'Tail'
+	} > $SRC
+	tagexec $aid Get
+	hasdoctext $bid Tail
+	t=`{cat $XENITH/$bid/doc/text}
+	if {~ $"t *Large*Tail*} {ok 'Get of a large file sets the live document again, all of it'} {bad 'live after a large Get:' $"t}
+	# not live: Get leaves it, and Live then sets it at once
+	echo nolive > $XENITH/$bid/doc/ctl
+	echo clean > $XENITH/$aid/ctl
+	echo '# Again' > $SRC
+	tagexec $aid Get
+	sleep 3
+	t=`{cat $XENITH/$bid/doc/text}
+	if {~ $"t *Again*} {bad 'Get set the document again (nolive)'} {ok 'nolive, Get does not set it again'}
+	tagexec $bid Live
+	hasdoctext $bid Again
+	t=`{cat $XENITH/$bid/doc/text}
+	if {~ $"t *Again*} {ok 'Live after Get sets it from the text read again'} {bad 'Live after Get:' $"t}
 	echo clean > $XENITH/$bid/ctl
 	echo delete > $XENITH/$bid/ctl
 }

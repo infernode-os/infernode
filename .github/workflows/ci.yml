@@ -558,6 +558,26 @@ jobs:
           fi
         fi
 
+        # styxbrick commander credentials: persistence is a USB provisioning
+        # barrier, retries are idempotent, and no raw key remains in /usr.
+        if [ -f tests/host/brick_factotum_test.sh ]; then
+          echo "--- brick factotum test ---"
+          chmod +x tests/host/brick_factotum_test.sh
+          set +e
+          ROOT=. sh tests/host/brick_factotum_test.sh > brick-factotum-test.txt 2>&1
+          rc=$?
+          set -e
+          cat brick-factotum-test.txt
+          if [ $rc -eq 0 ]; then
+            echo "brick factotum test: PASS"
+          elif [ $rc -eq 77 ]; then
+            echo "brick factotum test: SKIP (emu not built)"
+          else
+            echo "brick factotum test: FAIL"
+            exit 1
+          fi
+        fi
+
         # wallet persistence (secstore round-trip)
         if [ -f tests/host/wallet_persist_test.sh ]; then
           echo "--- wallet persistence test ---"
@@ -760,6 +780,7 @@ jobs:
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
               tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
+              tls_clientauth_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
@@ -1136,7 +1157,7 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
+        for t in wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1175,7 +1196,7 @@ jobs:
             xenith_event_test xenith_image_test xenith_browse_test \
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
-            xenith_race_test xenith_doc_test; do
+            xenith_race_test xenith_doc_test xenith_wrap_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1224,6 +1245,22 @@ jobs:
           Linux/amd64/bin/limbo
           Linux/amd64/bin/mk
         retention-days: 14
+
+  # The required check master's ruleset names.  The GUI job above was
+  # split into parts, each reported as "... (part)"; no job reported the
+  # plain name any more, so the ruleset waited on it for ever.  This job
+  # reports it, and passes only when every part passed.
+  linux-amd64-gui-gate:
+    name: Linux AMD64 SDL3 GUI Build & Test
+    needs: linux-amd64-gui
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+    - name: Every part passed
+      run: |
+        echo "linux-amd64-gui: ${{ needs.linux-amd64-gui.result }}"
+        test "${{ needs.linux-amd64-gui.result }}" = success
 
   # ─────────────────────────────────────────────
   # Linux ARM64: Full bootstrap build from source
@@ -2071,10 +2108,10 @@ jobs:
         SDL_VIDEODRIVER: dummy
         GUI: ${{ matrix.gui }}
       run: |
-        # As the Linux GUI job's wm and osk parts; wm_cursor_test needs
-        # LD_PRELOAD and skips here (77).
+        # As the Linux GUI job's wm and osk parts; wm_cursor_test and
+        # lucifer_cursor_test need LD_PRELOAD and skip here (77).
         case $GUI in
-        wm)	tests="wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
+        wm)	tests="wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
         osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test" ;;
         esac
         failed=

@@ -490,10 +490,17 @@ The `secstore` ctl verb is what `wm/logon:enablesecstoresave` uses to wire up
 save-back after a successful unlock. It accepts a literal password on a single
 line; the password is hashed in-place and the line is overwritten with zeroes.
 
+`sync` is a durability barrier, not merely a request. Its write returns an
+error when no persistence backend is configured or when the encrypted
+keyfile/secstore save fails. A caller provisioning another device can therefore
+commit its local candidate first and refuse to alter the device unless the
+candidate is recoverable after restart.
+
 ### 6.1 Namespace exposure
 
-`/mnt/factotum/ctl` is sensitive: writing keys is fine, but reading keys leaks
-their attributes (and `!password=` values, in `text` form). InferNode's
+`/mnt/factotum/ctl` is sensitive: reading lists public selectors and the names
+of secret fields, although values are elided as `!password?`. Those selectors
+can still reveal account and service relationships. InferNode's
 `nsconstruct` blocks Veltro agents from seeing `ctl` at all — agents can only
 use factotum *as a delegated authenticator* via `proto`/`rpc`. The wallet
 follows the same pattern: agents see addresses and balances under `/mnt/wallet`,

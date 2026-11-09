@@ -1078,10 +1078,10 @@ backoff(i: int)
 	sys->sleep(1<<i);
 }
 i2cctl, sensorfd, lensfd: ref Sys->FD;
-Exposureoff: con 48;
-Linelen: con 7824;
-Pixrate: con 585600000;
-Vblankmin: con 40;
+Exposureoff: con 48;		# lines: the exposure is at most frame length less this
+Linelen: con 7824;		# pixel clocks a line, at Pixrate
+Pixrate: con 585600000;		# the video timing PLL's pixel rate
+Vblankmin: con 40;		# lines: the least vertical blank a frame needs
 framelen := 0;
 
 ctlset(fd: ref Sys->FD, s: string): int
@@ -1214,16 +1214,17 @@ sensoron(): string
 	return nil;
 }
 
-# The mode, as CCS registers. Each was tested by leaving it out, on the
-# sensor, against the same picture (2026-11-03), and those that changed
-# nothing are not written. Of the rest, the registers' meanings are the
-# standard's, but these VALUES were read from the Linux imx708 driver,
-# which is GPL, and are not yet derived independently:
-#	the PLLs (0301 0303 0305 0306, 030B 030D 030E), the line length
-#	(0342, so Linelen and Pixrate), and 3200/3201, which are not CCS:
-#	without them the binned frame has no colour.
-# Left at the sensor's own timing the stream drops frames, so the PLLs
-# and line length stay; frame length is worked out from them.
+# The mode: the sensor's 2x2 binned readout, 2304x1296 of its 4608x2592,
+# RAW10 on two CSI-2 lanes. The registers are MIPI CCS's, named below as
+# the standard names them, except 3200 and 3201. Each was tested by
+# leaving it out, on the sensor, against the same picture (2026-11-03),
+# and those that changed nothing are not written.
+#
+# The clocks: the video timing PLL makes the pixel rate (Pixrate) the
+# line length is counted in, and the output PLL the lanes' rate, 900
+# Mbit/s a lane.
+# Left at the sensor's own timing the stream drops frames, so both
+# stay; frame length is worked out from the line length and the fps.
 sensormode(): int
 {
 	written = nil;
@@ -1232,37 +1233,40 @@ sensormode(): int
 		fl = Sh + Vblankmin;
 	framelen = fl;
 	r := 0;
-	r |= wr8(16r0100, 0);
-	r |= wr16(16r0136, 24<<8);		# external clock, 24 MHz in 8.8
-	r |= wr16(16r0112, 16r0A0A);		# RAW10
-	r |= wr8(16r0114, 1);			# two lanes
-	# 24 MHz / 2 * 122 = 1464 MHz, / 5 / 2 per lane pixel path
-	r |= wr8(16r0301, 5);
-	r |= wr8(16r0303, 2);
-	r |= wr8(16r0305, 2);
-	r |= wr16(16r0306, 122);
-	r |= wr8(16r030B, 2);
-	r |= wr8(16r030D, 4);
-	r |= wr16(16r030E, 300);		# 450 MHz: 900 Mbit/s a lane
-	r |= wr8(16r0310, 1);
-	r |= wr16(16r0342, Linelen);
-	r |= wr16(16r0340, fl);
-	r |= wr16(16r0344, 0);
-	r |= wr16(16r0346, 0);
-	r |= wr16(16r0348, 2*Sw-1);
-	r |= wr16(16r034A, 2*Sh-1);
-	r |= wr8(16r0900, 1);			# binning
-	r |= wr8(16r0901, 16r22);		# two by two
-	r |= wr8(16r0902, 8);
-	r |= wr8(16r3200, 16r41);		# not CCS: without these no colour
-	r |= wr8(16r3201, 16r41);
-	r |= wr16(16r0408, 0);
-	r |= wr16(16r040A, 0);
-	r |= wr16(16r040C, Sw);
-	r |= wr16(16r040E, Sh);
-	r |= wr16(16r034C, Sw);
-	r |= wr16(16r034E, Sh);
-	r |= wr8(16r0101, flip);
+	r |= wr8(16r0100, 0);			# mode_select: standby
+	r |= wr16(16r0136, 24<<8);		# extclk_frequency_mhz: the board's 24 MHz, in 8.8
+	r |= wr16(16r0112, 16r0A0A);		# csi_data_format: RAW10 in, RAW10 out
+	r |= wr8(16r0114, 1);			# csi_lane_mode: two lanes (lanes - 1)
+	# the video timing PLL: 24 MHz / 2 * 122 = 1464 MHz, divided for the
+	# pixel path
+	r |= wr8(16r0301, 5);			# vt_pix_clk_div
+	r |= wr8(16r0303, 2);			# vt_sys_clk_div
+	r |= wr8(16r0305, 2);			# pre_pll_clk_div
+	r |= wr16(16r0306, 122);		# pll_multiplier
+	# the output PLL: 24 MHz / 4 * 300 = 1800 MHz, / 2: 900 Mbit/s a
+	# lane, a 450 MHz clock on both edges
+	r |= wr8(16r030B, 2);			# op_sys_clk_div
+	r |= wr8(16r030D, 4);			# op_pre_pll_clk_div
+	r |= wr16(16r030E, 300);		# op_pll_multiplier: 450 MHz, 900 Mbit/s a lane
+	r |= wr8(16r0310, 1);			# pll_mode: the two PLLs apart
+	r |= wr16(16r0342, Linelen);		# line_length_pck
+	r |= wr16(16r0340, fl);			# frame_length_lines: sets the fps
+	r |= wr16(16r0344, 0);			# x_addr_start: the whole array
+	r |= wr16(16r0346, 0);			# y_addr_start
+	r |= wr16(16r0348, 2*Sw-1);		# x_addr_end
+	r |= wr16(16r034A, 2*Sh-1);		# y_addr_end
+	r |= wr8(16r0900, 1);			# binning_mode: on
+	r |= wr8(16r0901, 16r22);		# binning_type: two by two
+	r |= wr8(16r0902, 8);			# binning_weighting
+	r |= wr8(16r3200, 16r41);		# not CCS: measured, without these
+	r |= wr8(16r3201, 16r41);		#   the binned frame has no colour
+	r |= wr16(16r0408, 0);			# digital_crop_x_offset: no crop
+	r |= wr16(16r040A, 0);			# digital_crop_y_offset
+	r |= wr16(16r040C, Sw);			# digital_crop_image_width
+	r |= wr16(16r040E, Sh);			# digital_crop_image_height
+	r |= wr16(16r034C, Sw);			# x_output_size
+	r |= wr16(16r034E, Sh);			# y_output_size
+	r |= wr8(16r0101, flip);		# image_orientation: mirror and flip
 	l := fl - Exposureoff;
 	if(exposure != 0)
 		l = exposure;

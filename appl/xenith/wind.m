@@ -70,6 +70,7 @@ Windowm : module {
 		settag1 : fn(w : self ref Window);
 		commit : fn(w : self ref Window, t : ref Textm->Text);
 		reshape : fn(w : self ref Window, r : Draw->Rect, n : int, keepextra: int) : int;
+		setwrap : fn(w : self ref Window, word : int);
 		close : fn(w : self ref Window);
 		delete : fn(w : self ref Window);
 		clean : fn(w : self ref Window, n : int, exiting : int) : int;

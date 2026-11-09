@@ -643,7 +643,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 
 | | where | files | |
 |-|-|-|-|
-| `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags sysstat sysname user jit` … | both |
+| `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags heaptypes sysstat sysname user jit` … | both |
 | `#S` | `/dev` | `sdcard` (the whole device), `sdctl`, and one file per named range | both |
 | `#B` | `/dev` | `bootimage` (the running kernel, byte for byte), `bootargs` | both |
 | `#x` | `/dev` | `busec` — microseconds, for timing things honestly | both |

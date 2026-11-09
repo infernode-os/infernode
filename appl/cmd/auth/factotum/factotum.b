@@ -66,7 +66,7 @@ AES_GCM_TAG_LEN: con 16;
 keyfilepath: string;
 keyfilepass: array of byte;	# derived key, not raw password
 dirtyc: chan of int;		# signal dirty state to persist thread
-syncc: chan of chan of int;	# request sync, reply when done
+syncc: chan of chan of string;	# request sync, reply with persistence error
 
 # Secstore persistence
 secstoreaddr: string;		# secstore server address (e.g. "net!localhost!secstore")
@@ -229,7 +229,7 @@ factotumsrv()
 	# Load keys from secstore or encrypted keyfile
 	if(secstoreaddr != nil){
 		dirtyc = chan of int;
-		syncc = chan of chan of int;
+		syncc = chan of chan of string;
 		e := secstoreload();
 		if(e != nil){
 			if(debug)
@@ -239,7 +239,7 @@ factotumsrv()
 		spawn persist();
 	} else if(keyfilepath != nil){
 		dirtyc = chan of int;
-		syncc = chan of chan of int;
+		syncc = chan of chan of string;
 		e := loadkeyfile(keyfilepath);
 		if(e != nil && debug)
 			sys->fprint(sys->fildes(2), "factotum: keyfile: %s\n", e);
@@ -360,12 +360,18 @@ factotumsrv()
 					alt { dirtyc <-= 1 => ; * => ; }
 			}
 		"sync" =>
+			serr: string;
 			if(syncc != nil){
-				rc := chan of int;
+				rc := chan of string;
 				syncc <-= rc;
-				<-rc;
+				serr = <-rc;
 			}
-			wc <-= (len data, nil);
+			else
+				serr = "no persistence backend configured";
+			if(serr != nil)
+				wc <-= (0, "sync: " + serr);
+			else
+				wc <-= (len data, nil);
 		"secstore" =>
 			# ctl line: "secstore addr user password"
 			# verb "secstore" already stripped; s = "addr user password"
@@ -415,7 +421,7 @@ factotumsrv()
 			# Start persist thread if not already running
 			if(dirtyc == nil){
 				dirtyc = chan of int;
-				syncc = chan of chan of int;
+				syncc = chan of chan of string;
 				spawn persist();
 			}
 			wc <-= (len data, nil);
@@ -1601,11 +1607,12 @@ persist()
 
 	rc := <-syncc =>
 		e := dosave();
-		if(e != nil && debug)
-			sys->fprint(sys->fildes(2), "factotum: sync: %s\n", e);
-		else
+		if(e != nil){
+			if(debug)
+				sys->fprint(sys->fildes(2), "factotum: sync: %s\n", e);
+		}else
 			dirty = 0;
-		rc <-= 0;
+		rc <-= e;
 	}
 }
 

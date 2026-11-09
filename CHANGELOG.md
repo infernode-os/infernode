@@ -480,6 +480,15 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Applications
 
+- **A detector's boxes are drawn in a colour for each class.** A
+  detection (vision(4)'s records) with no `colour=` of its own was drawn
+  in the theme's accent, so people, cars and traffic lights were one
+  colour. layers(2) now gives each class one of the theme's eight
+  categorical colours (`pie0` to `pie7`), by a hash of its name, so it
+  is the same colour in every frame, viewer and run; a record's own
+  `colour=` still comes first. In wm/camera, Matrix's video pane and
+  vidplay9p alike.
+
 - **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
   words (#1112).** Plain `fmt` joins everything between blank lines,
   so a list became one paragraph and code, tables and headings were

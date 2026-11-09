@@ -69,7 +69,14 @@ is a theme's name
 .RB ( accent ,
 .BR red ,
 \&...) or
-.IR rrggbb .
+.IR rrggbb ;
+a record with none is drawn in the accent, or, a detection's, in its
+class's colour: one of the theme's eight categorical colours
+.RB ( pie0
+to
+.BR pie7 ,
+as charts use), chosen by a hash of the class's name, so a class is the
+same colour in every frame, viewer and run.
 Attributes it does not know are ignored, and a line that is no record is
 skipped.
 .PP

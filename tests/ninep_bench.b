@@ -32,7 +32,7 @@ implement NinepBench;
 # its offset (-p ways: that many at once, each a contiguous piece), for
 # secs seconds.  One line a run:
 #
-#	msize=N readers=R shared=S run=I frames=F ms=T framebytes=B p50_ms=P p95_ms=Q lost=L
+#	msize=N readers=R shared=S run=I frames=F ms=T framebytes=B p50_ms=P p95_ms=Q p99_ms=R max_ms=X lost=L
 #
 # frames is every reader's together; p50 and p95 are of one frame's read;
 # lost counts frames that expired before they were read.
@@ -311,13 +311,15 @@ feedrun(dirs: array of string, path: string, msize, nreaders, separate, i: int)
 	for(k := 0; times != nil; times = tl times)
 		a[k++] = hd times;
 	sort(a);
-	(p50, p95) := (0, 0);
+	(p50, p95, p99, pmax) := (0, 0, 0, 0);
 	if(len a > 0){
 		p50 = a[len a / 2];
 		p95 = a[len a * 95 / 100];
+		p99 = a[len a * 99 / 100];
+		pmax = a[len a - 1];
 	}
-	sys->print("msize=%d readers=%d shared=%d run=%d frames=%d ms=%d framebytes=%d p50_ms=%d p95_ms=%d lost=%d\n",
-		msize, nreaders, !separate, i, frames, ms, size, p50, p95, lost);
+	sys->print("msize=%d readers=%d shared=%d run=%d frames=%d ms=%d framebytes=%d p50_ms=%d p95_ms=%d p99_ms=%d max_ms=%d lost=%d\n",
+		msize, nreaders, !separate, i, frames, ms, size, p50, p95, p99, pmax, lost);
 }
 
 # wm/camera's reader, without the drawing: frames in order from the

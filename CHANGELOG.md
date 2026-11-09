@@ -24,6 +24,18 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Security
 
+- **`brick(1)` keeps a styxbrick's credentials in factotum, and its TLS
+  and lease handling are hardened (#1111).** The four commander secrets
+  move out of ordinary profile files into purpose-scoped factotum keys;
+  factotum's sync is a real durability barrier, and pairing is local
+  first, serialized and safe to retry. TLS client authentication
+  reloads its key from factotum encrypted, so no private scalar appears
+  in the name space, and handshakes and provisioning check the same
+  strict SPKI pin and refuse malformed or non-canonical DER. The D2
+  lease's release/renew race, counter lock, transport state, frame
+  bounds, rollback and lease validation are fixed. What remains open
+  (BLE admission when built with BLE, reconnect floods, unattended
+  provisioning on bare metal) is in `docs/PR-1015-SECURITY-REVIEW.md`.
 - **The formal-verification claims are narrowed to what the artefacts
   establish, and the TLA+ small configuration now reaches a copy.** The
   exhaustive small TLC run (2 processes, 3 pgrps, 3 channels) never
@@ -389,6 +401,20 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Applications
 
+- **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
+  words (#1112).** Plain `fmt` joins everything between blank lines,
+  so a list became one paragraph and code, tables and headings were
+  filled too. `md/fmt` finds blocks with the parser Render and Lucifer
+  use: paragraphs and list items are filled, quotes inside their `>`
+  marks, and code, headings, tables, rules and HTML are copied as they
+  are; `fmt` itself is unchanged. In Xenith, `Wrap` toggles a window
+  between breaking lines at the window's edge and between words
+  (`Wrap word`, `Wrap char`; `Wrap WORD` for every window; `xenith -w`
+  to start that way). It changes the display only: lines, addresses,
+  Edit and Put still go by newlines. A window's ctl takes `wrap word`
+  and `wrap char`, so a plumb rule can choose it per file. Markdown
+  drawn by Render no longer splits a paragraph at a `|` inside a code
+  span.
 - **Xenith's Get updates a live document of a file changed outside it
   (#1114).** When an agent or another program changed a file, Get read
   the new text into the window but left its Live view or Zerox twin
@@ -735,6 +761,20 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Emulator and the Dis VM
 
+- **Cycles of garbage are freed in seconds, not minutes, and
+  `/dev/heaptypes` shows what is live (#1123).** The collector marked a
+  list a cell per pass, so with the on-screen keyboard's word list in
+  the heap an epoch took about 55 passes; it now marks a whole list at
+  once, as it does an array, and an idle Pi 4 finishes an epoch in
+  about 5. On the native kernels, an idle scheduler with collection
+  outstanding now runs it, at most once a minute (`Idlegcgap`, 60 s),
+  where it slept until something woke it. In a 12-hour Pi 4 soak the
+  live objects stayed flat, and throughput was unchanged; that soak
+  ran with a 10 s gap, and the 60 s default has been measured only
+  under QEMU.
+  `/dev/heaptypes`, in the emulator and the native kernels, lists the
+  reading VM's live objects by type and module, most numerous first,
+  under the collector's counters.
 - **Option and Alt are the compose key only when tapped alone (#1113).**
   The SDL3 display started a compose sequence on every Alt or Option
   release, so after typing a character with Option (Option-Shift-hyphen

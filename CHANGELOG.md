@@ -4,6 +4,14 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **vid9p exits when its client hangs up.** When its 9P channel ended
+  it went on serving nothing, its ticker with it, for ever; under
+  `listen -A`, which runs a connection's command in the listener, no
+  second client was served at all. It now takes a process group of its
+  own and ends it, feeder and host decoder included, with the channel.
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

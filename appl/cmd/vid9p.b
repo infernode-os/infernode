@@ -142,6 +142,10 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers->init(styx);
 	nametree->init();
 
+	# A group of its own: when the 9P channel ends, the ticker, a feeder
+	# and a host decoder go with the server (killgrp, in serve).
+	sys->pctl(Sys->NEWPGRP, nil);
+
 	i420 = array[0] of byte;
 	# Allocated up front so the serve loop's alt never selects on a nil
 	# channel (a nil channel in alt faults). In static mode nothing is
@@ -236,15 +240,30 @@ advance()
 		pos = fbase;	# the retention window slid past the playhead
 }
 
+shutdown(tree: ref Tree)
+{
+	tree.quit();
+	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
 serve(tree: ref Tree)
 {
 	for(;;) alt {
 	tmsg := <-tc =>
-		if(tmsg == nil)
-			break;
+		# The channel ended (the client hung up, or the mount went):
+		# "break" here left only the alt, so vid9p and its ticker went
+		# on for ever, and under listen -A, which runs a connection's
+		# command in the listener, no second client was ever served.
+		if(tmsg == nil){
+			shutdown(tree);
+			return;
+		}
 		pick tm := tmsg {
 		Readerror =>
-			break;
+			shutdown(tree);
+			return;
 		Open =>
 			srv.open(tm);
 		Read =>

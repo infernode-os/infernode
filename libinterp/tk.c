@@ -73,6 +73,7 @@ tkmodinit(void)
 
 	fakeTkTop = dtype(tkfreetop, sizeof(TkTop), TktypeMap, sizeof(TktypeMap));
 	fakeTkTop->mark = tkmarktop;
+	heapaudittype("TkTop", &fakeTkTop);
 
 	tksorttable();
 }

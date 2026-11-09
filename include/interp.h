@@ -554,6 +554,7 @@ extern	void		destroylinks(Module*);
 extern	void		destroystack(REG*);
 extern	void		drawmodinit(void);
 extern	Type*		dtype(void (*)(Heap*, int), int, uchar*, int);
+extern	void		heapaudittype(char*, Type**);
 extern	Module*		dupmod(Module*);
 extern	int		dynldable(int);
 extern	void		iqlock(ILock*);

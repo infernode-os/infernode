@@ -2095,13 +2095,33 @@ jobs:
     - name: Generate SBOM (SPDX)
       # Named infernode-*-sbom.spdx.json so the checksum, cosign-signing and
       # release-upload steps below cover it automatically (no extra wiring).
-      # Same pinned action proven CI-verifiable in sbom.yml.
+      # Same pinned action proven CI-verifiable in sbom.yml, and the same
+      # second try: its syft download fails now and then with a 500 or
+      # 504 from GitHub's release CDN.
+      id: sbom1
+      continue-on-error: true
       uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       with:
         path: .
         format: spdx-json
         output-file: artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json
         upload-artifact: false
+
+    - name: Wait before trying the SBOM again
+      if: steps.sbom1.outcome == 'failure'
+      run: sleep 60
+
+    - name: Generate SBOM (SPDX), second try
+      if: steps.sbom1.outcome == 'failure'
+      uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      with:
+        path: .
+        format: spdx-json
+        output-file: artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json
+        upload-artifact: false
+
+    - name: Check the SBOM was made
+      run: test -s "artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json"
 
     - name: Generate checksums
       run: |

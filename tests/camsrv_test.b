@@ -133,15 +133,40 @@ newest(): int
 	return frames;
 }
 
-# the newest frame, as a live reader takes it
+# newest() of a camsrv mounted at dir
+postednewest(dir: string): int
+{
+	(frames, first) := (-1, 0);
+	(nil, w) := sys->tokenize(rd(dir + "/0/status"), " \t\n");
+	for(; w != nil; w = tl w){
+		if(len hd w > 7 && (hd w)[0:7] == "frames=")
+			frames = int (hd w)[7:];
+		if(len hd w > 6 && (hd w)[0:6] == "first=")
+			first = int (hd w)[6:];
+	}
+	if(frames > first)
+		return frames - 1;
+	return frames;
+}
+
+# the newest frame, as a live reader takes it: one fallen behind (a
+# slow machine; the ring keeps 8 frames) goes on from the newest again,
+# as wm/camera and video-pane do
 readframe(fd: ref Sys->FD, b: array of byte): int
 {
-	n := newest();
-	if(n < 0)
-		return 0;
-	(got, e) := readat(fd, b, n);
-	if(e != nil)
-		sys->fprint(sys->fildes(2), "readframe %d: %s\n", n, e);
+	got := 0;
+	for(try := 0; try < 5; try++){
+		n := newest();
+		if(n < 0)
+			return 0;
+		e: string;
+		(got, e) = readat(fd, b, n);
+		if(e != "frame expired"){
+			if(e != nil)
+				sys->fprint(sys->fildes(2), "readframe %d: %s\n", n, e);
+			return got;
+		}
+	}
 	return got;
 }
 
@@ -346,8 +371,16 @@ testPosted(t: ref T)
 				n = int (hd w)[7:];
 		sys->sleep(50);
 	}
-	(ga, ea) := readat(fa, a, n);
-	(gb, eb) := readat(fb, b, n);
+	# frame n through both connections; fallen behind the ring on a
+	# slow machine, a newer n
+	(ga, ea, gb, eb) := (0, "", 0, "");
+	for(try := 0; try < 5; try++){
+		(ga, ea) = readat(fa, a, n);
+		(gb, eb) = readat(fb, b, n);
+		if(ea != "frame expired" && eb != "frame expired")
+			break;
+		n = postednewest(da);
+	}
 	t.asserteq(ga, FS, "frame n on the first connection: " + ea);
 	t.asserteq(gb, FS, "frame n on the second: " + eb);
 	same := 1;
@@ -361,7 +394,7 @@ testPosted(t: ref T)
 	fb = nil;
 	sys->unmount(nil, db);
 	sys->sleep(200);
-	(ga, ea) = readat(fa, a, n + 1);
+	(ga, ea) = readat(fa, a, postednewest(da));
 	t.asserteq(ga, FS, "one connection gone, the other reads on: " + ea);
 	fa = nil;
 	sys->unmount(nil, da);

@@ -29,7 +29,8 @@ implement NinepBench;
 # directory, and each reader does what wm/camera does: read fmt, start at
 # the newest frame (-0: at frame 0, so a loaded clip is read as fast as
 # it can be, unpaced), and read each frame after it whole, one pread at
-# its offset, for secs seconds.  One line a run:
+# its offset (-p ways: that many at once, each a contiguous piece), for
+# secs seconds.  One line a run:
 #
 #	msize=N readers=R shared=S run=I frames=F ms=T framebytes=B p50_ms=P p95_ms=Q lost=L
 #
@@ -62,7 +63,8 @@ stalls := 0;
 deadline := 120;	# seconds a run may take before it is called stalled
 feedsecs := 0;		# -f: read a feed for this long
 fromzero := 0;		# -0: from frame 0, not the newest
-mntbase := "/n/bench";	# -D: where the mounts go (a machine's /n may not take one)
+mntbase := "/n/bench";
+ways := 1;		# -p: each frame read as this many preads at once	# -D: where the mounts go (a machine's /n may not take one)
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -75,7 +77,7 @@ init(nil: ref Draw->Context, args: list of string)
 	runs := 5;
 	separate := 0;
 	arg->init(args);
-	arg->setusage("ninep_bench [-A] [-C alg] [-k keyfile] [-m msize,...] [-c readers,...] [-n runs] [-s] [-l stats] [-t secs] [-f secs [-0]] [-D dir] addr path");
+	arg->setusage("ninep_bench [-A] [-C alg] [-k keyfile] [-m msize,...] [-c readers,...] [-n runs] [-s] [-l stats] [-t secs] [-f secs [-0] [-p ways]] [-D dir] addr path");
 	while((o := arg->opt()) != 0)
 		case o {
 		'A' =>	noauth = 1;
@@ -90,6 +92,7 @@ init(nil: ref Draw->Context, args: list of string)
 		'f' =>	feedsecs = int arg->earg();
 		'0' =>	fromzero = 1;
 		'D' =>	mntbase = arg->earg() + "/bench";
+		'p' =>	ways = int arg->earg();
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -332,18 +335,7 @@ feedreader(dir: string, size: int, go: chan of int, done: chan of (int, int, lis
 	times: list of int;
 	while(fd != nil && sys->millisec() < end){
 		t := sys->millisec();
-		got := 0;
-		e := "";
-		while(got < size){
-			m := sys->pread(fd, buf[got:], size - got, big f * big size + big got);
-			if(m < 0){
-				e = sys->sprint("%r");
-				break;
-			}
-			if(m == 0)
-				break;
-			got += m;
-		}
+		(got, e) := parpread(fd, buf, big f * big size, ways);
 		if(got < size){
 			if(e == "frame expired"){
 				lost++;
@@ -376,6 +368,61 @@ feedfmt(file: string): (int, int)
 	if(len t < 2)
 		return (0, 0);
 	return (int hd t, int hd tl t);
+}
+
+# b read at off as ways preads of contiguous pieces at once (parread(2)
+# does this; a copy here so the bench runs where the library is not)
+parpread(fd: ref Sys->FD, b: array of byte, off: big, ways: int): (int, string)
+{
+	if(ways <= 1)
+		return piece(fd, b, off);
+	size := (len b + ways - 1) / ways;
+	done := chan[ways] of (int, int, string);
+	n := 0;
+	for(s := 0; s < len b; s += size){
+		e := s + size;
+		if(e > len b)
+			e = len b;
+		spawn pworker(fd, b[s:e], off + big s, n, done);
+		n++;
+	}
+	got := array[n] of int;
+	errs := array[n] of string;
+	for(i := 0; i < n; i++){
+		(k, m, err) := <-done;
+		got[k] = m;
+		errs[k] = err;
+	}
+	total := 0;
+	for(i = 0; i < n; i++){
+		want := size;
+		if(i == n-1)
+			want = len b - size*(n-1);
+		total += got[i];
+		if(got[i] < want)
+			return (total, errs[i]);
+	}
+	return (total, nil);
+}
+
+pworker(fd: ref Sys->FD, b: array of byte, off: big, k: int, done: chan of (int, int, string))
+{
+	(m, err) := piece(fd, b, off);
+	done <-= (k, m, err);
+}
+
+piece(fd: ref Sys->FD, b: array of byte, off: big): (int, string)
+{
+	got := 0;
+	while(got < len b){
+		m := sys->pread(fd, b[got:], len b - got, off + big got);
+		if(m < 0)
+			return (got, sys->sprint("%r"));
+		if(m == 0)
+			break;
+		got += m;
+	}
+	return (got, nil);
 }
 
 # the newest frame kept, as wm/camera finds it (status frames= less one)

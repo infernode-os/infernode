@@ -18,6 +18,9 @@ implement NinepMsizeTest;
 #    workers replying at once interleaved them, and replies reached the
 #    wrong tags ("unexpected reply tag", "mnt: proc released ...
 #    mismatch"), then the mount wedged
+#  - a mount offers 64K on a plain connection and less than devssl's
+#    record limit over devssl, which every server already running
+#    splits and interleaves above it
 #
 
 include "sys.m";
@@ -257,6 +260,87 @@ testMount(t: ref T)
 	sys->remove(mnt);
 }
 
+# the message size a mount offers in Tversion, on a connection with
+# devssl pushed (alg set) or not
+offered(t: ref T, alg: string): int
+{
+	(ok, ac) := sys->announce("tcp!127.0.0.1!0");
+	if(ok < 0){
+		t.fatal(sys->sprint("announce: %r"));
+		return -1;
+	}
+	(nil, f) := sys->tokenize(readfile(ac.dir + "/local"), "!\n");
+	got := chan of int;
+	spawn versionsrv(ac, alg, got);
+	(dok, c) := sys->dial("tcp!127.0.0.1!" + hd tl f, nil);
+	if(dok < 0){
+		t.fatal(sys->sprint("dial: %r"));
+		return -1;
+	}
+	fd := c.dfd;
+	if(alg != nil){
+		err: string;
+		(fd, err) = pushssl(fd, SECRETB, SECRETA, alg);
+		if(fd == nil){
+			t.fatal("client ssl: " + err);
+			return -1;
+		}
+	}
+	mnt := DIR + ".offer";
+	sys->create(mnt, Sys->OREAD, Sys->DMDIR|8r777);
+	spawn mountquiet(fd, mnt);	# refused at attach; only its Tversion matters
+	n := <-got;
+	sys->remove(mnt);
+	return n;
+}
+
+mountquiet(fd: ref Sys->FD, mnt: string)
+{
+	sys->mount(fd, nil, mnt, Sys->MREPL, nil);
+}
+
+# answer one Tversion with the size offered, refuse what follows
+versionsrv(ac: Sys->Connection, alg: string, got: chan of int)
+{
+	(ok, c) := sys->listen(ac);
+	if(ok < 0){
+		got <-= -1;
+		return;
+	}
+	fd := sys->open(c.dir + "/data", Sys->ORDWR);
+	if(fd != nil && alg != nil)
+		(fd, nil) = pushssl(fd, SECRETA, SECRETB, alg);
+	if(fd == nil){
+		got <-= -1;
+		return;
+	}
+	m := Tmsg.read(fd, 0);
+	msize := -1;
+	pick v := m {
+	Version =>
+		msize = v.msize;
+		b := (ref Rmsg.Version(v.tag, msize, v.version)).pack();
+		sys->write(fd, b, len b);
+	}
+	got <-= msize;
+	for(;;){
+		m = Tmsg.read(fd, msize);
+		if(m == nil || tagof m == tagof Tmsg.Readerror)
+			return;
+		b := (ref Rmsg.Error(m.tag, "refused")).pack();
+		sys->write(fd, b, len b);
+	}
+}
+
+testOffer(t: ref T)
+{
+	plain := offered(t, nil);
+	enc := offered(t, ALG);
+	t.log(sys->sprint("a mount offers %d plain, %d over devssl", plain, enc));
+	t.asserteq(plain, 65536, "a plain mount offers 64K");
+	t.assert(enc > 8192 && enc <= 32*1024 - 256, sys->sprint("a mount over devssl offers under its record limit (%d): a server's devssl split a longer reply, and replies at once interleaved", enc));
+}
+
 NREADERS: con 8;
 
 testEncryptedReaders(t: ref T)
@@ -344,6 +428,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("LargeOffer", testLargeOffer);
 	run("Mount", testMount);
 	run("EncryptedReaders", testEncryptedReaders);
+	run("Offer", testOffer);
 	sys->remove(DIR + "/f");
 	sys->remove(DIR);
 	if(testing->summary(passed, failed, skipped) > 0)

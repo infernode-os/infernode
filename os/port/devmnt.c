@@ -58,6 +58,16 @@
  */
 #define MAXRPC (64*1024)
 
+/*
+ * The largest a mount over devssl (#D: mount -k, -C, listen's
+ * connections) offers.  devssl before 2026-11 sent a write longer than
+ * its record limit, (1<<15) less the digest and one, as pieces locked
+ * one at a time, and two replies written at once interleaved; every
+ * server already running has it.  Below the limit for any digest, a
+ * reply is one write and cannot be split.
+ */
+#define SSLMAXRPC (32*1024 - 256)
+
 struct Mntrpc
 {
 	Chan*	c;		/* Channel for whom we are working */
@@ -192,6 +202,8 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 		msize = MAXRPC;
 	if(msize > c->iounit && c->iounit != 0)
 		msize = c->iounit;
+	if(devtab[c->type]->dc == 'D' && msize > SSLMAXRPC)
+		msize = SSLMAXRPC;
 	v = version;
 	if(v == nil || v[0] == '\0')
 		v = VERSION9P;

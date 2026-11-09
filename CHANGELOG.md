@@ -488,8 +488,10 @@ installation, especially bare-metal nodes and systems that ran
   label's lines, in nodes and on edges. An edge that skips a layer goes
   round the side, as one against the flow does: it ran straight under
   the node between, hidden. The gap between layers is wide enough for
-  the edge labels in it, which the nodes either side were drawn over.
-  `tests/mermaid_flow_test.b` checks each.
+  the edge labels in it, which the nodes either side were drawn over,
+  and edges bending into one node keep their labels apart, each where
+  it leaves its own source's row. `tests/mermaid_flow_test.b` checks
+  each.
 
 - **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
   words (#1112).** Plain `fmt` joins everything between blank lines,

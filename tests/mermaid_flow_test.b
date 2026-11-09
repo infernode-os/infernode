@@ -6,7 +6,8 @@ implement MermaidFlowTest;
 # label's lines; a quoted edge label with a "-" in it (AES-256) keeps its
 # edge; an edge that skips a layer goes round the node in its way, not
 # under it; the gap between layers grows to fit an edge's label, which
-# the nodes either side were drawn over.
+# the nodes either side were drawn over; two edges bending into one node
+# keep their labels apart, each at its own source's height.
 #
 
 include "sys.m";
@@ -140,6 +141,86 @@ testLabelGap(t: ref T)
 	t.assert(long.r.dx() > short.r.dx() + 60, sys->sprint("a long edge label widens the gap: %d wide, %d with a short one", long.r.dx(), short.r.dx()));
 }
 
+# the columns where a line-coloured pixel is: the leftmost and rightmost
+linecols(img: ref Image): (int, int)
+{
+	w := img.r.dx();
+	b := array[4*w] of byte;
+	(lo, hi) := (w, -1);
+	for(y := img.r.min.y; y < img.r.max.y; y++){
+		img.readpixels(Rect((img.r.min.x, y), (img.r.max.x, y+1)), b);
+		for(x := 0; x < w; x++)
+			if(int b[4*x+2] > 200 && int b[4*x+1] < 60 && int b[4*x] < 60){
+				if(x < lo) lo = x;
+				if(x > hi) hi = x;
+			}
+	}
+	return (lo, hi);
+}
+
+# groups of rows with dark (text) pixels in columns x0 to x1
+textgroups(img: ref Image, x0, x1: int): int
+{
+	w := img.r.dx();
+	b := array[4*w] of byte;
+	groups := 0;
+	gap := 99;
+	for(y := img.r.min.y; y < img.r.max.y; y++){
+		img.readpixels(Rect((img.r.min.x, y), (img.r.max.x, y+1)), b);
+		dark := 0;
+		for(x := x0; x < x1 && x < w; x++)
+			if(int b[4*x] < 80 && int b[4*x+1] < 80 && int b[4*x+2] < 80)
+				dark = 1;
+		if(dark){
+			if(gap > 2)
+				groups++;
+			gap = 0;
+		} else
+			gap++;
+	}
+	return groups;
+}
+
+# the width of the first node: the longest line-coloured run in a row
+nodewidth(img: ref Image, lo, hi: int): int
+{
+	w := img.r.dx();
+	row := array[4*w] of byte;
+	best := 0;
+	for(y := img.r.min.y; y < img.r.max.y; y++){
+		img.readpixels(Rect((img.r.min.x, y), (img.r.max.x, y+1)), row);
+		run := 0;
+		for(x := lo; x <= hi && x < w; x++)
+			if(int row[4*x+2] > 200 && int row[4*x+1] < 60 && int row[4*x] < 60){
+				run++;
+				if(run > best && x - run + 1 == lo)
+					best = run;
+			} else
+				run = 0;
+	}
+	return best;
+}
+
+testConverge(t: ref T)
+{
+	# two-line labels, as ns2mmd's are: at the middle of their bends they
+	# were taller than the rows are apart, and one over the other
+	img := chart(t, "flowchart LR\n  a[aaaa] -->|\"first<br/>one\"| c[aaaa]\n  b[aaaa] -->|\"second<br/>two\"| c\n");
+	if(img == nil)
+		return;
+	# a, b and c are the same width; the gap between the columns is
+	# what is left after a's on the left and c's on the right
+	(lo, hi) := linecols(img);
+	nw := nodewidth(img, lo, hi);
+	if(nw < 10){
+		t.fatal(sys->sprint("no node found (lines %d to %d)", lo, hi));
+		return;
+	}
+	g := textgroups(img, lo + nw + 2, hi - nw - 2);
+	# each label's two lines a group of rows: four, none drawn over another
+	t.asserteq(g, 4, "two edges bending into one node: their two-line labels apart, four lines");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -166,6 +247,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DashLabel", testDashLabel);
 	run("Around", testAround);
 	run("LabelGap", testLabelGap);
+	run("Converge", testConverge);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

@@ -1271,11 +1271,20 @@ drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir, round: int)
 		drawarrowhead(img, p1, adir, col);
 	}
 
-	# Edge label at midpoint of middle segment
+	# Edge label on the line, in a box of its own: at the middle of a
+	# straight edge, and on a bent one where its run between the layers
+	# leaves its source's row (column, top-down), so edges that bend to
+	# one node each keep their label at their own height (at the middle
+	# of the bend they were drawn over each other)
 	if(e.label != "") {
-		# on the line, in a box of its own
 		mx := (p0.x + p1.x) / 2;
 		my := (p0.y + p1.y) / 2 - lblh(e.label)/2;
+		if((dir == DIRN_LR || dir == DIRN_RL) && p0.y != p1.y)
+			my = p0.y - lblh(e.label)/2;
+		else if(dir != DIRN_LR && dir != DIRN_RL && p0.x != p1.x){
+			mx = p0.x;
+			my = (p0.y + (p0.y + p1.y) / 2) / 2 - lblh(e.label)/2;
+		}
 		lw := lblw(e.label);
 		img.draw(Rect((mx-lw/2-2, my-1), (mx+lw/2+2, my+lblh(e.label)+1)),
 			cnode, nil, (0,0));

@@ -247,7 +247,7 @@ struct Tcpctl
 	int	sawwsopt;		/* true if we saw a wsopt on the incoming SYN */
 	u32int	cwind;			/* Congestion window */
 	int	scale;			/* desired rcv.scale */
-	ushort	ssthresh;		/* Slow start threshold */
+	u32int	ssthresh;		/* Slow start threshold */
 	int	resent;			/* Bytes just resent */
 	int	irs;			/* Initial received squence */
 	ushort	mss;			/* Mean segment size */

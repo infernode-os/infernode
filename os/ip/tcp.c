@@ -66,6 +66,7 @@ enum
 	DEF_MSS		= 1460,		/* Default mean segment */
 	DEF_MSS6	= 1280,		/* Default mean segment (min) for v6 */
 	DEF_RTT		= 500,		/* Default round trip */
+	MINRTO		= 200,		/* Least retransmission timeout (ms) */
 	DEF_KAT		= 120000,	/* Default time (ms) between keep alives */
 	TCP_LISTEN	= 0,		/* Listen connection */
 	TCP_CONNECT	= 1,		/* Outgoing connection */
@@ -3338,9 +3339,16 @@ tcpsettimer(Tcpctl *tcb)
 	x = backoff(tcb->backoff) *
 		(tcb->mdev + (tcb->srtt>>LOGAGAIN) + MSPTICK) / MSPTICK;
 
-	/* bounded twixt 1/2 and 64 seconds */
-	if(x < 500/MSPTICK)
-		x = 500/MSPTICK;
+	/*
+	 * bounded twixt MINRTO and 64 seconds.  The floor was 1/2 second;
+	 * on a LAN, whose round trip is a millisecond, it was every
+	 * retransmission's whole cost, and a lost segment that nothing
+	 * follows (a 9P request alone, a reply's last segment) is recovered
+	 * only by this timer.  200 ms, as Linux's TCP_RTO_MIN; a long round
+	 * trip sets a longer timeout of itself.
+	 */
+	if(x < MINRTO/MSPTICK)
+		x = MINRTO/MSPTICK;
 	else if(x > (64000/MSPTICK))
 		x = 64000/MSPTICK;
 	tcb->timer.start = x;

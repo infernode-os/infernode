@@ -21,6 +21,7 @@ SYSMODULES=\
 	layers.m\
 	wmclient.m\
 	i420.m\
+	parread.m\
 
 DISBIN=$ROOT/dis/mpeg
 

@@ -118,6 +118,10 @@ drawmodinit(void)
 	TScreen = dtype(freedrawscreen, sizeof(DScreen), screenmap, sizeof(screenmap));
 	TDisplay = dtype(freedrawdisplay, sizeof(DDisplay), displaymap, sizeof(displaymap));
 	TPath = dtype(freeheap, sizeof(Draw_Path), pathmap, sizeof(pathmap));
+	heapaudittype("Display", &TDisplay);
+	heapaudittype("Font", &TFont);
+	heapaudittype("Image", &TImage);
+	heapaudittype("Screen", &TScreen);
 	builtinmod("$Draw", Drawmodtab, Drawmodlen);
 }
 

@@ -506,32 +506,21 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	for(i := 0; i < len hexsigma; i++)
 		hexsigma[i] = 0;
 
-	if(hashis256(ver)){
-		secretin := array[Keyring->SHA256dlen] of byte;
-		secretout := array[Keyring->SHA256dlen] of byte;
-		# Server reverses client's direction: client out=HMAC("two"), so server in=HMAC("two")
-		kr->hmac_sha256(digest, len digest, array of byte "one", secretout, nil);
-		kr->hmac_sha256(digest, len digest, array of byte "two", secretin, nil);
-		e := ssl->secret(conn, secretin, secretout);
-		if(e != nil){
-			log("setsecret: " + e);
-			return (nil, nil, C);
-		}
-	}else{
-		secretin := array[Keyring->SHA1dlen] of byte;
-		secretout := array[Keyring->SHA1dlen] of byte;
-		# Server reverses client's direction: client out=HMAC("two"), so server in=HMAC("two")
-		kr->hmac_sha1(digest, len digest, array of byte "one", secretout, nil);
-		kr->hmac_sha1(digest, len digest, array of byte "two", secretin, nil);
-		e := ssl->secret(conn, secretin, secretout);
-		if(e != nil){
-			log("setsecret: " + e);
-			return (nil, nil, C);
-		}
+	# HMAC-SHA-384 for every version, as the client (secstore(2)): 48
+	# bytes each way, as aes_256_gcm needs 32 at the least
+	secretin := array[Keyring->SHA384dlen] of byte;
+	secretout := array[Keyring->SHA384dlen] of byte;
+	# Server reverses client's direction: client out=HMAC("two"), so server in=HMAC("two")
+	kr->hmac_sha384(digest, len digest, array of byte "one", secretout, nil);
+	kr->hmac_sha384(digest, len digest, array of byte "two", secretin, nil);
+	e := ssl->secret(conn, secretin, secretout);
+	if(e != nil){
+		log("setsecret: " + e);
+		return (nil, nil, C);
 	}
 	erasekey(digest);
 
-	if(sys->fprint(conn.cfd, "alg sha256 aes_128_cbc") < 0)
+	if(sys->fprint(conn.cfd, "alg aes_256_gcm") < 0)
 		return (nil, nil, C);
 
 	# Authenticated: clear any accumulated failure state for this account.

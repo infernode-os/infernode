@@ -148,7 +148,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		arg->usage();
 	arg = nil;
 	if (doauth && algs == nil)
-		algs = "aes_256_cbc" :: "sha256" :: nil;
+		algs = "aes_256_gcm" :: nil;
 	if (doauth && algs == nil)
 		error("authentication requested, but no SSL algorithms are available");
 	addr := netmkaddr(hd argv, "tcp", "styx");

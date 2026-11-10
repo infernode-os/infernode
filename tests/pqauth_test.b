@@ -297,7 +297,7 @@ encryptedRoundtrip(t: ref T, cfd, sfdForServer: ref Sys->FD,
 	rc := chan of (array of byte, string);
 	spawn serverside(sfdForServer, bob, len msg, rc);
 
-	(wrapped, cerr) := auth->client("aes_256_cbc sha256", alice, cfd);
+	(wrapped, cerr) := auth->client("aes_256_gcm", alice, cfd);
 	if(wrapped == nil)
 		t.fatal("client auth+ssl failed: " + cerr);
 	if(sys->write(wrapped, msg, len msg) != len msg)
@@ -363,7 +363,7 @@ testTcpChannel(t: ref T)
 		return;
 	}
 
-	(wrapped, cerr) := auth->client("aes_256_cbc sha256", alice, dc.dfd);
+	(wrapped, cerr) := auth->client("aes_256_gcm", alice, dc.dfd);
 	if(wrapped == nil)
 		t.fatal("client auth+ssl over tcp failed: " + cerr);
 	if(sys->write(wrapped, msg, len msg) != len msg)

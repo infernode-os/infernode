@@ -150,7 +150,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		}
 	}
 	if (doauth && algs == nil)
-		algs = "aes_256_cbc" :: "sha256" :: nil;
+		algs = "aes_256_gcm" :: nil;
 	if (doauth && algs == nil) {
 		sys->fprint(stderr(), "listen: authentication requested, but no SSL algorithms are available\n");
 		raise "fail:no auth algorithms";

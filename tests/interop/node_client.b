@@ -3,7 +3,7 @@ implement NodeClient;
 # Minimal connecting node for cross-binary interop testing.
 #   node_client keyfile addr mountpt file outpath
 # Reads its Authinfo, dials `addr`, authenticates with the hybrid PQ handshake,
-# wraps the line in aes_256_cbc/sha256 ssl, mounts the remote export at
+# wraps the line in aes_256_gcm ssl, mounts the remote export at
 # `mountpt`, reads `mountpt+file` over the encrypted 9P channel and writes the
 # bytes to `outpath` (so a harness can compare against the source). Prints
 # OK/ERR summary to stderr.  (A dedicated output file avoids relying on how emu
@@ -37,7 +37,7 @@ init(nil: ref Draw->Context, args: list of string)
 	(dok, dc) := sys->dial(addr, nil);
 	if(dok < 0) fail(sys->sprint("dial %s: %r", addr));
 
-	(wrapped, cerr) := auth->client("aes_256_cbc sha256", ai, dc.dfd);
+	(wrapped, cerr) := auth->client("aes_256_gcm", ai, dc.dfd);
 	if(wrapped == nil) fail("client auth+ssl: " + cerr);
 	sys->fprint(sys->fildes(2), "node_client: authenticated to %s\n", addr);
 

@@ -55,7 +55,7 @@ NinepBench: module
 };
 
 noauth := 0;
-alg := "aes_256_cbc/sha256";
+alg := "aes_256_gcm";
 keyfile := "";
 nstats := 50;
 errors := 0;

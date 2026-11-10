@@ -750,29 +750,22 @@ setsecret(conn: ref Dial->Connection, sigma: array of byte, direction: int): str
 	return setsecretver(conn, sigma, direction, VERSION1);
 }
 
-setsecretver(conn: ref Dial->Connection, sigma: array of byte, direction: int, version: string): string
+#
+# The session's secrets each way, HMAC-SHA-384 of the session key, for
+# every version: ssl(3)'s aes_256_gcm takes 32 bytes each way at the
+# least (secstore's SHA-1 ones were 20), and the version 1 PAK is kept
+# only for accounts to log on once and move to version 3.
+#
+setsecretver(conn: ref Dial->Connection, sigma: array of byte, direction: int, nil: string): string
 {
-	if(hashis256(version)){
-		secretin := array[Keyring->SHA256dlen] of byte;
-		secretout := array[Keyring->SHA256dlen] of byte;
-		if(direction != 0){
-			kr->hmac_sha256(sigma, len sigma, array of byte "one", secretout, nil);
-			kr->hmac_sha256(sigma, len sigma, array of byte "two", secretin, nil);
-		}else{
-			kr->hmac_sha256(sigma, len sigma, array of byte "two", secretout, nil);
-			kr->hmac_sha256(sigma, len sigma, array of byte "one", secretin, nil);
-		}
-		return ssl->secret(conn, secretin, secretout);
-	}
-
-	secretin := array[Keyring->SHA1dlen] of byte;
-	secretout := array[Keyring->SHA1dlen] of byte;
+	secretin := array[Keyring->SHA384dlen] of byte;
+	secretout := array[Keyring->SHA384dlen] of byte;
 	if(direction != 0){
-		kr->hmac_sha1(sigma, len sigma, array of byte "one", secretout, nil);
-		kr->hmac_sha1(sigma, len sigma, array of byte "two", secretin, nil);
+		kr->hmac_sha384(sigma, len sigma, array of byte "one", secretout, nil);
+		kr->hmac_sha384(sigma, len sigma, array of byte "two", secretin, nil);
 	}else{
-		kr->hmac_sha1(sigma, len sigma, array of byte "two", secretout, nil);
-		kr->hmac_sha1(sigma, len sigma, array of byte "one", secretin, nil);
+		kr->hmac_sha384(sigma, len sigma, array of byte "two", secretout, nil);
+		kr->hmac_sha384(sigma, len sigma, array of byte "one", secretin, nil);
 	}
 	return ssl->secret(conn, secretin, secretout);
 }
@@ -854,7 +847,7 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 	if(err != nil)
 		return nil;
 	erasekey(digest);
-	if(sys->fprint(conn.cfd, "alg sha256 aes_128_cbc") < 0)
+	if(sys->fprint(conn.cfd, "alg aes_256_gcm") < 0)
 		return nil;
 	return S;
 }
@@ -1159,7 +1152,7 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 	if(err != nil)
 		return nil;
 	erasekey(digest);
-	if(sys->fprint(conn.cfd, "alg sha256 aes_128_cbc") < 0)
+	if(sys->fprint(conn.cfd, "alg aes_256_gcm") < 0)
 		return nil;
 	return S;
 }

@@ -154,8 +154,8 @@ sequenceDiagram
     Note over C,S: digest = SHA-256("session", C, S, m, mu, sigma, Hi)<br/>secret_out = HMAC-SHA-256(digest, "one")<br/>secret_in  = HMAC-SHA-256(digest, "two")<br/>(server uses opposite direction labels)
     C-)S: ssl->secret(in, out)
     S-)C: ssl->secret(in, out)
-    C->>S: alg sha256 aes_128_cbc
-    S->>C: alg sha256 aes_128_cbc
+    C->>S: alg aes_256_gcm
+    S->>C: alg aes_256_gcm
     S-->>C: OK
 
     Note over C,S: Channel is now mutually authenticated and encrypted.<br/>AES-128-CBC bulk, HMAC-SHA-256 integrity,<br/>keys derived from PAK shared secret.
@@ -535,7 +535,7 @@ flowchart LR
 After PAK completes, `secstored.b:310` and `secstore.b:598` both send:
 
 ```
-fprint(conn.cfd, "alg sha256 aes_128_cbc")
+fprint(conn.cfd, "alg aes_256_gcm")
 ```
 
 Inferno's SSL device parses this as a request for:

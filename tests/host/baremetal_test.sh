@@ -5294,6 +5294,9 @@ try:
     typed("cat /net/ether0/ifstats")
     typed("iplocktest", 3)
     typed("niltest", 2)
+    # libsec against OpenSSL's and NIST's answers on a cortex-a53, which
+    # has the AES, PMULL and SHA-256 instructions the kernel then takes
+    typed("/dis/tests/libsec_kat_test.dis -v", 6)
     # CNSA strict mode on before anything authenticates, as osinit does
     # from the card's cnsamode file: the mount below is then ML-KEM-1024
     # both ways, on kernel stacks (the bcm2837 boot keeps ML-KEM-768)
@@ -5476,6 +5479,13 @@ else
     fail "virt: screen -- '$scr'"
 fi
 vrefute "nothing panics with every device attached" "panic:"
+if grep -aq -- '--- PASS: Libsec/AESGCM' <<<"$OUT" && grep -aq -- '--- PASS: Libsec/AESCBC' <<<"$OUT" \
+        && grep -aq -- '--- PASS: Libsec/SHA256' <<<"$OUT" && ! grep -aq -- '--- FAIL: Libsec/' <<<"$OUT"; then
+    pass "virt: libsec_kat_test: AES-GCM, AES-CBC and SHA-256 by the ARMv8 instructions give OpenSSL's and NIST's answers"
+else
+    fail "virt: libsec_kat_test did not pass: $(grep -aE 'Libsec/|passed' <<<"$OUT" | head -6 | tr '\n' ' ')"
+fi
+
 # the shell's prompt can land on the line before the output: "; VIRT-DATE ..."
 if grep -aqE '^(; )*VIRT-DATE.* 20[2-9][0-9]' <<<"$OUT"; then
     pass "virt: date(1) has the PL031's year, with no time server"

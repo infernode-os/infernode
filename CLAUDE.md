@@ -389,6 +389,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `example_test.b` | Reference template for new tests |
 | `asyncio_test.b` | Async I/O, channels, spawned tasks |
 | `crypto_test.b` | Cryptographic operations |
+| `ssl_hmac_test.b` | devssl's `hmac_sha384` (ssl(3)): one end of a pipe pushed with ssl and the other read raw, each record's 48-byte MAC checked byte for byte against Keyring's `hmac_sha384` of its data and number; records both ways through two pushed ends at sizes to 20000 bytes, digest alone and with `aes_256_cbc`, and `sha256` as it was; a record with a byte of its data or its MAC changed refused |
 | `spawn_test.b` | Process spawning |
 | `spawn_exec_test.b` | Process exec after spawn |
 | `tcp_test.b` | TCP networking |

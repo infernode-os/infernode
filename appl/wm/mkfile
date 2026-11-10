@@ -119,6 +119,7 @@ SYSMODULES=\
 	appfs.m\
 	i420.m\
 	layers.m\
+	parread.m\
 
 DISBIN=$ROOT/dis/wm
 

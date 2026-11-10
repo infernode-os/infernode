@@ -216,6 +216,7 @@ TARG=\
 	utf21_test.dis\
 	styx_pack_test.dis\
 	ninep_pack_test.dis\
+	parread_test.dis\
 	devprog_read_test.dis\
 	devprog_nslock_test.dis\
 	kill_deadserver_test.dis\
@@ -332,6 +333,7 @@ MODULES=\
 SYSMODULES=\
 	tensor.m\
 	layers.m\
+	parread.m\
 	visnet.m\
 	woff2.m\
 	touchgest.m\

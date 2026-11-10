@@ -4,8 +4,8 @@ implement CryptoBench;
 # crypto_bench: how fast this machine moves bytes through the crypto a
 # 9P mount pays for, with no network: a copy (the floor), SHA-256 and
 # HMAC-SHA-256, AES-256 in CBC and GCM, ChaCha20-Poly1305, and devssl
-# itself between the ends of a loopback TCP connection (digest alone,
-# and the aes_256_cbc sha256 that mount -C sets), and that connection
+# itself between the ends of a loopback TCP connection (hmac_sha384 alone,
+# and the aes_256_gcm that mount -C sets), and that connection
 # with no devssl on it.  Each for -t seconds (2) on blocks of -b
 # bytes (32K, a message of the size an encrypted mount now takes).  Not
 # a test: it measures.  One line each:
@@ -104,8 +104,8 @@ init(nil: ref Draw->Context, args: list of string)
 	report("chacha20_poly1305", n, sys->millisec() - t0);
 
 	sslpipe("tcp_loopback", nil, buf);
-	sslpipe("ssl_sha256", "sha256", buf);
-	sslpipe("ssl_aes256cbc_sha256", "aes_256_cbc sha256", buf);
+	sslpipe("ssl_hmac_sha384", "hmac_sha384", buf);
+	sslpipe("ssl_aes256gcm", "aes_256_gcm", buf);
 }
 
 # devssl pushed on both ends of a TCP connection over the loopback with

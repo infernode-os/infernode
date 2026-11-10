@@ -214,7 +214,7 @@ boot partition (the one with `config.txt`):
 Put the card back and boot. Check that the node prints:
 
 ```
-boot: cpu listener on tcp!*!rstyx (AES-256 + SHA-256, certificate /usr/inferno/keyring/default)
+boot: cpu listener on tcp!*!rstyx (AES-256-GCM, certificate /usr/inferno/keyring/default)
 ```
 
 If it says `cpulisten is set but … is missing; NOT starting` instead,
@@ -226,7 +226,7 @@ Copy the node's certificate to that machine's
 `~/.infernode/usr/<login>/keyring/default`, then in a login shell there:
 
 ```
-listen -a aes_256_cbc -a sha256 'tcp!*!rstyx' auxi/rstyxd &
+listen -a aes_256_gcm 'tcp!*!rstyx' auxi/rstyxd &
 ```
 
 It runs as long as that emulator does. The host's firewall may ask to
@@ -454,7 +454,7 @@ The steps above assume a release with the fixes from September 2026
 - **Before running `cpu`**, type `bind -a '#i' /dev` in the viewer.
   Older `cpu` bound the wrong device for the display, so without this
   the node draws on its own monitor and your window stays black.
-- **Name the ciphers**, in both 3a and 3b: `cpu -C 'aes_256_cbc sha256' tcp!…`,
+- **Name the ciphers**, in both 3a and 3b: `cpu -C aes_256_gcm tcp!…`,
   quoted exactly so. Older `cpu` defaulted to no encryption, and a node that
   requires both refuses encryption without the MAC (`client omitted
   required integrity algorithm`).
@@ -466,5 +466,5 @@ The steps above assume a release with the fixes from September 2026
 - **A bare-metal node without `cpulisten` support** needs its listener
   started by hand, from its serial or network console, after every
   boot:
-  `mkdir /tmp/client; bind -a /tmp /n; listen -a aes_256_cbc -a sha256 'tcp!*!rstyx' auxi/rstyxd &`.
+  `mkdir /tmp/client; bind -a /tmp /n; listen -a aes_256_gcm 'tcp!*!rstyx' auxi/rstyxd &`.
   Started that way it has the console's full powers, not a desktop's.

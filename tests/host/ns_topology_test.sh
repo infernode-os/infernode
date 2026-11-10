@@ -40,10 +40,10 @@ auth/createsignerkey -f /tmp/nst/keys/signer nst-signer > /dev/null
 auth/mkauthinfo -k 'key=/tmp/nst/keys/signer' \$user /tmp/nst/keys/default
 bind '#|' /tmp/nst/pipe
 listen -A tcp!127.0.0.1!$PORT {export /tmp/nst/pipe}
-listen -k /tmp/nst/keys/default -a aes_256_cbc -a sha256 tcp!127.0.0.1!$((PORT+1)) {export /tmp/nst/pipe}
+listen -k /tmp/nst/keys/default -a aes_256_gcm tcp!127.0.0.1!$((PORT+1)) {export /tmp/nst/pipe}
 sleep 1
 mount -A tcp!127.0.0.1!$PORT /n/plain
-mount -k /tmp/nst/keys/default -C aes_256_cbc/sha256 tcp!127.0.0.1!$((PORT+1)) /n/enc
+mount -k /tmp/nst/keys/default -C aes_256_gcm tcp!127.0.0.1!$((PORT+1)) /n/enc
 memfs /n/mem
 ns > /.ns_topology_test.ns
 d=\`{grep ' /n/enc\$' /.ns_topology_test.ns | sed 's/.*#D\/([0-9]+)\/data.*/\1/'}

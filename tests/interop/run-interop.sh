@@ -5,7 +5,7 @@
 # Launches two *separate* emu processes — a serving node and a connecting
 # node, optionally from two different InferNode trees — and drives a
 # real file transfer between them over the native transport: cert auth + the
-# hybrid post-quantum (ML-KEM-768) STS handshake + aes_256_cbc/sha256 ssl line
+# hybrid post-quantum (ML-KEM-768) STS handshake + aes_256_gcm ssl line
 # encryption + 9P export/mount.  Proves two independently-built nodes speak the
 # same authenticated, post-quantum-encrypted wire protocol.
 #

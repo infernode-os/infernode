@@ -4,7 +4,7 @@ implement NinepDisconnectTest;
 # Readers killed in the middle of their reads, through an encrypted 9P
 # mount, round after round, as viewers of a feed come and go:
 #  - export(2) serves a directory over TCP on the loopback with devssl
-#    pushed (aes_256_cbc sha256, as mount -C and listen's connections
+#    pushed (aes_256_gcm, as mount -C and listen's connections
 #    set it), as `listen ... {export dir}` serves a board's feed
 #  - the directory holds a 1 MB file and a file2chan file, slow, whose
 #    reads answer late, much later, or never, as a feed's do until its
@@ -38,7 +38,7 @@ NinepDisconnectTest: module
 
 SRCFILE: con "/tests/ninep_disconnect_test.b";
 DIR: con "/tmp/ninep_disconnect_test";
-ALG: con "aes_256_cbc sha256";
+ALG: con "aes_256_gcm";
 BIGLEN: con 1024*1024;
 PIECE: con 32*1024;
 

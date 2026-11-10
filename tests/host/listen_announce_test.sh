@@ -32,17 +32,17 @@ mkdir -p /tmp/lat/keys /tmp/lat/d /n/a /n/b
 echo served > /tmp/lat/d/f
 auth/createsignerkey -f /tmp/lat/keys/signer lat-signer > /dev/null
 auth/mkauthinfo -k 'key=/tmp/lat/keys/signer' \$user /tmp/lat/keys/default
-listen -k /tmp/lat/keys/default -a aes_256_cbc -a sha256 '$ADDR' {export /tmp/lat/d}
+listen -k /tmp/lat/keys/default -a aes_256_gcm '$ADDR' {export /tmp/lat/d}
 sleep 1
-mount -k /tmp/lat/keys/default -C aes_256_cbc/sha256 '$ADDR' /n/a
+mount -k /tmp/lat/keys/default -C aes_256_gcm '$ADDR' /n/a
 cat /n/a/f > /.listen_announce_test.first
 # the listener's own processes; the connection's is in Sh and Export
 for p in \`{ps | grep ' Listen' | sed 's/^ *([0-9]+) .*/\1/'} { echo kill > /prog/\$p/ctl }
 sleep 1
 ps | grep ' Listen' > /.listen_announce_test.left
-listen -k /tmp/lat/keys/default -a aes_256_cbc -a sha256 '$ADDR' {export /tmp/lat/d} >[2] /.listen_announce_test.again
+listen -k /tmp/lat/keys/default -a aes_256_gcm '$ADDR' {export /tmp/lat/d} >[2] /.listen_announce_test.again
 sleep 1
-mount -k /tmp/lat/keys/default -C aes_256_cbc/sha256 '$ADDR' /n/b
+mount -k /tmp/lat/keys/default -C aes_256_gcm '$ADDR' /n/b
 cat /n/b/f > /.listen_announce_test.second
 cat /n/a/f > /.listen_announce_test.still
 echo done > /.listen_announce_test.done

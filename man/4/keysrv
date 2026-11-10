@@ -22,9 +22,8 @@ When invoked, it
 first authenticates the connection using
 .IR security-auth (2),
 requiring the client to use
-.B sha1
-and
-.BR rc4_256 .
+.B aes_256_gcm
+.RI ( ssl (3)).
 If authentication succeeds,
 .I keysrv
 exports a name space containing a file

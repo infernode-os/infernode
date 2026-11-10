@@ -383,6 +383,12 @@ etherbwrite(Ipifc *ifc, Block *bp, int version, uchar *ip)
 	case V4:
 		eh->t[0] = 0x08;
 		eh->t[1] = 0x00;
+#ifdef CHAOS
+		if(chaosdrop()){	/* lost on the way out (os/port/chaos.c) */
+			freeb(bp);
+			break;
+		}
+#endif
 		devtab[er->mchan4->type]->bwrite(er->mchan4, bp, 0);
 		break;
 	case V6:
@@ -416,6 +422,12 @@ etherread4(void *a)
 	}
 	for(;;){
 		bp = devtab[er->mchan4->type]->bread(er->mchan4, ifc->maxtu, 0);
+#ifdef CHAOS
+		if(chaosdrop()){	/* lost on the way in */
+			freeb(bp);
+			continue;
+		}
+#endif
 		if(!canrlock(&ifc->rwl)){
 			freeb(bp);
 			continue;

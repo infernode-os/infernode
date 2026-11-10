@@ -6,6 +6,20 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **A native kernel's TCP no longer sends past its peer's window.**
+  When more was in flight than the peer's window allowed -- which
+  happens whenever the peer's right edge draws back even a byte, as a
+  scaled window rounded to its granularity does (Linux's too) -- the
+  sender's usable window, unsigned, wrapped to 4G, and it sent full
+  segments hundreds of K past the window. The receiver dropped them all
+  and the sender recovered one segment a round trip. Any connection
+  whose receiver fell behind its sender could hit it: devssl over a Pi
+  4's loopback with 24K or 32K records ran at 1 MB/s; with the fix,
+  24-67 MB/s (SHA-256) and 18-35 MB/s (AES-256-CBC with SHA-256), as
+  with 16K records.
+
+### Fixed
+
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a
   plain connection and 32512 bytes on an encrypted one (`mount -k`,
   `-C`, listen's connections), and gets what the server takes. Over the

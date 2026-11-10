@@ -389,6 +389,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `example_test.b` | Reference template for new tests |
 | `asyncio_test.b` | Async I/O, channels, spawned tasks |
 | `crypto_test.b` | Cryptographic operations |
+| `login_test.b` | login(2) against a real `auth/logind` over loopback TCP, each side in an environment of its own: neither in CNSA mode (ChaCha20-Poly1305), both (AES-256-GCM with HKDF-SHA-384), a CNSA client with a signer not in CNSA mode; a signer in CNSA mode refusing a client not in it and saying why; a wrong password refused either way; each certificate verified with the signer's key |
 | `spawn_test.b` | Process spawning |
 | `spawn_exec_test.b` | Process exec after spawn |
 | `tcp_test.b` | TCP networking |

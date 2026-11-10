@@ -1413,7 +1413,7 @@ jobs:
         include:
           - arch: arm64
             label: ARM64
-            runner: macos-15
+            runner: macos-14   # macos-15 went unacquired six times for v0.10.0 (GitHub arm64 capacity); headless needs no macOS 15
             homebrew: /opt/homebrew
           # Intel Macs (#786), for as long as GitHub has an Intel image.
           - arch: amd64
@@ -2199,6 +2199,7 @@ jobs:
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
           | Raspberry Pi 3B+ | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi3bplus.img.xz` |
           | Raspberry Pi 4B | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi4b.img.xz` |
+          | Raspberry Pi 5 | ARM64, native (no host OS); preview, not yet booted from a card | `infernode-${{ steps.version.outputs.version }}-rpi5.img.xz` |
 
           **Xenith**, the text environment on its own, as an app:
 
@@ -2224,7 +2225,7 @@ jobs:
 
           **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
 
-          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+ and 4B images are not interchangeable. For Wi-Fi, put a `wifi` file on the card (`essid` and `password` lines); for Bluetooth, a `bt` file: see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md). The images carry Broadcom's boot firmware and Cypress's Wi-Fi firmware and Bluetooth patch, each with its licence, for use on the Raspberry Pi they are for.
+          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+, 4B and 5 images are not interchangeable. The Pi 5 image is a preview: it is not in Raspberry Pi Imager's list, and has not yet been booted from a card. For Wi-Fi, put a `wifi` file on the card (`essid` and `password` lines); for Bluetooth, a `bt` file: see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md). The images carry Broadcom's boot firmware and Cypress's Wi-Fi firmware and Bluetooth patch, each with its licence, for use on the Raspberry Pi they are for.
 
           **Xenith (Linux):** Extract, then `./xenith [file ...]`. `./setup-desktop.sh` adds it to the app menu (files open with it) and puts `xenith` on your PATH. It shares `~/.infernode` with InferNode.
 

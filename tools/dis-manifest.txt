@@ -865,6 +865,10 @@ dis/tests/ninepsrc_config_test.dis
 dis/tests/nmea_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
+dis/tests/ninep_bench.dis
+dis/tests/ninep_msize_test.dis
+dis/tests/crypto_bench.dis
+dis/tests/tcpwatch.dis
 dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis
 dis/tests/outlinefont_test.dis

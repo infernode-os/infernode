@@ -69,31 +69,31 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	if(s != id)
 		return ("unexpected reply from signer: " + s, nil);
 
-	# user->CA	ivec (32 bytes: 20 for key derivation salt + 12 for AEAD nonce)
-	ivec := rand->randombuf(rand->ReallyRandom, 32);
+	# user->CA	ivec: a salt for the key derivation and the AEAD's nonce.
+	# Its length says which AEAD the client takes (see login(6)):
+	#   32 bytes (20 salt + 12 nonce): ChaCha20-Poly1305, HKDF-SHA-256
+	#   44 bytes (32 salt + 12 nonce): AES-256-GCM, HKDF-SHA-384 (CNSA)
+	# A client in CNSA mode (/env/cnsamode) sends only the second; a
+	# signer in CNSA mode takes only the second.
+	cnsa := cnsamode();
+	nsalt := 20;
+	if(cnsa)
+		nsalt = 32;
+	ivec := rand->randombuf(rand->ReallyRandom, nsalt+12);
 	if(kr->putbytearray(c.dfd, ivec, len ivec) < 0)
 		return (sys->sprint("can't send initialization vector: %r"), nil);
 
-	# Derive 32-byte ChaCha20-Poly1305 key from password + IV
-	# using HKDF (RFC 5869) with HMAC-SHA256:
-	#   Extract: PRK = HMAC-SHA256(salt=ivec[0:20], IKM=SHA-256(password))
-	#   Expand:  key = HMAC-SHA256(PRK, "infernode login aead" || 0x01)
+	# The AEAD's key, by HKDF (RFC 5869) from the password's SHA-256,
+	# which is what the signer keeps (changelogin(8)):
+	#   Extract: PRK = HMAC-H(salt, IKM=SHA-256(password))
+	#   Expand:  key = HMAC-H(PRK, info || 0x01)[0:32]
 	pwbuf := array of byte password;
 	pwdigest := array[Keyring->SHA256dlen] of byte;
 	kr->sha256(pwbuf, len pwbuf, pwdigest, nil);
-	salt := ivec[0:20];
-	prk := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(pwdigest, len pwdigest, salt, prk, nil);
-	hkdfinfo := array of byte "infernode login aead";
-	expandinput := array[len hkdfinfo + 1] of byte;
-	expandinput[0:] = hkdfinfo;
-	expandinput[len hkdfinfo] = byte 1;
-	aeadkey := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(expandinput, len expandinput, prk, aeadkey, nil);
-	nonce := ivec[20:32];
+	aeadkey := loginkey(cnsa, pwdigest, ivec[0:nsalt]);
+	nonce := ivec[nsalt:];
 
-	# CA -> user	AEAD-encrypted alpha**r0 mod p
-	# Receive ciphertext + 16-byte Poly1305 tag
+	# CA -> user	AEAD-encrypted alpha**r0 mod p, then its 16-byte tag
 	ciphertext: array of byte;
 	authtag: array of byte;
 	(ciphertext, err) = kr->getbytearray(c.dfd);
@@ -106,8 +106,11 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	if(err != nil)
 		return ("remote:" + err, nil);
 
-	# Decrypt with ChaCha20-Poly1305 (AEAD - authenticates and decrypts)
-	plaintext := kr->ccpolydecrypt(ciphertext, nil, authtag, aeadkey, nonce);
+	plaintext: array of byte;
+	if(cnsa)
+		plaintext = kr->aesgcmdecrypt(kr->aesgcmsetup(aeadkey, nonce), ciphertext, nil, authtag);
+	else
+		plaintext = kr->ccpolydecrypt(ciphertext, nil, authtag, aeadkey, nonce);
 	if(plaintext == nil)
 		return ("name or secret incorrect (AEAD decryption failed)", nil);
 	alphar0 := IPint.b64toip(string plaintext);
@@ -178,6 +181,47 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 
 	info.cert = kr->strtocert(s);
 	return(nil, info);
+}
+
+# The AEAD key: HKDF-SHA-256 for ChaCha20-Poly1305, HKDF-SHA-384 for
+# AES-256-GCM (CNSA admits SHA-384, not SHA-256), 32 bytes either way.
+# logind.b has the same function; tests/login_test.b runs the two together.
+loginkey(cnsa: int, ikm, salt: array of byte): array of byte
+{
+	info := "infernode login aead";
+	dlen := Keyring->SHA256dlen;
+	if(cnsa){
+		info = "infernode login aes-256-gcm";
+		dlen = Keyring->SHA384dlen;
+	}
+	prk := array[dlen] of byte;
+	t := array[dlen] of byte;
+	inf := array of byte info;
+	ex := array[len inf + 1] of byte;
+	ex[0:] = inf;
+	ex[len inf] = byte 1;
+	if(cnsa){
+		kr->hmac_sha384(ikm, len ikm, salt, prk, nil);
+		kr->hmac_sha384(ex, len ex, prk, t, nil);
+	}else{
+		kr->hmac_sha256(ikm, len ikm, salt, prk, nil);
+		kr->hmac_sha256(ex, len ex, prk, t, nil);
+	}
+	return t[0:32];
+}
+
+# CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.
+cnsamode(): int
+{
+	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	c := buf[0];
+	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
 }
 
 nomod(mod: string): (string, ref Keyring->Authinfo)

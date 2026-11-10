@@ -4,6 +4,25 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **9P mounts carry messages larger than 8K.** A mount offers 64K on a
+  plain connection and 32512 bytes on an encrypted one (`mount -k`,
+  `-C`, listen's connections), and gets what the server takes. Over the
+  wire from a Jetson to a Raspberry Pi, a single reader went from 5.6
+  to 10.4 MB/s encrypted.
+- **Stat works whatever message size a client offers.** exportfs gave
+  a stat the rest of the message as its room in a 16-bit field, so a
+  client offering more than 65544 bytes (Linux's v9fs offers 512K) had
+  every stat refused, "stat buffer too small". This, not devssl, is why
+  raising the size was reverted in May (INFR-214).
+- **Replies on an encrypted connection are not interleaved.** devssl
+  sent a write longer than about 32K as pieces locked one at a time, so
+  two replies written at once could interleave, and the client matched
+  replies to the wrong requests ("unexpected reply tag") until the
+  mount wedged. Every server built before this release has it, which is
+  why an encrypted mount offers no more than 32512 bytes.
+
 ## [0.10.0] - 2026-11-09
 
 This release adds a native kernel for the Raspberry Pi 5, and runs Dis

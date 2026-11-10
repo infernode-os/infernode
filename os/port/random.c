@@ -5,50 +5,51 @@
  * all, and every board's kernel has this one.
  *
  * Imported from upstream Inferno os/port/random.c and since rewritten
- * twice. Upstream stirred a pool with clock jitter and handed out what
- * was in it. #1051 made the rule that a secret comes only from a
+ * three times. Upstream stirred a pool with clock jitter and handed out
+ * what was in it. #1051 made the rule that a secret comes only from a
  * hardware generator, and kept it by reading the generator for every
- * byte asked for. That kept the rule and nothing more: a reader got
- * whatever the hardware had just said, unwhitened, with nothing behind
- * it if the hardware were wrong in a way its own tests miss, at the
- * hardware's speed (an RNG200 gives about 190 KB/s); and a key made
- * while the generator had nothing waited holding the Dis VM, so every
- * program on it stopped too.
+ * byte asked for: at the hardware's speed (an RNG200 gives about
+ * 190 KB/s), with nothing behind it, and a key made while the generator
+ * had nothing waited holding the Dis VM, so every program on it stopped
+ * too. So a deterministic generator came to stand between the hardware
+ * and every reader, as in Linux, the BSDs and 9front; it was ChaCha20,
+ * which no NIST or CNSA list admits as a generator. It is now:
  *
- * So now a deterministic generator stands between the hardware and
- * every reader, as in Linux, the BSDs and 9front:
+ *	HMAC_DRBG with SHA-512 (NIST SP 800-90A Rev. 1, 10.1.2), at its
+ *	full 256-bit strength, without prediction resistance: each
+ *	request is a Generate of at most 64K (the specification allows
+ *	2^19 bits), followed by its Update, so the state that made a
+ *	request's output is gone when it returns (backtracking
+ *	resistance), as ChaCha20's fast key erasure was.
  *
- *	It is ChaCha20 (RFC 8439) with a 256-bit key, the construction
- *	libsec's hosted genrandom.c uses ("fast key erasure"): each
- *	request first takes 32 bytes of keystream as the next key, then
- *	uses what follows as its output and forgets the state it came
- *	from. What a request returned cannot be worked back from
- *	anything left in memory after it.
+ *	It is instantiated from the hardware alone: Seedbytes of entropy
+ *	input and Noncebytes of nonce, both read from the generator, with
+ *	a personalization string naming this generator. Until they have
+ *	come NOTHING is returned: a reader waits, saying why on the console
+ *	every five seconds. The RNG200 is taken to give 4 bits of entropy
+ *	in a byte, so Seedbytes, 64, carry the 256 bits the strength needs.
  *
- *	It is keyed from the hardware generator alone: 32 bytes of it,
- *	hashed with SHA-256 together with 32 bytes of the generator's
- *	own stream, so a reseed adds to what it had and never replaces
- *	it with something worse. Until the first 32 bytes have come,
- *	NOTHING is returned: a reader waits, saying why on the console
- *	every five seconds.
+ *	It reseeds from the hardware (Seedbytes, SP 800-90A's Reseed) every
+ *	Reseedms or Reseedbytes, whichever comes first, far within the
+ *	specification's 2^48 requests, so a state that leaked is of use for
+ *	a second at most. When the hardware has nothing at a reseed, the
+ *	old state goes on serving -- it is still a secret no one has seen
+ *	-- but only for Stalems: after that a generator that has stopped is
+ *	taken to have broken, and readers wait for it as they waited at
+ *	boot.
  *
- *	It reseeds from the hardware every Reseedms or Reseedbytes,
- *	whichever comes first, so a state that leaked is of use for a
- *	second at most. When the hardware has nothing at a reseed, the
- *	old key goes on serving -- it is still a secret no one has seen
- *	-- but only for Stalems: after that a generator that has stopped
- *	is taken to have broken, and readers wait for it as they waited
- *	at boot.
+ *	The hardware's bytes pass SP 800-90B's two continuous health tests
+ *	(4.4.1 repetition count, 4.4.2 adaptive proportion, at the 4 bits a
+ *	byte claimed above and a false alarm of one in 2^20) before they
+ *	are used, and seeds that are one 32-bit word over and over, or that
+ *	repeat the last seed, are not taken: an unmapped register or a
+ *	stuck FIFO reads like that, and the hardware's own tests do not see
+ *	what a driver does with its words.
  *
- *	32 bytes from the hardware that are one 32-bit word eight times,
- *	or that repeat the last 32 it gave, are not taken: an unmapped
- *	register or a stuck FIFO reads like that, and the hardware's own
- *	health tests do not see what a driver does with its words.
- *
- *	ChaCha20 is checked against RFC 8439's test vector before its
- *	first use. A kernel built wrong (an alignment fault, a compiler
- *	that took liberties) would otherwise make a stream that looks
- *	random and is not the one specified; this one panics instead.
+ *	HMAC_DRBG is checked against NIST's CAVP vectors (HMAC_DRBG.rsp,
+ *	SHA-512, without and with a reseed) before its first use. A kernel
+ *	built wrong would otherwise make a stream that looks random and is
+ *	not the one specified; this one panics instead.
  *
  *	A reader that waits lets go of the Dis VM while it does, when it
  *	has it (a key made by a Keyring builtin), so the rest of the
@@ -67,7 +68,7 @@
  * An emulator with no generator can have a counter instead, when its
  * boot command line holds the word "insecurerandom", which says in so
  * many words what the boot is; tests/host/baremetal_test.sh passes it
- * to the QEMU machines that have no generator. The counter then keys
+ * to the QEMU machines that have no generator. The counter then seeds
  * this generator, whose output is exactly as predictable as the
  * counter, and the console says so in capitals when it is first used.
  */
@@ -84,29 +85,47 @@
 
 enum
 {
-	Seedbytes	= 32,
+	Seedbytes	= 64,		/* entropy input: 256 bits at 4 bits a byte */
+	Noncebytes	= 16,		/* the nonce, at instantiation */
+	Outlen		= SHA512dlen,	/* HMAC_DRBG's K and V */
 	Reseedms	= 1000,
 	Reseedbytes	= 1<<20,
 	Retryms		= 100,		/* a dry generator is asked again no sooner */
-	Stalems		= 10*60*1000,	/* the longest the old key serves while the generator is dry */
-	Chunk		= 64*1024,	/* a longer request rekeys between pieces */
+	Stalems		= 10*60*1000,	/* the longest the old state serves while the generator is dry */
+	Chunk		= 64*1024,	/* the most one Generate gives (2^19 bits) */
 	Tellms		= 5000,
+
+	/* SP 800-90B 4.4: H = 4 bits a byte, alpha = 2^-20 */
+	Rctcutoff	= 6,		/* 1 + ceil(20/H) */
+	Aptwindow	= 512,
+	Aptcutoff	= 62,		/* critbinom(512, 2^-4, 1-2^-20) */
 };
+
+static char personal[] = "InferNode os/port/random.c HMAC_DRBG SHA-512";
 
 static struct
 {
 	QLock	q;
-	ChaChastate cs;
+	uchar	k[Outlen];
+	uchar	v[Outlen];
+	uvlong	counter;	/* SP 800-90A's reseed_counter */
 	int	seeded;		/* 0 never, 1 by the hardware, 2 by the counter (insecurerandom) */
 	vlong	seedms;		/* when last reseeded */
 	int	dry;		/* the hardware had no reseed to give at triedms */
 	vlong	triedms;
 	uvlong	since;		/* bytes given since the last reseed */
-	uchar	last[SHA256dlen];	/* the hash of the last seed, to see one repeated */
+	uchar	last[SHA512dlen];	/* the hash of the last seed, to see one repeated */
 	int	katdone;
 	ulong	reseeds;
 	ulong	refused;	/* seeds not taken */
-} drbg;
+
+	/* SP 800-90B's continuous tests, over every byte the hardware gives */
+	int	rctlast;	/* the last byte, or -1 */
+	int	rctrun;
+	int	aptfirst;	/* the window's first byte, or -1 */
+	int	aptcount;
+	int	aptn;
+} drbg = { .rctlast = -1, .aptfirst = -1 };
 
 static int	insecureok(void);
 static int	weakrandom(uchar*, int);
@@ -128,130 +147,315 @@ wipe(void *a, int n)
 }
 
 /*
- * RFC 8439 2.3.2: the block function, key 00..1f, nonce
- * 00:00:00:09:00:00:00:4a:00:00:00:00, block count 1.
+ * HMAC-SHA-512 (RFC 2104) of the pieces p[0..n-1], one after another,
+ * its digest states on the stack: libsec's hmac_x allocates the outer
+ * one, and this runs with drbg.q held, where an allocation could wait
+ * or fail.
  */
 static void
-chachakat(void)
+hmac(uchar *key, uchar **p, int *len, int n, uchar *out)
 {
-	static uchar want[64] = {
-		0x10, 0xf1, 0xe7, 0xe4, 0xd1, 0x3b, 0x59, 0x15, 0x50, 0x0f, 0xdd, 0x1f, 0xa3, 0x20, 0x71, 0xc4,
-		0xc7, 0xd1, 0xf4, 0xc7, 0x33, 0xc0, 0x68, 0x03, 0x04, 0x22, 0xaa, 0x9a, 0xc3, 0xd4, 0x6c, 0x4e,
-		0xd2, 0x82, 0x64, 0x46, 0x07, 0x9f, 0xaa, 0x09, 0x14, 0xc2, 0xd7, 0x05, 0xd9, 0x8b, 0x02, 0xa2,
-		0xb5, 0x12, 0x9c, 0xd1, 0xde, 0x16, 0x4e, 0xb9, 0xcb, 0xd0, 0x83, 0xe8, 0xa2, 0x50, 0x3c, 0x4e,
-	};
-	static uchar nonce[12] = { 0, 0, 0, 0x09, 0, 0, 0, 0x4a, 0, 0, 0, 0 };
-	uchar key[32], out[64+3], *o;
-	ChaChastate cs;
+	SHA512state s;
+	uchar pad[SHA512bsize], in[SHA512dlen];
 	int i;
 
-	for(i = 0; i < 32; i++)
-		key[i] = i;
-	setupChaChastate(&cs, key, 32, nonce, 12, 20);
-	chacha_setctr(&cs, 1);
-	o = out + 3;		/* not word-aligned, as a reader's buffer need not be */
-	memset(o, 0, 64);
-	chacha_encrypt(o, 64, &cs);
-	if(memcmp(o, want, 64) != 0)
-		panic("random: ChaCha20 does not give RFC 8439's test vector; this kernel cannot make keys");
+	memset(pad, 0x36, sizeof pad);
+	for(i = 0; i < Outlen; i++)
+		pad[i] ^= key[i];
+	memset(&s, 0, sizeof s);
+	sha512(pad, sizeof pad, nil, &s);
+	for(i = 0; i < n; i++)
+		if(len[i] > 0)
+			sha512(p[i], len[i], nil, &s);
+	sha512(nil, 0, in, &s);
+
+	memset(pad, 0x5c, sizeof pad);
+	for(i = 0; i < Outlen; i++)
+		pad[i] ^= key[i];
+	memset(&s, 0, sizeof s);
+	sha512(pad, sizeof pad, nil, &s);
+	sha512(in, sizeof in, out, &s);
+	wipe(pad, sizeof pad);
+	wipe(in, sizeof in);
+	wipe(&s, sizeof s);
+}
+
+/* V = HMAC(K, V) */
+static void
+nextv(uchar *k, uchar *v)
+{
+	uchar *p[1];
+	int len[1];
+
+	p[0] = v;
+	len[0] = Outlen;
+	hmac(k, p, len, 1, v);
 }
 
 /*
- * qlocked: the next key from the current one, after which the state
- * that made it is gone (fast key erasure); and in *c, the stream that
- * follows those 32 bytes, so no output is ever also a key.
+ * SP 800-90A 10.1.2.2, HMAC_DRBG_Update, of the state k and v with the
+ * provided data, which is the pieces d0..d2 one after another.
  */
 static void
-rekey(ChaChastate *c)
+update(uchar *k, uchar *v, uchar *d0, int n0, uchar *d1, int n1, uchar *d2, int n2)
 {
-	*c = drbg.cs;
-	chacha_encrypt((uchar*)&drbg.cs.state[4], 32, c);
-	if(++drbg.cs.state[13] == 0)
-		if(++drbg.cs.state[14] == 0)
-			++drbg.cs.state[15];
+	static uchar zero[1] = {0x00}, one[1] = {0x01};
+	uchar *p[5];
+	int len[5];
+
+	p[0] = v;	len[0] = Outlen;
+	p[1] = zero;	len[1] = 1;
+	p[2] = d0;	len[2] = n0;
+	p[3] = d1;	len[3] = n1;
+	p[4] = d2;	len[4] = n2;
+	hmac(k, p, len, 5, k);		/* K = HMAC(K, V || 0x00 || provided) */
+	nextv(k, v);
+	if(n0 + n1 + n2 == 0)
+		return;
+	p[0] = v;	/* the new V */
+	p[1] = one;
+	hmac(k, p, len, 5, k);		/* K = HMAC(K, V || 0x01 || provided) */
+	nextv(k, v);
 }
 
-/* qlocked: n bytes */
+/* 10.1.2.3, Instantiate: K = 0x00.., V = 0x01.., Update(entropy || nonce || personal) */
+static void
+instantiate(uchar *k, uchar *v, uchar *e, int ne, uchar *nonce, int nn, uchar *ps, int nps)
+{
+	memset(k, 0x00, Outlen);
+	memset(v, 0x01, Outlen);
+	update(k, v, e, ne, nonce, nn, ps, nps);
+}
+
+/* 10.1.2.4, Reseed: Update(entropy || additional), none here */
+static void
+reseedwith(uchar *k, uchar *v, uchar *e, int ne)
+{
+	update(k, v, e, ne, nil, 0, nil, 0);
+}
+
+/* 10.1.2.5, Generate, n <= Chunk, no additional input; Update(nil) after */
+static void
+generatewith(uchar *k, uchar *v, uchar *p, int n)
+{
+	int m;
+
+	while(n > 0){
+		nextv(k, v);
+		m = n < Outlen ? n : Outlen;
+		memmove(p, v, m);
+		p += m;
+		n -= m;
+	}
+	update(k, v, nil, 0, nil, 0, nil, 0);
+}
+
+static int
+unhex(char *s, uchar *b)
+{
+	int n, d, i;
+
+	for(n = 0; s[0] && s[1]; s += 2, n++){
+		b[n] = 0;
+		for(i = 0; i < 2; i++){
+			d = s[i];
+			if(d >= '0' && d <= '9')
+				d -= '0';
+			else if(d >= 'a' && d <= 'f')
+				d -= 'a' - 10;
+			else
+				return -1;
+			b[n] = b[n]<<4 | d;
+		}
+	}
+	return n;
+}
+
+/*
+ * NIST CAVP drbgtestvectors, HMAC_DRBG.rsp, [SHA-512],
+ * PredictionResistance False, 256-bit entropy, 128-bit nonce, no
+ * personalization or additional input, 2048 bits returned: COUNT 0 of
+ * drbgvectors_no_reseed, and COUNT 0 of drbgvectors_pr_false (a reseed
+ * between instantiation and the first Generate). The vector's bits are
+ * the second Generate's.
+ */
+static struct {
+	char	*entropy;
+	char	*nonce;
+	char	*reseed;
+	char	*want;
+} kats[] = {
+	{
+	"35049f389a33c0ecb1293238fd951f8ffd517dfde06041d32945b3e26914ba15",
+	"f7328760be6168e6aa9fb54784989a11",
+	nil,
+	"e76491b0260aacfded01ad39fbf1a66a88284caa5123368a2ad9330ee48335e3c9c9ba90e6cbc9429962d60c1a6661edcfaa31d972b8264b9d4562cf18494128a092c17a8da6f3113e8a7edfcd4427082bd390675e9662408144971717303d8dc352c9e8b95e7f35fa2ac9f549b292bc7c4bc7f01ee0a577859ef6e82d79ef23892d167c140d22aac32b64ccdfeee2730528a38763b24227f91ac3ffe47fb11538e435307e77481802b0f613f370ffb0dbeab774fe1efbb1a80d01154a9459e73ad361108bbc86b0914f095136cbe634555ce0bb263618dc5c367291ce0825518987154fe9ecb052b3f0a256fcc30cc14572531c9628973639beda456f2bddf6",
+	},
+	{
+	"48c121b18733af15c27e1dd9ba66a9a81a5579cdba0f5b657ec53c2b9e90bbf6",
+	"bbb7c777428068fad9970891f879b1af",
+	"e0ffefdadb9ccf990504d568bdb4d862cbe17ccce6e22dfcab8b4804fd21421a",
+	"05da6aac7d980da038f65f392841476d37fe70fbd3e369d1f80196e66e54b8fadb1d60e1a0f3d4dc173769d75fc3410549d7a843270a54a068b4fe767d7d9a59604510a875ad1e9731c8afd0fd50b825e2c50d062576175106a9981be37e02ec7c5cd0a69aa0ca65bddaee1b0de532e10cfa1f5bf6a026e47379736a099d6750ab121dbe3622b841baf8bdcbe875c85ba4b586b8b5b57b0fecbec08c12ff2a9453c47c6e32a52103d972c62ab9affb8e728a31fcefbbccc556c0f0a35f4b10ace2d96b906e36cbb72233201e536d3e13b045187b417d2449cad1edd192e061f12d22147b0a176ea8d9c4c35404395b6502ef333a813b6586037479e0fa3c6a23",
+	},
+};
+
+static void
+drbgkat(void)
+{
+	uchar k[Outlen], v[Outlen], e[32], nonce[16], r[32], want[256], out[256+3], *o;
+	int i;
+
+	for(i = 0; i < nelem(kats); i++){
+		unhex(kats[i].entropy, e);
+		unhex(kats[i].nonce, nonce);
+		unhex(kats[i].want, want);
+		instantiate(k, v, e, 32, nonce, 16, nil, 0);
+		if(kats[i].reseed != nil){
+			unhex(kats[i].reseed, r);
+			reseedwith(k, v, r, 32);
+		}
+		o = out + 3;	/* not word-aligned, as a reader's buffer need not be */
+		generatewith(k, v, o, 256);
+		generatewith(k, v, o, 256);
+		if(memcmp(o, want, 256) != 0)
+			panic("random: HMAC_DRBG does not give NIST's CAVP vector %d; this kernel cannot make keys", i);
+	}
+	wipe(k, sizeof k);
+	wipe(v, sizeof v);
+}
+
+/* qlocked: n bytes, Chunk at most a Generate */
 static void
 fill(uchar *p, int n)
 {
-	ChaChastate c;
 	int m;
 
 	while(n > 0){
 		m = n;
 		if(m > Chunk)
 			m = Chunk;
-		rekey(&c);
-		memset(p, 0, m);
-		chacha_encrypt(p, m, &c);
+		generatewith(drbg.k, drbg.v, p, m);
+		drbg.counter++;
 		drbg.since += m;
 		p += m;
 		n -= m;
 	}
-	wipe(&c, sizeof c);
 }
 
 /*
- * qlocked: Seedbytes from the hardware, mixed into the key. 1 when
- * they were; 0 when the generator had none to give, or gave what is
- * refused above; -1 when this machine has none.
+ * qlocked: SP 800-90B's continuous tests on bytes the hardware gave.
+ * 0 when they pass; -1 when the source failed, which is said once a
+ * hundred times and the bytes not used.
+ */
+static int
+healthy(uchar *p, int n)
+{
+	int i, b, bad;
+
+	bad = 0;
+	for(i = 0; i < n; i++){
+		b = p[i];
+		/* 4.4.1 repetition count */
+		if(b == drbg.rctlast){
+			if(++drbg.rctrun >= Rctcutoff)
+				bad = 1;
+		}else{
+			drbg.rctlast = b;
+			drbg.rctrun = 1;
+		}
+		/* 4.4.2 adaptive proportion */
+		if(drbg.aptfirst < 0 || drbg.aptn >= Aptwindow){
+			drbg.aptfirst = b;
+			drbg.aptcount = 1;
+			drbg.aptn = 1;
+		}else{
+			drbg.aptn++;
+			if(b == drbg.aptfirst && ++drbg.aptcount >= Aptcutoff)
+				bad = 1;
+		}
+	}
+	return bad ? -1 : 0;
+}
+
+/*
+ * qlocked: n bytes from the hardware. 1 when they came and passed;
+ * 0 when the generator had none, or failed its tests (*why says which);
+ * -1 when this machine has none, or 2 when there is none and the
+ * command line allows the counter, which then gave them.
+ */
+static int
+hwbytes(uchar *p, int n, char **why)
+{
+	int got, r;
+
+	*why = nil;
+	for(got = 0; got < n; got += r){
+		r = hwrandom(p + got, n - got);
+		if(r < 0 && insecureok()){
+			weakrandom(p + got, n - got);
+			return 2;
+		}
+		if(r <= 0)
+			return r;
+	}
+	if(healthy(p, n) < 0){
+		*why = "bytes that fail SP 800-90B's health tests";
+		return 0;
+	}
+	return 1;
+}
+
+/*
+ * qlocked: a seed from the hardware, instantiating the generator the
+ * first time and reseeding it after. 1 when it was; 0 when the
+ * generator had none to give, or gave what is refused above; -1 when
+ * this machine has none.
  */
 static int
 reseed(void)
 {
-	static uchar nonce[12];
-	uchar buf[2*Seedbytes], h[SHA256dlen];
-	ChaChastate c;
+	uchar seed[Seedbytes+Noncebytes], h[SHA512dlen];
 	u32int *w;
-	int i, got, r, weak;
+	char *why;
+	int i, n, r, weak;
 
-	weak = 0;
-	for(got = 0; got < Seedbytes; got += r){
-		r = hwrandom(buf + Seedbytes + got, Seedbytes - got);
-		if(r < 0 && insecureok()){
-			weakrandom(buf + Seedbytes + got, Seedbytes - got);
-			weak = 1;
-			break;
-		}
-		if(r <= 0){
-			wipe(buf, sizeof buf);
-			return r;
-		}
+	n = drbg.seeded ? Seedbytes : Seedbytes+Noncebytes;
+	r = hwbytes(seed, n, &why);
+	if(r <= 0 && why == nil){
+		wipe(seed, sizeof seed);
+		return r;
 	}
-
-	if(!weak){
-		w = (u32int*)(buf + Seedbytes);
+	weak = r == 2;
+	if(!weak && why == nil){
+		w = (u32int*)seed;
 		for(i = 1; i < Seedbytes/4; i++)
 			if(w[i] != w[0])
 				break;
-		sha256(buf + Seedbytes, Seedbytes, h, nil);
-		if(i == Seedbytes/4 || memcmp(h, drbg.last, sizeof h) == 0){
-			if(drbg.refused++ % 100 == 0)
-				print("random: the hardware generator gave %s; not used (%lud so far)\n",
-					i == Seedbytes/4 ? "one word eight times" : "the same 32 bytes twice",
-					drbg.refused);
-			wipe(buf, sizeof buf);
-			wipe(h, sizeof h);
-			return 0;
-		}
-		memmove(drbg.last, h, sizeof h);
+		sha512(seed, Seedbytes, h, nil);
+		if(i == Seedbytes/4)
+			why = "one word over and over";
+		else if(memcmp(h, drbg.last, sizeof h) == 0)
+			why = "the same seed twice";
+		else
+			memmove(drbg.last, h, sizeof h);
+	}
+	if(why != nil){
+		if(drbg.refused++ % 100 == 0)
+			print("random: the hardware generator gave %s; not used (%lud so far)\n", why, drbg.refused);
+		wipe(seed, sizeof seed);
+		wipe(h, sizeof h);
+		return 0;
 	}
 
-	/* key' = SHA-256(32 bytes of the current stream, or zeros at first || the seed) */
-	memset(buf, 0, Seedbytes);
-	if(drbg.seeded){
-		rekey(&c);
-		chacha_encrypt(buf, Seedbytes, &c);
-		wipe(&c, sizeof c);
-	}
-	sha256(buf, sizeof buf, h, nil);
-	setupChaChastate(&drbg.cs, h, sizeof h, nonce, sizeof nonce, 20);
-	wipe(buf, sizeof buf);
+	if(drbg.seeded == 0){
+		instantiate(drbg.k, drbg.v, seed, Seedbytes, seed+Seedbytes, Noncebytes, (uchar*)personal, strlen(personal));
+		drbg.seeded = weak ? 2 : 1;
+	}else
+		reseedwith(drbg.k, drbg.v, seed, Seedbytes);
+	wipe(seed, sizeof seed);
 	wipe(h, sizeof h);
 
-	if(drbg.seeded == 0)
-		drbg.seeded = weak ? 2 : 1;
+	drbg.counter = 1;
 	drbg.seedms = nowms();
 	drbg.since = 0;
 	drbg.reseeds++;
@@ -269,7 +473,7 @@ drbgready(void)
 	int r;
 
 	if(!drbg.katdone){
-		chachakat();
+		drbgkat();
 		drbg.katdone = 1;
 	}
 	now = nowms();
@@ -379,7 +583,7 @@ generate(uchar *p, int n, int why)
 }
 
 /*
- * Nothing to start: the first request checks ChaCha20 and seeds. But a
+ * Nothing to start: the first request checks HMAC_DRBG and seeds. But a
  * boot that will hand out the counter says so now, not at the first
  * read, which may be long after the log anyone looks at.
  */

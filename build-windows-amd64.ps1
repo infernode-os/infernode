@@ -254,7 +254,7 @@ Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $secSrc = @(
     "des.c", "desmodes.c", "desECB.c", "desCBC.c", "des3ECB.c", "des3CBC.c",
-    "aes.c", "aesarm64.c", "aesctr.c", "aesgcm.c", "blowfish.c",
+    "aes.c", "aesarm64.c", "aesctr.c", "aesgcm.c", "ghasharm64.c", "blowfish.c",
     "chacha.c", "poly1305.c", "ccpoly.c",
     "x25519.c", "ecc.c",
     "idea.c",

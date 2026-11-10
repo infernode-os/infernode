@@ -984,6 +984,20 @@ SBEOF
         prng.c) continue;;		# host entropy (getentropy/urandom); the kernel's own random.c stands in
         esac
         o="$BUILD/crypto-$(basename "$f").o"
+        case "$(basename "$f")" in
+        aesarm64.c|ghasharm64.c|sha256arm64.c)
+            # The ARMv8 instructions (AES, PMULL, SHA-256): built with
+            # NEON, as libinterp is, and used only where
+            # ID_AA64ISAR0_EL1 says the core has them (a Pi 5; not a
+            # Pi 3 or 4). Only processes call them -- devssl, Keyring,
+            # the generator -- and procsave keeps a process's FP/SIMD
+            # registers across every switch; no interrupt path reaches
+            # them, and interrupts are built general-regs-only.
+            "$CC" "${IFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything \
+                 -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+            libobjs+=("$o")
+            continue;;
+        esac
         "$CC" "${CFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done

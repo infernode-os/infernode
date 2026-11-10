@@ -4,10 +4,14 @@
  * table indexed by key-dependent bytes for a cache to leak.
  *
  * Used where aes.c asks (aesarm64ok) and the processor has them: Apple's
- * (always), Linux's and Android's where getauxval says so.  Built to
- * nothing where NEON is not on, as in the native kernel, whose C is
- * -mgeneral-regs-only so that no interrupt path can touch the FP/SIMD
- * registers; it keeps aes.c's code.
+ * (always), Linux's and Android's where getauxval says so.  The native kernels build this file with
+ * NEON (tests/host/baremetal_test.sh), though the rest of their C is
+ * -mgeneral-regs-only, and ask ID_AA64ISAR0_EL1: a Pi 5 has the
+ * instructions, a Pi 3 or 4 does not and keeps the C.  That is safe
+ * because only processes reach it (devssl, Keyring, the generator), no
+ * interrupt does, and a process's FP/SIMD registers are saved at every
+ * switch (os/arm64/main.c's procsave); an interrupt touches none of them.
+ * Built to nothing where NEON is not on.
  *
  * The key schedules are aes.c's (ekey, and dkey with InvMixColumns
  * applied to its inner round keys: the "equivalent inverse cipher" that
@@ -40,6 +44,14 @@ aesarm64ok(void)
 		hasaes = 1;	/* every Apple arm64 has it */
 #elif defined(__linux__) && defined(AT_HWCAP)
 		hasaes = (getauxval(AT_HWCAP) & (1<<3)) != 0;	/* HWCAP_AES */
+#elif defined(INFERNO_NATIVE)
+		{
+			/* bare metal at EL1: the instruction set attribute register says (AES, bits 7:4) */
+			u64int isar0;
+
+			__asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
+			hasaes = ((isar0 >> 4) & 0xf) >= 1;
+		}
 #else
 		hasaes = 0;
 #endif

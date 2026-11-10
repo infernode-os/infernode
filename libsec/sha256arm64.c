@@ -6,9 +6,14 @@
  *
  * Used where sha2.c and sha256block.c ask (sha256arm64ok) and the
  * processor has them: Apple's (always), Linux's and Android's where
- * getauxval says so.  Built to nothing where NEON is not on, as in the
- * native kernel, whose C is -mgeneral-regs-only; it keeps
- * sha256block.c's code.
+ * getauxval says so.  The native kernels build this file with
+ * NEON (tests/host/baremetal_test.sh), though the rest of their C is
+ * -mgeneral-regs-only, and ask ID_AA64ISAR0_EL1: a Pi 5 has the
+ * instructions, a Pi 3 or 4 does not and keeps the C.  That is safe
+ * because only processes reach it (devssl, Keyring, the generator), no
+ * interrupt does, and a process's FP/SIMD registers are saved at every
+ * switch (os/arm64/main.c's procsave); an interrupt touches none of them.
+ * Built to nothing where NEON is not on.
  */
 #include "os.h"
 #include <libsec.h>
@@ -38,6 +43,14 @@ sha256arm64ok(void)
 		hassha = 1;	/* every Apple arm64 has it */
 #elif defined(__linux__) && defined(AT_HWCAP)
 		hassha = (getauxval(AT_HWCAP) & (1<<6)) != 0;	/* HWCAP_SHA2 */
+#elif defined(INFERNO_NATIVE)
+		{
+			/* bare metal at EL1: the instruction set attribute register says (SHA2, bits 15:12) */
+			u64int isar0;
+
+			__asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
+			hassha = ((isar0 >> 12) & 0xf) >= 1;
+		}
 #else
 		hassha = 0;
 #endif

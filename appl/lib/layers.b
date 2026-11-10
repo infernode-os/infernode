@@ -62,7 +62,7 @@ parse(line: string): (int, ref Mark)
 	# the frame's key alone (with what else a record carries: pts=, ...)
 	if(kind < 0 && get(kv, "x0") == nil && get(kv, "x") == nil)
 		return (frame, nil);
-	m := ref Mark(kind, 0, 0, 0, 0, nil, nil);
+	m := ref Mark(kind, 0, 0, 0, 0, nil, nil, nil);
 	(x0, ok0) := num(kv, "x0");
 	(y0, ok1) := num(kv, "y0");
 	(x1, ok2) := num(kv, "x1");
@@ -84,7 +84,8 @@ parse(line: string): (int, ref Mark)
 		return (-2, nil);
 	}
 	m.label = get(kv, "label");
-	if(m.label == nil && (c := get(kv, "class")) != nil){
+	m.class = get(kv, "class");
+	if(m.label == nil && (c := m.class) != nil){
 		m.label = c;
 		if((s := get(kv, "score")) != nil)
 			m.label += " " + s;
@@ -396,6 +397,8 @@ themed(d: ref Draw->Display): (ref Image, list of (string, ref Image))
 		("accent", t.accent), ("border", t.border), ("text", t.text), ("text2", t.text2),
 		("dim", t.dim), ("label", t.label), ("header", t.header), ("bg", t.bg),
 		("red", t.red), ("green", t.green), ("yellow", t.yellow),
+		("pie0", t.pie0), ("pie1", t.pie1), ("pie2", t.pie2), ("pie3", t.pie3),
+		("pie4", t.pie4), ("pie5", t.pie5), ("pie6", t.pie6), ("pie7", t.pie7),
 	};
 	l: list of (string, ref Image);
 	for(i := len names - 1; i >= 0; i--)
@@ -417,7 +420,10 @@ draw(marks: list of ref Mark, dst: ref Image, r: Rect, fw, fh: int,
 	sy := real r.dy() / real fh;
 	for(; marks != nil; marks = tl marks){
 		m := hd marks;
-		col := colourof(dst, m.colour, accent, colours);
+		c := m.colour;
+		if(c == nil && m.class != nil)
+			c = classcolour(m.class);
+		col := colourof(dst, c, accent, colours);
 		x0 := real r.min.x + real m.x0 * sx;
 		y0 := real r.min.y + real m.y0 * sy;
 		x1 := real r.min.x + real m.x1 * sx;
@@ -443,6 +449,19 @@ draw(marks: list of ref Mark, dst: ref Image, r: Rect, fw, fh: int,
 			dst.draw(Rect((p0.x - 2, p0.y - 2), (p0.x + 3, p0.y + 3)), col, nil, (0, 0));
 		}
 	}
+}
+
+# A detection with no colour of its own: its class's, one of the
+# theme's eight categorical colours (pie0 to pie7, as charts use), by
+# a hash of the class's name (FNV-1a), so a class is the same colour in
+# every frame, viewer and run, and person, car, traffic_light, bicycle
+# and handbag are five colours
+classcolour(class: string): string
+{
+	h := int 16r811c9dc5;
+	for(i := 0; i < len class; i++)
+		h = (h ^ (class[i] & 16rFF)) * 16777619;
+	return "pie" + string (h & 7);
 }
 
 colourof(dst: ref Image, name: string, accent: ref Image, colours: list of (string, ref Image)): ref Image

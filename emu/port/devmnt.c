@@ -477,6 +477,9 @@ mntwalk(Chan *c, Chan *nc, char **name, int nname)
 	wq->clone = nc;
 
 	if(waserror()) {
+		/* not answered (flushed, given up on): the server may have made newfid */
+		if(alloc)
+			chanfidretire(nc);
 		mntfree(r);
 		nexterror();
 	}
@@ -614,6 +617,12 @@ mntclunk(Chan *c, int t)
 	m = mntchk(c);
 	r = mntralloc(c, m->msize);
 	if(waserror()){
+		/*
+		 *  not answered: given up on (orphaned) or flushed, and a
+		 *  flushed clunk that the server never answered was never
+		 *  done.  The server may still hold the fid.
+		 */
+		chanfidretire(c);
 		mntfree(r);
 		nexterror();
 	}
@@ -641,6 +650,12 @@ muxclose(Mnt *m)
 		q->orphan = 0;
 		mntfree(q);
 	}
+	for(q = m->held; q != nil; q = r){
+		r = q->list;
+		q->m = nil;
+		mntfree(q);
+	}
+	m->held = nil;
 	m->id = 0;
 	free(m->version);
 	m->version = nil;
@@ -905,24 +920,6 @@ mntwatchproc(void *a)
 	}
 }
 
-/*
- * A killed Prog's flush, clunk or remove is sent whatever interrupt is
- * still pending for it.  The kill is what brought it here; a second
- * one (killprog interrupts a Prog that is already exiting) was left
- * pending, and the next system call, the write of this very message,
- * raised it: the flush was never sent, the server kept the fid busy
- * with the killed read, and the client, freeing the fid, gave its
- * number to the next walk ("fid in use").  How long the message is
- * waited for is the watch's to bound, set just after.
- */
-static void
-mntkilledsend(void)
-{
-	lock(&up->rlock);
-	up->intpend = 0;
-	unlock(&up->rlock);
-}
-
 static void
 mntwatch(Mwatch *w)
 {
@@ -1088,7 +1085,6 @@ mountio(Mnt *m, Mntrpc *r)
 		r = mntflushalloc(r, m->msize);
 		poperror();
 		if(upkilled()){
-			mntkilledsend();
 			mntwatch(&w);
 			watched = 1;
 		}
@@ -1109,7 +1105,6 @@ mountio(Mnt *m, Mntrpc *r)
 	 * the dying Prog, or its killer, for good.
 	 */
 	if(!watched && (r->request.type == Tclunk || r->request.type == Tremove) && upkilled()){
-		mntkilledsend();
 		mntwatch(&w);
 		watched = 1;
 	}
@@ -1268,10 +1263,39 @@ mntgate(Mnt *m)
 	unlock(&m->l);
 }
 
+/* the held calls whose tag the flush now answered named; m->l held */
+static Mntrpc*
+mntunhold(Mnt *m, int tag)
+{
+	Mntrpc **l, *x, *hl;
+
+	hl = nil;
+	for(l = &m->held; (x = *l) != nil;)
+		if(x->request.tag == tag){
+			*l = x->list;
+			x->m = nil;	/* nothing left to wait for */
+			x->list = hl;
+			hl = x;
+		}else
+			l = &x->list;
+	return hl;
+}
+
+static void
+mntfreelist(Mntrpc *hl)
+{
+	Mntrpc *x;
+
+	for(; hl != nil; hl = x){
+		x = hl->list;
+		mntfree(hl);
+	}
+}
+
 void
 mountmux(Mnt *m, Mntrpc *r)
 {
-	Mntrpc **l, *q;
+	Mntrpc **l, *q, *hl;
 
 	lock(&m->l);
 	l = &m->queue;
@@ -1294,13 +1318,18 @@ mountmux(Mnt *m, Mntrpc *r)
 			 * it cannot recycle q while this path is still waking its owner.
 			 */
 			q->done = 1;
+			hl = nil;
+			if(q->request.type == Tflush)
+				hl = mntunhold(m, q->request.oldtag);
 			if(q->orphan){
 				mntorphanreply(m, q);	/* unlocks m->l */
+				mntfreelist(hl);
 				return;
 			}
 			if(q != r)
 				Wakeup(&q->r);
 			unlock(&m->l);
+			mntfreelist(hl);
 			return;
 		}
 		l = &q->list;
@@ -1447,6 +1476,7 @@ mntralloc(Chan *c, ulong msize)
 	mntalloc.nrpcused++;
 	unlock(&mntalloc.l);
 	new->c = c;
+	new->m = nil;
 	new->done = 0;
 	new->orphan = 0;
 	new->flushed = nil;
@@ -1457,6 +1487,32 @@ mntralloc(Chan *c, ulong msize)
 void
 mntfree(Mntrpc *r)
 {
+	Mntrpc *x;
+
+	/*
+	 *  A flush still out names this call's tag: the tag is not used
+	 *  again until the flush is answered.  An orphaned call answered
+	 *  before its flush was freed at once, its tag given to the next
+	 *  call, and the server flushed that one when the old flush reached
+	 *  it, and the client took the old flush's answer for it: replies
+	 *  went to the wrong calls (an Rclunk to a Twalk, an Rwalk to a
+	 *  Tclunk), and the mount, which every reader of a feed shares,
+	 *  went out of step.  Held on m->held; mountmux lets it go.
+	 */
+	if(r->m != nil && r->request.type != Tflush){
+		lock(&r->m->l);
+		for(x = r->m->queue; x != nil; x = x->list)
+			if(x->request.type == Tflush && x->request.oldtag == r->request.tag)
+				break;
+		if(x != nil && r->orphan != 1){
+			r->orphan = 0;
+			r->list = r->m->held;
+			r->m->held = r;
+			unlock(&r->m->l);
+			return;
+		}
+		unlock(&r->m->l);
+	}
 	if(r->orphan){
 		lock(&r->m->l);
 		if(r->orphan == 1){

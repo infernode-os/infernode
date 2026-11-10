@@ -50,6 +50,7 @@ struct Dstate
 
 	ushort	diglen;		/* length of digest */
 	DigestState *(*hf)(uchar*, ulong, uchar*, DigestState*);	/* hash func */
+	int	hmac;		/* the MAC is HMAC with hf, keyed by the secret */
 
 	/* for SSL format */
 	int	max;			/* maximum unpadded data per msg */
@@ -787,11 +788,19 @@ struct Hashalg
 	char	*name;
 	int	diglen;
 	DigestState *(*hf)(uchar*, ulong, uchar*, DigestState*);
+	int	hmac;
 };
 
+/*
+ * sha256 is SSL 2's MAC: the hash of secret, record and record number,
+ * kept for the peers that speak it. hmac_sha384 is HMAC-SHA-384
+ * (FIPS 198-1) keyed by the secret, of the record and its number: the
+ * MAC CNSA admits.
+ */
 Hashalg hashtab[] =
 {
-	{ "sha256", SHA256dlen, sha256, },
+	{ "sha256", SHA256dlen, sha256, 0, },
+	{ "hmac_sha384", SHA384dlen, sha384, 1, },	/* hf the hash HMAC is of */
 	{ 0 }
 };
 
@@ -803,6 +812,7 @@ parsehashalg(char *p, Dstate *s)
 	for(ha = hashtab; ha->name; ha++){
 		if(strcmp(p, ha->name) == 0){
 			s->hf = ha->hf;
+			s->hmac = ha->hmac;
 			s->diglen = ha->diglen;
 			s->state &= ~Sclear;
 			s->state |= Sdigesting;
@@ -1002,6 +1012,7 @@ sslwrite(Chan *c, void *a, long n, vlong offset)
 			error("algorithm but no secret");
 
 		s.s->hf = 0;
+		s.s->hmac = 0;
 		s.s->encryptalg = Noencryption;
 		s.s->blocklen = 1;
 
@@ -1107,6 +1118,27 @@ decryptb(Dstate *s, Block *inb)
 	return inb;
 }
 
+/*
+ * The record's MAC, in pieces: macbegin, then macput for each piece,
+ * the last with out set to where the digest goes.
+ */
+static void
+macbegin(Dstate *s, OneWay *w, DigestState *ss)
+{
+	memset(ss, 0, sizeof(*ss));
+	if(!s->hmac)
+		(*s->hf)(w->secret, w->slen, 0, ss);
+}
+
+static void
+macput(Dstate *s, OneWay *w, DigestState *ss, uchar *p, ulong n, uchar *out)
+{
+	if(s->hmac)
+		hmac_sha384(p, n, w->secret, w->slen, out, ss);
+	else
+		(*s->hf)(p, n, out, ss);
+}
+
 static Block*
 digestb(Dstate *s, Block *b, int offset)
 {
@@ -1118,13 +1150,12 @@ digestb(Dstate *s, Block *b, int offset)
 
 	w = &s->out;
 
-	memset(&ss, 0, sizeof(ss));
 	h = s->diglen + offset;
 	n = BLEN(b) - h;
 
-	/* hash secret + message */
-	(*s->hf)(w->secret, w->slen, 0, &ss);
-	(*s->hf)(b->rp + h, n, 0, &ss);
+	/* secret + message */
+	macbegin(s, w, &ss);
+	macput(s, w, &ss, b->rp + h, n, 0);
 
 	/* hash message id */
 	p = msgid;
@@ -1133,7 +1164,7 @@ digestb(Dstate *s, Block *b, int offset)
 	*p++ = n>>16;
 	*p++ = n>>8;
 	*p = n;
-	(*s->hf)(msgid, 4, b->rp + offset, &ss);
+	macput(s, w, &ss, msgid, 4, b->rp + offset);
 
 	return b;
 }
@@ -1151,10 +1182,8 @@ checkdigestb(Dstate *s, Block *inb)
 
 	w = &s->in;
 
-	memset(&ss, 0, sizeof(ss));
-
 	/* hash secret */
-	(*s->hf)(w->secret, w->slen, 0, &ss);
+	macbegin(s, w, &ss);
 
 	/* hash message */
 	h = s->diglen;
@@ -1162,7 +1191,7 @@ checkdigestb(Dstate *s, Block *inb)
 		n = BLEN(b) - h;
 		if(n < 0)
 			panic("checkdigestb");
-		(*s->hf)(b->rp + h, n, 0, &ss);
+		macput(s, w, &ss, b->rp + h, n, 0);
 		h = 0;
 	}
 
@@ -1173,7 +1202,7 @@ checkdigestb(Dstate *s, Block *inb)
 	*p++ = n>>16;
 	*p++ = n>>8;
 	*p = n;
-	(*s->hf)(msgid, 4, digest, &ss);
+	macput(s, w, &ss, msgid, 4, digest);
 
 	/* requires pullupblock; use constant-time compare to prevent timing oracle */
 	{

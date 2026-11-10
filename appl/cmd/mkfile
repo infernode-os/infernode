@@ -145,6 +145,7 @@ TARG=\
 	netstat.dis\
 	newer.dis\
 	ns.dis\
+	ns2mmd.dis\
 	newuser.dis\
 	nsaudit.dis\
 	nsbuild.dis\

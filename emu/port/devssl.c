@@ -85,7 +85,8 @@ enum{
 	Qsecretin,
 	Qsecretout,
 	Qencalgs,
-	Qhashalgs
+	Qhashalgs,
+	Qlower			/* the name of the channel pushed under it */
 };
 
 #define TYPE(x) 	((ulong)(x).path & 0xf)
@@ -182,6 +183,10 @@ sslgen(Chan *c, char *dname, Dirtab *d, int nd, int s, Dir *dp)
 			q.path = QID(CONV(c->qid), Qhashalgs);
 			p = "hashalgs";
 			break;
+		case 6:
+			q.path = QID(CONV(c->qid), Qlower);
+			devdir(c, q, "lower", 0, nm, 0444, dp);
+			return 1;
 		}
 		devdir(c, q, p, 0, nm, 0660, dp);
 		return 1;
@@ -259,6 +264,7 @@ sslopen(Chan *c, int omode)
 		break;
 	case Qencalgs:
 	case Qhashalgs:
+	case Qlower:
 		if(omode != OREAD)
 			error(Eperm);
 		break;
@@ -571,6 +577,28 @@ sslread(Chan *c, void *a, long n, vlong offset)
 		return readstr(offset, a, n, encalgs);
 	case Qhashalgs:
 		return readstr(offset, a, n, hashalgs);
+	case Qlower:
+		/*
+		 * the channel the conversation was pushed onto (its fd ctl):
+		 * a mount's source in a name space is the conversation's
+		 * data file, and this is how a reader of /prog/n/ns finds
+		 * the connection under it (/net/tcp/3/data)
+		 */
+		{
+			Dstate *ds;
+			char nm[256];
+
+			/* copied under dslock: a close takes the
+			 * conversation out of dstate under it, and
+			 * frees it, its channel too, after */
+			nm[0] = 0;
+			lock(&dslock);
+			ds = dstate[CONV(c->qid)];
+			if(ds != 0 && ds->c != 0)
+				snprint(nm, sizeof(nm), "%s", c2name(ds->c));
+			unlock(&dslock);
+			return readstr(offset, a, n, nm);
+		}
 	}
 
 	n = 0;
@@ -605,6 +633,7 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 {
 	volatile struct { Dstate *s; } s;
 	volatile struct { Block *b; } bb;
+	volatile struct { int begun; } r;
 	Block *nb;
 	int h, n, m, pad, rv;
 	uchar *p;
@@ -618,17 +647,35 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		error(Ebadusefd);
 	}
 
+	/*
+	 * A record begun and not sent whole leaves the connection out of
+	 * step: its sequence number and the cipher's state advanced, or
+	 * part of it on the wire.  Only then is it hung up.  An error
+	 * between records leaves the stream at a record's end, and the
+	 * connection goes on.
+	 */
+	r.begun = 0;
 	if(waserror()){
 		qunlock(&s.s->out.q);
 		if(bb.b)
 			freeb(bb.b);
-		sslhangup(s.s);
+		if(r.begun)
+			sslhangup(s.s);
 		nexterror();
 	}
 	qlock(&s.s->out.q);
 
 	rv = 0;
 	while(bb.b){
+		/*
+		 * An interrupt pending (a Prog killed in a 9P call over this
+		 * connection, whose flush comes here) is raised now, before
+		 * the record is begun: raised by the host write's osenter, it
+		 * hung up a connection every other user of the mount needed.
+		 */
+		osenter();
+		osleave();
+		r.begun = 1;
 		m = n = BLEN(bb.b);
 		h = s.s->diglen + 2;
 
@@ -699,6 +746,7 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		m = BLEN(nb);
 		devtab[s.s->c->type]->bwrite(s.s->c, nb, s.s->c->offset);
 		s.s->c->offset += m;
+		r.begun = 0;
 	}
 	qunlock(&s.s->out.q);
 	poperror();

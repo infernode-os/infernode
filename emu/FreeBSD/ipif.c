@@ -73,7 +73,10 @@ so_send(int sock, void *va, int len, void *hdr, int hdrlen)
 		}
 		r = sendto(sock, va, len, 0, &sa, sizeof(sa));
 	}
-	osleave();
+	if(r > 0)
+		osleavekeep();	/* what it moved is the caller's: an interrupt is the next call's */
+	else
+		osleave();
 	return r;
 }
 
@@ -130,7 +133,10 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 			memmove(hdr, h, hdrlen);
 		}
 	}
-	osleave();
+	if(r > 0)
+		osleavekeep();	/* what it moved is the caller's: an interrupt is the next call's */
+	else
+		osleave();
 	return r;
 }
 

@@ -26,7 +26,7 @@ implement InteropTest;
 #                      (de)serialisation fix in libkeyring/dsaalg.c)
 #   - InteropElgamal   classical ElGamal-2048 certificates
 #
-# All ride aes_256_cbc/sha256 line encryption -- the same default `mount -k`
+# All ride aes_256_gcm line encryption -- the same default `mount -k`
 # and `styxlisten` negotiate between InferNode and NERVA3 nodes.
 #
 # Skips cleanly (not fails) where the host has no IP stack at all.
@@ -64,7 +64,7 @@ XFER: con "/ndb/inferno";
 XFERDIR: con "/ndb";
 
 # line-encryption algorithms (server offers a list, client a single spec) --
-# aes_256_cbc + sha256 is the default mount -k / styxlisten negotiates.
+# aes_256_gcm is the default mount -k / styxlisten negotiates.
 CLIENTALG: con "aes_256_gcm";
 
 serveralgs(): list of string

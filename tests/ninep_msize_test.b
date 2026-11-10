@@ -12,7 +12,7 @@ implement NinepMsizeTest;
 #    when the mount offered IOHDRSZ+64K, against the exportfs every
 #    machine was running)
 #  - eight readers at once through one encrypted mount at 64K
-#    (devssl, aes_256_cbc and sha256, as mount -C sets it) each read the
+#    (devssl, aes_256_gcm, as mount -C sets it) each read the
 #    file byte for byte: devssl wrote a reply longer than its record
 #    limit (about 32K) as pieces locked one at a time, two of exportfs's
 #    workers replying at once interleaved them, and replies reached the

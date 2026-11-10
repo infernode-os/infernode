@@ -16,6 +16,7 @@ struct OneWay
 {
 	QLock	q;
 	QLock	ctlq;
+	QLock	wq;		/* out only: one write's records together */
 
 	void	*state;		/* encryption state */
 	int	slen;			/* secret data length */
@@ -904,6 +905,19 @@ sslwrite(Chan *c, void *a, long n, vlong offset)
 		if(s.s->state == Sincomplete)
 			error(Ebadusefd);
 	
+		/*
+		 * A write longer than max goes as several sslbwrites, each
+		 * taking out.q alone: two processes writing at once (exportfs's
+		 * workers replying) interleaved their records, and the reader
+		 * took one message's tail for another's head.  9P messages
+		 * past 32K met it: replies to the wrong tags, then a wedged
+		 * mount.  wq keeps one write's records together.
+		 */
+		qlock(&s.s->out.wq);
+		if(waserror()){
+			qunlock(&s.s->out.wq);
+			nexterror();
+		}
 		p = a;
 		e = p + n;
 		do {
@@ -919,6 +933,8 @@ sslwrite(Chan *c, void *a, long n, vlong offset)
 
 			p += m;
 		} while(p < e);
+		poperror();
+		qunlock(&s.s->out.wq);
 		return n;
 	}
 

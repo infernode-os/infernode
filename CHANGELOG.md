@@ -4,17 +4,24 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
-### Performance
+### Fixed
 
-- **The native kernels' TCP recovers from loss faster.** After a
-  retransmission the slow-start threshold is half what was in flight
-  (RFC 5681), not one segment, so the window doubles back instead of
-  growing a segment a round trip; and the least retransmission timeout
-  is 200 ms (Linux's), not 500. Reading 720p frames from a Raspberry
-  Pi 5 with four reads in flight while a bulk download shared its path,
-  65 frames came through in the time master's kernel took 46 and 48,
-  and the slowest frame took 2.4 s to master's 3.3 and 5.4. With no
-  competing traffic nothing changed.
+- **9P mounts carry messages larger than 8K.** A mount offers 64K on a
+  plain connection and 32512 bytes on an encrypted one (`mount -k`,
+  `-C`, listen's connections), and gets what the server takes. Over the
+  wire from a Jetson to a Raspberry Pi, a single reader went from 5.6
+  to 10.4 MB/s encrypted.
+- **Stat works whatever message size a client offers.** exportfs gave
+  a stat the rest of the message as its room in a 16-bit field, so a
+  client offering more than 65544 bytes (Linux's v9fs offers 512K) had
+  every stat refused, "stat buffer too small". This, not devssl, is why
+  raising the size was reverted in May (INFR-214).
+- **Replies on an encrypted connection are not interleaved.** devssl
+  sent a write longer than about 32K as pieces locked one at a time, so
+  two replies written at once could interleave, and the client matched
+  replies to the wrong requests ("unexpected reply tag") until the
+  mount wedged. Every server built before this release has it, which is
+  why an encrypted mount offers no more than 32512 bytes.
 
 ## [0.10.0] - 2026-11-09
 

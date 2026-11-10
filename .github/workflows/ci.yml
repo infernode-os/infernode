@@ -668,6 +668,13 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
+    - name: Run AES and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES and SHA-256 against the standards' vectors, and
+        # the ARMv8 instructions' results against the C's where the
+        # processor has them (arm64 runners). Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -1417,6 +1424,13 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
+    - name: Run AES and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES and SHA-256 against the standards' vectors, and
+        # the ARMv8 instructions' results against the C's where the
+        # processor has them (arm64 runners). Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
+
     - name: Run wallet and secstore integration tests
       run: |
         echo "Running host-side integration tests..."
@@ -2033,6 +2047,13 @@ jobs:
         # cf. CVE-2026-22705). Whether a compiler emits one is per
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
+
+    - name: Run AES and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES and SHA-256 against the standards' vectors, and
+        # the ARMv8 instructions' results against the C's where the
+        # processor has them (arm64 runners). Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run wallet and secstore integration tests
       if: matrix.gui != 'osk'

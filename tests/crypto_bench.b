@@ -105,7 +105,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	sslpipe("tcp_loopback", nil, buf);
 	sslpipe("ssl_sha256", "sha256", buf);
-	sslpipe("ssl_aes256cbc_sha256", "aes_256_cbc sha256", buf);
+	sslpipe("ssl_aes256cbc_sha256", "aes_256_gcm", buf);
 }
 
 # devssl pushed on both ends of a TCP connection over the loopback with

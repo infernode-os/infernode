@@ -30,6 +30,8 @@ SSL: module
 
 	connect: fn(fd: ref Sys->FD): (string, ref Sys->Connection);
 	secret: fn(c: ref Sys->Connection, secretin, secretout: array of byte): string;
+	# one secret both ends share, as each way's own: (secretin, secretout)
+	secrets: fn(shared: array of byte, client: int): (array of byte, array of byte);
 };
 
 

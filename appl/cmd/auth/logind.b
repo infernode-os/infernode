@@ -139,13 +139,13 @@ dologin(c: ref Sys->Connection): string
 	# compute alpha**(r0*r1) mod p
 	alphar0r1 := alphar1.expmod(r0, info.p);
 
-	# turn on digesting
-	secret := alphar0r1.iptobytes();
-	err = ssl->secret(c, secret, secret);
+	# protect the rest: aes_256_gcm, each way under its own secret
+	(secretin, secretout) := ssl->secrets(alphar0r1.iptobytes(), 0);
+	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
-		return "can't set digest secret: "+err;
-	if(sys->fprint(c.cfd, "alg sha256") < 0)
-		return sys->sprint("can't push alg sha256: %r");
+		return "can't set secrets: "+err;
+	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
+		return sys->sprint("can't push alg aes_256_gcm: %r");
 
 	# send our public key
 	if(kr->putstring(c.dfd, kr->pktostr(kr->sktopk(info.mysk))) < 0)

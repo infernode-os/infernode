@@ -38,7 +38,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	arg->init(args);
 	arg->setusage("9export [-aA9] [-k keyspec] [-e enc digest]");
-	cryptalg := "";	# will be aes_256_cbc sha256
+	cryptalg := "";	# none: -e naming one is refused (p9sk1 below)
 	keyspec := "";
 	noauth := 0;
 	xflag := Sys->EXPWAIT;
@@ -101,38 +101,8 @@ init(nil: ref Draw->Context, args: list of string)
 			break;
 	if(n < 4 || string impo[0:4] != "impo")
 		fail("impo", "wasn't impo: possibly old import/cpu");
-	if(noauth == 0 && cryptalg != nil){
-		if(secret == nil)
-			fail("import", "didn't establish shared secret");
-		random := load Random Random->PATH;
-		if(random == nil)
-			nomod(Random->PATH);
-		kr := load Keyring Keyring->PATH;
-		if(kr == nil)
-			nomod(Keyring->PATH);
-		ssl := load SSL SSL->PATH;
-		if(ssl == nil)
-			nomod(SSL->PATH);
-		base64 := load Encoding Encoding->BASE64PATH;
-		if(base64 == nil)
-			nomod(Encoding->BASE64PATH);
-		key := array[16] of byte;	# myrand[4] secret[8] hisrand[4]
-		key[0:] = random->randombuf(Random->ReallyRandom, 4);
-		ns := len secret;
-		if(ns > 8)
-			ns = 8;
-		key[12:] = secret[0:ns];
-		if(sys->write(fd, key[12:], 4) != 4)
-			fail("import", sys->sprint("can't write key to remote: %r"));
-		if(sys->readn(fd, key, 4) != 4)
-			fail("import", sys->sprint("can't read remote key: %r"));
-		digest := array[Keyring->SHA1dlen] of byte;
-		kr->sha1(key, len key, digest, nil);
-		err: string;
-		(fd, err) = pushssl(fd, base64->dec(S(digest[10:20])), base64->dec(S(digest[0:10])), cryptalg);
-		if(err != nil)
-			fail("import", sys->sprint("can't push security layer: %s", err));
-	}
+	if(noauth == 0 && cryptalg != nil)
+		fail("9export", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
 	if(sys->export(fd, ".", xflag) < 0)
 		fail("export", sys->sprint("can't export %s: %r", tree));
 }

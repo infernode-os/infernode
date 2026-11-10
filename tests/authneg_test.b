@@ -294,8 +294,8 @@ testNotExpiredSucceeds(t: ref T)
 cipherServer(fd: ref Sys->FD, ai: ref Keyring->Authinfo, pidc: chan of int, rc: chan of (ref Sys->FD, string))
 {
 	pidc <-= sys->pctl(0, nil);
-	# server offers ONLY aes_256_cbc/sha256
-	(wrapped, err) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, fd, 0);
+	# server offers ONLY aes_256_gcm
+	(wrapped, err) := auth->server("aes_256_gcm" :: nil, ai, fd, 0);
 	rc <-= (wrapped, err);
 }
 
@@ -315,8 +315,8 @@ testCipherMismatch(t: ref T)
 	spawn cipherServer(fds[0], server, pidc, rc);
 	spid := <-pidc;
 
-	# client requests aes_128_cbc, which the server did not offer
-	(cwrapped, cerr) := auth->client("aes_128_cbc sha256", client, fds[1]);
+	# client requests hmac_sha384, which the server did not offer
+	(cwrapped, cerr) := auth->client("hmac_sha384", client, fds[1]);
 
 	tmo := chan[1] of int;
 	cancel := chan[1] of int;
@@ -377,7 +377,7 @@ tamperServer(fd: ref Sys->FD, ai: ref Keyring->Authinfo, expect: int,
 		pidc: chan of int, ready: chan of int, rc: chan of (int, int))
 {
 	pidc <-= sys->pctl(0, nil);
-	(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, fd, 0);
+	(wrapped, nil) := auth->server("aes_256_gcm" :: nil, ai, fd, 0);
 	if(wrapped == nil){
 		ready <-= 0;
 		rc <-= (-1, 0);
@@ -427,7 +427,7 @@ testTamperedCiphertext(t: ref T)
 	# emu open and race its teardown.  Kill them on every exit path.
 	stragglers := relaypid1 :: relaypid2 :: serverpid :: nil;
 
-	(cwrapped, cerr) := auth->client("aes_256_cbc sha256", client, pc[0]);
+	(cwrapped, cerr) := auth->client("aes_256_gcm", client, pc[0]);
 	if(cwrapped == nil){
 		killpids(stragglers);
 		t.fatal("client auth+ssl failed: " + cerr);

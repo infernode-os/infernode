@@ -11,6 +11,16 @@
 #include	"mp.h"
 #include	"libsec.h"
 
+enum
+{
+	Minsecret=	32,	/* bytes of secret each way, at the least */
+	Gcmkeylen=	32,
+	Gcmivlen=	12,
+	Gcmtaglen=	16,
+	Maxrecord=	(1<<15) - 1,	/* a record's length, as its header has it */
+	Maxmid=	0xFFFFFFFFUL,	/* records each way before the connection must end */
+};
+
 typedef struct OneWay OneWay;
 struct OneWay
 {
@@ -22,6 +32,7 @@ struct OneWay
 	int	slen;			/* secret data length */
 	uchar	*secret;	/* secret */
 	ulong	mid;		/* message id */
+	uchar	iv[Gcmivlen];	/* aes_256_gcm: the nonce for record 0 */
 };
 
 enum
@@ -29,13 +40,8 @@ enum
 	/* connection states */
 	Sincomplete=	0,
 	Sclear=		1,
-	Sencrypting=	2,
-	Sdigesting=	4,
-	Sdigenc=	Sencrypting|Sdigesting,
-
-	/* encryption algorithms */
-	Noencryption=	0,
-	AESCBC=		6
+	Sdigesting=	4,	/* hmac_sha384 */
+	Saead=		8,	/* aes_256_gcm */
 };
 
 typedef struct Dstate Dstate;
@@ -45,17 +51,11 @@ struct Dstate
 	uchar	state;		/* state of connection */
 	int	ref;			/* serialized by dslock for atomic destroy */
 
-	uchar	encryptalg;	/* encryption algorithm */
-	ushort	blocklen;	/* blocking length */
-
-	ushort	diglen;		/* length of digest */
-	DigestState *(*hf)(uchar*, ulong, uchar*, DigestState*);	/* hash func */
-	int	hmac;		/* the MAC is HMAC with hf, keyed by the secret */
+	ushort	diglen;		/* bytes a record adds to its data: MAC or tag */
 
 	/* for SSL format */
-	int	max;			/* maximum unpadded data per msg */
-	int	maxpad;			/* maximum padded data per msg */
-	
+	int	max;			/* maximum data per record */
+
 	/* input side */
 	OneWay	in;
 	Block	*processed;
@@ -106,10 +106,11 @@ static void alglistinit(void);
 static void	ensure(Dstate*, Block**, int);
 static void	consume(Block**, uchar*, int);
 static void	setsecret(OneWay*, uchar*, int);
-static Block*	encryptb(Dstate*, Block*, int);
-static Block*	decryptb(Dstate*, Block*);
+static Block*	sealb(Dstate*, Block*);
+static Block*	openb(Dstate*, Block*, int);
 static Block*	digestb(Dstate*, Block*, int);
 static void	checkdigestb(Dstate*, Block*);
+static void	freesecret(OneWay*);
 static Chan*	buftochan(char*);
 static void	sslhangup(Dstate*);
 static void dsclone(Chan *c);
@@ -337,10 +338,8 @@ sslclose(Chan *c)
 		if(s->c)
 			cclose(s->c);
 		free(s->user);
-		free(s->in.secret);
-		free(s->out.secret);
-		free(s->in.state);
-		free(s->out.state);
+		freesecret(&s->in);
+		freesecret(&s->out);
 		free(s);
 	}
 }
@@ -459,8 +458,8 @@ sslbread(Chan *c, long n, ulong offset)
 	volatile struct { Dstate *s; } s;
 	volatile struct { int nc; } nc;
 	Block *b;
-	uchar count[3];
-	int len, pad;
+	uchar count[2];
+	int len;
 
 	USED(offset);
 	s.s = dstate[CONV(c->qid)];
@@ -492,21 +491,11 @@ sslbread(Chan *c, long n, ulong offset)
 
 		consume(&s.s->unprocessed, count, 2);
 		nc.nc += 2;
-		if(count[0] & 0x80){
-			len = ((count[0] & 0x7f)<<8) | count[1];
-			ensure(s.s, &s.s->unprocessed, len);
-			pad = 0;
-		} else {
-			len = ((count[0] & 0x3f)<<8) | count[1];
-			ensure(s.s, &s.s->unprocessed, len+1);
-			consume(&s.s->unprocessed, count + nc.nc, 1);
-			pad = count[nc.nc];
-			nc.nc++;
-			if(pad > len){
-				print("pad %d buf len %d\n", pad, len);
-				error("bad pad in ssl message");
-			}
-		}
+		/* a padded (three-byte) header is SSL 2's block ciphers, none of them here */
+		if((count[0] & 0x80) == 0)
+			error("ssl record with a padded header");
+		len = ((count[0] & 0x7f)<<8) | count[1];
+		ensure(s.s, &s.s->unprocessed, len);
 		nc.nc = 0;
 
 		/* put extra on unprocessed queue */
@@ -517,10 +506,9 @@ sslbread(Chan *c, long n, ulong offset)
 			nexterror();
 		}
 		qlock(&s.s->in.ctlq);
+		if(s.s->state != Sclear && s.s->in.mid >= Maxmid)
+			error("ssl: too many records on one key");
 		switch(s.s->state){
-		case Sencrypting:
-			s.s->processed = decryptb(s.s, s.s->processed);
-			break;
 		case Sdigesting:
 			s.s->processed = pullupblock(s.s->processed, s.s->diglen);
 			if(s.s->processed == 0)
@@ -528,23 +516,13 @@ sslbread(Chan *c, long n, ulong offset)
 			checkdigestb(s.s, s.s->processed);
 			s.s->processed->rp += s.s->diglen;
 			break;
-		case Sdigenc:
-			s.s->processed = decryptb(s.s, s.s->processed);
-			s.s->processed = pullupblock(s.s->processed, s.s->diglen);
-			if(s.s->processed == 0)
-				error("ssl message too short");
-			checkdigestb(s.s, s.s->processed);
-			s.s->processed->rp += s.s->diglen;
-			len -= s.s->diglen;
+		case Saead:
+			s.s->processed = openb(s.s, s.s->processed, len);
 			break;
 		}
 		s.s->in.mid++;
 		qunlock(&s.s->in.ctlq);
 		poperror();
-
-		/* remove pad */
-		if(pad)
-			s.s->processed = qtake(&s.s->processed, len - pad, 1);
 	}
 
 	/* return at most what was asked for */
@@ -619,18 +597,9 @@ sslread(Chan *c, void *a, long n, vlong offset)
 }
 
 /*
- *  this algorithm doesn't have to be great since we're just
- *  trying to obscure the block fill
- */
-static void
-randfill(uchar *buf, int len)
-{
-	while(len-- > 0)
-		*buf++ = nrand(256);
-}
-
-/*
- *  use SSL record format, add in count and digest or encrypt
+ *  use SSL record format: a two-byte header (0x80 | length), then the
+ *  MAC and the data (hmac_sha384), or the data sealed and its tag
+ *  (aes_256_gcm)
  */
 static long
 sslbwrite(Chan *c, Block *b, ulong offset)
@@ -638,7 +607,7 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 	volatile struct { Dstate *s; } s;
 	volatile struct { Block *b; } bb;
 	Block *nb;
-	int h, n, m, pad, rv;
+	int h, n, m, rv;
 	uchar *p;
 
 	bb.b = b;
@@ -661,32 +630,28 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 
 	rv = 0;
 	while(bb.b){
+		if(s.s->state != Sclear && s.s->out.mid >= Maxmid)
+			error("ssl: too many records on one key");
 		m = n = BLEN(bb.b);
-		h = s.s->diglen + 2;
+		h = 2;
+		if(s.s->state == Sdigesting)
+			h += s.s->diglen;
 
-		/* trim to maximum block size */
-		pad = 0;
-		if(m > s.s->max){
+		/* trim to maximum record size */
+		if(m > s.s->max)
 			m = s.s->max;
-		} else if(s.s->blocklen != 1){
-			pad = (m + s.s->diglen)%s.s->blocklen;
-			if(pad){
-				if(m > s.s->maxpad){
-					pad = 0;
-					m = s.s->maxpad;
-				} else {
-					pad = s.s->blocklen - pad;
-					h++;
-				}
-			}
-		}
 
 		rv += m;
-		if(m != n){
-			nb = allocb(m + h + pad);
+		if(m != n || s.s->state == Saead){
+			/* room for the header and the tag the record will have */
+			nb = allocb(m + h + s.s->diglen);
 			memmove(nb->wp + h, bb.b->rp, m);
 			nb->wp += m + h;
 			bb.b->rp += m;
+			if(BLEN(bb.b) == 0){
+				freeb(bb.b);
+				bb.b = 0;
+			}
 		} else {
 			/* add header space */
 			nb = padblock(bb.b, h);
@@ -695,34 +660,17 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		m += s.s->diglen;
 
 		/* SSLv2 style count */
-		if(pad){
-			nb = padblock(nb, -pad);
-			randfill(nb->wp, pad);
-			nb->wp += pad;
-			m += pad;
-
-			p = nb->rp;
-			p[0] = (m>>8);
-			p[1] = m;
-			p[2] = pad;
-			offset = 3;
-		} else {
-			p = nb->rp;
-			p[0] = (m>>8) | 0x80;
-			p[1] = m;
-			offset = 2;
-		}
+		p = nb->rp;
+		p[0] = (m>>8) | 0x80;
+		p[1] = m;
+		offset = 2;
 
 		switch(s.s->state){
-		case Sencrypting:
-			nb = encryptb(s.s, nb, offset);
-			break;
 		case Sdigesting:
 			nb = digestb(s.s, nb, offset);
 			break;
-		case Sdigenc:
-			nb = digestb(s.s, nb, offset);
-			nb = encryptb(s.s, nb, offset);
+		case Saead:
+			nb = sealb(s.s, nb);
 			break;
 		}
 
@@ -747,121 +695,108 @@ setsecret(OneWay *w, uchar *secret, int n)
 	if(newsecret == nil)
 		error(Enomem);
 	memmove(newsecret, secret, n);
-	free(w->secret);
+	if(w->secret != nil){
+		secureZero(w->secret, w->slen);
+		free(w->secret);
+	}
 	w->secret = newsecret;
 	w->slen = n;
 }
 
 static void
-initAES128key(OneWay *w)
+freestate(OneWay *w)
 {
-	free(w->state);
-	w->state = malloc(sizeof(AESstate));
-	if(w->state == nil)
-		error(Enomem);
-	if(w->slen >= 32)
-		setupAESstate(w->state, w->secret, 16, w->secret+16);
-	else if(w->slen >= 16)
-		setupAESstate(w->state, w->secret, 16, nil);
-	else
-		error("secret too short");
+	if(w->state != nil){
+		secureZero(w->state, sizeof(AESGCMstate));
+		free(w->state);
+		w->state = nil;
+	}
+	secureZero(w->iv, sizeof(w->iv));
 }
 
 static void
-initAES256key(OneWay *w)
+freesecret(OneWay *w)
 {
-	free(w->state);
-	w->state = malloc(sizeof(AESstate));
-	if(w->state == nil)
-		error(Enomem);
-	if(w->slen >= 48)
-		setupAESstate(w->state, w->secret, 32, w->secret+32);
-	else if(w->slen >= 32)
-		setupAESstate(w->state, w->secret, 32, nil);
-	else
-		error("secret too short");
+	if(w->secret != nil){
+		secureZero(w->secret, w->slen);
+		free(w->secret);
+		w->secret = nil;
+	}
+	w->slen = 0;
+	freestate(w);
 }
-
-typedef struct Hashalg Hashalg;
-struct Hashalg
-{
-	char	*name;
-	int	diglen;
-	DigestState *(*hf)(uchar*, ulong, uchar*, DigestState*);
-	int	hmac;
-};
 
 /*
- * sha256 is SSL 2's MAC: the hash of secret, record and record number,
- * kept for the peers that speak it. hmac_sha384 is HMAC-SHA-384
- * (FIPS 198-1) keyed by the secret, of the record and its number: the
- * MAC CNSA admits.
+ * aes_256_gcm's key and nonce from a direction's secret, by HKDF
+ * (RFC 5869) with SHA-384: PRK = HMAC(0^48, secret), and the key and
+ * the nonce of record 0 the first 32 and next 12 bytes of
+ * HMAC(PRK, info || 1).  Record n's nonce is that nonce with n,
+ * big-endian, exclusive-ored into its last eight bytes, as TLS 1.3's.
  */
-Hashalg hashtab[] =
-{
-	{ "sha256", SHA256dlen, sha256, 0, },
-	{ "hmac_sha384", SHA384dlen, sha384, 1, },	/* hf the hash HMAC is of */
-	{ 0 }
-};
+static char gcminfo[] = "infernode ssl aes_256_gcm";
 
-static int
-parsehashalg(char *p, Dstate *s)
+static void
+initGCMkey(OneWay *w)
 {
-	Hashalg *ha;
+	uchar salt[SHA384dlen], prk[SHA384dlen], okm[SHA384dlen], info[sizeof(gcminfo)];
+	int n;
 
-	for(ha = hashtab; ha->name; ha++){
-		if(strcmp(p, ha->name) == 0){
-			s->hf = ha->hf;
-			s->hmac = ha->hmac;
-			s->diglen = ha->diglen;
-			s->state &= ~Sclear;
-			s->state |= Sdigesting;
-			return 0;
-		}
-	}
-	return -1;
+	freestate(w);
+	w->state = malloc(sizeof(AESGCMstate));
+	if(w->state == nil)
+		error(Enomem);
+	memset(salt, 0, sizeof(salt));
+	hmac_sha384(w->secret, w->slen, salt, sizeof(salt), prk, nil);
+	n = strlen(gcminfo);
+	memmove(info, gcminfo, n);
+	info[n++] = 1;
+	hmac_sha384(info, n, prk, sizeof(prk), okm, nil);
+	setupAESGCMstate(w->state, okm, Gcmkeylen, okm+Gcmkeylen, Gcmivlen);
+	memmove(w->iv, okm+Gcmkeylen, Gcmivlen);
+	secureZero(prk, sizeof(prk));
+	secureZero(okm, sizeof(okm));
 }
 
-typedef struct Encalg Encalg;
-struct Encalg
+/*
+ * What a record may be protected by, each alone: hmac_sha384,
+ * HMAC-SHA-384 (FIPS 198-1) keyed by the secret, of the record and its
+ * number, the data sent clear; aes_256_gcm, AES-256 in Galois/Counter
+ * Mode (SP 800-38D), the data sealed, the header authenticated with
+ * them.  Both are CNSA's, and nothing else is offered.
+ */
+typedef struct Alg Alg;
+struct Alg
 {
 	char	*name;
-	int	blocklen;
-	int	alg;
-	void	(*keyinit)(OneWay*);
+	int	state;
+	int	diglen;
 };
 
-Encalg encrypttab[] =
+static Alg hashtab[] =
 {
-	{ "aes_256_cbc", 16, AESCBC, initAES256key, },
-	{ "aes_128_cbc", 16, AESCBC, initAES128key, },
+	{ "hmac_sha384", Sdigesting, SHA384dlen, },
 	{ 0 }
 };
 
-static int
-parseencryptalg(char *p, Dstate *s)
+static Alg encrypttab[] =
 {
-	Encalg *ea;
+	{ "aes_256_gcm", Saead, Gcmtaglen, },
+	{ 0 }
+};
 
-	for(ea = encrypttab; ea->name; ea++){
-		if(strcmp(p, ea->name) == 0){
-			s->encryptalg = ea->alg;
-			s->blocklen = ea->blocklen;
-			(*ea->keyinit)(&s->in);
-			(*ea->keyinit)(&s->out);
-			s->state &= ~Sclear;
-			s->state |= Sencrypting;
-			return 0;
-		}
-	}
-	return -1;
+static Alg*
+lookalg(Alg *tab, char *p)
+{
+	for(; tab->name; tab++)
+		if(strcmp(p, tab->name) == 0)
+			return tab;
+	return nil;
 }
 
 static void
 alglistinit(void)
 {
-	Hashalg *h;
-	Encalg *e;
+	Alg *h, *e;
 	int n;
 
 	n = 1;
@@ -903,8 +838,9 @@ sslwrite(Chan *c, void *a, long n, vlong offset)
 	volatile struct { Dstate *s; } s;
 	volatile struct { Block *b; } b;
 	int m, t;
-	char *p, *np, *e, buf[32];
+	char *p, *e, buf[32];
 	uchar *x;
+	Alg *al;
 
 	s.s = dstate[CONV(c->qid)];
 	if(s.s == 0)
@@ -986,65 +922,49 @@ sslwrite(Chan *c, void *a, long n, vlong offset)
 
 		/* default is clear (msg delimiters only) */
 		s.s->state = Sclear;
-		s.s->blocklen = 1;
 		s.s->diglen = 0;
-		s.s->maxpad = s.s->max = (1<<15) - s.s->diglen - 1;
+		s.s->max = Maxrecord;
 		s.s->in.mid = 0;
 		s.s->out.mid = 0;
 	} else if(strcmp(buf, "alg") == 0 && p != 0){
-		s.s->blocklen = 1;
-		s.s->diglen = 0;
-
 		if(s.s->c == 0)
 			error("must set fd before algorithm");
 
 		if(strcmp(p, "clear") == 0){
 			s.s->state = Sclear;
-			s.s->maxpad = s.s->max = (1<<15) - s.s->diglen - 1;
+			s.s->diglen = 0;
+			s.s->max = Maxrecord;
 			goto out;
 		}
 
-		if(s.s->in.secret && s.s->out.secret == 0)
-			setsecret(&s.s->out, s.s->in.secret, s.s->in.slen);
-		if(s.s->out.secret && s.s->in.secret == 0)
-			setsecret(&s.s->in, s.s->out.secret, s.s->out.slen);
-		if(s.s->in.secret == 0 || s.s->out.secret == 0)
-			error("algorithm but no secret");
-
-		s.s->hf = 0;
-		s.s->hmac = 0;
-		s.s->encryptalg = Noencryption;
-		s.s->blocklen = 1;
-
-		for(;;){
-			np = strchr(p, ' ');
-			if(np)
-				*np++ = 0;
-			else{
-				np = strchr(p, '/');
-				if(np)
-					*np++ = 0;
-			}
-			if(parsehashalg(p, s.s) < 0)
-			if(parseencryptalg(p, s.s) < 0)
-				error(Ebadarg);
-
-			if(np == 0)
-				break;
-			p = np;
+		al = lookalg(hashtab, p);
+		if(al == nil)
+			al = lookalg(encrypttab, p);
+		if(al == nil){
+			if(strchr(p, ' ') != nil || strchr(p, '/') != nil)
+				error("ssl: one algorithm: hmac_sha384 or aes_256_gcm");
+			error("ssl: unknown algorithm; hmac_sha384 or aes_256_gcm");
 		}
 
-		if(s.s->hf == 0 && s.s->encryptalg == Noencryption)
-			error(Ebadarg);
+		/*
+		 * Each direction its own secret: the same both ways would
+		 * give both directions aes_256_gcm's key and nonces, and let
+		 * a record sent be returned as one received.
+		 */
+		if(s.s->in.secret == 0 || s.s->out.secret == 0)
+			error("ssl: a secret each way is needed");
+		if(s.s->in.slen < Minsecret || s.s->out.slen < Minsecret)
+			error("ssl: secret too short; 32 bytes each way at the least");
+		if(s.s->in.slen == s.s->out.slen && memcmp(s.s->in.secret, s.s->out.secret, s.s->in.slen) == 0)
+			error("ssl: the same secret both ways");
 
-		if(s.s->blocklen != 1){
-			/* make multiple of blocklen */
-			s.s->max = (1<<15) - s.s->diglen - 1;
-			s.s->max -= s.s->max % s.s->blocklen;
-			s.s->maxpad = (1<<14) - s.s->diglen - 1;
-			s.s->maxpad -= s.s->maxpad % s.s->blocklen;
-		} else
-			s.s->maxpad = s.s->max = (1<<15) - s.s->diglen - 1;
+		if(al->state == Saead){
+			initGCMkey(&s.s->in);
+			initGCMkey(&s.s->out);
+		}
+		s.s->state = al->state;
+		s.s->diglen = al->diglen;
+		s.s->max = Maxrecord - s.s->diglen;
 	} else if(strcmp(buf, "secretin") == 0 && p != 0) {
 		m = (strlen(p)*3)/2;
 		x = smalloc(m);
@@ -1078,44 +998,64 @@ out:
 }
 
 
-static Block*
-encryptb(Dstate *s, Block *b, int offset)
+/* record n's nonce: the direction's, n exclusive-ored into its end */
+static void
+gcmnonce(OneWay *w)
 {
-	switch(s->encryptalg){
-	case AESCBC:
-		aesCBCencrypt(b->rp + offset, BLEN(b) - offset, s->out.state);
-		break;
-	}
+	AESGCMstate *g;
+	uvlong n;
+	int i;
+
+	g = w->state;
+	memmove(g->J0, w->iv, Gcmivlen);
+	n = w->mid;
+	for(i = 0; i < 8; i++)
+		g->J0[Gcmivlen-1-i] ^= n >> (8*i);
+	g->J0[12] = 0;
+	g->J0[13] = 0;
+	g->J0[14] = 0;
+	g->J0[15] = 1;
+}
+
+/* seal a record: header, then data, which become ciphertext and tag */
+static Block*
+sealb(Dstate *s, Block *b)
+{
+	OneWay *w;
+	int n;
+
+	w = &s->out;
+	n = BLEN(b) - 2;
+	b = padblock(b, -Gcmtaglen);
+	gcmnonce(w);
+	if(aesgcm_encrypt(b->rp + 2, n, b->rp, 2, b->wp, w->state) < 0)
+		error("ssl: record too long");
+	b->wp += Gcmtaglen;
 	return b;
 }
 
+/* open a record of len bytes, its ciphertext and tag */
 static Block*
-decryptb(Dstate *s, Block *inb)
+openb(Dstate *s, Block *b, int len)
 {
-	Block *b, **l;
-	int i;
+	OneWay *w;
+	uchar hdr[2];
+	int n;
 
-	l = &inb;
-	for(b = inb; b; b = b->next){
-		/* make sure we have a multiple of s->blocklen */
-		if(s->blocklen > 1){
-			i = BLEN(b);
-			if(i % s->blocklen){
-				*l = b = pullupblock(b, i + s->blocklen - (i%s->blocklen));
-				if(b == 0)
-					error("ssl encrypted message too short");
-			}
-		}
-		l = &b->next;
-
-		/* decrypt */
-		switch(s->encryptalg){
-		case AESCBC:
-			aesCBCdecrypt(b->rp, BLEN(b), s->in.state);
-			break;
-		}
-	}
-	return inb;
+	w = &s->in;
+	if(len < Gcmtaglen)
+		error("ssl message too short");
+	b = pullupblock(b, len);
+	if(b == nil)
+		error("ssl message too short");
+	n = len - Gcmtaglen;
+	hdr[0] = 0x80 | (len>>8);
+	hdr[1] = len;
+	gcmnonce(w);
+	if(aesgcm_decrypt(b->rp, n, hdr, 2, b->rp + n, w->state) < 0)
+		error("bad digest");
+	b->wp = b->rp + n;
+	return b;
 }
 
 /*
@@ -1125,18 +1065,16 @@ decryptb(Dstate *s, Block *inb)
 static void
 macbegin(Dstate *s, OneWay *w, DigestState *ss)
 {
+	USED(s);
+	USED(w);
 	memset(ss, 0, sizeof(*ss));
-	if(!s->hmac)
-		(*s->hf)(w->secret, w->slen, 0, ss);
 }
 
 static void
 macput(Dstate *s, OneWay *w, DigestState *ss, uchar *p, ulong n, uchar *out)
 {
-	if(s->hmac)
-		hmac_sha384(p, n, w->secret, w->slen, out, ss);
-	else
-		(*s->hf)(p, n, out, ss);
+	USED(s);
+	hmac_sha384(p, n, w->secret, w->slen, out, ss);
 }
 
 static Block*

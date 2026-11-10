@@ -65,11 +65,11 @@ XFERDIR: con "/ndb";
 
 # line-encryption algorithms (server offers a list, client a single spec) --
 # aes_256_cbc + sha256 is the default mount -k / styxlisten negotiates.
-CLIENTALG: con "aes_256_cbc sha256";
+CLIENTALG: con "aes_256_gcm";
 
 serveralgs(): list of string
 {
-	return "aes_256_cbc" :: "sha256" :: nil;
+	return "aes_256_gcm" :: nil;
 }
 
 passed := 0;

@@ -78,7 +78,7 @@ exported(t: ref T): ref Sys->FD
 	return exportedalg(t, nil);
 }
 
-ALG: con "aes_256_cbc sha256";
+ALG: con "aes_256_gcm";
 SECRETA: array of byte;	# aes_256 wants a long secret; set in init
 SECRETB: array of byte;
 

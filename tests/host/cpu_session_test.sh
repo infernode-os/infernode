@@ -36,7 +36,7 @@ mkdir -p /tmp/cpusess/usr/\$user/keyring
 bind -b /tmp/cpusess/usr /usr
 auth/createsignerkey -f /usr/\$user/keyring/signer \$user-signer
 auth/mkauthinfo -k 'key=signer' \$user /usr/\$user/keyring/default
-listen -a aes_256_cbc -a sha256 'tcp!*!$PORT' auxi/rstyxd &
+listen -a aes_256_gcm 'tcp!*!$PORT' auxi/rstyxd &
 sleep 2
 
 cpu 'tcp!127.0.0.1!$PORT' sh -c 'sleep 1000 & echo ONESHOT-RAN'

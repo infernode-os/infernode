@@ -83,7 +83,7 @@ for t in "$@"; do
 	cat > "$script" <<ISH
 load std
 ndb/cs
-/dis/tests/ninep_bench.dis -C ${BENCH_ALG:-aes_256_cbc/sha256} $BENCH_ARGS $addr $path
+/dis/tests/ninep_bench.dis -C ${BENCH_ALG:-aes_256_gcm} $BENCH_ARGS $addr $path
 echo halt > /dev/sysctl
 ISH
 	out="$BENCH_OUT/$label.out"

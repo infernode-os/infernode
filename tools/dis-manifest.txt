@@ -873,6 +873,7 @@ dis/tests/ninep_bench.dis
 dis/tests/ninep_disconnect_test.dis
 dis/tests/ninep_msize_test.dis
 dis/tests/crypto_bench.dis
+dis/tests/ssl_hmac_test.dis
 dis/tests/tcpwatch.dis
 dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis

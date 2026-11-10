@@ -368,6 +368,51 @@ and whether it ships off-host are decided by what you mount at
 the path. Retention policy is a mount decision, not a code
 feature.
 
+**Compose in space, in time, and in both.** The aim is radical
+composability, and there is more than one kind; each fits a
+different shape of problem, and they compose with each other.
+
+*In time* is the pipeline: a stream flowing one way through
+stages, each with one reader.
+`{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s` draws the
+machines a name space reaches and redraws it as mounts come and
+go: text in, text out, one consumer, nothing to steer. A pipeline
+has no names and no state, and it gives backpressure for nothing.
+When the problem has that shape, it is the simplest correct
+structure, and a file server would be ceremony.
+
+*In space* is the name space: what can be reached, from where, by
+whom, built by `mount` and `bind`. A camera's feed on one machine,
+recognition on another and a window on a third were joined by a
+mount on each and one bind: the feed read by two machines at once
+and joinable mid-stream, the detections laid over the picture by
+binding a session's `layer/` into the feed's (and taken off by
+unmounting it), the session moved from GPU to DLA by a line
+written to its `ctl` while the stream ran. A pipe gives none of
+that: it has one reader, no back channel, no late joiner, and it
+ends at the machine. And because the arrangement lives in the name
+space, `ns` can report it; a pipeline's shape is known only to the
+shell that built it.
+
+*In both* is the usual case, and it is composition composed: the
+name space wires the stages together and decides who sees what;
+pipelines do the transforming inside a stage; a stage's results
+are served as files so the next can be bound. vision(1)'s
+`vision/detect`, `vision/draw` and `vision/crop` are filters
+piped through; visionfs reads a mounted feed and serves layers for
+anyone to bind; ns2mmd is a pipeline over a file, `ns`, that
+describes the name space. The rule of thumb: one consumer, one
+direction, nothing to steer, pipe it; several consumers, control,
+a late joiner, another machine, or anyone else needing to see it,
+serve it as files and bind it.
+
+The cost to know: a pipe streams, while a 9P read is a request
+and its reply. Over a network a stream read as a file pays a round
+trip a message unless its reader keeps several reads in flight. A
+file interface that carries a stream should be designed so it can
+be read that way (whole frames, offsets that mean something), not
+abandoned for a socket.
+
 **Do not build the grand unified anything.** No central logger,
 no plugin registry, no service bus, no vector store for
 documentation (the reader of the docs index is an LLM — it does

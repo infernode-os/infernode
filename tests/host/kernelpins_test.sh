@@ -22,6 +22,10 @@
 #                ahead of the data it speaks for.
 #   ceilings     the pools' ceilings must not add up to more than there
 #                is, and no heap may take the kernel's share.
+#   ssthresh     after a loss, half the flight (RFC 5681), in a field as
+#                wide as cwind: set to one segment, the window grew back
+#                a segment a round trip and never doubled; a ushort
+#                wraps half a scaled window (2026-11-10).
 #   usable       TCP's usable window is unsigned: with more in flight than
 #                the window allows, the difference wrapped to 4G and the
 #                sender sent past the window, all of it dropped
@@ -65,6 +69,9 @@ if echo "$m" | grep -q 'mem - mainmax - imagmax' && echo "$m" | grep -q 'heapres
 else no "POOLBYNEED: the ceilings no longer fit in memory"; fi
 if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the reserve"; else no "poolalloc ignores heapreserve"; fi
 
+rx=$(sed -n '/^tcprxmit(Conv \*s)/,/^}/p' os/ip/tcp.c)
+if grep -Eq '^[[:space:]]*u32int[[:space:]]+ssthresh;' os/ip/tcp.c && echo "$rx" | grep -q 'ssthresh = flight/2'; then ok "a loss halves ssthresh from the flight, in 32 bits"
+else no "tcprxmit's ssthresh is not half the flight in a u32int"; fi
 out=$(sed -n '/^tcpoutput(Conv \*s)/,/^}/p' os/ip/tcp.c)
 unguarded=$(echo "$out" | grep -B1 'usable -= sent;' | grep -vc -e 'usable -= sent;' -e 'if(usable > sent)' -e '^--$')
 if echo "$out" | grep -q 'usable -= sent;' && [ "$unguarded" = 0 ]; then ok "TCP's usable window never wraps below what is in flight"

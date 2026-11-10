@@ -49,7 +49,7 @@ INC="-I$ROOT/$EMUHOST/$OBJTYPE/include -I$ROOT/include -I$ROOT/libmp"
 # the flags emu's libsec is built with (mkfiles/mkfile-*): -O, not -O2
 CFLAGS="-g -O -fno-strict-aliasing -w"
 # what RFC 6979's HMAC-SHA256 needs from libsec
-LIBSEC="$L/hmac.c $L/sha2.c $L/sha256block.c $L/sha512block.c $L/sha1.c $L/sha1block.c $L/md5.c $L/md5block.c $L/securezero.c"
+LIBSEC="$L/hmac.c $L/sha2.c $L/sha256block.c $L/sha256arm64.c $L/sha512block.c $L/sha1.c $L/sha1block.c $L/md5.c $L/md5block.c $L/securezero.c"
 
 fails=0
 

@@ -32,7 +32,8 @@ Layers: module
 		kind:	int;
 		x0, y0, x1, y1:	int;	# a point or text at x0 y0
 		label:	string;
-		colour:	string;		# a theme's name or rrggbb; nil: the accent
+		colour:	string;		# a theme's name or rrggbb; nil: the accent, or the class's
+		class:	string;		# a detection's class=, nil for others
 	};
 
 	Layer: adt {

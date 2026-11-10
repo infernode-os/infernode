@@ -33,6 +33,8 @@ implement Camera;
 
 include "sys.m";
 	sys: Sys;
+include "parread.m";
+	parread: Parread;
 
 include "draw.m";
 	draw: Draw;
@@ -76,6 +78,11 @@ focus := 512;
 init(ctxt: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
+	parread = load Parread Parread->PATH;
+	if(parread == nil){
+		sys->fprint(sys->fildes(2), "camera: cannot load %s: %r\n", Parread->PATH);
+		raise "fail:load";
+	}
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	i420 = load I420 I420->PATH;
@@ -212,6 +219,11 @@ show(w: ref Window, frame: ref Image)
 # The server paces this: a read of the next frame waits for it. Frames
 # are numbered (frame n at n*framesize): it starts at the newest and,
 # if it falls behind ("frame expired"), goes on from the newest again.
+# It is a camera's window, so it keeps to the live edge: more than
+# Behind frames behind the newest (a feed across a network it cannot
+# read as fast as the feed makes them) it goes on from the newest, not
+# showing seconds-old frames until they expire, while a layer drawn
+# over them (a detector's, keyed to frames now) has nothing for them.
 # After each frame it waits to be told to go on (1) or to let go of the
 # feed (0), in which case it closes it and waits for resume. Each time
 # it takes the feed it asks its size, which may have changed meanwhile.
@@ -244,6 +256,8 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 				return;
 			}
 			pic.n = f++;
+			if((nf := newest()) - f > Behind)
+				f = nf;
 			got <-= (nil, pic);
 			if(<-more == 0)
 				break;
@@ -253,19 +267,14 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 	}
 }
 
-# frame f, whole, at its offset: (bytes, error)
+Behind: con 3;	# frames behind the newest that a reader may be
+
+# frame f, whole, at its offset, with WAYS reads in flight (parread(2)):
+# (bytes, error)
+WAYS: con 4;
 readat(fd: ref Sys->FD, b: array of byte, f: int): (int, string)
 {
-	got := 0;
-	while(got < len b){
-		m := sys->pread(fd, b[got:], len b - got, big f * big len b + big got);
-		if(m < 0)
-			return (got, sys->sprint("%r"));
-		if(m == 0)
-			break;
-		got += m;
-	}
-	return (got, nil);
+	return parread->pread(fd, b, big f * big len b, WAYS);
 }
 
 # where a live reader starts: the newest frame (status frames= less one)

@@ -2,6 +2,8 @@
 #include <libsec.h>
 
 extern void _sha256block(SHA256state*, uchar*);
+extern int sha256arm64ok(void);
+extern void sha256arm64blocks(u32int*, const uchar*, ulong);
 extern void _sha512block(SHA512state*, uchar*);
 
 u32int sha224h0[] = {
@@ -99,6 +101,14 @@ _sha256(uchar *p, ulong len, SHA256state *s)
 		memset(s->buf, 0, SHA256bsize);
 	}
 	/* whole blocks */
+	if(len >= SHA256bsize && sha256arm64ok()) {
+		ulong n = len / SHA256bsize;
+		sha256arm64blocks(s->h32, p, n);
+		n *= SHA256bsize;
+		s->len += n;
+		p += n;
+		len -= n;
+	}
 	while(len >= SHA256bsize) {
 		_sha256block(s, p);
 		s->len += SHA256bsize;

@@ -1,0 +1,59 @@
+.TH PARREAD 2
+.SH NAME
+parread \- read a buffer as several reads in flight at once
+.SH SYNOPSIS
+.EX
+include "parread.m";
+parread := load Parread Parread->PATH;
+
+pread: fn(fd: ref Sys->FD, b: array of byte, off: big, ways: int): (int, string);
+.EE
+.SH DESCRIPTION
+.B Pread
+fills
+.I b
+from offset
+.I off
+of
+.I fd
+as up to
+.I ways
+reads at once, each a
+.B sys->pread
+loop over a contiguous piece of
+.I b
+in a process of its own.
+Over a
+.IR mount (1)
+each read is a 9P request of its own, waiting a round trip for its answer;
+several overlap their waits where one read's requests would follow each
+other.
+It is for large reads at known offsets: a video feed's frames
+(see
+.IR vid9p (4)),
+read whole at
+.IR n *frame-size.
+.PP
+It returns the number of bytes read contiguously from
+.IR off ,
+a piece that came back short ending the count, and the first error in the
+order of the pieces
+.RB ( nil
+if none).
+So a read past the end of the file gives the bytes before it and no
+error, and a refused piece gives its error and the bytes before it, as one
+.B pread
+loop would.
+With
+.I ways
+1 or less, or a buffer too small to be worth sharing (under 16K a piece),
+it is that one loop.
+.SH EXAMPLES
+A 720p frame from a Raspberry Pi 5's feed, read by a Raspberry Pi 4 over
+an encrypted mount at 32512-byte messages, took 67 ms in one read and 39 ms
+in two or more: the connection's decryption is then the limit.
+.SH SOURCE
+.B /appl/lib/parread.b
+.SH SEE ALSO
+.IR sys-read (2),
+.IR vid9p (4)

@@ -668,6 +668,13 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
+    - name: Run AES and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES and SHA-256 against the standards' vectors, and
+        # the ARMv8 instructions' results against the C's where the
+        # processor has them (arm64 runners). Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -780,7 +787,7 @@ jobs:
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
               tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
-              tls_clientauth_test
+              tls_clientauth_test ssl_killedcall_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
@@ -789,7 +796,7 @@ jobs:
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
-              listen_rate_fairness_test mail9p_test
+              listen_announce_test listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
               nsaudit_metadata_test nosystemkeyboard_test osk_decoder_test prof_test profile_legacykey_test
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test
@@ -1157,7 +1164,7 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
+        for t in wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1226,7 +1233,7 @@ jobs:
         # seek) paced by the clock, and the Matrix video pane driving it
         # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
         failed=
-        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
+        for t in vid9p_test vid9p_replay_test vid9p_transport_test uitest_transport_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1416,6 +1423,13 @@ jobs:
         # cf. CVE-2026-22705). Whether a compiler emits one is per
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
+
+    - name: Run AES and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES and SHA-256 against the standards' vectors, and
+        # the ARMv8 instructions' results against the C's where the
+        # processor has them (arm64 runners). Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -2034,6 +2048,13 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
+    - name: Run AES and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES and SHA-256 against the standards' vectors, and
+        # the ARMv8 instructions' results against the C's where the
+        # processor has them (arm64 runners). Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
+
     - name: Run wallet and secstore integration tests
       if: matrix.gui != 'osk'
       run: |
@@ -2111,7 +2132,7 @@ jobs:
         # As the Linux GUI job's wm and osk parts; wm_cursor_test and
         # lucifer_cursor_test need LD_PRELOAD and skip here (77).
         case $GUI in
-        wm)	tests="wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
+        wm)	tests="wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
         osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test" ;;
         esac
         failed=

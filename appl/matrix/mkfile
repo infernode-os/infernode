@@ -36,6 +36,7 @@ SYSMODULES=\
 	keyboard.m\
 	readdir.m\
 	sh.m\
+	parread.m\
 
 DISBIN=$ROOT/dis/matrix
 

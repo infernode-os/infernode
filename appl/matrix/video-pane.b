@@ -56,6 +56,8 @@ implement VideoPane;
 
 include "sys.m";
 	sys: Sys;
+include "parread.m";
+	parread: Parread;
 
 include "draw.m";
 	drawm: Draw;
@@ -110,6 +112,7 @@ r_g: Rect;
 vw, vh, vrate, framesize: int;
 
 ffd: ref Sys->FD;		# open handle on <mount>/frame
+WAYS: con 4;			# a frame's reads in flight at once (parread(2))
 sfd: ref Sys->FD;		# open handle on <mount>/status
 cfd: ref Sys->FD;		# open handle on <mount>/ctl (transport writes)
 frame: ref Image;		# RGB24 staging image, native video size
@@ -137,6 +140,9 @@ STRIPH: con 14;			# transport status strip height
 init(display: ref Display, font: ref Font, mount: string): string
 {
 	sys = load Sys Sys->PATH;
+	parread = load Parread Parread->PATH;
+	if(parread == nil)
+		return sys->sprint("cannot load %s: %r", Parread->PATH);
 	drawm = load Draw Draw->PATH;
 	mio = load Mpegio Mpegio->PATH;
 	if(mio == nil)
@@ -287,16 +293,7 @@ streamreader()
 			continue;
 		}
 		fb := <-freech;
-		got := 0;
-		e := "";
-		while(got < framesize) {
-			n := sys->pread(fd, fb[got:], framesize-got, big f * big framesize + big got);
-			if(n < 0)
-				e = sys->sprint("%r");
-			if(n <= 0)
-				break;
-			got += n;
-		}
+		(got, e) := parread->pread(fd, fb[0:framesize], big f * big framesize, WAYS);
 		if(got < framesize) {
 			freech <-= fb;
 			if(e == "frame expired")
@@ -390,14 +387,9 @@ showframe(idx: int): int
 {
 	if(idx < 0)
 		return 0;
-	off := big idx * big framesize;
-	got := 0;
-	while(got < framesize) {
-		n := sys->pread(ffd, buf[got:], framesize-got, off + big got);
-		if(n <= 0)
-			return 0;
-		got += n;
-	}
+	(got, nil) := parread->pread(ffd, buf[0:framesize], big idx * big framesize, WAYS);
+	if(got < framesize)
+		return 0;
 	convertframe(buf);
 	lastshown = idx;
 	return 1;

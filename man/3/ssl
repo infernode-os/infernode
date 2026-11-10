@@ -17,6 +17,8 @@ ssl \- secure sockets layer device
 .BI #D/ n /encalgs
 .br
 .BI #D/ n /hashalgs
+.br
+.BI #D/ n /lower
 .SH DESCRIPTION
 The
 .I ssl
@@ -137,6 +139,21 @@ and
 (hashing algorithms for digests).
 Each contains a space-separated list of algorithm names.
 .PP
+The read-only file
+.B lower
+gives the name of the channel the conversation was pushed onto by its
+.B fd
+control message, as
+.B /net/tcp/3/data ,
+or nothing before one is.
+A mount over an encrypted connection names
+.BI #D/ n /data
+as its source in a name space
+.RI ( ns (1));
+.B lower
+is how a reader of the name space finds the connection, and so the
+machine, under it
+.RI ( ns2mmd (1)).
 .SH "SEE ALSO"
 .IR security-ssl (2)
 .br

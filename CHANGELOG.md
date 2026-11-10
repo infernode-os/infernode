@@ -6,6 +6,17 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **AES-GCM's GHASH takes the same time whatever it hashes.** It looked up a
+  table by nibbles of the running hash, which a cache shared with an attacker
+  shows. It is now PMULL where the processor has it, and otherwise integer
+  multiplication that indexes nothing, after BearSSL's (MIT). With the AES
+  instructions for its counter mode too, AES-256-GCM is 1444 MB/s on an
+  M-series Mac (171 before) and 476-569 MB/s on a Jetson Orin; the native
+  kernels keep the C, constant time and faster: 42.0 MB/s on a Pi 4 (37.6),
+  20.3 MB/s on a Pi 3 (19.4). `tests/host/armcrypto_test.sh` checks it against
+  438 of OpenSSL's answers in each configuration and, with valgrind, its
+  constant time.
+
 - **devssl has HMAC-SHA-384.** ssl(3)'s only digest was `sha256`, SSL 2's
   hash of secret, record and record number, which is not an HMAC and not a MAC
   CNSA admits. `alg hmac_sha384` is HMAC-SHA-384 keyed by the secret over the

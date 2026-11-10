@@ -905,6 +905,24 @@ mntwatchproc(void *a)
 	}
 }
 
+/*
+ * A killed Prog's flush, clunk or remove is sent whatever interrupt is
+ * still pending for it.  The kill is what brought it here; a second
+ * one (killprog interrupts a Prog that is already exiting) was left
+ * pending, and the next system call, the write of this very message,
+ * raised it: the flush was never sent, the server kept the fid busy
+ * with the killed read, and the client, freeing the fid, gave its
+ * number to the next walk ("fid in use").  How long the message is
+ * waited for is the watch's to bound, set just after.
+ */
+static void
+mntkilledsend(void)
+{
+	lock(&up->rlock);
+	up->intpend = 0;
+	unlock(&up->rlock);
+}
+
 static void
 mntwatch(Mwatch *w)
 {
@@ -1070,6 +1088,7 @@ mountio(Mnt *m, Mntrpc *r)
 		r = mntflushalloc(r, m->msize);
 		poperror();
 		if(upkilled()){
+			mntkilledsend();
 			mntwatch(&w);
 			watched = 1;
 		}
@@ -1090,6 +1109,7 @@ mountio(Mnt *m, Mntrpc *r)
 	 * the dying Prog, or its killer, for good.
 	 */
 	if(!watched && (r->request.type == Tclunk || r->request.type == Tremove) && upkilled()){
+		mntkilledsend();
 		mntwatch(&w);
 		watched = 1;
 	}

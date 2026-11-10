@@ -14,6 +14,13 @@ All notable changes to InferNode are documented in this file.
   refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
   are unchanged. login(6) describes the protocol as it is.
 
+- **devssl has HMAC-SHA-384.** ssl(3)'s only digest was `sha256`, SSL 2's
+  hash of secret, record and record number, which is not an HMAC and not a MAC
+  CNSA admits. `alg hmac_sha384` is HMAC-SHA-384 keyed by the secret over the
+  record and its number, in the emulator and the native kernels alike; `sha256`
+  is unchanged for the peers that speak it. ssl(3) lists the algorithms the
+  device has (it still described SHA-1, MD5, RC4, DES and IDEA).
+
 ### Fixed
 
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a

@@ -26,6 +26,9 @@
 #                wide as cwind: set to one segment, the window grew back
 #                a segment a round trip and never doubled; a ushort
 #                wraps half a scaled window (2026-11-10).
+#   loopback     the loopback queue holds several of TCP's 512K windows:
+#                at 128K it dropped 95% of a Pi 4's loopback traffic
+#                (2026-11-10).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -68,6 +71,9 @@ if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the rese
 rx=$(sed -n '/^tcprxmit(Conv \*s)/,/^}/p' os/ip/tcp.c)
 if grep -Eq '^[[:space:]]*u32int[[:space:]]+ssthresh;' os/ip/tcp.c && echo "$rx" | grep -q 'ssthresh = flight/2'; then ok "a loss halves ssthresh from the flight, in 32 bits"
 else no "tcprxmit's ssthresh is not half the flight in a u32int"; fi
+lbq=$(sed -n 's/.*lb->q = qopen(\([0-9*]*\), Qmsg.*/\1/p' os/ip/loopbackmedium.c)
+if [ -n "$lbq" ] && [ $(( lbq )) -ge $(( 4*512*1024 )) ]; then ok "the loopback queue holds four 512K windows ($(( lbq )) bytes)"
+else no "the loopback queue is ${lbq:-not found}: less than four of TCP's 512K windows"; fi
 
 idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)

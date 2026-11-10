@@ -130,6 +130,7 @@ void		mousetrack(int, int, int, int);
 void		muxclose(Mnt*);
 Chan*	namec(char*, int, int, ulong);
 Chan*	newchan(void);
+void	chanfidretire(Chan*);
 Cname*	newcname(char*);
 Egrp*	newegrp(void);
 Fgrp*	newfgrp(Fgrp*);

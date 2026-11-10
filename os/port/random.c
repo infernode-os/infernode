@@ -147,37 +147,64 @@ wipe(void *a, int n)
 }
 
 /*
- * HMAC-SHA-512 (RFC 2104) of the pieces p[0..n-1], one after another,
- * its digest states on the stack: libsec's hmac_x allocates the outer
- * one, and this runs with drbg.q held, where an allocation could wait
- * or fail.
+ * HMAC-SHA-512 (RFC 2104), its digest states on the stack: libsec's
+ * hmac_x allocates the outer one, and this runs with drbg.q held, where
+ * an allocation could wait or fail. A key's two padded blocks are
+ * hashed once (hkey), since a Generate uses one key for every block of
+ * its output; this halves what a byte costs.
  */
-static void
-hmac(uchar *key, uchar **p, int *len, int n, uchar *out)
+typedef struct Hkey Hkey;
+struct Hkey
 {
-	SHA512state s;
-	uchar pad[SHA512bsize], in[SHA512dlen];
+	SHA512state	i;	/* after K ^ ipad */
+	SHA512state	o;	/* after K ^ opad */
+};
+
+static void
+hkey(Hkey *h, uchar *key)
+{
+	uchar pad[SHA512bsize];
 	int i;
 
+	memset(h, 0, sizeof *h);
 	memset(pad, 0x36, sizeof pad);
 	for(i = 0; i < Outlen; i++)
 		pad[i] ^= key[i];
-	memset(&s, 0, sizeof s);
-	sha512(pad, sizeof pad, nil, &s);
+	sha512(pad, sizeof pad, nil, &h->i);
+	memset(pad, 0x5c, sizeof pad);
+	for(i = 0; i < Outlen; i++)
+		pad[i] ^= key[i];
+	sha512(pad, sizeof pad, nil, &h->o);
+	wipe(pad, sizeof pad);
+}
+
+/* HMAC under h of the pieces p[0..n-1], one after another */
+static void
+hmacwith(Hkey *h, uchar **p, int *len, int n, uchar *out)
+{
+	SHA512state s;
+	uchar in[SHA512dlen];
+	int i;
+
+	s = h->i;
 	for(i = 0; i < n; i++)
 		if(len[i] > 0)
 			sha512(p[i], len[i], nil, &s);
 	sha512(nil, 0, in, &s);
-
-	memset(pad, 0x5c, sizeof pad);
-	for(i = 0; i < Outlen; i++)
-		pad[i] ^= key[i];
-	memset(&s, 0, sizeof s);
-	sha512(pad, sizeof pad, nil, &s);
+	s = h->o;
 	sha512(in, sizeof in, out, &s);
-	wipe(pad, sizeof pad);
 	wipe(in, sizeof in);
 	wipe(&s, sizeof s);
+}
+
+static void
+hmac(uchar *key, uchar **p, int *len, int n, uchar *out)
+{
+	Hkey h;
+
+	hkey(&h, key);
+	hmacwith(&h, p, len, n, out);
+	wipe(&h, sizeof h);
 }
 
 /* V = HMAC(K, V) */
@@ -238,15 +265,21 @@ reseedwith(uchar *k, uchar *v, uchar *e, int ne)
 static void
 generatewith(uchar *k, uchar *v, uchar *p, int n)
 {
-	int m;
+	Hkey h;
+	uchar *pv[1];
+	int m, lv[1];
 
+	hkey(&h, k);
+	pv[0] = v;
+	lv[0] = Outlen;
 	while(n > 0){
-		nextv(k, v);
+		hmacwith(&h, pv, lv, 1, v);	/* V = HMAC(K, V) */
 		m = n < Outlen ? n : Outlen;
 		memmove(p, v, m);
 		p += m;
 		n -= m;
 	}
+	wipe(&h, sizeof h);
 	update(k, v, nil, 0, nil, 0, nil, 0);
 }
 

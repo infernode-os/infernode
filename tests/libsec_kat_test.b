@@ -31,7 +31,7 @@ LibsecKatTest: module
 
 SRCFILE: con "/tests/libsec_kat_test.b";
 VECTORS: con "/tests/host/gcm/vectors.txt";
-vectors := VECTORS;	# or the argument naming them (a board, whose tree is elsewhere)
+vectors: string;	# VECTORS, or the argument naming them (a board, whose tree is elsewhere)
 
 passed := 0;
 failed := 0;
@@ -157,6 +157,8 @@ testGCM(t: ref T)
 			t.error(sys->sprint("built-in vector %d: %s", i, e));
 	}
 	f := bufio->open(vectors, Bufio->OREAD);
+	if(f == nil && vectors != VECTORS)
+		t.fatal(sys->sprint("can't open %s: %r", vectors));
 	if(f != nil){
 		while((line := f.gets('\n')) != nil){
 			(nf, fl) := sys->tokenize(line, " \t\n");
@@ -166,7 +168,9 @@ testGCM(t: ref T)
 			if((e := gcm1(tl fl)) != nil && bad++ < 5)
 				t.error(sys->sprint("vector %d of %s: %s", n - len builtin, vectors, e));
 		}
-		t.assert(n >= len builtin + 438, sys->sprint("%d vectors read", n));
+		# the tree's file holds 438; another name is taken as the same file
+		if(n > len builtin || vectors != VECTORS)
+			t.assert(n >= len builtin + 438, sys->sprint("%d vectors read", n));
 	}
 	t.asserteq(bad, 0, "AES-GCM gives OpenSSL's ciphertext and tag, and opens them");
 	t.log(sys->sprint("%d GCM vectors", n));
@@ -228,7 +232,8 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load testing";
 	}
 	testing->init();
-	for(a := args; a != nil; a = tl a)
+	vectors = VECTORS;
+	for(a := tl args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
 		else

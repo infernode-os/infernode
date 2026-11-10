@@ -178,7 +178,7 @@ aesarm64ctr32(const u32int *ekey, int rounds, const uchar ctr[16], uchar *p, ulo
 	uint8x16_t k[AESmaxrounds+1], c[4], s[4];
 	uchar blk[16];
 	u32int base, i;
-	ulong j, m;
+
 	int l;
 
 	loadkeys(k, ekey, rounds);
@@ -198,10 +198,12 @@ aesarm64ctr32(const u32int *ekey, int rounds, const uchar ctr[16], uchar *p, ulo
 				p += 16;
 				n -= 16;
 			}else{
-				vst1q_u8(blk, s[l]);
-				m = n;
-				for(j = 0; j < m; j++)
-					p[j] ^= blk[j];
+				/* the last part-block, through a whole one: n bytes
+				 * of p in, a 16-byte exclusive-or, n bytes out */
+				memset(blk, 0, sizeof blk);
+				memmove(blk, p, n);
+				vst1q_u8(blk, veorq_u8(vld1q_u8(blk), s[l]));
+				memmove(p, blk, n);
 				n = 0;
 			}
 		}

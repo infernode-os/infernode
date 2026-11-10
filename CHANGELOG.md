@@ -4,6 +4,43 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **vid9p replays a `.y4m` file as a live feed: `vid9p -r file.y4m`, or
+  `replay file.y4m` to its `ctl`.** Its frames come at the file's rate
+  and start again from the first after the last, numbered on, so what
+  reads the feed (vision(4), wm/camera, Matrix) sees a live source, as
+  from camsrv or a host decoder, with `-w`'s window kept. It needs no
+  host decoder, so a bare-metal board with no camera can serve one.
+  A frame read past a live feed's window is now refused as `frame
+  expired`, as camsrv refuses it: vid9p added ` (retention window)`, and
+  wm/camera, vision(4), vidplay9p and Matrix's video pane, which match
+  the words to go on from the newest frame, stopped instead (wm/camera
+  showed "no camera"). `tests/host/vid9p_replay_test.sh` checks both.
+
+- **The machines a name space reaches, drawn from it:
+  `{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s` (#1136).**
+  `ns2mmd` turns ns(1)'s lines into a Mermaid flowchart: this machine,
+  each machine a mount reaches (named by ndb), an edge for each mount
+  with its service and mount point, marked when encrypted; a stream in,
+  a chart out each time the name space changes. `wm/page -s` shows a
+  stream of documents, each in the last one's place. An encrypted
+  mount's source in a name space is its SSL conversation (`#D/0/data`),
+  which nothing joined to its connection: ssl(3) has a new read-only
+  file, `#D/n/lower`, naming the channel the conversation was pushed
+  onto (`/net/tcp/3/data`), in emu and the native kernel. Mermaid text
+  on standard input (`flowchart`, `sequenceDiagram`) is now known as
+  Mermaid by its first bytes. `tests/host/ns_topology_test.sh` checks it.
+
+- **A detector's boxes are drawn in a colour for each class.** A
+  detection (vision(4)'s records) with no `colour=` of its own was drawn
+  in the theme's accent, so people, cars and traffic lights were one
+  colour. layers(2) now gives each class one of the theme's eight
+  categorical colours (`pie0` to `pie7`), by a hash of its name, so it
+  is the same colour in every frame, viewer and run; a record's own
+  `colour=` still comes first. In wm/camera, Matrix's video pane and
+  vidplay9p alike.
+
 ### Fixed
 
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a
@@ -22,6 +59,90 @@ All notable changes to InferNode are documented in this file.
   replies to the wrong requests ("unexpected reply tag") until the
   mount wedged. Every server built before this release has it, which is
   why an encrypted mount offers no more than 32512 bytes.
+
+- **Mermaid flowcharts: quoted labels, `<br>` line breaks, edges round
+  the nodes in their way, and room for edge labels.** A label in quotes
+  (`a["a [b]"]`, `-- "AES-256" -->`) is read to its closing quote, so it
+  may hold brackets, pipes and dashes; it kept its quotes, and a dash in
+  an edge's quoted label lost the edge. `<br>` and `<br/>` break a
+  label's lines, in nodes and on edges. An edge that skips a layer goes
+  round the side, as one against the flow does: it ran straight under
+  the node between, hidden. The gap between layers is wide enough for
+  the edge labels in it, which the nodes either side were drawn over,
+  and edges bending into one node keep their labels apart, each where
+  it leaves its own source's row. `tests/mermaid_flow_test.b` checks
+  each.
+
+- **listen(1) can be started again while a connection it made is
+  open.** Each authenticated connection kept a copy of the listener's
+  file descriptors, the announcement's among them, so a listen killed
+  and started again on the same address was refused ("address in
+  use") until every connection it had made ended, and the address
+  stayed announced with nothing taking connections. A connection now
+  keeps only its own files.
+
+- **vid9p exits when its client hangs up.** When its 9P channel ended
+  it went on serving nothing, its ticker with it, for ever; under
+  `listen -A`, which runs a connection's command in the listener, no
+  second client was served at all. It now takes a process group of its
+  own and ends it, feeder and host decoder included, with the channel.
+
+- **TCP over a native kernel's loopback no longer drops most of what it
+  sends.** The loopback interface's queue held 128K for both directions
+  of every conversation while TCP's windows are 512K, so a bulk transfer
+  overflowed it: on a Raspberry Pi 4, 95% of loopback packets were
+  dropped and TCP spent its time retransmitting. With a 2 MB queue none
+  are dropped, and a transfer between two programs on one board went
+  from 9-30 MB/s to about 500.
+
+### Security
+
+- **A Prog killed in a 9P call over an encrypted mount no longer takes
+  the mount down for everyone else.** The killed call's flush is written
+  through devssl, and the kill, still pending, interrupted that write
+  before any of the record was sent; devssl hung the connection up for
+  any error in a write, so every later request on the mount failed with
+  "inappropriate use of fd". A pending interrupt is now raised before a
+  record is begun, and only a record begun and not sent whole hangs the
+  connection up. And the flush is sent: what was pending was a second
+  interrupt for the kill already being handled, and devmnt now clears it
+  before a killed call's flush, clunk or remove, which its watch still
+  bounds. Unsent, the server kept the killed read's fid and the client
+  gave its number to the next walk, so the file could not be opened
+  again ("fid in use"), over any mount. Changing a vision(4) session's `place` while it follows
+  a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
+  checks it. The native kernel's devssl has the same write path; it is
+  not changed here.
+
+### Performance
+
+- **Video feeds are read with several reads in flight.** wm/camera,
+  vidplay9p, Matrix's video pane and vision(4)'s feed follower read a
+  frame as four reads of its pieces at once (`parread(2)`), so a frame
+  over the network waits about one round trip, not one per message. A
+  Raspberry Pi 4 reading 720p from a Pi 5 over an encrypted mount went
+  from 67 to 39 ms a frame (15 to 25 frames a second).
+
+- **AES and SHA-256 by the ARMv8 instructions.** On Apple Silicon and
+  on arm64 Linux and Android processors that have them (getauxval's
+  `HWCAP_AES`, `HWCAP_SHA2`), libsec's AES-CBC, AES blocks and SHA-256
+  use the Cryptography Extension instead of tables and C. On an M-series
+  Mac AES-256-CBC went from 234 to 1640 MB/s and SHA-256 from 442 to
+  2298 MB/s; an encrypted devssl session (AES-256-CBC with SHA-256)
+  from 140 to 579 MB/s. On a Jetson Orin, AES-256-CBC 138 to 1077 MB/s
+  encrypting and 142 to 2118 decrypting, SHA-256 163 to 828. Results
+  are byte for byte the C's (`tests/host/armcrypto_test.sh`). The native
+  kernels keep the C: their code may not touch the FP/SIMD registers.
+
+- **The native kernels' TCP recovers from loss faster.** After a
+  retransmission the slow-start threshold is half what was in flight
+  (RFC 5681), not one segment, so the window doubles back instead of
+  growing a segment a round trip; and the least retransmission timeout
+  is 200 ms (Linux's), not 500. Reading 720p frames from a Raspberry
+  Pi 5 with four reads in flight while a bulk download shared its path,
+  65 frames came through in the time master's kernel took 46 and 48,
+  and the slowest frame took 2.4 s to master's 3.3 and 5.4. With no
+  competing traffic nothing changed.
 
 ## [0.10.0] - 2026-11-09
 

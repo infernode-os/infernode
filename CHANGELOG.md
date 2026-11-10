@@ -6,6 +6,17 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **Recognition boxes no longer freeze when a session's settings
+  change.** Moving a vision session to another place (`place dla0`),
+  or changing its threshold, classes, model or rate, starts a new
+  follower for the same feed, and stopping the old one told every
+  waiting reader the feed had ended. A layer bound into a camera's
+  (wm/camera, Matrix) stopped there, its boxes frozen, until it was
+  unmounted and bound again. Readers now go on to the new follower's
+  frames.
+
+### Fixed
+
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a
   plain connection and 32512 bytes on an encrypted one (`mount -k`,
   `-C`, listen's connections), and gets what the server takes. Over the

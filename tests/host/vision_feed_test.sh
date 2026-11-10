@@ -77,9 +77,17 @@ visionfs load m $M
 		echo '-- cam'
 		for i in 1 2 3 4 5 { read }
 		echo '-- cam status'; cat /mnt/cam/0/status
-		echo thresh 0.3 > /mnt/vision/\$id/ctl
+		# a reader that stops at end of file, as a layer's in wm/camera:
+		# it waits for the next frame while the setting changes under it
+		cat > /tmp/vision_feed_cat &
+		sleep 2
+		echo thresh 0.45 > /mnt/vision/\$id/ctl
+		sleep 2
+		n0=\`{wc -l < /tmp/vision_feed_cat}
+		sleep 3
+		n1=\`{wc -l < /tmp/vision_feed_cat}
 		echo '-- cam restarted'
-		for i in 1 2 3 { read }
+		echo \$n0 \$n1
 	} < /mnt/vision/\$id/detections
 	echo src none > /mnt/vision/\$id/ctl
 } < /mnt/vision/clone
@@ -116,6 +124,6 @@ cam=$(part cam | cut -d' ' -f1 | sed 's/frame=//' | tr '\n' ' ')
 camframes=$(part 'cam status' | sed -n 's/.* frames=\([0-9]*\).*/\1/p')
 okcam=$(echo "$cam" | awk -v f="$camframes" '{n=0; for(i=1;i<=NF;i++){ if($i !~ /^[0-9]+$/ || $i >= f || (i>1 && $i <= p)) bad=1; p=$i; n++ } } END {print (n==5 && !bad && f != "") ? 1 : 0}')
 [ "$okcam" = 1 ] && ok "a camera: the session's frames are the camera's own numbers ($cam< frames=$camframes)" || bad "a camera's frames: '$cam' camsrv frames=$camframes"
-nre=$(part 'cam restarted' | grep -c '^frame=')
-[ "$nre" -ge 3 ] && ok "a setting changed under a reader (thresh: a new follower): the same open file goes on to the next frames ($nre)" || bad "after a restart the reader had $nre frames (it was told the feed had ended: a bound layer froze)"
+read n0 n1 <<< "$(part 'cam restarted' | tail -1)"
+[ -n "$n1" ] && [ "$n1" -gt "$n0" ] && ok "a setting changed under a waiting reader (thresh: a new follower): it reads on ($n0 then $n1 lines)" || bad "a setting changed under a waiting reader: it stopped at $n0 then $n1 lines (told the feed had ended: a bound layer froze)"
 exit $fail

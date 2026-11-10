@@ -156,15 +156,6 @@ All notable changes to InferNode are documented in this file.
   is unchanged for the peers that speak it. ssl(3) lists the algorithms the
   device has (it still described SHA-1, MD5, RC4, DES and IDEA).
 
-- **The native kernels' generator is NIST's HMAC_DRBG.** `os/port/random.c`,
-  behind every key, `#c/random` and `#c/notquiterandom` on bare metal, was
-  ChaCha20, which no NIST or CNSA list admits as a generator. It is now
-  HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1), instantiated from 64 bytes of
-  hardware entropy and a 16-byte nonce and reseeded as before, checked against
-  NIST's CAVP vectors at first use (a kernel that fails them panics), with
-  SP 800-90B's repetition-count and adaptive-proportion tests on every hardware
-  byte. The host test checks it against 60 of NIST's vectors.
-
 - **A Prog killed in a 9P call over an encrypted mount no longer takes
   the mount down for everyone else.** The killed call's flush is written
   through devssl, and the kill, still pending, interrupted that write

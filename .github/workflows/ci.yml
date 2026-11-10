@@ -1233,7 +1233,7 @@ jobs:
         # seek) paced by the clock, and the Matrix video pane driving it
         # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
         failed=
-        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
+        for t in vid9p_test vid9p_replay_test vid9p_transport_test uitest_transport_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?

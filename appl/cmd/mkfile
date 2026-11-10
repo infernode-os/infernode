@@ -353,6 +353,7 @@ SYSMODULES=\
 	bayer.m\
 	layers.m\
 	tensor.m\
+	parread.m\
 
 DISBIN=$ROOT/dis
 

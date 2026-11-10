@@ -432,6 +432,7 @@ dis/lib/rand.dis
 dis/lib/random.dis
 dis/lib/readavif.dis
 dis/lib/readdir.dis
+dis/lib/parread.dis
 dis/lib/readgif.dis
 dis/lib/readjpg.dis
 dis/lib/readpicfile.dis
@@ -863,6 +864,7 @@ dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
 dis/tests/ninep_pack_test.dis
+dis/tests/parread_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/nmea_test.dis
 dis/tests/opus_test.dis

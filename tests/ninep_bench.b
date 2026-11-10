@@ -136,9 +136,10 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	if(stalls)
 		sys->print("stalls=%d\n", stalls);
+	# the deadline timers sleep on: end them, so that emu exits now,
+	# after errors as well (it waited out the caller's timeout)
 	if(errors)
-		raise "fail:errors";
-	# the deadline timers sleep on: end them, so that emu exits now
+		sys->fprint(sys->fildes(2), "ninep_bench: %d errors\n", errors);
 	if((fd := sys->open(sys->sprint("/prog/%d/ctl", sys->pctl(0, nil)), Sys->OWRITE)) != nil)
 		sys->fprint(fd, "killgrp");
 }

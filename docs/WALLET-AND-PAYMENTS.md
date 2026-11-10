@@ -169,7 +169,7 @@ intentionally short.
 - The PAK exchange uses a 1024-bit prime; the first authentication of a session
   takes ~5 seconds on a laptop because of `H = (...)^r mod p`. Factotum caches
   `Hi` per (user, password) so subsequent auth is fast.
-- The wire is wrapped with Inferno SSL (`alg sha256 aes_128_cbc`); the bulk
+- The wire is wrapped with Inferno SSL (`alg aes_256_gcm`); the bulk
   cipher is AES-128-CBC and integrity is HMAC-SHA-256, with keys derived from
   the PAK shared secret. There is no PKI / no X.509 — the SSL handshake is
   symmetric, keyed entirely by PAK.

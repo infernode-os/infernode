@@ -74,7 +74,7 @@ All of this writes to `/mnt/toolctl/ctl`. The agent picks up the new state at th
 
 ## Cross-Host
 
-The same agent stack runs on a Jetson (Linux ARM64) over ZeroTier. 9P mounts work cross-host with Inferno keyring authentication (a hybrid post-quantum STS handshake: ML-KEM-768, or ML-KEM-1024 with ML-DSA-87 keys in CNSA strict mode via `CNSAMODE`) and, by default, `aes_256_cbc sha256` on the link (`mount`, `listen`). You can mount a remote Inferno namespace locally or vice versa.
+The same agent stack runs on a Jetson (Linux ARM64) over ZeroTier. 9P mounts work cross-host with Inferno keyring authentication (a hybrid post-quantum STS handshake: ML-KEM-768, or ML-KEM-1024 with ML-DSA-87 keys in CNSA strict mode via `CNSAMODE`) and, by default, `aes_256_gcm` on the link (`mount`, `listen`). You can mount a remote Inferno namespace locally or vice versa.
 
 ---
 

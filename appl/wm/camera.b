@@ -212,6 +212,11 @@ show(w: ref Window, frame: ref Image)
 # The server paces this: a read of the next frame waits for it. Frames
 # are numbered (frame n at n*framesize): it starts at the newest and,
 # if it falls behind ("frame expired"), goes on from the newest again.
+# It is a camera's window, so it keeps to the live edge: more than
+# Behind frames behind the newest (a feed across a network it cannot
+# read as fast as the feed makes them) it goes on from the newest, not
+# showing seconds-old frames until they expire, while a layer drawn
+# over them (a detector's, keyed to frames now) has nothing for them.
 # After each frame it waits to be told to go on (1) or to let go of the
 # feed (0), in which case it closes it and waits for resume. Each time
 # it takes the feed it asks its size, which may have changed meanwhile.
@@ -244,6 +249,8 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 				return;
 			}
 			pic.n = f++;
+			if((nf := newest()) - f > Behind)
+				f = nf;
 			got <-= (nil, pic);
 			if(<-more == 0)
 				break;
@@ -252,6 +259,8 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 		<-resume;
 	}
 }
+
+Behind: con 3;	# frames behind the newest that a reader may be
 
 # frame f, whole, at its offset: (bytes, error)
 readat(fd: ref Sys->FD, b: array of byte, f: int): (int, string)

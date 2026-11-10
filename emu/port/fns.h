@@ -229,6 +229,7 @@ void		cleanexit(int);
 void		oshostintr(Proc*);
 void		osenter(void);
 void		osleave(void);
+void		osleavekeep(void);
 void		oslopri(void);
 void		ospause(void);
 void		osyield(void);

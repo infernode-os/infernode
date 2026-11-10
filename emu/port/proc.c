@@ -236,6 +236,42 @@ osleave(void)
 		error(Eintr);
 }
 
+/*
+ * Leave a system call that did its work: a socket read that returned
+ * bytes, a write that sent them.  An interrupt that came during it
+ * (the Prog killed while the host call ran) is not raised now: raised,
+ * it threw away what the call had done (bytes taken off a socket and
+ * lost, an encrypted mount's stream out of step: "bad digest", or a
+ * record waited for that never comes).  It is left pending, and the
+ * next Sleep or osenter raises it, before anything else is done.
+ */
+void
+osleavekeep(void)
+{
+	int r;
+
+	lock(&up->rlock);
+	r = up->swipend;
+	up->swipend = 0;
+	if(r)
+		up->intpend = 1;
+	unlock(&up->rlock);
+
+	lock(&up->sysio);
+	up->syscall = 0;
+	unlock(&up->sysio);
+
+	if(up->intwait) {
+		int i;
+		for(i = 0; i < 1000; i++) {
+			if(!up->intwait)
+				break;
+			osyield();
+		}
+		up->intwait = 0;
+	}
+}
+
 void
 rptwakeup(void *o, void *ar)
 {

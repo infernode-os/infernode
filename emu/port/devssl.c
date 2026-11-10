@@ -59,6 +59,10 @@ struct Dstate
 
 	/* output side */
 	OneWay	out;
+	Queue	*oq;		/* records for the writer, in order */
+	Lock	wlk;
+	int	writer;		/* the writer kproc is running */
+	int	closed;		/* the last reference is gone */
 
 	/* protections */
 	char*	user;
@@ -108,6 +112,8 @@ static Block*	digestb(Dstate*, Block*, int);
 static void	checkdigestb(Dstate*, Block*);
 static Chan*	buftochan(char*);
 static void	sslhangup(Dstate*);
+static void	dsfree(Dstate*);
+static void	sslwriter(void*);
 static void dsclone(Chan *c);
 static void	dsnew(Chan *c, Dstate **);
 
@@ -329,16 +335,79 @@ sslclose(Chan *c)
 		dstate[CONV(c->qid)] = 0;
 		unlock(&dslock);
 
-		sslhangup(s);
-		if(s->c)
-			cclose(s->c);
-		free(s->user);
-		free(s->in.secret);
-		free(s->out.secret);
-		free(s->in.state);
-		free(s->out.state);
-		free(s);
+		/*
+		 *  the writer sends what is queued, then frees s; or, if it
+		 *  has already gone, s is freed here
+		 */
+		if(s->oq != nil)
+			qhangup(s->oq, nil);
+		lock(&s->wlk);
+		s->closed = 1;
+		if(s->writer){
+			unlock(&s->wlk);
+			break;
+		}
+		unlock(&s->wlk);
+		dsfree(s);
 	}
+}
+
+static void
+dsfree(Dstate *s)
+{
+	sslhangup(s);
+	if(s->c)
+		cclose(s->c);
+	if(s->oq != nil)
+		qfree(s->oq);
+	free(s->user);
+	free(s->in.secret);
+	free(s->out.secret);
+	free(s->in.state);
+	free(s->out.state);
+	free(s);
+}
+
+/*
+ *  The writer: a kproc that sends the records sslbwrite queued, in
+ *  order, to the channel underneath.  A Prog writing a record only
+ *  queues it, and queueing is all or nothing, so a Prog killed while
+ *  it writes (a 9P client of a mount over this connection, killed in
+ *  the middle of sending its request) cannot leave half a record on
+ *  the wire.  It wrote to the channel itself: a kill interrupted the
+ *  host's write part way, and the connection, which every other client
+ *  of the mount shares, was hung up.
+ */
+static void
+sslwriter(void *a)
+{
+	Dstate *s;
+	Block *b;
+	int closed;
+
+	s = a;
+	for(;;){
+		b = qbread(s->oq, Maxdmsg+256);
+		if(b == nil)
+			break;
+		if(waserror()){
+			/* the channel underneath failed: nothing more can be sent */
+			sslhangup(s);
+			qhangup(s->oq, up->env->errstr);
+			while((b = qget(s->oq)) != nil)
+				freeb(b);
+			break;
+		}
+		devtab[s->c->type]->bwrite(s->c, b, s->c->offset);
+		poperror();
+	}
+	lock(&s->wlk);
+	s->writer = 0;
+	closed = s->closed;
+	unlock(&s->wlk);
+	if(closed)
+		dsfree(s);
+	pexit("", 0);
 }
 
 /*
@@ -633,7 +702,6 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 {
 	volatile struct { Dstate *s; } s;
 	volatile struct { Block *b; } bb;
-	volatile struct { int begun; } r;
 	Block *nb;
 	int h, n, m, pad, rv;
 	uchar *p;
@@ -647,35 +715,24 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		error(Ebadusefd);
 	}
 
-	/*
-	 * A record begun and not sent whole leaves the connection out of
-	 * step: its sequence number and the cipher's state advanced, or
-	 * part of it on the wire.  Only then is it hung up.  An error
-	 * between records leaves the stream at a record's end, and the
-	 * connection goes on.
-	 */
-	r.begun = 0;
 	if(waserror()){
 		qunlock(&s.s->out.q);
+		/*
+		 *  interrupted waiting for the writer's queue, every record
+		 *  queued: they will all go and the connection is whole.
+		 *  Anything else, or some of the write not queued, leaves the
+		 *  far end part of a message.
+		 */
+		if(bb.b != nil || strcmp(up->env->errstr, Eintr) != 0)
+			sslhangup(s.s);
 		if(bb.b)
 			freeb(bb.b);
-		if(r.begun)
-			sslhangup(s.s);
 		nexterror();
 	}
 	qlock(&s.s->out.q);
 
 	rv = 0;
 	while(bb.b){
-		/*
-		 * An interrupt pending (a Prog killed in a 9P call over this
-		 * connection, whose flush comes here) is raised now, before
-		 * the record is begun: raised by the host write's osenter, it
-		 * hung up a connection every other user of the mount needed.
-		 */
-		osenter();
-		osleave();
-		r.begun = 1;
 		m = n = BLEN(bb.b);
 		h = s.s->diglen + 2;
 
@@ -744,9 +801,19 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 		s.s->out.mid++;
 
 		m = BLEN(nb);
-		devtab[s.s->c->type]->bwrite(s.s->c, nb, s.s->c->offset);
+		if(s.s->oq == nil){
+			s.s->oq = qopen(4*Maxdmsg, 0, nil, nil);
+			if(s.s->oq == nil){
+				freeb(nb);
+				error(Enomem);
+			}
+			lock(&s.s->wlk);
+			s.s->writer = 1;
+			unlock(&s.s->wlk);
+			kproc("sslwriter", sslwriter, s.s, 0);
+		}
+		qbwrite(s.s->oq, nb);	/* queued whole before any wait */
 		s.s->c->offset += m;
-		r.begun = 0;
 	}
 	qunlock(&s.s->out.q);
 	poperror();

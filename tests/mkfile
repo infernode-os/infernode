@@ -68,6 +68,7 @@ TARG=\
 	osk_accuracy.dis\
 	ninep_bench.dis\
 	ninep_msize_test.dis\
+	ninep_disconnect_test.dis\
 	crypto_bench.dis\
 	tcpwatch.dis\
 	keyboards_test.dis\

@@ -97,6 +97,9 @@ for c in $ccs; do
 			echo "FAIL: $c: gcmtest -DCTGRIND does not compile"
 			fails=$((fails+1))
 		fi
+	elif [ -n "${CI:-}" ] && [ "$(uname)" = Linux ]; then
+		echo "FAIL: CI has no valgrind (and valgrind's memcheck.h): the GHASH constant-time check did not run"
+		fails=$((fails+1))
 	else
 		echo "SKIP: $c: GHASH constant-time check (needs valgrind and its headers)"
 	fi

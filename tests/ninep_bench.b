@@ -118,7 +118,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(auth == nil || (e := auth->init()) != nil)
 			fatal("cannot load auth: " + e);
 	}
-	sys->pctl(Sys->FORKNS, nil);
+	sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil);
 	# runs outermost, and within a run each case in an order turned by
 	# one each run: a link that drifts over minutes then falls on every
 	# case alike, not on whichever was measured first
@@ -138,6 +138,9 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->print("stalls=%d\n", stalls);
 	if(errors)
 		raise "fail:errors";
+	# the deadline timers sleep on: end them, so that emu exits now
+	if((fd := sys->open(sys->sprint("/prog/%d/ctl", sys->pctl(0, nil)), Sys->OWRITE)) != nil)
+		sys->fprint(fd, "killgrp");
 }
 
 # a connection to addr, authenticated, at msize, mounted on dir

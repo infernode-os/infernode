@@ -6,6 +6,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **Login takes AES-256-GCM in CNSA mode.** The key exchange with a signer
+  (login(2), logind(8)) sealed its Diffie-Hellman value with ChaCha20-Poly1305,
+  which CNSA does not admit. A client in CNSA mode (`/env/cnsamode`) now seals
+  it with AES-256-GCM under a key from HKDF with SHA-384, and says so by its
+  IV's length (44 bytes, not 32); a signer takes either, and in CNSA mode
+  refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
+  are unchanged. login(6) describes the protocol as it is.
+
 - **AES-GCM's GHASH takes the same time whatever it hashes.** It looked up a
   table by nibbles of the running hash, which a cache shared with an attacker
   shows. It is now PMULL where the processor has it, and otherwise integer

@@ -21,25 +21,30 @@ In the description below:
 .PD
 .TP
 .I ivec
-is an 8 byte random number (`initialisation vector') chosen for
-this conversation.
+is a random salt followed by a 12-byte nonce, chosen for this
+conversation.
+Its length names the AEAD the client takes:
+32 bytes (a 20-byte salt) for ChaCha20-Poly1305,
+44 bytes (a 32-byte salt) for AES-256-GCM.
+A client in CNSA mode (\f5/env/cnsamode\fP set) sends only the second,
+and a CA in CNSA mode refuses the first, saying so.
 .TP
-.I sha
-is the 20 byte secure hash (SHA-1) of the password
+.I pw
+is the 32-byte SHA-256 of the password, as
+.IR changelogin (8)
+keeps it.
 .TP
 .I key
-is an 8 byte secret formed as follows:
+is 32 bytes by HKDF (RFC 5869) from
+.I pw
+and the salt:
 .EX
-.br
-key[0] = ivec[0]^sha[0]^sha[8]^sha[16]
-key[1] = ivec[1]^sha[1]^sha[9]^sha[17]
+PRK = HMAC-H(salt, pw)
+key = HMAC-H(PRK, info || 0x01)[0:32]
 .EE
-\&...
-.EX
-key[5] = ivec[5]^sha[5]^sha[13];
-key[6] = ivec[6]^sha[6]^sha[14];
-key[7] = ivec[7]^sha[7]^sha[15];
-.EE
+where H is SHA-256 and info is \f5infernode login aead\fP for
+ChaCha20-Poly1305, and H is SHA-384 and info is
+\f5infernode login aes-256-gcm\fP for AES-256-GCM.
 .TP
 .I alpha
 is a Diffie-Hellman base used system wide
@@ -50,8 +55,9 @@ is a Diffie-Hellman modulus used system wide
 .I "key(m)"
 is
 .I m
-encrypted using the RC4 algorithm with
-.IR key .
+sealed by the AEAD with
+.I key
+and the nonce, sent as the ciphertext and then its 16-byte tag.
 .TP
 .I Rx
 is a random number of the same order as

@@ -3,15 +3,18 @@ implement CipherMatrixTest;
 #
 # Line-encryption negotiation matrix for node-to-node sessions.
 #
-# pqauth_test / interop_test only exercise the default aes_256_cbc/sha256.
-# This sweeps every cipher and MAC the ssl device offers (devssl.c
-# encrypttab/hashtab) plus the unencrypted ("none") path, driving each through
-# a real auth->server / auth->client handshake and a data round-trip, and
-# asserting the payload survives byte-for-byte.
+# pqauth_test / interop_test only exercise the default aes_256_gcm.
+# This sweeps what the ssl device offers (devssl.c encrypttab/hashtab)
+# plus the unencrypted ("none") path, driving each through a real
+# auth->server / auth->client handshake and a data round-trip, and
+# asserting the payload survives byte-for-byte; and the policies and
+# requests the server refuses.
 #
-#   ciphers: aes_256_cbc, aes_128_cbc
-#   MACs:    sha256
+#   cipher:  aes_256_gcm (authenticating its records too)
+#   MAC:     hmac_sha384
 #   plus:    none (auth succeeds, no ssl pushed)
+#   refused: a MAC alone where the policy has the cipher, the old
+#            algorithms (aes_256_cbc, sha256), two algorithms at once
 #
 # Runs over a pipe (no TCP ports needed); each case has a timeout safety net.
 #
@@ -178,30 +181,38 @@ roundtrip(t: ref T, label: string, serverAlgs: list of string, clientAlg: string
 
 rejectsubset(t: ref T, label, clientAlg: string)
 {
+	refused(t, label, "aes_256_gcm"::"hmac_sha384"::nil, clientAlg);
+}
+
+refused(t: ref T, label: string, serverAlgs: list of string, clientAlg: string)
+{
 	(srv, cli) := setup();
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
 		t.fatal(sys->sprint("pipe failed: %r"));
 	rc := chan of (int, string);
-	spawn serverside(fds[0], srv, "aes_256_cbc"::"sha256"::nil, 0, rc);
+	spawn serverside(fds[0], srv, serverAlgs, 0, rc);
 	auth->client(clientAlg, cli, fds[1]);
 	(ok, err) := <-rc;
 	t.asserteq(ok, 0, label + ": incomplete policy rejected");
 	t.assert(err != nil, label + ": server reports policy error");
 }
 
-# ---- cipher sweep (sha256 MAC) ----
-testAes256(t: ref T)  { roundtrip(t, "aes_256_cbc/sha256", "aes_256_cbc"::"sha256"::nil, "aes_256_cbc sha256"); }
-testAes128(t: ref T)  { roundtrip(t, "aes_128_cbc/sha256", "aes_128_cbc"::"sha256"::nil, "aes_128_cbc sha256"); }
-testCipherAlternative(t: ref T) { roundtrip(t, "aes alternative with sha256", "aes_256_cbc"::"aes_128_cbc"::"sha256"::nil, "aes_128_cbc sha256"); }
-testHashOnlySubset(t: ref T) { rejectsubset(t, "sha256-only subset", "sha256"); }
-testCipherOnlySubset(t: ref T) { rejectsubset(t, "aes-only subset", "aes_256_cbc"); }
+# ---- what is offered ----
+testAesGcm(t: ref T)  { roundtrip(t, "aes_256_gcm", "aes_256_gcm"::nil, "aes_256_gcm"); }
+testEitherPolicy(t: ref T) { roundtrip(t, "aes_256_gcm where either is allowed", "aes_256_gcm"::"hmac_sha384"::nil, "aes_256_gcm"); }
+testHashOnlySubset(t: ref T) { rejectsubset(t, "hmac_sha384 where the policy has aes_256_gcm", "hmac_sha384"); }
 testEmptySubset(t: ref T) { rejectsubset(t, "empty subset", ""); }
-testHashOnlyPolicy(t: ref T) { roundtrip(t, "intentional sha256-only policy", "sha256"::nil, "sha256"); }
+testHashOnlyPolicy(t: ref T) { roundtrip(t, "intentional hmac_sha384-only policy", "hmac_sha384"::nil, "hmac_sha384"); }
+
+# ---- what is no longer ----
+testOldCipher(t: ref T) { refused(t, "aes_256_cbc sha256", "aes_256_gcm"::nil, "aes_256_cbc sha256"); }
+testOldMac(t: ref T) { refused(t, "sha256 with no policy", nil, "sha256"); }
+testTwoAlgs(t: ref T) { refused(t, "two algorithms at once, no policy", nil, "aes_256_gcm hmac_sha384"); }
 
 # ---- unencrypted path ----
 testNone(t: ref T) { roundtrip(t, "none", nil, "none"); }
-testExplicitNone(t: ref T) { roundtrip(t, "explicit none", "none"::"aes_256_cbc"::"sha256"::nil, "none"); }
+testExplicitNone(t: ref T) { roundtrip(t, "explicit none", "none"::"aes_256_gcm"::nil, "none"); }
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -234,13 +245,14 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	run("Aes256Sha256", testAes256);
-	run("Aes128Sha256", testAes128);
-	run("CipherAlternative", testCipherAlternative);
+	run("AesGcm", testAesGcm);
+	run("EitherPolicy", testEitherPolicy);
 	run("HashOnlyPolicySubset", testHashOnlySubset);
-	run("CipherOnlyPolicySubset", testCipherOnlySubset);
 	run("EmptyPolicySubset", testEmptySubset);
 	run("IntentionalHashOnlyPolicy", testHashOnlyPolicy);
+	run("OldCipherRefused", testOldCipher);
+	run("OldMacRefused", testOldMac);
+	run("TwoAlgorithmsRefused", testTwoAlgs);
 	run("NoEncryption", testNone);
 	run("ExplicitNoEncryption", testExplicitNone);
 

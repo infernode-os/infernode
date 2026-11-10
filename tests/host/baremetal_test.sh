@@ -3670,7 +3670,7 @@ fi
 
 #
 #     The remote-desktop listener (docs/REMOTE-DESKTOP.md). boot-baremetal.sh
-#     starts auxi/rstyxd under listen -a aes_256_cbc when, and only when,
+#     starts auxi/rstyxd under listen -a aes_256_gcm when, and only when,
 #     the card has /n/dos/cpulisten and this machine has a certificate.
 #     Its block is read out of the script, as the narrowing above is, and
 #     typed three times into child shells:
@@ -3678,7 +3678,8 @@ fi
 #       no cpulisten        nothing is started and nothing is said
 #       cpulisten, a key    it listens; an encrypted cpu(1) session from
 #                           this same kernel runs a command through it,
-#                           and a cleartext one (-C none) is refused
+#                           and a cleartext one (-C none) and a MAC-only
+#                           one (-C hmac_sha384) are refused
 #       cpulisten, no key   it refuses to start, and says why
 #
 #     The first is the one that matters for every card in the field: the
@@ -3689,8 +3690,8 @@ fi
 CPUL=()
 while IFS= read -r l; do CPUL+=("$l"); done \
     < <(sed -n '/^if {ftest -f \/n\/dos\/cpulisten} {$/,/^}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
-if [[ ${#CPUL[@]} -ge 8 ]] && printf '%s\n' "${CPUL[@]}" | grep -q 'listen -a aes_256_cbc -a sha256 \$cpuaddr auxi/rstyxd &'; then
-    pass "boot-baremetal.sh gates the cpu listener on /n/dos/cpulisten and requires AES-256 + SHA-256"
+if [[ ${#CPUL[@]} -ge 8 ]] && printf '%s\n' "${CPUL[@]}" | grep -q 'listen -a aes_256_gcm \$cpuaddr auxi/rstyxd &'; then
+    pass "boot-baremetal.sh gates the cpu listener on /n/dos/cpulisten and requires AES-256-GCM"
 else
     fail "could not read the cpu listener block out of boot-baremetal.sh (${#CPUL[@]} lines)"
 fi
@@ -3720,7 +3721,7 @@ CLOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'exit' \
         'sleep 1' \
         "cpu -C none tcp!127.0.0.1!17031 echo CLEAR-GOT-IN; echo CLEAR-DONE" \
-        "cpu -C aes_256_cbc tcp!127.0.0.1!17031 echo CIPHERONLY-GOT-IN; echo CIPHERONLY-DONE" \
+        "cpu -C hmac_sha384 tcp!127.0.0.1!17031 echo MACONLY-GOT-IN; echo MACONLY-DONE" \
         "cpu tcp!127.0.0.1!17031 echo CPU-RAN-REMOTELY &" \
         'sleep 8' \
         'rm -f /n/dos/cpulisten' \
@@ -3736,7 +3737,7 @@ if grep -q '^CPUL-NOKEY$' <<<"$CLOUT" && ! grep -q '^boot: cpu listener\|^boot: 
 else
     fail "cpu listener: started, or spoke, without /n/dos/cpulisten"
 fi
-if grep -q '^boot: cpu listener on tcp!\*!17031 (AES-256 + SHA-256' <<<"$CLON" && grep -q '^CPU-RAN-REMOTELY$' <<<"$CLON"; then
+if grep -q '^boot: cpu listener on tcp!\*!17031 (AES-256-GCM' <<<"$CLON" && grep -q '^CPU-RAN-REMOTELY$' <<<"$CLON"; then
     pass "cpu listener: with cpulisten and a certificate, an encrypted and MAC'd cpu(1) session runs a command"
 else
     fail "cpu listener: no encrypted session -- $(grep -a -E 'boot: cpu|cpu:|CPU-RAN' <<<"$CLON" | head -2 | tr '\n' ' ')"
@@ -3746,10 +3747,10 @@ if grep -q '^CLEAR-DONE$' <<<"$CLON" && ! grep -q '^CLEAR-GOT-IN$' <<<"$CLON"; t
 else
     fail "cpu listener: cleartext was not refused -- $(grep -a -E 'CLEAR|cpu:' <<<"$CLON" | head -2 | tr '\n' ' ')"
 fi
-if grep -q '^CIPHERONLY-DONE$' <<<"$CLON" && ! grep -q '^CIPHERONLY-GOT-IN$' <<<"$CLON"; then
-    pass "cpu listener: a cipher-only session (AES without the SHA-256 MAC) is refused"
+if grep -q '^MACONLY-DONE$' <<<"$CLON" && ! grep -q '^MACONLY-GOT-IN$' <<<"$CLON"; then
+    pass "cpu listener: a MAC-only session (hmac_sha384, the data in clear) is refused"
 else
-    fail "cpu listener: cipher-only was not refused -- $(grep -a -E 'CIPHERONLY|cpu:' <<<"$CLON" | head -2 | tr '\n' ' ')"
+    fail "cpu listener: MAC-only was not refused -- $(grep -a -E 'MACONLY|cpu:' <<<"$CLON" | head -2 | tr '\n' ' ')"
 fi
 if grep -q '^boot: /n/dos/cpulisten is set but /usr/.*/keyring/default is missing; NOT starting' <<<"$CLNOKEY"; then
     pass "cpu listener: with cpulisten but no certificate it refuses to start, and says why"

@@ -56,7 +56,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	authmethod := "p9";
 	keyspec := "";
-	ealgs := "aes_256_cbc sha256";
+	ealgs := "aes_256_gcm";
 	wmexport := 0;
 	p9win := 0;
 	infernocmd := 0;
@@ -75,6 +75,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			keyspec = arg->earg();
 		'e' =>
 			ealgs = arg->earg();
+			if(ealgs == "clear" || ealgs == "")
+				ealgs = nil;
 		'w' =>
 			wmexport = 1;
 		'r' =>
@@ -259,20 +261,7 @@ p9auth(fd: ref Sys->FD, ealgs, keyspec: string): (ref Sys->FD, string)
 
 	if(ealgs == nil)
 		return (fd, nil);
-
-	key := array[16] of byte;
-	key[4:] = ai.secret;
-	randombytes(key[0:4]);
-	if(sys->write(fd, key, 4) != 4)
-		return (nil, sys->sprint("write: %r"));
-	if(readn(fd, key[12:], 4) != 4)
-		return (nil, sys->sprint("read: %r"));
-	digest := array[Keyring->SHA1dlen] of byte;
-	keyring->sha1(key, len key, digest, nil);
-	(efd, err) := pushssl(fd, ealgs, mksecret(digest), mksecret(digest[10:]));
-	if(efd == nil)
-		return (nil, sys->sprint("cannot push ssl: %s", err));
-	return (efd, nil);
+	return (nil, "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; -e clear for clear text, on a network you trust");
 }
 
 # plan 9 bug/strangeness: interpret hex string as base64 to use as secret.

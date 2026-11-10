@@ -86,6 +86,20 @@ user→CA	user's public key, SHA(user's public key + secret)
 CA→user	user's public key certificate
 .EE
 .PP
+Once both have
+.IR secret ,
+each pushes
+.IR ssl (3)
+onto the connection with
+.B aes_256_gcm
+under its own secret each way, made from
+.I secret
+by
+.B secrets
+in
+.IR security-ssl (2),
+and the last four messages go sealed.
+.PP
 The complexity of this protocol is intended to shield the password.
 To start a clear text attack against the password, one
 needs to first attack the Diffie-Hellman exponential

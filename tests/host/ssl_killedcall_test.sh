@@ -42,10 +42,10 @@ mkdir -p /tmp/sslk/keys /tmp/sslk/pipe
 auth/createsignerkey -f /tmp/sslk/keys/signer sslk-signer
 auth/mkauthinfo -k 'key=/tmp/sslk/keys/signer' \$user /tmp/sslk/keys/default
 bind '#|' /tmp/sslk/pipe
-listen -k /tmp/sslk/keys/default -a aes_256_cbc -a sha256 tcp!127.0.0.1!$PORT {export /tmp/sslk/pipe}
+listen -k /tmp/sslk/keys/default -a aes_256_gcm tcp!127.0.0.1!$PORT {export /tmp/sslk/pipe}
 sleep 1
 mkdir -p /n/sslk
-mount -k /tmp/sslk/keys/default -C aes_256_cbc/sha256 tcp!127.0.0.1!$PORT /n/sslk
+mount -k /tmp/sslk/keys/default -C aes_256_gcm tcp!127.0.0.1!$PORT /n/sslk
 echo R before \`{ls /n/sslk >[2=1]} > /.ssl_killedcall_test.out
 cat /n/sslk/data1 > /dev/null &
 pid=\$apid

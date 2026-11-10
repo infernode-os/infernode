@@ -151,13 +151,13 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	# compute alpha**(r0*r1) mod p
 	alphar0r1 := alphar0.expmod(r1, info.p);
 
-	# turn on digesting
-	secret := alphar0r1.iptobytes();
-	err = ssl->secret(c, secret, secret);
+	# protect the rest: aes_256_gcm, each way under its own secret
+	(secretin, secretout) := ssl->secrets(alphar0r1.iptobytes(), 1);
+	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
-		return ("can't set digesting: " + err, nil);
-	if(sys->fprint(c.cfd, "alg sha256") < 0)
-		return (sys->sprint("can't push alg sha256: %r"), nil);
+		return ("can't set secrets: " + err, nil);
+	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
+		return (sys->sprint("can't push alg aes_256_gcm: %r"), nil);
 
 	# CA->user	CA's public key, SHA(CA's public key + secret)
 	(s, err) = kr->getstring(c.dfd);

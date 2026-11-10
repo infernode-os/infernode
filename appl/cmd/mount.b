@@ -21,7 +21,7 @@ do9 := 0;
 persist := 0;
 showstyx := 0;
 
-alg := "aes_256_cbc sha256";
+alg := "aes_256_gcm";
 keyfile: string;
 spec: string;
 addr: string;

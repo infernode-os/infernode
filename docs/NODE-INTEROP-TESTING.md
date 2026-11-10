@@ -21,7 +21,7 @@ plus the `ssl` line-encryption device:
    **ML-KEM-1024** instead (CNSA 2.0 strict mode; all nodes must agree).
    See [CRYPTO-MODERNIZATION.md §10](CRYPTO-MODERNIZATION.md).
 3. **Line encryption.** The 64-byte secret feeds the `ssl` device; the default
-   negotiated by `mount -k` / `styxlisten` is `aes_256_cbc` + `sha256`.
+   negotiated by `mount -k` / `styxlisten` is `aes_256_gcm`.
 4. **9P/Styx.** Everything above carries Styx (9P) — `sys->export` on the
    serving node, `sys->mount` on the connecting node.
 
@@ -33,8 +33,8 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | Asset | Kind | What it proves |
 |-------|------|----------------|
 | `tests/pqauth_test.b` | in-emu unit (auto-discovered by the runner) | the hybrid handshake itself: happy path (ed25519 + ML-DSA-65 signers), real-TCP encrypted channel, and the negatives (downgrade, tampered/malformed ML-KEM key) |
-| `tests/interop_test.b` | in-emu unit (auto-discovered) | end-to-end: real TCP + cert auth + PQ handshake + `aes_256_cbc` ssl + a real `export`/`mount` **file transfer**, across the full fast certificate range: ed25519, ML-DSA-65, ML-DSA-87, RSA-2048, **DSA-1024**, ElGamal-2048 |
-| `tests/cipher_matrix_test.b` | in-emu unit (auto-discovered) | every `ssl` line-encryption cipher (`aes_256_cbc`, `aes_128_cbc`, `ideacbc`, `ideaecb`) and MAC (`sha256`, `sha1`, `md5`, `md4`), plus the unencrypted `none` path, negotiated through a real `auth->server`/`auth->client` handshake and verified to round-trip a payload byte-for-byte |
+| `tests/interop_test.b` | in-emu unit (auto-discovered) | end-to-end: real TCP + cert auth + PQ handshake + `aes_256_gcm` ssl + a real `export`/`mount` **file transfer**, across the full fast certificate range: ed25519, ML-DSA-65, ML-DSA-87, RSA-2048, **DSA-1024**, ElGamal-2048 |
+| `tests/cipher_matrix_test.b` | in-emu unit (auto-discovered) | what `ssl` offers (`aes_256_gcm`, and `hmac_sha384` alone), plus the unencrypted `none` path, negotiated through a real `auth->server`/`auth->client` handshake and verified to round-trip a payload byte-for-byte; a MAC alone where the policy has the cipher, the old algorithms (`aes_256_cbc`, `sha256`) and two at once refused |
 | `tests/authneg_test.b` | in-emu unit (auto-discovered) | the trust + integrity layer must **fail closed**: untrusted signer rejected, expired certificate rejected, a cipher the server did not offer refused, and a one-byte tamper on the encrypted channel caught by the ssl record MAC |
 | `tests/crypto_props_test.b` | in-emu unit (auto-discovered) | protocol crypto guarantees: two handshakes with the same certs derive **different** 64-byte secrets (ephemeral key agreement / forward-secrecy proxy), a reflected `alpha**r0` is caught by the replay check, and a one-byte-corrupted certificate signature is rejected |
 | `tests/interrupt_test.b` | in-emu unit (auto-discovered) | interruptibility: an abrupt TCP disconnect **mid-handshake** makes the peer error cleanly (`hungup`), and **mid-transfer** makes the reader hit EOF with the partial data — no crash, no hang (timeout-guarded) |
@@ -124,7 +124,7 @@ guard.
 
 The keyring registers eight certificate signature algorithms
 (`libinterp/keyring.c:keyringmodinit`). Node-to-node STS auth was exercised
-with each, over a real TCP socket + `aes_256_cbc`/`sha256` ssl:
+with each, over a real TCP socket + `aes_256_gcm` ssl:
 
 | Signer cert | Class | Node-to-node auth | Notes |
 |-------------|-------|-------------------|-------|

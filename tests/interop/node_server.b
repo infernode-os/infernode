@@ -4,7 +4,7 @@ implement NodeServer;
 #   node_server keyfile addr exporttree
 # Reads its Authinfo (a signer keyfile from auth/createsignerkey), announces
 # `addr`, and on each connection authenticates the peer with the native hybrid
-# post-quantum handshake, wraps the line in aes_256_cbc/sha256 ssl, and exports
+# post-quantum handshake, wraps the line in aes_256_gcm ssl, and exports
 # `exporttree` as a 9P service over the encrypted channel.
 
 include "sys.m"; sys: Sys;
@@ -46,7 +46,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 serve(ai: ref Keyring->Authinfo, tree: string, dfd: ref Sys->FD)
 {
-	algs := "aes_256_cbc" :: "sha256" :: nil;
+	algs := "aes_256_gcm" :: nil;
 	(wrapped, who) := auth->server(algs, ai, dfd, 0);
 	if(wrapped == nil) { sys->fprint(sys->fildes(2), "node_server: auth failed: %s\n", who); return; }
 	sys->fprint(sys->fildes(2), "node_server: peer authenticated (%s); serving %s\n", who, tree);

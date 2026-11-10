@@ -50,10 +50,10 @@ not representative absolute numbers:
 
 == encrypted-channel throughput (8 MiB payload) ==
   none          500.00 MB/s     <- raw pipe ceiling (no ssl)
-  aes_256_cbc    68.96 MB/s
-  aes_128_cbc    72.72 MB/s
-  ideacbc        36.36 MB/s
-  ideaecb        44.19 MB/s
+  aes_256_cbc    68.96 MB/s     (since removed from ssl(3);
+  aes_128_cbc    72.72 MB/s      it now offers hmac_sha384 and
+  ideacbc        36.36 MB/s      aes_256_gcm, which the same
+  ideaecb        44.19 MB/s      run now measures)
 ```
 
 What the shape tells you (independent of the slow host):

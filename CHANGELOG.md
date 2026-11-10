@@ -6,6 +6,23 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **ssl(3) is AES-256-GCM and HMAC-SHA-384, nothing else.** Every
+  connection InferNode encrypts (mount, listen, styxlisten, cpu, login,
+  secstore, the grid registries, the bare-metal cpu listener) now takes
+  `aes_256_gcm` by default: each record sealed with its header authenticated,
+  key and nonce by HKDF-SHA-384, record n's nonce n exclusive-ored in, so a
+  record changed, cut, replayed, reordered or reflected is refused.
+  `hmac_sha384` remains for integrity alone. `sha256` (SSL 2's hash, not an
+  HMAC), `aes_128_cbc` and `aes_256_cbc` are gone, as is the padded record.
+  Each direction must have its own secret of 32 bytes or more (the same both
+  ways is refused); ssl(2)'s new `secrets` makes a shared secret into one for
+  each way, which auth(2), login(2), logind, secstore and secstored use. This
+  is not compatible with older peers: both ends must run this release.
+  crypt(1) uses AES-256-GCM with PBKDF2-HMAC-SHA-384 and a salt per file (its
+  old `md5/ideacbc` default no longer existed in the device). 9cpu, import and
+  9export refuse encryption, as Plan 9's p9sk1 key is 56 bits; without `-e`
+  they run in the clear.
+
 - **Every generator InferNode has is NIST's HMAC_DRBG.** The native kernels'
   (`os/port/random.c`, behind every key, `#c/random` and `#c/notquiterandom` on
   bare metal) and the emulator's (`libsec/genrandom.c`, behind every key and
@@ -27,13 +44,6 @@ All notable changes to InferNode are documented in this file.
   IV's length (44 bytes, not 32); a signer takes either, and in CNSA mode
   refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
   are unchanged. login(6) describes the protocol as it is.
-
-- **devssl has HMAC-SHA-384.** ssl(3)'s only digest was `sha256`, SSL 2's
-  hash of secret, record and record number, which is not an HMAC and not a MAC
-  CNSA admits. `alg hmac_sha384` is HMAC-SHA-384 keyed by the secret over the
-  record and its number, in the emulator and the native kernels alike; `sha256`
-  is unchanged for the peers that speak it. ssl(3) lists the algorithms the
-  device has (it still described SHA-1, MD5, RC4, DES and IDEA).
 
 ### Fixed
 

@@ -12,7 +12,7 @@ implement NinepMsizeTest;
 #    when the mount offered IOHDRSZ+64K, against the exportfs every
 #    machine was running)
 #  - eight readers at once through one encrypted mount at 64K
-#    (devssl, aes_256_cbc and sha256, as mount -C sets it) each read the
+#    (devssl, aes_256_gcm, as mount -C sets it) each read the
 #    file byte for byte: devssl wrote a reply longer than its record
 #    limit (about 32K) as pieces locked one at a time, two of exportfs's
 #    workers replying at once interleaved them, and replies reached the
@@ -78,7 +78,7 @@ exported(t: ref T): ref Sys->FD
 	return exportedalg(t, nil);
 }
 
-ALG: con "aes_256_cbc sha256";
+ALG: con "aes_256_gcm";
 SECRETA: array of byte;	# aes_256 wants a long secret; set in init
 SECRETB: array of byte;
 

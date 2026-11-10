@@ -31,6 +31,7 @@ LibsecKatTest: module
 
 SRCFILE: con "/tests/libsec_kat_test.b";
 VECTORS: con "/tests/host/gcm/vectors.txt";
+vectors := VECTORS;	# or the argument naming them (a board, whose tree is elsewhere)
 
 passed := 0;
 failed := 0;
@@ -155,7 +156,7 @@ testGCM(t: ref T)
 		if((e := gcm1(fl)) != nil && bad++ < 5)
 			t.error(sys->sprint("built-in vector %d: %s", i, e));
 	}
-	f := bufio->open(VECTORS, Bufio->OREAD);
+	f := bufio->open(vectors, Bufio->OREAD);
 	if(f != nil){
 		while((line := f.gets('\n')) != nil){
 			(nf, fl) := sys->tokenize(line, " \t\n");
@@ -163,7 +164,7 @@ testGCM(t: ref T)
 				continue;
 			n++;
 			if((e := gcm1(tl fl)) != nil && bad++ < 5)
-				t.error(sys->sprint("vector %d of %s: %s", n - len builtin, VECTORS, e));
+				t.error(sys->sprint("vector %d of %s: %s", n - len builtin, vectors, e));
 		}
 		t.assert(n >= len builtin + 438, sys->sprint("%d vectors read", n));
 	}
@@ -230,6 +231,8 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
+		else
+			vectors = hd a;
 	run("Libsec/AESGCM", testGCM);
 	run("Libsec/AESCBC", testCBC);
 	run("Libsec/SHA256", testSHA256);

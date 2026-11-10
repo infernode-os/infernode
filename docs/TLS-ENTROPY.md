@@ -68,21 +68,27 @@ the board's hardware generator `hwrandom()` alone (the Pi 3's in
 `os/bcm2837/random.c`, the Pi 4's and Pi 5's RNG200 in `os/bcm/rng200.c`,
 virtio-rng on QEMU's virt):
 
-- It is ChaCha20 with "fast key erasure", the construction libsec's hosted
-  `genrandom.c` and 9front use: each request first takes 32 bytes of
-  keystream as the next key and forgets the state it came from, so what a
-  request returned cannot be recovered from memory afterwards.
-- Its key is SHA-256 of 32 bytes of the old stream and 32 bytes from the
-  hardware, renewed every second or every megabyte. Until the first 32
-  hardware bytes have come, nothing is returned: readers wait, and the
-  console says why every five seconds. If the hardware goes dry the old
-  key serves for at most ten minutes, then readers wait again.
+- It is HMAC_DRBG with SHA-512 (NIST SP 800-90A Rev. 1, 10.1.2), which
+  CNSA admits: ChaCha20, the generator it replaced, is on no NIST list.
+  Each request is one Generate (64 KB at most) and its Update, so what a
+  request returned cannot be recovered from the state left afterwards.
+- It is instantiated from 64 bytes of hardware entropy and a 16-byte
+  hardware nonce (the RNG200 is taken to give 4 bits a byte, so 64 bytes
+  carry the 256 bits its strength needs), and reseeded from 64 more every
+  second or every megabyte. Until the first have come, nothing is
+  returned: readers wait, and the console says why every five seconds.
+  If the hardware goes dry the old state serves for at most ten minutes,
+  then readers wait again.
+- Every hardware byte passes SP 800-90B's continuous health tests
+  (repetition count, adaptive proportion) before it is used, and a seed
+  that is one word over and over, or the last seed again, is refused.
 - A machine with no generator makes no key. `hwrandom()` says so (-1)
   rather than make bytes up, and every reader waits, saying why, unless
   the boot command line holds `insecurerandom`, which keys the generator
   from a labelled counter for an emulator with nothing better. A Dis
   program waiting in a key generator lets go of the VM while it waits.
-- ChaCha20 is checked against RFC 8439's test vector before its first use.
+- HMAC_DRBG is checked against NIST's CAVP vectors before its first use;
+  a kernel that does not give them panics rather than make keys.
 - `#c/notquiterandom` (`genrandom()`) and `#c/random` (`randomread()`) are
   the same generator; the two names stay for what reads them. On a Pi 5
   it gives about 236 MB/s in 64 KB reads, and 7 µs a 32-byte read.

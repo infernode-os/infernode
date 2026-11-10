@@ -627,6 +627,9 @@ build_kernel() {
             "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
             # NaN and infinity in the kernel's own VM (libkernfp/nan.c)
             "/dis/tests/nan_test.dis=$ROOT/dis/tests/nan_test.dis"
+            # AES-GCM, AES-CBC and SHA-256 against answers made elsewhere, in
+            # the kernel's libsec (the ARMv8 instructions where the core has them)
+            "/dis/tests/libsec_kat_test.dis=$ROOT/dis/tests/libsec_kat_test.dis"
             # 150 threads blocked in sys->sleep at once -- 150 concurrent
             # kprocs (os/port/dis.c release()) -- proves conf.nproc holds
             # more than the 100 that hung the board under a real GUI
@@ -1884,6 +1887,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo 0 > /dev/jit; /dis/tests/fltfmt_test.dis; echo 1 > /dev/jit' \
         '/dis/tests/nan_test.dis' \
         'echo 0 > /dev/jit; /dis/tests/nan_test.dis; echo 1 > /dev/jit' \
+        '/dis/tests/libsec_kat_test.dis -v' \
         '/dis/procstorm.dis 150' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
@@ -2116,6 +2120,18 @@ if [[ "$(grep -c '^8 passed$' <<<"$SHOUT")" -ge 2 ]]; then
     pass "fltfmt_test: %g, %f, %e, string and real of a string are right in the kernel, JIT and interpreter (8 passed twice)"
 else
     fail "fltfmt_test did not report 8 passed with the JIT and without: $(grep -E 'passed|got ' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
+fi
+
+# libsec in the kernel against answers made elsewhere (OpenSSL's for
+# AES-GCM, NIST's for CBC and SHA-256). The kernel takes the ARMv8 AES,
+# PMULL and SHA-256 instructions where ID_AA64ISAR0_EL1 says the core
+# has them (QEMU's cortex-a53 and the Pi 5 do; the Pi 3 and 4 do not),
+# so this is what checks those paths as the kernel builds them.
+if grep -q -- '--- PASS: Libsec/AESGCM' <<<"$SHOUT" && grep -q -- '--- PASS: Libsec/AESCBC' <<<"$SHOUT" \
+        && grep -q -- '--- PASS: Libsec/SHA256' <<<"$SHOUT" && ! grep -q -- '--- FAIL: Libsec/' <<<"$SHOUT"; then
+    pass "libsec_kat_test: the kernel's AES-GCM, AES-CBC and SHA-256 give OpenSSL's and NIST's answers"
+else
+    fail "libsec_kat_test did not pass in the kernel: $(grep -aE 'Libsec/|passed' <<<"$SHOUT" | head -6 | tr '\n' ' ')"
 fi
 
 # NaN and infinity in the kernel's VM. libkernfp/nan.c took a double as

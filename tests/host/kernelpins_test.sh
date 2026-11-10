@@ -26,6 +26,13 @@
 #                wide as cwind: set to one segment, the window grew back
 #                a segment a round trip and never doubled; a ushort
 #                wraps half a scaled window (2026-11-10).
+#   loopback     the loopback queue holds several of TCP's 512K windows:
+#                at 128K it dropped 95% of a Pi 4's loopback traffic
+#                (2026-11-10).
+#   usable       TCP's usable window is unsigned: with more in flight than
+#                the window allows, the difference wrapped to 4G and the
+#                sender sent past the window, all of it dropped
+#                (2026-11-10, devssl over loopback at 1 MB/s).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -68,6 +75,13 @@ if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the rese
 rx=$(sed -n '/^tcprxmit(Conv \*s)/,/^}/p' os/ip/tcp.c)
 if grep -Eq '^[[:space:]]*u32int[[:space:]]+ssthresh;' os/ip/tcp.c && echo "$rx" | grep -q 'ssthresh = flight/2'; then ok "a loss halves ssthresh from the flight, in 32 bits"
 else no "tcprxmit's ssthresh is not half the flight in a u32int"; fi
+lbq=$(sed -n 's/.*lb->q = qopen(\([0-9*]*\), Qmsg.*/\1/p' os/ip/loopbackmedium.c)
+if [ -n "$lbq" ] && [ $(( lbq )) -ge $(( 4*512*1024 )) ]; then ok "the loopback queue holds four 512K windows ($(( lbq )) bytes)"
+else no "the loopback queue is ${lbq:-not found}: less than four of TCP's 512K windows"; fi
+out=$(sed -n '/^tcpoutput(Conv \*s)/,/^}/p' os/ip/tcp.c)
+unguarded=$(echo "$out" | grep -B1 'usable -= sent;' | grep -vc -e 'usable -= sent;' -e 'if(usable > sent)' -e '^--$')
+if echo "$out" | grep -q 'usable -= sent;' && [ "$unguarded" = 0 ]; then ok "TCP's usable window never wraps below what is in flight"
+else no "tcpoutput subtracts what is in flight from an unsigned usable window without a check"; fi
 
 idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)

@@ -200,8 +200,34 @@ osenter(void)
 		osleave();	/* raises Eintr */
 }
 
+static int	leave(int);
+
 void
 osleave(void)
+{
+	if(leave(0))
+		error(Eintr);
+}
+
+/*
+ * osleave for a host call that did its work: an interrupt that came while
+ * it ran is not raised, where it would throw away what the call had done
+ * -- bytes read from a socket, gone from the host's buffer, so that a
+ * devssl stream lost part of a record ("bad digest") and the connection,
+ * and every mount over it, was hung up.  It is dropped: the call is over.
+ * A killed Prog is still found killed at its next sleep and on its way
+ * back to the VM (upkilled); an exportfs worker's interrupt was for the
+ * request whose call has now finished, and kept, it interrupted the
+ * worker's next request ("clone failed: interrupted").
+ */
+void
+osleavekeep(void)
+{
+	leave(1);
+}
+
+static int
+leave(int keep)
 {
 	int r;
 
@@ -209,7 +235,7 @@ osleave(void)
 	r = up->swipend;
 	up->swipend = 0;
 	if(r)
-		up->intpend = 0;	/* the one interrupt, raised below */
+		up->intpend = 0;	/* the one interrupt: raised by the caller, or dropped */
 	unlock(&up->rlock);
 
 	lock(&up->sysio);
@@ -232,44 +258,7 @@ osleave(void)
 		up->intwait = 0;
 	}
 
-	if(r != 0)
-		error(Eintr);
-}
-
-/*
- * Leave a system call that did its work: a socket read that returned
- * bytes, a write that sent them.  An interrupt that came during it
- * (the Prog killed while the host call ran) is not raised now: raised,
- * it threw away what the call had done (bytes taken off a socket and
- * lost, an encrypted mount's stream out of step: "bad digest", or a
- * record waited for that never comes).  It is left pending, and the
- * next Sleep or osenter raises it, before anything else is done.
- */
-void
-osleavekeep(void)
-{
-	int r;
-
-	lock(&up->rlock);
-	r = up->swipend;
-	up->swipend = 0;
-	if(r)
-		up->intpend = 1;
-	unlock(&up->rlock);
-
-	lock(&up->sysio);
-	up->syscall = 0;
-	unlock(&up->sysio);
-
-	if(up->intwait) {
-		int i;
-		for(i = 0; i < 1000; i++) {
-			if(!up->intwait)
-				break;
-			osyield();
-		}
-		up->intwait = 0;
-	}
+	return r != 0 && !keep;
 }
 
 void

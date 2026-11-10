@@ -207,6 +207,7 @@ void		mul64fract(uvlong*, uvlong, uvlong);
 void		muxclose(Mnt*);
 Chan*		namec(char*, int, int, ulong);
 Chan*		newchan(void);
+void		chanfidretire(Chan*);
 Egrp*		newegrp(void);
 Fgrp*		newfgrp(Fgrp*);
 Mount*		newmount(Mhead*, Chan*, int, char*);

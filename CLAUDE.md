@@ -389,6 +389,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `example_test.b` | Reference template for new tests |
 | `asyncio_test.b` | Async I/O, channels, spawned tasks |
 | `crypto_test.b` | Cryptographic operations |
+| `login_test.b` | login(2) against a real `auth/logind` over loopback TCP, each side in an environment of its own: neither in CNSA mode (ChaCha20-Poly1305), both (AES-256-GCM with HKDF-SHA-384), a CNSA client with a signer not in CNSA mode; a signer in CNSA mode refusing a client not in it and saying why; a wrong password refused either way; each certificate verified with the signer's key |
 | `ssl_hmac_test.b` | devssl's `hmac_sha384` (ssl(3)): one end of a pipe pushed with ssl and the other read raw, each record's 48-byte MAC checked byte for byte against Keyring's `hmac_sha384` of its data and number; records both ways through two pushed ends at sizes to 20000 bytes, digest alone and with `aes_256_cbc`, and `sha256` as it was; a record with a byte of its data or its MAC changed refused |
 | `spawn_test.b` | Process spawning |
 | `spawn_exec_test.b` | Process exec after spawn |

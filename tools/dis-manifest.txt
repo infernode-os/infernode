@@ -619,6 +619,7 @@ dis/netstat.dis
 dis/newer.dis
 dis/newuser.dis
 dis/ns.dis
+dis/ns2mmd.dis
 dis/nsaudit.dis
 dis/nsbuild.dis
 dis/os.dis
@@ -800,6 +801,7 @@ dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/keyring_sweep_test.dis
 dis/tests/layers_test.dis
+dis/tests/mermaid_flow_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis

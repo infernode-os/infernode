@@ -22,6 +22,10 @@
 #                ahead of the data it speaks for.
 #   ceilings     the pools' ceilings must not add up to more than there
 #                is, and no heap may take the kernel's share.
+#   ssthresh     after a loss, half the flight (RFC 5681), in a field as
+#                wide as cwind: set to one segment, the window grew back
+#                a segment a round trip and never doubled; a ushort
+#                wraps half a scaled window (2026-11-10).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -60,6 +64,10 @@ m=$(sed -n '/#ifdef POOLBYNEED/,/#else/p' os/arm64/main.c)
 if echo "$m" | grep -q 'mem - mainmax - imagmax' && echo "$m" | grep -q 'heapreserve = mainmax + imagmax'; then ok "the pools fit in memory, and the heaps leave the kernel its share"
 else no "POOLBYNEED: the ceilings no longer fit in memory"; fi
 if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the reserve"; else no "poolalloc ignores heapreserve"; fi
+
+rx=$(sed -n '/^tcprxmit(Conv \*s)/,/^}/p' os/ip/tcp.c)
+if grep -Eq '^[[:space:]]*u32int[[:space:]]+ssthresh;' os/ip/tcp.c && echo "$rx" | grep -q 'ssthresh = flight/2'; then ok "a loss halves ssthresh from the flight, in 32 bits"
+else no "tcprxmit's ssthresh is not half the flight in a u32int"; fi
 
 idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)

@@ -6,31 +6,6 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
-- **An encrypted 9P mount survives its readers being killed.** Viewers
-  of a feed come and go, and each one killed in the middle of its reads
-  could break the mount for everyone else on it. Four causes, found by
-  `ninep_disconnect_test`, which kills readers at random moments, round
-  after round, and failed at its first round before:
-  - devssl hung up its connection when a writer was interrupted. A 9P
-    client killed while sending its request took the mount down with it
-    ("inappropriate use of fd"). Records now go through a queue to a
-    writer of their own in the emulator, so none is ever left half
-    sent, and an interrupt after a record is queued is no reason to
-    hang up (native too).
-  - The emulator threw away what a socket read or write had done when
-    an interrupt arrived during it: bytes read off the connection were
-    lost, and devssl's next record failed its digest ("bad digest").
-  - A tag was used again while a flush naming it was still out, so the
-    server flushed the wrong call and replies went to the wrong calls:
-    an Rclunk to a Twalk, an Rwalk to a Tclunk ("too many QIDs
-    returned by walk", "unexpected reply tag"). Native too; this is how
-    a board's feed went out of step after many viewers left.
-  - A clunk or walk given up on unanswered left its fid to be used
-    again while the server might still hold it ("fid in use"). Native
-    too.
-
-### Fixed
-
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a
   plain connection and 32512 bytes on an encrypted one (`mount -k`,
   `-C`, listen's connections), and gets what the server takes. Over the

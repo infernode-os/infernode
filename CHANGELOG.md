@@ -95,6 +95,50 @@ All notable changes to InferNode are documented in this file.
   are dropped, and a transfer between two programs on one board went
   from 9-30 MB/s to about 500.
 
+- **An encrypted 9P mount survives its readers being killed.** Viewers
+  of a feed come and go, and each one killed in the middle of its reads
+  could break the mount for everyone else on it. Four causes, found by
+  `ninep_disconnect_test`, which kills readers at random moments, round
+  after round, and failed at its first round before:
+  - devssl hung up its connection when a writer was interrupted. A 9P
+    client killed while sending its request took the mount down with it
+    ("inappropriate use of fd"). Records now go through a queue to a
+    writer of their own in the emulator, so none is ever left half
+    sent, and an interrupt after a record is queued is no reason to
+    hang up (native too).
+  - The emulator threw away what a socket read or write had done when
+    an interrupt arrived during it: bytes read off the connection were
+    lost, and devssl's next record failed its digest ("bad digest").
+  - A tag was used again while a flush naming it was still out, so the
+    server flushed the wrong call and replies went to the wrong calls:
+    an Rclunk to a Twalk, an Rwalk to a Tclunk ("too many QIDs
+    returned by walk", "unexpected reply tag"). Native too; this is how
+    a board's feed went out of step after many viewers left.
+  - A clunk or walk given up on unanswered left its fid to be used
+    again while the server might still hold it ("fid in use"). Native
+    too.
+
+- **Recognition boxes no longer freeze when a session's settings
+  change.** Moving a vision session to another place (`place dla0`),
+  or changing its threshold, classes, model or rate, starts a new
+  follower for the same feed, and stopping the old one told every
+  waiting reader the feed had ended. A layer bound into a camera's
+  (wm/camera, Matrix) stopped there, its boxes frozen, until it was
+  unmounted and bound again. Readers now go on to the new follower's
+  frames.
+
+- **A native kernel's TCP no longer sends past its peer's window.**
+  When more was in flight than the peer's window allowed -- which
+  happens whenever the peer's right edge draws back even a byte, as a
+  scaled window rounded to its granularity does (Linux's too) -- the
+  sender's usable window, unsigned, wrapped to 4G, and it sent full
+  segments hundreds of K past the window. The receiver dropped them all
+  and the sender recovered one segment a round trip. Any connection
+  whose receiver fell behind its sender could hit it: devssl over a Pi
+  4's loopback with 24K or 32K records ran at 1 MB/s; with the fix,
+  24-67 MB/s (SHA-256) and 18-35 MB/s (AES-256-CBC with SHA-256), as
+  with 16K records.
+
 ### Security
 
 - **A Prog killed in a 9P call over an encrypted mount no longer takes

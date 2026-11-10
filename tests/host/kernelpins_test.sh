@@ -22,6 +22,10 @@
 #                ahead of the data it speaks for.
 #   ceilings     the pools' ceilings must not add up to more than there
 #                is, and no heap may take the kernel's share.
+#   usable       TCP's usable window is unsigned: with more in flight than
+#                the window allows, the difference wrapped to 4G and the
+#                sender sent past the window, all of it dropped
+#                (2026-11-10, devssl over loopback at 1 MB/s).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -60,6 +64,11 @@ m=$(sed -n '/#ifdef POOLBYNEED/,/#else/p' os/arm64/main.c)
 if echo "$m" | grep -q 'mem - mainmax - imagmax' && echo "$m" | grep -q 'heapreserve = mainmax + imagmax'; then ok "the pools fit in memory, and the heaps leave the kernel its share"
 else no "POOLBYNEED: the ceilings no longer fit in memory"; fi
 if grep -q 'heapreserve != 0' os/port/alloc.c; then ok "poolalloc keeps the reserve"; else no "poolalloc ignores heapreserve"; fi
+
+out=$(sed -n '/^tcpoutput(Conv \*s)/,/^}/p' os/ip/tcp.c)
+unguarded=$(echo "$out" | grep -B1 'usable -= sent;' | grep -vc -e 'usable -= sent;' -e 'if(usable > sent)' -e '^--$')
+if echo "$out" | grep -q 'usable -= sent;' && [ "$unguarded" = 0 ]; then ok "TCP's usable window never wraps below what is in flight"
+else no "tcpoutput subtracts what is in flight from an unsigned usable window without a check"; fi
 
 idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)

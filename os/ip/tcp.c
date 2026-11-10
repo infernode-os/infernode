@@ -2563,7 +2563,21 @@ tcpoutput(Conv *s)
 			usable = tcb->cwind;
 			if(tcb->snd.wnd < usable)
 				usable = tcb->snd.wnd;
-			usable -= sent;
+			/*
+			 *  more in flight than the window allows: nothing
+			 *  more.  usable is unsigned, and the difference
+			 *  wrapped to 4G when the peer's right edge drew back
+			 *  even a byte (a scaled window is rounded down to its
+			 *  granularity, 8 bytes at scale 3, Linux's too): the
+			 *  sender then sent a full segment each time it could,
+			 *  hundreds of K past the window, all of it dropped by
+			 *  the receiver, and recovered a segment a round trip.
+			 *  A Pi 4's devssl over loopback ran at 1 MB/s.
+			 */
+			if(usable > sent)
+				usable -= sent;
+			else
+				usable = 0;
 		}
 		ssize = sndcnt-sent;
 		if(ssize && usable < 2)

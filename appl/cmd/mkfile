@@ -145,6 +145,7 @@ TARG=\
 	netstat.dis\
 	newer.dis\
 	ns.dis\
+	ns2mmd.dis\
 	newuser.dis\
 	nsaudit.dis\
 	nsbuild.dis\
@@ -352,6 +353,7 @@ SYSMODULES=\
 	bayer.m\
 	layers.m\
 	tensor.m\
+	parread.m\
 
 DISBIN=$ROOT/dis
 

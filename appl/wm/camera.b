@@ -33,6 +33,8 @@ implement Camera;
 
 include "sys.m";
 	sys: Sys;
+include "parread.m";
+	parread: Parread;
 
 include "draw.m";
 	draw: Draw;
@@ -76,6 +78,11 @@ focus := 512;
 init(ctxt: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
+	parread = load Parread Parread->PATH;
+	if(parread == nil){
+		sys->fprint(sys->fildes(2), "camera: cannot load %s: %r\n", Parread->PATH);
+		raise "fail:load";
+	}
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	i420 = load I420 I420->PATH;
@@ -262,19 +269,12 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 
 Behind: con 3;	# frames behind the newest that a reader may be
 
-# frame f, whole, at its offset: (bytes, error)
+# frame f, whole, at its offset, with WAYS reads in flight (parread(2)):
+# (bytes, error)
+WAYS: con 4;
 readat(fd: ref Sys->FD, b: array of byte, f: int): (int, string)
 {
-	got := 0;
-	while(got < len b){
-		m := sys->pread(fd, b[got:], len b - got, big f * big len b + big got);
-		if(m < 0)
-			return (got, sys->sprint("%r"));
-		if(m == 0)
-			break;
-		got += m;
-	}
-	return (got, nil);
+	return parread->pread(fd, b, big f * big len b, WAYS);
 }
 
 # where a live reader starts: the newest frame (status frames= less one)

@@ -1,6 +1,9 @@
 #include "os.h"
 #include <libsec.h>
 
+int sha256arm64ok(void);
+void sha256arm64blocks(u32int*, const uchar*, ulong);
+
 enum {
 	SHA256rounds =  64,
 };
@@ -52,6 +55,10 @@ _sha256block(SHA256state *s, uchar *buf)
 	u32int t1, t2;
 	u32int v[8];
 
+	if(sha256arm64ok()){
+		sha256arm64blocks(s->h32, buf, 1);
+		return;
+	}
 	for(t = 0; t < nelem(w)/2; t++) {
 		if(t < 16) {
 			w[t] = g32(buf);

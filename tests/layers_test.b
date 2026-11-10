@@ -7,12 +7,16 @@ implement LayersTest;
 # directory built by bind: on frame F each layer's records for its newest
 # frame up to F, its frame=* records on every frame, a frame's key alone
 # clearing it, bottom layer first in the union's order, the order
-# following bind -a and -b, a layer unmounted gone.
+# following bind -a and -b, a layer unmounted gone; a detection with
+# no colour drawn in its class's (one of the theme's eight categorical
+# colours, by its name), its own colour= still first.
 #
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
+	draw: Draw;
+	Display, Image, Rect, Point: import draw;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -95,6 +99,53 @@ testParse(t: ref T)
 	t.asserteq(f, -2, "a text without its place: not a mark");
 	(f, nil) = layers->parse("");
 	t.asserteq(f, -2, "an empty line: not a mark");
+}
+
+# the colour of the pixel at p, as rrggbbaa
+pixel(t: ref T, img: ref Image, p: Point): int
+{
+	b := array[4] of byte;
+	if(img.readpixels(Rect(p, p.add((1, 1))), b) != 4){
+		t.error(sys->sprint("readpixels: %r"));
+		return 0;
+	}
+	# XRGB32: b g r x
+	return (int b[2] << 24) | (int b[1] << 16) | (int b[0] << 8) | 16rFF;
+}
+
+testClassColour(t: ref T)
+{
+	(nil, m) := layers->parse("frame=3 class=person score=0.88 x0=10 y0=10 x1=60 y1=90");
+	if(m == nil){
+		t.fatal("a detection: no mark");
+		return;
+	}
+	t.assertseq(m.class, "person", "a detection keeps its class");
+	t.assertnil(m.colour, "a detection has no colour of its own");
+	(nil, m2) := layers->parse("frame=3 class=car score=0.80 x0=100 y0=10 x1=150 y1=90");
+	(nil, m3) := layers->parse("frame=3 class=car score=0.80 x0=200 y0=10 x1=250 y1=90 colour=red");
+
+	draw = load Draw Draw->PATH;
+	display := Display.allocate(nil);
+	if(display == nil){
+		t.skip(sys->sprint("no display: %r"));
+		return;
+	}
+	img := display.newimage(Rect((0, 0), (300, 100)), Draw->XRGB32, 0, int 16rFFFFFFFF);
+	cols := array[] of {
+		int 16rFF0000FF, int 16r00FF00FF, int 16r0000FFFF, int 16rFFFF00FF,
+		int 16rFF00FFFF, int 16r00FFFFFF, int 16r808080FF, int 16r800000FF,
+	};
+	l: list of (string, ref Image);
+	for(i := len cols - 1; i >= 0; i--)
+		l = ("pie" + string i, display.color(cols[i])) :: l;
+	l = ("red", display.color(int 16r123456FF)) :: l;
+	layers->draw(m :: m2 :: m3 :: nil, img, img.r, 300, 100, nil, display.color(int 16r000000FF), l);
+	# the left side of each box, half way down: FNV-1a of person is
+	# 0 mod 8, of car 1
+	t.asserteq(pixel(t, img, (10, 50)), cols[0], "a person's box is pie0");
+	t.asserteq(pixel(t, img, (100, 50)), cols[1], "a car's box is pie1, another colour");
+	t.asserteq(pixel(t, img, (200, 50)), int 16r123456FF, "a detection's own colour= is drawn, not its class's");
 }
 
 writefile(t: ref T, path, s: string)
@@ -193,6 +244,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	run("Parse", testParse);
 	run("Stack", testStack);
+	run("ClassColour", testClassColour);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

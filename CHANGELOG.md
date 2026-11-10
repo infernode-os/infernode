@@ -499,18 +499,6 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Applications
 
-- **vid9p replays a `.y4m` file as a live feed: `vid9p -r file.y4m`, or
-  `replay file.y4m` to its `ctl`.** Its frames come at the file's rate
-  and start again from the first after the last, numbered on, so what
-  reads the feed (vision(4), wm/camera, Matrix) sees a live source, as
-  from camsrv or a host decoder, with `-w`'s window kept. It needs no
-  host decoder, so a bare-metal board with no camera can serve one.
-  A frame read past a live feed's window is now refused as `frame
-  expired`, as camsrv refuses it: vid9p added ` (retention window)`, and
-  wm/camera, vision(4), vidplay9p and Matrix's video pane, which match
-  the words to go on from the newest frame, stopped instead (wm/camera
-  showed "no camera"). `tests/host/vid9p_replay_test.sh` checks both.
-
 - **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
   words (#1112).** Plain `fmt` joins everything between blank lines,
   so a list became one paragraph and code, tables and headings were

@@ -57,6 +57,8 @@ TARG=\
 	cut_test.dis\
 	dhcp_test.dis\
 	crypto_test.dis\
+	login_test.dis\
+	ssl_hmac_test.dis\
 	delegation_budget_test.dis\
 	destructor_test.dis\
 	dial_test.dis\
@@ -68,6 +70,7 @@ TARG=\
 	osk_accuracy.dis\
 	ninep_bench.dis\
 	ninep_msize_test.dis\
+	ninep_disconnect_test.dis\
 	crypto_bench.dis\
 	tcpwatch.dis\
 	keyboards_test.dis\

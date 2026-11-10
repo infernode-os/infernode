@@ -68,52 +68,31 @@ device.
 .B alg clear
 Allow data to pass in the clear with only message delimiters added. The device starts in this mode.
 .TP
-.B alg sha
-Append a SHA digest to each buffer written to
+.B alg sha256
+Append a SHA-256 digest to each buffer written to
 .BR data .
 The digest covers the outgoing secret (written to
 .BR secretout ),
-the message, and a message number which starts at 0 and increments by one for each message.
+the message, and a message number which starts at 0 and increments by one for each message
+(SSL 2's construction, kept for the peers that speak it).
 Messages read have their appended digests compared to a digest computed using the incoming secret (written to
 .BR secretin ).
 If the comparison fails, so will the read.
 .TP
-.B alg md4
+.B alg hmac_sha384
 Like
-.B sha
-but using the MD4 message digest algorithm.
+.BR sha256 ,
+but the digest is HMAC-SHA-384 (FIPS 198-1) keyed by the secret,
+of the message and its number as four bytes, most significant first:
+48 bytes, the MAC CNSA admits.
 .TP
-.B alg md5
-Like
-.B sha
-but using the MD5 message digest algorithm.
-.TP
-.B alg rc4
+.B alg aes_128_cbc
 .PD0
 .TP
-.B alg rc4_40
-.TP
-.B alg rc4_128
-.TP
-.B alg rc4_256
-RC4 encrypt each message written to
-.B data
-with the key written to
-.BR secretout ,
-using the key length as indicated (40-bit keys by default).
+.B alg aes_256_cbc
+Encrypt the stream using AES with a 128- or 256-bit key and Cipher Block Chaining (CBC),
+the key and initialisation vector taken from the secret.
 .PD
-.TP
-.B alg des_56_cbc
-Encrypt the stream using DES and Cipher Block Chaining (CBC)
-.TP
-.B alg des_56_ecb
-Encrypt the stream using DES and Electronic Code Book (ECB)
-.TP
-.B alg ideacbc
-Encrypt the stream using IDEA and CBC
-.TP
-.B alg ideaecb
-Encrypt the stream using IDEA and ECB
 .TP
 .BI alg " digest" / crypt
 Combine the use of the given

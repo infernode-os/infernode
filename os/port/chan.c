@@ -183,6 +183,22 @@ chandevshutdown(void)
 		devtab[i]->shutdown();
 }
 
+/*
+ *  c's fid stays with a server that has not answered its clunk: a dying
+ *  Prog's clunk or remove left orphaned by devmnt (mountio), the fid
+ *  given up on and the call on the queue for its reply.  c goes back on
+ *  the free list, and its next user would walk to that fid again while
+ *  the server may still hold it ("fid in use", the mount's next walks
+ *  failing).  c takes a fid not used before.
+ */
+void
+chanfidretire(Chan *c)
+{
+	lock(&chanalloc.l);
+	c->fid = ++chanalloc.fid;
+	unlock(&chanalloc.l);
+}
+
 Chan*
 newchan(void)
 {

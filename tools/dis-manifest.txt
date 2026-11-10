@@ -802,6 +802,7 @@ dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/keyring_sweep_test.dis
 dis/tests/layers_test.dis
+dis/tests/login_test.dis
 dis/tests/mermaid_flow_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
@@ -870,8 +871,10 @@ dis/tests/nmea_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
 dis/tests/ninep_bench.dis
+dis/tests/ninep_disconnect_test.dis
 dis/tests/ninep_msize_test.dis
 dis/tests/crypto_bench.dis
+dis/tests/ssl_hmac_test.dis
 dis/tests/tcpwatch.dis
 dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis

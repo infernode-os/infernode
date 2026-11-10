@@ -141,6 +141,30 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **Login takes AES-256-GCM in CNSA mode.** The key exchange with a signer
+  (login(2), logind(8)) sealed its Diffie-Hellman value with ChaCha20-Poly1305,
+  which CNSA does not admit. A client in CNSA mode (`/env/cnsamode`) now seals
+  it with AES-256-GCM under a key from HKDF with SHA-384, and says so by its
+  IV's length (44 bytes, not 32); a signer takes either, and in CNSA mode
+  refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
+  are unchanged. login(6) describes the protocol as it is.
+
+- **devssl has HMAC-SHA-384.** ssl(3)'s only digest was `sha256`, SSL 2's
+  hash of secret, record and record number, which is not an HMAC and not a MAC
+  CNSA admits. `alg hmac_sha384` is HMAC-SHA-384 keyed by the secret over the
+  record and its number, in the emulator and the native kernels alike; `sha256`
+  is unchanged for the peers that speak it. ssl(3) lists the algorithms the
+  device has (it still described SHA-1, MD5, RC4, DES and IDEA).
+
+- **The native kernels' generator is NIST's HMAC_DRBG.** `os/port/random.c`,
+  behind every key, `#c/random` and `#c/notquiterandom` on bare metal, was
+  ChaCha20, which no NIST or CNSA list admits as a generator. It is now
+  HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1), instantiated from 64 bytes of
+  hardware entropy and a 16-byte nonce and reseeded as before, checked against
+  NIST's CAVP vectors at first use (a kernel that fails them panics), with
+  SP 800-90B's repetition-count and adaptive-proportion tests on every hardware
+  byte. The host test checks it against 60 of NIST's vectors.
+
 - **A Prog killed in a 9P call over an encrypted mount no longer takes
   the mount down for everyone else.** The killed call's flush is written
   through devssl, and the kill, still pending, interrupted that write

@@ -544,9 +544,15 @@ reader(file: string, size: int, go: chan of int, done: chan of int)
 	buf := array[1024*1024] of byte;
 	<-go;
 	n := 0;
-	if(fd != nil)
-		while(n < size && (k := sys->read(fd, buf, len buf)) > 0)
+	if(fd == nil)
+		sys->fprint(sys->fildes(2), "ninep_bench: open %s: %r\n", file);
+	else{
+		k := 0;
+		while(n < size && (k = sys->read(fd, buf, len buf)) > 0)
 			n += k;
+		if(k < 0)
+			sys->fprint(sys->fildes(2), "ninep_bench: read %s at %d: %r\n", file, n);
+	}
 	done <-= n;
 }
 

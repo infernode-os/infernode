@@ -18,7 +18,7 @@ implement Sdgsrv;
 # Each accepted handshake is a session of its own, with its own export of
 # dir, as each TCP connection to `listen ... {export dir}` is: several
 # viewers are several sessions.  Within one, a request runs at most once
-# under its rid, its reply kept among the last Ncache, a retransmission
+# under its rid, its reply kept among the last ncachemax (-c, 16 as the brick), a retransmission
 # of one still running answered "pending" and of one gone from the cache
 # (or abandoned below the floor) "gone".  9P tags are the session's own
 # toward the export, so a tag the commander reuses after giving up on a
@@ -48,7 +48,7 @@ Pinit, Presp, Pdata: con 1+iota;
 INITLEN:	con 1 + 4 + 108 + 16 + 16;
 Udphdrlen:	con 52;
 MSIZE:	con 1200;
-Ncache:	con 16;		# replies kept, as the brick keeps
+ncachemax := 16;	# replies kept, as the brick keeps (-c)
 Window:	con 64;		# rids above the floor that may be open
 IDLEMS:	con 120000;	# a session with no packet this long is dropped
 NOTAG:	con 16rFFFF;
@@ -77,10 +77,19 @@ init(nil: ref Draw->Context, args: list of string)
 		genkeys(hd tl args);
 		return;
 	}
-	if(args != nil && hd args == "-v"){
-		verbose = 1;
-		args = tl args;
-	}
+	ncachemax = 16;
+	for(; args != nil && len hd args > 1 && (hd args)[0] == '-'; args = tl args)
+		case hd args {
+		"-v" =>
+			verbose = 1;
+		"-c" =>
+			# replies kept: the brick's 16 is gone in 40 ms at wire speed
+			if(tl args == nil || (ncachemax = int hd tl args) < 1)
+				usage();
+			args = tl args;
+		* =>
+			usage();
+		}
 	if(len args != 3)
 		usage();
 	kd := hd args;
@@ -110,7 +119,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: sdgsrv [-v] keydir addr dir\n       sdgsrv -g keydir\n");
+	sys->fprint(stderr, "usage: sdgsrv [-v] [-c ncache] keydir addr dir\n       sdgsrv -g keydir\n");
 	raise "fail:usage";
 }
 
@@ -684,17 +693,17 @@ reply(ss: ref Session, m: array of byte)
 		sys->fprint(stderr, "sdgsrv: Rversion %d msize %d\n", int m[4], get4(m, 7));
 	plain := cat(ridonly(r.rid), m);
 	ss.cache = (r.rid, plain) :: ss.cache;
-	if(++ss.ncache > Ncache){
+	if(++ss.ncache > ncachemax){
 		k: list of (int, array of byte);
 		i := 0;
-		for(c := ss.cache; c != nil && i < Ncache; c = tl c){
+		for(c := ss.cache; c != nil && i < ncachemax; c = tl c){
 			k = hd c :: k;
 			i++;
 		}
 		ss.cache = nil;
 		for(; k != nil; k = tl k)
 			ss.cache = hd k :: ss.cache;
-		ss.ncache = Ncache;
+		ss.ncache = ncachemax;
 	}
 	ran(ss, r.rid);
 	send(ss, plain);

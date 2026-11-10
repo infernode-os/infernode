@@ -10,5 +10,5 @@
 pdf	binary	/dis/xenith/doc/pdfdoc.dis	.pdf	magic=%PDF-
 image	binary	/dis/xenith/doc/imgdoc.dis	.png .jpg .jpeg .jpe .gif .webp .avif .svg .xbm .pic .ppm .pgm .bit	magic=\x89PNG magic=\xff\xd8\xff magic=GIF8
 markdown	source	/dis/xenith/doc/mddoc.dis	.md .markdown
-mermaid	source	/dis/xenith/doc/mmddoc.dis	.mmd .mermaid
+mermaid	source	/dis/xenith/doc/mmddoc.dis	.mmd .mermaid	magic=flowchart magic=sequenceDiagram
 html	source	/dis/xenith/doc/webdoc.dis	.html .htm

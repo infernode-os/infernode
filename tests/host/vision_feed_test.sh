@@ -14,6 +14,10 @@
 #   - a camera (camsrv -t): the session's frame= numbers are the
 #     camera's own (in order, within what camsrv has made), so a viewer
 #     of the camera elsewhere draws them on the frames they were found in
+#   - a setting that starts a new follower (thresh, as place does) changed
+#     while a reader has the file open: that reader goes on to the next
+#     frames (it was told the feed had ended, and a layer bound into a
+#     camera's froze until bound again)
 #   - src none back to idle; a feed that is not one refused
 #
 # Needs a model directory and a picture of a dog (as vision_test.sh) and
@@ -73,6 +77,9 @@ visionfs load m $M
 		echo '-- cam'
 		for i in 1 2 3 4 5 { read }
 		echo '-- cam status'; cat /mnt/cam/0/status
+		echo thresh 0.3 > /mnt/vision/\$id/ctl
+		echo '-- cam restarted'
+		for i in 1 2 3 { read }
 	} < /mnt/vision/\$id/detections
 	echo src none > /mnt/vision/\$id/ctl
 } < /mnt/vision/clone
@@ -109,4 +116,6 @@ cam=$(part cam | cut -d' ' -f1 | sed 's/frame=//' | tr '\n' ' ')
 camframes=$(part 'cam status' | sed -n 's/.* frames=\([0-9]*\).*/\1/p')
 okcam=$(echo "$cam" | awk -v f="$camframes" '{n=0; for(i=1;i<=NF;i++){ if($i !~ /^[0-9]+$/ || $i >= f || (i>1 && $i <= p)) bad=1; p=$i; n++ } } END {print (n==5 && !bad && f != "") ? 1 : 0}')
 [ "$okcam" = 1 ] && ok "a camera: the session's frames are the camera's own numbers ($cam< frames=$camframes)" || bad "a camera's frames: '$cam' camsrv frames=$camframes"
+nre=$(part 'cam restarted' | grep -c '^frame=')
+[ "$nre" -ge 3 ] && ok "a setting changed under a reader (thresh: a new follower): the same open file goes on to the next frames ($nre)" || bad "after a restart the reader had $nre frames (it was told the feed had ended: a bound layer froze)"
 exit $fail

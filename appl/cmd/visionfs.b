@@ -936,7 +936,12 @@ sessctl(s: ref Session, data: string): string
 		s.err = nil;
 	}
 	if(restart){
-		stopfeed(s);
+		# a new follower for the same feed (a place, threshold or
+		# classes changed): its readers go on to the next frame.
+		# stopfeed told them the feed had ended, and a layer bound
+		# into a camera's (wm/camera, Matrix) stopped, its boxes
+		# frozen, until it was unmounted and bound again
+		killfeed(s);
 		startfeed(s);
 	}
 	return nil;
@@ -971,7 +976,8 @@ startfeed(s: ref Session)
 	s.fpid = <-pidc;
 }
 
-stopfeed(s: ref Session)
+# the follower gone; its frames, if any are still on their way, not taken
+killfeed(s: ref Session)
 {
 	s.fgen++;
 	if(s.fpid >= 0){
@@ -980,6 +986,11 @@ stopfeed(s: ref Session)
 			sys->fprint(fd, "kill");
 	}
 	s.fpid = -1;
+}
+
+stopfeed(s: ref Session)
+{
+	killfeed(s);
 	s.ended = 1;
 	# readers waiting on the old feed are told it ended
 	for(fl := freaders; fl != nil; fl = tl fl)

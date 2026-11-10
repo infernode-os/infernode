@@ -585,6 +585,10 @@ exslave(void *a)
 				case Tstat:
 					q->out.stat = q->buf + MSGHDRSZ + BIT16SZ;	/* leaves it just where we want it */
 					q->out.nstat = q->bsize-(MSGHDRSZ+BIT16SZ);
+					/* nstat is 16 bits: a client's msize above
+					 * 65544 wrapped it, and the stat failed */
+					if(q->bsize-(MSGHDRSZ+BIT16SZ) > 0xFFFF)
+						q->out.nstat = 0xFFFF;
 					break;
 				}
 				err = (*fcalls[q->in.type])(fs, &q->in, &q->out);

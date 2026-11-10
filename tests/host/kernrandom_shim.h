@@ -77,6 +77,11 @@ typedef struct DigestState SHA512state;
 DigestState*	sha256(uchar*, ulong, uchar*, DigestState*);
 DigestState*	sha512(uchar*, ulong, uchar*, DigestState*);
 DigestState*	hmac_sha512(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
+enum { HMACDRBGlen = SHA512dlen, HMACDRBGmax = 64*1024 };
+void	hmacdrbginit(uchar*, uchar*, uchar*, int, uchar*, int, uchar*, int);
+void	hmacdrbgreseed(uchar*, uchar*, uchar*, int);
+void	hmacdrbggen(uchar*, uchar*, uchar*, int);
+int	hmacdrbgcheck(void);
 #define	nelem(x)	(sizeof(x)/sizeof((x)[0]))
 
 void	randominit(void);

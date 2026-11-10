@@ -623,9 +623,20 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 
 	if(waserror()){
 		qunlock(&s.s->out.q);
+		/*
+		 *  Interrupted with every record written: the channel
+		 *  underneath (TCP, a pipe) is qio, whose qbwrite queues a
+		 *  block before any wait it can be interrupted in, so the
+		 *  records went and the connection is whole.  A Prog killed
+		 *  while it wrote (a 9P client of a mount over this
+		 *  connection) hung up the connection for every other
+		 *  client.  Anything else, or a write not all made, leaves
+		 *  the far end part of a message.
+		 */
+		if(bb.b != nil || strcmp(up->env->errstr, Eintr) != 0)
+			sslhangup(s.s);
 		if(bb.b)
 			freeb(bb.b);
-		sslhangup(s.s);
 		nexterror();
 	}
 	qlock(&s.s->out.q);

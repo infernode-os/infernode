@@ -866,6 +866,7 @@ dis/tests/nmea_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
 dis/tests/ninep_bench.dis
+dis/tests/ninep_disconnect_test.dis
 dis/tests/ninep_msize_test.dis
 dis/tests/crypto_bench.dis
 dis/tests/tcpwatch.dis

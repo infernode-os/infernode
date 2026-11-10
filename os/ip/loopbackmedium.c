@@ -43,8 +43,16 @@ loopbackbind(Ipifc *ifc, int, char**)
 	lb = smalloc(sizeof(*lb));
 	lb->readp = (void*)-1;
 	lb->f = ifc->conv->p->f;
-	/* TO DO: make queue size a function of kernel memory */
-	lb->q = qopen(128*1024, Qmsg, nil, nil);
+	/*
+	 *  Both directions of every loopback conversation share this queue,
+	 *  ACKs included, and qpass drops what does not fit.  At 128K, under
+	 *  TCP's scaled 512K windows, a Pi 4's loopback dropped 95% of what
+	 *  it was given (/net/ipifc/0's errout): every bulk transfer lost
+	 *  segments and their ACKs, sat at one segment of window
+	 *  retransmitting what had arrived, and ran at 9-30 MB/s.  Four
+	 *  windows' worth; blocks take memory only while they are queued.
+	 */
+	lb->q = qopen(2*1024*1024, Qmsg, nil, nil);
 	ifc->arg = lb;
 	ifc->mbps = 1000;
 

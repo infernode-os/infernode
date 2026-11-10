@@ -48,6 +48,8 @@ include "keyring.m";
 	kr: Keyring;
 include "security.m";
 	auth: Auth;
+include "sdg.m";
+	sdg: Sdg;
 
 NinepBench: module
 {
@@ -64,6 +66,7 @@ deadline := 120;	# seconds a run may take before it is called stalled
 feedsecs := 0;		# -f: read a feed for this long
 fromzero := 0;		# -0: from frame 0, not the newest
 mntbase := "/n/bench";
+sdgkeys := "";		# -U: over sdg(2), its keys in this directory
 ways := 1;		# -p: each frame read as this many preads at once	# -D: where the mounts go (a machine's /n may not take one)
 
 init(nil: ref Draw->Context, args: list of string)
@@ -77,7 +80,7 @@ init(nil: ref Draw->Context, args: list of string)
 	runs := 5;
 	separate := 0;
 	arg->init(args);
-	arg->setusage("ninep_bench [-A] [-C alg] [-k keyfile] [-m msize,...] [-c readers,...] [-n runs] [-s] [-l stats] [-t secs] [-f secs [-0] [-p ways]] [-D dir] addr path");
+	arg->setusage("ninep_bench [-A] [-C alg] [-k keyfile] [-m msize,...] [-c readers,...] [-n runs] [-s] [-l stats] [-t secs] [-f secs [-0] [-p ways]] [-D dir] [-U keydir] addr path");
 	while((o := arg->opt()) != 0)
 		case o {
 		'A' =>	noauth = 1;
@@ -93,12 +96,22 @@ init(nil: ref Draw->Context, args: list of string)
 		'0' =>	fromzero = 1;
 		'D' =>	mntbase = arg->earg() + "/bench";
 		'p' =>	ways = int arg->earg();
+		'U' =>	sdgkeys = arg->earg();
 		* =>	arg->usage();
 		}
 	args = arg->argv();
 	if(len args != 2)
 		arg->usage();
 	addr := dial->netmkaddr(hd args, "tcp", "styx");
+	if(sdgkeys != nil){
+		addr = dial->netmkaddr(hd args, "udp", "5640");
+		sdg = load Sdg Sdg->PATH;
+		if(sdg == nil)
+			fatal(sys->sprint("cannot load %s: %r", Sdg->PATH));
+		if((e := sdg->init()) != nil)
+			fatal("sdg: " + e);
+		noauth = 1;
+	}
 	path := hd tl args;
 	if(!noauth){
 		auth = load Auth Auth->PATH;
@@ -130,6 +143,8 @@ init(nil: ref Draw->Context, args: list of string)
 # a connection to addr, authenticated, at msize, mounted on dir
 connect(addr: string, msize: int, dir: string): int
 {
+	if(sdgkeys != nil)
+		return sdgconnect(addr, msize, dir);
 	c := dial->dial(addr, nil);
 	if(c == nil){
 		sys->fprint(sys->fildes(2), "ninep_bench: dial %s: %r\n", addr);
@@ -161,6 +176,63 @@ connect(addr: string, msize: int, dir: string): int
 		return -1;
 	}
 	return got;
+}
+
+# the same over sdg(2): keys from sdgkeys (sdgsrv -g's sdg.key, sdg.brick, sdg.psk)
+sdgconnect(addr: string, msize: int, dir: string): int
+{
+	k := ref Sdg->Keys(hexfile(sdgkeys + "/sdg.key"), hexfile(sdgkeys + "/sdg.brick"),
+		hexfile(sdgkeys + "/sdg.psk"), sdgkeys + "/sdg.ctr");
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return -1;
+	if((e := sdg->relay(addr, k, p[1])) != nil){
+		sys->fprint(sys->fildes(2), "ninep_bench: sdg %s: %s\n", addr, e);
+		return -1;
+	}
+	p[1] = nil;
+	(got, nil) := sys->fversion(p[0], msize, "9P2000");
+	if(got <= 0){
+		sys->fprint(sys->fildes(2), "ninep_bench: fversion %d: %r\n", msize);
+		return -1;
+	}
+	if(got != msize)
+		sys->fprint(sys->fildes(2), "ninep_bench: asked msize %d, got %d\n", msize, got);
+	if(sys->mount(p[0], nil, dir, Sys->MREPL, nil) < 0){
+		sys->fprint(sys->fildes(2), "ninep_bench: mount: %r\n");
+		return -1;
+	}
+	return got;
+}
+
+hexfile(f: string): array of byte
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[200] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return nil;
+	s := string b[0:n];
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	if(len s % 2)
+		return nil;
+	a := array[len s/2] of byte;
+	for(i := 0; i < len a; i++){
+		v := 0;
+		for(j := 0; j < 2; j++){
+			c := s[2*i+j];
+			case c {
+			'0' to '9' => v = v*16 + c - '0';
+			'a' to 'f' => v = v*16 + c - 'a' + 10;
+			* => return nil;
+			}
+		}
+		a[i] = byte v;
+	}
+	return a;
 }
 
 keyname(): string

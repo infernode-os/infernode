@@ -499,20 +499,6 @@ installation, especially bare-metal nodes and systems that ran
 
 ### Applications
 
-- **The machines a name space reaches, drawn from it:
-  `{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s` (#1136).**
-  `ns2mmd` turns ns(1)'s lines into a Mermaid flowchart: this machine,
-  each machine a mount reaches (named by ndb), an edge for each mount
-  with its service and mount point, marked when encrypted; a stream in,
-  a chart out each time the name space changes. `wm/page -s` shows a
-  stream of documents, each in the last one's place. An encrypted
-  mount's source in a name space is its SSL conversation (`#D/0/data`),
-  which nothing joined to its connection: ssl(3) has a new read-only
-  file, `#D/n/lower`, naming the channel the conversation was pushed
-  onto (`/net/tcp/3/data`), in emu and the native kernel. Mermaid text
-  on standard input (`flowchart`, `sequenceDiagram`) is now known as
-  Mermaid by its first bytes. `tests/host/ns_topology_test.sh` checks it.
-
 - **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
   words (#1112).** Plain `fmt` joins everything between blank lines,
   so a list became one paragraph and code, tables and headings were

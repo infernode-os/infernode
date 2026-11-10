@@ -56,7 +56,7 @@ ns > /.ns_topology_test.ns2
 echo done > /.ns_topology_test.done
 echo halt > /dev/sysctl
 ISH
-timeout 90 "$EMU" -c1 -r"$ROOT" /dis/sh.dis /.ns_topology_test.sh </dev/null >"$P.log" 2>&1 || true
+with_timeout 90 "$EMU" -c1 -r"$ROOT" /dis/sh.dis /.ns_topology_test.sh </dev/null >"$P.log" 2>&1 || true
 
 failed=0
 fail() { echo "FAIL: $*"; failed=1; }
@@ -108,7 +108,7 @@ sleep 4
 /dis/scap.dis /.ns_topology_test.p2.img
 echo halt > /dev/sysctl
 ISH
-	SDL_VIDEODRIVER=dummy timeout 60 "$EMU" -c1 -g900x500 -r"$ROOT" /dis/sh.dis /.ns_topology_test.page </dev/null >"$P.plog" 2>&1 || true
+	SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c1 -g900x500 -r"$ROOT" /dis/sh.dis /.ns_topology_test.page </dev/null >"$P.plog" 2>&1 || true
 	if [ ! -f "$P.p1.img" ] || [ ! -f "$P.p2.img" ]; then
 		fail "wm/page -s: no screen captured: $(tail -3 "$P.plog")"
 	else

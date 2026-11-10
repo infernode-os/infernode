@@ -101,7 +101,10 @@ virtio-rng on QEMU's virt):
   a kernel that does not give them panics rather than make keys.
 - `#c/notquiterandom` (`genrandom()`) and `#c/random` (`randomread()`) are
   the same generator; the two names stay for what reads them. On a Pi 5
-  it gives about 236 MB/s in 64 KB reads, and 7 µs a 32-byte read.
+  it gives about 42 MB/s (16 MB read in 0.40 s; ChaCha20 gave 247 MB/s
+  the same way): two SHA-512 blocks for every 64 bytes, in C, as the
+  kernel uses no SIMD registers. A key or a TLS handshake takes a few
+  dozen bytes.
 
 So the order in `tls.b` is right on bare metal too: `#c/notquiterandom`
 opens and is the kernel's generator.

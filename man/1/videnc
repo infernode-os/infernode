@@ -1,0 +1,174 @@
+.TH VIDENC 1
+.SH NAME
+videnc, vidjpeg \- a video feed's frames as JPEG between machines
+.SH SYNOPSIS
+.B mount -a {videnc
+.I feed
+.B }
+.I feed
+.br
+.B mount {vidjpeg
+.I feed
+.B } /mnt/video
+.SH DESCRIPTION
+A feed in the schema of
+.IR camsrv (4)
+and vid9p
+.RB ( ctl ,
+.BR fmt ,
+.BR frame ,
+.BR status ,
+.BR layer/ )
+serves raw I420 frames: a 480x270 frame is 194 KB, a 6 frame a second
+feed 1.2 MB a second for each viewer.
+.I Videnc
+and
+.I vidjpeg
+compress the frames on the hop between machines and leave both ends
+raw, so neither the feed nor what reads it changes:
+.I videnc
+beside the feed, on its machine;
+.I vidjpeg
+on the viewer's.
+.PP
+.I Videnc
+reads
+.IB feed /fmt
+and
+.IB feed /frame
+and serves a directory
+.BR jpeg ,
+union-mounted after the feed
+.RB ( "mount -a" ,
+as
+.IR bind (1)
+describes)
+so that it appears beside
+.BR frame :
+.TF jpeg/index
+.PD
+.TP
+.B jpeg/ctl
+Written
+.BI quality " n"
+(1 to 100, default 75) sets the quality of the frames encoded from then
+on; read, it gives the quality.  A change starts the encoded frames
+again.
+.TP
+.B jpeg/fmt
+.BI jpeg " w h " "420 " fps
+.TP
+.B jpeg/index
+Frame
+.IR N 's
+record, at offset
+.IR N *32:
+its offset and length in
+.BR data ,
+as decimal numbers, padded with blanks to 31 bytes and ended by a
+newline.  A read must begin at a record.
+.TP
+.B jpeg/data
+The encoded frames end to end, each a baseline JPEG
+.RI ( jpegenc (2)),
+at offsets that only grow.
+.PD
+.PP
+A frame is encoded when its record is first read, once however many
+read it, so a feed nobody reads encoded costs nothing.  A record for a
+frame the feed has not made yet waits for it, as
+.B frame
+waits at a live feed's edge.  A frame the feed no longer keeps, or one
+that has left
+.IR videnc 's
+last 64, is
+.BR "frame expired" ;
+a frame past a clip's end is refused.
+With
+.IR export (4)
+in front, a remote viewer reads
+.B jpeg/
+where a local one reads
+.BR frame .
+.PP
+.I Vidjpeg
+reads a feed's
+.BR jpeg/ ,
+local or mounted from another machine, and serves
+.BR 0/ctl ,
+.BR 0/fmt ,
+.BR 0/frame ,
+.B 0/status
+and
+.B 0/layer/
+as vid9p does: frame
+.I N
+is the
+.I framesize
+bytes at
+.IR N * framesize ,
+decoded to I420 with
+.IR jpegenc (2)'s
+.B planes
+and no RGB between.
+.IR wm-camera (1),
+vidplay9p and
+.IR vision (4)
+read it unchanged.
+A frame read in several pieces, as viewers read one, is decoded once.
+.B status
+is the feed's, read through;
+.B ctl
+is passed to the feed's, so the playhead is driven as before;
+.B layer/
+is empty, as vid9p serves it, for layers bound on the viewer.
+The feed's errors, such as
+.BR "frame expired" ,
+come through as they are.
+.PP
+JPEG at quality 75 makes the frames of a busy street scene about a sixth
+of their raw size; a smooth or still scene shrinks further.  Encoding a
+480x270 frame takes about 25 ms on a Raspberry Pi 5 under the JIT
+compiler, so a feed at 6 frames a second costs it about a sixth of one
+core.  A single reader on a fast link reads raw frames faster than JPEG
+ones, since each waits for its encoding: these are for links, or numbers
+of viewers, where the bandwidth is the limit.
+.SH EXAMPLES
+On the machine with the feed:
+.IP
+.EX
+mount {vid9p -w 10 -c vdec cam.mp4 --y4m -} /mnt/video
+mount -a {videnc /mnt/video/0} /mnt/video/0
+listen -a aes_256_gcm tcp!*!17052 {export /mnt/video}
+.EE
+.PP
+On the viewer:
+.IP
+.EX
+mount -C aes_256_gcm tcp!pi5!17052 /n/pi5
+mount {vidjpeg /n/pi5/0} /mnt/video
+wm/camera
+.EE
+.PP
+Lower the quality from either machine:
+.IP
+.EX
+echo quality 40 > /n/pi5/0/jpeg/ctl
+.EE
+.SH SOURCE
+.B /appl/cmd/videnc.b
+.br
+.B /appl/cmd/vidjpeg.b
+.SH SEE ALSO
+.IR jpegenc (2),
+.IR camsrv (4),
+.IR export (4),
+.IR vision (4),
+.IR wm-camera (1)
+.SH BUGS
+Frames are coded one by one (JPEG), not from each other as a video
+codec codes them, so a still scene costs as much as a moving one.
+.PP
+The quality is one setting for every viewer of a
+.IR videnc ;
+for two, run two.

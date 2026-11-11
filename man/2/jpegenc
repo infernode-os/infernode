@@ -1,0 +1,66 @@
+.TH JPEGENC 2
+.SH NAME
+jpegenc, jpegplanes \- I420 video frames to JPEG and back
+.SH SYNOPSIS
+.EX
+include "jpeg.m";
+enc := load Jpegenc Jpegenc->PATH;
+jp := load Jpegplanes Jpegplanes->PATH;
+
+encode:	fn(w, h: int, y, u, v: array of byte, quality: int):
+		(array of byte, string);
+planes:	fn(d: array of byte):
+		(int, int, array of byte, array of byte, array of byte, string);
+.EE
+.SH DESCRIPTION
+These convert between video frames in planar YCbCr 4:2:0 (I420), as
+vid9p and
+.IR camsrv (4)
+serve them, and JPEG, without passing through RGB either way.
+.PP
+.B Encode
+makes a baseline JPEG (JFIF, three components, Y sampled 2x2 and Cb and
+Cr 1x1) of a
+.IR w x h
+frame:
+.I y
+holds
+.IR w * h
+samples, and
+.I u
+and
+.I v
+each
+.RI ( w +1)/2
+by
+.RI ( h +1)/2.
+.I Quality
+from 1 to 100 scales the quantisation tables of ITU T.81 Annex K as
+libjpeg scales them, so a quality means what it does there; the Huffman
+tables are Annex K's.  A width or height that is not a multiple of 16 is
+padded by repeating the last column or row.  The same frame gives the
+same bytes.  It returns the JPEG, or nil and the reason if the planes are
+too short for the size, or the size or quality is out of range.
+.PP
+.B Planes
+decodes a JPEG of that form (three components, the first sampled 2x2 and
+the others 1x1) and returns its width, height and Y, Cb and Cr planes as
+decoded, before the upsampling and colour conversion an RGB image needs,
+or the reason it cannot.
+.B Jpegplanes
+is implemented by
+.B readjpg
+.RI ( imagefile (2)),
+so it decodes as that does: baseline, extended and progressive JPEG, and
+libjpeg's integer inverse DCT.
+.PP
+A 480x270 frame encodes in about 25 ms on a Raspberry Pi 5 under the JIT
+compiler, and decodes in about 3 ms on an Apple M-series machine.
+.SH SOURCE
+.B /appl/lib/jpegenc.b
+.br
+.B /appl/lib/readjpg.b
+.SH SEE ALSO
+.IR videnc (1),
+.IR i420 (2),
+.IR imagefile (2)

@@ -157,8 +157,18 @@ the memory they need to process images.
 .B /appl/lib/readpicfile.b
 .br
 .B /appl/lib/readpng.b
+.SH SEE ALSO
+.IR jpegenc (2)
 .SH NOTES
-The JPEG reader handles only the Baseline sequential format as defined by
-the JFIF 1.02 file exchange format.
+The JPEG reader handles baseline, extended sequential and progressive
+Huffman-coded JPEG of 8-bit samples; arithmetic coding, lossless and
+hierarchical modes are refused.  It also implements
+.B Jpegplanes
+.RI ( jpegenc (2)),
+which gives a 4:2:0 JPEG's planes as decoded, without converting them to
+RGB.
 .PP
-Functions to write these formats are as yet unimplemented.
+Writing JPEG is
+.IR jpegenc (2)'s,
+for video frames in I420; functions to write the other formats are as yet
+unimplemented.

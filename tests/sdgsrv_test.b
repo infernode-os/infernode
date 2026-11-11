@@ -5,7 +5,7 @@ implement SdgsrvTest;
 # (relay) over UDP on the loopback, a directory of the test's served:
 # a 300,000-byte file read whole and byte for byte through the mount
 # with 1, 4 and 16 reads in flight (msize 1200: each read one datagram);
-# a file whose reads answer only after 400 ms, past the client's 40 ms
+# a file whose reads answer only after 1.5 s, past the client's 40 ms
 # retransmission, so the server answers its retransmissions "pending"
 # and the read still gets its bytes; two sessions at once, each its own
 # export; a reader killed in the middle of its reads (a Tflush through
@@ -32,6 +32,7 @@ SdgsrvTest: module
 
 SRCFILE: con "/tests/sdgsrv_test.b";
 BIGLEN: con 300000;
+SLOWMS: con 1500;	# past the client's 1 s retransmission of a request answered "pending"
 
 passed := 0;
 failed := 0;
@@ -95,7 +96,7 @@ hexfile(f: string): array of byte
 	return a;
 }
 
-# the slow file: each read answered 400 ms after it came
+# the slow file: each read answered SLOWMS after it came
 slow(fio: ref Sys->FileIO, pidc: chan of int)
 {
 	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
@@ -112,7 +113,7 @@ slow(fio: ref Sys->FileIO, pidc: chan of int)
 
 later(off: int, rc: chan of (array of byte, string))
 {
-	sys->sleep(400);
+	sys->sleep(SLOWMS);
 	if(off > 0)
 		rc <-= (nil, nil);
 	else
@@ -273,8 +274,8 @@ testPending(t: ref T)
 	t0 := sys->millisec();
 	n := sys->read(fd, b, len b);
 	ms := sys->millisec() - t0;
-	t.assert(n > 0 && string b[0:n] == "slow but here", sys->sprint("a read answered after 400 ms gets its bytes (%d)", n));
-	t.assert(ms >= 380 && ms < 3000, sys->sprint("in about the server's time, not a deadline's (%d ms)", ms));
+	t.assert(n > 0 && string b[0:n] == "slow but here", sys->sprint("a read answered after SLOWMS gets its bytes (%d)", n));
+	t.assert(ms >= SLOWMS - 20 && ms < SLOWMS + 3000, sys->sprint("in about the server's time, not a deadline's (%d ms)", ms));
 }
 
 testTwoSessions(t: ref T)
@@ -297,7 +298,7 @@ both(f: string, c: chan of (string, int))
 	c <-= (err, same(b, want));
 }
 
-# a read held open (400 ms) while 150 others, one at a time, run past it:
+# a read held open (SLOWMS) while 150 others, one at a time, run past it:
 # more than the 64 rids the window keeps, so the floor moves over the open
 # one and its run map shifts with the 64th's bit set.  A big's >> copies
 # that bit down (it is arithmetic), so rids not yet sent were taken for run
@@ -319,7 +320,8 @@ testWindow(t: ref T)
 				t.error(sys->sprint("read %d past the open one: %r", i));
 		}
 		if(i == 150)
-			<-sc;	# the slow one answered: on, past it
+			if(!<-sc)	# the slow one answered: on, past it
+				t.error("the read held open, its rid passed by the window, got no bytes (its retransmission was answered gone)");
 	}
 	t.asserteq(bad, 0, "every read past a read held open answered, and right");
 }
@@ -328,9 +330,10 @@ slowread(f: string, c: chan of int)
 {
 	fd := sys->open(f, Sys->OREAD);
 	b := array[100] of byte;
+	n := -1;
 	if(fd != nil)
-		sys->read(fd, b, len b);
-	c <-= 1;
+		n = sys->read(fd, b, len b);
+	c <-= n > 0 && string b[0:n] == "slow but here";
 }
 
 testKilled(t: ref T)

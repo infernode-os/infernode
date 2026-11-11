@@ -3,11 +3,14 @@ implement Sdgsrv;
 #
 # sdgsrv - serve a directory as 9P over Noise-secured datagrams: the
 # responder side of sdg(2), as styxbrick's firmware is, for an InferNode
-# machine.  Built for docs/experiments/sdg-video (sdg against TCP for a
-# live feed); the protocol is styxbrick's docs/STYX-DGRAM.md.
+# machine, to test and measure sdg(2) against; the protocol is
+# styxbrick's docs/STYX-DGRAM.md.
 #
-#	sdgsrv [-v] keydir addr dir
+#	sdgsrv [-v] [-c ncache] [-d n] keydir addr dir
 #	sdgsrv -g keydir
+#
+# -c keeps ncache replies (16, as the brick); -d loses one data packet in
+# n each way, received and sent, as a lossy link would (for tests).
 #
 # keydir holds, as hex lines: sdgsrv.key (our X25519 private key),
 # sdgsrv.peer (the one commander's public key) and sdg.psk (the
@@ -18,7 +21,7 @@ implement Sdgsrv;
 # Each accepted handshake is a session of its own, with its own export of
 # dir, as each TCP connection to `listen ... {export dir}` is: several
 # viewers are several sessions.  Within one, a request runs at most once
-# under its rid, its reply kept among the last ncachemax (-c, 16 as the brick), a retransmission
+# under its rid, its reply kept among the last ncache, a retransmission
 # of one still running answered "pending" and of one gone from the cache
 # (or abandoned below the floor) "gone".  9P tags are the session's own
 # toward the export, so a tag the commander reuses after giving up on a
@@ -49,6 +52,8 @@ INITLEN:	con 1 + 4 + 108 + 16 + 16;
 Udphdrlen:	con 52;
 MSIZE:	con 1200;
 ncachemax := 16;	# replies kept, as the brick keeps (-c)
+lossy := 0;		# -d: one data packet in this many lost each way (a test of loss)
+lossrand := 16r2545F491;
 Window:	con 64;		# rids above the floor that may be open
 IDLEMS:	con 120000;	# a session with no packet this long is dropped
 NOTAG:	con 16rFFFF;
@@ -82,6 +87,11 @@ init(nil: ref Draw->Context, args: list of string)
 		case hd args {
 		"-v" =>
 			verbose = 1;
+		"-d" =>
+			# lose one data packet in n, each way: a lossy link, for tests
+			if(tl args == nil || (lossy = int hd tl args) < 2)
+				usage();
+			args = tl args;
 		"-c" =>
 			# replies kept: the brick's 16 is gone in 40 ms at wire speed
 			if(tl args == nil || (ncachemax = int hd tl args) < 1)
@@ -119,7 +129,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: sdgsrv [-v] [-c ncache] keydir addr dir\n       sdgsrv -g keydir\n");
+	sys->fprint(stderr, "usage: sdgsrv [-v] [-c ncache] [-d n] keydir addr dir\n       sdgsrv -g keydir\n");
 	raise "fail:usage";
 }
 
@@ -552,6 +562,14 @@ datapkt(ss: ref Session, m: array of byte)
 		return;		# keepalive
 	msg := p[4:];
 
+	# still running (a parked read): pending, even once the floor has
+	# passed it, as the brick answers (its lookup comes before closed())
+	for(l := ss.running; l != nil; l = tl l)
+		if((hd l).rid == rid && !(hd l).closed){
+			ss.npend++;
+			send(ss, ridonly(rid));
+			return;
+		}
 	if(rid <= ss.floor || (rid - ss.floor <= Window && (ss.runmap & (big 1 << (rid - ss.floor - 1))) != big 0)){
 		# run (or closed): its reply is in the cache, or gone. Only a
 		# retransmission comes here, so the cache is searched only then
@@ -570,12 +588,6 @@ datapkt(ss: ref Session, m: array of byte)
 		send(ss, g);
 		return;
 	}
-	for(l := ss.running; l != nil; l = tl l)
-		if((hd l).rid == rid && !(hd l).closed){
-			ss.npend++;
-			send(ss, ridonly(rid));
-			return;
-		}
 	if(len msg < 7 || get4(msg, 0) != len msg || len msg > MSIZE)
 		return;
 	while(rid - ss.floor > Window){
@@ -734,7 +746,17 @@ send(ss: ref Session, plain: array of byte)
 	pkt[Udphdrlen:] = h;
 	pkt[Udphdrlen+13:] = c;
 	pkt[Udphdrlen+13+len c:] = tag;
-	sys->write(udp, pkt, len pkt);
+	if(!lost())
+		sys->write(udp, pkt, len pkt);
+}
+
+# -d: is this data packet lost?
+lost(): int
+{
+	if(lossy == 0)
+		return 0;
+	lossrand = lossrand * 1103515245 + 12345;
+	return ((lossrand >> 8) & 16rFFFF) % lossy == 0;
 }
 
 # ---- the socket ----
@@ -769,7 +791,7 @@ dispatch()
 			out := cat(hdr, resp);
 			sys->write(udp, out, len out);
 		Pdata =>
-			if(len m < 13)
+			if(len m < 13 || lost())
 				continue;
 			id := get4(m, 1);
 			for(s := sessions; s != nil; s = tl s)

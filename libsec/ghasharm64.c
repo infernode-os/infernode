@@ -11,9 +11,15 @@
  * back at the end.
  *
  * Used where aesgcm.c asks (ghasharm64ok) and the processor has PMULL:
- * Apple's (always), Linux's and Android's where getauxval says so.  Built
- * to nothing where NEON is not on, as in the native kernel, whose C is
- * -mgeneral-regs-only; it keeps aesgcm.c's C.
+ * Apple's (always), Linux's and Android's where getauxval says so.
+ * The native kernels build this file with
+ * NEON (tests/host/baremetal_test.sh), though the rest of their C is
+ * -mgeneral-regs-only, and ask ID_AA64ISAR0_EL1: a Pi 5 has the
+ * instructions, a Pi 3 or 4 does not and keeps the C.  That is safe
+ * because only processes reach it (devssl, Keyring, the generator), no
+ * interrupt does, and a process's FP/SIMD registers are saved at every
+ * switch (os/arm64/main.c's procsave); an interrupt touches none of them.
+ * Built to nothing where NEON is not on.
  */
 #include "os.h"
 #include <libsec.h>
@@ -35,6 +41,14 @@ ghasharm64ok(void)
 		haspmull = 1;	/* every Apple arm64 has it */
 #elif defined(__linux__) && defined(AT_HWCAP)
 		haspmull = (getauxval(AT_HWCAP) & (1<<4)) != 0;	/* HWCAP_PMULL */
+#elif defined(INFERNO_NATIVE)
+		{
+			/* bare metal at EL1: the instruction set attribute register says (AES 2 is AES and PMULL, bits 7:4) */
+			u64int isar0;
+
+			__asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
+			haspmull = ((isar0 >> 4) & 0xf) >= 2;
+		}
 #else
 		haspmull = 0;
 #endif

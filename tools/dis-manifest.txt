@@ -924,6 +924,7 @@ dis/tests/softkbd_test.dis
 dis/tests/sort_test.dis
 dis/tests/spawn_helpers_test.dis
 dis/tests/spawn_test.dis
+dis/tests/libsec_kat_test.dis
 dis/tests/ssl_transport_test.dis
 dis/tests/stderr_test.dis
 dis/tests/strcat_test.dis

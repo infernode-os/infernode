@@ -183,6 +183,7 @@ TARG=\
 	task_concurrent_probe.dis\
 	task_consistency_test.dis\
 	taskparse_test.dis\
+	libsec_kat_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
 	memdraw_far_test.dis\

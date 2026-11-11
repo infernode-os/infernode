@@ -357,7 +357,7 @@ kfauth(int fd, char *aname)
 }
 
 int
-kfversion(int fd, uint msize, char *vers, uint arglen)
+kfversion(int fd, uint msize, char *vers, uint arglen, uint *got)
 {
 	int m;
 	Chan *c;
@@ -376,6 +376,8 @@ kfversion(int fd, uint msize, char *vers, uint arglen)
 	}
 
 	m = mntversion(c, vers, msize, arglen);
+	if(got != nil)
+		*got = c->mux != nil ? c->mux->msize : msize;
 
 	poperror();
 	cclose(c);

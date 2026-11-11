@@ -58,6 +58,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **`sys->fversion` gives the message size agreed.** It gave back the size
+  it was asked for, whatever the server and the channel allowed: over devssl,
+  where a mount takes 32512 bytes at most, asking for 64K was reported as 64K.
+  The mount itself always used the size agreed; what read the result was told
+  otherwise (ninep_bench's "asked msize X, got Y" never fired, and
+  `ninep_msize_test` asserted the 64K it was echoed). Emulator and native
+  kernels alike.
+
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a
   plain connection and 32512 bytes on an encrypted one (`mount -k`,
   `-C`, listen's connections), and gets what the server takes. Over the

@@ -2027,21 +2027,6 @@ done:
 	if(seq_gt(seg->ack, tcb->snd.urg))
 		tcb->snd.urg = seg->ack;
 
-	/*
-	 *  New data acknowledged: the backoff ends, and so must the timeout
-	 *  it doubled.  timer.start was set again only from a round-trip
-	 *  sample, never taken while retransmitting (Karn), so after a few
-	 *  timeouts every later loss waited the backed-off time: at 5% loss
-	 *  each way the connection made no progress in a minute
-	 *  (docs/experiments/loss).
-	 */
-	tcb->flags &= ~RETRAN;
-	tcb->backedoff = 0;
-	if(tcb->backoff != 0){
-		tcb->backoff = 0;
-		tcpsettimer(tcb);
-	}
-
 	if(tcb->snd.una != tcb->snd.nxt)
 		tcpgo(tpriv, &tcb->timer);
 	else
@@ -2049,6 +2034,10 @@ done:
 
 	if(seq_lt(tcb->snd.ptr, tcb->snd.una))
 		tcb->snd.ptr = tcb->snd.una;
+
+	tcb->flags &= ~RETRAN;
+	tcb->backoff = 0;
+	tcb->backedoff = 0;
 }
 
 void

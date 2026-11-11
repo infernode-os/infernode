@@ -134,6 +134,7 @@ TARG=\
 	readavif.dis\
 	readgif.dis\
 	readjpg.dis\
+	jpegenc.dis\
 	readpicfile.dis\
 	readpng.dis\
 	readsvg.dis\
@@ -205,6 +206,7 @@ TARG=\
 MODULES=
 SYSMODULES=\
 	bidi.m\
+	jpeg.m\
 	parread.m\
 	layers.m\
 	visnet.m\

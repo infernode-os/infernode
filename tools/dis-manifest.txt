@@ -435,6 +435,7 @@ dis/lib/readdir.dis
 dis/lib/parread.dis
 dis/lib/readgif.dis
 dis/lib/readjpg.dis
+dis/lib/jpegenc.dis
 dis/lib/readpicfile.dis
 dis/lib/readpng.dis
 dis/lib/readsvg.dis
@@ -896,6 +897,7 @@ dis/tests/pres_launch_test.dis
 dis/tests/publicnet_host_test.dis
 dis/tests/publicnet_test.dis
 dis/tests/readjpg_test.dis
+dis/tests/jpeg_test.dis
 dis/tests/readwebp_test.dis
 dis/tests/realconv_test.dis
 dis/tests/refadt_zero_test.dis

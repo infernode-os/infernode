@@ -552,6 +552,14 @@ datapkt(ss: ref Session, m: array of byte)
 		return;		# keepalive
 	msg := p[4:];
 
+	# still running (a parked read): pending, even once the floor has
+	# passed it, as the brick answers (its lookup comes before closed())
+	for(l := ss.running; l != nil; l = tl l)
+		if((hd l).rid == rid && !(hd l).closed){
+			ss.npend++;
+			send(ss, ridonly(rid));
+			return;
+		}
 	if(rid <= ss.floor || (rid - ss.floor <= Window && (ss.runmap & (big 1 << (rid - ss.floor - 1))) != big 0)){
 		# run (or closed): its reply is in the cache, or gone. Only a
 		# retransmission comes here, so the cache is searched only then
@@ -570,12 +578,6 @@ datapkt(ss: ref Session, m: array of byte)
 		send(ss, g);
 		return;
 	}
-	for(l := ss.running; l != nil; l = tl l)
-		if((hd l).rid == rid && !(hd l).closed){
-			ss.npend++;
-			send(ss, ridonly(rid));
-			return;
-		}
 	if(len msg < 7 || get4(msg, 0) != len msg || len msg > MSIZE)
 		return;
 	while(rid - ss.floor > Window){

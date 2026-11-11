@@ -412,8 +412,8 @@ Session: adt {
 	floor:	int;			# every rid <= floor is closed
 	runmap:	big;			# bit i: rid floor+1+i has run
 	running:	list of ref Req;
-	cache:	list of (int, array of byte);	# (rid, plaintext reply), newest first
-	ncache:	int;
+	cache:	array of (int, array of byte);	# (rid, plaintext reply), a ring of ncachemax
+	ncache:	int;			# the ring's next slot
 	nexttag:	int;
 	pkts:	chan of (array of byte, array of byte);	# (udp header, packet)
 	replies:	chan of array of byte;
@@ -426,6 +426,7 @@ Session: adt {
 newsession(me, them: int, krecv, ksend, hdr: array of byte): ref Session
 {
 	ss := ref Session;
+	ss.cache = array[ncachemax] of (int, array of byte);
 	ss.me = me;
 	ss.them = them;
 	ss.krecv = krecv;
@@ -551,21 +552,17 @@ datapkt(ss: ref Session, m: array of byte)
 		return;		# keepalive
 	msg := p[4:];
 
-	for(c := ss.cache; c != nil; c = tl c){
-		(r, rep) := hd c;
-		if(r == rid){
-			ss.nresent++;
-			send(ss, rep);
-			return;
-		}
-	}
-	for(l := ss.running; l != nil; l = tl l)
-		if((hd l).rid == rid && !(hd l).closed){
-			ss.npend++;
-			send(ss, ridonly(rid));
-			return;
-		}
 	if(rid <= ss.floor || (rid - ss.floor <= Window && (ss.runmap & (big 1 << (rid - ss.floor - 1))) != big 0)){
+		# run (or closed): its reply is in the cache, or gone. Only a
+		# retransmission comes here, so the cache is searched only then
+		for(ci := 0; ci < len ss.cache; ci++){
+			(r, rep) := ss.cache[ci];
+			if(r == rid && rep != nil){
+				ss.nresent++;
+				send(ss, rep);
+				return;
+			}
+		}
 		ss.ngone++;
 		g := array[5] of byte;
 		put4(g, 0, rid);
@@ -573,6 +570,12 @@ datapkt(ss: ref Session, m: array of byte)
 		send(ss, g);
 		return;
 	}
+	for(l := ss.running; l != nil; l = tl l)
+		if((hd l).rid == rid && !(hd l).closed){
+			ss.npend++;
+			send(ss, ridonly(rid));
+			return;
+		}
 	if(len msg < 7 || get4(msg, 0) != len msg || len msg > MSIZE)
 		return;
 	while(rid - ss.floor > Window){
@@ -692,19 +695,8 @@ reply(ss: ref Session, m: array of byte)
 	if(verbose && r.typ == Tversion)
 		sys->fprint(stderr, "sdgsrv: Rversion %d msize %d\n", int m[4], get4(m, 7));
 	plain := cat(ridonly(r.rid), m);
-	ss.cache = (r.rid, plain) :: ss.cache;
-	if(++ss.ncache > ncachemax){
-		k: list of (int, array of byte);
-		i := 0;
-		for(c := ss.cache; c != nil && i < ncachemax; c = tl c){
-			k = hd c :: k;
-			i++;
-		}
-		ss.cache = nil;
-		for(; k != nil; k = tl k)
-			ss.cache = hd k :: ss.cache;
-		ss.ncache = ncachemax;
-	}
+	ss.cache[ss.ncache] = (r.rid, plain);
+	ss.ncache = (ss.ncache + 1) % len ss.cache;
 	ran(ss, r.rid);
 	send(ss, plain);
 }

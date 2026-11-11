@@ -36,11 +36,18 @@ All notable changes to InferNode are documented in this file.
   shows. It is now PMULL where the processor has it, and otherwise integer
   multiplication that indexes nothing, after BearSSL's (MIT). With the AES
   instructions for its counter mode too, AES-256-GCM is 1444 MB/s on an
-  M-series Mac (171 before) and 476-569 MB/s on a Jetson Orin; the native
-  kernels keep the C, constant time and faster: 42.0 MB/s on a Pi 4 (37.6),
-  20.3 MB/s on a Pi 3 (19.4). `tests/host/armcrypto_test.sh` checks it against
+  M-series Mac (171 before) and 476-569 MB/s on a Jetson Orin. The native
+  kernels take the ARMv8 AES, PMULL and SHA-256 instructions too where
+  `ID_AA64ISAR0_EL1` says the core has them: on a Pi 5 AES-256-GCM is 361
+  MB/s (64.9 in C), AES-256-CBC 496 (133), SHA-256 703 (148), and ssl(3)'s
+  `aes_256_gcm` 258 MB/s. The Pi 3 and 4 have no such instructions and keep
+  the C, constant time and faster: 42.0 MB/s on a Pi 4 (37.6), 20.3 MB/s
+  on a Pi 3 (19.4). `tests/host/armcrypto_test.sh` checks it against
   438 of OpenSSL's answers in each configuration and, with valgrind, its
-  constant time.
+  constant time; `tests/libsec_kat_test.b` checks Keyring's AES-GCM,
+  AES-CBC and SHA-256 against answers made elsewhere in the native kernel
+  itself (it found the counter mode's last part-block wrong under QEMU
+  from a compiler-vectorised loop, now done through a whole block).
 
 ### Fixed
 

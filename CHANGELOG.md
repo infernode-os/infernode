@@ -4,6 +4,8 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-11
+
 ### Added
 
 - **A video feed's frames as JPEG between machines, raw at both ends:
@@ -54,6 +56,21 @@ All notable changes to InferNode are documented in this file.
   is the same colour in every frame, viewer and run; a record's own
   `colour=` still comes first. In wm/camera, Matrix's video pane and
   vidplay9p alike.
+
+- **sdgsrv(1), a responder for sdg(2), as an experiment.** It serves an
+  export over sdg's Noise datagrams, each session its own export and tags,
+  so `tests/ninep_bench.b -U keydir` can measure sdg beside 9P over TCP.
+  It has no cookies and no idle expiry (a session's procs stay until it is
+  killed): it is for measuring, not deploying. `-d n` loses one data
+  packet in n each way, for tests. `tests/sdgsrv_test.b` reads through
+  sdg(2)'s own client: 1, 4 and 16 in flight, a slow file answered
+  `pending`, two sessions, a reader killed mid-read, and eight reads
+  through a server losing 1 in 20.
+
+- **`drop N` in a CHAOS kernel's `/dev/chaos`** loses one IPv4 packet in N
+  sent and one in N received on an Ethernet or Wi-Fi interface,
+  machine-wide, so TCP and sdg can be measured under loss. It exists only
+  in a kernel built with `-DCHAOS`.
 
 ### Security
 
@@ -130,6 +147,16 @@ All notable changes to InferNode are documented in this file.
   a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
   checks it. The native kernel's devssl has the same write path; it is
   not changed here.
+
+- **The Claude and Codex gateways' Python dependencies are pinned
+  exactly, past the fixes OSV reports.** `tools/claude-gate` and
+  `tools/codex-gate` name aiohttp 3.14.5 and claude-agent-sdk 0.2.179, not
+  a lower bound an old environment already met, and their serve scripts
+  install the requirements on every start, so a persistent virtual
+  environment made before a fix is brought up to it. Security Analysis
+  audits each gateway's resolved dependencies against OSV
+  (`pip-audit`), Dependabot keeps the pins current, and
+  `tests/host/gateway_dependencies_test.sh` checks both.
 
 ### Fixed
 
@@ -239,6 +266,16 @@ All notable changes to InferNode are documented in this file.
   24-67 MB/s (SHA-256) and 18-35 MB/s (AES-256-CBC with SHA-256), as
   with 16K records.
 
+- **sdg(2) reads no longer fail with `reply gone` when a packet is lost.**
+  The brick and sdgsrv move their floor up whenever a request id arrives
+  more than 64 beyond it, so with several reads in flight at LAN rates a
+  lost request was abandoned before its 40 ms retransmission. A request
+  that would be 64 or more past the oldest still unanswered now waits, in
+  order, until the window allows it (STYX-DGRAM Rev S7), and sdgsrv
+  answers `pending` for a request still running after the window has
+  passed it. `sdgsrv_test`'s Lossy fails without this, under `-c1` and
+  `-c0`.
+
 ### Performance
 
 - **Video feeds are read with several reads in flight.** wm/camera,
@@ -257,7 +294,8 @@ All notable changes to InferNode are documented in this file.
   from 140 to 579 MB/s. On a Jetson Orin, AES-256-CBC 138 to 1077 MB/s
   encrypting and 142 to 2118 decrypting, SHA-256 163 to 828. Results
   are byte for byte the C's (`tests/host/armcrypto_test.sh`). The native
-  kernels keep the C: their code may not touch the FP/SIMD registers.
+  kernels use them too where `ID_AA64ISAR0_EL1` says the core has them
+  (a Pi 5; see AES-GCM's entry under Security).
 
 - **The native kernels' TCP recovers from loss faster.** After a
   retransmission the slow-start threshold is half what was in flight
@@ -268,6 +306,18 @@ All notable changes to InferNode are documented in this file.
   65 frames came through in the time master's kernel took 46 and 48,
   and the slowest frame took 2.4 s to master's 3.3 and 5.4. With no
   competing traffic nothing changed.
+
+- **The native kernels' TCP finds a loss from its peer's SACK blocks.** It
+  parses them (RFC 2018), counts an ACK at `snd.una` that SACKs new data as
+  a duplicate whether or not it carries data, and takes a segment for lost
+  once more than three segments' worth above it are SACKed (RFC 6675). A
+  9P peer sends its ACKs with its next requests and a receiver SACKs what
+  follows a hole in one or two ACKs, so three plain duplicates rarely came
+  and three losses in four waited for the retransmission timer. An 18 MB
+  read by eight readers from a Pi 4 at 1% loss each way takes 6.5-8.4 s,
+  not 28-34; with no loss nothing changed. At 5% neither finishes in a
+  minute: recovery is still one segment at a time. `kernelpins_test.sh`
+  pins the rule.
 
 ## [0.10.0] - 2026-11-09
 

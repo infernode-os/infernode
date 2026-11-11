@@ -1901,8 +1901,7 @@ update(Conv *s, Tcp *seg)
 	 *  hole, whether or not this segment carries data of its own.  Without
 	 *  this a peer that sends requests as it acknowledges (9P: every new
 	 *  Tread carries the ACK) never made a duplicate, and every loss waited
-	 *  for the retransmission timer: at 1% loss, 9 of 10 retransmissions
-	 *  (docs/experiments/loss).
+	 *  for the retransmission timer: at 1% loss, 9 of 10 retransmissions.
 	 */
 	newsack = 0;
 	for(i = 0; i < seg->nrsack; i++)
@@ -1923,7 +1922,7 @@ update(Conv *s, Tcp *seg)
 		 *  Lost after three duplicates, or (RFC 6675's IsLost) once more
 		 *  than three segments' worth above it is SACKed: a receiver that
 		 *  coalesces what follows a hole SACKs it all in one or two ACKs,
-		 *  and three duplicates never came (docs/experiments/loss).
+		 *  and three duplicates never came.
 		 */
 		++tcb->snd.dupacks;
 		if(!tcb->snd.recovery

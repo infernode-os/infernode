@@ -40,7 +40,7 @@
 #                requests and SACKs all that follows a hole in one or two:
 #                at 1% loss three in four losses waited for the timer, and
 #                with the record left at 0 the rule was off in half the
-#                sequence space (2026-11-11, docs/experiments/loss).
+#                sequence space (2026-11-11).
 #
 # Usage: tests/host/kernelpins_test.sh
 #

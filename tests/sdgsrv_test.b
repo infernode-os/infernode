@@ -40,6 +40,8 @@ skipped := 0;
 scratch: string;
 addr: string;
 srvpid := -1;
+lossypid := -1;
+lossyaddr: string;
 slowpid := -1;
 want: array of byte;
 
@@ -120,7 +122,7 @@ later(off: int, rc: chan of (array of byte, string))
 		rc <-= (array of byte "slow but here", nil);
 }
 
-server(kd, a, d: string, pidc: chan of int)
+server(opts: list of string, kd, a, d: string, pidc: chan of int)
 {
 	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
 	srv := load Command "/dis/sdgsrv.dis";
@@ -128,7 +130,10 @@ server(kd, a, d: string, pidc: chan of int)
 		sys->fprint(sys->fildes(2), "sdgsrv_test: load sdgsrv: %r\n");
 		return;
 	}
-	srv->init(nil, "sdgsrv" :: kd :: a :: d :: nil);
+	args := kd :: a :: d :: nil;
+	for(r := rev(opts); r != nil; r = tl r)
+		args = hd r :: args;
+	srv->init(nil, "sdgsrv" :: args);
 }
 
 setup(): string
@@ -166,8 +171,14 @@ setup(): string
 	port := 23000 + int (random->randombuf(Random->NotQuiteRandom, 2)[0]) * 100 + sys->millisec() % 97;
 	addr = sys->sprint("udp!127.0.0.1!%d", port);
 	pidc := chan of int;
-	spawn server(kd, sys->sprint("udp!*!%d", port), d, pidc);
+	spawn server(nil, kd, sys->sprint("udp!*!%d", port), d, pidc);
 	srvpid = <-pidc;
+	# the same, losing one data packet in 20 each way, keeping 1024 replies
+	# so that a lost reply is still there when its request comes again: what
+	# is left to fail is a lost request the client has outrun
+	lossyaddr = sys->sprint("udp!127.0.0.1!%d", port+1);
+	spawn server("-c" :: "1024" :: "-d" :: "20" :: nil, kd, sys->sprint("udp!*!%d", port+1), d, pidc);
+	lossypid = <-pidc;
 	sys->sleep(300);
 	return nil;
 }
@@ -181,6 +192,11 @@ keys(): ref Sdg->Keys
 
 # a session mounted on mnt; nil, or why not
 mountsdg(mnt: string): string
+{
+	return mountat(addr, mnt);
+}
+
+mountat(addr, mnt: string): string
 {
 	mkdir(mnt);
 	p := array[2] of ref Sys->FD;
@@ -238,6 +254,14 @@ piece(fd: ref Sys->FD, b: array of byte, lo, hi: int, done: chan of string)
 		o += n;
 	}
 	done <-= nil;
+}
+
+rev(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 same(a, b: array of byte): int
@@ -303,7 +327,7 @@ both(f: string, c: chan of (string, int))
 # one and its run map shifts with the 64th's bit set.  A big's >> copies
 # that bit down (it is arithmetic), so rids not yet sent were taken for run
 # ("reply gone"), and a map of ones held the session in ran() for good,
-# answering nothing (the loss experiment, docs/experiments/loss)
+# answering nothing
 testWindow(t: ref T)
 {
 	sc := chan of int;
@@ -334,6 +358,24 @@ slowread(f: string, c: chan of int)
 	if(fd != nil)
 		n = sys->read(fd, b, len b);
 	c <-= n > 0 && string b[0:n] == "slow but here";
+}
+
+# eight reads at once through a server losing one data packet in 20 each
+# way: every lost request or reply is sent again and the file arrives whole.
+# The client sent past the server's window of 64 rids while a lost request
+# waited for its retransmission, and the server, its window moved on,
+# answered it "reply gone" (STYX-DGRAM Rev S7).  With the brick's 16
+# replies a lost reply can still be gone by then; reads re-sent under a
+# new rid would cover that, and sdg(2) does not do it
+testLossy(t: ref T)
+{
+	if((e := mountat(lossyaddr, scratch + "/m3")) != nil)
+		t.fatal(e);
+	for(i := 0; i < 3; i++){
+		(b, err) := readways(scratch + "/m3/big", 8);
+		t.assertnil(err, sys->sprint("pass %d: eight reads at once over a lossy link", i));
+		t.assert(same(b, want), sys->sprint("pass %d: the file byte for byte", i));
+	}
 }
 
 testKilled(t: ref T)
@@ -387,10 +429,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Sdgsrv/TwoSessions", testTwoSessions);
 	run("Sdgsrv/Window", testWindow);
 	run("Sdgsrv/KilledReader", testKilled);
+	run("Sdgsrv/Lossy", testLossy);
 	# the mounts (their relays end), the server and the slow file's, so that emu can exit
 	sys->unmount(nil, scratch + "/m1");
 	sys->unmount(nil, scratch + "/m2");
-	for(pl := srvpid :: slowpid :: nil; pl != nil; pl = tl pl)
+	sys->unmount(nil, scratch + "/m3");
+	for(pl := srvpid :: lossypid :: slowpid :: nil; pl != nil; pl = tl pl)
 		if(hd pl >= 0){
 			fd := sys->open(sys->sprint("/prog/%d/ctl", hd pl), Sys->OWRITE);
 			if(fd != nil)

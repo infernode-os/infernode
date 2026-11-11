@@ -736,35 +736,62 @@ clock(tick: chan of int, pids: chan of int)
 
 HANGUP: con 60000;	# no word from the brick this long, requests waiting: the session is gone
 
+WINDOW:	con 64;	# the brick's window of rids (STYX-DGRAM Rev S7)
+
+# May rid be sent?  Not if it is WINDOW or more beyond the oldest request
+# that has had neither a reply nor "pending": the brick's floor moves up
+# whenever a rid arrives more than WINDOW beyond it, so that one, if lost,
+# would be abandoned ("reply gone") before its retransmission came.  At
+# LAN rates eight reads in flight send that many in one retransmission.
+inwindow(pend: list of ref Req, rid: int): int
+{
+	oldest := -1;
+	for(; pend != nil; pend = tl pend)
+		if(!(hd pend).pending && (oldest < 0 || (hd pend).rid < oldest))
+			oldest = (hd pend).rid;
+	return oldest < 0 || rid - oldest < WINDOW;
+}
+
+# send 9P message m as request rid
+issue(s: ref Sess, m: array of byte, rid: int, pend: list of ref Req): list of ref Req
+{
+	typ := int m[4];
+	tag := int m[5] | int m[6] << 8;
+	if(typ == Tversion && len m >= 11 && get4(m, 7) > MSIZE)
+		put4(m, 7, MSIZE);	# one datagram
+	cancels := -1;
+	if(typ == Tflush && len m >= 9){
+		# Stop retransmitting the flushed request, but keep it: if
+		# its reply comes before the Rflush, 9P lets it through.
+		cancels = int m[7] | int m[8] << 8;
+		for(l := pend; l != nil; l = tl l)
+			if((hd l).tag == cancels)
+				(hd l).flushing = 1;
+	}
+	now := sys->millisec();
+	r := ref Req(rid, tag, typ, 0, cancels, typ == Twrite, cat(le4(rid), m), now + DEADLINE, now + RTO, 1, 0, now);
+	s.send(r.pkt);
+	return r :: pend;
+}
+
 core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan of int, pids: list of int)
 {
 	pend: list of ref Req;
+	held: list of array of byte;	# requests waiting for the window, newest first
 	rid := 0;
 	heard := sys->millisec();	# the last authenticated packet
-	for(;;) alt {
+	for(;;){
+	alt {
 	m := <-reqs =>
 		if(m == nil){		# unmounted
 			killall(pids);
 			return;
 		}
-		typ := int m[4];
-		tag := int m[5] | int m[6] << 8;
-		if(typ == Tversion && len m >= 11 && get4(m, 7) > MSIZE)
-			put4(m, 7, MSIZE);	# one datagram
-		cancels := -1;
-		if(typ == Tflush && len m >= 9){
-			# Stop retransmitting the flushed request, but keep it: if
-			# its reply comes before the Rflush, 9P lets it through.
-			cancels = int m[7] | int m[8] << 8;
-			for(l := pend; l != nil; l = tl l)
-				if((hd l).tag == cancels)
-					(hd l).flushing = 1;
-		}
-		rid++;
-		now := sys->millisec();
-		r := ref Req(rid, tag, typ, 0, cancels, typ == Twrite, cat(le4(rid), m), now + DEADLINE, now + RTO, 1, 0, now);
-		pend = r :: pend;
-		s.send(r.pkt);
+		if(held == nil && inwindow(pend, rid+1)){
+			rid++;
+			pend = issue(s, m, rid, pend);
+		}else
+			held = m :: held;
 	pc := <-pkts =>
 		ctr := big 0;
 		for(i := 0; i < 8; i++)
@@ -851,6 +878,18 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 		}
 		if(now - s.lastsend > IDLE)
 			s.send(le4(0));		# keepalive: rid 0 is never a request
+	}
+		# what the window now allows of what was held, oldest first
+		while(held != nil && inwindow(pend, rid+1)){
+			o: list of array of byte;
+			for(h := held; tl h != nil; h = tl h)
+				o = hd h :: o;
+			rid++;
+			pend = issue(s, hd h, rid, pend);
+			held = nil;
+			for(; o != nil; o = tl o)
+				held = hd o :: held;
+		}
 	}
 }
 

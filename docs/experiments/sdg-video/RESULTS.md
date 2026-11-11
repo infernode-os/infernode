@@ -22,13 +22,23 @@ running it:
   to the run). The Wi-Fi figures are consistent run to run. **The wired
   ones are not usable:** the background rate in the wired phases' idle
   windows was eight times the Wi-Fi phases' (1.37 against 0.16 busy ms
-  per ms), from a source not found, and the subtraction gives
+  per ms), most likely sdgsrv's spinning sessions (below), and the subtraction gives
   negative costs in some cells. Only Wi-Fi CPU is quoted below.
 - **sdgsrv** (the responder written for this) serves an export over sdg
   with its own tags, closes a request whose tag is reused (STYX-DGRAM),
-  and has no cookies and no idle expiry: every session's three procs stay
-  until it is killed (counted after the run). It is enough to measure
-  with, not to deploy.
+  drops a session idle for two minutes, and has no cookies. It is enough
+  to measure with, not to deploy.
+- **A fault in sdgsrv contaminated the wired phase** (found afterwards,
+  in `docs/experiments/loss`, fixed in cb86ac99d). Its window's run map
+  was shifted with a `big`'s `>>`, which is arithmetic: a session in
+  which one request stayed open while 63 later ones finished could fill
+  the map with ones and loop in `ran()` for good, answering nothing and
+  using about a tenth of a core. Sessions left so by the Wi-Fi phase
+  were still spinning in the wired phase; this is the likeliest source of
+  the high background there, and it took Pi CPU from the wired cells. The
+  wired sdg figures below are therefore a lower bound. The Wi-Fi phase's
+  idle background stayed at 0.16 busy ms per ms, about what the live
+  feed's replay costs, so its figures were not affected.
 - **Memory per viewer was not measured.**
 - `Sys->fversion` returned the size asked for, not the size agreed; found
   here and fixed separately (#1161). The bench reads the iounit instead.

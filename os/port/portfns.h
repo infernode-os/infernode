@@ -190,6 +190,7 @@ void		chaoslock(void);
 int		chaosyield(void);
 int		chaosdevice(ulong*);
 int		chaosintr(ulong*);
+int		chaosdrop(void);
 long		chaosread(void*, long, vlong);
 long		chaoswrite(void*, long);
 #endif

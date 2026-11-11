@@ -898,6 +898,7 @@ dis/tests/publicnet_host_test.dis
 dis/tests/publicnet_test.dis
 dis/tests/readjpg_test.dis
 dis/tests/jpeg_test.dis
+dis/tests/vidjpeg_test.dis
 dis/tests/readwebp_test.dis
 dis/tests/realconv_test.dis
 dis/tests/refadt_zero_test.dis
@@ -1087,6 +1088,8 @@ dis/veltro/wallet9p.dis
 dis/veltro/wiki9p.dis
 dis/ventisrv.dis
 dis/vid9p.dis
+dis/videnc.dis
+dis/vidjpeg.dis
 dis/vision/crop.dis
 dis/vision/detect.dis
 dis/vision/draw.dis

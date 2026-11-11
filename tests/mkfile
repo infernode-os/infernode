@@ -212,6 +212,7 @@ TARG=\
 	readwebp_test.dis\
 	readjpg_test.dis\
 	jpeg_test.dis\
+	vidjpeg_test.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\

@@ -218,6 +218,8 @@ TARG=\
 	vacput.dis\
 	ventisrv.dis\
 	vid9p.dis\
+	videnc.dis\
+	vidjpeg.dis\
 	visionfs.dis\
 	camsrv.dis\
 	wav2iaf.dis\
@@ -252,6 +254,7 @@ MODULES=\
 
 SYSMODULES=\
 	visnet.m\
+	jpeg.m\
 	arg.m\
 	bufio.m\
 	convcs.m\

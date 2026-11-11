@@ -7,7 +7,7 @@ Inferno's cons driver (`#c`) serves two entropy devices:
 | Device | Implementation | Throughput | Use case |
 |--------|---------------|------------|----------|
 | `#c/random` | Timing jitter between two kprocs (emu); the board's hardware generator (bare metal) | ~80ms/byte (emu) | Bare-metal Inferno |
-| `#c/notquiterandom` | `prng()` in `libsec/prng.c` (emu); the hardware generator (bare metal) | nanoseconds/byte | emu on macOS/Linux, and bare metal |
+| `#c/notquiterandom` | HMAC_DRBG (`libsec/hmacdrbg.c`) over the host's generator (emu) or the board's hardware generator (bare metal) | nanoseconds/byte | emu on macOS/Linux, and bare metal |
 
 ## How `#c/random` works in emu
 
@@ -23,17 +23,27 @@ The bare-metal kernels no longer do this; see "Bare-metal Inferno" below.
 
 ## How `#c/notquiterandom` works
 
-`#c/notquiterandom` calls `prng()` in `libsec/prng.c`, which is platform-specific:
+`#c/notquiterandom` reads `genrandom()` (`libsec/genrandom.c`), the generator
+every key in the emulator comes from: HMAC_DRBG with SHA-512 (NIST SP 800-90A
+Rev. 1, 10.1.2, `libsec/hmacdrbg.c`), the same code as the bare-metal kernels'.
+It is instantiated from 48 bytes of the host's generator as entropy input and
+16 as nonce, with a personalization naming it, and reseeded from 48 more every
+1M bytes, every 65536 Generates, and in a process other than the one that
+seeded it. NIST's CAVP vectors are checked before its first output. The host's
+generator is `prngtry()` in `libsec/prng.c`:
 
-- **macOS**: `arc4random_buf(p, n)` — ChaCha20 CSPRNG seeded from the hardware
-  entropy pool via `SecRandomCopyBytes` / RDRAND.  Despite the "arc4" name,
-  Apple replaced the RC4 internals with ChaCha20 circa 2013.
-- **Linux**: `getrandom(p, n, 0)` — the kernel CSPRNG, also ChaCha20-based,
-  seeded from hardware entropy (`/dev/hwrng`, RDRAND, boot-time jitter, etc.).
-- **Other POSIX**: falls back to `open("/dev/urandom")`.
+- **macOS**: `arc4random_buf(p, n)`, seeded from the hardware entropy pool.
+- **Linux**: `getrandom(p, n, 0)`, the kernel CSPRNG, seeded from hardware
+  entropy (`/dev/hwrng`, RDRAND, boot-time jitter, etc.).
+- **Windows**: `BCryptGenRandom`.
+- **Other POSIX**: `/dev/urandom`.
 
-These sources pass NIST SP 800-90A/B statistical tests and are used by the host
-OS for all its own cryptographic operations.
+Its output is a conditioned, full-entropy source, so it is not put through SP
+800-90B's health tests as a board's raw bytes are. With no host generator
+nothing is given: the read fails (keys made by `genrandom()` stop the
+emulator, as `prng()` does), with no fallback to a weaker source. The
+emulator's generator was ChaCha20 keyed from the host's, and the device read
+the host's generator itself; neither is on a NIST or CNSA list.
 
 ## Why `tls.b` prefers `#c/notquiterandom`
 
@@ -68,24 +78,33 @@ the board's hardware generator `hwrandom()` alone (the Pi 3's in
 `os/bcm2837/random.c`, the Pi 4's and Pi 5's RNG200 in `os/bcm/rng200.c`,
 virtio-rng on QEMU's virt):
 
-- It is ChaCha20 with "fast key erasure", the construction libsec's hosted
-  `genrandom.c` and 9front use: each request first takes 32 bytes of
-  keystream as the next key and forgets the state it came from, so what a
-  request returned cannot be recovered from memory afterwards.
-- Its key is SHA-256 of 32 bytes of the old stream and 32 bytes from the
-  hardware, renewed every second or every megabyte. Until the first 32
-  hardware bytes have come, nothing is returned: readers wait, and the
-  console says why every five seconds. If the hardware goes dry the old
-  key serves for at most ten minutes, then readers wait again.
+- It is HMAC_DRBG with SHA-512 (NIST SP 800-90A Rev. 1, 10.1.2), which
+  CNSA admits: ChaCha20, the generator it replaced, is on no NIST list.
+  Each request is one Generate (64 KB at most) and its Update, so what a
+  request returned cannot be recovered from the state left afterwards.
+- It is instantiated from 64 bytes of hardware entropy and a 16-byte
+  hardware nonce (the RNG200 is taken to give 4 bits a byte, so 64 bytes
+  carry the 256 bits its strength needs), and reseeded from 64 more every
+  second or every megabyte. Until the first have come, nothing is
+  returned: readers wait, and the console says why every five seconds.
+  If the hardware goes dry the old state serves for at most ten minutes,
+  then readers wait again.
+- Every hardware byte passes SP 800-90B's continuous health tests
+  (repetition count, adaptive proportion) before it is used, and a seed
+  that is one word over and over, or the last seed again, is refused.
 - A machine with no generator makes no key. `hwrandom()` says so (-1)
   rather than make bytes up, and every reader waits, saying why, unless
   the boot command line holds `insecurerandom`, which keys the generator
   from a labelled counter for an emulator with nothing better. A Dis
   program waiting in a key generator lets go of the VM while it waits.
-- ChaCha20 is checked against RFC 8439's test vector before its first use.
+- HMAC_DRBG is checked against NIST's CAVP vectors before its first use;
+  a kernel that does not give them panics rather than make keys.
 - `#c/notquiterandom` (`genrandom()`) and `#c/random` (`randomread()`) are
   the same generator; the two names stay for what reads them. On a Pi 5
-  it gives about 236 MB/s in 64 KB reads, and 7 µs a 32-byte read.
+  it gives about 42 MB/s (16 MB read in 0.40 s; ChaCha20 gave 247 MB/s
+  the same way): two SHA-512 blocks for every 64 bytes, in C, as the
+  kernel uses no SIMD registers. A key or a TLS handshake takes a few
+  dozen bytes.
 
 So the order in `tls.b` is right on bare metal too: `#c/notquiterandom`
 opens and is the kernel's generator.
@@ -107,5 +126,7 @@ reuse TLS 1.3 session tickets and take only network RTT (~100ms).
 
 - `emu/port/random.c` — emu's `#c/random` implementation and design comments
 - `os/port/random.c` — the bare-metal pool, `genrandom`, `prng`, `prngtry`
-- `libsec/prng.c` — `prng()` platform implementations
+- `libsec/hmacdrbg.c` — HMAC_DRBG, shared by both
+- `libsec/genrandom.c` — the emulator's generator
+- `libsec/prng.c` — the host's generator, `prng()` and `prngtry()`
 - `appl/lib/crypt/tls.b` — entropy selection in `init()` and `randombuf()`

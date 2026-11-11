@@ -312,6 +312,17 @@ DigestState* hmac_md5(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha1(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha256(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha384(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
+
+/* HMAC_DRBG, SHA-512, SP 800-90A 10.1.2 (hmacdrbg.c): K and V the caller's */
+enum
+{
+	HMACDRBGlen	= SHA512dlen,	/* K and V, each */
+	HMACDRBGmax	= 64*1024,	/* the most one Generate gives (2^19 bits) */
+};
+void	hmacdrbginit(uchar *k, uchar *v, uchar *e, int ne, uchar *nonce, int nn, uchar *ps, int nps);
+void	hmacdrbgreseed(uchar *k, uchar *v, uchar *e, int ne);
+void	hmacdrbggen(uchar *k, uchar *v, uchar *p, int n);
+int	hmacdrbgcheck(void);
 DigestState* hmac_sha512(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 char* md5pickle(MD5state*);
 MD5state* md5unpickle(char*);
@@ -492,6 +503,7 @@ int	slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int, const u
 /* random number generation */
 /* ===================================================== */
 void	genrandom(uchar *buf, int nbytes);
+int	genrandomtry(uchar *buf, int nbytes);	/* 0 ok, -1 no secure source (emu; never aborts) */
 void	_genrandomqlock(void);
 void	_genrandomqunlock(void);
 void	prng(uchar *buf, int nbytes);

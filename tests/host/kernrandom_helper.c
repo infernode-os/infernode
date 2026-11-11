@@ -15,7 +15,7 @@
 
 /* ---- the kernel, as random.c sees it ---- */
 
-enum { None, Dry, Good, Stuck, Repeat };
+enum { None, Dry, Good, Stuck, Repeat, Runs, Biased };
 
 Mach fakemach;
 static Proc proc0;
@@ -26,8 +26,9 @@ static int hwmax = 1<<30;		/* most bytes one call gives */
 static u64int hwstate = 0x0123456789ABCDEFULL;
 static long hwbytes;			/* given, all told */
 static long hwcalls;
-static uchar hwlast[32];		/* the last 32 given */
-static uchar repeatblk[32];
+static uchar hwlast[80];		/* the last 80 given */
+static uchar repeatblk[64];
+static int repeatpos;
 static char *cmdline = "";
 
 static char logbuf[1<<16];
@@ -135,11 +136,19 @@ hwrandom(uchar *p, int n)
 			p[i] = 0x12 + (hwbytes & 3);	/* one word, over and over */
 			break;
 		case Repeat:
-			p[i] = repeatblk[hwbytes % 32];
+			p[i] = repeatblk[repeatpos++ % 64];
+			break;
+		case Runs:			/* each byte eight times */
+			if((hwbytes & 7) == 0)
+				hwbyte();
+			p[i] = hwstate >> 24;
+			break;
+		case Biased:			/* a quarter of the bytes 0 */
+			p[i] = (hwbytes & 3) == 0 ? 0 : hwbyte();
 			break;
 		}
-		memmove(hwlast, hwlast+1, 31);
-		hwlast[31] = p[i];
+		memmove(hwlast, hwlast+1, sizeof hwlast - 1);
+		hwlast[sizeof hwlast - 1] = p[i];
 		hwbytes++;
 	}
 	return n;
@@ -178,59 +187,96 @@ untouched(uchar *p, int n)
 }
 
 /*
- * The construction, written out again from RFC 8439 and the comment
- * at the top of random.c, so the test does not read the code it tests.
+ * HMAC_DRBG with SHA-512, written out again from NIST SP 800-90A Rev. 1,
+ * 10.1.2, over libsec's hmac_sha512, so the test does not read the code
+ * it tests. It is checked against NIST's vectors (the "vectors" case)
+ * before the kernel is checked against it.
  */
 typedef struct Model Model;
 struct Model
 {
-	uchar key[32];
-	u32int nonce[3];
+	uchar k[64];
+	uchar v[64];
 };
 
-static void
-modelstate(Model *m, ChaChastate *c)
-{
-	static uchar zero[12];
+static char personal[] = "InferNode os/port/random.c HMAC_DRBG SHA-512";
 
-	setupChaChastate(c, m->key, 32, zero, 12, 20);
-	c->state[13] = m->nonce[0];
-	c->state[14] = m->nonce[1];
-	c->state[15] = m->nonce[2];
+static void
+mupdate(Model *m, uchar *data, int n)
+{
+	uchar buf[64+1+256];
+	int round;
+
+	for(round = 0; round < 2; round++){
+		if(round == 1 && n == 0)
+			break;
+		memmove(buf, m->v, 64);
+		buf[64] = round;
+		memmove(buf+65, data, n);
+		hmac_sha512(buf, 65+n, m->k, 64, m->k, nil);
+		hmac_sha512(m->v, 64, m->k, 64, m->v, nil);
+	}
 }
 
-/* one request of n bytes (n <= 64K): rekey, then output */
 static void
-modelfill(Model *m, uchar *out, int n)
+minstantiate(Model *m, uchar *e, int ne, uchar *nonce, int nn, uchar *ps, int nps)
 {
-	ChaChastate c;
-	uchar ks[32];
-	int i;
+	uchar buf[256];
 
-	modelstate(m, &c);
-	memset(ks, 0, 32);
-	chacha_encrypt(ks, 32, &c);
-	for(i = 0; i < 32; i++)
-		m->key[i] ^= ks[i];
-	if(++m->nonce[0] == 0)
-		if(++m->nonce[1] == 0)
-			++m->nonce[2];
-	memset(out, 0, n);
-	chacha_encrypt(out, n, &c);
+	memset(m->k, 0, 64);
+	memset(m->v, 1, 64);
+	memmove(buf, e, ne);
+	memmove(buf+ne, nonce, nn);
+	memmove(buf+ne+nn, ps, nps);
+	mupdate(m, buf, ne+nn+nps);
 }
 
-/* a reseed: SHA-256(32 bytes of stream, or zeros the first time || seed) */
+/* one Generate of n bytes */
 static void
-modelseed(Model *m, int first, uchar *seed)
+mgenerate(Model *m, uchar *out, int n)
 {
-	uchar buf[64];
+	int k;
 
-	memset(buf, 0, 32);
-	if(!first)
-		modelfill(m, buf, 32);
-	memmove(buf+32, seed, 32);
-	sha256(buf, 64, m->key, nil);
-	memset(m->nonce, 0, sizeof m->nonce);
+	for(; n > 0; n -= k, out += k){
+		hmac_sha512(m->v, 64, m->k, 64, m->v, nil);
+		k = n < 64 ? n : 64;
+		memmove(out, m->v, k);
+	}
+	mupdate(m, nil, 0);
+}
+
+/* a request of n bytes, a Generate for each 64K */
+static void
+mfill(Model *m, uchar *out, int n)
+{
+	int k;
+
+	for(; n > 0; n -= k, out += k){
+		k = n < 65536 ? n : 65536;
+		mgenerate(m, out, k);
+	}
+}
+
+/* the first seed: 64 bytes of entropy and 16 of nonce, as the hardware gave them */
+static void
+mfirst(Model *m, uchar *hw80)
+{
+	minstantiate(m, hw80, 64, hw80+64, 16, (uchar*)personal, strlen(personal));
+}
+
+static int
+unhex(char *s, uchar *b)
+{
+	int n;
+	unsigned x;
+
+	if(strcmp(s, "-") == 0)
+		return 0;
+	for(n = 0; s[2*n] && s[2*n+1]; n++){
+		sscanf(s + 2*n, "%2x", &x);
+		b[n] = x;
+	}
+	return n;
 }
 
 /* ---- the cases ---- */
@@ -300,37 +346,76 @@ insecure(void)
 }
 
 static void
+vectors(void)
+{
+	FILE *f;
+	char line[8192], kind[32], e[256], n[256], ps[256], rs[256], ret[1024];
+	uchar be[128], bn[128], bps[128], brs[128], want[512], got[256];
+	int count, ne, nn, nps, nrs;
+	Model m;
+
+	f = fopen(getenv("KERNRANDOM_VECTORS"), "r");
+	check(f != nil, "vectors: the file of NIST's vectors opens");
+	if(f == nil)
+		return;
+	count = 0;
+	while(fgets(line, sizeof line, f) != nil){
+		if(line[0] == '#' || line[0] == '\n')
+			continue;
+		if(sscanf(line, "%31s %255s %255s %255s %255s %1023s", kind, e, n, ps, rs, ret) != 6){
+			check(0, "vectors: a line of six fields");
+			continue;
+		}
+		ne = unhex(e, be);
+		nn = unhex(n, bn);
+		nps = unhex(ps, bps);
+		nrs = unhex(rs, brs);
+		check(unhex(ret, want) == 256, "vectors: 2048 bits returned");
+		minstantiate(&m, be, ne, bn, nn, bps, nps);
+		if(nrs > 0)
+			mupdate(&m, brs, nrs);
+		mgenerate(&m, got, 256);
+		mgenerate(&m, got, 256);
+		if(memcmp(got, want, 256) != 0){
+			fprintf(stderr, "vector %d (%s) differs\n", count, kind);
+			check(0, "vectors: the model gives NIST's ReturnedBits");
+		}
+		count++;
+	}
+	fclose(f);
+	check(count == 60, "vectors: all 60 read");
+}
+
+static void
 construction(void)
 {
 	Model m;
-	uchar seed[32], got[300], want[300];
+	uchar seed[80], got[300], want[300];
 	long before;
 
 	hwmode = Good;
 	hwmax = 5;		/* short reads, as a generator gives */
 	genrandom(got, 100);
-	check(hwbytes == 32, "the first request takes exactly 32 bytes from the hardware");
-	memmove(seed, hwlast, 32);
-	memset(&m, 0, sizeof m);
-	modelseed(&m, 1, seed);
-	modelfill(&m, want, 100);
-	check(memcmp(got, want, 100) == 0, "output is ChaCha20 keyed by SHA-256(0^32 || seed), after the 32 bytes that rekey it");
+	check(hwbytes == 80, "the first request takes exactly 80 bytes from the hardware (64 entropy, 16 nonce)");
+	memmove(seed, hwlast, 80);
+	mfirst(&m, seed);
+	mfill(&m, want, 100);
+	check(memcmp(got, want, 100) == 0, "output is HMAC_DRBG instantiated from the 80 bytes and the personalization string");
 	check(memmem(got, 100, seed, 4) == nil, "no hardware bytes appear in the output");
 
 	before = hwbytes;
 	fakemach.ticks += 999;
 	genrandom(got+1, 299);	/* unaligned */
-	modelfill(&m, want+1, 299);
+	mfill(&m, want+1, 299);
 	check(hwbytes == before, "a request within a second of the reseed takes nothing from the hardware");
-	check(memcmp(got+1, want+1, 299) == 0, "the next request continues from the erased key");
+	check(memcmp(got+1, want+1, 299) == 0, "the next request is the next Generate");
 
 	fakemach.ticks += 1;
 	genrandom(got, 64);
-	check(hwbytes == before + 32, "a request a second after the reseed reseeds");
-	memmove(seed, hwlast, 32);
-	modelseed(&m, 0, seed);
-	modelfill(&m, want, 64);
-	check(memcmp(got, want, 64) == 0, "the reseed is SHA-256(32 bytes of the old stream || new seed)");
+	check(hwbytes == before + 64, "a request a second after the reseed reseeds with 64 bytes");
+	mupdate(&m, hwlast + 16, 64);
+	mfill(&m, want, 64);
+	check(memcmp(got, want, 64) == 0, "the reseed is SP 800-90A's Reseed with the 64 bytes");
 }
 
 static void
@@ -354,7 +439,7 @@ bigrequest(void)
 				same++;
 	check(same == 0, "each 64K of a long request starts from a key of its own");
 	genrandom(b, 16);
-	check(hwbytes == before + 32, "a request after a megabyte reseeds");
+	check(hwbytes == before + 64, "a request after a megabyte reseeds");
 	free(b);
 }
 
@@ -409,7 +494,7 @@ stuck(void)
 		check(0, "a stuck generator keys the generator");
 	}
 	check(untouched(buf, 32), "a stuck generator: nothing written");
-	check(logged("one word eight times"), "a stuck generator: the console says so");
+	check(logged("one word over and over"), "a stuck generator: the console says so");
 }
 
 static void
@@ -420,14 +505,64 @@ repeated(void)
 
 	hwmode = Good;
 	genrandom(a, 32);
-	memmove(repeatblk, hwlast, 32);
+	memmove(repeatblk, hwlast, 64);	/* the first seed's entropy, without its nonce */
 	hwmode = Repeat;
 	before = hwbytes;
 	fakemach.ticks += 1000;
 	genrandom(b, 32);
-	check(hwbytes == before + 32, "a reseed was tried");
-	check(logged("the same 32 bytes twice"), "a seed that repeats the last is refused, and said so");
-	check(memcmp(a, b, 32) != 0, "the old key goes on serving after a refused seed");
+	check(hwbytes == before + 64, "a reseed was tried");
+	check(logged("the same seed twice"), "a seed that repeats the last is refused, and said so");
+	check(memcmp(a, b, 32) != 0, "the old state goes on serving after a refused seed");
+}
+
+/* SP 800-90B 4.4.1: six bytes alike in a row fail */
+static void
+runs(void)
+{
+	uchar buf[32];
+
+	hwmode = Runs;
+	memset(buf, 0x5A, sizeof buf);
+	sleeplimit = 10;
+	if(setjmp(escape) == 0){
+		genrandom(buf, 32);
+		check(0, "runs of one byte seed the generator");
+	}
+	check(untouched(buf, 32), "runs of one byte: nothing written");
+	check(logged("health tests"), "runs of one byte: the console says the health tests failed");
+}
+
+/* SP 800-90B 4.4.2: one byte value 62 times in 512 fails, across reseeds */
+static void
+biased(void)
+{
+	uchar a[32], b[32];
+	int i;
+
+	hwmode = Biased;
+	genrandom(a, 32);
+	check(!logged("health tests"), "a biased source: the first 80 bytes pass");
+	for(i = 0; i < 8; i++){
+		fakemach.ticks += 1000;
+		genrandom(b, 32);
+	}
+	check(logged("health tests"), "a biased source: refused within 600 bytes");
+	check(memcmp(a, b, 32) != 0, "a biased source: the old state goes on serving");
+}
+
+/* the Biased source passes the test that catches it when it is not biased */
+static void
+unbiased(void)
+{
+	uchar b[32];
+	int i;
+
+	hwmode = Good;
+	for(i = 0; i < 200; i++){
+		fakemach.ticks += 1000;
+		genrandom(b, 32);
+	}
+	check(!logged("not used"), "a good source: 200 reseeds, none refused");
 }
 
 static void
@@ -457,11 +592,15 @@ static struct {
 	{ "no generator", nogenerator },
 	{ "a process without the VM", notvm },
 	{ "insecurerandom", insecure },
+	{ "NIST's HMAC_DRBG vectors (the model)", vectors },
 	{ "construction", construction },
 	{ "long request", bigrequest },
 	{ "dry after seeding", dryafterseed },
 	{ "stuck generator", stuck },
 	{ "repeated seed", repeated },
+	{ "repetition count (SP 800-90B 4.4.1)", runs },
+	{ "adaptive proportion (SP 800-90B 4.4.2)", biased },
+	{ "a good source is not refused", unbiased },
 	{ "distinct requests", distinct },
 };
 

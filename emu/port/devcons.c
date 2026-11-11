@@ -545,18 +545,14 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	case Qnotquiterandom:
 		/*
-		 * Host OS CSPRNG (libsec prng(): arc4random_buf/getrandom/
-		 * BCryptGenRandom).  Historically this was libsec genrandom()
-		 * — a never-reseeded X9.17 3DES DRBG — which is well below
-		 * what emu/port/random.c and the wallet documented for this
-		 * device.  Under emu the host CSPRNG is always available.
+		 * libsec's genrandom: HMAC_DRBG (SP 800-90A) over the host's
+		 * generator, the one keys come from here, as the native
+		 * kernels' #c/notquiterandom is theirs.  It read the host's
+		 * generator itself.  genrandomtry, not genrandom: this device
+		 * serves every hosted process, so a host with no generator
+		 * fails this read, it does not abort the emulator.
 		 */
-		/*
-		 * prngtry(), not prng(): this device serves every hosted
-		 * process, so a missing entropy source must fail this read,
-		 * not abort() the whole emulator.
-		 */
-		if(prngtry(va, n) < 0)
+		if(genrandomtry(va, n) < 0)
 			error("no secure random source");
 		return n;
 

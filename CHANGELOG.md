@@ -23,6 +23,20 @@ All notable changes to InferNode are documented in this file.
   9export refuse encryption, as Plan 9's p9sk1 key is 56 bits; without `-e`
   they run in the clear.
 
+- **Every generator InferNode has is NIST's HMAC_DRBG.** The native kernels'
+  (`os/port/random.c`, behind every key, `#c/random` and `#c/notquiterandom` on
+  bare metal) and the emulator's (`libsec/genrandom.c`, behind every key and
+  `#c/notquiterandom`) were ChaCha20, which no NIST or CNSA list admits as a
+  generator. Both are now HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1), one
+  implementation (`libsec/hmacdrbg.c`) checked against NIST's CAVP vectors
+  before its first output. The kernels' is instantiated from 64 bytes of
+  hardware entropy and a 16-byte nonce under SP 800-90B's repetition-count and
+  adaptive-proportion tests (a kernel that fails the vectors panics); the
+  emulator's from the host's generator, reseeded every 1M bytes, every 65536
+  requests and after a fork, and gives nothing rather than fall back when the
+  host has no generator. `tests/host/kernrandom_test.sh` checks the kernels'
+  against 60 of NIST's vectors, `tests/host/emurandom_test.sh` the emulator's.
+
 - **Login takes AES-256-GCM in CNSA mode.** The key exchange with a signer
   (login(2), logind(8)) sealed its Diffie-Hellman value with ChaCha20-Poly1305,
   which CNSA does not admit. A client in CNSA mode (`/env/cnsamode`) now seals

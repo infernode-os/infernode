@@ -47,7 +47,6 @@ struct AESGCMstate
 	AESstate	a;
 	uchar	hkey[AESbsize];		/* GHASH subkey */
 	uchar	J0[AESbsize];		/* pre-counter block */
-	u64int	htable[16*2];		/* precomputed GHASH table */
 };
 
 void	setupAESGCMstate(AESGCMstate *s, uchar *key, int keylen, uchar *iv, int ivlen);

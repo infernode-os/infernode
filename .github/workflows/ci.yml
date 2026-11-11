@@ -91,7 +91,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -668,11 +668,12 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
-    - name: Run AES and SHA-256 test (ARMv8 and C)
+    - name: Run AES, AES-GCM and SHA-256 test (ARMv8 and C)
       run: |
-        # libsec's AES and SHA-256 against the standards' vectors, and
-        # the ARMv8 instructions' results against the C's where the
-        # processor has them (arm64 runners). Host C, no emulator.
+        # libsec's AES, AES-GCM and SHA-256 against the standards' and
+        # OpenSSL's vectors, the ARMv8 instructions' results against the
+        # C's where the processor has them (arm64 runners), and the C
+        # GHASH constant time under valgrind. Host C, no emulator.
         ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run JIT correctness tests
@@ -1292,7 +1293,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -1424,11 +1425,12 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
-    - name: Run AES and SHA-256 test (ARMv8 and C)
+    - name: Run AES, AES-GCM and SHA-256 test (ARMv8 and C)
       run: |
-        # libsec's AES and SHA-256 against the standards' vectors, and
-        # the ARMv8 instructions' results against the C's where the
-        # processor has them (arm64 runners). Host C, no emulator.
+        # libsec's AES, AES-GCM and SHA-256 against the standards' and
+        # OpenSSL's vectors, the ARMv8 instructions' results against the
+        # C's where the processor has them (arm64 runners), and the C
+        # GHASH constant time under valgrind. Host C, no emulator.
         ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run wallet and secstore integration tests
@@ -2048,11 +2050,12 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
-    - name: Run AES and SHA-256 test (ARMv8 and C)
+    - name: Run AES, AES-GCM and SHA-256 test (ARMv8 and C)
       run: |
-        # libsec's AES and SHA-256 against the standards' vectors, and
-        # the ARMv8 instructions' results against the C's where the
-        # processor has them (arm64 runners). Host C, no emulator.
+        # libsec's AES, AES-GCM and SHA-256 against the standards' and
+        # OpenSSL's vectors, the ARMv8 instructions' results against the
+        # C's where the processor has them (arm64 runners), and the C
+        # GHASH constant time under valgrind. Host C, no emulator.
         ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run wallet and secstore integration tests

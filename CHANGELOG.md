@@ -45,6 +45,17 @@ All notable changes to InferNode are documented in this file.
   refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
   are unchanged. login(6) describes the protocol as it is.
 
+- **AES-GCM's GHASH takes the same time whatever it hashes.** It looked up a
+  table by nibbles of the running hash, which a cache shared with an attacker
+  shows. It is now PMULL where the processor has it, and otherwise integer
+  multiplication that indexes nothing, after BearSSL's (MIT). With the AES
+  instructions for its counter mode too, AES-256-GCM is 1444 MB/s on an
+  M-series Mac (171 before) and 476-569 MB/s on a Jetson Orin; the native
+  kernels keep the C, constant time and faster: 42.0 MB/s on a Pi 4 (37.6),
+  20.3 MB/s on a Pi 3 (19.4). `tests/host/armcrypto_test.sh` checks it against
+  438 of OpenSSL's answers in each configuration and, with valgrind, its
+  constant time.
+
 ### Fixed
 
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a

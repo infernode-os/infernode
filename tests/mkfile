@@ -280,6 +280,7 @@ TARG=\
 	sdrdsp_test.dis\
 	secp256k1_test.dis\
 	sdg_test.dis\
+	sdgsrv_test.dis\
 	brick_d2_test.dis\
 	ethcrypto_test.dis\
 	ethrpc_conv_test.dis\

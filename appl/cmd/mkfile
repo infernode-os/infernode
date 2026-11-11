@@ -177,6 +177,7 @@ TARG=\
 	scenereplay.dis\
 	sed.dis\
 	sendmail.dis\
+	sdgsrv.dis\
 	seq.dis\
 	sha1sum.dis\
 	sleep.dis\

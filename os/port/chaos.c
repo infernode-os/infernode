@@ -28,8 +28,11 @@
  *	intr	after an interrupt, another device's handler is called with
  *		nothing for it to do, as a spurious or shared interrupt does
  *		(os/arm64/gic.c)
+ *	drop	an IPv4 packet on an Ethernet (or Wi-Fi) interface is lost,
+ *		sent or received, as on a lossy link (os/ip/ethermedium.c):
+ *		'drop 100' loses one in 100 each way, about 1%
  *
- * device and intr are the machine's, not a VM's: vms does not confine them.
+ * device, intr and drop are the machine's, not a VM's: vms does not confine them.
  *
  * vms is a mask of the Dis VMs (#X) whose procs meet the faults, bit 0
  * VM 0; bit 31 is the kernel's own procs, in no VM. Sparing VM 0 keeps
@@ -55,6 +58,7 @@ enum {
 	Cyield,
 	Cdevice,
 	Cintr,
+	Cdrop,
 	Nchaos
 };
 
@@ -65,6 +69,7 @@ static char *chaosname[Nchaos] = {
 	[Cyield]	"yield",
 	[Cdevice]	"device",
 	[Cintr]	"intr",
+	[Cdrop]	"drop",
 };
 
 static ulong chaosrate[Nchaos];
@@ -82,7 +87,7 @@ chaos(int site)
 	r = chaosrate[site];
 	if(r == 0)
 		return 0;
-	if(up != nil && site != Cdevice && site != Cintr){
+	if(up != nil && site != Cdevice && site != Cintr && site != Cdrop){
 		if(up->vm != nil){
 			if((chaosvms & (1UL << (up->vm->id & 31))) == 0)
 				return 0;
@@ -152,6 +157,12 @@ chaosintr(ulong *r)
 		return 0;
 	*r = chaosseed;
 	return 1;
+}
+
+int
+chaosdrop(void)
+{
+	return chaos(Cdrop);
 }
 
 long

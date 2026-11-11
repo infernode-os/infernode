@@ -38,8 +38,12 @@ if [ ! -x "$VENV/bin/python" ]; then
 	echo "serve-claude-gate: bootstrapping venv at $VENV" >&2
 	python3 -m venv "$VENV"
 	"$VENV/bin/pip" install --quiet --upgrade pip
-	"$VENV/bin/pip" install --quiet -r "$HERE/requirements.txt"
 fi
+
+# This is deliberately outside the bootstrap block. Exact application pins
+# make this a cheap no-op when the environment is current and repair an older
+# persistent venv after a security update to requirements.txt.
+"$VENV/bin/pip" install --quiet -r "$HERE/requirements.txt"
 
 # Billing guard: an inherited API key overrides subscription auth in the CLI.
 unset ANTHROPIC_API_KEY

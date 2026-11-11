@@ -581,7 +581,7 @@ datapkt(ss: ref Session, m: array of byte)
 	while(rid - ss.floor > Window){
 		# the oldest open rid is abandoned (or, run, closed): the floor moves up
 		ss.floor++;
-		ss.runmap >>= 1;
+		ss.runmap = shr1(ss.runmap);
 	}
 	run(ss, rid, msg);
 }
@@ -708,8 +708,16 @@ ran(ss: ref Session, rid: int)
 		ss.runmap |= big 1 << (rid - ss.floor - 1);
 	while((ss.runmap & big 1) != big 0){
 		ss.floor++;
-		ss.runmap >>= 1;
+		ss.runmap = shr1(ss.runmap);
 	}
+}
+
+# runmap moved down a rid. A big's >> is arithmetic: the 64th rid's bit,
+# once set, was copied down into rids not yet sent (taken for run: "reply
+# gone"), and a map of ones held ran() in its loop for good
+shr1(m: big): big
+{
+	return (m >> 1) & ~(big 1 << 63);
 }
 
 send(ss: ref Session, plain: array of byte)

@@ -297,6 +297,42 @@ both(f: string, c: chan of (string, int))
 	c <-= (err, same(b, want));
 }
 
+# a read held open (400 ms) while 150 others, one at a time, run past it:
+# more than the 64 rids the window keeps, so the floor moves over the open
+# one and its run map shifts with the 64th's bit set.  A big's >> copies
+# that bit down (it is arithmetic), so rids not yet sent were taken for run
+# ("reply gone"), and a map of ones held the session in ran() for good,
+# answering nothing (the loss experiment, docs/experiments/loss)
+testWindow(t: ref T)
+{
+	sc := chan of int;
+	spawn slowread(scratch + "/m1/slow", sc);
+	sys->sleep(50);
+	fd := sys->open(scratch + "/m1/big", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open big: %r"));
+	b := array[1] of byte;
+	bad := 0;
+	for(i := 0; i < 150 + 50; i++){
+		if(sys->pread(fd, b, 1, big (i*997)) != 1 || b[0] != want[i*997]){
+			if(bad++ == 0)
+				t.error(sys->sprint("read %d past the open one: %r", i));
+		}
+		if(i == 150)
+			<-sc;	# the slow one answered: on, past it
+	}
+	t.asserteq(bad, 0, "every read past a read held open answered, and right");
+}
+
+slowread(f: string, c: chan of int)
+{
+	fd := sys->open(f, Sys->OREAD);
+	b := array[100] of byte;
+	if(fd != nil)
+		sys->read(fd, b, len b);
+	c <-= 1;
+}
+
 testKilled(t: ref T)
 {
 	pidc := chan of int;
@@ -346,6 +382,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Sdgsrv/Read", testRead);
 	run("Sdgsrv/Pending", testPending);
 	run("Sdgsrv/TwoSessions", testTwoSessions);
+	run("Sdgsrv/Window", testWindow);
 	run("Sdgsrv/KilledReader", testKilled);
 	# the mounts (their relays end), the server and the slow file's, so that emu can exit
 	sys->unmount(nil, scratch + "/m1");

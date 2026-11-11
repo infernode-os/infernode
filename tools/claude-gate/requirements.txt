@@ -2,5 +2,5 @@
 # satisfying this file with a release that predates a security fix. Dependabot
 # and the Security Analysis workflow keep these pins current and audit their
 # resolved dependency tree.
-aiohttp==3.14.4
+aiohttp==3.14.5
 claude-agent-sdk==0.2.164

@@ -41,8 +41,12 @@ if [ ! -x "$VENV/bin/python" ]; then
 	echo "serve-codex-gate: bootstrapping venv at $VENV" >&2
 	python3 -m venv "$VENV"
 	"$VENV/bin/pip" install --quiet --upgrade pip
-	"$VENV/bin/pip" install --quiet -r "$HERE/requirements.txt"
 fi
+
+# This is deliberately outside the bootstrap block. The exact application
+# pin makes this a cheap no-op when the environment is current and repairs an
+# older persistent venv after a security update to requirements.txt.
+"$VENV/bin/pip" install --quiet -r "$HERE/requirements.txt"
 
 # Billing guard: an inherited API key can override ChatGPT auth in the CLI.
 unset OPENAI_API_KEY

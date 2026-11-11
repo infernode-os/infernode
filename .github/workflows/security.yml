@@ -13,6 +13,36 @@ permissions: {}
 
 jobs:
   # ─────────────────────────────────────────────
+  # Python gateway dependencies: resolve the full environment and ask OSV
+  # about direct and transitive packages. Scanning each gateway separately
+  # also proves that either one can be installed on its own.
+  # ─────────────────────────────────────────────
+  gateway-dependencies:
+    name: Gateway Dependency Audit (${{ matrix.gateway }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - gateway: claude
+          requirements: tools/claude-gate/requirements.txt
+        - gateway: codex
+          requirements: tools/codex-gate/requirements.txt
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Audit resolved dependencies against OSV
+      uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+      with:
+        inputs: ${{ matrix.requirements }}
+        vulnerability-service: osv
+
+  # ─────────────────────────────────────────────
   # CodeQL: GitHub's semantic code analysis (free for public repos)
   # Results appear in the GitHub Security tab
   # ─────────────────────────────────────────────

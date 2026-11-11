@@ -221,6 +221,8 @@ wc wc
 webgrab webgrab
 wm wm
 wm-camera wm-camera
+videnc videnc
+vidjpeg videnc
 wm-road wm-road
 wm-shell wm-shell
 shell wm-shell

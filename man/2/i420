@@ -71,4 +71,5 @@ or if a plane or
 .I out
 is too small for the frame.
 .SH SEE ALSO
+.IR jpegenc (2),
 .IR draw-image (2)

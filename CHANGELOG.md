@@ -6,6 +6,20 @@ All notable changes to InferNode are documented in this file.
 
 ### Added
 
+- **A video feed's frames as JPEG between machines, raw at both ends:
+  videnc(1) and vidjpeg(1).** `videnc`, union-mounted after a feed
+  (vid9p, camsrv), serves `jpeg/` beside its `frame`: `ctl` (the
+  quality), `fmt`, `index` (frame N's offset and length in `data` at
+  N*32) and `data`. A frame is encoded when first asked for, once however
+  many read it. `vidjpeg`, on the viewer, serves vid9p's files again from
+  a feed's `jpeg/`, so wm/camera, vidplay9p and vision(4) read it
+  unchanged. From a Pi 5 to a Mac on Wi-Fi, a 480x270 street scene at
+  6 fps takes about 40 KB a frame on the wire instead of 204, for a sixth
+  of a core on the Pi. Under it, jpegenc(2): a baseline JPEG encoder of
+  I420 frames in Limbo (25 ms a 480x270 frame on a Pi 5), and readjpg's
+  `planes`, which decodes a 4:2:0 JPEG to I420 with no RGB between.
+  `tests/jpeg_test.b` and `tests/vidjpeg_test.b` check them.
+
 - **vid9p replays a `.y4m` file as a live feed: `vid9p -r file.y4m`, or
   `replay file.y4m` to its `ctl`.** Its frames come at the file's rate
   and start again from the first after the last, numbered on, so what

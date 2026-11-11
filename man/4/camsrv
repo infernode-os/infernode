@@ -199,6 +199,7 @@ mount without a server and its readers waiting.
 .IR i2c (3),
 .IR layers (2),
 .IR post (1),
+.IR videnc (1),
 .IR wm-camera (1)
 .SH BUGS
 There is no ISP. White balance assumes the picture averages to grey, so

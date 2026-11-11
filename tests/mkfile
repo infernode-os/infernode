@@ -211,6 +211,8 @@ TARG=\
 	brotli_test.dis\
 	readwebp_test.dis\
 	readjpg_test.dis\
+	jpeg_test.dis\
+	vidjpeg_test.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
@@ -425,6 +427,7 @@ SYSMODULES=\
 	i420.m\
 	bayer.m\
 	imagefile.m\
+	jpeg.m\
 	imgload.m\
 	keyringinst.m\
 	l2cap.m\

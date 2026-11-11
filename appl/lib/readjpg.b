@@ -1,4 +1,4 @@
-implement RImagefile;
+implement RImagefile, Jpegplanes;
 
 #
 # JPEG (ITU T.81) decoder: baseline and extended sequential (SOF0,
@@ -27,6 +27,7 @@ include "bufio.m";
 	Iobuf: import bufio;
 
 include "imagefile.m";
+include "jpeg.m";
 
 Huff: adt
 {
@@ -172,6 +173,47 @@ int2(b: array of byte, n: int): int
 
 decode(d: array of byte): (ref Rawimage, string)
 {
+	(dc, err) := parse(d);
+	if(dc == nil)
+		return (nil, err);
+	return output(dc);
+}
+
+# Jpegplanes: a 4:2:0 JPEG's planes, as decoded, with no conversion
+planes(d: array of byte): (int, int, array of byte, array of byte, array of byte, string)
+{
+	if(idctlimit == nil)
+		init(nil);
+	dc: ref Dec;
+	err: string;
+	{
+		(dc, err) = parse(d);
+	} exception e {
+	"*" =>
+		return (0, 0, nil, nil, nil, "ReadJPG: " + e);
+	}
+	if(dc == nil)
+		return (0, 0, nil, nil, nil, err);
+	c := dc.comps;
+	if(len c != 3 || c[0].h != 2 || c[0].v != 2 || c[1].h != 1 || c[1].v != 1 || c[2].h != 1 || c[2].v != 1)
+		return (0, 0, nil, nil, nil, "ReadJPG: not 4:2:0 YCbCr");
+	w := dc.x;
+	h := dc.y;
+	p := array[3] of array of byte;
+	for(i := 0; i < 3; i++){
+		pw := c[i].dw;
+		ph := c[i].dh;
+		stride := c[i].bw * 8;
+		p[i] = array[pw*ph] of byte;
+		for(r := 0; r < ph; r++)
+			p[i][r*pw:] = c[i].plane[r*stride:r*stride+pw];
+	}
+	return (w, h, p[0], p[1], p[2], nil);
+}
+
+# the segments and scans: the planes decoded, before output
+parse(d: array of byte): (ref Dec, string)
+{
 	if(len d < 4 || d[0] != byte 16rFF || d[1] != byte 16rD8)
 		return (nil, "ReadJPG: not a JPEG file");
 	dc := ref Dec(d, 2, 0, 0, 0, 0, 0, nil, 0, 0, 0, 0, 0,
@@ -234,7 +276,7 @@ decode(d: array of byte): (ref Rawimage, string)
 	if(dc.prog)
 		for(i := 0; i < len dc.comps; i++)
 			finishcoef(dc, dc.comps[i]);
-	return output(dc);
+	return (dc, nil);
 }
 
 # the next marker's code at pos, skipping anything that is not one;

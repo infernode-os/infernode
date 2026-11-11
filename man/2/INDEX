@@ -97,6 +97,8 @@ hashtable hash
 i420 i420
 rgb24 i420
 imagefile imagefile
+jpegenc jpegenc
+jpegplanes jpegenc
 readgif imagefile
 readjpg imagefile
 readpicfile imagefile

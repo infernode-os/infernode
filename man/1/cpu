@@ -64,9 +64,12 @@ See
 .IR ssl (3)
 for the supported algorithms.
 The default is
-.BR "aes_256_cbc sha256" :
-the whole session is encrypted, and every record carries a SHA-256 MAC
-so that tampering is detected.
+.BR aes_256_gcm :
+the whole session is encrypted, and every record authenticated,
+so that tampering, replay and reordering are detected.
+.B "-C hmac_sha384"
+authenticates the records and sends them in the clear;
+a bare-metal InferNode's listener refuses it.
 .B "-C none"
 asks for no
 .IR ssl (3)

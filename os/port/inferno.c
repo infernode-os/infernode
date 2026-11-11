@@ -1024,6 +1024,7 @@ Sys_fversion(void *fp)
 	void *r;
 	F_Sys_fversion *f;
 	int n;
+	uint got;
 	char buf[20], *s;
 
 	f = fp;
@@ -1038,10 +1039,11 @@ Sys_fversion(void *fp)
 	memmove(buf, s, n);
 	buf[n] = 0;
 	release();
-	n = kfversion(fdchk(f->fd), f->msize, buf, sizeof(buf));
+	n = kfversion(fdchk(f->fd), f->msize, buf, sizeof(buf), &got);
 	acquire();
 	if(n >= 0){
-		f->ret->t0 = f->msize;
+		/* the size agreed, not the size asked (it gave the second) */
+		f->ret->t0 = got;
 		retnstr(buf, n, &f->ret->t1);
 	}
 }

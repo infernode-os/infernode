@@ -94,8 +94,8 @@ if {ftest -e /tmp/default-transport-payload} {echo DEFAULT-NONE-ACCEPTED} {echo 
 dial 'tcp!127.0.0.1!$DEFAULTPORT' echo DEFAULT-SECURE-PAYLOAD
 sleep 2
 cat /tmp/default-transport-payload
-listen -R 100 -a aes_256_cbc -a sha256 'tcp!*!$PORT' auxi/rstyxd &
-listen -R 100 -a aes_256_cbc -a sha256 'tcp!*!$ACKPORT' {echo 'NO rstyx2'; cat > /dev/null} &
+listen -R 100 -a aes_256_gcm 'tcp!*!$PORT' auxi/rstyxd &
+listen -R 100 -a aes_256_gcm 'tcp!*!$ACKPORT' {echo 'NO rstyx2'; cat > /dev/null} &
 sleep 2
 
 # Version 2 does not begin exporting until rstyxd acknowledges that it has

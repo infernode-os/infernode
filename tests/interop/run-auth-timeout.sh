@@ -25,8 +25,8 @@ case "$MODE" in
 	*) echo "usage: run-auth-timeout.sh [port] [concurrency|rate]" >&2; exit 2 ;;
 esac
 case "$KIND" in
-	listen)     LISTEN_CMD="listen -sv $LIMIT_ARGS -T 5000 -a aes_256_cbc -a sha256 -k $KEY tcp!*!$PORT {cat /dev/user > $IDENTITY; export /lib &}" ;;
-	styxlisten) LISTEN_CMD="styxlisten -sv $LIMIT_ARGS -T 5000 -a aes_256_cbc -a sha256 -k $KEY tcp!*!$PORT export /lib" ;;
+	listen)     LISTEN_CMD="listen -sv $LIMIT_ARGS -T 5000 -a aes_256_gcm -k $KEY tcp!*!$PORT {cat /dev/user > $IDENTITY; export /lib &}" ;;
+	styxlisten) LISTEN_CMD="styxlisten -sv $LIMIT_ARGS -T 5000 -a aes_256_gcm -k $KEY tcp!*!$PORT export /lib" ;;
 	*) echo "usage: run-auth-timeout.sh [port] [concurrency|rate] [listen|styxlisten]" >&2; exit 2 ;;
 esac
 KEY_HOST="$ROOT$KEY"
@@ -149,7 +149,7 @@ grep -q "$LIMIT_LOG" "$OUT" || {
 
 cat >"$CLIENT_RC" <<EOF
 load std
-if {mount -k $KEY -C 'aes_256_cbc sha256' tcp!127.0.0.1!$PORT $MNT} {echo MOUNT-OK} {echo MOUNT-FAIL; raise 'fail:mount'}
+if {mount -k $KEY -C aes_256_gcm tcp!127.0.0.1!$PORT $MNT} {echo MOUNT-OK} {echo MOUNT-FAIL; raise 'fail:mount'}
 if {cmp $MNT/ndb/inferno /lib/ndb/inferno} {echo AUTH-TIMEOUT-PASS} {echo AUTH-TIMEOUT-DIFF}
 EOF
 

@@ -41,18 +41,97 @@ All notable changes to InferNode are documented in this file.
   `colour=` still comes first. In wm/camera, Matrix's video pane and
   vidplay9p alike.
 
+### Security
+
+- **ssl(3) is AES-256-GCM and HMAC-SHA-384, nothing else.** Every
+  connection InferNode encrypts (mount, listen, styxlisten, cpu, login,
+  secstore, the grid registries, the bare-metal cpu listener) now takes
+  `aes_256_gcm` by default: each record sealed with its header authenticated,
+  key and nonce by HKDF-SHA-384, record n's nonce n exclusive-ored in, so a
+  record changed, cut, replayed, reordered or reflected is refused.
+  `hmac_sha384` remains for integrity alone. `sha256` (SSL 2's hash, not an
+  HMAC), `aes_128_cbc` and `aes_256_cbc` are gone, as is the padded record.
+  Each direction must have its own secret of 32 bytes or more (the same both
+  ways is refused); ssl(2)'s new `secrets` makes a shared secret into one for
+  each way, which auth(2), login(2), logind, secstore and secstored use. This
+  is not compatible with older peers: both ends must run this release.
+  crypt(1) uses AES-256-GCM with PBKDF2-HMAC-SHA-384 and a salt per file (its
+  old `md5/ideacbc` default no longer existed in the device). 9cpu, import and
+  9export refuse encryption, as Plan 9's p9sk1 key is 56 bits; without `-e`
+  they run in the clear.
+
+- **Every generator InferNode has is NIST's HMAC_DRBG.** The native kernels'
+  (`os/port/random.c`, behind every key, `#c/random` and `#c/notquiterandom` on
+  bare metal) and the emulator's (`libsec/genrandom.c`, behind every key and
+  `#c/notquiterandom`) were ChaCha20, which no NIST or CNSA list admits as a
+  generator. Both are now HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1), one
+  implementation (`libsec/hmacdrbg.c`) checked against NIST's CAVP vectors
+  before its first output. The kernels' is instantiated from 64 bytes of
+  hardware entropy and a 16-byte nonce under SP 800-90B's repetition-count and
+  adaptive-proportion tests (a kernel that fails the vectors panics); the
+  emulator's from the host's generator, reseeded every 1M bytes, every 65536
+  requests and after a fork, and gives nothing rather than fall back when the
+  host has no generator. `tests/host/kernrandom_test.sh` checks the kernels'
+  against 60 of NIST's vectors, `tests/host/emurandom_test.sh` the emulator's.
+
+- **Login takes AES-256-GCM in CNSA mode.** The key exchange with a signer
+  (login(2), logind(8)) sealed its Diffie-Hellman value with ChaCha20-Poly1305,
+  which CNSA does not admit. A client in CNSA mode (`/env/cnsamode`) now seals
+  it with AES-256-GCM under a key from HKDF with SHA-384, and says so by its
+  IV's length (44 bytes, not 32); a signer takes either, and in CNSA mode
+  refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
+  are unchanged. login(6) describes the protocol as it is.
+
+- **AES-GCM's GHASH takes the same time whatever it hashes.** It looked up a
+  table by nibbles of the running hash, which a cache shared with an attacker
+  shows. It is now PMULL where the processor has it, and otherwise integer
+  multiplication that indexes nothing, after BearSSL's (MIT). With the AES
+  instructions for its counter mode too, AES-256-GCM is 1444 MB/s on an
+  M-series Mac (171 before) and 476-569 MB/s on a Jetson Orin; the native
+  kernels keep the C, constant time and faster: 42.0 MB/s on a Pi 4 (37.6),
+  20.3 MB/s on a Pi 3 (19.4). `tests/host/armcrypto_test.sh` checks it against
+  438 of OpenSSL's answers in each configuration and, with valgrind, its
+  constant time.
+
+- **A Prog killed in a 9P call over an encrypted mount no longer takes
+  the mount down for everyone else.** The killed call's flush is written
+  through devssl, and the kill, still pending, interrupted that write
+  before any of the record was sent; devssl hung the connection up for
+  any error in a write, so every later request on the mount failed with
+  "inappropriate use of fd". A pending interrupt is now raised before a
+  record is begun, and only a record begun and not sent whole hangs the
+  connection up. And the flush is sent: what was pending was a second
+  interrupt for the kill already being handled, and devmnt now clears it
+  before a killed call's flush, clunk or remove, which its watch still
+  bounds. Unsent, the server kept the killed read's fid and the client
+  gave its number to the next walk, so the file could not be opened
+  again ("fid in use"), over any mount. Changing a vision(4) session's `place` while it follows
+  a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
+  checks it. The native kernel's devssl has the same write path; it is
+  not changed here.
+
 ### Fixed
+
+- **`sys->fversion` gives the message size agreed.** It gave back the size
+  it was asked for, whatever the server and the channel allowed: over devssl,
+  where a mount takes 32512 bytes at most, asking for 64K was reported as 64K.
+  The mount itself always used the size agreed; what read the result was told
+  otherwise (ninep_bench's "asked msize X, got Y" never fired, and
+  `ninep_msize_test` asserted the 64K it was echoed). Emulator and native
+  kernels alike.
 
 - **9P mounts carry messages larger than 8K.** A mount offers 64K on a
   plain connection and 32512 bytes on an encrypted one (`mount -k`,
   `-C`, listen's connections), and gets what the server takes. Over the
   wire from a Jetson to a Raspberry Pi, a single reader went from 5.6
   to 10.4 MB/s encrypted.
+
 - **Stat works whatever message size a client offers.** exportfs gave
   a stat the rest of the message as its room in a 16-bit field, so a
   client offering more than 65544 bytes (Linux's v9fs offers 512K) had
   every stat refused, "stat buffer too small". This, not devssl, is why
   raising the size was reverted in May (INFR-214).
+
 - **Replies on an encrypted connection are not interleaved.** devssl
   sent a write longer than about 32K as pieces locked one at a time, so
   two replies written at once could interleave, and the client matched
@@ -138,40 +217,6 @@ All notable changes to InferNode are documented in this file.
   4's loopback with 24K or 32K records ran at 1 MB/s; with the fix,
   24-67 MB/s (SHA-256) and 18-35 MB/s (AES-256-CBC with SHA-256), as
   with 16K records.
-
-### Security
-
-- **Login takes AES-256-GCM in CNSA mode.** The key exchange with a signer
-  (login(2), logind(8)) sealed its Diffie-Hellman value with ChaCha20-Poly1305,
-  which CNSA does not admit. A client in CNSA mode (`/env/cnsamode`) now seals
-  it with AES-256-GCM under a key from HKDF with SHA-384, and says so by its
-  IV's length (44 bytes, not 32); a signer takes either, and in CNSA mode
-  refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
-  are unchanged. login(6) describes the protocol as it is.
-
-- **devssl has HMAC-SHA-384.** ssl(3)'s only digest was `sha256`, SSL 2's
-  hash of secret, record and record number, which is not an HMAC and not a MAC
-  CNSA admits. `alg hmac_sha384` is HMAC-SHA-384 keyed by the secret over the
-  record and its number, in the emulator and the native kernels alike; `sha256`
-  is unchanged for the peers that speak it. ssl(3) lists the algorithms the
-  device has (it still described SHA-1, MD5, RC4, DES and IDEA).
-
-- **A Prog killed in a 9P call over an encrypted mount no longer takes
-  the mount down for everyone else.** The killed call's flush is written
-  through devssl, and the kill, still pending, interrupted that write
-  before any of the record was sent; devssl hung the connection up for
-  any error in a write, so every later request on the mount failed with
-  "inappropriate use of fd". A pending interrupt is now raised before a
-  record is begun, and only a record begun and not sent whole hangs the
-  connection up. And the flush is sent: what was pending was a second
-  interrupt for the kill already being handled, and devmnt now clears it
-  before a killed call's flush, clunk or remove, which its watch still
-  bounds. Unsent, the server kept the killed read's fid and the client
-  gave its number to the next walk, so the file could not be opened
-  again ("fid in use"), over any mount. Changing a vision(4) session's `place` while it follows
-  a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
-  checks it. The native kernel's devssl has the same write path; it is
-  not changed here.
 
 ### Performance
 

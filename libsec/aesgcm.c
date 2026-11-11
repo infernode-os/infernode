@@ -4,148 +4,187 @@
 /*
  * AES-GCM (Galois/Counter Mode) per NIST SP 800-38D.
  *
- * Uses Shoup's 4-bit table method for GF(2^128) multiplication.
- * The GHASH key H is AES_K(0^128).
+ * GHASH, multiplication by H = AES_K(0^128) in GF(2^128), is by PMULL
+ * where the processor has it (ghasharm64.c) and otherwise by the C below,
+ * which takes the same time whatever the data and the key: it looks up no
+ * table.  The 4-bit table it replaces (Shoup's) was indexed by nibbles of
+ * the running hash, which a cache shared with an attacker shows.  The
+ * counter mode is aesarm64.c's where AES has its instructions, else
+ * aesEncryptBlock a block at a time.
  */
 
-/* GF(2^128) multiplication using precomputed 4-bit table.
- * The field polynomial is x^128 + x^7 + x^2 + x + 1.
- */
+/* ghasharm64.c and aesarm64.c: the ARMv8 instructions, where the processor has them */
+int	ghasharm64ok(void);
+void	ghasharm64(uchar y[16], const uchar h[16], const uchar *p, ulong n);
+int	aesarm64ok(void);
+void	aesarm64ctr32(const u32int*, int, const uchar*, uchar*, ulong);
 
-/* load a 128-bit big-endian value into two u64int (MSB first) */
-static void
-be128load(uchar b[16], u64int v[2])
+static u64int
+be64(const uchar *b)
 {
-	v[0] = (u64int)b[0]<<56 | (u64int)b[1]<<48 | (u64int)b[2]<<40 | (u64int)b[3]<<32
+	return (u64int)b[0]<<56 | (u64int)b[1]<<48 | (u64int)b[2]<<40 | (u64int)b[3]<<32
 	     | (u64int)b[4]<<24 | (u64int)b[5]<<16 | (u64int)b[6]<<8 | (u64int)b[7];
-	v[1] = (u64int)b[8]<<56 | (u64int)b[9]<<48 | (u64int)b[10]<<40 | (u64int)b[11]<<32
-	     | (u64int)b[12]<<24 | (u64int)b[13]<<16 | (u64int)b[14]<<8 | (u64int)b[15];
 }
 
-/* store two u64int as 128-bit big-endian */
 static void
-be128store(u64int v[2], uchar b[16])
+put64(uchar *b, u64int v)
 {
-	b[0] = v[0]>>56; b[1] = v[0]>>48; b[2] = v[0]>>40; b[3] = v[0]>>32;
-	b[4] = v[0]>>24; b[5] = v[0]>>16; b[6] = v[0]>>8;  b[7] = v[0];
-	b[8] = v[1]>>56; b[9] = v[1]>>48; b[10]= v[1]>>40; b[11]= v[1]>>32;
-	b[12]= v[1]>>24; b[13]= v[1]>>16; b[14]= v[1]>>8;  b[15]= v[1];
+	b[0] = v>>56; b[1] = v>>48; b[2] = v>>40; b[3] = v>>32;
+	b[4] = v>>24; b[5] = v>>16; b[6] = v>>8;  b[7] = v;
 }
 
 /*
- * Precompute GHASH table: Htable[i] = i * H in GF(2^128)
- * for i = 0..15, stored as pairs of u64int.
- * Uses the bit-reflected convention.
+ * Constant-time GHASH by integer multiplication, after BearSSL's
+ * ghash_ctmul64 (Copyright (c) 2016 Thomas Pornin; MIT licence: "Permission
+ * is hereby granted, free of charge, to any person obtaining a copy of this
+ * software ... The above copyright notice and this permission notice shall
+ * be included in all copies or substantial portions of the Software.").
+ *
+ * bmul64 is a carry-less 64x64 multiply, low 64 bits: each operand is
+ * split into four interleaved bit sets (every fourth bit), so the carries
+ * of the ordinary multiplications land in bits that are masked away.  The
+ * high halves come from the same multiply of the bit-reversed operands.
+ * A 64-bit MUL takes the same time whatever its operands on the Cortex-A53,
+ * A72 and A76 these run on.
  */
-static void
-ghash_precomp(uchar H[16], u64int Htable[16*2])
+static u64int
+bmul64(u64int x, u64int y)
 {
-	u64int h[2], v[2], r;
-	int i, j;
+	u64int x0, x1, x2, x3, y0, y1, y2, y3, z0, z1, z2, z3;
 
-	/* GCM bit ordering: MSB of byte 0 = x^0, which is already
-	 * the reflected convention for right-shift multiplication */
-	be128load(H, h);
-
-	/* Htable[0] = 0 */
-	Htable[0] = 0;
-	Htable[1] = 0;
-
-	/* Htable[8] = H (since bit 3 = x^0 in reflected order) */
-	Htable[8*2] = h[0];
-	Htable[8*2+1] = h[1];
-
-	/* compute Htable[4] = 2*H, Htable[2] = 4*H, Htable[1] = 8*H
-	 * by doubling in GF(2^128). Double = shift right by 1 (reflected),
-	 * XOR reduction polynomial if low bit set.
-	 * Reduction: x^128 + x^7 + x^2 + x + 1 reflected = 0xe1 << 56
-	 */
-	v[0] = h[0];
-	v[1] = h[1];
-	for(i = 4; i >= 1; i >>= 1){
-		r = (u64int)(0ULL - (v[1] & 1)) & ((u64int)0xe1 << 56);
-		v[1] = (v[1] >> 1) | (v[0] << 63);
-		v[0] = (v[0] >> 1) ^ r;
-		Htable[i*2] = v[0];
-		Htable[i*2+1] = v[1];
-	}
-
-	/* fill in the rest by XOR: Htable[i^j] = Htable[i] ^ Htable[j] */
-	for(i = 2; i < 16; i <<= 1)
-		for(j = 1; j < i; j++){
-			Htable[(i+j)*2] = Htable[i*2] ^ Htable[j*2];
-			Htable[(i+j)*2+1] = Htable[i*2+1] ^ Htable[j*2+1];
-		}
+	x0 = x & 0x1111111111111111ULL;
+	x1 = x & 0x2222222222222222ULL;
+	x2 = x & 0x4444444444444444ULL;
+	x3 = x & 0x8888888888888888ULL;
+	y0 = y & 0x1111111111111111ULL;
+	y1 = y & 0x2222222222222222ULL;
+	y2 = y & 0x4444444444444444ULL;
+	y3 = y & 0x8888888888888888ULL;
+	z0 = (x0 * y0) ^ (x1 * y3) ^ (x2 * y2) ^ (x3 * y1);
+	z1 = (x0 * y1) ^ (x1 * y0) ^ (x2 * y3) ^ (x3 * y2);
+	z2 = (x0 * y2) ^ (x1 * y1) ^ (x2 * y0) ^ (x3 * y3);
+	z3 = (x0 * y3) ^ (x1 * y2) ^ (x2 * y1) ^ (x3 * y0);
+	z0 &= 0x1111111111111111ULL;
+	z1 &= 0x2222222222222222ULL;
+	z2 &= 0x4444444444444444ULL;
+	z3 &= 0x8888888888888888ULL;
+	return z0 | z1 | z2 | z3;
 }
 
-/*
- * GHASH: multiply-accumulate in GF(2^128).
- * Y = Y ^ X, then Y = Y * H.
- * Uses 4-bit table lookup (Shoup's method).
- */
-static void
-ghash_block(u64int Htable[16*2], u64int Y[2], uchar X[16])
+static u64int
+rev64(u64int x)
 {
-	u64int Xv[2], z[2], r;
-	int i;
-
-	/* load input block (already in GCM reflected bit order) */
-	be128load(X, Xv);
-
-	/* XOR into accumulator */
-	Y[0] ^= Xv[0];
-	Y[1] ^= Xv[1];
-
-	/* multiply Y * H using 4-bit table */
-	z[0] = 0;
-	z[1] = 0;
-
-	/* process 4 bits at a time, from LSB of Y[1] up to MSB of Y[0]
-	 * (high-degree to low-degree for right-shift Horner evaluation) */
-	for(i = 31; i >= 0; i--){
-		int nibble;
-		if(i < 16)
-			nibble = (Y[0] >> (60 - 4*i)) & 0xf;
-		else
-			nibble = (Y[1] >> (60 - 4*(i-16))) & 0xf;
-
-		if(i < 31){
-			/* shift z right by 4 in GF(2^128) */
-			r = z[1] & 0xf;
-			z[1] = (z[1] >> 4) | (z[0] << 60);
-			z[0] = (z[0] >> 4);
-			/* reduction for each of the 4 shifted-out bits */
-			z[0] ^= (u64int)(
-				/* precomputed reduction for 4 bits (matches OpenSSL rem_4bit) */
-				(r & 1 ? (u64int)0x1c20 << 48 : 0) ^
-				(r & 2 ? (u64int)0x3840 << 48 : 0) ^
-				(r & 4 ? (u64int)0x7080 << 48 : 0) ^
-				(r & 8 ? (u64int)0xe100 << 48 : 0)
-			);
-		}
-
-		z[0] ^= Htable[nibble*2];
-		z[1] ^= Htable[nibble*2+1];
-	}
-
-	Y[0] = z[0];
-	Y[1] = z[1];
+#define RMS(m, s) x = ((x & (u64int)(m)) << (s)) | ((x >> (s)) & (u64int)(m))
+	RMS(0x5555555555555555ULL, 1);
+	RMS(0x3333333333333333ULL, 2);
+	RMS(0x0F0F0F0F0F0F0F0FULL, 4);
+	RMS(0x00FF00FF00FF00FFULL, 8);
+	RMS(0x0000FFFF0000FFFFULL, 16);
+#undef RMS
+	return (x << 32) | (x >> 32);
 }
 
-/* GHASH over arbitrary data, with zero-padding to block boundary */
+/* Y = (Y ^ X) * H for each 16-byte X of p; n a multiple of 16 */
 static void
-ghash_update(u64int Htable[16*2], u64int Y[2], uchar *data, ulong len)
+ghashct(uchar y[16], const uchar h[16], const uchar *p, ulong n)
+{
+	u64int y0, y1, h0, h1, h2, h0r, h1r, h2r;
+	u64int y0r, y1r, y2, y2r, z0, z1, z2, z0h, z1h, z2h, v0, v1, v2, v3;
+
+	y1 = be64(y);
+	y0 = be64(y + 8);
+	h1 = be64(h);
+	h0 = be64(h + 8);
+	h0r = rev64(h0);
+	h1r = rev64(h1);
+	h2 = h0 ^ h1;
+	h2r = h0r ^ h1r;
+	for(; n >= 16; n -= 16, p += 16){
+		y1 ^= be64(p);
+		y0 ^= be64(p + 8);
+		y0r = rev64(y0);
+		y1r = rev64(y1);
+		y2 = y0 ^ y1;
+		y2r = y0r ^ y1r;
+
+		/* Karatsuba: low halves, and the high halves bit-reversed */
+		z0 = bmul64(y0, h0);
+		z1 = bmul64(y1, h1);
+		z2 = bmul64(y2, h2);
+		z0h = bmul64(y0r, h0r);
+		z1h = bmul64(y1r, h1r);
+		z2h = bmul64(y2r, h2r);
+		z2 ^= z0 ^ z1;
+		z2h ^= z0h ^ z1h;
+		z0h = rev64(z0h) >> 1;
+		z1h = rev64(z1h) >> 1;
+		z2h = rev64(z2h) >> 1;
+
+		/* the 256-bit product, shifted one place (GHASH's bits are reflected) */
+		v0 = z0;
+		v1 = z0h ^ z2;
+		v2 = z1 ^ z2h;
+		v3 = z1h;
+		v3 = (v3 << 1) | (v2 >> 63);
+		v2 = (v2 << 1) | (v1 >> 63);
+		v1 = (v1 << 1) | (v0 >> 63);
+		v0 = (v0 << 1);
+
+		/* reduced by x^128 + x^7 + x^2 + x + 1 */
+		v2 ^= v0 ^ (v0 >> 1) ^ (v0 >> 2) ^ (v0 >> 7);
+		v1 ^= (v0 << 63) ^ (v0 << 62) ^ (v0 << 57);
+		v3 ^= v1 ^ (v1 >> 1) ^ (v1 >> 2) ^ (v1 >> 7);
+		v2 ^= (v1 << 63) ^ (v1 << 62) ^ (v1 << 57);
+		y0 = v2;
+		y1 = v3;
+	}
+	put64(y, y1);
+	put64(y + 8, y0);
+}
+
+/* the test's switch: 0 forces the C (ghasharm64use is its own) */
+static int ghashc;
+
+void
+aesgcmuseC(int on)
+{
+	ghashc = on;
+}
+
+/* GHASH over data, with zero-padding to a block's end */
+static void
+ghash_update(AESGCMstate *s, uchar y[16], uchar *data, ulong len)
 {
 	uchar block[16];
+	ulong whole;
 
-	for(; len >= 16; len -= 16, data += 16)
-		ghash_block(Htable, Y, data);
-
-	if(len > 0){
-		memset(block, 0, 16);
-		memmove(block, data, len);
-		ghash_block(Htable, Y, block);
+	whole = len & ~(ulong)15;
+	if(whole > 0){
+		if(!ghashc && ghasharm64ok())
+			ghasharm64(y, s->hkey, data, whole);
+		else
+			ghashct(y, s->hkey, data, whole);
 	}
+	if(len > whole){
+		memset(block, 0, 16);
+		memmove(block, data + whole, len - whole);
+		if(!ghashc && ghasharm64ok())
+			ghasharm64(y, s->hkey, block, 16);
+		else
+			ghashct(y, s->hkey, block, 16);
+		secureZero(block, sizeof(block));
+	}
+}
+
+/* the length block: [len(AAD) in bits || len(C) in bits] */
+static void
+ghash_lengths(AESGCMstate *s, uchar y[16], ulong naad, ulong ndat)
+{
+	uchar lenblock[16];
+
+	put64(lenblock, (u64int)naad*8);
+	put64(lenblock+8, (u64int)ndat*8);
+	ghash_update(s, y, lenblock, 16);
 }
 
 /* increment the rightmost 32 bits of J (counter) */
@@ -156,6 +195,33 @@ gcm_inc32(uchar J[16])
 	for(i = 15; i >= 12; i--)
 		if(++J[i] != 0)
 			break;
+}
+
+/* dat ^= AES_K(J0+1), AES_K(J0+2), ...: counter mode from J0's successor */
+static void
+gcm_ctr(AESGCMstate *s, uchar *dat, ulong ndat)
+{
+	uchar J[AESbsize], block[AESbsize];
+	ulong i, k, n;
+
+	memmove(J, s->J0, AESbsize);
+	gcm_inc32(J);
+	if(!ghashc && aesarm64ok()){
+		aesarm64ctr32(s->a.ekey, s->a.rounds, J, dat, ndat);
+		secureZero(J, sizeof(J));
+		return;
+	}
+	for(i = 0; i < ndat; i += AESbsize){
+		aesEncryptBlock(&s->a, J, block);
+		gcm_inc32(J);
+		n = ndat - i;
+		if(n > AESbsize)
+			n = AESbsize;
+		for(k = 0; k < n; k++)
+			dat[i+k] ^= block[k];
+	}
+	secureZero(J, sizeof(J));
+	secureZero(block, sizeof(block));
 }
 
 void
@@ -170,9 +236,6 @@ setupAESGCMstate(AESGCMstate *s, uchar *key, int keylen, uchar *iv, int ivlen)
 	memset(zero, 0, AESbsize);
 	aesEncryptBlock(&s->a, zero, s->hkey);
 
-	/* precompute GHASH table */
-	ghash_precomp(s->hkey, s->htable);
-
 	/* compute J0 (initial counter) */
 	if(ivlen == 12){
 		/* common case: J0 = IV || 0^31 || 1 */
@@ -183,25 +246,9 @@ setupAESGCMstate(AESGCMstate *s, uchar *key, int keylen, uchar *iv, int ivlen)
 		s->J0[15] = 1;
 	} else {
 		/* general case: J0 = GHASH_H(IV || pad || len64) */
-		u64int Y[2];
-		uchar lenblock[16];
-
-		Y[0] = 0;
-		Y[1] = 0;
-		ghash_update(s->htable, Y, iv, ivlen);
-		memset(lenblock, 0, 8);
-		lenblock[8]  = ((u64int)ivlen*8) >> 56;
-		lenblock[9]  = ((u64int)ivlen*8) >> 48;
-		lenblock[10] = ((u64int)ivlen*8) >> 40;
-		lenblock[11] = ((u64int)ivlen*8) >> 32;
-		lenblock[12] = ((u64int)ivlen*8) >> 24;
-		lenblock[13] = ((u64int)ivlen*8) >> 16;
-		lenblock[14] = ((u64int)ivlen*8) >> 8;
-		lenblock[15] = ((u64int)ivlen*8);
-		ghash_block(s->htable, Y, lenblock);
-
-		/* convert Y to bytes for J0 */
-		be128store(Y, s->J0);
+		memset(s->J0, 0, AESbsize);
+		ghash_update(s, s->J0, iv, ivlen);
+		ghash_lengths(s, s->J0, 0, ivlen);
 	}
 }
 
@@ -211,6 +258,24 @@ setupAESGCMstate(AESGCMstate *s, uchar *key, int keylen, uchar *iv, int ivlen)
  * Beyond this the 32-bit counter wraps, causing keystream reuse.
  */
 #define AESGCM_MAXLEN	(((u64int)1 << 36) - 32)
+
+/* the tag: GHASH(A, C) ^ AES_K(J0) */
+static void
+gcm_tag(AESGCMstate *s, uchar *aad, ulong naad, uchar *dat, ulong ndat, uchar tag[16])
+{
+	uchar y[16], block[AESbsize];
+	int i;
+
+	memset(y, 0, 16);
+	ghash_update(s, y, aad, naad);
+	ghash_update(s, y, dat, ndat);
+	ghash_lengths(s, y, naad, ndat);
+	aesEncryptBlock(&s->a, s->J0, block);
+	for(i = 0; i < 16; i++)
+		tag[i] = y[i] ^ block[i];
+	secureZero(y, sizeof(y));
+	secureZero(block, sizeof(block));
+}
 
 /*
  * AES-GCM encrypt.
@@ -222,63 +287,10 @@ int
 aesgcm_encrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
 	uchar tag[16], AESGCMstate *s)
 {
-	uchar J[AESbsize], S[AESbsize], block[AESbsize];
-	u64int Y[2];
-	uchar lenblock[16];
-	ulong i, n;
-
 	if((u64int)ndat > AESGCM_MAXLEN)
 		return -1;
-
-	/* start counter at J0 + 1 */
-	memmove(J, s->J0, AESbsize);
-	gcm_inc32(J);
-
-	/* encrypt plaintext with AES-CTR */
-	for(i = 0; i < ndat; i += AESbsize){
-		aesEncryptBlock(&s->a, J, block);
-		gcm_inc32(J);
-		n = ndat - i;
-		if(n > AESbsize) n = AESbsize;
-		for(ulong k = 0; k < n; k++)
-			dat[i+k] ^= block[k];
-	}
-
-	/* GHASH over AAD and ciphertext */
-	Y[0] = 0;
-	Y[1] = 0;
-	ghash_update(s->htable, Y, aad, naad);
-	ghash_update(s->htable, Y, dat, ndat);
-
-	/* length block: [len(AAD) in bits || len(C) in bits] */
-	lenblock[0]  = ((u64int)naad*8) >> 56;
-	lenblock[1]  = ((u64int)naad*8) >> 48;
-	lenblock[2]  = ((u64int)naad*8) >> 40;
-	lenblock[3]  = ((u64int)naad*8) >> 32;
-	lenblock[4]  = ((u64int)naad*8) >> 24;
-	lenblock[5]  = ((u64int)naad*8) >> 16;
-	lenblock[6]  = ((u64int)naad*8) >> 8;
-	lenblock[7]  = ((u64int)naad*8);
-	lenblock[8]  = ((u64int)ndat*8) >> 56;
-	lenblock[9]  = ((u64int)ndat*8) >> 48;
-	lenblock[10] = ((u64int)ndat*8) >> 40;
-	lenblock[11] = ((u64int)ndat*8) >> 32;
-	lenblock[12] = ((u64int)ndat*8) >> 24;
-	lenblock[13] = ((u64int)ndat*8) >> 16;
-	lenblock[14] = ((u64int)ndat*8) >> 8;
-	lenblock[15] = ((u64int)ndat*8);
-	ghash_block(s->htable, Y, lenblock);
-
-	/* convert GHASH result to bytes */
-	be128store(Y, S);
-
-	/* tag = GHASH_result XOR AES_K(J0) */
-	aesEncryptBlock(&s->a, s->J0, block);
-	for(i = 0; i < 16; i++)
-		tag[i] = S[i] ^ block[i];
-
-	secureZero(J, sizeof(J));
-	secureZero(block, sizeof(block));
+	gcm_ctr(s, dat, ndat);
+	gcm_tag(s, aad, naad, dat, ndat, tag);
 	return 0;
 }
 
@@ -286,76 +298,28 @@ aesgcm_encrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
  * AES-GCM decrypt.
  * dat is ciphertext on input, plaintext on output.
  * tag is the 16-byte authentication tag to verify.
- * Returns 0 on success, -1 on authentication failure or input overflow.
+ * Returns 0 on success, -1 on authentication failure or input overflow;
+ * on failure dat is left as it was.
  */
 int
 aesgcm_decrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
 	uchar tag[16], AESGCMstate *s)
 {
-	uchar J[AESbsize], S[AESbsize], block[AESbsize];
-	uchar computed_tag[16];
-	u64int Y[2];
-	uchar lenblock[16];
-	ulong i, n;
-	int diff;
+	uchar computed[16];
+	int i, diff;
 
 	if((u64int)ndat > AESGCM_MAXLEN)
 		return -1;
-
-	/* GHASH over AAD and ciphertext (before decryption) */
-	Y[0] = 0;
-	Y[1] = 0;
-	ghash_update(s->htable, Y, aad, naad);
-	ghash_update(s->htable, Y, dat, ndat);
-
-	/* length block */
-	lenblock[0]  = ((u64int)naad*8) >> 56;
-	lenblock[1]  = ((u64int)naad*8) >> 48;
-	lenblock[2]  = ((u64int)naad*8) >> 40;
-	lenblock[3]  = ((u64int)naad*8) >> 32;
-	lenblock[4]  = ((u64int)naad*8) >> 24;
-	lenblock[5]  = ((u64int)naad*8) >> 16;
-	lenblock[6]  = ((u64int)naad*8) >> 8;
-	lenblock[7]  = ((u64int)naad*8);
-	lenblock[8]  = ((u64int)ndat*8) >> 56;
-	lenblock[9]  = ((u64int)ndat*8) >> 48;
-	lenblock[10] = ((u64int)ndat*8) >> 40;
-	lenblock[11] = ((u64int)ndat*8) >> 32;
-	lenblock[12] = ((u64int)ndat*8) >> 24;
-	lenblock[13] = ((u64int)ndat*8) >> 16;
-	lenblock[14] = ((u64int)ndat*8) >> 8;
-	lenblock[15] = ((u64int)ndat*8);
-	ghash_block(s->htable, Y, lenblock);
-
-	/* convert GHASH result to bytes */
-	be128store(Y, S);
-
-	/* computed tag = GHASH XOR AES_K(J0) */
-	aesEncryptBlock(&s->a, s->J0, block);
-	for(i = 0; i < 16; i++)
-		computed_tag[i] = S[i] ^ block[i];
+	gcm_tag(s, aad, naad, dat, ndat, computed);
 
 	/* constant-time comparison */
 	diff = 0;
 	for(i = 0; i < 16; i++)
-		diff |= computed_tag[i] ^ tag[i];
+		diff |= computed[i] ^ tag[i];
+	secureZero(computed, sizeof(computed));
 	if(diff != 0)
 		return -1;
 
-	/* decrypt ciphertext with AES-CTR */
-	memmove(J, s->J0, AESbsize);
-	gcm_inc32(J);
-	for(i = 0; i < ndat; i += AESbsize){
-		aesEncryptBlock(&s->a, J, block);
-		gcm_inc32(J);
-		n = ndat - i;
-		if(n > AESbsize) n = AESbsize;
-		for(ulong k = 0; k < n; k++)
-			dat[i+k] ^= block[k];
-	}
-
-	secureZero(J, sizeof(J));
-	secureZero(block, sizeof(block));
-	secureZero(computed_tag, sizeof(computed_tag));
+	gcm_ctr(s, dat, ndat);
 	return 0;
 }

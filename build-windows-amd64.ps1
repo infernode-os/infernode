@@ -254,11 +254,11 @@ Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $secSrc = @(
     "des.c", "desmodes.c", "desECB.c", "desCBC.c", "des3ECB.c", "des3CBC.c",
-    "aes.c", "aesarm64.c", "aesctr.c", "aesgcm.c", "blowfish.c",
+    "aes.c", "aesarm64.c", "aesctr.c", "aesgcm.c", "ghasharm64.c", "blowfish.c",
     "chacha.c", "poly1305.c", "ccpoly.c",
     "x25519.c", "ecc.c",
     "idea.c",
-    "hmac.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
+    "hmac.c", "hmacdrbg.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
     "sha2.c", "sha256block.c", "sha256arm64.c", "sha512block.c",
     "sha1pickle.c", "md5pickle.c", "rc4.c",
     "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c", "securezero.c",

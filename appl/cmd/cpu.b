@@ -122,7 +122,7 @@ init(nil: ref Context, argv: list of string)
 	# MAC comes with it. A bare-metal node's listener requires both.
 	# -C none still asks for cleartext, for a server offering nothing else.
 	if (alg == nil)
-		alg = "aes_256_cbc sha256";
+		alg = "aes_256_gcm";
 	err := au->init();
 	if(err != nil) {
 		sys->fprint(stderr, "cpu: cannot initialise auth module: %s\n", err);

@@ -78,6 +78,7 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 		clienthash |= member(calg, hashalgs);
 		alg += calg + " ";
 	}
+	clienthash |= clientenc;	# aes_256_gcm, the only cipher, authenticates its records too
 	if(algs != nil && !member("none", algs)){
 		if(encalgs == nil && hashalgs == nil)
 			return (nil, "cannot enforce ssl algorithm policy");
@@ -102,7 +103,7 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	ssl = load SSL SSL->PATH;
 	if(ssl == nil)
 		return (nil, sys->sprint("can't load ssl: %r"));
-	(c, err) := pushssl(fd, secret, secret, alg);
+	(c, err) := pushssl(fd, secret, 0, alg);
 	if(c == nil)
 		return (nil, "push ssl: " + err);
 	return (c, id_or_err);
@@ -186,7 +187,7 @@ client(alg: string, ai: ref Keyring->Authinfo, fd: ref Sys->FD): (ref Sys->FD, s
 	ssl = load SSL SSL->PATH;
 	if(ssl == nil)
 		return (nil, sys->sprint("can't load ssl: %r"));
-	(c, err) := pushssl(fd, secret, secret, alg);
+	(c, err) := pushssl(fd, secret, 1, alg);
 	if(c == nil)
 		return (nil, "push ssl: " + err);
 	return (c, id_or_err);
@@ -232,7 +233,7 @@ auth(ai: ref Keyring->Authinfo, keyspec: string, alg: string, fd: ref Sys->FD): 
 	ssl = load SSL SSL->PATH;
 	if(ssl == nil)
 		return (nil, nil, sys->sprint("can't load ssl: %r"));
-	(c, err) := pushssl(fd, secret, secret, alg);
+	(c, err) := pushssl(fd, secret, 1, alg);	# as the client: it sent the algorithm
 	if(c == nil)
 		return (nil, nil, "push ssl: " + err);
 	return (c, nil, id_or_err);
@@ -246,13 +247,14 @@ dump(b: array of byte): string
 	return s;
 }
 
-# push an SSLv2 Record Layer onto the fd
-pushssl(fd: ref Sys->FD, secretin, secretout: array of byte, alg: string): (ref Sys->FD, string)
+# push an SSLv2 Record Layer onto the fd, each way under its own secret
+pushssl(fd: ref Sys->FD, secret: array of byte, client: int, alg: string): (ref Sys->FD, string)
 {
 	(err, c) := ssl->connect(fd);
 	if(err != nil)
 		return (nil, "can't connect ssl: " + err);
 
+	(secretin, secretout) := ssl->secrets(secret, client);
 	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
 		return (nil, "can't write secret: " + err);

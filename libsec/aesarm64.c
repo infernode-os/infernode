@@ -154,6 +154,50 @@ aesarm64cbcdecrypt(uchar *p, int nblocks, const u32int *dkey, int rounds, uchar 
 	vst1q_u8(iv, prev);
 }
 
+/*
+ * GCM's counter mode: n bytes of p exclusive-ored in place with the
+ * encryptions of ctr, ctr+1, ..., the count its last 32 bits, big-endian
+ * (SP 800-38D's inc32), as aesgcm.c's loop does.  The round keys are
+ * loaded once, and four counters are in flight at a time.
+ */
+void
+aesarm64ctr32(const u32int *ekey, int rounds, const uchar ctr[16], uchar *p, ulong n)
+{
+	uint8x16_t k[AESmaxrounds+1], c[4], s[4];
+	uchar blk[16];
+	u32int base, i;
+	ulong j, m;
+	int l;
+
+	loadkeys(k, ekey, rounds);
+	memmove(blk, ctr, 16);
+	base = (u32int)blk[12]<<24 | (u32int)blk[13]<<16 | (u32int)blk[14]<<8 | blk[15];
+	for(i = 0; n > 0; ){
+		for(l = 0; l < 4; l++){
+			u32int v = base + i + l;
+			blk[12] = v>>24; blk[13] = v>>16; blk[14] = v>>8; blk[15] = v;
+			c[l] = vld1q_u8(blk);
+		}
+		for(l = 0; l < 4; l++)
+			s[l] = enc1(c[l], k, rounds);
+		for(l = 0; l < 4 && n > 0; l++){
+			if(n >= 16){
+				vst1q_u8(p, veorq_u8(vld1q_u8(p), s[l]));
+				p += 16;
+				n -= 16;
+			}else{
+				vst1q_u8(blk, s[l]);
+				m = n;
+				for(j = 0; j < m; j++)
+					p[j] ^= blk[j];
+				n = 0;
+			}
+		}
+		i += 4;
+	}
+	memset(blk, 0, sizeof blk);
+}
+
 #else
 
 int
@@ -184,6 +228,12 @@ void
 aesarm64cbcdecrypt(uchar *p, int nblocks, const u32int *dkey, int rounds, uchar *iv)
 {
 	USED(p); USED(nblocks); USED(dkey); USED(rounds); USED(iv);
+}
+
+void
+aesarm64ctr32(const u32int *ekey, int rounds, const uchar ctr[16], uchar *p, ulong n)
+{
+	USED(ekey); USED(rounds); USED(ctr); USED(p); USED(n);
 }
 
 #endif

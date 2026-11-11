@@ -179,7 +179,7 @@ negotiatecrypto(io: ref IO, key: ref Key, ai: ref Authinfo, attrs: list of ref S
 			if(alg == nil)
 				alg = authio->lookattrval(key.attrs, "alg");	# old way
 			if(alg == nil)
-				alg = "sha256/aes_256_cbc";
+				alg = "aes_256_gcm";
 			sendmsg(io, array of byte alg);
 		}else if(role == "server"){
 			alg = string getmsg(io);

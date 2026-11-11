@@ -59,20 +59,30 @@ int	hwrandom(uchar*, int);
 char*	boardcmdline(void);
 
 /* libsec, as include/libsec.h has them; the test links libsec's own */
-enum { ChachaBsize = 64, SHA256dlen = 32 };
-typedef struct ChaChastate ChaChastate;
-struct ChaChastate
-{
-	u32int	state[16];
-	uchar	buf[ChachaBsize];
-	int	blen;
-	int	rounds;
-};
-void	setupChaChastate(ChaChastate*, uchar*, int, uchar*, int, int);
-void	chacha_encrypt(uchar*, int, ChaChastate*);
-void	chacha_setctr(ChaChastate*, u32int);
+enum { SHA256dlen = 32, SHA384dlen = 48, SHA512dlen = 64, SHA512bsize = 128, Digestbsize = 128 };
 typedef struct DigestState DigestState;
+struct DigestState
+{
+	u64int	len;
+	u32int	state[5];
+	uchar	buf[Digestbsize];
+	int	blen;
+	u64int	nb128[2];
+	u64int	h64[8];
+	u32int	h32[8];
+	char	malloced;
+	char	seeded;
+};
+typedef struct DigestState SHA512state;
 DigestState*	sha256(uchar*, ulong, uchar*, DigestState*);
+DigestState*	sha512(uchar*, ulong, uchar*, DigestState*);
+DigestState*	hmac_sha512(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
+enum { HMACDRBGlen = SHA512dlen, HMACDRBGmax = 64*1024 };
+void	hmacdrbginit(uchar*, uchar*, uchar*, int, uchar*, int, uchar*, int);
+void	hmacdrbgreseed(uchar*, uchar*, uchar*, int);
+void	hmacdrbggen(uchar*, uchar*, uchar*, int);
+int	hmacdrbgcheck(void);
+#define	nelem(x)	(sizeof(x)/sizeof((x)[0]))
 
 void	randominit(void);
 ulong	randomread(void*, ulong);

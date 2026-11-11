@@ -1208,6 +1208,11 @@ jobs:
       run: |
         echo "$APPLE_CERTIFICATE_P12" | base64 --decode > /tmp/certificate.p12
         security create-keychain -p "" build.keychain
+        # A new keychain locks after 300 s idle; the bundle is packaged
+        # between here and signing, and on the Intel leg that took longer
+        # (v0.10.1): codesign then waited on a password prompt until the
+        # job's timeout. No timeout and no lock on sleep.
+        security set-keychain-settings build.keychain
         security default-keychain -s build.keychain
         security unlock-keychain -p "" build.keychain
         security import /tmp/certificate.p12 -k build.keychain \

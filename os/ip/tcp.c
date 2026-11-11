@@ -197,6 +197,9 @@ struct	Tcp
 	uchar	nsack;	/* SACK blocks to send with this ACK */
 	u32int	sackl[Nsack];	/* left edges */
 	u32int	sackr[Nsack];	/* right edges: the sequence number AFTER the block */
+	uchar	nrsack;	/* SACK blocks this segment brought (apart from nsack, so a
+			 * RST or reply made from it carries none) */
+	u32int	rsackr[Nsack];	/* their right edges */
 };
 
 /*
@@ -234,6 +237,7 @@ struct Tcpctl
 		u32int	dupacks;	/* number of duplicate acks rcvd */
 		int	recovery;	/* loss recovery flag */
 		u32int	rxt;		/* right window marker for recovery */
+		u32int	sackhigh;	/* the highest right edge the peer has SACKed */
 	} snd;
 	struct {
 		u32int	nxt;		/* Receive pointer to next uchar slot */
@@ -1155,7 +1159,7 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	uchar *optr;
 	ushort hdrlen;
 	ushort optlen;
-	int n;
+	int n, i;
 
 	*bpp = pullupblock(*bpp, TCP6_PKT+TCP6_HDRSIZE);
 	if(*bpp == nil)
@@ -1180,6 +1184,7 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	tcph->ws = 0;
 	tcph->sackok = 0;
 	tcph->nsack = 0;
+	tcph->nrsack = 0;
 	tcph->len = nhgets(h->ploadlen) - hdrlen;
 
 	*bpp = pullupblock(*bpp, hdrlen+TCP6_PKT);
@@ -1210,6 +1215,12 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 			if(optlen == SACKOK_LENGTH)
 				tcph->sackok = 1;
 			break;
+		case SACKOPT:
+			/* what the peer holds above a hole (RFC 2018): its
+			 * right edges are what loss detection needs */
+			for(i = 2; i + 8 <= optlen && tcph->nrsack < Nsack; i += 8)
+				tcph->rsackr[tcph->nrsack++] = nhgetl(optr+i+4);
+			break;
 		}
 		n -= optlen;
 		optr += optlen;
@@ -1224,7 +1235,7 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	uchar *optr;
 	ushort hdrlen;
 	ushort optlen;
-	int n;
+	int n, i;
 
 	*bpp = pullupblock(*bpp, TCP4_PKT+TCP4_HDRSIZE);
 	if(*bpp == nil)
@@ -1250,6 +1261,7 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	tcph->ws = 0;
 	tcph->sackok = 0;
 	tcph->nsack = 0;
+	tcph->nrsack = 0;
 	tcph->len = nhgets(h->length) - (hdrlen + TCP4_PKT);
 
 	*bpp = pullupblock(*bpp, hdrlen+TCP4_PKT);
@@ -1280,6 +1292,12 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 			if(optlen == SACKOK_LENGTH)
 				tcph->sackok = 1;
 			break;
+		case SACKOPT:
+			/* what the peer holds above a hole (RFC 2018): its
+			 * right edges are what loss detection needs */
+			for(i = 2; i + 8 <= optlen && tcph->nrsack < Nsack; i += 8)
+				tcph->rsackr[tcph->nrsack++] = nhgetl(optr+i+4);
+			break;
 		}
 		n -= optlen;
 		optr += optlen;
@@ -1298,6 +1316,7 @@ tcpsndsyn(Conv *s, Tcpctl *tcb)
 	tcb->rttseq = tcb->iss;
 	tcb->snd.wl2 = tcb->iss;
 	tcb->snd.una = tcb->iss;
+	tcb->snd.sackhigh = tcb->snd.una;	/* in this sequence space: 0 is half of them "after" una */
 	tcb->snd.ptr = tcb->rttseq;
 	tcb->snd.nxt = tcb->rttseq;
 	tcb->flgcnt++;
@@ -1722,6 +1741,7 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 	tcb->rttseq = tcb->iss;
 	tcb->snd.wl2 = tcb->iss;
 	tcb->snd.una = tcb->iss+1;
+	tcb->snd.sackhigh = tcb->snd.una;	/* in this sequence space: 0 is half of them "after" una */
 	tcb->snd.ptr = tcb->iss+1;
 	tcb->snd.nxt = tcb->iss+1;
 	tcb->flgcnt = 0;
@@ -1846,6 +1866,7 @@ update(Conv *s, Tcp *seg)
 	u32int acked;
 	u32int expand;
 	Tcppriv *tpriv;
+	int i, newsack;
 
 	tpriv = s->p->priv;
 	tcb = (Tcpctl*)s->ptcl;
@@ -1873,18 +1894,41 @@ update(Conv *s, Tcp *seg)
 		}
 	}
 
-	/* added by Dong Lin for fast retransmission */
+	/*
+	 *  A duplicate ACK (RFC 5681): the same ACK, no data, the same window.
+	 *  Or, as RFC 6675 counts them, an ACK at snd.una whose SACK blocks
+	 *  reach past any the peer has sent before: it holds new data above a
+	 *  hole, whether or not this segment carries data of its own.  Without
+	 *  this a peer that sends requests as it acknowledges (9P: every new
+	 *  Tread carries the ACK) never made a duplicate, and every loss waited
+	 *  for the retransmission timer: at 1% loss, 9 of 10 retransmissions
+	 *  (docs/experiments/loss).
+	 */
+	newsack = 0;
+	for(i = 0; i < seg->nrsack; i++)
+		if(seq_gt(seg->rsackr[i], tcb->snd.una) && seq_le(seg->rsackr[i], tcb->snd.nxt)
+		&& (seq_le(tcb->snd.sackhigh, tcb->snd.una) || seq_gt(seg->rsackr[i], tcb->snd.sackhigh))){
+			tcb->snd.sackhigh = seg->rsackr[i];
+			newsack = 1;
+		}
 	if(seg->ack == tcb->snd.una
 	&& tcb->snd.una != tcb->snd.nxt
 	&& tcb->snd.wnd != 0
-	&& seg->len == 0
-	&& seg->wnd == tcb->snd.wnd) {
+	&& (newsack || (seg->len == 0 && seg->wnd == tcb->snd.wnd))) {
 
-		/* this is a pure ack w/o window update */
 		netlog(s->p->f, Logtcprxmt, "dupack %lud ack %lud sndwnd %d advwin %d\n",
 			tcb->snd.dupacks, seg->ack, tcb->snd.wnd, seg->wnd);
 
-		if(++tcb->snd.dupacks == TCPREXMTTHRESH) {
+		/*
+		 *  Lost after three duplicates, or (RFC 6675's IsLost) once more
+		 *  than three segments' worth above it is SACKed: a receiver that
+		 *  coalesces what follows a hole SACKs it all in one or two ACKs,
+		 *  and three duplicates never came (docs/experiments/loss).
+		 */
+		++tcb->snd.dupacks;
+		if(!tcb->snd.recovery
+		&& (tcb->snd.dupacks >= TCPREXMTTHRESH
+		 || (newsack && tcb->snd.sackhigh - tcb->snd.una > (TCPREXMTTHRESH+1)*tcb->mss))) {
 			/*
 			 *  tahoe tcp rxt the packet, half sshthresh,
  			 *  and set cwnd to one packet
@@ -1983,6 +2027,21 @@ done:
 	if(seq_gt(seg->ack, tcb->snd.urg))
 		tcb->snd.urg = seg->ack;
 
+	/*
+	 *  New data acknowledged: the backoff ends, and so must the timeout
+	 *  it doubled.  timer.start was set again only from a round-trip
+	 *  sample, never taken while retransmitting (Karn), so after a few
+	 *  timeouts every later loss waited the backed-off time: at 5% loss
+	 *  each way the connection made no progress in a minute
+	 *  (docs/experiments/loss).
+	 */
+	tcb->flags &= ~RETRAN;
+	tcb->backedoff = 0;
+	if(tcb->backoff != 0){
+		tcb->backoff = 0;
+		tcpsettimer(tcb);
+	}
+
 	if(tcb->snd.una != tcb->snd.nxt)
 		tcpgo(tpriv, &tcb->timer);
 	else
@@ -1990,10 +2049,6 @@ done:
 
 	if(seq_lt(tcb->snd.ptr, tcb->snd.una))
 		tcb->snd.ptr = tcb->snd.una;
-
-	tcb->flags &= ~RETRAN;
-	tcb->backoff = 0;
-	tcb->backedoff = 0;
 }
 
 void

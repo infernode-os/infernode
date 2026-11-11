@@ -33,6 +33,16 @@
 #                the window allows, the difference wrapped to 4G and the
 #                sender sent past the window, all of it dropped
 #                (2026-11-10, devssl over loopback at 1 MB/s).
+#   sack         TCP counts an ACK that SACKs new data as a duplicate, and
+#                takes a segment for lost once more than three segments
+#                above it are SACKed; its record of the highest SACKed
+#                starts at snd.una.  A 9P peer sends its ACKs with its next
+#                requests and SACKs all that follows a hole in one or two:
+#                at 1% loss three in four losses waited for the timer, and
+#                with the record left at 0 the rule was off in half the
+#                sequence space (2026-11-11, docs/experiments/loss).
+#   backoff      New data acknowledged recomputes the retransmission timeout
+#                the backoff doubled, not only the backoff count.
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -82,6 +92,14 @@ out=$(sed -n '/^tcpoutput(Conv \*s)/,/^}/p' os/ip/tcp.c)
 unguarded=$(echo "$out" | grep -B1 'usable -= sent;' | grep -vc -e 'usable -= sent;' -e 'if(usable > sent)' -e '^--$')
 if echo "$out" | grep -q 'usable -= sent;' && [ "$unguarded" = 0 ]; then ok "TCP's usable window never wraps below what is in flight"
 else no "tcpoutput subtracts what is in flight from an unsigned usable window without a check"; fi
+upd=$(sed -n '/^update(Conv \*s, Tcp \*seg)/,/^}/p' os/ip/tcp.c)
+if echo "$upd" | grep -q 'newsack ||' && echo "$upd" | grep -q 'sackhigh - tcb->snd.una >' \
+   && [ "$(grep -c 'snd.sackhigh = tcb->snd.una;' os/ip/tcp.c)" -ge 2 ] && grep -q 'rsackr\[tcph->nrsack++\]' os/ip/tcp.c
+then ok "TCP takes SACKs as duplicates and as loss by bytes, the record starting at snd.una"
+else no "TCP's loss detection does not use the peer's SACK blocks (or sackhigh is not started at snd.una)"; fi
+if echo "$upd" | sed -n '/^done:/,$p' | grep -A3 'if(tcb->backoff != 0){' | grep -q 'tcpsettimer(tcb);'
+then ok "acknowledged data recomputes the backed-off retransmission timeout"
+else no "update() resets the backoff without recomputing the timeout it doubled"; fi
 
 idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)

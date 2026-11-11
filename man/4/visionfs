@@ -1,0 +1,257 @@
+.TH VISIONFS 4
+.SH NAME
+visionfs \- recognition as files
+.SH SYNOPSIS
+.B visionfs
+[
+.B -m
+.I mountpoint
+] [
+.B load
+.I name dir
+]
+.SH DESCRIPTION
+.I Visionfs
+serves recognition models as files, mounted by default at
+.BR /mnt/vision :
+a program, a person at the shell, or an agent writes a picture and
+reads back what is in it, one record a line.
+Which machine does the looking is which server is mounted there: this
+one, or another's, over 9P.
+.PP
+A model is a directory made by
+.BR tools/vision/onnx2vis.py :
+.BR graph ,
+.BR weights ,
+.BR classes ,
+.B info
+and
+.BR sha256 .
+Its weights are refused unless their SHA-256 is the one recorded, and
+its graph is checked, every operation's numbers and every tensor's
+shape, before anything runs.
+It is run by
+.B /dis/lib/visnet.dis
+on
+.BR $Tensor ,
+the processor's arithmetic (see
+.IR tensor (2)).
+.PP
+To mount it from another Dis VM
+.RI ( vm (1)),
+post its mount:
+.B post vision /mnt/vision
+.RI ( post (1)).
+.I Load
+loads a model as the server starts, as
+.B ctl
+does.
+.SS Files
+.TF models/\fIname\fP/classes
+.TP
+.B ctl
+Written:
+.BI load " name dir"
+loads the model in
+.I dir
+as
+.IR name ;
+.BI unload " name"
+lets it go, refused while a session uses it.
+.BI engine " dir"
+attaches an engine tree mounted at
+.IR dir :
+the Jetson's GPU and DLAs, served by
+.B trtsrv
+.RB ( tools/trtsrv )
+on its host command's pipe and mounted by whoever builds the name space;
+.B "engine none"
+lets it go, refused while a session is on one of its places.
+Read: the engine
+.RB ( "engine cpu" ,
+and
+.BI "engine trt " dir
+with one), where a session may run
+.RB ( "places cpu" ,
+or
+.B "places cpu gpu dla0 dla1"
+with an engine tree), and each model,
+.BI model " name dir" .
+.TP
+.BI models/ name /info
+.B kind=detect decode=yolox input=416x416 classes=80 order=bgr fill=114 places=cpu sha256=...
+.br
+.B places
+lists
+.B cpu
+and, with an engine tree, the places the model's directory has engines
+for
+.RB ( engines/sha256 ,
+from
+.BR tools/trtsrv/mkengines.sh ).
+.TP
+.BI models/ name /classes
+One class name a line, in index order.
+.TP
+.B clone
+Read: a new session's number,
+.IR N .
+The session lasts while any of its files is open, this one included.
+.TP
+.IB N /ctl
+A setting a line, written as read:
+.BI src " feed"
+(a directory of the
+.IR vid9p (1)
+schema:
+.BR fmt ,
+.BR frame ,
+.BR status )
+or
+.BR "src none" ,
+.BI rate " fps"
+(frames a second at most; 0, as many as it can),
+.BI model " name" \fR,
+.BI place " p"
+(where its network runs:
+.B cpu
+at first, or one of the model's places; on another, its engine is put into
+the engine tree the first time a session asks for it, and the heads it
+gives are decoded here as on the processor),
+.BI thresh " r"
+(0 to 1; 0.30 at first),
+.BI iou " r"
+(boxes of one class overlapping by this or more are kept once; 0.45),
+.BI classes " name ..."
+or
+.BR "classes all" .
+Every line of a write is checked before any is done, and a refusal says
+why.
+A new session has the first model loaded.
+.TP
+.IB N /image
+A picture, in any format
+.IR imgload (2)
+reads or a binary PPM, in as many writes as it takes from its start; it
+is looked at when the file is closed.
+.TP
+.IB N /detections
+Following a feed, each read is one frame's records, every line beginning
+.BI frame= n
+.BI pts= ms\fR,
+a frame with nothing in it that alone; a read waits for the next frame,
+a reader that opens it late starts at the next frame, one that has fallen
+behind what is kept is first told
+.BI gap " n=k" \fR,
+and the end of the feed is the end of the file.
+The detector takes the newest frame each time it is ready for one and
+never holds the feed back; a clip that has ended is looked at whole.
+Otherwise, what was found in the last picture, best first, one record a line:
+.IP
+.EX
+class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
+.EE
+.IP
+in the picture's pixels,
+.B x0 y0
+inside the box and
+.B x1 y1
+just past it.
+A read waits while the picture is looked at.
+Nothing found is nothing read.
+.TP
+.IB N /layer/vision. N
+The same records, as a layer to bind into a video's stack.
+.TP
+.IB N /status
+.BI state= state
+.RB ( idle ,
+.BR running ,
+.BR ready ,
+.BR error )
+and
+.BI model= name\fR,
+with
+.BI reason= ...
+when something is wrong.
+.TP
+.IB N /stats
+Following a feed:
+.BI in= n
+frames,
+.BI inferred= n
+looked at,
+.BI skipped= n
+not,
+.BI fps_infer= r\fR,
+.B ms_p50=
+and
+.B ms_p95=
+a frame,
+.BI readers= n\fR.
+Otherwise
+.BI images= n
+looked at,
+.BI found= n
+in the last,
+.BI ms= n
+it took.
+.PD
+.PP
+Each picture is looked at in a process of its own, so one session's
+never holds up another's, nor the server.
+.SH EXAMPLE
+.EX
+; visionfs load nano /lib/vision/yolox-nano
+; {
+	id=`{read}
+	cat photo.jpg > /mnt/vision/$id/image
+	cat /mnt/vision/$id/detections
+} < /mnt/vision/clone
+class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
+class=bicycle score=0.80 x0=54 y0=137 x1=572 y1=423
+.EE
+.PP
+On a machine with no model of its own, another's:
+.EX
+; mount tcp!orin!vision /mnt/vision
+.EE
+.SH SOURCE
+.B /appl/cmd/visionfs.b
+.br
+.B /appl/lib/visnet.b
+.br
+.B /tools/vision/onnx2vis.py
+.SH EXAMPLES
+Recognition on the Jetson's first DLA:
+.IP
+.EX
+mount -A {os trtsrv >[1=0]} /mnt/trt
+visionfs load yolox /lib/vision/yolox-nano
+echo engine /mnt/trt > /mnt/vision/ctl
+{
+	id=`{read}
+	echo place dla0 > /mnt/vision/$id/ctl
+	cat dog.jpg > /mnt/vision/$id/image
+	cat /mnt/vision/$id/detections
+} < /mnt/vision/clone
+.EE
+.PP
+.B >[1=0]
+joins the host command's output to the channel
+.B mount
+gives it on its input.
+.SH SEE ALSO
+.IR vision (1),
+.IR tensor (2)
+.SH BUGS
+Only detectors of the YOLOX family are converted.
+On an engine tree a picture's tensors cross 9P (about 1.6 MB a picture in
+FP16), which costs more than the GPU's inference.
+A feed's frame numbers are its own only where its
+.B status
+counts them
+.RB ( frames= ,
+as
+.IR vid9p (1)'s
+does); elsewhere they are counted from the start of following.

@@ -97,6 +97,8 @@ frame file random access, which is what buys seek/DVR/multi-viewer sync):
                          #        window errors "frame expired".
 /mnt/video/<id>/status   # read:  "<src> w= h= framesize= frames= first= eof=
                          #        state= pos= t= follow="  (one line)
+/mnt/video/<id>/layer/   # empty as served: what is drawn over the frames
+                         #        is bound here, a file a layer (#1095)
 ```
 
 Mirrors the InferNode `ctl`+data idiom (`appl/cmd/llmsrv.b`,
@@ -141,6 +143,23 @@ and none adding pixel code:
 - **`appl/matrix/video-ctl.b`** — a Matrix `MatrixTkDisplay` module: real Tk
   transport buttons (play/pause/stop/±5s + position label), each press one ctl
   write. Compose beside a `video-pane` over the same mount.
+
+What is drawn over the frames is the feed's `layer/` directory, composed by
+the name space (#1095, [layers(2)](../man/2/layers)): each file there is a
+layer of text records (box, line, text, point), stacked in the union's
+order. `vidplay9p` and `video-pane` both draw it, through `layers.m`:
+
+```
+; bind -a /mnt/vision/1/layer /mnt/video/0/layer    # a detector's boxes, on top
+; bind -b /n/remote/mask /mnt/video/0/layer         # a layer underneath
+; unmount /mnt/vision/1/layer /mnt/video/0/layer    # gone
+```
+
+A layer's `frame=N` is the feed's frame N, as the frame file numbers it, the
+same for every reader on every machine. A live feed (camsrv's camera, with no
+`pos=`) numbers its frames the same way: it keeps the last few, `status` gives
+`frames=` (one past the newest) and `first=`, and a live reader starts at the
+newest and skips ahead when it falls behind ("frame expired").
 
 The player and the feed wall are **crystallisations**, not applications:
 `/lib/matrix/compositions/video-player` (pane + ctl over one mount) and

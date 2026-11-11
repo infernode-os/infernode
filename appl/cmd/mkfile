@@ -9,9 +9,11 @@ DIRS=\
 	install\
 	ip\
 	limbo\
+	md\
 	mk\
 	ndb\
 	sdr\
+	vision\
 	sh\
 	wikifs\
 	fs\
@@ -36,6 +38,7 @@ TARG=\
 	bind.dis\
 	bit2gif.dis\
 	broke.dis\
+	brick.dis\
 	bt9p.dis\
 	btboardaddr.dis\
 	bthid.dis\
@@ -53,6 +56,7 @@ TARG=\
 	cleanname.dis\
 	cmp.dis\
 	comm.dis\
+	copybench.dis\
 	countfs.dis\
 	cp.dis\
 	cprof.dis\
@@ -93,7 +97,6 @@ TARG=\
 	gif2bit.dis\
 	gpsfs.dis\
 	sdrfs.dis\
-	gpusrv.dis\
 	llmctl9p.dis\
 	llmsrv.dis\
 	mail9p.dis\
@@ -109,6 +112,7 @@ TARG=\
 	jsfs.dis\
 	kill.dis\
 	lan78stats.dis\
+	layerfs.dis\
 	ktrans.dis\
 	limbtest.dis\
 	listen.dis\
@@ -141,6 +145,7 @@ TARG=\
 	netstat.dis\
 	newer.dis\
 	ns.dis\
+	ns2mmd.dis\
 	newuser.dis\
 	nsaudit.dis\
 	nsbuild.dis\
@@ -151,6 +156,7 @@ TARG=\
 	pipefs.dis\
 	plumb.dis\
 	plumber.dis\
+	post.dis\
 	procstorm.dis\
 	prof.dis\
 	ps.dis\
@@ -211,6 +217,8 @@ TARG=\
 	vacput.dis\
 	ventisrv.dis\
 	vid9p.dis\
+	visionfs.dis\
+	camsrv.dis\
 	wav2iaf.dis\
 	vm.dis\
 	wc.dis\
@@ -242,6 +250,7 @@ MODULES=\
 	$ROOT/appl/veltro/veltrosrv.m\
 
 SYSMODULES=\
+	visnet.m\
 	arg.m\
 	bufio.m\
 	convcs.m\
@@ -264,7 +273,6 @@ SYSMODULES=\
 	filter.m\
 	fslib.m\
 	ftrans.m\
-	gpu.m\
 	llmclient.m\
 	hash.m\
 	imagefile.m\
@@ -341,6 +349,11 @@ SYSMODULES=\
 	garminav.m\
 	gdl90.m\
 	post9p.m\
+	sdg.m\
+	bayer.m\
+	layers.m\
+	tensor.m\
+	parread.m\
 
 DISBIN=$ROOT/dis
 

@@ -32,20 +32,32 @@ implement VideoPane;
 # drives update() at frame cadence.  A status strip along the pane's
 # bottom edge shows state and position.
 #
-# LIVE SEQUENTIAL SOURCES: a mount whose status carries no transport
-# (no "pos=" — e.g. a vision service's /mnt/vision/feeds/<id>, serving the
-# vid9p fmt/frame schema with join-live ring semantics and reads that
-# park until the next frame) is played as a stream: a reader proc
-# consumes framesize-byte chunks sequentially — the SERVER paces it —
-# and the pane blits the newest frame each tick.  No transport keys;
-# the strip shows LIVE.  This is the remote-camera path: a perception
-# service ingests a camera stream and re-serves annotated I420 over
-# 9P; this pane mounts it from any reachable host (see
-# docs/H264-9P-BRIDGE.md).
+# LIVE SOURCES: a mount whose status carries no transport (no "pos=":
+# camsrv(4)'s camera, here or mounted from another machine) is played
+# as a stream: a reader proc starts at the newest frame (status frames=
+# less one, frames numbered as vid9p's), reads each next one at its
+# offset (the read parks until it exists: the SERVER paces it), goes
+# on from the newest when it falls behind, and the pane blits the
+# newest frame each tick.  No transport keys; the strip shows LIVE.
+#
+# LAYERS: what is drawn over the frames is the feed's layer/ directory
+# as this name space has it (#1095, layers(2)): each file a layer of
+# text records, stacked in the union's order, so a layer is added with
+# bind -a (on top) or bind -b (underneath) and taken off with unmount,
+# while the pane runs:
+#
+#     bind -a /mnt/vision/1/layer /mnt/video/0/layer    # detections
+#     unmount /mnt/vision/1/layer /mnt/video/0/layer
+#
+# On frame F each layer's records for its newest frame up to F are
+# drawn, and its frame=* records.  Frames are numbered by the feed, a
+# live one's too (camsrv's), so a detector's frame=N is drawn on N.
 #
 
 include "sys.m";
 	sys: Sys;
+include "parread.m";
+	parread: Parread;
 
 include "draw.m";
 	drawm: Draw;
@@ -62,6 +74,14 @@ include "keyboard.m";
 include "lucitheme.m";
 
 include "matrix.m";
+
+include "layers.m";
+	layers: Layers;
+	Stack, Mark: import layers;
+stack: ref Stack;
+acol: ref Image;			# the theme's accent, for marks with no colour
+colours: list of (string, ref Image);	# the theme's colours by name
+drawn := "";				# what the layers last drew
 
 VideoPane: module
 {
@@ -92,6 +112,7 @@ r_g: Rect;
 vw, vh, vrate, framesize: int;
 
 ffd: ref Sys->FD;		# open handle on <mount>/frame
+WAYS: con 4;			# a frame's reads in flight at once (parread(2))
 sfd: ref Sys->FD;		# open handle on <mount>/status
 cfd: ref Sys->FD;		# open handle on <mount>/ctl (transport writes)
 frame: ref Image;		# RGB24 staging image, native video size
@@ -101,7 +122,7 @@ haveframe: int;			# a frame has been decoded into `frame`
 # live-sequential source state (status without pos= / no status at all)
 seqmode := 0;			# 1: stream the frame file, server-paced
 seqprobed := 0;			# transport-vs-stream decided
-framech: chan of array of byte;	# reader -> pane, filled frames
+framech: chan of (int, array of byte);	# reader -> pane, filled frames and their numbers
 freech: chan of array of byte;	# pane -> reader, recycled buffers
 rdpid := -1;			# reader proc, killed on shutdown
 stopreader := 0;
@@ -119,6 +140,9 @@ STRIPH: con 14;			# transport status strip height
 init(display: ref Display, font: ref Font, mount: string): string
 {
 	sys = load Sys Sys->PATH;
+	parread = load Parread Parread->PATH;
+	if(parread == nil)
+		return sys->sprint("cannot load %s: %r", Parread->PATH);
 	drawm = load Draw Draw->PATH;
 	mio = load Mpegio Mpegio->PATH;
 	if(mio == nil)
@@ -133,6 +157,14 @@ init(display: ref Display, font: ref Font, mount: string): string
 	mountpath = mount;
 	haveframe = 0;
 	loadcolors();
+
+	layers = load Layers Layers->PATH;
+	if(layers == nil)
+		return sys->sprint("cannot load %s: %r", Layers->PATH);
+	if((e := layers->init()) != nil)
+		return e;
+	stack = Stack.watch(mount + "/layer");
+	(acol, colours) = layers->themed(display);
 
 	# fmt/frame may not be ready yet (the feed can start after the pane);
 	# ensureopen() retries lazily from update(), so a missing source here
@@ -220,7 +252,7 @@ ensureopen(): int
 			seqprobed = 1;
 		}
 		if(seqprobed && seqmode) {
-			framech = chan[1] of array of byte;
+			framech = chan[1] of (int, array of byte);
 			freech = chan[2] of array of byte;
 			freech <-= array[framesize] of byte;
 			freech <-= array[framesize] of byte;
@@ -240,40 +272,66 @@ contains(s, sub: string): int
 	return 0;
 }
 
-# Sequential reader for live sources: consume framesize-byte chunks
-# from <mount>/frame on a private fd (per-fid join-live semantics),
-# hand full frames to update() over a two-buffer ping-pong.  Blocking
-# is the design: the server parks the read until a new frame exists.
+# Reader for live sources.  Frames are numbered, as vid9p's are (frame
+# n at n*framesize, #1095): it starts at the newest, reads each next
+# one at its offset, and goes on from the newest again when it falls
+# behind ("frame expired").  Full frames go to update() with their
+# numbers over a two-buffer ping-pong.  Blocking is the design: the
+# server parks the read until the frame exists.
 streamreader()
 {
 	rdpid = sys->pctl(0, nil);
 	fd := sys->open(mountpath + "/frame", Sys->OREAD);
+	f := livestart();
 	for(;;) {
 		if(stopreader)
 			return;
 		if(fd == nil) {
 			sys->sleep(500);
 			fd = sys->open(mountpath + "/frame", Sys->OREAD);
+			f = livestart();
 			continue;
 		}
 		fb := <-freech;
-		got := 0;
-		while(got < framesize) {
-			n := sys->read(fd, fb[got:], framesize-got);
-			if(n <= 0) {
-				fd = nil;	# source went away; reopen joins live
-				break;
-			}
-			got += n;
-		}
+		(got, e) := parread->pread(fd, fb[0:framesize], big f * big framesize, WAYS);
 		if(got < framesize) {
 			freech <-= fb;
+			if(e == "frame expired")
+				f = livestart();
+			else
+				fd = nil;	# source went away; reopen joins live
 			continue;
 		}
 		if(stopreader)
 			return;
-		framech <-= fb;
+		framech <-= (f++, fb);
 	}
+}
+
+# where a live reader starts: the newest frame (status frames= less one)
+# if it is still kept (not below first=), else the next, which a read
+# waits for
+livestart(): int
+{
+	fd := sys->open(mountpath + "/status", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[512] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return 0;
+	(frames, first) := (0, 0);
+	(nil, toks) := sys->tokenize(string b[0:n], " \t\n");
+	for(; toks != nil; toks = tl toks) {
+		t := hd toks;
+		if(len t > 7 && t[0:7] == "frames=")
+			frames = int t[7:];
+		else if(len t > 6 && t[0:6] == "first=")
+			first = int t[6:];
+	}
+	if(frames > first)
+		return frames - 1;
+	return frames;
 }
 
 # Parse <mount>/status: "<src> w= h= framesize= frames= eof= state= pos= t= follow=".
@@ -329,14 +387,9 @@ showframe(idx: int): int
 {
 	if(idx < 0)
 		return 0;
-	off := big idx * big framesize;
-	got := 0;
-	while(got < framesize) {
-		n := sys->pread(ffd, buf[got:], framesize-got, off + big got);
-		if(n <= 0)
-			return 0;
-		got += n;
-	}
+	(got, nil) := parread->pread(ffd, buf[0:framesize], big idx * big framesize, WAYS);
+	if(got < framesize)
+		return 0;
 	convertframe(buf);
 	lastshown = idx;
 	return 1;
@@ -385,8 +438,9 @@ update(): int
 		# arrived since the last tick; never block the GUI loop.
 		changed := 0;
 		alt {
-		fb := <-framech =>
+		(fno, fb) := <-framech =>
 			convertframe(fb);
+			lastshown = fno;
 			freech <-= fb;
 			changed = 1;
 		* =>
@@ -397,7 +451,7 @@ update(): int
 			statestr = ns;
 			changed = 1;
 		}
-		return changed;
+		return layerschanged() || changed;
 	}
 	(strm, nf, playing, pos, tms, fol) := readstatus();
 	if(nf <= 0)
@@ -407,7 +461,26 @@ update(): int
 	if(pos != lastshown && pos < nf && showframe(pos))
 		changed = 1;
 	setstate(strm, nf, playing, tms, fol);
-	return changed || statestr != was;
+	return layerschanged() || changed || statestr != was;
+}
+
+# the frame the layers are drawn for: the one shown, by its number
+layerframe(): int
+{
+	return lastshown;
+}
+
+layerschanged(): int
+{
+	sig := "";
+	for(ml := stack.due(layerframe()); ml != nil; ml = tl ml) {
+		m := hd ml;
+		sig += sys->sprint("%d %d %d %d %d %s %s\n", m.kind, m.x0, m.y0, m.x1, m.y1, m.label, m.colour);
+	}
+	if(sig == drawn)
+		return 0;
+	drawn = sig;
+	return 1;
 }
 
 draw(dst: ref Image)
@@ -447,6 +520,9 @@ draw(dst: ref Image)
 	# source point in frame space aligned to ir.min
 	sp := Point(ir.min.x - pane.min.x, ir.min.y - pane.min.y);
 	dst.draw(ir, frame, nil, sp);
+
+	# the feed's layers over the frame, bottom first, where it is drawn
+	layers->draw(stack.due(layerframe()), dst, pane, vw, vh, font_g, acol, colours);
 
 	# thin border so the pane reads as a framed feed
 	dst.draw(Rect((r_g.min.x, r_g.min.y), (r_g.max.x, r_g.min.y+1)), bordercol, nil, (0,0));
@@ -507,10 +583,14 @@ retheme(display: ref Display)
 {
 	display_g = display;
 	loadcolors();
+	(acol, colours) = layers->themed(display);
 }
 
 shutdown()
 {
+	if(stack != nil)
+		stack.stop();
+	stack = nil;
 	stopreader = 1;
 	if(rdpid >= 0) {
 		# The reader may be parked in a server-paced read; kill it

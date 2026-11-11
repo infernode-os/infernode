@@ -153,8 +153,24 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	dev = hd args;
 
+	#
+	# The enumerator that found this device may still be letting go of
+	# its control endpoint and ctl file, which are exclusive-open; its
+	# release is not instantaneous. Ask a few times before calling them
+	# in use, as kbdusb, mouseusb and etherusb do. Without it, a kernel
+	# fast enough to start the driver first left the disk with none
+	# (QEMU virt, once the kernel copied words, not bytes).
+	#
 	ctlfd = sys->open("/usb/usb/" + dev + "/ctl", Sys->ORDWR);
+	for(retry := 0; ctlfd == nil && retry < 40 && inuse(); retry++){
+		sys->sleep(50);
+		ctlfd = sys->open("/usb/usb/" + dev + "/ctl", Sys->ORDWR);
+	}
 	ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	for(retry = 0; ep0 == nil && retry < 40 && inuse(); retry++){
+		sys->sleep(50);
+		ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
+	}
 	if(ctlfd == nil || ep0 == nil){
 		sys->print("diskusb: cannot open %s: %r\n", dev);
 		return;

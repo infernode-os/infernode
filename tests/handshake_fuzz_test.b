@@ -99,7 +99,7 @@ serveOnce(ai: ref Keyring->Authinfo, dfd: ref Sys->FD, rc: chan of int)
 {
 	outcome := CLEAN;
 	{
-		(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, dfd, 0);
+		(wrapped, nil) := auth->server("aes_256_gcm" :: nil, ai, dfd, 0);
 		if(wrapped != nil)
 			outcome = ACCEPTED;
 	} exception {

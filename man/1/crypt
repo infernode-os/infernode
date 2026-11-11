@@ -6,7 +6,7 @@ crypt, aescbc \- data encryption
 [
 .B -d
 ] [
-.BI -a " alg\fP\fR[\f5/\fP\fIalg\fP\fR]\fP"
+.BI -a " alg"
 ] [
 .BI -f " keyfile"
 ] [
@@ -36,14 +36,14 @@ option is given,
 decrypts the standard input instead, writing the clear text on standard output.
 The options are:
 .TP
-.BI -a " alg..."
-Specifies one or two algorithms, for encryption and/or digests.
-The algorithms are those supported by
-.IR ssl (3).
-If two algorithms are given, they should be separated by a slash
-.RB ( / )
-or space, following the conventions of
-.IR ssl (3).
+.BI -a " alg"
+Specifies the algorithm, one of those
+.IR ssl (3)
+supports:
+.B aes_256_gcm
+(the default) to encrypt and authenticate,
+.B hmac_sha384
+to authenticate alone.
 .TP
 .BI -f " keyfile"
 Read the encryption key from the given file, which obviously should be carefully protected.
@@ -64,12 +64,14 @@ is not otherwise supplied,
 prompts for it on
 .BR /dev/cons .
 There is no need to give algorithms when decrypting, because they are taken from the header.
-The default algorithm is
-.BR md5/ideacbc .
-It might be necessary to change that when using
-.I crypt
-for commercial purposes, as noted in
-.IR keyring-crypt (2).
+The key is made from it by PBKDF2 (RFC 8018, NIST SP 800-132) with
+HMAC-SHA-384, 200000 iterations, and a 32-byte salt chosen at random for each
+file; the header records the salt and the iterations.
+.PP
+The stream is a run of
+.IR ssl (3)
+records, each authenticated: a change anywhere in it is an error, but a stream
+cut at the end of a record is not detected.
 .PP
 .I Aescbc
 encrypts and decrypts using AES (Rijndael) in cypher

@@ -100,6 +100,7 @@ dis/bdf2subfont.dis
 dis/bind.dis
 dis/bioget.dis
 dis/bit2gif.dis
+dis/brick.dis
 dis/broke.dis
 dis/bt9p.dis
 dis/btboardaddr.dis
@@ -109,6 +110,7 @@ dis/bytes.dis
 dis/cal.dis
 dis/calc.dis
 dis/calendar9p.dis
+dis/camsrv.dis
 dis/cat.dis
 dis/cd.dis
 dis/cddb.dis
@@ -130,6 +132,7 @@ dis/cmd/git/push.dis
 dis/cmd/git/rm.dis
 dis/cmp.dis
 dis/comm.dis
+dis/copybench.dis
 dis/countfs.dis
 dis/cp.dis
 dis/cprof.dis
@@ -163,6 +166,8 @@ dis/disdump.dis
 dis/disk/calc.tab.dis
 dis/disk/fdisk.dis
 dis/disk/format.dis
+dis/disk/fsbench.dis
+dis/disk/gefs.dis
 dis/disk/ftl.dis
 dis/disk/kfs.dis
 dis/disk/kfscmd.dis
@@ -226,7 +231,6 @@ dis/getline.dis
 dis/gettar.dis
 dis/gif2bit.dis
 dis/gpsfs.dis
-dis/gpusrv.dis
 dis/grep.dis
 dis/grid/lib/announce.dis
 dis/grid/register.dis
@@ -279,6 +283,7 @@ dis/jsfs.dis
 dis/kill.dis
 dis/ktrans.dis
 dis/lan78stats.dis
+dis/layerfs.dis
 dis/lib/acmewin.dis
 dis/lib/arg.dis
 dis/lib/asn1.dis
@@ -383,6 +388,7 @@ dis/lib/kbdecode.dis
 dis/lib/keyringinst.dis
 dis/lib/keyset.dis
 dis/lib/l2cap.dis
+dis/lib/layers.dis
 dis/lib/libc.dis
 dis/lib/libc0.dis
 dis/lib/lists.dis
@@ -409,6 +415,7 @@ dis/lib/outlinefont.dis
 dis/lib/parseman.dis
 dis/lib/pdf.dis
 dis/lib/pdfenc.dis
+dis/lib/sdg.dis
 dis/lib/sheetview.dis
 dis/lib/plumbing.dis
 dis/lib/plumbmsg.dis
@@ -425,6 +432,7 @@ dis/lib/rand.dis
 dis/lib/random.dis
 dis/lib/readavif.dis
 dis/lib/readdir.dis
+dis/lib/parread.dis
 dis/lib/readgif.dis
 dis/lib/readjpg.dis
 dis/lib/readpicfile.dis
@@ -481,6 +489,8 @@ dis/lib/vac.dis
 dis/lib/venti.dis
 dis/lib/viewport.dis
 dis/lib/virgil.dis
+dis/lib/visnet.dis
+dis/lib/visrec.dis
 dis/lib/w3c/css.dis
 dis/lib/w3c/uris.dis
 dis/lib/w3c/xpointers.dis
@@ -574,8 +584,8 @@ dis/matrix/sparkline.dis
 dis/matrix/sysmon-svc.dis
 dis/matrix/tk-notes.dis
 dis/matrix/video-ctl.dis
-dis/matrix/video-overlay.dis
 dis/matrix/video-pane.dis
+dis/md/fmt.dis
 dis/mc.dis
 dis/md5sum.dis
 dis/mdb.dis
@@ -610,6 +620,7 @@ dis/netstat.dis
 dis/newer.dis
 dis/newuser.dis
 dis/ns.dis
+dis/ns2mmd.dis
 dis/nsaudit.dis
 dis/nsbuild.dis
 dis/os.dis
@@ -619,6 +630,7 @@ dis/pipefile.dis
 dis/pipefs.dis
 dis/plumb.dis
 dis/plumber.dis
+dis/post.dis
 dis/procstorm.dis
 dis/prof.dis
 dis/ps.dis
@@ -711,11 +723,14 @@ dis/tests/auditverify_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
 dis/tests/awk_test.dis
+dis/tests/bayer_test.dis
 dis/tests/bidi_test.dis
 dis/tests/bioauth_test.dis
+dis/tests/brick_d2_test.dis
 dis/tests/brotli_test.dis
 dis/tests/bthci_test.dis
 dis/tests/bufio_test.dis
+dis/tests/camsrv_test.dis
 dis/tests/casel_test.dis
 dis/tests/charonbatch.dis
 dis/tests/charonshot.dis
@@ -750,6 +765,7 @@ dis/tests/gc_cycle_test.dis
 dis/tests/fltfmt_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
+dis/tests/gefs_hash_test.dis
 dis/tests/gentmpl.dis
 dis/tests/geomap_test.dis
 dis/tests/git_test.dis
@@ -757,9 +773,6 @@ dis/tests/grpwait_test.dis
 dis/tests/goroutine_leak_test.dis
 dis/tests/gdl90_test.dis
 dis/tests/gps_capability_test.dis
-dis/tests/gpu_bench.dis
-dis/tests/gpu_smoke.dis
-dis/tests/gpu_test.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis
@@ -788,6 +801,9 @@ dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/keyring_sweep_test.dis
+dis/tests/layers_test.dis
+dis/tests/login_test.dis
+dis/tests/mermaid_flow_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
@@ -833,6 +849,7 @@ dis/tests/mail_provision_test.dis
 dis/tests/matrix_perfdashboard_test.dis
 dis/tests/matrix_sysmon_test.dis
 dis/tests/matrix_test.dis
+dis/tests/mdfmt_test.dis
 dis/tests/memdraw_far_test.dis
 dis/tests/memfs_test.dis
 dis/tests/menu_test.dis
@@ -848,10 +865,17 @@ dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
 dis/tests/ninep_pack_test.dis
+dis/tests/parread_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/nmea_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
+dis/tests/ninep_bench.dis
+dis/tests/ninep_disconnect_test.dis
+dis/tests/ninep_msize_test.dis
+dis/tests/crypto_bench.dis
+dis/tests/ssl_record_test.dis
+dis/tests/tcpwatch.dis
 dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis
 dis/tests/outlinefont_test.dis
@@ -883,6 +907,7 @@ dis/tests/scene_test.dis
 dis/tests/sdl3_test.dis
 dis/tests/sdrdsp_test.dis
 dis/tests/sdp_test.dis
+dis/tests/sdg_test.dis
 dis/tests/secp256k1_test.dis
 dis/tests/secstore_abort_probe.dis
 dis/tests/secstore_crypto_test.dis
@@ -925,6 +950,7 @@ dis/tests/tls_live_test.dis
 dis/tests/tls_pq_test.dis
 dis/tests/tls_protocol_test.dis
 dis/tests/tlsclient.dis
+dis/tests/tlspinclient.dis
 dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis
@@ -1018,7 +1044,6 @@ dis/veltro/tools/fractal.dis
 dis/veltro/tools/gap.dis
 dis/veltro/tools/git.dis
 dis/veltro/tools/gps.dis
-dis/veltro/tools/gpu.dis
 dis/veltro/tools/grep.dis
 dis/veltro/tools/hear.dis
 dis/veltro/tools/http.dis
@@ -1057,6 +1082,10 @@ dis/veltro/wallet9p.dis
 dis/veltro/wiki9p.dis
 dis/ventisrv.dis
 dis/vid9p.dis
+dis/vision/crop.dis
+dis/vision/detect.dis
+dis/vision/draw.dis
+dis/visionfs.dis
 dis/wav2iaf.dis
 dis/vm.dis
 dis/vmstress.dis
@@ -1067,6 +1096,7 @@ dis/wiki.dis
 dis/wikifs.dis
 dis/wm/about.dis
 dis/wm/bounce.dis
+dis/wm/camera.dis
 dis/wm/charon.dis
 dis/wm/clock.dis
 dis/wm/coffee.dis

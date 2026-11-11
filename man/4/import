@@ -64,22 +64,18 @@ options control the creation of union directories just as for
 .IR bind (1).
 By default, the remote file replaces the local one in the name space.
 .PP
-If the
+The
 .B -e
-option is given, the network connection can be encrypted, or provided
-with digests to authenticate the contents, or both.
-.I Crypt
-is an encryption algorithm accepted by
-.IR ssl (3);
-.I hash
-is one of its digest algorithms.
-Plan 9's
-.I exportfs
-normally requires
-.B
-\&'rc4_256 sha1'
-on such connections;
-it currently provides no negotiation of algorithms.
+option, which asked for the connection to be encrypted or digested, is
+refused, unless it names
+.BR clear :
+Plan 9's p9sk1 agrees a 56-bit key, too weak to key
+.IR ssl (3)'s
+.B aes_256_gcm
+or
+.BR hmac_sha384 ,
+the only algorithms it has.
+Without it the connection is in the clear, for a network that is trusted.
 .PP
 The
 .B -k

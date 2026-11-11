@@ -1,0 +1,89 @@
+.TH NS2MMD 1
+.SH NAME
+ns2mmd \- the machines a name space reaches, as a diagram
+.SH SYNOPSIS
+.B ns2mmd
+[
+.B -a
+] [
+.B -n
+.I name
+]
+.SH DESCRIPTION
+.I Ns2mmd
+reads the lines of a name space, as
+.IR ns (1)
+writes them, from its standard input, and writes a Mermaid flowchart
+of the machines they reach
+.RI ( mermaid (2)):
+one node for this machine, named by
+.B /dev/sysname
+or
+.IR name ;
+one for each other machine a mount reaches; an edge from it for each
+mount, labelled with its service and mount point, and
+.B encrypted
+for one over
+.IR ssl (3).
+.PP
+Its input is a stream: a blank line, or the end, ends each name space,
+and each is a chart, ended by a line holding only a form feed, unless
+it is the one written last.
+Piped into
+.B wm/page -s
+.RI ( page (1)),
+the diagram follows the name space as it changes:
+.IP
+.EX
+{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s
+.EE
+.PP
+A mount's source is found by reading files: a dial string
+.RB ( tcp!pi5!video ,
+as a mount made without encryption shows it) as it is; an encrypted
+conversation's
+.RB ( #D/0/data )
+through its
+.B lower
+file to its connection; a connection's
+.RB ( /net/tcp/3/data )
+through its
+.BR remote .
+An address is named by ndb
+.RB ( /lib/ndb/local ,
+.BR inferno ,
+.BR common ):
+a machine by
+.BR sys= ,
+a port by its
+.B tcp=
+service.
+These files are the machine's that
+.I ns2mmd
+runs on: the name space of another machine (from
+.IR cpu (1))
+names connections it cannot read.
+.PP
+Mounts of local servers (pipes, file servers started here) are left
+out; with
+.BR -a ,
+each is a node of its own, named by its source.
+.SH EXAMPLE
+On a Mac with a Pi's camera and an Orin's recognition mounted:
+.IP
+.EX
+; ns | ns2mmd
+flowchart LR
+    me["mac"]
+    h0["pi5<br/>192.168.1.100"]
+    h1["orin<br/>10.147.17.120"]
+    h0 -->|"video · /mnt/video<br/>encrypted"| me
+    h1 -->|"vision · /mnt/vision<br/>encrypted"| me
+.EE
+.SH SOURCE
+.B /appl/cmd/ns2mmd.b
+.SH SEE ALSO
+.IR ns (1),
+.IR page (1),
+.IR mermaid (2),
+.IR ssl (3)

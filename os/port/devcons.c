@@ -10,6 +10,9 @@
 #include	"mem.h"
 #include	"dat.h"
 #include	"fns.h"
+#ifdef FWRTC
+int	rtcset(u32int);
+#endif
 #include	"../port/error.h"
 #include	<version.h>
 
@@ -100,6 +103,7 @@ static Cmdtab sysctlcmd[] =
  */
 int	cnsastrict;
 int	cnsaasked;
+Lock	cnsalk;
 
 void
 printinit(void)
@@ -1560,6 +1564,9 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		buf[n] = 0;
 		t = strtoll(buf, 0, 0)/1000000;
 		boottime = t - TK2SEC(MACHP(0)->ticks);
+#ifdef FWRTC
+		rtcset((u32int)t);	/* a clock worth setting is worth keeping */
+#endif
 		break;
 
 	case Qhostowner:
@@ -1660,9 +1667,13 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		case CMcnsamode:
 			if(strcmp(cb->f[1], "on") != 0)
 				error("cnsamode: only on; it is off until the machine restarts");
-			if(cnsaasked && !cnsastrict)
+			lock(&cnsalk);
+			if(cnsaasked && !cnsastrict){
+				unlock(&cnsalk);
 				error("cnsamode: too late, an authentication has already run without it");
+			}
 			cnsastrict = 1;
+			unlock(&cnsalk);
 			break;
 		}
 		poperror();

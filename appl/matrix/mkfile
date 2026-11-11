@@ -20,10 +20,10 @@ TARG=\
 	proc-list.dis\
 	tk-notes.dis\
 	video-ctl.dis\
-	video-overlay.dis\
 	video-pane.dis\
 
 SYSMODULES=\
+	layers.m\
 	sys.m\
 	draw.m\
 	geoproj.m\
@@ -36,6 +36,7 @@ SYSMODULES=\
 	keyboard.m\
 	readdir.m\
 	sh.m\
+	parread.m\
 
 DISBIN=$ROOT/dis/matrix
 

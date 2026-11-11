@@ -30,7 +30,10 @@ GcCycleTest: module
 
 SRCFILE: con "/tests/gc_cycle_test.b";
 Ncycles: con 1000;
-Waitms: con 60*1000;	# the native kernel starts a round of idle collection 10s after its last
+# The native kernel starts a round of idle collection Idlegcgap (60 s,
+# os/port/dis.c) after its last one ends, so a cycle dropped just after a
+# round can wait that long, and the round's epochs on top: twice it.
+Waitms: con 120*1000;
 
 passed := 0;
 failed := 0;
@@ -63,30 +66,45 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
-# the heap's live objects: /dev/memory's heap line, allocations less frees
-live(): int
+# This module's live objects, from /dev/heaptypes (cons(3)): its lines
+# "count bytes obj owner" whose owner is a type this module declared.
+# Counted by type, not as the heap's total, so what the rest of the
+# system allocates meanwhile does not count: under QEMU a desktop still
+# loading wm/osk's lexicon grew the heap by some 19000 objects during
+# the wait, and the total never came back to where it was.
+mine(): int
 {
-	fd := sys->open("/dev/memory", Sys->OREAD);
+	fd := sys->open("/dev/heaptypes", Sys->OREAD);
 	if(fd == nil)
 		return -1;
-	b := array[2048] of byte;
-	n := sys->read(fd, b, len b);
-	if(n <= 0)
+	text := "";
+	b := array[8192] of byte;
+	n: int;
+	while((n = sys->read(fd, b, len b)) > 0)
+		text += string b[0:n];
+	if(n < 0)
 		return -1;
-	(nil, l) := sys->tokenize(string b[0:n], "\n");
+	count := 0;
+	(nil, l) := sys->tokenize(text, "\n");
 	for(; l != nil; l = tl l){
 		(nt, f) := sys->tokenize(hd l, " ");
-		if(nt == 8){
-			a := array[8] of string;
-			for(i := 0; i < 8; i++){
-				a[i] = hd f;
-				f = tl f;
-			}
-			if(a[7] == "heap")
-				return int a[3] - int a[4];
+		if(nt < 6)
+			continue;
+		a := array[6] of string;
+		for(i := 0; i < 6; i++){
+			a[i] = hd f;
+			f = tl f;
 		}
+		# count bytes obj PATH type N size S
+		if(a[2] == "obj" && a[4] == "type" && suffix(a[3], "/gc_cycle_test.dis"))
+			count += int a[0];
 	}
-	return -1;
+	return count;
+}
+
+suffix(s, suf: string): int
+{
+	return len s >= len suf && s[len s - len suf:] == suf;
 }
 
 makecycles(n: int)
@@ -99,27 +117,26 @@ makecycles(n: int)
 
 testCyclesFreed(t: ref T)
 {
-	before := live();
+	before := mine();
 	if(before < 0)
-		t.fatal(sys->sprint("cannot read the heap's line in /dev/memory: %r"));
+		t.fatal(sys->sprint("cannot read /dev/heaptypes: %r"));
 	makecycles(Ncycles);
-	made := live();
-	t.log(sys->sprint("live objects %d before, %d with %d cycles dropped", before, made, Ncycles));
+	made := mine();
+	t.log(sys->sprint("this module's objects %d before, %d with %d cycles dropped", before, made, Ncycles));
 	if(made - before < Ncycles/2)
 		t.skip(sys->sprint("the cycles were freed as they were made (%d -> %d)", before, made));
 
-	# the rest of the system allocates and frees as well, so not exactly
-	# before: within half the cycles of it
-	for(waited := 0; waited < Waitms; waited += 500){
-		now := live();
-		if(now - before < Ncycles/2){
-			t.log(sys->sprint("freed after %d ms: %d live", waited, now));
+	# a read walks the whole heap holding the VM: not too often
+	for(waited := 0; waited < Waitms; waited += 1000){
+		now := mine();
+		if(now - before < Ncycles/10){
+			t.log(sys->sprint("freed after %d ms: %d of this module's objects left", waited, now));
 			return;
 		}
-		sys->sleep(500);
+		sys->sleep(1000);
 	}
-	t.error(sys->sprint("%d cycles not freed in %d s: %d live, %d before",
-		Ncycles, Waitms/1000, live(), before));
+	t.error(sys->sprint("%d cycles not freed in %d s: %d of this module's objects, %d before",
+		Ncycles, Waitms/1000, mine(), before));
 }
 
 init(nil: ref Draw->Context, args: list of string)

@@ -326,6 +326,11 @@ attributes).
 .B "delkey \fIattribute-value-list\fP
 delete a key whose attributes match those given.
 .TP
+.B sync
+synchronously save all keys through the configured encrypted keyfile or
+secstore backend.  The write fails if no persistence backend is configured or
+if the save fails; success means the backend accepted the complete key set.
+.TP
 .B debug
 toggle debugging on and off, i.e., the debugging also
 turned on by the

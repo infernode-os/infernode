@@ -78,12 +78,22 @@ dologin(c: ref Sys->Connection): string
 	name := s;
 	kr->putstring(c.dfd, name);
 
-	# get initialization vector (32 bytes: 20 salt + 12 nonce)
+	# get initialization vector: its length says the client's AEAD
+	# (login.b): 32 bytes, ChaCha20-Poly1305; 44, AES-256-GCM (CNSA)
 	(ivec, err) = kr->getbytearray(c.dfd);
 	if(err != nil)
 		return "can't get initialization vector: "+err;
-	if(len ivec != 32)
+	gcm := 0;
+	case len ivec {
+	32 =>
+		if(cnsamode())
+			return "CNSA mode: this signer takes AES-256-GCM logins only; set cnsamode on the client";
+	44 =>
+		gcm = 1;
+	* =>
 		return "bad initialization vector length";
+	}
+	nsalt := len ivec - 12;
 
 	# lookup password
 	pw := getsecret(s);
@@ -102,24 +112,18 @@ dologin(c: ref Sys->Connection): string
 	# generate alpha0 = alpha**r0 mod p
 	alphar0 := info.alpha.expmod(r0, info.p);
 
-	# Derive 32-byte ChaCha20-Poly1305 key from stored password hash + IV
-	# using HKDF (RFC 5869) with HMAC-SHA256:
-	#   Extract: PRK = HMAC-SHA256(salt=ivec[0:20], IKM=pw[0:32])
-	#   Expand:  key = HMAC-SHA256(PRK, "infernode login aead" || 0x01)
-	salt := ivec[0:20];
-	prk := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(pw[0:Keyring->SHA256dlen], Keyring->SHA256dlen, salt, prk, nil);
-	hkdfinfo := array of byte "infernode login aead";
-	expandinput := array[len hkdfinfo + 1] of byte;
-	expandinput[0:] = hkdfinfo;
-	expandinput[len hkdfinfo] = byte 1;
-	aeadkey := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(expandinput, len expandinput, prk, aeadkey, nil);
-	nonce := ivec[20:32];
+	# The AEAD's key from the stored SHA-256 of the password and the
+	# salt, by HKDF as login.b derives it (loginkey).
+	aeadkey := loginkey(gcm, pw[0:Keyring->SHA256dlen], ivec[0:nsalt]);
+	nonce := ivec[nsalt:];
 
-	# Send AEAD-encrypted alpha**r0 mod p using ChaCha20-Poly1305
+	# Send AEAD-encrypted alpha**r0 mod p
 	plaintext := array of byte alphar0.iptob64();
-	(ciphertext, authtag) := kr->ccpolyencrypt(plaintext, nil, aeadkey, nonce);
+	ciphertext, authtag: array of byte;
+	if(gcm)
+		(ciphertext, authtag) = kr->aesgcmencrypt(kr->aesgcmsetup(aeadkey, nonce), plaintext, nil);
+	else
+		(ciphertext, authtag) = kr->ccpolyencrypt(plaintext, nil, aeadkey, nonce);
 	if(kr->putbytearray(c.dfd, ciphertext, len ciphertext) < 0)
 		return sys->sprint("can't send encrypted (alpha**r0 mod p): %r");
 	if(kr->putbytearray(c.dfd, authtag, len authtag) < 0)
@@ -139,13 +143,13 @@ dologin(c: ref Sys->Connection): string
 	# compute alpha**(r0*r1) mod p
 	alphar0r1 := alphar1.expmod(r0, info.p);
 
-	# turn on digesting
-	secret := alphar0r1.iptobytes();
-	err = ssl->secret(c, secret, secret);
+	# protect the rest: aes_256_gcm, each way under its own secret
+	(secretin, secretout) := ssl->secrets(alphar0r1.iptobytes(), 0);
+	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
-		return "can't set digest secret: "+err;
-	if(sys->fprint(c.cfd, "alg sha256") < 0)
-		return sys->sprint("can't push alg sha256: %r");
+		return "can't set secrets: "+err;
+	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
+		return sys->sprint("can't push alg aes_256_gcm: %r");
 
 	# send our public key
 	if(kr->putstring(c.dfd, kr->pktostr(kr->sktopk(info.mysk))) < 0)
@@ -168,6 +172,46 @@ dologin(c: ref Sys->Connection): string
 		return sys->sprint("can't send certificate: %r");
 
 	return nil;
+}
+
+# The AEAD key: HKDF-SHA-256 for ChaCha20-Poly1305, HKDF-SHA-384 for
+# AES-256-GCM, 32 bytes either way; login.b's loginkey, the client's.
+loginkey(gcm: int, ikm, salt: array of byte): array of byte
+{
+	info := "infernode login aead";
+	dlen := Keyring->SHA256dlen;
+	if(gcm){
+		info = "infernode login aes-256-gcm";
+		dlen = Keyring->SHA384dlen;
+	}
+	prk := array[dlen] of byte;
+	t := array[dlen] of byte;
+	inf := array of byte info;
+	ex := array[len inf + 1] of byte;
+	ex[0:] = inf;
+	ex[len inf] = byte 1;
+	if(gcm){
+		kr->hmac_sha384(ikm, len ikm, salt, prk, nil);
+		kr->hmac_sha384(ex, len ex, prk, t, nil);
+	}else{
+		kr->hmac_sha256(ikm, len ikm, salt, prk, nil);
+		kr->hmac_sha256(ex, len ex, prk, t, nil);
+	}
+	return t[0:32];
+}
+
+# CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.
+cnsamode(): int
+{
+	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	c := buf[0];
+	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
 }
 
 nomod(mod: string)

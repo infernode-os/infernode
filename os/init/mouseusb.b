@@ -141,6 +141,9 @@ Reportlen:	con 3;		# buttons, dx, dy
 Slopfrac:	con 16*65536/800;
 Stepfrac:	con 40*65536/480;
 Maxerr:		con 100;	# failed reads before deciding it is gone
+Maxreportbits:	con 32768;	# bound hostile descriptor arithmetic and report state
+Maxfields:	con 4096;	# across the whole descriptor, not once per main item
+Maxcontacts:	con 16;	# retained or published from any multi-touch frame
 
 #
 # Buttons, and they are NOT in the same order on both sides.
@@ -732,6 +735,7 @@ parsereport(d: array of byte): ref Report
 	nfinger := 0;
 	mode: ref Field;
 	modeid := 0;
+	nfields := 0;
 
 	for(i := 0; i < len d; ){
 		b := int d[i];
@@ -760,6 +764,21 @@ parsereport(d: array of byte): ref Report
 
 		case typ {
 		0 =>	# main
+			# Report Size and Report Count are device-controlled and may
+			# each be four bytes.  Bound them before multiplication or a
+			# malicious descriptor can wrap an offset, or spend the board's
+			# memory and CPU making billions of Field adts.
+			if(tag == 8 || tag == 16rB){
+				cur := off[rid];
+				if(tag == 16rB)
+					cur = foff[rid];
+				if(rsize <= 0 || rsize > Maxreportbits || rcount < 0
+				|| rcount > Maxfields || nfields > Maxfields-rcount
+				|| cur < 0 || cur > Maxreportbits
+				|| rcount > 0 && rsize > (Maxreportbits-cur)/rcount)
+					return nil;
+				nfields += rcount;
+			}
 			# where this item is: its application and its finger
 			app := 0;
 			fing := -1;
@@ -956,7 +975,9 @@ parsereport(d: array of byte): ref Report
 #
 getf(data: array of byte, base: int, f: ref Field): (int, int)
 {
-	if(f == nil || f.size <= 0 || f.size > 32 || base + f.off + f.size > 8*len data)
+	nbits := 8*len data;
+	if(f == nil || f.size <= 0 || f.size > 32 || base < 0 || f.off < 0
+	|| base > nbits || f.off > nbits-base || f.size > nbits-base-f.off)
 		return (0, 0);
 	v := 0;
 	for(k := 0; k < f.size; k++){
@@ -1159,7 +1180,7 @@ revpts(l: list of (int, int)): list of (int, int)
 # given a small one while it is down. seefinger notes each contact of a
 # frame, endframe lifts those the frame did not have.
 #
-Maxfinger:	con 16;
+Maxfinger:	con Maxcontacts;
 fingers: ref Sys->FD;
 fcid := array[Maxfinger] of {* => -1};	# the device's id on each of ours
 fx := array[Maxfinger] of {* => 0};
@@ -1378,6 +1399,14 @@ Frame.add(f: self ref Frame, count: int, c: list of (int, int, int, int)): (int,
 {
 	if(count < 0)
 		return (1, c);
+	# Contact Count is another device-controlled field.  A panel that
+	# claims billions and then supplies a few slots per report must not
+	# grow pend until the shared heap is exhausted.
+	if(count > Maxcontacts){
+		f.pend = nil;
+		f.want = 0;
+		return (1, nil);
+	}
 	if(count > 0){
 		f.pend = nil;
 		f.want = count;
@@ -1552,6 +1581,9 @@ selftestmt(tablet, touch: array of byte): int
 	(done, f) = fr.add(c3, l3);
 	if(!done || len f != 1)
 		e += " [parallel: a count of 1 not one finger]";
+	(done, f) = fr.add(Maxcontacts+1, l3);
+	if(!done || f != nil || fr.want != 0 || fr.pend != nil)
+		e += " [oversized contact count retained state]";
 	e += expect("lifted", onreport(rep(-1, 0, 0, -1, 0, 0, 0), r, g, st, 3100), "");
 	if(e != nil){
 		sys->print("mouseusb: selftest: multi-touch:%s\n", e);
@@ -1662,6 +1694,30 @@ selftest()
 			sys->print("mouseusb: selftest: touchscreen took report 2 for report 1\n");
 			ok = 0;
 		}
+	}
+
+	# Hostile four-byte Report Count/Size values used to wrap the bit
+	# offset or enter an effectively unbounded allocation loop.  These
+	# descriptors have X and Y after the bad item, so accepting them is
+	# observable rather than merely returning "not a pointer".
+	badcount := array[] of {
+		byte 16r05, byte 16r01,
+		byte 16r77, byte 16r01, byte 0, byte 0, byte 0,	# size 1
+		byte 16r97, byte 16rFF, byte 16rFF, byte 16rFF, byte 16r7F,	# count 2^31-1
+		byte 16r81, byte 16r03,
+		byte 16r09, byte 16r30, byte 16r09, byte 16r31,
+		byte 16r75, byte 16r10, byte 16r95, byte 16r02, byte 16r81, byte 16r02,
+	};
+	badsize := array[] of {
+		byte 16r05, byte 16r01,
+		byte 16r77, byte 16rFF, byte 16rFF, byte 16rFF, byte 16r7F,	# size 2^31-1
+		byte 16r95, byte 16r02, byte 16r81, byte 16r03,
+		byte 16r09, byte 16r30, byte 16r09, byte 16r31,
+		byte 16r75, byte 16r10, byte 16r95, byte 16r02, byte 16r81, byte 16r02,
+	};
+	if(parsereport(badcount) != nil || parsereport(badsize) != nil){
+		sys->print("mouseusb: selftest: hostile report size/count accepted\n");
+		ok = 0;
 	}
 	ok &= selftestmt(tablet, touch);
 	if(ok)

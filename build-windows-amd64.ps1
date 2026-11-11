@@ -254,12 +254,12 @@ Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $secSrc = @(
     "des.c", "desmodes.c", "desECB.c", "desCBC.c", "des3ECB.c", "des3CBC.c",
-    "aes.c", "aesctr.c", "aesgcm.c", "blowfish.c",
+    "aes.c", "aesarm64.c", "aesctr.c", "aesgcm.c", "ghasharm64.c", "blowfish.c",
     "chacha.c", "poly1305.c", "ccpoly.c",
     "x25519.c", "ecc.c",
     "idea.c",
-    "hmac.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
-    "sha2.c", "sha256block.c", "sha512block.c",
+    "hmac.c", "hmacdrbg.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
+    "sha2.c", "sha256block.c", "sha256arm64.c", "sha512block.c",
     "sha1pickle.c", "md5pickle.c", "rc4.c",
     "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c", "securezero.c",
     "secp256k1.c", "keccak256.c",
@@ -355,7 +355,7 @@ Push-Location "$ROOT\libdraw"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $drawSrc = @(
-    "alloc.c", "allocimagemix.c", "arith.c", "bezier.c", "border.c",
+    "alloc.c", "allocimagemix.c", "arith.c", "badrect.c", "bezier.c", "border.c",
     "buildfont.c", "bytesperline.c", "chan.c", "cloadimage.c", "computil.c",
     "creadimage.c", "defont.c", "draw.c", "drawrepl.c", "ellipse.c",
     "font.c", "freesubfont.c", "getdefont.c", "getsubfont.c", "init.c",
@@ -581,8 +581,7 @@ $interpSrc = @(
     "alt.c", "conv.c", "crypt.c", "dec.c", "draw.c", "gc.c", "geom.c",
     "heap.c", "heapaudit.c", "ipint.c", "link.c", "load.c", "math.c",
     "raise.c", "readmod.c", "runt.c", "sign.c", "stack.c", "tk.c",
-    "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c",
-    "gpu-stub.c"
+    "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c"
 )
 $interpFlags = @(
     "/DEMU", "/I.", "/I$ROOT\include",

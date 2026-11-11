@@ -44,6 +44,7 @@ env env
 fc fc
 filename filename
 fmt fmt
+md/fmt md
 fortune fortune
 freq freq
 fs fs
@@ -219,12 +220,18 @@ vm vm
 wc wc
 webgrab webgrab
 wm wm
+wm-camera wm-camera
 wm-road wm-road
 wm-shell wm-shell
 shell wm-shell
 wm-osk wm-osk
 osk wm-osk
+post post
 xd xd
 yacc yacc
 zeros zeros
 sam sam
+vision vision
+vision/detect vision
+vision/draw vision
+vision/crop vision

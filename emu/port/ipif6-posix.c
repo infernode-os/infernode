@@ -204,7 +204,11 @@ so_send(int sock, void *va, int len, void *hdr, int hdrlen)
 		}
 		r = sendto(sock, va, len, 0, (struct sockaddr*)sin6, sizeof(*sin6));
 	}
-	osleave();
+	/* what was sent or read is the caller's, interrupted or not */
+	if(r > 0)
+		osleavekeep();
+	else
+		osleave();
 	return r;
 }
 
@@ -317,7 +321,11 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 			memmove(hdr, h, hdrlen);
 		}
 	}
-	osleave();
+	/* what was sent or read is the caller's, interrupted or not */
+	if(r > 0)
+		osleavekeep();
+	else
+		osleave();
 	return r;
 }
 

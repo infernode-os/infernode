@@ -233,7 +233,7 @@ echo ""
 echo "  Test 1: Authenticated, protected mount"
 
 TEST1_CMDS="
-	mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	mount -C aes_256_gcm -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 	cat /mnt/llm/new
 "
 
@@ -262,7 +262,7 @@ echo ""
 echo "  Test 2: Auth + encrypted mount (AES-256/SHA-256)"
 
 TEST2_CMDS="
-	mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	mount -C aes_256_gcm -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 	cat /mnt/llm/new
 "
 
@@ -295,7 +295,7 @@ echo "  Test 3: LLM query through encrypted channel"
 #
 # We use a shell script that captures the session ID and uses it.
 TEST3_CMDS="
-	mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	mount -C aes_256_gcm -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 	id = \`{cat /mnt/llm/new};
 	echo 'Reply with just the word hello' > /mnt/llm/\$id/ask;
 	cat /mnt/llm/\$id/ask
@@ -379,7 +379,7 @@ if [[ "$INTERACTIVE" -eq 1 ]] && [[ "$failed" -eq 0 ]]; then
 
 	# Instance B stays alive while the user interacts (cleanup trap runs on EXIT)
 	"$EMU" -r"$ROOT" /dis/sh.dis -c "
-		mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+		mount -C aes_256_gcm -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 		echo 'Connected to Instance B (authenticated + encrypted)';
 		echo 'LLM service mounted at /mnt/llm';
 		sh

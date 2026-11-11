@@ -17,7 +17,7 @@ implement VeltroMoreToolsTest;
 #   task     — subcommand dispatch (create / status / list / close), errors
 #   wiki     — argument validation, unmounted-/mnt/wikia error path
 #   say      — unsafe voice names rejected before speech9p ctl writes
-#   gpu      — unsafe model names rejected before /mnt/gpu session writes
+#   vision   — bad arguments refused before anything reaches /mnt/vision
 #   fractal  — exact typed args before fractal ctl writes
 #   http/webfetch/payfetch — private URL rejection before network dials
 #
@@ -688,22 +688,30 @@ testSayRejectsUnsafeVoice(t: ref T)
 }
 
 # ============================================================================
-# gpu — GPU service control validation
+# vision — arguments checked before anything reaches /mnt/vision
 # ============================================================================
 
-testGpuRejectsUnsafeModel(t: ref T)
+testVisionRefusesBadArgs(t: ref T)
 {
-	tool := loadtool(t, "gpu");
+	tool := loadtool(t, "vision");
 	if(tool == nil)
 		return;
 
-	r := tool->exec("infer ../ctl /tmp/image.jpg");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
-		"gpu rejects traversal-shaped model name");
+	r := tool->exec("");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "usage"),
+		"vision with no picture says how it is used");
 
-	r = tool->exec("detect yolov8;touch /tmp/owned /tmp/image.jpg");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
-		"gpu rejects shell metacharacters in model name");
+	r = tool->exec("/tmp/a.jpg /tmp/b.jpg");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "one picture"),
+		"vision refuses two pictures at once");
+
+	r = tool->exec("-c");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "usage"),
+		"vision refuses -c with no classes");
+
+	r = tool->exec("/nonexistent/picture.jpg");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "/nonexistent/picture.jpg"),
+		"vision names a picture it cannot read");
 }
 
 # ============================================================================
@@ -899,8 +907,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# say
 	run("SayRejectsUnsafeVoice", testSayRejectsUnsafeVoice);
 
-	# gpu
-	run("GpuRejectsUnsafeModel", testGpuRejectsUnsafeModel);
+	# vision
+	run("VisionRefusesBadArgs", testVisionRefusesBadArgs);
 
 	# fractal
 	run("FractalRejectsUnsafeCtl", testFractalRejectsUnsafeCtl);

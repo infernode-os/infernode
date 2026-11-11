@@ -57,7 +57,7 @@ SRCFILE: con "/tests/tool_schema_test.b";
 TOOLS := array[] of {
 	"browse",   "charon",  "diff",     "edit",     "editor",
 	"exec",     "find",    "fractal",  "gap",      "git",
-	"gpu",      "grep",    "hear",     "http",     "json",
+	"grep",     "hear",     "http",     "json",
 	"keyring",  "launch",  "limbo",    "list",     "man",
 	"memory",   "mount",   "payfetch", "plan",     "present",
 	"read",     "say",     "search",   "shell",
@@ -474,7 +474,8 @@ testToolArgsByName(t: ref T)
 	t.assertseq(a("grep", "{\"path\":\"/lib\",\"pattern\":\"x\"}"), "x /lib", "grep: no flags");
 	t.assertseq(a("say", "{\"text\":\"hello there\",\"voice\":\"amy\"}"), "-v amy hello there", "say: voice is a flag");
 	t.assertseq(a("say", "{\"text\":\"hello\"}"), "hello", "say: text alone");
-	t.assertseq(a("vision", "{\"imagepath\":\"/i.png\",\"backend\":\"local\"}"), "--local /i.png", "vision: backend is a flag");
+	t.assertseq(a("vision", "{\"thresh\":\"0.5\",\"imagepath\":\"/i.png\",\"classes\":\"person,car\"}"), "-c person,car -t 0.5 /i.png", "vision: classes and thresh are flags");
+	t.assertseq(a("vision", "{\"imagepath\":\"/i.png\"}"), "/i.png", "vision: the picture alone");
 	t.assertseq(a("write", "{\"content\":\"x\",\"path\":\"/lib/f\"}"), "-r /lib/f x\n", "write: the path first, whatever order sent");
 	t.assertseq(a("task", "{\"command\":\"status\",\"args\":\"1\"}"), "status 1", "command and args as before");
 	t.assertseq(a("limbo", "{\"path\":\"/tmp/veltro/scratch/f.b\",\"description\":\"a program\"}"), "-o /tmp/veltro/scratch/f.b a program", "limbo: a path to save to");

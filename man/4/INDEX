@@ -4,6 +4,7 @@ acme acme
 archfs archfs
 bt9p bt9p
 btmock bt9p
+camsrv camsrv
 countfs countfs
 cpu cpu
 dbfs dbfs
@@ -14,12 +15,14 @@ export export
 factotum factotum
 feedkey factotum
 ftpfs ftpfs
+gefs gefs
 gpsfs gpsfs
 9export import
 import import
 keyfs keyfs
 keysrv keysrv
 kfs kfs
+layerfs layerfs
 lockfs lockfs
 logfile logfile
 mail9p mail9p
@@ -34,3 +37,4 @@ scenefs scenefs
 sdrfs sdrfs
 tarfs tarfs
 veltrosrv veltrosrv
+visionfs visionfs

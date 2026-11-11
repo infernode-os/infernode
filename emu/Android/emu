@@ -50,7 +50,6 @@ mod
 	math
 	srv	srv
 	keyring
-#	gpu
 #	loader
 #	freetype
 

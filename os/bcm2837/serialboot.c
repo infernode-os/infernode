@@ -35,7 +35,9 @@ void jumpflush(void);
 #ifndef PHYSIO
 #define PHYSIO		0x3F000000UL
 #endif
+#ifndef UARTREGS
 #define UARTREGS	(PHYSIO + 0x201000)
+#endif
 #define SYSTIMER	(PHYSIO + 0x003000)	/* free-running, 1MHz, no init */
 #define GPIOREGS	(PHYSIO + 0x200000)
 
@@ -92,6 +94,22 @@ enum {
 	Maxsize	= 16*1024*1024,
 };
 
+/*
+ * A Pi 5 (-DBCM2712; os/bcm2712/README.md) is different in kind. UARTREGS
+ * is RP1's UART0, behind PCIe, which config.txt's enable_rp1_uart has the
+ * firmware bring up at 115200: its pins and clock are not this file's to
+ * touch. The time comes from the generic counter. And before offering to
+ * load anything it says what it found (os/bcm2712/loader/probe.c).
+ */
+#ifdef BCM2712
+#define uartinit()
+void	probeinit(void);
+void	probe(u64int);
+void	wdstop(void);
+void	idle(int);
+#else
+#define idle(active)
+#define wdstop()
 static void
 uartinit(void)
 {
@@ -120,6 +138,7 @@ uartinit(void)
 	REG(UARTREGS + Imsc) = 0;
 	REG(UARTREGS + Cr) = Uarten | Txe | Rxe;
 }
+#endif
 
 static void
 putc(int c)
@@ -133,15 +152,28 @@ static int
 getc(void)
 {
 	while(REG(UARTREGS + Fr) & Rxfe)
-		;
+		idle(0);
+	idle(1);
 	return REG(UARTREGS + Dr) & 0xFF;
 }
 
+#ifdef BCM2712
+u32int
+now(void)
+{
+	u64int t, f;
+
+	__asm__ volatile("mrs %0, cntpct_el0" : "=r"(t));
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+	return (u32int)(t / (f / 1000000));
+}
+#else
 static u32int
 now(void)
 {
 	return REG(SYSTIMER + Clo);
 }
+#endif
 
 /*
  * A character, or -1 if none arrived within us microseconds.
@@ -155,10 +187,14 @@ getctmo(u32int us)
 	while((REG(UARTREGS + Fr) & Rxfe) != 0)
 		if(now() - start > us)
 			return -1;
+	idle(1);
 	return REG(UARTREGS + Dr) & 0xFF;
 }
 
-static void
+#ifndef BCM2712
+static
+#endif
+void
 puts(char *s)
 {
 	while(*s)
@@ -171,13 +207,21 @@ puts(char *s)
  * to asking again is a board that needs a power cycle to retry.
  */
 unsigned long
-bmain(void)
+bmain(u64int dtb)
 {
 	u32int size, i;
 	int c;
 	uchar *p;
 
+#ifdef BCM2712
+	probeinit();
+#endif
 	uartinit();
+#ifdef BCM2712
+	probe(dtb);
+#else
+	(void)dtb;
+#endif
 	puts("\r\nserialboot: ready, waiting for a kernel\r\n");
 
 	for(;;){
@@ -229,6 +273,7 @@ bmain(void)
 			continue;
 
 		puts("\r\nserialboot: GO\r\n");
+		wdstop();
 		jumpflush();
 		return Kernel;
 	}

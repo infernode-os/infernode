@@ -11,8 +11,9 @@ ndb/cs
 auth/factotum -s factotum.^${pid} >[2] /dev/null
 echo 'key proto=pass service=brave user=apikey !password=DUMMYBRAVEKEY01' > /mnt/factotum/ctl >[2] /dev/null
 failed=()
-# websearch or vision granted: the key VISIBLE (keylen=15); with no
-# credentialed tool, or with exec beside it: HIDDEN
+# websearch granted: the key VISIBLE (keylen=15); with vision (no
+# credential: it reaches only /mnt/vision), with no credentialed tool,
+# or with exec beside websearch: HIDDEN
 for mode in with vision without withexec {
 	if {! /tests/factotum_grant_test.dis $mode} {failed=($failed $mode)}
 }

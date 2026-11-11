@@ -8,6 +8,9 @@ implement Vid9p;
 # filesystem:
 #
 #   /mnt/video/0/ctl      write "open <file.y4m>"  load a static .y4m file
+#                         write "replay <file.y4m>" serve it as a live
+#                               feed, paced at its rate and looped (no
+#                               host decoder: runs on bare metal too)
 #                         write "play <cmd> [arg..]" spawn a host decoder
 #                               (via os) and stream its y4m stdout live
 #                         write "play" / "pause" / "stop" /
@@ -24,6 +27,8 @@ implement Vid9p;
 #   /mnt/video/0/status   read  one line of key=value state: geometry,
 #                               frames=/first= (retained range), eof=,
 #                               state=/pos=/t=/follow= (playhead)
+#   /mnt/video/0/layer/   empty as served: what is drawn over the frames is
+#                         bound here, a file a layer (#1095, layers(2))
 #
 # TRANSPORT: the playhead (state=/pos=) lives in this server and is paced
 # here at the stream's fps, so every consumer renders the same frame and
@@ -49,6 +54,7 @@ implement Vid9p;
 # Usage (in the Inferno shell):
 #   mount {vid9p clip.y4m}                        /mnt/video   # static
 #   mount {vid9p -c vdec cam.mp4 --y4m -}         /mnt/video   # live
+#   mount {vid9p -w 10 -r clip.y4m}               /mnt/video   # a file, live
 #   mount {vid9p -w 120 -c vdec rtsp://cam --y4m -} /mnt/video # 2 min DVR
 #
 
@@ -72,7 +78,7 @@ Command: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus: con iota;
+Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus, Qlayer: con iota;
 
 tc: chan of ref Tmsg;
 srv: ref Styxserver;
@@ -140,6 +146,10 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers->init(styx);
 	nametree->init();
 
+	# A group of its own: when the 9P channel ends, the ticker, a feeder
+	# and a host decoder go with the server (killgrp, in serve).
+	sys->pctl(Sys->NEWPGRP, nil);
+
 	i420 = array[0] of byte;
 	# Allocated up front so the serve loop's alt never selects on a nil
 	# channel (a nil channel in alt faults). In static mode nothing is
@@ -148,8 +158,9 @@ init(nil: ref Draw->Context, args: list of string)
 	eofc = chan of int;
 	geoc = chan of (int, int, int);
 
-	# args: [-w secs] then "-c <cmd> [arg...]" for a live decoder, else
-	# an optional static .y4m file.  -w bounds a live feed's retention
+	# args: [-w secs] then "-c <cmd> [arg...]" for a live decoder,
+	# "-r <file.y4m>" for a file replayed as a live feed, else an
+	# optional static .y4m file.  -w bounds a live feed's retention
 	# (DVR) window; 0 = unlimited.
 	args = tl args;
 	if(args != nil && hd args == "-w") {
@@ -165,6 +176,11 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->fprint(stderr, "vid9p: -c needs a command\n");
 		else
 			startstream(cmd);
+	} else if(args != nil && hd args == "-r") {
+		if(tl args == nil)
+			sys->fprint(stderr, "vid9p: -r needs a file\n");
+		else if((e := startreplay(hd tl args)) != nil)
+			sys->fprint(stderr, "vid9p: %s\n", e);
 	} else if(args != nil) {
 		e := loadvideo(hd args);
 		if(e != nil)
@@ -178,6 +194,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("fmt",    8r444, Qfmt));
 	tree.create(big Qstream, dir("frame",  8r444, Qframe));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
+	# empty as served: where a feed's layers are bound (#1095)
+	tree.create(big Qstream, dir("layer",  Sys->DMDIR|8r555, Qlayer));
 
 	(tc, srv) = Styxserver.new(sys->fildes(0), Navigator.new(treeop), big Qroot);
 	tickc = chan of int;
@@ -232,15 +250,30 @@ advance()
 		pos = fbase;	# the retention window slid past the playhead
 }
 
+shutdown(tree: ref Tree)
+{
+	tree.quit();
+	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
 serve(tree: ref Tree)
 {
 	for(;;) alt {
 	tmsg := <-tc =>
-		if(tmsg == nil)
-			break;
+		# The channel ended (the client hung up, or the mount went):
+		# "break" here left only the alt, so vid9p and its ticker went
+		# on for ever, and under listen -A, which runs a connection's
+		# command in the listener, no second client was ever served.
+		if(tmsg == nil){
+			shutdown(tree);
+			return;
+		}
 		pick tm := tmsg {
 		Readerror =>
-			break;
+			shutdown(tree);
+			return;
 		Open =>
 			srv.open(tm);
 		Read =>
@@ -249,7 +282,7 @@ serve(tree: ref Tree)
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
 			} else {
 				case int c.path {
-				Qroot or Qstream =>
+				Qroot or Qstream or Qlayer =>
 					srv.read(tm);
 				Qfmt =>
 					srv.reply(styxservers->readstr(tm, fmtstr()));
@@ -369,7 +402,7 @@ replyframe(tm: ref Tmsg.Read): int
 	base := big fbase * big framesize;
 	off := tm.offset;
 	if(off < base) {
-		srv.reply(ref Rmsg.Error(tm.tag, "frame expired (retention window)"));
+		srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
 		return 1;
 	}
 	if(off >= base + big used) {
@@ -447,7 +480,7 @@ statusstr(): string
 
 ctlhelp(): string
 {
-	return "open <file.y4m>\nplay [<cmd> arg...]\npause\nstop\nseek <ms>|+<ms>|-<ms>\nlive\n";
+	return "open <file.y4m>\nreplay <file.y4m>\nplay [<cmd> arg...]\npause\nstop\nseek <ms>|+<ms>|-<ms>\nlive\n";
 }
 
 doctl(s: string)
@@ -463,6 +496,12 @@ doctl(s: string)
 				sys->fprint(stderr, "vid9p: open: %s\n", e);
 			else
 				wakeparked();	# static reload satisfies waiters
+		}
+	"replay" =>
+		if(tl toks != nil){
+			e := startreplay(hd tl toks);
+			if(e != nil)
+				sys->fprint(stderr, "vid9p: replay: %s\n", e);
 		}
 	"play" =>
 		if(tl toks != nil)
@@ -533,6 +572,90 @@ startstream(cmd: list of string)
 		sys->fprint(stderr, "vid9p: cannot start decoder\n");
 		return;
 	}
+	streamfrom(fd);
+}
+
+# Replay a .y4m file as a live feed: its frames at its rate, from the
+# first again after the last, numbered on without end.  A camera's
+# stand-in where there is no camera and no host decoder (a bare-metal
+# board): what reads it sees a live feed, as from camsrv or a decoder.
+startreplay(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("open %s: %r", path);
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		return sys->sprint("pipe: %r");
+	spawn pacer(fd, fds[1]);
+	fds[1] = nil;
+	streamfrom(fds[0]);
+	if(width <= 0)
+		return sys->sprint("%s: not a YUV4MPEG2 stream", path);
+	return nil;
+}
+
+# Copy a y4m file into wfd as one endless stream: the header once, then
+# its frames, each when it is due at the header's rate, the first again
+# after the last.  Ends when the reader goes or the file has no frame.
+pacer(fd, wfd: ref Sys->FD)
+{
+	(hdr, buf) := readline(fd, array[0] of byte);
+	if(hdr == nil)
+		return;
+	(w, h, f) := parsehdr(hdr);
+	if(w <= 0 || h <= 0)
+		return;
+	if(f <= 0 || f > 120)
+		f = 25;
+	fsz := w*h + 2*(w/2)*(h/2);
+	start := big len hdr + big 1;	# the first frame's offset
+	if(writeall(wfd, cat(hdr, array[] of {byte '\n'})) < 0)
+		return;
+	mark := array of byte "FRAME\n";
+	t0 := sys->millisec();
+	k := 0;
+	for(;;){
+		(line, r1) := readline(fd, buf);
+		payload: array of byte;
+		if(line != nil)
+			(payload, buf) = readn(fd, r1, fsz);
+		if(payload == nil){
+			# the end: the first frame again
+			if(k == 0)
+				return;
+			sys->seek(fd, start, Sys->SEEKSTART);
+			buf = array[0] of byte;
+			(line, r1) = readline(fd, buf);
+			if(line == nil)
+				return;
+			(payload, buf) = readn(fd, r1, fsz);
+			if(payload == nil)
+				return;
+		}
+		due := t0 + k*1000/f;
+		if((d := due - sys->millisec()) > 0)
+			sys->sleep(d);
+		if(writeall(wfd, mark) < 0 || writeall(wfd, payload) < 0)
+			return;
+		k++;
+	}
+}
+
+writeall(fd: ref Sys->FD, b: array of byte): int
+{
+	for(o := 0; o < len b; ){
+		n := sys->write(fd, b[o:], len b - o);
+		if(n <= 0)
+			return -1;
+		o += n;
+	}
+	return len b;
+}
+
+# Serve the y4m stream read from fd as a live feed.
+streamfrom(fd: ref Sys->FD)
+{
 	# reset served state for the new source
 	i420 = array[0] of byte;
 	ring = nil;

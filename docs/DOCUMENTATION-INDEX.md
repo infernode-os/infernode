@@ -48,7 +48,6 @@
 | [draw-geometry.md](draw-geometry.md) | Anti-aliased geometry in the draw device |
 | [scene-design.md](scene-design.md) | Scene: a general 2-D situation display (`lib/scene`, `scenefs`, `wm/scene`) |
 | [H264-9P-BRIDGE.md](H264-9P-BRIDGE.md) | H.264-over-9P video bridge (`vid9p`) |
-| [ML-VISION-9P.md](ML-VISION-9P.md) | Design exploration: ML vision inference as composable 9P services |
 | [INFR-119-design.md](INFR-119-design.md) | Design proposal: split the mobile zones into wm windows and a generic pager |
 
 ## For Developers
@@ -69,6 +68,7 @@
 | [NODE-INTEROP-TESTING.md](NODE-INTEROP-TESTING.md) | Node-to-node interoperability testing: cert auth and post-quantum transport |
 | [SECURITY-REVIEW-LEDGER.md](SECURITY-REVIEW-LEDGER.md) | Pinned index of completed, blocked, and queued security reviews |
 | [PR-1015-SECURITY-REVIEW.md](PR-1015-SECURITY-REVIEW.md) | Security disposition and required changes for the styxbrick commander, sdg, TLS pinning, and D2 |
+| [PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md](PR-1015-STYXBRICK-REQUIREMENTS-REVIEW.md) | Cross-repository trust, provisioning, timing, persistence, and credential-boundary requirements for PR #1015 |
 | [CAMERA-SECURITY-REVIEW.md](CAMERA-SECURITY-REVIEW.md) | Security review and pre-real-sensor gates for the native `#V` camera interface |
 | [FUZZ-HARDENING-SECURITY-REVIEW.md](FUZZ-HARDENING-SECURITY-REVIEW.md) | Source-pinned review of PR #1069's fuzz-derived kernel, JIT, OOM, 9P, and virtio hardening |
 | [POST-REVIEW-DELTA-SECURITY-REVIEW.md](POST-REVIEW-DELTA-SECURITY-REVIEW.md) | Pinned review of the post-report Veltro, keyring, Claude-gate, mobile, and formal-verification delta |

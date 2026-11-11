@@ -127,6 +127,7 @@ struct RWlock
 	QLock	x;			/* Mutual exclusion lock */
 	QLock	k;			/* Lock for waiting writers */
 	int	readers;		/* Count of readers in lock */
+	int	writers;		/* writers holding or waiting, under l */
 };
 
 struct Talarm
@@ -320,6 +321,7 @@ struct Mnt
 	Chan	*c;		/* Channel to file service */
 	Proc	*rip;		/* Reader in progress */
 	Mntrpc	*queue;		/* Queue of pending requests on this channel */
+	Mntrpc	*held;		/* answered, their tags named by flushes still out (mntfree) */
 	ulong	id;		/* Multiplexer id for channel check */
 	Mnt	*list;		/* Free list */
 	int	flags;		/* cache */

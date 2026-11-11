@@ -150,7 +150,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		}
 	}
 	if (doauth && algs == nil)
-		algs = "aes_256_cbc" :: "sha256" :: nil;
+		algs = "aes_256_gcm" :: nil;
 	if (doauth && algs == nil) {
 		sys->fprint(stderr(), "listen: authentication requested, but no SSL algorithms are available\n");
 		raise "fail:no auth algorithms";
@@ -343,16 +343,23 @@ listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: str
 authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
 		ctxt: ref Context, cmd: list of ref Sh->Listnode, host: string)
 {
+	# A table of its own with only the connection's files in it: the
+	# dups onto 0 and 1 below went into the table it shared with the
+	# listener, which then held the connection open until the next one
+	# replaced it; and a copy of the listener's (FORKFD) held its
+	# announcement's ctl and listen files, so a connection that outlived
+	# its listen kept the address, and a listen started again on it was
+	# refused ("address in use") until that connection ended.
+	keep := 0 :: 1 :: 2 :: c.dfd.fd :: nil;
+	if(c.cfd != nil)
+		keep = c.cfd.fd :: keep;
+	sys->pctl(Sys->NEWFD, keep);
 	# The copy is made here, in the connection's own process: a
 	# Context's wait file is that of the process that copies it.  Made
 	# in the listener, every connection's shell waited for its command
 	# on the listener's wait file, never saw it end, and kept the
 	# connection open, so a cpu(1) session never ended (#732).
 	ctxt = ctxt.copy(1);
-	# Its own fd table, likewise: the dups onto 0 and 1 below went into
-	# the table it shared with the listener, which then held the
-	# connection open until the next one replaced it.
-	sys->pctl(Sys->FORKFD, nil);
 	err: string;
 	cancel := chan[1] of int;
 	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout, host);

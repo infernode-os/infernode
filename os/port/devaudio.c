@@ -11,6 +11,7 @@ Dirtab audiotab[] =
 	".",		{Qdir, 0, QTDIR},	0,	0555,
 	"audio",	{Qaudio},	0,	0666,
 	"audioctl",	{Qaudioctl},	0,	0666,
+	"audiostat",	{Qaudiostat},	0,	0444,
 };
 
 static void
@@ -48,6 +49,7 @@ audioopen(Chan *c, int omode)
 	switch(c->qid.path) {
 	case Qdir:
 	case Qaudioctl:
+	case Qaudiostat:
 		break;
 	case Qaudio:
 		audio_file_open(c, c->mode);
@@ -68,6 +70,7 @@ audioclose(Chan *c)
 	switch(c->qid.path) {
 	case Qdir:
 	case Qaudioctl:
+	case Qaudiostat:
 		break;
 	case Qaudio:
 		audio_file_close(c);
@@ -97,6 +100,22 @@ audioread(Chan *c, void *va, long count, vlong offset)
 			nexterror();
 		}
 		n = ctlsummary(buf, READSTR, getaudiodev());
+		count = readstr(offset, va, n, buf);
+		poperror();
+		free(buf);
+		return count;
+	case Qaudiostat:
+		/*
+		 * What the device has done, as against what it is set to
+		 * (audioctl): the board's half says, one line of name and
+		 * value pairs. 9front calls its file this too.
+		 */
+		buf = smalloc(READSTR);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
+		n = audiostatus(buf, buf+READSTR) - buf;
 		count = readstr(offset, va, n, buf);
 		poperror();
 		free(buf);

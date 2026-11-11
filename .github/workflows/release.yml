@@ -1413,7 +1413,7 @@ jobs:
         include:
           - arch: arm64
             label: ARM64
-            runner: macos-15
+            runner: macos-14   # macos-15 went unacquired six times for v0.10.0 (GitHub arm64 capacity); headless needs no macOS 15
             homebrew: /opt/homebrew
           # Intel Macs (#786), for as long as GitHub has an Intel image.
           - arch: amd64
@@ -1990,13 +1990,13 @@ jobs:
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         mkdir -p "$RUNNER_TEMP/bm"
         set +e
-        BAREMETAL_BUILD_ONLY=1 BAREMETAL_PLATFORMS="bcm2837 bcm2711" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
+        BAREMETAL_BUILD_ONLY=1 BAREMETAL_PLATFORMS="bcm2837 bcm2711 bcm2712" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
           ./tests/host/baremetal_test.sh 2>&1 | tee "$RUNNER_TEMP/bm/harness.log"
         st=${PIPESTATUS[0]}
         set -e
         [ "$st" = 0 ] || { tail -20 "$RUNNER_TEMP/bm/cc.log"; echo "::error::the harness exited $st"; exit 1; }
         grep -q 'Skipped: 0' "$RUNNER_TEMP/bm/harness.log" || { echo "::error::the harness skipped something"; exit 1; }
-        for k in bcm2837 bcm2711; do
+        for k in bcm2837 bcm2711 bcm2712; do
           test -s "$RUNNER_TEMP/bm/$k-kernel.img" || { echo "::error::no $k kernel"; exit 1; }
         done
 
@@ -2010,9 +2010,9 @@ jobs:
 
         # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
         # ring-fence rule. Here the stage is what the images are made of.
-        if find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+        if find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card os/bcm2712/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
           echo "FATAL: testing-only harness files found in what a card carries:" >&2
-          find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          find dis lib fonts icons os/bcm/card os/bcm2837/card os/bcm2711/card os/bcm2712/card \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
           exit 1
         fi
 
@@ -2022,7 +2022,7 @@ jobs:
         mkdir -p "$RUNNER_TEMP/bootfw"
         sh tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt "$RUNNER_TEMP/bootfw"
 
-        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64; do
+        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64 rpi5:bcm2712:none; do
           b=${board%%:*} rest=${board#*:} soc=${rest%%:*} qemu=${rest#*:}
           img="infernode-$VERSION-$b.img"
           sh tools/mkpiimage.sh "$b" "$RUNNER_TEMP/bm/$soc-kernel.img" "$img"
@@ -2034,6 +2034,8 @@ jobs:
           # login screen. Either failing stops the release here; neither
           # may skip.
           python3 tools/piromcheck.py --firmware "$RUNNER_TEMP/bootfw/firmware" "$b" "$img"
+          # no emulator models a Pi 5: it has only the check above
+          [ "$qemu" = none ] && { xz -T0 -9 "$img"; continue; }
           set +e
           QEMU="$qemu" sh tests/host/piimage_boot_test.sh "$b" "$img" "$RUNNER_TEMP/bm/$soc-kernel.img"
           st=$?
@@ -2093,13 +2095,33 @@ jobs:
     - name: Generate SBOM (SPDX)
       # Named infernode-*-sbom.spdx.json so the checksum, cosign-signing and
       # release-upload steps below cover it automatically (no extra wiring).
-      # Same pinned action proven CI-verifiable in sbom.yml.
+      # Same pinned action proven CI-verifiable in sbom.yml, and the same
+      # second try: its syft download fails now and then with a 500 or
+      # 504 from GitHub's release CDN.
+      id: sbom1
+      continue-on-error: true
       uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       with:
         path: .
         format: spdx-json
         output-file: artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json
         upload-artifact: false
+
+    - name: Wait before trying the SBOM again
+      if: steps.sbom1.outcome == 'failure'
+      run: sleep 60
+
+    - name: Generate SBOM (SPDX), second try
+      if: steps.sbom1.outcome == 'failure'
+      uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      with:
+        path: .
+        format: spdx-json
+        output-file: artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json
+        upload-artifact: false
+
+    - name: Check the SBOM was made
+      run: test -s "artifacts/infernode-${{ steps.version.outputs.version }}-sbom.spdx.json"
 
     - name: Generate checksums
       run: |
@@ -2108,7 +2130,7 @@ jobs:
         cat SHA256SUMS.txt
 
     - name: Install cosign
-      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
     - name: Sign release artifacts
       run: |
@@ -2147,7 +2169,7 @@ jobs:
         subject-path: artifacts/xenith-*.tar.gz
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+      uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
       with:
         tag_name: ${{ github.ref_name }}
         name: InferNode ${{ steps.version.outputs.version }}
@@ -2177,6 +2199,7 @@ jobs:
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
           | Raspberry Pi 3B+ | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi3bplus.img.xz` |
           | Raspberry Pi 4B | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi4b.img.xz` |
+          | Raspberry Pi 5 | ARM64, native (no host OS); preview, not yet booted from a card | `infernode-${{ steps.version.outputs.version }}-rpi5.img.xz` |
 
           **Xenith**, the text environment on its own, as an app:
 
@@ -2202,7 +2225,7 @@ jobs:
 
           **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
 
-          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+ and 4B images are not interchangeable. For Wi-Fi, put a `wifi` file on the card (`essid` and `password` lines); for Bluetooth, a `bt` file: see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md). The images carry Broadcom's boot firmware and Cypress's Wi-Fi firmware and Bluetooth patch, each with its licence, for use on the Raspberry Pi they are for.
+          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+, 4B and 5 images are not interchangeable. The Pi 5 image is a preview: it is not in Raspberry Pi Imager's list, and has not yet been booted from a card. For Wi-Fi, put a `wifi` file on the card (`essid` and `password` lines); for Bluetooth, a `bt` file: see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md). The images carry Broadcom's boot firmware and Cypress's Wi-Fi firmware and Bluetooth patch, each with its licence, for use on the Raspberry Pi they are for.
 
           **Xenith (Linux):** Extract, then `./xenith [file ...]`. `./setup-desktop.sh` adds it to the app menu (files open with it) and puts `xenith` on your PATH. It shares `~/.infernode` with InferNode.
 

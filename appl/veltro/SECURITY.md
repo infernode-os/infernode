@@ -760,7 +760,7 @@ be explicit:
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
-`/mnt/gpu` only from `gpu` or local `vision`, `/mnt/wikia` only from `wiki`,
+`/mnt/vision` only from `vision`, `/mnt/wikia` only from `wiki`,
 `/mnt/video` only from video presentation tools, and `/phone` only from `sms`,
 `dial`, or `contacts`.
 Legacy authority roots such as `/mnt/keys`, `/mnt/keysrv`, and

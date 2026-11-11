@@ -130,8 +130,9 @@ And, called from devices rather than from boot:
 
 `genrandom`, `prng` and `prngtry` — what libsec's key generators,
 `#c/random` and `#c/notquiterandom` call — are `os/port/random.c`'s, not
-the board's: a ChaCha20 generator keyed from `hwrandom` alone and rekeyed
-from it every second or megabyte, **never from anything else**. The board
+the board's: HMAC_DRBG with SHA-512 (SP 800-90A) seeded from `hwrandom`
+alone and reseeded from it every second or megabyte, **never from anything
+else**; the bytes pass SP 800-90B's health tests first. The board
 supplies only `hwrandom`. With no generator every reader waits, saying so
 every five seconds (`prngtry` answers -1), unless the command line holds
 the word `insecurerandom`, which keys it from a labelled counter for an

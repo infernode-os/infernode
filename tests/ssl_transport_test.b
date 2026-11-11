@@ -1,13 +1,14 @@
 implement SSLTransportTest;
 
 #
-# SSL transport tests — verifies AES-CBC and SHA-256 in the kernel SSL device (#D)
+# SSL transport tests: the kernel SSL device (#D) and what it offers
 #
 # Tests:
-# - New algorithms advertised in encalgs/hashalgs
-# - AES-256-CBC + SHA-256 data round-trip through pipe
-# - AES-128-CBC + SHA-256 data round-trip through pipe
-# - AES-256-CBC encryption-only round-trip (no digest)
+# - encalgs is aes_256_gcm alone, hashalgs hmac_sha384 alone
+# - AES-256-GCM data round-trip through a pipe
+# - HMAC-SHA-384 (the data clear) round-trip through a pipe
+# - the same secret both ways, a short secret, one way's secret alone,
+#   two algorithms at once and the old algorithms refused
 #
 
 include "sys.m";
@@ -101,39 +102,29 @@ testAlgorithmAdvertised(t: ref T)
 		return;
 	}
 
-	# Check for aes_128_cbc and aes_256_cbc
-	found128 := 0;
-	found256 := 0;
-	foundweak := 0;
-	for(el := encalgs; el != nil; el = tl el) {
-		if(hd el == "aes_128_cbc")
-			found128 = 1;
-		if(hd el == "aes_256_cbc")
-			found256 = 1;
-		if(hd el == "ideacbc" || hd el == "ideaecb" || hd el == "rc4")
-			foundweak = 1;
-	}
-	t.assert(found128, "aes_128_cbc in encalgs");
-	t.assert(found256, "aes_256_cbc in encalgs");
-	t.assert(!foundweak, "weak ciphers absent from encalgs");
+	t.assertseq(join(encalgs), "aes_256_gcm", "encalgs is aes_256_gcm alone");
+	t.assertseq(join(hashalgs), "hmac_sha384", "hashalgs is hmac_sha384 alone");
+}
 
-	# Check for sha256
-	foundsha := 0;
-	foundweakhash := 0;
-	for(hl := hashalgs; hl != nil; hl = tl hl) {
-		if(hd hl == "sha256")
-			foundsha = 1;
-		if(hd hl == "sha1" || hd hl == "sha" || hd hl == "md5" || hd hl == "md4")
-			foundweakhash = 1;
+join(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l){
+		if(s != nil)
+			s += " ";
+		s += hd l;
 	}
-	t.assert(foundsha, "sha256 in hashalgs");
-	t.assert(!foundweakhash, "weak hashes absent from hashalgs");
+	return s;
 }
 
 # Set up two SSL connections over a pipe, configure algorithm, return (side_a, side_b)
-# Secret must be long enough for the chosen cipher (48 bytes covers AES-256 + 16-byte IV)
+# A sends under secret and B under its reverse: each way its own
 sslpair(t: ref T, alg: string, secret: array of byte): (ref Sys->Connection, ref Sys->Connection)
 {
+	other := array[len secret] of byte;
+	for(i := 0; i < len secret; i++)
+		other[i] = secret[len secret - 1 - i] ^ byte 16r5a;
+
 	p := array[2] of ref Sys->FD;
 	if(sys->pipe(p) < 0) {
 		t.fatal(sys->sprint("pipe failed: %r"));
@@ -152,14 +143,13 @@ sslpair(t: ref T, alg: string, secret: array of byte): (ref Sys->Connection, ref
 		return (nil, nil);
 	}
 
-	# Set secrets on both sides (symmetric: same key for in and out)
-	err := ssl->secret(ca, secret, secret);
+	err := ssl->secret(ca, other, secret);
 	if(err != nil) {
 		t.fatal("secret side A: " + err);
 		return (nil, nil);
 	}
 
-	err = ssl->secret(cb, secret, secret);
+	err = ssl->secret(cb, secret, other);
 	if(err != nil) {
 		t.fatal("secret side B: " + err);
 		return (nil, nil);
@@ -231,59 +221,82 @@ reader(dfd: ref Sys->FD, expect: int, result: chan of (array of byte, string))
 	result <-= (buf[0:total], nil);
 }
 
-# 48-byte secret: 32-byte AES-256 key + 16-byte IV
-mksecret256(): array of byte
+mksecret(n: int): array of byte
 {
-	s := array[48] of byte;
+	s := array[n] of byte;
 	for(i := 0; i < len s; i++)
 		s[i] = byte ((i * 37 + 7) % 256);
 	return s;
 }
 
-# 32-byte secret: 16-byte AES-128 key + 16-byte IV
-mksecret128(): array of byte
-{
-	s := array[32] of byte;
-	for(i := 0; i < len s; i++)
-		s[i] = byte ((i * 53 + 13) % 256);
-	return s;
-}
-
 testdata(): array of byte
 {
-	# 200 bytes of varied data — not a multiple of 16 to exercise padding
+	# 200 bytes of varied data, not a multiple of 16
 	s := array[200] of byte;
 	for(i := 0; i < len s; i++)
 		s[i] = byte ((i * 71 + 3) % 256);
 	return s;
 }
 
-# AES-256-CBC + SHA-256 round-trip
-testAES256SHA256(t: ref T)
+testAESGCM(t: ref T)
 {
-	roundtrip(t, "aes_256_cbc sha256", mksecret256(), testdata());
+	roundtrip(t, "aes_256_gcm", mksecret(48), testdata());
+	roundtrip(t, "aes_256_gcm", mksecret(32), testdata());
 }
 
-# AES-128-CBC + SHA-256 round-trip
-testAES128SHA256(t: ref T)
+testHMACSHA384(t: ref T)
 {
-	roundtrip(t, "aes_128_cbc sha256", mksecret128(), testdata());
+	roundtrip(t, "hmac_sha384", mksecret(48), testdata());
 }
 
-# AES-256-CBC encryption only (no digest)
-testAES256Only(t: ref T)
+# the alg named on a connection with these secrets: the error, or nil
+pushalg(alg: string, secretin, secretout: array of byte): string
 {
-	roundtrip(t, "aes_256_cbc", mksecret256(), testdata());
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return sys->sprint("pipe: %r");
+	(err, c) := ssl->connect(p[0]);
+	if(err != nil)
+		return "connect: " + err;
+	if(ssl->secret(c, secretin, secretout) != nil)
+		return "secret";
+	if(sys->fprint(c.cfd, "alg %s", alg) < 0)
+		return sys->sprint("%r");
+	return nil;
 }
 
-# SHA-256 digest only (no encryption)
-testSHA256Only(t: ref T)
+refused(t: ref T, what, alg: string, secretin, secretout: array of byte, why: string)
 {
-	# Secret only needs to be non-empty for digest
-	secret := array[20] of byte;
-	for(i := 0; i < len secret; i++)
-		secret[i] = byte (i + 1);
-	roundtrip(t, "sha256", secret, testdata());
+	err := pushalg(alg, secretin, secretout);
+	t.assert(err != nil, what + " refused");
+	t.assert(err != nil && contains(err, why), sys->sprint("%s: says %q (got %q)", what, why, err));
+}
+
+testRefused(t: ref T)
+{
+	a := mksecret(48);
+	b := mksecret(48);
+	b[0] ^= byte 1;
+	for(l := "aes_256_gcm" :: "hmac_sha384" :: nil; l != nil; l = tl l){
+		alg := hd l;
+		refused(t, alg+": the same secret both ways", alg, a, a, "same secret both ways");
+		refused(t, alg+": a secret of 31 bytes", alg, a, mksecret(31), "too short");
+		refused(t, alg+": one way's secret alone", alg, a, nil, "a secret each way");
+	}
+	refused(t, "two algorithms", "aes_256_gcm hmac_sha384", a, b, "one algorithm");
+	refused(t, "two algorithms with a slash", "hmac_sha384/aes_256_gcm", a, b, "one algorithm");
+	for(l = "aes_256_cbc" :: "aes_128_cbc" :: "sha256" :: "sha1" :: "md5" :: "rc4" :: nil; l != nil; l = tl l)
+		refused(t, hd l, hd l, a, b, "unknown algorithm");
+	t.assertnil(pushalg("aes_256_gcm", a, b), "and with a secret each way, 48 bytes, aes_256_gcm is taken");
+	t.assertnil(pushalg("clear", a, a), "clear takes any secrets");
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }
 
 testConversationPermissions(t: ref T)
@@ -345,10 +358,9 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	run("AlgorithmAdvertised", testAlgorithmAdvertised);
-	run("AES256_SHA256", testAES256SHA256);
-	run("AES128_SHA256", testAES128SHA256);
-	run("AES256_Only", testAES256Only);
-	run("SHA256_Only", testSHA256Only);
+	run("AES256_GCM", testAESGCM);
+	run("HMAC_SHA384", testHMACSHA384);
+	run("Refused", testRefused);
 	# This deliberately drops the test process identity, so it must run last.
 	run("ConversationPermissions", testConversationPermissions);
 

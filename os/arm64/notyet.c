@@ -94,6 +94,9 @@ exit(int code)
 		up != nil? (ulong)up->pid : 0UL,
 		up != nil? up->text : "-");
 	splhi();
+#ifdef NVME0
+	nvmeshutdown();
+#endif
 
 	/*
 	 * Reset into serialboot rather than halt.
@@ -163,6 +166,9 @@ reboot(void)
 	 * print it. The reset then looks like a crash: the console simply
 	 * stops and starts again with no line saying why.
 	 */
+#ifdef NVME0
+	nvmeshutdown();
+#endif
 	uartputstr("reboot: resetting via the watchdog\n");
 	boardreboot();
 	/* boardreboot does not return; if it somehow does, stop. */
@@ -176,6 +182,9 @@ reboot(void)
 void
 tryboot(void)
 {
+#ifdef NVME0
+	nvmeshutdown();
+#endif
 	uartputstr("tryboot: resetting; next boot is the CANDIDATE kernel\n");
 	boardtryboot();
 	exit(0);
@@ -196,6 +205,9 @@ booted(void)
 void
 halt(void)
 {
+#ifdef NVME0
+	boardpoweroff();
+#endif
 	exit(0);
 }
 
@@ -255,20 +267,29 @@ extern void sysmodinit(void);
  * no longer change it.
  */
 extern int cnsastrict, cnsaasked;
+extern Lock cnsalk;
 
 char*
 getenv(char *name)
 {
+	int strict;
+
 	if(strcmp(name, "CNSAMODE") != 0)
 		return nil;
+	lock(&cnsalk);
 	cnsaasked = 1;
-	return cnsastrict? "1": nil;
+	strict = cnsastrict;
+	unlock(&cnsalk);
+	return strict? "1": nil;
 }
 
 extern void drawmodinit(void);
 extern void tkmodinit(void);
 extern void mathmodinit(void);
 extern void keyringmodinit(void);
+extern void tensormodinit(void);
+extern void i420modinit(void);
+extern void bayermodinit(void);
 
 void
 modinit(void)
@@ -278,6 +299,9 @@ modinit(void)
 	tkmodinit();
 	mathmodinit();
 	keyringmodinit();
+	tensormodinit();
+	i420modinit();
+	bayermodinit();
 }
 
 

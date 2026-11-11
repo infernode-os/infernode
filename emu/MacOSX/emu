@@ -53,6 +53,8 @@ mod
 	srv	srv
 	keyring
 	i420
+	tensor
+	bayer
 #	loader
 #	freetype
 

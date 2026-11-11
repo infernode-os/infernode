@@ -28,7 +28,7 @@ extern	int	kdup(int, int);
 extern	int	kfauth(int, char*);
 extern	char*	kfd2path(int);
 extern	int	kfstat(int, uchar*, int);
-extern	int	kfversion(int, uint, char*, uint);
+extern	int	kfversion(int, uint, char*, uint, uint*);
 extern	int	kfwstat(int, uchar*, int);
 extern	int	kmount(int, int, char*, int, char*);
 extern	int	kopen(char*, int);

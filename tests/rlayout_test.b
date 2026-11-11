@@ -9,6 +9,7 @@ implement RlayoutTest;
 #     inside bold or italic is parsed again
 #   - a backslash makes punctuation literal
 #   - a link's text may hold brackets, as a badge's image does
+#   - a | in a paragraph's line is text; only a table ends the paragraph
 #
 
 include "sys.m";
@@ -226,6 +227,19 @@ testEscapedPipe(t: ref T)
 	t.asserteq(n.aux, 2, "the escaped pipe does not split the cell");
 }
 
+# A line with a | in it continues a paragraph; only a table (a row and
+# its separator) ends one. md/fmt joins such lines.
+testPipeInPara(t: ref T)
+{
+	p := block(t, "text\nwith `a | b` in it", Rlayout->Npara);
+	t.assertseq(shown(p.children), "text with a | b in it", "one paragraph");
+
+	doc := rlayout->parsemd("text\n| a | b |\n|---|---|\n| x | y |");
+	t.asserteq(len doc, 2, "a table still ends a paragraph");
+	if(len doc == 2)
+		t.asserteq((hd tl doc).kind, Rlayout->Ntable, "and is a table");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -257,6 +271,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("QuoteDepth", testQuoteDepth);
 	run("StrikeAndAutolink", testStrikeAndAutolink);
 	run("EscapedPipe", testEscapedPipe);
+	run("PipeInPara", testPipeInPara);
 	run("InlineHTML", testInlineHTML);
 
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -22,10 +22,13 @@ Crypt: module {
 Ehungup: con "i/o on hungup channel";
 
 ALGSTR: con "alg ";
-DEFAULTALG: con "md5/ideacbc";
+DEFAULTALG: con "aes_256_gcm";
+KDFSTR: con "pbkdf2_sha384 ";
+Iterations: con 200000;	# PBKDF2's, for a new file
+Saltlen: con 32;
 usage()
 {
-	sys->fprint(stderr, "usage: crypt [-?] [-d] [-k secret] [-f secretfile] [-a alg[/alg]]\n");
+	sys->fprint(stderr, "usage: crypt [-?] [-d] [-k secret] [-f secretfile] [-a alg]\n");
 	sys->fprint(stderr, "available algorithms:\n");
 	showalgs(stderr);
 	fail("bad usage");
@@ -91,10 +94,11 @@ init(nil: ref Draw->Context, argv: list of string)
 		usage();
 	if(secret == nil)
 		secret = array of byte readpassword();
-	sk := array[Keyring->SHA1dlen] of byte;
-	keyring->sha1(secret, len secret, sk, nil);
+	salt: array of byte;
+	iter := Iterations;
 	if (headers) {
-		# deal with header - the header encodes the algorithm along with the data.
+		# deal with header - the header encodes the algorithm along with the data,
+		# then the key's derivation: its salt, new for each file, and iterations
 		if (decrypt) {
 			msg := msgio->getmsg(sys->fildes(0));
 			if (msg != nil)
@@ -102,13 +106,25 @@ init(nil: ref Draw->Context, argv: list of string)
 			if (msg == nil || len alg < len ALGSTR || alg[0:len ALGSTR] != ALGSTR)
 				error("couldn't get decrypt algorithm");
 			alg = alg[len ALGSTR:];
+			msg = msgio->getmsg(sys->fildes(0));
+			kdf := string msg;
+			if (msg == nil || len kdf < len KDFSTR || kdf[0:len KDFSTR] != KDFSTR)
+				error("no key derivation in the header: not made by this crypt");
+			(n, f) := sys->tokenize(kdf[len KDFSTR:], " ");
+			if (n != 2 || (iter = int hd f) < 1000 || (salt = unhex(hd tl f)) == nil || len salt < 16)
+				error("bad key derivation in the header");
 		} else {
+			salt = randombuf(Saltlen);
 			msg := array of byte ("alg " + alg);
 			e := msgio->sendmsg(sys->fildes(1),  msg, len msg);
 			if (e == -1)
 				error("couldn't write algorithm string");
+			msg = array of byte sys->sprint("%s%d %s", KDFSTR, iter, hex(salt));
+			if (msgio->sendmsg(sys->fildes(1), msg, len msg) == -1)
+				error("couldn't write the key's derivation");
 		}
 	}
+	sk := pbkdf2(secret, salt, iter);
 	fd := docrypt(decrypt, alg, sk);
 	if (decrypt) {
 		# if decrypting, don't use stream, as we want to catch
@@ -158,7 +174,14 @@ cryptpipe(decrypt: int, alg: string, sk: array of byte): (string, array of ref S
 	if (err != nil)
 		return ("could not connect ssl: "+err, nil, nil, nil);
 	pfd[1] = nil;
-	err = ssl->secret(c, sk, sk);
+	# the stream goes one way, under sk; ssl(3) takes another secret the other
+	other := array[Keyring->SHA384dlen] of byte;
+	l := array of byte "crypt: the way not used";
+	keyring->hmac_sha384(l, len l, sk, other, nil);
+	if (decrypt)
+		err = ssl->secret(c, sk, other);
+	else
+		err = ssl->secret(c, other, sk);
 	if (err != nil) 
 		return ("could not write secret: "+err, nil, nil, nil);
 
@@ -206,6 +229,67 @@ showalgs(fd: ref Sys->FD)
 			sys->fprint(fd, " %s", hd l);
 		sys->fprint(fd, "\n");
 	}
+}
+
+#
+# PBKDF2 (RFC 8018, SP 800-132) with HMAC-SHA-384: its first block,
+# 48 bytes, all that ssl(3) takes from a secret
+#
+pbkdf2(pw, salt: array of byte, iter: int): array of byte
+{
+	u := array[len salt + 4] of byte;
+	u[0:] = salt;
+	u[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
+	t := array[Keyring->SHA384dlen] of byte;
+	keyring->hmac_sha384(u, len u, pw, t, nil);
+	u = array[Keyring->SHA384dlen] of byte;
+	u[0:] = t;
+	v := array[Keyring->SHA384dlen] of byte;
+	for (i := 1; i < iter; i++) {
+		keyring->hmac_sha384(u, len u, pw, v, nil);
+		for (j := 0; j < len t; j++)
+			t[j] ^= v[j];
+		(u, v) = (v, u);
+	}
+	return t;
+}
+
+randombuf(n: int): array of byte
+{
+	b := array[n] of byte;
+	fd := sys->open("/dev/random", Sys->OREAD);
+	if (fd == nil || sys->readn(fd, b, n) != n)
+		error(sys->sprint("cannot read /dev/random: %r"));
+	return b;
+}
+
+hex(b: array of byte): string
+{
+	s := "";
+	for (i := 0; i < len b; i++)
+		s += sys->sprint("%.2ux", int b[i]);
+	return s;
+}
+
+unhex(s: string): array of byte
+{
+	if (len s % 2)
+		return nil;
+	b := array[len s / 2] of byte;
+	for (i := 0; i < len b; i++) {
+		v := 0;
+		for (k := 0; k < 2; k++) {
+			c := s[2*i+k];
+			case c {
+			'0' to '9' => v = v*16 + c - '0';
+			'a' to 'f' => v = v*16 + c - 'a' + 10;
+			'A' to 'F' => v = v*16 + c - 'A' + 10;
+			* => return nil;
+			}
+		}
+		b[i] = byte v;
+	}
+	return b;
 }
 
 readpassword(): string

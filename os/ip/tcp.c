@@ -66,6 +66,7 @@ enum
 	DEF_MSS		= 1460,		/* Default mean segment */
 	DEF_MSS6	= 1280,		/* Default mean segment (min) for v6 */
 	DEF_RTT		= 500,		/* Default round trip */
+	MINRTO		= 200,		/* Least retransmission timeout (ms) */
 	DEF_KAT		= 120000,	/* Default time (ms) between keep alives */
 	TCP_LISTEN	= 0,		/* Listen connection */
 	TCP_CONNECT	= 1,		/* Outgoing connection */
@@ -246,7 +247,7 @@ struct Tcpctl
 	int	sawwsopt;		/* true if we saw a wsopt on the incoming SYN */
 	u32int	cwind;			/* Congestion window */
 	int	scale;			/* desired rcv.scale */
-	ushort	ssthresh;		/* Slow start threshold */
+	u32int	ssthresh;		/* Slow start threshold */
 	int	resent;			/* Bytes just resent */
 	int	irs;			/* Initial received squence */
 	ushort	mss;			/* Mean segment size */
@@ -2563,7 +2564,21 @@ tcpoutput(Conv *s)
 			usable = tcb->cwind;
 			if(tcb->snd.wnd < usable)
 				usable = tcb->snd.wnd;
-			usable -= sent;
+			/*
+			 *  more in flight than the window allows: nothing
+			 *  more.  usable is unsigned, and the difference
+			 *  wrapped to 4G when the peer's right edge drew back
+			 *  even a byte (a scaled window is rounded down to its
+			 *  granularity, 8 bytes at scale 3, Linux's too): the
+			 *  sender then sent a full segment each time it could,
+			 *  hundreds of K past the window, all of it dropped by
+			 *  the receiver, and recovered a segment a round trip.
+			 *  A Pi 4's devssl over loopback ran at 1 MB/s.
+			 */
+			if(usable > sent)
+				usable -= sent;
+			else
+				usable = 0;
 		}
 		ssize = sndcnt-sent;
 		if(ssize && usable < 2)
@@ -2873,17 +2888,23 @@ void
 tcprxmit(Conv *s)
 {
 	Tcpctl *tcb;
+	u32int flight;
 
 	tcb = (Tcpctl*)s->ptcl;
 
+	/*
+	 *  Half what was in flight, at least two segments (RFC 5681 3.1).
+	 *  It was set to one segment: after any loss the window then grew
+	 *  by a segment a round trip from one, never doubling, and a link
+	 *  that loses now and then (WiFi) kept it a few segments wide.
+	 */
+	flight = tcb->snd.nxt - tcb->snd.una;
+	tcb->ssthresh = flight/2;
+	if(tcb->ssthresh < 2*tcb->mss)
+		tcb->ssthresh = 2*tcb->mss;
+
 	tcb->flags |= RETRAN|FORCE;
 	tcb->snd.ptr = tcb->snd.una;
-
-	/*
-	 *  We should be halving the slow start threshhold (down to one
-	 *  mss) but leaving it at mss seems to work well enough
-	 */
- 	tcb->ssthresh = tcb->mss;
 
 	/*
 	 *  pull window down to a single packet
@@ -3338,9 +3359,16 @@ tcpsettimer(Tcpctl *tcb)
 	x = backoff(tcb->backoff) *
 		(tcb->mdev + (tcb->srtt>>LOGAGAIN) + MSPTICK) / MSPTICK;
 
-	/* bounded twixt 1/2 and 64 seconds */
-	if(x < 500/MSPTICK)
-		x = 500/MSPTICK;
+	/*
+	 * bounded twixt MINRTO and 64 seconds.  The floor was 1/2 second;
+	 * on a LAN, whose round trip is a millisecond, it was every
+	 * retransmission's whole cost, and a lost segment that nothing
+	 * follows (a 9P request alone, a reply's last segment) is recovered
+	 * only by this timer.  200 ms, as Linux's TCP_RTO_MIN; a long round
+	 * trip sets a longer timeout of itself.
+	 */
+	if(x < MINRTO/MSPTICK)
+		x = MINRTO/MSPTICK;
 	else if(x > (64000/MSPTICK))
 		x = 64000/MSPTICK;
 	tcb->timer.start = x;

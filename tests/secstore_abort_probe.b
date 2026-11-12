@@ -40,11 +40,14 @@ init(nil: ref Draw->Context, args: list of string)
 	if(args != nil)
 		addr = hd args;
 
+	# an m the server takes (an element of the group, as a client's
+	# is), made from a password that is not the account's
+	m := secstore->mkverifier(user, "secstore3", secstore->mkseckey2("not the password"));
 	for(i := 0; i < count; i++) {
 		conn := secstore->dial(addr);
 		if(conn == nil)
 			fail(sys->sprint("dial %s failed: %r", addr));
-		if(sys->fprint(conn.dfd, "secstore3\tPAK\nC=%s\nm=1\n", user) < 0)
+		if(sys->fprint(conn.dfd, "secstore3\tPAK\nC=%s\nm=%s\n", user, m) < 0)
 			fail(sys->sprint("hello write failed: %r"));
 		buf := array[4096] of byte;
 		n := sys->read(conn.dfd, buf, len buf);

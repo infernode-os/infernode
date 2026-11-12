@@ -916,6 +916,7 @@ dis/tests/sdg_test.dis
 dis/tests/sdgsrv_test.dis
 dis/tests/secp256k1_test.dis
 dis/tests/secstore_abort_probe.dis
+dis/tests/secstore_badm_probe.dis
 dis/tests/secstore_crypto_test.dis
 dis/tests/sed_test.dis
 dis/tests/sha3_test.dis

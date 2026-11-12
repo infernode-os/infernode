@@ -823,6 +823,10 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
+	if(!ingroup(mu, params)){
+		writerr(dfd, "mu not in the group");
+		return nil;
+	}
 	sigma := mu.expmod(x, params.p);
 	hexsigma := sigma.iptostr(64);
 	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);
@@ -981,6 +985,18 @@ longhashver(ver: string, C: string, passwd: array of byte): ref IPint
 	return mod(IPint.bebytestoip(buf), params.p).expmod(params.r, params.p);	# H
 }
 
+# an element of the order-q subgroup other than 1, below p: a server's
+# mu out of it (0, p, p-1) makes sigma 0 or of order 2
+ingroup(e: ref IPint, params: ref PAKparams): int
+{
+	if(e == nil)
+		return 0;
+	one := IPint.inttoip(1);
+	if(e.cmp(one) <= 0 || e.cmp(params.p) >= 0)
+		return 0;
+	return e.expmod(params.q, params.p).eq(one);
+}
+
 mod(a, b: ref IPint): ref IPint
 {
 	return a.div(b).t1;
@@ -1128,6 +1144,10 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
+	if(!ingroup(mu, params)){
+		writerr(dfd, "mu not in the group");
+		return nil;
+	}
 	sigma := mu.expmod(x, params.p);
 	hexsigma := sigma.iptostr(64);
 	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);

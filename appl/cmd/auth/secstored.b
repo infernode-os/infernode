@@ -431,6 +431,18 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	Hi := IPint.strtoip(hexHi, 64);
 	m := IPint.strtoip(hexm, 64);
 
+	# m = g**x * H is in the order-q subgroup, as H is. One that is
+	# not (0 or p: m*Hi is 0 mod p, sigma 0 whatever y, and k below a
+	# function of the password alone, to be guessed against off line;
+	# p-1: of order 2) is refused before anything depends on the
+	# password. Whether m is in the group does not depend on it either.
+	if(!ingroup(m, params)){
+		log(sys->sprint("rejected %s: m not in the group", C));
+		writerr(fd, "m not in the group");
+		notefail(C);
+		return (nil, nil, C);
+	}
+
 	# Server picks random y, computes mu = g^y mod p
 	y := mod(IPint.random(exponentbits(ver), exponentbits(ver)), params.q);
 	if(y.eq(IPint.inttoip(0)))
@@ -742,6 +754,17 @@ exponentbits(version: string): int
 	if(version == VERSION3)
 		return 320;
 	return 240;
+}
+
+# an element of the order-q subgroup other than 1, below p
+ingroup(e: ref IPint, params: ref PAKparams): int
+{
+	if(e == nil)
+		return 0;
+	one := IPint.inttoip(1);
+	if(e.cmp(one) <= 0 || e.cmp(params.p) >= 0)
+		return 0;
+	return e.expmod(params.q, params.p).eq(one);
 }
 
 mod(a, b: ref IPint): ref IPint

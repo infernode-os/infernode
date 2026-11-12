@@ -769,7 +769,7 @@ class Run:
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
-                      'wc -l /tmp/soak/*/ticks >[2] /dev/null', 'wc -l /tmp/soak/*/runs >[2] /dev/null | sed ''s/runs$/RUNS/''',
+                      'wc -l /tmp/soak/*/ticks >[2] /dev/null', "wc -l /tmp/soak/*/runs >[2] /dev/null | sed 's/runs$/RUNS/'",
                       'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
                  re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)\s*$', out, re.M)}

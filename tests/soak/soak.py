@@ -21,7 +21,7 @@ removed from the board, so none is overwritten.
 Output: ~/soak/runs/<board>-<start>-<kernel>/ (soak.log, samples.tsv,
 memtags/, fails/, summary.txt), and one row in ~/soak/ledger.tsv.
 """
-import argparse, fcntl, glob, hashlib, json, os, re, signal, socket, subprocess, sys, threading, time
+import argparse, fcntl, glob, hashlib, json, os, re, signal, socket, shutil, subprocess, sys, threading, time
 
 HOME = os.path.expanduser('~')
 PITOOLS = os.path.join(HOME, 'pitools')
@@ -278,13 +278,30 @@ fn bad {
 	}
 }
 fn run { ftest -e /tmp/soak/run }
+# A file-system cycle waits for the host's word that a network push has
+# begun (its go file), so the writes meet the push's interrupts and DMA;
+# with no word in fsmaxwait seconds (no push load running) it goes anyway.
+# It returns at once when the run ends.
+fn fswait {
+	fsn = $1; fsw = 0
+	while {run && ! ftest -e /tmp/soak/$fsn/go && ! ~ $fsw $fsmaxwait} {sleep 1; fsw = ${expr $fsw 1 +}}
+	rm -f /tmp/soak/$fsn/go
+}
+# gefs with a 4 MB block cache (the default 64 MB would fill for hours and
+# look like heap growth) and its automatic snapshots kept 5 a minute and 2
+# an hour, so that their count is steady within two hours
+fn gefsmount {
+	disk/gefs -m 4 -M main:/tmp/soak/gefs/m -M adm:/tmp/soak/gefs/a -M dump:/tmp/soak/gefs/d '#S/soakgefs' >[2] /tmp/soak/gefs/err || bad gefs mount
+	echo retain main 5@m 2@h > /tmp/soak/gefs/a/ctl >[2] /tmp/soak/gefs/err || bad gefs retain
+}
 '''
 
-def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=False, setup=None):
+def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=False, setup=None, teardown=None):
     # vm0: the load starts a new sh (sh -c), which cannot load Sh in another VM
     # ("Sh": module not loaded, 2026-11-08), so it stays in VM 0 with the sink
     # setup: sh lines run once before the loops (a device's mode, as soak5.sh set them)
-    return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every, vm0=vm0, setup=setup)
+    # teardown: sh lines run once after them (servers the setup started)
+    return dict(name=name, what=what, board=board, host=host, needs=list(needs), core=core, every=every, vm0=vm0, setup=setup, teardown=teardown)
 
 # Intensity. Reads are cheap and stay frequent; writes to flash are small,
 # verified and budgeted (bytes per day at each profile in the comments).
@@ -292,19 +309,32 @@ def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=F
 # 'stress'. Raw block writes need --scratch DEV=PART: without it no raw
 # device is ever written (the Pi 5's NVMe is a store with data on it).
 PROFILES = {
-    'gentle': dict(sdr_mb=16, sdr_every=600, sdw_kb=0,    sdw_every=0,    nvr_mb=64,  nvr_every=600, nvw_kb=0,     nvw_every=0,
+    'gentle': dict(sdr_mb=16, sdr_every=600, sdw_kb=0,    sdw_every=0,    nvr_mb=64,  nvr_every=600, nvw_kb=0,     nvw_every=0,    fs_every=3600,
                    net_mb=16, net_every=1800, churn=50,  half=2,  jit_every=900, rsa_every=600, rng_kb=256,   fuzz_every=0),
-    'normal': dict(sdr_mb=16, sdr_every=120, sdw_kb=1024, sdw_every=600,  nvr_mb=64,  nvr_every=120, nvw_kb=1024,  nvw_every=300,
+    'normal': dict(sdr_mb=16, sdr_every=120, sdw_kb=1024, sdw_every=3600, nvr_mb=64,  nvr_every=120, nvw_kb=1024,  nvw_every=300,  fs_every=1800,
                    net_mb=64, net_every=600,  churn=200, half=8,  jit_every=300, rsa_every=60,  rng_kb=4096,  fuzz_every=0),
-    'stress': dict(sdr_mb=64, sdr_every=30,  sdw_kb=4096, sdw_every=120,  nvr_mb=256, nvr_every=30,  nvw_kb=16384, nvw_every=60,
+    'stress': dict(sdr_mb=64, sdr_every=30,  sdw_kb=1024, sdw_every=600,  nvr_mb=256, nvr_every=30,  nvw_kb=16384, nvw_every=60,   fs_every=600,
                    net_mb=64, net_every=60,   churn=1000, half=32, jit_every=60,  rsa_every=10,  rng_kb=16384, fuzz_every=3600),
 }
-# SD writes per day: normal 144 MB, stress 2.9 GB; NVMe (scratch only): normal 288 MB, stress 23 GB.
-AREAS = {'storage': ('sdr_mb', 'sdr_every', 'sdw_kb', 'sdw_every', 'nvr_mb', 'nvr_every', 'nvw_kb', 'nvw_every'),
+# A soak is for interactions and leaks, not for wearing flash out: what it
+# needs is that writes keep happening beside everything else, not volume.
+# SD writes per day: normal 24 MB, stress 144 MB (the card is the boot
+# device). kfs and gefs on the NVMe scratch: about 20 and 50 MB a day at
+# normal. Raw NVMe writes (--scratch nvme=PART only): normal 288 MB.
+AREAS = {'storage': ('sdr_mb', 'sdr_every', 'sdw_kb', 'sdw_every', 'nvr_mb', 'nvr_every', 'nvw_kb', 'nvw_every', 'fs_every'),
          'net': ('net_mb', 'net_every', 'churn', 'half'),
          'cpu': ('jit_every', 'rsa_every', 'rng_kb'),
          'fuzz': ('fuzz_every',),
          'vm': ()}
+
+# The file-system loads' scratch: two 1 GB ranges at the start of the
+# partition --scratch fs= names, made partitions with sdctl's nvmepart for
+# the run (the disk's own table is not touched), kfs's then gefs's.
+FSBLOCKS = 2097152      # 512-byte blocks: 1 GB
+# what a clean kfs check says; any other line is a finding
+KFSOK = ('^checking file system|^check free list|^lo = [0-9]+; hi = [0-9]+$'
+         '|^ *[0-9]+ (files|blocks in the file system|used blocks|free blocks|maximum qid path)$|^$')
+TREE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 
 # Kernel complaints worth a line in the summary (an alarm only for the first group).
 ALARMS = r'\b(panic|PANIC|unhandled)\b|exception:|lock loop|miller is a lazy git'
@@ -333,7 +363,7 @@ LOADS = [
     L('sd', 'SD card raw reads (16 MB every 2 min at normal); never writes the raw device', core=True, board=r'''
 	dd -if $sdraw -of /dev/null -bs 65536 -count $sdrcount >[2] /tmp/soak/sd/err || bad sd read
 	tick sd; sleep $sdrevery''', needs=['sdraw', 'dd']),
-    L('sd-write', 'a file on the card written, read back, compared and removed (1 MB every 10 min at normal: 144 MB a day)', core=True, board=r'''
+    L('sd-write', 'a file on the card written, read back, compared and removed (1 MB an hour at normal: 24 MB a day)', core=True, board=r'''
 	dd -if /dev/random -of /tmp/soak/sd-write/x -bs 1024 -count $sdwkb >[2] /dev/null
 	cp /tmp/soak/sd-write/x /n/dos/soak.tmp >[2] /tmp/soak/sd-write/err; cmp /tmp/soak/sd-write/x /n/dos/soak.tmp > /tmp/soak/sd-write/out >[2=1] || bad sd-write verify
 	rm -f /n/dos/soak.tmp /tmp/soak/sd-write/x
@@ -362,6 +392,75 @@ LOADS = [
 	cmp /tmp/soak/nvme-write/x /tmp/soak/nvme-write/y > /tmp/soak/nvme-write/out >[2=1] || bad nvme-write verify
 	rm -f /tmp/soak/nvme-write/x /tmp/soak/nvme-write/y
 	tick nvme-write; sleep $nvwevery''', needs=['nvme', 'dd', 'scratch:nvme', 'budget:nvme']),
+    L('kfs', 'kfs(4) on 1 GB of the NVMe scratch (--scratch fs=PART): 40 files of 8 KB written, read back and removed every 30 min at normal, begun inside a network push; checked hourly; restarted every 6 h and a file kept since the start compared', board=r'''
+	fswait kfs
+	if {run} {
+		k = /tmp/soak/kfs
+		ftest -e $k/m/keep/k || bad kfs not-mounted
+		mkdir -p $k/m/c
+		ok = 1; for(i in $fsfiles) {cp $k/src $k/m/c/f$i >[2] $k/err || ok = 0}; ~ $ok 1 || bad kfs write
+		ok = 1; for(i in $fsfiles) {cmp -s $k/src $k/m/c/f$i || ok = 0}; ~ $ok 1 || bad kfs readback
+		rm -r $k/m/c >[2] $k/err || bad kfs remove
+		kn = ${expr $kn 1 +}
+		if {~ ${expr $kn 2 %} 0} {
+			disk/kfscmd -n soakkfs check > $k/out >[2=1] || bad kfs check
+			grep -v $kfsok $k/out > $k/err; grep -s . $k/err && bad kfs check-found
+		}
+		if {~ ${expr $kn 12 %} 0} {
+			unmount $k/m; sleep 5
+			ftest -e /chan/kfs.soakkfs.cmd && bad kfs server-stayed
+			mount -c {disk/kfs -n soakkfs '#S/soakkfs'} $k/m >[2] $k/err || bad kfs remount
+			cmp -s $k/keep $k/m/keep/k || bad kfs kept-file-changed
+		}
+	}
+	tick kfs''', needs=['scratch:fs', 'kfstools'], setup=r'''{
+	echo nvmepart soakkfs $kfsstart $fsblocks > '#S/sdctl'
+	mkdir -p /tmp/soak/kfs/m
+	mount -c {disk/kfs -r -n soakkfs '#S/soakkfs'} /tmp/soak/kfs/m
+	read 8192 < /dev/random > /tmp/soak/kfs/src
+	dd -if /dev/random -of /tmp/soak/kfs/keep -bs 1024 -count 256 >[2] /dev/null
+	mkdir /tmp/soak/kfs/m/keep; cp /tmp/soak/kfs/keep /tmp/soak/kfs/m/keep/k
+}''', teardown='unmount /tmp/soak/kfs/m'),
+    L('gefs', 'gefs(4) on 1 GB of the NVMe scratch: the same files, synced, read back; a snapshot kept while its file changes, then deleted; every 30 min at normal, begun inside a network push; checked hourly; halted, checked offline and restarted every 6 h, a file kept since the start compared', board=r'''
+	fswait gefs
+	if {run} {
+		g = /tmp/soak/gefs
+		ftest -e $g/m/keep || bad gefs not-mounted
+		mkdir -p $g/m/c
+		ok = 1; for(i in $fsfiles) {cp $g/src $g/m/c/f$i >[2] $g/err || ok = 0}; ~ $ok 1 || bad gefs write
+		echo sync > $g/a/ctl >[2] $g/err || bad gefs sync
+		ok = 1; for(i in $fsfiles) {cmp -s $g/src $g/m/c/f$i || ok = 0}; ~ $ok 1 || bad gefs readback
+		echo before > $g/m/snapf
+		echo snap main soak > $g/a/ctl >[2] $g/err || bad gefs snap
+		echo after > $g/m/snapf
+		~ `{cat $g/d/soak/snapf} before || bad gefs snapshot-changed
+		~ `{cat $g/m/snapf} after || bad gefs main-write
+		echo delsnap soak > $g/a/ctl >[2] $g/err || bad gefs delsnap
+		rm -r $g/m/c $g/m/snapf >[2] $g/err || bad gefs remove
+		gn = ${expr $gn 1 +}
+		if {~ ${expr $gn 2 %} 0} {echo check > $g/a/ctl >[2] $g/err || bad gefs check}
+		if {~ ${expr $gn 12 %} 0} {
+			echo halt > $g/a/ctl; unmount $g/m; unmount $g/a; unmount $g/d; sleep 5
+			disk/gefs -c '#S/soakgefs' > $g/out >[2=1]
+			grep -s 'not ok' $g/out && bad gefs offline-check
+			gefsmount
+			cmp -s $g/keep $g/m/keep || bad gefs kept-file-changed
+		}
+	}
+	tick gefs''', needs=['scratch:fs', 'gefstools'], setup=r'''{
+	echo nvmepart soakgefs $gefsstart $fsblocks > '#S/sdctl'
+	mkdir -p /tmp/soak/gefs/m /tmp/soak/gefs/a /tmp/soak/gefs/d
+	disk/gefs -r `{cat /dev/user} '#S/soakgefs'
+	gefsmount
+	read 8192 < /dev/random > /tmp/soak/gefs/src
+	dd -if /dev/random -of /tmp/soak/gefs/keep -bs 1024 -count 256 >[2] /dev/null
+	cp /tmp/soak/gefs/keep /tmp/soak/gefs/m/keep
+	# the block cache filled now, before the heap's baseline is taken
+	dd -if /dev/random -of /tmp/soak/gefs/m/warm -bs 65536 -count 96 >[2] /dev/null
+	cat /tmp/soak/gefs/m/warm > /dev/null; rm /tmp/soak/gefs/m/warm
+	echo sync > /tmp/soak/gefs/a/ctl
+}''', teardown='''echo halt > /tmp/soak/gefs/a/ctl >[2] /dev/null
+unmount /tmp/soak/gefs/m; unmount /tmp/soak/gefs/a; unmount /tmp/soak/gefs/d'''),
     L('spi', 'SPI loopback compare', board=r'''
 	read 8192 < /dis/sh.dis > /tmp/soak/spi/s; cat /tmp/soak/spi/s > '#Q/spi0'; cat '#Q/spi0' > /tmp/soak/spi/r
 	cmp /tmp/soak/spi/s /tmp/soak/spi/r > /tmp/soak/spi/out >[2=1] || bad spi compare
@@ -384,6 +483,23 @@ LOADS = [
     L('bt', 'from the Jetson: l2ping x20 every 10 min (hci0 reserved)', host='bt', needs=['bt', 'bdaddr']),
     L('wifi', '32 MB pushed to the Wi-Fi address every 10 min', host='wifi', needs=['wifi']),
     L('usbnet', '32 MB each way over the USB gadget link every 10 min (gadget reserved)', host='usbnet', needs=['usbnet']),
+    L('video', 'camsrv(4)\'s simulated sensor (288x162, 30 fps; Bayer to I420) held for the run with videnc(1) beside it and exported on 8704; read whole as a live viewer reads it, a minute at a time', board=r'''
+	# into new and then over out, so that the sampler always finds a whole reading
+	/dis/tests/feedrate.dis /tmp/soak/video/v/0 60 > /tmp/soak/video/new >[2] /tmp/soak/video/err || bad video feedrate
+	cp /tmp/soak/video/new /tmp/soak/video/out
+	grep -s 'frames=[0-9][0-9][0-9]' /tmp/soak/video/out || bad video few-frames
+	tick video''', needs=['videotools'], setup=r'''{
+	mkdir -p /tmp/soak/video/v
+	mount {camsrv -t} /tmp/soak/video/v
+	mount -a {videnc /tmp/soak/video/v/0} /tmp/soak/video/v/0
+	# the listener in a process group of its own, so that the teardown stops it
+	# and the exports it started (they hold the name space, and camsrv with it)
+	# (its shell stays, so that the group has a member the teardown can name)
+	{pctl newpgrp; echo ${pid} > /tmp/soak/video/lpid; listen -A 'tcp!*!8704' {export /tmp/soak/video/v}; while {ftest -e /tmp/soak/video/lpid} {sleep 30}} &
+}''', teardown='''p = `{cat /tmp/soak/video/lpid}; rm -f /tmp/soak/video/lpid; echo killgrp > /prog/$p/ctl >[2] /dev/null
+kill -g Camsrv Videnc > /dev/null >[2] /dev/null
+unmount /tmp/soak/video/v >[2] /dev/null'''),
+    L('video-remote', 'the board\'s feed as JPEG on the Jetson (vidjpeg(1) in its emulator, over Ethernet), read as a live viewer 5 min every 30 min', host='video-remote', needs=['videotools', 'hostemu', 'wired']),
     L('draw', 'drawbench every 30 s', board=r'''
 	sh -c 'bind -a ''#i'' /dev; drawbench > /tmp/soak/draw/out >[2] /tmp/soak/draw/err' || bad draw drawbench
 	tick draw; sleep 30''', needs=['drawbench', 'display'], vm0=True),
@@ -434,6 +550,8 @@ class Run:
             for k in AREAS[area]:
                 self.iv[k] = PROFILES['stress'][k]
         self.scratch = dict(x.split('=', 1) for x in a.scratch)
+        self.fsgo = []; self.fsdriver = None; self.fsnext = 0
+        self.vfps = {}; self.vlast = None
 
     # transport ----------------------------------------------------------
     def connect(self):
@@ -460,7 +578,8 @@ class Run:
         r['serial'] = (self.ser is not None, 'captured serial line' if self.ser else
                        ('no serial cable in ~/pitools/boards' if not self.info.port else 'serial not captured (start sercap.py)'))
         out = self.sh(
-            "for(f in jitbench drawbench memtouch auth/rsagen vm zeros tlsperf vmstress tests/tls_live_test tests/sysfuzz dd cmp) { ftest -e /dis/$f.dis && echo HAVE $f }",
+            "for(f in jitbench drawbench memtouch auth/rsagen vm zeros tlsperf vmstress tests/tls_live_test tests/sysfuzz dd cmp camsrv videnc tests/feedrate disk/kfs disk/kfscmd disk/gefs) { ftest -e /dis/$f.dis && echo HAVE $f }",
+            "cat '#S/sdctl' >[2] /dev/null | grep '^part '",
             "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' /dev/memtags /dev/heapaudit /net/bt/status '#i/draw') { ftest -e $f && echo DEV $f }",
             "ls '#X' >[2] /dev/null > /dev/null && echo DEV vm",
             "cat /net/bt/status >[2] /dev/null | sed 1q",
@@ -478,6 +597,13 @@ class Run:
         r['budget:sd'] = (self.iv['sdw_kb'] > 0, 'profile %s writes no files to the card' % self.a.profile)
         r['budget:nvme'] = (self.iv['nvw_kb'] > 0, 'profile %s writes nothing to NVMe' % self.a.profile)
         r['scratch:nvme'] = ('nvme' in self.scratch, 'no --scratch nvme=PART (NVMe is never written without one)')
+        r['scratch:fs'] = self.fsscratch(out)
+        r['kfstools'] = ('disk/kfs' in have and 'disk/kfscmd' in have, '/dis/disk/kfs.dis and kfscmd.dis')
+        r['gefstools'] = ('disk/gefs' in have, '/dis/disk/gefs.dis')
+        r['videotools'] = (all(t in have for t in ('camsrv', 'videnc', 'tests/feedrate')), '/dis/camsrv.dis, videnc.dis, tests/feedrate.dis')
+        emu = os.path.join(TREE, 'emu', 'Linux', 'o.emu')
+        r['hostemu'] = (os.path.exists(emu) and all(os.path.exists(os.path.join(TREE, 'dis', f)) for f in ('vidjpeg.dis', 'tests/feedrate.dis')),
+                        'the Jetson\'s emulator and dis/vidjpeg.dis, dis/tests/feedrate.dis in %s' % os.path.normpath(TREE))
         sd = [d for d in ("'#S/sdcard'", "'#S/sd0'") if d.strip("'") in dev]
         r['sdraw'] = (bool(sd), sd[0].strip("'") if sd else 'no raw SD device (#S/sdcard, #S/sd0)')
         self.sdraw = sd[0] if sd else None
@@ -520,6 +646,25 @@ class Run:
         r['opt:fuzz'] = (self.iv['fuzz_every'] > 0, '--stress fuzz or --profile stress')
         r['opt:flood'] = (self.a.flood, '--flood')
         return r
+
+    def fsscratch(self, out):
+        """the file-system loads' two ranges, from the partition --scratch fs= names
+        (an NVMe one only: the card is the boot device)"""
+        want = self.scratch.get('fs')
+        self.fsrange = None
+        if not want:
+            return (False, 'no --scratch fs=PART (an NVMe partition the kfs and gefs loads may use 2 GB of)')
+        name = want.replace('#S/', '').strip("'")
+        parts = {m.group(1): (int(m.group(2)), int(m.group(3))) for m in re.finditer(r'^part (\S+) (\d+) (\d+)$', out, re.M)}
+        if not name.startswith('nvme'):
+            return (False, '--scratch fs=%s: only an NVMe partition' % want)
+        if name not in parts:
+            return (False, '--scratch fs=%s: no such partition in #S/sdctl' % want)
+        off, n = parts[name]
+        if n < 2 * FSBLOCKS:
+            return (False, '--scratch fs=%s: %d MB, 2048 needed' % (want, n // 2048))
+        self.fsrange = (off, off + FSBLOCKS)
+        return (True, '%s: kfs at block %d, gefs at %d, 1 GB each' % (name, off, off + FSBLOCKS))
 
     def choosevm(self):
         """VM 1 for the loops if it exists and sees /tmp/soak, /n/dos and /net as VM 0 does"""
@@ -608,6 +753,11 @@ class Run:
             iv['nvw_kb'] // 8, max(iv['nvw_every'], 1), rcq(self.scratch.get('nvme', '/dev/null')), iv['jit_every'],
             iv['rsa_every'], max(iv['rng_kb'] // 64, 1), max(iv['fuzz_every'] - 600, 60))
         body += 'gpiopairs = (%s)\n' % ' '.join('%d:%d' % p for p in (self.gpiopairs or []))
+        fr = getattr(self, 'fsrange', None) or (0, 0)
+        body += 'kfsstart = %d\ngefsstart = %d\nfsblocks = %d\nfsmaxwait = %d\nkn = 0\ngn = 0\n' % (
+            fr[0], fr[1], FSBLOCKS, iv['fs_every'] + 900)
+        body += 'fsfiles = (%s)\n' % ' '.join(str(i) for i in range(1, 41))
+        body += "kfsok = '%s'\n" % KFSOK
         for l in loads:
             body += 'mkdir -p /tmp/soak/%s\n' % l['name']
             if l.get('setup'):
@@ -622,6 +772,12 @@ class Run:
         # the host loads' listeners, held by this session too
         body += 'echo soakd-up\n'
         body += 'while {run} {sleep 30}\n'
+        # servers the setups started, stopped once the loops are done (a video
+        # read lasts a minute; the runner's last sample is 40 s after the end,
+        # so nothing this stops is counted as a failure)
+        downs = [l['teardown'] for l in loads if l.get('teardown')]
+        if downs:
+            body += 'sleep 70\n' + '\n'.join(downs) + '\n'
         return body
 
     # host loads ----------------------------------------------------------
@@ -655,6 +811,9 @@ class Run:
         again or GIVEUP passes, so the record says where it stopped, for how long,
         and what each end's TCP said about it."""
         lk = self.hres.take('jetson-nic')
+        if self.fsgo and name == self.fsdriver and time.time() >= self.fsnext:
+            self.fsnext = time.time() + self.iv['fs_every'] - 120
+            threading.Timer(1.5, self.sayfsgo).start()
         st = {'phase': 'connect in', 'bytes': 0, 'snap': None, 'last': time.time(), 'lastb': 0, 'stalled': 0, 'stallb': 0}
         stalls = []
         def progress():
@@ -747,6 +906,34 @@ class Run:
         except Exception as e:
             out.append('board: no answer in %.0f s: %s' % (time.time() - t0, e))
         return '\n'.join(out) + '\n'
+
+    def sayfsgo(self):
+        """the file-system loads' word to go, 1.5 s into a push"""
+        try:
+            self.sh('; '.join('echo > /tmp/soak/%s/go' % n for n in self.fsgo), limit=20)
+        except Exception as e:
+            self.log('fs go: %s' % e)
+
+    def h_video(self):
+        """the board's feed through videnc, read as JPEG by vidjpeg in the Jetson's
+        emulator over Ethernet, as a live viewer reads it"""
+        secs = 300; n = 'soakvid%d' % os.getpid()
+        cmd = ("load std; mkdir -p /tmp/%s/pv /tmp/%s/vj; mount -A 'tcp!%s!8704' /tmp/%s/pv && "
+               "mount {vidjpeg /tmp/%s/pv/0} /tmp/%s/vj && /dis/tests/feedrate.dis /tmp/%s/vj/0 %d; echo halt > /dev/sysctl") % (
+               n, n, self.info.addr, n, n, n, n, secs)
+        try:
+            r = subprocess.run([os.path.join(TREE, 'emu', 'Linux', 'o.emu'), '-c1', '-r' + os.path.normpath(TREE), '/dis/sh.dis', '-c', cmd],
+                               capture_output=True, text=True, timeout=secs + 120, stdin=subprocess.DEVNULL)
+            text = r.stdout + r.stderr
+        except subprocess.TimeoutExpired as e:
+            text = 'timed out after %d s: %s' % (secs + 120, (e.stdout or b'')[-200:])
+        finally:
+            shutil.rmtree(os.path.join(TREE, 'tmp', n), ignore_errors=True)
+        m = re.search(r'frames=(\d+) secs=([\d.]+) fps=([\d.]+) missed=(\d+)', text)
+        if not m:
+            return False, 'no reading: ' + ' '.join(l for l in text.splitlines() if 'sdl3' not in l)[-300:]
+        self.vfps.setdefault('remote', []).append((float(m.group(3)), int(m.group(4))))
+        return int(m.group(1)) >= 2 * secs, m.group(0)
 
     def h_net(self):
         return self.push(self.info.addr, self.iv['net_mb'], 'net')
@@ -855,7 +1042,7 @@ class Run:
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
                       'for(f in /tmp/soak/*/ticks) {echo `{cat $f >[2] /dev/null} $f}',
                       "{for(f in /tmp/soak/*/runs) {echo `{cat $f >[2] /dev/null} $f}} | sed 's/runs$/RUNS/'",
-                      'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
+                      'ls /tmp/soak/*/fail-* >[2] /dev/null', 'cat /tmp/soak/video/out >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
                  re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)\s*$', out, re.M)}
         # a count read while its loop rewrites it is missing; the last one read stands
@@ -873,6 +1060,9 @@ class Run:
             size.group(1) if size else '', temp[0] if temp else '', json.dumps(ticks),
             g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1]))
         self.samples.flush()
+        v = re.search(r'^frames=(\d+) secs=([\d.]+) fps=([\d.]+) missed=(\d+).*$', out, re.M)
+        if v and v.group(0) != self.vlast:
+            self.vlast = v.group(0); self.vfps.setdefault('board', []).append((float(v.group(3)), int(v.group(4))))
         fails = re.findall(r'(/tmp/soak/[\w-]+/fail-\d+)', out)
         for f in fails:
             body = self.sh('cat %s' % f, 'rm %s' % f)
@@ -974,7 +1164,9 @@ class Run:
             print(self.soakd_text([l for l in sel if l['board'] and not self.gate(l, r)]))
             return
         # leftovers of an earlier run
-        self.sh('rm -f /tmp/soak/run', limit=20); time.sleep(35)
+        self.sh('rm -f /tmp/soak/run', limit=20); time.sleep(110)
+        # an earlier run's video listener, if that run did not get to its teardown
+        self.sh("ftest -e /tmp/soak/video/lpid && {p = `{cat /tmp/soak/video/lpid}; echo killgrp > /prog/$p/ctl} >[2] /dev/null", limit=20)
         self.sh('rm -rf /tmp/soak', 'mkdir -p /tmp/soak', limit=30)
         r = self.probe()
         if not r['clock'][0]:
@@ -1027,6 +1219,10 @@ class Run:
         time.sleep(20)
         # host loads
         st = lambda n: self.state.get(n, '') == 'run'
+        # the push the file-system cycles begin inside: Wi-Fi's lasts longest
+        self.fsgo = [n for n in ('kfs', 'gefs') if st(n)]
+        self.fsdriver = 'wifi' if st('wifi') else 'net'
+        self.fsnext = 0
         if st('net'): self.every(self.iv['net_every'], self.h_net, 'net', first=60)
         if st('churn'): self.every(600, self.h_churn, 'churn', first=240)
         if st('latency'): self.every(60, self.h_latency, 'latency', first=20)
@@ -1034,6 +1230,7 @@ class Run:
         if st('usbnet'): self.every(600, self.h_usbnet, 'usbnet', first=300)
         if st('bt'): self.every(600, self.h_bt, 'bt', first=420)
         if st('console'): self.every(3600, self.h_console, 'console', first=600)
+        if st('video-remote'): self.every(1800, self.h_video, 'video-remote', first=900)
         if st('vm'):
             va, vb = (2, 3) if self.loopsvm == 1 else (1, 2)
             self.holdhost('vm', "vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; while {ftest -e /tmp/soak/run} {sleep 30}" % (va, vb))
@@ -1139,8 +1336,17 @@ class Run:
                 hrs = max((s[-1][0] - s[min(10, len(s) - 1)][0]) / 3600, 0.01)
                 out.append('%-5s floor %d -> %d bytes, %+.0f bytes/h' % (name, a, b, (b - a) / hrs))
         wt = ticks.get('sd-write', 0) * self.iv['sdw_kb'] * 1024; nt = ticks.get('nvme-write', 0) * self.iv['nvw_kb'] * 1024
-        out.append('written: SD %.1f MB (files), NVMe %.1f MB (%s); raw SD never' % (
+        out.append('written: SD %.1f MB (files), NVMe raw %.1f MB (%s); raw SD never' % (
             wt / 1e6, nt / 1e6, self.scratch.get('nvme', 'no scratch: never')))
+        if self.fsgo:
+            # each cycle's files (40 of 8 KB), before each file system's own metadata
+            out.append('written: kfs %d cycles, gefs %d cycles (%.1f MB of files each at most) on %s' % (
+                ticks.get('kfs', 0), ticks.get('gefs', 0), max(ticks.get('kfs', 0), ticks.get('gefs', 0)) * 40 * 8192 / 1e6,
+                self.scratch.get('fs')))
+        for k, v in sorted(self.vfps.items()):
+            f = sorted(x[0] for x in v)
+            out.append('video %-6s %d readings; median %.1f fps, slowest %.1f; frames skipped %d' % (
+                k, len(v), f[len(f) // 2], f[0], sum(x[1] for x in v)))
         if self.lat:
             avgs = sorted(x[0] for x in self.lat); mx = max(x[1] for x in self.lat)
             out.append('latency  %d samples; median avg %.2f ms, worst max %.2f ms, samples with loss %d' % (
@@ -1216,7 +1422,7 @@ def main():
     p.add_argument('--hours', type=float, default=12)
     p.add_argument('--profile', choices=sorted(PROFILES), default='normal', help='intensity of every area')
     p.add_argument('--stress', type=lambda s: s.split(','), default=[], help='areas raised to stress: ' + ','.join(AREAS))
-    p.add_argument('--scratch', action='append', default=[], help='DEV=PART that may be written raw, e.g. nvme=#S/nvme0p2')
+    p.add_argument('--scratch', action='append', default=[], help='DEV=PART that may be written: nvme=PART raw, fs=PART (an NVMe partition) for kfs and gefs, 1 GB each at its start, e.g. fs=nvme0p3')
     p.add_argument('--vmstress', action='store_true')
     p.add_argument('--flood', action='store_true', help='console flood as a load')
     p.add_argument('--batteries', action='store_true', help='Ethernet, Bluetooth and GPIO batteries before and after')

@@ -200,6 +200,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		# parcel and centres it both horizontally and vertically (was
 		# -side top, which pinned the board to the top edge).
 		cmd(win, "pack .f -expand 1");
+		# Keys reach us through the binding on ".", so "." must hold the
+		# focus.  Clicking "New game" on the high-score table gives it to
+		# that button, which is then destroyed with .f, leaving the focus
+		# nowhere: the next game answered only to the mouse.
+		cmd(win, "focus .");
 		cmd(win, "update");
 		g := Game.new(bd);
 		(finished, rank) := rungame(g, win, fromuser, winctl, scorech);

@@ -1,6 +1,6 @@
 # InferNode analytics
 
-Snapshot captured `2026-11-11T11:08:50+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-11-12T11:26:42+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
@@ -15,17 +15,18 @@ Snapshot captured `2026-11-11T11:08:50+00:00`. Updated daily by [`.github/workfl
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 40 | 11 |
-| Merged | — | 1060 |
+| Open | 40 | 12 |
+| Merged | — | 1065 |
 | Closed (unmerged) | 31 | 29 |
 
 ## Release downloads
 
-Lifetime downloads across published releases: **1145** (Δ 7d +91, Δ 30d +797).
+Lifetime downloads across published releases: **1205** (Δ 7d +151, Δ 30d +856).
 
 | Release | Published | Downloads |
 |---|---|---:|
-| `v0.10.0` | 2026-11-09 | 85 |
+| `v0.10.1` | 2026-11-12 | 49 |
+| `v0.10.0` | 2026-11-09 | 96 |
 | `v0.9.0` | 2026-10-29 | 81 |
 | `v0.8.1` | 2026-10-22 | 86 |
 | `v0.8.0` | 2026-10-15 | 74 |
@@ -59,40 +60,39 @@ Lifetime downloads across published releases: **1145** (Δ 7d +91, Δ 30d +797).
 | `v0.1.3` | `infernode-0.1.3-linux-amd64.tar.gz` | 9 |
 | `v0.10.0` | `infernode-0.10.0-rpi3bplus.img.xz` | 8 |
 | `v0.3.6` | `infernode-0.3.6-linux-amd64-gui.tar.gz` | 8 |
+| `v0.10.0` | `infernode-0.10.0-linux-amd64-gui.tar.gz` | 7 |
 | `v0.9.0` | `xenith-0.9.0-linux-amd64.tar.gz` | 7 |
 | `v0.9.0` | `xenith-0.9.0-macos-arm64.dmg` | 7 |
 | `v0.5.0` | `infernode-0.5.0-macos-arm64.dmg` | 7 |
 | `v0.3.6` | `infernode-0.3.6-macos-arm64.dmg` | 7 |
-| `v0.3.6` | `infernode-0.3.6-windows-amd64-gui.zip` | 7 |
 
 ## Traffic (last 14 days)
 
-- Views: **1230** total, **361** unique visitors
-- Clones: **22871** total, **1398** unique cloners
+- Views: **1254** total, **316** unique visitors
+- Clones: **23955** total, **1432** unique cloners
 
 ### Top referrers
 
 | Referrer | Views | Uniques |
 |---|---:|---:|
-| aocr.org | 318 | 320 |
-| github.com | 50 | 9 |
-| infernode.io | 19 | 9 |
-| Google | 10 | 8 |
+| aocr.org | 275 | 278 |
+| github.com | 60 | 9 |
+| infernode.io | 19 | 8 |
+| Google | 9 | 7 |
 | Baidu | 1 | 1 |
 | claude-funny-maxwell-ut4cv4.infernode-io.pages.dev | 1 | 1 |
-| github-com.btglss.net | 1 | 1 |
 
 ### Top paths
 
 | Path | Views | Uniques |
 |---|---:|---:|
-| `/infernode-os/infernode/pulls` | 434 | 10 |
-| `/infernode-os/infernode` | 88 | 32 |
-| `/infernode-os/infernode/releases/tag/v0.9.0` | 19 | 8 |
+| `/infernode-os/infernode/pulls` | 459 | 9 |
+| `/infernode-os/infernode` | 97 | 32 |
+| `/infernode-os/infernode/releases/tag/v0.9.0` | 21 | 8 |
 | `/infernode-os/infernode/pull/1111` | 13 | 1 |
+| `/infernode-os/infernode/releases/tag/v0.10.0` | 10 | 2 |
 | `/infernode-os/infernode/pull/1067` | 10 | 1 |
 | `/infernode-os/infernode/pull/1032` | 9 | 1 |
 | `/infernode-os/infernode/pull/1040` | 8 | 1 |
-| `/infernode-os/infernode/issues` | 7 | 6 |
+| `/infernode-os/infernode/issues` | 7 | 5 |
 | `/infernode-os/infernode/pull/1069` | 7 | 1 |
-| `/infernode-os/infernode/pull/1128` | 7 | 1 |

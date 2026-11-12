@@ -155,6 +155,8 @@ The runner stops and alarms (soakwatch's job, folded in) on:
 - heat past the soft limit (hard throttling, a capped clock, under-voltage, 85 °C)
 - a core load failing twice in a row
 
+A network push (net, wifi, usbnet) fails when it moves less than 1 MB in 15 s. It is followed until it moves again, or for 180 s, and then abandoned. The failure's file says which step it stopped in (connect, send, the board closing, receive), at which byte, and for how long. It also holds both ends' TCP view at 15 s and again afterwards: the host's `ss -ti` for the socket, and the board's conversations on the sink ports, `/net/tcp/stats` and `/net/ipifc/*/status`. If the board's console did not answer during the stall, the file says so and how long it waited. A single 15 s socket timeout used to end the push as `exception: timed out` and recorded nothing more.
+
 At the end it writes a **summary**:
 - **header:** board, kernel size and sha1, commit, card `/dis` state, options, host contention seen
 - one row per load: ran / skipped (why) / lost (when); passes, failures, the first failure's file

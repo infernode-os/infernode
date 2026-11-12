@@ -640,29 +640,107 @@ class Run:
                     return
         threading.Thread(target=loop, daemon=True).start()
 
+    STALL = 15      # seconds without a byte moved before a transfer is a failure
+    GIVEUP = 180    # seconds without a byte before it is abandoned
+
     def push(self, addr, mb, name):
+        """mb MB into the board (port 8702) and 64 MB out of it (8703). A transfer
+        that moves nothing for STALL seconds fails, but is followed until it moves
+        again or GIVEUP passes, so the record says where it stopped, for how long,
+        and what each end's TCP said about it."""
         lk = self.hres.take('jetson-nic')
+        st = {'phase': 'connect in', 'bytes': 0, 'snap': None, 'last': time.time(), 'lastb': 0, 'stalled': 0}
+        stalls = []
+        def progress():
+            # a stall is less than a MB moved in STALL seconds (a peer's trickle is no progress)
+            t = time.time(); w = t - st['last']
+            if st['bytes'] - st['lastb'] >= (1 << 20):
+                if st['stalled']:
+                    stalls.append((st['phase'], st['lastb'], w)); st['stalled'] = 0
+                st['last'], st['lastb'] = t, st['bytes']
+            elif w >= self.STALL and not st['stalled']:
+                st['stalled'] = 1
+                if st['snap'] is None:
+                    st['snap'] = self.stallsnap(addr, cur[0], '%s, %.0f s at byte %d' % (st['phase'], w, st['bytes']))
+            if w >= self.GIVEUP:
+                stalls.append((st['phase'], st['lastb'], w))
+                raise TimeoutError('under 1 MB moved in %.0f s in %s at byte %d' % (w, st['phase'], st['bytes']))
+        def phase(p, sock):
+            if st['stalled']:
+                stalls.append((st['phase'], st['lastb'], time.time() - st['last'])); st['stalled'] = 0
+            st['phase'] = p; cur[0] = sock; st['last'], st['lastb'] = time.time(), st['bytes']
+        cur = [None]
+        def watch(op, p, sock):
+            if p != st['phase'] or sock is not cur[0]:
+                phase(p, sock)
+            while True:
+                try:
+                    r = op()
+                    break
+                except socket.timeout:
+                    progress()
+            return r
         try:
-            c = socket.create_connection((addr, 8702), timeout=15); data = b'\xa5' * (1 << 20); t0 = time.time()
-            for _ in range(mb):
-                c.sendall(data)
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(1)
+            watch(lambda: c.connect((addr, 8702)), 'connect in', c)
+            data = memoryview(b'\xa5' * (1 << 20)); total = mb << 20; t0 = time.time()
+            while st['bytes'] < total:
+                off = st['bytes'] % len(data); end = min(len(data), off + total - st['bytes'])
+                st['bytes'] += watch(lambda: c.send(data[off:end]), 'send', c); progress()
             c.shutdown(socket.SHUT_WR)
             try:
-                c.settimeout(60); c.recv(1)
-            except Exception:
+                watch(lambda: c.recv(1), 'close in', c)
+            except (TimeoutError, OSError):
                 pass
             c.close(); rin = mb * 8 / (time.time() - t0)
-            c = socket.create_connection((addr, 8703), timeout=15); c.settimeout(60); n = 0; t0 = time.time()
+            phase('between', None); st['bytes'] = 0
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(1)
+            watch(lambda: c.connect((addr, 8703)), 'connect out', c)
+            t0 = time.time()
             while True:
-                b = c.recv(1 << 20)
+                b = watch(lambda: c.recv(1 << 20), 'recv', c)
                 if not b:
                     break
-                n += len(b)
-            c.close(); rout = n * 8 / (time.time() - t0) / 1e6
+                st['bytes'] += len(b); progress()
+            c.close(); n = st['bytes']; rout = n * 8 / (time.time() - t0) / 1e6
+            phase('done', None)
+        except Exception as e:
+            note = 'exception: %s (in %s at byte %d)' % (e, st['phase'], st['bytes'])
+            return False, self.stallnote(note, stalls, st['snap'])
         finally:
             self.hres.give(lk)
         self.rates.setdefault(name, []).append((rin, rout))
-        return True, 'in %d MB at %.1f Mbit/s, out %d MB at %.1f Mbit/s' % (mb, rin, n >> 20, rout)
+        note = 'in %d MB at %.1f Mbit/s, out %d MB at %.1f Mbit/s' % (mb, rin, n >> 20, rout)
+        if stalls:
+            return False, self.stallnote(note, stalls, st['snap'])
+        return True, note
+
+    def stallnote(self, note, stalls, snap):
+        for phase, at, w in stalls:
+            note += '; stalled %.1f s in %s at byte %d, then %s' % (w, phase, at, 'moved again' if w < self.GIVEUP else 'abandoned')
+        if snap:
+            note += '\n' + snap + self.stallsnap(None, None, 'after')
+        return note
+
+    def stallsnap(self, addr, sock, when):
+        """both ends' view of a stalled transfer: the host's socket (ss -ti), the
+        board's conversations on the sink ports and its TCP counters"""
+        out = ['--- %s (%s)' % (when, now())]
+        if sock is not None:
+            try:
+                lp = sock.getsockname()[1]
+                r = subprocess.run(['ss', '-tinmoe', 'sport', '=', ':%d' % lp], capture_output=True, text=True, timeout=10)
+                out.append('host: ' + r.stdout.strip())
+            except Exception as e:
+                out.append('host: %s' % e)
+        t0 = time.time()
+        try:
+            b = self.sh(["{for d in /net/tcp/[0-9]* {echo $d `{cat $d/local} `{cat $d/remote} `{cat $d/status}}} | grep '!870[23] '",
+                         'cat /net/tcp/stats', 'cat /net/ipifc/*/status'], limit=60)
+            out.append('board (console answered in %.1f s):\n%s' % (time.time() - t0, b.strip()))
+        except Exception as e:
+            out.append('board: no answer in %.0f s: %s' % (time.time() - t0, e))
+        return '\n'.join(out) + '\n'
 
     def h_net(self):
         return self.push(self.info.addr, self.iv['net_mb'], 'net')

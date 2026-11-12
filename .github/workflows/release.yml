@@ -1418,7 +1418,7 @@ jobs:
         include:
           - arch: arm64
             label: ARM64
-            runner: macos-14   # macos-15 went unacquired six times for v0.10.0 (GitHub arm64 capacity); headless needs no macOS 15
+            runner: macos-15   # macos-14 is gone: "The configuration 'macos-14-arm64-us-default' is not supported" (v0.10.1)
             homebrew: /opt/homebrew
           # Intel Macs (#786), for as long as GitHub has an Intel image.
           - arch: amd64

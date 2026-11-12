@@ -63,7 +63,7 @@ tests/soak/
 - In Inferno's shell, `@{ }` does not fork the namespace. A bind inside one leaks into the loops' shared namespace, and the run's TLS CA replaced every trusted root. Use `sh -c '...'`, which forks the namespace by default.
 - A braced block has its own arguments, so `$1` is empty inside it. Take arguments into variables first.
 
-**Passes are counted, not iterations.** Each board loop iteration starts with `begin NAME`, which counts a run and sets `passok`. Any `bad` clears `passok`. The iteration ends with `done NAME`, which ticks a pass only if nothing in it failed. The summary shows runs, passes and fails. The runner refuses a load whose body does not end in exactly one `tick` it can turn into a `done`.
+**Passes are counted, not iterations.** Each board loop iteration starts with `begin NAME`, which counts a run and sets `passok`. Any `bad` clears `passok`. The iteration ends with `done NAME`, which ticks a pass only if nothing in it failed. The summary shows runs, passes and fails. The runner refuses a load whose body does not end in exactly one `tick` it can turn into a `done`. Each loop keeps its two counts as numbers and overwrites `/tmp/soak/NAME/runs` and `ticks` with them, so the files stay a few bytes long. They used to get a line appended per iteration. `/tmp` is memfs, which keeps its data on the Dis heap, so on the Pi 5's 12 h run of 2026-11-12 the heap grew 0.6 MB an hour from the counters alone (3.3 to 10.4 MB, all of it given back when the two files were removed). A real leak of that size would have been hidden.
 
 Before this fix every load ticked unconditionally, so failed iterations counted as passes. The Pi 5's I2C showed "490 passed" while every read failed.
 
@@ -155,6 +155,8 @@ The runner stops and alarms (soakwatch's job, folded in) on:
 - heat past the soft limit (hard throttling, a capped clock, under-voltage, 85 °C)
 - a core load failing twice in a row
 
+A network push (net, wifi, usbnet) fails when it moves less than 1 MB in 15 s. It is followed until it moves again, or for 180 s, and then abandoned. The failure's file says which step it stopped in (connect, send, the board closing, receive), at which byte, and for how long. It also holds both ends' TCP view at 15 s and again afterwards: the host's `ss -ti` for the socket, and the board's conversations on the sink ports, `/net/tcp/stats` and `/net/ipifc/*/status`. If the board's console did not answer during the stall, the file says so and how long it waited. A single 15 s socket timeout used to end the push as `exception: timed out` and recorded nothing more.
+
 At the end it writes a **summary**:
 - **header:** board, kernel size and sha1, commit, card `/dis` state, options, host contention seen
 - one row per load: ran / skipped (why) / lost (when); passes, failures, the first failure's file
@@ -163,7 +165,7 @@ At the end it writes a **summary**:
 - rates for each network path, with their band
 - battery results before and after
 
-It also appends one **ledger** row (board, date, kernel, options, length, result, slope) to `~/soak/ledger.tsv`, so any two runs on any boards can be set side by side.
+It also appends one **ledger** row (board, date, kernel, options, length, result, the main and heap pools' slopes) to `~/soak/ledger.tsv`, so any two runs on any boards can be set side by side.
 
 ## Shared host resources
 

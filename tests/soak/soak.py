@@ -247,16 +247,22 @@ class HostRes:
 # board (sh body run in a loop under soakd), host (a function run in a
 # thread), what, and an optional pass note. Resources are probed by PROBES.
 
-SOAKD_HEAD = r'''load std
+SOAKD_HEAD = r'''load std; load expr
 mkdir -p /tmp/soak
-fn tick { echo x >> /tmp/soak/$1/ticks }
+# Each loop keeps its counts as numbers (nr runs, nt passes; a background
+# block has variables of its own) and overwrites its files with them. The
+# files were a line appended per iteration: /tmp is memfs, on the Dis heap,
+# and the Pi 5's fs load (31 iterations a second) grew the heap by 0.6 MB an
+# hour of counters, a slope that would have hidden a leak (2026-11-12).
+nr = 0; nt = 0
+fn tick { name = $1; nt = ${expr $nt 1 +}; echo $nt > /tmp/soak/$name/ticks }
 # An iteration passes only if nothing in it failed: begin counts a run and
 # sets passok, bad clears it, done ticks only if it is still set. A plain
 # tick after "cmd || bad" counted failed iterations as passes (the Pi 5's
 # i2c: "490 passed" with every read failing, 2026-11-08). done takes its
 # argument into a variable first: inside the if block $1 is empty.
-fn begin { passok = 1; echo x >> /tmp/soak/$1/runs }
-fn done { name = $1; if {~ $passok 1} {echo x >> /tmp/soak/$name/ticks} }
+fn begin { name = $1; passok = 1; nr = ${expr $nr 1 +}; echo $nr > /tmp/soak/$name/runs }
+fn done { name = $1; if {~ $passok 1} {nt = ${expr $nt 1 +}; echo $nt > /tmp/soak/$name/ticks} }
 # A braced block (a backquote's, an if's body) has its own arguments: $1 is
 # empty inside one, and "null list in concatenation" kills the whole loop
 # (it did, for every load's first failure, 2026-11-07). So the name is taken
@@ -640,29 +646,107 @@ class Run:
                     return
         threading.Thread(target=loop, daemon=True).start()
 
+    STALL = 15      # seconds without a byte moved before a transfer is a failure
+    GIVEUP = 180    # seconds without a byte before it is abandoned
+
     def push(self, addr, mb, name):
+        """mb MB into the board (port 8702) and 64 MB out of it (8703). A transfer
+        that moves nothing for STALL seconds fails, but is followed until it moves
+        again or GIVEUP passes, so the record says where it stopped, for how long,
+        and what each end's TCP said about it."""
         lk = self.hres.take('jetson-nic')
+        st = {'phase': 'connect in', 'bytes': 0, 'snap': None, 'last': time.time(), 'lastb': 0, 'stalled': 0, 'stallb': 0}
+        stalls = []
+        def progress():
+            # a stall is less than a MB moved in STALL seconds (a peer's trickle is no progress)
+            t = time.time(); w = t - st['last']
+            if st['bytes'] - st['lastb'] >= (1 << 20):
+                if st['stalled']:
+                    stalls.append((st['phase'], st['stallb'], w)); st['stalled'] = 0
+                st['last'], st['lastb'] = t, st['bytes']
+            elif w >= self.STALL and not st['stalled']:
+                st['stalled'] = 1; st['stallb'] = st['bytes']
+                if st['snap'] is None:
+                    st['snap'] = self.stallsnap(addr, cur[0], '%s, %.0f s at byte %d' % (st['phase'], w, st['bytes']))
+            if w >= self.GIVEUP:
+                stalls.append((st['phase'], st['stallb'], w))
+                raise TimeoutError('under 1 MB moved in %.0f s in %s at byte %d' % (w, st['phase'], st['bytes']))
+        def phase(p, sock):
+            if st['stalled']:
+                stalls.append((st['phase'], st['stallb'], time.time() - st['last'])); st['stalled'] = 0
+            st['phase'] = p; cur[0] = sock; st['last'], st['lastb'] = time.time(), st['bytes']
+        cur = [None]
+        def watch(op, p, sock):
+            if p != st['phase'] or sock is not cur[0]:
+                phase(p, sock)
+            while True:
+                try:
+                    r = op()
+                    break
+                except socket.timeout:
+                    progress()
+            return r
         try:
-            c = socket.create_connection((addr, 8702), timeout=15); data = b'\xa5' * (1 << 20); t0 = time.time()
-            for _ in range(mb):
-                c.sendall(data)
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(1)
+            watch(lambda: c.connect((addr, 8702)), 'connect in', c)
+            data = memoryview(b'\xa5' * (1 << 20)); total = mb << 20; t0 = time.time()
+            while st['bytes'] < total:
+                off = st['bytes'] % len(data); end = min(len(data), off + total - st['bytes'])
+                st['bytes'] += watch(lambda: c.send(data[off:end]), 'send', c); progress()
             c.shutdown(socket.SHUT_WR)
             try:
-                c.settimeout(60); c.recv(1)
-            except Exception:
+                watch(lambda: c.recv(1), 'close in', c)
+            except (TimeoutError, OSError):
                 pass
             c.close(); rin = mb * 8 / (time.time() - t0)
-            c = socket.create_connection((addr, 8703), timeout=15); c.settimeout(60); n = 0; t0 = time.time()
+            phase('between', None); st['bytes'] = 0
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(1)
+            watch(lambda: c.connect((addr, 8703)), 'connect out', c)
+            t0 = time.time()
             while True:
-                b = c.recv(1 << 20)
+                b = watch(lambda: c.recv(1 << 20), 'recv', c)
                 if not b:
                     break
-                n += len(b)
-            c.close(); rout = n * 8 / (time.time() - t0) / 1e6
+                st['bytes'] += len(b); progress()
+            c.close(); n = st['bytes']; rout = n * 8 / (time.time() - t0) / 1e6
+            phase('done', None)
+        except Exception as e:
+            note = 'exception: %s (in %s at byte %d)' % (e, st['phase'], st['bytes'])
+            return False, self.stallnote(note, stalls, st['snap'])
         finally:
             self.hres.give(lk)
         self.rates.setdefault(name, []).append((rin, rout))
-        return True, 'in %d MB at %.1f Mbit/s, out %d MB at %.1f Mbit/s' % (mb, rin, n >> 20, rout)
+        note = 'in %d MB at %.1f Mbit/s, out %d MB at %.1f Mbit/s' % (mb, rin, n >> 20, rout)
+        if stalls:
+            return False, self.stallnote(note, stalls, st['snap'])
+        return True, note
+
+    def stallnote(self, note, stalls, snap):
+        for phase, at, w in stalls:
+            note += '; stalled %.1f s in %s at byte %d, then %s' % (w, phase, at, 'moved again' if w < self.GIVEUP else 'abandoned')
+        if snap:
+            note += '\n' + snap + self.stallsnap(None, None, 'after')
+        return note
+
+    def stallsnap(self, addr, sock, when):
+        """both ends' view of a stalled transfer: the host's socket (ss -ti), the
+        board's conversations on the sink ports and its TCP counters"""
+        out = ['--- %s (%s)' % (when, now())]
+        if sock is not None:
+            try:
+                lp = sock.getsockname()[1]
+                r = subprocess.run(['ss', '-tinmoe', 'sport', '=', ':%d' % lp], capture_output=True, text=True, timeout=10)
+                out.append('host: ' + r.stdout.strip())
+            except Exception as e:
+                out.append('host: %s' % e)
+        t0 = time.time()
+        try:
+            b = self.sh("{for d in /net/tcp/[0-9]* {echo $d `{cat $d/local} `{cat $d/remote} `{cat $d/status}}} | grep '!870[23] '",
+                        'cat /net/tcp/stats', 'cat /net/ipifc/*/status', limit=60)
+            out.append('board (console answered in %.1f s):\n%s' % (time.time() - t0, b.strip()))
+        except Exception as e:
+            out.append('board: no answer in %.0f s: %s' % (time.time() - t0, e))
+        return '\n'.join(out) + '\n'
 
     def h_net(self):
         return self.push(self.info.addr, self.iv['net_mb'], 'net')
@@ -769,12 +853,14 @@ class Run:
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
-                      'wc -l /tmp/soak/*/ticks >[2] /dev/null', "wc -l /tmp/soak/*/runs >[2] /dev/null | sed 's/runs$/RUNS/'",
+                      'for(f in /tmp/soak/*/ticks) {echo `{cat $f >[2] /dev/null} $f}',
+                      "{for(f in /tmp/soak/*/runs) {echo `{cat $f >[2] /dev/null} $f}} | sed 's/runs$/RUNS/'",
                       'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
                  re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)\s*$', out, re.M)}
-        ticks = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/ticks', out)}
-        self.runs = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/RUNS', out)} or getattr(self, 'runs', {})
+        # a count read while its loop rewrites it is missing; the last one read stands
+        self.ticks = ticks = dict(getattr(self, 'ticks', {}), **{m.group(2): int(m.group(1)) for m in re.finditer(r'^(\d+) /tmp/soak/([\w-]+)/ticks', out, re.M)})
+        self.runs = dict(getattr(self, 'runs', {}), **{m.group(2): int(m.group(1)) for m in re.finditer(r'^(\d+) /tmp/soak/([\w-]+)/RUNS', out, re.M)})
         size = re.search(r' (\d+) [A-Z][a-z][a-z] .*bootimage', out)
         temp = re.findall(r'^(\d+\.\d+)', out, re.M)
         running = 'RUNNING' in out
@@ -1084,18 +1170,25 @@ class Run:
         os.makedirs(SOAKHOME, exist_ok=True)
         led = os.path.join(SOAKHOME, 'ledger.tsv')
         new = not os.path.exists(led)
+        if not new:
+            # the heap's slope was added as a last column (2026-11-12); older rows leave it empty
+            lines = open(led).read().split('\n')
+            if lines and lines[0].startswith('start\t') and 'heap_per_h' not in lines[0]:
+                lines[0] += '\theap_per_h'; open(led, 'w').write('\n'.join(lines))
         with open(led, 'a') as f:
             if new:
-                f.write('start\tboard\tkernel_sha1\tkernel_bytes\thours\toptions\tresult\tfails\tmain_per_h\tskipped\trun_dir\n')
-            s = series(2)
-            slope = ''
-            if len(s) > 12:
-                a, b = floor(s, s[10][0]), floor(s, s[-1][0]); slope = '%.0f' % ((b - a) / max((s[-1][0] - s[10][0]) / 3600, 0.01))
-            f.write('%s\t%s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+                f.write('start\tboard\tkernel_sha1\tkernel_bytes\thours\toptions\tresult\tfails\tmain_per_h\tskipped\trun_dir\theap_per_h\n')
+            def slope(col):
+                s = series(col)
+                if len(s) <= 12:
+                    return ''
+                a, b = floor(s, s[10][0]), floor(s, s[-1][0])
+                return '%.0f' % ((b - a) / max((s[-1][0] - s[10][0]) / 3600, 0.01))
+            f.write('%s\t%s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
                 time.strftime('%Y-%m-%d %H:%M', time.localtime(self.t0)), self.info.name, self.kernel[1], self.kernel[0],
                 (time.time() - self.t0) / 3600, self.options().replace(' ', ','),
-                'ALARM' if alarm else 'ok', sum(self.failcount.values()), slope,
-                ','.join(n for n, s in self.state.items() if s.startswith('skip')), self.dir))
+                'ALARM' if alarm else 'ok', sum(self.failcount.values()), slope(2),
+                ','.join(n for n, s in self.state.items() if s.startswith('skip')), self.dir, slope(3)))
 
     def tagdiff(self, fa, fb):
         def load(f):

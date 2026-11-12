@@ -34,17 +34,72 @@ module; see
 .PP
 Client and server communicate over the Secure Socket Layer device
 .IR ssl (3).
+.SS "Failed attempts"
+.I Logind
+limits online guessing of passwords
+(NIST SP 800-53 AC-7, Common Criteria FIA_AFL.1).
+After 10 logins in a row for a name that do not prove its password,
+further logins for that name are refused for 60 seconds,
+before the password is looked up or any key is exchanged,
+with the error
+.IP
+.B "login refused: too many failed attempts; retry in"
+.IR n s
+.PP
+An attempt is counted when it begins and its count cleared only when
+the client shows it has the session's key, which only the password gives;
+so a wrong password, a client that hangs up part way, a value refused,
+a time out and a
+.I logind
+killed are all counted, and many connections opened at once for one
+name are counted as they start.
+A login that works clears the name's count.
+A name with no account is counted and refused in the same way and the
+same words, so the throttle does not tell which names have accounts.
+A count not added to for 15 minutes is forgotten, as is a cooldown once
+it ends; at most 4096 counts not at the limit are kept, the oldest
+dropped first.
+Each lock, and each refusal while locked, is written to the console and,
+when the audit log is set up
+.RI ( auditfs (4)),
+to it as an
+.B authlock
+event.
+.PP
+Each connection is served by a
+.I logind
+of its own, so the counts are kept in
+.BR /keydb/loginfail ,
+one line per name: the SHA-256 of the name in hexadecimal, the count,
+when the last attempt began and when the cooldown ends (0 if not set),
+in seconds since the epoch.
+It is read and written whole under
+.BR /keydb/loginfail.lock ,
+made exclusively and removed when closed; a lock more than a minute old
+is taken to be left by a crash and removed.
+Removing an entry, or the file, ends a cooldown at once.
+If the file or its lock cannot be had,
+.I logind
+refuses the login rather than go without the limit.
 .SH FILES
-.TF /keydb/signerkey
+.TF /keydb/loginfail.lock
 .TP
 .B /keydb/keys
 .TP
 .B /keydb/signerkey
+.TP
+.B /keydb/loginfail
+Failed-attempt counts.
+.TP
+.B /keydb/loginfail.lock
+Its lock.
 .SH SOURCE
 .B /appl/cmd/auth/logind.b
 .SH "SEE ALSO"
+.IR secstore (1),
 .IR security-login (2),
 .IR ssl (3),
+.IR auditfs (4),
 .IR keyfs (4),
 .IR keys (6),
 .IR changelogin (8),

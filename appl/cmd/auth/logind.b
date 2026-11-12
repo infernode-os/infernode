@@ -19,6 +19,9 @@ include "security.m";
 include "daytime.m";
 	daytime: Daytime;
 
+include "audit.m";
+	audit: Audit;
+
 Logind: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -26,6 +29,49 @@ Logind: module
 
 TimeLimit: con 5*60*1000;	# five minutes
 keydb := "/mnt/keys";
+
+#
+# Failed-attempt throttle (NIST SP 800-53 AC-7; CC FIA_AFL.1), as
+# secstored(8) has: Maxfail logins in a row that do not prove the
+# password lock the name for Locksecs, refused before any key exchange.
+# A name that is no account is counted and locked the same way, and
+# refused in the same words, so the throttle says nothing of who has an
+# account.
+#
+# Each connection is a logind of its own (svc/auth: listen ...
+# {auth/logind&}), so the counts cannot be in memory as secstored's
+# are: they are in Failfile, read and written whole under Failfile.lock,
+# made exclusively and removed on close, so a logind that dies holding
+# it leaves nothing behind. An attempt is counted when it begins (the
+# lock taken for it, before the exchange), and the count cleared only
+# when the client has shown it has the session key, which only the
+# password gives; so every other end -- a wrong password, a client that
+# hangs up after the server's message, a value refused, a time out, a
+# logind killed -- stays counted, and many connections opened at once
+# for one name are counted as they start, not after they fail.
+#
+# Names are kept as the SHA-256 of the name, so the file holds no names
+# and a name cannot break its lines. A count not added to for
+# Forgetsecs is forgotten (AC-7's "during a time period"); past
+# Maxentries the oldest unlocked counts are dropped, so names made up by
+# the million do not make the file, which every login reads, grow
+# without end. The file cannot be read or written, or its lock cannot be
+# had: the login is refused (closed, not open).
+#
+Maxfail: con 10;	# attempts in a row not proving the password
+Locksecs: con 60;	# then refused for this long
+Forgetsecs: con 15*60;	# a count left this long is forgotten
+Maxentries: con 4096;	# unlocked counts kept
+Lockwait: con 5000;	# ms to wait for Failfile.lock
+Lockstale: con 60;	# s: a lock older than this was left by a crash
+failfile := "/keydb/loginfail";
+
+Fail: adt {
+	key:	string;	# hex SHA-256 of the name
+	fails:	int;	# attempts in a row not proving the password
+	last:	int;	# when the last began
+	until:	int;	# refused until then; 0, not yet set
+};
 
 stderr: ref Sys->FD;
  
@@ -43,6 +89,10 @@ init(nil: ref Draw->Context, nil: list of string)
 	daytime = load Daytime Daytime->PATH;
 	if(daytime == nil) 
 		nomod(Daytime->PATH);
+
+	audit = load Audit Audit->PATH;	# optional: the audit log
+	if(audit != nil)
+		audit->init();
 
 	(err, c) := ssl->connect(sys->fildes(0));     
 	if(c == nil)
@@ -94,6 +144,19 @@ dologin(c: ref Sys->Connection): string
 		return "bad initialization vector length";
 	}
 	nsalt := len ivec - 12;
+
+	# The throttle, before the password is looked up or any exchange:
+	# a name in its cooldown is refused, and this attempt is counted
+	# until the client proves the password (cleared below).
+	key := failkey(name);
+	(rem, terr) := charge(name, key);
+	if(terr != nil)
+		return "login throttle: " + terr;
+	if(rem > 0){
+		sys->fprint(stderr, "logind: refused %q: locked for %ds more\n", name, rem);
+		auditlog("authlock", sys->sprint("user=%q reason=throttled remaining=%d", name, rem));
+		return sys->sprint("login refused: too many failed attempts; retry in %ds", rem);
+	}
 
 	# lookup password
 	pw := getsecret(s);
@@ -159,6 +222,10 @@ dologin(c: ref Sys->Connection): string
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return "client public key: "+err;
+
+	# The client's key came under the session's secrets: it has
+	# alpha**(r0*r1), so it had the password. The attempt is not a failure.
+	cleared(key);
 	hisPKbuf := array of byte s;
 	hisPK := kr->strtopk(s);
 	if(hisPK.owner != name)
@@ -297,6 +364,206 @@ getexpiry(id: string): int
 		return -1;
 	}
 	return int s;
+}
+
+failkey(name: string): string
+{
+	b := array of byte name;
+	d := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(b, len b, d, nil);
+	h := "";
+	for(i := 0; i < len d; i++)
+		h += sys->sprint("%.2ux", int d[i]);
+	return h;
+}
+
+auditlog(event, msg: string)
+{
+	if(audit != nil)
+		audit->log("logind", event, msg);
+}
+
+# Count an attempt for key: the seconds it is still refused for (and
+# then it is not counted), or 0 and the attempt counted. Counts reach
+# Maxfail at most, and only one at Maxfail is refused.
+charge(name, key: string): (int, string)
+{
+	(lk, err) := failock();
+	if(lk == nil)
+		return (0, err);
+	now := daytime->now();
+	fl := prune(loadfails(), now);
+	e: ref Fail;
+	for(l := fl; l != nil; l = tl l)
+		if((hd l).key == key){
+			e = hd l;
+			break;
+		}
+	if(e != nil && e.fails >= Maxfail){
+		# Maxfail attempts in a row, none proving the password: refused
+		# for Locksecs from the last of them. The lock is set here, by
+		# the attempt after them, so a last that worked locks nothing.
+		if(e.until == 0){
+			e.until = e.last + Locksecs;
+			if(e.until > now){
+				sys->fprint(stderr, "logind: %q locked after %d attempts not proving the password (%ds)\n", name, e.fails, Locksecs);
+				auditlog("authlock", sys->sprint("user=%q fails=%d locksecs=%d", name, e.fails, Locksecs));
+				err = storefails(fl);
+				if(err != nil)
+					return (0, err);
+			}
+		}
+		if(e.until > now)
+			return (e.until - now, nil);	# lk let go as it goes
+		e.fails = 0;	# the cooldown is over: a fresh count
+		e.until = 0;
+	}
+	if(e == nil){
+		e = ref Fail(key, 0, 0, 0);
+		fl = e :: fl;
+	}
+	e.fails++;
+	e.last = now;
+	err = storefails(fl);
+	lk = nil;
+	if(err != nil)
+		return (0, err);
+	return (0, nil);
+}
+
+# The password proved: key's count gone.
+cleared(key: string)
+{
+	(lk, err) := failock();
+	if(lk == nil){
+		sys->fprint(stderr, "logind: can't clear a count: %s\n", err);
+		return;
+	}
+	fl := loadfails();
+	nl: list of ref Fail;
+	found := 0;
+	for(; fl != nil; fl = tl fl)
+		if((hd fl).key == key)
+			found = 1;
+		else
+			nl = hd fl :: nl;
+	if(found){
+		err = storefails(nl);
+		if(err != nil)
+			sys->fprint(stderr, "logind: can't clear a count: %s\n", err);
+	}
+	lk = nil;
+}
+
+# The counts still to keep at now: a lock run out and a count left
+# Forgetsecs gone; past Maxentries unlocked, the oldest of those gone.
+prune(fl: list of ref Fail, now: int): list of ref Fail
+{
+	locked, open: list of ref Fail;
+	nopen := 0;
+	for(; fl != nil; fl = tl fl){
+		e := hd fl;
+		if(e.fails >= Maxfail){
+			until := e.until;
+			if(until == 0)
+				until = e.last + Locksecs;
+			if(until > now)
+				locked = e :: locked;
+		}else if(now - e.last < Forgetsecs){
+			open = e :: open;
+			nopen++;
+		}
+	}
+	if(nopen > Maxentries){
+		a := array[nopen] of ref Fail;
+		i := 0;
+		for(; open != nil; open = tl open)
+			a[i++] = hd open;
+		sortlast(a);
+		for(i = nopen - Maxentries; i < nopen; i++)
+			open = a[i] :: open;
+	}
+	for(; open != nil; open = tl open)
+		locked = hd open :: locked;
+	return locked;
+}
+
+# oldest first, by last (Shell's sort)
+sortlast(a: array of ref Fail)
+{
+	for(gap := len a / 2; gap > 0; gap /= 2)
+		for(i := gap; i < len a; i++)
+			for(j := i - gap; j >= 0 && a[j].last > a[j+gap].last; j -= gap)
+				(a[j], a[j+gap]) = (a[j+gap], a[j]);
+}
+
+# Failfile's counts; a line that is not one (a torn write) is left out.
+loadfails(): list of ref Fail
+{
+	fd := sys->open(failfile, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	data := "";
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		data += string buf[0:n];
+	fl: list of ref Fail;
+	(nil, lines) := sys->tokenize(data, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " ");
+		if(nf != 4 || len hd f != 2*Keyring->SHA256dlen)
+			continue;
+		e := ref Fail(hd f, int hd tl f, int hd tl tl f, int hd tl tl tl f);
+		if(e.fails <= 0)
+			continue;
+		fl = e :: fl;
+	}
+	return fl;
+}
+
+storefails(fl: list of ref Fail): string
+{
+	fd := sys->create(failfile, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return sys->sprint("can't write %s: %r", failfile);
+	s := "";
+	for(; fl != nil; fl = tl fl){
+		e := hd fl;
+		s += sys->sprint("%s %d %d %d\n", e.key, e.fails, e.last, e.until);
+	}
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("can't write %s: %r", failfile);
+	return nil;
+}
+
+# Failfile.lock, made exclusively and removed when its fd goes; one
+# older than Lockstale (a host that went down holding it) is removed.
+failock(): (ref Sys->FD, string)
+{
+	lf := failfile + ".lock";
+	t0 := sys->millisec();
+	for(;;){
+		fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+		if(fd != nil)
+			return (fd, nil);
+		err := sys->sprint("%r");
+		(ok, d) := sys->stat(lf);
+		if(ok < 0){
+			# not made and not there: the directory refuses it, unless
+			# a holder let go between the two
+			fd = sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+			if(fd != nil)
+				return (fd, nil);
+			(ok, nil) = sys->stat(lf);
+			if(ok < 0)
+				return (nil, sys->sprint("can't make %s: %s", lf, err));
+		}else if(daytime->now() - d.mtime > Lockstale)
+			sys->remove(lf);
+		if(sys->millisec() - t0 > Lockwait)
+			return (nil, sys->sprint("%s held for %d ms", lf, Lockwait));
+		sys->sleep(10);
+	}
 }
 
 stalker(pidc: chan of int, killpid: int)

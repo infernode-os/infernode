@@ -63,7 +63,7 @@ tests/soak/
 - In Inferno's shell, `@{ }` does not fork the namespace. A bind inside one leaks into the loops' shared namespace, and the run's TLS CA replaced every trusted root. Use `sh -c '...'`, which forks the namespace by default.
 - A braced block has its own arguments, so `$1` is empty inside it. Take arguments into variables first.
 
-**Passes are counted, not iterations.** Each board loop iteration starts with `begin NAME`, which counts a run and sets `passok`. Any `bad` clears `passok`. The iteration ends with `done NAME`, which ticks a pass only if nothing in it failed. The summary shows runs, passes and fails. The runner refuses a load whose body does not end in exactly one `tick` it can turn into a `done`.
+**Passes are counted, not iterations.** Each board loop iteration starts with `begin NAME`, which counts a run and sets `passok`. Any `bad` clears `passok`. The iteration ends with `done NAME`, which ticks a pass only if nothing in it failed. The summary shows runs, passes and fails. The runner refuses a load whose body does not end in exactly one `tick` it can turn into a `done`. Each loop keeps its two counts as numbers and overwrites `/tmp/soak/NAME/runs` and `ticks` with them, so the files stay a few bytes long. They used to get a line appended per iteration. `/tmp` is memfs, which keeps its data on the Dis heap, so on the Pi 5's 12 h run of 2026-11-12 the heap grew 0.6 MB an hour from the counters alone (3.3 to 10.4 MB, all of it given back when the two files were removed). A real leak of that size would have been hidden.
 
 Before this fix every load ticked unconditionally, so failed iterations counted as passes. The Pi 5's I2C showed "490 passed" while every read failed.
 
@@ -165,7 +165,7 @@ At the end it writes a **summary**:
 - rates for each network path, with their band
 - battery results before and after
 
-It also appends one **ledger** row (board, date, kernel, options, length, result, slope) to `~/soak/ledger.tsv`, so any two runs on any boards can be set side by side.
+It also appends one **ledger** row (board, date, kernel, options, length, result, the main and heap pools' slopes) to `~/soak/ledger.tsv`, so any two runs on any boards can be set side by side.
 
 ## Shared host resources
 

@@ -247,16 +247,22 @@ class HostRes:
 # board (sh body run in a loop under soakd), host (a function run in a
 # thread), what, and an optional pass note. Resources are probed by PROBES.
 
-SOAKD_HEAD = r'''load std
+SOAKD_HEAD = r'''load std; load expr
 mkdir -p /tmp/soak
-fn tick { echo x >> /tmp/soak/$1/ticks }
+# Each loop keeps its counts as numbers (nr runs, nt passes; a background
+# block has variables of its own) and overwrites its files with them. The
+# files were a line appended per iteration: /tmp is memfs, on the Dis heap,
+# and the Pi 5's fs load (31 iterations a second) grew the heap by 0.6 MB an
+# hour of counters, a slope that would have hidden a leak (2026-11-12).
+nr = 0; nt = 0
+fn tick { name = $1; nt = ${expr $nt 1 +}; echo $nt > /tmp/soak/$name/ticks }
 # An iteration passes only if nothing in it failed: begin counts a run and
 # sets passok, bad clears it, done ticks only if it is still set. A plain
 # tick after "cmd || bad" counted failed iterations as passes (the Pi 5's
 # i2c: "490 passed" with every read failing, 2026-11-08). done takes its
 # argument into a variable first: inside the if block $1 is empty.
-fn begin { passok = 1; echo x >> /tmp/soak/$1/runs }
-fn done { name = $1; if {~ $passok 1} {echo x >> /tmp/soak/$name/ticks} }
+fn begin { name = $1; passok = 1; nr = ${expr $nr 1 +}; echo $nr > /tmp/soak/$name/runs }
+fn done { name = $1; if {~ $passok 1} {nt = ${expr $nt 1 +}; echo $nt > /tmp/soak/$name/ticks} }
 # A braced block (a backquote's, an if's body) has its own arguments: $1 is
 # empty inside one, and "null list in concatenation" kills the whole loop
 # (it did, for every load's first failure, 2026-11-07). So the name is taken
@@ -847,12 +853,14 @@ class Run:
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
-                      'wc -l /tmp/soak/*/ticks >[2] /dev/null', "wc -l /tmp/soak/*/runs >[2] /dev/null | sed 's/runs$/RUNS/'",
+                      'for(f in /tmp/soak/*/ticks) {echo `{cat $f >[2] /dev/null} $f}',
+                      "{for(f in /tmp/soak/*/runs) {echo `{cat $f >[2] /dev/null} $f}} | sed 's/runs$/RUNS/'",
                       'ls /tmp/soak/*/fail-* >[2] /dev/null', limit=60)
         pools = {m.group(7): (int(m.group(1)), int(m.group(3))) for m in
                  re.finditer(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+(main|heap|image)\s*$', out, re.M)}
-        ticks = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/ticks', out)}
-        self.runs = {m.group(2): int(m.group(1)) for m in re.finditer(r'(\d+) /tmp/soak/([\w-]+)/RUNS', out)} or getattr(self, 'runs', {})
+        # a count read while its loop rewrites it is missing; the last one read stands
+        self.ticks = ticks = dict(getattr(self, 'ticks', {}), **{m.group(2): int(m.group(1)) for m in re.finditer(r'^(\d+) /tmp/soak/([\w-]+)/ticks', out, re.M)})
+        self.runs = dict(getattr(self, 'runs', {}), **{m.group(2): int(m.group(1)) for m in re.finditer(r'^(\d+) /tmp/soak/([\w-]+)/RUNS', out, re.M)})
         size = re.search(r' (\d+) [A-Z][a-z][a-z] .*bootimage', out)
         temp = re.findall(r'^(\d+\.\d+)', out, re.M)
         running = 'RUNNING' in out
@@ -1162,18 +1170,25 @@ class Run:
         os.makedirs(SOAKHOME, exist_ok=True)
         led = os.path.join(SOAKHOME, 'ledger.tsv')
         new = not os.path.exists(led)
+        if not new:
+            # the heap's slope was added as a last column (2026-11-12); older rows leave it empty
+            lines = open(led).read().split('\n')
+            if lines and lines[0].startswith('start\t') and 'heap_per_h' not in lines[0]:
+                lines[0] += '\theap_per_h'; open(led, 'w').write('\n'.join(lines))
         with open(led, 'a') as f:
             if new:
-                f.write('start\tboard\tkernel_sha1\tkernel_bytes\thours\toptions\tresult\tfails\tmain_per_h\tskipped\trun_dir\n')
-            s = series(2)
-            slope = ''
-            if len(s) > 12:
-                a, b = floor(s, s[10][0]), floor(s, s[-1][0]); slope = '%.0f' % ((b - a) / max((s[-1][0] - s[10][0]) / 3600, 0.01))
-            f.write('%s\t%s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+                f.write('start\tboard\tkernel_sha1\tkernel_bytes\thours\toptions\tresult\tfails\tmain_per_h\tskipped\trun_dir\theap_per_h\n')
+            def slope(col):
+                s = series(col)
+                if len(s) <= 12:
+                    return ''
+                a, b = floor(s, s[10][0]), floor(s, s[-1][0])
+                return '%.0f' % ((b - a) / max((s[-1][0] - s[10][0]) / 3600, 0.01))
+            f.write('%s\t%s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
                 time.strftime('%Y-%m-%d %H:%M', time.localtime(self.t0)), self.info.name, self.kernel[1], self.kernel[0],
                 (time.time() - self.t0) / 3600, self.options().replace(' ', ','),
-                'ALARM' if alarm else 'ok', sum(self.failcount.values()), slope,
-                ','.join(n for n, s in self.state.items() if s.startswith('skip')), self.dir))
+                'ALARM' if alarm else 'ok', sum(self.failcount.values()), slope(2),
+                ','.join(n for n, s in self.state.items() if s.startswith('skip')), self.dir, slope(3)))
 
     def tagdiff(self, fa, fb):
         def load(f):

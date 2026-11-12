@@ -93,7 +93,11 @@ Core loads run on every board. Gated loads run where their resource exists.
 | **vm** | multi-VM kernel (probed: `#X`) | soak5, extras | jitbench in VMs 1–2, memtouch in VM 3 | VMs advance |
 | **vmstress** | option `--vmstress` + multi-VM | extras | vmstress(1): echo servers, allocators, kills across VMs | 0 failures, report advancing |
 | **sd** | card (core) | soak5 | read 64 MB; write, verify, remove a 1 MB file on `/n/dos` | verified |
-| **nvme** | `#S/nvme0` (gated) | soak5 | read; write+verify on a scratch partition; kfs on another | verified; media errors 0 |
+| **nvme** | `#S/nvme0` (gated) | soak5 | raw reads; raw write+verify only on a `--scratch nvme=PART` partition | verified; media errors 0 |
+| **kfs** | `--scratch fs=PART` (an NVMe partition) | new | kfs(4) on the first GB of PART: 40 files of 8 KB written, read back and removed every 30 min, begun inside a network push; `kfscmd check` hourly; unmounted and started again every 6 h, a file written at the start compared | every cycle; the check reports nothing but its counts |
+| **gefs** | `--scratch fs=PART` | new | gefs(4) on the second GB: the same files, synced and read back; a snapshot kept while its file changes, then deleted; `check` hourly; halted, `gefs -c` offline and started again every 6 h, a file written at the start compared | every cycle; checks `ok` |
+| **video** | camsrv, videnc, feedrate on the card | new | `camsrv -t` (the simulated sensor, Bayer to I420, 288x162 at 30 fps) held for the run with videnc(1) beside it, exported on 8704; read whole as a live viewer reads it (`tests/feedrate`), a minute at a time | at least 100 frames a minute |
+| **video-remote** | the Jetson's emulator and tree | new | the feed as JPEG on the Jetson: vidjpeg(1) over Ethernet, read as a live viewer 5 min every 30 min | at least 2 frames a second |
 | **usbdisk** | gadget `disk` reservation (gated) | extras | copy + md5 of 4 MB on `/n/usb0` | verified |
 | **usbnet** | gadget `ncm`/`ecm` reservation (gated) | extras, soak5 | 32 MB each way | no failure |
 | **usbhid** | gadget `hid` reservation (gated) | extras | FunctionFS pointer; board must claim it | claimed every cycle |
@@ -113,15 +117,20 @@ The aim is to test the hardware, not wear it out. The rules:
 - **Reads are cheap**, so they stay frequent.
 - **Writes to flash are small, verified and budgeted.** Each run reports what it wrote to each device.
 - **Raw block devices are never written** unless `--scratch DEV=PART` names a partition for it. The Pi 5's NVMe is a store with data on it.
+- **What a soak needs from writes is that they keep happening, not volume.** It is for interactions and leaks: a write's DMA and interrupts meeting a network push, a file server's state over two days. Throughput and crash safety have tests of their own (`fsbench`, `tests/host/gefs_crash_test.sh`, `tests/host/kfscheck_test.sh`). So the file-system cycles are small and begin 1.5 s into a network push (the Wi-Fi one, the longest; the wired one without Wi-Fi), and a cycle with no push in 45 min goes anyway.
+- **The card is the boot device**: it gets reads and one small file an hour, and no file system load.
+- **The file-system loads take 2 GB at the start of the `--scratch fs=` partition** as two partitions made with `nvmepart` in `#S/sdctl` for the run; the disk's own partition table is not written. Each run reams them. On the Pi 5 that is `fs=nvme0p3`.
+- **The file servers must not look like a leak.** gefs runs with a 4 MB cache (`-m 4`; its default 64 MB would fill for hours), filled at setup before the heap's baseline, and keeps its automatic snapshots 5 a minute and 2 an hour (`retain main 5@m 2@h`) so their number is steady within two hours. kfs's buffers are made at its start. The video servers run the whole soak, so the frame ring is in the baseline.
 
 `--profile gentle|normal|stress` sets every area. `--stress storage,net,cpu,vm,fuzz` raises single areas to stress. Both are recorded in the header, summary and ledger.
 
 | | gentle | normal | stress |
 |---|---|---|---|
 | SD raw reads | 16 MB / 10 min | 16 MB / 2 min | 64 MB / 30 s |
-| SD file writes (verified, removed) | none | 1 MB / 10 min = 144 MB a day | 4 MB / 2 min = 2.9 GB a day |
+| SD file writes (verified, removed) | none | 1 MB / hour = 24 MB a day | 1 MB / 10 min = 144 MB a day |
 | NVMe raw reads | 64 MB / 10 min | 64 MB / 2 min | 256 MB / 30 s |
-| NVMe writes (scratch partition only) | none | 1 MB / 5 min = 288 MB a day | 16 MB / min = 23 GB a day |
+| NVMe raw writes (`--scratch nvme=` only) | none | 1 MB / 5 min = 288 MB a day | 16 MB / min = 23 GB a day |
+| kfs and gefs cycles (`--scratch fs=` only) | hourly | every 30 min: about 20 and 50 MB a day | every 10 min |
 | network pushes | 16 MB / 30 min | 64 MB each way / 10 min | 64 MB each way / min |
 | connection churn | 50 + 2 half-open | 200 + 8 half-open / 10 min | 1000 + 32 half-open |
 | JIT, RSA keys, random | every 15 min / 10 min / 256 KB | 5 min / 1 min / 4 MB | 1 min / 10 s / 16 MB |
@@ -184,7 +193,7 @@ Probed, not declared. The table shows only what each board would get as things s
 |---|---|---|
 | 3B+ | all | bt, gpio (jig), wifi (if a `/n/dos/wifi` network is set), draw (HDMI) |
 | Pi 4 | all | usb* (when it holds the gadget), bt, wifi, vm/vmstress, draw (DSI), camera (as a gated load, from today's camera soaks) |
-| Pi 5 | all | nvme, spi, i2c, gpio loop, pwm, bt, wifi, usbnet, vm, draw, board (RTC, fan) |
+| Pi 5 | all | nvme, kfs and gefs (`--scratch fs=nvme0p3`), video (simulated sensor; the Pi 5 has no camera driver yet), spi, i2c, gpio loop, pwm, bt, wifi, usbnet, vm, draw, board (RTC, fan) |
 
 ## Migration
 

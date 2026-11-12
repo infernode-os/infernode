@@ -655,25 +655,25 @@ class Run:
         again or GIVEUP passes, so the record says where it stopped, for how long,
         and what each end's TCP said about it."""
         lk = self.hres.take('jetson-nic')
-        st = {'phase': 'connect in', 'bytes': 0, 'snap': None, 'last': time.time(), 'lastb': 0, 'stalled': 0}
+        st = {'phase': 'connect in', 'bytes': 0, 'snap': None, 'last': time.time(), 'lastb': 0, 'stalled': 0, 'stallb': 0}
         stalls = []
         def progress():
             # a stall is less than a MB moved in STALL seconds (a peer's trickle is no progress)
             t = time.time(); w = t - st['last']
             if st['bytes'] - st['lastb'] >= (1 << 20):
                 if st['stalled']:
-                    stalls.append((st['phase'], st['lastb'], w)); st['stalled'] = 0
+                    stalls.append((st['phase'], st['stallb'], w)); st['stalled'] = 0
                 st['last'], st['lastb'] = t, st['bytes']
             elif w >= self.STALL and not st['stalled']:
-                st['stalled'] = 1
+                st['stalled'] = 1; st['stallb'] = st['bytes']
                 if st['snap'] is None:
                     st['snap'] = self.stallsnap(addr, cur[0], '%s, %.0f s at byte %d' % (st['phase'], w, st['bytes']))
             if w >= self.GIVEUP:
-                stalls.append((st['phase'], st['lastb'], w))
+                stalls.append((st['phase'], st['stallb'], w))
                 raise TimeoutError('under 1 MB moved in %.0f s in %s at byte %d' % (w, st['phase'], st['bytes']))
         def phase(p, sock):
             if st['stalled']:
-                stalls.append((st['phase'], st['lastb'], time.time() - st['last'])); st['stalled'] = 0
+                stalls.append((st['phase'], st['stallb'], time.time() - st['last'])); st['stalled'] = 0
             st['phase'] = p; cur[0] = sock; st['last'], st['lastb'] = time.time(), st['bytes']
         cur = [None]
         def watch(op, p, sock):
@@ -741,8 +741,8 @@ class Run:
                 out.append('host: %s' % e)
         t0 = time.time()
         try:
-            b = self.sh(["{for d in /net/tcp/[0-9]* {echo $d `{cat $d/local} `{cat $d/remote} `{cat $d/status}}} | grep '!870[23] '",
-                         'cat /net/tcp/stats', 'cat /net/ipifc/*/status'], limit=60)
+            b = self.sh("{for d in /net/tcp/[0-9]* {echo $d `{cat $d/local} `{cat $d/remote} `{cat $d/status}}} | grep '!870[23] '",
+                        'cat /net/tcp/stats', 'cat /net/ipifc/*/status', limit=60)
             out.append('board (console answered in %.1f s):\n%s' % (time.time() - t0, b.strip()))
         except Exception as e:
             out.append('board: no answer in %.0f s: %s' % (time.time() - t0, e))

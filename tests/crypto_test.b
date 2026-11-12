@@ -516,77 +516,6 @@ testCCPolyAEAD(t: ref T)
 }
 
 #
-# Test login protocol key derivation (simulated client/server)
-#
-testLoginKeyDerivation(t: ref T)
-{
-	t.log("Testing login protocol AEAD key derivation...");
-
-	# Simulate what login.b and logind.b do:
-	# Both sides derive the same key from password + IV
-
-	password := "test-password-123";
-
-	# Client side: hash password
-	pwbuf := array of byte password;
-	pwdigest := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(pwbuf, len pwbuf, pwdigest, nil);
-
-	# Server side: stored password hash is already SHA-256
-	# (changelogin.b stores SHA-256 of password)
-	serverpw := array[Keyring->SHA256dlen] of byte;
-	serverpw[0:] = pwdigest;
-
-	# Shared IV (normally sent from client to server)
-	ivec := array[32] of byte;
-	for(i := 0; i < 32; i++)
-		ivec[i] = byte (i * 7 + 13);
-
-	# Client key derivation using HKDF (RFC 5869) with HMAC-SHA256:
-	#   Extract: PRK = HMAC-SHA256(salt=ivec[0:20], IKM=SHA-256(password))
-	#   Expand:  key = HMAC-SHA256(PRK, "infernode login aead" || 0x01)
-	salt := ivec[0:20];
-	cprk := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(pwdigest, len pwdigest, salt, cprk, nil);
-	hkdfinfo := array of byte "infernode login aead";
-	expandinput := array[len hkdfinfo + 1] of byte;
-	expandinput[0:] = hkdfinfo;
-	expandinput[len hkdfinfo] = byte 1;
-	clientkey := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(expandinput, len expandinput, cprk, clientkey, nil);
-
-	# Server key derivation (same HKDF, using stored password hash)
-	sprk := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(serverpw[0:Keyring->SHA256dlen], Keyring->SHA256dlen, salt, sprk, nil);
-	serverkey := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(expandinput, len expandinput, sprk, serverkey, nil);
-
-	# Keys should match
-	match := 1;
-	for(i = 0; i < Keyring->SHA256dlen; i++) {
-		if(clientkey[i] != serverkey[i]) {
-			match = 0;
-			break;
-		}
-	}
-	t.asserteq(match, 1, "client and server derive same AEAD key");
-
-	# Nonce should be same (last 12 bytes of ivec)
-	nonce := ivec[20:32];
-	t.asserteq(len nonce, 12, "nonce is 12 bytes");
-
-	# Test that the derived key actually works for AEAD
-	plaintext := array of byte "DH-value-alpha-r0-mod-p";
-	(ciphertext, tag) := kr->ccpolyencrypt(plaintext, nil, clientkey, nonce);
-	recovered := kr->ccpolydecrypt(ciphertext, nil, tag, serverkey, nonce);
-	if(recovered == nil) {
-		t.fatal("AEAD round-trip with derived keys failed");
-		return;
-	}
-	t.assertseq(string recovered, string plaintext, "AEAD with derived keys");
-}
-
-#
 # Test AES is still available (not disabled)
 #
 testAESAvailable(t: ref T)
@@ -949,7 +878,6 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DES/Disabled", testDESDisabled);
 	run("AES/Available", testAESAvailable);
 	run("CCPoly/AEAD", testCCPolyAEAD);
-	run("Login/KeyDerivation", testLoginKeyDerivation);
 	run("DH/2048bit", testDHParams);
 	run("MultiAlgorithm/Interop", testMultipleAlgorithms);
 	run("Ed25519/Stress", testEd25519Stress);

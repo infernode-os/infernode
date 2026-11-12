@@ -19,6 +19,10 @@ include "security.m";
 include "daytime.m";
 	daytime: Daytime;
 
+include "loginpak.m";
+	pak: Loginpak;
+	Server: import pak;
+
 Logind: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -44,6 +48,12 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(daytime == nil) 
 		nomod(Daytime->PATH);
 
+	pak = load Loginpak Loginpak->PATH;
+	if(pak == nil)
+		nomod(Loginpak->PATH);
+	if((e := pak->init()) != nil)
+		fatal(e);
+
 	(err, c) := ssl->connect(sys->fildes(0));     
 	if(c == nil)
 		fatal("pushing ssl: " + err);
@@ -64,87 +74,86 @@ init(nil: ref Draw->Context, nil: list of string)
 
 dologin(c: ref Sys->Connection): string
 {
-	ivec: array of byte;
-
 	(info, err) := signerkey("/keydb/signerkey");
 	if(info == nil)
 		return "can't read signer's own key: "+err;
 
-	# get user name; ack
+	# get the protocol version and key encapsulation; answer the version
 	s: string;
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return err;
-	name := s;
-	kr->putstring(c.dfd, name);
-
-	# get initialization vector: its length says the client's AEAD
-	# (login.b): 32 bytes, ChaCha20-Poly1305; 44, AES-256-GCM (CNSA)
-	(ivec, err) = kr->getbytearray(c.dfd);
-	if(err != nil)
-		return "can't get initialization vector: "+err;
-	gcm := 0;
-	case len ivec {
-	32 =>
+	(nf, flds) := sys->tokenize(s, " ");
+	if(nf != 2 || hd flds != Loginpak->Version)
+		return "this signer speaks only login(6)'s " + Loginpak->Version + " protocol; the client is older";
+	kem := hd tl flds;
+	case kem {
+	"mlkem768" =>
 		if(cnsamode())
-			return "CNSA mode: this signer takes AES-256-GCM logins only; set cnsamode on the client";
-	44 =>
-		gcm = 1;
+			return "CNSA mode: this signer takes ML-KEM-1024 logins only; set cnsamode on the client";
+	"mlkem1024" =>
+		;
 	* =>
-		return "bad initialization vector length";
+		return "unknown key encapsulation " + kem;
 	}
-	nsalt := len ivec - 12;
+	if(kr->putstring(c.dfd, Loginpak->Version) < 0)
+		return sys->sprint("can't send version: %r");
 
-	# lookup password
-	pw := getsecret(s);
-	if(pw == nil)
-		return sys->sprint("no password entry for %s: %r", s);
-	if(len pw < Keyring->SHA256dlen)
-		return "bad password for "+s+": not SHA256 hashed?";
-	userexp := getexpiry(s);
-	if(userexp < 0)
-		return sys->sprint("expiry time for %s: %r", s);
-
-	# generate our random diffie hellman part
-	bits := info.p.bits();
-	r0 := kr->IPint.random(bits/4, bits);
-
-	# generate alpha0 = alpha**r0 mod p
-	alphar0 := info.alpha.expmod(r0, info.p);
-
-	# The AEAD's key from the stored SHA-256 of the password and the
-	# salt, by HKDF as login.b derives it (loginkey).
-	aeadkey := loginkey(gcm, pw[0:Keyring->SHA256dlen], ivec[0:nsalt]);
-	nonce := ivec[nsalt:];
-
-	# Send AEAD-encrypted alpha**r0 mod p
-	plaintext := array of byte alphar0.iptob64();
-	ciphertext, authtag: array of byte;
-	if(gcm)
-		(ciphertext, authtag) = kr->aesgcmencrypt(kr->aesgcmsetup(aeadkey, nonce), plaintext, nil);
-	else
-		(ciphertext, authtag) = kr->ccpolyencrypt(plaintext, nil, aeadkey, nonce);
-	if(kr->putbytearray(c.dfd, ciphertext, len ciphertext) < 0)
-		return sys->sprint("can't send encrypted (alpha**r0 mod p): %r");
-	if(kr->putbytearray(c.dfd, authtag, len authtag) < 0)
-		return sys->sprint("can't send auth tag: %r");
-
-	# send alpha, p
-	if(kr->putstring(c.dfd, info.alpha.iptob64()) < 0 ||
-	   kr->putstring(c.dfd, info.p.iptob64()) < 0)
-		return sys->sprint("can't send alpha, p: %r");
-
-	# get alpha**r1 mod p
-	(s, err) = kr->getstring(c.dfd);
+	# get name, m, ek
+	name, hexm: string;
+	ek: array of byte;
+	(name, err) = kr->getstring(c.dfd);
+	if(err == nil)
+		(hexm, err) = kr->getstring(c.dfd);
+	if(err == nil)
+		(ek, err) = kr->getbytearray(c.dfd);
 	if(err != nil)
-		return "can't get alpha**r1 mod p:"+err;
-	alphar1 := kr->IPint.b64toip(s);
+		return "can't get the password exchange: "+err;
 
-	# compute alpha**(r0*r1) mod p
-	alphar0r1 := alphar1.expmod(r0, info.p);
+	# The user's element of the group, from the password's SHA-256 as
+	# changelogin(8) keeps it. A name with no entry gets one from a
+	# random secret, made the same way at the same cost, and the
+	# exchange runs on to fail at k' as a wrong password does: neither
+	# what is sent nor when says whether the name exists.
+	why: string;
+	pw := getsecret(name);
+	if(pw == nil)
+		why = sys->sprint("no password entry for %s", name);
+	else if(len pw < Keyring->SHA256dlen)
+		why = "bad password for "+name+": not SHA256 hashed?";
+	if(why != nil){
+		rand := load Random Random->PATH;
+		if(rand == nil)
+			return sys->sprint("can't load %s: %r", Random->PATH);
+		pw = rand->randombuf(Random->ReallyRandom, Keyring->SHA256dlen);
+	}
+	H := pak->pwelem(name, pw[0:Keyring->SHA256dlen]);
+	userexp := getexpiry(name);
+
+	(ps, hexmu, ct, k, perr) := Server.new(kem, name, H, hexm, ek);
+	if(ps == nil)
+		return perr;
+	if(kr->putstring(c.dfd, hexmu) < 0 ||
+	   kr->putbytearray(c.dfd, ct, len ct) < 0 ||
+	   kr->putbytearray(c.dfd, k, len k) < 0)
+		return sys->sprint("can't send mu, ct, k: %r");
+
+	# get k'; with no entry, nothing proves it
+	kprime: array of byte;
+	(kprime, err) = kr->getbytearray(c.dfd);
+	if(err != nil || why != nil || !ps.check(kprime)){
+		if(why != nil)
+			sys->fprint(stderr, "logind: %s\n", why);
+		return "name or secret incorrect";
+	}
+	# the password is proved: say why no certificate, now it tells nothing
+	if(userexp < 0)
+		return sys->sprint("expiry time for %s: %r", name);
+	if(kr->putstring(c.dfd, "ok") < 0)
+		return sys->sprint("can't send ok: %r");
 
 	# protect the rest: aes_256_gcm, each way under its own secret
-	(secretin, secretout) := ssl->secrets(alphar0r1.iptobytes(), 0);
+	(secretin, secretout) := ssl->secrets(ps.session, 0);
 	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
 		return "can't set secrets: "+err;
@@ -161,43 +170,19 @@ dologin(c: ref Sys->Connection): string
 		return "client public key: "+err;
 	hisPKbuf := array of byte s;
 	hisPK := kr->strtopk(s);
-	if(hisPK.owner != name)
+	if(hisPK == nil || hisPK.owner != name)
 		return "pk name doesn't match user name";
 
-	# sign and return
+	# sign and return, with the Diffie-Hellman constants an Authinfo carries
 	state := certdigest(info.mysk, hisPKbuf);
 	cert := kr->sign(info.mysk, userexp, state, certhash(info.mysk));
 
-	if(kr->putstring(c.dfd, kr->certtostr(cert)) < 0)
+	if(kr->putstring(c.dfd, kr->certtostr(cert)) < 0 ||
+	   kr->putstring(c.dfd, info.alpha.iptob64()) < 0 ||
+	   kr->putstring(c.dfd, info.p.iptob64()) < 0)
 		return sys->sprint("can't send certificate: %r");
 
 	return nil;
-}
-
-# The AEAD key: HKDF-SHA-256 for ChaCha20-Poly1305, HKDF-SHA-384 for
-# AES-256-GCM, 32 bytes either way; login.b's loginkey, the client's.
-loginkey(gcm: int, ikm, salt: array of byte): array of byte
-{
-	info := "infernode login aead";
-	dlen := Keyring->SHA256dlen;
-	if(gcm){
-		info = "infernode login aes-256-gcm";
-		dlen = Keyring->SHA384dlen;
-	}
-	prk := array[dlen] of byte;
-	t := array[dlen] of byte;
-	inf := array of byte info;
-	ex := array[len inf + 1] of byte;
-	ex[0:] = inf;
-	ex[len inf] = byte 1;
-	if(gcm){
-		kr->hmac_sha384(ikm, len ikm, salt, prk, nil);
-		kr->hmac_sha384(ex, len ex, prk, t, nil);
-	}else{
-		kr->hmac_sha256(ikm, len ikm, salt, prk, nil);
-		kr->hmac_sha256(ex, len ex, prk, t, nil);
-	}
-	return t[0:32];
 }
 
 # CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.

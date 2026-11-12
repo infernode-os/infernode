@@ -74,11 +74,15 @@ The certificate can if desired be stored by
 .BR Keyring->writeauthinfo ;
 see
 .IR keyring-auth (2).
-The password is used by the encrypted
-key exchange protocol to establish
-a secure channel between user and CA.
+The password is proved to the CA, and the CA's knowledge of it to
+the user, by a password-authenticated key exchange (PAK, with ML-KEM)
+that also establishes a secure channel between user and CA;
+no guess at the password can be checked off line against the
+conversation.
 .SH SOURCE
 .B /appl/lib/login.b
+.br
+.B /appl/lib/loginpak.b
 .SH SEE ALSO
 .IR getauthinfo (8),
 .IR keyring-auth (2),

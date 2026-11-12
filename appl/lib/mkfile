@@ -102,6 +102,7 @@ TARG=\
 	lists.dis\
 	lock.dis\
 	login.dis\
+	loginpak.dis\
 	lucitheme.dis\
 	matrixlib.dis\
 	memfs.dis\
@@ -288,6 +289,7 @@ SYSMODULES=\
 	libc0.m\
 	lists.m\
 	lock.m\
+	loginpak.m\
 	lucitheme.m\
 	man.m\
 	math.m\

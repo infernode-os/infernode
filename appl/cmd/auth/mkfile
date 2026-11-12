@@ -43,6 +43,7 @@ SYSMODULES=\
 	msgio.m\
 	readdir.m\
 	secstore.m\
+	loginpak.m\
 
 DISBIN=$ROOT/dis/auth
 

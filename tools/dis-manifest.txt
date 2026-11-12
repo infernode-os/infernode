@@ -395,6 +395,7 @@ dis/lib/lists.dis
 dis/lib/llmclient.dis
 dis/lib/lock.dis
 dis/lib/login.dis
+dis/lib/loginpak.dis
 dis/lib/lucitheme.dis
 dis/lib/mailparse.dis
 dis/lib/matrixlib.dis

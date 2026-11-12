@@ -1,12 +1,11 @@
-# Inferno Encrypt Key Exchange Protocol
-#
-# Copyright © 1995-1999 Lucent Techologies Inc.  All rights reserved.
-#
-# This code uses methods that are subject to one or more patents
-# held by Lucent Technologies Inc.  Its use outside Inferno
-# requires a separate licence from Lucent.
-#
 implement Login;
+
+#
+# The client of login(6): the password proved to the signer by PAK
+# with ML-KEM (loginpak.b), then a key pair made here and its public
+# half certified, over ssl(3) under the exchange's session key.
+# The protocol before it, Lucent's encrypted key exchange, is gone.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -18,6 +17,10 @@ include "keyring.m";
 include "security.m";
 
 include "string.m";
+
+include "loginpak.m";
+	pak: Loginpak;
+	Client: import pak;
 
 # see login(6)
 login(id, password, dest: string): (string, ref Keyring->Authinfo)
@@ -31,9 +34,11 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	if(ssl == nil)
 		return nomod(SSL->PATH);
 
-	rand := load Random Random->PATH;
-	if(rand == nil)
-		return nomod(Random->PATH);
+	pak = load Loginpak Loginpak->PATH;
+	if(pak == nil)
+		return nomod(Loginpak->PATH);
+	if((e := pak->init()) != nil)
+		return (e, nil);
 
 	if(dest == nil)
 		dest = "$SIGNER";
@@ -47,6 +52,17 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	if(!hasdelim)
 		dest = "net!"+dest+"!inflogin";
 
+	# the expensive part before dialling, as secstore does
+	kem := pak->kemname(cnsamode());
+	pwbuf := array of byte password;
+	pw := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(pwbuf, len pwbuf, pw, nil);
+	erase(pwbuf);
+	(pc, perr) := Client.new(kem, id, pw);
+	erase(pw);
+	if(pc == nil)
+		return (perr, nil);
+
 	(ok, lc) := sys->dial(dest, nil);
 	if(ok < 0)
 		return (sys->sprint("can't contact login service: %r"), nil);
@@ -58,156 +74,113 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	lc.dfd = nil;
 	lc.cfd = nil;
 
-	# user->CA	name
-	if(kr->putstring(c.dfd, id) < 0)
-		return (sys->sprint("can't send user name: %r"), nil);
+	# user->CA	version and key encapsulation
+	hello := Loginpak->Version + " " + kem;
+	if(kr->putstring(c.dfd, hello) < 0)
+		return (sys->sprint("can't send protocol version: %r"), nil);
 
-	# CA->user	ACK
+	# CA->user	version
 	(s, why) := kr->getstring(c.dfd);
 	if(why != nil)
 		return ("remote: " + why, nil);
-	if(s != id)
+	if(s == hello)
+		return ("the signer speaks only the old login protocol, which can give away the password; upgrade its logind", nil);
+	if(s != Loginpak->Version)
 		return ("unexpected reply from signer: " + s, nil);
 
-	# user->CA	ivec: a salt for the key derivation and the AEAD's nonce.
-	# Its length says which AEAD the client takes (see login(6)):
-	#   32 bytes (20 salt + 12 nonce): ChaCha20-Poly1305, HKDF-SHA-256
-	#   44 bytes (32 salt + 12 nonce): AES-256-GCM, HKDF-SHA-384 (CNSA)
-	# A client in CNSA mode (/env/cnsamode) sends only the second; a
-	# signer in CNSA mode takes only the second.
-	cnsa := cnsamode();
-	nsalt := 20;
-	if(cnsa)
-		nsalt = 32;
-	ivec := rand->randombuf(rand->ReallyRandom, nsalt+12);
-	if(kr->putbytearray(c.dfd, ivec, len ivec) < 0)
-		return (sys->sprint("can't send initialization vector: %r"), nil);
+	# user->CA	name, m, ek
+	if(kr->putstring(c.dfd, id) < 0 ||
+	   kr->putstring(c.dfd, pc.m) < 0 ||
+	   kr->putbytearray(c.dfd, pc.ek, len pc.ek) < 0)
+		return (sys->sprint("can't send the password exchange: %r"), nil);
 
-	# The AEAD's key, by HKDF (RFC 5869) from the password's SHA-256,
-	# which is what the signer keeps (changelogin(8)):
-	#   Extract: PRK = HMAC-H(salt, IKM=SHA-256(password))
-	#   Expand:  key = HMAC-H(PRK, info || 0x01)[0:32]
-	pwbuf := array of byte password;
-	pwdigest := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(pwbuf, len pwbuf, pwdigest, nil);
-	aeadkey := loginkey(cnsa, pwdigest, ivec[0:nsalt]);
-	nonce := ivec[nsalt:];
-
-	# CA -> user	AEAD-encrypted alpha**r0 mod p, then its 16-byte tag
-	ciphertext: array of byte;
-	authtag: array of byte;
-	(ciphertext, err) = kr->getbytearray(c.dfd);
+	# CA->user	mu, ct, k
+	ct, k: array of byte;
+	(s, err) = kr->getstring(c.dfd);
+	if(err == nil)
+		(ct, err) = kr->getbytearray(c.dfd);
+	if(err == nil)
+		(k, err) = kr->getbytearray(c.dfd);
 	if(err != nil){
 		if(err == "failure")
-			return ("name or secret incorrect (alpha**r0 mod p)", nil);
-		return ("remote:" + err, nil);
+			return ("name or secret incorrect", nil);
+		return ("remote: " + err, nil);
 	}
-	(authtag, err) = kr->getbytearray(c.dfd);
-	if(err != nil)
-		return ("remote:" + err, nil);
 
-	plaintext: array of byte;
-	if(cnsa)
-		plaintext = kr->aesgcmdecrypt(kr->aesgcmsetup(aeadkey, nonce), ciphertext, nil, authtag);
-	else
-		plaintext = kr->ccpolydecrypt(ciphertext, nil, authtag, aeadkey, nonce);
-	if(plaintext == nil)
-		return ("name or secret incorrect (AEAD decryption failed)", nil);
-	alphar0 := IPint.b64toip(string plaintext);
+	(kp, rerr) := pc.respond(s, ct, k);
+	if(kp == nil){
+		kr->puterror(c.dfd, "name or secret incorrect");
+		return (rerr, nil);
+	}
 
-	# CA->user	alpha
+	# user->CA	k'
+	if(kr->putbytearray(c.dfd, kp, len kp) < 0)
+		return (sys->sprint("can't send k': %r"), nil);
+
+	# CA->user	ok, or why not
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil){
 		if(err == "failure")
-			return ("name or secret incorrect (alpha)", nil);
+			return ("name or secret incorrect", nil);
 		return ("remote: " + err, nil);
 	}
-	info := ref Keyring->Authinfo;
-	info.alpha = IPint.b64toip(s);
-
-	# CA->user	p
-	(s, err) = kr->getstring(c.dfd);
-	if(err != nil){
-		if(err == "failure")
-			return ("name or secret incorrect (p)", nil);
-		return ("remote: " + err, nil);
-	}
-	info.p = IPint.b64toip(s);
-
-	# sanity check
-	bits := info.p.bits();
-	abits := info.alpha.bits();
-	if(abits > bits || abits < 2)
-		return ("bogus diffie hellman constants", nil);
-
-	# generate our random diffie hellman part
-	r1 := kr->IPint.random(bits/4, bits);
-	alphar1 := info.alpha.expmod(r1, info.p);
-
-	# user->CA	alpha**r1 mod p
-	if(kr->putstring(c.dfd, alphar1.iptob64()) < 0)
-		return (sys->sprint("can't send (alpha**r1 mod p): %r"), nil);
-
-	# compute alpha**(r0*r1) mod p
-	alphar0r1 := alphar0.expmod(r1, info.p);
+	if(s != "ok")
+		return ("unexpected reply from signer: " + s, nil);
 
 	# protect the rest: aes_256_gcm, each way under its own secret
-	(secretin, secretout) := ssl->secrets(alphar0r1.iptobytes(), 1);
+	(secretin, secretout) := ssl->secrets(pc.session, 1);
+	erase(pc.session);
 	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
 		return ("can't set secrets: " + err, nil);
 	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
 		return (sys->sprint("can't push alg aes_256_gcm: %r"), nil);
 
-	# CA->user	CA's public key, SHA(CA's public key + secret)
+	# CA->user	CA's public key
 	(s, err) = kr->getstring(c.dfd);
-	if(err != nil)
-		return ("can't get signer's public key: " + err, nil);
+	if(err != nil){
+		if(err == "failure")
+			return ("name or secret incorrect", nil);
+		return ("remote: " + err, nil);
+	}
 
+	info := ref Keyring->Authinfo;
 	info.spk = kr->strtopk(s);
+	if(info.spk == nil)
+		return ("bad signer's public key", nil);
 
 	# generate a key pair
 	info.mysk = kr->genSKfromPK(info.spk, id);
 	info.mypk = kr->sktopk(info.mysk);
 
-	# user->CA	user's public key, SHA(user's public key + secret)
+	# user->CA	user's public key
 	if(kr->putstring(c.dfd, kr->pktostr(info.mypk)) < 0)
 		return (sys->sprint("can't send your public: %r"), nil);
 
-	# CA->user	user's public key certificate
+	# CA->user	user's public key certificate, alpha, p
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return ("can't get certificate: " + err, nil);
-
 	info.cert = kr->strtocert(s);
+
+	# the Diffie-Hellman constants an Authinfo carries for Keyring->auth
+	(s, err) = kr->getstring(c.dfd);
+	if(err != nil)
+		return ("can't get alpha: " + err, nil);
+	info.alpha = IPint.b64toip(s);
+	(s, err) = kr->getstring(c.dfd);
+	if(err != nil)
+		return ("can't get p: " + err, nil);
+	info.p = IPint.b64toip(s);
+	if(info.alpha == nil || info.p == nil || info.alpha.bits() > info.p.bits() || info.alpha.bits() < 2)
+		return ("bogus diffie hellman constants", nil);
 	return(nil, info);
 }
 
-# The AEAD key: HKDF-SHA-256 for ChaCha20-Poly1305, HKDF-SHA-384 for
-# AES-256-GCM (CNSA admits SHA-384, not SHA-256), 32 bytes either way.
-# logind.b has the same function; tests/login_test.b runs the two together.
-loginkey(cnsa: int, ikm, salt: array of byte): array of byte
+erase(a: array of byte)
 {
-	info := "infernode login aead";
-	dlen := Keyring->SHA256dlen;
-	if(cnsa){
-		info = "infernode login aes-256-gcm";
-		dlen = Keyring->SHA384dlen;
-	}
-	prk := array[dlen] of byte;
-	t := array[dlen] of byte;
-	inf := array of byte info;
-	ex := array[len inf + 1] of byte;
-	ex[0:] = inf;
-	ex[len inf] = byte 1;
-	if(cnsa){
-		kr->hmac_sha384(ikm, len ikm, salt, prk, nil);
-		kr->hmac_sha384(ex, len ex, prk, t, nil);
-	}else{
-		kr->hmac_sha256(ikm, len ikm, salt, prk, nil);
-		kr->hmac_sha256(ex, len ex, prk, t, nil);
-	}
-	return t[0:32];
+	for(i := 0; i < len a; i++)
+		a[i] = byte 0;
 }
 
 # CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.

@@ -63,7 +63,7 @@ implementation and the regression test.
 |------|--------|
 | Requirement | AES with 256-bit keys |
 | Implementation | `libsec/aes.c`, AES-GCM in `libsec/aesgcm.c` (`setupAESGCMstate` accepts `keylen`; 32 = AES-256) — decl `include/libsec.h:53` |
-| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
+| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). The login channel (login(6), `inflogin2`) is `aes_256_gcm` under a key from its PAK + ML-KEM exchange — `docs/CRYPTO-MODERNIZATION.md` §5 |
 | Evidence | `tests/tls_crypto_test.b` (AES-GCM NIST vectors), `tests/secstore_crypto_test.b` (SGCM file encryption) |
 | Status | **Met** — AES-256-GCM available and negotiated |
 
@@ -131,6 +131,12 @@ All deployed PQ key exchange is **hybrid** (classical + PQ), so a session is saf
 - Native 9P/Styx transport: classical DH **+** mutual ML-KEM-768, combined via SHA3-512,
   transcript-bound against active substitution (`docs/CRYPTO-MODERNIZATION.md` §10;
   proven by `tests/pqauth_test.b` *TamperedEkRejected* / *DowngradeRejected*).
+- Login to the signer (login(6), `inflogin2`): PAK's DH **+** ML-KEM-768 (ML-KEM-1024 in
+  CNSA mode; a CNSA signer refuses 768), the KEM's secret in both proofs and the session
+  key (SHA-384), so a recording broken in the discrete log alone gives neither the
+  session nor a way to test password guesses (`appl/lib/loginpak.b`, `tests/login_test.b`).
+  PAK's group is RFC 5114's 2048-bit one, below CNSA's 3072 for classical DH; it carries
+  the password proof, and the session's confidentiality rests on the hybrid.
 
 This exceeds the CNSA 2.0 baseline (which permits PQ-only); the hybrid construction is a
 stricter, transition-safe posture.

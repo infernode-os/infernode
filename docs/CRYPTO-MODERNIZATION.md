@@ -84,27 +84,37 @@ After these changes:
 - **Signatures:** Ed25519 provides 128-bit security with deterministic signatures
 - **Certificates:** SHA-256 hash prevents collision attacks
 - **Key exchange:** 2048-bit DH provides ~112-bit security
-- **Login EKE:** ChaCha20-Poly1305 AEAD with 256-bit key (replaces RC4-40)
+- **Login:** PAK with ML-KEM mixed in (`inflogin2`, §5); replaces the encrypted key exchange
 - **SSL3 negotiation:** Weak ciphers rejected during handshake (no downgrade)
 - **Revocation:** CRL-based certificate revocation checking
 - **Transport:** WireGuard + Rosenpass handles (external to Inferno)
 
-### 5. Login Protocol: RC4 → ChaCha20-Poly1305 (Phase 4)
+### 5. Login Protocol: PAK with ML-KEM (`inflogin2`)
 
-The login EKE protocol's temporary encryption of the DH exchange now uses ChaCha20-Poly1305 AEAD instead of RC4-40.
+login(2) and logind(8) prove the password with PAK (the variant Plan 9's
+secstore uses, over RFC 5114's 2048-bit group), with an ML-KEM exchange
+(768, or 1024 in CNSA mode) mixed into both proofs and the session key;
+the protocol is in login(6), the code in `appl/lib/loginpak.b`.
 
-| Aspect | Before | After |
+| Aspect | Encrypted key exchange (before) | `inflogin2` |
 |--------|--------|-------|
-| Cipher | RC4-40 (40-bit key) | **ChaCha20-Poly1305 AEAD** |
-| Key derivation | SHA-256 folded to 8 bytes | **SHA-256(SHA-256(pw) \|\| salt)** = 32 bytes |
-| Authentication | None | **Poly1305 tag (16 bytes)** |
-| IV/Nonce | 8-byte IV | **32 bytes (20 salt + 12 nonce)** |
+| Password check | the CA's first reply sealed under a key from the password | PAK: each side proves it, neither proof checkable without x or y |
+| Off-line guessing | possible from the CA's first reply | one guess per run, either side |
+| Key agreement | classical DH | PAK's DH + ML-KEM-768 (ML-KEM-1024 in CNSA mode) |
+| Hash | SHA-256 / SHA-384 | SHA-384 |
+| Unknown name | said so | answered as a wrong password |
+| alpha, p | in the clear | sealed, after the certificate |
 
-**Files modified:**
-- `appl/lib/login.b` - Client-side AEAD encryption
-- `appl/cmd/auth/logind.b` - Server-side AEAD encryption
+The stored secret is unchanged (the password's SHA-256, as changelogin(8)
+keeps it): the CA computes PAK's element of the group from it at each
+login, so no account needs its password set again.
 
-**Breaking change:** Clients and servers must both be updated. Old clients cannot authenticate with new servers and vice versa.
+**Files:** `appl/lib/loginpak.b` (new), `appl/lib/login.b`,
+`appl/cmd/auth/logind.b`; `tests/login_test.b`.
+
+**Breaking change:** clients and signers must both be updated. A new
+signer refuses an old client, and a new client refuses an old signer,
+each saying why.
 
 ### 6. SSL3 Weak Cipher Suite Rejection (Phase 5)
 
@@ -161,7 +171,7 @@ SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the 
    - Clients must re-authenticate to get new certificates
 
 3. **Update all clients and servers together:**
-   - Login protocol now uses ChaCha20-Poly1305 AEAD (incompatible with RC4 version)
+   - The login protocol is `inflogin2` (PAK with ML-KEM; §5), incompatible with earlier ones
    - Both `login.b` (client) and `logind.b` (server) must be updated simultaneously
 
 4. **Install CRLs (optional):**
@@ -170,7 +180,7 @@ SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the 
 
 ### For New Deployments
 
-No action needed - Ed25519, SHA-256, and AEAD login are the defaults.
+No action needed - Ed25519, SHA-256, and PAK login are the defaults.
 
 ## Testing
 

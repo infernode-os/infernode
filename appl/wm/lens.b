@@ -14,10 +14,13 @@ include "menuhit.m";
 	Menu, Mousectl: import menuhit;
 
 # related to us
-disp, screen, color: ref Image;
-ptrchan: chan of Pointer;
+disp, screen, back: ref Image;
+font: ref Font;
+ptrchan: chan of Point;
 zoom: int;
 window: ref Image;
+last: Point;
+looked := 0;
 
 Lens: module
 {
@@ -44,37 +47,38 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	w.startinput("kbd"::"ptr" :: nil);
 	w.onscreen(nil);
 	menuhit->init(w);
-	window = w.image;
-	# the window it is given, not the one it asked for: in Lucifer's zone
-	# the zone, where a 300x300 image sat in its corner
-	screen = display.newimage(Rect((0, 0), (w.image.r.dx(), w.image.r.dy())), display.image.chans, 0, Draw->Red);
-	if(screen == nil)
-		sys->fprint(sys->fildes(2), "no image memory (screen): %r\n");
-	w.image.draw(w.image.r, screen, nil, (0,0));
-	
-	color = display.newimage(Rect((0, 0), (1, 1)), display.image.chans, 1, Draw->Red);
-	if(color == nil)
-		sys->fprint(sys->fildes(2), "no image memory (color): %r\n");
-
-	ptrchan = chan of Pointer;
+	back = display.rgb(16r40, 16r40, 16r40);
+	font = Font.open(display, "*default*");
 	zoom = 5;
+	ptrchan = chan of Point;
+	newscreen(w.image);
 	spawn lens();
 	for(;;) alt{
 	ctl := <-w.ctl or
 	ctl = <-w.ctxt.ctl =>
 		w.wmctl(ctl);
 		if(ctl != nil && ctl[0] == '!'){
-			w.image.draw(w.image.r, screen, nil, (0,0));
-		screen = display.newimage(Rect((0,0), (w.image.r.dx(), w.image.r.dy())), display.image.chans, 0, Draw->Red);
-		window = w.image;
+			newscreen(w.image);
+			if(looked)
+				ptrchan <-= last;
 		}
 	p := <-w.ctxt.ptr =>
-		ptrchan <-= *p;
-		# Any click (button-1, button-2, or button-3) raises the exit
-		# menu.  Button-3 is added for touch — the SDL3 gesture layer
-		# synthesises a long-press as button-3 (see emu/port/draw-sdl3.c
-		# touch_lp_* and INFR-160/163).
-		if(!w.pointer(*p)  && (p.buttons & (1|2|4))){
+		if(w.pointer(*p))
+			;
+		else if(p.buttons & 1){
+			# Button 1 held: magnify around the pointer.  The window
+			# manager (and Lucifer's zone) keeps sending the pointer
+			# to the window a press began in until the buttons are
+			# up, so a drag reaches past the lens's own window.  On
+			# its own, the pointer is only ever over the lens itself,
+			# which is all a lens that followed it unpressed showed.
+			ptrchan <-= p.xy;
+		} else if(p.buttons & (2|4)){
+			# Button 2, or button 3 -- the SDL3 gesture layer's
+			# long-press on a touchscreen (emu/port/draw-sdl3.c
+			# touch_lp_*, INFR-160/163) -- raises the exit menu.
+			# Button 1 used to as well, so the lens could never be
+			# dragged and showed nothing but its own red fill.
 			mc := ref Mousectl(w.ctxt.ptr, p.buttons, p.xy, p.msec);
 			n := menuhit->menuhit(p.buttons, mc, menu, nil);
 			if(n == 0){
@@ -104,57 +108,94 @@ processkbd(kbd: int)
 	case kbd {
 		'1' or '2' or '3' or '4' or '5' or '6' or '7' or '8' or '9' => zoom = kbd-16r30;
 		'0' => zoom = 10;
+		* => return;
 	}
+	if(looked)
+		ptrchan <-= last;
+}
+
+# The image the lens is drawn in, the size of the window it is given,
+# not the one it asked for: in Lucifer's zone the zone, where a 300x300
+# image sat in its corner.  Until the first drag it says how to use it.
+newscreen(img: ref Image)
+{
+	window = img;
+	screen = display.newimage(Rect((0, 0), (img.r.dx(), img.r.dy())), Draw->RGB24, 0, Draw->Nofill);
+	if(screen == nil){
+		sys->fprint(sys->fildes(2), "lens: no image memory (screen): %r\n");
+		raise "fail:no memory";
+	}
+	screen.draw(screen.r, back, nil, (0, 0));
+	if(font != nil){
+		hint := array[] of {"Hold button 1 and drag", "to magnify.  Keys 1-9, 0: zoom"};
+		y := (screen.r.dy() - len hint * font.height) / 2;
+		for(i := 0; i < len hint; i++){
+			x := (screen.r.dx() - font.width(hint[i])) / 2;
+			screen.text((x, y), display.white, (0, 0), font, hint[i]);
+			y += font.height;
+		}
+	}
+	flush();
 }
 
 flush()
 {
 	window.draw(window.r, screen, nil, (0,0));
+	window.flush(Draw->Flushnow);
 }
 
 lens()
 {
-	p: Point;
-	r: Rect;
-	ptr: Pointer;
-	x, y, i, j: int;
-	xoff, yoff: int;
-
 	for(;;) {
-		ptr = <- ptrchan;
+		p := <-ptrchan;
+		last = p;
+		looked = 1;
+		z := zoom;
+		w := screen.r.dx();
+		h := screen.r.dy();
+		# the part of the display shown, one pixel of it per z x z square
+		sw := (w + z - 1) / z;
+		sh := (h + z - 1) / z;
+		if(sw > disp.r.dx())
+			sw = disp.r.dx();
+		if(sh > disp.r.dy())
+			sh = disp.r.dy();
+		o := p.sub((sw / 2, sh / 2));
+		if(o.x < disp.r.min.x)
+			o.x = disp.r.min.x;
+		if(o.x > disp.r.max.x - sw)
+			o.x = disp.r.max.x - sw;
+		if(o.y < disp.r.min.y)
+			o.y = disp.r.min.y;
+		if(o.y > disp.r.max.y - sh)
+			o.y = disp.r.max.y - sh;
 
-		xoff = screen.r.dx()/(2*zoom);
-		yoff = screen.r.dy()/(2*zoom);
-
-		p = ptr.xy;
-		if(p.x < disp.r.min.x + xoff)
-			p.x = disp.r.min.x + xoff;
-		if(p.x > disp.r.max.x - xoff)
-			p.x = disp.r.max.x - xoff;
-		if(p.y < disp.r.min.y + yoff)
-			p.y = disp.r.min.y + yoff;
-		if(p.y > disp.r.max.y - yoff)
-			p.y = disp.r.max.y - yoff;
-
-		# zoom == 1 is a special case, optimize
-		if(zoom == 1) {
-			screen.draw(screen.r, disp, nil, p.sub(Point(xoff, yoff)));
-			flush();
+		# One read of the display and one write of the lens: it was
+		# a draw per pixel, thousands for each movement of the mouse.
+		src := display.newimage(Rect((0, 0), (sw, sh)), Draw->RGB24, 0, Draw->Nofill);
+		if(src == nil)
 			continue;
-		}
-
-		i = 0;
-		for (x = p.x-xoff; x < p.x+xoff; x++) {
-			j = 0;
-			for (y = p.y-yoff; y < p.y+yoff; y ++) {
-				r = Rect((i, j), (i+zoom, j+zoom));
-
-				color.draw(color.r, disp, nil, Point(x, y));
-				screen.draw(r, color, nil, color.r.min);
-				j+=zoom;
+		src.draw(src.r, disp, nil, o);
+		pix := array[3 * sw * sh] of byte;
+		if(src.readpixels(src.r, pix) != len pix)
+			continue;
+		out := array[3 * w * h] of byte;
+		bpl := 3 * w;
+		for(y := 0; y < h; y += z){
+			srow := 3 * sw * (y / z);
+			drow := bpl * y;
+			for(x := 0; x < w; x++){
+				si := srow + 3 * (x / z);
+				di := drow + 3 * x;
+				out[di] = pix[si];
+				out[di+1] = pix[si+1];
+				out[di+2] = pix[si+2];
 			}
-			i+=zoom;
+			# the rest of this square's rows are the same row
+			for(k := 1; k < z && y + k < h; k++)
+				out[drow + k * bpl:] = out[drow:drow + bpl];
 		}
+		screen.writepixels(screen.r, out);
 		flush();
 	}
 }

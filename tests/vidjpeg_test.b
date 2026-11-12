@@ -228,13 +228,29 @@ testFiles(t: ref T)
 	t.assertnotnil(err, "a frame past the clip's end refused");
 }
 
+# a status line without the playing place, which moves with time
+unplaced(s: string): string
+{
+	r := "";
+	for((nil, l) := sys->tokenize(s, " \n"); l != nil; l = tl l)
+		if(!prefix("pos=", hd l) && !prefix("t=", hd l))
+			r += " " + hd l;
+	return r;
+}
+
+prefix(p, s: string): int
+{
+	return len s >= len p && s[0:len p] == p;
+}
+
 testView(t: ref T)
 {
 	(f, nil) := readall(dir + "/view/0/fmt");
 	t.assertseq(f, sys->sprint("%d %d i420 6\n", W, H), "vidjpeg's fmt is a raw feed's");
+	# the feed plays, so its place (pos, t) may move between the two reads
 	(st, nil) := readall(dir + "/view/0/status");
 	(st2, nil) := readall(dir + "/feed/0/status");
-	t.assertseq(st, st2, "status is the feed's");
+	t.assertseq(unplaced(st), unplaced(st2), "status is the feed's");
 	fd := sys->open(dir + "/view/0/frame", Sys->OREAD);
 	if(fd == nil)
 		t.fatal(sys->sprint("open view frame: %r"));

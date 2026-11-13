@@ -14,6 +14,7 @@ COUNT: con BIT32SZ;
 OFFSET: con BIT64SZ;
 
 H: con BIT32SZ+BIT8SZ+BIT16SZ;	# minimum header length: size[4] type tag[2]
+MINMSIZE: con 256;	# the least a client may offer: a walk or a stat fits it; the mount driver's least too
 
 #
 # the following array could be shorter if it were indexed by (type-Tversion)
@@ -404,6 +405,11 @@ Tmsg.unpack(f: array of byte): (int, ref Tmsg)
 		return (0, nil);
 	size := (int f[1] << 8) | int f[0];
 	size |= ((int f[3] << 8) | int f[2]) << 16;
+	# a size with its top bit set is negative here, and one less than a
+	# header's is no message: either made f[0:size] an exception in
+	# whoever called with more than one message's bytes
+	if(size < H)
+		return (-1, nil);
 	if(len f != size){
 		if(len f < size)
 			return (0, nil);	# need more data
@@ -481,7 +487,9 @@ Decode:
 		offset := g64(f, H+FID);
 		count := g32(f, H+FID+OFFSET);
 		O: con H+FID+OFFSET+COUNT;
-		if(count > len f-O)
+		# count is the peer's and signed here: ff ff ff ff is -1, less
+		# than what is left, and f[O:O-1] ended the server's reader
+		if(count < 0 || count > len f-O)
 			break;
 		data := f[O:O+count];
 		return (O+count, ref Tmsg.Write(tag, fid, offset, data));
@@ -500,6 +508,8 @@ Decode:
 		if(len f < H+FID+LEN+n)
 			break;
 		(ds, stat) := unpackdir(f[H+FID+LEN:]);
+		if(ds <= 0)
+			break;	# a stat of no bytes was taken for one of all zeros
 		if(ds != n){
 			sys->print("Ninep->Tmsg.unpack: wstat count: %d/%d\n", ds, n);	# temporary
 			break;
@@ -705,6 +715,11 @@ Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 		return (0, nil);
 	size := (int f[1] << 8) | int f[0];
 	size |= ((int f[3] << 8) | int f[2]) << 16;	# size includes itself
+	# a size with its top bit set is negative here, and one less than a
+	# header's is no message: either made f[0:size] an exception in
+	# whoever called with more than one message's bytes
+	if(size < H)
+		return (-1, nil);
 	if(len f != size){
 		if(len f < size)
 			return (0, nil);	# need more data
@@ -761,8 +776,9 @@ Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 	Rcreate=>
 		return (H+QID+COUNT, ref Rmsg.Create(tag, gqid(f, H), g32(f, H+QID)));
 	Rread =>
+		# as Twrite's: negative, or so large H+COUNT+count wrapped
 		count := g32(f, H);
-		if(len f < H+COUNT+count)
+		if(count < 0 || count > len f-(H+COUNT))
 			break;
 		data := f[H+COUNT:H+COUNT+count];
 		return (H+COUNT+count, ref Rmsg.Read(tag, data));
@@ -908,6 +924,10 @@ compatible(t: ref Tmsg.Version, msize: int, version: string): (int, string)
 {
 	if(version == nil)
 		version = VERSION;
+	# a size no message fits (0, negative, a few bytes) is no offer: the
+	# server went on with it as the size agreed
+	if(t.msize < MINMSIZE)
+		return (msize, "unknown");
 	if(t.msize < msize)
 		msize = t.msize;
 	v := t.version;

@@ -184,7 +184,9 @@ dologin(c: ref Sys->Connection): string
 	if(why != nil){
 		sys->fprint(stderr, "logind: %s; answered as a wrong password\n", why);
 		auditlog("authfail", sys->sprint("user=%q reason=unusable", name));
-		pw = rand->randombuf(Random->ReallyRandom, Keyring->SHA256dlen);
+		# the DRBG (#c/notquiterandom): ReallyRandom takes seconds, a
+		# delay a wrong password does not have
+		pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
 		userexp = 0;
 	}
 

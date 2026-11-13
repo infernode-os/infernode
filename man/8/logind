@@ -56,6 +56,17 @@ name are counted as they start.
 A login that works clears the name's count.
 A name with no account is counted and refused in the same way and the
 same words, so the throttle does not tell which names have accounts.
+Nor does a single login:
+a name with no account, or one whose entry
+.IR keyfs (4)
+will not give (disabled or expired) or that has no usable secret or
+expiry, is answered as a wrong password is.
+The exchange goes on under a random stand-in for the password's SHA-256,
+with the same work and the same messages, so the client fails to decrypt
+the signer's first message and reports
+.BR "name or secret incorrect" ;
+the real reason is written to the console alone, and the login is
+counted and never cleared or signed.
 A count not added to for 15 minutes is forgotten, as is a cooldown once
 it ends; at most 4096 counts not at the limit are kept, the oldest
 dropped first.

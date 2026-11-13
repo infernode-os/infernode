@@ -70,6 +70,8 @@ dnsfile := "/lib/ndb/local";
 myname: string;
 mntpt := "/net";
 DNSport: con 53;
+dnsport := DNSport;	# -p: the port servers are asked on (a test's server is not on 53)
+Maxttl: con 7*24*60*60;	# the longest a record is kept, whatever it says
 debug := 0;
 referdns := 0;
 usehost := 1;
@@ -92,7 +94,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(dial == nil)
 		cantload(Dial->PATH);
 	arg->init(args);
-	arg->setusage("dns [-Drh] [-f dnsfile] [-x mntpt]");
+	arg->setusage("dns [-Drh] [-f dnsfile] [-p port] [-x mntpt]");
 	svcname := "#sdns";
 	while((c := arg->opt()) != 0)
 		case c {
@@ -102,6 +104,10 @@ init(nil: ref Draw->Context, args: list of string)
 			dnsfile = arg->earg();
 		'h' =>
 			usehost = 0;
+		'p' =>
+			dnsport = int arg->earg();
+			if(dnsport <= 0 || dnsport > 65535)
+				arg->usage();
 		'r' =>
 			referdns = 1;
 		'x' =>
@@ -1124,7 +1130,7 @@ Step1:
 			#		canonical name (data) of the CNAME RR and goto step 1.
 			#	d. if response is server failure or otherwise odd, delete server from SLIST
 			#		and goto step 3.
-			auth := (dm.flags & Fauth) != 0;
+			auth := dm.flags & Fauth;	# the flag itself: the cache tests rr.flags & Fauth
 			soa: ref RR.Soa;
 			(soa, dm.ns) = soaof(dm.ns);
 			if((dm.flags & Rmask) != Rok){
@@ -1496,6 +1502,8 @@ getrrl(nr: int, a: array of byte, o: int): (list of ref RR, int)
 		(ttl, o) = get4(a, o);
 		if(ttl <= 0)
 			ttl = 0;
+		if(ttl > Maxttl)
+			ttl = Maxttl;	# a week (RFC 8767's ceiling); and now+ttl must not wrap
 		#ttl = 1*60;
 		ttl += now;
 		dlen: int;
@@ -1504,6 +1512,9 @@ getrrl(nr: int, a: array of byte, o: int): (list of ref RR, int)
 			return (rrl, o);
 		if(o+dlen > len a)
 			return (rrl, -(o+dlen));
+		# the record's data is dlen bytes and no more: what is parsed from
+		# it must end inside it, and the next record starts after it
+		rend := o+dlen;
 		rr: ref RR;
 		dname: string;
 		case rtype {
@@ -1516,6 +1527,10 @@ getrrl(nr: int, a: array of byte, o: int): (list of ref RR, int)
 			(soa.retry, o) = get4(a, o);
 			(soa.expire, o) = get4(a, o);
 			(soa.minttl, o) = get4(a, o);
+			if(soa.minttl < 0)
+				soa.minttl = 0;
+			if(soa.minttl > Maxttl)
+				soa.minttl = Maxttl;
 			rr = ref RR.Soa(name, rtype, rclass, ttl, 0, soa);
 		Thinfo =>
 			cpu, os: string;
@@ -1534,6 +1549,8 @@ getrrl(nr: int, a: array of byte, o: int): (list of ref RR, int)
 			(dname, o) = getdn(a, o, 0);
 			rr = ref RR.Host(name, rtype, rclass, ttl, 0, dname);
 		Ta =>
+			if(dlen != 4)
+				return (rrl, -o);	# an address is four bytes; udpquery sends to rdata[0:4]
 			rdata := array[dlen] of byte;
 			rdata[0:] = a[o:o+dlen];
 			rr = ref RR.A(name, rtype, rclass, ttl, 0, rdata);
@@ -1544,6 +1561,11 @@ getrrl(nr: int, a: array of byte, o: int): (list of ref RR, int)
 			rr = ref RR.Other(name, rtype, rclass, ttl, 0, rdata);
 			o += dlen;
 		}
+		if(o < 0)
+			return (rrl, o);
+		if(o > rend)
+			return (rrl, -o);	# its fields ran past its own length
+		o = rend;
 		rrl = rr :: rrl;
 	}
 	r: list of ref RR;
@@ -1655,7 +1677,7 @@ rcodes := array[] of {
 
 reason(n: int): string
 {
-	if(n < 0 || n > len rcodes)
+	if(n < 0 || n >= len rcodes)
 		return sys->sprint("error %d", n);
 	return rcodes[n];
 }
@@ -1716,24 +1738,29 @@ mkquery(qtype: int, qclass: int, name: string): (int, array of byte, string)
 		return (0, nil, "dns: bad query message");	# should only happen if a name is ridiculous
 	for(i:=0; i<Udphdrsize; i++)
 		a[i] = byte 0;
-	a[Udprport] = byte (DNSport>>8);
-	a[Udprport+1] = byte DNSport;
+	a[Udprport] = byte (dnsport>>8);
+	a[Udprport+1] = byte dnsport;
 	return (dm.id&16rFFFF, a, nil);
 }
 
 udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: ref RR): (ref DNSmsg, string)
 {
-	# TO DO: check address and ports?
-
 	if(debug)
 		sys->print("udp query %s\n", sname);
 	pick ar := addr {
 	A =>
+		if(len ar.rdata != 4)
+			return (nil, "not an IPv4 address");
 		query[Udpraddr:] = ip->v4prefix[0:IPv4off];
 		query[Udpraddr+IPv4off:] = ar.rdata[0:4];
 	* =>
 		return (nil, "not A resource");
 	}
+	# what was asked, to hold a reply against
+	asked: ref QR;
+	qm := DNSmsg.unpack(query[Udphdrsize:]);
+	if(qm != nil && qm.qd != nil)
+		asked = hd qm.qd;
 	dm: ref DNSmsg;
 	pidc := chan of int;
 	c := chan of array of byte;
@@ -1752,12 +1779,27 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 			return (nil, sys->sprint("udp write err: %r"));
 		buf := <-c;
 		if(buf != nil){
+			# a reply is the server's only if it comes from the address
+			# and port the query went to, and answers the question asked;
+			# anything else is someone else's datagram, and is not read
+			if(!fromserver(buf, query)){
+				if(debug)
+					sys->print("id=%d: datagram not from the server asked\n", id);
+				dm = nil;
+				continue;
+			}
 			buf = buf[Udphdrsize:];
 			dm = DNSmsg.unpack(buf);
 			if(dm == nil){
 				kill(tpid);
 				kill(rpid);
 				return (nil, "bad udp reply message");
+			}
+			if(dm.flags & Fresp && dm.id == id && !answers(dm, asked)){
+				if(debug)
+					sys->print("id=%d: reply to another question\n", id);
+				dm = nil;
+				continue;
 			}
 			if(dm.flags & Fresp && dm.id == id){
 				if(dm.flags & Ftrunc && dm.ns == nil){
@@ -1781,6 +1823,30 @@ udpquery(fd: ref Sys->FD, id: int, query: array of byte, sname: string, addr: re
 	if(debug)
 		sys->print("reply: %s\n", dm.text());
 	return (dm, nil);
+}
+
+# The datagram's source, as the kernel put it in the header, against the
+# address and port the query's header named.
+fromserver(buf, query: array of byte): int
+{
+	if(len buf < Udphdrsize || len query < Udphdrsize)
+		return 0;
+	for(i := 0; i < IPaddrlen; i++)
+		if(buf[Udpraddr+i] != query[Udpraddr+i])
+			return 0;
+	return buf[Udprport] == query[Udprport] && buf[Udprport+1] == query[Udprport+1];
+}
+
+# A reply answers what was asked if it repeats the question.  One with no
+# question at all is taken only as an error (some servers send those bare).
+answers(dm: ref DNSmsg, asked: ref QR): int
+{
+	if(asked == nil)
+		return 1;
+	if(dm.qd == nil)
+		return (dm.flags & Rmask) != Rok;
+	q := hd dm.qd;
+	return q.rtype == asked.rtype && q.class == asked.class && lower(q.name) == lower(asked.name);
 }
 
 reader(fd: ref Sys->FD, c: chan of array of byte, pidc: chan of int)
@@ -1839,7 +1905,7 @@ tcpquery(query: array of byte): (ref DNSmsg, string)
 	# TO DO: check request id, ports etc.
 
 	ipa := query[Udpraddr+IPv4off:];
-	addr := sys->sprint("tcp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1], int ipa[2], int ipa[3], DNSport);
+	addr := sys->sprint("tcp!%d.%d.%d.%d!%d", int ipa[0], int ipa[1], int ipa[2], int ipa[3], dnsport);
 	conn := dial->dial(addr, nil);
 	if(conn == nil)
 		return (nil, sys->sprint("can't dial %s: %r", addr));

@@ -214,6 +214,14 @@ ptclcsum(Block *bp, int offset, int len)
 	ushort csum;
 	int odd, blocklen, x;
 
+	/*
+	 * A length or an offset below zero is a caller's arithmetic on a
+	 * header gone wrong; summed, it is bytes before the block or a
+	 * count that is not one.  Answered as a sum that does not verify.
+	 */
+	if(offset < 0 || len < 0)
+		return 0xffff;
+
 	/* Correct to front of data area */
 	while(bp != nil && offset && offset >= BLEN(bp)) {
 		offset -= BLEN(bp);
@@ -285,7 +293,8 @@ int
 eipfmt(Fmt *f)
 {
 	char buf[5*8];
-	static char *efmt = "%.2lux%.2lux%.2lux%.2lux%.2lux%.2lux";
+	/* the bytes are passed as ints: an l here read each as 64 bits */
+	static char *efmt = "%.2ux%.2ux%.2ux%.2ux%.2ux%.2ux";
 	static char *ifmt = "%d.%d.%d.%d";
 	uchar *p, ip[16];
 	ulong *lp;

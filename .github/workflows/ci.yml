@@ -796,7 +796,7 @@ jobs:
               libkern_copy_test
               ethermedium_arp_test genet_rxlen_test icmp6_ndopt_test icmp_netlog_test
               virtio_used_test ether4330_bounds_test dns_reply_test usbclass_selftest_test
-              usbdwc_bounds_test udp_len_test iproute_guard_test
+              usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test

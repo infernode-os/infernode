@@ -431,6 +431,22 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	Hi := IPint.strtoip(hexHi, 64);
 	m := IPint.strtoip(hexm, 64);
 
+	# m is the client's, and must be an element of the group: 0 < m < p.
+	# Only the string "0" was looked for (the probe, above).  Any other
+	# spelling of zero, or p, or a multiple of it, made sigma below 0
+	# whatever y was, and the k sent next the hash of things the client
+	# knows and the password's verifier: one connection, and the
+	# password could be searched for with no further word to this
+	# server, the lockout never counting past one.  An m that is no
+	# number was a nil dereference.  Counted as a failed attempt.
+	if(m == nil || m.cmp(IPint.inttoip(0)) <= 0 || m.cmp(params.p) >= 0){
+		log(sys->sprint("rejected m outside the group for %s", C));
+		writerr(fd, "bad m");
+		auditlog("secstore", "authfail", sys->sprint("user=%s reason=badm", C));
+		notefail(C);
+		return (nil, nil, C);
+	}
+
 	# Server picks random y, computes mu = g^y mod p
 	y := mod(IPint.random(exponentbits(ver), exponentbits(ver)), params.q);
 	if(y.eq(IPint.inttoip(0)))
@@ -566,7 +582,7 @@ fileloop(conn: ref Dial->Connection, user: string, nil: string)
 		"RM" =>
 			dorm(user, arg);
 		"BYE" =>
-			break;
+			return;	# break left only the case, and the session went on
 		* =>
 			writerr(fd, "unknown command");
 		}

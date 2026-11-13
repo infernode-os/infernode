@@ -970,6 +970,148 @@ testOptions(t: ref T)
 }
 
 #
+# A string option is the server's text and is written into net/ndb, a file
+# of lines.  One carrying a control character is no value at all; one with
+# a blank in it is not written as a bare ndb word.
+#
+testStrings(t: ref T)
+{
+	c := Bootconf.new();
+	c.put(Dhcpclient->Ohostname, array of byte "board");
+	t.assertseq(c.gets(Dhcpclient->Ohostname), "board", "a plain name is taken");
+
+	bad := array[] of {
+		"a\nip=10.0.0.9 ipmask=255.0.0.0",
+		"a\r",
+		"a\tb",
+		"\n",
+		"a\u007f",
+		"a\u0001b",
+	};
+	for(i := 0; i < len bad; i++){
+		c.put(Dhcpclient->Ohostname, array of byte bad[i]);
+		t.assertnil(c.gets(Dhcpclient->Ohostname), sys->sprint("a name with a control character is no value (case %d)", i));
+	}
+
+	# a name beyond ASCII is still a name
+	c.put(Dhcpclient->Ohostname, array of byte "caf\u00e9");
+	t.assertseq(c.gets(Dhcpclient->Ohostname), "caf\u00e9", "a name in UTF-8 is taken");
+
+	# and what reaches net/ndb: one entry, whatever sys and dom hold
+	memfs = load MemFS MemFS->PATH;
+	if(memfs == nil){
+		t.fatal("cannot load "+MemFS->PATH);
+		return;
+	}
+	if((e := memfs->init()) != nil){
+		t.fatal("memfs: "+e);
+		return;
+	}
+	fd := memfs->newfs(64*1024);
+	if(fd == nil || sys->mount(fd, nil, Netdir, Sys->MREPL|Sys->MCREATE, nil) < 0){
+		t.fatal(sys->sprint("cannot mount a scratch net on %s: %r", Netdir));
+		return;
+	}
+	ctl := sys->create(Netdir+"/ctl", Sys->ORDWR, 8r666);
+	if(ctl == nil){
+		t.fatal(sys->sprint("cannot create a scratch interface ctl: %r"));
+		return;
+	}
+	c = Bootconf.new();
+	c.ip = "192.168.7.5";
+	c.ipmask = "255.255.255.0";
+	c.sys = "h ip=10.0.0.9";	# a blank: two ndb attributes if written bare
+	c.dom = "lab.example";
+	t.assertnil(dhcpclient->applycfg(Netdir, ctl, c), "the configuration applies");
+	ndb := readall(Netdir+"/ndb");
+	t.assert(ndb != nil, "net/ndb was written");
+	nip := 0;
+	(nil, lines) := sys->tokenize(ndb, "\n");
+	for(; lines != nil; lines = tl lines){
+		l := hd lines;
+		if(len l >= 3 && l[0:3] == "ip=")
+			nip++;
+		t.assert(!contains(l, "10.0.0.9"), "nothing of a name with a blank reaches net/ndb: "+l);
+	}
+	t.asserteq(nip, 1, "net/ndb holds exactly one entry");
+	t.assert(contains(ndb, "dom=lab.example"), "a plain domain is written");
+	t.assert(!contains(ndb, "sys="), "a name that is not one word is left out");
+	ctl = nil;
+	sys->unmount(nil, Netdir);
+}
+
+readall(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+#
+# The times a lease is run on.  The server's own when they make sense;
+# otherwise half and seven-eighths; never a renewal sooner than Minrenew,
+# and the renewal always before the rebinding, for every lease there is.
+#
+testTimers(t: ref T)
+{
+	(t1, t2) := dhcpclient->timers(3600, 0, 0);
+	t.asserteq(t1, 1800, "T1 defaults to half the lease");
+	t.asserteq(t2, 3150, "T2 defaults to seven-eighths");
+
+	(t1, t2) = dhcpclient->timers(3600, 600, 1200);
+	t.asserteq(t1, 600, "the server's T1 is kept");
+	t.asserteq(t2, 1200, "the server's T2 is kept");
+
+	(t1, t2) = dhcpclient->timers(3600, 2000, 1000);
+	t.asserteq(t1, 2000, "a T1 inside the lease is kept");
+	t.asserteq(t2, 3150, "a T2 before T1 falls back");
+
+	(t1, t2) = dhcpclient->timers(3600, 7200, 9000);
+	t.asserteq(t1, 1800, "a T1 past the lease falls back");
+	t.asserteq(t2, 3150, "a T2 past the lease falls back");
+
+	# the longest lease a reply can carry: seven-eighths of it does not wrap
+	(t1, t2) = dhcpclient->timers(16r7FFFFFFF, 0, 0);
+	t.assert(t1 > 0 && t2 > t1, sys->sprint("the longest lease: T1 %d before T2 %d", t1, t2));
+
+	# the shortest: not renewed in a loop
+	for(lease := 1; lease <= 64; lease++){
+		(t1, t2) = dhcpclient->timers(lease, 0, 0);
+		if(t1 < Dhcpclient->Minrenew || t2 <= t1){
+			t.error(sys->sprint("lease %d: T1 %d T2 %d", lease, t1, t2));
+			break;
+		}
+		(t1, t2) = dhcpclient->timers(lease, 1, 1);
+		if(t1 < Dhcpclient->Minrenew || t2 <= t1){
+			t.error(sys->sprint("lease %d with T1 = T2 = 1: T1 %d T2 %d", lease, t1, t2));
+			break;
+		}
+	}
+
+	# and across the range
+	for(lease = 100; lease > 0 && lease < 16r7FFFFFFF/3; lease *= 3){
+		(t1, t2) = dhcpclient->timers(lease, 0, 0);
+		if(t1 < Dhcpclient->Minrenew || t2 <= t1 || t2 > lease){
+			t.error(sys->sprint("lease %d: T1 %d T2 %d", lease, t1, t2));
+			break;
+		}
+	}
+}
+
+#
 # The whole exchange, against the synthetic server.
 #
 testExchange(t: ref T)
@@ -1068,6 +1210,8 @@ init(nil: ref Draw->Context, args: list of string)
 	dhcpclient->init();
 
 	run("Options", testOptions);
+	run("Strings", testStrings);
+	run("Timers", testTimers);
 	run("Exchange", testExchange);
 
 	if(testing->summary(passed, failed, skipped) > 0)

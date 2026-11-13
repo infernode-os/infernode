@@ -1015,6 +1015,19 @@ ctlrcmd(Ctlr *ctlr, u32int c, u32int s, u64int p, u32int *er)
 }
 
 static void
+setresidue(Ring *r, u32int x, u32int reported)
+{
+	int queued;
+
+	queued = r->residue[x & r->mask];
+	if(queued < 0)
+		reported = 0;
+	else if(reported > (u32int)queued)
+		reported = queued;
+	r->residue[x & r->mask] = reported;
+}
+
+static void
 completering(Ctlr *ctlr, Ring *r, u32int *er)
 {
 	Wait *w, **wp;
@@ -1030,7 +1043,7 @@ completering(Ctlr *ctlr, Ring *r, u32int *er)
 		td = &r->base[4*(x & r->mask)];
 		if((*ctlr->x.dmaaddr)(td) == pa){
 			if(r->residue != nil)
-				r->residue[x & r->mask] = er[2] & 0xFFFFFF;
+				setresidue(r, x, er[2] & 0xFFFFFF);
 			r->rp = x+1;
 			break;
 		}
@@ -1669,10 +1682,11 @@ isoread(Ep *ep, uchar *p, long n)
 	for(i = io->frame0; (int)(io->ring->rp - io->rp0) > 0 && n > 0; i++) {
 		if((io->rp0 & io->ring->mask) == io->ring->mask)
 			io->rp0++;
-		m = io->tdsz - io->ring->residue[io->rp0 & io->ring->mask];
+		m = (long)io->tdsz - io->ring->residue[io->rp0 & io->ring->mask]
+			- io->nleft;
 		if(m > 0){
 			d = io->buf + (i&io->ring->mask)*io->tdsz;
-			d += io->nleft, m -= io->nleft;
+			d += io->nleft;
 			if(n < m){
 				dmainval(d, n);
 				memmove(p, d, n);
@@ -2230,4 +2244,3 @@ xhcilinkage(Hci *hp, Xhci *ctlr)
 
 	ctlr->active = hp;
 }
-

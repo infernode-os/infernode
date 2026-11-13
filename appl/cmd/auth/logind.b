@@ -15,6 +15,7 @@ include "keyring.m";
 
 include "security.m";
 	ssl: SSL;
+	rand: Random;
 
 include "daytime.m";
 	daytime: Daytime;
@@ -90,6 +91,10 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(daytime == nil) 
 		nomod(Daytime->PATH);
 
+	rand = load Random Random->PATH;
+	if(rand == nil)
+		nomod(Random->PATH);
+
 	audit = load Audit Audit->PATH;	# optional: the audit log
 	if(audit != nil)
 		audit->init();
@@ -158,15 +163,32 @@ dologin(c: ref Sys->Connection): string
 		return sys->sprint("login refused: too many failed attempts; retry in %ds", rem);
 	}
 
-	# lookup password
+	# Look up the password and expiry. A name that cannot log in -- no
+	# account, one keyfs(4) refuses the secret of (disabled, expired),
+	# an entry not a SHA-256, no expiry -- is answered as a wrong
+	# password is: the exchange goes on under a random stand-in for the
+	# password's SHA-256, which no client has, so it fails to decrypt
+	# alpha**r0 and says "name or secret incorrect", as for a real name
+	# with a wrong password. The reason goes to the console alone, and
+	# both paths do the same work: both lookups, the key derivation, the
+	# expmods, the same messages.
 	pw := getsecret(s);
+	why := "";
 	if(pw == nil)
-		return sys->sprint("no password entry for %s: %r", s);
-	if(len pw < Keyring->SHA256dlen)
-		return "bad password for "+s+": not SHA256 hashed?";
+		why = sys->sprint("no password entry for %s: %r", s);
 	userexp := getexpiry(s);
-	if(userexp < 0)
-		return sys->sprint("expiry time for %s: %r", s);
+	if(why == nil && len pw < Keyring->SHA256dlen)
+		why = "bad password for "+s+": not SHA256 hashed?";
+	if(why == nil && userexp < 0)
+		why = sys->sprint("expiry time for %s: %r", s);
+	if(why != nil){
+		sys->fprint(stderr, "logind: %s; answered as a wrong password\n", why);
+		auditlog("authfail", sys->sprint("user=%q reason=unusable", name));
+		# the DRBG (#c/notquiterandom): ReallyRandom takes seconds, a
+		# delay a wrong password does not have
+		pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
+		userexp = 0;
+	}
 
 	# generate our random diffie hellman part
 	bits := info.p.bits();
@@ -222,6 +244,11 @@ dologin(c: ref Sys->Connection): string
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return "client public key: "+err;
+
+	# A name that cannot log in: no client has the stand-in, so none
+	# gets here; if one did, it is still refused, uncleared, unsigned.
+	if(why != nil)
+		return why;
 
 	# The client's key came under the session's secrets: it has
 	# alpha**(r0*r1), so it had the password. The attempt is not a failure.

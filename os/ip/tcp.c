@@ -1152,6 +1152,19 @@ htontcp4(Tcp *tcph, Block *data, Tcp4hdr *ph, Tcpctl *tcb)
 	return data;
 }
 
+static int
+tcpoptlen(uchar *opt, int n)
+{
+	int len;
+
+	if(n < 2)
+		return 0;
+	len = opt[1];
+	if(len < 2 || len > n)
+		return 0;
+	return len;
+}
+
 int
 ntohtcp6(Tcp *tcph, Block **bpp)
 {
@@ -1200,8 +1213,8 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 			optr++;
 			continue;
 		}
-		optlen = optr[1];
-		if(optlen < 2 || optlen > n)
+		optlen = tcpoptlen(optr, n);
+		if(optlen == 0)
 			break;
 		switch(*optr) {
 		case MSSOPT:
@@ -1278,8 +1291,8 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 			optr++;
 			continue;
 		}
-		optlen = optr[1];
-		if(optlen < 2 || optlen > n)
+		optlen = tcpoptlen(optr, n);
+		if(optlen == 0)
 			break;
 		switch(*optr) {
 		case MSSOPT:

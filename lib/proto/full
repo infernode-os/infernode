@@ -54,9 +54,6 @@ module
 	+
 n
 services
-	httpd
-		httpd.rewrite
-		httpd.suff
 	logs
 	webget
 		help.html

@@ -1,115 +1,320 @@
 .TH HTTPD 8
 .SH NAME
-httpd, echo, stats \- HTTP server
+httpd \- web server for a name space
 .SH SYNOPSIS
 .B svc/httpd/httpd
 [
+.B -Lv
+] [
 .BI -a " addr"
 ] [
-.BI -c " cachesize"
+.BI -c " cert"
+.BI -k " key"
 ] [
-.B -D
+.BI -l " log"
+] [
+.BI -p " path"
+]... [
+.BI -w " wikibase"
+] [
+.BI -r " httpsport"
+] [
+.BI -S " secs"
+] [
+.BI -n " maxconns"
+] [
+.BI -s " persource"
+] [
+.BI -b " maxbody"
 ]
-.PP
-.BI svc/httpd/echo " meth vers uri search"
-.PP
-.BI svc/httpd/stats " meth vers uri search"
+.I root
 .SH DESCRIPTION
 .I Httpd
-is a simple HTTP daemon, serving version 1.0 of the HTTP protocol.
-It listens for incoming calls on a given
-.I address
-(default:
-.BR tcp!*!80 ).
-It serves content rooted at
-.L /services/httpd/root
-in its name space.
+serves the directory
+.I root
+over HTTP/1.1, and over TLS 1.3 when given a certificate and key.
+What it serves is whatever is in
+.I root
+when a request arrives, including what has been bound or mounted under it:
+a device's file server mounted at
+.IB root /gps
+is a set of pages whose
+.B GET
+reads the device.
+Dynamic content is a file server's business, not the web server's;
+there is no CGI.
 .PP
-The
-.I httpd
-program supports only the
-.L GET
+Each connection runs in a name space of its own, made from the server's
+as it was started:
+.B pctl(FORKNS)
+(see
+.IR sys-pctl (2)),
+.I root
+bound over
+.B /
+with
+.BR MREPL ,
+then
+.BR pctl(NODEVS) ,
+an empty environment
+.RB ( NEWENV )
+and no descriptors but the connection's, the log's and the TLS
+module's entropy source
+.RB ( NEWFD ).
+In that name space
+.B /
+is the site and
+.B ..
+from it is the site; the server's own
+.BR /dis ,
+.BR /dev ,
+.BR /prog
+and the rest are not there, and no device can be attached by name.
+In the hosted emulator, a host symbolic link in the site is not
+followed once
+.B NODEVS
+is set
+.RI ( fs (3)).
+The name space sketch:
+.IP
+.EX
+/		root, as it was when httpd started
+/index.html	served for /
+/gps/	...	a mount made under root before httpd started
+/wiki/	...	wikifs, for -w /wiki
+.EE
+.PP
+Requests are refused before they reach the name space when they are
+not strictly HTTP/1.1 or HTTP/1.0: a request line or header line longer
+than 8192 bytes (414, 431), more than 64 headers or 16384 bytes of them
+(431), a folded header, a line ending in a bare LF or holding a bare CR
+or NUL, a control character in a header, a header name that is not a
+token, no
+.B Host
+under HTTP/1.1 or more than one, a
+.B Host
+that is not a host and port (400);
+.B Transfer-Encoding
+(501: no request body taken needs it, and with
+.B Content-Length
+it is how requests are smuggled), two
+.B Content-Length
+headers that differ, or one that is not digits (400).
+A path is percent-decoded once, as UTF-8; a NUL, a control character,
+bytes that are not UTF-8, a
+.B .
+or
+.B ..
+segment (a browser removes them before it sends) or a path longer than
+2048 bytes is refused (400).
+A path with a segment beginning with
+.B .
+is not found (404).
+A refused request ends its connection.
+.PP
+.B GET
 and
-.L HEAD
-methods of the HTTP protocol. The
-.L Content-type
+.B HEAD
+send a file with its
+.BR Content-Type
+(by its name's extension),
+.BR ETag
+(from its qid),
+.BR Last-Modified ,
+and
+.BR "X-Content-Type-Options: nosniff" ;
+.B If-None-Match
+and
+.B If-Modified-Since
+are answered with 304, a single byte range with 206
+.RB ( If-Range
+honoured; several ranges get the whole file).
+A file whose length is 0 in its stat (a device's status file, a
+stream) is read until end of file and sent chunked, with
+.BR "Cache-Control: no-store" .
+A directory is sent as its
+.B index.html
+if it has one; otherwise it is refused (403), or listed with
+.BR -L .
+A directory named without its final
+.B /
+is redirected (301) to the name with it.
+Pages the server makes itself (errors and listings) carry a
+.B Content-Security-Policy
+that loads and runs nothing.
+.PP
+.B POST
+is taken only by the paths named with
+.BR -p ,
+whose body (at most
+.I maxbody
+bytes, default 65536, with a
+.BR Content-Length )
+replaces the file's contents in one write, as the shell's
+.B >
+does (a file that cannot be truncated, a device's
+.BR ctl ,
+is written as it is).
+If the file can then be read, what it gives is the answer (200);
+otherwise there is none (204).
+With
+.BR -w ,
+.B /magic/wikipost
+takes the edit form of a
+.I wikifs
+.RB ( appl/cmd/wikifs )
+mounted at
+.I wikibase
+in the site, writes the page to
+.IB wikibase /new
+and redirects (303) to the page; the form's own
+.B base
+field is not followed.
+Either is refused (403) when the request comes from another site: an
+.B Origin
+that is not this server's, or a
+.B Sec-Fetch-Site
+that is not
+.B same-origin
+or
+.BR none .
+A request with neither (not from a browser) is taken.
+Writes are not authenticated: name with
+.B -p
+only what anyone who can reach the server may write.
+.PP
+Each phase of a connection has a deadline: 10 seconds for the TLS
+handshake, 10 for the first request's headers, 15 between requests
+and for their headers, and 30 for each read of a body, write of a
+response and read of a file.
+A connection past one is hung up and its processes killed by the
+listener, which holds the connections' control files; a file server that
+never answers holds a connection only that long.
+The listener admits at most
+.I maxconns
+connections at once (default 64), and at most
+.I persource
+from one address (default 16); a connection past either is closed
+unanswered.
+A connection is closed after 100 requests.
+.PP
+The options are:
+.TP
+.BI -a " addr"
+Announce
+.I addr
 (default
-.LR application/octet-stream )
-and
-.L Content-encoding
-(default
-.LR binary )
-of a file are determined by looking for suffixes of the file name in
-.BR /services/http/http.suff .
-.PP
-If the requested URI begins with
-.BR /magic/ ,
-.I httpd
-loads the module associated with the remaining part of the URI.
-Take care to configure the name space sensibly.
-Simple servers
-.I echo
-and
-.I stats
-are provided (see below).
-.PP
+.B tcp!*!443
+with TLS,
+.B tcp!*!80
+without).
+.TP
+.BI -c " cert" " -k" " key"
+Serve TLS 1.3 alone
+.RB ( module/tls.m 's
+server: the X25519MLKEM768 hybrid first, then X25519, then P-256 by
+HelloRetryRequest; AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 in the
+client's order; ALPN
+.BR http/1.1 ;
+no resumption or early data).
+.I Cert
+is a PEM chain, leaf first, whose key is ECDSA P-256;
+.I key
+is its PEM private key, SEC1
+.RB ( "EC PRIVATE KEY" )
+or PKCS #8
+.RB ( "PRIVATE KEY" ).
 .I Httpd
-has the following options:
+will not start if the key is not the certificate's.
+Clients that offer only TLS 1.2 or earlier are refused.
 .TP
-.BI -a " address"
-Listen for calls on the given
-.IR address ,
-expressed using the syntax of
-.IR dial (2).
+.BI -l " log"
+Append each request to
+.I log
+in Common Log Format with the referer and agent (Apache's
+.IR combined );
+the default is standard output.
 .TP
-.BI -c " cachesize"
-Set the size of the daemon's cache to
-.I cachesize
-kilobytes. The default is a five megabyte cache.
+.B -L
+List directories that have no
+.BR index.html .
 .TP
-.B -D
-Debugging information is written to the file
-.BR /services/httpd/httpd.debug .
+.BI -p " path"
+Take
+.B POST
+at
+.I path
+in the site.
+.TP
+.BI -w " wikibase"
+Take wikifs's edit form at
+.BR /magic/wikipost .
+.TP
+.BI -r " httpsport"
+Answer every request with a redirect (301) to the same place on
+.B https
+at
+.I httpsport
+of the request's host: a plain server in front of a TLS one.
+.TP
+.BI -S " secs"
+Send
+.B Strict-Transport-Security
+with
+.BI max-age= secs
+(TLS only).
+Browsers then refuse the site's plain address, and a certificate they do
+not trust, for that long: give it only for a certificate they trust.
+.TP
+.BI -n " maxconns" ", -s" " persource" ", -b" " maxbody"
+The limits above.
+.TP
+.B -v
+Report refused requests, failed handshakes and connections hung up,
+on standard error.
+.SH EXAMPLES
+A device's pages over TLS, with its sensor's file server in the site
+and its LED's control file writable:
+.IP
+.EX
+mount {gpsfs} /services/www/gps
+bind /dev/led /services/www/led
+svc/httpd/httpd -c /keys/web.pem -k /keys/web.key -p /led \e
+	-l /services/logs/httpd /services/www &
+svc/httpd/httpd -r 443 /services/www &
+.EE
 .PP
-.I Echo
-is a trivial server that just returns the method, URI, any search, and the headers sent by the client.
+A wiki, browsed at
+.B /wiki/
+and edited from its pages:
+.IP
+.EX
+mount {wikifs -d /services/wiki} /services/www/wiki
+svc/httpd/httpd -w /wiki /services/www
+.EE
 .PP
-.I Stats
-is an equally simple server that queries the cache and returns information to the user about pages stored in the cache.
-.PP
-More complex services can be written to
-.IR httpd 's
-private interface.
-The file
-.B httpd.m
-(in
-.BR /appl/svc/httpd )
-defines constants and adts used by
-.IR httpd .
-The file
-.B cgi.m
-defines the
-module
-.L Cgi
-which is the interface for programs called using the URI
-.BR /magic/ .
+A certificate and key OpenSSL makes for it:
+.IP
+.EX
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \e
+	-keyout web.key -out web.pem -days 365 -subj /CN=device.example \e
+	-addext subjectAltName=DNS:device.example
+.EE
 .SH FILES
-.TF "/services/httpd/httpd.rewrite  "
+.TF /dis/svc/httpd/httpd.dis
 .TP
-.B /services/httpd/root
-Root of the served web content.
-.TP
-.B /services/httpd/httpd.debug
-Logfile for debugging information.
-.TP
-.B /services/httpd/httpd.log
-.I httpd
-logfile.
-.TP
-.B /services/httpd/httpd.rewrite
-File to redirect specific URI requests.
-.TP
-.B /services/httpd/httpd.suff
-File of recognizable suffixes and their content type.
+.B /dis/svc/httpd/httpd.dis
 .SH SOURCE
-.B /appl/svc/httpd
+.B /appl/svc/httpd/httpd.b
+.br
+.B /appl/lib/crypt/tls.b
+.SH SEE ALSO
+.IR sys-pctl (2),
+.IR fs (3),
+.IR listen (1)
+.SH BUGS
+HTTP/2 and HTTP/3 are not spoken; HTTP/1.1 over TLS 1.3 is.
+There is no authentication: a site that must have it is not served by
+this alone.
+Certificates are ECDSA P-256 only, and there is no ACME client to keep
+one renewed.

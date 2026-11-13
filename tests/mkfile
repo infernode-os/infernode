@@ -217,6 +217,8 @@ TARG=\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
 	tls_hrr_test.dis\
+	tls_server_test.dis\
+	httpd_confine_test.dis\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\

@@ -1,53 +1,17 @@
 <$ROOT/mkconfig
 
 TARG=\
-	alarms.dis\
-	cache.dis\
-	cgiparse.dis\
-	contents.dis\
-	date.dis\
-	echo.dis\
 	httpd.dis\
-	imagemap.dis\
-	parser.dis\
-	redirect.dis\
-	stats.dis\
-	wikipost.dis\
 
 MODULES=\
-	cache.m\
-	contents.m\
-	date.m\
-	httpd.m\
-	parser.m\
-	redirect.m\
-	alarms.m\
-	cgiparse.m\
 
 SYSMODULES=\
-	bufio.m\
+	arg.m\
 	daytime.m\
 	draw.m\
-	encoding.m\
-	rand.m\
-	readdir.m\
-	sh.m\
-	string.m\
-	sys.m
-
-LOGS=	httpd.debug\
-	httpd.log\
-	httpd.rewrite\
-	httpd.suff\
+	sys.m\
+	tls.m\
 
 DISBIN=$ROOT/dis/svc/httpd
 
 <$ROOT/mkfiles/mkdis
-
-install:V: 
-
-install-logs-sh:V:
-	for (i in $LOGS) {
-		rm -f $ROOT/services/httpd/$i && cp $i $ROOT/services/httpd/$i
-	}
-	# chmod 644 $ROOT/services/httpd/httpd.log

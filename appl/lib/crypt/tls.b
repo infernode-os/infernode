@@ -45,6 +45,7 @@ HT_SERVER_HELLO_DONE:		con 14;
 HT_CERTIFICATE_VERIFY:		con 15;
 HT_CLIENT_KEY_EXCHANGE:		con 16;
 HT_FINISHED:			con 20;
+HT_KEY_UPDATE:			con 24;
 HT_MESSAGE_HASH:		con 254;	# RFC 8446 §4.4.1: stands for ClientHello1 after a HelloRetryRequest
 
 # Alert levels
@@ -64,12 +65,17 @@ ALERT_DECODE_ERROR:		con 50;
 ALERT_DECRYPT_ERROR:		con 51;
 ALERT_PROTOCOL_VERSION:		con 70;
 ALERT_INTERNAL_ERROR:		con 80;
+ALERT_INSUFFICIENT_SECURITY:	con 71;
 ALERT_MISSING_EXTENSION:	con 109;
+ALERT_UNRECOGNIZED_NAME:	con 112;
+ALERT_NO_APPLICATION_PROTOCOL:	con 120;
 
 # Extension types
 EXT_SERVER_NAME:		con 0;
 EXT_SUPPORTED_GROUPS:		con 10;
 EXT_SIGNATURE_ALGORITHMS:	con 13;
+EXT_ALPN:			con 16;
+EXT_PRE_SHARED_KEY:		con 41;
 EXT_SUPPORTED_VERSIONS:		con 43;
 EXT_COOKIE:			con 44;
 EXT_KEY_SHARE:			con 51;
@@ -269,9 +275,12 @@ Conn.read(conn: self ref Conn, buf: array of byte, n: int): int
 			return -1;
 
 		CT_HANDSHAKE =>
-			# Post-handshake messages (e.g., NewSessionTicket, KeyUpdate)
-			# For now, silently consume
-			;
+			# Post-handshake messages: a KeyUpdate changes the
+			# peer's keys (RFC 8446 §4.6.3); a server's
+			# NewSessionTicket is not used.  A client may send a
+			# server nothing else.
+			if(posthandshake(cs, data) < 0)
+				return -1;
 
 		* =>
 			return -1;
@@ -2041,7 +2050,13 @@ clientcertverify13(transcript_hash, key: array of byte): (array of byte, string)
 {
 	if(len key != 32)
 		return (nil, "tls: client key is not a P-256 private key");
-	context_str := "TLS 1.3, client CertificateVerify";
+	return certverify13("TLS 1.3, client CertificateVerify", transcript_hash, key);
+}
+
+# A CertificateVerify's body (RFC 8446 §4.4.3): ecdsa_secp256r1_sha256
+# over 64 spaces, the context string, a zero byte and the transcript hash.
+certverify13(context_str: string, transcript_hash, key: array of byte): (array of byte, string)
+{
 	content := array [64 + len context_str + 1 + len transcript_hash] of byte;
 	for(i := 0; i < 64; i++)
 		content[i] = byte 16r20;
@@ -2059,7 +2074,7 @@ clientcertverify13(transcript_hash, key: array of byte): (array of byte, string)
 		raw = nil;
 	}
 	if(raw == nil || len raw != 64)
-		return (nil, "tls: client CertificateVerify signature failed");
+		return (nil, "tls: CertificateVerify signature failed");
 	sig := ecdsadersig(raw[0:32], raw[32:64]);
 	cv := array [4 + len sig] of byte;
 	put16(cv, 0, ECDSA_SECP256R1_SHA256);
@@ -2778,7 +2793,10 @@ readhsmsg(cs: ref ConnState): (int, array of byte, string)
 			rem := cs.hsbuf[cs.hsoff:];
 			mtype := int rem[0];
 			mlen := get24(rem, 1);
-			if(mlen > MAXHSMSG)
+			limit := MAXHSMSG;
+			if(cs.hsmax > 0)
+				limit = cs.hsmax;
+			if(mlen > limit)
 				return (0, nil, "tls: handshake message too long");
 			if(4 + mlen <= len rem) {
 				updatehash(cs, rem[0:4+mlen]);
@@ -3142,24 +3160,821 @@ randombytes(n: int): array of byte
 	return buf;
 }
 
+# n bytes from the entropy source, or an exception: never bytes anyone
+# could guess.  (It once fell back to the millisecond clock, and took a
+# short read as whole: a process whose name space had no #c -- a server
+# after pctl(NODEVS) -- would have made its keys from the time.)
 randombuf(buf: array of byte, n: int)
 {
-	if(randomfd != nil) {
-		sys->read(randomfd, buf, n);
-		return;
-	}
-	# randomfd not initialized (init() not called?) — open on demand.
-	fd := sys->open("#c/notquiterandom", Sys->OREAD);
-	if(fd == nil)
-		fd = sys->open("/dev/urandom", Sys->OREAD);
-	if(fd == nil)
-		fd = sys->open("#c/random", Sys->OREAD);
-	if(fd != nil) {
-		sys->read(fd, buf, n);
+	if(randomfd == nil) {
+		# init() not called: open one now
+		fd := sys->open("#c/notquiterandom", Sys->OREAD);
+		if(fd == nil)
+			fd = sys->open("/dev/urandom", Sys->OREAD);
+		if(fd == nil)
+			fd = sys->open("#c/random", Sys->OREAD);
 		randomfd = fd;
-		return;
 	}
-	# Fallback: use keyring random (via IPint)
-	for(i := 0; i < n; i++)
-		buf[i] = byte (sys->millisec() ^ (i * 37));
+	if(randomfd == nil)
+		raise "tls: no entropy source";
+	for(i := 0; i < n; ) {
+		m := sys->read(randomfd, buf[i:], n - i);
+		if(m <= 0)
+			raise "tls: entropy source failed";
+		i += m;
+	}
+}
+
+keptfds(): list of int
+{
+	if(randomfd == nil)
+		return nil;
+	return randomfd.fd :: nil;
+}
+
+# ================================================================
+# Post-handshake messages (both sides, TLS 1.3)
+# ================================================================
+
+# The handshake messages in one record after the handshake: 0, or -1
+# for one we cannot take.  A KeyUpdate from the peer moves our reading
+# keys on (RFC 8446 §4.6.3); a server asked for one of its own updates
+# its writing keys too.  A client does not: another of its threads may
+# be writing, and the new keys would race it (the server is told
+# nothing, and goes on reading the old keys, as RFC 8446 allows it to
+# stop the connection).
+posthandshake(cs: ref ConnState, data: array of byte): int
+{
+	if(cs.version != TLS13)
+		return 0;	# TLS 1.2's HelloRequest and the like: ignored, as before
+	off := 0;
+	while(off < len data) {
+		if(off + 4 > len data) {
+			if(cs.isserver)
+				return -1;
+			return 0;	# a ticket split over records: not ours to keep
+		}
+		mtype := int data[off];
+		mlen := get24(data, off+1);
+		if(off + 4 + mlen > len data) {
+			if(cs.isserver)
+				return -1;
+			return 0;
+		}
+		body := data[off+4:off+4+mlen];
+		off += 4 + mlen;
+		case mtype {
+		HT_KEY_UPDATE =>
+			if(mlen != 1 || int body[0] > 1)
+				return -1;
+			hashlen := hashlength(cs.suite);
+			if(cs.isserver) {
+				cs.cts = hkdf_expand_label(cs.suite, cs.cts, "traffic upd", nil, hashlen);
+				(cs.readkey, cs.readiv) = derivekeys(cs.cts, cs.suite);
+			} else {
+				cs.sts = hkdf_expand_label(cs.suite, cs.sts, "traffic upd", nil, hashlen);
+				(cs.readkey, cs.readiv) = derivekeys(cs.sts, cs.suite);
+			}
+			cs.readseq = big 0;
+			if(cs.isserver && int body[0] == 1) {
+				# our own, sent under the old keys, then the new
+				if(writerecord(cs, CT_HANDSHAKE, hsmsg(HT_KEY_UPDATE, array[1] of {byte 0})) != nil)
+					return -1;
+				cs.sts = hkdf_expand_label(cs.suite, cs.sts, "traffic upd", nil, hashlen);
+				(cs.writekey, cs.writeiv) = derivekeys(cs.sts, cs.suite);
+				cs.writeseq = big 0;
+			}
+		HT_NEW_SESSION_TICKET =>
+			if(cs.isserver)
+				return -1;
+		* =>
+			return -1;
+		}
+	}
+	return 0;
+}
+
+# ================================================================
+# Server (TLS 1.3 only)
+# ================================================================
+#
+# What a ClientHello offers.  Each list is in the order the client
+# sent it.
+
+Hello: adt {
+	sessid:		array of byte;
+	suites:		list of int;
+	versions:	list of int;
+	groups:		list of int;
+	shares:		list of (int, array of byte);
+	sigalgs:	list of int;
+	sni:		string;
+	alpn:		list of string;
+	hasalpn:	int;
+	hassigalgs:	int;
+	haskeyshare:	int;
+};
+
+# The suites a server takes, and the groups, in its preference.  The
+# client's order decides among suites (it knows whether it has AES
+# instructions); ours among groups, the post-quantum hybrid first.
+servergroups(): list of int
+{
+	return GROUP_X25519MLKEM768 :: GROUP_X25519 :: GROUP_SECP256R1 :: nil;
+}
+
+serversuite(s: int): int
+{
+	return s == TLS_AES_128_GCM_SHA256 || s == TLS_AES_256_GCM_SHA384 ||
+		s == TLS_CHACHA20_POLY1305_SHA256;
+}
+
+sharelen(group: int): int
+{
+	case group {
+	GROUP_X25519 =>
+		return 32;
+	GROUP_SECP256R1 =>
+		return 65;
+	GROUP_X25519MLKEM768 =>
+		return MLKEM768_EKLEN + 32;
+	}
+	return -1;
+}
+
+server(fd: ref Sys->FD, config: ref ServerConfig): (ref Conn, string)
+{
+	if(config == nil || config.certs == nil || len config.key != 32)
+		return (nil, "tls: server has no certificate or key");
+	cs := ref ConnState;
+	cs.fd = fd;
+	cs.isserver = 1;
+	cs.hsmax = config.maxhello;
+	if(cs.hsmax <= 0)
+		cs.hsmax = 16384;
+	cs.writeseq = big 0;
+	cs.readseq = big 0;
+
+	alpn: string;
+	err: string;
+	alert := 0;
+	{
+		(alert, alpn, err) = server0(cs, config);
+	} exception e {
+	"tls:*" =>
+		(alert, err) = (ALERT_INTERNAL_ERROR, e);
+	"*" =>
+		# the peer's end gone under a write ("write on closed
+		# pipe"), and the like: an error, not an exception
+		(alert, err) = (0, "tls: " + e);
+	}
+	clearephemeral(cs);
+	if(err != nil) {
+		if(alert != 0) {
+			# best effort, under whatever keys are set
+			a := array[2] of byte;
+			a[0] = byte ALERT_FATAL;
+			a[1] = byte alert;
+			writerecord(cs, CT_ALERT, a);
+		}
+		return (nil, err);
+	}
+	cs.hsmax = 0;
+
+	conn := ref Conn;
+	conn.version = cs.version;
+	conn.suite = cs.suite;
+	conn.group = cs.group;
+	conn.servername = cs.servername;
+	conn.alpn = alpn;
+	conn.st = cs;
+	return (conn, nil);
+}
+
+# The handshake: (alert to send or 0, ALPN protocol, error or nil)
+server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
+{
+	(mtype, ch, err) := readhsmsg(cs);
+	if(err != nil)
+		return (0, nil, err);
+	if(mtype != HT_CLIENT_HELLO)
+		return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected ClientHello");
+	(h, alert, herr) := parsehello(ch);
+	if(herr != nil)
+		return (alert, nil, herr);
+	if(!member(h.versions, TLS13))
+		return (ALERT_PROTOCOL_VERSION, nil, "tls: client does not offer TLS 1.3");
+
+	suite := 0;
+	for(l := h.suites; l != nil; l = tl l)
+		if(serversuite(hd l)) {
+			suite = hd l;
+			break;
+		}
+	if(suite == 0)
+		return (ALERT_HANDSHAKE_FAILURE, nil, "tls: no cipher suite in common");
+	if(!h.hassigalgs)
+		return (ALERT_MISSING_EXTENSION, nil, "tls: no signature_algorithms");
+	if(!member(h.sigalgs, ECDSA_SECP256R1_SHA256))
+		return (ALERT_HANDSHAKE_FAILURE, nil, "tls: client does not take ecdsa_secp256r1_sha256");
+	if(!h.haskeyshare)
+		return (ALERT_MISSING_EXTENSION, nil, "tls: no key_share");
+
+	alpn: string;
+	if(h.hasalpn && config.alpn != nil) {
+		for(a := config.alpn; a != nil && alpn == nil; a = tl a)
+			for(b := h.alpn; b != nil; b = tl b)
+				if(hd a == hd b) {
+					alpn = hd a;
+					break;
+				}
+		if(alpn == nil)
+			return (ALERT_NO_APPLICATION_PROTOCOL, nil, "tls: no application protocol in common");
+	}
+
+	# A group the client sent a share for, else one it supports with no
+	# share: asked for by HelloRetryRequest, once.
+	group := 0;
+	share: array of byte;
+	for(g := servergroups(); g != nil && group == 0; g = tl g)
+		if((d := sharefor(h.shares, hd g)) != nil) {
+			group = hd g;
+			share = d;
+		}
+	cs.suite = suite;
+	cs.version = TLS13;
+	sentccs := 0;
+	if(group == 0) {
+		for(g = servergroups(); g != nil && group == 0; g = tl g)
+			if(member(h.groups, hd g))
+				group = hd g;
+		if(group == 0)
+			return (ALERT_HANDSHAKE_FAILURE, nil, "tls: no key exchange group in common");
+
+		hrr := buildserverhello(hexbytes(HRRRANDOM), h.sessid, suite, group, nil);
+		hrrtranscript(cs, hsmsg(HT_CLIENT_HELLO, ch), hsmsg(HT_SERVER_HELLO, hrr));
+		if((err = writerecord(cs, CT_HANDSHAKE, hsmsg(HT_SERVER_HELLO, hrr))) != nil)
+			return (0, nil, err);
+		if(len h.sessid > 0) {
+			if((err = sendccs(cs)) != nil)
+				return (0, nil, err);
+			sentccs = 1;
+		}
+
+		ch2: array of byte;
+		(mtype, ch2, err) = readhsmsg(cs);
+		if(err != nil)
+			return (0, nil, err);
+		if(mtype != HT_CLIENT_HELLO)
+			return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected a second ClientHello");
+		h2: ref Hello;
+		(h2, alert, herr) = parsehello(ch2);
+		if(herr != nil)
+			return (alert, nil, herr);
+		# §4.1.2: the same but for the share asked for
+		if(!member(h2.versions, TLS13) || !member(h2.suites, suite) ||
+		   !bytescmp(h2.sessid, h.sessid))
+			return (ALERT_ILLEGAL_PARAMETER, nil, "tls: second ClientHello differs from the first");
+		if(h2.shares == nil || tl h2.shares != nil || (hd h2.shares).t0 != group)
+			return (ALERT_ILLEGAL_PARAMETER, nil, "tls: second ClientHello does not answer the HelloRetryRequest");
+		share = (hd h2.shares).t1;
+		h = h2;
+	}
+	cs.group = group;
+	cs.servername = h.sni;
+
+	(myshare, secret, kerr) := serverkeyex(cs, group, share);
+	if(kerr != nil)
+		return (ALERT_ILLEGAL_PARAMETER, nil, kerr);
+
+	sh := buildserverhello(randombytes(32), h.sessid, suite, group, myshare);
+	if((err = sendhsmsg(cs, HT_SERVER_HELLO, sh)) != nil)
+		return (0, nil, err);
+	if(len h.sessid > 0 && !sentccs)
+		if((err = sendccs(cs)) != nil)
+			return (0, nil, err);
+
+	# The key schedule (RFC 8446 §7.1), as the client's but turned round
+	hashlen := hashlength(suite);
+	zeros := array [hashlen] of {* => byte 0};
+	early_secret := hkdf_extract(suite, zeros, zeros);
+	derived := hkdf_expand_label(suite, early_secret, "derived", hash_empty(cs), hashlen);
+	hs_secret := hkdf_extract(suite, derived, secret);
+	wipebytes(secret);
+	hs_hash := hashcurrent(cs);
+	c_hs := hkdf_expand_label(suite, hs_secret, "c hs traffic", hs_hash, hashlen);
+	s_hs := hkdf_expand_label(suite, hs_secret, "s hs traffic", hs_hash, hashlen);
+	(cs.readkey, cs.readiv) = derivekeys(c_hs, suite);
+	(cs.writekey, cs.writeiv) = derivekeys(s_hs, suite);
+	cs.readseq = big 0;
+	cs.writeseq = big 0;
+	cs.hsencrypted = 1;
+
+	# EncryptedExtensions: the protocol agreed, if any
+	ee: array of byte;
+	if(alpn != nil) {
+		ab := s2b(alpn);
+		ee = array[2 + 4 + 2 + 1 + len ab] of byte;
+		put16(ee, 0, 4 + 2 + 1 + len ab);
+		put16(ee, 2, EXT_ALPN);
+		put16(ee, 4, 2 + 1 + len ab);
+		put16(ee, 6, 1 + len ab);
+		ee[8] = byte len ab;
+		ee[9:] = ab;
+	} else
+		ee = array[2] of {* => byte 0};
+	if((err = sendhsmsg(cs, HT_ENCRYPTED_EXTENSIONS, ee)) != nil)
+		return (0, nil, err);
+
+	# Certificate: no context, each entry with no extensions
+	total := 0;
+	for(c := config.certs; c != nil; c = tl c)
+		total += 3 + len hd c + 2;
+	cm := array[1 + 3 + total] of byte;
+	cm[0] = byte 0;
+	put24(cm, 1, total);
+	off := 4;
+	for(c = config.certs; c != nil; c = tl c) {
+		put24(cm, off, len hd c);
+		cm[off+3:] = hd c;
+		off += 3 + len hd c;
+		put16(cm, off, 0);
+		off += 2;
+	}
+	if((err = sendhsmsg(cs, HT_CERTIFICATE, cm)) != nil)
+		return (0, nil, err);
+
+	(cv, cverr) := certverify13("TLS 1.3, server CertificateVerify", hashcurrent(cs), config.key);
+	if(cverr != nil)
+		return (ALERT_INTERNAL_ERROR, nil, cverr);
+	if((err = sendhsmsg(cs, HT_CERTIFICATE_VERIFY, cv)) != nil)
+		return (0, nil, err);
+
+	fkey := hkdf_expand_label(suite, s_hs, "finished", nil, hashlen);
+	if((err = sendhsmsg(cs, HT_FINISHED, hmac_hash(suite, fkey, hashcurrent(cs)))) != nil)
+		return (0, nil, err);
+
+	# the application secrets cover the transcript through our Finished
+	md := hkdf_expand_label(suite, hs_secret, "derived", hash_empty(cs), hashlen);
+	master := hkdf_extract(suite, md, zeros);
+	app_hash := hashcurrent(cs);
+	cs.cts = hkdf_expand_label(suite, master, "c ap traffic", app_hash, hashlen);
+	cs.sts = hkdf_expand_label(suite, master, "s ap traffic", app_hash, hashlen);
+	wipebytes(hs_secret);
+	wipebytes(master);
+
+	# the client's Finished, under its handshake keys; nothing else
+	# (we asked for no certificate)
+	pre := hashcurrent(cs);
+	fin: array of byte;
+	(mtype, fin, err) = readhsmsg(cs);
+	if(err != nil)
+		return (0, nil, err);
+	if(mtype != HT_FINISHED)
+		return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected the client's Finished");
+	if(verifyfinished13_hash(cs, fin, c_hs, pre) != nil)
+		return (ALERT_DECRYPT_ERROR, nil, "tls: client Finished verification failed");
+	if(cs.hsbuf != nil && cs.hsoff < len cs.hsbuf)
+		return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: data after the client's Finished in its record");
+	wipebytes(c_hs);
+	wipebytes(s_hs);
+
+	(cs.readkey, cs.readiv) = derivekeys(cs.cts, suite);
+	(cs.writekey, cs.writeiv) = derivekeys(cs.sts, suite);
+	cs.readseq = big 0;
+	cs.writeseq = big 0;
+	cs.tr256 = nil;
+	cs.tr384 = nil;
+	return (0, alpn, nil);
+}
+
+# Our share and the shared secret for the client's share in group.
+serverkeyex(cs: ref ConnState, group: int, share: array of byte): (array of byte, array of byte, string)
+{
+	if(len share != sharelen(group))
+		return (nil, nil, "tls: client key share is the wrong length");
+	case group {
+	GROUP_X25519 =>
+		(pub, ss) := x25519pair(share);
+		if(ss == nil)
+			return (nil, nil, "tls: X25519 key share is not usable");
+		return (pub, ss, nil);
+	GROUP_X25519MLKEM768 =>
+		# client: ML-KEM-768 ek || X25519; ours: ciphertext || X25519
+		ct, kss: array of byte;
+		{
+			(ct, kss) = keyring->mlkem768_encaps(share[0:MLKEM768_EKLEN]);
+		} exception {
+		* =>
+			ct = nil;
+		}
+		if(ct == nil || kss == nil || len ct != MLKEM768_CTLEN)
+			return (nil, nil, "tls: ML-KEM-768 key share is not usable");
+		(pub, xss) := x25519pair(share[MLKEM768_EKLEN:]);
+		if(xss == nil)
+			return (nil, nil, "tls: X25519 key share is not usable");
+		return (catbytes(ct, pub), catbytes(kss, xss), nil);
+	GROUP_SECP256R1 =>
+		pt := keyring->p256_make_point(share);
+		if(pt == nil)
+			return (nil, nil, "tls: P-256 key share is not a point on the curve");
+		(priv, mine) := keyring->p256_keygen();
+		if(priv == nil || mine == nil)
+			return (nil, nil, "tls: P-256 key generation failed");
+		cs.eph_p256_priv = priv;
+		ss := keyring->p256_ecdh(priv, pt);
+		if(ss == nil)
+			return (nil, nil, "tls: P-256 ECDH failed");
+		return (keyring->p256_point_bytes(mine), ss, nil);
+	}
+	return (nil, nil, "tls: unsupported group");
+}
+
+# A fresh X25519 key's public half and its secret with peer, or nil
+# for a peer whose secret comes out all zeros (a small-order point,
+# RFC 8446 §7.4.2).
+x25519pair(peer: array of byte): (array of byte, array of byte)
+{
+	priv := randombytes(32);
+	pub := keyring->x25519_base(priv);
+	ss := keyring->x25519(priv, peer);
+	wipebytes(priv);
+	if(pub == nil || ss == nil || len ss != 32)
+		return (nil, nil);
+	z := 0;
+	for(i := 0; i < len ss; i++)
+		z |= int ss[i];
+	if(z == 0)
+		return (nil, nil);
+	return (pub, ss);
+}
+
+# A ServerHello (or, with HRRRANDOM, a HelloRetryRequest: share nil,
+# the key_share then the group alone)
+buildserverhello(random, sessid: array of byte, suite, group: int, share: array of byte): array of byte
+{
+	kslen := 2;
+	if(share != nil)
+		kslen = 4 + len share;
+	extlen := 4 + 2 + 4 + kslen;
+	b := array[2 + 32 + 1 + len sessid + 2 + 1 + 2 + extlen] of byte;
+	off := 0;
+	put16(b, off, RECVERSION);
+	off += 2;
+	b[off:] = random;
+	off += 32;
+	b[off++] = byte len sessid;
+	b[off:] = sessid;
+	off += len sessid;
+	put16(b, off, suite);
+	off += 2;
+	b[off++] = byte 0;
+	put16(b, off, extlen);
+	off += 2;
+	put16(b, off, EXT_SUPPORTED_VERSIONS);
+	put16(b, off+2, 2);
+	put16(b, off+4, TLS13);
+	off += 6;
+	put16(b, off, EXT_KEY_SHARE);
+	put16(b, off+2, kslen);
+	put16(b, off+4, group);
+	if(share != nil) {
+		put16(b, off+6, len share);
+		b[off+8:] = share;
+	}
+	return b;
+}
+
+sendccs(cs: ref ConnState): string
+{
+	return writerecord(cs, CT_CHANGE_CIPHER_SPEC, array[1] of {byte 1});
+}
+
+hexbytes(s: string): array of byte
+{
+	b := array[len s / 2] of byte;
+	for(i := 0; i < len b; i++)
+		b[i] = byte ((hexval(s[2*i]) << 4) | hexval(s[2*i+1]));
+	return b;
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return 0;
+}
+
+# A ClientHello's offers, checked as RFC 8446 §4.1.2 and §4.2 have
+# them: (offers, alert, error)
+parsehello(d: array of byte): (ref Hello, int, string)
+{
+	nohello: ref Hello;
+	bad := (nohello, ALERT_DECODE_ERROR, "tls: malformed ClientHello");
+	h := ref Hello;
+	if(len d < 2 + 32 + 1)
+		return bad;
+	off := 34;
+	n := int d[off++];
+	if(n > 32 || off + n + 2 > len d)
+		return bad;
+	h.sessid = d[off:off+n];
+	off += n;
+	n = get16(d, off);
+	off += 2;
+	if(n < 2 || n & 1 || off + n + 1 > len d)
+		return bad;
+	h.suites = list16(d[off:off+n]);
+	off += n;
+	n = int d[off++];
+	if(n < 1 || off + n > len d)
+		return bad;
+	# TLS 1.3: the null method alone
+	if(n != 1 || d[off] != byte 0)
+		return (nil, ALERT_ILLEGAL_PARAMETER, "tls: ClientHello offers compression");
+	off += n;
+	if(off == len d)
+		return (nil, ALERT_PROTOCOL_VERSION, "tls: ClientHello has no extensions (not TLS 1.3)");
+	if(off + 2 > len d)
+		return bad;
+	end := off + 2 + get16(d, off);
+	off += 2;
+	if(end != len d)
+		return bad;
+	seen: list of int;
+	nexts := 0;
+	while(off < end) {
+		if(off + 4 > end)
+			return bad;
+		etype := get16(d, off);
+		elen := get16(d, off+2);
+		off += 4;
+		if(off + elen > end)
+			return bad;
+		if(member(seen, etype))
+			return (nil, ALERT_ILLEGAL_PARAMETER, sys->sprint("tls: ClientHello repeats extension %d", etype));
+		seen = etype :: seen;
+		if(++nexts > 64)
+			return bad;
+		e := d[off:off+elen];
+		off += elen;
+		case etype {
+		EXT_SERVER_NAME =>
+			if(elen < 2 || get16(e, 0) != elen - 2)
+				return bad;
+			for(o := 2; o < elen; ) {
+				if(o + 3 > elen)
+					return bad;
+				nl := get16(e, o+1);
+				if(o + 3 + nl > elen)
+					return bad;
+				if(int e[o] == 0 && h.sni == nil) {
+					name := string e[o+3:o+3+nl];
+					if(!hostname(name))
+						return (nil, ALERT_ILLEGAL_PARAMETER, "tls: server_name is not a host name");
+					h.sni = strlower(name);
+				}
+				o += 3 + nl;
+			}
+		EXT_SUPPORTED_GROUPS =>
+			if(elen < 2 || get16(e, 0) != elen - 2 || elen & 1)
+				return bad;
+			h.groups = list16(e[2:]);
+		EXT_SIGNATURE_ALGORITHMS =>
+			if(elen < 2 || get16(e, 0) != elen - 2 || elen & 1)
+				return bad;
+			h.sigalgs = list16(e[2:]);
+			h.hassigalgs = 1;
+		EXT_ALPN =>
+			if(elen < 2 || get16(e, 0) != elen - 2)
+				return bad;
+			h.hasalpn = 1;
+			protos: list of string;
+			for(o := 2; o < elen; ) {
+				pl := int e[o];
+				if(pl == 0 || o + 1 + pl > elen)
+					return bad;
+				protos = string e[o+1:o+1+pl] :: protos;
+				o += 1 + pl;
+			}
+			for(; protos != nil; protos = tl protos)
+				h.alpn = hd protos :: h.alpn;
+		EXT_SUPPORTED_VERSIONS =>
+			if(elen < 1 || int e[0] != elen - 1 || (elen - 1) & 1)
+				return bad;
+			h.versions = list16(e[1:]);
+		EXT_KEY_SHARE =>
+			if(elen < 2 || get16(e, 0) != elen - 2)
+				return bad;
+			h.haskeyshare = 1;
+			rev: list of (int, array of byte);
+			groups: list of int;
+			for(o := 2; o < elen; ) {
+				if(o + 4 > elen)
+					return bad;
+				g := get16(e, o);
+				kl := get16(e, o+2);
+				if(kl == 0 || o + 4 + kl > elen)
+					return bad;
+				if(member(groups, g))
+					return (nil, ALERT_ILLEGAL_PARAMETER, "tls: key_share repeats a group");
+				groups = g :: groups;
+				rev = (g, e[o+4:o+4+kl]) :: rev;
+				o += 4 + kl;
+			}
+			for(; rev != nil; rev = tl rev)
+				h.shares = hd rev :: h.shares;
+		EXT_PRE_SHARED_KEY =>
+			# §4.2.11: the last extension.  We hold no tickets, and
+			# answer as though it were not there.
+			if(off != end)
+				return (nil, ALERT_ILLEGAL_PARAMETER, "tls: pre_shared_key is not the last extension");
+		}
+	}
+	return (h, 0, nil);
+}
+
+list16(b: array of byte): list of int
+{
+	l: list of int;
+	for(i := len b - 2; i >= 0; i -= 2)
+		l = get16(b, i) :: l;
+	return l;
+}
+
+# A DNS name as SNI carries one: letters, digits, '-', '_' and '.',
+# 1 to 253 bytes, no empty label.
+hostname(s: string): int
+{
+	if(len s == 0 || len s > 253 || s[0] == '.' || s[len s - 1] == '.')
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		     c == '-' || c == '_' || c == '.'))
+			return 0;
+		if(c == '.' && s[i+1] == '.')
+			return 0;
+	}
+	return 1;
+}
+
+checkserver(config: ref ServerConfig): string
+{
+	if(config == nil || config.certs == nil)
+		return "no certificate";
+	if(len config.key != 32)
+		return "the key is not a P-256 private key";
+	for(c := config.certs; c != nil; c = tl c) {
+		(serr, nil) := x509->Signed.decode(hd c);
+		if(serr != nil)
+			return "a certificate does not parse: " + serr;
+	}
+	(pt, perr) := extractecpoint(config.certs);
+	if(perr != nil)
+		return "the certificate's key is not P-256 (" + perr + ")";
+	digest := array[Keyring->SHA256dlen] of byte;
+	msg := array of byte "InferNode TLS: does this key match its certificate?";
+	keyring->sha256(msg, len msg, digest, nil);
+	sig: array of byte;
+	{
+		sig = keyring->p256_ecdsa_sign(config.key, digest);
+	} exception {
+	* =>
+		sig = nil;
+	}
+	if(sig == nil || keyring->p256_ecdsa_verify(pt, digest, sig) != 1)
+		return "the key is not the certificate's";
+	return nil;
+}
+
+pemblocks(pem: string, label: string): list of array of byte
+{
+	begin := "-----BEGIN " + label + "-----";
+	end := "-----END " + label + "-----";
+	rev: list of array of byte;
+	for(;;) {
+		i := strfind(pem, begin);
+		if(i < 0)
+			break;
+		pem = pem[i + len begin:];
+		j := strfind(pem, end);
+		if(j < 0)
+			break;
+		b := unbase64(pem[0:j]);
+		if(b == nil)
+			return nil;
+		rev = b :: rev;
+		pem = pem[j + len end:];
+	}
+	l: list of array of byte;
+	for(; rev != nil; rev = tl rev)
+		l = hd rev :: l;
+	return l;
+}
+
+strfind(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return i;
+	return -1;
+}
+
+# Base64 with white space between; nil for anything else
+unbase64(s: string): array of byte
+{
+	out := array[len s * 3 / 4 + 3] of byte;
+	n := 0;
+	acc := 0;
+	bits := 0;
+	pad := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		v := -1;
+		if(c >= 'A' && c <= 'Z')
+			v = c - 'A';
+		else if(c >= 'a' && c <= 'z')
+			v = c - 'a' + 26;
+		else if(c >= '0' && c <= '9')
+			v = c - '0' + 52;
+		else if(c == '+')
+			v = 62;
+		else if(c == '/')
+			v = 63;
+		else if(c == '=') {
+			pad++;
+			continue;
+		} else if(c == ' ' || c == '\t' || c == '\r' || c == '\n')
+			continue;
+		else
+			return nil;
+		if(pad)
+			return nil;
+		acc = (acc << 6) | v;
+		bits += 6;
+		if(bits >= 8) {
+			bits -= 8;
+			out[n++] = byte (acc >> bits);
+			acc &= (1 << bits) - 1;
+		}
+	}
+	return out[0:n];
+}
+
+# prime256v1, 1.2.840.10045.3.1.7, as DER content
+P256OID := array[] of {byte 16r2A, byte 16r86, byte 16r48, byte 16rCE, byte 16r3D, byte 16r03, byte 16r01, byte 16r07};
+
+p256key(der: array of byte): (array of byte, string)
+{
+	(t, h, n) := dertlv(der, 0);
+	if(t != 16r30 || h + n != len der)
+		return (nil, "not a DER key");
+	off := h;
+	(t, h, n) = dertlv(der, off);
+	if(t != 16r02 || n != 1)
+		return (nil, "not a private key");
+	version := int der[off+h];
+	off += h + n;
+	case version {
+	0 =>
+		# PKCS #8: AlgorithmIdentifier { id-ecPublicKey, prime256v1 },
+		# then the SEC1 key in an OCTET STRING
+		(t, h, n) = dertlv(der, off);
+		if(t != 16r30)
+			return (nil, "not a PKCS #8 key");
+		if(!hasbytes(der[off+h:off+h+n], P256OID))
+			return (nil, "not a P-256 key");
+		off += h + n;
+		(t, h, n) = dertlv(der, off);
+		if(t != 16r04)
+			return (nil, "not a PKCS #8 key");
+		return p256key(der[off+h:off+h+n]);
+	1 =>
+		# SEC1 ECPrivateKey: privateKey OCTET STRING, [0] the curve
+		(t, h, n) = dertlv(der, off);
+		if(t != 16r04 || n != 32)
+			return (nil, "not a P-256 private key");
+		k := der[off+h:off+h+n];
+		off += h + n;
+		(t, h, n) = dertlv(der, off);
+		if(t == 16rA0 && !hasbytes(der[off+h:off+h+n], P256OID))
+			return (nil, "not a P-256 key");
+		key := array[32] of byte;
+		key[0:] = k;
+		return (key, nil);
+	}
+	return (nil, "not a private key we know");
+}
+
+hasbytes(a, b: array of byte): int
+{
+	for(i := 0; i + len b <= len a; i++)
+		if(bytescmp(a[i:i+len b], b))
+			return 1;
+	return 0;
 }

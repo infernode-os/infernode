@@ -143,6 +143,8 @@ Stepfrac:	con 40*65536/480;
 Maxerr:		con 100;	# failed reads before deciding it is gone
 Maxreportbits:	con 32768;	# bound hostile descriptor arithmetic and report state
 Maxfields:	con 4096;	# across the whole descriptor, not once per main item
+Maxwheel:	con 127;	# ticks in one report: the boot protocol's signed byte
+Maxmove:	con 32767;	# relative movement in one report
 Maxcontacts:	con 16;	# retained or published from any multi-touch frame
 
 #
@@ -999,7 +1001,8 @@ scale(v: int, f: ref Field): int
 		v = f.lmin;
 	if(v > f.lmax)
 		v = f.lmax;
-	return int ((big (v - f.lmin) * big 65535) / big (f.lmax - f.lmin));
+	# a range may be the whole of an int: the differences are taken wide
+	return int (((big v - big f.lmin) * big 65535) / (big f.lmax - big f.lmin));
 }
 
 #
@@ -1015,8 +1018,12 @@ pollreport(fd, ptr: ref Sys->FD, ival, maxpkt: int, r: ref Report, g: ref Gest)
 	if(maxpkt < 1)
 		maxpkt = 8;
 	rc := chan of array of byte;
-	spawn reader(fd, ival, maxpkt, rc);
-	alarm := chan of int;
+	pidc := chan of int;
+	spawn reader(fd, ival, maxpkt, rc, pidc);
+	rpid := <-pidc;
+	# room for one: an alarm that falls due after this has returned
+	# leaves its process nothing to wait for
+	alarm := chan[1] of int;
 	waiting := 0;		# an alarm is set
 	if(g != nil)
 		fingers = sys->open("/dev/fingers", Sys->OWRITE);
@@ -1026,7 +1033,7 @@ pollreport(fd, ptr: ref Sys->FD, ival, maxpkt: int, r: ref Report, g: ref Gest)
 		alt {
 		buf := <-rc =>
 			if(buf == nil)
-				return;
+				return;		# the reader has said its last
 			out = onreport(buf, r, g, st, sys->millisec());
 		<-alarm =>
 			waiting = 0;
@@ -1036,6 +1043,9 @@ pollreport(fd, ptr: ref Sys->FD, ival, maxpkt: int, r: ref Report, g: ref Gest)
 			a := array of byte hd out;
 			if(sys->write(ptr, a, len a) < 0){
 				sys->print("mouseusb: write to /dev/pointer failed: %r\n");
+				# the reader would wait for ever to hand over its
+				# next report, holding the endpoint open
+				kill(rpid);
 				return;
 			}
 		}
@@ -1132,8 +1142,16 @@ wake(c: chan of int, ms: int)
 # The interrupt endpoint's reports, one a read, to c; nil when the
 # device is gone.
 #
-reader(fd: ref Sys->FD, ival, maxpkt: int, c: chan of array of byte)
+kill(pid: int)
 {
+	cfd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(cfd != nil)
+		sys->fprint(cfd, "kill");
+}
+
+reader(fd: ref Sys->FD, ival, maxpkt: int, c: chan of array of byte, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
 	buf := array[maxpkt] of byte;
 	nerr := 0;
 	for(;;){
@@ -1182,7 +1200,8 @@ revpts(l: list of (int, int)): list of (int, int)
 #
 Maxfinger:	con Maxcontacts;
 fingers: ref Sys->FD;
-fcid := array[Maxfinger] of {* => -1};	# the device's id on each of ours
+fcid := array[Maxfinger] of {* => 0};	# the device's id on each of ours: any int, -1 too
+fused := array[Maxfinger] of {* => 0};	# the slot holds a finger
 fx := array[Maxfinger] of {* => 0};
 fy := array[Maxfinger] of {* => 0};
 fseen := array[Maxfinger] of {* => 0};
@@ -1195,14 +1214,15 @@ seefinger(cid, on, x, y: int)
 		return;	# endframe lifts what the frame did not have down
 	i := 0;
 	for(; i < Maxfinger; i++)
-		if(fcid[i] == cid)
+		if(fused[i] && fcid[i] == cid)
 			break;
 	if(i == Maxfinger){
 		for(i = 0; i < Maxfinger; i++)
-			if(fcid[i] < 0)
+			if(!fused[i])
 				break;
 		if(i == Maxfinger)
 			return;	# more fingers than ids: this one is not told
+		fused[i] = 1;
 		fcid[i] = cid;
 		fx[i] = fy[i] = -1;
 	}
@@ -1219,9 +1239,9 @@ endframe()
 	if(fingers == nil)
 		return;
 	for(i := 0; i < Maxfinger; i++){
-		if(fcid[i] >= 0 && !fseen[i]){
+		if(fused[i] && !fseen[i]){
 			postfinger(i, fx[i], fy[i], 0);
-			fcid[i] = -1;
+			fused[i] = 0;
 		}
 		fseen[i] = 0;
 	}
@@ -1269,6 +1289,17 @@ decode(data: array of byte, r: ref Report): (int, int, int, int, int)
 	w := 0;
 	if(r.wheel != nil)
 		(w, nil) = getf(data, base, r.wheel);
+	# A wheel's field is as wide as its descriptor says, and each tick
+	# is two writes to the pointer: a report claiming millions of ticks
+	# is not given them.
+	if(w > Maxwheel)
+		w = Maxwheel;
+	else if(w < -Maxwheel)
+		w = -Maxwheel;
+	if(r.x.rel){
+		x = clamp(x, Maxmove);
+		y = clamp(y, Maxmove);
+	}
 	if(!r.x.rel){
 		x = scale(x, r.x);
 		y = scale(y, r.y);
@@ -1285,6 +1316,15 @@ decode(data: array of byte, r: ref Report): (int, int, int, int, int)
 	if(swapxy)
 		(x, y) = (y, x);
 	return (b, x, y, w, 1);
+}
+
+clamp(v, lim: int): int
+{
+	if(v > lim)
+		return lim;
+	if(v < -lim)
+		return -lim;
+	return v;
 }
 
 ctlin2(rtype, req, value, index: int, data: array of byte): int
@@ -1633,6 +1673,75 @@ expect(what: string, got: list of string, want: string): string
 # The parser and decoder against two descriptors, with no device:
 # QEMU's usb-tablet (a mouse interface with absolute X and Y, as the
 # Waveshare panel's is) and a minimal touchscreen digitizer with a
+# What a device says in a report its own descriptor makes room for: a
+# wheel field as wide as an int, a range that is the whole of one, a
+# contact whose id is -1.
+selftesthostile(tablet: array of byte): int
+{
+	ok := 1;
+	# the tablet's wheel is an 8-bit field at byte 5; widen it to 32 bits
+	r := parsereport(tablet);
+	if(r == nil || r.wheel == nil){
+		sys->print("mouseusb: selftest: the tablet has no wheel to widen\n");
+		return 0;
+	}
+	r.wheel = ref Field(r.wheel.page, r.wheel.usage, r.wheel.off, 32, -16r7FFFFFFF-1, 16r7FFFFFFF, r.wheel.rel, r.wheel.finger, r.wheel.app);
+	rep := array[(r.wheel.off + 32 + 7) / 8] of {* => byte 0};
+	o := r.wheel.off / 8;
+	rep[o] = rep[o+1] = rep[o+2] = byte 16rFF;
+	rep[o+3] = byte 16r7F;
+	(nil, nil, nil, w, wok) := decode(rep, r);
+	if(!wok || w != Maxwheel){
+		sys->print("mouseusb: selftest: a wheel of 2^31-1 ticks decoded as %d, want %d\n", w, Maxwheel);
+		ok = 0;
+	}
+	rep[o] = rep[o+1] = rep[o+2] = byte 0;
+	rep[o+3] = byte 16r80;
+	(nil, nil, nil, w, wok) = decode(rep, r);
+	if(!wok || w != -Maxwheel){
+		sys->print("mouseusb: selftest: a wheel of -2^31 ticks decoded as %d, want %d\n", w, -Maxwheel);
+		ok = 0;
+	}
+	st := ref State(ref Frame, 0, -1, -1);
+	rep[o+3] = byte 16r7F;
+	out := onreport(rep, r, nil, st, 0);
+	if(len out > 1 + 2*Maxwheel){
+		sys->print("mouseusb: selftest: one report made %d pointer writes\n", len out);
+		ok = 0;
+	}
+
+	# a range that is the whole of an int
+	f := ref Field(Pgdesktop, Ux, 0, 32, -16r7FFFFFFF-1, 16r7FFFFFFF, 0, -1, 0);
+	lo := scale(-16r7FFFFFFF-1, f);
+	mid := scale(0, f);
+	hi := scale(16r7FFFFFFF, f);
+	if(lo != 0 || hi != 65535 || mid < 32760 || mid > 32775){
+		sys->print("mouseusb: selftest: the widest range scaled to %d %d %d\n", lo, mid, hi);
+		ok = 0;
+	}
+
+	# a contact whose id is -1 goes down and comes up as any other
+	save := fingers;
+	fingers = sys->open("/dev/null", Sys->OWRITE);
+	if(fingers != nil){
+		seefinger(-1, 1, 100, 100);
+		endframe();		# the frame it was in
+		down := 0;
+		for(i := 0; i < Maxfinger; i++)
+			down += fused[i];
+		endframe();		# a frame without it
+		up := 0;
+		for(i = 0; i < Maxfinger; i++)
+			up += fused[i];
+		if(down != 1 || up != 0){
+			sys->print("mouseusb: selftest: a contact with id -1: %d down after its frame, %d after the next\n", down, up);
+			ok = 0;
+		}
+	}
+	fingers = save;
+	return ok;
+}
+
 # report id and a tip switch. mouseusb -t
 #
 selftest()
@@ -1719,6 +1828,7 @@ selftest()
 		sys->print("mouseusb: selftest: hostile report size/count accepted\n");
 		ok = 0;
 	}
+	ok &= selftesthostile(tablet);
 	ok &= selftestmt(tablet, touch);
 	if(ok)
 		sys->print("mouseusb: selftest OK\n");

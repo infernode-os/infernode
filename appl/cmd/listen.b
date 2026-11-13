@@ -245,8 +245,6 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	listench := chan of (int, Sys->Connection);
 	spawn listener(listench, acon, addr);
 	for (;;) {
-		user := "";
-		ccon: Sys->Connection;
 		alt {
 		(lok, c) := <-listench =>
 			if (lok == -1){
@@ -284,22 +282,31 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 				}
 				continue;
 			}
-			ccon = c;
+			# A process of its own, as an authenticated connection
+			# has: run here, the command held the listener, and a
+			# connection arriving while it ran was not taken until
+			# it ended. One idle client kept every other waiting
+			# (a soak's sink stalled behind connections held open).
+			spawn plaincommand(c, ctxt, cmd);
+			c.dfd = c.cfd = nil;
 		}
-		if (user != nil)
-			ctxt.set("user", sh->stringlist2list(user :: nil));
-		ctxt.set("net", ref Sh->Listnode(nil, ccon.dir) :: nil);
-
-		# XXX could do this in a separate process too, to
-		# allow new connections to arrive and start authenticating
-		# while the shell command is still running.
-		sys->dup(ccon.dfd.fd, 0);
-		sys->dup(ccon.dfd.fd, 1);
-		ccon.dfd = ccon.cfd = nil;
-		ctxt.run(cmd, 0);
-		sys->dup(2, 0);
-		sys->dup(2, 1);
 	}
+}
+
+plaincommand(c: Sys->Connection, ctxt: ref Context, cmd: list of ref Sh->Listnode)
+{
+	# the connection's files alone, and the Context copied here, for
+	# the reasons given in authenticatedcommand
+	keep := 0 :: 1 :: 2 :: c.dfd.fd :: nil;
+	if(c.cfd != nil)
+		keep = c.cfd.fd :: keep;
+	sys->pctl(Sys->NEWFD, keep);
+	ctxt = ctxt.copy(1);
+	ctxt.set("net", ref Sh->Listnode(nil, c.dir) :: nil);
+	sys->dup(c.dfd.fd, 0);
+	sys->dup(c.dfd.fd, 1);
+	c.dfd = c.cfd = nil;
+	ctxt.run(cmd, 0);
 }
 
 rateallow(): int

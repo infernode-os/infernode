@@ -3,12 +3,12 @@
 # vid9p_hangup_test.sh - vid9p(4) ends with its client: when its 9P
 # channel ends (the client hangs up, the mount goes), vid9p exits and its
 # ticker with it.  Its serve loop's "break" left only the alt, so vid9p
-# served nothing for ever, its ticker beside it; under listen -A, which
-# runs a connection's command in the listener, no second client was
-# served at all.
+# served nothing for ever, its ticker beside it (and under listen -A,
+# which then ran a connection's command in the listener, no second
+# client was served at all; it now serves each connection apart).
 #
 #  - two clients in turn through listen -A {vid9p clip}: each reads the
-#    feed's fmt (the second only once the first's vid9p has gone)
+#    feed's fmt
 #  - with both gone, no Vid9p process is left
 #
 set -e

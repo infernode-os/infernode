@@ -722,6 +722,7 @@ dis/tests/auditchain_test.dis
 dis/tests/auditprov_test.dis
 dis/tests/auditsign_test.dis
 dis/tests/auditverify_test.dis
+dis/tests/auth_keyfile_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
 dis/tests/awk_test.dis

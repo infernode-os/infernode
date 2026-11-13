@@ -75,6 +75,7 @@ TARG=\
 	mnt_smallmsize_test.dis\
 	styxservers_hostile_test.dis\
 	keyring_degenerate_test.dis\
+	auth_keyfile_test.dis\
 	ninep_disconnect_test.dis\
 	crypto_bench.dis\
 	tcpwatch.dis\

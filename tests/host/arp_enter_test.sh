@@ -96,7 +96,7 @@ fi
 e1=$(grep -c 'arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), [01], ifc);' "$ROOT/os/ip/ethermedium.c")
 e2=$(grep -c 'arpenter(icmp->f, V6, np->[a-z]*, lla, 6, [a-z0-9]*, ipifc);' "$ROOT/os/ip/icmp6.c")
 e3=$(grep -c 'arpenter(f, V6, ip, nifc->mac, 6, 0, nil);' "$ROOT/os/ip/ipifc.c")
-all=$(cat "$ROOT"/os/ip/*.c | grep -c 'arpenter(.*);')
+all=$(cat "$ROOT"/os/ip/*.c | grep -c "arpenter(.*);")
 if [ "$e1" -eq 2 ] && [ "$e2" -eq 2 ] && [ "$e3" -eq 1 ] && [ "$all" -eq 5 ]; then
 	pass "ARP and neighbour discovery say which interface heard the frame"
 else

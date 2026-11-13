@@ -179,7 +179,7 @@ struct Medium
 	void	(*leavemulti)(Ipifc *ifc, uchar *a, uchar *ia);
 
 	/* address resolution */
-	void	(*ares)(Fs*, int, uchar*, uchar*, int, int);	/* resolve */
+	void	(*ares)(Fs*, int, uchar*, uchar*, int, int, Ipifc*);	/* resolve; the interface that heard it, or nil */
 	void	(*areg)(Ipifc*, uchar*);			/* register */
 
 	/* v6 address generation */

@@ -477,7 +477,7 @@ arpwrite(Fs *fs, char *s, int len)
 				r = v4lookup(fs, ip+IPv4off, nil);
 			else
 				r = v6lookup(fs, ip, nil);
-			if(r == nil)
+			if(r == nil || r->ifc == nil || r->ifc->m == nil)
 				error("Destination unreachable");
 			m = r->ifc->m;
 			n = parsemac(mac, f[2], m->maclen);
@@ -494,7 +494,7 @@ arpwrite(Fs *fs, char *s, int len)
 		if(m->ares == nil)
 			error(Ebadarp);
 
-		m->ares(fs, V6, ip, mac, n, 0);
+		m->ares(fs, V6, ip, mac, n, 0, nil);	/* entered by hand: heard on no interface */
 	} else if(strcmp(f[0], "del") == 0){
 		if(n != 2)
 			error(Ebadarg);

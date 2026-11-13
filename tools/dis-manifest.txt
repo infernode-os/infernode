@@ -398,6 +398,7 @@ dis/lib/login.dis
 dis/lib/lucitheme.dis
 dis/lib/mailparse.dis
 dis/lib/matrixlib.dis
+dis/lib/mdhtml.dis
 dis/lib/memfs.dis
 dis/lib/menu.dis
 dis/lib/menuhit.dis
@@ -765,6 +766,7 @@ dis/tests/goroutine_leak_test.dis
 dis/tests/gdl90_test.dis
 dis/tests/gps_capability_test.dis
 dis/tests/httpd_confine_test.dis
+dis/tests/mdhtml_test.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis

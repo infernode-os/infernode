@@ -11,6 +11,19 @@ static char*	pkattr[] = { "p", "alpha", "key", nil };
 static char*	skattr[] = { "p", "alpha", "key", "!secret", nil };
 static char*	sigattr[] = { "r", "s", nil };
 
+/*
+ * A key in its domain, as far as what uses it goes on to divide by and
+ * loop on: a modulus of 0 reached mpdiv (sysfatal), and one of 3 or less
+ * left egsign looking for ever for a k between 1 and p-1 with an inverse.
+ */
+static int
+egpubok(EGpub *pub)
+{
+	return mpcmp(pub->p, mptwo) > 0 && mpsignif(pub->p) > 2
+		&& mpcmp(pub->alpha, mpzero) > 0 && mpcmp(pub->alpha, pub->p) < 0
+		&& mpcmp(pub->key, mpzero) > 0 && mpcmp(pub->key, pub->p) < 0;
+}
+
 static void*
 eg_str2sk(char *str, char **strp)
 {
@@ -24,7 +37,8 @@ eg_str2sk(char *str, char **strp)
 	eg->secret = base64tobig(p, &p);
 	if(strp)
 		*strp = p;
-	if(eg->pub.p == nil || eg->pub.alpha == nil || eg->pub.key == nil || eg->secret == nil){
+	if(eg->pub.p == nil || eg->pub.alpha == nil || eg->pub.key == nil || eg->secret == nil
+	|| !egpubok(&eg->pub) || mpcmp(eg->secret, mpzero) <= 0){
 		egprivfree(eg);
 		return nil;
 	}
@@ -43,7 +57,7 @@ eg_str2pk(char *str, char **strp)
 	eg->key = base64tobig(p, &p);
 	if(strp)
 		*strp = p;
-	if(eg->p == nil || eg->alpha == nil || eg->key == nil){
+	if(eg->p == nil || eg->alpha == nil || eg->key == nil || !egpubok(eg)){
 		egpubfree(eg);
 		return nil;
 	}
@@ -152,6 +166,8 @@ eg_genfrompk(void *vpub)
 	int nlen;
 
 	pub = vpub;
+	if(!egpubok(pub))
+		return nil;
 	priv = egprivalloc();
 	priv->pub.p = mpcopy(pub->p);
 	priv->pub.alpha = mpcopy(pub->alpha);

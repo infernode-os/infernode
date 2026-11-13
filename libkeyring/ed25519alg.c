@@ -189,6 +189,26 @@ ed25519_str2sk(char *str, char **strp)
 		return nil;
 	}
 
+	/*
+	 * the public half must be the seed's: signing hashes it into the
+	 * signature, and a key file with another's public half in it
+	 * made signatures from which the secret scalar follows
+	 */
+	{
+		uchar pk[Ed25519PublicKeyLen], sk[Ed25519SecretKeyLen];
+		int i, diff;
+
+		ed25519_create_keypair(pk, sk, k->seed);
+		diff = 0;
+		for(i = 0; i < Ed25519PublicKeyLen; i++)
+			diff |= pk[i] ^ k->pk[i];
+		secureZero(sk, sizeof(sk));
+		if(diff != 0){
+			ed25519privfree(k);
+			return nil;
+		}
+	}
+
 	if(strp)
 		*strp = p;
 
@@ -323,6 +343,7 @@ ed25519_gen(int len)
 
 	/* Derive keypair from seed */
 	ed25519_create_keypair(k->pk, sk, k->seed);
+	secureZero(sk, sizeof(sk));	/* it holds the seed */
 
 	return k;
 }
@@ -1586,14 +1607,42 @@ sc_muladd_simple(uchar *s, const uchar *a, const uchar *b, const uchar *c)
 /*
  * Ed25519 core operations
  */
+/*
+ * Is the scalar s (little-endian) less than the group's order L?  RFC
+ * 8032 5.1.7 has a verifier refuse a signature whose S is not: [L]B is
+ * the identity, so S+L, S+2L, ... gave the same point as S and every
+ * signature verified in several encodings.  Not secret: a signature's.
+ */
+static int
+sc_lt_L(const uchar *s)
+{
+	static const uchar L_le[32] = {
+		0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+		0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
+	};
+	int i;
+
+	for(i = 31; i >= 0; i--){
+		if(s[i] < L_le[i])
+			return 1;
+		if(s[i] > L_le[i])
+			return 0;
+	}
+	return 0;	/* L itself */
+}
+
 static void
 ed25519_create_keypair(uchar *pk, uchar *sk, const uchar *seed)
 {
 	ge_p3 A;
 	uchar hash[SHA512dlen];
+	DigestState st;
 
 	/* Hash seed to create secret scalar */
-	sha512((uchar*)seed, Ed25519SeedLen, hash, nil);
+	memset(&st, 0, sizeof(st));
+	sha512((uchar*)seed, Ed25519SeedLen, hash, &st);
 	hash[0] &= 248;
 	hash[31] &= 127;
 	hash[31] |= 64;
@@ -1605,6 +1654,8 @@ ed25519_create_keypair(uchar *pk, uchar *sk, const uchar *seed)
 	/* Secret key is seed || public key */
 	memmove(sk, seed, Ed25519SeedLen);
 	memmove(sk + Ed25519SeedLen, pk, Ed25519PublicKeyLen);
+	secureZero(hash, sizeof(hash));
+	secureZero(&st, sizeof(st));
 }
 
 static void
@@ -1614,16 +1665,24 @@ ed25519_sign(uchar *sig, const uchar *m, ulong mlen, const uchar *sk)
 	uchar hram[SHA512dlen];
 	uchar r[SHA512dlen];
 	ge_p3 R;
-	DigestState *ds;
+	DigestState *ds, st;
 
 	/* Hash secret key half to get prefix for nonce derivation */
-	sha512((uchar*)sk, Ed25519SeedLen, hash, nil);
+	memset(&st, 0, sizeof(st));
+	sha512((uchar*)sk, Ed25519SeedLen, hash, &st);
 	hash[0] &= 248;
 	hash[31] &= 127;
 	hash[31] |= 64;
 
-	/* Compute nonce r = H(prefix || m) */
-	ds = sha512(hash + 32, 32, nil, nil);
+	/*
+	 * Compute nonce r = H(prefix || m).  The digest's state is on
+	 * this stack: given nil, sha512 allocates one, and gives nil back
+	 * when it cannot; the next call, given that nil, began a fresh
+	 * digest, so the nonce was H(m) with no secret in it, and two
+	 * signatures gave the key away.
+	 */
+	memset(&st, 0, sizeof(st));
+	ds = sha512(hash + 32, 32, nil, &st);
 	sha512((uchar*)m, mlen, r, ds);
 	sc_reduce(r);
 
@@ -1632,7 +1691,8 @@ ed25519_sign(uchar *sig, const uchar *m, ulong mlen, const uchar *sk)
 	ge_p3_tobytes(sig, &R);
 
 	/* Compute S = r + H(R || A || m) * s */
-	ds = sha512(sig, 32, nil, nil);
+	memset(&st, 0, sizeof(st));
+	ds = sha512(sig, 32, nil, &st);
 	ds = sha512((uchar*)sk + 32, 32, nil, ds);
 	sha512((uchar*)m, mlen, hram, ds);
 	sc_reduce(hram);
@@ -1642,6 +1702,7 @@ ed25519_sign(uchar *sig, const uchar *m, ulong mlen, const uchar *sk)
 
 	secureZero(hash, sizeof(hash));
 	secureZero(r, sizeof(r));
+	secureZero(&st, sizeof(st));
 }
 
 static int
@@ -1654,15 +1715,19 @@ ed25519_verify(const uchar *sig, const uchar *m, ulong mlen, const uchar *pk)
 	ge_p1p1 t;
 	ge_p2 Rp2;
 	ge_cached Acached;
-	DigestState *ds;
+	DigestState *ds, st;
 	int i;
+
+	if(!sc_lt_L(sig + 32))
+		return 0;
 
 	/* Decode public key */
 	if(ge_frombytes_negate_vartime(&A, pk) != 0)
 		return 0;
 
-	/* h = H(R || A || m) */
-	ds = sha512((uchar*)sig, 32, nil, nil);
+	/* h = H(R || A || m); the state is ours, as in ed25519_sign */
+	memset(&st, 0, sizeof(st));
+	ds = sha512((uchar*)sig, 32, nil, &st);
 	ds = sha512((uchar*)pk, 32, nil, ds);
 	sha512((uchar*)m, mlen, h, ds);
 	sc_reduce(h);

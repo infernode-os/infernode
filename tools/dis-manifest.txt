@@ -804,6 +804,7 @@ dis/tests/jit_retslice_test.dis
 dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
+dis/tests/keyring_degenerate_test.dis
 dis/tests/keyring_sweep_test.dis
 dis/tests/layers_test.dis
 dis/tests/login_test.dis

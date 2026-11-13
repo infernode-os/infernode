@@ -3524,13 +3524,7 @@ storeltk(who: string, ptype: int, k: ref Smp->Keys)
 		sys->fprint(stderr, "bt9p: factotum refused the LTK for %s: %r\n", who);
 		return;
 	}
-	if(keyfile != nil){
-		kf := sys->open(keyfile, Sys->OWRITE);
-		if(kf == nil)
-			kf = sys->create(keyfile, Sys->OWRITE, 8r600);
-		if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
-			sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
-	}
+	addkeyline(line);
 }
 
 forgetltk(who: string)
@@ -4240,13 +4234,68 @@ storekey(who: string, key: array of byte, ktype: int)
 		sys->fprint(stderr, "bt9p: factotum refused the link key for %s: %r\n", who);
 		return;
 	}
-	if(keyfile != nil){
-		kf := sys->open(keyfile, Sys->OWRITE);
-		if(kf == nil)
-			kf = sys->create(keyfile, Sys->OWRITE, 8r600);
-		if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
-			sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
+	addkeyline(line);
+}
+
+#
+# One more key line onto the card, if the file has room for it.
+#
+# The file is read whole at start, and one too large to be a keys file
+# is not read at all: every key in it is then lost to the next boot,
+# and forget cannot take a line out of it either. Pairing, when it is
+# allowed, makes a key for whoever asks, so a file with no limit is one
+# that anyone in range can grow until it is that large. So it holds so
+# many keys and no more. A key there is no room for is not kept on the
+# card, and says so: the peers already there keep their keys, which is
+# what is being protected, and the new one is good until restart.
+# Making room is the user's choice of whom to forget.
+#
+Maxkeylines: con 256;
+Maxkeybytes: con 128*1024;
+
+# is there room for a line of n bytes in a file of nkeys keys and nbytes bytes?
+keyroom(nkeys, nbytes, n: int): int
+{
+	return nkeys >= 0 && nkeys < Maxkeylines && nbytes >= 0 && n > 0 && n < Maxkeybytes && nbytes <= Maxkeybytes - n - 1;
+}
+
+addkeyline(line: string)
+{
+	if(keyfile == nil)
+		return;
+	nkeys := 0;
+	nbytes := 0;
+	kf := sys->open(keyfile, Sys->OREAD);
+	if(kf != nil){
+		(ok, d) := sys->fstat(kf);
+		if(ok < 0 || d.length > big Maxkeybytes){
+			sys->fprint(stderr, "bt9p: %s is too large to be added to; the key is held until restart\n", keyfile);
+			return;
+		}
+		nbytes = int d.length;
+		buf := array[nbytes] of byte;
+		n := 0;
+		while(n < len buf){
+			m := sys->read(kf, buf[n:], len buf - n);
+			if(m <= 0)
+				break;
+			n += m;
+		}
+		(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+		for(; lines != nil; lines = tl lines)
+			if(len hd lines >= 4 && (hd lines)[0:4] == "key ")
+				nkeys++;
+		kf = nil;
 	}
+	if(!keyroom(nkeys, nbytes, len array of byte line)){
+		sys->fprint(stderr, "bt9p: %s holds %d keys, its limit: this one is held until restart; forget a peer to keep another\n", keyfile, nkeys);
+		return;
+	}
+	kf = sys->open(keyfile, Sys->OWRITE);
+	if(kf == nil)
+		kf = sys->create(keyfile, Sys->OWRITE, 8r600);
+	if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
+		sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
 }
 
 # the value of attr=value in a key line, nil if absent

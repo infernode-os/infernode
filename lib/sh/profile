@@ -29,18 +29,34 @@ ndb/cs
 # /n/local is the user-visible root of the host filesystem on every
 # platform. Wiring to get there differs (POSIX has a single root;
 # Windows has drive letters), but Inferno-side paths are identical.
-if {~ $emuhost MacOSX Linux Nt}{
-	if {~ $emuhost Nt} {
-		# Windows: mount C:\ at /n/local. Profiles live at C:\Users\<name>,
-		# so /n/local/Users/$user matches macOS's /n/local/Users/$user.
-		trfs '#UC:/' /n/local >[2] /dev/null
-		ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
-		ghome=/n/local/Users/^$user
+#
+# ghome is the host's home directory as seen here, or nothing when the
+# host gives none. A host started with no $HOME (launchd, a systemd
+# unit, env -i) made /n/local/^`{...} a null list in concatenation, and
+# the profile went on to make ~/.infernode at the top of /n/local. Its
+# password file is asked next; with neither, the overlay is left out
+# and the home is the emulator's own /usr/$user, as on native hardware.
+ghome=()
+if {~ $emuhost Nt} {
+	# Windows: mount C:\ at /n/local. Profiles live at C:\Users\<name>,
+	# so /n/local/Users/$user matches macOS's /n/local/Users/$user.
+	trfs '#UC:/' /n/local >[2] /dev/null
+	ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
+	if {! ~ $#user 0} { ghome=/n/local/Users/^$user }
+}
+if {~ $emuhost MacOSX Linux} {
+	trfs '#U*' /n/local >[2] /dev/null
+	ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
+	# printf, not echo: no newline to strip. getent where there is one
+	# (Linux), dscl on macOS. $"_hh: one word, a home with blanks whole.
+	_hh=`{os sh -c 'h=$HOME; [ -n "$h" ] || h=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6); [ -n "$h" ] || h=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | sed "s/^[^:]*: *//"); printf %s "$h"' >[2] /dev/null}
+	if {! ~ $#_hh 0} {
+		ghome=/n/local^$"_hh
 	}{
-		trfs '#U*' /n/local >[2] /dev/null
-		ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
-		ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+		echo 'profile: the host gives no home directory ($HOME unset, none in its password file): ~/.infernode is not used, nothing in /usr persists' >[1=2]
 	}
+}
+if {! ~ $#ghome 0}{
 	home=$ghome
 
 	# ── Writable overlay from ~/.infernode ──────────────────
@@ -174,7 +190,7 @@ if {~ $emuhost MacOSX Linux Nt}{
 		snapd >[2] /dev/null &
 	}
 }{
-	# Non-desktop platforms (native hardware, embedded)
+	# Native hardware and embedded, or a host with no home directory
 	home=/usr/^$user
 	if {! ftest -d $home} { mkdir -p $home }
 }

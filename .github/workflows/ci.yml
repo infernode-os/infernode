@@ -347,6 +347,15 @@ jobs:
         ROOT=. bash tests/host/profile_proxy_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
+    - name: Run login-profile home directory check
+      run: |
+        # The profile finds the host's home with no $HOME, and says so
+        # when there is none (#737). 77 = skip (no emu).
+        chmod +x tests/host/profile_nohome_test.sh
+        rc=0
+        ROOT=. bash tests/host/profile_nohome_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run agent harness checks
       run: |
         # The one agent loop, veltrosrv, through its files and through its

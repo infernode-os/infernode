@@ -4,6 +4,17 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The login profile finds the host's home without `$HOME` (#737).**
+  emu started with no `$HOME` (a launchd agent, a systemd unit, `env -i`)
+  printed `sh: null list in concatenation` at login and made
+  `.infernode` at the top of `/n/local`. The profile now asks the host's
+  password file (`getent`, `dscl` on macOS) when `$HOME` is unset, keeps
+  a home with a blank in it whole, and with no home at all says so and
+  uses the emulator's `/usr/$user` without the overlay.
+  `tests/host/profile_nohome_test.sh` checks each case.
+
 ## [0.10.1] - 2026-11-11
 
 ### Added

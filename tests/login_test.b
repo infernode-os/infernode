@@ -13,7 +13,9 @@ implement LoginTest;
 # own, its counts in /keydb/loginfail of this name space: Maxfail logins
 # that do not prove the password refuse the next, fewer do not, a login
 # that works clears the count, and a name with no account is counted and
-# refused the same way, in the same words.
+# refused the same way, in the same words. A name with no account, or an
+# expired one, is answered as a wrong password is: the client gets the
+# same error, so one login does not tell it which names have accounts.
 #
 
 include "sys.m";
@@ -45,7 +47,8 @@ failed := 0;
 skipped := 0;
 
 User: con "alice";
-Users := array[] of {User, "carol", "dave", "erin"};
+Users := array[] of {User, "carol", "dave", "erin", "frank", "gwen"};
+Expired: con "gwen";	# an entry whose expire reads "expired"
 Maxfail: con 10;	# logind's
 Wrong: con "correct horse battery stapler";
 testdir: string;
@@ -121,8 +124,11 @@ setup(): string
 	kr->sha256(pw, len pw, dig, nil);
 	for(i := 0; i < len Users; i++){
 		u := d+"/mnt/keys/"+Users[i];
+		exp := "never";
+		if(Users[i] == Expired)
+			exp = "expired";
 		if(mkdir(u) < 0 || writefile(u+"/secret", dig) < 0 ||
-		   writefile(u+"/expire", array of byte "never") < 0)
+		   writefile(u+"/expire", array of byte exp) < 0)
 			return sys->sprint("can't write %s's entry: %r", Users[i]);
 	}
 	if(sys->bind(d+"/root", "/", Sys->MBEFORE) < 0 || sys->bind(d+"/mnt", "/mnt", Sys->MBEFORE) < 0)
@@ -385,6 +391,30 @@ testUnknownName(t: ref T)
 	t.assertseq(refusalwords(err), refusalwords(carolrefusal), "a name with no account refused in an account's words");
 }
 
+testUnknownLikeWrong(t: ref T)
+{
+	# Each AEAD: a real name with a wrong password, a name with no
+	# account (any password) and an expired entry (the right password)
+	# give the client the same words. frank, oscar, gwen: none of them
+	# near the throttle.
+	for(cnsa := 0; cnsa <= 1; cnsa++){
+		mode := "not in CNSA mode";
+		if(cnsa)
+			mode = "in CNSA mode";
+		(wrong, winfo) := userlogin(t, "frank", cnsa, cnsa, Wrong);
+		t.assert(winfo == nil, mode + ": a wrong password gives nothing");
+		t.assert(wrong != nil && contains(wrong, "incorrect"), mode + ": a wrong password is incorrect: " + wrong);
+		(none, ninfo) := userlogin(t, "oscar", cnsa, cnsa, Wrong);
+		t.assert(ninfo == nil, mode + ": a name with no account gives nothing");
+		t.assertseq(none, wrong, mode + ": a name with no account answered as a wrong password");
+		(none, ninfo) = userlogin(t, "oscar", cnsa, cnsa, Password);
+		t.assertseq(none, wrong, mode + ": whatever password it is given");
+		(exp, einfo) := userlogin(t, Expired, cnsa, cnsa, Password);
+		t.assert(einfo == nil, mode + ": an expired entry gives nothing");
+		t.assertseq(exp, wrong, mode + ": an expired entry answered as a wrong password");
+	}
+}
+
 failkey(name: string): string
 {
 	b := array of byte name;
@@ -488,6 +518,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Login/BelowThreshold", testBelowThreshold);
 	run("Login/SuccessResets", testSuccessResets);
 	run("Login/UnknownName", testUnknownName);
+	run("Login/UnknownLikeWrong", testUnknownLikeWrong);
 
 	rmtree(testdir);
 	if(testing->summary(passed, failed, skipped) > 0)

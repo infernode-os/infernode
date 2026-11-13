@@ -239,7 +239,8 @@ netproc(void *a)
 			b = cookie;
 			if(b == nil)
 				continue;
-			if(len <= (u32int)c->hdrlen || len > (u32int)(c->hdrlen + Framemax + 4)){
+			/* a frame is at least an Ethernet header: less is nothing the stack can read */
+			if(len < (u32int)(c->hdrlen + ETHERHDRSIZE) || len > (u32int)(c->hdrlen + Framemax + 4)){
 				c->nrxdrop++;
 				freeb(b);
 			}else{

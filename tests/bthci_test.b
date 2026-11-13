@@ -652,6 +652,316 @@ testHcdRecords(t: ref T)
 	t.asserteq(bad, 4, "a trailing partial header names its offset");
 }
 
+#
+# The host against a controller the test plays itself, byte by byte.
+#
+
+Ans: adt {
+	st:	int;
+	ret:	array of byte;
+	err:	string;
+};
+
+docmd(h: ref Hci, op: int, params: array of byte, ms: int, c: chan of ref Ans)
+{
+	(st, ret, err) := h.cmd(op, params, ms);
+	c <-= ref Ans(st, ret, err);
+}
+
+askpid(h: ref Hci, op: int, ms: int, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	h.cmd(op, nil, ms);
+}
+
+alarm(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# an answer, or nil if none comes in ms
+answer(c: chan of ref Ans, ms: int): ref Ans
+{
+	tc := chan[1] of int;
+	spawn alarm(tc, ms);
+	alt {
+	a := <-c =>
+		return a;
+	<-tc =>
+		return nil;
+	}
+}
+
+# the next event; (nil, 0) is the nil that ends them, (nil, -1) nothing in ms
+nextevent(h: ref Hci, ms: int): (ref Event, int)
+{
+	tc := chan[1] of int;
+	spawn alarm(tc, ms);
+	alt {
+	e := <-h.events =>
+		return (e, e != nil);
+	<-tc =>
+		return (nil, -1);
+	}
+}
+
+# Command Complete for op, with these return parameters
+cmdcomp(ncmd, op: int, ret: array of byte): array of byte
+{
+	b := array[7 + len ret] of byte;
+	b[0] = byte 16r04;
+	b[1] = byte 16r0e;
+	b[2] = byte (4 + len ret);
+	b[3] = byte ncmd;
+	b[4] = byte op;
+	b[5] = byte (op >> 8);
+	b[6] = byte 0;
+	b[7:] = ret;
+	return b;
+}
+
+wr(fd: ref Sys->FD, b: array of byte)
+{
+	sys->write(fd, b, len b);
+}
+
+testDeframeLostSync(t: ref T)
+{
+	# an indicator's value in the noise, and a length no packet has:
+	# the event behind it is not taken for its payload
+	ev := bytes(16r04 :: 16r0e :: 16r04 :: 16r01 :: 16r03 :: 16r0c :: 16r00 :: nil);
+	d := Deframer.new();
+	d.feed(bytes(16r02 :: 16r00 :: 16r00 :: 16rff :: 16rff :: nil));
+	l := d.feed(ev);
+	t.asserteq(len l, 1, "the event after a false ACL header is found");
+	if(l != nil)
+		t.asserteq((hd l).kind, Bthci->Hevt, "and is the event");
+	# a handle no connection has
+	d = Deframer.new();
+	d.feed(bytes(16r02 :: 16rff :: 16r0f :: 16r40 :: 16r00 :: nil));
+	l = d.feed(ev);
+	t.asserteq(len l, 1, "and after a header with no such handle");
+	# real data is still data
+	d = Deframer.new();
+	acl := array[5 + 1000] of { * => byte 16r55 };
+	acl[0:] = bytes(16r02 :: 16r40 :: 16r20 :: 16re8 :: 16r03 :: nil);
+	l = d.feed(acl);
+	t.asserteq(len l, 1, "an ACL packet of 1000 bytes is one packet");
+	# a long run of noise is dropped in one go, and counted
+	d = Deframer.new();
+	d.feed(array[3000] of { * => byte 0 });
+	l = d.feed(ev);
+	t.asserteq(len l, 1, "the event after 3000 bytes of noise is found");
+	t.asserteq(d.junk, 3000, "and the noise counted");
+}
+
+testCommandLength(t: ref T)
+{
+	t.assert(bthci->command(16rfc01, array[256] of { * => byte 0 }) == nil, "a command's parameters fit a one-byte length or there is no command");
+	t.assert(bthci->command(16rfc01, array[255] of { * => byte 0 }) != nil, "255 bytes do");
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.fatal("cannot make a pipe");
+	h := Hci.new(Transport.h4(fds[0]));
+	c := chan[1] of ref Ans;
+	spawn docmd(h, 16rfc01, array[256] of { * => byte 0 }, 300, c);
+	a := answer(c, 2000);
+	t.assert(a != nil && a.err != nil && a.err != "timeout", "and the host says so rather than sending it");
+	h.stop();
+}
+
+testKilledCaller(t: ref T)
+{
+	# a caller killed while it waits must not take the host with it
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.fatal("cannot make a pipe");
+	h := Hci.new(Transport.h4(fds[0]));
+	pidc := chan of int;
+	spawn askpid(h, Bthci->Reset, 300, pidc);
+	pid := <-pidc;
+	sys->sleep(100);
+	kill(pid);
+	sys->sleep(500);	# its deadline passes with nobody to tell
+	c := chan[1] of ref Ans;
+	spawn docmd(h, Bthci->Reset, nil, 300, c);
+	a := answer(c, 3000);
+	t.assert(a != nil, "the next caller is answered");
+	if(a == nil)
+		return;		# the host is stuck: stopping it would wait too
+	t.assert(a.err != nil, "with its own timeout");
+	h.stop();
+}
+
+testEventsKept(t: ref T)
+{
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.fatal("cannot make a pipe");
+	h := Hci.new(Transport.h4(fds[0]));
+	# nobody reads: 80 advertising reports, then a link going down and
+	# packets completed, then more reports
+	adv := bytes(16r04 :: 16r3e :: 16r02 :: 16r02 :: 16r00 :: nil);
+	for(i := 0; i < 80; i++)
+		wr(fds[1], adv);
+	wr(fds[1], bytes(16r04 :: 16r05 :: 16r04 :: 16r00 :: 16r40 :: 16r00 :: 16r13 :: nil));
+	wr(fds[1], bytes(16r04 :: 16r13 :: 16r05 :: 16r01 :: 16r40 :: 16r00 :: 16r01 :: 16r00 :: nil));
+	for(i = 0; i < 10; i++)
+		wr(fds[1], adv);
+	sys->sleep(300);
+	nadv := 0;
+	codes := "";
+	for(;;){
+		(e, ok) := nextevent(h, 500);
+		if(ok <= 0)
+			break;
+		if(e.code == Bthci->EvLeMeta)
+			nadv++;
+		else
+			codes += sys->sprint(" %.2x", e.code);
+	}
+	t.assertseq(codes, " 05 13", "the disconnection and the completed packets reach the reader, in order");
+	t.assert(nadv >= 64 && nadv < 90, sys->sprint("with the reports there was room for (%d)", nadv));
+	t.assert(h.dropped > 0, "and the rest counted");
+
+	# data: 80 packets with nobody reading, read back whole and in order
+	for(i = 0; i < 80; i++)
+		wr(fds[1], bytes(16r02 :: 16r40 :: 16r20 :: 16r01 :: 16r00 :: i :: nil));
+	sys->sleep(300);
+	inorder := 1;
+	for(i = 0; i < 80; i++){
+		tc := chan[1] of int;
+		spawn alarm(tc, 500);
+		alt {
+		p := <-h.data =>
+			if(len p.data != 5 || int p.data[4] != i)
+				inorder = 0;
+		<-tc =>
+			inorder = 0;
+			i = 1000;
+		}
+	}
+	t.asserteq(i, 80, "80 data packets nobody was reading are all there");
+	t.assert(inorder, "in order");
+
+	# the end reaches a reader however far behind it is
+	for(i = 0; i < 70; i++)
+		wr(fds[1], adv);
+	wr(fds[1], bytes(16r04 :: 16r05 :: 16r04 :: 16r00 :: 16r41 :: 16r00 :: 16r13 :: nil));
+	sys->sleep(300);
+	fds[1] = nil;
+	sys->sleep(300);
+	sawdisc := 0;
+	ended := 0;
+	for(i = 0; i < 200; i++){
+		(e, ok) := nextevent(h, 1000);
+		if(ok == 0){
+			ended = 1;
+			break;
+		}
+		if(ok < 0)
+			break;
+		if(e.code == Bthci->EvDisconnComplete)
+			sawdisc = 1;
+	}
+	t.assert(sawdisc, "a reader behind when the controller went still learns of the link");
+	t.assert(ended, "and then that there is no more");
+}
+
+sendreq(h: ref Hci, r: ref Bthci->Req, done: chan of int)
+{
+	h.reqs <-= r;
+	done <-= 1;
+}
+
+sendctl(h: ref Hci, done: chan of int)
+{
+	h.ctl <-= 1;
+	done <-= 1;
+}
+
+testAfterDeath(t: ref T)
+{
+	# a caller that looked at h.dead a moment before it was set is on
+	# its way to the request channel: it is answered there
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.fatal("cannot make a pipe");
+	h := Hci.new(Transport.h4(fds[0]));
+	fds[1] = nil;
+	(nil, ok) := nextevent(h, 2000);
+	t.asserteq(ok, 0, "the controller went");
+	t.asserteq(h.dead, 1, "and the host knows");
+	r := ref Bthci->Req(Bthci->Reset, bthci->command(Bthci->Reset, nil), sys->millisec() + 300,
+		chan[1] of (int, array of byte, string));
+	done := chan[2] of int;
+	spawn sendreq(h, r, done);
+	tc := chan[1] of int;
+	spawn alarm(tc, 1000);
+	alt {
+	<-done =>
+		(nil, nil, err) := <-r.reply;
+		t.assert(err != nil, "a request that arrives after is answered with the reason");
+	<-tc =>
+		t.error("a request that arrives after the controller went is never answered");
+	}
+	# and one on its way to stop it
+	spawn sendctl(h, done);
+	tc = chan[1] of int;
+	spawn alarm(tc, 1000);
+	alt {
+	<-done =>
+		;
+	<-tc =>
+		t.error("a stop that arrives after the controller went waits for ever");
+	}
+}
+
+testLateAnswer(t: ref T)
+{
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.fatal("cannot make a pipe");
+	h := Hci.new(Transport.h4(fds[0]));
+	op := 16rfc77;
+	c := chan[4] of ref Ans;
+	# a controller that takes two commands at a time
+	spawn docmd(h, Bthci->Reset, nil, 1000, c);
+	sys->sleep(100);
+	wr(fds[1], cmdcomp(2, Bthci->Reset, nil));
+	a := answer(c, 2000);
+	t.assert(a != nil && a.err == nil, "a first command is answered");
+
+	# one question times out; another with the same opcode is asked;
+	# then the first one's answer comes, and then the second's
+	spawn docmd(h, op, bytes(1 :: nil), 200, c);
+	a = answer(c, 2000);
+	t.assert(a != nil && a.err == "timeout", "a command times out");
+	spawn docmd(h, op, bytes(2 :: nil), 2000, c);
+	sys->sleep(100);
+	wr(fds[1], cmdcomp(1, op, bytes(16raa :: nil)));
+	sys->sleep(100);
+	wr(fds[1], cmdcomp(2, op, bytes(16rbb :: nil)));
+	a = answer(c, 3000);
+	t.assert(a != nil && a.err == nil, "the second is answered");
+	if(a != nil && len a.ret == 1)
+		t.asserteq(int a.ret[0], 16rbb, "with its own answer, not the late one");
+	else
+		t.error("the second question's answer is missing");
+
+	# asked again in the same words, the late answer will do
+	spawn docmd(h, op, bytes(3 :: nil), 200, c);
+	a = answer(c, 2000);
+	t.assert(a != nil && a.err == "timeout", "a command times out again");
+	spawn docmd(h, op, bytes(3 :: nil), 2000, c);
+	sys->sleep(100);
+	wr(fds[1], cmdcomp(2, op, bytes(16rcc :: nil)));
+	a = answer(c, 1500);
+	t.assert(a != nil && a.err == nil && len a.ret == 1 && int a.ret[0] == 16rcc, "a retry in the same words takes the answer that comes");
+	h.stop();
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -702,6 +1012,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HcdRecords", testHcdRecords);
 	run("LeAndNames", testLeAndNames);
 	run("PairingEvents", testPairingEvents);
+	run("DeframeLostSync", testDeframeLostSync);
+	run("CommandLength", testCommandLength);
+	run("KilledCaller", testKilledCaller);
+	run("EventsKept", testEventsKept);
+	run("AfterDeath", testAfterDeath);
+	run("LateAnswer", testLateAnswer);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

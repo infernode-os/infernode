@@ -301,7 +301,7 @@ arpresolve(Arp *arp, Arpent *a, Medium *type, uchar *mac)
 }
 
 void
-arpenter(Fs *fs, int version, uchar *ip, uchar *mac, int n, int refresh)
+arpenter(Fs *fs, int version, uchar *ip, uchar *mac, int n, int refresh, Ipifc *rifc)
 {
 	Arp *arp;
 	Route *r;
@@ -338,7 +338,22 @@ arpenter(Fs *fs, int version, uchar *ip, uchar *mac, int n, int refresh)
 	}
 
 	ifc = r->ifc;
+	if(ifc == nil)
+		return;
+	/*
+	 * What an interface heard is about that interface.  The entry's
+	 * interface is the route's, so without this a station on one
+	 * segment could name the hardware address for any address routed
+	 * by another of the same medium, and what was held for that
+	 * address went out there to the address it chose.  (rifc is nil
+	 * for entries this node makes for itself.)
+	 */
+	if(rifc != nil && ifc != rifc)
+		return;
 	type = ifc->m;
+	/* the caller's n bytes are what is copied, type->maclen of them */
+	if(type == nil || type->maclen > n || type->maclen > sizeof(a->mac))
+		return;
 
 	qlock(&arp->ql);
 	for(a = arp->hash[haship(ip)]; a; a = a->hash){
@@ -585,6 +600,13 @@ arpread(Arp *arp, char *p, ulong offset, int len)
 	return n;
 }
 
+/* is an entry that was being solicited still one to solicit, on the same interface? */
+static int
+rxmtstill(int state, int v4, int sameifc)
+{
+	return state == AWAIT && !v4 && sameifc;
+}
+
 extern int
 rxmitsols(Arp *arp)
 {
@@ -632,22 +654,32 @@ rxmitsols(Arp *arp)
 	runlock(&ifc->rwl);
 	qlock(&arp->ql);	
 
-	/* put to the end of re-transmit chain */
-	l = &arp->rxmt;
-	for(b = *l; b; b = b->nextrxt){
-		if(b == a){
-			*l = a->nextrxt;
-			break;
+	/*
+	 * The lock was out while the solicitation was sent, and the entry
+	 * may not be what it was: answered (and off the chain, resolved),
+	 * deleted or flushed (off the chain, with no interface), or taken
+	 * for another address.  Put back unasked it was solicited again
+	 * until it was destroyed, resolved or not, or met the assert above
+	 * with no interface.  Only an entry still waiting, for the same
+	 * interface, goes to the end of the chain.
+	 */
+	if(rxmtstill(a->state, isv4(a->ip), a->ifc == ifc)){
+		l = &arp->rxmt;
+		for(b = *l; b; b = b->nextrxt){
+			if(b == a){
+				*l = a->nextrxt;
+				break;
+			}
+			l = &b->nextrxt;
 		}
-		l = &b->nextrxt;
+		for(b = *l; b; b = b->nextrxt){
+			l = &b->nextrxt;
+		}
+		*l = a;
+		a->rxtsrem--;
+		a->nextrxt = nil;
+		a->rtime = NOW + ReTransTimer;
 	}
-	for(b = *l; b; b = b->nextrxt){
-		l = &b->nextrxt;
-	}
-	*l = a;
-	a->rxtsrem--;
-	a->nextrxt = nil;
-	a->rtime = NOW + ReTransTimer;
 
 	a = arp->rxmt;
 	if(a==nil)

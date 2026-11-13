@@ -1022,7 +1022,7 @@ icmpiput6(Proto *icmp, Ipifc *ipifc, Block *bp)
 				/* learn the sender only from a source link-layer address option */
 				lla = ndlladdr(bp->rp+sizeof(NdiscC), BLEN(bp)-(long)sizeof(NdiscC), SRC_LLADDRESS);
 				if(lla != nil)
-					arpenter(icmp->f, V6, np->src, lla, 6, 0);
+					arpenter(icmp->f, V6, np->src, lla, 6, 0, ipifc);
 				pktflags |= Sflag;
 			}
 			if(ipv6local(ipifc, lsrc)) {
@@ -1058,7 +1058,7 @@ icmpiput6(Proto *icmp, Ipifc *ipifc, Block *bp)
 			refresh = 0;
 		lla = ndlladdr(bp->rp+sizeof(NdiscC), BLEN(bp)-(long)sizeof(NdiscC), TARGET_LLADDRESS);
 		if(lla != nil)
-			arpenter(icmp->f, V6, np->target, lla, 6, refresh);
+			arpenter(icmp->f, V6, np->target, lla, 6, refresh, ipifc);
 		freeblist(bp);
 		break;
 

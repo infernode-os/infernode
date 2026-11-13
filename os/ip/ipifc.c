@@ -1699,7 +1699,7 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				if(ipcmp(net, lifc->remote) == 0) { /* add solicited-node multicast address */
 					ipv62smcast(net, ip);
 					addselfcache(f, nifc, lifc, net, Rmulti);
-					arpenter(f, V6, ip, nifc->mac, 6, 0);
+					arpenter(f, V6, ip, nifc->mac, 6, 0, nil);
 					//(*m->addmulti)(nifc, net, ip);
 					break;
 				}

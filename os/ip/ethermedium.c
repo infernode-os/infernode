@@ -761,7 +761,7 @@ recvarp(Ipifc *ifc)
 		if(!arpsenderok(e->spa, e->sha) || (ipforme(er->f, ip) & (Rbcast|Rmulti)))
 			break;
 
-		arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 0);
+		arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 0, ifc);
 		break;
 
 	case ARPREQUEST:
@@ -792,7 +792,7 @@ recvarp(Ipifc *ifc)
 
 		/* refresh what we know about sender, if it could be one station */
 		if(arpsenderok(e->spa, e->sha) && !(ipforme(er->f, ip) & (Rbcast|Rmulti)))
-			arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 1);
+			arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 1, ifc);
 
 		/* answer only requests for our address or systems we're proxying for */
 		v4tov6(ip, e->tpa);

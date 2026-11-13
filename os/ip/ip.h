@@ -610,7 +610,7 @@ extern int	arpwrite(Fs*, char*, int);
 extern Arpent*	arpget(Arp*, Block *bp, int version, Ipifc *ifc, uchar *ip, uchar *h);
 extern void	arprelease(Arp*, Arpent *a);
 extern Block*	arpresolve(Arp*, Arpent *a, Medium *type, uchar *mac);
-extern void	arpenter(Fs*, int version, uchar *ip, uchar *mac, int len, int norefresh);
+extern void	arpenter(Fs*, int version, uchar *ip, uchar *mac, int len, int norefresh, Ipifc *heardon);
 
 /*
  * ipaux.c

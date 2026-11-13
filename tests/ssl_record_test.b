@@ -345,6 +345,91 @@ testRefused(t: ref T)
 	}
 }
 
+# records too short to hold what their algorithm needs, the header on its own
+testShort(t: ref T)
+{
+	for(l := "aes_256_gcm" :: "hmac_sha384" :: nil; l != nil; l = tl l){
+		alg := hd l;
+		# no bytes at all: two bytes from anyone, before any MAC is looked at
+		(c, raw) := pushed(t, alg);
+		t.assert(offer(c, raw, array[0] of byte) < 0, alg + ": a record of no bytes is refused");
+		# fewer than a MAC or a tag
+		(c, raw) = pushed(t, alg);
+		t.assert(offer(c, raw, array[10] of {* => byte 16r5a}) < 0, alg + ": a record shorter than its MAC is refused");
+		# and a conversation beside it goes on
+		(c, raw) = pushed(t, alg);
+		seal := wantsealed;
+		if(alg == "hmac_sha384")
+			seal = macced;
+		data := array of byte "still here";
+		t.asserteq(offer(c, raw, seal(other, data, 0)), len data, alg + ": a whole record is still taken");
+	}
+}
+
+# a conversation of its own, not yet pushed onto anything: its ctl and its number
+bare(t: ref T): (ref Sys->FD, string)
+{
+	cfd := sys->open("#D/clone", Sys->ORDWR);
+	if(cfd == nil)
+		t.fatal(sys->sprint("open #D/clone: %r"));
+	b := array[32] of byte;
+	n := sys->read(cfd, b, len b);
+	if(n <= 0)
+		t.fatal(sys->sprint("read #D/clone: %r"));
+	return (cfd, string b[0:n]);
+}
+
+# what a conversation may be pushed onto: a channel open both ways that is
+# not a directory and not ssl's own
+testPushedOnto(t: ref T)
+{
+	# another conversation, with a record waiting to be read
+	(victim, vraw) := pushed(t, "hmac_sha384");
+	secretdata := array of byte "not yours to read";
+	writerecord(vraw, macced(other, secretdata, 0));
+	vdir := victim.dir;
+
+	# its directory, which anyone may open
+	(cfd, nil) := bare(t);
+	dfd := sys->open(vdir, Sys->OREAD);
+	if(dfd == nil)
+		t.fatal(sys->sprint("open %s: %r", vdir));
+	t.assert(sys->fprint(cfd, "fd %d", dfd.fd) < 0, "a conversation's directory is refused as a channel to push onto");
+
+	# ssl's own top directory
+	(cfd, nil) = bare(t);
+	dfd = sys->open("#D", Sys->OREAD);
+	if(dfd == nil)
+		t.fatal(sys->sprint("open #D: %r"));
+	t.assert(sys->fprint(cfd, "fd %d", dfd.fd) < 0, "#D is refused as a channel to push onto");
+
+	# its own data file
+	n: string;
+	(cfd, n) = bare(t);
+	dfd = sys->open("#D/" + n + "/data", Sys->ORDWR);
+	if(dfd == nil)
+		t.fatal(sys->sprint("open #D/%s/data: %r", n));
+	t.assert(sys->fprint(cfd, "fd %d", dfd.fd) < 0, "a conversation's own data file is refused as its channel");
+
+	# a channel open one way only
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		t.fatal(sys->sprint("pipe: %r"));
+	(cfd, nil) = bare(t);
+	rfd := sys->open("/dev/null", Sys->OREAD);
+	t.assert(rfd != nil && sys->fprint(cfd, "fd %d", rfd.fd) < 0, "a channel open only for reading is refused");
+
+	# a second fd
+	(cfd, nil) = bare(t);
+	t.assert(sys->fprint(cfd, "fd %d", p[0].fd) >= 0, "a pipe is taken");
+	t.assert(sys->fprint(cfd, "fd %d", p[1].fd) < 0, "a second fd is refused");
+
+	# and the other conversation's record is still its owner's to read
+	buf := array[256] of byte;
+	m := sys->read(victim.dfd, buf, len buf);
+	t.assert(m == len secretdata && same(buf[0:m], secretdata), sys->sprint("the other conversation's record is read by its owner (%d)", m));
+}
+
 # hmac_sha384's body for record n: MAC then data
 macced(s, data: array of byte, n: int): array of byte
 {
@@ -382,6 +467,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SSL/LongWrite", testLongWrite);
 	run("SSL/RoundTrip", testRoundTrip);
 	run("SSL/Refused", testRefused);
+	run("SSL/Short", testShort);
+	run("SSL/PushedOnto", testPushedOnto);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

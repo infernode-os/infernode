@@ -3342,10 +3342,16 @@ tcpctl(Conv* c, char** f, int n)
 		return tcphangup(c);
 	if(n >= 1 && strcmp(f[0], "keepalive") == 0)
 		return tcpstartka(c, f, n);
-	if(n >= 1 && strcmp(f[0], "checksum") == 0)
+	if(n >= 1 && strcmp(f[0], "checksum") == 0){
+		if(n < 2)
+			return "insufficient arguments";
 		return tcpsetchecksum(c, f, n);
-	if(n >= 1 && strcmp(f[0], "tcpporthogdefense") == 0)
+	}
+	if(n >= 1 && strcmp(f[0], "tcpporthogdefense") == 0){
+		if(n < 2)
+			return "insufficient arguments";
 		return tcpporthogdefensectl(f[1]);
+	}
 	return "unknown control request";
 }
 

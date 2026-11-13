@@ -8,8 +8,9 @@ implement TLSServerTest;
 # HelloRetryRequest; the server's key read from PEM, SEC1 and PKCS #8,
 # checkserver refusing a key that is not the certificate's; and 3000
 # ClientHellos made from a real one by changing, cutting and lengthening
-# it, which the server refuses or answers without an exception that is
-# not its own and without waiting for ever.
+# it, which the server refuses or answers without raising anything (a
+# write on a pipe its client closed raised, found under tools/sanemu's
+# slower emu) and without waiting for ever.
 #
 # tests/host/httpd_test.sh takes the server to curl and OpenSSL.
 #
@@ -376,10 +377,8 @@ testMutatedHellos(t: ref T)
 		<-tc =>
 			t.fatal(sys->sprint("mutation %d: the server waited for ever", i));
 		}
-		if(r.exc != nil) {
-			if(len r.exc < 4 || r.exc[0:4] != "tls:")
-				t.fatal(sys->sprint("mutation %d: the server raised %s", i, r.exc));
-		}
+		if(r.exc != nil)
+			t.fatal(sys->sprint("mutation %d: the server raised %s", i, r.exc));
 		if(r.err != nil)
 			refused++;
 		else

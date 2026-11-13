@@ -683,18 +683,7 @@ dis/styxchat.dis
 dis/styxlisten.dis
 dis/styxmon.dis
 dis/sum.dis
-dis/svc/httpd/alarms.dis
-dis/svc/httpd/cache.dis
-dis/svc/httpd/cgiparse.dis
-dis/svc/httpd/contents.dis
-dis/svc/httpd/date.dis
-dis/svc/httpd/echo.dis
 dis/svc/httpd/httpd.dis
-dis/svc/httpd/imagemap.dis
-dis/svc/httpd/parser.dis
-dis/svc/httpd/redirect.dis
-dis/svc/httpd/stats.dis
-dis/svc/httpd/wikipost.dis
 dis/svc/webget/date.dis
 dis/svc/webget/file.dis
 dis/svc/webget/ftp.dis
@@ -775,6 +764,7 @@ dis/tests/grpwait_test.dis
 dis/tests/goroutine_leak_test.dis
 dis/tests/gdl90_test.dis
 dis/tests/gps_capability_test.dis
+dis/tests/httpd_confine_test.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis
@@ -952,6 +942,7 @@ dis/tests/tkimgrender.dis
 dis/tests/tkrender.dis
 dis/tests/tls_crypto_test.dis
 dis/tests/tls_hrr_test.dis
+dis/tests/tls_server_test.dis
 dis/tests/tls_live_test.dis
 dis/tests/tls_pq_test.dis
 dis/tests/tls_protocol_test.dis

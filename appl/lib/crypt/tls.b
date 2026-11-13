@@ -3323,6 +3323,10 @@ server(fd: ref Sys->FD, config: ref ServerConfig): (ref Conn, string)
 	} exception e {
 	"tls:*" =>
 		(alert, err) = (ALERT_INTERNAL_ERROR, e);
+	"*" =>
+		# the peer's end gone under a write ("write on closed
+		# pipe"), and the like: an error, not an exception
+		(alert, err) = (0, "tls: " + e);
 	}
 	clearephemeral(cs);
 	if(err != nil) {

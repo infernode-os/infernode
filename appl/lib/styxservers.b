@@ -27,7 +27,7 @@ include "styx.m";
 
 include "styxservers.m";
 
-CHANHASHSIZE: con 32;
+CHANHASHSIZE: con 256;	# a power of two; a connection may hold MAXFIDS fids
 DIRREADSIZE: con Styx->STATFIXLEN+4*20;	# ``reasonable'' chunk for reading directories
 
 debug := 0;
@@ -46,7 +46,7 @@ traceset(d: int)
 Styxserver.new(fd: ref Sys->FD, t: ref Navigator, rootpath: big): (chan of ref Tmsg, ref Styxserver)
 {
 	tchan := chan of ref Tmsg;
-	srv := ref Styxserver(fd, array[CHANHASHSIZE] of list of ref Fid, chan[1] of int, t, rootpath, 0, nil);
+	srv := ref Styxserver(fd, array[CHANHASHSIZE] of list of ref Fid, chan[1] of int, t, rootpath, 0, nil, 0);
 
 	sync := chan of int;
 	spawn tmsgreader(fd, srv, tchan, sync);
@@ -118,7 +118,9 @@ Styxserver.reply(srv: self ref Styxserver, m: ref Rmsg): int
 
 Styxserver.replydirect(srv: self ref Styxserver, m: ref Rmsg): int
 {
-	if(srv.msize == 0)
+	# before a version is agreed nothing is answered but the Tversion
+	# itself and what was refused
+	if(srv.msize == 0 && tagof m != tagof Rmsg.Version && tagof m != tagof Rmsg.Error)
 		m = ref Rmsg.Error(m.tag, "Tversion not seen");
 	d := m.pack();
 	if(srv.msize != 0 && len d > srv.msize){
@@ -141,7 +143,7 @@ Styxserver.attach(srv: self ref Styxserver, m: ref Tmsg.Attach): ref Fid
 	}
 	c := srv.newfid(m.fid);
 	if(c == nil) {
-		srv.reply(ref Rmsg.Error(m.tag, Einuse));
+		srv.reply(ref Rmsg.Error(m.tag, srv.nofid()));
 		return nil;
 	}
 	c.uname = m.uname;
@@ -150,6 +152,27 @@ Styxserver.attach(srv: self ref Styxserver, m: ref Tmsg.Attach): ref Fid
 	c.qtype = d.qid.qtype;
 	srv.reply(ref Rmsg.Attach(m.tag, d.qid));
 	return c;
+}
+
+# not one element of a path: empty, or with a slash or a NUL in it
+badname(s: string): int
+{
+	if(s == nil)
+		return 1;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/' || s[i] == 0)
+			return 1;
+	return 0;
+}
+
+# why newfid gave nil
+Styxserver.nofid(srv: self ref Styxserver): string
+{
+	if(srv.msize == 0)
+		return "Tversion not seen";
+	if(srv.nfids >= MAXFIDS)
+		return Enofids;
+	return Einuse;
 }
 
 walk1(n: ref Navigator, c: ref Fid, name: string): (ref Sys->Dir, string)
@@ -181,11 +204,20 @@ Styxserver.walk(srv: self ref Styxserver, m: ref Tmsg.Walk): ref Fid
 	if(m.newfid != m.fid){
 		nc := srv.newfid(m.newfid);
 		if(nc == nil){
-			srv.reply(ref Rmsg.Error(m.tag, Einuse));
+			srv.reply(ref Rmsg.Error(m.tag, srv.nofid()));
 			return nil;
 		}
 		c = c.clone(nc);
 	}
+	# a name is one element: with a slash in it, a navigator that makes
+	# a path of its names was walked wherever the client said
+	for(j := 0; j < len m.names; j++)
+		if(badname(m.names[j])){
+			if(m.newfid != m.fid)
+				srv.delfid(c);
+			srv.reply(ref Rmsg.Error(m.tag, Ename));
+			return nil;
+		}
 	qids := array[len m.names] of Sys->Qid;
 	oldpath := c.path;
 	oldqtype := c.qtype;
@@ -260,7 +292,7 @@ Styxserver.cancreate(srv: self ref Styxserver, m: ref Tmsg.Create): (ref Fid, in
 		return (nil, 0, nil, err);
 	if((d.mode & Sys->DMDIR) == 0)
 		return (nil, 0, nil, Enotdir);
-	if(m.name == "")
+	if(badname(m.name))
 		return (nil, 0, nil, Ename);
 	if(m.name == "." || m.name == "..")
 		return (nil, 0, nil, Edot);
@@ -321,22 +353,31 @@ Styxserver.read(srv: self ref Styxserver, m: ref Tmsg.Read): ref Fid
 		srv.reply(ref Rmsg.Read(m.tag, nil));
 		return c;
 	}
-	a := array[m.count] of byte;
+	# a directory's offsets are ints here: one past 2^31 was cut to an
+	# int and compared, and the read answered with the directory's
+	# first entries (or, cut to a positive, with a walk of all of it)
+	if(m.offset > big 16r7fffffff){
+		srv.reply(ref Rmsg.Read(m.tag, nil));
+		return c;
+	}
+	want := int m.offset;
+	count := m.count;
+	a := array[count] of byte;
 	(offset, index) := c.doffset;
-	if(int m.offset != offset){	# rescan from the beginning
+	if(want != offset){	# rescan from the beginning
 		offset = 0;
 		index = 0;
 	}
 	p := 0;
 Dread:
-	while((d := srv.t.readdir(c.path, index, (m.count+DIRREADSIZE-1)/DIRREADSIZE)) != nil && (nd := len d) > 0){
+	while((d := srv.t.readdir(c.path, index, (count+DIRREADSIZE-1)/DIRREADSIZE)) != nil && (nd := len d) > 0){
 		for(i := 0; i < nd; i++) {
 			size := styx->packdirsize(*d[i]);
 			offset += size;
 			index++;
-			if(offset < int m.offset)
+			if(offset < want)
 				continue;
-			if((m.count -= size) < 0){	# won't fit, save state for next time
+			if((count -= size) < 0){	# won't fit, save state for next time
 				offset -= size;
 				index--;
 				break Dread;
@@ -433,11 +474,19 @@ Styxserver.default(srv: self ref Styxserver, gm: ref Tmsg)
 		srv.t.c <-= nil;
 		exit;
 	Version =>
-		if(srv.msize <= 0)
-			srv.msize = Styx->MAXRPC;
-		(msize, version) := styx->compatible(m, srv.msize, Styx->VERSION);
-		if(msize < 256){
+		# srv.msize is set only by a Tversion that is taken: it was set
+		# to the default first, so one refused for its size, or of a
+		# version not known, left the connection as though agreed
+		max := srv.msize;
+		if(max <= 0)
+			max = Styx->MAXRPC;
+		(msize, version) := styx->compatible(m, max, Styx->VERSION);
+		if(m.msize < 256 || msize < 256){
 			srv.reply(ref Rmsg.Error(m.tag, "message size too small"));
+			break;
+		}
+		if(version == "unknown"){
+			srv.reply(ref Rmsg.Version(m.tag, msize, version));
 			break;
 		}
 		srv.msize = msize;
@@ -501,6 +550,8 @@ Styxserver.delfid(srv: self ref Styxserver, c: ref Fid)
 	for(l := srv.fids[slot]; l != nil; l = tl l)
 		if((hd l).fid != c.fid)
 			nl = (hd l) :: nl;
+		else
+			srv.nfids--;
 	srv.fids[slot] = nl;
 	<-srv.fidlock;
 }
@@ -523,6 +574,15 @@ Styxserver.newfid(srv: self ref Styxserver, fid: int): ref Fid
 		<-srv.fidlock;
 		return nil;		# illegal: fid in use
 	}
+	# No fid before a version is agreed: the request that asked for one
+	# was answered "Tversion not seen" with its fid made all the same,
+	# and "in use" ever after.  And no more than MAXFIDS: nothing
+	# counted them, and a walk of no names makes one for 17 bytes.
+	if(srv.msize == 0 || srv.nfids >= MAXFIDS){
+		<-srv.fidlock;
+		return nil;
+	}
+	srv.nfids++;
 	c = ref Fid;
 	c.path = big -1;
 	c.qtype = 0;
@@ -544,13 +604,16 @@ readstr(m: ref Tmsg.Read, d: string): ref Rmsg.Read
 readbytes(m: ref Tmsg.Read, d: array of byte): ref Rmsg.Read
 {
 	r := ref Rmsg.Read(m.tag, nil);
-	if(m.offset >= big len d || m.offset < big 0)
+	# the count is the client's: negative (ff ff ff ff), or so large that
+	# offset+count wrapped, d[offset:e] was an exception in the server,
+	# which not every server calls canread to prevent
+	if(m.count <= 0 || m.offset >= big len d || m.offset < big 0)
 		return r;
 	offset := int m.offset;
-	e := offset + m.count;
-	if(e > len d)
-		e = len d;
-	r.data = d[offset:e];
+	n := len d - offset;
+	if(m.count < n)
+		n = m.count;
+	r.data = d[offset:offset+n];
 	return r;
 }
 

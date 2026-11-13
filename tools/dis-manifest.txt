@@ -880,6 +880,7 @@ dis/tests/ninep_disconnect_test.dis
 dis/tests/ninep_msize_test.dis
 dis/tests/crypto_bench.dis
 dis/tests/ssl_record_test.dis
+dis/tests/styxservers_hostile_test.dis
 dis/tests/tcpwatch.dis
 dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis

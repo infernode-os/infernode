@@ -390,6 +390,16 @@ Supp.reset(s: self ref Supp)
 	s.ptk = nil;
 	s.lastrepc = big 0;
 	s.newptk = 0;
+	s.snonce = nil;
+	s.gtk = nil;
+	s.gtkkid = -1;
+}
+
+# a > b, both unsigned 64 bits
+ugt(a, b: big): int
+{
+	top := big 1 << 63;
+	return (a ^ top) > (b ^ top);
 }
 
 #
@@ -464,43 +474,75 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 
 	if((flags & Fmic) == 0){
 		#
-		# Message 1: the access point's nonce, unauthenticated.
-		# Deriving a PTK from it costs nothing and commits to
-		# nothing; the MIC on message 3 is what proves the
-		# access point knew the same PMK.
+		# Message 1: the access point's nonce, unauthenticated --
+		# anyone in range can send one, at any time.  So it
+		# changes nothing that is in use: not the key, not the
+		# access point's address.  It is answered with a key
+		# derived for the answer alone, from one nonce of ours
+		# kept for the whole handshake; message 3 carries the
+		# access point's nonce again, and the key is derived
+		# from that, once its MIC proves who sent it.  A forged
+		# message 1 between the real one and message 3 therefore
+		# costs a wasted reply and nothing else.
 		#
 		if((flags & (Fptk|Fack)) != (Fptk|Fack))
 			return (nil, nil);
 		if(len snonce != Noncelen)
 			return (nil, "no nonce supplied");
-		s.amac = amac;
+		if(s.snonce == nil)
+			s.snonce = copyb(snonce, 0, Noncelen);
 		anonce := copyb(frame, kd+13, kd+45);
-		s.ptk = ptk(s.pmk, s.smac, s.amac, snonce, anonce);
-		s.newptk = 1;
-		reply := mkreply(s, frame, kd, vers,
-			(flags & ~(Fack|Fins)) | Fmic, snonce, s.rsne);
+		cand := ptk(s.pmk, s.smac, amac, s.snonce, anonce);
+		#
+		# Our key information, not the sender's with bits changed:
+		# what an unauthenticated frame set is not ours to repeat.
+		#
+		reply := mkreply(s, cand[0:KCKlen], amac, frame, kd, vers,
+			kvers | Fptk | Fmic, s.snonce, s.rsne);
 		return (ref Action(Asend, reply, nil, 0) :: nil, nil);
 	}
 
 	#
-	# Everything below carries a MIC, so there must be a PTK to check
-	# it with and the check comes before anything else is believed.
+	# Everything below carries a MIC, and the check comes before
+	# anything else is believed.  Message 3 of a handshake in
+	# progress is checked with the key its own nonce and ours make;
+	# if that is right it is the access point's, and only then does
+	# the key, and the address it came from, become the ones in use.
+	# Anything else is checked with the key in use.
 	#
-	if(s.ptk == nil)
-		return (nil, nil);		# a handshake we are not part of
-	kck := s.ptk[0:KCKlen];
 	msg := copyb(frame, m, e);
 	got := copyb(frame, kd+77, kd+93);
 	zero(msg, (kd - m) + 77, MIClen);
-	want := mic(kvers, kck, msg);
-	if(want == nil || !eqct(got, want))
-		return (nil, "bad MIC");
+	ok := 0;
+	if((flags & (Fptk|Fack)) == (Fptk|Fack) && s.snonce != nil){
+		cand := ptk(s.pmk, s.smac, amac, s.snonce, copyb(frame, kd+13, kd+45));
+		want := mic(kvers, cand[0:KCKlen], msg);
+		if(want != nil && eqct(got, want)){
+			ok = 1;
+			if(s.ptk == nil || !eqct(s.ptk, cand)){
+				s.ptk = cand;
+				s.amac = amac;
+				s.newptk = 1;
+			}
+		}
+	}
+	if(!ok){
+		if(s.ptk == nil){
+			if(s.snonce != nil)
+				return (nil, "bad MIC");
+			return (nil, nil);	# a handshake we are not part of
+		}
+		want := mic(kvers, s.ptk[0:KCKlen], msg);
+		if(want == nil || !eqct(got, want))
+			return (nil, "bad MIC");
+	}
 
 	repc := big 0;
 	for(i := 0; i < 8; i++)
 		repc = (repc << 8) | big int frame[kd+5+i];
-	if(repc <= s.lastrepc)
-		return (nil, sys->sprint("stale replay counter %bd", repc));
+	# the counter is 64 bits unsigned: one with its top bit set is not negative
+	if(!ugt(repc, s.lastrepc))
+		return (nil, sys->sprint("stale replay counter %bud", repc));
 	s.lastrepc = repc;
 
 	#
@@ -529,13 +571,26 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 		# message 4 is encrypted with a key the access point is
 		# not yet using.
 		#
-		if(!s.newptk)
-			return (nil, nil);	# a retransmission; the keys are in
+		if(!s.newptk){
+			#
+			# A retransmission: our message 4 did not arrive.
+			# The keys are in and stay as they are -- installing
+			# them again would start their counters again -- but
+			# the access point is still waiting for its answer
+			# (IEEE 802.11-2016 12.7.6.5).
+			#
+			return (ref Action(Asend,
+				mkreply(s, s.ptk[0:KCKlen], s.amac, frame, kd, vers,
+					flags & ~(Fack|Fenc|Fins), nil, nil),
+				nil, 0) :: nil, nil);
+		}
+		s.snonce = nil;		# this handshake is done; the next has a nonce of its own
 		tk := hex(s.ptk[KCKlen+KEKlen:KCKlen+KEKlen+TKlen]);
 		acts = ref Action(Actl, nil,
 			sys->sprint("rxkey %s ccmp:%s@0", eaddr(s.amac), tk), 0) :: acts;
 		acts = ref Action(Asend,
-			mkreply(s, frame, kd, vers, flags & ~(Fack|Fenc|Fins), nil, nil),
+			mkreply(s, s.ptk[0:KCKlen], s.amac, frame, kd, vers,
+				flags & ~(Fack|Fenc|Fins), nil, nil),
 			nil, 0) :: acts;
 		acts = ref Action(Adelay, nil, nil, 100) :: acts;
 		acts = ref Action(Actl, nil,
@@ -544,15 +599,28 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 	}else if((flags & (Fptk|Fsec|Fack)) == (Fsec|Fack)){
 		# A group rekey: acknowledge it, then install the new key.
 		acts = ref Action(Asend,
-			mkreply(s, frame, kd, vers, flags & ~(Fenc|Fack), nil, nil),
+			mkreply(s, s.ptk[0:KCKlen], s.amac, frame, kd, vers,
+				flags & ~(Fenc|Fack), nil, nil),
 			nil, 0) :: acts;
 	}else
 		return (nil, nil);
 
-	if(gtk != nil && len gtk >= TKlen && gtkkid >= 0)
+	#
+	# The group key: CCMP's, which is the only cipher offered, so a
+	# key of another length is not cut down to fit.  And a key that
+	# is already in is not put in again: the access point sends a
+	# rekey again when it missed our answer, each copy with a fresh
+	# replay counter, and installing the same key twice would set
+	# its receive counter back to where frames already seen are new.
+	#
+	if(gtk != nil && len gtk == TKlen && gtkkid >= 0 &&
+	   !(s.gtk != nil && gtkkid == s.gtkkid && eqct(gtk, s.gtk))){
 		acts = ref Action(Actl, nil,
 			sys->sprint("rxkey%d %s ccmp:%s@%bux", gtkkid, eaddr(s.amac),
-				hex(gtk[0:TKlen]), rsc), 0) :: acts;
+				hex(gtk), rsc), 0) :: acts;
+		s.gtk = gtk;
+		s.gtkkid = gtkkid;
+	}
 
 	return (rev(acts), nil);
 }
@@ -587,7 +655,7 @@ findgtk(data: array of byte, flags: int): (array of byte, int)
 #	which is how the replay counter and key length come back the way
 #	the access point sent them.
 #
-mkreply(s: ref Supp, frame: array of byte, kd, vers, flags: int,
+mkreply(s: ref Supp, kck, amac, frame: array of byte, kd, vers, flags: int,
 	nonce, data: array of byte): array of byte
 {
 	body := array[4 + Keydescrlen + len data] of byte;
@@ -613,7 +681,7 @@ mkreply(s: ref Supp, frame: array of byte, kd, vers, flags: int,
 
 	zero(body, k+77, MIClen);
 	if(flags & Fmic){
-		m := mic(flags & 7, s.ptk[0:KCKlen], body);
+		m := mic(flags & 7, kck, body);
 		if(m != nil)
 			body[k+77:] = m;
 	}
@@ -625,7 +693,7 @@ mkreply(s: ref Supp, frame: array of byte, kd, vers, flags: int,
 	if(n < 60)
 		n = 60;
 	f := array[n] of {* => byte 0};
-	f[0:] = s.amac;
+	f[0:] = amac;
 	f[Eaddrlen:] = s.smac;
 	f[2*Eaddrlen] = byte (Eapoltype >> 8);
 	f[2*Eaddrlen + 1] = byte Eapoltype;

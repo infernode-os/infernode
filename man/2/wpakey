@@ -19,6 +19,8 @@ Supp: adt {
     pmk, smac, amac, rsne, ptk: array of byte;
     lastrepc: big;
     newptk:   int;
+    snonce, gtk: array of byte;
+    gtkkid:   int;
 
     mk:    fn(pmk, smac, rsne: array of byte): ref Supp;
     reset: fn(s: self ref Supp);
@@ -123,7 +125,8 @@ for both ciphers, PSK authentication.
 makes a supplicant for one master key, one station address and the RSN
 element that was claimed when associating.
 .B Reset
-clears the replay counter, the derived key and the
+clears the replay counter, the derived key, the handshake's nonce, the
+record of the group key installed and the
 key-installation gate; call it whenever the link drops, because none of
 those is meaningful across an association.
 .PP
@@ -131,7 +134,8 @@ those is meaningful across an association.
 takes a received ethernet frame, complete with its 14-byte header, and
 .I snonce
 \(em 32 fresh random bytes, which the caller supplies on every call and
-which are used only if the frame turns out to be message 1.
+which are used only if the frame turns out to be the first message 1
+of a handshake: one nonce serves a handshake to its end.
 Randomness is thus the caller's business, and this module has no opinion
 about where it comes from.
 It returns the actions to perform, in order, and a diagnostic.
@@ -163,6 +167,18 @@ handshake but could not be used returns no actions and a diagnostic:
 a bad integrity check, a stale replay counter, key data that did not
 unwrap, a truncated frame, or a key descriptor version this module does
 not implement.
+.PP
+Message 1 carries no integrity check, so anyone in range can send one.
+It is answered, and changes nothing in use: the pairwise key and the
+access point's address become the ones in use only when a message 3
+arrives whose integrity check is right under the key that its own nonce
+and the handshake's make.
+A message 3 that comes again once the keys are in is answered with
+message 4 again and installs nothing.
+A group key already installed is not installed again, however many
+times the access point sends it; a group key that is not CCMP's 16
+bytes is not installed at all.
+The replay counter is compared as 64 bits unsigned.
 .SH SOURCE
 .B /appl/lib/wpakey.b
 .SH SEE ALSO

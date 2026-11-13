@@ -653,6 +653,191 @@ testIgnored(t: ref T)
 	t.assertnil(e, "and is not an error, only someone else's handshake");
 }
 
+#
+#	What the access point's side of the synthetic handshake needs in
+#	order to say something the constants above do not: the same frame
+#	with another replay counter, or other key data, under a MIC that
+#	is right.
+#
+remic(kck, frame: array of byte, counter: big): array of byte
+{
+	f := array[len frame] of byte;
+	f[0:] = frame;
+	kd := 18;
+	for(i := 7; i >= 0; i--){
+		f[kd+5+i] = byte counter;
+		counter >>= 8;
+	}
+	n := (int f[16] << 8) | int f[17];
+	for(i = 0; i < 16; i++)
+		f[kd+77+i] = byte 0;
+	m := wpakey->mic(int f[kd+2] & 7, kck, f[14:18+n]);
+	f[kd+77:] = m;
+	return f;
+}
+
+# RFC 3394, the direction the access point uses
+aeswrap(kek, data: array of byte): array of byte
+{
+	kr := load Keyring Keyring->PATH;
+	n := len data/8;
+	a := array[8] of {* => byte 16rA6};
+	r := array[len data] of byte;
+	r[0:] = data;
+	b := array[16] of byte;
+	for(j := 0; j <= 5; j++)
+		for(i := 1; i <= n; i++){
+			b[0:] = a;
+			b[8:] = r[(i-1)*8:i*8];
+			st := kr->aessetup(kek, nil);
+			kr->aescbc(st, b, 16, Keyring->Encrypt);
+			t := j*n + i;
+			a[0:] = b[0:8];
+			a[7] ^= byte t;
+			a[6] ^= byte (t >> 8);
+			r[(i-1)*8:] = b[8:16];
+		}
+	out := array[8 + len data] of byte;
+	out[0:] = a;
+	out[8:] = r;
+	return out;
+}
+
+# a group rekey carrying this key under this index, from the Rekey frame
+rekeywith(ptk: array of byte, kid: int, gtk: array of byte, counter: big): array of byte
+{
+	kde := array[8 + len gtk] of byte;
+	kde[0:] = wpakey->unhex("dd00000fac010000");
+	kde[1] = byte (6 + len gtk);
+	kde[6] = byte kid;
+	kde[8:] = gtk;
+	plain := array[(len kde + 8) / 8 * 8] of {* => byte 0};
+	plain[0:] = kde;
+	if(len plain > len kde)
+		plain[len kde] = byte 16rdd;
+	data := aeswrap(ptk[16:32], plain);
+	base := wpakey->unhex(Rekey);
+	f := array[18 + 95 + len data] of byte;
+	f[0:] = base[0:18+95];
+	f[18+95:] = data;
+	f[16] = byte ((95 + len data) >> 8);
+	f[17] = byte (95 + len data);
+	f[18+93] = byte (len data >> 8);
+	f[18+94] = byte len data;
+	return remic(ptk[0:16], f, counter);
+}
+
+keyed(t: ref T): ref Supp
+{
+	supp := Supp.mk(wpakey->unhex(Pmk), wpakey->unhex("020000000001"), wpakey->rsnie());
+	snonce := wpakey->unhex(Snonce);
+	supp.recv(wpakey->unhex(Msg1), snonce);
+	(a3, e3) := supp.recv(wpakey->unhex(Msg3), snonce);
+	if(e3 != nil || len a3 != 5)
+		t.fatal(sys->sprint("the synthetic handshake did not complete: %d actions, %s", len a3, e3));
+	return supp;
+}
+
+nctl(acts: list of ref Action): int
+{
+	n := 0;
+	for(; acts != nil; acts = tl acts)
+		if((hd acts).kind == Wpakey->Actl)
+			n++;
+	return n;
+}
+
+testForgedMessage1(t: ref T)
+{
+	smac := wpakey->unhex("020000000001");
+	snonce := wpakey->unhex(Snonce);
+	other := array[32] of {* => byte 16r5a};
+	supp := Supp.mk(wpakey->unhex(Pmk), smac, wpakey->rsnie());
+
+	# the real message 1; then one from anybody, with a nonce of its own
+	# and every flag it can set; then the real message 3
+	(a1, nil) := supp.recv(wpakey->unhex(Msg1), snonce);
+	t.asserteq(len a1, 1, "message 1 is answered");
+	forged := wpakey->unhex(Msg1);
+	for(i := 0; i < 32; i++)
+		forged[18+13+i] = byte 16ree;
+	forged[19] = byte 16r1e;	# Fenc, Freq, Ferr, Fsec
+	(af, ef) := supp.recv(forged, other);
+	t.assertnil(ef, "a second message 1 is no error");
+	t.asserteq(len af, 1, "and is answered");
+	if(af != nil){
+		r := (hd af).frame;
+		t.asserteq((int r[19] << 8) | int r[20], 16r010a,
+			"with our key information, not a copy of its own");
+		t.assertseq(wpakey->hex(r[18+13:18+45]), Snonce, "and the nonce the handshake began with");
+	}
+	(a3, e3) := supp.recv(wpakey->unhex(Msg3), other);
+	t.assertnil(e3, "the real message 3 is still accepted");
+	t.asserteq(len a3, 5, "and the keys go in");
+	if(len a3 == 5)
+		t.assertseq((hd a3).text, "rxkey 020000000002 ccmp:" + Tk + "@0", "the key the access point has");
+
+	# with the keys in, a message 1 from anybody changes nothing in use
+	forged[6+5] = byte 16r66;	# from another address
+	supp.recv(forged, other);
+	t.assertseq(wpakey->eaddr(supp.amac), "020000000002", "the access point is still the access point");
+	(a5, e5) := supp.recv(wpakey->unhex(Rekey), other);
+	t.assertnil(e5, "and its group rekey is still accepted");
+	t.asserteq(len a5, 2, "acknowledged and installed");
+}
+
+testRetransmissions(t: ref T)
+{
+	supp := keyed(t);
+	kck := supp.ptk[0:16];
+	snonce := wpakey->unhex(Snonce);
+
+	# message 3 again with the next counter: our message 4 was lost
+	(a, e) := supp.recv(remic(kck, wpakey->unhex(Msg3), big 3), snonce);
+	t.assertnil(e, "a retransmitted message 3 is no error");
+	t.asserteq(len a, 1, "it is answered");
+	t.asserteq(nctl(a), 0, "and no key is installed again");
+	if(len a == 1){
+		t.asserteq((hd a).kind, Wpakey->Asend, "the answer is a frame");
+		want := remic(kck, wpakey->unhex(Msg4), big 3);
+		t.assertseq(wpakey->hex((hd a).frame), wpakey->hex(want), "message 4, for that counter");
+	}
+
+	# a group rekey, and the same one again as the access point sends it
+	# when it missed the acknowledgement
+	(a, e) = supp.recv(remic(kck, wpakey->unhex(Rekey), big 4), snonce);
+	t.assertnil(e, "a group rekey is accepted");
+	t.asserteq(nctl(a), 1, "and its key installed");
+	(a, e) = supp.recv(remic(kck, wpakey->unhex(Rekey), big 5), snonce);
+	t.assertnil(e, "the same rekey with the next counter is accepted");
+	t.asserteq(len a, 1, "and acknowledged");
+	t.asserteq(nctl(a), 0, "but the key that is in is not put in again");
+
+	# the counter is unsigned
+	(a, e) = supp.recv(rekeywith(supp.ptk, 1, wpakey->unhex(Gtk1), big 1 << 63 | big 1), snonce);
+	t.assertnil(e, "a replay counter with its top bit set is after one without");
+	t.asserteq(nctl(a), 1, "and a new key under it is installed");
+	(a, e) = supp.recv(remic(kck, wpakey->unhex(Rekey), big 6), snonce);
+	t.assertnotnil(e, "and a small one after it is stale");
+}
+
+testGroupKeyShape(t: ref T)
+{
+	supp := keyed(t);
+	snonce := wpakey->unhex(Snonce);
+	# the helper makes what the supplicant takes
+	k16 := wpakey->unhex("202122232425262728292a2b2c2d2e2f");
+	(a, e) := supp.recv(rekeywith(supp.ptk, 2, k16, big 3), snonce);
+	t.assertnil(e, "a rekey made here is accepted");
+	t.asserteq(nctl(a), 1, "and its key installed");
+	# a key of another cipher's length is not cut down to CCMP's
+	k32 := array[32] of {* => byte 16r77};
+	(a, e) = supp.recv(rekeywith(supp.ptk, 1, k32, big 4), snonce);
+	t.assertnil(e, "a rekey with a 32-byte key is acknowledged");
+	t.asserteq(len a, 1, "by its answer");
+	t.asserteq(nctl(a), 0, "and half of it is not installed as a CCMP key");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -685,6 +870,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HandshakeV3", testHandshakeV3);
 	run("Unknownversion", testUnknownversion);
 	run("Ignored", testIgnored);
+	run("ForgedMessage1", testForgedMessage1);
+	run("Retransmissions", testRetransmissions);
+	run("GroupKeyShape", testGroupKeyShape);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

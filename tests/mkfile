@@ -72,6 +72,7 @@ TARG=\
 	ninep_msize_test.dis\
 	export_hostile_test.dis\
 	export_limits.dis\
+	mnt_smallmsize_test.dis\
 	ninep_disconnect_test.dis\
 	crypto_bench.dis\
 	tcpwatch.dis\

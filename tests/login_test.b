@@ -134,6 +134,13 @@ setup(): string
 	if(sys->bind(d+"/root", "/", Sys->MBEFORE) < 0 || sys->bind(d+"/mnt", "/mnt", Sys->MBEFORE) < 0)
 		return sys->sprint("can't bind the signer's files: %r");
 
+	# login(2) draws its IV from /dev/random (Random->ReallyRandom),
+	# seconds a read (ten on the macOS runners), and the throttle's
+	# tests make dozens of logins: the DRBG in its place, in this name
+	# space alone. What is checked does not depend on the generator.
+	if(sys->bind("#c/notquiterandom", "/dev/random", Sys->MREPL) < 0)
+		return sys->sprint("can't bind #c/notquiterandom over /dev/random: %r");
+
 	csk := load Command "/dis/auth/createsignerkey.dis";
 	if(csk == nil)
 		return sys->sprint("can't load createsignerkey: %r");
@@ -393,11 +400,10 @@ testUnknownName(t: ref T)
 
 testUnknownLikeWrong(t: ref T)
 {
-	# A real name with a wrong password, a name with no account and an
-	# expired entry with the right password give the client the same
-	# words; the first two in each AEAD. frank, oscar, gwen: none of
-	# them near the throttle. Each login is seconds (the client's
-	# ReallyRandom), so no more of them than that.
+	# Each AEAD: a real name with a wrong password, a name with no
+	# account (either password) and an expired entry (the right
+	# password) give the client the same words. frank, oscar, gwen:
+	# none of them near the throttle.
 	for(cnsa := 0; cnsa <= 1; cnsa++){
 		mode := "not in CNSA mode";
 		if(cnsa)
@@ -405,14 +411,14 @@ testUnknownLikeWrong(t: ref T)
 		(wrong, winfo) := userlogin(t, "frank", cnsa, cnsa, Wrong);
 		t.assert(winfo == nil, mode + ": a wrong password gives nothing");
 		t.assert(wrong != nil && contains(wrong, "incorrect"), mode + ": a wrong password is incorrect: " + wrong);
-		(none, ninfo) := userlogin(t, "oscar", cnsa, cnsa, Password);
+		(none, ninfo) := userlogin(t, "oscar", cnsa, cnsa, Wrong);
 		t.assert(ninfo == nil, mode + ": a name with no account gives nothing");
 		t.assertseq(none, wrong, mode + ": a name with no account answered as a wrong password");
-		if(!cnsa){
-			(exp, einfo) := userlogin(t, Expired, cnsa, cnsa, Password);
-			t.assert(einfo == nil, mode + ": an expired entry gives nothing");
-			t.assertseq(exp, wrong, mode + ": an expired entry answered as a wrong password");
-		}
+		(none, ninfo) = userlogin(t, "oscar", cnsa, cnsa, Password);
+		t.assertseq(none, wrong, mode + ": whatever password it is given");
+		(exp, einfo) := userlogin(t, Expired, cnsa, cnsa, Password);
+		t.assert(einfo == nil, mode + ": an expired entry gives nothing");
+		t.assertseq(exp, wrong, mode + ": an expired entry answered as a wrong password");
 	}
 }
 

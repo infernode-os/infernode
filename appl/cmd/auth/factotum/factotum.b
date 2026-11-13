@@ -527,19 +527,34 @@ factotumsrv()
 			if(tag == ntag){
 				found = 1;
 				k := findkey(allkeys, attrs);
+				# never wait for the asker: it is waiting for this,
+				# or it has gone (its fid clunked, its proc killed),
+				# and a send to one that had gone stopped this
+				# loop, and every file it serves, for good
+				reply: (list of ref Key, string);
 				if(k != nil)
-					kc <-= (k :: nil, nil);
+					reply = (k :: nil, nil);
 				else
-					kc <-= (nil, "needkey "+attrtext(attrs));
+					reply = (nil, "needkey "+attrtext(attrs));
+				alt{
+				kc <-= reply =>
+					;
+				* =>
+					;
+				}
 				while((l = tl l) != nil)
 					nl = hd l :: nl;
 				break;
 			}
 			nl = hd l :: nl;
 		}
-		if(found)
+		if(found){
+			# answered, so no longer needed: the list without it was
+			# made and never kept, and the tag answered again sent
+			# to an asker no longer waiting
+			needed = nl;
 			wc <-= (len data, nil);
-		else
+		}else
 			wc <-= (0, "tag not found");
 
 	(attrs, required, kc) := <-keymanc =>

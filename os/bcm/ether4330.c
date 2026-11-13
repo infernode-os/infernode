@@ -250,6 +250,8 @@ struct Ctlr
 	Lock	txwinlock;	/* the flow-control pair, written by rproc */
 	Rendez	cmdr;
 	Rendez	joinr;
+	Rendez	txr;		/* tproc waits here for txkick */
+	int	txkick;		/* frames to send, or the window reopened */
 	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 	Block	*scanb;		/* the scan being assembled, one line per network */
@@ -268,6 +270,7 @@ struct Ctlr
 	int	running;	/* firmware running and answering */
 	int	reader;		/* rproc has been started */
 	int	timer;		/* lproc has been started */
+	int	txproc;		/* tproc has been started */
 	int	fwbytes;	/* size of the firmware uploaded */
 	char	ver[128];	/* what the firmware says it is */
 
@@ -1737,6 +1740,49 @@ txstart(Ether *edev)
 }
 
 /*
+ * THE TRANSMITTER'S OWN PROCESS. devether calls transmit from the
+ * writer's context, and the writer is IP: ipoput4 and the ARP
+ * resolver call it holding the interface's read lock. txstart moves
+ * frames over SDIO, which sleeps -- on pktlock behind the reader, on
+ * the bus, on a card that has stopped answering -- and a writer
+ * asleep there held the lock: a lease renewal's ipifc remove/add then
+ * queued as a writer behind it, every canrlock on the interface
+ * failed, and traffic in and out stopped for good (#1120; #692 the
+ * same shape on a USB adapter). So transmit only says there is work,
+ * and tproc, holding nothing of IP's, drains the queue.
+ */
+static int
+txkicked(void *a)
+{
+	return ((Ctlr*)a)->txkick;
+}
+
+static void
+txkick(Ctlr *ctl)
+{
+	ctl->txkick = 1;
+	wakeup(&ctl->txr);
+}
+
+static void
+tproc(void *a)
+{
+	Ether *edev;
+	Ctlr *ctl;
+
+	edev = a;
+	ctl = edev->ctlr;
+	for(;;){
+		if(waserror())
+			continue;	/* a note: txstart has its own label */
+		sleep(&ctl->txr, txkicked, ctl);
+		poperror();
+		ctl->txkick = 0;
+		txstart(edev);
+	}
+}
+
+/*
  * The link has gone. Say so on the interface, and send end-of-file to
  * every conversation carrying 0x888e: a supplicant blocked on a read
  * of its EAPOL conversation learns that the association it was
@@ -1815,7 +1861,7 @@ rproc(void *a)
 		 */
 		if(flowstart){
 			flowstart = 0;
-			txstart(edev);
+			txkick(ctl);
 		}
 		b = wlreadpkt(ctl);
 		poperror();
@@ -2830,6 +2876,10 @@ bringup(Ether *edev)
 		kproc("wifitimer", lproc, edev, 0);
 		ctl->timer = 1;
 	}
+	if(!ctl->txproc){
+		kproc("wifitx", tproc, edev, 0);
+		ctl->txproc = 1;
+	}
 	if(ctl->fwchan[2] != nil)
 		reguload(ctl, ctl->fwchan[2]);
 	wlinit(edev, ctl);
@@ -3225,7 +3275,18 @@ etherbcmctl(Ether *edev, void *a, long n)
 static void
 etherbcmtransmit(Ether *edev)
 {
-	txstart(edev);
+	Ctlr *ctl;
+
+	ctl = edev->ctlr;
+	/*
+	 * Before bringup there is no tproc, and the firmware is not
+	 * running: txstart only drops what is queued, touching no bus.
+	 */
+	if(!ctl->txproc){
+		txstart(edev);
+		return;
+	}
+	txkick(ctl);
 }
 
 /*

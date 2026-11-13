@@ -33,6 +33,10 @@
 #                the window allows, the difference wrapped to 4G and the
 #                sender sent past the window, all of it dropped
 #                (2026-11-10, devssl over loopback at 1 MB/s).
+#   radio tx     the radio's transmit runs in IP's writer, which holds the
+#                interface's read lock: SDIO there, asleep on the bus, held
+#                it, and a writer queued behind stopped the interface for
+#                good (#1120). transmit wakes tproc, which moves the frames.
 #   sack         TCP counts an ACK that SACKs new data as a duplicate, and
 #                takes a segment for lost once more than three segments
 #                above it are SACKed; its record of the highest SACKed
@@ -118,5 +122,11 @@ if echo "$sec" | grep -q 'todget' && ! grep -q 'boottime' os/port/devcons.c; the
 else no "seconds() is not todget()'s: the time of day loses every missed tick"; fi
 if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
 else no "timerintr runs hzclock once however many ticks were due"; fi
+
+tx=$(sed -n '/^etherbcmtransmit(Ether \*edev)/,/^}/p' os/bcm/ether4330.c)
+if echo "$tx" | grep -q 'txkick(ctl);' && echo "$tx" | grep -q 'if(!ctl->txproc)' \
+   && sed -n '/^tproc(void \*a)/,/^}/p' os/bcm/ether4330.c | grep -q 'txstart(edev);'
+then ok "the radio's transmit only wakes tproc: no SDIO in IP's writer, under the interface's lock"
+else no "ether4330's transmit moves frames over SDIO in the writer, holding ifc->rwl: a lease renewal then wedges the interface (#1120)"; fi
 
 exit $fail

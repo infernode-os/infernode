@@ -15,6 +15,17 @@ All notable changes to InferNode are documented in this file.
   uses the emulator's `/usr/$user` without the overlay.
   `tests/host/profile_nohome_test.sh` checks each case.
 
+- **The Pis' Wi-Fi no longer moves frames over SDIO in IP's writer
+  (#1120).** devether calls a driver's transmit from the writer, and
+  `ipoput4` and ARP write holding the interface's read lock; ether4330's
+  transmit sent the frames itself, over SDIO, which sleeps. A writer
+  asleep on the bus held the lock, a lease renewal's `remove`/`add` then
+  queued as a writer behind it, and every `canrlock` on the interface
+  failed: no traffic either way, for good. Transmit now wakes a kproc of
+  the driver's own (`wifitx`), which holds nothing of IP's. The wired
+  drivers already only queued, onto a queue that drops when full (#692).
+  `tests/host/kernelpins_test.sh` pins it.
+
 ## [0.10.1] - 2026-11-11
 
 ### Added

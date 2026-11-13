@@ -237,3 +237,153 @@ rate(s: string): int
 		return 0;
 	return int v;	# rounds
 }
+
+hertz(s: string): big
+{
+	if(s == nil)
+		return big -1;
+	m := 1.0;
+	case s[len s - 1] {
+	'k' or 'K' =>
+		m = 1e3;
+	'M' =>
+		m = 1e6;
+	'G' =>
+		m = 1e9;
+	}
+	if(m != 1.0)
+		s = s[0:len s - 1];
+	dot := 0;
+	digits := 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] == '.' && !dot)
+			dot = 1;
+		else if(s[i] >= '0' && s[i] <= '9')
+			digits++;
+		else
+			return big -1;
+	}
+	if(digits == 0 || digits > 12 || (dot && m == 1.0))
+		return big -1;
+	if(m == 1.0)
+		return big s;
+	return big (real s * m);
+}
+
+#
+# Headers.  rtl_tcp's samples carry nothing of what they are, and a
+# demodulator told the rate apart from them can be told wrong; so
+# sdrfs's iq begins as audio(6) does, with what follows: lines that
+# are each a command its ctl takes, then an empty line.
+#
+
+# the lines padded with blanks so that they and the empty line after
+# them are a multiple of 4 bytes, as auplay(1) requires
+header(lines: string): array of byte
+{
+	if(lines == nil || lines[len lines - 1] != '\n')
+		lines += "\n";
+	b := array of byte lines;
+	pad := (4 - (len b + 1) % 4) % 4;
+	h := array[len b + pad + 1] of byte;
+	h[0:] = b[0:len b - 1];
+	for(j := 0; j < pad; j++)
+		h[len b - 1 + j] = byte ' ';
+	h[len h - 2] = byte '\n';
+	h[len h - 1] = byte '\n';
+	return h;
+}
+
+Hdr.read(b: array of byte, n: int): (ref Hdr, int, string)
+{
+	# audio(6): rate first
+	magic := "rate";
+	for(j := 0; j < len magic; j++) {
+		if(j == n)
+			return (nil, 0, nil);
+		if(int b[j] != magic[j])
+			return (nil, -1, "no header");
+	}
+	# its end, an empty line; text until then
+	e := -1;
+	for(j = 0; j < n && j < Maxhdr; j++) {
+		c := int b[j];
+		if(c == '\n' && int b[j-1] == '\n') {
+			e = j;
+			break;
+		}
+		if((c < ' ' || c >= 16r7f) && c != '\n' && c != '\t' && c != '\r')
+			return (nil, -1, "no header: not text");
+	}
+	if(e < 0) {
+		if(j == Maxhdr)
+			return (nil, -1, "header too long");
+		return (nil, 0, nil);
+	}
+	h := ref Hdr(0, nil, big -1, nil);
+	lines: list of string;
+	s := string b[0:e];
+	while(s != nil) {
+		for(j = 0; j < len s; j++)
+			if(s[j] == '\n')
+				break;
+		w := words(s[0:j]);
+		if(j < len s)
+			s = s[j+1:];
+		else
+			s = nil;
+		if(w == nil)
+			continue;
+		line := hd w;
+		for(r := tl w; r != nil; r = tl r)
+			line += " " + hd r;
+		lines = line :: lines;
+		if(len w != 2)
+			continue;
+		v := hd tl w;
+		case hd w {
+		"rate" =>
+			if((h.rate = rate(v)) == 0)
+				return (nil, -1, "bad header line: " + line);
+		"enc" =>
+			h.enc = v;
+		"freq" =>
+			if((h.freq = hertz(v)) < big 0)
+				return (nil, -1, "bad header line: " + line);
+		}
+	}
+	if(h.rate == 0)
+		return (nil, -1, "bad header: no rate");
+	for(; lines != nil; lines = tl lines)
+		h.lines = hd lines :: h.lines;
+	return (h, e + 1, nil);
+}
+
+Hdr.text(h: self ref Hdr): string
+{
+	s := "";
+	for(l := h.lines; l != nil; l = tl l)
+		s += hd l + "\n";
+	return s;
+}
+
+# a line's words, split at blanks
+words(s: string): list of string
+{
+	w: list of string;
+	for(i := 0; i < len s; ) {
+		while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r'))
+			i++;
+		if(i == len s)
+			break;
+		j := i;
+		while(j < len s && s[j] != ' ' && s[j] != '\t' && s[j] != '\r')
+			j++;
+		w = s[i:j] :: w;
+		i = j;
+	}
+	r: list of string;
+	for(; w != nil; w = tl w)
+		r = hd w :: r;
+	return r;
+}

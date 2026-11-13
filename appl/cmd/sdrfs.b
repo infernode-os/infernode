@@ -14,6 +14,7 @@ implement Sdrfs;
 #                                   host (port 1234); stop for none
 #                  freq <hz>        k, M and G suffixes taken
 #                  rate <samples a second>
+#                  enc cu8          the samples' encoding; the only one
 #                  gain auto | <dB> the nearest the tuner has, once known
 #                  ppm <n>          the frequency correction
 #                  agc on | off     the RTL2832U's own
@@ -23,25 +24,36 @@ implement Sdrfs;
 #                source= tuner= gains= readers= bytes= dropped=
 #                skipped= error=
 #   gains   (r)  the tuner's gains, dB, one a line
-#   iq      (r)  the samples from the open on, 8-bit unsigned I then Q;
-#                each read waits for more.  The first open dials
+#   iq      (r)  a header, then the samples from the open on, 8-bit
+#                unsigned I then Q; each read waits for more.  The
+#                header is as audio(6)'s: lines of text, each a command
+#                ctl takes (rate, enc, freq), then an empty line, padded
+#                to a multiple of 4 bytes.  It is true for the whole
+#                stream: a setting written that changes the rate or the
+#                frequency ends every open's stream, once what it has
+#                queued is read, with end of file, and an open after it
+#                has a header saying so; the others (gain, ppm, agc,
+#                direct, biastee) end nothing.  The first open dials
 #                rtl_tcp if it is not held, and once the last reader
 #                and the last setting are -l seconds gone it hangs up,
 #                so the radio is read only while something listens or
 #                has just.  Every open has its own queue; one that
 #                falls behind loses the oldest, counted in status as
 #                dropped=.  rtl_tcp answers no command and applies
-#                them one at a time, so sdrfs reckons 150ms each; samples
-#                arriving before then and -t milliseconds (300) more
-#                were tuned before they took, and are dropped, counted
-#                as skipped=.  A hang-up waits for them too.  When the radio's
+#                them one at a time, so sdrfs reckons 150ms each; a
+#                stream starts tuned: samples arriving before then and
+#                -t milliseconds (300) more were tuned before they took,
+#                and a stream not yet begun is not given them, counted as
+#                skipped=.  A stream begun is given every sample.  A
+#                hang-up waits for them too.  When the radio's
 #                stream ends, a read gives what was queued, then end
 #                of file.
 #
 # The settings are sdrfs's, and sent whole each time it dials: what
 # ctl says is what the radio is set to.  One radio is one tuner on one
 # frequency; every reader of iq hears what it is tuned to, and a
-# setting written moves them all.
+# setting written moves them all: a new rate or frequency by ending
+# their streams, as each one's header would no longer be true.
 #
 # Tuning (ctl) and listening (iq) are separate files, so what a process
 # may do is what is bound in its name space.  The radio cannot transmit.
@@ -79,6 +91,9 @@ include "styxservers.m";
 include "post9p.m";
 	post9p: Post9p;
 
+include "sdrdsp.m";
+	dsp: Sdrdsp;
+
 Sdrfs: module
 {
 	init: fn(nil: ref Draw->Context, argv: list of string);
@@ -98,7 +113,9 @@ Chunk: con 64*1024;		# a read of the stream
 Maxqueue: con 8*1024*1024;	# what a reader of iq has not read: 1.7s at 2.4 MS/s
 Greeting: con 12;		# "RTL0", the tuner type, the number of gains
 
-# rtl_tcp's commands: a byte, then a big-endian 32-bit value
+# rtl_tcp's commands: a byte, then a big-endian 32-bit value; Cnone a
+# setting that sends none
+Cnone: con 0;
 Cfreq: con 1;
 Crate: con 2;
 Cgainmode: con 3;
@@ -144,6 +161,8 @@ Client: adt {
 	off:	int;			# into hd front
 	n:	int;			# bytes queued
 	rd:	ref Tmsg.Read;		# a read waiting
+	hdr:	array of byte;		# what is left to give of its header
+	started:	int;			# samples have been queued for it
 	ended:	int;			# the stream it was reading is gone
 	err:	string;			# why, if not an end of file
 
@@ -180,8 +199,10 @@ init(nil: ref Draw->Context, argv: list of string)
 	arg := load Arg Arg->PATH;
 	styx = load Styx Styx->PATH;
 	styxservers = load Styxservers Styxservers->PATH;
-	if(arg == nil || styx == nil || styxservers == nil)
+	dsp = load Sdrdsp Sdrdsp->PATH;
+	if(arg == nil || styx == nil || styxservers == nil || dsp == nil)
 		fatal(sys->sprint("cannot load modules: %r"));
+	dsp->init();
 	styx->init();
 	styxservers->init(styx);
 
@@ -388,12 +409,20 @@ Serve:
 			if(listening(clients) == 0)
 				spawn lingertimer(++ltok, lingerms, lingerc);
 		Ddata =>
-			if(sys->millisec() - settleuntil < 0) {
-				skipped += big len ev.data;
-				break;
+			# a stream starts tuned, and once started is given
+			# every sample: it was ended if they changed
+			tuning := sys->millisec() - settleuntil < 0;
+			for(l := clients; l != nil; l = tl l) {
+				c := hd l;
+				if(c.ended)
+					continue;
+				if(!c.started && tuning) {
+					skipped += big len ev.data;
+					continue;
+				}
+				c.started = 1;
+				dropped += big c.put(ev.data);
 			}
-			for(l := clients; l != nil; l = tl l)
-				dropped += big (hd l).put(ev.data);
 		Dend =>
 			readerpid = -1;
 			conn = nil;
@@ -438,7 +467,8 @@ Serve:
 			f := srv.open(m);
 			if(f == nil || f.path != Qiq)
 				break;
-			clients = ref Client(srv, m.fid, nil, nil, 0, 0, nil, 0, nil) :: clients;
+			hdr := dsp->header(sys->sprint("rate %d\nenc cu8\nfreq %bd\n", set.rate, set.freq));
+			clients = ref Client(srv, m.fid, nil, nil, 0, 0, nil, hdr, 0, 0, nil) :: clients;
 			if(conn != nil || dialling)
 				break;
 			if(source == "") {
@@ -546,6 +576,10 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, perr));
 				break;
 			}
+			# what the streams' headers say changed: ended
+			if(nset.rate != set.rate || nset.freq != set.freq)
+				for(cl := clients; cl != nil; cl = tl cl)
+					(hd cl).end(nil);
 			*set = *nset;
 			if(conn != nil) {
 				# the gain last, and again after direct or agc,
@@ -682,6 +716,8 @@ Client.end(c: self ref Client, err: string)
 		return;
 	c.ended = 1;
 	c.err = err;
+	if(err != nil && !c.started)
+		c.hdr = nil;	# refused before it began: no header
 	c.reply();
 }
 
@@ -692,6 +728,18 @@ Client.reply(c: self ref Client)
 {
 	if(c.rd == nil)
 		return;
+	if(c.hdr != nil) {
+		# the header in reads of its own
+		k := c.rd.count;
+		if(k > len c.hdr)
+			k = len c.hdr;
+		c.srv.reply(ref Rmsg.Read(c.rd.tag, c.hdr[0:k]));
+		c.rd = nil;
+		c.hdr = c.hdr[k:];
+		if(len c.hdr == 0)
+			c.hdr = nil;
+		return;
+	}
 	if(c.n == 0) {
 		if(!c.ended)
 			return;
@@ -972,7 +1020,7 @@ settings(s: ref Settings): string
 	g := "auto";
 	if(s.gain != Auto)
 		g = tenths(s.gain);
-	return sys->sprint("freq %bd\nrate %d\ngain %s\nppm %d\nagc %s\ndirect %s\nbiastee %s\n",
+	return sys->sprint("freq %bd\nrate %d\nenc cu8\ngain %s\nppm %d\nagc %s\ndirect %s\nbiastee %s\n",
 		s.freq, s.rate, g, s.ppm, onoff(s.agc), directs[s.direct], onoff(s.biastee));
 }
 
@@ -1036,6 +1084,11 @@ setting(s: ref Settings, w: list of string, tuner: int): (int, string)
 		}
 		s.biastee = b;
 		return (Cbiastee, nil);
+	"enc" =>
+		# rtl_tcp's: the RTL2832U's 8-bit unsigned I then Q
+		if(v != "cu8")
+			return (0, "bad enc " + v + ": cu8 only");
+		return (Cnone, nil);
 	"direct" =>
 		case v {
 		"off" =>

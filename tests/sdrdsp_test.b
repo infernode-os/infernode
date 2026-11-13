@@ -5,7 +5,9 @@ implement SdrdspTest;
 # 8-bit samples summed and scaled; a filter's impulse response, its gain
 # where it passes and where it stops, and its state carried from one
 # call to the next; a rate changed by averaging; sound as 16-bit
-# little-endian, the level taken out, clipped; rates as sdrfs writes them.
+# little-endian, the level taken out, clipped; rates and frequencies as
+# sdrfs writes them; headers made padded to 4 bytes and read back, read
+# from their start (more wanted), and refused.
 #
 
 include "sys.m";
@@ -22,7 +24,7 @@ include "testing.m";
 
 include "sdrdsp.m";
 	dsp: Sdrdsp;
-	Decim, Fir, Resamp, Pcm: import dsp;
+	Decim, Fir, Resamp, Pcm, Hdr: import dsp;
 
 SdrdspTest: module
 {
@@ -232,6 +234,94 @@ testRate(t: ref T)
 	t.asserteq(dsp->rate("-5"), 0, "negative");
 }
 
+testHertz(t: ref T)
+{
+	t.assert(dsp->hertz("99.5M") == big 99500000, "99.5M");
+	t.assert(dsp->hertz("1090000000") == big 1090000000, "plain");
+	t.assert(dsp->hertz("1.09G") == big 1090000000, "1.09G");
+	t.assert(dsp->hertz("162.025M") == big 162025000, "162.025M");
+	t.assert(dsp->hertz("99.5") < big 0, "a fraction of a hertz");
+	t.assert(dsp->hertz("loud") < big 0, "not a frequency");
+	t.assert(dsp->hertz("") < big 0, "nothing");
+}
+
+# the lines of a header made and read back, padded to 4 as auplay(1)
+# requires, whatever their length
+testHeader(t: ref T)
+{
+	for(n := 0; n < 8; n++) {
+		s := "rate 2400000\nenc cu8\nfreq 99500000\n" + "x" + string array[n] of {* => byte 'y'} + " 1\n";
+		h := dsp->header(s);
+		t.asserteq(len h % 4, 0, sys->sprint("padded to 4: %d", len h));
+		t.assert(len h >= len s + 1 && len h <= len s + 4, sys->sprint("padded by at most 3: %d for %d", len h, len s));
+		t.assert(h[len h - 1] == byte '\n' && h[len h - 2] == byte '\n', "an empty line at its end");
+		(r, k, e) := Hdr.read(h, len h);
+		t.assertnil(e, "read back");
+		t.asserteq(k, len h, "all of it");
+		if(r == nil)
+			continue;
+		t.assertseq(r.text(), s, "its lines, without the padding");
+	}
+	# a line with no newline is given one
+	h := dsp->header("rate 8000");
+	t.assertseq(string h, "rate 8000 \n\n", "rate 8000, padded");
+}
+
+testHdrRead(t: ref T)
+{
+	b := array of byte "rate 2400000\nenc cu8\nfreq 99.5M  \n\n";
+	all := array[len b + 4] of byte;
+	all[0:] = b;
+	all[len b:] = array[] of {byte 0, byte 255, byte 1, byte 254};
+	(h, k, e) := Hdr.read(all, len all);
+	t.assertnil(e, "a header");
+	t.asserteq(k, len b, "its length, not the samples after it");
+	if(h == nil)
+		t.fatal("no header");
+	t.asserteq(h.rate, 2400000, "rate");
+	t.assertseq(h.enc, "cu8", "enc");
+	t.assert(h.freq == big 99500000, sys->sprint("freq %bd", h.freq));
+	t.assertseq(h.text(), "rate 2400000\nenc cu8\nfreq 99.5M\n", "lines, blanks taken out");
+
+	# only its start: read more, at every length short of the end
+	for(n := 0; n < len b; n++) {
+		(nil, k, e) = Hdr.read(b, n);
+		t.asserteq(k, 0, sys->sprint("%d bytes of it: more wanted (%s)", n, e));
+	}
+
+	# no freq, other lines kept
+	(h, k, e) = Hdr.read(array of byte "rate 250k\ngain 20\n\n", 19);
+	t.assertnil(e, "no freq");
+	if(h != nil) {
+		t.asserteq(h.rate, 250000, "250k");
+		t.assert(h.freq == big -1, "no freq: -1");
+		t.assert(h.enc == nil, "no enc: nil");
+		t.assertseq(h.text(), "rate 250k\ngain 20\n", "every line");
+	}
+
+	# refused
+	refused := array[] of {
+		("samples", string array[] of {byte 0, byte 255, byte 1, byte 254, byte 2, byte 253}, "no header"),
+		("not rate first", "freq 99M\nrate 2400000\n\n", "no header"),
+		("a bad rate", "rate fast\n\n", "bad header line: rate fast"),
+		("a bad freq", "rate 2400000\nfreq loud\n\n", "bad header line: freq loud"),
+		("no rate", "rate\nenc cu8\n\n", "bad header: no rate"),
+		("binary", "rate 2400000\n\001\002\n\n", "no header: not text"),
+	};
+	for(i := 0; i < len refused; i++) {
+		(what, s, want) := refused[i];
+		x := array of byte s;
+		(h, k, e) = Hdr.read(x, len x);
+		t.asserteq(k, -1, what + ": refused");
+		t.assertseq(e, want, what);
+	}
+	long := array[Sdrdsp->Maxhdr + 10] of {* => byte 'a'};
+	long[0:] = array of byte "rate 1\n";
+	(nil, k, e) = Hdr.read(long, len long);
+	t.asserteq(k, -1, "too long: refused");
+	t.assertseq(e, "header too long", "too long");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -254,6 +344,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Resamp", testResamp);
 	run("Pcm", testPcm);
 	run("Rate", testRate);
+	run("Hertz", testHertz);
+	run("Header", testHeader);
+	run("HdrRead", testHdrRead);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

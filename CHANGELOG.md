@@ -4,6 +4,37 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **sdrfs(4)'s `iq` describes itself, so nothing is told the rate twice
+  (#1094).** Each open of `/mnt/sdr/iq` begins with a header as an
+  audio(6) file does: `rate 2400000`, `enc cu8`, `freq 99500000`, each a
+  command `ctl` takes, then an empty line, padded to a multiple of 4
+  bytes; then the samples. `ctl` takes `enc cu8` (the only encoding;
+  anything else refused). The header is true for the whole stream: a
+  write to `ctl` that changes the rate or the frequency ends every open's
+  stream with end of file once what it has queued is read, and a reopen
+  gets a new header on the connection still held, with no dial. Gain,
+  ppm, AGC, direct sampling and the bias tee end nothing. A stream starts
+  tuned, and samples from a retune settling are no longer dropped from
+  the middle of one (`skipped=` now counts what a stream not yet begun
+  was not given).
+- **Breaking: sdr/fm and sdr/am no longer take `-r`, and their output has
+  a header unless `-R`.** They read the rate and the encoding from the
+  input's header and refuse input without one, or in an encoding they
+  cannot take. Their sound begins with an audio(6) header (`rate`,
+  `chans`, `bits 16`, `enc pcm`) in one write, so
+  `sdr/fm -o 44100 < /mnt/sdr/iq | auplay /fd/0` plays; `-R` gives the
+  samples alone, as before. A recording made without a header (the
+  host's `rtl_sdr`) takes one from `sdr/rawiq`.
+
+### Added
+
+- **sdr/rawiq and sdr/iqhdr.** `sdr/rawiq -r RATE [-f FREQ]` puts iq's
+  header on samples that have none; `sdr/iqhdr` prints a recording's
+  header lines, so `sdr/iqhdr < rec > /mnt/sdr/ctl` tunes the radio back
+  to it. The header is made and read by `module/sdrdsp.m` (`header`, `Hdr.read`).
+
 ## [0.10.1] - 2026-11-11
 
 ### Added

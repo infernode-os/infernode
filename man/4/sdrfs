@@ -112,6 +112,17 @@ are taken
 samples a second: 225001 to 300000, or 900001 to 3200000, as librtlsdr
 takes; 2.4M is the most a dongle gives reliably.
 .TP
+.BI enc " encoding"
+the samples' encoding:
+.BR cu8 ,
+8-bit unsigned I then Q, as the RTL2832U gives them, the only one;
+any other is refused.
+It changes nothing, but every line of
+.BR iq 's
+header is a command
+.B ctl
+takes.
+.TP
 .BR gain " auto | \fIdB\fP"
 automatic gain, or the tuner's gain nearest
 .IR dB ,
@@ -157,7 +168,8 @@ given to readers,
 .BI dropped= n
 lost by readers that fell behind, and
 .BI skipped= n
-dropped as tuned before a setting took (below), since start;
+not given to streams not yet begun as tuned before a setting took
+(below), since start;
 .BI error= reason
 for the last that failed.
 .TP
@@ -165,8 +177,40 @@ for the last that failed.
 the tuner's gains, dB, one a line.
 .TP
 .B iq
-the samples, from the open on: 8-bit unsigned I then Q, two bytes a
-sample, 4.8 MB a second at 2.4M.
+a header, then the samples, from the open on: 8-bit unsigned I then Q,
+two bytes a sample, 4.8 MB a second at 2.4M.
+The header is as
+.IR audio (6)'s:
+lines of text, each a command
+.B ctl
+takes, then an empty line, padded with blanks to a multiple of 4 bytes:
+.RS
+.IP
+.EX
+rate 2400000
+enc cu8
+freq 99500000
+.EE
+.RE
+.IP
+It comes in reads of its own, before any sample.
+It is true for the whole stream: a write to
+.B ctl
+that changes the rate or the frequency ends every open's stream, once
+what it has queued is read, with end of file;
+an open after it has a header saying what the radio is tuned to
+now, on the connection still held, so it costs no dial.
+A program reading
+.B iq
+is told the rate, never given it apart; one that reads to the end of
+file reads one tuning.
+The other settings
+.RB ( gain ,
+.BR ppm ,
+.BR agc ,
+.BR direct ,
+.BR biastee )
+change nothing the header says, and end nothing.
 Each read waits for more and gives as much as is queued, up to its
 count, a whole number of samples when it can.
 The first open dials
@@ -181,7 +225,9 @@ milliseconds each, so
 .I sdrfs
 reckons 150 each: samples arriving before the last should be done, and
 .B -t
-milliseconds (300) more, were tuned before it took, and are dropped.
+milliseconds (300) more, were tuned before it took.
+A stream starts tuned: one not yet begun is not given them.
+One begun is given every sample, a gain changing in it.
 A hang-up waits for them too.
 Every open has its own queue; one that falls more than 8 MB behind
 loses the oldest, whole samples, counted in
@@ -194,7 +240,8 @@ Every reader of
 .B iq
 hears what it is tuned to, and a setting written to
 .B ctl
-moves them all.
+moves them all; a new rate or frequency ends their streams, as their
+headers would no longer be true.
 Tuning and listening are separate files, so what a process may do is
 what is bound in its name space: a process given
 .B iq
@@ -229,7 +276,17 @@ link=open source=tcp!127.0.0.1!1234 tuner=R828D gains=29 readers=0 bytes=0 dropp
 ; echo 'freq 1090M
 rate 2M
 gain 49.6' > /mnt/sdr/ctl
-; read 16384 < /mnt/sdr/iq > /tmp/adsb.cu8
+; cat /mnt/sdr/iq > /tmp/adsb.iq	# until it is retuned
+.EE
+.PP
+The recording says what it was tuned to, and tunes the radio back:
+.IP
+.EX
+; sdr/iqhdr < /tmp/adsb.iq
+rate 2000000
+enc cu8
+freq 1090000000
+; sdr/iqhdr < /tmp/adsb.iq > /mnt/sdr/ctl
 .EE
 .SH SOURCE
 .B /appl/cmd/sdrfs.b

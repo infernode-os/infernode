@@ -142,6 +142,10 @@ ConnState: type State;
 # docs/TLS-ENTROPY.md for the full picture.
 randomfd: ref Sys->FD;
 
+# how far a server has got through its handshake messages (handshake12, handshake13)
+S12cert, S12kx, S12req: con iota + 1;
+S13ee, S13req, S13cert, S13cv: con iota + 1;
+
 init(): string
 {
 	sys = load Sys Sys->PATH;
@@ -169,11 +173,7 @@ init(): string
 
 	# Open entropy source once; reuse fd for all subsequent randombuf() calls.
 	# See the ENTROPY SOURCE SELECTION comment above randomfd for the full rationale.
-	randomfd = sys->open("#c/notquiterandom", Sys->OREAD);
-	if(randomfd == nil)
-		randomfd = sys->open("/dev/urandom", Sys->OREAD);
-	if(randomfd == nil)
-		randomfd = sys->open("#c/random", Sys->OREAD);
+	randomfd = openrandom();
 
 	return nil;
 }
@@ -635,6 +635,8 @@ handshake0(cs: ref ConnState, config: ref Config): string
 	# a second ClientHello after a HelloRetryRequest repeats
 	client_random := randombytes(32);
 	session_id := randombytes(32);
+	if(client_random == nil || session_id == nil)
+		return "tls: no source of random numbers";
 
 	# Key exchange: only the CNSA hybrid (SecP384r1MLKEM1024) when
 	# /env/cnsatls is set; else the X25519MLKEM768 hybrid first, then
@@ -660,6 +662,8 @@ handshake0(cs: ref ConnState, config: ref Config): string
 		shares = (GROUP_SECP384R1MLKEM1024, catbytes(p384pub, mlkem_ek)) :: nil;
 	}else{
 		x25519_priv = randombytes(32);
+		if(x25519_priv == nil)
+			return "tls: no source of random numbers";
 		x25519_pub = keyring->x25519_base(x25519_priv);
 		groups = GROUP_X25519 :: GROUP_SECP256R1 :: GROUP_SECP384R1 :: nil;
 		shares = (GROUP_X25519, x25519_pub) :: nil;
@@ -942,7 +946,14 @@ handshake12(cs: ref ConnState, config: ref Config,
 	server_curve := 0;
 	uses_ecdhe := 0;
 
-	# Read server messages until ServerHelloDone
+	# Read server messages until ServerHelloDone, each once and in the
+	# order RFC 5246 7.3 gives them: Certificate, ServerKeyExchange (an
+	# ECDHE suite's), CertificateRequest, ServerHelloDone.  They were
+	# taken in any order and any number, the last Certificate replacing
+	# the one before: a server signed its key exchange with a certificate
+	# of its own, then sent another's, and it was the other's chain and
+	# name that were verified below.
+	st12 := 0;
 	got_server_done := 0;
 	while(!got_server_done) {
 		(mtype, mdata, merr) := readhsmsg(cs);
@@ -951,12 +962,19 @@ handshake12(cs: ref ConnState, config: ref Config,
 
 		case mtype {
 		HT_CERTIFICATE =>
+			if(st12 != 0)
+				return "tls: Certificate out of order or sent twice";
 			(certs, cerr) := parsecertificatemsg(mdata);
 			if(cerr != nil)
 				return cerr;
 			server_certs = certs;
+			st12 = S12cert;
 
 		HT_SERVER_KEY_EXCHANGE =>
+			if(st12 != S12cert)
+				return "tls: ServerKeyExchange out of order or sent twice";
+			if(!isecdhe(cs.suite))
+				return "tls: ServerKeyExchange for a suite that has none";
 			# ECDHE key exchange - parse and verify signature
 			(curve, ecpoint, skerr) := parseserverkeyexchange(mdata,
 				client_random, server_random, server_certs, cs.insecure);
@@ -965,12 +983,17 @@ handshake12(cs: ref ConnState, config: ref Config,
 			server_ecpoint = ecpoint;
 			server_curve = curve;
 			uses_ecdhe = 1;
+			st12 = S12kx;
 
 		HT_CERTIFICATE_REQUEST =>
 			# Client cert requested - we don't support this yet
-			;
+			if(st12 != S12cert && st12 != S12kx)
+				return "tls: CertificateRequest out of order or sent twice";
+			st12 = S12req;
 
 		HT_SERVER_HELLO_DONE =>
+			if(st12 == 0)
+				return "tls: ServerHelloDone before Certificate";
 			got_server_done = 1;
 
 		* =>
@@ -1037,7 +1060,7 @@ handshake12(cs: ref ConnState, config: ref Config,
 			if(server_ecpoint == nil || len server_ecpoint != 32)
 				return "tls: invalid server X25519 point";
 			premaster = keyring->x25519(x25519_priv, server_ecpoint);
-			if(premaster == nil)
+			if(premaster == nil || allzero(premaster))
 				return "tls: X25519 computation failed";
 			x25519_pub := keyring->x25519_base(x25519_priv);
 			cke_x := buildclientkeyexchange_ecdhe(x25519_pub);
@@ -1050,7 +1073,8 @@ handshake12(cs: ref ConnState, config: ref Config,
 		premaster = array [48] of byte;
 		premaster[0] = byte 3;
 		premaster[1] = byte 3;
-		randombuf(premaster[2:], 46);
+		if(!randombuf(premaster[2:], 46))
+			return "tls: no source of random numbers";
 
 		# Encrypt premaster with server's RSA public key
 		if(server_certs == nil)
@@ -1198,7 +1222,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 		* =>
 			return "tls: X25519MLKEM768 key agreement failed";
 		}
-		if(mlkem_ss == nil || x_ss == nil)
+		if(mlkem_ss == nil || x_ss == nil || allzero(x_ss))
 			return "tls: X25519MLKEM768 key agreement failed";
 		# combiner: ML-KEM secret first, then X25519 (the codepoint's order)
 		shared_secret = catbytes(mlkem_ss, x_ss);
@@ -1206,7 +1230,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 		if(key_share_data == nil || len key_share_data != 32)
 			return "tls: invalid server key share";
 		shared_secret = keyring->x25519(x25519_priv, key_share_data);
-		if(shared_secret == nil)
+		if(shared_secret == nil || allzero(shared_secret))
 			return "tls: X25519 computation failed";
 	}else if(key_share_group == GROUP_SECP256R1){
 		if(cs.eph_p256_priv == nil)
@@ -1266,6 +1290,14 @@ handshake13(cs: ref ConnState, config: ref Config,
 	server_certs: list of array of byte;
 	hs_done := 0;
 	got_cv := 0;
+	# The server's messages come once each and in the order RFC 8446 4.4
+	# gives them: EncryptedExtensions, CertificateRequest (if any),
+	# Certificate, CertificateVerify, Finished.  They were taken in any
+	# order and any number, the last Certificate replacing the one
+	# before: a server sent a certificate of its own, a CertificateVerify
+	# made with its key, then another's certificate, and it was the
+	# other's chain and name that were verified after Finished.
+	st13 := 0;
 	# Some peers (e.g. Gmail's SMTP submission frontend) send CertificateRequest
 	# during the handshake even when the cert is optional. RFC 8446 §4.4.2
 	# requires the client to respond with a Certificate message (empty is OK)
@@ -1287,9 +1319,14 @@ handshake13(cs: ref ConnState, config: ref Config,
 		case mtype {
 		HT_ENCRYPTED_EXTENSIONS =>
 			# Parse but mostly ignore for now
-			;
+			if(st13 != 0)
+				return "tls: EncryptedExtensions out of order or sent twice";
+			st13 = S13ee;
 
 		HT_CERTIFICATE_REQUEST =>
+			if(st13 != S13ee)
+				return "tls: CertificateRequest out of order or sent twice";
+			st13 = S13req;
 			# RFC 8446 §4.3.2: body =
 			#   opaque certificate_request_context<0..2^8-1>;
 			#   Extension extensions<2..2^16-1>;
@@ -1305,13 +1342,19 @@ handshake13(cs: ref ConnState, config: ref Config,
 			}
 
 		HT_CERTIFICATE =>
+			if(st13 != S13ee && st13 != S13req)
+				return "tls: Certificate out of order or sent twice";
 			(certs, cerr) := parsecertificatemsg13(mdata);
 			if(cerr != nil)
 				return cerr;
 			server_certs = certs;
+			st13 = S13cert;
 
 		HT_CERTIFICATE_VERIFY =>
 			# Verify server's signature over transcript (EXCLUDING CertificateVerify)
+			if(st13 != S13cert)
+				return "tls: CertificateVerify out of order or sent twice";
+			st13 = S13cv;
 			if(server_certs == nil)
 				return "tls: CertificateVerify before Certificate";
 			if(!cs.insecure) {
@@ -1325,8 +1368,12 @@ handshake13(cs: ref ConnState, config: ref Config,
 			# Without PSK the server must have authenticated itself
 			# (RFC 8446 §4.4): a Finished alone proves only knowledge of
 			# the (attacker-chosen) key share.
-			if(!cs.insecure && (server_certs == nil || !got_cv))
+			if(!cs.insecure && (server_certs == nil || !got_cv || st13 != S13cv))
 				return "tls: server did not authenticate (Certificate/CertificateVerify missing)";
+			if(st13 == 0)
+				return "tls: Finished before EncryptedExtensions";
+			if(st13 == S13cert)
+				return "tls: Finished after a Certificate with no CertificateVerify";
 			# Verify server Finished using transcript hash BEFORE Finished was hashed
 			fverr := verifyfinished13_hash(cs, mdata, s_hs_traffic, pre_read_hash);
 			if(fverr != nil)
@@ -1647,6 +1694,28 @@ buildclientkeyexchange_rsa(encrypted_premaster: array of byte): array of byte
 # Handshake Message Parsing
 # ================================================================
 
+# "DOWNGRD" and 01 (1.2) or 00 (1.1 and below) at the end of a ServerHello's random
+downgraded(random: array of byte): int
+{
+	if(len random != 32)
+		return 0;
+	mark := array[] of {byte 16r44, byte 16r4f, byte 16r57, byte 16r4e, byte 16r47, byte 16r52, byte 16r44};
+	for(i := 0; i < len mark; i++)
+		if(random[24+i] != mark[i])
+			return 0;
+	return random[31] == byte 1 || random[31] == byte 0;
+}
+
+# an X25519 result of all zeros: the peer's point was of small order
+# (RFC 8446 7.4.2, RFC 7748 6.1), and the secret is one anyone knows
+allzero(a: array of byte): int
+{
+	z := 0;
+	for(i := 0; i < len a; i++)
+		z |= int a[i];
+	return z == 0;
+}
+
 parseserverhello(data: array of byte, config: ref Config): (array of byte, int, int, int, array of byte, string)
 {
 	if(len data < 38)
@@ -1728,6 +1797,19 @@ parseserverhello(data: array of byte, config: ref Config): (array of byte, int, 
 	# Validate version
 	if(version != TLS12 && version != TLS13)
 		return (nil, 0, 0, 0, nil, sys->sprint("tls: unsupported version 0x%04x", version));
+	# within what this configuration allows: a server answering 1.2 to
+	# a client set for 1.3 only was taken at its word
+	if(version < config.minver || version > config.maxver)
+		return (nil, 0, 0, 0, nil, sys->sprint("tls: server chose version 0x%04x, outside what is configured", version));
+	# the suite is one of its version's: a 1.3 suite under 1.2 has no key
+	# exchange of its own, and was run as RSA key transport
+	if((version == TLS13) != ((suite>>8) == 16r13))
+		return (nil, 0, 0, 0, nil, sys->sprint("tls: suite 0x%04x is not one of version 0x%04x", suite, version));
+	# RFC 8446 4.1.3: a server that speaks 1.3 and was asked for less
+	# says so in the last eight bytes of its random; we offered 1.3, so
+	# seeing it means the offer was cut out on the way
+	if(version == TLS12 && config.maxver >= TLS13 && downgraded(server_random))
+		return (nil, 0, 0, 0, nil, "tls: downgrade to TLS 1.2 detected");
 
 	return (server_random, suite, version, key_share_group, key_share_data, nil);
 }
@@ -3162,36 +3244,51 @@ bytescmp(a, b: array of byte): int
 	return d == 0;
 }
 
+# n random bytes, or nil: there is no handshake without them
 randombytes(n: int): array of byte
 {
 	buf := array [n] of byte;
-	randombuf(buf, n);
+	if(!randombuf(buf, n))
+		return nil;
 	return buf;
 }
 
-# n bytes from the entropy source, or an exception: never bytes anyone
-# could guess.  (It once fell back to the millisecond clock, and took a
-# short read as whole: a process whose name space had no #c -- a server
-# after pctl(NODEVS) -- would have made its keys from the time.)
-randombuf(buf: array of byte, n: int)
+# the generator, by its name in the name space first: a name space made
+# without the devices (NODEVS) has no #c, and has /dev/random only if it
+# was given it
+openrandom(): ref Sys->FD
 {
-	if(randomfd == nil) {
-		# init() not called: open one now
-		fd := sys->open("#c/notquiterandom", Sys->OREAD);
-		if(fd == nil)
-			fd = sys->open("/dev/urandom", Sys->OREAD);
-		if(fd == nil)
-			fd = sys->open("#c/random", Sys->OREAD);
-		randomfd = fd;
+	names := array[] of {"#c/notquiterandom", "/dev/notquiterandom", "/dev/urandom", "#c/random", "/dev/random"};
+	for(i := 0; i < len names; i++){
+		fd := sys->open(names[i], Sys->OREAD);
+		if(fd != nil)
+			return fd;
 	}
+	return nil;
+}
+
+#
+# Fill buf with n random bytes; 0 if that cannot be done.  A read's count
+# was not looked at, so a short one left the rest of a key zero; and with
+# no generator to open (a name space with no #c and no /dev/random) the
+# bytes were made from the millisecond clock, which anyone watching the
+# connection knows to within a few values: the X25519 private key, the
+# RSA premaster secret and the client random with them.  Now the
+# handshake does not happen.
+#
+randombuf(buf: array of byte, n: int): int
+{
 	if(randomfd == nil)
-		raise "tls: no entropy source";
-	for(i := 0; i < n; ) {
-		m := sys->read(randomfd, buf[i:], n - i);
+		randomfd = openrandom();
+	if(randomfd == nil)
+		return 0;
+	for(o := 0; o < n; ){
+		m := sys->read(randomfd, buf[o:n], n-o);
 		if(m <= 0)
-			raise "tls: entropy source failed";
-		i += m;
+			return 0;
+		o += m;
 	}
+	return 1;
 }
 
 keptfds(): list of int

@@ -91,7 +91,14 @@ Scenario: adt {
 	secondhrr:	int;	# answer ClientHello2 with another HRR
 	shsuite:	int;	# ServerHello's suite; 0: hrrsuite (or AES128)
 	shgroup:	int;	# ServerHello's group; 0: hrrgroup (or X25519)
+	flight:	int;	# which messages follow the ServerHello (F* below); 0: EncryptedExtensions, Finished
+	v12:		int;	# answer as a TLS 1.2 server would, with this flight (V* below); 0: TLS 1.3
 };
+
+# A TLS 1.3 server's encrypted flight before its Finished
+Fee2, Fcertcvcert, Fcertfirst, Fcvnocert, Fnocv, Fcr2, Fwhole: con iota + 1;
+# A TLS 1.2 server's flight
+V12order, V12ske2, V12nocert, V12suite13, V12downgrade, V12plain: con iota + 1;
 
 # A parsed ClientHello
 Hello: adt {
@@ -576,6 +583,9 @@ server0(fd: ref Sys->FD, sc: ref Scenario): string
 	}else
 		transcript = ch1.raw;
 
+	if(sc.v12 != 0)
+		return server12(fd, sc, ch);
+
 	if(sc.shsuite != 0)
 		suite = sc.shsuite;
 	group := sc.shgroup;
@@ -603,11 +613,43 @@ server0(fd: ref Sys->FD, sc: ref Scenario): string
 	ckeys := traffickeys(suite, chs);
 
 	ee := hsmsg(8, u16(0));
-	transcript = cat(transcript, ee);
+	# a certificate of ten bytes with no extensions, a CertificateVerify
+	# of four, a CertificateRequest asking for nothing: their order is
+	# what is tested, and the client is not verifying (config.insecure)
+	cert := hsmsg(11, cat(array[] of {byte 0, byte 0, byte 0, byte 15, byte 0, byte 0, byte 10},
+		cat(array[10] of {* => byte 16r30}, u16(0))));
+	cv := hsmsg(15, cat(u16(16r0804), cat(u16(4), array[4] of {* => byte 1})));
+	cr := hsmsg(13, cat(array[] of {byte 0}, u16(0)));
+	msgs: list of array of byte;
+	case sc.flight {
+	Fee2 =>
+		msgs = ee :: ee :: nil;
+	Fcertcvcert =>
+		msgs = ee :: cert :: cv :: cert :: nil;
+	Fcertfirst =>
+		msgs = cert :: ee :: nil;
+	Fcvnocert =>
+		msgs = ee :: cv :: nil;
+	Fnocv =>
+		msgs = ee :: cert :: nil;
+	Fcr2 =>
+		msgs = ee :: cr :: cr :: nil;
+	Fwhole =>
+		msgs = ee :: cert :: cv :: nil;
+	* =>
+		msgs = ee :: nil;
+	}
+	out: array of byte;
+	for(; msgs != nil; msgs = tl msgs){
+		transcript = cat(transcript, hd msgs);
+		out = cat(out, seal(skeys, 22, hd msgs));
+	}
 	sfin := hsmsg(20, hmac(suite, expandlabel(suite, shs, "finished", nil, hl), hash(suite, transcript)));
 	transcript = cat(transcript, sfin);
-	out := cat(seal(skeys, 22, ee), seal(skeys, 22, sfin));
+	out = cat(out, seal(skeys, 22, sfin));
 	writeall(fd, out);
+	if(sc.flight != 0 && sc.flight != Fwhole)
+		return waiteof(fd);	# the client is to refuse it
 
 	# the client's Finished, over the transcript as we have it
 	(ctype, payload) := readrecord(fd);
@@ -622,6 +664,44 @@ server0(fd: ref Sys->FD, sc: ref Scenario): string
 	if(!eq(msg, want))
 		return "client's Finished does not match the server's transcript";
 	return "ok";
+}
+
+# A TLS 1.2 server's answer to ch, in the clear: ServerHello and the
+# flight sc.v12 names.  The client is to refuse each before it sends
+# anything, so nothing is read but the end of the connection.
+server12(fd: ref Sys->FD, sc: ref Scenario, ch: ref Hello): string
+{
+	random := array [32] of {* => byte 16r5A};
+	suite := 16rC02F;	# TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+	if(sc.v12 == V12suite13)
+		suite = AES128;
+	if(sc.v12 == V12downgrade)
+		random[24:] = array[] of {byte 16r44, byte 16r4f, byte 16r57, byte 16r4e, byte 16r47, byte 16r52, byte 16r44, byte 1};
+	sh := hsmsg(2, cat(u16(16r0303), cat(random, cat(array[] of {byte len ch.sid}, cat(ch.sid,
+		cat(u16(suite), array[] of {byte 0}))))));
+	# a certificate of ten bytes; a key exchange on X25519 with a signature of four
+	cert := hsmsg(11, cat(array[] of {byte 0, byte 0, byte 13, byte 0, byte 0, byte 10}, array[10] of {* => byte 16r30}));
+	pub := kr->x25519_base(array [32] of {* => byte 16r33});
+	ske := hsmsg(12, cat(array[] of {byte 3, byte 0, byte 16r1d, byte 32}, cat(pub,
+		cat(u16(16r0804), cat(u16(4), array[4] of {* => byte 1})))));
+	done := hsmsg(14, nil);
+	msgs: list of array of byte;
+	case sc.v12 {
+	V12order =>
+		msgs = sh :: cert :: ske :: cert :: done :: nil;
+	V12ske2 =>
+		msgs = sh :: cert :: ske :: ske :: done :: nil;
+	V12nocert =>
+		msgs = sh :: done :: nil;
+	* =>
+		msgs = sh :: nil;	# refused at the ServerHello
+	}
+	# in one write: the client hangs up at the message it refuses
+	out: array of byte;
+	for(; msgs != nil; msgs = tl msgs)
+		out = cat(out, record(22, hd msgs));
+	writeall(fd, out);
+	return waiteof(fd);
 }
 
 writeall(fd: ref Sys->FD, b: array of byte)
@@ -658,6 +738,12 @@ kill(pid: int)
 # Run sc, a handshake that must fail with an error containing want
 runscenario(t: ref T, sc: ref Scenario, want: string)
 {
+	runscenariomin(t, sc, want, TLS->TLS12);
+}
+
+# the same, with a client that takes no version below minver
+runscenariomin(t: ref T, sc: ref Scenario, want: string, minver: int)
+{
 	p := array [2] of ref Sys->FD;
 	if(sys->pipe(p) < 0)
 		t.fatal(sys->sprint("pipe: %r"));
@@ -668,6 +754,7 @@ runscenario(t: ref T, sc: ref Scenario, want: string)
 	config := tls->defaultconfig();
 	config.servername = "test.example.com";
 	config.insecure = 1;
+	config.minver = minver;
 	(conn, err) := tls->client(p[0], config);
 	p[0] = nil;
 	if(conn != nil)
@@ -738,14 +825,14 @@ runok(t: ref T, sc: ref Scenario, group: int)
 # P-256 share and the cookie, the rest as before; the handshake completes.
 testHRRP256Cookie(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P256, array of byte "a cookie, opaque to the client", 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES128, P256, array of byte "a cookie, opaque to the client", 0, 0, 0, 0, 0, 0, 0);
 	runok(t, sc, P256);
 }
 
 # HRR selecting P-384, no cookie
 testHRRP384(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P384, nil, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES128, P384, nil, 0, 0, 0, 0, 0, 0, 0);
 	runok(t, sc, P384);
 }
 
@@ -757,83 +844,136 @@ testHRRCookieOnlySHA384(t: ref T)
 	cookie := array [300] of byte;
 	for(i := 0; i < len cookie; i++)
 		cookie[i] = byte (i * 7);
-	sc := ref Scenario(1, AES256, 0, cookie, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES256, 0, cookie, 0, 0, 0, 0, 0, 0, 0);
 	runok(t, sc, X25519);
 }
 
 # HRR selecting P-256, under the SHA-384 suite
 testHRRP256SHA384(t: ref T)
 {
-	sc := ref Scenario(1, AES256, P256, nil, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES256, P256, nil, 0, 0, 0, 0, 0, 0, 0);
 	runok(t, sc, P256);
 }
 
 # No HRR: a server taking X25519 needs none
 testNoHRR(t: ref T)
 {
-	sc := ref Scenario(0, AES128, 0, nil, 0, 0, 0, 0, X25519);
+	sc := ref Scenario(0, AES128, 0, nil, 0, 0, 0, 0, X25519, 0, 0);
 	runok(t, sc, X25519);
 }
 
 # A ServerHello (no HRR) choosing P-256, for which no share was sent
 testServerHelloUnsentGroup(t: ref T)
 {
-	sc := ref Scenario(0, AES128, 0, nil, 0, 0, 0, 0, P256);
+	sc := ref Scenario(0, AES128, 0, nil, 0, 0, 0, 0, P256, 0, 0);
 	runscenario(t, sc, "which we did not send");
 }
 
 testHRRGroupAlreadyShared(t: ref T)
 {
-	sc := ref Scenario(1, AES128, X25519, nil, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES128, X25519, nil, 0, 0, 0, 0, 0, 0, 0);
 	runscenario(t, sc, "which we sent a share for");
 }
 
 testHRRGroupNotOffered(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P521, nil, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES128, P521, nil, 0, 0, 0, 0, 0, 0, 0);
 	runscenario(t, sc, "which we did not offer");
 }
 
 testHRRNoChange(t: ref T)
 {
-	sc := ref Scenario(1, AES128, 0, nil, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES128, 0, nil, 0, 0, 0, 0, 0, 0, 0);
 	runscenario(t, sc, "asks for no change");
 }
 
 testHRRUnknownExtension(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P256, nil, 16r1234, 0, 0, 0, 0);
+	sc := ref Scenario(1, AES128, P256, nil, 16r1234, 0, 0, 0, 0, 0, 0);
 	runscenario(t, sc, "we did not send");
 }
 
 testHRRBadSessionID(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P256, nil, 0, 1, 0, 0, 0);
+	sc := ref Scenario(1, AES128, P256, nil, 0, 1, 0, 0, 0, 0, 0);
 	runscenario(t, sc, "session id");
 }
 
 testHRRUnofferedSuite(t: ref T)
 {
-	sc := ref Scenario(1, 16rC02F, P256, nil, 0, 0, 0, 0, 0);
+	sc := ref Scenario(1, 16rC02F, P256, nil, 0, 0, 0, 0, 0, 0, 0);
 	runscenario(t, sc, "unsupported suite");
 }
 
 testSecondHRR(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P256, array of byte "c", 0, 0, 1, 0, 0);
+	sc := ref Scenario(1, AES128, P256, array of byte "c", 0, 0, 1, 0, 0, 0, 0);
 	runscenario(t, sc, "second HelloRetryRequest");
 }
 
 testServerHelloSuiteDiffers(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P256, nil, 0, 0, 0, AES256, 0);
+	sc := ref Scenario(1, AES128, P256, nil, 0, 0, 0, AES256, 0, 0, 0);
 	runscenario(t, sc, "cipher suite differs");
 }
 
 testServerHelloGroupDiffers(t: ref T)
 {
-	sc := ref Scenario(1, AES128, P256, nil, 0, 0, 0, 0, X25519);
+	sc := ref Scenario(1, AES128, P256, nil, 0, 0, 0, 0, X25519, 0, 0);
 	runscenario(t, sc, "key share differs");
+}
+
+# ================================================================
+# The order of a server's handshake messages.  They were taken in any
+# order and any number, the last Certificate replacing the one before,
+# so the chain verified at the end need not be the one whose key signed
+# the handshake.  The client here verifies nothing (config.insecure):
+# what is tested is that the order is refused before verification is
+# reached at all.
+# ================================================================
+
+flight(f: int): ref Scenario
+{
+	return ref Scenario(0, AES128, 0, nil, 0, 0, 0, 0, X25519, f, 0);
+}
+
+testOrder13(t: ref T)
+{
+	runscenario(t, flight(Fcertcvcert), "Certificate out of order or sent twice");
+	runscenario(t, flight(Fee2), "EncryptedExtensions out of order or sent twice");
+	runscenario(t, flight(Fcertfirst), "Certificate out of order");
+	runscenario(t, flight(Fcvnocert), "CertificateVerify out of order");
+	runscenario(t, flight(Fnocv), "with no CertificateVerify");
+	runscenario(t, flight(Fcr2), "CertificateRequest out of order or sent twice");
+}
+
+# each message once and in order is still a handshake
+testOrder13Whole(t: ref T)
+{
+	runok(t, flight(Fwhole), X25519);
+}
+
+v12(v: int): ref Scenario
+{
+	return ref Scenario(0, AES128, 0, nil, 0, 0, 0, 0, 0, 0, v);
+}
+
+testOrder12(t: ref T)
+{
+	runscenario(t, v12(V12order), "Certificate out of order or sent twice");
+	runscenario(t, v12(V12ske2), "ServerKeyExchange out of order or sent twice");
+	runscenario(t, v12(V12nocert), "ServerHelloDone before Certificate");
+}
+
+# the version and suite a ServerHello chooses
+testServerHelloVersion(t: ref T)
+{
+	# a TLS 1.3 suite under TLS 1.2: it has no key exchange of 1.2's
+	runscenario(t, v12(V12suite13), "is not one of version");
+	# RFC 8446 4.1.3: the mark a 1.3 server leaves when asked for less
+	runscenario(t, v12(V12downgrade), "downgrade");
+	# a client set for 1.3 only, answered in 1.2
+	runscenariomin(t, v12(V12plain), "outside what is configured", TLS->TLS13);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -884,6 +1024,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SecondHRR", testSecondHRR);
 	run("ServerHelloSuiteDiffers", testServerHelloSuiteDiffers);
 	run("ServerHelloGroupDiffers", testServerHelloGroupDiffers);
+	run("Order13", testOrder13);
+	run("Order13Whole", testOrder13Whole);
+	run("Order12", testOrder12);
+	run("ServerHelloVersion", testServerHelloVersion);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -24,6 +24,7 @@ L2cap: module
 	Cidlesig:	con 5;		# LE signalling,
 	Cidsmp:		con 6;		# and the Security Manager
 	Ciddyn:		con 16r40;	# first dynamically allocated CID
+	Maxchans:	con 64;		# the most channels a link holds; a peer's request past it is refused
 
 	# signalling command codes, 4.1
 	Creject:	con 16r01;

@@ -185,7 +185,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	char *ptr;
 	Etherrock *er;
 
-	if(argc < 2)
+	if(argc < 3)
 		error(Ebadarg);
 
 	v.mchan4 = v.cchan4 = v.achan = v.mchan6 = v.cchan6 = nil;
@@ -437,6 +437,14 @@ etherread4(void *a)
 			nexterror();
 		}
 		ifc->in++;
+		if(BLEN(bp) < ifc->m->hsize){
+			/* not even a header: nothing for IP to look at */
+			ifc->inerr++;
+			freeb(bp);
+			runlock(&ifc->rwl);
+			poperror();
+			continue;
+		}
 		bp->rp += ifc->m->hsize;
 		if(ifc->lifc == nil)
 			freeb(bp);
@@ -476,6 +484,14 @@ etherread6(void *a)
 			nexterror();
 		}
 		ifc->in++;
+		if(BLEN(bp) < ifc->m->hsize){
+			/* not even a header: nothing for IP to look at */
+			ifc->inerr++;
+			freeb(bp);
+			runlock(&ifc->rwl);
+			poperror();
+			continue;
+		}
 		bp->rp += ifc->m->hsize;
 		if(ifc->lifc == nil)
 			freeb(bp);
@@ -662,6 +678,41 @@ sendgarp(Ipifc *ifc, uchar *ip)
 		print("garp: send: %r\n");
 }
 
+/*
+ *  The ARP channel's reader promises nothing about what it returns: a
+ *  frame is taken only whole, and only in the one shape this medium
+ *  speaks -- Ethernet hardware, IPv4 protocol, six- and four-byte
+ *  addresses.  Anything else is dropped before a field of it is read.
+ */
+static int
+arpframeok(uchar *p, long n)
+{
+	Etherarp *e;
+
+	if(n < (long)sizeof(Etherarp))
+		return 0;
+	e = (Etherarp*)p;
+	if(nhgets(e->hrd) != 1 || nhgets(e->pro) != ETIP4)
+		return 0;
+	return e->hln == sizeof(e->sha) && e->pln == sizeof(e->spa);
+}
+
+/*
+ *  What a sender says of itself goes in the cache only if it could be one
+ *  station: a unicast hardware address, and a protocol address that is
+ *  neither unspecified, nor limited broadcast, nor class D or E.  (An
+ *  address probe, RFC 5227, asks from 0.0.0.0: it is answered, not kept.)
+ */
+static int
+arpsenderok(uchar *spa, uchar *sha)
+{
+	if(sha[0] & 1)
+		return 0;
+	if(spa[0] == 0 && spa[1] == 0 && spa[2] == 0 && spa[3] == 0)
+		return 0;
+	return spa[0] < 224;
+}
+
 static void
 recvarp(Ipifc *ifc)
 {
@@ -678,6 +729,10 @@ recvarp(Ipifc *ifc)
 		return;
 	}
 
+	if(!arpframeok(ebp->rp, BLEN(ebp))){
+		freeb(ebp);
+		return;
+	}
 	e = (Etherarp*)ebp->rp;
 	switch(nhgets(e->op)) {
 	default:
@@ -701,6 +756,10 @@ recvarp(Ipifc *ifc)
 				e->s, e->sha, e->spa);
 			break;
 		}
+
+		/* nor a group address, nor one of this node's own broadcasts */
+		if(!arpsenderok(e->spa, e->sha) || (ipforme(er->f, ip) & (Rbcast|Rmulti)))
+			break;
 
 		arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 0);
 		break;
@@ -727,8 +786,13 @@ recvarp(Ipifc *ifc)
 			}
 		}
 
-		/* refresh what we know about sender */
-		arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 1);
+		/* a group hardware address is no station to learn or to answer */
+		if(e->sha[0] & 1)
+			break;
+
+		/* refresh what we know about sender, if it could be one station */
+		if(arpsenderok(e->spa, e->sha) && !(ipforme(er->f, ip) & (Rbcast|Rmulti)))
+			arpenter(er->f, V4, e->spa, e->sha, sizeof(e->sha), 1);
 
 		/* answer only requests for our address or systems we're proxying for */
 		v4tov6(ip, e->tpa);

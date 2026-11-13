@@ -109,6 +109,8 @@ Readyms:	con 250;	# between TEST UNIT READY attempts
 Pollms:		con 2000;	# how often an idle disk is asked if it is still there
 
 Maxlun:		con 15;		# GET MAX LUN's answer is a four-bit number
+Maxblocks:	con big 16r4000000000000;	# 2^50: times a 4096-byte block still fits a big
+Xfertmout:	con 30000;	# ms a bulk transfer may take: a disk spinning up, not one gone quiet
 
 dev: string;			# devusb's name for the device: epN.0
 ctlfd: ref Sys->FD;
@@ -132,6 +134,7 @@ Unit: adt {
 	present:	int;	# a medium is in it now
 	fio:	ref Sys->FileIO;
 	fwd:	int;		# the forwarder's pid, so it can be stopped
+	mounted:	int;	# dossrv has been started on its file
 };
 units: list of ref Unit;
 
@@ -152,6 +155,10 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 	dev = hd args;
+	if(dev == "-t"){
+		selftest();
+		return;
+	}
 
 	#
 	# The enumerator that found this device may still be letting go of
@@ -229,10 +236,13 @@ init(nil: ref Draw->Context, args: list of string)
 #
 probe(lun: int): ref Unit
 {
-	u := ref Unit(lun, "", big 0, 0, nil, 0, nil, 0);
+	u := ref Unit(lun, "", big 0, 0, nil, 0, nil, 0, 0);
 	inq := array[36] of byte;
-	if(scsi(lun, array[] of {byte Cinquiry, byte 0, byte 0, byte 0, byte len inq, byte 0}, inq, 0) < 0){
-		sys->print("diskusb: %s: INQUIRY failed: %r\n", unitname(u));
+	# The qualifier, the type and the length are the first five bytes:
+	# an answer without them says nothing, and the zeros it leaves in
+	# the buffer would read as "a disk".
+	if(scsi(lun, array[] of {byte Cinquiry, byte 0, byte 0, byte 0, byte len inq, byte 0}, inq, 0) < 5){
+		sys->print("diskusb: %s: INQUIRY failed or was cut short: %r\n", unitname(u));
 		return nil;
 	}
 	if((int inq[0] >> 5) == 3){
@@ -282,7 +292,13 @@ bringup(u: ref Unit): int
 	mb := (u.blocks * big u.bsize) / big (1024*1024);
 	sys->print("diskusb: %s %s: %bd blocks of %d bytes (%bd MB), served as %s\n",
 		unitname(u), u.what, u.blocks, u.bsize, mb, u.name);
-	spawn mountfat(u.name);
+	# once: a medium that comes and goes is seen through the file dossrv
+	# already holds, and a unit that says it has changed every few
+	# seconds would otherwise start another dossrv each time
+	if(!u.mounted){
+		u.mounted = 1;
+		spawn mountfat(u.name);
+	}
 	return 0;
 }
 
@@ -304,12 +320,28 @@ loop(tick: chan of int)
 {
 	for(;;) alt {
 	(u, off, n, rc) := <-reads =>
-		(data, err) := diskread(u, big off, n);
+		data: array of byte;
+		err: string;
+		# this is the one process every unit's file is served by: a
+		# request that goes wrong is that request's error, not its end
+		{
+			(data, err) = diskread(u, big off, n);
+		} exception e {
+		"*" =>
+			(data, err) = (nil, "diskusb: " + e);
+		}
 		rc <-= (data, err);
 		if(err != nil && detached(err))
 			return;
 	(u, off, data, wc) := <-writes =>
-		(n, err) := diskwrite(u, big off, data);
+		n: int;
+		err: string;
+		{
+			(n, err) = diskwrite(u, big off, data);
+		} exception e {
+		"*" =>
+			(n, err) = (-1, "diskusb: " + e);
+		}
 		wc <-= (n, err);
 		if(err != nil && detached(err))
 			return;
@@ -418,13 +450,12 @@ diskread(u: ref Unit, off: big, n: int): (array of byte, string)
 {
 	if(!u.present)
 		return (nil, u.name + ": no medium");
-	if(off < big 0 || n <= 0)
+	size := u.blocks * big u.bsize;
+	if(off < big 0 || n <= 0 || off >= size)
 		return (nil, nil);
+	if(big n > size - off)		# not off+n against the size: the sum can wrap
+		n = int (size - off);
 	end := off + big n;
-	if(end > u.blocks * big u.bsize)
-		end = u.blocks * big u.bsize;
-	if(end <= off)
-		return (nil, nil);
 	lba := off / big u.bsize;
 	last := (end - big 1) / big u.bsize;
 	nb := int (last - lba) + 1;
@@ -448,11 +479,11 @@ diskwrite(u: ref Unit, off: big, data: array of byte): (int, string)
 	if(off < big 0)
 		return (-1, "negative offset");
 	n := len data;
-	end := off + big n;
-	if(end > u.blocks * big u.bsize)
+	if(!within(off, n, u.blocks * big u.bsize))
 		return (-1, "write beyond the end of " + u.name);
 	if(n == 0)
 		return (0, nil);
+	end := off + big n;
 	lba := off / big u.bsize;
 	last := (end - big 1) / big u.bsize;
 	nb := int (last - lba) + 1;
@@ -463,6 +494,8 @@ diskwrite(u: ref Unit, off: big, data: array of byte): (int, string)
 		(old, err) := diskread(u, lba * big u.bsize, nb * u.bsize);
 		if(err != nil)
 			return (-1, err);
+		if(len old != nb * u.bsize)
+			return (-1, sys->sprint("%s: short read at %bd", u.name, off));
 		buf = array[nb * u.bsize] of byte;
 		buf[0:] = old;
 		buf[skip:] = data;
@@ -651,16 +684,18 @@ nounit(key, asc: int): int
 sense(lun: int): (int, int, int)
 {
 	sb := array[18] of byte;
-	if(scsi(lun, array[] of {byte Crequestsense, byte 0, byte 0, byte 0, byte len sb, byte 0}, sb, 0) < 0)
-		return (-1, 0, 0);
+	if(scsi(lun, array[] of {byte Crequestsense, byte 0, byte 0, byte 0, byte len sb, byte 0}, sb, 0) < 14)
+		return (-1, 0, 0);	# no answer, or one without the key and its codes
 	return (int sb[2] & 16rF, int sb[12], int sb[13]);
 }
 
 capacity(u: ref Unit): int
 {
 	cap := array[8] of byte;
-	if(scsi(u.lun, array[10] of {byte Creadcap10, * => byte 0}, cap, 0) < 0)
+	if(scsi(u.lun, array[10] of {byte Creadcap10, * => byte 0}, cap, 0) < len cap){
+		sys->werrstr("no answer, or a short one");
 		return -1;
+	}
 	last := get4(cap, 0);
 	u.bsize = get4(cap, 4);
 	if(last == -1){
@@ -670,10 +705,16 @@ capacity(u: ref Unit): int
 		cmd[0] = byte Creadcap16;
 		cmd[1] = byte 16r10;
 		cmd[13] = byte len cap16;
-		if(scsi(u.lun, cmd, cap16, 0) < 0)
+		if(scsi(u.lun, cmd, cap16, 0) < 12){
+			sys->werrstr("no answer to READ CAPACITY(16), or a short one");
 			return -1;
-		u.blocks = (big get4(cap16, 0) << 32) | (big get4(cap16, 4) & 16rFFFFFFFF) + big 1;
+		}
+		u.blocks = cap16blocks(get4(cap16, 0), get4(cap16, 4));
 		u.bsize = get4(cap16, 8);
+		if(u.blocks < big 0){
+			sys->werrstr("a block count no disk has");
+			return -1;
+		}
 		return 0;
 	}
 	u.blocks = (big last & 16rFFFFFFFF) + big 1;
@@ -802,28 +843,41 @@ bulkeps(): (int, int, int)
 	cfg := array[total] of byte;
 	if(ctlin(Rd2h|Rstd|Rdev, Rgetdesc, Dconf << 8, 0, cfg) < total)
 		return (-1, -1, -1);
-	#
-	# The endpoints of the MASS-STORAGE interface, not the first bulk
-	# pair in the configuration: on a composite device -- the Jetson's
-	# own USB gadget is network, serial and disk in one -- the first
-	# bulk endpoints are a network interface's.
-	#
+	return findbulk(cfg);
+}
+
+#
+# The endpoints of the MASS-STORAGE interface, not the first bulk
+# pair in the configuration: on a composite device -- the Jetson's
+# own USB gadget is network, serial and disk in one -- the first
+# bulk endpoints are a network interface's. A descriptor shorter
+# than its kind has no fields to read, endpoint 0 is the control
+# endpoint whatever a descriptor calls it, and a packet size no bulk
+# endpoint has is not passed on.
+#
+findbulk(cfg: array of byte): (int, int, int)
+{
+	total := len cfg;
 	i := -1;
 	o := -1;
 	mp := -1;
 	inms := 0;
 	for(p := 0; p + 2 <= total; ){
 		dlen := int cfg[p];
-		if(dlen < 2)
+		if(dlen < 2 || dlen > total - p)
 			break;
-		if(int cfg[p+1] == 4 && p + 8 < total){	# interface
-			inms = int cfg[p+5] == 8 && int cfg[p+7] == 16r50;	# mass storage, bulk-only
+		if(int cfg[p+1] == 4){	# interface
+			inms = dlen >= 9 && int cfg[p+5] == 8 && int cfg[p+7] == 16r50;	# mass storage, bulk-only
 			if(inms && i < 0)
 				msiface = int cfg[p+2];
 		}
-		if(inms && int cfg[p+1] == 5 && p + 6 < total && (int cfg[p+3] & 3) == 2){
+		if(inms && int cfg[p+1] == 5 && dlen >= 7 && (int cfg[p+3] & 3) == 2 && (int cfg[p+2] & 16rF) != 0){
 			addr := int cfg[p+2];
-			sz := int cfg[p+4] | (int cfg[p+5] << 8);
+			sz := (int cfg[p+4] | (int cfg[p+5] << 8)) & 16r7FF;
+			if(sz < 8 || sz > 1024){
+				p += dlen;
+				continue;
+			}
 			if(addr & 16r80){
 				if(i < 0){
 					i = addr & 16rF;
@@ -835,6 +889,84 @@ bulkeps(): (int, int, int)
 		p += dlen;
 	}
 	return (i, o, mp);
+}
+
+selftest()
+{
+	ok := 1;
+	# READ CAPACITY(16): the last block's address, as a count
+	if(cap16blocks(1, -1) != big 2 << 32){
+		sys->print("diskusb: selftest: a last block of 1:ffffffff is %bd blocks, want %bd\n", cap16blocks(1, -1), big 2 << 32);
+		ok = 0;
+	}
+	if(cap16blocks(0, 0) != big 1 || cap16blocks(1, 0) != (big 1 << 32) + big 1){
+		sys->print("diskusb: selftest: small READ CAPACITY(16) answers\n");
+		ok = 0;
+	}
+	if(cap16blocks(int 16r80000000, 0) >= big 0 || cap16blocks(-1, -1) >= big 0 || cap16blocks(16r40000, 0) >= big 0){
+		sys->print("diskusb: selftest: a block count past 2^50 taken (%bd %bd)\n", cap16blocks(int 16r80000000, 0), cap16blocks(-1, -1));
+		ok = 0;
+	}
+	# offsets
+	size := big 1024 * big 1024;
+	top := big 16r7FFFFFFFFFFFFF00;
+	if(!within(big 0, 512, size) || !within(size - big 512, 512, size) || !within(size, 0, size)
+	|| within(size - big 511, 512, size) || within(big -1, 1, size) || within(top, 512, size)
+	|| within(top, 512, top + big 100)){
+		sys->print("diskusb: selftest: a range past the end, or one that wraps, taken as inside\n");
+		ok = 0;
+	}
+	# names
+	if(trim("  Kingston\n\tdiskusb: gone\u001b[2J  ") != "Kingstondiskusb: gone[2J" || trim("") != "" || trim("\0\0\0") != ""){
+		sys->print("diskusb: selftest: a device's name printed as it came: %q\n", trim("  Kingston\n\tdiskusb: gone\u001b[2J  "));
+		ok = 0;
+	}
+	# endpoints: a network interface's bulk pair, then the disk's
+	gadget := array[] of {
+		byte 9, byte 2, byte 55, byte 0, byte 2, byte 1, byte 0, byte 16r80, byte 50,
+		byte 9, byte 4, byte 0, byte 0, byte 2, byte 10, byte 0, byte 0, byte 0,
+		byte 7, byte 5, byte 16r81, byte 2, byte 0, byte 2, byte 0,
+		byte 7, byte 5, byte 16r01, byte 2, byte 0, byte 2, byte 0,
+		byte 9, byte 4, byte 1, byte 0, byte 2, byte 8, byte 6, byte 16r50, byte 0,
+		byte 7, byte 5, byte 16r82, byte 2, byte 0, byte 2, byte 0,
+		byte 7, byte 5, byte 16r02, byte 2, byte 0, byte 2, byte 0,
+	};
+	(i, o, mp) := findbulk(gadget);
+	if(i != 2 || o != 2 || mp != 512 || msiface != 1){
+		sys->print("diskusb: selftest: the gadget's disk endpoints: in %d out %d maxpkt %d interface %d\n", i, o, mp, msiface);
+		ok = 0;
+	}
+	bad := array[len gadget] of byte;
+	bad[0:] = gadget;
+	bad[45] = bad[46] = byte 0;		# the disk's bulk IN: packet size 0
+	(i, nil, nil) = findbulk(bad);
+	if(i != -1){
+		sys->print("diskusb: selftest: a bulk endpoint with a packet size of 0 taken\n");
+		ok = 0;
+	}
+	bad[0:] = gadget;
+	bad[45] = bad[46] = byte 16rFF;		# and 2047
+	(i, nil, nil) = findbulk(bad);
+	if(i != -1){
+		sys->print("diskusb: selftest: a bulk endpoint with a packet size of 2047 taken\n");
+		ok = 0;
+	}
+	bad[0:] = gadget;
+	bad[43] = byte 16r80;			# endpoint 0
+	(i, nil, nil) = findbulk(bad);
+	if(i != -1){
+		sys->print("diskusb: selftest: endpoint 0 taken for a bulk endpoint\n");
+		ok = 0;
+	}
+	(i, o, nil) = findbulk(gadget[0:44]);	# cut in the middle of a descriptor
+	if(i != -1 || o != -1){
+		sys->print("diskusb: selftest: a descriptor cut short read\n");
+		ok = 0;
+	}
+	if(ok)
+		sys->print("diskusb: selftest OK\n");
+	else
+		sys->print("diskusb: selftest FAILED\n");
 }
 
 openbulk(): int
@@ -852,8 +984,10 @@ openbulk(): int
 			return -1;
 		}
 		efd := sys->open("/usb/usb/" + epname(inep) + "/ctl", Sys->OWRITE);
-		if(efd != nil)
+		if(efd != nil){
 			sys->fprint(efd, "maxpkt %d", maxpkt);
+			sys->fprint(efd, "timeout %d", Xfertmout);
+		}
 		bulkin = sys->open("/usb/usb/" + epname(inep) + "/data", Sys->ORDWR);
 		bulkout = bulkin;
 		if(bulkin == nil){
@@ -880,8 +1014,17 @@ openbulk(): int
 	#
 	for(ep := inep; ; ep = outep){
 		efd := sys->open("/usb/usb/" + epname(ep) + "/ctl", Sys->OWRITE);
-		if(efd != nil)
+		if(efd != nil){
 			sys->fprint(efd, "maxpkt %d", maxpkt);
+			#
+			# A bulk endpoint has no timeout of its own, and one
+			# process serves every unit through these two: a device
+			# that takes a command and never gives its status would
+			# hold all of them for good. With a limit, the read fails
+			# and the transport is reset (scsi, recover).
+			#
+			sys->fprint(efd, "timeout %d", Xfertmout);
+		}
 		if(ep == outep)
 			break;
 	}
@@ -951,8 +1094,43 @@ inuse(): int
 	return 0;
 }
 
+#
+# The last block's address in a READ CAPACITY(16) answer, as a count:
+# its two words unsigned, and the one added to the whole (it was added
+# to the low word before the two were joined, so a low word of all ones
+# lost the carry; and a high word with its top bit set made the count
+# negative). -1 for a count no disk has, which would not multiply by a
+# block size and stay a big.
+#
+cap16blocks(hi, lo: int): big
+{
+	h := big hi & big 16rFFFFFFFF;
+	l := big lo & big 16rFFFFFFFF;
+	if(h >= big 16r40000)
+		return big -1;
+	n := ((h << 32) | l) + big 1;
+	if(n <= big 0 || n > Maxblocks)
+		return big -1;
+	return n;
+}
+
+# n bytes at off lie within size bytes, with no sum that could wrap
+within(off: big, n: int, size: big): int
+{
+	return off >= big 0 && n >= 0 && off <= size && big n <= size - off;
+}
+
+#
+# A name from the device, for printing: letters, digits and marks, so
+# that a vendor string cannot begin a line of its own on the console.
+#
 trim(s: string): string
 {
+	t := "";
+	for(i := 0; i < len s; i++)
+		if(s[i] >= ' ' && s[i] <= '~')
+			t[len t] = s[i];
+	s = t;
 	while(len s > 0 && s[len s - 1] == ' ')
 		s = s[0:len s - 1];
 	while(len s > 0 && s[0] == ' ')

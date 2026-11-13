@@ -219,6 +219,248 @@ testRefusedSession(t: ref T)
 	t.asserteq(len a.m.recv(g), 0, "a frame with a wrong FCS produces nothing");
 }
 
+# frames as a peer of our choosing would send them
+ctlf(dlci, ctl: int): array of byte
+{
+	f := array[] of { byte (1 | (dlci << 2)), byte (ctl | 16r10), byte 1, byte 0 };
+	f[3] = rfcomm->fcs(f, 3);
+	return f;
+}
+
+uihf(dlci, credits: int, data: array of byte): array of byte
+{
+	n := len data;
+	hl := 3;
+	if(n >= 128)
+		hl++;
+	if(credits >= 0)
+		hl++;
+	f := array[hl + n + 1] of byte;
+	f[0] = byte (1 | (dlci << 2));
+	f[1] = byte 16ref;
+	if(credits >= 0)
+		f[1] = byte 16rff;
+	i := 2;
+	if(n < 128)
+		f[i++] = byte ((n << 1) | 1);
+	else{
+		f[i++] = byte ((n & 16r7f) << 1);
+		f[i++] = byte (n >> 7);
+	}
+	if(credits >= 0)
+		f[i++] = byte credits;
+	f[i:] = data;
+	f[hl + n] = rfcomm->fcs(f, 2);
+	return f;
+}
+
+# a control message for DLCI 0, its length in as many bytes as it needs
+mccf(t, cmd: int, v: array of byte): array of byte
+{
+	n := len v;
+	hl := 2;
+	if(n >= 128)
+		hl = 3;
+	b := array[hl + n] of byte;
+	b[0] = byte ((t << 2) | (cmd << 1) | 1);
+	if(n < 128)
+		b[1] = byte ((n << 1) | 1);
+	else{
+		b[1] = byte ((n & 16r7f) << 1);
+		b[2] = byte (((n >> 7) << 1) | 1);
+	}
+	b[hl:] = v;
+	return uihf(0, -1, b);
+}
+
+pnf(dlci, cl, fs, k: int): array of byte
+{
+	v := array[8] of { * => byte 0 };
+	v[0] = byte dlci;
+	v[1] = byte (cl << 4);
+	v[4] = byte fs;
+	v[5] = byte (fs >> 8);
+	v[7] = byte k;
+	return mccf(16r20, 1, v);
+}
+
+# what a Mux said to a frame
+Said: adt {
+	sends:	list of array of byte;	# in order
+	opened, incoming, closed, data, refused: int;
+};
+
+feed(m: ref Mux, f: array of byte): ref Said
+{
+	s := ref Said(nil, 0, 0, 0, 0, 0);
+	rev: list of array of byte;
+	for(l := m.recv(f); l != nil; l = tl l)
+		pick e := hd l {
+		Send =>		rev = e.sdu :: rev;
+		Opened =>	s.opened++;
+		Incoming =>	s.incoming++;
+		Closed =>	s.closed++;
+		Data =>		s.data++;
+		Refused =>	s.refused++;
+		}
+	for(; rev != nil; rev = tl rev)
+		s.sends = hd rev :: s.sends;
+	return s;
+}
+
+# an open session: a dialled channel 1 of b
+session(): (ref Side, ref Side, ref Dlc, ref Dlc)
+{
+	a := newside(1, nil);
+	b := newside(0, 1 :: nil);
+	(d, evs) := a.m.connect(1);
+	exchange(a, b, evs);
+	return (a, b, d, b.m.find(2));
+}
+
+testNegotiation(t: ref T)
+{
+	(a, b, d, pd) := session();
+	t.assert(pd != nil && pd.state == Rfcomm->Open, "a session is open");
+	if(pd == nil)
+		return;
+	# parameters are settled before a port opens, and stay settled
+	fs := pd.framesize;
+	pd.txcredits = 5;
+	s := feed(b.m, pnf(2, 16rf, 10, 0));
+	t.asserteq(pd.framesize, fs, "a PN for an open port leaves its frame size");
+	t.asserteq(pd.txcredits, 5, "and its credits");
+	t.asserteq(len s.sends, 0, "and is not answered");
+	# nor does the peer set the parameters of a port we are opening
+	s = feed(a.m, pnf(2, 16rf, 10, 0));
+	t.asserteq(d.framesize, fs, "a PN command for a port we dialled changes nothing");
+	t.asserteq(len s.sends, 0, "and is not answered");
+	# before it opens, the peer may ask again
+	c := newside(0, 1 :: nil);
+	feed(c.m, ctlf(0, 16r2f));
+	s = feed(c.m, pnf(2, 16rf, 100, 3));
+	t.asserteq(len s.sends, 1, "a first PN is answered");
+	s = feed(c.m, pnf(2, 16rf, 50, 3));
+	t.asserteq(len s.sends, 1, "and a second, the port not yet open");
+	cd := c.m.find(2);
+	t.assert(cd != nil && cd.framesize == 50, "with the size it asked for");
+}
+
+testOpening(t: ref T)
+{
+	(nil, b, nil, pd) := session();
+	if(pd == nil){
+		t.fatal("no session");
+		return;
+	}
+	# a SABM for a port already open is a retransmission
+	s := feed(b.m, ctlf(2, 16r2f));
+	t.asserteq(len s.sends, 1, "a second SABM is answered");
+	t.asserteq(s.incoming + s.opened, 0, "and the port announced to nobody again");
+	# one for a port being closed does not bring it back
+	b.m.disconnect(pd);
+	t.asserteq(pd.state, Rfcomm->Waitdisc, "the port is closing");
+	s = feed(b.m, ctlf(2, 16r2f));
+	t.asserteq(pd.state, Rfcomm->Waitdisc, "a SABM leaves it closing");
+	t.asserteq(s.incoming + s.opened, 0, "and opens nothing");
+
+	# a UA opens what we asked to open, not what the peer is to open
+	c := newside(0, 1 :: nil);
+	feed(c.m, ctlf(0, 16r2f));
+	feed(c.m, pnf(2, 16rf, 100, 3));
+	cd := c.m.find(2);
+	t.assert(cd != nil && cd.state == Rfcomm->Waitua, "the peer's port waits for its SABM");
+	s = feed(c.m, ctlf(2, 16r63));
+	t.asserteq(s.opened, 0, "a UA for it opens nothing");
+	if(cd != nil)
+		t.asserteq(cd.state, Rfcomm->Waitua, "and it goes on waiting");
+	# and bytes for a port not open are not delivered
+	s = feed(c.m, uihf(2, -1, array of byte "early"));
+	t.asserteq(s.data, 0, "data for a port not yet open is not delivered");
+	s = feed(c.m, ctlf(2, 16r2f));
+	t.asserteq(s.incoming, 1, "the SABM opens it");
+	s = feed(c.m, uihf(2, -1, array of byte "now"));
+	t.asserteq(s.data, 1, "and then data is delivered");
+	over := array[101] of { * => byte 16r78 };
+	s = feed(c.m, uihf(2, -1, over));
+	t.asserteq(s.data, 0, "but not a frame over the size agreed");
+
+	# the peer opens ports on its side of the DLCIs, and only the user's
+	e := newside(0, 1 :: 31 :: nil);
+	feed(e.m, ctlf(0, 16r2f));
+	s = feed(e.m, ctlf(3, 16r2f));
+	t.asserteq(s.refused, 1, "a SABM on a DLCI of ours is refused");
+	t.assert(e.m.find(3) == nil, "and no port made");
+	s = feed(e.m, pnf(3, 16rf, 100, 3));
+	t.asserteq(s.refused, 1, "a PN the same");
+	s = feed(e.m, ctlf(62, 16r2f));
+	t.asserteq(s.refused, 1, "DLCI 62 is not a user's");
+	t.assert(e.m.find(62) == nil, "and no port made");
+}
+
+testControlLength(t: ref T)
+{
+	c := newside(0, nil);
+	feed(c.m, ctlf(0, 16r2f));
+	v := array[200] of byte;
+	for(i := 0; i < len v; i++)
+		v[i] = byte i;
+	s := feed(c.m, mccf(16r08, 1, v));	# Test: echoed
+	t.asserteq(len s.sends, 1, "a Test command of 200 bytes is answered");
+	if(s.sends == nil)
+		return;
+	r := hd s.sends;
+	# address, control, two bytes of frame length, then the message
+	t.asserteq(len r, 4 + 3 + 200 + 1, "by a frame that holds them all");
+	if(len r != 4 + 3 + 200 + 1)
+		return;
+	t.asserteq(int r[5], (200 & 16r7f) << 1, "its length's first byte says another follows");
+	t.asserteq(int r[6], ((200 >> 7) << 1) | 1, "and the second is the last");
+	same := 1;
+	for(i = 0; i < 200; i++)
+		if(r[7+i] != v[i])
+			same = 0;
+	t.assert(same, "and the bytes are the ones sent");
+}
+
+testCreditBound(t: ref T)
+{
+	(nil, b, nil, pd) := session();
+	if(pd == nil){
+		t.fatal("no session");
+		return;
+	}
+	for(i := 0; i < 200; i++)
+		feed(b.m, uihf(2, 255, array[0] of byte));
+	t.assert(pd.txcredits > 0 && pd.txcredits <= 4096, sys->sprint("credits stay bounded (%d)", pd.txcredits));
+}
+
+testSessionEdges(t: ref T)
+{
+	# DM on DLCI 0 of a session that was up: it is down, and the next
+	# connect begins a session
+	(a, nil, nil, nil) := session();
+	t.asserteq(a.m.up, 1, "a session is up");
+	feed(a.m, ctlf(0, 16r0f));
+	t.asserteq(a.m.up, 0, "DM on DLCI 0 takes it down");
+	(nil, evs) := a.m.connect(4);
+	first := "";
+	if(evs != nil)
+		pick e := hd evs {
+		Send =>	first = bthci->hex(e.sdu);
+		}
+	t.assertseq(first, "03 3f 01 1c", "and the next connect starts with SABM on DLCI 0");
+
+	# our connect waits for the session; the peer's SABM brings it up
+	b := newside(0, nil);
+	(d, nil) := b.m.connect(5);
+	t.assert(d != nil && b.m.pending != nil, "a connect waits for the session");
+	s := feed(b.m, ctlf(0, 16r2f));
+	t.asserteq(b.m.up, 1, "the peer's SABM brings the session up");
+	t.asserteq(len s.sends, 2, "answered, and our waiting connect's PN sent");
+	t.assert(b.m.pending == nil, "nothing waits");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -236,6 +478,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Session", testSession);
 	run("Credits", testCredits);
 	run("RefusedSession", testRefusedSession);
+	run("Negotiation", testNegotiation);
+	run("Opening", testOpening);
+	run("ControlLength", testControlLength);
+	run("CreditBound", testCreditBound);
+	run("SessionEdges", testSessionEdges);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

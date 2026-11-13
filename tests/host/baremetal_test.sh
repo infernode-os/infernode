@@ -5304,6 +5304,8 @@ try:
     typed("echo cnsamode on > /dev/sysctl; echo CNSAON-$status")
     typed("listen 'tcp!*!17030' export / &")
     typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 6)
+    # the same listener through the machine's own Ethernet address (#736)
+    typed("mkdir -p /n/self; mount tcp!10.0.2.15!17030 /n/self; echo SELFMOUNT-$status; ls /n/self/dis/sh.dis", 8)
     typed("cat /dev/sdctl")
     typed("echo VIRT-DATE `{date}")
 
@@ -5365,6 +5367,9 @@ vcheck "init finds the kernel link driver"         "init: ether0 is a kernel lin
 # an authenticated 9P mount, both ends on this kernel (#725; the bcm2837
 # check tells the story)
 vcheck "os/ip + keyring: an authenticated 9P mount works on the kernel (#725)" "/n/remote/dis/sh.dis"
+# A dial of the machine's own Ethernet address goes through the loopback
+# interface, not out on the wire to a peer that never answers (#736).
+vcheck "os/ip: a connection to the machine's own Ethernet address is delivered here (#736)" "/n/self/dis/sh.dis"
 if tr -d '\r' <<<"$OUT" | grep -qx 'CNSAON-'; then
     pass "cnsamode on is taken before anything has authenticated; the mount above ran in it (ML-KEM-1024)"
 else

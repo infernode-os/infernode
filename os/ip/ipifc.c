@@ -1219,6 +1219,39 @@ ipforme(Fs *f, uchar *addr)
  *  find the ifc on same net as the remote system.
  *  returns the read-locked ifc, otherwise nil.
  */
+/*
+ * The interface a packet to one of our own unicast addresses goes
+ * out on (#736). The route to it names the interface the address is
+ * on, and on Ethernet that put the packet on the wire, addressed by
+ * ARP to a machine nobody answers for: a dial of the machine's own
+ * address never completed. A host delivers to itself, so it goes to
+ * the loopback interface, whose queue and kproc bring it back in
+ * through ipiput4 (which takes any of our addresses) without
+ * recursing into the sender. ifc itself when it is the loopback, or
+ * there is none.
+ */
+Ipifc*
+selfipifc(Fs *f, Ipifc *ifc)
+{
+	Conv **cp, **e;
+	Ipifc *x;
+	Medium *m;
+
+	m = ifc->m;
+	if(m == nil || strcmp(m->name, "loopback") == 0)
+		return ifc;
+	e = &f->ipifc->conv[f->ipifc->nc];
+	for(cp = f->ipifc->conv; cp < e; cp++){
+		if(*cp == nil)
+			continue;
+		x = (Ipifc*)(*cp)->ptcl;
+		m = x->m;		/* media are static: a stale one is still a Medium */
+		if(m != nil && strcmp(m->name, "loopback") == 0)
+			return x;
+	}
+	return ifc;
+}
+
 Ipifc*
 findipifc(Fs *f, uchar *remote, int type)
 {

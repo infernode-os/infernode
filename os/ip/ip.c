@@ -281,6 +281,8 @@ ipoput4(Fs *f, Block *bp, int gating, int ttl, int tos, Conv *c)
 	}
 
 	ifc = r->ifc;
+	if(r->type & Runi)
+		ifc = selfipifc(f, ifc);	/* our own address: not the wire (#736) */
 	if(r->type & (Rifc|Runi))
 		gate = eh->dst;
 	else

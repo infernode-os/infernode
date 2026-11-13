@@ -264,8 +264,9 @@ serve(tree: ref Tree)
 	tmsg := <-tc =>
 		# The channel ended (the client hung up, or the mount went):
 		# "break" here left only the alt, so vid9p and its ticker went
-		# on for ever, and under listen -A, which runs a connection's
-		# command in the listener, no second client was ever served.
+		# on for ever (and under listen -A, which then ran a
+		# connection's command in the listener, no second client was
+		# ever served).
 		if(tmsg == nil){
 			shutdown(tree);
 			return;

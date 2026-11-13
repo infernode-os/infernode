@@ -652,6 +652,8 @@ dis/scenefs.dis
 dis/scenereplay.dis
 dis/sdr/am.dis
 dis/sdr/fm.dis
+dis/sdr/iqhdr.dis
+dis/sdr/rawiq.dis
 dis/sdrfs.dis
 dis/sdgsrv.dis
 dis/sed.dis

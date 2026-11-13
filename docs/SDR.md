@@ -109,6 +109,7 @@ changing anything that reads `/mnt/sdr`:
                   form written:
                     freq 1090000000        hertz
                     rate 2400000           samples a second
+                    enc cu8                the samples' encoding, the only one
                     gain auto | 38.6       dB, the nearest the tuner has
                     ppm 0
                     agc off | on           the RTL2832U's own
@@ -117,12 +118,38 @@ changing anything that reads `/mnt/sdr`:
     status    r   attr=value: tuner=R820T link=open|closed|error
                   source=tcp!localhost!1234 readers=N dropped=N error='...'
     gains     r   the tuner's gains, one a line, dB
-    iq        r   the samples, 8-bit unsigned I then Q, from the open on;
-                  each read waits for more.  Every open has its own queue;
-                  a reader that falls behind loses the oldest, counted in
-                  status.  The first open starts the samples, the last
-                  close stops them.
+    iq        r   a header, then the samples, 8-bit unsigned I then Q,
+                  from the open on; each read waits for more.  Every open
+                  has its own queue; a reader that falls behind loses the
+                  oldest, counted in status.  The first open starts the
+                  samples, the last close stops them.
 ```
+
+**`iq` describes itself, so nothing is told the rate twice.** Each open
+begins as an `audio(6)` file does: lines of text, each a command `ctl`
+takes, then an empty line, padded to a multiple of 4 bytes, then the
+samples:
+
+```
+rate 2400000
+enc cu8
+freq 99500000
+
+```
+
+The header is true for the whole stream. A write to `ctl` that changes
+the rate or the frequency ends every open's stream with end of file,
+once what it has queued is read; reopening gives a header with the new
+tuning, on the connection still held (no dial). The gain, ppm, AGC,
+direct sampling and bias tee change nothing the header says and end
+nothing. So a demodulator learns the rate from what it reads, not from
+a flag that can disagree with `ctl` (with `-r 2.4M` given and the radio
+at 2.048M, `sdr/fm` would play everything 17% sharp and say nothing), and a recording says what
+it is: `sdr/iqhdr < rec > /mnt/sdr/ctl` tunes the radio back to it.
+Samples from a retune settling are no longer dropped from the middle of
+a stream (`skipped=` counted them there); a stream starts tuned, and a
+retune starts a new one. `sdr/rawiq -r RATE -f FREQ` puts a header on
+samples that have none (the host's `rtl_sdr`).
 
 ```
 ; sdrfs source tcp!localhost!1234
@@ -152,15 +179,21 @@ is a program reading `iq` and writing what it found, as Unix filters do:
 
 ```
 ; echo freq 98500000 > /mnt/sdr/ctl
-; sdr/fm -w < /mnt/sdr/iq > /dev/audio          # broadcast FM, to the speaker
+; sdr/fm -o 44100 < /mnt/sdr/iq | auplay /fd/0  # broadcast FM, to the speaker
 ; echo freq 121500000 > /mnt/sdr/ctl
-; sdr/am < /mnt/sdr/iq > /dev/audio             # the air band's emergency frequency
+; sdr/am < /mnt/sdr/iq | auplay /fd/0           # the air band's emergency frequency
 ```
+
+The demodulators' sound is an `audio(6)` file too (`rate`, `chans`,
+`bits 16`, `enc pcm`, then the samples), so `auplay` sets `/dev/audio`
+from it; `-R` gives the samples alone.
 
 | Program | Input | Output | Notes |
 |---|---|---|---|
-| `sdr/fm` | iq | PCM for `/dev/audio` | wide FM (broadcast) or narrow (`-n`: marine VHF, 2 m ham, NOAA weather) |
-| `sdr/am` | iq | PCM | the aviation band, 118–137 MHz, is AM |
+| `sdr/fm` | iq | audio(6) | wide FM (broadcast) or narrow (`-n`: marine VHF, 2 m ham, NOAA weather) |
+| `sdr/am` | iq | audio(6) | the aviation band, 118–137 MHz, is AM |
+| `sdr/rawiq` | samples with no header | iq | `-r` rate, `-f` frequency |
+| `sdr/iqhdr` | iq | its header's lines | as `ctl` takes them |
 | `sdr/adsb` | iq at 2 MS/s, 1090 MHz | Mode S messages as AVR text (`*8D4840D6...;`) | the format dump1090 serves on port 30002 |
 | `sdr/ais` | iq, 162 MHz | `!AIVDM` sentences | 9600-baud GMSK, two channels |
 | `sdr/aprs` | iq, 144.39 MHz (Americas) or 144.8 | positions | 1200-baud AFSK, AX.25 frames |

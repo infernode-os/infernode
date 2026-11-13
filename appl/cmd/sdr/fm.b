@@ -4,7 +4,7 @@ implement Fm;
 # sdr/fm - FM demodulated: sdrfs(4)'s iq in, audio(3)'s sound out.
 #
 #	echo freq 98.5M > /mnt/sdr/ctl
-#	sdr/fm < /mnt/sdr/iq > /dev/audio
+#	sdr/fm -o 44100 < /mnt/sdr/iq | auplay /fd/0
 #
 # Wide (broadcast) by default; -n narrow (marine VHF, 2 m amateur, NOAA
 # weather, the land mobile bands).  The samples are summed to about
@@ -15,11 +15,15 @@ implement Fm;
 # 15 kHz (above are the stereo pilot and subcarriers), and averaged to
 # the rate out.  The sound is mono.
 #
-# -r is the rate in (sdrfs's rate; 2048000, its default), -o the rate
-# out (8000, /dev/audio's default) and -c the channels out (2, as
-# audio(3); the same sound in each).  -g multiplies the volume.
+# The rate in is the one iq's header gives (sdr/rawiq puts one on a
+# recording without); input with no header, or in an encoding other
+# than cu8, is refused.  -o is the rate out (8000, /dev/audio's
+# default) and -c the channels out (2, as audio(3); the same sound in
+# each).  -g multiplies the volume.  The sound begins with audio(6)'s
+# header, so auplay(1) plays it; -R leaves it out (for /dev/audio
+# with audioctl set by hand).
 #
-# Usage:	sdr/fm [-nw] [-c chans] [-d µs] [-g gain] [-o rate] [-r rate]
+# Usage:	sdr/fm [-nwR] [-c chans] [-d µs] [-g gain] [-o rate]
 #
 
 include "sys.m";
@@ -34,7 +38,7 @@ include "math.m";
 
 include "sdrdsp.m";
 	dsp: Sdrdsp;
-	Decim, Fir, Resamp, Pcm: import dsp;
+	Decim, Fir, Resamp, Pcm, Hdr: import dsp;
 
 Fm: module
 {
@@ -60,9 +64,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	deemph := -1.0;
 	gain := 1.0;
 	fout := 8000;
-	fin := 2048000;
+	raw := 0;
 	arg->init(argv);
-	arg->setusage("sdr/fm [-nw] [-c chans] [-d µs] [-g gain] [-o rate] [-r rate]");
+	arg->setusage("sdr/fm [-nwR] [-c chans] [-d µs] [-g gain] [-o rate]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'n' =>
@@ -82,14 +86,18 @@ init(nil: ref Draw->Context, argv: list of string)
 		'o' =>
 			if((fout = dsp->rate(arg->earg())) == 0)
 				arg->usage();
-		'r' =>
-			if((fin = dsp->rate(arg->earg())) == 0)
-				arg->usage();
+		'R' =>
+			raw = 1;
 		* =>
 			arg->usage();
 		}
 	if(arg->argv() != nil)
 		arg->usage();
+
+	stdin := sys->fildes(0);
+	stdout := sys->fildes(1);
+	(h, first) := readhdr(stdin);
+	fin := h.rate;
 
 	# the deviation at full scale, and the rate it is found at: wide,
 	# the samples summed to about 240k; narrow, then the channel (8k
@@ -153,8 +161,11 @@ init(nil: ref Draw->Context, argv: list of string)
 		r = Resamp.new(fin, fout * n);
 	p := Pcm.new(fout, chans);
 
-	stdin := sys->fildes(0);
-	stdout := sys->fildes(1);
+	if(!raw) {
+		b := dsp->header(sys->sprint("rate %d\nchans %d\nbits 16\nenc pcm\n", fout, chans));
+		if(sys->write(stdout, b, len b) != len b)
+			fatal(sys->sprint("write: %r"));
+	}
 	buf := array[Chunk+1] of byte;	# a byte carried, and a chunk
 	i := array[Chunk/2] of real;
 	q := array[Chunk/2] of real;
@@ -169,7 +180,12 @@ init(nil: ref Draw->Context, argv: list of string)
 	spawn readahead(stdin, rc, pidc);
 	readerpid = <-pidc;
 	for(;;) {
-		(b, err) := <-rc;
+		b := first;
+		err: string;
+		if(b != nil)
+			first = nil;
+		else
+			(b, err) = <-rc;
 		if(b == nil) {
 			readerpid = -1;
 			if(err != nil)
@@ -230,6 +246,36 @@ readahead(fd: ref Sys->FD, c: chan of (array of byte, string), pidc: chan of int
 			return;
 		}
 		c <-= (b[0:n], nil);
+	}
+}
+
+# iq's header, refused if there is none or its samples are not cu8;
+# with it, what was read after it
+readhdr(fd: ref Sys->FD): (ref Hdr, array of byte)
+{
+	b := array[Sdrdsp->Maxhdr] of byte;
+	n := 0;
+	for(;;) {
+		(h, k, e) := Hdr.read(b, n);
+		if(k < 0)
+			fatal(e + ": not sdrfs(4)'s iq (sdr/rawiq puts a header on samples)");
+		if(k > 0) {
+			if(h.enc == nil)
+				fatal("no enc in the header: cu8 is all it takes");
+			if(h.enc != "cu8")
+				fatal("enc " + h.enc + ": cu8 is all it takes");
+			if(n == k)
+				return (h, nil);
+			return (h, b[k:n]);
+		}
+		if(n == len b)
+			fatal("header too long");
+		r := sys->read(fd, b[n:], len b - n);
+		if(r < 0)
+			fatal(sys->sprint("read: %r"));
+		if(r == 0)
+			fatal("no header: not sdrfs(4)'s iq (sdr/rawiq puts a header on samples)");
+		n += r;
 	}
 }
 

@@ -1,10 +1,10 @@
 .TH SDR 1
 .SH NAME
-sdr/fm, sdr/am \- demodulate a software-defined radio's samples
+sdr/fm, sdr/am, sdr/rawiq, sdr/iqhdr \- demodulate a software-defined radio's samples
 .SH SYNOPSIS
 .B sdr/fm
 [
-.B -nw
+.B -nwR
 ] [
 .B -c
 .I chans
@@ -17,13 +17,12 @@ sdr/fm, sdr/am \- demodulate a software-defined radio's samples
 ] [
 .B -o
 .I rate
-] [
-.B -r
-.I rate
 ]
 .PP
 .B sdr/am
 [
+.B -R
+] [
 .B -b
 .I hertz
 ] [
@@ -35,24 +34,56 @@ sdr/fm, sdr/am \- demodulate a software-defined radio's samples
 ] [
 .B -o
 .I rate
-] [
+]
+.PP
+.B sdr/rawiq
 .B -r
 .I rate
+[
+.B -f
+.I freq
+]
+.PP
+.B sdr/iqhdr
+[
+.I file
 ]
 .SH DESCRIPTION
-Each reads a radio's samples on its standard input, as
+.I Fm
+and
+.I am
+each read a radio's samples on standard input, as
 .IR sdrfs (4)'s
 .B iq
-gives them (8-bit unsigned I then Q), and writes the sound they carry on
-its standard output, as
-.IR audio (3)
-takes it: 16-bit little-endian samples,
+gives them: a header, lines of text saying the rate and the encoding
+(and the frequency), then 8-bit unsigned I then Q.
+The rate in is the header's; input with no header, or in an encoding
+other than
+.BR cu8 ,
+is refused.
+They write the sound the samples carry on standard output, as an
+.IR audio (6)
+file: a header
+.RB ( rate ,
+.BR chans ,
+.BR "bits 16" ,
+.BR "enc pcm" ),
+in one write, then 16-bit little-endian samples,
 .I chans
-of each, the same sound in every channel.
+of each, the same sound in every channel, so
+.IR auplay (1)
+plays it as it comes.
+.B -R
+leaves the header out, for
+.B /dev/audio
+set by hand.
 The radio is tuned to the station; what is a little off (a frequency
 error, an offset in ppm) is heard all the same.
 They are filters: they read until end of file and keep no state
 elsewhere.
+A retune ends
+.BR iq 's
+stream, and so them.
 .PP
 .I Fm
 demodulates FM: wide, broadcast FM, by default (or
@@ -85,15 +116,9 @@ signal's strength; full modulation is 0.7 of full scale.
 .PP
 Both take:
 .TP
-.BI -r " rate"
-the rate in: what
-.I sdrfs
-is set to (2048000, its default), with k or M taken (2.4M).
-.TP
 .BI -o " rate"
-the rate out: 8000, what
-.B /dev/audio
-plays until told otherwise; set both higher for broadcast FM (it
+the rate out: 8000 by default; higher for broadcast FM
+.RI ( audio (3)
 takes 8000, 11025, 22050 and 44100).
 .TP
 .BI -c " chans"
@@ -104,6 +129,27 @@ the channels out (2, as
 the volume multiplied; past full scale is clipped.
 .PP
 A rate out the rate in cannot give is refused.
+.PP
+.I Rawiq
+puts a header on samples that have none (a recording by the host's
+.IR rtl_sdr ,
+or samples with their header cut off): it writes one saying
+.B -r
+samples a second,
+.BR "enc cu8" ,
+and
+.B -f
+hertz if given (k, M and G taken), then copies its standard input.
+.PP
+.I Iqhdr
+reads only the header of samples on standard input (or in
+.IR file )
+and prints its lines, one a line, without the padding or the empty line
+after them; each is a command
+.BR sdrfs 's
+.B ctl
+takes, so written there they tune the radio as the samples were tuned.
+Input with no header is refused.
 .SH EXAMPLES
 A broadcast station, to the speaker:
 .IP
@@ -112,31 +158,47 @@ A broadcast station, to the speaker:
 ; echo 'freq 98.5M
 rate 2.4M
 gain 20' > /mnt/sdr/ctl
-; echo rate 44100 > /dev/audioctl
-; sdr/fm -r 2.4M -o 44100 < /mnt/sdr/iq > /dev/audio
+; sdr/fm -o 44100 < /mnt/sdr/iq | auplay /fd/0
 .EE
 .PP
 The air band's emergency frequency:
 .IP
 .EX
 ; echo freq 121.5M > /mnt/sdr/ctl
-; sdr/am -r 2.4M < /mnt/sdr/iq > /dev/audio
+; sdr/am < /mnt/sdr/iq | auplay /fd/0
 .EE
 .PP
-A recording made once, demodulated later:
+A recording made once, demodulated later, and the radio tuned back to
+it:
 .IP
 .EX
-; sdr/fm -n -c 1 < /tmp/marine.cu8 > /tmp/marine.pcm
+; cat /mnt/sdr/iq > /tmp/marine.iq
+; sdr/fm -n -c 1 < /tmp/marine.iq > /tmp/marine.au
+; sdr/iqhdr < /tmp/marine.iq > /mnt/sdr/ctl
+.EE
+.PP
+One made by the host's
+.IR rtl_sdr ,
+which has no header:
+.IP
+.EX
+; sdr/rawiq -r 2.4M -f 98.5M < /tmp/rtl.cu8 | sdr/fm -o 44100 > /tmp/fm.au
 .EE
 .SH SOURCE
 .B /appl/cmd/sdr/fm.b
 .br
 .B /appl/cmd/sdr/am.b
 .br
+.B /appl/cmd/sdr/rawiq.b
+.br
+.B /appl/cmd/sdr/iqhdr.b
+.br
 .B /appl/lib/sdrdsp.b
 .SH SEE ALSO
 .IR sdrfs (4),
-.IR audio (3)
+.IR auplay (1),
+.IR audio (3),
+.IR audio (6)
 .br
 .B /docs/SDR.md
 .SH BUGS

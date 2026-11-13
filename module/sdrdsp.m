@@ -1,7 +1,8 @@
 #
-# sdrdsp - what sdr(1)'s demodulators share: the samples sdrfs(4)'s iq
-# gives, made fewer and complex; a rate changed by averaging; sound as
-# audio(3) takes it.  Arithmetic only: no files, no processes.
+# sdrdsp - what sdr(1)'s demodulators share: the header sdrfs(4)'s iq
+# and audio(6) begin with; the samples iq gives, made fewer and
+# complex; a rate changed by averaging; sound as audio(3) takes it.
+# Arithmetic and text in buffers only: no files, no processes.
 #
 Sdrdsp: module
 {
@@ -70,4 +71,25 @@ Sdrdsp: module
 
 	# a rate as sdrfs's ctl takes it: 2.4M, 240k, 2048000; 0 if not
 	rate:	fn(s: string): int;
+	# a frequency as it takes it: 99.5M, 1090000000; -1 if not
+	hertz:	fn(s: string): big;
+
+	# A header, as sdrfs's iq and audio(6) begin: lines of text, each a
+	# command the device's ctl takes, rate first, then an empty line,
+	# the whole a multiple of 4 bytes (the last line padded with blanks).
+	Maxhdr:	con 1024;
+	Hdr: adt {
+		rate:	int;		# rate n
+		enc:	string;		# enc e; nil if not given
+		freq:	big;		# freq hz; -1 if not given
+		lines:	list of string;	# each line, its words joined by one blank
+
+		# the header at the start of b[0:n], and its length in bytes:
+		# 0 if b holds only its start (read more), -1 and why if b
+		# does not begin with one
+		read:	fn(b: array of byte, n: int): (ref Hdr, int, string);
+		text:	fn(h: self ref Hdr): string;	# the lines, each ending in a newline
+	};
+	# lines of text, each ending in a newline, as a header
+	header:	fn(lines: string): array of byte;
 };

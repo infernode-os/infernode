@@ -358,6 +358,7 @@ SYSMODULES=\
 	layers.m\
 	tensor.m\
 	parread.m\
+	sdrdsp.m\
 
 DISBIN=$ROOT/dis
 

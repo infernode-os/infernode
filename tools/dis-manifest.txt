@@ -759,6 +759,8 @@ dis/tests/env_rclose_test.dis
 dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
+dis/tests/export_hostile_test.dis
+dis/tests/export_limits.dis
 dis/tests/exception_test.dis
 dis/tests/factotum_grant_test.dis
 dis/tests/factotum_test.dis

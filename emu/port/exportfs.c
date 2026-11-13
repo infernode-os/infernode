@@ -36,6 +36,8 @@ struct Export
 	int	gid;
 	int	msize;
 	char*	user;
+	Ref	nreq;	/* requests counted against Maxreqs */
+	int	nfid;	/* fids in the table; locked by fidlock */
 };
 
 struct Fid
@@ -43,8 +45,10 @@ struct Fid
 	Fid*	next;
 	Fid**	last;
 	Chan*	chan;
-	int	fid;
-	int	ref;		/* fcalls using the fid; locked by Export.Lock */
+	u32int	fid;		/* as the message has it: an int never equalled a fid past 2^31 */
+	int	ref;		/* fcalls using the fid; locked by Export.fidlock */
+	int	excl;		/* one fcall has the fid to itself; locked by Export.fidlock */
+	int	dirbusy;	/* a directory read is in progress; locked by Export.fidlock */
 	vlong	offset;	/* last offset used (within directory) */
 	int	attached;	/* fid attached or cloned but not clunked */
 	Uqid*	qid;	/* generated qid */
@@ -60,6 +64,7 @@ struct Exq
 	Exq*	flush;	/* queued flush requests */
 	Exq*	flusht;	/* tail of flush queue */
 	Export*	export;
+	int	counted;	/* in export->nreq */
 	Proc*	slave;
 	Fcall	in, out;
 	uchar*	buf;
@@ -107,6 +112,22 @@ static char	Emode[] = "open/create -- unknown mode";
 static char	Edupfid[]	= "fid in use";
 static char	Eaccess[] = "read/write -- not open in suitable mode";
 static char	Ecount[] = "read/write -- count too big";
+static char	Emanyfids[] = "too many fids";
+static char	Emanyreqs[] = "too many requests outstanding";
+
+/*
+ * What one connection may hold.  A request keeps a buffer of msize bytes
+ * and, while it waits in a device, a slave; a fid keeps a Chan.  Nothing
+ * counted either, so a peer chose how much of the kernel's memory and how
+ * many of its processes an export held.  The limits are far above what a
+ * mount asks for (a blocked read for each waiting reader of a file, a fid
+ * for each open file and each name it has walked to and kept).
+ */
+enum
+{
+	Maxreqs	= 1024,	/* requests accepted and not yet answered */
+	Maxfids	= 32768,	/* fids attached or walked to and not clunked */
+};
 int	exdebug = 0;
 
 int
@@ -245,6 +266,7 @@ exportproc(void *a)
 	Exq *q;
 	int async, msize;
 	int n, type;
+	char *verr;
 	Export *fs = a;
 
 	exportinit();
@@ -325,6 +347,32 @@ exportproc(void *a)
 			}
 			continue;
 		}
+
+		/*
+		 * Tversion is answered here, not by a slave: the size it
+		 * sets is the size of the next request's buffer, which
+		 * this loop allocates before a slave would have run.
+		 */
+		if(type == Tversion){
+			verr = Exversion(fs, &q->in, &q->out);
+			if(verr != nil){
+				q->out.type = Rerror;
+				q->out.ename = verr;
+			}
+			exreply(q, "exportproc");
+			exfreeq(q);
+			continue;
+		}
+
+		if(fs->nreq.ref >= Maxreqs){
+			q->out.type = Rerror;
+			q->out.ename = Emanyreqs;
+			exreply(q, "exportproc");
+			exfreeq(q);
+			continue;
+		}
+		incref(&fs->nreq);
+		q->counted = 1;
 
 		lock(&exq.l);
 		if(exq.head == nil)
@@ -439,6 +487,8 @@ exfreeq(Exq *q)
 		exfree(fq->export);
 		free(fq);
 	}
+	if(q->counted)
+		decref(&q->export->nreq);
 	exfree(q->export);
 	free(q);
 }
@@ -581,6 +631,9 @@ exslave(void *a)
 				switch(q->in.type){
 				case Tread:
 					q->out.data = (char*)q->buf + IOHDRSZ;
+					/* the room for data, for Exread: this request's
+					 * buffer, whatever msize has become since */
+					q->out.count = q->bsize - IOHDRSZ;
 					break;
 				case Tstat:
 					q->out.stat = q->buf + MSGHDRSZ + BIT16SZ;	/* leaves it just where we want it */
@@ -673,20 +726,31 @@ exreply(Exq *q, char *who)
 static int
 exiounit(Export *fs, Chan *c)
 {
-	int iounit;
+	int iounit, msize;
 
-	iounit = fs->msize-IOHDRSZ;
-	if(c->iounit != 0 && c->iounit < fs->msize)
+	/* before a Tversion, the size requests are read at (it was -24) */
+	msize = fs->msize;
+	if(msize == 0)
+		msize = MAXRPCDEF;
+	iounit = msize-IOHDRSZ;
+	if(c->iounit != 0 && c->iounit < msize)
 		iounit = c->iounit;
 	return iounit;
 }
 
+/*
+ * A new fid, the caller's alone (excl) until its Exputfid: it has no Chan
+ * yet, and every other request on it is refused until it has.  It was in
+ * the table at once, and a request sent with the Tattach or Twalk that
+ * made it found it with a nil Chan.
+ */
 static Fid*
-Exmkfid(Export *fs, ulong fid)
+Exmkfid(Export *fs, ulong fid, char **why)
 {
 	ulong h;
 	Fid *f, *nf;
 
+	*why = Enomem;
 	nf = malloc(sizeof(Fid));
 	if(nf == nil)
 		return nil;
@@ -696,9 +760,17 @@ Exmkfid(Export *fs, ulong fid)
 		if(f->fid == fid){
 			unlock(&fs->fidlock);
 			free(nf);
+			*why = Edupfid;
 			return nil;
 		}
 	}
+	if(fs->nfid >= Maxfids){
+		unlock(&fs->fidlock);
+		free(nf);
+		*why = Emanyfids;
+		return nil;
+	}
+	fs->nfid++;
 
 	nf->next = fs->fid[h];
 	if(nf->next != nil)
@@ -708,6 +780,8 @@ Exmkfid(Export *fs, ulong fid)
 
 	nf->fid = fid;
 	nf->ref = 1;
+	nf->excl = 1;
+	nf->dirbusy = 0;
 	nf->attached = 1;
 	nf->offset = 0;
 	nf->chan = nil;
@@ -716,19 +790,36 @@ Exmkfid(Export *fs, ulong fid)
 	return nf;
 }
 
+/*
+ * The fid, for one fcall.  A fcall that replaces the fid's Chan (an open,
+ * a create, a walk that keeps the fid, a remove) asks for it alone (excl)
+ * and gets it only if no other fcall is using it; while it has it, every
+ * other is refused.  The others share it: reads and writes on one fid at
+ * once are ordinary (a mount sends them), and each uses the Chan the fid
+ * has.  Nothing kept the two apart: requests sent together on one fid
+ * closed the Chan another was cloning or reading.  A mount opens and
+ * removes only a fid it has just walked to for itself, so it is never
+ * refused.
+ */
 static Fid*
-Exgetfid(Export *fs, ulong fid)
+Exgetfid(Export *fs, ulong fid, int excl, char **why)
 {
 	Fid *f;
 	ulong h;
 
+	*why = Enofid;
 	lock(&fs->fidlock);
 	h = fid % Nfidhash;
 	for(f = fs->fid[h]; f; f = f->next) {
 		if(f->fid == fid){
 			if(f->attached == 0)
 				break;
+			if(f->excl || excl && f->ref != 0){
+				*why = Edupfid;
+				break;
+			}
 			f->ref++;
+			f->excl = excl;
 			unlock(&fs->fidlock);
 			return f;
 		}
@@ -744,12 +835,14 @@ Exputfid(Export *fs, Fid *f)
 
 	lock(&fs->fidlock);
 	f->ref--;
+	f->excl = 0;	/* whoever had it alone was the only one using it */
 	if(f->ref == 0 && f->attached == 0){
 		c = f->chan;
 		f->chan = nil;
 		*f->last = f->next;
 		if(f->next != nil)
 			f->next->last = f->last;
+		fs->nfid--;
 		unlock(&fs->fidlock);
 		freeuqid(&fs->uqids, f->qid);
 		free(f);
@@ -855,10 +948,11 @@ static char*
 Exattach(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
+	char *err;
 
-	f = Exmkfid(fs, t->fid);
+	f = Exmkfid(fs, t->fid, &err);
 	if(f == nil)
-		return Edupfid;
+		return err;
 	if(waserror()){
 		f->attached = 0;
 		Exputfid(fs, f);
@@ -876,11 +970,12 @@ static char*
 Exclunk(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
+	char *err;
 
 	USED(r);
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 0, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	f->attached = 0;
 	Exputfid(fs, f);
 	return nil;
@@ -903,64 +998,75 @@ static char*
 Exwalk(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f, *nf;
-	Chan *c;
-	char *name;
-	Uqid *qid;
+	volatile struct {Chan *c;} c;
+	volatile struct {Uqid *q;} qid;
+	char *name, *err;
 	int i;
 
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, t->newfid == t->fid, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	if(f->chan->flag & COPEN){
 		Exputfid(fs, f);
 		return Eopen;
 	}
+	/*
+	 * one handler for all of it: validname and uqidalloc raise, and
+	 * raised past this function with the clone, the qid and the fid
+	 * all still held (a name with a slash in it kept the fid in use
+	 * for good, and a Chan with it).
+	 */
+	c.c = nil;
+	qid.q = nil;
 	if(waserror()){
+		if(c.c != nil)
+			cclose(c.c);
+		freeuqid(&fs->uqids, qid.q);
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
-	c = cclone(f->chan);
-	poperror();
-	qid = f->qid;
-	incref(&qid->r);
+	c.c = cclone(f->chan);
+	qid.q = f->qid;
+	incref(&qid.q->r);
 	r->nwqid = 0;
-	if(t->nwname > 0){
-		for(i=0; i<t->nwname; i++){
-			name = t->wname[i];
-			validname(name, 0);
-			if(!exisroot(fs, c) || *name != '\0' && strcmp(name, "..") != 0){
-				if(safewalk(&c, &name, 1, 0, nil) < 0){
-					/* leave the original state on error */
-					cclose(c);
-					freeuqid(&fs->uqids, qid);
-					Exputfid(fs, f);
-					if(i == 0)
-						return up->env->errstr;
-					return nil;
-				}
-				freeuqid(&fs->uqids, qid);
-				qid = uqidalloc(&fs->uqids, c);
+	for(i=0; i<t->nwname; i++){
+		name = t->wname[i];
+		validname(name, 0);
+		if(!exisroot(fs, c.c) || *name != '\0' && strcmp(name, "..") != 0){
+			if(safewalk((Chan**)&c.c, &name, 1, 0, nil) < 0){
+				/* leave the original state on error */
+				poperror();
+				cclose(c.c);
+				freeuqid(&fs->uqids, qid.q);
+				Exputfid(fs, f);
+				if(i == 0)
+					return up->env->errstr;
+				return nil;
 			}
-			r->wqid[r->nwqid++] = mkuqid(c, qid);
+			freeuqid(&fs->uqids, qid.q);
+			qid.q = nil;
+			qid.q = uqidalloc(&fs->uqids, c.c);
 		}
+		r->wqid[r->nwqid++] = mkuqid(c.c, qid.q);
 	}
+	poperror();
 
 	if(t->newfid != t->fid){
-		nf = Exmkfid(fs, t->newfid);
+		nf = Exmkfid(fs, t->newfid, &err);
 		if(nf == nil){
-			cclose(c);
-			freeuqid(&fs->uqids, qid);
+			cclose(c.c);
+			freeuqid(&fs->uqids, qid.q);
 			Exputfid(fs, f);
-			return Edupfid;
+			return err;
 		}
-		nf->chan = c;
-		nf->qid = qid;
+		nf->chan = c.c;
+		nf->qid = qid.q;
 		Exputfid(fs, nf);
 	}else{
 		cclose(f->chan);
-		f->chan = c;
+		f->chan = c.c;
 		freeuqid(&fs->uqids, f->qid);
-		f->qid = qid;
+		f->qid = qid.q;
 	}
 	Exputfid(fs, f);
 	return nil;
@@ -973,10 +1079,11 @@ Exopen(Export *fs, Fcall *t, Fcall *r)
 	Chan *c;
 	Uqid *qid;
 	Mhead *m;
+	char *err;
 
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 1, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	if(f->chan->flag & COPEN){
 		Exputfid(fs, f);
 		return Emode;
@@ -1029,10 +1136,11 @@ Excreate(Export *fs, Fcall *t, Fcall *r)
 	Cname *oname;
 	Uqid *qid;
 	Mhead *m;
+	char *err;
 
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 1, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	if(f->chan->flag & COPEN){
 		Exputfid(fs, f);
 		return Emode;
@@ -1092,20 +1200,45 @@ Excreate(Export *fs, Fcall *t, Fcall *r)
 	return nil;
 }
 
+/*
+ * Is a count more than a read or write may ask for?  count is unsigned
+ * and msize is 0 until a Tversion: msize-IOHDRSZ was then -24, which the
+ * comparison made 4294967272, so no count was too big.
+ */
+static int
+countover(Export *fs, u32int count)
+{
+	return fs->msize != 0 && count > (u32int)(fs->msize-IOHDRSZ);
+}
+
+static void
+exdirdone(Export *fs, Fid *f)
+{
+	lock(&fs->fidlock);
+	f->dirbusy = 0;
+	unlock(&fs->fidlock);
+}
+
 static char*
 Exread(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
 	Chan *c;
 	Lock *cl;
-	vlong off;
-	int dir, n, seek;
+	vlong off, d;
+	int n, seek;
+	u32int max;
+	char *err;
+	volatile struct {int dir;} dir;
 
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 0, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 
+	dir.dir = 0;
 	if(waserror()) {
+		if(dir.dir)
+			exdirdone(fs, f);
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
@@ -1114,12 +1247,33 @@ Exread(Export *fs, Fcall *t, Fcall *r)
 		error(Emode);
 	if(c->mode != OREAD && c->mode != ORDWR)
 		error(Eaccess);
-	if(t->count < 0 || t->count > fs->msize-IOHDRSZ)
+	/*
+	 * the data goes into this request's own buffer, which has room
+	 * for max bytes (exslave says).  The count was held only to
+	 * msize, which is 0 before a Tversion (see countover) and may
+	 * have grown since the buffer was made: either way the device
+	 * was given more room than there was.
+	 */
+	max = r->count;
+	if(t->count > max || countover(fs, t->count))
 		error(Ecount);
 	if(t->offset < 0)
 		error(Enegoff);
-	dir = c->qid.type & QTDIR;
-	if(dir && t->offset != f->offset){
+	if(c->qid.type & QTDIR){
+		/*
+		 * a directory's place is the fid's (offset, and the
+		 * Chan's for a union): one read of it at a time
+		 */
+		lock(&fs->fidlock);
+		if(f->dirbusy){
+			unlock(&fs->fidlock);
+			error(Edupfid);
+		}
+		f->dirbusy = 1;
+		unlock(&fs->fidlock);
+		dir.dir = 1;
+	}
+	if(dir.dir && t->offset != f->offset){
 		if(t->offset != 0)
 			error(Eseekdir);
 		f->offset = 0;
@@ -1131,14 +1285,19 @@ Exread(Export *fs, Fcall *t, Fcall *r)
 		n = t->count;
 		seek = 0;
 		off = t->offset;
-		if(dir && f->offset != off){
+		if(dir.dir && f->offset != off){
 			off = f->offset;
-			n = t->offset - off;
-			if(n > MAXFDATA)
-				n = MAXFDATA;
+			d = t->offset - off;
+			if(d <= 0)
+				error(Eseekdir);
+			if(d > MAXFDATA)
+				d = MAXFDATA;
+			n = d;
+			if(n > max)
+				n = max;
 			seek = 1;
 		}
-		if(dir && c->umh != nil){
+		if(dir.dir && c->umh != nil){
 			if(0)
 				print("union read %d uri %d dri %d\n", seek, c->uri, c->dri);
 			n = unionread(c, r->data, n);
@@ -1160,6 +1319,8 @@ Exread(Export *fs, Fcall *t, Fcall *r)
 	r->count = n;
 
 	poperror();
+	if(dir.dir)
+		exdirdone(fs, f);
 	Exputfid(fs, f);
 	return nil;
 }
@@ -1169,10 +1330,11 @@ Exwrite(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
 	Chan *c;
+	char *err;
 
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 0, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	if(waserror()){
 		Exputfid(fs, f);
 		return up->env->errstr;
@@ -1185,7 +1347,7 @@ Exwrite(Export *fs, Fcall *t, Fcall *r)
 		error(Eaccess);
 	if(c->qid.type & QTDIR)
 		error(Eisdir);
-	if(t->count < 0 || t->count > fs->msize-IOHDRSZ)
+	if(countover(fs, t->count))
 		error(Ecount);
 	if(t->offset < 0)
 		error(Enegoff);
@@ -1201,10 +1363,11 @@ Exstat(Export *fs, Fcall *t, Fcall *r)
 	Fid *f;
 	Chan *c;
 	int n;
+	char *err;
 
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 0, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	c = nil;
 	if(waserror()){
 		if(c != nil)
@@ -1229,11 +1392,12 @@ Exwstat(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
 	Chan *c;
+	char *err;
 
 	USED(r);
-	f = Exgetfid(fs, t->fid);
+	f = Exgetfid(fs, t->fid, 0, &err);
 	if(f == nil)
-		return Enofid;
+		return err;
 	if(waserror()){
 		Exputfid(fs, f);
 		return up->env->errstr;
@@ -1260,23 +1424,44 @@ Exremove(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
 	Chan *c;
+	char *err;
+	volatile struct {int removing;} rm;
 
 	USED(r);
-	f = Exgetfid(fs, t->fid);
-	if(f == nil)
-		return Enofid;
+	f = Exgetfid(fs, t->fid, 1, &err);
+	if(f == nil){
+		/*
+		 * in use by another fcall: not removed, but a remove
+		 * clunks its fid whatever becomes of it
+		 */
+		if(err == Edupfid && (f = Exgetfid(fs, t->fid, 0, &err)) != nil){
+			f->attached = 0;
+			Exputfid(fs, f);
+			return Edupfid;
+		}
+		return err;
+	}
 	if(waserror()){
 		f->attached = 0;
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
 	c = exmount(f->chan, nil, 0);
+	rm.removing = 0;
 	if(waserror()){
-		c->type = 0;	/* see below */
+		/*
+		 * only once the device's remove has been called has it
+		 * clunked the Chan: refused before that (a read-only
+		 * mount), the Chan is still the device's to close.  It
+		 * was given to device 0 either way, and may be the fid's.
+		 */
+		if(rm.removing)
+			c->type = 0;	/* see below */
 		cclose(c);
 		nexterror();
 	}
 	checkwritable(c);
+	rm.removing = 1;
 	devtab[c->type]->remove(c);
 	poperror();
 	poperror();

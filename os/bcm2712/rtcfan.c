@@ -64,8 +64,6 @@ enum
 	Plausible	= 1600000000,	/* a clock before 2020 was never set */
 };
 
-extern vlong boottime;		/* ../port/devcons.c: what /dev/time is kept from */
-
 static int fanlevel;
 
 /* the firmware's clock, or -1 */
@@ -224,5 +222,5 @@ rtcfanlink(void)
 	t = rtcget();
 	print("rtc: %lld seconds%s\n", t, t >= Plausible ? "" : ": not set, the clock is left alone");
 	if(t >= Plausible)
-		boottime = t - TK2SEC(MACHP(0)->ticks);
+		todset(t * 1000000000LL, 0, 0);	/* tod.c's clock is /dev/time's */
 }

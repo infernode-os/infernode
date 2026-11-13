@@ -41,6 +41,11 @@
 #                at 1% loss three in four losses waited for the timer, and
 #                with the record left at 0 the rule was off in half the
 #                sequence space (2026-11-11).
+#   clock        the time of day is tod.c's (the hardware counter), not
+#                boot time plus the tick count; the tick is armed before
+#                timerintr() arms its deadline, not after; every overdue
+#                tick is counted. Each ARM board lost 2.6 to 4.5 s an
+#                hour (2026-11-13).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -100,5 +105,18 @@ idle=$(sed -n 's/^Idlems: con \([0-9]*\);.*/\1/p' appl/cmd/disk/kfs.b)
 flush=$(sed -n 's/^[[:space:]]*Flushms[[:space:]]*= \([0-9]*\),.*/\1/p' os/bcm2712/nvme.c)
 if [ -n "$idle" ] && [ -n "$flush" ] && [ "$idle" -gt "$flush" ]; then ok "kfs waits $idle ms, the drive flushes every $flush"
 else no "kfs's idle mark ($idle ms) must outlast the drive's write-back ($flush ms)"; fi
+
+for f in os/arm64/clockgt.c os/bcm2837/clock.c; do
+	ci=$(sed -n '/^clockintr(Ureg/,/^}/p' $f | grep -v '^[[:space:]]*\*\|/\*')
+	a=$(echo "$ci" | grep -n 'armtick();' | cut -d: -f1 | xargs)
+	t=$(echo "$ci" | grep -n 'timerintr(u, 0);' | cut -d: -f1)
+	if [ -n "$t" ] && [ $(echo $a | wc -w) -eq 1 ] && [ "$a" -lt "$t" ]; then ok "$f arms the tick before timerintr's deadline"
+	else no "$f: clockintr must call armtick() once, before timerintr(), or the tick runs late and the clock loses it"; fi
+done
+sec=$(sed -n '/^seconds(void)/,/^}/p' os/port/devcons.c)
+if echo "$sec" | grep -q 'todget' && ! grep -q 'boottime' os/port/devcons.c; then ok "the time of day is the hardware counter's"
+else no "seconds() is not todget()'s: the time of day loses every missed tick"; fi
+if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
+else no "timerintr runs hzclock once however many ticks were due"; fi
 
 exit $fail

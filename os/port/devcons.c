@@ -906,30 +906,37 @@ kbdsread(Chan *c, void *va, long n)
 	return n;
 }
 
-ulong	boottime;		/* seconds since epoch at boot */
-
+/*
+ * DIVERGENCE FROM UPSTREAM: the time of day is tod.c's, as Plan 9's
+ * is. Upstream had it as the boot time plus MACHP(0)->ticks, which
+ * loses every tick the clock interrupt misses; tod.c reads the
+ * hardware counter, which misses nothing. The kernel had two clocks
+ * that had to be set together (the virt boards set both), and the
+ * one /dev/time read was the one that drifted: 2.6 s an hour slow
+ * on a Pi 5, 4.5 on a Pi 3.
+ */
 long
 seconds(void)
 {
-	return boottime + TK2SEC(MACHP(0)->ticks);
+	return todget(nil) / 1000000000LL;
 }
 
 vlong
 mseconds(void)
 {
-	return ((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)));
+	return todget(nil) / 1000000LL;
 }
 
 vlong
 osusectime(void)
 {
-	return (((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)))*1000);
+	return todget(nil) / 1000LL;
 }
 
 vlong
 nsec(void)
 {
-	return osusectime()*1000;	/* TO DO */
+	return todget(nil);
 }
 
 int
@@ -1326,7 +1333,7 @@ consread(Chan *c, void *buf, long n, vlong offset)
 			return qread(kscanq, buf, n);
 
 	case Qtime:
-		snprint(tmp, sizeof(tmp), "%.lld", (vlong)mseconds()*1000);
+		snprint(tmp, sizeof(tmp), "%.lld", osusectime());
 		return readstr(offset, buf, n, tmp);
 
 	case Qhostowner:
@@ -1463,7 +1470,7 @@ consread(Chan *c, void *buf, long n, vlong offset)
 static long
 conswrite(Chan *c, void *va, long n, vlong offset)
 {
-	vlong t;
+	vlong t, us;
 	long l, bp;
 	char *a = va;
 	Cmdbuf *cb;
@@ -1562,8 +1569,9 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			n = sizeof(buf)-1;
 		strncpy(buf, a, n);
 		buf[n] = 0;
-		t = strtoll(buf, 0, 0)/1000000;
-		boottime = t - TK2SEC(MACHP(0)->ticks);
+		us = strtoll(buf, 0, 0);
+		todset(us * 1000LL, 0, 0);
+		t = us / 1000000;
 #ifdef FWRTC
 		rtcset((u32int)t);	/* a clock worth setting is worth keeping */
 #endif

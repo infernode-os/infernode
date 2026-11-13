@@ -75,6 +75,9 @@ struct Mntalloc
 	ulong	tagmask[NMASK];
 }mntalloc;
 
+static char Enofit[] = "request does not fit the server's message size";
+static ulong nunexpected;	/* replies to no call; a count for the console's sake, not exact */
+
 void	mattach(Mnt*, Chan*, char*);
 Mnt*	mntchk(Chan*);
 void	mntdirfix(uchar*, Chan*);
@@ -1112,9 +1115,15 @@ mountio(Mnt *m, Mntrpc *r)
 	/* Transmit a file system rpc */
 	if(m->msize == 0)
 		panic("msize");
+	/*
+	 * convS2M gives 0 for a request that does not fit msize, which the
+	 * server chose (256 at least): a walk of long names, a wstat.  The
+	 * test was n < 0, never true: nothing was written, and the caller
+	 * waited for the answer to a request that was never sent.
+	 */
 	n = convS2M(&r->request, r->rpc, m->msize);
-	if(n < 0)
-		panic("bad message type in mountio");
+	if(n <= 0)
+		error(Enofit);
 	if(devtab[m->c->type]->write(m->c, r->rpc, n, 0) != n)
 		error(Emountrpc);
 /*	r->stime = fastticks(nil); */
@@ -1296,6 +1305,7 @@ void
 mountmux(Mnt *m, Mntrpc *r)
 {
 	Mntrpc **l, *q, *hl;
+	ulong n;
 
 	lock(&m->l);
 	l = &m->queue;
@@ -1339,10 +1349,19 @@ mountmux(Mnt *m, Mntrpc *r)
 		freeblist(r->b);
 		r->b = nil;
 	}
+	/*
+	 * the first few, then one in a thousand: a server sends these as
+	 * fast as it likes, and each was a line on the console
+	 */
+	n = ++nunexpected;
+	if(n > 8 && n%1000 != 0)
+		return;
 	if(r->reply.type == Rerror)
 		print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
 	else
 		print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
+	if(n == 8)
+		print("unexpected reply tags: one in a thousand reported from here\n");
 }
 
 /*

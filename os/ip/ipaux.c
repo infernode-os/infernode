@@ -472,6 +472,11 @@ parseip(uchar *to, char *from)
 		op = p;
 		x = strtoul(p, &p, 16);
 		if(*p == '.' || (*p == 0 && i == 0)){
+			/* a dotted tail occupies four bytes, not one 16-bit group */
+			if(i > IPaddrlen-4){
+				memset(to, 0, IPaddrlen);
+				return 6;
+			}
 			p = v4parseip(to+i, op);
 			i += 4;
 			break;

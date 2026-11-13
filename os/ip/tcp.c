@@ -1191,6 +1191,7 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	if(*bpp == nil)
 		return -1;
 
+	h = (Tcp6hdr *)((*bpp)->rp);
 	optr = h->tcpopt;
 	n = hdrlen - TCP6_HDRSIZE;
 	while(n > 0 && *optr != EOLOPT) {
@@ -1268,6 +1269,7 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	if(*bpp == nil)
 		return -1;
 
+	h = (Tcp4hdr *)((*bpp)->rp);
 	optr = h->tcpopt;
 	n = hdrlen - TCP4_HDRSIZE;
 	while(n > 0 && *optr != EOLOPT) {
@@ -1878,6 +1880,8 @@ update(Conv *s, Tcp *seg)
 
 	/* An ACK for data not yet sent must not change window or recovery state. */
 	if(seq_gt(seg->ack, tcb->snd.nxt))
+		return;
+	if(seq_lt(seg->ack, tcb->snd.una))
 		return;
 
 	/* RFC 793: accept a window update only from a newer segment/ACK pair. */

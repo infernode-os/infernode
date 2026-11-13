@@ -114,5 +114,14 @@ else
 	fail "virtio-net hands up a frame shorter than an Ethernet header"
 fi
 
+# A receive queue left short of buffers is refilled on the clock, not only on an interrupt.
+awk '/^netproc\(/,/^}/' "$ROOT/os/virtio/ethervirtio.c" > "$BUILD/netproc.c"
+if grep -q 'starved = vqroom(c->rx) > 0;' "$BUILD/netproc.c" &&
+   grep -A1 'if(starved)' "$BUILD/netproc.c" | grep -q 'tsleep(&c->r, network, c, Rxretryms)'; then
+	pass "virtio-net retries a receive buffer it could not post, with no frame needed to wake it"
+else
+	fail "virtio-net waits for an interrupt to refill a receive queue that may have nothing left to interrupt for"
+fi
+
 echo "Passed: $PASSED  Failed: $FAILED"
 [ "$FAILED" -eq 0 ]

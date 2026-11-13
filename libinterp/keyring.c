@@ -181,15 +181,32 @@ base64tobig(char *str, char **strp)
 
 	for(p = str; *p && *p != '\n'; p++)
 		;
+	/*
+	 * where the field ended, whether or not it held a number: callers
+	 * parse a key as one call after another, each starting where the
+	 * last stopped (base64tobig(p, &p)).  An empty field returned nil
+	 * with *strp untouched, and the next call started from whatever
+	 * the caller's stack held: a key string that is just a newline,
+	 * which a peer sends, read from a wild pointer.
+	 */
+	if(strp){
+		if(*p)
+			*strp = p+1;
+		else
+			*strp = p;
+	}
 	if(p == str)
 		return nil;
 	n = dec64(hex, sizeof(hex), str, p - str);
+	if(n <= 0)
+		return nil;	/* no base64 in it */
 	b = betomp(hex, n, nil);
-	if(strp){
-		if(*p)
-			p++;
-		*strp = p;
-	}
+	/*
+	 * a zero as libmp knows one: betomp leaves a number of all zero
+	 * bytes with a digit in it, which compares greater than mpzero and
+	 * is not the divisor mpdiv looks for
+	 */
+	mpnorm(b);
 	return b;
 }
 
@@ -402,6 +419,9 @@ Keyring_genSKfromPK(void *fp)
 	release();
 	sk->key = (*sa->vec->genskfrompk)(pk->key);
 	acquire();
+	/* as genSK: nil for a key that cannot be made, not an SK with none */
+	if(sk->key == nil)
+		*f->ret = H;
 }
 
 /* converts a sequence of newline-separated base64-encoded mpints to attr=hexval ... in f */

@@ -239,6 +239,8 @@ view(ctxt: ref Context, ims, masks: array of ref Image, file: string)
 	for(;;) alt{
 	ctl := <-w.ctl or
 	ctl = <-w.ctxt.ctl =>
+		if(ctl == "exit")
+			leave();
 		w.wmctl(ctl);
 		if(ctl != nil && ctl[0] == '!'){
 #	ul = w.image.r.min;
@@ -255,9 +257,7 @@ view(ctxt: ref Context, ims, masks: array of ref Image, file: string)
 				n := menuhit->menuhit(p.buttons, mc, menu, nil);
 				case n {
 				Exit =>
-				#	plumbmsg->shutdown();
-					postnote(1, sys->pctl(0, nil), "kill");
-					exit;
+					leave();
 				Rot =>
 					image = rot90(image);
 					redraw(image, w.image);
@@ -315,6 +315,19 @@ view(ctxt: ref Context, ims, masks: array of ref Image, file: string)
 #			imno = 0;
 #		w.image.draw(ims[imno].r,ims[imno], masks[imno], ims[imno].r.min);
 	}
+}
+
+# Tell the plumber the view port is gone before the group goes: it
+# counts view as started from its "start" until it hears "stop", and
+# sent every later image to a port nobody read (the first image
+# opened, the rest did nothing).  wmclient's exit (the frame's close,
+# wm/wm's Delete) is a killgrp too, so it comes through here first.
+leave()
+{
+	if(plumbed)
+		plumbmsg->shutdown();
+	postnote(1, sys->pctl(0, nil), "kill");
+	exit;
 }
 
 postnote(t : int, pid : int, note : string) : int

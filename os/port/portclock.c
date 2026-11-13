@@ -3,6 +3,7 @@
  *
  * DIVERGENCE FROM UPSTREAM: embedded Locks are named. Timers embeds
  * one, and portdat.h's Timer does too. See os/bcm2837/README.md.
+ * timerintr() counts every overdue tick (see there).
  */
 
 #include "u.h"
@@ -226,8 +227,18 @@ timerintr(Ureg *u, uvlong)
 		if(when > now){
 			timerset(when);
 			iunlock(&tt->l);
-			if(callhzclock)
+			if(callhzclock){
+				/*
+				 * DIVERGENCE FROM UPSTREAM: an interrupt late by
+				 * more than a period finds the clock Timer due more
+				 * than once. Upstream counted each and ran hzclock()
+				 * once, so a tick was lost every time; m->ticks is
+				 * what timed sleeps and the scheduler count by.
+				 * Count them all and run the clock once.
+				 */
+				m->ticks += callhzclock - 1;
 				hzclock(u);
+			}
 			return;
 		}
 		tt->head = t->tnext;

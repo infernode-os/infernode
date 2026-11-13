@@ -261,7 +261,7 @@ ipoput6(Fs *f, Block *bp, int gating, int ttl, int tos, Conv *c)
 		
 	/* start v6 fragmentation */
 	uflen = unfraglen(bp, &nexthdr, 1);
-	if(uflen > medialen) {
+	if(uflen < 0 || uflen > medialen) {
 		ip->stats[FragFails]++;
 		ip->stats[OutDiscards]++;
 		netlog(f, Logip, "%I: unfragmentable part too big\n", eh->dst);
@@ -398,6 +398,28 @@ ipiput6(Fs *f, Ipifc *ifc, Block *bp)
 		return;
 	}
 
+	/*
+	 * Ignore link-layer padding, but never let extension-header parsing
+	 * walk past the payload length advertised by the IPv6 header.
+	 */
+	hl = IP6HDR + nhgets(h->ploadlen);
+	if(blocklen(bp) < hl) {
+		ip->stats[InHdrErrors]++;
+		freeblist(bp);
+		return;
+	}
+	if(blocklen(bp) != hl) {
+		bp = trimblock(bp, 0, hl);
+		if(bp == nil)
+			return;
+	}
+	if(BLEN(bp) < hl) {
+		bp = pullupblock(bp, hl);
+		if(bp == nil)
+			return;
+	}
+	h = (Ip6hdr *)bp->rp;
+
 	/* route */
 	if(notforme) {
 		if(!ip->iprouting){
@@ -518,12 +540,20 @@ procxtns(IP *ip, Block *bp, int doreasm) {
 
 	h = (Ip6hdr *) (bp->rp);
 	offset = unfraglen(bp, &proto, 0);
+	if(offset < 0) {
+		freeblist(bp);
+		return nil;
+	}
 
 	if((proto == FH) && (doreasm != 0)) {
 		bp = ip6reassemble(ip, offset, bp, h);
 		if(bp == nil) 
 			return nil; 
 		offset = unfraglen(bp, &proto, 0);
+		if(offset < 0) {
+			freeblist(bp);
+			return nil;
+		}
 	}
 
 	if(proto == DOH || offset > IP6HDR) 
@@ -541,10 +571,13 @@ procxtns(IP *ip, Block *bp, int doreasm) {
 int
 unfraglen(Block *bp, uchar *nexthdr, int setfh)
 {
-	uchar *p, *q;
+	uchar *e, *p, *q;
 	int ufl, hs;
 
 	p = bp->rp;
+	e = bp->wp;
+	if(e - p < IP6HDR)
+		return -1;
 	q = p+6;	/* proto, = p+sizeof(Ip6hdr.vcf)+sizeof(Ip6hdr.ploadlen) */
 	*nexthdr = *q;
 	ufl = IP6HDR;
@@ -552,8 +585,12 @@ unfraglen(Block *bp, uchar *nexthdr, int setfh)
 
 	for(;;) {
 		if(*nexthdr == HBH || *nexthdr == RH) {
+			if(e - p < 2)
+				return -1;
 			*nexthdr = *p;
 			hs = ((int)*(p+1) + 1) * 8;
+			if(hs > e - p)
+				return -1;
 			ufl += hs;
 			q = p;
 			p += hs;
@@ -562,8 +599,11 @@ unfraglen(Block *bp, uchar *nexthdr, int setfh)
 			break;
 	}
 
-	if(*nexthdr == FH)
+	if(*nexthdr == FH) {
+		if(e - p < IP6FHDR)
+			return -1;
 		*q = *p;
+	}
 
 	if(setfh)
 		*q = FH;
@@ -757,4 +797,3 @@ ip6reassemble(IP* ip, int uflen, Block* bp, Ip6hdr* ih)
 	qunlock(&ip->fraglock6);
 	return nil;
 }
-

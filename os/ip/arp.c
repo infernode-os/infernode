@@ -533,6 +533,7 @@ arpread(Arp *arp, char *p, ulong offset, int len)
 {
 	Arpent *a;
 	int n;
+	char line[Alinelen+1];
 	char mac[2*MAClen+1];
 
 	if(offset % Alinelen)
@@ -542,6 +543,7 @@ arpread(Arp *arp, char *p, ulong offset, int len)
 	len = len/Alinelen;
 
 	n = 0;
+	qlock(&arp->ql);
 	for(a = arp->cache; len > 0 && a < &arp->cache[NCACHE]; a++){
 		if(a->state == 0)
 			continue;
@@ -550,11 +552,13 @@ arpread(Arp *arp, char *p, ulong offset, int len)
 			continue;
 		}
 		len--;
-		qlock(&arp->ql);
 		convmac(mac, a->mac, a->type->maclen);
-		n += sprint(p+n, aformat, a->type->name, arpstate[a->state], a->ip, mac);
-		qunlock(&arp->ql);
+		snprint(line, sizeof line, aformat, a->type->name,
+			arpstate[a->state], a->ip, mac);
+		memmove(p+n, line, Alinelen);
+		n += Alinelen;
 	}
+	qunlock(&arp->ql);
 
 	return n;
 }
@@ -681,4 +685,3 @@ rxmitproc(void *v)
 			tsleep(&arp->rxmtq, return0, 0, wakeupat); 
 	}
 }
-

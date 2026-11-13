@@ -794,6 +794,8 @@ jobs:
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
               cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test mpexp_test
               libkern_copy_test
+              ethermedium_arp_test genet_rxlen_test icmp6_ndopt_test icmp_netlog_test
+              virtio_used_test ether4330_bounds_test dns_reply_test usbclass_selftest_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test

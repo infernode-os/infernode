@@ -277,6 +277,7 @@ Lrxerr:		con 16r00400000;	# RX_CMD_A: receive error
 Maxframe:	con 1514;	# an Ethernet frame, header included
 Rnisdata:	con 16r00000001;
 Rnishdr:	con 44;		# RNDIS_PACKET_MSG, before the frame
+Rnisburst:	con 3116;	# two RNDIS messages' worth: what is read of a transfer, and so what the device is told
 
 #
 # THE DRIVER FAMILY TABLE.
@@ -368,6 +369,10 @@ init(nil: ref Draw->Context, argv: list of string)
 		return;
 	}
 	dev = hd argv;
+	if(dev == "-t"){
+		selftest();
+		return;
+	}
 
 	#
 	# -k: the kernel already has the link. A machine whose Ethernet is
@@ -423,7 +428,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	for(i := 0; i < len families; i++)
 		if(families[i].vid != Byclass &&
 		   (families[i].vid < 0 || families[i].vid == vid) &&
-		   (families[i].pid < 0 || families[i].pid == pid)){
+		   (families[i].pid < 0 || families[i].pid == pid) &&
+		   (families[i].name != "lan78xx" || lanpid(pid))){
 			family = families[i];
 			found = 1;
 			break;
@@ -676,7 +682,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		#
 		bulkfd = nil;
 		bulkoutfd = nil;
-		burst := 3116;			# two RNDIS messages' worth
+		burst := Rnisburst;
 		extra := "";
 		case family.name {
 		"lan78xx" =>
@@ -919,6 +925,12 @@ dumpendpoints(cfg: array of byte)
 # port and a disk in one configuration -- has several bulk pairs, and
 # the first is not necessarily the chosen function's.
 #
+# a bulk endpoint's packet size: full speed's, high speed's 512, SuperSpeed's 1024
+bulkszok(sz: int): int
+{
+	return sz == 8 || sz == 16 || sz == 32 || sz == 64 || sz == 512 || sz == 1024;
+}
+
 bulkeps(cfg: array of byte, iface, setting: int): (int, int, int)
 {
 	total := len cfg;
@@ -928,13 +940,17 @@ bulkeps(cfg: array of byte, iface, setting: int): (int, int, int)
 	mine := iface < 0;
 	for(i := 0; i + 2 <= total; ){
 		dlen := int cfg[i];
-		if(dlen < 2)
+		if(dlen < 2 || dlen > total - i)
 			break;
-		if(iface >= 0 && int cfg[i+1] == Diface && i + 4 <= total)
+		if(iface >= 0 && int cfg[i+1] == Diface && dlen >= 4)
 			mine = int cfg[i+2] == iface && int cfg[i+3] == setting;
-		if(mine && int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2){
+		# an endpoint descriptor is seven bytes; endpoint 0 is the
+		# control endpoint; and the packet size goes to the kernel's
+		# framing, which divides by it, so it is one a bulk endpoint has
+		if(mine && int cfg[i+1] == 5 && dlen >= 7 && (int cfg[i+3] & 3) == 2
+		&& (int cfg[i+2] & 16rF) != 0 && bulkszok((int cfg[i+4] | (int cfg[i+5] << 8)) & 16r7FF)){
 			addr := int cfg[i+2];
-			sz := int cfg[i+4] | (int cfg[i+5] << 8);
+			sz := (int cfg[i+4] | (int cfg[i+5] << 8)) & 16r7FF;
 			if(addr & 16r80){
 				if(inep < 0){
 					inep = addr & 16rF;
@@ -1505,6 +1521,27 @@ v4map(a: array of byte, off: int, b0, b1, b2, b3: int)
 	a[off+15] = byte b3;
 }
 
+# an address a host can be given: not 0.x, not loopback, not multicast or beyond
+hostaddr(a: array of byte, off: int): int
+{
+	if(off < 0 || off + 4 > len a)
+		return 0;
+	b := int a[off];
+	return b != 0 && b != 127 && b < 224;
+}
+
+# a mask: ones, then zeros, and at least one of each side's ones
+maskok(m: array of byte): int
+{
+	if(len m < 4)
+		return 0;
+	v := (int m[0] << 24) | (int m[1] << 16) | (int m[2] << 8) | int m[3];
+	if(v == 0)
+		return 0;
+	inv := ~v;			# zeros then ones: one less than a power of two
+	return (inv & (inv + 1)) == 0;
+}
+
 dotted(a: array of byte, off: int): string
 {
 	return sys->sprint("%d.%d.%d.%d", int a[off], int a[off+1],
@@ -1755,6 +1792,21 @@ dhcp(c: ref Sys->FD, conv: string): (string, string, string)
 		if(g != nil && len g >= 4)
 			gw = dotted(g, 0);
 		#
+		# Whoever answers first is believed, which is DHCP; but what
+		# it says goes into "add" and the default route as it stands,
+		# so it must at least be an address a host can have and a
+		# mask that is one. A router that could not be one is left
+		# out rather than the lease refused.
+		#
+		if(!hostaddr(ack, 16) || (m != nil && len m >= 4 && !maskok(m))){
+			sys->print("etherusb: DHCP offered %s mask %s, which no host has; asking again\n", addr, mask);
+			continue;
+		}
+		if(gw != "" && (!hostaddr(g, 0) || gw == addr)){
+			sys->print("etherusb: DHCP named %s as the router; no default route from it\n", gw);
+			gw = "";
+		}
+		#
 		# The time servers, if the lease named any.
 		#
 		# Asked for here rather than hardcoding an address because
@@ -1985,8 +2037,11 @@ pingout(dest: string)
 
 	alt {
 	rep := <-rc =>
+		typ := -1;
+		if(len rep > 20)
+			typ = int rep[20];
 		sys->print("etherusb: ICMP echo reply from %s (%d bytes, type %d)\n",
-			dest, len rep, int rep[20]);
+			dest, len rep, typ);
 	<-tc =>
 		sys->print("etherusb: no echo reply from %s\n", dest);
 	}
@@ -2098,7 +2153,7 @@ rndisinit(): int
 	put4(msg, 8, reqid++);
 	put4(msg, 12, 1);		# major version
 	put4(msg, 16, 0);		# minor version
-	put4(msg, 20, 16r4000);		# max transfer size
+	put4(msg, 20, Rnisburst);	# max transfer size: what the kernel reads at a time
 
 	reply := array[Maxctl] of byte;
 	n := rndis(msg, reply);
@@ -2145,13 +2200,28 @@ rndisquery(oid: int, out: array of byte): int
 	# start -- a detail that silently yields the wrong eight bytes if
 	# it is taken as absolute.
 	#
-	inlen := int get4(reply, 16);
-	off := int get4(reply, 20) + 8;
-	if(inlen < len out || off + len out > n)
+	off := rndisinfo(reply, n, len out);
+	if(off < 0)
 		return -1;
-
 	out[0:] = reply[off:off + len out];
 	return 0;
+}
+
+#
+# Where want bytes of a query's answer are in its n-byte reply, or -1.
+# The length and the offset are the device's, 32 bits each: compared
+# as they came, before anything is added to them, or an offset near
+# 2^32 becomes a small negative one and passes.
+#
+rndisinfo(reply: array of byte, n, want: int): int
+{
+	if(n < 24 || n > len reply || want < 0)
+		return -1;
+	inlen := get4(reply, 16);
+	off := get4(reply, 20);
+	if(inlen < big want || off > big (n - 8 - want))
+		return -1;
+	return int off + 8;
 }
 
 rndisset(oid: int, val: array of byte): int
@@ -2311,10 +2381,13 @@ rndisunwrap(buf: array of byte, n, nil: int): (int, array of byte)
 	if(msglen > n)
 		return (0, nil);
 
-	dataoff := 8 + int get4(buf, 8);
-	datalen := int get4(buf, 12);
-	if(datalen < 14 || dataoff + datalen > n)
+	# the device's 32 bits each, compared before they are added
+	doff := get4(buf, 8);
+	dlen := get4(buf, 12);
+	if(dlen < big 14 || dlen > big n || doff > big (n - 8) - dlen)
 		return (msglen, nil);	# consume it; there is no frame in it
+	dataoff := 8 + int doff;
+	datalen := int dlen;
 
 	frame := array[datalen] of byte;
 	frame[0:] = buf[dataoff:dataoff+datalen];
@@ -2560,6 +2633,44 @@ ecmunwrap(buf: array of byte, n, nil: int): (int, array of byte)
 # posts. The parameters are read in setting 0, as the spec has it,
 # before the data interface is brought up.
 #
+#
+# What the device says of the NTBs it takes, into ntboutmax, ndpdiv,
+# ndprem, ndpalign and ndpmaxdg: the kernel builds every frame sent by
+# them. The largest NTB is 32 bits, and one with its top bit set is not
+# a negative size; the least the specification allows is 2048. The
+# modulus and the alignment are held to what the kernel takes (512),
+# a device asking for more being one it cannot send to. nil, or why not.
+#
+ncmparams(p: array of byte): string
+{
+	if(len p < 28)
+		return "short";
+	out := get4(p, 16);
+	if(out < big 2048)
+		return sys->sprint("largest NTB taken is %bd bytes; the least allowed is 2048", out);
+	if(out > big Ncmtxmax)
+		out = big Ncmtxmax;
+	div := int p[20] | (int p[21] << 8);
+	rem := int p[22] | (int p[23] << 8);
+	align := int p[24] | (int p[25] << 8);
+	if(div < 1)
+		div = 4;
+	if(div > 512)
+		return sys->sprint("datagrams at a multiple of %d", div);
+	if(rem >= div)
+		rem %= div;
+	if(align < 4 || (align & (align - 1)) != 0)
+		align = 4;
+	if(align > 512)
+		return sys->sprint("NDP alignment %d", align);
+	ntboutmax = int out;
+	ndpdiv = div;
+	ndprem = rem;
+	ndpalign = align;
+	ndpmaxdg = int p[26] | (int p[27] << 8);
+	return nil;
+}
+
 ncmsetup(): int
 {
 	if(cdcmac() < 0){
@@ -2578,19 +2689,11 @@ ncmsetup(): int
 		return -1;
 	}
 	inmax := int get4(p, 4);
-	ntboutmax = int get4(p, 16);
-	ndpdiv = int p[20] | (int p[21] << 8);
-	ndprem = int p[22] | (int p[23] << 8);
-	ndpalign = int p[24] | (int p[25] << 8);
-	ndpmaxdg = int p[26] | (int p[27] << 8);
-	if(ndpdiv < 1)
-		ndpdiv = 4;
-	if(ndprem >= ndpdiv)
-		ndprem %= ndpdiv;
-	if(ndpalign < 4 || (ndpalign & (ndpalign - 1)) != 0)
-		ndpalign = 4;
-	if(ntboutmax > Ncmtxmax)
-		ntboutmax = Ncmtxmax;
+	why := ncmparams(p);
+	if(why != nil){
+		sys->print("etherusb: %s: GET_NTB_PARAMETERS: %s\n", dev, why);
+		return -1;
+	}
 	ntbinmax = inmax;
 	if(inmax > Ncmrxmax || inmax <= 0){
 		v := array[4] of byte;
@@ -2855,6 +2958,220 @@ lanflow()
 # Called once the endpoint is open, which loopback needs and lanphy()
 # runs too early to have.
 #
+#
+# etherusb -t: what a device or a network says, at the edges.
+#
+selftest()
+{
+	ok := 1;
+	# RNDIS: a query's answer of 6 bytes in a 64-byte reply
+	r := array[Maxctl] of {* => byte 0};
+	put4(r, 16, 6);
+	put4(r, 20, 16);
+	if(rndisinfo(r, 64, 6) != 24){
+		sys->print("etherusb: selftest: a query's answer at offset 16 found at %d\n", rndisinfo(r, 64, 6));
+		ok = 0;
+	}
+	put4(r, 20, int 16rFFFFFF00);
+	if(rndisinfo(r, 64, 6) != -1){
+		sys->print("etherusb: selftest: an answer offset of ffffff00 taken\n");
+		ok = 0;
+	}
+	put4(r, 20, 16r7FFFFFF4);
+	if(rndisinfo(r, 64, 6) != -1){
+		sys->print("etherusb: selftest: an answer offset of 7ffffff4 taken\n");
+		ok = 0;
+	}
+	put4(r, 20, 64 - 8 - 6);
+	if(rndisinfo(r, 64, 6) != 58 || rndisinfo(r, 63, 6) != -1){
+		sys->print("etherusb: selftest: an answer at the very end of its reply\n");
+		ok = 0;
+	}
+	put4(r, 20, 16);
+	put4(r, 16, 5);
+	if(rndisinfo(r, 64, 6) != -1){
+		sys->print("etherusb: selftest: an answer shorter than asked taken\n");
+		ok = 0;
+	}
+	# RNDIS data: a 14-byte frame in a message
+	d := array[128] of {* => byte 0};
+	put4(d, 0, Rnisdata);
+	put4(d, 4, Rnishdr + 14);
+	put4(d, 8, Rnishdr - 8);
+	put4(d, 12, 14);
+	(used, fr) := rndisunwrap(d, Rnishdr + 14, 0);
+	if(used != Rnishdr + 14 || len fr != 14){
+		sys->print("etherusb: selftest: a frame in an RNDIS message not found\n");
+		ok = 0;
+	}
+	put4(d, 8, int 16rFFFFFF00);
+	(used, fr) = rndisunwrap(d, Rnishdr + 14, 0);
+	if(fr != nil){
+		sys->print("etherusb: selftest: an RNDIS data offset of ffffff00 gave a frame\n");
+		ok = 0;
+	}
+	put4(d, 8, 16r7FFFFFF0);
+	(used, fr) = rndisunwrap(d, Rnishdr + 14, 0);
+	if(fr != nil){
+		sys->print("etherusb: selftest: an RNDIS data offset of 7ffffff0 gave a frame\n");
+		ok = 0;
+	}
+	put4(d, 8, Rnishdr - 8);
+	put4(d, 12, int 16rFFFFFFF0);
+	(used, fr) = rndisunwrap(d, Rnishdr + 14, 0);
+	if(fr != nil){
+		sys->print("etherusb: selftest: an RNDIS data length of fffffff0 gave a frame\n");
+		ok = 0;
+	}
+
+	# NCM: what the device says of what it takes
+	np := array[28] of {* => byte 0};
+	np[2] = byte 1;
+	put4(np, 16, 16384);
+	np[20] = byte 4;
+	np[24] = byte 4;
+	if(ncmparams(np) != nil || ntboutmax != 16384 || ndpdiv != 4 || ndpalign != 4){
+		sys->print("etherusb: selftest: ordinary NTB parameters refused: %s\n", ncmparams(np));
+		ok = 0;
+	}
+	put4(np, 16, int 16r80000000);
+	if(ncmparams(np) != nil || ntboutmax != Ncmtxmax){
+		sys->print("etherusb: selftest: a largest NTB of 2^31 became %d\n", ntboutmax);
+		ok = 0;
+	}
+	put4(np, 16, 16);
+	if(ncmparams(np) == nil){
+		sys->print("etherusb: selftest: a largest NTB of 16 bytes taken\n");
+		ok = 0;
+	}
+	put4(np, 16, 16384);
+	np[20] = np[21] = byte 16rFF;
+	if(ncmparams(np) == nil){
+		sys->print("etherusb: selftest: datagrams at a multiple of 65535 taken\n");
+		ok = 0;
+	}
+	np[20] = byte 4;
+	np[21] = byte 0;
+	np[24] = byte 0;
+	np[25] = byte 16r80;
+	if(ncmparams(np) == nil){
+		sys->print("etherusb: selftest: an NDP alignment of 32768 taken\n");
+		ok = 0;
+	}
+
+	# the parts the LAN78xx register map is for
+	if(!lanchip(16r78000001) || !lanchip(16r78500001) || !lanchip(16r78010000)
+	|| lanchip(int 16rEC000002) || lanchip(16r75000001) || lanpid(16rEC00) || !lanpid(16r7800)){
+		sys->print("etherusb: selftest: which parts are a LAN78xx\n");
+		ok = 0;
+	}
+
+	# bulk endpoints
+	eps := array[] of {
+		byte 9, byte 4, byte 1, byte 0, byte 2, byte 10, byte 0, byte 0, byte 0,
+		byte 7, byte 5, byte 16r81, byte 2, byte 0, byte 2, byte 0,
+		byte 7, byte 5, byte 16r02, byte 2, byte 0, byte 2, byte 0,
+	};
+	(ie, oe, mp) := bulkeps(eps, 1, 0);
+	if(ie != 1 || oe != 2 || mp != 512){
+		sys->print("etherusb: selftest: bulk endpoints in %d out %d maxpkt %d\n", ie, oe, mp);
+		ok = 0;
+	}
+	bad := array[len eps] of byte;
+	bad[0:] = eps;
+	bad[13] = bad[14] = byte 0;
+	(ie, nil, nil) = bulkeps(bad, 1, 0);
+	if(ie != -1){
+		sys->print("etherusb: selftest: a bulk endpoint with a packet size of 0 taken\n");
+		ok = 0;
+	}
+	bad[13] = byte 3;
+	(ie, nil, nil) = bulkeps(bad, 1, 0);
+	if(ie != -1){
+		sys->print("etherusb: selftest: a bulk endpoint with a packet size of 3 taken\n");
+		ok = 0;
+	}
+	bad[0:] = eps;
+	bad[14] = byte 16rFA;		# 512 with the reserved bits above it set
+	(ie, nil, mp) = bulkeps(bad, 1, 0);
+	if(ie != 1 || mp != 512){
+		sys->print("etherusb: selftest: a packet size's reserved bits kept: %d\n", mp);
+		ok = 0;
+	}
+	bad[0:] = eps;
+	bad[11] = byte 16r80;
+	(ie, nil, nil) = bulkeps(bad, 1, 0);
+	if(ie != -1){
+		sys->print("etherusb: selftest: endpoint 0 taken for a bulk endpoint\n");
+		ok = 0;
+	}
+	(ie, oe, nil) = bulkeps(eps[0:12], 1, 0);
+	if(ie != -1 || oe != -1){
+		sys->print("etherusb: selftest: an endpoint descriptor cut short read\n");
+		ok = 0;
+	}
+
+	# a lease
+	if(!hostaddr(array[] of {byte 192, byte 168, byte 8, byte 20}, 0)
+	|| hostaddr(array[] of {byte 0, byte 0, byte 0, byte 0}, 0)
+	|| hostaddr(array[] of {byte 127, byte 0, byte 0, byte 1}, 0)
+	|| hostaddr(array[] of {byte 224, byte 0, byte 0, byte 1}, 0)
+	|| hostaddr(array[] of {byte 255, byte 255, byte 255, byte 255}, 0)
+	|| hostaddr(array[] of {byte 10, byte 0}, 0)){
+		sys->print("etherusb: selftest: which addresses a host can have\n");
+		ok = 0;
+	}
+	if(!maskok(array[] of {byte 255, byte 255, byte 255, byte 0})
+	|| !maskok(array[] of {byte 255, byte 255, byte 255, byte 255})
+	|| !maskok(array[] of {byte 128, byte 0, byte 0, byte 0})
+	|| maskok(array[] of {byte 0, byte 0, byte 0, byte 0})
+	|| maskok(array[] of {byte 255, byte 0, byte 255, byte 0})
+	|| maskok(array[] of {byte 0, byte 255, byte 255, byte 255})){
+		sys->print("etherusb: selftest: which masks are masks\n");
+		ok = 0;
+	}
+
+	# SNTP: a server's answer for 2026-01-01 00:00:00 UTC
+	nt := array[48] of {* => byte 0};
+	nt[0] = byte (4 << 3 | 4);
+	nt[1] = byte 2;
+	secs := big 1767225600 + big 2208988800;
+	nt[40] = byte (secs >> 24);
+	nt[41] = byte (secs >> 16);
+	nt[42] = byte (secs >> 8);
+	nt[43] = byte secs;
+	if(ntpunix(nt) != big 1767225600){
+		sys->print("etherusb: selftest: a time server's answer read as %bd\n", ntpunix(nt));
+		ok = 0;
+	}
+	nt[1] = byte 0;
+	if(ntpunix(nt) > big 0){
+		sys->print("etherusb: selftest: a stratum 0 answer taken for the time\n");
+		ok = 0;
+	}
+	nt[1] = byte 2;
+	nt[0] = byte (4 << 3 | 3);
+	if(ntpunix(nt) > big 0){
+		sys->print("etherusb: selftest: a client's request taken for an answer\n");
+		ok = 0;
+	}
+	nt[0] = byte (4 << 3 | 4);
+	if(ntpunix(nt[0:47]) > big 0 || ntpunix(nil) > big 0){
+		sys->print("etherusb: selftest: a short answer taken\n");
+		ok = 0;
+	}
+	nt[40] = nt[41] = nt[42] = nt[43] = byte 0;
+	if(ntpunix(nt) > big 0){
+		sys->print("etherusb: selftest: an answer with no time taken\n");
+		ok = 0;
+	}
+
+	if(ok)
+		sys->print("etherusb: selftest OK\n");
+	else
+		sys->print("etherusb: selftest FAILED\n");
+}
+
 lanselftest()
 {
 	(e, sr) := lanmiird(Mbmsr);
@@ -3243,6 +3560,18 @@ macusable(m: array of byte): int
 	return (int m[0] & 1) == 0;
 }
 
+# The LAN78xx parts by USB product: the 7800 (the 3B+'s LAN7515 too), 7801 and 7850.
+lanpid(pid: int): int
+{
+	return pid == 16r7800 || pid == 16r7801 || pid == 16r7850;
+}
+
+# and by the chip id in the top half of ID_REV
+lanchip(idrev: int): int
+{
+	return lanpid((idrev >> 16) & 16rFFFF);
+}
+
 lansetup(): int
 {
 	#
@@ -3262,6 +3591,16 @@ lansetup(): int
 	if(idrev == 0 || idrev == -1){		# -1 is 0xFFFFFFFF as an int
 		sys->print("etherusb: LAN78xx ID_REV reads %8.8ux -- refusing\n",
 			idrev);
+		return -1;
+	}
+	#
+	# And that it is one of the parts this register map is for. The
+	# maker's other Ethernet parts (the LAN9514 of an older Pi) answer
+	# the same requests and have an ID_REV in the same place, with
+	# other registers behind it.
+	#
+	if(!lanchip(idrev)){
+		sys->print("etherusb: ID_REV %8.8ux is not a LAN7800, LAN7801 or LAN7850 -- refusing\n", idrev);
 		return -1;
 	}
 	sys->print("etherusb: LAN78xx ID_REV %8.8ux\n", idrev);
@@ -3677,32 +4016,18 @@ trytime(server: string): int
 		killproc(rpid);
 		return -1;
 	}
-	if(rep == nil || len rep < 48)
-		killproc(rpid);
-		return -1;
-
 	#
-	# Transmit timestamp, bytes 40-43: seconds since 1900.
+	# Each of these returned whatever its test said: only the kill was
+	# under the if, so any reply at all was "no answer" and the clock
+	# was never set from the network.
 	#
-	# NTP counts from 1900 and Unix from 1970, so the difference is
-	# the 2208988800 seconds between them -- seventy years including
-	# seventeen leap days. Getting that constant wrong is the classic
-	# way to be exactly 70 years out.
-	#
-	secs := big 0;
-	for(i = 40; i < 44; i++)
-		secs = (secs << 8) | big (int rep[i] & 16rFF);
-	if(secs == big 0)
-		killproc(rpid);
-		return -1;
-	unix := secs - big 2208988800;
+	killproc(rpid);
+	unix := ntpunix(rep);
 	if(unix <= big 0)
-		killproc(rpid);
 		return -1;
 
 	t := sys->open("/dev/time", Sys->OWRITE);
 	if(t == nil)
-		killproc(rpid);
 		return -1;
 	#
 	# The kernel keeps time in MICROseconds.
@@ -3715,6 +4040,35 @@ trytime(server: string): int
 	sys->print("etherusb: clock set from %s\n", server);
 	killproc(rpid);
 	return 0;
+}
+
+#
+# The time in an SNTP reply, in seconds since 1970; -1 if it is not a
+# server's answer with a time in it.
+#
+# Transmit timestamp, bytes 40-43: seconds since 1900. NTP counts from
+# 1900 and Unix from 1970, so the difference is the 2208988800 seconds
+# between them -- seventy years including seventeen leap days. Getting
+# that constant wrong is the classic way to be exactly 70 years out.
+#
+ntpunix(rep: array of byte): big
+{
+	if(rep == nil || len rep < 48)
+		return big -1;
+	mode := int rep[0] & 7;
+	if(mode != 4 && mode != 5)	# server, or broadcast: not our own request come back
+		return big -1;
+	if(int rep[1] == 0)		# stratum 0: "go away", with a reason where the time would be
+		return big -1;
+	secs := big 0;
+	for(i := 40; i < 44; i++)
+		secs = (secs << 8) | big (int rep[i] & 16rFF);
+	if(secs == big 0)
+		return big -1;
+	unix := secs - big 2208988800;
+	if(unix <= big 0)
+		return big -1;
+	return unix;
 }
 
 ntpreader(d: ref Sys->FD, rc: chan of array of byte, pids: chan of int)

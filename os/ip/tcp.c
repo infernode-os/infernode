@@ -1881,6 +1881,8 @@ update(Conv *s, Tcp *seg)
 	/* An ACK for data not yet sent must not change window or recovery state. */
 	if(seq_gt(seg->ack, tcb->snd.nxt))
 		return;
+	if(seq_lt(seg->ack, tcb->snd.una))
+		return;
 
 	/* RFC 793: accept a window update only from a newer segment/ACK pair. */
 	if(seq_gt(seg->seq, tcb->snd.wl1)

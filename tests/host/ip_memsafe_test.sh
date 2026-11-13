@@ -126,5 +126,27 @@ else
 	fail "TCP parser pointer refresh"
 fi
 
+# An ACK older than SND.UNA is not acceptable and must not update the send
+# window, even when its sequence number would otherwise advance WL1.
+if python3 - "$TCP" <<'PYEOF'
+import re, sys
+
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+match = re.search(r"\nupdate\([^)]*\)\s*\n\{(.*?)\n\}", text, re.S)
+if not match:
+    raise SystemExit("missing update")
+body = match.group(1)
+upper = body.find("seq_gt(seg->ack, tcb->snd.nxt)")
+lower = body.find("seq_lt(seg->ack, tcb->snd.una)", upper)
+window = body.find("tcb->snd.wl1 = seg->seq", upper)
+if upper < 0 or lower < 0 or window < 0 or not upper < lower < window:
+    raise SystemExit("old ACK can update the send window")
+PYEOF
+then
+	pass "TCP rejects ACKs older than SND.UNA before window updates"
+else
+	fail "TCP stale-ACK window-update guard"
+fi
+
 echo "Passed: $PASSED  Failed: $FAILED"
 [[ $FAILED -eq 0 ]]

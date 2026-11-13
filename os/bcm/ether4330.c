@@ -251,6 +251,7 @@ struct Ctlr
 	Rendez	cmdr;
 	Rendez	joinr;
 	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
+	Lock	rsplock;	/* rsp, handed from rproc to wlcmd */
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 	Block	*scanb;		/* the scan being assembled, one line per network */
 	int	scansecs;	/* rescan this often, or 0 for not at all */
@@ -291,7 +292,7 @@ struct Ctlr
 	int	socramrev;
 	u32int	socramsize;
 	u32int	rambase;
-	short	reqid;
+	ushort	reqid;		/* as it is on the wire: a short went negative after 32767 commands and matched nothing */
 	uchar	fcmask;
 	uchar	txwindow;
 	uchar	txseq;
@@ -1303,6 +1304,35 @@ condense(uchar *buf, int n)
 }
 
 /*
+ * Whether n bytes at offset off lie inside the dongle's RAM.  The file
+ * being uploaded is whatever the ctl message named; its length is not
+ * the driver's to assume.
+ */
+static int
+fwfits(u32int ramsize, long off, long n)
+{
+	if(off < 0 || n < 0)
+		return 0;
+	return (uvlong)off + (uvlong)n <= ramsize;
+}
+
+/*
+ * Where the Cmd header of a control response is, or -1.  The SDPCM header
+ * gives the offset in one byte, the device's word; it is believed only
+ * past the header itself, and only if the Cmd and need bytes of answer
+ * after it were received.
+ */
+static int
+rspcmdoff(long blen, int doffset, long need)
+{
+	if(doffset < (int)sizeof(Sdpcm) || need < 0)
+		return -1;
+	if(blen < (long)doffset + (long)sizeof(Cmd) + need)
+		return -1;
+	return doffset;
+}
+
+/*
  * Upload one file into the dongle's RAM: the firmware from the base
  * up, the condensed config at the top with its length word to
  * follow. Then, with Firmwarecmp, read the whole of it back and
@@ -1323,11 +1353,11 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 		free(cbuf);
 		nexterror();
 	}
-	buf = malloc(isconfig? Cfgmax : Uploadsz);
+	buf = malloc(isconfig? Cfgmax+8 : Uploadsz);	/* condense adds two terminators and pads to four */
 	if(buf == nil)
 		error(Enomem);
 	if(Firmwarecmp){
-		cbuf = malloc(isconfig? Cfgmax : Uploadsz);
+		cbuf = malloc(isconfig? Cfgmax+8 : Uploadsz);
 		if(cbuf == nil)
 			error(Enomem);
 	}
@@ -1356,11 +1386,15 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 			if(n <= 0)
 				error("ether4330: NVRAM file is empty");
 			n = condense(buf, n);
+			if((u32int)n + 4 > ctl->socramsize)
+				error("ether4330: NVRAM larger than the dongle's RAM");
 			off = ctl->socramsize - n - 4;
 		}else{
 			n = devtab[c->type]->read(c, buf, Uploadsz, off);
 			if(n <= 0)
 				break;
+			if(!fwfits(ctl->socramsize, off, (n+3) & ~3))
+				error("ether4330: firmware larger than the dongle's RAM");
 		}
 		if(!isconfig && off == 0)
 			memmove(ctl->resetvec.c, buf, sizeof(ctl->resetvec.c));
@@ -1384,6 +1418,8 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 				n = devtab[c->type]->read(c, buf, Uploadsz, off);
 				if(n <= 0)
 					break;
+				if(!fwfits(ctl->socramsize, off, (n+3) & ~3))
+					error("ether4330: firmware larger than the dongle's RAM");
 				while(n&3)
 					buf[n++] = 0;
 			}
@@ -1594,7 +1630,7 @@ wlreadpkt(Ctlr *ctl)
 {
 	Block *b;
 	Sdpcm *p;
-	int len, lenck;
+	int len, lenck, i;
 
 	b = allocb(2048);
 	p = (Sdpcm*)b->wp;
@@ -1618,10 +1654,15 @@ wlreadpkt(Ctlr *ctl)
 		   len < (int)sizeof(*p) || len > 2048){
 			print("ether4330: wlreadpkt error len %.4x lenck %.4x\n", len, lenck);
 			cfgw(Framectl, Rfhalt);
-			while(cfgr(Rfrmcnt+1) > 0)
-				;
-			while(cfgr(Rfrmcnt) > 0)
-				;
+			/* bounded, as every other wait on the dongle is: it may never drain */
+			for(i = 0; i < Sbpolls && cfgr(Rfrmcnt+1) > 0; i++)
+				microdelay(10);
+			if(i == Sbpolls)
+				error(Eio);
+			for(i = 0; i < Sbpolls && cfgr(Rfrmcnt) > 0; i++)
+				microdelay(10);
+			if(i == Sbpolls)
+				error(Eio);
 			continue;
 		}
 		if(len > (int)sizeof(*p))
@@ -1789,7 +1830,7 @@ rproc(void *a)
 {
 	Ether *edev;
 	Ctlr *ctl;
-	Block *b;
+	Block *b, *ob;
 	Sdpcm *p;
 	Cmd *q;
 	int bdc, flowstart;
@@ -1841,12 +1882,18 @@ rproc(void *a)
 		switch(p->chanflg & 0xF){
 		case 0:
 			if(iodebug) dump("rsp", b->rp, BLEN(b));
-			if(BLEN(b) < (long)(sizeof(Sdpcm) + sizeof(Cmd)))
+			if(rspcmdoff(BLEN(b), p->doffset, 0) < 0)
 				break;
-			q = (Cmd*)(b->rp + sizeof(*p));
+			q = (Cmd*)(b->rp + p->doffset);
 			if((q->id[0] | q->id[1]<<8) != ctl->reqid)
 				break;
+			/* a second answer to one command replaces the first; the first is not lost */
+			lock(&ctl->rsplock);
+			ob = ctl->rsp;
 			ctl->rsp = b;
+			unlock(&ctl->rsplock);
+			if(ob != nil)
+				freeb(ob);
 			wakeup(&ctl->cmdr);
 			continue;
 		case 1:
@@ -2093,7 +2140,8 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	volatile struct { Block *b; } v;
 	Sdpcm *p;
 	Cmd *q;
-	int len, tlen;
+	Block *ob;
+	int len, tlen, id;
 
 	if(write)
 		tlen = dlen + rlen;
@@ -2109,6 +2157,16 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 		nexterror();
 	}
 	memset(v.b->wp, 0, len);
+	/*
+	 * An answer that came after its command gave up is still parked
+	 * here, and would be taken for this command's: it goes first.
+	 */
+	lock(&ctl->rsplock);
+	ob = ctl->rsp;
+	ctl->rsp = nil;
+	unlock(&ctl->rsplock);
+	if(ob != nil)
+		freeb(ob);
 	qlock(&ctl->pktlock);
 	p = (Sdpcm*)v.b->wp;
 	put2(p->len, len);
@@ -2121,7 +2179,8 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	put4(q->cmd, op);
 	put4(q->len, tlen);
 	put2(q->flags, write? 2 : 0);
-	put2(q->id, ++ctl->reqid);
+	id = ++ctl->reqid;
+	put2(q->id, id);
 	put4(q->status, 0);
 	v.b->wp += sizeof(*q);
 
@@ -2141,14 +2200,27 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	freeb(v.b);
 	v.b = nil;
 	tsleep(&ctl->cmdr, cmddone, ctl, Cmdtimeout);
+	lock(&ctl->rsplock);
 	v.b = ctl->rsp;
 	ctl->rsp = nil;
+	unlock(&ctl->rsplock);
 	if(v.b == nil){
 		print("ether4330: no answer to cmd %d\n", op);
 		error("ether4330: firmware does not answer");
 	}
+	/*
+	 * The answer is the device's: its Cmd is where its own header says
+	 * only if that, and the bytes this command asked for, were received,
+	 * and it is this command's only if it carries this command's id.
+	 */
 	p = (Sdpcm*)v.b->rp;
+	if(rspcmdoff(BLEN(v.b), p->doffset, write? 0 : rlen) < 0){
+		print("ether4330: cmd %d: short answer, %ld bytes, offset %d\n", op, BLEN(v.b), p->doffset);
+		error("ether4330: short answer from the firmware");
+	}
 	q = (Cmd*)(v.b->rp + p->doffset);
+	if((q->id[0] | q->id[1]<<8) != id)
+		error("ether4330: answer to another command");
 	if(q->status[0] | q->status[1] | q->status[2] | q->status[3]){
 		print("ether4330: cmd %d error status %ud\n", op, get4(q->status));
 		dump("ether4330: cmd error", v.b->rp, BLEN(v.b));

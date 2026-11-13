@@ -59,6 +59,7 @@ echo DONE
 echo halt > /dev/sysctl
 EOF
 
+rm -rf "$ROOT"/tmp/rstyxd-* 2>/dev/null
 out=$(timeout "$TIMEOUT" "$EMU" -c1 -r"$ROOT" /dis/sh.dis /tmp/cpu_session_test.sh 2>&1 < /dev/null)
 rc=0
 ok() {	# ok name condition-result
@@ -78,5 +79,15 @@ ok "what a session started ends with it" "$(hasnt '^AFTER-ONESHOT ' '^AFTER-ONES
 ok "a long session is running before its caller hangs up" "$(has '^DURING-SECOND .*Sleep')"
 ok "a session whose caller hangs up is ended by the node" "$(hasnt '^AFTER-HANGUP ' '^AFTER-HANGUP .*Sleep')"
 ok "the test ran to the end" "$(has '^DONE$')"
+# a session's directories in /tmp go with it: its jail was removed only by
+# an exporter that the session's end kills first, so each session left one
+left=$(ls -d "$ROOT"/tmp/rstyxd-* 2>/dev/null | wc -l | tr -d ' ')
+if [ "$left" = 0 ]; then
+	echo "PASS: no session left a directory in /tmp"
+else
+	echo "FAIL: $left session directories left in /tmp:"
+	ls -d "$ROOT"/tmp/rstyxd-* | head -5
+	rc=1
+fi
 [ $rc -eq 0 ] || echo "$out" | grep -v sdl3 | tail -30
 exit $rc

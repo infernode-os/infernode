@@ -87,19 +87,35 @@ init(nil: ref Draw->Context, nil: list of string)
 	emptyusr := base + "-usr";
 	emptydev := base + "-dev";
 	if(mkdir(jail) < 0 || mkdir(emptyusr) < 0 ||
-	   mkdir(emptydev) < 0)
+	   mkdir(emptydev) < 0){
+		unmake(base);
 		err(sys->sprint("cannot make restricted namespace: %r"));
+	}
 	p := array[2] of ref Sys->FD;
-	if(sys->pipe(p) < 0)
+	if(sys->pipe(p) < 0){
+		unmake(base);
 		err(sys->sprint("cannot make namespace pipe: %r"));
+	}
 	nssync := chan[1] of string;
-	spawn serverexport(p[1], emptyusr, emptydev, jail, nssync);
+	spawn serverexport(p[1], emptyusr, emptydev, nssync);
 	p[1] = nil;
 	e := <-nssync;
-	if(e != nil)
+	if(e != nil){
+		unmake(base);
 		err(e);
+	}
 
-	if(sys->chdir(jail) < 0 || sys->pctl(Sys->NEWNS, nil) < 0)
+	# The jail's name goes as soon as it is entered: dot keeps its Chan,
+	# as the binds keep the masking directories'.  It was removed by the
+	# exporter after its export returned, which it never does: the
+	# session's end kills the exporter in it, so every session left a
+	# directory in /tmp.
+	if(sys->chdir(jail) < 0){
+		unmake(base);
+		err(sys->sprint("cannot enter empty namespace: %r"));
+	}
+	sys->remove(jail);
+	if(sys->pctl(Sys->NEWNS, nil) < 0)
 		err(sys->sprint("cannot enter empty namespace: %r"));
 	if(sys->mount(p[0], nil, "/", Sys->MREPL|Sys->MCREATE, "") < 0)
 		err(sys->sprint("cannot mount restricted server namespace: %r"));
@@ -154,7 +170,15 @@ mkdir(path: string): int
 	return 0;
 }
 
-serverexport(fd: ref Sys->FD, emptyusr, emptydev, jail: string,
+# the session's three directories, whichever of them are still there
+unmake(base: string)
+{
+	sys->remove(base + "-root");
+	sys->remove(base + "-usr");
+	sys->remove(base + "-dev");
+}
+
+serverexport(fd: ref Sys->FD, emptyusr, emptydev: string,
 		sync: chan of string)
 {
 	if(sys->pctl(Sys->FORKNS, nil) < 0) {
@@ -195,7 +219,6 @@ serverexport(fd: ref Sys->FD, emptyusr, emptydev, jail: string,
 	sys->unmount(nil, "/dev");
 	sys->unmount(nil, "/mnt/factotum");
 	sys->unmount(nil, "/tmp/factotum");
-	sys->remove(jail);
 }
 
 hideifpresent(empty, path: string): int

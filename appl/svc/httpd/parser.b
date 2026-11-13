@@ -1116,7 +1116,7 @@ fail(g: ref Private_info,reason : int, message : string)
 	title:=sys->sprint("<head><title>%s</title></head>\n<body bgcolor=#ffffff>\n",
 					errormsg[reason].concise);
 	body1:=	"<h1> Error </h1>\n<P>" +
-		"Sorry, Charon is unable to process your request. The webserver reports"+
+		"The server could not process your request. It reports"+
 		" the following error <P><b>";
 	#concise error
 	body2:="</b><p>for the URL\n<P><b>";
@@ -1128,9 +1128,7 @@ fail(g: ref Private_info,reason : int, message : string)
 		verb=v1+escmsg+v2[2:];
 	}else
 		verb=errormsg[reason].verbose;
-	body4:="</b><hr> This Webserver powered by  DRIED DUNG<br>"+
-		"For more information  <a href=\"http://caerwyn.com\"> caerwyn.com </a>\n"+
-		"<hr><address>\n";
+	body4:="</b><hr><address>\n";
 	dtime:=sys->sprint("This information processed at %s.\n",daytime->time());
 	body5:="</address>\n</body>\n";
 	strbuf:=title+body1+errormsg[reason].concise+body2+escmsg+body3+

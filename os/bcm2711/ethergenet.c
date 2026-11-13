@@ -423,12 +423,40 @@ newrxblock(void)
 static void
 replenish(Ctlr *c, Desc *d)
 {
-	while((d->b = newrxblock()) == nil){
+	Block *nb;
+
+	/*
+	 * The slot keeps what it had until there is a block to put in it:
+	 * resrcwait can raise, and recvproc's loop then comes round to this
+	 * slot again and must find a block there.
+	 */
+	while((nb = newrxblock()) == nil){
 		c->nnobuf++;
 		resrcwait("out of genet rx buffers");
 	}
+	d->b = nb;
 	cachedwbinvse(d->b->rp, Rbsz);
 	setdma(d, d->b->rp);
+}
+
+/*
+ * A receive descriptor's status word is the device's word, and its length
+ * field is 12 bits: up to 4095, in a buffer of Rbsz.  The frame is taken
+ * only if it is one whole good frame, at least an Ethernet header, no
+ * longer than the MAC was told to pass (Maxtu), and inside the room the
+ * Block has.  Otherwise -1, and the caller counts it bad.
+ */
+static long
+rxframelen(u32int s, long room)
+{
+	long len;
+
+	if((s & (DmaSOP|DmaEOP|DmaRxErrors)) != (DmaSOP|DmaEOP))
+		return -1;
+	len = (s & 0x0FFF0000) >> 16;
+	if(len < ETHERHDRSIZE || len > Maxtu || len > room)
+		return -1;
+	return len;
 }
 
 static int
@@ -451,6 +479,7 @@ recvproc(void *arg)
 	Desc *d;
 	Block *b;
 	u32int s;
+	long len;
 
 	while(waserror())
 		;
@@ -468,12 +497,13 @@ recvproc(void *arg)
 		coherence();
 		ctlr->rx->rp = (ctlr->rx->rp + 1) & 0xFFFF;
 		REG(ctlr->rx->regs[RxRP]) = ctlr->rx->rp;
-		if((s & (DmaSOP|DmaEOP|DmaRxErrors)) != (DmaSOP|DmaEOP)){
+		len = rxframelen(s, b->lim - b->rp);
+		if(len < 0){
 			ctlr->nrxbad++;
 			freeb(b);
 			continue;
 		}
-		b->wp += (s & 0x0FFF0000) >> 16;
+		b->wp += len;
 		ctlr->nrx++;
 		edev->nif.inpackets++;
 		etheriqb(edev, b);

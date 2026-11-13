@@ -61,6 +61,7 @@ char *Ebadarp = "bad arp";
 #define haship(s) ((s)[IPaddrlen-1]%NHASH)
 
 extern int 	ReTransTimer = RETRANS_TIMER;
+static void	arpdropq(Arp*, Block*);
 static void 	rxmitproc(void *v);
 
 void
@@ -109,14 +110,7 @@ newarp6(Arp *arp, uchar *ip, Ipifc *ifc, int addrxt)
 	}
 	else {	// queue icmp unreachable for rxmitproc later on, w/o arp lock
 		if(xp){
-			if(arp->dropl == nil) 
-				arp->dropf = xp;
-			else
-				arp->dropl->list = xp;
-
-			for(next = xp->list; next; next = next->list)
-				xp = next;
-			arp->dropl = xp;
+			arpdropq(arp, xp);
 			wakeup(&arp->rxmtq);
 		}
 	}
@@ -528,6 +522,34 @@ convmac(char *p, uchar *mac, int n)
 		p += sprint(p, "%2.2ux", *mac++);
 }
 
+/* called with arp qlocked */
+static void
+arpdropq(Arp *arp, Block *bp)
+{
+	Block *tail;
+
+	if(bp == nil)
+		return;
+	if(arp->dropl == nil)
+		arp->dropf = bp;
+	else
+		arp->dropl->list = bp;
+	for(tail = bp; tail->list != nil; tail = tail->list)
+		;
+	arp->dropl = tail;
+}
+
+static int
+arpifclock(Arpent *a, Ipifc *ifc)
+{
+	if(a->rxtsrem <= 0 || !canrlock(&ifc->rwl))
+		return 0;
+	if(a->ifcid == ifc->ifcid)
+		return 1;
+	runlock(&ifc->rwl);
+	return 0;
+}
+
 int
 arpread(Arp *arp, char *p, ulong offset, int len)
 {
@@ -589,16 +611,10 @@ rxmitsols(Arp *arp)
 	for(; a; a = a->nextrxt){
 		ifc = a->ifc;
 		assert(ifc != nil);
-		if((a->rxtsrem <= 0) || !(canrlock(&ifc->rwl)) || (a->ifcid != ifc->ifcid)){
+		if(!arpifclock(a, ifc)){
 			xp = a->hold;
 			a->hold = nil;
-
-			if(xp){
-				if(arp->dropl == nil) 
-					arp->dropf = xp;
-				else
-					arp->dropl->list = xp;
-			}
+			arpdropq(arp, xp);
 
 			cleanarpent(arp, a);
 		}

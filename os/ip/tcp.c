@@ -19,6 +19,7 @@
 #include	"../port/error.h"
 
 #include	"ip.h"
+#include	"libsec.h"
 
 enum
 {
@@ -64,6 +65,7 @@ enum
 	MSL2		= 10,
 	MSPTICK		= 50,		/* Milliseconds per timer tick */
 	DEF_MSS		= 1460,		/* Default mean segment */
+	Minmss		= 216,		/* the least segment a peer's MSS option is taken to ask for */
 	DEF_MSS6	= 1280,		/* Default mean segment (min) for v6 */
 	DEF_RTT		= 500,		/* Default round trip */
 	MINRTO		= 200,		/* Least retransmission timeout (ms) */
@@ -1324,10 +1326,109 @@ ntohtcp4(Tcp *tcph, Block **bpp)
  *  For outgiing calls, generate an initial sequence
  *  number and put a SYN on the send queue
  */
+/*
+ * Initial sequence numbers (RFC 6528): a keyed hash of the connection's
+ * two ends, plus a clock.
+ *
+ * They were two draws from nrand, a linear congruential generator: its
+ * next output follows from its last, so whoever was given one sequence
+ * number (by connecting to any open port) knew the ones given to
+ * everyone after, which is what an off-path sender needs to forge a
+ * connection or write into one.  Hashed under a key nobody else has,
+ * one connection's number says nothing of another's; the clock keeps a
+ * pair of ends used again ahead of where it was.
+ *
+ * The key is the hardware generator's bytes, taken as hwrandom gives
+ * them and never waited for (the DRBG in random.c waits, and a machine
+ * with no generator must still have a network: see seedrand in
+ * devcons.c).  What the generator does not give is made up from nrand
+ * and the clock, which is no secret but no worse than what this
+ * replaces.
+ */
+static struct {
+	Lock	lk;
+	int	set;
+	uchar	key[32];
+} isn;
+
+static void
+isnkey(void)
+{
+	uchar k[sizeof isn.key];
+	uvlong t;
+	int i, n, got, try;
+
+	got = 0;
+	for(try = 0; try < 8 && got < sizeof k; try++){
+		n = hwrandom(k + got, sizeof k - got);
+		if(n < 0)
+			break;		/* no generator at all */
+		got += n;
+	}
+	for(i = got; i < sizeof k; i++)
+		k[i] = nrand(256);
+	t = fastticks(nil);
+	for(i = 0; i < 8; i++)
+		k[sizeof k - 1 - i] ^= t >> (8*i);
+	lock(&isn.lk);
+	if(!isn.set){
+		memmove(isn.key, k, sizeof isn.key);
+		isn.set = 1;
+	}
+	unlock(&isn.lk);
+	memset(k, 0, sizeof k);
+}
+
+static u32int
+tcpisn(uchar *laddr, ushort lport, uchar *raddr, ushort rport)
+{
+	uchar m[2*IPaddrlen + 4], d[SHA256dlen];
+	u32int h;
+
+	if(!isn.set)
+		isnkey();
+	memmove(m, laddr, IPaddrlen);
+	memmove(m + IPaddrlen, raddr, IPaddrlen);
+	m[2*IPaddrlen] = lport >> 8;
+	m[2*IPaddrlen + 1] = lport;
+	m[2*IPaddrlen + 2] = rport >> 8;
+	m[2*IPaddrlen + 3] = rport;
+	hmac_sha256(m, sizeof m, isn.key, sizeof isn.key, d, nil);
+	h = (u32int)d[0]<<24 | (u32int)d[1]<<16 | (u32int)d[2]<<8 | (u32int)d[3];
+	/* RFC 6528's M: a clock of four microseconds */
+	return h + (u32int)(fastticks2ns(fastticks(nil)) / 4000);
+}
+
+/*
+ * The segment size to send with, given the peer's MSS option (0 if it
+ * sent none) and ours.  Never more than ours; and never less than
+ * Minmss because the peer said so: a peer asking for one-byte segments
+ * had every byte sent in a packet of its own, and its out-of-order
+ * bytes each held a Block of ours.
+ */
+static int
+peermss(int theirs, int ours)
+{
+	if(theirs == 0 || theirs >= ours)
+		return ours;
+	if(theirs < Minmss)
+		theirs = Minmss;
+	if(theirs > ours)
+		theirs = ours;
+	return theirs;
+}
+
+/* is a reset's sequence number the one a reset must have? */
+static int
+rstexact(u32int seq, u32int nxt)
+{
+	return seq == nxt;
+}
+
 void
 tcpsndsyn(Conv *s, Tcpctl *tcb)
 {
-	tcb->iss = (nrand(1<<16)<<16)|nrand(1<<16);
+	tcb->iss = tcpisn(s->laddr, s->lport, s->raddr, s->rport);
 	tcb->rttseq = tcb->iss;
 	tcb->snd.wl2 = tcb->iss;
 	tcb->snd.una = tcb->iss;
@@ -1597,7 +1698,7 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 		lp->rcvscale = seg->ws;
 		lp->sackok = seg->sackok;
 		lp->irs = seg->seq;
-		lp->iss = (nrand(1<<16)<<16)|nrand(1<<16);
+		lp->iss = tcpisn(dest, seg->dest, source, seg->source);
 		lp->rexmits = 0;
 		*l = lp;
 	}
@@ -1763,8 +1864,7 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 	tcb->flags |= SYNACK;
 
 	/* our sending max segment size cannot be bigger than what he asked for */
-	if(lp->mss != 0 && lp->mss < tcb->mss)
-		tcb->mss = lp->mss;
+	tcb->mss = peermss(lp->mss, tcb->mss);
 
 	/* he offered SACK and sndsynack accepted: describe our holes to him */
 	tcb->sackok = lp->sackok;
@@ -2106,6 +2206,9 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 
 		hdrlen = ntohtcp4(&seg, &bp);
 		if(hdrlen < 0 || hdrlen > length){
+			/* ntohtcp4 freed the block where it failed; where it did not, it is still ours */
+			if(hdrlen >= 0)
+				freeblist(bp);
 			tpriv->stats[HlenErrs]++;
 			tpriv->stats[InErrs]++;
 			netlog(f, Logtcp, "bad tcp hdr len\n");
@@ -2152,6 +2255,8 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 
 		hdrlen = ntohtcp6(&seg, &bp);
 		if(hdrlen < 0 || hdrlen > length){
+			if(hdrlen >= 0)
+				freeblist(bp);
 			tpriv->stats[HlenErrs]++;
 			tpriv->stats[InErrs]++;
 			netlog(f, Logtcp, "bad tcp hdr len\n");
@@ -2333,7 +2438,7 @@ reset:
 		tcb->flags |= FORCE;
 		update(s, &seg);
 		if(addreseq(tcb, tpriv, &seg, bp, length) < 0)
-			print("reseq %I.%d -> %I.%d\n", s->raddr, s->rport, s->laddr, s->lport);
+			netlog(f, Logtcp, "reseq %I.%d -> %I.%d\n", s->raddr, s->rport, s->laddr, s->lport);
 		goto output;
 	}
 
@@ -2343,11 +2448,25 @@ reset:
 	 */
 	for(;;) {
 		if(seg.flags & RST) {
-			if(tcb->state == Established) {
-				tpriv->stats[EstabResets]++;
-				if(tcb->rcv.nxt != seg.seq)
-					print("out of order RST rcvd: %I.%d -> %I.%d, rcv.nxt %lux seq %lux\n", s->raddr, s->rport, s->laddr, s->lport, tcb->rcv.nxt, seg.seq);
+			/*
+			 * RFC 5961 3.2.  A reset anywhere in the window closed
+			 * the connection, and the window is half a megabyte: a
+			 * sender who knows the two ends and not the sequence
+			 * number needed some eight thousand tries.  Only the
+			 * reset at exactly the next number expected is one;
+			 * any other in the window is answered with an ACK,
+			 * which tells a real peer where we are, and it will
+			 * send its reset again there.
+			 */
+			if(!rstexact(seg.seq, tcb->rcv.nxt)){
+				netlog(f, Logtcp, "RST not at rcv.nxt: %I.%d -> %I.%d, rcv.nxt %lux seq %lux\n",
+					s->raddr, s->rport, s->laddr, s->lport, tcb->rcv.nxt, seg.seq);
+				freeblist(bp);
+				tcb->flags |= FORCE;
+				goto output;
 			}
+			if(tcb->state == Established)
+				tpriv->stats[EstabResets]++;
 			localclose(s, Econrefused);
 			goto raise;
 		}
@@ -3041,8 +3160,7 @@ procsyn(Conv *s, Tcp *seg)
 	tcb->irs = seg->seq;
 
 	/* our sending max segment size cannot be bigger than what he asked for */
-	if(seg->mss != 0 && seg->mss < tcb->mss)
-		tcb->mss = seg->mss;
+	tcb->mss = peermss(seg->mss, tcb->mss);
 
 	/*
 	 *  every SYN of ours offers SACK, so his SYN (or SYN ACK) carrying
@@ -3118,6 +3236,8 @@ sackblocks(Tcpctl *tcb, Tcp *seg)
 	seg->nsack = n;
 }
 
+static int reseqsaid;	/* when the queue's limit was last reported, in ms; 0 never */
+
 int
 addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 {
@@ -3150,16 +3270,16 @@ addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 	qmax = tcb->window;
 	nmax = (tcb->window + tcb->mss - 1) / tcb->mss;
 	if(tcb->reseqlen > qmax || tcb->nreseq > nmax){
-		print("resequence queue limit: %d bytes/%d packets (max %d/%d)\n",
-			tcb->reseqlen, tcb->nreseq, qmax, nmax);
-		i = 0;
-		for(rp1 = tcb->reseq; rp1 != nil; rp1 = rp1->next){
-	  		print("%#lux %#lux %#ux\n", rp1->seg.seq,
-	  			rp1->seg.ack, rp1->seg.flags);
-			if(i++ > 10){
-				print("...\n");
-				break;
-			}
+		/*
+		 * Said once a minute at most: the peer chooses how often
+		 * this happens, and a dozen lines on a serial console for
+		 * each was the peer writing the console.
+		 */
+		i = NOW;
+		if(reseqsaid == 0 || i - reseqsaid >= 60000){
+			reseqsaid = i | 1;
+			print("tcp: resequence queue limit: %d bytes/%d packets (max %d/%d)\n",
+				tcb->reseqlen, tcb->nreseq, qmax, nmax);
 		}
 
 		// delete entire reassembly queue; wait for retransmit.

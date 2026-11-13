@@ -27,6 +27,7 @@ enum {
 	Maxmedia = 32,
 	Nself = Maxmedia*5,
 	NHASH = (1<<6),
+	Maxmulti = 32,		/* multicast groups one conversation may join */
 	NCACHE = 256,
 	QMAX = 64*1024-1,
 };
@@ -71,7 +72,13 @@ struct Ipmcast
 };
 
 /* quick hash for ip addresses */
-#define hashipa(a) ( ( ((a)[IPaddrlen-2]<<8) | (a)[IPaddrlen-1] )%NHASH )
+/*
+ * (The last byte and the one before it shifted left by eight came to
+ * the last byte's low six bits alone, the shifted byte being a
+ * multiple of NHASH: addresses a caller chose to end alike all went
+ * on one chain, which every received packet walks.)
+ */
+#define hashipa(a) ( ( (((a)[IPaddrlen-3]*31 + (a)[IPaddrlen-2])*31) + (a)[IPaddrlen-1] )%NHASH )
 
 static char tifc[] = "ifc ";
 
@@ -195,6 +202,7 @@ ipifcbind(Conv *c, char **argv, int argc)
 
 	/* reopen all the queues closed by a previous unbind */
 	qreopen(c->rq);
+	qreopen(c->wq);		/* unbind closes it with the others; left closed, data written after a rebind went nowhere */
 	qreopen(c->eq);
 	qreopen(c->sq);
 
@@ -429,6 +437,7 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 
 	if(ifc->m == nil)
 		return "ipifc not yet bound to device";
+	mtu = -1;	/* none given */
 
 	f = ifc->conv->p->f;
 
@@ -443,8 +452,6 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 		/* fall through */
 	case 5:
 		mtu = strtoul(argv[4], 0, 0);
-		if(mtu >= ifc->m->mintu && mtu <= ifc->m->maxtu)
-			ifc->maxtu = mtu;
 		/* fall through */
 	case 4:
 		parseip(ip, argv[1]);
@@ -471,6 +478,18 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 	if(isv4(ip))
 		tentative = 0;
 	wlock(&ifc->rwl);
+	/*
+	 * Bound, as seen with the lock held: an unbind lets the lock go
+	 * with its placeholder medium in place and then sets none at all,
+	 * and an address added in between was left on an interface with no
+	 * device, its routes still drawing packets.
+	 */
+	if(ifc->m == nil || ifc->m == &unboundmedium){
+		wunlock(&ifc->rwl);
+		return "ipifc not yet bound to device";
+	}
+	if(mtu >= ifc->m->mintu && mtu <= ifc->m->maxtu)
+		ifc->maxtu = mtu;
 	if(waserror()){
 		wunlock(&ifc->rwl);
 		nexterror();
@@ -1180,14 +1199,29 @@ int
 iptentative(Fs *f, uchar *addr)
 {
  	Ipself *p;
+	Iplink *link;
+	int t;
 
-	p = f->self->hash[hashipa(addr)];
-	for(; p; p = p->next){
+	/*
+	 * Under the table's lock, as everything that changes it is.  An
+	 * address is in the table before its first link is and after its
+	 * last one has gone, and a link's logical interface is freed as
+	 * soon as its links are unlinked: read without the lock, a packet
+	 * for an address being added or removed followed a nil pointer or
+	 * read a freed interface.
+	 */
+	t = 0;
+	qlock(&f->self->ql);
+	for(p = f->self->hash[hashipa(addr)]; p; p = p->next){
 		if(ipcmp(addr, p->a) == 0) {
-			return p->link->lifc->tentative;
+			link = p->link;
+			if(link != nil && link->lifc != nil)
+				t = link->lifc->tentative;
+			break;
 		}
 	}
-	return 0;
+	qunlock(&f->self->ql);
+	return t;
 }
 
 /*
@@ -1327,16 +1361,22 @@ findprimaryipv6(Fs *f, uchar *local)
 		if(*cp == 0)
 			continue;
 		ifc = (Ipifc*)(*cp)->ptcl;
+		/* its addresses are freed under its lock: one being changed is passed over */
+		if(!canrlock(&ifc->rwl))
+			continue;
 		for(lifc = ifc->lifc; lifc; lifc = lifc->next){
 			atypel = v6addrtype(lifc->local);
 			if(atypel > atype)
 			if(v6addrcurr(lifc)) {
 				ipmove(local, lifc->local);
 				atype = atypel;
-				if(atype == globalv6)
+				if(atype == globalv6){
+					runlock(&ifc->rwl);
 					return;
+				}
 			}
 		}
+		runlock(&ifc->rwl);
 	}
 }
 
@@ -1356,10 +1396,14 @@ findprimaryipv4(Fs *f, uchar *local)
 		if(*cp == 0)
 			continue;
 		ifc = (Ipifc*)(*cp)->ptcl;
+		if(!canrlock(&ifc->rwl))
+			continue;
 		if((lifc = ifc->lifc) != nil){
 			ipmove(local, lifc->local);
+			runlock(&ifc->rwl);
 			return;
 		}
+		runlock(&ifc->rwl);
 	}
 }
 
@@ -1384,8 +1428,13 @@ findlocalip(Fs *f, uchar *local, uchar *remote)
 	r = v6lookup(f, remote, nil);
  	version = (memcmp(remote, v4prefix, IPv4off) == 0) ? V4 : V6;
 	
-	if(r != nil){
-		ifc = r->ifc;
+	/*
+	 * The route's interface, held while its addresses are read: they
+	 * are freed under its lock, and a connect beside a remove walked a
+	 * list that was being taken apart.  One being changed this moment
+	 * is passed over for the first address there is, as with no route.
+	 */
+	if(r != nil && (ifc = r->ifc) != nil && canrlock(&ifc->rwl)){
 		if(r->type & Rv4)
 			v4tov6(gate, r->v4.gate);
 		else {
@@ -1400,6 +1449,7 @@ findlocalip(Fs *f, uchar *local, uchar *remote)
 				maskip(gate, lifc->mask, gnet);
 				if(ipcmp(gnet, lifc->net) == 0){
 					ipmove(local, lifc->local);
+					runlock(&ifc->rwl);
 					goto out;
 				}
 			}
@@ -1417,12 +1467,15 @@ findlocalip(Fs *f, uchar *local, uchar *remote)
 						break;
 				}
 			}
-			if(atype > unspecifiedv6)
+			if(atype > unspecifiedv6){
+				runlock(&ifc->rwl);
 				goto out;
+			}
 			break;
 		default:
 			panic("findlocalip: version %d", version);
 		}
+		runlock(&ifc->rwl);
 	}
 
 	switch(version){
@@ -1573,13 +1626,25 @@ ipifcaddmulti(Conv *c, uchar *ma, uchar *ia)
 	Conv **p;
 	Ipmulti *multi, **l;
 	Fs *f;
+	int n;
 
 	f = c->p->f;
 	
-	for(l = &c->multi; *l; l = &(*l)->next)
+	n = 0;
+	for(l = &c->multi; *l; l = &(*l)->next){
 		if(ipcmp(ma, (*l)->ma) == 0)
 		if(ipcmp(ia, (*l)->ia) == 0)
 			return;		/* it's already there */
+		n++;
+	}
+	/*
+	 * Each group is an entry in the table every received packet is
+	 * looked up in, a route, and a filter in the hardware: a
+	 * conversation has as many as a program has use for, not as many
+	 * as it can ask for.
+	 */
+	if(n >= Maxmulti)
+		error("too many multicast groups for one conversation");
 
 	multi = *l = smalloc(sizeof(*multi));
 	ipmove(multi->ma, ma);
@@ -1699,7 +1764,7 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				if(ipcmp(net, lifc->remote) == 0) { /* add solicited-node multicast address */
 					ipv62smcast(net, ip);
 					addselfcache(f, nifc, lifc, net, Rmulti);
-					arpenter(f, V6, ip, nifc->mac, 6, 0);
+					arpenter(f, V6, ip, nifc->mac, 6, 0, nil);
 					//(*m->addmulti)(nifc, net, ip);
 					break;
 				}

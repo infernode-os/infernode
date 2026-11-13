@@ -231,7 +231,8 @@ Conv: adt {
 	hidids: list of (int, int, int);	# hid: (reference handle, value handle, report id) per input report
 };
 Kl2cap, Krfcomm, Kgatt, Khid: con iota;
-leseen: list of (string, int);	# addresses lescan has heard, with their types
+leseen: list of (string, int);	# addresses lescan has heard, with their types; newest first
+nleseen := 0;
 convs: list of ref Conv;
 nconv := 0;
 clonefids: list of (int, int);	# fid -> conversation, for opens of clone and listen
@@ -281,6 +282,13 @@ Sub: adt {
 };
 subs: list of ref Sub;
 Maxlines: con 1000;
+#
+# How many devices a scan, and the table of address types, keep track
+# of. Anything with a radio is heard, and an address costs it nothing
+# to change: with no limit, each list grew for as long as something
+# kept changing its address, and every report walked all of it.
+#
+Maxseen: con 512;
 
 # raw packets for the hci file's holder
 hcifid := -1;
@@ -391,6 +399,10 @@ init(nil: ref Draw->Context, args: list of string)
 		't' =>	transportname = arg->earg();
 		'k' =>	keyfile = arg->earg();
 		'f' =>	factdir = arg->earg();
+		'S' =>
+			# the limits on what a radio in range can make this keep, checked with no radio
+			selftest();
+			exit;
 		* =>	usage();
 		}
 	if(transportname == nil)
@@ -905,6 +917,10 @@ event(srv: ref Styxserver, e: ref Event)
 			d := hd f;
 			if(knows(s, d.addr))
 				continue;
+			if(len s.seen >= Maxseen){
+				s.dropped++;	# more devices than a scan lists
+				continue;
+			}
 			s.seen = d.addr :: s.seen;
 			if(d.name != nil)
 				post(srv, s, foundline(d));
@@ -1087,6 +1103,10 @@ event(srv: ref Styxserver, e: ref Event)
 			leresolve(srv, d.addr, d.letype);
 			if(knows(s, d.addr))
 				continue;
+			if(len s.seen + len s.nameless >= Maxseen && !nameless(s, d.addr)){
+				s.dropped++;	# more devices than a scan lists
+				continue;
+			}
 			if(d.name == nil){
 				if(!nameless(s, d.addr))
 					s.nameless = d :: s.nameless;
@@ -1131,9 +1151,86 @@ appendf(l: list of ref Found, f: ref Found): list of ref Found
 	return hd l :: appendf(tl l, f);
 }
 
+#
+# A device's name as it goes into a line of a file: the device chose
+# it, and a line break in it would be a line of its own in what a
+# program reads the scan from -- another device, with whatever address
+# and name it liked. Control characters become '?', and it is no longer
+# than a name can be.
+#
+cleanname(nm: string): string
+{
+	if(len nm > 248)
+		nm = nm[0:248];
+	for(i := 0; i < len nm; i++)
+		if(nm[i] < ' ' || nm[i] == 16r7f || nm[i] == 16r85 || nm[i] == 16r2028 || nm[i] == 16r2029)
+			nm[i] = '?';
+	return nm;
+}
+
+selftest()
+{
+	ok := 1;
+	# names
+	if(cleanname("hephaestus") != "hephaestus" || cleanname(nil) != nil
+	|| cleanname("kbd\naa:aa:aa:aa:aa:01 public -40 trusted") != "kbd?aa:aa:aa:aa:aa:01 public -40 trusted"
+	|| cleanname("a\tb\rc\u001bd\u007fe") != "a?b?c?d?e" || cleanname("x\u2028y") != "x?y"){
+		sys->print("bt9p: selftest: a name's control characters reach the scan's lines\n");
+		ok = 0;
+	}
+	long := "";
+	for(i := 0; i < 400; i++)
+		long[len long] = 'n';
+	if(len cleanname(long) != 248){
+		sys->print("bt9p: selftest: a name of 400 was kept at %d\n", len cleanname(long));
+		ok = 0;
+	}
+	fl := foundline(ref Found("aa:bb:cc:dd:ee:ff", 0, -40, "one\ntwo", 1));
+	nl := 0;
+	for(i = 0; i < len fl; i++)
+		if(fl[i] == '\n')
+			nl++;
+	if(nl != 1 || fl[len fl - 1] != '\n'){
+		sys->print("bt9p: selftest: a device's line is %d lines\n", nl);
+		ok = 0;
+	}
+	# the table of address types: 5000 addresses heard, a bounded number kept, the newest among them
+	leseen = nil;
+	nleseen = 0;
+	for(i = 0; i < 5000; i++)
+		noteletype(sys->sprint("c0:00:00:00:%2.2ux:%2.2ux", i >> 8, i & 16rff), 1);
+	if(len leseen > Maxseen || len leseen != nleseen){
+		sys->print("bt9p: selftest: %d address types kept (counted %d) of 5000 heard; the limit is %d\n", len leseen, nleseen, Maxseen);
+		ok = 0;
+	}
+	noteletype("c0:00:00:00:13:87", 0);	# 4999 again: heard last, so kept, and not added twice
+	n := 0;
+	for(l := leseen; l != nil; l = tl l){
+		(a, nil) := hd l;
+		if(a == "c0:00:00:00:13:87")
+			n++;
+	}
+	if(n != 1){
+		sys->print("bt9p: selftest: the address heard last is kept %d times, not once\n", n);
+		ok = 0;
+	}
+	leseen = nil;
+	nleseen = 0;
+	# the keys file
+	if(!keyroom(0, 0, 100) || !keyroom(Maxkeylines-1, 1000, 100) || keyroom(Maxkeylines, 1000, 100)
+	|| keyroom(10, Maxkeybytes - 50, 100) || keyroom(10, 0, Maxkeybytes) || keyroom(-1, 0, 100) || keyroom(0, 0, 0)){
+		sys->print("bt9p: selftest: room in the keys file\n");
+		ok = 0;
+	}
+	if(ok)
+		sys->print("bt9p: selftest OK\n");
+	else
+		sys->print("bt9p: selftest FAILED\n");
+}
+
 foundline(d: ref Found): string
 {
-	nm := d.name;
+	nm := cleanname(d.name);
 	if(nm == nil)
 		nm = "-";
 	if(d.letype < 0)
@@ -3011,6 +3108,19 @@ noteletype(a: string, t: int)
 			return;
 	}
 	leseen = (a, t) :: leseen;
+	if(++nleseen > Maxseen){
+		# the oldest go: a connect to one of them asks its type again
+		keep: list of (string, int);
+		n := 0;
+		for(l = leseen; l != nil && n < Maxseen/2; l = tl l){
+			keep = hd l :: keep;
+			n++;
+		}
+		leseen = nil;
+		for(; keep != nil; keep = tl keep)
+			leseen = hd keep :: leseen;
+		nleseen = n;
+	}
 }
 
 # A bonded peripheral that gave us an IRK advertises under private
@@ -3524,13 +3634,7 @@ storeltk(who: string, ptype: int, k: ref Smp->Keys)
 		sys->fprint(stderr, "bt9p: factotum refused the LTK for %s: %r\n", who);
 		return;
 	}
-	if(keyfile != nil){
-		kf := sys->open(keyfile, Sys->OWRITE);
-		if(kf == nil)
-			kf = sys->create(keyfile, Sys->OWRITE, 8r600);
-		if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
-			sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
-	}
+	addkeyline(line);
 }
 
 forgetltk(who: string)
@@ -4240,13 +4344,68 @@ storekey(who: string, key: array of byte, ktype: int)
 		sys->fprint(stderr, "bt9p: factotum refused the link key for %s: %r\n", who);
 		return;
 	}
-	if(keyfile != nil){
-		kf := sys->open(keyfile, Sys->OWRITE);
-		if(kf == nil)
-			kf = sys->create(keyfile, Sys->OWRITE, 8r600);
-		if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
-			sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
+	addkeyline(line);
+}
+
+#
+# One more key line onto the card, if the file has room for it.
+#
+# The file is read whole at start, and one too large to be a keys file
+# is not read at all: every key in it is then lost to the next boot,
+# and forget cannot take a line out of it either. Pairing, when it is
+# allowed, makes a key for whoever asks, so a file with no limit is one
+# that anyone in range can grow until it is that large. So it holds so
+# many keys and no more. A key there is no room for is not kept on the
+# card, and says so: the peers already there keep their keys, which is
+# what is being protected, and the new one is good until restart.
+# Making room is the user's choice of whom to forget.
+#
+Maxkeylines: con 256;
+Maxkeybytes: con 128*1024;
+
+# is there room for a line of n bytes in a file of nkeys keys and nbytes bytes?
+keyroom(nkeys, nbytes, n: int): int
+{
+	return nkeys >= 0 && nkeys < Maxkeylines && nbytes >= 0 && n > 0 && n < Maxkeybytes && nbytes <= Maxkeybytes - n - 1;
+}
+
+addkeyline(line: string)
+{
+	if(keyfile == nil)
+		return;
+	nkeys := 0;
+	nbytes := 0;
+	kf := sys->open(keyfile, Sys->OREAD);
+	if(kf != nil){
+		(ok, d) := sys->fstat(kf);
+		if(ok < 0 || d.length > big Maxkeybytes){
+			sys->fprint(stderr, "bt9p: %s is too large to be added to; the key is held until restart\n", keyfile);
+			return;
+		}
+		nbytes = int d.length;
+		buf := array[nbytes] of byte;
+		n := 0;
+		while(n < len buf){
+			m := sys->read(kf, buf[n:], len buf - n);
+			if(m <= 0)
+				break;
+			n += m;
+		}
+		(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+		for(; lines != nil; lines = tl lines)
+			if(len hd lines >= 4 && (hd lines)[0:4] == "key ")
+				nkeys++;
+		kf = nil;
 	}
+	if(!keyroom(nkeys, nbytes, len array of byte line)){
+		sys->fprint(stderr, "bt9p: %s holds %d keys, its limit: this one is held until restart; forget a peer to keep another\n", keyfile, nkeys);
+		return;
+	}
+	kf = sys->open(keyfile, Sys->OWRITE);
+	if(kf == nil)
+		kf = sys->create(keyfile, Sys->OWRITE, 8r600);
+	if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
+		sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
 }
 
 # the value of attr=value in a key line, nil if absent

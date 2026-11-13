@@ -1412,6 +1412,32 @@ initepctx(Ctlr *ctlr, u32int *w, Ring *r, Ep *ep)
 		w[4] |= (ep->maxpkt*ep->ntds)<<16;
 }
 
+/*
+ * The length a Normal TRB can carry for a transfer of n bytes.  Its
+ * length field is 17 bits, with the count of packets left and the
+ * interrupter above it: a length past the field was sent as its low
+ * 17 bits, so a read of 128K moved nothing and returned 128K, and a
+ * longer one was reported to an interrupter nobody services.  A read
+ * is cut to the most whole packets the field holds; for a write, what
+ * comes back is not n and the caller refuses it.
+ */
+static long
+trblen(long n, int maxpkt, int rd)
+{
+	long lim;
+
+	if(n < 0)
+		return 0;
+	if(n <= 0x1ffff)
+		return n;
+	if(!rd)
+		return -1;
+	lim = 0x1ffff;
+	if(maxpkt > 0 && maxpkt <= 1024)
+		lim -= lim % maxpkt;
+	return lim;
+}
+
 static void
 initisoio(Epio *io, Ep *ep)
 {
@@ -1420,6 +1446,8 @@ initisoio(Epio *io, Ep *ep)
 	io->rp0 = io->ring->wp;
 	io->frame0 = io->frame = 0;
 	io->period = ep->pollival << 3*(ep->dev->speed == Fullspeed || ep->dev->speed == Lowspeed);
+	if(io->period < 1)
+		io->period = 1;		/* isoread and isowrite divide by it */
 	if(io->ring->id & 1){
 		io->ring->residue = smalloc((io->ring->mask+1)*sizeof(io->ring->residue[0]));
 		io->incr = 0;
@@ -1910,6 +1938,9 @@ epread(Ep *ep, void *va, long n)
 	if((err = unstall(ep, io->ring)) != nil)
 		error(err);
 
+	/* a read may be shorter than asked: as much as one TRB can say */
+	n = trblen(n, ep->maxpkt, 1);
+
 	/*
 	 * 9front bounces a user-space buffer; this kernel has no user
 	 * space, and what it has instead is memory a PCI device may not
@@ -2046,6 +2077,10 @@ epwrite(Ep *ep, void *va, long n)
 
 	if((err = unstall(ep, io->ring)) != nil)
 		error(err);
+
+	/* a write is all or nothing: more than one TRB can say is refused */
+	if(trblen(n, ep->maxpkt, 0) != n)
+		error(Ebadlen);
 
 	dp = p;
 	if(!pcidmaok(p, n)){

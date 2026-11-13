@@ -124,6 +124,12 @@ struct Ipfrag
 {
 	ushort	foff;
 	ushort	flen;
+	ushort	ufl;	/* this fragment's own unfragmentable length: they need not agree */
+	ushort	more;	/* its M flag */
+};
+
+enum {
+	Maxfrags6	= 64,	/* fragments held for one datagram: 64K at the least MTU is 54 */
 };
 
 /* an instance of IP */
@@ -385,7 +391,7 @@ ipiput6(Fs *f, Ipifc *ifc, Block *bp)
 	tentative = iptentative(f, v6dst);
   
 	if(tentative && (h->proto != ICMPv6)) {
-		print("tentative addr, drop\n");
+		netlog(f, Logip, "ip6: tentative addr, drop\n");
 		freeblist(bp);
 		return;
 	}
@@ -423,7 +429,7 @@ ipiput6(Fs *f, Ipifc *ifc, Block *bp)
 	/* route */
 	if(notforme) {
 		if(!ip->iprouting){
-			freeb(bp);
+			freeblist(bp);
 			return;
 		}
 		/* don't forward to source's network */
@@ -545,6 +551,18 @@ procxtns(IP *ip, Block *bp, int doreasm) {
 		return nil;
 	}
 
+	if(proto == FH && doreasm == 0){
+		/*
+		 * unfraglen named the fragment header's own next header in
+		 * the header before it, which is right once the fragment
+		 * header is taken out; passed on as it is, the packet must
+		 * still say that a fragment header comes next.
+		 */
+		if(unfraglen(bp, &proto, 1) < 0){
+			freeblist(bp);
+			return nil;
+		}
+	}
 	if((proto == FH) && (doreasm != 0)) {
 		bp = ip6reassemble(ip, offset, bp, h);
 		if(bp == nil) 
@@ -617,70 +635,129 @@ procopts(Block *bp)
 	return bp;
 }
 
+/* a block that holds the headers before a fragment header, and the fragment header */
+static int
+fragfits(int blen, int uflen)
+{
+	return uflen >= IP6HDR && uflen <= blen && blen - uflen >= IP6FHDR;
+}
+
+/*
+ * A fragment of flen bytes at offset: some data, in whole 8-byte units
+ * unless it is the last, ending within the largest payload there is.
+ */
+static int
+fragok(int offset, int flen, int more)
+{
+	if(offset < 0 || flen <= 0 || flen > 65535 || offset > 65535 - flen)
+		return 0;
+	if(more && (flen & 7) != 0)
+		return 0;
+	return 1;
+}
+
 Block*
 ip6reassemble(IP* ip, int uflen, Block* bp, Ip6hdr* ih)
 {
-
-	int fend, offset;
+	int fend, offset, flen, more, n, len, pktposn, overlap;
 	uint id;
-	Fragment6 *f, *fnext;
+	Fragment6 *f, *q, *fnext;
 	Fraghdr6 *fraghdr;
 	uchar src[IPaddrlen], dst[IPaddrlen];
-	Block *bl, **l, *last, *prev;
-	int ovlap, len, fragsize, pktposn;
+	Block *bl, **l, *prev;
 
+	/*
+	 *  block lists are too hard, pullupblock into a single block;
+	 *  and only then look at it: the block is another one after
+	 */
+	if(bp->next){
+		bp = pullupblock(bp, blocklen(bp));
+		if(bp == nil)
+			return nil;
+	}
+	if(!fragfits(BLEN(bp), uflen)){
+		ip->stats[ReasmFails]++;
+		freeblist(bp);
+		return nil;
+	}
+	ih = (Ip6hdr *)(bp->rp);
 	fraghdr = (Fraghdr6 *) (bp->rp + uflen);
 	memmove(src, ih->src, IPaddrlen);
 	memmove(dst, ih->dst, IPaddrlen);
 	id = nhgetl(fraghdr->id);
 	offset = nhgets(fraghdr->offsetRM) & ~7;
-
-	/*
-	 *  block lists are too hard, pullupblock into a single block
-	 */
-	if(bp->next){
-		bp = pullupblock(bp, blocklen(bp));
-		ih = (Ip6hdr *)(bp->rp);
-	}
-
+	more = fraghdr->offsetRM[1] & 1;
+	/* what this fragment carries is what came, not what a header says came */
+	flen = BLEN(bp) - uflen - IP6FHDR;
 
 	qlock(&ip->fraglock6);
 
 	/*
-	 *  find a reassembly queue for this fragment
+	 *  find a reassembly queue for this fragment, and let go of
+	 *  every one that has waited too long, this one's too
 	 */
-	for(f = ip->flisthead6; f; f = fnext){
-		fnext = f->next;
-		if(ipcmp(f->src, src)==0 && ipcmp(f->dst, dst)==0 && f->id == id)
-			break;
-		if(f->age < NOW){
+	f = nil;
+	for(q = ip->flisthead6; q; q = fnext){
+		fnext = q->next;
+		if(q->age < NOW){
 			ip->stats[ReasmTimeout]++;
-			ipfragfree6(ip, f);
+			ipfragfree6(ip, q);
+			continue;
 		}
+		if(f == nil && ipcmp(q->src, src)==0 && ipcmp(q->dst, dst)==0 && q->id == id)
+			f = q;
 	}
-
 
 	/*
 	 *  if this isn't a fragmented packet, accept it
 	 *  and get rid of any fragments that might go
-	 *  with it.
+	 *  with it.  The fragment header comes out: the header before
+	 *  it already names what follows (unfraglen), and left in, its
+	 *  eight bytes were read as the start of that.
 	 */
-	if(nhgets(fraghdr->offsetRM)==0) {	// first frag is also the last
+	if(offset == 0 && !more) {
 		if(f != nil) {
 			ipfragfree6(ip, f);
 			ip->stats[ReasmFails]++;
 		}
 		qunlock(&ip->fraglock6);
+		memmove(bp->rp + IP6FHDR, bp->rp, uflen);
+		bp->rp += IP6FHDR;
+		ih = (Ip6hdr *)(bp->rp);
+		hnputs(ih->ploadlen, BLEN(bp) - IP6HDR);
 		return bp;
+	}
+
+	/*
+	 *  A fragment has data, in whole 8-byte units unless it is the
+	 *  last, and ends inside the largest datagram there is.  One that
+	 *  does not is no part of any datagram, and neither is what was
+	 *  queued with it.
+	 */
+	if(!fragok(offset, flen, more)){
+Abandon:
+		if(f != nil)
+			ipfragfree6(ip, f);
+		ip->stats[ReasmFails]++;
+		qunlock(&ip->fraglock6);
+		freeblist(bp);
+		return nil;
 	}
 
 	if(bp->base+sizeof(Ipfrag) >= bp->rp){
 		bp = padblock(bp, sizeof(Ipfrag));
+		if(bp == nil){
+			qunlock(&ip->fraglock6);
+			return nil;
+		}
 		bp->rp += sizeof(Ipfrag);
 	}
+	/* ih and fraghdr pointed into the block padblock may have replaced: not used again */
 
 	BKFG(bp)->foff = offset;
-	BKFG(bp)->flen = nhgets(ih->ploadlen) + IP6HDR - uflen - IP6FHDR;
+	BKFG(bp)->flen = flen;
+	BKFG(bp)->ufl = uflen;
+	BKFG(bp)->more = more;
 
 	/* First fragment allocates a reassembly queue */
 	if(f == nil) {
@@ -699,100 +776,89 @@ ip6reassemble(IP* ip, int uflen, Block* bp, Ip6hdr* ih)
 	/*
 	 *  find the new fragment's position in the queue
 	 */
+	n = 0;
 	prev = nil;
 	l = &f->blist;
-	bl = f->blist;
-	while(bl != nil && BKFG(bp)->foff > BKFG(bl)->foff) {
+	for(bl = f->blist; bl != nil && BKFG(bl)->foff < offset; bl = bl->next){
 		prev = bl;
 		l = &bl->next;
-		bl = bl->next;
+		n++;
 	}
 
-	/* Check overlap of a previous fragment - trim away as necessary */
-	if(prev) {
-		ovlap = BKFG(prev)->foff + BKFG(prev)->flen - BKFG(bp)->foff;
-		if(ovlap > 0) {
-			if(ovlap >= BKFG(bp)->flen) {
-				freeblist(bp);
-				qunlock(&ip->fraglock6);
-				return nil;
-			}
-			BKFG(prev)->flen -= ovlap;
-		}
-	}
-
-	/* Link onto assembly queue */
-	bp->next = *l;
-	*l = bp;
-
-	/* Check to see if succeeding segments overlap */
-	if(bp->next) {
-		l = &bp->next;
-		fend = BKFG(bp)->foff + BKFG(bp)->flen;
-
-		/* Take completely covered segments out */
-
-		while(*l) {
-			ovlap = fend - BKFG(*l)->foff;
-
-			if(ovlap <= 0) 
-				break; 
-			if(ovlap < BKFG(*l)->flen) {
-				BKFG(*l)->flen -= ovlap;
-				BKFG(*l)->foff += ovlap;
-				/* move up ih hdrs */
-				memmove((*l)->rp + ovlap, (*l)->rp, uflen);
-				(*l)->rp += ovlap;
-				break;
-			}
-			last = (*l)->next;
-			(*l)->next = nil;
-			freeblist(*l);
-			*l = last;
-		}
+	/* the network may deliver a fragment twice: the second is dropped, the rest kept */
+	if(bl != nil && BKFG(bl)->foff == offset && BKFG(bl)->flen == flen){
+		qunlock(&ip->fraglock6);
+		freeblist(bp);
+		return nil;
 	}
 
 	/*
-	 *  look for a complete packet.  if we get to a fragment
-	 *  with the trailing bit of fraghdr->offsetRM[1] set, we're done.
+	 *  Fragments that overlap are not trimmed to fit: the datagram is
+	 *  abandoned (RFC 8200 4.5).  Trimming moved one fragment's
+	 *  headers by another's length, and what a datagram says where its
+	 *  fragments disagree is the sender's choice of what each reader
+	 *  sees.  Nor is a datagram held in more pieces than any needs.
+	 */
+	fend = offset + flen;
+	overlap = (prev != nil && BKFG(prev)->foff + BKFG(prev)->flen > offset)
+		|| (bl != nil && fend > BKFG(bl)->foff);
+	for(prev = bl; prev != nil; prev = prev->next)
+		n++;
+	if(overlap || n >= Maxfrags6)
+		goto Abandon;
+
+	/* Link onto assembly queue */
+	bp->next = bl;
+	*l = bp;
+
+	/*
+	 *  look for a complete packet: fragments end to end from 0, the
+	 *  last of them the one that says it is the last.
 	 */
 	pktposn = 0;
 	for(bl = f->blist; bl; bl = bl->next) {
 		if(BKFG(bl)->foff != pktposn)
 			break;
-	
-		fraghdr = (Fraghdr6 *) (bl->rp + uflen);
-		if((fraghdr->offsetRM[1] & 1) == 0) {
-
-			bl = f->blist;
-
-			/* get rid of frag header in first fragment */
-
-			memmove(bl->rp + IP6FHDR, bl->rp, uflen);
-			bl->rp += IP6FHDR;
-			len = nhgets(((Ip6hdr*)(bl->rp))->ploadlen) - IP6FHDR;
-			bl->wp = bl->rp + len + IP6HDR;
-
-			/* Pullup all the fragment headers and
-			 * return a complete packet
-			 */
-			for(bl = bl->next; bl; bl = bl->next) {
-				fragsize = BKFG(bl)->flen;
-				len += fragsize;
-				bl->rp += uflen + IP6FHDR;
-				bl->wp = bl->rp + fragsize;
-			}
-
-			bl = f->blist;
-			f->blist = nil;
-			ipfragfree6(ip, f);
-			ih = (Ip6hdr*)(bl->rp);
-			hnputs(ih->ploadlen, len);
-			qunlock(&ip->fraglock6);
-			ip->stats[ReasmOKs]++;
-			return bl;		
-		}
 		pktposn += BKFG(bl)->flen;
+		if(BKFG(bl)->more)
+			continue;
+
+		/* data after the last fragment belongs to no datagram */
+		if(bl->next != nil){
+			ipfragfree6(ip, f);
+			ip->stats[ReasmFails]++;
+			qunlock(&ip->fraglock6);
+			return nil;
+		}
+
+		bl = f->blist;
+		n = BKFG(bl)->ufl;
+		len = (n - IP6HDR) + pktposn;	/* the first fragment's extension headers, and the data */
+		if(len > 65535){
+			ipfragfree6(ip, f);
+			ip->stats[ReasmFails]++;
+			qunlock(&ip->fraglock6);
+			return nil;
+		}
+
+		/* get rid of frag header in first fragment */
+		memmove(bl->rp + IP6FHDR, bl->rp, n);
+		bl->rp += IP6FHDR;
+
+		/*
+		 * Each later fragment gives up its own headers, by its own
+		 * length, and what is left is its data.
+		 */
+		for(prev = bl->next; prev; prev = prev->next)
+			prev->rp += BKFG(prev)->ufl + IP6FHDR;
+
+		f->blist = nil;
+		ipfragfree6(ip, f);
+		ih = (Ip6hdr*)(bl->rp);
+		hnputs(ih->ploadlen, len);
+		qunlock(&ip->fraglock6);
+		ip->stats[ReasmOKs]++;
+		return bl;
 	}
 	qunlock(&ip->fraglock6);
 	return nil;

@@ -63,8 +63,10 @@
  *
  * With no generator no secret is made: everything here waits. The
  * kernel still boots and its network still works, since nrand -- port
- * numbers and TCP sequence numbers, not secrets, and an LCG over the
- * clock since upstream -- never waits (devcons.c's seedrand).
+ * numbers, not secrets, and an LCG over the clock since upstream --
+ * never waits (devcons.c's seedrand), and nor does the key TCP hashes
+ * its sequence numbers under (tcp.c's isnkey), which takes what
+ * hwrandom has and makes up the rest.
  *
  * An emulator with no generator can have a counter instead, when its
  * boot command line holds the word "insecurerandom", which says in so

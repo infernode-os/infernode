@@ -169,9 +169,18 @@ uih(m: ref Mux, dlci: int, credits: int, data: array of byte): ref Ev
 # a multiplexer control message on DLCI 0
 mcc(m: ref Mux, t: int, cmd: int, v: array of byte): ref Ev
 {
-	h := array[2] of byte;
+	h: array of byte;
+	n := len v;
+	if(n < 128){
+		h = array[2] of byte;
+		h[1] = byte ((n << 1) | 1);
+	}else{
+		# the length does not fit seven bits: EA clear, and the rest in a second byte
+		h = array[3] of byte;
+		h[1] = byte ((n & 16r7f) << 1);
+		h[2] = byte (((n >> 7) << 1) | 1);
+	}
 	h[0] = byte ((t << 2) | (cmd << 1) | 1);
-	h[1] = byte ((len v << 1) | 1);
 	return uih(m, 0, -1, cat(h, v));
 }
 
@@ -282,9 +291,12 @@ Mux.recv(m: self ref Mux, sdu: array of byte): list of ref Ev
 		evs: list of ref Ev;
 		if(credits > 0){
 			d.txcredits += credits;
+			if(d.txcredits > Maxcredits)
+				d.txcredits = Maxcredits;	# a count that only grows comes round to negative
 			evs = flush(m, d);
 		}
-		if(len data > 0){
+		# data is for a port that is open, in frames of the size agreed
+		if(len data > 0 && d.state == Open && len data <= d.framesize){
 			if(d.rxcredits > 0)
 				d.rxcredits--;
 			evs = appendev(evs, ref Ev.Data(d, data));
@@ -294,20 +306,36 @@ Mux.recv(m: self ref Mux, sdu: array of byte): list of ref Ev
 	return nil;
 }
 
+Maxcredits: con 4096;	# more than any window; a bound, so the count cannot wrap
+
+# A DLCI the peer may open: one of the user DLCIs (2 to 61), with the
+# direction bit that is the peer's to use (TS 07.10 5.6), not ours.
+peerdlci(m: ref Mux, dlci: int): int
+{
+	if(dlci < 2 || dlci > 61)
+		return 0;
+	return (dlci & 1) == (m.initiator != 0);
+}
+
 sabm(m: ref Mux, dlci: int): list of ref Ev
 {
 	if(dlci == 0){
 		# the peer brings the multiplexer up; we are the responder
 		m.up = 1;
 		m.starting = 0;
-		return ctlframe(m, 0, UA, 0) :: nil;
+		evs0 := ctlframe(m, 0, UA, 0) :: nil;
+		# connects that waited for our own SABM's answer wait for nothing now
+		for(pl := m.pending; pl != nil; pl = tl pl)
+			evs0 = appendevs(evs0, pn(m, hd pl));
+		m.pending = nil;
+		return evs0;
 	}
 	if(!m.up)
 		return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "multiplexer not up") :: nil;
 	channel := dlci >> 1;
 	d := m.find(dlci);
 	if(d == nil){
-		if(!accepts(m, channel))
+		if(!peerdlci(m, dlci) || !accepts(m, channel))
 			return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "channel not offered") :: nil;
 		# no PN first: TS 07.10 defaults, credits as the spec says (RFCOMM 6.5.2)
 		d = ref Dlc(dlci, channel, Waitua, Defframe, 0, Initcredits, 0, 0, 0, nil);
@@ -315,6 +343,16 @@ sabm(m: ref Mux, dlci: int): list of ref Ev
 	}
 	if(d.initiator)
 		return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "collision on our own DLCI") :: nil;
+	#
+	# A SABM opens a port that is waiting to be opened.  One for a port
+	# already open is the peer's retransmission: answered again, and
+	# announced to nobody a second time.  One for a port we are closing
+	# does not bring it back.
+	#
+	if(d.state == Open)
+		return ctlframe(m, dlci, UA, 0) :: nil;
+	if(d.state != Waitua)
+		return nil;
 	d.state = Open;
 	# UA, then our MSC command: the port is open at our end
 	evs := ctlframe(m, dlci, UA, 0) :: mcc(m, Tmsc, 1, mscbody(d.dlci)) :: nil;
@@ -351,6 +389,8 @@ ua(m: ref Mux, dlci: int): list of ref Ev
 		return nil;
 	case d.state {
 	Waitua =>
+		if(!d.initiator)
+			return nil;	# the peer's own port, waiting for its SABM: a UA is no SABM
 		d.state = Open;
 		return mcc(m, Tmsc, 1, mscbody(d.dlci)) :: ref Ev.Opened(d) :: nil;
 	Waitdisc =>
@@ -364,6 +404,7 @@ dm(m: ref Mux, dlci: int): list of ref Ev
 {
 	if(dlci == 0){
 		m.starting = 0;
+		m.up = 0;	# or the next connect skips the SABM a session begins with
 		evs: list of ref Ev;
 		for(l := m.dlcs; l != nil; l = tl l)
 			evs = appendev(evs, ref Ev.Closed(hd l, "refused"));
@@ -425,7 +466,7 @@ control(m: ref Mux, data: array of byte): list of ref Ev
 	if((int data[1] & 1) == 0){
 		if(len data < 3)
 			return nil;
-		n |= int data[2] << 7;
+		n |= (int data[2] >> 1) << 7;	# the second byte has an EA bit of its own
 		i = 3;
 	}
 	if(i + n > len data)
@@ -444,11 +485,12 @@ control(m: ref Mux, data: array of byte): list of ref Ev
 			# the peer proposes; we answer with what we will do. A frame
 			# size we cannot take is answered with ours, the smaller.
 			if(d == nil){
-				if(!accepts(m, dlci >> 1))
+				if(!peerdlci(m, dlci) || !accepts(m, dlci >> 1))
 					return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "channel not offered") :: nil;
 				d = ref Dlc(dlci, dlci >> 1, Waitua, Defframe, 0, Initcredits, 0, 0, 0, nil);
 				m.dlcs = d :: m.dlcs;
-			}
+			}else if(d.initiator || d.state != Waitua)
+				return nil;	# RFCOMM 5.5.3: not after the port is open, and not for a port of ours
 			ours := m.mtu - 6;
 			if(ours > Maxframe)
 				ours = Maxframe;

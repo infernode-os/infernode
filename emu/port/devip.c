@@ -383,6 +383,17 @@ static int m2p[] = {
 	1,
 };
 
+/*
+ * Does this open mode ask to change the file?  OWRITE is 1 and ORDWR is
+ * 2: a test of the OWRITE bit says no to an open for reading and
+ * writing, which then wrote all the same.
+ */
+static int
+wantswrite(int omode)
+{
+	return (omode&3) == OWRITE || (omode&3) == ORDWR || (omode & OTRUNC) != 0;
+}
+
 static Chan *
 ipopen(Chan *c, int omode)
 {
@@ -412,9 +423,10 @@ ipopen(Chan *c, int omode)
 			error(Eperm);
 		break;
 	case Qndb:
-		if(omode & (OWRITE|OTRUNC) && !iseve())
+		/* the network database names the resolvers: changing it is eve's */
+		if(wantswrite(omode) && !iseve())
 			error(Eperm);
-		if((omode & (OWRITE|OTRUNC)) == (OWRITE|OTRUNC)){
+		if(wantswrite(omode) && (omode & OTRUNC)){
 			f->ndb[0] = 0;
 			f->ndbvers++;
 		}

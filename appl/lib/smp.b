@@ -136,6 +136,9 @@ Pairing.recv(p: self ref Pairing, pdu: array of byte): list of ref Ev
 		return nil;
 	code := int pdu[0];
 	if(code == Cfailed){
+		# a failure ends a pairing in progress, not one that is over or not begun
+		if(p.state == Idle || p.state == Done || p.state == Failed)
+			return nil;
 		p.state = Failed;
 		reason := Funspecified;
 		if(len pdu >= 2)
@@ -146,10 +149,17 @@ Pairing.recv(p: self ref Pairing, pdu: array of byte): list of ref Ev
 	Waitrsp =>
 		if(code != Cpairrsp || len pdu < 7)
 			return fail(p, Finvalidparams);
-		p.pres = pdu[0:7];
-		# a peer that will only do Secure Connections has set SC and
-		# will refuse legacy; say so now rather than fail the confirm
-		if(int pdu[4] < 7)
+		p.pres = copy(pdu[0:7]);
+		#
+		# The key size is 7 to 16 bytes (Vol 3 Part H 3.5.2); anything else
+		# is not a size.  We ask for 16 and take nothing shorter: a shorter
+		# key must be masked to its size before the controller has it and
+		# kept with its size wherever the bond is stored, and neither is done
+		# here, so a short key would be used as though it were a whole one.
+		#
+		if(int pdu[4] > 16)
+			return fail(p, Finvalidparams);
+		if(int pdu[4] < 16)
 			return fail(p, Fenckeysize);
 		p.want = int pdu[6] & (Kenc | Kid);
 		p.state = Waitconfirm;
@@ -158,13 +168,13 @@ Pairing.recv(p: self ref Pairing, pdu: array of byte): list of ref Ev
 	Waitconfirm =>
 		if(code != Cconfirm || len pdu < 17)
 			return fail(p, Finvalidparams);
-		p.sconfirm = pdu[1:17];
+		p.sconfirm = copy(pdu[1:17]);
 		p.state = Waitrandom;
 		return ref Ev.Send(withcode(Crandom, p.mrand)) :: nil;
 	Waitrandom =>
 		if(code != Crandom || len pdu < 17)
 			return fail(p, Finvalidparams);
-		p.srand = pdu[1:17];
+		p.srand = copy(pdu[1:17]);
 		want := c1(p.tk, p.srand, p.preq, p.pres, p.iat, p.ia, p.rat, p.ra);
 		if(!same(want, p.sconfirm))
 			return fail(p, Fconfirmfailed);
@@ -198,19 +208,22 @@ keydist(p: ref Pairing, code: int, pdu: array of byte): list of ref Ev
 	Cencinfo =>
 		if(len pdu < 17)
 			return fail(p, Finvalidparams);
-		p.keys.ltk = pdu[1:17];
+		p.keys.ltk = copy(pdu[1:17]);
 	Cmasterid =>
 		if(len pdu < 11)
 			return fail(p, Finvalidparams);
 		p.keys.ediv = int pdu[1] | (int pdu[2] << 8);
-		p.keys.rand = pdu[3:11];
+		p.keys.rand = copy(pdu[3:11]);
 		p.want &= ~Kenc;
 	Cidinfo =>
 		if(len pdu < 17)
 			return fail(p, Finvalidparams);
-		p.keys.irk = pdu[1:17];
+		p.keys.irk = copy(pdu[1:17]);
 	Cidaddr =>
 		if(len pdu < 8)
+			return fail(p, Finvalidparams);
+		# an identity is a public address or a static random one (3.6.5)
+		if(int pdu[1] > 1 || (int pdu[1] == 1 && (int pdu[7] & 16rc0) != 16rc0))
 			return fail(p, Finvalidparams);
 		p.keys.idtype = int pdu[1];
 		p.keys.idaddr = bthci->bdaddr(pdu, 2);
@@ -229,6 +242,8 @@ done(p: ref Pairing): list of ref Ev
 {
 	if(p.want != 0)
 		return nil;
+	if(p.keys.ltk == nil && p.pres != nil && len p.pres >= 7 && (int p.pres[6] & Kenc) != 0)
+		return fail(p, Finvalidparams);	# its half of a key it said it would send, and not the key
 	p.state = Done;
 	if(p.keys.ltk == nil){
 		# no encryption key was to come: the STK is all there is,
@@ -238,6 +253,15 @@ done(p: ref Pairing): list of ref Ev
 		p.keys.ediv = 0;
 	}
 	return ref Ev.Paired(p.keys) :: nil;
+}
+
+# What is kept is kept apart from the buffer it arrived in: a slice shares
+# its storage, and the reader's next packet would be in the key.
+copy(a: array of byte): array of byte
+{
+	r := array[len a] of byte;
+	r[0:] = a;
+	return r;
 }
 
 withcode(code: int, v: array of byte): array of byte

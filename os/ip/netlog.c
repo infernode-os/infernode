@@ -100,8 +100,11 @@ netlogopen(Fs *f)
 	if(f->alog->opens == 0){
 		if(f->alog->buf == nil)
 			f->alog->buf = malloc(Nlog);
+		if(f->alog->buf == nil)
+			error(Enomem);
 		f->alog->rptr = f->alog->buf;
 		f->alog->end = f->alog->buf + Nlog;
+		f->alog->len = 0;	/* nothing of the last opening's is in the new buffer */
 	}
 	f->alog->opens++;
 	unlock(&f->alog->lk);
@@ -120,6 +123,9 @@ netlogclose(Fs *f)
 	if(f->alog->opens == 0){
 		free(f->alog->buf);
 		f->alog->buf = nil;
+		f->alog->rptr = nil;
+		f->alog->end = nil;
+		f->alog->len = 0;
 	}
 	unlock(&f->alog->lk);
 	poperror();
@@ -215,6 +221,7 @@ netlogctl(Fs *f, char* s, int n)
 		else
 			f->alog->iponlyset = 1;
 		free(cb);
+		poperror();
 		return;
 
 	default:
@@ -255,6 +262,14 @@ netlog(Fs *f, int mask, char *fmt, ...)
 	va_end(arg);
 
 	lock(&f->alog->lk);
+	/*
+	 * The test above was made without the lock, and the last close frees
+	 * the buffer under it: look again now that nothing can change.
+	 */
+	if(f->alog->opens == 0 || f->alog->buf == nil){
+		unlock(&f->alog->lk);
+		return;
+	}
 	i = f->alog->len + n - Nlog;
 	if(i > 0){
 		f->alog->len -= i;

@@ -269,6 +269,12 @@ udpkick(void *x, Block *bp)
 	}
 
 	dlen = blocklen(bp);
+	if(dlen > 65535 - UDP_UDPHDR_SZ){
+		/* the length is 16 bits: more would go out saying some other length */
+		netlog(f, Logudp, "udp: write of %d bytes is no datagram\n", dlen);
+		freeblist(bp);
+		return;
+	}
 
 	/* fill in pseudo header and compute checksum */
 	switch(version){
@@ -355,6 +361,20 @@ udpkick(void *x, Block *bp)
 	upriv->ustats.udpOutDatagrams++;
 }
 
+/*
+ * A datagram's own length, against the bytes that came after the IP
+ * header: at least a UDP header, and no more than arrived.  Asked
+ * before the length is used for anything -- the checksum runs over
+ * that many bytes, and a conversation is made for the sender of a
+ * datagram to an announced port -- so that a length that cannot be
+ * right costs nothing and is counted where the block is freed.
+ */
+static int
+udplenok(int len, int avail)
+{
+	return len >= UDP_UDPHDR_SZ && len <= avail;
+}
+
 void
 udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 {
@@ -392,9 +412,11 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 			freeblist(bp);
 			return;
 		}
+		len = nhgets(uh4->udplen);
+		if(!udplenok(len, blocklen(bp) - UDP4_IPHDR_SZ))
+			goto Badhdr;
 		ottl = uh4->Unused;
 		uh4->Unused = 0;
-		len = nhgets(uh4->udplen);
 		olen = nhgets(uh4->udpplen);
 		hnputs(uh4->udpplen, len);
 
@@ -420,6 +442,8 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 			goto Badhdr;
 		uh6 = (Udp6hdr*)(bp->rp);
 		len = nhgets(uh6->udplen);
+		if(!udplenok(len, blocklen(bp) - UDP6_IPHDR_SZ))
+			goto Badhdr;
 		oviclfl = nhgetl(uh6->viclfl);
 		olen = nhgets(uh6->len);
 		ottl = uh6->hoplimit;
@@ -477,6 +501,12 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 		if(ucb->headers == 0){
 			/* create a new conversation */
 			if(ipforme(f, laddr) != Runi) {
+				if(ifc->lifc == nil){
+					/* no address of ours to answer from */
+					qunlock(&udp->ql);
+					freeblist(bp);
+					return;
+				}
 				switch(version){
 				case V4:
 					v4tov6(laddr, ifc->lifc->local);
@@ -503,10 +533,9 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 	qunlock(&udp->ql);
 
 	/*
-	 * Trim the packet down to data size
+	 * Trim the packet down to data size.  The length was checked with
+	 * the header (udplenok); trimblock frees what it refuses.
 	 */
-	if(len < UDP_UDPHDR_SZ)
-		goto Badlen;
 	len -= UDP_UDPHDR_SZ;
 	switch(version){
 	case V4:
@@ -520,7 +549,6 @@ udpiput(Proto *udp, Ipifc *ifc, Block *bp)
 		panic("udpiput4: version %d", version);
 	}
 	if(bp == nil){
-Badlen:
 		qunlock(&c->ql);
 		netlog(f, Logudp, "udp: len err %I.%d -> %I.%d\n", raddr, rport,
 		       laddr, lport);
@@ -531,10 +559,20 @@ Badlen:
 	netlog(f, Logudpmsg, "udp: %I.%d -> %I.%d l %d\n", raddr, rport,
 	       laddr, lport, len);
 
+	if(ucb->headers != 0 && ifc->lifc == nil){
+		/* the headers carry the interface's address, and it has none */
+		qunlock(&c->ql);
+		freeblist(bp);
+		return;
+	}
 	switch(ucb->headers){
 	case 7:
 		/* pass the src address */
 		bp = padblock(bp, UDP_USEAD7);
+		if(bp == nil){
+			qunlock(&c->ql);
+			return;
+		}
 		p = bp->rp;
 		ipmove(p, raddr); p += IPaddrlen;
 		ipmove(p, laddr); p += IPaddrlen;
@@ -545,6 +583,10 @@ Badlen:
 	case 6:
 		/* pass the src address */
 		bp = padblock(bp, UDP_USEAD6);
+		if(bp == nil){
+			qunlock(&c->ql);
+			return;
+		}
 		p = bp->rp;
 		ipmove(p, raddr); p += IPaddrlen;
 		ipmove(p, ipforme(f, laddr)==Runi ? laddr : ifc->lifc->local); p += IPaddrlen;
@@ -600,14 +642,28 @@ udpadvise(Proto *udp, Block *bp, char *msg)
 	h4 = (Udp4hdr*)(bp->rp);
 	version = ((h4->vihl&0xF0)==IP_VER6) ? V6 : V4;
 
+	/*
+	 * What an ICMP error quotes is as much of the packet as its sender
+	 * chose, and its first byte, which chooses the header read here, is
+	 * the sender's too: the addresses and both ports must be in what
+	 * arrived, for the version it claims.
+	 */
 	switch(version) {
 	case V4:
+		if(BLEN(bp) < UDP4_IPHDR_SZ + 4){
+			freeblist(bp);
+			return;
+		}
 		v4tov6(dest, h4->udpdst);
 		v4tov6(source, h4->udpsrc);
 		psource = nhgets(h4->udpsport);
 		pdest = nhgets(h4->udpdport);
 		break;
 	case V6:
+		if(BLEN(bp) < UDP6_IPHDR_SZ + 4){
+			freeblist(bp);
+			return;
+		}
 		h6 = (Udp6hdr*)(bp->rp);
 		ipmove(dest, h6->udpdst);
 		ipmove(source, h6->udpsrc);

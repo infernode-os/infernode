@@ -90,6 +90,9 @@ Acm, Ftdi, Cp210x: con iota;
 famname := array[] of {"acm", "ftdi", "cp210x"};
 
 Maxq:	con 256*1024;	# received bytes held for a reader before the oldest are dropped
+Cellcost:	con 32;		# what a queued packet costs beyond its bytes
+Maxintr:	con 64;		# the notification endpoint's packet, and what is read of it
+Maxbreak:	con 5000;	# ms a break may be asked to last
 Maxports:	con 16;
 
 Port: adt {
@@ -102,6 +105,7 @@ Port: adt {
 	inep, outep, maxpkt:	int;
 	intrep, intrmax, intrival:	int;	# acm's notification endpoint, or -1
 	bulkin, bulkout:	ref Sys->FD;
+	wpid, npid:	int;	# the writer and the notifier, to end with the port
 
 	# the line, as eia(3) says it
 	baud, bits, stop, dtr, rts, cts, xon:	int;
@@ -117,6 +121,12 @@ Port: adt {
 dev: string;		# devusb's name for the device: epN.0
 ctlfd: ref Sys->FD;
 ep0: ref Sys->FD;
+#
+# A control transfer is a write and then a read of the one endpoint,
+# and each port has a process that makes them: one at a time, or one
+# port's read collects the other's reply. A token in a channel of one.
+#
+ctllock: chan of int;
 vendor, product, bcd: int;
 
 init(nil: ref Draw->Context, args: list of string)
@@ -145,6 +155,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->sleep(50);
 		ctlfd = sys->open("/usb/usb/" + dev + "/ctl", Sys->ORDWR);
 	}
+	ctllock = chan[1] of int;
 	ep0 = sys->open("/usb/usb/" + dev + "/data", Sys->ORDWR);
 	for(retry = 0; ep0 == nil && retry < 40 && errhas("in use"); retry++){
 		sys->sleep(50);
@@ -232,7 +243,10 @@ findports(cfg: array of byte): list of ref Port
 			if(cur != nil && dlen >= 5 && int cfg[p+2] == 6)
 				cur.union = int cfg[p+4];
 		5 =>	# endpoint
-			if(cur != nil && dlen >= 7){
+			if(cur != nil && dlen >= 7 && (int cfg[p+2] & 16rF) != 0){
+				# (endpoint 0 is the control endpoint, whatever a
+				# descriptor calls it: made again as a bulk one, every
+				# control transfer after would go by the wrong rules)
 				addr := int cfg[p+2];
 				typ := int cfg[p+3] & 3;
 				mx := get2le(cfg, p+4) & 16r7FF;
@@ -266,9 +280,13 @@ findports(cfg: array of byte): list of ref Port
 			pt := newport(Acm, d);
 			pt.ctliface = f.num;
 			pt.intrep = f.iin;
+			# SERIAL_STATE is ten bytes; the notifier reads 64 at a time
 			pt.intrmax = f.imax;
+			if(pt.intrmax <= 0 || pt.intrmax > Maxintr)
+				pt.intrmax = Maxintr;
 			pt.intrival = f.iival;
-			ports = pt :: ports;
+			if(!shares(ports, pt))
+				ports = pt :: ports;
 		}else if(f.class == 255 && f.bin >= 0 && f.bout >= 0){
 			case vendor {
 			Vftdi =>
@@ -276,13 +294,35 @@ findports(cfg: array of byte): list of ref Port
 				if(nvendor > 1)
 					pt.index = f.num + 1;
 				pt.hchip = bcd == 16r700 || bcd == 16r800 || bcd == 16r900;
-				ports = pt :: ports;
+				if(!shares(ports, pt))
+					ports = pt :: ports;
 			Vsilabs =>
-				ports = newport(Cp210x, f) :: ports;
+				pt := newport(Cp210x, f);
+				if(!shares(ports, pt))
+					ports = pt :: ports;
 			}
 		}
 	}
 	return rev2(ports);
+}
+
+#
+# An endpoint belongs to one port. A configuration that lists one under
+# two interfaces would have two readers on it, the second port setting
+# its packet size under the first: the second is not a port.
+#
+shares(ports: list of ref Port, p: ref Port): int
+{
+	for(; ports != nil; ports = tl ports){
+		o := hd ports;
+		if(o.inep == p.inep || o.outep == p.outep)
+			return 1;
+		if(p.intrep >= 0 && (o.intrep == p.intrep || o.inep == p.intrep))
+			return 1;
+		if(o.intrep >= 0 && o.intrep == p.inep)
+			return 1;
+	}
+	return 0;
 }
 
 #
@@ -322,7 +362,7 @@ newport(fam: int, f: ref Iface): ref Port
 	p.inep = f.bin;
 	p.outep = f.bout;
 	p.maxpkt = f.bmax;
-	if(p.maxpkt <= 0)
+	if(p.maxpkt <= 0 || p.maxpkt > 1024)	# no bulk endpoint's is larger
 		p.maxpkt = 64;
 	p.intrep = -1;
 	p.baud = 9600;
@@ -465,6 +505,22 @@ setflow(p: ref Port): int
 		return iout(Csetflow, 0, p.ctliface, cpflow(p.cts, p.rts));
 	}
 	return -1;
+}
+
+#
+# How long a break lasts: 250 ms unless told, and no longer than
+# Maxbreak. The serving process waits it out, so a break of days would
+# be a port answering nothing for days; and an ACM device is sent the
+# time in 16 bits, where 16rFFFF means "until told to stop" and a
+# longer time is its low 16 bits.
+#
+breakms(n: int): int
+{
+	if(n <= 0)
+		return 250;
+	if(n > Maxbreak)
+		return Maxbreak;
+	return n;
 }
 
 brk(p: ref Port, ms: int)
@@ -638,12 +694,74 @@ serve(p: ref Port): int
 	rx := chan of ref Rx;
 	tx := chan[64] of (array of byte, chan of (int, string));
 	notes := chan of int;
+	pidc := chan of int;
 	spawn reader(p, rx);
-	spawn writer(p, tx);
-	if(p.intrep >= 0)
-		spawn notifier(p, notes);
+	spawn writer(p, tx, pidc);
+	p.wpid = <-pidc;
+	if(p.intrep >= 0){
+		spawn notifier(p, notes, pidc);
+		p.npid = <-pidc;
+	}
 	spawn port(p, data, ctl, status, rx, tx, notes);
 	return 0;
+}
+
+#
+# What has been received and not yet read, oldest first: a front to
+# take from and a back to add to, so neither walks the other. Its cost
+# is its bytes and something for each packet, since a device that sends
+# a byte at a time would otherwise be held to a limit of 256K bytes
+# with 256K packets of them.
+#
+Queue: adt {
+	front:	list of array of byte;	# oldest first
+	back:	list of array of byte;	# newest first
+	n:	int;			# bytes
+	cells:	int;
+
+	put:	fn(q: self ref Queue, d: array of byte);
+	get:	fn(q: self ref Queue, max: int): array of byte;
+	cost:	fn(q: self ref Queue): int;
+	clear:	fn(q: self ref Queue);
+};
+
+Queue.put(q: self ref Queue, d: array of byte)
+{
+	q.back = d :: q.back;
+	q.n += len d;
+	q.cells++;
+}
+
+# up to max bytes of the oldest packet; nil if there is none
+Queue.get(q: self ref Queue, max: int): array of byte
+{
+	if(q.front == nil){
+		for(; q.back != nil; q.back = tl q.back)
+			q.front = hd q.back :: q.front;
+		if(q.front == nil)
+			return nil;
+	}
+	b := hd q.front;
+	if(max >= 0 && len b > max){
+		q.front = b[max:] :: tl q.front;
+		b = b[0:max];
+	}else{
+		q.front = tl q.front;
+		q.cells--;
+	}
+	q.n -= len b;
+	return b;
+}
+
+Queue.cost(q: self ref Queue): int
+{
+	return q.n + q.cells*Cellcost;
+}
+
+Queue.clear(q: self ref Queue)
+{
+	q.front = q.back = nil;
+	q.n = q.cells = 0;
 }
 
 Pending: adt {
@@ -655,8 +773,7 @@ Pending: adt {
 port(p: ref Port, data, ctl, status: ref Sys->FileIO,
 	rx: chan of ref Rx, tx: chan of (array of byte, chan of (int, string)), notes: chan of int)
 {
-	q: list of array of byte;	# received, oldest first
-	nq := 0;
+	q := ref Queue(nil, nil, 0, 0);	# received
 	waiting: list of ref Pending;
 	gone := 0;
 	for(;;){
@@ -667,19 +784,22 @@ port(p: ref Port, data, ctl, status: ref Sys->FileIO,
 				for(; waiting != nil; waiting = tl waiting)
 					reply((hd waiting).rc, nil, "hungup");
 				sys->print("usbserial: %s detached; /dev/eiaU%d is gone\n", dev, p.n);
-				tx <-= (nil, nil);	# the writer's cue to go
+				# The writer may be in a write that flow control holds,
+				# its queue full, and the notifier about to say
+				# something to nobody: neither is waited for.
+				kill(p.wpid);
+				kill(p.npid);
+				p.bulkin = p.bulkout = nil;
 				return;
 			}
 			if(r.st0 >= 0)
 				ftdistatus(p, r.st0, r.st1);
 			if(len r.data > 0){
 				p.nrx += big len r.data;
-				q = append(q, r.data);
-				nq += len r.data;
-				while(nq > p.qlim && q != nil){
-					nq -= len hd q;
+				q.put(r.data);
+				while(q.cost() > p.qlim && q.cells > 0){
+					q.get(-1);
 					p.oerr++;
-					q = tl q;
 				}
 			}
 		s := <-notes =>
@@ -706,8 +826,15 @@ port(p: ref Port, data, ctl, status: ref Sys->FileIO,
 				waiting = dropfid(waiting, fid);
 				break;
 			}
-			p.ntx += big len d;
-			tx <-= (d, wc);
+			# offered, not forced: with the writer held up and its
+			# queue full, waiting here would be the status and ctl
+			# files (and the m0 that would let it go) not answering
+			alt {
+			tx <-= (d, wc) =>
+				p.ntx += big len d;
+			* =>
+				wreply(wc, 0, "output queue full");
+			}
 		(off, n, nil, rc) := <-status.read =>
 			if(rc == nil)
 				break;
@@ -728,8 +855,7 @@ port(p: ref Port, data, ctl, status: ref Sys->FileIO,
 				# hang up: the readers get end of file, the queue is emptied
 				for(; waiting != nil; waiting = tl waiting)
 					reply((hd waiting).rc, array[0] of byte, nil);
-				q = nil;
-				nq = 0;
+				q.clear();
 				err = nil;
 			}
 			if(err != nil)
@@ -738,17 +864,10 @@ port(p: ref Port, data, ctl, status: ref Sys->FileIO,
 				wreply(wc, len d, nil);
 		}
 		# whatever has arrived goes to whoever is waiting, oldest first
-		while(waiting != nil && q != nil){
+		while(waiting != nil && q.cells > 0){
 			w := hd waiting;
 			waiting = tl waiting;
-			b := hd q;
-			if(len b > w.n){
-				q = b[w.n:] :: tl q;
-				b = b[0:w.n];
-			}else
-				q = tl q;
-			nq -= len b;
-			reply(w.rc, b, nil);
+			reply(w.rc, q.get(w.n), nil);
 		}
 	}
 }
@@ -815,8 +934,18 @@ reader(p: ref Port, rx: chan of ref Rx)
 	}
 }
 
-writer(p: ref Port, tx: chan of (array of byte, chan of (int, string)))
+kill(pid: int)
 {
+	if(pid <= 0)
+		return;
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+writer(p: ref Port, tx: chan of (array of byte, chan of (int, string)), pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
 	for(;;){
 		(d, wc) := <-tx;
 		if(wc == nil)
@@ -829,12 +958,13 @@ writer(p: ref Port, tx: chan of (array of byte, chan of (int, string)))
 	}
 }
 
-notifier(p: ref Port, notes: chan of int)
+notifier(p: ref Port, notes: chan of int, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	fd := sys->open(epfile(p.intrep, "data"), Sys->OREAD);
 	if(fd == nil)
 		return;
-	buf := array[64] of byte;
+	buf := array[Maxintr] of byte;
 	for(;;){
 		m := sys->read(fd, buf, len buf);
 		if(m < 0)
@@ -964,15 +1094,13 @@ ctlmsg(p: ref Port, s: string): string
 		'e' or 'E' =>
 			p.hupdsr = n != 0;
 		'k' or 'K' =>
-			if(n <= 0)
-				n = 250;
-			brk(p, n);
+			brk(p, breakms(n));
 		'f' or 'F' =>
 			flushout(p);
 		'h' or 'H' =>
 			hup = 1;
 		'q' or 'Q' =>
-			if(n > 0)
+			if(n > 0 && n <= 4*Maxq)
 				p.qlim = n;
 		'n' or 'N' or 'i' or 'I' =>
 			;	# non-blocking output, FIFO depth: nothing to set on an adapter
@@ -1016,12 +1144,11 @@ statustext(p: ref Port): string
 readstr(off, n: int, s: string): array of byte
 {
 	b := array of byte s;
-	if(off >= len b)
+	if(off < 0 || off >= len b || n <= 0)
 		return array[0] of byte;
-	e := off + n;
-	if(e > len b)
-		e = len b;
-	return b[off:e];
+	if(n > len b - off)	# not off+n: that can wrap
+		n = len b - off;
+	return b[off:off+n];
 }
 
 #
@@ -1051,9 +1178,12 @@ ctlin(rtype, req, value, index: int, data: array of byte): int
 	put2le(setup, 2, value);
 	put2le(setup, 4, index);
 	put2le(setup, 6, len data);
-	if(sys->write(ep0, setup, len setup) != len setup)
-		return -1;
-	return sys->read(ep0, data, len data);
+	ctllock <-= 1;
+	n := -1;
+	if(sys->write(ep0, setup, len setup) == len setup)
+		n = sys->read(ep0, data, len data);
+	<-ctllock;
+	return n;
 }
 
 ctlout(rtype, req, value, index: int, data: array of byte): int
@@ -1069,10 +1199,14 @@ ctlout(rtype, req, value, index: int, data: array of byte): int
 	put2le(buf, 6, dlen);
 	if(dlen > 0)
 		buf[8:] = data;
-	if(sys->write(ep0, buf, len buf) != len buf)
+	ctllock <-= 1;
+	if(sys->write(ep0, buf, len buf) != len buf){
+		<-ctllock;
 		return -1;
+	}
 	rep := array[8] of byte;
 	sys->read(ep0, rep, len rep);	# collect the (empty) reply: devusb parks it otherwise
+	<-ctllock;
 	return 0;
 }
 
@@ -1104,12 +1238,6 @@ put4le(a: array of byte, off, v: int)
 	a[off+3] = byte (v >> 24);
 }
 
-append(l: list of array of byte, b: array of byte): list of array of byte
-{
-	if(l == nil)
-		return b :: nil;
-	return hd l :: append(tl l, b);
-}
 
 dropfid(l: list of ref Pending, fid: int): list of ref Pending
 {
@@ -1246,6 +1374,87 @@ selftest()
 	vendor = 16r1234;
 	if(findports(ft2232) != nil){
 		sys->print("usbserial: selftest: a vendor interface of an unknown maker was taken\n");
+		fails++;
+	}
+
+	# endpoint 0 is not a bulk endpoint, whatever a descriptor says
+	zero := array[len ft2232] of byte;
+	zero[0:] = ft2232;
+	zero[20] = byte 16r80;
+	zero[27] = byte 16r00;
+	vendor = Vftdi;
+	ps = findports(zero);
+	if(len ps != 1 || (hd ps).inep != 3 || (hd ps).outep != 4){
+		sys->print("usbserial: selftest: a port was made of endpoint 0 (%d ports)\n", len ps);
+		fails++;
+	}
+	# one endpoint under two interfaces is one port
+	twice := array[len ft2232] of byte;
+	twice[0:] = ft2232;
+	twice[43] = byte 16r81;
+	ps = findports(twice);
+	if(len ps != 1 || (hd ps).inep != 1){
+		sys->print("usbserial: selftest: an endpoint listed under two interfaces made %d ports\n", len ps);
+		fails++;
+	}
+	# packet sizes no endpoint has
+	big1 := array[len pico] of byte;
+	big1[0:] = pico;
+	big1[49] = byte 16rFF;	# the interrupt endpoint's: 2047
+	big1[50] = byte 16r07;
+	big1[72] = byte 16rFF;	# the bulk IN endpoint's
+	big1[73] = byte 16r07;
+	vendor = 16r2E8A;
+	ps = findports(big1);
+	if(len ps != 1 || (hd ps).intrmax != Maxintr || (hd ps).maxpkt != 64){
+		sys->print("usbserial: selftest: packet sizes of 2047 were kept\n");
+		fails++;
+	}
+	big1[49] = big1[50] = byte 0;
+	ps = findports(big1);
+	if(len ps != 1 || (hd ps).intrmax != Maxintr){
+		sys->print("usbserial: selftest: an interrupt packet size of 0 was kept\n");
+		fails++;
+	}
+
+	# offsets into the status text
+	if(len readstr(-16r7FFFFFFF-1, 64, "hello") != 0 || len readstr(-1, 64, "hello") != 0
+	|| len readstr(16r7FFFFFF0, 64, "hello") != 0 || len readstr(2, 16r7FFFFFFF, "hello") != 3
+	|| len readstr(0, -1, "hello") != 0 || string readstr(1, 3, "hello") != "ell"){
+		sys->print("usbserial: selftest: readstr at the edges\n");
+		fails++;
+	}
+
+	# breaks
+	if(breakms(0) != 250 || breakms(-5) != 250 || breakms(300) != 300
+	|| breakms(65535) != Maxbreak || breakms(16r7FFFFFFF) != Maxbreak || breakms(65536) != Maxbreak){
+		sys->print("usbserial: selftest: break times\n");
+		fails++;
+	}
+
+	# the queue: in order, split where a reader wants less, and its
+	# cost counting the packets as well as the bytes
+	q := ref Queue(nil, nil, 0, 0);
+	for(i = 0; i < 1000; i++)
+		q.put(array[1] of { * => byte i });
+	if(q.cost() != 1000 + 1000*Cellcost){
+		sys->print("usbserial: selftest: 1000 one-byte packets cost %d\n", q.cost());
+		fails++;
+	}
+	inorder := 1;
+	for(i = 0; i < 500; i++){
+		b := q.get(4);
+		if(len b != 1 || b[0] != byte i)
+			inorder = 0;
+	}
+	q.put(array of byte "abcdef");
+	for(i = 500; i < 1000; i++){
+		b := q.get(-1);
+		if(len b != 1 || b[0] != byte i)
+			inorder = 0;
+	}
+	if(!inorder || string q.get(4) != "abcd" || string q.get(4) != "ef" || q.get(4) != nil || q.cost() != 0){
+		sys->print("usbserial: selftest: the receive queue\n");
 		fails++;
 	}
 

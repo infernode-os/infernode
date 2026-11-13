@@ -113,6 +113,9 @@ Wpakey: module
 		ptk:	array of byte;
 		lastrepc:	big;
 		newptk:	int;			# a PTK is derived and not yet installed
+		snonce:	array of byte;		# ours for the handshake in progress; nil between handshakes
+		gtk:	array of byte;		# the group key last installed,
+		gtkkid:	int;			# and its index: not installed twice
 
 		mk:	fn(pmk, smac, rsne: array of byte): ref Supp;
 		reset:	fn(s: self ref Supp);

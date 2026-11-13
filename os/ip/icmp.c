@@ -209,7 +209,19 @@ icmpttlexceeded(Fs *f, uchar *ia, Block *bp)
 	Block	*nbp;
 	Icmp	*p, *np;
 
+	uchar	addr[IPaddrlen];
+	int	i;
+
+	/* the error quotes the packet's header and eight bytes: they must be there */
+	if(BLEN(bp) < ICMP_IPSIZE + 8)
+		return;
 	p = (Icmp *)bp->rp;
+
+	/* as icmpunreachable: an error goes to one node, never to a group */
+	v4tov6(addr, p->src);
+	i = ipforme(f, addr);
+	if(i != 0 && (i&Runi) == 0)
+		return;
 
 	netlog(f, Logicmp, "sending icmpttlexceeded -> %V\n", p->src);
 	nbp = allocb(ICMP_IPSIZE + ICMP_HDRSIZE + ICMP_IPSIZE + 8);
@@ -238,6 +250,9 @@ icmpunreachable(Fs *f, Block *bp, int code, int seq)
 	int	i;
 	uchar	addr[IPaddrlen];
 
+	/* the error quotes the packet's header and eight bytes: they must be there */
+	if(BLEN(bp) < ICMP_IPSIZE + 8)
+		return;
 	p = (Icmp *)bp->rp;
 
 	/* only do this for unicast sources and destinations */
@@ -333,6 +348,20 @@ static char *unreachcode[] =
 [5]	"source route failed",
 };
 
+/*
+ * The IP header's total length is the peer's word.  It is believed only
+ * between an ICMP header's worth and what was received: below that the
+ * checksum would be taken over a negative count and a reply built from a
+ * block shorter than the header it rewrites.
+ */
+static int
+icmplenok(int n, int iplen)
+{
+	if(n < ICMP_IPSIZE+ICMP_HDRSIZE)
+		return 0;
+	return iplen >= ICMP_IPSIZE+ICMP_HDRSIZE && iplen <= n;
+}
+
 static void
 icmpiput(Proto *icmp, Ipifc*, Block *bp)
 {
@@ -342,23 +371,30 @@ icmpiput(Proto *icmp, Ipifc*, Block *bp)
 	Proto	*pr;
 	char	*msg;
 	char	m2[128];
+	uchar	addr[IPaddrlen];
 	Icmppriv *ipriv;
 
 	ipriv = icmp->priv;
 	
 	ipriv->stats[InMsgs]++;
 
-	p = (Icmp *)bp->rp;
-	netlog(icmp->f, Logicmp, "icmpiput %d %d\n", p->type, p->code);
-	n = blocklen(bp);
+	/* every field is read from the first block: make it the only one */
+	if(bp->next != nil){
+		bp = pullupblock(bp, blocklen(bp));
+		if(bp == nil)
+			return;
+	}
+	n = BLEN(bp);
 	if(n < ICMP_IPSIZE+ICMP_HDRSIZE){
 		ipriv->stats[InErrors]++;
 		ipriv->stats[HlenErrs]++;
 		netlog(icmp->f, Logicmp, "icmp hlen %d\n", n);
 		goto raise;
 	}
+	p = (Icmp *)bp->rp;
+	netlog(icmp->f, Logicmp, "icmpiput %d %d\n", p->type, p->code);
 	iplen = nhgets(p->length);
-	if(iplen > n || (iplen % 1)){
+	if(!icmplenok(n, iplen)){
 		ipriv->stats[LenErrs]++;
 		ipriv->stats[InErrors]++;
 		netlog(icmp->f, Logicmp, "icmp length %d\n", iplen);
@@ -375,6 +411,10 @@ icmpiput(Proto *icmp, Ipifc*, Block *bp)
 
 	switch(p->type) {
 	case EchoRequest:
+		/* answer only what was sent to this node itself, not to a broadcast or group */
+		v4tov6(addr, p->dst);
+		if((ipforme(icmp->f, addr) & Runi) == 0)
+			goto raise;
 		if (iplen < n)
 			bp = trimblock(bp, 0, iplen);
 		r = mkechoreply(bp);

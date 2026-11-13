@@ -239,6 +239,22 @@ virtioready(Vdev *d)
  * Qalign boundary. xspanalloc because it must be page-aligned and
  * because it is for ever -- nothing here ever gives a queue back.
  */
+static int
+vqsizeok(u32int n)
+{
+	return n != 0 && (n & (n-1)) == 0;
+}
+
+/*
+ * What the device says it wrote, cut to what it was lent to write in:
+ * every driver takes this as a count of bytes in its own buffer.
+ */
+static u32int
+vqusedlen(u32int len, u32int lent)
+{
+	return len > lent ? lent : len;
+}
+
 Vq*
 virtioqueue(Vdev *d, int idx, int n)
 {
@@ -257,10 +273,24 @@ virtioqueue(Vdev *d, int idx, int n)
 		print("virtio: slot %d has no queue %d\n", d->slot, idx);
 		return nil;
 	}
+	/*
+	 * The ring is indexed by a 16-bit counter modulo its size, which
+	 * comes out right across the counter's wrap only for a power of
+	 * two.  The specification requires one; the device is not taken at
+	 * its word.
+	 */
+	if(!vqsizeok(max)){
+		print("virtio: slot %d queue %d: size %ud is not a power of two; refused\n", d->slot, idx, max);
+		return nil;
+	}
+	if(n <= 0)
+		return nil;
 	if(n > Vqmax)
 		n = Vqmax;
 	if((u32int)n > max)
 		n = max;		/* a power of two, since max is and Vqmax is */
+	if(!vqsizeok(n))
+		return nil;
 
 	availoff = n * sizeof(Vqdesc);
 	usedoff = ROUND(availoff + sizeof(Vqavail) + n*sizeof(u16int) + sizeof(u16int), Qalign);
@@ -285,6 +315,8 @@ virtioqueue(Vdev *d, int idx, int n)
 	q->nfree = n;
 	q->lastused = 0;
 
+	/* the queue's memory as it should be, THEN the registers that give it to the device */
+	coherence();
 	REG(d, Vrqnum) = n;
 	if(d->legacy){
 		REG(d, Vrqalign) = Qalign;
@@ -358,6 +390,7 @@ vqsubmit(Vq *q, Vbuf *b, int nbuf, void *cookie)
 {
 	Vqdesc *d;
 	int head, i, j;
+	u64int wlen;
 
 	ilock(&q->l);
 	if(nbuf <= 0 || q->nfree < nbuf){
@@ -367,10 +400,13 @@ vqsubmit(Vq *q, Vbuf *b, int nbuf, void *cookie)
 	head = q->free;
 	j = head;
 	d = nil;
+	wlen = 0;
 	for(i = 0; i < nbuf; i++){
 		d = &q->desc[j];
 		d->addr = PADDR(b[i].p);
 		d->len = b[i].len;
+		if(b[i].write)
+			wlen += (u32int)b[i].len;
 		d->flags = (b[i].write ? Vdwrite : 0) | (i < nbuf-1 ? Vdnext : 0);
 		d->next = q->snext[j];	/* ours: what the device left there is not read */
 		j = q->snext[j];
@@ -380,6 +416,7 @@ vqsubmit(Vq *q, Vbuf *b, int nbuf, void *cookie)
 	q->cookie[head] = cookie;
 	q->nchain[head] = nbuf;
 	q->busy[head] = 1;
+	q->wlen[head] = wlen > 0xFFFFFFFFULL ? 0xFFFFFFFF : (u32int)wlen;
 
 	/*
 	 * The ring entry, a barrier, THEN the index: the index is what
@@ -421,6 +458,7 @@ vqcollect(Vq *q, u32int *lenp, void **cookiep)
 {
 	Vqusedelem *e;
 	int head, j, k;
+	u32int len;
 
 	ilock(&q->l);
 #ifdef CHAOS
@@ -441,17 +479,27 @@ vqcollect(Vq *q, u32int *lenp, void **cookiep)
 			iunlock(&q->l);
 			return -1;
 		}
+		/*
+		 * The index, a barrier, THEN the entry it covers: the device
+		 * stores them in the other order, and a load that follows a
+		 * branch is not held back by it.  The entry is read once.
+		 */
+		coherence();
 		e = &q->used->ring[q->lastused % q->n];
 		q->lastused++;
 		head = e->id;
+		len = e->len;
 		if(head >= 0 && head < q->n && q->busy[head])
 			break;
 		if(q->nbogus++ == 0)
 			iprint("virtio: slot %d queue %d: used ring names descriptor %d, not the device's; refused\n",
 				q->dev->slot, q->idx, head);
 	}
+	if(len > q->wlen[head] && q->nlong++ == 0)
+		iprint("virtio: slot %d queue %d: device says it wrote %ud bytes in %ud lent; cut\n",
+			q->dev->slot, q->idx, len, q->wlen[head]);
 	if(lenp != nil)
-		*lenp = e->len;
+		*lenp = vqusedlen(len, q->wlen[head]);
 	if(cookiep != nil)
 		*cookiep = q->cookie[head];
 	q->cookie[head] = nil;

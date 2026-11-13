@@ -66,6 +66,7 @@ enum
 	Rxq		= 0,
 	Txq		= 1,
 	Nrx		= 128,		/* receive buffers kept posted */
+	Rxretryms	= 100,		/* between tries to post one that could not be */
 	Ntx		= 128,
 
 	Hdrlegacy	= 10,
@@ -222,12 +223,22 @@ netproc(void *a)
 	Block *b;
 	void *cookie;
 	u32int len;
-	int posted;
+	int posted, starved;
 
 	c = a;
 	e = c->edev;
+	starved = 0;
 	for(;;){
-		sleep(&c->r, network, c);
+		/*
+		 * With the receive queue short of buffers there may be none
+		 * for the device to fill, and then nothing it will interrupt
+		 * for: a post that failed is tried again on the clock, not
+		 * when the next frame arrives, which may be never.
+		 */
+		if(starved)
+			tsleep(&c->r, network, c, Rxretryms);
+		else
+			sleep(&c->r, network, c);
 		c->work = 0;
 		if(c->cfgchg){
 			c->cfgchg = 0;
@@ -239,7 +250,8 @@ netproc(void *a)
 			b = cookie;
 			if(b == nil)
 				continue;
-			if(len <= (u32int)c->hdrlen || len > (u32int)(c->hdrlen + Framemax + 4)){
+			/* a frame is at least an Ethernet header: less is nothing the stack can read */
+			if(len < (u32int)(c->hdrlen + ETHERHDRSIZE) || len > (u32int)(c->hdrlen + Framemax + 4)){
 				c->nrxdrop++;
 				freeb(b);
 			}else{
@@ -257,6 +269,7 @@ netproc(void *a)
 		}
 		if(posted)
 			vqkick(c->rx);
+		starved = vqroom(c->rx) > 0;
 
 		nettransmit(e);
 	}

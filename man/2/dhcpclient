@@ -48,6 +48,8 @@ dhcp:      fn(net: string, ctlifc: ref Sys->FD, device: string,
                init: ref Bootconf, options: array of int):
                (ref Bootconf, ref Lease, string);
 
+Minrenew:  con 1;
+timers:    fn(lease, t1, t2: int): (int, int);
 applycfg:  fn(net: string, ctlifc: ref Sys->FD,
                conf: ref Bootconf): string;
 removecfg: fn(net: string, ctlifc: ref Sys->FD,
@@ -347,6 +349,24 @@ removes from the interface just those parameters set by
 Normally these functions are called automatically, as required, by
 .B dhcp
 and its watchdog process.
+.PP
+.B Timers
+returns the renewal and rebinding times, in seconds, on which a lease of
+.I lease
+seconds is run, given the server's own values
+.I t1
+and
+.I t2
+(options 58 and 59, or zero).
+The server's values are used when each is inside the lease and they are in order;
+otherwise half and seven-eighths of the lease.
+The renewal time is never less than
+.B Minrenew
+and is always before the rebinding time.
+A string option carrying a control character reads as nil from
+.BR gets ,
+and a host or domain name that is not one word is not written to
+.IR net /ndb .
 .SH SOURCE
 .B /appl/lib/dhcpclient.b
 .SH SEE ALSO

@@ -315,6 +315,179 @@ testFragment(t: ref T)
 	t.asserteq(int p.data[4], 54, "which is the right remainder");
 }
 
+#
+# One L2CAP signalling command, as the ACL packets that carry it.
+#
+sigpkts(handle, code, id: int, d: array of byte): list of ref Bthci->Pkt
+{
+	f := array[4+4+len d] of byte;
+	n := 4 + len d;
+	f[0] = byte n; f[1] = byte (n>>8);
+	f[2] = byte L2cap->Cidsig; f[3] = byte 0;
+	f[4] = byte code; f[5] = byte id;
+	f[6] = byte len d; f[7] = byte (len d >> 8);
+	f[8:] = d;
+	return l2cap->fragment(handle, f, 1024);
+}
+
+deliver(l: ref Link, pl: list of ref Bthci->Pkt): list of ref Ev
+{
+	evs: list of ref Ev;
+	for(; pl != nil; pl = tl pl)
+		evs = cat(evs, l.recv(hd pl));
+	return evs;
+}
+
+# the result field of the first Connection Response among the events, or -1
+connresult(evs: list of ref Ev): int
+{
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Send =>
+			f := e.frame;
+			if(len f >= 8+8 && int f[4] == L2cap->Cconnrsp)
+				return int f[12] | int f[13]<<8;
+		}
+	return -1;
+}
+
+connreq(psm, scid: int): array of byte
+{
+	d := array[4] of byte;
+	d[0] = byte psm; d[1] = byte (psm>>8);
+	d[2] = byte scid; d[3] = byte (scid>>8);
+	return d;
+}
+
+#
+# A peer may hold Maxchans channels on a link and no more, one for each of
+# its own channel ids; a source id is never given to two live channels.
+#
+testChannelBound(t: ref T)
+{
+	b := Link.new(16r41);
+	b.accept = 16r1001 :: nil;
+
+	# requests that are never configured: each stays half open for ever
+	for(i := 0; i < L2cap->Maxchans; i++){
+		evs := deliver(b, sigpkts(16r41, L2cap->Cconnreq, 1+(i&16r7f), connreq(16r1001, L2cap->Ciddyn+i)));
+		if(connresult(evs) != L2cap->Rok){
+			t.fatal(sys->sprint("request %d of %d was refused", i+1, L2cap->Maxchans));
+			return;
+		}
+	}
+	t.asserteq(len b.chans, L2cap->Maxchans, "the link holds as many channels as it may");
+
+	evs := deliver(b, sigpkts(16r41, L2cap->Cconnreq, 5, connreq(16r1001, L2cap->Ciddyn+1000)));
+	t.asserteq(connresult(evs), L2cap->Rnoresources, "one more is refused: no resources");
+	t.asserteq(len b.chans, L2cap->Maxchans, "and makes no channel");
+	for(e := evs; e != nil; e = tl e)
+		pick ev := hd e {
+		Incoming =>
+			t.error("a refused request was announced as incoming");
+		}
+
+	# a second request from the same source id is not a second channel
+	c := Link.new(16r42);
+	c.accept = 16r1001 :: nil;
+	evs = deliver(c, sigpkts(16r42, L2cap->Cconnreq, 1, connreq(16r1001, 16r50)));
+	t.asserteq(connresult(evs), L2cap->Rok, "a first request is accepted");
+	evs = deliver(c, sigpkts(16r42, L2cap->Cconnreq, 2, connreq(16r1001, 16r50)));
+	t.asserteq(connresult(evs), L2cap->Rnoresources, "the same source id again is refused");
+	t.asserteq(len c.chans, 1, "one channel for one source id");
+
+	# the id counter coming round does not hand out an id in use
+	d := Link.new(16r43);
+	(c1, nil) := d.connect(16r1001);
+	d.nextcid = c1.scid;	# as it will be after 65472 more allocations
+	(c2, nil) := d.connect(16r1001);
+	t.assert(c1.scid != c2.scid, "two live channels have two source ids");
+	t.assert(d.find(c1.scid) == c1 && d.find(c2.scid) == c2, "and each is found by its own");
+}
+
+#
+# A Connection Response is ours only if it names our channel, and opens
+# nothing on a fixed channel id.
+#
+testConnectResponse(t: ref T)
+{
+	a := Link.new(16r41);
+	(ca, nil) := a.connect(16r1001);
+	t.asserteq(ca.state, L2cap->Waitconn, "waiting for the response");
+
+	r := array[8] of byte;
+	for(i := 0; i < len r; i++)
+		r[i] = byte 0;
+	# dcid 0x60, scid NOT ours, result ok
+	r[0] = byte 16r60; r[2] = byte (ca.scid+1); r[3] = byte ((ca.scid+1)>>8);
+	deliver(a, sigpkts(16r41, L2cap->Cconnrsp, ca.ident, r));
+	t.asserteq(ca.state, L2cap->Waitconn, "a response naming another channel changes nothing");
+
+	# ours, but "accepted" on the signalling channel's own id
+	r[0] = byte L2cap->Cidsig; r[1] = byte 0; r[2] = byte ca.scid; r[3] = byte (ca.scid>>8);
+	deliver(a, sigpkts(16r41, L2cap->Cconnrsp, ca.ident, r));
+	t.assert(ca.state != L2cap->Config && ca.state != L2cap->Open, "a response accepting on a fixed id opens no channel");
+}
+
+#
+# An LE peer's connection parameters are accepted only when a controller
+# could be given them.
+#
+testLEParams(t: ref T)
+{
+	cases := array[] of {
+		# min, max, latency, timeout, accepted
+		(6, 6, 0, 10, 1),
+		(24, 40, 0, 500, 1),
+		(3200, 3200, 0, 3200, 1),
+		(3200, 3200, 0, 800, 0),	# the timeout is not longer than two intervals
+		(800, 800, 0, 3200, 1),
+		(5, 40, 0, 500, 0),	# interval below 7.5 ms
+		(24, 3201, 0, 3200, 0),	# above 4 s
+		(40, 24, 0, 500, 0),	# out of order
+		(24, 40, 500, 3200, 0),	# latency past 499
+		(24, 40, 0, 9, 0),	# timeout below 100 ms
+		(24, 40, 0, 3201, 0),	# above 32 s
+		(24, 40, 499, 3200, 0),	# shorter than the latency allows
+		(16rC80, 6, 0, 500, 0),
+		(0, 0, 0, 0, 0),
+		(16rFFFF, 16rFFFF, 16rFFFF, 16rFFFF, 0),
+	};
+	l := Link.new(16r41);
+	for(i := 0; i < len cases; i++){
+		(min, max, lat, tmo, want) := cases[i];
+		d := array[8] of byte;
+		d[0] = byte min; d[1] = byte (min>>8);
+		d[2] = byte max; d[3] = byte (max>>8);
+		d[4] = byte lat; d[5] = byte (lat>>8);
+		d[6] = byte tmo; d[7] = byte (tmo>>8);
+		f := array[4+4+len d] of byte;
+		f[0] = byte (4+len d); f[1] = byte 0;
+		f[2] = byte L2cap->Cidlesig; f[3] = byte 0;
+		f[4] = byte 16r12; f[5] = byte 7; f[6] = byte len d; f[7] = byte 0;
+		f[8:] = d;
+		evs := deliver(l, l2cap->fragment(16r41, f, 1024));
+		result := -1;
+		params := 0;
+		for(; evs != nil; evs = tl evs)
+			pick e := hd evs {
+			Send =>
+				if(len e.frame >= 10 && int e.frame[4] == 16r13)
+					result = int e.frame[8] | int e.frame[9]<<8;
+			Params =>
+				params = 1;
+			}
+		what := sys->sprint("interval %d-%d latency %d timeout %d", min, max, lat, tmo);
+		if(want){
+			t.asserteq(result, 0, what+": accepted");
+			t.asserteq(params, 1, what+": handed to the caller");
+		}else{
+			t.asserteq(result, 1, what+": rejected");
+			t.asserteq(params, 0, what+": not handed to the caller");
+		}
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -338,6 +511,9 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("Fragment", testFragment);
+	run("ChannelBound", testChannelBound);
+	run("ConnectResponse", testConnectResponse);
+	run("LEParams", testLEParams);
 	run("ConnectAndData", testConnectAndData);
 	run("Refused", testRefused);
 	run("RemoteHangupAndDown", testRemoteHangupAndDown);

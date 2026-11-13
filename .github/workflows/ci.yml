@@ -811,7 +811,7 @@ jobs:
               strcat_test task_provisioning_test tcpseq_test themefs_test
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
-              write_capability_test xenith_build_test
+              write_capability_test xenith_build_test werc_test
     permissions:
       contents: read
     env:

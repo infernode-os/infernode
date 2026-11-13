@@ -1092,6 +1092,7 @@ dis/vm.dis
 dis/vmstress.dis
 dis/wc.dis
 dis/webfs.dis
+dis/wercfs.dis
 dis/webgrab.dis
 dis/wiki.dis
 dis/wikifs.dis

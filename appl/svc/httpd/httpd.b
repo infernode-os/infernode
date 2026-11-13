@@ -72,6 +72,7 @@ maxconns := 64;
 maxpersource := 16;
 maxbody := 65536;
 verbose := 0;
+deftype := "application/octet-stream";	# -T: a name with no extension's type
 
 scfg: ref ServerConfig;
 logfd: ref FD;
@@ -110,7 +111,7 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	certfile, keyfile, logfile: string;
 	arg->init(argv);
-	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-r httpsport] [-S hstssecs] [-n maxconns] [-s persource] [-b maxbody] root");
+	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-T type] [-r httpsport] [-S hstssecs] [-n maxconns] [-s persource] [-b maxbody] root");
 	while((o := arg->opt()) != 0)
 		case o {
 		'a' =>	addr = arg->earg();
@@ -127,6 +128,10 @@ init(nil: ref Draw->Context, argv: list of string)
 			wikibase = cleanpath(arg->earg());
 			if(wikibase == nil)
 				fatal("-w: not a path in the site");
+		'T' =>
+			deftype = arg->earg();
+			if(!istype(deftype))
+				fatal("-T: not a media type");
 		'r' =>	redirport = arg->earg();
 		'S' =>	hsts = posint(arg->earg());
 		'n' =>	maxconns = posint(arg->earg());
@@ -1286,7 +1291,10 @@ etagmatch(header, etag: string): int
 
 contenttype(path: string): string
 {
-	(nil, ext) := splitlast(path, '.');
+	(nil, name) := splitlast(path, '/');
+	(nil, ext) := splitlast(name, '.');
+	if(!contains(name, "."))
+		return deftype;
 	case lower(ext) {
 	"html" or "htm" =>	return "text/html; charset=utf-8";
 	"css" =>	return "text/css; charset=utf-8";
@@ -1591,6 +1599,18 @@ splitbefore(s: string, c: int): (string, string)
 		if(s[i] == c)
 			return (s[0:i], s[i:]);
 	return (s, nil);
+}
+
+# A media type as a header may carry it: type/subtype, perhaps with
+# parameters, printable and on one line
+istype(s: string): int
+{
+	if(len s == 0 || len s > 128 || !contains(s, "/") || s[0] == '/')
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] > '~')
+			return 0;
+	return 1;
 }
 
 splitlast(s: string, c: int): (string, string)

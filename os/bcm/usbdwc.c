@@ -190,6 +190,7 @@ struct Epio {
 	 */
 	Block	*rbounce;
 	Block	*wbounce;
+	Block	*retired;	/* read buffers outgrown, kept until the endpoint closes */
 	ulong	lastpoll;
 };
 
@@ -844,22 +845,40 @@ logstart(Ep *ep)
 		nchanlog = 0;
 }
 
+/* where the next entry of the debug log goes: the last slot, once it is full */
+static int
+logslot(int n)
+{
+	if(n < 0)
+		return 0;
+	if(n >= 32)
+		return 31;
+	return n;
+}
+
 static void
 clog(Ep *ep, Hostchan *hc)
 {
 	Reg *p;
+	int i;
 
 	if(ep != nil && !ep->debug)
 		return;
-	if(nchanlog == 32)
-		nchanlog--;
-	p = chanlog[nchanlog];
+	/*
+	 * Called from the interrupt and from the process, on any core,
+	 * with no lock: two increments can pass the old test for 32
+	 * between them, and the next entry was written past the array.
+	 * The slot is taken from a copy and held to the array whatever
+	 * the count has become; a lost entry in a debug log is nothing.
+	 */
+	i = logslot(nchanlog);
+	p = chanlog[i];
 	p[0] = dwc.regs->hfnum;
 	p[1] = hc->hcchar;
 	p[2] = hc->hcint;
 	p[3] = hc->hctsiz;
 	p[4] = hc->hcdma;
-	nchanlog++;
+	nchanlog = i + 1;
 }
 
 static void
@@ -871,7 +890,7 @@ logdump(Ep *ep)
 	if(!ep->debug)
 		return;
 	p = chanlog[0];
-	for(i = 0; i < nchanlog; i++){
+	for(i = 0; i < nchanlog && i < nelem(chanlog); i++){
 		print("%5.5d.%5.5d %8.8ux %8.8ux %8.8ux %8.8ux\n",
 			p[0]&0xFFFF, p[0]>>16, p[1], p[2], p[3], p[4]);
 		p += 5;
@@ -880,6 +899,34 @@ logdump(Ep *ep)
 }
 
 static int chanio1(Ep*, Hostchan*, int, int, void*, int);
+
+/* the bytes the controller may write for a transfer of len: an IN's whole packets */
+static int
+bouncelen(int in, int len, int maxpkt)
+{
+	if(in && maxpkt > 0)
+		return ROUND(len, maxpkt);
+	return len;
+}
+
+/*
+ * The most one channel operation can move with packets of maxpkt: the
+ * size field is 19 bits and the packet count 10, and a transfer that
+ * needs more of either runs into the fields beside them. 0 for a
+ * packet size no endpoint has.
+ */
+static int
+xferlimit(int maxpkt)
+{
+	int lim;
+
+	if(maxpkt <= 0 || maxpkt > 1024)
+		return 0;
+	lim = 0x3ff * maxpkt;
+	if(lim > 0x7ffff)
+		lim = 0x7ffff;
+	return lim - lim % maxpkt;
+}
 
 /*
  * A transfer's buffer is somebody else's -- a Block, a Limbo array, a
@@ -921,13 +968,20 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 	i = hc - ctlr->regs->hchan;
 	if(i < 0 || i >= nelem(bounce))
 		panic("usbdwc: channel %d has no bounce buffer", i);
-	if(bounce[i].n < len){
+	/*
+	 * As long as what chanio1 programs, not as long as was asked for:
+	 * an IN is programmed for whole packets, so a device that answers
+	 * an 18-byte request with a 64-byte packet has 64 bytes written
+	 * for it, and the buffer was 18.
+	 */
+	n = bouncelen(dir == Epin, len, ep->maxpkt);
+	if(bounce[i].n < n){
 		dmafree(bounce[i].p, bounce[i].n);
 		bounce[i].n = 0;
-		bounce[i].p = dmaalloc(len, CACHELINESZ);
+		bounce[i].p = dmaalloc(n, CACHELINESZ);
 		if(bounce[i].p == nil)
 			error(Enomem);
-		bounce[i].n = len;
+		bounce[i].n = n;
 	}
 	b = bounce[i].p;
 	nbounce++;
@@ -949,6 +1003,20 @@ chanio1(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 
 	ctlr = ep->hp->aux;
 	maxpkt = ep->maxpkt;
+	/*
+	 * devusb keeps a packet size in 1..1024, but every count and
+	 * remainder below divides by it. And a length that does not fit
+	 * hctsiz's fields is not sent as some other length: a read is
+	 * made shorter, which a read may be; a write is refused.
+	 */
+	n = xferlimit(maxpkt);
+	if(n == 0 || len < 0)
+		error(Ebadlen);
+	if(len > n){
+		if(dir != Epin)
+			error(Ebadlen);
+		len = n;
+	}
 	npkt = HOWMANY(len, ep->maxpkt);
 	if(npkt == 0)
 		npkt = 1;
@@ -1367,6 +1435,17 @@ chanio1(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 		}
 account:
 		n = hc->hcdma - hcdma;
+		if(n < 0){
+			/*
+			 * The DMA pointer is behind where this pass began.
+			 * Taken as a count it made nleft larger than len, the
+			 * transfer's result negative, and the caller's copy
+			 * of that many bytes a copy of nearly four gigabytes.
+			 */
+			print("usbotg: ep%d.%d dma went backwards %8.8ux->%8.8ux\n",
+				ep->dev->nb, ep->nb, hcdma, hc->hcdma);
+			error(Eio);
+		}
 		if(n == 0){
 			/*
 			 * Nothing moved, and the controller says the
@@ -2068,6 +2147,7 @@ epclose(Ep *ep)
 	default:
 		if(((Epio*)ep->aux)->rbounce != nil)
 			freeb(((Epio*)ep->aux)->rbounce);
+		freeblist(((Epio*)ep->aux)->retired);
 		if(((Epio*)ep->aux)->wbounce != nil)
 			freeb(((Epio*)ep->aux)->wbounce);
 		free(ep->aux);
@@ -2125,10 +2205,24 @@ epread(Ep *ep, void *a, long n)
 	case Tbulk:
 		/* XXX cache madness */
 		if(epio->rbounce == nil || BALLOC(epio->rbounce) < ROUND(n, ep->maxpkt) + CACHELINESZ){
+			/*
+			 * Outgrown, not freed: the packet a halted IN was
+			 * waiting for can still be written to the old
+			 * buffer (see Epio), and freed, it would be written
+			 * over whoever has the memory next. It is kept until
+			 * the endpoint closes; each new one is at least twice
+			 * the last, so those kept come to less than the one
+			 * in use.
+			 */
 			b = epio->rbounce;
-			epio->rbounce = allocb(ROUND(n, ep->maxpkt) + CACHELINESZ);
-			if(b != nil)
-				freeb(b);
+			nr = ROUND(n, ep->maxpkt) + CACHELINESZ;
+			if(b != nil && nr < 2*BALLOC(b))
+				nr = 2*BALLOC(b);
+			epio->rbounce = allocb(nr);
+			if(b != nil){
+				b->next = epio->retired;
+				epio->retired = b;
+			}
 		}
 		b = epio->rbounce;
 		p = (uchar*)ROUND((uintptr)b->base, CACHELINESZ);
@@ -2150,9 +2244,10 @@ epread(Ep *ep, void *a, long n)
 		 * errors and 6 ICMP checksum errors in 2200 frames, one echo
 		 * request answered twice.
 		 */
-		if(nr > 0)
+		if(nr > 0){
 			cachedwbinvse(p, nr);
-		memmove(a, p, nr);
+			memmove(a, p, nr);
+		}
 		qunlock(lk);
 		poperror();
 		if(ep->ttype == Tbulk){

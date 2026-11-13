@@ -226,6 +226,7 @@ TARG=\
 	vm.dis\
 	wc.dis\
 	webfs.dis\
+	wercfs.dis\
 	webgrab.dis\
 	wmexport.dis\
 	wmimport.dis\

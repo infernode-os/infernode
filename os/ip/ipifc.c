@@ -1023,7 +1023,7 @@ iplinkfree(Iplink *p)
 
 	l = &freeiplink;
 	for(np = *l; np; np = *l){
-		if(np->expire > now){
+		if((long)(now - np->expire) >= 0){
 			*l = np->next;
 			free(np);
 			continue;
@@ -1042,7 +1042,7 @@ ipselffree(Ipself *p)
 
 	l = &freeipself;
 	for(np = *l; np; np = *l){
-		if(np->expire > now){
+		if((long)(now - np->expire) >= 0){
 			*l = np->next;
 			free(np);
 			continue;
@@ -1821,4 +1821,3 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 
 	return ipifcadd(ifc, params, 3, 0, &lifc);
 }
-

@@ -1191,6 +1191,7 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	if(*bpp == nil)
 		return -1;
 
+	h = (Tcp6hdr *)((*bpp)->rp);
 	optr = h->tcpopt;
 	n = hdrlen - TCP6_HDRSIZE;
 	while(n > 0 && *optr != EOLOPT) {
@@ -1268,6 +1269,7 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	if(*bpp == nil)
 		return -1;
 
+	h = (Tcp4hdr *)((*bpp)->rp);
 	optr = h->tcpopt;
 	n = hdrlen - TCP4_HDRSIZE;
 	while(n > 0 && *optr != EOLOPT) {

@@ -241,6 +241,8 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 		Tag =>
 			if(t.name == "svg") {
 				canvas = new_canvas(t.attrs);
+				rules = nil;
+				nrules = 0;
 				m0 := parser.mark();
 				parser.down();
 				scanids(parser, canvas);
@@ -370,10 +372,186 @@ scanids(parser: ref Parser, canvas: ref Canvas)
 			if((id := t.attrs.get("id")) != nil)
 				canvas.ids = ref Idref(id, t.name, t.attrs, parser.mark()) :: canvas.ids;
 			parser.down();
-			scanids(parser, canvas);
+			if(t.name == "style")
+				sheetrules(stylecss(parser));
+			else
+				scanids(parser, canvas);
 			parser.up();
 		}
 	}
+}
+
+# ---- style sheets: <style> (SVG 2 §6.3) ----
+#
+# What drawing programs write: Illustrator's .cls-1{fill:#c8e8eb}, a
+# rule a class, on every shape (Kubernetes' icons were black).  Rules
+# of type, class and id selectors, compounds of them and lists, are
+# taken; one with a combinator, a pseudo-class or an attribute is not.
+# A rule's declarations come after the element's presentation
+# attributes and before its style attribute, by specificity then
+# order (Cascade 4).
+
+Rule: adt {
+	tag:	string;	# nil for any
+	id:	string;
+	classes:	list of string;
+	spec:	int;	# id << 16 | classes << 8 | type
+	order:	int;
+	decls:	string;
+};
+rules: list of ref Rule;
+nrules := 0;
+
+stylecss(parser: ref Parser): string
+{
+	t := "";
+	for(;;) {
+		item := parser.next();
+		if(item == nil)
+			break;
+		pick x := item {
+		Text =>
+			t += x.ch;
+		}
+	}
+	return t;
+}
+
+sheetrules(css: string)
+{
+	# comments out, then selector { declarations } until the end;
+	# an at-rule's block is passed over
+	c := "";
+	for(i := 0; i < len css; i++) {
+		if(i + 1 < len css && css[i] == '/' && css[i+1] == '*') {
+			for(i += 2; i + 1 < len css && !(css[i] == '*' && css[i+1] == '/'); i++)
+				;
+			i++;
+			continue;
+		}
+		c[len c] = css[i];
+	}
+	for(i = 0; i < len c; ) {
+		j := i;
+		while(j < len c && c[j] != '{')
+			j++;
+		if(j >= len c)
+			break;
+		sel := trim(c[i:j]);
+		k := j + 1;
+		depth := 1;
+		while(k < len c && depth > 0) {
+			if(c[k] == '{')
+				depth++;
+			else if(c[k] == '}')
+				depth--;
+			k++;
+		}
+		body := c[j+1:k-1];
+		i = k;
+		if(len sel > 0 && sel[0] == '@')
+			continue;
+		(nil, sl) := sys->tokenize(sel, ",");
+		for(; sl != nil; sl = tl sl)
+			if((r := compound(trim(hd sl))) != nil) {
+				r.decls = body;
+				r.order = nrules++;
+				rules = r :: rules;
+			}
+	}
+}
+
+# a compound selector: type, .class, #id; nil for anything else
+compound(sel: string): ref Rule
+{
+	if(sel == nil)
+		return nil;
+	r := ref Rule(nil, nil, nil, 0, 0, nil);
+	i := 0;
+	while(i < len sel) {
+		c := sel[i];
+		j := i + 1;
+		while(j < len sel && sel[j] != '.' && sel[j] != '#' && identc(sel[j]))
+			j++;
+		case c {
+		'.' =>
+			if(j == i + 1)
+				return nil;
+			r.classes = sel[i+1:j] :: r.classes;
+			r.spec += 1 << 8;
+		'#' =>
+			if(j == i + 1 || r.id != nil)
+				return nil;
+			r.id = sel[i+1:j];
+			r.spec += 1 << 16;
+		'*' =>
+			if(i != 0)
+				return nil;
+		* =>
+			if(i != 0 || !identc(c))
+				return nil;
+			r.tag = sel[i:j];
+			r.spec += 1;
+		}
+		if(j < len sel && !(sel[j] == '.' || sel[j] == '#'))
+			return nil;	# a combinator, a pseudo-class, an attribute
+		i = j;
+	}
+	return r;
+}
+
+identc(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c >= 16r80;
+}
+
+# the element's attributes with the rules that match it put before its
+# style attribute
+sheetattrs(name: string, attrs: Attributes): Attributes
+{
+	if(rules == nil)
+		return attrs;
+	id := attrs.get("id");
+	(nil, cl) := sys->tokenize(attrs.get("class"), " \t\n\r");
+	m: list of ref Rule;
+	for(l := rules; l != nil; l = tl l) {
+		r := hd l;
+		if(r.tag != nil && r.tag != name || r.id != nil && r.id != id)
+			continue;
+		ok := 1;
+		for(rc := r.classes; ok && rc != nil; rc = tl rc)
+			ok = member(hd rc, cl);
+		if(ok)
+			m = r :: m;
+	}
+	if(m == nil)
+		return attrs;
+	# by specificity, then order: the later wins
+	a := array[len m] of ref Rule;
+	for(i := 0; m != nil; m = tl m)
+		a[i++] = hd m;
+	for(i = 1; i < len a; i++)
+		for(j := i; j > 0 && (a[j].spec < a[j-1].spec || a[j].spec == a[j-1].spec && a[j].order < a[j-1].order); j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	st := "";
+	for(i = 0; i < len a; i++)
+		st += a[i].decls + ";";
+	r: list of Xml->Attribute;
+	for(al := attrs.attrs; al != nil; al = tl al)
+		if((hd al).name == "style")
+			st += (hd al).value;
+		else
+			r = hd al :: r;
+	r = Xml->Attribute("style", st) :: r;
+	return Attributes(r);
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 findid(canvas: ref Canvas, id: string): ref Idref
@@ -524,6 +702,7 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 	}
 
 	# Parse style
+	attrs = sheetattrs(name, attrs);
 	style := parse_style(attrs, parent_style);
 	if(clipping) {
 		# a clip path's geometry: filled, whatever paint it is given
@@ -1930,14 +2109,15 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 	stroke := attrs.get("stroke");
 	if(stroke != nil)
 		setpaint(s, 1, stroke);
-	if(style_str != nil)
-		apply_css_style(s, style_str);
 
 	sw := attrs.get("stroke-width");
 	if(sw != nil)
 		s.stroke_width = pd(sw, 1.0);
 
+	# opacity is the element's, attribute or style, times its groups'
 	op := attrs.get("opacity");
+	if(style_str != nil && (cop := extract_style_prop(style_str, "opacity")) != nil)
+		op = cop;
 	if(op != nil)
 		s.opacity *= real op;
 
@@ -1952,16 +2132,20 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 	fs := attrs.get("font-size");
 	if(fs != nil)
 		s.font_size = parse_length(fs, s.font_size);
+	for(k := 0; k < len strokeprops; k++)
+		if((v := attrs.get(strokeprops[k])) != nil)
+			setstrokeprop(s, strokeprops[k], v);
+
+	# then the style attribute (and the style sheet's rules, before it),
+	# which wins over them (SVG 2 §6.4)
+	if(style_str != nil)
+		apply_css_style(s, style_str);
 	for(tk := 0; tk < len textprops; tk++) {
 		if((tv := attrs.get(textprops[tk])) != nil)
 			settextprop(s, textprops[tk], tv);
 		if(style_str != nil && (sv := extract_style_prop(style_str, textprops[tk])) != nil)
 			settextprop(s, textprops[tk], sv);
 	}
-
-	for(k := 0; k < len strokeprops; k++)
-		if((v := attrs.get(strokeprops[k])) != nil)
-			setstrokeprop(s, strokeprops[k], v);
 
 	# the colours stay as given, shared with the parent's and siblings'
 	# styles: opacity is applied when painting (paint)
@@ -2047,7 +2231,7 @@ apply_css_style(s: ref Style, css: string)
 		"stroke-width" =>
 			s.stroke_width = pd(value, 1.0);
 		"opacity" =>
-			s.opacity *= real value;
+			;	# (parse_style's: the attribute's or this, not both)
 		"fill-opacity" =>
 			s.fill_opacity = real value;
 		"stroke-opacity" =>
@@ -2434,6 +2618,7 @@ split_whitespace_comma(s: string): array of string
 	return result;
 }
 
+# in the order written, so that the last of a property is the one taken
 split_semicolons(s: string): list of string
 {
 	parts: list of string;
@@ -2445,7 +2630,10 @@ split_semicolons(s: string): list of string
 			start = i + 1;
 		}
 	}
-	return parts;
+	r: list of string;
+	for(; parts != nil; parts = tl parts)
+		r = hd parts :: r;
+	return r;
 }
 
 lower(s: string): string
@@ -2479,13 +2667,15 @@ trim(s: string): string
 
 extract_style_prop(style, prop: string): string
 {
+	# the last declaration wins, as in CSS
+	v: string;
 	parts := split_semicolons(style);
 	for(p := parts; p != nil; p = tl p) {
 		(name, value) := split_colon(hd p);
 		if(trim(name) == prop)
-			return trim(value);
+			v = trim(value);
 	}
-	return nil;
+	return v;
 }
 
 reverse_segments(segs: list of ref Segment): list of ref Segment

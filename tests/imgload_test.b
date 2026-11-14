@@ -310,6 +310,26 @@ testSvgRefs(t: ref T)
 	near(t, pixel(im, o.add((35, 5))), (255, 255, 0), 0, "use of a symbol: its viewBox into the use's size");
 }
 
+# An SVG's style sheet: Illustrator's .cls-1{fill:...} on every shape
+# (Kubernetes' icons were black), by specificity and order, after the
+# presentation attributes and before the style attribute; and a style
+# attribute's last declaration is the one taken (it was its first)
+testSvgSheet(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/sheet.svg");
+	if(im == nil)
+		t.fatal("sheet.svg: " + err);
+	o := im.r.min;
+	near(t, pixel(im, o.add((5, 5))), (0, 0, 255), 0, ".a over rect");
+	near(t, pixel(im, o.add((15, 5))), (0, 255, 0), 0, ".b.c");
+	near(t, pixel(im, o.add((25, 5))), (255, 255, 0), 0, "#d over .a");
+	near(t, pixel(im, o.add((35, 5))), (255, 255, 255), 0, "the style attribute over the sheet");
+	near(t, pixel(im, o.add((45, 5))), (0, 0, 255), 0, "the sheet over a presentation attribute");
+	near(t, pixel(im, o.add((55, 5))), (0, 255, 255), 0, "a style attribute's last fill");
+	near(t, pixel(im, o.add((65, 5))), (255, 0, 0), 0, "rect alone");
+}
+
 # A palette image's transparent index after a colour is clear: the
 # colour of the pixel before it was kept with alpha 0, and premultiplied,
 # added to whatever it was drawn over
@@ -1004,6 +1024,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PngPaletteAlpha", testPngPaletteAlpha);
 	run("SvgRefs", testSvgRefs);
 	run("ClearAfterColour", testClearAfterColour);
+	run("SvgSheet", testSvgSheet);
 	run("DecodeJpeg", testDecodeJpeg);
 	run("DecodeGif", testDecodeGif);
 	run("DecodeWebpLossless", testDecodeWebpLossless);

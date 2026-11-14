@@ -65,3 +65,18 @@ gt.putpixel((1, 0), 1)
 gt.putpixel((2, 0), 2)
 gt.putpixel((3, 0), 1)
 gt.save(d + "/clear.gif", transparency=1)
+# A style sheet in an SVG, as drawing programs write one: a type rule,
+# a class, two classes, an id, a style attribute after them, a
+# presentation attribute under them, two of a property in one style
+# attribute (the last taken): 70 by 10, seven cells
+open(d + "/sheet.svg", "w").write('''<svg xmlns="http://www.w3.org/2000/svg" width="70" height="10">
+<style>/* .z{fill:#ff0000} */ rect{fill:#ff0000} .a{fill:#0000ff} .b.c{fill:#00ff00} #d{fill:#ffff00}</style>
+<rect class="a" width="10" height="10"/>
+<rect class="b c" x="10" width="10" height="10"/>
+<rect id="d" class="a" x="20" width="10" height="10"/>
+<rect class="a" style="fill:#ffffff" x="30" width="10" height="10"/>
+<rect class="a" fill="#ff0000" x="40" width="10" height="10"/>
+<rect style="fill:#ff0000;fill:#00ffff" x="50" width="10" height="10"/>
+<rect x="60" width="10" height="10"/>
+</svg>
+''')

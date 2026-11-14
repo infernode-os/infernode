@@ -291,6 +291,7 @@ Style: module
 		imgorient:	int;	# image-orientation: 0 from-image, 1 none (inherited)
 		clipinset:	array of Len;	# clip-path: inset(), top right bottom left; nil for none or another shape
 		textfill:	int;	# -webkit-text-fill-color: the glyphs' colour, Ccurrent for color's (inherited)
+		kidalign:	int;	# where block children go when their margins leave room: 0, or Aleft, Acenter, Aright, by text-align -webkit-center and kin, which <center> and align= give (inherited)
 
 		new:	fn(): ref St;		# initial values
 	};

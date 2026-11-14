@@ -2568,24 +2568,31 @@ automargins(b: ref Box, cbw: int)
 		b.ml += free;
 	else if(rauto)
 		b.mr += free;
-	else if(free > 0 && incenter(b)) {
-		# <center> centres its block children too (HTML §15.3.3:
-		# text-align: -webkit-center), as pages of its era expect
-		b.ml += free/2;
-		b.mr += free - free/2;
+	else if(free > 0 && (ka := kidalign(b)) != 0) {
+		# <center> and align= place their block children too (HTML
+		# §15.3.3: text-align: -webkit-center and kin), as pages of
+		# their era expect: plan9.io's tables, centred in a <td
+		# align=center>, were at its left
+		case ka {
+		Style->Acenter =>
+			b.ml += free/2;
+			b.mr += free - free/2;
+		Style->Aright =>
+			b.ml += free;
+		* =>
+			b.mr += free;
+		}
 	} else if(free != 0 && b.parent != nil && b.parent.st.dirrtl)
 		b.ml += free;	# over-constrained in a right-to-left block: margin-left gives (§10.3.3)
 }
 
-# is b a block child of <center> (or of its anonymous blocks)?
-incenter(b: ref Box): int
+# where the box's container places its block children, by its
+# text-align (through its anonymous blocks, which have its style)
+kidalign(b: ref Box): int
 {
 	for(p := b.parent; p != nil; p = p.parent) {
-		if(p.node != 0)
-			return curdoc != nil && curdoc.nodes[p.node].tag == Dom->Tcenter &&
-				curdoc.nodes[p.node].ns == Dom->HTML;
-		if(p.kind != Kblock)
-			break;
+		if(p.node != 0 || p.kind != Kblock)
+			return p.st.kidalign;
 	}
 	return 0;
 }

@@ -2522,7 +2522,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0);
 	s.fontsize = 16.0 * dpr;
 	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
 	return s;
@@ -2550,6 +2550,7 @@ inherit(p: ref St): ref St
 	s.smallcaps = p.smallcaps;
 	s.lineheight = p.lineheight;
 	s.align = p.align;
+	s.kidalign = p.kidalign;
 	s.alignlast = p.alignlast;
 	s.indent = p.indent;
 	s.transform = p.transform;
@@ -4233,6 +4234,13 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 	}
 	if(d != nil && isroot(d, n) && st.display == Dcontents)
 		st.display = Dblock;
+	# a table takes none of the -webkit- alignments, which go back to
+	# start (as Blink's style adjuster has it): <center> places its
+	# table, but not the table's text (Hacker News's titles, centred)
+	if((st.display == Dtable || st.display == Dinlinetable) && st.kidalign != 0) {
+		st.align = Astart;
+		st.kidalign = 0;
+	}
 }
 
 # ---- value parsing ----
@@ -7171,19 +7179,31 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			return 0;
 		st.lineheight = px(l.resolve(st.fontsize));	# % is of the font size
 	"text-align" =>
+		# the -webkit-, -moz- and -internal- values align the block
+		# children too (HTML §15.3.3, <center> and align=: a table in
+		# a <td align=center> is centred in it)
+		st.kidalign = 0;
 		case id {
 		"start" => st.align = Astart;
 		"end" => st.align = Aend;
-		"left" or "-webkit-left" => st.align = Aleft;
-		"right" or "-webkit-right" => st.align = Aright;
-		"center" or "-webkit-center" or "-moz-center" or "-internal-center" => st.align = Acenter;
+		"left" => st.align = Aleft;
+		"right" => st.align = Aright;
+		"center" => st.align = Acenter;
+		"-webkit-left" or "-moz-left" or "-internal-left" =>
+			st.align = st.kidalign = Aleft;
+		"-webkit-right" or "-moz-right" or "-internal-right" =>
+			st.align = st.kidalign = Aright;
+		"-webkit-center" or "-moz-center" or "-internal-center" =>
+			st.align = st.kidalign = Acenter;
 		"justify" => st.align = Ajustify;
 		"justify-all" =>
 			st.align = Ajustify;
 			st.alignlast = Ajustify;	# the last line too (Text 3 §7.1)
 		"match-parent" =>
-			if(parent != nil)
+			if(parent != nil) {
 				st.align = parent.align;
+				st.kidalign = parent.kidalign;
+			}
 		* => return 0;
 		}
 	"text-align-last" =>
@@ -8365,7 +8385,9 @@ copyprop(d, s: ref St, nm: string)
 	"font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" => d.synth = s.synth;
 	"font-variant" or "font-variant-caps" => d.smallcaps = s.smallcaps;
 	"line-height" => d.lineheight = s.lineheight;
-	"text-align" => d.align = s.align;
+	"text-align" =>
+		d.align = s.align;
+		d.kidalign = s.kidalign;
 	"text-align-last" => d.alignlast = s.alignlast;
 	"text-indent" => d.indent = s.indent;
 	"text-transform" => d.transform = s.transform;
@@ -8672,9 +8694,9 @@ dimhint(d: ref Doc, n: int, attr, prop: string): string
 alignhint(d: ref Doc, n: int): string
 {
 	case lower(d.attr(n, "align")) {
-	"left" => return "text-align:left;";
-	"right" => return "text-align:right;";
-	"center" or "middle" => return "text-align:center;";
+	"left" => return "text-align:-internal-left;";
+	"right" => return "text-align:-internal-right;";
+	"center" or "middle" => return "text-align:-internal-center;";
 	"justify" => return "text-align:justify;";
 	}
 	return "";
@@ -8748,6 +8770,8 @@ dump(st: ref St): string
 	s += "font-style " + names3[st.fontstyle] + "\n";
 	s += "line-height " + lenstr(st.lineheight) + "\n";
 	s += "text-align " + names4[st.align] + "\n";
+	if(st.kidalign != 0)
+		s += "-internal-align-children " + names4[st.kidalign] + "\n";
 	s += "white-space " + names5[st.whitespace] + "\n";
 	s += "opacity " + realstr(st.opacity) + "\n";
 	if(st.translated)

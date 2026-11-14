@@ -218,6 +218,44 @@ testFontZero(t: ref T)
 		t.error("no box for #w");
 }
 
+# <center> and align= place their block children, and centre their
+# text: a table in a <td align=center> is centred in it (plan9.io's
+# were at its left), a heading in <center> is centred, a div in it
+# places its own children; a table's text goes back to the start, as
+# Blink's has it (Hacker News's titles, in a <center>'d table)
+testAlignChildren(t: ref T)
+{
+	pg := pageof(t, "<body style='margin:0'><table id=o style='width:300px;border-spacing:0'><tr><td id=c align=center style='padding:0'>" +
+		"<table id=i style='width:100px;border-spacing:0'><tr><td>x</td></tr></table></td></tr></table>" +
+		"<center><div style='width:400px'><table id=n style='width:100px'><tr><td>y</td></tr></table></div>" +
+		"<table id=t style='width:200px'><tr><td id=tc>title</td></tr></table></center>" +
+		"<div align=right style='width:300px'><table id=r style='width:100px'><tr><td>z</td></tr></table></div>", 800, 600);
+	if((i := boxof(pg.doc, pg.root, "i")) != nil)
+		t.asserteq(absx(i), 100, "a table in a td align=center: centred");
+	else
+		t.error("no box for #i");
+	if((n := boxof(pg.doc, pg.root, "n")) != nil)
+		t.asserteq(absx(n), 350, "in <center>, a div's table: centred in the div (400 wide at 200)");
+	else
+		t.error("no box for #n");
+	if((r := boxof(pg.doc, pg.root, "r")) != nil)
+		t.asserteq(absx(r), 200, "in a div align=right, at its right");
+	else
+		t.error("no box for #r");
+	if((tc := boxof(pg.doc, pg.root, "tc")) != nil)
+		t.asserteq(tc.st.align, Style->Astart, "a <center>'d table's cell: its text at the start");
+	else
+		t.error("no box for #tc");
+}
+
+absx(b: ref Box): int
+{
+	x := 0;
+	for(; b != nil; b = b.parent)
+		x += b.x;
+	return x;
+}
+
 # the colour at the middle of the picture a box shows, as 16rRRGGBB
 midcolour(b: ref Box): int
 {
@@ -289,6 +327,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("GridMinContent", testGridMinContent);
 	run("SvgVars", testSvgVars);
 	run("FontZero", testFontZero);
+	run("AlignChildren", testAlignChildren);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

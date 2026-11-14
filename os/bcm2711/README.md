@@ -119,7 +119,9 @@ switch.
 | serial loader | `recover.c` offers it as on the 3B+ (proved under `raspi4b`); the board's serial input is proved |
 
 Not yet tried: SuperSpeed devices on the blue sockets, a USB disk, an
-8GB board (memory above 4GB is not mapped), HDMI audio, the camera.
+8GB board (memory above 4GB is not mapped), HDMI audio. The camera has
+run since: a Camera Module 3 is a feed at `/mnt/video/0` through
+`camsrv(4)` (#1085).
 
 ## What could not be tested before there was a board
 

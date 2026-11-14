@@ -476,9 +476,16 @@ unmount /tmp/soak/gefs/m; unmount /tmp/soak/gefs/a; unmount /tmp/soak/gefs/d''')
 	read 8192 < /dis/sh.dis > /tmp/soak/spi/s; cat /tmp/soak/spi/s > '#Q/spi0'; cat '#Q/spi0' > /tmp/soak/spi/r
 	cmp /tmp/soak/spi/s /tmp/soak/spi/r > /tmp/soak/spi/out >[2=1] || bad spi compare
 	tick spi; sleep 1''', needs=['spi'], setup="echo loop 1 > '#Q/spictl'"),
-    L('i2c', 'I2C reads', board=r'''
-	read 1 < '#J/i2c1data' > /dev/null >[2] /tmp/soak/i2c/err || bad i2c read
-	tick i2c; sleep 1''', needs=['i2c', 'i2cdev'], setup="echo addr $i2caddr > '#J/i2c1ctl'"),
+    # A BME280 (or BMP280) is read whole by tests/bme280.b, its chip id
+    # checked each pass, and the room's temperature, humidity and pressure
+    # kept in i2c/out for the samples; any other device has a byte read.
+    L('i2c', 'I2C reads: a BME280 measured (the room beside the board), or a byte of another device', board=r'''
+	if {~ $i2ckind bme280} {
+		/dis/tests/bme280.dis -b $i2cbus -a $i2caddr > /tmp/soak/i2c/m >[2] /tmp/soak/i2c/err && mv /tmp/soak/i2c/m /tmp/soak/i2c/out || bad i2c reading
+	} {
+		read 1 < '#J/i2c'^$i2cbus^data > /dev/null >[2] /tmp/soak/i2c/err || bad i2c read
+	}
+	tick i2c; sleep 2''', needs=['i2c', 'i2cdev'], setup="~ $i2ckind bme280 || echo addr $i2caddr > '#J/i2c'^$i2cbus^ctl"),
     L('gpio', 'the loopback jig: drive each pair both ways', board=r'''
 	for(p in $gpiopairs) {
 		x = `{echo $p | sed 's/:.*//'}; y = `{echo $p | sed 's/.*://'}
@@ -591,7 +598,7 @@ class Run:
         out = self.sh(
             "for(f in jitbench drawbench memtouch auth/rsagen vm zeros tlsperf vmstress tests/tls_live_test tests/sysfuzz dd cmp camsrv videnc tests/feedrate disk/kfs disk/kfscmd disk/gefs) { ftest -e /dis/$f.dis && echo HAVE $f }",
             "cat '#S/sdctl' >[2] /dev/null | grep '^part '",
-            "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' /dev/memtags /dev/heapaudit /net/bt/status '#i/draw') { ftest -e $f && echo DEV $f }",
+            "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c0data' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' /dev/memtags /dev/heapaudit /net/bt/status '#i/draw') { ftest -e $f && echo DEV $f }",
             "ls '#X' >[2] /dev/null > /dev/null && echo DEV vm",
             "cat /net/bt/status >[2] /dev/null | sed 1q",
             "cat /net/ipifc/*/status | grep '^device|^	[0-9]'",
@@ -618,17 +625,33 @@ class Run:
         sd = [d for d in ("'#S/sdcard'", "'#S/sd0'") if d.strip("'") in dev]
         r['sdraw'] = (bool(sd), sd[0].strip("'") if sd else 'no raw SD device (#S/sdcard, #S/sd0)')
         self.sdraw = sd[0] if sd else None
-        for k, d in (('nvme', '#S/nvme0'), ('spi', '#Q/spi0'), ('i2c', '#J/i2c1data')):
+        for k, d in (('nvme', '#S/nvme0'), ('spi', '#Q/spi0')):
             r[k] = (d in dev, d + ('' if d in dev else ' missing'))
+        buses = [b for b in ([self.a.i2c_bus] if self.a.i2c_bus else ['1', '0']) if '#J/i2c%sdata' % b in dev]
+        r['i2c'] = (bool(buses), ' '.join('#J/i2c%sdata' % b for b in buses) or 'no #J/i2c%sdata' % (self.a.i2c_bus or '1'))
         r['boarddevs'] = (any(d in dev for d in ('#r/rtc', '#P/fanrpm', '#S/nvmestat')), 'RTC/fan/nvmestat')
-        # an I2C load needs a device that answers; a bus with nothing on it is absent hardware
-        if r['i2c'][0]:
-            o = self.sh("echo addr %s > '#J/i2c1ctl' >[2] /dev/null; read 1 < '#J/i2c1data' > /dev/null >[2=1] && echo I2CACK" % self.a.i2c_addr, limit=20)
-            r['i2cdev'] = ('I2CACK' in o, ('a device at %s on i2c1' % self.a.i2c_addr) if 'I2CACK' in o else
-                           ('no device acknowledges at %s on i2c1; a real test needs one fitted, e.g. a 24Cxx EEPROM at 0x50 '
-                            '(or --i2c-addr for another device)' % self.a.i2c_addr))
+        # an I2C load needs a device that answers; a bus with nothing on it is
+        # absent hardware. A BME280 on either bus first (the Pi 5's i2c1 pins
+        # are under an NVMe HAT's header), then --i2c-addr on the first bus.
+        self.i2ckind, self.i2cbus, self.i2caddr = 'raw', (buses or ['1'])[0], self.a.i2c_addr
+        r['i2cdev'] = (False, 'no I2C bus')
+        for b in buses:
+            o = self.sh('/dis/tests/bme280.dis -b %s%s >[2=1]' % (b, ' -a ' + self.a.i2c_addr if self.a.i2c_addr_set else ''), limit=20)
+            m = re.search(r'chip=(0x\w+) addr=(0x\w+)', o)
+            if m:
+                self.i2ckind, self.i2cbus, self.i2caddr = 'bme280', b, m.group(2)
+                r['i2cdev'] = (True, '%s (chip %s) at %s on i2c%s' % ('BME280' if m.group(1) == '0x60' else 'BMP280', m.group(1), m.group(2), b))
+                break
         else:
-            r['i2cdev'] = (False, 'no i2c1')
+            for b in buses:
+                o = self.sh("echo addr %s > '#J/i2c%sctl' >[2] /dev/null; read 1 < '#J/i2c%sdata' > /dev/null >[2=1] && echo I2CACK" % (self.a.i2c_addr, b, b), limit=20)
+                if 'I2CACK' in o:
+                    self.i2cbus = b
+                    r['i2cdev'] = (True, 'a device at %s on i2c%s' % (self.a.i2c_addr, b))
+                    break
+            else:
+                r['i2cdev'] = (False, 'no BME280 on %s and nothing acknowledges at %s; a real test needs a device fitted '
+                               '(a BME280, or e.g. a 24Cxx EEPROM at 0x50, or --i2c-addr for another)' % (' or '.join('i2c' + b for b in buses) or 'no bus', self.a.i2c_addr))
         r['memtags'] = ('/dev/memtags' in dev, '/dev/memtags')
         r['heapaudit'] = ('/dev/heapaudit' in dev, '/dev/heapaudit')
         r['cputemp'] = ('#P/cputemp' in dev, '#P/cputemp')
@@ -758,7 +781,8 @@ class Run:
         body = SOAKD_HEAD
         # a group of its own, which the end of a run can kill whole (heldalive)
         body += 'pctl newpgrp\nkids = ()\n'
-        body += 'sdraw = %s\njetson = %s\ntlsport = %d\ni2caddr = %s\n' % (self.sdraw or "''", self.jetson, self.tlsport, self.a.i2c_addr)
+        body += 'sdraw = %s\njetson = %s\ntlsport = %d\ni2caddr = %s\ni2cbus = %s\ni2ckind = %s\n' % (self.sdraw or "''", self.jetson, self.tlsport,
+            getattr(self, 'i2caddr', self.a.i2c_addr), getattr(self, 'i2cbus', '1'), getattr(self, 'i2ckind', 'raw'))
         iv = self.iv
         body += ('sdrcount = %d\nsdrevery = %d\nsdwkb = %d\nsdwevery = %d\nnvrcount = %d\nnvrevery = %d\n'
                  'nvwblocks = %d\nnvwevery = %d\nnvscratch = %s\njitevery = %d\nrsaevery = %d\nrngcount = %d\nfuzzevery = %d\n') % (
@@ -1094,7 +1118,7 @@ class Run:
     def sample(self, n):
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
-                      "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null", 'cat /dev/sysstat',
+                      "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null", 'cat /dev/sysstat', 'cat /tmp/soak/i2c/out >[2] /dev/null',
                       'for(f in /tmp/soak/*/ticks) {echo `{cat $f >[2] /dev/null} $f}',
                       "{for(f in /tmp/soak/*/runs) {echo `{cat $f >[2] /dev/null} $f}} | sed 's/runs$/RUNS/'",
                       'ls /tmp/soak/*/fail-* >[2] /dev/null', 'cat /tmp/soak/video/out >[2] /dev/null', limit=60)
@@ -1120,11 +1144,14 @@ class Run:
             busy = '%d' % round(100 * (1 - sum(cpu[k][1] - prev[k][1] for k in cpu if k in prev) / dt))
         if cpu:
             self.cpuprev = cpu
-        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+        # the room, from the BME280 beside the board (the i2c load's last reading)
+        am = re.search(r'^chip=0x\w+ addr=0x\w+ t=(-?[\d.]+) p=([\d.]+)(?: h=([\d.]+))?', out, re.M)
+        amb = (am.group(1), am.group(3) or '', am.group(2)) if am else ('', '', '')
+        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
             now(), int(time.time() - self.t0),
             pools.get('main', ('', ''))[0], pools.get('heap', ('', ''))[0], pools.get('image', ('', ''))[0],
             size.group(1) if size else '', temp[0] if temp else '', json.dumps(ticks),
-            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1], busy))
+            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1], busy, amb[0], amb[1], amb[2]))
         self.samples.flush()
         v = re.search(r'^frames=(\d+) secs=([\d.]+) fps=([\d.]+) missed=(\d+).*$', out, re.M)
         if v and v.group(0) != self.vlast:
@@ -1205,7 +1232,7 @@ class Run:
         os.makedirs(os.path.join(self.dir, 'memtags'), exist_ok=True)
         self.log = Log(os.path.join(self.dir, 'soak.log'))
         self.samples = open(os.path.join(self.dir, 'samples.tsv'), 'a')
-        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\tcpubusy\n')
+        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\tcpubusy\tamb_t\tamb_h\tamb_p\n')
         self.hres = HostRes(self.info.name, self.log)
         self.failcount = {}; self.batt = {}
         self.log('soak %s: kernel %s bytes sha1 %s; driven over %s; serial %s; options: %s' % (
@@ -1471,6 +1498,27 @@ class Run:
                 len(self.lat), avgs[len(avgs) // 2], mx, sum(1 for x in self.lat if x[2])))
         if self.churnres:
             out.append('churn    %d rounds; conversations %s' % (len(self.churnres), ' '.join('%d->%d' % (b, a) for b, a, _ in self.churnres[-6:])))
+        def reals(col):
+            v = []
+            for r in rows:
+                try:
+                    v.append(float(r[col]))
+                except (IndexError, ValueError):
+                    pass
+            return v
+        for col, name in ((14, 'room temp (C)'), (15, 'room humidity (%)'), (16, 'room pressure (hPa)')):
+            v = reals(col)
+            if v:
+                out.append('%-19s first %.1f, last %.1f, min %.1f, max %.1f' % (name, v[0], v[-1], min(v), max(v)))
+        d = []
+        for r in rows:
+            try:
+                d.append(float(r[6]) - float(r[14]))
+            except (IndexError, ValueError):
+                pass
+        d.sort()
+        if d:
+            out.append('cpu above the room  median %.1f C, max %.1f C' % (d[len(d) // 2], d[-1]))
         for col, name in ((8, 'procs'), (9, 'tcp conversations'), (10, 'clock drift (s)'), (13, 'cpu busy (%)')):
             s = [r[col] for r in rows if len(r) > col and r[col].lstrip('-').isdigit()]
             if s:
@@ -1546,13 +1594,16 @@ def main():
     p.add_argument('--batteries', action='store_true', help='Ethernet, Bluetooth and GPIO batteries before and after')
     p.add_argument('--card', action='store_true', help='card.py against this tree first')
     p.add_argument('--serial-only', action='store_true')
-    p.add_argument('--i2c-addr', default='0x50', help='the I2C device the i2c load reads (it must acknowledge)')
+    p.add_argument('--i2c-addr', default=None, help='the I2C device the i2c load reads (it must acknowledge); a BME280 is looked for at 0x76 and 0x77 first, otherwise 0x50')
+    p.add_argument('--i2c-bus', default=None, help='the I2C bus (0 or 1); by default 1 then 0')
     p.add_argument('--loops-vm', type=int, default=None, help='VM for the board loops (default: 1 when the board has one that sees what they need, else 0)')
     p.add_argument('--dry', action='store_true', help='probe and print the plan; change nothing on the board')
     p.add_argument('--loads', type=lambda s: s.split(','), default=None)
     p.add_argument('--skip', type=lambda s: s.split(','), default=[])
     p.add_argument('--elf', help='the running kernel\'s ELF, to name memtags call sites')
     a = p.parse_args()
+    a.i2c_addr_set = a.i2c_addr is not None
+    a.i2c_addr = a.i2c_addr or '0x50'
     run = Run(a)
     signal.signal(signal.SIGTERM, lambda *x: run.stop.set())
     run.main()

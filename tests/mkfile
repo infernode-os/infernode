@@ -26,6 +26,7 @@ TARG=\
 	mermaid_flow_test.dis\
 	visnet_run.dis\
 	feedrate.dis\
+	bme280.dis\
 	trtcheck.dis\
 	bayer_test.dis\
 	camsrv_test.dis\

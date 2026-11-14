@@ -1260,13 +1260,34 @@ unicam(s: string): string
 	return nil;
 }
 
-sensoron(): string
+# The receiver's connectors, if it has more than one to choose from (a
+# Pi 5's "port" line in its ctl); nil for one (the Pi 4's).
+ports(): list of string
 {
-	unicam("stream off");		# what a killed server left, if it did
-	lastst = -1;
-	e := unicam(sys->sprint("format %d %d", Sw, Sh));
-	if(e == nil)
-		e = unicam("power on");
+	fd := sys->open("/dev/unicam/ctl", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[1024] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return nil;
+	(nil, lines) := sys->tokenize(string b[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "port"){
+			# the one it is on first: where the camera was found last
+			if(hd tl f == "1")
+				return "1" :: "0" :: nil;
+			return "0" :: "1" :: nil;
+		}
+	}
+	return nil;
+}
+
+# Power and find the sensor on a connector: nil, or why not.
+sensorfind(): string
+{
+	e := unicam("power on");
 	if(e != nil)
 		return e;
 	i2cbus = sensorbus();
@@ -1287,6 +1308,26 @@ sensoron(): string
 	}
 	if(id != Chip)
 		return sys->sprint("camsrv: not an IMX708: %.4x", id);
+	return nil;
+}
+
+sensoron(): string
+{
+	unicam("stream off");		# what a killed server left, if it did
+	lastst = -1;
+	e := unicam(sys->sprint("format %d %d", Sw, Sh));
+	if(e != nil)
+		return e;
+	pl := ports();
+	if(pl == nil)
+		e = sensorfind();
+	for(; pl != nil; pl = tl pl){
+		unicam("power off");
+		if((e = unicam("port " + hd pl)) == nil && (e = sensorfind()) == nil)
+			break;
+	}
+	if(e != nil)
+		return e;
 	if(sensormode() < 0)
 		return "camsrv: the sensor will not take its settings: " + badreg;
 	e = unicam("stream on");

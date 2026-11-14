@@ -8,6 +8,12 @@
  *	#J/i2cNctl	write "addr N", "subaddress N", "speed N"; read them
  *	#J/i2cNdata	read and write the device at addr
  *
+ * Each open of a data file takes addr and subaddress as they are then
+ * and keeps them, as the Pi 4's #J does: a program holds an open for
+ * each device it talks to (camsrv(4) the sensor and its lens on one
+ * bus), and only the moment between a ctl write and the open is shared.
+ * They were the bus's, so camsrv's sensor reads went to the lens.
+ *
  * With subaddress N, a transfer starts with the file offset in N bytes,
  * high first, and a read is a repeated start after them: which is how
  * almost every register and EEPROM device is read, as in Inferno's #J.
@@ -64,6 +70,13 @@ enum{
 	Stdlow		= 1050,		/* 5.25us, of 4.7 */
 	Fasthigh	= 200,		/* 1us, of 0.6 */
 	Fastlow		= 300,		/* 1.5us, of 1.3 */
+};
+
+typedef struct Dev1 Dev1;
+struct Dev1
+{
+	int	addr;
+	int	sub;
 };
 
 typedef struct Bus Bus;
@@ -165,14 +178,14 @@ buson(Bus *b)
  * FIFO empties sends no stop of its own.
  */
 static char*
-transfer(Bus *b, uchar *w, int nw, uchar *r, int nr)
+transfer(Bus *b, int addr, uchar *w, int nw, uchar *r, int nr)
 {
 	int sent, got, total, idle;
 	u32int cmd, src;
 	char *err;
 
 	disable(b);
-	R(b, Tar) = b->addr;
+	R(b, Tar) = addr;
 	R(b, Enable) = 1;
 	R(b, Clrintr);
 
@@ -230,13 +243,13 @@ transfer(Bus *b, uchar *w, int nw, uchar *r, int nr)
 }
 
 static int
-offsetbytes(Bus *b, uchar *p, vlong off)
+offsetbytes(int sub, uchar *p, vlong off)
 {
 	int i;
 
-	for(i = 0; i < b->sub; i++)
-		p[i] = off >> 8*(b->sub-1-i);
-	return b->sub;
+	for(i = 0; i < sub; i++)
+		p[i] = off >> 8*(sub-1-i);
+	return sub;
 }
 
 static Chan*
@@ -272,6 +285,16 @@ i2copen(Chan *c, int omode)
 			nexterror();
 		}
 		buson(b);
+		if(ISDATA(c)){
+			Dev1 *d;
+
+			if(b->addr < 0)
+				error("i2c: no addr set");
+			d = smalloc(sizeof *d);
+			d->addr = b->addr;
+			d->sub = b->sub;
+			c->aux = d;
+		}
 		qunlock(&b->lk);
 		poperror();
 	}
@@ -281,13 +304,17 @@ i2copen(Chan *c, int omode)
 static void
 i2cclose(Chan *c)
 {
-	USED(c);
+	if((c->flag & COPEN) && c->aux != nil){
+		free(c->aux);
+		c->aux = nil;
+	}
 }
 
 static long
 i2cread(Chan *c, void *a, long n, vlong off)
 {
 	Bus *b;
+	Dev1 *d;
 	uchar sub[4];
 	char buf[64], *err;
 	int ns;
@@ -303,13 +330,10 @@ i2cread(Chan *c, void *a, long n, vlong off)
 		return 0;
 	if(n > Maxio)
 		n = Maxio;
+	d = c->aux;
 	qlock(&b->lk);
-	if(b->addr < 0){
-		qunlock(&b->lk);
-		error("i2c: no addr set");
-	}
-	ns = offsetbytes(b, sub, off);
-	err = transfer(b, sub, ns, a, n);
+	ns = offsetbytes(d->sub, sub, off);
+	err = transfer(b, d->addr, sub, ns, a, n);
 	qunlock(&b->lk);
 	if(err != nil)
 		error(err);
@@ -352,6 +376,7 @@ static long
 i2cwrite(Chan *c, void *a, long n, vlong off)
 {
 	Bus *b;
+	Dev1 *d;
 	uchar *p;
 	char *err;
 	int ns;
@@ -365,16 +390,12 @@ i2cwrite(Chan *c, void *a, long n, vlong off)
 		error(Etoobig);
 	if(n <= 0)
 		return 0;
+	d = c->aux;
 	p = smalloc(n + 4);
 	qlock(&b->lk);
-	if(b->addr < 0){
-		qunlock(&b->lk);
-		free(p);
-		error("i2c: no addr set");
-	}
-	ns = offsetbytes(b, p, off);
+	ns = offsetbytes(d->sub, p, off);
 	memmove(p+ns, a, n);
-	err = transfer(b, p, ns+n, nil, 0);
+	err = transfer(b, d->addr, p, ns+n, nil, 0);
 	qunlock(&b->lk);
 	free(p);
 	if(err != nil)

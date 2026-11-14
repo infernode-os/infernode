@@ -113,7 +113,7 @@ enum
 	Maxbuf		= 8*1024*1024,
 	Dmalimit	= 0x80000000,	/* RP1's own registers are above */
 	Framems		= 1000,
-	Powerms		= 20,		/* the sensor's start, from enable */
+	Powerms		= 100,		/* the module's start, from enable: Linux gives its regulator 70 ms; at the Pi 4's 20 nothing answered */
 	Minoff		= 500,		/* ms off before on again, as on the Pi 4 */
 
 	Qroot		= 0,

@@ -747,8 +747,9 @@ DOCTEXT: con
 	"  /mnt/wiki   wikifs must be mounted (page storage)\n" +
 	"  /mnt/llm      LLM service must be available\n" +
 	"\n" +
-	"The wiki is browsable via Charon at the httpd URL\n" +
-	"serving wikifs.  wiki9p provides the intelligence;\n" +
+	"The wiki is browsed and edited on the web through\n" +
+	"svc/httpd/httpd -w /wiki, wikifs mounted at wiki/ in\n" +
+	"its site (httpd(8)).  wiki9p provides the intelligence;\n" +
 	"wikifs provides the storage and web presentation.\n";
 
 # ===================================================================

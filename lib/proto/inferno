@@ -1112,30 +1112,8 @@ appl
 	svc
 		auth.sh
 		httpd
-			alarms.b
-			alarms.m
-			cache.b
-			cache.m
-			cgiparse.b
-			cgiparse.m
-			contents.b
-			contents.m
-			date.b
-			date.m
-			echo.b
 			httpd.b
-			httpd.m
-			httpd.debug
-			httpd.log
-			httpd.rewrite
-			httpd.suff
-			imagemap.b
 			mkfile
-			parser.b
-			parser.m
-			redirect.b
-			redirect.m
-			stats.b
 		mkfile
 		net.sh
 		registry.sh

@@ -2522,7 +2522,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0, nil, ~0);
 	s.fontsize = 16.0 * dpr;
 	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
 	return s;
@@ -4248,6 +4248,43 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 # ---- value parsing ----
 
 # A <length-percentage>, or a calc() family function.
+# polygon()'s arguments: its points, x and y alternately, and its fill rule
+polygon(v: array of ref Tok, ctx: ref Ctx): (array of Len, int, int)
+{
+	args := commas(v);
+	wind := ~0;
+	if(args != nil) {
+		a := nows(hd args);
+		if(len a == 1 && a[0].kind == Kident) {
+			case lower(a[0].s) {
+			"evenodd" => wind = 1;
+			"nonzero" => ;
+			* => return (nil, 0, 0);
+			}
+			args = tl args;
+		}
+	}
+	pts: list of Len;
+	n := 0;
+	for(; args != nil; args = tl args) {
+		a := nows(hd args);
+		if(len a != 2)
+			return (nil, 0, 0);
+		(okx, lx) := length(a[0:1], ctx);
+		(oky, ly) := length(a[1:2], ctx);
+		if(!okx || !oky)
+			return (nil, 0, 0);
+		pts = ly :: lx :: pts;
+		n += 2;
+	}
+	if(n < 6)
+		return (nil, 0, 0);	# fewer than three points: nothing shows
+	r := array[n] of Len;
+	for(k := n - 1; pts != nil; pts = tl pts)
+		r[k--] = hd pts;
+	return (r, wind, 1);
+}
+
 length(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 {
 	v = trim(v);
@@ -6820,9 +6857,11 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		else
 			return 0;
 	"clip-path" =>
-		# a stacking context; clipped to an inset() rectangle (other
-		# shapes are not clipped yet)
+		# a stacking context; clipped to an inset() rectangle or a
+		# polygon() (other shapes are not clipped yet)
 		st.clipinset = nil;
+		st.clippoly = nil;
+		st.clipwind = ~0;
 		if(id == "none")
 			st.ctx &= ~SCclippath;
 		else if(len trim(v) > 0) {
@@ -6849,6 +6888,14 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				3 => ins[3] = ins[1];
 				}
 				st.clipinset = ins;
+			} else if(len x >= 1 && x[0].kind == Kfunction && lower(x[0].s) == "polygon") {
+				# polygon([fill-rule,] x y, ...): Mozilla's hero ends
+				# in steps, a ::before cut to one
+				(pts, wind, ok) := polygon(x[0].kids, ctx);
+				if(!ok)
+					return 0;
+				st.clippoly = pts;
+				st.clipwind = wind;
 			}
 		} else
 			return 0;
@@ -8370,6 +8417,8 @@ copyprop(d, s: ref St, nm: string)
 	"clip-path" =>
 		d.ctx = d.ctx & ~SCclippath | s.ctx & SCclippath;
 		d.clipinset = s.clipinset;
+		d.clippoly = s.clippoly;
+		d.clipwind = s.clipwind;
 	"will-change" => d.ctx = d.ctx & ~SCwillchange | s.ctx & SCwillchange;
 	"transform" =>
 		d.translated = s.translated;

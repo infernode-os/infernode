@@ -13514,6 +13514,31 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	if(b.st.filter != nil)
 		if(!noeffects)
 			filter(img, b.st.filter);
+	if(b.st.clippoly != nil) {
+		# clip-path: polygon(), its points against the border box
+		# where it is drawn
+		br := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+		if(b.st.translated && b.st.tfs == nil)
+			br = br.addpt(Point(res(b.st.tx, b.w), res(b.st.ty, b.h)));
+		pts := b.st.clippoly;
+		path := Path.new();
+		for(k := 0; k + 1 < len pts; k += 2) {
+			x := real br.min.x + pts[k].resolve(real b.w);
+			y := real br.min.y + pts[k+1].resolve(real b.h);
+			if(k == 0)
+				path.moveto(x, y);
+			else
+				path.lineto(x, y);
+		}
+		path.close();
+		pm := display.newimage(pr, Draw->GREY8, 0, Draw->Black);
+		cut := display.newimage(pr, Draw->RGBA32, 0, Draw->Transparent);
+		if(pm == nil || cut == nil)
+			return;
+		pm.fillpath(path, b.st.clipwind, display.white, (0, 0));
+		cut.draw(pr, img, pm, pr.min);
+		img = cut;
+	}
 	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
 	if(hasmask(b.st)) {
@@ -13541,7 +13566,7 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 # painted into a layer of its own: translucent, masked or filtered
 ownlayer(st: ref St): int
 {
-	return st.opacity < 1.0 || hasmask(st) || st.filter != nil;
+	return st.opacity < 1.0 || hasmask(st) || st.filter != nil || st.clippoly != nil;
 }
 
 # a stacking context though not positioned: a layer of its own, or

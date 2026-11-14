@@ -292,6 +292,8 @@ Style: module
 		clipinset:	array of Len;	# clip-path: inset(), top right bottom left; nil for none or another shape
 		textfill:	int;	# -webkit-text-fill-color: the glyphs' colour, Ccurrent for color's (inherited)
 		kidalign:	int;	# where block children go when their margins leave room: 0, or Aleft, Acenter, Aright, by text-align -webkit-center and kin, which <center> and align= give (inherited)
+		clippoly:	array of Len;	# clip-path: polygon(), x and y alternately, against the border box; nil for none or another shape
+		clipwind:	int;	# its fill rule, as fillpath's: ~0 nonzero, 1 evenodd
 
 		new:	fn(): ref St;		# initial values
 	};

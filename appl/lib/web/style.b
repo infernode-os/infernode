@@ -339,7 +339,7 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			for(k := 0; k < len decls && !sibfns; k++)
 				sibfns = hassibfn(decls[k].val);
 			for(k = 0; k < len r.sels; k++)
-				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0, nil));
+				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0, nil, curcq));
 			ix.order++;
 		Media =>
 			if(mediamatch(r.cond, ix.env))
@@ -348,7 +348,12 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			if(supports(r.cond))
 				indexrules(ix, r.rules, origin, layer, base, depth+1);
 		Container =>
+			# its rules hold where the condition does: asked when an
+			# element matches (cqmatch), of its container's size
+			ocq := curcq;
+			curcq = cqprelude(r.cond) :: curcq;
 			indexrules(ix, r.rules, origin, layer, base, depth+1);
+			curcq = ocq;
 		Layer =>
 			if(r.rules == nil)
 				continue;
@@ -374,6 +379,92 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			}
 			indexrules(ix, sh.rules, origin, l, u, depth+1);
 		}
+}
+
+# ---- container queries (Conditional 5 §5) ----
+
+curcq: list of (string, array of ref Tok);	# while indexing: the @container blocks a rule is in
+cqsizes: array of (int, int);	# by node: a container's content box, the last layout's
+cqcomp: ref Computed;	# being computed: its containers' styles
+cqasked := 0;
+
+setcontainers(sizes: array of (int, int))
+{
+	cqsizes = sizes;
+}
+
+containersasked(): int
+{
+	a := cqasked;
+	cqasked = 0;
+	return a;
+}
+
+strmember(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+# @container [name] query: its name (nil for any container) and query
+cqprelude(v: array of ref Tok): (string, array of ref Tok)
+{
+	v = nows(v);
+	if(len v > 0 && v[0].kind == Kident) {
+		case lower(v[0].s) {
+		"not" or "and" or "or" =>
+			;
+		* =>
+			return (v[0].s, nows(v[1:]));
+		}
+	}
+	return (nil, v);
+}
+
+# whether n's containers meet every condition the entry is under
+cqmatch(m: ref M, n: int, cq: list of (string, array of ref Tok)): int
+{
+	for(; cq != nil; cq = tl cq) {
+		(name, q) := hd cq;
+		if(!cqone(m, n, name, q))
+			return 0;
+	}
+	return 1;
+}
+
+cqone(m: ref M, n: int, name: string, q: array of ref Tok): int
+{
+	cqasked = 1;
+	d := m.d;
+	# the nearest ancestor that is a query container of that name
+	c := 0;
+	ctype := 0;
+	for(a := parentel(d, n); a != 0; a = parentel(d, a)) {
+		st: ref St;
+		if(cqcomp != nil && a < len cqcomp.st)
+			st = cqcomp.st[a];
+		if(st == nil || st.cqtype == 0)
+			continue;
+		if(name != nil && !strmember(name, st.cqnames))
+			continue;
+		c = a;
+		ctype = st.cqtype;
+		break;
+	}
+	if(c == 0)
+		return 0;	# no such container: the condition is unknown, so false
+	env := ref *m.env;
+	w := -1;
+	h := -1;
+	if(cqsizes != nil && c < len cqsizes)
+		(w, h) = cqsizes[c];
+	if(w >= 0)
+		env.width = w;
+	if(ctype == 2 && h >= 0)
+		env.height = h;
+	return mediamatch(q, env);
 }
 
 # Make url() values in declarations absolute against the sheet's address.
@@ -2522,7 +2613,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0, nil, ~0);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0, nil, ~0, 0, nil);
 	s.fontsize = 16.0 * dpr;
 	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
 	return s;
@@ -2679,6 +2770,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	lastenv = ref *env;	# for light-dark() in colours parsed without a context
 	setdpr(env);
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	cqcomp = c;
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
@@ -2881,6 +2973,7 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 	setdpr(env);
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
 		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
+	cqcomp = c;
 	ctx := ref Ctx(16.0*dpr, c.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;
@@ -3061,6 +3154,7 @@ restyleflat(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed, m: ref 
 	setdpr(env);
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
 		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
+	cqcomp = c;
 	ctx := ref Ctx(16.0*dpr, c.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;
@@ -3340,6 +3434,7 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 	if(chain == nil || hd chain != root)
 		return nil;	# not in the document's tree
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	cqcomp = c;
 	m := matcher(d, env);
 	ctx := ref Ctx(16.0*dpr, 16.0*dpr, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
@@ -3803,7 +3898,7 @@ trybucket(m: ref M, l: list of ref Entry, key: string, n: int, filter: array of 
 		e.mark = candgen;
 		if(e.anc != nil && !bloomok(filter, e.anc))
 			continue;
-		if(matchsel(m, e.sel, n))
+		if(matchsel(m, e.sel, n) && (e.cq == nil || cqmatch(m, n, e.cq)))
 			r = e :: r;
 	}
 	return r;
@@ -5615,8 +5710,17 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return nil;	# only the CSS-wide keywords, handled above
 	"border-image" =>
 		return borderimage(x);
+	"container" =>
+		# <name>... [/ <type>]
+		parts := slashes(x);
+		if(len parts == 0 || len parts > 2)
+			return nil;
+		ty := array[] of {ref Tok(Kident, "normal", 0.0, 0, nil)};
+		if(len parts == 2)
+			ty = nows(parts[1]);
+		return ("container-name", nows(parts[0])) :: ("container-type", ty) :: nil;
 	"transition" or "animation" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" or "font-variant" =>
+	"scroll-margin" or "scroll-padding" or "font-variant" =>
 		return nil;
 	}
 	return nil;
@@ -5763,8 +5867,9 @@ shorthand(nm: string): list of string
 		return r;
 	"border-image" => return list of {"border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"};
 	"mask" => return list of {"mask-image", "mask-repeat", "mask-position", "mask-size", "mask-origin", "mask-clip"};
+	"container" => return list of {"container-name", "container-type"};
 	"transition" or "animation" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" =>
+	"scroll-margin" or "scroll-padding" =>
 		return "-x-ignored" :: nil;
 	}
 	return nil;
@@ -5779,7 +5884,7 @@ allprops := array[] of {
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
 	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
-	"mask-image", "object-fit", "object-position", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change",
+	"mask-image", "object-fit", "object-position", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change", "container-type", "container-name",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -6856,6 +6961,23 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.ctx |= SCblend;
 		else
 			return 0;
+	"container-type" =>
+		case id {
+		"normal" => st.cqtype = 0;
+		"inline-size" => st.cqtype = 1;
+		"size" => st.cqtype = 2;
+		* => return 0;
+		}
+	"container-name" =>
+		st.cqnames = nil;
+		if(id != "none") {
+			x := nows(v);
+			for(k := len x - 1; k >= 0; k--) {
+				if(x[k].kind != Kident)
+					return 0;
+				st.cqnames = x[k].s :: st.cqnames;
+			}
+		}
 	"clip-path" =>
 		# a stacking context; clipped to an inset() rectangle or a
 		# polygon() (other shapes are not clipped yet)
@@ -8441,6 +8563,8 @@ copyprop(d, s: ref St, nm: string)
 		d.clipinset = s.clipinset;
 		d.clippoly = s.clippoly;
 		d.clipwind = s.clipwind;
+	"container-type" => d.cqtype = s.cqtype;
+	"container-name" => d.cqnames = s.cqnames;
 	"will-change" => d.ctx = d.ctx & ~SCwillchange | s.ctx & SCwillchange;
 	"transform" =>
 		d.translated = s.translated;

@@ -265,7 +265,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	scripting := setting("scripts") == "on";
 	html->scripting(scripting);
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil, 0, 0, nil);
+		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil, 0, 0, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -293,6 +293,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	phase("objects");
 	plock();
 	{
+		style->setcontainers(p.cqs);
 		p.computed = style->compute(d, p.styles, p.env);
 		phase("styles computed");
 		rebuild(p);
@@ -342,6 +343,67 @@ rebuild(p: ref Pg)
 	phase("rebuild: inline svgs");
 	if(layoutcheck && old != nil)
 		checklayout(p);
+	if(!incq)
+		cqpass(p);
+}
+
+# @container conditions are of the containers' sizes, which only a
+# layout knows: styles computed with the sizes the last one gave (the
+# viewport's at first), the page is styled and laid out again, twice at
+# most, while a condition was asked and a container's size changed
+# (Vercel's hero, a row at @lg, was all its variants at once)
+incq := 0;
+cqpass(p: ref Pg)
+{
+	for(pass := 0; pass < 2; pass++) {
+		if(!style->containersasked())
+			return;
+		sizes := array[p.doc.n] of {* => (-1, -1)};
+		if(!cqsizes(p.root, sizes))
+			return;
+		if(p.cqs != nil && len p.cqs == len sizes) {
+			same := 1;
+			for(i := 0; i < len sizes && same; i++)
+				if(sizes[i].t0 != p.cqs[i].t0 || sizes[i].t1 != p.cqs[i].t1)
+					same = 0;
+			if(same)
+				return;
+		}
+		p.cqs = sizes;
+		style->setcontainers(p.cqs);
+		p.computed = style->compute(p.doc, p.styles, p.env);
+		incq = 1;
+		{
+			rebuild(p);
+		} exception e {
+		"*" =>
+			incq = 0;
+			raise e;
+		}
+		incq = 0;
+		phase("rebuild: containers");
+	}
+}
+
+# each query container's content box, by node; whether there is one
+cqsizes(b: ref Box, sizes: array of (int, int)): int
+{
+	any := 0;
+	if(b.node > 0 && b.node < len sizes && b.st != nil && b.st.cqtype != 0) {
+		sizes[b.node] = (b.w - b.bl - b.br - b.pl - b.pr, b.h - b.bt - b.bb - b.pt - b.pb);
+		any = 1;
+	}
+	for(i := 0; i < len b.kids; i++)
+		any |= cqsizes(b.kids[i], sizes);
+	for(l := b.pos; l != nil; l = tl l)
+		any |= cqsizes(hd l, sizes);
+	for(i = 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++)
+			if(ln.frags[j].kind == Layout->Fatomic && ln.frags[j].box != nil)
+				any |= cqsizes(ln.frags[j].box, sizes);
+	}
+	return any;
 }
 
 # a test's (/env/layoutcheck): the boxes built and laid out again from
@@ -989,6 +1051,7 @@ Pg.stylefor(p: self ref Pg, n: int): ref Style->St
 		} else {
 			if(resheet(p))
 				p.computed = nil;	# (the next styling is of the whole, with these sheets)
+			style->setcontainers(p.cqs);
 			st = style->element(p.doc, p.styles, p.env, n);
 		}
 	} exception e {
@@ -1095,12 +1158,14 @@ pseudoname(k: int): string
 
 styleagain(p: ref Pg)
 {
+	style->setcontainers(p.cqs);
 	if(resheet(p) || p.computed == nil)
 		p.computed = style->compute(p.doc, p.styles, p.env);
 	else {
 		p.computed = style->restyle(p.doc, p.styles, p.env, p.computed);
 		if(stylecheck) {
 			# a test's: the whole computed again, element by element
+			style->setcontainers(p.cqs);
 			c := style->compute(p.doc, p.styles, p.env);
 			bad := 0;
 			first := 0;

@@ -38,6 +38,7 @@ Page: module
 		lazy:	int;
 		view:	int;
 		sent:	list of string;
+		cqs:	array of (int, int);	# its query containers' sizes, by node, as last laid out (Style->setcontainers)
 
 		relayout:	fn(p: self ref Pg, width, height: int);
 		close:	fn(p: self ref Pg);	# done with: what it alone holds (its web fonts) is let go

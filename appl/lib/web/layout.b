@@ -7986,8 +7986,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	h := k.h;
 	if((st.height.kind == Style->Lauto && !truereplaced(k) && !(st.aspect > 0.0) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
 		# (an auto height with a ratio comes from the width: aspect-ratio/abspos-003)
+		# the insets make it definite: laid out again at it, should its
+		# content care (a flex container's items stretch to it:
+		# web.dev's tabs, a nav at inset: 0, were their text's height)
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
-		k.h = h;
+		imposeh(l, k, h, cbw, cbh);
 	} else if(st.height.kind == Style->Lstretch) {
 		avail := cbh;
 		if(!tauto)
@@ -7997,7 +8000,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		if(tauto && bauto)
 			avail -= sy - pr.min.y;
 		h = clamph(k, avail - k.mt - k.mb, cbh);
-		k.h = h;
+		imposeh(l, k, h, cbw, cbh);
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
 		# a definite or intrinsic (fit-content) height: auto margins
 		# auto margins take what the insets and height leave (§10.6.4)

@@ -471,6 +471,7 @@ SYSMODULES=\
 	sdg.m\
 	sdrdsp.m\
 	mermaid.m\
+	mdhtml.m\
 
 DISBIN=$ROOT/dis/tests
 

@@ -41,6 +41,11 @@ include "math.m";
 Huff: adt
 {
 	look:	array of int;	# 9-bit lookahead: length<<8 | value, 0 when the code is longer
+	# an AC table's codes whose run, size and the coefficient's bits all
+	# fit in the 9-bit lookahead (libjpeg-turbo's fast AC): bits taken<<8
+	# | run, 0 when not; the coefficient in facv
+	fac:	array of int;
+	facv:	array of int;
 	maxcode:	array of int;	# by length 1..16: the largest code, -1 when none
 	mincode:	array of int;
 	valptr:	array of int;
@@ -427,7 +432,7 @@ huffman(dc: ref Dec, b: array of byte): string
 			n += int counts[i];
 		if(n > 256 || l + 17 + n > len b)
 			return "ReadJPG: bad Huffman table";
-		h := ref Huff(array[512] of {* => 0}, array[18] of {* => -1}, array[17] of {* => 0}, array[17] of {* => 0}, array[n] of int);
+		h := ref Huff(array[512] of {* => 0}, nil, nil, array[18] of {* => -1}, array[17] of {* => 0}, array[17] of {* => 0}, array[n] of int);
 		for(i = 0; i < n; i++)
 			h.vals[i] = int b[l+17+i];
 		# canonical codes (C.2, F.15)
@@ -452,6 +457,8 @@ huffman(dc: ref Dec, b: array of byte): string
 			code <<= 1;
 		}
 		h.maxcode[17] = 16r7FFFFFFF;	# a sentinel: decode stops at 16 bits
+		if(tc == 1)
+			fastac(h);
 		if(tc == 0)
 			dc.dc[th] = h;
 		else
@@ -459,6 +466,29 @@ huffman(dc: ref Dec, b: array of byte): string
 		l += 17 + n;
 	}
 	return nil;
+}
+
+# the fast AC table: for each 9 bits, a code of length l whose symbol
+# is run r and size s, with l + s <= 9, decodes to the coefficient
+# whole from those bits
+fastac(h: ref Huff)
+{
+	h.fac = array[512] of {* => 0};
+	h.facv = array[512] of {* => 0};
+	for(c := 0; c < 512; c++) {
+		lk := h.look[c];
+		if(lk == 0)
+			continue;
+		l := lk >> 8;
+		rs := lk & 255;
+		r := rs >> 4;
+		sz := rs & 15;
+		if(sz == 0 || l + sz > 9)
+			continue;	# EOB and ZRL, or bits past the lookahead
+		v := (c >> (9 - l - sz)) & ((1 << sz) - 1);
+		h.fac[c] = ((l + sz) << 8) | r;
+		h.facv[c] = extend(v, sz);
+	}
 }
 
 # ---- entropy-coded bits ----
@@ -668,15 +698,50 @@ block(dc: ref Dec, c: ref Comp, bx, by, kind, ss, se, al: int, zz: array of int)
 		c.pred += extend(getbits(dc, t), t);
 		zz[0] = c.pred;
 		ac := dc.ac[c.ta];
+		# the AC coefficients, the bits kept in locals between fills
+		# and most codes taken by the fast table: entropy decoding is
+		# most of a photograph's time (an 800 by 766 one at quality
+		# 90: 55 of its 59 ms, whatever the scale)
+		(fac, facv, look) := (ac.fac, ac.facv, ac.look);
+		(buf, cnt) := (dc.buf, dc.cnt);
 		for(k = 1; k < 64; ) {
-			rs := huff(dc, ac);
+			if(cnt < 16) {
+				(dc.buf, dc.cnt) = (buf, cnt);
+				fill(dc);
+				(buf, cnt) = (dc.buf, dc.cnt);
+			}
+			c9 := (buf >> (cnt - 9)) & 511;
+			if((f := fac[c9]) != 0) {
+				cnt -= f >> 8;
+				k += f & 255;
+				if(k > 63)
+					break;
+				zz[zig[k]] = facv[c9];
+				k++;
+				continue;
+			}
+			rs: int;
+			if((lk := look[c9]) != 0) {
+				cnt -= lk >> 8;
+				rs = lk & 255;
+			} else {
+				(dc.buf, dc.cnt) = (buf, cnt);
+				rs = huff(dc, ac);
+				(buf, cnt) = (dc.buf, dc.cnt);
+			}
 			r := rs >> 4;
-			s := rs & 15;
-			if(s != 0) {
+			sz := rs & 15;
+			if(sz != 0) {
 				k += r;
 				if(k > 63)
 					break;
-				zz[zig[k]] = extend(getbits(dc, s), s);
+				if(cnt < sz) {
+					(dc.buf, dc.cnt) = (buf, cnt);
+					fill(dc);
+					(buf, cnt) = (dc.buf, dc.cnt);
+				}
+				cnt -= sz;
+				zz[zig[k]] = extend((buf >> cnt) & ((1 << sz) - 1), sz);
 				k++;
 			} else {
 				if(r != 15)
@@ -684,6 +749,7 @@ block(dc: ref Dec, c: ref Comp, bx, by, kind, ss, se, al: int, zz: array of int)
 				k += 16;
 			}
 		}
+		(dc.buf, dc.cnt) = (buf, cnt);
 		bs := dc.bs;
 		stride := c.bw * bs;
 		if(bs == 8)

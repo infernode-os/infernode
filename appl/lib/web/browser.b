@@ -494,6 +494,17 @@ fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
 		return;
 	(ok, nil) := sys->stat("/env/pagetime");
 	imgtime = ok >= 0;
+	# the sizes the layout shows them at, where it knows them: each is
+	# decoded no smaller than that rather than the screen's width
+	sizes: list of (string, int, int);
+	{
+		sizes = pg.shown(urls);
+	} exception {
+	"*" =>
+		sizes = nil;
+	}
+	if(imgtime)
+		sys->fprint(sys->fildes(2), "page: images: %d of %d at a size the layout gives\n", len sizes, n);
 	work := chan[n] of string;
 	for(; urls != nil; urls = tl urls)
 		work <-= hd urls;
@@ -502,7 +513,7 @@ fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
 	if(nw > n)
 		nw = n;
 	for(i := 0; i < nw; i++)
-		spawn picfetcher(s, g, work, res);
+		spawn picfetcher(s, g, work, res, sizes);
 	tick := chan of int;
 	stop := chan[1] of int;
 	spawn ticker(tick, stop);
@@ -609,7 +620,7 @@ apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: 
 	return 1;
 }
 
-picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic)
+picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic, sizes: list of (string, int, int))
 {
 	for(;;) alt {
 	u := <-work =>
@@ -622,7 +633,13 @@ picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->
 			t0 := sys->millisec();
 			(data, ctype, err) := page->fetchimage(u);
 			t1 := sys->millisec();
-			pic = page->picture(u, data, ctype, err);
+			(mw, mh) := (0, 0);
+			for(sl := sizes; sl != nil; sl = tl sl)
+				if((hd sl).t0 == u) {
+					(nil, mw, mh) = hd sl;
+					break;
+				}
+			pic = page->picturefor(u, data, ctype, err, mw, mh);
 			if(imgtime)
 				sys->fprint(sys->fildes(2), "page: image %s: fetched %d ms, decoded %d ms (%d bytes, %s)\n",
 					u, t1-t0, sys->millisec()-t1, len data, ctype);

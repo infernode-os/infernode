@@ -560,6 +560,46 @@ want1(p: ref Pg, n: int): list of string
 	return urls;
 }
 
+Pg.shown(p: self ref Pg, urls: list of string): list of (string, int, int)
+{
+	r: list of (string, int, int);
+	plock();
+	{
+		curdoc = p.doc;
+		boxes := replacedboxes(p.root, nil);
+		bgs := bgurls(p);	# a background is tiled at its own size
+		for(; urls != nil; urls = tl urls) {
+			u := hd urls;
+			if(member(u, bgs))
+				continue;
+			(w, h) := (0, 0);
+			unknown := 0;
+			for(l := boxes; l != nil; l = tl l) {
+				b := hd l;
+				if(b.url != u)
+					continue;
+				(bw, bh) := layout->objectbox(b);
+				if(bw <= 1 && bh <= 1) {
+					unknown = 1;	# a box not yet sized: the image says how big
+					continue;
+				}
+				if(bw > w)
+					w = bw;
+				if(bh > h)
+					h = bh;
+			}
+			if(!unknown && (w > 1 || h > 1))
+				r = (u, w, h) :: r;
+		}
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+	return r;
+}
+
 Pg.wantall(p: self ref Pg)
 {
 	p.allimages = 1;
@@ -608,11 +648,16 @@ picof(p: ref Pg, url: string): ref Pic
 # An image fetched, decoded; or why not.
 picture(url: string, data: array of byte, ctype, err: string): ref Pic
 {
+	return picturefor(url, data, ctype, err, 0, 0);
+}
+
+picturefor(url: string, data: array of byte, ctype, err: string, minw, minh: int): ref Pic
+{
 	if(err != nil)
 		return ref Pic(url, nil, nil, err, nil, 0, 0, nil, nil);
 	dlk <-= 1;
 	{
-		pic := picture1(url, data, ctype);
+		pic := picture1(url, data, ctype, minw, minh);
 		<-dlk;
 		return pic;
 	} exception e {
@@ -622,12 +667,21 @@ picture(url: string, data: array of byte, ctype, err: string): ref Pic
 	}
 }
 
-picture1(url: string, data: array of byte, ctype: string): ref Pic
+picture1(url: string, data: array of byte, ctype: string, minw, minh: int): ref Pic
 {
 	sw := 0;
 	if(display != nil)
 		sw = display.image.r.dx();
-	(img, raw, nw, nh) := decodeimage3(data, ctype, url, sw, 0);
+	# no smaller than its box, where the layout gives it one (fitimages
+	# decodes it again should it be shown larger), else the screen's
+	# width: a photograph shown as a thumbnail is decoded at a fraction
+	(dw, dh) := (sw, 0);
+	if(minw > 0 || minh > 0) {
+		(dw, dh) = (minw, minh);
+		if(sw > 0 && dw > sw)
+			dw = sw;
+	}
+	(img, raw, nw, nh) := decodeimage3(data, ctype, url, dw, dh);
 	if(img == nil)
 		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil, 0, 0, nil, nil);
 	if(issvg(data, ctype, url))

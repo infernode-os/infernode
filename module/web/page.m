@@ -45,6 +45,10 @@ Page: module
 		# progressively: the URLs of images it shows and has not got,
 		# then those that have come, laid out with them
 		wanted:	fn(p: self ref Pg): list of string;
+		# the size, in pixels, each of urls is shown at where the layout
+		# already gives its box one (its width and height, or either):
+		# the largest over its boxes; urls whose boxes have none are left out
+		shown:	fn(p: self ref Pg, urls: list of string): list of (string, int, int);
 		install:	fn(p: self ref Pg, pics: list of ref Pic);
 		frames:	fn(p: self ref Pg);	# fetch and draw its <iframe>s
 		# with images click: the URLs of the images shown where node n's
@@ -106,6 +110,9 @@ Page: module
 	# a document already in hand, as if fetched from url with content type ctype
 	parse:	fn(data: array of byte, ctype, url: string, width, height: int): ref Pg;
 	picture:	fn(url: string, data: array of byte, ctype, err: string): ref Pic;
+	# the same, decoded no smaller than minw by minh where the format can
+	# be decoded smaller (a JPEG); 0 by 0 is the screen's width
+	picturefor:	fn(url: string, data: array of byte, ctype, err: string, minw, minh: int): ref Pic;
 	fetch:	fn(url: string): (array of byte, string, string);	# (data, content type, error)
 	# fetch, saying an image will do: image/webp first, as browsers do
 	fetchimage:	fn(url: string): (array of byte, string, string);

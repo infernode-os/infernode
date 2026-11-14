@@ -248,6 +248,37 @@ testAlignChildren(t: ref T)
 		t.error("no box for #tc");
 }
 
+# The size each image is shown at, where the layout already knows it:
+# an <img> with a width, the largest of two boxes of one image, and not
+# an image with no size yet (its own size decides) or a background
+testShown(t: ref T)
+{
+	pg := pageof(t, "<body style='margin:0'>" +
+		"<img src=w.jpg width=120>" +
+		"<img src=two.jpg style='width:40px;height:30px'><img src=two.jpg style='width:90px;height:20px'>" +
+		"<img src=free.jpg>" +
+		"<img src=bg.jpg style='width:50px;height:50px'><div style='width:9px;height:9px;background:url(bg.jpg)'></div>", 800, 600);
+	urls := "file:///tmp/w.jpg" :: "file:///tmp/two.jpg" :: "file:///tmp/free.jpg" :: "file:///tmp/bg.jpg" :: nil;
+	got := "";
+	for(l := pg.shown(urls); l != nil; l = tl l) {
+		(u, w, h) := hd l;
+		got += sys->sprint(" %s=%dx%d", u[len "file:///tmp/":], w, h);
+	}
+	t.log("shown:" + got);
+	t.assert(contains(got, " two.jpg=90x30"), "two boxes: the largest of each: " + got);
+	t.assert(contains(got, " w.jpg=120x"), "a width given: " + got);
+	t.assert(!contains(got, "free.jpg"), "no size yet: left out: " + got);
+	t.assert(!contains(got, "bg.jpg"), "a background: left out: " + got);
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i+len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
 absx(b: ref Box): int
 {
 	x := 0;
@@ -328,6 +359,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SvgVars", testSvgVars);
 	run("FontZero", testFontZero);
 	run("AlignChildren", testAlignChildren);
+	run("Shown", testShown);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

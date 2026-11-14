@@ -9243,8 +9243,22 @@ intrinsic1(b: ref Box): (int, int)
 			# holding a 1536px carousel, was laid out 4017px wide
 			wmn := gap * (len cols - 1) + ex;
 			wmx := wmn;
+			# under a max-content constraint the fr tracks share one
+			# size, the largest of their items' contributions per flex
+			# factor (§12.7.1): Notion's two buttons in 1fr 1fr at
+			# max-content were split their sum, and the wider wrapped
+			fr := 0.0;
+			for(i = 0; i < len cols; i++)
+				if(cols[i].hi.kind == Tfr && cols[i].hi.v > 0.0) {
+					f := cols[i].hi.v;
+					if(f < 1.0)
+						f = 1.0;
+					fr = maxr(fr, real cmx[i] / f);
+				}
 			for(i = 0; i < len cols; i++) {
 				tr := cols[i];
+				if(tr.hi.kind == Tfr && fr * tr.hi.v > real cmx[i])
+					cmx[i] = int math->ceil(fr * tr.hi.v);
 				mn := cmn[i];
 				if(tr.lo.kind == Tfixed)
 					mn = int tr.lo.v;

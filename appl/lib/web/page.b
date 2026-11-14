@@ -28,6 +28,7 @@ include "web/css.m";
 	css: Css;
 include "web/style.m";
 	style: Style;
+	Vars: import style;
 	Styles, Env: import style;
 include "outlinefont.m";
 include "web/fonts.m";
@@ -1877,7 +1878,7 @@ svgmarkup(d: ref Doc, cs: ref Style->Computed, n, w, h: int, st: ref Style->St):
 		"viewBox" =>
 			vb = 1;
 		}
-		s += " " + k + "=\"" + xmlesc(v) + "\"";
+		s += " " + k + "=\"" + xmlesc(attrvars(v, st)) + "\"";
 	}
 	s += " style=\"" + xmlesc(css) + "\"";
 	if(!vb) {
@@ -1929,7 +1930,7 @@ xmlnode(d: ref Doc, cs: ref Style->Computed, n: int, pst: ref Style->St): string
 				css += ";" + (hd a).t1;
 				continue;
 			}
-			s += " " + (hd a).t0 + "=\"" + xmlesc((hd a).t1) + "\"";
+			s += " " + (hd a).t0 + "=\"" + xmlesc(attrvars((hd a).t1, st)) + "\"";
 		}
 		if(css != nil)
 			s += " style=\"" + xmlesc(css[1:]) + "\"";
@@ -1943,6 +1944,75 @@ xmlnode(d: ref Doc, cs: ref Style->Computed, n: int, pst: ref Style->St): string
 		return s + "</" + nd.name + ">";
 	}
 	return "";
+}
+
+# A presentation attribute's var()s, from the custom properties the
+# element has: the drawing is made from markup, where they mean
+# nothing.  Stripe's Sign in button, an svg whose rects are filled
+# var(--hds-color-text-solid) and var(--hds-color-surface-bg-quiet),
+# was drawn black.
+attrvars(v: string, st: ref Style->St): string
+{
+	if(st == nil || st.vars == nil || index(v, "var(") < 0)
+		return v;
+	t := css->tokenize(v);
+	(r, ok) := substvars(t, st.vars, 0);
+	if(!ok)
+		return v;
+	return css->tostring(r);
+}
+
+substvars(t: array of ref Css->Tok, vars: ref Style->Vars, depth: int): (array of ref Css->Tok, int)
+{
+	if(depth > 16)
+		return (nil, 0);	# a cycle
+	r: list of ref Css->Tok;
+	n := 0;
+	for(i := 0; i < len t; i++) {
+		k := t[i];
+		if(k.kind == Css->Kfunction && lower(k.s) == "var") {
+			(sub, ok) := varvalue(k.kids, vars, depth);
+			if(!ok)
+				return (nil, 0);
+			for(j := 0; j < len sub; j++) {
+				r = sub[j] :: r;
+				n++;
+			}
+			continue;
+		}
+		if(k.kids != nil) {
+			(kids, ok) := substvars(k.kids, vars, depth);
+			if(!ok)
+				return (nil, 0);
+			k = ref *k;
+			k.kids = kids;
+		}
+		r = k :: r;
+		n++;
+	}
+	a := array[n] of ref Css->Tok;
+	for(; r != nil; r = tl r)
+		a[--n] = hd r;
+	return (a, 1);
+}
+
+# var(--name [, fallback]): the property's value, else the fallback
+varvalue(args: array of ref Css->Tok, vars: ref Style->Vars, depth: int): (array of ref Css->Tok, int)
+{
+	i := 0;
+	while(i < len args && args[i].kind == Css->Kws)
+		i++;
+	if(i >= len args || args[i].kind != Css->Kident || len args[i].s < 2 || args[i].s[0:2] != "--")
+		return (nil, 0);
+	name := args[i].s;
+	i++;
+	while(i < len args && args[i].kind == Css->Kws)
+		i++;
+	if((v := vars.get(name)) != nil)
+		return substvars(v, vars, depth + 1);
+	if(i < len args && args[i].kind == Css->Kcomma)
+		return substvars(args[i+1:], vars, depth + 1);
+	return (nil, 0);
 }
 
 xmlesc(s: string): string

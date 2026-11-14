@@ -9,7 +9,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display: import draw;
+	Display, Rect, Point, Image: import draw;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -195,6 +195,39 @@ testGridMinContent(t: ref T)
 		t.error("no box for #t");
 }
 
+# the colour at the middle of the picture a box shows, as 16rRRGGBB
+midcolour(b: ref Box): int
+{
+	if(b == nil || b.img == nil)
+		return -1;
+	d := b.img.display;
+	px := d.newimage(Rect((0, 0), (1, 1)), Draw->RGB24, 0, Draw->White);
+	c := b.img.r.min.add(Point(b.img.r.dx()/2, b.img.r.dy()/2));
+	px.draw(px.r, b.img, nil, c);
+	a := array[3] of byte;
+	px.readpixels(px.r, a);
+	return (int a[2] << 16) | (int a[1] << 8) | int a[0];
+}
+
+# An inline svg's presentation attributes take var() from the custom
+# properties of the element they are on, falling back as var() does:
+# the picture is drawn from markup, where they meant nothing, and
+# Stripe's customer logos (fill="var(--customerLogoColor, #003478)")
+# and Sign in button were black
+testSvgVars(t: ref T)
+{
+	pg := pageof(t, "<style>body{margin:0;--c:#00ff00} .k{--d:#ff0000}</style>" +
+		"<svg id=v width=20 height=20><rect width=20 height=20 fill='var(--c)'/></svg>" +
+		"<svg id=f width=20 height=20><rect width=20 height=20 fill='var(--none, #0000ff)'/></svg>" +
+		"<svg id=n class=k width=20 height=20><rect width=20 height=20 fill='var(--none, var(--d))'/></svg>", 800, 600);
+	for(l := ("v", 16r00FF00, "var(--c)") :: ("f", 16r0000FF, "a fallback") :: ("n", 16rFF0000, "a fallback that is a var()") :: nil; l != nil; l = tl l) {
+		(id, want, what) := hd l;
+		b := boxof(pg.doc, pg.root, id);
+		got := midcolour(b);
+		t.assert(got == want, sys->sprint("%s: %.6x, want %.6x", what, got, want));
+	}
+}
+
 # the first box of the element with id
 boxof(d: ref Doc, root: ref Box, id: string): ref Box
 {
@@ -231,6 +264,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Scale", testScale);
 	run("SelectArrow", testSelectArrow);
 	run("GridMinContent", testGridMinContent);
+	run("SvgVars", testSvgVars);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

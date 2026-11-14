@@ -10494,6 +10494,7 @@ Ln: adt {
 	indent:	real;		# text-indent (the first line only): content starts this far past the left edge
 	floats:	list of ref Box;	# floats met mid-line, placed when the line ends
 	below:	list of ref Abs;	# block-level absolutes met mid-line: their static position is under it
+	brk:	int;		# ended by a break: a <br>, or a preserved newline (a textarea's, a pre's)
 };
 
 # the inline formatting state of one block container
@@ -10675,7 +10676,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	para := 0;
 	joinruns(items);
 	(items, para) = bidiitems(b, items);
-	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil, nil);
+	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil, nil, 0);
 	linestart(f, ln);
 	first := 1;
 	opened: list of ref Box;	# inline boxes open, outermost last
@@ -10864,6 +10865,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 		Ibreak =>
 			ln.content = 1;
+			ln.brk = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;
 			first = 0;
 			ln = newline(f, ln, opened);
@@ -11243,7 +11245,7 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
-	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil, nil);
+	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil, nil, 0);
 	linestart(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;
@@ -11421,8 +11423,14 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	}
 	# the line height calculation quirk: in quirks mode a line with no
 	# text takes no strut, nor do the edgeless inline boxes on it, so a
-	# cell holding only an image is the image's height (Quirks §3.3)
-	quirky := curdoc != nil && curdoc.quirks && !linetext(frags);
+	# cell holding only an image is the image's height (Quirks §3.3).
+	# A line a break ends is not one: a <br> takes the line's height in
+	# browsers in quirks mode too, and a preserved newline is preserved
+	# white space, so <br><br> and the empty lines of a textarea or a
+	# pre keep their height (a wiki's edit form, with no doctype, showed
+	# its paragraphs run together).  A block's last line, with no break,
+	# still has the quirk.
+	quirky := curdoc != nil && curdoc.quirks && !linetext(frags) && !ln.brk;
 	if(quirky) {
 		above = 0.0;
 		below = 0.0;

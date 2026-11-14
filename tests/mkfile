@@ -25,6 +25,7 @@ TARG=\
 	layers_test.dis\
 	mermaid_flow_test.dis\
 	visnet_run.dis\
+	charonsite.dis\
 	feedrate.dis\
 	trtcheck.dis\
 	bayer_test.dis\

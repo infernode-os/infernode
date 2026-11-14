@@ -233,6 +233,14 @@ in the site, writes the page to
 and redirects (303) to the page; the form's own
 .B base
 field is not followed.
+An edit of a version that is no longer the page's current one (another
+writer's edit came first) is refused by
+.IR wikifs ,
+kept in the page's history, and redirected to the page's
+.BR werror.html ,
+as Plan 9's
+.B wikipost
+does.
 Either is refused (403) when the request comes from another site: an
 .B Origin
 that is not this server's, or a
@@ -563,10 +571,22 @@ new EventSource("/gps/event").onmessage =
 .PP
 A wiki, browsed at
 .B /wiki/
-and edited from its pages:
+and edited from its pages.
+.I Wikifs
+serves the pages; the store's
+.B web/
+holds what is beside them, as Plan 9's web tree held it: the
+.B index.html
+that sends
+.B /wiki/
+on to the front page (page 1) and the
+.B create.html
+form that makes a new page.
+Bound before the mount, its names cannot be taken by a page's title:
 .IP
 .EX
 mount {wikifs -d /services/wiki} /services/www/wiki
+bind -b /services/wiki/web /services/www/wiki
 svc/httpd/httpd -w /wiki /services/www
 .EE
 .PP

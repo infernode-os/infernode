@@ -174,6 +174,7 @@ init(nil: ref Draw->Context, args: list of string)
 	creqs := chan of ref Creq;
 	spawn core(navops, creqs);
 	(tc, srv) := Styxserver.new(sys->fildes(0), Navigator.new(navops), big 0);
+	srv.msize = 65536 + Styx->IOHDRSZ;	# a page in as few reads as it can
 	serve(tc, srv, creqs);
 }
 
@@ -194,6 +195,7 @@ serve(tc: chan of ref Tmsg, srv: ref Styxserver, creqs: chan of ref Creq)
 	creply := chan of (ref Sys->Dir, array of byte, string, string);
 Serve:
 	while((gm := <-tc) != nil){
+		msgno++;	# stats are taken afresh for each message
 		pick m := gm {
 		Readerror =>
 			break Serve;
@@ -429,7 +431,7 @@ strhash(s: string): int
 # What the site path p (no leading /; nil the root) is, or nil
 resolve(p: string): ref Ent
 {
-	(ok, d) := sys->stat(sitedir);
+	(ok, d) := cstat(sitedir);
 	if(ok < 0)
 		return nil;
 	e := ref Ent(Kdir, sitedir, ref d, nil);
@@ -454,11 +456,11 @@ child(e: ref Ent, pp, name: string): ref Ent
 		also: string;
 		if(e.also != nil)
 			also = e.also + "/" + name;
-		(ok, d) := sys->stat(full);
+		(ok, d) := cstat(full);
 		if(ok < 0){
 			if(also == nil)
 				return nil;
-			(ok, d) = sys->stat(also);
+			(ok, d) = cstat(also);
 			if(ok < 0)
 				return nil;
 			(full, also) = (also, nil);
@@ -472,7 +474,7 @@ child(e: ref Ent, pp, name: string): ref Ent
 	Kwerc =>
 		if(name != "pub")
 			return nil;
-		(ok, d) := sys->stat(full);
+		(ok, d) := cstat(full);
 		if(ok < 0 || (d.mode & Sys->DMDIR) == 0)
 			return nil;
 		return ref Ent(Kraw, full, ref d, nil);
@@ -481,7 +483,7 @@ child(e: ref Ent, pp, name: string): ref Ent
 		wpub: string;
 		if(pp == nil && name == "pub" && wercroot != nil && isdir(wercroot + "/pub"))
 			wpub = wercroot + "/pub";
-		(ok, d) := sys->stat(full);
+		(ok, d) := cstat(full);
 		if(ok >= 0 && (d.mode & Sys->DMDIR)){
 			if(name == "_werc"){
 				if(isdir(full + "/pub"))
@@ -495,7 +497,7 @@ child(e: ref Ent, pp, name: string): ref Ent
 		if(name == "index.html")
 			return ref Ent(Kindex, e.src, nil, nil);
 		if(wpub != nil){
-			(nil, wd) := sys->stat(wpub);
+			(nil, wd) := cstat(wpub);
 			return ref Ent(Kraw, wpub, ref wd, nil);
 		}
 		if(name != "index" && (src := pagesrc(e.src + "/" + name)) != nil)
@@ -510,7 +512,7 @@ child(e: ref Ent, pp, name: string): ref Ent
 pagesrc(base: string): string
 {
 	for(l := list of {".md", ".html", ".txt"}; l != nil; l = tl l){
-		(ok, d) := sys->stat(base + hd l);
+		(ok, d) := cstat(base + hd l);
 		if(ok >= 0 && (d.mode & Sys->DMDIR) == 0)
 			return base + hd l;
 	}
@@ -624,7 +626,7 @@ current(deps: list of (string, string)): int
 
 statsig(name: string): string
 {
-	(ok, d) := sys->stat(name);
+	(ok, d) := cstat(name);
 	if(ok < 0)
 		return "-";
 	return sys->sprint("%bux %ud %ud %bd", d.qid.path, d.qid.vers, d.mtime, d.length);
@@ -652,7 +654,7 @@ Mk.probe(mk: self ref Mk, name: string): (int, Sys->Dir)
 	for(l := mk.deps; l != nil; l = tl l)
 		if((hd l).t0 == name)
 			break;
-	(ok, d) := sys->stat(name);
+	(ok, d) := cstat(name);
 	if(l == nil){
 		sig := "-";
 		if(ok >= 0){
@@ -1270,9 +1272,30 @@ readdirnames(name: string): (array of ref Sys->Dir, int)
 	return (a, len a);
 }
 
+# The stat of a host name, taken once in each 9P message: styxservers
+# walks a name at a time, and each is resolved from the site's root, its
+# pages checked against what they were made from, so one Twalk of a
+# page three levels down took the root's stat six times and the page's
+# sources each time it was named.  Each message sees the site as it is
+# when the message arrives: an edit is seen at the next.
+msgno := 0;
+SCACHE: con 256;
+scache := array[SCACHE] of (string, int, int, Sys->Dir);
+
+cstat(name: string): (int, Sys->Dir)
+{
+	h := strhash(name) % SCACHE;
+	(n, m, ok, d) := scache[h];
+	if(m == msgno && n == name)
+		return (ok, d);
+	(ok, d) = sys->stat(name);
+	scache[h] = (name, msgno, ok, d);
+	return (ok, d);
+}
+
 isdir(name: string): int
 {
-	(ok, d) := sys->stat(name);
+	(ok, d) := cstat(name);
 	return ok >= 0 && (d.mode & Sys->DMDIR);
 }
 

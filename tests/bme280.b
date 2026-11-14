@@ -78,9 +78,9 @@ init(nil: ref Draw->Context, args: list of string)
 	t2 := real s16(cal, 2);
 	t3 := real s16(cal, 4);
 	p1 := real u16(cal, 6);
-	p := array[9] of real;
-	for(i := 1; i < 9; i++)
-		p[i] = real s16(cal, 6+2*i);
+	p := array[10] of real;	# P2..P9 at their own numbers
+	for(i := 2; i <= 9; i++)
+		p[i] = real s16(cal, 6+2*(i-1));	# P2 at 0x8E ... P9 at 0x9E
 	h1, h2, h3, h4, h5, h6: real;
 	if(hum){
 		h1 = real int cal[25];

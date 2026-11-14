@@ -1,0 +1,111 @@
+.TH MDHTML 2
+.SH NAME
+mdhtml \- Markdown to HTML
+.SH SYNOPSIS
+.EX
+include "mdhtml.m";
+mdhtml := load Mdhtml Mdhtml->PATH;
+
+init:   fn();
+html:   fn(text: string): string;
+escape: fn(s: string): string;
+.EE
+.SH DESCRIPTION
+.I Html
+returns the Markdown document
+.I text
+as HTML, by the rules of Markdown.pl (John Gruber's, which werc
+formats its pages with), for a page a browser shows.
+.I Init
+must be called first.
+.PP
+Blocks are paragraphs; headings, by
+.B #
+to
+.B ######
+or a line of
+.B =
+or
+.B -
+under their text; rules
+.RB ( --- ,
+.BR "* * *" );
+block quotes, nested and with lazy lines; lists by
+.BR * ,
+.BR + ,
+.B -
+or a number and
+.BR . ,
+nested by indentation, tight (items' text bare) or loose (in
+paragraphs) as blank lines put them, an ordered list keeping a first
+number other than 1; code indented four spaces, or between fences of
+.B ```
+or
+.B ~~~
+(the first word after the opening fence its
+.BR language- class);
+and raw HTML, a line at the left margin opening a block-level element,
+taken as it is to the next blank line (and
+.BR <pre> ,
+.BR <script> ,
+.B <style>
+and
+.B <textarea>
+to their end tag, a comment to its end).
+Reference definitions,
+\fB[\fIid\fB]: \fIurl\fR and, if it has one, \fB"\fItitle\fB"\fR
+on a line of their own, are taken out wherever they are.
+.PP
+Inline: code spans of any number of backticks; emphasis and strong
+emphasis by
+.B *
+and
+.B _
+(an
+.B _
+inside a word is a letter);
+.B ~~
+for deleted text; links and images, inline
+\fB[\fItext\fB](\fIurl\fB "\fItitle\fB")\fR
+or by reference
+.RB ( [\fItext\fP][\fIid\fP] ,
+.BR [\fItext\fP][] ,
+.BR [\fItext\fP] );
+autolinks
+.RB ( <http://...> ,
+.BR <mailto:...> ,
+.BR <name@host> );
+raw inline HTML and entities passed through; backslash escapes; a
+line ending in two blanks a hard break.
+Other
+.BR & ,
+.B <
+and
+.B >
+are escaped.
+What is written as HTML is passed through unchanged: a document is
+trusted as its author's, as it is in werc.
+Do not give
+.I html
+text from someone who must not write HTML into the page.
+.PP
+.I Escape
+returns
+.I s
+with \fB&\fP, \fB<\fP, \fB>\fP and \fB"\fP
+as entities, for text or an attribute's value.
+.PP
+.IR Rlayout 's
+.B parsemd
+.RB ( module/rlayout.m )
+parses Markdown to draw it, in Xenith's Render, and drops what a page
+needs (images, raw HTML, list nesting, references); this is the one
+that writes it out as HTML.
+.SH SOURCE
+.B /appl/lib/mdhtml.b
+.SH SEE ALSO
+.IR wercfs (4)
+.SH BUGS
+It is Markdown.pl's dialect, not CommonMark: tables are paragraphs,
+headings have no ids, and emphasis is matched by a simpler rule than
+CommonMark's.

@@ -423,5 +423,6 @@ kbdecode kbdecode
 osklayout kbdecode
 softkbd softkbd
 layers layers
+mdhtml mdhtml
 tensor tensor
 letterbox tensor

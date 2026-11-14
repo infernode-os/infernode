@@ -2659,7 +2659,13 @@ extractrsakey(certs: list of array of byte): (ref RSAKey, string)
 
 	pick rpk := pk {
 	RSA =>
-		return (rpk.pk, nil);
+		# a peer's key may be made to cost: one of 16384 bits with a
+		# huge exponent takes seconds a signature
+		k := rpk.pk;
+		if(k == nil || k.modulus == nil || k.exponent == nil ||
+		   k.modulus.bits() > 8192 || k.exponent.bits() > 32)
+			return (nil, "tls: RSA key past 8192 bits or with an exponent past 32 bits");
+		return (k, nil);
 	* =>
 		return (nil, "tls: not an RSA public key");
 	}

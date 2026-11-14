@@ -264,7 +264,8 @@ blocks), the TLS handshake asks every client for a certificate those
 CAs issued, naming them, so a browser offers only those.
 A client that gives one must prove its key and its chain must end at
 one of the CAs: signatures, validity, basicConstraints, keyUsage and
-path length checked, at most 64 signatures in the search for a path;
+path length checked, at most 64 signatures in the search for a path,
+no RSA key past 8192 bits or with an exponent past 32 bits;
 the leaf's extended key usage, if it has one, must name client
 authentication (a server's certificate from the same CA is refused),
 and a CRL from the file must not list it (a CRL past its next update
@@ -298,6 +299,9 @@ Ten wrong passwords from one network (an IPv4 address, an IPv6 /64)
 in ten minutes, or fifty for one user from anywhere, and further
 attempts from it, or for them, are refused (429) for the rest of the
 ten minutes, except a password already found right.
+So anyone can keep a user who is not already in out, by guessing
+wrong for that user from five networks; the lockout is against
+guessing, not for keeping people out.
 .PP
 .BI -x " rules"
 says which paths need which.
@@ -325,18 +329,23 @@ or
 it meets any one of its rule's terms.
 A request's rule is the deepest whose path is its path or a directory
 of it, a rule for its method before one for both.
-Paths are compared in lower case, and a rule for a path that existed
-when
+Paths are compared in lower case.
+A protecting rule for a path that existed when
 .I httpd
-started matches by that file's identity too (its qid and device, by a
-stat of each directory of the request's path): a host that takes
+started applies by that file's identity as well (its qid and device,
+by a stat of each directory of the request's path): a host that takes
 .B /ADMIN
-or
-.B /ADMINI~1
+or a folded
+.B /adm\(*in
 for
 .B /admin
-(macOS, Windows), or folds a name's other letters, opens the same
-directory and meets the same rule.
+(macOS) opens the same directory and must meet the same rule.
+Identity only adds a rule to meet, never takes one away, so an
+identity shared by accident (an inode used again after a delete) can
+protect too much but not too little.
+On a Windows host, whose emulator makes a file's identity from its
+name, a path with a byte past ASCII is refused (400) while anything is
+protected.
 A path no rule names is refused (403).
 Every file a request may be answered from is checked: a
 .IB name .gz

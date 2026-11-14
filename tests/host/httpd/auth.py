@@ -219,7 +219,13 @@ def review():
     # or keeps 8.3 names makes /ADMIN or /ADMINI~1 of it
     check(st(R, "/alias/x.txt", user="alice:opensesame") == 403, "the protected directory under another name: its rule, by identity")
     check(st(R, "/alias/x.txt", cert="alice") == 200, "and served under it with the certificate")
-    for p in ("/ADMINI~1/x.txt", "/con", "/NUL.txt", "/public/com1", "/lpt9.log", "/CONOUT$"):
+    check(st(R, "/pub/dl/f.txt") == 200, "/pub/dl is open")
+    check(st(R, "/admin/dl/f.txt", user="alice:opensesame") == 403, "and the same directory inside /admin is /admin's: identity adds rules, never takes one away")
+    r = request(R, "/admin/x.txt", cert="bigexp")
+    time.sleep(0.3)
+    check(r.err is not None and "exponent past 32 bits" in open(W + "/emu.log").read(),
+          "a certificate whose RSA exponent is past 32 bits refused, as that (each check would cost)", str(r.status))
+    for p in ("/ADMINI~1/x.txt", "/con", "/NUL.txt", "/public/com1", "/lpt9.log", "/CONOUT$", "/com%C2%B9", "/LPT%C2%B3.txt"):
         got = st(R, p, raw=("GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" % p).encode())
         check(got == 400, "refused: %s" % p, str(got))
     # what a request is served from: a .gz copy, an index page

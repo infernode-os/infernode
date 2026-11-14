@@ -2344,6 +2344,11 @@ verify_issued(child: ref Signed, issuer: ref Certificate): (int, string)
 	(err, nil, pk) := issuer.subject_pkinfo.getPublicKey();
 	if(err != "")
 		return (0, "issuer key: " + err);
+	pick k := pk {
+	RSA =>
+		if((e := rsasane(k.pk)) != nil)
+			return (0, "issuer key: " + e);
+	}
 	algid := asn1->oid_lookup(child.alg.oid, pkcs->objIdTab);
 	pick key := pk {
 	RSA =>
@@ -4961,4 +4966,18 @@ parse_attr(nil: ref Elem): (int, ref Attribute)
 pack_attr(nil: ref Attribute): (int, ref Elem)
 {
 	return (0, nil);
+}
+
+# An RSA key a signature is worth checking with: a chain's keys may be
+# anyone's, and one of 16384 bits with a 4096-bit exponent costs
+# seconds a signature
+rsasane(k: ref PKCS->RSAKey): string
+{
+	if(k == nil || k.modulus == nil || k.exponent == nil)
+		return "RSA key missing";
+	if(k.modulus.bits() > 8192)
+		return "RSA key past 8192 bits";
+	if(k.exponent.bits() > 32)
+		return "RSA exponent past 32 bits";
+	return nil;
 }

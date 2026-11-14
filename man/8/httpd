@@ -17,6 +17,8 @@ httpd \- web server for a name space
 ]... [
 .BI -w " wikibase"
 ] [
+.BI -T " type"
+] [
 .BI -r " httpsport"
 ] [
 .BI -S " secs"
@@ -137,7 +139,9 @@ and
 .B HEAD
 send a file with its
 .BR Content-Type
-(by its name's extension),
+(by its name's extension; for a name with none,
+.BR -T 's
+type),
 .BR ETag
 (from its qid),
 .BR Last-Modified ,
@@ -493,6 +497,14 @@ in the site.
 Take wikifs's edit form at
 .BR /magic/wikipost .
 .TP
+.BI -T " type"
+The type of a file whose name has no extension (default
+.BR application/octet-stream ).
+A site whose pages are named so, as
+.IR wercfs (4)
+names them, is served with
+.BR "-T text/html" .
+.TP
 .BI -r " httpsport"
 Answer every request with a redirect (301) to the same place on
 .B https
@@ -558,6 +570,14 @@ mount {wikifs -d /services/wiki} /services/www/wiki
 svc/httpd/httpd -w /wiki /services/www
 .EE
 .PP
+A werc site, its pages made by
+.IR wercfs (4):
+.IP
+.EX
+mount {wercfs /services/werc/sites/example.org} /services/www
+svc/httpd/httpd -T text/html /services/www
+.EE
+.PP
 A certificate and key OpenSSL makes for it:
 .IP
 .EX
@@ -593,6 +613,7 @@ svc/httpd/httpd -c /keys/web.pem -k /keys/web.key -A /keys/clientcas \e
 .br
 .B /appl/lib/crypt/tls.b
 .SH SEE ALSO
+.IR wercfs (4),
 .IR sys-pctl (2),
 .IR fs (3),
 .IR listen (1)

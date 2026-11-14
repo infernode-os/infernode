@@ -1,0 +1,346 @@
+.TH WERCFS 4
+.SH NAME
+wercfs \- a werc site as the files a web server sends
+.SH SYNOPSIS
+.B wercfs
+[
+.BI -w " wercroot"
+]
+.I sitedir
+.PP
+.B mount {wercfs
+.IB sitedir }
+.I dir
+.SH DESCRIPTION
+.I Wercfs
+serves a site laid out for werc
+(the rc web framework of
+.BR werc.cat-v.org )
+as its pages, made: a page's Markdown, HTML or text in werc's
+master template, with werc's menu, title and included files.
+It is meant to be mounted where
+.IR httpd (8)
+serves, which runs no programs (there is no CGI) and sends files;
+werc is rc run as CGI, and here it is a file server instead.
+.PP
+.I Sitedir
+is the site's directory, as werc has it under
+.BI sites/ domain\fR.
+.I Wercroot
+is werc's own directory, holding
+.B lib/
+(werc's
+.B top_bar.inc
+and
+.BR footer.inc ),
+.B pub/
+(its style sheet) and
+.B sites/
+(where
+.B $masterSite
+is looked for).
+Without
+.BR -w ,
+it is the directory above
+.IR sitedir 's
+when that is named
+.B sites
+and holds a
+.BR lib/ ;
+otherwise there is none, and only the site's own files are used.
+.PP
+What is served is read-only, and made when it is looked at: an edit
+to the site is seen at the next request.
+.SH FILES SERVED
+In the site's own terms, from its root:
+.TF /_werc/pub/...
+.TP
+.B /
+The site's directory.
+Its directories are directories here, and its files are here as they are
+.RB ( /foo.md ,
+.BR /img.png ).
+.TP
+.B /index.html
+A directory's page:
+.BR index.md ,
+.B index.html
+or
+.B index.txt
+(the first there is) made as a page is;
+with none, werc's listing of the directory in the template, between its
+.B _header.md
+and
+.BR _footer.md .
+.I Httpd
+sends it for the directory's
+.BR / .
+.TP
+.B /foo
+A page, from
+.BR foo.md ,
+.B foo.html
+or
+.B foo.txt
+(the first there is), as werc's
+.B setup_handlers
+chooses.
+Its name has no extension, as werc's URLs have none: serve the site with
+.I httpd
+.B "-T text/html"
+for pages to be sent as HTML.
+.TP
+.B /pub/...
+The site's
+.BR pub/ ,
+and for a name it does not have,
+.IR wercroot 's
+(werc's
+.BR pub/style/style.css ,
+which its template links).
+.TP
+.B /_werc/pub/...
+The site's own
+.BR _werc/pub/ :
+its
+.BR style.css ,
+linked when there is one.
+.PD
+.PP
+Nothing else of a
+.B _werc
+directory is served: its
+.B config
+and
+.B lib/
+are the site's source, not its pages.
+Nor is a name beginning with a dot.
+A directory and a page of one name are the directory, as in werc;
+a page hides a file of its own name.
+.PP
+.I Wercfs
+reads the site as
+.I httpd
+does: once started it runs in a name space of its own with
+.B NODEVS
+(see
+.IR sys-pctl (2)),
+so in the hosted emulator no host symbolic link is followed
+.RI ( fs (3)),
+and one in the site cannot bring a page, an included file or a file
+served as it is from outside it.
+.PP
+A page is a file of known length, with the time of the newest thing it
+was made from and a qid version that is a hash of what it holds, so
+.I httpd
+gives it a
+.BR Content-Length ,
+an
+.B ETag
+that changes when the page does and not otherwise, ranges and
+.BR 304 s,
+as for any file.
+It is kept once made, with the stat of each thing it was made from (its
+source, each
+.B _werc/config
+down its path, the included files, the directories its menu lists),
+and made again when one has changed.
+.SH PAGES
+A page is made as werc 1.5 makes it
+.RB ( bin/werc.rc ,
+.BR bin/corehandlers.rc ,
+.BR lib/headers.tpl ,
+.BR lib/default_master.tpl ),
+with its elements, ids and classes, so werc's style sheets apply unchanged:
+.TP
+The body
+A
+.B .md
+through
+.IR mdhtml (2)
+(Markdown as werc's Markdown.pl formats it: raw HTML passed through);
+a
+.BR .html 's
+contents between
+.B <body ...>
+and
+.B </body>
+(or all of it, with none), as werc's
+.BR html_handler ;
+a
+.B .txt
+escaped in
+.BR <pre> .
+.TP
+The title
+A
+.BR .md 's
+first line when the second is all
+.BR = ,
+a
+.BR .html 's
+.BR <title> ;
+otherwise the path's elements joined by
+.LR " - " ,
+with
+.B _
+and a
+.B -
+between letters as blanks
+.RB ( /docs/setup-guide
+is
+.LR "docs - setup guide" );
+at the root,
+.B $siteTitle
+and
+.BR $siteSubTitle .
+.TP
+The menu
+werc's
+.BR nav_tree :
+the root's pages and directories, and each directory's on the path to the
+page, nested, sorted, the extension dropped,
+.B _
+and
+.B -
+shown as blanks, those on the path marked
+.B class="thisPage"
+and
+.BR &raquo; ;
+names beginning with
+.B _
+or
+.BR . ,
+the
+.B index
+pages,
+.BR robots.txt ,
+.B sitemap.txt
+and names matching
+.B conf_hide_paths
+left out (they are still served),
+headed by
+.B $sideBarNavTitle
+when it is set.
+.TP
+Included files
+.BR top_bar.inc ,
+.B footer.inc
+and
+.BR headers.inc ,
+each the first found of the site's
+.BR _werc/lib/ ,
+.BR $masterSite 's
+.RI ( wercroot /sites/ $masterSite /_werc/lib/ )
+and
+.IR wercroot /lib/ ,
+put in as they are, as werc's
+.B cat
+puts them.
+.TP
+The head
+.BR $meta_description ,
+.B $meta_keywords
+and
+.B $extraHeaders
+as werc's
+.B headers.tpl
+puts them.
+.SH CONFIGURATION
+A site's
+.B _werc/config
+files are read as werc sources them: the root's, then each directory's
+on the path to the page, a later one overriding an earlier.
+They are rc, and
+.I wercfs
+does not run rc; it takes, of them, plain assignments
+.RB ( name=word ,
+.BR name='quoted' ,
+.BR "name=(a list)" ,
+quotes and
+.B ''
+as rc has them, a
+.B #
+comment)
+and
+.B conf_hide_paths
+.IR pattern ...
+(regular expressions, from the directory of the file naming them, as in
+werc).
+Every other line is not taken: functions
+.RB ( conf_enable_\fIapp\fP ,
+.BR conf_perm_redirect ,
+.BR ll_add ),
+and anything inside braces, whose assignments may not run (an
+.B if
+or a
+.BR switch ).
+Each is reported once on standard error, naming the file and line:
+.IP
+.EX
+wercfs: not taken: .../_werc/config:4: conf_enable_comments
+.EE
+.PP
+Werc's variables used are
+.BR siteTitle ,
+.BR siteSubTitle ,
+.BR masterSite ,
+.BR meta_description ,
+.BR meta_keywords ,
+.B extraHeaders
+and
+.BR sideBarNavTitle .
+.SH EXAMPLES
+werc's own tree, its site
+.B example.org
+served on port 80:
+.IP
+.EX
+mount {wercfs /services/werc/sites/example.org} /services/www
+svc/httpd/httpd -T text/html /services/www &
+.EE
+.PP
+A site directory alone, werc's style sheet beside it in its
+.BR pub/ :
+.IP
+.EX
+mount {wercfs /usr/me/site} /services/www
+svc/httpd/httpd -T text/html -c web.pem -k web.key /services/www &
+.EE
+.SH SOURCE
+.B /appl/cmd/wercfs.b
+.br
+.B /appl/lib/mdhtml.b
+.SH SEE ALSO
+.IR mdhtml (2),
+.IR sys-pctl (2),
+.IR fs (3),
+.IR httpd (8)
+.SH BUGS
+Only werc's pages, menu and templates are served.
+Werc's apps (blagh's blog, bridge's comments, the dirdir wiki), its
+users and logins, the sitemap, and redirects
+.RB ( conf_perm_redirect ,
+.B /index
+to
+.BR / )
+are not; the apps that take a
+.B POST
+would need a file to write to, and
+.I httpd
+has no authentication.
+A
+.B .tpl
+file and a site's own
+.B default_master.tpl
+are rc, and are not run: the template is werc's default.
+.br
+werc's 404 page is not used:
+.I httpd
+answers with its own.
+.br
+One site to an instance; virtual hosts are one
+.I wercfs
+and one
+.I httpd
+each.

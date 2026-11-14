@@ -201,11 +201,13 @@ TARG=\
 	layers.dis\
 	visnet.dis\
 	visrec.dis\
+	mdhtml.dis\
 
 
 MODULES=
 SYSMODULES=\
 	bidi.m\
+	mdhtml.m\
 	jpeg.m\
 	parread.m\
 	layers.m\

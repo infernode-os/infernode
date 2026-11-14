@@ -1120,7 +1120,7 @@ flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
 # end an inline run: wrapped in an anonymous block, unless it is only
 # collapsible white space (and out-of-flow boxes, which stand alone).
 # In a flex or grid container a run of white space is no item even
-# preserved (Flexbox ง4, Grid ง6.1): a shiki code block is a grid of
+# preserved (Flexbox ยง4, Grid ยง6.1): a shiki code block is a grid of
 # lines with a newline between each, and every other row was empty
 flushrun(box: ref Box, run, r: list of ref Box): list of ref Box
 {
@@ -3350,6 +3350,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i = 0; i < len la; i++) {
 		ln := la[i];
 		avail := mainavail;
+		clamped := 0;	# a min-height or max-height gave the column its height
 		if(avail < 0) {
 			# indefinite (a column with auto height): sizes are hypothetical
 			avail = 0;
@@ -3357,7 +3358,9 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				avail += ir(ln.items[j].hyp) + ln.items[j].mm;
 			avail += gapmain * nz(len ln.items - 1);
 			# then the container's min-height and max-height (ยง9.2 step 4)
-			avail = clamph(b, avail + vextra(b), cbh) - vextra(b);
+			ca := clamph(b, avail + vextra(b), cbh) - vextra(b);
+			clamped = !row && !wrap && ca != avail;
+			avail = ca;
 		}
 		resolveflex(ln.items, real (avail - gapmain * nz(len ln.items - 1)));
 		cross := 0;
@@ -3387,7 +3390,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 					(ks.basis.kind == Style->Lpx || ks.basis.kind == Style->Lauto && ks.height.kind == Style->Lpx);
 				outer := imposed;
 				outerh := imposedh;
-				if(ch >= 0 || fixedmain) {
+				# (a column its min-height or max-height sizes: its items are as
+				# tall as they flex to, for their own content too, as Chrome has
+				# it; Vercel's hero, flex-1 columns in a column of min-height:
+				# min(100svh - ..., 1100px), kept their content's height)
+				if(ch >= 0 || fixedmain || clamped) {
 					imposed = k;
 					imposedh = m;
 				}
@@ -3811,7 +3818,7 @@ tsz(t: ref Tok): (int, Tsz)
 		"calc" or "min" or "max" or "clamp" =>
 			# px and percentages both (style made the rest px):
 			# against the grid's width, or auto where it is not
-			# known yet (Grid 2 ง7.2.1)
+			# known yet (Grid 2 ยง7.2.1)
 			(ok, l) := style->tracklen(t);
 			if(!ok)
 				return (0, Tsz(Tauto, 0.0));
@@ -9245,7 +9252,7 @@ intrinsic1(b: ref Box): (int, int)
 			wmx := wmn;
 			# under a max-content constraint the fr tracks share one
 			# size, the largest of their items' contributions per flex
-			# factor (ง12.7.1): Notion's two buttons in 1fr 1fr at
+			# factor (ยง12.7.1): Notion's two buttons in 1fr 1fr at
 			# max-content were split their sum, and the wider wrapped
 			fr := 0.0;
 			for(i = 0; i < len cols; i++)

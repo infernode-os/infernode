@@ -48,6 +48,8 @@
 | [draw-geometry.md](draw-geometry.md) | Anti-aliased geometry in the draw device |
 | [scene-design.md](scene-design.md) | Scene: a general 2-D situation display (`lib/scene`, `scenefs`, `wm/scene`) |
 | [H264-9P-BRIDGE.md](H264-9P-BRIDGE.md) | H.264-over-9P video bridge (`vid9p`) |
+| [xenith-documents.md](xenith-documents.md) | Xenith documents: one model for every rendered file (PDF, Markdown, HTML, images) |
+| [DEVICE-LETTERS.md](DEVICE-LETTERS.md) | Kernel device letters (`#c`, `#I`, …): which device has which, and the rule that keeps two from sharing one |
 | [INFR-119-design.md](INFR-119-design.md) | Design proposal: split the mobile zones into wm windows and a generic pager |
 
 ## For Developers
@@ -57,6 +59,8 @@
 | [CLAUDE.md](../CLAUDE.md) | Development guide for Claude Code (build, test, project structure) |
 | [TUTORIAL-9P-SERVICE.md](TUTORIAL-9P-SERVICE.md) | **Worked tutorial** — design, build, test, and document a 9P service (`countfs`); every artifact ships in-tree |
 | [TESTING.md](TESTING.md) | Testing guide (unit tests, integration tests, CI) |
+| [NATIVE-FUZZING.md](NATIVE-FUZZING.md) | Fuzzing the native kernel (`tools/nativefuzz`) under QEMU and on a board, what it found and what is open |
+| [SOAK.md](SOAK.md) | One soak runner for every Raspberry Pi (`tests/soak/`): design and how to run it |
 | [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) | Performance specifications and benchmarks |
 | [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results (v1, v2, v3 suites) |
 | [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md) | Running, debugging and resetting InferNode from the command line |
@@ -73,6 +77,8 @@
 | [FUZZ-HARDENING-SECURITY-REVIEW.md](FUZZ-HARDENING-SECURITY-REVIEW.md) | Source-pinned review of PR #1069's fuzz-derived kernel, JIT, OOM, 9P, and virtio hardening |
 | [POST-REVIEW-DELTA-SECURITY-REVIEW.md](POST-REVIEW-DELTA-SECURITY-REVIEW.md) | Pinned review of the post-report Veltro, keyring, Claude-gate, mobile, and formal-verification delta |
 | [9FRONT-SECURITY-AUDIT.md](9FRONT-SECURITY-AUDIT.md) | Pinned source-by-source audit of applicable 9front security fixes |
+| [REMOTE-KERNEL-SECURITY-REVIEW.md](REMOTE-KERNEL-SECURITY-REVIEW.md) | Security review done while assimilating master into the 0.9.0 security patch line |
+| [POST-1096-SECURITY-DELTA.md](POST-1096-SECURITY-DELTA.md) | Pinned review of the remote delta after #1096 |
 | [veltro-llm-bridge-bug-taxonomy.md](veltro-llm-bridge-bug-taxonomy.md) | Catalogue of defect classes in the Anthropic/OpenAI LLM bridge |
 
 ## Wallet & Payments
@@ -104,9 +110,9 @@
 
 | Document | Description |
 |----------|-------------|
-| [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md) | Ed25519 signatures, SHA-256, key sizes |
+| [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md) | Ed25519, SHA-256, post-quantum algorithms, hybrid node authentication, CNSA 2.0 mode, constant-time curves, and the AES-256-GCM `ssl(3)` |
 | [CRYPTO-DEBUGGING-GUIDE.md](CRYPTO-DEBUGGING-GUIDE.md) | Debugging cryptographic code |
-| [TLS-ENTROPY.md](TLS-ENTROPY.md) | TLS entropy configuration |
+| [TLS-ENTROPY.md](TLS-ENTROPY.md) | Random numbers: the HMAC_DRBG (SP 800-90A) behind every key, in the emulator and the native kernels, and their entropy sources |
 
 ## Porting Guide
 
@@ -117,11 +123,12 @@
 | [IOS.md](IOS.md) | InferNode on iOS: design plan and build spec |
 | [IOS-ONDEVICE-LLM.md](IOS-ONDEVICE-LLM.md) | On-device LLM inference on iOS behind `/mnt/llm` |
 | [ONDEVICE-LLM.md](ONDEVICE-LLM.md) | On-device models behind `/mnt/llm`: Apple Foundation Models on macOS 27, gates, a mount per provider (design) |
-| [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
+| [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+ or 4B, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |
 | [../os/bcm2837/README.md](../os/bcm2837/README.md) | Bare-metal Raspberry Pi 3B+ kernel: the engineering journal -- status, decisions, measurements, board runbook |
-| [../os/bcm2711/README.md](../os/bcm2711/README.md) | Bare-metal Raspberry Pi 4B: boots to the desktop under QEMU `raspi4b`, never on a board; what the emulator lacks and the nine things only hardware will show |
+| [../os/bcm2711/README.md](../os/bcm2711/README.md) | Bare-metal Raspberry Pi 4B: runs on a board since 2026-10-15 and under QEMU `raspi4b`; what was proved on the board, what was fixed to get there, what has not been tried |
+| [../os/bcm2712/README.md](../os/bcm2712/README.md) | Bare-metal Raspberry Pi 5: runs on a board since 2026-10-31, on no emulator; [INVENTORY.md](../os/bcm2712/INVENTORY.md) says what is proved, feature by feature |
 | [../os/bcm/README.md](../os/bcm/README.md) | The drivers the Raspberry Pi SoCs share, and the rule for what may live there |
 | [../os/virt/README.md](../os/virt/README.md) | Bare-metal QEMU `virt`: what the second machine is for, what it found (a GIC end-of-interrupt bug), and the QEMU flags that fail silently |
 | [BLUETOOTH.md](BLUETOOTH.md) | Bluetooth design: `#t` serial, mini-UART console, `bt9p` at `/net/bt`; classic pairing, SDP/RFCOMM, LE HID -- on the Pi 3B+ |
@@ -144,6 +151,22 @@
 | [CLAUDE-GATE.md](CLAUDE-GATE.md) | claude-gate: Anthropic models through the Claude Code CLI |
 | [CODEX-GATE.md](CODEX-GATE.md) | codex-gate: OpenAI models through the Codex CLI |
 | [MODEL-INTEGRATION-NOTES.md](MODEL-INTEGRATION-NOTES.md) | Local LLM models tested through the harness: what works and what does not |
+
+## Sensors, Video and Vision
+
+There is no single guide yet; the manual pages are the reference.
+
+| Document | Description |
+|----------|-------------|
+| [H264-9P-BRIDGE.md](H264-9P-BRIDGE.md) | `vid9p`: video as files, the schema every feed serves |
+| [camsrv(4)](../man/4/camsrv), [wm-camera(1)](../man/1/wm-camera) | A camera as a `vid9p` feed (the Pi 4's Camera Module 3), and its window |
+| [videnc(1)](../man/1/videnc) | A feed's frames as JPEG between machines (`videnc`, `vidjpeg`) |
+| [visionfs(4)](../man/4/visionfs), [vision(1)](../man/1/vision) | Object detection as files at `/mnt/vision`: models, sessions, a feed followed; `trtsrv` for a Jetson's GPU and DLAs |
+| [layerfs(4)](../man/4/layerfs) | What is drawn over a video, composed by the name space |
+| [post(1)](../man/1/post) | A mounted directory offered to other name spaces and Dis VMs |
+| [gpsfs(4)](../man/4/gpsfs), [wm-road(1)](../man/1/wm-road), [timesync(8)](../man/8/timesync) | GPS, AIS and ADS-B as files at `/mnt/gps`, a moving map, the GPS as a clock |
+| [SDR.md](SDR.md), [sdrfs(4)](../man/4/sdrfs), [sdr(1)](../man/1/sdr) | An RTL-SDR as files at `/mnt/sdr`, FM and AM demodulation |
+| [ns2mmd(1)](../man/1/ns2mmd) | The machines a name space reaches, drawn from it as a Mermaid flowchart |
 
 ## Debugging Reference
 

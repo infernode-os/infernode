@@ -166,6 +166,11 @@ test('style', () => {
 	check('no prefixed animation', box.style.WebkitAnimation, undefined);
 	check('no transition', 'transition' in box.style, false);
 	check('supports no animation', CSS.supports('animation-name', 'x'), false);
+	// nor does a touch come: a page testing for one must hear no, or it
+	// lays itself out for a phone (python.org's Modernizr made it touch,
+	// and its navigation a menu off the page)
+	check('no ontouchstart', 'ontouchstart' in window, false);
+	check('no touch points', navigator.maxTouchPoints, 0);
 	check('known property', box.style.opacity, '');
 	box.style.transition = 'opacity 1s';
 	check('set transition reads back', box.style.transition, 'opacity 1s');

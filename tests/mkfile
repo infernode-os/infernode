@@ -26,6 +26,7 @@ TARG=\
 	layers_test.dis\
 	mermaid_flow_test.dis\
 	visnet_run.dis\
+	charonsite.dis\
 	feedrate.dis\
 	trtcheck.dis\
 	bayer_test.dis\
@@ -218,6 +219,9 @@ TARG=\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
 	tls_hrr_test.dis\
+	tls_server_test.dis\
+	httpd_confine_test.dis\
+	mdhtml_test.dis\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
@@ -470,6 +474,7 @@ SYSMODULES=\
 	sdrdsp.m\
 	mermaid.m\
 	filter.m\
+	mdhtml.m\
 
 DISBIN=$ROOT/dis/tests
 

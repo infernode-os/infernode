@@ -310,6 +310,32 @@ pagetext(name: string): string
 	return out;
 }
 
+# The current version of the page titled title (its "current" file's D
+# line), or 0 if there is no such page
+wikiversion(title: string): int
+{
+	name := "";
+	for(i := 0; i < len title; i++)
+		if(title[i] == ' ')
+			name[len name] = '_';
+		else
+			name[len name] = title[i];
+	fd := sys->open(wikidir + "/" + name + "/current", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	if(lines == nil || tl lines == nil)
+		return 0;
+	v := hd tl lines;
+	if(len v < 2 || v[0] != 'D')
+		return 0;
+	return int v[1:];
+}
+
 # Write a new wiki page (or update existing) via wikifs /new protocol
 wikiwrite(title, comment, content: string): int
 {
@@ -319,10 +345,11 @@ wikiwrite(title, comment, content: string): int
 		return -1;
 	}
 
-	# Write header: title, metadata, then content
-	# D0 = new page (wikifs uses this for version tracking)
+	# Write header: title, metadata, then content.  D is the version
+	# this replaces (0: a new page); wikifs refuses an edit of a
+	# version that is not the current one, as an update conflict
 	hdr := title + "\n";
-	hdr += "D0\n";
+	hdr += "D" + string wikiversion(title) + "\n";
 	hdr += "A" + author + "\n";
 	if(comment != nil)
 		hdr += "C" + comment + "\n";
@@ -747,8 +774,9 @@ DOCTEXT: con
 	"  /mnt/wiki   wikifs must be mounted (page storage)\n" +
 	"  /mnt/llm      LLM service must be available\n" +
 	"\n" +
-	"The wiki is browsable via Charon at the httpd URL\n" +
-	"serving wikifs.  wiki9p provides the intelligence;\n" +
+	"The wiki is browsed and edited on the web through\n" +
+	"svc/httpd/httpd -w /wiki, wikifs mounted at wiki/ in\n" +
+	"its site (httpd(8)).  wiki9p provides the intelligence;\n" +
 	"wikifs provides the storage and web presentation.\n";
 
 # ===================================================================

@@ -140,6 +140,21 @@ e = page(m.group(1), "edit.html") if m else ""
 check(m and ("input", "value", 't" autofocus onfocus="alert(5)') in attrs(e) and scripted(e) == [],
       "a title stays inside the edit form's value")
 
+# a page saved again from its own edit form, as it is, is the same page:
+# a ! line last with no newline took the next line's # ("is#"), and
+# each save put a blank more after every !
+import html as htmlmod
+src = "Para one.\n\nHEADING\n\n *\tbullet\n\n!  pre one\n!  pre last"
+post("round trip", "0", src)
+first = page("round_trip")
+for i in range(3):
+    m = re.search(r"<textarea[^>]*>\n?(.*?)</textarea>", page("round_trip", "edit.html"), re.S)
+    post("round trip", version("round_trip"), htmlmod.unescape(m.group(1)) if m else "")
+again = page("round_trip")
+strip = lambda h: re.sub(r"Last modified [^<]*", "", h)
+check(strip(again) == strip(first) and "pre last#" not in again and "!  pre" in page("round_trip", "edit.html"),
+      "a page saved again three times from its edit form is unchanged")
+
 for f in ("", "create.html", "1/", "wiki_syntax/"):
     st, hd, b = req("GET", "/wiki/" + f)
     check(st == 200, "/wiki/%s answers 200 (%d)" % (f, st))

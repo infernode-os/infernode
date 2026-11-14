@@ -1,0 +1,21 @@
+wiki syntax
+D1763078400
+Ainfernode
+#A page is plain text, with these exceptions.
+#
+# *	A blank line begins a new paragraph.
+# *	A paragraph of capital letters alone is a section heading.
+# *	A line beginning with * begins an item of a bulleted list.
+# *	A line beginning with ! is set in a fixed-width font as it is,
+#	uninterpreted: for program listings and typescripts.
+# *	Text in square brackets is a link: [the title of a page] (in any
+#	case), [https://example.com], or [text | https://example.com].
+#	A link is to a page of this wiki or to an http, https, ftp, mailto,
+#	telnet or file URL; any other is shown as its text.
+#
+#HTML is not taken: what is written is shown as it is written, so a page
+#reads as well in a text editor as in a browser.
+#
+#EXAMPLE
+#
+#Follow Edit below to see this page's own text.

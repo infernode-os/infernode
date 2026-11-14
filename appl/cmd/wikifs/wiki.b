@@ -372,7 +372,13 @@ Brdpage(b: ref Iobuf, rdwline: ref fn(b: ref Iobuf, sep: int): string): list of 
 			pw = ref Wpage(Wbullet, nil, 0, nil) :: pw;
 			pw = ref Wpage(Wplain, p[1:], 0, nil) :: pw;
 		'!' =>
-			pw = ref Wpage(Wpre, p[1:], 0, nil) :: pw;
+			# kept as it is, with its newline: a last line without
+			# one had the next line's # put on its end when stored
+			# ("stays as it is#"), one more at each save
+			t := p[1:];
+			if(t == nil || t[len t - 1] != '\n')
+				t += "\n";
+			pw = ref Wpage(Wpre, t, 0, nil) :: pw;
 		* =>
 			(nil, c) := str->splitl(p, "a-z");
 			(nil, d) := str->splitl(p, "A-Z");
@@ -842,7 +848,9 @@ pagetext(page: list of ref Wpage, dosharp: int): string
 			if(inpara)
 				inpara = 0;
 			s = endlin(s, dosharp);
-			s += "! " + w.text +  sharp;
+			# the text after the ! as it was read, blanks and all:
+			# "! " put a blank more in front at each save
+			s += "!" + w.text +  sharp;
 		Wplain =>
 			if(inpara)
 				inpara = 0;

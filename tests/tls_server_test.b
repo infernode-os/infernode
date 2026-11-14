@@ -120,7 +120,7 @@ serverconfig(t: ref T): ref ServerConfig
 	(key, err) := tls->p256key(hex(KEYPKCS8));
 	if(err != nil)
 		t.fatal("p256key: " + err);
-	return ref ServerConfig(certs, key, "http/1.1" :: nil, 0);
+	return ref ServerConfig(certs, key, "http/1.1" :: nil, 0, nil);
 }
 
 clientconfig(): ref Config
@@ -223,13 +223,13 @@ testKeys(t: ref T)
 	(k1, e1) := tls->p256key(hex(KEYSEC1));
 	t.assertnil(e1, "SEC1 key parsed");
 	t.assert(k8 != nil && k1 != nil && same(k8, k1), "PKCS #8 and SEC1 give the same scalar");
-	t.assertnil(tls->checkserver(ref ServerConfig(certs, k8, nil, 0)), "the key is the certificate's");
+	t.assertnil(tls->checkserver(ref ServerConfig(certs, k8, nil, 0, nil)), "the key is the certificate's");
 	(ko, eo) := tls->p256key(hex(OTHERKEY));
 	t.assertnil(eo, "the other key parsed");
-	t.assertnotnil(tls->checkserver(ref ServerConfig(certs, ko, nil, 0)), "another key refused for the certificate");
+	t.assertnotnil(tls->checkserver(ref ServerConfig(certs, ko, nil, 0, nil)), "another key refused for the certificate");
 	(nil, eb) := tls->p256key(hex(KEYPKCS8)[0:40]);
 	t.assertnotnil(eb, "a cut key refused");
-	t.assertnotnil(tls->checkserver(ref ServerConfig(nil, k8, nil, 0)), "no certificate refused");
+	t.assertnotnil(tls->checkserver(ref ServerConfig(nil, k8, nil, 0, nil)), "no certificate refused");
 }
 
 testHandshake(t: ref T)
@@ -275,6 +275,44 @@ testSuites(t: ref T)
 		sc.write(m, len m);
 		t.assert(same(readn(cc, len m), m), sys->sprint("data under suite %04x", hd s));
 	}
+}
+
+testPreference(t: ref T)
+{
+	# the client puts AES-128-GCM first (defaultconfig); a server
+	# preferring ChaCha20 gets it, one preferring nothing takes AES
+	scfg := serverconfig(t);
+	scfg.suites = CHACHA :: AES128 :: nil;
+	(cc, nil) := connect(t, scfg, clientconfig());
+	t.asserteq(cc.suite, CHACHA, "the server's preference taken");
+	scfg.suites = AES256 :: nil;
+	(cc, nil) = connect(t, scfg, clientconfig());
+	t.asserteq(cc.suite, AES256, "a preference the client offers further down");
+	scfg.suites = nil;
+	(cc, nil) = connect(t, scfg, clientconfig());
+	t.asserteq(cc.suite, AES128, "no preference: the client's first");
+	cfg := clientconfig();
+	cfg.suites = AES256 :: nil;
+	cfg.minver = TLS->TLS13;
+	scfg.suites = CHACHA :: nil;
+	(cc, nil) = connect(t, scfg, cfg);
+	t.asserteq(cc.suite, AES256, "a preference the client does not offer: the client's");
+
+	f := tls->fastsuites();
+	t.asserteq(len f, 3, "fastsuites names the three suites");
+	s := "";
+	for(; f != nil; f = tl f)
+		s += sys->sprint(" %04x", hd f);
+	t.log("fastest first:" + s);
+	t.assert(contains(s, "1301") && contains(s, "1302") && contains(s, "1303"), "each once");
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
 }
 
 testHRR(t: ref T)
@@ -421,6 +459,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Keys", testKeys);
 	run("Handshake", testHandshake);
 	run("Suites", testSuites);
+	run("Preference", testPreference);
 	run("CNSAClientRefused", testHRR);
 	run("MutatedHellos", testMutatedHellos);
 

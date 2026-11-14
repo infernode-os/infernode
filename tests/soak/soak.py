@@ -501,7 +501,7 @@ unmount /tmp/soak/gefs/m; unmount /tmp/soak/gefs/a; unmount /tmp/soak/gefs/d''')
     L('bt', 'from the Jetson: l2ping x20 every 10 min (hci0 reserved)', host='bt', needs=['bt', 'bdaddr']),
     L('wifi', '32 MB pushed to the Wi-Fi address every 10 min', host='wifi', needs=['wifi']),
     L('usbnet', '32 MB each way over the USB gadget link every 10 min (gadget reserved)', host='usbnet', needs=['usbnet']),
-    L('video', 'camsrv(4)\'s simulated sensor (288x162, 30 fps; Bayer to I420) held for the run with videnc(1) beside it and exported on 8704; read whole as a live viewer reads it, a minute at a time', board=r'''
+    L('video', 'camsrv(4) on the board\'s camera (an IMX708 on #V, 576x324 from its 2304x1296 binned mode), or its simulated sensor (288x162) where there is none; 30 fps, Bayer to I420, held for the run with videnc(1) beside it and exported on 8704; read whole as a live viewer reads it, a minute at a time', board=r'''
 	# into new and then over out, so that the sampler always finds a whole reading
 	/dis/tests/feedrate.dis /tmp/soak/video/v/0 60 > /tmp/soak/video/new >[2] /tmp/soak/video/err || bad video feedrate
 	cp /tmp/soak/video/new /tmp/soak/video/out
@@ -598,7 +598,7 @@ class Run:
         out = self.sh(
             "for(f in jitbench drawbench memtouch auth/rsagen vm zeros tlsperf vmstress tests/tls_live_test tests/sysfuzz dd cmp camsrv videnc tests/feedrate disk/kfs disk/kfscmd disk/gefs) { ftest -e /dis/$f.dis && echo HAVE $f }",
             "cat '#S/sdctl' >[2] /dev/null | grep '^part '",
-            "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c0data' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' /dev/memtags /dev/heapaudit /net/bt/status '#i/draw') { ftest -e $f && echo DEV $f }",
+            "for(f in '#S/sdcard' '#S/sd0' '#S/nvme0' '#Q/spi0' '#J/i2c0data' '#J/i2c1data' '#r/rtc' '#P/fanrpm' '#P/cputemp' '#S/nvmestat' '#V' /dev/memtags /dev/heapaudit /net/bt/status '#i/draw') { ftest -e $f && echo DEV $f }",
             "ls '#X' >[2] /dev/null > /dev/null && echo DEV vm",
             "cat /net/bt/status >[2] /dev/null | sed 1q",
             "cat /net/ipifc/*/status | grep '^device|^	[0-9]'",
@@ -619,6 +619,14 @@ class Run:
         r['kfstools'] = ('disk/kfs' in have and 'disk/kfscmd' in have, '/dis/disk/kfs.dis and kfscmd.dis')
         r['gefstools'] = ('disk/gefs' in have, '/dis/disk/gefs.dis')
         r['videotools'] = (all(t in have for t in ('camsrv', 'videnc', 'tests/feedrate')), '/dis/camsrv.dis, videnc.dis, tests/feedrate.dis')
+        # a real camera: camsrv on #V gives frames (a sensor powered, found
+        # and streaming); the video load runs on it, or on the simulated one
+        self.realcam = False
+        if r['videotools'][0] and '#V' in dev:
+            o = self.sh('mkdir -p /tmp/camprobe; mount {camsrv} /tmp/camprobe >[2=1] && {/dis/tests/feedrate.dis /tmp/camprobe/0 3 >[2=1]; unmount /tmp/camprobe}', limit=40)
+            m = re.search(r'frames=(\d+)', o)
+            self.realcam = bool(m) and int(m.group(1)) > 0
+        r['camera'] = (self.realcam, 'a camera on #V gives frames' if self.realcam else 'no camera giving frames (#V absent, or no sensor); the video load uses the simulated sensor')
         emu = os.path.join(TREE, 'emu', 'Linux', 'o.emu')
         r['hostemu'] = (os.path.exists(emu) and all(os.path.exists(os.path.join(TREE, 'dis', f)) for f in ('vidjpeg.dis', 'tests/feedrate.dis')),
                         'the Jetson\'s emulator and dis/vidjpeg.dis, dis/tests/feedrate.dis in %s' % os.path.normpath(TREE))
@@ -798,7 +806,10 @@ class Run:
         for l in loads:
             body += 'mkdir -p /tmp/soak/%s\n' % l['name']
             if l.get('setup'):
-                body += l['setup'] + ' >[2] /tmp/soak/%s/setup.err\n' % l['name']
+                setup = l['setup']
+                if getattr(self, 'realcam', False):
+                    setup = setup.replace('{camsrv -t}', '{camsrv}')
+                body += setup + ' >[2] /tmp/soak/%s/setup.err\n' % l['name']
         body += 'mkdir -p /tmp/soak/fuzz/scratch\n'
         body += 'echo > /tmp/soak/run\n'
         for l in loads:
@@ -1279,6 +1290,8 @@ class Run:
             self.log('TLS server not started: %s' % e)
         self.res = r = self.probe()
         open(os.path.join(self.dir, 'resources.json'), 'w').write(json.dumps(r, indent=1))
+        if 'camera' in r:
+            self.log('video: %s' % ('the board\'s camera' if r['camera'][0] else r['camera'][1]))
         sel = [l for l in LOADS if (not a.loads or l['name'] in a.loads) and l['name'] not in a.skip]
         for l in sel:
             miss = self.gate(l, r)

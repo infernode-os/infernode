@@ -1036,18 +1036,29 @@ wikipost(io: ref Io, r: ref Req, body: array of byte): (int, big, int)
 		m += "C" + comment + "\n";
 	m += "\n" + text;
 	b := array of byte m;
-	if(sys->write(fd, b, len b) != len b || sys->write(fd, b, 0) != 0)
+	if(sys->write(fd, b, len b) != len b)
 		return page(io, r, 422, nil, sys->sprint("%r\n"));
+	# the commit; refused (an update conflict: the page changed since
+	# the form was read), the page still has a name, and the writer is
+	# sent its werror.html, as Plan 9's wikipost does
+	committed := sys->write(fd, b, 0) == 0;
+	err := sys->sprint("%r");
 	sys->seek(fd, big 0, Sys->SEEKSTART);
 	buf := array[256] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	if(n <= 0) {
+		if(!committed)
+			return page(io, r, 422, nil, err + "\n");
 		return errorpage(io, r, 500, nil);
+	}
 	name := string buf[0:n];
 	if(hasbyte(name, '/') || name == "." || name == "..")
 		return errorpage(io, r, 500, nil);
+	file := "/index.html";
+	if(!committed)
+		file = "/werror.html";
 	# 303: the browser GETs the page it changed
-	return errorpage(io, r, 303, "Location: " + urlpath(wikibase + "/" + name + "/index.html") + "\r\n");
+	return errorpage(io, r, 303, "Location: " + urlpath(wikibase + "/" + name + file) + "\r\n");
 }
 
 sameorigin(r: ref Req): int

@@ -1150,12 +1150,35 @@ ctlset(fd: ref Sys->FD, s: string): int
 	return sys->fprint(fd, "%s", s);
 }
 
-# an open of i2c0data keeps the device ctl named when it was opened
+# The sensor's bus in #J: the receiver's ctl names it ("i2c i2c4" on a
+# Pi 5, a connector's own bus); the Pi 4's says nothing, and its camera
+# bus is i2c0.
+i2cbus := "i2c0";
+
+sensorbus(): string
+{
+	fd := sys->open("/dev/unicam/ctl", Sys->OREAD);
+	if(fd == nil)
+		return "i2c0";
+	b := array[1024] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return "i2c0";
+	(nil, lines) := sys->tokenize(string b[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "i2c")
+			return hd tl f;
+	}
+	return "i2c0";
+}
+
+# an open of i2cNdata keeps the device ctl named when it was opened
 opendev(addr, sub: int): ref Sys->FD
 {
 	if(sys->fprint(i2cctl, "addr %d", addr) < 0 || sys->fprint(i2cctl, "subaddress %d", sub) < 0)
 		return nil;
-	return sys->open("/dev/i2c0data", Sys->ORDWR);
+	return sys->open("/dev/" + i2cbus + "data", Sys->ORDWR);
 }
 
 rd8(reg: int): int
@@ -1246,7 +1269,8 @@ sensoron(): string
 		e = unicam("power on");
 	if(e != nil)
 		return e;
-	i2cctl = sys->open("/dev/i2c0ctl", Sys->ORDWR);
+	i2cbus = sensorbus();
+	i2cctl = sys->open("/dev/" + i2cbus + "ctl", Sys->ORDWR);
 	if(i2cctl == nil)
 		return sys->sprint("camsrv: i2c: %r");
 	sensorfd = opendev(Sensor, 2);

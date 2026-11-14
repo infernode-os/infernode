@@ -1,6 +1,8 @@
 /*
  * #J -- I2C, on the two buses the 40-pin header gives by convention:
- * i2c0 on GPIO 0 and 1, i2c1 on GPIO 2 and 3. RP1's are DesignWare
+ * i2c0 on GPIO 0 and 1, i2c1 on GPIO 2 and 3; and the two camera
+ * connectors', i2c6 (CAM/DISP 0, GPIO 38 and 39) and i2c4 (CAM/DISP 1,
+ * GPIO 40 and 41), where a camera's sensor is. RP1's are DesignWare
  * blocks, run here as a polled master, 7-bit addresses only.
  *
  *	#J/i2cNctl	write "addr N", "subaddress N", "speed N"; read them
@@ -23,7 +25,7 @@
 #include	"board.h"
 
 enum{
-	Nbus		= 2,
+	Nbus		= 4,
 	Maxio		= 4096,
 	Rxdepth		= 8,		/* reads in flight, a FIFO's worth at least */
 	Patience	= 100000,	/* 10us polls without progress: a second */
@@ -71,6 +73,7 @@ struct Bus
 	uintptr	base;
 	int	sda;
 	int	scl;
+	int	alt;		/* the pins' function for this block */
 	int	on;
 	int	addr;
 	int	sub;
@@ -78,8 +81,10 @@ struct Bus
 };
 
 static Bus buses[Nbus] = {
-	{ .base = RP1REGS + 0x70000, .sda = 0, .scl = 1, .addr = -1, .speed = 100000 },
-	{ .base = RP1REGS + 0x74000, .sda = 2, .scl = 3, .addr = -1, .speed = 100000 },
+	{ .base = RP1REGS + 0x70000, .sda = 0, .scl = 1, .alt = Gpioalt3, .addr = -1, .speed = 100000 },
+	{ .base = RP1REGS + 0x74000, .sda = 2, .scl = 3, .alt = Gpioalt3, .addr = -1, .speed = 100000 },
+	{ .base = RP1REGS + 0x80000, .sda = 40, .scl = 41, .alt = Gpioalt2, .addr = -1, .speed = 100000 },	/* i2c4 */
+	{ .base = RP1REGS + 0x88000, .sda = 38, .scl = 39, .alt = Gpioalt3, .addr = -1, .speed = 100000 },	/* i2c6 */
 };
 
 #define R(b, o)	(*(volatile u32int*)((b)->base + (o)))
@@ -90,6 +95,10 @@ enum{
 	Qdata0,
 	Qctl1,
 	Qdata1,
+	Qctl4,
+	Qdata4,
+	Qctl6,
+	Qdata6,
 };
 
 static Dirtab i2ctab[]={
@@ -98,6 +107,10 @@ static Dirtab i2ctab[]={
 	"i2c0data",	{Qdata0},		0,	0664,
 	"i2c1ctl",	{Qctl1},		0,	0664,
 	"i2c1data",	{Qdata1},		0,	0664,
+	"i2c4ctl",	{Qctl4},		0,	0664,
+	"i2c4data",	{Qdata4},		0,	0664,
+	"i2c6ctl",	{Qctl6},		0,	0664,
+	"i2c6data",	{Qdata6},		0,	0664,
 };
 
 #define BUS(c)		(&buses[((ulong)(c)->qid.path - 1) / 2])
@@ -139,8 +152,8 @@ buson(Bus *b)
 	gpioclaim(b->scl, "i2c");
 	gpiopull(b->sda, Pullup);
 	gpiopull(b->scl, Pullup);
-	gpiofunc(b->sda, Gpioalt3);
-	gpiofunc(b->scl, Gpioalt3);
+	gpiofunc(b->sda, b->alt);
+	gpiofunc(b->scl, b->alt);
 	setup(b);
 	b->on = 1;
 }

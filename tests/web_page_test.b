@@ -195,6 +195,29 @@ testGridMinContent(t: ref T)
 		t.error("no box for #t");
 }
 
+# font: 0/0 a, the image-replacement idiom, sets a size of 0 and a
+# line height of 0: the 0 was taken for a weight, the rule dropped, and
+# weather.gov's header drew its text over its picture of that text
+testFontZero(t: ref T)
+{
+	pg := pageof(t, "<style>div{margin:0}</style>" +
+		"<div id=z style='font:0/0 serif'>text</div>" +
+		"<div id=g style='font:0/0 a'><span style='font:3px/1 a'>x</span></div>" +
+		"<div id=w style='font:700 20px/30px serif'>bold</div>", 800, 600);
+	if((z := boxof(pg.doc, pg.root, "z")) != nil)
+		t.asserteq(z.h, 0, "font: 0/0: no height");
+	else
+		t.error("no box for #z");
+	if((g := boxof(pg.doc, pg.root, "g")) != nil)
+		t.asserteq(g.h, 3, "a 3px/1 span inside it: 3 high");
+	else
+		t.error("no box for #g");
+	if((w := boxof(pg.doc, pg.root, "w")) != nil)
+		t.asserteq(w.h, 30, "a weight before the size is still a weight");
+	else
+		t.error("no box for #w");
+}
+
 # the colour at the middle of the picture a box shows, as 16rRRGGBB
 midcolour(b: ref Box): int
 {
@@ -265,6 +288,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SelectArrow", testSelectArrow);
 	run("GridMinContent", testGridMinContent);
 	run("SvgVars", testSvgVars);
+	run("FontZero", testFontZero);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

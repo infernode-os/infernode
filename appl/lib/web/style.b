@@ -6123,7 +6123,11 @@ font(x: array of ref Tok): list of (string, array of ref Tok)
 				continue;
 			}
 		}
-		if(t.kind == Knumber && k+1 < len x) {
+		# a number is a weight (1 to 1000); a 0 is the size, as a
+		# length (font: 0/0 a, the image-replacement idiom: weather.gov's
+		# header drew its text over its picture of it, the rule dropped)
+		if(t.kind == Knumber && k+1 < len x && t.n >= 1.0 && t.n <= 1000.0 &&
+		   !(x[k+1].kind == Kdelim && x[k+1].s == "/")) {
 			r = ("font-weight", x[k:k+1]) :: r;
 			continue;
 		}

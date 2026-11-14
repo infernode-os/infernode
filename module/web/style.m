@@ -290,6 +290,7 @@ Style: module
 		objx, objy:	Len;	# object-position: px, and pct of the room left over
 		imgorient:	int;	# image-orientation: 0 from-image, 1 none (inherited)
 		clipinset:	array of Len;	# clip-path: inset(), top right bottom left; nil for none or another shape
+		textfill:	int;	# -webkit-text-fill-color: the glyphs' colour, Ccurrent for color's (inherited)
 
 		new:	fn(): ref St;		# initial values
 	};

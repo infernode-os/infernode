@@ -2501,7 +2501,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent);
 	s.fontsize = 16.0 * dpr;
 	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
 	return s;
@@ -2565,6 +2565,7 @@ inherit(p: ref St): ref St
 	s.hideempty = p.hideempty;
 	s.accent = p.accent;
 	s.caret = p.caret;
+	s.textfill = p.textfill;
 	s.svgfill = p.svgfill;
 	s.svgstroke = p.svgstroke;
 	s.vars = p.vars;
@@ -2596,7 +2597,7 @@ isinherited(nm: string): int
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
-	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "fill" or "stroke" or
+	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "-webkit-text-fill-color" or "fill" or "stroke" or
 	"font-kerning" or "font-feature-settings" or "font-variation-settings" or "image-orientation" =>
 		return 1;
 	}
@@ -6347,7 +6348,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"column-rule-style" => st.colrules = b;
 		}
 	"border-top-color" or "border-right-color" or "border-bottom-color" or "border-left-color" or
-	"outline-color" or "text-decoration-color" or "column-rule-color" or "accent-color" or "caret-color" =>
+	"outline-color" or "text-decoration-color" or "column-rule-color" or "accent-color" or "caret-color" or
+	"-webkit-text-fill-color" =>
 		(ok, c) := color(v);
 		if(!ok) {
 			if(id == "auto" && (nm == "accent-color" || nm == "caret-color" || nm == "outline-color"))
@@ -6365,6 +6367,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"column-rule-color" => st.colrulec = c;
 		"accent-color" => st.accent = c;
 		"caret-color" => st.caret = c;
+		"-webkit-text-fill-color" => st.textfill = c;	# (gradient text: transparent, the background clipped to it)
 		}
 	"fill" or "stroke" =>
 		# for inline svg, which readsvg draws: kept as it can read it
@@ -8412,6 +8415,7 @@ copyprop(d, s: ref St, nm: string)
 	"appearance" => d.appearance = s.appearance;
 	"accent-color" => d.accent = s.accent;
 	"caret-color" => d.caret = s.caret;
+	"-webkit-text-fill-color" => d.textfill = s.textfill;
 	"fill" => d.svgfill = s.svgfill;
 	"stroke" => d.svgstroke = s.svgstroke;
 	}
@@ -8695,6 +8699,8 @@ dump(st: ref St): string
 	s += "padding " + lenstr(st.pt) + " " + lenstr(st.pr) + " " + lenstr(st.pb) + " " + lenstr(st.pl) + "\n";
 	s += sys->sprint("border-width %d %d %d %d\n", st.bt, st.br, st.bb, st.bl);
 	s += "color " + colstr(st.color) + "\n";
+	if(st.textfill != Ccurrent)
+		s += "-webkit-text-fill-color " + colstr(st.textfill) + "\n";
 	s += "background-color " + colstr(st.bgcolor) + "\n";
 	fam := "";
 	for(l := st.family; l != nil; l = tl l) {

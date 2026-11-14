@@ -15104,11 +15104,33 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	(gcx, gcy, grx, gry) := (0.0, 0.0, 0.0, 0.0);
 	case kind {
 	Glinear =>
+		# -webkit-linear-gradient is the syntax before the standard's:
+		# its angles start east and go anticlockwise, and a side or
+		# corner is where the gradient starts, not where it goes (Vue's
+		# heading's 315deg ran from blue to green, the wrong way)
+		legacy := t.s == "-webkit-linear-gradient";
+		if(legacy && len a > 0 && a[0].kind == Css->Kident && lower(a[0].s) != "to") {
+			na := array[len a + 1] of ref Css->Tok;
+			na[0] = ref Css->Tok(Css->Kident, "to", 0.0, 0, nil);
+			for(k := 0; k < len a; k++) {
+				na[k+1] = a[k];
+				if(a[k].kind == Css->Kident)
+					case lower(a[k].s) {
+					"left" => na[k+1] = ref Css->Tok(Css->Kident, "right", 0.0, 0, nil);
+					"right" => na[k+1] = ref Css->Tok(Css->Kident, "left", 0.0, 0, nil);
+					"top" => na[k+1] = ref Css->Tok(Css->Kident, "bottom", 0.0, 0, nil);
+					"bottom" => na[k+1] = ref Css->Tok(Css->Kident, "top", 0.0, 0, nil);
+					}
+			}
+			a = na;
+		}
 		if(len a == 1 && (a[0].kind == Css->Kdimension || a[0].kind == Css->Knumber && a[0].n == 0.0)) {
 			(ok, v) := angleof(a[0]);
 			if(!ok)
 				return;
 			angle = v;
+			if(legacy)
+				angle = 90.0 - v;
 		} else if(len a > 1 && a[0].kind == Css->Kident && lower(a[0].s) == "to") {
 			# to a side, or a corner: then the line is at right angles
 			# to the one through the other two corners (Images 3 §3.1.1)
@@ -16238,8 +16260,14 @@ painttext(dst: ref Image, f: ref Frag, o: Point)
 		if(visible(s.color))
 			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), text, colorimg(s.color), st.letterspacing, f.level % 2);
 	}
-	if(visible(st.color))
-		drawtext(dst, fc, p, text, colorimg(st.color), st.letterspacing, f.level % 2);
+	# the glyphs in -webkit-text-fill-color, which is color unless set
+	# (Vue's gradient heading: transparent, its background clipped to
+	# the text; it was drawn over in its colour)
+	fill := st.color;
+	if(st.textfill != Style->Ccurrent)
+		fill = st.textfill;
+	if(visible(fill))
+		drawtext(dst, fc, p, text, colorimg(fill), st.letterspacing, f.level % 2);
 	paintdeco(dst, f, o);
 }
 

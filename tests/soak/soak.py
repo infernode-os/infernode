@@ -296,6 +296,17 @@ fn gefsmount {
 }
 '''
 
+# The end of a held command's process group, named by a member still there
+# ($l, the pids of what it started): a Prog's killgrp of its own pid left
+# the rest of its group running on the native kernel (a sinks' two
+# listeners, 2026-11-14), where one naming another member ends the group,
+# its own shell with it.
+ENDGROUP = 'for(p in $l) {ftest -e /prog/$p/ctl && echo killgrp > /prog/$p/ctl}'
+
+def beat(name):
+    """the line a held command's loops run every pass: their shell's pid and the time (heldalive)"""
+    return 'echo ${pid} `{date -n} > /tmp/soak/beat-%s' % name
+
 def L(name, what, board=None, host=None, needs=(), core=False, every=None, vm0=False, setup=None, teardown=None):
     # vm0: the load starts a new sh (sh -c), which cannot load Sh in another VM
     # ("Sh": module not loaded, 2026-11-08), so it stays in VM 0 with the sink
@@ -496,7 +507,7 @@ unmount /tmp/soak/gefs/m; unmount /tmp/soak/gefs/a; unmount /tmp/soak/gefs/d''')
 	# and the exports it started (they hold the name space, and camsrv with it)
 	# (its shell stays, so that the group has a member the teardown can name)
 	{pctl newpgrp; echo ${pid} > /tmp/soak/video/lpid; listen -A 'tcp!*!8704' {export /tmp/soak/video/v}; while {ftest -e /tmp/soak/video/lpid} {sleep 30}} &
-}''', teardown='''p = `{cat /tmp/soak/video/lpid}; rm -f /tmp/soak/video/lpid; echo killgrp > /prog/$p/ctl >[2] /dev/null
+}''', teardown='''p = `{cat /tmp/soak/video/lpid >[2] /dev/null}; rm -f /tmp/soak/video/lpid; ~ $#p 1 && echo killgrp > /prog/$p/ctl >[2] /dev/null
 kill -g Camsrv Videnc > /dev/null >[2] /dev/null
 unmount /tmp/soak/video/v >[2] /dev/null'''),
     L('video-remote', 'the board\'s feed as JPEG on the Jetson (vidjpeg(1) in its emulator, over Ethernet), read as a live viewer 5 min every 30 min', host='video-remote', needs=['videotools', 'hostemu', 'wired']),
@@ -736,15 +747,17 @@ class Run:
         # loads that must stay in VM 0 get a script of their own when the rest go elsewhere
         here = [l for l in loads if l.get('vm0')] if self.loopsvm else []
         rest = [l for l in loads if l not in here]
-        body = self.soakd_text(rest)
+        body = self.soakd_text(rest, 'soakd')
         self.drv.put('/tmp/soak/soakd.sh', body.encode())
         self.vm0loads = bool(here)
         if here:
-            self.drv.put('/tmp/soak/soakd0.sh', self.soakd_text(here).encode())
+            self.drv.put('/tmp/soak/soakd0.sh', self.soakd_text(here, 'soakd0').encode())
         return body
 
-    def soakd_text(self, loads):
+    def soakd_text(self, loads, name='soakd'):
         body = SOAKD_HEAD
+        # a group of its own, which the end of a run can kill whole (heldalive)
+        body += 'pctl newpgrp\nkids = ()\n'
         body += 'sdraw = %s\njetson = %s\ntlsport = %d\ni2caddr = %s\n' % (self.sdraw or "''", self.jetson, self.tlsport, self.a.i2c_addr)
         iv = self.iv
         body += ('sdrcount = %d\nsdrevery = %d\nsdwkb = %d\nsdwevery = %d\nnvrcount = %d\nnvrevery = %d\n'
@@ -768,16 +781,20 @@ class Run:
             b = l['board'].replace('tick %s;' % l['name'], 'done %s;' % l['name'])
             b = re.sub(r'tick %s\s*$' % re.escape(l['name']), 'done %s' % l['name'], b)
             assert 'done %s' % l['name'] in b and 'tick ' not in b, 'load %s: no single tick to make a done' % l['name']
-            body += '{ while {run} {\n\tbegin %s%s\n} } &\n' % (l['name'], b)
+            body += '{ while {run} {\n\tbegin %s%s\n} } &\nkids = ($kids $apid)\n' % (l['name'], b)
         # the host loads' listeners, held by this session too
         body += 'echo soakd-up\n'
-        body += 'while {run} {sleep 30}\n'
+        body += 'while {run} {%s; sleep 30}\n' % beat(name)
         # servers the setups started, stopped once the loops are done (a video
         # read lasts a minute; the runner's last sample is 40 s after the end,
         # so nothing this stops is counted as a failure)
         downs = [l['teardown'] for l in loads if l.get('teardown')]
         if downs:
             body += 'sleep 70\n' + '\n'.join(downs) + '\n'
+        body += 'rm -f /tmp/soak/beat-%s\n' % name
+        # what is left of its group (a load stuck in a server that broke:
+        # Kfscmd on a kfs raising "array bounds error") goes with it
+        body += ENDGROUP.replace('$l', '$kids') + '\n'
         return body
 
     # host loads ----------------------------------------------------------
@@ -1012,19 +1029,29 @@ class Run:
         full = len(re.findall(r'kbd: input queue full', got))
         return ('y-' + mark in got), ('serial shell runs commands' if 'y-' + mark in got else 'SERIAL SHELL DOES NOT RUN COMMANDS') + (' (input queue full x%d)' % full if full else '')
 
-    def heldalive(self, name):
-        """the pid of a held command still running on the board, or None"""
-        out = self.sh("ftest -e /tmp/soak/held-%s && {p = `{cat /tmp/soak/held-%s}; ftest -e /prog/$p/ctl && echo HELDPID $p}" % (name, name), limit=30)
-        m = re.search(r'HELDPID (\d+)', out)
-        return m.group(1) if m else None
+    def heldalive(self, name, fresh=True):
+        """the pid of a held command still beating on the board, or None.
+
+        The shell that runs a held command's loops writes its pid and the
+        time to /tmp/soak/beat-NAME every 30 s (BEAT). That shell is not
+        always the session's: the board loops run under vm(1), in another
+        VM and process group, and lived on when the session's shell died.
+        With fresh false, the pid of a beater whose shell is still there
+        however long ago it beat (one stuck)."""
+        out = self.sh("ftest -e /tmp/soak/beat-%s && {b = `{cat /tmp/soak/beat-%s}; ~ $#b 2 && {echo BEAT $b NOW `{date -n}; p = ${hd $b}; ftest -e /prog/$p/ctl && echo PROG}}" % (name, name), limit=30)
+        m = re.search(r'BEAT (\d+) (\d+) NOW (\d+)', out)
+        if not m:
+            return None
+        if fresh:
+            return m.group(1) if int(m.group(3)) - int(m.group(2)) <= 100 else None
+        return m.group(1) if 'PROG' in out else None
 
     def holdhost(self, name, cmd):
         """a board command held on its own console session for the run.
 
         The session dropping does not end the command on the board: its
-        loops run while /tmp/soak/run is there. Its shell is a process group
-        of its own and leaves its pid in /tmp/soak/held-NAME, and a session
-        that drops is not opened again while that pid runs. Opened again at
+        loops run while /tmp/soak/run is there. A session that drops is not
+        opened again while the command's loops still beat (heldalive). Opened again at
         once, as it was, every held load ran twice in the same directories
         after the board stopped answering for four minutes (a Pi 5,
         2026-11-13): two kfs on one image, two Bluetooth scans, two SPI
@@ -1035,16 +1062,16 @@ class Run:
                 try:
                     p = self.heldalive(name)
                     if p:
-                        self.log('%s: its session dropped but it runs on the board (pid %s); not started again' % (name, p))
+                        self.log('%s: its session dropped but it runs on the board (pid %s beats); not started again' % (name, p))
                         while not self.stop.is_set() and self.heldalive(name) == p:
                             self.stop.wait(60)
                         if self.stop.is_set():
                             break
-                        self.log('%s: pid %s has ended; starting it again' % (name, p))
+                        self.log('%s: pid %s has stopped beating; starting it again' % (name, p))
                 except OSError:
                     self.stop.wait(60); continue
                 try:
-                    c = self.cons.hold('load std; pctl newpgrp; echo ${pid} > /tmp/soak/held-%s; ' % name + cmd)
+                    c = self.cons.hold('load std; ' + cmd)
                     self.log('%s: held' % name)
                     c.settimeout(60)
                     # what the session prints (a loop's shell error among it) is kept
@@ -1204,10 +1231,16 @@ class Run:
             return
         # leftovers of an earlier run
         self.sh('rm -f /tmp/soak/run', limit=20); time.sleep(110)
+        # an earlier run's listeners (its sinks', its video's), however they
+        # were left: their announcements hung up, so each listen ends
+        self.sh("for(c in /net/tcp/[0-9]*) {s = `{cat $c/status}; l = `{cat $c/local}; ~ ${hd $s} Listen && ~ $l *!8702 *!8703 *!8704 && echo hangup > $c/ctl}", limit=30)
         # an earlier run's held commands still running (stuck in a server that broke)
-        self.sh("for(f in `{ls /tmp/soak >[2] /dev/null | grep /held-}) {p = `{cat $f}; ftest -e /prog/$p/ctl && echo killgrp > /prog/$p/ctl}", limit=30)
-        # an earlier run's video listener, if that run did not get to its teardown
-        self.sh("ftest -e /tmp/soak/video/lpid && {p = `{cat /tmp/soak/video/lpid}; echo killgrp > /prog/$p/ctl} >[2] /dev/null", limit=20)
+        self.sh("for(f in `{ls /tmp/soak >[2] /dev/null | grep /beat-}) {b = `{cat $f}; ~ $#b 2 && {p = ${hd $b}; ftest -e /prog/$p/ctl && echo killgrp > /prog/$p/ctl}}", limit=30)
+        # an earlier run's video listener, if that run did not get to its
+        # teardown. Its pid file can be empty (the load killed before it wrote
+        # it), and /prog/$p/ctl of no $p is "null list in concatenation",
+        # which ends the session's shell: the run then died here, "no answer".
+        self.sh("ftest -e /tmp/soak/video/lpid && {p = `{cat /tmp/soak/video/lpid}; ~ $#p 1 && ftest -e /prog/$p/ctl && echo killgrp > /prog/$p/ctl} >[2] /dev/null", limit=20)
         self.sh('rm -rf /tmp/soak', 'mkdir -p /tmp/soak', limit=30)
         r = self.probe()
         if not r['clock'][0]:
@@ -1241,13 +1274,24 @@ class Run:
         # VM 0 the loops share its interpreter with the sink and cut a Pi 4's
         # inbound rate from ~920 to ~150 Mbit/s (infernode-e5's bisection,
         # 2026-11-08), so a push measured beside them measures the loops.
-        sinks = ("listen -A 'tcp!*!8702' {cat > /dev/null} &; listen -A 'tcp!*!8703' {zeros 65536 1024} &; "
-                 "while {ftest -e /tmp/soak/run} {sleep 30}")
+        # The listeners run synchronously (-s), so they stay in the sinks'
+        # process group and end with it: backgrounded, a listen went to the
+        # console's group, which nothing kills, and one run's sinks went on
+        # serving the next's (whose own listens were refused the address,
+        # unseen).
+        sinks = ("listen -s -A 'tcp!*!8702' {cat > /dev/null} &; l = $apid; listen -s -A 'tcp!*!8703' {zeros 65536 1024} &; l = ($l $apid); "
+                 "while {ftest -e /tmp/soak/run} {%s; sleep 30}; rm -f /tmp/soak/beat-sinks; %s" % (beat('sinks'), ENDGROUP))
+        sinks = 'pctl newpgrp; ' + sinks
         if self.loopsvm:
+            # the script beats in its VM; this shell only waits
             loops = 'vm %d sh /tmp/soak/soakd.sh; while {ftest -e /tmp/soak/run} {sleep 30}' % self.loopsvm
         else:
             loops = 'sh /tmp/soak/soakd.sh'
         if self.cons:
+            # the sinks wait while the run is on, so it is on before either is
+            # held (soakd's script made it after the sinks had looked, and
+            # their listeners, once backgrounded, hid that they had gone)
+            self.sh('echo > /tmp/soak/run', limit=20)
             self.holdhost('sinks', sinks)
             self.holdhost('soakd', loops)
             if getattr(self, 'vm0loads', False):
@@ -1274,7 +1318,7 @@ class Run:
         if st('video-remote'): self.every(1800, self.h_video, 'video-remote', first=900)
         if st('vm'):
             va, vb = (2, 3) if self.loopsvm == 1 else (1, 2)
-            self.holdhost('vm', "vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {jitbench > /dev/null}'; while {ftest -e /tmp/soak/run} {sleep 30}" % (va, vb))
+            self.holdhost('vm', "pctl newpgrp; vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {%s; jitbench > /dev/null}'; vm %d sh -c 'load std; while {ftest -e /tmp/soak/run} {%s; jitbench > /dev/null}'; while {ftest -e /tmp/soak/run} {%s; sleep 30}; rm -f /tmp/soak/beat-vm" % (va, beat('vm'), vb, beat('vm'), beat('vm')))
         if st('vmstress'): self.holdhost('vmstress', 'vmstress /tmp/soak/vs')
         if st('flood'):
             def flood():
@@ -1343,16 +1387,16 @@ class Run:
         self.summary(alarm, sel)
 
     def endheld(self, loads):
-        """held commands still running two minutes after the end are killed,
-        and the loads' teardowns run here in their place (a soakd waiting on a
-        broken kfs never reached its own, and left two camera simulators
-        spinning, 2026-11-14)"""
+        """held commands still there two and a half minutes after the end are killed,
+        and the loads' teardowns run here in their place (doubled, a soakd sat
+        in a broken kfs and never reached its own, leaving two camera
+        simulators spinning, 2026-11-14)"""
         if not self.cons or not getattr(self, 'held', None):
             return
         t0 = time.time(); left = list(self.held)
-        while left and time.time() - t0 < 120:
+        while left and time.time() - t0 < 150:
             try:
-                left = [n for n in left if self.heldalive(n)]
+                left = [n for n in left if self.heldalive(n, fresh=False)]
             except OSError:
                 pass
             if left:
@@ -1361,7 +1405,7 @@ class Run:
             return
         for n in left:
             try:
-                p = self.heldalive(n)
+                p = self.heldalive(n, fresh=False)
                 if p:
                     self.sh('echo killgrp > /prog/%s/ctl' % p, limit=20)
                     self.log('%s: still running %.0f s after the end (pid %s); killed' % (n, time.time() - t0, p))

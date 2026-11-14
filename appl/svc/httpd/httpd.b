@@ -77,6 +77,10 @@ maxage := 0;			# -C: Cache-Control max-age for files that are not HTML
 
 scfg: ref ServerConfig;
 logfd: ref FD;
+logfile := "";
+logmax := big (1024*1024);	# -m: the log's size at which it is rotated; 0: never
+logold := 2;			# -M: how many old logs are kept (log.1 the newest)
+logc: chan of array of byte;	# the connections' lines, to the logger, which alone writes the log
 stderr: ref FD;
 
 # /dev/time, opened before the connections are confined and kept by
@@ -114,9 +118,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(arg == nil)
 		fatal(sys->sprint("cannot load %s: %r", Arg->PATH));
 
-	certfile, keyfile, logfile: string;
+	certfile, keyfile: string;
 	arg->init(argv);
-	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-r httpsport] [-S hstssecs] [-C maxage] [-n maxconns] [-s persource] [-b maxbody] root");
+	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-r httpsport] [-S hstssecs] [-C maxage] [-m maxlog] [-M oldlogs] [-n maxconns] [-s persource] [-b maxbody] root");
 	while((o := arg->opt()) != 0)
 		case o {
 		'a' =>	addr = arg->earg();
@@ -140,10 +144,12 @@ init(nil: ref Draw->Context, argv: list of string)
 		'b' =>	maxbody = posint(arg->earg());
 		'v' =>	verbose = 1;
 		'C' =>	maxage = posint(arg->earg());
+		'm' =>	logmax = size(arg->earg());
+		'M' =>	logold = posint(arg->earg());
 		* =>	arg->usage();
 		}
 	argv = arg->argv();
-	if(len argv != 1 || maxconns <= 0 || maxpersource <= 0 || maxbody <= 0 || hsts < 0 || maxage < 0)
+	if(len argv != 1 || maxconns <= 0 || maxpersource <= 0 || maxbody <= 0 || hsts < 0 || maxage < 0 || logmax < big 0 || logold < 1)
 		arg->usage();
 	if(redirport != nil && (posint(redirport) <= 0 || posint(redirport) > 65535))
 		fatal("-r: not a port");
@@ -188,14 +194,17 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	if(logfile != nil) {
-		logfd = sys->open(logfile, Sys->OWRITE);
-		if(logfd == nil)
-			logfd = sys->create(logfile, Sys->OWRITE, Sys->DMAPPEND|8r644);
+		if(logfile[0] != '/' && logfile[0] != '#') {
+			cwd := sys->fd2path(sys->open(".", Sys->OREAD));
+			logfile = cwd + "/" + logfile;
+		}
+		logfd = openlog();
 		if(logfd == nil)
 			fatal(sys->sprint("cannot open %s: %r", logfile));
-		sys->seek(logfd, big 0, Sys->SEEKEND);
 	} else
 		logfd = sys->fildes(1);
+	logc = chan[128] of array of byte;
+	spawn logger();
 
 	timefd = sys->open("/dev/time", Sys->OREAD);
 	epoch0 = daytime->now();
@@ -325,7 +334,7 @@ ticker(c: chan of int)
 connection(dfd: ref FD, ip: string, w: ref Watch, sync: chan of int)
 {
 	pid := sys->pctl(Sys->NEWPGRP, nil);
-	keep := dfd.fd :: logfd.fd :: stderr.fd :: nil;
+	keep := dfd.fd :: stderr.fd :: nil;	# not the log's: the logger writes it
 	if(timefd != nil)
 		keep = timefd.fd :: keep;
 	if(tls != nil)
@@ -1335,8 +1344,86 @@ logreq(ip: string, r: ref Req, code: int, n: big)
 	s := sys->sprint("%s - - [%02d/%s/%d:%02d:%02d:%02d +0000] \"%s %s %s\" %d %bd \"%s\" \"%s\"\n",
 		ip, t.mday, months[t.mon], t.year + 1900, t.hour, t.min, t.sec,
 		logesc(r.meth), logesc(r.target), vers(r.vers), code, n, logesc(r.referer), logesc(r.agent));
-	b := array of byte s;
-	sys->write(logfd, b, len b);
+	logc <-= array of byte s;
+}
+
+# The log, opened to append
+openlog(): ref FD
+{
+	fd := sys->open(logfile, Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->create(logfile, Sys->OWRITE, Sys->DMAPPEND|8r644);
+	if(fd != nil)
+		sys->seek(fd, big 0, Sys->SEEKEND);
+	return fd;
+}
+
+# The listener's side of the log: each connection's line written
+# whole (none interleaved), and with -l the file rotated when it
+# reaches -m bytes: log.M removed, log.i renamed log.i+1, log renamed
+# log.1, a new log begun.  A device's storage then holds at most
+# about (M+1) times -m of log, whatever the traffic.
+logger()
+{
+	written := big 0;
+	if(logfile != nil) {
+		(ok, d) := sys->fstat(logfd);
+		if(ok >= 0)
+			written = d.length;
+	}
+	for(;;) {
+		b := <-logc;
+		if(logfd != nil)
+			sys->write(logfd, b, len b);
+		written += big len b;
+		if(logfile != nil && logmax > big 0 && written >= logmax) {
+			rotate();
+			written = big 0;
+		}
+	}
+}
+
+rotate()
+{
+	logfd = nil;
+	sys->remove(logfile + "." + string logold);
+	for(i := logold - 1; i >= 1; i--)
+		rename(logfile + "." + string i, logfile + "." + string (i + 1));
+	if(rename(logfile, logfile + ".1") < 0) {
+		# a file server that cannot rename: start the log again rather
+		# than let it grow
+		sys->fprint(stderr, "httpd: cannot rotate %s: %r; truncating it\n", logfile);
+		logfd = sys->create(logfile, Sys->OWRITE|Sys->OTRUNC, Sys->DMAPPEND|8r644);
+		return;
+	}
+	logfd = openlog();
+	if(logfd == nil)
+		sys->fprint(stderr, "httpd: cannot open %s after rotating it: %r\n", logfile);
+}
+
+rename(old, new: string): int
+{
+	(nil, name) := splitlast(new, '/');
+	d := sys->nulldir;
+	d.name = name;
+	return sys->wstat(old, d);
+}
+
+# A size: digits, then k or m for kilobytes and megabytes; -1 if not one
+size(s: string): big
+{
+	m := big 1;
+	if(s != nil && (s[len s - 1] == 'k' || s[len s - 1] == 'K')) {
+		m = big 1024;
+		s = s[0:len s - 1];
+	} else if(s != nil && (s[len s - 1] == 'm' || s[len s - 1] == 'M')) {
+		m = big (1024*1024);
+		s = s[0:len s - 1];
+	}
+	n := decimal(s);
+	if(n < big 0)
+		return big -1;
+	return n * m;
 }
 
 vers(v: int): string

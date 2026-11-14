@@ -23,6 +23,10 @@ httpd \- web server for a name space
 ] [
 .BI -C " maxage"
 ] [
+.BI -m " maxlog"
+] [
+.BI -M " oldlogs"
+] [
 .BI -n " maxconns"
 ] [
 .BI -s " persource"
@@ -60,9 +64,11 @@ then
 .BR pctl(NODEVS) ,
 an empty environment
 .RB ( NEWENV )
-and no descriptors but the connection's, the log's and the TLS
+and no descriptors but the connection's, the clock's and the TLS
 module's entropy source
 .RB ( NEWFD ).
+A connection does not write the log: it sends its line to the
+listener, which alone holds the log.
 In that name space
 .B /
 is the site and
@@ -284,6 +290,38 @@ Append each request to
 in Common Log Format with the referer and agent (Apache's
 .IR combined );
 the default is standard output.
+The log is rotated when it reaches
+.I maxlog
+bytes (default
+.BR 1m ):
+.IB log . oldlogs
+is removed, each
+.IB log . i
+becomes
+.IB log . i+1\fR,
+.I log
+becomes
+.IB log .1
+and a new
+.I log
+is begun, so it takes at most about
+.RI ( oldlogs +1)
+times
+.I maxlog
+of storage.
+.TP
+.BI -m " maxlog"
+The size at which the log is rotated: bytes, or with
+.B k
+or
+.B m
+after it;
+.B 0
+never rotates it.
+.TP
+.BI -M " oldlogs"
+How many old logs are kept (default 2).
+A file server that cannot rename a file has its log truncated instead.
 .TP
 .B -L
 List directories that have no

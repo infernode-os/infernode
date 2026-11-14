@@ -103,7 +103,7 @@ line two'} {}
 bind /chan/httpdfast $T/site/events/fast
 file2chan /chan/httpdslow {sleep 17; rread ping} {}
 bind /chan/httpdslow $T/site/events/slow
-svc/httpd/httpd -v -L -p /post/ctl -w /wiki -l $T/access.log -a tcp!127.0.0.1!$P1 $T/site &
+svc/httpd/httpd -v -L -p /post/ctl -w /wiki -l $T/access.log -m 16k -M 2 -a tcp!127.0.0.1!$P1 $T/site &
 svc/httpd/httpd -v -c $T/cert.pem -k $T/key.pem -S 600 -C 600 -a tcp!127.0.0.1!$P2 $T/site &
 svc/httpd/httpd -r $P2 -a tcp!127.0.0.1!$P3 $T/site &
 svc/httpd/httpd -v -n 6 -s 3 -a tcp!127.0.0.1!$P4 $T/site &
@@ -148,12 +148,26 @@ else
 	echo "FAIL: processes left over: $n0 Progs at start, $n1 at the end"; fails=$((fails+1))
 fi
 
-# the access log is Common Log Format
-if grep -qE '^127\.0\.0\.1 - - \[[0-9]{2}/[A-Z][a-z]{2}/[0-9]{4}:[0-9:]{8} \+0000\] "GET /hello.txt HTTP/1\.1" 200 13 ' "$W/access.log"; then
+# the access log: Common Log Format, rotated at 16K keeping two old
+# logs (-m 16k -M 2) through all of the above, each line whole
+python3 -c "import socket; s=socket.create_connection(('127.0.0.1', $P1)); s.sendall(b'GET /hello.txt?last HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n'); s.recv(1000)"
+sleep 1
+CLF='^127\.0\.0\.1 - - \[[0-9]{2}/[A-Z][a-z]{2}/[0-9]{4}:[0-9:]{8} \+0000\] "[^"]*" [0-9]{3} [0-9]+ "[^"]*" "[^"]*"$'
+if grep -qE '^127\.0\.0\.1 - - \[[0-9]{2}/[A-Z][a-z]{2}/[0-9]{4}:[0-9:]{8} \+0000\] "GET /hello.txt HTTP/1\.1" 200 13 ' "$W"/access.log*; then
 	echo "PASS: the access log is in Common Log Format"
 else
 	echo "FAIL: the access log is not in Common Log Format"; head -3 "$W/access.log"; fails=$((fails+1))
 fi
+if [ -f "$W/access.log.1" ] && [ -f "$W/access.log.2" ] && [ ! -e "$W/access.log.3" ]; then
+	echo "PASS: the log rotated, two old logs kept"
+else
+	echo "FAIL: the log did not rotate as -m 16k -M 2 says"; ls -l "$W"/access.log*; fails=$((fails+1))
+fi
+big=0; for f in "$W"/access.log*; do [ "$(wc -c < "$f")" -le $((16384 + 1024)) ] || big=1; done
+if [ $big -eq 0 ]; then echo "PASS: no log past its 16K (and a line)"; else echo "FAIL: a log past 16K"; ls -l "$W"/access.log*; fails=$((fails+1)); fi
+torn=$(cat "$W"/access.log* | grep -cvE "$CLF")
+if [ "$torn" -eq 0 ]; then echo "PASS: every line of every log whole ($(cat "$W"/access.log* | wc -l) lines)"; else echo "FAIL: $torn log lines not whole"; cat "$W"/access.log* | grep -vE "$CLF" | head -3; fails=$((fails+1)); fi
+if tail -1 "$W/access.log" | grep -q 'GET /hello.txt?last '; then echo "PASS: the newest request in the current log"; else echo "FAIL: the newest request is not at the end of the current log"; fails=$((fails+1)); fi
 if ! kill -0 "$emupid" 2>/dev/null; then
 	echo "FAIL: emu exited"; fails=$((fails+1))
 fi

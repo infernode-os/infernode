@@ -67,6 +67,9 @@ sign alice alice-laptop ca cli.ext
 sign bob bob-phone int cli.ext
 sign srvonly a-server ca srv.ext
 sign revoked mallory ca cli.ext
+# an RSA key whose exponent is past 32 bits: costly to check, refused
+q genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_pubexp:0x100000001 -out bigexp.key
+sign bigexp big-exponent ca cli.ext
 q req -new -key alice.key -subj "/CN=alice-laptop" -out o.csr; q x509 -req -in o.csr -CA other.pem -CAkey other.key -CAcreateserial -days 2 -extfile cli.ext -out other.chain
 cp alice.key other.key2; mv other.key2 other.key.client
 q req -x509 -new -key selfsigned.key -subj "/CN=alice-laptop" -days 2 -addext "extendedKeyUsage=clientAuth" -out selfsigned.pem
@@ -76,12 +79,12 @@ printf '[ca]\ndefault_ca=c\n[c]\ndatabase=db/index.txt\ncrlnumber=db/crlnumber\n
 q ca -config ca.cnf -keyfile ca.key -cert ca.pem -revoke revoked.pem
 q ca -config ca.cnf -keyfile ca.key -cert ca.pem -gencrl -out ca.crl
 q ca -config ca.cnf -keyfile other.key -cert other.pem -gencrl -out other.crl
-for f in ca.pem ca.crl int.pem alice.pem bob.pem srvonly.pem revoked.pem selfsigned.pem server.pem other.chain other.crl; do
+for f in ca.pem ca.crl int.pem alice.pem bob.pem srvonly.pem revoked.pem selfsigned.pem server.pem other.chain other.crl bigexp.pem; do
 	[ -s "$f" ] || { echo "FAIL: could not make $f"; exit 1; }
 done
 cat ca.pem ca.crl > trust.pem
 cat ca.pem other.crl > badtrust.pem
-cp alice.pem alice.chain; cp srvonly.pem srvonly.chain; cp revoked.pem revoked.chain; cp selfsigned.pem selfsigned.chain
+cp bigexp.pem bigexp.chain; cp alice.pem alice.chain; cp srvonly.pem srvonly.chain; cp revoked.pem revoked.chain; cp selfsigned.pem selfsigned.chain
 cat bob.pem int.pem > bob.chain; cp bob.pem bobleaf.chain; cp bob.key bobleaf.key
 mv other.key otherca.key; cp alice.key other.key
 FP=$(q x509 -in alice.pem -outform der | sha256sum | cut -c1-64)
@@ -100,6 +103,7 @@ echo secret > site/secret/x.txt
 echo report > site/report.txt; gzip -9 -n -c site/report.txt > site/report.txt.gz
 echo index > site/idx/index.html
 mkdir -p site/mixed/locked; echo o > site/mixed/open.txt; echo l > site/mixed/locked/x.txt
+mkdir -p site/pub/dl site/admin/dl; echo dl > site/pub/dl/f.txt
 : > site/ev/feed
 cat > rules <<RULES
 realm Test site
@@ -115,6 +119,7 @@ GET /led	password cert
 /idx/index.html	cert
 POST /wiki	cert
 /mixed/locked	cert
+/pub/dl		none
 RULES
 printf '/open none\n' > plainrules
 printf 'realm Lockout\n/ password\n' > lockrules
@@ -163,6 +168,9 @@ load file2chan
 # /alias is /admin under another name: what a host that folds case or
 # keeps 8.3 names makes of /ADMIN or /ADMINI~1
 bind $T/site/admin $T/site/alias
+# and /pub/dl, open, also inside /admin: one identity under two rules
+# (as an inode used again would make), the open one must not open /admin
+bind $T/site/pub/dl $T/site/admin/dl
 file2chan /chan/authfeed {sleep 1; rread 'café ☕'} {}
 bind /chan/authfeed $T/site/ev/feed
 svc/httpd/httpd -v -L $TLSARGS -A $T/trust.pem -P $T/pw -x $T/rules -p /led/ctl -w /wiki -l $T/access.log -a tcp!127.0.0.1!$P1 $T/site &

@@ -111,7 +111,7 @@ Rule: adt {
 	dev:	int;
 };
 rules: list of ref Rule;
-resolved := 0;		# a rule matches by identity too
+maxresolved := 0;	# the depth of the deepest protecting rule found by identity: no stat past it
 rulesprotect := 0;	# a rule protects something
 authc: chan of (string, string, string, chan of int);	# (user, password, address, answer) to the authenticator
 Ok, Bad, Locked: con iota;
@@ -128,6 +128,7 @@ stderr: ref FD;
 # board's clock is often set by timesync(8) or NTP after boot).  If
 # there is none, the time at start and the millisecond clock since.
 timefd: ref FD;
+ntfs := 0;		# the emulator is Windows's (its emuhost is Nt)
 epoch0 := 0;
 ms0 := 0;
 
@@ -261,6 +262,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	spawn logger();
 
 	timefd = sys->open("/dev/time", Sys->OREAD);
+	ntfs = trim(readfile("/env/emuhost", 64)) == "Nt";
 	epoch0 = daytime->now();
 	ms0 = sys->millisec();
 
@@ -1014,6 +1016,13 @@ eventstream(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
 	streamc <-= (io.w, ok);
 	if(<-ok == 0)
 		return errorpage(io, r, 503, "Retry-After: 30\r\n");
+	(code, n, keep) := eventstream0(io, r, fd);
+	io.w.stream = 0;	# a kept connection that streamed once is not a stream now
+	return (code, n, keep);
+}
+
+eventstream0(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
+{
 	hdr := "Content-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n";
 	chunked := r.vers == 11;
 	if(chunked)
@@ -1231,6 +1240,7 @@ listing(io: ref Io, r: ref Req, path: string, fd: ref FD): (int, big, int)
 	names: list of string;
 	count := 0;
 	for(;;) {
+		io.deadline(IOWAIT);
 		(n, d) := sys->dirread(fd);
 		if(n <= 0)
 			break;
@@ -1238,7 +1248,7 @@ listing(io: ref Io, r: ref Req, path: string, fd: ref FD): (int, big, int)
 			if(d[i].name == nil || d[i].name[0] == '.')
 				continue;
 			nm := d[i].name;
-			if(protection() && !mayshow(io, r, path + nm))
+			if(protection() && !mayshow(io, r, path + nm, d[i]))
 				continue;	# not one this client may have: not named either
 			if(d[i].mode & Sys->DMDIR)
 				nm += "/";
@@ -2103,15 +2113,19 @@ logname(s: string): string
 	return t;
 }
 
-# The rule for a path: the deepest rule that is the path or a directory
-# of it, a rule for the method before one for both; nil if none
-# (refused, with -x).  A rule matches by its name, in lower case, and,
-# when what it names existed when httpd started, by that file's
-# identity too (its qid and device), found by a stat of each directory
-# on the way: a host that takes /ADMIN, /ADMINI~1 or /admın for
-# /admin (macOS's APFS, Windows's NTFS) opens the same directory,
-# whatever the name.
-findrule(path, meth: string): ref Rule
+# The rule for a path, by name: the deepest rule that is the path or a
+# directory of it, a rule for the method before one for both, paths in
+# lower case; nil if none (refused, with -x).
+#
+# And the rules it must meet as well, by identity: a host that takes
+# /ADMIN, /ADMINI~1 or a folded /admın for /admin (macOS's APFS) opens
+# the same directory whatever the name, so each directory on the
+# request's way is stat'ed and a protecting rule whose path had that
+# identity (qid, dtype, dev) when httpd started applies too.  Identity
+# only ever adds a rule to meet, never takes one away: an identity
+# shared by accident (an inode used again after a delete, a server's
+# small qids) can protect too much, not too little.
+findrules(path, meth: string, ident: int): (ref Rule, list of ref Rule)
 {
 	if(meth == "HEAD")
 		meth = "GET";
@@ -2124,27 +2138,35 @@ findrule(path, meth: string): ref Rule
 		if(under(lp, ru.prefix))
 			best = better(best, ru);
 	}
-	if(!resolved)
-		return best;
-	# each directory on the way, and the path itself, by identity
+	if(!ident || maxresolved == 0)
+		return (best, nil);
+	extra: list of ref Rule;
 	p := "";
-	segs := split(path, '/');
-	for(sl := segs; sl != nil; sl = tl sl) {
+	depth := 0;
+	for(sl := split(path, '/'); sl != nil && depth < maxresolved; sl = tl sl) {
 		if(hd sl == "")
 			continue;
 		p += "/" + hd sl;
+		depth++;
 		(ok, d) := sys->stat(p);
 		if(ok < 0)
 			break;
-		for(l = rules; l != nil; l = tl l) {
-			ru := hd l;
-			if(ru.meth != nil && ru.meth != meth || !ru.resolved)
-				continue;
-			if(ru.qpath == d.qid.path && ru.dtype == d.dtype && ru.dev == d.dev)
-				best = better(best, ru);
-		}
+		extra = identityrules(d, meth, extra);
 	}
-	return best;
+	return (best, extra);
+}
+
+# The protecting rules (for meth) whose path had d's identity
+identityrules(d: Dir, meth: string, extra: list of ref Rule): list of ref Rule
+{
+	for(l := rules; l != nil; l = tl l) {
+		ru := hd l;
+		if(!ru.resolved || !protects(ru.terms) || ru.meth != nil && ru.meth != meth)
+			continue;
+		if(ru.qpath == d.qid.path && ru.dtype == d.dtype && ru.dev == d.dev)
+			extra = ru :: extra;
+	}
+	return extra;
 }
 
 better(best, ru: ref Rule): ref Rule
@@ -2203,6 +2225,12 @@ authorise(io: ref Io, r: ref Req): (int, string)
 	# another's (ADMIN~1, an 8.3 name) is refused whatever its rule
 	if(protection() && shortname(r.path))
 		return (400, nil);
+	# a Windows host folds the case of letters past ASCII (ı is I, ſ
+	# is S) and the emulator's identity for a file there is a hash of
+	# its name: a path not ASCII cannot be matched to its rule, and
+	# is refused while anything is protected
+	if(protection() && ntfs && !ascii(r.path))
+		return (400, nil);
 	paths := r.path :: nil;
 	if(len r.path > 3 && r.path[len r.path - 3:] == ".gz")
 		paths = r.path[0:len r.path - 3] :: paths;
@@ -2223,15 +2251,34 @@ authorise(io: ref Io, r: ref Req): (int, string)
 
 authorise1(io: ref Io, r: ref Req, path, meth: string): (int, string)
 {
-	terms: list of ref Term;
-	if(rulesfile != nil) {
-		ru := findrule(path, meth);
-		if(ru == nil)
-			return (403, nil);	# no rule names it: refused
-		terms = ru.terms;
-	} else
-		terms = defaultterms(meth);
+	if(rulesfile == nil)
+		return termsok(io, r, defaultterms(meth));
+	(ru, extra) := findrules(path, meth, 1);
+	if(ru == nil)
+		return (403, nil);	# no rule names it: refused
+	(code, hdr) := termsok(io, r, ru.terms);
+	for(; extra != nil && code == 0; extra = tl extra)
+		if(hd extra != ru)
+			(code, hdr) = termsok(io, r, (hd extra).terms);
+	return (code, hdr);
+}
 
+# a term t a certificate meets: a name is a CN, or a fingerprint if it
+# says sha256:, never either (a CN of "sha256:..." is no fingerprint)
+certmeets(io: ref Io, t: ref Term): int
+{
+	if(io.fp == nil)
+		return 0;
+	if(t.name == nil)
+		return 1;
+	if(prefix(t.name, "sha256:"))
+		return t.name == io.fp;
+	return t.name == io.cn;
+}
+
+# (0, nil) if the request meets one of terms; else the refusal
+termsok(io: ref Io, r: ref Req, terms: list of ref Term): (int, string)
+{
 	wantpw := 0;
 	for(l := terms; l != nil; l = tl l) {
 		t := hd l;
@@ -2239,13 +2286,9 @@ authorise1(io: ref Io, r: ref Req, path, meth: string): (int, string)
 		Anyone =>
 			return (0, nil);
 		Cert =>
-			if(io.fp == nil)
-				continue;
-			# a name is a CN, or a fingerprint if it says sha256:,
-			# never either (a CN of "sha256:..." is no fingerprint)
-			if(t.name == nil || prefix(t.name, "sha256:") && t.name == io.fp ||
-			   !prefix(t.name, "sha256:") && t.name == io.cn) {
-				r.user = "cert:" + io.cn;
+			if(certmeets(io, t)) {
+				if(r.user == nil)
+					r.user = "cert:" + io.cn;
 				return (0, nil);
 			}
 		Password =>
@@ -2275,32 +2318,42 @@ authorise1(io: ref Io, r: ref Req, path, meth: string): (int, string)
 	}
 	for(l = terms; l != nil; l = tl l)
 		if((hd l).kind == Password && ((hd l).name == nil || (hd l).name == user)) {
-			r.user = user;
+			if(r.user == nil || prefix(r.user, "cert:"))
+				r.user = user;
 			return (0, nil);
 		}
 	return (403, nil);	# the right password, but not a user this path names
 }
 
 # Whether a listing shows an entry: not one the requester could not
-# have (a rule it does not meet, by what it has already shown: its
-# certificate, or the user its password was found to be)
-mayshow(io: ref Io, r: ref Req, path: string): int
+# have, by what it has already shown (its certificate, or the user its
+# password was found to be), under the entry's rule by name and, by
+# identity, the entry's own Dir (no further stat: a listing of 10000
+# names costs none)
+mayshow(io: ref Io, r: ref Req, path: string, d: Dir): int
 {
-	terms: list of ref Term;
-	if(rulesfile != nil) {
-		ru := findrule(path, r.meth);
-		if(ru == nil)
+	if(rulesfile == nil)
+		return termsmet(io, r, defaultterms(r.meth));
+	(ru, nil) := findrules(path, r.meth, 0);
+	if(ru == nil || !termsmet(io, r, ru.terms))
+		return 0;
+	if(maxresolved == 0)
+		return 1;
+	for(l := identityrules(d, r.meth, nil); l != nil; l = tl l)
+		if(!termsmet(io, r, (hd l).terms))
 			return 0;
-		terms = ru.terms;
-	} else
-		terms = defaultterms(r.meth);
+	return 1;
+}
+
+termsmet(io: ref Io, r: ref Req, terms: list of ref Term): int
+{
 	for(; terms != nil; terms = tl terms) {
 		t := hd terms;
 		case t.kind {
 		Anyone =>
 			return 1;
 		Cert =>
-			if(io.fp != nil && (t.name == nil || t.name == io.fp || t.name == io.cn))
+			if(certmeets(io, t))
 				return 1;
 		Password =>
 			if(r.user != nil && !prefix(r.user, "cert:") && (t.name == nil || t.name == r.user))
@@ -2459,7 +2512,8 @@ loadrules()
 				ru.qpath = d.qid.path;
 				ru.dtype = d.dtype;
 				ru.dev = d.dev;
-				resolved = 1;
+				if(protects(ru.terms) && ru.depth > maxresolved)
+					maxresolved = ru.depth;
 			}
 		}
 		rev = ru :: rev;
@@ -2728,7 +2782,9 @@ dosdevice(seg: string): int
 	"con" or "prn" or "aux" or "nul" or "conin$" or "conout$" or "clock$" =>
 		return 1;
 	}
-	if(len base == 4 && (prefix(base, "com") || prefix(base, "lpt")) && base[3] >= '0' && base[3] <= '9')
+	# COM1-9, LPT1-9, and COM¹²³ and LPT¹²³ (Windows reserves those too)
+	if(len base == 4 && (prefix(base, "com") || prefix(base, "lpt")) &&
+	   (base[3] >= '0' && base[3] <= '9' || base[3] == 16rB9 || base[3] == 16rB2 || base[3] == 16rB3))
 		return 1;
 	return 0;
 }
@@ -2738,4 +2794,12 @@ max(a, b: int): int
 	if(a > b)
 		return a;
 	return b;
+}
+
+ascii(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] > 16r7E)
+			return 0;
+	return 1;
 }

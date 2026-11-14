@@ -44,6 +44,42 @@ TrustedRoot: adt {
 trust_store: list of ref TrustedRoot;
 trust_store_loaded: int;
 
+# What a verification takes its roots, CRLs and time from: nil, the
+# stores (/lib/certs, /lib/crls) and /dev/time; else these alone
+VCtx: adt {
+	roots:	list of ref TrustedRoot;
+	crls:	list of ref CRLEntry;
+	now:	int;
+	stores:	int;	# the stores and /dev/time, not these
+	work:	int;	# signatures left to check in the search for a path
+};
+
+# A path search may check at most this many signatures: a chain of
+# certificates that all name each other (one issuer, ten CAs) has
+# paths without number, and each would cost a signature
+MAXWORK: con 64;
+
+ctxroots(ctx: ref VCtx): list of ref TrustedRoot
+{
+	if(ctx == nil || ctx.stores) {
+		load_trust_store();
+		return trust_store;
+	}
+	return ctx.roots;
+}
+
+ctxnow(ctx: ref VCtx): int
+{
+	if(ctx == nil || ctx.stores)
+		return daytime->now();
+	return ctx.now;
+}
+
+validat(validity: ref Validity, now: int): int
+{
+	return big now >= validity.not_before && big now <= validity.not_after;
+}
+
 # CRL store: lazily loaded certificate revocation lists
 CRLEntry: adt {
 	signed:	ref Signed;
@@ -284,17 +320,25 @@ load_crl_store()
 # Check if a certificate is revoked by any loaded CRL from its issuer.
 # Returns (1, reason) if revoked, (0, "") if not revoked or no CRL found.
 
-check_revoked(cert: ref Certificate): (int, string)
+check_revoked(cert: ref Certificate, ctx: ref VCtx): (int, string)
 {
-	load_crl_store();
-	l := crl_store;
-	now := daytime->now();
+	l: list of ref CRLEntry;
+	if(ctx != nil && !ctx.stores)
+		l = ctx.crls;
+	else {
+		load_crl_store();
+		l = crl_store;
+	}
+	now := ctxnow(ctx);
 	while(l != nil) {
 		entry := hd l;
 		# Match CRL issuer to certificate issuer
 		if(entry.crl.issuer.equal(cert.issuer)) {
-			# Skip expired CRLs (next_update == 0 means no expiry)
-			if(entry.crl.next_update != big 0 && entry.crl.next_update < big now) {
+			# Skip expired CRLs (next_update == 0 means no expiry); but
+			# not those a caller gave (ctx): a stale list of revoked
+			# certificates still names them, and skipping it would let
+			# them back in
+			if((ctx == nil || ctx.stores) && entry.crl.next_update != big 0 && entry.crl.next_update < big now) {
 				l = tl l;
 				continue;
 			}
@@ -2005,6 +2049,13 @@ Extension.tostring(e: self ref Extension): string
 
 verify_certchain(cs: list of array of byte): (int, string)
 {
+	return verify_chain(cs, nil);
+}
+
+verify_chain(cs: list of array of byte, ctx: ref VCtx): (int, string)
+{
+	if(ctx == nil)
+		ctx = ref VCtx(nil, nil, 0, 1, MAXWORK);
 	nodes: list of ref Node;
 	for(l := cs; l != nil; l = tl l) {
 		der := hd l;
@@ -2024,7 +2075,46 @@ verify_certchain(cs: list of array of byte): (int, string)
 	l2: list of ref Node;
 	for(; nodes != nil; nodes = tl nodes)
 		l2 = hd nodes :: l2;	# back to presented order
-	return verify_leaf(hd l2, tl l2);
+	return verify_leaf(hd l2, tl l2, ctx);
+}
+
+# [public]
+verify_certchain_roots(cs: list of array of byte, roots: list of array of byte,
+	crls: list of array of byte, now: int): (int, string)
+{
+	ctx := ref VCtx(nil, nil, now, 0, MAXWORK);
+	for(r := roots; r != nil; r = tl r) {
+		(serr, s) := Signed.decode(hd r);
+		if(serr != "")
+			return (0, "root: " + serr);
+		(cerr, c) := Certificate.decode(s.tobe_signed);
+		if(cerr != "")
+			return (0, "root: " + cerr);
+		ctx.roots = ref TrustedRoot(s, c) :: ctx.roots;
+	}
+	if(ctx.roots == nil)
+		return (0, "no roots");
+	for(l := crls; l != nil; l = tl l) {
+		(serr, s) := Signed.decode(hd l);
+		if(serr != "")
+			return (0, "CRL: " + serr);
+		(cerr, crl) := CRL.decode(s.tobe_signed);
+		if(cerr != "")
+			return (0, "CRL: " + cerr);
+		# a CRL counts only if a root signed it (the stores' CRLs are
+		# not checked; these come from a server's configuration and
+		# are checked all the same)
+		signed := 0;
+		for(t := ctx.roots; t != nil && !signed; t = tl t)
+			if((hd t).cert.subject.equal(crl.issuer)) {
+				(ok, nil) := verify_issued(s, (hd t).cert);
+				signed = ok;
+			}
+		if(!signed)
+			return (0, "CRL not signed by a root: " + crl.issuer.tostring());
+		ctx.crls = ref CRLEntry(s, crl) :: ctx.crls;
+	}
+	return verify_chain(cs, ctx);
 }
 
 # [public]
@@ -2040,7 +2130,7 @@ verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 	}
 	if(l == nil)
 		return (0, "no certificates");
-	return verify_leaf(hd l, tl l);
+	return verify_leaf(hd l, tl l, ref VCtx(nil, nil, 0, 1, MAXWORK));
 }
 
 # [private]
@@ -2057,32 +2147,33 @@ Node: adt {
 	c:	ref Certificate;
 };
 
-verify_leaf(leaf: ref Node, pool: list of ref Node): (int, string)
+verify_leaf(leaf: ref Node, pool: list of ref Node, ctx: ref VCtx): (int, string)
 {
-	if(!is_validtime(leaf.c.validity))
+	if(!validat(leaf.c.validity, ctxnow(ctx)))
 		return (0, "certificate expired or not yet valid: " + leaf.c.subject.tostring());
-	(revoked, reason) := check_revoked(leaf.c);
+	(revoked, reason) := check_revoked(leaf.c, ctx);
 	if(revoked)
 		return (0, reason);
-	return findpath(leaf, pool, 0, leaf :: nil);
+	return findpath(leaf, pool, 0, leaf :: nil, ctx);
 }
 
 # n is accepted; find its issuer. depth counts the intermediates already
 # on the path below n's issuer (0 when n is the leaf).
-findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node): (int, string)
+findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node, ctx: ref VCtx): (int, string)
 {
-	if(is_anchor(n))
+	if(is_anchor(n, ctx))
 		return (1, "");
 	if(depth > MAXPATH)
 		return (0, "certificate path too long");
 	lasterr := "no trusted root CA for " + n.c.issuer.tostring();
 
 	# a trust anchor that issued n
-	load_trust_store();
-	for(t := trust_store; t != nil; t = tl t) {
+	for(t := ctxroots(ctx); t != nil; t = tl t) {
 		tr := hd t;
 		if(!tr.cert.subject.equal(n.c.issuer))
 			continue;
+		if(--ctx.work < 0)
+			return (0, "certificate path: too many signatures to check");
 		(ok, err) := verify_issued(n.s, tr.cert);
 		if(ok)
 			return (1, "");
@@ -2095,19 +2186,21 @@ findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node
 		cand := hd p;
 		if(onpath(path, cand) || !cand.c.subject.equal(n.c.issuer))
 			continue;
-		err := check_ca(cand.c, depth);
+		err := check_ca(cand.c, depth, ctx);
 		if(err == nil) {
+			if(--ctx.work < 0)
+				return (0, "certificate path: too many signatures to check");
 			(ok, e) := verify_issued(n.s, cand.c);
 			if(!ok)
 				err = e;
 		}
 		if(err == nil) {
-			(revoked, reason) := check_revoked(cand.c);
+			(revoked, reason) := check_revoked(cand.c, ctx);
 			if(revoked)
 				err = reason;
 		}
 		if(err == nil) {
-			(ok, e) := findpath(cand, pool, depth+1, cand :: path);
+			(ok, e) := findpath(cand, pool, depth+1, cand :: path, ctx);
 			if(ok)
 				return (1, "");
 			err = e;
@@ -2118,10 +2211,9 @@ findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node
 }
 
 # n is itself in the trust store (the server sent the root, or is one)
-is_anchor(n: ref Node): int
+is_anchor(n: ref Node, ctx: ref VCtx): int
 {
-	load_trust_store();
-	for(t := trust_store; t != nil; t = tl t)
+	for(t := ctxroots(ctx); t != nil; t = tl t)
 		if(bytesequal((hd t).signed.tobe_signed, n.s.tobe_signed))
 			return 1;
 	return 0;
@@ -2154,9 +2246,9 @@ bytesequal(a, b: array of byte): int
 }
 
 # May c issue certificates at this depth? nil if so, else why not.
-check_ca(c: ref Certificate, depth: int): string
+check_ca(c: ref Certificate, depth: int, ctx: ref VCtx): string
 {
-	if(!is_validtime(c.validity))
+	if(!validat(c.validity, ctxnow(ctx)))
 		return "issuer certificate expired or not yet valid";
 	ca := 0;
 	pathlen := -1;
@@ -2186,6 +2278,8 @@ check_ca(c: ref Certificate, depth: int): string
 }
 
 OID_BASICCONSTRAINTS := array [] of {2,5,29,19};
+OID_CRLNUMBER := array [] of {2,5,29,20};
+OID_AUTHKEYID := array [] of {2,5,29,35};
 OID_KEYUSAGE := array [] of {2,5,29,15};
 OID_SHA512RSA := array [] of {1,2,840,113549,1,1,13};
 OID_ECDSASHA512 := array [] of {1,2,840,10045,4,3,4};
@@ -2250,6 +2344,11 @@ verify_issued(child: ref Signed, issuer: ref Certificate): (int, string)
 	(err, nil, pk) := issuer.subject_pkinfo.getPublicKey();
 	if(err != "")
 		return (0, "issuer key: " + err);
+	pick k := pk {
+	RSA =>
+		if((e := rsasane(k.pk)) != nil)
+			return (0, "issuer key: " + e);
+	}
 	algid := asn1->oid_lookup(child.alg.oid, pkcs->objIdTab);
 	pick key := pk {
 	RSA =>
@@ -2392,13 +2491,19 @@ parse:
 		(ok, el) := all.is_seq();
 		if(!ok || len el < 3)
 			break parse;
-		c.version = 1; # set to default (v2)
-		(ok, c.version) = parse_version(hd el);
-		if(!ok)
-			break parse;
-		if(c.version < 0) {
+		# TBSCertList (RFC 5280 §5.1): version is a plain INTEGER, there
+		# only in v2 (1), not [0] as in a certificate.  (It was read as
+		# a certificate's and the list never advanced past it, so no
+		# CRL OpenSSL makes decoded.)
+		c.version = 0;
+		if((hd el).tag.class == Universal && (hd el).tag.num == INTEGER) {
+			v: int;
+			(ok, v) = (hd el).is_int();
+			if(!ok || v != 1)
+				break parse;
+			c.version = v;
 			el = tl el;
-			if(len el < 4)
+			if(len el < 3)
 				break parse;
 		}
 		# signature algorithm
@@ -2425,19 +2530,27 @@ parse:
 				break parse;
 			el = tl el;
 		}
-		# revoked certificates
-		if(el != nil) {
+		# revoked certificates: OPTIONAL, a SEQUENCE (absent when none is)
+		if(el != nil && (hd el).tag.class == Universal && (hd el).tag.num == SEQUENCE) {
 			(ok, c.revoked_certs) = parse_revoked_certs(hd el);
 			if(!ok)
 				break parse;
 			el = tl el;
 		}
-		# extensions
+		# crlExtensions [0] EXPLICIT, v2 only
 		if(el != nil) {
-			(ok, c.exts) = parse_extlist(hd el);	
+			(isctx, inner) := is_context(hd el, 0);
+			if(!isctx || c.version != 1)
+				break parse;
+			(ok, c.exts) = parse_extlist(inner);
 			if(!ok)
 				break parse;
 			el = tl el;
+			# a critical extension we do not know means a CRL we cannot
+			# read as its issuer meant (a delta CRL, a partial scope)
+			for(x := c.exts; x != nil; x = tl x)
+				if((hd x).critical && !oideq((hd x).oid, OID_CRLNUMBER) && !oideq((hd x).oid, OID_AUTHKEYID))
+					break parse;
 		}
 		# must be no more left
 		if(el != nil)
@@ -2624,7 +2737,7 @@ parse_revoked(e: ref Elem): (int, ref RevokedCert)
 {
 parse:
 	for(;;) {
-		c: ref RevokedCert;
+		c := ref RevokedCert;	# (it was declared nil and written through: every entry raised)
 		(ok, el) := e.is_seq();
 		if(!ok || len el < 2)
 			break parse;
@@ -4853,4 +4966,18 @@ parse_attr(nil: ref Elem): (int, ref Attribute)
 pack_attr(nil: ref Attribute): (int, ref Elem)
 {
 	return (0, nil);
+}
+
+# An RSA key a signature is worth checking with: a chain's keys may be
+# anyone's, and one of 16384 bits with a 4096-bit exponent costs
+# seconds a signature
+rsasane(k: ref PKCS->RSAKey): string
+{
+	if(k == nil || k.modulus == nil || k.exponent == nil)
+		return "RSA key missing";
+	if(k.modulus.bits() > 8192)
+		return "RSA key past 8192 bits";
+	if(k.exponent.bits() > 32)
+		return "RSA exponent past 32 bits";
+	return nil;
 }

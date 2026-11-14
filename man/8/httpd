@@ -1,115 +1,608 @@
 .TH HTTPD 8
 .SH NAME
-httpd, echo, stats \- HTTP server
+httpd \- web server for a name space
 .SH SYNOPSIS
 .B svc/httpd/httpd
 [
+.B -Lv
+] [
 .BI -a " addr"
 ] [
-.BI -c " cachesize"
+.BI -c " cert"
+.BI -k " key"
 ] [
-.B -D
+.BI -l " log"
+] [
+.BI -p " path"
+]... [
+.BI -w " wikibase"
+] [
+.BI -r " httpsport"
+] [
+.BI -S " secs"
+] [
+.BI -C " maxage"
+] [
+.BI -m " maxlog"
+] [
+.BI -M " oldlogs"
+] [
+.BI -A " clientcas"
+] [
+.BI -P " passwords"
+] [
+.BI -x " rules"
+] [
+.BI -n " maxconns"
+] [
+.BI -s " persource"
+] [
+.BI -b " maxbody"
 ]
+.I root
 .PP
-.BI svc/httpd/echo " meth vers uri search"
-.PP
-.BI svc/httpd/stats " meth vers uri search"
+.B svc/httpd/passwd
+[
+.BI -i " iterations"
+]
+.I user
 .SH DESCRIPTION
 .I Httpd
-is a simple HTTP daemon, serving version 1.0 of the HTTP protocol.
-It listens for incoming calls on a given
-.I address
-(default:
-.BR tcp!*!80 ).
-It serves content rooted at
-.L /services/httpd/root
-in its name space.
+serves the directory
+.I root
+over HTTP/1.1, and over TLS 1.3 when given a certificate and key.
+What it serves is whatever is in
+.I root
+when a request arrives, including what has been bound or mounted under it:
+a device's file server mounted at
+.IB root /gps
+is a set of pages whose
+.B GET
+reads the device.
+Dynamic content is a file server's business, not the web server's;
+there is no CGI.
 .PP
-The
-.I httpd
-program supports only the
-.L GET
-and
-.L HEAD
-methods of the HTTP protocol. The
-.L Content-type
-(default
-.LR application/octet-stream )
-and
-.L Content-encoding
-(default
-.LR binary )
-of a file are determined by looking for suffixes of the file name in
-.BR /services/http/http.suff .
+Each connection runs in a name space of its own, made from the server's
+as it was started:
+.B pctl(FORKNS)
+(see
+.IR sys-pctl (2)),
+.I root
+bound over
+.B /
+with
+.BR MREPL ,
+then
+.BR pctl(NODEVS) ,
+an empty environment
+.RB ( NEWENV )
+and no descriptors but the connection's, the clock's and the TLS
+module's entropy source
+.RB ( NEWFD ).
+A connection does not write the log: it sends its line to the
+listener, which alone holds the log.
+In that name space
+.B /
+is the site and
+.B ..
+from it is the site; the server's own
+.BR /dis ,
+.BR /dev ,
+.BR /prog
+and the rest are not there, and no device can be attached by name.
+In the hosted emulator, a host symbolic link in the site is not
+followed once
+.B NODEVS
+is set
+.RI ( fs (3)).
+The name space sketch:
+.IP
+.EX
+/		root, as it was when httpd started
+/index.html	served for /
+/gps/	...	a mount made under root before httpd started
+/wiki/	...	wikifs, for -w /wiki
+.EE
 .PP
-If the requested URI begins with
-.BR /magic/ ,
-.I httpd
-loads the module associated with the remaining part of the URI.
-Take care to configure the name space sensibly.
-Simple servers
-.I echo
-and
-.I stats
-are provided (see below).
+Requests are refused before they reach the name space when they are
+not strictly HTTP/1.1 or HTTP/1.0: a request line or header line longer
+than 8192 bytes (414, 431), more than 64 headers or 16384 bytes of them
+(431), a folded header, a line ending in a bare LF or holding a bare CR
+or NUL, a control character in a header, a header name that is not a
+token, no
+.B Host
+under HTTP/1.1 or more than one, a
+.B Host
+that is not a host and port (400);
+.B Transfer-Encoding
+(501: no request body taken needs it, and with
+.B Content-Length
+it is how requests are smuggled), two
+.B Content-Length
+headers that differ, or one that is not digits (400).
+A path is percent-decoded once, as UTF-8; a NUL, a control character,
+bytes that are not UTF-8, a
+.B .
+or
+.B ..
+segment (a browser removes them before it sends) or a path longer than
+2048 bytes is refused (400).
+A path with a segment beginning with
+.B .
+is not found (404).
+A refused request ends its connection.
 .PP
+.B GET
+and
+.B HEAD
+send a file with its
+.BR Content-Type
+(by its name's extension),
+.BR ETag
+(from its qid),
+.BR Last-Modified ,
+and
+.BR "X-Content-Type-Options: nosniff" ;
+.B If-None-Match
+and
+.B If-Modified-Since
+are answered with 304, a single byte range with 206
+.RB ( If-Range
+honoured; several ranges get the whole file).
+A file whose length is 0 in its stat (a device's status file, a
+stream) is read until end of file and sent chunked, with
+.BR "Cache-Control: no-store" .
+A file with a compressed copy beside it,
+.IB name .gz
+(made ahead of time, as with
+.BR "gzip -9 -k" ),
+is sent as that copy, with
+.BR "Content-Encoding: gzip" ,
+to a client whose
+.B Accept-Encoding
+takes gzip, and as itself to one that does not; both answers carry
+.BR "Vary: Accept-Encoding" .
+Nothing is compressed as it is sent.
+.PP
+A file asked for with an
+.B Accept
+naming
+.B text/event-stream
+(as a browser's
+.B EventSource
+asks) is sent as Server-Sent Events: each read of the file is an event,
+each line of it a
+.B data:
+line.
+A device's event file, whose read waits for a change (gpsfs's
+.BR event ,
+the theme's
+.BR event ),
+is then a live page: the reads have no deadline, and after 15 seconds
+with nothing to send a comment line is sent, which keeps the stream
+open through proxies and finds a client that has gone.
+The file ending ends the stream; an
+.B EventSource
+then opens it again.
+At most half of
+.I maxconns
+connections hold event streams, and half of
+.I persource
+from one address; one more is refused (503).
+The same file asked for otherwise is read as any other, under the
+deadline below.
+A directory is sent as its
+.B index.html
+if it has one; otherwise it is refused (403), or listed with
+.BR -L .
+A directory named without its final
+.B /
+is redirected (301) to the name with it.
+Pages the server makes itself (errors and listings) carry a
+.B Content-Security-Policy
+that loads and runs nothing.
+.PP
+.B POST
+is taken only by the paths named with
+.BR -p ,
+whose body (at most
+.I maxbody
+bytes, default 65536, with a
+.BR Content-Length )
+replaces the file's contents in one write, as the shell's
+.B >
+does (a file that cannot be truncated, a device's
+.BR ctl ,
+is written as it is).
+If the file can then be read, what it gives is the answer (200);
+otherwise there is none (204).
+With
+.BR -w ,
+.B /magic/wikipost
+takes the edit form of a
+.I wikifs
+.RB ( appl/cmd/wikifs )
+mounted at
+.I wikibase
+in the site, writes the page to
+.IB wikibase /new
+and redirects (303) to the page; the form's own
+.B base
+field is not followed.
+Either is refused (403) when the request comes from another site: an
+.B Origin
+that is not this server's, or a
+.B Sec-Fetch-Site
+that is not
+.B same-origin
+or
+.BR none .
+A request with neither (not from a browser) is taken.
+Who may write is the business of the next section: without it a
+.B -p
+path is anyone's who can reach the server.
+.SS Who may
 .I Httpd
-has the following options:
+takes two proofs of who a client is, over TLS only (it will not start
+with
+.B -A
+or
+.B -P
+and no
+.BR -c ):
 .TP
-.BI -a " address"
-Listen for calls on the given
-.IR address ,
-expressed using the syntax of
-.IR dial (2).
-.TP
-.BI -c " cachesize"
-Set the size of the daemon's cache to
-.I cachesize
-kilobytes. The default is a five megabyte cache.
-.TP
-.B -D
-Debugging information is written to the file
-.BR /services/httpd/httpd.debug .
-.PP
-.I Echo
-is a trivial server that just returns the method, URI, any search, and the headers sent by the client.
-.PP
-.I Stats
-is an equally simple server that queries the cache and returns information to the user about pages stored in the cache.
-.PP
-More complex services can be written to
-.IR httpd 's
-private interface.
-The file
-.B httpd.m
-(in
-.BR /appl/svc/httpd )
-defines constants and adts used by
-.IR httpd .
-The file
-.B cgi.m
-defines the
-module
-.L Cgi
-which is the interface for programs called using the URI
-.BR /magic/ .
-.SH FILES
-.TF "/services/httpd/httpd.rewrite  "
-.TP
-.B /services/httpd/root
-Root of the served web content.
-.TP
-.B /services/httpd/httpd.debug
-Logfile for debugging information.
-.TP
-.B /services/httpd/httpd.log
+Client certificates
+With
+.BI -A " clientcas" \fR,
+a PEM file of CA certificates (and, if any, their CRLs as
+.B "X509 CRL"
+blocks), the TLS handshake asks every client for a certificate those
+CAs issued, naming them, so a browser offers only those.
+A client that gives one must prove its key and its chain must end at
+one of the CAs: signatures, validity, basicConstraints, keyUsage and
+path length checked, at most 64 signatures in the search for a path,
+no RSA key past 8192 bits or with an exponent past 32 bits;
+the leaf's extended key usage, if it has one, must name client
+authentication (a server's certificate from the same CA is refused),
+and a CRL from the file must not list it (a CRL past its next update
+still counts).
+A CRL no CA in the file signed stops
 .I httpd
-logfile.
+starting.
+A client that gives none goes on without one.
+A refused certificate ends the handshake.
+Revoke a certificate by a CRL in the file, or by its name leaving the
+rules.
 .TP
-.B /services/httpd/httpd.rewrite
-File to redirect specific URI requests.
+Passwords
+With
+.BI -P " passwords" \fR,
+a file of lines that
+.B svc/httpd/passwd
+makes, HTTP Basic authentication:
+.IB user :pbkdf2-sha256: iterations : salt : hash \fR,
+the hash PBKDF2-HMAC-SHA-256 (RFC 8018) of the password, 100000
+iterations unless
+.B -i
+says.
+.B Svc/httpd/passwd
+reads the password from its standard input.
+The file is read again when it changes.
+Passwords are checked by one process, one at a time; an unknown user
+costs as much as a known one, so a name is not learnt by the time; a
+password found right is taken again for five minutes without its hash.
+Ten wrong passwords from one network (an IPv4 address, an IPv6 /64)
+in ten minutes, or fifty for one user from anywhere, and further
+attempts from it, or for them, are refused (429) for the rest of the
+ten minutes, except a password already found right.
+So anyone can keep a user who is not already in out, by guessing
+wrong for that user from five networks; the lockout is against
+guessing, not for keeping people out.
+.PP
+.BI -x " rules"
+says which paths need which.
+A line is
+.RB [ GET | POST ]
+.I path term ...
+(a rule for GET is HEAD's too; one with neither method both), or
+.B realm
+.I words
+(the name a browser shows when it asks for a password).
+A term is
+.B none
+(anyone),
+.B password
+(any user),
+.BI password= user\fR,
+.B cert
+(any certificate from the CAs),
+.BI cert= cn
+(one whose subject's common name is
+.IR cn )
+or
+.BI cert=sha256: hex
+(the one whose DER's SHA-256 is that); a request may have the path if
+it meets any one of its rule's terms.
+A request's rule is the deepest whose path is its path or a directory
+of it, a rule for its method before one for both.
+Paths are compared in lower case.
+A protecting rule for a path that existed when
+.I httpd
+started applies by that file's identity as well (its qid and device,
+by a stat of each directory of the request's path): a host that takes
+.B /ADMIN
+or a folded
+.B /adm\(*in
+for
+.B /admin
+(macOS) opens the same directory and must meet the same rule.
+Identity only adds a rule to meet, never takes one away, so an
+identity shared by accident (an inode used again after a delete) can
+protect too much but not too little.
+On a Windows host, whose emulator makes a file's identity from its
+name, a path with a byte past ASCII is refused (400) while anything is
+protected.
+A path no rule names is refused (403).
+Every file a request may be answered from is checked: a
+.IB name .gz
+copy by
+.IR name 's
+rule as well as its own, a directory's
+.B index.html
+by its own rule, and
+.B /magic/wikipost
+by the POST rule of
+.I wikibase
+and
+.IB wikibase /new\fR.
+Without
+.BR -x :
+with
+.B -P
+every request needs a password or a certificate; with
+.B -A
+a POST needs a certificate.
+.PP
+The checks come before anything of the site is opened, so a refusal
+says nothing of what is there: 401 with
+.B WWW-Authenticate
+when a password would do, else 403.
+While anything is protected a path with a segment like
+.B ~1
+(a Windows short name) is refused (400), as always is one with a
+segment ending in a dot or blank, a backslash, or a Windows device's
+name
+.RB ( con ,
+.BR nul ,
+.BR com1 ...).
+A listing leaves out what its client may not have.
+The log's user field is the user, or
+.BI cert: cn\fR.
+.PP
+Each phase of a connection has a deadline: 10 seconds for the TLS
+handshake, 10 for the first request's headers, 15 between requests
+and for their headers, and 30 for each read of a body, write of a
+response and read of a file (but an event stream's), and 30 for the
+whole of a request's body.
+A connection past one is hung up and its processes killed by the
+listener, which holds the connections' control files; a file server that
+never answers holds a connection only that long.
+The listener admits at most
+.I maxconns
+connections at once (default 64), and at most
+.I persource
+from one address (default 16); a connection past either is closed
+unanswered.
+A connection is closed after 1000 requests.
+.PP
+The time in
+.B Date
+headers and the log is read from
+.BR /dev/time ,
+opened before the connections are confined, so a clock set after
+.I httpd
+started (by
+.IR timesync (8)
+or NTP on a board that boots without one) is followed.
+.PP
+The options are:
 .TP
-.B /services/httpd/httpd.suff
-File of recognizable suffixes and their content type.
+.BI -a " addr"
+Announce
+.I addr
+(default
+.B tcp!*!443
+with TLS,
+.B tcp!*!80
+without).
+.TP
+.BI -c " cert" " -k" " key"
+Serve TLS 1.3 alone
+.RB ( module/tls.m 's
+server: the X25519MLKEM768 hybrid first, then X25519, then P-256 by
+HelloRetryRequest; of AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, the
+one fastest on this machine that the client offers, timed when
+.I httpd
+starts (clients put AES-GCM first, being fast where their processor
+has AES instructions; where this one has none, ChaCha20-Poly1305 is
+several times faster); ALPN
+.BR http/1.1 ;
+no resumption or early data).
+.I Cert
+is a PEM chain, leaf first, whose key is ECDSA P-256;
+.I key
+is its PEM private key, SEC1
+.RB ( "EC PRIVATE KEY" )
+or PKCS #8
+.RB ( "PRIVATE KEY" ).
+.I Httpd
+will not start if the key is not the certificate's.
+Clients that offer only TLS 1.2 or earlier are refused.
+.TP
+.BI -l " log"
+Append each request to
+.I log
+in Common Log Format with the referer and agent (Apache's
+.IR combined );
+the default is standard output.
+The log is rotated when it reaches
+.I maxlog
+bytes (default
+.BR 1m ):
+.IB log . oldlogs
+is removed, each
+.IB log . i
+becomes
+.IB log . i+1\fR,
+.I log
+becomes
+.IB log .1
+and a new
+.I log
+is begun, so it takes at most about
+.RI ( oldlogs +1)
+times
+.I maxlog
+of storage.
+.TP
+.BI -m " maxlog"
+The size at which the log is rotated: bytes, or with
+.B k
+or
+.B m
+after it;
+.B 0
+never rotates it.
+.TP
+.BI -M " oldlogs"
+How many old logs are kept (default 2).
+A file server that cannot rename a file has its log truncated instead.
+.TP
+.B -L
+List directories that have no
+.BR index.html .
+.TP
+.BI -p " path"
+Take
+.B POST
+at
+.I path
+in the site.
+.TP
+.BI -w " wikibase"
+Take wikifs's edit form at
+.BR /magic/wikipost .
+.TP
+.BI -r " httpsport"
+Answer every request with a redirect (301) to the same place on
+.B https
+at
+.I httpsport
+of the request's host: a plain server in front of a TLS one.
+.TP
+.BI -S " secs"
+Send
+.B Strict-Transport-Security
+with
+.BI max-age= secs
+(TLS only).
+Browsers then refuse the site's plain address, and a certificate they do
+not trust, for that long: give it only for a certificate they trust.
+.TP
+.BI -C " maxage"
+Send
+.BI "Cache-Control: max-age=" maxage
+with files that are not HTML pages: a browser keeps them that long
+without asking.
+Pages are asked about each time (their
+.B ETag
+answers 304), so a changed site is seen at once; give an asset a new
+name when it changes.
+.TP
+.BI -n " maxconns" ", -s" " persource" ", -b" " maxbody"
+The limits above.
+.TP
+.B -v
+Report refused requests, failed handshakes and connections hung up,
+and the TLS suites in the order timed, on standard error.
+.TP
+.BI -A " clientcas" ", -P" " passwords" ", -x" " rules"
+Client certificates, passwords and the rules, above.
+.SH EXAMPLES
+A device's pages over TLS, with its sensor's file server in the site
+and its LED's control file writable:
+.IP
+.EX
+mount {gpsfs} /services/www/gps
+bind /dev/led /services/www/led
+svc/httpd/httpd -c /keys/web.pem -k /keys/web.key -p /led \e
+	-l /services/logs/httpd /services/www &
+svc/httpd/httpd -r 443 /services/www &
+.EE
+.PP
+A page that follows the position as it changes, through gpsfs's
+.B event
+file as an event stream (the page's script, served from the site):
+.IP
+.EX
+new EventSource("/gps/event").onmessage =
+	e => document.getElementById("fix").textContent = e.data;
+.EE
+.PP
+A wiki, browsed at
+.B /wiki/
+and edited from its pages:
+.IP
+.EX
+mount {wikifs -d /services/wiki} /services/www/wiki
+svc/httpd/httpd -w /wiki /services/www
+.EE
+.PP
+A certificate and key OpenSSL makes for it:
+.IP
+.EX
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \e
+	-keyout web.key -out web.pem -days 365 -subj /CN=device.example \e
+	-addext subjectAltName=DNS:device.example
+.EE
+.PP
+A device's administration by certificate, its pages by password, its
+public pages open:
+.IP
+.EX
+cp ca.pem /keys/clientcas
+echo secret | svc/httpd/passwd alice > /keys/passwords
+echo 'realm The device' > /keys/rules
+echo '/		password cert' >> /keys/rules
+echo '/public	none' >> /keys/rules
+echo '/admin	cert=ops-laptop' >> /keys/rules
+echo 'POST /led	cert' >> /keys/rules
+svc/httpd/httpd -c /keys/web.pem -k /keys/web.key -A /keys/clientcas \e
+	-P /keys/passwords -x /keys/rules -p /led/ctl /services/www &
+.EE
+.SH FILES
+.TF /dis/svc/httpd/httpd.dis
+.TP
+.B /dis/svc/httpd/httpd.dis
+.TP
+.B /dis/svc/httpd/passwd.dis
 .SH SOURCE
-.B /appl/svc/httpd
+.B /appl/svc/httpd/httpd.b
+.br
+.B /appl/svc/httpd/passwd.b
+.br
+.B /appl/lib/crypt/tls.b
+.SH SEE ALSO
+.IR sys-pctl (2),
+.IR fs (3),
+.IR listen (1)
+.SH BUGS
+HTTP/2 and HTTP/3 are not spoken; HTTP/1.1 over TLS 1.3 is.
+Passwords are HTTP Basic: a browser keeps one until it is closed,
+and there is no logging out.
+Rules for paths that did not exist when
+.I httpd
+started match by name alone; restart it after making a protected
+directory on a host that folds case.
+Certificates are ECDSA P-256 only, and there is no ACME client to keep
+one renewed.

@@ -106,6 +106,12 @@ TLS: module {
 
 		# Ephemeral P-256 private key for the TLS 1.3 secp256r1 key share; nil otherwise
 		eph_p256_priv:	array of byte;
+
+		# A server's connection (server()): the peer's traffic secret is
+		# then cts, and a KeyUpdate it sends replaces that
+		isserver:	int;
+		hsmax:		int;	# the longest handshake message taken; 0: MAXHSMSG
+		peercerts:	list of array of byte;	# a server's: the client's verified chain, until the Conn has it
 	};
 
 	# Connection (read/write after handshake)
@@ -113,7 +119,9 @@ TLS: module {
 		version:	int;		# negotiated TLS version
 		suite:		int;		# negotiated cipher suite
 		group:		int;		# TLS 1.3 key-exchange group (X25519MLKEM768, ...); 0 under TLS 1.2
-		servername:	string;		# peer name
+		servername:	string;		# peer name; a server's: the name the client asked for (SNI), or nil
+		alpn:		string;		# application protocol agreed (ALPN), or nil
+		peercerts:	list of array of byte;	# a server's: the client's chain (DER, leaf first), verified; nil: none
 		st:		ref State;	# nil once closed
 
 		read:	fn(c: self ref Conn, buf: array of byte, n: int): int;
@@ -121,8 +129,46 @@ TLS: module {
 		close:	fn(c: self ref Conn): string;
 	};
 
+	# A server's identity and what it offers (server(), TLS 1.3 only)
+	ServerConfig: adt {
+		certs:		list of array of byte;	# the chain in DER, leaf first
+		key:		array of byte;		# the leaf's P-256 private scalar, 32 bytes
+		alpn:		list of string;		# protocols taken, in preference order; nil: no ALPN
+		maxhello:	int;			# the longest ClientHello taken; 0: 16384
+		suites:		list of int;		# the server's preference, first that the client offers taken; nil: the client's order
+		# Client certificates (RFC 8446 §4.3.2), asked for when roots are given
+		clientroots:	list of array of byte;	# the CAs a client's chain must end at (DER); nil: none asked for
+		clientcrls:	list of array of byte;	# their CRLs (DER), each signed by one of them
+		clientneed:	int;			# 1: refuse a client with none; 0: take one, and go on without
+		clock:		ref Sys->FD;		# /dev/time, for the chain's validity (a confined caller has none to open); nil: opened
+	};
+
 	# Primary API
 	client:		fn(fd: ref Sys->FD, config: ref Config): (ref Conn, string);
+	# Answer a client on fd: TLS 1.3 alone, X25519MLKEM768, X25519 or
+	# P-256 (by HelloRetryRequest), the suites the client puts first,
+	# an ECDSA P-256 certificate.  No resumption, no early data.
+	server:		fn(fd: ref Sys->FD, config: ref ServerConfig): (ref Conn, string);
+	# Whether config can serve: the chain parses, the key is P-256 and
+	# is the leaf's (a signature made with it verifies with the leaf's key).
+	checkserver:	fn(config: ref ServerConfig): string;
+	# The DER of each PEM block labelled label ("CERTIFICATE"), in order
+	pemblocks:	fn(pem: string, label: string): list of array of byte;
+	# The 32-byte scalar of a P-256 private key in DER: SEC1's
+	# ECPrivateKey or PKCS #8's PrivateKeyInfo (OpenSSL writes either)
+	p256key:	fn(der: array of byte): (array of byte, string);
+	# The TLS 1.3 suites, fastest first on this machine: each times a
+	# few records of its AEAD (AES-GCM is several times slower where the
+	# processor has no AES instructions; ChaCha20-Poly1305 is not), for
+	# ServerConfig.suites
+	fastsuites:	fn(): list of int;
+	# A certificate's subject common name, and the SHA-256 of the
+	# whole certificate as "sha256:" and hex: names for a client
+	certcn:		fn(der: array of byte): string;
+	certfingerprint:	fn(der: array of byte): string;
+	# The descriptors init() opened (its entropy source), for a caller
+	# that drops the rest with pctl(NEWFD, ...) and goes on using TLS
+	keptfds:	fn(): list of int;
 	defaultconfig:	fn(): ref Config;
 	# Validate an exact SHA-256 SubjectPublicKeyInfo pin against one DER
 	# certificate.  Exposed so provisioning and regression tools use the

@@ -60,7 +60,6 @@ iacme.exe
 
 o.emu
 o.*
-services/httpd/httpd.log
 **/Dockerfile
 !/Dockerfile
 !.clusterfuzzlite/Dockerfile

@@ -1118,12 +1118,15 @@ flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
 }
 
 # end an inline run: wrapped in an anonymous block, unless it is only
-# collapsible white space (and out-of-flow boxes, which stand alone)
+# collapsible white space (and out-of-flow boxes, which stand alone).
+# In a flex or grid container a run of white space is no item even
+# preserved (Flexbox §4, Grid §6.1): a shiki code block is a grid of
+# lines with a newline between each, and every other row was empty
 flushrun(box: ref Box, run, r: list of ref Box): list of ref Box
 {
 	if(run == nil)
 		return r;
-	if(!blankrun(run, 1))
+	if(!blankrun(run, box.kind != Kflex && box.kind != Kgrid))
 		return anonblock(box, rev(run)) :: r;
 	for(l := rev(run); l != nil; l = tl l)
 		if(isoof(hd l))

@@ -1,12 +1,14 @@
 implement Bme280;
 
 #
-# bme280 [-b bus] [-a addr]: one reading of a Bosch BME280 (or BMP280)
+# bme280 [-d dir] [-b bus] [-a addr]: one reading of a Bosch BME280 (or BMP280)
 # through #J, the board's I2C: the chip's id checked, its calibration
 # read, one forced measurement, and a line
 #	chip=0x60 addr=0x77 t=23.41 p=1008.62 h=47.3
 # temperature in degrees Celsius, pressure in hPa, relative humidity in
 # percent (none from a BMP280, chip 0x58). With no -a, 0x76 then 0x77.
+# -d names where the I2C files are, #J by default: another machine's
+# #J, mounted, reads its sensor from here.
 # The soak reads the room with it beside the board's own temperature.
 #
 # The compensation is the datasheet's (BST-BME280-DS002, section 4.2.3,
@@ -36,21 +38,24 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage("bme280 [-b bus] [-a addr]");
+	arg->setusage("bme280 [-d dir] [-b bus] [-a addr]");
 	bus := "1";
+	dir := "#J";
 	addrs := 16r76 :: 16r77 :: nil;
 	while((c := arg->opt()) != 0)
 		case c {
 		'b' =>
 			bus = arg->earg();
+		'd' =>
+			dir = arg->earg();
 		'a' =>
 			(a, nil) := toint(arg->earg());
 			addrs = a :: nil;
 		* =>
 			arg->usage();
 		}
-	ctl := "#J/i2c" + bus + "ctl";
-	dname := "#J/i2c" + bus + "data";
+	ctl := dir + "/i2c" + bus + "ctl";
+	dname := dir + "/i2c" + bus + "data";
 	chip := -1;
 	addr := -1;
 	for(; addrs != nil; addrs = tl addrs){

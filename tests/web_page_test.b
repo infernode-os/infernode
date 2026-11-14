@@ -168,6 +168,33 @@ testSelectArrow(t: ref T)
 		t.error("no box for #w");
 }
 
+# A grid's min-content size counts a track with a length for its
+# minimum at that length, whatever its items: a minmax(0, 1fr) column
+# adds nothing (an fr's flex fraction is zero there, Grid §12.7.1).
+# Tailwind's hero, an auto column's item beside such a grid holding a
+# 1536px carousel, was laid out 4017px wide in a 1200px grid
+testGridMinContent(t: ref T)
+{
+	pg := pageof(t, "<style>body{margin:0} .w{width:2000px;height:1px}</style>" +
+		"<div id=o style='display:grid;width:600px'><div id=i>" +
+		"<div id=g style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px'>" +
+		"<div style='overflow:hidden'><div class=w></div></div><div><div class=w></div></div><div>c</div></div>" +
+		"<div id=t style='display:grid;grid-template-columns:minmax(0,100px) 50px'><div><div class=w></div></div><div></div></div>" +
+		"</div></div>", 1280, 800);
+	if((i := boxof(pg.doc, pg.root, "i")) != nil)
+		t.asserteq(i.w, 600, "the auto column's item: the grid's width, not its 2000px items'");
+	else
+		t.error("no box for #i");
+	if((g := boxof(pg.doc, pg.root, "g")) != nil)
+		t.asserteq(g.w, 600, "the minmax(0, 1fr) grid fills it");
+	else
+		t.error("no box for #g");
+	if((k := boxof(pg.doc, pg.root, "t")) != nil)
+		t.asserteq(k.w, 600, "minmax(0, 100px) and 50px: a block, as wide as its container");
+	else
+		t.error("no box for #t");
+}
+
 # the first box of the element with id
 boxof(d: ref Doc, root: ref Box, id: string): ref Box
 {
@@ -203,6 +230,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WantedOrder", testWantedOrder);
 	run("Scale", testScale);
 	run("SelectArrow", testSelectArrow);
+	run("GridMinContent", testGridMinContent);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

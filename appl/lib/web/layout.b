@@ -9186,21 +9186,33 @@ intrinsic1(b: ref Box): (int, int)
 				spreadspan(cols, cmn, cmx, a0, a0 + span, kmn, kmx, gap);
 				c = (a0 + span) % len cols;
 			}
+			# under a min-content constraint a track is its base size:
+			# its minimum sizing function when that is a length,
+			# whatever its items (minmax(0, 1fr) is 0, and an fr's
+			# flex fraction is zero there, §12.7.1); the items' only
+			# when it is intrinsic.  Tailwind's hero, in an auto
+			# column beside a grid of 30 minmax(0, 1fr) columns
+			# holding a 1536px carousel, was laid out 4017px wide
 			wmn := gap * (len cols - 1) + ex;
 			wmx := wmn;
-			for(i = 0; i < len cols; i++)
-				if(cols[i].lo.kind == Tfixed && cols[i].hi.kind == Tfixed) {
-					wmn += int cols[i].hi.v;
-					wmx += int cols[i].hi.v;
-				} else {
-					wmn += cmn[i];
-					x := cmx[i];
-					if(cols[i].hi.kind == Tfit && x > int cols[i].hi.v)
-						x = int cols[i].hi.v;	# fit-content: no wider than its argument
-					if(x < cmn[i])
-						x = cmn[i];
-					wmx += x;
+			for(i = 0; i < len cols; i++) {
+				tr := cols[i];
+				mn := cmn[i];
+				if(tr.lo.kind == Tfixed)
+					mn = int tr.lo.v;
+				x := cmx[i];
+				case tr.hi.kind {
+				Tfixed =>
+					x = int tr.hi.v;	# grown to its limit, and no further
+				Tfit =>
+					if(x > int tr.hi.v)
+						x = int tr.hi.v;	# fit-content: no wider than its argument
 				}
+				if(x < mn)
+					x = mn;
+				wmn += mn;
+				wmx += x;
+			}
 			return (wmn, wmx);
 		}
 	}

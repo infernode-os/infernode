@@ -1838,7 +1838,12 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 				if(b.d.hasattr(o, "selected"))
 					break;
 			}
-		r.text = squash(sel) + " ▾";
+		# the arrow is the control's own: with appearance: none the
+		# page draws its (DuckDuckGo's chevron, an ::after), and there
+		# were two
+		r.text = squash(sel);
+		if(st.appearance)
+			r.text += " ▾";
 		return r;
 	}
 	return nil;

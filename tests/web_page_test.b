@@ -1,7 +1,8 @@
 implement WebPageTest;
 
 #
-# The page pipeline (page(2)): what a page asks for, in what order.
+# The page pipeline (page(2)): what a page asks for, in what order;
+# what it lays out.
 #
 
 include "sys.m";
@@ -128,6 +129,45 @@ testScale(t: ref T)
 		t.error("no box for #mq");
 }
 
+# a page of src, laid out at w by h, no picture fetched
+pageof(t: ref T, src: string, w, h: int): ref Pg
+{
+	f := "/tmp/web_page_test_src.html";
+	fd := sys->create(f, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create %s: %r", f));
+	b := array of byte src;
+	sys->write(fd, b, len b);
+	fd = nil;
+	(pg, err) := page->begin("file://" + f, "GET", nil, nil, w, h);
+	sys->remove(f);
+	if(pg == nil)
+		t.fatal("begin: " + err);
+	layout = page->layoutmod();
+	return pg;
+}
+
+# A select draws its arrow, unless its appearance is none: then the
+# page draws one (DuckDuckGo's chevron, an ::after), and there were two
+testSelectArrow(t: ref T)
+{
+	pg := pageof(t, "<select id=a><option>All Regions</select>" +
+		"<select id=n style='appearance:none'><option>Any Time</select>" +
+		"<select id=w style='-webkit-appearance:none'><option>Any Time</select>", 800, 600);
+	if((a := boxof(pg.doc, pg.root, "a")) != nil)
+		t.assertseq(a.text, "All Regions ▾", "appearance auto: the arrow");
+	else
+		t.error("no box for #a");
+	if((n := boxof(pg.doc, pg.root, "n")) != nil)
+		t.assertseq(n.text, "Any Time", "appearance none: no arrow");
+	else
+		t.error("no box for #n");
+	if((w := boxof(pg.doc, pg.root, "w")) != nil)
+		t.assertseq(w.text, "Any Time", "-webkit-appearance none: no arrow");
+	else
+		t.error("no box for #w");
+}
+
 # the first box of the element with id
 boxof(d: ref Doc, root: ref Box, id: string): ref Box
 {
@@ -162,6 +202,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	run("WantedOrder", testWantedOrder);
 	run("Scale", testScale);
+	run("SelectArrow", testSelectArrow);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

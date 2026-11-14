@@ -365,4 +365,5 @@ Style: module
 	resolveurl:	fn(base, rel: string): string;	# RFC 3986 reference resolution
 	anon:	fn(parent: ref St, display: int): ref St;	# an anonymous box's style
 	addimport:	fn(url: string, sh: ref Css->Sheet);	# the sheet fetched for an @import
+	tracklen:	fn(t: ref Css->Tok): (int, Len);	# a calc(), min(), max() or clamp() kept in a track list, as a Len against the grid's width
 };

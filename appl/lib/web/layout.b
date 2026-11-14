@@ -3802,9 +3802,28 @@ Gi: adt {
 };
 
 # the size a track function names, or Tauto if it is not one
+tavail := -1;	# what tracks() lays the template out in: a calc()'s percentages are of it
 tsz(t: ref Tok): (int, Tsz)
 {
 	case t.kind {
+	Css->Kfunction =>
+		case t.s {
+		"calc" or "min" or "max" or "clamp" =>
+			# px and percentages both (style made the rest px):
+			# against the grid's width, or auto where it is not
+			# known yet (Grid 2 §7.2.1)
+			(ok, l) := style->tracklen(t);
+			if(!ok)
+				return (0, Tsz(Tauto, 0.0));
+			if(l.kind == Style->Lpx && l.pct == 0.0)
+				return (1, Tsz(Tfixed, l.px));
+			if(tavail < 0)
+				return (1, Tsz(Tauto, 0.0));
+			v := l.resolve(real tavail);
+			if(v < 0.0)
+				v = 0.0;
+			return (1, Tsz(Tfixed, v));
+		}
 	Css->Kdimension =>
 		if(t.s == "fr")
 			return (1, Tsz(Tfr, t.n));
@@ -3855,8 +3874,11 @@ track(t: ref Tok): ref Track
 			if(hi.kind == Tfixed)
 				hi = Tsz(Tfit, hi.v);
 			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0, 0);
+		"calc" or "min" or "max" or "clamp" =>
+			;	# a size: below
+		* =>
+			return nil;
 		}
-		return nil;
 	}
 	(ok, sz) := tsz(t);
 	if(!ok)
@@ -3875,6 +3897,16 @@ repsize := 0.0;
 # A track list, with repeat() expanded (auto-fill/auto-fit against
 # avail) and line names collected: names[i] are the names of line i.
 tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list of string)
+{
+	outeravail := tavail;
+	if(avail >= 0)
+		tavail = avail;
+	(a, n) := tracks1(v, avail, gap);
+	tavail = outeravail;
+	return (a, n);
+}
+
+tracks1(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list of string)
 {
 	tlist: list of ref Track;
 	names: list of (int, string);

@@ -7929,6 +7929,26 @@ counters(v: array of ref Tok): array of ref Tok
 	return nows(v);
 }
 
+# A calc(), min(), max() or clamp() lentoks left in a track list, its
+# lengths px and percentages, as a Len to resolve against the grid's
+# width (Notion's hero grid: calc(100% - 128px) and min()s of it, and
+# a track layout could not read was no track, every line after it moved)
+tracklen(t: ref Tok): (int, Len)
+{
+	if(t == nil || t.kind != Kfunction)
+		return (0, px(0.0));
+	env := lastenv;
+	if(env == nil)
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
+	e := calcexpr(t, ref Ctx(16.0, 16.0, 19.2, env, 1, nil, 400, 0));
+	if(e == nil)
+		return (0, px(0.0));
+	(lin, p, pc) := fold(e);
+	if(lin)
+		return (1, Len(Lpx, p, pc, nil));
+	return (1, Len(Lcalc, 0.0, 0.0, e));
+}
+
 # Compute the lengths inside a token list (grid tracks, transforms) to
 # px dimensions, leaving the structure for layout to interpret.
 lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
@@ -7952,6 +7972,8 @@ lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
 					t = ref Tok(Kdimension, "px", p, 0, nil);
 				else if(lin && p == 0.0)
 					t = ref Tok(Kpercent, nil, pc, 0, nil);
+				else	# px and %: its lengths px now, for tracklen at layout
+					t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));
 			} else
 				t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));	# (an angle's, say: what is in it, now)
 		} else if(t.kids != nil)

@@ -324,6 +324,7 @@ names(l: list of string): string
 # that sizes its box is laid out with the page again, sized by it
 testInstallPlaced(t: ref T)
 {
+	needdisplay(t);
 	data := readfile("/tests/imgload/rb.png");
 	if(data == nil)
 		t.fatal("no /tests/imgload/rb.png");
@@ -361,6 +362,15 @@ readfile(f: string): array of byte
 	return b;
 }
 
+display: ref Display;	# nil where there is no /dev/draw (the runner's name space)
+
+# pictures are decoded only with a display: without one, skip
+needdisplay(t: ref T)
+{
+	if(display == nil)
+		t.skip("no /dev/draw");
+}
+
 absx(b: ref Box): int
 {
 	x := 0;
@@ -390,6 +400,7 @@ midcolour(b: ref Box): int
 # and Sign in button were black
 testSvgVars(t: ref T)
 {
+	needdisplay(t);
 	pg := pageof(t, "<style>body{margin:0;--c:#00ff00} .k{--d:#ff0000}</style>" +
 		"<svg id=v width=20 height=20><rect width=20 height=20 fill='var(--c)'/></svg>" +
 		"<svg id=f width=20 height=20><rect width=20 height=20 fill='var(--none, #0000ff)'/></svg>" +
@@ -430,7 +441,8 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "cannot load %s: %r\n", Page->PATH);
 		raise "fail:load";
 	}
-	if((err := page->init(Display.allocate(nil))) != nil) {
+	display = Display.allocate(nil);
+	if((err := page->init(display)) != nil) {
 		sys->fprint(sys->fildes(2), "page: %s\n", err);
 		raise "fail:init";
 	}

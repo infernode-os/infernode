@@ -8493,12 +8493,15 @@ imgsrc(d: ref Doc, n: int): string
 	return d.attr(n, "src");
 }
 
-# image types the engine decodes
+# image types the engine decodes: not AVIF, which readavif recognises
+# and refuses (no AV1 decoder), nor ICO, which nothing reads.  A
+# <source> of either was taken and nothing shown: svelte.dev's hero
+# is an AVIF source, then a WebP one
 decodes(t: string): int
 {
 	case lower(trimsp(t)) {
 	"image/png" or "image/jpeg" or "image/jpg" or "image/gif" or "image/webp" or
-	"image/svg+xml" or "image/avif" or "image/x-icon" or "image/vnd.microsoft.icon" =>
+	"image/svg+xml" =>
 		return 1;
 	}
 	return 0;

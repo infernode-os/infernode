@@ -259,6 +259,7 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 				parser.down();
 				scanids(parser, canvas);
 				parser.up();
+				pregradients(parser, canvas);
 				parser.goto(m0);
 				parser.down();
 				# the root's own fill, stroke, color and style pass down
@@ -370,6 +371,25 @@ new_canvas(attrs: Attributes): ref Canvas
 	c.defs = nil;
 
 	return c;
+}
+
+# every gradient with an id, wherever it is: a fill names one in <defs>
+# at the end as often as before it (MediaWiki's logo, its flower's 16)
+pregradients(parser: ref Parser, canvas: ref Canvas)
+{
+	for(l := canvas.ids; l != nil; l = tl l) {
+		r := hd l;
+		g: ref Gradient;
+		parser.goto(r.mark);
+		case r.name {
+		"linearGradient" =>
+			g = parse_linear_gradient(parser, r.attrs);
+		"radialGradient" =>
+			g = parse_radial_gradient(parser, r.attrs);
+		}
+		if(g != nil)
+			canvas.defs = g :: canvas.defs;
+	}
 }
 
 # every element with an id, where it is

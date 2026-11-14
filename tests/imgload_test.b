@@ -310,6 +310,19 @@ testSvgRefs(t: ref T)
 	near(t, pixel(im, o.add((35, 5))), (255, 255, 0), 0, "use of a symbol: its viewBox into the use's size");
 }
 
+# Gradients a fill names before they are defined, in a <defs> at the end
+# (MediaWiki's logo: its flower was not drawn)
+testSvgForwardGradient(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/fwdgrad.svg");
+	if(im == nil)
+		t.fatal("fwdgrad.svg: " + err);
+	o := im.r.min;
+	near(t, pixel(im, o.add((5, 5))), (0, 255, 0), 0, "a linear gradient defined after its use");
+	near(t, pixel(im, o.add((15, 5))), (0, 0, 255), 0, "a radial one");
+}
+
 # An SVG's style sheet: Illustrator's .cls-1{fill:...} on every shape
 # (Kubernetes' icons were black), by specificity and order, after the
 # presentation attributes and before the style attribute; and a style
@@ -1025,6 +1038,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SvgRefs", testSvgRefs);
 	run("ClearAfterColour", testClearAfterColour);
 	run("SvgSheet", testSvgSheet);
+	run("SvgForwardGradient", testSvgForwardGradient);
 	run("DecodeJpeg", testDecodeJpeg);
 	run("DecodeGif", testDecodeGif);
 	run("DecodeWebpLossless", testDecodeWebpLossless);

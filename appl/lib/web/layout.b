@@ -12701,6 +12701,7 @@ scrolled: Point;	# how far the document is scrolled in it; fixed boxes do not mo
 
 paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 {
+	paintfault = 0;
 	if(root.doc != nil)
 		curdoc = root.doc;
 	viewport = clip;
@@ -13210,7 +13211,31 @@ before(a, b: ref Lyr): int
 	return a.box.seq < b.box.seq;
 }
 
+# A box's fault in painting is the box's: it is left out and the
+# rest painted (the draw device refuses a path past 2^20 pixels, and
+# one such box on nodejs.org left the whole page white), and said once
+# a paint
+paintfault := 0;
+
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
+{
+	{
+		paintself0(dst, b, r, canvasbg);
+	} exception e {
+	"*" =>
+		if(paintfault++ == 0)
+			sys->fprint(sys->fildes(2), "charon: painting <%s>: %s\n", boxname(b), e);
+	}
+}
+
+boxname(b: ref Box): string
+{
+	if(curdoc == nil || b.node <= 0 || b.node >= curdoc.n)
+		return "anonymous box";
+	return curdoc.nodes[b.node].name;
+}
+
+paintself0(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
 	if(textmask)
 		return;	# only text goes into the mask
@@ -14311,6 +14336,23 @@ radii(b: ref Box): (int, int, int, int)
 	r := (res(st.rtl, b.w), res(st.rtr, b.w), res(st.rbr, b.w), res(st.rbl, b.w));
 	if(r.t0 == 0 && r.t1 == 0 && r.t2 == 0 && r.t3 == 0 && (n := nativelook(b)) > 0)
 		return (n, n, n, n);
+	# none larger than the box: they are scaled down to fit it anyway
+	# (Backgrounds 3 §5.5), and two of 2147483647px (calc(infinity *
+	# 1px) as a minifier writes it: nodejs.org's) summed past an int,
+	# the scale went negative and the path past what the draw device
+	# takes, and the whole page was left unpainted
+	m := b.w + b.h;
+	if(m < 1)
+		m = 1;
+	return (radclamp(r.t0, m), radclamp(r.t1, m), radclamp(r.t2, m), radclamp(r.t3, m));
+}
+
+radclamp(r, m: int): int
+{
+	if(r > m)
+		return m;
+	if(r < 0)
+		return 0;
 	return r;
 }
 
@@ -14654,7 +14696,14 @@ svgraster(url: string, data: array of byte, w, h: int): ref Image
 		readsvg->init(bufio);
 		imageremap->init(display);
 	}
-	(raw, err) := readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	raw: ref RImagefile->Rawimage;
+	err: string;
+	{
+		(raw, err) = readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	} exception e {
+	"*" =>
+		err = e;	# a picture that cannot be drawn costs itself, not the page's paint
+	}
 	if(raw == nil || err != nil)
 		return nil;
 	(img, nil) := imageremap->remap(raw, display, 0);

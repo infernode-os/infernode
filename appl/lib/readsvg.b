@@ -201,6 +201,18 @@ readmulti(fd: ref Iobuf): (array of ref Rawimage, string)
 
 readarray(fd: ref Iobuf): (array of ref Rawimage, string)
 {
+	# a fault in the drawing is the image's, not its caller's (a page
+	# painting one as a background was left blank)
+	{
+		return readarray1(fd);
+	} exception e {
+	"*" =>
+		return (nil, "SVG: " + e);
+	}
+}
+
+readarray1(fd: ref Iobuf): (array of ref Rawimage, string)
+{
 	if(xml == nil)
 		return (nil, "SVG: cannot load XML parser");
 	if(display == nil)
@@ -645,7 +657,19 @@ render_children(parser: ref Parser, canvas: ref Canvas, xform: ref Matrix, paren
 
 		pick t := item {
 		Tag =>
-			render_element(parser, canvas, t.name, t.attrs, xform, parent_style);
+			# an element the draw device cannot draw (a path beyond
+			# the 2^20 pixels its coordinates reach: nodejs.org's
+			# background) is left out, and the rest drawn
+			here := parser.mark();
+			{
+				render_element(parser, canvas, t.name, t.attrs, xform, parent_style);
+			} exception e {
+			"path coordinate*" =>
+				parser.goto(here);
+				parser.down();
+				skip_element(parser);
+				parser.up();
+			}
 		}
 	}
 }

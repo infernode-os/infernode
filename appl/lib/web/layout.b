@@ -14995,6 +14995,8 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	if(!ok)
 		return;
 	dst.clipr = cr;
+	if(grad)
+		img = gradtile(b, bg, tw, th);	# nil: painted where it falls, a tile at a time
 	for(yl := ys; yl != nil; yl = tl yl)
 		for(xl := xs; xl != nil; xl = tl xl) {
 			x := hd xl;
@@ -15003,12 +15005,73 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			(t, tok) := tile.clip(cr);
 			if(!tok)
 				continue;
-			if(grad)
+			if(grad && img == nil)
 				paintgradient(dst, b, tile, bg);
 			else
 				dst.draw(t, img, nil, img.r.min.add(t.min.sub(Point(x, y))));
 		}
 	dst.clipr = oclip;
+}
+
+# A gradient's tile, drawn once: a gradient is worked out a pixel at a
+# time, and was for every tile of every paint.  Tailwind's gutters are
+# a repeating gradient in 10px tiles, 8800 of them in a screenful, a
+# second a paint; a hero's gradient was worked out again at each step
+# of a scroll.  Kept by the layer, the style it was resolved in (its
+# lengths and currentcolor) and the size, up to GRADKEEP bytes, the
+# least recently used going first; nil for one too large to keep.
+GradTile: adt {
+	bg:	ref Style->Bg;
+	st:	ref St;
+	w, h:	int;
+	img:	ref Image;
+};
+gradtiles: list of ref GradTile;
+gradbytes := 0;
+GRADKEEP: con 32*1024*1024;
+GRADONE: con 8*1024*1024;
+
+gradtile(b: ref Box, bg: ref Style->Bg, w, h: int): ref Image
+{
+	if(4 * w * h > GRADONE)
+		return nil;
+	keep: list of ref GradTile;
+	found: ref GradTile;
+	for(l := gradtiles; l != nil; l = tl l) {
+		g := hd l;
+		if(found == nil && g.bg == bg && g.st == b.st && g.w == w && g.h == h)
+			found = g;
+		else
+			keep = g :: keep;
+	}
+	if(found != nil) {
+		gradtiles = found :: revgt(keep);
+		return found.img;
+	}
+	img := display.newimage(Rect((0, 0), (w, h)), Draw->RGBA32, 0, Draw->Transparent);
+	if(img == nil)
+		return nil;
+	paintgradient(img, b, img.r, bg);
+	gradbytes += 4 * w * h;
+	keep = nil;
+	n := 0;
+	for(l = gradtiles; l != nil; l = tl l) {
+		if(n + 4 * w * h + 4 * (hd l).w * (hd l).h > GRADKEEP)
+			break;
+		n += 4 * (hd l).w * (hd l).h;
+		keep = hd l :: keep;
+	}
+	gradbytes = n + 4 * w * h;
+	gradtiles = ref GradTile(bg, b.st, w, h, img) :: revgt(keep);
+	return img;
+}
+
+revgt(l: list of ref GradTile): list of ref GradTile
+{
+	r: list of ref GradTile;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 # where the tiles of size t go along one axis, the first at p by

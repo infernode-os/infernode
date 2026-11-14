@@ -533,16 +533,31 @@ def tlsattacks():
     check(s.selected_alpn_protocol() == "http/1.1", "ALPN http/1.1", str(s.selected_alpn_protocol()))
     check(s.version() == "TLSv1.3", "TLS 1.3")
     s.close()
-    # only h2 offered: no protocol in common
-    s = socket.create_connection((HOST, TLSP), timeout=10)
+    # only h2 offered: no protocol in common, so the server's answer to
+    # the ClientHello is a fatal no_application_protocol alert (120).
+    # The record is read as it comes: OpenSSL 3.0, which CI's Python has,
+    # names no such alert and reports "[SSL] unknown error"
     ctx = ssl.create_default_context(cafile=CAFILE)
     ctx.set_alpn_protocols(["h2"])
+    inc, out = ssl.MemoryBIO(), ssl.MemoryBIO()
+    obj = ctx.wrap_bio(inc, out, server_hostname="localhost")
     try:
-        ctx.wrap_socket(s, server_hostname="localhost")
-        ok = False
-    except ssl.SSLError as e:
-        ok = "NO_APPLICATION_PROTOCOL" in str(e).upper()
-    check(ok, "only h2 offered: refused (no_application_protocol)")
+        obj.do_handshake()
+    except ssl.SSLWantReadError:
+        pass
+    s = socket.create_connection((HOST, TLSP), timeout=10)
+    s.sendall(out.read())
+    d = b""
+    while len(d) < 7:
+        try:
+            c = s.recv(7 - len(d))
+        except OSError:
+            break
+        if not c:
+            break
+        d += c
+    s.close()
+    check(d == b"\x15\x03\x03\x00\x02\x02\x78", "only h2 offered: refused (no_application_protocol)", d.hex())
     # a ClientHello that says it is a megabyte
     s = socket.create_connection((HOST, TLSP), timeout=10)
     s.sendall(b"\x16\x03\x01\x40\x00" + b"\x01\x10\x00\x00" + b"\x00" * 16380)

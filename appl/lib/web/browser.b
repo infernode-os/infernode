@@ -8,7 +8,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Point: import draw;
+	Point, Rect: import draw;
 include "web/dom.m";
 	dom: Dom;
 	Doc: import dom;
@@ -2748,8 +2748,21 @@ hbox(id, n: int): (int, int, int, int, int)
 	if(r == nil || n <= 0 || n >= r.pg.doc.n)
 		return (0, 0, 0, 0, 0);
 	laidout(r);
+	# the element's own box, not its ::before's or ::after's (which carry
+	# its node, and came first: Modernizr's test for generated content
+	# measured an inline ::after, 0 high, and said there was none, so
+	# python.org hid its icons); an inline box by its fragments in the
+	# lines, as the box file has it (a span was 0 by 0)
 	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
 		b := hd l;
+		if(pseudo(r.pg, n, b))
+			continue;
+		if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil) {
+			u := hd fr;
+			for(fr = tl fr; fr != nil; fr = tl fr)
+				u = u.combine(hd fr);
+			return (1, cssn(u.min.x), cssn(u.min.y), cssn(u.dx()), cssn(u.dy()));
+		}
 		return (1, cssn(absx(b)), cssn(absy(b)), cssn(b.w), cssn(b.h));
 	}
 	return (0, 0, 0, 0, 0);

@@ -171,6 +171,8 @@ test('style', () => {
 	// and its navigation a menu off the page)
 	check('no ontouchstart', 'ontouchstart' in window, false);
 	check('no touch points', navigator.maxTouchPoints, 0);
+	// SVG, as Modernizr tests for it
+	check('createSVGRect', typeof document.createElementNS('http://www.w3.org/2000/svg', 'svg').createSVGRect, 'function');
 	check('known property', box.style.opacity, '');
 	box.style.transition = 'opacity 1s';
 	check('set transition reads back', box.style.transition, 'opacity 1s');
@@ -492,6 +494,29 @@ test('window', () => {
 	check('history', (history.replaceState({s: 1}, '', '?q=2'), location.search), '?q=2');
 	check('history state', history.state.s, 1);
 	check('rect', typeof document.getElementById('box').getBoundingClientRect().width, 'number');
+});
+// an element's geometry is its own box's: not its ::after's, which
+// came first (Modernizr's generated-content test measured 0, and
+// python.org hid its icons), and an inline one's is its fragments'
+// (a span was 0 by 0)
+test('geometry', () => {
+	const st = document.createElement('style');
+	st.textContent = '#gc{font:0/0 a}#gc:after{content:":)";visibility:hidden;font:3px/1 a}';
+	document.head.appendChild(st);
+	const d = document.createElement('div');
+	d.id = 'gc';
+	document.body.appendChild(d);
+	check('generated content has height', d.offsetHeight, 3);
+	const p = document.createElement('p');
+	p.innerHTML = 'a <span style="font-size:20px">some words</span> b';
+	document.body.appendChild(p);
+	const sp = p.querySelector('span');
+	check('a span has width', sp.offsetWidth > 20, true);
+	check('a span has height', sp.offsetHeight > 10, true);
+	check('and a rect', sp.getBoundingClientRect().width === sp.offsetWidth, true);
+	d.remove();
+	p.remove();
+	st.remove();
 });
 test('mutation observer', () => {
 	const main = document.getElementById('main');

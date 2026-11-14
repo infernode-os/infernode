@@ -951,6 +951,13 @@ resheet(p: ref Pg): int
 
 # the document's styles after a script's changes: only what changed
 # (style->restyle), unless the sheets did
+pseudoname(k: int): string
+{
+	if(k == 0)
+		return "before";
+	return "after";
+}
+
 styleagain(p: ref Pg)
 {
 	if(resheet(p) || p.computed == nil)
@@ -986,7 +993,25 @@ styleagain(p: ref Pg)
 					}
 				}
 			}
-			sys->fprint(sys->fildes(2), "page: restyle checked: %d of %d differ (first %d)\n", bad, p.doc.n, first);
+			# and their ::before and ::after
+			pbad := 0;
+			for(i = 1; i < p.doc.n; i++)
+				for(k := 0; k < 2; k++) {
+					a, b: ref Style->St;
+					if(k == 0) {
+						if(c.before != nil && i < len c.before) a = c.before[i];
+						if(p.computed.before != nil && i < len p.computed.before) b = p.computed.before[i];
+					} else {
+						if(c.after != nil && i < len c.after) a = c.after[i];
+						if(p.computed.after != nil && i < len p.computed.after) b = p.computed.after[i];
+					}
+					if((a == nil) != (b == nil) || a != nil && style->dump(a) != style->dump(b)) {
+						if(pbad++ == 0)
+							sys->fprint(sys->fildes(2), "page: restyle differs at %d <%s>::%s: whole %d, restyled %d\n",
+								i, p.doc.nodes[i].name, pseudoname(k), a != nil, b != nil);
+					}
+				}
+			sys->fprint(sys->fildes(2), "page: restyle checked: %d of %d differ (first %d), %d pseudo-elements\n", bad, p.doc.n, first, pbad);
 			p.computed = c;
 		}
 	}

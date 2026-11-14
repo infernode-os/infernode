@@ -976,7 +976,8 @@ class Run:
         m = re.search(r'= [\d.]+/([\d.]+)/([\d.]+)', r.stdout); l = re.search(r'(\d+)% packet loss', r.stdout)
         if m:
             self.lat.append((float(m.group(1)), float(m.group(2)), int(l.group(1)) if l else 0))
-        return (m is not None and (not l or l.group(1) != '100')), ''
+        ok = m is not None and (not l or l.group(1) != '100')
+        return ok, '' if ok else 'ping %s: %s' % (self.info.addr, (l.group(0) if l else (r.stdout + r.stderr).strip()[-120:]))
 
     def h_wifi(self):
         return self.push(self.wifiaddr, 32, 'wifi')
@@ -1011,12 +1012,39 @@ class Run:
         full = len(re.findall(r'kbd: input queue full', got))
         return ('y-' + mark in got), ('serial shell runs commands' if 'y-' + mark in got else 'SERIAL SHELL DOES NOT RUN COMMANDS') + (' (input queue full x%d)' % full if full else '')
 
+    def heldalive(self, name):
+        """the pid of a held command still running on the board, or None"""
+        out = self.sh("ftest -e /tmp/soak/held-%s && {p = `{cat /tmp/soak/held-%s}; ftest -e /prog/$p/ctl && echo HELDPID $p}" % (name, name), limit=30)
+        m = re.search(r'HELDPID (\d+)', out)
+        return m.group(1) if m else None
+
     def holdhost(self, name, cmd):
-        """a board command held on its own console session for the run"""
+        """a board command held on its own console session for the run.
+
+        The session dropping does not end the command on the board: its
+        loops run while /tmp/soak/run is there. Its shell is a process group
+        of its own and leaves its pid in /tmp/soak/held-NAME, and a session
+        that drops is not opened again while that pid runs. Opened again at
+        once, as it was, every held load ran twice in the same directories
+        after the board stopped answering for four minutes (a Pi 5,
+        2026-11-13): two kfs on one image, two Bluetooth scans, two SPI
+        users, each failing the other's checks for the rest of the run."""
+        self.held = getattr(self, 'held', []) + [name]
         def keep():
             while not self.stop.is_set():
                 try:
-                    c = self.cons.hold('load std; ' + cmd)
+                    p = self.heldalive(name)
+                    if p:
+                        self.log('%s: its session dropped but it runs on the board (pid %s); not started again' % (name, p))
+                        while not self.stop.is_set() and self.heldalive(name) == p:
+                            self.stop.wait(60)
+                        if self.stop.is_set():
+                            break
+                        self.log('%s: pid %s has ended; starting it again' % (name, p))
+                except OSError:
+                    self.stop.wait(60); continue
+                try:
+                    c = self.cons.hold('load std; pctl newpgrp; echo ${pid} > /tmp/soak/held-%s; ' % name + cmd)
                     self.log('%s: held' % name)
                     c.settimeout(60)
                     # what the session prints (a loop's shell error among it) is kept
@@ -1039,7 +1067,7 @@ class Run:
     def sample(self, n):
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
-                      "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
+                      "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null", 'cat /dev/sysstat',
                       'for(f in /tmp/soak/*/ticks) {echo `{cat $f >[2] /dev/null} $f}',
                       "{for(f in /tmp/soak/*/runs) {echo `{cat $f >[2] /dev/null} $f}} | sed 's/runs$/RUNS/'",
                       'ls /tmp/soak/*/fail-* >[2] /dev/null', 'cat /tmp/soak/video/out >[2] /dev/null', limit=60)
@@ -1054,11 +1082,22 @@ class Run:
         g = lambda k: (re.search(k + r' (\d+)', out) or [None, ''])[1]
         bt = g('BOARDTIME'); drift = '%d' % (int(bt) - int(time.time())) if bt else ''
         lat = self.lat[-1] if self.lat else ('', '', '')
-        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+        # the share of the cores' ticks since the last sample not idle: a
+        # loaded board's throughput fell 5x for 16 hours with nothing to show
+        # whether the CPU had gone (2026-11-13)
+        cpu = {m.group(1): (int(m.group(2)), int(m.group(3))) for m in re.finditer(r'^cpu(\d+) ticks (\d+) idle (\d+)', out, re.M)}
+        busy = ''
+        prev = getattr(self, 'cpuprev', {})
+        dt = sum(cpu[k][0] - prev[k][0] for k in cpu if k in prev)
+        if dt > 0:
+            busy = '%d' % round(100 * (1 - sum(cpu[k][1] - prev[k][1] for k in cpu if k in prev) / dt))
+        if cpu:
+            self.cpuprev = cpu
+        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
             now(), int(time.time() - self.t0),
             pools.get('main', ('', ''))[0], pools.get('heap', ('', ''))[0], pools.get('image', ('', ''))[0],
             size.group(1) if size else '', temp[0] if temp else '', json.dumps(ticks),
-            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1]))
+            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1], busy))
         self.samples.flush()
         v = re.search(r'^frames=(\d+) secs=([\d.]+) fps=([\d.]+) missed=(\d+).*$', out, re.M)
         if v and v.group(0) != self.vlast:
@@ -1139,7 +1178,7 @@ class Run:
         os.makedirs(os.path.join(self.dir, 'memtags'), exist_ok=True)
         self.log = Log(os.path.join(self.dir, 'soak.log'))
         self.samples = open(os.path.join(self.dir, 'samples.tsv'), 'a')
-        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\n')
+        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\tcpubusy\n')
         self.hres = HostRes(self.info.name, self.log)
         self.failcount = {}; self.batt = {}
         self.log('soak %s: kernel %s bytes sha1 %s; driven over %s; serial %s; options: %s' % (
@@ -1165,6 +1204,8 @@ class Run:
             return
         # leftovers of an earlier run
         self.sh('rm -f /tmp/soak/run', limit=20); time.sleep(110)
+        # an earlier run's held commands still running (stuck in a server that broke)
+        self.sh("for(f in `{ls /tmp/soak >[2] /dev/null | grep /held-}) {p = `{cat $f}; ftest -e /prog/$p/ctl && echo killgrp > /prog/$p/ctl}", limit=30)
         # an earlier run's video listener, if that run did not get to its teardown
         self.sh("ftest -e /tmp/soak/video/lpid && {p = `{cat /tmp/soak/video/lpid}; echo killgrp > /prog/$p/ctl} >[2] /dev/null", limit=20)
         self.sh('rm -rf /tmp/soak', 'mkdir -p /tmp/soak', limit=30)
@@ -1295,10 +1336,43 @@ class Run:
             self.sample(n + 1)
         except Exception:
             pass
+        self.endheld(board)
         self.memtags('end')
         if a.batteries and not alarm and not early:
             self.batteries('after')
         self.summary(alarm, sel)
+
+    def endheld(self, loads):
+        """held commands still running two minutes after the end are killed,
+        and the loads' teardowns run here in their place (a soakd waiting on a
+        broken kfs never reached its own, and left two camera simulators
+        spinning, 2026-11-14)"""
+        if not self.cons or not getattr(self, 'held', None):
+            return
+        t0 = time.time(); left = list(self.held)
+        while left and time.time() - t0 < 120:
+            try:
+                left = [n for n in left if self.heldalive(n)]
+            except OSError:
+                pass
+            if left:
+                time.sleep(10)
+        if not left:
+            return
+        for n in left:
+            try:
+                p = self.heldalive(n)
+                if p:
+                    self.sh('echo killgrp > /prog/%s/ctl' % p, limit=20)
+                    self.log('%s: still running %.0f s after the end (pid %s); killed' % (n, time.time() - t0, p))
+            except OSError:
+                pass
+        for l in loads:
+            if l.get('teardown'):
+                try:
+                    self.sh(*l['teardown'].split('\n'), limit=30)
+                except OSError:
+                    pass
 
     # summary -----------------------------------------------------------------
     def summary(self, alarm, sel):
@@ -1353,7 +1427,7 @@ class Run:
                 len(self.lat), avgs[len(avgs) // 2], mx, sum(1 for x in self.lat if x[2])))
         if self.churnres:
             out.append('churn    %d rounds; conversations %s' % (len(self.churnres), ' '.join('%d->%d' % (b, a) for b, a, _ in self.churnres[-6:])))
-        for col, name in ((8, 'procs'), (9, 'tcp conversations'), (10, 'clock drift (s)')):
+        for col, name in ((8, 'procs'), (9, 'tcp conversations'), (10, 'clock drift (s)'), (13, 'cpu busy (%)')):
             s = [r[col] for r in rows if len(r) > col and r[col].lstrip('-').isdigit()]
             if s:
                 out.append('%-17s first %s, last %s, min %s, max %s' % (name, s[0], s[-1], min(s, key=int), max(s, key=int)))

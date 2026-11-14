@@ -15,7 +15,8 @@
 #	forms	<form> <node> <kind> <name> <value> [checked], one field per line;
 #		  a select's options follow it, as "\toption <value> <label> [selected]"
 #	find	write: text to look for; read: the lines of text containing it
-#	image	the viewport, rendered, as an image(6)
+#	image	the viewport, rendered, as an image(6); while the page's
+#		  scripts hold it, after they let go (10 s at most)
 #	event	one line per event, "loading <url>", "done <url>",
 #		  "error <msg>", "stopped", or "update" (a form changed),
 #		  from when it was opened; reads block

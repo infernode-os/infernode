@@ -437,6 +437,8 @@ contents(t, n: int): array of byte
 	return array of byte s;
 }
 
+IMAGEWAIT: con 100;	# paints tried, each waiting up to 100ms for the page
+
 # the viewport as an image(6)
 image(): array of byte
 {
@@ -445,7 +447,12 @@ image(): array of byte
 	img := display.newimage(Rect((0, 0), (sess.width, sess.height)), Draw->RGB24, 0, Draw->White);
 	if(img == nil)
 		return nil;
-	sess.paint(img, Point(0, sess.scroll));
+	# the page's scripts may hold it: the window keeps what it showed
+	# then, but a reader of this file has nothing else, and was given a
+	# blank page (usa.gov's, while its scripts ran on after it loaded).
+	# It waits for them, a while.
+	for(i := 0; !sess.paint(img, Point(0, sess.scroll)) && i < IMAGEWAIT; i++)
+		;
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
 		return nil;

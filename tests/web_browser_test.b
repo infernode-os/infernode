@@ -10,7 +10,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display: import draw;
+	Display, Rect, Point, Image: import draw;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -565,6 +565,32 @@ testLeaveBusy(t: ref T)
 	}
 }
 
+# The image of a page whose script holds the session: the file waits
+# for it rather than give the blank image it was painted into (a
+# window keeps what it showed; a reader of the file had a white page,
+# usa.gov's while its scripts ran on after it loaded)
+testImageBusy(t: ref T)
+{
+	if(disp == nil)
+		t.skip("no display: nothing is rendered");
+	scripts(t, "on");
+	navto(t, "open " + DIR + "busygreen.html", DIR + "busygreen.html");
+	sys->sleep(300);	# its script is running, the lock held
+	fd := sys->open(MNT + "/image", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open image: %r"));
+	img := disp.readimage(fd);
+	if(img == nil)
+		t.fatal(sys->sprint("read image: %r"));
+	px := disp.newimage(Rect((0, 0), (1, 1)), Draw->RGB24, 0, Draw->White);
+	px.draw(px.r, img, nil, Point(img.r.dx()/2, img.r.dy()/2));
+	a := array[3] of byte;
+	px.readpixels(px.r, a);
+	t.assert(int a[0] == 0 && int a[1] == 255 && int a[2] == 0,
+		sys->sprint("the page's green, not a blank image: %d %d %d (b g r)", int a[0], int a[1], int a[2]));
+	scripts(t, "off");
+}
+
 # navto, its answer sent on c, so a test can wait for it with a limit
 navasync(c: chan of string, cmd, url: string)
 {
@@ -710,6 +736,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);
+	run("ImageBusy", testImageBusy);
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);

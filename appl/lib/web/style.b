@@ -3659,6 +3659,8 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 		return nil;	# cellpadding and border come from the table
 	if(rowish(nd.tag) && tablerules(d, n) != nil)
 		return nil;	# so do its rules
+	if(nd.tag == Dom->Timg && nd.parent != 0 && d.nodes[nd.parent].tag == Dom->Tpicture)
+		return nil;	# its size may be its <source>'s
 	if(nd.attrs != nil) {
 		k += "|" + nd.name;
 		for(l := nd.attrs; l != nil; l = tl l)
@@ -8571,8 +8573,16 @@ hints(d: ref Doc, n: int): list of ref Decl
 		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
 			s += "border-width:0;";
 		if(nd.tag != Dom->Tinput || lower(d.attr(n, "type")) == "image") {
-			if(nd.tag != Dom->Tcanvas)	# a canvas's width and height are its bitmap's: its natural size, not a hint
-				s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
+			if(nd.tag != Dom->Tcanvas) {	# a canvas's width and height are its bitmap's: its natural size, not a hint
+				# an <img>'s are its <picture>'s chosen <source>'s, should
+				# that have either (HTML §4.8.4.3.4: Wikipedia's footer
+				# badges, 84 by 29, were drawn in the <img>'s 25 by 25)
+				dn := n;
+				if(nd.tag == Dom->Timg && (c := chosensource(d, n)) != 0 &&
+				   (d.hasattr(c, "width") || d.hasattr(c, "height")))
+					dn = c;
+				s += dimhint(d, dn, "width", "width") + dimhint(d, dn, "height", "height");
+			}
 			if((h := d.attr(n, "hspace")) != nil)
 				s += sys->sprint("margin-left:%dpx;margin-right:%dpx;", atoi(h), atoi(h));
 			if((v := d.attr(n, "vspace")) != nil)
@@ -8673,6 +8683,40 @@ colorhint(d: ref Doc, n: int, attr, prop: string): string
 			v = "#" + v;
 	}
 	return prop + ":" + v + ";";
+}
+
+# the <source> of its <picture> an <img> shows, as layout's imgsrc
+# chooses it: the first whose media matches, whose type is decoded, and
+# that has a srcset; 0 for none (the <img>'s own)
+chosensource(d: ref Doc, n: int): int
+{
+	p := d.nodes[n].parent;
+	if(p == 0 || d.nodes[p].tag != Dom->Tpicture || d.nodes[p].ns != Dom->HTML)
+		return 0;
+	for(c := d.nodes[p].first; c != 0 && c != n; c = d.nodes[c].next) {
+		nd := d.nodes[c];
+		if(nd.kind != Dom->Element || nd.tag != Dom->Tsource)
+			continue;
+		if(d.hasattr(c, "media") && trimstr(d.attr(c, "media")) != "" &&
+		   (lastenv == nil || !mediamatch(css->tokenize(d.attr(c, "media")), lastenv)))
+			continue;
+		if(d.hasattr(c, "type") && !decodedtype(d.attr(c, "type")))
+			continue;
+		if(trimstr(d.attr(c, "srcset")) != "")
+			return c;
+	}
+	return 0;
+}
+
+# image types the engine decodes (layout's decodes)
+decodedtype(t: string): int
+{
+	case lower(trimstr(t)) {
+	"image/png" or "image/jpeg" or "image/jpg" or "image/gif" or "image/webp" or
+	"image/svg+xml" =>
+		return 1;
+	}
+	return 0;
 }
 
 dimhint(d: ref Doc, n: int, attr, prop: string): string

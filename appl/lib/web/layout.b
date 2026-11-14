@@ -14745,8 +14745,9 @@ svgroot(s: string): (int, int)
 }
 
 # The SVG with its root element's size set to w by h: the content is
-# then drawn to fit, through a viewBox (one made from the old size if it
-# had none).
+# then drawn to fit, through a viewBox; one made from the old size if it
+# had none, and then stretched to fill, as Chrome draws an SVG with no
+# viewBox in a box not its shape (a raster's fill)
 svgresize(data: array of byte, w, h: int): array of byte
 {
 	s := string data;
@@ -14760,8 +14761,10 @@ svgresize(data: array of byte, w, h: int): array of byte
 	vb := "";
 	if(strindex(tag, "viewBox", 0) < 0 && strindex(tag, "viewbox", 0) < 0) {
 		# "65px" converts as 65; a percentage gives no box to fit
-		if(svglen(ow) > 0 && svglen(oh) > 0)
-			vb = sys->sprint(" viewBox=\"0 0 %d %d\"", svglen(ow), svglen(oh));
+		if(svglen(ow) > 0 && svglen(oh) > 0) {
+			(tag, nil) = dropattr(tag, "preserveAspectRatio");
+			vb = sys->sprint(" viewBox=\"0 0 %d %d\" preserveAspectRatio=\"none\"", svglen(ow), svglen(oh));
+		}
 	}
 	n := s[0:i] + sys->sprint("<svg width=\"%d\" height=\"%d\"%s", w, h, vb) + tag + s[e:];
 	return array of byte n;

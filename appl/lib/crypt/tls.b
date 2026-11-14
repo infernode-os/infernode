@@ -3365,12 +3365,14 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 	if(!member(h.versions, TLS13))
 		return (ALERT_PROTOCOL_VERSION, nil, "tls: client does not offer TLS 1.3");
 
+	# ours if we say (the cipher fastest here), else the client's order
 	suite := 0;
-	for(l := h.suites; l != nil; l = tl l)
-		if(serversuite(hd l)) {
+	for(l := config.suites; l != nil && suite == 0; l = tl l)
+		if(serversuite(hd l) && member(h.suites, hd l))
 			suite = hd l;
-			break;
-		}
+	for(l = h.suites; l != nil && suite == 0; l = tl l)
+		if(serversuite(hd l))
+			suite = hd l;
 	if(suite == 0)
 		return (ALERT_HANDSHAKE_FAILURE, nil, "tls: no cipher suite in common");
 	if(!h.hassigalgs)
@@ -3977,4 +3979,42 @@ hasbytes(a, b: array of byte): int
 		if(bytescmp(a[i:i+len b], b))
 			return 1;
 	return 0;
+}
+
+fastsuites(): list of int
+{
+	key := array[32] of {* => byte 16r5A};
+	nonce := array[12] of {* => byte 16rA5};
+	rec := array[MAXRECORD + 1] of {* => byte 16r33};
+	aad := array[5] of {* => byte 16r17};
+	suites := array[] of {TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_256_GCM_SHA384};
+	cost := array[len suites] of int;
+	for(i := 0; i < len suites; i++) {
+		k := key[0:keylength(suites[i])];
+		t0 := sys->millisec();
+		n := 0;
+		# at least 8 records and 20ms: a coarse clock on a slow board
+		while(n < 8 || sys->millisec() - t0 < 20) {
+			if(suites[i] == TLS_CHACHA20_POLY1305_SHA256)
+				keyring->ccpolyencrypt(rec, aad, k, nonce);
+			else
+				keyring->aesgcmencrypt(keyring->aesgcmsetup(k, nonce), rec, aad);
+			n++;
+		}
+		cost[i] = (sys->millisec() - t0) * 1000 / n;
+	}
+	# cheapest first; ties keep the order above
+	l: list of int;
+	for(j := 0; j < len suites; j++) {
+		best := -1;
+		for(i = 0; i < len suites; i++)
+			if(cost[i] >= 0 && (best < 0 || cost[i] < cost[best]))
+				best = i;
+		l = suites[best] :: l;
+		cost[best] = -1;
+	}
+	r: list of int;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }

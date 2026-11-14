@@ -21,6 +21,8 @@ httpd \- web server for a name space
 ] [
 .BI -S " secs"
 ] [
+.BI -C " maxage"
+] [
 .BI -n " maxconns"
 ] [
 .BI -s " persource"
@@ -132,6 +134,40 @@ honoured; several ranges get the whole file).
 A file whose length is 0 in its stat (a device's status file, a
 stream) is read until end of file and sent chunked, with
 .BR "Cache-Control: no-store" .
+A file with a compressed copy beside it,
+.IB name .gz
+(made ahead of time, as with
+.BR "gzip -9 -k" ),
+is sent as that copy, with
+.BR "Content-Encoding: gzip" ,
+to a client whose
+.B Accept-Encoding
+takes gzip, and as itself to one that does not; both answers carry
+.BR "Vary: Accept-Encoding" .
+Nothing is compressed as it is sent.
+.PP
+A file asked for with an
+.B Accept
+naming
+.B text/event-stream
+(as a browser's
+.B EventSource
+asks) is sent as Server-Sent Events: each read of the file is an event,
+each line of it a
+.B data:
+line.
+A device's event file, whose read waits for a change (gpsfs's
+.BR event ,
+the theme's
+.BR event ),
+is then a live page: the reads have no deadline, and after 15 seconds
+with nothing to send a comment line is sent, which keeps the stream
+open through proxies and finds a client that has gone.
+The file ending ends the stream; an
+.B EventSource
+then opens it again.
+The same file asked for otherwise is read as any other, under the
+deadline below.
 A directory is sent as its
 .B index.html
 if it has one; otherwise it is refused (403), or listed with
@@ -186,7 +222,7 @@ only what anyone who can reach the server may write.
 Each phase of a connection has a deadline: 10 seconds for the TLS
 handshake, 10 for the first request's headers, 15 between requests
 and for their headers, and 30 for each read of a body, write of a
-response and read of a file.
+response and read of a file (but an event stream's).
 A connection past one is hung up and its processes killed by the
 listener, which holds the connections' control files; a file server that
 never answers holds a connection only that long.
@@ -196,7 +232,17 @@ connections at once (default 64), and at most
 .I persource
 from one address (default 16); a connection past either is closed
 unanswered.
-A connection is closed after 100 requests.
+A connection is closed after 1000 requests.
+.PP
+The time in
+.B Date
+headers and the log is read from
+.BR /dev/time ,
+opened before the connections are confined, so a clock set after
+.I httpd
+started (by
+.IR timesync (8)
+or NTP on a board that boots without one) is followed.
 .PP
 The options are:
 .TP
@@ -213,8 +259,12 @@ without).
 Serve TLS 1.3 alone
 .RB ( module/tls.m 's
 server: the X25519MLKEM768 hybrid first, then X25519, then P-256 by
-HelloRetryRequest; AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 in the
-client's order; ALPN
+HelloRetryRequest; of AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, the
+one fastest on this machine that the client offers, timed when
+.I httpd
+starts (clients put AES-GCM first, being fast where their processor
+has AES instructions; where this one has none, ChaCha20-Poly1305 is
+several times faster); ALPN
 .BR http/1.1 ;
 no resumption or early data).
 .I Cert
@@ -266,12 +316,22 @@ with
 Browsers then refuse the site's plain address, and a certificate they do
 not trust, for that long: give it only for a certificate they trust.
 .TP
+.BI -C " maxage"
+Send
+.BI "Cache-Control: max-age=" maxage
+with files that are not HTML pages: a browser keeps them that long
+without asking.
+Pages are asked about each time (their
+.B ETag
+answers 304), so a changed site is seen at once; give an asset a new
+name when it changes.
+.TP
 .BI -n " maxconns" ", -s" " persource" ", -b" " maxbody"
 The limits above.
 .TP
 .B -v
 Report refused requests, failed handshakes and connections hung up,
-on standard error.
+and the TLS suites in the order timed, on standard error.
 .SH EXAMPLES
 A device's pages over TLS, with its sensor's file server in the site
 and its LED's control file writable:
@@ -282,6 +342,15 @@ bind /dev/led /services/www/led
 svc/httpd/httpd -c /keys/web.pem -k /keys/web.key -p /led \e
 	-l /services/logs/httpd /services/www &
 svc/httpd/httpd -r 443 /services/www &
+.EE
+.PP
+A page that follows the position as it changes, through gpsfs's
+.B event
+file as an event stream (the page's script, served from the site):
+.IP
+.EX
+new EventSource("/gps/event").onmessage =
+	e => document.getElementById("fix").textContent = e.data;
 .EE
 .PP
 A wiki, browsed at

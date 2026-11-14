@@ -12,6 +12,11 @@
 #   flood    -n 6 -s 3
 #
 # What it checks: files, HEAD, types, index.html, a directory's 301,
+# a compressed copy (name.gz) sent to a client taking gzip, -C's
+# Cache-Control, Server-Sent Events from file2chan files (each read an
+# event, a comment after 15 s of silence, a client gone mid-stream
+# leaving no process), the TLS suite fastest here chosen over the
+# client's first, the Date following the clock stepped an hour,
 # listings with names escaped, dotfiles not found; ranges and
 # conditional requests; a file of no known length chunked; keep-alive,
 # pipelining, the 100-request limit, 40 plain and 15 TLS clients at
@@ -69,6 +74,11 @@ printf 'euro\n' > "$S/€.txt"
 : > "$S/post/ctl"
 : > "$S/sysname"
 : > "$S/block"
+mkdir -p "$S/events"
+: > "$S/events/fast"
+: > "$S/events/slow"
+printf 'body { color: #123; }\n%.0s' $(seq 1 200) > "$S/style.css"
+gzip -9 -n -c "$S/style.css" > "$S/style.css.gz"
 ln -s /etc/hostname "$S/link.txt"
 ln -s /etc "$S/etcdir"
 ln -s /etc "$S/sub/escape"
@@ -88,12 +98,20 @@ mount {wikifs -d $T/store} $T/site/wiki
 bind /dev/sysname $T/site/sysname
 file2chan /chan/httpdblock {} {}
 bind /chan/httpdblock $T/site/block
+file2chan /chan/httpdfast {sleep 1; rread 'line one
+line two'} {}
+bind /chan/httpdfast $T/site/events/fast
+file2chan /chan/httpdslow {sleep 17; rread ping} {}
+bind /chan/httpdslow $T/site/events/slow
 svc/httpd/httpd -v -L -p /post/ctl -w /wiki -l $T/access.log -a tcp!127.0.0.1!$P1 $T/site &
-svc/httpd/httpd -v -c $T/cert.pem -k $T/key.pem -S 600 -a tcp!127.0.0.1!$P2 $T/site &
+svc/httpd/httpd -v -c $T/cert.pem -k $T/key.pem -S 600 -C 600 -a tcp!127.0.0.1!$P2 $T/site &
 svc/httpd/httpd -r $P2 -a tcp!127.0.0.1!$P3 $T/site &
 svc/httpd/httpd -v -n 6 -s 3 -a tcp!127.0.0.1!$P4 $T/site &
 sleep 3
 ls /prog > $T/procs0
+while {! ftest -e $T/step} {sleep 1}
+cat $T/step > /dev/time
+echo stepped > $T/stepped
 while {! ftest -e $T/count} {sleep 1}
 ls /prog > $T/procs1
 INFERNO
@@ -116,7 +134,7 @@ else
 	echo "FAIL: confinement (tests/httpd_confine_test.b)"; grep -v 'bad path' "$W/confine.log" | tail -8; cfails=1
 fi
 
-with_timeout 900 python3 -I "$ROOT/tests/host/httpd/attack.py" $P1 $P2 $P3 $P4 "$W/cert.pem" "$S"
+with_timeout 900 python3 -I "$ROOT/tests/host/httpd/attack.py" $P1 $P2 $P3 $P4 "$W/cert.pem" "$S" "$W/emu.log"
 fails=$(( $? + cfails ))
 
 # no process left over from all that: the Progs now no more than at start

@@ -51,7 +51,7 @@ MAXLINE:	con 8192;		# a request line or one header line
 MAXHDRS:	con 64;		# headers in a request
 MAXHDRBYTES:	con 16384;		# all of a request's headers
 MAXPATH:	con 2048;		# a decoded path
-MAXREQS:	con 100;		# requests on one connection
+MAXREQS:	con 1000;		# requests on one connection (nginx's keepalive_requests)
 BUFSIZE:	con 16384;
 
 # Deadlines, in milliseconds
@@ -59,6 +59,7 @@ TLSWAIT:	con 10*1000;	# the TLS handshake
 HDRWAIT:	con 10*1000;	# a request's headers, from the first request
 IDLEWAIT:	con 15*1000;	# between requests on a kept connection, and its headers
 IOWAIT:		con 30*1000;	# each read of a body, write of a response, read of a file
+BEATWAIT:	con 15*1000;	# an event stream's silence before a comment keeps it open
 
 # Options
 root := "";
@@ -72,13 +73,17 @@ maxconns := 64;
 maxpersource := 16;
 maxbody := 65536;
 verbose := 0;
+maxage := 0;			# -C: Cache-Control max-age for files that are not HTML
 
 scfg: ref ServerConfig;
 logfd: ref FD;
 stderr: ref FD;
 
-# The epoch time at start and the millisecond clock then: a confined
-# connection has no /dev/time to ask.
+# /dev/time, opened before the connections are confined and kept by
+# them: the clock as it is now, set after httpd started or not (a
+# board's clock is often set by timesync(8) or NTP after boot).  If
+# there is none, the time at start and the millisecond clock since.
+timefd: ref FD;
 epoch0 := 0;
 ms0 := 0;
 
@@ -86,6 +91,7 @@ ms0 := 0;
 Watch: adt {
 	deadline:	int;	# sys->millisec() past which it is hung up; 0: none
 	pid:	int;	# its process (group), to kill
+	orphans:	int;	# it leaves a process behind (an event stream's reader blocked in a read), killed with its group when it ends
 };
 
 Entry: adt {
@@ -110,7 +116,7 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	certfile, keyfile, logfile: string;
 	arg->init(argv);
-	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-r httpsport] [-S hstssecs] [-n maxconns] [-s persource] [-b maxbody] root");
+	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-r httpsport] [-S hstssecs] [-C maxage] [-n maxconns] [-s persource] [-b maxbody] root");
 	while((o := arg->opt()) != 0)
 		case o {
 		'a' =>	addr = arg->earg();
@@ -133,10 +139,11 @@ init(nil: ref Draw->Context, argv: list of string)
 		's' =>	maxpersource = posint(arg->earg());
 		'b' =>	maxbody = posint(arg->earg());
 		'v' =>	verbose = 1;
+		'C' =>	maxage = posint(arg->earg());
 		* =>	arg->usage();
 		}
 	argv = arg->argv();
-	if(len argv != 1 || maxconns <= 0 || maxpersource <= 0 || maxbody <= 0 || hsts < 0)
+	if(len argv != 1 || maxconns <= 0 || maxpersource <= 0 || maxbody <= 0 || hsts < 0 || maxage < 0)
 		arg->usage();
 	if(redirport != nil && (posint(redirport) <= 0 || posint(redirport) > 65535))
 		fatal("-r: not a port");
@@ -161,6 +168,16 @@ init(nil: ref Draw->Context, argv: list of string)
 		if((e := tls->init()) != nil)
 			fatal(e);
 		scfg = loadidentity(certfile, keyfile);
+		# the AEAD fastest here first: clients put AES-GCM first, as
+		# theirs has AES instructions, and where ours has none
+		# ChaCha20-Poly1305 is several times faster
+		scfg.suites = tls->fastsuites();
+		if(verbose) {
+			t := "";
+			for(l := scfg.suites; l != nil; l = tl l)
+				t += sys->sprint(" %04x", hd l);
+			sys->fprint(stderr, "httpd: TLS suites, fastest first:%s\n", t);
+		}
 	} else if(hsts)
 		fatal("-S needs TLS (-c, -k)");
 	if(addr == nil) {
@@ -180,6 +197,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	} else
 		logfd = sys->fildes(1);
 
+	timefd = sys->open("/dev/time", Sys->OREAD);
 	epoch0 = daytime->now();
 	ms0 = sys->millisec();
 
@@ -234,7 +252,7 @@ loadidentity(certfile, keyfile: string): ref ServerConfig
 	ktext = nil;
 	if(err != nil)
 		fatal(keyfile + ": " + err);
-	cfg := ref ServerConfig(certs, key, "http/1.1" :: nil, 0);
+	cfg := ref ServerConfig(certs, key, "http/1.1" :: nil, 0, nil);
 	if((err = tls->checkserver(cfg)) != nil)
 		fatal(certfile + ", " + keyfile + ": " + err);
 	return cfg;
@@ -260,11 +278,13 @@ watchdog()
 			rc <-= nil;
 			continue;
 		}
-		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0);
+		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0, 0);
 		conns = ref Entry(w, cfd, ip) :: conns;
 		n++;
 		rc <-= w;
 	w := <-donec =>
+		if(w.orphans && w.pid > 0)
+			writefile("/prog/" + string w.pid + "/ctl", "killgrp");
 		keep: list of ref Entry;
 		for(l := conns; l != nil; l = tl l)
 			if((hd l).w == w)
@@ -306,6 +326,8 @@ connection(dfd: ref FD, ip: string, w: ref Watch, sync: chan of int)
 {
 	pid := sys->pctl(Sys->NEWPGRP, nil);
 	keep := dfd.fd :: logfd.fd :: stderr.fd :: nil;
+	if(timefd != nil)
+		keep = timefd.fd :: keep;
 	if(tls != nil)
 		for(l := tls->keptfds(); l != nil; l = tl l)
 			keep = hd l :: keep;
@@ -502,6 +524,8 @@ Req: adt {
 	ctype:	string;
 	referer:	string;
 	agent:	string;
+	accept:	string;
+	acceptenc:	string;
 };
 
 serve(io: ref Io, ip: string)
@@ -526,7 +550,7 @@ serve(io: ref Io, ip: string)
 			break;	# the client went
 		if(code != 0) {
 			if(r == nil)
-				r = ref Req("-", "-", nil, nil, 11, nil, big -1, 1, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
+				r = ref Req("-", "-", nil, nil, 11, nil, big -1, 1, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
 			r.close = 1;
 			if(verbose && why != nil)
 				sys->fprint(stderr, "httpd: %s: %d: %s\n", ip, code, why);
@@ -569,7 +593,7 @@ readreq(io: ref Io): (ref Req, int, string)
 	(target, version) := splitfirst(rest, ' ');
 	if(!token(meth) || target == nil || hasbyte(target, ' ') || hasbyte(version, ' '))
 		return (nil, 400, "malformed request line");
-	r := ref Req(meth, target, nil, nil, 11, nil, big -1, 0, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
+	r := ref Req(meth, target, nil, nil, 11, nil, big -1, 0, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
 	case version {
 	"HTTP/1.1" =>
 		r.vers = 11;
@@ -637,6 +661,8 @@ readreq(io: ref Io): (ref Req, int, string)
 		"expect" =>	r.expect = lower(value);
 		"content-type" =>	r.ctype = lower(value);
 		"referer" =>	r.referer = value;
+		"accept" =>	r.accept = lower(value);
+		"accept-encoding" =>	r.acceptenc = lower(value);
 		"user-agent" =>	r.agent = value;
 		}
 	}
@@ -795,13 +821,153 @@ get(io: ref Io, r: ref Req): (int, big, int)
 		if(ifd != nil) {
 			(iok, id) := sys->fstat(ifd);
 			if(iok >= 0 && (id.mode & Sys->DMDIR) == 0)
-				return sendfile(io, r, path + "index.html", ifd, id);
+				return sendvariant(io, r, path + "index.html", ifd, id);
 		}
 		if(!listdirs)
 			return errorpage(io, r, 403, nil);
 		return listing(io, r, path, fd);
 	}
-	return sendfile(io, r, path, fd, d);
+	if(contains(r.accept, "text/event-stream"))
+		return eventstream(io, r, fd);
+	return sendvariant(io, r, path, fd, d);
+}
+
+# A file with a compressed copy beside it (name.gz, a file with a
+# length) is sent as that to a client that takes gzip, as nginx's
+# gzip_static does: compressed once, ahead of time, not per request.
+sendvariant(io: ref Io, r: ref Req, path: string, fd: ref FD, d: Dir): (int, big, int)
+{
+	if(d.length == big 0 || len path > 3 && path[len path - 3:] == ".gz")
+		return sendfile(io, r, path, fd, d, Plain);
+	gfd := sys->open(path + ".gz", Sys->OREAD);
+	if(gfd == nil)
+		return sendfile(io, r, path, fd, d, Plain);
+	(ok, gd) := sys->fstat(gfd);
+	if(ok < 0 || (gd.mode & Sys->DMDIR) || gd.length == big 0)
+		return sendfile(io, r, path, fd, d, Plain);
+	if(acceptsgzip(r.acceptenc))
+		return sendfile(io, r, path, gfd, gd, Gzip);
+	return sendfile(io, r, path, fd, d, Varies);
+}
+
+# Accept-Encoding names gzip (or *) with a q that is not 0
+acceptsgzip(h: string): int
+{
+	for(l := split(h, ','); l != nil; l = tl l) {
+		(coding, params) := splitfirst(trimows(hd l), ';');
+		coding = trimows(coding);
+		if(coding != "gzip" && coding != "x-gzip" && coding != "*")
+			continue;
+		params = trimows(params);
+		if(prefix(params, "q=")) {
+			q := params[2:];
+			zero := 1;
+			for(i := 0; i < len q; i++)
+				if(q[i] != '0' && q[i] != '.')
+					zero = 0;
+			if(zero)
+				continue;
+		}
+		return 1;
+	}
+	return 0;
+}
+
+# A file read as Server-Sent Events (the client's Accept names
+# text/event-stream, as a browser's EventSource sends): each read of
+# the file is an event, its lines its data.  A device's event file
+# (gpsfs's, themefs's) waits for a change before it answers, so there
+# is no deadline on the file's reads, only on the writes; every 15
+# seconds of silence a comment goes out, which keeps proxies from
+# closing the stream and finds a client gone.  The file ending ends
+# the stream (and an EventSource opens it again).
+eventstream(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
+{
+	hdr := "Content-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n";
+	chunked := r.vers == 11;
+	if(chunked)
+		hdr += "Transfer-Encoding: chunked\r\n";
+	else
+		r.close = 1;
+	(nil, nil, keep) := header(io, r, 200, hdr, big -2);
+	if(r.meth == "HEAD")
+		return (200, big 0, keep);
+	if(io.flush() < 0)
+		return (200, big 0, 0);
+
+	c := chan of array of byte;
+	io.w.orphans = 1;	# the reader may be in a read that never ends
+	spawn eventreader(fd, c);
+	sent := big 0;
+	for(;;) {
+		io.w.deadline = 0;	# a file may wait as long as it likes
+		beat := chan[1] of int;
+		spawn sleeper(BEATWAIT, beat);
+		ev: string;
+		alt {
+		b := <-c =>
+			if(b == nil) {
+				io.w.orphans = 0;	# the reader saw the end, and has gone
+				if(chunked) {
+					io.puts("0\r\n\r\n");
+					return (200, sent, keep);
+				}
+				return (200, sent, 0);
+			}
+			ev = sseevent(b);
+		<-beat =>
+			ev = ": keep-alive\n\n";
+		}
+		eb := array of byte ev;
+		if(chunked)
+			io.puts(sys->sprint("%x\r\n", len eb));
+		io.put(eb);
+		if(chunked)
+			io.puts("\r\n");
+		if(io.flush() < 0)
+			return (200, sent, 0);
+		sent += big len eb;
+	}
+}
+
+eventreader(fd: ref FD, c: chan of array of byte)
+{
+	buf := array[BUFSIZE] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0) {
+			c <-= nil;
+			return;
+		}
+		b := array[n] of byte;
+		b[0:] = buf[0:n];
+		c <-= b;
+	}
+}
+
+sleeper(ms: int, c: chan of int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# One read's bytes as an event: each line a data: line, CRs dropped
+# (a CR is a line break to an EventSource), one final newline not a line
+sseevent(b: array of byte): string
+{
+	t := "";
+	for(i := 0; i < len b; i++)
+		if(b[i] != byte '\r')
+			t[len t] = int b[i];
+	s := string array of byte t;	# the bytes back as UTF-8
+	if(s == nil)
+		return "data:\n\n";
+	if(s[len s - 1] == '\n')
+		s = s[0:len s - 1];
+	ev := "";
+	for(l := split(s, '\n'); l != nil; l = tl l)
+		ev += "data: " + hd l + "\n";
+	return ev + "\n";
 }
 
 openerror(io: ref Io, r: ref Req): (int, big, int)
@@ -812,10 +978,16 @@ openerror(io: ref Io, r: ref Req): (int, big, int)
 	return errorpage(io, r, 404, nil);
 }
 
-sendfile(io: ref Io, r: ref Req, path: string, fd: ref FD, d: Dir): (int, big, int)
+Plain, Gzip, Varies: con iota;	# the file as it is; its compressed copy; as it is, a compressed copy beside it
+
+sendfile(io: ref Io, r: ref Req, path: string, fd: ref FD, d: Dir, enc: int): (int, big, int)
 {
 	ctype := contenttype(path);
 	hdr := "Content-Type: " + ctype + "\r\nX-Content-Type-Options: nosniff\r\n";
+	if(enc == Gzip)
+		hdr += "Content-Encoding: gzip\r\n";
+	if(enc != Plain)
+		hdr += "Vary: Accept-Encoding\r\n";
 
 	# a file whose length its server does not know (0: a device's
 	# status, a log) is read to its end, and not cached
@@ -826,6 +998,11 @@ sendfile(io: ref Io, r: ref Req, path: string, fd: ref FD, d: Dir): (int, big, i
 	hdr += "ETag: " + etag + "\r\nAccept-Ranges: bytes\r\n";
 	if(d.mtime > 0)
 		hdr += "Last-Modified: " + httpdate(d.mtime) + "\r\n";
+	# -C: files other than pages kept by the browser for a while; a
+	# page is asked about each time (its ETag answers 304), so a
+	# changed site is seen at once and its assets can be renamed
+	if(maxage > 0 && !prefix(ctype, "text/html"))
+		hdr += sys->sprint("Cache-Control: max-age=%d\r\n", maxage);
 
 	# RFC 9110 §13.2.2: If-None-Match decides, else If-Modified-Since
 	if(r.ifnonematch != nil) {
@@ -1194,6 +1371,15 @@ logesc(s: string): string
 
 now(): int
 {
+	if(timefd != nil) {
+		b := array[32] of byte;
+		n := sys->pread(timefd, b, len b, big 0);
+		if(n > 0) {
+			us := big string b[0:n];
+			if(us > big 0)
+				return int (us / big 1000000);
+		}
+	}
 	return epoch0 + (sys->millisec() - ms0) / 1000;
 }
 

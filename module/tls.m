@@ -133,6 +133,7 @@ TLS: module {
 		key:		array of byte;		# the leaf's P-256 private scalar, 32 bytes
 		alpn:		list of string;		# protocols taken, in preference order; nil: no ALPN
 		maxhello:	int;			# the longest ClientHello taken; 0: 16384
+		suites:		list of int;		# the server's preference, first that the client offers taken; nil: the client's order
 	};
 
 	# Primary API
@@ -149,6 +150,11 @@ TLS: module {
 	# The 32-byte scalar of a P-256 private key in DER: SEC1's
 	# ECPrivateKey or PKCS #8's PrivateKeyInfo (OpenSSL writes either)
 	p256key:	fn(der: array of byte): (array of byte, string);
+	# The TLS 1.3 suites, fastest first on this machine: each times a
+	# few records of its AEAD (AES-GCM is several times slower where the
+	# processor has no AES instructions; ChaCha20-Poly1305 is not), for
+	# ServerConfig.suites
+	fastsuites:	fn(): list of int;
 	# The descriptors init() opened (its entropy source), for a caller
 	# that drops the rest with pctl(NEWFD, ...) and goes on using TLS
 	keptfds:	fn(): list of int;

@@ -4,7 +4,7 @@
 # sockets and TLS.  Run by tests/host/httpd_test.sh, which starts the
 # servers and makes the site:
 #
-#   attack.py PLAIN TLS REDIRECT FLOOD CAFILE SITEDIR
+#   attack.py PLAIN TLS REDIRECT FLOOD CAFILE SITEDIR EMULOG
 #
 # PLAIN:    -L -p /post/ctl -w /wiki, on 127.0.0.1
 # TLS:      the same site over TLS 1.3, -S 600
@@ -17,7 +17,7 @@
 import os, random, socket, ssl, sys, time, threading, hashlib
 
 PLAIN, TLSP, REDIR, FLOOD = (int(x) for x in sys.argv[1:5])
-CAFILE, SITE = sys.argv[5], sys.argv[6]
+CAFILE, SITE, EMULOG = sys.argv[5], sys.argv[6], sys.argv[7]
 HOST = "127.0.0.1"
 fails = 0
 
@@ -253,14 +253,14 @@ def connections():
     # a connection kept to its limit of 100 requests is closed after it
     s = connect(PLAIN)
     rd = Reader(s)
-    s.sendall(b"GET /hello.txt HTTP/1.1\r\nHost: a\r\n\r\n" * 101)
+    s.sendall(b"GET /hello.txt HTTP/1.1\r\nHost: a\r\n\r\n" * 1001)
     n = 0
     while True:
         r = response(rd)
         if r.closed:
             break
         n += 1
-    check(n == 100, "100 requests on a connection, then it closes", str(n))
+    check(n == 1000, "1000 requests on a connection, then it closes", str(n))
     s.close()
     # many at once
     res = []
@@ -613,8 +613,118 @@ def fuzz():
     check(alive() and alive(TLSP, True), "still serving after the fuzz")
     check(fileof("/hello.txt") == b"hello, world\n", "and the site is unchanged")
 
-for f in (files, ranges, conditional, stream, connections, methods, posts, wiki, redirect,
-          traversal, parsing, slow, flood, tlsattacks, fuzz):
+def gzipped():
+    css, gz = fileof("/style.css"), fileof("/style.css.gz")
+    r = get(PLAIN, "/style.css", extra="Accept-Encoding: gzip, deflate, br\r\n")
+    check(r.status == 200 and r.body == gz and r.headers.get("content-encoding") == "gzip", "a client taking gzip gets name.gz")
+    check(r.headers.get("content-type") == "text/css; charset=utf-8" and r.headers.get("vary") == "Accept-Encoding",
+          "its type the file's, Vary: Accept-Encoding", repr((r.headers.get("content-type"), r.headers.get("vary"))))
+    import gzip as gz_
+    check(gz_.decompress(r.body) == css, "and it is the file")
+    r = get(PLAIN, "/style.css")
+    check(r.body == css and "content-encoding" not in r.headers and r.headers.get("vary") == "Accept-Encoding",
+          "a client not taking it gets the file, Vary too")
+    for h in ("gzip;q=0", "gzip; q=0.0", "identity", "deflate"):
+        r = get(PLAIN, "/style.css", extra="Accept-Encoding: %s\r\n" % h)
+        check(r.body == css and "content-encoding" not in r.headers, "Accept-Encoding: %s: the file" % h)
+    for h in ("*", "gzip;q=0.5", "x-gzip"):
+        r = get(PLAIN, "/style.css", extra="Accept-Encoding: %s\r\n" % h)
+        check(r.body == gz, "Accept-Encoding: %s: name.gz" % h)
+    r = get(PLAIN, "/style.css", extra="Accept-Encoding: gzip\r\nRange: bytes=0-9\r\n")
+    check(r.status == 206 and r.body == gz[0:10] and r.headers.get("content-encoding") == "gzip", "a range of name.gz")
+    r = get(PLAIN, "/style.css", extra="Accept-Encoding: gzip\r\n", method="HEAD")
+    check(r.headers.get("content-length") == str(len(gz)), "HEAD: name.gz's length")
+    r = get(PLAIN, "/style.css.gz", extra="Accept-Encoding: gzip\r\n")
+    check(r.body == gz and "content-encoding" not in r.headers and r.headers.get("content-type") == "application/gzip",
+          "name.gz asked for itself: as it is")
+    check("vary" not in get(PLAIN, "/hello.txt", extra="Accept-Encoding: gzip\r\n").headers, "no copy: no Vary")
+
+def caching():
+    r = get(TLSP, "/style.css", True)
+    check(r.headers.get("cache-control") == "max-age=600", "-C: Cache-Control on a file", r.headers.get("cache-control", ""))
+    r = get(TLSP, "/index.html", True)
+    check("cache-control" not in r.headers and "etag" in r.headers, "-C: none on a page (asked about each time)")
+    check("cache-control" not in get(PLAIN, "/style.css").headers, "no -C: no Cache-Control")
+
+def events():
+    def open_stream(path, tls=False, port=PLAIN):
+        s = connect(port, tls, timeout=30)
+        s.sendall(("GET %s HTTP/1.1\r\nHost: a\r\nAccept: text/event-stream\r\n\r\n" % path).encode())
+        rd = Reader(s)
+        hdrs = {}
+        st = rd.line()
+        while True:
+            l = rd.line()
+            if not l:
+                break
+            k, v = l.decode().split(":", 1)
+            hdrs[k.lower()] = v.strip()
+        return s, rd, st, hdrs
+    def chunk(rd):
+        n = int(rd.line(), 16)
+        d = rd.take(n)
+        rd.line()
+        return d
+    s, rd, st, h = open_stream("/events/fast")
+    check(st == b"HTTP/1.1 200 OK" and h.get("content-type") == "text/event-stream" and h.get("cache-control") == "no-store",
+          "Accept: text/event-stream: an event stream", repr(h))
+    t0 = time.time()
+    evs = [chunk(rd) for i in range(3)]
+    took = time.time() - t0
+    check(evs == [b"data: line one\ndata: line two\n\n"] * 3, "each read an event, its lines data:", repr(evs[0]))
+    check(2 < took < 6, "as the file gives them (a read a second)", "%.1fs" % took)
+    s.close()	# gone mid-stream: its reader, waiting in a read, must be killed (the leak check at the end)
+    s, rd, st, h = open_stream("/events/fast", tls=True, port=TLSP)
+    check(chunk(rd).startswith(b"data: line one"), "an event stream over TLS")
+    s.close()
+    # silence: a comment every 15 s, then the event at 17 s, no deadline
+    s, rd, st, h = open_stream("/events/slow")
+    t0 = time.time()
+    beat = chunk(rd)
+    t1 = time.time() - t0
+    ev = chunk(rd)
+    t2 = time.time() - t0
+    check(beat == b": keep-alive\n\n" and 13 < t1 < 17, "15 s of silence: a comment", "%r at %.1fs" % (beat, t1))
+    check(ev == b"data: ping\n\n" and 15 < t2 < 20, "a file that waits 17 s: its event, not hung up", "%r at %.1fs" % (ev, t2))
+    s.close()
+    r = raw(PLAIN, b"HEAD /events/fast HTTP/1.1\r\nHost: a\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n", head=True)
+    check(r.status == 200 and r.headers.get("content-type") == "text/event-stream", "HEAD of a stream: its headers")
+    check(alive(), "still serving after the streams")
+
+def suites():
+    import re
+    m = re.search(r"TLS suites, fastest first: (\w+)", open(EMULOG).read())
+    names = {"1301": "TLS_AES_128_GCM_SHA256", "1302": "TLS_AES_256_GCM_SHA384", "1303": "TLS_CHACHA20_POLY1305_SHA256"}
+    check(m is not None, "the TLS server timed its suites")
+    if m:
+        s = connect(TLSP, True)
+        got = s.cipher()[0]
+        s.close()
+        # OpenSSL offers AES-256-GCM, ChaCha20, AES-128-GCM, in that order
+        check(got == names.get(m.group(1)), "the suite fastest here chosen, whatever the client put first",
+              "%s, fastest %s" % (got, m.group(1)))
+
+def clock():
+    def date(r):
+        import email.utils
+        return email.utils.parsedate_to_datetime(r.headers["date"]).timestamp()
+    d = date(get(PLAIN, "/hello.txt"))
+    check(abs(d - time.time()) < 5, "Date is the time", "%.0f s off" % (d - time.time()))
+    step = os.path.join(os.path.dirname(SITE), "step")
+    open(step + ".tmp", "w").write("%d" % int((time.time() + 3600) * 1e6))
+    os.rename(step + ".tmp", step)
+    for i in range(50):
+        if os.path.exists(os.path.join(os.path.dirname(SITE), "stepped")):
+            break
+        time.sleep(0.2)
+    time.sleep(0.5)
+    d = date(get(PLAIN, "/hello.txt"))
+    check(abs(d - (time.time() + 3600)) < 10, "the clock stepped an hour after start: Date follows it (timesync)",
+          "%.0f s from an hour ahead" % (d - time.time() - 3600))
+    check(abs(date(get(TLSP, "/hello.txt", True)) - (time.time() + 3600)) < 10, "in a TLS connection too")
+
+for f in (files, gzipped, caching, events, suites, ranges, conditional, stream, connections, methods, posts, wiki, redirect,
+          traversal, parsing, slow, flood, tlsattacks, fuzz, clock):
     try:
         f()
     except Exception as e:

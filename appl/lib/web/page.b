@@ -1997,9 +1997,108 @@ svgmarkup(d: ref Doc, cs: ref Style->Computed, n, w, h: int, st: ref Style->St):
 			s += " viewBox=\"0 0 " + xmlesc(num(ow)) + " " + xmlesc(num(oh)) + "\"";
 	}
 	s += ">";
+	body := "";
 	for(c := d.nodes[n].first; c != 0; c = d.nodes[c].next)
-		s += xmlnode(d, cs, c, st);
-	return s + "</svg>";
+		body += xmlnode(d, cs, c, st);
+	return s + body + svgdefs(d, body) + "</svg>";
+}
+
+# What an inline svg refers to (a <use href="#icon-news">, a
+# fill="url(#g)") and does not hold, from elsewhere in the document: a
+# page's icons are uses of symbols in one sprite <svg> (NPR's 281), and
+# each svg is drawn as a document of its own.  Copied as written, so a
+# symbol's currentColor is the use's.  Its own references followed a
+# few deep.
+svgdefs(d: ref Doc, body: string): string
+{
+	(have, want) := svgids(body);
+	if(want == nil)
+		return "";
+	defs := "";
+	for(round := 0; want != nil && round < 4; round++) {
+		more := "";
+		for(; want != nil; want = tl want) {
+			id := hd want;
+			if(member(id, have))
+				continue;
+			have = id :: have;
+			if((m := elementid(d, id)) != 0 && d.nodes[m].ns == Dom->SVG)
+				more += xmlnode(d, nil, m, nil);
+		}
+		defs += more;
+		(nil, want) = svgids(more);
+	}
+	if(defs == "")
+		return "";
+	return "<defs>" + defs + "</defs>";
+}
+
+# the ids an svg's markup defines and those it names (href="#x",
+# xlink:href="#x", url(#x))
+svgids(s: string): (list of string, list of string)
+{
+	have, want: list of string;
+	for(i := 0; i < len s; i++) {
+		if(s[i] == ' ' && i + 5 < len s && s[i+1:i+5] == "id=\"") {
+			e := i + 5;
+			while(e < len s && s[e] != '"')
+				e++;
+			have = s[i+5:e] :: have;
+		} else if(s[i] == 'h' && i + 7 < len s && s[i:i+7] == "href=\"#") {
+			e := i + 7;
+			while(e < len s && s[e] != '"')
+				e++;
+			if(e > i + 7)
+				want = s[i+7:e] :: want;
+		} else if(s[i] == 'u' && i + 5 < len s && s[i:i+5] == "url(#") {
+			e := i + 5;
+			while(e < len s && s[e] != ')' && s[e] != '"' && s[e] != '\'' && s[e] != ' ')
+				e++;
+			if(e > i + 5)
+				want = s[i+5:e] :: want;
+		}
+	}
+	return (have, want);
+}
+
+# the element with id, 0 for none: the document's ids indexed once a
+# generation
+Nids: con 512;
+iddoc: ref Doc;
+idgen := -1;
+idtab: array of list of (string, int);
+
+elementid(d: ref Doc, id: string): int
+{
+	if(d != iddoc || d.gen != idgen || idtab == nil) {
+		idtab = array[Nids] of list of (string, int);
+		for(i := len d.nodes - 1; i > 0; i--) {
+			nd := d.nodes[i];
+			if(nd == nil || nd.kind != Dom->Element)
+				continue;
+			for(a := nd.attrs; a != nil; a = tl a)
+				if((hd a).t0 == "id") {
+					v := (hd a).t1;
+					k := idhash(v);
+					idtab[k] = (v, i) :: idtab[k];	# the first in the document last pushed: first found
+					break;
+				}
+		}
+		iddoc = d;
+		idgen = d.gen;
+	}
+	for(l := idtab[idhash(id)]; l != nil; l = tl l)
+		if((hd l).t0 == id)
+			return (hd l).t1;
+	return 0;
+}
+
+idhash(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = (h * 31 + s[i]) & 16r7fffffff;
+	return h % Nids;
 }
 
 num(s: string): string

@@ -1,0 +1,7 @@
+<!doctype html><title>an inline svg uses a symbol from a sprite svg elsewhere in the page</title>
+<style>body{margin:0} div{width:100px;height:100px;background:red} svg{display:block}</style>
+<svg style="position:absolute;width:0;height:0" aria-hidden="true">
+<symbol id="sq" viewBox="0 0 10 10"><rect width="10" height="10" fill="url(#g)"/></symbol>
+<linearGradient id="g"><stop offset="0" stop-color="green"/><stop offset="1" stop-color="green"/></linearGradient>
+</svg>
+<div><svg width="100" height="100"><use href="#sq" width="100" height="100"/></svg></div>

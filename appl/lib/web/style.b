@@ -2002,6 +2002,7 @@ supportsdecl(v: array of ref Tok): int
 
 resolveurl(base, rel: string): string
 {
+	rel = urltrim(rel);
 	if(rel == nil || base == nil)
 		return rel;
 	# absolute already?  Its path's dot segments go all the same (a
@@ -2050,6 +2051,31 @@ resolveurl(base, rel: string): string
 }
 
 # (scheme, "//authority" or "", path, "?query")
+# A URL as a page writes it, as the URL Standard parses it: C0
+# controls and blanks at either end left out, and every tab, LF and
+# CR within (href=" http://x/" is http://x/, not a path of this site)
+urltrim(s: string): string
+{
+	i := 0;
+	while(i < len s && s[i] <= 16r20)
+		i++;
+	e := len s;
+	while(e > i && s[e-1] <= 16r20)
+		e--;
+	if(i > 0 || e < len s)
+		s = s[i:e];
+	for(i = 0; i < len s; i++)
+		if(s[i] == '\t' || s[i] == '\n' || s[i] == '\r')
+			break;
+	if(i == len s)
+		return s;
+	t := s[0:i];
+	for(; i < len s; i++)
+		if(s[i] != '\t' && s[i] != '\n' && s[i] != '\r')
+			t[len t] = s[i];
+	return t;
+}
+
 spliturl(u: string): (string, string, string, string)
 {
 	e := index(u, "#", 0);

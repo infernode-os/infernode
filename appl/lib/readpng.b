@@ -594,6 +594,32 @@ expand(out: array of byte, outstride: int, in: array of byte, pixels: int, bpp: 
 	}
 }
 
+# a row of 8-bit RGB or RGBA into its channels, in one pass
+splitrow(raw: ref Rawimage, o: int, row: array of byte, pixels: int)
+{
+	r := raw.chans[0][o:o+pixels];
+	g := raw.chans[1][o:o+pixels];
+	b := raw.chans[2][o:o+pixels];
+	i := 0;
+	if (raw.nchans == 4) {
+		a := raw.chans[3][o:o+pixels];
+		for (x := 0; x < pixels; x++) {
+			r[x] = row[i];
+			g[x] = row[i+1];
+			b[x] = row[i+2];
+			a[x] = row[i+3];
+			i += 4;
+		}
+	} else {
+		for (x := 0; x < pixels; x++) {
+			r[x] = row[i];
+			g[x] = row[i+1];
+			b[x] = row[i+2];
+			i += 3;
+		}
+	}
+}
+
 copybytes(out: array of byte, outstride: int, in: array of byte, instride: int, pixels: int)
 {
 	inx := 0;
@@ -638,6 +664,10 @@ outputrow(png: ref Png, raw: ref Rawimage, row: array of byte)
 			# split rgb (and optionally alpha) into separate channels
 			bytespc := png.depth / 8;
 			stride := (raw.nchans + png.alpha) * bytespc;
+			if (bytespc == 1 && png.colstep == 1 && png.alpha == 0) {
+				splitrow(raw, offset + png.colstart, row, png.phasecols);
+				return;
+			}
 			copybytes(raw.chans[0][offset + png.colstart:], png.colstep, row, stride, png.phasecols);
 			copybytes(raw.chans[1][offset + png.colstart:], png.colstep, row[bytespc:], stride, png.phasecols);
 			copybytes(raw.chans[2][offset + png.colstart:], png.colstep, row[bytespc * 2:], stride, png.phasecols);

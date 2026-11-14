@@ -2,7 +2,8 @@ implement WebFontsTest;
 
 #
 # Fonts for the web engine: downloaded faces (@font-face) in TrueType
-# and WOFF, family matching, metrics for ex and ch.
+# and WOFF, family matching, metrics for ex and ch; the shipped faces
+# that stand in for Arial, Helvetica and Times.
 #
 
 include "sys.m";
@@ -251,6 +252,46 @@ testGPOS(t: ref T)
 	t.assert(int px[20*120 + 10] >= 128, "and not at the origin");
 }
 
+# Arial, Helvetica, Times and the browsers' defaults (sans-serif,
+# serif, no family) are faces with their advances (TeX Gyre Heros and
+# Termes) and their line-height: normal, each of ascent, descent and
+# line gap rounded as Chromium does; families named for the Mac alone
+# fall through; Verdana keeps DejaVu Sans; what the stand-ins lack is
+# DejaVu's
+PANGRAM: con "The quick brown fox jumps over the lazy dog. Hello, World 0123456789";
+
+near(t: ref T, got, want: real, what: string)
+{
+	d := got - want;
+	if(d < 0.0)
+		d = -d;
+	t.assert(d <= want * 0.02, sys->sprint("%s: %.1f px, want %.1f within 2%%", what, got, want));
+}
+
+testStandins(t: ref T)
+{
+	arial := fonts->face("arial" :: nil, 400, 0, 16.0);
+	# Liberation Sans's advances: 31.63 em of this line; DejaVu Sans's 35.96
+	near(t, arial.width(PANGRAM), 31.63 * 16.0, "Arial 16px");
+	near(t, fonts->face("helvetica neue" :: "helvetica" :: nil, 400, 0, 16.0).width(PANGRAM), 31.63 * 16.0, "Helvetica Neue 16px");
+	near(t, fonts->face("sans-serif" :: nil, 400, 0, 16.0).width(PANGRAM), 31.63 * 16.0, "sans-serif 16px");
+	near(t, fonts->face("lucida grande" :: "helvetica" :: "arial" :: nil, 400, 0, 16.0).width(PANGRAM), 31.63 * 16.0, "Lucida Grande, the Mac's, falls through to Helvetica");
+	near(t, fonts->face("times new roman" :: nil, 400, 0, 16.0).width(PANGRAM), 29.30 * 16.0, "Times New Roman 16px");
+	near(t, fonts->face("serif" :: nil, 400, 0, 16.0).width(PANGRAM), 29.30 * 16.0, "serif 16px");
+	near(t, fonts->face("no such family" :: nil, 400, 0, 16.0).width(PANGRAM), 29.30 * 16.0, "a family not known: the default, Times");
+	near(t, fonts->face("verdana" :: nil, 400, 0, 16.0).width(PANGRAM), 35.96 * 16.0, "Verdana: DejaVu Sans, as wide");
+	# line-height: normal, as Chromium has it for Arial and Times New Roman
+	for(l := ("arial", 16.0, 18.0) :: ("times new roman", 16.0, 18.0) :: ("arial", 13.0, 15.0) ::
+	    ("serif", 20.0, 23.0) :: ("sans-serif", 14.0, 16.0) :: nil; l != nil; l = tl l) {
+		(fam, sz, want) := hd l;
+		f := fonts->face(fam :: nil, 400, 0, sz);
+		t.assert(f.normal == want, sys->sprint("%s %.0fpx: line-height normal %.1f, want %.0f", fam, sz, f.normal, want));
+	}
+	t.assert(arial.has('Ж') && arial.has('ש'), "Cyrillic and Hebrew, which Heros lacks, from DejaVu");
+	b := fonts->face("arial" :: nil, 700, 1, 16.0);
+	t.assert(b.width(PANGRAM) > arial.width(PANGRAM), "bold italic: its own face, wider");
+}
+
 testOTF(t: ref T)
 {
 	(a, err) := ofont->open(readfile(DIR + "FASubset.otf"), "ttf");
@@ -344,6 +385,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Ligatures", testLigatures);
 	run("GPOS", testGPOS);
 	run("OTF", testOTF);
+	run("Standins", testStandins);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

@@ -483,11 +483,17 @@ claim(r: ref Realm, urls: list of string): list of string
 	return rev(n);
 }
 
+# /env/pagetime: each image's fetch and decode said too (the decode
+# waits its turn: one decodes at a time)
+imgtime := 0;
+
 fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
 {
 	n := len urls;
 	if(n == 0)
 		return;
+	(ok, nil) := sys->stat("/env/pagetime");
+	imgtime = ok >= 0;
 	work := chan[n] of string;
 	for(; urls != nil; urls = tl urls)
 		work <-= hd urls;
@@ -613,8 +619,13 @@ picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->
 		}
 		pic: ref Page->Pic;
 		{
+			t0 := sys->millisec();
 			(data, ctype, err) := page->fetchimage(u);
+			t1 := sys->millisec();
 			pic = page->picture(u, data, ctype, err);
+			if(imgtime)
+				sys->fprint(sys->fildes(2), "page: image %s: fetched %d ms, decoded %d ms (%d bytes, %s)\n",
+					u, t1-t0, sys->millisec()-t1, len data, ctype);
 		} exception e {
 		"*" =>
 			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);

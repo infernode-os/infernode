@@ -16,6 +16,7 @@ include "imagefile.m";
 	imageremap: Imageremap;
 include "imgload.m";
 	imgload: Imgload;
+	jpegscaled: Jpegscaled;
 include "encoding.m";
 	base64: Encoding;
 include "web/dom.m";
@@ -138,6 +139,7 @@ init(d: ref Display): string
 	layout = load Layout Layout->PATH;
 	imgload = load Imgload Imgload->PATH;
 	imageremap = load Imageremap Imageremap->PATH;
+	jpegscaled = load Jpegscaled Jpegscaled->PATH;	# (without it, JPEGs decode whole)
 	base64 = load Encoding Encoding->BASE64PATH;
 	if(html == nil || css == nil || style == nil || layout == nil)
 		return sys->sprint("cannot load modules: %r");
@@ -621,17 +623,19 @@ picture(url: string, data: array of byte, ctype, err: string): ref Pic
 
 picture1(url: string, data: array of byte, ctype: string): ref Pic
 {
-	(img, raw) := decodeimage2(data, ctype, url);
+	sw := 0;
+	if(display != nil)
+		sw = display.image.r.dx();
+	(img, raw, nw, nh) := decodeimage3(data, ctype, url, sw, 0);
 	if(img == nil)
 		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil, 0, 0, nil, nil);
 	if(issvg(data, ctype, url))
 		return ref Pic(url, img, data, nil, raw, img.r.dx(), img.r.dy(), nil, nil);
-	(nw, nh) := (img.r.dx(), img.r.dy());
 	# no wider than the screen, from the start: pictures wait to be laid
 	# out in batches, several decoding at once, and GitHub's held 100M at
 	# full size.  Layout cuts each to its size (fitimages), and decodes it
 	# again in the rare case it is shown wider.
-	if(raw == nil && display != nil && (sw := display.image.r.dx()) > 0 && nw > sw)
+	if(raw == nil && sw > 0 && img.r.dx() > sw)
 		if((small := layout->scaleimage(img, sw, (nh*sw + nw-1)/nw)) != nil)
 			img = small;
 	return ref Pic(url, img, nil, nil, raw, nw, nh, data, ctype);
@@ -1641,7 +1645,8 @@ fitimages(p: ref Pg, root: ref Box)
 			continue;
 		if(img.r.dx() < w || img.r.dy() < h) {
 			# shown larger than it was kept: from its bytes again
-			if((img = decodeimage(pic.data, pic.ctype, pic.url)) == nil)
+			(img, nil, nil, nil) = decodeimage3(pic.data, pic.ctype, pic.url, w, h);
+			if(img == nil)
 				continue;
 		}
 		if(img.r.dx() != w || img.r.dy() != h)
@@ -1993,18 +1998,54 @@ decodeimage(data: array of byte, ctype, url: string): ref Image
 # turned it
 decodeimage2(data: array of byte, ctype, url: string): (ref Image, ref Image)
 {
-	img := decodeimage1(data, ctype, url);
-	if(img == nil)
-		return (nil, nil);
-	o := exiforient(data);
-	if(o <= 1)
-		return (img, nil);
-	if((t := orient(img, o)) == nil)
-		return (img, nil);
-	return (t, img);
+	(img, raw, nil, nil) := decodeimage3(data, ctype, url, 0, 0);
+	return (img, raw);
 }
 
-decodeimage1(data: array of byte, ctype, url: string): ref Image
+# The same, perhaps decoded smaller than it is, but no smaller than
+# minw by minh (0 by 0 is all of it): a JPEG by its IDCT's scaling,
+# which costs a quarter of the time for a photograph several times
+# the screen's width (NASA's front page decoded 24 megapixels for a
+# card 400 wide).  With the image's own size, turned.
+decodeimage3(data: array of byte, ctype, url: string, minw, minh: int): (ref Image, ref Image, int, int)
+{
+	o := exiforient(data);
+	if(o > 1)
+		minw = minh = 0;	# kept as stored too (raw): all of it
+	(img, nw, nh) := decodeimage1(data, ctype, url, minw, minh);
+	if(img == nil)
+		return (nil, nil, 0, 0);
+	if(o <= 1)
+		return (img, nil, nw, nh);
+	if((t := orient(img, o)) == nil)
+		return (img, nil, nw, nh);
+	return (t, img, t.r.dx(), t.r.dy());
+}
+
+decodeimage1(data: array of byte, ctype, url: string, minw, minh: int): (ref Image, int, int)
+{
+	if((minw > 0 || minh > 0) && jpegscaled != nil && imageremap != nil &&
+	   len data > 4 && data[0] == byte 16rFF && data[1] == byte 16rD8) {
+		{
+			(raw, w, h, err) := jpegscaled->scaled(data, minw, minh);
+			if(raw != nil && err == nil) {
+				(img, nil) := imageremap->remap(raw, display, 0);
+				if(img != nil)
+					return (img, w, h);
+			}
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: %s: jpeg: %s\n", url, e);
+		}
+		return (nil, 0, 0);
+	}
+	img := decodeimage0(data, ctype, url);
+	if(img == nil)
+		return (nil, 0, 0);
+	return (img, img.r.dx(), img.r.dy());
+}
+
+decodeimage0(data: array of byte, ctype, url: string): ref Image
 {
 	if(imgload == nil || len data < 4)
 		return nil;

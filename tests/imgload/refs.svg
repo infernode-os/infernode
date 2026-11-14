@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 40 by 10, four cells: a red square clipped to its left half (the
+clip path after it), a green square with its middle masked out, a blue
+square drawn by use, a yellow one by use of a symbol -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="10">
+<rect x="0" y="0" width="10" height="10" fill="#ff0000" clip-path="url(#left)"/>
+<defs>
+<mask id="hole"><rect x="10" y="0" width="10" height="10" fill="#ffffff"/><rect x="13" y="3" width="4" height="4" fill="#000000"/></mask>
+<rect id="sq" width="10" height="10" fill="#0000ff"/>
+</defs>
+<rect x="10" y="0" width="10" height="10" fill="#00ff00" mask="url(#hole)"/>
+<use xlink:href="#sq" x="20" y="0"/>
+<symbol id="sym" viewBox="0 0 1 1"><rect width="1" height="1" fill="#ffff00"/></symbol>
+<use href="#sym" x="30" y="0" width="10" height="10"/>
+<clipPath id="left"><rect x="0" y="0" width="5" height="10"/></clipPath>
+</svg>

@@ -10,6 +10,7 @@ implement ImgloadTest;
 # - Which names are images (what Xenith opens as one)
 # - Every format decoded from a file, its pixels checked
 #   (fixtures in /tests/imgload, made by mkfixtures.py there)
+# - SVG clip paths, masks, use and symbols, by pixel
 # - PNG alpha that is not RGBA (grey and alpha; a palette with
 #   translucent and several transparent entries) made RGBA
 # - Xenith's image renderer claims images, and not text that
@@ -288,6 +289,25 @@ testPngPaletteAlpha(t: ref T)
 	t.assertseq(rgba(raw, 3, 6), "0 0 255 128", "blue at alpha 128 (translucent entries were opaque)");
 	t.asserteq(int raw.chans[3][1*8+7], 0, "a transparent index");
 	t.asserteq(int raw.chans[3][7*8+3], 0, "a second transparent index (with two, neither was)");
+}
+
+# An SVG's clip-path (its clip path after it), mask, use and use of a
+# symbol: each was drawn as if not there (the square unclipped, the
+# mask's hole filled, nothing for the uses)
+testSvgRefs(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/refs.svg");
+	if(im == nil)
+		t.fatal("refs.svg: " + err);
+	t.asserteq(im.r.dx(), 40, "refs.svg width");
+	o := im.r.min;
+	near(t, pixel(im, o.add((2, 5))), (255, 0, 0), 0, "clip-path: the half inside");
+	near(t, pixel(im, o.add((7, 5))), (0, 0, 0), 0, "clip-path: the half outside, not drawn");
+	near(t, pixel(im, o.add((11, 1))), (0, 255, 0), 0, "mask: where it is white");
+	near(t, pixel(im, o.add((15, 5))), (0, 0, 0), 0, "mask: where it is black, not drawn");
+	near(t, pixel(im, o.add((25, 5))), (0, 0, 255), 0, "use: the rect it names, at its x");
+	near(t, pixel(im, o.add((35, 5))), (255, 255, 0), 0, "use of a symbol: its viewBox into the use's size");
 }
 
 testDecodeJpeg(t: ref T)	{ checkfixture(t, "rb.jpg", "jpeg", (255, 0, 0), (0, 0, 255), 40); }
@@ -966,6 +986,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DecodePng", testDecodePng);
 	run("PngGreyAlpha", testPngGreyAlpha);
 	run("PngPaletteAlpha", testPngPaletteAlpha);
+	run("SvgRefs", testSvgRefs);
 	run("DecodeJpeg", testDecodeJpeg);
 	run("DecodeGif", testDecodeGif);
 	run("DecodeWebpLossless", testDecodeWebpLossless);

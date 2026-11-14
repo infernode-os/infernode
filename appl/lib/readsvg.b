@@ -15,7 +15,11 @@ implement RImagefile;
 #   - Text elements (basic positioning)
 #   - Linear and radial gradients: href'd stops, units, gradientTransform,
 #     focal points, spreadMethod, stop-opacity
-#   - Use/defs references
+#   - use (an element or a symbol, by href or xlink:href), defs
+#   - clip-path and mask (by url(#id), in user space: clipPathUnits and
+#     maskContentUnits objectBoundingBox are not done), the element
+#     drawn into a layer and through their coverage; what they name
+#     may come after what names it
 #   - Style attributes (inline)
 #
 # Uses Inferno's XML parser for SVG parsing.  Shapes are drawn as
@@ -146,7 +150,25 @@ Canvas: adt {
 	viewbox_h:	real;
 	defs:		list of ref Gradient;
 	transform:	ref Matrix;
+	ids:		list of ref Idref;	# every element with an id, where it is
 };
+
+# An element with an id: what clip-path, mask and use name, wherever in
+# the document it is, found before drawing begins (they are often
+# after what uses them); drawn again from its mark
+Idref: adt {
+	id:	string;
+	name:	string;
+	attrs:	Attributes;
+	mark:	ref Xml->Mark;
+};
+
+# drawing a clip path's or a mask's content, or a use's target: how
+# deep, so that one naming itself ends
+refdepth := 0;
+MAXREFDEPTH: con 8;
+clipping := 0;		# drawing a clip path: geometry alone, filled white
+noclipnext := 0;	# the next element is drawn into a layer its clip or mask is applied to: not again
 
 display: ref Display;
 
@@ -219,6 +241,11 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 		Tag =>
 			if(t.name == "svg") {
 				canvas = new_canvas(t.attrs);
+				m0 := parser.mark();
+				parser.down();
+				scanids(parser, canvas);
+				parser.up();
+				parser.goto(m0);
 				parser.down();
 				# the root's own fill, stroke, color and style pass down
 				# like any element's (an icon's <svg fill="none"
@@ -331,6 +358,105 @@ new_canvas(attrs: Attributes): ref Canvas
 	return c;
 }
 
+# every element with an id, where it is
+scanids(parser: ref Parser, canvas: ref Canvas)
+{
+	for(;;) {
+		item := parser.next();
+		if(item == nil)
+			break;
+		pick t := item {
+		Tag =>
+			if((id := t.attrs.get("id")) != nil)
+				canvas.ids = ref Idref(id, t.name, t.attrs, parser.mark()) :: canvas.ids;
+			parser.down();
+			scanids(parser, canvas);
+			parser.up();
+		}
+	}
+}
+
+findid(canvas: ref Canvas, id: string): ref Idref
+{
+	for(l := canvas.ids; l != nil; l = tl l)
+		if((hd l).id == id)
+			return hd l;
+	return nil;
+}
+
+# the id in a url(#id), or nil
+urlref(v: string): string
+{
+	v = trim(v);
+	if(len v < 6 || lower(v[0:4]) != "url(")
+		return nil;
+	v = trim(v[4:len v - 1]);
+	if(len v > 1 && (v[0] == '"' || v[0] == '\'') && v[len v - 1] == v[0])
+		v = v[1:len v - 1];
+	if(len v < 2 || v[0] != '#')
+		return nil;
+	return v[1:];
+}
+
+# an element's clip-path or mask, from its attribute or its style attribute
+clipprop(attrs: Attributes, name: string): string
+{
+	v := attrs.get(name);
+	if((st := attrs.get("style")) != nil && (sv := extract_style_prop(st, name)) != nil)
+		v = sv;
+	return urlref(v);
+}
+
+# The coverage a clip path or a mask gives, as a GREY8 image the size of
+# the canvas: a clip path's shapes filled (clip-rule as fill-rule, their
+# paint ignored), a mask's content drawn and taken as luminance times
+# alpha (mask-type: luminance).  Both in the user space of the element
+# they apply to (clipPathUnits and maskContentUnits userSpaceOnUse);
+# nil for objectBoundingBox, which is not done, and for an id that is
+# no clip path or mask.  The parser is left where it was.
+coverage(parser: ref Parser, canvas: ref Canvas, ref_: ref Idref, xform: ref Matrix, here: ref Xml->Mark): ref Image
+{
+	ismask := ref_.name == "mask";
+	if(!ismask && ref_.name != "clipPath")
+		return nil;
+	units := ref_.attrs.get("clipPathUnits");
+	if(ismask)
+		units = ref_.attrs.get("maskContentUnits");
+	if(units == "objectBoundingBox")
+		return nil;
+	r := canvas.img.r;
+	layer := display.newimage(r, Draw->RGBA32, 0, Draw->Transparent);
+	cov := display.newimage(r, Draw->GREY8, 0, Draw->Black);
+	if(layer == nil || cov == nil)
+		return nil;
+	xf := xform;
+	if((t := ref_.attrs.get("transform")) != nil)
+		xf = matrix_multiply(xform, parse_transform(t));
+	saved := canvas.img;
+	oclip := clipping;
+	canvas.img = layer;
+	clipping = !ismask;
+	refdepth++;
+	{
+		parser.goto(ref_.mark);
+		parser.down();
+		render_children(parser, canvas, xf, parse_style(ref_.attrs, default_style()));
+		parser.up();
+	} exception {
+	"*" =>
+		;
+	}
+	refdepth--;
+	clipping = oclip;
+	canvas.img = saved;
+	parser.goto(here);
+	if(ismask)
+		cov.draw(r, layer, nil, r.min);	# premultiplied, over black, made grey: luminance times alpha
+	else
+		cov.draw(r, display.white, layer, r.min);	# the shapes' coverage
+	return cov;
+}
+
 # Render child elements
 render_children(parser: ref Parser, canvas: ref Canvas, xform: ref Matrix, parent_style: ref Style)
 {
@@ -357,8 +483,59 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 		xform = matrix_multiply(parent_xform, local_xf);
 	}
 
+	# a clip path or a mask: the element drawn into a layer of its own,
+	# then onto the canvas through the coverage they give (CSS Masking
+	# 1 §5, §7).  Stripe's Sign in button is a rect with its label cut
+	# out by a mask, and its icons' arrows clipped
+	if(noclipnext)
+		noclipnext = 0;
+	else if(!clipping && refdepth < MAXREFDEPTH && name != "clipPath" && name != "mask" && name != "defs") {
+		cov: ref Image;
+		here := parser.mark();
+		for(l := "clip-path" :: "mask" :: nil; l != nil; l = tl l)
+			if((id := clipprop(attrs, hd l)) != nil && (rf := findid(canvas, id)) != nil &&
+			   (c := coverage(parser, canvas, rf, xform, here)) != nil) {
+				if(cov == nil)
+					cov = c;
+				else if((both := display.newimage(c.r, Draw->GREY8, 0, Draw->Black)) != nil) {
+					both.draw(both.r, cov, c, both.r.min);	# both: the product
+					cov = both;
+				}
+			}
+		if(cov != nil) {
+			r := canvas.img.r;
+			layer := display.newimage(r, Draw->RGBA32, 0, Draw->Transparent);
+			if(layer != nil) {
+				saved := canvas.img;
+				canvas.img = layer;
+				noclipnext = 1;
+				{
+					render_element(parser, canvas, name, attrs, parent_xform, parent_style);
+				} exception {
+				"*" =>
+					;
+				}
+				noclipnext = 0;
+				canvas.img = saved;
+				saved.draw(r, layer, cov, r.min);
+				return;
+			}
+		}
+	}
+
 	# Parse style
 	style := parse_style(attrs, parent_style);
+	if(clipping) {
+		# a clip path's geometry: filled, whatever paint it is given
+		style.fill = ref Color(255, 255, 255, 255);
+		style.fillurl = nil;
+		style.stroke = nil;
+		style.strokeurl = nil;
+		style.opacity = 1.0;
+		style.fill_opacity = 1.0;
+		if((cr := attrs.get("clip-rule")) != nil)
+			style.fill_rule = fillrule(cr);
+	}
 
 	case name {
 	"g" =>
@@ -399,9 +576,36 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 	"text" =>
 		render_text(parser, canvas, attrs, xform, style);
 	"use" =>
-		# Basic use element support
+		# the element href names, drawn here as if it were a g with its
+		# x and y as a translation; a symbol as an svg, its viewBox
+		# fitted into the use's width and height (SVG 2 §5.6)
+		h := attrs.get("href");
+		if(h == nil)
+			h = attrs.get("xlink:href");
+		if(h != nil && len h > 1 && h[0] == '#' && refdepth < MAXREFDEPTH &&
+		   (rf := findid(canvas, h[1:])) != nil && rf.name != "clipPath" && rf.name != "mask") {
+			here := parser.mark();
+			x := px(attrs.get("x"), 0.0);
+			y := py(attrs.get("y"), 0.0);
+			uxf := matrix_multiply(xform, ref Matrix(1.0, 0.0, x, 0.0, 1.0, y));
+			refdepth++;
+			{
+				parser.goto(rf.mark);
+				if(rf.name == "symbol") {
+					parser.down();
+					render_children(parser, canvas, matrix_multiply(uxf, symbol_viewport(rf.attrs, attrs)), parse_style(rf.attrs, style));
+					parser.up();
+				} else
+					render_element(parser, canvas, rf.name, rf.attrs, uxf, style);
+			} exception {
+			"*" =>
+				;
+			}
+			refdepth--;
+			parser.goto(here);
+		}
 		parser.down();
-		render_children(parser, canvas, xform, style);
+		skip_element(parser);
 		parser.up();
 	"image" or "switch" or "clipPath" or "mask" or
 	"symbol" or "marker" or "pattern" or "filter" or
@@ -467,6 +671,40 @@ nested_viewport(attrs: Attributes): ref Matrix
 	"Max" =>	ay = 1.0;
 	}
 	return ref Matrix(sc, 0.0, x + (w - vw*sc)*ax - vx*sc, 0.0, sc, y + (h - vh*sc)*ay - vy*sc);
+}
+
+# a symbol's viewBox into the width and height a use gives it (100% of
+# the viewport when it gives none), at 0, 0: the use's x and y are its
+# translation already
+symbol_viewport(sym, use: Attributes): ref Matrix
+{
+	a := array[] of {
+		("viewBox", sym.get("viewBox")),
+		("preserveAspectRatio", sym.get("preserveAspectRatio")),
+		("width", use.get("width")),
+		("height", use.get("height")),
+	};
+	if(a[2].t1 == nil)
+		a[2].t1 = sym.get("width");
+	if(a[3].t1 == nil)
+		a[3].t1 = sym.get("height");
+	return nested_viewport(attrsof(a));
+}
+
+fillrule(v: string): int
+{
+	if(trim(v) == "evenodd")
+		return 1;
+	return ~0;
+}
+
+attrsof(a: array of (string, string)): Attributes
+{
+	l: list of Xml->Attribute;
+	for(i := len a - 1; i >= 0; i--)
+		if(a[i].t1 != nil)
+			l = Xml->Attribute(a[i].t0, a[i].t1) :: l;
+	return Attributes(l);
 }
 
 # Skip an element and its children

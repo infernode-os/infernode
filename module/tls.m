@@ -111,6 +111,7 @@ TLS: module {
 		# then cts, and a KeyUpdate it sends replaces that
 		isserver:	int;
 		hsmax:		int;	# the longest handshake message taken; 0: MAXHSMSG
+		peercerts:	list of array of byte;	# a server's: the client's verified chain, until the Conn has it
 	};
 
 	# Connection (read/write after handshake)
@@ -120,6 +121,7 @@ TLS: module {
 		group:		int;		# TLS 1.3 key-exchange group (X25519MLKEM768, ...); 0 under TLS 1.2
 		servername:	string;		# peer name; a server's: the name the client asked for (SNI), or nil
 		alpn:		string;		# application protocol agreed (ALPN), or nil
+		peercerts:	list of array of byte;	# a server's: the client's chain (DER, leaf first), verified; nil: none
 		st:		ref State;	# nil once closed
 
 		read:	fn(c: self ref Conn, buf: array of byte, n: int): int;
@@ -134,6 +136,11 @@ TLS: module {
 		alpn:		list of string;		# protocols taken, in preference order; nil: no ALPN
 		maxhello:	int;			# the longest ClientHello taken; 0: 16384
 		suites:		list of int;		# the server's preference, first that the client offers taken; nil: the client's order
+		# Client certificates (RFC 8446 §4.3.2), asked for when roots are given
+		clientroots:	list of array of byte;	# the CAs a client's chain must end at (DER); nil: none asked for
+		clientcrls:	list of array of byte;	# their CRLs (DER), each signed by one of them
+		clientneed:	int;			# 1: refuse a client with none; 0: take one, and go on without
+		clock:		ref Sys->FD;		# /dev/time, for the chain's validity (a confined caller has none to open); nil: opened
 	};
 
 	# Primary API
@@ -155,6 +162,10 @@ TLS: module {
 	# processor has no AES instructions; ChaCha20-Poly1305 is not), for
 	# ServerConfig.suites
 	fastsuites:	fn(): list of int;
+	# A certificate's subject common name, and the SHA-256 of the
+	# whole certificate as "sha256:" and hex: names for a client
+	certcn:		fn(der: array of byte): string;
+	certfingerprint:	fn(der: array of byte): string;
 	# The descriptors init() opened (its entropy source), for a caller
 	# that drops the rest with pctl(NEWFD, ...) and goes on using TLS
 	keptfds:	fn(): list of int;

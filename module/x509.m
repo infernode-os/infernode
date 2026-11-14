@@ -75,6 +75,13 @@ X509: module {
 
 	verify_certchain: fn(cs: list of array of byte): (int, string);
 	verify_certpath: fn(cp: list of (ref Signed, ref Certificate)): (int, string);
+	# The same against roots given, not /lib/certs: a client's chain
+	# against the CAs a server names (DER, each a CA certificate), with
+	# the CRLs given (DER; each must be signed by one of the roots, or
+	# the call fails) and the time now (seconds since the epoch: a
+	# confined caller has no /dev/time).  Neither store is read.
+	verify_certchain_roots: fn(cs: list of array of byte, roots: list of array of byte,
+		crls: list of array of byte, now: int): (int, string);
 
 	## TBS (Public Key) Certificate
 

@@ -41,6 +41,16 @@ include "tls.m";
 	tls: TLS;
 	Conn, ServerConfig: import tls;
 
+include "keyring.m";
+	keyring: Keyring;
+
+include "encoding.m";
+	base64: Encoding;
+
+include "asn1.m";
+include "pkcs.m";
+include "x509.m";
+
 Httpd: module
 {
 	init: fn(nil: ref Draw->Context, argv: list of string);
@@ -77,6 +87,36 @@ deftype := "application/octet-stream";	# -T: a name with no extension's type
 maxage := 0;			# -C: Cache-Control max-age for files that are not HTML
 
 scfg: ref ServerConfig;
+
+# Who may have what (-A, -P, -x)
+trustfile := "";		# -A: CA certificates (and CRLs) whose client certificates are taken
+pwfile := "";			# -P: passwords (svc/httpd/passwd makes the lines)
+rulesfile := "";		# -x: which paths need which; without it the defaults (rules())
+realm := "InferNode";
+
+Anyone, Password, Cert: con iota;
+Term: adt {
+	kind:	int;
+	name:	string;	# nil: any user, any certificate; else the one (a user, a CN, sha256:hex)
+};
+Rule: adt {
+	meth:	string;	# GET (for HEAD too) or POST; nil: both
+	prefix:	string;	# lower case, so a host whose files are named without case (macOS, Windows) cannot be asked another way
+	orig:	string;	# as the rules file has it
+	depth:	int;	# its names: / is 0, /admin 1
+	terms:	list of ref Term;	# any one of them will do
+	# what it names, if that was there when httpd started (findrule)
+	resolved:	int;
+	qpath:	big;
+	dtype:	int;
+	dev:	int;
+};
+rules: list of ref Rule;
+resolved := 0;		# a rule matches by identity too
+rulesprotect := 0;	# a rule protects something
+authc: chan of (string, string, string, chan of int);	# (user, password, address, answer) to the authenticator
+Ok, Bad, Locked: con iota;
+
 logfd: ref FD;
 logfile := "";
 logmax := big (1024*1024);	# -m: the log's size at which it is rotated; 0: never
@@ -97,6 +137,8 @@ Watch: adt {
 	deadline:	int;	# sys->millisec() past which it is hung up; 0: none
 	pid:	int;	# its process (group), to kill
 	orphans:	int;	# it leaves a process behind (an event stream's reader blocked in a read), killed with its group when it ends
+	ip:	string;	# the client's address
+	stream:	int;	# it holds an event stream (the watchdog's to set)
 };
 
 Entry: adt {
@@ -106,7 +148,8 @@ Entry: adt {
 };
 
 admitc: chan of (string, ref FD, chan of ref Watch);
-donec: chan of ref Watch;	# a connection's end, told at once: a client's next connection is not refused for one it has finished with
+donec: chan of ref Watch;
+streamc: chan of (ref Watch, chan of int);	# may this connection hold an event stream?	# a connection's end, told at once: a client's next connection is not refused for one it has finished with
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -120,8 +163,12 @@ init(nil: ref Draw->Context, argv: list of string)
 		fatal(sys->sprint("cannot load %s: %r", Arg->PATH));
 
 	certfile, keyfile: string;
+	keyring = load Keyring Keyring->PATH;
+	base64 = load Encoding Encoding->BASE64PATH;
+	if(keyring == nil || base64 == nil)
+		fatal(sys->sprint("cannot load keyring or base64: %r"));
 	arg->init(argv);
-	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-T type] [-r httpsport] [-S hstssecs] [-C maxage] [-m maxlog] [-M oldlogs] [-n maxconns] [-s persource] [-b maxbody] root");
+	arg->setusage("svc/httpd/httpd [-Lv] [-a addr] [-c cert -k key] [-l log] [-p path]... [-w wikibase]\n\t[-T type] [-r httpsport] [-S hstssecs] [-C maxage] [-m maxlog] [-M oldlogs]\n\t[-A clientcas] [-P passwords] [-x rules] [-n maxconns] [-s persource] [-b maxbody] root");
 	while((o := arg->opt()) != 0)
 		case o {
 		'a' =>	addr = arg->earg();
@@ -151,6 +198,9 @@ init(nil: ref Draw->Context, argv: list of string)
 		'C' =>	maxage = posint(arg->earg());
 		'm' =>	logmax = size(arg->earg());
 		'M' =>	logold = posint(arg->earg());
+		'A' =>	trustfile = arg->earg();
+		'P' =>	pwfile = arg->earg();
+		'x' =>	rulesfile = arg->earg();
 		* =>	arg->usage();
 		}
 	argv = arg->argv();
@@ -191,6 +241,10 @@ init(nil: ref Draw->Context, argv: list of string)
 		}
 	} else if(hsts)
 		fatal("-S needs TLS (-c, -k)");
+	if(scfg == nil && (trustfile != nil || pwfile != nil))
+		fatal("-A and -P need TLS (-c, -k): a password must not cross the network in clear");
+	if(redirport != nil && (trustfile != nil || pwfile != nil || rulesfile != nil))
+		fatal("-r answers every request with a redirect: -A, -P and -x are the TLS server's");
 	if(addr == nil) {
 		if(scfg != nil)
 			addr = "tcp!*!443";
@@ -215,12 +269,32 @@ init(nil: ref Draw->Context, argv: list of string)
 	epoch0 = daytime->now();
 	ms0 = sys->millisec();
 
+	if(trustfile != nil)
+		loadtrust();
+	if(rulesfile != nil)
+		loadrules();
+	if(pwfile != nil) {
+		if(loadpasswords() == nil)
+			fatal(pwfile + ": no users");
+		authc = chan of (string, string, string, chan of int);
+		spawn authenticator();
+	}
+	if(rulesfile != nil)
+		for(rl := rules; rl != nil; rl = tl rl)
+			for(tm := (hd rl).terms; tm != nil; tm = tl tm) {
+				if((hd tm).kind == Cert && trustfile == nil)
+					fatal(rulesfile + ": a rule takes a certificate, and there is no -A");
+				if((hd tm).kind == Password && pwfile == nil)
+					fatal(rulesfile + ": a rule takes a password, and there is no -P");
+			}
+
 	(aok, c) := sys->announce(addr);
 	if(aok < 0)
 		fatal(sys->sprint("cannot announce %s: %r", addr));
 
 	admitc = chan of (string, ref FD, chan of ref Watch);
 	donec = chan[16] of ref Watch;
+	streamc = chan of (ref Watch, chan of int);
 	spawn watchdog();
 	for(;;) {
 		(lok, nc) := sys->listen(c);
@@ -266,7 +340,7 @@ loadidentity(certfile, keyfile: string): ref ServerConfig
 	ktext = nil;
 	if(err != nil)
 		fatal(keyfile + ": " + err);
-	cfg := ref ServerConfig(certs, key, "http/1.1" :: nil, 0, nil);
+	cfg := ref ServerConfig(certs, key, "http/1.1" :: nil, 0, nil, nil, nil, 0, nil);
 	if((err = tls->checkserver(cfg)) != nil)
 		fatal(certfile + ", " + keyfile + ": " + err);
 	return cfg;
@@ -292,10 +366,28 @@ watchdog()
 			rc <-= nil;
 			continue;
 		}
-		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0, 0);
+		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0, 0, ip, 0);
 		conns = ref Entry(w, cfd, ip) :: conns;
 		n++;
 		rc <-= w;
+	(sw, src) := <-streamc =>
+		# event streams have no deadline: at most half the
+		# connections, and half of one address's, so a few clients
+		# holding streams leave room for the rest
+		ns := 0;
+		nip := 0;
+		for(l := conns; l != nil; l = tl l)
+			if((hd l).w.stream) {
+				ns++;
+				if((hd l).ip == sw.ip)
+					nip++;
+			}
+		if(ns >= max(1, maxconns / 2) || nip >= max(1, maxpersource / 2))
+			src <-= 0;
+		else {
+			sw.stream = 1;
+			src <-= 1;
+		}
 	w := <-donec =>
 		if(w.orphans && w.pid > 0)
 			writefile("/prog/" + string w.pid + "/ctl", "killgrp");
@@ -354,7 +446,7 @@ connection(dfd: ref FD, ip: string, w: ref Watch, sync: chan of int)
 	}
 	sys->pctl(Sys->NODEVS, nil);
 	{
-		serve(ref Io(dfd, nil, array[BUFSIZE] of byte, 0, 0, nil, 0, w), ip);
+		serve(ref Io(dfd, nil, array[BUFSIZE] of byte, 0, 0, nil, 0, w, nil, nil), ip);
 	} exception e {
 	"*" =>
 		if(verbose)
@@ -376,6 +468,8 @@ Io: adt {
 	obuf:	array of byte;
 	on:	int;
 	w:	ref Watch;
+	cn:	string;	# the client's certificate's common name, if it gave one (verified)
+	fp:	string;	# and its fingerprint
 
 	fill:	fn(io: self ref Io): int;
 	getline:	fn(io: self ref Io, max: int): (string, string);
@@ -448,9 +542,9 @@ Io.read(io: self ref Io, n: int): array of byte
 {
 	b := array[n] of byte;
 	i := 0;
+	io.deadline(IOWAIT);	# the whole body, not each piece: a byte every 29 s does not hold a connection
 	while(i < n) {
 		if(io.rp == io.re) {
-			io.deadline(IOWAIT);
 			if(io.fill() <= 0)
 				return nil;
 		}
@@ -540,6 +634,8 @@ Req: adt {
 	agent:	string;
 	accept:	string;
 	acceptenc:	string;
+	auth:	string;	# Authorization
+	user:	string;	# who it was found to be: a user, or cert:CN
 };
 
 serve(io: ref Io, ip: string)
@@ -553,6 +649,10 @@ serve(io: ref Io, ip: string)
 			return;
 		}
 		io.tc = tc;
+		if(tc.peercerts != nil) {
+			io.cn = tls->certcn(hd tc.peercerts);
+			io.fp = tls->certfingerprint(hd tc.peercerts);
+		}
 	}
 	for(nreq := 0; nreq < MAXREQS; nreq++) {
 		if(nreq == 0)
@@ -564,7 +664,7 @@ serve(io: ref Io, ip: string)
 			break;	# the client went
 		if(code != 0) {
 			if(r == nil)
-				r = ref Req("-", "-", nil, nil, 11, nil, big -1, 1, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
+				r = ref Req("-", "-", nil, nil, 11, nil, big -1, 1, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
 			r.close = 1;
 			if(verbose && why != nil)
 				sys->fprint(stderr, "httpd: %s: %d: %s\n", ip, code, why);
@@ -607,7 +707,7 @@ readreq(io: ref Io): (ref Req, int, string)
 	(target, version) := splitfirst(rest, ' ');
 	if(!token(meth) || target == nil || hasbyte(target, ' ') || hasbyte(version, ' '))
 		return (nil, 400, "malformed request line");
-	r := ref Req(meth, target, nil, nil, 11, nil, big -1, 0, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
+	r := ref Req(meth, target, nil, nil, 11, nil, big -1, 0, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
 	case version {
 	"HTTP/1.1" =>
 		r.vers = 11;
@@ -678,6 +778,10 @@ readreq(io: ref Io): (ref Req, int, string)
 		"accept" =>	r.accept = lower(value);
 		"accept-encoding" =>	r.acceptenc = lower(value);
 		"user-agent" =>	r.agent = value;
+		"authorization" =>
+			if(r.auth != nil)
+				return (r, 400, "two Authorization headers");
+			r.auth = value;
 		}
 	}
 	if(r.vers == 10 && !r.keepalive)
@@ -750,6 +854,15 @@ decodepath(p: string): (string, string)
 			continue;
 		if(seg == "." || seg == "..")
 			return (nil, "dot segment in the path");
+		# a name a Windows host would take as another: "admin." and
+		# "admin " are "admin" there, and \ separates its names
+		c := seg[len seg - 1];
+		if(c == '.' || c == ' ')
+			return (nil, "a segment ending in a dot or blank");
+		if(hasbyte(seg, '\\'))
+			return (nil, "a backslash in the path");
+		if(dosdevice(seg))
+			return (nil, "a Windows device's name");
 		out += "/" + seg;
 	}
 	if(out == "")
@@ -785,6 +898,11 @@ handle(io: ref Io, r: ref Req): (int, big, int)
 {
 	if(redirport != nil)
 		return redirect(io, r);
+	# who may: before anything of the site is opened, so a refusal
+	# says nothing of what is there
+	(acode, ahdr) := authorise(io, r);
+	if(acode != 0)
+		return errorpage(io, r, acode, ahdr);
 	case r.meth {
 	"GET" or "HEAD" =>
 		return get(io, r);
@@ -897,6 +1015,10 @@ acceptsgzip(h: string): int
 # the stream (and an EventSource opens it again).
 eventstream(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
 {
+	ok := chan[1] of int;
+	streamc <-= (io.w, ok);
+	if(<-ok == 0)
+		return errorpage(io, r, 503, "Retry-After: 30\r\n");
 	hdr := "Content-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n";
 	chunked := r.vers == 11;
 	if(chunked)
@@ -969,11 +1091,12 @@ sleeper(ms: int, c: chan of int)
 # (a CR is a line break to an EventSource), one final newline not a line
 sseevent(b: array of byte): string
 {
-	t := "";
+	nb := array[len b] of byte;
+	n := 0;
 	for(i := 0; i < len b; i++)
 		if(b[i] != byte '\r')
-			t[len t] = int b[i];
-	s := string array of byte t;	# the bytes back as UTF-8
+			nb[n++] = b[i];
+	s := string nb[0:n];	# as UTF-8 (they were taken as Latin-1, and sent twice encoded)
 	if(s == nil)
 		return "data:\n\n";
 	if(s[len s - 1] == '\n')
@@ -1120,6 +1243,8 @@ listing(io: ref Io, r: ref Req, path: string, fd: ref FD): (int, big, int)
 			if(d[i].name == nil || d[i].name[0] == '.')
 				continue;
 			nm := d[i].name;
+			if(protection() && !mayshow(io, r, path + nm))
+				continue;	# not one this client may have: not named either
 			if(d[i].mode & Sys->DMDIR)
 				nm += "/";
 			names = nm :: names;
@@ -1163,6 +1288,7 @@ post(io: ref Io, r: ref Req): (int, big, int)
 	body := io.read(int r.clen);
 	if(body == nil && r.clen > big 0)
 		return (400, big 0, 0);
+	r.clen = big 0;	# read: what follows on the connection is the next request
 	if(wiki)
 		return wikipost(io, r, body);
 
@@ -1298,8 +1424,10 @@ errorpage(io: ref Io, r: ref Req, code: int, hdr: string): (int, big, int)
 {
 	if(code == 405)
 		hdr += "Allow: GET, HEAD" + postallowed(r) + "\r\n";
-	if(code >= 400 && code != 404 && code != 403 && code != 304)
-		r.close = 1;	# what was left of the request is not read
+	if(code >= 400 && code != 404 && code != 403 && code != 401 && code != 304)
+		r.close = 1;
+	if(r.clen > big 0)
+		r.close = 1;	# a body not read: it is not the next request (a proxy in front would be out of step)
 	t := sys->sprint("%d %s", code, reason(code));
 	return page(io, r, code, hdr, "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>" + t +
 		"</title></head>\n<body><h1>" + t + "</h1></body></html>\n");
@@ -1333,6 +1461,7 @@ reason(code: int): string
 	416 =>	return "Range Not Satisfiable";
 	417 =>	return "Expectation Failed";
 	422 =>	return "Unprocessable Content";
+	429 =>	return "Too Many Requests";
 	431 =>	return "Request Header Fields Too Large";
 	500 =>	return "Internal Server Error";
 	501 =>	return "Not Implemented";
@@ -1346,8 +1475,8 @@ reason(code: int): string
 logreq(ip: string, r: ref Req, code: int, n: big)
 {
 	t := daytime->gmt(now());
-	s := sys->sprint("%s - - [%02d/%s/%d:%02d:%02d:%02d +0000] \"%s %s %s\" %d %bd \"%s\" \"%s\"\n",
-		ip, t.mday, months[t.mon], t.year + 1900, t.hour, t.min, t.sec,
+	s := sys->sprint("%s - %s [%02d/%s/%d:%02d:%02d:%02d +0000] \"%s %s %s\" %d %bd \"%s\" \"%s\"\n",
+		ip, logname(r.user), t.mday, months[t.mon], t.year + 1900, t.hour, t.min, t.sec,
 		logesc(r.meth), logesc(r.target), vers(r.vers), code, n, logesc(r.referer), logesc(r.agent));
 	logc <-= array of byte s;
 }
@@ -1974,4 +2103,659 @@ fatal(s: string)
 {
 	sys->fprint(sys->fildes(2), "httpd: %s\n", s);
 	raise "fail:" + s;
+}
+
+# ================================================================
+# Who may (-A, -P, -x)
+# ================================================================
+
+logname(s: string): string
+{
+	if(s == nil)
+		return "-";
+	t := "";
+	for(i := 0; i < len s && i < 64; i++) {
+		c := s[i];
+		if(c <= 16r20 || c == 16r7F || c == '"' || c == '\\' || c > 16r7E)
+			c = '_';
+		t[len t] = c;
+	}
+	return t;
+}
+
+# The rule for a path: the deepest rule that is the path or a directory
+# of it, a rule for the method before one for both; nil if none
+# (refused, with -x).  A rule matches by its name, in lower case, and,
+# when what it names existed when httpd started, by that file's
+# identity too (its qid and device), found by a stat of each directory
+# on the way: a host that takes /ADMIN, /ADMINI~1 or /admın for
+# /admin (macOS's APFS, Windows's NTFS) opens the same directory,
+# whatever the name.
+findrule(path, meth: string): ref Rule
+{
+	if(meth == "HEAD")
+		meth = "GET";
+	lp := lower(path);
+	best: ref Rule;
+	for(l := rules; l != nil; l = tl l) {
+		ru := hd l;
+		if(ru.meth != nil && ru.meth != meth)
+			continue;
+		if(under(lp, ru.prefix))
+			best = better(best, ru);
+	}
+	if(!resolved)
+		return best;
+	# each directory on the way, and the path itself, by identity
+	p := "";
+	segs := split(path, '/');
+	for(sl := segs; sl != nil; sl = tl sl) {
+		if(hd sl == "")
+			continue;
+		p += "/" + hd sl;
+		(ok, d) := sys->stat(p);
+		if(ok < 0)
+			break;
+		for(l = rules; l != nil; l = tl l) {
+			ru := hd l;
+			if(ru.meth != nil && ru.meth != meth || !ru.resolved)
+				continue;
+			if(ru.qpath == d.qid.path && ru.dtype == d.dtype && ru.dev == d.dev)
+				best = better(best, ru);
+		}
+	}
+	return best;
+}
+
+better(best, ru: ref Rule): ref Rule
+{
+	if(best == nil || ru.depth > best.depth ||
+	   ru.depth == best.depth && ru.meth != nil && best.meth == nil)
+		return ru;
+	return best;
+}
+
+# path is prefix, or below it: /admin is not /administrator
+under(path, p: string): int
+{
+	if(p == "/")
+		return 1;
+	if(!prefix(path, p))
+		return 0;
+	return len path == len p || path[len p] == '/';
+}
+
+# Without -x: with -P every request needs a password (or a client
+# certificate); with -A a POST needs a client certificate
+defaultterms(meth: string): list of ref Term
+{
+	t: list of ref Term;
+	if(meth == "POST") {
+		if(trustfile != nil)
+			return ref Term(Cert, nil) :: nil;
+		if(pwfile != nil)
+			return ref Term(Password, nil) :: nil;
+		return ref Term(Anyone, nil) :: nil;
+	}
+	if(pwfile != nil) {
+		t = ref Term(Password, nil) :: t;
+		if(trustfile != nil)
+			t = ref Term(Cert, nil) :: t;
+		return t;
+	}
+	return ref Term(Anyone, nil) :: nil;
+}
+
+protection(): int
+{
+	return trustfile != nil || pwfile != nil || rulesprotect;
+}
+
+# (0, nil) to go on; else the status to refuse with, and its headers.
+# Every path the request may be answered from is authorised, each as
+# strictly as its own rule says: the path, a compressed copy's original
+# (name.gz is the file name's, whatever a rule says of name.gz), a
+# directory's index.html, and for the wiki's form the wiki's own
+# new file, which it writes.
+authorise(io: ref Io, r: ref Req): (int, string)
+{
+	# with anything protected, a name a Windows host might take for
+	# another's (ADMIN~1, an 8.3 name) is refused whatever its rule
+	if(protection() && shortname(r.path))
+		return (400, nil);
+	paths := r.path :: nil;
+	if(len r.path > 3 && r.path[len r.path - 3:] == ".gz")
+		paths = r.path[0:len r.path - 3] :: paths;
+	if(r.path[len r.path - 1] == '/')
+		paths = r.path + "index.html" :: paths;
+	meths := r.meth :: nil;
+	if(wikibase != nil && r.path == "/magic/wikipost") {
+		paths = wikibase + "/new" :: wikibase :: paths;
+		meths = "POST" :: nil;
+	}
+	for(; paths != nil; paths = tl paths) {
+		(code, hdr) := authorise1(io, r, hd paths, hd meths);
+		if(code != 0)
+			return (code, hdr);
+	}
+	return (0, nil);
+}
+
+authorise1(io: ref Io, r: ref Req, path, meth: string): (int, string)
+{
+	terms: list of ref Term;
+	if(rulesfile != nil) {
+		ru := findrule(path, meth);
+		if(ru == nil)
+			return (403, nil);	# no rule names it: refused
+		terms = ru.terms;
+	} else
+		terms = defaultterms(meth);
+
+	wantpw := 0;
+	for(l := terms; l != nil; l = tl l) {
+		t := hd l;
+		case t.kind {
+		Anyone =>
+			return (0, nil);
+		Cert =>
+			if(io.fp == nil)
+				continue;
+			# a name is a CN, or a fingerprint if it says sha256:,
+			# never either (a CN of "sha256:..." is no fingerprint)
+			if(t.name == nil || prefix(t.name, "sha256:") && t.name == io.fp ||
+			   !prefix(t.name, "sha256:") && t.name == io.cn) {
+				r.user = "cert:" + io.cn;
+				return (0, nil);
+			}
+		Password =>
+			wantpw = 1;
+		}
+	}
+	if(!wantpw)
+		return (403, nil);
+
+	challenge := "WWW-Authenticate: Basic realm=\"" + realm + "\", charset=\"UTF-8\"\r\n";
+	if(r.auth == nil)
+		return (401, challenge);
+	(user, pass) := basicauth(r.auth);
+	if(user == nil)
+		return (401, challenge);
+	# the answer's channel holds it: a connection killed while its
+	# password is checked must not leave the authenticator waiting to
+	# tell it (every later login would wait for ever)
+	rc := chan[1] of int;
+	io.deadline(IOWAIT);
+	authc <-= (user, pass, io.w.ip, rc);
+	case <-rc {
+	Locked =>
+		return (429, "Retry-After: 600\r\n");
+	Bad =>
+		return (401, challenge);
+	}
+	for(l = terms; l != nil; l = tl l)
+		if((hd l).kind == Password && ((hd l).name == nil || (hd l).name == user)) {
+			r.user = user;
+			return (0, nil);
+		}
+	return (403, nil);	# the right password, but not a user this path names
+}
+
+# Whether a listing shows an entry: not one the requester could not
+# have (a rule it does not meet, by what it has already shown: its
+# certificate, or the user its password was found to be)
+mayshow(io: ref Io, r: ref Req, path: string): int
+{
+	terms: list of ref Term;
+	if(rulesfile != nil) {
+		ru := findrule(path, r.meth);
+		if(ru == nil)
+			return 0;
+		terms = ru.terms;
+	} else
+		terms = defaultterms(r.meth);
+	for(; terms != nil; terms = tl terms) {
+		t := hd terms;
+		case t.kind {
+		Anyone =>
+			return 1;
+		Cert =>
+			if(io.fp != nil && (t.name == nil || t.name == io.fp || t.name == io.cn))
+				return 1;
+		Password =>
+			if(r.user != nil && !prefix(r.user, "cert:") && (t.name == nil || t.name == r.user))
+				return 1;
+		}
+	}
+	return 0;
+}
+
+protects(terms: list of ref Term): int
+{
+	for(; terms != nil; terms = tl terms)
+		if((hd terms).kind == Anyone)
+			return 0;
+	return 1;
+}
+
+# a segment such as ADMIN~1 (a Windows volume's 8.3 alias)
+shortname(path: string): int
+{
+	for(i := 0; i + 1 < len path; i++)
+		if(path[i] == '~' && path[i+1] >= '0' && path[i+1] <= '9')
+			return 1;
+	return 0;
+}
+
+# Authorization: Basic base64(user:password), strictly: (user, password) or nil
+basicauth(h: string): (string, string)
+{
+	(scheme, rest) := splitfirst(trimows(h), ' ');
+	if(lower(scheme) != "basic")
+		return (nil, nil);
+	rest = trimows(rest);
+	if(rest == nil || len rest > 1024)
+		return (nil, nil);
+	for(i := 0; i < len rest; i++) {
+		c := rest[i];
+		if(!(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '='))
+			return (nil, nil);
+	}
+	b := base64->dec(rest);
+	if(b == nil)
+		return (nil, nil);
+	s := string b;
+	if(len array of byte s != len b)
+		return (nil, nil);	# not UTF-8
+	(user, pass) := splitfirst(s, ':');
+	if(user == nil || len user > 64 || !hasbyte(s, ':') || len b > 512)
+		return (nil, nil);
+	for(i = 0; i < len s; i++)
+		if(s[i] < 16r20 || s[i] == 16r7F)
+			return (nil, nil);
+	return (user, pass);
+}
+
+loadtrust()
+{
+	text := readfile(trustfile, 1<<20);
+	if(text == nil)
+		fatal(sys->sprint("cannot read %s: %r", trustfile));
+	roots := tls->pemblocks(text, "CERTIFICATE");
+	crls := tls->pemblocks(text, "X509 CRL");
+	if(roots == nil)
+		fatal(trustfile + ": no PEM CA certificate");
+	# the roots and CRLs as a handshake will take them, now: a CRL no
+	# root signed would refuse every client
+	x := load X509 X509->PATH;
+	if(x == nil || x->init() != nil)
+		fatal(sys->sprint("cannot load %s: %r", X509->PATH));
+	for(l := roots; l != nil; l = tl l) {
+		(ok, err) := x->verify_certchain_roots(hd l :: nil, roots, crls, now());
+		if(!ok)
+			fatal(trustfile + ": " + err);
+	}
+	scfg.clientroots = roots;
+	scfg.clientcrls = crls;
+	scfg.clientneed = 0;	# asked for; each path says whether it needs one
+	scfg.clock = timefd;
+}
+
+# -x: a line is [GET|POST] path term..., a term none, password,
+# password=user, cert, cert=CN or cert=sha256:hex; or realm name...
+loadrules()
+{
+	text := readfile(rulesfile, 1<<20);
+	if(text == nil)
+		fatal(sys->sprint("cannot read %s: %r", rulesfile));
+	n := 0;
+	rev: list of ref Rule;
+	for(ls := split(text, '\n'); ls != nil; ls = tl ls) {
+		n++;
+		line := hd ls;
+		(line, nil) = splitfirst(line, '#');
+		(nil, f) := sys->tokenize(line, " \t\r");
+		if(f == nil)
+			continue;
+		where := sys->sprint("%s:%d: ", rulesfile, n);
+		if(hd f == "realm") {
+			realm = "";
+			for(f = tl f; f != nil; f = tl f) {
+				if(realm != "")
+					realm += " ";
+				realm += hd f;
+			}
+			for(i := 0; i < len realm; i++)
+				if(realm[i] == '"' || realm[i] == '\\' || realm[i] < 16r20 || realm[i] > 16r7E)
+					fatal(where + "a realm of printable ASCII, no quote or backslash");
+			continue;
+		}
+		ru := ref Rule;
+		if(hd f == "GET" || hd f == "POST") {
+			ru.meth = hd f;
+			f = tl f;
+		}
+		if(f == nil)
+			fatal(where + "no path");
+		ru.orig = cleanpath(hd f);
+		if(hd f == "/")
+			ru.orig = "/";
+		if(ru.orig == nil)
+			fatal(where + "not a path: " + hd f);
+		ru.prefix = lower(ru.orig);
+		for(i := 0; i < len ru.orig; i++)
+			if(ru.orig[i] == '/' && ru.orig != "/")
+				ru.depth++;
+		for(f = tl f; f != nil; f = tl f) {
+			(k, v) := splitfirst(hd f, '=');
+			if(hasbyte(hd f, '=') && v == nil)
+				fatal(where + "nothing after = in " + hd f);
+			case k {
+			"none" =>
+				if(v != nil)
+					fatal(where + "none names no one");
+				ru.terms = ref Term(Anyone, nil) :: ru.terms;
+			"password" =>
+				ru.terms = ref Term(Password, v) :: ru.terms;
+			"cert" =>
+				if(prefix(v, "sha256:"))
+					v = lower(v);
+				ru.terms = ref Term(Cert, v) :: ru.terms;
+			* =>
+				fatal(where + "not a term: " + hd f);
+			}
+		}
+		if(ru.terms == nil)
+			fatal(where + "no terms: say none, password or cert");
+		if(!protects(ru.terms) && tl ru.terms != nil)
+			fatal(where + "none with other terms: say one or the other");
+		if(protects(ru.terms))
+			rulesprotect = 1;
+		# its identity, while httpd can see the site whole
+		if(ru.orig != "/") {
+			(ok, d) := sys->stat(root + ru.orig);
+			if(ok >= 0) {
+				ru.resolved = 1;
+				ru.qpath = d.qid.path;
+				ru.dtype = d.dtype;
+				ru.dev = d.dev;
+				resolved = 1;
+			}
+		}
+		rev = ru :: rev;
+	}
+	rules = rev;
+}
+
+# ---------------------------------------------------------------- passwords
+
+User: adt {
+	name:	string;
+	iters:	int;
+	salt:	array of byte;
+	hash:	array of byte;
+};
+
+users: list of ref User;
+pwqid: Sys->Qid;
+pwmtime := -1;
+
+DEFITERS: con 100000;
+WINDOW: con 600;	# seconds a source's failures are counted, and it is refused for after ten
+MAXFAIL: con 10;
+CACHETIME: con 300;	# seconds a checked password is taken again without its hash
+
+# user:pbkdf2-sha256:iterations:salt:hash, the last two base64
+loadpasswords(): list of ref User
+{
+	(ok, d) := sys->stat(pwfile);
+	if(ok < 0) {
+		sys->fprint(stderr, "httpd: cannot stat %s: %r\n", pwfile);
+		return users;
+	}
+	text := readfile(pwfile, 1<<20);
+	if(text == nil)
+		return users;
+	nu: list of ref User;
+	n := 0;
+	for(ls := split(text, '\n'); ls != nil; ls = tl ls) {
+		n++;
+		line := trim(hd ls);
+		if(line == nil || line[0] == '#')
+			continue;
+		f := split(line, ':');
+		u: ref User;
+		if(len f == 5 && hd tl f == "pbkdf2-sha256") {
+			name := hd f;
+			f = tl tl f;
+			it := posint(hd f);
+			salt := base64->dec(hd tl f);
+			hash := base64->dec(hd tl tl f);
+			if(name != nil && it >= 1000 && salt != nil && len salt >= 8 && hash != nil && len hash == Keyring->SHA256dlen)
+				u = ref User(name, it, salt, hash);
+		}
+		if(u == nil) {
+			sys->fprint(stderr, "httpd: %s:%d: not a password line, left out\n", pwfile, n);
+			continue;
+		}
+		nu = u :: nu;
+	}
+	users = nu;
+	pwqid = d.qid;
+	pwmtime = d.mtime;
+	return users;
+}
+
+Fail: adt {
+	ip:	string;
+	n:	int;
+	first:	int;
+};
+
+Cached: adt {
+	key:	array of byte;	# SHA-256 of user, NUL, password
+	until:	int;
+};
+
+# Passwords are checked here, one at a time: a guess costs its
+# PBKDF2 whatever it guesses (an unknown user's too, against a salt of
+# no one's and as many iterations as the file's most, so a name is not
+# learnt by the time).  Ten wrong from one network (an IPv4 address, an
+# IPv6 /64) in ten minutes and it is refused for the rest of them;
+# fifty wrong for one user from anywhere and that user is.  A password
+# found right is taken again for five minutes without its hash (a
+# browser sends it with every request), lockout or not, so one guesser
+# behind a NAT does not lock out those already in.  The password file
+# is read again when it changes.
+authenticator()
+{
+	fails: list of ref Fail;
+	cache: list of ref Cached;
+	dummysalt := array of byte "no one's salt, for no one";
+	for(;;) {
+		(user, pass, ip, rc) := <-authc;
+		{
+			rc <-= check(user, pass, ip, fails, cache, dummysalt);
+		} exception e {
+		"*" =>
+			sys->fprint(stderr, "httpd: checking a password: %s\n", e);
+			rc <-= Bad;	# (rc holds one: this does not wait)
+		}
+		(fails, cache) = (cfails, ccache);
+	}
+}
+
+# check's lists, as it leaves them (Limbo has no reference parameters)
+cfails: list of ref Fail;
+ccache: list of ref Cached;
+
+USERFAIL: con 50;
+
+check(user, pass, ip: string, fails: list of ref Fail, cache: list of ref Cached, dummysalt: array of byte): int
+{
+	cfails = fails;
+	ccache = cache;
+	t := now();
+	(ok, d) := sys->stat(pwfile);
+	if(ok >= 0 && (d.mtime != pwmtime || d.qid.vers != pwqid.vers || d.qid.path != pwqid.path)) {
+		loadpasswords();
+		cache = nil;
+	}
+	key := sha256(array of byte (user + "\0" + pass));
+	nc: list of ref Cached;
+	hit := 0;
+	for(cl := cache; cl != nil; cl = tl cl)
+		if((hd cl).until > t) {
+			nc = hd cl :: nc;
+			if(bytesame((hd cl).key, key))
+				hit = 1;
+		}
+	ccache = cache = nc;
+	if(hit)
+		return Ok;
+
+	net := netof(ip);
+	ukey := "user " + user;
+	nf: list of ref Fail;
+	fnet, fuser: ref Fail;
+	for(l := fails; l != nil; l = tl l)
+		if(t - (hd l).first < WINDOW) {
+			nf = hd l :: nf;
+			if((hd l).ip == net)
+				fnet = hd l;
+			if((hd l).ip == ukey)
+				fuser = hd l;
+		}
+	cfails = fails = nf;
+	if(fnet != nil && fnet.n >= MAXFAIL || fuser != nil && fuser.n >= USERFAIL)
+		return Locked;
+
+	u: ref User;
+	most := DEFITERS;
+	for(ul := users; ul != nil; ul = tl ul) {
+		if((hd ul).name == user)
+			u = hd ul;
+		if((hd ul).iters > most)
+			most = (hd ul).iters;
+	}
+	good := 0;
+	if(u != nil)
+		good = bytesame(pbkdf2(array of byte pass, u.salt, u.iters), u.hash);
+	else
+		pbkdf2(array of byte pass, dummysalt, most);
+	if(good) {
+		if(len cache < 64)
+			ccache = ref Cached(key, t + CACHETIME) :: cache;
+		return Ok;
+	}
+	if(fnet == nil)
+		cfails = fails = ref Fail(net, 1, t) :: fails;
+	else
+		fnet.n++;
+	if(fuser == nil)
+		cfails = ref Fail(ukey, 1, t) :: fails;
+	else
+		fuser.n++;
+	if(verbose)
+		sys->fprint(stderr, "httpd: %s: a wrong password for %s\n", ip, logname(user));
+	return Bad;
+}
+
+# The network an address's guesses are counted for: an IPv4 address
+# alone, an IPv6 address's /64 (one host has as many addresses of it as
+# it likes); an IPv4-mapped IPv6 address as its IPv4
+netof(ip: string): string
+{
+	if(!hasbyte(ip, ':'))
+		return ip;
+	(nil, last) := splitlast(ip, ':');
+	if(hasbyte(last, '.'))
+		return last;
+	# expand "::" to the zero groups it stands for, then keep four
+	groups := split(ip, ':');
+	n := 0;
+	for(g := groups; g != nil; g = tl g)
+		if(hd g != "")
+			n++;
+	full: list of string;
+	gap := 0;
+	for(g = groups; g != nil; g = tl g) {
+		if(hd g == "") {
+			if(!gap) {
+				for(i := n; i < 8; i++)
+					full = "0" :: full;
+				gap = 1;
+			}
+			continue;
+		}
+		full = lower(hd g) :: full;
+	}
+	r: list of string;
+	for(; full != nil; full = tl full)
+		r = hd full :: r;
+	s := "";
+	for(i := 0; i < 4 && r != nil; i++) {
+		s += hd r + ":";
+		r = tl r;
+	}
+	return s + ":/64";
+}
+
+# PBKDF2-HMAC-SHA-256 (RFC 8018), one block: 32 bytes
+pbkdf2(pass, salt: array of byte, iters: int): array of byte
+{
+	s := array[len salt + 4] of byte;
+	s[0:] = salt;
+	s[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
+	u := array[Keyring->SHA256dlen] of byte;
+	keyring->hmac_sha256(s, len s, pass, u, nil);
+	t := array[len u] of byte;
+	t[0:] = u;
+	v := array[len u] of byte;
+	for(i := 1; i < iters; i++) {
+		keyring->hmac_sha256(u, len u, pass, v, nil);
+		(u, v) = (v, u);
+		for(j := 0; j < len t; j++)
+			t[j] ^= u[j];
+	}
+	return t;
+}
+
+sha256(b: array of byte): array of byte
+{
+	d := array[Keyring->SHA256dlen] of byte;
+	keyring->sha256(b, len b, d, nil);
+	return d;
+}
+
+# equal, in time that does not depend on where they differ
+bytesame(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	x := 0;
+	for(i := 0; i < len a; i++)
+		x |= int a[i] ^ int b[i];
+	return x == 0;
+}
+
+# CON, NUL, COM1 and the like, with any extension: on a Windows host
+# the device, wherever the name is
+dosdevice(seg: string): int
+{
+	(base, nil) := splitfirst(lower(seg), '.');
+	case base {
+	"con" or "prn" or "aux" or "nul" or "conin$" or "conout$" or "clock$" =>
+		return 1;
+	}
+	if(len base == 4 && (prefix(base, "com") || prefix(base, "lpt")) && base[3] >= '0' && base[3] <= '9')
+		return 1;
+	return 0;
+}
+
+max(a, b: int): int
+{
+	if(a > b)
+		return a;
+	return b;
 }

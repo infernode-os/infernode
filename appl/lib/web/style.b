@@ -6864,7 +6864,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"transform" =>
 		# a list of transform functions (the 2D ones; 3D ones are
 		# taken for their 2D part or ignored).  Translations alone
-		# are kept as one offset, the general case as the list.
+		# are kept as one offset, the general case as the list; a
+		# function that changes nothing is left out (Tailwind's
+		# translate(...) rotate(0) skewX(0) skewY(0) scaleX(1)
+		# scaleY(1) is a translation, drawn as one and not warped)
 		if(id == "none") {
 			st.translated = 0;
 			st.tx = st.ty = px(0.0);
@@ -6913,8 +6916,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				(ok, a) := angle(hd args, ctx);
 				if(!ok)
 					return 0;
-				tfl = ref Tf(TFrotate, array[] of {a}, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(a != 0.0) {	# rotate(0), as Tailwind writes between every translation and scale, moves nothing
+					tfl = ref Tf(TFrotate, array[] of {a}, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"scale" or "scalex" or "scaley" or "scale3d" =>
 				if(n < 1 || n > 3)
 					return 0;
@@ -6936,8 +6941,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						return 0;
 					sy = f;
 				}
-				tfl = ref Tf(TFscale, array[] of {sx, sy}, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(sx != 1.0 || sy != 1.0) {
+					tfl = ref Tf(TFscale, array[] of {sx, sy}, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"skew" or "skewx" or "skewy" =>
 				if(n < 1 || n > 2)
 					return 0;
@@ -6956,8 +6963,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						return 0;
 					ay = a;
 				}
-				tfl = ref Tf(TFskew, array[] of {ax, ay}, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(ax != 0.0 || ay != 0.0) {
+					tfl = ref Tf(TFskew, array[] of {ax, ay}, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"matrix" =>
 				if(n != 6)
 					return 0;
@@ -6969,8 +6978,15 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						return 0;
 					m[k] = f;
 				}
-				tfl = ref Tf(TFmatrix, m, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0) {
+					# a translation: what computed styles write for one
+					tx += m[4];
+					ty += m[5];
+					tfl = ref Tf(TFtranslate, nil, px(m[4]), px(m[5])) :: tfl;
+				} else {
+					tfl = ref Tf(TFmatrix, m, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"rotatex" or "rotatey" or "rotate3d" or "scalez" or "matrix3d" or "perspective" =>
 				;	# no depth here
 			* =>

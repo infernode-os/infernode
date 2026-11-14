@@ -12843,7 +12843,8 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			warp(dst, b, o, clip, canvasbg);
 			return;
 		}
-		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
+		if(st.tfs == nil)	# warped, its translation is in the matrix: its picture is untransformed
+			o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 		intransform++;
 	}
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
@@ -13485,6 +13486,13 @@ rectok(r: Rect): int
 layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+	# what it paints is where its translation takes it (paintctx moves
+	# it inside the layer): Astro's hero glow, a blurred image moved
+	# left by half its width, was cut off at its untranslated box
+	if(b.st.translated && b.st.tfs == nil)
+		r = r.addpt(Point(res(b.st.tx, b.w), res(b.st.ty, b.h)));
+	else if(b.st.translated && b.st.tfs != nil && clip.dx() <= 8192 && clip.dy() <= 8192)
+		r = clip;	# warped inside the layer, to anywhere: all that can show
 	# a blur takes in, and spreads out to, three deviations around
 	spread := 0;
 	for(i := 0; i < len b.st.filter; i++)

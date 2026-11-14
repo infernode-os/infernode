@@ -27,6 +27,12 @@ httpd \- web server for a name space
 ] [
 .BI -M " oldlogs"
 ] [
+.BI -A " clientcas"
+] [
+.BI -P " passwords"
+] [
+.BI -x " rules"
+] [
 .BI -n " maxconns"
 ] [
 .BI -s " persource"
@@ -34,6 +40,12 @@ httpd \- web server for a name space
 .BI -b " maxbody"
 ]
 .I root
+.PP
+.B svc/httpd/passwd
+[
+.BI -i " iterations"
+]
+.I user
 .SH DESCRIPTION
 .I Httpd
 serves the directory
@@ -172,6 +184,11 @@ open through proxies and finds a client that has gone.
 The file ending ends the stream; an
 .B EventSource
 then opens it again.
+At most half of
+.I maxconns
+connections hold event streams, and half of
+.I persource
+from one address; one more is refused (503).
 The same file asked for otherwise is read as any other, under the
 deadline below.
 A directory is sent as its
@@ -221,14 +238,143 @@ that is not
 or
 .BR none .
 A request with neither (not from a browser) is taken.
-Writes are not authenticated: name with
+Who may write is the business of the next section: without it a
 .B -p
-only what anyone who can reach the server may write.
+path is anyone's who can reach the server.
+.SS Who may
+.I Httpd
+takes two proofs of who a client is, over TLS only (it will not start
+with
+.B -A
+or
+.B -P
+and no
+.BR -c ):
+.TP
+Client certificates
+With
+.BI -A " clientcas" \fR,
+a PEM file of CA certificates (and, if any, their CRLs as
+.B "X509 CRL"
+blocks), the TLS handshake asks every client for a certificate those
+CAs issued, naming them, so a browser offers only those.
+A client that gives one must prove its key and its chain must end at
+one of the CAs: signatures, validity, basicConstraints, keyUsage and
+path length checked, at most 64 signatures in the search for a path;
+the leaf's extended key usage, if it has one, must name client
+authentication (a server's certificate from the same CA is refused),
+and a CRL from the file must not list it (a CRL past its next update
+still counts).
+A CRL no CA in the file signed stops
+.I httpd
+starting.
+A client that gives none goes on without one.
+A refused certificate ends the handshake.
+Revoke a certificate by a CRL in the file, or by its name leaving the
+rules.
+.TP
+Passwords
+With
+.BI -P " passwords" \fR,
+a file of lines that
+.B svc/httpd/passwd
+makes, HTTP Basic authentication:
+.IB user :pbkdf2-sha256: iterations : salt : hash \fR,
+the hash PBKDF2-HMAC-SHA-256 (RFC 8018) of the password, 100000
+iterations unless
+.B -i
+says.
+.B Svc/httpd/passwd
+reads the password from its standard input.
+The file is read again when it changes.
+Passwords are checked by one process, one at a time; an unknown user
+costs as much as a known one, so a name is not learnt by the time; a
+password found right is taken again for five minutes without its hash.
+Ten wrong passwords from one network (an IPv4 address, an IPv6 /64)
+in ten minutes, or fifty for one user from anywhere, and further
+attempts from it, or for them, are refused (429) for the rest of the
+ten minutes, except a password already found right.
+.PP
+.BI -x " rules"
+says which paths need which.
+A line is
+.RB [ GET | POST ]
+.I path term ...
+(a rule for GET is HEAD's too; one with neither method both), or
+.B realm
+.I words
+(the name a browser shows when it asks for a password).
+A term is
+.B none
+(anyone),
+.B password
+(any user),
+.BI password= user\fR,
+.B cert
+(any certificate from the CAs),
+.BI cert= cn
+(one whose subject's common name is
+.IR cn )
+or
+.BI cert=sha256: hex
+(the one whose DER's SHA-256 is that); a request may have the path if
+it meets any one of its rule's terms.
+A request's rule is the deepest whose path is its path or a directory
+of it, a rule for its method before one for both.
+Paths are compared in lower case, and a rule for a path that existed
+when
+.I httpd
+started matches by that file's identity too (its qid and device, by a
+stat of each directory of the request's path): a host that takes
+.B /ADMIN
+or
+.B /ADMINI~1
+for
+.B /admin
+(macOS, Windows), or folds a name's other letters, opens the same
+directory and meets the same rule.
+A path no rule names is refused (403).
+Every file a request may be answered from is checked: a
+.IB name .gz
+copy by
+.IR name 's
+rule as well as its own, a directory's
+.B index.html
+by its own rule, and
+.B /magic/wikipost
+by the POST rule of
+.I wikibase
+and
+.IB wikibase /new\fR.
+Without
+.BR -x :
+with
+.B -P
+every request needs a password or a certificate; with
+.B -A
+a POST needs a certificate.
+.PP
+The checks come before anything of the site is opened, so a refusal
+says nothing of what is there: 401 with
+.B WWW-Authenticate
+when a password would do, else 403.
+While anything is protected a path with a segment like
+.B ~1
+(a Windows short name) is refused (400), as always is one with a
+segment ending in a dot or blank, a backslash, or a Windows device's
+name
+.RB ( con ,
+.BR nul ,
+.BR com1 ...).
+A listing leaves out what its client may not have.
+The log's user field is the user, or
+.BI cert: cn\fR.
 .PP
 Each phase of a connection has a deadline: 10 seconds for the TLS
 handshake, 10 for the first request's headers, 15 between requests
 and for their headers, and 30 for each read of a body, write of a
-response and read of a file (but an event stream's).
+response and read of a file (but an event stream's), and 30 for the
+whole of a request's body.
 A connection past one is hung up and its processes killed by the
 listener, which holds the connections' control files; a file server that
 never answers holds a connection only that long.
@@ -370,6 +516,9 @@ The limits above.
 .B -v
 Report refused requests, failed handshakes and connections hung up,
 and the TLS suites in the order timed, on standard error.
+.TP
+.BI -A " clientcas" ", -P" " passwords" ", -x" " rules"
+Client certificates, passwords and the rules, above.
 .SH EXAMPLES
 A device's pages over TLS, with its sensor's file server in the site
 and its LED's control file writable:
@@ -407,12 +556,31 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \e
 	-keyout web.key -out web.pem -days 365 -subj /CN=device.example \e
 	-addext subjectAltName=DNS:device.example
 .EE
+.PP
+A device's administration by certificate, its pages by password, its
+public pages open:
+.IP
+.EX
+cp ca.pem /keys/clientcas
+echo secret | svc/httpd/passwd alice > /keys/passwords
+echo 'realm The device' > /keys/rules
+echo '/		password cert' >> /keys/rules
+echo '/public	none' >> /keys/rules
+echo '/admin	cert=ops-laptop' >> /keys/rules
+echo 'POST /led	cert' >> /keys/rules
+svc/httpd/httpd -c /keys/web.pem -k /keys/web.key -A /keys/clientcas \e
+	-P /keys/passwords -x /keys/rules -p /led/ctl /services/www &
+.EE
 .SH FILES
 .TF /dis/svc/httpd/httpd.dis
 .TP
 .B /dis/svc/httpd/httpd.dis
+.TP
+.B /dis/svc/httpd/passwd.dis
 .SH SOURCE
 .B /appl/svc/httpd/httpd.b
+.br
+.B /appl/svc/httpd/passwd.b
 .br
 .B /appl/lib/crypt/tls.b
 .SH SEE ALSO
@@ -421,7 +589,11 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \e
 .IR listen (1)
 .SH BUGS
 HTTP/2 and HTTP/3 are not spoken; HTTP/1.1 over TLS 1.3 is.
-There is no authentication: a site that must have it is not served by
-this alone.
+Passwords are HTTP Basic: a browser keeps one until it is closed,
+and there is no logging out.
+Rules for paths that did not exist when
+.I httpd
+started match by name alone; restart it after making a protected
+directory on a host that folds case.
 Certificates are ECDSA P-256 only, and there is no ACME client to keep
 one renewed.

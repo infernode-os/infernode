@@ -67,6 +67,8 @@ ALERT_PROTOCOL_VERSION:		con 70;
 ALERT_INTERNAL_ERROR:		con 80;
 ALERT_INSUFFICIENT_SECURITY:	con 71;
 ALERT_MISSING_EXTENSION:	con 109;
+ALERT_UNKNOWN_CA:		con 48;
+ALERT_CERTIFICATE_REQUIRED:	con 116;
 ALERT_UNRECOGNIZED_NAME:	con 112;
 ALERT_NO_APPLICATION_PROTOCOL:	con 120;
 
@@ -76,6 +78,7 @@ EXT_SUPPORTED_GROUPS:		con 10;
 EXT_SIGNATURE_ALGORITHMS:	con 13;
 EXT_ALPN:			con 16;
 EXT_PRE_SHARED_KEY:		con 41;
+EXT_CERTIFICATE_AUTHORITIES:	con 47;
 EXT_SUPPORTED_VERSIONS:		con 43;
 EXT_COOKIE:			con 44;
 EXT_KEY_SHARE:			con 51;
@@ -3331,11 +3334,17 @@ server(fd: ref Sys->FD, config: ref ServerConfig): (ref Conn, string)
 	clearephemeral(cs);
 	if(err != nil) {
 		if(alert != 0) {
-			# best effort, under whatever keys are set
+			# best effort, under whatever keys are set; the peer may
+			# be gone ("write on closed pipe")
 			a := array[2] of byte;
 			a[0] = byte ALERT_FATAL;
 			a[1] = byte alert;
-			writerecord(cs, CT_ALERT, a);
+			{
+				writerecord(cs, CT_ALERT, a);
+			} exception {
+			"*" =>
+				;
+			}
 		}
 		return (nil, err);
 	}
@@ -3347,6 +3356,8 @@ server(fd: ref Sys->FD, config: ref ServerConfig): (ref Conn, string)
 	conn.group = cs.group;
 	conn.servername = cs.servername;
 	conn.alpn = alpn;
+	conn.peercerts = cs.peercerts;
+	cs.peercerts = nil;
 	conn.st = cs;
 	return (conn, nil);
 }
@@ -3359,6 +3370,9 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 		return (0, nil, err);
 	if(mtype != HT_CLIENT_HELLO)
 		return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected ClientHello");
+	# §5.1: nothing after it in its record, as the keys change at it
+	if(cs.hsbuf != nil && cs.hsoff < len cs.hsbuf)
+		return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: more after the ClientHello in its record");
 	(h, alert, herr) := parsehello(ch);
 	if(herr != nil)
 		return (alert, nil, herr);
@@ -3429,13 +3443,15 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 			return (0, nil, err);
 		if(mtype != HT_CLIENT_HELLO)
 			return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected a second ClientHello");
+		if(cs.hsbuf != nil && cs.hsoff < len cs.hsbuf)
+			return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: more after the second ClientHello in its record");
 		h2: ref Hello;
 		(h2, alert, herr) = parsehello(ch2);
 		if(herr != nil)
 			return (alert, nil, herr);
 		# §4.1.2: the same but for the share asked for
 		if(!member(h2.versions, TLS13) || !member(h2.suites, suite) ||
-		   !bytescmp(h2.sessid, h.sessid))
+		   !bytescmp(h2.sessid, h.sessid) || !member(h2.sigalgs, ECDSA_SECP256R1_SHA256))
 			return (ALERT_ILLEGAL_PARAMETER, nil, "tls: second ClientHello differs from the first");
 		if(h2.shares == nil || tl h2.shares != nil || (hd h2.shares).t0 != group)
 			return (ALERT_ILLEGAL_PARAMETER, nil, "tls: second ClientHello does not answer the HelloRetryRequest");
@@ -3488,6 +3504,15 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 	if((err = sendhsmsg(cs, HT_ENCRYPTED_EXTENSIONS, ee)) != nil)
 		return (0, nil, err);
 
+	# CertificateRequest (§4.3.2): no context, the schemes we verify,
+	# and the CAs we take, so a browser offers only certificates they
+	# issued (and asks no one else to choose)
+	if(config.clientroots != nil) {
+		if((err = sendhsmsg(cs, HT_CERTIFICATE_REQUEST, certrequest(config.clientroots))) != nil)
+			return (0, nil, err);
+		cs.hsmax = 65536;	# a client's chain, RSA keys and all
+	}
+
 	# Certificate: no context, each entry with no extensions
 	total := 0;
 	for(c := config.certs; c != nil; c = tl c)
@@ -3525,13 +3550,44 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 	wipebytes(hs_secret);
 	wipebytes(master);
 
-	# the client's Finished, under its handshake keys; nothing else
-	# (we asked for no certificate)
+	# the client's Certificate and CertificateVerify if we asked for
+	# them, then its Finished, under its handshake keys
 	pre := hashcurrent(cs);
 	fin: array of byte;
 	(mtype, fin, err) = readhsmsg(cs);
 	if(err != nil)
 		return (0, nil, err);
+	if(config.clientroots != nil) {
+		if(mtype != HT_CERTIFICATE)
+			return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected the client's Certificate");
+		(certs, cerr) := parseclientcerts(fin);
+		if(cerr != nil)
+			return (ALERT_DECODE_ERROR, nil, cerr);
+		if(certs == nil) {
+			if(config.clientneed)
+				return (ALERT_CERTIFICATE_REQUIRED, nil, "tls: the client sent no certificate");
+		} else {
+			cvhash := hashcurrent(cs);
+			cv: array of byte;
+			(mtype, cv, err) = readhsmsg(cs);
+			if(err != nil)
+				return (0, nil, err);
+			if(mtype != HT_CERTIFICATE_VERIFY)
+				return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected the client's CertificateVerify");
+			if((err = verifyclientcv(cv, certs, cvhash)) != nil)
+				return (ALERT_DECRYPT_ERROR, nil, err);
+			(ok, verr) := x509->verify_certchain_roots(certs, config.clientroots, config.clientcrls, clocknow(config.clock));
+			if(!ok)
+				return (ALERT_BAD_CERTIFICATE, nil, "tls: client certificate refused: " + verr);
+			if((err = clientusage(hd certs)) != nil)
+				return (ALERT_BAD_CERTIFICATE, nil, err);
+			cs.peercerts = certs;
+		}
+		pre = hashcurrent(cs);
+		(mtype, fin, err) = readhsmsg(cs);
+		if(err != nil)
+			return (0, nil, err);
+	}
 	if(mtype != HT_FINISHED)
 		return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected the client's Finished");
 	if(verifyfinished13_hash(cs, fin, c_hs, pre) != nil)
@@ -4017,4 +4073,238 @@ fastsuites(): list of int
 	for(; l != nil; l = tl l)
 		r = hd l :: r;
 	return r;
+}
+
+# ================================================================
+# Client certificates (server side)
+# ================================================================
+
+# The schemes a client's CertificateVerify may use: what
+# verifyserversig takes under TLS 1.3
+CLIENTSCHEMES := array[] of {ECDSA_SECP256R1_SHA256, ECDSA_SECP384R1_SHA384, RSA_PSS_RSAE_SHA256, RSA_PSS_RSAE_SHA384};
+
+certrequest(roots: list of array of byte): array of byte
+{
+	sa := array[2 + 2 * len CLIENTSCHEMES] of byte;
+	put16(sa, 0, 2 * len CLIENTSCHEMES);
+	for(i := 0; i < len CLIENTSCHEMES; i++)
+		put16(sa, 2 + 2 * i, CLIENTSCHEMES[i]);
+	dns: array of byte;
+	for(r := roots; r != nil; r = tl r) {
+		dn := certsubject(hd r);
+		if(dn == nil)
+			continue;
+		e := array[2 + len dn] of byte;
+		put16(e, 0, len dn);
+		e[2:] = dn;
+		dns = catbytes(dns, e);
+	}
+	exts := ext(EXT_SIGNATURE_ALGORITHMS, sa);
+	if(dns != nil && len dns + 2 < 65536 - 64) {
+		ca := array[2 + len dns] of byte;
+		put16(ca, 0, len dns);
+		ca[2:] = dns;
+		exts = catbytes(exts, ext(EXT_CERTIFICATE_AUTHORITIES, ca));
+	}
+	m := array[1 + 2 + len exts] of byte;
+	m[0] = byte 0;	# certificate_request_context: empty
+	put16(m, 1, len exts);
+	m[3:] = exts;
+	return m;
+}
+
+ext(etype: int, body: array of byte): array of byte
+{
+	e := array[4 + len body] of byte;
+	put16(e, 0, etype);
+	put16(e, 2, len body);
+	e[4:] = body;
+	return e;
+}
+
+# A certificate's raw subject Name (DER), as a CertificateRequest names
+# a CA: tbsCertificate's sixth field, before its SubjectPublicKeyInfo
+certsubject(der: array of byte): array of byte
+{
+	(t, h, n) := dertlv(der, 0);
+	if(t != 16r30 || h + n != len der)
+		return nil;
+	off := h;
+	(t, h, n) = dertlv(der, off);
+	if(t != 16r30)
+		return nil;
+	off += h;
+	end := off + n;
+	(t, h, n) = dertlv(der, off);
+	if(t == 16rA0) {
+		off += h + n;
+		(t, h, n) = dertlv(der, off);
+	}
+	for(i := 0; i < 4; i++) {	# serial, signature, issuer, validity
+		if(t < 0 || off + h + n > end)
+			return nil;
+		off += h + n;
+		(t, h, n) = dertlv(der, off);
+	}
+	if(t != 16r30 || off + h + n > end)
+		return nil;
+	return der[off:off+h+n];
+}
+
+# A client's Certificate message, strictly (§4.4.2): an empty context
+# (we sent one), each entry a certificate and its extensions, the list
+# exactly the message, at most 10 certificates.  nil: none sent.
+parseclientcerts(m: array of byte): (list of array of byte, string)
+{
+	bad := "tls: malformed client Certificate";
+	if(len m < 4 || m[0] != byte 0)
+		return (nil, bad);
+	total := get24(m, 1);
+	if(4 + total != len m)
+		return (nil, bad);
+	rev: list of array of byte;
+	n := 0;
+	for(off := 4; off < len m; ) {
+		if(off + 3 > len m)
+			return (nil, bad);
+		cl := get24(m, off);
+		off += 3;
+		if(cl == 0 || off + cl + 2 > len m)
+			return (nil, bad);
+		rev = m[off:off+cl] :: rev;
+		off += cl;
+		el := get16(m, off);
+		off += 2 + el;
+		if(off > len m)
+			return (nil, bad);
+		if(++n > 10)
+			return (nil, "tls: client sent too many certificates");
+	}
+	certs: list of array of byte;
+	for(; rev != nil; rev = tl rev)
+		certs = hd rev :: certs;
+	return (certs, nil);
+}
+
+# The client's CertificateVerify over the transcript through its
+# Certificate, with the client's context string, by its leaf's key
+verifyclientcv(data: array of byte, certs: list of array of byte, transcript_hash: array of byte): string
+{
+	if(len data < 4)
+		return "tls: client CertificateVerify too short";
+	scheme := get16(data, 0);
+	slen := get16(data, 2);
+	if(4 + slen != len data)
+		return "tls: client CertificateVerify malformed";
+	ok := 0;
+	for(i := 0; i < len CLIENTSCHEMES; i++)
+		if(CLIENTSCHEMES[i] == scheme)
+			ok = 1;
+	if(!ok)
+		return sys->sprint("tls: client CertificateVerify by scheme 0x%04x, not asked for", scheme);
+	ctx := "TLS 1.3, client CertificateVerify";
+	content := array[64 + len ctx + 1 + len transcript_hash] of {* => byte 16r20};
+	content[64:] = array of byte ctx;
+	content[64 + len ctx] = byte 0;
+	content[64 + len ctx + 1:] = transcript_hash;
+	err := verifyserversig(certs, scheme, content, data[4:], 1);
+	if(err != nil)
+		return "tls: client CertificateVerify does not verify: " + err;
+	return nil;
+}
+
+# A leaf a client may authenticate with: its extended key usage, if it
+# has one, names clientAuth (or any purpose), and its key usage, if it
+# has one, digitalSignature -- a server's certificate from the same CA
+# is not a client's
+OID_EKU := array[] of {2,5,29,37};
+OID_KU := array[] of {2,5,29,15};
+CLIENTAUTH := array[] of {byte 16r2B, byte 16r06, byte 16r01, byte 16r05, byte 16r05, byte 16r07, byte 16r03, byte 16r02};
+ANYEKU := array[] of {byte 16r55, byte 16r1D, byte 16r25, byte 16r00};
+
+clientusage(der: array of byte): string
+{
+	(serr, signed) := x509->Signed.decode(der);
+	if(serr != nil)
+		return "tls: client certificate: " + serr;
+	(cerr, c) := x509->Certificate.decode(signed.tobe_signed);
+	if(cerr != nil)
+		return "tls: client certificate: " + cerr;
+	for(l := c.exts; l != nil; l = tl l) {
+		e := hd l;
+		if(oidis(e.oid, OID_EKU)) {
+			v := e.value;
+			(t, h, n) := dertlv(v, 0);
+			if(t != 16r30 || h + n != len v)
+				return "tls: client certificate's extended key usage malformed";
+			found := 0;
+			for(off := h; off < len v; ) {
+				(ot, oh, on) := dertlv(v, off);
+				if(ot != 16r06)
+					return "tls: client certificate's extended key usage malformed";
+				o := v[off+oh:off+oh+on];
+				if(bytescmp(o, CLIENTAUTH) || bytescmp(o, ANYEKU))
+					found = 1;
+				off += oh + on;
+			}
+			if(!found)
+				return "tls: client certificate not for client authentication (extended key usage)";
+		} else if(oidis(e.oid, OID_KU)) {
+			v := e.value;
+			(t, h, n) := dertlv(v, 0);
+			if(t != 16r03 || h + n != len v || n < 2)
+				return "tls: client certificate's key usage malformed";
+			if((int v[h+1] & 16r80) == 0)
+				return "tls: client certificate's key usage lacks digitalSignature";
+		}
+	}
+	return nil;
+}
+
+oidis(o: ref ASN1->Oid, nums: array of int): int
+{
+	if(o == nil || len o.nums != len nums)
+		return 0;
+	for(i := 0; i < len nums; i++)
+		if(o.nums[i] != nums[i])
+			return 0;
+	return 1;
+}
+
+# Seconds since the epoch from /dev/time (fd, or opened); 0 if none,
+# when every certificate is out of date and refused
+clocknow(fd: ref Sys->FD): int
+{
+	if(fd == nil)
+		fd = sys->open("/dev/time", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[32] of byte;
+	n := sys->pread(fd, b, len b, big 0);
+	if(n <= 0)
+		return 0;
+	return int (big string b[0:n] / big 1000000);
+}
+
+certcn(der: array of byte): string
+{
+	(serr, signed) := x509->Signed.decode(der);
+	if(serr != nil)
+		return nil;
+	(cerr, c) := x509->Certificate.decode(signed.tobe_signed);
+	if(cerr != nil || c.subject == nil)
+		return nil;
+	cn: string;
+	for(r := c.subject.rd_names; r != nil; r = tl r)
+		for(a := (hd r).avas; a != nil; a = tl a)
+			if(oidis((hd a).oid, array[] of {2,5,4,3}))
+				cn = (hd a).value;	# the last, the most specific
+	return cn;
+}
+
+certfingerprint(der: array of byte): string
+{
+	d := array[Keyring->SHA256dlen] of byte;
+	keyring->sha256(der, len der, d, nil);
+	return "sha256:" + hexstr(d);
 }

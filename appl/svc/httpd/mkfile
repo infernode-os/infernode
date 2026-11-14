@@ -2,15 +2,21 @@
 
 TARG=\
 	httpd.dis\
+	passwd.dis\
 
 MODULES=\
 
 SYSMODULES=\
 	arg.m\
+	asn1.m\
 	daytime.m\
 	draw.m\
+	encoding.m\
+	keyring.m\
+	pkcs.m\
 	sys.m\
 	tls.m\
+	x509.m\
 
 DISBIN=$ROOT/dis/svc/httpd
 

@@ -684,6 +684,7 @@ dis/styxlisten.dis
 dis/styxmon.dis
 dis/sum.dis
 dis/svc/httpd/httpd.dis
+dis/svc/httpd/passwd.dis
 dis/svc/webget/date.dis
 dis/svc/webget/file.dis
 dis/svc/webget/ftp.dis

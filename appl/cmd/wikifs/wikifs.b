@@ -136,6 +136,7 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn navigator(navops);
 	tchan: chan of ref Tmsg;
 	(tchan, srv) = Styxserver.new(sys->fildes(0), Navigator.new(navops), mkqid(Droot, 0, 0, 0));
+	srv.msize = 65536 + Styx->IOHDRSZ;	# a page, its history and diffs in few reads
 	spawn serve(tchan, navops);
 }
 

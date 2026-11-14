@@ -53,6 +53,7 @@ MAXHDRBYTES:	con 16384;		# all of a request's headers
 MAXPATH:	con 2048;		# a decoded path
 MAXREQS:	con 100;		# requests on one connection
 BUFSIZE:	con 16384;
+FILEBUF:	con 65536;	# a file read a 9P message at a time, at a mount's 64K: a page wercfs(4) makes in two, not thirteen
 
 # Deadlines, in milliseconds
 TLSWAIT:	con 10*1000;	# the TLS handshake
@@ -859,10 +860,10 @@ sendfile(io: ref Io, r: ref Req, path: string, fd: ref FD, d: Dir): (int, big, i
 	(nil, nil, keep) := header(io, r, code, hdr, n);
 	if(r.meth == "HEAD")
 		return (code, big 0, keep);
-	buf := array[BUFSIZE] of byte;
+	buf := array[FILEBUF] of byte;
 	sent := big 0;
 	while(sent < n) {
-		m := BUFSIZE;
+		m := FILEBUF;
 		if(big m > n - sent)
 			m = int (n - sent);
 		io.deadline(IOWAIT);

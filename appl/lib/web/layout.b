@@ -15036,6 +15036,13 @@ bgurl(t: ref Css->Tok): string
 	return nil;
 }
 
+listurl(st: ref St): string
+{
+	if(st == nil || st.listimage == nil)
+		return nil;
+	return bgurl(st.listimage);
+}
+
 bgurls(st: ref St): list of string
 {
 	r: list of string;

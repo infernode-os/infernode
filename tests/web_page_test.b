@@ -319,6 +319,48 @@ names(l: list of string): string
 	return s;
 }
 
+# A picture whose boxes it cannot resize (an <img width height>, a
+# background) is put in them with no relayout, at the size given; one
+# that sizes its box is laid out with the page again, sized by it
+testInstallPlaced(t: ref T)
+{
+	data := readfile("/tests/imgload/rb.png");
+	if(data == nil)
+		t.fatal("no /tests/imgload/rb.png");
+	pg := pageof(t, "<body style='margin:0'><img id=f src=f.png width=30 height=20>" +
+		"<div id=d style='width:10px;height:10px;background:url(bg.png)'></div><img id=n src=n.png>", 800, 600);
+	pg.install(page->picture("file:///tmp/f.png", data, "image/png", nil) ::
+		page->picture("file:///tmp/bg.png", data, "image/png", nil) :: nil);
+	f := boxof(pg.doc, pg.root, "f");
+	if(f == nil)
+		t.fatal("no box for #f");
+	t.assert(f.img != nil, "its picture in its box");
+	t.asserteq(f.w, 30, "its width as given");
+	t.asserteq(f.h, 20, "its height as given");
+	pg.install(page->picture("file:///tmp/n.png", data, "image/png", nil) :: nil);
+	n := boxof(pg.doc, pg.root, "n");
+	if(n == nil)
+		t.fatal("no box for #n");
+	t.assert(n.img != nil, "the other's picture in its box");
+	t.asserteq(n.w, 8, "sized by its picture (8x8)");
+	f = boxof(pg.doc, pg.root, "f");
+	t.assert(f != nil && f.img != nil, "the first still has its picture after the relayout");
+}
+
+readfile(f: string): array of byte
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0)
+		return nil;
+	b := array[int d.length] of byte;
+	if(sys->readn(fd, b, len b) != len b)
+		return nil;
+	return b;
+}
+
 absx(b: ref Box): int
 {
 	x := 0;
@@ -401,6 +443,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AlignChildren", testAlignChildren);
 	run("Shown", testShown);
 	run("Lazy", testLazy);
+	run("InstallPlaced", testInstallPlaced);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

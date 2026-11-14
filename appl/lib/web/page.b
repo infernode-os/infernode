@@ -637,6 +637,7 @@ local(u: string): int
 
 Pg.install(p: self ref Pg, pics: list of ref Pic)
 {
+	fresh: list of ref Pic;
 	for(; pics != nil; pics = tl pics) {
 		pic := hd pics;
 		if(pic == nil || picof(p, pic.url) != nil)
@@ -644,16 +645,72 @@ Pg.install(p: self ref Pg, pics: list of ref Pic)
 		if(pic.err != nil)
 			p.errors = pic.url + ": " + pic.err :: p.errors;
 		p.pics = pic :: p.pics;
+		fresh = pic :: fresh;
 	}
 	plock();
 	{
-		rebuild(p);
+		# pictures whose boxes their pixels cannot resize go straight
+		# into them; any other is laid out with the page again (a long
+		# Wikipedia article's 15 images were five 500ms relayouts)
+		if(!placed(p, fresh))
+			rebuild(p);
 	} exception e {
 	"*" =>
 		punlock();
 		raise e;
 	}
 	punlock();
+}
+
+# put the fresh pictures in their boxes with no relayout, if that is
+# all they change: each shown only by boxes whose width and height are
+# both lengths (an <img width height>), and the document unchanged
+# since it was laid out; an SVG is then drawn at its box's size, as a
+# rebuild draws it.  A background, a mask or a border image only
+# paints (from layout's table, made again): unless it is also a
+# list-style-image, which sizes its marker, it needs no relayout either
+placed(p: ref Pg, fresh: list of ref Pic): int
+{
+	if(fresh == nil)
+		return 1;
+	if(p.root == nil || p.computed == nil || p.doc.nchanged != 0 || len p.computed.st < p.doc.n)
+		return 0;
+	curdoc = p.doc;
+	bgs := bgurls(p);
+	boxes := replacedboxes(p.root, nil);
+	for(l := fresh; l != nil; l = tl l) {
+		pic := hd l;
+		if(member(pic.url, bgs) && islistimage(p, pic.url))
+			return 0;
+		for(bl := boxes; bl != nil; bl = tl bl) {
+			b := hd bl;
+			if(b.url != pic.url)
+				continue;
+			st := b.st;
+			if(st.width.kind != Style->Lpx || st.height.kind != Style->Lpx || st.imgorient == 1)
+				return 0;
+			if(st.minwidth.kind != Style->Lauto && st.minwidth.kind != Style->Lpx ||
+			   st.minheight.kind != Style->Lauto && st.minheight.kind != Style->Lpx)
+				return 0;
+		}
+	}
+	applypics(p, p.root);
+	fitimages(p, p.root);
+	inlinesvg(p, p.root);
+	bgpage = nil;	# its background images, again with the new ones
+	usebg(p);
+	return 1;
+}
+
+# whether url is some element's list-style-image
+islistimage(p: ref Pg, url: string): int
+{
+	c := p.computed;
+	for(i := 0; i < len c.st; i++)
+		if(c.st[i] != nil && c.st[i].listimage != nil && layout->listurl(c.st[i]) == url ||
+		   c.before != nil && c.before[i] != nil && c.before[i].listimage != nil && layout->listurl(c.before[i]) == url)
+			return 1;
+	return 0;
 }
 
 Pg.frames(p: self ref Pg)

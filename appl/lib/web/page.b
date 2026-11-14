@@ -1261,12 +1261,17 @@ loadfonts(p: ref Pg)
 			urls = (hd s).url :: urls;
 			keep = hd s :: keep;
 		}
+	tf := sys->millisec();
 	got := fetchall(urls, nil);
+	phase(sys->sprint("fonts: fetched (%d)", len got));
 	for(; keep != nil; keep = tl keep) {
 		f := hd keep;
 		(data, nil, err) := fetched(got, f.url);
+		tf = sys->millisec();
 		if(err == nil)
 			err = fm->addfacedesc(f.family, f.desc, f.ranges, data);
+		if(ptime)
+			sys->fprint(sys->fildes(2), "page: font %s: %d bytes, read %d ms\n", f.url, len data, sys->millisec() - tf);
 		if(err != nil)
 			p.errors = f.url + ": " + err :: p.errors;
 	}

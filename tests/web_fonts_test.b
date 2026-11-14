@@ -292,6 +292,26 @@ testStandins(t: ref T)
 	t.assert(b.width(PANGRAM) > arial.width(PANGRAM), "bold italic: its own face, wider");
 }
 
+# A face is read when text is set in it, not when it is added: one
+# whose header is whole is taken, and if it cannot be read once used,
+# what stands in for the family draws (CNN's 17 faces took 2.3 s, read
+# as the page named them)
+testLazyFace(t: ref T)
+{
+	fonts->clearfaces();
+	# a TrueType header and directory naming one table, and no table
+	b := array[28] of {* => byte 0};
+	b[1] = byte 1;
+	b[5] = byte 1;
+	t.assertnil(fonts->addface("lazy", 400, 0, nil, b), "a face with a whole header is taken, not yet read");
+	f := fonts->face("lazy" :: "serif" :: nil, 400, 0, 16.0);
+	t.assert(f != nil && f.parts == nil, "used, it cannot be read: the shipped face draws");
+	t.assertnil(fonts->addface("ahemw", 400, 0, nil, readfile(DIR + "Ahem.woff")), "add Ahem.woff");
+	g := fonts->face("ahemw" :: nil, 400, 0, 20.0);
+	t.assert(g != nil && g.parts != nil, "a good one is read when used");
+	t.asserteq(int g.width("xxxx"), 80, "and measures");
+}
+
 testOTF(t: ref T)
 {
 	(a, err) := ofont->open(readfile(DIR + "FASubset.otf"), "ttf");
@@ -386,6 +406,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("GPOS", testGPOS);
 	run("OTF", testOTF);
 	run("Standins", testStandins);
+	run("LazyFace", testLazyFace);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

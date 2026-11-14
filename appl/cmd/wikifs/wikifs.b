@@ -245,17 +245,23 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 					p[0:] = m.data;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				}else if(len fid.data != 0) {
-					n := newfile(string fid.data);
+					(n, err) := newfile(string fid.data);
 					if(n < 0){
 						fid.data = nil;
 						srv.reply(ref Rmsg.Error(m.tag, "newfile failed"));
 					}else{
+						# as Plan 9's: a write refused (an update
+						# conflict) still names the page, so the
+						# writer can be shown its werror.html
 						name := wiki->numtoname(n);
 						for(i:=0;i<len name;i++)
 							if(name[i] == ' ')
 								name[i] = '_';
 						fid.data = array of byte name;
-						srv.reply(ref Rmsg.Write(m.tag, 0));
+						if(err != nil)
+							srv.reply(ref Rmsg.Error(m.tag, err));
+						else
+							srv.reply(ref Rmsg.Write(m.tag, 0));
 					}
 				}else
 					srv.reply(ref Rmsg.Error(m.tag, "protocol botch"));
@@ -295,7 +301,8 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 	}
 }
 
-newfile(file: string): int
+# a page written to new: its number, and why its write was refused
+newfile(file: string): (int, string)
 {
 	w: ref Whist;
 	t, n: int;
@@ -303,7 +310,7 @@ newfile(file: string): int
 
 	fd := bufio->sopen(file);
 	if((title = fd.gets('\n')) == nil)
-		return -1;
+		return (-1, nil);
 	w = ref Whist;
 	w.title = title[0:len title-1];
 	author = "me";
@@ -323,14 +330,15 @@ newfile(file: string): int
 	
 	w.doc[0].wtxt = wiki->Brdpage(fd, wiki->Srdwline);
 	if(w.doc[0].wtxt == nil)
-		return -1;
+		return (-1, nil);
 	w.ndoc = 1;
 	n = wiki->allocnum(w.title, 0);
 	if(n < 0)
-		return -1;
+		return (-1, nil);
 	s = wiki->doctext(w.doc[0]);
-	wiki->writepage(n, t, s, w.title);
-	return n;
+	if(wiki->writepage(n, t, s, w.title) < 0)
+		return (n, sys->sprint("%r"));
+	return (n, nil);
 }
 
 loadpath(path: big): array of byte

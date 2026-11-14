@@ -136,6 +136,11 @@ voidcache(n: int)
 	if((c := findcache(n)) != nil){
 		c.tcurrent = 0;
 		c.thist = 0;
+		# and forget the files' qids: a host file's version is its
+		# mtime in seconds (fs(3)), the same for a write in the same
+		# second as the last read, which was then never read again
+		c.qid = ref Qid(big -1, 0, 0);
+		c.qidhist = ref Qid(big -1, 0, 0);
 	}
 }
 
@@ -423,7 +428,7 @@ mklink(s: string): ref Wpage
 	if(len q == 0)
 		w = ref Wpage(Wlink, strcondense(s), 0, nil);
 	else
-		w = ref Wpage(Wlink, strcondense(s[0:i]), 0, s[i+1:]);
+		w = ref Wpage(Wlink, strcondense(s[0:i]), 0, strcondense(s[i+1:]));
 	return w;
 }
 
@@ -633,6 +638,53 @@ allocnum(title: string, mustbenew:int): int
 	return n;
 }
 
+# The doctext s, its version (D, a time in seconds) made later than ev,
+# the version it replaces: two edits in one second are two versions,
+# with their own names in the history, and an edit of the first is a
+# conflict with the second
+laterthan(s: string, ev: int): string
+{
+	(d, rest) := str->splitl(s, "\n");
+	if(len d < 2 || d[0] != 'D')
+		return s;
+	if(int d[1:] > ev)
+		return s;
+	return sys->sprint("D%ud", ev + 1) + rest;
+}
+
+# The newest version in the history file hist (its last D line; its
+# text's lines begin with '#'), or 0, read from its end
+histlast(hist: string): int
+{
+	fd := wopen(hist, Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0)
+		return 0;
+	end := d.length;
+	for(n := big 4096; ; n *= big 2){
+		off := end - n;
+		if(off < big 0)
+			off = big 0;
+		buf := array[int (end - off)] of byte;
+		k := sys->pread(fd, buf, len buf, off);
+		if(k <= 0)
+			return 0;
+		s := string buf[0:k];
+		for(i := len s - 1; i >= 0; i--)
+			if(s[i] == 'D' && i > 0 && s[i-1] == '\n'){	# (the first line is the title)
+				j := i + 1;
+				while(j < len s && s[j] >= '0' && s[j] <= '9')
+					j++;
+				if(j < len s && s[j] == '\n')
+					return int s[i+1:j];
+			}
+		if(off == big 0)
+			return 0;
+	}
+}
+
 writepage(num: int, t: int, s: string, title: string): int
 {
 	err: string;
@@ -648,6 +700,23 @@ writepage(num: int, t: int, s: string, title: string): int
 		if(p == nil || p[0] != 'D'){
 			err = sys->sprint("bad format in extant file");
 			conflict = 1;
+		}else{
+			# an edit of a version not the current one, as Plan 9's
+			# writepage: the same text sent again is taken as done,
+			# anything else is a conflict, kept in the history
+			ev := int p[1:];
+			if(ev != t){
+				os := "";
+				while((l := b.gets('\n')) != nil)
+					os += l;
+				(nil, ns) := str->splitl(s, "\n");
+				if(ns != nil && ns[1:] + "\n" == os){
+					lfd = nil;
+					return 0;
+				}
+				err = sys->sprint("update conflict %ud != %ud", t, ev);
+				conflict = 1;
+			}
 		}
 	}else{
 		if(t != 0){
@@ -657,6 +726,8 @@ writepage(num: int, t: int, s: string, title: string): int
 		}
 	}
 
+	# later than every version in the history, a conflicting one too
+	s = laterthan(s, histlast(hist));
 	if((fd := wopen(hist, Sys->OWRITE)) == nil){
 		if((fd = wcreate(hist, Sys->OWRITE, 8r666)) == nil){
 			lfd = nil;
@@ -846,7 +917,7 @@ pagehtml(page: list of ref Wpage, ty: int): string
 				inpara = 1;
 				s += "\n<p>\n";
 			}
-			s += "<b>" + w.text + "</b>\n<p>\n";
+			s += "<b>" + hesc(w.text) + "</b>\n<p>\n";
 		Wpara =>
 			if(inlist){
 				inlist = 0;
@@ -879,7 +950,14 @@ pagehtml(page: list of ref Wpage, ty: int): string
 				p = mkurl(w.text, ty);
 			else
 				p = w.url;
-			s += "<a href=\"" + p + "\">";
+			# anyone may write a page: a link is to a page or a
+			# place on the web, never script, and its URL stays
+			# inside its attribute
+			if(!safeurl(p)){
+				s += escap(w.text, 0);
+				break;
+			}
+			s += "<a href=\"" + hesc(p) + "\">";
 			s += escap(w.text, 0);
 			s += "</a>";
 		Wpre =>
@@ -913,9 +991,46 @@ pagehtml(page: list of ref Wpage, ty: int): string
 	return s;
 }
 
+# The schemes a link may name; a URL with none is a path of this site
+linkschemes := array[] of {"http", "https", "ftp", "mailto", "telnet", "file"};
+
+safeurl(u: string): int
+{
+	for(i := 0; i < len u; i++){
+		c := u[i];
+		if(c == ':'){
+			sch := str->tolower(u[0:i]);
+			for(j := 0; j < len linkschemes; j++)
+				if(sch == linkschemes[j])
+					return 1;
+			return 0;
+		}
+		if(c == '/' || c == '?' || c == '#')
+			break;
+	}
+	return 1;
+}
+
+# What anyone wrote, inside an element or an attribute's quotes
+hesc(s: string): string
+{
+	t := "";
+	for(i := 0; i < len s; i++)
+		case s[i] {
+		'&' =>	t += "&amp;";
+		'<' =>	t += "&lt;";
+		'>' =>	t += "&gt;";
+		'"' =>	t += "&quot;";
+		'\'' =>	t += "&#39;";
+		* =>	t[len t] = s[i];
+		}
+	return t;
+}
+
 mkurl(s: string, ty: int): string
 {
 	if((len s >= 4 && s[0:4] == "ftp:")
+		|| (len s >= 6 && s[0:6] == "https:")
 		|| (len s >= 5 && (s[0:5] == "http:" ||s[0:5] == "file:"))
 		|| (len s >= 7 && (s[0:7] == "mailto:" || s[0:7] == "telnet:")))
 		return s;
@@ -965,7 +1080,8 @@ tohtml(h: ref Whist, d: ref Wdoc, ty: int): string
 		q = q[4:];
 	nsub = 0;
 	if(h != nil){
-		sub[nsub] = Sub("TITLE", h.title);
+		# in <title>, the heading and the edit form's value="..."
+		sub[nsub] = Sub("TITLE", hesc(h.title));
 		nsub++;
 	}
 	if(d != nil){
@@ -981,7 +1097,8 @@ tohtml(h: ref Whist, d: ref Wdoc, ty: int): string
 	Tpage or Toldpage =>
 		s += pagehtml(d.wtxt, ty);
 	Tedit =>
-		s += pagetext(d.wtxt, 0);
+		# in a <textarea>: a page holding </textarea> stays text
+		s += hesc(pagetext(d.wtxt, 0));
 	Tdiff =>
 		s += diffhtml(h);
 	Thistory =>
@@ -1080,12 +1197,12 @@ historyhtml(h: ref Whist): string
 		atime = daytime->text(daytime->local(h.doc[i].time));
 		s += "<li><a href=\"" + tmp + "\">" + atime + "</a>";
 		if(h.doc[i].author != nil)
-			s += ", " + h.doc[i].author;
+			s += ", " + hesc(h.doc[i].author);
 		if(h.doc[i].conflict)
 			s += ", conflicting write";
 		s += "\n";
 		if(h.doc[i].comment != nil)
-			s += "<br><i>" + h.doc[i].comment + "</i>\n";
+			s += "<br><i>" + hesc(h.doc[i].comment) + "</i>\n";
 	}
 	s += "</ul>";
 	return s;
@@ -1251,12 +1368,12 @@ diffhtml(h: ref Whist): string
 		atime = daytime->text(daytime->local(h.doc[i].time));
 		s += "<li><a href=\"" + tmp + "\">" + atime + "</a>";
 		if(h.doc[i].author != nil)
-			s += ", " + h.doc[i].author;
+			s += ", " + hesc(h.doc[i].author);
 		if(h.doc[i].conflict)
 			s += ", conflicting write";
 		s += "\n";
 		if(h.doc[i].comment != nil)
-			s += "<br><i>" + h.doc[i].comment + "</i>\n";
+			s += "<br><i>" + hesc(h.doc[i].comment) + "</i>\n";
 		s += "<br><hr>";
 		s += sdiff(h, i, i-1);
 	}

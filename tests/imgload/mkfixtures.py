@@ -26,3 +26,17 @@ open(d + "/rb.svg", "w").write('''<?xml version="1.0" encoding="UTF-8"?>
 <rect x="0" y="4" width="8" height="4" fill="#0000ff"/>
 </svg>
 ''')
+# Alpha that is not RGBA's: grey and alpha (Apple's logos), white over
+# black at half alpha; a palette whose tRNS has a translucent entry and
+# two transparent ones (pngquant's icons): red, opaque, over blue at
+# alpha 128, the right column transparent (index 2), the bottom row
+# transparent too (index 3)
+la = Image.new("LA", (8, 8), (0, 128))
+la.paste((255, 255), (0, 0, 8, 4))
+la.save(d + "/wbla.png")
+pa = Image.new("P", (8, 8), 1)
+pa.putpalette([255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 0])
+pa.paste(0, (0, 0, 8, 4))
+pa.paste(2, (7, 0, 8, 8))
+pa.paste(3, (0, 7, 8, 8))
+pa.save(d + "/rbpa.png", transparency=bytes([255, 128, 0, 0]))

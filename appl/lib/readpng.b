@@ -37,6 +37,8 @@ Png: adt {
 	PLTEsize: int;
 	tRNS: array of byte;
 	trgb: array of int;	# truecolour tRNS: the transparent colour
+	palpha: int;	# the palette's tRNS has more than one transparent entry, or translucent ones
+	achan: array of byte;	# grey and alpha: the alpha, as read
 	# state for managing unpacking
 	alpha: int;
 	done: int;
@@ -278,17 +280,20 @@ read(fd: ref Iobuf): (ref Rawimage, string)
 #						sys->print("%3d: (%3d)\n", x, int png.tRNS[x]);
 #				}
 				if (png.error == nil) {
-					# analyse the tRNS chunk to see if it contains a single transparent index
-					# translucent entries are treated as opaque
+					# a single transparent index is the image's transparent
+					# colour; more than one, or any translucent, and the
+					# image is made RGBA once its pixels are in (pngquant's
+					# anti-aliased icons were drawn on opaque squares)
 					for (x = 0; x < chunk.size; x++)
 						if (png.tRNS[x] == byte 0) {
 							raw.trindex = byte x;
-							if (raw.transp) {
-								raw.transp = 0;
-								break;
-							}
+							if (raw.transp)
+								png.palpha = 1;
 							raw.transp = 1;
-						}
+						} else if (png.tRNS[x] != byte 255)
+							png.palpha = 1;
+					if (png.palpha)
+						raw.transp = 0;
 #					if (raw.transp)
 #						sys->print("selected index %d\n", int raw.trindex);
 				}
@@ -395,7 +400,46 @@ read(fd: ref Iobuf): (ref Rawimage, string)
 		png.error = "insufficient data";
 	if (png.error == nil && png.trgb != nil && raw.nchans == 3)
 		addalpha(raw, png.trgb);
+	if (png.error == nil && png.achan != nil) {
+		# grey and alpha: RGBA, the grey thrice
+		y := raw.chans[0];
+		raw.chans = array[] of {y, y, y, png.achan};
+		raw.nchans = 4;
+		raw.chandesc = RImagefile->CRGBA;
+	}
+	if (png.error == nil && png.palpha && raw.cmap != nil)
+		palalpha(raw, png.tRNS);
 	return (raw, png.error);
+}
+
+# a palette image whose tRNS has translucent entries, or more than one
+# transparent, as RGBA
+palalpha(raw: ref Rawimage, trns: array of byte)
+{
+	ix := raw.chans[0];
+	n := len ix;
+	cm := raw.cmap;
+	r := array[n] of byte;
+	g := array[n] of byte;
+	b := array[n] of byte;
+	a := array[n] of byte;
+	for (i := 0; i < n; i++) {
+		k := int ix[i];
+		if (3*k + 2 < len cm) {
+			r[i] = cm[3*k];
+			g[i] = cm[3*k+1];
+			b[i] = cm[3*k+2];
+		}
+		if (k < len trns)
+			a[i] = trns[k];
+		else
+			a[i] = byte 255;
+	}
+	raw.chans = array[] of {r, g, b, a};
+	raw.nchans = 4;
+	raw.chandesc = RImagefile->CRGBA;
+	raw.cmap = nil;
+	raw.transp = 0;
 }
 
 # RGB with a transparent colour becomes RGBA
@@ -576,9 +620,14 @@ outputrow(png: ref Png, raw: ref Rawimage, row: array of byte)
 			else
 				upconvert(raw.chans[0][offset + png.colstart:], png.colstep, row, png.phasecols, png.depth);
 		8 or 16 =>
-			# might have an Alpha channel to ignore!
+			# grey, and perhaps alpha after it
 			stride := (png.alpha + 1) * png.depth / 8;
 			copybytes(raw.chans[0][offset + png.colstart:], png.colstep, row, stride, png.phasecols);
+			if (png.alpha) {
+				if (png.achan == nil)
+					png.achan = array[len raw.chans[0]] of byte;
+				copybytes(png.achan[offset + png.colstart:], png.colstep, row[png.depth/8:], stride, png.phasecols);
+			}
 		}
 	3 or 4 =>
 		case (png.depth) {

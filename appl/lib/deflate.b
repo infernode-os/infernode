@@ -790,8 +790,23 @@ lzcomp(lz: ref LZstate, lzb: ref LZblock, max: int)
 			if(s >= es)
 				break;
 			t = s - me + you;
-			if(t - runlen < 0)
+			lim := es;
+			if(t - runlen < 0) {
+				# from before the history last slid down: in the
+				# copy left above it, which holds what came after
+				# only as far as there was then.  a string that
+				# runs on past where it slid is compared nowhere
+				# (gzip -9 matched 258 bytes, 42 of them stale),
+				# and one before it is extended no further
+				if(t >= 0) {
+					chars -= runlen + 1;
+					continue matchloop;
+				}
 				t += MaxOff + HistSlop;
+				lim = me - you;
+				if(lim > es)
+					lim = es;
+			}
 			for(; s >= p; s--) {
 				if(hist[s] != hist[t]) {
 					chars -= p + runlen - s + 1;
@@ -806,7 +821,7 @@ lzcomp(lz: ref LZstate, lzb: ref LZblock, max: int)
 			#
 			t += runlen + 2;
 			s += runlen + 2;
-			for(; s < es; s++) {
+			for(; s < lim; s++) {
 				if(hist[s] != hist[t])
 					break;
 				t++;

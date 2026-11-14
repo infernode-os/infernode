@@ -310,6 +310,22 @@ testSvgRefs(t: ref T)
 	near(t, pixel(im, o.add((35, 5))), (255, 255, 0), 0, "use of a symbol: its viewBox into the use's size");
 }
 
+# A palette image's transparent index after a colour is clear: the
+# colour of the pixel before it was kept with alpha 0, and premultiplied,
+# added to whatever it was drawn over
+testClearAfterColour(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/clear.gif");
+	if(im == nil)
+		t.fatal("clear.gif: " + err);
+	o := im.r.min;
+	near(t, pixel(im, o.add((0, 0))), (255, 0, 0), 0, "red");
+	near(t, pixel(im, o.add((1, 0))), (0, 0, 0), 0, "clear after red: nothing on black");
+	near(t, pixel(im, o.add((2, 0))), (255, 255, 255), 0, "white");
+	near(t, pixel(im, o.add((3, 0))), (0, 0, 0), 0, "clear after white: nothing on black");
+}
+
 testDecodeJpeg(t: ref T)	{ checkfixture(t, "rb.jpg", "jpeg", (255, 0, 0), (0, 0, 255), 40); }
 testDecodeGif(t: ref T)		{ checkfixture(t, "rb.gif", "gif", (255, 0, 0), (0, 0, 255), 0); }
 testDecodeWebpLossless(t: ref T)	{ checkfixture(t, "rb.webp", "webp", (255, 0, 0), (0, 0, 255), 0); }
@@ -987,6 +1003,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PngGreyAlpha", testPngGreyAlpha);
 	run("PngPaletteAlpha", testPngPaletteAlpha);
 	run("SvgRefs", testSvgRefs);
+	run("ClearAfterColour", testClearAfterColour);
 	run("DecodeJpeg", testDecodeJpeg);
 	run("DecodeGif", testDecodeGif);
 	run("DecodeWebpLossless", testDecodeWebpLossless);

@@ -57,3 +57,11 @@ square drawn by use, a yellow one by use of a symbol -->
 <clipPath id="left"><rect x="0" y="0" width="5" height="10"/></clipPath>
 </svg>
 ''')
+# A GIF whose transparent index follows a colour, across each row: red,
+# clear, white, clear (paulgraham.com's titles): the clear pixels clear
+gt = Image.new("P", (4, 1), 0)
+gt.putpalette([255, 0, 0, 0, 0, 0, 255, 255, 255])
+gt.putpixel((1, 0), 1)
+gt.putpixel((2, 0), 2)
+gt.putpixel((3, 0), 1)
+gt.save(d + "/clear.gif", transparency=1)

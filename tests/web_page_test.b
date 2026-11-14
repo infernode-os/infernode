@@ -279,6 +279,46 @@ contains(s, sub: string): int
 	return 0;
 }
 
+# With lazy set (a browser's view), an <img loading=lazy> is wanted
+# only within LAZYMARGIN (1250px) of the view; one not lazy, or a lazy
+# image's URL also used near the view, always; all of them when every
+# image is wanted
+testLazy(t: ref T)
+{
+	pg := pageof(t, "<body style='margin:0'>" +
+		"<img src=near.png loading=lazy style='width:10px;height:10px'>" +
+		"<div style='height:4000px'></div>" +
+		"<img src=far.png loading=LAZY style='width:10px;height:10px'>" +
+		"<img src=eager.png style='width:10px;height:10px'>" +
+		"<img src=twice.png loading=lazy style='width:10px;height:10px'>" +
+		"<div style='height:4000px'></div>" +
+		"<img src=twice.png style='width:10px;height:10px'>", 800, 600);
+	t.assertseq(names(pg.wanted()), " near far eager twice", "not lazy: all");
+	pg.lazy = 1;
+	pg.view = 0;
+	t.assertseq(names(pg.wanted()), " near eager twice", "at the top");
+	pg.view = 3000;
+	t.assertseq(names(pg.wanted()), " far eager twice", "scrolled down to it, near gone out of range");
+	pg.view = 0;
+	pg.wantall();
+	t.assertseq(names(pg.wanted()), " near far eager twice", "every image wanted");
+}
+
+names(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		u := hd l;
+		for(i := len u - 1; i >= 0 && u[i] != '/'; i--)
+			;
+		u = u[i+1:];
+		if(len u > 4 && u[len u - 4:] == ".png")
+			u = u[0:len u - 4];
+		s += " " + u;
+	}
+	return s;
+}
+
 absx(b: ref Box): int
 {
 	x := 0;
@@ -360,6 +400,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("FontZero", testFontZero);
 	run("AlignChildren", testAlignChildren);
 	run("Shown", testShown);
+	run("Lazy", testLazy);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

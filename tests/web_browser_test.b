@@ -591,6 +591,29 @@ testImageBusy(t: ref T)
 	scripts(t, "off");
 }
 
+# An <img loading=lazy> far below the view is not sent for until the
+# view comes near it: scrolled there through ctl (no window, so nothing
+# calls viewing), it is.  Both images are missing, so each sent for is
+# an error
+testLazy(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "lazy.html"), "done " + DIR + "lazy.html", "load");
+	errs := "";
+	for(i := 0; i < 30 && !contains(errs, "lazynear.png"); i++) {
+		sys->sleep(100);
+		errs = rd("errors");
+	}
+	t.assert(contains(errs, "lazynear.png"), "the one in view sent for: " + errs);
+	t.assert(!contains(errs, "lazyfar.png"), "the one 4000px down not: " + errs);
+	wr("ctl", "scroll 3600");
+	for(i = 0; i < 50 && !contains(errs, "lazyfar.png"); i++) {
+		sys->sleep(100);
+		errs = rd("errors");
+	}
+	t.assert(contains(errs, "lazyfar.png"), "scrolled near it: sent for: " + errs);
+	wr("ctl", "scroll 0");
+}
+
 # navto, its answer sent on c, so a test can wait for it with a limit
 navasync(c: chan of string, cmd, url: string)
 {
@@ -737,6 +760,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);
 	run("ImageBusy", testImageBusy);
+	run("Lazy", testLazy);
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);

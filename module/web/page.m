@@ -32,6 +32,12 @@ Page: module
 		allimages:	int;	# every image wanted, whatever the setting
 		sheetlist:	array of (string, string, string);	# its sheets as last read: (inline text, nil, nil) or (nil, url, charset)
 		sheetcache:	list of (string, ref Css->Sheet);	# parsed, by text or url
+		# with lazy set, an <img loading=lazy> is wanted only once it is
+		# near the view, whose top is at view (a browser's, not a
+		# document laid out whole); sent: what has been sent for
+		lazy:	int;
+		view:	int;
+		sent:	list of string;
 
 		relayout:	fn(p: self ref Pg, width, height: int);
 		close:	fn(p: self ref Pg);	# done with: what it alone holds (its web fonts) is let go

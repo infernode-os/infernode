@@ -427,6 +427,8 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	if(y < 0)
 		y = 0;
 	s.scroll = s.at = y;
+	pg.lazy = 1;	# its lazy images as the view comes near them
+	pg.view = y;
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
@@ -466,8 +468,22 @@ images(s: ref Session, g: int, pg: ref Pg)
 		urls = claim(r, urls);
 		r.imaging = 1;
 	}
+	urls = unsent(pg, urls);
 	unlock(s);
 	fetchpics(s, g, pg, urls);
+}
+
+# what of urls has not been sent for for pg; the rest it now has (the
+# session's lock held): a view moved asks again for what is near it
+unsent(pg: ref Pg, urls: list of string): list of string
+{
+	n: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(!member(hd urls, pg.sent)) {
+			pg.sent = hd urls :: pg.sent;
+			n = hd urls :: n;
+		}
+	return rev(n);
 }
 
 # what of urls is not fetched or being fetched for the realm's page; the
@@ -1484,13 +1500,28 @@ Session.scrollto(s: self ref Session, y: int)
 	lock(s);
 	s.scroll = y;
 	unlock(s);
+	lazynear(s, y);
 	event(s, "scroll " + string y);
 }
 
 Session.viewing(s: self ref Session, y: int)
 {
 	s.at = y;	# (one word: read under the lock when the page is left)
+	lazynear(s, y);
 }
+
+# the view at y: the lazy images it has come near sent for (with no
+# window, as charonfs's scroll leaves it, viewing is never called)
+lazynear(s: ref Session, y: int)
+{
+	pg := s.pg;
+	if(pg != nil && pg.lazy && (y - pg.view >= LAZYSTEP || pg.view - y >= LAZYSTEP)) {
+		pg.view = y;
+		spawn images(s, s.gen, pg);
+	}
+}
+
+LAZYSTEP: con 200;	# pixels the view moves before its lazy images are looked at again
 
 # A fault in the engine while the session's lock is held: said, and
 # the lock let go as ever.  Raised out of a section holding it, it was
@@ -2603,6 +2634,7 @@ realmhelper(r: ref Realm)
 			lock(s);
 			s.scroll = rq.y;
 			unlock(s);
+			lazynear(s, rq.y);
 			event(s, "scroll " + string rq.y);
 		}
 	}
@@ -2636,7 +2668,7 @@ laidout(r: ref Realm)
 		# for (JSTOR's logo, in a header its script makes)
 		us: list of string;
 		{
-			us = claim(r, r.pg.wanted());
+			us = unsent(r.pg, claim(r, r.pg.wanted()));
 		} exception e {
 		"*" =>
 			sys->fprint(sys->fildes(2), "charon: images after a script: %s\n", e);

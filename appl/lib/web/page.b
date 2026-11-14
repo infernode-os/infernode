@@ -265,7 +265,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	scripting := setting("scripts") == "on";
 	html->scripting(scripting);
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil);
+		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil, 0, 0, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -423,8 +423,14 @@ Pg.wanted(p: self ref Pg): list of string
 		curdoc = p.doc;
 		ny := array[p.doc.n + 1] of {* => -1};
 		nodetops(p.root, ny);
-		for(l := replacedboxes(p.root, nil); l != nil; l = tl l)
-			urls = ((hd l).url, boxtop(hd l)) :: urls;
+		lazy := p.lazy && !p.allimages;
+		for(l := replacedboxes(p.root, nil); l != nil; l = tl l) {
+			b := hd l;
+			y := boxtop(b);
+			if(lazy && b.url != nil && !nearview(p, y, b.h) && islazy(p.doc, b.node))
+				continue;	# later, should the view come near it
+			urls = (b.url, y) :: urls;
+		}
 		c := p.computed;
 		for(i := 0; i < len c.st; i++) {
 			y := Unplaced;
@@ -487,6 +493,24 @@ toptobottom(l: list of (string, int), n: int): list of string
 	for(i = n - 1; i >= 0; i--)
 		r = a[i].t0 :: r;
 	return r;
+}
+
+# How near the view an <img loading=lazy> is fetched: Chrome's margin
+LAZYMARGIN: con 1250;	# CSS px
+
+# whether a box at y, h tall, is within LAZYMARGIN of the view
+nearview(p: ref Pg, y, h: int): int
+{
+	m := int (real LAZYMARGIN * pxscale);
+	return y < p.view + p.height + m && y + h > p.view - m;
+}
+
+islazy(d: ref Doc, n: int): int
+{
+	if(n <= 0 || n >= len d.nodes)
+		return 0;
+	nd := d.nodes[n];
+	return nd.tag == Dom->Timg && nd.ns == Dom->HTML && lower(d.attr(n, "loading")) == "lazy";
 }
 
 # a box's top in page coordinates (an absolutely positioned box's

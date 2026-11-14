@@ -95,6 +95,25 @@ testWOFF(t: ref T)
 	t.assertnotnil(fonts->addface("bad", 400, 0, nil, array of byte "wOFFgarbage"), "a broken WOFF is an error");
 }
 
+# Emoji: a character past U+FFFF that the page's fonts lack is drawn
+# from Noto Emoji's outlines (its cmap's format 12; the bitmap fallback
+# stops at U+FFFD), behind a web font as behind the shipped faces
+testEmoji(t: ref T)
+{
+	fonts->clearfaces();
+	f := fonts->face("sans-serif" :: nil, 400, 0, 20.0);
+	for(l := 16r1F3A7 :: 16r1F680 :: 16r1F600 :: nil; l != nil; l = tl l) {
+		c := hd l;
+		t.assert(f.has(c), sys->sprint("U+%X has a glyph", c));
+		w := f.width(sys->sprint("%c", c));
+		t.assert(w > 10.0 && w < 40.0, sys->sprint("U+%X about an em wide: %g", c, w));
+	}
+	t.assert(!f.has(16r1D400), "a character neither has: none (the bitmap fallback's)");
+	t.assertnil(fonts->addface("ahem", 400, 0, nil, readfile(DIR + "Ahem.ttf")), "add Ahem");
+	a := fonts->face("ahem" :: nil, 400, 0, 20.0);
+	t.assert(a.has(16r1F680), "behind a web font too");
+}
+
 # a family's faces split by unicode-range: each character from the face
 # that has it, the rest from the next family
 testRanges(t: ref T)
@@ -398,6 +417,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Ahem", testAhem);
 	run("WOFF", testWOFF);
 	run("Ranges", testRanges);
+	run("Emoji", testEmoji);
 	run("Weights", testWeights);
 	run("WOFF2", testWOFF2);
 	run("WOFF2hmtx", testWOFF2hmtx);

@@ -150,6 +150,8 @@ FaceData: adt {
 	# Type 1: the charstrings, decrypted, by GID, and the subroutines
 	t1cs:	array of array of byte;
 	t1subrs:	array of array of byte;
+	# a format 12 cmap's groups past U+FFFF, sorted: (first, last, its GID)
+	cmap32:	array of (int, int, int);
 };
 
 Axis: adt {
@@ -689,6 +691,12 @@ Face.cidtogid(f: self ref Face, cid: int): int
 Face.lookup(f: self ref Face, charcode: int): int
 {
 	fd := getfacedata(f);
+	if(fd != nil && charcode > 16rFFFF && fd.cmap32 != nil) {
+		g := cmap32gid(fd.cmap32, charcode);
+		if(g <= 0 || g >= fd.nglyphs)
+			return -1;
+		return g;
+	}
 	if(fd == nil || fd.ttfcmap == nil || charcode < 0 || charcode >= len fd.ttfcmap)
 		return -1;
 	gid := fd.ttfcmap[charcode];
@@ -700,6 +708,8 @@ Face.lookup(f: self ref Face, charcode: int): int
 Face.chartogid(f: self ref Face, charcode: int): int
 {
 	fd := getfacedata(f);
+	if(fd != nil && charcode > 16rFFFF && fd.cmap32 != nil && (g := cmap32gid(fd.cmap32, charcode)) > 0 && g < fd.nglyphs)
+		return g;
 	if(fd == nil || fd.ttfcmap == nil)
 		return charcode;	# CFF: identity mapping
 	if(charcode >= 0 && charcode < len fd.ttfcmap){
@@ -2921,7 +2931,8 @@ parsecff(data: array of byte): (ref FaceData, string)
 		nil, nil,		# gsub, gpos
 		nil, 0, 0, nil, nil,	# no variations
 		sids, strings, nil, nil,
-		nil, nil
+		nil, nil,
+		nil			# cmap32
 	);
 
 	return (fd, nil);
@@ -3532,8 +3543,9 @@ parsettf(data: array of byte): (ref FaceData, string)
 
 	# Parse cmap table
 	ttfcmap: array of int;
+	cmap32: array of (int, int, int);
 	if(cmapoff != 0 && cmaplen > 0)
-		ttfcmap = parsettfcmap(data, cmapoff, cmaplen);
+		(ttfcmap, cmap32) = parsettfcmap(data, cmapoff, cmaplen);
 
 	# 'kern' (version 0): the first horizontal format 0 subtable
 	kernpairs := 0;
@@ -3598,7 +3610,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 		nil,
 		nil,
 		nil, nil, nil, nil,	# no glyph names
-		nil, nil
+		nil, nil,
+		cmap32			# cmap32
 	);
 
 	return (fd, nil);
@@ -3636,7 +3649,7 @@ parseotf(data: array of byte): (ref FaceData, string)
 	fd.gsub = parsegsub(data, gsuboff, 7);
 	fd.gpos = parsegsub(data, gposoff, 9);
 	if(cmaplen > 0)
-		fd.ttfcmap = parsettfcmap(data, cmapoff, cmaplen);
+		(fd.ttfcmap, fd.cmap32) = parsettfcmap(data, cmapoff, cmaplen);
 	if(headoff != 0 && hheaoff != 0 && hheaoff + 8 <= len data) {
 		upem := getu16be(data, headoff + 18);
 		if(upem > 0) {
@@ -3650,11 +3663,12 @@ parseotf(data: array of byte): (ref FaceData, string)
 	return (fd, nil);
 }
 
-# Parse cmap table — build charcode → GID lookup
-parsettfcmap(data: array of byte, cmapoff, cmaplen: int): array of int
+# Parse cmap table — build charcode → GID lookup: the Basic
+# Multilingual Plane as an array, and a format 12 table's groups past it
+parsettfcmap(data: array of byte, cmapoff, cmaplen: int): (array of int, array of (int, int, int))
 {
 	if(cmapoff + 4 > len data)
-		return nil;
+		return (nil, nil);
 
 	numsubtables := getu16be(data, cmapoff + 2);
 
@@ -3668,8 +3682,13 @@ parsettfcmap(data: array of byte, cmapoff, cmaplen: int): array of int
 		platformID := getu16be(data, recoff);
 		encodingID := getu16be(data, recoff + 2);
 		subtableoff := getu32be(data, recoff + 4);
+		# the whole of Unicode first (format 12, as emoji need)
+		sf := -1;
+		if(subtableoff >= 0 && cmapoff + subtableoff + 2 <= len data)
+			sf = getu16be(data, cmapoff + subtableoff);
 		prio := 0;
-		if(platformID == 3 && encodingID == 1) prio = 4;
+		if(sf == 12 && (platformID == 3 && encodingID == 10 || platformID == 0)) prio = 6;
+		else if(platformID == 3 && encodingID == 1) prio = 4;
 		else if(platformID == 0) prio = 3;
 		else if(platformID == 1 && encodingID == 0) prio = 2;
 		else prio = 1;
@@ -3680,19 +3699,97 @@ parsettfcmap(data: array of byte, cmapoff, cmaplen: int): array of int
 	}
 
 	if(bestoff == 0 || bestoff + 2 > len data)
-		return nil;
+		return (nil, nil);
 
 	format := getu16be(data, bestoff);
 	case format {
 	0 =>
-		return parsecmapfmt0(data, bestoff);
+		return (parsecmapfmt0(data, bestoff), nil);
 	4 =>
-		return parsecmapfmt4(data, bestoff);
+		return (parsecmapfmt4(data, bestoff), nil);
 	6 =>
-		return parsecmapfmt6(data, bestoff);
+		return (parsecmapfmt6(data, bestoff), nil);
+	12 =>
+		return parsecmapfmt12(data, bestoff);
 	* =>
-		return nil;
+		return (nil, nil);
 	}
+}
+
+# cmap format 12: segmented coverage, 32-bit codes in groups of
+# (first, last, first GID); the BMP's in the array, the rest kept as groups
+MAXGROUPS: con 65536;
+parsecmapfmt12(data: array of byte, off: int): (array of int, array of (int, int, int))
+{
+	if(off + 16 > len data)
+		return (nil, nil);
+	ngroups := getu32be(data, off + 12);
+	if(ngroups < 0 || ngroups > MAXGROUPS || off + 16 + ngroups*12 > len data)
+		return (nil, nil);
+	maxcode := 255;
+	nbig := 0;
+	for(i := 0; i < ngroups; i++) {
+		g := off + 16 + i*12;
+		first := getu32be(data, g);
+		last := getu32be(data, g + 4);
+		if(first < 0 || last < first || last > 16r10FFFF)
+			continue;
+		if(first <= 16rFFFF) {
+			e := last;
+			if(e > 16rFFFF)
+				e = 16rFFFF;
+			if(e > maxcode)
+				maxcode = e;
+		}
+		if(last > 16rFFFF)
+			nbig++;
+	}
+	cmap := array[maxcode + 1] of { * => -1 };
+	big32 := array[nbig] of (int, int, int);
+	nb := 0;
+	for(i = 0; i < ngroups; i++) {
+		g := off + 16 + i*12;
+		first := getu32be(data, g);
+		last := getu32be(data, g + 4);
+		gid := getu32be(data, g + 8);
+		if(first < 0 || last < first || last > 16r10FFFF || gid < 0)
+			continue;
+		for(c := first; c <= last && c <= maxcode; c++)
+			if(gid + (c - first) > 0)
+				cmap[c] = gid + (c - first);
+		if(last > 16rFFFF && nb < nbig) {
+			f := first;
+			if(f <= 16rFFFF) {
+				gid += 16r10000 - f;
+				f = 16r10000;
+			}
+			big32[nb++] = (f, last, gid);
+		}
+	}
+	big32 = big32[0:nb];
+	# by first code, for the search (a font should have them so already)
+	for(i = 1; i < nb; i++)
+		for(j := i; j > 0 && big32[j-1].t0 > big32[j].t0; j--)
+			(big32[j-1], big32[j]) = (big32[j], big32[j-1]);
+	return (cmap, big32);
+}
+
+# the GID a format 12 table's groups give a code past U+FFFF, else -1
+cmap32gid(g: array of (int, int, int), c: int): int
+{
+	lo := 0;
+	hi := len g;
+	while(lo < hi) {
+		m := (lo + hi) / 2;
+		(first, last, gid) := g[m];
+		if(c < first)
+			hi = m;
+		else if(c > last)
+			lo = m + 1;
+		else
+			return gid + (c - first);
+	}
+	return -1;
 }
 
 # cmap format 0: byte encoding table (256 entries)

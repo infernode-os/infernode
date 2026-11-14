@@ -337,8 +337,25 @@ SCRIPTDIR: con "/fonts/ttf/noto";
 thaifaces := array[2] of ref OutlineFont->Face;
 thaitried := array[2] of { * => 0 };
 
+# what draws emoji, and what else past U+FFFF it has: Noto Emoji's
+# outlines, read when the first is wanted (the bitmap fallback stops at
+# U+FFFD, so NPR's "🎧 Listen" was a speck)
+EMOJIFONT: con "/fonts/ttf/notoemoji/NotoEmoji-Regular.ttf";
+emojiface: ref OutlineFont->Face;
+emojitried := 0;
+
 scriptglyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 {
+	if(c > 16rFFFF) {
+		if(!emojitried) {
+			emojitried = 1;
+			if((d := readall(EMOJIFONT)) != nil)
+				(emojiface, nil) = ofont->open(d, "ttf");
+		}
+		if(emojiface != nil && (g := emojiface.lookup(c)) >= 0)
+			return (emojiface, g);
+		return (nil, -1);
+	}
 	if(c < 16r0E00 || c > 16r0E7F)
 		return (nil, -1);
 	b := 0;

@@ -726,6 +726,7 @@ dis/tests/camsrv_test.dis
 dis/tests/casel_test.dis
 dis/tests/charonbatch.dis
 dis/tests/charonshot.dis
+dis/tests/charonsite.dis
 dis/tests/cipher_matrix_test.dis
 dis/tests/concurrency_test.dis
 dis/tests/concurrent_auth_test.dis

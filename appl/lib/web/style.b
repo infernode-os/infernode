@@ -91,7 +91,24 @@ kw(k: int): Len
 	return Len(k, 0.0, 0.0, nil);
 }
 
+# the largest a calculation's value is: infinity, a division by zero
+CALCMAX: con 33554400.0;
+
+calcclamp(v: real): real
+{
+	if(v > CALCMAX)
+		return CALCMAX;
+	if(v < -CALCMAX)
+		return -CALCMAX;
+	return v;
+}
+
 evalexpr(e: ref Expr, basis: real): real
+{
+	return calcclamp(evalexpr1(e, basis));
+}
+
+evalexpr1(e: ref Expr, basis: real): real
 {
 	case e.op {
 	'n' =>
@@ -106,9 +123,13 @@ evalexpr(e: ref Expr, basis: real): real
 		return evalexpr(e.kids[0], basis) * evalexpr(e.kids[1], basis);
 	'/' =>
 		d := evalexpr(e.kids[1], basis);
-		if(d == 0.0)
-			return 0.0;
-		return evalexpr(e.kids[0], basis) / d;
+		n := evalexpr(e.kids[0], basis);
+		if(d == 0.0) {
+			if(n < 0.0)
+				return -CALCMAX;	# a division by zero is infinite
+			return CALCMAX;
+		}
+		return n / d;
 	'm' or 'M' =>
 		v := evalexpr(e.kids[0], basis);
 		for(i := 1; i < len e.kids; i++) {
@@ -4403,6 +4424,12 @@ operand(t: ref Tok, ctx: ref Ctx): ref Expr
 		case lower(t.s) {
 		"pi" => return ref Expr('k', Math->Pi, 0.0, nil);
 		"e" => return ref Expr('k', 2.718281828459045, 0.0, nil);
+		# (Values 4 §10.7.1): as large as a length can be, as
+		# Chromium has it; NaN as 0.  Tailwind 4's rounded-full is
+		# calc(infinity * 1px): Cloudflare's pills were squares
+		"infinity" => return ref Expr('k', CALCMAX, 0.0, nil);
+		"-infinity" => return ref Expr('k', -CALCMAX, 0.0, nil);
+		"nan" => return ref Expr('k', 0.0, 0.0, nil);
 		}
 	}
 	return nil;
@@ -4428,13 +4455,20 @@ fold(e: ref Expr): (int, real, real)
 		if(!a || !b)
 			return (0, 0.0, 0.0);
 		if(e.kids[0].op == 'k' || isnum(e.kids[0]))
-			return (1, bp*ap, bpc*ap);
-		return (1, ap*bp, apc*bp);
+			return (1, calcclamp(bp*ap), calcclamp(bpc*ap));
+		return (1, calcclamp(ap*bp), calcclamp(apc*bp));
 	'/' =>
 		(a, ap, apc) := fold(e.kids[0]);
 		(b, bp, nil) := fold(e.kids[1]);
-		if(!a || !b || bp == 0.0)
+		if(!a || !b)
 			return (0, 0.0, 0.0);
+		if(bp == 0.0) {
+			if(apc != 0.0)
+				return (0, 0.0, 0.0);
+			if(ap < 0.0)
+				return (1, -CALCMAX, 0.0);
+			return (1, CALCMAX, 0.0);
+		}
 		return (1, ap/bp, apc/bp);
 	'm' or 'M' or 'c' =>
 		# without percentages, evaluate now

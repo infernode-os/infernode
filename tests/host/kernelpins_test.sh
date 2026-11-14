@@ -118,5 +118,8 @@ if echo "$sec" | grep -q 'todget' && ! grep -q 'boottime' os/port/devcons.c; the
 else no "seconds() is not todget()'s: the time of day loses every missed tick"; fi
 if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
 else no "timerintr runs hzclock once however many ticks were due"; fi
+hw=$(sed -n '/^hubwatch(/,/^}/p' os/init/osinit.b | grep -v '^[[:space:]]*#')
+if echo "$hw" | grep -q 'devs\[port\] == "" && (status & HPenable) == 0' && echo "$hw" | grep -A12 'devs\[port\] == "" && (status & HPenable) == 0' | grep -q 'portsetup'; then ok "a USB device present and not set up is tried again"
+else no "hubwatch leaves a device whose setup failed present and not set up for the rest of the boot"; fi
 
 exit $fail

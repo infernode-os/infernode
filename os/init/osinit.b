@@ -694,6 +694,7 @@ Fportreset:	con 4;
 #
 Resetrecovery:	con 50;
 Watchival:	con 1000;	# how often a hub's ports are re-read, ms
+Retrymax:	con 256;	# most polls between tries of a device that would not set up
 Enumattempts:	con 3;
 Fportpower:	con 8;
 
@@ -3501,6 +3502,20 @@ hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array 
 			was[i] = st >= 0 && (st & HPpresent);
 		}
 
+	#
+	# A device present on a port with nothing set up on it is tried
+	# again, after 1, 2, 4 ... polls up to Retrymax (about four
+	# minutes). When the setup after "fell off the bus" failed (the
+	# port not enabled after three resets), devs[port] became "" with
+	# the device still present: present before and present now, with
+	# nothing set up, was "nothing happened" for the rest of the boot.
+	# A Pi 5 soak lost its USB Ethernet so, its fourth fall in 40
+	# minutes (2026-11-13 17:44), with the gadget at the far end left
+	# suspended for want of a host. xHCI only, as the fall itself.
+	#
+	nap := array[nports+1] of {* => 0};
+	gap := array[nports+1] of {* => 1};
+
 	dead := 0;
 	for(;;){
 		sys->sleep(Watchival);
@@ -3534,10 +3549,27 @@ hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array 
 						indent, name, port, devs[port]);
 					detachdev(devs[port]);
 					devs[port] = portsetup(d, name, port, indent);
+					gap[port] = 1; nap[port] = 0;
+				}else if(havexhci && now && devs[port] == "" && (status & HPenable) == 0){
+					if(nap[port] > 0){
+						nap[port]--;
+						continue;
+					}
+					sys->print("init: %s%s port %d: a device there is not set up; trying again\n",
+						indent, name, port);
+					devs[port] = portsetup(d, name, port, indent);
+					if(devs[port] == ""){
+						gap[port] *= 2;
+						if(gap[port] > Retrymax)
+							gap[port] = Retrymax;
+						nap[port] = gap[port];
+					}else
+						gap[port] = 1;
 				}
 				continue;
 			}
 			was[port] = now;
+			gap[port] = 1; nap[port] = 0;
 
 			if(now){
 				sys->print("init: %s%s port %d: device attached\n",

@@ -1123,11 +1123,22 @@ sheetsof(p: ref Pg): array of (string, string, string)
 			sheets = (d.textof(n), nil, nil) :: sheets;
 		Dom->Tlink =>
 			rel := " " + lower(d.attr(n, "rel")) + " ";
+			onload := d.attr(n, "onload");
+			# loadCSS's idioms, a sheet loaded without holding up the
+			# page: <link rel=preload as=style onload="this.rel=
+			# 'stylesheet'"> and <link rel=stylesheet media=print
+			# onload="this.media='all'">, taken as their onload makes
+			# them whether or not it runs (Smashing Magazine's main.css)
+			if(index(rel, " preload ") >= 0 && lower(d.attr(n, "as")) == "style" && lower(assigned(onload, "rel")) == "stylesheet")
+				rel = " stylesheet ";
 			if(index(rel, " stylesheet ") < 0 || index(rel, " alternate ") >= 0)
 				continue;
 			if(d.hasattr(n, "disabled") || !indoc(d, n))
 				continue;
-			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
+			media := d.attr(n, "media");
+			if((m := assigned(onload, "media")) != nil)
+				media = m;
+			if(!style->mediamatch(css->tokenize(media), p.env))
 				continue;
 			href := d.attr(n, "href");
 			if(href == nil)
@@ -1145,6 +1156,49 @@ sheetsof(p: ref Pg): array of (string, string, string)
 		sheets = tl sheets;
 	}
 	return a;
+}
+
+# the quoted value a script assigns to this.name (or name) in js, nil
+# for none: "this.media='all'" gives all
+assigned(js, name: string): string
+{
+	for(i := index(js, name); i >= 0 && i < len js; ) {
+		j := i + len name;
+		if(i > 0 && (isalnum(js[i-1]) || js[i-1] == '_' || js[i-1] == '-')) {
+			i = nextindex(js, name, j);
+			continue;
+		}
+		while(j < len js && (js[j] == ' ' || js[j] == '\t'))
+			j++;
+		if(j < len js && js[j] == '=' && (j + 1 >= len js || js[j+1] != '=')) {
+			j++;
+			while(j < len js && (js[j] == ' ' || js[j] == '\t'))
+				j++;
+			if(j < len js && (js[j] == '\'' || js[j] == '"')) {
+				q := js[j];
+				for(e := j + 1; e < len js; e++)
+					if(js[e] == q)
+						return js[j+1:e];
+			}
+		}
+		i = nextindex(js, name, j);
+	}
+	return nil;
+}
+
+nextindex(s, t: string, from: int): int
+{
+	if(from >= len s)
+		return -1;
+	k := index(s[from:], t);
+	if(k < 0)
+		return -1;
+	return from + k;
+}
+
+isalnum(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9';
 }
 
 # whether n is in the document (not removed, nor in a shadow tree or

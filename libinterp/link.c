@@ -16,13 +16,18 @@ newlink(Link *l, char *fn, int sig, Type *t)
 	memmove(l->name, fn, n);
 	l->sig = sig;
 	l->frame = t;
+	l->dig = nil;
 }
 
+/*
+ * dig is the table's own, which is never freed
+ */
 void
-runtime(Module *m, Link *l, char *fn, int sig, void (*runt)(void*), Type *t)
+runtime(Module *m, Link *l, char *fn, int sig, uchar *dig, void (*runt)(void*), Type *t)
 {
 	USED(m);
 	newlink(l, fn, sig, t);
+	l->dig = dig;
 	l->u.runt = runt;
 }
 

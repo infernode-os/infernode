@@ -39,7 +39,11 @@ HFILES=\
 	runt.h\
 	tab.h\
 
+# interp.h is among them for Runtab, the type of a row of the tables
+# limbo -t writes: a table from before a row had its digest must be
+# made again, not compiled as rows of the new length.
 MODULES=\
+	$ROOT/include/interp.h\
 	$ROOT/module/runt.m\
 	$ROOT/module/sys.m\
 	$ROOT/module/draw.m\

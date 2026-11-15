@@ -2998,21 +2998,27 @@ typecom(Type *t)
 	 */
 	sz = n * sizeof(u32int) + Typejithdr;
 
+	/*
+	 * No memory for it is a compile that fails, like the two above:
+	 * these three returned as though the type had its code, the
+	 * module was compiled, and its frame instruction called the
+	 * type's initialize, which was nil.
+	 */
 #ifdef INFERNO_NATIVE
 	start = malloc(sz);
 	if(start == nil)
-		return;
+		{ typecomfailed = 1; return; }
 #elif defined(APPLE_JIT)
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
 	if(start == MAP_FAILED)
-		return;
+		{ typecomfailed = 1; return; }
 	pthread_jit_write_protect_np(0);
 #else
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
 			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 	if(start == MAP_FAILED)
-		return;
+		{ typecomfailed = 1; return; }
 #endif
 
 	*(ulong*)start = sz;

@@ -2549,17 +2549,25 @@ typecom(Type *t)
 		inmod = saveinmod;
 		code = savecode;
 		print("typecom: emitted %d > bound %lud for np=%d\n", n, need, t->np);
-		error(exCompile);
+		typecomfailed = 1;
+		return;
 	}
 	free(tmp);
 
 	sz = n * sizeof(u32int) + Typejithdr;
 
+	/*
+	 * No memory for it is a compile that fails, like the two above:
+	 * these returned as though the type had its code, the module was
+	 * compiled, and its frame instruction called the type's
+	 * initialize, which was nil.
+	 */
 #ifdef INFERNO_NATIVE
 	start = malloc(sz);
 	if(start == nil) {
 		inmod = saveinmod;
 		code = savecode;
+		typecomfailed = 1;
 		return;
 	}
 #else
@@ -2568,6 +2576,7 @@ typecom(Type *t)
 	if(start == MAP_FAILED) {
 		inmod = saveinmod;
 		code = savecode;
+		typecomfailed = 1;
 		return;
 	}
 #endif

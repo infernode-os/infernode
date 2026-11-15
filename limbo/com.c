@@ -317,6 +317,7 @@ if(debug['v']) print("fncom: %s %d %p\n", d->sym->name, d->refs, d);
 			hints |= HASLDT;
 		if(excs != nil)
 			hints |= HASEXCEPT;
+		hints |= HASSIGS;
 		discon(hints);		/* runtime hints */
 		discon(maxstack);	/* minimum stack extent size */
 		discon(ninst);
@@ -333,6 +334,7 @@ if(debug['v']) print("fncom: %s %d %p\n", d->sym->name, d->refs, d);
 		if(excs != nil)
 			disexc(excs);
 		dispath();
+		dissigs(impdecl, LDT ? ldts : nil);
 	}else{
 		asminst(firstinst);
 		asmentry(entry);

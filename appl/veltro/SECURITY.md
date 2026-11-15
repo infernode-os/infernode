@@ -374,6 +374,11 @@ When the install audits (`/mnt/audit/log` present), spawn auto-grants that
 append-only path into every child's caps; `auditcontrolpath` keeps
 `/mnt/audit` itself, `chain`, and `ctl` ungrantable, so a child can append
 to its own trail but can never read or rewrite history (AU-9 by placement).
+What it appends cannot harm the trail either: `auditfs` puts every record in
+one canonical text before hashing it (controls and line breaks are blanks,
+one write is one bounded record), so neither a writer nor text sealed on a
+model's behalf (a tool's name) can break the chain for the records after it,
+split a record in two, or pass for the server's `checkpoint`.
 
 ## Subagent Architecture
 

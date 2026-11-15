@@ -36,6 +36,20 @@ implement Auditfs;
 # name and the replay outcome, so restarts are visible in the trail and a
 # log is readably bound to its host.
 #
+# A record is put in one canonical text (auditchain's token and text)
+# before it is hashed, whatever a writer sent, and a line of the file is
+# a record only if it is exactly that text: what is sealed, what is
+# stored and what a replay reads are the same bytes.
+#
+# A file whose chain does not verify is still served and still appended
+# to (a log that stops taking records stops every fail-closed writer),
+# but not as though it verified: the start record says replay=broken@n,
+# sequence numbers go on from the highest in the file, the chain goes on
+# from the last record's stored hash (so what is added is bound to the
+# file as it was found), verify goes on saying where the break is, and no
+# checkpoint is signed over it.  Set such a file aside and start another
+# to have signed roots again.
+#
 # Checkpoint signing (AU-10) is performed by factotum, which holds the
 # signer key — auditfs never sees the private key (see
 # docs/compliance/audit-log-factotum-signing-DESIGN.md). The vac
@@ -90,6 +104,10 @@ chainfd: ref Sys->FD;		# read handle for streaming /mnt/audit/chain
 
 tiphash: array of byte;		# current chain tip
 seq := 0;			# sequence number of the last record (0 = none)
+knownbreaks: list of int;	# where the file's chain did not verify when read
+needsnl := 0;			# the file ends in a fragment: begin a new line first
+MAXSEQ: con 16r7fffffff;
+MAXREC: con 4096;		# a writer's record; less than any 9P message in use
 
 # Checkpoint cadence: a signed root at least every CHECKEVERY records,
 # and (via the ticker) within CHECKMS of any new record. lastattempt
@@ -152,14 +170,17 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Recompute the chain from any existing backing file; fail loud (to
 	# stderr) if it is already broken, but keep serving so an operator
-	# can read /mnt/audit/verify and inspect.
+	# can read /mnt/audit/verify and inspect.  A file that is there and
+	# cannot be read is not an empty log: it was taken for one, and
+	# records numbered from 1 were appended to it.
 	tiphash = ac->genesis();
-	data := readfile(logpath);
-	(tip, last, broken) := replay(data);
-	tiphash = tip;
-	seq = last;
-	if(broken >= 0)
-		sys->fprint(stderr, "auditfs: WARNING chain broken at seq %d in %s\n", broken, logpath);
+	(data, rerr) := readfile(logpath);
+	if(rerr != nil)
+		fail(rerr);
+	(tiphash, seq, knownbreaks) = replay(data);
+	needsnl = len data > 0 && data[len data - 1] != '\n';
+	if(knownbreaks != nil)
+		sys->fprint(stderr, "auditfs: WARNING chain broken at seq %d in %s\n", hd knownbreaks, logpath);
 
 	# Open the backing file for append (create if absent).
 	logfd = sys->open(logpath, Sys->OWRITE);
@@ -177,9 +198,9 @@ init(nil: ref Draw->Context, args: list of string)
 	# so one host's log reads as that host's. Fatal on failure — a log
 	# that cannot take this record cannot take any.
 	rst := "ok";
-	if(broken >= 0)
-		rst = sys->sprint("broken@%d", broken);
-	err := appendrec("auditfs", "start", sys->sprint("host=%s replay=%s", hostname(), rst));
+	if(knownbreaks != nil)
+		rst = sys->sprint("broken@%d", hd knownbreaks);
+	err := appendrec("auditfs", "start", sys->sprint("host=%s replay=%s", ac->value(hostname()), rst));
 	if(err != nil)
 		fail(err);
 
@@ -205,7 +226,15 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn ticker(tick, pidc);
 	tickpid := <-pidc;
 
-	serveloop(tc, srv, tree, tick);
+	# The ticker goes with the server however the server goes: an
+	# exception in the loop left it running, holding the mount's pipe.
+	{
+		serveloop(tc, srv, tree, tick);
+	} exception {
+	* =>
+		kill(tickpid);
+		raise;
+	}
 	kill(tickpid);
 }
 
@@ -227,7 +256,7 @@ kill(pid: int)
 
 hostname(): string
 {
-	s := readfile("/dev/sysname");
+	(s, nil) := readfile("/dev/sysname");
 	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
 		s = s[0:len s - 1];
 	if(s == "")
@@ -294,18 +323,32 @@ loop:
 				srv.reply(styxservers->readstr(tm,
 					sys->sprint("%s %d\n", ac->hex(tiphash), seq)));
 			Qverify =>
-				(ftip, flast, broken) := replay(readfile(logpath));
+				# A file that cannot be read is not a chain that
+				# verifies: its bytes so far were replayed, and "ok"
+				# or a break somewhere else was the answer.
+				(fdata, ferr) := readfile(logpath);
+				if(ferr != nil) {
+					srv.reply(ref Rmsg.Error(tm.tag, ferr));
+					continue;
+				}
+				(ftip, flast, fbreaks) := replay(fdata);
+				same := flast == seq && ac->hex(ftip) == ac->hex(tiphash) &&
+					sameints(fbreaks, knownbreaks);
 				s: string;
-				if(broken >= 0)
-					s = sys->sprint("broken at seq %d\n", broken);
-				else if(flast != seq || ac->hex(ftip) != ac->hex(tiphash))
-					# The file replays clean but disagrees with the live
-					# chain: the backing store was modified behind the
-					# running server (truncate-and-rewrite looks exactly
-					# like this).
-					s = sys->sprint("diverged: file at seq %d tip %s, server at seq %d tip %s\n",
+				if(fbreaks != nil && (same || knownbreaks == nil))
+					s = sys->sprint("broken at seq %d\n", hd fbreaks);
+				else if(!same) {
+					# The file disagrees with the live chain: the
+					# backing store was modified behind the running
+					# server (truncate-and-rewrite looks exactly like
+					# this; so does a second break in a file that
+					# was broken when it was read).
+					s = sys->sprint("diverged: file at seq %d tip %s, server at seq %d tip %s",
 						flast, ac->hex(ftip), seq, ac->hex(tiphash));
-				else
+					if(fbreaks != nil)
+						s += sys->sprint(" (file broken at seq %d)", hd fbreaks);
+					s += "\n";
+				} else
 					s = sys->sprint("ok %d\n", seq);
 				srv.reply(styxservers->readstr(tm, s));
 			Qpubkey =>
@@ -329,13 +372,23 @@ loop:
 			}
 			case int c.path {
 			Qlog =>
-				err := writelog(stripnl(string tm.data));
+				# One write is one record.  A write longer than a
+				# 9P message reaches here in pieces, and each piece
+				# was sealed as a record of its own: the end of a
+				# long field became the source, event and message
+				# of the next.  The first piece is refused, which
+				# ends the write.
+				err: string;
+				if(len tm.data > MAXREC)
+					err = sys->sprint("auditfs: record longer than %d bytes", MAXREC);
+				else
+					err = writelog(string tm.data);
 				if(err != nil)
 					srv.reply(ref Rmsg.Error(tm.tag, err));
 				else
 					srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 			Qctl =>
-				err := writectl(stripnl(string tm.data));
+				err := writectl(ac->text(string tm.data));
 				if(err != nil)
 					srv.reply(ref Rmsg.Error(tm.tag, err));
 				else
@@ -357,7 +410,11 @@ loop:
 # writelog parses a "source event msg..." write and seals a record.
 writelog(s: string): string
 {
-	(n, toks) := sys->tokenize(s, " ");
+	# The write as one line of words first, so that the source and the
+	# event are the words a reader of the record sees: split before the
+	# controls were dealt with, "checkpoint" followed by a CR was not the
+	# reserved event when written and read as it once displayed.
+	(n, toks) := sys->tokenize(ac->text(s), " ");
 	if(n < 2)
 		return "auditfs: write must be 'source event [message]'";
 	source := hd toks; toks = tl toks;
@@ -397,6 +454,10 @@ writectl(s: string): string
 # (-k) rightly reads one as tampering.
 docheckpoint(): string
 {
+	# A signed root says the tip covers every record before it; that is
+	# not so of a history that does not verify.
+	if(knownbreaks != nil)
+		return sys->sprint("auditfs: chain broken at seq %d: no checkpoint is signed over it", hd knownbreaks);
 	content := sys->sprint("audit-checkpoint %s %d", ac->hex(tiphash), seq);
 	cert := factotumsign(array of byte content);
 	if(cert == nil)
@@ -474,64 +535,96 @@ concat(a, b: array of byte): array of byte
 
 # appendrec seals one record: server-assigned seq + time, chain extend,
 # durable append. The serveloop is single-threaded, so seq/tiphash need
-# no lock.
+# no lock.  This is the one place a record is made: the fields are put
+# in their canonical text here, before they are hashed.
 appendrec(source, event, msg: string): string
 {
-	source = clean1(source);
-	event = clean1(event);
-	msg = cleannl(msg);
+	source = ac->token(source);
+	event = ac->token(event);
+	msg = ac->text(msg);
+	if(seq >= MAXSEQ)
+		return "auditfs: sequence numbers used up";
 	newseq := seq + 1;
 	t := daytime->now();
 	canon := ac->canon(newseq, t, source, event, msg);
 	newhash := ac->extend(tiphash, array of byte canon);
-	line := sys->sprint("%d %d %s %s %s %s\n",
-		newseq, t, source, event, ac->hex(newhash), msg);
+	line := ac->record(newseq, t, source, event, ac->hex(newhash), msg) + "\n";
+	if(needsnl)
+		line = "\n" + line;
 	b := array of byte line;
 	sys->seek(logfd, big 0, Sys->SEEKEND);
-	if(sys->write(logfd, b, len b) != len b)
-		return sys->sprint("auditfs: write failed: %r");
+	if(sys->write(logfd, b, len b) != len b) {
+		err := sys->sprint("auditfs: write failed: %r");
+		# Part of the line may be in the file.  The file is what a
+		# verifier will read, so go on from what it now holds: the
+		# next record began in the middle of the fragment's line, and
+		# the server's chain was one no reading of the file gave.
+		resync();
+		return err;
+	}
+	needsnl = 0;
 	tiphash = newhash;
 	seq = newseq;
 	return nil;
 }
 
+resync()
+{
+	needsnl = 1;
+	(data, err) := readfile(logpath);
+	if(err != nil)
+		return;
+	(tiphash, seq, knownbreaks) = replay(data);
+	needsnl = len data > 0 && data[len data - 1] != '\n';
+}
+
 # replay recomputes the chain over the backing-file contents.
-# Returns (tip, lastseq, brokenseq) where brokenseq is -1 if intact.
-replay(data: string): (array of byte, int, int)
+# Returns (tip, lastseq, breaks): the sequence numbers at which the
+# chain does not verify, in the file's order, nil if it is intact.
+#
+# A record must carry the next number after the highest so far and the
+# hash of the chain before it.  One that does not is a break, and the
+# replay goes on from that record's own stored hash and number: what
+# follows is then checked against what the file says, and a server that
+# appends to such a file chains from its end.  (It stopped at the first
+# break and gave the chain's state before it; a server started on the
+# file then appended from there, numbering its records as ones already
+# in the file.)  A line that is no record is a break at the next
+# number, and changes nothing else.
+replay(data: string): (array of byte, int, list of int)
 {
 	prev := ac->genesis();
 	last := 0;
+	breaks: list of int;
 	(nil, lines) := sys->tokenize(data, "\n");
 	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(line == "")
+		(seqf, tf, source, event, hashf, msg, ok) := ac->parse(hd lines);
+		if(!ok) {
+			breaks = last + 1 :: breaks;
 			continue;
-		(seqf, tf, source, event, hashf, msg, ok) := parserec(line);
-		if(!ok)
-			return (prev, last, last + 1);
+		}
 		h := ac->extend(prev, array of byte ac->canon(seqf, tf, source, event, msg));
-		if(ac->hex(h) != hashf)
-			return (prev, last, seqf);
-		prev = h;
-		last = seqf;
+		if(ac->hex(h) != hashf || seqf != last + 1)
+			breaks = seqf :: breaks;
+		prev = ac->unhex(hashf);
+		if(seqf > last)
+			last = seqf;
 	}
-	return (prev, last, -1);
+	r: list of int;
+	for(; breaks != nil; breaks = tl breaks)
+		r = hd breaks :: r;
+	return (prev, last, r);
 }
 
-# parserec splits a stored line into its fields. The first five
-# space-separated tokens are seq, time, source, event, hash; the rest
-# (rejoined) is the message.
-parserec(line: string): (int, int, string, string, string, string, int)
+sameints(a, b: list of int): int
 {
-	(n, toks) := sys->tokenize(line, " ");
-	if(n < 5)
-		return (0, 0, "", "", "", "", 0);
-	seqf := int hd toks; toks = tl toks;
-	tf := int hd toks; toks = tl toks;
-	source := hd toks; toks = tl toks;
-	event := hd toks; toks = tl toks;
-	hashf := hd toks; toks = tl toks;
-	return (seqf, tf, source, event, hashf, join(toks), 1);
+	while(a != nil && b != nil) {
+		if(hd a != hd b)
+			return 0;
+		a = tl a;
+		b = tl b;
+	}
+	return a == nil && b == nil;
 }
 
 # readchain answers one styx Read of /mnt/audit/chain directly from the
@@ -550,11 +643,20 @@ readchain(tm: ref Tmsg.Read): ref Rmsg
 	return ref Rmsg.Read(tm.tag, buf[0:r]);
 }
 
-readfile(path: string): string
+# readfile returns a file's text and nil, or what kept it from being
+# read.  A file that is not there is empty.  The bytes are put together
+# before they are made a string: a rune cut by the end of a read is one
+# rune.  An error in the middle of the file was taken for its end.
+readfile(path: string): (string, string)
 {
 	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return "";
+	if(fd == nil) {
+		err := sys->sprint("cannot open %s: %r", path);
+		(ok, nil) := sys->stat(path);
+		if(ok < 0)
+			return ("", nil);
+		return ("", err);
+	}
 	# Collect chunks and assemble once: += on a string is quadratic,
 	# and this runs over the whole (ever-growing) backing file.
 	chunks: list of array of byte;
@@ -562,7 +664,9 @@ readfile(path: string): string
 	for(;;) {
 		buf := array[Sys->ATOMICIO] of byte;
 		m := sys->read(fd, buf, len buf);
-		if(m <= 0)
+		if(m < 0)
+			return ("", sys->sprint("cannot read %s: %r", path));
+		if(m == 0)
 			break;
 		chunks = buf[0:m] :: chunks;
 		total += m;
@@ -574,7 +678,7 @@ readfile(path: string): string
 		o -= len c;
 		all[o:] = c;
 	}
-	return string all;
+	return (string all, nil);
 }
 
 join(toks: list of string): string
@@ -585,41 +689,6 @@ join(toks: list of string): string
 			s += " ";
 		s += hd toks;
 	}
-	return s;
-}
-
-# clean1 forces a single space-free token (sources/events are one word).
-clean1(s: string): string
-{
-	r := "";
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c == ' ' || c == '\t' || c == '\n')
-			c = '_';
-		r[len r] = c;
-	}
-	if(r == "")
-		r = "-";
-	return r;
-}
-
-# cleannl keeps a record to one line (the server escapes newlines).
-cleannl(s: string): string
-{
-	r := "";
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c == '\n' || c == '\r')
-			c = ' ';
-		r[len r] = c;
-	}
-	return r;
-}
-
-stripnl(s: string): string
-{
-	if(len s > 0 && s[len s - 1] == '\n')
-		s = s[0:len s - 1];
 	return s;
 }
 

@@ -48,7 +48,7 @@ enum
 	IDSHIFT	= 8,
 	NID	= 1 << IDSHIFT,
 	IDMASK	= NID - 1,
-	MAXPATH	= 1024	/* TO DO: eliminate this */
+	MAXELEM	= 1024	/* the longest name a directory entry is taken to have */
 };
 
 typedef struct User User;
@@ -75,7 +75,7 @@ static	User*	newuname(char*);
 static	User*	newgname(char*);
 
 static	Qid	fsqid(struct stat *);
-static	void	fspath(Cname*, char*, char*);
+static	char*	fsdirpath(Cname*, char**, char**);
 static	int	fsdirconv(Chan*, char*, char*, struct stat*, uchar*, int, int);
 static	Cname*	fswalkpath(Cname*, char*, int);
 static	char*	fslastelem(Cname*);
@@ -764,21 +764,34 @@ fsqid(struct stat *st)
 	return q;
 }
 
-static void
-fspath(Cname *c, char *name, char *path)
+/*
+ * A directory's host name with a slash after it and room for an entry's
+ * name: *ep is where the entry's name goes and *end the end of the room.
+ * The caller frees it.
+ *
+ * It was built in a buffer of 1024 bytes on the stack, and a directory
+ * with a longer name panicked the emulator when it was read ("fspath:
+ * name too long"): any program that can make directories can make one,
+ * nested deep enough. A name of exactly 1023 bytes passed the test and
+ * put the terminator one byte past the buffer.
+ */
+static char*
+fsdirpath(Cname *c, char **ep, char **end)
 {
 	int n;
+	char *path;
 
-	if(c->len+strlen(name) >= MAXPATH)
-		panic("fspath: name too long");
+	path = malloc(c->len + 1 + MAXELEM + 1);
+	if(path == nil)
+		error(Enomem);
 	memmove(path, c->s, c->len);
 	n = c->len;
-	if(path[n-1] != '/')
+	if(n == 0 || path[n-1] != '/')
 		path[n++] = '/';
-	strcpy(path+n, name);
-	if(isdotdot(name))
-		cleanname(path);
-/*print("->%s\n", path);*/
+	path[n] = '\0';
+	*ep = path+n;
+	*end = path + c->len + 1 + MAXELEM + 1;
+	return path;
 }
 
 static Cname *
@@ -879,13 +892,21 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 	int i;
 	long n, r;
 	struct stat st;
-	char path[MAXPATH], *ep;
+	char *volatile path, *ep, *end;
+	volatile int locked;
 	struct dirent *de;
 	static uchar slop[8192];
 
 	i = 0;
-	fspath(FS(c)->name, "", path);
-	ep = path+strlen(path);
+	locked = 0;
+	path = fsdirpath(FS(c)->name, &ep, &end);
+	if(waserror()){
+		/* (an error from fsdirconv below left idl held, for good) */
+		if(locked)
+			qunlock(&idl);
+		free(path);
+		nexterror();
+	}
 	if(FS(c)->offset != offset) {
 		seekdir(FS(c)->dir, 0);
 		FS(c)->de = nil;
@@ -896,11 +917,13 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 				/* EOF, so stash offset and return 0 */
 				FS(c)->offset = n;
 				FS(c)->eod = 1;
+				poperror();
+				free(path);
 				return 0;
 			}
 			if(de->d_ino==0 || de->d_name[0]==0 || isdots(de->d_name))
 				continue;
-			strecpy(ep, path+sizeof(path), de->d_name);
+			strecpy(ep, end, de->d_name);
 			if(xstat(path, &st) < 0) {
 				fprint(2, "dir: bad path %s\n", path);
 				continue;
@@ -915,6 +938,8 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 			qunlock(&idl);
 			if(r <= 0) {
 				FS(c)->offset = n;
+				poperror();
+				free(path);
 				return 0;
 			}
 			n += r;
@@ -922,8 +947,11 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		FS(c)->offset = offset;
 	}
 
-	if(FS(c)->eod)
+	if(FS(c)->eod){
+		poperror();
+		free(path);
 		return 0;
+	}
 
 	/*
 	 * Take idl on behalf of id2name.  Stalling attach, which is a
@@ -931,6 +959,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 	 * preferable to adding lock round-trips.
 	 */
 	qlock(&idl);
+	locked = 1;
 	while(i < count){
 		de = FS(c)->de;
 		FS(c)->de = nil;
@@ -944,7 +973,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		if(de->d_ino==0 || de->d_name[0]==0 || isdots(de->d_name))
 			continue;
 
-		strecpy(ep, path+sizeof(path), de->d_name);
+		strecpy(ep, end, de->d_name);
 		if(xstat(path, &st) < 0) {
 			fprint(2, "dir: bad path %s\n", path);
 			continue;
@@ -957,7 +986,10 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		i += r;
 		FS(c)->offset += r;
 	}
+	locked = 0;
 	qunlock(&idl);
+	poperror();
+	free(path);
 	return i;
 }
 

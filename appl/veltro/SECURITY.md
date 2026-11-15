@@ -463,6 +463,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
 | Speech preserved | `/mnt/speech` granted as a path to `say` and `hear`, exposed only if mounted |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
+| Compiler reads source only | The `limbo` tool runs the compiler in a process of its own, with an empty directory over `/mnt`, `/dev`, `/prog`, `/net`, `/env`, `/chan`, `/tool` and `/srv` and a pipe of its own: an `include` line names source, not a service's file. Where it saves (`-o`) is held to the rule `write` and `edit` follow |
 
 The baseline paths above are retained capabilities, not declarations that an
 entire subtree is harmless. `/dev/cons` is an input/output channel, `/prog`

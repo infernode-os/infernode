@@ -156,6 +156,9 @@ TARG=\
 	webclient_body_test.dis\
 	webclient_deadline_test.dis\
 	veltro_coord_test.dis\
+	link_digest_test.dis\
+	link_digest_a.dis\
+	link_digest_b.dis\
 	keyring_args_test.dis\
 	ipint_edge_test.dis\
 	namec_clone_test.dis\

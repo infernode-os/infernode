@@ -39,6 +39,8 @@ include "testing.m";
 	T: import testing;
 
 include "auditchain.m";
+include "audit.m";
+	audit: Audit;
 	ac: Auditchain;
 
 AuditCanonTest: module
@@ -441,6 +443,39 @@ testTornTail(t: ref T)
 	t.assertseq(verify(), "broken at seq 3", "verify says where");
 }
 
+# A name the emitter did not choose is one value of its record.  logind
+# wrote user=%q: a name with a blank was quoted, and read back as two
+# fields when it held a key of its own.
+testEmitterValue(t: ref T)
+{
+	audit = load Audit Audit->PATH;
+	if(audit == nil)
+		t.fatal(sys->sprint("cannot load audit: %r"));
+	audit->init();
+	names := array[] of {
+		"alice",
+		"eve status=ok",
+		"eve\r\nstatus=ok",
+		"a%3Db",
+		"x\ty=1 z=2",
+		"nonascii \u00e9\u2028=\u3000",
+		"",
+	};
+	for(i := 0; i < len names; i++){
+		v := audit->value(names[i]);
+		bad := 0;
+		for(j := 0; j < len v; j++)
+			if(v[j] <= ' ' || v[j] == '=' || v[j] == 16r7f || v[j] >= 16r2028 && v[j] <= 16r202f || v[j] == 16r3000)
+				bad = 1;
+		t.assert(!bad, sys->sprint("value %d is one word with no key of its own: %s", i, v));
+		t.assertseq(ac->unvalue(v), names[i], sys->sprint("value %d reads back as it was", i));
+		t.assertseq(v, ac->value(names[i]), sys->sprint("value %d is the chain's own encoding", i));
+		(nf, nil) := sys->tokenize("user=" + v + " fails=3", " \t\r\n");
+		t.asserteq(nf, 2, sys->sprint("a record with value %d has its two fields", i));
+	}
+	t.assertseq(audit->value("alice"), "alice", "a plain name is unchanged");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -470,6 +505,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("OldLogVerifies", testOldLogVerifies);
 	run("BrokenFileRestart", testBrokenFileRestart);
 	run("TornTail", testTornTail);
+	run("EmitterValue", testEmitterValue);
 	stopauditfs();
 
 	if(testing->summary(passed, failed, skipped) > 0)

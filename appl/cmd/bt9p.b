@@ -1957,7 +1957,7 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 		addr = r.addr;
 		name = r.name;
 		version = r.version;
-		auditlog("up", sys->sprint("addr=%s name=%q %s", addr, name, transportname));
+		auditlog("up", sys->sprint("addr=%s name=%s %s", addr, auditval(name), transportname));
 		if(r.aclmtu > 0){
 			aclmtu = r.aclmtu;
 			aclcredits = r.aclnum;
@@ -4181,6 +4181,14 @@ auditlog(event, msg: string)
 {
 	if(audit != nil)
 		audit->log("bt9p", event, msg);
+}
+
+# a name a device in range gave itself, as one value of a record
+auditval(s: string): string
+{
+	if(audit == nil)
+		return "";
+	return audit->value(s);
 }
 
 # one secret from factotum, or nil with the reason in errstr

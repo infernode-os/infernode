@@ -551,6 +551,7 @@ SYSMODULES=\
 	crc.m\
 	pngload.m\
 	newns.m\
+	audit.m\
 
 DISBIN=$ROOT/dis/tests
 

@@ -100,6 +100,7 @@ TARG=\
 	html_test.dis\
 	imgload_test.dis\
 	png_hostile_test.dis\
+	devfs_longpath_test.dis\
 	devip_conv_test.dis\
 	nsunion_race_test.dis\
 	icon_test.dis\
@@ -115,6 +116,7 @@ TARG=\
 	plan_test.dis\
 	rfc3339_test.dis\
 	spawn_exec_test.dis\
+	syscall_edge_test.dis\
 	spawn_schedule_test.dis\
 	imap_test.dis\
 	jit_bounds_test.dis\

@@ -86,7 +86,7 @@ devattach(int tc, char *spec)
 	c->type = devno(tc, 0);
 	if(spec == nil)
 		spec = "";
-	buf = smalloc(4+strlen(spec)+1);
+	buf = smalloc(1+UTFmax+strlen(spec)+1);	/* '#', the device's rune, the spec */
 	sprint(buf, "#%C%s", tc, spec);
 	c->name = newcname(buf);
 	free(buf);

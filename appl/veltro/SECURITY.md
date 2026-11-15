@@ -812,9 +812,9 @@ particular: `create ... type=app dis=<path> data=<args>` makes Lucifer start
 that program with those arguments in its own name space, with the user's
 authority, outside any agent's confinement. Lucifer loads only from `/dis/wm`
 and `/dis/xenith`, and `luciuisrv` refuses any other path, but the arguments
-are free (`wm/shell -c`, an editor's file). Of the agent's tools only `launch`
-writes such a request, building the path and checking the arguments itself;
-`present` makes content artifacts and nothing else.
+are free (`wm/shell -c`, an editor's file). Of the agent's tools `launch`
+writes such requests, building the path and checking the arguments itself, and
+`keyring` a fixed one; `present` makes content artifacts and nothing else.
 
 A GUI program a tool drives is the user's program in the user's name space,
 and is not confined. A tool must not have it open or save a name the agent

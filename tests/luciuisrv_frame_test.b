@@ -25,7 +25,8 @@ implement LuciuisrvFrameTest;
 # all its bytes.  Also here, with the same server: a quote inside a
 # value hides no later key; "hidden" is not a status a writer may set;
 # activity 0 is not closed; a closed activity's place is free for a new
-# one; its event file ends; the current activity is never a closed one.
+# one; its event file ends; the current activity is never a closed one;
+# an input message refused for its length is not posted in part.
 #
 
 include "sys.m";
@@ -512,6 +513,43 @@ rd(fd: ref Sys->FD, c: chan of int)
 	c <-= sys->read(fd, buf, len buf);
 }
 
+# A message for conversation/input that is refused for its length is
+# not posted, whole or in part.
+testInputRefused(t: ref T)
+{
+	need(t);
+	a := newact(t, "input");
+	inp := act(a) + "/conversation/input";
+	b := array of byte (fill(1024*1024 + 100, 'q'));
+	fd := sys->open(inp, Sys->OWRITE);
+	t.assert(sys->write(fd, b, len b) < 0, "a message past the limit is refused");
+	fd = nil;
+	t.assert(writefile(inp, "after") > 0, "one after it is taken");
+	c := chan[1] of string;
+	spawn rdinput(inp, c);
+	tc := chan[1] of int;
+	spawn timer(tc, 5000);
+	alt {
+	m := <-c =>
+		t.assertseq(m, "after", "and is the first there is to read");
+	<-tc =>
+		t.error("nothing to read from input");
+	}
+}
+
+rdinput(path: string, c: chan of string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		n = 0;
+	s := string buf[0:n];
+	if(len s > 40)
+		s = s[0:40] + "...";
+	c <-= strip(s);
+}
+
 # Closed activities do not count against the limit on open ones.
 testSlots(t: ref T)
 {
@@ -570,6 +608,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AppArtifact", testAppArtifact);
 	run("QuoteInValue", testQuoteInValue);
 	run("Closing", testClosing);
+	run("InputRefused", testInputRefused);
 	run("Slots", testSlots);
 
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -562,7 +562,7 @@ testReadauthinfo(t: ref T)
 
 # a call that must come back: run aside, with a time limit, as the code
 # before never returns from some of these (and cannot then be killed)
-SIZETIME: con 5000;
+SIZETIME: con 20000;	# (only the code before waits it out; a loaded machine needs more than a few seconds for the sizes that work)
 
 gencall(which: string, n: int, c: chan of string)
 {

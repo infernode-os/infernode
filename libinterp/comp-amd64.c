@@ -1552,7 +1552,7 @@ commframe(Inst *i)
 		modrr(Oxchg, RAX, RRTMP);
 	}
 
-	modrm32(Ocmpi, O(Type, initialize), RRTA, 7);
+	modrm(Ocmpi, O(Type, initialize), RRTA, 7);	/* a pointer: all 64 bits */
 	genb(0);
 	gen2(Ojneb, 0);
 	punt_label = code - 1;
@@ -1953,7 +1953,7 @@ comp(Inst *i)
 		cmpl64(RDI, (uvlong)H);
 		gen2(Ojeqb, 0);
 		skip = code - 1;
-		modrm32(Oldw, O(Array, len), RDI, RAX);
+		modrm(Oldw, O(Array, len), RDI, RAX);	/* a WORD */
 		*skip = code - (skip + 1);
 		opwst(i, Ostw, RAX);
 		break;
@@ -2803,7 +2803,15 @@ macmcal(void)
 	gen2(Ojeqb, 0);
 	mlnil = code - 1;
 
-	modrm32(0x83, O(Modlink, prog), RRTA, 7);
+	/*
+	 * Modlink.prog is a pointer and all of it is compared: a built-in
+	 * module's is nil. The low half alone was, so a compiled module
+	 * whose text was mapped at a multiple of 4GB was taken for a
+	 * built-in and its code called from C as a function, which never
+	 * came back to rmcall (one launch in a thousand has such a place
+	 * among jitmalloc's; the emulator went down a few calls later).
+	 */
+	modrm(0x83, O(Modlink, prog), RRTA, 7);
 	genb(0x00);
 	gen2(Ojneb, 0);
 	label = code-1;

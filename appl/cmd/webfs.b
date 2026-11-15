@@ -115,6 +115,11 @@ ConnState: adt {
 # and read body with separate opens; past this many the oldest go.
 MAXIDLE: con 32;
 
+MAXID: con 16rFFFFFF;	# a connection's number is 24 bits of a qid's path
+MAXPOST: con 64*1024*1024;	# the most a request's body may be
+MAXHDRS: con 128;	# and its headers
+Eisopen: con "file already open for I/O";
+
 # a finished fetch
 Done: adt {
 	conn:	ref ConnState;
@@ -136,6 +141,7 @@ nextid: int;
 useragent := "Mozilla/5.0 (Inferno) Webfs/1.0";
 jar: ref Jar;
 done: chan of ref Done;
+inflight: int;	# fetches that have yet to report on done
 
 usage()
 {
@@ -197,7 +203,7 @@ init(nil: ref Draw->Context, args: list of string)
 		mountpt = hd args;
 
 	# Initialize connection pool
-	conns = array[16] of ref ConnState;
+	conns = array[0] of ref ConnState;
 	nconns = 0;
 	nextid = 1;
 	vers = 0;
@@ -237,16 +243,29 @@ init(nil: ref Draw->Context, args: list of string)
 # Allocate a new connection, return its ID
 newconn(): ref ConnState
 {
+	# A connection's number is 24 bits of its files' qids: past that
+	# it was another connection's files. The numbers go round, past
+	# those still in use.
+	for(;;){
+		if(nextid <= 0 || nextid > MAXID)
+			nextid = 1;
+		if(findconn(nextid) == nil)
+			break;
+		nextid++;
+	}
 	id := nextid++;
 	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "", 0, 0, nil, 0, 0, nil);
 
-	# Grow pool if needed
-	if(nconns >= len conns) {
-		nc := array[len conns * 2] of ref ConnState;
-		nc[0:] = conns[0:nconns];
-		conns = nc;
-	}
-	conns[nconns++] = c;
+	# The pool is never changed where it stands: the navigator, a
+	# process of its own, walks it while this one adds and removes,
+	# and met a slot not yet filled or just emptied (nil, and it died:
+	# every walk after waited for ever). A new array takes the old
+	# one's place in one assignment.
+	nc := array[len conns + 1] of ref ConnState;
+	nc[0:] = conns;
+	nc[len conns] = c;
+	conns = nc;
+	nconns = len conns;
 	vers++;
 	reap();
 	return c;
@@ -256,8 +275,9 @@ newconn(): ref ConnState
 reap()
 {
 	idle := 0;
-	for(i := nconns - 1; i >= 0; i--) {
-		c := conns[i];
+	a := conns;	# freeconn replaces conns
+	for(i := len a - 1; i >= 0; i--) {
+		c := a[i];
 		if(c.nopen > 0 || c.fetching || c.pending != nil)
 			continue;
 		if(++idle > MAXIDLE)
@@ -268,20 +288,24 @@ reap()
 # Find connection by ID
 findconn(id: int): ref ConnState
 {
-	for(i := 0; i < nconns; i++)
-		if(conns[i].id == id)
-			return conns[i];
+	a := conns;
+	for(i := 0; i < len a; i++)
+		if(a[i].id == id)
+			return a[i];
 	return nil;
 }
 
 # Free a connection
 freeconn(id: int)
 {
-	for(i := 0; i < nconns; i++) {
-		if(conns[i].id == id) {
-			conns[i:] = conns[i+1:nconns];
-			nconns--;
-			conns[nconns] = nil;
+	a := conns;
+	for(i := 0; i < len a; i++) {
+		if(a[i].id == id) {
+			nc := array[len a - 1] of ref ConnState;
+			nc[0:] = a[0:i];
+			nc[i:] = a[i+1:];
+			conns = nc;
+			nconns = len conns;
 			vers++;
 			return;
 		}
@@ -338,6 +362,7 @@ needfetch(c: ref ConnState, m: ref Tmsg): int
 	j := jar;
 	if(c.nocookies)
 		j = nil;
+	inflight++;
 	spawn fetcher(c, c.gen, c.method, c.url, hdrs, c.postdata, j, c.types);
 	return 1;
 }
@@ -366,7 +391,10 @@ finish(srv: ref Styxserver, d: ref Done)
 {
 	c := d.conn;
 	c.fetching = 0;
+	inflight--;
 	if(d.gen == c.gen) {
+		if(d.err == nil && d.resp == nil)
+			d.err = "no response";
 		if(d.err != nil) {
 			c.status = "error: " + d.err;
 			c.resp = nil;
@@ -394,8 +422,9 @@ finish(srv: ref Styxserver, d: ref Done)
 # Forget a flushed request that is waiting for a fetch.
 flushpending(tag: int)
 {
-	for(i := 0; i < nconns; i++) {
-		c := conns[i];
+	a := conns;
+	for(i := 0; i < len a; i++) {
+		c := a[i];
 		keep: list of ref Tmsg;
 		for(p := c.pending; p != nil; p = tl p)
 			if((hd p).tag != tag)
@@ -427,6 +456,17 @@ Serve:
 		finish(srv, d);
 	}
 	navops <-= nil;
+	# Fetches still out had no one to report to, and waited to for
+	# ever, each with its connection and what it had read. They are
+	# heard out, and what they say is dropped.
+	if(inflight > 0)
+		spawn drain(inflight);
+}
+
+drain(n: int)
+{
+	for(; n > 0; n--)
+		<-done;
 }
 
 handle(srv: ref Styxserver, gm: ref Tmsg)
@@ -442,6 +482,25 @@ handle(srv: ref Styxserver, gm: ref Tmsg)
 			mode := styxservers->openmode(m.mode);
 			if(mode < 0) {
 				srv.reply(ref Rmsg.Error(m.tag, Ebadarg));
+				break;
+			}
+			# This open is webfs's own, not the library's, and asked
+			# neither of the library's questions. A fid opened twice
+			# counted its connection open twice and closed once, so
+			# the connection and its response were kept for good; and
+			# the files' modes were for show: the cookies, 0600, were
+			# anyone's to read.
+			if(c.isopen) {
+				srv.reply(ref Rmsg.Error(m.tag, Eisopen));
+				break;
+			}
+			(od, nil) := dirgen(c.path);
+			if(od == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+				break;
+			}
+			if(!styxservers->openok(c.uname, m.mode, od.mode, od.uid, od.gid)) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				break;
 			}
 
@@ -477,6 +536,13 @@ handle(srv: ref Styxserver, gm: ref Tmsg)
 
 			case ft {
 			Qclone =>
+				# the read after the number is the end of the file:
+				# it made a second connection, which put out the
+				# oldest idle one, another client's
+				if(m.offset != big 0) {
+					srv.reply(ref Rmsg.Read(m.tag, array[0] of byte));
+					break;
+				}
 				conn := newconn();
 				data := array of byte (string conn.id + "\n");
 				srv.reply(styxservers->readbytes(m, data));
@@ -651,6 +717,10 @@ handle(srv: ref Styxserver, gm: ref Tmsg)
 					off = len conn.postdata;
 				if(m.offset == big 0)
 					off = 0;
+				if(off + len m.data > MAXPOST) {
+					srv.reply(ref Rmsg.Error(m.tag, "post body too large"));
+					break;
+				}
 				body := array[off + len m.data] of byte;
 				body[0:] = conn.postdata[0:off];
 				body[off:] = m.data;
@@ -731,6 +801,8 @@ connctl(c: ref ConnState, data: string): string
 		# Find ": " separator
 		for(i := 0; i < len hdr - 1; i++) {
 			if(hdr[i] == ':' && hdr[i+1] == ' ') {
+				if(len c.headers >= MAXHDRS)
+					return "too many headers";
 				c.headers = Header(hdr[0:i], hdr[i+2:]) :: c.headers;
 				c.fetched = 0;
 				c.gen++;
@@ -959,8 +1031,9 @@ navigator(navops: chan of ref Navop)
 				entries = MKPATH(0, Qclone) :: entries;
 				entries = MKPATH(0, Qgctl) :: entries;
 				entries = MKPATH(0, Qcookies) :: entries;
-				for(i := 0; i < nconns; i++)
-					entries = MKPATH(conns[i].id, Qconndir) :: entries;
+				a := conns;
+				for(i := 0; i < len a; i++)
+					entries = MKPATH(a[i].id, Qconndir) :: entries;
 
 				# Reverse to preserve order
 				rev: list of big;
@@ -1058,6 +1131,10 @@ strtoint(s: string): int
 	for(i := 0; i < len s; i++) {
 		c := s[i];
 		if(c < '0' || c > '9')
+			return -1;
+		# no number so long is a connection's: with more digits it
+		# wrapped, to the number of one that was
+		if(i >= 9)
 			return -1;
 		n = n * 10 + (c - '0');
 	}

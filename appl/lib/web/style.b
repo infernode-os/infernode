@@ -2639,7 +2639,8 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0, nil, ~0, 0, nil);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0, nil, ~0, 0, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil);
 	s.fontsize = 16.0 * dpr;
 	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
 	return s;
@@ -2673,6 +2674,14 @@ inherit(p: ref St): ref St
 	s.transform = p.transform;
 	s.letterspacing = p.letterspacing;
 	s.nokern = p.nokern;
+	s.fvlig = p.fvlig;
+	s.fvcaps = p.fvcaps;
+	s.fvnum = p.fvnum;
+	s.fvea = p.fvea;
+	s.fvpos = p.fvpos;
+	s.fvalt = p.fvalt;
+	s.ffs = p.ffs;
+	s.langover = p.langover;
 	s.fontvars = p.fontvars;
 	s.wordspacing = p.wordspacing;
 	s.whitespace = p.whitespace;
@@ -2728,7 +2737,8 @@ isinherited(nm: string): int
 {
 	case nm {
 	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or "font-stretch" or "font-width" or "font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" or
-	"font-variant" or "font-variant-caps" or "line-height" or "text-align" or
+	"font-variant" or "font-variant-caps" or "font-variant-ligatures" or "font-variant-numeric" or
+	"font-variant-east-asian" or "font-variant-position" or "font-variant-alternates" or "line-height" or "text-align" or
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
 	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or "word-space-transform" or
@@ -2737,7 +2747,7 @@ isinherited(nm: string): int
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
 	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "-webkit-text-fill-color" or "fill" or "stroke" or
-	"font-kerning" or "font-feature-settings" or "font-variation-settings" or "image-orientation" =>
+	"font-kerning" or "font-feature-settings" or "font-variation-settings" or "font-language-override" or "image-orientation" =>
 		return 1;
 	}
 	return 0;
@@ -4806,6 +4816,172 @@ ident(v: array of ref Tok): string
 	if(len v == 1 && v[0].kind == Kident)
 		return lower(v[0].s);
 	return nil;
+}
+
+# ---- font-variant (Fonts 4 §6) ----
+
+# The groups of font-variant's keywords, by longhand
+FVlig, FVcaps, FVnum, FVea, FVpos, FValt, FVn: con iota;
+
+# a keyword's group and the features it sets, or (-1, nil)
+fvkeyword(k: string): (int, list of (string, int))
+{
+	case k {
+	"common-ligatures" =>	return (FVlig, ("liga", 1) :: ("clig", 1) :: nil);
+	"no-common-ligatures" =>	return (FVlig, ("liga", 0) :: ("clig", 0) :: nil);
+	"discretionary-ligatures" =>	return (FVlig, ("dlig", 1) :: nil);
+	"no-discretionary-ligatures" =>	return (FVlig, ("dlig", 0) :: nil);
+	"historical-ligatures" =>	return (FVlig, ("hlig", 1) :: nil);
+	"no-historical-ligatures" =>	return (FVlig, ("hlig", 0) :: nil);
+	"contextual" =>	return (FVlig, ("calt", 1) :: nil);
+	"no-contextual" =>	return (FVlig, ("calt", 0) :: nil);
+	"small-caps" =>	return (FVcaps, ("smcp", 1) :: nil);
+	"all-small-caps" =>	return (FVcaps, ("c2sc", 1) :: ("smcp", 1) :: nil);
+	"petite-caps" =>	return (FVcaps, ("pcap", 1) :: nil);
+	"all-petite-caps" =>	return (FVcaps, ("c2pc", 1) :: ("pcap", 1) :: nil);
+	"unicase" =>	return (FVcaps, ("unic", 1) :: nil);
+	"titling-caps" =>	return (FVcaps, ("titl", 1) :: nil);
+	"lining-nums" =>	return (FVnum, ("lnum", 1) :: nil);
+	"oldstyle-nums" =>	return (FVnum, ("onum", 1) :: nil);
+	"proportional-nums" =>	return (FVnum, ("pnum", 1) :: nil);
+	"tabular-nums" =>	return (FVnum, ("tnum", 1) :: nil);
+	"diagonal-fractions" =>	return (FVnum, ("frac", 1) :: nil);
+	"stacked-fractions" =>	return (FVnum, ("afrc", 1) :: nil);
+	"ordinal" =>	return (FVnum, ("ordn", 1) :: nil);
+	"slashed-zero" =>	return (FVnum, ("zero", 1) :: nil);
+	"jis78" =>	return (FVea, ("jp78", 1) :: nil);
+	"jis83" =>	return (FVea, ("jp83", 1) :: nil);
+	"jis90" =>	return (FVea, ("jp90", 1) :: nil);
+	"jis04" =>	return (FVea, ("jp04", 1) :: nil);
+	"simplified" =>	return (FVea, ("smpl", 1) :: nil);
+	"traditional" =>	return (FVea, ("trad", 1) :: nil);
+	"full-width" =>	return (FVea, ("fwid", 1) :: nil);
+	"proportional-width" =>	return (FVea, ("pwid", 1) :: nil);
+	"ruby" =>	return (FVea, ("ruby", 1) :: nil);
+	"sub" =>	return (FVpos, ("subs", 1) :: nil);
+	"super" =>	return (FVpos, ("sups", 1) :: nil);
+	"historical-forms" =>	return (FValt, nil);
+	}
+	return (-1, nil);
+}
+
+# font-variant or one of its longhands: each keyword (or alternates'
+# function) in the group the property takes, none twice; the
+# shorthand resets the groups it does not name
+fontvariant(st: ref St, nm: string, x: array of ref Tok): int
+{
+	want := -1;
+	case nm {
+	"font-variant-ligatures" =>	want = FVlig;
+	"font-variant-caps" =>	want = FVcaps;
+	"font-variant-numeric" =>	want = FVnum;
+	"font-variant-east-asian" =>	want = FVea;
+	"font-variant-position" =>	want = FVpos;
+	"font-variant-alternates" =>	want = FValt;
+	}
+	g := array[FVn] of list of (string, int);
+	alts: list of (string, string);
+	seen := array[FVn] of {* => 0};
+	used: list of string;	# keywords and functions, each once
+	smallcaps := 0;
+	k1 := "";
+	if(len x == 1 && x[0].kind == Kident)
+		k1 = lower(x[0].s);
+	if(k1 == "normal" || k1 == "none" && (want < 0 || want == FVlig)) {
+		if(k1 == "none")
+			g[FVlig] = ("liga", 0) :: ("clig", 0) :: ("dlig", 0) :: ("hlig", 0) :: ("calt", 0) :: nil;
+	} else {
+		if(len x == 0)
+			return 0;
+		for(i := 0; i < len x; i++) {
+			t := x[i];
+			grp := -1;
+			fl: list of (string, int);
+			w: string;
+			if(t.kind == Kident) {
+				w = lower(t.s);
+				(grp, fl) = fvkeyword(w);
+				if(grp == FValt)
+					alts = (w, "") :: alts;
+			} else if(t.kind == Kfunction) {
+				w = t.s;
+				case w {
+				"stylistic" or "styleset" or "character-variant" or "swash" or "ornaments" or "annotation" =>
+					grp = FValt;
+					names := 0;
+					a := nows(t.kids);
+					for(j := 0; j < len a; j++) {
+						if(a[j].kind == Kident) {
+							alts = (w, a[j].s) :: alts;
+							names++;
+						} else if(a[j].kind != Kcomma)
+							return 0;
+					}
+					# only styleset and character-variant take several
+					if(names == 0 || names > 1 && w != "styleset" && w != "character-variant")
+						return 0;
+				}
+			}
+			if(grp < 0 || want >= 0 && grp != want)
+				return 0;
+			for(u := used; u != nil; u = tl u)
+				if(hd u == w)
+					return 0;
+			# caps and position take one keyword
+			if((grp == FVcaps || grp == FVpos) && seen[grp])
+				return 0;
+			# common-ligatures and no-common-ligatures and the like
+			for(f := fl; f != nil; f = tl f)
+				for(e := g[grp]; e != nil; e = tl e)
+					if((hd e).t0 == (hd f).t0)
+						return 0;
+			used = w :: used;
+			seen[grp] = 1;
+			if(w == "small-caps" || w == "all-small-caps")
+				smallcaps = 1;
+			for(; fl != nil; fl = tl fl)
+				g[grp] = hd fl :: g[grp];
+		}
+	}
+	for(i := 0; i < FVn; i++)
+		g[i] = revfeats(g[i]);
+	ra: list of (string, string);
+	for(; alts != nil; alts = tl alts)
+		ra = hd alts :: ra;
+	if(want < 0 || want == FVlig)
+		st.fvlig = g[FVlig];
+	if(want < 0 || want == FVcaps) {
+		st.fvcaps = g[FVcaps];
+		st.smallcaps = smallcaps;
+	}
+	if(want < 0 || want == FVnum)
+		st.fvnum = g[FVnum];
+	if(want < 0 || want == FVea)
+		st.fvea = g[FVea];
+	if(want < 0 || want == FVpos)
+		st.fvpos = g[FVpos];
+	if(want < 0 || want == FValt)
+		st.fvalt = ra;
+	return 1;
+}
+
+revfeats(l: list of (string, int)): list of (string, int)
+{
+	r: list of (string, int);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+# four characters U+20 to U+7E (Fonts 4 §6.12)
+featuretag(s: string): int
+{
+	if(len s != 4)
+		return 0;
+	for(i := 0; i < 4; i++)
+		if(s[i] < 16r20 || s[i] > 16r7E)
+			return 0;
+	return 1;
 }
 
 # ---- colours (CSS Color 4) ----
@@ -7369,12 +7545,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(w < 0.0)
 			return 0;
 		st.stretch = w;
-	"font-variant" or "font-variant-caps" =>
-		case id {
-		"small-caps" or "all-small-caps" => st.smallcaps = 1;
-		"normal" or "none" => st.smallcaps = 0;
-		* => ;
-		}
+	"font-variant" or "font-variant-caps" or "font-variant-ligatures" or "font-variant-numeric" or
+	"font-variant-east-asian" or "font-variant-position" or "font-variant-alternates" =>
+		return fontvariant(st, nm, nows(v));
 	"line-height" =>
 		if(id == "normal") {
 			st.lineheight = kw(Lnormal);
@@ -7490,20 +7663,45 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"normal" or "auto" => st.nokern = 0;
 		* => return 0;
 		}
-	"font-feature-settings" =>
-		# only "kern" matters here: off or 0 turns kerning off
-		on := -1;
-		for(k := 0; k < len v; k++)
-			if(v[k].kind == Kstring && v[k].s == "kern") {
-				on = 1;
-				for(j := k+1; j < len v && v[j].kind != Kcomma; j++)
-					if(v[j].kind == Kident && lower(v[j].s) == "off" || v[j].kind == Knumber && v[j].n == 0.0)
-						on = 0;
-			}
+	"font-language-override" =>
+		x := nows(v);
 		if(id == "normal")
-			on = 1;
-		if(on >= 0)
-			st.nokern = !on;
+			st.langover = nil;
+		else if(len x == 1 && x[0].kind == Kstring && len x[0].s >= 1 && len x[0].s <= 4 && featuretag(x[0].s + "    "[len x[0].s:]))
+			st.langover = x[0].s + "    "[len x[0].s:];
+		else
+			return 0;
+	"font-feature-settings" =>
+		if(id == "normal") {
+			st.ffs = nil;
+			return 1;
+		}
+		x := nows(v);
+		r: list of (string, int);
+		for(i := 0; i < len x; ) {
+			if(x[i].kind != Kstring || !featuretag(x[i].s))
+				return 0;
+			tag := x[i++].s;
+			val := 1;
+			if(i < len x && x[i].kind == Knumber) {
+				if(!(x[i].flag & 1) || x[i].n < 0.0)
+					return 0;
+				val = int x[i++].n;
+			} else if(i < len x && x[i].kind == Kident) {
+				case lower(x[i++].s) {
+				"on" =>	val = 1;
+				"off" =>	val = 0;
+				* =>	return 0;
+				}
+			}
+			r = (tag, val) :: r;
+			if(i < len x) {
+				if(x[i].kind != Kcomma || i + 1 == len x)
+					return 0;
+				i++;
+			}
+		}
+		st.ffs = revfeats(r);
 	"white-space" or "white-space-collapse" or "text-wrap-mode" or "text-wrap" =>
 		x := nows(v);
 		for(k := 0; k < len x; k++) {
@@ -8622,7 +8820,22 @@ copyprop(d, s: ref St, nm: string)
 		d.slant = s.slant;
 	"font-stretch" or "font-width" => d.stretch = s.stretch;
 	"font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" => d.synth = s.synth;
-	"font-variant" or "font-variant-caps" => d.smallcaps = s.smallcaps;
+	"font-variant" =>
+		d.smallcaps = s.smallcaps;
+		d.fvlig = s.fvlig;
+		d.fvcaps = s.fvcaps;
+		d.fvnum = s.fvnum;
+		d.fvea = s.fvea;
+		d.fvpos = s.fvpos;
+		d.fvalt = s.fvalt;
+	"font-variant-caps" =>
+		d.smallcaps = s.smallcaps;
+		d.fvcaps = s.fvcaps;
+	"font-variant-ligatures" => d.fvlig = s.fvlig;
+	"font-variant-numeric" => d.fvnum = s.fvnum;
+	"font-variant-east-asian" => d.fvea = s.fvea;
+	"font-variant-position" => d.fvpos = s.fvpos;
+	"font-variant-alternates" => d.fvalt = s.fvalt;
 	"line-height" => d.lineheight = s.lineheight;
 	"text-align" =>
 		d.align = s.align;
@@ -8631,7 +8844,9 @@ copyprop(d, s: ref St, nm: string)
 	"text-indent" => d.indent = s.indent;
 	"text-transform" => d.transform = s.transform;
 	"letter-spacing" => d.letterspacing = s.letterspacing;
-	"font-kerning" or "font-feature-settings" => d.nokern = s.nokern;
+	"font-kerning" => d.nokern = s.nokern;
+	"font-feature-settings" => d.ffs = s.ffs;
+	"font-language-override" => d.langover = s.langover;
 	"font-variation-settings" => d.fontvars = s.fontvars;
 	"word-spacing" => d.wordspacing = s.wordspacing;
 	"white-space" or "white-space-collapse" or "text-wrap-mode" => d.whitespace = s.whitespace;

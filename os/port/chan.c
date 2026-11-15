@@ -583,6 +583,7 @@ cmount(Chan *new, Chan *old, int flag, char *spec)
 	Mhead *m, **l, *mh;
 	Mount *nm, *f, *um, **h, *om;
 	Mount *volatile snap;
+	Mount *volatile made;
 	int mid;
 
 	if(QTDIR & (old->qid.type^new->qid.type))
@@ -647,9 +648,37 @@ if(old->umh)
 		poperror();
 		runlock(&mh->lock);
 	}
+	made = nil;
 	if(waserror()){
 		mountfree(snap);
+		mountfree(made);
 		nexterror();
+	}
+
+	/*
+	 * The new mounts are made here, before the name space is locked
+	 * and before a head for them is in its table: newmount raises
+	 * when there is no memory.  They were made after, under the
+	 * head's lock: a head just made for an MREPL bind was then left
+	 * in the table with no mount, which the next walk to that
+	 * directory followed, nil.
+	 */
+	nm = newmount(nil, new, flag, spec);
+	made = nm;
+	if(isunion) {
+		/*
+		 *  copy a union when binding it onto a directory
+		 */
+		flg = order | (flag&MREADONLY);
+		if(order == MREPL)
+			flg = MAFTER | (flag&MREADONLY);
+		h = &nm->next;
+		for(um = snap; um; um = um->next) {
+			f = newmount(nil, um->to,
+				flg | (um->mflag&MREADONLY), um->spec);
+			*h = f;
+			h = &f->next;
+		}
 	}
 
 	pg = up->env->pgrp;
@@ -666,40 +695,42 @@ if(old->umh)
 		/*
 		 *  nothing mounted here yet.  create a mount
 		 *  head and add to the hash table.
+		 *
+		 *  The head goes into the table whole or not at all,
+		 *  and the name space is unlocked if it cannot be
+		 *  made: making it, and the old node's mount, can
+		 *  raise, and did with the name space's lock held and
+		 *  no handler to let it go.  Every look-up in that
+		 *  name space then waited for ever.
 		 */
+		if(waserror()){
+			wunlock(&pg->ns);
+			nexterror();
+		}
 		m = newmhead(old);
-		*l = m;
 
 		/*
 		 *  if this is a union mount, add the old
 		 *  node to the mount chain.
 		 */
-		if(order != MREPL)
+		if(order != MREPL){
+			if(waserror()){
+				putmhead(m);
+				nexterror();
+			}
 			m->mount = newmount(m, old, 0, 0);
+			poperror();
+		}
+		poperror();
+		*l = m;
 	}
 	wlock(&m->lock);
-	if(waserror()){
-		wunlock(&m->lock);
-		nexterror();
-	}
 	wunlock(&pg->ns);
 
-	nm = newmount(m, new, flag, spec);
-	if(isunion) {
-		/*
-		 *  copy a union when binding it onto a directory
-		 */
-		flg = order | (flag&MREADONLY);
-		if(order == MREPL)
-			flg = MAFTER | (flag&MREADONLY);
-		h = &nm->next;
-		for(um = snap; um; um = um->next) {
-			f = newmount(m, um->to,
-				flg | (um->mflag&MREADONLY), um->spec);
-			*h = f;
-			h = &f->next;
-		}
-	}
+	/* nothing below raises */
+	for(f = nm; f != nil; f = f->next)
+		f->head = m;
+	made = nil;
 
 	/*
 	 * What MREPL replaces is freed once m->lock is let go, not under
@@ -733,7 +764,6 @@ if(old->umh)
 
 	mid = nm->mountid;
 	wunlock(&m->lock);
-	poperror();
 	poperror();
 	mountfree(snap);
 	if(om != nil)
@@ -876,6 +906,11 @@ if(m->from == nil){
 	continue;
 }
 		if(eqchantdqid(m->from, type, dev, qid, 1)) {
+			if(m->mount == nil){
+				/* not to be: a head in the table has a mount */
+				runlock(&m->lock);
+				continue;
+			}
 			runlock(&pg->ns);
 			/*
 			 * What these replace is let go once this head's lock

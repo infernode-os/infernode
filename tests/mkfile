@@ -211,6 +211,7 @@ TARG=\
 	luciuisrv_test.dis\
 	luciuisrv_frame_test.dis\
 	lucictx_click_test.dis\
+	xenith_tool_test.dis\
 	grpwait_test.dis\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\

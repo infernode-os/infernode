@@ -86,6 +86,33 @@ static char exBadKey[]	= "bad encryption key";
 static char exBadDigest[]	= "bad digest value";
 static char exBadIvec[]	= "bad ivec";
 static char exBadState[] = "bad encryption state";
+static char exBadBits[] = "bad key size";
+
+/*
+ * The size of a key, a prime or a random number is a program's, and was
+ * given to libsec as it came. Below the least each generator can make
+ * it never returned: probably_prime looked for ever for a witness for
+ * 3, which every small search meets, and RSAsk.gen and EGsk.gen ask
+ * again until the result has the bits asked for, which five bits of
+ * modulus never has. That was after release(), so the Prog could not be
+ * killed, and went on using a processor until the emulator ended. At
+ * none or less genprime wrote before its number. Very large ones
+ * overflow libmp's digit counts, or take longer than anyone will wait.
+ */
+enum
+{
+	MinRSAbits	= 16,	/* as libkeyring's rsa_gen: two primes of eight bits */
+	MinDHbits	= 3,	/* the least safe prime is 7 */
+	Maxgenbits	= 1<<16,
+	Maxrandbits	= 1<<26,	/* as IPint's shifts: 8MB of number */
+};
+
+static void
+genbits(int n, int min, int max)
+{
+	if(n < min || n > max)
+		error(exBadBits);
+}
 
 typedef struct XBFstate XBFstate;
 
@@ -1625,6 +1652,7 @@ Keyring_dhparams(void *fp)
 	f->ret->t1 = H;
 	destroy(v);
 
+	genbits(f->nbits, MinDHbits, Maxgenbits);
 	p = mpnew(0);
 	alpha = mpnew(0);
 	release();
@@ -3260,6 +3288,27 @@ Keyring_rc4back(void *fp)
  *  public/secret keys, signing and verifying
  */
 
+/*
+ * The keys below are adts a program fills in, and libsec is given their
+ * numbers as they are. What it would raise for (a modulus of zero to
+ * divide by, a negative exponent) is refused here instead: libsec's own
+ * raise comes after it has allocated its working numbers, which were
+ * lost each time, a few kilobytes of the kernel's pool a call.
+ */
+static void
+modulusok(mpint *m)
+{
+	if(m->top == 0 || m->sign < 0)
+		error(exBadKey);
+}
+
+static void
+exponentok(mpint *e)
+{
+	if(e->sign < 0)
+		error(exBadKey);
+}
+
 static void
 dsapk2pub(DSApub* p, Keyring_DSApk* pk)
 {
@@ -3269,6 +3318,21 @@ dsapk2pub(DSApub* p, Keyring_DSApk* pk)
 	p->q = checkIPint(pk->q);
 	p->alpha = checkIPint(pk->alpha);
 	p->key = checkIPint(pk->key);
+	modulusok(p->p);
+	modulusok(p->q);
+}
+
+/*
+ * A key to sign with or to make another like: its numbers are a
+ * program's (the adt is filled in Limbo). dsasign looks for a k from 1
+ * to q-1 and dsagen for a generator mod p, and with q of 1 or less, or
+ * p of 2 or less, there is none: they looked for ever, released.
+ */
+static void
+dsagenok(DSApub *p)
+{
+	if(mpcmp(p->q, mpone) <= 0 || mpcmp(p->p, mptwo) <= 0)
+		error(exBadKey);
 }
 
 static void
@@ -3277,6 +3341,7 @@ dsask2priv(DSApriv* p, Keyring_DSAsk* sk)
 	if(sk == H || sk->pk == H)
 		error(exNilref);
 	dsapk2pub(&p->pub, sk->pk);
+	dsagenok(&p->pub);
 	p->secret = checkIPint(sk->secret);
 }
 
@@ -3311,6 +3376,7 @@ DSAsk_gen(void *fp)
 	oldpk = nil;
 	if(f->oldpk != H){
 		dsapk2pub(&pub, f->oldpk);
+		dsagenok(&pub);
 		oldpk = &pub;
 	}
 	release();
@@ -3375,6 +3441,7 @@ egpk2pub(EGpub* p, Keyring_EGpk* pk)
 	p->p = checkIPint(pk->p);
 	p->alpha = checkIPint(pk->alpha);
 	p->key = checkIPint(pk->key);
+	modulusok(p->p);
 }
 
 static void
@@ -3383,6 +3450,9 @@ egsk2priv(EGpriv* p, Keyring_EGsk* sk)
 	if(sk == H || sk->pk == H)
 		error(exNilref);
 	egpk2pub(&p->pub, sk->pk);
+	/* egsign looks for a k from 1 to p-2: see dsagenok */
+	if(mpcmp(p->pub.p, mptwo) <= 0)
+		error(exBadKey);
 	p->secret = checkIPint(sk->secret);
 }
 
@@ -3408,6 +3478,7 @@ EGsk_gen(void *fp)
 
 	f = fp;
 	v = *f->ret;
+	genbits(f->nlen, MinDHbits, Maxgenbits);
 	sk = newthing(TEGsk, 0);
 	sk->pk = newthing(TEGpk, 0);
 	*f->ret = sk;
@@ -3466,6 +3537,8 @@ EGpk_verify(void *fp)
 	sig.r = checkIPint(f->sig->r);
 	sig.s = checkIPint(f->sig->s);
 	m = checkIPint(f->m);
+	if(sig.s->sign < 0 || m->sign < 0)
+		return;	/* exponents, to egverify: no signature */
 	release();
 	*f->ret = egverify(&p, &sig, m) == 0;
 	acquire();
@@ -3479,6 +3552,8 @@ rsapk2pub(RSApub* p, Keyring_RSApk* pk)
 	memset(p, 0, sizeof(*p));
 	p->n = checkIPint(pk->n);
 	p->ek = checkIPint(pk->ek);
+	modulusok(p->n);
+	exponentok(p->ek);
 }
 
 static void
@@ -3493,6 +3568,10 @@ rsask2priv(RSApriv* p, Keyring_RSAsk* sk)
 	p->kp = checkIPint(sk->kp);
 	p->kq = checkIPint(sk->kq);
 	p->c2 = checkIPint(sk->c2);
+	modulusok(p->p);
+	modulusok(p->q);
+	exponentok(p->kp);
+	exponentok(p->kq);
 }
 
 static void
@@ -3542,6 +3621,8 @@ RSAsk_gen(void *fp)
 
 	f = fp;
 	v = *f->ret;
+	genbits(f->nlen, MinRSAbits, Maxgenbits);
+	genbits(f->elen, 1, f->nlen);
 	sk = newthing(TRSAsk, 0);
 	sk->pk = newthing(TRSApk, 0);
 	*f->ret = sk;
@@ -3662,6 +3743,7 @@ Keyring_IPint_random(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	genbits(f->maxbits, 0, Maxrandbits);
 	release();
 	b = mprand(f->maxbits, genrandom, nil);
 	acquire();

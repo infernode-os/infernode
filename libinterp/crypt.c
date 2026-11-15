@@ -51,6 +51,52 @@ static char exBadKey[]	= "bad encryption key";
 static char exBadDigest[]	= "bad digest value";
 static char exBadIvec[]	= "bad ivec";
 static char exBadState[] = "bad encryption state";
+static char exBadBits[] = "bad key size";
+
+/*
+ * The size of a key is a program's: as Keyring's (keyring.c). Below
+ * the least a generator can make it never returned (released, so the
+ * Prog could not be killed), at none or less genprime wrote before its
+ * number, and near the largest int libmp's digit counts wrap.
+ */
+enum
+{
+	MinRSAbits	= 16,
+	MinDHbits	= 3,
+	Maxgenbits	= 1<<16,
+};
+
+static int
+bitsok(int n, int min, int max)
+{
+	return n >= min && n <= max;
+}
+
+static void
+genbits(int n, int min, int max)
+{
+	if(!bitsok(n, min, max))
+		error(exBadBits);
+}
+
+/*
+ * What libsec would raise for or never return from, in keys a program
+ * fills in: a modulus of zero to divide by, a negative exponent, and
+ * for signing and generating a q or p with no number below it to find.
+ */
+static void
+modulusok(mpint *m)
+{
+	if(m->top == 0 || m->sign < 0)
+		error(exBadKey);
+}
+
+static void
+exponentok(mpint *e)
+{
+	if(e->sign < 0)
+		error(exBadKey);
+}
 
 /*
  * these structures reveal the C state of Limbo adts in crypt.m
@@ -415,6 +461,7 @@ Crypt_dhparams(void *fp)
 	f->ret->t1 = H;
 	destroy(v);
 
+	genbits(f->nbits, MinDHbits, Maxgenbits);
 	p = mpnew(0);
 	alpha = mpnew(0);
 	release();
@@ -769,6 +816,16 @@ dsapk2pub(DSApub* p, Crypt_PK* pk)
 	p->q = MPX(pk->u.DSA.q);
 	p->alpha = MPX(pk->u.DSA.alpha);
 	p->key = MPX(pk->u.DSA.key);
+	modulusok(p->p);
+	modulusok(p->q);
+}
+
+/* a key to sign with, or to make another like: see modulusok */
+static void
+dsagenok(DSApub *p)
+{
+	if(mpcmp(p->q, mpone) <= 0 || mpcmp(p->p, mptwo) <= 0)
+		error(exBadKey);
 }
 
 static void
@@ -779,6 +836,7 @@ dsask2priv(DSApriv* p, Crypt_SK* sk)
 	if(sk->pick != Crypt_SK_DSA)
 		error(exType);
 	dsapk2pub(&p->pub, sk->u.DSA.pk);
+	dsagenok(&p->pub);
 	p->secret = MPX(sk->u.DSA.secret);
 }
 
@@ -820,12 +878,13 @@ Crypt_dsagen(void *fp)
 	*f->ret = H;
 	destroy(v);
 
-	sk = newSK(f->ret, TSKdsa, Crypt_SK_DSA);
 	oldpk = nil;
 	if(f->oldpk != H && f->oldpk->pick == Crypt_PK_DSA){
 		dsapk2pub(&pub, f->oldpk);
+		dsagenok(&pub);
 		oldpk = &pub;
 	}
+	sk = newSK(f->ret, TSKdsa, Crypt_SK_DSA);
 	dsaxgen(sk, oldpk);
 }
 
@@ -843,6 +902,7 @@ egpk2pub(EGpub* p, Crypt_PK* pk)
 	p->p = MPX(pk->u.Elgamal.p);
 	p->alpha = MPX(pk->u.Elgamal.alpha);
 	p->key = MPX(pk->u.Elgamal.key);
+	modulusok(p->p);
 }
 
 static void
@@ -853,6 +913,9 @@ egsk2priv(EGpriv* p, Crypt_SK* sk)
 	if(sk->pick != Crypt_SK_Elgamal)
 		error(exType);
 	egpk2pub(&p->pub, sk->u.Elgamal.pk);
+	/* egsign looks for a k from 1 to p-2 */
+	if(mpcmp(p->pub.p, mptwo) <= 0)
+		error(exBadKey);
 	p->secret = MPX(sk->u.Elgamal.secret);
 }
 
@@ -898,6 +961,7 @@ Crypt_eggen(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	genbits(f->nlen, MinDHbits, Maxgenbits);
 	sk = newSK(f->ret, TSKeg, Crypt_SK_Elgamal);
 	egxgen(sk, f->nlen, f->nrep);
 }
@@ -915,6 +979,8 @@ rsapk2pub(RSApub* p, Crypt_PK* pk)
 		error(exType);
 	p->n = MPX(pk->u.RSA.n);
 	p->ek = MPX(pk->u.RSA.ek);
+	modulusok(p->n);
+	exponentok(p->ek);
 }
 
 static void
@@ -931,6 +997,10 @@ rsask2priv(RSApriv* p, Crypt_SK* sk)
 	p->kp = MPX(sk->u.RSA.kp);
 	p->kq = MPX(sk->u.RSA.kq);
 	p->c2 = MPX(sk->u.RSA.c2);
+	modulusok(p->p);
+	modulusok(p->q);
+	exponentok(p->kp);
+	exponentok(p->kq);
 }
 
 static void
@@ -978,6 +1048,8 @@ Crypt_rsagen(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	genbits(f->nlen, MinRSAbits, Maxgenbits);
+	genbits(f->elen, 1, f->nlen);
 	sk = newSK(f->ret, TSKrsa, Crypt_SK_RSA);
 	rsaxgen(sk, f->nlen, f->elen, f->nrep);
 }
@@ -1070,16 +1142,20 @@ Crypt_genSK(void *fp)
 
 	sa = string2c(f->algname);
 	if(strcmp(sa, "rsa") == 0){
+		if(!bitsok(f->length, MinRSAbits, Maxgenbits))
+			return;
 		sk = newSK(f->ret, TSKrsa, Crypt_SK_RSA);
 		rsaxgen(sk, f->length, 6, 0);
 	}else if(strcmp(sa, "dsa") == 0){
 		sk = newSK(f->ret, TSKdsa, Crypt_SK_DSA);
 		dsaxgen(sk, nil);
 	}else if(strcmp(sa, "elgamal") == 0){
+		if(!bitsok(f->length, MinDHbits, Maxgenbits))
+			return;
 		sk = newSK(f->ret, TSKeg, Crypt_SK_Elgamal);
 		egxgen(sk, f->length, 0);
 	}
-	/* genSK returns nil for unknown algorithm */
+	/* genSK returns nil for unknown algorithm, and for a size no key has */
 }
 
 void
@@ -1101,6 +1177,8 @@ Crypt_genSKfromPK(void *fp)
 			RSApub p;
 
 			rsapk2pub(&p, f->pk);
+			if(!bitsok(mpsignif(p.n), MinRSAbits, Maxgenbits) || !bitsok(mpsignif(p.ek), 2, mpsignif(p.n)))
+				return;	/* nil, as for a size genSK has no key for */
 			sk = newSK(f->ret, TSKrsa, Crypt_SK_RSA);
 			rsaxgen(sk, mpsignif(p.n), mpsignif(p.ek), 0);
 		}
@@ -1109,6 +1187,8 @@ Crypt_genSKfromPK(void *fp)
 			EGpub p;
 
 			egpk2pub(&p, f->pk);
+			if(!bitsok(mpsignif(p.p), MinDHbits, Maxgenbits))
+				return;
 			sk = newSK(f->ret, TSKeg, Crypt_SK_Elgamal);
 			egxgen(sk, mpsignif(p.p), 0);
 		}
@@ -1117,6 +1197,7 @@ Crypt_genSKfromPK(void *fp)
 			DSApub p;
 
 			dsapk2pub(&p, f->pk);
+			dsagenok(&p);
 			sk = newSK(f->ret, TSKdsa, Crypt_SK_DSA);
 			dsaxgen(sk, &p);
 		}
@@ -1259,6 +1340,8 @@ Crypt_verify(void *fp)
 			egpk2pub(&p, f->pk);
 			sig.r = MPX(f->sig->u.Elgamal.r);
 			sig.s = MPX(f->sig->u.Elgamal.s);
+			if(sig.s->sign < 0 || m->sign < 0)
+				break;	/* exponents, to egverify: no signature */
 			release();
 			*f->ret = egverify(&p, &sig, m) == 0;
 			acquire();

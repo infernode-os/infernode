@@ -94,6 +94,11 @@ def main():
                 out = sh("; ".join([setpin(n, "out"), "echo 1 > %s/%d/level" % (G, n), rd_(n), "echo 0 > %s/%d/level" % (G, n), rd_(n),
                          setpin(n, "in", "up"), rd_(n), setpin(n, "in", "down"), rd_(n), setpin(n, "in")]), wait=0.8)
                 vals = [v_ for n_, v_ in levels(out) if int(n_) == n]
+                owner = re.search(r"in use by (\w+)", out)
+                if owner:
+                    # the kernel's own (the Pi 5's second console has 12 and 13): refused, as it should be
+                    b.skip("BCM %d" % n, "the kernel's (%s): refused, as a claimed pin is" % owner.group(1))
+                    continue
                 b.check(vals == ["1", "0", "1", "0"], "BCM %d: driven 1,0 reads 1,0; pulled up,down reads 1,0 (got %s)" % (n, ",".join(vals)), out.strip()[-80:])
         out = sh("echo 'edge both' > %s/14/ctl" % G, "cat %s/4/ctl" % G, wait=0.5)
         b.check("in use" in out or "rror" in out, "a pin a driver has claimed (BCM 14) refuses 'edge'", out.strip()[-100:])

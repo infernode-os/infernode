@@ -829,6 +829,18 @@ client put in a document is not saved on the user's way out without the user
 asking. The same holds for Xenith: an agent's windows are labels, never file
 names.
 
+The `matrix` tool composes into Matrix's name space, which is also the user's.
+An agent's composition places display modules, and names a service or a watch
+only over Matrix's own data (`/tmp/matrix`) or exactly as the live composition
+already has it: a service's outputs come back to the agent (`out`), and a
+watch's arms tell it what a file holds, so neither is the agent's to point at
+the user's files. A library composition is the owner's grant, loaded with
+`ctl load`. What its services publish an agent holding the tool can read:
+with `sysmon` loaded that is the process table and the network census, so
+"bounded process visibility" below is a property of the agent's own name
+space, not of what a loaded Matrix service reports. Hosting an app in a
+composition is never an agent's line.
+
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
 `/mnt/vision` only from `vision`, `/mnt/wikia` only from `wiki`,

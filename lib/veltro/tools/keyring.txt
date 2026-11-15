@@ -10,8 +10,10 @@ Usage:
   keyring need <description>         Launch Keyring and tell the user
                                      what credential is needed
   keyring check <service>            Check if a service has credentials
-                                     configured. Returns yes/no only —
-                                     never reveals the actual key.
+                                     configured. Returns yes or no, or
+                                     "unknown" when this tool cannot see
+                                     factotum (the usual case) — never
+                                     reveals the actual key.
 
 Examples:
   keyring need "Anthropic API key for Claude access"

@@ -891,6 +891,7 @@ dis/tests/pdfrender.dis
 dis/tests/pdftext_test.dis
 dis/tests/pgrp_race_test.dis
 dis/tests/png_hostile_test.dis
+dis/tests/devip_conv_test.dis
 dis/tests/spawn_budget_test.dis
 dis/tests/sheetview_test.dis
 dis/tests/p9any_timeout_test.dis

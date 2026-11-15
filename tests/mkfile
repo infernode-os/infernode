@@ -100,6 +100,7 @@ TARG=\
 	html_test.dis\
 	imgload_test.dis\
 	png_hostile_test.dis\
+	devip_conv_test.dis\
 	icon_test.dis\
 	touchgest_test.dis\
 	docengine_test.dis\

@@ -235,6 +235,7 @@ TARG=\
 	sed_test.dis\
 	sort_test.dis\
 	spawn_test.dis\
+	speech9p_say_test.dis\
 	task_concurrent_probe.dis\
 	task_consistency_test.dis\
 	taskparse_test.dis\

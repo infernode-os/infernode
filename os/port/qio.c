@@ -518,6 +518,9 @@ qconsume(Queue *q, void *vp, int len)
 		if(b == 0){
 			q->state |= Qstarve;
 			iunlock(&q->l);
+			/* (the empty blocks passed on the way here were dropped unfreed) */
+			if(tofree != nil)
+				freeblist(tofree);
 			return -1;
 		}
 		QDEBUG checkb(b, "qconsume 1");
@@ -633,9 +636,10 @@ qpassnolim(Queue *q, Block *b)
 	ilock(&q->l);
 
 	if(q->state & Qclosed){
-		freeblist(b);
+		len = BALLOC(b);	/* before it is freed: it was read after */
 		iunlock(&q->l);
-		return BALLOC(b);
+		freeblist(b);
+		return len;
 	}
 
 	/* add buffer to queue */
@@ -1058,7 +1062,21 @@ qbread(Queue *q, int len)
 	if(n > len){
 		if((q->state&Qmsg) == 0){
 			n -= len;
+			/*
+			 * allocb raises when there is no memory, and the
+			 * queue's lock is held here: the reader's handler
+			 * lets go of rlock alone, so the queue stayed locked
+			 * for good and the block taken off it was lost. A
+			 * program can run the pool short. The block goes
+			 * back whole and the lock is let go first.
+			 */
+			if(waserror()){
+				qputback(q, nb);
+				iunlock(&q->l);
+				nexterror();
+			}
 			b = allocb(n);
+			poperror();
 			memmove(b->wp, nb->rp+len, n);
 			b->wp += n;
 			qputback(q, b);

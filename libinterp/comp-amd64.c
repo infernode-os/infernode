@@ -3504,7 +3504,12 @@ compile(Module *m, int size, Modlink *ml)
 	 * the module failed to compile ("phase error").
 	 */
 	patch = mallocz((size+1)*sizeof(*patch), 1);
-	tinit = mallocz(m->ntype*sizeof(*tinit), 0);
+	/*
+	 * Cleared too: it was not, and a stale byte had typecom make
+	 * code for a type no frame instruction names, and fail the
+	 * compile when that type's code was more than a slab holds.
+	 */
+	tinit = mallocz(m->ntype*sizeof(*tinit), 1);
 	if(compile_tmp == nil) {
 		compile_tmp = jitmalloc(COMPILE_TMP);
 		if(compile_tmp == nil)

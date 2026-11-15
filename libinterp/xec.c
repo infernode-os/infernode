@@ -185,6 +185,8 @@ OP(iexpw)
 	n = W(s);
 	inv = 0;
 	if(n < 0){
+		if(x == 0)
+			error(exZdiv);	/* as the compiler says of a constant */
 		n = -n;
 		inv = 1;
 	}
@@ -197,7 +199,7 @@ OP(iexpw)
 		x *= x;
 	}
 	if(inv)
-		r = 1/r;
+		r = r == 1 || r == -1? r: 0;	/* 1/r, and r may have wrapped to 0 */
 	W(d) = CW(r);
 }
 OP(iexpl)
@@ -210,6 +212,8 @@ OP(iexpl)
 	n = W(s);
 	inv = 0;
 	if(n < 0){
+		if(x == 0)
+			error(exZdiv);
 		n = -n;
 		inv = 1;
 	}
@@ -222,7 +226,7 @@ OP(iexpl)
 		x *= x;
 	}
 	if(inv)
-		r = 1/r;
+		r = r == 1 || r == -1? r: 0;	/* 1/r, and r may have wrapped to 0 */
 	V(d) = r;
 }
 OP(iexpf)
@@ -1691,6 +1695,21 @@ OP(mulx)
 		r >>= (-p);
 	W(d) = CW(r);
 }
+/*
+ * A fixed-point divide.  By zero it was the host's own trap (an
+ * exception that was not "zero divide", or on arm64 and riscv64 no
+ * exception and 0), and the most negative value over -1 traps too.
+ */
+static LONG
+xdiv(LONG s, LONG y)
+{
+	if(y == 0)
+		error(exZdiv);
+	if(y == -1)
+		return (LONG)(0 - (uvlong)s);
+	return s / y;
+}
+
 OP(divx)
 {
 	WORD p;
@@ -1702,7 +1721,7 @@ OP(divx)
 		s <<= p;
 	else
 		s >>= (-p);
-	s /= (LONG)W(s);
+	s = xdiv(s, (LONG)W(s));
 	W(d) = CW(s);
 }
 OP(cvtxx)
@@ -1736,7 +1755,7 @@ OP(mulx0)
 		r <<= p;
 	else
 		r >>= (-p);
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 OP(divx0)
@@ -1757,7 +1776,7 @@ OP(divx0)
 		s <<= p;
 	else
 		s >>= (-p);
-	s /= (LONG)y;
+	s = xdiv(s, (LONG)y);
 	W(d) = CW(s);
 }
 OP(cvtxx0)
@@ -1777,7 +1796,7 @@ OP(cvtxx0)
 		r <<= p;
 	else
 		r >>= (-p);
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 OP(mulx1)
@@ -1815,7 +1834,7 @@ OP(mulx1)
 	else
 		r >>= (-p);
 	r += (LONG)v;
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 OP(divx1)
@@ -1851,7 +1870,7 @@ OP(divx1)
 		s <<= p;
 	else
 		s >>= (-p);
-	s /= (LONG)y;
+	s = xdiv(s, (LONG)y);
 	W(d) = CW(s + v);
 }
 OP(cvtxx1)
@@ -1887,7 +1906,7 @@ OP(cvtxx1)
 	else
 		r >>= (-p);
 	r += (LONG)v;
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 /*

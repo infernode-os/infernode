@@ -143,6 +143,8 @@ TARG=\
 	math_edge_test.dis\
 	alt_edge_test.dis\
 	toolcall.dis\
+	tls_closeread_test.dis\
+	llmclient_edge_test.dis\
 	fetchtools_edge_test.dis\
 	fakecs.dis\
 	webclient_body_test.dis\

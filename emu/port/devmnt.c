@@ -634,13 +634,29 @@ mntclunk(Chan *c, int t)
 	poperror();
 }
 
+/*
+ * The connection is gone: what is queued (orphans waiting for replies
+ * that will not come) and held is freed.  Both lists are taken off the
+ * mount first and each call let go of it (m nil): mntfree of a call
+ * still on m looks along m->queue for a flush naming it, and freed
+ * where they stood, the calls before it on the queue were freed memory
+ * by then, read with m->l held (macOS ARM64 CI: "PC in mntfree", "fault
+ * while holding 1 lock(s)"; ninep_orphanclose_test under tools/sanemu).
+ */
 void
 muxclose(Mnt *m)
 {
-	Mntrpc *q, *r;
+	Mntrpc *q, *r, *ql, *hl;
 
-	for(q = m->queue; q; q = r) {
+	lock(&m->l);
+	ql = m->queue;
+	m->queue = nil;
+	hl = m->held;
+	m->held = nil;
+	unlock(&m->l);
+	for(q = ql; q != nil; q = r) {
 		r = q->list;
+		q->m = nil;
 		if(q->orphan == 1){
 			/* abandoned, its caller still holding it: that caller frees it */
 			q->orphan = 0;
@@ -650,12 +666,11 @@ muxclose(Mnt *m)
 		q->orphan = 0;
 		mntfree(q);
 	}
-	for(q = m->held; q != nil; q = r){
+	for(q = hl; q != nil; q = r){
 		r = q->list;
 		q->m = nil;
 		mntfree(q);
 	}
-	m->held = nil;
 	m->id = 0;
 	free(m->version);
 	m->version = nil;

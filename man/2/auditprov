@@ -14,6 +14,7 @@ attached: fn(): int;
 put:      fn(data: array of byte): (string, string, string);
 get:      fn(score: string): (array of byte, string);
 sha256:   fn(data: array of byte): string;
+value:    fn(s: string): string;
 log:      fn(source, event, msg: string, payload: array of byte): int;
 .EE
 .SH DESCRIPTION
@@ -67,6 +68,11 @@ stores a payload and returns its score and SHA-256;
 identical payloads dedupe to the same score.
 .B Get
 fetches a payload back by score.
+It checks nothing against a record: compare
+.B sha256
+of what it returns with the record's
+.B sha256=
+before relying on it.
 .B Log
 combines the two: it stores
 .I payload
@@ -77,10 +83,65 @@ append-only sink
 It returns 0 on success and \-1 if the record could not be sealed.
 If the payload cannot be stored, the record is still sealed with
 .B content=unstored
-(the event is never lost) and \-2 is returned; the caller decides
+(the event is never lost) and
+.BR why=no-store ,
+.B why=too-large
+or
+.BR why=store-failed ,
+and \-2 is returned; the caller decides
 whether that is fatal (see
 .B Audit->ONFILE
 for the fail-closed convention).
+.PP
+.I Msg
+is the caller's
+.IB key = value
+fields, but text in it may not be the caller's: a tool's name is the
+model's, a file's name whoever made the file's.
+.B Value
+writes such text as one word, with its blanks, controls,
+.B =
+and
+.B %
+as
+.BI % XX
+.RB ( %u\fIXXXX\fP
+from U+0100), so that it is one value and holds no
+.IB key =
+of its own; a caller writes
+.EX
+	"tool=" + auditprov->value(name)
+.EE
+and
+.B Auditchain->unvalue
+reads it back.
+.B Log
+holds the record to this whatever the caller did:
+.BR content ,
+.BR sha256 ,
+.BR size ,
+.B why
+and
+.B cut
+are the emitter's keys, each given once in a record, by
+.BR log ;
+a word of
+.I msg
+that begins with one of them, or with a key that
+.I msg
+gives more than once, is not a field and is written as
+.B value
+writes it.
+A reader of a record thus gets the provenance fields
+.B log
+wrote, and no value at all for a key given twice, rather than one of
+two.
+A
+.I msg
+of more than
+.B MAXMSG
+bytes is cut there and the record says
+.BI cut= length.
 .SH SOURCE
 .B /appl/lib/auditprov.b
 .SH SEE ALSO

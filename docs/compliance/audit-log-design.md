@@ -134,7 +134,8 @@ seq  time        source   event      hash             message
   record was hashed with CR/LF turned to blanks and replayed with runs of blanks made one: a
   CR beside a blank in any field — a tool name a model chose, a user name a peer sent — left
   a record no replay could verify.) One write is one record, at most 4096 bytes.
-- A value that is not the emitter's own text is written with `Auditchain->value`:
+- A value that is not the emitter's own text is written with `Auditchain->value`
+  (`AuditProv->value` for a provenance record):
   blanks, controls, `=` and `%` as `%XX`, so it is one word and carries no `key=` of its own.
 - `hash` = the chain hash for that record (see §5). The caller writes only `source event msg`.
 - Record 1 of every server run is `auditfs start host=<sysname> replay=ok|broken@<n>`:
@@ -237,6 +238,11 @@ spawns) dropped in **without reworking the spine**, exactly as designed:
    mjl's public-domain GSoC 2007 ventivac work — the server the in-tree vac stack always
    referenced) as a vac hash tree, and the record carries
    `content=<score> sha256=<hex> size=<n>` (`auditprov(2)`; read back with `auditget(1)`).
+   Those keys are the emitter's: `auditprov` writes each once, and a word of the caller's
+   message that begins with one — or with any key the message gives twice — is written as
+   text, not as a field, so a tool name of the model's choosing cannot put its own
+   `content=` or `sha256=` in a sealed record, nor a second `status=` beside the harness's.
+   A caller writes text that is not its own with `value()`, and then it can add no field.
    The chain line stays tiny, identical content dedupes, and the sensitive payload is
    separable from the broadly-auditable trail (confidentiality/minimization).
    **The SHA-256 pin is deliberate:** venti scores are SHA-1, which is collision-broken, so

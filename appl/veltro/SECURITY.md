@@ -378,7 +378,9 @@ What it appends cannot harm the trail either: `auditfs` puts every record in
 one canonical text before hashing it (controls and line breaks are blanks,
 one write is one bounded record), so neither a writer nor text sealed on a
 model's behalf (a tool's name) can break the chain for the records after it,
-split a record in two, or pass for the server's `checkpoint`.
+split a record in two, or pass for the server's `checkpoint`. Provenance
+records keep their `content=`, `sha256=` and `size=` for the emitter: a name
+holding those keys is sealed as text (`auditprov(2)`).
 
 ## Subagent Architecture
 

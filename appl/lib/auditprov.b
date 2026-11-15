@@ -42,6 +42,9 @@ include "vac.m";
 include "audit.m";
 	audit: Audit;
 
+include "auditchain.m";
+	ac: Auditchain;
+
 include "auditprov.m";
 
 session: ref Session;
@@ -71,6 +74,10 @@ init(): string
 	if(audit == nil)
 		return sys->sprint("load audit: %r");
 	audit->init();
+	ac = load Auditchain Auditchain->PATH;
+	if(ac == nil)
+		return sys->sprint("load auditchain: %r");
+	ac->init();
 	sema = Semaphore.new();
 	return nil;
 }
@@ -241,18 +248,110 @@ get(scorestr: string): (array of byte, string)
 	}
 }
 
+value(s: string): string
+{
+	return ac->value(s);
+}
+
+# The emitter's own keys: no word of a caller's message begins with one.
+reserved(k: string): int
+{
+	return k == "content" || k == "sha256" || k == "size" || k == "why" || k == "cut";
+}
+
+# The key of a key=value word, nil if it is not one.
+keyof(w: string): string
+{
+	for(i := 1; i < len w; i++)
+		if(w[i] == '=')
+			return w[0:i];
+	return nil;
+}
+
+# A caller's message as the fields of a record.  The message is the
+# harness's, but text in it may not be: a tool's name is the model's, and
+# a name of " status=ok content=0000 sha256=ffff size=1" was sealed as
+# those fields, ahead of the ones written here.  A caller writes such a
+# value with value(), which makes it one word with no key in it.  For a
+# caller that has not: a word here is a field only if its key is not one
+# of the emitter's and is given once in the message.  Any other is
+# written as value() writes it, its '=' included, so it reads as text and
+# not as a field: a reader gets the provenance fields this module wrote,
+# and no value for a key the message gave twice, rather than one of two.
+fields(msg: string): string
+{
+	(nil, words) := sys->tokenize(ac->text(msg), " ");
+	seen, twice: list of string;
+	for(l := words; l != nil; l = tl l) {
+		k := keyof(hd l);
+		if(k == nil)
+			continue;
+		if(has(seen, k)) {
+			if(!has(twice, k))
+				twice = k :: twice;
+		} else
+			seen = k :: seen;
+	}
+	r := "";
+	for(l = words; l != nil; l = tl l) {
+		w := hd l;
+		k := keyof(w);
+		if(k != nil && (reserved(k) || has(twice, k)))
+			w = ac->value(w);
+		if(r != "")
+			r += " ";
+		r += w;
+	}
+	# One record is one write of one 9P message: a longer line would
+	# reach the log in pieces, each sealed as a record of its own.
+	n := 0;
+	for(i := 0; i < len r; i++) {
+		c := r[i];
+		w := 1;
+		if(c >= 16r80)
+			w++;
+		if(c >= 16r800)
+			w++;
+		if(c >= 16r10000)
+			w++;
+		if(n + w > MAXMSG)
+			return r[0:i] + " cut=" + string len r;
+		n += w;
+	}
+	return r;
+}
+
+has(l: list of string, s: string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
 log(source, event, msg: string, payload: array of byte): int
 {
+	source = ac->token(source);
+	event = ac->token(event);
+	msg = fields(msg);
 	if(payload == nil)
 		return audit->log(source, event, msg);
+	if(msg != "")
+		msg += " ";
 
 	(score, sha, err) := put(payload);
 	if(err != nil) {
-		if(audit->log(source, event, msg + " content=unstored sha256=" + sha +
-		    " size=" + string len payload) < 0)
+		# why: the trail shows a gap; say which kind
+		why := "store-failed";
+		if(len payload > MAXPAYLOAD)
+			why = "too-large";
+		else if(session == nil)
+			why = "no-store";
+		if(audit->log(source, event, msg + "content=unstored sha256=" + sha +
+		    " size=" + string len payload + " why=" + why) < 0)
 			return -1;
 		return -2;
 	}
-	return audit->log(source, event, msg + " content=" + score + " sha256=" + sha +
+	return audit->log(source, event, msg + "content=" + score + " sha256=" + sha +
 	    " size=" + string len payload);
 }

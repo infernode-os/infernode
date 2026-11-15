@@ -252,24 +252,26 @@ draw(dst: ref Image)
 	gap := gapafter();
 	for(c := 0; c < len series; c++) {
 		col := palette[c % len palette];
-		pts := array[nsamp] of Point;
+		# where each sample falls, to the fraction of a pixel: rounded to
+		# whole pixels a slow change is flat runs and one-pixel steps,
+		# which the anti-aliasing only softens
+		xs := array[nsamp] of real;
+		ys := array[nsamp] of real;
 		for(i := 0; i < nsamp; i++) {
-			x: int;
 			if(times != nil && times[nsamp-1] > times[0])
-				x = plot.min.x + int (real (times[i] - times[0]) / real (times[nsamp-1] - times[0]) * real (plot.dx() - 1));
+				xs[i] = real plot.min.x + real (times[i] - times[0]) / real (times[nsamp-1] - times[0]) * real (plot.dx() - 1);
 			else
-				x = plot.min.x + i * (plot.dx() - 1) / (nsamp - 1);
-			y := plot.max.y - 1 - int ((series[c][i] - lo) / (hi - lo) * real (plot.dy() - 2));
-			pts[i] = Point(x, y);
+				xs[i] = real plot.min.x + real i * real (plot.dx() - 1) / real (nsamp - 1);
+			ys[i] = real (plot.max.y - 1) - (series[c][i] - lo) / (hi - lo) * real (plot.dy() - 2);
 		}
 		# a run of samples with no gap is one line; a lone sample a dot
 		s := 0;
 		for(i = 1; i <= nsamp; i++)
 			if(i == nsamp || (gap > 0 && times[i] - times[i-1] > gap)){
 				if(i - s >= 2)
-					polyline(dst, pts[s:i], 2.0, col);
+					polyline(dst, columns(xs[s:i], ys[s:i]), 2.0, col);
 				else
-					dst.fillellipse(pts[s], 1, 1, col, (0, 0));
+					dst.fillellipse(Point(int xs[s], int ys[s]), 1, 1, col, (0, 0));
 				s = i;
 			}
 	}
@@ -350,11 +352,42 @@ shutdown()
 	series = nil;
 }
 
-# a polyline through pixel centres, anti-aliased (Image.strokepath)
-polyline(dst: ref Image, pts: array of Point, w: real, col: ref Image)
+# more samples than pixels: one point per pixel column (int of x - 0.5,
+# its floor: x is not negative and int rounds), the mean of
+# those in it (drawn one by one they zigzag within the column)
+columns(xs, ys: array of real): (array of real, array of real)
 {
-	p := Path.new().moveto(real pts[0].x + 0.5, real pts[0].y + 0.5);
-	for(i := 1; i < len pts; i++)
-		p.lineto(real pts[i].x + 0.5, real pts[i].y + 0.5);
-	dst.strokepath(p, w, Draw->Capround, Draw->Joinround, col, pts[0]);
+	ox := array[len xs] of real;
+	oy := array[len xs] of real;
+	n := 0;
+	for(i := 0; i < len xs; ){
+		col := int (xs[i] - 0.5);
+		sx := 0.0;
+		sy := 0.0;
+		k := 0;
+		for(; i < len xs && int (xs[i] - 0.5) == col; i++){
+			sx += xs[i];
+			sy += ys[i];
+			k++;
+		}
+		ox[n] = sx / real k;
+		oy[n] = sy / real k;
+		n++;
+	}
+	return (ox[0:n], oy[0:n]);
+}
+
+# a polyline through points in pixel coordinates, anti-aliased
+# (Image.strokepath); pixel x's centre is x + 0.5
+polyline(dst: ref Image, pt: (array of real, array of real), w: real, col: ref Image)
+{
+	(xs, ys) := pt;
+	if(len xs == 1){
+		dst.fillellipse(Point(int xs[0], int ys[0]), 1, 1, col, (0, 0));
+		return;
+	}
+	p := Path.new().moveto(xs[0] + 0.5, ys[0] + 0.5);
+	for(i := 1; i < len xs; i++)
+		p.lineto(xs[i] + 0.5, ys[i] + 0.5);
+	dst.strokepath(p, w, Draw->Capround, Draw->Joinround, col, (0, 0));
 }

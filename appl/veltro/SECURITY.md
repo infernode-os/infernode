@@ -233,9 +233,14 @@ root from bypassing activity isolation.
 
 The shared `/tmp/veltro` root is also allowlisted. A generic invocation sees
 only `scratch`; core state such as task metadata, memory, plan/todo fallback
-files, and GUI IPC trees are present only when the relevant tool or an explicit
-path capability names them. Trusted app control files under `/tmp/veltro/*/ctl`
-must never be ambient.
+files, and GUI IPC trees are present only when the relevant tool names them.
+The memory and plan tools keep one store an activity
+(`/tmp/veltro/memory/<id>`, `/tmp/veltro/plans/a<id>`), and a call of either
+sees its own activity's alone, as scratch. Those directories and the todo
+file are the tools' state, never a path grant. Any other path granted under
+`/tmp/veltro` shows exactly what was granted (not its first component whole)
+and is bound read-only unless it is a write path. Trusted app control files
+under `/tmp/veltro/*/ctl` must never be ambient.
 
 Memory and plans are kept per activity. The `memory` tool stores under
 `/tmp/veltro/memory/<activity-id>` and the `plan` tool (when no session
@@ -266,12 +271,12 @@ absent, not present-and-denied:
 | 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
 | 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
 | 4 | `/n` | Capability-derived foreign imports: presentation and exact `/n/local` grants | Foreign-tree capabilities |
-| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services (`msg`, `wallet`, `ui`) are narrowed again | Synthesized-service capabilities |
+| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services (`msg`, `wallet`, `ui`) are narrowed again: the wallet to its accounts' proposal and read files, the UI (for every tool but `task`) to the tool's own activity without its conversation, with `activity/current` reading as that activity | Synthesized-service capabilities |
 | 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
 | 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
-| 8 | `/prog` | Current pid for non-exec tools; empty for exec, including exec with `shellcmds` | No parent/sibling inspection or control |
+| 8 | `/prog` | Current pid for non-exec tools; empty for exec, including exec with `shellcmds`; whole for the spawn tool's own call, which ends its subagents by their `ctl` files | No parent/sibling inspection or control |
 | 9 | `/` | Base system dirs plus only capability-derived `/mnt`, network, UI, phone, and explicit root trees | Replace the host-backed root union |
-| 10 | `/tool` and extra roots | Tool metadata/current tool plus recursively narrowed explicit path grants | Remove generic control files and sibling paths |
+| 10 | `/tool` and extra roots | Tool metadata/current tool plus recursively narrowed explicit path grants; for a spawned child, files of its own saying what it holds, with no tool to call | Remove generic control files and sibling paths; keep a child off its parent's tool server |
 | 11 | activity views | Per-activity cowfs writes, scratch, task metadata, and tool-specific `/tmp/veltro` entries | Isolate mutable state |
 | 12 | `/tmp` | `veltro/` only, writable | Hide `/tmp/.veltro-ns` after construction |
 

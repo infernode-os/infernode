@@ -3568,7 +3568,10 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 	if(kerr != nil)
 		return (ALERT_ILLEGAL_PARAMETER, nil, kerr);
 
-	sh := buildserverhello(randombytes(32), h.sessid, suite, group, myshare);
+	srandom := randombytes(32);
+	if(srandom == nil)
+		return (0, nil, "tls: no source of random numbers");
+	sh := buildserverhello(srandom, h.sessid, suite, group, myshare);
 	if((err = sendhsmsg(cs, HT_SERVER_HELLO, sh)) != nil)
 		return (0, nil, err);
 	if(len h.sessid > 0 && !sentccs)
@@ -3757,6 +3760,8 @@ serverkeyex(cs: ref ConnState, group: int, share: array of byte): (array of byte
 x25519pair(peer: array of byte): (array of byte, array of byte)
 {
 	priv := randombytes(32);
+	if(priv == nil)
+		return (nil, nil);	# no generator: no key, as the client's side
 	pub := keyring->x25519_base(priv);
 	ss := keyring->x25519(priv, peer);
 	wipebytes(priv);

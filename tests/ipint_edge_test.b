@@ -512,8 +512,12 @@ testPower(t: ref T)
 	stop <-= 1;
 	t.asserteq(y.bits(), 3323908, "3**(2**21) has 3323908 bits");
 	t.log(sys->sprint("3**(2**21): %d ms, %d ticks of 10 ms meanwhile", ms, during));
+	# Held, the VM gives the ticker no turn at all until the power is
+	# done.  How many it gets with the VM let go is the host's business
+	# (an Intel Mac runner gave a 10 ms sleep 55 ms: 19 turns in 1055 ms),
+	# so the test asks for a few, not for a rate.
 	if(ms >= 200)
-		t.assert(during >= ms/40, sys->sprint("the ticker ran %d times in the %d ms it took", during, ms));
+		t.assert(during >= 3, sys->sprint("the ticker ran %d times in the %d ms it took", during, ms));
 }
 
 init(nil: ref Draw->Context, args: list of string)

@@ -1813,7 +1813,12 @@ jobs:
           - arch: amd64
             label: AMD64
             runner: macos-15-intel
-            backstop: 1800  # an i7-8700B, interpreted: slower still
+            # An i7-8700B, interpreted: slower still.  At 1800 the suite
+            # was cut off in its last few tests on 2026-11-15, nothing
+            # hung: the tests it had finished add up to 1801 s (crypto
+            # 247 s, tls_server 209 s).  The backstop bounds a hang, and
+            # the job has 75 minutes.
+            backstop: 2400
     env:
       ROOT: ${{ github.workspace }}
       OBJTYPE: ${{ matrix.arch }}

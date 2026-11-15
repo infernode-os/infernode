@@ -514,6 +514,19 @@ exec(args: string): string
 			}
 		}
 
+		# What the child's restriction would refuse of its grants is
+		# refused before a session is opened for it, in the words the
+		# child would have used.
+		capserr := nsconstruct->checkchildcaps(caps);
+		if(capserr != nil) {
+			resultchan <-= ref ResultMsg(idx, "ERROR:namespace restriction failed: " + capserr);
+			if(sched)
+				unsched(1);
+			scheduled[idx] = 0;
+			idx++;
+			continue;
+		}
+
 		# The child's model session, opened here: its parent closes it
 		# when the child ends, however it ends.  (The child opened it,
 		# and closed it by a name its own name space no longer had:

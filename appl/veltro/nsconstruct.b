@@ -210,6 +210,31 @@ restrictchildns(caps: ref Capabilities, auditrequired: int): string
 	return restrictnsx(caps, Kchild, auditrequired);
 }
 
+# The refusals of restrictnsx for a child that need nothing done to find:
+# the same checks, in the same order.
+checkchildcaps(caps: ref Capabilities): string
+{
+	err := validatecapnames(caps.tools, "tool");
+	if(err != nil)
+		return err;
+	err = validatetoolnames(caps.tools);
+	if(err != nil)
+		return err;
+	err = validatecapnames(caps.shellcmds, "shell command");
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.paths, "path", caps.tools);
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.writepaths, "write path", caps.tools);
+	if(err != nil)
+		return err;
+	err = validatechildpaths(caps.paths);
+	if(err != nil)
+		return err;
+	return validatechildtools(caps.tools);
+}
+
 # The current directory is a channel taken before the restriction: left
 # so, a relative name was resolved outside it, from the directory the
 # process started in (an agent asked for ../file read beside its grant,

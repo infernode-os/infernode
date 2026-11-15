@@ -86,6 +86,13 @@ NsConstruct: module {
 	# refused.
 	restrictchildns: fn(caps: ref Capabilities, auditrequired: int): string;
 
+	# What restrictchildns would refuse caps for by its names and paths
+	# alone, with nothing restricted: nil if nothing.  For a caller to ask
+	# before it starts anything on the child's behalf (spawn opens the
+	# child's model session first, and a grant that would be refused was
+	# reported as that session's failure where there was none to open).
+	checkchildcaps: fn(caps: ref Capabilities): string;
+
 	# True if a subagent may not hold the tool: its effect needs the
 	# user's approval, which the coordinator asks for before its own
 	# agent's call and which a subagent's calls, made as module calls,

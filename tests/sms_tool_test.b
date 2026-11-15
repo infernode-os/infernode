@@ -50,12 +50,12 @@ run(name: string, testfn: ref fn(t: ref T))
 testRejectsUnsafeNumber(t: ref T)
 {
 	r := tool->exec("+15551234\nsend +1999 owned hello");
-	t.assert(hassubstr(r, "sms: unsafe number"),
-		"rejects newline in recipient before /phone/sms write");
+	t.assert(hassubstr(r, "not a phone number") && !hassubstr(r, "/phone/sms"),
+		"rejects newline in recipient before /phone/sms write: " + r);
 
 	r = tool->exec("alice hello");
-	t.assert(hassubstr(r, "sms: unsafe number"),
-		"rejects non-phone recipient token before /phone/sms write");
+	t.assert(hassubstr(r, "not a phone number") && !hassubstr(r, "/phone/sms"),
+		"rejects non-phone recipient token before /phone/sms write: " + r);
 
 	r = tool->exec("+1-555-1234 hello");
 	t.assert(hassubstr(r, "/phone/sms") || hassubstr(r, "queued"),

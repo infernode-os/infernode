@@ -122,7 +122,7 @@ createbranch(repo: ref Repo, gitdir, name: string)
 	if(rrerr != nil)
 		fail("resolve HEAD: " + rrerr);
 
-	git->writeref(gitdir, refname, hash);
+	check(git->writeref(gitdir, refname, hash));
 	sys->print("Created branch '%s' at %s\n", name, hash.hex()[:7]);
 }
 
@@ -150,4 +150,11 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/branch: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
 }

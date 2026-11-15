@@ -95,6 +95,7 @@ TARG=\
 	memfs_test.dis\
 	font_format_test.dis\
 	git_test.dis\
+	git_hostile_test.dis\
 	goroutine_leak_test.dis\
 	hello_test.dis\
 	appfs_fake.dis\

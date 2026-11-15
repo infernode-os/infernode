@@ -54,6 +54,7 @@ CEntry: adt {
 repo: ref git->Repo;
 gitdir: string;
 dflag := 0;
+nflag := 0;	# serve with no device attach and no host symlinks
 ss: ref Styxserver;
 
 # Object cache: index -> CEntry
@@ -99,7 +100,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(sys->NEWPGRP, nil);
 
 	arg->init(args);
-	arg->setusage(arg->progname() + " [-D] [-m mtpt] gitdir");
+	arg->setusage(arg->progname() + " [-Dn] [-m mtpt] gitdir");
 
 	mtpt: string;
 	while((ch := arg->opt()) != 0)
@@ -109,6 +110,8 @@ init(nil: ref Draw->Context, args: list of string)
 			dflag = 1;
 		'm' =>
 			mtpt = arg->earg();
+		'n' =>
+			nflag = 1;
 		* =>
 			arg->usage();
 		}
@@ -146,7 +149,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	navchan := chan of ref Navop;
 	nav := Navigator.new(navchan);
-	spawn navigator(navchan);
+	navready := chan of int;
+	spawn navigator(navchan, navready);
+	<-navready;
 
 	msgc: chan of ref Tmsg;
 	(msgc, ss) = Styxserver.new(fds[0], nav, big rootqid);
@@ -164,8 +169,22 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("git/fs mounted on %s\n", mtpt);
 }
 
+# With -n the processes that read the repository give up device attach
+# and host symbolic links (NODEVS), each in a copy of the name space taken
+# before the mount is made, so that the caller's name space, where the
+# mount goes, keeps its own.  (The agent's git tool forked its name space
+# for this before calling here, and so mounted where nothing looked.)
+confine()
+{
+	if(nflag) {
+		sys->pctl(Sys->FORKNS, nil);
+		sys->pctl(Sys->NODEVS, nil);
+	}
+}
+
 serveloop(msgc: chan of ref Tmsg, pidc: chan of int)
 {
+	confine();
 	pidc <-= sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: ss.fd.fd :: nil);
 
 Serve:
@@ -271,8 +290,10 @@ getobj(h: git->Hash): ref CEntry
 # Navigator
 # =====================================================================
 
-navigator(c: chan of ref Navop)
+navigator(c: chan of ref Navop, ready: chan of int)
 {
+	confine();
+	ready <-= 1;
 	for(;;) {
 		navop := <-c;
 		if(dflag) say(sprint("navop path=%bd", navop.path));

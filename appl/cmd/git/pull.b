@@ -107,10 +107,10 @@ init(nil: ref Draw->Context, args: list of string)
 		if(xerr != nil)
 			fail("indexpack: " + xerr);
 
-		git->renamepak(gitdir, packpath, packname);
+		check(git->renamepak(gitdir, packpath, packname));
 
 		# Update remote tracking refs
-		git->updaterefs(gitdir, "origin", refs, verbose);
+		warn(git->updaterefs(gitdir, "origin", refs, verbose));
 
 		# Reopen repo to pick up new packs
 		(repo, oerr) = git->openrepo(gitdir);
@@ -120,7 +120,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(verbose)
 			sys->fprint(stderr, "no new objects\n");
 		# Still update tracking refs
-		git->updaterefs(gitdir, "origin", refs, verbose);
+		warn(git->updaterefs(gitdir, "origin", refs, verbose));
 	}
 
 	# Determine current branch
@@ -166,7 +166,7 @@ init(nil: ref Draw->Context, args: list of string)
 			branch, localhash.hex()[:7], remotehash.hex()[:7]);
 
 	# Update local branch ref
-	git->writeref(gitdir, headref, remotehash);
+	check(git->writeref(gitdir, headref, remotehash));
 
 	# Checkout new tree
 	(nil, cdata, cerr) := repo.readobj(remotehash);
@@ -195,4 +195,17 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/pull: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
+}
+
+warn(err: string)
+{
+	if(err != nil)
+		sys->fprint(stderr, "git/pull: warning: %s\n", err);
 }

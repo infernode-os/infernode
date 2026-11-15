@@ -473,6 +473,30 @@ exact `/dev`, `/dis`, `/prog`, and `/lib` top-level views, the granted tool
 module set, protected-key exclusion, and read-only attenuation. Escape-room
 campaign results supplement those checks but do not prove these paths safe.
 
+### The git tool
+
+`git` is the one tool whose effects are not bounded by the call's name space:
+its worker is started when `tools9p` starts, before any restriction, and keeps
+that name space (with `NODEVS`). Its boundary is the repository `tools9p` was
+started in, and it is kept by checking names, not by the name space:
+
+- a path the model gives is relative to the start directory, with no `..` and
+  no `.git` component;
+- a ref's name (the model's, one a remote advertises, what `HEAD` or a
+  symbolic ref says) is a name as git's `check-ref-format` has it, under
+  `refs/`, where it is read and where it is written (`writeref`,
+  `updaterefs`): a remote that advertises `refs/heads/../../x` is not fetched
+  from;
+- a tree entry's name is one component, not `.`, `..`, or anything a host
+  file system reads as `.git`: `parsetree` refuses the tree, so checkout,
+  merge, the index and `/mnt/git` never join such a name to a directory.
+
+`push` and `fetch` dial the remote named in `.git/config` from the worker,
+whatever `caps.network` says, and `push` sends the factotum key kept for that
+host. The tool's manifest says `dials_net`, so nsaudit's egress rules count an
+agent that holds `git`. A remote's URL is given back without any user and
+password in it, and its progress text is not printed on the console.
+
 ## Shell and Exec Access
 
 The `exec` tool and `shellcmds` field both affect what appears in `/dis`:

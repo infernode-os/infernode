@@ -98,6 +98,10 @@ Browser: module
 		boxof:	fn(s: self ref Session, n: int): (int, Draw->Rect);	# node n's first border box, page coordinates
 		linkat:	fn(s: self ref Session, x, y: int): string;	# the URL of the link under a point
 		findat:	fn(s: self ref Session, what: string, after: int): (int, Draw->Rect);	# next text match below y=after
+		# the page's text from p0 to p1 (page coordinates, either order)
+		# and the rectangles it is drawn in, for a highlight; words, whole
+		# words at either end (p0 == p1: the word at it); every: all of it
+		selection:	fn(s: self ref Session, p0, p1: Draw->Point, words, every: int): (string, list of Draw->Rect);
 		pageheight:	fn(s: self ref Session): int;
 		pinned:	fn(s: self ref Session): int;	# a box of the page stays put in the window as it scrolls
 		dom:	fn(s: self ref Session, n: int, what: string): (string, string);	# tag attrs text style box children

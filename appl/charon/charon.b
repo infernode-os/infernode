@@ -76,6 +76,21 @@ selpending: ref Field;	# a select pressed on, whose menu the release posts
 layout: Layout;
 hoverurl := "";
 
+# The page's text selection, a drag over it or a word double-clicked:
+# where it began and ends in page coordinates, the text and where it is
+# drawn.  A press is a click when the button comes up where it went
+# down; moved further, it selects.
+Pnone, Ppressed, Pselecting, Pword: con iota;
+pressing := Pnone;
+pressat: Point;	# the press, in the canvas
+selfrom, selto: Point;	# page coordinates
+selwords := 0;
+selall := 0;
+seltext := "";
+selrects: list of Rect;
+menulink := "";	# the link the menu was posted over
+DRAGSLOP: con 4;
+
 Control: adt {
 	f:	ref Field;
 	w:	string;	# widget path
@@ -252,10 +267,11 @@ buildui()
 		"pack .bar -side top -fill x",
 		"pack .status -side bottom -fill x",
 		"pack .view -side top -fill both -expand 1",
-		"bind .view.c <Button-1> {send act click %x %y %X %Y}",
+		"bind .view.c <Button-1> {send act press %x %y %X %Y}",
+		"bind .view.c <Double-Button-1> {send act word %x %y}",
 		"bind .view.c <ButtonRelease-1> {send act release}",
 		"bind .view.c <Motion> {send act hover %x %y}",
-		"bind .view.c <Button-3> {send act menu %X %Y}",
+		"bind .view.c <Button-3> {send act menu %x %y %X %Y}",
 		"bind .view.c <ButtonPress-4> {send act wheel -1}",
 		"bind .view.c <ButtonPress-5> {send act wheel 1}",
 		"bind .view <Configure> {send act resized}",
@@ -264,6 +280,10 @@ buildui()
 		".ctx add command -label {Forward} -command {send act forward}",
 		".ctx add command -label {Reload} -command {send act reload}",
 		".ctx add command -label {Find...} -command {send act find}",
+		".ctx add separator",
+		".ctx add command -label {Copy} -command {send act copy}",
+		".ctx add command -label {Select all} -command {send act selectall}",
+		".ctx add command -label {Copy link address} -command {send act copylink}",
 		".ctx add separator",
 		".ctx add command -label {Load images on this page} -command {send act loadimages}",
 		".ctx add checkbutton -label {Load images automatically} -variable autoimages -command {send act setting images}",
@@ -356,8 +376,13 @@ redraw()
 		return;
 	if(hiliting) {
 		r := hilite.subpt(Point(0, scroll));
-		y := display.color(int 16rFFFF0060);
+		y := display.color(int 16r60600060);	# premultiplied: yellow at 3/8
 		pageimg.draw(r, y, nil, (0, 0));
+	}
+	if(selrects != nil) {
+		blue := display.color(int 16r14315560);	# premultiplied: #3584E4 at 3/8
+		for(l := selrects; l != nil; l = tl l)
+			pageimg.draw((hd l).subpt(Point(0, scroll)), blue, nil, (0, 0));
 	}
 	tk->putimage(top, "page", pageimg, nil);
 	tk->cmd(top, ".view.c coords pageitem 0 0");
@@ -426,6 +451,9 @@ event(e: string)
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
 		status("Stopped");
 	"update" =>
+		# laid out again (an image came): the selection may have moved
+		if(selrects != nil)
+			(seltext, selrects) = sess.selection(selfrom, selto, selwords, selall);
 		redraw();
 		(got, n) := split(rest);
 		if(n != nil && got != n)
@@ -455,6 +483,9 @@ shown()
 	tkclient->settitle(top, title + " — Charon");
 	shownt = sess.title;
 	hiliting = 0;
+	seltext = "";
+	selrects = nil;
+	pressing = Pnone;
 	scroll = 0;
 	scrollto(sess.scroll);
 	endedit(0);
@@ -485,7 +516,22 @@ action(a: string)
 		resized();
 	"menu" =>
 		syncmenu();	# the settings may have changed from elsewhere (ctl, the file)
-		tk->cmd(top, ".ctx post " + rest);
+		(x, y) := xy(rest);
+		menulink = sess.linkat(x, y + scroll);
+		(nil, l) := sys->tokenize(rest, " ");
+		if(len l == 4)
+			tk->cmd(top, ".ctx post " + hd tl tl l + " " + hd tl tl tl l);
+	"copy" =>
+		copy();
+	"selectall" =>
+		selectall();
+	"copylink" =>
+		if(menulink == "")
+			status("No link there");
+		else {
+			tkclient->snarfput(menulink);
+			status("Copied " + menulink);
+		}
 	"loadimages" =>
 		sess.images();
 	"setting" =>
@@ -529,7 +575,47 @@ action(a: string)
 				d = int n * (vh - LINE);
 			scrollto(scroll + d);
 		}
+	"press" =>
+		# Tk sends the press again with each motion while the button is held
+		if(pressing != Pnone)
+			return;
+		tk->cmd(top, "focus .view.c");
+		(x, y) := xy(rest);
+		(nil, l) := sys->tokenize(rest, " ");
+		if(len l == 4)	# where the canvas is on the screen, for a menu posted from it
+			(scrx, scry) = (int hd tl tl l - x, int hd tl tl tl l - y);
+		pressat = Point(x, y);
+		pressing = Ppressed;
+	"drag" =>
+		(x, y) := xy(rest);
+		if(pressing == Ppressed && (abs(x - pressat.x) > DRAGSLOP || abs(y - pressat.y) > DRAGSLOP)) {
+			endedit(1);
+			pressing = Pselecting;
+			selfrom = pressat.add(Point(0, scroll));
+			selwords = 0;
+		}
+		if(pressing == Pselecting || pressing == Pword) {
+			selto = Point(x, y + scroll);
+			select();
+		}
+	"word" =>
+		(x, y) := xy(rest);
+		endedit(1);
+		pressing = Pword;
+		selfrom = selto = Point(x, y + scroll);
+		selwords = 1;
+		select();
 	"release" =>
+		case pressing {
+		Ppressed =>
+			pressing = Pnone;
+			clearselection();
+			action("click " + string pressat.x + " " + string pressat.y);
+		Pselecting or Pword =>
+			pressing = Pnone;
+			if(seltext != "")
+				status(sys->sprint("%d characters selected   (Ctrl-C: copy)", len seltext));
+		}
 		if((f := selpending) != nil) {
 			selpending = nil;
 			postselect(f);
@@ -537,11 +623,7 @@ action(a: string)
 	"wheel" =>
 		scrollto(scroll + int rest * 2 * LINE);	# the wheel: two lines a notch
 	"click" =>
-		tk->cmd(top, "focus .view.c");
 		(x, y) := xy(rest);
-		(nil, l) := sys->tokenize(rest, " ");
-		if(len l == 4)	# where the canvas is on the screen, for a menu posted from it
-			(scrx, scry) = (int hd tl tl l - x, int hd tl tl tl l - y);
 		n := sess.nodeat(x, y + scroll);
 		endedit(1);
 		if(n != 0) {
@@ -558,6 +640,11 @@ action(a: string)
 		}
 	"hover" =>
 		(x, y) := xy(rest);
+		# Inferno Tk has no <B1-Motion>: a drag is motion while pressed
+		if(pressing != Pnone) {
+			action("drag " + rest);
+			return;
+		}
 		u := sess.linkat(x, y + scroll);
 		if(u != hoverurl) {
 			hoverurl = u;
@@ -645,7 +732,28 @@ key(k: int)
 		findkey(k);
 		return;
 	}
+	focus := tk->cmd(top, "focus");
+	onpage := focus == "" || focus == ".view.c" || focus == ".";
 	case k {
+	'c' & 16r1F =>
+		if(onpage)
+			copy();
+		else
+			widgetcopy(focus, 0);
+		return;
+	'x' & 16r1F =>
+		if(!onpage)
+			widgetcopy(focus, 1);
+		return;
+	'v' & 16r1F =>
+		if(!onpage)
+			paste(focus);
+		return;
+	'a' & 16r1F =>
+		if(onpage) {
+			selectall();
+			return;
+		}
 	'q' & 16r1F =>
 		exit;
 	'l' & 16r1F =>
@@ -663,8 +771,7 @@ key(k: int)
 		findnext();
 		return;
 	}
-	focus := tk->cmd(top, "focus");
-	if(focus != "" && focus != ".view.c" && focus != ".") {
+	if(!onpage) {
 		tk->keyboard(top, k);
 		return;
 	}
@@ -705,6 +812,98 @@ findkey(k: int)
 			status("Find: " + findbuf);
 		}
 	}
+}
+
+# ---- selection, copy and paste ----
+
+select()
+{
+	selall = 0;
+	(seltext, selrects) = sess.selection(selfrom, selto, selwords, 0);
+	redraw();
+}
+
+selectall()
+{
+	pressing = Pnone;
+	selall = 1;
+	(seltext, selrects) = sess.selection((0, 0), (0, 0), 0, 1);
+	status(sys->sprint("%d characters selected   (Ctrl-C: copy)", len seltext));
+	redraw();
+}
+
+clearselection()
+{
+	if(selrects == nil && seltext == "")
+		return;
+	seltext = "";
+	selrects = nil;
+	redraw();
+}
+
+copy()
+{
+	if(seltext == "") {
+		status("Nothing selected");
+		return;
+	}
+	tkclient->snarfput(seltext);
+	status(sys->sprint("Copied %d characters", len seltext));
+}
+
+# Ctrl-C and Ctrl-X in the address bar or a field being typed into:
+# Tk's entry and text have the selection but leave the snarf buffer to
+# the program
+widgetcopy(w: string, cut: int)
+{
+	t := "";
+	if(tk->cmd(top, "winfo class " + w) == "Text") {
+		t = tk->cmd(top, w + " get sel.first sel.last");
+		if(t != "" && t[0] == '!')
+			return;
+	} else {
+		a := tk->cmd(top, w + " index sel.first");
+		b := tk->cmd(top, w + " index sel.last");
+		if(a == "" || a[0] == '!' || b == "" || b[0] == '!')
+			return;
+		v := tk->cmd(top, w + " get");
+		(i, j) := (int a, int b);
+		if(i < 0 || j > len v || i >= j)
+			return;
+		t = v[i:j];
+	}
+	if(t == "")
+		return;
+	tkclient->snarfput(t);
+	if(cut) {
+		tk->cmd(top, w + " delete sel.first sel.last");
+		tk->cmd(top, "update");
+	}
+}
+
+# Ctrl-V: the snarf buffer typed in at the cursor, over the selection;
+# one line in an entry
+paste(w: string)
+{
+	t := tkclient->snarfget();
+	if(t == "")
+		return;
+	if(tk->cmd(top, "winfo class " + w) != "Text") {
+		for(i := 0; i < len t; i++)
+			if(t[i] == '\n' || t[i] == '\r' || t[i] == '\t')
+				t[i] = ' ';
+	}
+	tk->cmd(top, w + " delete sel.first sel.last");
+	tk->cmd(top, w + " insert insert " + tk->quote(t));
+	tk->cmd(top, w + " see insert");
+	tk->cmd(top, "update");
+}
+
+abs(n: int): int
+{
+	if(n < 0)
+		return -n;
+	return n;
 }
 
 findnext()

@@ -614,6 +614,42 @@ testLazy(t: ref T)
 	wr("ctl", "scroll 0");
 }
 
+# Selecting text through ctl's select and reading it back: a drag
+# across two paragraphs is their text a line each, a word the word
+# under the point, a paragraph wrapped in a narrow box its words with a
+# blank where it wrapped, everything the whole page
+testSelect(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "select.html"), "done " + DIR + "select.html", "load");
+	t.assertnil(wr("ctl", "select all"), "select all");
+	t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.\nalpha beta gamma delta", "all");
+	t.assertnil(wr("ctl", "select 0 10 2000 50"), "select a drag");
+	t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.", "two paragraphs");
+	t.assertnil(wr("ctl", "select 2000 50 0 10"), "select a drag backwards");
+	t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.", "the same, dragged up");
+	t.assertnil(wr("ctl", "select word 3 50"), "select a word");
+	t.assertseq(rd("selection"), "Second", "the word");
+	t.assertnil(wr("ctl", "select 0 90 2000 400"), "select past the end");
+	t.assertseq(rd("selection"), "alpha beta gamma delta", "wrapped lines joined by blanks");
+	t.assertnil(wr("ctl", "select none"), "select none");
+	t.assertseq(rd("selection"), "", "none");
+	t.assertsne(wr("ctl", "select 1 2"), nil, "a bad select refused");
+
+	# where it is: the last of the wrapped lines, found and selected,
+	# drawn inside the page (a fragment's y is its box's, and was taken
+	# as its line's: Find's mark fell lines below the match)
+	(ok, r) := sess.findat("delta", -1);
+	t.assert(ok, "delta found");
+	h := sess.pageheight();
+	t.assert(r.min.y >= 80 && r.max.y <= h, sys->sprint("delta's mark %d..%d in the paragraph, the page %d high", r.min.y, r.max.y, h));
+	(w, rects) := sess.selection(r.min.add((2, 2)), r.min.add((2, 2)), 1, 0);
+	t.assertseq(w, "delta", "the word at delta's mark");
+	t.asserteq(len rects, 1, "one rect");
+	if(rects != nil)
+		t.assert((hd rects).eq(r), sys->sprint("its rect %d,%d %d,%d delta's mark %d,%d %d,%d",
+			(hd rects).min.x, (hd rects).min.y, (hd rects).max.x, (hd rects).max.y, r.min.x, r.min.y, r.max.x, r.max.y));
+}
+
 # navto, its answer sent on c, so a test can wait for it with a limit
 navasync(c: chan of string, cmd, url: string)
 {
@@ -761,6 +797,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("LeaveBusy", testLeaveBusy);
 	run("ImageBusy", testImageBusy);
 	run("Lazy", testLazy);
+	run("Select", testSelect);
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);

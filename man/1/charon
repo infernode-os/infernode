@@ -67,6 +67,12 @@ find (Ctrl-G finds the next)
 .B Ctrl-R
 reload
 .TP
+.B Ctrl-A
+select the page's text
+.TP
+.B Ctrl-C
+copy the selection to the snarf buffer
+.TP
 .B Escape
 stop
 .TP
@@ -74,7 +80,19 @@ stop
 quit
 .PD
 .PP
-Button 1 follows a link or works a control; button 3 is a menu.
+In the location or a text field being typed into,
+.B Ctrl-C
+and
+.B Ctrl-X
+copy and cut its selection and
+.B Ctrl-V
+pastes the snarf buffer (in one line, but in a
+.BR textarea ).
+.PP
+Button 1 follows a link or works a control; dragged, it selects text,
+and a double-click selects a word.
+Button 3 is a menu: Copy, Select all and Copy link address among the
+rest.
 .PP
 A location without a scheme is taken as
 .B https://
@@ -111,7 +129,13 @@ Commands:
 .BI submit " form" " \fR[\fPnode\fR]\fP"\f1,
 .BI size " w" x h\f1,
 .BI width " w"\f1,
-.BI scroll " y"\f1.
+.BI scroll " y"\f1,
+.BI select " x0 y0 x1 y1"
+(the text from one point to another in page coordinates, as a drag
+selects it),
+.BI "select word" " x y"\f1,
+.BR "select all" ,
+.BR "select none" .
 .TP
 .B url
 .br
@@ -204,6 +228,11 @@ Charon does not print them.
 .B errors
 .IR url ": " reason
 for each resource the page could not fetch.
+.TP
+.B selection
+The text the last
+.B select
+chose: a block's end a newline, a line wrapped in it a blank.
 .PD
 .PP
 A file's contents are taken when it is opened.

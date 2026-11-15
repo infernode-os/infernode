@@ -33,14 +33,14 @@ include "post9p.m";
 include "web/charonfs.m";
 
 Qroot, Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent,
-Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors: con iota;
+Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors, Qsel: con iota;
 
-rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors};
+rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors, Qsel};
 nodefiles := array[] of {Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren};
 
 names := array[] of {
 	"/", "ctl", "url", "title", "status", "text", "links", "forms", "find", "image", "event",
-	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors",
+	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors", "selection",
 };
 
 # an open event file
@@ -55,6 +55,7 @@ sess: ref Session;
 display: ref Display;
 user: string;
 query: string;	# the last thing written to find
+seltext: string;	# the text selected, by ctl's select
 evqs: list of ref Evq;
 
 init(): string
@@ -392,6 +393,8 @@ ctl(s: string): string
 		sess.resize(num(hd l), num(hd tl l));
 	"scroll" =>
 		sess.scrollto(num(arg));
+	"select" =>
+		return select(arg);
 	"images" or "fonts" or "effects" or "scripts" =>
 		return sess.configure(cmd + " " + arg);
 	"loadimages" =>
@@ -400,6 +403,35 @@ ctl(s: string): string
 		return browser->savesettings();
 	* =>
 		return "unknown command " + cmd;
+	}
+	return nil;
+}
+
+# select x0 y0 x1 y1, select word x y, select all, select none:
+# points in the page's coordinates, as box and find give them
+select(arg: string): string
+{
+	(nil, l) := sys->tokenize(arg, " \t");
+	n := array[len l] of int;
+	w := "";
+	if(l != nil)
+		w = hd l;
+	for(i := 0; l != nil; l = tl l)
+		n[i++] = num(hd l);
+	case w {
+	"all" =>
+		(seltext, nil) = sess.selection((0, 0), (0, 0), 0, 1);
+	"none" =>
+		seltext = nil;
+	"word" =>
+		if(len n != 3)
+			return "usage: select word x y";
+		p := Point(n[1], n[2]);
+		(seltext, nil) = sess.selection(p, p, 1, 0);
+	* =>
+		if(len n != 4)
+			return "usage: select x0 y0 x1 y1 | word x y | all | none";
+		(seltext, nil) = sess.selection((n[0], n[1]), (n[2], n[3]), 0, 0);
 	}
 	return nil;
 }
@@ -430,6 +462,8 @@ contents(t, n: int): array of byte
 	Qerrors =>
 		if(sess.pg != nil)
 			s = lines(sess.pg.errors);
+	Qsel =>
+		s = seltext;
 	Qtag or Qattrs or Qntext or Qstyle or Qbox or Qchildren =>
 		(r, nil) := sess.dom(n, names[t]);
 		s = r;

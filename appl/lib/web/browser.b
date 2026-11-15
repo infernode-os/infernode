@@ -1731,8 +1731,9 @@ findin(b: ref Box, what: string, after, ox, oy: int): (int, Draw->Rect)
 		ln := b.lines[i];
 		for(j := 0; j < len ln.frags; j++) {
 			f := ln.frags[j];
-			if(f.kind == Layout->Ftext && y + ln.y + f.y > after && contains(lower(f.text), what))
-				return (1, ((x + f.x, y + ln.y + f.y), (x + f.x + f.w, y + ln.y + f.y + ln.h)));
+			# a fragment's y is its box's, not its line's
+			if(f.kind == Layout->Ftext && y + f.y > after && contains(lower(f.text), what))
+				return (1, ((x + f.x, y + f.y), (x + f.x + f.w, y + f.y + f.h)));
 		}
 	}
 	for(i = 0; i < len b.kids; i++) {
@@ -1746,6 +1747,200 @@ findin(b: ref Box, what: string, after, ox, oy: int): (int, Draw->Rect)
 			return (ok, r);
 	}
 	return (0, ((0, 0), (0, 0)));
+}
+
+# ---- selection ----
+
+# A text fragment where it is drawn: its line's band in page coordinates,
+# its x, and the block whose lines it is in (a new block, a new line of
+# the text copied; a line wrapped in one, a space)
+Sel: adt {
+	x, y, h:	int;	# the line's band: where a point is on it
+	fy, fh:	int;	# the fragment's own: where it is drawn
+	f:	ref Layout->Frag;
+	line:	int;
+	blk:	ref Box;
+};
+
+Session.selection(s: self ref Session, p0, p1: Point, words, every: int): (string, list of Rect)
+{
+	freshen(s);
+	pg := s.pg;
+	if(pg == nil || pg.root == nil)
+		return ("", nil);
+	locked := trylock(s, 500);
+	r: (string, list of Rect);
+	{
+		r = selection1(pg, p0, p1, words, every);
+	} exception e {
+	"*" =>
+		if(locked)
+			unlock(s);
+		raise e;
+	}
+	if(locked)
+		unlock(s);
+	return r;
+}
+
+selline := 0;
+
+selection1(pg: ref Pg, p0, p1: Point, words, every: int): (string, list of Rect)
+{
+	selline = 0;
+	items := selfrags(pg.root, 0, 0, nil);
+	a := array[len items] of ref Sel;
+	for(i := len a; items != nil; items = tl items)
+		a[--i] = hd items;
+	if(len a == 0)
+		return ("", nil);
+	(i0, o0) := (0, 0);
+	(i1, o1) := (len a - 1, len a[len a - 1].f.text);
+	if(!every) {
+		(i0, o0) = selhit(a, p0);
+		(i1, o1) = selhit(a, p1);
+		if(i1 < i0 || i1 == i0 && o1 < o0)
+			(i0, o0, i1, o1) = (i1, o1, i0, o0);
+		if(words) {
+			o0 = wordstart(a[i0].f.text, o0);
+			o1 = wordend(a[i1].f.text, o1);
+		}
+	}
+	text := "";
+	rects: list of Rect;
+	for(i = i0; i <= i1; i++) {
+		it := a[i];
+		t := it.f.text;
+		b := 0;
+		e := len t;
+		if(i == i0)
+			b = o0;
+		if(i == i1)
+			e = o1;
+		if(b > e)
+			b = e;
+		if(i > i0) {
+			p := a[i-1];
+			if(p.blk != it.blk) {
+				if(text != "" && text[len text - 1] != '\n')
+					text += "\n";
+			} else if(p.line != it.line && text != "" && text[len text - 1] != ' ' && (len t == 0 || t[0] != ' '))
+				text += " ";
+		}
+		text += t[b:e];
+		if(e > b) {
+			x0 := it.x + fragx(it.f, b);
+			x1 := it.x + fragx(it.f, e);
+			rects = Rect((x0, it.fy), (x1, it.fy + it.fh)) :: rects;
+		}
+	}
+	# what ends it a blank or a block's end, not text (a field's empty line)
+	n := len text;
+	while(n > 0 && (text[n-1] == ' ' || text[n-1] == '\n' || text[n-1] == '\t'))
+		n--;
+	return (text[0:n], rects);
+}
+
+# the page's text fragments in document order, where they are drawn
+selfrags(b: ref Box, ox, oy: int, acc: list of ref Sel): list of ref Sel
+{
+	x := ox + b.x;
+	y := oy + b.y;
+	if(b.st != nil && b.st.visibility != Style->Vvisible && b.kids == nil)
+		return acc;
+	for(i := 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		selline++;
+		for(j := 0; j < len ln.frags; j++) {
+			f := ln.frags[j];
+			if(f.kind == Layout->Ftext && f.text != "")
+				acc = ref Sel(x + f.x, y + ln.y, ln.h, y + f.y, f.h, f, selline, b) :: acc;
+		}
+	}
+	for(i = 0; i < len b.kids; i++)
+		acc = selfrags(b.kids[i], x, y, acc);
+	for(l := b.pos; l != nil; l = tl l)
+		acc = selfrags(hd l, x, y, acc);
+	return acc;
+}
+
+# where in its fragment's text a character offset is drawn, from its left
+fragx(f: ref Layout->Frag, k: int): int
+{
+	if(k <= 0)
+		return 0;
+	if(k >= len f.text)
+		return f.w;
+	if(f.face == nil)
+		return f.w * k / len f.text;
+	fonts := layout->fontmod();
+	Typeface: import fonts;
+	return int f.face.width(f.text[0:k]);
+}
+
+# the fragment and character a point is at: in a line's band, the
+# fragment under it or the nearest along it; above or below every line,
+# the next line's start (or the last's end)
+selhit(a: array of ref Sel, p: Point): (int, int)
+{
+	best := -1;
+	bestd := 1 << 30;
+	for(i := 0; i < len a; i++) {
+		it := a[i];
+		if(p.y < it.y || p.y >= it.y + it.h)
+			continue;
+		d := 0;
+		if(p.x < it.x)
+			d = it.x - p.x;
+		else if(p.x >= it.x + it.f.w)
+			d = p.x - (it.x + it.f.w) + 1;
+		if(d < bestd) {
+			best = i;
+			bestd = d;
+		}
+		if(d == 0)
+			break;
+	}
+	if(best < 0) {
+		for(i = 0; i < len a; i++)
+			if(a[i].y >= p.y)
+				return (i, 0);
+		return (len a - 1, len a[len a - 1].f.text);
+	}
+	it := a[best];
+	t := it.f.text;
+	if(p.x <= it.x)
+		return (best, 0);
+	if(p.x >= it.x + it.f.w)
+		return (best, len t);
+	# the character whose middle is past the point
+	for(k := 0; k < len t; k++) {
+		mid := (fragx(it.f, k) + fragx(it.f, k + 1)) / 2;
+		if(it.x + mid > p.x)
+			return (best, k);
+	}
+	return (best, len t);
+}
+
+wordchar(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '\'' || c >= 16rC0;
+}
+
+wordstart(t: string, k: int): int
+{
+	if(k > len t)
+		k = len t;
+	while(k > 0 && wordchar(t[k-1]))
+		k--;
+	return k;
+}
+
+wordend(t: string, k: int): int
+{
+	while(k < len t && wordchar(t[k]))
+		k++;
+	return k;
 }
 
 Session.pageheight(s: self ref Session): int

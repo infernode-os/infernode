@@ -3,7 +3,7 @@ implement Toolcall;
 #
 # toolcall - load one Veltro tool module and call it, for host tests
 #
-#	toolcall /dis/veltro/tools/x.dis 'arguments' ...
+#	toolcall [-m n] /dis/veltro/tools/x.dis 'arguments' ...
 #
 # Each call's result is printed between two lines of its own:
 #
@@ -13,7 +13,8 @@ implement Toolcall;
 #
 # ms is how long exec took and procs the number of entries in /prog
 # after it, so a test can see a call that returned leaving processes
-# behind.  The tool is called directly, with no tools9p worker and no
+# behind.  With -m, a result longer than n characters is printed as its
+# first and last n/2, with its length between.  The tool is called directly, with no tools9p worker and no
 # restricted name space: what is tested is the tool.
 #
 
@@ -41,6 +42,11 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:usage";
 	}
 	args = tl args;
+	max := 0;
+	if(hd args == "-m" && len args >= 3) {
+		max = int hd tl args;
+		args = tl tl args;
+	}
 	path := hd args;
 	t := load Tool path;
 	if(t == nil) {
@@ -57,6 +63,8 @@ init(nil: ref Draw->Context, args: list of string)
 		t0 := sys->millisec();
 		r := t->exec(hd args);
 		ms := sys->millisec() - t0;
+		if(max > 0 && len r > max)
+			r = r[0:max/2] + sys->sprint("\n...[%d characters]...\n", len r) + r[len r - max/2:];
 		sys->print("R_CALL %d %d %d\n%s\nR_RET %d\n", n, ms, nprocs(), r, n);
 	}
 }

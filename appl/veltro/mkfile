@@ -204,7 +204,7 @@ tools/websearch.dis: tools/websearch.b tool.m $MODDIR/draw.m $MODDIR/factotum.m 
 	limbo $LIMBOFLAGS -gw -o tools/websearch.dis tools/websearch.b
 
 # Browse tool
-tools/browse.dis: tools/browse.b tool.m $MODDIR/draw.m $MODDIR/formatter.m $MODDIR/html.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
+tools/browse.dis: tools/browse.b tool.m $MODDIR/draw.m $MODDIR/formatter.m $MODDIR/html.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m $MODDIR/publicnet.m
 	limbo $LIMBOFLAGS -gw -o tools/browse.dis tools/browse.b
 
 # Charon browser tool

@@ -83,6 +83,24 @@ and approval policy on every execution path. Payment approval and wallet
 configuration remain trusted-controller actions outside the model namespace;
 approval cannot be disabled for an agent-visible account.
 
+The tools that fetch from the web (`webfetch`, `http`, `browse`, `payfetch`,
+`websearch`) reach public addresses only: `publicnet` refuses loopback, private
+and reserved destinations before the request and again at the dial of every
+redirect. Each request is given thirty seconds, redirects and body included,
+and reads no more than a fixed amount of the response (512KB; `websearch` 1MB,
+`browse` 2MB): the request keeps the time itself (`webclient->requestbounded`),
+so at the deadline its connection is hung up and nothing of it is left running,
+and a response's header cannot make a tool hold memory for a body that has not
+come. What a tool returns of a page is the page's words, hostile input like any
+other: a result says where it came from or is otherwise marked, so that fetched
+text beginning `error:` is not taken for the tool failing, and says when it was
+cut. `payfetch` answers a 402 with a payment authorization only when the 402
+came over https. The `charon` tool drives the user's own browser, which reads
+`file:` addresses as the user; a page from the network cannot take that browser
+to one (a link followed, a form's action, a refresh, a script, a frame, a
+`<base>`: `Page->mayload`), so the tool reads nothing of the browser's name
+space through a page.
+
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
 for granting a compromised model both confidential data and unrestricted egress.

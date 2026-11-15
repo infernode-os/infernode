@@ -182,6 +182,10 @@ exposure steps, white balance, a focus chart, motion:
 .IP
 .B tools/camera-test-pattern.py loop.mp4
 .PP
+Its segments, their times and the code on every frame that names its
+segment and frame are in
+.BR docs/CAMERA-TEST-VIDEO.md .
+.PP
 .I Camsrv
 runs in a process group of its own. To stop it, unmount it; to kill
 it, write

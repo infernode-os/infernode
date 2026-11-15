@@ -204,20 +204,20 @@ txready(void *arg)
 
 /*
  * From the interrupt: the MAC stopped -- it read a descriptor that was
- * not its own -- or finished a frame. If the descriptor it is now at is
- * one we have given it since, and it is not going, it missed the
- * TSTART that came with that frame: start it again, now, rather than
- * when sendproc or linkproc next looks (txkick, below). This is Linux
- * macb's macb_tx_restart.
- *
- * Whether there is a frame to send is the descriptor's to say, not
- * where the MAC is: with every descriptor given to it, the oldest, where
- * it stopped, is also the one sendproc fills next, so the MAC at txhead
- * is a full ring as well as an empty one. Taking it for empty left every
- * stop with the ring full to sendproc's 100 ms wait; with a backlog the
- * ring was full at every stop after, and a Pi 5 sent a few frames a
- * second until it was restarted (2026-11-15). Linux never fills its
- * ring, so its test of the head is not ambiguous.
+ * not its own -- or finished a frame. If it is not going and a frame is
+ * waiting, start it again now (txkick, below), rather than when sendproc
+ * or linkproc next looks. This is Linux macb's macb_tx_restart, with
+ * two differences. Whether there is a frame to send is the descriptors'
+ * to say, not where the MAC is: with every descriptor given to it, the
+ * oldest, where it stopped, is also the one sendproc fills next, so the
+ * MAC at txhead is a full ring as well as an empty one; taking it for
+ * empty left every stop with the ring full to sendproc's 100 ms wait,
+ * and with a backlog a Pi 5 sent a few frames a second (2026-11-15).
+ * Linux never fills its ring, so its test of the head is not ambiguous.
+ * And a MAC stopped away from the oldest frame is moved to it, here:
+ * left to sendproc and linkproc, a trickle of ACKs (an inbound
+ * transfer) waited until 64 had piled up, and the transfer ran at a
+ * seventh of its speed.
  */
 static int
 txat(Ctlr *ctlr)
@@ -250,19 +250,12 @@ txoldest(Ctlr *ctlr)
 	return -1;
 }
 
+static void txkick(Ctlr*, int);
+
 static void
 txrestart(Ctlr *ctlr)
 {
-	int i;
-
-	ilock(&ctlr->tlock);
-	i = txat(ctlr);
-	if((GEM(Tsr) & Tgo) == 0 && i >= 0 && (ctlr->tx[i].ctrl & Txused) == 0){
-		ctlr->nirqkick++;
-		GEM(Ncr) |= Tstart;
-		(void)GEM(Ncr);
-	}
-	iunlock(&ctlr->tlock);
+	txkick(ctlr, 1);
 }
 
 static void
@@ -366,7 +359,7 @@ txstuck(Ctlr *ctlr, int *kp, int *pp)
 }
 
 static void
-txkick(Ctlr *ctlr)
+txkick(Ctlr *ctlr, int irq)
 {
 	int k, p;
 
@@ -391,7 +384,9 @@ txkick(Ctlr *ctlr)
 		GEM(Tbqp) = (u32int)(uintptr)&ctlr->tx[k];
 		GEM(Tbqph) = 0;
 		GEM(Ncr) |= Txen;
-	}else if(ctlr->nkick++ == 0)
+	}else if(irq)
+		ctlr->nirqkick++;
+	else if(ctlr->nkick++ == 0)
 		iprint("#l0: rp1: transmitter stopped with frames to send (tsr %#ux); restarted, and counted in ifstats\n",
 			GEM(Tsr));
 	GEM(Ncr) |= Tstart;
@@ -427,7 +422,7 @@ sendproc(void *arg)
 		while((d->ctrl & Txused) == 0){		/* the ring is full */
 			coherence();
 			tsleep(&ctlr->tr, txready, (void*)d, 100);
-			txkick(ctlr);
+			txkick(ctlr, 0);
 		}
 		memmove(ctlr->tbuf + ctlr->txhead*Bsz, b->rp, n);
 		freeb(b);
@@ -492,11 +487,10 @@ linkproc(void *arg)
 {
 	Ether *edev;
 	Ctlr *ctlr;
-	int s, link, lasthead;
+	int s, link;
 
 	edev = arg;
 	ctlr = edev->ctlr;
-	lasthead = -1;
 	while(waserror())
 		;
 	for(;;){
@@ -511,15 +505,14 @@ linkproc(void *arg)
 			edev->nif.link = link;
 		}
 		/*
-		 * Nothing more may come to send, and with it no ring-full
-		 * wait in sendproc to notice: the last frame given could
-		 * sit there. Kick only when it has sat through two looks,
-		 * half a second apart, with nothing given since: one look
-		 * could fall between sendproc handing it over and its TSTART.
+		 * A stop the interrupt did not see, with frames waiting and
+		 * no ring-full wait in sendproc to notice (a trickle of
+		 * ACKs never fills the ring, and never leaves it still
+		 * either): every look. sendproc hands a frame over and
+		 * writes its TSTART under tlock, so a look cannot fall
+		 * between the two.
 		 */
-		if(ctlr->txhead == lasthead)
-			txkick(ctlr);
-		lasthead = ctlr->txhead;
+		txkick(ctlr, 0);
 		tsleep(&ctlr->lr, return0, nil, 500);
 	}
 }

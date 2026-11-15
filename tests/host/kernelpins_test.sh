@@ -131,10 +131,11 @@ if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += c
 else no "timerintr runs hzclock once however many ticks were due"; fi
 
 rs=$(sed -n '/^txrestart(Ctlr \*ctlr)/,/^}/p' os/bcm2712/etherrp1.c)
-if echo "$rs" | grep -q 'ctrl & Txused' && ! echo "$rs" | grep -q 'txhead'; then ok "the RP1 transmitter is restarted from the interrupt with the ring full too"
+so=$(sed -n '/^txstuck(Ctlr/,/^}/p;/^txoldest(Ctlr/,/^}/p' os/bcm2712/etherrp1.c)
+if echo "$rs" | grep -q 'txkick(ctlr, 1)' && echo "$so" | grep -q 'ctrl & Txused' && echo "$so" | grep -q 'txoldest'; then ok "the RP1 transmitter is restarted from the interrupt with the ring full too"
 else no "etherrp1.c txrestart takes the MAC at txhead for an empty ring (a full one is the same): ask the descriptor"; fi
 
-tk=$(sed -n '/^txkick(Ctlr \*ctlr)/,/^}/p' os/bcm2712/etherrp1.c)
+tk=$(sed -n '/^txkick(Ctlr \*ctlr, int irq)/,/^}/p' os/bcm2712/etherrp1.c)
 if echo "$tk" | grep -q 'txoldest\|txstuck' && echo "$tk" | grep -q 'GEM(Tbqp) = ' && echo "$tk" | grep -q '~Txen'; then ok "a stopped RP1 transmitter not at its oldest frame is moved there"
 else no "etherrp1.c txkick only writes TSTART: a MAC stopped elsewhere than at its oldest frame re-reads a done descriptor for ever"; fi
 

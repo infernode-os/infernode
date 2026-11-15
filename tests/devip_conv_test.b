@@ -245,6 +245,10 @@ testPermission(t: ref T)
 		t.assert(fd == nil, "and its open for reading");
 	}
 	t.assert(sys->open(c.dir + "/status", Sys->OREAD) != nil, "its status is anyone's to read");
+	# the host's ARP table and the network database are the host owner's to change
+	t.assert(sys->open("/net/arp", Sys->OWRITE) == nil && iserr("permission"), sys->sprint("another user's open of /net/arp to write it is refused: %r"));
+	t.assert(sys->open("/net/arp", Sys->ORDWR) == nil, "and to read and write it");
+	t.assert(sys->open("/net/ndb", Sys->ORDWR) == nil, "and of /net/ndb");
 
 	# and a conversation of that user's own
 	(own, on) := clone("tcp");

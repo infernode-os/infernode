@@ -442,6 +442,11 @@ ipopen(Chan *c, int omode)
 		if(omode != OREAD)
 			error(Eperm);
 		break;
+	case Qarp:
+		/* the host's table of who is at which address: eve's to change */
+		if(wantswrite(omode) && !iseve())
+			error(Eperm);
+		break;
 	case Qndb:
 		/* the network database names the resolvers: changing it is eve's */
 		if(wantswrite(omode) && !iseve())

@@ -13,6 +13,22 @@ enum
 
 static void envremove(Chan*);
 
+/*
+ * The environment of whoever is asking. Not every process has one: a
+ * kernel process serving an export (sys->export on a connection) has
+ * none, and the connection it reads can be a file of this device, which
+ * any program can make. Each entry point took up->env->egrp's lock
+ * without looking: a nil, the kernel process faulted, and a fault there
+ * ends the emulator (and the native kernel).
+ */
+static Egrp*
+envgrp(void)
+{
+	if(up == nil || up->env == nil || up->env->egrp == nil)
+		error("no environment");
+	return up->env->egrp;
+}
+
 static int
 envgen(Chan *c, char *name, Dirtab *d, int nd, int s, Dir *dp)
 {
@@ -26,7 +42,7 @@ envgen(Chan *c, char *name, Dirtab *d, int nd, int s, Dir *dp)
 		devdir(c, c->qid, "#e", 0, eve, DMDIR|0775, dp);
 		return 1;
 	}
-	eg = up->env->egrp;
+	eg = envgrp();
 	qlock(&eg->l);
 	for(e = eg->entries; e != nil && s != 0; e = e->next)
 		s--;
@@ -57,7 +73,7 @@ static int
 envstat(Chan *c, uchar *db, int n)
 {
 	if(c->qid.type & QTDIR)
-		c->qid.vers = up->env->egrp->vers;
+		c->qid.vers = envgrp()->vers;
 	return devstat(c, db, n, 0, 0, envgen);
 }
 
@@ -91,7 +107,7 @@ envopen(Chan *c, int mode)
 		c->offset = 0;
 		return c;
 	}
-	eg = up->env->egrp;
+	eg = envgrp();
 	qlock(&eg->l);
 	for(e = eg->entries; e != nil; e = e->next)
 		if(e->qid.path == c->qid.path)
@@ -100,7 +116,8 @@ envopen(Chan *c, int mode)
 		qunlock(&eg->l);
 		error(Enonexist);
 	}
-	if(mode == (OWRITE|OTRUNC) && e->val) {
+	/* (only OWRITE|OTRUNC exactly truncated: ORDWR|OTRUNC kept the old value's tail) */
+	if((mode & OTRUNC) && e->val) {
 		free(e->val);
 		e->val = 0;
 		e->len = 0;
@@ -110,7 +127,8 @@ envopen(Chan *c, int mode)
 	envkeep(c, eg, mode);
 	c->offset = 0;
 	c->flag |= COPEN;
-	c->mode = mode&~OTRUNC;
+	/* the access alone: with ORCLOSE left in it no read or write matched the mode */
+	c->mode = openmode(mode);
 	return c;
 }
 
@@ -125,7 +143,7 @@ envcreate(Chan *c, char *name, int mode, ulong perm)
 		error(Eperm);
 	if(strlen(name) >= sizeof(up->genbuf))
 		error("name too long");	/* needs to fit for stat */
-	eg = up->env->egrp;
+	eg = envgrp();
 	qlock(&eg->l);
 	for(le = nil, e = eg->entries; e != nil; le = e, e = e->next)
 		if(strcmp(e->var, name) == 0) {
@@ -149,7 +167,7 @@ envcreate(Chan *c, char *name, int mode, ulong perm)
 	envkeep(c, eg, mode);
 	c->offset = 0;
 	c->flag |= COPEN;
-	c->mode = mode;
+	c->mode = openmode(mode);
 }
 
 static void
@@ -178,7 +196,7 @@ envread(Chan *c, void *a, long n, vlong offset)
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, a, n, 0, 0, envgen);
-	eg = up->env->egrp;
+	eg = envgrp();
 	qlock(&eg->l);
 	for(e = eg->entries; e != nil; e = e->next)
 		if(e->qid.path == c->qid.path)
@@ -212,7 +230,7 @@ envwrite(Chan *c, void *a, long n, vlong offset)
 	ve = offset+n;
 	if(ve > Maxenvlen)
 		error(Etoobig);
-	eg = up->env->egrp;
+	eg = envgrp();
 	qlock(&eg->l);
 	for(e = eg->entries; e != nil; e = e->next)
 		if(e->qid.path == c->qid.path)
@@ -247,7 +265,7 @@ envremove(Chan *c)
 	/* an ORCLOSE Chan's own, closed by whoever drops it last: the collector's kproc has none */
 	eg = c->aux;
 	if(eg == nil && up->env != nil)
-		eg = up->env->egrp;
+		eg = envgrp();
 	if(eg == nil)
 		error(Enonexist);
 	qlock(&eg->l);

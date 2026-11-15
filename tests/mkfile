@@ -102,6 +102,7 @@ TARG=\
 	png_hostile_test.dis\
 	devaudio_read_test.dis\
 	devfs_longpath_test.dis\
+	devenv_edge_test.dis\
 	devip_conv_test.dis\
 	devsrv_devprog_edge_test.dis\
 	dial_edge_test.dis\

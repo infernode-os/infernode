@@ -34,6 +34,19 @@ creadimage(Display *d, int fd, int dolock)
 		kwerrstr("creadimage: bad format");
 		return nil;
 	}
+	/*
+	 * Each field is eleven characters and a blank (image(6)).  The
+	 * numbers are read with atoi, which stops at what is not a digit:
+	 * a field of twelve digits ran into the next, and the last into
+	 * hdr[60], which nothing had set, and the stack after it.
+	 */
+	hdr[5*12] = '\0';
+	for(m=1; m<5; m++){
+		if(hdr[m*12+11] != ' '){
+			kwerrstr("creadimage: bad format");
+			return nil;
+		}
+	}
 	if(new){
 		hdr[11] = '\0';
 		if((chan = strtochan(hdr)) == 0){
@@ -80,6 +93,12 @@ creadimage(Display *d, int fd, int dolock)
 				unlockdisplay(d);
 			free(buf);
 			return nil;
+		}
+		/* a block's two fields end in a blank too, or its count ran
+		 * on into what the buffer held before */
+		if(hdr[11] != ' ' || hdr[23] != ' '){
+			kwerrstr("creadimage: bad format");
+			goto Errout;
 		}
 		maxy = atoi(hdr+0*12);
 		nb = atoi(hdr+1*12);

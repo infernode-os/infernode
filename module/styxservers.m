@@ -49,6 +49,7 @@ Styxservers: module
 		rootpath:	big;		# Qid.path of root of its name space
 		msize:	int;		# negotiated Styx message size
 		replychan:	chan of ref Styx->Rmsg;
+		nfids:	int;		# fids in the table: MAXFIDS of them at most
 
 		new:		fn(fd: ref Sys->FD, t: ref Navigator, rootpath: big): (chan of ref Styx->Tmsg, ref Styxserver);
 		reply:	fn(srv: self ref Styxserver, m: ref Styx->Rmsg): int;
@@ -78,6 +79,7 @@ Styxservers: module
 		newfid:	fn(srv: self ref Styxserver, fid: int): ref Fid;
 		delfid:	fn(srv: self ref Styxserver, c: ref Fid);
 		allfids:	fn(srv: self ref Styxserver): list of ref Fid;
+		nofid:	fn(srv: self ref Styxserver): string;	# why newfid gave nil
 
 		iounit:	fn(srv: self ref Styxserver): int;
 	};
@@ -92,6 +94,8 @@ Styxservers: module
 	openmode: fn(o: int): int;
 	
 	Einuse:	con "fid already in use";
+	Enofids:	con "too many fids";
+	MAXFIDS:	con 32768;	# fids one connection may hold
 	Ebadfid:	con "bad fid";
 	Eopen:	con "fid already opened";
 	Enotfound:	con "file does not exist";

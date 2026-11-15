@@ -713,6 +713,8 @@ dis/tests/auditchain_test.dis
 dis/tests/auditprov_test.dis
 dis/tests/auditsign_test.dis
 dis/tests/auditverify_test.dis
+dis/tests/auth9_short_test.dis
+dis/tests/auth_keyfile_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
 dis/tests/awk_test.dis
@@ -751,8 +753,11 @@ dis/tests/env_rclose_test.dis
 dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
+dis/tests/export_hostile_test.dis
+dis/tests/export_limits.dis
 dis/tests/exception_test.dis
 dis/tests/factotum_grant_test.dis
+dis/tests/factotum_needkey_test.dis
 dis/tests/factotum_test.dis
 dis/tests/fdclose_test.dis
 dis/tests/gc_cycle_test.dis
@@ -796,10 +801,12 @@ dis/tests/jit_retslice_test.dis
 dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
+dis/tests/keyring_degenerate_test.dis
 dis/tests/keyring_sweep_test.dis
 dis/tests/layers_test.dis
 dis/tests/login_test.dis
 dis/tests/mermaid_flow_test.dis
+dis/tests/mnt_smallmsize_test.dis
 dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
@@ -871,6 +878,7 @@ dis/tests/ninep_disconnect_test.dis
 dis/tests/ninep_msize_test.dis
 dis/tests/crypto_bench.dis
 dis/tests/ssl_record_test.dis
+dis/tests/styxservers_hostile_test.dis
 dis/tests/tcpwatch.dis
 dis/tests/osk_accuracy.dis
 dis/tests/osk_fuzz.dis
@@ -882,6 +890,9 @@ dis/tests/pdf_test.dis
 dis/tests/pdfrender.dis
 dis/tests/pdftext_test.dis
 dis/tests/pgrp_race_test.dis
+dis/tests/png_hostile_test.dis
+dis/tests/devip_conv_test.dis
+dis/tests/nsunion_race_test.dis
 dis/tests/spawn_budget_test.dis
 dis/tests/sheetview_test.dis
 dis/tests/p9any_timeout_test.dis

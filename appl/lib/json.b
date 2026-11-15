@@ -68,6 +68,11 @@ jvtrue(): ref JValue.True
 Syntax: exception(string);
 Badwrite: exception;
 
+# How deep arrays and objects may nest.  readval calls itself for each
+# level, and a document of nothing but '[' had it do so until memory
+# ran out: an exception readjson does not catch, in whoever was reading.
+Maxdepth: con 512;
+
 readjson(fd: ref Iobuf): (ref JValue, string)
 {
 	{
@@ -110,6 +115,8 @@ readval(p: ref Parse): ref JValue raises(Syntax)
 		case c {
 		'{' =>
 			# object ::= '{' [pair (',' pair)*] '}'
+			if(++p.depth > Maxdepth)
+				raise Syntax("nested too deep");
 			l:  list of (string, ref JValue);
 			if((c = p.getns()) != '}'){
 				p.unget(c);
@@ -129,9 +136,12 @@ readval(p: ref Parse): ref JValue raises(Syntax)
 			}
 			if(c != '}')
 				raise Syntax("missing '}' at end of object");
+			p.depth--;
 			return ref JValue.Object(l);
 		'[' =>
 			#	array ::= '[' [value (',' value)*] ']'
+			if(++p.depth > Maxdepth)
+				raise Syntax("nested too deep");
 			l: list of ref JValue;
 			n := 0;
 			if((c = p.getns()) != ']'){
@@ -146,6 +156,7 @@ readval(p: ref Parse): ref JValue raises(Syntax)
 			a := array[n] of ref JValue;
 			for(; --n >= 0; l = tl l)
 				a[n] = hd l;
+			p.depth--;
 			return ref JValue.Array(a);
 		'"' =>
 			return ref JValue.String(readstring(p, c));
@@ -178,6 +189,11 @@ readval(p: ref Parse): ref JValue raises(Syntax)
 				p.unget(c);
 			if(fracp != nil || exp != nil)
 				return ref JValue.Real(real (intp+"."+fracp+exp));
+			# An integer that does not fit a big is a real: the
+			# conversion gave the largest big for any of them, with
+			# no error, a number the sender had not written.
+			if(!fitsbig(intp))
+				return ref JValue.Real(real intp);
 			return ref JValue.Int(big intp);
 		'a' to 'z' =>
 			# 'true' | 'false' | 'null'
@@ -201,28 +217,73 @@ readval(p: ref Parse): ref JValue raises(Syntax)
 	}
 }
 
+# whether the digits of s, with or without a sign, are a big's
+fitsbig(s: string): int
+{
+	neg := 0;
+	i := 0;
+	if(len s > 0 && s[0] == '-'){
+		neg = 1;
+		i = 1;
+	}
+	while(i < len s - 1 && s[i] == '0')
+		i++;
+	d := s[i:];
+	if(len d != 19)
+		return len d < 19;
+	lim := "9223372036854775807";
+	if(neg)
+		lim = "9223372036854775808";
+	return d <= lim;	# the same length: as strings, as numbers
+}
+
 # string ::= '"' char* '"'
 # char ::= [^\x00-\x1F"\\] | '\"' | '\/' | '\b' | '\f' | '\n' | '\r' | '\t' | '\u' hex hex hex hex
 readstring(p: ref Parse, delim: int): string raises(Syntax)
 {
 	{
 		s := "";
+	Str:
 		while((c := p.getc()) != delim && c >= 0){
 			if(c == '\\'){
 				c = p.getc();
 				if(c < 0)
 					break;
-				case c {
-				'b' =>	c =  '\b';
-				'f' =>		c =  '\f';
-				'n' =>	c =  '\n';
-				'r' =>		c =  '\r';
-				't' =>		c =  '\t';
-				'u' =>
-					c = 0;
-					for(i := 0; i < 4; i++)
-						c = (c<<4) | hex(p.getc());
-				* =>		;	# identity, including '"', '/', and '\'
+				if(c != 'u')
+					c = unesc(c);
+				else{
+					c = hex4(p);
+					# A character past U+FFFF is written as two, and
+					# the pair is the one character.  Half of one alone
+					# is no character: it was kept as it came, and was
+					# bytes that are not UTF-8 when written again.
+					while(c >= 16rD800 && c <= 16rDBFF){
+						c1 := p.getc();
+						if(c1 != '\\'){
+							p.unget(c1);
+							c = Sys->UTFerror;
+							break;
+						}
+						c2 := p.getc();
+						if(c2 < 0){
+							c = c2;
+							break Str;
+						}
+						if(c2 != 'u'){
+							s[len s] = Sys->UTFerror;
+							c = unesc(c2);
+							break;
+						}
+						lo := hex4(p);
+						if(lo >= 16rDC00 && lo <= 16rDFFF){
+							c = 16r10000 + ((c - 16rD800) << 10) + (lo - 16rDC00);
+							break;
+						}
+						s[len s] = Sys->UTFerror;
+						c = lo;	# which may be the first half of another
+					}
+					if(c >= 16rDC00 && c <= 16rDFFF)
+						c = Sys->UTFerror;
 				}
 			}
 			s[len s] = c;
@@ -233,6 +294,33 @@ readstring(p: ref Parse, delim: int): string raises(Syntax)
 			raise Syntax("unterminated string");
 		}
 		return s;
+	}exception{
+	Syntax =>
+		raise;
+	}
+}
+
+# the character after a backslash that is not 'u'
+unesc(c: int): int
+{
+	case c {
+	'b' =>	return '\b';
+	'f' =>	return '\f';
+	'n' =>	return '\n';
+	'r' =>	return '\r';
+	't' =>	return '\t';
+	}
+	return c;	# itself, including '"', '/', and '\'
+}
+
+# four hex digits
+hex4(p: ref Parse): int raises(Syntax)
+{
+	{
+		c := 0;
+		for(i := 0; i < 4; i++)
+			c = (c<<4) | hex(p.getc());
+		return c;
 	}exception{
 	Syntax =>
 		raise;
@@ -281,7 +369,11 @@ writeval(out: ref Iobuf, o: ref JValue) raises(Badwrite)
 		Int =>
 			puts(out, r.text());
 		Real =>
-			puts(out, r.text());
+			# JSON has no infinity and no NaN
+			rs := realtext(r.value);
+			if(rs == nil)
+				raise Badwrite;
+			puts(out, rs);
 		Object =>	# '{' [pair (',' pair)*] '}'
 			putc(out, '{');
 			for(l := r.mem; l != nil; l = tl l){
@@ -364,6 +456,7 @@ putc(out: ref Iobuf, c: int) raises(Badwrite)
 Parse: adt {
 	input:	ref Iobuf;
 	eof:		int;
+	depth:	int;
 
 	mk:		fn(io: ref Iobuf): ref Parse;
 	getc:		fn(nil: self ref Parse): int;
@@ -373,7 +466,7 @@ Parse: adt {
 
 Parse.mk(io: ref Iobuf): ref Parse
 {
-	return ref Parse(io, 0);
+	return ref Parse(io, 0, 0);
 }
 
 Parse.getc(p: self ref Parse): int
@@ -577,7 +670,10 @@ JValue.text(v: self ref JValue): string
 	Int =>
 		return string r.value;
 	Real =>
-		return sys->sprint("%f", r.value);
+		rs := realtext(r.value);
+		if(rs == nil)
+			return "null";
+		return rs;
 	String =>
 		return quote(r.s);		# quoted, or not?
 	Array =>
@@ -599,6 +695,29 @@ JValue.text(v: self ref JValue): string
 	* =>
 		return nil;
 	}
+}
+
+Maxreal: con 1.7976931348623157e308;
+
+# A real as JSON has it, in the fewest digits that read back as the
+# same real, or nil if it is no number.  It was %f: six places, so 1e-7
+# was written as 0.000000, and 1e300 as three hundred digits.
+realtext(r: real): string
+{
+	# an infinity is past the largest real, and a NaN compares with nothing
+	if(!(r >= -Maxreal && r <= Maxreal))
+		return nil;
+	s: string;
+	for(prec := 15; prec <= 17; prec++){
+		s = sys->sprint("%.*g", prec, r);
+		if(real s == r)
+			break;
+	}
+	# still a real to whoever reads it: "5" would be an integer
+	for(i := 0; i < len s; i++)
+		if(s[i] == '.' || s[i] == 'e' || s[i] == 'E')
+			return s;
+	return s + ".0";
 }
 
 quote(s: string): string

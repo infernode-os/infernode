@@ -71,6 +71,14 @@ TARG=\
 	osk_accuracy.dis\
 	ninep_bench.dis\
 	ninep_msize_test.dis\
+	export_hostile_test.dis\
+	export_limits.dis\
+	mnt_smallmsize_test.dis\
+	styxservers_hostile_test.dis\
+	keyring_degenerate_test.dis\
+	auth_keyfile_test.dis\
+	factotum_needkey_test.dis\
+	auth9_short_test.dis\
 	ninep_disconnect_test.dis\
 	crypto_bench.dis\
 	tcpwatch.dis\
@@ -91,6 +99,9 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	png_hostile_test.dis\
+	devip_conv_test.dis\
+	nsunion_race_test.dis\
 	icon_test.dis\
 	touchgest_test.dis\
 	docengine_test.dis\
@@ -473,6 +484,8 @@ SYSMODULES=\
 	sdrdsp.m\
 	mermaid.m\
 	mdhtml.m\
+	crc.m\
+	pngload.m\
 
 DISBIN=$ROOT/dis/tests
 

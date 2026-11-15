@@ -351,6 +351,68 @@ testDecodeBit(t: ref T)
 	near(t, pixel(im, (3, 6)), (0, 0, 255), 0, "bottom half");
 }
 
+# an image file's bytes read by the draw library, or nil
+readbit(data: array of byte): ref Image
+{
+	path := "/tmp/imgload_test_hdr.bit";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return nil;
+	sys->write(fd, data, len data);
+	fd = sys->open(path, Sys->OREAD);
+	im: ref Image;
+	if(fd != nil)
+		im = display.readimage(fd);
+	sys->remove(path);
+	return im;
+}
+
+# Each field of an image file's header is eleven characters and a blank
+# (image(6)).  The numbers were read with atoi, which stops at what is
+# not a digit: a field of twelve digits ran on into the next, and the
+# last into a byte of the stack that nothing had set.
+testBitHeaderFields(t: ref T)
+{
+	needdisplay(t);
+	# 2 by 2, three bytes a pixel, not compressed
+	hdr := sys->sprint("%11s %11d %11d %11d %11d ", "r8g8b8", 0, 0, 2, 2);
+	plain := array[len hdr + 12] of {* => byte 16r80};
+	plain[0:] = array of byte hdr;
+	im := readbit(plain);
+	t.assert(im != nil && im.r.dx() == 2 && im.r.dy() == 2, "an image file that is one is read");
+
+	# the same written by the display, which compresses it
+	src := display.newimage(Rect((0, 0), (8, 8)), Draw->RGB24, 0, Draw->Blue);
+	path := "/tmp/imgload_test_hdr2.bit";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil || display.writeimage(fd, src) < 0)
+		t.fatal(sys->sprint("writeimage: %r"));
+	fd = nil;
+	comp := readfile(path);
+	sys->remove(path);
+	t.assert(len comp > 11 + 60 + 24 && string comp[0:11] == "compressed\n", "the display writes a compressed image");
+	t.assert(readbit(comp) != nil, "and reads it back");
+
+	# a digit where each field's blank is
+	for(f := 1; f < 5; f++){
+		a := array[len plain] of byte;
+		a[0:] = plain;
+		a[f*12 + 11] = byte '0';
+		t.assert(readbit(a) == nil, sys->sprint("field %d with a digit for its blank is refused", f + 1));
+		c := array[len comp] of byte;
+		c[0:] = comp;
+		c[11 + f*12 + 11] = byte '0';
+		t.assert(readbit(c) == nil, sys->sprint("the same of a compressed image's field %d", f + 1));
+	}
+	# and in a compressed image's first block
+	for(f = 0; f < 2; f++){
+		c := array[len comp] of byte;
+		c[0:] = comp;
+		c[11 + 60 + f*12 + 11] = byte '0';
+		t.assert(readbit(c) == nil, sys->sprint("a block's field %d with a digit for its blank is refused", f + 1));
+	}
+}
+
 # A row wider than the display's buffer (8000 bytes: 2100 pixels of
 # XRGB32, a Retina window's width): writeimage read it a buffer's
 # rows at a time, which was none, and never finished
@@ -935,6 +997,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DecodePic", testDecodePic);
 	run("DecodeBit", testDecodeBit);
 	run("WriteWide", testWriteWide);
+	run("BitHeaderFields", testBitHeaderFields);
 	run("RemapTrueColour", testRemapTrueColour);
 	run("Unrecognised", testUnrecognised);
 	run("GifNoColourTable", testGifNoColourTable);

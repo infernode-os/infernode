@@ -11,6 +11,35 @@ static char*	pkattr[] = { "n", "ek", nil };
 static char*	skattr[] = { "n", "ek", "!dk", "!p", "!q", "!kp", "!kq", "!c2", nil };
 static char*	sigattr[] = { "val", nil };
 
+enum
+{
+	/* the least rsagen can make primes for; not a size to use */
+	MinRSAgen	= 16,
+};
+
+/*
+ * A key that is one, as far as what uses it goes on to divide by: read
+ * from a string, which a peer or a file supplies, a modulus or a prime
+ * of 0 reached mpdiv, whose answer to a zero divisor is sysfatal, and
+ * the emulator ended.  Not a judgment of the key's strength.
+ */
+static int
+rsapubok(RSApub *pub)
+{
+	return mpcmp(pub->n, mpone) > 0
+		&& mpcmp(pub->ek, mpone) > 0
+		&& mpcmp(pub->ek, pub->n) < 0;
+}
+
+static int
+rsaprivok(RSApriv *rsa)
+{
+	return rsapubok(&rsa->pub)
+		&& mpcmp(rsa->p, mpone) > 0
+		&& mpcmp(rsa->q, mpone) > 0
+		&& mpcmp(rsa->dk, mpzero) > 0;
+}
+
 static void*
 rsa_str2sk(char *str, char **strp)
 {
@@ -30,7 +59,7 @@ rsa_str2sk(char *str, char **strp)
 		*strp = p;
 	if(rsa->pub.n == nil || rsa->pub.ek == nil ||
 	   rsa->dk == nil || rsa->p == nil || rsa->q == nil ||
-	   rsa->kp == nil || rsa->kq == nil || rsa->c2 == nil){
+	   rsa->kp == nil || rsa->kq == nil || rsa->c2 == nil || !rsaprivok(rsa)){
 		rsaprivfree(rsa);
 		return nil;
 	}
@@ -49,7 +78,7 @@ rsa_str2pk(char *str, char **strp)
 	rsa->ek = base64tobig(p, &p);
 	if(strp)
 		*strp = p;
-	if(rsa->n == nil || rsa->ek == nil){
+	if(rsa->n == nil || rsa->ek == nil || !rsapubok(rsa)){
 		rsapubfree(rsa);
 		return nil;
 	}
@@ -144,7 +173,7 @@ rsa_gen(int len)
 	 * write.  Reject it so genSK() returns nil instead of corrupting
 	 * memory.
 	 */
-	if(len < 2)
+	if(len < MinRSAgen)
 		return nil;
 	for(;;){
 		key = rsagen(len, 6, 0);
@@ -159,9 +188,20 @@ static void*
 rsa_genfrompk(void *vpub)
 {
 	RSApub *pub;
+	int nlen, elen;
 
+	/*
+	 * the same sizes as rsa_gen is held to, and for the same reason:
+	 * this is the path given a key from elsewhere (a signer's, at
+	 * enrolment), and a modulus of a bit or two had genprime write
+	 * before its number
+	 */
 	pub = vpub;
-	return rsagen(mpsignif(pub->n), mpsignif(pub->ek), 0);
+	nlen = mpsignif(pub->n);
+	elen = mpsignif(pub->ek);
+	if(nlen < MinRSAgen || elen < 2 || elen > nlen)
+		return nil;
+	return rsagen(nlen, elen, 0);
 }
 
 static void*

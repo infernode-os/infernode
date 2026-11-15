@@ -51,6 +51,11 @@ Png: adt {
 	lastrow: array of byte;
 };
 
+# The largest image read: a channel is a byte a pixel, in one array, and
+# there are up to four.  The widest row is then 8MB.
+MAXDIM: con 1 << 20;
+MAXPIXELS: con 64 * 1024 * 1024;
+
 init(iomod: Bufio)
 {
 	if(sys == nil)
@@ -152,6 +157,11 @@ read(fd: ref Iobuf): (ref Rawimage, string)
 			raw.r.max.x, raw.r.max.y, png.depth, png.colortype, png.interlacemethod);
 	if (!get_crc_and_check(fd, chunk))
 		return (nil, "invalid CRC");
+	# The size is the file's to say, and the channels below are made of
+	# it: a width times a height that wrapped an int made them of no
+	# bytes, or of a negative number of them.
+	if (raw.r.max.x > MAXDIM || raw.r.max.y > MAXDIM || big raw.r.max.x * big raw.r.max.y > big MAXPIXELS)
+		return (nil, sys->sprint("image too large: %dx%d", raw.r.max.x, raw.r.max.y));
 # Stash some detail in raw
 	raw.r.min = Point(0, 0);
 	raw.transp = 0;

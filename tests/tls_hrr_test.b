@@ -520,6 +520,12 @@ server(fd: ref Sys->FD, sc: ref Scenario, result: chan of string)
 	{
 		r = server0(fd, sc);
 	} exception e {
+	"write on closed pipe" =>
+		# The client refused what it was sent and hung up while more
+		# was being written to it: the end of the pipe, met by a write
+		# and not a read. Which of the two the server meets depends on
+		# who runs first, and it was a failure one run in many.
+		r = "eof: the client hung up while the server was writing";
 	"*" =>
 		r = "server: exception " + e;
 	}

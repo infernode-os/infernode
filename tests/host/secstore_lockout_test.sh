@@ -146,6 +146,43 @@ check "post-abort attempts are rejected while locked" "$OUTPUT3" "rejected locke
 
 lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
+sleep 1
+
+# Scenario 4 (an m outside the group): the client's m must be between 0 and p.
+# Zero in any spelling but the probe's "0" was taken, and made the shared
+# secret 0 whatever the server chose: its verifier, sent next, was then the
+# hash of things the client knows and the password's own verifier, so one
+# connection let the password be searched for with no further word to the
+# server. Refused, said to be bad, and counted as a failed attempt.
+cat > "$ROOT/tmp/test_badm.sh" << EOF
+load std
+bind -a '#I' /net
+ndb/cs
+auth/secstored &
+sleep 2
+auth/secstore-setup -u $USER -k $CORRECT
+echo '--- m outside the group ---'
+/tests/secstore_abort_probe.dis -m 'AA==' $USER
+/tests/secstore_abort_probe.dis -m 'AAAAAAAA' $USER
+/tests/secstore_abort_probe.dis -m '!!!!' $USER
+echo '--- an m inside it is still answered ---'
+/tests/secstore_abort_probe.dis -m 'AQ==' $USER
+echo '--- and the right password still authenticates ---'
+echo $CORRECT | auth/secstore -i -u $USER -s tcp!localhost!5356 t >[2=1]
+echo '--- bad m scenario done ---'
+EOF
+
+OUTPUT4=$(run_emu 60 /tmp/test_badm.sh)
+
+check "an m of zero is refused" "$OUTPUT4" "m-probe AA==: reply begins '!bad m"
+check "zero in another spelling is refused" "$OUTPUT4" "m-probe AAAAAAAA: reply begins '!bad m"
+check "an m that is no number is refused" "$OUTPUT4" "m-probe !!!!: reply begins '!bad m"
+check "an m in the group is answered" "$OUTPUT4" "m-probe AQ==: reply begins mu="
+check "the server says it refused an m outside the group" "$OUTPUT4" "rejected m outside the group"
+check "the right password authenticates after them" "$OUTPUT4" "authenticated: $USER"
+
+lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
+rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
 
 echo ""
 echo "$((TESTS - FAILURES))/$TESTS passed"

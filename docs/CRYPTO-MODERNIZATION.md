@@ -407,8 +407,8 @@ code), it uses a **mutual ML-KEM-768 exchange**:
 
    where the two KEM secrets and `ek`s are ordered canonically by comparing
    the public keys, so both peers derive the identical 64-byte secret. That
-   secret feeds the `ssl` device unchanged (64 bytes supplies a full key +
-   IV for any cipher).
+   secret feeds the `ssl` device (since 0.10.1 split into a secret for each
+   direction for AES-256-GCM; see section 11).
 
 The result is safe unless **both** the Diffie-Hellman and the ML-KEM problem
 are broken — directly addressing the harvest-now-decrypt-later threat on the
@@ -479,6 +479,51 @@ keeps the web, over X25519MLKEM768 where the server has it.
 ```sh
 ./emu/Linux/o.emu -r. /tests/pqauth_test.dis -v
 ```
+
+### 11. The line encryption: `ssl(3)` is AES-256-GCM (0.10.1)
+
+The 64-byte secret from section 10 no longer feeds a choice of ciphers.
+`ssl(3)` offers two algorithms and refuses the rest:
+
+| Algorithm | What it is |
+|-----------|------------|
+| `aes_256_gcm` (default) | Each record sealed, its header authenticated; key and nonce from HKDF-SHA-384, record n's nonce n exclusive-ored in, so a record changed, cut, replayed, reordered or reflected is refused |
+| `hmac_sha384` | Integrity alone |
+
+`sha256` (SSL 2's hash, not an HMAC), `aes_128_cbc`, `aes_256_cbc` and the
+padded record are gone. Each direction must have its own secret of at least
+32 bytes, and the same secret both ways is refused; `ssl(2)`'s `secrets`
+makes one shared secret into one for each way, which auth(2), login(2),
+logind, secstore and secstored use. Every connection InferNode encrypts
+(mount, listen, styxlisten, cpu, login, secstore, the grid registries, the
+bare-metal cpu listener) takes it.
+
+**Breaking change:** both ends must run 0.10.1 or later. `9cpu`, `import` and
+`9export`, which speak to Plan 9 (p9sk1, a 56-bit key), refuse encryption
+and run in the clear without `-e`. `crypt(1)` uses AES-256-GCM with
+PBKDF2-HMAC-SHA-384 and a salt per file.
+
+Under it:
+
+- **GHASH in constant time.** It indexed a table by nibbles of the running
+  hash; it is now PMULL where the processor has it and table-free integer
+  multiplication otherwise (after BearSSL). AES and SHA-256 use the ARMv8
+  instructions where `ID_AA64ISAR0_EL1` says the core has them, in the
+  emulator and the native kernels.
+- **One generator, NIST's.** Every random number, in the emulator
+  (`libsec/genrandom.c`) and the native kernels (`os/port/random.c`), comes
+  from HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1, `libsec/hmacdrbg.c`),
+  checked against NIST's CAVP vectors before its first output. ChaCha20,
+  which it replaced, is on no NIST or CNSA list. See
+  [TLS-ENTROPY.md](TLS-ENTROPY.md).
+- **Login in CNSA mode** seals its Diffie-Hellman value with AES-256-GCM
+  under HKDF-SHA-384 rather than ChaCha20-Poly1305; a signer in CNSA mode
+  refuses the latter and says why.
+
+Tests: `tests/ssl_record_test.b`, `tests/ssl_transport_test.b`,
+`tests/libsec_kat_test.b`, `tests/login_test.b`,
+`tests/host/armcrypto_test.sh`, `tests/host/kernrandom_test.sh`,
+`tests/host/emurandom_test.sh`.
 
 ## Security Properties (Updated)
 

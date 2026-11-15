@@ -119,6 +119,8 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		'f' or
 		'k' =>
 			keyfile = arg->earg();
+			if (keyfile == nil)
+				arg->usage();	# -k '' indexed an empty string
 			if (! (keyfile[0] == '/' || (len keyfile > 2 &&  keyfile[0:2] == "./")))
 				keyfile = "/usr/" + user() + "/keyring/" + keyfile;
 		'i' =>

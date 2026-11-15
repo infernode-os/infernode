@@ -823,6 +823,13 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
+	# the server's, and an element of the group or nothing: one that is
+	# no number was a nil dereference here
+	if(mu == nil || mu.cmp(IPint.inttoip(0)) <= 0 || mu.cmp(params.p) >= 0){
+		writerr(dfd, "bad mu");
+		sys->werrstr("secstore: server's mu is outside the group");
+		return nil;
+	}
 	sigma := mu.expmod(x, params.p);
 	hexsigma := sigma.iptostr(64);
 	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);
@@ -1128,6 +1135,13 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
+	# the server's, and an element of the group or nothing: one that is
+	# no number was a nil dereference here
+	if(mu == nil || mu.cmp(IPint.inttoip(0)) <= 0 || mu.cmp(params.p) >= 0){
+		writerr(dfd, "bad mu");
+		sys->werrstr("secstore: server's mu is outside the group");
+		return nil;
+	}
 	sigma := mu.expmod(x, params.p);
 	hexsigma := sigma.iptostr(64);
 	digest := shorthashver(version, "server", C, S, hexm, hexmu, hexsigma, hexHi);

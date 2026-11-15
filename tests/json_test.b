@@ -357,6 +357,193 @@ testRoundTrip(t: ref T)
 	}
 }
 
+# ── What a peer chooses ──────────────────────────────────────────────────────
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+# Arrays and objects nest only so deep: the parser calls itself for each
+# level, and a document of nothing but '[' had it do so for as long as
+# there was memory.
+testDepth(t: ref T)
+{
+	s := "";
+	for(i := 0; i < 500; i++)
+		s += "[";
+	for(i = 0; i < 500; i++)
+		s += "]";
+	(v, err) := parse(s);
+	t.assert(v != nil && err == nil, "500 arrays, one in another, parse: " + err);
+
+	a := array[100000] of {* => byte '['};
+	(v, err) = parse(string a);
+	t.assert(v == nil && contains(err, "too deep"), "100000 '[' is refused for its depth: " + err);
+
+	s = "";
+	for(i = 0; i < 2000; i++)
+		s += "{\"a\":";
+	(v, err) = parse(s);
+	t.assert(v == nil && contains(err, "too deep"), "2000 objects, one in another, are refused for their depth: " + err);
+
+	# the limit is on depth, not number: 5000 side by side, and the depth
+	# counted down again at each one's end
+	s = "[";
+	for(i = 0; i < 5000; i++){
+		if(i != 0)
+			s += ",";
+		s += "[{\"a\":[]}]";
+	}
+	s += "]";
+	(v, err) = parse(s);
+	if(v == nil)
+		t.fatal("5000 arrays side by side: " + err);
+	pick x := v {
+	Array =>
+		t.asserteq(len x.a, 5000, "5000 arrays side by side");
+	* =>
+		t.error("not an array");
+	}
+}
+
+isint(t: ref T, s: string, want: big)
+{
+	(v, err) := parse(s);
+	if(v == nil){
+		t.error(s + ": " + err);
+		return;
+	}
+	pick x := v {
+	Int =>
+		t.assert(x.value == want, sys->sprint("%s is the integer %bd: %bd", s, want, x.value));
+	* =>
+		t.error(s + " is not an integer");
+	}
+}
+
+isreal(t: ref T, s: string, want: real)
+{
+	(v, err) := parse(s);
+	if(v == nil){
+		t.error(s + ": " + err);
+		return;
+	}
+	pick x := v {
+	Real =>
+		t.assert(x.value == want, sys->sprint("%s is the real %g: %g", s, want, x.value));
+	* =>
+		t.error(s + " is not a real: " + v.text());
+	}
+}
+
+# An integer that does not fit 64 bits is a real, not the largest
+# integer there is.
+testBigIntegers(t: ref T)
+{
+	isint(t, "9223372036854775807", big 16r7fffffffffffffff);
+	isint(t, "-9223372036854775808", big 1 << 63);
+	isint(t, "-9223372036854775807", -(big 16r7fffffffffffffff));
+	isint(t, "000000000000000000000000000042", big 42);
+	isint(t, "-0", big 0);
+	isint(t, "999999999999999999", big 999999999999999999);
+	isreal(t, "9223372036854775808", 9223372036854775808.0);
+	isreal(t, "-9223372036854775809", -9223372036854775809.0);
+	isreal(t, "18446744073709551617", 18446744073709551617.0);
+	isreal(t, "99999999999999999999999", 1e23);
+	isreal(t, "10000000000000000000", 1e19);
+}
+
+# Reals are written in the digits that read back as themselves.
+testReals(t: ref T)
+{
+	t.assertseq(json->jvreal(0.7).text(), "0.7", "0.7");
+	t.assertseq(json->jvreal(5.0).text(), "5.0", "5.0 stays a real");
+	t.assertseq(json->jvreal(-0.25).text(), "-0.25", "-0.25");
+	vals := array[] of {0.7, 0.1, 1e-7, 5.0, 1.5e300, 123456789.125, 1e22, 0.30000000000000004,
+		-2.5e-10, 3.14, 1.7976931348623157e308, 4.9e-324, 0.0, 1e300, 9223372036854775808.0};
+	for(i := 0; i < len vals; i++){
+		s := json->jvreal(vals[i]).text();
+		t.assert(len s < 30, sys->sprint("%g is written in %d characters", vals[i], len s));
+		isreal(t, s, vals[i]);
+	}
+
+	# what is no number is not written as one
+	inf := real "1e999";
+	t.assertseq(json->jvreal(inf).text(), "null", "infinity as text");
+	ninf := -inf;
+	t.assertseq(json->jvreal(ninf).text(), "null", "minus infinity as text");
+	t.assertseq(json->jvreal(inf + ninf).text(), "null", "NaN as text");
+	out := bufio->create("/tmp/json_test.out", Sys->OWRITE, 8r600);
+	if(out == nil)
+		t.fatal(sys->sprint("cannot create /tmp/json_test.out: %r"));
+	bad := array[2] of ref JValue;
+	bad[0] = json->jvreal(1.5);
+	bad[1] = json->jvreal(-inf);
+	arr := json->jvarray(bad);
+	t.asserteq(json->writejson(out, arr), -1, "an array with an infinity in it is not written");
+	out.close();
+	out = bufio->create("/tmp/json_test.out", Sys->OWRITE, 8r600);
+	good := array[3] of ref JValue;
+	good[0] = json->jvreal(1e-7);
+	good[1] = json->jvreal(1e300);
+	good[2] = json->jvint(3);
+	t.asserteq(json->writejson(out, json->jvarray(good)), 0, "an array of reals is written");
+	out.close();
+	in := bufio->open("/tmp/json_test.out", Sys->OREAD);
+	if(in != nil)
+		t.assertseq(in.gets('\n'), "[1e-07,1e+300,3]", "as written");
+	sys->remove("/tmp/json_test.out");
+}
+
+isstring(t: ref T, src: string, want: array of int, what: string)
+{
+	(v, err) := parse(src);
+	if(v == nil){
+		t.error(what + ": " + err);
+		return;
+	}
+	pick x := v {
+	String =>
+		ok := len x.s == len want;
+		for(i := 0; ok && i < len want; i++)
+			ok = x.s[i] == want[i];
+		got := "";
+		for(i = 0; i < len x.s; i++)
+			got += sys->sprint(" %.4ux", x.s[i]);
+		t.assert(ok, what + ":" + got);
+	* =>
+		t.error(what + ": not a string");
+	}
+}
+
+# \u escapes for a character past U+FFFF come in pairs; half a pair is
+# no character.
+testSurrogates(t: ref T)
+{
+	E: con Sys->UTFerror;
+	isstring(t, "\"\\uD83D\\uDE00\"", array[] of {16r1F600}, "a pair is its one character");
+	isstring(t, "\"a\\uD834\\uDD1Eb\"", array[] of {'a', 16r1D11E, 'b'}, "a pair between letters");
+	isstring(t, "\"\\uDBFF\\uDFFF\"", array[] of {16r10FFFF}, "the last pair");
+	isstring(t, "\"\\uDC00\"", array[] of {E}, "a second half alone");
+	isstring(t, "\"\\uD800\"", array[] of {E}, "a first half alone");
+	isstring(t, "\"\\uD800x\"", array[] of {E, 'x'}, "a first half and a letter");
+	isstring(t, "\"\\uD800\\n\"", array[] of {E, '\n'}, "a first half and another escape");
+	isstring(t, "\"\\uD800\\u0041\"", array[] of {E, 'A'}, "a first half and a \\u that is no second half");
+	isstring(t, "\"\\uD800\\uD83D\\uDE00\"", array[] of {E, 16r1F600}, "a first half and then a pair");
+	isstring(t, "\"\\uD800\\uD800\"", array[] of {E, E}, "two first halves");
+	isstring(t, "\"\\u00e9\\u4e16\"", array[] of {16re9, 16r4e16}, "characters that need no pair");
+	(v, err) := parse("\"\\uD800");
+	t.assert(v == nil && err != nil, "a string that ends after a first half is refused");
+	(v, err) = parse("\"\\uD800\\");
+	t.assert(v == nil && err != nil, "and one that ends in the middle of the next escape");
+	(v, err) = parse("\"\\uD800\\uDC");
+	t.assert(v == nil && err != nil, "and one that ends in the middle of the second half");
+}
+
 # ── Error handling tests ─────────────────────────────────────────────────────
 
 testParseInvalid(t: ref T)
@@ -412,6 +599,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ParseEmpty", testParseEmpty);
 	run("ParseEscapes", testParseEscapes);
 	run("RoundTrip", testRoundTrip);
+	run("Depth", testDepth);
+	run("BigIntegers", testBigIntegers);
+	run("Reals", testReals);
+	run("Surrogates", testSurrogates);
 	run("ParseInvalid", testParseInvalid);
 
 	if(testing->summary(passed, failed, skipped) > 0)

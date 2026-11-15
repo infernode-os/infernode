@@ -43,7 +43,8 @@ static Type*	TRSApk;
 static Type*	TRSAsig;
 
 enum {
-	Maxmsg=	4096
+	Maxmsg=	4096,
+	Maxdhbits=	1<<15,	/* a Diffie-Hellman modulus auth will use */
 };
 
 static uchar DigestStatemap[] = Keyring_DigestState_map;
@@ -551,20 +552,42 @@ sktostr(SK *sk, char *buf, int len)
 	return n + (*sk->vec->sk2str)(sk->key, buf+n, len - n);
 }
 
+/*
+ * A key's or certificate's text, for sktostr, pktostr and certtostr.
+ * Each allocated its 48K with malloc and then looked at its argument:
+ * sktostr(nil) raised with the buffer never freed, two thousand calls
+ * took the kernel's main pool 96MB, and with the pool at its limit
+ * nothing else in the emulator could have 48K again. The argument is
+ * now checked first, and the text is made in an array of the Dis heap:
+ * making the string of it can raise for want of heap, and an array
+ * nothing refers to is the collector's to free.
+ */
+static Array*
+textbuf(void)
+{
+	return H2D(Array*, heaparray(&Tbyte, Maxbuf));
+}
+
+static void
+rettext(Array *a, String **ret)
+{
+	retstr((char*)a->data, ret);
+	memset(a->data, 0, a->len);	/* it may be a secret key */
+	destroy(a);
+}
+
 void
 Keyring_sktostr(void *fp)
 {
 	F_Keyring_sktostr *f;
-	char *buf;
+	SK *sk;
+	Array *a;
 
 	f = fp;
-	buf = malloc(Maxbuf);
-
-	if(buf)
-		sktostr(checkSK(f->sk), buf, Maxbuf);
-	retstr(buf, f->ret);
-
-	free(buf);
+	sk = checkSK(f->sk);
+	a = textbuf();
+	sktostr(sk, (char*)a->data, Maxbuf);
+	rettext(a, f->ret);
 }
 
 static SK*
@@ -709,16 +732,14 @@ void
 Keyring_pktostr(void *fp)
 {
 	F_Keyring_pktostr *f;
-	char *buf;
+	PK *pk;
+	Array *a;
 
 	f = fp;
-	buf = malloc(Maxbuf);
-
-	if(buf)
-		pktostr(checkPK(f->pk), buf, Maxbuf);
-	retstr(buf, f->ret);
-
-	free(buf);
+	pk = checkPK(f->pk);
+	a = textbuf();
+	pktostr(pk, (char*)a->data, Maxbuf);
+	rettext(a, f->ret);
 }
 
 void
@@ -878,16 +899,14 @@ void
 Keyring_certtostr(void *fp)
 {
 	F_Keyring_certtostr *f;
-	char *buf;
+	Certificate *c;
+	Array *a;
 
 	f = fp;
-	buf = malloc(Maxbuf);
-
-	if(buf)
-		certtostr(checkCertificate(f->c), buf, Maxbuf);
-	retstr(buf, f->ret);
-
-	free(buf);
+	c = checkCertificate(f->c);
+	a = textbuf();
+	certtostr(c, (char*)a->data, Maxbuf);
+	rettext(a, f->ret);
 }
 
 void
@@ -1980,10 +1999,11 @@ Keyring_auth(void *fp)
 	SK *mysk;
 	PK *mypk, *spk, *hispk;
 	Certificate *cert, *hiscert, *alphacert;
-	char *buf, *err;
+	char *buf, *err, *argerr;
 	uchar *cvb;
 	int n, fd;
 	long now;
+	Keyring_Authinfo *info;
 	/* hybrid post-quantum key agreement material. Buffers are sized for the
 	 * larger ML-KEM-1024 (CNSA 2.0 strict); pklen/ctlen select the in-use
 	 * parameter set at runtime. They live on the heap, not the stack:
@@ -2015,6 +2035,47 @@ Keyring_auth(void *fp)
 		return;
 	}
 	fd = f->fd->fd;
+
+	/*
+	 * The keys, looked at before anything is allocated: a key that
+	 * is none raises, and that was after the 48K buffer and the
+	 * ML-KEM block were made, which were then never freed (59K a
+	 * call, from a program with an Authinfo of its own making). What
+	 * is said to the peer about a missing one is still said after the
+	 * versions are exchanged.
+	 */
+	info = f->info;
+	argerr = nil;
+	mysk = nil;
+	mypk = spk = nil;
+	cert = nil;
+	p = alpha = nil;
+	if(info == H)
+		argerr = "no authentication information";
+	else if(info->p == H)
+		argerr = "missing diffie hellman mod";
+	else if(info->alpha == H)
+		argerr = "missing diffie hellman base";
+	else{
+		mysk = checkSK(info->mysk);
+		mypk = checkPK(info->mypk);
+		cert = checkCertificate(info->cert);
+		spk = checkPK(info->spk);
+		p = checkIPint(info->p);
+		alpha = checkIPint(info->alpha);
+		/*
+		 * The modulus is the caller's. Zero is divided by (libmp
+		 * raises, with everything here allocated). The two shares
+		 * in base 64 and the two ML-KEM keys are signed from buf,
+		 * and were copied there whatever their length: past its end
+		 * with a modulus of a quarter of a million bits. The groups
+		 * in use are of 2048 to 8192 bits.
+		 */
+		if(p->sign < 0)
+			argerr = "-ve modulus";
+		else if(p->top == 0 || mpsignif(p) > Maxdhbits)
+			argerr = "bad diffie hellman mod";
+	}
 
 	buf = malloc(Maxbuf);
 	if(buf == nil){
@@ -2062,45 +2123,8 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
-	if(f->info == H){
-		err = "no authentication information";
-		goto out;
-	}
-	if(f->info->p == H){
-		err = "missing diffie hellman mod";
-		goto out;
-	}
-	if(f->info->alpha == H){
-		err = "missing diffie hellman base";
-		goto out;
-	}
-	mysk = checkSK(f->info->mysk);
-	if(mysk == H){
-		err = "bad sk arg";
-		goto out;
-	}
-	mypk = checkPK(f->info->mypk);
-	if(mypk == H){
-		err = "bad pk arg";
-		goto out;
-	}
-	cert = checkCertificate(f->info->cert);
-	if(cert == H){
-		err = "bad certificate arg";
-		goto out;
-	}
-	spk = checkPK(f->info->spk);
-	if(spk == H){
-		err = "bad signer key arg";
-		goto out;
-	}
-
-	/* get alpha and p */
-	p = checkIPint(f->info->p);
-	alpha = checkIPint(f->info->alpha);
-
-	if(p->sign == -1) {
-		err = "-ve modulus";
+	if(argerr != nil){
+		err = argerr;
 		goto out;
 	}
 
@@ -2300,9 +2324,24 @@ Keyring_auth(void *fp)
 	 */
 	n = bigtobase64(alphar0, buf, Maxbuf);
 	n += bigtobase64(alphar1, buf+n, Maxbuf-n);
+	if(n > Maxbuf - 2*pklen){
+		err = "bad diffie hellman mod";
+		goto out;
+	}
 	memmove(buf+n, myek, pklen); n += pklen;
 	memmove(buf+n, hisek, pklen); n += pklen;
 	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
+	/*
+	 * sign gives nil when it has no memory for its buffer, and a
+	 * certificate with no signature when the algorithm makes none:
+	 * either went on to be printed, through nil
+	 */
+	if(alphacert == nil || alphacert->signa == nil){
+		if(alphacert == nil)
+			alphacert = H;
+		err = exNomem;
+		goto out;
+	}
 	n = certtostr(alphacert, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
 		err = MSG;
@@ -2327,6 +2366,10 @@ Keyring_auth(void *fp)
 	certimmutable(alphacert);		/* hide from the garbage collector */
 	n = bigtobase64(alphar1, buf, Maxbuf);
 	n += bigtobase64(alphar0, buf+n, Maxbuf-n);
+	if(n > Maxbuf - 2*pklen){
+		err = "bad diffie hellman mod";
+		goto out;
+	}
 	memmove(buf+n, hisek, pklen); n += pklen;
 	memmove(buf+n, myek, pklen); n += pklen;
 	if(verify(hispk, alphacert, buf, n) == 0){
@@ -2572,12 +2615,15 @@ Keyring_readauthinfo(void *fp)
 	if(f->filename == H)
 		return;
 
-	buf = malloc(Maxbuf);
-	if(buf == nil)
-		return;
-
 	ai = newAuthinfo();
 	*f->ret = ai;
+
+	buf = malloc(Maxbuf);
+	if(buf == nil){
+		*f->ret = H;
+		destroy(ai);
+		return;
+	}
 
 	release();
 	fd = kopen(string2c(f->filename), OREAD);
@@ -2619,7 +2665,14 @@ Keyring_readauthinfo(void *fp)
 	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
+	/*
+	 * a number that is none: newIPint raises on nil, and the buffer
+	 * and the open file were then never given back (a key file with
+	 * one bad character cost a descriptor each time it was read)
+	 */
 	b = strtomp(buf, nil, 64, nil);
+	if(b == nil)
+		goto out;
 	ai->alpha = newIPint(b);
 
 	/* diffie hellman modulus */
@@ -2627,6 +2680,8 @@ Keyring_readauthinfo(void *fp)
 	if(n < 0)
 		goto out;
 	b = strtomp(buf, nil, 64, nil);
+	if(b == nil)
+		goto out;
 	ai->p = newIPint(b);
 	ok = 1;
 out:
@@ -2730,7 +2785,7 @@ getbuf(int fd, uchar *buf, int n, char *err, int nerr)
 	acquire();
 	if(len <= 0){
 		strncpy(err, "hungup", nerr);
-		buf[nerr-1] = 0;
+		err[nerr-1] = 0;
 		return -1;
 	}
 	if(buf[0] == 0)
@@ -3236,6 +3291,9 @@ Keyring_rc4setup(void *fp)
 
 	if(f->seed == H)
 		return;
+	/* a key of no bytes: the byte after the array was read and used as one */
+	if(f->seed->len <= 0)
+		error(exBadKey);
 
 	h = heap(TRC4state);
 	is = H2D(XRC4state*, h);
@@ -3262,6 +3320,34 @@ Keyring_rc4(void *fp)
 	rc4(&is->state, p, f->n);
 }
 
+/*
+ * rc4skip and rc4back step the state as many times as a program says,
+ * and did it holding the VM: the largest int stopped every Limbo thread
+ * for six seconds. A long way is gone on a copy of the state, with the
+ * VM let go.
+ */
+enum
+{
+	RC4relsteps	= 1<<20,
+};
+
+static void
+rc4step(XRC4state *is, int n, void (*step)(RC4state*, int))
+{
+	RC4state st;
+
+	if(n <= RC4relsteps){
+		(*step)(&is->state, n);
+		return;
+	}
+	st = is->state;
+	release();
+	(*step)(&st, n);
+	acquire();
+	is->state = st;
+	memset(&st, 0, sizeof(st));
+}
+
 void
 Keyring_rc4skip(void *fp)
 {
@@ -3270,7 +3356,7 @@ Keyring_rc4skip(void *fp)
 
 	f = fp;
 	is = checktype(f->state, TRC4state, exBadState, 0);
-	rc4skip(&is->state, f->n);
+	rc4step(is, f->n, rc4skip);
 }
 
 void
@@ -3281,7 +3367,7 @@ Keyring_rc4back(void *fp)
 
 	f = fp;
 	is = checktype(f->state, TRC4state, exBadState, 0);
-	rc4back(&is->state, f->n);
+	rc4step(is, f->n, rc4back);
 }
 
 /*

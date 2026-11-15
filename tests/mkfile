@@ -142,6 +142,7 @@ TARG=\
 	print_edge_test.dis\
 	math_edge_test.dis\
 	alt_edge_test.dis\
+	keyring_args_test.dis\
 	ipint_edge_test.dis\
 	string_edge_test.dis\
 	geom_edge_test.dis\

@@ -718,7 +718,8 @@ Crypt_blowfishcbc(void *fp)
 
 	f = fp;
 
-	if(f->state == H)
+	/* the buffer, not the state: its length is read next (checktype refuses a nil state) */
+	if(f->buf == H)
 		return;
 	if(f->n < 0 || f->n > f->buf->len)
 		error(exBounds);
@@ -749,6 +750,9 @@ Crypt_rc4setup(void *fp)
 
 	if(f->seed == H)
 		error(exNilref);
+	/* a key of no bytes: the byte after the array was read and used as one */
+	if(f->seed->len <= 0)
+		error(exBadKey);
 
 	h = heap(TRC4state);
 	is = H2D(XRC4state*, h);
@@ -775,6 +779,33 @@ Crypt_rc4(void *fp)
 	rc4(&is->state, p, f->n);
 }
 
+/*
+ * rc4skip and rc4back step the state as many times as a program says:
+ * a long way is gone on a copy of the state with the VM let go, as
+ * Keyring's (the largest int held every Limbo thread for seconds).
+ */
+enum
+{
+	RC4relsteps	= 1<<20,
+};
+
+static void
+rc4step(XRC4state *is, int n, void (*step)(RC4state*, int))
+{
+	RC4state st;
+
+	if(n <= RC4relsteps){
+		(*step)(&is->state, n);
+		return;
+	}
+	st = is->state;
+	release();
+	(*step)(&st, n);
+	acquire();
+	is->state = st;
+	memset(&st, 0, sizeof(st));
+}
+
 void
 Crypt_rc4skip(void *fp)
 {
@@ -783,7 +814,7 @@ Crypt_rc4skip(void *fp)
 
 	f = fp;
 	is = checktype(f->state, TRC4state, exBadState, 0);
-	rc4skip(&is->state, f->n);
+	rc4step(is, f->n, rc4skip);
 }
 
 void
@@ -794,7 +825,7 @@ Crypt_rc4back(void *fp)
 
 	f = fp;
 	is = checktype(f->state, TRC4state, exBadState, 0);
-	rc4back(&is->state, f->n);
+	rc4step(is, f->n, rc4back);
 }
 
 /*

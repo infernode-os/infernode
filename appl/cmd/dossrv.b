@@ -681,14 +681,31 @@ rread(t: ref Tmsg.Read): ref Rmsg
 	    (f.flags&Oread == 0))
 		return e(Eio);
 
+	#
+	# An offset is 64 bits and a file here is at most 2GB: cut to an
+	# int, one past 2^31 was negative, and a sector's bytes were
+	# sliced from a negative index (the server ended, and what it had
+	# not yet written was lost). No more is read than one message
+	# holds, whatever the count.
+	#
+	if(t.offset < big 0)
+		return e(Eio);
+	if(t.offset > big Maxoff)
+		return ref Rmsg.Read(t.tag, array[0] of byte);
+	count := t.count;
+	if(count < 0)
+		count = 0;
+	if(count > Styx->MAXFDATA)
+		count = Styx->MAXFDATA;
+
 	if((f.qid.qtype & Sys->QTDIR) != 0) {
 		if(getfile(f) < 0)
 			return e(Eio);
-		(r, data) = readdir(f, int t.offset, t.count);
+		(r, data) = readdir(f, int t.offset, count);
 	} else {
 		if(getfile(f) < 0)
 			return e(Eio);
-		(r,data) = readfile(f, int t.offset, t.count);
+		(r,data) = readfile(f, int t.offset, count);
 	}
 	putfile(f);
 
@@ -702,6 +719,9 @@ rwrite(t: ref Tmsg.Write): ref Rmsg
 	if(((f:=xfile(t.fid, Asis))==nil) ||
 	   !(f.flags&Owrite))
 		return e(Eio);
+	# as rread: and a write may not take a file past what an int counts
+	if(t.offset < big 0 || t.offset > big Maxoff - big len t.data)
+		return e(Efull);
 	if(getfile(f) < 0)
 		return e(Eio);
 	r := writefile(f, t.data, int t.offset, len t.data);
@@ -1487,10 +1507,32 @@ Dmddo:
 		bp.fsinfo = bytes2short(p.iobuf[48:50]);
 	}
 
-	bp.fataddr = int bp.nresrv;
-	bp.rootaddr = bp.fataddr + bp.nfats*bp.fatsize;
+	#
+	# These numbers are whatever the card says, and everything after
+	# is computed from them. A sector size of 0 was a division by
+	# zero here; one of 4096 indexed a 512-byte sector at 523 in the
+	# first directory read; no FATs, no clusters or no sectors gave
+	# addresses that were nowhere. Each ended the server, and with it
+	# every other file system it was serving.
+	#
+	if(bp.sectsize != Sectorsize || bp.clustsize <= 0 || (bp.clustsize & (bp.clustsize-1)) != 0 ||
+	   bp.nresrv <= 0 || bp.nfats <= 0 || bp.nfats > 8 || bp.fatsize <= 0 ||
+	   bp.rootsize < 0 || bp.volsize <= 0){
+		chat("implausible boot sector...");
+		putsect(p);
+		return -1;
+	}
 	i = bp.rootsize*DOSDIRSIZE + bp.sectsize-1;
 	i /= bp.sectsize;
+	# as bigs: the sum is of 32-bit fields
+	bdata := big bp.nresrv + big bp.nfats*big bp.fatsize + big i;
+	if(bdata >= big bp.volsize){
+		chat("no room for data in the volume...");
+		putsect(p);
+		return -1;
+	}
+	bp.fataddr = int bp.nresrv;
+	bp.rootaddr = bp.fataddr + bp.nfats*bp.fatsize;
 	bp.dataaddr = bp.rootaddr + i;
 	bp.fatclusters = FATRESRV+(bp.volsize - bp.dataaddr)/bp.clustsize;
 	if(bp.rootclust != 0)
@@ -1499,6 +1541,21 @@ Dmddo:
 		bp.fatbits = 12;
 	else
 		bp.fatbits = 16;
+	#
+	# No more clusters than the FAT has entries for: a volume said to
+	# be larger than its FAT maps had cluster numbers that passed the
+	# check against fatclusters and lay past the FAT's end.
+	#
+	maxcl := (big bp.fatsize * big bp.sectsize * big 8) / big bp.fatbits;
+	if(maxcl > big 16r0FFFFFF7)
+		maxcl = big 16r0FFFFFF7;
+	if(big bp.fatclusters > maxcl)
+		bp.fatclusters = int maxcl;
+	if(bp.fatclusters <= FATRESRV || (bp.rootclust != 0 && !okclust(bp, bp.rootclust))){
+		chat("no clusters, or a root that is none of them...");
+		putsect(p);
+		return -1;
+	}
 	bp.freeptr = 2;
 	if(debug & FAT_INFO){
 		chat(sys->sprint("fatbits=%d (%d clusters)...",
@@ -1574,7 +1631,24 @@ getstart(xf: ref Xfs, d: ref Dosdir): int
 	start := bytes2short(d.start);
 	if(bp.fatbits == 32)
 		start |= bytes2short(d.reserved[8:10])<<16;
+	#
+	# An entry's start is the card's to say. One that is no cluster
+	# of the volume (1, or past the last) was used as it stood: a
+	# sector before the data area or past the volume's end, read as
+	# the file and written as the file (cluster 1 is the last sector
+	# of the root or of the FAT), and a server ended by the FAT's
+	# range check when the file was removed or grown. Such a file
+	# has no clusters.
+	#
+	if(start != 0 && !okclust(bp, start))
+		return 0;
 	return start;
+}
+
+# whether c is the number of a cluster of the volume
+okclust(bp: ref Dosbpb, c: int): int
+{
+	return c >= FATRESRV && c < bp.fatclusters;
 }
 
 putstart(xf: ref Xfs, d: ref Dosdir, start: int)
@@ -1793,7 +1867,7 @@ searchdir(f: ref Xfile, name: string, cflag: int, lflag: int): (int, ref Dosptr)
 	addr := -1;
 	prevaddr: int;
 	have := 0;
-	for(isect:=0;; isect++) {
+	for(isect:=0; isect < Maxdirsect; isect++) {
 		prevaddr = addr;
 		addr = fileaddr(f, isect, cflag);
 		if(addr < 0)
@@ -1936,7 +2010,7 @@ searchdir(f: ref Xfile, name: string, cflag: int, lflag: int): (int, ref Dosptr)
 
 emptydir(f: ref Xfile): int
 {
-	for(isect:=0;; isect++) {
+	for(isect:=0; isect < Maxdirsect; isect++) {
 		addr := fileaddr(f, isect, 0);
 		if(addr < 0)
 			break;
@@ -1978,9 +2052,13 @@ readdir(f:ref Xfile, offset: int, count: int): (int, array of byte)
 
 	if(count <= 0)
 		return (0, nil);
+	if(count > len buf)
+		count = len buf;
 
+	# no further than a directory can be long: a chain of clusters
+	# that comes round to itself made one with no end, read for ever
 Read:
-	for(isect:=0;; isect++) {
+	for(isect:=0; isect < Maxdirsect; isect++) {
 		addr := fileaddr(f, isect, 0);
 		if(addr < 0)
 			break;
@@ -2264,10 +2342,14 @@ readfile(f: ref Xfile, offset: int, count: int): (int, array of byte)
 
 	length := bytes2int(dp.p.iobuf[dp.offset+28:dp.offset+32]);
 	rcnt := 0;
-	if(offset >= length)
+	if(length < 0)	# 2GB or more, which an int does not count
+		length = Maxoff;
+	if(offset < 0 || offset >= length)
 		return (0,nil);
+	if(count > Styx->MAXFDATA)
+		count = Styx->MAXFDATA;
  	buf := array[Styx->MAXFDATA] of byte;
-	if(offset+count >= length)
+	if(count >= length - offset)
 		count = length - offset;
 	isect := offset/bp.sectsize;
 	o := offset%bp.sectsize;
@@ -2733,9 +2815,11 @@ getfat(xf: ref Xfs, n: int): int
 	if(n < 2 || n >= bp.fatclusters)
 		return -1;
 	fb := bp.fatbits;
+	# within the FAT by dosfs's bound on fatclusters; asked again
+	# here, as bigs, and answered rather than died on
+	if((big fb * big n) >> 3 >= big bp.fatsize * big bp.sectsize)
+		return -1;
 	k = (fb*n) >> 3;
-	if(k < 0 || k >= bp.fatsize*bp.sectsize)
-		panic("getfat");
 
 	sect := k/bp.sectsize + bp.fataddr;
 	o := k%bp.sectsize;
@@ -2773,6 +2857,9 @@ getfat(xf: ref Xfs, n: int): int
 	#
 	if(k >= (1<<fb) - 8)
 		return -1;
+	# and for a link to what is no cluster: the chain ends there
+	if(k != 0 && !okclust(bp, k))
+		return -1;
 	return k;
 }
 
@@ -2809,13 +2896,16 @@ fsinfounknown(xf: ref Xfs)
 putfat(xf: ref Xfs, n, val: int)
 {
 	bp := xf.ptr;
-	if(n < 2 || n >= bp.fatclusters)
-		panic(sys->sprint("putfat n=%d", n));
+	# not a cluster of this volume: nothing is written, and the
+	# server goes on (it ended here, for a number off the card)
+	if(n < 2 || n >= bp.fatclusters ||
+	   (big bp.fatbits * big n) >> 3 >= big bp.fatsize * big bp.sectsize){
+		chat(sys->sprint("putfat: cluster %d is not in the FAT\n", n));
+		return;
+	}
 	if(bp.fatbits == 32 && !bp.fsinfodone)
 		fsinfounknown(xf);
 	k := (bp.fatbits*n) >> 3;
-	if(k >= bp.fatsize*bp.sectsize)
-		panic("putfat");
 	sect := k/bp.sectsize + bp.fataddr;
 	for(; sect<bp.rootaddr; sect+=bp.fatsize) {
 		o := k%bp.sectsize;
@@ -3285,6 +3375,8 @@ HIOB: con 127;	# a prime
 NIOBUF: con 256;
 
 Sectorsize: con 512;
+Maxoff: con 16r7FFFFFFF;	# the last offset an int holds
+Maxdirsect: con 65536*DOSDIRSIZE/Sectorsize;	# a directory has at most 65536 entries
 Sect2trk: con 9;	# default
 
 hiob := array[HIOB+1] of ref Iotrack;		# hash buckets + lru list
@@ -3367,6 +3459,11 @@ getosect(xf: ref Xfs, addr: int): ref Iosect
 # get the sector corresponding to the address addr.
 getiosect(xf: ref Xfs, addr , rflag: int): ref Iosect
 {
+	# no sector before the first, or past the volume's last once it
+	# is known: a negative one indexed the track's table
+	if(addr < 0 || (xf.fmt && xf.ptr != nil && addr >= xf.ptr.volsize))
+		return nil;
+
 	# offset from beginning of track.
 	toff := addr %  sect2trk;
 

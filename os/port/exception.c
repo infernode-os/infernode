@@ -167,13 +167,22 @@ handler(char *estr)
 found:
 	{
 		int n;
-		char name[3*KNAMELEN];
+		char name[3*KNAMELEN], *nex;
 
 		pc = modstatus(&R, name, sizeof(name));
-		n = 10+1+strlen(name)+1+strlen(estr)+1;
-		p->exstr = realloc(p->exstr, n);
-		if(p->exstr != nil)
+		/*
+		 * 20 digits: a pc is a ulong, and in a compiled module an
+		 * address. Room was left for 10, as a 32-bit one has, and
+		 * the end of the exception's text was cut off to make up
+		 * (/prog/n/exception gave "plain " for "plain text").
+		 * And a failed realloc does not lose the old text's block.
+		 */
+		n = 20+1+strlen(name)+1+strlen(estr)+1;
+		nex = realloc(p->exstr, n);
+		if(nex != nil){
+			p->exstr = nex;
 			snprint(p->exstr, n, "%lud %s %s", pc, name, estr);
+		}
 	}
 
 	/*
@@ -222,7 +231,17 @@ found:
 	else
 		R.PC = m->prog+newpc;
 	memmove(&p->reg, &R, sizeof(R));
-	p->kill = nil;
+	/*
+	 * Unless it is a kill that came while the frames were freed.
+	 * Freeing a file descriptor lets the VM go to close it, and a
+	 * Prog killed then is only marked, to be raised when it next
+	 * runs: this cleared the mark, and the Prog went on in its
+	 * handler with its killer told it had gone (a block that opens a
+	 * file and raises, in thirty Progs at once: 130 outlived their
+	 * killgrp in ten tries).
+	 */
+	if((p->flags & Pkilled) == 0)
+		p->kill = nil;
 	destroy(p->exval);
 	p->exval = H;
 	return 1;

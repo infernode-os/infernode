@@ -912,7 +912,7 @@ static void
 alglistinit(void)
 {
 	Alg *h, *e;
-	int n;
+	int n, m;
 
 	n = 1;
 	for(e = encrypttab; e->name != nil; e++)
@@ -922,8 +922,9 @@ alglistinit(void)
 		panic("sslinit");
 	n = 0;
 	for(e = encrypttab; e->name != nil; e++){
-		strcpy(encalgs+n, e->name);
-		n += strlen(e->name);
+		m = strlen(e->name);
+		memmove(encalgs+n, e->name, m);
+		n += m;
 		if(e[1].name == nil)
 			break;
 		encalgs[n++] = ' ';
@@ -938,8 +939,9 @@ alglistinit(void)
 		panic("sslinit");
 	n = 0;
 	for(h = hashtab; h->name != nil; h++){
-		strcpy(hashalgs+n, h->name);
-		n += strlen(h->name);
+		m = strlen(h->name);
+		memmove(hashalgs+n, h->name, m);
+		n += m;
 		if(h[1].name == nil)
 			break;
 		hashalgs[n++] = ' ';

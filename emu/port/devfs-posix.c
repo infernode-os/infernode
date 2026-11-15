@@ -37,6 +37,7 @@ struct Fsinfo
 	int	issocket;
 	QLock	oq;	/* mutex for offset */
 	char*	spec;
+	Lock	namel;	/* name is replaced by a rename; see fsname */
 	Cname*	name;	/* Unix's name for file */
 	Qid	rootqid;		/* Plan 9's qid for Inferno's root */
 };
@@ -48,7 +49,7 @@ enum
 	IDSHIFT	= 8,
 	NID	= 1 << IDSHIFT,
 	IDMASK	= NID - 1,
-	MAXPATH	= 1024	/* TO DO: eliminate this */
+	MAXELEM	= 1024	/* the longest name a directory entry is taken to have */
 };
 
 typedef struct User User;
@@ -75,7 +76,7 @@ static	User*	newuname(char*);
 static	User*	newgname(char*);
 
 static	Qid	fsqid(struct stat *);
-static	void	fspath(Cname*, char*, char*);
+static	char*	fsdirpath(Cname*, char**, char**);
 static	int	fsdirconv(Chan*, char*, char*, struct stat*, uchar*, int, int);
 static	Cname*	fswalkpath(Cname*, char*, int);
 static	char*	fslastelem(Cname*);
@@ -86,17 +87,56 @@ static	int	fsomode(int);
 static	void	fsremove(Chan*);
 static	vlong osdisksize(int);	/* defined by including file */
 
+/*
+ * A channel's host name is replaced when the file is renamed through
+ * it (fswstat), and a channel open in several processes is read and
+ * stat'ed by the others meanwhile.  They used the name with no
+ * reference of their own: the rename freed it under them, and a
+ * directory read then built its path from freed memory.  Each use takes
+ * a reference here and gives it back with cnameclose.
+ */
+static Cname*
+fsname(Chan *c)
+{
+	Cname *n;
+
+	lock(&FS(c)->namel);
+	n = FS(c)->name;
+	if(n != nil)
+		incref(&n->r);
+	unlock(&FS(c)->namel);
+	return n;
+}
+
+/* n's reference becomes the channel's */
+static void
+fssetname(Chan *c, Cname *n)
+{
+	Cname *o;
+
+	lock(&FS(c)->namel);
+	o = FS(c)->name;
+	FS(c)->name = n;
+	unlock(&FS(c)->namel);
+	cnameclose(o);
+}
+
 static int
 fsattrfd(Chan *c, struct stat *expected)
 {
 	struct stat actual;
 	int fd, oerrno;
+	Cname *nm;
 
 #ifndef O_NOFOLLOW
 	errno = ENOTSUP;
 	return -1;
 #else
-	fd = open(FS(c)->name->s, O_RDONLY|O_NONBLOCK|O_NOFOLLOW);
+	nm = fsname(c);
+	fd = open(nm->s, O_RDONLY|O_NONBLOCK|O_NOFOLLOW);	/* Flawfinder: ignore — O_NOFOLLOW, and the device and inode are checked against the walk's stat below */
+	oerrno = errno;
+	cnameclose(nm);
+	errno = oerrno;
 	if(fd < 0)
 		return -1;
 	if(fstat(fd, &actual) < 0){
@@ -186,10 +226,19 @@ fsattach(char *spec)
 	struct stat st;
 	static int devno;
 	static Lock l;
+	char *root;
 
 	if(!emptystr(spec) && strcmp(spec, "*") != 0)
 		error(Ebadspec);
-	if(stat(rootdir, &st) < 0)
+	/*
+	 * #U* is the host's whole tree, and its root is the host's /.  It
+	 * was given the qid, owner and mode of the emulator's root
+	 * directory: ".." from that directory inside #U* stayed there (fswalk
+	 * stops at the root's qid), and / was opened by another directory's
+	 * permissions.
+	 */
+	root = emptystr(spec)? rootdir: "/";
+	if(stat(root, &st) < 0)
 		oserror();
 	if(!S_ISDIR(st.st_mode))
 		error(Enotdir);
@@ -203,11 +252,9 @@ fsattach(char *spec)
 	lock(&l);
 	c->dev = devno++;
 	unlock(&l);
-	if(!emptystr(spec)){
+	if(!emptystr(spec))
 		FS(c)->spec = "/";
-		FS(c)->name = newcname(FS(c)->spec);
-	}else
-		FS(c)->name = newcname(rootdir);
+	FS(c)->name = newcname(root);
 	FS(c)->rootqid = c->qid;
 
 	return c;
@@ -247,9 +294,7 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 	}
 	wq->clone = nc;
 	rootqid = FS(c)->rootqid;
-	current = FS(c)->name;
-	if(current != nil)
-		incref(&current->r);
+	current = fsname(c);
 	for(j = 0; j < nname; j++){
 		if(!(nc->qid.type&QTDIR)){
 			if(j==0)
@@ -267,7 +312,7 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 				cnameclose(next);
 				if(j == 0)
 					error(Enonexist);
-				strcpy(up->env->errstr, Enonexist);
+				kstrcpy(up->env->errstr, Enonexist, ERRMAX);
 				break;
 			}
 			nc->qid = fsqid(&st);
@@ -308,20 +353,34 @@ fsstat(Chan *c, uchar *dp, int n)
 {
 	struct stat st;
 	char *p;
+	Cname *volatile nm;
+	volatile int locked;
 
+	locked = 0;
+	nm = fsname(c);
+	if(waserror()){
+		if(locked)
+			qunlock(&idl);
+		cnameclose(nm);
+		nexterror();
+	}
 	if(FS(c)->fd >= 0){
 		if(fstat(FS(c)->fd, &st) < 0)
 			oserror();
 	}else{
-		if(xstat(FS(c)->name->s, &st) < 0)
+		if(xstat(nm->s, &st) < 0)
 			oserror();
 	}
-	p = fslastelem(FS(c)->name);
+	p = fslastelem(nm);
 	if(*p == 0)
 		p = "/";
 	qlock(&idl);
-	n = fsdirconv(c, FS(c)->name->s, p, &st, dp, n, 0);
+	locked = 1;
+	n = fsdirconv(c, nm->s, p, &st, dp, n, 0);
+	locked = 0;
 	qunlock(&idl);
+	poperror();
+	cnameclose(nm);
 	return n;
 }
 
@@ -464,8 +523,7 @@ fscreate(Chan *c, char *name, int mode, ulong perm)
 		}
 		FS(c)->fd = fd;
 	}
-	cnameclose(FS(c)->name);
-	FS(c)->name = n;
+	fssetname(c, n);
 	poperror();
 
 	c->qid = fsqid(&st);
@@ -603,46 +661,63 @@ fsremove(Chan *c)
 static int
 fswstat(Chan *c, uchar *buf, int nb)
 {
-	Dir *d;
+	Dir *volatile d;
 	User *p;
 	Cname *volatile ph;
+	Cname *volatile nm;
 	struct stat st;
 	struct utimbuf utbuf;
 	int tsync, fd, rv, oerrno;
 
+	/* the name as it is now; a rename below replaces it (see fsname) */
+	nm = fsname(c);
+	d = nil;
+	if(waserror()){
+		free(d);
+		cnameclose(nm);
+		nexterror();
+	}
 	if(FS(c)->fd >= 0){
 		if(fstat(FS(c)->fd, &st) < 0)
 			oserror();
 	}else{
-		if(stat(FS(c)->name->s, &st) < 0)
+		if(stat(nm->s, &st) < 0)
 			oserror();
 	}
 	d = malloc(sizeof(*d)+nb);
 	if(d == nil)
 		error(Enomem);
-	if(waserror()){
-		free(d);
-		nexterror();
-	}
 	tsync = 1;
 	nb = convM2D(buf, nb, d, (char*)&d[1]);
 	if(nb == 0)
 		error(Eshortstat);
-	if(!emptystr(d->name) && strcmp(d->name, fslastelem(FS(c)->name)) != 0) {
+	/*
+	 * Only the owner changes the mode or the times, and is refused here,
+	 * before anything is changed: the rename was made first, so a request
+	 * for both from another user moved the file and then failed.
+	 */
+	if((d->mode != ~0 && (d->mode&0777) != (st.st_mode&0777) ||
+	    d->atime != ~0 && d->atime != st.st_atime ||
+	    d->mtime != ~0 && d->mtime != st.st_mtime) && up->env->uid != st.st_uid)
+		error(Eowner);
+	if(!emptystr(d->name) && strcmp(d->name, fslastelem(nm)) != 0) {
 		tsync = 0;
 		validname(d->name, 0);
-		ph = fswalkpath(FS(c)->name, "..", 1);
+		ph = fswalkpath(nm, "..", 1);
 		if(waserror()){
 			cnameclose(ph);
 			nexterror();
 		}
 		fswchk(ph);
 		ph = fswalkpath(ph, d->name, 0);
-		if(rename(FS(c)->name->s, ph->s) < 0)
+		if(rename(nm->s, ph->s) < 0)
 			oserror();
-		cnameclose(FS(c)->name);
 		poperror();
-		FS(c)->name = ph;
+		/* one reference for the channel, one for the rest of this call */
+		incref(&ph->r);
+		fssetname(c, ph);
+		cnameclose(nm);
+		nm = ph;
 	}
 
 	if(d->mode != ~0 && (d->mode&0777) != (st.st_mode&0777)) {
@@ -680,7 +755,7 @@ fswstat(Chan *c, uchar *buf, int nb)
 			utbuf.actime  = d->atime;
 		else
 			utbuf.actime = st.st_atime;
-		if(utime(FS(c)->name->s, &utbuf) < 0)	/* TO DO: futimes isn't portable */
+		if(utime(nm->s, &utbuf) < 0)	/* TO DO: futimes isn't portable */
 			oserror();
 	}
 
@@ -724,14 +799,15 @@ fswstat(Chan *c, uchar *buf, int nb)
 			if(ftruncate(FS(c)->fd, d->length) < 0)
 				oserror();
 		}else{
-			fswchk(FS(c)->name);
-			if(truncate(FS(c)->name->s, d->length) < 0)
+			fswchk(nm);
+			if(truncate(nm->s, d->length) < 0)
 				oserror();
 		}
 	}
 
 	poperror();
 	free(d);
+	cnameclose(nm);
 	if(tsync && FS(c)->fd >= 0 && fsync(FS(c)->fd) < 0)
 		oserror();
 	return nb;
@@ -764,21 +840,34 @@ fsqid(struct stat *st)
 	return q;
 }
 
-static void
-fspath(Cname *c, char *name, char *path)
+/*
+ * A directory's host name with a slash after it and room for an entry's
+ * name: *ep is where the entry's name goes and *end the end of the room.
+ * The caller frees it.
+ *
+ * It was built in a buffer of 1024 bytes on the stack, and a directory
+ * with a longer name panicked the emulator when it was read ("fspath:
+ * name too long"): any program that can make directories can make one,
+ * nested deep enough. A name of exactly 1023 bytes passed the test and
+ * put the terminator one byte past the buffer.
+ */
+static char*
+fsdirpath(Cname *c, char **ep, char **end)
 {
 	int n;
+	char *path;
 
-	if(c->len+strlen(name) >= MAXPATH)
-		panic("fspath: name too long");
+	path = malloc(c->len + 1 + MAXELEM + 1);
+	if(path == nil)
+		error(Enomem);
 	memmove(path, c->s, c->len);
 	n = c->len;
-	if(path[n-1] != '/')
+	if(n == 0 || path[n-1] != '/')
 		path[n++] = '/';
-	strcpy(path+n, name);
-	if(isdotdot(name))
-		cleanname(path);
-/*print("->%s\n", path);*/
+	path[n] = '\0';
+	*ep = path+n;
+	*end = path + c->len + 1 + MAXELEM + 1;
+	return path;
 }
 
 static Cname *
@@ -879,15 +968,44 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 	int i;
 	long n, r;
 	struct stat st;
-	char path[MAXPATH], *ep;
+	char *volatile path, *ep, *end;
+	volatile int locked;
 	struct dirent *de;
+	Cname *nm;
 	static uchar slop[8192];
 
 	i = 0;
-	fspath(FS(c)->name, "", path);
-	ep = path+strlen(path);
-	if(FS(c)->offset != offset) {
-		seekdir(FS(c)->dir, 0);
+	locked = 0;
+	nm = fsname(c);
+	if(waserror()){
+		cnameclose(nm);
+		nexterror();
+	}
+	path = fsdirpath(nm, &ep, &end);
+	poperror();
+	cnameclose(nm);
+	if(waserror()){
+		/* (an error from fsdirconv below left idl held, for good) */
+		if(locked)
+			qunlock(&idl);
+		free(path);
+		nexterror();
+	}
+	/*
+	 * A read at the start starts again, whatever was read before: with
+	 * entries left out (their stat failed, as during a rename of the
+	 * directory) the stream reached its end with the offset still 0, and
+	 * every later read from 0 was then an empty directory.
+	 */
+	if(FS(c)->offset != offset || offset == 0 && (FS(c)->eod || FS(c)->de == nil)) {
+		/*
+		 * rewinddir, not seekdir(dir, 0): a seekdir takes what
+		 * telldir gave, and 0 is that only by accident.  glibc
+		 * rewinds for it; macOS's does nothing, so a directory read
+		 * to its end read as empty from then on, however the reader
+		 * sought back to its start.
+		 */
+		rewinddir(FS(c)->dir);
 		FS(c)->de = nil;
 		FS(c)->eod = 0;
 		for(n=0; n<offset; ) {
@@ -896,13 +1014,16 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 				/* EOF, so stash offset and return 0 */
 				FS(c)->offset = n;
 				FS(c)->eod = 1;
+				poperror();
+				free(path);
 				return 0;
 			}
 			if(de->d_ino==0 || de->d_name[0]==0 || isdots(de->d_name))
 				continue;
-			strecpy(ep, path+sizeof(path), de->d_name);
+			strecpy(ep, end, de->d_name);	/* Flawfinder: ignore — strecpy stops at end, the end of path's allocation (fsdirpath) */
 			if(xstat(path, &st) < 0) {
-				fprint(2, "dir: bad path %s\n", path);
+				if(errno != ENOENT)
+					fprint(2, "dir: bad path %s\n", path);
 				continue;
 			}
 			qlock(&idl);
@@ -915,6 +1036,8 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 			qunlock(&idl);
 			if(r <= 0) {
 				FS(c)->offset = n;
+				poperror();
+				free(path);
 				return 0;
 			}
 			n += r;
@@ -922,8 +1045,11 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		FS(c)->offset = offset;
 	}
 
-	if(FS(c)->eod)
+	if(FS(c)->eod){
+		poperror();
+		free(path);
 		return 0;
+	}
 
 	/*
 	 * Take idl on behalf of id2name.  Stalling attach, which is a
@@ -931,6 +1057,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 	 * preferable to adding lock round-trips.
 	 */
 	qlock(&idl);
+	locked = 1;
 	while(i < count){
 		de = FS(c)->de;
 		FS(c)->de = nil;
@@ -944,9 +1071,14 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		if(de->d_ino==0 || de->d_name[0]==0 || isdots(de->d_name))
 			continue;
 
-		strecpy(ep, path+sizeof(path), de->d_name);
+		strecpy(ep, end, de->d_name);	/* Flawfinder: ignore — as above: bounded by end */
+		/*
+		 * An entry gone between readdir and here (removed, or its
+		 * directory renamed) is no fault: nothing is said of it.
+		 */
 		if(xstat(path, &st) < 0) {
-			fprint(2, "dir: bad path %s\n", path);
+			if(errno != ENOENT)
+				fprint(2, "dir: bad path %s\n", path);
 			continue;
 		}
 		r = fsdirconv(c, path, de->d_name, &st, va+i, count-i, 1);
@@ -957,7 +1089,10 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		i += r;
 		FS(c)->offset += r;
 	}
+	locked = 0;
 	qunlock(&idl);
+	poperror();
+	free(path);
 	return i;
 }
 
@@ -1170,16 +1305,27 @@ id2user(User **tab, int id, User* (*get)(int))
 static int
 ingroup(int id, int gid)
 {
-	int i;
+	int i, r;
 	User *g;
 
+	/*
+	 * The tables are changed by a lookup (a group first seen is added,
+	 * through getgrgid's one buffer), and their callers hold idl.  This
+	 * one, reached from every open's permission check, did not: two
+	 * opens, or an open beside a directory read, changed a chain
+	 * together.  Nothing that holds idl calls here.
+	 */
+	r = 0;
+	qlock(&idl);
 	g = id2user(gidmap, gid, newgid);
-	if(g == nil || g->mem == nil)
-		return 0;
-	for(i = 0; i < g->nmem; i++)
-		if(g->mem[i] == id)
-			return 1;
-	return 0;
+	if(g != nil && g->mem != nil)
+		for(i = 0; i < g->nmem; i++)
+			if(g->mem[i] == id){
+				r = 1;
+				break;
+			}
+	qunlock(&idl);
+	return r;
 }
 
 Dev fsdevtab = {

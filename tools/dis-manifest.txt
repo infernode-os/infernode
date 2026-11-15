@@ -798,6 +798,7 @@ dis/tests/jit_nilmod_test.dis
 dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
+dis/tests/kill_escape_test.dis
 dis/tests/jit_small_helper.dis
 dis/tests/jit_small_test.dis
 dis/tests/jit_unload_helper.dis
@@ -891,7 +892,13 @@ dis/tests/pdfrender.dis
 dis/tests/pdftext_test.dis
 dis/tests/pgrp_race_test.dis
 dis/tests/png_hostile_test.dis
+dis/tests/devaudio_read_test.dis
+dis/tests/devfs_longpath_test.dis
+dis/tests/devfs_rename_test.dis
+dis/tests/devenv_edge_test.dis
 dis/tests/devip_conv_test.dis
+dis/tests/devsrv_devprog_edge_test.dis
+dis/tests/dial_edge_test.dis
 dis/tests/nsunion_race_test.dis
 dis/tests/spawn_budget_test.dis
 dis/tests/sheetview_test.dis
@@ -972,6 +979,7 @@ dis/tests/twofaslot_test.dis
 dis/tests/url_test.dis
 dis/tests/styx_pack_test.dis
 dis/tests/utf21_test.dis
+dis/tests/vm_size_edge_test.dis
 dis/tests/veltro_cc_alignment_test.dis
 dis/tests/veltro_charon_security_test.dis
 dis/tests/veltro_concurrent_test.dis
@@ -1219,8 +1227,10 @@ xenith/dis/spout.dis
 xenith/dis/win.dis
 xenith/dis/winm.dis
 dis/tests/alt_nilchan_test.dis
+dis/tests/errlabel_leak_test.dis
 dis/tests/lock_stress_test.dis
 dis/tests/plan_test.dis
 dis/tests/rfc3339_test.dis
 dis/tests/spawn_exec_test.dis
+dis/tests/syscall_edge_test.dis
 dis/tests/spawn_schedule_test.dis

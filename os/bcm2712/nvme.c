@@ -484,7 +484,12 @@ nvmerw(int write, void *a, long n, vlong off)
 
 	bs = nvme.blocksize;
 	len = nvmelength();
-	if(off >= len || n <= 0)
+	/*
+	 * (off < 0: a partition whose start the disk's table gave as
+	 * negative; the block's part of the copy was then taken from
+	 * before nvme.data)
+	 */
+	if(off < 0 || off >= len || n <= 0)
 		return 0;
 	if(off + n > len)
 		n = len - off;
@@ -649,7 +654,7 @@ static void
 gptscan(void)
 {
 	uchar *d, *e;
-	char name[16];
+	char name[16], *err;
 	uvlong tab, first, last;
 	int bs, i, nent, esz, n, scale;
 
@@ -668,7 +673,11 @@ gptscan(void)
 			if(e[4] == 0 || last == 0)
 				continue;
 			snprint(name, sizeof name, "nvme0p%d", i+1);
-			sdaddnvmepart(name, first*scale, last*scale);
+			err = sdaddnvmepart(name, first*scale, last*scale);
+			if(err != nil){
+				print("nvme: %s: %s\n", name, err);
+				continue;
+			}
 			print("nvme: %s mbr type %#ux from %llud, %llud MB\n", name, e[4], first, last*bs >> 20);
 		}
 		return;
@@ -695,8 +704,17 @@ gptscan(void)
 			continue;
 		first = *(u64int*)(e+32);
 		last = *(u64int*)(e+40);
+		/* the table is the disk's: an entry that is no range is left out */
+		if(last < first || last >= nvme.nblocks){
+			print("nvme: partition %d: blocks %llud to %llud of %llud: ignored\n", i+1, first, last, nvme.nblocks);
+			continue;
+		}
 		snprint(name, sizeof name, "nvme0p%d", i+1);
-		sdaddnvmepart(name, first*scale, (last - first + 1)*scale);
+		err = sdaddnvmepart(name, first*scale, (last - first + 1)*scale);
+		if(err != nil){
+			print("nvme: %s: %s\n", name, err);
+			continue;
+		}
 		print("nvme: %s from %llud, %llud MB\n", name, first, (last-first+1)*bs >> 20);
 	}
 }

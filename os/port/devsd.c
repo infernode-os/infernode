@@ -49,6 +49,8 @@ enum{
 	Namelen	= 32,
 };
 
+#define	Maxpartblk	(((vlong)1<<62)/Blen)	/* no partition starts or ends past this block */
+
 typedef struct Part Part;
 struct Part {
 	char	name[Namelen];
@@ -80,18 +82,56 @@ static struct {
  * Plan 9's disk devices draw the line in the same place and for the
  * same reason.
  */
-static void
-sdaddpart(char *name, vlong startblk, vlong nblk)
+/*
+ * Whether blocks startblk to startblk+nblk-1 are a range a partition can
+ * be, on a device of devblks blocks (0 when that is not known).
+ *
+ * The numbers are whatever was written to sdctl, and those are what a
+ * card's or a disk's partition table says: a start of ffffffff in an MBR
+ * arrives as -1, a GPT's are 64 bits as they come. Nothing looked. A
+ * negative start made every offset in the partition negative, and the
+ * part of a block an unaligned read or write copies was then taken from
+ * before the bounce buffer: the kernel's memory, read and written. A
+ * start large enough for start*512 to wrap did the same; a length of
+ * none, or negative, made a file with no end.
+ */
+static int
+partok(vlong startblk, vlong nblk, vlong devblks)
+{
+	if(startblk < 0 || nblk <= 0)
+		return 0;
+	if(startblk > Maxpartblk || nblk > Maxpartblk - startblk)
+		return 0;
+	if(devblks > 0 && startblk >= devblks)
+		return 0;
+	return 1;
+}
+
+/* nil, or why not; it raises nothing, as the disk's own scan runs at boot with no error label */
+static char*
+addpart(char *name, vlong startblk, vlong nblk, vlong devblks, int nvme)
 {
 	Part *p;
 	int i;
 
+	if(name[0] == 0 || strchr(name, '/') != nil)
+		return Ebadctl;
+	if(!partok(startblk, nblk, devblks))
+		return "bad partition";
+	/* one that runs past the end of its device is cut at it */
+	if(devblks > 0 && nblk > devblks - startblk)
+		nblk = devblks - startblk;
+
+	/* under the lock I/O takes: the table was changed with none held */
+	qlock(&sd.q);
 	for(i = 0; i < sd.npart; i++)
 		if(strcmp(sd.part[i].name, name) == 0)
 			break;
 	if(i == sd.npart){
-		if(sd.npart >= Npart)
-			error("too many partitions");
+		if(sd.npart >= Npart){
+			qunlock(&sd.q);
+			return "too many partitions";
+		}
 		sd.npart++;
 	}
 	p = &sd.part[i];
@@ -100,21 +140,30 @@ sdaddpart(char *name, vlong startblk, vlong nblk)
 	p->off = startblk * Blen;
 	p->len = nblk * Blen;
 #ifdef NVME0
-	p->nvme = 0;
+	p->nvme = nvme;
+#else
+	USED(nvme);
 #endif
+	qunlock(&sd.q);
+	return nil;
+}
+
+static void
+sdaddpart(char *name, vlong startblk, vlong nblk, vlong devblks, int nvme)
+{
+	char *e;
+
+	e = addpart(name, startblk, nblk, devblks, nvme);
+	if(e != nil)
+		error(e);
 }
 
 #ifdef NVME0
 /* nvme.c's, from the disk's partition table: in 512-byte units, as nvmepart */
-void
+char*
 sdaddnvmepart(char *name, vlong start, vlong n)
 {
-	int i;
-
-	sdaddpart(name, start, n);
-	for(i = 0; i < sd.npart; i++)
-		if(strcmp(sd.part[i].name, name) == 0)
-			sd.part[i].nvme = 1;
+	return addpart(name, start, n, nvmelength()/Blen, 1);
 }
 #endif
 
@@ -255,6 +304,9 @@ sdio(int iswrite, void *a, long n, vlong off, vlong base, vlong total)
 	}
 	if(n <= 0)
 		return 0;
+	/* (a second check on what partok lets by: nothing below copes with either) */
+	if(off < 0 || base < 0 || off > Maxpartblk*Blen || base > Maxpartblk*Blen)
+		error(Ebadarg);
 	off += base;
 
 	p = a;
@@ -324,10 +376,14 @@ sdrange(Chan *c, vlong *base, vlong *len)
 		return;
 	}
 	i = path - Qpart;
-	if(i < 0 || i >= sd.npart)
+	qlock(&sd.q);
+	if(i < 0 || i >= sd.npart){
+		qunlock(&sd.q);
 		error(Ebadusefd);
+	}
 	*base = sd.part[i].off;
 	*len = sd.part[i].len;
+	qunlock(&sd.q);
 }
 
 static long
@@ -395,11 +451,11 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		}
 		if(cb->nf == 4 && strcmp(cb->f[0], "part") == 0)
 			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
-				strtoll(cb->f[3], nil, 0));
+				strtoll(cb->f[3], nil, 0), sdblknblocks(), 0);
 #ifdef NVME0
 		else if(cb->nf == 4 && strcmp(cb->f[0], "nvmepart") == 0){
-			sdaddnvmepart(cb->f[1], strtoll(cb->f[2], nil, 0),
-				strtoll(cb->f[3], nil, 0));
+			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
+				strtoll(cb->f[3], nil, 0), nvmelength()/Blen, 1);
 		}
 		else if(cb->nf == 1 && strcmp(cb->f[0], "nvmeslow") == 0)
 			nvmeslow();

@@ -57,6 +57,7 @@ TARG=\
 	cowfs_test.dis\
 	cut_test.dis\
 	dhcp_test.dis\
+	errlabel_leak_test.dis\
 	crypto_test.dis\
 	login_test.dis\
 	ssl_record_test.dis\
@@ -100,7 +101,13 @@ TARG=\
 	html_test.dis\
 	imgload_test.dis\
 	png_hostile_test.dis\
+	devaudio_read_test.dis\
+	devfs_longpath_test.dis\
+	devfs_rename_test.dis\
+	devenv_edge_test.dis\
 	devip_conv_test.dis\
+	devsrv_devprog_edge_test.dis\
+	dial_edge_test.dis\
 	nsunion_race_test.dis\
 	icon_test.dis\
 	touchgest_test.dis\
@@ -115,6 +122,7 @@ TARG=\
 	plan_test.dis\
 	rfc3339_test.dis\
 	spawn_exec_test.dis\
+	syscall_edge_test.dis\
 	spawn_schedule_test.dis\
 	imap_test.dis\
 	jit_bounds_test.dis\
@@ -138,6 +146,7 @@ TARG=\
 	wm_frozen.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
+	kill_escape_test.dis\
 	jit_small_test.dis\
 	jit_test.dis\
 	js_engine_test.dis\
@@ -235,6 +244,7 @@ TARG=\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
+	vm_size_edge_test.dis\
 	styx_pack_test.dis\
 	ninep_pack_test.dis\
 	parread_test.dis\

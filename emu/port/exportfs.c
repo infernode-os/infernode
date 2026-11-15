@@ -1076,9 +1076,17 @@ static char*
 Exopen(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
-	Chan *c;
+	/*
+	 * volatile: both are nil at waserror(), set after it, and given
+	 * back by the handler.  Not volatile, clang took them for nil
+	 * there, and an open the device refused (no permission, a file
+	 * that is busy) kept the channel exmount had made: one for every
+	 * refused open, from whoever the tree is exported to.
+	 */
+	Chan *volatile c;
 	Uqid *qid;
-	Mhead *m;
+	Mhead *volatile m;
+	Mhead *tm;
 	char *err;
 
 	f = Exgetfid(fs, t->fid, 1, &err);
@@ -1098,7 +1106,9 @@ Exopen(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
-	c = exmount(f->chan, &m, 1);
+	tm = nil;
+	c = exmount(f->chan, &tm, 1);	/* which gives tm back itself if it raises */
+	m = tm;
 	if(mutatingmode(t->mode))
 		checkwritable(c);
 
@@ -1361,7 +1371,7 @@ static char*
 Exstat(Export *fs, Fcall *t, Fcall *r)
 {
 	Fid *f;
-	Chan *c;
+	Chan *volatile c;	/* as Exopen's: a stat the device refused kept it */
 	int n;
 	char *err;
 

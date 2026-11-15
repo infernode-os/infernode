@@ -872,7 +872,8 @@ exprog(Prog *p, char *exc)
 static void
 propex(Prog *p, char *estr)
 {
-	Prog *f, *nf, *pgl;
+	Prog *f, *pgl;
+	int i, n, gid, ppid, pglpid, propagate, *pids;
 
 	if(!(p->flags & (Ppropagate|Pnotifyleader)) || p->group == nil)
 		return;
@@ -886,18 +887,41 @@ propex(Prog *p, char *estr)
 		pgl = p;
 	if(!(pgl->flags & (Ppropagate|Pnotifyleader)))
 		return;	/* exceptions are local; don't propagate */
-	for(f = p->group->head; f != nil; f = nf){
-		nf = f->grpnext;
-		if(f != p && f != pgl){
-			if(pgl->flags & Ppropagate)
-				exprog(f, estr);
-			else{
-				f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
-				killprog(f, "killed");
-			}
+	/*
+	 * By pid, as the hosted kernel has it. killprog lets the VM go
+	 * (delprog), and the group's list was walked through it by
+	 * pointer: the next Prog, or the leader, could have exited and
+	 * been freed in that moment, or left for a group of its own.
+	 */
+	propagate = pgl->flags & Ppropagate;
+	gid = p->group->id;
+	ppid = p->pid;
+	pglpid = pgl->pid;
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		n++;
+	pids = malloc(n*sizeof(int));
+	if(pids == nil){
+		print("propex: no memory to propagate \"%s\" from %d\n", estr, ppid);
+		return;
+	}
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		if(f->pid != ppid && f->pid != pglpid)
+			pids[n++] = f->pid;
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f == nil || f->group == nil || f->group->id != gid)
+			continue;	/* gone, or in a group of its own now */
+		if(propagate)
+			exprog(f, estr);
+		else{
+			f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
+			killprog(f, "killed");
 		}
 	}
-	if(p != pgl)
+	free(pids);
+	if(pglpid != ppid && (pgl = progpid(pglpid)) != nil)
 		exprog(pgl, estr);
 }
 
@@ -1007,11 +1031,17 @@ killprog(Prog *p, char *cause)
 	}
 
 
+	/*
+	 * Exiting before propex, as the hosted kernel has it: killing the
+	 * group's others can let the VM go (delprog), and a killprog or
+	 * exprog of p from another processor then must leave p alone, not
+	 * free it a second time or queue it to run again.
+	 */
+	p->state = Pexiting;
 	propex(p, "killed");
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
-	p->state = Pexiting;
 	/*
 	 * Destroyed here, in the killer: its closes are a killed Prog's,
 	 * and a 9P clunk among them is sent and not waited for (devmnt,
@@ -1037,6 +1067,16 @@ newgrp(Prog *p)
 
 	if(p->group != nil && p->group->id == p->pid)
 		return;
+	/*
+	 * A group that is being killed is not left. Its killer has the
+	 * group's Progs by pid, taken once, and lets the VM go as each
+	 * dies: a Prog of the group run in one of those moments left
+	 * for a group of its own, which is not marked, spawned, and its
+	 * child was in nobody's list (killtree, which is how a confined
+	 * command's processes are cleared away, left 36 of 42).
+	 */
+	if(p->group != nil && (p->group->flags & Pkilled))
+		error("group is being killed");
 	g = malloc(sizeof(*g));
 	if(g == nil)
 		error(Enomem);
@@ -1077,8 +1117,11 @@ addgrp(Prog *n, Prog *p)
  * A read of /prog/n/grpwait waits for n's process group, as it was when
  * the file was opened, to have no Prog left: delgrp posts to each such
  * reader's queue as it frees the group (a group is freed with its last
- * Prog, and group ids are pids, never reused).  The list is changed and
- * walked with the interpreter held.
+ * Prog, and group ids are pids, never reused).  The list is one for the
+ * machine and has a lock of its own: it was changed and walked "with the
+ * interpreter held", but there are several interpreters (vm(1)): a reader
+ * adds under the Prog's and removes under its own, and a group goes under
+ * its Prog's. Two at once lost an entry, or walked one being freed.
  */
 typedef struct Grpwait Grpwait;
 struct Grpwait
@@ -1088,6 +1131,7 @@ struct Grpwait
 	Grpwait*	next;
 };
 static Grpwait *grpwaits;
+static Lock grpwaitl;
 
 void
 grpwaitadd(int gid, Queue *q)
@@ -1099,21 +1143,31 @@ grpwaitadd(int gid, Queue *q)
 		error(Enomem);
 	w->gid = gid;
 	w->q = q;
+	lock(&grpwaitl);
 	w->next = grpwaits;
 	grpwaits = w;
+	unlock(&grpwaitl);
 }
 
 void
 grpwaitdel(Queue *q)
 {
-	Grpwait **l, *w;
+	Grpwait **l, *w, *gone;
 
+	gone = nil;
+	lock(&grpwaitl);
 	for(l = &grpwaits; (w = *l) != nil; ){
 		if(w->q == q){
 			*l = w->next;
-			free(w);
+			w->next = gone;
+			gone = w;
 		}else
 			l = &w->next;
+	}
+	unlock(&grpwaitl);
+	while((w = gone) != nil){
+		gone = w->next;
+		free(w);
 	}
 }
 
@@ -1125,9 +1179,11 @@ grpgone(int gid)
 	int n;
 
 	n = snprint(buf, sizeof(buf), "%d", gid);
+	lock(&grpwaitl);
 	for(w = grpwaits; w != nil; w = w->next)
 		if(w->gid == gid)
 			qproduce(w->q, buf, n);
+	unlock(&grpwaitl);
 }
 
 static Progs*
@@ -1314,7 +1370,7 @@ cleargrptreekilled(int *gids, int n)
 int
 killgrptree(Prog *p, char *msg)
 {
-	int i, n, *gids, *pids;
+	int i, n, gid, *gids, *pids;
 	Prog *f;
 	Progs *g;
 
@@ -1327,8 +1383,40 @@ killgrptree(Prog *p, char *msg)
 		if(grptreedescendant(f->group, g))
 			n++;
 	pids = malloc(2*n*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list, as killgrp's: the tree is killed
+		 * anyway, the first of it not yet killed each time round.
+		 * It was an error, and the tree that could not be killed
+		 * was the one holding the memory. The groups are found by
+		 * their mark once the root's may have gone.
+		 */
+		gid = g->id;
+		for(f = isched.head; f != nil; f = f->next)
+			if(grptreedescendant(f->group, g))
+				f->group->flags |= Pkilled;
+		if(waserror()){
+			for(f = isched.head; f != nil; f = f->next)
+				if(f->group != nil)
+					f->group->flags &= ~Pkilled;
+			nexterror();
+		}
+		for(i = 0; i < n; i++){
+			for(f = isched.head; f != nil; f = f->next)
+				if(f != currun() && f->group != nil && (f->group->flags & Pkilled) &&
+				   (f->flags & Pkilled) == 0 && f->state != Pexiting && f->state != Pbroken)
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+		}
+		poperror();
+		USED(gid);
+		for(f = isched.head; f != nil; f = f->next)
+			if(f->group != nil)
+				f->group->flags &= ~Pkilled;
+		return 0;
+	}
 	gids = pids+n;
 	n = 0;
 	for(f = isched.head; f != nil; f = f->next)
@@ -1666,6 +1754,7 @@ vmrun(int n, int argc, char **argv)
 	Osenv *o;
 	Type *t;
 	List *l;
+	List *volatile vl;	/* l as the error handler sees it: l is changed after waserror() */
 	String *s;
 	uchar *fp;
 	int i, pid, w;
@@ -1702,16 +1791,34 @@ vmrun(int n, int argc, char **argv)
 	w = NREG+3;
 	if(t == nil || t->np <= (w+1)/8 || (t->map[w/8] & (0x80>>(w%8))) == 0 || (t->map[(w+1)/8] & (0x80>>((w+1)%8))) == 0)
 		error("not a command: init is not init(ctxt, argv)");
-	p = schedmod(root);
-
+	/*
+	 * The arguments before the Prog. They were made after schedmod,
+	 * which leaves the Prog ready to run: with the VM's heap full,
+	 * c2string or cons raised, and the Prog was left to run with an
+	 * environment of zeros, whose first system call was a fault in
+	 * the kernel. Anyone may write a VM's run file.
+	 */
 	l = (List*)H;
+	vl = l;
+	if(waserror()){
+		destroy(vl);
+		nexterror();
+	}
 	for(i = argc-1; i >= 0; i--){
 		s = c2string(argv[i], strlen(argv[i]));
+		if(waserror()){
+			destroy(s);
+			nexterror();
+		}
 		l = cons(IBY2WD, &l);
+		vl = l;		/* what the handler above gives back */
+		poperror();
 		l->t = &Tptr;
 		Tptr.ref++;
 		*(String**)l->data = s;
 	}
+	p = schedmod(root);
+	poperror();
 	fp = p->reg.FP;
 	*(WORD**)(fp + w*IBY2WD) = H;		/* ctxt: nil */
 	*(List**)(fp + (w+1)*IBY2WD) = l;	/* argv */

@@ -4,6 +4,7 @@
 #include "dat.h"
 #include "fns.h"
 #include "interp.h"
+#include "../port/error.h"
 
 #define left	u.s.bhl
 #define right	u.s.bhr
@@ -140,6 +141,10 @@ enum {
 };
  *
  */
+
+enum {
+	Maxblock	= 1024*1024*1024,	/* no block is this big: for sanity and to avoid overflow */
+};
 
 /* tracing */
 enum {
@@ -709,10 +714,16 @@ static QLock tagsumlk;
 static void
 tagadd(ulong pc, ulong bytes)
 {
-	int i, start;
+	int i, k, start;
 
 	start = (pc >> 2) % Ntagsum;
-	for(i = start; ; i = (i + 1) % Ntagsum){
+	/*
+	 * once round and no more: with the table full and its last slot
+	 * taken as the sink below, no slot is empty, and a pc not in it
+	 * was looked for for ever, with the pool's lock held and
+	 * interrupts off
+	 */
+	for(i = start, k = 0; k < Ntagsum; k++, i = (i + 1) % Ntagsum){
 		if(tagsum[i].n == 0){
 			if(ntagsum >= Ntagsum - 1)
 				break;		/* full: charge to the sink below */
@@ -797,6 +808,13 @@ pooltagsread(char *va, int count, ulong offset)
 	return n;
 }
 
+/*
+ * A size no block has. The pools refuse a block of a gigabyte or more,
+ * but were asked only after the tag words were added to the size: a size
+ * within sixteen bytes of the top of a ulong (malloc(-1), which is what
+ * a negative int from a program is) came out as a few bytes, was given,
+ * and was then zeroed for the size asked: the kernel's memory after it.
+ */
 void*
 malloc(ulong size)
 {
@@ -806,6 +824,8 @@ malloc(ulong size)
 	if(chaosmalloc())
 		return nil;
 #endif
+	if(size >= Maxblock)
+		return nil;
 	v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
 	if(v != nil){
 		if(Npadlong){
@@ -823,6 +843,12 @@ smalloc(ulong size)
 {
 	void *v;
 
+	/* a size no pool gives is not waited for: that wait had no end */
+	if(size >= Maxblock){
+		if(up != nil && up->nerrlab > 0)
+			error(Enomem);
+		panic("smalloc: %lud bytes asked for, pc=%#p", size, getcallerpc(&size));
+	}
 	for(;;) {
 		v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
 		if(v != nil)
@@ -847,6 +873,8 @@ mallocz(ulong size, int clr)
 	if(chaosmalloc())
 		return nil;
 #endif
+	if(size >= Maxblock)
+		return nil;
 	v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
 	if(v != nil){
 		if(Npadlong){
@@ -884,6 +912,8 @@ realloc(void *v, ulong size)
 	if(chaosmalloc())
 		return nil;
 #endif
+	if(size >= Maxblock)
+		return nil;
 	if(v != nil)
 		v = (ulong*)v-Npadlong;
 	if(Npadlong!=0 && size!=0)
@@ -953,6 +983,9 @@ msize(void *v)
 void*
 calloc(ulong n, ulong szelem)
 {
+	/* (the product was taken as it came, wrapped or not) */
+	if(n != 0 && szelem > Maxblock / n)
+		return nil;
 	return malloc(n*szelem);
 }
 

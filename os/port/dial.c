@@ -95,7 +95,8 @@ csdial(DS *ds)
 	/*
 	 *  ask connection server to translate
 	 */
-	sprint(buf, "%s!%s", ds->proto, ds->rem);
+	/* (sprint: 128 bytes and no more, and the string is the caller's) */
+	snprint(buf, sizeof(buf), "%s!%s", ds->proto, ds->rem);
 	if(kwrite(fd, buf, strlen(buf)) < 0){
 		kerrstr(err, sizeof err);
 		kclose(fd);
@@ -108,7 +109,7 @@ csdial(DS *ds)
 	 *  we get one that works.
 	 */
 	*besterr = 0;
-	strcpy(err, Egreg);
+	kstrcpy(err, Egreg, sizeof err);
 	rv = -1;
 	kseek(fd, 0, 0);
 	while((n = kread(fd, buf, sizeof(buf) - 1)) > 0){
@@ -158,8 +159,19 @@ call(char *clone, char *dest, DS *ds)
 	name[n] = 0;
 	for(p = name; *p == ' '; p++)
 		;
-	sprint(name, "%ld", strtoul(p, 0, 0));
+	snprint(name, sizeof(name), "%ld", strtoul(p, 0, 0));
+	/*
+	 * The clone file is what the connection server said, and the
+	 * connection server is whatever is at netdir/cs: a file of the
+	 * caller's own will do. With no slash in it there was nothing
+	 * to cut, and the nil was written through.
+	 */
 	p = strrchr(clone, '/');
+	if(p == nil){
+		kclose(cfd);
+		kwerrstr("bad clone file name: %s", clone);
+		return -1;
+	}
 	*p = 0;
 	if(ds->dir)
 		snprint(ds->dir, NETPATHLEN, "%s/%s", clone, name);
@@ -216,11 +228,22 @@ _dial_string_parse(char *str, DS *ds)
 			ds->netdir = 0;
 			ds->proto = ds->buf;
 		} else {
-			for(p2 = p; *p2 != '/'; p2--)
+			/*
+			 * back to the slash before the protocol. A string
+			 * that begins with # need have none ("#!x"): the
+			 * search went on below the buffer, down the stack,
+			 * and wrote a zero where it found one.
+			 */
+			for(p2 = p; p2 > ds->buf && *p2 != '/'; p2--)
 				;
-			*p2++ = 0;
-			ds->netdir = ds->buf;
-			ds->proto = p2;
+			if(*p2 != '/'){
+				ds->netdir = 0;
+				ds->proto = ds->buf;
+			}else{
+				*p2++ = 0;
+				ds->netdir = ds->buf;
+				ds->proto = p2;
+			}
 		}
 		*p = 0;
 		ds->rem = p + 1;
@@ -253,12 +276,18 @@ kannounce(char *addr, char *dir)
 	if(ctl<0)
 		return -1;
 	cp = strrchr(netdir, '/');
+	if(cp == nil){
+		/* a connection server's answer with no slash in it */
+		kclose(ctl);
+		kwerrstr("bad clone file name: %s", netdir);
+		return -1;
+	}
 	*cp = 0;
 
 	/*
 	 *  find out which line we have
 	 */
-	n = sprint(buf, "%.*s/", sizeof buf, netdir);
+	n = snprint(buf, sizeof(buf), "%.*s/", (int)sizeof(buf)-1, netdir);
 	m = kread(ctl, &buf[n], sizeof(buf)-n-1);
 	if(m <= 0){
 		kclose(ctl);
@@ -279,7 +308,7 @@ kannounce(char *addr, char *dir)
 	 *  return directory etc.
 	 */
 	if(dir)
-		strcpy(dir, buf);
+		kstrcpy(dir, buf, NETPATHLEN);	/* the caller's is NETPATHLEN, as buf is */
 	return ctl;
 }
 
@@ -291,20 +320,34 @@ klisten(char *dir, char *newdir)
 {
 	int ctl, n, m;
 	char buf[NETPATHLEN];
+	char lbuf[NETPATHLEN+8];
 	char *cp;
+
+	/*
+	 * The directory is the caller's: a program's string, of any
+	 * length. It was copied into 40 bytes with strcpy, over the
+	 * rest of the stack, once a name made of its first 39 bytes
+	 * had opened (the name was cut to fit; "/dev////...//null"
+	 * opens). It is a conversation's directory and is no longer
+	 * than one, and has a slash in it.
+	 */
+	if(strlen(dir) >= sizeof(buf) || strrchr(dir, '/') == nil){
+		kwerrstr("bad network directory: %.60s", dir);
+		return -1;
+	}
 
 	/*
 	 *  open listen, wait for a call
 	 */
-	snprint(buf, sizeof buf, "%s/listen", dir);
-	ctl = kopen(buf, ORDWR);
+	snprint(lbuf, sizeof lbuf, "%s/listen", dir);
+	ctl = kopen(lbuf, ORDWR);
 	if(ctl < 0)
 		return -1;
 
 	/*
 	 *  find out which line we have
 	 */
-	strcpy(buf, dir);
+	kstrcpy(buf, dir, sizeof buf);
 	cp = strrchr(buf, '/');
 	*++cp = 0;
 	n = cp-buf;
@@ -319,7 +362,7 @@ klisten(char *dir, char *newdir)
 	 *  return directory etc.
 	 */
 	if(newdir)
-		strcpy(newdir, buf);
+		kstrcpy(newdir, buf, NETPATHLEN);	/* the caller's is NETPATHLEN, as buf is */
 	return ctl;
 
 }
@@ -343,8 +386,11 @@ identtrans(char *netdir, char *addr, char *naddr, int na, char *file, int nf)
 		*p++ = 0;
 
 	snprint(file, nf, "%s/%s/clone", netdir, proto);
-	strncpy(naddr, p, na);
-	naddr[na-1] = 0;
+	/* (p is nil when the address has no '!' within proto's size) */
+	if(p != nil)
+		snprint(naddr, na, "%s", p);
+	else
+		naddr[0] = '\0';
 
 	return 1;
 }
@@ -387,7 +433,7 @@ nettrans(char *addr, char *naddr, int na, char *file, int nf)
 	/*
 	 *  ask the connection server
 	 */
-	sprint(buf, "%s/cs", netdir);
+	snprint(buf, sizeof(buf), "%s/cs", netdir);
 	fd = kopen(buf, ORDWR);
 	if(fd < 0)
 		return identtrans(netdir, addr, naddr, na, file, nf);

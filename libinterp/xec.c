@@ -539,6 +539,19 @@ cnewc(Type *t, void (*mover)(OPARGS), int len)
 	Heap *h;
 	Channel *c;
 
+	/*
+	 * The buffer is an array of len elements, and len is the
+	 * program's. It went to heaparray as it was, which multiplied it
+	 * by the element's size in an int: chan[16r20000000] of big asks
+	 * for 2^32 bytes, which is none, and got an array that says it has
+	 * 2^29 elements and has no storage. Each send then stored its
+	 * value further up the heap. Asked before anything is made.
+	 */
+	if(len < 0)
+		error(exNegsize);
+	if(len > 0)	/* (with no buffer there may be no type: newcm's) */
+		acheck(t->size, len);
+
 	h = heap(&Tchannel);
 	c = H2D(Channel*, h);
 	c->buf = H;

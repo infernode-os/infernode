@@ -44,6 +44,13 @@ libqlockproc(void *l)
 	USED(l);
 }
 
+int
+libcompile(void *l, Module *m, int size)
+{
+	USED(l);
+	return compile(m, size, nil);
+}
+
 void
 libqunlockproc(void *l)
 {

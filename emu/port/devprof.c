@@ -119,15 +119,17 @@ static void
 addpmod(char *m)
 {
 	Pmod *p = malloc(sizeof(Pmod));
+	int n;
 
 	if(p == nil)
 		return;
-	p->name = malloc(strlen(m)+1);
+	n = strlen(m)+1;
+	p->name = malloc(n);
 	if(p->name == nil){
 		free(p);
 		return;
 	}
-	strcpy(p->name, m);
+	memmove(p->name, m, n);
 	p->link = pmods;
 	pmods = p;
 }

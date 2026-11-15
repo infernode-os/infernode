@@ -7,10 +7,13 @@
 static void
 newlink(Link *l, char *fn, int sig, Type *t)
 {
-	l->name = malloc(strlen(fn)+1);
+	int n;
+
+	n = strlen(fn)+1;
+	l->name = malloc(n);
 	if(l->name == nil)
 		error(exNomem);
-	strcpy(l->name, fn);
+	memmove(l->name, fn, n);
 	l->sig = sig;
 	l->frame = t;
 }

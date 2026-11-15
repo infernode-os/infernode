@@ -114,7 +114,7 @@ devattach(int tc, char *spec)
 	 * string, which makes it the only one where the argument has to
 	 * be re-made every time the format changes.
 	 */
-	n = 4+strlen(spec)+1;
+	n = 1+UTFmax+strlen(spec)+1;	/* 4 was '#' and a rune of three bytes: UTFmax is 4 */
 	buf = smalloc(n);
 	snprint(buf, n, "#%C%s", tc, spec);
 	c->name = newcname(buf);

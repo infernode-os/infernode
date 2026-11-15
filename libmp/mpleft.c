@@ -16,13 +16,21 @@ mpleft(mpint *b, int shift, mpint *res)
 	}
 
 	// a negative left shift is a right shift
+	// (the most negative int is its own negative: it came back here from
+	// mpright, and went there again, without end; asked of its bits, as a
+	// compiler may take shift == -shift to be true of 0 alone)
 	if(shift < 0){
-		mpright(b, -shift, res);
+		mpright(b, (uint)shift == ~(~0U>>1)? (int)(~0U>>1): -shift, res);
 		return;
 	}
 
 	// b and res may be the same so remember the old top
 	otop = b->top;
+
+	// the sum below is an int: wrapped, no room was made for the
+	// digits and they were stored anyway
+	if(shift > (int)(~0U>>1) - otop*Dbits)
+		sysfatal("mpleft: shift of %d bits is too large", shift);
 
 	// shift
 	mpbits(res, otop*Dbits + shift);	// overkill

@@ -1048,7 +1048,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				*nerror = nhave;
 			cnameclose(cname);
 			cclose(c);
-			strcpy(up->env->errstr, Enotdir);
+			kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 			if(mh != nil)
 				putmhead(mh);
 			return -1;
@@ -1139,11 +1139,11 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 					if(wq->nqid==0 || (wq->qid[wq->nqid-1].type&QTDIR)){
 						if(nerror)
 							*nerror = nhave+wq->nqid+1;
-						strcpy(up->env->errstr, Edoesnotexist);
+						kstrcpy(up->env->errstr, Edoesnotexist, ERRMAX);
 					}else{
 						if(nerror)
 							*nerror = nhave+wq->nqid;
-						strcpy(up->env->errstr, Enotdir);
+						kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 					}
 					free(wq);
 					if(mh != nil)
@@ -1378,14 +1378,36 @@ memrchr(void *va, int c, long n)
  * the same means as walkc below.
  */
 static int
-domountc(Chan *volatile *cp, Mhead **mp, Cname **name)
+domountc(Chan *volatile *cp, Mhead *volatile *mp, Cname **name)
 {
 	Chan *t;
+	Mhead *m;
 	int r;
 
 	t = *cp;
-	r = domount(&t, mp, name);
+	m = *mp;
+	r = domount(&t, &m, name);
 	*cp = t;
+	*mp = m;
+	return r;
+}
+
+/*
+ * findmount() for namec's create, whose channel and mount head are
+ * volatile, by the same means as walkc.
+ */
+static int
+findmountc(Chan *volatile *cp, Mhead *volatile *mp, int type, int dev, Qid qid)
+{
+	Chan *t;
+	Mhead *m;
+	int r;
+
+	t = *cp;
+	m = *mp;
+	r = findmount(&t, &m, type, dev, qid);
+	*cp = t;
+	*mp = m;
 	return r;
 }
 
@@ -1442,7 +1464,15 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * namec is simply the one that was missed.
 	 */
 	Chan * volatile c;
-	Chan *cnew;
+	/*
+	 * volatile, both, for the reason c is.  The create below sets them
+	 * after its waserror() and its handler gives them back.  Not
+	 * volatile, clang took them for the nil they were at waserror():
+	 * the handler closed nothing, and every create a device refused
+	 * kept a channel (384 bytes of the main pool each, measured; and
+	 * a fid on a 9P server, never clunked).
+	 */
+	Chan *volatile cnew;
 	Cname *cname;
 	/*
 	 * volatile for the same reason as c above, and found the same way.
@@ -1457,7 +1487,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 */
 	volatile Elemlist e;
 	Rune r;
-	Mhead *m;
+	Mhead *volatile m;
 	Pgrp *pg;
 	char *createerr, tmperrbuf[ERRMAX];
 	char *name;
@@ -1561,7 +1591,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 			print("namec %s walk error npath=%d\n", aname, npath);
 			nexterror();
 		}
-		strcpy(tmperrbuf, up->env->errstr);
+		kstrcpy(tmperrbuf, up->env->errstr, sizeof tmperrbuf);
 	NameError:
 		len = prefix+e.off[npath];
 		if(len < ERRMAX/3 || (name=memrchr(aname, '/', len))==nil || name==aname)
@@ -1761,7 +1791,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		m = nil;
 		cnew = nil;	/* is this assignment necessary? */
 		if(!waserror()){	/* try create */
-			if(!nomount && findmount(&cnew, &m, c->type, c->dev, c->qid))
+			if(!nomount && findmountc(&cnew, &m, c->type, c->dev, c->qid))
 				cnew = createdir(cnew, m);
 			else{
 				cnew = c;

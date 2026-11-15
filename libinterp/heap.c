@@ -610,7 +610,18 @@ heaparray(Type *t, int sz)
 {
 	Heap *h;
 	Array *a;
+	uint maxalloc;
 
+	/*
+	 * The size is an int, and so is the product: the callers that
+	 * have a program's number (a channel's buffer) are held to what
+	 * nheap can be asked for, as xec.c's acheck holds an array's.
+	 */
+	if(sz < 0 || t->size < 0)
+		error(exNegsize);
+	maxalloc = ~0U >> 1;
+	if(t->size != 0 && (uint)sz > (maxalloc - sizeof(Array) - sizeof(Heap)) / (uint)t->size)
+		error(exHeap);
 	h = nheap(sizeof(Array) + (t->size*sz));
 	h->t = &Tarray;
 	Tarray.ref++;

@@ -1013,7 +1013,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				*nerror = nhave;
 			cnameclose(cname);
 			cclose(c);
-			strcpy(up->env->errstr, Enotdir);
+			kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 			if(mh != nil)
 				putmhead(mh);
 			return -1;
@@ -1104,11 +1104,11 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 					if(wq->nqid==0 || (wq->qid[wq->nqid-1].type&QTDIR)){
 						if(nerror)
 							*nerror = nhave+wq->nqid+1;
-						strcpy(up->env->errstr, Edoesnotexist);
+						kstrcpy(up->env->errstr, Edoesnotexist, ERRMAX);
 					}else{
 						if(nerror)
 							*nerror = nhave+wq->nqid;
-						strcpy(up->env->errstr, Enotdir);
+						kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 					}
 					free(wq);
 					if(mh != nil)
@@ -1306,6 +1306,60 @@ saveregisters(void)
 }
 
 /*
+ * walk() and domount() on behalf of namec, whose Chan* is volatile (see
+ * the note there): they take a plain Chan** because they store through
+ * it.  They are called through a plain temporary and the result stored
+ * back at once, before anything else can raise.  If walk itself raises,
+ * the store does not happen and namec's Chan* still names the channel it
+ * entered with, the one whose reference it holds.
+ */
+static int
+domountc(Chan *volatile *cp, Mhead *volatile *mp, Cname **name)
+{
+	Chan *t;
+	Mhead *m;
+	int r;
+
+	t = *cp;
+	m = *mp;
+	r = domount(&t, &m, name);
+	*cp = t;
+	*mp = m;
+	return r;
+}
+
+/*
+ * findmount() for namec's create, whose channel and mount head are
+ * volatile, by the same means as walkc.
+ */
+static int
+findmountc(Chan *volatile *cp, Mhead *volatile *mp, int type, int dev, Qid qid)
+{
+	Chan *t;
+	Mhead *m;
+	int r;
+
+	t = *cp;
+	m = *mp;
+	r = findmount(&t, &m, type, dev, qid);
+	*cp = t;
+	*mp = m;
+	return r;
+}
+
+static int
+walkc(Chan *volatile *cp, char **names, int nnames, int nomount, int *nerror)
+{
+	Chan *t;
+	int r;
+
+	t = *cp;
+	r = walk(&t, names, nnames, nomount, nerror);
+	*cp = t;
+	return r;
+}
+
+/*
  * Turn a name into a channel.
  * &name[0] is known to be a valid address.  It may be a kernel address.
  *
@@ -1325,7 +1379,28 @@ Chan*
 namec(char *aname, int amode, int omode, ulong perm)
 {
 	int n, prefix, len, t, nomount, npath;
-	Chan *c, *cnew;
+	/*
+	 * volatile, as the native kernel's is (os/port/chan.c has the
+	 * history).  c is replaced through a pointer after waserror() --
+	 * walk closes the channel it is given and stores another -- and is
+	 * read again in the handler, reached by longjmp.  C leaves a local
+	 * changed between setjmp and longjmp and not volatile indeterminate
+	 * there.  The compilers the hosted builds use, at the -O they are
+	 * built with, read it from memory and have the new value; clang at
+	 * -O2 keeps the value c had at waserror() and the handler closes
+	 * that: the channel walk already released (the name space's root,
+	 * or dot), once more for every name that fails after its walk.
+	 */
+	Chan *volatile c;
+	/*
+	 * volatile, both, for the reason c is.  The create below sets them
+	 * after its waserror() and its handler gives them back.  Not
+	 * volatile, clang took them for the nil they were at waserror():
+	 * the handler closed nothing, and every create a device refused
+	 * kept a channel (384 bytes of the main pool each, measured; and
+	 * a fid on a 9P server, never clunked).
+	 */
+	Chan *volatile cnew;
 	Cname *cname;
 	/*
 	 * volatile is load-bearing. e.name, e.elems and e.off are nil at
@@ -1341,7 +1416,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 */
 	volatile Elemlist e;
 	Rune r;
-	Mhead *m;
+	Mhead *volatile m;
 	Pgrp *pg;
 	char *createerr, tmperrbuf[ERRMAX];
 	char *name;
@@ -1440,12 +1515,12 @@ namec(char *aname, int amode, int omode, ulong perm)
 		e.nelems--;
 	}
 
-	if(walk(&c, e.elems, e.nelems, nomount, &npath) < 0){
+	if(walkc(&c, e.elems, e.nelems, nomount, &npath) < 0){
 		if(npath < 0 || npath > e.nelems){
 			print("namec %s walk error npath=%d\n", aname, npath);
 			nexterror();
 		}
-		strcpy(tmperrbuf, up->env->errstr);
+		kstrcpy(tmperrbuf, up->env->errstr, sizeof tmperrbuf);
 	NameError:
 		len = prefix+e.off[npath];
 		if(len < ERRMAX/3 || (name=memrchr(aname, '/', len))==nil || name==aname)
@@ -1470,7 +1545,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	switch(amode){
 	case Aaccess:
 		m = nil;
-		if(!nomount && domount(&c, &m, nil)){
+		if(!nomount && domountc(&c, &m, nil)){
 			if(waserror()){
 				putmhead(m);
 				nexterror();
@@ -1484,7 +1559,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 	case Abind:
 		m = nil;
-		if(!nomount && domount(&c, &m, nil))
+		if(!nomount && domountc(&c, &m, nil))
 			c->mflag = mheadflag(m);
 		if(waserror()){
 			putmhead(m);
@@ -1503,7 +1578,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		incref(&cname->r);
 		m = nil;
 		if(!nomount)
-			domount(&c, &m, &cname);
+			domountc(&c, &m, &cname);
 
 		/* our own copy to open or remove */
 		if(waserror()){
@@ -1584,7 +1659,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		 * If omode&OEXCL is set, just give up.
 		 */
 		e.nelems++;
-		if(walk(&c, e.elems+e.nelems-1, 1, nomount, nil) == 0){
+		if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) == 0){
 			if(omode&OEXCL)
 				error(Eexist);
 			omode |= OTRUNC;
@@ -1634,7 +1709,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		m = nil;
 		cnew = nil;	/* is this assignment necessary? */
 		if(!waserror()){	/* try create */
-			if(!nomount && findmount(&cnew, &m, c->type, c->dev, c->qid))
+			if(!nomount && findmountc(&cnew, &m, c->type, c->dev, c->qid))
 				cnew = createdir(cnew, m);
 			else{
 				cnew = c;
@@ -1676,7 +1751,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 			createerr = up->env->errstr;
 			up->env->errstr = tmperrbuf;
 			/* note: we depend that walk does not error */
-			if(walk(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0){
+			if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0){
 				up->env->errstr = createerr;
 				error(createerr);	/* report true error */
 			}

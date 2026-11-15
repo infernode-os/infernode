@@ -589,6 +589,7 @@ TkVar*
 tkmkvar(TkTop *t, char *name, int type)
 {
 	TkVar *v;
+	int n;
 
 	for(v = t->vars; v; v = v->link)
 		if(strcmp(v->name, name) == 0)
@@ -597,10 +598,11 @@ tkmkvar(TkTop *t, char *name, int type)
 	if(type == 0)
 		return nil;
 
-	v = malloc(sizeof(TkVar)+strlen(name)+1);
+	n = strlen(name)+1;
+	v = malloc(sizeof(TkVar)+n);
 	if(v == nil)
 		return nil;
-	strcpy(v->name, name);
+	memmove(v->name, name, n);
 	v->link = t->vars;
 	t->vars = v;
 	v->type = type;

@@ -74,6 +74,30 @@ libqunlockproc(void *l)
 	qunlock((QLock*)l);
 }
 
+/*
+ * compile() under the lock, and the lock let go if the code generator
+ * raises, which it does for an instruction it does not know. With no
+ * way out the lock stayed held: the next module to be compiled waited
+ * for it, holding its VM as libqlockproc is meant to, and no Limbo
+ * program ran again. One .dis file with one bad opcode, loaded by
+ * anyone.
+ */
+int
+libcompile(void *l, Module *m, int size)
+{
+	int ok;
+
+	libqlockproc(l);
+	if(waserror()){
+		libqunlockproc(l);
+		nexterror();
+	}
+	ok = compile(m, size, nil);
+	poperror();
+	libqunlockproc(l);
+	return ok;
+}
+
 void*
 libqlalloc(void)
 {

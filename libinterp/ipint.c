@@ -644,6 +644,28 @@ IPint_cmp(void *fp)
 }
 
 /* shifts */
+/*
+ * A shift's count is the program's. libmp added it to the number's own
+ * bits in an int: near the largest int the sum wrapped, no room was
+ * made, and the digits were stored a quarter of a gigabyte past a block
+ * of a hundred bytes; the most negative int, which is its own negative,
+ * sent mpleft and mpright calling each other without end; and a count
+ * merely large asked the pool for more than it has, which libmp answers
+ * by ending the emulator. A number here is no longer than Maxshiftbits.
+ */
+enum {
+	Maxshiftbits	= 1<<26,	/* 8MB of number */
+};
+
+static void
+shiftcheck(mpint *i, int n)
+{
+	if(n <= 0)
+		return;
+	if(n > Maxshiftbits || i->top > (Maxshiftbits - n)/Dbits)
+		error("IPint: shift too large");
+}
+
 void
 IPint_shl(void *fp)
 {
@@ -657,6 +679,7 @@ IPint_shl(void *fp)
 	destroy(v);
 
 	i = MP(f->i);
+	shiftcheck(i, f->n);
 	ret = mpnew(0);
 	if(ret != nil)
 		mpleft(i, f->n, ret);
@@ -675,6 +698,9 @@ IPint_shr(void *fp)
 	destroy(v);
 
 	i = MP(f->i);
+	/* a right shift by less than nothing is a left shift */
+	if(f->n < 0)
+		shiftcheck(i, (uint)f->n == ~(~0U>>1)? Maxshiftbits+1: -f->n);
 	ret = mpnew(0);
 	if(ret != nil)
 		mpright(i, f->n, ret);

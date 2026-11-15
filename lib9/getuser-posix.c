@@ -11,9 +11,7 @@ getuser(void)
 	if (!user) {
 		p = getpwuid(getuid());
 		if (p && p->pw_name) {
-			user = malloc(strlen(p->pw_name)+1);
-			if (user)
-				strcpy(user, p->pw_name);
+			user = strdup(p->pw_name);
 		}
 	}
 	if(!user)

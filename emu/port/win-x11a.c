@@ -1549,7 +1549,7 @@ _xputsnarf(XDisplay *xd, char *data)
 	if(strlen(data) >= SnarfSize)
 		return;
 	qlock(&clip.lk);
-	strcpy(clip.buf, data);
+	strecpy(clip.buf, clip.buf+sizeof(clip.buf), data);
 
 	/* leave note for mouse proc to assert selection ownership */
 	putsnarf++;

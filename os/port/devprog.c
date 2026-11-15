@@ -236,7 +236,7 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 {
 	Qid qid;
 	Prog *p;
-	char *e;
+	char *e, *user;
 	Osenv *o;
 	ulong pid, path, perm, len;
 
@@ -279,7 +279,15 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 			return -1;
 		}
 		mkqid(&qid, pid<<QSHIFT, pid, QTDIR);
-		devdir(c, qid, up->genbuf, 0, o->user, DMDIR|0555, dp);
+		/*
+		 * devdir keeps the pointers it is given and the caller packs
+		 * the entry after the VM is let go here, when the Prog can
+		 * have gone and its owner's name been freed: the name is
+		 * copied to this process's buffer, after the pid.
+		 */
+		user = up->genbuf+strlen(up->genbuf)+1;
+		snprint(user, sizeof(up->genbuf)-(user-up->genbuf), "%s", o->user);
+		devdir(c, qid, up->genbuf, 0, user, DMDIR|0555, dp);
 		prelease();
 		return 1;
 	}
@@ -304,7 +312,8 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 
 	len = tab->length;
 	mkqid(&qid, path|tab->qid.path, c->qid.vers, QTFILE);
-	devdir(c, qid, tab->name, len, o->user, perm, dp);
+	snprint(up->genbuf, sizeof(up->genbuf), "%s", o->user);	/* as above */
+	devdir(c, qid, tab->name, len, up->genbuf, perm, dp);
 	prelease();
 	return 1;
 }
@@ -883,8 +892,11 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			if(addr & 3)
 				return -1;
 			ml = *(Modlink**)addr;
-			fmt = ml == H ? "nil\n" : "%lux\n";
-			n += psnprint(va+n, count-n, fmt, ml->MP);
+			/* (ml->MP was read to print "nil" too: a fault at H) */
+			if(ml == H)
+				n += psnprint(va+n, count-n, "nil\n");
+			else
+				n += psnprint(va+n, count-n, "%lux\n", ml->MP);
 			s = sizeof(WORD);
 			break;
 		case 'c':
@@ -1373,7 +1385,8 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 		hq->addr = strtoul(buf, &b, 0);
 		if(*b == '+')
 			hq->module = strtoul(b, &b, 0);
-		if(*b++ != '.')
+		/* a query ending at the '.' took its count from past the terminator */
+		if(*b++ != '.' || *b == '\0')
 			error(Ebadctl);
 		hq->fmt = *b++;
 		hq->count = strtoul(b, nil, 0);
@@ -1692,8 +1705,15 @@ save:
 
 	p->reg = R;
 
+	/*
+	 * The reference taken above is on ctl, and ctl is what gives it
+	 * back: the debugger can have gone while this Prog was blocked
+	 * (the reference was then never dropped) or another taken its
+	 * place (the other's was dropped, and its Progctl freed under it).
+	 */
 	if(env->debug == nil) {
 		poperror();
+		closedbgctl(ctl, p);
 		return;
 	}
 
@@ -1702,7 +1722,7 @@ save:
 
 	telldbg(env->debug, buf);
 	poperror();
-	closedbgctl(env->debug, p);
+	closedbgctl(ctl, p);
 }
 
 /*

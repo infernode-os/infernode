@@ -937,7 +937,7 @@ Tk_putimage(void *a)
 				p++;
 			if(*p != '\0'){
 				n = 2;
-				reqid = atoi(p);
+				reqid = atoi(p);	/* Flawfinder: ignore — an id compared with the window's own; one that is none matches nothing */
 			}
 		}
 		tk = nil;

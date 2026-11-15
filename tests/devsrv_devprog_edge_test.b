@@ -7,6 +7,10 @@ implement DevsrvDevprogEdgeTest;
 #    which srvwalk then looked for among the directory's files and, not
 #    finding it, panicked: stat("#s/..") ended the emulator, and would
 #    the native kernel
+#  - a file2chan file (devsrv.c): an offset past 2^31 reached the file's
+#    server as a negative int, or from 2^32 as a small one (a server that
+#    slices its data by the offset died of the first), and the count a
+#    server answered a write with was the write's result whatever it was
 #  - /prog/n/exception (devprog.c): the text of the exception a Prog
 #    raised was given to snprint as its format. A program that raises
 #    "%lux %lux ..." and reads its own file got the kernel's stack back;
@@ -131,6 +135,73 @@ testSrvDotDot(t: ref T)
 	fio = nil;
 }
 
+# what the server of a file2chan file was last asked
+lastoff := 0;
+nasked := 0;
+
+offserver(fio: ref Sys->FileIO)
+{
+	for(;;) alt {
+	(off, nil, nil, rc) := <-fio.read =>
+		if(rc == nil)
+			continue;
+		lastoff = off;
+		nasked++;
+		rc <-= (array of byte "data", nil);
+	(off, nil, nil, wc) := <-fio.write =>
+		if(wc == nil)
+			continue;
+		lastoff = off;
+		nasked++;
+		# a count of the server's own, far more than it was given
+		wc <-= (16r40000000, nil);
+	}
+}
+
+testFileOffsetAndCount(t: ref T)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("#s", "/chan", Sys->MBEFORE) < 0)
+		t.skip(sys->sprint("bind #s: %r"));
+	fio := sys->file2chan("/chan", "edgeoffsets");
+	if(fio == nil)
+		t.fatal(sys->sprint("file2chan: %r"));
+	spawn offserver(fio);
+	fd := sys->open("/chan/edgeoffsets", Sys->ORDWR);
+	if(fd == nil)
+		t.fatal(sys->sprint("open: %r"));
+	buf := array[16] of byte;
+
+	# (offset asked for, offset the server is to be given)
+	offs := array[] of {
+		(big 0, 0),
+		(big 5, 5),
+		(big 16r7fffffff, 16r7fffffff),
+		(big 16r80000000, 16r7fffffff),
+		(big 16r80000005, 16r7fffffff),
+		(big 16rffffffff, 16r7fffffff),
+		(big 16r100000005, 16r7fffffff),
+		(big 16r7ffffffffffffff0, 16r7fffffff),
+	};
+	for(i := 0; i < len offs; i++){
+		(off, want) := offs[i];
+		before := nasked;
+		sys->pread(fd, buf, len buf, off);
+		if(nasked == before)
+			continue;	# cut short before the server: nothing to check
+		t.asserteq(lastoff, want, sys->sprint("a read at %bd reaches the server as", off));
+		before = nasked;
+		n := sys->pwrite(fd, buf, 3, off);
+		if(nasked == before)
+			continue;
+		t.asserteq(lastoff, want, sys->sprint("a write at %bd reaches the server as", off));
+		t.assert(n <= 3, sys->sprint("a write of 3 bytes is told no more than 3 were written (got %d)", n));
+	}
+	t.assert(nasked >= 8, "the server was asked");
+	fd = nil;
+	fio = nil;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -145,6 +216,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("ExceptionText", testExceptionText);
+	run("FileOffsetAndCount", testFileOffsetAndCount);
 	# last: before the fix this one ended the emulator
 	run("SrvDotDot", testSrvDotDot);
 

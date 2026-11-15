@@ -351,6 +351,23 @@ srvputdir(SrvFile *dir)
 	free(dir);
 }
 
+/*
+ * A server is given the offset as a Limbo int.  An offset past the
+ * largest was cut to its low 32 bits: from 2^31 a negative number, which
+ * a server slicing its data by it took as an array bounds error and
+ * died of, from any client that can read or write the file; from 2^32 a
+ * small one again.  The largest int stands for all of them.
+ */
+static int
+srvoffset(vlong offset)
+{
+	if(offset < 0)
+		return 0;
+	if(offset > 0x7fffffffLL)
+		return 0x7fffffff;
+	return offset;
+}
+
 static void
 srvunblock(SrvFile *sf, int fid)
 {
@@ -512,8 +529,16 @@ srvclunk(Chan *c, int remove)
 	opens = 0;
 	if(c->flag & COPEN){
 		opens = sf->opens--;
-		if(sf->read != H || sf->write != H)
-			srvunblock(sf, c->fid);
+		if(sf->read != H || sf->write != H){
+			/*
+			 * a clunk finishes whatever becomes of telling the
+			 * server: an error here left dev.l held, for good
+			 */
+			if(!waserror()){
+				srvunblock(sf, c->fid);
+				poperror();
+			}
+		}
 	}
 
 	sf->ref--;
@@ -622,7 +647,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	req.t0 = offset;
+	req.t0 = srvoffset(offset);
 	req.t1 = count;
 	req.t2 = c->fid;
 	req.t3 = rc;
@@ -709,7 +734,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	req.t0 = offset;
+	req.t0 = srvoffset(offset);
 	req.t1 = mem2array(va, count);
 	req.t2 = c->fid;
 	req.t3 = wc;
@@ -765,6 +790,9 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	release();
 	if(l < 0)
 		l = 0;
+	/* the server's count is its own: no more was written than was given */
+	if(l > count)
+		l = count;
 	return l;
 }
 

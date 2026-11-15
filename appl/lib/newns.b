@@ -48,11 +48,10 @@ newns(user: string, file: string): string
 	kr = load Keyring Keyring->PATH;
 	stderr = sys->fildes(2);
 
-	# Validate user parameter
-	if(user == nil || user == "") {
-		sys->fprint(stderr, "newns: user must be specified\n");
-		return "newns: user must be specified";
-	}
+	# user is not used (the name space is built as the caller, with
+	# the caller's $user and $home), so none need be given: it was
+	# required all the same, and nsbuild, which gives none, could build
+	# nothing.
 	bio = load Bufio Bufio->PATH;
 	if(bio == nil)
 		return sys->sprint("cannot load %s: %r", Bufio->PATH);
@@ -87,10 +86,13 @@ newns(user: string, file: string): string
 	}
 
 	facfd := sys->open("/mnt/factotum/rpc", Sys->ORDWR);
-	return nsfile(mfp, facfd);
+	return nsfile(mfp, facfd, 0);
 }
 
-nsfile(b: ref Iobuf, facfd: ref Sys->FD): string
+# A file may read another (.), which may read it: no deeper than this.
+MAXDEPTH: con 16;
+
+nsfile(b: ref Iobuf, facfd: ref Sys->FD, depth: int): string
 {
 	e := "";
 	while((l := b.gets('\n')) != nil){
@@ -100,14 +102,20 @@ nsfile(b: ref Iobuf, facfd: ref Sys->FD): string
 			(nil, slist) = sys->tokenize(l, " \t\n\r");	# old way, in absence of String
 		if(slist == nil)
 			continue;
-		e = nsop(expand(slist), facfd);
+		# A line with a variable that is not set is an error: it was
+		# taken for a comment, so a bind that narrows the name space
+		# was left out and the file read on as though it had been done.
+		(argv, xerr) := expand(slist);
+		if(xerr != nil)
+			return xerr;
+		e = nsop(argv, facfd, depth);
 		if(e != "")
 			break;
    	}
 	return e;
 }
 
-expand(l: list of string): list of string
+expand(l: list of string): (list of string, string)
 {
 	nl: list of string;
 	for(; l != nil; l = tl l){
@@ -120,7 +128,7 @@ expand(l: list of string): list of string
 				if(j > i+1){
 					(ok, v) := getenv(s[i+1:j]);
 					if(!ok)
-						return nil;
+						return (nil, sys->sprint("variable $%s is not set", s[i+1:j]));
 					s = s[0:i] + v + s[j:];
 					i = i + len v;
 				}
@@ -130,13 +138,19 @@ expand(l: list of string): list of string
 	l = nil;
 	for(; nl != nil; nl = tl nl)
 		l = hd nl :: l;
-	return l;
+	return (l, nil);
 }
 
-nsop(argv: list of string, facfd: ref Sys->FD): string
+nsop(argv: list of string, facfd: ref Sys->FD, depth: int): string
 {
 	# ignore comments 
-	if(argv == nil || (hd argv)[0] == '#')
+	if(argv == nil)
+		return nil;
+	# an empty word (a quoted nothing, a variable set to nothing) is no
+	# command: its first character was looked at
+	if(hd argv == "")
+		return "invalid namespace command";
+	if((hd argv)[0] == '#')
 		return nil;
  
 	e := "";
@@ -147,10 +161,12 @@ nsop(argv: list of string, facfd: ref Sys->FD): string
 		if(tl argv == nil)
 			return ".: needs a filename";
 		nsf := hd tl argv;
+		if(depth >= MAXDEPTH)
+			return sys->sprint(". %q: files nested too deeply", nsf);
 		mfp := bio->open(nsf, bio->OREAD);
 		if(mfp==nil)
       			return sys->sprint("can't open %q for read %r", nsf);
-		e = nsfile(mfp, facfd);
+		e = nsfile(mfp, facfd, depth + 1);
 	"new" =>
 		c = Sys->NEWNS | Sys->FORKENV;
 	"clear" =>
@@ -254,8 +270,10 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 	if(err != nil)
 		return err;
 
+	# a line that is not a mount is an error with -i too, as bind's
+	# and import's are: -i is for a mount that fails
 	if(len r.argv < 2)
-		return ig(r, "mount: too few args");
+		return "mount: too few args";
 
 	addr := hd r.argv;
 	r.argv = tl r.argv;
@@ -274,6 +292,7 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 		if(factotum == nil)
 			return ig(r, sys->sprint("cannot load %s: %r", Factotum->PATH));
 		factotum->init();
+		fd = c.dfd;	# it was never set: every mount -9 failed, "fd out of range"
 		afd := sys->fauth(fd, spec);
 		if(afd != nil)
 			factotum->proxy(afd, facfd, "proto=p9any role=client");	# ignore result; if it fails, mount will fail
@@ -293,8 +312,12 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 		if (ok<0)
 			return ig(r, sys->sprint("cannot find certificate %q: %r", cert));
 	} else {
+		# the address as a file of the key directory, when it is the
+		# name of one: with a slash in it, it named a file elsewhere
 		cert = kd + addr;
-		(ok, nil) = sys->stat(cert);
+		ok = -1;
+		if(plainname(addr))
+			(ok, nil) = sys->stat(cert);
 		if(ok < 0){
 			cert = kd + "default";
 			(ok, nil) = sys->stat(cert);
@@ -306,10 +329,10 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 
 	err = au->init();
 	if (err != nil)
-		return ig(r, sys->sprint("auth->init: %r"));
+		return ig(r, "auth->init: " + err);
 	(fd, err) = au->client(r.alg, ai, c.dfd);
 	if(fd == nil)
-		return ig(r, sys->sprint("auth: %r"));
+		return ig(r, "auth: " + err);
 
 	if(sys->mount(fd, nil, dir, r.flags, spec) < 0)
 		return ig(r, sys->sprint("mount %q %q: %r", addr, dir));
@@ -384,6 +407,16 @@ unmount(argv: list of string): string
 		return ig(r, sys->sprint("unmount: %r"));
 
 	return nil;
+}
+
+plainname(s: string): int
+{
+	if(s == "" || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 0;
+	return 1;
 }
 
 ig(r: ref Moptres, e: string): string

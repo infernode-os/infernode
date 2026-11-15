@@ -311,6 +311,7 @@ TARG=\
 	veltro_security_test.dis\
 	veltro_store_test.dis\
 	veltro_child_test.dis\
+	newns_test.dis\
 	subagent_edge_test.dis\
 	subagent_tool.dis\
 	veltro_test.dis\
@@ -549,6 +550,7 @@ SYSMODULES=\
 	mdhtml.m\
 	crc.m\
 	pngload.m\
+	newns.m\
 
 DISBIN=$ROOT/dis/tests
 

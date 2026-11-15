@@ -66,6 +66,7 @@ struct Dstate
 
 	/* protections */
 	char*	user;
+	ulong	pgrpid;		/* the name space it was made in */
 	int	perm;
 };
 
@@ -268,6 +269,19 @@ sslopen(Chan *c, int omode)
 			dsnew(c, pp);
 		else {
 			devpermcheck(s->user, s->perm, omode);
+			/*
+			 * #D may be attached after NODEVS, as "private secure
+			 * sockets", and it was not private: the table of
+			 * conversations is one for the whole system, and every
+			 * program runs as the same user, so a confined program
+			 * opened another's conversation by its number, read
+			 * what it had deciphered and wrote under its key.  A
+			 * program that has given up its devices opens only
+			 * conversations made in its own name space.  (One that
+			 * was handed a conversation's descriptors has them.)
+			 */
+			if(up->env->pgrp->nodevs && s->pgrpid != up->env->pgrp->pgrpid)
+				error(Eperm);
 			s->ref++;
 		}
 		unlock(&dslock);
@@ -1288,6 +1302,7 @@ dsnew(Chan *ch, Dstate **pp)
 	s->ref = 1;
 	kstrdup(&s->user, up->env->user);
 	s->perm = 0660;
+	s->pgrpid = up->env->pgrp->pgrpid;
 	t = TYPE(ch->qid);
 	if(t == Qclonus)
 		t = Qctl;

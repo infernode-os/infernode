@@ -816,6 +816,19 @@ are free (`wm/shell -c`, an editor's file). Of the agent's tools only `launch`
 writes such a request, building the path and checking the arguments itself;
 `present` makes content artifacts and nothing else.
 
+A GUI program a tool drives is the user's program in the user's name space,
+and is not confined. A tool must not have it open or save a name the agent
+chose: there the name is another file (the shared `/tmp/veltro/scratch`, not
+the activity's; the real file, not the overlay) and no grant is read-only. So
+the `editor` tool does the file I/O itself, in its own restricted name space:
+`open` reads the file and writes the text to the editor's `body`, `save` reads
+`body` and creates the file after the same check `write` makes, and the editor
+is told the name only to show it (`remote`). The editor does not write a
+document under such a name, its `quit` from a client saves nothing, and text a
+client put in a document is not saved on the user's way out without the user
+asking. The same holds for Xenith: an agent's windows are labels, never file
+names.
+
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
 `/mnt/vision` only from `vision`, `/mnt/wikia` only from `wiki`,

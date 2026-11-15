@@ -953,15 +953,55 @@ undomount(Chan *c, Cname *name)
 }
 
 /*
+ * cunique() and a device's walk for walk(), which fails and does not
+ * raise: nil if they raised, the reason in the error string.  A copy
+ * that cannot be made leaves c the caller's to close (cunique raises
+ * before it closes what it was given).
+ */
+static Chan*
+cuniquenoerr(Chan *c)
+{
+	Chan *nc;
+
+	if(waserror())
+		return nil;
+	nc = cunique(c);
+	poperror();
+	return nc;
+}
+
+static Walkqid*
+devwalknoerr(Chan *c, char **names, int nnames)
+{
+	Walkqid *wq;
+
+	if(waserror())
+		return nil;
+	wq = devtab[c->type]->walk(c, nil, names, nnames);
+	poperror();
+	return wq;
+}
+
+/*
  * Either walks all the way or not at all.  No partial results in *cp.
  * *nerror is the number of names to display in an error message.
+ *
+ * It does not raise, and namec depends on that.  It did: the copy of a
+ * channel taken where a mount point is crossed, and of the one walked
+ * to, is a walk of no names, which raises when a 9P server refuses it,
+ * when its connection has hung up and when the caller is interrupted.
+ * Nothing here caught it, and what the walk held went with it: the
+ * channel walked to so far, the name, the mount heads and the mounted
+ * channel, for every look-up of a name below a mount whose server had
+ * gone.  A device's own walk raises too, if it must wait for memory and
+ * is interrupted: in a union that was with the head's lock held.
  */
 static char Edoesnotexist[] = "does not exist";
 int
 walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 {
 	int dev, didmount, dotdot, i, mflag, n, nhave, ntry, type;
-	Chan *c, *nc;
+	Chan *c, *nc, *uc;
 	Cname *cname;
 	Mount *f;
 	Mhead *mh, *nmh;
@@ -1041,7 +1081,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 		type = c->type;
 		dev = c->dev;
 
-		if((wq = devtab[type]->walk(c, nil, names+nhave, ntry)) == nil){
+		if((wq = devwalknoerr(c, names+nhave, ntry)) == nil){
 			/* try a union mount, if any */
 			if(mh && !nomount){
 				/*
@@ -1054,7 +1094,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				 */
 				rlock(&mh->lock);
 				for(f = mh->mount != nil? mh->mount->next: nil; f; f = f->next)
-					if((wq = devtab[f->to->type]->walk(f->to, nil, names+nhave, ntry)) != nil)
+					if((wq = devwalknoerr(f->to, names+nhave, ntry)) != nil)
 						break;
 				if(f != nil){
 					type = f->to->type;
@@ -1119,7 +1159,22 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				nc = wq->clone;
 			}else{		/* stopped early, at a mount point */
 				didmount = 1;
-				nc = cunique(nc);
+				uc = cuniquenoerr(nc);
+				if(uc == nil){
+					/* the mounted channel cannot be copied */
+					cclose(nc);
+					putmhead(nmh);
+					if(wq->clone != nil)
+						cclose(wq->clone);
+					free(wq);
+					cclose(c);
+					cnameclose(cname);
+					putmhead(mh);
+					if(nerror)
+						*nerror = nhave+i+1;
+					return -1;
+				}
+				nc = uc;
 				nc->mflag = mheadflag(nmh);
 				if(wq->clone != nil){
 					cclose(wq->clone);
@@ -1153,7 +1208,15 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 
 	putmhead(mh);
 
-	c = cunique(c);
+	uc = cuniquenoerr(c);
+	if(uc == nil){
+		cclose(c);
+		cnameclose(cname);
+		if(nerror)
+			*nerror = nnames;
+		return -1;
+	}
+	c = uc;
 
 	cnameclose(c->name);
 	c->name = cname;
@@ -1314,15 +1377,22 @@ saveregisters(void)
  * entered with, the one whose reference it holds.
  */
 static int
-domountc(Chan *volatile *cp, Mhead *volatile *mp, Cname **name)
+domountc(Chan *volatile *cp, Mhead *volatile *mp, Cname *volatile *name)
 {
 	Chan *t;
 	Mhead *m;
+	Cname *n;
 	int r;
 
 	t = *cp;
 	m = *mp;
-	r = domount(&t, &m, name);
+	if(name == nil)
+		r = domount(&t, &m, nil);
+	else{
+		n = *name;
+		r = domount(&t, &m, &n);
+		*name = n;
+	}
 	*cp = t;
 	*mp = m;
 	return r;
@@ -1401,7 +1471,11 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * a fid on a 9P server, never clunked).
 	 */
 	Chan *volatile cnew;
-	Cname *cname;
+	/*
+	 * volatile: set after namec's waserror(), and given back by the
+	 * handler round the copy made for an open.
+	 */
+	Cname *volatile cname;
 	/*
 	 * volatile is load-bearing. e.name, e.elems and e.off are nil at
 	 * waserror() and allocated by parsename after it, and the handler
@@ -1580,8 +1654,14 @@ namec(char *aname, int amode, int omode, ulong perm)
 		if(!nomount)
 			domountc(&c, &m, &cname);
 
-		/* our own copy to open or remove */
+		/*
+		 * our own copy to open or remove.  If it cannot be made
+		 * the name saved above is given back too: it was kept,
+		 * with the channels in it, for every open of a mount
+		 * point whose server refused the copy or had gone.
+		 */
 		if(waserror()){
+			cnameclose(cname);
 			putmhead(m);
 			nexterror();
 		}

@@ -8,6 +8,8 @@ implement NamecCloneTest;
 # (a 9P walk of no names), and so does the end of every walk from a
 # shared channel.  The copy raises when the server answers with an error,
 # when its connection has hung up, or when the caller is interrupted.
+# walk() had no handler round either copy, and the handler in namec that
+# should have caught what an open's copy held gave back less than it had:
 #
 #  - a create whose last element exists is retried as an open, and for
 #    that second walk namec pointed the process's error string at a
@@ -15,7 +17,15 @@ implement NamecCloneTest;
 #    pointer back: the process's error string was namec's dead frame for
 #    the rest of its life.  %r read the kernel's stack back, and every
 #    later error text was written over the frames of whatever call was
-#    then running there: the emulator faulted in a later open.
+#    then running there: the emulator faulted in a later open;
+#
+#  - every look-up of a name below such a mount kept the channel it had
+#    walked to, its name and the mount's head: 512 bytes of the kernel's
+#    main pool each, for good, and a fid on the device below.  A server
+#    that has exited while still mounted is enough, and a program asking
+#    once a second whether a file of its is there yet;
+#
+#  - an open of the mount point itself kept the name: 384 bytes each.
 #
 # The server here is the test's own, on a pipe.
 #
@@ -319,6 +329,118 @@ testCreateRetryErrstr(t: ref T)
 	t.asserteq(ok, 0, "the kernel answers afterwards");
 }
 
+N: con 5000;
+KEEP: con 128*1024;	# a leak is 384 or 512 bytes a call
+
+# calls of f, and the main pool's growth over them
+grow(f: ref fn(), n: int): int
+{
+	for(i := 0; i < 200; i++)
+		f();
+	before := mainused();
+	for(i = 0; i < n; i++)
+		f();
+	return mainused() - before;
+}
+
+statbelow()
+{
+	sys->stat(MNT + "/x");
+}
+
+openmnt()
+{
+	sys->open(MNT, Sys->OREAD);
+}
+
+testWalkCloneRefused(t: ref T)
+{
+	if(mainused() < 0)
+		t.skip("no /dev/memory");
+	sys->pctl(Sys->FORKNS, nil);
+	(sv, err) := mountsrv();
+	if(sv == nil)
+		t.skip(err);
+
+	# the clone answered, the name not there
+	d := grow(statbelow, N);
+	t.log(sys->sprint("%d stats of a name that is not there: %d bytes of the main pool", N, d));
+	t.assert(d < KEEP, sys->sprint("%d stats of a name that is not there keep %d bytes of the main pool", N, d));
+
+	sv.refuseclone = 1;
+	(ok, nil) := sys->stat(MNT + "/x");
+	e := sys->sprint("%r");
+	t.assert(ok < 0, "a name below a mount that cannot be cloned is not found");
+	t.assert(contains(e, "clone failed") && contains(e, NOCLONE),
+		sys->sprint("the error says the clone failed and why: %q", e));
+	d = grow(statbelow, N);
+	t.log(sys->sprint("%d stats below a mount whose clone is refused: %d bytes of the main pool", N, d));
+	t.assert(d < KEEP,
+		sys->sprint("%d stats below a mount whose clone is refused keep %d bytes of the main pool (%d each)", N, d, d/N));
+
+	# and the mount works once the server clones again
+	sv.refuseclone = 0;
+	(ok, nil) = sys->stat(MNT + "/d");
+	t.asserteq(ok, 0, sys->sprint("the mount is walked once its server clones again: %r"));
+	sys->unmount(nil, MNT);
+}
+
+testWalkServerGone(t: ref T)
+{
+	if(mainused() < 0)
+		t.skip("no /dev/memory");
+	sys->pctl(Sys->FORKNS, nil);
+	(sv, err) := mountsrv();
+	if(sv == nil)
+		t.skip(err);
+
+	sv.die = 1;
+	sys->stat(MNT + "/x");	# the server reads this and goes
+	sys->sleep(100);
+	(ok, nil) := sys->stat(MNT + "/x");
+	t.assert(ok < 0, "a name below a mount whose server has gone is not found");
+	t.log(sys->sprint("a stat below a mount whose server has gone: %r"));
+	d := grow(statbelow, N);
+	t.log(sys->sprint("%d stats below a mount whose server has gone: %d bytes of the main pool", N, d));
+	t.assert(d < KEEP,
+		sys->sprint("%d stats below a mount whose server has gone keep %d bytes of the main pool (%d each)", N, d, d/N));
+	sys->unmount(nil, MNT);
+}
+
+testOpenCloneRefused(t: ref T)
+{
+	if(mainused() < 0)
+		t.skip("no /dev/memory");
+	sys->pctl(Sys->FORKNS, nil);
+	(sv, err) := mountsrv();
+	if(sv == nil)
+		t.skip(err);
+
+	# the clone answered, the open refused
+	sv.openfail = 1;
+	d := grow(openmnt, N);
+	t.log(sys->sprint("%d opens the server refuses: %d bytes of the main pool", N, d));
+	t.assert(d < KEEP, sys->sprint("%d opens the server refuses keep %d bytes of the main pool", N, d));
+
+	sv.openfail = 0;
+	sv.refuseclone = 1;
+	fd := sys->open(MNT, Sys->OREAD);
+	e := sys->sprint("%r");
+	t.assert(fd == nil, "a mount point that cannot be cloned is not opened");
+	t.assert(contains(e, "clone failed") && contains(e, NOCLONE),
+		sys->sprint("the error says the clone failed and why: %q", e));
+	d = grow(openmnt, N);
+	t.log(sys->sprint("%d opens of a mount point whose clone is refused: %d bytes of the main pool", N, d));
+	t.assert(d < KEEP,
+		sys->sprint("%d opens of a mount point whose clone is refused keep %d bytes of the main pool (%d each)", N, d, d/N));
+
+	sv.refuseclone = 0;
+	fd = sys->open(MNT, Sys->OREAD);
+	t.assert(fd != nil, sys->sprint("the mount point opens once its server clones again: %r"));
+	fd = nil;
+	sys->unmount(nil, MNT);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -340,6 +462,9 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("CreateRetryErrstr", testCreateRetryErrstr);
+	run("WalkCloneRefused", testWalkCloneRefused);
+	run("WalkServerGone", testWalkServerGone);
+	run("OpenCloneRefused", testOpenCloneRefused);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

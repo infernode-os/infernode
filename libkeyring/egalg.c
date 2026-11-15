@@ -11,6 +11,11 @@ static char*	pkattr[] = { "p", "alpha", "key", nil };
 static char*	skattr[] = { "p", "alpha", "key", "!secret", nil };
 static char*	sigattr[] = { "r", "s", nil };
 
+enum
+{
+	MaxEGgen	= 1<<16,	/* bits of modulus eg_gen will try for */
+};
+
 /*
  * A key in its domain, as far as what uses it goes on to divide by and
  * loop on: a modulus of 0 reached mpdiv (sysfatal), and one of 3 or less
@@ -152,8 +157,8 @@ eg_gen(int len)
 	 * "mpsetminbits: n < 0" (sysfatal) instead of failing cleanly.
 	 * Reject it here so genSK() returns nil per its contract.
 	 */
-	if(len < 2)
-		return nil;
+	if(len < 3 || len > MaxEGgen)
+		return nil;	/* the least safe prime is 7 */
 	return eggen(len, 0);
 }
 

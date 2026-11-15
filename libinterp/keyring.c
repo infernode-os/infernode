@@ -43,7 +43,8 @@ static Type*	TRSApk;
 static Type*	TRSAsig;
 
 enum {
-	Maxmsg=	4096
+	Maxmsg=	4096,
+	Maxdhbits=	1<<15,	/* a Diffie-Hellman modulus auth will use */
 };
 
 static uchar DigestStatemap[] = Keyring_DigestState_map;
@@ -86,6 +87,33 @@ static char exBadKey[]	= "bad encryption key";
 static char exBadDigest[]	= "bad digest value";
 static char exBadIvec[]	= "bad ivec";
 static char exBadState[] = "bad encryption state";
+static char exBadBits[] = "bad key size";
+
+/*
+ * The size of a key, a prime or a random number is a program's, and was
+ * given to libsec as it came. Below the least each generator can make
+ * it never returned: probably_prime looked for ever for a witness for
+ * 3, which every small search meets, and RSAsk.gen and EGsk.gen ask
+ * again until the result has the bits asked for, which five bits of
+ * modulus never has. That was after release(), so the Prog could not be
+ * killed, and went on using a processor until the emulator ended. At
+ * none or less genprime wrote before its number. Very large ones
+ * overflow libmp's digit counts, or take longer than anyone will wait.
+ */
+enum
+{
+	MinRSAbits	= 16,	/* as libkeyring's rsa_gen: two primes of eight bits */
+	MinDHbits	= 3,	/* the least safe prime is 7 */
+	Maxgenbits	= 1<<16,
+	Maxrandbits	= 1<<26,	/* as IPint's shifts: 8MB of number */
+};
+
+static void
+genbits(int n, int min, int max)
+{
+	if(n < min || n > max)
+		error(exBadBits);
+}
 
 typedef struct XBFstate XBFstate;
 
@@ -280,6 +308,13 @@ strtoalg(char *str, char **strp)
 	return nil;
 }
 
+/*
+ * A SigAlg is an adt of the module's interface, and a key's or a
+ * certificate's sa is a field a program can assign: nil, a SigAlg it
+ * made itself (ref SigAlg("rsa"): a string and nothing after it), or
+ * another key's. None of that was looked for: the vector was read from
+ * beyond the program's eight bytes or through nil.
+ */
 static SigAlg*
 checkSigAlg(Keyring_SigAlg *ksa)
 {
@@ -287,12 +322,33 @@ checkSigAlg(Keyring_SigAlg *ksa)
 	SigAlg *sa;
 
 	sa = (SigAlg*)ksa;
-
-	for(sap = algs; sap < &algs[Maxalg]; sap++)
+	if(sa == H || sa == nil || D2H(sa)->t != TSigAlg)
+		errorf("%s: %s", exType, exBadSA);
+	for(sap = algs; sap < &algs[nalg]; sap++)
 		if(sa->vec == *sap)
 			return sa;
 	errorf("%s: %s", exType, exBadSA);
 	return nil;
+}
+
+/*
+ * Whether sa is still the algorithm a key or signature was made by,
+ * which vec records. The functions that read a key were found through
+ * its sa, so a key relabelled with another's (sk.sa = other.sa) had one
+ * algorithm's code read the other's structure: an RSA key printed as
+ * Ed25519 gave the addresses of its numbers, an Ed25519 key signed as
+ * RSA used its bytes as pointers. A key that says it is not what it is
+ * is refused, and what is done with a key is found from vec, which no
+ * program can change (nor another thread, while a builtin has let the
+ * VM go).
+ */
+static int
+ownalg(Keyring_SigAlg *ksa, SigAlgVec *vec)
+{
+	SigAlg *sa;
+
+	sa = (SigAlg*)ksa;
+	return vec != nil && sa != H && sa != nil && D2H(sa)->t == TSigAlg && sa->vec == vec;
 }
 
 /*
@@ -359,7 +415,8 @@ checkSK(Keyring_SK *k)
 	SK *sk;
 
 	sk = (SK*)k;
-	if(sk == H || sk == nil || sk->key == 0 || D2H(sk)->t != TSK){
+	/* the type first: key is not a field of an SK a program made (ref SK(sa, owner)) */
+	if(sk == H || sk == nil || D2H(sk)->t != TSK || sk->key == 0 || !ownalg(sk->x.sa, sk->vec)){
 		errorf("%s: %s", exType, exBadSK);
 		return nil;
 	}
@@ -372,7 +429,8 @@ Keyring_genSK(void *fp)
 	F_Keyring_genSK *f;
 	SK *sk;
 	SigAlg *sa;
-	void *v;
+	SigAlgVec *vec;
+	void *v, *key;
 
 	f = fp;
 	v = *f->ret;
@@ -385,17 +443,21 @@ Keyring_genSK(void *fp)
 
 	sk = newSK(sa, stringdup(f->owner), 0);
 	*f->ret = (Keyring_SK*)sk;
+	vec = sk->vec;
 	release();
-	sk->key = (*sa->vec->gensk)(f->length);
+	key = (*vec->gensk)(f->length);
 	acquire();
+	sk->key = key;
 	/*
 	 * gensk returns nil when key generation fails (e.g. an invalid key
 	 * size).  Honour genSK's contract by returning nil rather than an SK
 	 * with a nil internal key, which would otherwise trip exBadSK only on
 	 * later use.
 	 */
-	if(sk->key == nil)
+	if(key == nil){
 		*f->ret = H;
+		destroy(sk);
+	}
 }
 
 void
@@ -403,9 +465,10 @@ Keyring_genSKfromPK(void *fp)
 {
 	F_Keyring_genSKfromPK *f;
 	SigAlg *sa;
+	SigAlgVec *vec;
 	PK *pk;
 	SK *sk;
-	void *v;
+	void *v, *key;
 
 	f = fp;
 	v = *f->ret;
@@ -416,12 +479,16 @@ Keyring_genSKfromPK(void *fp)
 	sa = checkSigAlg(pk->x.sa);
 	sk = newSK(sa, stringdup(f->owner), 1);
 	*f->ret = (Keyring_SK*)sk;
+	vec = sk->vec;
 	release();
-	sk->key = (*sa->vec->genskfrompk)(pk->key);
+	key = (*vec->genskfrompk)(pk->key);
 	acquire();
+	sk->key = key;
 	/* as genSK: nil for a key that cannot be made, not an SK with none */
-	if(sk->key == nil)
+	if(key == nil){
 		*f->ret = H;
+		destroy(sk);
+	}
 }
 
 /* converts a sequence of newline-separated base64-encoded mpints to attr=hexval ... in f */
@@ -454,25 +521,23 @@ Keyring_sktoattr(void *fp)
 {
 	F_Keyring_sktoattr *f;
 	char *val, *buf, *owner;
-	SigAlg *sa;
 	Fmt o;
 	SK *sk;
 
 	f = fp;
 	sk = checkSK(f->sk);
-	sa = checkSigAlg(sk->x.sa);
 	buf = malloc(Maxbuf);
 	if(buf == nil){
 		retstr(nil, f->ret);
 		return;
 	}
-	(*sa->vec->sk2str)(sk->key, buf, Maxbuf);
+	(*sk->vec->sk2str)(sk->key, buf, Maxbuf);
 	fmtstrinit(&o);
-	fmtprint(&o, "alg=%q", string2c(sa->x.name));
+	fmtprint(&o, "alg=%q", sk->vec->name);
 	owner = string2c(sk->x.owner);
 	if(*owner)
 		fmtprint(&o, " owner=%q", owner);
-	val = bigs2attr(&o, buf, sa->vec->skattr);
+	val = bigs2attr(&o, buf, sk->vec->skattr);
 	free(buf);
 	retstr(val, f->ret);
 	free(val);
@@ -482,28 +547,47 @@ static int
 sktostr(SK *sk, char *buf, int len)
 {
 	int n;
-	SigAlg *sa;
 
-	sa = checkSigAlg(sk->x.sa);
-	n = snprint(buf, len, "%s\n%s\n", string2c(sa->x.name),
-			string2c(sk->x.owner));
-	return n + (*sa->vec->sk2str)(sk->key, buf+n, len - n);
+	n = snprint(buf, len, "%s\n%s\n", sk->vec->name, string2c(sk->x.owner));
+	return n + (*sk->vec->sk2str)(sk->key, buf+n, len - n);
+}
+
+/*
+ * A key's or certificate's text, for sktostr, pktostr and certtostr.
+ * Each allocated its 48K with malloc and then looked at its argument:
+ * sktostr(nil) raised with the buffer never freed, two thousand calls
+ * took the kernel's main pool 96MB, and with the pool at its limit
+ * nothing else in the emulator could have 48K again. The argument is
+ * now checked first, and the text is made in an array of the Dis heap:
+ * making the string of it can raise for want of heap, and an array
+ * nothing refers to is the collector's to free.
+ */
+static Array*
+textbuf(void)
+{
+	return H2D(Array*, heaparray(&Tbyte, Maxbuf));
+}
+
+static void
+rettext(Array *a, String **ret)
+{
+	retstr((char*)a->data, ret);
+	memset(a->data, 0, a->len);	/* it may be a secret key */
+	destroy(a);
 }
 
 void
 Keyring_sktostr(void *fp)
 {
 	F_Keyring_sktostr *f;
-	char *buf;
+	SK *sk;
+	Array *a;
 
 	f = fp;
-	buf = malloc(Maxbuf);
-
-	if(buf)
-		sktostr(checkSK(f->sk), buf, Maxbuf);
-	retstr(buf, f->ret);
-
-	free(buf);
+	sk = checkSK(f->sk);
+	a = textbuf();
+	sktostr(sk, (char*)a->data, Maxbuf);
+	rettext(a, f->ret);
 }
 
 static SK*
@@ -607,7 +691,7 @@ checkPK(Keyring_PK *k)
 	PK *pk;
 
 	pk = (PK*)k;
-	if(pk == H || pk == nil || pk->key == 0 || D2H(pk)->t != TPK){
+	if(pk == H || pk == nil || D2H(pk)->t != TPK || pk->key == 0 || !ownalg(pk->x.sa, pk->vec)){
 		errorf("%s: %s", exType, exBadPK);
 		return nil;
 	}
@@ -631,7 +715,7 @@ Keyring_sktopk(void *fp)
 	sk = checkSK(f->sk);
 	sa = checkSigAlg(sk->x.sa);
 	pk = newPK(sa, stringdup(sk->x.owner), 1);
-	pk->key = (*sa->vec->sk2pk)(sk->key);
+	pk->key = (*sk->vec->sk2pk)(sk->key);
 	*f->ret = (Keyring_PK*)pk;
 }
 
@@ -639,27 +723,23 @@ static int
 pktostr(PK *pk, char *buf, int len)
 {
 	int n;
-	SigAlg *sa;
 
-	sa = checkSigAlg(pk->x.sa);
-	n = snprint(buf, len, "%s\n%s\n", string2c(sa->x.name), string2c(pk->x.owner));
-	return n + (*sa->vec->pk2str)(pk->key, buf+n, len - n);
+	n = snprint(buf, len, "%s\n%s\n", pk->vec->name, string2c(pk->x.owner));
+	return n + (*pk->vec->pk2str)(pk->key, buf+n, len - n);
 }
 
 void
 Keyring_pktostr(void *fp)
 {
 	F_Keyring_pktostr *f;
-	char *buf;
+	PK *pk;
+	Array *a;
 
 	f = fp;
-	buf = malloc(Maxbuf);
-
-	if(buf)
-		pktostr(checkPK(f->pk), buf, Maxbuf);
-	retstr(buf, f->ret);
-
-	free(buf);
+	pk = checkPK(f->pk);
+	a = textbuf();
+	pktostr(pk, (char*)a->data, Maxbuf);
+	rettext(a, f->ret);
 }
 
 void
@@ -667,25 +747,23 @@ Keyring_pktoattr(void *fp)
 {
 	F_Keyring_pktoattr *f;
 	char *val, *buf, *owner;
-	SigAlg *sa;
 	Fmt o;
 	PK *pk;
 
 	f = fp;
 	pk = checkPK(f->pk);
-	sa = checkSigAlg(pk->x.sa);
 	buf = malloc(Maxbuf);
 	if(buf == nil){
 		retstr(nil, f->ret);
 		return;
 	}
-	(*sa->vec->pk2str)(pk->key, buf, Maxbuf);
+	(*pk->vec->pk2str)(pk->key, buf, Maxbuf);
 	fmtstrinit(&o);
-	fmtprint(&o, "alg=%q", string2c(sa->x.name));
+	fmtprint(&o, "alg=%q", pk->vec->name);
 	owner = string2c(pk->x.owner);
 	if(*owner)
 		fmtprint(&o, " owner=%q", owner);
-	val = bigs2attr(&o, buf, sa->vec->pkattr);
+	val = bigs2attr(&o, buf, pk->vec->pkattr);
 	free(buf);
 	retstr(val, f->ret);
 	free(val);
@@ -800,7 +878,7 @@ checkCertificate(Keyring_Certificate *c)
 	Certificate *cert;
 
 	cert = (Certificate*)c;
-	if(cert == H || cert == nil || cert->signa == 0 || D2H(cert)->t != TCertificate){
+	if(cert == H || cert == nil || D2H(cert)->t != TCertificate || cert->signa == 0 || !ownalg(cert->x.sa, cert->vec)){
 		errorf("%s: %s", exType, exBadCert);
 		return nil;
 	}
@@ -810,29 +888,25 @@ checkCertificate(Keyring_Certificate *c)
 static int
 certtostr(Certificate *c, char *buf, int len)
 {
-	SigAlg *sa;
 	int n;
 
-	sa = checkSigAlg(c->x.sa);
-	n = snprint(buf, len, "%s\n%s\n%s\n%d\n", string2c(sa->x.name),
+	n = snprint(buf, len, "%s\n%s\n%s\n%d\n", c->vec->name,
 		string2c(c->x.ha), string2c(c->x.signer), c->x.exp);
-	return n + (*sa->vec->sig2str)(c->signa, buf+n, len - n);
+	return n + (*c->vec->sig2str)(c->signa, buf+n, len - n);
 }
 
 void
 Keyring_certtostr(void *fp)
 {
 	F_Keyring_certtostr *f;
-	char *buf;
+	Certificate *c;
+	Array *a;
 
 	f = fp;
-	buf = malloc(Maxbuf);
-
-	if(buf)
-		certtostr(checkCertificate(f->c), buf, Maxbuf);
-	retstr(buf, f->ret);
-
-	free(buf);
+	c = checkCertificate(f->c);
+	a = textbuf();
+	certtostr(c, (char*)a->data, Maxbuf);
+	rettext(a, f->ret);
 }
 
 void
@@ -840,26 +914,24 @@ Keyring_certtoattr(void *fp)
 {
 	F_Keyring_certtoattr *f;
 	char *val, *buf, *ha;
-	SigAlg *sa;
 	Fmt o;
 	Certificate *c;
 
 	f = fp;
 	c = checkCertificate(f->c);
-	sa = checkSigAlg(c->x.sa);
 	buf = malloc(Maxbuf);
 	if(buf == nil){
 		retstr(nil, f->ret);
 		return;
 	}
-	(*sa->vec->sig2str)(c->signa, buf, Maxbuf);
+	(*c->vec->sig2str)(c->signa, buf, Maxbuf);
 	ha = string2c(c->x.ha);
 	if(strcmp(ha, "sha") == 0)
 		ha = "sha1";	/* normalise */
 	fmtstrinit(&o);
-	fmtprint(&o, "sigalg=%q-%q signer=%q expires=%ud", string2c(sa->x.name), ha,
+	fmtprint(&o, "sigalg=%q-%q signer=%q expires=%ud", c->vec->name, ha,
 		string2c(c->x.signer), c->x.exp);
-	val = bigs2attr(&o, buf, sa->vec->sigattr);
+	val = bigs2attr(&o, buf, c->vec->sigattr);
 	free(buf);
 	retstr(val, f->ret);
 	free(val);
@@ -929,10 +1001,12 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	mpint *b;
 	int n;
 	SigAlg *sa;
+	SigAlgVec *vec;
 	DigestState *ds;
 	uchar digest[SHA256dlen];
 	char *buf;
 	String *hastr;
+	void *signa;
 
 	hastr = H;
 	sa = checkSigAlg(sk->x.sa);
@@ -973,9 +1047,11 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	retstr(ha, &hastr);
 	c = newCertificate(sa, hastr, stringdup(sk->x.owner), exp, 1);
 	certimmutable(c);		/* hide from the garbage collector */
+	vec = sk->vec;
 	release();
-	c->signa = (*sa->vec->sign)(b, sk->key);
+	signa = (*vec->sign)(b, sk->key);
 	acquire();
+	c->signa = signa;
 	mpfree(b);
 
 	return c;
@@ -989,11 +1065,12 @@ Keyring_sign(void *fp)
 	mpint *b;
 	int n;
 	SigAlg *sa;
+	SigAlgVec *vec;
 	SK *sk;
 	XDigestState *ds;
 	uchar digest[SHA512dlen];
 	char *buf;
-	void *v;
+	void *v, *signa;
 
 	f = fp;
 	v = *f->ret;
@@ -1006,10 +1083,17 @@ Keyring_sign(void *fp)
 	/* add signer name and expiration time to hash */
 	if(f->state == H)
 		return;
+	/*
+	 * A DigestState is an adt of the module's interface, so a program
+	 * can make one of its own (ref DigestState(0)): eight bytes, not
+	 * libsec's state. It was taken with a cast here and in verify, and
+	 * the digest's block buffer, count and length were whatever lay
+	 * after it in the heap: the signer's name was copied there.
+	 */
+	ds = checktype(f->state, TDigestState, "DigestState", 0);
 	buf = malloc(Maxbuf);
 	if(buf == nil)
 		return;
-	ds = (XDigestState*)f->state;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(sk->x.owner), f->exp);
 	if(strcmp(string2c(f->ha), "sha256") == 0){
 		sha256((uchar*)buf, n, digest, &ds->state);
@@ -1043,9 +1127,11 @@ Keyring_sign(void *fp)
 	/* sign */
 	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), f->exp, 1);
 	*f->ret = (Keyring_Certificate*)c;
+	vec = sk->vec;
 	release();
-	c->signa = (*sa->vec->sign)(b, sk->key);
+	signa = (*vec->sign)(b, sk->key);
 	acquire();
+	c->signa = signa;
 	mpfree(b);
 }
 
@@ -1056,8 +1142,9 @@ Keyring_signm(void *fp)
 	Certificate *c;
 	mpint *b;
 	SigAlg *sa;
+	SigAlgVec *vec;
 	SK *sk;
-	void *v;
+	void *v, *signa;
 
 	f = fp;
 	v = *f->ret;
@@ -1074,9 +1161,11 @@ Keyring_signm(void *fp)
 	/* sign */
 	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), 0, 1);
 	*f->ret = (Keyring_Certificate*)c;
+	vec = sk->vec;
 	release();
-	c->signa = (*sa->vec->sign)(b, sk->key);
+	signa = (*vec->sign)(b, sk->key);
 	acquire();
+	c->signa = signa;
 }
 
 static int
@@ -1084,14 +1173,13 @@ verify(PK *pk, Certificate *c, char *a, int len)
 {
 	mpint *b;
 	int n;
-	SigAlg *sa, *pksa;
+	SigAlgVec *vec;
 	DigestState *ds;
 	uchar digest[SHA512dlen];
 	char *buf;
 
-	sa = checkSigAlg(c->x.sa);
-	pksa = checkSigAlg(pk->x.sa);
-	if(sa->vec != pksa->vec)
+	vec = c->vec;
+	if(vec != pk->vec)
 		return 0;
 
 	/* add signer name and expiration time to hash */
@@ -1135,7 +1223,7 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		return 0;
 	/* verify */
 	release();
-	n = (*sa->vec->verify)(b, c->signa, pk->key);
+	n = (*vec->verify)(b, c->signa, pk->key);
 	acquire();
 
 	mpfree(b);
@@ -1149,7 +1237,7 @@ Keyring_verify(void *fp)
 	Certificate *c;
 	mpint *b;
 	int n;
-	SigAlg *sa, *pksa;
+	SigAlgVec *vec;
 	PK *pk;
 	XDigestState *ds;
 	uchar digest[SHA512dlen];
@@ -1159,20 +1247,19 @@ Keyring_verify(void *fp)
 	*f->ret = 0;
 
 	c = checkCertificate(f->cert);
-	sa = checkSigAlg(c->x.sa);
 	pk = checkPK(f->pk);
-	pksa = checkSigAlg(pk->x.sa);
-	if(sa->vec != pksa->vec)
+	vec = c->vec;
+	if(vec != pk->vec)
 		return;
 
 	/* add signer name and expiration time to hash */
 	if(f->state == H)
 		return;
+	ds = checktype(f->state, TDigestState, "DigestState", 0);	/* see Keyring_sign */
 	buf = malloc(Maxbuf);
 	if(buf == nil)
 		return;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(c->x.signer), c->x.exp);
-	ds = (XDigestState*)f->state;
 
 	if(strcmp(string2c(c->x.ha), "sha256") == 0){
 		sha256((uchar*)buf, n, digest, &ds->state);
@@ -1205,8 +1292,9 @@ Keyring_verify(void *fp)
 
 	/* verify */
 	release();
-	*f->ret = (*sa->vec->verify)(b, c->signa, pk->key);
+	n = (*vec->verify)(b, c->signa, pk->key);
 	acquire();
+	*f->ret = n;
 
 	mpfree(b);
 }
@@ -1216,25 +1304,28 @@ Keyring_verifym(void *fp)
 {
 	F_Keyring_verifym *f;
 	Certificate *c;
-	SigAlg *sa, *pksa;
+	SigAlgVec *vec;
 	PK *pk;
+	mpint *m;
+	int n;
 
 	f = fp;
 	*f->ret = 0;
 
 	c = checkCertificate(f->cert);
-	sa = checkSigAlg(c->x.sa);
 	pk = checkPK(f->pk);
-	pksa = checkSigAlg(pk->x.sa);
-	if(sa->vec != pksa->vec)
+	vec = c->vec;
+	if(vec != pk->vec)
 		return;
 
 	if(f->m == H)
 		return;
+	m = checkIPint(f->m);
 
 	release();
-	*f->ret = (*sa->vec->verify)(checkIPint(f->m), c->signa, pk->key);
+	n = (*vec->verify)(m, c->signa, pk->key);
 	acquire();
+	*f->ret = n;
 }
 
 /*
@@ -1262,6 +1353,24 @@ Keyring_DigestState_copy(void *fp)
 	}
 }
 
+/*
+ * How many bytes of a program's array a digest is to read: the count is
+ * the program's, and only one longer than the array was looked for (and
+ * cut down). A negative one went to libsec as an unsigned length: sha1,
+ * md5 and md4 take whole blocks off it in an int, which stepped back
+ * from the array, and hashed up to 63 bytes found before it (a program
+ * read the heap below its array a byte at a time, by matching digests);
+ * the SHA-2 and SHA-3 digests walked forward to the end of memory. A
+ * count that is not within the array is refused, as the ciphers refuse it.
+ */
+static int
+digestcount(Array *buf, int n)
+{
+	if(n < 0 || n > buf->len)
+		error(exBounds);
+	return n;
+}
+
 static Keyring_DigestState*
 keyring_digest_x(Array *buf, int n, Array *digest, int dlen, Keyring_DigestState *state, DigestState* (*fn)(uchar*, ulong, uchar*, DigestState*))
 {
@@ -1270,8 +1379,7 @@ keyring_digest_x(Array *buf, int n, Array *digest, int dlen, Keyring_DigestState
 	uchar *cbuf, *cdigest;
 
 	if(buf != H){
-		if(n > buf->len)
-			n = buf->len;
+		n = digestcount(buf, n);
 		cbuf = buf->data;
 	}else{
 		if(n != 0)
@@ -1386,9 +1494,7 @@ Keyring_sha3_256(void *fp)
 	if(f->buf == H || f->digest == H)
 		return;
 
-	n = f->n;
-	if(n > f->buf->len)
-		n = f->buf->len;
+	n = digestcount(f->buf, f->n);
 	if(f->digest->len < SHA3_256dlen)
 		error(exBadDigest);
 
@@ -1410,9 +1516,7 @@ Keyring_sha3_512(void *fp)
 	if(f->buf == H || f->digest == H)
 		return;
 
-	n = f->n;
-	if(n > f->buf->len)
-		n = f->buf->len;
+	n = digestcount(f->buf, f->n);
 	if(f->digest->len < SHA3_512dlen)
 		error(exBadDigest);
 
@@ -1457,8 +1561,7 @@ keyring_hmac_x(Array *data, int n, Array *key, Array *digest, int dlen, Keyring_
 	uchar *cdata, *cdigest;
 
 	if(data != H){
-		if(n > data->len)
-			n = data->len;
+		n = digestcount(data, n);
 		cdata = data->data;
 	}else{
 		if(n != 0)
@@ -1568,6 +1671,7 @@ Keyring_dhparams(void *fp)
 	f->ret->t1 = H;
 	destroy(v);
 
+	genbits(f->nbits, MinDHbits, Maxgenbits);
 	p = mpnew(0);
 	alpha = mpnew(0);
 	release();
@@ -1895,10 +1999,11 @@ Keyring_auth(void *fp)
 	SK *mysk;
 	PK *mypk, *spk, *hispk;
 	Certificate *cert, *hiscert, *alphacert;
-	char *buf, *err;
+	char *buf, *err, *argerr;
 	uchar *cvb;
 	int n, fd;
 	long now;
+	Keyring_Authinfo *info;
 	/* hybrid post-quantum key agreement material. Buffers are sized for the
 	 * larger ML-KEM-1024 (CNSA 2.0 strict); pklen/ctlen select the in-use
 	 * parameter set at runtime. They live on the heap, not the stack:
@@ -1930,6 +2035,47 @@ Keyring_auth(void *fp)
 		return;
 	}
 	fd = f->fd->fd;
+
+	/*
+	 * The keys, looked at before anything is allocated: a key that
+	 * is none raises, and that was after the 48K buffer and the
+	 * ML-KEM block were made, which were then never freed (59K a
+	 * call, from a program with an Authinfo of its own making). What
+	 * is said to the peer about a missing one is still said after the
+	 * versions are exchanged.
+	 */
+	info = f->info;
+	argerr = nil;
+	mysk = nil;
+	mypk = spk = nil;
+	cert = nil;
+	p = alpha = nil;
+	if(info == H)
+		argerr = "no authentication information";
+	else if(info->p == H)
+		argerr = "missing diffie hellman mod";
+	else if(info->alpha == H)
+		argerr = "missing diffie hellman base";
+	else{
+		mysk = checkSK(info->mysk);
+		mypk = checkPK(info->mypk);
+		cert = checkCertificate(info->cert);
+		spk = checkPK(info->spk);
+		p = checkIPint(info->p);
+		alpha = checkIPint(info->alpha);
+		/*
+		 * The modulus is the caller's. Zero is divided by (libmp
+		 * raises, with everything here allocated). The two shares
+		 * in base 64 and the two ML-KEM keys are signed from buf,
+		 * and were copied there whatever their length: past its end
+		 * with a modulus of a quarter of a million bits. The groups
+		 * in use are of 2048 to 8192 bits.
+		 */
+		if(p->sign < 0)
+			argerr = "-ve modulus";
+		else if(p->top == 0 || mpsignif(p) > Maxdhbits)
+			argerr = "bad diffie hellman mod";
+	}
 
 	buf = malloc(Maxbuf);
 	if(buf == nil){
@@ -1977,45 +2123,8 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
-	if(f->info == H){
-		err = "no authentication information";
-		goto out;
-	}
-	if(f->info->p == H){
-		err = "missing diffie hellman mod";
-		goto out;
-	}
-	if(f->info->alpha == H){
-		err = "missing diffie hellman base";
-		goto out;
-	}
-	mysk = checkSK(f->info->mysk);
-	if(mysk == H){
-		err = "bad sk arg";
-		goto out;
-	}
-	mypk = checkPK(f->info->mypk);
-	if(mypk == H){
-		err = "bad pk arg";
-		goto out;
-	}
-	cert = checkCertificate(f->info->cert);
-	if(cert == H){
-		err = "bad certificate arg";
-		goto out;
-	}
-	spk = checkPK(f->info->spk);
-	if(spk == H){
-		err = "bad signer key arg";
-		goto out;
-	}
-
-	/* get alpha and p */
-	p = checkIPint(f->info->p);
-	alpha = checkIPint(f->info->alpha);
-
-	if(p->sign == -1) {
-		err = "-ve modulus";
+	if(argerr != nil){
+		err = argerr;
 		goto out;
 	}
 
@@ -2215,9 +2324,24 @@ Keyring_auth(void *fp)
 	 */
 	n = bigtobase64(alphar0, buf, Maxbuf);
 	n += bigtobase64(alphar1, buf+n, Maxbuf-n);
+	if(n > Maxbuf - 2*pklen){
+		err = "bad diffie hellman mod";
+		goto out;
+	}
 	memmove(buf+n, myek, pklen); n += pklen;
 	memmove(buf+n, hisek, pklen); n += pklen;
 	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
+	/*
+	 * sign gives nil when it has no memory for its buffer, and a
+	 * certificate with no signature when the algorithm makes none:
+	 * either went on to be printed, through nil
+	 */
+	if(alphacert == nil || alphacert->signa == nil){
+		if(alphacert == nil)
+			alphacert = H;
+		err = exNomem;
+		goto out;
+	}
 	n = certtostr(alphacert, buf, Maxbuf);
 	if(sendmsg(fd, buf, n) <= 0){
 		err = MSG;
@@ -2242,6 +2366,10 @@ Keyring_auth(void *fp)
 	certimmutable(alphacert);		/* hide from the garbage collector */
 	n = bigtobase64(alphar1, buf, Maxbuf);
 	n += bigtobase64(alphar0, buf+n, Maxbuf-n);
+	if(n > Maxbuf - 2*pklen){
+		err = "bad diffie hellman mod";
+		goto out;
+	}
 	memmove(buf+n, hisek, pklen); n += pklen;
 	memmove(buf+n, myek, pklen); n += pklen;
 	if(verify(hispk, alphacert, buf, n) == 0){
@@ -2487,12 +2615,15 @@ Keyring_readauthinfo(void *fp)
 	if(f->filename == H)
 		return;
 
-	buf = malloc(Maxbuf);
-	if(buf == nil)
-		return;
-
 	ai = newAuthinfo();
 	*f->ret = ai;
+
+	buf = malloc(Maxbuf);
+	if(buf == nil){
+		*f->ret = H;
+		destroy(ai);
+		return;
+	}
 
 	release();
 	fd = kopen(string2c(f->filename), OREAD);
@@ -2534,7 +2665,14 @@ Keyring_readauthinfo(void *fp)
 	n = getkfmsg(fd, buf, Maxbuf);
 	if(n < 0)
 		goto out;
+	/*
+	 * a number that is none: newIPint raises on nil, and the buffer
+	 * and the open file were then never given back (a key file with
+	 * one bad character cost a descriptor each time it was read)
+	 */
 	b = strtomp(buf, nil, 64, nil);
+	if(b == nil)
+		goto out;
 	ai->alpha = newIPint(b);
 
 	/* diffie hellman modulus */
@@ -2542,6 +2680,8 @@ Keyring_readauthinfo(void *fp)
 	if(n < 0)
 		goto out;
 	b = strtomp(buf, nil, 64, nil);
+	if(b == nil)
+		goto out;
 	ai->p = newIPint(b);
 	ok = 1;
 out:
@@ -2645,7 +2785,7 @@ getbuf(int fd, uchar *buf, int n, char *err, int nerr)
 	acquire();
 	if(len <= 0){
 		strncpy(err, "hungup", nerr);
-		buf[nerr-1] = 0;
+		err[nerr-1] = 0;
 		return -1;
 	}
 	if(buf[0] == 0)
@@ -3151,6 +3291,9 @@ Keyring_rc4setup(void *fp)
 
 	if(f->seed == H)
 		return;
+	/* a key of no bytes: the byte after the array was read and used as one */
+	if(f->seed->len <= 0)
+		error(exBadKey);
 
 	h = heap(TRC4state);
 	is = H2D(XRC4state*, h);
@@ -3177,6 +3320,34 @@ Keyring_rc4(void *fp)
 	rc4(&is->state, p, f->n);
 }
 
+/*
+ * rc4skip and rc4back step the state as many times as a program says,
+ * and did it holding the VM: the largest int stopped every Limbo thread
+ * for six seconds. A long way is gone on a copy of the state, with the
+ * VM let go.
+ */
+enum
+{
+	RC4relsteps	= 1<<20,
+};
+
+static void
+rc4step(XRC4state *is, int n, void (*step)(RC4state*, int))
+{
+	RC4state st;
+
+	if(n <= RC4relsteps){
+		(*step)(&is->state, n);
+		return;
+	}
+	st = is->state;
+	release();
+	(*step)(&st, n);
+	acquire();
+	is->state = st;
+	memset(&st, 0, sizeof(st));
+}
+
 void
 Keyring_rc4skip(void *fp)
 {
@@ -3185,7 +3356,7 @@ Keyring_rc4skip(void *fp)
 
 	f = fp;
 	is = checktype(f->state, TRC4state, exBadState, 0);
-	rc4skip(&is->state, f->n);
+	rc4step(is, f->n, rc4skip);
 }
 
 void
@@ -3196,12 +3367,33 @@ Keyring_rc4back(void *fp)
 
 	f = fp;
 	is = checktype(f->state, TRC4state, exBadState, 0);
-	rc4back(&is->state, f->n);
+	rc4step(is, f->n, rc4back);
 }
 
 /*
  *  public/secret keys, signing and verifying
  */
+
+/*
+ * The keys below are adts a program fills in, and libsec is given their
+ * numbers as they are. What it would raise for (a modulus of zero to
+ * divide by, a negative exponent) is refused here instead: libsec's own
+ * raise comes after it has allocated its working numbers, which were
+ * lost each time, a few kilobytes of the kernel's pool a call.
+ */
+static void
+modulusok(mpint *m)
+{
+	if(m->top == 0 || m->sign < 0)
+		error(exBadKey);
+}
+
+static void
+exponentok(mpint *e)
+{
+	if(e->sign < 0)
+		error(exBadKey);
+}
 
 static void
 dsapk2pub(DSApub* p, Keyring_DSApk* pk)
@@ -3212,6 +3404,21 @@ dsapk2pub(DSApub* p, Keyring_DSApk* pk)
 	p->q = checkIPint(pk->q);
 	p->alpha = checkIPint(pk->alpha);
 	p->key = checkIPint(pk->key);
+	modulusok(p->p);
+	modulusok(p->q);
+}
+
+/*
+ * A key to sign with or to make another like: its numbers are a
+ * program's (the adt is filled in Limbo). dsasign looks for a k from 1
+ * to q-1 and dsagen for a generator mod p, and with q of 1 or less, or
+ * p of 2 or less, there is none: they looked for ever, released.
+ */
+static void
+dsagenok(DSApub *p)
+{
+	if(mpcmp(p->q, mpone) <= 0 || mpcmp(p->p, mptwo) <= 0)
+		error(exBadKey);
 }
 
 static void
@@ -3220,6 +3427,7 @@ dsask2priv(DSApriv* p, Keyring_DSAsk* sk)
 	if(sk == H || sk->pk == H)
 		error(exNilref);
 	dsapk2pub(&p->pub, sk->pk);
+	dsagenok(&p->pub);
 	p->secret = checkIPint(sk->secret);
 }
 
@@ -3254,6 +3462,7 @@ DSAsk_gen(void *fp)
 	oldpk = nil;
 	if(f->oldpk != H){
 		dsapk2pub(&pub, f->oldpk);
+		dsagenok(&pub);
 		oldpk = &pub;
 	}
 	release();
@@ -3318,6 +3527,7 @@ egpk2pub(EGpub* p, Keyring_EGpk* pk)
 	p->p = checkIPint(pk->p);
 	p->alpha = checkIPint(pk->alpha);
 	p->key = checkIPint(pk->key);
+	modulusok(p->p);
 }
 
 static void
@@ -3326,6 +3536,9 @@ egsk2priv(EGpriv* p, Keyring_EGsk* sk)
 	if(sk == H || sk->pk == H)
 		error(exNilref);
 	egpk2pub(&p->pub, sk->pk);
+	/* egsign looks for a k from 1 to p-2: see dsagenok */
+	if(mpcmp(p->pub.p, mptwo) <= 0)
+		error(exBadKey);
 	p->secret = checkIPint(sk->secret);
 }
 
@@ -3351,6 +3564,7 @@ EGsk_gen(void *fp)
 
 	f = fp;
 	v = *f->ret;
+	genbits(f->nlen, MinDHbits, Maxgenbits);
 	sk = newthing(TEGsk, 0);
 	sk->pk = newthing(TEGpk, 0);
 	*f->ret = sk;
@@ -3409,6 +3623,8 @@ EGpk_verify(void *fp)
 	sig.r = checkIPint(f->sig->r);
 	sig.s = checkIPint(f->sig->s);
 	m = checkIPint(f->m);
+	if(sig.s->sign < 0 || m->sign < 0)
+		return;	/* exponents, to egverify: no signature */
 	release();
 	*f->ret = egverify(&p, &sig, m) == 0;
 	acquire();
@@ -3422,6 +3638,8 @@ rsapk2pub(RSApub* p, Keyring_RSApk* pk)
 	memset(p, 0, sizeof(*p));
 	p->n = checkIPint(pk->n);
 	p->ek = checkIPint(pk->ek);
+	modulusok(p->n);
+	exponentok(p->ek);
 }
 
 static void
@@ -3436,6 +3654,10 @@ rsask2priv(RSApriv* p, Keyring_RSAsk* sk)
 	p->kp = checkIPint(sk->kp);
 	p->kq = checkIPint(sk->kq);
 	p->c2 = checkIPint(sk->c2);
+	modulusok(p->p);
+	modulusok(p->q);
+	exponentok(p->kp);
+	exponentok(p->kq);
 }
 
 static void
@@ -3485,6 +3707,8 @@ RSAsk_gen(void *fp)
 
 	f = fp;
 	v = *f->ret;
+	genbits(f->nlen, MinRSAbits, Maxgenbits);
+	genbits(f->elen, 1, f->nlen);
 	sk = newthing(TRSAsk, 0);
 	sk->pk = newthing(TRSApk, 0);
 	*f->ret = sk;
@@ -3605,6 +3829,7 @@ Keyring_IPint_random(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	genbits(f->maxbits, 0, Maxrandbits);
 	release();
 	b = mprand(f->maxbits, genrandom, nil);
 	acquire();
@@ -4081,11 +4306,7 @@ Keyring_keccak256(void *fp)
 	if(f->buf == H || f->digest == H)
 		return;
 
-	n = f->n;
-	if(n < 0)
-		n = 0;
-	if(n > f->buf->len)
-		n = f->buf->len;
+	n = digestcount(f->buf, f->n);
 	if(f->digest->len < 32)
 		error(exBadDigest);
 

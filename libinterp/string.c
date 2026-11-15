@@ -76,6 +76,14 @@ OP(insc)
 
 	l = ss->len;
 	if(l < 0 || expand) {
+		/*
+		 * An empty string that is not nil (string array[0] of byte)
+		 * came from newstring, and its max is in bytes: as runes it
+		 * has room for a quarter as many.  Stores of runes went on to
+		 * max of them, over the blocks after it.
+		 */
+		if(l == 0 && v == 0)
+			ss->max /= sizeof(Rune);
 		l = -l;
 r:
 		if(v < l)
@@ -451,6 +459,46 @@ string2c(String *s)
 	return s->tmp;
 }
 
+/*
+ * The rune at p, in a buffer that ends at e: the bytes it takes, or 0
+ * if what is left is the start of a rune cut off by the end (a read
+ * that stopped inside one; left out, as it always was).  Bytes that
+ * are no rune and no start of one are Runeerror, one byte at a time,
+ * as they are anywhere else in the buffer: `a E2 b` at the end of one
+ * was "a", the b lost with the byte before it.  Nothing past e is read.
+ */
+static int
+runeat(Rune *r, uchar *p, uchar *e)
+{
+	int c, i, n, need;
+
+	c = *p;
+	if(c < Runeself){
+		*r = c;
+		return 1;
+	}
+	n = e - p;
+	if(n >= UTFmax || fullrune((char*)p, n))
+		return chartorune(r, (char*)p);
+	if(c >= 0xF0 && c < 0xF8)
+		need = 4;
+	else if(c >= 0xE0)
+		need = 3;
+	else if(c >= 0xC0)
+		need = 2;
+	else
+		need = 0;	/* a continuation byte, or 0xF8 and up */
+	if(c < 0xF8 && need > n){
+		for(i = 1; i < n; i++)
+			if((p[i] & 0xC0) != 0x80)
+				break;
+		if(i == n)
+			return 0;
+	}
+	*r = Runeerror;
+	return 1;
+}
+
 String*
 c2string(char *cs, int len)
 {
@@ -458,7 +506,7 @@ c2string(char *cs, int len)
 	char *ecs;
 	String *s;
 	Rune *r, junk;
-	int c, nc, isrune;
+	int c, n, nc, isrune;
 
 	isrune = 0;
 	ecs = cs+len;
@@ -481,19 +529,16 @@ c2string(char *cs, int len)
 	p--;
 	nc = p - (uchar*)cs;
 	while(p < (uchar*)ecs) {
-		c = *p;
-		if(c < Runeself)
-			p++;
-		else if(p+UTFmax<=(uchar*)ecs || fullrune((char*)p, (uchar*)ecs-p))
-			p += chartorune(&junk, (char*)p);
-		else
+		n = runeat(&junk, p, (uchar*)ecs);
+		if(n == 0)
 			break;
+		p += n;
 		nc++;
 	}
 	s = newrunes(nc);
 	r = s->Srune;
 	while(nc--)
-		cs += chartorune(r++, cs);
+		cs += runeat(r++, (uchar*)cs, (uchar*)ecs);
 
 	return s;
 }
@@ -524,6 +569,9 @@ newrunes(int nr)
 		return newstring(nr);
 	if(nr < 0)
 		nr = -nr;
+	/* nheap takes an int: from 2^30 runes the size wrapped to a small one */
+	if(nr > (0x7fffffff-sizeof(String))/sizeof(Rune))
+		error(exHeap);
 	h = nheap(sizeof(String)+nr*sizeof(Rune));
 	h->t = &Tstring;
 	Tstring.ref++;

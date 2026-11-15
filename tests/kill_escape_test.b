@@ -12,6 +12,12 @@ implement KillEscapeTest;
 #    descriptor lets the VM go to close it, a kill that came then was
 #    only marked, and the handler cleared the mark as it finished: the
 #    Prog ran on, its killer told it had gone
+#  - a Prog of a group or tree that is being killed wrote "killtree" to
+#    its own ctl. killgrptree did not wait for the first killer to be
+#    done, as killgrp does: it listed the writer's tree, killed all of it
+#    but the writer (the Prog running is never killed by its own kill),
+#    and cleared the mark on the writer's group, the first killer's. The
+#    writer then spawned, and its children were in nobody's list
 #  - the JIT raises for an instruction it does not know, and did so
 #    holding the lock compiles are made under: the next module to be
 #    compiled waited for it holding the VM, and every Limbo program
@@ -179,6 +185,121 @@ testKilledInHandler(t: ref T)
 	t.asserteq(outlived, 0, "rounds of ten in which a Prog killed in its handler went on running");
 }
 
+# The Progs a member of a dying group leaves behind
+runs := big 0;
+began := 0;
+spawned := 0;
+
+runner()
+{
+	while(!stop){
+		runs++;
+		sys->sleep(1);
+	}
+}
+
+# a Prog whose kill takes its killer a while, with the VM let go: its
+# file descriptors are its own, and there are many to close
+ballast(ready: chan of int)
+{
+	sys->pctl(Sys->FORKFD, nil);
+	fds: list of ref Sys->FD;
+	for(i := 0; i < 400; i++)
+		fds = sys->open("/dev/null", Sys->OREAD) :: fds;
+	ready <-= 1;
+	c := chan of int;
+	<-c;
+	fds = nil;
+}
+
+# waits for the kill of its leader to begin, writes killtree to its own
+# ctl, and spawns
+selfkiller(leaderpid: int, owngrp: int, ready: chan of int)
+{
+	pid := sys->pctl(0, nil);
+	if(owngrp)
+		pid = sys->pctl(Sys->NEWPGRP, nil);
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	status := sys->sprint("/prog/%d/status", leaderpid);
+	ready <-= 1;
+	for(;;){
+		if(stop)
+			exit;
+		(ok, nil) := sys->stat(status);
+		if(ok < 0)
+			break;
+	}
+	began++;
+	sys->fprint(fd, "killtree");
+	spawn runner();
+	spawn runner();
+	spawned++;
+	c := chan of int;
+	<-c;
+}
+
+selfkillleader(pidc: chan of int, n: int, owngrp: int)
+{
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	ready := chan of int;
+	# killed after the leader and before the rest: pids are taken in order
+	for(i := 0; i < 8; i++){
+		spawn ballast(ready);
+		<-ready;
+	}
+	for(i = 0; i < n; i++){
+		spawn selfkiller(pid, owngrp, ready);
+		<-ready;
+	}
+	pidc <-= pid;
+	c := chan of int;
+	<-c;
+}
+
+# rounds in which something of the group went on; how many Progs saw
+# their group's kill begin
+selfkill(t: ref T, how: string, owngrp: int): (int, int)
+{
+	outlived := 0;
+	saw := 0;
+	for(round := 0; round < 5; round++){
+		began = spawned = 0;
+		pidc := chan of int;
+		spawn selfkillleader(pidc, 12, owngrp);
+		pid := <-pidc;
+		sys->sleep(50);
+		r := ctl(pid, how);
+		t.assert(r > 0, sys->sprint("%s is taken: %d %r", how, r));
+		sys->sleep(200);
+		r0 := runs;
+		sys->sleep(200);
+		if(runs != r0 || spawned != 0)
+			outlived++;
+		t.log(sys->sprint("%s round %d: %d Progs saw the kill begin, %d of them spawned, their children ran %bd times in 200 ms after",
+			how, round, began, spawned, runs - r0));
+		saw += began;
+		stop = 1;
+		sys->sleep(100);
+		stop = 0;
+	}
+	return (outlived, saw);
+}
+
+testSelfKilltree(t: ref T)
+{
+	(ok, nil) := sys->stat("/prog");
+	if(ok < 0)
+		t.skip("no /prog here");
+	# each in a group of its own below the leader's, the tree killed
+	(outlived, saw) := selfkill(t, "killtree", 1);
+	t.asserteq(outlived, 0, "rounds of five in which a Prog that wrote killtree to its own ctl outlived its tree's kill");
+	t.assert(saw > 0, "some Prog saw its tree's kill begin (or this tested nothing)");
+	# all in the leader's group, the group killed
+	(outlived, saw) = selfkill(t, "killgrp", 0);
+	t.asserteq(outlived, 0, "rounds of five in which a Prog that wrote killtree to its own ctl outlived its group's kill");
+	t.assert(saw > 0, "some Prog saw its group's kill begin (or this tested nothing)");
+}
+
 loader(path: string, c: chan of string)
 {
 	{
@@ -274,6 +395,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("NewpgrpChains", testNewpgrpChains);
 	run("KilledInHandler", testKilledInHandler);
+	run("SelfKilltree", testSelfKilltree);
 	# last: before the fix, under the JIT, nothing ran after this
 	run("BadOpcode", testBadOpcode);
 

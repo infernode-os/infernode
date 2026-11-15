@@ -513,14 +513,19 @@ initmem(Type *t, void *vw)
 	}
 }
 
+/*
+ * nheap, or nil if there is no memory: for a caller that holds something
+ * a raise would lose (libinterp has no error labels to give it back
+ * with).
+ */
 Heap*
-nheap(int n)
+nheapok(int n)
 {
 	Heap *h;
 
 	h = poolalloc(heapmem, sizeof(Heap)+n);
 	if(h == nil)
-		error(exHeap);
+		return nil;
 
 	h->t = nil;
 	h->ref = 1;
@@ -528,6 +533,17 @@ nheap(int n)
 	if(heapmonitor != nil)
 		heapmonitor(0, h, n);
 
+	return h;
+}
+
+Heap*
+nheap(int n)
+{
+	Heap *h;
+
+	h = nheapok(n);
+	if(h == nil)
+		error(exHeap);
 	return h;
 }
 
@@ -609,7 +625,6 @@ Heap*
 heaparray(Type *t, int sz)
 {
 	Heap *h;
-	Array *a;
 	uint maxalloc;
 
 	/*
@@ -622,7 +637,25 @@ heaparray(Type *t, int sz)
 	maxalloc = ~0U >> 1;
 	if(t->size != 0 && (uint)sz > (maxalloc - sizeof(Array) - sizeof(Heap)) / (uint)t->size)
 		error(exHeap);
-	h = nheap(sizeof(Array) + (t->size*sz));
+	h = heaparrayok(t, sz);
+	if(h == nil)
+		error(exHeap);
+	return h;
+}
+
+/*
+ * heaparray for a size already checked (as above, or acheck), or nil
+ * if there is no memory.
+ */
+Heap*
+heaparrayok(Type *t, int sz)
+{
+	Heap *h;
+	Array *a;
+
+	h = nheapok(sizeof(Array) + (t->size*sz));
+	if(h == nil)
+		return nil;
 	h->t = &Tarray;
 	Tarray.ref++;
 	a = H2D(Array*, h);

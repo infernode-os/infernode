@@ -193,7 +193,8 @@ trapILL(int signo, siginfo_t *si, void *a)
 static int
 isnilref(siginfo_t *si)
 {
-	return si != 0 && (si->si_addr == (void*)~(uintptr_t)0 || (uintptr_t)si->si_addr < 512);
+	/* nil (-1) plus a field's offset, up to 65535: emu/port/dis.c:/^isnilfault */
+	return si != 0 && (si->si_addr == (void*)~(uintptr_t)0 || (uintptr_t)si->si_addr < 64*1024);
 }
 
 static void

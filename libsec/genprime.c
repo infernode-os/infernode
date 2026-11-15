@@ -8,6 +8,12 @@ genprime(mpint *p, int n, int accuracy)
 {
 	mpdigit x;
 
+	// a prime has two bits at least.  with none, the top digit set
+	// below is the word before the number; with a count near the
+	// largest int the digit count wraps
+	if(n < 2 || n > (1<<30))
+		sysfatal("genprime: bad bit count");
+
 	// generate n random bits with high and low bits set
 	mpbits(p, n);
 	genrandom((uchar*)p->p, (n+7)/8);

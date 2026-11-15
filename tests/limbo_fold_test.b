@@ -124,6 +124,67 @@ testInlinedNil(t: ref T)
 	t.asserteq(hd (1 :: nl()), 1, "hd of a cons onto an inlined nil");
 }
 
+# Not folds, but the same operators at run time: zero to a negative
+# power is "zero divide" (the compiler refuses it of constants; the VM
+# computed 1/0 in C), a power that wraps to nothing and is then inverted
+# is 0, and a fixed-point divide by zero is "zero divide" too (it was the
+# host's own trap, or none).
+Fa: type fixed(0.01, 100.0);
+Fb: type fixed(2.0**-8, 1000.0);
+Fc: type fixed(0.003, 50.0);
+
+ev := array[] of {0, -1, 2, -40, -64, 1, 3};
+e(i: int): int { return ev[i]; }
+
+raised(i: int): string
+{
+	{
+		case i {
+		0 =>
+			return string (e(0) ** e(1));
+		1 =>
+			return string (big e(0) ** e(1));
+		2 =>
+			return string (e(2) ** e(3));
+		3 =>
+			return string (big e(2) ** e(4));
+		4 =>
+			return string (e(5) ** e(1));
+		5 =>
+			return string (e(1) ** e(1));
+		6 =>
+			return string (e(6) ** e(1));
+		7 =>
+			return string int (Fa 1.0 / Fa real e(0));
+		8 =>
+			return string int (Fb 1.0 / Fb real e(0));
+		9 =>
+			return string int (Fc 1.0 / Fc real e(0));
+		10 =>
+			return string int (Fa 6.0 / Fa real e(2));
+		}
+	} exception ex {
+	"*" =>
+		return "raised: " + ex;
+	}
+	return "?";
+}
+
+testZeroPowerAndFixedDivide(t: ref T)
+{
+	t.assertseq(raised(0), "raised: zero divide", "0 ** -1");
+	t.assertseq(raised(1), "raised: zero divide", "big 0 ** -1");
+	t.assertseq(raised(2), "0", "2 ** -40");
+	t.assertseq(raised(3), "0", "big 2 ** -64");
+	t.assertseq(raised(4), "1", "1 ** -1");
+	t.assertseq(raised(5), "-1", "-1 ** -1");
+	t.assertseq(raised(6), "0", "3 ** -1");
+	t.assertseq(raised(7), "raised: zero divide", "a fixed(0.01) divide by zero");
+	t.assertseq(raised(8), "raised: zero divide", "a fixed(2**-8) divide by zero");
+	t.assertseq(raised(9), "raised: zero divide", "a fixed(0.003) divide by zero");
+	t.assertseq(raised(10), "3", "a fixed divide still divides");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -140,6 +201,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ExpZero", testExpZero);
 	run("Folds", testFolds);
 	run("InlinedNil", testInlinedNil);
+	run("ZeroPowerAndFixedDivide", testZeroPowerAndFixedDivide);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

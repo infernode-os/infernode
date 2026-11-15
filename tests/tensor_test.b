@@ -473,6 +473,12 @@ lbscale()	{ tensor->letterbox(array[12] of byte, 2, 2, -1.0, 0, 0, ob, 2, 2); }
 realen()	{ tensor->toreal(ib, array[3] of real); }
 halflen()	{ tensor->tohalf(array[16] of byte, array[6] of byte); }
 halfsame()	{ b := array[16] of byte; tensor->fromhalf(b[0:8], b); }
+# out over in's bytes, or the weights', as slices of one array
+lapbuf: array of byte;
+lapconv()	{ tensor->conv(lapbuf[0:4*16], 1, 4, 4, wb[0:4], 1, 1, 1, 1, 0, 1, bb[0:4], 0, lapbuf[32:32+4*16]); }
+lapwt()		{ tensor->conv(ib[0:4*16], 1, 4, 4, lapbuf[8:12], 1, 1, 1, 1, 0, 1, bb[0:4], 0, lapbuf[0:4*16]); }
+lappool()	{ tensor->maxpool(lapbuf[0:4*16], 1, 4, 4, 1, 1, 0, lapbuf[16:16+4*16]); }
+lapup()		{ tensor->up2(lapbuf[0:4*4], 1, 2, 2, lapbuf[8:8+4*16]); }
 
 testRefusals(t: ref T)
 {
@@ -500,6 +506,11 @@ testRefusals(t: ref T)
 	refused(t, "toreal, lengths differ", realen);
 	refused(t, "tohalf, lengths differ", halflen);
 	refused(t, "fromhalf into its own array", halfsame);
+	lapbuf = array[4*64] of {* => byte 0};
+	refused(t, "conv, out a slice over in", lapconv);
+	refused(t, "conv, the weights a slice of out", lapwt);
+	refused(t, "maxpool, out a slice over in", lappool);
+	refused(t, "up2, out a slice over in", lapup);
 	refused(t, "letterboxi420, odd width", i420odd);
 	refused(t, "letterboxi420, short luma", i420short);
 }

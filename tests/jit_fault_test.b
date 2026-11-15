@@ -205,6 +205,62 @@ deep(n: int): int
 	return deep(n - 1) + 1;
 }
 
+# hd and tl of nil, and a copy through a nil ref, in the forms compiled
+# code gives to the VM's C rather than doing itself (a list of tuples
+# with pointers, an adt with pointers): the C asks for nil, as a fault
+# in the kernel's own C is a panic in the native kernels.
+Pair: adt {
+	a:	array of byte;
+	s:	string;
+};
+
+nopairs(): list of (string, int) { return nil; }
+noints(): list of int { return nil; }
+nopair(): ref Pair { return nil; }
+
+nilform(i: int): string
+{
+	{
+		case i {
+		0 =>
+			(s, n) := hd nopairs();
+			return s + string n;
+		1 =>
+			return string len tl nopairs();
+		2 =>
+			return string hd noints();
+		3 =>
+			return string len tl noints();
+		4 =>
+			v := *nopair();
+			return string len v.a;
+		5 =>
+			p := nopair();
+			q := ref Pair(array[1] of byte, "x");
+			*q = *p;
+			return q.s;
+		}
+	} exception e {
+	"*" =>
+		return "raised: " + e;
+	}
+	return "?";
+}
+
+testNilInC(t: ref T)
+{
+	what := array[] of {
+		"hd of a nil list of (string, int)",
+		"tl of one",
+		"hd of a nil list of int",
+		"tl of one",
+		"a copy of what a nil ref refers to",
+		"an assignment of it through another ref",
+	};
+	for(i := 0; i < len what; i++)
+		t.assertseq(nilform(i), "raised: dereference of nil", what[i]);
+}
+
 testUnwind(t: ref T)
 {
 	t.assertseq(fault(11), "zero divide", "50 frames down");
@@ -320,6 +376,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Bounds", testBounds);
 	run("NilList", testNilList);
 	run("NilRef", testNilRef);
+	run("NilInC", testNilInC);
 	run("Unwind", testUnwind);
 	run("HandlerChoice", testHandlerChoice);
 	run("BuiltinRaise", testBuiltinRaise);

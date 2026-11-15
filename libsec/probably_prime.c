@@ -17,9 +17,15 @@ probably_prime(mpint *n, int nrep)
 
 	if(nrep <= 0)
 		nrep = 18;
+	if(nrep > 256)
+		nrep = 256;	/* an error of 4**-256 is as sure as arithmetic is */
 
 	k = mptoi(n);
-	if(k == 2)		/* 2 is prime */
+	/*
+	 * 3 as well: the witnesses below are from 2 to n-2, and for 3
+	 * there is none; the search for one never ended
+	 */
+	if(k == 2 || k == 3)	/* 2 and 3 are prime */
 		return 1;
 	if(k < 2)		/* 1 is not prime */
 		return 0;

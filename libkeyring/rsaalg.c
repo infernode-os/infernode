@@ -15,6 +15,8 @@ enum
 {
 	/* the least rsagen can make primes for; not a size to use */
 	MinRSAgen	= 16,
+	/* and the most: past it nothing returns, and near the largest int the digit counts wrap */
+	MaxRSAgen	= 1<<16,
 };
 
 /*
@@ -173,7 +175,7 @@ rsa_gen(int len)
 	 * write.  Reject it so genSK() returns nil instead of corrupting
 	 * memory.
 	 */
-	if(len < MinRSAgen)
+	if(len < MinRSAgen || len > MaxRSAgen)
 		return nil;
 	for(;;){
 		key = rsagen(len, 6, 0);

@@ -6,16 +6,35 @@
 #include "mathi.h"
 #include "mathmod.h"
 
-static union
+/*
+ * Locals of each function that uses one: the native kernel runs a Dis VM
+ * a core, and a static would be shared by all of them.
+ */
+typedef union Bits64 Bits64;
+union Bits64
 {
 	double x;
 	uvlong u;
-} bits64;
+};
 
-static union{
+typedef union Bits32 Bits32;
+union Bits32
+{
 	float x;
 	unsigned int u;
-} bits32;
+};
+
+/*
+ * An array a program passes may be nil.  Hosted, reading through H is a
+ * fault the emulator turns into an exception; in the native kernels a
+ * fault in the kernel's own C stops the machine.
+ */
+static void
+notnil(Array *a)
+{
+	if(a == H)
+		error(exNilref);
+}
 
 void
 mathmodinit(void)
@@ -36,20 +55,22 @@ Math_import_int(void *fp)
 	int i, n;
 	unsigned int u;
 	unsigned char *bp;
-	int *x;
+	WORD *x;
 
 	f = fp;
+	notnil(f->b);
+	notnil(f->x);
 	n = f->x->len;
 	if(f->b->len!=4*n)
 		error(exMathia);
 	bp = (unsigned char *)(f->b->data);
-	x = (int*)(f->x->data);
+	x = (WORD*)(f->x->data);	/* an int is a whole word, sign-extended */
 	for(i=0; i<n; i++){
 		u = *bp++;
 		u = (u<<8) | *bp++;
 		u = (u<<8) | *bp++;
 		u = (u<<8) | *bp++;
-		x[i] = u;
+		x[i] = (int)u;
 	}
 }
 
@@ -61,8 +82,11 @@ Math_import_real32(void *fp)
 	unsigned int u;
 	unsigned char *bp;
 	double *x;
+	Bits32 bits32;
 
 	f = fp;
+	notnil(f->b);
+	notnil(f->x);
 	n = f->x->len;
 	if(f->b->len!=4*n)
 		error(exMathia);
@@ -86,8 +110,11 @@ Math_import_real(void *fp)
 	uvlong u;
 	unsigned char *bp;
 	double *x;
+	Bits64 bits64;
 
 	f = fp;
+	notnil(f->b);
+	notnil(f->x);
 	n = f->x->len;
 	if(f->b->len!=8*n)
 		error(exMathia);
@@ -114,14 +141,16 @@ Math_export_int(void *fp)
 	int i, n;
 	unsigned int u;
 	unsigned char *bp;
-	int *x;
+	WORD *x;
 
 	f = fp;
+	notnil(f->b);
+	notnil(f->x);
 	n = f->x->len;
 	if(f->b->len!=4*n)
 		error(exMathia);
 	bp = (unsigned char *)(f->b->data);
-	x = (int*)(f->x->data);
+	x = (WORD*)(f->x->data);
 	for(i=0; i<n; i++){
 		u = x[i];
 		*bp++ = u>>24;
@@ -139,8 +168,11 @@ Math_export_real32(void *fp)
 	unsigned int u;
 	unsigned char *bp;
 	double *x;
+	Bits32 bits32;
 
 	f = fp;
+	notnil(f->b);
+	notnil(f->x);
 	n = f->x->len;
 	if(f->b->len!=4*n)
 		error(exMathia);
@@ -164,8 +196,11 @@ Math_export_real(void *fp)
 	uvlong u;
 	unsigned char *bp;
 	double *x;
+	Bits64 bits64;
 
 	f = fp;
+	notnil(f->b);
+	notnil(f->x);
 	n = f->x->len;
 	if(f->b->len!=8*n)
 		error(exMathia);
@@ -190,6 +225,7 @@ void
 Math_bits32real(void *fp)
 {
 	F_Math_bits32real *f;
+	Bits32 bits32;
 
 	f = fp;
 	bits32.u = f->b;
@@ -200,6 +236,7 @@ void
 Math_bits64real(void *fp)
 {
 	F_Math_bits64real *f;
+	Bits64 bits64;
 
 	f = fp;
 	bits64.u = f->b;
@@ -210,16 +247,18 @@ void
 Math_realbits32(void *fp)
 {
 	F_Math_realbits32 *f;
+	Bits32 bits32;
 
 	f = fp;
 	bits32.x = f->x;
-	*f->ret = bits32.u;
+	*f->ret = (int)bits32.u;	/* an int: sign-extended in its word */
 }
 
 void
 Math_realbits64(void *fp)
 {
 	F_Math_realbits64 *f;
+	Bits64 bits64;
 
 	f = fp;
 	bits64.x = f->x;
@@ -679,6 +718,32 @@ Math_copysign(void *fp)
 	*f->ret = copysign(f->x, f->s);
 }
 
+/*
+ * jn and yn are recurrences as long as the order: one of order 2^31 takes
+ * a quarter of a minute.  Past an order that takes no time the Dis VM is
+ * let go for it, as IPint's long operations do, so that the other Progs
+ * run meanwhile.
+ */
+enum { Longorder = 4096 };
+
+static double
+besseln(int y, int n, double x)
+{
+	double r;
+	int let;
+
+	let = n > Longorder || n < -Longorder;
+	if(let)
+		release();
+	if(y)
+		r = __ieee754_yn(n, x);
+	else
+		r = __ieee754_jn(n, x);
+	if(let)
+		acquire();
+	return r;
+}
+
 void
 Math_jn(void *fp)
 {
@@ -686,7 +751,7 @@ Math_jn(void *fp)
 
 	f = fp;
 
-	*f->ret = __ieee754_jn(f->n, f->x);
+	*f->ret = besseln(0, f->n, f->x);
 }
 
 void
@@ -750,31 +815,49 @@ Math_yn(void *fp)
 
 	f = fp;
 
-	*f->ret = __ieee754_yn(f->n, f->x);
+	*f->ret = besseln(1, f->n, f->x);
 }
 
 
 /**** sorting real vectors through permutation vector ****/
 /* qsort from coma:/usr/jlb/qsort/qsort.dir/qsort.c on 28 Sep '92
  char* has been changed to uchar*, static internal functions.
- specialized to swapping ints (which are 32-bit anyway in limbo).
- converted uchar* to int* (and substituted 1 for es).
+ specialized to swapping the permutation's elements, which are Limbo ints:
+ a WORD each (they were taken for 32-bit ints, so on a 64-bit host half
+ the permutation was sorted and the other half left).
 */
 
+/*
+ * A total order: a NaN is after every number and equal to another NaN.
+ * (Comparing as C does, a NaN was greater than everything both ways
+ * round, and a vector of them split one element at a time.)
+ */
 static int
-cmp(int *u, int *v, double *x)
+cmp(WORD *u, WORD *v, double *x)
 {
-	return ((x[*u]==x[*v])? 0 : ((x[*u]<x[*v])? -1 : 1));
+	double a, b;
+
+	a = x[*u];
+	b = x[*v];
+	if(a == b)
+		return 0;
+	if(a < b)
+		return -1;
+	if(a > b)
+		return 1;
+	if(a != a)
+		return b != b? 0: 1;
+	return -1;
 }
 
-#define swap(u, v) {int t = *(u); *(u) = *(v); *(v) = t;}
+#define swap(u, v) {WORD t = *(u); *(u) = *(v); *(v) = t;}
 
 #define vecswap(u, v, n) if(n>0){	\
     int i = n;				\
-    register int *pi = u;		\
-    register int *pj = v;		\
+    register WORD *pi = u;		\
+    register WORD *pj = v;		\
     do {				\
-        register int t = *pi;		\
+        register WORD t = *pi;		\
         *pi++ = *pj;			\
         *pj++ = t;			\
     } while (--i > 0);			\
@@ -782,23 +865,68 @@ cmp(int *u, int *v, double *x)
 
 #define minimum(x, y) ((x)<=(y) ? (x) : (y))
 
-static int *
-med3(int *a, int *b, int *c, double *x)
+static WORD *
+med3(WORD *a, WORD *b, WORD *c, double *x)
 {	return cmp(a, b, x) < 0 ?
 		  (cmp(b, c, x) < 0 ? b : (cmp(a, c, x) < 0 ? c : a ) )
 		: (cmp(b, c, x) > 0 ? b : (cmp(a, c, x) < 0 ? a : c ) );
 }
 
-void
-rqsort(int *a, int n, double *x)
+/* heap sort: what rqsort falls back to when its partitions are bad */
+static void
+sift(WORD *a, int i, int n, double *x)
 {
-	int *pa, *pb, *pc, *pd, *pl, *pm, *pn;
+	int c;
+
+	for(;;){
+		c = 2*i+1;
+		if(c >= n)
+			break;
+		if(c+1 < n && cmp(a+c, a+c+1, x) < 0)
+			c++;
+		if(cmp(a+i, a+c, x) >= 0)
+			break;
+		swap(a+i, a+c);
+		i = c;
+	}
+}
+
+static void
+rhsort(WORD *a, int n, double *x)
+{
+	int i;
+
+	for(i = n/2-1; i >= 0; i--)
+		sift(a, i, n, x);
+	for(i = n-1; i > 0; i--){
+		swap(a, a+i);
+		sift(a, 0, i, x);
+	}
+}
+
+/*
+ * It recursed on both parts, on a Dis process's C stack (some 300 of its
+ * frames hosted, fewer in the native kernels): a vector chosen to split
+ * badly, or simply 400 NaNs, ran off the end of it.  The smaller part is
+ * recursed on and the larger looped on, so the depth is at most log2 n;
+ * and after lim partitions that did not halve, what is left is heap
+ * sorted, so the time is n log n whatever the vector.
+ */
+static void
+rqsort(WORD *a, int n, double *x, int lim)
+{
+	WORD *pa, *pb, *pc, *pd, *pl, *pm, *pn;
 	int  d, r;
 
+again:
 	if (n < 7) { /* Insertion sort on small arrays */
 		for (pm = a + 1; pm < a + n; pm++)
 			for (pl = pm; pl > a && cmp(pl-1, pl, x) > 0; pl--)
 				swap(pl, pl-1);
+		return;
+	}
+	if (lim-- <= 0) {
+		rhsort(a, n, x);
 		return;
 	}
 	pm = a + (n/2);
@@ -833,20 +961,33 @@ rqsort(int *a, int n, double *x)
 	pn = a + n;
 	r = minimum(pa-a,  pb-pa);   vecswap(a,  pb-r, r);
 	r = minimum(pd-pc, pn-pd-1); vecswap(pb, pn-r, r);
-	if ((r = pb-pa) > 1) rqsort(a, r, x);
-	if ((r = pd-pc) > 1) rqsort(pn-r, r, x);
+	r = pb-pa;	/* the part less than the pivot, at a */
+	d = pd-pc;	/* the part greater, at pn-d */
+	if (r < d) {
+		if (r > 1) rqsort(a, r, x, lim);
+		a = pn-d;
+		n = d;
+	} else {
+		if (d > 1) rqsort(pn-d, d, x, lim);
+		n = r;
+	}
+	if (n > 1)
+		goto again;
 }
 
 void
 Math_sort(void*fp)
 {
 	F_Math_sort *f;
-	int	i, pilen, xlen, *p;
+	int	i, pilen, xlen, lim;
+	WORD	*p;
 
 	f = fp;
+	notnil(f->x);
+	notnil(f->pi);
 
 	/* check that permutation contents are in [0,n-1] !!! */
-	p = (int*) (f->pi->data);
+	p = (WORD*) (f->pi->data);
 	pilen = f->pi->len;
 	xlen = f->x->len - 1;
 
@@ -856,7 +997,11 @@ Math_sort(void*fp)
 		p++;
 	}
 
-	rqsort( (int*)(f->pi->data), f->pi->len, (double*)(f->x->data));
+	/* twice log2 of the length, and a few */
+	lim = 8;
+	for(i = pilen; i > 1; i >>= 1)
+		lim += 2;
+	rqsort( (WORD*)(f->pi->data), pilen, (double*)(f->x->data), lim);
 }
 
 
@@ -868,6 +1013,8 @@ Math_dot(void *fp)
 	F_Math_dot *f;
 
 	f = fp;
+	notnil(f->x);
+	notnil(f->y);
 	if(f->x->len!=f->y->len)
 		error(exMathia);	/* incompatible lengths */
 	*f->ret = dot(f->x->len, (double*)(f->x->data), (double*)(f->y->data));
@@ -879,6 +1026,7 @@ Math_iamax(void *fp)
 	F_Math_iamax *f;
 
 	f = fp;
+	notnil(f->x);
 
 	*f->ret = iamax(f->x->len, (double*)(f->x->data));
 }
@@ -889,6 +1037,7 @@ Math_norm2(void *fp)
 	F_Math_norm2 *f;
 
 	f = fp;
+	notnil(f->x);
 
 	*f->ret = norm2(f->x->len, (double*)(f->x->data));
 }
@@ -899,59 +1048,89 @@ Math_norm1(void *fp)
 	F_Math_norm1 *f;
 
 	f = fp;
+	notnil(f->x);
 
 	*f->ret = norm1(f->x->len, (double*)(f->x->data));
+}
+
+/*
+ * Does a column-major matrix of nrow rows and ncol columns, with leading
+ * dimension ld, lie inside the array a?  Its last element is at
+ * ld*(ncol-1) + nrow-1.  (The test was ld*(ncol-1) > len, in an int: it
+ * left the rows out, so a matrix of one column was not looked at at all,
+ * and the product wrapped.)  A matrix with no elements is not touched,
+ * and may be nil.
+ */
+static int
+ldok(Array *a, int ld, int nrow, int ncol)
+{
+	if(nrow == 0 || ncol == 0)
+		return 1;
+	if(a == H || ld < nrow)
+		return 0;
+	return (vlong)ld*(ncol-1) + nrow <= a->len;
 }
 
 void
 Math_gemm(void *fp)
 {
 	F_Math_gemm *f = fp;
-	int nrowa, ncola, nrowb, ncolb, mn, ld, m, n;
-	double *adata = 0, *bdata = 0, *cdata;
+	int nrowa, ncola, nrowb, ncolb, m, n, k;
+	double *adata = 0, *bdata = 0, *cdata = 0;
 	int nota = f->transa=='N';
 	int notb = f->transb=='N';
-	if(nota){
-		nrowa = f->m;
-		ncola = f->k;
-	}else{
-		nrowa = f->k;
-		ncola = f->m;
-	}
-	if(notb){
-		nrowb = f->k;
-		ncolb = f->n;
-	}else{
-		nrowb = f->n;
-		ncolb = f->k;
-	}
-	if(     (!nota && f->transa!='C' && f->transa!='T') ||
-		(!notb && f->transb!='C' && f->transb!='T') ||
-		(f->m < 0 || f->n < 0 || f->k < 0) ){
-		error(exMathia);
-	}
-	if(f->a != H){
-		mn = f->a->len;
-		adata = (double*)(f->a->data);
-		ld = f->lda;
-		if(ld<nrowa || ld*(ncola-1)>mn)
-			error(exBounds);
-	}
-	if(f->b != H){
-		mn = f->b->len;
-		ld = f->ldb;
-		bdata = (double*)(f->b->data);
-		if(ld<nrowb || ld*(ncolb-1)>mn)
-			error(exBounds);
-	}
+
 	m = f->m;
 	n = f->n;
-	mn = f->c->len;
-	cdata = (double*)(f->c->data);
-	ld = f->ldc;
-	if(ld<m || ld*(n-1)>mn)
+	k = f->k;
+	if(     (!nota && f->transa!='C' && f->transa!='T') ||
+		(!notb && f->transb!='C' && f->transb!='T') ||
+		(m < 0 || n < 0 || k < 0) ){
+		error(exMathia);
+	}
+	/* the shapes gemm() reads, which follow its own cases */
+	if(m == 0 || n == 0 || f->alpha == 0.){
+		/* a and b are not read */
+		nrowa = ncola = nrowb = ncolb = 0;
+	}else if(f->a == H){
+		/* C := alpha*B + beta*C, or B': B is m by n, k plays no part */
+		nrowa = ncola = 0;
+		if(notb){
+			nrowb = m;
+			ncolb = n;
+		}else{
+			nrowb = n;
+			ncolb = m;
+		}
+		if(f->b == H)
+			error(exNilref);
+	}else{
+		if(nota){
+			nrowa = m;
+			ncola = k;
+		}else{
+			nrowa = k;
+			ncola = m;
+		}
+		if(notb){
+			nrowb = k;
+			ncolb = n;
+		}else{
+			nrowb = n;
+			ncolb = k;
+		}
+	}
+	if(!ldok(f->a, f->lda, nrowa, ncola)
+	|| !ldok(f->b, f->ldb, nrowb, ncolb)
+	|| !ldok(f->c, f->ldc, m, n))
 		error(exBounds);
+	if(f->a != H)
+		adata = (double*)(f->a->data);
+	if(f->b != H)
+		bdata = (double*)(f->b->data);
+	if(f->c != H)
+		cdata = (double*)(f->c->data);
 
-	gemm(f->transa, f->transb, f->m, f->n, f->k, f->alpha,
+	gemm(f->transa, f->transb, m, n, k, f->alpha,
 		adata, f->lda, bdata, f->ldb, f->beta, cdata, f->ldc);
 }

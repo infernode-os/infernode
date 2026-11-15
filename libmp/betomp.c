@@ -13,7 +13,7 @@ betomp(uchar *p, uint n, mpint *b)
 		b = mpnew(0);
 
 	// dump leading zeros
-	while(*p == 0 && n > 1){
+	while(n > 1 && *p == 0){
 		p++;
 		n--;
 	}
@@ -36,5 +36,9 @@ betomp(uchar *p, uint n, mpint *b)
 		}
 	}
 
+	// a zero is no digits: bytes that were all zero left one digit of
+	// zero, which is not the divisor mpdiv looked for, and it shifted
+	// that digit left for ever looking for its top bit
+	mpnorm(b);
 	return b;
 }

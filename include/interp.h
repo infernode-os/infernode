@@ -538,6 +538,7 @@ extern	void		cqadd(Progq**, Prog*);
 extern	int		cqaddok(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);
+extern	int		cqhas(Progq*, Prog*);
 extern	void		crecv(Channel*, void*);
 extern	void		csend(Channel*, void*);
 extern	int		csendalt(Channel*, void*, Type *, int);

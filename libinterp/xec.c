@@ -1139,12 +1139,34 @@ cqsize(Progq *q)
 }
 */
 /*
+ * A channel's queue always has a first element, whose prog is nil when
+ * nobody waits; isend, irecv and alt look at q->prog without asking
+ * whether q is there.  (Only killcomm, freeing the channel, takes the
+ * first away.)
+ */
+
+/* is p waiting on q? */
+int
+cqhas(Progq *q, Prog *p)
+{
+	for( ; q != nil; q = q->next)
+		if(q->prog == p)
+			return 1;
+	return 0;
+}
+
+/*
  * p queued on q, or 0 if there is no memory for it, q as it was. A
  * caller that has queued p elsewhere, or taken it off the run queue,
  * must undo that before raising the error: alt's queuing on its
  * channels, and isend and irecv, raised it with p left on the first
  * channels (to be woken freed) or off the run queue (its exception
  * handled with no Prog current). Malloc refused, os/port/chaos.c.
+ *
+ * A Prog is on a queue once.  An alt naming a channel twice (or an
+ * array holding it n times) queued it once for each, at the queue's end
+ * each time: n*n steps holding the VM for an array of n, and cqdelp
+ * then freed the whole queue.
  */
 int
 cqaddok(Progq **q, Prog *p)
@@ -1155,13 +1177,14 @@ cqaddok(Progq **q, Prog *p)
 		(*q)->prog = p;
 		return 1;
 	}
+	for( ; *q != nil; q = &(*q)->next)
+		if((*q)->prog == p)
+			return 1;
 	n = (Progq*)malloc(sizeof(Progq));
 	if(n == nil)
 		return 0;
 	n->prog = p;
 	n->next = nil;
-	for( ; *q != nil; q = &(*q)->next)
-		;
 	*q = n;
 	return 1;
 }
@@ -1185,26 +1208,32 @@ cqdel(Progq **q)
 	*q = f->next;
 	free(f);
 }
+/*
+ * p off q, wherever it is.  The last element stays, empty: with p in
+ * every element (an alt with a channel in two of its arms) they were
+ * all freed and the channel left with no queue, which the alt's own
+ * next look at it, and everything after, read through.  A queue that
+ * killcomm has taken away has nothing of p's.
+ */
 void
 cqdelp(Progq **q, Prog *p)
 {
-	Progq *f;
+	Progq *f, **l;
 
-	if((*q)->next == nil){
-		if((*q)->prog == p)
-			(*q)->prog = nil;
-		return;
-	}
-	for( ; *q != nil; ){
-		if((*q)->prog == p){
-			f = *q;
-			*q = (*q)->next;
-			free(f);
+	for(l = q; *l != nil; ){
+		if((*l)->prog != p){
+			l = &(*l)->next;
+			continue;
 		}
-		else
-			q = &(*q)->next;
+		f = *l;
+		if(l == q && f->next == nil){
+			f->prog = nil;
+			return;
+		}
+		*l = f->next;
+		free(f);
 	}
-}	
+}
 OP(isend)
 {
 	Channel *c;

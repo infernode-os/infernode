@@ -706,6 +706,7 @@ dis/tests/agent_test.dis
 dis/tests/agentlib_mcp_test.dis
 dis/tests/agentlib_test.dis
 dis/tests/alpha_test.dis
+dis/tests/alt_edge_test.dis
 dis/tests/arrayinit_test.dis
 dis/tests/asyncio_test.dis
 dis/tests/att_test.dis
@@ -1237,3 +1238,4 @@ dis/tests/rfc3339_test.dis
 dis/tests/spawn_exec_test.dis
 dis/tests/syscall_edge_test.dis
 dis/tests/spawn_schedule_test.dis
+dis/tests/string_edge_test.dis

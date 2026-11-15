@@ -655,8 +655,12 @@ tkfreename(TkName *f)
 	}
 }
 
-void
-tkfreeobj(Tk *tk)
+/*
+ * tk is going: nothing that remembers a widget between events may
+ * remember it.
+ */
+static void
+tkforget(Tk *tk)
 {
 	TkCtxt *c;
 
@@ -679,6 +683,48 @@ tkfreeobj(Tk *tk)
 	}
 	if (tk == blinkw)
 		blinkw = nil;
+}
+
+/*
+ * A widget destroyed by a script is not freed there.  The script may
+ * be a binding's, run in the middle of delivering an event to that
+ * very widget: tkdeliver, the widget's own code and Tk's pointer and
+ * keyboard entry points all go on using it when the script returns,
+ * and it had been freed (and, if the script allocated, was by then
+ * something else).  It is taken out of everything here and kept, its
+ * memory whole, on the top's list of the dead, which tkfreedead
+ * empties once no event is in delivery: at the end of each of Tk's
+ * entry points, and when the top itself goes.
+ */
+void
+tkfreelater(Tk *tk)
+{
+	TkTop *t;
+
+	t = tk->env->top;
+	tkforget(tk);
+	tk->flag |= Tkdestroy|Tkdying;
+	tk->siblings = t->dead;
+	t->dead = tk;
+}
+
+void
+tkfreedead(TkTop *t)
+{
+	Tk *tk;
+
+	/* freeing one may destroy others (a text's windows): until none is left */
+	while((tk = t->dead) != nil){
+		t->dead = tk->siblings;
+		tk->siblings = nil;
+		tkfreeobj(tk);
+	}
+}
+
+void
+tkfreeobj(Tk *tk)
+{
+	tkforget(tk);
 	tkextnfreeobj(tk);
 	tkmethod[tk->type]->free(tk);
 	tkputenv(tk->env);

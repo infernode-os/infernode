@@ -206,7 +206,7 @@ tkcmdbind(Tk *tk, int event, char *s, void *data)
 	Point p;
 	TkMouse *m;
 	TkGeom *g;
-	int v, len;
+	int v, len, depth;
 	char *e, *c, *ec, *cmd;
 	TkTop *t;
 
@@ -311,12 +311,27 @@ tkcmdbind(Tk *tk, int event, char *s, void *data)
 	*c = '\0';
 	e = nil;
 	t = tk->env->top;
-	t->execdepth = 0;
-	if(cmd[0] == '|')
-		tkexec(t, cmd+1, nil);
-	else if(cmd[0] != '\0')
-		e = tkexec(t, cmd, nil);
-	t->execdepth = -1;
+	/*
+	 * A binding's script may cause another event with a binding, and
+	 * that one's another.  Each began its count of commands again and
+	 * ended by turning the count off, so a binding that caused its own
+	 * event again recursed until the C stack ran out, which ends emu.
+	 * They are held to Tkmaxbind deep, and a binding's count is put
+	 * back as it was when one inside it is done.
+	 */
+	if(t->binddepth >= Tkmaxbind)
+		e = TkDepth;
+	else{
+		depth = t->execdepth;
+		t->binddepth++;
+		t->execdepth = 0;
+		if(cmd[0] == '|')
+			tkexec(t, cmd+1, nil);
+		else if(cmd[0] != '\0')
+			e = tkexec(t, cmd, nil);
+		t->execdepth = depth;
+		t->binddepth--;
+	}
 
 	if(e == nil) {
 		free(cmd);
@@ -822,18 +837,30 @@ tkdestroy(TkTop *t, char *arg, char **ret)
 	}
 	free(buf);
 
-	for(tk = t->root; tk; tk = tk->siblings) {
-		if((tk->flag & Tkdestroy) == 0)
+	/*
+	 * A widget's Destroy binding is a script, and may destroy: the
+	 * widget it is run for, others this call has marked, others it
+	 * has not.  Each is told once (Tkdying), whichever call reaches it
+	 * first, and after each the list is read again from its start,
+	 * since the script may have taken out of it the widget in hand
+	 * and any after it.
+	 */
+	for(tk = t->root; tk; tk = next) {
+		next = tk->siblings;
+		if((tk->flag & (Tkdestroy|Tkdying)) != Tkdestroy)
 			continue;
-		if(tk->flag & Tkwindow) {
+		if((tk->flag & Tkwindow) && tk->name != nil &&
+		   strcmp(tk->name->name, ".") == 0) {
 			tkunmap(tk);
-			if(tk->name != nil &&
-			   strcmp(tk->name->name, ".") == 0)
-				tk->flag &= ~Tkdestroy;
-			else
+			tk->flag &= ~Tkdestroy;
+		} else {
+			tk->flag |= Tkdying;
+			if(tk->flag & Tkwindow)
+				tkunmap(tk);
+			/* no script is run for a top the collector is sweeping (tkfreetop) */
+			if((tk->flag & Tkswept) == 0)
 				tkdeliver(tk, TkDestroy, nil);
-		} else
-			tkdeliver(tk, TkDestroy, nil);
+		}
 if(0)print("tkdestroy %q\n", tkname(tk));
 		if(tk->destroyed != nil)
 			tk->destroyed(tk);
@@ -851,6 +878,7 @@ if(0)print("tkdestroy %q\n", tkname(tk));
 			tkfreegrid(tk->grid);
 			tk->grid = nil;
 		}
+		next = t->root;
 	}
 	tkrunpack(t);
 
@@ -868,7 +896,7 @@ if(0)print("tkdestroy %q\n", tkname(tk));
 		next = tk->siblings;
 		if(tk->flag & Tkdestroy) {
 			*l = next;
-			tkfreeobj(tk);
+			tkfreelater(tk);
 			continue;
 		}
 		l = &tk->siblings;
@@ -966,11 +994,20 @@ tkcursorcmd(TkTop *t, char *arg, char **ret)
 	tko[0].optab = tkcurop;
 	tko[1].ptr = nil;
 	e = tkparse(t, arg, tko, nil);
-	if(e != nil)
-		return e;
-
 	d = t->display;
 	locked = lockdisplay(d);
+	if(e != nil){
+		/*
+		 * An option refused after -image or -bitmap was taken: the
+		 * image kept its reference, and the count it was left with
+		 * is one tkfreetop would not have.
+		 */
+		tkimgput(c.img);
+		freeimage(c.bit);
+		if(locked)
+			unlockdisplay(d);
+		return e;
+	}
 	if(c.def)
 		tkcursorswitch(t, nil, nil);
 	if(c.img != nil || c.bit != nil){

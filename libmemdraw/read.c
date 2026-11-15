@@ -28,6 +28,19 @@ readmemimage(int fd)
 		werrstr("readimage: short header (2)");
 		return nil;
 	}
+	/*
+	 * Each field is eleven characters and a blank (image(6)).  The
+	 * numbers are read with atoi, which stops at what is not a digit:
+	 * a field of twelve digits ran into the next, and the last into
+	 * hdr[60], which nothing had set, and the stack after it.
+	 */
+	hdr[5*12] = '\0';
+	for(m=1; m<5; m++){
+		if(hdr[m*12+11] != ' '){
+			werrstr("readimage: bad format");
+			return nil;
+		}
+	}
 
 	/*
 	 * distinguish new channel descriptor from old ldepth.
@@ -84,8 +97,9 @@ readmemimage(int fd)
 		goto Err;
 	while(maxy > miny){
 		dy = maxy - miny;
-		if(dy*l > chunk)
-			dy = chunk/l;
+		/* by division: the product is the file's to choose, and wraps */
+		if(l == 0 || dy > chunk/l)
+			dy = l == 0? 0: chunk/l;
 		if(dy <= 0){
 			werrstr("readmemimage: image too wide for buffer");
 			goto Err;

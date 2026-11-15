@@ -2592,17 +2592,19 @@ sdsetup()
 		ptype := int sec[p+4];	# 'type' is a Limbo keyword
 		if(ptype == 0)
 			continue;
-		start := int sec[p+8] | (int sec[p+9] << 8) |
-			(int sec[p+10] << 16) | (int sec[p+11] << 24);
-		nsec := int sec[p+12] | (int sec[p+13] << 8) |
-			(int sec[p+14] << 16) | (int sec[p+15] << 24);
+		# 32 bits each, unsigned: as ints, a start or a size of 2^31
+		# sectors or more (a terabyte) was written to sdctl negative
+		start := big sec[p+8] | (big sec[p+9] << 8) |
+			(big sec[p+10] << 16) | (big sec[p+11] << 24);
+		nsec := big sec[p+12] | (big sec[p+13] << 8) |
+			(big sec[p+14] << 16) | (big sec[p+15] << 24);
 
 		name := sys->sprint("sd%d", i);
-		if(sys->fprint(ctl, "part %s %d %d", name, start, nsec) < 0){
+		if(sys->fprint(ctl, "part %s %bd %bd", name, start, nsec) < 0){
 			sys->print("init: cannot name partition %d: %r\n", i);
 			continue;
 		}
-		sys->print("init: /dev/%s: type %#2.2x, %d sectors\n",
+		sys->print("init: /dev/%s: type %#2.2x, %bd sectors\n",
 			name, ptype, nsec);
 
 		#

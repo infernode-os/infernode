@@ -434,6 +434,7 @@ struct Module
 	ulong*	pctab;	/* dis pc to code pc when compiled */
 	ulong	jitsize;	/* bytes of executable memory at prog when compiled */
 	void*	dlm;		/* dynamic C module */
+	uchar*	sigs;		/* the file's type digests, which ext and ldt point into */
 };
 
 struct Modl
@@ -474,6 +475,7 @@ struct Import
 {
 	int	sig;
 	char*	name;
+	uchar*	dig;		/* as Link's */
 };
 
 struct Except
@@ -514,6 +516,7 @@ extern	void	destroyrestore(Dsave*);
 
 extern	int	bflag;
 extern	int	cflag;
+extern	int	strictlink;
 extern	int	nproc;
 extern	Type	Tarray;
 extern	Type	Tstring;

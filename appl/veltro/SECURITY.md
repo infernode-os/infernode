@@ -628,6 +628,51 @@ Xenith's Agent window (`appl/xenith/xenith/agent/Agent.b`) applies its own
 overlays and still reads the folder from `.cowmeta`. It relies on the first
 rule alone.
 
+## Type Safety Between Modules
+
+The name space decides which files an agent's programs can reach. What a
+program can do to the emulator it runs in is decided by Limbo's type safety,
+which at run time rests on the compiler, on the loader refusing to link a
+module to a function of another type, and on nobody loading a module the
+compiler did not make.
+
+The loader's check compares, for each function a module imports, the type the
+importer was compiled against with the type the implementing module (or the
+builtin module's table) was compiled with. Each module file carries two forms
+of that type: a 32-bit hash, and a SHA-256 digest of the same signature text
+(`HASSIGS`, dis(6)). The 32-bit hash alone is not a check: two different
+function types with the same hash are found in about a second, and a module
+that declares one and loads a module implementing the other was linked, after
+which a reference could be read as an integer and an integer used as a
+reference. When both modules have digests the loader compares the digests,
+and such a pair is refused with a `link typecheck` error, as it is against
+`$Sys` and the other builtin modules.
+
+What this guarantees: between two modules that both carry digests, a call
+through a `load`ed module reaches a function of exactly the declared type, up
+to SHA-256. Everything built from this tree carries them.
+
+What strict mode adds: by default a module with no digests (built by an older
+compiler, or with the section removed) is still linked on the 32-bit hash, so
+that old modules keep loading; the guarantee above then covers only the links
+between modules the current compiler made. `emu -L`, or a `1` written to
+`/dev/strictlink` by the host owner (it cannot be written back to 0), makes
+the loader refuse any link in which either side has no digests, so that no
+link in the system rests on 32 bits. Everything this tree builds links under
+it; a deployment that lets an agent compile and load its own Limbo should run
+strict, and keep old module files out of where the agent can load from. On
+the native kernel, a file `strictlink` on the boot card has init set it.
+
+What it does not do: Dis has no bytecode verifier. A module file that did not
+come from the compiler (written by hand, or patched) is trusted as far as it
+is loaded: its instructions can address memory as they like, and a digest
+section proves nothing about them, since whoever writes the file writes the
+digests too. So "who can cause a module file of their own making to be
+loaded" remains a boundary the name space must hold: an agent that can write
+a `.dis` file somewhere it can then `load` from is confined by the name space
+and the host, not by the type system. Strict linking closes the route that
+needed only source and the stock compiler; it does not close that one.
+
 ## Shell and Exec Access
 
 The `exec` tool and `shellcmds` field both affect what appears in `/dis`:

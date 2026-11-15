@@ -846,6 +846,53 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir, Module *volatile *buil
 		istream++;
 	}
 
+	if(m->rt & HASSIGS){
+		int j, nd;
+		uchar *dp;
+		Import *i1, **i2;
+
+		/*
+		 * The digests of the types: a count, then SIGDLEN bytes for
+		 * each link above and each import, in their order.  They
+		 * follow the source path, which nothing here reads, so that
+		 * a loader from before them takes the module all the same.
+		 * The count is the file's own and is believed only if it is
+		 * the number of links and imports, and the bytes are there.
+		 */
+		if(istream >= ps.end || memchr(istream, 0, ps.end-istream) == nil){
+			kwerrstr("bad type digests");
+			goto bad;
+		}
+		while(*istream++)
+			;
+		nd = lsize;
+		if(m->ldt != nil)
+			for(i2 = m->ldt; *i2 != nil; i2++)
+				for(i1 = *i2; i1->name != nil; i1++)
+					nd++;
+		n = operand(&ps, isp);
+		if(ps.error || n != nd || (ulong)n > (ulong)(ps.end-istream)/SIGDLEN){
+			kwerrstr("bad type digests");
+			goto bad;
+		}
+		if(n != 0){
+			m->sigs = malloc((ulong)n*SIGDLEN);
+			if(m->sigs == nil){
+				kwerrstr(exNomem);
+				goto bad;
+			}
+			memmove(m->sigs, istream, (ulong)n*SIGDLEN);
+			istream += (ulong)n*SIGDLEN;
+			dp = m->sigs;
+			for(j = 0; j < lsize; j++, dp += SIGDLEN)
+				m->ext[j].dig = dp;
+			if(m->ldt != nil)
+				for(i2 = m->ldt; *i2 != nil; i2++)
+					for(i1 = *i2; i1->name != nil; i1++, dp += SIGDLEN)
+						i1->dig = dp;
+		}
+	}
+
 	m->entryt = nil;
 	m->entry = m->prog;
 	if((ulong)entry < isize && (ulong)entryt < hsize) {
@@ -951,6 +998,7 @@ freemod(Module *m)
 	free(m->prog);
 	free(m->path);
 	free(m->pctab);
+	free(m->sigs);
 	if(m->ldt != nil){
 		for(i2 = m->ldt; *i2 != nil; i2++){
 			for(i1 = *i2; i1->name != nil; i1++)

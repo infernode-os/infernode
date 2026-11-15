@@ -4,6 +4,15 @@
 #include "raise.h"
 #include <kernel.h>
 
+/*
+ * Set, a link either side of which has no type digests is refused: a
+ * module made before the compiler wrote them, or by something that is
+ * not the compiler.  Clear, such a link is checked by the 32 bits
+ * alone, as all were.  The host's owner sets it (emu -L, a write to
+ * #c/strictlink), and nothing clears it while the system runs.
+ */
+int	strictlink;
+
 static void
 newlink(Link *l, char *fn, int sig, Type *t)
 {
@@ -58,6 +67,27 @@ linkm(Module *m, Modlink *ml, int i, Import *ldt)
 	if(l->sig != sig) {
 		snprint(e, sizeof(e), "link typecheck %s->%s() %ux/%ux",
 							m->name, ldt->name, l->sig, sig);
+		goto bad;
+	}
+	/*
+	 * Those 32 bits, MD5 of the type's text folded, were the whole
+	 * check, and two function types that differ and fold alike are
+	 * found in a second: a module declaring one and loading a module
+	 * that implements the other linked, and the callee read its frame
+	 * as the wrong types, a ref as an integer or an integer as a ref.
+	 * The compiler now writes SHA-256 of the same text beside each,
+	 * and the two are compared when both modules have them.
+	 */
+	if(l->dig != nil && ldt->dig != nil) {
+		if(memcmp(l->dig, ldt->dig, SIGDLEN) != 0) {
+			snprint(e, sizeof(e), "link typecheck %s->%s() %ux/%ux: type digests differ",
+							m->name, ldt->name, l->sig, sig);
+			goto bad;
+		}
+	}
+	else if(strictlink) {
+		snprint(e, sizeof(e), "link typecheck %s->%s(): %s has no type digests: rebuild it",
+			m->name, ldt->name, l->dig == nil? m->name: "the module importing it");
 		goto bad;
 	}
 

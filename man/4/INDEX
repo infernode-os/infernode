@@ -11,6 +11,7 @@ dbfs dbfs
 rawdbfs dbfs
 9660srv dossrv
 dossrv dossrv
+envsrv envsrv
 export export
 factotum factotum
 feedkey factotum

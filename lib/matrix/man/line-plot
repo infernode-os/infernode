@@ -28,6 +28,14 @@ DESCRIPTION
 	chart — but any file an agent appends to with echo has the same
 	shape.
 
+	Where every line's first column is a time in seconds since the
+	epoch (history-svc's rings), the samples are placed by time, a
+	space more than three times the usual interval between two is
+	left as a gap, the axis is labelled with the times at its ends
+	(with the day when they span more than half of one), the range
+	is labelled inside the plot's left edge, and the newest line's
+	values follow the title.
+
 SEE ALSO
 	sparkline (the minimal one-line variant)
-	sysmon-svc, llm-recorder (produce history rings this can graph)
+	sysmon-svc, llm-recorder, history-svc (produce history rings this can graph)

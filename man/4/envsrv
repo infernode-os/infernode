@@ -1,0 +1,99 @@
+.TH ENVSRV 4
+.SH NAME
+envsrv \- a sensor's readings of the room as files
+.SH SYNOPSIS
+.B mount {envsrv
+[
+.B -d
+.I dir
+] [
+.B -b
+.I bus
+] [
+.B -a
+.I addr
+]
+.B } /mnt/env
+.br
+.B mount {envsrv -t} /mnt/env
+.SH DESCRIPTION
+.I Envsrv
+serves the temperature, relative humidity and pressure a sensor
+measures, one number to a file:
+.TF humidity
+.TP
+.B temp
+degrees Celsius, as
+.BR 24.34 .
+.TP
+.B humidity
+relative humidity in percent, as
+.BR 57.4 ;
+absent where the sensor measures none (a BMP280).
+.TP
+.B pressure
+hectopascals, as
+.BR 970.84 .
+.TP
+.B ctl
+the sensor, as
+.BR "chip=0x60 addr=0x76 bus=1 dir=#J" ,
+.B chip=none
+while none answers, or
+.B sim .
+.PD
+.PP
+A read of a value file at offset 0 is a measurement taken then, all
+three values at once; reads within a second of it get its values, so
+the three files read together are one measurement. A sensor that stops
+answering is an error on the read, saying why, and the next read looks
+for it again and reads its calibration again.
+.PP
+The sensor is a Bosch BME280, or a BMP280, on bus
+.I bus
+(1 by default) of the I2C files in
+.I dir
+.RB ( #J
+by default), at
+.I addr
+or, with no
+.BR -a ,
+0x76 then 0x77. Another machine's
+.BR #J ,
+mounted, is read with
+.BR -d .
+.I Envsrv
+looks for the sensor before it serves, and with none says so and
+serves nothing.
+.PP
+With
+.B -t
+it simulates one, on any machine: the temperature swings six degrees
+over the day (highest mid-afternoon, UTC), the humidity against it,
+the pressure has its twice-daily tide and a slower drift, each with a
+little noise. The values are a function of the time.
+.PP
+Another sensor is another server serving these names. Matrix's
+.B history-svc
+records them and
+.B /lib/matrix/compositions/environment
+draws a day of them.
+.SH EXAMPLES
+A board's sensor, read on another machine:
+.IP
+.EX
+board; mount {envsrv} /mnt/env
+board; listen -s tcp!*!17080 {export /mnt/env} &
+viewer; mount tcp!board!17080 /mnt/env
+viewer; cat /mnt/env/temp
+24.34
+viewer; wm/matrix /lib/matrix/compositions/environment
+.EE
+.SH SOURCE
+.B /appl/cmd/envsrv.b
+.SH SEE ALSO
+.IR camsrv (4),
+.IR listen (1)
+.SH BUGS
+It takes the datasheet's floating-point compensation, one forced
+measurement oversampled once, with no filter.

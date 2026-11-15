@@ -2,6 +2,7 @@ alert-watcher (service) - poll a signal file and a status file and emit a sequen
 comp-list (tk-display) - list the compositions in a directory as Tk buttons that load the chosen one via the Matrix ctl file
 cpu-gauge (display) - render a headline value and bar sparkline from a current-sample file and a timestamped history file
 geo-fixture (service) - write and continuously rewrite a synthetic tree of ndb-stanza entity and feature files, advancing simulated units along fixed courses
+history-svc (service) - sample every numeric file in a directory once a minute into day-long ring files that keep their history across restarts
 line-plot (display) - graph every numeric column of a history-style file as an anti-aliased auto-scaled series
 llm-context (display) - render one horizontal fill bar per session id listed in an index file, with a watermark tick at the historical maximum
 llm-recorder (service) - enumerate numeric subdirectories of a mount, sample a usage and a model file from each, and rewrite an index plus per-id current/history files

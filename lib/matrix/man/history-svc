@@ -1,0 +1,31 @@
+NAME
+	history-svc (service) - sample every numeric file in a directory once a minute into day-long ring files that keep their history across restarts
+
+INTERFACE
+	service (MatrixService)
+
+READS
+	<mount>/<file>	each file directly in the mount whose content
+			starts with a number (envsrv(4)'s temp,
+			humidity and pressure, or any other); files
+			that are not numbers are passed over.
+
+WRITES
+	<file>/history	ring: ts value, oldest first, ts in seconds
+			since the epoch; the last 1440 samples (24 h)
+	<file>/current	the last value read
+
+DESCRIPTION
+	The first sample is taken at start, then one every 60 s, the
+	value kept as the file wrote it.  At init the history files
+	already in the outdir are read back, so a composition loaded
+	again, or an emulator started again, keeps the day it had
+	(/tmp/matrix is on the host's disk); a file that has gone keeps
+	its history, and samples not taken leave a gap in time, which
+	line-plot draws as a gap.  The clock is read in init and carried
+	on by the millisecond counter, as the service runs with no /dev.
+	Files are replaced atomically (tmp file + rename).
+
+SEE ALSO
+	line-plot, sparkline (draw the history files)
+	envsrv(4) (a sensor's readings as such a directory)

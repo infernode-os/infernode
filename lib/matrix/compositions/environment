@@ -1,0 +1,27 @@
+# environment — a room's temperature, humidity and pressure over the day
+#
+# history-svc samples whatever numbers the sensor's directory holds
+# once a minute and keeps a day of each; the three plots draw them by
+# time, the newest value beside each title.  Three plots, not one:
+# line-plot puts a file's columns on one scale, and hPa would flatten
+# the rest.  A day already recorded is read back when this loads.
+#
+# The sensor is envsrv(4) at /mnt/env, here or on the machine it is
+# fitted to:
+#     mount {envsrv} /mnt/env			# a BME280 on this machine's I2C
+#     mount {envsrv -t} /mnt/env		# a simulated one
+#     mount tcp!board!port /mnt/env		# a board's, exported there with
+#						# listen tcp!*!port {export /mnt/env}
+#     wm/matrix /lib/matrix/compositions/environment
+#
+# Another sensor that serves the same names fits unchanged; one that
+# serves others needs only the paths below changed.
+
+layout vsplit 34 66
+bottom vsplit 50 50
+
+top            line-plot /tmp/matrix/history-svc/temp/history
+bottom/top     line-plot /tmp/matrix/history-svc/humidity/history
+bottom/bottom  line-plot /tmp/matrix/history-svc/pressure/history
+
+service history-svc /mnt/env

@@ -392,6 +392,17 @@ call `restrictns()`. Its model-requested tool calls cross the per-invocation
 `tools9p` boundary above. Changes that execute model text or tool modules inside
 `lucibridge` would violate this contract.
 
+What `lucibridge` shows is the agent's; the user's controls stay the bridge's
+own. A dialogue tile with buttons is made only by the bridge (an approval, an
+offer of changes kept from an earlier session). A titled note in the session's
+text becomes a tile only under a title the harness itself gives (`Agent stuck`,
+`Model unavailable`); under any other it is shown as the agent's text, so a
+line of the model's that reads as a note's header cannot make a "Permission
+required" tile. An activity's status names a tool only when the name is one of
+the activity's tools and not a word a status has of its own (`hidden` marks an
+activity closed). `/stop` stops the turn, a dialogue waiting or not; anything
+else typed while one waits is its answer, and only `Allow` allows.
+
 ### spawn Child Restriction
 
 The child process applies the full isolation sequence:

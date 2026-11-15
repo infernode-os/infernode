@@ -463,7 +463,7 @@ runsetupwizard()
 			# A typed message (not one of the option buttons) before any
 			# LLM is configured. Echo it and explain, rather than silently
 			# eating it (the symptom: "my message just disappears").
-			writemsg("user", choice);
+			writemsg("human", choice);	# luciuisrv has no "user" role: the echo was refused
 			writemsg("veltro",
 				"I'm not connected to an LLM yet, so I can't reply. Choose an option above " +
 				"(" + optionlist + ") to set one " +
@@ -522,6 +522,10 @@ updatedialogue(idx: int, progress, title, text: string)
 inputc: chan of string;		# nil once the input is closed
 answerc: chan of string;		# a dialogue's answer, while one is awaited
 awaiting := 0;
+# Events (a task's report, an arrived message) that may wait for a turn to
+# end; each is a turn of its own, so more are not kept.
+MAXQUEUEDEVENTS: con 16;
+droppedevents := 0;
 Queued: adt {
 	text:	string;
 	shown:	int;		# already shown as the human's
@@ -554,6 +558,11 @@ nextinput(): (string, int)
 		queued = tl queued;
 		return (q.text, q.shown);
 	}
+	if(droppedevents > 0) {
+		writemsg("veltro", sys->sprint("(%d more notification(s) arrived while the agent was busy " +
+			"than it keeps waiting, and were not given to it)", droppedevents));
+		droppedevents = 0;
+	}
 	if(inputclosed)
 		return (nil, 0);
 	m := <-inputc;
@@ -566,26 +575,42 @@ nextinput(): (string, int)
 turninput(m: string)
 {
 	if(m == nil) {
+		# A dialogue left waiting held the turn open, and the agent's
+		# processes with it, after the activity was closed.
 		inputclosed = 1;
 		ctl("cancel");
+		answer("Deny");
 		return;
 	}
-	# Delivered task/message events are subsequent turns, never answers to a
-	# permission dialogue. Only the user's own input can resolve the tile.
-	if(awaiting && !agentlib->hasprefix(m, TASKEVENT) &&
-	   !agentlib->hasprefix(m, MSGEVENT)) {
-		answerc <-= m;
-		return;
-	}
+	# /stop stops, a dialogue waiting or not.  Taken for the dialogue's
+	# answer it denied the one call, and the turn went on.
 	if(m == "/stop") {
 		log("human: /stop");
 		ctl("cancel");
 		writemsg("veltro", "(stopping)");
+		answer("Deny");
 		return;
 	}
+	event := agentlib->hasprefix(m, TASKEVENT) || agentlib->hasprefix(m, MSGEVENT);
+	# Delivered task/message events are subsequent turns, never answers to a
+	# permission dialogue. Only the user's own input can resolve the tile.
+	if(awaiting && !event) {
+		answer(m);
+		return;
+	}
+	if(event) {
+		nev := 0;
+		for(q := queued; q != nil; q = tl q)
+			if(agentlib->hasprefix((hd q).text, TASKEVENT) || agentlib->hasprefix((hd q).text, MSGEVENT))
+				nev++;
+		if(nev >= MAXQUEUEDEVENTS) {
+			droppedevents++;
+			log("event dropped: too many waiting");
+			return;
+		}
+	}
 	shown := 0;
-	if(!agentlib->hasprefix(m, TASKEVENT) && !agentlib->hasprefix(m, MSGEVENT) &&
-	   (len m == 0 || m[0] != '/')) {
+	if(!event && (len m == 0 || m[0] != '/')) {
 		writemsg("human", m);
 		shown = 1;
 	}
@@ -605,6 +630,17 @@ readuserinput(): string
 	r := <-answerc;
 	awaiting = 0;
 	return r;
+}
+
+# Give the dialogue that waits its answer: the first one, from whoever has
+# it (the user's input, a /stop, the activity's close).  answerc holds one,
+# so the giver does not wait for the dialogue to be read.
+answer(m: string)
+{
+	if(!awaiting)
+		return;
+	awaiting = 0;
+	answerc <-= m;
 }
 
 setstatus(status: string)
@@ -844,10 +880,9 @@ lookuppathperm(lines: list of string, path: string): string
 }
 
 # Reflect /tool/paths into the context zone.  Diffs against the last-seen
-# content; binds new paths into this namespace, unmounts removed ones, and
-# pushes resource events so the namespace view updates immediately; the
-# folders granted for writing are noted (recordgrants).  The agent's own
-# system prompt follows /tool/paths inside the harness.
+# content and pushes resource events so the namespace view updates
+# immediately; the folders granted for writing are noted (recordgrants).
+# The agent's own system prompt follows /tool/paths inside the harness.
 applypathchanges()
 {
 	if(!agentlib->pathexists(toolmount))
@@ -870,20 +905,12 @@ applypathchanges()
 		p := hd np;
 		if(p == "" || strcontains(oldpaths, p))
 			continue;
-		if(len p >= 9 && p[0:9] == "/n/local/") {
+		if(len p >= 9 && p[0:9] == "/n/local/")
 			log("path accessible: " + p);
-		} else if(agentlib->pathexists(p)) {
+		else if(agentlib->pathexists(p))
 			log("path accessible (Inferno-native): " + p);
-		} else {
-			base := pathbase(p);
-			if(base == nil || base == "")
-				base = "path";
-			tgt := "/n/local/" + base;
-			if(sys->bind(p, tgt, Sys->MBEFORE) < 0)
-				log("bindpath " + p + ": failed");
-			else
-				log("bound " + p + " -> " + tgt);
-		}
+		else
+			log("path not in this name space: " + p);
 		base := pathbase(p);
 		if(base == nil || base == "")
 			base = p;
@@ -892,19 +919,15 @@ applypathchanges()
 			" label=" + base + " type=fs status=idle via=bound");
 	}
 
-	# Unmount removed paths (only those we actually bound, not /n/local/ pass-throughs)
+	# Paths no longer granted leave the context zone.  (A path that is not
+	# in this name space was to be bound at /n/local/<its last name>, and
+	# whatever was mounted at that name unmounted when the grant went: the
+	# bind could not succeed, its source not being there, and the unmount
+	# was of something else's.)
 	for(op := oldpaths; op != nil; op = tl op) {
 		p := hd op;
 		if(p == "" || strcontains(newpaths, p))
 			continue;
-		if(!(len p >= 9 && p[0:9] == "/n/local/") && !agentlib->pathexists(p)) {
-			base := pathbase(p);
-			if(base == nil || base == "")
-				base = "path";
-			tgt := "/n/local/" + base;
-			sys->unmount(nil, tgt);
-			log("unbound " + p);
-		}
 		writefile(ctxpath, "resource remove " + p);
 	}
 
@@ -1485,13 +1508,18 @@ startharness()
 		args = "-p" :: join(pathargs, ",") :: args;
 	args = "veltrosrv" :: args;
 
-	srvdone = chan of int;
+	# Neither waits on the other once this has its answer: the timer is
+	# stopped, and what the loser sends is not waited for.  (Each bridge
+	# left its timer behind, for ever in its send.)
+	srvdone = chan[1] of int;
 	spawn runsrv(srv, args);
-	timeout := chan of int;
-	spawn timer(timeout, 20000);
+	timeout := chan[1] of int;
+	pidc := chan of int;
+	spawn timer(pidc, timeout, 20000);
+	tpid := <-pidc;
 	alt {
 	<-srvdone =>
-		;
+		kill(tpid);
 	<-timeout =>
 		fatal("veltrosrv did not start");
 	}
@@ -1514,8 +1542,9 @@ join(l: list of string, sep: string): string
 	return s;
 }
 
-timer(ch: chan of int, ms: int)
+timer(pidc: chan of int, ch: chan of int, ms: int)
 {
+	pidc <-= sys->pctl(0, nil);
 	sys->sleep(ms);
 	ch <-= 1;
 }
@@ -1745,11 +1774,18 @@ endmessage(role, title, body: string, idx: int)
 		if(idx >= 0)
 			updateliveconvmsg(idx, body);
 	"note" =>
-		if(title != "") {
+		# A titled note is a tile only under a title the harness gives
+		# one.  The text is the session's, the model's words among it: a
+		# line of the model's that was read as "== note <title>" made a
+		# tile of its titling, "Permission required" with buttons of its
+		# own among them.  Any other title is shown as the text it is.
+		if(title == "Agent stuck" || title == "Model unavailable") {
 			writedialogue(title, body, "", "");
 			if(title == "Agent stuck")
 				seturgency(1);
-		} else
+		} else if(title != "")
+			writemsg("veltro", "== note " + title + "\n" + body);
+		else
 			writemsg("veltro", body);
 	}
 }
@@ -1800,7 +1836,8 @@ logfollow(offset: big, done: chan of int)
 				(s1chunks, nil) = str->toint(line[len "stream: done (":], 10);
 			} else if(agentlib->hasprefix(line, "tool ")) {
 				(nm, rest2) := str->splitl(line[5:], ":");
-				nm = str->tolower(nm);
+				# the name is the model's: it goes into ctl lines as one word
+				nm = safeattrtext(str->tolower(nm));
 				if(agentlib->hasprefix(rest2, ": args ")) {
 					curtool = nm;
 					curpath = filepathof(rest2[7:]);
@@ -1818,7 +1855,14 @@ logfollow(offset: big, done: chan of int)
 						log("context: file " + curpath + " via " + nm);
 					}
 				} else if(agentlib->hasprefix(rest2, ": calling")) {
-					setstatus(nm);
+					# The status names the tool at work when it is one.
+					# Any name the model called was written there, a
+					# tool or not: "hidden", which is how an activity is
+					# marked closed, closed this one for good.
+					if(activetool(nm))
+						setstatus(nm);
+					else
+						setstatus("working");
 				} else if(agentlib->hasprefix(rest2, ": done")) {
 					setstatus("working");
 					writefile(ctxpath, "resource update path=" + nm + " status=idle");
@@ -1835,6 +1879,21 @@ logfollow(offset: big, done: chan of int)
 		}
 	}
 	done <-= 1;
+}
+
+# nm is one of this activity's tools (tools9p's list), and no word a
+# status has of its own.
+activetool(nm: string): int
+{
+	case nm {
+	"hidden" or "idle" or "working" or "blocked" or "complete" or "stopped" or "done" or "provisioning" =>
+		return 0;
+	}
+	(nil, tls) := sys->tokenize(agentlib->readfile(toolmount + "/tools"), "\n");
+	for(; tls != nil; tls = tl tls)
+		if(str->tolower(hd tls) == nm)
+			return 1;
+	return 0;
 }
 
 # An unattended campaign has no operator to answer a dialogue: its driver
@@ -1871,7 +1930,11 @@ approver(done: chan of int)
 		(callid, rest) := str->splitl(req, " ");
 		rest = str->drop(rest, " ");
 		if(headlessdeny()) {
+			# Said where the conversation is read: unseen, a marker left
+			# behind denied every such call with no dialogue and no word.
 			log("pretool: denied by headless campaign policy: " + rest);
+			writemsg("veltro", "(denied without asking, as " + HEADLESSDENY +
+				" says to: " + rest + ")");
 			writefile(sess + "/approve", "deny " + callid + " headless");
 			continue;
 		}
@@ -1956,6 +2019,8 @@ notifyparent()
 	done := "has finished its assignment";
 	if(agentlib->hasprefix(status, "failed"))
 		done = "could not finish its assignment";
+	else if(laststop == "cancelled")
+		done = "was stopped before it finished its assignment";
 	ev := TASKEVENT + sys->sprint("Task %d \"%s\" %s (status: %s). " +
 		"This is a notification from the harness, not a message from the user.\n\n" +
 		"Its report:\n%s\n", actid, label, done, status, report);
@@ -2139,6 +2204,7 @@ closewatch(turnover: chan of int)
 	<-closed =>
 		log("activity closed: cancelling the turn");
 		ctl("cancel");
+		answer("Deny");
 		<-turnover;
 	}
 }
@@ -2235,6 +2301,8 @@ agentturn(input: string)
 	# "complete" tells the MA this TA finished its autonomous assignment.
 	if(laststop == "llm-error" && actid > 0)
 		setstatus("failed: the model service could not be reached");
+	else if(actid > 0 && !userinteracted && laststop == "cancelled")
+		setstatus("stopped");	# by /stop or a close: not "complete"
 	else if(actid > 0 && !userinteracted)
 		setstatus("complete");
 	else
@@ -2432,7 +2500,7 @@ init(nil: ref Draw->Context, args: list of string)
 				} else {
 					# A typed message while the LLM is unreachable: echo it
 					# and explain, instead of silently eating it.
-					writemsg("user", choice);
+					writemsg("human", choice);	# luciuisrv has no "user" role: the echo was refused
 					writemsg("veltro",
 						"I still can't reach the LLM, so I can't reply yet. Check the dial " +
 						"address and that the remote is running, then close InferNode and " +
@@ -2517,7 +2585,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# only the agent's response is shown. Fires on brief OR instructions so an
 	# instructions-only task still auto-starts.
 	inputc = chan of string;
-	answerc = chan of string;
+	answerc = chan[1] of string;
 	spawn inputreader();
 
 	if(taskbrief != "" || taskinstr != "") {

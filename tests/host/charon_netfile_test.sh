@@ -15,7 +15,11 @@
 # every way is refused, the address stays the page's, and the file's
 # text is in nothing the session shows.  What the user asks for by name
 # still opens, and a file's own link to a file is still followed.
-# Skipped without python3.
+#
+# The charon tool's own waiting is checked on the way: each navigation
+# through it left two processes behind for good (a reader of the
+# session's events and a timer), so six of them are made and the
+# emulator's processes counted.  Skipped without python3.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -93,6 +97,10 @@ echo R_TOOL
 /tests/toolcall.dis /dis/veltro/tools/charon.dis 'read links' 'follow 1' 'read body' 'read url'
 echo R_END
 settle
+echo R_NAV
+/tests/toolcall.dis /dis/veltro/tools/charon.dis 'navigate $u/link' 'reload' 'reload' 'reload' 'navigate $u/none' 'back' 'status'
+echo R_END
+settle
 echo R_FOLLOW; try follow 1; echo R_END; settle; show AFTERFOLLOW
 echo R_SUBMIT; try submit 1; echo R_END; settle; show AFTERSUBMIT
 
@@ -147,6 +155,16 @@ elif echo "$s" | grep -q '^error: .*may not open a file: address'; then
 	pass "the charon tool's follow is refused, saying why"
 else
 	fail "the charon tool's follow: $s"
+fi
+s=$(section NAV)
+first=$(echo "$s" | sed -n 's/^R_CALL 1 [0-9]* \([0-9]*\)$/\1/p')
+last=$(echo "$s" | sed -n 's/^R_CALL 7 [0-9]* \([0-9]*\)$/\1/p')
+if [ "$(echo "$s" | grep -c '^Status: done')" != 7 ]; then
+	fail "the charon tool's navigations: $s"
+elif [ -n "$first" ] && [ -n "$last" ] && [ $((last - first)) -le 2 ]; then
+	pass "six navigations through the charon tool leave no processes ($first, then $last)"
+else
+	fail "the charon tool left processes: ${first:-?} after its first navigation, ${last:-?} after its seventh call"
 fi
 if section FOLLOW | grep -q 'ctl refused: .*may not open a file: address'; then
 	pass "follow is refused"

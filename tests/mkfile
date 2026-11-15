@@ -56,6 +56,7 @@ TARG=\
 	concurrency_test.dis\
 	casel_test.dis\
 	cowfs_test.dis\
+	cowfs_control_test.dis\
 	cut_test.dis\
 	dhcp_test.dis\
 	errlabel_leak_test.dis\

@@ -11,7 +11,16 @@ implement Cowfs;
 # The overlay directory stores:
 #   - Modified/new files at their relative paths
 #   - .whiteout file listing deleted paths (one per line)
+#   - .cowbase file: what each base file was when first shadowed
 #   - .cowmeta file with basepath and metadata
+#
+# The last three are the overlay's own records.  They are in the directory
+# the mount's writes land in, so the server keeps them out of the mount:
+# no walk reaches one and nothing is made under one of their names
+# (guarded).  They were only left out of listings, so a task with the mount
+# read and wrote them by name: it removed .cowbase (no conflict was then
+# seen), wrote .whiteout (deletions of its choosing) and gave .cowmeta
+# another basepath, which the promoter believed.
 #
 # Module-level functions (diff, promote, revert) operate directly
 # on overlay and base directories without going through Styx.
@@ -253,6 +262,8 @@ promotefile(basepath, overlaydir, relpath: string): string
 	(relpath, pathok) = cleanrelpath(relpath);
 	if(!pathok)
 		return "invalid path: contains traversal";
+	if(relpath == "" || internalrel(relpath))
+		return "invalid path: not a staged file";
 
 	if(basechanged(basepath, overlaydir, relpath))
 		return "not applied, changed since the task's copy was made (still staged): " + relpath;
@@ -499,6 +510,71 @@ safename(name: string): int
 	return 1;
 }
 
+# A name as a host file system that folds names finds it: letters in one
+# case, no dots or blanks at its end, nothing from a colon on.  (On such a
+# host ".COWMETA", ".cowmeta." and ".cowmeta::$DATA" all open .cowmeta.)
+foldname(name: string): string
+{
+	for(i := 0; i < len name; i++)
+		if(name[i] == ':') {
+			name = name[0:i];
+			break;
+		}
+	while(len name > 0 && (name[len name - 1] == '.' || name[len name - 1] == ' '))
+		name = name[0:len name - 1];
+	out := "";
+	for(i = 0; i < len name; i++) {
+		c := name[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		out[len out] = c;
+	}
+	return out;
+}
+
+# relpath is, by its name, one of the overlay's own records: they are at
+# the overlay's root only.
+internalrel(relpath: string): int
+{
+	for(i := 0; i < len relpath; i++)
+		if(relpath[i] == '/')
+			return 0;
+	return isinternal(foldname(relpath));
+}
+
+# relpath is one of the overlay's records, by its name or because the host
+# finds a record's file under it (a short name, any alias the fold above
+# does not know).  Asked of every walk and create: nothing through the
+# mount reaches a record or is made where one will be.
+guarded(state: ref SrvState, relpath: string): int
+{
+	if(relpath == "")
+		return 0;
+	if(internalrel(relpath))
+		return 1;
+	for(i := 0; i < len relpath; i++)
+		if(relpath[i] == '/')
+			return 0;
+	(ok, d) := sys->stat(state.overlaydir + "/" + relpath);
+	if(ok < 0)
+		return 0;
+	return samefile(d, state.overlaydir + "/" + META_FILE) ||
+		samefile(d, state.overlaydir + "/" + BASE_FILE) ||
+		samefile(d, state.overlaydir + "/" + WHITEOUT_FILE);
+}
+
+samefile(d: Sys->Dir, path: string): int
+{
+	(ok, o) := sys->stat(path);
+	return ok >= 0 && o.qid.path == d.qid.path && o.dtype == d.dtype && o.dev == d.dev;
+}
+
+exists(path: string): int
+{
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
+}
+
 # --- Path validation ---
 
 # Canonicalize a relative path and reject traversal attempts.
@@ -614,6 +690,10 @@ Serve:
 			if((m.mode & Sys->OTRUNC) && !(c.qtype & Sys->QTDIR)) {
 				tpe := lookuppath(state, c.path);
 				if(tpe != nil && tpe.relpath != "") {
+					if(internalrel(tpe.relpath)) {
+						srv.reply(ref Rmsg.Error(m.tag, Eperm));
+						break;
+					}
 					topath := state.overlaydir + "/" + tpe.relpath;
 					notebase(state.basepath, state.overlaydir, tpe.relpath);
 					ensureparent(topath);
@@ -651,6 +731,12 @@ Serve:
 			}
 
 			relpath := joinrel(pe.relpath, m.name);
+			# Nothing is made under the name of one of the overlay's
+			# records, or where the host would find one.
+			if(guarded(state, relpath)) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
 			if(!(m.perm & Sys->DMDIR))
 				notebase(state.basepath, state.overlaydir, relpath);
 
@@ -703,8 +789,8 @@ Serve:
 				break;
 			}
 
-			(rpath, exists, nil) := resolve(state, pe.relpath);
-			if(!exists) {
+			(rpath, found, nil) := resolve(state, pe.relpath);
+			if(!found || internalrel(pe.relpath)) {
 				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 				break;
 			}
@@ -721,7 +807,7 @@ Serve:
 			}
 
 			pe := lookuppath(state, c.path);
-			if(pe == nil) {
+			if(pe == nil || internalrel(pe.relpath)) {
 				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 				break;
 			}
@@ -788,8 +874,8 @@ Serve:
 			# of that number ("fid already in use") and wedges the mount.
 			srv.delfid(c);
 			pe := lookuppath(state, c.path);
-			if(pe == nil || pe.relpath == "") {
-				# Can't remove root
+			if(pe == nil || pe.relpath == "" || internalrel(pe.relpath)) {
+				# Can't remove root, nor the overlay's records
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				break;
 			}
@@ -871,6 +957,12 @@ navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 				continue;
 			}
 
+			# The overlay's own records are not in the tree it serves.
+			if(guarded(state, childrel)) {
+				n.reply <-= (nil, Enotfound);
+				continue;
+			}
+
 			# Check whiteout
 			if(iswhiteout(state, childrel)) {
 				n.reply <-= (nil, Enotfound);
@@ -878,8 +970,8 @@ navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 			}
 
 			# Resolve child
-			(rpath, exists, nil) := resolve(state, childrel);
-			if(!exists) {
+			(rpath, found, nil) := resolve(state, childrel);
+			if(!found) {
 				n.reply <-= (nil, Enotfound);
 				continue;
 			}
@@ -927,8 +1019,8 @@ cowstat(state: ref SrvState, qpath: big): (ref Sys->Dir, string)
 	if(pe == nil)
 		return (nil, Enotfound);
 
-	(rpath, exists, nil) := resolve(state, pe.relpath);
-	if(!exists && pe.relpath != "")
+	(rpath, found, nil) := resolve(state, pe.relpath);
+	if(!found && pe.relpath != "")
 		return (nil, Enotfound);
 
 	# For root, use base directory
@@ -984,9 +1076,9 @@ mergedirents(state: ref SrvState, parentrel: string): list of ref DirEnt
 	(odirs, on) := readdir->init(odir, Readdir->NAME);
 	for(i := 0; i < on; i++) {
 		name := odirs[i].name;
-		if(isinternal(name))
-			continue;
 		childrel := joinrel(parentrel, name);
+		if(internalrel(childrel))
+			continue;
 		if(iswhiteout(state, childrel))
 			continue;
 		isdir := (odirs[i].mode & Sys->DMDIR) != 0;
@@ -1002,7 +1094,7 @@ mergedirents(state: ref SrvState, parentrel: string): list of ref DirEnt
 	for(i = 0; i < bn; i++) {
 		name := bdirs[i].name;
 		childrel := joinrel(parentrel, name);
-		if(inlist(name, seen))
+		if(inlist(name, seen) || internalrel(childrel))
 			continue;
 		if(iswhiteout(state, childrel))
 			continue;
@@ -1177,10 +1269,9 @@ diffwalk(overlaydir, parentrel: string, meta: ref MetaInfo, result: list of stri
 	(dirs, n) := readdir->init(odir, Readdir->NAME);
 	for(i := 0; i < n; i++) {
 		name := dirs[i].name;
-		if(isinternal(name))
-			continue;
-
 		childrel := joinrel(parentrel, name);
+		if(internalrel(childrel))
+			continue;
 
 		if(dirs[i].mode & Sys->DMDIR) {
 			# Recurse into subdirectories
@@ -1228,7 +1319,7 @@ countfiles(overlaydir, parentrel: string): int
 	(dirs, dn) := readdir->init(odir, Readdir->NONE);
 	for(i := 0; i < dn; i++) {
 		name := dirs[i].name;
-		if(isinternal(name))
+		if(internalrel(joinrel(parentrel, name)))
 			continue;
 		if(dirs[i].mode & Sys->DMDIR)
 			n += countfiles(overlaydir, joinrel(parentrel, name));
@@ -1249,10 +1340,9 @@ promotewalk(basepath, overlaydir, parentrel: string): (int, string, list of stri
 	(dirs, n) := readdir->init(odir, Readdir->NAME);
 	for(i := 0; i < n; i++) {
 		name := dirs[i].name;
-		if(isinternal(name))
-			continue;
-
 		childrel := joinrel(parentrel, name);
+		if(internalrel(childrel))
+			continue;
 		opath := overlaydir + "/" + childrel;
 		bpath := basepath + "/" + childrel;
 

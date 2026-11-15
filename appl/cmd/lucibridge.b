@@ -845,8 +845,9 @@ lookuppathperm(lines: list of string, path: string): string
 
 # Reflect /tool/paths into the context zone.  Diffs against the last-seen
 # content; binds new paths into this namespace, unmounts removed ones, and
-# pushes resource events so the namespace view updates immediately.  The
-# agent's own system prompt follows /tool/paths inside the harness.
+# pushes resource events so the namespace view updates immediately; the
+# folders granted for writing are noted (recordgrants).  The agent's own
+# system prompt follows /tool/paths inside the harness.
 applypathchanges()
 {
 	if(!agentlib->pathexists(toolmount))
@@ -908,6 +909,7 @@ applypathchanges()
 	}
 
 	currentpathsraw = latest;
+	recordgrants();
 }
 
 # Handle slash commands from the input channel.
@@ -1034,9 +1036,10 @@ Cowfs: module {
 # may write: /tmp/veltro/cow/<actid>-<key of the folder>.  Only the first
 # was found, so a task given two folders had the changes to one of them
 # reported, promoted and reverted, and the other's left behind.
+COWDIR: con "/tmp/veltro/cow";
 cowoverlays(prefix: string): list of string
 {
-	fd := sys->open("/tmp/veltro/cow", Sys->OREAD);
+	fd := sys->open(COWDIR, Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	l: list of string;
@@ -1046,8 +1049,10 @@ cowoverlays(prefix: string): list of string
 			break;
 		for(i := 0; i < n; i++) {
 			nm := dirs[i].name;
+			if(nm == "" || nm[0] == '.')
+				continue;	# GRANTDIR: not an overlay
 			if(len nm >= len prefix && nm[0:len prefix] == prefix)
-				l = "/tmp/veltro/cow/" + nm :: l;
+				l = COWDIR + "/" + nm :: l;
 		}
 	}
 	return l;
@@ -1055,18 +1060,112 @@ cowoverlays(prefix: string): list of string
 
 myoverlays(): list of string
 {
+	recordgrants();
 	return cowoverlays(sys->sprint("%d-", actid));
 }
 
-# An overlay's changes as lines, each with the folder it is in.
+# Where an overlay's changes go is not the overlay's to say.  Its .cowmeta
+# names a folder, but that file is in the directory the task's own file
+# server writes in; a promote took the folder from it, so a task that got
+# at the file (cowfs let it) had its files written wherever it named, on
+# the user's ordinary "apply".  The folder comes from here instead: each
+# folder an activity is granted for writing (tools9p's list, which no tool
+# writes) is noted under GRANTDIR, in the cow directory, which is in no
+# agent's name space and is not grantable.  An overlay is named for its
+# activity and the key of its folder (nsconstruct), so the note for that
+# name says which folder it stages; .cowmeta must agree, or nothing is
+# applied.  The note outlives the session, as the overlay does: changes
+# kept from an earlier one are applied by the same rule.
+GRANTDIR: con COWDIR + "/.grants";
+
+# As nsconstruct's overlaykey: FNV-1a of the path, eight hex digits.
+overlaykey(path: string): string
+{
+	h := int 16r811c9dc5;
+	b := array of byte path;
+	for(i := 0; i < len b; i++) {
+		h = h ^ int b[i];
+		h = h * 16r01000193;
+	}
+	return sys->sprint("%8.8ux", h);
+}
+
+grantsin(file: string): list of string
+{
+	(nil, l) := sys->tokenize(agentlib->readfile(file), "\n");
+	return l;
+}
+
+# Note the folders this activity may write now.
+recordgrants()
+{
+	if(!agentlib->pathexists(toolmount))
+		return;
+	(nil, lines) := sys->tokenize(agentlib->readfile(toolmount + "/paths"), "\n");
+	for(; lines != nil; lines = tl lines) {
+		(p, perm) := splitpathperm(hd lines);
+		if(perm != "rw" || len p < 2 || p[0] != '/')
+			continue;
+		f := sys->sprint("%s/%d-%s", GRANTDIR, actid, overlaykey(p));
+		if(strcontains(grantsin(f), p))
+			continue;
+		if(!agentlib->pathexists(GRANTDIR)) {
+			if(!agentlib->pathexists(COWDIR))
+				sys->create(COWDIR, Sys->OREAD, Sys->DMDIR | 8r755);
+			sys->create(GRANTDIR, Sys->OREAD, Sys->DMDIR | 8r755);
+		}
+		fd := sys->open(f, Sys->OWRITE);
+		if(fd == nil)
+			fd = sys->create(f, Sys->OWRITE, 8r644);
+		if(fd == nil) {
+			log(sys->sprint("cannot note the grant of %s: %r", p));
+			continue;
+		}
+		sys->seek(fd, big 0, Sys->SEEKEND);
+		sys->fprint(fd, "%s\n", p);
+	}
+}
+
+# The folder an overlay stages changes for, or why it has none it can be
+# applied to.  The overlay is <activity>-<key>, or kept-<boot>-<activity>-<key>
+# once set aside.
+overlaybase(overlay: string): (string, string)
+{
+	(nil, f) := sys->tokenize(pathbase(overlay), "-");
+	if(len f < 2)
+		return (nil, "it is not an overlay");
+	for(; len f > 2; f = tl f)
+		;
+	key := hd tl f;
+	meta := cowmetabase(overlay);
+	base := "";
+	for(g := grantsin(GRANTDIR + "/" + hd f + "-" + key); g != nil; g = tl g)
+		if(overlaykey(hd g) == key && (base == "" || hd g == meta))
+			base = hd g;
+	if(base == "")
+		return (nil, "no folder granted for writing is recorded for it");
+	if(meta == nil)
+		return (nil, "it does not say which folder it is for (the one granted was " + base + ")");
+	if(meta != base)
+		return (nil, sys->sprint("it says it is for %s, and the folder granted was %s", meta, base));
+	return (base, nil);
+}
+
+# An overlay's changes as lines, each with the folder it is in.  Changes
+# that cannot be applied (overlaybase) say so, and are not given a folder.
 overlaychanges(cowfs: Cowfs, overlay: string): list of string
 {
-	base := cowbasepath(overlay);
+	c := cowfs->diff(overlay);
+	if(c == nil)
+		return nil;
+	(base, why) := overlaybase(overlay);
 	out: list of string;
-	for(c := cowfs->diff(overlay); c != nil; c = tl c) {
+	for(; c != nil; c = tl c) {
 		l := hd c;
 		if(base != nil && len l > 2 && l[1] == ' ')
 			l = l[0:2] + base + "/" + l[2:];
+		else if(base == nil)
+			l = sys->sprint("%s  (in %s; cannot be applied: %s)", l, pathbase(overlay), why);
 		out = l :: out;
 	}
 	return revl(out);
@@ -1100,18 +1199,26 @@ cowdiff(): string
 	return result;
 }
 
-# The overlay a file named for /promote or /revert is in: by its full path
-# (under a folder's base), or by a path in the folder (the only overlay).
-cowfilein(ovs: list of string, arg: string): (string, string)
+# The overlay a file named for /promote or /revert is in, and its folder:
+# by the file's full path (under a folder), or by a path in the folder
+# (the only overlay with one).
+cowfilein(ovs: list of string, arg: string): (string, string, string)
 {
+	only, onlybase: string;
+	nbase := 0;
 	for(o := ovs; o != nil; o = tl o) {
-		base := cowbasepath(hd o);
-		if(base != nil && agentlib->hasprefix(arg, base + "/"))
-			return (hd o, arg[len base + 1:]);
+		(base, nil) := overlaybase(hd o);
+		if(base == nil)
+			continue;
+		if(agentlib->hasprefix(arg, base + "/"))
+			return (hd o, base, arg[len base + 1:]);
+		only = hd o;
+		onlybase = base;
+		nbase++;
 	}
-	if(len ovs == 1 && arg != "" && arg[0] != '/')
-		return (hd ovs, arg);
-	return (nil, nil);
+	if(nbase == 1 && arg != "" && arg[0] != '/')
+		return (only, onlybase, arg);
+	return (nil, nil, nil);
 }
 
 cowpromote(arg: string): string
@@ -1123,20 +1230,25 @@ cowpromote(arg: string): string
 	if(ovs == nil)
 		return "no cowfs overlay for this activity";
 	if(arg != "") {
-		(overlay, rel) := cowfilein(ovs, arg);
+		(overlay, base, rel) := cowfilein(ovs, arg);
 		if(overlay == nil)
 			return "error: " + arg + " is not in a folder this activity changed";
-		err := cowfs->promotefile(cowbasepath(overlay), overlay, rel);
+		err := cowfs->promotefile(base, overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "promoted: " + arg;
 	}
 	total := 0;
 	conflicts := "";
+	refused := "";
 	for(; ovs != nil; ovs = tl ovs) {
-		basepath := cowbasepath(hd ovs);
-		if(basepath == nil)
-			return "error: cannot determine base path of " + hd ovs;
+		if(cowfs->diff(hd ovs) == nil)
+			continue;	# nothing staged in it
+		(basepath, why) := overlaybase(hd ovs);
+		if(basepath == nil) {
+			refused += sys->sprint("\n%s: %s", pathbase(hd ovs), why);
+			continue;
+		}
 		(n, err) := cowfs->promote(basepath, hd ovs);
 		total += n;
 		if(err != nil && agentlib->hasprefix(err, "not applied"))
@@ -1147,25 +1259,34 @@ cowpromote(arg: string): string
 	# This goes back to the agent that asked for it.  It used to begin
 	# "promoted N file(s)", which a model read as done and told the user so,
 	# and it said to ask the task again, which the task tool cannot do.
-	if(conflicts != "") {
-		applied := "";
-		if(total > 0)
-			applied = sys->sprint(" (%d other file(s) were applied)", total);
+	applied := "";
+	if(total > 0)
+		applied = sys->sprint(" (%d other file(s) were applied)", total);
+	if(refused != "") {
+		how := "/revert discards them";
+		if(actid > 0)
+			how = sys->sprint("/revert, or \"task revert %d\", discards them", actid);
+		return sys->sprint("NOT applied%s: only changes to a folder this activity was given " +
+			"to write are applied, and these are staged elsewhere:%s%s\n" +
+			"They stay staged (/diff lists them; %s).  " +
+			"Tell the user they were not applied and why.", applied, refused, conflicts, how);
+	}
+	if(conflicts != "")
 		return sys->sprint("NOT applied%s:%s\n" +
 			"Someone changed those files after this task copied them, so its version would " +
 			"undo that change.  They are left as they are now, without the task's change, which " +
 			"stays staged.  Tell the user it was not applied and why.  To make the change on " +
 			"the current file: \"task revert %d\", then create a new task with the same brief; " +
 			"it starts from the file as it is now.", applied, conflicts, actid);
-	}
 	return sys->sprint("promoted %d file(s)", total);
 }
 
-# The folder an overlay stages changes for: the basepath= line of its
-# .cowmeta.  The whole file used to be taken for the path, so a promote
+# The folder an overlay says it stages changes for: the basepath= line of
+# its .cowmeta.  The whole file used to be taken for the path, so a promote
 # wrote "basepath=/n/local/..." relative to wherever it ran, and saved that
-# as the base, doubling the prefix.  Only an absolute path is a base.
-cowbasepath(overlay: string): string
+# as the base, doubling the prefix.  Only an absolute path is a base.  It
+# is the overlay's word, checked by overlaybase, never the folder used.
+cowmetabase(overlay: string): string
 {
 	(nil, lines) := sys->tokenize(agentlib->readfile(overlay + "/.cowmeta"), "\n");
 	for(; lines != nil; lines = tl lines) {
@@ -1189,7 +1310,7 @@ cowrevert(arg: string): string
 	if(ovs == nil)
 		return "no cowfs overlay for this activity";
 	if(arg != "") {
-		(overlay, rel) := cowfilein(ovs, arg);
+		(overlay, nil, rel) := cowfilein(ovs, arg);
 		if(overlay == nil)
 			return "error: " + arg + " is not in a folder this activity changed";
 		err := cowfs->revertfile(overlay, rel);
@@ -1240,8 +1361,12 @@ offerkept()
 		for(c := changes; c != nil; c = tl c)
 			text += hd c + "\n";
 		text = agentlib->strip(text);
+		options := sys->sprint("Apply %d,Discard %d", n, n);
+		(kbase, nil) := overlaybase(hd ovs);
+		if(kbase == nil)
+			options = sys->sprint("Discard %d", n);	# the lines say why
 		didx := writedialogue(sys->sprint("Not applied, from your last session (%d)", n),
-			text, "", sys->sprint("Apply %d,Discard %d", n, n));
+			text, "", options);
 		kept = (n, hd ovs, didx) :: kept;
 		about += sys->sprint("  %d: %s\n", n, agentlib->strip(text));
 	}
@@ -1268,10 +1393,10 @@ keptdo(verb: string, n: int): string
 			rest = hd l :: rest;
 			continue;
 		}
-		base := cowbasepath(overlay);
+		(base, why) := overlaybase(overlay);
 		if(verb == "apply") {
 			if(base == nil)
-				return "error: cannot determine the folder of these changes";
+				return sys->sprint("not applied: %s. Discard %d drops these changes.", why, n);
 			(nf, err) := cowfs->promote(base, overlay);
 			if(err != nil && agentlib->hasprefix(err, "not applied"))
 				return sys->sprint("applied %d file(s) to %s, but %s: those files were changed " +
@@ -1284,7 +1409,9 @@ keptdo(verb: string, n: int): string
 			err := cowfs->revert(overlay);
 			if(err != nil)
 				return "error: " + err;
-			result = "discarded the changes to " + base;
+			result = "discarded the changes";
+			if(base != nil)
+				result += " to " + base;
 			updatedialogue(didx, "", sys->sprint("Discarded (%d)", n), "");
 		}
 		sys->remove(overlay + "/.cowmeta");
@@ -1749,6 +1876,8 @@ approver(done: chan of int)
 			continue;
 		}
 		(tool, what) := str->splitl(rest, " ");
+		if(tool == "task")
+			what += promotepreview(what);
 		awaiting = 1;	# before the tile: a quick answer is the tile's
 		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
 		response := readuserinput();
@@ -1762,6 +1891,41 @@ approver(done: chan of int)
 		}
 	}
 	done <-= 1;
+}
+
+# What "task promote N" would change, for the dialogue that asks the user:
+# the agent's words for it name no file, and the list of them went only to
+# the model that asked.  Read here from the task's overlays, with the
+# folders the harness recorded for them (overlaychanges).
+PREVIEWMAX: con 12;
+
+promotepreview(what: string): string
+{
+	(nil, r) := str->splitstrl(what, "task ");
+	if(r == nil)
+		return "";
+	(n, nil) := str->toint(r[len "task ":], 10);
+	if(n <= 0)
+		return "";
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "";
+	lines: list of string;
+	for(ovs := cowoverlays(sys->sprint("%d-", n)); ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c)
+			lines = hd c :: lines;
+	if(lines == nil)
+		return "\nNothing is staged.";
+	out := sys->sprint("\n%d change(s) (A added, M changed, D removed):", len lines);
+	k := 0;
+	for(lines = revl(lines); lines != nil; lines = tl lines) {
+		if(k++ == PREVIEWMAX) {
+			out += sys->sprint("\n  ... and %d more", len lines);
+			break;
+		}
+		out += "\n  " + hd lines;
+	}
+	return out;
 }
 
 # Tell activity 0 this task has done its assignment: what it said last, and

@@ -460,6 +460,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | exec grants sh.dis only | `sh.dis` bound when `exec` is in caps.tools; named commands require `shellcmds` |
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
 | Writable views explicit | `MREADONLY` protects code/source views; `MCREATE` appears only on `/tmp`, proposal endpoints, activity scratch, and cowfs staging |
+| Staged writes applied only where granted | cowfs keeps its records out of its mount; a promote takes the folder from the harness's note of the grant, never from the overlay (see Staged Writes and Promotion) |
 | Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
 | Speech preserved | `/mnt/speech` granted as a path to `say` and `hear`, exposed only if mounted |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
@@ -497,6 +498,50 @@ whatever `caps.network` says, and `push` sends the factotum key kept for that
 host. The tool's manifest says `dials_net`, so nsaudit's egress rules count an
 agent that holds `git`. A remote's URL is given back without any user and
 password in it, and its progress text is not printed on the console.
+
+## Staged Writes and Promotion
+
+A folder granted `rw` is not written by the agent. Each tool call mounts a
+cowfs overlay over it (`overlaywritepaths`), so every create, write and remove
+lands in `/tmp/veltro/cow/<activity>-<key of the folder>`, and reaches the
+folder only when the user applies it: `/promote` in the activity's tab, the
+approval of `task promote <id>`, or `Apply` on changes kept from an earlier
+session. Three rules keep that step the user's.
+
+**The overlay's records are not in the tree it serves.** The overlay directory
+holds, beside the staged files, `.cowmeta` (the folder it stages for, and the
+session's mark), `.cowbase` (what each base file was when the task first
+changed it: the conflict check) and `.whiteout` (the staged deletions). They
+are in the directory the task's writes land in, so cowfs refuses every walk to
+one and every create under one of their names at the overlay's root, by name as
+a folding host file system would read it (case, trailing dots and blanks, a
+`:stream` suffix) and by identity (any other name the host resolves to the same
+file); 9P `wstat` is refused, so nothing is renamed onto one. A task that could
+write them removed `.cowbase` (a promote then wrote over the user's newer
+edit), listed deletions of its choosing in `.whiteout`, and named another
+folder in `.cowmeta`.
+
+**A promote takes the folder from the harness, not from the overlay.**
+`lucibridge` notes every folder an activity is granted for writing, as
+`tools9p` lists them in `/tool/paths`, under `/tmp/veltro/cow/.grants/`. That
+directory is in no agent's name space and, like the rest of `/tmp/veltro/cow`,
+cannot be granted. An overlay's name gives its activity and its folder's key;
+its changes are applied only to a folder noted for that name, and only when the
+overlay's own `.cowmeta` names the same one. Anything else is refused, saying
+which folder was claimed and which was granted, and stays staged for `/revert`
+or `Discard`. So an overlay for a folder the activity was never granted for
+writing is never applied: exec's staging of `/lib/veltro`, `/lib/certs` and
+`/dis/veltro` is of that kind. Changes kept from an earlier session follow the
+same rule; without a note they are offered for discarding only.
+
+**The user is shown what would change.** The dialogue that asks the user to
+allow `task promote <id>` lists the staged changes (count, and up to twelve of
+them with their folder), read by activity 0's `lucibridge` from the task's
+overlays. The text the agent gave for the call names no file.
+
+Xenith's Agent window (`appl/xenith/xenith/agent/Agent.b`) applies its own
+overlays and still reads the folder from `.cowmeta`. It relies on the first
+rule alone.
 
 ## Shell and Exec Access
 
@@ -617,6 +662,7 @@ tools9p cleanup process can access this tree; restricted agents cannot.
 | `module/nsconstruct.m` | Module interface: capabilities, restriction, verification helpers |
 | `appl/veltro/nsconstruct.b` | Core implementation |
 | `appl/veltro/tools9p.b` | Tool filesystem server with serveloop namespace restriction |
+| `appl/veltro/cowfs.b` | Overlay server for `rw` grants and activity scratch; diff, promote and revert of what is staged |
 | `appl/veltro/veltrosrv.b` | The coordinator: the agent loop served at `/mnt/veltro`, restricted before it serves |
 | `appl/veltro/veltro.b` | Command-line client of `veltrosrv` |
 | `appl/cmd/lucibridge.b` | Lucia's client of `veltrosrv`; model effects go through tools9p |
@@ -654,6 +700,12 @@ Tests cover:
 - `sh.dis` and other read-only grants reject write, truncation, remove, and wstat
 - rebinding and 9P export cannot strip read-only attenuation; explicit deeper writable mounts work
 - `caps.paths` exposes granted `/n/local/` subtree
+
+Staged writes: `tests/cowfs_control_test.b` (the overlay's records out of
+reach of the mount, deletions, conflicts) and
+`tests/host/lucibridge_promote_test.sh` (a task that goes for the records with
+its tools, an overlay naming another folder than the one granted, the approval
+dialogue).
 
 Concurrency tests in `tests/veltro_concurrent_test.b`:
 - Concurrent init

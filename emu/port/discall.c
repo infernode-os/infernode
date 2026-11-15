@@ -92,6 +92,31 @@ libcompile(void *l, Module *m, int size)
 	return ok;
 }
 
+/*
+ * parsemod() with what it has made given back if it raises: the module
+ * being built, and the caller's copy of the file and its Dir (readmod's,
+ * which has no label to free them with).  It raises when the Dis heap
+ * cannot hold the module's data, and when the code generator does.
+ */
+Module*
+libparsemod(char *path, uchar *code, ulong length, Dir *dir)
+{
+	Module *volatile building;
+	Module *m;
+
+	building = nil;
+	if(waserror()){
+		if(building != nil)
+			parsefail(building);
+		free(code);
+		free(dir);
+		nexterror();
+	}
+	m = parsemod(path, code, length, dir, &building);
+	poperror();
+	return m;
+}
+
 void*
 libqlalloc(void)
 {

@@ -67,13 +67,16 @@ bad:
 	return -1;
 }
 
-Modlink*
-mklinkmod(Module *m, int n)
+/* H if there is no memory for it */
+static Modlink*
+mklinkmodok(Module *m, int n)
 {
 	Heap *h;
 	Modlink *ml;
 
-	h = nheap(sizeof(Modlink)+(n-1)*sizeof(ml->links[0]));
+	h = nheapok(sizeof(Modlink)+(n-1)*sizeof(ml->links[0]));
+	if(h == nil)
+		return H;
 	h->t = &Tmodlink;
 	Tmodlink.ref++;
 	ml = H2D(Modlink*, h);
@@ -85,6 +88,17 @@ mklinkmod(Module *m, int n)
 	ml->MP = H;
 	ml->data = nil;
 
+	return ml;
+}
+
+Modlink*
+mklinkmod(Module *m, int n)
+{
+	Modlink *ml;
+
+	ml = mklinkmodok(m, n);
+	if(ml == H)
+		error(exHeap);
 	return ml;
 }
 
@@ -102,7 +116,17 @@ linkmod(Module *m, Import *ldt, int mkmp)
 
 	for(i = 0, l = ldt; l->name != nil; i++, l++)
 		;
-	ml = mklinkmod(m, i);
+	/*
+	 * The caller's reference to m becomes the Modlink's.  With no
+	 * Modlink it is given back here: raised with it kept, a module
+	 * just loaded stayed loaded, with nothing to unload it, for each
+	 * load made with the heap full.
+	 */
+	ml = mklinkmodok(m, i);
+	if(ml == H){
+		unload(m);
+		error(exHeap);
+	}
 
 	if(mkmp){
 		if(mkmp && m->origmp != H && m->ntype > 0) {

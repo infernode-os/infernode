@@ -145,6 +145,8 @@ TARG=\
 	string_edge_test.dis\
 	pool_nomem_helper.dis\
 	print_heapfull.dis\
+	load_heapfull.dis\
+	load_heapfull_mod.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
 	wmapp_fuzz.dis\

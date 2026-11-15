@@ -297,8 +297,30 @@ lockedcompile(Module *m, int isize)
 	return ok;
 }
 
+/*
+ * A module being built that will not be finished: what it holds goes
+ * back.
+ */
+void
+parsefail(Module *m)
+{
+	destroy(m->origmp);
+	if(m->ext != nil)
+		destroylinks(m);
+	freemod(m);
+}
+
+/*
+ * *building is the module while it is being built and nil otherwise,
+ * for libparsemod, which holds the error label this library cannot:
+ * the heap allocations below raise when the heap is full, and so does
+ * the code generator.  A raise used to leave the module, its
+ * instructions and its types (and readmod's copy of the file) in the
+ * kernel's pool for good: tens of megabytes for each load of an
+ * ordinary module by a program that had filled the heap first.
+ */
 Module*
-parsemod(char *path, uchar *code, ulong length, Dir *dir)
+parsemod(char *path, uchar *code, ulong length, Dir *dir, Module *volatile *building)
 {
 	Heap *h;
 	Inst *ip;
@@ -331,6 +353,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	m->mtime = dir->mtime;
 	m->origmp = H;
 	m->pctab = nil;
+	*building = m;
 
 	switch(operand(&ps, isp)) {
 	default:
@@ -854,12 +877,11 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	m->link = modules;
 	modules = m;
 
+	*building = nil;
 	return m;
 bad:
-	destroy(m->origmp);
-	if(m->ext != nil)
-		destroylinks(m);
-	freemod(m);
+	*building = nil;
+	parsefail(m);
 	return nil;
 }
 

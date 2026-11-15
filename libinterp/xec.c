@@ -2,6 +2,7 @@
 #include "isa.h"
 #include "interp.h"
 #include "raise.h"
+#include "kernel.h"
 #include "pool.h"
 
 Vm	vm0 = {		/* the VM; R is the running VM's registers (interp.h) */
@@ -610,18 +611,50 @@ OP(newcb)  { newc(&Tbyte, movb);  }
 OP(newcw)  { newc(&Tword, movw);  }
 OP(newcf)  { newc(&Treal, movf);  }
 OP(newcp)  { newc(&Tptr, movp);  }
+/*
+ * A channel of values with no pointers, of a size no instruction names.
+ * Its buffer is an array of a type made for it, which is malloc'd: made
+ * first, it was lost whenever the channel or the buffer could not be
+ * (a buffer too big for the heap, in a loop: the kernel's pool, for
+ * good), and was not looked at for nil.  The channel is made first, with
+ * no buffer, and then the type and the buffer's storage without raising.
+ */
 OP(newcm)
 {
-	Channel *c;
+	Channel *c, **cp, *oldc;
 	Type *t;
+	Heap *h;
+	WORD len, size;
 
-	t = nil;
-	if(R.m != R.d && W(m) > 0)
-		t = dtype(nil, W(s), nil, 0);
-	c = newc(t, movm);
-	c->mid.w = W(s);
-	if(t != nil)
-		freetype(t);
+	size = W(s);
+	len = 0;
+	if(R.m != R.d)
+		len = W(m);
+	if(len < 0)
+		error(exNegsize);
+	if(len > 0)
+		acheck(size, len);
+	c = cnewc(nil, movm, 0);
+	c->mid.w = size;
+	if(len > 0){
+		t = dtype(nil, size, nil, 0);
+		h = nil;
+		if(t != nil)
+			h = heaparrayok(t, len);
+		if(h == nil){
+			destroy(c);
+			if(t == nil)
+				error(exNomem);
+			freetype(t);
+			error(exHeap);
+		}
+		c->buf = H2D(Array*, h);
+		freetype(t);	/* the array has it now */
+	}
+	cp = R.d;
+	oldc = *cp;
+	*cp = c;
+	destroy(oldc);
 }
 OP(newcmp)
 {
@@ -937,8 +970,27 @@ OP(iload)
 	Module *m;
 	Modlink *ml, **mp, *t;
 	Heap *h;
+	int nn;
+	char path[1024];
 
+	/*
+	 * The path is copied: readmod lets the VM go while it reads the
+	 * file, and the string it came from may be another Prog's to free
+	 * meanwhile.
+	 */
 	n = string2c(S(s));
+	nn = strlen(n);
+	if(nn >= sizeof(path)){
+		/* no module: nil, as for any file that cannot be opened */
+		kwerrstr("module path too long");
+		mp = R.d;
+		t = *mp;
+		*mp = H;
+		destroy(t);
+		return;
+	}
+	memmove(path, n, nn+1);
+	n = path;
 	m = R.M->m;
 	if(m->rt & HASLDT)
 		ldt = m->ldt[W(m)];

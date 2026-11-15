@@ -1239,6 +1239,9 @@ dis/tests/jit_compile_fail.dis
 dis/tests/jit_compile_fail_mod.dis
 dis/tests/jit_compile_fail_ok.dis
 dis/tests/keyring_args_test.dis
+dis/tests/link_digest_a.dis
+dis/tests/link_digest_b.dis
+dis/tests/link_digest_test.dis
 dis/tests/limbo_stale_test.dis
 dis/tests/load_heapfull.dis
 dis/tests/load_heapfull_mod.dis

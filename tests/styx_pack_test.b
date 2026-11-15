@@ -14,6 +14,12 @@ implement StyxPackTest;
 # message or directory entry is the length its packedsize says, and
 # unpacks to what was packed.
 #
+# Lengths the sender chooses (a Twrite's or an Rread's count, the size
+# field, a Twstat's stat) are refused as an illegal message, where a
+# count of ff ff ff ff, -1 here, passed the check against the bytes left
+# and the slice f[O:O-1] ended the server's reader; and a Tversion that
+# offers a size no message fits is not agreed to.
+#
 # Their utflen counted 16-bit runes, three bytes at most; U+1F680 is
 # four in UTF-8, so packdir's array was a byte short of a name with it,
 # and the server packing a directory read with such a file in it died
@@ -232,6 +238,111 @@ testLongStat(t: ref T)
 	}
 }
 
+# a message of n bytes whose size field says size, of this type, tag 1
+rawmsg(size, mtype: int, rest: array of byte): array of byte
+{
+	a := array[7 + len rest] of byte;
+	a[0] = byte size;
+	a[1] = byte (size>>8);
+	a[2] = byte (size>>16);
+	a[3] = byte (size>>24);
+	a[4] = byte mtype;
+	a[5] = byte 1;
+	a[6] = byte 0;
+	a[7:] = rest;
+	return a;
+}
+
+le32(v: int): array of byte
+{
+	return array[] of {byte v, byte (v>>8), byte (v>>16), byte (v>>24)};
+}
+
+cat(l: list of array of byte): array of byte
+{
+	n := 0;
+	for(p := l; p != nil; p = tl p)
+		n += len hd p;
+	a := array[n] of byte;
+	o := 0;
+	for(p = l; p != nil; p = tl p){
+		a[o:] = hd p;
+		o += len hd p;
+	}
+	return a;
+}
+
+# what unpack makes of a: its count, or -2 if it raised
+tunpack(a: array of byte): int
+{
+	{
+		(n, nil) := Tmsg.unpack(a);
+		return n;
+	} exception {
+	* =>
+		return -2;
+	}
+}
+
+runpack(a: array of byte): int
+{
+	{
+		(n, nil) := Rmsg.unpack(a);
+		return n;
+	} exception {
+	* =>
+		return -2;
+	}
+}
+
+# lengths in a message that are the sender's to choose: refused as an
+# illegal message (-1), never an exception in whoever unpacks it
+testHostileLengths(t: ref T)
+{
+	Twrite: con 118;
+	Rread: con 117;
+	Twstat: con 126;
+	fid := le32(7);
+	off := array[8] of {* => byte 0};
+
+	# Twrite: count ff ff ff ff is -1 here, less than the bytes left
+	a := rawmsg(23, Twrite, cat(fid :: off :: le32(-1) :: nil));
+	t.asserteq(tunpack(a), -1, "Twrite with a count of -1");
+	a = rawmsg(23, Twrite, cat(fid :: off :: le32(16r7fffffff) :: nil));
+	t.asserteq(tunpack(a), -1, "Twrite with a count past its bytes");
+	a = rawmsg(28, Twrite, cat(fid :: off :: le32(5) :: array of byte "hello" :: nil));
+	t.asserteq(tunpack(a), 28, "Twrite of five bytes is still taken");
+
+	# Rread: the same, and a count so large that header+count wraps
+	a = rawmsg(11, Rread, le32(-1));
+	t.asserteq(runpack(a), -1, "Rread with a count of -1");
+	a = rawmsg(11, Rread, le32(16r7ffffff5));
+	t.asserteq(runpack(a), -1, "Rread with a count that wraps the sum");
+	a = rawmsg(13, Rread, cat(le32(2) :: array of byte "ok" :: nil));
+	t.asserteq(runpack(a), 13, "Rread of two bytes is still taken");
+
+	# the size field itself, in a buffer longer than it says
+	long := cat(fid :: off :: le32(0) :: array[20] of {* => byte 0} :: nil);
+	t.asserteq(tunpack(rawmsg(int 16r80000000, Twrite, long)), -1, "a size with its top bit set (T)");
+	t.asserteq(tunpack(rawmsg(3, Twrite, long)), -1, "a size less than a header (T)");
+	t.asserteq(runpack(rawmsg(int 16r80000000, Rread, long)), -1, "a size with its top bit set (R)");
+	t.asserteq(runpack(rawmsg(3, Rread, long)), -1, "a size less than a header (R)");
+
+	# Twstat with a stat of no bytes: not a stat of all zeros
+	a = rawmsg(13, Twstat, cat(fid :: array[] of {byte 0, byte 0} :: nil));
+	t.asserteq(tunpack(a), -1, "Twstat with a stat of no bytes");
+
+	# a Tversion's size is an offer: one no message fits is none
+	for(l := 0 :: -1 :: 10 :: 255 :: nil; l != nil; l = tl l){
+		(nil, v) := styx->compatible(ref Tmsg.Version(16rffff, hd l, "9P2000"), 8216, nil);
+		t.assertseq(v, "unknown", sys->sprint("a Tversion offering %d bytes is not agreed to", hd l));
+	}
+	(m, v) := styx->compatible(ref Tmsg.Version(16rffff, 256, "9P2000"), 8216, nil);
+	t.assert(m == 256 && v == "9P2000", sys->sprint("an offer of 256 is taken (%d %s)", m, v));
+	(m, v) = styx->compatible(ref Tmsg.Version(16rffff, 65536, "9P2000"), 8216, nil);
+	t.assert(m == 8216 && v == "9P2000", sys->sprint("a larger offer is held to ours (%d %s)", m, v));
+}
+
 testVenti(t: ref T)
 {
 	ns := names();
@@ -278,6 +389,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Ninep", testNinep);
 	run("LongStat", testLongStat);
 	run("Venti", testVenti);
+	run("HostileLengths", testHostileLengths);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

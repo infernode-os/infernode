@@ -20,6 +20,9 @@ MemFS: module {
 blksz : con 512;
 Efull : con "filesystem full";
 Ebadoff : con "offset out of range";
+Eremoved : con "file has been removed";
+Maxname : con 255;	# bytes in a file's name
+OEXEC : con 3;	# open to execute: to search, of a directory
 Maxoff : con 16r3FFFFFFF;	# the most a file may hold; an offset plus a count stays an int
 
 Memfile : adt {
@@ -168,6 +171,14 @@ Serve:
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
 			}
+			# A fid that is open is not walked (walk(5)): it took the
+			# open with it to another file, whose count of opens then
+			# went down at the clunk while the first file's never did,
+			# and that file was kept, and charged for, for ever.
+			if (c.open) {
+				srv.reply(ref Rmsg.Error(tm.tag, Styxlib->Eopen));
+				continue;
+			}
 			nc: ref styxlib->Chan;
 			if (tm.newfid != tm.fid) {
 				nc = srv.clone(c, tm.newfid);
@@ -184,7 +195,18 @@ Serve:
 				qids = array[len tm.names] of Sys->Qid;
 				wmf := mf;
 				for (i := 0; i < len tm.names; i++) {
-					wmf = dirlookup(wmf, tm.names[i]);
+					# a name is looked for in a directory, and in one
+					# the user may search: a directory of mode 0700 kept
+					# its listing from others and gave them its files
+					werr := Styxlib->Enotfound;
+					if (!(wmf.perm & Sys->DMDIR)) {
+						werr = Styxlib->Enotdir;
+						wmf = nil;
+					} else if (!modeok(OEXEC, wmf.perm, c.uname, wmf.owner)) {
+						werr = Styxlib->Eperm;
+						wmf = nil;
+					} else
+						wmf = dirlookup(wmf, tm.names[i]);
 					if (wmf == nil) {
 						if (nc == nil) {
 							c.qid = oqid;
@@ -192,7 +214,7 @@ Serve:
 						} else
 							srv.chanfree(nc);
 						if (i == 0)
-							srv.reply(ref Rmsg.Error(tm.tag, Styxlib->Enotfound));
+							srv.reply(ref Rmsg.Error(tm.tag, werr));
 						else
 							srv.reply(ref Rmsg.Walk(tm.tag, qids[0:i]));
 						break Msg;
@@ -208,7 +230,7 @@ Serve:
 				err = Styxlib->Eopen;
 			if (err == "" && !modeok(tm.mode, mf.perm, c.uname, mf.owner))
 				err = Styxlib->Eperm;
-			if (err == "" && (mf.perm & Sys->DMDIR) && (tm.mode & (OTRUNC|OWRITE|ORCLOSE)))
+			if (err == "" && (mf.perm & Sys->DMDIR) && (writes(tm.mode) || (tm.mode & (OTRUNC|ORCLOSE))))
 				err = Styxlib->Eperm;
 			if (err == "" && (tm.mode & ORCLOSE)) {
 				p := mf.parent;
@@ -245,8 +267,14 @@ Serve:
 				err = Styxlib->Enotdir;
 			if (err == "" && !modeok(OWRITE, parent.perm, c.uname, parent.owner))
 				err = Styxlib->Eperm;
-			if (err == "" && (tm.perm & Sys->DMDIR) && (tm.mode & (OTRUNC|OWRITE|ORCLOSE)))
+			# A directory that has been removed is on no path: files
+			# made in it could never be reached again, or freed.
+			if (err == "" && parent.parent == nil)
+				err = Eremoved;
+			if (err == "" && (tm.perm & Sys->DMDIR) && (writes(tm.mode) || (tm.mode & (OTRUNC|ORCLOSE))))
 				err = Styxlib->Eperm;
+			if (err == "")
+				err = badname(tm.name);
 			if (err == "" && dirlookup(parent, tm.name) != nil)
 				err = Styxlib->Eexists;
 
@@ -255,8 +283,10 @@ Serve:
 				continue;
 			}
 
+			# a directory is charged a block as a file is, though it has
+			# none: they cost nothing, and there was no end to them
 			isdir := tm.perm & Sys->DMDIR;
-			if (!isdir && freeblks <= 0) {
+			if (freeblks <= 0) {
 				srv.reply(ref Rmsg.Error(tm.tag, Efull));
 				continue;
 			}
@@ -269,11 +299,10 @@ Serve:
 				perm = (tm.perm&(~8r777|8r111)) | (parent.perm&tm.perm& 8r666);
 
 			nmf := newmf(qhash, parent, tm.name, c.uname, perm);
-			if (!isdir) {
-				freeblks--;
+			freeblks--;
+			nmf.nblks = 1;
+			if (!isdir)
 				nmf.data = array[1] of {* => array [blksz] of byte};
-				nmf.nblks = 1;
-			}
 
 			# link in the new MemFile
 			nmf.next = parent.kids;
@@ -290,6 +319,10 @@ Serve:
 			(err, c, mf) := fidtomf(srv, qhash, tm.fid);
 			if (err == "" && !c.open)
 				err = Styxlib->Ebadfid;
+			# as it was opened: the mode was checked at the open and not
+			# looked at again, so a file opened to write was read
+			if (err == "" && (c.mode & 3) == OWRITE)
+				err = Styxlib->Eperm;
 			# an offset is 64 bits and the files here are int-sized:
 			# one past an int was cut to a negative one, and indexed
 			# the block table with it (array bounds error, the server
@@ -317,6 +350,9 @@ Serve:
 			(err, c, mf) := fidtomf(srv, qhash, tm.fid);
 			if (c != nil && !c.open)
 				err = Styxlib->Ebadfid;
+			# and one opened to read was written
+			if (err == nil && !writes(c.mode))
+				err = Styxlib->Eperm;
 			if (err == nil && (mf.perm & Sys->DMDIR))
 				err = Styxlib->Eperm;
 			# compared so as not to overflow: 2^63-1 plus a count was negative
@@ -362,14 +398,25 @@ Serve:
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
 			}
+			# a file another fid has removed, still open on this one,
+			# is in no directory (the server died here, on nil)
 			parent := mf.parent;
-			if (!modeok(OWRITE, parent.perm, c.uname, parent.owner))
+			if (parent == nil)
+				err = Eremoved;
+			else if (!modeok(OWRITE, parent.perm, c.uname, parent.owner))
 				err = Styxlib->Eperm;
 			if (err == "" && (mf.perm & Sys->DMDIR) && mf.kids != nil)
 				err = "directory not empty";
 			if (err == "" && mf == root)
 				err = "root directory";
 			if (err != nil) {
+				# the fid is clunked all the same, and its open with it
+				if (c.open) {
+					if (c.mode & ORCLOSE)
+						unlink(mf);
+					mf.nopen--;
+					freeblks += delfile(qhash, mf);
+				}
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
 			}
@@ -383,17 +430,27 @@ Serve:
 			(err, c, mf) := fidtomf(srv, qhash, tm.fid);
 			stat := tm.stat;
 
-			if (err == nil && stat.name != mf.name) {
+			# Each field is changed only if it is given (not "", not
+			# ~0) and differs. The tests were of difference alone, which
+			# an unchanged field never showed: so a wstat giving a file's
+			# own mode and time back, and a new owner, was asked nothing,
+			# and any user made any file their own.
+			if (err == nil && stat.name != nil && stat.name != mf.name) {
 				parent := mf.parent;
-				if (!modeok(OWRITE, parent.perm, c.uname, parent.owner))
+				if (parent == nil)
+					err = Eremoved;
+				else if (!modeok(OWRITE, parent.perm, c.uname, parent.owner))
 					err = Styxlib->Eperm;
-				else if (dirlookup(parent, stat.name) != nil)
+				else if ((err = badname(stat.name)) == nil && dirlookup(parent, stat.name) != nil)
 					err = Styxlib->Eexists;
 			}
-			if (err == nil && (stat.mode != mf.perm || stat.mtime != mf.mtime)) {
+			if (err == nil && ((stat.mode != ~0 && stat.mode != mf.perm) || (stat.mtime != ~0 && stat.mtime != mf.mtime))) {
 				if (c.uname != mf.owner)
 					err = Styxlib->Eperm;
 			}
+			# a file's owner is not changed by wstat
+			if (err == nil && stat.uid != nil && stat.uid != mf.owner)
+				err = Styxlib->Eperm;
 			if (err != nil) {
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
@@ -402,14 +459,13 @@ Serve:
 			if(stat.name != nil)
 				mf.name = stat.name;
 			if(stat.mode != ~0)
-				mf.perm = stat.mode | isdir;
+				mf.perm = (stat.mode & ~Sys->DMDIR) | isdir;	# a file stays a file
 			if(stat.mtime != ~0)
 				mf.mtime = stat.mtime;
- 			if(stat.uid != nil)
- 				mf.owner = stat.uid;
 			t := now();
 			mf.atime = t;
-			mf.parent.mtime = t;
+			if(mf.parent != nil)	# nil once removed, while a fid has it open
+				mf.parent.mtime = t;
 			# not supporting group id at the moment
 			srv.reply(ref Rmsg.Wstat(tm.tag));
 		Attach =>
@@ -427,8 +483,12 @@ Serve:
 
 writefile(mf: ref Memfile, offset: int, data: array of byte): string
 {
-	if(mf.perm & Sys->DMAPPEND)
+	if(mf.perm & Sys->DMAPPEND){
+		# the offset checked was the message's, which an append ignores
 		offset = mf.length;
+		if(offset > Maxoff - len data)
+			return Ebadoff;
+	}
 	startblk := offset/blksz;
 	nblks := ((len data + offset) - (startblk * blksz))/blksz;
 	lastblk := startblk + nblks;
@@ -595,6 +655,25 @@ fidtomf(srv : ref Styxserver, qh : ref Qidhash, fid : int) : (string, ref Styxli
 	if (mf == nil)
 		return (Styxlib->Enotfound, c, nil);
 	return (nil, c, mf);
+}
+
+# whether an open of this mode is one that writes
+writes(mode : int) : int
+{
+	return (mode & 3) == OWRITE || (mode & 3) == Sys->ORDWR;
+}
+
+# why a name is none for a file, or nil
+badname(name : string) : string
+{
+	if (name == nil || name == "." || name == "..")
+		return "bad file name";
+	for (i := 0; i < len name; i++)
+		if (name[i] == '/' || name[i] == 0)
+			return "bad file name";
+	if (len array of byte name > Maxname)
+		return "file name too long";
+	return nil;
 }
 
 unlink(mf : ref Memfile)

@@ -9,8 +9,22 @@ enum
 	NONE	= -1000,
 	FDIGIT	= 20,
 	FDEFLT	= 6,
-	NSIGNIF	= 17
+	NSIGNIF	= 17,
+
+	/*
+	 * %f writes every digit before the point: 309 of them for the
+	 * largest double, then the point and up to FDIGIT more, with a
+	 * sign before them. The buffer was 64 bytes on the stack, and
+	 * sprint("%f", 1e300), which any Limbo program can call and a
+	 * number read from a peer can reach, wrote 250 bytes of digits
+	 * past it. OUTMAX is more than the longest there is, and PUT
+	 * stores nothing past the buffer's end whatever the arithmetic
+	 * says.
+	 */
+	OUTMAX	= 400
 };
+
+#define	PUT(c)	do{ if(pout < eout) *pout++ = (c); }while(0)
 
 int
 gfltconv(Fmt *f)
@@ -21,7 +35,7 @@ gfltconv(Fmt *f)
 	double d;
 	int echr, exponent, sign, ndig, nout, i;
 	char *digits, *edigits, ebuf[32], *eptr;
-	char out[64], *pout;
+	char out[OUTMAX], *pout, *eout;
 
 	d = va_arg(f->args, double);
 	echr = 'e';
@@ -95,25 +109,26 @@ gfltconv(Fmt *f)
 		while(eptr<ebuf+2) *eptr++ = '0';
 	}
 	pout = out;
-	if(sign) *pout++ = '-';
-	else if(flags&FmtSign) *pout++ = '+';
-	else if(flags&FmtSpace) *pout++ = ' ';
+	eout = out + sizeof(out) - 1;	/* room for the NUL */
+	if(sign) PUT('-');
+	else if(flags&FmtSign) PUT('+');
+	else if(flags&FmtSpace) PUT(' ');
 	if(fmt == 'f'){
-		for(i=0; i<exponent; i++) *pout++ = i<ndig?digits[i]:'0';
-		if(i == 0) *pout++ = '0';
-		if(precision>0 || flags&FmtSharp) *pout++ = '.';
-		for(i=0; i!=precision; i++)
-			*pout++ = 0<=i+exponent && i+exponent<ndig?digits[i+exponent]:'0';
+		for(i=0; i<exponent; i++) PUT(i<ndig?digits[i]:'0');
+		if(i == 0) PUT('0');
+		if(precision>0 || flags&FmtSharp) PUT('.');
+		for(i=0; i<precision; i++)
+			PUT(0<=i+exponent && i+exponent<ndig?digits[i+exponent]:'0');
 	}
 	else{
-		*pout++ = digits[0];
-		if(precision>0 || flags&FmtSharp) *pout++ = '.';
-		for(i=0; i!=precision; i++) *pout++ = i<ndig-1?digits[i+1]:'0';
+		PUT(digits[0]);
+		if(precision>0 || flags&FmtSharp) PUT('.');
+		for(i=0; i<precision; i++) PUT(i<ndig-1?digits[i+1]:'0');
 	}
 	if(fmt != 'f'){
-		*pout++ = echr;
-		*pout++ = exponent<=0?'-':'+';
-		while(eptr>ebuf) *pout++ = *--eptr;
+		PUT(echr);
+		PUT(exponent<=0?'-':'+');
+		while(eptr>ebuf) PUT(*--eptr);
 	}
 	*pout = 0;
 	freedtoa(digits);

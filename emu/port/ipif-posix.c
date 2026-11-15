@@ -365,12 +365,15 @@ void
 arpadd(char *ipaddr, char *eaddr, int n)
 {
 #ifdef SIOCGARP
+	enum { Maxarpdel = 16 };
 	struct arpreq a;
 	struct sockaddr_in pa;
-	int s;
+	int s, i;
 	uchar addr[IPaddrlen];
 
 	s = socket(AF_INET, SOCK_DGRAM, 0);
+	if(s < 0)
+		oserror();
 	memset(&a, 0, sizeof(a));
 	memset(&pa, 0, sizeof(pa));
 	pa.sin_family = AF_INET;
@@ -380,10 +383,23 @@ arpadd(char *ipaddr, char *eaddr, int n)
 		close(s);
 		error(Ebadarg);
 	}
-	memmove(&pa.sin_addr, ipaddr+IPv4off, IPv4addrlen);
+	/*
+	 * The address parsed, not the text it was parsed from: the four
+	 * bytes were taken from twelve characters into the string, past
+	 * the end of a short one, and the entry made was for whatever
+	 * address the bytes after it spelled.
+	 */
+	memmove(&pa.sin_addr, addr+IPv4off, IPv4addrlen);
 	memmove(&a.arp_pa, &pa, sizeof(pa));
-	while(ioctl(s, SIOCGARP, &a) != -1) {
-		ioctl(s, SIOCDARP, &a);
+	/*
+	 * Entries for the address are removed first. While one was found
+	 * the loop went on, whether or not it could be removed: on a host
+	 * where the emulator may read the table and not change it, for
+	 * ever, in the kernel, where nothing could stop it.
+	 */
+	for(i = 0; i < Maxarpdel && ioctl(s, SIOCGARP, &a) != -1; i++) {
+		if(ioctl(s, SIOCDARP, &a) == -1)
+			break;
 		memset(&a.arp_ha, 0, sizeof(a.arp_ha));
 	}
 	a.arp_ha.sa_family = AF_UNSPEC;

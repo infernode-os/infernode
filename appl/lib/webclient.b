@@ -471,7 +471,13 @@ schemehost(requrl: string): string
 		* => port = "80";
 		}
 	}
-	s := url->schemes[u.scheme] + "://" + u.host;
+	h := u.host;
+	for(i := 0; i < len h; i++)
+		if(h[i] == ':'){	# an IPv6 address, as a URL writes it
+			h = "[" + h + "]";
+			break;
+		}
+	s := url->schemes[u.scheme] + "://" + h;
 	if(port != "80" && port != "443")
 		s += ":" + port;
 	return s;

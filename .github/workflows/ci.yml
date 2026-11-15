@@ -457,6 +457,12 @@ jobs:
         rc=0
         ROOT=. bash tests/host/dossrv_lfn_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # A card whose boot sector, FAT or entries are not what a
+        # FAT's are must not end dossrv or keep it reading for ever.
+        chmod +x tests/host/dossrv_hostile_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_hostile_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
         # The radio firmware tool's verification path: a mismatched
         # checksum must refuse to install. Network-free (--from a
         # fixture directory), under a second.
@@ -815,6 +821,7 @@ jobs:
               usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
               usbxhci_trblen_test ip6reasm_test ipifc_guard_test devip_guard_test tcp_isn_test
               bt9p_selftest_test
+              export_limits_test devip_conv_test arpadd_test factotum_persist_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test

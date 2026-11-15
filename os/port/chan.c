@@ -561,13 +561,28 @@ newmhead(Chan *from)
 	return mh;
 }
 
+/* whether m has more than one mount */
+static int
+ismultiunion(Mhead *m)
+{
+	int multi;
+
+	if(m == nil)
+		return 0;
+	rlock(&m->lock);
+	multi = m->mount != nil && m->mount->next != nil;
+	runlock(&m->lock);
+	return multi;
+}
+
 int
 cmount(Chan *new, Chan *old, int flag, char *spec)
 {
 	Pgrp *pg;
-	int order, flg;
+	int order, flg, isunion;
 	Mhead *m, **l, *mh;
 	Mount *nm, *f, *um, **h, *om;
+	Mount *volatile snap;
 	int mid;
 
 	if(QTDIR & (old->qid.type^new->qid.type))
@@ -599,9 +614,43 @@ if(old->umh)
 	 * This is far more complicated than it should be, but I don't
 	 * see an easier way at the moment.		-rsc
 	 */
-	if((flag&MCREATE) && mh && mh->mount
-	&& (mh->mount->next || !(mh->mount->mflag&MCREATE)))
-		error(Emount);
+	/*
+	 * The mounts of the directory being bound are read here, under
+	 * its lock, and what is copied below is this copy. They were read
+	 * with no lock of theirs held, here and where the union is copied:
+	 * an unmount of that directory by another process of the name
+	 * space, between the two, left a nil to follow or a mount that had
+	 * been freed. The lock is let go before the target's is taken:
+	 * the two may be one (bind /a /a).
+	 */
+	snap = nil;
+	isunion = 0;
+	if(mh != nil){
+		rlock(&mh->lock);
+		if(waserror()){
+			runlock(&mh->lock);
+			mountfree(snap);
+			nexterror();
+		}
+		if(mh->mount != nil){
+			if((flag&MCREATE)
+			&& (mh->mount->next || !(mh->mount->mflag&MCREATE)))
+				error(Emount);
+			isunion = 1;
+			h = (Mount**)&snap;
+			for(um = mh->mount->next; um != nil; um = um->next){
+				f = newmount(nil, um->to, um->mflag, um->spec);
+				*h = f;
+				h = &f->next;
+			}
+		}
+		poperror();
+		runlock(&mh->lock);
+	}
+	if(waserror()){
+		mountfree(snap);
+		nexterror();
+	}
 
 	pg = up->env->pgrp;
 	wlock(&pg->ns);
@@ -636,7 +685,7 @@ if(old->umh)
 	wunlock(&pg->ns);
 
 	nm = newmount(m, new, flag, spec);
-	if(mh != nil && mh->mount != nil) {
+	if(isunion) {
 		/*
 		 *  copy a union when binding it onto a directory
 		 */
@@ -644,8 +693,7 @@ if(old->umh)
 		if(order == MREPL)
 			flg = MAFTER | (flag&MREADONLY);
 		h = &nm->next;
-		um = mh->mount;
-		for(um = um->next; um; um = um->next) {
+		for(um = snap; um; um = um->next) {
 			f = newmount(m, um->to,
 				flg | (um->mflag&MREADONLY), um->spec);
 			*h = f;
@@ -686,6 +734,8 @@ if(old->umh)
 	mid = nm->mountid;
 	wunlock(&m->lock);
 	poperror();
+	poperror();
+	mountfree(snap);
 	if(om != nil)
 		mountfree(om);
 	return mid;
@@ -726,8 +776,13 @@ cunmount(Chan *mnt, Chan *mounted)
 	}
 
 	/*
-	 * As in cmount, what is taken off is freed, and the mount point
-	 * closed, with the locks let go: either can wait on a 9P server.
+	 * As in cmount, what is taken off is freed with the locks let go:
+	 * it can wait on a 9P server. The mount point (m->from) is the
+	 * head's for as long as there is a head, and is closed with it
+	 * (putmhead): closed here, it was closed under whoever had found
+	 * the head a moment before and went on to put it in a path (a
+	 * walk crossing the mount point), which then held, and later
+	 * closed again, a channel that had been freed.
 	 */
 	wlock(&m->lock);
 	if(mounted == 0) {
@@ -737,7 +792,6 @@ cunmount(Chan *mnt, Chan *mounted)
 		m->mount = nil;
 		wunlock(&m->lock);
 		mountfree(f);
-		cclose(m->from);
 		putmhead(m);
 		return;
 	}
@@ -754,7 +808,6 @@ cunmount(Chan *mnt, Chan *mounted)
 				wunlock(&m->lock);
 				wunlock(&pg->ns);
 				mountfree(f);
-				cclose(m->from);
 				putmhead(m);
 				return;
 			}
@@ -810,7 +863,8 @@ int
 findmount(Chan **cp, Mhead **mp, int type, int dev, Qid qid)
 {
 	Pgrp *pg;
-	Mhead *m;
+	Mhead *m, *omh;
+	Chan *oc;
 
 	pg = up->env->pgrp;
 	rlock(&pg->ns);
@@ -823,17 +877,24 @@ if(m->from == nil){
 }
 		if(eqchantdqid(m->from, type, dev, qid, 1)) {
 			runlock(&pg->ns);
+			/*
+			 * What these replace is let go once this head's lock
+			 * is: letting go of a head can now close its mount
+			 * point, and closing a channel can wait on a server.
+			 */
+			omh = nil;
 			if(mp != nil){
 				incref(&m->r);
-				if(*mp != nil)
-					putmhead(*mp);
+				omh = *mp;
 				*mp = m;
 			}
-			if(*cp != nil)
-				cclose(*cp);
+			oc = *cp;
 			incref(&m->mount->to->r);
 			*cp = m->mount->to;
 			runlock(&m->lock);
+			if(oc != nil)
+				cclose(oc);
+			putmhead(omh);
 			return 1;
 		}
 		runlock(&m->lock);
@@ -1021,8 +1082,13 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				/*
 				 * mh->mount == c, so start at mh->mount->next
 				 */
+				/*
+				 * unless it was unmounted while that walk waited
+				 * for its answer: then there is no mount, and
+				 * following it was a nil dereference
+				 */
 				rlock(&mh->lock);
-				for(f = mh->mount->next; f; f = f->next)
+				for(f = mh->mount != nil? mh->mount->next: nil; f; f = f->next)
 					if((wq = devtab[f->to->type]->walk(f->to, nil, names+nhave, ntry)) != nil)
 						break;
 				if(f != nil){
@@ -1595,8 +1661,12 @@ namec(char *aname, int amode, int omode, ulong perm)
 				putmhead(m);
 				error(Eperm);
 			}
-			/* only save the mount head if it's a multiple element union */
-			if(m && m->mount && m->mount->next)
+			/*
+			 * only save the mount head if it's a multiple element
+			 * union: asked under its lock, as an unmount frees the
+			 * mounts once it has let the lock go
+			 */
+			if(ismultiunion(m))
 				c->umh = m;
 			else
 				putmhead(m);
@@ -1852,6 +1922,8 @@ putmhead(Mhead *m)
 {
 	if(m && decref(&m->r) == 0){
 		m->mount = (Mount*)0xCafeBeef;
+		cclose(m->from);
+		m->from = nil;
 		free(m);
 	}
 }

@@ -283,6 +283,14 @@ key(keyspec: string): ref Keyring->Authinfo
 # closest match to [net!]addr[!svc]
 #
 
+hasslash(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 1;
+	return 0;
+}
+
 keyfile(keyspec: string): string
 {
 	if(sys == nil)
@@ -305,12 +313,19 @@ keyfile(keyspec: string): string
 		net = hd flds;
 		addr = hd tl flds;
 	}
+	# server, service and dom name a file in the key directory, and
+	# only there: with a slash in one (server=../../x) the name made of
+	# it was a path to anywhere.  key= is the attribute for a path.
+	if(hasslash(net) || hasslash(addr) || hasslash(svc))
+		return nil;
 	if(addr != nil)
 		keyname = addr;
 	else
 		keyname = "default";
 	kd := keydir();
 	dom := get(al, "dom");
+	if(hasslash(dom))
+		dom = nil;
 	if(dom != nil){
 		if((cert := exists(kd+dom)) != nil)
 			return cert;

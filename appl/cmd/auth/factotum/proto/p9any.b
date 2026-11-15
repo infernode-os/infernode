@@ -168,7 +168,7 @@ p9sk1client(io: ref IO, udom: string): string
 	if(sbuf == nil)
 		return sys->sprint("p9sk1: can't read server's authenticator: %r");
 	(nil, ar) = Authenticator.unpack(sbuf, tick.key);
-	if(ar.num != Auth9->AuthAs || !eqbytes(ar.chal, cchal) || ar.id != 0)
+	if(ar == nil || ar.num != Auth9->AuthAs || !eqbytes(ar.chal, cchal) || ar.id != 0)
 		return "invalid authenticator from server";
 
 	ai := ref Authinfo(tick.cuid, tick.suid, nil, auth9->des56to64(tick.key));

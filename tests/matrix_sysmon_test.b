@@ -65,7 +65,17 @@ run(name: string, testfn: ref fn(t: ref T))
 
 readfile(path: string): string
 {
+	# The service replaces a file by removing it and renaming its new
+	# copy into place, and says so: for a moment there is no file.  One
+	# open in some twenty thousand lands in that moment here, and more
+	# on a slower machine: the test then read cpu/current as empty
+	# (macOS ARM64 CI).  A file that is not there is asked for again,
+	# for up to a second.
 	fd := sys->open(path, Sys->OREAD);
+	for(i := 0; fd == nil && i < 20; i++){
+		sys->sleep(50);
+		fd = sys->open(path, Sys->OREAD);
+	}
 	if(fd == nil)
 		return "";
 	out := "";

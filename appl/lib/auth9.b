@@ -81,8 +81,13 @@ Authenticator.pack(f: self ref Authenticator, key: array of byte): array of byte
 	return p;
 }
 
+# Each of these takes a message of a fixed length from whoever sent it,
+# and looks at fixed places in it: one shorter than its length is no
+# message, where it was an array bounds error in whoever unpacked it.
 Authenticator.unpack(a: array of byte, key: array of byte): (int, ref Authenticator)
 {
+	if(len a < AUTHENTLEN)
+		return (0, nil);
 	if(key != nil)
 		decrypt(key, a, AUTHENTLEN);
 	f := ref Authenticator;
@@ -107,6 +112,8 @@ Passwordreq.pack(f: self ref Passwordreq, key: array of byte): array of byte
 
 Passwordreq.unpack(a: array of byte, key: array of byte): (int, ref Passwordreq)
 {
+	if(len a < PASSREQLEN)
+		return (0, nil);
 	if(key != nil)
 		decrypt(key, a, PASSREQLEN);
 	f := ref Passwordreq;
@@ -136,6 +143,8 @@ Ticket.pack(f: self ref Ticket, key: array of byte): array of byte
 
 Ticket.unpack(a: array of byte, key: array of byte): (int, ref Ticket)
 {
+	if(len a < TICKETLEN)
+		return (0, nil);
 	if(key != nil)
 		decrypt(key, a, TICKETLEN);
 	f := ref Ticket;
@@ -149,6 +158,8 @@ Ticket.unpack(a: array of byte, key: array of byte): (int, ref Ticket)
 
 Ticketreq.unpack(a: array of byte): (int, ref Ticketreq)
 {
+	if(len a < TICKREQLEN)
+		return (0, nil);
 	f := ref Ticketreq;
 	f.rtype = int a[0];
 	f.authid = gets(a[1:], ANAMELEN);
@@ -300,7 +311,17 @@ _asgetticket(fd: ref Sys->FD, tr: ref Ticketreq, key: array of byte): (ref Ticke
 	a = _asrdresp(fd, 2*TICKETLEN);
 	if(a == nil)
 		return (nil, nil);
+	# two tickets or nothing: the server's variable-length answer let it
+	# send any length, and a short one was sliced and decrypted as two
+	if(len a != 2*TICKETLEN){
+		sys->werrstr(pbmsg);
+		return (nil, nil);
+	}
 	(nil, t) := Ticket.unpack(a, key);
+	if(t == nil){
+		sys->werrstr(pbmsg);
+		return (nil, nil);
+	}
 	return (t, a[TICKETLEN:]);	# can't unpack both since the second uses server key
 }
 
@@ -320,10 +341,12 @@ _asrdresp(fd: ref Sys->FD, n: int): array of byte
 		b = readn(fd, 5);
 		if(b == nil)
 			break;
-		n = int string b;
-		if(n<= 0 || n > 4096)
+		# no more than the caller has asked for, as Plan 9's has it:
+		# the limit was 4096 whatever was asked
+		m := int string b;
+		if(m <= 0 || m > n)
 			break;
-		buf = readn(fd, n);
+		buf = readn(fd, m);
 	AuthErr =>
 		b = readn(fd, 64);
 		if(b == nil)

@@ -11,9 +11,15 @@ implement ToolPresent;
 #   create <id> [type=markdown|text|table|code] [label=<text>]
 #                            - Create a new presentation artifact
 #   write <id> <content>     - Write content to artifact (\\n for newlines)
+#   append <id> <content>    - Add content to the end of an artifact
 #   center <id>              - Make artifact the active/focused view
+#   delete <id>, kill <id>   - Remove an artifact; end a GUI app and remove it
 #   list                     - List artifacts in current activity
 #   status                   - Show current activity and centered artifact
+#
+# Content goes through an artifact's data file; a ctl request carries
+# only an id and a label.  The tool makes content artifacts and starts no
+# apps (an app artifact is started by Lucifer with the user's authority).
 #
 # Examples:
 #   present create summary type=markdown label="Session Summary"

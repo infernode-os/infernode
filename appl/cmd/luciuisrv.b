@@ -41,6 +41,10 @@ implement Luciuisrv;
 #                   background/
 #                       0, 1...      background task entries
 #
+# A ctl file takes one request a write.  A request longer than one 9P
+# message arrives as several, each but the last full: they are gathered
+# on the fid and run as one request (see dowrite).
+#
 # Usage:
 #   luciuisrv              mount at /mnt/ui
 #   luciuisrv -m /mnt/ui   legacy mount point

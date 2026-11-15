@@ -19,11 +19,13 @@
 # the interpreter that then ran it.
 #
 # Here: /dis/sh.dis with its last instruction's opcode 255, loaded 200
-# times, raises each time naming op255 and the main pool is where it was;
-# seven other faults in a small module each raise "compile failed" and
-# nothing faults; then a module marked "must be compiled" is, and runs;
-# and the module with the large frame gives under -c1 what it gives
-# under -c0, through each kind of case and a goto.
+# times, raises each time naming op255 and the main pool is where it was
+# (the arm64 and riscv64 JITs leave an opcode they do not know to the
+# interpreter, so there it loads, and the pool is where it was); seven
+# other faults in a small module each raise "compile failed" and nothing
+# faults; then a module marked "must be compiled" is, and runs; and the
+# module with the large frame gives under -c1 what it gives under -c0,
+# through each kind of case and a goto.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -71,12 +73,10 @@ tabref=$(echo "$ref" | grep '^TABLES ')
 want='TABLES one two teens other / ant b-c e-g none / one 4G minus other / a b c'
 [ "$tabref" = "$want" ] || fail "-c0: the module with the large frame: $tabref"
 
-# does this JIT compile anything, and refuse what the test makes?
-if ! echo "$out" | grep -q '^BAD bigop raised '"$COUNT"' '; then
-	if echo "$out" | grep -q '^BAD bigop raised 0 nil 0 loaded '; then
-		echo "jit_compile_fail_test: SKIP (no JIT here: the bad modules load under -c1)"
-		exit 77
-	fi
+# is there a JIT here?  with none the bad modules load under -c1 as under -c0
+if echo "$out" | grep -q '^BAD frame raised 0 nil 0 loaded '; then
+	echo "jit_compile_fail_test: SKIP (no JIT here: the bad modules load under -c1)"
+	exit 77
 fi
 
 echo "$out" | grep -q '^DONE$' || fail "-c1: the program did not finish: $(echo "$out" | grep -v '^fs:' | tail -3 | tr '\n' ' ' | cut -c1-300)"
@@ -86,17 +86,26 @@ fi
 
 line=$(echo "$out" | grep '^BAD bigop ')
 grew=$(echo "$line" | sed -n 's/.* grew \(-\{0,1\}[0-9]*\):.*/\1/p')
-if ! echo "$line" | grep -q "^BAD bigop raised $COUNT nil 0 loaded 0 "; then
-	fail "-c1: not every load of sh.dis with an opcode that is none raised: $line"
-elif [ -z "$grew" ] || [ "$grew" -gt $LIMIT ]; then
-	fail "-c1: $COUNT refused compiles of sh.dis left ${grew:-?} bytes in the main pool"
+if echo "$line" | grep -q "^BAD bigop raised $COUNT nil 0 loaded 0 "; then
+	if [ -z "$grew" ] || [ "$grew" -gt $LIMIT ]; then
+		fail "-c1: $COUNT refused compiles of sh.dis left ${grew:-?} bytes in the main pool"
+	else
+		pass "-c1: $COUNT refused compiles of sh.dis left $grew bytes in the main pool"
+	fi
+	if echo "$line" | grep -q "compile, no 'op255'\$"; then
+		pass "-c1: the error names the opcode: $(echo "$line" | sed 's/.*: raised: //')"
+	else
+		fail "-c1: the error for opcode 255 does not name it op255: $line"
+	fi
+elif echo "$line" | grep -q "^BAD bigop raised 0 nil 0 loaded $COUNT "; then
+	# a JIT that gives the opcode to the interpreter, which refuses it when it is run
+	if [ -z "$grew" ] || [ "$grew" -gt $LIMIT ]; then
+		fail "-c1: $COUNT loads of sh.dis with an opcode that is none left ${grew:-?} bytes in the main pool"
+	else
+		pass "-c1: sh.dis with an opcode that is none loads (this JIT leaves it to the interpreter); $grew bytes left"
+	fi
 else
-	pass "-c1: $COUNT refused compiles of sh.dis left $grew bytes in the main pool"
-fi
-if echo "$line" | grep -q "compile, no 'op255'\$"; then
-	pass "-c1: the error names the opcode: $(echo "$line" | sed 's/.*: raised: //')"
-else
-	fail "-c1: the error for opcode 255 does not name it op255: $line"
+	fail "-c1: sh.dis with an opcode that is none: $line"
 fi
 
 for k in $KINDS; do
@@ -110,11 +119,13 @@ for k in $KINDS; do
 		pass "-c1: $k: refused $COUNT times, $grew bytes left"
 	fi
 done
-# opwld names the instruction it refuses: its source mode is none
-if echo "$out" | grep -q '^movw	mode3, '; then
-	pass "-c1: an address mode that is none is printed as mode3"
-else
-	fail "-c1: the instruction with address mode 3 was not printed as such: $(echo "$out" | grep -a '^movw' | head -1 | cut -c1-80)"
+# the amd64 JIT prints the instruction it refuses: its source mode is none
+if echo "$out" | grep -a -q '^movw	'; then
+	if echo "$out" | grep -q '^movw	mode3, '; then
+		pass "-c1: an address mode that is none is printed as mode3"
+	else
+		fail "-c1: the instruction with address mode 3 was not printed as such: $(echo "$out" | grep -a '^movw' | head -1 | cut -c1-80)"
+	fi
 fi
 
 okl=$(echo "$out" | grep '^OK ')

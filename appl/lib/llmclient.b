@@ -699,6 +699,25 @@ antbuild(st: ref AntState, req: ref AskRequest): (ref AskResponse, string)
 	return (ref AskResponse(response, structjson, tokens), nil);
 }
 
+# A tool call's arguments as they go into the stored turn: the JSON
+# object they are, written out again, or {} if they are not one.  The
+# model's text was put into the turn's JSON as it came, so arguments
+# that were not JSON made the stored turn unreadable, and ones that
+# closed the object early added blocks of their own to it.
+objectjson(args: string): string
+{
+	if(args == "")
+		return "{}";
+	(jv, err) := readjsonstring(args);
+	if(err != nil || jv == nil)
+		return "{}";
+	pick o := jv {
+	Object =>
+		return o.text();
+	}
+	return "{}";
+}
+
 # The answer's text, as it follows the STOP: line and the TOOL: lines.
 # The tool calls are the TOOL: lines before the first line that is not
 # one, so text that itself begins "TOOL:" (a model quoting what it
@@ -1417,9 +1436,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 		(id, name, rawargs) := hd revtc;
 		# JSON verbatim; wirefmt escapes; flatten for legacy /tool is in calltool.
 		toolentries = wirefmt->encodetool(id, name, rawargs) :: toolentries;
-		inputjson := rawargs;
-		if(inputjson == "")
-			inputjson = "{}";
+		inputjson := objectjson(rawargs);
 		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
 			",\"name\":" + jquote(name) +
 			",\"input\":" + inputjson + "}") :: structblocks;
@@ -1590,9 +1607,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 		rawargs := listget(st.tcargs, i);
 		# JSON verbatim; wirefmt escapes; flatten for legacy /tool is in calltool.
 		toolentries = wirefmt->encodetool(id, name, rawargs) :: toolentries;
-		inputjson := rawargs;
-		if(inputjson == "")
-			inputjson = "{}";
+		inputjson := objectjson(rawargs);
 		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
 			",\"name\":" + jquote(name) +
 			",\"input\":" + inputjson + "}") :: structblocks;

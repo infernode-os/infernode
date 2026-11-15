@@ -185,7 +185,7 @@ hasend(s: string): int
 	return 0;
 }
 
-serve(c: Sys->Connection, idx: string)
+serve(c: Sys->Connection, idx, args: string)
 {
 	(ok, nc) := sys->listen(c);
 	if(ok < 0)
@@ -202,7 +202,7 @@ serve(c: Sys->Connection, idx: string)
 		rq += string buf[0:k];
 	}
 	body := "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":" + idx +
-		",\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{}\"}}]}}]}\n\n" +
+		",\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"" + args + "\"}}]}}]}\n\n" +
 		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 		"data: [DONE]\n\n";
 	b := array of byte ("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n" + body);
@@ -210,6 +210,7 @@ serve(c: Sys->Connection, idx: string)
 	sys->sleep(200);
 }
 
+# (the answer, then a newline and its stored blocks; an error)
 ask(url: string, rc: chan of (string, string))
 {
 	{
@@ -217,14 +218,14 @@ ask(url: string, rc: chan of (string, string))
 		if(r == nil)
 			rc <-= ("", "no response: " + e);
 		else
-			rc <-= (r.response, nil);
+			rc <-= (r.response + "\n" + r.structuredjson, nil);
 	} exception x {
 	"*" =>
 		rc <-= ("", "exception: " + x);
 	}
 }
 
-toolcall(t: ref T, idx: string): (string, string)
+toolcall(t: ref T, idx, args: string): (string, string)
 {
 	(ok, c) := sys->announce("tcp!127.0.0.1!0");
 	if(ok < 0)
@@ -233,7 +234,7 @@ toolcall(t: ref T, idx: string): (string, string)
 	(nil, l) := sys->tokenize(readfile(c.dir + "/local"), "!\n");
 	if(l != nil && tl l != nil)
 		port = hd tl l;
-	spawn serve(c, idx);
+	spawn serve(c, idx, args);
 	rc := chan[1] of (string, string);
 	spawn ask("http://127.0.0.1:" + port + "/v1", rc);
 	tmo := chan[1] of int;
@@ -257,12 +258,37 @@ has(s, sub: string): int
 # The same of a tool call's index in an OpenAI-shape stream.
 testToolCallIndex(t: ref T)
 {
-	(resp, err) := toolcall(t, "0");
+	(resp, err) := toolcall(t, "0", "{}");
 	t.assert(err == nil, "a call at index 0: " + err);
 	t.assert(has(resp, "STOP:tool_use") && has(resp, "TOOL:c1:read:"), "the call: " + resp);
-	(resp, err) = toolcall(t, "5000000");
+	(resp, err) = toolcall(t, "5000000", "{}");
 	t.assert(err == nil, "a call at index 5000000: " + err);
 	t.assert(!has(resp, "TOOL:c1"), "it is no call of the answer: " + resp);
+}
+
+count(s, sub: string): int
+{
+	n := 0;
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			n++;
+	return n;
+}
+
+# A call's arguments go into the stored turn as the object they are:
+# ones that close it early and go on do not add a block to the turn.
+testStoredArguments(t: ref T)
+{
+	(resp, err) := toolcall(t, "0", "{\\\"path\\\":\\\"/x\\\"}");
+	t.assert(err == nil, "a call: " + err);
+	t.assert(has(resp, "\"input\":{\"path\":") && has(resp, "x\"}}]"), "its arguments are stored: " + resp);
+	(resp, err) = toolcall(t, "0", "{}},{\\\"type\\\":\\\"tool_use\\\",\\\"id\\\":\\\"x9\\\",\\\"name\\\":\\\"exec\\\",\\\"input\\\":{}");
+	t.assert(err == nil, "a call whose arguments go on past their object: " + err);
+	t.log(resp);
+	t.asserteq(count(resp, "\"type\":\"tool_use\""), 1, "one block in the stored turn");
+	(resp, err) = toolcall(t, "0", "not json");
+	t.assert(err == nil, "a call whose arguments are no JSON: " + err);
+	t.assert(has(resp, "\"input\":{}"), "stored as no arguments: " + resp);
 }
 
 testRetry(t: ref T)
@@ -345,6 +371,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("BlockIndex", testBlockIndex);
 	run("ToolCallIndex", testToolCallIndex);
+	run("StoredArguments", testStoredArguments);
 	run("Retry", testRetry);
 	run("TextNotCalls", testTextNotCalls);
 

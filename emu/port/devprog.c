@@ -225,7 +225,7 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 		 * have gone and its owner's name been freed: the name is
 		 * copied to this process's buffer, after the pid.
 		 */
-		user = up->genbuf+strlen(up->genbuf)+1;
+		user = up->genbuf+strlen(up->genbuf)+1;	/* Flawfinder: ignore — genbuf holds the pid sprint just wrote, at most 20 digits of 128 bytes */
 		snprint(user, sizeof(up->genbuf)-(user-up->genbuf), "%s", o->user);
 		devdir(c, qid, up->genbuf, 0, user, DMDIR|0555, dp);
 		release();

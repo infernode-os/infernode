@@ -316,7 +316,7 @@ klisten(char *dir, char *newdir)
 {
 	int ctl, n, m;
 	char buf[NETPATHLEN];
-	char lbuf[NETPATHLEN+8];
+	char lbuf[NETPATHLEN+8];	/* Flawfinder: ignore — written only by snprint(lbuf, sizeof lbuf) below */
 	char *cp;
 
 	/*
@@ -327,7 +327,7 @@ klisten(char *dir, char *newdir)
 	 * opens). It is a conversation's directory and is no longer
 	 * than one, and has a slash in it.
 	 */
-	if(strlen(dir) >= sizeof(buf) || strrchr(dir, '/') == nil){
+	if(strlen(dir) >= sizeof(buf) || strrchr(dir, '/') == nil){	/* Flawfinder: ignore — dir is a C string made by the caller (string2c) */
 		kwerrstr("bad network directory: %.60s", dir);
 		return -1;
 	}

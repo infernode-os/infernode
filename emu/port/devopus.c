@@ -258,7 +258,7 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 		 * as they came. (strncmp: memcmp read past a short command.)
 		 */
 		qlock(&opus_state.l);
-		if(strncmp(cmd, "rate ", 5) == 0 && (v = atoi(cmd+5)) > 0) {
+		if(strncmp(cmd, "rate ", 5) == 0 && (v = atoi(cmd+5)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
 			if(v != 8000 && v != 12000 && v != 16000 && v != 24000 && v != 48000){
 				qunlock(&opus_state.l);
 				free(cmd);
@@ -273,7 +273,7 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 				opus_decoder_destroy(opus_state.dec);
 				opus_state.dec = nil;
 			}
-		} else if(strncmp(cmd, "chans ", 6) == 0 && (v = atoi(cmd+6)) > 0) {
+		} else if(strncmp(cmd, "chans ", 6) == 0 && (v = atoi(cmd+6)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
 			if(v != 1 && v != 2){
 				qunlock(&opus_state.l);
 				free(cmd);
@@ -288,7 +288,7 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 				opus_decoder_destroy(opus_state.dec);
 				opus_state.dec = nil;
 			}
-		} else if(strncmp(cmd, "frame_ms ", 9) == 0 && (v = atoi(cmd+9)) > 0) {
+		} else if(strncmp(cmd, "frame_ms ", 9) == 0 && (v = atoi(cmd+9)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
 			if(v != 5 && v != 10 && v != 20 && v != 40 && v != 60){
 				qunlock(&opus_state.l);
 				free(cmd);
@@ -296,7 +296,7 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 			}
 			opus_state.frame_ms = v;
 			opus_state.enc_pcm_len = 0;	/* what was gathered was for the old length */
-		} else if(strncmp(cmd, "bitrate ", 8) == 0 && (v = atoi(cmd+8)) > 0) {
+		} else if(strncmp(cmd, "bitrate ", 8) == 0 && (v = atoi(cmd+8)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
 			if(v < 500 || v > 512000){
 				qunlock(&opus_state.l);
 				free(cmd);

@@ -160,7 +160,7 @@ handler(char *estr)
 found:
 	{
 		int n;
-		char name[3*KNAMELEN], *nex;
+		char name[3*KNAMELEN], *nex;	/* Flawfinder: ignore — filled by modstatus, which is given sizeof(name) */
 
 		pc = modstatus(&R, name, sizeof(name));
 		/*
@@ -170,7 +170,7 @@ found:
 		 * (/prog/n/exception gave "plain " for "plain text").
 		 * And a failed realloc does not lose the old text's block.
 		 */
-		n = 20+1+strlen(name)+1+strlen(estr)+1;
+		n = 20+1+strlen(name)+1+strlen(estr)+1;	/* Flawfinder: ignore — name is terminated by modstatus, estr is the exception's C string */
 		nex = realloc(p->exstr, n);
 		if(nex != nil){
 			p->exstr = nex;

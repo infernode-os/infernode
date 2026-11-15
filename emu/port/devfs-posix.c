@@ -133,7 +133,7 @@ fsattrfd(Chan *c, struct stat *expected)
 	return -1;
 #else
 	nm = fsname(c);
-	fd = open(nm->s, O_RDONLY|O_NONBLOCK|O_NOFOLLOW);
+	fd = open(nm->s, O_RDONLY|O_NONBLOCK|O_NOFOLLOW);	/* Flawfinder: ignore — O_NOFOLLOW, and the device and inode are checked against the walk's stat below */
 	oerrno = errno;
 	cnameclose(nm);
 	errno = oerrno;
@@ -1013,7 +1013,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 			}
 			if(de->d_ino==0 || de->d_name[0]==0 || isdots(de->d_name))
 				continue;
-			strecpy(ep, end, de->d_name);
+			strecpy(ep, end, de->d_name);	/* Flawfinder: ignore — strecpy stops at end, the end of path's allocation (fsdirpath) */
 			if(xstat(path, &st) < 0) {
 				if(errno != ENOENT)
 					fprint(2, "dir: bad path %s\n", path);
@@ -1064,7 +1064,7 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 		if(de->d_ino==0 || de->d_name[0]==0 || isdots(de->d_name))
 			continue;
 
-		strecpy(ep, end, de->d_name);
+		strecpy(ep, end, de->d_name);	/* Flawfinder: ignore — as above: bounded by end */
 		/*
 		 * An entry gone between readdir and here (removed, or its
 		 * directory renamed) is no fault: nothing is said of it.

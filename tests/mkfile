@@ -311,6 +311,8 @@ TARG=\
 	veltro_security_test.dis\
 	veltro_store_test.dis\
 	veltro_child_test.dis\
+	subagent_edge_test.dis\
+	subagent_tool.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
 	veltro_edit_test.dis\
@@ -603,6 +605,13 @@ tooluse_test.dis: tooluse_test.b $ROOT/module/agentlib.m
 # tooldoc_test needs -I for appl/veltro (tool.m)
 tooldoc_test.dis: tooldoc_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tooldoc_test.b
+
+# subagent_edge_test and its tool need -I for appl/veltro/{subagent,tool}.m
+subagent_edge_test.dis: subagent_edge_test.b $ROOT/appl/veltro/subagent.m $ROOT/appl/veltro/tool.m
+	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw subagent_edge_test.b
+
+subagent_tool.dis: subagent_tool.b $ROOT/appl/veltro/tool.m
+	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw subagent_tool.b
 
 # tool_schema_test (INFR-126) needs -I for appl/veltro/{agentlib,tool}.m
 tool_schema_test.dis: tool_schema_test.b $ROOT/module/agentlib.m $ROOT/appl/veltro/tool.m

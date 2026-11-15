@@ -342,6 +342,29 @@ The child starts a fresh process group and environment, forks the already
 restricted parent namespace, narrows tools and paths again, prunes descriptors,
 then applies `NODEVS`. It cannot recover authority absent from the parent.
 
+The name space it forks is the spawn tool's own call's, which holds more than
+the agent was granted: the tools of the delegation budget, the model service,
+the audit sink. `restrictchildns()` therefore differs from `restrictns()` in
+three ways. The child's `/tool` is not its parent's tool server (which runs
+every call with the parent's grants and keeps each tool's last result) but a
+read-only directory of the child's own: `tools`, `paths` (its grants, each
+`ro`), `activity`, `meta/audit`. It may not be granted `/mnt/llm` or anything
+beneath it. And the install's audit switch, which cannot be seen from there,
+is the caller's word. The spawn tool, for its part, grants a child a path only
+inside a grant the agent itself holds (a line of `/tool/paths`), and refuses
+the agent's own services (`/mnt/llm`, `/mnt/audit`, `/mnt/ui`, `/mnt/veltro`,
+the tool server) whatever the grants say.
+
+A child calls its tools as loaded modules, so the coordinator, which asks the
+user before its own agent's call of `sms`, `dial` or `task promote` runs,
+never sees a child's call. A child is therefore given none of `sms`, `dial`
+and `task`, whatever the delegation budget holds: spawn refuses the request
+and `restrictchildns()` refuses the capabilities.
+
+A child has one name space for all its tools. One that can run commands
+(`exec`, `shell`, `shellcmds`) is not given the UI's files even when it also
+holds a UI tool; the tool then reports that the UI is not there.
+
 ## Entry Point Details
 
 ### tools9p Per-Invocation Restriction
@@ -425,11 +448,13 @@ else typed while one waits is its answer, and only `Allow` allows.
 The child process applies the full isolation sequence:
 
 ```
-1. pctl(NEWPGRP)         -- Fresh process group (empty srv registry)
+0. (parent) open the child's model session and its ask and tools files
+1. pctl(NEWPGRP)         -- Its own process group; the parent opens its ctl
+                            file, and only then lets it go on
 2. pctl(FORKNS)          -- Fork parent's restricted namespace
 3. pctl(NEWENV)          -- Empty environment (NOT FORKENV!)
-4. Open LLM FDs          -- While /mnt/llm still accessible from parent
-5. restrictns(caps)      -- Further bind-replace restrictions
+5. restrictchildns(caps) -- Further bind-replace restrictions; no tool
+                            server, no model service
 6. verifysafefds()       -- Redirect FDs 0-2 to /dev/null if nil
 7. pctl(NEWFD, keepfds)  -- Prune all other FDs (llm ask, log, pipe, provenance store)
 8. pctl(NODEVS)          -- Block #U/#p/#c device naming
@@ -439,10 +464,26 @@ The child process applies the full isolation sequence:
 10. subagent->runloop()  -- Execute task with pre-loaded tool modules
 ```
 
-When the install audits (`/mnt/audit/log` present), spawn auto-grants that
-append-only path into every child's caps; `auditcontrolpath` keeps
-`/mnt/audit` itself, `chain`, and `ctl` ungrantable, so a child can append
-to its own trail but can never read or rewrite history (AU-9 by placement).
+A child's life is its parent's to end, and the parent ends it: when it has
+answered, at its timeout, or, for one scheduled with `at=` or `every=`, when
+the tool server that started it has gone (a keeper process of the call asks
+every few seconds). Ending it kills its process group and every group made
+below it (`killtree`) and closes its model session. At most eight are
+scheduled at once, and the call's result names each one's process group.
+tools9p keeps the directories a spawn call's name space is built on until the
+last process of the call's group has gone, so a scheduled child's name space
+lasts as long as it does.
+
+When the install audits (`/mnt/audit/log` present), tools9p binds that
+append-only file into the spawn tool's call and spawn grants it to every
+child; `auditcontrolpath` keeps `/mnt/audit` itself, `chain`, and `ctl`
+ungrantable, so a child can append to its own trail but can never read or
+rewrite history (AU-9 by placement). Whether auditing is required
+(`Audit->ONFILE`) is tools9p's word, at `/tool/meta/audit`: a tool call's name
+space has no `/usr` to look in. Where it is required, a spawn whose records
+cannot be written (no sink, no content store) starts nothing, and a child
+whose own restriction or trajectory cannot be recorded is refused or stopped.
+
 What it appends cannot harm the trail either: `auditfs` puts every record in
 one canonical text before hashing it (controls and line breaks are blanks,
 one write is one bounded record), so neither a writer nor text sealed on a
@@ -476,13 +517,14 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | No ambient host filesystem | `/n/local` is absent unless exactly granted; `#U` attachment is blocked by `NODEVS` at every execution boundary |
 | No project file exposure | Root restriction hides `.env`, `.git`, `CLAUDE.md`, source tree |
 | No env secrets | Every tool worker and spawned child uses `NEWENV`; workers copy only `VELTRO_SESSION`, then `/env` is allowlisted |
-| No ambient child FDs | Spawn uses `NEWFD`; exec runs its command from a descriptor group of the call's own: 0 is `/dev/null`, 1 and 2 the call's pipe, and the private wait FD the only other. Nothing of the group all tool calls share is kept |
+| No ambient child FDs | Each tool call has a descriptor table of its own (`NEWFD`, `/dev/null` as input); spawn uses `NEWFD`; exec runs its command from a descriptor group of the call's own: 0 is `/dev/null`, 1 and 2 the call's pipe, and the private wait FD the only other. Nothing of the group all tool calls share is kept |
+| Bounded subagent life | A child is ended, with all it started, by its parent: at its answer, its timeout, or the tool server's end |
 | Safe FD 0-2 | `verifysafefds()` redirects nil FDs to `/dev/null` |
 | Empty srv registry | NEWPGRP first (child) |
-| Truthful namespace | bind-replace shows only allowed items; `MREADONLY` enforces paths reported read-only |
+| Truthful namespace | bind-replace shows only allowed items; `MREADONLY` enforces paths reported read-only, and `/tool/paths` lists a service under `/mnt`, which is not bound read-only, as `rw` |
 | Capability attenuation | Child forks restricted parent, can only narrow |
 | Bounded process visibility | `/prog` is self-only for non-exec tools and empty for exec, with or without `shellcmds` |
-| Shadow cleanup | tools9p reclaims per-call physical shadows and sweeps crash leftovers at startup |
+| Shadow cleanup | tools9p reclaims per-call physical shadows (a spawn call's when the last process of its group has gone) and sweeps crash leftovers at startup |
 | Auditable construction | `restrictns()` pre-opens only the write-only audit append FD, `emitauditlog()` seals the completed restriction through it, then closes it before tool execution; the audit tree never enters the tool namespace |
 | No cross-window access | `/chan` hidden unless `caps.xenith` is set; REPL opens FDs before restriction |
 | exec grants sh.dis only | `sh.dis` bound when `exec` is in caps.tools; named commands require `shellcmds` |
@@ -632,7 +674,7 @@ Spawn -- tools=exec shellcmds=cat,ls :: inspect only with the named commands
 
 Options:
 - `tools=<csv>` -- tools to grant (required)
-- `paths=<csv>` -- host filesystem paths to expose (optional)
+- `paths=<csv>` -- paths to expose, each inside a grant the agent itself holds (optional)
 - `shellcmds=<csv>` -- shell commands to allow (grants sh.dis + named cmds)
 - `agenttype=<type>` -- agent prompt: default, explore, plan, task
 - `model=<name>` -- LLM model (default: the llmsrv backend default)

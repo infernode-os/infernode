@@ -99,6 +99,7 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	png_hostile_test.dis\
 	icon_test.dis\
 	touchgest_test.dis\
 	docengine_test.dis\
@@ -481,6 +482,8 @@ SYSMODULES=\
 	sdrdsp.m\
 	mermaid.m\
 	mdhtml.m\
+	crc.m\
+	pngload.m\
 
 DISBIN=$ROOT/dis/tests
 

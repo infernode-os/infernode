@@ -24,9 +24,9 @@ main(void)
 
 	print("#include \"raise.h\"\n\n");
 	print("/*\n * v(v(reg)): the first is a pointer and may be nil.  (See dec.c.)\n */\n");
-	print("static uchar*\ndind(uchar *p, int o)\n{\n");
-	print("\tif((uintptr)p + 1 <= 64*1024){\n\t\tR.PC++;\n\t\terror(exNilref);\n\t}\n\treturn p + o;\n}\n\n");
-	print("#define DIND(reg, xxx) dind(*(uchar**)(R.reg+R.PC->xxx.i.f), R.PC->xxx.i.s)\n");
+	print("static uchar*\ndind(uchar *p, int o, Inst **pc)\n{\n");
+	print("\tif((uintptr)p + 1 <= 64*1024){\n\t\t(*pc)++;\n\t\terror(exNilref);\n\t}\n\treturn p + o;\n}\n\n");
+	print("#define DIND(reg, xxx) dind(*(uchar**)(R.reg+R.PC->xxx.i.f), R.PC->xxx.i.s, &R.PC)\n");
 
 	for(i = 0; i < 256; i++)
 		decgen(i);

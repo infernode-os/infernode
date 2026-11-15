@@ -16,20 +16,20 @@
  * the fault.)
  */
 static uchar*
-dind(uchar *p, int o)
+dind(uchar *p, int o, Inst **pc)
 {
 	if((uintptr)p + 1 <= 64*1024){
 		/*
 		 * as raised from the instruction itself, which runs with
 		 * R.PC past it: the handler search looks one back
 		 */
-		R.PC++;
+		(*pc)++;
 		error(exNilref);
 	}
 	return p + o;
 }
 
-#define DIND(reg, xxx) dind(*(uchar**)(R.reg+R.PC->xxx.i.f), R.PC->xxx.i.s)
+#define DIND(reg, xxx) dind(*(uchar**)(R.reg+R.PC->xxx.i.f), R.PC->xxx.i.s, &R.PC)
 static void
 D00(OPARGS)
 {

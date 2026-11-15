@@ -65,6 +65,7 @@ enum
 		Itxcomp	= 1<<7,
 	Ier		= 0x028,
 	Idr		= 0x02C,
+	Imr		= 0x030,	/* the mask: reading Isr would clear it */
 	Intmod		= 0x05C,	/* in 800ns: 40us on the receive side */
 	Man		= 0x034,
 	Hrb		= 0x080,
@@ -140,6 +141,7 @@ struct Ctlr
 	ulong	nmdiotimeout;
 	ulong	nkick;		/* transmitter found idle with a frame of ours: TSTART again */
 	ulong	nirqkick;	/* the same, from the interrupt that says it stopped */
+	ulong	ntxfull;	/* sendproc found every descriptor the MAC's */
 };
 
 static int
@@ -205,6 +207,15 @@ txready(void *arg)
  * TSTART that came with that frame: start it again, now, rather than
  * when sendproc or linkproc next looks (txkick, below). This is Linux
  * macb's macb_tx_restart.
+ *
+ * Whether there is a frame to send is the descriptor's to say, not
+ * where the MAC is: with every descriptor given to it, the oldest, where
+ * it stopped, is also the one sendproc fills next, so the MAC at txhead
+ * is a full ring as well as an empty one. Taking it for empty left every
+ * stop with the ring full to sendproc's 100 ms wait; with a backlog the
+ * ring was full at every stop after, and a Pi 5 sent a few frames a
+ * second until it was restarted (2026-11-15). Linux never fills its
+ * ring, so its test of the head is not ambiguous.
  */
 static void
 txrestart(Ctlr *ctlr)
@@ -214,7 +225,7 @@ txrestart(Ctlr *ctlr)
 	if(GEM(Tsr) & Tgo)
 		return;
 	i = (GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc);
-	if(i < 0 || i >= Ntx || i == ctlr->txhead)
+	if(i < 0 || i >= Ntx)
 		return;
 	coherence();
 	if(ctlr->tx[i].ctrl & Txused)
@@ -340,6 +351,8 @@ sendproc(void *arg)
 			continue;
 		}
 		d = &ctlr->tx[ctlr->txhead];
+		if((d->ctrl & Txused) == 0)
+			ctlr->ntxfull++;
 		while((d->ctrl & Txused) == 0){		/* the ring is full */
 			coherence();
 			tsleep(&ctlr->tr, txready, (void*)d, 100);
@@ -611,18 +624,24 @@ ifstat(Ether *edev, void *a, long n, ulong off)
 {
 	Ctlr *ctlr;
 	char *p;
+	int i, busy;
 
 	ctlr = edev->ctlr;
+	/* the descriptors the MAC has now; not Isr, which a read clears */
+	busy = 0;
+	for(i = 0; i < Ntx; i++)
+		if((ctlr->tx[i].ctrl & Txused) == 0)
+			busy++;
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
 	snprint(p, READSTR, "rp1 gem mid %#ux\nintr %lud rx %lud rxbad %lud tx %lud mdiotimeout %lud rxtail %d txhead %d\n"
-		"txkick %lud txirqkick %lud tbqp %d\n"
-		"tsr %#ux rsr %#ux isr %#ux ncfgr %#ux dmacfg %#ux\n"
+		"txkick %lud txirqkick %lud txfull %lud txbusy %d tbqp %d\n"
+		"tsr %#ux rsr %#ux imr %#ux ncfgr %#ux dmacfg %#ux\n"
 		"mac txframes %ud txunder %ud rxframes %ud rxfcs %ud rxalign %ud rxover %ud rxres %ud\n",
 		GEM(Mid), ctlr->nintr, ctlr->nrx, ctlr->nrxbad, ctlr->ntx, ctlr->nmdiotimeout, ctlr->rxtail, ctlr->txhead,
-		ctlr->nkick, ctlr->nirqkick, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)),
-		GEM(Tsr), GEM(0x20), GEM(0x24), GEM(Ncfgr), GEM(Dmacfg),
+		ctlr->nkick, ctlr->nirqkick, ctlr->ntxfull, busy, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)),
+		GEM(Tsr), GEM(0x20), GEM(Imr), GEM(Ncfgr), GEM(Dmacfg),
 		GEM(0x108), GEM(0x134), GEM(0x158), GEM(0x190), GEM(0x194), GEM(0x1A4), GEM(0x1A0));
 	n = readstr(off, a, n, p);
 	free(p);

@@ -46,6 +46,12 @@
 #                timerintr() arms its deadline, not after; every overdue
 #                tick is counted. Each ARM board lost 2.6 to 4.5 s an
 #                hour (2026-11-13).
+#   tx full      the Pi 5's Ethernet restart from the interrupt asks the
+#                descriptor whether there is a frame to send, not whether
+#                the MAC is at txhead: with all 64 given, the MAC at
+#                txhead is a full ring, and every stop waited for the
+#                100 ms backstop; with a backlog the ring stayed full and
+#                the board sent a few frames a second (2026-11-15).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -118,5 +124,9 @@ if echo "$sec" | grep -q 'todget' && ! grep -q 'boottime' os/port/devcons.c; the
 else no "seconds() is not todget()'s: the time of day loses every missed tick"; fi
 if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
 else no "timerintr runs hzclock once however many ticks were due"; fi
+
+rs=$(sed -n '/^txrestart(Ctlr \*ctlr)/,/^}/p' os/bcm2712/etherrp1.c)
+if echo "$rs" | grep -q 'ctrl & Txused' && ! echo "$rs" | grep -q 'txhead'; then ok "the RP1 transmitter is restarted from the interrupt with the ring full too"
+else no "etherrp1.c txrestart takes the MAC at txhead for an empty ring (a full one is the same): ask the descriptor"; fi
 
 exit $fail

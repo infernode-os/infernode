@@ -375,14 +375,14 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "tools9p: no valid tools specified\n");
 		raise "fail:no tools";
 	}
-	# Clean shadow dirs left by previous session (crash or kill).
-	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
+	# Shadow dirs left by a previous session (crash or kill) are swept by
+	# shadowcleanloop when it starts; the current session's are cleaned
+	# per invocation by the same proc.
 	cleanupchan = chan[32] of ref Reclaim;
 	taskcreatelock = chan[1] of int;
 	manifestgate = chan[1] of int;
 	evpostc = chan[4] of string;
 	answerc = chan[64] of ref Callanswer;
-	cleanshadows();
 	spawn shadowcleanloop();
 
 	# Write agent name file so the UI can display it.
@@ -1676,6 +1676,11 @@ shadowowneralive(name: string): int
 # reach SHADOW_BASE regardless of what child goroutines have restricted.
 shadowcleanloop()
 {
+	# The sweep of an earlier session's leftovers, here and not before
+	# the server is mounted: it looks at every directory left, and with
+	# thousands of them (a test suite's, say) the server was seconds
+	# late, and whoever started it and then used it found no /tool.
+	cleanshadows();
 	for(;;) {
 		r := <-cleanupchan;
 		if(r == nil)

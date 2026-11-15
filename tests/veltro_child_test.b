@@ -176,9 +176,34 @@ world(): string
 	return nil;
 }
 
+# What a worker left: its world, and what the builder made for it in the
+# trusted tree (its shadows, its scratch, its manifest).  The worker has
+# gone, and its name space with it, so these are plain directories of
+# placeholders.  Nothing reclaims them here as tools9p does for its
+# calls, and each one left slows the next tools9p's start.
 unworld(pid: int)
 {
 	rmrf(sys->sprint("/tmp/vct.%d", pid));
+	prefix := sys->sprint("%d-", pid);
+	for(dl := "/tmp/.veltro-ns/shadow" :: "/tmp/.veltro-ns/tool" :: "/tmp/.veltro-ns/ui" :: nil; dl != nil; dl = tl dl) {
+		names: list of string;
+		fd := sys->open(hd dl, Sys->OREAD);
+		if(fd == nil)
+			continue;
+		for(;;) {
+			(n, d) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++)
+				if(len d[i].name > len prefix && d[i].name[0:len prefix] == prefix)
+					names = d[i].name :: names;
+		}
+		fd = nil;
+		for(; names != nil; names = tl names)
+			rmrf(hd dl + "/" + hd names);
+	}
+	rmrf(sys->sprint("/tmp/veltro/scratch/%d", pid));
+	sys->remove(sys->sprint("/tmp/.veltro-ns/audit/%d.ns", pid));
 }
 
 # Each check runs in a process with a name space of its own and says ""
@@ -401,11 +426,11 @@ testManifestKept(t: ref T)
 	spawn manifestkept(r);
 	(pid, e) := <-r;
 	log := get(sys->sprint("/tmp/vct.%d/mnt/audit/log", pid));
-	unworld(pid);
 	if(e != "")
 		t.error(e);
 	old := sys->sprint("/tmp/.veltro-ns/audit/%d.ns", pid);
 	t.assertseq(get(old), "EARLIER", "the manifest an earlier record names");
+	unworld(pid);
 	t.assert(has(log, sys->sprint("manifest=%d.", pid)) && !has(log, sys->sprint("manifest=%d.ns", pid)),
 		"the new record names a manifest of its own: " + log);
 	sys->remove(old);
@@ -482,7 +507,8 @@ inplain(t: ref T, f: ref fn(r: chan of (int, string)))
 {
 	r := chan of (int, string);
 	spawn f(r);
-	(nil, e) := <-r;
+	(pid, e) := <-r;
+	unworld(pid);
 	if(e != "")
 		t.error(e);
 }
@@ -524,7 +550,8 @@ expect(t: ref T, ok: int, c: ref NsConstruct->Capabilities, what: string)
 		spawn accepted(r, c, what);
 	else
 		spawn refused(r, c, what);
-	(nil, e) := <-r;
+	(pid, e) := <-r;
+	unworld(pid);
 	if(e != "")
 		t.error(e);
 }
@@ -661,11 +688,13 @@ testStoresPerActivity(t: ref T)
 	put("/tmp/veltro/plans/loose", "loose");
 	r := chan of (int, string);
 	spawn storeview(r, "memory");
-	(nil, e) := <-r;
+	(wpid, e) := <-r;
+	unworld(wpid);
 	if(e != "")
 		t.error(e);
 	spawn storeview(r, "plan");
-	(nil, e) = <-r;
+	(wpid, e) = <-r;
+	unworld(wpid);
 	if(e != "")
 		t.error(e);
 	inplain(t, storefresh);
@@ -945,7 +974,7 @@ testExecManifestHasNamespace(t: ref T)
 	m := get(sys->sprint("/tmp/.veltro-ns/audit/%d.ns", pid));
 	t.assert(has(m, "tools=exec"), "exec's restriction has a manifest");
 	t.assert(has(m, "# Current namespace:"), "exec's manifest has the name space in it");
-	sys->remove(sys->sprint("/tmp/.veltro-ns/audit/%d.ns", pid));
+	unworld(pid);
 }
 
 progview(r: chan of (int, string), tools: list of string)
@@ -984,13 +1013,16 @@ testProgForSpawnAlone(t: ref T)
 {
 	r := chan of (int, string);
 	spawn progview(r, "spawn" :: "read" :: nil);
-	(nil, e) := <-r;
+	(wpid, e) := <-r;
+	unworld(wpid);
 	t.assertseq(e, "whole", "the spawn tool's worker's /prog");
 	spawn progview(r, "read" :: nil);
-	(nil, e) = <-r;
+	(wpid, e) = <-r;
+	unworld(wpid);
 	t.assertseq(e, "self only", "another tool's /prog");
 	spawn childprog(r);
-	(nil, e) = <-r;
+	(wpid, e) = <-r;
+	unworld(wpid);
 	t.assertseq(e, "self only", "a subagent's /prog");
 }
 

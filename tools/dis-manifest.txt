@@ -1236,6 +1236,8 @@ dis/tests/load_heapfull.dis
 dis/tests/load_heapfull_mod.dis
 dis/tests/lock_stress_test.dis
 dis/tests/math_edge_test.dis
+dis/tests/namec_clone_test.dis
+dis/tests/nil_far_test.dis
 dis/tests/plan_test.dis
 dis/tests/print_edge_test.dis
 dis/tests/print_heapfull.dis

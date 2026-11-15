@@ -1126,7 +1126,13 @@ progread(Chan *c, void *va, long n, vlong offset)
 		if(p->exstr == nil)
 			up->genbuf[0] = 0;
 		else
-			snprint(up->genbuf, sizeof(up->genbuf), p->exstr);
+			/*
+			 * as text, not as a format: it is what the program
+			 * raised ("%lux%lux" read the kernel's stack back
+			 * to it; "%s" and "%n" followed and wrote through
+			 * whatever was there)
+			 */
+			snprint(up->genbuf, sizeof(up->genbuf), "%s", p->exstr);
 		release();
 		return readstr(offset, va, n, up->genbuf);
 	}

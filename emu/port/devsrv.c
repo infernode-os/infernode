@@ -200,16 +200,34 @@ srvwalk(Chan *c, Chan *nc, char **name, int nname)
 
 	w = devwalk(c, nc, name, nname, nil, 0, srvgen);
 	if(w != nil && w->clone != nil){
-		if(nname != 0){
+		if(nname != 0 && w->clone->qid.path != pd->qid.path){
 			for(d = pd->entry; d != nil; d = d->entry)
 				if(d->qid.path == w->clone->qid.path)
 					break;
-			if(d == nil)
-				panic("srvwalk");
+			if(d == nil){
+				/* not to be: srvgen made the qid from this list, under this lock */
+				if(w->clone != c){
+					w->clone->aux = pd;
+					pd->ref++;
+					cclose(w->clone);
+				}
+				free(w);
+				error(Enonexist);
+			}
 			if(w->clone == c)
 				pd->ref--;
-		}else
+		}else{
+			/*
+			 * the directory itself: no names, or a walk to "..",
+			 * which srvgen answers with the directory. That was
+			 * looked for among the directory's files, not found,
+			 * and a panic: stat("#s/..") from any program, #s
+			 * being a device it keeps after NODEVS.
+			 */
 			d = pd;
+			if(nname != 0 && w->clone == c)
+				pd->ref--;
+		}
 		w->clone->aux = d;
 		d->ref++;
 	}
@@ -547,6 +565,16 @@ delwaiting(Pending *w)
 {
 	w->next->prev = w->prev;
 	w->prev->next = w->next;
+	/*
+	 * Left pointing at itself, so that taking it off again changes
+	 * nothing. srvcancelreqs takes each waiter off the list and wakes
+	 * it, and the waiter takes itself off on its way out: with its
+	 * links as they were, that second time stored through them, into
+	 * a neighbour that had since gone, a Pending on its own process's
+	 * stack.
+	 */
+	w->next = w;
+	w->prev = w;
 }
 
 static long

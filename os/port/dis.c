@@ -1077,8 +1077,11 @@ addgrp(Prog *n, Prog *p)
  * A read of /prog/n/grpwait waits for n's process group, as it was when
  * the file was opened, to have no Prog left: delgrp posts to each such
  * reader's queue as it frees the group (a group is freed with its last
- * Prog, and group ids are pids, never reused).  The list is changed and
- * walked with the interpreter held.
+ * Prog, and group ids are pids, never reused).  The list is one for the
+ * machine and has a lock of its own: it was changed and walked "with the
+ * interpreter held", but there are several interpreters (vm(1)): a reader
+ * adds under the Prog's and removes under its own, and a group goes under
+ * its Prog's. Two at once lost an entry, or walked one being freed.
  */
 typedef struct Grpwait Grpwait;
 struct Grpwait
@@ -1088,6 +1091,7 @@ struct Grpwait
 	Grpwait*	next;
 };
 static Grpwait *grpwaits;
+static Lock grpwaitl;
 
 void
 grpwaitadd(int gid, Queue *q)
@@ -1099,21 +1103,31 @@ grpwaitadd(int gid, Queue *q)
 		error(Enomem);
 	w->gid = gid;
 	w->q = q;
+	lock(&grpwaitl);
 	w->next = grpwaits;
 	grpwaits = w;
+	unlock(&grpwaitl);
 }
 
 void
 grpwaitdel(Queue *q)
 {
-	Grpwait **l, *w;
+	Grpwait **l, *w, *gone;
 
+	gone = nil;
+	lock(&grpwaitl);
 	for(l = &grpwaits; (w = *l) != nil; ){
 		if(w->q == q){
 			*l = w->next;
-			free(w);
+			w->next = gone;
+			gone = w;
 		}else
 			l = &w->next;
+	}
+	unlock(&grpwaitl);
+	while((w = gone) != nil){
+		gone = w->next;
+		free(w);
 	}
 }
 
@@ -1125,9 +1139,11 @@ grpgone(int gid)
 	int n;
 
 	n = snprint(buf, sizeof(buf), "%d", gid);
+	lock(&grpwaitl);
 	for(w = grpwaits; w != nil; w = w->next)
 		if(w->gid == gid)
 			qproduce(w->q, buf, n);
+	unlock(&grpwaitl);
 }
 
 static Progs*

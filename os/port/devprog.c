@@ -204,7 +204,7 @@ extern	Type	*Trdchan;
 extern	Type	*Twrchan;
 static  char 	Emisalign[] = "misaligned address";
 
-static /*
+/*
  * A Prog is touched only under its own VM's interpreter (#944): its
  * VM may be running it, or freeing it, on another core. So devprog
  * takes the VM of the Prog it is asked about, and gives the caller's
@@ -932,7 +932,12 @@ modstatus(REG *r, char *ptr, int len)
 			return (WORD)f->lr;
 		return f->lr - f->mr->prog;
 	}
-	memmove(ptr, r->M->m->name, len);
+	/*
+	 * the name, ended: len bytes were copied whatever the name's
+	 * length, a short one read past its block and a long one left
+	 * the buffer without an end
+	 */
+	snprint(ptr, len, "%s", r->M->m->name);
 	if(r->M->compiled)
 		return (WORD)r->PC;
 	PC = r->PC;
@@ -1160,7 +1165,13 @@ progread(Chan *c, void *va, long n, vlong offset)
 		if(p->exstr == nil)
 			up->genbuf[0] = 0;
 		else
-			snprint(up->genbuf, sizeof(up->genbuf), p->exstr);
+			/*
+			 * as text, not as a format: it is what the program
+			 * raised ("%lux%lux" read the kernel's stack back
+			 * to it; "%s" and "%n" followed and wrote through
+			 * whatever was there)
+			 */
+			snprint(up->genbuf, sizeof(up->genbuf), "%s", p->exstr);
 		prelease();
 		return readstr(offset, va, n, up->genbuf);
 	}

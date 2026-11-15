@@ -160,13 +160,22 @@ handler(char *estr)
 found:
 	{
 		int n;
-		char name[3*KNAMELEN];
+		char name[3*KNAMELEN], *nex;
 
 		pc = modstatus(&R, name, sizeof(name));
-		n = 10+1+strlen(name)+1+strlen(estr)+1;
-		p->exstr = realloc(p->exstr, n);
-		if(p->exstr != nil)
+		/*
+		 * 20 digits: a pc is a ulong, and in a compiled module an
+		 * address. Room was left for 10, as a 32-bit one has, and
+		 * the end of the exception's text was cut off to make up
+		 * (/prog/n/exception gave "plain " for "plain text").
+		 * And a failed realloc does not lose the old text's block.
+		 */
+		n = 20+1+strlen(name)+1+strlen(estr)+1;
+		nex = realloc(p->exstr, n);
+		if(nex != nil){
+			p->exstr = nex;
 			snprint(p->exstr, n, "%lud %s %s", pc, name, estr);
+		}
 	}
 
 	/*

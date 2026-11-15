@@ -894,6 +894,7 @@ dis/tests/png_hostile_test.dis
 dis/tests/devaudio_read_test.dis
 dis/tests/devfs_longpath_test.dis
 dis/tests/devip_conv_test.dis
+dis/tests/devsrv_devprog_edge_test.dis
 dis/tests/dial_edge_test.dis
 dis/tests/nsunion_race_test.dis
 dis/tests/spawn_budget_test.dis

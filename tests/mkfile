@@ -103,6 +103,7 @@ TARG=\
 	devaudio_read_test.dis\
 	devfs_longpath_test.dis\
 	devip_conv_test.dis\
+	devsrv_devprog_edge_test.dis\
 	dial_edge_test.dis\
 	nsunion_race_test.dis\
 	icon_test.dis\

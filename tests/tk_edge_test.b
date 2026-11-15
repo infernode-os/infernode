@@ -532,11 +532,15 @@ nimages(): int
 	fd := sys->open("/dev/heaptypes", Sys->OREAD);
 	if(fd == nil)
 		return -1;
+	# all of it: the listing has a line for every type in the heap, and
+	# in a long-running emulator Image's is far past the first read
+	text := "";
 	buf := array[16384] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		text += string buf[0:n];
+	if(text == "")
 		return -1;
-	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	(nil, lines) := sys->tokenize(text, "\n");
 	for(; lines != nil; lines = tl lines){
 		(nf, f) := sys->tokenize(hd lines, " \t");
 		if(nf >= 2){

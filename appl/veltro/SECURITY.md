@@ -539,6 +539,12 @@ allow `task promote <id>` lists the staged changes (count, and up to twelve of
 them with their folder), read by activity 0's `lucibridge` from the task's
 overlays. The text the agent gave for the call names no file.
 
+Promotion is conservative in what it changes. A staged deletion removes one
+name: a file only if it is as it was when the task removed it, a directory only
+if it is empty (a task removes a directory after what was in it, each a line of
+`/diff`). A file whose base changed after the task first touched it is not
+overwritten; it is reported and stays staged.
+
 Xenith's Agent window (`appl/xenith/xenith/agent/Agent.b`) applies its own
 overlays and still reads the folder from `.cowmeta`. It relies on the first
 rule alone.

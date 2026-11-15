@@ -200,24 +200,22 @@ promote(basepath, overlaydir: string): (int, string)
 	count := 0;
 	conflicts: list of string;
 
-	# Apply whiteout deletes to base
+	# Apply whiteout deletes to base: one name each, a directory after
+	# what was in it.  A directory's whiteout used to be applied by
+	# removing the tree, whatever the user had put or changed in it since.
 	keptwh: list of string;
-	wh := loadwhiteouts(overlaydir);
-	for(; wh != nil; wh = tl wh) {
-		# Validate whiteout path — reject traversal attempts
-		(relpath, pathok) := cleanrelpath(hd wh);
-		if(!pathok)
+	for(wh := deepestfirst(loadwhiteouts(overlaydir)); wh != nil; wh = tl wh) {
+		relpath := hd wh;	# cleaned by loadwhiteouts
+		if(internalrel(relpath))
 			continue;
-		if(basechanged(basepath, overlaydir, relpath)) {
+		if(!applywhiteout(basepath, overlaydir, relpath)) {
 			conflicts = relpath :: conflicts;
-			keptwh = hd wh :: keptwh;
+			keptwh = relpath :: keptwh;
 			continue;
 		}
-		bpath := basepath + "/" + relpath;
-		# Remove from base (best-effort)
-		removefile(bpath);
 		count++;
 	}
+
 
 	# Copy overlay files to base
 	(n, err, wc) := promotewalk(basepath, overlaydir, "");
@@ -265,15 +263,12 @@ promotefile(basepath, overlaydir, relpath: string): string
 	if(relpath == "" || internalrel(relpath))
 		return "invalid path: not a staged file";
 
-	if(basechanged(basepath, overlaydir, relpath))
-		return "not applied, changed since the task's copy was made (still staged): " + relpath;
-
 	# Check if it's a whiteout (deletion)
 	wh := loadwhiteouts(overlaydir);
 	if(inlist(relpath, wh)) {
-		# Apply delete to base
-		bpath := basepath + "/" + relpath;
-		removefile(bpath);
+		# Apply delete to base: the one name
+		if(!applywhiteout(basepath, overlaydir, relpath))
+			return "not applied, changed since the task's copy was made (still staged): " + relpath;
 		# Remove from whiteout list
 		newwh: list of string;
 		for(; wh != nil; wh = tl wh)
@@ -283,6 +278,9 @@ promotefile(basepath, overlaydir, relpath: string): string
 		dropbase(overlaydir, relpath);
 		return nil;
 	}
+
+	if(basechanged(basepath, overlaydir, relpath))
+		return "not applied, changed since the task's copy was made (still staged): " + relpath;
 
 	# Copy overlay file to base
 	opath := overlaydir + "/" + relpath;
@@ -454,6 +452,32 @@ removewhiteout(state: ref SrvState, relpath: string)
 iswhiteout(state: ref SrvState, relpath: string): int
 {
 	return inlist(relpath, state.whiteouts);
+}
+
+# Deepest first, so that what was removed from a directory goes before it.
+deepestfirst(l: list of string): list of string
+{
+	a := array[len l] of string;
+	for(n := 0; l != nil; l = tl l)
+		a[n++] = hd l;
+	for(i := 1; i < n; i++) {
+		v := a[i];
+		for(j := i; j > 0 && depth(a[j-1]) < depth(v); j--)
+			a[j] = a[j-1];
+		a[j] = v;
+	}
+	for(i = n - 1; i >= 0; i--)
+		l = a[i] :: l;
+	return l;
+}
+
+depth(relpath: string): int
+{
+	d := 0;
+	for(i := 0; i < len relpath; i++)
+		if(relpath[i] == '/')
+			d++;
+	return d;
 }
 
 # --- QID / path management ---
@@ -880,6 +904,15 @@ Serve:
 				break;
 			}
 
+			# A directory goes when nothing is in it, as anywhere.  One
+			# with files only in the base was given a whiteout at once
+			# (the overlay had nothing to refuse the remove): one remove
+			# staged the deletion of the tree.
+			if(pe.isdir && mergedirents(state, pe.relpath) != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "directory not empty"));
+				break;
+			}
+
 			# Remove from overlay if present
 			opath := state.overlaydir + "/" + pe.relpath;
 			(inoverlay, nil) := sys->stat(opath);
@@ -1234,6 +1267,23 @@ copyfile(src, dst: string): string
 			return sys->sprint("write %s: %r", dst);
 	}
 	return nil;
+}
+
+# A staged deletion made in the base: the one name, not what is under it.
+# A file goes if it is as it was when the task removed it.  A directory
+# goes if it is empty: what was removed from it has gone before it, which
+# changed it, so what it was then says nothing; with anything in it now
+# (put there since, or a file whose removal was not applied) it stays.
+# 0: not applied.
+applywhiteout(basepath, overlaydir, relpath: string): int
+{
+	bpath := basepath + "/" + relpath;
+	(ok, d) := sys->stat(bpath);
+	if(ok < 0)
+		return 1;
+	if(!(d.mode & Sys->DMDIR) && basechanged(basepath, overlaydir, relpath))
+		return 0;
+	return sys->remove(bpath) >= 0;
 }
 
 removefile(path: string)

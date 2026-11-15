@@ -12,6 +12,10 @@ implement CowfsControlTest;
 # edit), wrote .whiteout (deletions of its choosing) and gave .cowmeta
 # another basepath, which the promoter took for the folder to write in.
 #
+# And a remove of a directory with files only in the base was answered at
+# once with a whiteout, which a promote applied by removing the tree, the
+# user's later changes in it too.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -316,6 +320,62 @@ testDotfileBelowRoot(t: ref T)
 	t.assertseq(readfile(basedir + "/sub/.cowmeta"), "a project's own file", "to the folder");
 }
 
+# A directory is removed when it is empty.
+testRemoveNonEmptyDir(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("rmdir");
+	mkdirp(basedir + "/d");
+	writefile(basedir + "/d/f1", "one");
+	writefile(basedir + "/d/f2", "two");
+	mkdirp(basedir + "/e");
+	writefile(basedir + "/e/g1", "one");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	t.assert(sys->remove(mntpoint + "/d") < 0, "a directory with files in it is not removed");
+	t.assert(exists(mntpoint + "/d/f1"), "its files are still there");
+	t.assert(!inlist("D d", cowfs->diff(overlaydir)), "no deletion of the tree is staged");
+
+	# Emptied first, it goes; each file is its own line of the diff.
+	t.asserteq(sys->remove(mntpoint + "/d/f1"), 0, "remove d/f1");
+	t.asserteq(sys->remove(mntpoint + "/d/f2"), 0, "remove d/f2");
+	t.asserteq(sys->remove(mntpoint + "/d"), 0, "the empty directory is removed");
+	t.asserteq(sys->remove(mntpoint + "/e/g1"), 0, "remove e/g1");
+	t.asserteq(sys->remove(mntpoint + "/e"), 0, "and e");
+	d := cowfs->diff(overlaydir);
+	t.assert(inlist("D d", d) && inlist("D d/f1", d) && inlist("D d/f2", d), "three deletions are staged for d");
+
+	# The user puts a file in d afterwards: it, and d, stay.  e goes with
+	# what was in it, though removing that changes e.
+	sys->sleep(1100);
+	writefile(basedir + "/d/new", "the user's, made since");
+	unmountcow(mntpoint);
+	(n, err) := cowfs->promote(basedir, overlaydir);
+	t.asserteq(n, 4, "d's two files, e's file and e are removed");
+	t.assert(err != nil && contains(err, "not applied"), "there is a conflict: " + err);
+	t.assert(err != nil && hassuffix(err, "(still staged): d"), "and it is d alone");
+	t.assert(!exists(basedir + "/d/f1") && !exists(basedir + "/d/f2"), "d's files are gone");
+	t.assert(!exists(basedir + "/e"), "e is gone");
+	t.assertseq(readfile(basedir + "/d/new"), "the user's, made since", "the user's file is kept");
+	t.assert(inlist("D d", cowfs->diff(overlaydir)), "the removal of d stays staged");
+}
+
+# A whiteout that names a directory with files in it (an overlay an
+# earlier cowfs left) removes no tree.
+testOldDirWhiteout(t: ref T)
+{
+	(basedir, overlaydir, nil) := setup("oldwh");
+	mkdirp(basedir + "/d");
+	writefile(basedir + "/d/f1", "one");
+	writefile(overlaydir + "/.whiteout", "d\n");
+
+	(n, err) := cowfs->promote(basedir, overlaydir);
+	t.asserteq(n, 0, "nothing is removed");
+	t.assert(err != nil && contains(err, "d"), "and it is said: " + err);
+	t.assertseq(readfile(basedir + "/d/f1"), "one", "the tree is whole");
+	t.assert(cowfs->promotefile(basedir, overlaydir, "d") != nil, "nor by promotefile");
+	t.assertseq(readfile(basedir + "/d/f1"), "one", "the tree is still whole");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -344,6 +404,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ConflictRecordKept", testConflictRecordKept);
 	run("NoForgedWhiteout", testNoForgedWhiteout);
 	run("DotfileBelowRoot", testDotfileBelowRoot);
+	run("RemoveNonEmptyDir", testRemoveNonEmptyDir);
+	run("OldDirWhiteout", testOldDirWhiteout);
 
 	removetree(TESTBASE);
 

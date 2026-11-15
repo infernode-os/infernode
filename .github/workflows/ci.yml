@@ -822,7 +822,7 @@ jobs:
               tools9p_basics_test tools9p_write_exec_view_test
               write_capability_test xenith_build_test werc_test charon_werc_test
               git_tool_test exec_fd_test limbo_tool_test lucibridge_promote_test lucibridge_turn_test
-              spawn_life_test spawn_provenance_test tools9p_call_test nsaudit_truth_test
+              spawn_life_test spawn_provenance_test tools9p_call_test nsaudit_truth_test default_budget_test
     permissions:
       contents: read
     env:

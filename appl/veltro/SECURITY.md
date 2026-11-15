@@ -563,6 +563,15 @@ started in, and it is kept by checking names, not by the name space:
   file system reads as `.git`: `parsetree` refuses the tree, so checkout,
   merge, the index and `/mnt/git` never join such a name to a directory.
 
+Because of that, `git` is **not in the default delegation budget**
+(`lib/lucifer/boot.sh`): a task agent cannot be given it unless the operator
+adds it (`budget-add git`). What it adds, removes, checks out or merges is
+written to the user's files directly, by no grant and through no copy-on-write
+overlay, so nothing of it waits for a promote. It goes back in the budget when
+its writes go through the call's grants and overlays and its push is a proposal
+the user approves. `tests/host/default_budget_test.sh` refuses a budget naming
+a tool whose manifest says its effects are outside the call's grants.
+
 `push` and `fetch` dial the remote named in `.git/config` from the worker,
 whatever `caps.network` says, and `push` sends the factotum key kept for that
 host. The tool's manifest says `dials_net`, so nsaudit's egress rules count an

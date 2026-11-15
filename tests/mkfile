@@ -191,6 +191,7 @@ TARG=\
 	lucifer_flicker_test.dis\
 	lucifer_zorder_test.dis\
 	mail9p_test.dis\
+	mc9p_http_test.dis\
 	msg_approval_test.dis\
 	msg9p_stream_test.dis\
 	msg_badsrc.dis\

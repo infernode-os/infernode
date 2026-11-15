@@ -795,6 +795,8 @@ jobs:
               statcheck_bounds_test tools9p_env_isolation_test
               tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
               tls_clientauth_test ssl_killedcall_test vid9p_hangup_test httpd_test httpd_auth_test
+              charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
+              matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
@@ -819,6 +821,8 @@ jobs:
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
               write_capability_test xenith_build_test werc_test charon_werc_test
+              git_tool_test exec_fd_test limbo_tool_test lucibridge_promote_test lucibridge_turn_test
+              spawn_life_test spawn_provenance_test tools9p_call_test nsaudit_truth_test
     permissions:
       contents: read
     env:

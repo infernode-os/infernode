@@ -147,6 +147,7 @@ TARG=\
 	namec_clone_test.dis\
 	nil_far_test.dis\
 	slice_end_test.dis\
+	draw_edge_test.dis\
 	string_edge_test.dis\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\
@@ -158,6 +159,7 @@ TARG=\
 	jit_compile_fail.dis\
 	jit_compile_fail_mod.dis\
 	jit_compile_fail_ok.dis\
+	draw_pools.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
 	wmapp_fuzz.dis\

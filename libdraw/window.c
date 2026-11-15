@@ -111,9 +111,24 @@ Image*
 _allocwindow(Image *i, Screen *s, Rectangle r, int ref, ulong val)
 {
 	Display *d;
+	ulong chan;
 
 	d = s->display;
-	i = _allocimage(i, d, r, s->image->chan, 0, val, s->id, ref);
+	/*
+	 * A public screen is another client's: it has no image here
+	 * (publicscreen), and its windows are in the display's channels,
+	 * which is what publicscreen was told.  s->image was read all the
+	 * same.
+	 */
+	if(s->image != nil)
+		chan = s->image->chan;
+	else if(d->image != nil)
+		chan = d->image->chan;
+	else{
+		kwerrstr("allocwindow: screen has no image");
+		return 0;
+	}
+	i = _allocimage(i, d, r, chan, 0, val, s->id, ref);
 	if(i == 0)
 		return 0;
 	i->screen = s;

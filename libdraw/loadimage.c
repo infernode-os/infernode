@@ -10,12 +10,34 @@ loadimage(Image *i, Rectangle r, uchar *data, int ndata)
 	uchar *a;
 	int chunk;
 	Rectangle dstr;
+	vlong dx, ny;
 
 	chunk = i->display->bufsize - 64;
 
+	/*
+	 * The rectangle is the caller's, and everything below is computed
+	 * from it.  One whose max is before its min was taken: a line
+	 * came out as -1 bytes long, which was the length given to
+	 * memmove.  One with no pixels has no bytes; one whose bytes in a
+	 * line do not fit the arithmetic below is not an image's.
+	 */
+	dx = (vlong)r.max.x - r.min.x;
+	ny = (vlong)r.max.y - r.min.y;
+	if(dx < 0 || ny < 0 ||
+	   r.min.x < -(1<<25) || r.max.x >= (1<<25)){
+		kwerrstr("loadimage: bad rectangle");
+		return -1;
+	}
+	if(dx == 0 || ny == 0)
+		return 0;
+
+	/*
+	 * The bytes needed, in 64 bits: as an int, 256 bytes a line by
+	 * 2^24 lines came to none, any array was enough, and each line
+	 * drawn was read 256 bytes further past its end.
+	 */
 	bpl = bytesperline(r, i->depth);
-	n = bpl*Dy(r);
-	if(n > ndata){
+	if(bpl <= 0 || ndata < 0 || bpl*ny > ndata){
 		kwerrstr("loadimage: insufficient data");
 		return -1;
 	}

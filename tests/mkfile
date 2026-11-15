@@ -143,6 +143,7 @@ TARG=\
 	math_edge_test.dis\
 	alt_edge_test.dis\
 	string_edge_test.dis\
+	geom_edge_test.dis\
 	pool_nomem_helper.dis\
 	print_heapfull.dis\
 	load_heapfull.dis\

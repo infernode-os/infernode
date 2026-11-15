@@ -1229,6 +1229,7 @@ xenith/dis/win.dis
 xenith/dis/winm.dis
 dis/tests/alt_nilchan_test.dis
 dis/tests/errlabel_leak_test.dis
+dis/tests/geom_edge_test.dis
 dis/tests/load_heapfull.dis
 dis/tests/load_heapfull_mod.dis
 dis/tests/lock_stress_test.dis

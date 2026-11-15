@@ -839,6 +839,11 @@ does not help you at runtime — only the correctness of the caps themselves
 does. The value `nsaudit` adds is making misconfiguration visible before
 it ships.
 
+A report says only what was checked. With no rules, a file among the rules
+that is not one, a role that is neither `toplevel` nor `child`, an activity id
+that is not a number, or a tool whose name is not a name in the manifest
+directory, `nsaudit` fails saying so and reports nothing.
+
 ### Data model
 
 All inputs and outputs are files. No serialization format is invented; no

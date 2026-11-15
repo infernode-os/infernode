@@ -8,7 +8,8 @@
 # word, Ctrl-C copies each to /chan/snarf; a click in the field below
 # and Ctrl-V pastes into it.  After each step it prints R, the step and
 # the snarf buffer or the field's value; the screen after the drag is
-# written to $1/drag.img.
+# written to $1/drag.img.  Then Tab from the page goes to the field, and
+# + five times zooms to 200% ($1/zoom.img) and 0 back ($1/unzoom.img).
 #
 load std
 E=$1
@@ -64,5 +65,25 @@ sleep 1
 echo > /dev/keyboard
 sleep 2
 echo R field; cat /tmp/charonsel/forms
+
+# Tab from the page: the field, typed into at its end
+ptr 700 600 1; ptr 700 600 0
+sleep 1
+code 9
+sleep 1
+echo -n ' tabbed' > /dev/keyboard
+echo > /dev/keyboard
+sleep 2
+echo R tab; cat /tmp/charonsel/forms
+
+# + five times: 200%, the line's text twice as wide
+ptr 700 600 1; ptr 700 600 0
+sleep 1
+for i in 1 2 3 4 5 { echo -n + > /dev/keyboard; sleep 1 }
+sleep 2
+scap $E/zoom.img
+echo -n 0 > /dev/keyboard
+sleep 2
+scap $E/unzoom.img
 echo R done
 echo halt > '#c/sysctl'

@@ -73,8 +73,14 @@ select the page's text
 .B Ctrl-C
 copy the selection to the snarf buffer
 .TP
+.B "+ - 0"
+zoom in, out, and back to the actual size
+.TP
+.B Tab
+the next text field
+.TP
 .B Escape
-stop
+clear the selection, or stop
 .TP
 .B Ctrl-Q
 quit
@@ -91,8 +97,10 @@ pastes the snarf buffer (in one line, but in a
 .PP
 Button 1 follows a link or works a control; dragged, it selects text,
 and a double-click selects a word.
-Button 3 is a menu: Copy, Select all and Copy link address among the
-rest.
+Button 3 is a menu: Copy, Select all, Copy link address and the zoom
+among the rest.  Zoom lays the page out again at another ratio of
+pixels to the CSS px, as a denser or coarser screen would have it, and
+the pages after it too.
 .PP
 A location without a scheme is taken as
 .B https://
@@ -135,7 +143,9 @@ Commands:
 selects it),
 .BI "select word" " x y"\f1,
 .BR "select all" ,
-.BR "select none" .
+.BR "select none" ,
+.BI zoom " ratio"
+(pixels to the CSS px: 2 is 200%).
 .TP
 .B url
 .br

@@ -26,6 +26,10 @@ if [ -z "$EMU" ]; then
 	esac
 fi
 [ -x "$EMU" ] || { echo "build the emulator first ($EMU)" >&2; exit 1; }
+# an SDL emu wants a video device even for an image drawn off screen:
+# with none ("No available video device") every shot was "no image"
+: "${SDL_VIDEODRIVER:=dummy}"
+export SDL_VIDEODRIVER
 [ -f "$ROOT/dis/tests/charonshot.dis" ] || { echo "build tests first: (cd tests; mk install)" >&2; exit 1; }
 case "$SRC" in
 *://*) URL="$SRC" ;;

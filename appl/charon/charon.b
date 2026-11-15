@@ -91,6 +91,12 @@ selrects: list of Rect;
 menulink := "";	# the link the menu was posted over
 DRAGSLOP: con 4;
 
+# zoom, as a ratio of the display's own (its $displayscale)
+zooms := array[] of {0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
+ZOOM1: con 4;
+zoomi := ZOOM1;
+zoombase := 1.0;
+
 Control: adt {
 	f:	ref Field;
 	w:	string;	# widget path
@@ -194,6 +200,7 @@ start(w, h: int, mnt: string)
 	if((err := browser->init(display)) != nil || (err = charonfs->init()) != nil)
 		fatal(err);
 	sess = Session.new(w, h);
+	zoombase = sess.zoom(0.0);
 	if((err = charonfs->serve(browser, sess, display, mnt)) != nil)
 		sys->fprint(stderr, "web: %s\n", err);
 	# for name spaces other than this one, Veltro's included
@@ -284,6 +291,10 @@ buildui()
 		".ctx add command -label {Copy} -command {send act copy}",
 		".ctx add command -label {Select all} -command {send act selectall}",
 		".ctx add command -label {Copy link address} -command {send act copylink}",
+		".ctx add separator",
+		".ctx add command -label {Zoom in} -command {send act zoom 1}",
+		".ctx add command -label {Zoom out} -command {send act zoom -1}",
+		".ctx add command -label {Actual size} -command {send act zoom 0}",
 		".ctx add separator",
 		".ctx add command -label {Load images on this page} -command {send act loadimages}",
 		".ctx add checkbutton -label {Load images automatically} -variable autoimages -command {send act setting images}",
@@ -521,6 +532,15 @@ action(a: string)
 		(nil, l) := sys->tokenize(rest, " ");
 		if(len l == 4)
 			tk->cmd(top, ".ctx post " + hd tl tl l + " " + hd tl tl tl l);
+	"zoom" =>
+		case rest {
+		"1" =>
+			zoomto(zoomi + 1);
+		"-1" =>
+			zoomto(zoomi - 1);
+		* =>
+			zoomto(ZOOM1);
+		}
 	"copy" =>
 		copy();
 	"selectall" =>
@@ -754,6 +774,12 @@ key(k: int)
 			selectall();
 			return;
 		}
+	'\t' =>
+		# the next text field, from the one being typed into or the view
+		if(onpage || editing != nil && focus == editing.w) {
+			nextfield();
+			return;
+		}
 	'q' & 16r1F =>
 		exit;
 	'l' & 16r1F =>
@@ -784,10 +810,75 @@ key(k: int)
 	Kend =>	scrollto(pageheight());
 	Kbs or Kleft =>	report(sess.goback());
 	Kright =>	report(sess.goforward());
-	Kesc =>	sess.stop();
+	Kesc =>
+		if(selrects != nil)
+			clearselection();
+		else
+			sess.stop();
+	'+' or '=' =>	zoomto(zoomi + 1);
+	'-' =>	zoomto(zoomi - 1);
+	'0' =>	zoomto(ZOOM1);
 	* =>
 		tk->keyboard(top, k);
 	}
+}
+
+zoomto(i: int)
+{
+	if(i < 0 || i >= len zooms)
+		return;
+	endedit(1);
+	h0 := pageheight();
+	zoomi = i;
+	sess.zoom(zoombase * zooms[i]);
+	# the same place in the page, near enough
+	scrollto(int (real scroll * real pageheight() / real h0));
+	if(selrects != nil)
+		(seltext, selrects) = sess.selection(selfrom, selto, selwords, selall);
+	redraw();
+	status(sys->sprint("Zoom %d%%", int (zooms[i] * 100.0)));
+}
+
+# Tab: the text field after the one being typed into, or the first in
+# view (or after it); round to the first
+nextfield()
+{
+	fields := sess.fields();
+	after := -1;
+	if(editing != nil) {
+		for(i := 0; i < len fields; i++)
+			if(fields[i].node == editing.f.node)
+				after = i;
+	}
+	first, inview: ref Field;
+	for(i := 0; i < len fields; i++) {
+		f := fields[i];
+		if(!istext(f.kind) || f.disabled || f.readonly)
+			continue;
+		(ok, r, nil) := fieldbox(f.node);
+		if(!ok || r.dx() == 0 || r.dy() == 0)
+			continue;	# not shown
+		if(first == nil)
+			first = f;
+		if(after >= 0) {
+			if(i > after) {
+				inview = f;
+				break;
+			}
+		} else if(r.max.y > scroll) {
+			inview = f;
+			break;
+		}
+	}
+	if(inview == nil)
+		inview = first;
+	endedit(1);
+	if(inview == nil)
+		return;
+	(nil, r, nil) := fieldbox(inview.node);
+	if(r.min.y < scroll || r.max.y > scroll + vh)
+		scrollto(r.min.y - vh/3);
+	startedit(inview);
 }
 
 findkey(k: int)

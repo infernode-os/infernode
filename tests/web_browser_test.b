@@ -650,6 +650,40 @@ testSelect(t: ref T)
 			(hd rects).min.x, (hd rects).min.y, (hd rects).max.x, (hd rects).max.y, r.min.x, r.min.y, r.max.x, r.max.y));
 }
 
+# ctl's zoom: the page laid out again at twice the pixels to the CSS
+# px, its text drawn twice the size and the same text; a bad ratio
+# refused; back at 1, as it was
+testZoom(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "select.html"), "done " + DIR + "select.html", "load");
+	(ok, r) := sess.findat("delta", -1);
+	t.assert(ok, "delta found");
+	h := sess.pageheight();
+	t.assertnil(wr("ctl", "zoom 2"), "zoom 2");
+	{
+		(ok2, r2) := sess.findat("delta", -1);
+		t.assert(ok2, "delta found at 2");
+		t.assert(r2.dx() >= 2*r.dx() - 2 && r2.dx() <= 2*r.dx() + 2, sys->sprint("delta %d wide at 2, %d at 1", r2.dx(), r.dx()));
+		h2 := sess.pageheight();
+		t.assert(h2 >= 2*h - 4 && h2 <= 2*h + 4, sys->sprint("the page %d high at 2, %d at 1", h2, h));
+		t.assertnil(wr("ctl", "select all"), "select all");
+		t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.\nalpha beta gamma delta", "the same text");
+		t.assertsne(wr("ctl", "zoom x"), nil, "a bad ratio refused");
+	} exception e {
+	"*" =>
+		wr("ctl", "zoom 1");
+		raise e;
+	}
+	# below 1 too, as a browser zooms out
+	t.assertnil(wr("ctl", "zoom 0.5"), "zoom 0.5");
+	(nil, rh) := sess.findat("delta", -1);
+	t.assert(rh.dx() >= r.dx()/2 - 2 && rh.dx() <= r.dx()/2 + 2, sys->sprint("delta %d wide at 0.5, %d at 1", rh.dx(), r.dx()));
+	t.assertnil(wr("ctl", "zoom 1"), "zoom 1");
+	(nil, r3) := sess.findat("delta", -1);
+	t.assert(r3.eq(r), "back as it was");
+	t.asserteq(sess.pageheight(), h, "the page's height as it was");
+}
+
 # navto, its answer sent on c, so a test can wait for it with a limit
 navasync(c: chan of string, cmd, url: string)
 {
@@ -798,6 +832,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ImageBusy", testImageBusy);
 	run("Lazy", testLazy);
 	run("Select", testSelect);
+	run("Zoom", testZoom);
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);

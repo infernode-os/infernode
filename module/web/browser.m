@@ -74,6 +74,7 @@ Browser: module
 		# it is left, so Back and Fwd come back to it there
 		viewing:	fn(s: self ref Session, y: int);
 		resize:	fn(s: self ref Session, width, height: int);
+		zoom:	fn(s: self ref Session, dpr: real): real;	# device pixels to the CSS px, this page and the next: the ratio taken (0 or less: asked, not changed)
 		listen:	fn(s: self ref Session): chan of string;
 		unlisten:	fn(s: self ref Session, c: chan of string);
 

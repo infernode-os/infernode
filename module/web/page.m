@@ -85,6 +85,8 @@ Page: module
 	# screen of two pixels to the point (Retina), 2, and pages are
 	# laid out and drawn twice the size, as sharp. Whoever knows the
 	# display says ($displayscale); not a setting, so not saved.
+	# A browser's zoom is the same ratio, so it may be below 1
+	# (0.25 to 4).
 	scale:	fn(r: real);
 	dpr:	fn(): real;
 	setting:	fn(name: string): string;

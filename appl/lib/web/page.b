@@ -3400,8 +3400,8 @@ pxscale := 1.0;
 
 scale(r: real)
 {
-	if(r < 1.0)
-		r = 1.0;
+	if(r < 0.25)
+		r = 0.25;
 	if(r > 4.0)
 		r = 4.0;
 	pxscale = r;

@@ -395,6 +395,11 @@ ctl(s: string): string
 		sess.scrollto(num(arg));
 	"select" =>
 		return select(arg);
+	"zoom" =>
+		r := real arg;
+		if(r <= 0.0)
+			return "usage: zoom ratio";
+		sess.zoom(r);
 	"images" or "fonts" or "effects" or "scripts" =>
 		return sess.configure(cmd + " " + arg);
 	"loadimages" =>

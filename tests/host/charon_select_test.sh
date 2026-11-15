@@ -6,7 +6,8 @@
 # click on text copies nothing, a drag along a line and a double-click
 # on a word copy them with Ctrl-C, Ctrl-A selects the page, Ctrl-V in a
 # text field types the snarf buffer, and the drag's selection is drawn
-# (light blue over the text, by pixel).  Charon had no selection: a
+# (light blue over the text, by pixel); Tab from the page goes to the
+# field, and + zooms the page (by pixel) and 0 puts it back.  Charon had no selection: a
 # drag did nothing and Ctrl-C copied nothing.  Tk sends button 1's press
 # again with each motion while it is held, which restarted the drag.
 #
@@ -43,6 +44,40 @@ if grep -q '^0 16 text q pasted words$' "$W/log"; then
 	echo "PASS: Ctrl-V pastes into a text field"
 else
 	echo "FAIL: Ctrl-V in a text field:"; sed -n '/^R field/,/^R done/p' "$W/log"; fail=1
+fi
+
+if grep -q '^0 16 text q pasted words tabbed$' "$W/log"; then
+	echo "PASS: Tab goes from the page to the text field"
+else
+	echo "FAIL: Tab to the text field:"; sed -n '/^R tab/,/^R done/p' "$W/log"; fail=1
+fi
+
+# at 200% the line's text reaches past x 420 (at 100% it ends near 264):
+# dark pixels there zoomed, none once back at 0
+dark() {
+	python3 - "$ROOT/tools" "$1" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from p9img2png import load
+im = load(sys.argv[2])
+m = 0
+for y in range(300, 372):
+	for x in range(430, 520):
+		p = ((y - im.r[1]) * im.w + x - im.r[0]) * 3
+		if im.rgb[p] < 100 and im.rgb[p+1] < 100 and im.rgb[p+2] < 100:
+			m += 1
+print(m)
+PY
+}
+if [ -f "$W/zoom.img" ] && [ -f "$W/unzoom.img" ]; then
+	z=$(dark "$W/zoom.img"); u=$(dark "$W/unzoom.img")
+	if [ "${z:-0}" -gt 200 ] && [ "${u:-1}" -eq 0 ]; then
+		echo "PASS: + zooms the page and 0 puts it back ($z dark pixels zoomed, $u after)"
+	else
+		echo "FAIL: zoom: $z dark pixels zoomed, $u after"; fail=1
+	fi
+else
+	echo "FAIL: zoom: no screens captured"; fail=1
 fi
 
 if [ -f "$W/drag.img" ]; then

@@ -302,6 +302,31 @@ Session.resize(s: self ref Session, width, height: int)
 	unlock(s);
 }
 
+# A browser's zoom: the page laid out again at another ratio of device
+# pixels to the CSS px, as a denser screen has it (its media queries
+# seeing a narrower viewport), and the pages after it at that ratio too
+Session.zoom(s: self ref Session, r: real): real
+{
+	if(r <= 0.0)
+		return page->dpr();	# asked, not changed
+	lock(s);
+	page->scale(r);
+	r = page->dpr();
+	if(s.pg != nil && s.pg.env.dpr != r) {
+		s.pg.env.dpr = r;
+		s.pg.computed = nil;	# every length: restyled whole, not what changed
+		{
+			s.pg.update();
+		} exception e {
+		"*" =>
+			unlock(s);
+			raise e;
+		}
+	}
+	unlock(s);
+	return r;
+}
+
 navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: int)
 {
 	if(url == "about:blank")

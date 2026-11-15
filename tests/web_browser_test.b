@@ -684,6 +684,30 @@ testZoom(t: ref T)
 	t.asserteq(sess.pageheight(), h, "the page's height as it was");
 }
 
+# ctl's history n and the history file: three pages opened, two back
+# in one step to the first, the two after it forward of it in the
+# order they were opened; two forward again; too far refused
+testHistoryJump(t: ref T)
+{
+	a := DIR + "a.html";
+	b := DIR + "b.html";
+	c := DIR + "select.html";
+	for(l := a :: b :: c :: nil; l != nil; l = tl l)
+		t.assertseq(nav(t, "open " + hd l), "done " + hd l, "open " + hd l);
+	h := rd("history");
+	t.assert(contains(h, "-2 " + a + "\n-1 " + b + "\n0 " + c + "\n"), "three opened: " + h);
+	t.assertseq(nav(t, "history -2"), "done " + a, "two back");
+	t.assertseq(chomp(rd("url")), a, "the first");
+	h = rd("history");
+	t.assert(contains(h, "0 " + a + "\n1 " + b + "\n2 " + c + "\n"), "two back: " + h);
+	t.assertseq(nav(t, "history 2"), "done " + c, "two forward");
+	h = rd("history");
+	t.assert(contains(h, "-2 " + a + "\n-1 " + b + "\n0 " + c + "\n"), "two forward: " + h);
+	t.assert(!contains(h, "\n1 "), "nothing forward: " + h);
+	t.assertsne(wr("ctl", "history 1"), nil, "past the end refused");
+	t.assertsne(wr("ctl", "history -99"), nil, "before the start refused");
+}
+
 # navto, its answer sent on c, so a test can wait for it with a limit
 navasync(c: chan of string, cmd, url: string)
 {
@@ -833,6 +857,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Lazy", testLazy);
 	run("Select", testSelect);
 	run("Zoom", testZoom);
+	run("HistoryJump", testHistoryJump);
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);

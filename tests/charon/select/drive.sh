@@ -11,7 +11,7 @@
 # written to $1/drag.img.  Then Tab from the page goes to the field, and
 # + five times zooms to 200% ($1/zoom.img) and 0 back ($1/unzoom.img),
 # and the pointer goes over a link and off it; a drag held below the
-# view scrolls to the end.
+# view scrolls to the end; History in the menu goes back two pages.
 #
 load std
 E=$1
@@ -106,5 +106,20 @@ sleep 1
 code 3
 sleep 1
 snarf autoscroll
+
+# two pages more, then button 3's History and its first page: two back
+# at once (the menu is posted at the press, History its fourth item,
+# 18 pixels each; its pages to the right, the furthest back first)
+echo open file:///tests/charon/browser/a.html > /tmp/charonsel/ctl
+sleep 2
+echo open file:///tests/charon/browser/b.html > /tmp/charonsel/ctl
+sleep 2
+ptr 500 400 4; sleep 1
+ptr 520 464 4; sleep 1
+ptr 700 464 4; sleep 1
+ptr 760 464 4; sleep 1
+ptr 760 464 0
+sleep 3
+echo R history `{cat /tmp/charonsel/url}
 echo R done
 echo halt > '#c/sysctl'

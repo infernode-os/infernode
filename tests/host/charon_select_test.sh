@@ -53,6 +53,11 @@ the end line" "Ctrl-A selects the page"
 check autoscroll "Supercalifragilistic bravo charlie
 a link here
 the end line" "a drag held below the view scrolls to the page's end"
+if grep -q '^R history file:///tests/charon/select/page.html$' "$W/log"; then
+	echo "PASS: History in the menu goes two pages back"
+else
+	echo "FAIL: History in the menu: $(grep '^R history' "$W/log")"; fail=1
+fi
 if grep -q '^0 16 text q pasted words$' "$W/log"; then
 	echo "PASS: Ctrl-V pastes into a text field"
 else

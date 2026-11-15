@@ -72,7 +72,7 @@ init(d: ref Draw->Display): string
 
 Session.new(width, height: int): ref Session
 {
-	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0);
+	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0, 1);
 }
 
 # The session's lock.  A page's realm takes it for each task, and a
@@ -231,27 +231,36 @@ typed(s: ref Session, u: string): string
 
 Session.goback(s: self ref Session): string
 {
-	lock(s);
-	if(s.back == nil) {
-		unlock(s);
-		return "no previous page";
-	}
-	(u, nil) := hd s.back;
-	unlock(s);
-	navigate(s, u, "GET", nil, nil, Hback);
-	return nil;
+	return s.gohistory(-1);
 }
 
 Session.goforward(s: self ref Session): string
 {
+	return s.gohistory(1);
+}
+
+Session.gohistory(s: self ref Session, n: int): string
+{
 	lock(s);
-	if(s.fwd == nil) {
+	h := s.fwd;
+	hist := Hforward;
+	if(n < 0) {
+		h = s.back;
+		hist = Hback;
+		n = -n;
+	}
+	if(n == 0 || len h < n) {
 		unlock(s);
+		if(hist == Hback)
+			return "no previous page";
 		return "no next page";
 	}
-	(u, nil) := hd s.fwd;
+	for(i := 1; i < n; i++)
+		h = tl h;
+	(u, nil) := hd h;
+	s.hops = n;
 	unlock(s);
-	navigate(s, u, "GET", nil, nil, Hforward);
+	navigate(s, u, "GET", nil, nil, hist);
 	return nil;
 }
 
@@ -371,16 +380,27 @@ history(s: ref Session, prev: string, hist: int)
 			s.back = (prev, s.at) :: s.back;
 		s.fwd = nil;
 	Hback =>
-		if(s.back != nil)
-			s.back = tl s.back;
+		# the page left, then those passed over, go forward, as a
+		# step at a time would have put them
 		if(prev != "")
 			s.fwd = (prev, s.at) :: s.fwd;
+		for(i := 1; i < s.hops && s.back != nil; i++) {
+			s.fwd = hd s.back :: s.fwd;
+			s.back = tl s.back;
+		}
+		if(s.back != nil)
+			s.back = tl s.back;
 	Hforward =>
-		if(s.fwd != nil)
-			s.fwd = tl s.fwd;
 		if(prev != "")
 			s.back = (prev, s.at) :: s.back;
+		for(i := 1; i < s.hops && s.fwd != nil; i++) {
+			s.back = hd s.fwd :: s.back;
+			s.fwd = tl s.fwd;
+		}
+		if(s.fwd != nil)
+			s.fwd = tl s.fwd;
 	}
+	s.hops = 1;
 }
 
 # where the view was on the page Back or Fwd goes to, as history has it
@@ -392,6 +412,8 @@ wasat(s: ref Session, hist: int): int
 	Hforward =>	h = s.fwd;
 	* =>	return -1;
 	}
+	for(i := 1; i < s.hops && h != nil; i++)
+		h = tl h;
 	if(h == nil)
 		return -1;
 	(nil, y) := hd h;

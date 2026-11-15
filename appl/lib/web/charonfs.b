@@ -33,14 +33,14 @@ include "post9p.m";
 include "web/charonfs.m";
 
 Qroot, Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent,
-Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors, Qsel: con iota;
+Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors, Qsel, Qhist: con iota;
 
-rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors, Qsel};
+rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors, Qsel, Qhist};
 nodefiles := array[] of {Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren};
 
 names := array[] of {
 	"/", "ctl", "url", "title", "status", "text", "links", "forms", "find", "image", "event",
-	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors", "selection",
+	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors", "selection", "history",
 };
 
 # an open event file
@@ -368,6 +368,11 @@ ctl(s: string): string
 		return sess.goback();
 	"forward" =>
 		return sess.goforward();
+	"history" =>
+		n := int arg;
+		if(n == 0)
+			return "usage: history n (n < 0 back, n > 0 forward)";
+		return sess.gohistory(n);
 	"reload" =>
 		sess.reload();
 	"stop" =>
@@ -410,6 +415,23 @@ ctl(s: string): string
 		return "unknown command " + cmd;
 	}
 	return nil;
+}
+
+# the pages back (-n) and forward (n) of this one (0), a line each,
+# the furthest back first
+histtext(): string
+{
+	# back is nearest first: each line goes before the ones after it
+	s := "";
+	i := -1;
+	for(l := sess.back; l != nil; l = tl l)
+		s = sys->sprint("%d %s\n", i--, (hd l).t0) + s;
+	if(sess.url != "")
+		s += "0 " + sess.url + "\n";
+	i = 1;
+	for(l = sess.fwd; l != nil; l = tl l)
+		s += sys->sprint("%d %s\n", i++, (hd l).t0);
+	return s;
 }
 
 # select x0 y0 x1 y1, select word x y, select all, select none:
@@ -469,6 +491,8 @@ contents(t, n: int): array of byte
 			s = lines(sess.pg.errors);
 	Qsel =>
 		s = seltext;
+	Qhist =>
+		s = histtext();
 	Qtag or Qattrs or Qntext or Qstyle or Qbox or Qchildren =>
 		(r, nil) := sess.dom(n, names[t]);
 		s = r;

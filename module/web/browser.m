@@ -54,6 +54,7 @@ Browser: module
 		lk:	chan of int;
 		listeners:	list of chan of string;
 		lkpid:	int;	# the process holding lk (one that died holding it is taken back from)
+		hops:	int;	# how many pages Back or Fwd goes (gohistory)
 
 		new:	fn(width, height: int): ref Session;
 		open:	fn(s: self ref Session, url: string);
@@ -64,6 +65,9 @@ Browser: module
 		show:	fn(s: self ref Session, data: array of byte, ctype, url: string): string;
 		goback:	fn(s: self ref Session): string;
 		goforward:	fn(s: self ref Session): string;
+		# n pages back (n < 0) or forward (n > 0) in one step: only
+		# the page gone to is loaded, as a history menu wants
+		gohistory:	fn(s: self ref Session, n: int): string;
 		reload:	fn(s: self ref Session);
 		stop:	fn(s: self ref Session);
 		close:	fn(s: self ref Session);	# stopped, and its page let go: done with

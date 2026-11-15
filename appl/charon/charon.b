@@ -298,9 +298,11 @@ buildui()
 		"bind .view.c <ButtonPress-5> {send act wheel 1}",
 		"bind .view <Configure> {send act resized}",
 		"menu .ctx",
+		"menu .ctx.hist",
 		".ctx add command -label {Back} -command {send act back}",
 		".ctx add command -label {Forward} -command {send act forward}",
 		".ctx add command -label {Reload} -command {send act reload}",
+		".ctx add cascade -label {History} -menu .ctx.hist",
 		".ctx add command -label {Find...} -command {send act find}",
 		".ctx add separator",
 		".ctx add command -label {Copy} -command {send act copy}",
@@ -544,6 +546,7 @@ action(a: string)
 		syncmenu();	# the settings may have changed from elsewhere (ctl, the file)
 		(x, y) := xy(rest);
 		menulink = sess.linkat(x, y + scroll);
+		histmenu();
 		(nil, l) := sys->tokenize(rest, " ");
 		if(len l == 4)
 			tk->cmd(top, ".ctx post " + hd tl tl l + " " + hd tl tl tl l);
@@ -556,6 +559,8 @@ action(a: string)
 		* =>
 			zoomto(ZOOM1);
 		}
+	"history" =>
+		report(sess.gohistory(int rest));
 	"copy" =>
 		copy();
 	"selectall" =>
@@ -1015,6 +1020,35 @@ paste(w: string)
 	tk->cmd(top, w + " insert insert " + tk->quote(t));
 	tk->cmd(top, w + " see insert");
 	tk->cmd(top, "update");
+}
+
+# The History menu: the pages back, nearest first under the furthest,
+# this one (not chosen), the pages forward; as the session has them
+# when the menu is posted
+histmenu()
+{
+	m := ".ctx.hist";
+	tk->cmd(top, m + " delete 0 end");
+	items: list of string;
+	i := -1;
+	for(l := sess.back; l != nil && i >= -HISTMAX; l = tl l)
+		items = histitem(m, (hd l).t0, sys->sprint("send act history %d", i--)) :: items;
+	for(; items != nil; items = tl items)
+		tk->cmd(top, hd items);
+	if(sess.url != "")
+		tk->cmd(top, histitem(m, sess.url, "") + " -state disabled");
+	i = 1;
+	for(l = sess.fwd; l != nil && i <= HISTMAX; l = tl l)
+		tk->cmd(top, histitem(m, (hd l).t0, sys->sprint("send act history %d", i++)));
+}
+
+HISTMAX: con 15;
+
+histitem(m, url, cmd: string): string
+{
+	if(len url > 70)
+		url = url[0:67] + "...";
+	return m + " add command -label " + tk->quote(url) + " -command {" + cmd + "}";
 }
 
 ticker()

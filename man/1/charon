@@ -98,7 +98,8 @@ pastes the snarf buffer (in one line, but in a
 Over a link the cursor is a hand.
 Button 1 follows a link or works a control; dragged, it selects text,
 and a double-click selects a word.
-Button 3 is a menu: Copy, Select all, Copy link address and the zoom
+Button 3 is a menu: History (the pages back and forward, any of them
+gone to at once), Copy, Select all, Copy link address and the zoom
 among the rest.  Zoom lays the page out again at another ratio of
 pixels to the CSS px, as a denser or coarser screen would have it, and
 the pages after it too.
@@ -130,6 +131,8 @@ Commands:
 .BI open " url"\f1,
 .BR back ,
 .BR forward ,
+.BI history " n"
+(n pages back, if negative, or forward, at once),
 .BR reload ,
 .BR stop ,
 .BI follow " n"\f1,
@@ -239,6 +242,11 @@ Charon does not print them.
 .B errors
 .IR url ": " reason
 for each resource the page could not fetch.
+.TP
+.B history
+The pages back and forward of this one, a line each:
+.I n
+and the URL, the furthest back first, this page 0.
 .TP
 .B selection
 The text the last

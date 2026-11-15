@@ -54,14 +54,22 @@ f() { cat "$D/$1" 2>/dev/null || true; }
 has() { f "$1" | grep -q -- "$2"; }
 # the log between the Nth connect and its hangup
 conn() { awk -v n="$1" '$1=="connect"{c=$2} c==n{print} $1=="hangup"&&$2==n{exit}' "$D/rtl.log"; }
-# whole samples of the fake's pattern: I+Q=255, I rising by one
+# whole samples of the fake's pattern: I+Q=255, I rising by one.
+# With "lossy", I may jump: what a reader that fell behind is given is
+# in whole samples, and in order, but not without gaps.  A read of 16K
+# is two 9P reads, and the oldest chunk may be dropped between them.
+# The chunks are what each read of the socket gave: of the fake's 16K
+# pieces as they were sent, a multiple of 256 samples, so a gap did not
+# show in I; on a busy machine TCP gives them in other sizes, and the
+# check, which asked for no gap, failed there (CI: "bad 16384").
 samples() {
-	python3 -I - "$D/$1" <<'EOF'
+	python3 -I - "$D/$1" "${2:-}" <<'EOF'
 import sys
 b = open(sys.argv[1], "rb").read()
+lossy = sys.argv[2] == "lossy"
 ok = len(b) > 0 and len(b) % 2 == 0
 for i in range(0, len(b) - 1, 2):
-    if b[i] + b[i+1] != 255 or (i and b[i] != (b[i-2] + 1) % 256):
+    if b[i] + b[i+1] != 255 or (i and not lossy and b[i] != (b[i-2] + 1) % 256):
         ok = False
         break
 print("ok" if ok else "bad %d" % len(b))
@@ -120,7 +128,7 @@ has status.gone2 "^link=idle .* readers=0 " && conn 2 | grep -q '^hangup 2 ' &&
 
 has status.dropped "dropped=[1-9]" && pass "a reader that does not read loses the oldest" ||
 	fail "status: $(f status.dropped)"
-[ "$(samples iq.late)" = ok ] && pass "still in whole samples after a loss" || fail "iq.late: $(samples iq.late)"
+[ "$(samples iq.late lossy)" = ok ] && pass "still in whole samples after a loss" || fail "iq.late: $(samples iq.late lossy)"
 
 has err.notrtl "not rtl_tcp" && pass "something that is not rtl_tcp refused" || fail "notrtl: '$(f err.notrtl)'"
 has err.nothing "dial tcp!127.0.0.1!$PN" && pass "nothing listening refused" || fail "nothing: '$(f err.nothing)'"

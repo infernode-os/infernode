@@ -330,6 +330,13 @@ OP(movmp)
 
 	t = R.M->type[W(m)];
 
+	/*
+	 * Compiled code gives this copy to C with the addresses it made:
+	 * of a nil ref, nil and a displacement.  Asked for here, as hd
+	 * and tl are below.
+	 */
+	if((uintptr)R.s + 1 <= 64*1024 || (uintptr)R.d + 1 <= 64*1024)
+		error(exNilref);
 	incmem(R.s, t);
 	if (t->np)
 		freeptrs(R.d, t);
@@ -1484,11 +1491,18 @@ OP(consmp)
 	l->t = t;
 	t->ref++;
 }
+/*
+ * hd and tl of nil are asked, not found by the fault: compiled code
+ * calls some of these (headmp), and a fault in the kernel's own C is a
+ * panic in the native kernels.
+ */
 OP(headb)
 {
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	B(d) = *(BYTE*)l->data;
 }
 OP(headw)
@@ -1496,6 +1510,8 @@ OP(headw)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	W(d) = *(WORD*)l->data;
 }
 OP(headl)
@@ -1503,6 +1519,8 @@ OP(headl)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	V(d) = *(LONG*)l->data;
 }
 OP(headp)
@@ -1510,6 +1528,8 @@ OP(headp)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	R.s = l->data;
 	movp(OPCALL);
 }
@@ -1518,6 +1538,8 @@ OP(headf)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	F(d) = *(REAL*)l->data;
 }
 OP(headm)
@@ -1525,6 +1547,8 @@ OP(headm)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	memmove(R.d, l->data, W(m));
 }
 OP(headmp)
@@ -1532,6 +1556,8 @@ OP(headmp)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	R.s = l->data;
 	movmp(OPCALL);
 }
@@ -1540,6 +1566,8 @@ OP(tail)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	R.s = &l->tail;
 	movp(OPCALL);
 }

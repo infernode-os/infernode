@@ -4,8 +4,32 @@
 #include "isa.h"
 #include "interp.h"
 #include "opreg.h"
+#include "raise.h"
 
-#define DIND(reg, xxx) (uchar*)((*(ulong*)(R.reg+R.PC->xxx.i.f))+R.PC->xxx.i.s)
+/*
+ * v(v(reg)): the first is a pointer and may be nil.  Nil and a
+ * displacement is an address in the first 64K (H is -1), which hosted
+ * is a fault the emulator makes "dereference of nil" of if it is below
+ * 512, and in the native kernels, where a fault in the kernel's own C
+ * stops the machine, is a panic or, past the first page, RAM.  The
+ * interpreter asks.  (Compiled code makes the address itself and takes
+ * the fault.)
+ */
+static uchar*
+dind(uchar *p, int o)
+{
+	if((uintptr)p + 1 <= 64*1024){
+		/*
+		 * as raised from the instruction itself, which runs with
+		 * R.PC past it: the handler search looks one back
+		 */
+		R.PC++;
+		error(exNilref);
+	}
+	return p + o;
+}
+
+#define DIND(reg, xxx) dind(*(uchar**)(R.reg+R.PC->xxx.i.f), R.PC->xxx.i.s)
 static void
 D00(OPARGS)
 {

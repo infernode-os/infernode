@@ -48,7 +48,11 @@ check click "start" "a click on text copies nothing"
 check drag "Supercalifragilistic bravo charlie" "a drag along a line copies it"
 check word "Supercalifragilistic" "a double-click copies the word"
 check all "Supercalifragilistic bravo charlie
-a link here" "Ctrl-A selects the page"
+a link here
+the end line" "Ctrl-A selects the page"
+check autoscroll "Supercalifragilistic bravo charlie
+a link here
+the end line" "a drag held below the view scrolls to the page's end"
 if grep -q '^0 16 text q pasted words$' "$W/log"; then
 	echo "PASS: Ctrl-V pastes into a text field"
 else

@@ -96,6 +96,13 @@ DRAGSLOP: con 4;
 HANDCURSOR: con "cursor -5 0 16 32 06000f000f000f000fc00ff86ffeffffffff7ffe7fff3fff3ffe1ffc0ffc0ffc060009000900090009c009386926992588054802400120012002100408040ffc";
 handon := 0;
 
+# a drag held above or below the view scrolls it, a tick at a time,
+# though the pointer does not move (Tk sends no motion then)
+tickc: chan of int;
+ticking := 0;
+dragat: Point;	# the drag's last point, in the canvas
+TICKMS: con 50;
+
 # zoom, as a ratio of the display's own (its $displayscale)
 zooms := array[] of {0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
 ZOOM1: con 4;
@@ -168,6 +175,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(top, wmctl) = tkclient->toplevel(ctxt, sys->sprint("-width %d -height %d", w, h), "Charon", Tkclient->Appl);
 	display = top.display;
 	act := chan[16] of string;
+	tickc = chan of int;
 	tk->namechan(top, act, "act");
 	buildui();
 	themech := chan[1] of int;
@@ -193,6 +201,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		tk->pointer(top, *p);
 	a := <-act =>
 		action(a);
+	<-tickc =>
+		autoscroll();
 	<-themech =>
 		retheme();
 	e := <-ev =>
@@ -620,8 +630,13 @@ action(a: string)
 			selwords = 0;
 		}
 		if(pressing == Pselecting || pressing == Pword) {
+			dragat = Point(x, y);
 			selto = Point(x, y + scroll);
 			select();
+			if((y < 0 || y >= vh) && !ticking) {
+				ticking = 1;
+				spawn ticker();
+			}
 		}
 	"word" =>
 		(x, y) := xy(rest);
@@ -1000,6 +1015,38 @@ paste(w: string)
 	tk->cmd(top, w + " insert insert " + tk->quote(t));
 	tk->cmd(top, w + " see insert");
 	tk->cmd(top, "update");
+}
+
+ticker()
+{
+	while(ticking) {
+		sys->sleep(TICKMS);
+		tickc <-= 1;
+	}
+}
+
+# A tick while a drag is held outside the view: scrolled by how far
+# outside (a line at most a tick, as a browser does), the selection
+# taken to the new place.  Inside, or let go, the ticks stop.
+autoscroll()
+{
+	if(pressing != Pselecting && pressing != Pword || dragat.y >= 0 && dragat.y < vh) {
+		ticking = 0;
+		return;
+	}
+	d := dragat.y;
+	if(d >= vh)
+		d -= vh - 1;
+	if(d > LINE)
+		d = LINE;
+	if(d < -LINE)
+		d = -LINE;
+	s0 := scroll;
+	scrollto(scroll + d);
+	if(scroll == s0)
+		return;	# at the top or the end
+	selto = Point(dragat.x, dragat.y + scroll);
+	select();
 }
 
 abs(n: int): int

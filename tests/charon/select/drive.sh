@@ -10,7 +10,8 @@
 # the snarf buffer or the field's value; the screen after the drag is
 # written to $1/drag.img.  Then Tab from the page goes to the field, and
 # + five times zooms to 200% ($1/zoom.img) and 0 back ($1/unzoom.img),
-# and the pointer goes over a link and off it.
+# and the pointer goes over a link and off it; a drag held below the
+# view scrolls to the end.
 #
 load std
 E=$1
@@ -95,5 +96,15 @@ echo R hover-link
 ptr 700 600 0
 sleep 1
 echo R hover-off
+
+# a drag from the first line held below the view: it scrolls to the
+# page's end, and the selection with it
+ptr 5 100 1; ptr 30 100 1; ptr 300 790 1
+sleep 5
+ptr 300 790 0
+sleep 1
+code 3
+sleep 1
+snarf autoscroll
 echo R done
 echo halt > '#c/sysctl'

@@ -12,6 +12,12 @@ implement TkNomem;
 # and so left it stopped for good.  Garbage only the collector frees
 # then filled the heap.
 #
+# heap, sweep: with the Dis heap full instead, a Tk command that sends
+# a string to the program is refused the string, by an exception, inside
+# the toplevel's lock.  The lock was left held: the Prog's next call on
+# the toplevel waited for itself (heap), and so did whoever freed the
+# toplevel (sweep).
+#
 
 include "sys.m";
 	sys: Sys;
@@ -90,7 +96,99 @@ cmd(top: ref Toplevel, s: string): string
 	}
 }
 
-init(nil: ref Draw->Context, nil: list of string)
+big4k: list of array of byte;
+small: list of array of byte;
+
+# fill the Dis heap: large blocks, then the smallest
+fillheap()
+{
+	{
+		for(;;)
+			big4k = array[4096] of byte :: big4k;
+	} exception {
+	"out of memory*" =>
+		;
+	}
+	{
+		for(;;)
+			small = array[8] of byte :: small;
+	} exception {
+	"out of memory*" =>
+		;
+	}
+}
+
+hung(c: chan of int)
+{
+	for(k := 0; k < 300; k++){
+		alt {
+		<-c =>
+			return;
+		* =>
+			sys->sleep(100);
+		}
+	}
+	sys->print("HUNG\n");
+	fd := sys->open("/dev/sysctl", Sys->OWRITE);
+	sys->fprint(fd, "halt");
+}
+
+# a toplevel whose builtin was ended by an exception: a string for the
+# program's channel is refused with the heap full, inside the toplevel's
+# lock
+stuck(d: ref Display): ref Toplevel
+{
+	top := tk->toplevel(d, "");
+	c := chan[4096] of string;
+	tk->namechan(top, c, "c");
+	fillheap();
+	raised := 0;
+	# what the collector frees meanwhile is used up by the sends that work
+	for(k := 0; k < 4000 && !raised; k++){
+		{
+			tk->cmd(top, "send c x");
+		} exception {
+		"out of memory*" =>
+			raised = 1;
+		}
+	}
+	big4k = nil;
+	small = nil;
+	if(!raised)
+		return nil;
+	return top;
+}
+
+heap(d: ref Display, what: string)
+{
+	c := chan[1] of int;
+	spawn hung(c);
+	top := stuck(d);
+	if(top == nil){
+		sys->print("NORAISE\n");
+		c <-= 1;
+		return;
+	}
+	sys->print("RAISED\n");
+	if(what == "heap"){
+		# the Prog that was refused goes on using the toplevel
+		if(cmd(top, "frame .f; pack .f; update") == nil && cmd(top, ".f cget -width") != nil)
+			sys->print("AGAIN ok\n");
+		else
+			sys->print("AGAIN refused\n");
+	}else{
+		# or drops it as it was when refused: it is freed, and the
+		# collector runs on
+		top = nil;
+		if(swept(150))
+			sys->print("SWEPT\n");
+		else
+			sys->print("NOTSWEPT\n");
+	}
+	c <-= 1;
+}
+
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
@@ -98,6 +196,13 @@ init(nil: ref Draw->Context, nil: list of string)
 	d := Display.allocate(nil);
 	if(d == nil || tk == nil){
 		sys->print("SKIP no display or no Tk: %r\n");
+		sys->print("DONE\n");
+		fd := sys->open("/dev/sysctl", Sys->OWRITE);
+		sys->fprint(fd, "halt");
+		return;
+	}
+	if(len args > 1){
+		heap(d, hd tl args);
 		sys->print("DONE\n");
 		fd := sys->open("/dev/sysctl", Sys->OWRITE);
 		sys->fprint(fd, "halt");
@@ -117,13 +222,13 @@ init(nil: ref Draw->Context, nil: list of string)
 			break;
 		n++;
 	}
-	small := 0;
-	for(; small < 2000000; small++){
-		e := cmd(top, sys->sprint("variable s%d x", small));
+	ns := 0;
+	for(; ns < 2000000; ns++){
+		e := cmd(top, sys->sprint("variable s%d x", ns));
 		if(e != nil && e[0] == '!')
 			break;
 	}
-	sys->print("FILLED %d %d\n", n, small);
+	sys->print("FILLED %d %d\n", n, ns);
 
 	made := 0;
 	refused := 0;

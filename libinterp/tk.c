@@ -20,9 +20,23 @@ void	(*tkwiretap)(void*, char*, char*, void*, Rectangle*);
 static void tktopimagedptr(TkTop*, Draw_Image*);
 static char*tkputwinimage(Tk*, Draw_Image*, int);
 
+/*
+ * Only the builtins below take a toplevel's lock, each for one call.
+ * One ended by an exception (the heap full when a string is made to
+ * send to the program, say) leaves with it held, and nothing gives it
+ * back: the Prog's next call waited for itself, and so did whoever
+ * freed the toplevel, which is most often the collector, in its sweep.
+ * A Prog that finds itself the holder had it from such a call, and
+ * goes on with it; its unlock gives it back.
+ */
 static void
 lockctxt(TkCtxt *ctxt)
 {
+	Prog *p;
+
+	p = currun();
+	if(p != nil && libqlowner(ctxt->lock) == p)
+		return;
 	libqlock(ctxt->lock);
 }
 
@@ -1084,7 +1098,7 @@ tkfreetop(Heap *h, int swept)
 	Tk *f, *next;
 	TkImg *i, *nexti;
 	TkVar *v, *nextv;
-	int wgtype;
+	int wgtype, locked;
 	void *r;
 	TkPanelimage *pi, *nextpi;
 
@@ -1093,9 +1107,17 @@ tkfreetop(Heap *h, int swept)
 	 * Tk_toplevel frees a top it could not finish, which has no
 	 * context yet; its lock was taken all the same, through nil, and
 	 * the fault left destroy() with the collector stopped.
+	 *
+	 * A builtin holds the lock only while it has the top as its
+	 * argument, so none can hold it now that nothing refers to the
+	 * top: if it is held, it was left held by an exception
+	 * (lockctxt), and is not waited for.
 	 */
-	if(t->ctxt != nil)
+	locked = 0;
+	if(t->ctxt != nil && libqlowner(t->ctxt->lock) == nil){
 		lockctxt(t->ctxt);
+		locked = 1;
+	}
 
 	if(swept) {
 		t->di = H;
@@ -1180,7 +1202,7 @@ tkfreetop(Heap *h, int swept)
 		if(t->binds[wgtype])
 			tkfreebind(t->binds[wgtype]);
 
-	if(t->ctxt != nil)
+	if(locked)
 		unlockctxt(t->ctxt);
 	/* XXX should we leave it locked for this bit? */
 	tkfreectxt(t->ctxt);

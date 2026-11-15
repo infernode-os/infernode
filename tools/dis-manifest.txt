@@ -1231,6 +1231,11 @@ dis/tests/alt_nilchan_test.dis
 dis/tests/errlabel_leak_test.dis
 dis/tests/geom_edge_test.dis
 dis/tests/ipint_edge_test.dis
+dis/tests/jit_4gb.dis
+dis/tests/jit_4gb_mod.dis
+dis/tests/jit_compile_fail.dis
+dis/tests/jit_compile_fail_mod.dis
+dis/tests/jit_compile_fail_ok.dis
 dis/tests/keyring_args_test.dis
 dis/tests/load_heapfull.dis
 dis/tests/load_heapfull_mod.dis

@@ -14,7 +14,11 @@ implement Msg9p;
 #   ├── status      (r)   Summary of all sources
 #   ├── draft       (w)   Create an immutable pending reply proposal
 #   ├── flag        (w)   "<src> <origid> <flag>" (separate capability)
-#   ├── pending     (r)   Trusted controller view of pending request IDs
+#   ├── pending     (r)   Trusted controller view of pending requests: a line
+#   │                     "id src origid len body", then tab-indented lines
+#   │                     "To:" and "Subject:" saying whose message, about
+#   │                     what, the reply answers (as the source said when the
+#   │                     draft was made)
 #   ├── approve     (w)   Trusted one-shot approval: "approve <id>"
 #   ├── deny        (w)   Trusted one-shot denial: "deny <id>"
 #   └── sources/    (dir) Per-source directories (future expansion)
@@ -70,12 +74,31 @@ SrcInfo: adt {
 PendingRead: adt {
 	tag:  int;
 	fid:  int;
+	count: int;
 };
 
+# A reply awaiting approval. The approver decides on what is shown, so
+# the request keeps whose message it answers and its subject, asked of
+# the source when the draft was made, and the same is asked again before
+# it is sent: a source may number its messages anew (a mailbox after an
+# expunge), and an id alone then names another message, from someone else.
 PendingSend: adt {
 	id: int;
 	data: string;
+	known: int;		# the source said what the message is
+	towhom: string;		# its sender
+	subject: string;
+	thread: string;		# its own id for the message, if it has one
 };
+
+# A draft whose message has been looked up, on its way to the serve loop.
+Drafted: adt {
+	tag:	int;
+	n:	int;
+	ps:	ref PendingSend;
+	err:	string;
+};
+draftc: chan of ref Drafted;
 
 stderr: ref Sys->FD;
 user: string;
@@ -93,6 +116,8 @@ pendingReaders: list of ref PendingRead;
 # Queued notifications when no reader is waiting
 notifyq: list of string;
 MAXQ: con 64;
+ndropped := 0;		# notifications dropped with the queue full
+MAXFIELD: con 256;	# characters of one header field in a notification
 MAXPENDING: con 16;
 pendingSends: list of ref PendingSend;
 nextSendID := 1;
@@ -142,6 +167,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg = nil;
 
 	notifychan = chan of string;
+	draftc = chan of ref Drafted;
 
 	sys->pctl(Sys->FORKFD, nil);
 
@@ -350,14 +376,18 @@ Serve:
 			Qnotify =>
 				# Blocking read: if we have queued notifications,
 				# reply immediately. Otherwise, park the reader.
+				# A stream: each read is the next notification whatever
+				# its offset. Read by offset, a second read on one fd
+				# got the tail of the next notification, or nothing,
+				# and that notification was gone.
 				if(notifyq != nil) {
 					# Dequeue oldest (last in reversed list)
 					text := dequeue();
-					srv.reply(styxservers->readbytes(m, array of byte text));
+					srv.reply(ref Rmsg.Read(m.tag, cutto(array of byte text, m.count)));
 				} else {
 					# Park — do NOT reply. Reply happens when
 					# notification arrives (see notifychan handler).
-					pendingReaders = ref PendingRead(m.tag, c.fid) :: pendingReaders;
+					pendingReaders = ref PendingRead(m.tag, c.fid, m.count) :: pendingReaders;
 				}
 
 			* =>
@@ -385,11 +415,13 @@ Serve:
 				else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qdraft =>
-				perr := queuedraft(data);
+				(dsrc, perr) := checkdraft(data);
 				if(perr != nil)
 					srv.reply(ref Rmsg.Error(m.tag, perr));
+				else if(dsrc == nil)
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));	# queued already
 				else
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					spawn drafter(dsrc, m.tag, len m.data, data);
 			Qflag =>
 				(nil, fargs) := sys->tokenize(data, " \t\r\n");
 				ferr := doflag(fargs);
@@ -427,6 +459,12 @@ Serve:
 				cancelpending(m.fid);
 			srv.clunk(m);
 
+		Flush =>
+			# a reader that has given up is not waiting: left parked,
+			# it was given the next notification, which nobody read
+			cancelflushed(m.oldtag);
+			srv.default(gm);
+
 		* =>
 			srv.default(gm);
 		}
@@ -437,11 +475,20 @@ Serve:
 			# Wake oldest reader (last in list since we prepend)
 			pr := lastpending();
 			pendingReaders = droplast(pendingReaders);
-			srv.reply(ref Rmsg.Read(pr.tag, array of byte notification));
+			srv.reply(ref Rmsg.Read(pr.tag, cutto(array of byte notification, pr.count)));
 		} else {
 			# Queue (bounded)
 			enqueue(notification);
 		}
+
+	d := <-draftc =>
+		derr := d.err;
+		if(derr == nil)
+			derr = queuedraft(d.ps);
+		if(derr != nil)
+			srv.reply(ref Rmsg.Error(d.tag, derr));
+		else
+			srv.reply(ref Rmsg.Write(d.tag, d.n));
 	}
 
 	navops <-= nil;
@@ -508,40 +555,84 @@ handlectl(data: string): string
 # new email tried it here, again and again, from "unsafe source name".
 DRAFTHOW: con " (a draft is a reply to a message here: its first line is the message's source and its second the message's id, as /mnt/msg/status lists them, then the body; a new message to someone cannot be drafted here)";
 
-queuedraft(data: string): string
+# A draft as written: the source it names, or nil with no error if the
+# same draft is queued already.
+checkdraft(data: string): (ref SrcInfo, string)
 {
-	verr := validreply(data);
+	(src, verr) := validreply(data);
 	if(verr != nil)
-		return verr;
+		return (nil, verr);
 	count := 0;
 	for(p := pendingSends; p != nil; p = tl p) {
 		count++;
 		if((hd p).data == data)
+			return (nil, nil);
+	}
+	if(count >= MAXPENDING)
+		return (nil, sys->sprint("draft: approval queue full (%d replies await approval)", count));
+	return (src, nil);
+}
+
+# Ask the source what the draft answers, away from the serve loop (a
+# mail source asks its server), and hand the request to the loop.
+drafter(src: ref SrcInfo, tag, n: int, data: string)
+{
+	(nil, r1) := splitfirst(data, '\n');
+	(origid, nil) := splitfirst(r1, '\n');
+	origid = msgstrip(origid);
+	d := ref Drafted(tag, n, ref PendingSend(0, data, 0, "", "", ""), nil);
+	{
+		(msg, err) := src.mod->fetch(origid);
+		if(msg != nil) {
+			d.ps.known = 1;
+			d.ps.towhom = msg.sender;
+			d.ps.subject = msg.subject;
+			d.ps.thread = msg.threadid;
+		} else if(src.mod->capabilities() & MsgSrc->CAP_FETCH)
+			d.err = "draft: " + src.name + " has no message " + origid +
+				" (" + err + ")" + DRAFTHOW;
+	} exception e {
+	"*" =>
+		d.err = "draft: " + src.name + ": " + e;
+	}
+	draftc <-= d;
+}
+
+queuedraft(ps: ref PendingSend): string
+{
+	count := 0;
+	for(p := pendingSends; p != nil; p = tl p) {
+		count++;
+		if((hd p).data == ps.data)
 			return nil;
 	}
 	if(count >= MAXPENDING)
-		return "draft: approval queue full";
-	id := nextSendID++;
-	pendingSends = ref PendingSend(id, data) :: pendingSends;
+		return sys->sprint("draft: approval queue full (%d replies await approval)", count);
+	ps.id = nextSendID++;
+	pendingSends = ps :: pendingSends;
 	return nil;
 }
 
-validreply(data: string): string
+validreply(data: string): (ref SrcInfo, string)
 {
 	(src, r1) := splitfirst(data, '\n');
 	(origid, nil) := splitfirst(r1, '\n');
 	src = msgstrip(src);
 	origid = msgstrip(origid);
 	if(src == "" || origid == "")
-		return "draft: want <srcname>\\n<origid>\\n<body>" + DRAFTHOW;
+		return (nil, "draft: want <srcname>\\n<origid>\\n<body>" + DRAFTHOW);
 	if(!safesrcname(src))
-		return "draft: unsafe source name" + DRAFTHOW;
+		return (nil, "draft: unsafe source name" + DRAFTHOW);
 	if(hascontrol(origid))
-		return "draft: unsafe message id" + DRAFTHOW;
+		return (nil, "draft: unsafe message id" + DRAFTHOW);
 	for(sl := sources; sl != nil; sl = tl sl)
-		if((hd sl).name == src)
-			return nil;
-	return "draft: no source: " + src + DRAFTHOW;
+		if((hd sl).name == src) {
+			# a source that cannot reply has nothing to approve
+			if(((hd sl).mod->capabilities() & MsgSrc->CAP_REPLY) == 0)
+				return (nil, "draft: " + src + " cannot send a reply");
+			return (hd sl, nil);
+		}
+	return (nil, "draft: no source: " + src + DRAFTHOW);
 }
 
 genpending(): string
@@ -553,6 +644,13 @@ genpending(): string
 		(origid, body) := splitfirst(r1, '\n');
 		result += sys->sprint("%d %s %s %d %s\n", ps.id, msgstrip(src),
 			msgstrip(origid), len body, pendingescape(body));
+		# whose message it answers: that is who the reply goes to
+		if(ps.known) {
+			result += "\tTo: " + previewfield(ps.towhom, MAXFIELD) + "\n";
+			result += "\tSubject: " + previewfield(ps.subject, MAXFIELD) + "\n";
+		} else
+			result += "\tTo: (not known: " + msgstrip(src) +
+				" cannot say whose message " + cleanfield(msgstrip(origid)) + " is)\n";
 	}
 	return result;
 }
@@ -602,7 +700,7 @@ takepending(id: int): ref PendingSend
 		if(ps.id == id && found == nil)
 			found = ps;
 		else
-			kept = ref PendingSend(ps.id, ps.data) :: kept;
+			kept = ps :: kept;
 	}
 	pendingSends = kept;
 	return found;
@@ -610,15 +708,16 @@ takepending(id: int): ref PendingSend
 
 doapproved(srv: ref Styxserver, tag, datalen: int, ps: ref PendingSend)
 {
-	rerr := handlereply(ps.data);
+	rerr := handlereply(ps);
 	if(rerr != nil)
 		srv.reply(ref Rmsg.Error(tag, rerr));
 	else
 		srv.reply(ref Rmsg.Write(tag, datalen));
 }
 
-handlereply(data: string): string
+handlereply(ps: ref PendingSend): string
 {
+	data := ps.data;
 	(src, r1) := splitfirst(data, '\n');
 	(origid, body) := splitfirst(r1, '\n');
 	src = msgstrip(src);
@@ -630,8 +729,24 @@ handlereply(data: string): string
 	if(hascontrol(origid))
 		return "reply: unsafe message id";
 	for(sl := sources; sl != nil; sl = tl sl)
-		if((hd sl).name == src)
-			return (hd sl).mod->reply(origid, body);
+		if((hd sl).name == src) {
+			mod := (hd sl).mod;
+			# The approval was given for a reply to the message shown.
+			# If the id now names another, nothing is sent.
+			if(ps.known) {
+				(msg, err) := mod->fetch(origid);
+				if(msg == nil)
+					return "reply: not sent: message " + origid + " of " + src +
+						" is no longer there (" + err + ")";
+				if(msg.sender != ps.towhom || msg.subject != ps.subject ||
+				   msg.threadid != ps.thread)
+					return "reply: not sent: message " + origid + " of " + src +
+						" is no longer the one this reply was drafted against (it was from " +
+						previewfield(ps.towhom, MAXFIELD) + ", it is from " +
+						previewfield(msg.sender, MAXFIELD) + ")";
+			}
+			return mod->reply(origid, body);
+		}
 	return "reply: no source: " + src;
 }
 
@@ -745,8 +860,10 @@ doregister(args: list of string): string
 	if(err != nil)
 		return "init " + srcname + ": " + err;
 
-	# Start watch goroutine
-	stopc := chan of int;
+	# Start watch goroutine. The stop is buffered: unregister tells it from
+	# the serve loop, while the wrapper may be waiting for that same loop
+	# to take a notification, and each then waited for the other for good.
+	stopc := chan[1] of int;
 	src := ref SrcInfo(srcname, dispath, mod, stopc);
 	sources = src :: sources;
 
@@ -810,7 +927,12 @@ dounregister(srcname: string): string
 	for(sl := sources; sl != nil; sl = tl sl) {
 		src := hd sl;
 		if(src.name == srcname) {
-			src.stopc <-= 1;	# signal watch to stop
+			alt {
+			src.stopc <-= 1 =>	# signal watch to stop
+				;
+			* =>
+				;
+			}
 			src.mod->close();
 			found = 1;
 		} else
@@ -828,7 +950,7 @@ dounregister(srcname: string): string
 watchwrapper(src: ref SrcInfo, nchan: chan of string, stopc: chan of int)
 {
 	updates := chan of ref MsgSrc->Notification;
-	relaystop := chan of int;
+	relaystop := chan[1] of int;	# a source in a read of its own is not listening
 
 	# Start the source's watch in a sub-goroutine
 	spawn sourcewatcher(src, updates, relaystop);
@@ -902,8 +1024,11 @@ hassub(hay, needle: string): int
 # injection into the Meta Agent's conversation.
 formatnotification(srcname: string, n: ref MsgSrc->Notification): string
 {
+	# Every field is bounded: a notification is one read's worth, and one
+	# with a 20K subject did not fit a 9P reply, so its reader got an
+	# error and the notification was gone.
 	if(n.kind == "error")
-		return "[Message error — " + cleanfield(srcname) + "]\nDetail: " + cleanfield(n.detail);
+		return "[Message error — " + cleanfield(srcname) + "]\nDetail: " + previewfield(n.detail, 2*MAXFIELD);
 
 	if(n.msg == nil)
 		return "[Message " + cleanfield(n.kind) + " — " + cleanfield(srcname) + "]";
@@ -914,19 +1039,21 @@ formatnotification(srcname: string, n: ref MsgSrc->Notification): string
 	text += "Triage: " + triageverdict(m) + "\n";
 
 	if(m.sender != nil)
-		text += "From: " + cleanfield(m.sender) + "\n";
+		text += "From: " + previewfield(m.sender, MAXFIELD) + "\n";
 	if(m.recipient != nil)
-		text += "To: " + cleanfield(m.recipient) + "\n";
+		text += "To: " + previewfield(m.recipient, MAXFIELD) + "\n";
 	if(m.subject != nil)
-		text += "Subject: " + cleanfield(m.subject) + "\n";
+		text += "Subject: " + previewfield(m.subject, MAXFIELD) + "\n";
 	if(m.timestamp != nil)
-		text += "Date: " + cleanfield(m.timestamp) + "\n";
+		text += "Date: " + previewfield(m.timestamp, MAXFIELD) + "\n";
 
 	# Include preview of body (first 200 chars)
 	if(m.body != nil && m.body != "")
 		text += "Preview: " + previewfield(m.body, 200) + "\n";
 
-	text += "Message ID: " + cleanfield(m.id) + "\n";
+	# whole or not at all: a cut id would name nothing, or another message
+	if(len m.id <= MAXFIELD)
+		text += "Message ID: " + cleanfield(m.id) + "\n";
 	text += "---\n";
 	text += "Handle this per your message policy. Draft via /mnt/msg/draft, " +
 		"flag via /mnt/msg/flag; the full body (when needed) is in the depth mount.";
@@ -973,8 +1100,13 @@ enqueue(s: string)
 	count := 0;
 	for(q := notifyq; q != nil; q = tl q)
 		count++;
-	if(count >= MAXQ)
-		return;	# drop if full
+	if(count >= MAXQ) {
+		# dropped, and said: on stderr the first time, and counted
+		# in status
+		if(ndropped++ == 0)
+			sys->fprint(stderr, "msg9p: notify queue full (%d): dropping notifications nobody reads\n", MAXQ);
+		return;
+	}
 
 	# Append to end (build reversed, then reverse)
 	notifyq = appendstr(notifyq, s);
@@ -1016,6 +1148,29 @@ droplast(l: list of ref PendingRead): list of ref PendingRead
 	return hd l :: droplast(tl l);
 }
 
+cancelflushed(tag: int)
+{
+	newlist: list of ref PendingRead;
+	for(l := pendingReaders; l != nil; l = tl l)
+		if((hd l).tag != tag)
+			newlist = hd l :: newlist;
+	# newlist is reversed; put it back oldest last
+	pendingReaders = nil;
+	for(; newlist != nil; newlist = tl newlist)
+		pendingReaders = hd newlist :: pendingReaders;
+}
+
+# no more of a notification than its reader asked for (the kernel cuts
+# a longer reply anyway; one past the message size is an error instead)
+cutto(data: array of byte, count: int): array of byte
+{
+	if(count < 0)
+		count = 0;
+	if(len data > count)
+		return data[0:count];
+	return data;
+}
+
 cancelpending(fid: int)
 {
 	newlist: list of ref PendingRead;
@@ -1046,8 +1201,11 @@ gensrclist(): string
 
 genstatus(): string
 {
-	if(sources == nil)
+	if(sources == nil) {
+		if(ndropped > 0)
+			return sys->sprint("no sources registered\n%d notifications dropped (nobody was reading notify)\n", ndropped);
 		return "no sources registered\n";
+	}
 	result := "";
 	for(sl := sources; sl != nil; sl = tl sl) {
 		src := hd sl;
@@ -1056,6 +1214,8 @@ genstatus(): string
 		st := src.mod->status();
 		result += src.name + ": " + st + " [caps: " + capwords(src.mod->capabilities()) + "]";
 	}
+	if(ndropped > 0)
+		result += sys->sprint("\n%d notifications dropped (nobody was reading notify)", ndropped);
 	return result;
 }
 

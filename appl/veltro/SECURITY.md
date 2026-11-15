@@ -62,7 +62,12 @@ capabilities.
 Message replies use two separate authorities. An agent with an exact
 `/mnt/msg/draft` grant can only queue immutable reply proposals. The trusted
 controller alone can inspect `/mnt/msg/pending` and consume a request once
-through `/mnt/msg/approve` (or discard it through `/mnt/msg/deny`). Never bind
+through `/mnt/msg/approve` (or discard it through `/mnt/msg/deny`). An approval
+is of what `pending` showed: the reply's exact body, and whose message it
+answers with its subject, which msg9p asks of the source when the draft is
+queued. Before sending it asks again and sends nothing if the id no longer
+names that message; the mail source names a message by UIDVALIDITY and UID,
+not by a sequence number that an expunge would move to another sender. Never bind
 those controller endpoints into an agent namespace. Message notification text is
 also part of the boundary: source-controlled fields must remain single physical
 lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`

@@ -297,6 +297,7 @@ static	ulong	codesize;	/* bytes at base, until the module has them */
 static	u32int*	comptmp;	/* pass 0's scratch */
 static	ulong*	patch;
 static	int	incompile;	/* #635 tripwire: compile() is not reentrant */
+static	int	toofar;		/* a conditional branch out of its 19 bits: compile fails, the module interpreted */
 
 void
 compiledone(void)
@@ -1193,7 +1194,12 @@ swapbraop(int b)
 }
 
 /*
- * condbra — B.cond to a Dis instruction.
+ * condbra — B.cond to a Dis instruction.  The displacement is 19 bits
+ * of instructions, a megabyte either way, and was masked to that with
+ * no check: a conditional branch over more code (one function with an
+ * `if' around some thousands of statements) went somewhere else in the
+ * module.  Such a module is not compiled; the unconditional branches
+ * reach 128MB, more than a module's code may be.
  */
 static void
 condbra(int r, Inst *i)
@@ -1207,6 +1213,10 @@ condbra(int r, Inst *i)
 		return;
 	}
 	off = ((long)(IA(patch, dst)) - (long)(code + codeoff)) >> 2;
+	if(off > 0x3FFFF || off < -0x40000) {
+		toofar = 1;
+		off = 0;
+	}
 	BCOND(r, off);
 }
 
@@ -3165,6 +3175,7 @@ compile(Module *m, int size, Modlink *ml)
 	compclean();
 	incompile = 1;
 	mod = m;
+	toofar = 0;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
 	/* Pass 0 generates each instruction, then each macro, into tmp
@@ -3308,6 +3319,11 @@ compile(Module *m, int size, Modlink *ml)
 			print("%s:\n", mactab[i].name);
 			das(s, code - s);
 		}
+	}
+
+	if(toofar) {
+		print("JIT: %s: a conditional branch over more than 1MB of code\n", m->name);
+		goto bad;
 	}
 
 	if(cflag > 3)

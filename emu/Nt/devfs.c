@@ -435,11 +435,18 @@ fsattach(char *spec)
 Walkqid*
 fswalk(Chan *c, Chan *nc, char **name, int nname)
 {
-	int j, alloc;
+	int j;
+	/*
+	 * volatile, as devfs-posix.c's are: both are set after waserror()
+	 * and used by its handler, which a compiler may otherwise give the
+	 * values they had there (no clone to close, no name to give back).
+	 */
+	volatile int alloc;
 	Walkqid *wq;
 	char path[MAX_PATH], *p;
 	Cname *ph;
-	Cname *current, *next;
+	Cname *volatile current;
+	Cname *next;
 
 	if(nname > 0)
 		isdir(c);

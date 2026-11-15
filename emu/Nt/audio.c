@@ -109,7 +109,7 @@ audio_file_init(void)
 void
 audio_file_open(Chan *c, int omode)
 {
-	int in_is_open = 0;
+	volatile int in_is_open = 0;	/* set after waserror(), read by its handler */
 
 	switch(omode){
 	case OREAD:

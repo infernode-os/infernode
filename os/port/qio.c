@@ -958,10 +958,17 @@ Block*
 mem2bl(uchar *p, int len)
 {
 	int n;
-	Block *b, *first, **l;
+	Block *b, *last;
+	/*
+	 * volatile: the list grows after waserror() and the handler frees
+	 * it.  It was reached through a pointer to a plain local, which
+	 * clang took for the nil it was at waserror(): when allocb raised
+	 * part way through a long write, the blocks already made were kept.
+	 */
+	Block *volatile first;
 
 	first = nil;
-	l = &first;
+	last = nil;
 	if(waserror()){
 		freeblist(first);
 		nexterror();
@@ -971,13 +978,17 @@ mem2bl(uchar *p, int len)
 		if(n > Maxatomic)
 			n = Maxatomic;
 
-		*l = b = allocb(n);
+		b = allocb(n);
+		if(last == nil)
+			first = b;
+		else
+			last->next = b;
+		last = b;
 		setmalloctag(b, getcallerpc(&p));
 		memmove(b->wp, p, n);
 		b->wp += n;
 		p += n;
 		len -= n;
-		l = &b->next;
 	} while(len > 0);
 	poperror();
 

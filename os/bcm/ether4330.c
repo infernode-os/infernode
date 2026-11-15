@@ -1343,8 +1343,9 @@ rspcmdoff(long blen, int doffset, long need)
 static int
 upload(Ctlr *ctl, Chan *c, int isconfig)
 {
-	uchar *buf;
-	uchar *cbuf;
+	/* volatile: nil at waserror(), allocated after it, freed by its handler */
+	uchar *volatile buf;
+	uchar *volatile cbuf;
 	int off, n, total;
 
 	buf = cbuf = nil;
@@ -1453,7 +1454,7 @@ static void wlsetvar(Ctlr*, char*, void*, int);
 static void
 reguload(Ctlr *ctl, Chan *c)
 {
-	uchar *buf;
+	uchar *volatile buf;	/* as upload's */
 	int off, n, flag;
 	enum {
 		Reguhdr = 2+2+4+4,

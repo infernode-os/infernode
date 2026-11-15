@@ -1754,6 +1754,7 @@ vmrun(int n, int argc, char **argv)
 	Osenv *o;
 	Type *t;
 	List *l;
+	List *volatile vl;	/* l as the error handler sees it: l is changed after waserror() */
 	String *s;
 	uchar *fp;
 	int i, pid, w;
@@ -1798,8 +1799,9 @@ vmrun(int n, int argc, char **argv)
 	 * the kernel. Anyone may write a VM's run file.
 	 */
 	l = (List*)H;
+	vl = l;
 	if(waserror()){
-		destroy(l);
+		destroy(vl);
 		nexterror();
 	}
 	for(i = argc-1; i >= 0; i--){
@@ -1809,6 +1811,7 @@ vmrun(int n, int argc, char **argv)
 			nexterror();
 		}
 		l = cons(IBY2WD, &l);
+		vl = l;		/* what the handler above gives back */
 		poperror();
 		l->t = &Tptr;
 		Tptr.ref++;

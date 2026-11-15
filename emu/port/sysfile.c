@@ -397,7 +397,18 @@ kpipe(int fd[2])
 	int i;
 	Dev *d;
 	Fgrp *f;
-	Chan *c[2];
+	/*
+	 * volatile: the handler closes what is here when it runs, and both
+	 * are replaced after waserror() (walk closes the channel it is
+	 * given and stores another).  Not volatile, the native kernel's
+	 * handler was compiled to close the channel c[0] held at
+	 * waserror(), which walk had already released, and nothing else:
+	 * a pipe() refused for want of a descriptor closed that channel a
+	 * second time and kept the two it had made.
+	 */
+	Chan *volatile c[2];
+	Chan *t;
+	int r;
 	static char *names[] = {"data", "data1"};
 
 	f = up->env->fgrp;
@@ -425,9 +436,15 @@ kpipe(int fd[2])
 		return -1;
 	}
 	c[1] = cclone(c[0]);
-	if(walk(&c[0], &names[0], 1, 1, nil) < 0)
+	t = c[0];
+	r = walk(&t, &names[0], 1, 1, nil);
+	c[0] = t;
+	if(r < 0)
 		error(Egreg);
-	if(walk(&c[1], &names[1], 1, 1, nil) < 0)
+	t = c[1];
+	r = walk(&t, &names[1], 1, 1, nil);
+	c[1] = t;
+	if(r < 0)
 		error(Egreg);
 	c[0] = d->open(c[0], ORDWR);
 	c[1] = d->open(c[1], ORDWR);

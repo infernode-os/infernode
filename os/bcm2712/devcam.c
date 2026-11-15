@@ -6,7 +6,11 @@
  *	#V/unicam/ctl	"format W H", "power on|off", "stream on|off",
  *			"port 0|1" (the connector); reads back the same,
  *			"i2c i2cN" (the bus in #J of the sensor on that
- *			connector), and what the receiver saw
+ *			connector), and what the receiver saw. One
+ *			writer at a time (another's open is refused
+ *			"in use"), and its close stops the stream and
+ *			takes the power off: two camsrvs shared it, and
+ *			one leaving powered off the other's camera
  *	#V/unicam/frame	an open waits for the next frame; reads return
  *			it, W*H samples of 16 bits, little-endian, row by
  *			row. One reader at a time.
@@ -155,6 +159,7 @@ static struct {
 	ulong	offat;		/* when power went off, in ms; 0 never */
 	int	on;
 	int	reader;
+	int	owner;		/* a ctl open for writing: one at a time */
 	ulong	frames;
 	int	cur, nxt, ready, busy, started;
 	ulong	intrs, fs, fe;
@@ -536,6 +541,15 @@ uopen(Chan *c, int omode)
 		u.reader = 1;
 		poperror();
 		qunlock(&u.lk);
+	}else if(path == Qctl && (c->mode & 3) != OREAD){
+		qlock(&u.lk);
+		if(u.owner){
+			qunlock(&u.lk);
+			c->flag &= ~COPEN;
+			error(Einuse);
+		}
+		u.owner = 1;
+		qunlock(&u.lk);
 	}
 	return c;
 }
@@ -543,7 +557,24 @@ uopen(Chan *c, int omode)
 static void
 uclose(Chan *c)
 {
-	if((c->flag & COPEN) == 0 || (ulong)c->qid.path != Qframe)
+	if((c->flag & COPEN) == 0)
+		return;
+	if((ulong)c->qid.path == Qctl){
+		if((c->mode & 3) == OREAD)
+			return;
+		/* the owner gone, killed or not: nothing it started is left on */
+		qlock(&u.lk);
+		if(!waserror()){
+			if(u.on)
+				stop();
+			campower(0);
+			poperror();
+		}
+		u.owner = 0;
+		qunlock(&u.lk);
+		return;
+	}
+	if((ulong)c->qid.path != Qframe)
 		return;
 	ilock(&u.ilk);
 	u.busy = -1;

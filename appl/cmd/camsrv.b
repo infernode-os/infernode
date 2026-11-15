@@ -1252,10 +1252,15 @@ lens(pos: int)
 	sys->pwrite(lensfd, b, 2, big 3);
 }
 
+# The receiver's ctl, held open for writing from sensoron to sensoroff:
+# the Pi 5's #V takes one writer, so a second camsrv is refused there
+# rather than powering off this one's camera, and its close turns off
+# what a killed camsrv left on.
+unicamfd: ref Sys->FD;
+
 unicam(s: string): string
 {
-	fd := sys->open("/dev/unicam/ctl", Sys->OWRITE);
-	if(fd == nil || sys->fprint(fd, "%s", s) < 0)
+	if(unicamfd == nil || sys->fprint(unicamfd, "%s", s) < 0)
 		return sys->sprint("camsrv: unicam %s: %r", s);
 	return nil;
 }
@@ -1313,6 +1318,9 @@ sensorfind(): string
 
 sensoron(): string
 {
+	unicamfd = sys->open("/dev/unicam/ctl", Sys->OWRITE);
+	if(unicamfd == nil)
+		return sys->sprint("camsrv: the camera: %r");
 	unicam("stream off");		# what a killed server left, if it did
 	lastst = -1;
 	e := unicam(sys->sprint("format %d %d", Sw, Sh));
@@ -1407,4 +1415,5 @@ sensoroff()
 	unicam("stream off");
 	unicam("power off");
 	i2cctl = sensorfd = lensfd = nil;
+	unicamfd = nil;
 }

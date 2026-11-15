@@ -17,8 +17,18 @@ implement DevipConvTest;
 #
 # The first needs a limit on the emulator's descriptors that is reached
 # before the table is full: tests/host/devip_conv_test.sh runs this
-# under one.  Without it that test is skipped.  Permission is tested
-# last, as it gives up the identity the tests run with.
+# under one.  Permission is tested last, as it gives up the identity the
+# tests run with.
+#
+# A conversation once made is in its protocol's directory for as long as
+# the emulator runs, and a walk to one costs a pass over those before
+# it.  The first two tests make hundreds, and with no limit on
+# descriptors thousands: every listing of /net after them is that much
+# slower (3000 conversations of tcp took a second to read the status
+# files of, where there had been two; matrix's sysmon service, which
+# reads them each second, fell behind its tests' deadlines on a slow
+# machine).  So they run only with -o, in an emulator of their own, as
+# the host test runs them; in the suite's emulator they are skipped.
 #
 
 include "sys.m";
@@ -34,6 +44,10 @@ DevipConvTest: module
 };
 
 SRCFILE: con "/tests/devip_conv_test.b";
+
+# whether the emulator is this test's alone (-o)
+own := 0;
+OWN: con "leaves its conversations in the emulator's table: run with -o in an emulator of its own (tests/host/devip_conv_test.sh)";
 
 passed := 0;
 failed := 0;
@@ -117,6 +131,8 @@ lister(proto: string, stop: chan of int, done: chan of int)
 # another Prog lists the protocol and reads its conversations' files.
 testGrow(t: ref T)
 {
+	if(!own)
+		t.skip(OWN);
 	stop := chan of int;
 	done := chan of int;
 	spawn lister("udp", stop, done);
@@ -157,6 +173,8 @@ fill(want: int): (array of ref Sys->FD, array of int, int)
 
 testSlots(t: ref T)
 {
+	if(!own)
+		t.skip(OWN);
 	(fds, nums, n0) := fill(MAXTRY);
 	if(n0 >= MAXTRY){
 		fds = nil;
@@ -270,6 +288,8 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
+		else if(hd a == "-o")
+			own = 1;
 
 	run("Grow", testGrow);
 	run("Slots", testSlots);

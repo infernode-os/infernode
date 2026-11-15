@@ -11,6 +11,10 @@
 # conversations and not another's (the owner's permission bits were
 # asked whoever the user was).
 #
+# The emulator is the test's own (-o): the conversations it makes stay
+# in the table, and would slow every later reader of /net in a shared
+# one.
+#
 # Skips (exit 77) when there is no emulator or the program is not built.
 #
 . "$(dirname "$0")/common.sh"
@@ -22,7 +26,7 @@
 TIMEOUT=${TIMEOUT:-240}
 rc=0
 for c in 1 0; do
-	out=$( ulimit -n 256; with_timeout "$TIMEOUT" "$EMU" -c$c -r"$ROOT" /dis/sh.dis -c "/dis/tests/devip_conv_test.dis -v; echo halt > /dev/sysctl" 2>&1 < /dev/null )
+	out=$( ulimit -n 256; with_timeout "$TIMEOUT" "$EMU" -c$c -r"$ROOT" /dis/sh.dis -c "/dis/tests/devip_conv_test.dis -v -o; echo halt > /dev/sysctl" 2>&1 < /dev/null )
 	if echo "$out" | grep -q "^PASS$" && ! echo "$out" | grep -q -- '--- FAIL\|--- SKIP\|SEGV: addr=\|BUS: addr=\|panic:\|Broken:'; then
 		echo "PASS: -c$c: no conversation lost to a refused socket; a user's conversations their own"
 	else

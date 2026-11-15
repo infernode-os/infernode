@@ -760,9 +760,7 @@ firstletter(box: ref Box, st: ref St)
 		j++;
 	if(j >= n || isspacesep(s[j]))
 		return;	# punctuation alone, or a space where the letter would be: no first letter
-	j++;
-	while(j < n && bidi->joining(s[j]) == Bidi->JT)
-		j++;
+	j = clusterend(s, j);
 	while(j < n && bidi->punct(s[j]))
 		j++;
 	ft := newbox(Ktext, 1, t.node, st);
@@ -796,6 +794,38 @@ firstletter(box: ref Box, st: ref St)
 		kids[m++] = hd l;
 	kids[m:] = p.kids[i+1:];
 	p.kids = kids;
+}
+
+# where the grapheme cluster that begins at s[j] ends (UAX #29, as far
+# as a first letter needs): the character, its marks, variation
+# selectors and emoji modifiers, a regional indicator's pair (a flag:
+# WPT's first-letter-flag-001 enlarged half of it), and what a
+# zero-width joiner joins to it
+clusterend(s: string, j: int): int
+{
+	n := len s;
+	if(j >= n)
+		return j;
+	ri := isregional(s[j]);
+	j++;
+	if(ri && j < n && isregional(s[j]))
+		j++;
+	while(j < n) {
+		c := s[j];
+		if(bidi->joining(c) == Bidi->JT || c >= 16rFE00 && c <= 16rFE0F || c >= 16rE0100 && c <= 16rE01EF ||
+		   c >= 16r1F3FB && c <= 16r1F3FF || c >= 16rE0020 && c <= 16rE007F)
+			j++;	# a mark, a variation selector, a skin tone, a tag
+		else if(c == 16r200D && j + 1 < n)
+			j += 2;	# joined to what follows
+		else
+			break;
+	}
+	return j;
+}
+
+isregional(c: int): int
+{
+	return c >= 16r1F1E6 && c <= 16r1F1FF;
 }
 
 # a space separator that is a break opportunity and hangs at a line's

@@ -725,16 +725,18 @@ Pg.install(p: self ref Pg, pics: list of ref Pic)
 }
 
 # put the fresh pictures in their boxes with no relayout, if that is
-# all they change: each shown only by boxes whose width and height are
-# both lengths (an <img width height>), and the document unchanged
+# all they change: each shown by boxes already, only by boxes whose width
+# and height are both lengths (an <img width height>), and the document unchanged
 # since it was laid out; an SVG is then drawn at its box's size, as a
 # rebuild draws it.  A background, a mask or a border image only
 # paints (from layout's table, made again): unless it is also a
 # list-style-image, which sizes its marker, it needs no relayout either
 placed(p: ref Pg, fresh: list of ref Pic): int
 {
+	# nothing new: laid out again as before, which a caller may be
+	# asking for (an install of pictures it had already)
 	if(fresh == nil)
-		return 1;
+		return 0;
 	if(p.root == nil || p.computed == nil || p.doc.nchanged != 0 || len p.computed.st < p.doc.n)
 		return 0;
 	curdoc = p.doc;
@@ -742,19 +744,28 @@ placed(p: ref Pg, fresh: list of ref Pic): int
 	boxes := replacedboxes(p.root, nil);
 	for(l := fresh; l != nil; l = tl l) {
 		pic := hd l;
-		if(member(pic.url, bgs) && islistimage(p, pic.url))
+		isbg := member(pic.url, bgs);
+		if(isbg && islistimage(p, pic.url))
 			return 0;
+		shown := 0;
 		for(bl := boxes; bl != nil; bl = tl bl) {
 			b := hd bl;
 			if(b.url != pic.url)
 				continue;
+			shown = 1;
 			st := b.st;
-			if(st.width.kind != Style->Lpx || st.height.kind != Style->Lpx || st.imgorient == 1)
+			if(!fixedlen(st.width) || !fixedlen(st.height) || st.imgorient == 1)
 				return 0;
-			if(st.minwidth.kind != Style->Lauto && st.minwidth.kind != Style->Lpx ||
-			   st.minheight.kind != Style->Lauto && st.minheight.kind != Style->Lpx)
+			if(st.minwidth.kind != Style->Lauto && !fixedlen(st.minwidth) ||
+			   st.minheight.kind != Style->Lauto && !fixedlen(st.minheight))
 				return 0;
 		}
+		# no replaced box shows it and it is no background: an <img>
+		# laid out before its picture came (as its alt text, or
+		# nothing), which the picture's size changes (WPT's
+		# intrinsic-size-009: an image in a flex item, 100% of it)
+		if(!shown && !isbg)
+			return 0;
 	}
 	applypics(p, p.root);
 	fitimages(p, p.root);
@@ -762,6 +773,14 @@ placed(p: ref Pg, fresh: list of ref Pic): int
 	bgpage = nil;	# its background images, again with the new ones
 	usebg(p);
 	return 1;
+}
+
+# a length with no percentage in it: Lpx is px plus pct% of the basis,
+# so width: 100% is Lpx too, and sized by the picture's box (WPT's
+# intrinsic-size-009: placed with no relayout, the image kept its size)
+fixedlen(l: Style->Len): int
+{
+	return l.kind == Style->Lpx && l.pct == 0.0;
 }
 
 # whether url is some element's list-style-image

@@ -800,6 +800,22 @@ be explicit:
 - future `profile-observe-ui`: possible read-only/event-only UI view if the
   namespace surface supports that distinction.
 
+A fixed-function UI tool is only as fixed as the requests it writes. The
+`/mnt/ui` control files take one request per write, and the request's first
+word is the command, so a tool that puts model text into one must keep that
+text where it is data. Two things hold this. `luciuisrv` takes a request
+whole however many 9P messages carry it (a write longer than one message used
+to be run a message at a time, the later ones as commands of their own), and a
+tool does not write a control request longer than one message: long content
+goes through an artifact's `data` file. This matters because of one request in
+particular: `create ... type=app dis=<path> data=<args>` makes Lucifer start
+that program with those arguments in its own name space, with the user's
+authority, outside any agent's confinement. Lucifer loads only from `/dis/wm`
+and `/dis/xenith`, and `luciuisrv` refuses any other path, but the arguments
+are free (`wm/shell -c`, an editor's file). Of the agent's tools only `launch`
+writes such a request, building the path and checking the arguments itself;
+`present` makes content artifacts and nothing else.
+
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
 `/mnt/vision` only from `vision`, `/mnt/wikia` only from `wiki`,

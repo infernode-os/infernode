@@ -69,8 +69,8 @@ doc(): string
 		"  write <id> <content>    Write content (use \\\\n for newlines)\n" +
 		"  center <id>             Make artifact the active/focused view\n" +
 		"  delete <id>             Remove artifact from presentation zone\n" +
+		"  append <id> <content>   Add content to the end of an artifact\n" +
 		"  kill <id>               Terminate a running GUI app and remove its tab\n" +
-		"  navigate <id> <url>     Navigate a GUI app to a new URL (kill + relaunch)\n" +
 		"  list                    List artifacts in current activity\n" +
 		"  status                  Show current activity and centered artifact\n\n" +
 		"Artifact types:\n" +
@@ -99,8 +99,8 @@ doc(): string
 		"  present center flow\n\n" +
 		"  present list\n\n" +
 		"Navigating Charon browser:\n" +
-		"  Launch charon http://example.com  — preferred: launch+navigate in one step\n" +
-		"  present navigate charon http://example.com  — navigate a running Charon\n" +
+		"  Launch charon http://example.com  — the launch tool starts Charon on a URL\n" +
+		"  (present starts no apps: it has no navigate).\n" +
 		"  Right-click inside Charon for back/fwd/stop/start menu.\n" +
 		"  Do NOT use exec or shell commands to control Charon.";
 }
@@ -129,8 +129,8 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, write, append, center, delete, kill, navigate, list, status.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"For create: <id> [type=...] [label=...] [data=<path>]. For write/append: <id> <content> (use \\\\n for newlines). For center/delete/kill: <id>. For navigate: <id> <url>. Omit for list/status.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, write, append, center, delete, kill, list, status.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: <id> [type=...] [label=...]. For write/append: <id> <content> (use \\\\n for newlines; for type pdf or image the content is the file's path). For center/delete/kill: <id>. Omit for list/status.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -169,7 +169,7 @@ exec(args: string): string
 	"status" =>
 		return dostatus();
 	* =>
-		return sys->sprint("error: unknown command '%s'. Use: create, write, append, center, delete, kill, navigate, list, status", cmd);
+		return sys->sprint("error: unknown command '%s'. Use: create, write, append, center, delete, kill, list, status", cmd);
 	}
 }
 
@@ -232,6 +232,8 @@ docreate(args: string): string
 	if(label == nil || label == "")
 		label = id;
 	label = safeattrtext(label);
+	if(len label > MAXLABEL)
+		label = label[0:MAXLABEL];
 
 	actid := currentactid();
 	if(actid < 0)
@@ -290,11 +292,11 @@ dowrite(args: string): string
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r (artifact '%s' exists?)", datapath, id);
 
-	# Truncate and write
+	# A write at offset 0 replaces the data
 	sys->seek(fd, big 0, Sys->SEEKSTART);
 	data := array of byte content;
 	n := sys->write(fd, data, len data);
-	if(n < 0)
+	if(n != len data)
 		return sys->sprint("error: write failed: %r");
 
 	return sys->sprint("wrote %d bytes to artifact '%s'", n, id);
@@ -325,13 +327,28 @@ doappend(args: string): string
 	if(actid < 0)
 		return "error: no active activity";
 
-	pctl := sys->sprint("%s/activity/%d/presentation/ctl", UI_MOUNT, actid);
-	cmd := sys->sprint("append id=%s data=%s", id, content);
-	err := writefile(pctl, cmd);
-	if(err != nil)
-		return "error: " + err;
+	# Through the data file, which takes content of any length (a write
+	# longer than one 9P message is put together by its offsets): what is
+	# there, then the new content, written from offset 0.  It used to go
+	# into a ctl line, "append id=... data=<content>", in one write: past
+	# one message the server ran the rest of the content, the model's own
+	# text, as a ctl command of its own, and an artifact of a type create
+	# refuses (an app, with its arguments) could be made that way.
+	datapath := sys->sprint("%s/activity/%d/presentation/%s/data", UI_MOUNT, actid, id);
+	(old, rerr) := readall(datapath);
+	if(rerr != nil)
+		return sys->sprint("error: %s (artifact '%s' exists?)", rerr, id);
+	fd := sys->open(datapath, Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("error: cannot open %s: %r", datapath);
+	add := array of byte content;
+	data := array[len old + len add] of byte;
+	data[0:] = old;
+	data[len old:] = add;
+	if(sys->write(fd, data, len data) != len data)
+		return sys->sprint("error: append failed: %r");
 
-	return sys->sprint("appended %d bytes to artifact '%s'", len content, id);
+	return sys->sprint("appended %d bytes to artifact '%s'", len add, id);
 }
 
 # Center/activate an artifact
@@ -377,77 +394,16 @@ dokill(args: string): string
 	return sys->sprint("killed app '%s'", id);
 }
 
-# Navigate a running GUI app to a new URL (kill and relaunch with data=url)
-# Usage: navigate <id> <url>
-# The app's .dis path is read from the artifact directory so the app can be
-# relaunched. If the dis file is not readable, fall back to Launch <id> <url>.
-donavigate(args: string): string
+# navigate was to send a running app to a URL by killing it and creating
+# it again with the URL as its argument.  It never did (it read the
+# app's path from a file that is not there), and present does not start
+# apps: one made from a presentation artifact runs with the user's
+# authority, outside the agent's name space, with the arguments given.
+# The launch tool is the one that does, with its own checks.
+donavigate(nil: string): string
 {
-	args = strip(args);
-	if(args == "")
-		return "error: usage: navigate <id> <url>";
-
-	(id, url) := splitfirst(args);
-	if(id == "")
-		return "error: app id required";
-	if(!validid(id))
-		return "error: invalid artifact id: " + id;
-	if(url == "")
-		return sys->sprint("error: url required — e.g. navigate %s http://example.com", id);
-	if(id != "charon")
-		return "error: URL navigation is only supported for charon";
-	if(!isallowedurl(url))
-		return "error: charon only accepts http:// and https:// URLs";
-
-	actid := currentactid();
-	if(actid < 0)
-		return "error: no active activity";
-
-	artdir := sys->sprint("%s/activity/%d/presentation/%s", UI_MOUNT, actid, id);
-
-	# Read the .dis path stored when the app was created.
-	dispath := readfile(artdir + "/dis");
-	if(dispath == nil || strip(dispath) == "")
-		return sys->sprint("error: cannot read dis path for '%s' — use Launch %s %s instead", id, id, url);
-	dispath = strip(dispath);
-
-	label := readfile(artdir + "/label");
-	if(label == nil || strip(label) == "")
-		label = id;
-	else
-		label = strip(label);
-	label = safeattrtext(label);
-
-	pctl := sys->sprint("%s/activity/%d/presentation/ctl", UI_MOUNT, actid);
-
-	# Kill the running instance (ignore errors — app may not be running)
-	writefile(pctl, "kill id=" + id);
-
-	# Relaunch with new URL as data arg
-	cmd := sys->sprint("create id=%s type=app dis=%s label=%s data=%s", id, dispath, label, url);
-	err := writefile(pctl, cmd);
-	if(err != nil)
-		return "error: " + err;
-
-	# Center the relaunched app
-	writefile(pctl, "center id=" + id);
-
-	return sys->sprint("navigated '%s' to %s", id, url);
-}
-
-isallowedurl(url: string): int
-{
-	lurl := url;
-	for(i := 0; i < len lurl; i++)
-		if(lurl[i] >= 'A' && lurl[i] <= 'Z')
-			lurl[i] += 'a' - 'A';
-	for(i = 0; i < len lurl; i++) {
-		c := lurl[i];
-		if(c <= ' ' || c == 16r7F)
-			return 0;
-	}
-	return len lurl >= 7 && lurl[0:7] == "http://" ||
-		len lurl >= 8 && lurl[0:8] == "https://";
+	return "error: present has no navigate: it starts no apps. " +
+		"To open Charon on a URL use the launch tool: launch charon <url>";
 }
 
 # Delete an artifact by id
@@ -546,17 +502,54 @@ dostatus(): string
 
 # --- Helpers ---
 
+# Write one request to a ctl file.  A ctl request is one 9P message: a
+# longer write is sent as several, and what a server makes of the ones
+# after the first is not this tool's to assume, so one that does not fit
+# is refused here.  Nothing of the model's that goes into a request (an
+# id, a label) is long enough to need more.
+MAXCTL: con 2048;
+MAXLABEL: con 200;
+
 writefile(path, data: string): string
 {
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("cannot open %s: %r", path);
 	b := array of byte data;
+	iou := sys->iounit(fd);
+	if(len b > MAXCTL || (iou > 0 && len b >= iou))
+		return "request too long for " + path;
 	n := sys->write(fd, b, len b);
-	if(n < 0)
+	if(n != len b)
 		return sys->sprint("write to %s failed: %r", path);
 	return nil;
 }
+
+# All of a file, however many reads it takes.
+readall(path: string): (array of byte, string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return (nil, sys->sprint("cannot open %s: %r", path));
+	data := array[0] of byte;
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n < 0)
+			return (nil, sys->sprint("cannot read %s: %r", path));
+		if(n == 0)
+			break;
+		if(len data + n > MAXDATA)
+			return (nil, path + " is too large");
+		nd := array[len data + n] of byte;
+		nd[0:] = data;
+		nd[len data:] = buf[0:n];
+		data = nd;
+	}
+	return (data, nil);
+}
+
+MAXDATA: con 1024*1024;	# luciuisrv's limit on an artifact's data
 
 readfile(path: string): string
 {
@@ -591,6 +584,10 @@ safeattrtext(s: string): string
 validid(id: string): int
 {
 	if(id == nil || len id == 0 || len id > 128)
+		return 0;
+	# the presentation directory's own files: an artifact of that name
+	# could never be reached
+	if(id == "ctl" || id == "current")
 		return 0;
 	for(i := 0; i < len id; i++) {
 		c := id[i];

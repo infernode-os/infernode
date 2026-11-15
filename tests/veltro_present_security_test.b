@@ -61,11 +61,12 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(err != nil)
 		raise "fail:present init: " + err;
 
-	check(tool, "navigate charon file:/lib/veltro/system.txt", "only accepts http:// and https://");
-	check(tool, "navigate charon FILE:///env/secret", "only accepts http:// and https://");
-	check(tool, "navigate charon http://example.com data=-c owned", "only accepts http:// and https://");
-	check(tool, "navigate charon https://example.com\n" + "dis=/dis/wm/shell.dis", "only accepts http:// and https://");
-	check(tool, "navigate editor https://example.com", "only supported for charon");
+	# present starts no apps: navigate (kill an app, start it again on a
+	# URL) is refused whatever it is given
+	check(tool, "navigate charon file:/lib/veltro/system.txt", "present has no navigate");
+	check(tool, "navigate charon http://example.com data=-c owned", "present has no navigate");
+	check(tool, "navigate charon HTTPS://example.com", "present has no navigate");
+	check(tool, "navigate editor https://example.com", "present has no navigate");
 	check(tool, "create sneaky type=app label=Shell", "unsupported artifact type");
 	check(tool, "create sneaky2 app Shell", "unsupported artifact type");
 	check(tool, "create ../../owned type=text label=Owned", "invalid artifact id");
@@ -75,10 +76,11 @@ init(nil: ref Draw->Context, nil: list of string)
 	check(tool, "center bad\nid", "invalid artifact id");
 	check(tool, "delete id=other", "invalid artifact id");
 	check(tool, "kill bad/id", "invalid artifact id");
-	check(tool, "navigate bad/id https://example.com", "invalid artifact id");
+	check(tool, "create ctl type=text", "invalid artifact id");
+	check(tool, "create current type=text", "invalid artifact id");
 	if(safeattrtext("Report data=/tmp/owned\nlabel=evil") != "Report data:/tmp/owned label:evil")
 		raise "fail:safeattrtext";
 	sys->print("PASS present label attr text is inert\n");
-	# A permitted URL gets past policy validation and reaches the absent test UI.
-	check(tool, "navigate charon HTTPS://example.com", "no active activity");
+	# A permitted request gets past validation and reaches the absent test UI.
+	check(tool, "center summary", "no active activity");
 }

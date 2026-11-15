@@ -231,6 +231,12 @@ inputreads: list of ref InputRead;
 # The longest message a writer may post to conversation/input.
 MAXINPUT: con 1024*1024;
 
+# Fids whose request (a ctl command, an input message) was refused part
+# way through: what else is written on one is refused too, until it is
+# clunked, so the tail of a refused request is never taken for a
+# request of its own.
+refusedfids: list of int;
+
 PendingRead: adt {
 	fid:	int;
 	tag:	int;
@@ -923,6 +929,14 @@ Serve:
 				cf.data = nil;
 				dropinputread(m.fid);
 			}
+			# So is a ctl request whose last piece was a full message.
+			if(cf != nil && isctl(FTYPE(cf.path)) && cf.data != nil) {
+				cerr := runctl(FTYPE(cf.path), ACTID(cf.path), cf.data);
+				if(cerr != nil)
+					sys->fprint(stderr, "luciuisrv: ctl request refused at close: %s\n", cerr);
+				cf.data = nil;
+			}
+			unrefuse(m.fid);
 			# Remove pending reads for this fid
 			prev: ref PendingRead;
 			p := pending;
@@ -1304,20 +1318,51 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		return;
 	}
 
+	if(inlist(m.fid, refusedfids)) {
+		srv.reply(ref Rmsg.Error(m.tag, "request refused"));
+		return;
+	}
+
+	# One request to a ctl file is one write, which the mount driver
+	# sends as several messages when it is longer than one, each but the
+	# last full.  They are gathered on the fid and run as one request at
+	# the first that is not full (at the clunk, if the last was).  Each
+	# message used to be run as a command of its own: a long request was
+	# cut short, and its tail, which is the writer's text (a model's
+	# reply, an artifact's content), was run as a second command.
+	if(isctl(ft)) {
+		if(len c.data + len m.data > MAX_DATA_SIZE) {
+			c.data = nil;
+			refusedfids = m.fid :: refusedfids;
+			srv.reply(ref Rmsg.Error(m.tag, "ctl request too long"));
+			return;
+		}
+		whole := m.data;
+		if(len c.data > 0) {
+			whole = array[len c.data + len m.data] of byte;
+			whole[0:] = c.data;
+			whole[len c.data:] = m.data;
+		}
+		if(len m.data >= srv.iounit()) {
+			c.data = whole;
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			return;
+		}
+		c.data = nil;
+		err := runctl(ft, actid, whole);
+		if(err != nil)
+			srv.reply(ref Rmsg.Error(m.tag, err));
+		else
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		return;
+	}
+
 	data := string m.data;
 	# Strip trailing newline
 	if(len data > 0 && data[len data - 1] == '\n')
 		data = data[0:len data - 1];
 
 	case ft {
-	Qctl =>
-		err := globalctl(data);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	Qnotification =>
 		data = safeeventtext(data);
 		if(qlen(notifyq) >= MAX_QUEUE_DEPTH) {
@@ -1404,24 +1449,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		pushglobalevent("activity urgency " + string actid);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
-	Qconvctl =>
-		a := findactivity(actid);
-		if(a == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			break;
-		}
-		err := convctl(a, data);
-		if(err != nil) {
-			# Log rejected ctl writes: a 9P write error here is otherwise
-			# easy to miss because sh's `> ` redirect swallows it, so a bad
-			# write parses as a no-op and the caller assumes success
-			# (INFR-131). The operator at least sees the cause in the log.
-			sys->fprint(stderr, "luciuisrv: convctl rejected %q: %s\n", data, err);
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	Qconvinput =>
 		a := findactivity(actid);
 		if(a == nil) {
@@ -1448,19 +1475,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			c.data = nil;
 			postinput(actid, msg);
 		}
-
-	Qpresctl =>
-		a := findactivity(actid);
-		if(a == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			break;
-		}
-		err := presctl(a, data);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qprescurrent =>
 		a := findactivity(actid);
@@ -1505,22 +1519,59 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		pushevent(actid, "presentation app " + a.artifacts[subid].id + " status=" + a.artifacts[subid].appstatus);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
-	Qctxctl =>
-		a := findactivity(actid);
-		if(a == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			break;
-		}
-		err := ctxctl(a, data);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	* =>
 		srv.reply(ref Rmsg.Error(m.tag, Eperm));
 	}
+}
+
+isctl(ft: int): int
+{
+	return ft == Qctl || ft == Qconvctl || ft == Qpresctl || ft == Qctxctl;
+}
+
+unrefuse(fid: int)
+{
+	kept: list of int;
+	for(l := refusedfids; l != nil; l = tl l)
+		if(hd l != fid)
+			kept = hd l :: kept;
+	refusedfids = kept;
+}
+
+# Run one whole request to a ctl file: nil, or why it is refused.
+runctl(ft, actid: int, raw: array of byte): string
+{
+	data := string raw;
+	if(len data > 0 && data[len data - 1] == '\n')
+		data = data[0:len data - 1];
+	if(ft == Qctl)
+		return globalctl(data);
+	a := findactivity(actid);
+	if(a == nil)
+		return Enotfound;
+	# closed since the request's first piece was taken
+	if(a.status == "hidden")
+		return "activity closed";
+	err: string;
+	case ft {
+	Qconvctl =>
+		err = convctl(a, data);
+		if(err != nil) {
+			# Log rejected ctl writes: a 9P write error here is otherwise
+			# easy to miss because sh's `> ` redirect swallows it, so a bad
+			# write parses as a no-op and the caller assumes success
+			# (INFR-131). The operator at least sees the cause in the log.
+			shown := data;
+			if(len shown > 200)
+				shown = shown[0:200] + "...";
+			sys->fprint(stderr, "luciuisrv: convctl rejected %q: %s\n", shown, err);
+		}
+	Qpresctl =>
+		err = presctl(a, data);
+	Qctxctl =>
+		err = ctxctl(a, data);
+	}
+	return err;
 }
 
 # --- Ctl command handlers ---
@@ -1697,6 +1748,9 @@ presctl(a: ref Activity, data: string): string
 		dispath := getattr(attrs, "dis");
 		if(id == nil || id == "")
 			return "missing id";
+		# the directory's own files: an artifact so named is never reached
+		if(id == "ctl" || id == "current")
+			return "invalid artifact id: " + id;
 		if(atype == nil || atype == "")
 			atype = "text";
 		atype = safeattrtext(atype);
@@ -1706,6 +1760,11 @@ presctl(a: ref Activity, data: string): string
 			label = id;
 		label = safeattrtext(label);
 		dispath = safeattrtext(dispath);
+		# Lucifer loads an app's path only from where GUI apps are kept
+		# (its validdispath); one from anywhere else is refused here too,
+		# before it is stored and announced.
+		if(dispath != nil && dispath != "" && !validapppath(dispath))
+			return "invalid app path: " + dispath;
 		if(findartifact(a, id) != nil)
 			return "artifact already exists: " + id;
 		art := addartifact(a, id, atype, label);
@@ -2898,6 +2957,26 @@ validrole(role: string): int
 validdtype(dtype: string): int
 {
 	return dtype == "dialogue" || dtype == "form";
+}
+
+# An app's Dis file: under /dis/wm/ or /dis/xenith/, a .dis, with no
+# blank, control character or dot component (as lucifer.b's validdispath).
+validapppath(p: string): int
+{
+	if(!hasprefix(p, "/dis/wm/") && !hasprefix(p, "/dis/xenith/"))
+		return 0;
+	if(len p < 4 || p[len p - 4:] != ".dis")
+		return 0;
+	for(i := 0; i < len p; i++) {
+		c := p[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+		if(c == '/' && i + 1 < len p && (p[i+1] == '/' || p[i+1] == '.'))
+			return 0;
+		if(c == '.' && i + 1 < len p && p[i+1] == '.')
+			return 0;
+	}
+	return 1;
 }
 
 validleaf(s: string): int

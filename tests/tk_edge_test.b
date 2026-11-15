@@ -532,46 +532,95 @@ nimages(): int
 	fd := sys->open("/dev/heaptypes", Sys->OREAD);
 	if(fd == nil)
 		return -1;
-	# all of it: the listing has a line for every type in the heap, and
-	# in a long-running emulator Image's is far past the first read
 	text := "";
 	buf := array[16384] of byte;
 	while((n := sys->read(fd, buf, len buf)) > 0)
 		text += string buf[0:n];
 	if(text == "")
 		return -1;
+	return imageline(text);
+}
+
+# Image's count in the text of /dev/heaptypes, 0 if it has no line, -1 if
+# the listing was cut short before it could have had one.  Its lines are
+#	heap objects N bytes N kinds K
+#	gc ...
+#	gc propagated N name		(what the collector last traversed)
+#	count bytes kind name ...	(one for each of the K kinds, most first)
+# and only the last sort is a count of objects: a "gc propagated ... Image"
+# line was taken for one, which made the count 0 whenever the collector
+# had just been through some images.
+imageline(text: string): int
+{
+	kinds := -1;
+	listed := 0;
 	(nil, lines) := sys->tokenize(text, "\n");
 	for(; lines != nil; lines = tl lines){
 		(nf, f) := sys->tokenize(hd lines, " \t");
-		if(nf >= 2){
-			last := "";
-			for(g := f; g != nil; g = tl g)
-				last = hd g;
-			if(last == "Image")
-				return int hd f;
+		if(nf < 4)
+			continue;
+		a := array[nf] of string;
+		for(k := 0; f != nil; f = tl f)
+			a[k++] = hd f;
+		if(a[0] == "heap" && nf == 7 && a[5] == "kinds"){
+			kinds = int a[6];
+			continue;
 		}
+		if(!isnumber(a[0]) || !isnumber(a[1]))
+			continue;
+		listed++;
+		if(nf == 4 && a[2] == "obj" && a[3] == "Image")
+			return int a[0];
 	}
+	if(kinds >= 0 && listed < kinds)
+		return -1;
 	return 0;
+}
+
+isnumber(s: string): int
+{
+	if(s == "")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+# the count, or the test is skipped: it cannot be had in this emulator
+images(t: ref T): int
+{
+	n := nimages();
+	if(n < 0)
+		t.skip("/dev/heaptypes has no count of images here");
+	return n;
 }
 
 testPanelImages(t: ref T)
 {
-	if(nimages() < 0)
-		t.skip("no /dev/heaptypes");
+	# the reading of the listing, first: lines that are not counts
+	t.asserteq(imageline("heap objects 9 bytes 9 kinds 3\ngc runs 1 epochs 1\ngc propagated       50 Image\n" +
+		"     254      32768 obj string\n      88      11264 obj Image\n       3        384 array Image\n"), 88,
+		"the count of images is the objects' line, not the collector's");
+	t.asserteq(imageline("heap objects 9 bytes 9 kinds 2\ngc propagated       50 Image\n     254      32768 obj string\n       2        384 list ptr\n"), 0,
+		"no line, no images");
+	t.asserteq(imageline("heap objects 9 bytes 9 kinds 40\n     254      32768 obj string\n"), -1,
+		"a listing cut short says nothing");
+
 	top := mktop(t, 100, 100);
 	cmd(t, top, "panel .p; pack .p; update");
-	n0 := nimages();
+	n0 := images(t);
 	imgs := array[50] of ref Image;
 	for(k := 0; k < len imgs; k++){
 		imgs[k] = display.newimage(Rect((0,0),(8,8)), display.image.chans, 0, Draw->White);
 		tk->putimage(top, ".p", imgs[k], nil);	# in place of the one before
 	}
-	t.asserteq(nimages(), n0+50, "fifty images are made and shown in turn");
+	t.asserteq(images(t), n0+50, "fifty images are made and shown in turn");
 	for(k = 0; k < len imgs; k++)
 		imgs[k] = nil;
-	t.asserteq(nimages(), n0+1, "dropped by the program, only the one the panel shows is left");
+	t.asserteq(images(t), n0+1, "dropped by the program, only the one the panel shows is left");
 	cmd(t, top, "destroy .p");
-	t.asserteq(nimages(), n0, "and none once the panel has gone");
+	t.asserteq(images(t), n0, "and none once the panel has gone");
 }
 
 init(nil: ref Draw->Context, args: list of string)

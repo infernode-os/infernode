@@ -91,6 +91,11 @@ selrects: list of Rect;
 menulink := "";	# the link the menu was posted over
 DRAGSLOP: con 4;
 
+# a pointing hand, its fingertip the hot spot, over a link: as wm/wm's
+# own, a 16x16 white mask and the black over it
+HANDCURSOR: con "cursor -5 0 16 32 06000f000f000f000fc00ff86ffeffffffff7ffe7fff3fff3ffe1ffc0ffc0ffc060009000900090009c009386926992588054802400120012002100408040ffc";
+handon := 0;
+
 # zoom, as a ratio of the display's own (its $displayscale)
 zooms := array[] of {0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
 ZOOM1: con 4;
@@ -666,6 +671,13 @@ action(a: string)
 			return;
 		}
 		u := sess.linkat(x, y + scroll);
+		if((u != nil) != handon) {
+			handon = u != nil;
+			if(handon)
+				tkclient->wmctl(top, HANDCURSOR);
+			else
+				tkclient->wmctl(top, "cursor");
+		}
 		if(u != hoverurl) {
 			hoverurl = u;
 			if(u != nil)

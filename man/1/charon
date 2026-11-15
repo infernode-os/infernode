@@ -95,6 +95,7 @@ copy and cut its selection and
 pastes the snarf buffer (in one line, but in a
 .BR textarea ).
 .PP
+Over a link the cursor is a hand.
 Button 1 follows a link or works a control; dragged, it selects text,
 and a double-click selects a word.
 Button 3 is a menu: Copy, Select all, Copy link address and the zoom

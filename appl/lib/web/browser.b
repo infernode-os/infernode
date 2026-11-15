@@ -1847,12 +1847,21 @@ selection1(pg: ref Pg, p0, p1: Point, words, every: int): (string, list of Rect)
 		if(i > i0) {
 			p := a[i-1];
 			if(p.blk != it.blk) {
+				text = trimblanks(text);
 				if(text != "" && text[len text - 1] != '\n')
 					text += "\n";
 			} else if(p.line != it.line && text != "" && text[len text - 1] != ' ' && (len t == 0 || t[0] != ' '))
 				text += " ";
 		}
-		text += t[b:e];
+		piece := t[b:e];
+		if(text == "" || text[len text - 1] == '\n') {
+			# a line begins with what is not a blank (a field's empty line is none)
+			k := 0;
+			while(k < len piece && (piece[k] == ' ' || piece[k] == '\t'))
+				k++;
+			piece = piece[k:];
+		}
+		text += piece;
 		if(e > b) {
 			x0 := it.x + fragx(it.f, b);
 			x1 := it.x + fragx(it.f, e);
@@ -1864,6 +1873,15 @@ selection1(pg: ref Pg, p0, p1: Point, words, every: int): (string, list of Rect)
 	while(n > 0 && (text[n-1] == ' ' || text[n-1] == '\n' || text[n-1] == '\t'))
 		n--;
 	return (text[0:n], rects);
+}
+
+# s without the blanks that end it
+trimblanks(s: string): string
+{
+	n := len s;
+	while(n > 0 && (s[n-1] == ' ' || s[n-1] == '\t'))
+		n--;
+	return s[0:n];
 }
 
 # the page's text fragments in document order, where they are drawn

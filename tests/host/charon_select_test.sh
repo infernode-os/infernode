@@ -26,20 +26,29 @@ fi
 T=tmp/charon_select_test.$$
 W="$ROOT/$T"
 mkdir -p "$W"
-trap 'rm -rf "$W"' EXIT
-SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
+trap '[ -n "${KEEP:-}" ] || rm -rf "$W"' EXIT
+# the cursors SDL is given, logged by wm_cursor_test.sh's shim (LD_PRELOAD: Linux)
+preload=
+CC=$(command -v cc || command -v gcc || command -v clang || true)
+if [ "$EMUHOST" = Linux ] && [ -n "$CC" ] &&
+   "$CC" -shared -fPIC $(pkg-config --cflags sdl3 2>/dev/null || echo -I/usr/local/include) \
+	-o "$W/shim.so" "$ROOT/tests/wm/cursorshim.c" -ldl 2>/dev/null; then
+	preload="$W/shim.so"
+fi
+SDL_VIDEODRIVER=dummy LD_PRELOAD="$preload" with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
 	/dis/sh.dis -c "wm/wm sh /tests/charon/select/drive.sh /$T" > "$W/log" 2>&1 < /dev/null
 grep -q '^R done' "$W/log" || { echo "FAIL: the session did not finish"; grep -v fsqid "$W/log" | tail -10; exit 1; }
 
 fail=0
-check() {	# step, what is wanted, what it is
-	got=$(sed -n "s/^R $1 \[\(.*\)\]\$/\1/p" "$W/log")
+check() {	# step, what is wanted, what it is (the text between [ and ], lines and all)
+	got=$(awk -v s="R $1 [" 'index($0, s) == 1 { t = substr($0, length(s) + 1); on = 1 } on && !index($0, s) { t = t "\n" $0 } on && /\]$/ { sub(/\]$/, "", t); print t; exit }' "$W/log")
 	if [ "$got" = "$2" ]; then echo "PASS: $3"; else echo "FAIL: $3: got '$got', want '$2'"; fail=1; fi
 }
 check click "start" "a click on text copies nothing"
 check drag "Supercalifragilistic bravo charlie" "a drag along a line copies it"
 check word "Supercalifragilistic" "a double-click copies the word"
-check all "Supercalifragilistic bravo charlie" "Ctrl-A selects the page"
+check all "Supercalifragilistic bravo charlie
+a link here" "Ctrl-A selects the page"
 if grep -q '^0 16 text q pasted words$' "$W/log"; then
 	echo "PASS: Ctrl-V pastes into a text field"
 else
@@ -100,6 +109,18 @@ PY
 	if [ "${n:-0}" -gt 2000 ]; then echo "PASS: the selection is drawn ($n light blue pixels)"; else echo "FAIL: the selection is not drawn ($n light blue pixels)"; fail=1; fi
 else
 	echo "FAIL: no screen captured"; fail=1
+fi
+# the hand is 161 bits of mask; the arrow is no cursor of Charon's
+if [ -n "$preload" ]; then
+	calls() {
+		awk -v s="$1" '/^R /{if($2 == s){printf "%s", buf; exit} buf = ""; next} /^C /{sub(/^C /, ""); buf = buf $0 "\n"}' "$W/log"
+	}
+	last() { calls "$1" | awk '/^create/{c = $2} /^destroy/{c = "default"} END{print c}'; }
+	h=$(last hover-link); o=$(last hover-off)
+	if [ "$h" = 161 ]; then echo "PASS: the hand over a link"; else echo "FAIL: over a link the cursor is '$h', not the hand (161 bits): $(calls hover-link | tr '\n' ';')"; fail=1; fi
+	if [ "$o" = default ]; then echo "PASS: the arrow off it"; else echo "FAIL: off the link the cursor is '$o', not the arrow: $(calls hover-off | tr '\n' ';')"; fail=1; fi
+else
+	echo "SKIP: the cursor shim needs LD_PRELOAD (Linux) and a C compiler: cursors not checked"
 fi
 [ $fail = 0 ] && echo "ALL PASS"
 exit $fail

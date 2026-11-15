@@ -9,7 +9,8 @@
 # and Ctrl-V pastes into it.  After each step it prints R, the step and
 # the snarf buffer or the field's value; the screen after the drag is
 # written to $1/drag.img.  Then Tab from the page goes to the field, and
-# + five times zooms to 200% ($1/zoom.img) and 0 back ($1/unzoom.img).
+# + five times zooms to 200% ($1/zoom.img) and 0 back ($1/unzoom.img),
+# and the pointer goes over a link and off it.
 #
 load std
 E=$1
@@ -85,5 +86,14 @@ scap $E/zoom.img
 echo -n 0 > /dev/keyboard
 sleep 2
 scap $E/unzoom.img
+
+# the pointer over the link below the field, then off it: the hand
+# cursor and the arrow (tests/host/charon_select_test.sh's shim logs them)
+ptr 30 398 0
+sleep 1
+echo R hover-link
+ptr 700 600 0
+sleep 1
+echo R hover-off
 echo R done
 echo halt > '#c/sysctl'

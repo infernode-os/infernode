@@ -1606,12 +1606,17 @@ disfault(void *reg, char *msg)
 
 /*
  * A memory fault at this address is a Limbo nil dereference: Dis's nil
- * (H) is -1, and a field of a nil ref adt is a small offset from 0.
+ * (H) is -1, and a field of a nil ref adt is that plus the field's
+ * offset, which is whatever an operand's second displacement can carry:
+ * up to 65535.  No host maps anything there.  The rule was "below 512":
+ * a field further into a nil ref than that was "sys: segmentation
+ * violation", and from compiled code was not caught by the handler
+ * round it, since R.PC is put right only for a nil fault (jitfault).
  */
 int
 isnilfault(uintptr addr)
 {
-	return addr == ~(uintptr)0 || addr < 512;
+	return addr == ~(uintptr)0 || addr < 64*1024;
 }
 
 /*

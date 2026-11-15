@@ -121,16 +121,27 @@ testLongDirectory(t: ref T)
 
 	# seven levels of 200 bytes: past 1024 at the sixth whatever the root's
 	# name is, and a read of each level on the way down
+	# A host may take no name that long: macOS's limit for a whole path
+	# is 1024 bytes, the size of the buffer that was, so there the names
+	# stop where the host stops them and the lengths below are the test.
 	d := BASE;
 	for(i := 0; i < 7; i++){
-		d += "/" + elem(200, 'a' + i);
-		if(!mkdir(d)){
-			(sok, nil) := sys->stat(d);
+		nd := d + "/" + elem(200, 'a' + i);
+		if(!mkdir(nd)){
+			why := sys->sprint("%r");
+			(sok, nil) := sys->stat(nd);
 			if(sok < 0){
+				if(i >= 3){
+					t.log(sys->sprint("the host makes no directory at level %d, a name of %d bytes below the root: %s", i, len nd, why));
+					break;
+				}
+				for(fl := made; fl != nil; fl = tl fl)
+					sys->remove(hd fl + "/file");
 				cleanup(made);
-				t.fatal(sys->sprint("mkdir at level %d: %r", i));
+				t.fatal(sys->sprint("mkdir at level %d: %s", i, why));
 			}
 		}
+		d = nd;
 		made = d :: made;
 		ffd := sys->create(d + "/file", Sys->OWRITE, 8r666);
 		ffd = nil;

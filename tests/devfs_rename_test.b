@@ -202,6 +202,47 @@ testStarRoot(t: ref T)
 	}
 }
 
+# A directory read to its end, then read again from its start through the
+# same descriptor, lists the same files: the rewind was a seekdir to 0,
+# which macOS's libc does not take for the start, so the second reading
+# (and every one after) was empty there.
+testRereadFromStart(t: ref T)
+{
+	sys->create("/tmp", Sys->OREAD, Sys->DMDIR | 8r777);
+	scrub();
+	if(sys->create(BASE, Sys->OREAD, Sys->DMDIR | 8r777) == nil)
+		t.skip(sys->sprint("cannot make %s: %r", BASE));
+	(ok, dir) := sys->stat(BASE);
+	if(ok < 0 || dir.dtype != 'U'){
+		scrub();
+		t.skip("/tmp is not the host's file system here");
+	}
+	if(sys->create(BASE + "/a", Sys->OREAD, Sys->DMDIR | 8r777) == nil){
+		scrub();
+		t.fatal(sys->sprint("cannot make the directory: %r"));
+	}
+	for(i := 0; i < 8; i++)
+		sys->create(BASE + "/a/f" + string i, Sys->OWRITE, 8r666);
+	fd := sys->open(BASE + "/a", Sys->OREAD);
+	if(fd == nil){
+		scrub();
+		t.fatal(sys->sprint("open: %r"));
+	}
+	for(round := 0; round < 4; round++){
+		sys->seek(fd, big 0, Sys->SEEKSTART);
+		n := 0;
+		for(;;){
+			(nr, nil) := sys->dirread(fd);
+			if(nr <= 0)
+				break;
+			n += nr;
+		}
+		t.asserteq(n, 8, sys->sprint("reading %d of the directory from its start lists its eight files", round+1));
+	}
+	fd = nil;
+	scrub();
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -216,6 +257,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("StarRoot", testStarRoot);
+	run("RereadFromStart", testRereadFromStart);
 	run("RenameUnderReaders", testRenameUnderReaders);
 
 	if(testing->summary(passed, failed, skipped) > 0)

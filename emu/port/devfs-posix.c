@@ -998,7 +998,14 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 	 * every later read from 0 was then an empty directory.
 	 */
 	if(FS(c)->offset != offset || offset == 0 && (FS(c)->eod || FS(c)->de == nil)) {
-		seekdir(FS(c)->dir, 0);
+		/*
+		 * rewinddir, not seekdir(dir, 0): a seekdir takes what
+		 * telldir gave, and 0 is that only by accident.  glibc
+		 * rewinds for it; macOS's does nothing, so a directory read
+		 * to its end read as empty from then on, however the reader
+		 * sought back to its start.
+		 */
+		rewinddir(FS(c)->dir);
 		FS(c)->de = nil;
 		FS(c)->eod = 0;
 		for(n=0; n<offset; ) {

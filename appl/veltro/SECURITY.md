@@ -112,6 +112,47 @@ to one (a link followed, a form's action, a refresh, a script, a frame, a
 `<base>`: `Page->mayload`), so the tool reads nothing of the browser's name
 space through a page.
 
+Three effects have no proposal endpoint behind them, so the user's approval
+is the whole control: `task promote` (a task's staged changes applied to the
+user's folders), `sms` (a text message sent) and `dial` (a call placed). The
+coordinator asks before it sends such a call to the tool server
+(`veltrosrv`'s gate, the session's `approve` file), and these rules hold it:
+
+- **One reading of a call.** The model's call is read once, where it is
+  taken: its tool name is made a plain name the tool server offers, or the
+  call is refused; its arguments are put in the form the tool takes. For
+  `task`, `sms` and `dial` the tool itself says what the call will do
+  (`effect()` in the tool module, which `veltrosrv` loads before it
+  restricts itself, and which the tool's `exec` acts on too). What the gate
+  judges, what the user is shown and what is sent to the tool are that one
+  string, so case, spacing, quoting and JSON shape cannot make the gate see
+  a different call from the one that runs. A call that cannot be read is
+  refused, not run ungated.
+- **The request is what will run.** The user is shown the whole call on one
+  line, control characters and invisible reordering characters written out;
+  for the three effect tools, the tool's own fixed words with the task's
+  number or the phone number and message. A command too long to show whole
+  is not asked about and not run. Only the content of a write may be cut,
+  and the request says how much is not shown. Nothing the model writes is
+  presented as the harness's words.
+- **`dial` takes a plain phone number** (digits, `+` first): MMI and USSD
+  codes, pauses and anything after a line break are refused by the tool.
+- **A stop is a stop.** A cancelled turn asks nothing more, and a client
+  that holds its session (`ctl` `hold`) and dies has its turn stopped and
+  its session closed, so no agent goes on alone with the gate answered in
+  advance.
+
+The gate for `exec`, `write` and `edit` (bind, mount, a recursive remove
+outside `/tmp`, a write under `/dis`, `/lib` or `/dev`) is a second line
+behind the tool worker's namespace, not the boundary. The gate is the
+coordinator's: tools a spawned child holds are called in the child, with no
+gate, so `sms` and `dial` do not belong in a delegation budget.
+
+Text the harness shows or forwards is framed by the harness alone. Model
+text cannot begin a line of a session's `text` with a message header, nor
+add a line to its `log`; a tool's result or a child's report cannot end its
+entry in the results sent back to the model, or begin one as the user.
+
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
 for granting a compromised model both confidential data and unrestricted egress.

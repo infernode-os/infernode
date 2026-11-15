@@ -61,9 +61,7 @@ tool-result call_big_output_0_0:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 80 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_big_output_0_0:read:{"args"\: "/usr/agentloop/big.txt"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_big_output_0_0:read:{"args"\: "/usr/agentloop/big.txt"}\n
   | tool read: args {"args": "/usr/agentloop/big.txt"}
   | tool read: calling with 34 bytes
   | tool read: done,     1	line 1 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456...
@@ -72,7 +70,5 @@ tool-result call_big_output_0_0:
   | stream: done (1 chunks, 17 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 32 bytes
-  | llm: STOP:end_turn
-  | Read the big one.
-  | 
+  | llm: STOP:end_turn\nRead the big one.\n
   | turn done stop=end_turn steps=2

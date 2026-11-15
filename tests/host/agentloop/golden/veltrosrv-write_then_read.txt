@@ -25,10 +25,7 @@ tool-result call_write_then_read_0_1:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 159 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_write_then_read_0_0:write:{"args"\: "/usr/agentloop/c.txt gamma"}
-  | TOOL:call_write_then_read_0_1:read:{"args"\: "/usr/agentloop/c.txt"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_write_then_read_0_0:write:{"args"\: "/usr/agentloop/c.txt gamma"}\nTOOL:call_write_then_read_0_1:read:{"args"\: "/usr/agentloop/c.txt"}\n
   | tool write: args {"args": "/usr/agentloop/c.txt gamma"}
   | tool write: calling with 38 bytes
   | tool write: done, wrote 5 bytes to /usr/agentloop/c.txt
@@ -40,7 +37,5 @@ tool-result call_write_then_read_0_1:
   | stream: done (1 chunks, 15 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 30 bytes
-  | llm: STOP:end_turn
-  | Wrote and read.
-  | 
+  | llm: STOP:end_turn\nWrote and read.\n
   | turn done stop=end_turn steps=2

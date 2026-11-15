@@ -112,13 +112,21 @@ write, one request per write:
 .B cancel
 stop the running turn at its next step; a call waiting on
 .B approve
-is denied.
+is not run, and no other is asked about.
 .TP
 .B reset
 start a new model session for this conversation.
 .TP
 .B close
 end the session.
+.TP
+.B hold
+the session is this descriptor's: when the descriptor is closed, by the
+client or by the client's death, the running turn is stopped and the
+session closed.  A client that should not leave an agent working
+unattended writes this to a
+.B ctl
+it keeps open.
 .TP
 .BI persona " type"
 layer
@@ -145,9 +153,21 @@ to the system prompt.
 .BI maxsteps " n"
 .TP
 .BR gate " on | off"
-whether destructive calls wait on
+whether calls that need the user's leave wait on
 .B approve
-(default on).
+(default on): a command that binds, mounts or removes a tree outside
+.BR /tmp ,
+a write or edit under
+.BR /dis ,
+.B /lib
+or
+.BR /dev ,
+a task's staged changes applied
+.RB ( "task promote" ),
+a text message sent
+.RB ( sms )
+and a call placed
+.RB ( dial ).
 .RE
 .IP
 Read: the settings, as
@@ -195,8 +215,21 @@ or the name of the tool running.
 .BI id /approve
 read: while a turn runs, waits until a call needs the operator's
 approval, then gives
-.IR "callid tool args" ;
-when the session is idle it is empty.  Write
+.IR "callid tool what" ,
+one line:
+.I what
+is the call as it will run, whole, with control characters written out
+.RB ( \en ,
+.BR \ex1b ),
+or for
+.BR task ,
+.B sms
+and
+.B dial
+the tool's own account of it.  A command too long to show whole is not
+asked about and not run; of a write's content the middle may be left
+out, and the line says how much.
+When the session is idle it is empty.  Write
 .BI allow " callid"
 or
 .BI deny " callid"

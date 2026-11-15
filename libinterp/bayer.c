@@ -70,7 +70,13 @@ Bayer_merge(void *fp)
 	int yb, ydx, ydy, cbase, cdx, cdy;
 	WORD *mean;
 	int rw, rh, s, cells, n, w, h, x, y0, cx, cy, ro, bo, g1, g2, nl;
-	int r, g, b, pr, pg, pb, sr[2], sg[2], sb[2];
+	/*
+	 * A cell's sums are 64 bits: at a scale of 258 the green one passes an
+	 * int, went negative, and stayed negative when divided: an index
+	 * before the table.
+	 */
+	uvlong r, g, b;
+	int pr, pg, pb, sr[2], sg[2], sb[2];
 	uvlong tr, tg, tb;
 
 	f = fp;

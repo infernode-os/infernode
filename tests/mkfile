@@ -163,6 +163,8 @@ TARG=\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\
 	print_heapfull.dis\
+	tool9call.dis\
+	exec_fd_probe.dis\
 	load_heapfull.dis\
 	load_heapfull_mod.dis\
 	jit_4gb.dis\

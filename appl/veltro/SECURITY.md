@@ -448,7 +448,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | No ambient host filesystem | `/n/local` is absent unless exactly granted; `#U` attachment is blocked by `NODEVS` at every execution boundary |
 | No project file exposure | Root restriction hides `.env`, `.git`, `CLAUDE.md`, source tree |
 | No env secrets | Every tool worker and spawned child uses `NEWENV`; workers copy only `VELTRO_SESSION`, then `/env` is allowlisted |
-| No ambient child FDs | Spawn uses `NEWFD`; exec keeps only I/O and its private wait FD |
+| No ambient child FDs | Spawn uses `NEWFD`; exec runs its command from a descriptor group of the call's own: 0 is `/dev/null`, 1 and 2 the call's pipe, and the private wait FD the only other. Nothing of the group all tool calls share is kept |
 | Safe FD 0-2 | `verifysafefds()` redirects nil FDs to `/dev/null` |
 | Empty srv registry | NEWPGRP first (child) |
 | Truthful namespace | bind-replace shows only allowed items; `MREADONLY` enforces paths reported read-only |

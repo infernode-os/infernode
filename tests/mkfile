@@ -245,6 +245,7 @@ TARG=\
 	memdraw_far_test.dis\
 	strcat_test.dis\
 	string_test.dis\
+	taskboard9p_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
 	textwidget_test.dis\

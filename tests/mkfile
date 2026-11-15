@@ -146,6 +146,7 @@ TARG=\
 	ipint_edge_test.dis\
 	namec_clone_test.dis\
 	nil_far_test.dis\
+	slice_end_test.dis\
 	string_edge_test.dis\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\

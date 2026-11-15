@@ -1248,6 +1248,7 @@ dis/tests/plan_test.dis
 dis/tests/print_edge_test.dis
 dis/tests/print_heapfull.dis
 dis/tests/rfc3339_test.dis
+dis/tests/slice_end_test.dis
 dis/tests/spawn_exec_test.dis
 dis/tests/syscall_edge_test.dis
 dis/tests/spawn_schedule_test.dis

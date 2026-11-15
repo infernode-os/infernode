@@ -2126,7 +2126,10 @@ void
 xec(Prog *p)
 {
 	RPDECL;
-	int op;
+	int op, over;
+	Inst *pc0;
+	uchar *fp0;
+	enum { Over = 2 };	/* R.IC while running on to the slice's end */
 
 	/*
 	 * R is p's before the pending Modlink is released, not after.
@@ -2174,12 +2177,44 @@ xec(Prog *p)
 		comvec();
 	}
 	else {
-		do {
-		dec[R.PC->add](OPCALL);
-		op = R.PC->op;
-		R.PC++;
-		optab[op](OPCALL);
-	} while(--R.IC != 0);
+		/*
+		 * The slice is R.IC instructions, and it ends only where
+		 * compiled code's would: after a backward branch, a call or
+		 * a return.  It ended wherever the count ran out, between
+		 * any two instructions, and the compiler's code is written
+		 * for a VM that does not do that: an element's address is
+		 * found by one instruction (indx) and used by the next, with
+		 * nothing holding the array meanwhile.  Another Prog run
+		 * between the two could drop the array, and the store went
+		 * into whatever was allocated there.  So when the count is
+		 * down to its last instruction the Prog goes on (over) until
+		 * one that leaves the straight line.  An instruction that
+		 * must stop the Prog now (it has blocked, or changed to a
+		 * compiled module) sets R.IC to 1, as before: that is seen
+		 * as a count that is no longer Over.
+		 */
+		over = 0;
+		for(;;) {
+			if(R.IC == 1 && !over) {
+				over = 1;
+				R.IC = Over;
+			}
+			pc0 = R.PC;
+			fp0 = R.FP;
+			dec[R.PC->add](OPCALL);
+			op = R.PC->op;
+			R.PC++;
+			optab[op](OPCALL);
+			if(!over) {
+				if(--R.IC == 0)
+					break;
+				continue;
+			}
+			if(R.IC != Over || R.PC <= pc0 || R.FP != fp0) {
+				R.IC = 0;
+				break;
+			}
+		}
 	}
 
 	if(R.M->compiled && PC_MISALIGNED(R.PC)) {

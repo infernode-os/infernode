@@ -182,12 +182,132 @@ tlswritepump(conn: ref Conn, fd: ref Sys->FD)
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(method, requrl, hdrs, body, 0, nil, nil);
+	return request0(newreq(0, 0), method, requrl, hdrs, body, 0, nil, nil);
 }
 
 requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(method, requrl, hdrs, body, 1, nil, nil);
+	return request0(newreq(0, 0), method, requrl, hdrs, body, 1, nil, nil);
+}
+
+# ---- a request with a deadline ----
+#
+# A caller that gave up on a request (a tool with 30 seconds for its
+# fetch) used to leave it running: the process in its read, the
+# connection open, and the body's buffer, which was allocated whole from
+# Content-Length before a byte of it came.  A server sending "64 MB
+# follow" and nothing more cost 64 MB of the heap every program shares,
+# for as long as it kept the connection, for each request.
+#
+# The request is now the one that keeps the time.  It runs in a process
+# of its own; at the deadline the connection it is using is hung up,
+# which ends its read (or its TLS handshake), no new one is made, and
+# the caller has its answer at once.  A process cannot be killed here
+# by number (a tool's name space has no /prog entry but its own, and one
+# killed holding the pool's lock would stop every later request), so it
+# is the hangup that ends it; one still in a connect is not reachable so
+# and ends when the connect does, holding nothing.
+
+Etimeout: con "request timed out";
+POLLMS: con 100;	# how often the deadline is looked at
+
+Req: adt {
+	ms:	int;		# from the start to the end of the body; 0: no deadline
+	t0:	int;
+	maxbody:	int;	# bytes of body kept
+	lk:	chan of int;	# cur and over
+	cur:	ref Link;	# the connection in use
+	over:	int;	# the deadline passed: nothing more is read or dialled
+	done:	int;	# answered: the watch ends
+
+	attach:	fn(r: self ref Req, l: ref Link): int;
+	detach:	fn(r: self ref Req);
+	expire:	fn(r: self ref Req);
+};
+
+newreq(ms, maxbody: int): ref Req
+{
+	if(maxbody <= 0 || maxbody > MAXBODY)
+		maxbody = MAXBODY;
+	return ref Req(ms, sys->millisec(), maxbody, chan[1] of int, nil, 0, 0);
+}
+
+# l is the connection in use, unless the time is up (0)
+Req.attach(r: self ref Req, l: ref Link): int
+{
+	r.lk <-= 1;
+	ok := !r.over;
+	if(ok)
+		r.cur = l;
+	<-r.lk;
+	return ok;
+}
+
+# the connection is no longer this request's to hang up (it may go
+# back to the pool, for another's use)
+Req.detach(r: self ref Req)
+{
+	r.lk <-= 1;
+	r.cur = nil;
+	<-r.lk;
+}
+
+Req.expire(r: self ref Req)
+{
+	r.lk <-= 1;
+	r.over = 1;
+	if(r.cur != nil)
+		r.cur.hangup();	# under the lock: it is still this request's
+	<-r.lk;
+}
+
+requestbounded(method, requrl: string, hdrs: list of Header, body: array of byte, public, ms, maxbody: int): (ref Response, string)
+{
+	rq := newreq(ms, maxbody);
+	if(ms <= 0)
+		return request0(rq, method, requrl, hdrs, body, public, nil, nil);
+	res := chan[1] of (ref Response, string);
+	late := chan[1] of int;
+	spawn bounded(rq, method, requrl, hdrs, body, public, res);
+	spawn watch(rq, late);
+	alt {
+	(r, e) := <-res =>
+		rq.done = 1;
+		return (r, e);
+	<-late =>
+		return (nil, Etimeout);
+	}
+}
+
+bounded(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array of byte, public: int, res: chan of (ref Response, string))
+{
+	r: ref Response;
+	e: string;
+	{
+		(r, e) = request0(rq, method, requrl, hdrs, body, public, nil, nil);
+	} exception x {
+	"*" =>
+		r = nil;
+		e = "internal error: " + x;
+	}
+	if(rq.over)
+		(r, e) = (nil, Etimeout);
+	res <-= (r, e);
+}
+
+# ends within POLLMS of the answer, or at the deadline
+watch(rq: ref Req, late: chan of int)
+{
+	for(;;) {
+		sys->sleep(POLLMS);
+		if(rq.done)
+			return;
+		if(sys->millisec() - rq.t0 >= rq.ms) {
+			rq.expire();
+			late <-= 1;
+			return;
+		}
+	}
 }
 
 requestjar(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar): (ref Response, string)
@@ -197,7 +317,7 @@ requestjar(method, requrl: string, hdrs: list of Header, body: array of byte, ja
 
 requesttypes(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar, types: list of string): (ref Response, string)
 {
-	(resp, err) := request0(method, requrl, hdrs, body, 0, jar, types);
+	(resp, err) := request0(newreq(0, 0), method, requrl, hdrs, body, 0, jar, types);
 	if(resp != nil && resp.body != nil) {
 		ce := str->tolower(resp.hdrval("Content-Encoding"));
 		case ce {
@@ -267,9 +387,11 @@ decompress(data: array of byte, param: string): array of byte
 
 # Revalidates every redirect target. Public mode resolves first and dials the
 # exact validated address, preventing redirect and DNS-rebinding SSRF.
-request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar, types: list of string): (ref Response, string)
+request0(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar, types: list of string): (ref Response, string)
 {
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
+		if(rq.over)
+			return (nil, Etimeout);
 		requrl = encodeurl(requrl);
 		rh := hdrs;
 		if(jar != nil && (c := jar.header(requrl)) != nil)
@@ -277,7 +399,7 @@ request0(method, requrl: string, hdrs: list of Header, body: array of byte, publ
 		verr := validrequesttext(method, requrl, rh);
 		if(verr != nil)
 			return (nil, verr);
-		(resp, err) := dorequest(method, requrl, rh, body, public, types);
+		(resp, err) := dorequest(rq, method, requrl, rh, body, public, types);
 		if(err != nil)
 			return (nil, err);
 		resp.url = requrl;
@@ -484,11 +606,14 @@ schemehost(requrl: string): string
 }
 
 # [private]
-dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, types: list of string): (ref Response, string)
+dorequest(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array of byte, public: int, types: list of string): (ref Response, string)
 {
 	u := url->makeurl(requrl);
 	if(u == nil)
 		return (nil, "bad url: " + requrl);
+	# (a redirect to file:///x was a request to localhost, port 80)
+	if(u.scheme != Url->HTTP && u.scheme != Url->HTTPS)
+		return (nil, "not an http or https address: " + requrl);
 
 	host := u.host;
 	port := u.port;
@@ -514,7 +639,7 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, pub
 		if(err != nil)
 			return (nil, err);
 	}
-	return linkrequest(method, u, host, addr, ishttps, hdrs, body, types);
+	return linkrequest(rq, method, u, host, addr, ishttps, hdrs, body, types);
 }
 
 publicaddr(host, port: string): (string, string)
@@ -567,6 +692,7 @@ Link: adt {
 	key:	string;	# where it goes: the address, and the TLS server name
 	tls:	ref Conn;
 	fd:	ref Sys->FD;
+	cfd:	ref Sys->FD;	# its ctl file, to hang it up
 	buf:	array of byte;
 	p, n:	int;	# buf[p:n] read and not yet taken
 	idle:	int;	# sys->millisec() when it was put back
@@ -575,6 +701,7 @@ Link: adt {
 	read:	fn(l: self ref Link, a: array of byte): int;
 	write:	fn(l: self ref Link, a: array of byte): int;
 	getc:	fn(l: self ref Link): int;
+	hangup:	fn(l: self ref Link);
 	close:	fn(l: self ref Link);
 };
 
@@ -625,12 +752,20 @@ Link.write(l: self ref Link, a: array of byte): int
 	return sys->write(l.fd, a, len a);
 }
 
+# Hang it up: a read outstanding on it fails.
+Link.hangup(l: self ref Link)
+{
+	if(l.cfd != nil)
+		sys->fprint(l.cfd, "hangup");
+}
+
 Link.close(l: self ref Link)
 {
 	if(l.tls != nil)
 		l.tls.close();
 	l.tls = nil;
 	l.fd = nil;
+	l.cfd = nil;
 }
 
 lockpool()
@@ -681,25 +816,40 @@ putlink(l: ref Link)
 		l.close();
 }
 
-newlink(key, addr, host: string, ishttps: int): (ref Link, string)
+# A new connection, the request's own (attached) from before its TLS
+# handshake, which is a read like any other to a server that says nothing.
+newlink(rq: ref Req, key, addr, host: string, ishttps: int): (ref Link, string)
 {
+	if(rq.over)
+		return (nil, Etimeout);
 	c := dial->dial(addr, nil);
 	if(c == nil)
 		return (nil, sys->sprint("dial %s: %r", addr));
-	l := ref Link(key, nil, c.dfd, array[16384] of byte, 0, 0, 0, 0);
+	l := ref Link(key, nil, c.dfd, c.cfd, array[16384] of byte, 0, 0, 0, 0);
+	if(!rq.attach(l)) {
+		l.hangup();
+		l.close();
+		return (nil, Etimeout);
+	}
 	if(ishttps) {
 		cfg := tls->defaultconfig();
 		cfg.servername = host;
 		(conn, terr) := tls->client(c.dfd, cfg);
-		if(terr != nil)
+		if(terr != nil) {
+			rq.detach();
+			l.hangup();
+			l.close();
+			if(rq.over)
+				return (nil, Etimeout);
 			return (nil, "tls: " + terr);
+		}
 		l.tls = conn;
 	}
 	return (l, nil);
 }
 
 # [private]
-linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
+linkrequest(rq: ref Req, method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
 	hdrs: list of Header, body: array of byte, types: list of string): (ref Response, string)
 {
 	req := array of byte buildrequest(method, u, host, hdrs, body);
@@ -710,22 +860,36 @@ linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
 		l: ref Link;
 		if(try == 0)
 			l = takelink(key);
-		if(l != nil)
+		if(l != nil) {
 			l.reused = 1;
-		else {
+			if(!rq.attach(l)) {
+				l.close();
+				return (nil, Etimeout);
+			}
+		} else {
 			err: string;
-			(l, err) = newlink(key, addr, host, ishttps);
+			(l, err) = newlink(rq, key, addr, host, ishttps);
 			if(l == nil)
 				return (nil, err);
 		}
 		again := l.reused && try == 0 && (method == "GET" || method == "HEAD");
 		if(l.write(req) != len req || body != nil && l.write(body) != len body) {
+			rq.detach();
 			l.close();
+			if(rq.over)
+				return (nil, Etimeout);
 			if(again)
 				continue;
 			return (nil, "write failed");
 		}
-		(resp, keep, err) := readresponse(l, method, types);
+		(resp, keep, err) := readresponse(rq, l, method, types);
+		# from here it is not the request's to hang up; if the time
+		# ran out it may have been, and what was read is not the answer
+		rq.detach();
+		if(rq.over) {
+			l.close();
+			return (nil, Etimeout);
+		}
 		if(resp == nil) {
 			l.close();
 			if(again && err == "empty response")
@@ -740,10 +904,79 @@ linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
 	}
 }
 
+# ---- bodies ----
+#
+# A body is read into a buffer that grows as its bytes come, to what the
+# header promised and no further than the request's limit.  It was
+# allocated whole from Content-Length (and each chunk from its size
+# line) before anything was read: what a server said, not what it sent,
+# decided how much memory a request took.
+
+Grow: adt {
+	a:	array of byte;
+	n:	int;	# bytes held
+	max:	int;	# never more than this
+
+	room:	fn(g: self ref Grow, want: int): int;
+	bytes:	fn(g: self ref Grow): array of byte;
+};
+
+# Room for some of want more bytes, at a[n:]: how many (0 at the limit).
+# The buffer doubles when it is full, never past what is wanted, so one
+# that is filled is exactly as long as its body.
+Grow.room(g: self ref Grow, want: int): int
+{
+	if(want > g.max - g.n)
+		want = g.max - g.n;
+	if(want <= 0)
+		return 0;
+	free := len g.a - g.n;
+	if(free == 0) {
+		sz := 2 * len g.a;
+		if(sz < 65536)
+			sz = 65536;
+		if(sz > g.n + want)
+			sz = g.n + want;
+		na := array[sz] of byte;
+		na[0:] = g.a[0:g.n];
+		g.a = na;
+		free = sz - g.n;
+	}
+	if(free > want)
+		free = want;
+	return free;
+}
+
+Grow.bytes(g: self ref Grow): array of byte
+{
+	if(g.n == 0)
+		return nil;
+	if(g.n == len g.a)
+		return g.a;
+	return g.a[0:g.n];
+}
+
+# Up to want more bytes of l into g: how many came.
+readinto(rq: ref Req, l: ref Link, g: ref Grow, want: int): int
+{
+	got := 0;
+	while(got < want && !rq.over) {
+		m := g.room(want - got);
+		if(m == 0)
+			break;
+		n := l.read(g.a[g.n:g.n+m]);
+		if(n <= 0)
+			break;
+		g.n += n;
+		got += n;
+	}
+	return got;
+}
+
 # [private]
 # The response to a request: its header, and its body as the header
 # frames it.  Whether the connection can carry another request after.
-readresponse(l: ref Link, method: string, types: list of string): (ref Response, int, string)
+readresponse(rq: ref Req, l: ref Link, method: string, types: list of string): (ref Response, int, string)
 {
 	resp: ref Response;
 	for(;;) {
@@ -771,47 +1004,35 @@ readresponse(l: ref Link, method: string, types: list of string): (ref Response,
 		return (resp, keep, nil);
 	if(code < 300 && types != nil && !typeok(resp.hdrval("Content-Type"), types))
 		return (resp, 0, nil);	# not wanted: not read, and the connection with it not kept
+	g := ref Grow(nil, 0, rq.maxbody);
 	if(te != nil && contains(te, "chunked")) {
 		ok: int;
-		(resp.body, ok) = readchunked(l);
+		(ok, resp.truncated) = readchunked(rq, l, g);
+		resp.body = g.bytes();
 		return (resp, keep && ok, nil);
 	}
 	if(clen != nil) {
-		nbytes := int clen;
-		if(nbytes > MAXBODY) {
-			nbytes = MAXBODY;
+		(cl, nil) := str->tobig(clen, 10);
+		nbytes := g.max;
+		if(cl > big g.max) {
+			resp.truncated = 1;
 			keep = 0;
-		}
+		} else
+			nbytes = int cl;
 		if(nbytes <= 0)
 			return (resp, keep, nil);
-		resp.body = array[nbytes] of byte;
-		off := 0;
-		while(off < nbytes) {
-			n := l.read(resp.body[off:]);
-			if(n <= 0)
-				break;
-			off += n;
-		}
-		if(off < nbytes) {
-			resp.body = resp.body[:off];
+		if(readinto(rq, l, g, nbytes) < nbytes)
 			keep = 0;
-		}
+		resp.body = g.bytes();
 		return (resp, keep, nil);
 	}
 	# the body runs to the end of the connection
-	chunks: list of array of byte;
-	total := 0;
-	rbuf := array[16384] of byte;
-	while(total < MAXBODY) {
-		n := l.read(rbuf);
-		if(n <= 0)
-			break;
-		chunk := array[n] of byte;
-		chunk[0:] = rbuf[:n];
-		chunks = chunk :: chunks;
-		total += n;
+	readinto(rq, l, g, g.max);
+	if(g.n == g.max) {
+		one := array[1] of byte;
+		resp.truncated = l.read(one) > 0;
 	}
-	resp.body = concatchunks(chunks, total);
+	resp.body = g.bytes();
 	return (resp, 0, nil);
 }
 
@@ -904,7 +1125,7 @@ parseresponse(hdrstr: string): (ref Response, int, string)
 	}
 	bodystart += 2;	# past final \r\n
 
-	resp := ref Response(code, status, headers, nil, nil);
+	resp := ref Response(code, status, headers, nil, nil, 0);
 	return (resp, bodystart, nil);
 }
 
@@ -939,45 +1160,34 @@ splitheader(line: string): (string, string)
 # A chunked body (RFC 9112 §7.1), and whether it ended as it should:
 # the last chunk and the trailer section read, so that the connection
 # is at the next response.
-readchunked(l: ref Link): (array of byte, int)
+# Into g; whether it ended as it should, and whether it was cut at g's
+# limit.
+readchunked(rq: ref Req, l: ref Link, g: ref Grow): (int, int)
 {
-	chunks: list of array of byte;
-	total := 0;
 	for(;;) {
 		line := readline(l);
 		if(line == nil)
-			return (concatchunks(chunks, total), 0);
+			return (0, 0);
 		chunksize := hexval(line);
 		if(chunksize <= 0)
 			break;
-		trunc := 0;
-		if(total + chunksize > MAXBODY) {
-			chunksize = MAXBODY - total;
-			trunc = 1;
+		if(chunksize > g.max - g.n) {
+			readinto(rq, l, g, g.max - g.n);
+			return (0, 1);
 		}
-		chunk := array [chunksize] of byte;
-		off := 0;
-		while(off < chunksize) {
-			n := l.read(chunk[off:]);
-			if(n <= 0)
-				break;
-			off += n;
-		}
-		chunks = chunk[:off] :: chunks;
-		total += off;
-		if(off < chunksize || trunc)
-			return (concatchunks(chunks, total), 0);
+		if(readinto(rq, l, g, chunksize) < chunksize)
+			return (0, 0);
 		readline(l);	# the CRLF after the data
 	}
 	# the trailer section, to its blank line
 	for(;;) {
 		line := readline(l);
 		if(line == nil)
-			return (concatchunks(chunks, total), 0);
+			return (0, 0);
 		if(line == "\r\n" || line == "\n")
 			break;
 	}
-	return (concatchunks(chunks, total), 1);
+	return (1, 0);
 }
 
 # [private]
@@ -1019,6 +1229,8 @@ hexval(s: string): int
 			d = c - 'A' + 10;
 		else
 			break;
+		if(n >= 16r8000000)
+			return 16r7fffffff;	# more than any body kept; not left to wrap
 		n = n * 16 + d;
 	}
 	return n;

@@ -19,6 +19,7 @@ Webclient: module {
 		headers:	list of Header;
 		body:		array of byte;
 		url:		string;		# the URL that answered, after redirects
+		truncated:	int;		# the body is its first bytes: it was longer than the caller's limit (or MAXBODY)
 
 		hdrval:	fn(r: self ref Response, name: string): string;
 	};
@@ -51,6 +52,15 @@ Webclient: module {
 	# redirect and strips credential headers when the origin changes.
 	requestpublic: fn(method, url: string, hdrs: list of Header,
 			   body: array of byte): (ref Response, string);
+	# request (public: requestpublic) for a caller that will not wait for
+	# ever or take whatever comes: the whole exchange, redirects and body
+	# included, is over within ms milliseconds, and no more than maxbody
+	# bytes of body are kept (Response.truncated says when there were
+	# more).  At the deadline the answer is "request timed out" and the
+	# connection is hung up, so nothing goes on behind the caller's back.
+	# ms 0: no deadline; maxbody 0: MAXBODY.
+	requestbounded: fn(method, url: string, hdrs: list of Header,
+			   body: array of byte, public, ms, maxbody: int): (ref Response, string);
 	# request, keeping cookies in jar across redirects, and decoding a
 	# gzip or deflate Content-Encoding (asked for by the caller's
 	# Accept-Encoding header)

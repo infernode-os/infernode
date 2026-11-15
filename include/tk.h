@@ -737,6 +737,7 @@ extern	void		tkrunpack(TkTop*);
 extern	void		tkpackreq(Tk*);
 extern	int		tksetslavereq(Tk*, TkGeom);
 extern	int		tkisslave(Tk*, Tk*);
+extern	int		tkisinside(Tk*, Tk*);
 
 /* General - grids.c */
 extern	int		tkgridder(Tk*);

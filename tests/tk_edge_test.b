@@ -15,6 +15,11 @@ implement TkEdgeTest;
 # name what the sweep had already freed.  Each of these ended the
 # emulator, or left the toplevel's lock held by an exception.
 #
+# A widget could be put inside itself: a frame made a window of the
+# canvas packed in it, a canvas packed in a frame that is one of its
+# windows.  Whatever walked up from a widget to its window then went
+# round for ever, holding the VM: every program in the emulator stopped.
+#
 # A cursor command refused after its -image option kept the image's
 # reference, and a toplevel freed with an image so counted was an
 # abort().  A cursor image with no bits was read through nil.  A grab
@@ -431,6 +436,53 @@ testGrab(t: ref T)
 	t.assertseq(heard(c), "ab ", "with no grab .ab has its press");
 }
 
+# a command that must be refused
+refused(t: ref T, top: ref Toplevel, s: string, what: string)
+{
+	e := tk->cmd(top, s);
+	t.assert(e != nil && e[0] == '!', sys->sprint("%s is refused: %s: %s", what, s, e));
+}
+
+testRings(t: ref T)
+{
+	# a canvas's or text's window that is what the canvas or text is in
+	top := mktop(t, 200, 200);
+	cmd(t, top, "frame .a; canvas .a.cv; pack .a.cv; update");
+	refused(t, top, ".a.cv create window 20 20 -window .a", "the frame a canvas is packed in, as its window");
+	cmd(t, top, "pack .a; update");
+	works(t, top, "after it");
+
+	top = mktop(t, 200, 200);
+	cmd(t, top, "frame .a; frame .a.b; text .a.b.t; pack .a.b.t; pack .a.b; update");
+	refused(t, top, ".a.b.t window create end -window .a", "a frame two above a text, as its window");
+	cmd(t, top, "pack .a; update");
+	works(t, top, "after it");
+
+	# and the other way: packed, or gridded, in what is already its window
+	top = mktop(t, 200, 200);
+	cmd(t, top, "canvas .cv; frame .a; frame .a.b; pack .a.b");
+	cmd(t, top, ".cv create window 20 20 -window .a");
+	refused(t, top, "pack .cv -in .a", "a canvas packed in its own window");
+	refused(t, top, "pack .cv -in .a.b", "or in a frame inside it");
+	cmd(t, top, "pack .cv; update");
+	works(t, top, "after it");
+
+	top = mktop(t, 200, 200);
+	cmd(t, top, "text .t; frame .a");
+	cmd(t, top, ".t window create end -window .a");
+	refused(t, top, "grid .t -in .a", "a text gridded in its own window");
+	cmd(t, top, "pack .t; update");
+	works(t, top, "after it");
+
+	# what is allowed still is
+	top = mktop(t, 200, 200);
+	cmd(t, top, "frame .a; canvas .a.cv; frame .f; frame .g; pack .a.cv; pack .a");
+	t.assert(cmd(t, top, ".a.cv create window 20 20 -window .f") != nil, "a frame that is nowhere is made a canvas's window");
+	cmd(t, top, "pack .g -in .f; update");
+	t.assert(tk->rect(top, ".g", 0).dx() >= 0, "and another is packed in it");
+	works(t, top, "after them");
+}
+
 testPutimageName(t: ref T)
 {
 	top := mktop(t, 100, 100);
@@ -524,6 +576,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BindingDepth", testBindingDepth);
 	run("Cursor", testCursor);
 	run("Grab", testGrab);
+	run("Rings", testRings);
 	run("PutimageName", testPutimageName);
 	run("PanelImages", testPanelImages);
 	run("SweptTop", testSweptTop);

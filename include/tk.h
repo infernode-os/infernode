@@ -107,7 +107,7 @@ enum
 	BoolF,
 
 	Tkmaxitem	= 128,
-	Tkmaxbind	= 8,		/* bindings' scripts one inside another: each is some hundreds of bytes of C stack */
+	Tkmaxnest	= 16,		/* scripts run one inside another: each is some hundreds of bytes of C stack */
 	Tkminitem	= 32,
 	Tkcvstextins	= 1024,
 	Tkmaxdump	= 1024,
@@ -612,7 +612,7 @@ struct TkTop
 	char		errcmd[32];
 	char		errx[32];
 	Tk*		dead;			/* destroyed widgets not yet freed (tkfreedead), by siblings */
-	int		binddepth;		/* bindings' scripts running, one inside another */
+	int		execnest;		/* scripts (tkexec) running, one inside another */
 };
 
 #define TKobj(t, p)	((t*)((p)+1))

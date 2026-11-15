@@ -312,26 +312,19 @@ tkcmdbind(Tk *tk, int event, char *s, void *data)
 	e = nil;
 	t = tk->env->top;
 	/*
-	 * A binding's script may cause another event with a binding, and
-	 * that one's another.  Each began its count of commands again and
-	 * ended by turning the count off, so a binding that caused its own
-	 * event again recursed until the C stack ran out, which ends emu.
-	 * They are held to Tkmaxbind deep, and a binding's count is put
-	 * back as it was when one inside it is done.
+	 * A binding's script may cause another event with a binding.
+	 * Each begins its count of commands again; it ended by turning
+	 * the count off, for the binding it was run inside too.  That
+	 * one's count is put back as it was.  (How deep they go is
+	 * tkexec's to bound.)
 	 */
-	if(t->binddepth >= Tkmaxbind)
-		e = TkDepth;
-	else{
-		depth = t->execdepth;
-		t->binddepth++;
-		t->execdepth = 0;
-		if(cmd[0] == '|')
-			tkexec(t, cmd+1, nil);
-		else if(cmd[0] != '\0')
-			e = tkexec(t, cmd, nil);
-		t->execdepth = depth;
-		t->binddepth--;
-	}
+	depth = t->execdepth;
+	t->execdepth = 0;
+	if(cmd[0] == '|')
+		tkexec(t, cmd+1, nil);
+	else if(cmd[0] != '\0')
+		e = tkexec(t, cmd, nil);
+	t->execdepth = depth;
 
 	if(e == nil) {
 		free(cmd);

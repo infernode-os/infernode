@@ -1792,8 +1792,32 @@ tkmatch(int inc, int dec, char *p)
 	return nil;
 }
 
+static char*	tkexec1(TkTop*, char*, char**);
+
+/*
+ * A script runs commands, and a command may run a script: a binding's,
+ * when it causes an event; a widget's own (a button's -command that
+ * invokes the button).  The count below is of commands in one binding,
+ * begun again by each binding and not kept at all outside one, so
+ * nothing bounded scripts one inside another but the C stack, and a
+ * script that ran itself ended the emulator when that ran out.  They
+ * are held to Tkmaxnest deep.
+ */
 char*
 tkexec(TkTop *t, char *arg, char **val)
+{
+	char *e;
+
+	if(t->execnest >= Tkmaxnest)
+		return TkDepth;
+	t->execnest++;
+	e = tkexec1(t, arg, val);
+	t->execnest--;
+	return e;
+}
+
+static char*
+tkexec1(TkTop *t, char *arg, char **val)
 {
 	int cmdsz, n;
 	char *p, *cmd, *e, *c;

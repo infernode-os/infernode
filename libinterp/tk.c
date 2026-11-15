@@ -176,6 +176,7 @@ Tk_cmd(void *a)
 
 	lockctxt(t->ctxt);
 	val = nil;
+	t->execnest = 0;	/* no script is running: one an exception ended is not counted for ever */
 	e = tkexec(t, arg, &val);
 	tkfreedead(t);
 	unlockctxt(t->ctxt);
@@ -409,6 +410,7 @@ Tk_pointer(void *a)
 		return;
 
 	lockctxt(c);
+	t->execnest = 0;
 //if (f->p.buttons != 0 || c->mstate.b != 0)
 //print("tkmouse %d [%d %d], focused %d[%s], grab %s, entered %s\n",
 //	f->p.buttons, f->p.xy.x, f->p.xy.y, c->focused, tkname(c->mfocus), tkname(c->mgrab), tkname(c->entered));
@@ -592,6 +594,7 @@ Tk_keyboard(void *a)
 	}
 
 	t = grab->env->top;
+	t->execnest = 0;
 	tkdeliver(grab, TkKey|TKKEY(f->key), nil);
 	tkupdate(t);
 	tkfreedead(t);
@@ -900,6 +903,7 @@ Tk_putimage(void *a)
 
 	name = string2c(f->name);
 	lockctxt(t->ctxt);
+	t->execnest = 0;
 	e = nil;
 	found = 0;
 	if(name[0] == '.'){

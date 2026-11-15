@@ -10,9 +10,10 @@ implement TkEdgeTest;
 # code went on using it (and, where the script had allocated since, used
 # something else).  A Destroy binding that destroyed its own widget, or
 # the next, started again inside itself until the C stack ran out, since
-# each binding began the count of nested commands afresh.  Run for a
-# toplevel the collector was sweeping, a Destroy binding's script could
-# name what the sweep had already freed.  Each of these ended the
+# each binding began the count of nested commands afresh; so did a
+# button whose command invokes the button, with no binding at all.  Run
+# for a toplevel the collector was sweeping, a Destroy binding's script
+# could name what the sweep had already freed.  Each of these ended the
 # emulator, or left the toplevel's lock held by an exception.
 #
 # A widget could be put inside itself: a frame made a window of the
@@ -261,6 +262,27 @@ count:
 	tk->cmd(top, "destroy .");
 	t.assert(tk->cmd(top, sys->sprint(".f%d cget -width", Nchain-1))[0] == '!', "all go when asked one by one");
 	works(t, top, "after the chain");
+}
+
+testCommandDepth(t: ref T)
+{
+	# a button whose command invokes it
+	top := mktop(t, 100, 100);
+	cmd(t, top, "button .b -text x -command {.b invoke}; pack .b; update");
+	e := tk->cmd(top, ".b invoke");
+	t.assert(e != nil && e[0] == '!', "a command that runs itself is refused when it is too deep: " + e);
+	works(t, top, "after it");
+	r := tk->rect(top, ".b", 0);
+	ptr(top, r.min.x+4, r.min.y+4, 1);
+	ptr(top, r.min.x+4, r.min.y+4, 0);
+	works(t, top, "after a click on it");
+
+	# a command a few deep is run
+	c := chan[4] of string;
+	tk->namechan(top, c, "c");
+	cmd(t, top, "button .b1 -command {.b2 invoke}; button .b2 -command {.b3 invoke}; button .b3 -command {send c three}");
+	t.assertseq(tk->cmd(top, ".b1 invoke"), nil, "three buttons each invoking the next");
+	t.assertseq(heard(c), "three ", "reach the third");
 }
 
 #
@@ -574,6 +596,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DestroyInBinding", testDestroyInBinding);
 	run("DestroyOnce", testDestroyOnce);
 	run("BindingDepth", testBindingDepth);
+	run("CommandDepth", testCommandDepth);
 	run("Cursor", testCursor);
 	run("Grab", testGrab);
 	run("Rings", testRings);

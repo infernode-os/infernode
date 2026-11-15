@@ -714,10 +714,16 @@ static QLock tagsumlk;
 static void
 tagadd(ulong pc, ulong bytes)
 {
-	int i, start;
+	int i, k, start;
 
 	start = (pc >> 2) % Ntagsum;
-	for(i = start; ; i = (i + 1) % Ntagsum){
+	/*
+	 * once round and no more: with the table full and its last slot
+	 * taken as the sink below, no slot is empty, and a pc not in it
+	 * was looked for for ever, with the pool's lock held and
+	 * interrupts off
+	 */
+	for(i = start, k = 0; k < Ntagsum; k++, i = (i + 1) % Ntagsum){
 		if(tagsum[i].n == 0){
 			if(ntagsum >= Ntagsum - 1)
 				break;		/* full: charge to the sink below */

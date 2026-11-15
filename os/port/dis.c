@@ -872,7 +872,8 @@ exprog(Prog *p, char *exc)
 static void
 propex(Prog *p, char *estr)
 {
-	Prog *f, *nf, *pgl;
+	Prog *f, *pgl;
+	int i, n, gid, ppid, pglpid, propagate, *pids;
 
 	if(!(p->flags & (Ppropagate|Pnotifyleader)) || p->group == nil)
 		return;
@@ -886,18 +887,41 @@ propex(Prog *p, char *estr)
 		pgl = p;
 	if(!(pgl->flags & (Ppropagate|Pnotifyleader)))
 		return;	/* exceptions are local; don't propagate */
-	for(f = p->group->head; f != nil; f = nf){
-		nf = f->grpnext;
-		if(f != p && f != pgl){
-			if(pgl->flags & Ppropagate)
-				exprog(f, estr);
-			else{
-				f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
-				killprog(f, "killed");
-			}
+	/*
+	 * By pid, as the hosted kernel has it. killprog lets the VM go
+	 * (delprog), and the group's list was walked through it by
+	 * pointer: the next Prog, or the leader, could have exited and
+	 * been freed in that moment, or left for a group of its own.
+	 */
+	propagate = pgl->flags & Ppropagate;
+	gid = p->group->id;
+	ppid = p->pid;
+	pglpid = pgl->pid;
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		n++;
+	pids = malloc(n*sizeof(int));
+	if(pids == nil){
+		print("propex: no memory to propagate \"%s\" from %d\n", estr, ppid);
+		return;
+	}
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		if(f->pid != ppid && f->pid != pglpid)
+			pids[n++] = f->pid;
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f == nil || f->group == nil || f->group->id != gid)
+			continue;	/* gone, or in a group of its own now */
+		if(propagate)
+			exprog(f, estr);
+		else{
+			f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
+			killprog(f, "killed");
 		}
 	}
-	if(p != pgl)
+	free(pids);
+	if(pglpid != ppid && (pgl = progpid(pglpid)) != nil)
 		exprog(pgl, estr);
 }
 
@@ -1007,11 +1031,17 @@ killprog(Prog *p, char *cause)
 	}
 
 
+	/*
+	 * Exiting before propex, as the hosted kernel has it: killing the
+	 * group's others can let the VM go (delprog), and a killprog or
+	 * exprog of p from another processor then must leave p alone, not
+	 * free it a second time or queue it to run again.
+	 */
+	p->state = Pexiting;
 	propex(p, "killed");
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
-	p->state = Pexiting;
 	/*
 	 * Destroyed here, in the killer: its closes are a killed Prog's,
 	 * and a 9P clunk among them is sent and not waited for (devmnt,
@@ -1760,16 +1790,32 @@ vmrun(int n, int argc, char **argv)
 	w = NREG+3;
 	if(t == nil || t->np <= (w+1)/8 || (t->map[w/8] & (0x80>>(w%8))) == 0 || (t->map[(w+1)/8] & (0x80>>((w+1)%8))) == 0)
 		error("not a command: init is not init(ctxt, argv)");
-	p = schedmod(root);
-
+	/*
+	 * The arguments before the Prog. They were made after schedmod,
+	 * which leaves the Prog ready to run: with the VM's heap full,
+	 * c2string or cons raised, and the Prog was left to run with an
+	 * environment of zeros, whose first system call was a fault in
+	 * the kernel. Anyone may write a VM's run file.
+	 */
 	l = (List*)H;
+	if(waserror()){
+		destroy(l);
+		nexterror();
+	}
 	for(i = argc-1; i >= 0; i--){
 		s = c2string(argv[i], strlen(argv[i]));
+		if(waserror()){
+			destroy(s);
+			nexterror();
+		}
 		l = cons(IBY2WD, &l);
+		poperror();
 		l->t = &Tptr;
 		Tptr.ref++;
 		*(String**)l->data = s;
 	}
+	p = schedmod(root);
+	poperror();
 	fp = p->reg.FP;
 	*(WORD**)(fp + w*IBY2WD) = H;		/* ctxt: nil */
 	*(List**)(fp + (w+1)*IBY2WD) = l;	/* argv */

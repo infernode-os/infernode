@@ -30,7 +30,8 @@ command -v python3 >/dev/null 2>&1 || { echo "charon_netfile_test: SKIP (no pyth
 d=$(mktemp -d "${TMPDIR:-/tmp}/charon_netfile.XXXXXX")
 w="$ROOT/tmp/charon_netfile.$$"		# what the emulator sees as /tmp/charon_netfile.$$
 e="/tmp/charon_netfile.$$"
-trap 'kill $srv 2>/dev/null; rm -rf "$d" "$w" "$ROOT/tmp/charon_netfile.sh"' EXIT
+# (with scripts on, Charon keeps a store for each origin under the user's lib)
+trap 'kill $srv 2>/dev/null; rm -rf "$d" "$w" "$ROOT/tmp/charon_netfile.sh" "$ROOT/usr/$(id -un)/lib/charon/store/http_127.0.0.1_$port"' EXIT
 mkdir -p "$w"
 echo "NOT-THE-PAGES-c0ffee" >"$w/secret.txt"
 cat >"$w/local.html" <<HTML

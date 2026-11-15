@@ -50,7 +50,15 @@ MAX_MATCHES:  con 200;
 MAX_FILES:    con 500;
 MAX_DEPTH:    con 20;
 MAX_LINE_LEN: con 300;
+MAX_SCAN:     con 20000;	# files looked into in one search
+MAX_MATCHLINE: con 16384;	# characters of a line that are matched
 OPEN_TIMEOUT: con 3000;	# ms — skip directories that block
+
+# What one search has done, and may yet: shared by its calls.
+Search: adt {
+	scanned:	int;	# files looked into
+	stopped:	int;	# the search gave up at MAX_SCAN or MAX_DEPTH
+};
 
 init(): string
 {
@@ -83,7 +91,8 @@ doc(): string
 		"  grep -l <pattern> <path>       # list matching files only\n" +
 		"  grep -i <pattern> <path>       # case-insensitive match\n" +
 		"  grep -rl <pattern> <path>      # combine flags freely\n\n" +
-		"Output: file:line: content  (max " + string MAX_MATCHES + " matches)\n\n" +
+		"Output: file:line: content  (max " + string MAX_MATCHES + " matches)\n" +
+		"A search stops after " + string MAX_SCAN + " files, or " + string MAX_DEPTH + " directories down, and says so.\n\n" +
 		"Regex: Plan 9 ERE — supports . * + ? | () [] [^] ^ $\n" +
 		"  NO: \\d \\w \\s \\b {n,m} [[:class:]] lookahead/lookbehind\n" +
 		"  NOTE: \\d etc are silently treated as literals (d, w, s)\n\n" +
@@ -167,11 +176,22 @@ exec(args: string): string
 	if(re == nil)
 		return "error: invalid pattern '" + pattern + "': " + err;
 
-	# Dispatch
-	(results, nmatches, nfiles, truncated) := searchpath(re, path, rflag, lflag, iflag, 0);
+	# What cannot be searched is not "no matches": a path that does not
+	# exist, or cannot be read, had the same answer as a file without
+	# the pattern in it.
+	(isdir, serr) := isdirtimeout(path, OPEN_TIMEOUT);
+	if(isdir < 0)
+		return "error: cannot search " + path + ": " + serr;
 
-	if(nmatches == 0 && nfiles == 0)
+	# Dispatch
+	srch := ref Search(0, 0);
+	(results, nmatches, nfiles, truncated) := searchpath(re, path, rflag, lflag, iflag, 0, srch);
+
+	if(nmatches == 0 && nfiles == 0) {
+		if(srch.stopped)
+			return sys->sprint("no matches found in the %d files looked into; the search stopped there, with more not looked into: search a smaller part", srch.scanned);
 		return "no matches found";
+	}
 
 	# Reverse to restore original order
 	rev: list of string;
@@ -185,8 +205,14 @@ exec(args: string): string
 		out += hd r;
 	}
 
-	if(truncated)
-		out += sys->sprint("\n... (truncated at %d matches)", MAX_MATCHES);
+	# (said to be cut at MAX_MATCHES whatever had stopped the search,
+	# and however many there were)
+	if(srch.stopped)
+		out += sys->sprint("\n... (the search stopped after looking into %d files; more were not looked into)", srch.scanned);
+	else if(truncated && lflag)
+		out += sys->sprint("\n... (stopped at %d files; there may be more)", nfiles);
+	else if(truncated)
+		out += sys->sprint("\n... (stopped at %d matches; there may be more)", nmatches);
 
 	if(lflag)
 		return sys->sprint("%d files:\n%s", nfiles, out);
@@ -194,27 +220,26 @@ exec(args: string): string
 }
 
 # Dispatch to file or directory search based on stat result
-searchpath(re: Re, path: string, recursive, listonly, icase, depth: int):
+searchpath(re: Re, path: string, recursive, listonly, icase, depth: int, srch: ref Search):
 	(list of string, int, int, int)
 {
-	if(depth > MAX_DEPTH)
-		return (nil, 0, 0, 0);
-
-	isdir := isdirtimeout(path, OPEN_TIMEOUT);
+	(isdir, nil) := isdirtimeout(path, OPEN_TIMEOUT);
 	if(isdir < 0)
 		return (nil, 0, 0, 0);
 
 	if(isdir == 0)
-		return searchfile(re, path, path, listonly, icase);
+		return searchfile(re, path, path, listonly, icase, MAX_MATCHES, srch);
 
 	# Directory — enumerate contents
-	return searchdir(re, path, recursive, listonly, icase, depth);
+	return searchdir(re, path, recursive, listonly, icase, depth, srch);
 }
 
 # Search a single file; returns (results, nmatches, nfiles, truncated)
-searchfile(re: Re, path, display: string, listonly, icase: int):
+# max is how many more matches the search may still report.
+searchfile(re: Re, path, display: string, listonly, icase, max: int, srch: ref Search):
 	(list of string, int, int, int)
 {
+	srch.scanned++;
 	if(!istext(path))
 		return (nil, 0, 0, 0);
 
@@ -227,11 +252,11 @@ searchfile(re: Re, path, display: string, listonly, icase: int):
 	lineno := 0;
 	filematched := 0;
 
-	while((line := f.gets('\n')) != nil) {
+	for(;;) {
+		(line, eof) := getline(f);
+		if(eof)
+			break;
 		lineno++;
-
-		if(len line > 0 && line[len line - 1] == '\n')
-			line = line[0:len line - 1];
 
 		matchline := line;
 		if(icase)
@@ -245,7 +270,7 @@ searchfile(re: Re, path, display: string, listonly, icase: int):
 				nmatches = 1;
 				break;
 			}
-			if(nmatches >= MAX_MATCHES) {
+			if(nmatches >= max) {
 				f.close();
 				return (results, nmatches, 1, 1);
 			}
@@ -265,13 +290,20 @@ searchfile(re: Re, path, display: string, listonly, icase: int):
 }
 
 # Search a directory; recurse if recursive flag set
-searchdir(re: Re, dirpath: string, recursive, listonly, icase, depth: int):
+searchdir(re: Re, dirpath: string, recursive, listonly, icase, depth: int, srch: ref Search):
 	(list of string, int, int, int)
 {
 	results: list of string;
 	nmatches := 0;
 	nfiles := 0;
 	truncated := 0;
+
+	# (the depth was tested where a search begins, at 0, and nowhere
+	# below: a tree of directories without end was followed without end)
+	if(depth > MAX_DEPTH) {
+		srch.stopped = 1;
+		return (nil, 0, 0, 0);
+	}
 
 	fd := opentimeout(dirpath, Sys->OREAD, OPEN_TIMEOUT);
 	if(fd == nil)
@@ -286,19 +318,27 @@ searchdir(re: Re, dirpath: string, recursive, listonly, icase, depth: int):
 			ent := dirs[i];
 			name := ent.name;
 
-			if(name == "." || name == "..")
+			# a name a server gives that is no name of this directory
+			if(name == "" || name == "." || name == ".." || hasslash(name))
 				continue;
 
 			# Skip hidden entries and known binary dirs
-			if(len name > 0 && name[0] == '.')
+			if(name[0] == '.')
 				continue;
+
+			# A search is bounded by what it looks into, not only by
+			# what it finds: with nothing to find it had no end.
+			if(srch.scanned >= MAX_SCAN) {
+				srch.stopped = 1;
+				return (results, nmatches, nfiles, 1);
+			}
 
 			fullpath := joinpath(dirpath, name);
 
 			if(ent.mode & Sys->DMDIR) {
 				if(!recursive)
 					continue;
-				(sub, sm, sf, st) := searchdir(re, fullpath, recursive, listonly, icase, depth+1);
+				(sub, sm, sf, st) := searchdir(re, fullpath, recursive, listonly, icase, depth+1, srch);
 				for(; sub != nil; sub = tl sub)
 					results = hd sub :: results;
 				nmatches += sm;
@@ -306,11 +346,15 @@ searchdir(re: Re, dirpath: string, recursive, listonly, icase, depth: int):
 				if(st)
 					truncated = 1;
 			} else {
-				(sub, sm, sf, nil) := searchfile(re, fullpath, fullpath, listonly, icase);
+				# each file had MAX_MATCHES of its own, and one that
+				# reached them was not counted as cutting the search
+				(sub, sm, sf, st) := searchfile(re, fullpath, fullpath, listonly, icase, MAX_MATCHES - nmatches, srch);
 				for(; sub != nil; sub = tl sub)
 					results = hd sub :: results;
 				nmatches += sm;
 				nfiles += sf;
+				if(st)
+					truncated = 1;
 			}
 
 			if(nmatches >= MAX_MATCHES || nfiles >= MAX_FILES) {
@@ -321,6 +365,32 @@ searchdir(re: Re, dirpath: string, recursive, listonly, icase, depth: int):
 	}
 
 	return (results, nmatches, nfiles, truncated);
+}
+
+hasslash(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 1;
+	return 0;
+}
+
+# The next line without its newline, to MAX_MATCHLINE characters (the rest
+# of a longer one is read and left out), and whether the file has ended.
+# A line was read whole whatever its length: a file with no newline in it
+# was held in memory entire.
+getline(f: ref Iobuf): (string, int)
+{
+	c := f.getc();
+	if(c == Bufio->EOF || c == Bufio->ERROR)
+		return (nil, 1);
+	line := "";
+	while(c != '\n' && c != Bufio->EOF && c != Bufio->ERROR) {
+		if(len line < MAX_MATCHLINE)
+			line[len line] = c;
+		c = f.getc();
+	}
+	return (line, 0);
 }
 
 # Split off one whitespace- or quote-delimited token from s
@@ -421,10 +491,11 @@ istext(path: string): int
 	return 1;
 }
 
-# Check if path is a directory (with timeout), returns 1=dir, 0=file, -1=error
-isdirtimeout(path: string, ms: int): int
+# Check if path is a directory (with timeout), returns 1=dir, 0=file,
+# -1=error and why
+isdirtimeout(path: string, ms: int): (int, string)
 {
-	rc := chan[1] of int;
+	rc := chan[1] of (int, string);
 	spawn statcheck(path, rc);
 	tc := chan[1] of int;
 	spawn sleeptimer(tc, ms);
@@ -432,19 +503,19 @@ isdirtimeout(path: string, ms: int): int
 		v := <-rc =>
 			return v;
 		<-tc =>
-			return -1;
+			return (-1, sys->sprint("it did not answer in %d seconds", ms / 1000));
 	}
 }
 
-statcheck(path: string, rc: chan of int)
+statcheck(path: string, rc: chan of (int, string))
 {
 	(ok, d) := sys->stat(path);
 	if(ok < 0)
-		rc <-= -1;
+		rc <-= (-1, sys->sprint("%r"));
 	else if(d.mode & Sys->DMDIR)
-		rc <-= 1;
+		rc <-= (1, nil);
 	else
-		rc <-= 0;
+		rc <-= (0, nil);
 }
 
 opentimeout(path: string, mode: int, ms: int): ref Sys->FD

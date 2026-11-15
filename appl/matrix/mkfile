@@ -6,6 +6,7 @@ TARG=\
 	risk-gauge.dis\
 	alert-watcher.dis\
 	geo-fixture.dis\
+	history-svc.dis\
 	line-plot.dis\
 	llm-recorder.dis\
 	llm-context.dis\
@@ -37,6 +38,7 @@ SYSMODULES=\
 	readdir.m\
 	sh.m\
 	parread.m\
+	daytime.m\
 
 DISBIN=$ROOT/dis/matrix
 

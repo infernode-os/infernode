@@ -51,6 +51,7 @@ TARG=\
 	cd.dis\
 	cddb.dis\
 	chatsrv.dis\
+	envsrv.dis\
 	chgrp.dis\
 	chmod.dis\
 	cleanname.dis\

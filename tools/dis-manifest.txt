@@ -184,6 +184,7 @@ dis/ed.dis
 dis/edit.dis
 dis/emuinit.dis
 dis/env.dis
+dis/envsrv.dis
 dis/esort.dis
 dis/export.dis
 dis/fc.dis
@@ -571,6 +572,7 @@ dis/matrix/alert-watcher.dis
 dis/matrix/comp-list.dis
 dis/matrix/cpu-gauge.dis
 dis/matrix/geo-fixture.dis
+dis/matrix/history-svc.dis
 dis/matrix/line-plot.dis
 dis/matrix/llm-context.dis
 dis/matrix/llm-recorder.dis
@@ -842,6 +844,7 @@ dis/tests/lucitheme_test.dis
 dis/tests/luciuisrv_test.dis
 dis/tests/mail9p_test.dis
 dis/tests/mail_provision_test.dis
+dis/tests/matrix_env_test.dis
 dis/tests/matrix_perfdashboard_test.dis
 dis/tests/matrix_sysmon_test.dis
 dis/tests/matrix_test.dis

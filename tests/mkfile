@@ -279,6 +279,7 @@ TARG=\
 	scene_test.dis\
 	sam_test.dis\
 	matrix_perfdashboard_test.dis\
+	matrix_env_test.dis\
 	matrix_sysmon_test.dis\
 	matrix_test.dis\
 	opus_test.dis\

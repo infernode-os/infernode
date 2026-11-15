@@ -330,6 +330,8 @@ enum
 
 static	uchar*	code;
 static	uchar*	base;
+static	uchar*	text;		/* the text being made, until the module has it */
+static	ulong	textsize;
 static	uvlong*	patch;
 static	int	pass;
 static	Module*	mod;
@@ -496,6 +498,157 @@ static void
 urk(void)
 {
 	error(exCompile);
+}
+
+/*
+ * The instruction a branch goes to, as an index into patch[].  load.c
+ * makes a destination an address, and checks it, only where it is an
+ * immediate: any other mode is whatever the file's operand bytes
+ * were, which was subtracted from the module's start and patch[] read
+ * there.  limbo writes no such branch.
+ */
+static vlong
+brpc(Inst *i)
+{
+	uvlong o;
+
+	if(UXDST(i->add) != DST(AIMM))
+		urk();
+	o = (uvlong)((uchar*)i->d.ins - (uchar*)mod->prog);
+	if(o % sizeof(Inst) != 0 || o/sizeof(Inst) >= (uvlong)mod->nprog)
+		urk();
+	return o/sizeof(Inst);
+}
+
+/*
+ * The table of a case or goto, in the module's data: the word that
+ * counts its entries is off bytes from the operand, the first entry
+ * hdr words after that, an entry is width words, and more words follow
+ * the last (a case's default).  nil if the operand is not module data
+ * or the table is not all inside it: load.c looks at no table, and one
+ * was marked and relocated wherever a file's operand said it was.  A
+ * count that tabreloc has marked is read as the count it stands for.
+ */
+static WORD*
+modtab(Inst *i, int off, int hdr, int width, int more)
+{
+	WORD *c, l;
+	uvlong o, dsize, room;
+
+	if(UXDST(i->add) != DST(AMP) || mod->origmp == H || mod->ntype < 1 || mod->type[0] == nil)
+		return nil;
+	dsize = mod->type[0]->size;
+	o = (uvlong)(i->d.ind + off);
+	if(o >= dsize || o % sizeof(WORD) != 0)
+		return nil;
+	room = (dsize - o)/sizeof(WORD);
+	if(room < hdr + more)
+		return nil;
+	c = (WORD*)(mod->origmp + o);
+	l = *c;
+	if(l < 0)
+		l = -(l+1);
+	if((uvlong)l > (room - hdr - more)/width)
+		return nil;
+	return c + hdr;
+}
+
+/*
+ * A table as limbo writes one: n entries whose pc (the word at pcoff
+ * of each) is an instruction of this module.  Looked at in pass 0,
+ * before there is anything to undo; patch[] was indexed by whatever
+ * was there.
+ */
+static void
+tabcheck(WORD *t, WORD n, int width, int pcoff)
+{
+	WORD *e;
+
+	if(t == nil || n < 0)
+		urk();
+	for(e = t + n*width; t < e; t += width)
+		if(t[pcoff] < 0 || t[pcoff] >= mod->nprog)
+			urk();
+}
+
+static void
+relocpc(WORD *w)
+{
+	if(*w >= 0 && *w < mod->nprog)
+		*w = (uvlong)base + patch[*w];
+}
+
+static void
+caserelocate(WORD *t, int hdr, int width)
+{
+	WORD *e, l;
+
+	if(t == nil || (l = t[-hdr]) >= 0)
+		return;
+	l = -(l+1);
+	t[-hdr] = l;
+	for(e = t + l*width; t < e; t += width)
+		relocpc(&t[2]);
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	relocpc(t);
+}
+
+/*
+ * The pcs in the module's case and goto tables made addresses of its
+ * new code.  This is done last, when nothing can stop the compile:
+ * the passes used to mark and relocate the tables as they met them,
+ * and a compile that then failed (a type's code that could not be
+ * made, in a module with a large frame or with the JIT's memory used
+ * up) left the module to be interpreted with addresses where its
+ * tables had pcs.  Its next case jumped to prog + an address.
+ *
+ * A table two instructions name is relocated once: all are marked
+ * first, by a count made negative, and a marked one is relocated and
+ * its count put back.  A goto's count is cleared instead: nothing
+ * reads it again.
+ */
+static void
+tabreloc(void)
+{
+	Inst *i, *ie;
+	WORD *t, *e, l;
+
+	ie = mod->prog + mod->nprog;
+	for(i = mod->prog; i < ie; i++){
+		t = nil;
+		switch(i->op){
+		case ICASE:
+		case ICASEC:
+			t = modtab(i, 0, 1, 3, 1);
+			break;
+		case ICASEL:
+			t = modtab(i, 0, 2, 4, 1);
+			if(t != nil)
+				t--;	/* the count is two words before the entries */
+			break;
+		}
+		if(t != nil && t[-1] >= 0)
+			t[-1] = -t[-1]-1;
+	}
+	for(i = mod->prog; i < ie; i++){
+		switch(i->op){
+		case ICASE:
+		case ICASEC:
+			caserelocate(modtab(i, 0, 1, 3, 1), 1, 3);
+			break;
+		case ICASEL:
+			caserelocate(modtab(i, 0, 2, 4, 1), 2, 4);
+			break;
+		case IGOTO:
+			t = modtab(i, -(int)sizeof(WORD), 1, 1, 0);
+			if(t == nil || (l = t[-1]) <= 0)
+				break;
+			t[-1] = 0;
+			for(e = t + l; t < e; t++)
+				relocpc(t);
+			break;
+		}
+	}
 }
 
 /*
@@ -953,7 +1106,7 @@ punt(Inst *i, int m, void (*fn)(void))
 	}
 
 	if(m & DBRAN) {
-		pc = patch[(Inst*)i->d.imm-mod->prog];
+		pc = patch[brpc(i)];
 		literal((uvlong)base+pc, O(REG, d));
 	}
 
@@ -1183,7 +1336,7 @@ cbra(Inst *i, int jmp)
 		opwld(i, Ocmpw, RAX);
 	}
 	genb(0x0f);
-	rbra(patch[i->d.ins-mod->prog], jmp);
+	rbra(patch[brpc(i)], jmp);
 }
 
 /*
@@ -1207,7 +1360,7 @@ cbral(Inst *i, int jmsw, int jlsw, int mode)
 	modrm32(Ocmpw, 4, RRTMP, RAX);
 
 	label = nil;
-	dst = patch[i->d.ins-mod->prog];
+	dst = patch[brpc(i)];
 
 	switch(mode) {
 	case ANDAND:
@@ -1250,7 +1403,7 @@ cbrab(Inst *i, int jmp)
 
 	opwld(i, Ocmpb, RAX);
 	genb(0x0f);
-	rbra(patch[i->d.ins-mod->prog], jmp);
+	rbra(patch[brpc(i)], jmp);
 }
 
 /*
@@ -1356,7 +1509,7 @@ cbraf(Inst *i, int op)
 	}
 	ssemem(0xf2, 0, Smovsd, 0, a);
 	ssemem(0x66, 0, Sucomisd, 0, b);
-	dst = patch[i->d.ins-mod->prog];
+	dst = patch[brpc(i)];
 	switch(op) {
 	case IBEQF:
 		gen2(0x7a, 6);		/* jp over the je: unordered is not equal */
@@ -1416,72 +1569,53 @@ cvtif(Inst *i)
 static void
 comcase(Inst *i, int w)
 {
-	int l;
-	WORD *t, *e;
+	WORD *t;
+
+	/*
+	 * The table is checked here and left as it is: tabreloc makes
+	 * its pcs addresses when the compile is sure to finish.
+	 */
+	t = modtab(i, 0, 1, 3, 1);
+	if(pass == 0){
+		if(t == nil)
+			urk();
+		tabcheck(t, t[-1], 3, 2);
+		if(t[t[-1]*3] >= mod->nprog)	/* the default; -1 for none */
+			urk();
+	}
 
 	if(w != 0) {
 		opwld(i, Oldw, RAX);		/* v */
 		genb(Opushq+RSI);
 		/*
 		 * Use origmp address directly for case table.
-		 * comcase() patches JIT addresses into origmp, but
+		 * tabreloc() patches JIT addresses into origmp, but
 		 * newmp() may not propagate them to Modlink->MP.
 		 * origmp is stable for the module's lifetime.
 		 */
 		con64((uvlong)(mod->origmp+i->d.ind), RSI);
 		rbra(macro[MacCASE], Ojmp);
 	}
-
-	t = (WORD*)(mod->origmp+i->d.ind+sizeof(WORD));
-	l = t[-1];
-
-	if(pass == 0) {
-		if(l >= 0)
-			t[-1] = -l-1;
-		return;
-	}
-	if(l >= 0)
-		return;
-	t[-1] = -l-1;
-	e = t + t[-1]*3;
-	while(t < e) {
-		t[2] = (uvlong)base + patch[t[2]];
-		t += 3;
-	}
-	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
-	if(t[0] >= 0)
-		t[0] = (uvlong)base + patch[t[0]];
 }
 
 static void
 comcasel(Inst *i)
 {
-	int l;
-	WORD *t, *e;
+	WORD *t;
 
 	/* casel table (limbo dis.c Tcasel, 64-bit): count in a 2*IBY2WD
 	 * slot, then per case [lo][hi][pc+pad] — a 4-WORD stride with the
 	 * pc at t[2]. The old walk patched the 32-bit stride-6 shape and
 	 * corrupted module data whenever a module used `case big`
-	 * (INFR-355). */
-	t = (WORD*)(mod->origmp+i->d.ind+2*sizeof(WORD));
-	l = t[-2];
-	if(pass == 0) {
-		if(l >= 0)
-			t[-2] = -l-1;
+	 * (INFR-355). Checked here, relocated by tabreloc. */
+	if(pass != 0)
 		return;
-	}
-	if(l >= 0)
-		return;
-	t[-2] = -l-1;
-	e = t + t[-2]*4;
-	while(t < e) {
-		t[2] = (uvlong)base + patch[t[2]];
-		t += 4;
-	}
-	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
-	if(t[0] >= 0)
-		t[0] = (uvlong)base + patch[t[0]];
+	t = modtab(i, 0, 2, 4, 1);
+	if(t == nil)
+		urk();
+	tabcheck(t, t[-2], 4, 2);
+	if(t[t[-2]*4] >= mod->nprog)	/* the default; -1 for none */
+		urk();
 }
 
 /*
@@ -1737,7 +1871,7 @@ static void
 comp(Inst *i)
 {
 	int r;
-	WORD *t, *e;
+	WORD *t;
 	uchar *rune, *done;
 	char buf[64];
 
@@ -1896,6 +2030,9 @@ comp(Inst *i)
 			punt(i, SRCOP|DSTOP, optab[i->op]);
 			break;
 		}
+		/* the type's number is the file's: tinit[] was written and type[] read wherever it said */
+		if(i->s.imm < 0 || i->s.imm >= mod->ntype || mod->type[i->s.imm] == nil)
+			urk();
 		tinit[i->s.imm] = 1;
 		framepc(i);
 		con64((uvlong)mod->type[i->s.imm], RRTA);
@@ -2164,9 +2301,12 @@ comp(Inst *i)
 	case IJMP:
 		if(RESCHED)
 			schedcheck(i);
-		rbra(patch[i->d.ins-mod->prog], Ojmp);
+		rbra(patch[brpc(i)], Ojmp);
 		break;
 	case IMOVPC:
+		/* the pc is the file's: patch[] was read wherever it said */
+		if(UXSRC(i->add) != SRC(AIMM) || i->s.imm < 0 || i->s.imm >= mod->nprog)
+			urk();
 		con64(patch[i->s.imm]+(uvlong)base, RAX);
 		opwst(i, Ostw, RAX);
 		break;
@@ -2178,15 +2318,12 @@ comp(Inst *i)
 		gen2(Ojmprm, (0<<6)|(4<<3)|4);
 		genb((3<<6)|(RAX<<3)|RDI);
 
-		if(pass == 0)
-			break;
-
-		t = (WORD*)(mod->origmp+i->d.ind);
-		e = t + t[-1];
-		t[-1] = 0;
-		while(t < e) {
-			t[0] = (uvlong)base + patch[t[0]];
-			t++;
+		/* the table is checked here; tabreloc relocates it */
+		if(pass == 0){
+			t = modtab(i, -(int)sizeof(WORD), 1, 1, 0);
+			if(t == nil)
+				urk();
+			tabcheck(t, t[-1], 1, 0);
 		}
 		break;
 	case IMULF:
@@ -3306,6 +3443,43 @@ enum {
 static uchar *compile_tmp = nil;
 
 /*
+ * What a compile holds, given back, and its state as it was before:
+ * for every way out of compile() that is not a module compiled.
+ */
+static void
+compclean(void)
+{
+	free(patch);
+	patch = nil;
+	free(tinit);
+	tinit = nil;
+	if(text != nil) {
+#ifdef __APPLE__
+		pthread_jit_write_protect_np(1);
+#endif
+		jitfree(text, textsize);
+		text = nil;
+		textsize = 0;
+	}
+	base = nil;
+	mod = nil;
+}
+
+/*
+ * For libcompile's error label (emu/port/discall.c): the code generator
+ * raises for an instruction it will not compile, and a fault in it is
+ * raised too.  compile() has no label of its own, so everything it had
+ * allocated stayed allocated: megabytes of the kernel's pool for each
+ * load of a module with one such instruction, by any program that
+ * could have a file loaded.
+ */
+void
+compileabort(void)
+{
+	compclean();
+}
+
+/*
  * Main compilation entry point
  */
 
@@ -3321,7 +3495,8 @@ compile(Module *m, int size, Modlink *ml)
 	if(getenv("INFERNODE_NOJIT") != nil)
 		return 0;
 
-	base = nil;
+	compclean();
+	mod = m;
 	/*
 	 * Cleared: pass 0 encodes base+patch[i+1] before patch[i+1] is
 	 * set, and con64's length depends on the value, so a stale entry
@@ -3345,7 +3520,6 @@ compile(Module *m, int size, Modlink *ml)
 	if(comvec == nil)
 		goto bad;
 
-	mod = m;
 	n = 0;
 	pass = 0;
 	nlit = 0;
@@ -3362,7 +3536,6 @@ compile(Module *m, int size, Modlink *ml)
 		if(code - tmp >= COMPILE_TMP) {
 			print("JIT: instruction %d overflowed tmp (%ld >= %d)\n",
 				i, (long)(code - tmp), COMPILE_TMP);
-			base = nil;	/* it is tmp here, which is kept */
 			goto bad;
 		}
 		patch[i] = n;
@@ -3376,7 +3549,6 @@ compile(Module *m, int size, Modlink *ml)
 		if(code - tmp >= COMPILE_TMP) {
 			print("JIT: macro %d overflowed tmp (%ld >= %d)\n",
 				i, (long)(code - tmp), COMPILE_TMP);
-			base = nil;	/* it is tmp here, which is kept */
 			goto bad;
 		}
 		macro[mactab[i].idx] = n;
@@ -3387,11 +3559,13 @@ compile(Module *m, int size, Modlink *ml)
 
 	nlit *= sizeof(uvlong);
 
-	base = jitmalloc(n + nlit);
-	if(base == NULL) {
-		base = nil;
+	text = jitmalloc(n + nlit);
+	if(text == NULL) {
+		text = nil;
 		goto bad;
 	}
+	textsize = n + nlit;
+	base = text;
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(0);
 #endif
@@ -3469,6 +3643,12 @@ compile(Module *m, int size, Modlink *ml)
 	if(typecomfailed)
 		goto bad;
 
+	/*
+	 * Nothing from here on fails or raises, and only from here on is
+	 * the module changed: its tables, links, handlers and entry.
+	 */
+	tabreloc();
+
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc-m->prog != -1)
 			l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);
@@ -3492,22 +3672,25 @@ compile(Module *m, int size, Modlink *ml)
 
 	patchex(m, patch);
 	m->entry = (Inst*)(v+patch[mod->entry-mod->prog]);
-	free(patch);
-	free(tinit);
 	free(m->prog);
-	m->prog = (Inst*)base;
-	m->jitsize = n + nlit;
+	m->prog = (Inst*)text;
+	m->jitsize = textsize;
 	m->compiled = 1;
 
 #ifndef __APPLE__
-	segflush(base, n + nlit);
+	segflush(text, textsize);
 #endif
 
+	text = nil;	/* the module's now */
+	compclean();
 	return 1;
 bad:
-	free(patch);
-	free(tinit);
-	if(base != nil)
-		jitfree(base, n + nlit);
+	/*
+	 * The module goes on as it was, interpreted: the code made for
+	 * its types calls into the text given back below.
+	 */
+	for(i = 0; i < m->ntype; i++)
+		freetypejit(m->type[i]);
+	compclean();
 	return 0;
 }

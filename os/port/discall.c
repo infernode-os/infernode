@@ -81,6 +81,11 @@ libqunlockproc(void *l)
  * for it, holding its VM as libqlockproc is meant to, and no Limbo
  * program ran again. One .dis file with one bad opcode, loaded by
  * anyone.
+ *
+ * The 64-bit code generators are told too, before the lock goes: what
+ * a compile had allocated when it raised stayed allocated (megabytes
+ * for each such load), and two of them were left believing a compile
+ * was still under way, which the next one panicked on.
  */
 int
 libcompile(void *l, Module *m, int size)
@@ -89,6 +94,9 @@ libcompile(void *l, Module *m, int size)
 
 	libqlockproc(l);
 	if(waserror()){
+#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64) || (defined(__riscv) && __riscv_xlen == 64)
+		compileabort();		/* comp-amd64.c, comp-arm64.c, comp-riscv64.c */
+#endif
 		libqunlockproc(l);
 		nexterror();
 	}

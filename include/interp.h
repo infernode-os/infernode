@@ -526,6 +526,7 @@ extern	void		cmovw(void*, void*);
 extern	Channel*	cnewc(Type*, void (*)(OPARGS), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
+extern	void		compileabort(void);	/* the 64-bit code generators': a compile that raised gives back what it held */
 /*
  * The detectors in heap.c and the JIT (#622, #635) call panic(). The
  * native kernel declares it in portfns.h and the hosted emulator in its

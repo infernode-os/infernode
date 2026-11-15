@@ -154,6 +154,9 @@ TARG=\
 	load_heapfull_mod.dis\
 	jit_4gb.dis\
 	jit_4gb_mod.dis\
+	jit_compile_fail.dis\
+	jit_compile_fail_mod.dis\
+	jit_compile_fail_ok.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
 	wmapp_fuzz.dis\

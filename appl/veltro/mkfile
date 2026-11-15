@@ -82,7 +82,7 @@ agentlib.dis: agentlib.b $MODDIR/agentlib.m $MODDIR/bufio.m $MODDIR/json.m $MODD
 veltro.dis: veltro.b $MODDIR/agentlib.m tool.m $MODDIR/nsconstruct.m veltrosrv.m $MODDIR/arg.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw veltro.b
 
-tools9p.dis: tools9p.b tool.m $MODDIR/arg.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/nsconstruct.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
+tools9p.dis: tools9p.b tool.m $MODDIR/arg.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/nsconstruct.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m $MODDIR/audit.m
 	limbo $LIMBOFLAGS -gw tools9p.b
 
 nsconstruct.dis: nsconstruct.b $MODDIR/nsconstruct.m $MODDIR/audit.m $MODDIR/cowfs.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/keyring.m $MODDIR/sys.m

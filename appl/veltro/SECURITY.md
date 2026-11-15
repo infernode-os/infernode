@@ -220,6 +220,11 @@ All layers use the same `restrictdir()` primitive. Capability attenuation is
 natural: children fork an already-restricted namespace and can only narrow
 further.
 
+A task's memory and plan stores (`/tmp/veltro/memory/<id>`,
+`/tmp/veltro/plans/a<id>`) are removed by tools9p when it provisions the task
+and when the task is closed, as its scratch is emptied: activity numbers are
+used again, and the `task` tool's own call cannot name those directories.
+
 Task briefs, instructions, model choices, and agent-role selections are exchanged
 under `/tmp/veltro/tasks`. `restrictns()` replaces that directory with an empty
 view for every invocation except the fixed-function `task` tool. The trusted
@@ -352,13 +357,20 @@ For ordinary tools the ordering remains security-critical:
 
 ```
 asyncexec(tool):
+  0. pctl(NEWFD) keeping the console; /dev/null as descriptor 0
   1. pctl(FORKNS)
   2. pctl(NEWENV), then copy only VELTRO_SESSION
   3. pctl(NODEVS)
   4. bind /tool.N over /tool
   5. restricttoolns(Capabilities(tools = [tool], ...))
-  6. execute only that tool module
+  6. (spawn only) pctl(NEWPGRP)
+  7. execute only that tool module
 ```
+
+Every call is made this way, a `task create` included. A call's descriptors
+are its own: no call has a file another call, or the server, has open, and a
+command `exec` starts has `/dev/null` as its input. A call's answer is sent by
+the serve loop, and not at all once the caller has flushed it.
 
 The fresh environment group is required even though `restrictns()` narrows
 `/env`: Inferno deliberately permits a process to name its private `#e`

@@ -196,6 +196,19 @@ files, and GUI IPC trees are present only when the relevant tool or an explicit
 path capability names them. Trusted app control files under `/tmp/veltro/*/ctl`
 must never be ambient.
 
+Memory and plans are kept per activity. The `memory` tool stores under
+`/tmp/veltro/memory/<activity-id>` and the `plan` tool (when no session
+directory is set) under `/tmp/veltro/plans/a<activity-id>`, the id being the one
+its tool server serves as `/tool/activity`. One activity's tool therefore does
+not list, load or clear what another kept: a task that has read hostile text
+cannot leave it where the main agent will load it as its own memory. Activity
+0's store persists across sessions; a task's is emptied when a new tool server
+first uses it, because task ids begin again at each boot. This is the tools'
+own scoping. The name space still binds the whole of `memory` and `plans` for a
+holder of the tool, so a caller that also holds a raw file tool over
+`/tmp/veltro` can reach the other directories; delegated children of one
+activity share its store.
+
 Provisioned children receive only read-only navigation tools by default:
 `read`, `list`, `find`, `search`, and `grep`. Persistence (`memory`), recursive
 delegation (`spawn`), planning state, and UI effects require explicit budgeted

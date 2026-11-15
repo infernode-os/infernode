@@ -166,11 +166,16 @@ exec(args: string): string
 	nbytes := 0;
 	cutlines := 0;
 	more := 0;		# the count of lines was given up: the file goes on
+	readerr := "";
 
 	for(;;) {
 		(line, full, eof) := getline(f);
-		if(eof)
+		if(eof) {
+			# a read that failed is not the end of the file
+			if(eof == 2)
+				readerr = sys->sprint("%r");
 			break;
+		}
 		if(lineno >= offset && stopped < 0) {
 			if(linesread >= limit || nbytes >= maxbytes)
 				stopped = lineno;
@@ -216,6 +221,13 @@ exec(args: string): string
 
 	f.close();
 
+	if(readerr != "") {
+		if(result == "")
+			return "error: cannot read " + path + ": " + readerr;
+		if(result[len result - 1] != '\n')
+			result += "\n";
+		return result + sys->sprint("[reading stopped after line %d: %s]", lineno, readerr);
+	}
 	if(result == "") {
 		if(lineno == 0)
 			return "(empty file)";
@@ -249,13 +261,16 @@ isnumber(s: string): int
 }
 
 # The next line: at most MAX_LINE characters of it (and its newline), how
-# many characters it has, and whether the file has ended.  The line was
+# many characters it has, and whether the file has ended (1) or a read of
+# it failed (2).  The line was
 # read whole whatever its length, so a file with no newline in it was held
 # in memory entire to show its first 2000 characters.
 getline(f: ref Iobuf): (string, int, int)
 {
 	c := f.getc();
-	if(c == Bufio->EOF || c == Bufio->ERROR)
+	if(c == Bufio->ERROR)
+		return (nil, 0, 2);
+	if(c == Bufio->EOF)
 		return (nil, 0, 1);
 	line := "";
 	n := 0;

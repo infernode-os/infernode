@@ -220,6 +220,18 @@ endless(fio: ref Sys->FileIO)
 	}
 }
 
+broken(fio: ref Sys->FileIO)
+{
+	for(;;) alt {
+	(nil, nil, nil, rc) := <-fio.read =>
+		if(rc != nil)
+			rc <-= (nil, "the disk is on fire");
+	(nil, nil, nil, wc) := <-fio.write =>
+		if(wc != nil)
+			wc <-= (0, "no");
+	}
+}
+
 testRead(t: ref T)
 {
 	read := loadtool(t, "read");
@@ -275,13 +287,17 @@ testRead(t: ref T)
 	r = read->exec(dir + "/long.txt");
 	t.assert(contains(r, "[line cut: 300000 characters]") && len r < 4000, sprint("a long line is cut and its length said: %d came back", len r));
 
-	# a file with no end
+	# a file with no end, and one whose reads fail
 	if(sys->bind("#s", dir, Sys->MBEFORE) < 0)
 		t.skip(sprint("cannot bind #s: %r"));
 	fio := sys->file2chan(dir, "endless");
-	if(fio == nil)
+	bio := sys->file2chan(dir, "broken");
+	if(fio == nil || bio == nil)
 		t.skip(sprint("file2chan: %r"));
 	spawn endless(fio);
+	spawn broken(bio);
+	r = read->exec(dir + "/broken");
+	t.assert(iserror(r) && contains(r, "the disk is on fire"), "a file that cannot be read is an error, not an empty file: " + r);
 	r = call(read, dir + "/endless", 60000);
 	t.assert(r != nil, "a file with no end is not read for ever");
 	if(r != nil)

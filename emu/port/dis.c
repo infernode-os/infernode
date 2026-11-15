@@ -168,9 +168,14 @@ newprog(Prog *p, Modlink *m)
 		error(exNomem);
 	}
 
-	n->pid = ++pidnum;
-	if(n->pid <= 0)
+	/*
+	 * Asked before the count is stepped: stepping the largest int is
+	 * not defined, and a compiler may then leave out a test, made
+	 * after, that the pid is positive.
+	 */
+	if(pidnum == 0x7fffffff)
 		panic("no pids");
+	n->pid = ++pidnum;
 	n->group = nil;
 
 	if(isched.tail != nil) {
@@ -205,7 +210,19 @@ newprog(Prog *p, Modlink *m)
 	addrun(n);
 
 	if(p == nil){
+		/*
+		 * A first Prog is listed and ready to run by now.  If no
+		 * group can be made for it, it goes, as one that newstack
+		 * has no memory for does.  It was left as it was, to run
+		 * with no group, no PC and an environment of zeros (the
+		 * native kernel's #X run file, which anyone may write).
+		 */
+		if(waserror()){
+			killprog(n, exNomem);
+			nexterror();
+		}
 		newgrp(n);
+		poperror();
 		return n;
 	}
 
@@ -1221,8 +1238,11 @@ schedmod(Module *m)
 	t = m->entryt;
 	if(t != nil && t->size > sizeof(Frame)){
 		fp = mallocz(t->size, 1);
-		if(fp == nil)
+		if(fp == nil){
+			/* p is ready to run: it goes, as in newstack */
+			killprog(p, exNomem);
 			error(exNomem);
+		}
 	}else{
 		memset(&f, 0, sizeof(f));
 		fp = &f;
@@ -1293,6 +1313,8 @@ void
 vmwatchdog(void *a)
 {
 	ulong ms;
+	Proc *o, *q;
+	char now[KNAMELEN];
 
 	USED(a);
 	for(;;){
@@ -1305,9 +1327,25 @@ vmwatchdog(void *a)
 		if(vmowner == nil)
 			print("vmwatchdog: VM token LOST %ludms ago (no owner, waiters queued) — last owner text=%s\n",
 				ms - vmownerms, vmownertext);
-		else
+		else{
+			/*
+			 * What the owner is doing now, if it is still a
+			 * proc: a kproc that ended holding the VM has been
+			 * freed, and its text was read through the pointer
+			 * kept here.
+			 */
+			o = vmowner;
+			kstrcpy(now, "gone", sizeof now);
+			lock(&procs.l);
+			for(q = procs.head; q != nil; q = q->next)
+				if(q == o){
+					kstrcpy(now, q->text, sizeof now);
+					break;
+				}
+			unlock(&procs.l);
 			print("vmwatchdog: VM token STUCK for %ludms: owner=%#p text=%s now=%s (waiters queued)\n",
-				ms - vmownerms, vmowner, vmownertext, vmowner->text);
+				ms - vmownerms, o, vmownertext, now);
+		}
 	}
 }
 

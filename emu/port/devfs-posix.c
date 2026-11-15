@@ -312,7 +312,7 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 				cnameclose(next);
 				if(j == 0)
 					error(Enonexist);
-				strcpy(up->env->errstr, Enonexist);
+				kstrcpy(up->env->errstr, Enonexist, ERRMAX);
 				break;
 			}
 			nc->qid = fsqid(&st);

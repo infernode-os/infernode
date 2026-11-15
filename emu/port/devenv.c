@@ -151,8 +151,8 @@ envcreate(Chan *c, char *name, int mode, ulong perm)
 			error(Eexist);
 		}
 	e = smalloc(sizeof(Evalue));
-	e->var = smalloc(strlen(name)+1);
-	strcpy(e->var, name);
+	e->var = nil;
+	kstrdup(&e->var, name);
 	e->val = 0;
 	e->len = 0;
 	e->qid.path = ++eg->path;

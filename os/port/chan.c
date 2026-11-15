@@ -1048,7 +1048,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				*nerror = nhave;
 			cnameclose(cname);
 			cclose(c);
-			strcpy(up->env->errstr, Enotdir);
+			kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 			if(mh != nil)
 				putmhead(mh);
 			return -1;
@@ -1139,11 +1139,11 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 					if(wq->nqid==0 || (wq->qid[wq->nqid-1].type&QTDIR)){
 						if(nerror)
 							*nerror = nhave+wq->nqid+1;
-						strcpy(up->env->errstr, Edoesnotexist);
+						kstrcpy(up->env->errstr, Edoesnotexist, ERRMAX);
 					}else{
 						if(nerror)
 							*nerror = nhave+wq->nqid;
-						strcpy(up->env->errstr, Enotdir);
+						kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 					}
 					free(wq);
 					if(mh != nil)
@@ -1591,7 +1591,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 			print("namec %s walk error npath=%d\n", aname, npath);
 			nexterror();
 		}
-		strcpy(tmperrbuf, up->env->errstr);
+		kstrcpy(tmperrbuf, up->env->errstr, sizeof tmperrbuf);
 	NameError:
 		len = prefix+e.off[npath];
 		if(len < ERRMAX/3 || (name=memrchr(aname, '/', len))==nil || name==aname)

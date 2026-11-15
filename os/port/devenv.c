@@ -178,8 +178,8 @@ envcreate(Chan *c, char *name, int mode, ulong)
 		if(strcmp(e->var, name) == 0)
 			error(Eexist);
 	e = smalloc(sizeof(Evalue));
-	e->var = smalloc(strlen(name)+1);
-	strcpy(e->var, name);
+	e->var = nil;
+	kstrdup(&e->var, name);
 	e->val = 0;
 	e->len = 0;
 	e->qid.path = ++eg->path;

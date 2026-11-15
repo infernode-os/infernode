@@ -109,7 +109,7 @@ csdial(DS *ds)
 	 *  we get one that works.
 	 */
 	*besterr = 0;
-	strcpy(err, Egreg);
+	kstrcpy(err, Egreg, sizeof err);
 	rv = -1;
 	kseek(fd, 0, 0);
 	while((n = kread(fd, buf, sizeof(buf) - 1)) > 0){
@@ -308,7 +308,7 @@ kannounce(char *addr, char *dir)
 	 *  return directory etc.
 	 */
 	if(dir)
-		strcpy(dir, buf);
+		kstrcpy(dir, buf, NETPATHLEN);	/* the caller's is NETPATHLEN, as buf is */
 	return ctl;
 }
 
@@ -347,7 +347,7 @@ klisten(char *dir, char *newdir)
 	/*
 	 *  find out which line we have
 	 */
-	strcpy(buf, dir);
+	kstrcpy(buf, dir, sizeof buf);
 	cp = strrchr(buf, '/');
 	*++cp = 0;
 	n = cp-buf;
@@ -362,7 +362,7 @@ klisten(char *dir, char *newdir)
 	 *  return directory etc.
 	 */
 	if(newdir)
-		strcpy(newdir, buf);
+		kstrcpy(newdir, buf, NETPATHLEN);	/* the caller's is NETPATHLEN, as buf is */
 	return ctl;
 
 }

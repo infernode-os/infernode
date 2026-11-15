@@ -1,0 +1,5 @@
+<!doctype html><title>clip-path: polygon() cuts a box, and a pseudo-element, to its points</title>
+<style>body{margin:0} .g{position:relative;width:100px;height:100px;background:green}
+.g::before{content:"";position:absolute;inset:0;background:red;clip-path:polygon(-20px -20px,-10px -20px,-10px -10px)}
+.r{position:absolute;left:-100px;top:0;width:200px;height:100px;background:red;clip-path:polygon(0 0,50% 0,50% 100%,0 100%)}</style>
+<div class=g><div class=r></div></div>

@@ -760,9 +760,7 @@ firstletter(box: ref Box, st: ref St)
 		j++;
 	if(j >= n || isspacesep(s[j]))
 		return;	# punctuation alone, or a space where the letter would be: no first letter
-	j++;
-	while(j < n && bidi->joining(s[j]) == Bidi->JT)
-		j++;
+	j = clusterend(s, j);
 	while(j < n && bidi->punct(s[j]))
 		j++;
 	ft := newbox(Ktext, 1, t.node, st);
@@ -796,6 +794,38 @@ firstletter(box: ref Box, st: ref St)
 		kids[m++] = hd l;
 	kids[m:] = p.kids[i+1:];
 	p.kids = kids;
+}
+
+# where the grapheme cluster that begins at s[j] ends (UAX #29, as far
+# as a first letter needs): the character, its marks, variation
+# selectors and emoji modifiers, a regional indicator's pair (a flag:
+# WPT's first-letter-flag-001 enlarged half of it), and what a
+# zero-width joiner joins to it
+clusterend(s: string, j: int): int
+{
+	n := len s;
+	if(j >= n)
+		return j;
+	ri := isregional(s[j]);
+	j++;
+	if(ri && j < n && isregional(s[j]))
+		j++;
+	while(j < n) {
+		c := s[j];
+		if(bidi->joining(c) == Bidi->JT || c >= 16rFE00 && c <= 16rFE0F || c >= 16rE0100 && c <= 16rE01EF ||
+		   c >= 16r1F3FB && c <= 16r1F3FF || c >= 16rE0020 && c <= 16rE007F)
+			j++;	# a mark, a variation selector, a skin tone, a tag
+		else if(c == 16r200D && j + 1 < n)
+			j += 2;	# joined to what follows
+		else
+			break;
+	}
+	return j;
+}
+
+isregional(c: int): int
+{
+	return c >= 16r1F1E6 && c <= 16r1F1FF;
 }
 
 # a space separator that is a break opportunity and hangs at a line's
@@ -1118,12 +1148,15 @@ flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
 }
 
 # end an inline run: wrapped in an anonymous block, unless it is only
-# collapsible white space (and out-of-flow boxes, which stand alone)
+# collapsible white space (and out-of-flow boxes, which stand alone).
+# In a flex or grid container a run of white space is no item even
+# preserved (Flexbox §4, Grid §6.1): a shiki code block is a grid of
+# lines with a newline between each, and every other row was empty
 flushrun(box: ref Box, run, r: list of ref Box): list of ref Box
 {
 	if(run == nil)
 		return r;
-	if(!blankrun(run, 1))
+	if(!blankrun(run, box.kind != Kflex && box.kind != Kgrid))
 		return anonblock(box, rev(run)) :: r;
 	for(l := rev(run); l != nil; l = tl l)
 		if(isoof(hd l))
@@ -1838,7 +1871,12 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 				if(b.d.hasattr(o, "selected"))
 					break;
 			}
-		r.text = squash(sel) + " ▾";
+		# the arrow is the control's own: with appearance: none the
+		# page draws its (DuckDuckGo's chevron, an ::after), and there
+		# were two
+		r.text = squash(sel);
+		if(st.appearance)
+			r.text += " ▾";
 		return r;
 	}
 	return nil;
@@ -2563,24 +2601,31 @@ automargins(b: ref Box, cbw: int)
 		b.ml += free;
 	else if(rauto)
 		b.mr += free;
-	else if(free > 0 && incenter(b)) {
-		# <center> centres its block children too (HTML §15.3.3:
-		# text-align: -webkit-center), as pages of its era expect
-		b.ml += free/2;
-		b.mr += free - free/2;
+	else if(free > 0 && (ka := kidalign(b)) != 0) {
+		# <center> and align= place their block children too (HTML
+		# §15.3.3: text-align: -webkit-center and kin), as pages of
+		# their era expect: plan9.io's tables, centred in a <td
+		# align=center>, were at its left
+		case ka {
+		Style->Acenter =>
+			b.ml += free/2;
+			b.mr += free - free/2;
+		Style->Aright =>
+			b.ml += free;
+		* =>
+			b.mr += free;
+		}
 	} else if(free != 0 && b.parent != nil && b.parent.st.dirrtl)
 		b.ml += free;	# over-constrained in a right-to-left block: margin-left gives (§10.3.3)
 }
 
-# is b a block child of <center> (or of its anonymous blocks)?
-incenter(b: ref Box): int
+# where the box's container places its block children, by its
+# text-align (through its anonymous blocks, which have its style)
+kidalign(b: ref Box): int
 {
 	for(p := b.parent; p != nil; p = p.parent) {
-		if(p.node != 0)
-			return curdoc != nil && curdoc.nodes[p.node].tag == Dom->Tcenter &&
-				curdoc.nodes[p.node].ns == Dom->HTML;
-		if(p.kind != Kblock)
-			break;
+		if(p.node != 0 || p.kind != Kblock)
+			return p.st.kidalign;
 	}
 	return 0;
 }
@@ -3335,6 +3380,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i = 0; i < len la; i++) {
 		ln := la[i];
 		avail := mainavail;
+		clamped := 0;	# a min-height or max-height gave the column its height
 		if(avail < 0) {
 			# indefinite (a column with auto height): sizes are hypothetical
 			avail = 0;
@@ -3342,7 +3388,9 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				avail += ir(ln.items[j].hyp) + ln.items[j].mm;
 			avail += gapmain * nz(len ln.items - 1);
 			# then the container's min-height and max-height (§9.2 step 4)
-			avail = clamph(b, avail + vextra(b), cbh) - vextra(b);
+			ca := clamph(b, avail + vextra(b), cbh) - vextra(b);
+			clamped = !row && !wrap && ca != avail;
+			avail = ca;
 		}
 		resolveflex(ln.items, real (avail - gapmain * nz(len ln.items - 1)));
 		cross := 0;
@@ -3372,7 +3420,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 					(ks.basis.kind == Style->Lpx || ks.basis.kind == Style->Lauto && ks.height.kind == Style->Lpx);
 				outer := imposed;
 				outerh := imposedh;
-				if(ch >= 0 || fixedmain) {
+				# (a column its min-height or max-height sizes: its items are as
+				# tall as they flex to, for their own content too, as Chrome has
+				# it; Vercel's hero, flex-1 columns in a column of min-height:
+				# min(100svh - ..., 1100px), kept their content's height)
+				if(ch >= 0 || fixedmain || clamped) {
 					imposed = k;
 					imposedh = m;
 				}
@@ -3787,9 +3839,28 @@ Gi: adt {
 };
 
 # the size a track function names, or Tauto if it is not one
+tavail := -1;	# what tracks() lays the template out in: a calc()'s percentages are of it
 tsz(t: ref Tok): (int, Tsz)
 {
 	case t.kind {
+	Css->Kfunction =>
+		case t.s {
+		"calc" or "min" or "max" or "clamp" =>
+			# px and percentages both (style made the rest px):
+			# against the grid's width, or auto where it is not
+			# known yet (Grid 2 §7.2.1)
+			(ok, l) := style->tracklen(t);
+			if(!ok)
+				return (0, Tsz(Tauto, 0.0));
+			if(l.kind == Style->Lpx && l.pct == 0.0)
+				return (1, Tsz(Tfixed, l.px));
+			if(tavail < 0)
+				return (1, Tsz(Tauto, 0.0));
+			v := l.resolve(real tavail);
+			if(v < 0.0)
+				v = 0.0;
+			return (1, Tsz(Tfixed, v));
+		}
 	Css->Kdimension =>
 		if(t.s == "fr")
 			return (1, Tsz(Tfr, t.n));
@@ -3840,8 +3911,11 @@ track(t: ref Tok): ref Track
 			if(hi.kind == Tfixed)
 				hi = Tsz(Tfit, hi.v);
 			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0, 0);
+		"calc" or "min" or "max" or "clamp" =>
+			;	# a size: below
+		* =>
+			return nil;
 		}
-		return nil;
 	}
 	(ok, sz) := tsz(t);
 	if(!ok)
@@ -3860,6 +3934,16 @@ repsize := 0.0;
 # A track list, with repeat() expanded (auto-fill/auto-fit against
 # avail) and line names collected: names[i] are the names of line i.
 tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list of string)
+{
+	outeravail := tavail;
+	if(avail >= 0)
+		tavail = avail;
+	(a, n) := tracks1(v, avail, gap);
+	tavail = outeravail;
+	return (a, n);
+}
+
+tracks1(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list of string)
 {
 	tlist: list of ref Track;
 	names: list of (int, string);
@@ -7971,8 +8055,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	h := k.h;
 	if((st.height.kind == Style->Lauto && !truereplaced(k) && !(st.aspect > 0.0) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
 		# (an auto height with a ratio comes from the width: aspect-ratio/abspos-003)
+		# the insets make it definite: laid out again at it, should its
+		# content care (a flex container's items stretch to it:
+		# web.dev's tabs, a nav at inset: 0, were their text's height)
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
-		k.h = h;
+		imposeh(l, k, h, cbw, cbh);
 	} else if(st.height.kind == Style->Lstretch) {
 		avail := cbh;
 		if(!tauto)
@@ -7982,7 +8069,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		if(tauto && bauto)
 			avail -= sy - pr.min.y;
 		h = clamph(k, avail - k.mt - k.mb, cbh);
-		k.h = h;
+		imposeh(l, k, h, cbw, cbh);
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
 		# a definite or intrinsic (fit-content) height: auto margins
 		# auto margins take what the insets and height leave (§10.6.4)
@@ -8488,12 +8575,15 @@ imgsrc(d: ref Doc, n: int): string
 	return d.attr(n, "src");
 }
 
-# image types the engine decodes
+# image types the engine decodes: not AVIF, which readavif recognises
+# and refuses (no AV1 decoder), nor ICO, which nothing reads.  A
+# <source> of either was taken and nothing shown: svelte.dev's hero
+# is an AVIF source, then a WebP one
 decodes(t: string): int
 {
 	case lower(trimsp(t)) {
 	"image/png" or "image/jpeg" or "image/jpg" or "image/gif" or "image/webp" or
-	"image/svg+xml" or "image/avif" or "image/x-icon" or "image/vnd.microsoft.icon" =>
+	"image/svg+xml" =>
 		return 1;
 	}
 	return 0;
@@ -9181,21 +9271,47 @@ intrinsic1(b: ref Box): (int, int)
 				spreadspan(cols, cmn, cmx, a0, a0 + span, kmn, kmx, gap);
 				c = (a0 + span) % len cols;
 			}
+			# under a min-content constraint a track is its base size:
+			# its minimum sizing function when that is a length,
+			# whatever its items (minmax(0, 1fr) is 0, and an fr's
+			# flex fraction is zero there, §12.7.1); the items' only
+			# when it is intrinsic.  Tailwind's hero, in an auto
+			# column beside a grid of 30 minmax(0, 1fr) columns
+			# holding a 1536px carousel, was laid out 4017px wide
 			wmn := gap * (len cols - 1) + ex;
 			wmx := wmn;
+			# under a max-content constraint the fr tracks share one
+			# size, the largest of their items' contributions per flex
+			# factor (§12.7.1): Notion's two buttons in 1fr 1fr at
+			# max-content were split their sum, and the wider wrapped
+			fr := 0.0;
 			for(i = 0; i < len cols; i++)
-				if(cols[i].lo.kind == Tfixed && cols[i].hi.kind == Tfixed) {
-					wmn += int cols[i].hi.v;
-					wmx += int cols[i].hi.v;
-				} else {
-					wmn += cmn[i];
-					x := cmx[i];
-					if(cols[i].hi.kind == Tfit && x > int cols[i].hi.v)
-						x = int cols[i].hi.v;	# fit-content: no wider than its argument
-					if(x < cmn[i])
-						x = cmn[i];
-					wmx += x;
+				if(cols[i].hi.kind == Tfr && cols[i].hi.v > 0.0) {
+					f := cols[i].hi.v;
+					if(f < 1.0)
+						f = 1.0;
+					fr = maxr(fr, real cmx[i] / f);
 				}
+			for(i = 0; i < len cols; i++) {
+				tr := cols[i];
+				if(tr.hi.kind == Tfr && fr * tr.hi.v > real cmx[i])
+					cmx[i] = int math->ceil(fr * tr.hi.v);
+				mn := cmn[i];
+				if(tr.lo.kind == Tfixed)
+					mn = int tr.lo.v;
+				x := cmx[i];
+				case tr.hi.kind {
+				Tfixed =>
+					x = int tr.hi.v;	# grown to its limit, and no further
+				Tfit =>
+					if(x > int tr.hi.v)
+						x = int tr.hi.v;	# fit-content: no wider than its argument
+				}
+				if(x < mn)
+					x = mn;
+				wmn += mn;
+				wmx += x;
+			}
 			return (wmn, wmx);
 		}
 	}
@@ -12692,6 +12808,7 @@ scrolled: Point;	# how far the document is scrolled in it; fixed boxes do not mo
 
 paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 {
+	paintfault = 0;
 	if(root.doc != nil)
 		curdoc = root.doc;
 	viewport = clip;
@@ -12820,7 +12937,8 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			warp(dst, b, o, clip, canvasbg);
 			return;
 		}
-		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
+		if(st.tfs == nil)	# warped, its translation is in the matrix: its picture is untransformed
+			o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 		intransform++;
 	}
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
@@ -13201,7 +13319,31 @@ before(a, b: ref Lyr): int
 	return a.box.seq < b.box.seq;
 }
 
+# A box's fault in painting is the box's: it is left out and the
+# rest painted (the draw device refuses a path past 2^20 pixels, and
+# one such box on nodejs.org left the whole page white), and said once
+# a paint
+paintfault := 0;
+
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
+{
+	{
+		paintself0(dst, b, r, canvasbg);
+	} exception e {
+	"*" =>
+		if(paintfault++ == 0)
+			sys->fprint(sys->fildes(2), "charon: painting <%s>: %s\n", boxname(b), e);
+	}
+}
+
+boxname(b: ref Box): string
+{
+	if(curdoc == nil || b.node <= 0 || b.node >= curdoc.n)
+		return "anonymous box";
+	return curdoc.nodes[b.node].name;
+}
+
+paintself0(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
 	if(textmask)
 		return;	# only text goes into the mask
@@ -13438,6 +13580,13 @@ rectok(r: Rect): int
 layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+	# what it paints is where its translation takes it (paintctx moves
+	# it inside the layer): Astro's hero glow, a blurred image moved
+	# left by half its width, was cut off at its untranslated box
+	if(b.st.translated && b.st.tfs == nil)
+		r = r.addpt(Point(res(b.st.tx, b.w), res(b.st.ty, b.h)));
+	else if(b.st.translated && b.st.tfs != nil && clip.dx() <= 8192 && clip.dy() <= 8192)
+		r = clip;	# warped inside the layer, to anywhere: all that can show
 	# a blur takes in, and spreads out to, three deviations around
 	spread := 0;
 	for(i := 0; i < len b.st.filter; i++)
@@ -13459,6 +13608,31 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	if(b.st.filter != nil)
 		if(!noeffects)
 			filter(img, b.st.filter);
+	if(b.st.clippoly != nil) {
+		# clip-path: polygon(), its points against the border box
+		# where it is drawn
+		br := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+		if(b.st.translated && b.st.tfs == nil)
+			br = br.addpt(Point(res(b.st.tx, b.w), res(b.st.ty, b.h)));
+		pts := b.st.clippoly;
+		path := Path.new();
+		for(k := 0; k + 1 < len pts; k += 2) {
+			x := real br.min.x + pts[k].resolve(real b.w);
+			y := real br.min.y + pts[k+1].resolve(real b.h);
+			if(k == 0)
+				path.moveto(x, y);
+			else
+				path.lineto(x, y);
+		}
+		path.close();
+		pm := display.newimage(pr, Draw->GREY8, 0, Draw->Black);
+		cut := display.newimage(pr, Draw->RGBA32, 0, Draw->Transparent);
+		if(pm == nil || cut == nil)
+			return;
+		pm.fillpath(path, b.st.clipwind, display.white, (0, 0));
+		cut.draw(pr, img, pm, pr.min);
+		img = cut;
+	}
 	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
 	if(hasmask(b.st)) {
@@ -13486,7 +13660,7 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 # painted into a layer of its own: translucent, masked or filtered
 ownlayer(st: ref St): int
 {
-	return st.opacity < 1.0 || hasmask(st) || st.filter != nil;
+	return st.opacity < 1.0 || hasmask(st) || st.filter != nil || st.clippoly != nil;
 }
 
 # a stacking context though not positioned: a layer of its own, or
@@ -14302,6 +14476,23 @@ radii(b: ref Box): (int, int, int, int)
 	r := (res(st.rtl, b.w), res(st.rtr, b.w), res(st.rbr, b.w), res(st.rbl, b.w));
 	if(r.t0 == 0 && r.t1 == 0 && r.t2 == 0 && r.t3 == 0 && (n := nativelook(b)) > 0)
 		return (n, n, n, n);
+	# none larger than the box: they are scaled down to fit it anyway
+	# (Backgrounds 3 §5.5), and two of 2147483647px (calc(infinity *
+	# 1px) as a minifier writes it: nodejs.org's) summed past an int,
+	# the scale went negative and the path past what the draw device
+	# takes, and the whole page was left unpainted
+	m := b.w + b.h;
+	if(m < 1)
+		m = 1;
+	return (radclamp(r.t0, m), radclamp(r.t1, m), radclamp(r.t2, m), radclamp(r.t3, m));
+}
+
+radclamp(r, m: int): int
+{
+	if(r > m)
+		return m;
+	if(r < 0)
+		return 0;
 	return r;
 }
 
@@ -14645,7 +14836,14 @@ svgraster(url: string, data: array of byte, w, h: int): ref Image
 		readsvg->init(bufio);
 		imageremap->init(display);
 	}
-	(raw, err) := readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	raw: ref RImagefile->Rawimage;
+	err: string;
+	{
+		(raw, err) = readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	} exception e {
+	"*" =>
+		err = e;	# a picture that cannot be drawn costs itself, not the page's paint
+	}
 	if(raw == nil || err != nil)
 		return nil;
 	(img, nil) := imageremap->remap(raw, display, 0);
@@ -14677,8 +14875,9 @@ svgroot(s: string): (int, int)
 }
 
 # The SVG with its root element's size set to w by h: the content is
-# then drawn to fit, through a viewBox (one made from the old size if it
-# had none).
+# then drawn to fit, through a viewBox; one made from the old size if it
+# had none, and then stretched to fill, as Chrome draws an SVG with no
+# viewBox in a box not its shape (a raster's fill)
 svgresize(data: array of byte, w, h: int): array of byte
 {
 	s := string data;
@@ -14692,8 +14891,10 @@ svgresize(data: array of byte, w, h: int): array of byte
 	vb := "";
 	if(strindex(tag, "viewBox", 0) < 0 && strindex(tag, "viewbox", 0) < 0) {
 		# "65px" converts as 65; a percentage gives no box to fit
-		if(svglen(ow) > 0 && svglen(oh) > 0)
-			vb = sys->sprint(" viewBox=\"0 0 %d %d\"", svglen(ow), svglen(oh));
+		if(svglen(ow) > 0 && svglen(oh) > 0) {
+			(tag, nil) = dropattr(tag, "preserveAspectRatio");
+			vb = sys->sprint(" viewBox=\"0 0 %d %d\" preserveAspectRatio=\"none\"", svglen(ow), svglen(oh));
+		}
 	}
 	n := s[0:i] + sys->sprint("<svg width=\"%d\" height=\"%d\"%s", w, h, vb) + tag + s[e:];
 	return array of byte n;
@@ -14880,6 +15081,13 @@ bgurl(t: ref Css->Tok): string
 	return nil;
 }
 
+listurl(st: ref St): string
+{
+	if(st == nil || st.listimage == nil)
+		return nil;
+	return bgurl(st.listimage);
+}
+
 bgurls(st: ref St): list of string
 {
 	r: list of string;
@@ -14986,6 +15194,8 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	if(!ok)
 		return;
 	dst.clipr = cr;
+	if(grad)
+		img = gradtile(b, bg, tw, th);	# nil: painted where it falls, a tile at a time
 	for(yl := ys; yl != nil; yl = tl yl)
 		for(xl := xs; xl != nil; xl = tl xl) {
 			x := hd xl;
@@ -14994,12 +15204,73 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			(t, tok) := tile.clip(cr);
 			if(!tok)
 				continue;
-			if(grad)
+			if(grad && img == nil)
 				paintgradient(dst, b, tile, bg);
 			else
 				dst.draw(t, img, nil, img.r.min.add(t.min.sub(Point(x, y))));
 		}
 	dst.clipr = oclip;
+}
+
+# A gradient's tile, drawn once: a gradient is worked out a pixel at a
+# time, and was for every tile of every paint.  Tailwind's gutters are
+# a repeating gradient in 10px tiles, 8800 of them in a screenful, a
+# second a paint; a hero's gradient was worked out again at each step
+# of a scroll.  Kept by the layer, the style it was resolved in (its
+# lengths and currentcolor) and the size, up to GRADKEEP bytes, the
+# least recently used going first; nil for one too large to keep.
+GradTile: adt {
+	bg:	ref Style->Bg;
+	st:	ref St;
+	w, h:	int;
+	img:	ref Image;
+};
+gradtiles: list of ref GradTile;
+gradbytes := 0;
+GRADKEEP: con 32*1024*1024;
+GRADONE: con 8*1024*1024;
+
+gradtile(b: ref Box, bg: ref Style->Bg, w, h: int): ref Image
+{
+	if(4 * w * h > GRADONE)
+		return nil;
+	keep: list of ref GradTile;
+	found: ref GradTile;
+	for(l := gradtiles; l != nil; l = tl l) {
+		g := hd l;
+		if(found == nil && g.bg == bg && g.st == b.st && g.w == w && g.h == h)
+			found = g;
+		else
+			keep = g :: keep;
+	}
+	if(found != nil) {
+		gradtiles = found :: revgt(keep);
+		return found.img;
+	}
+	img := display.newimage(Rect((0, 0), (w, h)), Draw->RGBA32, 0, Draw->Transparent);
+	if(img == nil)
+		return nil;
+	paintgradient(img, b, img.r, bg);
+	gradbytes += 4 * w * h;
+	keep = nil;
+	n := 0;
+	for(l = gradtiles; l != nil; l = tl l) {
+		if(n + 4 * w * h + 4 * (hd l).w * (hd l).h > GRADKEEP)
+			break;
+		n += 4 * (hd l).w * (hd l).h;
+		keep = hd l :: keep;
+	}
+	gradbytes = n + 4 * w * h;
+	gradtiles = ref GradTile(bg, b.st, w, h, img) :: revgt(keep);
+	return img;
+}
+
+revgt(l: list of ref GradTile): list of ref GradTile
+{
+	r: list of ref GradTile;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 # where the tiles of size t go along one axis, the first at p by
@@ -15095,11 +15366,33 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	(gcx, gcy, grx, gry) := (0.0, 0.0, 0.0, 0.0);
 	case kind {
 	Glinear =>
+		# -webkit-linear-gradient is the syntax before the standard's:
+		# its angles start east and go anticlockwise, and a side or
+		# corner is where the gradient starts, not where it goes (Vue's
+		# heading's 315deg ran from blue to green, the wrong way)
+		legacy := t.s == "-webkit-linear-gradient";
+		if(legacy && len a > 0 && a[0].kind == Css->Kident && lower(a[0].s) != "to") {
+			na := array[len a + 1] of ref Css->Tok;
+			na[0] = ref Css->Tok(Css->Kident, "to", 0.0, 0, nil);
+			for(k := 0; k < len a; k++) {
+				na[k+1] = a[k];
+				if(a[k].kind == Css->Kident)
+					case lower(a[k].s) {
+					"left" => na[k+1] = ref Css->Tok(Css->Kident, "right", 0.0, 0, nil);
+					"right" => na[k+1] = ref Css->Tok(Css->Kident, "left", 0.0, 0, nil);
+					"top" => na[k+1] = ref Css->Tok(Css->Kident, "bottom", 0.0, 0, nil);
+					"bottom" => na[k+1] = ref Css->Tok(Css->Kident, "top", 0.0, 0, nil);
+					}
+			}
+			a = na;
+		}
 		if(len a == 1 && (a[0].kind == Css->Kdimension || a[0].kind == Css->Knumber && a[0].n == 0.0)) {
 			(ok, v) := angleof(a[0]);
 			if(!ok)
 				return;
 			angle = v;
+			if(legacy)
+				angle = 90.0 - v;
 		} else if(len a > 1 && a[0].kind == Css->Kident && lower(a[0].s) == "to") {
 			# to a side, or a corner: then the line is at right angles
 			# to the one through the other two corners (Images 3 §3.1.1)
@@ -16229,8 +16522,14 @@ painttext(dst: ref Image, f: ref Frag, o: Point)
 		if(visible(s.color))
 			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), text, colorimg(s.color), st.letterspacing, f.level % 2);
 	}
-	if(visible(st.color))
-		drawtext(dst, fc, p, text, colorimg(st.color), st.letterspacing, f.level % 2);
+	# the glyphs in -webkit-text-fill-color, which is color unless set
+	# (Vue's gradient heading: transparent, its background clipped to
+	# the text; it was drawn over in its colour)
+	fill := st.color;
+	if(st.textfill != Style->Ccurrent)
+		fill = st.textfill;
+	if(visible(fill))
+		drawtext(dst, fc, p, text, colorimg(fill), st.letterspacing, f.level % 2);
 	paintdeco(dst, f, o);
 }
 

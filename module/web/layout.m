@@ -30,6 +30,7 @@ Layout: module
 	# background and list-style images: what a style asks for, and the
 	# decoded images to paint, by absolute URL
 	bgurls:	fn(st: ref Style->St): list of string;
+	listurl:	fn(st: ref Style->St): string;	# its list-style-image's URL, nil for none
 	setbgimage:	fn(url: string, img: ref Draw->Image);
 	setbgsvg:	fn(url: string, data: array of byte);	# an SVG's source: drawn again at each size it is shown
 	clearbgimages:	fn();

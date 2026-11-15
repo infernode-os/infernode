@@ -8,7 +8,12 @@ implement JpegTest;
 # multiple of 16 and odd sizes (padded by repeating the edge); the same
 # bytes for the same frame; the output read by readjpg as an ordinary
 # RGB image too; short planes, a bad size or quality refused; a JPEG
-# that is not 4:2:0 refused by planes.  That a decoder written elsewhere
+# that is not 4:2:0 refused by planes.  Jpegscaled: decoded at 1/2, 1/4
+# and 1/8 its size, each within a little (28 dB: the frame's chroma ramps
+# steeply) of the whole decode averaged
+# over the squares it takes, at the size rounded up, the image's own
+# size given back; the smallest scale that leaves the size asked
+# chosen; 0 by 0 the same pixels as readjpg's read.  That a decoder written elsewhere
 # reads it is checked once, by hand (PIL), not here.
 #
 
@@ -21,6 +26,7 @@ include "imagefile.m";
 include "jpeg.m";
 	enc: Jpegenc;
 	jp: Jpegplanes;
+	js: Jpegscaled;
 include "math.m";
 	math: Math;
 include "testing.m";
@@ -214,6 +220,83 @@ testRefused(t: ref T)
 	}
 }
 
+# the whole decode's channel averaged over s by s squares, as the
+# scaled one's pixels are
+boxavg(full: array of byte, w, h, s: int): array of byte
+{
+	sw := (w + s - 1) / s;
+	sh := (h + s - 1) / s;
+	a := array[sw*sh] of byte;
+	for(y := 0; y < sh; y++)
+		for(x := 0; x < sw; x++){
+			t := 0;
+			n := 0;
+			for(yy := y*s; yy < y*s+s && yy < h; yy++)
+				for(xx := x*s; xx < x*s+s && xx < w; xx++){
+					t += int full[yy*w+xx];
+					n++;
+				}
+			a[y*sw+x] = byte ((t + n/2) / n);
+		}
+	return a;
+}
+
+testScaled(t: ref T)
+{
+	for(sl := (640, 360) :: (333, 201) :: (17, 9) :: nil; sl != nil; sl = tl sl){
+		(w, h) := hd sl;
+		(y, u, v) := frame(w, h);
+		(j, nil) := enc->encode(w, h, y, u, v, 90);
+		if(j == nil)
+			t.fatal(sys->sprint("%dx%d: no JPEG", w, h));
+		(full, fw, fh, err) := js->scaled(j, 0, 0);
+		if(full == nil)
+			t.fatal(sys->sprint("%dx%d: whole: %s", w, h, err));
+		t.assert(fw == w && fh == h && full.r.max.x == w && full.r.max.y == h, sys->sprint("%dx%d: 0 by 0 is the whole size", w, h));
+		for(s := 2; s <= 8; s *= 2){
+			sw := (w + s - 1) / s;
+			sh := (h + s - 1) / s;
+			(im, ow, oh, serr) := js->scaled(j, sw, sh);
+			if(im == nil){
+				t.error(sys->sprint("%dx%d at 1/%d: %s", w, h, s, serr));
+				continue;
+			}
+			t.assert(ow == w && oh == h, sys->sprint("%dx%d at 1/%d: its own size given (%dx%d)", w, h, s, ow, oh));
+			t.assert(im.r.max.x == sw && im.r.max.y == sh && im.nchans == 3,
+				sys->sprint("%dx%d at 1/%d: %dx%d, rounded up (%dx%d)", w, h, s, sw, sh, im.r.max.x, im.r.max.y));
+			# a few pixels of a ramp steeper than its chroma's samples
+			# (the 17x9's 1/8 is 3x2) are the size alone
+			if(im.r.max.x != sw || im.r.max.y != sh || w < 64)
+				continue;
+			for(c := 0; c < 3; c++){
+				db := psnr(im.chans[c], boxavg(full.chans[c], w, h, s));
+				t.log(sys->sprint("%dx%d at 1/%d: channel %d %.1f dB", w, h, s, c, db));
+				t.assert(db > 28.0, sys->sprint("%dx%d at 1/%d: channel %d near the whole one averaged (%.1f dB)", w, h, s, c, db));
+			}
+		}
+	}
+	(y, u, v) := frame(640, 360);
+	(j, nil) := enc->encode(640, 360, y, u, v, 75);
+	(im, nil, nil, nil) := js->scaled(j, 100, 0);
+	t.assert(im != nil && im.r.max.x == 160, "the smallest scale leaving 100 wide is 1/4 (160)");
+	(im, nil, nil, nil) = js->scaled(j, 0, 90);
+	t.assert(im != nil && im.r.max.y == 90, "the smallest leaving 90 high is 1/4 (90)");
+	(im, nil, nil, nil) = js->scaled(j, 1000, 0);
+	t.assert(im != nil && im.r.max.x == 640, "wider than it is: all of it");
+	# the whole size is what readjpg's read gives
+	(full, nil, nil, nil) := js->scaled(j, 0, 0);
+	rd := load RImagefile RImagefile->READJPGPATH;
+	rd->init(bufio);
+	(r, nil) := rd->read(bufio->aopen(j));
+	ok := full != nil && r != nil;
+	for(c := 0; ok && c < 3; c++)
+		ok = same(full.chans[c], r.chans[c]);
+	t.assert(ok, "0 by 0: read's pixels");
+	nerr: string;
+	(im, nil, nil, nerr) = js->scaled(array of byte "not a jpeg", 10, 10);
+	t.assert(im == nil && nerr != nil, "what is not a JPEG refused");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -221,6 +304,7 @@ init(nil: ref Draw->Context, args: list of string)
 	math = load Math Math->PATH;
 	enc = load Jpegenc Jpegenc->PATH;
 	jp = load Jpegplanes Jpegplanes->PATH;
+	js = load Jpegscaled Jpegscaled->PATH;
 	testing = load Testing Testing->PATH;
 	if(testing == nil){
 		sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");
@@ -230,7 +314,7 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := tl args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
-	if(enc == nil || jp == nil){
+	if(enc == nil || jp == nil || js == nil){
 		sys->fprint(sys->fildes(2), "jpeg_test: can't load jpegenc or readjpg's planes: %r\n");
 		raise "fail:load";
 	}
@@ -238,6 +322,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Jpeg/Sizes", testSizes);
 	run("Jpeg/Deterministic", testDeterministic);
 	run("Jpeg/RGBReader", testRGBReader);
+	run("Jpeg/Scaled", testScaled);
 	run("Jpeg/Refused", testRefused);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -1,0 +1,95 @@
+name: WPT reftests
+
+# Charon against web-platform-tests: the reftests of the directories
+# tools/ref/wpt-suites lists, at the commit tools/ref/wpt-commit pins,
+# rendered and compared by tools/ref/wptrun.py.  tools/ref/wptgate.py
+# fails the job if a test that passed in tools/ref/baseline no longer
+# does.  The gate is a ratchet: a change that makes more pass moves the
+# baseline up (wptgate.py --update) in the same commit.
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'appl/lib/web/**'
+      - 'appl/charon/**'
+      - 'module/web/**'
+      - 'appl/lib/read*.b'
+      - 'appl/lib/inflate.b'
+      - 'appl/lib/outlinefont.b'
+      - 'appl/lib/svg*.b'
+      - 'libdraw/**'
+      - 'libmemdraw/**'
+      - 'fonts/**'
+      - 'lib/js/**'
+      - 'tests/charonbatch.b'
+      - 'tools/ref/**'
+      - '.github/workflows/wpt.yml'
+  push:
+    branches: [ master ]
+    paths:
+      - 'appl/lib/web/**'
+      - 'appl/charon/**'
+      - 'module/web/**'
+      - 'tools/ref/**'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  reftests:
+    name: WPT reftests (Charon)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+      SDL_VIDEODRIVER: dummy
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install build dependencies
+      # numpy from Ubuntu's archive, signed, not from PyPI
+      run: sudo apt-get update && sudo apt-get install -y build-essential python3-numpy
+
+    - name: Build the emulator and the runtime tree
+      run: |
+        ./build-linux-amd64.sh headless
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
+    - name: Keep the WPT checkout
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/wpt
+        key: wpt-${{ hashFiles('tools/ref/wpt-commit', 'tools/ref/wpt-suites', 'tools/ref/wpt-paths') }}
+
+    - name: Fetch web-platform-tests at the pinned commit
+      # by its hash: git checks each object it checks out against it
+      run: sh tools/ref/wpt-fetch.sh "$RUNNER_TEMP/wpt"
+
+    - name: Render and compare
+      run: |
+        suites=$(grep -v '^#' tools/ref/wpt-suites | grep -v '^$')
+        # shellcheck disable=SC2086
+        python3 tools/ref/wptrun.py -j "$(nproc)" -o wpt-out "$RUNNER_TEMP/wpt" $suites
+        tail -n 25 wpt-out/summary.txt
+
+    - name: Hold the line
+      run: python3 tools/ref/wptgate.py --flaky tools/ref/baseline/wpt-flaky.txt tools/ref/baseline/wpt-results.txt.gz wpt-out/results.txt
+
+    - name: Keep the failures' pictures
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: failure()
+      with:
+        name: wpt-failures
+        path: wpt-out
+        if-no-files-found: ignore

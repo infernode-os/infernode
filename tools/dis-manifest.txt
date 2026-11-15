@@ -782,6 +782,7 @@ dis/tests/html_test.dis
 dis/tests/icon_test.dis
 dis/tests/imap_test.dis
 dis/tests/imgload_test.dis
+dis/tests/inflate_test.dis
 dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis

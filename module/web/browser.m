@@ -54,6 +54,7 @@ Browser: module
 		lk:	chan of int;
 		listeners:	list of chan of string;
 		lkpid:	int;	# the process holding lk (one that died holding it is taken back from)
+		hops:	int;	# how many pages Back or Fwd goes (gohistory)
 
 		new:	fn(width, height: int): ref Session;
 		open:	fn(s: self ref Session, url: string);
@@ -64,6 +65,9 @@ Browser: module
 		show:	fn(s: self ref Session, data: array of byte, ctype, url: string): string;
 		goback:	fn(s: self ref Session): string;
 		goforward:	fn(s: self ref Session): string;
+		# n pages back (n < 0) or forward (n > 0) in one step: only
+		# the page gone to is loaded, as a history menu wants
+		gohistory:	fn(s: self ref Session, n: int): string;
 		reload:	fn(s: self ref Session);
 		stop:	fn(s: self ref Session);
 		close:	fn(s: self ref Session);	# stopped, and its page let go: done with
@@ -74,6 +78,7 @@ Browser: module
 		# it is left, so Back and Fwd come back to it there
 		viewing:	fn(s: self ref Session, y: int);
 		resize:	fn(s: self ref Session, width, height: int);
+		zoom:	fn(s: self ref Session, dpr: real): real;	# device pixels to the CSS px, this page and the next: the ratio taken (0 or less: asked, not changed)
 		listen:	fn(s: self ref Session): chan of string;
 		unlisten:	fn(s: self ref Session, c: chan of string);
 
@@ -98,6 +103,10 @@ Browser: module
 		boxof:	fn(s: self ref Session, n: int): (int, Draw->Rect);	# node n's first border box, page coordinates
 		linkat:	fn(s: self ref Session, x, y: int): string;	# the URL of the link under a point
 		findat:	fn(s: self ref Session, what: string, after: int): (int, Draw->Rect);	# next text match below y=after
+		# the page's text from p0 to p1 (page coordinates, either order)
+		# and the rectangles it is drawn in, for a highlight; words, whole
+		# words at either end (p0 == p1: the word at it); every: all of it
+		selection:	fn(s: self ref Session, p0, p1: Draw->Point, words, every: int): (string, list of Draw->Rect);
 		pageheight:	fn(s: self ref Session): int;
 		pinned:	fn(s: self ref Session): int;	# a box of the page stays put in the window as it scrolls
 		dom:	fn(s: self ref Session, n: int, what: string): (string, string);	# tag attrs text style box children

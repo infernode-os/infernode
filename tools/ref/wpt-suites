@@ -1,0 +1,21 @@
+# The web-platform-tests directories whose reftests tools/ref/wptgate.py
+# holds Charon to (tools/ref/baseline/wpt-results.txt.gz has a line for
+# each test in them at tools/ref/wpt-commit).  Add one with its results.
+css/CSS2
+css/css-backgrounds
+css/css-box
+css/css-cascade
+css/css-color
+css/css-display
+css/css-flexbox
+css/css-fonts
+css/css-grid
+css/css-lists
+css/css-nesting
+css/css-position
+css/css-sizing
+css/css-tables
+css/css-text
+css/css-values
+css/css-variables
+css/selectors

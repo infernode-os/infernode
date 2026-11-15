@@ -1,0 +1,5 @@
+<!doctype html><title>a max-content grid's fr columns each take the largest item's share</title>
+<style>body{margin:0} .r{position:absolute;left:100px;top:0;width:100px;height:100px;background:red}
+.g{display:grid;grid-template-columns:1fr 1fr;width:max-content;position:relative}
+.a div{width:100px;height:100px;background:green} .b{height:100px;background:green}</style>
+<div class=r></div><div class=g><div class=a><div></div></div><div class=b></div></div>

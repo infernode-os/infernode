@@ -174,11 +174,17 @@ ui(log: string)
 	fio := sys->file2chan("/mnt/ui", "ctl");
 	if(fio == nil)
 		raise sys->sprint("fail:file2chan: %r");
+	# Activity 7 is there from a create to a delete, as the UI server's
+	# list has one: the task tool takes the activity it made to be the
+	# one that was not listed before its request.
+	present := 0;
 	for(;;) alt {
 	(off, nil, nil, rc) := <-fio.read =>
 		if(rc == nil)
 			continue;
-		data := array of byte "activities: 0 7\n";
+		data := array of byte "activities: 0\n";
+		if(present)
+			data = array of byte "activities: 0 7\n";
 		if(off == 0)
 			tasktoolns();
 		if(off >= len data)
@@ -189,6 +195,11 @@ ui(log: string)
 		if(wc == nil)
 			continue;
 		tasktoolns();
+		req := string data;
+		if(has(req, "activity create"))
+			present = 1;
+		else if(has(req, "activity delete"))
+			present = 0;
 		wc <-= (len data, nil);
 	}
 }

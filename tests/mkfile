@@ -150,6 +150,7 @@ TARG=\
 	fakecs.dis\
 	webclient_body_test.dis\
 	webclient_deadline_test.dis\
+	veltro_coord_test.dis\
 	keyring_args_test.dis\
 	ipint_edge_test.dis\
 	namec_clone_test.dis\

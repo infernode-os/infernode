@@ -12,6 +12,7 @@ mpright(mpint *b, int shift, mpint *res)
 	res->sign = b->sign;
 	if(b->top==0){
 		res->top = 0;
+		res->sign = 1;
 		return;
 	}
 
@@ -27,9 +28,12 @@ mpright(mpint *b, int shift, mpint *res)
 	r = shift - d*Dbits;
 	l = Dbits - r;
 
-	//  shift all the bits out == zero
+	//  shift all the bits out == zero, which has no sign: a negative
+	//  number shifted to nothing was a zero less than zero, equal to
+	//  no other and printed "-0"
 	if(d>=b->top){
 		res->top = 0;
+		res->sign = 1;
 		return;
 	}
 

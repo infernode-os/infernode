@@ -24,5 +24,7 @@ letomp(uchar *s, uint n, mpint *b)
 	if(i > 0)
 		b->p[m++] = x;
 	b->top = m;
+	// zero bytes at the top are not digits: see betomp
+	mpnorm(b);
 	return b;
 }

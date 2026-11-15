@@ -65,6 +65,7 @@ AES_GCM_TAG_LEN: con 16;
 
 keyfilepath: string;
 keyfilepass: array of byte;	# derived key, not raw password
+Maxkeyfile: con 16*1024*1024;	# the most a key file may be
 dirtyc: chan of int;		# signal dirty state to persist thread
 syncc: chan of chan of string;	# request sync, reply with persistence error
 
@@ -228,7 +229,7 @@ factotumsrv()
 
 	# Load keys from secstore or encrypted keyfile
 	if(secstoreaddr != nil){
-		dirtyc = chan of int;
+		dirtyc = chan[1] of int;	# one change is always remembered, whatever persist is doing
 		syncc = chan of chan of string;
 		e := secstoreload();
 		if(e != nil){
@@ -238,7 +239,7 @@ factotumsrv()
 		}
 		spawn persist();
 	} else if(keyfilepath != nil){
-		dirtyc = chan of int;
+		dirtyc = chan[1] of int;	# one change is always remembered, whatever persist is doing
 		syncc = chan of chan of string;
 		e := loadkeyfile(keyfilepath);
 		if(e != nil && debug)
@@ -293,6 +294,11 @@ factotumsrv()
 			}
 			if(lookattrval(k.attrs, "proto") == nil){
 				wc <-= (0, "key without proto");
+				break;
+			}
+			# keys are kept a line each
+			if(hasnewline(k.attrs)){
+				wc <-= (0, "key with a line break in it");
 				break;
 			}
 			allkeys = addkey(allkeys, k);
@@ -420,7 +426,7 @@ factotumsrv()
 			sdk = nil;
 			# Start persist thread if not already running
 			if(dirtyc == nil){
-				dirtyc = chan of int;
+				dirtyc = chan[1] of int;	# one change is always remembered, whatever persist is doing
 				syncc = chan of chan of string;
 				spawn persist();
 			}
@@ -739,7 +745,9 @@ finish(r: ref Fid): ref Rpc
 					reply(rpc, "error no authinfo available");
 				else{
 					a := packai(r.ai);
-					if(rpc.nbytes-3 < len a)
+					if(a == nil)
+						reply(rpc, "error authinfo too large");
+					else if(rpc.nbytes-3 < len a)
 						reply(rpc, sys->sprint("toosmall %d", len a + 3));
 					else
 						okdata(rpc, a);
@@ -857,7 +865,9 @@ puta(a: array of byte, n: int, v: array of byte): int
 
 packai(ai: ref Authinfo): array of byte
 {
-	a := array[1024] of byte;
+	# as long as what goes in it: it was 1024 bytes, and information
+	# that did not fit was answered "ok" with nothing
+	a := array[4*2 + len array of byte ai.cuid + len array of byte ai.suid + len array of byte ai.cap + len ai.secret] of byte;
 	i := puta(a, 0, array of byte ai.cuid);
 	i = puta(a, i, array of byte ai.suid);
 	i = puta(a, i, array of byte ai.cap);
@@ -913,13 +923,28 @@ parseline(s: string): list of ref Attr
 	return attrs;
 }
 
+# whether an attribute's name or value would end a key's line
+hasnewline(attrs: list of ref Attr): int
+{
+	for(; attrs != nil; attrs = tl attrs){
+		a := hd attrs;
+		t := a.name + a.val;
+		for(i := 0; i < len t; i++)
+			if(t[i] == '\n' || t[i] == '\r')
+				return 1;
+	}
+	return 0;
+}
+
 Attr.text(a: self ref Attr): string
 {
 	case a.tag {
 	Aattr =>
 		return a.name;
 	Aval =>
-		return a.name+"="+a.val;
+		# quoted where it must be: a value with a blank in it was
+		# written bare, and read back as a value and more attributes
+		return a.name+"="+sys->sprint("%q", a.val);
 	Aquery =>
 		return a.name+"?";
 	* =>
@@ -1418,10 +1443,20 @@ loadkeyfile(path: string): string
 	if(fd == nil)
 		return "keyfile does not exist (new installation)";
 
-	# Read the whole file
+	# Read the whole file. It was read into 64K and no more, though
+	# written at any length: seven post-quantum signing keys are more,
+	# and then the file did not decrypt, the agent started with no
+	# keys, and saved none after.
 	buf := array[65536] of byte;
 	total := 0;
 	for(;;){
+		if(total == len buf){
+			if(len buf >= Maxkeyfile)
+				return "keyfile too large";
+			nbuf := array[2 * len buf] of byte;
+			nbuf[0:] = buf;
+			buf = nbuf;
+		}
 		n := sys->read(fd, buf[total:], len buf - total);
 		if(n <= 0)
 			break;
@@ -1514,10 +1549,14 @@ savekeyfile(path: string): string
 		return "no keyfile password";
 
 	# Serialize all keys
+	# each slot is read once: the serving thread empties them (delkey)
+	# while this one saves, and a slot found full and then empty was a
+	# nil dereference that ended this thread, and with it every sync
 	s := "";
-	for(i := 0; i < len allkeys; i++)
-		if(allkeys[i] != nil)
-			s += allkeys[i].text() + "\n";
+	keys := allkeys;
+	for(i := 0; i < len keys; i++)
+		if((k := keys[i]) != nil)
+			s += k.text() + "\n";
 
 	plaintext := array of byte s;
 
@@ -1840,9 +1879,10 @@ secstoresave(): string
 
 	# Serialize all keys
 	s := "";
-	for(i := 0; i < len allkeys; i++)
-		if(allkeys[i] != nil)
-			s += "key " + allkeys[i].text() + "\n";
+	keys := allkeys;	# each slot read once, as in savekeyfile
+	for(i := 0; i < len keys; i++)
+		if((k := keys[i]) != nil)
+			s += "key " + k.text() + "\n";
 
 	plaintext := array of byte s;
 

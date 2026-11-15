@@ -22,7 +22,10 @@ implement LuciuisrvFrameTest;
 # label makes a short request, navigate (which was to start an app again
 # with an argument, and never worked) writes nothing; and against the
 # real server the 8.3 KB append of the review leaves one artifact with
-# all its bytes.
+# all its bytes.  Also here, with the same server: a quote inside a
+# value hides no later key; "hidden" is not a status a writer may set;
+# activity 0 is not closed; a closed activity's place is free for a new
+# one; its event file ends; the current activity is never a closed one.
 #
 
 include "sys.m";
@@ -451,6 +454,97 @@ testAppArtifact(t: ref T)
 	t.assert(writefile(pctl, "create id=current type=text") < 0, "and one named current");
 }
 
+testQuoteInValue(t: ref T)
+{
+	need(t);
+	a := newact(t, "quote");
+	cctl := act(a) + "/conversation/ctl";
+	t.assert(writefile(cctl, "role=veltro dtype=dialogue title=a\"b options=Yes,No text=hi") > 0, "a title with a quote in it");
+	t.assertseq(strip(readall(act(a) + "/conversation/0")),
+		"role=veltro dtype=dialogue title=a\"b options=Yes,No text=hi", "keeps its options and text");
+	t.assert(writefile(cctl, "role=veltro dtype=dialogue title=\"never closed options=Yes,No text=hi") > 0,
+		"a title that opens a quote and does not close it");
+	t.assertseq(strip(readall(act(a) + "/conversation/1")),
+		"role=veltro dtype=dialogue title=\"never closed options=Yes,No text=hi", "does too");
+	t.assert(writefile(cctl, "role=veltro dtype=dialogue title=\"two words\" options=Yes,No text=hi") > 0,
+		"a quoted title");
+	t.assertseq(strip(readall(act(a) + "/conversation/2")),
+		"role=veltro dtype=dialogue title=two words options=Yes,No text=hi", "is the words in the quotes");
+	t.assert(writefile(cctl, "role=\"human\nstatus=owned\" text=bad") < 0, "a quoted value still hides the keys in it");
+}
+
+testClosing(t: ref T)
+{
+	need(t);
+	a := newact(t, "closing");
+	t.assert(writefile(act(a) + "/status", "hidden") < 0, "hidden is not a status to write");
+	t.assert(writefile(act(a) + "/status", " hidden\n") < 0, "however it is spelled");
+	t.assert(writefile(act(a) + "/status", "working") > 0, "another is");
+	t.assertseq(strip(readall(act(a) + "/status")), "working", "and is kept");
+	t.assert(writefile(act(a) + "/conversation/ctl", "role=veltro text=still open") > 0, "the activity is still open");
+
+	t.assert(writefile(TESTMNT + "/ctl", "activity delete 0") < 0, "activity 0 is not closed");
+	t.assertsne(strip(readall(act(0) + "/status")), "hidden", "it is as it was");
+
+	# the current activity is never a closed one
+	t.assert(writefile(TESTMNT + "/activity/current", string a) > 0, "make an activity current");
+	fd := sys->open(act(a) + "/event", Sys->OREAD);
+	t.assert(writefile(TESTMNT + "/ctl", "activity delete " + string a) > 0, "close it");
+	t.assertseq(strip(readall(TESTMNT + "/activity/current")), "0", "the current activity is 0");
+	t.assert(writefile(TESTMNT + "/activity/current", string a) < 0, "a closed activity is not made current");
+
+	# its event file ends
+	c := chan[1] of int;
+	spawn rd(fd, c);
+	tc := chan[1] of int;
+	spawn timer(tc, 5000);
+	alt {
+	n := <-c =>
+		t.asserteq(n, 0, "a read of a closed activity's event file is the end of it");
+	<-tc =>
+		t.error("a read of a closed activity's event file waits for ever");
+	}
+}
+
+rd(fd: ref Sys->FD, c: chan of int)
+{
+	buf := array[256] of byte;
+	c <-= sys->read(fd, buf, len buf);
+}
+
+# Closed activities do not count against the limit on open ones.
+testSlots(t: ref T)
+{
+	need(t);
+	ids: list of int;
+	made := 0;
+	for(i := 0; i < 200; i++) {
+		if(writefile(TESTMNT + "/ctl", "activity create slot") < 0)
+			break;
+		made++;
+	}
+	t.assert(made > 0 && made < 200, sys->sprint("there is a limit on open activities (%d made)", made));
+	# find some of them and close them
+	closed := 0;
+	for(i = 1; i < 70000 && closed < 8; i++) {
+		p := sys->sprint("%s/activity/%d", TESTMNT, i);
+		if(!exists(p))
+			break;
+		if(strip(readall(p + "/label")) == "slot") {
+			if(writefile(TESTMNT + "/ctl", "activity delete " + string i) > 0) {
+				ids = i :: ids;
+				closed++;
+			}
+		}
+	}
+	t.asserteq(closed, 8, "eight closed");
+	again := 0;
+	for(i = 0; i < 20; i++)
+		if(writefile(TESTMNT + "/ctl", "activity create slot") > 0)
+			again++;
+	t.asserteq(again, 8, "make room for eight");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -474,6 +568,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Framing", testFraming);
 	run("PresentAppendServer", testPresentAppendServer);
 	run("AppArtifact", testAppArtifact);
+	run("QuoteInValue", testQuoteInValue);
+	run("Closing", testClosing);
+	run("Slots", testSlots);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

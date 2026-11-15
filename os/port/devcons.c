@@ -1192,6 +1192,8 @@ consopen(Chan *c, int omode)
 	return devopen(c, omode, consdir, nelem(consdir), devgen);
 }
 
+static QLock heaptypesl;	/* one reader of heaptypes at a time: its text is on the channel */
+
 static void
 consclose(Chan *c)
 {
@@ -1229,8 +1231,10 @@ consclose(Chan *c)
 		break;
 
 	case Qheaptypes:
+		qlock(&heaptypesl);
 		free(c->aux);
 		c->aux = nil;
+		qunlock(&heaptypesl);
 		break;
 	}
 }
@@ -1387,13 +1391,28 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	 * the same open take the same text.
 	 */
 	case Qheaptypes:
+		/*
+		 * One reader at a time. The text is kept on the channel
+		 * and made again at offset 0, and reads of one channel are
+		 * not otherwise kept apart: two at once both freed the old
+		 * text, or one freed what the other was copying from.
+		 */
+		qlock(&heaptypesl);
+		if(waserror()){
+			qunlock(&heaptypesl);
+			nexterror();
+		}
 		if(offset == 0 || c->aux == nil){
 			free(c->aux);
+			c->aux = nil;
 			c->aux = heapaudittext();
 			if(c->aux == nil)
 				error(Enomem);
 		}
-		return readstr(offset, buf, n, c->aux);
+		n = readstr(offset, buf, n, c->aux);
+		poperror();
+		qunlock(&heaptypesl);
+		return n;
 
 	/*
 	 * One line per running core: its tick count, how many clock

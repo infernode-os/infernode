@@ -324,6 +324,8 @@ memclose(Chan *c)
 
 }
 
+static QLock eventrl;	/* one reader of memevent at a time */
+
 static long
 memread(Chan *c, void *va, long count, vlong offset)
 {
@@ -380,14 +382,27 @@ memread(Chan *c, void *va, long count, vlong offset)
 		}
 		return m-(uchar*)va;
 	case Qevent:
+		/*
+		 * one reader at a time: there is one Rendez to wait on, and a
+		 * second Prog reading the same descriptor slept on it too,
+		 * which is a panic ("double sleep")
+		 */
+		qlock(&eventrl);
+		if(waserror()){
+			qunlock(&eventrl);
+			nexterror();
+		}
 		while(!ismemdata(nil)){
 			poolevents.want = 1;
 			Sleep(&poolevents.r, ismemdata, nil);
 		}
 		m = va;
 		do{
-			if((count -= 4*4) < 0)
+			if((count -= 4*4) < 0){
+				poperror();
+				qunlock(&eventrl);
 				return m-(uchar*)va;
+			}
 			pe = poolevents.events[poolevents.rd];
 			mput4(m, pe.pool);
 			mput4(m+4, pe.pc);
@@ -398,6 +413,8 @@ memread(Chan *c, void *va, long count, vlong offset)
 				poolevents.rd = 0;
 		}while(poolevents.rd != poolevents.wr);
 		poolevents.full = 0;
+		poperror();
+		qunlock(&eventrl);
 		return m-(uchar*)va;
 	case Qprof:
 		if(offset == 0){
@@ -407,6 +424,14 @@ memread(Chan *c, void *va, long count, vlong offset)
 			unlock(&memprof.l);
 		}
 		m = va;
+		/*
+		 * (the entry's number was the offset over sixteen, kept in an
+		 * int: an offset of 2^35 made it the most negative there is,
+		 * and what was copied out was the emulator's memory far below
+		 * the table)
+		 */
+		if(offset < 0 || offset/(4*4) >= memprof.snapped)
+			return 0;
 		for(i = offset/(4*4); i < memprof.snapped && (count -= 4*4) >= 0; i++){
 			b = &memprof.snap[i];
 			mput4(m, b->pool);

@@ -189,6 +189,20 @@ DigestState_copy(void *fp)
 	}
 }
 
+/*
+ * How many bytes of a program's array a digest is to read: as Keyring's
+ * (keyring.c). A negative count went to libsec as an unsigned length,
+ * and sha1, md5 and md4 then hashed bytes from before the array, the
+ * others walked to the end of memory.
+ */
+static int
+digestcount(Array *buf, int n)
+{
+	if(n < 0 || n > buf->len)
+		error(exBounds);
+	return n;
+}
+
 static Crypt_DigestState*
 crypt_digest_x(Array *buf, int n, Array *digest, int dlen, Crypt_DigestState *state, DigestState* (*fn)(uchar*, ulong, uchar*, DigestState*))
 {
@@ -197,8 +211,7 @@ crypt_digest_x(Array *buf, int n, Array *digest, int dlen, Crypt_DigestState *st
 	uchar *cbuf, *cdigest;
 
 	if(buf != H){
-		if(n > buf->len)
-			n = buf->len;
+		n = digestcount(buf, n);
 		cbuf = buf->data;
 	}else{
 		if(n != 0)
@@ -331,8 +344,7 @@ crypt_hmac_x(Array *data, int n, Array *key, Array *digest, int dlen, Crypt_Dige
 	uchar *cdata, *cdigest;
 
 	if(data != H){
-		if(n > data->len)
-			n = data->len;
+		n = digestcount(data, n);
 		cdata = data->data;
 	}else{
 		if(n != 0)

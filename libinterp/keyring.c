@@ -1006,10 +1006,17 @@ Keyring_sign(void *fp)
 	/* add signer name and expiration time to hash */
 	if(f->state == H)
 		return;
+	/*
+	 * A DigestState is an adt of the module's interface, so a program
+	 * can make one of its own (ref DigestState(0)): eight bytes, not
+	 * libsec's state. It was taken with a cast here and in verify, and
+	 * the digest's block buffer, count and length were whatever lay
+	 * after it in the heap: the signer's name was copied there.
+	 */
+	ds = checktype(f->state, TDigestState, "DigestState", 0);
 	buf = malloc(Maxbuf);
 	if(buf == nil)
 		return;
-	ds = (XDigestState*)f->state;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(sk->x.owner), f->exp);
 	if(strcmp(string2c(f->ha), "sha256") == 0){
 		sha256((uchar*)buf, n, digest, &ds->state);
@@ -1168,11 +1175,11 @@ Keyring_verify(void *fp)
 	/* add signer name and expiration time to hash */
 	if(f->state == H)
 		return;
+	ds = checktype(f->state, TDigestState, "DigestState", 0);	/* see Keyring_sign */
 	buf = malloc(Maxbuf);
 	if(buf == nil)
 		return;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(c->x.signer), c->x.exp);
-	ds = (XDigestState*)f->state;
 
 	if(strcmp(string2c(c->x.ha), "sha256") == 0){
 		sha256((uchar*)buf, n, digest, &ds->state);
@@ -1262,6 +1269,24 @@ Keyring_DigestState_copy(void *fp)
 	}
 }
 
+/*
+ * How many bytes of a program's array a digest is to read: the count is
+ * the program's, and only one longer than the array was looked for (and
+ * cut down). A negative one went to libsec as an unsigned length: sha1,
+ * md5 and md4 take whole blocks off it in an int, which stepped back
+ * from the array, and hashed up to 63 bytes found before it (a program
+ * read the heap below its array a byte at a time, by matching digests);
+ * the SHA-2 and SHA-3 digests walked forward to the end of memory. A
+ * count that is not within the array is refused, as the ciphers refuse it.
+ */
+static int
+digestcount(Array *buf, int n)
+{
+	if(n < 0 || n > buf->len)
+		error(exBounds);
+	return n;
+}
+
 static Keyring_DigestState*
 keyring_digest_x(Array *buf, int n, Array *digest, int dlen, Keyring_DigestState *state, DigestState* (*fn)(uchar*, ulong, uchar*, DigestState*))
 {
@@ -1270,8 +1295,7 @@ keyring_digest_x(Array *buf, int n, Array *digest, int dlen, Keyring_DigestState
 	uchar *cbuf, *cdigest;
 
 	if(buf != H){
-		if(n > buf->len)
-			n = buf->len;
+		n = digestcount(buf, n);
 		cbuf = buf->data;
 	}else{
 		if(n != 0)
@@ -1386,9 +1410,7 @@ Keyring_sha3_256(void *fp)
 	if(f->buf == H || f->digest == H)
 		return;
 
-	n = f->n;
-	if(n > f->buf->len)
-		n = f->buf->len;
+	n = digestcount(f->buf, f->n);
 	if(f->digest->len < SHA3_256dlen)
 		error(exBadDigest);
 
@@ -1410,9 +1432,7 @@ Keyring_sha3_512(void *fp)
 	if(f->buf == H || f->digest == H)
 		return;
 
-	n = f->n;
-	if(n > f->buf->len)
-		n = f->buf->len;
+	n = digestcount(f->buf, f->n);
 	if(f->digest->len < SHA3_512dlen)
 		error(exBadDigest);
 
@@ -1457,8 +1477,7 @@ keyring_hmac_x(Array *data, int n, Array *key, Array *digest, int dlen, Keyring_
 	uchar *cdata, *cdigest;
 
 	if(data != H){
-		if(n > data->len)
-			n = data->len;
+		n = digestcount(data, n);
 		cdata = data->data;
 	}else{
 		if(n != 0)
@@ -4081,11 +4100,7 @@ Keyring_keccak256(void *fp)
 	if(f->buf == H || f->digest == H)
 		return;
 
-	n = f->n;
-	if(n < 0)
-		n = 0;
-	if(n > f->buf->len)
-		n = f->buf->len;
+	n = digestcount(f->buf, f->n);
 	if(f->digest->len < 32)
 		error(exBadDigest);
 

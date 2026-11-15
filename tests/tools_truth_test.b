@@ -526,6 +526,24 @@ testLaunch(t: ref T)
 	r = launch->exec("clock!x");
 	t.assert(iserror(r), "a name that is no app's is an error: " + r);
 	t.asserteq(len z.cmds, n, "and neither reaches the presentation zone");
+
+	# the browser opens a URL with the user's network: none that names
+	# this machine or a private network, in any form of the address
+	urls := array[] of {
+		"http://127.0.0.1:8080/", "http://localhost/x", "https://[::1]/", "http://10.1.2.3/",
+		"http://0177.0.0.1/", "http://2130706433/", "http://192.168.1.1:631/", "http://user@127.0.0.1/",
+		"http://169.254.169.254/latest/meta-data/",
+	};
+	for(i := 0; i < len urls; i++){
+		r = launch->exec("charon " + urls[i]);
+		t.assert(iserror(r) && contains(r, "local or private"), "charon is not opened at " + urls[i] + ": " + r);
+	}
+	long := "http://example.com/";
+	while(len long <= 2048)
+		long += "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	r = launch->exec("charon " + long);
+	t.assert(iserror(r) && contains(r, "2048"), "nor at a URL too long to show: " + r);
+	t.asserteq(len z.cmds, n, "and none of them reaches the presentation zone");
 }
 
 # --- shell ---

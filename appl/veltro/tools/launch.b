@@ -22,7 +22,12 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "publicnet.m";
+	publicnet: Publicnet;
+
 include "../tool.m";
+
+Maxurl: con 2048;	# of a URL given to the browser
 
 ToolLaunch: module {
 	init: fn(): string;
@@ -42,6 +47,10 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	# without it no URL is given to the browser (below)
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet != nil)
+		publicnet->init();
 	return nil;
 }
 
@@ -168,6 +177,18 @@ exec(args: string): string
 		return "error: launch data is only supported for charon";
 	if(disname == "charon" && extradata != "" && !isallowedurl(extradata))
 		return "error: charon only accepts http:// and https:// URLs";
+	# The browser opens the address with the user's network, not the
+	# agent's: one naming this machine or a private network is refused
+	# here, by the rule the fetch tools use for a URL's host as written
+	# (what a public name resolves to is the browser's own to check).
+	if(disname == "charon" && extradata != "") {
+		if(len extradata > Maxurl)
+			return sys->sprint("error: a URL of more than %d characters is not opened", Maxurl);
+		if(publicnet == nil)
+			return "error: cannot check the URL's host (publicnet did not load); nothing was opened";
+		if(publicnet->hostblocked(publicnet->urlhost(extradata)))
+			return "error: charon is not opened at a local or private address";
+	}
 
 	# An app's name is letters, digits, - and _, as the presentation zone
 	# takes an id: anything else is refused there, after this tool had

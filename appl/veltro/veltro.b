@@ -71,6 +71,10 @@ sessiondir := "";
 # The agent session: its directory under /mnt/veltro.
 sess := "";
 srvpid := 0;
+# The session's ctl, open for as long as this command runs, with "hold"
+# written to it: when the command goes, however it goes, the descriptor is
+# closed and veltrosrv stops the turn and closes the session.
+holdfd: ref Sys->FD;
 
 stderr: ref Sys->FD;
 stdout: ref Sys->FD;
@@ -128,10 +132,12 @@ classifyintent(task: string): string
 
 # Start veltrosrv in a process group of its own, so it can be stopped
 # when this run is over.  It mounts at /mnt/veltro in this namespace.
-# This process stays, so the group has a member to send killgrp to.
-srvstop: chan of int;
-
-srvproc(srv: VeltroSrv, args: list of string, started: chan of int)
+# This process stays, so the group has a member to send killgrp to, and
+# watches the command: if that is killed (it raises nothing, and runs no
+# stopharness), the harness is stopped from here.  It used to wait on a
+# channel nothing sent on, and the agent went on taking steps and calling
+# tools, with the gate off if -y was given, until the step limit.
+srvproc(srv: VeltroSrv, args: list of string, started: chan of int, mainpid: int)
 {
 	pid := sys->pctl(Sys->NEWPGRP, nil);
 	{
@@ -143,7 +149,17 @@ srvproc(srv: VeltroSrv, args: list of string, started: chan of int)
 		started <-= -1;
 		return;
 	}
-	<-srvstop;
+	for(;;) {
+		sys->sleep(500);
+		(ok, nil) := sys->stat("/prog/" + string mainpid + "/status");
+		if(ok >= 0)
+			continue;
+		sys->unmount(nil, "/mnt/veltro");
+		fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "killgrp");
+		return;
+	}
 }
 
 startharness(pathlist: list of string)
@@ -159,8 +175,7 @@ startharness(pathlist: list of string)
 		args = "-p" :: join(pathlist, ",") :: args;
 	args = "veltrosrv" :: args;
 	started := chan of int;
-	srvstop = chan of int;
-	spawn srvproc(srv, args, started);
+	spawn srvproc(srv, args, started, sys->pctl(0, nil));
 	srvpid = <-started;
 	if(srvpid < 0)
 		raise "fail:cannot start the agent";
@@ -171,10 +186,16 @@ startharness(pathlist: list of string)
 		raise "fail:no session";
 	}
 	sess = "/mnt/veltro/" + sid;
+	holdfd = sys->open(sess + "/ctl", Sys->OWRITE);
+	if(holdfd == nil || sys->fprint(holdfd, "hold") < 0) {
+		sys->fprint(stderr, "veltro: cannot hold the agent session: %r\n");
+		raise "fail:no session";
+	}
 }
 
 stopharness()
 {
+	holdfd = nil;
 	if(sess != "")
 		ctl("close");
 	sys->unmount(nil, "/mnt/veltro");
@@ -339,12 +360,16 @@ approver(done: chan of int)
 		fd = nil;
 		if(n <= 0)
 			break;		# the turn is over
-		req := agentlib->strip(string buf[0:n]);
+			req := agentlib->strip(string buf[0:n]);
 		(callid, rest) := str->splitl(req, " ");
 		rest = str->drop(rest, " ");
 		answer := "deny";
 		if(cons != nil) {
-			sys->fprint(cons, "veltro: allow %s? [y/N] ", rest);
+			# veltrosrv writes the request on one line, its control
+			# characters written out; whatever is there is printed so
+			# (it was printed as it came: a carriage return in a
+			# command drew another command over the one asked about).
+			sys->fprint(cons, "veltro: allow %s? [y/N] ", printable(rest));
 			ab := array[64] of byte;
 			an := sys->read(cons, ab, len ab);
 			if(an > 0) {
@@ -358,6 +383,19 @@ approver(done: chan of int)
 			sys->fprint(afd, "%s %s", answer, callid);
 	}
 	done <-= 1;
+}
+
+printable(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			out += sys->sprint("\\x%.2x", c);
+		else
+			out[len out] = c;
+	}
+	return out;
 }
 
 # Send one message and return when the agent has finished with it.
@@ -380,7 +418,9 @@ turn(input: string): int
 		return -1;
 	}
 	fd = nil;
-	done := chan of int;
+	# Room for all three: a follower whose command has been killed still
+	# ends (each stayed for good, sending to nobody).
+	done := chan[3] of int;
 	spawn textfollow(textoff, done);
 	spawn logfollow(logoff, done);
 	spawn approver(done);
@@ -420,19 +460,38 @@ makeslug(task: string): string
 	return slug;
 }
 
-# Find a free session name: if base exists, try base-2, base-3, ...
-findfreeslug(base: string): string
+# Make a session directory of a name not in use: base, else base-2,
+# base-3, ...  The name was looked for and then made, and making a
+# directory that was there counted as made: two runs of one task at once
+# shared a session.  The directory is the user's alone: it holds what the
+# agent read.
+newsession(base: string): string
 {
-	(ok, nil) := sys->stat(SESSION_BASE + "/" + base);
-	if(ok < 0)
-		return base;
-	for(n := 2; n < 1000; n++) {
-		candidate := base + "-" + string n;
-		(ok2, nil) := sys->stat(SESSION_BASE + "/" + candidate);
-		if(ok2 < 0)
-			return candidate;
+	mkdirall(SESSION_BASE);
+	for(n := 1; n < 1000; n++) {
+		name := base;
+		if(n > 1)
+			name = base + "-" + string n;
+		fd := sys->create(SESSION_BASE + "/" + name, Sys->OREAD, 8r700 | Sys->DMDIR);
+		if(fd != nil)
+			return name;
 	}
-	return base + "-x";
+	return nil;
+}
+
+# A session's name, as a name: it is put in a path.  Given to -r, or read
+# from the file "last", "../../x" resumed and saved a session anywhere.
+validname(s: string): int
+{
+	if(s == "" || len s > 64 || s[0] == '.')
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+		     c == '-' || c == '_' || c == '.'))
+			return 0;
+	}
+	return 1;
 }
 
 # Create path and all missing parent directories (mkdir -p equivalent)
@@ -457,11 +516,11 @@ mkdirall(path: string): string
 # Write string content to a file (create or overwrite)
 writefile(path, content: string): string
 {
-	fd := sys->create(path, Sys->OWRITE, 8r644);
+	fd := sys->create(path, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("cannot create %s: %r", path);
 	data := array of byte content;
-	if(sys->write(fd, data, len data) < 0) {
+	if(sys->write(fd, data, len data) != len data) {
 		fd = nil;
 		return sys->sprint("write %s failed: %r", path);
 	}
@@ -502,10 +561,15 @@ savesession(sdir: string)
 {
 	if(sdir == "")
 		return;
-	writefile(sdir + "/transcript", readfile(sess + "/text"));
+	err := writefile(sdir + "/transcript", readfile(sess + "/text"));
 	ctx := readfile(sess + "/context");
-	if(ctx != "")
-		writefile(sdir + "/context", ctx);
+	if(err == nil && ctx != "")
+		err = writefile(sdir + "/context", ctx);
+	# said: a session that was not saved cannot be resumed as it was
+	if(err != nil)
+		sys->fprint(stderr, "veltro: session not saved: %s\n", err);
+	else if(ctx == "")
+		sys->fprint(stderr, "veltro: the model's history could not be read: the session resumes from its log\n");
 }
 
 setenv(name, val: string)
@@ -702,12 +766,12 @@ runagent(task: string)
 		sys->fprint(stderr, "veltro: starting with task: %s\n", task);
 
 	# Create session directory and set environment
-	slug := findfreeslug(makeslug(task));
-	sdir := SESSION_BASE + "/" + slug;
-	if(mkdirall(sdir) != nil) {
+	slug := newsession(makeslug(task));
+	sdir := "";
+	if(slug != nil)
+		sdir = SESSION_BASE + "/" + slug;
+	else
 		sys->fprint(stderr, "veltro: warning: cannot create session dir — session not saved\n");
-		sdir = "";
-	}
 	if(sdir != "") {
 		writefile(sdir + "/task", task);
 		writefile(SESSION_BASE + "/last", slug);
@@ -752,6 +816,10 @@ runresume(name, extra: string)
 			return;
 		}
 	}
+	if(!validname(actualname)) {
+		sys->fprint(stderr, "veltro: '%s' is not a session's name\n", printable(actualname));
+		return;
+	}
 
 	sdir := SESSION_BASE + "/" + actualname;
 	task := trimright(readfile(sdir + "/task"));
@@ -778,12 +846,18 @@ runresume(name, extra: string)
 	# and log.
 	prompt: string;
 	ctx := readfile(sdir + "/context");
-	if(ctx != "" && putfile(sess + "/context", ctx) == nil) {
+	perr := "there is no saved history";
+	if(ctx != "")
+		perr = putfile(sess + "/context", ctx);
+	if(perr == nil) {
 		prompt = "Continue the task where you left off.";
 		if(extra != "")
 			prompt = extra;
-	} else
+	} else {
+		# said: the model starts from a summary, not where it was
+		sys->fprint(stderr, "veltro: resuming from the session's log (%s)\n", perr);
 		prompt = buildresumecontext(task, plan, logcontent, extra);
+	}
 	turn(prompt);
 	savesession(sdir);
 }
@@ -864,8 +938,8 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "veltro: warning: persona '%s' empty or unreadable\n", agenttype);
 	if(thinkbudget > 0 && ctl("think " + string thinkbudget) >= 0 && verbose)
 		sys->fprint(stderr, "veltro: thinking budget: %d tokens\n", thinkbudget);
-	if(nogate)
-		ctl("gate off");
+	if(nogate && ctl("gate off") < 0)
+		sys->fprint(stderr, "veltro: -y not applied: the agent's approval requests will be asked\n");
 
 	{
 		if(resumename != "")

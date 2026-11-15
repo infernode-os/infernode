@@ -12,9 +12,14 @@ implement CowfsControlTest;
 # edit), wrote .whiteout (deletions of its choosing) and gave .cowmeta
 # another basepath, which the promoter took for the folder to write in.
 #
-# And a remove of a directory with files only in the base was answered at
-# once with a whiteout, which a promote applied by removing the tree, the
-# user's later changes in it too.
+# And beside them: a remove of a directory with files only in the base was
+# answered at once with a whiteout, which a promote applied by removing the
+# tree, the user's later changes in it too; the server's list of whiteouts
+# was read once, so a deletion the user had taken back was put back by the
+# task's next remove; a promote lost the overlay's boot= mark; one stopped
+# by an error left the deletions it had made listed, conflicts ever after;
+# revertfile took "../x" as it came; promotefile copied a directory as a
+# file; a record that could not be written was not noticed.
 #
 
 include "sys.m";
@@ -376,6 +381,152 @@ testOldDirWhiteout(t: ref T)
 	t.assertseq(readfile(basedir + "/d/f1"), "one", "the tree is still whole");
 }
 
+# The server follows the whiteout list as it is, not as it first read it.
+testWhiteoutsFollowFile(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("whcache");
+	writefile(basedir + "/a", "a");
+	writefile(basedir + "/b", "b");
+	writefile(basedir + "/c", "c");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	t.asserteq(sys->remove(mntpoint + "/a"), 0, "the task removes a");
+	t.asserteq(sys->remove(mntpoint + "/b"), 0, "and b");
+	t.assert(cowfs->revertfile(overlaydir, "a") == nil, "the user takes the removal of a back");
+	t.assert(exists(mntpoint + "/a"), "a is in the task's view again");
+	t.asserteq(sys->remove(mntpoint + "/c"), 0, "the task removes c");
+	d := cowfs->diff(overlaydir);
+	t.assert(!inlist("D a", d), "the removal of a is not staged again");
+	t.assert(inlist("D b", d) && inlist("D c", d), "b and c are");
+	unmountcow(mntpoint);
+
+	(n, err) := cowfs->promote(basedir, overlaydir);
+	t.assert(err == nil, "promote: " + err);
+	t.asserteq(n, 2, "two removals are applied");
+	t.assert(exists(basedir + "/a"), "a is kept");
+	t.assert(!exists(basedir + "/b") && !exists(basedir + "/c"), "b and c are gone");
+}
+
+# A promote, and a revert, keep the lines of .cowmeta that are not cowfs's.
+testMarkKept(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("mark");
+	mountcow(t, basedir, overlaydir, mntpoint);
+	fd := sys->open(overlaydir + "/.cowmeta", Sys->OWRITE);
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	sys->fprint(fd, "boot=12345\n");
+	fd = nil;
+
+	writefile(mntpoint + "/new", "x");
+	(n, err) := cowfs->promote(basedir, overlaydir);
+	t.assert(err == nil && n == 1, "promote: " + err);
+	t.assert(contains(readfile(overlaydir + "/.cowmeta"), "boot=12345"), "the mark outlives a promote");
+	t.assert(contains(readfile(overlaydir + "/.cowmeta"), "basepath="), "with the base");
+
+	writefile(mntpoint + "/new2", "y");
+	cowfs->revert(overlaydir);
+	t.assert(contains(readfile(overlaydir + "/.cowmeta"), "boot=12345"), "and a revert");
+	t.assert(!exists(overlaydir + "/new2"), "which drops what was staged");
+	unmountcow(mntpoint);
+}
+
+# A promote stopped by an error has still recorded what it did.
+testPartialPromote(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("partial");
+	writefile(basedir + "/w", "to be removed");
+	writefile(basedir + "/x", "x v1");
+	mountcow(t, basedir, overlaydir, mntpoint);
+	t.asserteq(sys->remove(mntpoint + "/w"), 0, "the task removes w");
+	t.assert(writefile(mntpoint + "/x", "x task") > 0, "and changes x");
+	unmountcow(mntpoint);
+
+	# x cannot be written (its mode: nothing of what the conflict check
+	# looks at changes).
+	d := sys->nulldir;
+	d.mode = 8r444;
+	if(sys->wstat(basedir + "/x", d) < 0)
+		t.fatal(sys->sprint("chmod: %r"));
+	if(sys->open(basedir + "/x", Sys->OWRITE) != nil)
+		t.skip("this host lets a read-only file be written");
+	(n, err) := cowfs->promote(basedir, overlaydir);
+	t.assert(err != nil && !contains(err, "not applied"), "the promote stops on an error: " + err);
+	t.asserteq(n, 1, "having removed w");
+	t.assert(!exists(basedir + "/w"), "w is gone");
+	t.assert(!inlist("D w", cowfs->diff(overlaydir)), "and no longer staged");
+	t.assertseq(readfile(overlaydir + "/x"), "x task", "x still is");
+
+	d.mode = 8r644;
+	sys->wstat(basedir + "/x", d);
+	(n, err) = cowfs->promote(basedir, overlaydir);
+	t.assert(err == nil, "the obstacle gone, the rest is applied: " + err);
+	t.asserteq(n, 1, "one file");
+	t.assertseq(readfile(basedir + "/x"), "x task", "x is the task's");
+}
+
+# The per-file calls take a path inside the overlay, of a file.
+testFilePaths(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("paths");
+	outside := TESTBASE + "/paths/outside";
+	writefile(outside, "not the overlay's");
+	mountcow(t, basedir, overlaydir, mntpoint);
+	sys->create(mntpoint + "/newdir", Sys->OREAD, 8r755|Sys->DMDIR);
+	writefile(mntpoint + "/newdir/f", "staged");
+	unmountcow(mntpoint);
+
+	t.assert(cowfs->revertfile(overlaydir, "../outside") != nil, "revertfile refuses a path that leaves the overlay");
+	t.assert(exists(outside), "the file outside is still there");
+	t.assert(cowfs->revertfile(overlaydir, ".cowmeta") != nil, "revertfile refuses a record");
+	t.assert(exists(overlaydir + "/.cowmeta"), "the record is still there");
+	t.assert(cowfs->revertfile(overlaydir, "nosuch") != nil, "revertfile says when nothing is staged");
+	t.assert(cowfs->promotefile(basedir, overlaydir, ".cowmeta") != nil, "promotefile refuses a record");
+	t.assert(!exists(basedir + "/.cowmeta"), "none is copied to the folder");
+
+	t.assert(cowfs->promotefile(basedir, overlaydir, "newdir") != nil, "promotefile refuses a directory");
+	t.assert(!exists(basedir + "/newdir") || isdir(basedir + "/newdir"), "no file of its name is made");
+	t.assert(exists(overlaydir + "/newdir/f"), "what is in it is still staged");
+	t.assert(cowfs->promotefile(basedir, overlaydir, "newdir/f") == nil, "the file in it is promoted by its name");
+	t.assertseq(readfile(basedir + "/newdir/f"), "staged", "to the folder");
+}
+
+# A record that cannot be written refuses the change it would record.
+testRecordWriteFails(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("recfail");
+	writefile(basedir + "/a", "a");
+	# .whiteout cannot be made: something else has its name.
+	mkdirp(overlaydir + "/.whiteout");
+	mountcow(t, basedir, overlaydir, mntpoint);
+	t.assert(sys->remove(mntpoint + "/a") < 0, "a remove that cannot be recorded is refused");
+	t.assert(exists(mntpoint + "/a"), "and the file is still seen");
+	unmountcow(mntpoint);
+
+	(basedir, overlaydir, mntpoint) = setup("recfail2");
+	writefile(basedir + "/a", "a");
+	mkdirp(overlaydir + "/.cowbase");
+	mountcow(t, basedir, overlaydir, mntpoint);
+	fd := sys->open(mntpoint + "/a", Sys->OWRITE);
+	t.assert(fd == nil || sys->write(fd, array of byte "task", 4) < 0,
+		"a change whose base cannot be noted is refused");
+	fd = nil;
+	t.assert(!exists(overlaydir + "/a"), "and nothing is staged");
+	unmountcow(mntpoint);
+}
+
+# A directory is opened to be read.
+testDirOpen(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup("diropen");
+	mkdirp(basedir + "/d");
+	mountcow(t, basedir, overlaydir, mntpoint);
+	t.assert(sys->open(mntpoint + "/d", Sys->OREAD) != nil, "a directory opens for reading");
+	t.assert(sys->open(mntpoint + "/d", Sys->OWRITE) == nil, "not for writing");
+	t.assert(sys->open(mntpoint + "/d", Sys->OREAD|Sys->OTRUNC) == nil, "nor truncated");
+	t.assert(!exists(overlaydir + "/d") || isdir(overlaydir + "/d"), "no file of its name is staged");
+	unmountcow(mntpoint);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -406,6 +557,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DotfileBelowRoot", testDotfileBelowRoot);
 	run("RemoveNonEmptyDir", testRemoveNonEmptyDir);
 	run("OldDirWhiteout", testOldDirWhiteout);
+	run("WhiteoutsFollowFile", testWhiteoutsFollowFile);
+	run("MarkKept", testMarkKept);
+	run("PartialPromote", testPartialPromote);
+	run("FilePaths", testFilePaths);
+	run("RecordWriteFails", testRecordWriteFails);
+	run("DirOpen", testDirOpen);
 
 	removetree(TESTBASE);
 

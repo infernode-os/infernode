@@ -144,6 +144,7 @@ TARG=\
 	wm_frozen.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
+	kill_escape_test.dis\
 	jit_small_test.dis\
 	jit_test.dis\
 	js_engine_test.dis\

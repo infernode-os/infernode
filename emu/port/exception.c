@@ -227,7 +227,17 @@ found:
 	} else
 		R.PC = m->prog+newpc;
 	memmove(&p->reg, &R, sizeof(R));
-	p->kill = nil;
+	/*
+	 * Unless it is a kill that came while the frames were freed.
+	 * Freeing a file descriptor lets the VM go to close it, and a
+	 * Prog killed then is only marked, to be raised when it next
+	 * runs: this cleared the mark, and the Prog went on in its
+	 * handler with its killer told it had gone (a block that opens a
+	 * file and raises, in thirty Progs at once: 130 outlived their
+	 * killgrp in ten tries).
+	 */
+	if((p->flags & Pkilled) == 0)
+		p->kill = nil;
 	destroy(p->exval);
 	p->exval = H;
 	return 1;

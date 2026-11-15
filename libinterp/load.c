@@ -276,6 +276,7 @@ brpatch(Inst *ip, Module *m)
  * compile with no lock at all.
  */
 static void*	complock;
+extern	int	libcompile(void*, Module*, int);
 
 static int
 lockedcompile(Module *m, int isize)
@@ -291,9 +292,8 @@ lockedcompile(Module *m, int isize)
 		if(complock == nil)
 			return 0;
 	}
-	libqlockproc(complock);
-	ok = compile(m, isize, nil);
-	libqunlockproc(complock);
+	/* the kernel's: libinterp has no error labels to let the lock go with */
+	ok = libcompile(complock, m, isize);
 	return ok;
 }
 

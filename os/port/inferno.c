@@ -965,9 +965,6 @@ Sys_pctl(void *fp)
 		closeegrp(oe);
 	}
 
-	if(f->flags & Sys_NEWPGRP)
-		newgrp(p);
-
 	if(f->flags & Sys_NODEVS)
 		o->pgrp->nodevs = 1;
 
@@ -975,6 +972,22 @@ Sys_pctl(void *fp)
 
 	if(f->flags & BlockingPctl)
 		acquire();
+
+	/*
+	 * With the VM, as the hosted kernel has it: the groups' lists are
+	 * the VM's, changed by spawn, exit and kill on other processors.
+	 * newgrp ran above with the VM let go when the same call also
+	 * forked the name space (a common pairing), and a list could keep
+	 * a Prog that had exited and been freed.
+	 */
+	if(f->flags & Sys_NEWPGRP){
+		if(waserror()){
+			*f->ret = -1;
+			return;
+		}
+		newgrp(p);
+		poperror();
+	}
 
 	*f->ret = p->pid;
 }

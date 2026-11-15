@@ -566,6 +566,16 @@ newgrp(Prog *p)
 
 	if(p->group != nil && p->group->id == p->pid)
 		return;
+	/*
+	 * A group that is being killed is not left. Its killer has the
+	 * group's Progs by pid, taken once, and lets the VM go as each
+	 * dies: a Prog of the group run in one of those moments left
+	 * for a group of its own, which is not marked, spawned, and its
+	 * child was in nobody's list (killtree, which is how a confined
+	 * command's processes are cleared away, left 36 of 42).
+	 */
+	if(p->group != nil && (p->group->flags & Pkilled))
+		error("group is being killed");
 	g = malloc(sizeof(*g));
 	if(g == nil)
 		error(Enomem);
@@ -867,7 +877,7 @@ cleargrptreekilled(int *gids, int n)
 int
 killgrptree(Prog *p, char *msg)
 {
-	int i, n, *gids, *pids;
+	int i, n, gid, *gids, *pids;
 	Prog *f;
 	Progs *g;
 
@@ -884,8 +894,40 @@ killgrptree(Prog *p, char *msg)
 		if(grptreedescendant(f->group, g))
 			n++;
 	pids = malloc(2*n*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list, as killgrp's: the tree is killed
+		 * anyway, the first of it not yet killed each time round.
+		 * It was an error, and the tree that could not be killed
+		 * was the one holding the memory. The groups are found by
+		 * their mark once the root's may have gone.
+		 */
+		gid = g->id;
+		for(f = isched.head; f != nil; f = f->next)
+			if(grptreedescendant(f->group, g))
+				f->group->flags |= Pkilled;
+		if(waserror()){
+			for(f = isched.head; f != nil; f = f->next)
+				if(f->group != nil)
+					f->group->flags &= ~Pkilled;
+			nexterror();
+		}
+		for(i = 0; i < n; i++){
+			for(f = isched.head; f != nil; f = f->next)
+				if(f != currun() && f->group != nil && (f->group->flags & Pkilled) &&
+				   (f->flags & Pkilled) == 0 && f->state != Pexiting && f->state != Pbroken)
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+		}
+		poperror();
+		USED(gid);
+		for(f = isched.head; f != nil; f = f->next)
+			if(f->group != nil)
+				f->group->flags &= ~Pkilled;
+		return 0;
+	}
 	gids = pids+n;
 	n = 0;
 	for(f = isched.head; f != nil; f = f->next)

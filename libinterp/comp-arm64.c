@@ -3280,7 +3280,13 @@ compile(Module *m, int size, Modlink *ml)
 
 	pass = 1;
 	nlit = 0;
-	litpool = (ulong*)(base + n);
+	/*
+	 * The literals are 8 bytes each and C reads them through the
+	 * addresses stored in R.s and R.d: the pool starts on an 8-byte
+	 * boundary.  After an odd number of instructions it was 4 off.
+	 * There is room: the pool is sized with 16 entries to spare.
+	 */
+	litpool = (ulong*)(base + ((n + 1) & ~1));
 	litlimit = (ulong*)((uchar*)base + codesize);
 	code = base;
 	n = 0;

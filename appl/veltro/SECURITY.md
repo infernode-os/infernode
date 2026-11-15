@@ -81,7 +81,13 @@ grant). wallet9p constructs everything it signs
 (transactions from `pay`, EIP-712 digests from `authorize`) and enforces budget
 and approval policy on every execution path. Payment approval and wallet
 configuration remain trusted-controller actions outside the model namespace;
-approval cannot be disabled for an agent-visible account.
+approval cannot be disabled for an agent-visible account. What is approved is
+what the approver was shown: wallet9p takes an amount in one form only (no
+leading zero) and keeps the network as it writes it itself, and the wallet GUI
+shows the whole payee, the amount and the network of each proposal, never a
+shortened line. One account's proposals are bounded apart from the queue's
+total, and an account cannot take the name of one of the wallet's root files,
+since the agent's view is an allowlist built from the account names.
 
 The tools that fetch from the web (`webfetch`, `http`, `browse`, `payfetch`,
 `websearch`) reach public addresses only: `publicnet` refuses loopback, private

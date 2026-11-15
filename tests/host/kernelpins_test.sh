@@ -52,6 +52,11 @@
 #                txhead is a full ring, and every stop waited for the
 #                100 ms backstop; with a backlog the ring stayed full and
 #                the board sent a few frames a second (2026-11-15).
+#   tx lost      a Pi 5's transmitter stopped and not at the oldest frame
+#                given it (TBQP at descriptor 0, frames waiting at 31 on)
+#                is disabled, pointed at that frame and started: TSTART
+#                alone read the done descriptor again, and the board sent
+#                a frame only when sendproc came round to 0 (2026-11-15).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -128,5 +133,9 @@ else no "timerintr runs hzclock once however many ticks were due"; fi
 rs=$(sed -n '/^txrestart(Ctlr \*ctlr)/,/^}/p' os/bcm2712/etherrp1.c)
 if echo "$rs" | grep -q 'ctrl & Txused' && ! echo "$rs" | grep -q 'txhead'; then ok "the RP1 transmitter is restarted from the interrupt with the ring full too"
 else no "etherrp1.c txrestart takes the MAC at txhead for an empty ring (a full one is the same): ask the descriptor"; fi
+
+tk=$(sed -n '/^txkick(Ctlr \*ctlr)/,/^}/p' os/bcm2712/etherrp1.c)
+if echo "$tk" | grep -q 'txoldest\|txstuck' && echo "$tk" | grep -q 'GEM(Tbqp) = ' && echo "$tk" | grep -q '~Txen'; then ok "a stopped RP1 transmitter not at its oldest frame is moved there"
+else no "etherrp1.c txkick only writes TSTART: a MAC stopped elsewhere than at its oldest frame re-reads a done descriptor for ever"; fi
 
 exit $fail

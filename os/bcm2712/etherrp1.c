@@ -119,6 +119,7 @@ struct Ctlr
 {
 	volatile u32int	*r;
 	QLock	alock;
+	Lock	tlock;		/* NCR's writes and the ring's handing over, against txkick */
 	int	attached;
 	int	phy;
 
@@ -142,6 +143,7 @@ struct Ctlr
 	ulong	nkick;		/* transmitter found idle with a frame of ours: TSTART again */
 	ulong	nirqkick;	/* the same, from the interrupt that says it stopped */
 	ulong	ntxfull;	/* sendproc found every descriptor the MAC's */
+	ulong	nrepoint;	/* the MAC stopped elsewhere than at its oldest frame: put it there */
 };
 
 static int
@@ -217,22 +219,50 @@ txready(void *arg)
  * second until it was restarted (2026-11-15). Linux never fills its
  * ring, so its test of the head is not ambiguous.
  */
+static int
+txat(Ctlr *ctlr)
+{
+	int i;
+
+	i = (GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc);
+	if(i < 0 || i >= Ntx)
+		return -1;
+	coherence();
+	return i;
+}
+
+/*
+ * The oldest frame still the MAC's: the first such descriptor from
+ * txhead on, which is the oldest given. Called holding tlock, so
+ * sendproc is not between handing one over and moving txhead.
+ */
+static int
+txoldest(Ctlr *ctlr)
+{
+	int i, k;
+
+	coherence();
+	for(i = 0; i < Ntx; i++){
+		k = (ctlr->txhead + i) % Ntx;
+		if((ctlr->tx[k].ctrl & Txused) == 0)
+			return k;
+	}
+	return -1;
+}
+
 static void
 txrestart(Ctlr *ctlr)
 {
 	int i;
 
-	if(GEM(Tsr) & Tgo)
-		return;
-	i = (GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc);
-	if(i < 0 || i >= Ntx)
-		return;
-	coherence();
-	if(ctlr->tx[i].ctrl & Txused)
-		return;
-	ctlr->nirqkick++;
-	GEM(Ncr) |= Tstart;
-	(void)GEM(Ncr);
+	ilock(&ctlr->tlock);
+	i = txat(ctlr);
+	if((GEM(Tsr) & Tgo) == 0 && i >= 0 && (ctlr->tx[i].ctrl & Txused) == 0){
+		ctlr->nirqkick++;
+		GEM(Ncr) |= Tstart;
+		(void)GEM(Ncr);
+	}
+	iunlock(&ctlr->tlock);
 }
 
 static void
@@ -309,23 +339,64 @@ recvproc(void *arg)
  * stall on RP1 (raspberrypi/linux #7339), cause unknown there too, and
  * what is known to recover it is to write TSTART again.
  *
- * So: if the descriptor d is still the MAC's and the transmitter is not
- * going, kick it. It cannot go wrong on a healthy MAC: TSTART while
- * idle with nothing given to it does nothing, and a MAC that is going
- * is left alone. Each kick is counted in ifstats, and the first said
- * on the console, so a soak shows whether it happens.
+ * TSTART resumes the MAC where it stopped, which is right only if that
+ * is where our oldest frame is. A Pi 5 also showed the MAC stopped at
+ * the base of the ring (TBQP at descriptor 0, done) with frames waiting
+ * at 31 on: each TSTART read descriptor 0 again and stopped, and a
+ * frame went out only when sendproc came round to 0 (2026-11-15, 70
+ * minutes into a soak, for hours). So where the MAC is is not where the
+ * oldest frame is, the transmitter is disabled (which takes it back to
+ * TBQP), TBQP is set to that frame, and it is enabled and started.
+ * Looked at twice, 20 µs apart, first: a frame just sent whose
+ * descriptor is not yet handed back would otherwise go twice.
+ *
+ * It cannot go wrong on a healthy MAC: TSTART while idle with nothing
+ * given to it does nothing, and a MAC that is going is left alone. Each
+ * kick and each move is counted in ifstats, and the first of each said
+ * on the console, so a soak shows whether they happen.
  */
-static void
-txkick(Ctlr *ctlr, volatile Desc *d)
+static int
+txstuck(Ctlr *ctlr, int *kp, int *pp)
 {
-	coherence();
-	if((d->ctrl & Txused) != 0 || (GEM(Tsr) & Tgo) != 0)
+	if(GEM(Tsr) & Tgo)
+		return 0;
+	*kp = txoldest(ctlr);
+	*pp = txat(ctlr);
+	return *kp >= 0;
+}
+
+static void
+txkick(Ctlr *ctlr)
+{
+	int k, p;
+
+	ilock(&ctlr->tlock);
+	if(!txstuck(ctlr, &k, &p)){
+		iunlock(&ctlr->tlock);
 		return;
-	if(ctlr->nkick++ == 0)
-		print("#l0: rp1: transmitter stopped with frames to send (tsr %#ux); restarted, and counted in ifstats\n",
+	}
+	if(p != k){
+		microdelay(20);
+		if(!txstuck(ctlr, &k, &p)){
+			iunlock(&ctlr->tlock);
+			return;
+		}
+	}
+	if(p != k){
+		if(ctlr->nrepoint++ == 0)
+			iprint("#l0: rp1: transmitter stopped at descriptor %d, its oldest frame at %d (tsr %#ux); moved there, and counted in ifstats\n",
+				p, k, GEM(Tsr));
+		GEM(Ncr) &= ~Txen;
+		(void)GEM(Ncr);
+		GEM(Tbqp) = (u32int)(uintptr)&ctlr->tx[k];
+		GEM(Tbqph) = 0;
+		GEM(Ncr) |= Txen;
+	}else if(ctlr->nkick++ == 0)
+		iprint("#l0: rp1: transmitter stopped with frames to send (tsr %#ux); restarted, and counted in ifstats\n",
 			GEM(Tsr));
 	GEM(Ncr) |= Tstart;
 	(void)GEM(Ncr);		/* a read: the write is posted, over PCIe */
+	iunlock(&ctlr->tlock);
 }
 
 static void
@@ -356,19 +427,21 @@ sendproc(void *arg)
 		while((d->ctrl & Txused) == 0){		/* the ring is full */
 			coherence();
 			tsleep(&ctlr->tr, txready, (void*)d, 100);
-			txkick(ctlr, d);
+			txkick(ctlr);
 		}
 		memmove(ctlr->tbuf + ctlr->txhead*Bsz, b->rp, n);
 		freeb(b);
 		ctl = n | Txlast;
 		if(ctlr->txhead == Ntx-1)
 			ctl |= Txwrap;
+		ilock(&ctlr->tlock);
 		coherence();
 		d->ctrl = ctl;		/* clears Txused: it is the MAC's */
 		coherence();
 		GEM(Ncr) |= Tstart;
 		(void)GEM(Ncr);		/* flush the posted write */
 		ctlr->txhead = (ctlr->txhead + 1) % Ntx;
+		iunlock(&ctlr->tlock);
 		ctlr->ntx++;
 		edev->nif.outpackets++;
 	}
@@ -445,7 +518,7 @@ linkproc(void *arg)
 		 * could fall between sendproc handing it over and its TSTART.
 		 */
 		if(ctlr->txhead == lasthead)
-			txkick(ctlr, &ctlr->tx[(lasthead + Ntx - 1) % Ntx]);
+			txkick(ctlr);
 		lasthead = ctlr->txhead;
 		tsleep(&ctlr->lr, return0, nil, 500);
 	}
@@ -624,23 +697,33 @@ ifstat(Ether *edev, void *a, long n, ulong off)
 {
 	Ctlr *ctlr;
 	char *p;
-	int i, busy;
+	int i, busy, oldest;
+	char map[Ntx+1];
 
 	ctlr = edev->ctlr;
 	/* the descriptors the MAC has now; not Isr, which a read clears */
 	busy = 0;
-	for(i = 0; i < Ntx; i++)
-		if((ctlr->tx[i].ctrl & Txused) == 0)
+	for(i = 0; i < Ntx; i++){
+		map[i] = '.';
+		if((ctlr->tx[i].ctrl & Txused) == 0){
+			map[i] = 'x';
 			busy++;
+		}
+	}
+	map[Ntx] = 0;
+	ilock(&ctlr->tlock);
+	oldest = txoldest(ctlr);
+	iunlock(&ctlr->tlock);
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
 	snprint(p, READSTR, "rp1 gem mid %#ux\nintr %lud rx %lud rxbad %lud tx %lud mdiotimeout %lud rxtail %d txhead %d\n"
-		"txkick %lud txirqkick %lud txfull %lud txbusy %d tbqp %d\n"
+		"txkick %lud txirqkick %lud txrepoint %lud txfull %lud txbusy %d txoldest %d tbqp %d\n"
+		"txring %s\n"
 		"tsr %#ux rsr %#ux imr %#ux ncfgr %#ux dmacfg %#ux\n"
 		"mac txframes %ud txunder %ud rxframes %ud rxfcs %ud rxalign %ud rxover %ud rxres %ud\n",
 		GEM(Mid), ctlr->nintr, ctlr->nrx, ctlr->nrxbad, ctlr->ntx, ctlr->nmdiotimeout, ctlr->rxtail, ctlr->txhead,
-		ctlr->nkick, ctlr->nirqkick, ctlr->ntxfull, busy, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)),
+		ctlr->nkick, ctlr->nirqkick, ctlr->nrepoint, ctlr->ntxfull, busy, oldest, (int)((GEM(Tbqp) - (u32int)(uintptr)ctlr->tx) / sizeof(Desc)), map,
 		GEM(Tsr), GEM(0x20), GEM(Imr), GEM(Ncfgr), GEM(Dmacfg),
 		GEM(0x108), GEM(0x134), GEM(0x158), GEM(0x190), GEM(0x194), GEM(0x1A4), GEM(0x1A0));
 	n = readstr(off, a, n, p);

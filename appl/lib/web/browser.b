@@ -184,7 +184,7 @@ Session.unlisten(s: self ref Session, c: chan of string)
 
 Session.open(s: self ref Session, url: string)
 {
-	navigate(s, typed(s, url), "GET", nil, nil, Hnew);
+	navto(s, typed(s, url), "GET", nil, nil, Hnew);
 }
 
 Session.show(s: self ref Session, data: array of byte, ctype, url: string): string
@@ -238,7 +238,7 @@ Session.goback(s: self ref Session): string
 	}
 	(u, nil) := hd s.back;
 	unlock(s);
-	navigate(s, u, "GET", nil, nil, Hback);
+	navto(s, u, "GET", nil, nil, Hback);
 	return nil;
 }
 
@@ -251,14 +251,14 @@ Session.goforward(s: self ref Session): string
 	}
 	(u, nil) := hd s.fwd;
 	unlock(s);
-	navigate(s, u, "GET", nil, nil, Hforward);
+	navto(s, u, "GET", nil, nil, Hforward);
 	return nil;
 }
 
 Session.reload(s: self ref Session)
 {
 	if(s.url != "")
-		navigate(s, s.url, "GET", nil, nil, Hreload);
+		navto(s, s.url, "GET", nil, nil, Hreload);
 }
 
 Session.stop(s: self ref Session)
@@ -302,7 +302,27 @@ Session.resize(s: self ref Session, width, height: int)
 	unlock(s);
 }
 
-navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: int)
+# Where the page shown takes the session: a link followed or clicked, a
+# form sent, a refresh, a script's word.  Whoever asked (the user's
+# click, an agent's "follow 3", the page itself), the address is the
+# page's, so it goes only where the page may send the browser
+# (page->mayload): a page from the network had a link to
+# file:///usr/someone/notes followed, and the file was the next page.
+# What the user asks for by name (open, back, forward, reload) is
+# navto.  nil, or why not.
+navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: int): string
+{
+	if(!page->mayload(s.url, url)) {
+		sch := lower(scheme(url));
+		if(sch == "")
+			sch = "file";
+		return "a page from the network may not open a " + sch + ": address";
+	}
+	navto(s, url, method, ctype, body, hist);
+	return nil;
+}
+
+navto(s: ref Session, url, method, ctype: string, body: array of byte, hist: int)
 {
 	if(url == "about:blank")
 		url = "data:text/html,";
@@ -656,7 +676,7 @@ refresh(s: ref Session, g: int, pg: ref Pg)
 		if(u == "")
 			u = unfrag(pg.url);
 		else
-			u = resolve(pg.url, u);
+			u = resolve(d.url, u);
 		spawn refresher(s, g, u, secs);
 		return;
 	}
@@ -669,8 +689,8 @@ refresher(s: ref Session, g: int, url: string, secs: int)
 	lock(s);
 	live := s.gen == g;
 	unlock(s);
-	if(live)
-		navigate(s, url, "GET", nil, nil, Hnew);
+	if(live && (e := navigate(s, url, "GET", nil, nil, Hnew)) != nil)
+		sys->fprint(sys->fildes(2), "charon: refresh to %s: %s\n", url, e);
 }
 
 # "5; url=http://x", "0;URL='x'", "3" -> (seconds, url); seconds -1 if unreadable
@@ -938,8 +958,7 @@ Session.follow(s: self ref Session, n: int): string
 	a := s.links();
 	if(n < 1 || n > len a)
 		return sys->sprint("no link %d", n);
-	navigate(s, a[n-1].url, "GET", nil, nil, Hnew);
-	return nil;
+	return navigate(s, a[n-1].url, "GET", nil, nil, Hnew);
 }
 
 # ---- forms ----
@@ -1403,17 +1422,14 @@ Session.submit(s: self ref Session, form, submitter: int): string
 		}
 	}
 	if(method == "post")
-		navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
-	else {
-		u := unfrag(url);
-		for(i = 0; i < len u; i++)
-			if(u[i] == '?') {
-				u = u[0:i];
-				break;
-			}
-		navigate(s, u + "?" + q, "GET", nil, nil, Hnew);
-	}
-	return nil;
+		return navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
+	u := unfrag(url);
+	for(i = 0; i < len u; i++)
+		if(u[i] == '?') {
+			u = u[0:i];
+			break;
+		}
+	return navigate(s, u + "?" + q, "GET", nil, nil, Hnew);
 }
 
 anyselected(l: list of (string, string, int)): int
@@ -1749,8 +1765,7 @@ Session.click(s: self ref Session, n: int): string
 				u := resolve(d.url, d.attr(m, "href"));
 				if(lower(scheme(u)) == "javascript")
 					return "javascript: links need a script engine";
-				navigate(s, u, "GET", nil, nil, Hnew);
-				return nil;
+				return navigate(s, u, "GET", nil, nil, Hnew);
 			}
 		Dom->Tlabel =>
 			# for names an id in the label's own tree: a web
@@ -2567,10 +2582,13 @@ realmhelper(r: ref Realm)
 			hist := Hnew;
 			if(rq.replace)
 				hist = Hnone;
+			e: string;
 			if(rq.method == "POST")
-				navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
+				e = navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
 			else
-				navigate(s, rq.url, "GET", nil, nil, hist);
+				e = navigate(s, rq.url, "GET", nil, nil, hist);
+			if(e != nil)
+				toconsole(r.pg, "navigation to " + rq.url + " refused: " + e);
 		Scroll =>
 			lock(s);
 			s.scroll = rq.y;

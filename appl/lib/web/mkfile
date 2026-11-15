@@ -44,6 +44,7 @@ SYSMODULES=\
 	plumbmsg.m\
 	woff2.m\
 	post9p.m\
+	publicnet.m\
 
 DISBIN=$ROOT/dis/lib/web
 

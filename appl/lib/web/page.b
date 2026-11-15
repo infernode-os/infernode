@@ -36,6 +36,8 @@ include "web/layout.m";
 include "plumbmsg.m";
 	plumbmsg: Plumbmsg;
 	Msg: import plumbmsg;
+include "publicnet.m";
+	publicnet: Publicnet;
 include "web/page.m";
 
 display: ref Display;
@@ -139,7 +141,8 @@ init(d: ref Display): string
 	imgload = load Imgload Imgload->PATH;
 	imageremap = load Imageremap Imageremap->PATH;
 	base64 = load Encoding Encoding->BASE64PATH;
-	if(html == nil || css == nil || style == nil || layout == nil)
+	publicnet = load Publicnet Publicnet->PATH;
+	if(html == nil || css == nil || style == nil || layout == nil || publicnet == nil)
 		return sys->sprint("cannot load modules: %r");
 	display = d;
 	html->init();
@@ -164,7 +167,13 @@ open(url: string, width, height: int): (ref Pg, string)
 
 request(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
-	(p, err) := begin(url, method, reqctype, body, width, height);
+	return requestfrom(nil, url, method, reqctype, body, width, height);
+}
+
+# request, on behalf of the page at from (its frame)
+requestfrom(from, url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
+{
+	(p, err) := begin0(from, url, method, reqctype, body, width, height, 1);
 	if(p == nil)
 		return (nil, err);
 	images(p);
@@ -190,17 +199,51 @@ phase(what: string)
 
 begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
-	return begin0(url, method, reqctype, body, width, height, 1);
+	return begin0(nil, url, method, reqctype, body, width, height, 1);
 }
 
 go(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
-	return begin0(url, method, reqctype, body, width, height, 2);
+	return begin0(nil, url, method, reqctype, body, width, height, 2);
 }
 
-# page is 1 for a page (a frame's too), 2 for one navigated to
-begin0(url, method, reqctype: string, body: array of byte, width, height: int, page: int): (ref Pg, string)
+# ---- what a page may have loaded ----
+#
+# A document that came from the network does not have the browser read
+# its own name space.  Only the user does: file: URLs, and names with
+# no scheme, are read by fetchfinal as whoever runs the browser, so a
+# page linking, framing, redirecting or scripting its way to
+# file:///usr/someone/... was shown that file (and anything that reads
+# the page for the user, an agent's charon tool, was given it).  from
+# is the address of the document that asks, nil when nobody's page
+# does (the user typed it, or went back to it).  data: and about: name
+# nothing outside themselves and are always loaded; a document made of
+# such a URL is whoever wrote the URL, so it asks as the network does.
+mayload(from, url: string): int
 {
+	(ts, nil) := splitscheme(url);
+	if(ts == "data" || ts == "about")
+		return 1;
+	(fs, nil) := splitscheme(from);
+	if(fs == "data" || fs == "about" || fs == "blob" || fs == "javascript")
+		from = "http:";
+	return publicnet->transitionallowed(from, ts);
+}
+
+notallowed(url: string): string
+{
+	(ts, nil) := splitscheme(url);
+	if(ts == "")
+		ts = "file";
+	return "a page from the network may not open a " + ts + ": address";
+}
+
+# page is 1 for a page (a frame's too), 2 for one navigated to; from
+# is the page that asks for it, nil if none does
+begin0(from, url, method, reqctype: string, body: array of byte, width, height: int, page: int): (ref Pg, string)
+{
+	if(!mayload(from, url))
+		return (nil, notallowed(url));
 	readsettings();
 	(pok, nil) := sys->stat("/env/pagetime");
 	ptime = pok >= 0;
@@ -218,7 +261,7 @@ begin0(url, method, reqctype: string, body: array of byte, width, height: int, p
 	if(method == "POST" || scheme == "http" || scheme == "https")
 		(data, ctype, err, final, nil) = webfsp(url, method, reqctype, body, nil, page);
 	else
-		(data, ctype, err, final) = fetchfinal(url, nil);
+		(data, ctype, err, final) = fetchfinal(from, url, nil);
 	phase(sys->sprint("fetched (%d bytes)", len data));
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
@@ -241,7 +284,7 @@ images(p: ref Pg)
 {
 	if((urls := p.wanted()) != nil) {
 		pics: list of ref Pic;
-		got := fetchall(urls, ACCEPTIMAGE);
+		got := fetchall(p.url, urls, ACCEPTIMAGE);
 		phase(sys->sprint("images fetched (%d)", len got));
 		for(; got != nil; got = tl got) {
 			g := hd got;
@@ -274,11 +317,13 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 		p.doc = html->parse(data, charset, url);
 	d := p.doc;
 	phase(sys->sprint("parsed (%d nodes)", d.n));
-	# <base href>
-	if((b := d.find(1, Dom->Tbase)) != 0 && (h := d.attr(b, "href")) != nil) {
+	# <base href>: what the document's relative URLs are resolved
+	# against (d.url), not where it is.  It was made the page's address
+	# too: a page saying <base href="file:///usr/x/"> was then a file:
+	# page to everything that asked, its scripts given that directory,
+	# and the address shown for it whatever the page chose.
+	if((b := d.find(1, Dom->Tbase)) != 0 && (h := d.attr(b, "href")) != nil)
 		d.url = style->resolveurl(url, h);
-		p.url = d.url;
-	}
 	if((t := d.find(1, Dom->Ttitle)) != 0)
 		p.title = squash(d.textof(t));
 	declarative(d);
@@ -450,6 +495,8 @@ Pg.wanted(p: self ref Pg): list of string
 		(u, y) := hd urls;
 		if(u == nil || picof(p, u) != nil)
 			continue;
+		if(!mayload(p.url, u))
+			continue;	# not this page's to have: never fetched
 		if(click && !local(u) && !member(u, p.asked))
 			continue;
 		for(t := r; t != nil; t = tl t)
@@ -522,7 +569,11 @@ Pg.want(p: self ref Pg, n: int): list of string
 		raise e;
 	}
 	punlock();
-	return urls;
+	ok: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(mayload(p.url, hd urls))
+			ok = hd urls :: ok;
+	return ok;
 }
 
 want1(p: ref Pg, n: int): list of string
@@ -670,12 +721,15 @@ loadframes(p: ref Pg)
 		framedepth++;
 		framing = p.url :: framing;
 		sub: ref Pg;
+		ferr: string;
 		{
-			(sub, nil) = request(url, "GET", nil, nil, w, h);
+			(sub, ferr) = requestfrom(p.url, url, "GET", nil, nil, w, h);
 		} exception {
 		"*" =>
 			sub = nil;
 		}
+		if(sub == nil && ferr != nil && !prefix(url, "data:"))
+			p.errors = url + ": " + ferr :: p.errors;
 		framing = tl framing;
 		framedepth--;
 		img := display.newimage(Rect((0, 0), (w, h)), Draw->RGB24, 0, Draw->White);
@@ -1067,7 +1121,7 @@ applysheets(p: ref Pg, a: array of (string, string, string))
 			urls = a[i].t1 :: urls;
 	got: list of ref Got;
 	if(urls != nil)
-		got = fetchall(urls, nil);
+		got = fetchall(p.url, urls, nil);
 	# a sheet linked (or written inline) again is parsed once: the
 	# parsed form is never changed, and each use keeps its own place
 	# in the cascade.  (GitHub links some of its largest sheets five
@@ -1127,7 +1181,7 @@ applysheets(p: ref Pg, a: array of (string, string, string))
 		urls = p.styles.imports(p.env);
 		if(urls == nil)
 			break;
-		got = fetchall(urls, nil);
+		got = fetchall(p.url, urls, nil);
 		for(; urls != nil; urls = tl urls) {
 			(data, ctype, err) := fetched(got, hd urls);
 			if(err != nil) {
@@ -1231,7 +1285,7 @@ loadfonts(p: ref Pg)
 			urls = (hd s).url :: urls;
 			keep = hd s :: keep;
 		}
-	got := fetchall(urls, nil);
+	got := fetchall(p.url, urls, nil);
 	for(; keep != nil; keep = tl keep) {
 		f := hd keep;
 		(data, nil, err) := fetched(got, f.url);
@@ -1553,7 +1607,7 @@ findobjects(p: ref Pg)
 	ul: list of string;
 	for(l := urls; l != nil; l = tl l)
 		ul = (hd l).t1 :: ul;
-	got := fetchall(ul, nil);
+	got := fetchall(p.url, ul, nil);
 	r: list of (int, int, string);
 	for(l = urls; l != nil; l = tl l) {
 		(n, u) := hd l;
@@ -2180,9 +2234,9 @@ Got: adt {
 	err:	string;
 };
 
-# Fetch urls concurrently, each distinct URL once, saying accept (if
-# not nil) is what will do.
-fetchall(urls: list of string, accept: string): list of ref Got
+# Fetch urls concurrently for the page at from, each distinct URL once,
+# saying accept (if not nil) is what will do.
+fetchall(from: string, urls: list of string, accept: string): list of ref Got
 {
 	todo: list of string;
 	n := 0;
@@ -2208,18 +2262,18 @@ fetchall(urls: list of string, accept: string): list of ref Got
 	if(nw > n)
 		nw = n;
 	for(i := 0; i < nw; i++)
-		spawn fetcher(work, res, accept);
+		spawn fetcher(from, work, res, accept);
 	got: list of ref Got;
 	for(i = 0; i < n; i++)
 		got = <-res :: got;
 	return got;
 }
 
-fetcher(work: chan of string, res: chan of ref Got, accept: string)
+fetcher(from: string, work: chan of string, res: chan of ref Got, accept: string)
 {
 	for(;;) alt {
 	u := <-work =>
-		(data, ctype, err, nil) := fetchfinal(u, accept);
+		(data, ctype, err, nil) := fetchfinal(from, u, accept);
 		res <-= ref Got(u, data, ctype, err);
 	* =>
 		return;
@@ -2236,7 +2290,7 @@ fetched(got: list of ref Got, url: string): (array of byte, string, string)
 
 fetch(url: string): (array of byte, string, string)
 {
-	(data, ctype, err, nil) := fetchfinal(url, nil);
+	(data, ctype, err, nil) := fetchfinal(nil, url, nil);
 	return (data, ctype, err);
 }
 
@@ -2244,7 +2298,7 @@ fetchimage(url: string): (array of byte, string, string)
 {
 	(scheme, nil) := splitscheme(url);
 	if(scheme != "http" && scheme != "https") {
-		(data, ctype, err, nil) := fetchfinal(url, ACCEPTIMAGE);
+		(data, ctype, err, nil) := fetchfinal(nil, url, ACCEPTIMAGE);
 		return (data, ctype, err);
 	}
 	if((c := cachedimage(url)) != nil)
@@ -2332,9 +2386,12 @@ nostore(header: string): int
 	return 0;
 }
 
-# fetch, and the URL the resource came from in the end
-fetchfinal(url, accept: string): (array of byte, string, string, string)
+# fetch for the page at from (nil: for no page), and the URL the
+# resource came from in the end
+fetchfinal(from, url, accept: string): (array of byte, string, string, string)
 {
+	if(!mayload(from, url))
+		return (nil, nil, notallowed(url), url);
 	(scheme, rest) := splitscheme(url);
 	case scheme {
 	"file" =>

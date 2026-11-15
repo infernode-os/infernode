@@ -16,7 +16,7 @@ Page: module
 	init:	fn(d: ref Draw->Display): string;
 
 	Pg: adt {
-		url:	string;		# after redirects and <base>
+		url:	string;		# where it came from, after redirects (<base> changes doc.url only)
 		doc:	ref Dom->Doc;
 		styles:	ref Style->Styles;
 		computed:	ref Style->Computed;
@@ -110,4 +110,9 @@ Page: module
 	# fetch, saying an image will do: image/webp first, as browsers do
 	fetchimage:	fn(url: string): (array of byte, string, string);
 	decodeimage:	fn(data: array of byte, ctype, url: string): ref Draw->Image;
+	# whether the document at from may have url loaded, or the browser
+	# taken to it: one from the network may not have a file: address or
+	# a bare path, which are read from the browser's own name space;
+	# from nil (nobody's page asks: the user does) may have anything
+	mayload:	fn(from, url: string): int;
 };

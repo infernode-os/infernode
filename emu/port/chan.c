@@ -1418,7 +1418,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	Rune r;
 	Mhead *volatile m;
 	Pgrp *pg;
-	char *createerr, tmperrbuf[ERRMAX];
+	char tmperrbuf[ERRMAX];
 	char *name;
 
 	name = aname;
@@ -1747,15 +1747,20 @@ namec(char *aname, int amode, int omode, ulong perm)
 				putmhead(m);
 			if(omode & OEXCL)
 				nexterror();
-			/* save error */
-			createerr = up->env->errstr;
-			up->env->errstr = tmperrbuf;
-			/* note: we depend that walk does not error */
-			if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0){
-				up->env->errstr = createerr;
-				error(createerr);	/* report true error */
-			}
-			up->env->errstr = createerr;
+			/*
+			 * Save the create's error, for the walk may write its
+			 * own.  It is copied out; the Prog's error string stays
+			 * where it is.  It was pointed at tmperrbuf for the
+			 * walk and pointed back after, and a walk that raised
+			 * (its clone refused by a 9P server, or interrupted)
+			 * left it there: the Prog's error string was this
+			 * frame, dead, for the rest of its life, read back by
+			 * %r and written by every later error over whatever
+			 * call was then running on this stack.
+			 */
+			kstrcpy(tmperrbuf, up->env->errstr, sizeof tmperrbuf);
+			if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0)
+				error(tmperrbuf);	/* report true error */
 			omode |= OTRUNC;
 			goto Open;
 		}

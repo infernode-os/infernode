@@ -285,6 +285,19 @@ testListenerStart(t: ref T)
 		"fail:usage", "styxlisten -A with an algorithm");
 }
 
+# import and 9export do no encryption (import(4) says why), and say so when
+# asked for it: import said it only after it had authenticated to the far
+# end and named the tree, and 9export -A not at all, exporting in clear.
+testPlan9Commands(t: ref T)
+{
+	t.assertseq(start("/dis/import.dis", "import" :: "-e" :: "aes_256_gcm" :: "tcp!127.0.0.1!1" :: "/n/nosuch" :: nil),
+		"fail:import", "import -e with an algorithm is refused before it dials");
+	t.assertseq(start("/dis/9export.dis", "9export" :: "-A" :: "-e" :: "aes_256_gcm" :: nil),
+		"fail:9export", "9export -A -e with an algorithm is refused");
+	t.assertseq(start("/dis/9export.dis", "9export" :: "-e" :: "aes_256_gcm" :: nil),
+		"fail:9export", "9export -e with an algorithm is refused before the caller is spoken to");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -318,6 +331,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ServerChoice", testServerChoice);
 	run("Honest", testHonest);
 	run("ListenerStart", testListenerStart);
+	run("Plan9Commands", testPlan9Commands);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

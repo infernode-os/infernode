@@ -63,6 +63,8 @@ speed, track, vertical speed
 call sign
 .RB ( name )
 and emitter category.
+A call sign is digits, capital letters and blanks; one with any other
+byte in it is not a name.
 .PP
 .B Crc
 is the CRC-16-CCITT the format uses;

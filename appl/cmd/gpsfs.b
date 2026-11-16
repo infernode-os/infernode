@@ -30,6 +30,9 @@ implement Gpsfs;
 #                    the write returns; a read gives the command in use.
 #   status      (r)  state=fix|nofix|nosource link=none|open|closed|error
 #                    source=... sentences=N bad=N age=S error='...'
+#                    bad counts what was refused: sentences that are
+#                    none, frames of another format that fail their
+#                    check, and any the parser could not get through
 #   position    (r)  "lat lon", decimal degrees; "no fix" is an error
 #   fix         (r)  the last fix, attr=value: time lat lon alt baroalt
 #                    speed course mcourse heading mheading mode q sats
@@ -135,16 +138,18 @@ files := array[] of {
 
 Maxqueue: con 64*1024;	# what a reader of event or nmea has not read
 Maxline: con 1024;
+Maxopens: con 64;	# of event and nmea, each with its queue
 
 # what a reader proc reports
-Iopen, Iline, Iend, Itarget: con iota;
+Iopen, Iline, Iend, Itarget, Ibad: con iota;
 Input: adt {
 	gen:	int;
 	kind:	int;
 	line:	string;
 	err:	string;
 	target:	ref Target;
-	us:	big;	# this host's clock when the line began to arrive, or 0
+	us:	big;	# this host's clock when the line began to arrive, or 0;
+			# Ibad: how many were refused
 };
 
 # a request from one of the connections: the mount's, or one made
@@ -183,6 +188,11 @@ State: adt {
 	# fed), whether its times are the receiver's own, when it began
 	# to arrive (0 not known)
 	take:	fn(st: self ref State, line, origin: string, owntime: int, us: big): string;
+	take1:	fn(st: self ref State, line, origin: string, owntime: int, us: big): string;
+	target:	fn(st: self ref State, t: ref Target);
+	fault:	fn(st: self ref State, what, e: string);
+	text:	fn(st: self ref State, path: big): (string, string);
+	faults:	int;
 	lastorigin:	fn(st: self ref State): string;
 	settime:	fn(st: self ref State, f: ref Fix, sync: int);
 };
@@ -260,7 +270,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(cmd != nil) {
 		fd := sys->open(mnt + "/ctl", Sys->OWRITE);
 		if(fd == nil || sys->fprint(fd, "%s", cmd[1:]) < 0)
-			fatal(sys->sprint("%s: %r", cmd[1:]));
+			fatal(sys->sprint("%s: %r (%s is served, with no source)", cmd[1:], mnt));	# it said only that it had failed
 	}
 }
 
@@ -327,7 +337,7 @@ server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop,
 	}
 	pidc <-= pid;
 
-	st := ref State(Parser.new(), nil, 0, 0, -1, nil, big 0, nil, big 0, nil, nil);
+	st := ref State(Parser.new(), nil, 0, 0, -1, nil, big 0, nil, big 0, nil, nil, 0);
 	inputc := chan of ref Input;
 	gen := 0;
 	readerpid := -1;
@@ -372,7 +382,9 @@ Serve:
 			if(len in.line > 0 && (in.line[0] == '$' || in.line[0] == '!') && src != nil)
 				st.take(in.line, src.origin, src.format == "nmea", in.us);
 		Itarget =>
-			st.p.target(in.target);
+			st.target(in.target);
+		Ibad =>
+			st.bad += int in.us;
 		Iend =>
 			readerpid = -1;
 			if(in.err != nil) {
@@ -400,6 +412,15 @@ Serve:
 		}
 		pick m := r.m {
 		Open =>
+			# each open of event or nmea has a queue of what it has not
+			# read, copied at every fix: no more of them than could be
+			# wanted
+			pf := srv.getfid(m.fid);
+			if(pf != nil && !pf.isopen && (pf.path == Qevent || pf.path == Qnmea) &&
+			   nstreams(st.clients) >= Maxopens) {
+				srv.reply(ref Rmsg.Error(m.tag, "too many opens of event and nmea"));
+				break;
+			}
 			f := srv.open(m);
 			if(f != nil && (f.path == Qevent || f.path == Qnmea || f.path == Qfeed))
 				st.clients = ref Client(srv, m.fid, f.path, nil, nil, nil) :: st.clients;
@@ -433,23 +454,12 @@ Serve:
 				if(srcerr != nil)
 					s += " error=" + quote(srcerr);
 				srv.reply(styxservers->readstr(m, s + "\n"));
-			Qposition =>
-				pos: string;
-				if(st.p.last != nil)
-					pos = st.p.last.position();
-				if(pos == nil)
-					srv.reply(ref Rmsg.Error(m.tag, "no fix"));
+			Qposition or Qfix or Qsatellites or Qtraffic =>
+				(s, terr) := st.text(f.path);
+				if(terr != nil)
+					srv.reply(ref Rmsg.Error(m.tag, terr));
 				else
-					srv.reply(styxservers->readstr(m, pos + "\n"));
-			Qfix =>
-				s := "";
-				if(st.p.last != nil)
-					s = st.p.last.text() + st.lastorigin() + "\n";
-				srv.reply(styxservers->readstr(m, s));
-			Qsatellites =>
-				srv.reply(styxservers->readstr(m, st.p.satellites()));
-			Qtraffic =>
-				srv.reply(styxservers->readstr(m, st.p.traffic(sys->millisec())));
+					srv.reply(styxservers->readstr(m, s));
 			Qtime =>
 				srv.reply(styxservers->readstr(m, st.timetext));
 			Qevent or Qnmea =>
@@ -563,9 +573,90 @@ Serve:
 	navops <-= nil;
 }
 
+# A sentence taken, whatever is in it.  The sentences are a wire's (a
+# serial line, a datagram from anyone on the network, a log), and this
+# is the one proc that owns every file: an exception in the parser, or
+# in what is made of a fix, cost the whole of /mnt/gps (one AIS
+# sentence with a count of 200000000 did it, by the heap).  It costs
+# the sentence, counted in bad, and what the parser had half made.
+State.take(st: self ref State, line, origin: string, owntime: int, us: big): string
+{
+	{
+		return st.take1(line, origin, owntime, us);
+	} exception e {
+	"*" =>
+		st.fault("a sentence", e);
+		return "not taken: " + e;
+	}
+}
+
+# a target from a decoder, likewise
+State.target(st: self ref State, t: ref Target)
+{
+	{
+		st.p.target(t);
+	} exception e {
+	"*" =>
+		st.fault("a target", e);
+	}
+}
+
+State.fault(st: self ref State, what, e: string)
+{
+	st.bad++;
+	# the first few are said, then one in a thousand: the sender of
+	# one can send a million
+	if(st.faults++ < 5 || st.faults % 1000 == 0)
+		sys->fprint(stderr, "gpsfs: %s was not taken: %s (%d so far)\n", what, e, st.faults);
+	{
+		st.p.forget();
+	} exception {
+	"*" =>
+		st.p = Parser.new();
+	}
+}
+
+# what position, fix, satellites or traffic reads as, or an error
+State.text(st: self ref State, path: big): (string, string)
+{
+	{
+		case path {
+		Qposition =>
+			pos: string;
+			if(st.p.last != nil)
+				pos = st.p.last.position();
+			if(pos == nil)
+				return (nil, "no fix");
+			return (pos + "\n", nil);
+		Qfix =>
+			if(st.p.last == nil)
+				return ("", nil);
+			return (st.p.last.text() + st.lastorigin() + "\n", nil);
+		Qsatellites =>
+			return (st.p.satellites(), nil);
+		Qtraffic =>
+			return (st.p.traffic(sys->millisec()), nil);
+		}
+		return ("", nil);
+	} exception e {
+	"*" =>
+		st.fault("a read", e);
+		return (nil, "gpsfs: " + e);
+	}
+}
+
+nstreams(l: list of ref Client): int
+{
+	n := 0;
+	for(; l != nil; l = tl l)
+		if((hd l).path == Qevent || (hd l).path == Qnmea)
+			n++;
+	return n;
+}
+
 # a sentence: given to the readers of nmea, and any fix it completes
 # to the readers of event and the time file; nil, or why it was refused
-State.take(st: self ref State, line, origin: string, owntime: int, us: big): string
+State.take1(st: self ref State, line, origin: string, owntime: int, us: big): string
 {
 	if(len line > 0 && line[len line-1] == '\r')
 		line = line[0:len line-1];
@@ -923,6 +1014,11 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
 		now := hostus(clock);
+		# A datagram of no bytes reads as none under the hosted
+		# emulator, header and all: it is no end.  Taken for one, a
+		# single empty datagram from anyone closed the source.
+		if(n == 0 && listen)
+			continue;
 		if(n <= 0) {
 			err: string;
 			if(n < 0)
@@ -936,15 +1032,37 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 				continue;
 			b = b[Udphdr:];
 		}
+		# a decoder that raises on what it is sent costs what it was
+		# sent, not the source: counted with the frames whose check
+		# failed, which status never showed
 		if(gdl != nil) {
-			(fixes, targets) := gdl.feed(b);
+			fixes: list of ref Fix;
+			targets: list of ref Target;
+			nbad := gdl.bad;
+			{
+				(fixes, targets) = gdl.feed(b);
+			} exception {
+			"*" =>
+				gdl = Framer.new();
+				nbad = -1;
+			}
+			if(gdl.bad != nbad)
+				inputc <-= ref Input(gen, Ibad, nil, nil, nil, big (gdl.bad - nbad));
 			for(; targets != nil; targets = tl targets)
 				inputc <-= ref Input(gen, Itarget, nil, nil, hd targets, big 0);
 			sendfixes(gen, inputc, fixes);
 			continue;
 		}
 		if(garmin != nil) {
-			sendfixes(gen, inputc, garmin.feed(b));
+			fixes: list of ref Fix;
+			{
+				fixes = garmin.feed(b);
+			} exception {
+			"*" =>
+				garmin = Grouper.new();
+				inputc <-= ref Input(gen, Ibad, nil, nil, nil, big 1);
+			}
+			sendfixes(gen, inputc, fixes);
 			continue;
 		}
 		# when a byte of this read arrived: the read's time less the

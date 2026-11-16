@@ -145,6 +145,9 @@ when the source ended,
 for a recording;
 .BI sentences= n ,
 .BI bad= n
+(what was refused: sentences that are none or fail their checksum,
+frames of another format that fail their check, and any the parser
+could not get through)
 and
 .BI suspect= n
 (positions held back as glitches) counted since start;
@@ -237,6 +240,11 @@ each read waits for the next fix and gives it, as
 would, or the fixes since the last read.
 Every open has its own; a reader that falls far behind loses the
 oldest.
+No more than 64 opens of
+.B event
+and
+.B nmea
+are held at once; the next is refused.
 A fix is given once the receiver has sent all it sends for one time,
 or a sentence for the next time has come; a lost fix is told once.
 The first fix from a new source is given at its first position

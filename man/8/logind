@@ -3,6 +3,9 @@
 logind \- login daemon
 .SH SYNOPSIS
 .B auth/logind
+[
+.BI -g " group"
+]
 .SH DESCRIPTION
 .I Logind
 is normally started by
@@ -34,6 +37,56 @@ module; see
 .PP
 Client and server communicate over the Secure Socket Layer device
 .IR ssl (3).
+.PP
+The exchange uses one of the three Diffie-Hellman groups
+.IR login (6)
+names, not the parameters in the signer's key file:
+RFC 3526's group 14 (2048 bits), or group 15 (3072 bits) when the client
+asks for the CNSA suite.
+The
+.B -g
+option names the least group to offer (14, 15 or 16) if a site wants a larger one;
+a client takes any of the three that is large enough for its mode.
+The
+.I alpha
+and
+.I p
+of the key file are sent to the client once it has proved the password,
+for
+.IR security-auth (2)
+to use between the holders of the signer's certificates.
+In CNSA mode
+.RB ( /env/cnsamode
+set)
+.I logind
+refuses a client that does not offer the CNSA suite, saying so.
+.PP
+The name a client gives must be one account name, as
+.IR login (6)
+defines it (no
+.B /
+or
+.BR \e ,
+not
+.B .
+or
+.BR .. ,
+no control character);
+any other is refused with
+.B "bad user name"
+before it is acknowledged, counted or looked up.
+The signer's own name (the owner of
+.BR /keydb/signerkey )
+is not an account's, whatever
+.IR keyfs (4)
+has:
+its certificate is the one in the key file, which
+.IR keysrv (4)
+shows to prove it is the signer.
+.PP
+A client of the exchange before version 2 is told
+.BR "signer speaks login version 2" ;
+nothing is negotiated.
 .SS "Failed attempts"
 .I Logind
 limits online guessing of passwords
@@ -47,12 +100,20 @@ with the error
 .IR n s
 .PP
 An attempt is counted when it begins and its count cleared only when
-the client shows it has the session's key, which only the password gives;
-so a wrong password, a client that hangs up part way, a value refused,
+the client's proof that it has the session's secret, which only the password gives,
+has been checked;
+.I logind
+sends nothing made from that secret before then.
+So a wrong password, a client that hangs up part way, a Diffie-Hellman value refused
+(0, 1,
+.IR p \-1
+and the like, with which the secret would be known to all),
 a time out and a
 .I logind
 killed are all counted, and many connections opened at once for one
 name are counted as they start.
+.IR Keysrv (4)
+counts wrong proofs of a password in the same file.
 A login that works clears the name's count.
 A name with no account is counted and refused in the same way and the
 same words, so the throttle does not tell which names have accounts.
@@ -62,8 +123,8 @@ a name with no account, or one whose entry
 will not give (disabled or expired) or that has no usable secret or
 expiry, is answered as a wrong password is.
 The exchange goes on under a random stand-in for the password's SHA-256,
-with the same work and the same messages, so the client fails to decrypt
-the signer's first message and reports
+with the same work and the same messages, so the client's proof fails
+and it is told
 .BR "name or secret incorrect" ;
 the real reason is written to the console alone, and the login is
 counted and never cleared or signed.
@@ -76,6 +137,37 @@ when the audit log is set up
 to it as an
 .B authlock
 event.
+.SS "Audit records"
+When the audit log is set up,
+.I logind
+also records each certificate it issues and each attempt that fails, the name as one value
+.RB ( Audit->value ):
+.IP
+.EX
+logind authok user=\fIname\fP exp=\fIexpiry\fP
+logind authfail user=\fIname\fP reason=\fIreason\fP
+.EE
+.PP
+.I Reason
+is
+.B secret
+(the proof was not the password's),
+.B badvalue
+(a Diffie-Hellman value out of range),
+.B exchange
+(the client went away or sent something else),
+.B unusable
+(no account, or one that cannot log in; the client is answered as for a wrong password),
+or
+.B badname
+(not an account name; no
+.B user
+is recorded).
+What a client is told never says more than
+.BR "name or secret incorrect" :
+when the key file or the count of attempts cannot be used it is told
+.B "login service unavailable"
+and the reason is on the console.
 .PP
 Each connection is served by a
 .I logind
@@ -112,7 +204,9 @@ Its lock.
 .IR ssl (3),
 .IR auditfs (4),
 .IR keyfs (4),
+.IR keysrv (4),
 .IR keys (6),
+.IR login (6),
 .IR changelogin (8),
 .IR createsignerkey (8),
 .IR svc (8)

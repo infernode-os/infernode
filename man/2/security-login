@@ -9,6 +9,10 @@ login := load Login Login->PATH;
 
 login: fn(name, password, addr: string):
 	(string, ref Keyring->Authinfo);
+
+okname:  fn(name: string): string;
+charge:  fn(prog, name: string): (int, string);
+cleared: fn(prog, name: string);
 .EE
 .SH DESCRIPTION
 The
@@ -77,6 +81,70 @@ see
 The password is used by the encrypted
 key exchange protocol to establish
 a secure channel between user and CA.
+.PP
+.B Login
+returns only when the signer has proved that it has the password too,
+and what it returns it has checked:
+the signer's public key and Diffie-Hellman parameters
+.RB ( alpha
+and
+.BR p ,
+which
+.IR security-auth (2)
+uses) come under the session's keys from that signer, and the certificate
+verifies with the signer's key for the key
+.B login
+made.
+The exchange's own Diffie-Hellman group is one of the three in
+.IR login (6),
+which the module holds; nothing is taken from the signer on trust.
+In CNSA mode
+.RB ( /env/cnsamode
+set)
+.B login
+offers only the CNSA suite and refuses a group of fewer than 3072 bits.
+.PP
+The other functions are for the signer's programs, which share them so
+that there is one of each.
+.B Okname
+returns nil if
+.I name
+is one account name as
+.IR login (6)
+defines it, and otherwise the reason it is not;
+.BR login ,
+.IR logind (8),
+.IR keysrv (4),
+.IR signer (8)
+and
+.IR changelogin (8)
+refuse a name it refuses.
+.B Charge
+and
+.B cleared
+are the count of failed attempts described in
+.IR logind (8),
+kept in
+.BR /keydb/loginfail :
+.B charge
+counts an attempt for
+.I name
+and returns 0, or returns the seconds for which
+.I name
+is still refused (and counts nothing), or an error string if the count cannot be kept;
+.B cleared
+removes the count once the password has been proved.
+.I Prog
+is the caller's name for the console and the audit log.
+The module also exports the pieces of the exchange both ends compute
+.RB ( group ,
+.BR exponent ,
+.BR mask ,
+.BR keys
+and the rest; see
+.B security.m
+and
+.IR login (6)).
 .SH SOURCE
 .B /appl/lib/login.b
 .SH SEE ALSO

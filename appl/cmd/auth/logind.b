@@ -16,6 +16,7 @@ include "keyring.m";
 include "security.m";
 	ssl: SSL;
 	rand: Random;
+	login: Login;
 
 include "daytime.m";
 	daytime: Daytime;
@@ -32,51 +33,17 @@ TimeLimit: con 5*60*1000;	# five minutes
 keydb := "/mnt/keys";
 
 #
-# Failed-attempt throttle (NIST SP 800-53 AC-7; CC FIA_AFL.1), as
-# secstored(8) has: Maxfail logins in a row that do not prove the
-# password lock the name for Locksecs, refused before any key exchange.
-# A name that is no account is counted and locked the same way, and
-# refused in the same words, so the throttle says nothing of who has an
-# account.
+# The exchange is login(6)'s, version 2; the pieces both ends compute
+# (the groups, the keystream, the keys, the rule for names) and the
+# count of failed attempts are login(2)'s, in appl/lib/login.b, where
+# the reasons are.
 #
-# Each connection is a logind of its own (svc/auth: listen ...
-# {auth/logind&}), so the counts cannot be in memory as secstored's
-# are: they are in Failfile, read and written whole under Failfile.lock,
-# made exclusively and removed on close, so a logind that dies holding
-# it leaves nothing behind. An attempt is counted when it begins (the
-# lock taken for it, before the exchange), and the count cleared only
-# when the client has shown it has the session key, which only the
-# password gives; so every other end -- a wrong password, a client that
-# hangs up after the server's message, a value refused, a time out, a
-# logind killed -- stays counted, and many connections opened at once
-# for one name are counted as they start, not after they fail.
-#
-# Names are kept as the SHA-256 of the name, so the file holds no names
-# and a name cannot break its lines. A count not added to for
-# Forgetsecs is forgotten (AC-7's "during a time period"); past
-# Maxentries the oldest unlocked counts are dropped, so names made up by
-# the million do not make the file, which every login reads, grow
-# without end. The file cannot be read or written, or its lock cannot be
-# had: the login is refused (closed, not open).
-#
-Maxfail: con 10;	# attempts in a row not proving the password
-Locksecs: con 60;	# then refused for this long
-Forgetsecs: con 15*60;	# a count left this long is forgotten
-Maxentries: con 4096;	# unlocked counts kept
-Lockwait: con 5000;	# ms to wait for Failfile.lock
-Lockstale: con 60;	# s: a lock older than this was left by a crash
-failfile := "/keydb/loginfail";
 
-Fail: adt {
-	key:	string;	# hex SHA-256 of the name
-	fails:	int;	# attempts in a row not proving the password
-	last:	int;	# when the last began
-	until:	int;	# refused until then; 0, not yet set
-};
+mingroup := 14;	# -g: the least group offered
 
 stderr: ref Sys->FD;
  
-init(nil: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->open("/dev/cons", sys->OWRITE);
@@ -95,9 +62,27 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(rand == nil)
 		nomod(Random->PATH);
 
+	login = load Login Login->PATH;
+	if(login == nil)
+		nomod(Login->PATH);
+
 	audit = load Audit Audit->PATH;	# optional: the audit log
 	if(audit != nil)
 		audit->init();
+
+	# -g n: offer no group below RFC 3526's group n (14, 15 or 16)
+	if(args != nil)
+		args = tl args;
+	for(; args != nil; args = tl args){
+		if(hd args == "-g" && tl args != nil){
+			args = tl args;
+			mingroup = int hd args;
+			(gp, nil) := login->group(mingroup);
+			if(gp == nil)
+				fatal("-g: no group " + hd args + " (14, 15 or 16)");
+		}else
+			fatal("usage: logind [-g group]");
+	}
 
 	(err, c) := ssl->connect(sys->fildes(0));     
 	if(c == nil)
@@ -117,46 +102,69 @@ init(nil: ref Draw->Context, nil: list of string)
 	kill(tpid, "kill");
 }
 
+# What is said to the client is at most 63 bytes: Keyring's getstring
+# keeps no more of an error.
 dologin(c: ref Sys->Connection): string
 {
-	ivec: array of byte;
-
 	(info, err) := signerkey("/keydb/signerkey");
-	if(info == nil)
-		return "can't read signer's own key: "+err;
+	if(info == nil){
+		sys->fprint(stderr, "logind: can't read signer's own key: %s\n", err);
+		return "login service unavailable";
+	}
 
-	# get user name; ack
+	# The user's name, which must be one account name before it is
+	# acknowledged, counted, looked up or signed: "carol/." was carol to
+	# keyfs and somebody else to the throttle, and "../../tmp/x" took the
+	# password from a file of anybody's.
 	s: string;
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return err;
 	name := s;
+	err = login->okname(name);
+	if(err != nil){
+		auditlog("authfail", "reason=badname");
+		sys->fprint(stderr, "logind: refused a name: %s\n", err);
+		return "bad user name";
+	}
 	kr->putstring(c.dfd, name);
 
-	# get initialization vector: its length says the client's AEAD
-	# (login.b): 32 bytes, ChaCha20-Poly1305; 44, AES-256-GCM (CNSA)
-	(ivec, err) = kr->getbytearray(c.dfd);
+	# The client's hello: version, suite, its nonce.  The old exchange
+	# sent an ivec of 32 or 44 bytes here; it is not spoken, and nothing
+	# is negotiated down to it.
+	hello: array of byte;
+	(hello, err) = kr->getbytearray(c.dfd);
 	if(err != nil)
-		return "can't get initialization vector: "+err;
-	gcm := 0;
-	case len ivec {
-	32 =>
+		return "can't get hello: "+err;
+	if(len hello == 32 || len hello == 44)
+		return "signer speaks login version 2; update the client (login(6))";
+	if(len hello != 2+Login->Noncelen || int hello[0] != Login->Version)
+		return "bad hello: signer speaks login version 2 (login(6))";
+	suite := int hello[1];
+	gid := mingroup;
+	case suite {
+	Login->Chacha =>
 		if(cnsamode())
-			return "CNSA mode: this signer takes AES-256-GCM logins only; set cnsamode on the client";
-	44 =>
-		gcm = 1;
+			return "CNSA mode: AES-256-GCM logins only; set cnsamode on the client";
+	Login->Aesgcm =>
+		if(gid < 15)
+			gid = 15;	# CNSA: 3072 bits at least
 	* =>
-		return "bad initialization vector length";
+		return "unknown login suite";
 	}
-	nsalt := len ivec - 12;
+	(p, n) := login->group(gid);
+	hlen := Keyring->SHA256dlen;
+	if(suite == Login->Aesgcm)
+		hlen = Keyring->SHA384dlen;
 
 	# The throttle, before the password is looked up or any exchange:
 	# a name in its cooldown is refused, and this attempt is counted
 	# until the client proves the password (cleared below).
-	key := failkey(name);
-	(rem, terr) := charge(name, key);
-	if(terr != nil)
-		return "login throttle: " + terr;
+	(rem, terr) := login->charge("logind", name);
+	if(terr != nil){
+		sys->fprint(stderr, "logind: login throttle: %s\n", terr);
+		return "login service unavailable";
+	}
 	if(rem > 0){
 		sys->fprint(stderr, "logind: refused %q: locked for %ds more\n", name, rem);
 		auditlog("authlock", sys->sprint("user=%s reason=throttled remaining=%d", auditval(name), rem));
@@ -165,13 +173,13 @@ dologin(c: ref Sys->Connection): string
 
 	# Look up the password and expiry. A name that cannot log in -- no
 	# account, one keyfs(4) refuses the secret of (disabled, expired),
-	# an entry not a SHA-256, no expiry -- is answered as a wrong
-	# password is: the exchange goes on under a random stand-in for the
-	# password's SHA-256, which no client has, so it fails to decrypt
-	# alpha**r0 and says "name or secret incorrect", as for a real name
-	# with a wrong password. The reason goes to the console alone, and
-	# both paths do the same work: both lookups, the key derivation, the
-	# expmods, the same messages.
+	# an entry not a SHA-256, no expiry, the signer's own name -- is
+	# answered as a wrong password is: the exchange goes on under a
+	# random stand-in for the password's SHA-256, which no client has, so
+	# its proof fails and it is told "name or secret incorrect", as for a
+	# real name with a wrong password. The reason goes to the console
+	# alone, and both paths do the same work: both lookups, the key
+	# derivation, the expmods, the same messages.
 	pw := getsecret(s);
 	why := "";
 	if(pw == nil)
@@ -181,6 +189,11 @@ dologin(c: ref Sys->Connection): string
 		why = "bad password for "+s+": not SHA256 hashed?";
 	if(why == nil && userexp < 0)
 		why = sys->sprint("expiry time for %s: %r", s);
+	# The signer's own name is certified by its key file alone: a
+	# server that shows a certificate in that name (keysrv(4)) is taken
+	# for the signer.
+	if(why == nil && name == info.mypk.owner)
+		why = "the signer's own name is not an account's";
 	if(why != nil){
 		sys->fprint(stderr, "logind: %s; answered as a wrong password\n", why);
 		auditlog("authfail", sys->sprint("user=%s reason=unusable", auditval(name)));
@@ -189,109 +202,114 @@ dologin(c: ref Sys->Connection): string
 		pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
 		userexp = 0;
 	}
+	pw = pw[0:Keyring->SHA256dlen];
 
-	# generate our random diffie hellman part
-	bits := info.p.bits();
-	r0 := kr->IPint.random(bits/4, bits);
+	# Our Diffie-Hellman value, 2**r0 mod p, or p less it as a coin
+	# falls.  2 generates the squares, so 2**r0 alone is always a
+	# square, and whether a number is one can be computed: a guessed
+	# password that unmasked the message below to a non-square would be
+	# known wrong, half of them from each login watched.  With the sign
+	# the value is uniform over 2..p-2, as a wrong guess's is (p's top
+	# 64 bits are ones); the 2 in the exponents below takes it off.
+	r0 := login->exponent(p);
+	x := IPint.inttoip(2).expmod(r0, p);
+	if(int login->nonce()[0] & 1)
+		x = p.sub(x);
 
-	# generate alpha0 = alpha**r0 mod p
-	alphar0 := info.alpha.expmod(r0, info.p);
+	# CA->user: version, suite, group, our nonce, and x under the
+	# password's keystream: no tag, nothing a guess can be checked
+	# against.  Our nonce is in the keystream's derivation, so the same
+	# hello sent again gets another keystream.
+	reply := array[3+Login->Noncelen+n] of byte;
+	reply[0] = byte Login->Version;
+	reply[1] = byte suite;
+	reply[2] = byte gid;
+	reply[3:] = login->nonce();
+	reply[3+Login->Noncelen:] = login->mask(suite, gid, name, pw, hello[2:], reply[3:3+Login->Noncelen], login->bebytes(x, n));
+	if(kr->putbytearray(c.dfd, reply, len reply) < 0)
+		return sys->sprint("can't send masked (2**r0 mod p): %r");
 
-	# The AEAD's key from the stored SHA-256 of the password and the
-	# salt, by HKDF as login.b derives it (loginkey).
-	aeadkey := loginkey(gcm, pw[0:Keyring->SHA256dlen], ivec[0:nsalt]);
-	nonce := ivec[nsalt:];
+	# user->CA: 2**r1 mod p and the client's proof.  Nothing made from
+	# the secret leaves here before the proof is checked: what was sent
+	# next under the secret's keys let a client that had chosen r1 try
+	# passwords against it at leisure.
+	msg: array of byte;
+	(msg, err) = kr->getbytearray(c.dfd);
+	if(err != nil){
+		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
+		return "can't get 2**r1 mod p: "+err;
+	}
+	if(len msg != n+hlen){
+		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
+		return "bad Diffie-Hellman message";
+	}
 
-	# Send AEAD-encrypted alpha**r0 mod p
-	plaintext := array of byte alphar0.iptob64();
-	ciphertext, authtag: array of byte;
-	if(gcm)
-		(ciphertext, authtag) = kr->aesgcmencrypt(kr->aesgcmsetup(aeadkey, nonce), plaintext, nil);
-	else
-		(ciphertext, authtag) = kr->ccpolyencrypt(plaintext, nil, aeadkey, nonce);
-	if(kr->putbytearray(c.dfd, ciphertext, len ciphertext) < 0)
-		return sys->sprint("can't send encrypted (alpha**r0 mod p): %r");
-	if(kr->putbytearray(c.dfd, authtag, len authtag) < 0)
-		return sys->sprint("can't send auth tag: %r");
+	# The client's value must be one whose powers are not known to
+	# all: with 0, 1 or p-1 (or p+1, which is 1) the secret was 0, 1 or
+	# p-1 whatever r0 was, and a certificate went to anybody for any
+	# name.  The range is SP 800-56A's (5.6.2.3.1); the order needs no
+	# test, since p is a safe prime and the exponent is 2*r0: what is
+	# left of any value in range is of order q.
+	y := IPint.bytestoip(msg[0:n]);
+	if(!login->inrange(y, p)){
+		auditlog("authfail", sys->sprint("user=%s reason=badvalue", auditval(name)));
+		return "bad Diffie-Hellman value";
+	}
+	z := login->bebytes(y.expmod(r0.shl(1), p), n);
+	(cproof, sproof, sk) := login->keys(suite, name, pw, hello, reply, msg[0:n], z);
 
-	# send alpha, p
-	if(kr->putstring(c.dfd, info.alpha.iptob64()) < 0 ||
-	   kr->putstring(c.dfd, info.p.iptob64()) < 0)
-		return sys->sprint("can't send alpha, p: %r");
+	# A name that cannot log in: no client has the stand-in, so none
+	# has the proof; if one did, it is still refused, uncleared, unsigned.
+	if(why != nil || !login->same(cproof, msg[n:])){
+		if(why == nil)
+			auditlog("authfail", sys->sprint("user=%s reason=secret", auditval(name)));
+		return "name or secret incorrect";
+	}
 
-	# get alpha**r1 mod p
-	(s, err) = kr->getstring(c.dfd);
-	if(err != nil)
-		return "can't get alpha**r1 mod p:"+err;
-	alphar1 := kr->IPint.b64toip(s);
-
-	# compute alpha**(r0*r1) mod p
-	alphar0r1 := alphar1.expmod(r0, info.p);
-
-	# protect the rest: aes_256_gcm, each way under its own secret
-	(secretin, secretout) := ssl->secrets(alphar0r1.iptobytes(), 0);
+	# The client has the secret, which only the password gives: the
+	# attempt is not a failure.  Our proof, then the rest under
+	# aes_256_gcm, each way under its own secret.
+	login->cleared("logind", name);
+	if(kr->putbytearray(c.dfd, sproof, len sproof) < 0)
+		return sys->sprint("can't send proof: %r");
+	(secretin, secretout) := ssl->secrets(sk, 0);
 	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
 		return "can't set secrets: "+err;
 	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
 		return sys->sprint("can't push alg aes_256_gcm: %r");
 
-	# send our public key
+	# send our public key, and the alpha and p of our key file: they
+	# are not this exchange's (which uses login(6)'s groups whatever
+	# the file has) but auth(2)'s, between holders of our certificates
 	if(kr->putstring(c.dfd, kr->pktostr(kr->sktopk(info.mysk))) < 0)
 		return sys->sprint("can't send signer's public key: %r");
+	if(kr->putstring(c.dfd, info.alpha.iptob64()) < 0 ||
+	   kr->putstring(c.dfd, info.p.iptob64()) < 0)
+		return sys->sprint("can't send alpha, p: %r");
 
 	# get his public key
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return "client public key: "+err;
-
-	# A name that cannot log in: no client has the stand-in, so none
-	# gets here; if one did, it is still refused, uncleared, unsigned.
-	if(why != nil)
-		return why;
-
-	# The client's key came under the session's secrets: it has
-	# alpha**(r0*r1), so it had the password. The attempt is not a failure.
-	cleared(key);
 	hisPKbuf := array of byte s;
 	hisPK := kr->strtopk(s);
+	if(hisPK == nil)
+		return "client's public key is not a key";
 	if(hisPK.owner != name)
 		return "pk name doesn't match user name";
 
 	# sign and return
 	state := certdigest(info.mysk, hisPKbuf);
 	cert := kr->sign(info.mysk, userexp, state, certhash(info.mysk));
+	if(cert == nil)
+		return "can't sign";
 
 	if(kr->putstring(c.dfd, kr->certtostr(cert)) < 0)
 		return sys->sprint("can't send certificate: %r");
+	auditlog("authok", sys->sprint("user=%s exp=%d", auditval(name), userexp));
 
 	return nil;
-}
-
-# The AEAD key: HKDF-SHA-256 for ChaCha20-Poly1305, HKDF-SHA-384 for
-# AES-256-GCM, 32 bytes either way; login.b's loginkey, the client's.
-loginkey(gcm: int, ikm, salt: array of byte): array of byte
-{
-	info := "infernode login aead";
-	dlen := Keyring->SHA256dlen;
-	if(gcm){
-		info = "infernode login aes-256-gcm";
-		dlen = Keyring->SHA384dlen;
-	}
-	prk := array[dlen] of byte;
-	t := array[dlen] of byte;
-	inf := array of byte info;
-	ex := array[len inf + 1] of byte;
-	ex[0:] = inf;
-	ex[len inf] = byte 1;
-	if(gcm){
-		kr->hmac_sha384(ikm, len ikm, salt, prk, nil);
-		kr->hmac_sha384(ex, len ex, prk, t, nil);
-	}else{
-		kr->hmac_sha256(ikm, len ikm, salt, prk, nil);
-		kr->hmac_sha256(ex, len ex, prk, t, nil);
-	}
-	return t[0:32];
 }
 
 # CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.
@@ -393,17 +411,6 @@ getexpiry(id: string): int
 	return int s;
 }
 
-failkey(name: string): string
-{
-	b := array of byte name;
-	d := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(b, len b, d, nil);
-	h := "";
-	for(i := 0; i < len d; i++)
-		h += sys->sprint("%.2ux", int d[i]);
-	return h;
-}
-
 auditlog(event, msg: string)
 {
 	if(audit != nil)
@@ -417,189 +424,6 @@ auditval(s: string): string
 	if(audit == nil)
 		return "";
 	return audit->value(s);
-}
-
-# Count an attempt for key: the seconds it is still refused for (and
-# then it is not counted), or 0 and the attempt counted. Counts reach
-# Maxfail at most, and only one at Maxfail is refused.
-charge(name, key: string): (int, string)
-{
-	(lk, err) := failock();
-	if(lk == nil)
-		return (0, err);
-	now := daytime->now();
-	fl := prune(loadfails(), now);
-	e: ref Fail;
-	for(l := fl; l != nil; l = tl l)
-		if((hd l).key == key){
-			e = hd l;
-			break;
-		}
-	if(e != nil && e.fails >= Maxfail){
-		# Maxfail attempts in a row, none proving the password: refused
-		# for Locksecs from the last of them. The lock is set here, by
-		# the attempt after them, so a last that worked locks nothing.
-		if(e.until == 0){
-			e.until = e.last + Locksecs;
-			if(e.until > now){
-				sys->fprint(stderr, "logind: %q locked after %d attempts not proving the password (%ds)\n", name, e.fails, Locksecs);
-				auditlog("authlock", sys->sprint("user=%s fails=%d locksecs=%d", auditval(name), e.fails, Locksecs));
-				err = storefails(fl);
-				if(err != nil)
-					return (0, err);
-			}
-		}
-		if(e.until > now)
-			return (e.until - now, nil);	# lk let go as it goes
-		e.fails = 0;	# the cooldown is over: a fresh count
-		e.until = 0;
-	}
-	if(e == nil){
-		e = ref Fail(key, 0, 0, 0);
-		fl = e :: fl;
-	}
-	e.fails++;
-	e.last = now;
-	err = storefails(fl);
-	lk = nil;
-	if(err != nil)
-		return (0, err);
-	return (0, nil);
-}
-
-# The password proved: key's count gone.
-cleared(key: string)
-{
-	(lk, err) := failock();
-	if(lk == nil){
-		sys->fprint(stderr, "logind: can't clear a count: %s\n", err);
-		return;
-	}
-	fl := loadfails();
-	nl: list of ref Fail;
-	found := 0;
-	for(; fl != nil; fl = tl fl)
-		if((hd fl).key == key)
-			found = 1;
-		else
-			nl = hd fl :: nl;
-	if(found){
-		err = storefails(nl);
-		if(err != nil)
-			sys->fprint(stderr, "logind: can't clear a count: %s\n", err);
-	}
-	lk = nil;
-}
-
-# The counts still to keep at now: a lock run out and a count left
-# Forgetsecs gone; past Maxentries unlocked, the oldest of those gone.
-prune(fl: list of ref Fail, now: int): list of ref Fail
-{
-	locked, open: list of ref Fail;
-	nopen := 0;
-	for(; fl != nil; fl = tl fl){
-		e := hd fl;
-		if(e.fails >= Maxfail){
-			until := e.until;
-			if(until == 0)
-				until = e.last + Locksecs;
-			if(until > now)
-				locked = e :: locked;
-		}else if(now - e.last < Forgetsecs){
-			open = e :: open;
-			nopen++;
-		}
-	}
-	if(nopen > Maxentries){
-		a := array[nopen] of ref Fail;
-		i := 0;
-		for(; open != nil; open = tl open)
-			a[i++] = hd open;
-		sortlast(a);
-		for(i = nopen - Maxentries; i < nopen; i++)
-			open = a[i] :: open;
-	}
-	for(; open != nil; open = tl open)
-		locked = hd open :: locked;
-	return locked;
-}
-
-# oldest first, by last (Shell's sort)
-sortlast(a: array of ref Fail)
-{
-	for(gap := len a / 2; gap > 0; gap /= 2)
-		for(i := gap; i < len a; i++)
-			for(j := i - gap; j >= 0 && a[j].last > a[j+gap].last; j -= gap)
-				(a[j], a[j+gap]) = (a[j+gap], a[j]);
-}
-
-# Failfile's counts; a line that is not one (a torn write) is left out.
-loadfails(): list of ref Fail
-{
-	fd := sys->open(failfile, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	data := "";
-	buf := array[Sys->ATOMICIO] of byte;
-	while((n := sys->read(fd, buf, len buf)) > 0)
-		data += string buf[0:n];
-	fl: list of ref Fail;
-	(nil, lines) := sys->tokenize(data, "\n");
-	for(; lines != nil; lines = tl lines){
-		(nf, f) := sys->tokenize(hd lines, " ");
-		if(nf != 4 || len hd f != 2*Keyring->SHA256dlen)
-			continue;
-		e := ref Fail(hd f, int hd tl f, int hd tl tl f, int hd tl tl tl f);
-		if(e.fails <= 0)
-			continue;
-		fl = e :: fl;
-	}
-	return fl;
-}
-
-storefails(fl: list of ref Fail): string
-{
-	fd := sys->create(failfile, Sys->OWRITE, 8r600);
-	if(fd == nil)
-		return sys->sprint("can't write %s: %r", failfile);
-	s := "";
-	for(; fl != nil; fl = tl fl){
-		e := hd fl;
-		s += sys->sprint("%s %d %d %d\n", e.key, e.fails, e.last, e.until);
-	}
-	b := array of byte s;
-	if(sys->write(fd, b, len b) != len b)
-		return sys->sprint("can't write %s: %r", failfile);
-	return nil;
-}
-
-# Failfile.lock, made exclusively and removed when its fd goes; one
-# older than Lockstale (a host that went down holding it) is removed.
-failock(): (ref Sys->FD, string)
-{
-	lf := failfile + ".lock";
-	t0 := sys->millisec();
-	for(;;){
-		fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
-		if(fd != nil)
-			return (fd, nil);
-		err := sys->sprint("%r");
-		(ok, d) := sys->stat(lf);
-		if(ok < 0){
-			# not made and not there: the directory refuses it, unless
-			# a holder let go between the two
-			fd = sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
-			if(fd != nil)
-				return (fd, nil);
-			(ok, nil) = sys->stat(lf);
-			if(ok < 0)
-				return (nil, sys->sprint("can't make %s: %s", lf, err));
-		}else if(daytime->now() - d.mtime > Lockstale)
-			sys->remove(lf);
-		if(sys->millisec() - t0 > Lockwait)
-			return (nil, sys->sprint("%s held for %d ms", lf, Lockwait));
-		sys->sleep(10);
-	}
 }
 
 stalker(pidc: chan of int, killpid: int)

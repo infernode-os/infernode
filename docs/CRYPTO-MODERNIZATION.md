@@ -84,7 +84,7 @@ After these changes:
 - **Signatures:** Ed25519 provides 128-bit security with deterministic signatures
 - **Certificates:** SHA-256 hash prevents collision attacks
 - **Key exchange:** 2048-bit DH provides ~112-bit security
-- **Login EKE:** ChaCha20-Poly1305 AEAD with 256-bit key (replaces RC4-40)
+- **Login EKE:** login(6) version 2: nothing a guessed password can be tested against (see "Login: version 2")
 - **SSL3 negotiation:** Weak ciphers rejected during handshake (no downgrade)
 - **Revocation:** CRL-based certificate revocation checking
 - **Transport:** WireGuard + Rosenpass handles (external to Inferno)
@@ -105,6 +105,11 @@ The login EKE protocol's temporary encryption of the DH exchange now uses ChaCha
 - `appl/cmd/auth/logind.b` - Server-side AEAD encryption
 
 **Breaking change:** Clients and servers must both be updated. Old clients cannot authenticate with new servers and vice versa.
+
+**Superseded by login version 2** (below, "Login: version 2"). Sealing the
+signer's Diffie-Hellman value with an AEAD gave anybody who asked for it a
+tag to test passwords against; the value now goes under the cipher's
+keystream with no tag.
 
 ### 6. SSL3 Weak Cipher Suite Rejection (Phase 5)
 
@@ -161,7 +166,7 @@ SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the 
    - Clients must re-authenticate to get new certificates
 
 3. **Update all clients and servers together:**
-   - Login protocol now uses ChaCha20-Poly1305 AEAD (incompatible with RC4 version)
+   - Login is version 2 of `login(6)` (incompatible with every exchange before it)
    - Both `login.b` (client) and `logind.b` (server) must be updated simultaneously
 
 4. **Install CRLs (optional):**
@@ -170,7 +175,7 @@ SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the 
 
 ### For New Deployments
 
-No action needed - Ed25519, SHA-256, and AEAD login are the defaults.
+No action needed - Ed25519, SHA-256, and login version 2 are the defaults.
 
 ## Testing
 
@@ -516,14 +521,41 @@ Under it:
   checked against NIST's CAVP vectors before its first output. ChaCha20,
   which it replaced, is on no NIST or CNSA list. See
   [TLS-ENTROPY.md](TLS-ENTROPY.md).
-- **Login in CNSA mode** seals its Diffie-Hellman value with AES-256-GCM
-  under HKDF-SHA-384 rather than ChaCha20-Poly1305; a signer in CNSA mode
-  refuses the latter and says why.
+- **Login in CNSA mode** hides its Diffie-Hellman value under AES-256-GCM's
+  keystream with HKDF-SHA-384 rather than ChaCha20's with HKDF-SHA-256, in a
+  group of 3072 bits or more; a signer in CNSA mode refuses the latter and
+  says why. (See "Login: version 2".)
 
 Tests: `tests/ssl_record_test.b`, `tests/ssl_transport_test.b`,
 `tests/libsec_kat_test.b`, `tests/login_test.b`,
 `tests/host/armcrypto_test.sh`, `tests/host/kernrandom_test.sh`,
 `tests/host/emurandom_test.sh`.
+
+## Login: version 2
+
+`login(6)` is Bellovin and Merritt's encrypted key exchange with the signer's
+Diffie-Hellman value alone encrypted. A review found that three of that
+protocol's properties had been lost and one had never been there:
+
+| What was wrong | What a peer could do | Now |
+|----------------|----------------------|-----|
+| The signer's value was sealed by an AEAD under the password's key, and sent to anybody who gave a name | Try passwords offline against one reply: the right one's tag verifies | The value is sent under the AEAD's keystream with no tag, with a random sign, in a group whose prime begins with 64 one bits: every password unmasks it to a number a signer could have sent |
+| The key and nonce of that message came from the client's ivec alone | Have the signer encrypt new values under one keystream | The signer's own 32 random bytes are in the key derivation |
+| The signer spoke next, under the session's keys, to a client that had proved nothing | Choose r1 and try passwords against that message | The client sends a proof made from the secret, the password and everything said; the signer checks it before it sends anything made from the secret, then proves itself |
+| Neither end checked the other's Diffie-Hellman value | Send 0, 1 or p-1 and be issued a certificate for any account with no password | Both refuse a value outside 2..p-2 (SP 800-56A 5.6.2.3.1), and the exponents carry the cofactor 2 |
+| The client took alpha and p from whoever answered, with no floor | A relay sent p = 2 and was taken for the signer | The groups are RFC 3526's 14, 15 and 16, held by both ends and named by number; 2048 bits at least, 3072 in CNSA mode |
+| A name was used as a path and as the throttle's key as it came | `carol/.` logged in as carol with a count of its own; `../../tmp/x` took its password from a file | One rule for an account name (`Login->okname`), applied before a name is acknowledged, counted, looked up or signed |
+
+The signer's key file still carries an `alpha` and `p`; they are not used by
+the login exchange and reach the client under the session's keys, for
+`auth(2)`.
+
+**Breaking change:** both ends must speak version 2. Nothing is negotiated:
+an old client is told `signer speaks login version 2`, and a new client
+given the old signer's answer says the signer speaks the old exchange.
+Password entries (`keyfs`) and certificates already issued are unchanged.
+
+Tests: `tests/login_test.b`, `tests/host/login_test.sh`.
 
 ## Security Properties (Updated)
 

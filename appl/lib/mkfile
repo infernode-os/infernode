@@ -32,7 +32,6 @@ TARG=\
 	attrdb.dis\
 	attrhash.dis\
 	auth.dis\
-	auth9.dis\
 	bloomfilter.dis\
 	bthci.dis\
 	btmock.dis\
@@ -117,7 +116,6 @@ TARG=\
 	sdrdsp.dis\
 	garminav.dis\
 	ninep.dis\
-	oldauth.dis\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
@@ -224,7 +222,6 @@ SYSMODULES=\
 	xenithwin.m\
 	asn1.m\
 	attrdb.m\
-	auth9.m\
 	bloomfilter.m\
 	bthci.m\
 	btmock.m\
@@ -239,7 +236,6 @@ SYSMODULES=\
 	cfgfile.m\
 	complete.m\
 	crc.m\
-	crypt.m\
 	csv.m\
 	daytime.m\
 	dbm.m\
@@ -308,7 +304,6 @@ SYSMODULES=\
 	gdl90.m\
 	sdrdsp.m\
 	garminav.m\
-	oldauth.m\
 	pkcs.m\
 	plumbing.m\
 	plumbmsg.m\

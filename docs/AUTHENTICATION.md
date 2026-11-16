@@ -473,7 +473,7 @@ Factotum exposes four files at `/mnt/factotum`:
 | File      | Mode  | Purpose                                                          |
 |-----------|-------|------------------------------------------------------------------|
 | `ctl`     | rw    | Add/remove keys; `sync`; `secstore <addr> <user> <pass>`         |
-| `proto`   | r     | List of known auth protocols (`pass`, `p9sk1`, …)                |
+| `proto`   | r     | List of known auth protocols (`pass`, `sign`, …)                 |
 | `rpc`     | rw    | Per-protocol RPC for delegated auth                              |
 | `needkey` | r     | Notification when factotum needs a key it does not have          |
 

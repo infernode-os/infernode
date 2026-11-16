@@ -1,7 +1,6 @@
 <../../../../../mkconfig
 
 TARG=\
-	p9any.dis\
 	pass.dis\
 	sign.dis\
 	wpapsk.dis\
@@ -18,7 +17,6 @@ SYSMODULES=\
 	draw.m\
 	bufio.m\
 	string.m\
-	auth9.m\
 	daytime.m\
 	encoding.m\
 

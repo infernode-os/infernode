@@ -231,7 +231,9 @@ HMAC-SHA1 remains where a protocol still names it (HMAC-SHA1 is still considered
      longer read by a login: move it once with `auth/secstore m factotum`.
    - `svc/auth` no longer starts `auth/signer` and `auth/countersigner`
      (signer(8) says how to start them on purpose).
-   - `p9any` needs `authdom=dom auth=server` in ndb for each domain.
+   - `p9any` and `p9sk1` are gone (their tickets are DES): nothing
+     authenticates to a Plan 9 system, and `9export` serves one only
+     with `-A`.
 
 4. **Install CRLs (optional):**
    - Place DER-encoded CRL files in `/lib/crls/` for revocation checking
@@ -569,7 +571,8 @@ bare-metal cpu listener) takes it.
 
 **Breaking change:** both ends must run 0.10.1 or later. `9cpu`, `import` and
 `9export`, which speak to Plan 9 (p9sk1, a 56-bit key), refuse encryption
-and run in the clear without `-e`. `crypt(1)` uses AES-256-GCM with
+and run in the clear without `-e` (since then p9sk1 itself has gone, with
+DES: see factotum(4)). `crypt(1)` uses AES-256-GCM with
 PBKDF2-HMAC-SHA-384 and a salt per file.
 
 Under it:

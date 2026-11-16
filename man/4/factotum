@@ -106,14 +106,6 @@ any particular authentication protocol.
 .I Factotum
 currently supports the following protocols:
 .TF mschap
-.TP
-.B p9any
-a metaprotocol used to negotiate which actual protocol to use.
-.TP
-.B p9sk1
-a Plan 9 shared key protocol described in
-.I authsrv
-in section 6 of Plan 9's Programmer's Manual
 .\" .TP
 .\" .B p9sk2
 .\" a variant of
@@ -212,7 +204,7 @@ See the `Protocols' section below.
 Here are some examples:
 .PP
 .EX
-    proto=p9sk1 dom=avayalabs.com user=presotto !password=lucent
+    proto=wpapsk role=client essid=home !password=correct.horse.battery
     proto=pass user=tb !password=does.it.matter
 .EE
 .PP
@@ -334,10 +326,7 @@ public attributes match (ie, non
 attributes).
 The key is first given to its protocol's module to check, if its
 .B proto
-has one (a
-.B p9sk1
-key goes to
-.BR p9any ),
+has one,
 and a key the protocol could never use is refused with the reason:
 see each protocol below.
 A key whose
@@ -695,72 +684,32 @@ module in the directory
 .BR /dis/auth/proto .
 Currently only a few are implemented in Inferno:
 .PP
-.BR P9sk1
-is the shared-secret protocol used to authenticate to various Plan 9 services.
-It requires a key with
-.BR proto = p9sk1 ,
-a
-.B dom
-attribute identifying the authentication domain, a
-.B user
-name valid in that domain, and either a
-.B !password
-or
-.B !hex
-attribute specifying the password or hexadecimal secret
-to be used.
-.B P9sk1
-normally is invoked by Plan 9's general authentication protocol,
-.BR p9any ,
-which is supported by Inferno's
-.IR factotum .
-Only the client's side of
+.B P9any
+and
+.BR p9sk1 ,
+Plan 9's general authentication protocol and its shared-key protocol,
+are not implemented:
+.BR p9sk1 's
+tickets are encrypted with DES, which the system no longer has, and
 .B p9any
-is implemented
-.RB ( role=server
-is refused).
-Of the domains a server offers,
-.B p9any
-takes the first for which there is a
-.B p9sk1
-key matching the attributes the caller gave
-(a
-.B user
-or
-.B dom
-attribute chooses among several keys).
-The offered domains are looked at without asking anybody; only if none has a key is
-an agent reading
-.B needkey
-asked for one, for the first domain offered.
-The server's ticket request must then be for the domain negotiated, or
-.B p9sk1
-stops before it asks anything of anybody:
-the key is found by that domain, and the authentication server is the one
-the network database names for it
-.RB ( "authdom=\fIdom\fP auth=\fIserver\fP" ,
-see
-.IR ndb (6)).
-A domain with no authentication server named has none;
-the machine's own
-.B $auth
-is not asked in its place.
-The ticket that comes back must carry the server's challenge and the user it was asked for.
+offered nothing else.
+A
+.B start
+naming either is refused, saying so.
+That is what a 9P server asking for authentication in the protocol
+(a Plan 9 file server; see
+.IR sys-fauth (2))
+and the commands that speak to Plan 9
+.RB ( import
+and
+.B 9export
+of
+.IR import (4),
+.BR 9cpu )
+now get.
 A
 .B p9sk1
-key without
-.BR dom ,
-.B user
-or a
-.B !password
-(or a
-.B !hex
-of 14 digits) is refused when it is stored.
-.B P9sk1
-needs DES, which is in the
-.B $Crypt
-module of the Windows and Plan 9 hosted emulators only;
-elsewhere it stops at the ticket.
+key is kept, as any key whose protocol has no module is, and nothing uses it.
 .PP
 A request
 .RB ( start )

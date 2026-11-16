@@ -318,7 +318,6 @@ appl
 				feedkey.b
 				proto
 					mkfile
-					p9any.b
 					pass.b
 				rpc.b
 			getpk.b
@@ -782,7 +781,6 @@ appl
 		attrdb.b
 		attrhash.b
 		auth.b
-		auth9.b
 		bloomfilter.b
 		bufio.b
 		cfg.b
@@ -1371,7 +1369,6 @@ dis
 		attrdb.dis
 		attrhash.dis
 		auth.dis
-		auth9.dis
 		bloomfilter.dis
 		bufio.dis
 		cfg.dis
@@ -1953,7 +1950,6 @@ module
 	arg.m
 	asn1.m
 	attrdb.m
-	auth9.m
 	bench.m
 	bloomfilter.m
 	brutus.m

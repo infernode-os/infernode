@@ -4,13 +4,24 @@
 
 // Gordon's algorithm for generating a strong prime
 //	Menezes et al () Handbook, p.150
+// The prime has n bits, and 64 if fewer are asked for.  (It had n or
+// n-1 as its parts fell: the steps are repeated until it has n.)
+static void	gordon(mpint*, int, int);
+
 void
 genstrongprime(mpint *p, int n, int accuracy)
 {
-	mpint *s, *t, *r, *i;
-
 	if(n < 64)
 		n = 64;
+	do
+		gordon(p, n, accuracy);
+	while(mpsignif(p) != n);
+}
+
+static void
+gordon(mpint *p, int n, int accuracy)
+{
+	mpint *s, *t, *r, *i;
 
 	s = mpnew(n/2);
 	genprime(s, (n/2)-16, accuracy);

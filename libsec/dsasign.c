@@ -18,7 +18,9 @@ dsasign(DSApriv *priv, mpint *m)
 	k = mpnew(0);
 	mpsub(pub->q, mpone, qm1);
 
-	// find a k that has an inverse mod q
+	// find a k that has an inverse mod q, and for which neither r nor
+	// s is 0 (FIPS 186-4 4.6: another k then).  An s of 0 was given
+	// out: no verifier takes it, and it tells the secret (-m/r mod q).
 	while(1){
 		mprand(qlen, genrandom, k);
 		if((mpcmp(mpone, k) > 0) || (mpcmp(k, pub->q) >= 0))
@@ -34,21 +36,25 @@ dsasign(DSApriv *priv, mpint *m)
 			mpfree(s);
 			sysfatal("dsasign: pub->q not prime");
 		}
+
+		// make kinv positive
+		mpmod(kinv, pub->q, kinv);
+
+		// r = ((alpha**k) mod p) mod q
+		mpexp(alpha, k, p, r);
+		mpmod(r, q, r);
+		if(r->top == 0)
+			continue;
+
+		// s = (kinv*(m + ar)) mod q
+		mpmul(r, priv->secret, s);
+		mpadd(s, m, s);
+		mpmul(s, kinv, s);
+		mpmod(s, q, s);
+		if(s->top == 0)
+			continue;
 		break;
 	}
-
-  	// make kinv positive
-	mpmod(kinv, pub->q, kinv);
-
-	// r = ((alpha**k) mod p) mod q
-	mpexp(alpha, k, p, r);
-	mpmod(r, q, r);
-
-	// s = (kinv*(m + ar)) mod q
-	mpmul(r, priv->secret, s);
-	mpadd(s, m, s);
-	mpmul(s, kinv, s);
-	mpmod(s, q, s);
 
 	sig = dsasigalloc();
 	sig->r = r;

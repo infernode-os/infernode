@@ -3459,7 +3459,22 @@ dsapk2pub(DSApub* p, Keyring_DSApk* pk)
 static void
 dsagenok(DSApub *p)
 {
+	mpint *t;
+	int ok;
+
 	if(mpcmp(p->q, mpone) <= 0 || mpcmp(p->p, mptwo) <= 0)
+		error(exBadKey);
+	/*
+	 * q divides p-1, or they are no DSA key's (dsagen raised for it
+	 * with everything made).  That they are prime is dsagen's to ask,
+	 * with the VM let go: libsec/dsagen.c.
+	 */
+	t = mpnew(0);
+	mpsub(p->p, mpone, t);
+	mpmod(t, p->q, t);
+	ok = t->top == 0;
+	mpfree(t);
+	if(!ok)
 		error(exBadKey);
 }
 

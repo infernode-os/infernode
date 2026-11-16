@@ -44,10 +44,22 @@ dsa_str2sk(char *str, char **strp)
 	if(dsa->pub.p == nil || dsa->pub.q == nil ||
 	   dsa->pub.alpha == nil || dsa->pub.key == nil || dsa->secret == nil
 	|| !dsapubok(&dsa->pub)
-	|| mpcmp(dsa->secret, mpzero) <= 0 || mpcmp(dsa->secret, dsa->pub.q) >= 0
+	|| mpcmp(dsa->secret, mpzero) <= 0 || mpcmp(dsa->secret, dsa->pub.p) >= 0
 	|| !probably_prime(dsa->pub.q, 18)){
 		dsaprivfree(dsa);
 		return nil;
+	}
+	/*
+	 * a secret is from 1 to q-1.  dsagen drew it below p, and every
+	 * key it made was refused here: such a key's secret is taken mod
+	 * q, which signs as it did (alpha has order q)
+	 */
+	if(mpcmp(dsa->secret, dsa->pub.q) >= 0){
+		mpmod(dsa->secret, dsa->pub.q, dsa->secret);
+		if(dsa->secret->top == 0){
+			dsaprivfree(dsa);
+			return nil;
+		}
 	}
 	return dsa;
 }
@@ -164,7 +176,8 @@ dsa_gen(int len)
 static void*
 dsa_genfrompk(void *vpub)
 {
-	if(!dsapubok((DSApub*)vpub) || !probably_prime(((DSApub*)vpub)->q, 18))
+	/* what dsagen would raise for (see dsaparamsok): no key */
+	if(!dsapubok((DSApub*)vpub) || dsaparamsok(((DSApub*)vpub)->p, ((DSApub*)vpub)->q) < 0)
 		return nil;
 	return dsagen((DSApub*)vpub);
 }

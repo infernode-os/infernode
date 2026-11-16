@@ -669,7 +669,8 @@ struct DSAsig
 	mpint	*r, *s;
 };
 
-DSApriv*	dsagen(DSApub *opub);	/* opub not checked for consistency! */
+DSApriv*	dsagen(DSApub *opub);
+int		dsaparamsok(mpint *p, mpint *q);	/* 0 if p and q can be a key's: see dsagen.c */	/* opub not checked for consistency! */
 DSAsig*		dsasign(DSApriv *k, mpint *m);
 int		dsaverify(DSApub *k, DSAsig *sig, mpint *m);
 DSApub*		dsapuballoc(void);

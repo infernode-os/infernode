@@ -14,7 +14,10 @@ implement Vidjpeg;
 # decoded are kept, so the several reads one frame is read with decode
 # it once.  status and fmt are the feed's, read through; ctl is passed
 # to the feed's; layer/ is empty, as vid9p serves it, for layers bound
-# here.  Errors (frame expired) are the feed's.
+# here.  Errors (frame expired) are the feed's.  A feed turned while it is
+# read (camsrv(4)'s rotate) has JPEGs of another width and height from some
+# frame on, each saying its own: a reader of frame is told once, as camsrv
+# tells it, "format changed: <w> <h> i420 <fps>", and fmt says the newest.
 #
 
 include "sys.m";
@@ -46,7 +49,15 @@ WAYS: con 4;	# reads in flight for one frame's bytes
 Frm: adt {
 	n:	int;
 	b:	array of byte;	# I420, framesize bytes
+	w, h:	int;		# as its JPEG says
 };
+
+# a reader of frame, and the format it last had: fmt's when it opened
+Ses: adt {
+	fid:	int;
+	w, h:	int;
+};
+sess: list of ref Ses;
 
 stderr: ref Sys->FD;
 src: string;
@@ -56,7 +67,7 @@ kept: list of ref Frm;	# newest first
 busy: list of int;
 waiting: list of ref Tmsg.Read;
 srv: ref Styxserver;
-done: chan of (int, array of byte, string);
+done: chan of (int, ref Frm, string);
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -88,7 +99,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(index == nil || data == nil)
 		fatal(sys->sprint("can't open %s/jpeg: %r", src));
 	sys->pctl(Sys->NEWPGRP, nil);
-	done = chan of (int, array of byte, string);
+	done = chan of (int, ref Frm, string);
 
 	(tree, treeop) := nametree->start();
 	tree.create(big Qroot, dir(".", Sys->DMDIR|8r555, Qroot));
@@ -193,6 +204,16 @@ serve(tc: chan of ref Tmsg, tree: ref Tree)
 				# to the feed's ctl, from a process of its own: it may wait
 				spawn ctlwrite(tm);
 			}
+		Open =>
+			c := srv.open(tm);
+			if(c != nil && int c.path == Qframe)
+				sess = ref Ses(tm.fid, w, h) :: sess;
+		Clunk =>
+			dropses(tm.fid);
+			srv.default(tmsg);
+		Remove =>
+			dropses(tm.fid);
+			srv.default(tmsg);
 		Flush =>
 			still: list of ref Tmsg.Read;
 			for(l := waiting; l != nil; l = tl l)
@@ -206,8 +227,10 @@ serve(tc: chan of ref Tmsg, tree: ref Tree)
 	(n, b, e) := <-done =>
 		if(e != "later")
 			busy = remove(busy, n);
-		if(b != nil)
-			keep(n, b);
+		if(b != nil){
+			keep(b);
+			(w, h) = (b.w, b.h);	# fmt: the newest frame's
+		}
 		still, again: list of ref Tmsg.Read;
 		for(l := waiting; l != nil; l = tl l){
 			tm := hd l;
@@ -248,7 +271,7 @@ readframe(tm: ref Tmsg.Read)
 	n := int (tm.offset / big framesize);
 	for(l := kept; l != nil; l = tl l)
 		if((hd l).n == n){
-			replyframe(tm, (hd l).b);
+			replyframe(tm, hd l);
 			return;
 		}
 	start(n, tm);
@@ -273,8 +296,16 @@ later(n: int)
 	done <-= (n, nil, "later");
 }
 
-replyframe(tm: ref Tmsg.Read, b: array of byte)
+replyframe(tm: ref Tmsg.Read, f: ref Frm)
 {
+	for(l := sess; l != nil; l = tl l)
+		if((s := hd l).fid == tm.fid && (s.w != f.w || s.h != f.h)){
+			# turned since this reader last knew: once, saying how
+			(s.w, s.h) = (f.w, f.h);
+			srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", f.w, f.h, fps)));
+			return;
+		}
+	b := f.b;
 	o := int (tm.offset % big framesize);
 	k := len b - o;
 	if(k > tm.count)
@@ -282,9 +313,18 @@ replyframe(tm: ref Tmsg.Read, b: array of byte)
 	srv.reply(ref Rmsg.Read(tm.tag, b[o:o+k]));
 }
 
-keep(n: int, b: array of byte)
+dropses(fid: int)
 {
-	kept = ref Frm(n, b) :: kept;
+	r: list of ref Ses;
+	for(l := sess; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			r = hd l :: r;
+	sess = r;
+}
+
+keep(f: ref Frm)
+{
+	kept = f :: kept;
 	k: list of ref Frm;
 	i := 0;
 	for(l := kept; l != nil && i < NKEEP; l = tl l){
@@ -332,7 +372,8 @@ decode(n: int)
 		done <-= (n, nil, derr);
 		return;
 	}
-	if(dw != w || dh != h){
+	# a turned frame keeps framesize; any other size is not this feed's
+	if(len y + len u + len v != framesize){
 		done <-= (n, nil, sys->sprint("vidjpeg: frame %d is %dx%d, not %dx%d", n, dw, dh, w, h));
 		return;
 	}
@@ -340,7 +381,7 @@ decode(n: int)
 	b[0:] = y;
 	b[len y:] = u;
 	b[len y + len u:] = v;
-	done <-= (n, b, nil);
+	done <-= (n, ref Frm(n, b, dw, dh), nil);
 }
 
 member(l: list of int, n: int): int

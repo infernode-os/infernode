@@ -12,7 +12,13 @@ implement Camsrv;
 #                               for it. A live reader starts at the newest
 #                               (status frames= less one) and skips ahead
 #                               when it falls behind. Numbers run on across
-#                               the sensor going off and on.
+#                               the sensor going off and on. A frame of
+#                               another width and height than the reader's
+#                               last (rotate, while it reads) is refused
+#                               once, "format changed: <w> <h> i420 <fps>",
+#                               the format it has: the reader takes it and
+#                               reads the frame again. A quarter turn keeps
+#                               framesize, so frame N stays where it was.
 #   /mnt/video/0/raw      read  one frame as the sensor gave it, 16 bits a
 #                               sample little-endian, w*2 by h*2 pixels
 #                               scaled; its format is in status
@@ -21,7 +27,8 @@ implement Camsrv;
 #                               kept), and no pos=: a live feed
 #   /mnt/video/0/ctl      write mode W H | fps N | exposure LINES (0 = auto)
 #                               gain CODE | focus N | focus auto | flip N
-#                               rotate 0|90|180|270
+#                               rotate 0|90|180|270; all but mode and fps
+#                               while it streams
 #   /mnt/video/0/layer/   empty as served: what is drawn over the frames is
 #                               bound here, a file a layer (#1095, layers(2))
 #
@@ -106,6 +113,7 @@ seq := 0;		# frames made since camsrv started: the next frame's number
 base := 0;		# the first frame since the sensor last came on
 Ring: con 8;		# the frames kept, at 30 fps a quarter second
 ring := array[Ring] of (int, array of byte);
+ringdim := array[Ring] of (int, int);	# each kept frame's width and height, as served
 latest: array of byte;
 lastraw: array of byte;
 err := "";
@@ -116,13 +124,14 @@ Fsess: adt {
 	path:	int;
 	seq:	int;		# the last frame this fid took
 	fr:	array of byte;	# the frame it is in
+	w, h:	int;		# the format its reader has: fmt's when it opened, or the last "format changed"
 };
 sess: list of ref Fsess;
 parked: list of (ref Tmsg.Read, ref Fsess);
 users := 0;
 capstop: chan of int;
 capdone: chan of int;
-framec: chan of array of byte;
+framec: chan of (array of byte, int, int);
 rawc: chan of array of byte;
 errc: chan of string;
 ctlc: chan of string;
@@ -161,7 +170,7 @@ init(nil: ref Draw->Context, args: list of string)
 			height = 162;
 		}
 	fsize = framesize();
-	framec = chan of array of byte;
+	framec = chan of (array of byte, int, int);
 	rawc = chan of array of byte;
 	errc = chan[1] of string;
 	capdone = chan of int;
@@ -220,6 +229,21 @@ dir(name: string, perm, path: int): Sys->Dir
 	return d;
 }
 
+# a frame merged at rotation rot, as served
+turnedw(rot: int): int
+{
+	if(rot%180)
+		return height;
+	return width;
+}
+
+turnedh(rot: int): int
+{
+	if(rot%180)
+		return width;
+	return height;
+}
+
 # the picture as served: turned a quarter, its sides swap
 fw(): int
 {
@@ -272,7 +296,7 @@ serve(tree: ref Tree)
 			if((path == Qframe || path == Qraw) && err != "" && users == 0)
 				err = "";
 			if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
-				sess = ref Fsess(srv, tm.fid, path, seq, nil) :: sess;
+				sess = ref Fsess(srv, tm.fid, path, seq, nil, fw(), fh()) :: sess;
 				if(users++ == 0)
 					startcapture();
 			}
@@ -322,9 +346,10 @@ serve(tree: ref Tree)
 		* =>
 			srv.default(tmsg);
 		}
-	fr := <-framec =>
+	(fr, fwid, fht) := <-framec =>
 		latest = fr;
 		ring[seq % Ring] = (seq, fr);
+		ringdim[seq % Ring] = (fwid, fht);
 		seq++;
 		wake();
 	r := <-rawc =>
@@ -430,6 +455,14 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		(sn, fr) := ring[n % Ring];
 		if(sn != n || fr == nil || len fr != fs){
 			s.srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
+			return 1;
+		}
+		(dw, dh) := ringdim[n % Ring];
+		if(dw != s.w || dh != s.h){
+			# turned since this reader last knew: once, saying how
+			s.w = dw;
+			s.h = dh;
+			s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
 			return 1;
 		}
 		k := tm.count;
@@ -567,14 +600,13 @@ doctl(s: string): string
 		v := int hd tl f;
 		if(n != 2 || v < 0 || v > 3)
 			return "camsrv: flip 0..3";
-		if(users > 0)
-			return "camsrv: in use";
 		flip = v;
+		tell("flip");
 	"rotate" =>
 		if(n != 2)
 			return "camsrv: rotate 0|90|180|270";
-		if(users > 0)
-			return "camsrv: in use";
+		# live: each frame is merged at the rotation then set, and a
+		# reader of another width and height told once (reply)
 		if(!rotation(hd tl f))
 			return "camsrv: rotate 0|90|180|270";
 		latest = nil;
@@ -663,6 +695,12 @@ capture(stop: chan of int)
 	aelines := framelen - Exposureoff;
 	aegain := gaintoq(gain);
 	af: ref Af;
+	# the mirror the frames being merged were read out with: a write of the
+	# register shows from the sensor's next frame, so the one being read
+	# keeps the old order of colours (as exposure, Aeevery)
+	mflip := flip;
+	newflip := flip;
+	flipwait := 0;
 	Loop:
 	for(;;){
 		alt {
@@ -677,6 +715,10 @@ capture(stop: chan of int)
 					aegain = gaintoq(gain);
 				}
 				wlines = -1;
+			}else if(c == "flip" && flip != newflip){
+				newflip = flip;
+				wr8(16r0101, flip);
+				flipwait = 2;
 			}
 		* =>
 			;
@@ -695,9 +737,12 @@ capture(stop: chan of int)
 			watchn = 0;
 			watchlink();
 		}
+		if(flipwait > 0 && --flipwait == 0)
+			mflip = newflip;
 		(y, cb, cr) = planes();
-		bayer->merge(raw, Sw, Sh, scale, flip, rotate/90, lr, lg, lb, y, cb, cr, mean);
-		framec <-= y[0:fsize];
+		rot := rotate;
+		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean);
+		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= raw[0:];
 		(lr, lg, lb) = wbal(mean);
@@ -1031,8 +1076,9 @@ simulate(stop: chan of int)
 		fill(raw, w, h, band);
 		band = (band+4) % h;
 		(y, cb, cr) = planes();
-		bayer->merge(raw, w, h, scale, 0, rotate/90, lr, lg, lb, y, cb, cr, mean);
-		framec <-= y[0:fsize];
+		rot := rotate;
+		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean);
+		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= raw[0:];
 		d := 1000/fps - (sys->millisec()-t0);

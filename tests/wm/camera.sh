@@ -30,3 +30,9 @@ menu 900 100 190
 sleep 3
 status unhidden
 echo R turned `{cat /chan/wmwindows}
+# turned back while shown: the camera says so at the next frame
+# ("format changed") and the window follows, streaming throughout
+echo rotate 0 > /mnt/video/0/ctl
+sleep 3
+status live
+echo R live `{cat /chan/wmwindows}

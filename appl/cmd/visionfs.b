@@ -1095,6 +1095,19 @@ feedcount(src: string): (int, int, int, int)
 	return (has, frames, first, eof);
 }
 
+# "format changed: <w> <h> i420 <fps>", as a feed turned while it is read
+# says it (camsrv(4)): the width and height, else nil
+fmtchanged(e: string): list of int
+{
+	p := "format changed:";
+	if(len e <= len p || e[0:len p] != p)
+		return nil;
+	(nt, t) := sys->tokenize(e[len p:], " ");
+	if(nt < 2 || int hd t <= 0 || int hd tl t <= 0)
+		return nil;
+	return int hd t :: int hd tl t :: nil;
+}
+
 # a feed, followed: each frame it is ready for looked at, the frames it
 # was not ready for counted
 follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real, classes: list of string, rate: int,
@@ -1139,7 +1152,12 @@ follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real
 		if(got < fs && e != nil){
 			if(e == "frame expired" && counted && !eof)
 				expired = 1;	# fallen behind a live feed
-			else{
+			else if((nw := fmtchanged(e)) != nil && (hd nw)*(hd tl nw) == w*h){
+				# the feed turned (camsrv's rotate): this frame again, at
+				# its size; boxes from here on are in the turned picture
+				(w, h) = (hd nw, hd tl nw);
+				continue;
+			}else{
 				framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s/frame: %s", src, e), 0, 0, 1);
 				return;
 			}

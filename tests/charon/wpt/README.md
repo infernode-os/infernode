@@ -20,4 +20,7 @@ under test so that any failure mode (not laid out, laid out in the wrong
 place, wrong size) leaves red visible or green missing.
 
 Rendering uses `tools/charon-shot.sh`, which needs the emulator and
-`dis/tests/charonshot.dis` (`cd tests; mk install`).
+`dis/tests/charonshot.dis` (`cd tests; mk install`); `$EMU` names
+another emulator than the tree's (a headless build renders them the
+same). CI's Linux job runs every fixture and keeps their images when
+one fails.

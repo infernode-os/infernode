@@ -33,14 +33,14 @@ include "post9p.m";
 include "web/charonfs.m";
 
 Qroot, Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent,
-Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors: con iota;
+Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors, Qsel, Qhist: con iota;
 
-rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors};
+rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors, Qsel, Qhist};
 nodefiles := array[] of {Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren};
 
 names := array[] of {
 	"/", "ctl", "url", "title", "status", "text", "links", "forms", "find", "image", "event",
-	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors",
+	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors", "selection", "history",
 };
 
 # an open event file
@@ -55,6 +55,7 @@ sess: ref Session;
 display: ref Display;
 user: string;
 query: string;	# the last thing written to find
+seltext: string;	# the text selected, by ctl's select
 evqs: list of ref Evq;
 
 init(): string
@@ -367,6 +368,11 @@ ctl(s: string): string
 		return sess.goback();
 	"forward" =>
 		return sess.goforward();
+	"history" =>
+		n := int arg;
+		if(n == 0)
+			return "usage: history n (n < 0 back, n > 0 forward)";
+		return sess.gohistory(n);
 	"reload" =>
 		sess.reload();
 	"stop" =>
@@ -392,6 +398,13 @@ ctl(s: string): string
 		sess.resize(num(hd l), num(hd tl l));
 	"scroll" =>
 		sess.scrollto(num(arg));
+	"select" =>
+		return select(arg);
+	"zoom" =>
+		r := real arg;
+		if(r <= 0.0)
+			return "usage: zoom ratio";
+		sess.zoom(r);
 	"images" or "fonts" or "effects" or "scripts" =>
 		return sess.configure(cmd + " " + arg);
 	"loadimages" =>
@@ -400,6 +413,52 @@ ctl(s: string): string
 		return browser->savesettings();
 	* =>
 		return "unknown command " + cmd;
+	}
+	return nil;
+}
+
+# the pages back (-n) and forward (n) of this one (0), a line each,
+# the furthest back first
+histtext(): string
+{
+	# back is nearest first: each line goes before the ones after it
+	s := "";
+	i := -1;
+	for(l := sess.back; l != nil; l = tl l)
+		s = sys->sprint("%d %s\n", i--, (hd l).t0) + s;
+	if(sess.url != "")
+		s += "0 " + sess.url + "\n";
+	i = 1;
+	for(l = sess.fwd; l != nil; l = tl l)
+		s += sys->sprint("%d %s\n", i++, (hd l).t0);
+	return s;
+}
+
+# select x0 y0 x1 y1, select word x y, select all, select none:
+# points in the page's coordinates, as box and find give them
+select(arg: string): string
+{
+	(nil, l) := sys->tokenize(arg, " \t");
+	n := array[len l] of int;
+	w := "";
+	if(l != nil)
+		w = hd l;
+	for(i := 0; l != nil; l = tl l)
+		n[i++] = num(hd l);
+	case w {
+	"all" =>
+		(seltext, nil) = sess.selection((0, 0), (0, 0), 0, 1);
+	"none" =>
+		seltext = nil;
+	"word" =>
+		if(len n != 3)
+			return "usage: select word x y";
+		p := Point(n[1], n[2]);
+		(seltext, nil) = sess.selection(p, p, 1, 0);
+	* =>
+		if(len n != 4)
+			return "usage: select x0 y0 x1 y1 | word x y | all | none";
+		(seltext, nil) = sess.selection((n[0], n[1]), (n[2], n[3]), 0, 0);
 	}
 	return nil;
 }
@@ -430,12 +489,18 @@ contents(t, n: int): array of byte
 	Qerrors =>
 		if(sess.pg != nil)
 			s = lines(sess.pg.errors);
+	Qsel =>
+		s = seltext;
+	Qhist =>
+		s = histtext();
 	Qtag or Qattrs or Qntext or Qstyle or Qbox or Qchildren =>
 		(r, nil) := sess.dom(n, names[t]);
 		s = r;
 	}
 	return array of byte s;
 }
+
+IMAGEWAIT: con 100;	# paints tried, each waiting up to 100ms for the page
 
 # the viewport as an image(6)
 image(): array of byte
@@ -445,7 +510,12 @@ image(): array of byte
 	img := display.newimage(Rect((0, 0), (sess.width, sess.height)), Draw->RGB24, 0, Draw->White);
 	if(img == nil)
 		return nil;
-	sess.paint(img, Point(0, sess.scroll));
+	# the page's scripts may hold it: the window keeps what it showed
+	# then, but a reader of this file has nothing else, and was given a
+	# blank page (usa.gov's, while its scripts ran on after it loaded).
+	# It waits for them, a while.
+	for(i := 0; !sess.paint(img, Point(0, sess.scroll)) && i < IMAGEWAIT; i++)
+		;
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
 		return nil;

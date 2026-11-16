@@ -633,7 +633,11 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 				n = len pic - j0;
 			for(k := 0; k < n; k++) {
 				v := int pic[j0+k];
-				r, g, b: byte;
+				# (a declaration in a loop is not zeroed each time
+				# round: a clear pixel kept the last one's colour, and
+				# premultiplied, that colour was added to what is
+				# behind it; paulgraham.com's titles and bullets)
+				(r, g, b) := (byte 0, byte 0, byte 0);
 				a := byte 255;
 				if(byte v == i.trindex)
 					a = byte 0;	# all zero: clear
@@ -675,7 +679,7 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 				n = len c0 - j0;
 			for(k := 0; k < n; k++) {
 				j = j0 + k;
-				r, g, b: byte;
+				(r, g, b) := (byte 0, byte 0, byte 0);	# an index past the colour map is black
 				case i.chandesc {
 				RImagefile->CRGB =>
 					r = c0[j];

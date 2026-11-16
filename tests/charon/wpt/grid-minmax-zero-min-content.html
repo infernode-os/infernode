@@ -1,0 +1,13 @@
+<!doctype html><title>a minmax(0, 1fr) track adds nothing to its grid's min-content size</title>
+<style>
+body{margin:0}
+.outer{display:grid;width:100px}
+.inner{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.wide{width:300px;height:1px}
+/* as wide as the outer grid's one auto column: green to 100px, red past it */
+.probe{height:100px;background:linear-gradient(to right,green 100px,red 100px)}
+</style>
+<div class=outer><div>
+<div class=inner><div style="overflow:hidden"><div class=wide></div></div><div><div class=wide></div></div></div>
+<div class=probe></div>
+</div></div>

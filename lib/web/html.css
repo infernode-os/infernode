@@ -30,6 +30,7 @@ header, hr, legend, listing, main, p, plaintext, pre, search, xmp,
 article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section,
 dir, dd, dl, dt, menu, ol, ul, details, summary, fieldset, optgroup { display: block; }
 li { display: list-item; text-align: match-parent; }
+center { text-align: -internal-center; }
 summary { display: list-item; list-style: disclosure-closed inside; }
 details[open] > summary:first-of-type { list-style-type: disclosure-open; }
 

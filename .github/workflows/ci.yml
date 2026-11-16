@@ -263,6 +263,22 @@ jobs:
         chmod +x tests/host/charon_notpage_test.sh
         ROOT=. bash tests/host/charon_notpage_test.sh
 
+    - name: Check Charon's render fixtures
+      run: |
+        # tests/charon/wpt: one feature a page, each drawn solid green
+        # with no pure red when right (tests/charon/wpt/README.md); a
+        # layout or paint change that breaks one fails here
+        mkdir -p charon-wpt-out
+        sh tools/charon-wpt.sh charon-wpt-out
+
+    - name: Keep the render fixtures' images
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: failure()
+      with:
+        name: charon-wpt-images
+        path: charon-wpt-out
+        if-no-files-found: ignore
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;

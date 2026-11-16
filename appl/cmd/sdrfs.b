@@ -315,8 +315,12 @@ server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop,
 	settleuntil := sys->millisec();	# samples before this were tuned before a setting took
 	busyuntil := settleuntil;	# rtl_tcp still applying commands until about this
 	n0 := 0;
-	lingerc := chan of int;
-	ltok := 0;		# the linger timer that counts; a later one replaces it
+	# One linger timer at a time, its channel with room for its tick:
+	# there was a timer for every clunk and setting, each waiting to
+	# say so, and those left when the server ended waited for ever.
+	lingerc := chan[1] of int;
+	lingering := 0;		# a timer is out
+	idlesince := 0;		# when the last listener or setting went
 	clients: list of ref Client;
 
 	evc := chan of ref Event;
@@ -386,7 +390,13 @@ Serve:
 			spawn reader(gen, conn.dfd, evc, rpidc);
 			readerpid = <-rpidc;
 			if(listening(clients) == 0)
-				spawn lingertimer(++ltok, lingerms, lingerc);
+			{
+				idlesince = sys->millisec();
+				if(!lingering) {
+					lingering = 1;
+					spawn lingertimer(lingerms, lingerc);
+				}
+			}
 		Ddata =>
 			if(sys->millisec() - settleuntil < 0) {
 				skipped += big len ev.data;
@@ -407,10 +417,17 @@ Serve:
 				(hd l).end(ev.err);
 		}
 
-	t := <-lingerc =>
+	<-lingerc =>
 		# held long enough with nothing listening: hang up
-		if(t != ltok || conn == nil || listening(clients) > 0)
+		lingering = 0;
+		if(conn == nil || listening(clients) > 0)
 			break;
+		if((left := lingerms - (sys->millisec() - idlesince)) > 0) {
+			# something listened or was set since: wait out the rest
+			lingering = 1;
+			spawn lingertimer(left, lingerc);
+			break;
+		}
 		hangup(conn, readerpid, settleuntil);
 		conn = nil;
 		readerpid = -1;
@@ -428,7 +445,13 @@ Serve:
 			if(ctlsrv == srv)
 				ctlwait = nil;
 			if(listening(clients) == 0 && conn != nil)
-				spawn lingertimer(++ltok, lingerms, lingerc);
+			{
+				idlesince = sys->millisec();
+				if(!lingering) {
+					lingering = 1;
+					spawn lingertimer(lingerms, lingerc);
+				}
+			}
 			if(--nconn == 0 && !posted)
 				break Serve;
 			break;
@@ -569,7 +592,13 @@ Serve:
 					break;
 				}
 				if(changed != nil && listening(clients) == 0)
-					spawn lingertimer(++ltok, lingerms, lingerc);
+				{
+					idlesince = sys->millisec();
+					if(!lingering) {
+						lingering = 1;
+						spawn lingertimer(lingerms, lingerc);
+					}
+				}
 			}
 			if(!stop && nsrc == "") {
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -618,11 +647,23 @@ Serve:
 			# the last listener gone: hang up once it has been
 			# gone a while
 			if(listening(clients) == 0 && conn != nil)
-				spawn lingertimer(++ltok, lingerms, lingerc);
+			{
+				idlesince = sys->millisec();
+				if(!lingering) {
+					lingering = 1;
+					spawn lingertimer(lingerms, lingerc);
+				}
+			}
 		* =>
 			srv.default(r.m);
 		}
 	}
+	# Not posted and its last connection gone: nobody can reach it.  It
+	# left its stream's reader, the connection to rtl_tcp (which takes
+	# one client at a time) and its navigator behind for ever.
+	if(conn != nil)
+		hangup(conn, readerpid, settleuntil);
+	navops <-= nil;
 }
 
 client(l: list of ref Client, srv: ref Styxserver, fid: int): ref Client
@@ -830,10 +871,10 @@ greeting(fd: ref Sys->FD, gc: chan of (array of byte, string))
 	gc <-= (b, nil);
 }
 
-lingertimer(tok: int, ms: int, lc: chan of int)
+lingertimer(ms: int, lc: chan of int)
 {
 	sys->sleep(ms);
-	lc <-= tok;
+	lc <-= 1;
 }
 
 timer(ms: int, tc: chan of int)

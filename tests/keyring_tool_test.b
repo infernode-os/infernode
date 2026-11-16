@@ -177,6 +177,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(fio == nil)
 		raise sys->sprint("fail:file2chan: %r");
 	spawn ctlserver(fio);
+	mkdir("/mnt/ui");	# a fresh tree has no mount point; a dev tree may
 	if(sys->bind(ui, "/mnt/ui", Sys->MREPL) < 0)
 		raise sys->sprint("fail:bind /mnt/ui: %r");
 

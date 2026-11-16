@@ -53,20 +53,39 @@ void	aesarm64encryptblock(const u32int*, int, const uchar*, uchar*);
 void	aesarm64cbcencrypt(uchar*, int, const u32int*, int, uchar*);
 void	aesarm64cbcdecrypt(uchar*, int, const u32int*, int, uchar*);
 
+/*
+ * A key is 16, 24 or 32 bytes (FIPS 197).  Any other length was taken:
+ * the schedule was not made, rounds was 0, and what came out was the
+ * block exclusive-ored with the key's first 16 bytes and no more (a
+ * key of no bytes: with nothing), which decrypts again and looks like
+ * a cipher; a key longer than 32 bytes was cut to them.  The
+ * instructions' code (aesarm64.c) indexed its round keys with rounds-1
+ * and read the 16 bytes of the stack below them, which the result gave
+ * back.  The state of such a key is left unset, and what is asked of an
+ * unset state gives zeros, not the data and not a cipher of it.
+ */
+enum {
+	AESset=	0xcafebabe,
+};
+
+static int
+aesok(AESstate *s)
+{
+	return s->setup == AESset && (s->rounds == 10 || s->rounds == 12 || s->rounds == 14);
+}
+
 void
 setupAESstate(AESstate *s, uchar key[], int keybytes, uchar *ivec)
 {
 	memset(s, 0, sizeof(*s));
-	if(keybytes > AESmaxkey)
-		keybytes = AESmaxkey;
+	if(keybytes != 16 && keybytes != 24 && keybytes != 32)
+		return;
 	memmove(s->key, key, keybytes);
 	s->keybytes = keybytes;
 	s->rounds = rijndaelKeySetup(s->ekey, s->dkey, s->key, keybytes * 8);
 	if(ivec != nil)
 		memmove(s->ivec, ivec, AESbsize);
-	if(keybytes==16 || keybytes==24 || keybytes==32)
-		s->setup = 0xcafebabe;
-	// else rijndaelKeySetup was invalid
+	s->setup = AESset;
 }
 
 // Define by analogy with desCBCencrypt;  AES modes are not standardized yet.
@@ -78,6 +97,11 @@ aesCBCencrypt(uchar *p, int len, AESstate *s)
 	uchar *p2, *ip, *eip;
 	uchar q[AESbsize];
 
+	if(!aesok(s)){
+		if(len > 0)
+			memset(p, 0, len);
+		return;
+	}
 	if(len >= AESbsize && aesarm64ok()){
 		aesarm64cbcencrypt(p, len/AESbsize, s->ekey, s->rounds, s->ivec);
 		p += len - len%AESbsize;
@@ -109,6 +133,11 @@ aesCBCdecrypt(uchar *p, int len, AESstate *s)
 	uchar *ip, *eip, *tp;
 	uchar tmp[AESbsize], q[AESbsize];
 
+	if(!aesok(s)){
+		if(len > 0)
+			memset(p, 0, len);
+		return;
+	}
 	if(len >= AESbsize && aesarm64ok()){
 		aesarm64cbcdecrypt(p, len/AESbsize, s->dkey, s->rounds, s->ivec);
 		p += len - len%AESbsize;
@@ -139,6 +168,10 @@ aesCBCdecrypt(uchar *p, int len, AESstate *s)
 void
 aesEncryptBlock(AESstate *s, uchar pt[16], uchar ct[16])
 {
+	if(!aesok(s)){
+		memset(ct, 0, AESbsize);
+		return;
+	}
 	if(aesarm64ok()){
 		aesarm64encryptblock(s->ekey, s->rounds, pt, ct);
 		return;
@@ -907,7 +940,7 @@ static int rijndaelKeySetupEnc(u32 rk[/*4*(Nr + 1)*/], const u8 cipherKey[], int
 		for (;;) {
 			temp  = rk[3];
 			rk[4] = rk[0] ^
-				(Te4[(temp >> 16) & 0xff] << 24) ^
+				((u32)Te4[(temp >> 16) & 0xff] << 24) ^
 				(Te4[(temp >>  8) & 0xff] << 16) ^
 				(Te4[(temp      ) & 0xff] <<  8) ^
 				(Te4[(temp >> 24)       ]      ) ^
@@ -927,7 +960,7 @@ static int rijndaelKeySetupEnc(u32 rk[/*4*(Nr + 1)*/], const u8 cipherKey[], int
 		for (;;) {
 			temp = rk[ 5];
 			rk[ 6] = rk[ 0] ^
-				(Te4[(temp >> 16) & 0xff] << 24) ^
+				((u32)Te4[(temp >> 16) & 0xff] << 24) ^
 				(Te4[(temp >>  8) & 0xff] << 16) ^
 				(Te4[(temp      ) & 0xff] <<  8) ^
 				(Te4[(temp >> 24)       ]      ) ^
@@ -949,7 +982,7 @@ static int rijndaelKeySetupEnc(u32 rk[/*4*(Nr + 1)*/], const u8 cipherKey[], int
         for (;;) {
         	temp = rk[ 7];
         	rk[ 8] = rk[ 0] ^
-        		(Te4[(temp >> 16) & 0xff] << 24) ^
+        		((u32)Te4[(temp >> 16) & 0xff] << 24) ^
         		(Te4[(temp >>  8) & 0xff] << 16) ^
         		(Te4[(temp      ) & 0xff] <<  8) ^
         		(Te4[(temp >> 24)       ]      ) ^
@@ -962,7 +995,7 @@ static int rijndaelKeySetupEnc(u32 rk[/*4*(Nr + 1)*/], const u8 cipherKey[], int
 			}
         	temp = rk[11];
         	rk[12] = rk[ 4] ^
-        		(Te4[(temp >> 24)       ] << 24) ^
+        		((u32)Te4[(temp >> 24)       ] << 24) ^
         		(Te4[(temp >> 16) & 0xff] << 16) ^
         		(Te4[(temp >>  8) & 0xff] <<  8) ^
         		(Te4[(temp      ) & 0xff]      );
@@ -1173,28 +1206,28 @@ static void rijndaelEncrypt(const u32 rk[/*4*(Nr + 1)*/], int Nr, const u8 pt[16
 	 * map cipher state to byte array block:
 	 */
 	s0 =
-		(Te4[(t0 >> 24)       ] << 24) ^
+		((u32)Te4[(t0 >> 24)       ] << 24) ^
 		(Te4[(t1 >> 16) & 0xff] << 16) ^
 		(Te4[(t2 >>  8) & 0xff] <<  8) ^
 		(Te4[(t3      ) & 0xff]      ) ^
 		rk[0];
 	PUTU32(ct     , s0);
 	s1 =
-		(Te4[(t1 >> 24)       ] << 24) ^
+		((u32)Te4[(t1 >> 24)       ] << 24) ^
 		(Te4[(t2 >> 16) & 0xff] << 16) ^
 		(Te4[(t3 >>  8) & 0xff] <<  8) ^
 		(Te4[(t0      ) & 0xff]      ) ^
 		rk[1];
 	PUTU32(ct +  4, s1);
 	s2 =
-		(Te4[(t2 >> 24)       ] << 24) ^
+		((u32)Te4[(t2 >> 24)       ] << 24) ^
 		(Te4[(t3 >> 16) & 0xff] << 16) ^
 		(Te4[(t0 >>  8) & 0xff] <<  8) ^
 		(Te4[(t1      ) & 0xff]      ) ^
 		rk[2];
 	PUTU32(ct +  8, s2);
 	s3 =
-		(Te4[(t3 >> 24)       ] << 24) ^
+		((u32)Te4[(t3 >> 24)       ] << 24) ^
 		(Te4[(t0 >> 16) & 0xff] << 16) ^
 		(Te4[(t1 >>  8) & 0xff] <<  8) ^
 		(Te4[(t2      ) & 0xff]      ) ^
@@ -1354,28 +1387,28 @@ static void rijndaelDecrypt(const u32 rk[/*4*(Nr + 1)*/], int Nr, const u8 ct[16
 	 * map cipher state to byte array block:
 	 */
    	s0 =
-   		(Td4[(t0 >> 24)       ] << 24) ^
+   		((u32)Td4[(t0 >> 24)       ] << 24) ^
    		(Td4[(t3 >> 16) & 0xff] << 16) ^
    		(Td4[(t2 >>  8) & 0xff] <<  8) ^
    		(Td4[(t1      ) & 0xff]      ) ^
    		rk[0];
 	PUTU32(pt     , s0);
    	s1 =
-   		(Td4[(t1 >> 24)       ] << 24) ^
+   		((u32)Td4[(t1 >> 24)       ] << 24) ^
    		(Td4[(t0 >> 16) & 0xff] << 16) ^
    		(Td4[(t3 >>  8) & 0xff] <<  8) ^
    		(Td4[(t2      ) & 0xff]      ) ^
    		rk[1];
 	PUTU32(pt +  4, s1);
    	s2 =
-   		(Td4[(t2 >> 24)       ] << 24) ^
+   		((u32)Td4[(t2 >> 24)       ] << 24) ^
    		(Td4[(t1 >> 16) & 0xff] << 16) ^
    		(Td4[(t0 >>  8) & 0xff] <<  8) ^
    		(Td4[(t3      ) & 0xff]      ) ^
    		rk[2];
 	PUTU32(pt +  8, s2);
    	s3 =
-   		(Td4[(t3 >> 24)       ] << 24) ^
+   		((u32)Td4[(t3 >> 24)       ] << 24) ^
    		(Td4[(t2 >> 16) & 0xff] << 16) ^
    		(Td4[(t1 >>  8) & 0xff] <<  8) ^
    		(Td4[(t0      ) & 0xff]      ) ^
@@ -1442,25 +1475,25 @@ static void rijndaelEncryptRound(const u32 rk[/*4*(Nr + 1)*/], int Nr, u8 block[
 	 */
 	if (rounds == Nr) {
     	t0 =
-    		(Te4[(s0 >> 24)       ] << 24) ^
+    		((u32)Te4[(s0 >> 24)       ] << 24) ^
     		(Te4[(s1 >> 16) & 0xff] << 16) ^
     		(Te4[(s2 >>  8) & 0xff] <<  8) ^
     		(Te4[(s3      ) & 0xff]      ) ^
     		rk[0];
     	t1 =
-    		(Te4[(s1 >> 24)       ] << 24) ^
+    		((u32)Te4[(s1 >> 24)       ] << 24) ^
     		(Te4[(s2 >> 16) & 0xff] << 16) ^
     		(Te4[(s3 >>  8) & 0xff] <<  8) ^
     		(Te4[(s0      ) & 0xff]      ) ^
     		rk[1];
     	t2 =
-    		(Te4[(s2 >> 24)       ] << 24) ^
+    		((u32)Te4[(s2 >> 24)       ] << 24) ^
     		(Te4[(s3 >> 16) & 0xff] << 16) ^
     		(Te4[(s0 >>  8) & 0xff] <<  8) ^
     		(Te4[(s1      ) & 0xff]      ) ^
     		rk[2];
     	t3 =
-    		(Te4[(s3 >> 24)       ] << 24) ^
+    		((u32)Te4[(s3 >> 24)       ] << 24) ^
     		(Te4[(s0 >> 16) & 0xff] << 16) ^
     		(Te4[(s1 >>  8) & 0xff] <<  8) ^
     		(Te4[(s2      ) & 0xff]      ) ^
@@ -1534,22 +1567,22 @@ static void rijndaelDecryptRound(const u32 rk[/*4*(Nr + 1)*/], int Nr, u8 block[
 	 * map cipher state to byte array block:
 	 */
 	t0 =
-		(Td4[(s0 >> 24)       ] << 24) ^
+		((u32)Td4[(s0 >> 24)       ] << 24) ^
 		(Td4[(s3 >> 16) & 0xff] << 16) ^
 		(Td4[(s2 >>  8) & 0xff] <<  8) ^
 		(Td4[(s1      ) & 0xff]      );
 	t1 =
-		(Td4[(s1 >> 24)       ] << 24) ^
+		((u32)Td4[(s1 >> 24)       ] << 24) ^
 		(Td4[(s0 >> 16) & 0xff] << 16) ^
 		(Td4[(s3 >>  8) & 0xff] <<  8) ^
 		(Td4[(s2      ) & 0xff]      );
 	t2 =
-		(Td4[(s2 >> 24)       ] << 24) ^
+		((u32)Td4[(s2 >> 24)       ] << 24) ^
 		(Td4[(s1 >> 16) & 0xff] << 16) ^
 		(Td4[(s0 >>  8) & 0xff] <<  8) ^
 		(Td4[(s3      ) & 0xff]      );
 	t3 =
-		(Td4[(s3 >> 24)       ] << 24) ^
+		((u32)Td4[(s3 >> 24)       ] << 24) ^
 		(Td4[(s2 >> 16) & 0xff] << 16) ^
 		(Td4[(s1 >>  8) & 0xff] <<  8) ^
 		(Td4[(s0      ) & 0xff]      );

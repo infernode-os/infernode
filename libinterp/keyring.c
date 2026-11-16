@@ -3137,7 +3137,12 @@ Keyring_aesgcmsetup(void *fp)
 	*f->ret = H;
 	destroy(r);
 
-	if(f->key == H || f->key->len <= 0)
+	/*
+	 * a key is 16, 24 or 32 bytes, as aessetup asks: any length was
+	 * taken, and one that is no key's made a state that enciphered
+	 * with no rounds (see libsec/aes.c)
+	 */
+	if(f->key == H || f->key->len != 16 && f->key->len != 24 && f->key->len != 32)
 		error(exBadKey);
 	if(f->iv == H || f->iv->len <= 0)
 		error(exBadIvec);
@@ -3178,10 +3183,13 @@ Keyring_aesgcmencrypt(void *fp)
 		error(exNomem);
 	memmove(buf, f->dat->data, ndat);
 
-	aesgcm_encrypt(buf, ndat,
+	if(aesgcm_encrypt(buf, ndat,
 		f->aad != H ? f->aad->data : nil,
 		f->aad != H ? f->aad->len : 0,
-		tag, &is->state);
+		tag, &is->state) < 0){
+		free(buf);
+		error(exBadState);
+	}
 
 	f->ret->t0 = mem2array(buf, ndat);
 	f->ret->t1 = mem2array(tag, 16);

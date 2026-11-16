@@ -142,7 +142,7 @@ ghashct(uchar y[16], const uchar h[16], const uchar *p, ulong n)
 	put64(y + 8, y0);
 }
 
-/* the test's switch: 0 forces the C (ghasharm64use is its own) */
+/* the test's switch: nonzero forces the C (ghasharm64use is its own) */
 static int ghashc;
 
 void
@@ -224,13 +224,32 @@ gcm_ctr(AESGCMstate *s, uchar *dat, ulong ndat)
 	secureZero(block, sizeof(block));
 }
 
+/* a state setupAESGCMstate made of a key and an IV that are ones */
+static int
+gcmok(AESGCMstate *s)
+{
+	return s->a.setup == 0xcafebabe && (s->a.rounds == 10 || s->a.rounds == 12 || s->a.rounds == 14);
+}
+
 void
 setupAESGCMstate(AESGCMstate *s, uchar *key, int keylen, uchar *iv, int ivlen)
 {
 	uchar zero[AESbsize];
 
 	memset(s, 0, sizeof(*s));
+	/*
+	 * SP 800-38D 5.2.1.1: an IV has at least one bit.  With none J0
+	 * was the block of zeros and the tag of an empty message was H.
+	 * And a key that is one: see setupAESstate.  The state is left
+	 * unset, and aesgcm_encrypt and aesgcm_decrypt refuse it.
+	 */
+	if(ivlen <= 0)
+		return;
 	setupAESstate(&s->a, key, keylen, nil);
+	if(!gcmok(s)){
+		memset(s, 0, sizeof(*s));
+		return;
+	}
 
 	/* H = AES_K(0^128) */
 	memset(zero, 0, AESbsize);
@@ -281,7 +300,9 @@ gcm_tag(AESGCMstate *s, uchar *aad, ulong naad, uchar *dat, ulong ndat, uchar ta
  * AES-GCM encrypt.
  * dat is plaintext on input, ciphertext on output.
  * tag receives the 16-byte authentication tag.
- * Returns 0 on success, -1 if input exceeds GCM limits.
+ * Returns 0 on success, -1 if input exceeds GCM limits or the state
+ * was made of no key (and then dat and the tag are zeros: a caller that
+ * does not look sends neither the text nor a cipher of it).
  */
 int
 aesgcm_encrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
@@ -289,6 +310,11 @@ aesgcm_encrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
 {
 	if((u64int)ndat > AESGCM_MAXLEN)
 		return -1;
+	if(!gcmok(s)){
+		memset(dat, 0, ndat);
+		memset(tag, 0, 16);
+		return -1;
+	}
 	gcm_ctr(s, dat, ndat);
 	gcm_tag(s, aad, naad, dat, ndat, tag);
 	return 0;
@@ -308,7 +334,7 @@ aesgcm_decrypt(uchar *dat, ulong ndat, uchar *aad, ulong naad,
 	uchar computed[16];
 	int i, diff;
 
-	if((u64int)ndat > AESGCM_MAXLEN)
+	if((u64int)ndat > AESGCM_MAXLEN || !gcmok(s))
 		return -1;
 	gcm_tag(s, aad, naad, dat, ndat, computed);
 

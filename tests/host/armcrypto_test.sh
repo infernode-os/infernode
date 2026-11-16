@@ -53,7 +53,7 @@ done
 
 fails=0
 for c in $ccs; do
-	if $c $CFLAGS $INC -o "$TMP/aestest" "$ROOT/tests/host/aes/aestest.c" "$S/aesarm64.c" 2>"$TMP/cc.log"; then
+	if $c $CFLAGS $INC -o "$TMP/aestest" "$ROOT/tests/host/aes/aestest.c" "$S/aesarm64.c" "$S/securezero.c" 2>"$TMP/cc.log"; then
 		if "$TMP/aestest" >"$TMP/out" 2>&1; then
 			sed "s/^/$c: /" "$TMP/out"
 		else

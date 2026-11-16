@@ -159,6 +159,59 @@ speed(int dec)
 	return n * (double)sizeof buf / 1e6 / ((double)(clock() - t0) / CLOCKS_PER_SEC);
 }
 
+/*
+ * A key is 16, 24 or 32 bytes.  Any other length made a state with no
+ * rounds, which gave the block exclusive-ored with the key's first 16
+ * bytes (a cipher to look at; with a key of no bytes, the block), and
+ * through the instructions read the round key before its array.  Such a
+ * state gives zeros now, by either path.
+ */
+static void
+keylengths(const char *path)
+{
+	static int bad[] = { 0, 1, 8, 15, 17, 20, 31, 33, 48, 100, -1 };
+	AESstate s;
+	uchar key[128], pt[64], buf[64], ct[16], zero[64];
+	int i, j;
+
+	memset(zero, 0, sizeof zero);
+	for(j = 0; j < sizeof key; j++)
+		key[j] = 0xa0 + j;
+	for(j = 0; j < sizeof pt; j++)
+		pt[j] = j;
+	for(i = 0; i < nelem(bad); i++){
+		char what[64];
+
+		setupAESstate(&s, key, bad[i], nil);
+		snprintf(what, sizeof what, "%s: a key of %d bytes", path, bad[i]);
+		if(s.setup != 0 || s.rounds != 0){
+			printf("FAIL: %s made a state (rounds %d)\n", what, s.rounds);
+			failed = 1;
+		}
+		memset(ct, 0xee, sizeof ct);
+		aesEncryptBlock(&s, pt, ct);
+		check(what, ct, zero, 16);
+		memmove(buf, pt, sizeof buf);
+		aesCBCencrypt(buf, 53, &s);
+		check(what, buf, zero, 53);
+		memmove(buf, pt, sizeof buf);
+		aesCBCdecrypt(buf, 53, &s);
+		check(what, buf, zero, 53);
+	}
+	/* and the functions under them, given a count that is none */
+	if(aesarm64ok()){
+		memset(ct, 0xee, sizeof ct);
+		aesarm64encryptblock(s.ekey, 0, pt, ct);
+		check("aesarm64encryptblock with no rounds", ct, zero, 16);
+		memmove(buf, pt, sizeof buf);
+		aesarm64cbcencrypt(buf, 3, s.ekey, 0, ct);
+		check("aesarm64cbcencrypt with no rounds", buf, zero, 48);
+		memmove(buf, pt, sizeof buf);
+		aesarm64cbcdecrypt(buf, 3, s.dkey, 15, ct);
+		check("aesarm64cbcdecrypt with 15 rounds", buf, zero, 48);
+	}
+}
+
 int
 main(void)
 {
@@ -167,12 +220,14 @@ main(void)
 	aesarm64use(0);
 	fips197("tables");
 	sp80038a("tables");
+	keylengths("tables");
 	te = speed(0);
 	td = speed(1);
 	if(aesarm64ok() || (aesarm64use(1), aesarm64ok())){
 		aesarm64use(1);
 		fips197("ARMv8");
 		sp80038a("ARMv8");
+		keylengths("ARMv8");
 		cross();
 		ae = speed(0);
 		ad = speed(1);
@@ -180,6 +235,6 @@ main(void)
 	}else
 		printf("SKIP: no ARMv8 AES here; tables %.0f encrypt %.0f decrypt MB/s\n", te, td);
 	if(!failed)
-		printf("PASS: FIPS-197 and SP 800-38A vectors on every path\n");
+		printf("PASS: FIPS-197 and SP 800-38A vectors on every path; a key that is none gives zeros\n");
 	return failed;
 }

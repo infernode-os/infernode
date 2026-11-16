@@ -702,6 +702,46 @@ rc4stream(st: ref Keyring->RC4state, n: int): string
 	return hex(b);
 }
 
+# A key for AES-GCM is 16, 24 or 32 bytes. aesgcmsetup took any that was
+# not empty, and a length that is no key's made a state with no rounds:
+# what it "encrypted" opened again, 33 and 100 bytes gave one output, and
+# on a processor with the AES instructions the tag carried 16 bytes of
+# the emulator's stack.
+testAESGCMKey(t: ref T)
+{
+	iv := array[12] of {* => byte 7};
+	lens := array[] of {0, 1, 5, 15, 17, 20, 31, 33, 100};
+	for(i := 0; i < len lens; i++){
+		e: string;
+		{
+			kr->aesgcmsetup(array[lens[i]] of {* => byte 16r41}, iv);
+		} exception x {
+		"*" =>
+			e = x;
+		}
+		t.assert(e != nil, sys->sprint("aesgcmsetup with a key of %d bytes is refused", lens[i]));
+	}
+	lens = array[] of {16, 24, 32};
+	for(i = 0; i < len lens; i++){
+		key := array[lens[i]] of {* => byte 16r41};
+		st := kr->aesgcmsetup(key, iv);
+		t.assert(st != nil, sys->sprint("aesgcmsetup with a key of %d bytes", lens[i]));
+		msg := array of byte "a message";
+		(ct, tag) := kr->aesgcmencrypt(st, msg, nil);
+		pt := kr->aesgcmdecrypt(kr->aesgcmsetup(key, iv), ct, nil, tag);
+		t.assert(pt != nil && string pt == "a message" && string ct != "a message", sys->sprint("a key of %d bytes seals and opens", lens[i]));
+	}
+	# what the two longest gave: the same
+	e: string;
+	{
+		kr->aesgcmsetup(array[0] of byte, iv);
+	} exception x {
+	"*" =>
+		e = x;
+	}
+	t.assert(e != nil, "aesgcmsetup with an empty key is refused");
+}
+
 testRC4(t: ref T)
 {
 	# a key of no bytes: the byte after the array was the key
@@ -771,6 +811,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AuthModulus", testAuthModulus);
 	run("Readauthinfo", testReadauthinfo);
 	run("RC4", testRC4);
+	run("AESGCMKey", testAESGCMKey);
 	run("KeySizes", testKeySizes);
 
 	if(testing->summary(passed, failed, skipped) > 0)

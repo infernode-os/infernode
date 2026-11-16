@@ -438,7 +438,6 @@ appl
 		grep.b
 		gunzip.b
 		gzip.b
-		idea.b
 		import.b
 		install
 			NOTICE
@@ -598,7 +597,6 @@ appl
 			query.b
 			registry.b
 			regquery.b
-		netkey.b
 		netstat.b
 		newer.b
 		ns.b
@@ -1356,7 +1354,6 @@ dis
 			+
 	gunzip.dis
 	gzip.dis
-	idea.dis
 	import.dis
 	install
 		+
@@ -1551,7 +1548,6 @@ dis
 	mv.dis
 	ndb
 		+
-	netkey.dis
 	netstat.dis
 	newer.dis
 	ns.dis

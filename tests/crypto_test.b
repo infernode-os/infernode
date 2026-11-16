@@ -403,29 +403,6 @@ testRC4Disabled(t: ref T)
 }
 
 #
-# Test that DES is disabled
-#
-testDESDisabled(t: ref T)
-{
-	key := array[8] of byte;
-	for(i := 0; i < 8; i++)
-		key[i] = byte i;
-
-	rejected := 0;
-	{
-		state := kr->dessetup(key, nil);
-		if(state != nil)
-			t.error("DES setup unexpectedly succeeded");
-	} exception {
-	"DES is disabled" =>
-		rejected = 1;
-	"*" =>
-		t.error("DES setup failed with an unexpected exception");
-	}
-	t.assert(rejected, "DES setup rejected");
-}
-
-#
 # Test ChaCha20-Poly1305 AEAD (used by modernized login protocol)
 #
 testCCPolyAEAD(t: ref T)
@@ -944,7 +921,6 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RSA/2048bit", testRSA2048);
 	run("ElGamal/2048bit", testElGamal2048);
 	run("RC4/Disabled", testRC4Disabled);
-	run("DES/Disabled", testDESDisabled);
 	run("AES/Available", testAESAvailable);
 	run("CCPoly/AEAD", testCCPolyAEAD);
 	run("Login/KeyDerivation", testLoginKeyDerivation);

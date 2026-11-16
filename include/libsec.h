@@ -148,75 +148,6 @@ int	secp256k1_recover(uchar pub[65], uchar *hash, int hashlen, uchar sig[65]);
 int	secp256k1_verify(uchar sig[64], uchar pub[65], uchar *hash, int hashlen);
 
 /* ===================================================== */
-/* Keccak-256 (Ethereum, pre-NIST padding) */
-/* ===================================================== */
-void	keccak256(const uchar *in, ulong inlen, uchar out[32]);
-
-/* ===================================================== */
-/* Blowfish Definitions */
-/* ===================================================== */
-
-enum
-{
-	BFbsize	= 8,
-	BFrounds	= 16
-};
-
-/* 16-round Blowfish */
-typedef struct BFstate BFstate;
-struct BFstate
-{
-	ulong	setup;
-
-	uchar	key[56];
-	uchar	ivec[8];
-
-	u32int 	pbox[BFrounds+2];
-	u32int	sbox[1024];
-};
-
-void	setupBFstate(BFstate *s, uchar key[], int keybytes, uchar *ivec);
-void	bfCBCencrypt(uchar*, int, BFstate*);
-void	bfCBCdecrypt(uchar*, int, BFstate*);
-void	bfECBencrypt(uchar*, int, BFstate*);
-void	bfECBdecrypt(uchar*, int, BFstate*);
-
-/* ===================================================== */
-/* DES is gone from libsec (des.c and its modes: nothing called them;
- * Keyring's DES functions only refuse).  The state's type stays until
- * libkeyring/keys.h's XDESstate, which those functions' adt is made of,
- * goes with them. */
-/* ===================================================== */
-
-enum
-{
-	DESbsize=	8
-};
-
-typedef struct DESstate DESstate;
-struct DESstate
-{
-	ulong	setup;
-	uchar	key[8];		/* unexpanded key */
-	ulong	expanded[32];	/* expanded key */
-	uchar	ivec[8];	/* initialization vector */
-};
-
-/* IDEA */
-typedef struct IDEAstate IDEAstate;
-struct IDEAstate
-{
-	uchar	key[16];
-	ushort	edkey[104];
-	uchar	ivec[8];
-};
-
-void	setupIDEAstate(IDEAstate*, uchar*, uchar*);
-void	idea_key_setup(uchar*, ushort*);
-void	idea_cipher(ushort*, uchar*, int);
-
-
-/* ===================================================== */
 /* digests */
 /* ===================================================== */
 
@@ -224,7 +155,6 @@ enum
 {
 	/* digest lengths */
 	SHA1dlen=	20,
-	MD4dlen=	16,
 	MD5dlen=	16,
 
 	SHA224dlen=	28,
@@ -255,11 +185,9 @@ struct DigestState
 typedef struct DigestState SHAstate;	/* obsolete name */
 typedef struct DigestState SHA1state;
 typedef struct DigestState MD5state;
-typedef struct DigestState MD4state;
 typedef struct DigestState SHA256state;
 typedef struct DigestState SHA512state;
 
-DigestState* md4(uchar*, ulong, uchar*, DigestState*);
 DigestState* md5(uchar*, ulong, uchar*, DigestState*);
 DigestState* sha1(uchar*, ulong, uchar*, DigestState*);
 DigestState* sha224(uchar*, ulong, uchar*, DigestState*);
@@ -328,6 +256,7 @@ struct SHA3state
  */
 
 void	sha3_256(const uchar *in, ulong inlen, uchar out[32]);
+void	keccak256(const uchar *in, ulong inlen, uchar out[32]);	/* Ethereum's: SHA3-256 with the Keccak submission's padding */
 void	sha3_512(const uchar *in, ulong inlen, uchar out[64]);
 void	shake128_init(SHA3state *s);
 void	shake128_absorb(SHA3state *s, const uchar *in, ulong inlen);
@@ -545,7 +474,7 @@ int	probably_prime(mpint *n, int nrep);	/* miller-rabin test */
 int	smallprimetest(mpint *p);		/* returns -1 if not prime, 0 otherwise */
 
 /* ===================================================== */
-/* rc4 */
+/* rc4: kept for PDFs encrypted with it (appl/lib/pdf.b), and for nothing else */
 /* ===================================================== */
 typedef struct RC4state RC4state;
 struct RC4state
@@ -565,7 +494,6 @@ void	rc4back(RC4state*, int);
 /* ===================================================== */
 typedef struct RSApub RSApub;
 typedef struct RSApriv RSApriv;
-typedef struct PEMChain PEMChain;
 
 /* public/encryption key */
 struct RSApub
@@ -589,12 +517,6 @@ struct RSApriv
 	mpint	*c2;	/* (inv p) mod q */
 };
 
-struct PEMChain{
-	PEMChain *next;
-	uchar *pem;
-	int pemlen;
-};
-
 RSApriv*	rsagen(int nlen, int elen, int rounds);
 RSApriv*	rsafill(mpint *n, mpint *e, mpint *d, mpint *p, mpint *q);
 mpint*		rsaencrypt(RSApub *k, mpint *in, mpint *out);
@@ -604,13 +526,6 @@ void		rsapubfree(RSApub*);
 RSApriv*	rsaprivalloc(void);
 void		rsaprivfree(RSApriv*);
 RSApub*		rsaprivtopub(RSApriv*);
-RSApub*		X509toRSApub(uchar*, int, char*, int);
-RSApriv*	asn1toRSApriv(uchar*, int);
-void		asn1dump(uchar *der, int len);
-uchar*		X509gen(RSApriv *priv, char *subj, ulong valid[2], int *certlen);
-uchar*		X509req(RSApriv *priv, char *subj, int *certlen);
-char*		X509verify(uchar *cert, int ncert, RSApub *pk);
-void		X509dump(uchar *cert, int ncert);
 
 /* ===================================================== */
 /* elgamal */
@@ -696,33 +611,3 @@ void		dsaprivfree(DSApriv*);
 DSAsig*		dsasigalloc(void);
 void		dsasigfree(DSAsig*);
 DSApub*		dsaprivtopub(DSApriv*);
-
-/* ===================================================== */
-/* TLS */
-/* ===================================================== */
-typedef struct Thumbprint{
-	struct Thumbprint *next;
-	uchar sha1[SHA1dlen];
-} Thumbprint;
-
-typedef struct TLSconn{
-	char dir[40];  /* connection directory */
-	uchar *cert;   /* certificate (local on input, remote on output) */
-	uchar *sessionID;
-	int certlen, sessionIDlen;
-	int (*trace)(char*fmt, ...);
-	PEMChain *chain; /* optional extra certificate evidence for servers to present */
-} TLSconn;
-
-/* tlshand.c */
-int tlsClient(int fd, TLSconn *c);
-int tlsServer(int fd, TLSconn *c);
-
-/* thumb.c */
-Thumbprint* initThumbprints(char *ok, char *crl);
-void	freeThumbprints(Thumbprint *ok);
-int		okThumbprint(uchar *sha1, Thumbprint *ok);
-
-/* readcert.c */
-uchar	*readcert(char *filename, int *pcertlen);
-PEMChain *readcertchain(char *filename);

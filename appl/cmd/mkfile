@@ -105,7 +105,6 @@ TARG=\
 	gzip.dis\
 	history.dis\
 	hostplumb.dis\
-	idea.dis\
 	import.dis\
 	iostats.dis\
 	js.dis\
@@ -141,7 +140,6 @@ TARG=\
 	mount.dis\
 	mprof.dis\
 	mv.dis\
-	netkey.dis\
 	netstat.dis\
 	newer.dis\
 	ns.dis\

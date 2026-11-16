@@ -123,12 +123,6 @@ strtopk keyring-certtostr
 strtosk keyring-certtostr
 aescbc keyring-crypt
 aessetup keyring-crypt
-descbc keyring-crypt
-desecb keyring-crypt
-dessetup keyring-crypt
-ideacbc keyring-crypt
-ideaecb keyring-crypt
-ideasetup keyring-crypt
 keyring keyring-crypt
 keyring-crypt keyring-crypt
 dhparams keyring-gensk
@@ -170,7 +164,6 @@ hmac_md5 keyring-sha1
 hmac_sha1 keyring-sha1
 keyring keyring-sha1
 keyring-sha1 keyring-sha1
-md4 keyring-sha1
 md5 keyring-sha1
 sha1 keyring-sha1
 sign keyring-sha1

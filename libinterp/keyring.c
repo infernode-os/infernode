@@ -23,9 +23,6 @@ static Type*	TAESstate;
 static Type*	TAESGCMstate;
 static Type*	TChaChastate;
 static Type*	TECpoint;
-static Type*	TDESstate;
-static Type*	TIDEAstate;
-static Type*	TBFstate;
 static Type*	TRC4state;
 
 static Type*	TSigAlg;
@@ -82,9 +79,6 @@ static uchar AESstatemap[] = Keyring_AESstate_map;
 static uchar AESGCMstatemap[] = Keyring_AESGCMstate_map;
 static uchar ChaChastatemap[] = Keyring_ChaChastate_map;
 static uchar ECpointmap[] = Keyring_ECpoint_map;
-static uchar DESstatemap[] = Keyring_DESstate_map;
-static uchar IDEAstatemap[] = Keyring_IDEAstate_map;
-static uchar BFstatemap[] = Keyring_BFstate_map;
 static uchar RC4statemap[] = Keyring_RC4state_map;
 
 static uchar SigAlgmap[] = Keyring_SigAlg_map;
@@ -112,7 +106,6 @@ static char exBadSA[]	= "bad signature algorithm";
 static char exBadSK[]	= "bad secret key";
 static char exBadPK[]	= "bad public key";
 static char exBadCert[]	= "bad certificate";
-static char exBadBsize[]	= "data not multiple of block size";
 static char exBadKey[]	= "bad encryption key";
 static char exBadDigest[]	= "bad digest value";
 static char exBadIvec[]	= "bad ivec";
@@ -144,15 +137,6 @@ genbits(int n, int min, int max)
 	if(n < min || n > max)
 		error(exBadBits);
 }
-
-typedef struct XBFstate XBFstate;
-
-/* BF state */
-struct XBFstate
-{
-	Keyring_BFstate	x;
-	BFstate	state;
-};
 
 /* convert a Big to base64 ascii */
 int
@@ -1198,10 +1182,6 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 		md5(a, len, 0, &ds0);
 		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
-	} else if(strcmp(ha, "md4") == 0){
-		md4(a, len, 0, &ds0);
-		md4((uchar*)buf, n, digest, &ds0);
-		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
 		return nil;
@@ -1300,9 +1280,6 @@ Keyring_sign(void *fp)
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(f->ha), "md5") == 0){
 		md5((uchar*)buf, n, digest, &ds->state);
-		n = Keyring_MD5dlen;
-	} else if(strcmp(string2c(f->ha), "md4") == 0){
-		md4((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1430,10 +1407,6 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		md5((uchar*)a, len, 0, &ds0);
 		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
-	} else if(strcmp(string2c(c->x.ha), "md4") == 0){
-		md4((uchar*)a, len, 0, &ds0);
-		md4((uchar*)buf, n, digest, &ds0);
-		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
 		return 0;
@@ -1503,9 +1476,6 @@ Keyring_verify(void *fp)
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(c->x.ha), "md5") == 0){
 		md5((uchar*)buf, n, digest, &ds->state);
-		n = Keyring_MD5dlen;
-	} else if(strcmp(string2c(c->x.ha), "md4") == 0){
-		md4((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1588,8 +1558,8 @@ Keyring_DigestState_copy(void *fp)
 /*
  * How many bytes of a program's array a digest is to read: the count is
  * the program's, and only one longer than the array was looked for (and
- * cut down). A negative one went to libsec as an unsigned length: sha1,
- * md5 and md4 take whole blocks off it in an int, which stepped back
+ * cut down). A negative one went to libsec as an unsigned length: sha1
+ * and md5 take whole blocks off it in an int, which stepped back
  * from the array, and hashed up to 63 bytes found before it (a program
  * read the heap below its array a byte at a time, by matching digests);
  * the SHA-2 and SHA-3 digests walked forward to the end of memory. A
@@ -1769,20 +1739,6 @@ Keyring_md5(void *fp)
 	destroy(r);
 
 	*f->ret = keyring_digest_x(f->buf, f->n, f->digest, MD5dlen, f->state, md5);
-}
-
-void
-Keyring_md4(void *fp)
-{
-	F_Keyring_md4 *f;
-	void *r;
-
-	f = fp;
-	r = *f->ret;
-	*f->ret = H;
-	destroy(r);
-
-	*f->ret = keyring_digest_x(f->buf, f->n, f->digest, MD4dlen, f->state, md4);
 }
 
 static Keyring_DigestState*
@@ -3142,12 +3098,6 @@ keyringmodinit(void)
 		sizeof(ChaChastatemap));
 	TECpoint = dtype(freeheap, sizeof(XECpoint), ECpointmap,
 		sizeof(ECpointmap));
-	TDESstate = dtype(freeheap, sizeof(XDESstate), DESstatemap,
-		sizeof(DESstatemap));
-	TIDEAstate = dtype(freeheap, sizeof(XIDEAstate), IDEAstatemap,
-		sizeof(IDEAstatemap));
-	TBFstate = dtype(freeheap, sizeof(XBFstate), BFstatemap,
-		sizeof(BFstatemap));
 	TRC4state = dtype(freestate, sizeof(XRC4state), RC4statemap,
 		sizeof(RC4statemap));
 	TAuthinfo = dtype(freeheap, sizeof(Keyring_Authinfo), Authinfomap, sizeof(Authinfomap));
@@ -3450,125 +3400,6 @@ Keyring_putbytearray(void *fp)
 }
 
 void
-Keyring_dessetup(void *fp)
-{
-	USED(fp);
-	error("DES is disabled");
-}
-
-void
-Keyring_desecb(void *fp)
-{
-	USED(fp);
-	error("DES is disabled");
-}
-
-void
-Keyring_descbc(void *fp)
-{
-	USED(fp);
-	error("DES is disabled");
-}
-
-void
-Keyring_ideasetup(void *fp)
-{
-	F_Keyring_ideasetup *f;
-	Heap *h;
-	XIDEAstate *is;
-	uchar *ivec;
-	void *r;
-
-	f = fp;
-	r = *f->ret;
-	*f->ret = H;
-	destroy(r);
-
-	if(f->key == H || f->key->len < 16)
-		error(exBadKey);
-	if(f->ivec != H){
-		if(f->ivec->len < 8)
-			error(exBadIvec);
-		ivec = f->ivec->data;
-	}else
-		ivec = nil;
-
-	h = heap(TIDEAstate);
-	is = H2D(XIDEAstate*, h);
-
-	setupIDEAstate(&is->state, f->key->data, ivec);
-
-	*f->ret = (Keyring_IDEAstate*)is;
-}
-
-void
-Keyring_ideaecb(void *fp)
-{
-	F_Keyring_ideaecb *f;
-	XIDEAstate *is;
-	int i;
-	uchar *p;
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	is = checktype(f->state, TIDEAstate, exBadState, 0);
-	p = f->buf->data;
-
-	for(i = 8; i <= f->n; i += 8, p += 8)
-		idea_cipher(is->state.edkey, p, f->direction);
-}
-
-void
-Keyring_ideacbc(void *fp)
-{
-	F_Keyring_ideacbc *f;
-	XIDEAstate *is;
-	uchar *p, *ep, *ip, *p2, *eip;
-	uchar tmp[8];
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	is = checktype(f->state, TIDEAstate, exBadState, 0);
-	p = f->buf->data;
-
-	if(f->direction == 0){
-		for(ep = p + f->n; p < ep; p += 8){
-			p2 = p;
-			ip = is->state.ivec;
-			for(eip = ip+8; ip < eip; )
-				*p2++ ^= *ip++;
-			idea_cipher(is->state.edkey, p, 0);
-			memmove(is->state.ivec, p, 8);
-		}
-	} else {
-		for(ep = p + f->n; p < ep; ){
-			memmove(tmp, p, 8);
-			idea_cipher(is->state.edkey, p, 1);
-			p2 = tmp;
-			ip = is->state.ivec;
-			for(eip = ip+8; ip < eip; ){
-				*p++ ^= *ip;
-				*ip++ = *p2++;
-			}
-		}
-	}
-}
-
-void
 Keyring_aessetup(void *fp)
 {
 	F_Keyring_aessetup *f;
@@ -3735,62 +3566,6 @@ Keyring_aesgcmdecrypt(void *fp)
 
 	*f->ret = mem2array(buf, ndat);
 	free(buf);
-}
-
-void
-Keyring_blowfishsetup(void *fp)
-{
-	F_Keyring_blowfishsetup *f;
-	Heap *h;
-	XBFstate *is;
-	uchar *ivec;
-	void *r;
-
-	f = fp;
-	r = *f->ret;
-	*f->ret = H;
-	destroy(r);
-
-	if(f->key == H || f->key->len <= 0)
-		error(exBadKey);
-	if(f->ivec != H){
-		if(f->ivec->len != BFbsize)
-			error(exBadIvec);
-		ivec = f->ivec->data;
-	}else
-		ivec = nil;
-
-	h = heap(TBFstate);
-	is = H2D(XBFstate*, h);
-
-	setupBFstate(&is->state, f->key->data, f->key->len, ivec);
-
-	*f->ret = (Keyring_BFstate*)is;
-}
-
-void
-Keyring_blowfishcbc(void *fp)
-{
-	F_Keyring_blowfishcbc *f;
-	XBFstate *is;
-	uchar *p;
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	is = checktype(f->state, TBFstate, exBadState, 0);
-	p = f->buf->data;
-
-	if(f->direction == 0)
-		bfCBCencrypt(p, f->n, &is->state);
-	else
-		bfCBCdecrypt(p, f->n, &is->state);
 }
 
 void

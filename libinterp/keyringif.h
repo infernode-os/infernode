@@ -13,10 +13,7 @@ typedef struct Keyring_AESstate Keyring_AESstate;
 typedef struct Keyring_AESGCMstate Keyring_AESGCMstate;
 typedef struct Keyring_ChaChastate Keyring_ChaChastate;
 typedef struct Keyring_ECpoint Keyring_ECpoint;
-typedef struct Keyring_DESstate Keyring_DESstate;
-typedef struct Keyring_IDEAstate Keyring_IDEAstate;
 typedef struct Keyring_RC4state Keyring_RC4state;
-typedef struct Keyring_BFstate Keyring_BFstate;
 typedef struct Keyring_Authinfo Keyring_Authinfo;
 typedef struct Keyring_RSApk Keyring_RSApk;
 typedef struct Keyring_RSAsk Keyring_RSAsk;
@@ -149,30 +146,12 @@ struct Keyring_ECpoint
 };
 #define Keyring_ECpoint_size 8
 #define Keyring_ECpoint_map {0}
-struct Keyring_DESstate
-{
-	WORD	x;
-};
-#define Keyring_DESstate_size 8
-#define Keyring_DESstate_map {0}
-struct Keyring_IDEAstate
-{
-	WORD	x;
-};
-#define Keyring_IDEAstate_size 8
-#define Keyring_IDEAstate_map {0}
 struct Keyring_RC4state
 {
 	WORD	x;
 };
 #define Keyring_RC4state_size 8
 #define Keyring_RC4state_map {0}
-struct Keyring_BFstate
-{
-	WORD	x;
-};
-#define Keyring_BFstate_size 8
-#define Keyring_BFstate_map {0}
 struct Keyring_Authinfo
 {
 	Keyring_SK*	mysk;
@@ -845,28 +824,6 @@ struct F_IPint_bits
 	uchar	temps[24];
 	Keyring_IPint*	i;
 };
-void Keyring_blowfishcbc(void*);
-typedef struct F_Keyring_blowfishcbc F_Keyring_blowfishcbc;
-struct F_Keyring_blowfishcbc
-{
-	WORD	regs[NREG-1];
-	WORD	noret;
-	uchar	temps[24];
-	Keyring_BFstate*	state;
-	Array*	buf;
-	WORD	n;
-	WORD	direction;
-};
-void Keyring_blowfishsetup(void*);
-typedef struct F_Keyring_blowfishsetup F_Keyring_blowfishsetup;
-struct F_Keyring_blowfishsetup
-{
-	WORD	regs[NREG-1];
-	Keyring_BFstate**	ret;
-	uchar	temps[24];
-	Array*	key;
-	Array*	ivec;
-};
 void IPint_bytestoip(void*);
 typedef struct F_IPint_bytestoip F_IPint_bytestoip;
 struct F_IPint_bytestoip
@@ -956,40 +913,6 @@ struct F_RSAsk_decrypt
 	uchar	temps[24];
 	Keyring_RSAsk*	k;
 	Keyring_IPint*	m;
-};
-void Keyring_descbc(void*);
-typedef struct F_Keyring_descbc F_Keyring_descbc;
-struct F_Keyring_descbc
-{
-	WORD	regs[NREG-1];
-	WORD	noret;
-	uchar	temps[24];
-	Keyring_DESstate*	state;
-	Array*	buf;
-	WORD	n;
-	WORD	direction;
-};
-void Keyring_desecb(void*);
-typedef struct F_Keyring_desecb F_Keyring_desecb;
-struct F_Keyring_desecb
-{
-	WORD	regs[NREG-1];
-	WORD	noret;
-	uchar	temps[24];
-	Keyring_DESstate*	state;
-	Array*	buf;
-	WORD	n;
-	WORD	direction;
-};
-void Keyring_dessetup(void*);
-typedef struct F_Keyring_dessetup F_Keyring_dessetup;
-struct F_Keyring_dessetup
-{
-	WORD	regs[NREG-1];
-	Keyring_DESstate**	ret;
-	uchar	temps[24];
-	Array*	key;
-	Array*	ivec;
 };
 void Keyring_dhparams(void*);
 typedef struct F_Keyring_dhparams F_Keyring_dhparams;
@@ -1218,40 +1141,6 @@ struct F_Keyring_hmac_sha512
 	Array*	digest;
 	Keyring_DigestState*	state;
 };
-void Keyring_ideacbc(void*);
-typedef struct F_Keyring_ideacbc F_Keyring_ideacbc;
-struct F_Keyring_ideacbc
-{
-	WORD	regs[NREG-1];
-	WORD	noret;
-	uchar	temps[24];
-	Keyring_IDEAstate*	state;
-	Array*	buf;
-	WORD	n;
-	WORD	direction;
-};
-void Keyring_ideaecb(void*);
-typedef struct F_Keyring_ideaecb F_Keyring_ideaecb;
-struct F_Keyring_ideaecb
-{
-	WORD	regs[NREG-1];
-	WORD	noret;
-	uchar	temps[24];
-	Keyring_IDEAstate*	state;
-	Array*	buf;
-	WORD	n;
-	WORD	direction;
-};
-void Keyring_ideasetup(void*);
-typedef struct F_Keyring_ideasetup F_Keyring_ideasetup;
-struct F_Keyring_ideasetup
-{
-	WORD	regs[NREG-1];
-	Keyring_IDEAstate**	ret;
-	uchar	temps[24];
-	Array*	key;
-	Array*	ivec;
-};
 void IPint_inttoip(void*);
 typedef struct F_IPint_inttoip F_IPint_inttoip;
 struct F_IPint_inttoip
@@ -1336,18 +1225,6 @@ struct F_Keyring_keccak256
 	Array*	buf;
 	WORD	n;
 	Array*	digest;
-};
-void Keyring_md4(void*);
-typedef struct F_Keyring_md4 F_Keyring_md4;
-struct F_Keyring_md4
-{
-	WORD	regs[NREG-1];
-	Keyring_DigestState**	ret;
-	uchar	temps[24];
-	Array*	buf;
-	WORD	n;
-	Array*	digest;
-	Keyring_DigestState*	state;
 };
 void Keyring_md5(void*);
 typedef struct F_Keyring_md5 F_Keyring_md5;
@@ -2045,7 +1922,6 @@ struct F_IPint_xor
 #define Keyring_SHA384dlen 48
 #define Keyring_SHA512dlen 64
 #define Keyring_MD5dlen 16
-#define Keyring_MD4dlen 16
 #define Keyring_SHA3_256dlen 32
 #define Keyring_SHA3_512dlen 64
 #define Keyring_SLHDSA192S_PKLEN 48
@@ -2066,7 +1942,4 @@ struct F_IPint_xor
 #define Keyring_MLKEM1024_SKLEN 3168
 #define Keyring_MLKEM1024_CTLEN 1568
 #define Keyring_MLKEM1024_SSLEN 32
-#define Keyring_DESbsize 8
-#define Keyring_IDEAbsize 8
-#define Keyring_BFbsize 8
 #define Keyring_Maxmsg 49151

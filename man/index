@@ -289,7 +289,6 @@
 1	/man/1/grep
 1	/man/1/grid-register
 1	/man/1/gzip
-1	/man/1/idea
 1	/man/1/kill
 1	/man/1/lc
 1	/man/1/limbo
@@ -305,7 +304,6 @@
 1	/man/1/mkdir
 1	/man/1/mprof
 1	/man/1/mv
-1	/man/1/netkey
 1	/man/1/netstat
 1	/man/1/ns
 1	/man/1/nsbuild
@@ -800,7 +798,6 @@
 154x	/man/10/plan9.ini
 158	/man/6/ndb
 16	/man/1/auplay
-16	/man/1/idea
 16	/man/1/math-misc
 16	/man/1/tr
 16	/man/1/xd
@@ -935,7 +932,6 @@
 1984	/man/2/draw-image
 1984	/man/2/geodesy
 1989	/man/2/geodesy
-1990	/man/1/idea
 1990	/man/9/1copyright
 1994	/man/9/1copyright
 1996	/man/2/keyring-0intro
@@ -2342,7 +2338,6 @@ a	/man/1/gettar
 a	/man/1/grep
 a	/man/1/grid-register
 a	/man/1/gzip
-a	/man/1/idea
 a	/man/1/kill
 a	/man/1/lc
 a	/man/1/limbo
@@ -2358,7 +2353,6 @@ a	/man/1/mk
 a	/man/1/mkdir
 a	/man/1/mprof
 a	/man/1/mv
-a	/man/1/netkey
 a	/man/1/netstat
 a	/man/1/ns
 a	/man/1/nsbuild
@@ -2686,7 +2680,6 @@ a	/man/8/svc
 a	/man/9/1copyright
 a0	/man/6/sbl
 a1	/man/1/acme
-a10076795	/man/1/idea
 a2	/man/1/acme
 a4	/man/2/print
 a5	/man/2/print
@@ -2712,7 +2705,6 @@ abc	/man/2/sexprs
 abc	/man/6/translate
 abc9i	/man/6/namespace
 abcb	/man/2/regex
-abcd2345	/man/1/idea
 abcdefghijklmn	/man/10/styxserver
 abcdeghijklmn	/man/10/styxserver
 abcelrx	/man/4/dbfs
@@ -3910,10 +3902,8 @@ algorithm	/man/1/cpu
 algorithm	/man/1/crypt
 algorithm	/man/1/diff
 algorithm	/man/1/gzip
-algorithm	/man/1/idea
 algorithm	/man/1/listen
 algorithm	/man/1/math-misc
-algorithm	/man/1/netkey
 algorithm	/man/1/rcmd
 algorithm	/man/1/sum
 algorithm	/man/2/crc
@@ -4860,7 +4850,6 @@ always	/man/1/acme-misc
 always	/man/1/cal
 always	/man/1/charon
 always	/man/1/du
-always	/man/1/idea
 always	/man/1/mc
 always	/man/1/mk
 always	/man/1/sh
@@ -4980,7 +4969,6 @@ an	/man/1/fs
 an	/man/1/ftest
 an	/man/1/grep
 an	/man/1/grid-register
-an	/man/1/idea
 an	/man/1/kill
 an	/man/1/lc
 an	/man/1/limbo
@@ -4990,7 +4978,6 @@ an	/man/1/math-misc
 an	/man/1/mc
 an	/man/1/mdb
 an	/man/1/mk
-an	/man/1/netkey
 an	/man/1/os
 an	/man/1/passwd
 an	/man/1/plumb
@@ -5302,7 +5289,6 @@ and	/man/1/ftest
 and	/man/1/gettar
 and	/man/1/grid-register
 and	/man/1/gzip
-and	/man/1/idea
 and	/man/1/kill
 and	/man/1/lc
 and	/man/1/limbo
@@ -5317,7 +5303,6 @@ and	/man/1/mdb
 and	/man/1/mk
 and	/man/1/mkdir
 and	/man/1/mprof
-and	/man/1/netkey
 and	/man/1/netstat
 and	/man/1/ns
 and	/man/1/nsbuild
@@ -5742,7 +5727,6 @@ any	/man/1/fc
 any	/man/1/freq
 any	/man/1/fs
 any	/man/1/grid-register
-any	/man/1/idea
 any	/man/1/kill
 any	/man/1/limbo
 any	/man/1/listen
@@ -6116,7 +6100,6 @@ appl	/man/1/gettar
 appl	/man/1/grep
 appl	/man/1/grid-register
 appl	/man/1/gzip
-appl	/man/1/idea
 appl	/man/1/kill
 appl	/man/1/lc
 appl	/man/1/limbo
@@ -6132,7 +6115,6 @@ appl	/man/1/mk
 appl	/man/1/mkdir
 appl	/man/1/mprof
 appl	/man/1/mv
-appl	/man/1/netkey
 appl	/man/1/netstat
 appl	/man/1/ns
 appl	/man/1/nsbuild
@@ -6628,7 +6610,6 @@ are	/man/1/ftest
 are	/man/1/grep
 are	/man/1/grid-register
 are	/man/1/gzip
-are	/man/1/idea
 are	/man/1/kill
 are	/man/1/lc
 are	/man/1/limbo
@@ -7130,7 +7111,6 @@ arithmetic	/man/2/math-fp
 arm	/man/2/dis
 armag	/man/10/ar
 armpit	/man/10/plan9.ini
-around	/man/1/idea
 around	/man/2/styxservers
 arp	/man/3/ip
 arrange	/man/1/acme
@@ -7279,7 +7259,6 @@ as	/man/1/ftest
 as	/man/1/gettar
 as	/man/1/grep
 as	/man/1/grid-register
-as	/man/1/idea
 as	/man/1/listen
 as	/man/1/logon
 as	/man/1/look
@@ -7290,7 +7269,6 @@ as	/man/1/mc
 as	/man/1/mdb
 as	/man/1/mk
 as	/man/1/mprof
-as	/man/1/netkey
 as	/man/1/ns
 as	/man/1/nsbuild
 as	/man/1/p
@@ -8250,7 +8228,6 @@ auth	/man/8/srv
 auth	/man/8/svc
 authenticate	/man/1/bind
 authenticate	/man/1/listen
-authenticate	/man/1/netkey
 authenticate	/man/10/odbc
 authenticate	/man/2/factotum
 authenticate	/man/2/keyring-0intro
@@ -8287,7 +8264,6 @@ authentication	/man/1/bind
 authentication	/man/1/cpu
 authentication	/man/1/listen
 authentication	/man/1/ls
-authentication	/man/1/netkey
 authentication	/man/1/passwd
 authentication	/man/1/rcmd
 authentication	/man/10/odbc
@@ -8579,7 +8555,6 @@ b	/man/1/gettar
 b	/man/1/grep
 b	/man/1/grid-register
 b	/man/1/gzip
-b	/man/1/idea
 b	/man/1/kill
 b	/man/1/lc
 b	/man/1/limbo
@@ -8595,7 +8570,6 @@ b	/man/1/mk
 b	/man/1/mkdir
 b	/man/1/mprof
 b	/man/1/mv
-b	/man/1/netkey
 b	/man/1/netstat
 b	/man/1/ns
 b	/man/1/nsbuild
@@ -9055,7 +9029,6 @@ base64path	/man/2/encoding
 based	/man/1/0intro
 based	/man/1/acme
 based	/man/1/charon
-based	/man/1/netkey
 based	/man/1/ns
 based	/man/1/sh-file2chan
 based	/man/1/uuencode
@@ -9149,7 +9122,6 @@ be	/man/1/fc
 be	/man/1/fs
 be	/man/1/ftest
 be	/man/1/grid-register
-be	/man/1/idea
 be	/man/1/lc
 be	/man/1/limbo
 be	/man/1/listen
@@ -10741,7 +10713,6 @@ both	/man/1/comm
 both	/man/1/dd
 both	/man/1/diff
 both	/man/1/fs
-both	/man/1/idea
 both	/man/1/listen
 both	/man/1/man
 both	/man/1/mk
@@ -10921,7 +10892,6 @@ br	/man/1/fs
 br	/man/1/ftest
 br	/man/1/gettar
 br	/man/1/gzip
-br	/man/1/idea
 br	/man/1/kill
 br	/man/1/limbo
 br	/man/1/listen
@@ -10932,7 +10902,6 @@ br	/man/1/math-misc
 br	/man/1/mc
 br	/man/1/mk
 br	/man/1/mv
-br	/man/1/netkey
 br	/man/1/netstat
 br	/man/1/nsbuild
 br	/man/1/os
@@ -11798,7 +11767,6 @@ by	/man/1/gettar
 by	/man/1/grep
 by	/man/1/grid-register
 by	/man/1/gzip
-by	/man/1/idea
 by	/man/1/kill
 by	/man/1/lc
 by	/man/1/limbo
@@ -11813,7 +11781,6 @@ by	/man/1/mdb
 by	/man/1/mk
 by	/man/1/mkdir
 by	/man/1/mprof
-by	/man/1/netkey
 by	/man/1/ns
 by	/man/1/nsbuild
 by	/man/1/passwd
@@ -12319,7 +12286,6 @@ c	/man/1/emu
 c	/man/1/fc
 c	/man/1/freq
 c	/man/1/fs
-c	/man/1/idea
 c	/man/1/lc
 c	/man/1/limbo
 c	/man/1/look
@@ -12491,7 +12457,6 @@ cachesize	/man/8/httpd
 cal	/man/1/cal
 cal	/man/1/calendar
 calc	/man/1/yacc
-calculate	/man/1/netkey
 calculate	/man/1/sum
 calculate	/man/10/seconds
 calculate	/man/2/crc
@@ -12503,7 +12468,6 @@ calculates	/man/1/disdep
 calculates	/man/1/fc
 calculates	/man/1/math-misc
 calculates	/man/1/mprof
-calculates	/man/1/netkey
 calculates	/man/1/prof
 calculates	/man/2/crc
 calculating	/man/2/crc
@@ -12822,7 +12786,6 @@ can	/man/1/env
 can	/man/1/fc
 can	/man/1/fs
 can	/man/1/ftest
-can	/man/1/idea
 can	/man/1/listen
 can	/man/1/math-misc
 can	/man/1/mc
@@ -13518,7 +13481,6 @@ chained	/man/10/allocb
 chaining	/man/1/crypt
 chaining	/man/2/keyring-crypt
 chaining	/man/3/ssl
-challenge	/man/1/netkey
 chan	/man/1/auplay
 chan	/man/1/plumb
 chan	/man/1/sh-file2chan
@@ -13825,7 +13787,6 @@ character	/man/1/dd
 character	/man/1/fc
 character	/man/1/freq
 character	/man/1/fs
-character	/man/1/idea
 character	/man/1/lc
 character	/man/1/look
 character	/man/1/ls
@@ -14141,7 +14102,6 @@ chunks	/man/1/stream
 chunks	/man/1/xd
 cidr	/man/2/ip
 cignore	/man/3/draw
-cipher	/man/1/idea
 cipher	/man/2/keyring-crypt
 cipher	/man/3/ssl
 ciphertext	/man/2/security-0intro
@@ -14455,7 +14415,6 @@ cmd	/man/1/ftest
 cmd	/man/1/gettar
 cmd	/man/1/grep
 cmd	/man/1/gzip
-cmd	/man/1/idea
 cmd	/man/1/kill
 cmd	/man/1/lc
 cmd	/man/1/listen
@@ -14468,7 +14427,6 @@ cmd	/man/1/mk
 cmd	/man/1/mkdir
 cmd	/man/1/mprof
 cmd	/man/1/mv
-cmd	/man/1/netkey
 cmd	/man/1/netstat
 cmd	/man/1/ns
 cmd	/man/1/nsbuild
@@ -14793,7 +14751,6 @@ command	/man/1/fc
 command	/man/1/fs
 command	/man/1/ftest
 command	/man/1/grid-register
-command	/man/1/idea
 command	/man/1/listen
 command	/man/1/man
 command	/man/1/mdb
@@ -15627,7 +15584,6 @@ cons	/man/1/date
 cons	/man/1/emu
 cons	/man/1/ftest
 cons	/man/1/logon
-cons	/man/1/netkey
 cons	/man/1/runas
 cons	/man/10/dev
 cons	/man/10/kbdputc
@@ -16823,7 +16779,6 @@ corresponding	/man/1/cprof
 corresponding	/man/1/kill
 corresponding	/man/1/listen
 corresponding	/man/1/mk
-corresponding	/man/1/netkey
 corresponding	/man/1/sh-tk
 corresponding	/man/1/tr
 corresponding	/man/10/conf
@@ -17669,7 +17624,6 @@ d	/man/1/fc
 d	/man/1/freq
 d	/man/1/fs
 d	/man/1/ftest
-d	/man/1/idea
 d	/man/1/lc
 d	/man/1/limbo
 d	/man/1/look
@@ -17774,7 +17728,6 @@ data	/man/1/deb
 data	/man/1/emu
 data	/man/1/fs
 data	/man/1/gzip
-data	/man/1/idea
 data	/man/1/listen
 data	/man/1/mdb
 data	/man/1/mprof
@@ -17944,7 +17897,6 @@ databases	/man/2/dbm
 databases	/man/7/0intro
 dataclass	/man/2/rfc822
 datafile	/man/1/calendar
-datafile	/man/1/idea
 datafiles	/man/4/lockfs
 datagram	/man/3/ip
 datagrams	/man/3/ip
@@ -18226,23 +18178,18 @@ decrement	/man/10/dev
 decrements	/man/1/mdb
 decrements	/man/10/newchan
 decrements	/man/10/ref
-decryped	/man/1/idea
 decrypt	/man/1/crypt
-decrypt	/man/1/idea
 decrypt	/man/2/keyring-crypt
 decrypt	/man/2/keyring-rc4
 decrypt	/man/2/security-0intro
 decrypt	/man/8/svc
-decrypted	/man/1/idea
 decrypted	/man/2/keyring-crypt
 decrypted	/man/2/security-0intro
 decrypting	/man/1/crypt
-decryption	/man/1/idea
 decryption	/man/2/keyring-crypt
 decryption	/man/2/security-0intro
 decryptor	/man/2/keyring-crypt
 decrypts	/man/1/crypt
-decrypts	/man/1/idea
 decrypts	/man/4/keyfs
 decrypts	/man/6/keys
 deemed	/man/10/devattach
@@ -18670,7 +18617,6 @@ deletions	/man/8/applylog
 delfid	/man/2/styxservers
 delight	/man/2/draw-example
 delim	/man/2/sys-tokenize
-delimit	/man/1/idea
 delimit	/man/10/qio
 delimit	/man/3/pipe
 delimited	/man/1/acme
@@ -18821,7 +18767,6 @@ desc	/man/2/dis
 desc	/man/2/draw-font
 desc	/man/2/print
 desc	/man/6/dis
-descbc	/man/2/keyring-crypt
 descend	/man/1/sh-expr
 descend	/man/5/walk
 descendants	/man/2/styxservers-nametree
@@ -19003,7 +18948,6 @@ description	/man/1/gettar
 description	/man/1/grep
 description	/man/1/grid-register
 description	/man/1/gzip
-description	/man/1/idea
 description	/man/1/kill
 description	/man/1/lc
 description	/man/1/limbo
@@ -19019,7 +18963,6 @@ description	/man/1/mk
 description	/man/1/mkdir
 description	/man/1/mprof
 description	/man/1/mv
-description	/man/1/netkey
 description	/man/1/netstat
 description	/man/1/ns
 description	/man/1/nsbuild
@@ -19442,7 +19385,6 @@ descriptors	/man/5/0intro
 descriptors	/man/6/dis
 descriptors	/man/6/image
 descriptors	/man/8/rstyxd
-desecb	/man/2/keyring-crypt
 design	/man/2/security-0intro
 design	/man/6/colour
 design	/man/6/keyboard
@@ -19474,7 +19416,6 @@ despite	/man/2/asn1
 despite	/man/2/draw-image
 despite	/man/5/walk
 despite	/man/6/sbl
-dessetup	/man/2/keyring-crypt
 desstate	/man/2/keyring-crypt
 dest	/man/1/plumb
 dest	/man/6/dis
@@ -19624,7 +19565,6 @@ dev	/man/1/date
 dev	/man/1/emu
 dev	/man/1/ftest
 dev	/man/1/logon
-dev	/man/1/netkey
 dev	/man/1/os
 dev	/man/1/passwd
 dev	/man/1/runas
@@ -19733,7 +19673,6 @@ device	/man/1/deb
 device	/man/1/listen
 device	/man/1/ls
 device	/man/1/mprof
-device	/man/1/netkey
 device	/man/1/netstat
 device	/man/1/os
 device	/man/1/ps
@@ -21508,7 +21447,6 @@ e	/man/1/fc
 e	/man/1/fs
 e	/man/1/ftest
 e	/man/1/grid-register
-e	/man/1/idea
 e	/man/1/limbo
 e	/man/1/ls
 e	/man/1/mc
@@ -21837,7 +21775,6 @@ echo	/man/1/acme
 echo	/man/1/echo
 echo	/man/1/fs
 echo	/man/1/listen
-echo	/man/1/netkey
 echo	/man/1/sh
 echo	/man/1/sh-arg
 echo	/man/1/sh-file2chan
@@ -21900,7 +21837,6 @@ ee	/man/1/date
 ee	/man/1/emu
 ee	/man/1/fs
 ee	/man/1/gettar
-ee	/man/1/idea
 ee	/man/1/limbo
 ee	/man/1/listen
 ee	/man/1/math-misc
@@ -22263,7 +22199,6 @@ either	/man/1/calendar
 either	/man/1/cprof
 either	/man/1/fc
 either	/man/1/fs
-either	/man/1/idea
 either	/man/1/lc
 either	/man/1/limbo
 either	/man/1/ls
@@ -22510,7 +22445,6 @@ empty	/man/1/diff
 empty	/man/1/fmt
 empty	/man/1/fs
 empty	/man/1/mk
-empty	/man/1/netkey
 empty	/man/1/read
 empty	/man/1/rm
 empty	/man/1/sh
@@ -22837,7 +22771,6 @@ encounters	/man/2/sh
 encourage	/man/10/inb
 encrypt	/man/1/bind
 encrypt	/man/1/crypt
-encrypt	/man/1/idea
 encrypt	/man/1/listen
 encrypt	/man/2/keyring-0intro
 encrypt	/man/2/keyring-auth
@@ -22849,7 +22782,6 @@ encrypt	/man/3/ssl
 encrypt	/man/6/auth
 encrypt	/man/8/svc
 encrypted	/man/1/crypt
-encrypted	/man/1/idea
 encrypted	/man/2/keyring-crypt
 encrypted	/man/2/security-0intro
 encrypted	/man/2/security-login
@@ -22864,7 +22796,6 @@ encrypting	/man/3/ssl
 encryption	/man/1/bind
 encryption	/man/1/cpu
 encryption	/man/1/crypt
-encryption	/man/1/idea
 encryption	/man/1/listen
 encryption	/man/1/rcmd
 encryption	/man/10/plan9.ini
@@ -22880,7 +22811,6 @@ encryption	/man/4/import
 encryption	/man/8/rstyxd
 encryptor	/man/2/keyring-crypt
 encrypts	/man/1/crypt
-encrypts	/man/1/idea
 end	/man/1/acme
 end	/man/1/acme-misc
 end	/man/1/ar
@@ -22891,7 +22821,6 @@ end	/man/1/listen
 end	/man/1/mc
 end	/man/1/mkdir
 end	/man/1/mprof
-end	/man/1/netkey
 end	/man/1/netstat
 end	/man/1/p
 end	/man/1/read
@@ -23880,7 +23809,6 @@ ex	/man/1/date
 ex	/man/1/emu
 ex	/man/1/fs
 ex	/man/1/gettar
-ex	/man/1/idea
 ex	/man/1/limbo
 ex	/man/1/listen
 ex	/man/1/math-misc
@@ -24103,7 +24031,6 @@ exact	/man/2/wmclient
 exact	/man/6/plumbing
 exactly	/man/1/fc
 exactly	/man/1/fs
-exactly	/man/1/idea
 exactly	/man/1/look
 exactly	/man/1/mk
 exactly	/man/1/sh-std
@@ -24248,7 +24175,6 @@ example	/man/8/srv
 examples	/man/1/acme
 examples	/man/1/fc
 examples	/man/1/fs
-examples	/man/1/idea
 examples	/man/1/listen
 examples	/man/1/mk
 examples	/man/1/sh
@@ -24785,7 +24711,6 @@ exiting	/man/2/wmlib
 exiting	/man/3/prog
 exits	/man/1/listen
 exits	/man/1/mk
-exits	/man/1/netkey
 exits	/man/1/sh
 exits	/man/10/mk
 exits	/man/10/print
@@ -25052,7 +24977,6 @@ extends	/man/6/regexp
 extensible	/man/2/xml
 extension	/man/1/asm
 extension	/man/1/charon
-extension	/man/1/idea
 extension	/man/2/complete
 extension	/man/2/spki
 extension	/man/4/dossrv
@@ -26022,7 +25946,6 @@ file	/man/1/ftest
 file	/man/1/gettar
 file	/man/1/grep
 file	/man/1/gzip
-file	/man/1/idea
 file	/man/1/kill
 file	/man/1/lc
 file	/man/1/limbo
@@ -26037,7 +25960,6 @@ file	/man/1/mdb
 file	/man/1/mk
 file	/man/1/mprof
 file	/man/1/mv
-file	/man/1/netkey
 file	/man/1/netstat
 file	/man/1/ns
 file	/man/1/nsbuild
@@ -26745,7 +26667,6 @@ first	/man/1/diff
 first	/man/1/disdep
 first	/man/1/fc
 first	/man/1/fs
-first	/man/1/idea
 first	/man/1/limbo
 first	/man/1/logon
 first	/man/1/ls
@@ -27645,7 +27566,6 @@ for	/man/1/fs
 for	/man/1/ftest
 for	/man/1/gettar
 for	/man/1/grid-register
-for	/man/1/idea
 for	/man/1/kill
 for	/man/1/lc
 for	/man/1/limbo
@@ -27659,7 +27579,6 @@ for	/man/1/mk
 for	/man/1/mkdir
 for	/man/1/mprof
 for	/man/1/mv
-for	/man/1/netkey
 for	/man/1/netstat
 for	/man/1/ns
 for	/man/1/nsbuild
@@ -28632,7 +28551,6 @@ from	/man/1/fs
 from	/man/1/ftest
 from	/man/1/gettar
 from	/man/1/grep
-from	/man/1/idea
 from	/man/1/limbo
 from	/man/1/listen
 from	/man/1/look
@@ -29574,7 +29492,6 @@ given	/man/1/gettar
 given	/man/1/grep
 given	/man/1/grid-register
 given	/man/1/gzip
-given	/man/1/idea
 given	/man/1/kill
 given	/man/1/lc
 given	/man/1/listen
@@ -29586,7 +29503,6 @@ given	/man/1/mc
 given	/man/1/mdb
 given	/man/1/mk
 given	/man/1/mprof
-given	/man/1/netkey
 given	/man/1/ns
 given	/man/1/os
 given	/man/1/p
@@ -30163,7 +30079,6 @@ gw	/man/3/ip
 gwip	/man/3/ip
 gz	/man/1/ar
 gz	/man/1/gzip
-gz	/man/1/idea
 gz	/man/8/rdbgsrv
 gzip	/man/1/ar
 gzip	/man/1/gzip
@@ -30334,7 +30249,6 @@ has	/man/1/emu
 has	/man/1/ftest
 has	/man/1/grep
 has	/man/1/grid-register
-has	/man/1/idea
 has	/man/1/listen
 has	/man/1/logon
 has	/man/1/ls
@@ -30555,7 +30469,6 @@ have	/man/1/deb
 have	/man/1/fs
 have	/man/1/grep
 have	/man/1/gzip
-have	/man/1/idea
 have	/man/1/logon
 have	/man/1/mc
 have	/man/1/mdb
@@ -30691,7 +30604,6 @@ hd	/man/2/sys-tokenize
 hd0disk	/man/4/dossrv
 hdr	/man/10/ar
 he	/man/1/0intro
-he	/man/1/idea
 he	/man/2/keyring-0intro
 he	/man/2/sys-stat
 head	/man/1/stack
@@ -31298,7 +31210,6 @@ i	/man/1/gettar
 i	/man/1/grep
 i	/man/1/grid-register
 i	/man/1/gzip
-i	/man/1/idea
 i	/man/1/kill
 i	/man/1/lc
 i	/man/1/limbo
@@ -31314,7 +31225,6 @@ i	/man/1/mk
 i	/man/1/mkdir
 i	/man/1/mprof
 i	/man/1/mv
-i	/man/1/netkey
 i	/man/1/netstat
 i	/man/1/ns
 i	/man/1/nsbuild
@@ -31739,7 +31649,6 @@ icons	/man/4/namespace
 ics	/man/1/tcs
 id	/man/1/acme
 id	/man/1/chgrp
-id	/man/1/idea
 id	/man/1/kill
 id	/man/1/mk
 id	/man/1/ps
@@ -31788,7 +31697,6 @@ id	/man/8/manufacture
 id	/man/8/register
 id	/man/8/signer
 idea	/man/1/acme
-idea	/man/1/idea
 idea	/man/10/plan9.ini
 idea	/man/10/seconds
 idea	/man/2/keyring-0intro
@@ -31798,14 +31706,11 @@ idea	/man/5/attach
 idea	/man/6/colour
 ideabsize	/man/2/keyring-crypt
 ideacbc	/man/1/crypt
-ideacbc	/man/2/keyring-crypt
 ideacbc	/man/3/ssl
-ideaecb	/man/2/keyring-crypt
 ideaecb	/man/3/ssl
 ideally	/man/10/dev
 ideally	/man/3/cmd
 ideas	/man/1/0intro
-ideasetup	/man/2/keyring-crypt
 ideastate	/man/2/keyring-crypt
 idea™	/man/2/keyring-crypt
 idempotent	/man/1/fmt
@@ -32008,7 +31913,6 @@ if	/man/1/gettar
 if	/man/1/grep
 if	/man/1/grid-register
 if	/man/1/gzip
-if	/man/1/idea
 if	/man/1/lc
 if	/man/1/limbo
 if	/man/1/listen
@@ -32741,7 +32645,6 @@ in	/man/1/fs
 in	/man/1/gettar
 in	/man/1/grep
 in	/man/1/grid-register
-in	/man/1/idea
 in	/man/1/kill
 in	/man/1/lc
 in	/man/1/limbo
@@ -34143,7 +34046,6 @@ input	/man/1/fs
 input	/man/1/gettar
 input	/man/1/grep
 input	/man/1/gzip
-input	/man/1/idea
 input	/man/1/limbo
 input	/man/1/listen
 input	/man/1/logon
@@ -34942,7 +34844,6 @@ internally	/man/6/colour
 internally	/man/6/sbl
 internally	/man/6/users
 internally	/man/6/utf
-international	/man/1/idea
 international	/man/2/geodesy
 international	/man/2/keyring-crypt
 internet	/man/2/ip
@@ -34991,7 +34892,6 @@ interpretation	/man/6/sexprs
 interpreted	/man/1/acme
 interpreted	/man/1/auplay
 interpreted	/man/1/emu
-interpreted	/man/1/idea
 interpreted	/man/1/mdb
 interpreted	/man/1/mk
 interpreted	/man/1/sh-file2chan
@@ -35482,7 +35382,6 @@ ip	/man/1/diff
 ip	/man/1/emu
 ip	/man/1/fs
 ip	/man/1/gettar
-ip	/man/1/idea
 ip	/man/1/listen
 ip	/man/1/ls
 ip	/man/1/mdb
@@ -36068,7 +35967,6 @@ is	/man/1/gettar
 is	/man/1/grep
 is	/man/1/grid-register
 is	/man/1/gzip
-is	/man/1/idea
 is	/man/1/kill
 is	/man/1/lc
 is	/man/1/limbo
@@ -36084,7 +35982,6 @@ is	/man/1/mk
 is	/man/1/mkdir
 is	/man/1/mprof
 is	/man/1/mv
-is	/man/1/netkey
 is	/man/1/netstat
 is	/man/1/ns
 is	/man/1/os
@@ -36479,7 +36376,6 @@ it	/man/1/gettar
 it	/man/1/grep
 it	/man/1/grid-register
 it	/man/1/gzip
-it	/man/1/idea
 it	/man/1/kill
 it	/man/1/limbo
 it	/man/1/listen
@@ -36491,7 +36387,6 @@ it	/man/1/mdb
 it	/man/1/mk
 it	/man/1/mkdir
 it	/man/1/mprof
-it	/man/1/netkey
 it	/man/1/ns
 it	/man/1/nsbuild
 it	/man/1/os
@@ -37062,7 +36957,6 @@ j	/man/6/keyboard
 j0	/man/2/math-elem
 j1	/man/2/math-elem
 jacm	/man/6/image
-james	/man/1/idea
 james	/man/6/attrdb
 jan	/man/1/date
 jan	/man/2/daytime
@@ -37284,7 +37178,6 @@ key	/man/1/acme
 key	/man/1/ar
 key	/man/1/charon
 key	/man/1/crypt
-key	/man/1/idea
 key	/man/1/look
 key	/man/1/wm
 key	/man/10/lock
@@ -37707,7 +37600,6 @@ lack	/man/8/ping
 lacks	/man/1/mkdir
 lacks	/man/2/factotum
 lacks	/man/3/ip
-lai	/man/1/idea
 laid	/man/1/charon
 laid	/man/5/stat
 lalo	/man/2/geodesy
@@ -38676,7 +38568,6 @@ line	/man/1/fmt
 line	/man/1/fortune
 line	/man/1/gettar
 line	/man/1/grep
-line	/man/1/idea
 line	/man/1/look
 line	/man/1/ls
 line	/man/1/mc
@@ -39130,7 +39021,6 @@ live	/man/3/prog
 live	/man/8/ping
 lives	/man/6/ndb
 lmargin	/man/2/print
-lmno	/man/1/idea
 lno	/man/2/attrdb
 lnum	/man/2/cfg
 lnvils	/man/1/grep
@@ -39570,7 +39460,6 @@ long	/man/1/acme
 long	/man/1/ar
 long	/man/1/deb
 long	/man/1/fmt
-long	/man/1/idea
 long	/man/1/ls
 long	/man/1/mk
 long	/man/1/passwd
@@ -40112,7 +40001,6 @@ made	/man/1/fs
 made	/man/1/grep
 made	/man/1/listen
 made	/man/1/mk
-made	/man/1/netkey
 made	/man/1/sh
 made	/man/1/sh-file2chan
 made	/man/1/sh-regex
@@ -40660,7 +40548,6 @@ masktext	/man/2/ip
 mason	/man/6/attrdb
 mass	/man/1/units
 masse	/man/1/acme
-massey	/man/1/idea
 master	/man/1/mk
 master	/man/10/mk
 master	/man/4/keyfs
@@ -40978,8 +40865,6 @@ mc	/man/1/mc
 mcreate	/man/2/sys-bind
 mcreate	/man/3/fs
 mcreate	/man/6/namespace
-md4	/man/2/keyring-0intro
-md4	/man/2/keyring-sha1
 md4	/man/3/ssl
 md4len	/man/2/keyring-sha1
 md5	/man/1/crypt
@@ -42521,7 +42406,6 @@ must	/man/1/disdep
 must	/man/1/fs
 must	/man/1/ftest
 must	/man/1/gzip
-must	/man/1/idea
 must	/man/1/logon
 must	/man/1/mc
 must	/man/1/mk
@@ -42888,7 +42772,6 @@ name	/man/1/gettar
 name	/man/1/grep
 name	/man/1/grid-register
 name	/man/1/gzip
-name	/man/1/idea
 name	/man/1/kill
 name	/man/1/lc
 name	/man/1/limbo
@@ -42904,7 +42787,6 @@ name	/man/1/mk
 name	/man/1/mkdir
 name	/man/1/mprof
 name	/man/1/mv
-name	/man/1/netkey
 name	/man/1/netstat
 name	/man/1/ns
 name	/man/1/nsbuild
@@ -43769,7 +43651,6 @@ netaddr	/man/2/sys-dial
 netaddr	/man/8/cs
 netgear	/man/10/plan9.ini
 netif	/man/10/0intro
-netkey	/man/1/netkey
 netscape	/man/1/charon
 netscape	/man/6/colour
 netstat	/man/1/netstat
@@ -44282,7 +44163,6 @@ no	/man/1/ftest
 no	/man/1/gettar
 no	/man/1/grep
 no	/man/1/gzip
-no	/man/1/idea
 no	/man/1/limbo
 no	/man/1/listen
 no	/man/1/logon
@@ -45009,7 +44889,6 @@ note	/man/1/ar
 note	/man/1/bind
 note	/man/1/fc
 note	/man/1/fs
-note	/man/1/idea
 note	/man/1/mprof
 note	/man/1/prof
 note	/man/1/pwd
@@ -45767,7 +45646,6 @@ of	/man/1/gettar
 of	/man/1/grep
 of	/man/1/grid-register
 of	/man/1/gzip
-of	/man/1/idea
 of	/man/1/kill
 of	/man/1/lc
 of	/man/1/limbo
@@ -45783,7 +45661,6 @@ of	/man/1/mk
 of	/man/1/mkdir
 of	/man/1/mprof
 of	/man/1/mv
-of	/man/1/netkey
 of	/man/1/netstat
 of	/man/1/ns
 of	/man/1/nsbuild
@@ -46105,7 +45982,6 @@ of	/man/8/styxmon
 of	/man/8/svc
 of	/man/9/1copyright
 off	/man/1/charon
-off	/man/1/netkey
 off	/man/1/sh-expr
 off	/man/10/dev
 off	/man/10/plan9.ini
@@ -46336,14 +46212,12 @@ on	/man/1/env
 on	/man/1/fc
 on	/man/1/fs
 on	/man/1/grid-register
-on	/man/1/idea
 on	/man/1/kill
 on	/man/1/limbo
 on	/man/1/listen
 on	/man/1/logon
 on	/man/1/mk
 on	/man/1/mprof
-on	/man/1/netkey
 on	/man/1/netstat
 on	/man/1/ns
 on	/man/1/nsbuild
@@ -46595,11 +46469,9 @@ once	/man/1/0intro
 once	/man/1/charon
 once	/man/1/deb
 once	/man/1/fs
-once	/man/1/idea
 once	/man/1/listen
 once	/man/1/logon
 once	/man/1/mk
-once	/man/1/netkey
 once	/man/1/sh-std
 once	/man/1/stack
 once	/man/10/dev
@@ -46666,7 +46538,6 @@ one	/man/1/fs
 one	/man/1/gettar
 one	/man/1/grep
 one	/man/1/grid-register
-one	/man/1/idea
 one	/man/1/limbo
 one	/man/1/logon
 one	/man/1/ls
@@ -47437,7 +47308,6 @@ option	/man/1/freq
 option	/man/1/fs
 option	/man/1/grid-register
 option	/man/1/gzip
-option	/man/1/idea
 option	/man/1/kill
 option	/man/1/listen
 option	/man/1/logon
@@ -47678,7 +47548,6 @@ or	/man/1/fc
 or	/man/1/fs
 or	/man/1/gettar
 or	/man/1/grep
-or	/man/1/idea
 or	/man/1/kill
 or	/man/1/lc
 or	/man/1/limbo
@@ -47692,7 +47561,6 @@ or	/man/1/mc
 or	/man/1/mdb
 or	/man/1/mk
 or	/man/1/mprof
-or	/man/1/netkey
 or	/man/1/ns
 or	/man/1/os
 or	/man/1/p
@@ -48603,7 +48471,6 @@ output	/man/1/fs
 output	/man/1/gettar
 output	/man/1/grep
 output	/man/1/gzip
-output	/man/1/idea
 output	/man/1/kill
 output	/man/1/lc
 output	/man/1/limbo
@@ -49582,7 +49449,6 @@ passwd	/man/4/keysrv
 passwd	/man/6/keys
 passwd	/man/8/changelogin
 password	/man/1/acme
-password	/man/1/netkey
 password	/man/1/passwd
 password	/man/2/factotum
 password	/man/2/keyring-0intro
@@ -51026,7 +50892,6 @@ pp	/man/1/fs
 pp	/man/1/ftest
 pp	/man/1/gettar
 pp	/man/1/gzip
-pp	/man/1/idea
 pp	/man/1/kill
 pp	/man/1/limbo
 pp	/man/1/listen
@@ -51873,7 +51738,6 @@ prints	/man/1/math-misc
 prints	/man/1/mc
 prints	/man/1/mdb
 prints	/man/1/mkdir
-prints	/man/1/netkey
 prints	/man/1/netstat
 prints	/man/1/ns
 prints	/man/1/ps
@@ -52452,7 +52316,6 @@ prompted	/man/8/signer
 prompting	/man/4/ftpfs
 prompting	/man/8/getauthinfo
 prompts	/man/1/crypt
-prompts	/man/1/netkey
 prompts	/man/1/passwd
 prompts	/man/4/keyfs
 prompts	/man/4/registry
@@ -52503,7 +52366,6 @@ property	/man/6/colour
 proportional	/man/1/acme
 proportional	/man/2/dict
 proportionally	/man/2/print
-proposed	/man/1/idea
 proposed	/man/10/ntsrv
 proposed	/man/4/registry
 proposed	/man/5/walk
@@ -52947,7 +52809,6 @@ pushing	/man/10/error
 put	/man/1/Mail
 put	/man/1/acme
 put	/man/1/ar
-put	/man/1/idea
 put	/man/10/conf
 put	/man/10/qlock
 put	/man/2/debug
@@ -53232,7 +53093,6 @@ quoted	/man/6/sexprs
 quoted	/man/6/translate
 quoted	/man/8/kfscmd
 quotes	/man/1/acme
-quotes	/man/1/idea
 quotes	/man/1/mk
 quotes	/man/1/sh
 quotes	/man/1/sh-csv
@@ -53757,7 +53617,6 @@ read	/man/1/deb
 read	/man/1/fs
 read	/man/1/ftest
 read	/man/1/grid-register
-read	/man/1/idea
 read	/man/1/ls
 read	/man/1/math-misc
 read	/man/1/mc
@@ -54019,7 +53878,6 @@ reads	/man/1/freq
 reads	/man/1/fs
 reads	/man/1/gettar
 reads	/man/1/mc
-reads	/man/1/netkey
 reads	/man/1/nsbuild
 reads	/man/1/sendmail
 reads	/man/1/sh
@@ -54220,7 +54078,6 @@ received	/man/5/version
 received	/man/6/auth
 received	/man/8/register
 received	/man/8/styxmon
-receiver	/man/1/idea
 receiver	/man/2/security-0intro
 receives	/man/1/acme
 receives	/man/1/sh
@@ -54980,7 +54837,6 @@ remote	/man/1/charon
 remote	/man/1/cpu
 remote	/man/1/deb
 remote	/man/1/listen
-remote	/man/1/netkey
 remote	/man/1/os
 remote	/man/1/passwd
 remote	/man/1/ps
@@ -55144,7 +55000,6 @@ repeated	/man/2/prof
 repeated	/man/6/keyboard
 repeatedly	/man/1/acme
 repeatedly	/man/1/fc
-repeatedly	/man/1/netkey
 repeatedly	/man/1/sh-std
 repeatedly	/man/10/lock
 repeatedly	/man/2/crc
@@ -55931,7 +55786,6 @@ responds	/man/3/ip
 responds	/man/5/0intro
 responds	/man/5/version
 responds	/man/8/getauthinfo
-response	/man/1/netkey
 response	/man/1/wm
 response	/man/10/plan9.ini
 response	/man/10/xalloc
@@ -57312,7 +57166,6 @@ s	/man/1/mc
 s	/man/1/mdb
 s	/man/1/mk
 s	/man/1/mprof
-s	/man/1/netkey
 s	/man/1/os
 s	/man/1/passwd
 s	/man/1/plumb
@@ -57591,7 +57444,6 @@ same	/man/1/mdb
 same	/man/1/mk
 same	/man/1/mprof
 same	/man/1/mv
-same	/man/1/netkey
 same	/man/1/ns
 same	/man/1/passwd
 same	/man/1/prof
@@ -58046,7 +57898,6 @@ seconds	/man/5/stat
 seconds	/man/8/applylog
 seconds	/man/8/createsignerkey
 secret	/man/1/crypt
-secret	/man/1/netkey
 secret	/man/1/passwd
 secret	/man/2/factotum
 secret	/man/2/keyring-0intro
@@ -58152,7 +58003,6 @@ secure	/man/8/signer
 secured	/man/3/sign
 securely	/man/2/keyring-0intro
 securely	/man/2/security-0intro
-securenet	/man/1/netkey
 security	/man/1/bind
 security	/man/1/charon
 security	/man/1/cpu
@@ -58813,7 +58663,6 @@ sensitive	/man/10/eve
 sensitive	/man/10/plan9.ini
 sensitive	/man/6/colour
 sent	/man/1/acme
-sent	/man/1/idea
 sent	/man/1/plumb
 sent	/man/1/sh
 sent	/man/1/sh-file2chan
@@ -59701,7 +59550,6 @@ sh	/man/1/gettar
 sh	/man/1/grep
 sh	/man/1/grid-register
 sh	/man/1/gzip
-sh	/man/1/idea
 sh	/man/1/kill
 sh	/man/1/lc
 sh	/man/1/limbo
@@ -59717,7 +59565,6 @@ sh	/man/1/mk
 sh	/man/1/mkdir
 sh	/man/1/mprof
 sh	/man/1/mv
-sh	/man/1/netkey
 sh	/man/1/netstat
 sh	/man/1/ns
 sh	/man/1/nsbuild
@@ -60103,7 +59950,6 @@ share	/man/2/sys-pipe
 share	/man/3/dbg
 share	/man/4/keyfs
 share	/man/5/0intro
-shared	/man/1/netkey
 shared	/man/1/passwd
 shared	/man/1/ps
 shared	/man/10/kproc
@@ -60149,7 +59995,6 @@ shell	/man/1/echo
 shell	/man/1/emu
 shell	/man/1/fc
 shell	/man/1/fs
-shell	/man/1/idea
 shell	/man/1/listen
 shell	/man/1/mk
 shell	/man/1/p
@@ -60223,7 +60068,6 @@ should	/man/1/charon
 should	/man/1/cprof
 should	/man/1/crypt
 should	/man/1/fs
-should	/man/1/idea
 should	/man/1/listen
 should	/man/1/math-misc
 should	/man/1/mc
@@ -60714,7 +60558,6 @@ simply	/man/1/0intro
 simply	/man/1/acme
 simply	/man/1/cprof
 simply	/man/1/deb
-simply	/man/1/idea
 simply	/man/1/mc
 simply	/man/1/mv
 simply	/man/1/sh
@@ -61488,7 +61331,6 @@ source	/man/1/gettar
 source	/man/1/grep
 source	/man/1/grid-register
 source	/man/1/gzip
-source	/man/1/idea
 source	/man/1/kill
 source	/man/1/lc
 source	/man/1/limbo
@@ -61504,7 +61346,6 @@ source	/man/1/mk
 source	/man/1/mkdir
 source	/man/1/mprof
 source	/man/1/mv
-source	/man/1/netkey
 source	/man/1/netstat
 source	/man/1/ns
 source	/man/1/nsbuild
@@ -62067,7 +61908,6 @@ specified	/man/1/fc
 specified	/man/1/fortune
 specified	/man/1/fs
 specified	/man/1/ftest
-specified	/man/1/idea
 specified	/man/1/listen
 specified	/man/1/logon
 specified	/man/1/look
@@ -62469,7 +62309,6 @@ standard	/man/1/fs
 standard	/man/1/gettar
 standard	/man/1/grep
 standard	/man/1/gzip
-standard	/man/1/idea
 standard	/man/1/kill
 standard	/man/1/limbo
 standard	/man/1/listen
@@ -63324,7 +63163,6 @@ string	/man/1/charon
 string	/man/1/diff
 string	/man/1/disdep
 string	/man/1/fs
-string	/man/1/idea
 string	/man/1/look
 string	/man/1/mc
 string	/man/1/mk
@@ -64644,7 +64482,6 @@ synopsis	/man/1/gettar
 synopsis	/man/1/grep
 synopsis	/man/1/grid-register
 synopsis	/man/1/gzip
-synopsis	/man/1/idea
 synopsis	/man/1/kill
 synopsis	/man/1/lc
 synopsis	/man/1/limbo
@@ -64660,7 +64497,6 @@ synopsis	/man/1/mk
 synopsis	/man/1/mkdir
 synopsis	/man/1/mprof
 synopsis	/man/1/mv
-synopsis	/man/1/netkey
 synopsis	/man/1/netstat
 synopsis	/man/1/ns
 synopsis	/man/1/nsbuild
@@ -65175,7 +65011,6 @@ system	/man/1/disdep
 system	/man/1/emu
 system	/man/1/kill
 system	/man/1/mprof
-system	/man/1/netkey
 system	/man/1/os
 system	/man/1/passwd
 system	/man/1/sh
@@ -66256,7 +66091,6 @@ th	/man/1/gettar
 th	/man/1/grep
 th	/man/1/grid-register
 th	/man/1/gzip
-th	/man/1/idea
 th	/man/1/kill
 th	/man/1/lc
 th	/man/1/limbo
@@ -66272,7 +66106,6 @@ th	/man/1/mk
 th	/man/1/mkdir
 th	/man/1/mprof
 th	/man/1/mv
-th	/man/1/netkey
 th	/man/1/netstat
 th	/man/1/ns
 th	/man/1/nsbuild
@@ -66754,7 +66587,6 @@ that	/man/1/gettar
 that	/man/1/grep
 that	/man/1/grid-register
 that	/man/1/gzip
-that	/man/1/idea
 that	/man/1/kill
 that	/man/1/lc
 that	/man/1/listen
@@ -67068,7 +66900,6 @@ the	/man/1/gettar
 the	/man/1/grep
 the	/man/1/grid-register
 the	/man/1/gzip
-the	/man/1/idea
 the	/man/1/kill
 the	/man/1/lc
 the	/man/1/limbo
@@ -67084,7 +66915,6 @@ the	/man/1/mk
 the	/man/1/mkdir
 the	/man/1/mprof
 the	/man/1/mv
-the	/man/1/netkey
 the	/man/1/netstat
 the	/man/1/ns
 the	/man/1/nsbuild
@@ -67586,7 +67416,6 @@ then	/man/1/cprof
 then	/man/1/cpu
 then	/man/1/diff
 then	/man/1/grid-register
-then	/man/1/idea
 then	/man/1/lc
 then	/man/1/limbo
 then	/man/1/listen
@@ -67595,7 +67424,6 @@ then	/man/1/mdb
 then	/man/1/mk
 then	/man/1/mprof
 then	/man/1/mv
-then	/man/1/netkey
 then	/man/1/passwd
 then	/man/1/prof
 then	/man/1/sh
@@ -67859,7 +67687,6 @@ these	/man/1/charon
 these	/man/1/diff
 these	/man/1/ftest
 these	/man/1/gettar
-these	/man/1/idea
 these	/man/1/mc
 these	/man/1/mk
 these	/man/1/sh-std
@@ -68079,7 +67906,6 @@ this	/man/1/disdep
 this	/man/1/emu
 this	/man/1/fc
 this	/man/1/fs
-this	/man/1/idea
 this	/man/1/limbo
 this	/man/1/listen
 this	/man/1/ls
@@ -68713,7 +68539,6 @@ to	/man/1/ftest
 to	/man/1/gettar
 to	/man/1/grid-register
 to	/man/1/gzip
-to	/man/1/idea
 to	/man/1/kill
 to	/man/1/lc
 to	/man/1/limbo
@@ -68729,7 +68554,6 @@ to	/man/1/mk
 to	/man/1/mkdir
 to	/man/1/mprof
 to	/man/1/mv
-to	/man/1/netkey
 to	/man/1/ns
 to	/man/1/os
 to	/man/1/p
@@ -69553,7 +69377,6 @@ transmit	/man/2/filter-deflate
 transmit	/man/3/ip
 transmits	/man/2/styx
 transmits	/man/5/0intro
-transmitted	/man/1/idea
 transmitted	/man/1/sh-file2chan
 transmitted	/man/10/print
 transmitted	/man/2/keyring-0intro
@@ -69911,7 +69734,6 @@ turn	/man/6/dis
 turn	/man/8/kfscmd
 turn	/man/8/plumber
 turn	/man/8/styxmon
-turned	/man/1/netkey
 turned	/man/2/draw-0intro
 turned	/man/2/keyring-0intro
 turned	/man/2/security-0intro
@@ -71364,7 +71186,6 @@ used	/man/1/du
 used	/man/1/fs
 used	/man/1/grep
 used	/man/1/gzip
-used	/man/1/idea
 used	/man/1/listen
 used	/man/1/man
 used	/man/1/mc
@@ -71591,7 +71412,6 @@ user	/man/1/listen
 user	/man/1/logon
 user	/man/1/ls
 user	/man/1/math-misc
-user	/man/1/netkey
 user	/man/1/netstat
 user	/man/1/p
 user	/man/1/passwd
@@ -71789,14 +71609,12 @@ using	/man/1/cprof
 using	/man/1/cpu
 using	/man/1/crypt
 using	/man/1/deb
-using	/man/1/idea
 using	/man/1/listen
 using	/man/1/logon
 using	/man/1/man
 using	/man/1/math-misc
 using	/man/1/mc
 using	/man/1/mk
-using	/man/1/netkey
 using	/man/1/passwd
 using	/man/1/sendmail
 using	/man/1/sh
@@ -72068,7 +71886,6 @@ utility	/man/2/keyring-ipint
 utility	/man/2/rfc822
 utility	/man/2/sh
 utility	/man/2/styxservers
-utils	/man/1/idea
 utils	/man/10/atoi
 utils	/man/10/inm
 utils	/man/10/kprof
@@ -73678,7 +73495,6 @@ which	/man/1/fs
 which	/man/1/ftest
 which	/man/1/grid-register
 which	/man/1/gzip
-which	/man/1/idea
 which	/man/1/lc
 which	/man/1/listen
 which	/man/1/logon
@@ -73974,7 +73790,6 @@ whose	/man/1/asm
 whose	/man/1/cprof
 whose	/man/1/emu
 whose	/man/1/fs
-whose	/man/1/idea
 whose	/man/1/limbo
 whose	/man/1/look
 whose	/man/1/mk
@@ -74389,7 +74204,6 @@ with	/man/1/gettar
 with	/man/1/grep
 with	/man/1/grid-register
 with	/man/1/gzip
-with	/man/1/idea
 with	/man/1/lc
 with	/man/1/limbo
 with	/man/1/listen
@@ -74702,7 +74516,6 @@ without	/man/1/ar
 without	/man/1/charon
 without	/man/1/dd
 without	/man/1/fs
-without	/man/1/idea
 without	/man/1/ls
 without	/man/1/mc
 without	/man/1/mk
@@ -75103,7 +74916,6 @@ writes	/man/1/du
 writes	/man/1/echo
 writes	/man/1/fs
 writes	/man/1/gettar
-writes	/man/1/netkey
 writes	/man/1/read
 writes	/man/1/runas
 writes	/man/1/sh-file2chan
@@ -75432,7 +75244,6 @@ xsize	/man/1/emu
 xspanalloc	/man/10/xalloc
 xstep	/man/2/w3c-xpointers
 xterm	/man/1/acme-misc
-xuejia	/man/1/idea
 xx	/man/1/fc
 xx	/man/10/rune
 xx	/man/2/draw-example

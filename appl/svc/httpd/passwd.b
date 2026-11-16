@@ -5,6 +5,10 @@ implement Passwd;
 # password file for user, the password read from standard input (its
 # first line): user:pbkdf2-sha256:iterations:salt:hash, salt and hash
 # in base64, the salt 16 random bytes, the hash PBKDF2-HMAC-SHA-256.
+# The line is added to the file: of two for one user httpd takes the
+# last.  A name or password httpd would never take from a client (an
+# empty name, a password past 256 bytes, not UTF-8 or with a control
+# character) is refused here, not made a line that lets no one in.
 #
 
 include "sys.m";
@@ -24,6 +28,8 @@ Passwd: module
 {
 	init: fn(nil: ref Draw->Context, argv: list of string);
 };
+
+MAXPASS: con 256;	# bytes of a password; httpd takes 512 of user:password
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -45,6 +51,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(len argv != 1 || iters < 1000)
 		arg->usage();
 	user := hd argv;
+	if(user == nil)
+		fatal("a user's name is empty");
 	for(i := 0; i < len user; i++)
 		if(user[i] == ':' || user[i] <= 16r20 || user[i] == 16r7F)
 			fatal("a user's name has no colon, blank or control character");
@@ -61,14 +69,21 @@ init(nil: ref Draw->Context, argv: list of string)
 		if(hasnl(b[0:n]))
 			break;
 	}
-	pass := string b[0:n];
-	for(i = 0; i < len pass; i++)
-		if(pass[i] == '\n' || pass[i] == '\r') {
-			pass = pass[0:i];
+	if(n == len b && !hasnl(b))
+		fatal("a password is at most 256 bytes");	# (it was cut at 1024, and the line made of that)
+	for(n = 0; n < len b; n++)
+		if(b[n] == byte '\n' || b[n] == byte '\r')
 			break;
-		}
+	pass := string b[0:n];
 	if(pass == nil)
 		fatal("no password on standard input");
+	if(n > MAXPASS)
+		fatal(sys->sprint("a password is at most %d bytes", MAXPASS));
+	if(len array of byte pass != n)
+		fatal("a password is UTF-8");
+	for(i = 0; i < len pass; i++)
+		if(pass[i] < 16r20 || pass[i] == 16r7F || pass[i] == 16rFFFD)
+			fatal("a password has no control character");
 
 	salt := array[16] of byte;
 	rfd := sys->open("#c/notquiterandom", Sys->OREAD);
@@ -77,7 +92,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(rfd == nil || sys->readn(rfd, salt, len salt) != len salt)
 		fatal(sys->sprint("no random bytes for a salt: %r"));
 	h := pbkdf2(array of byte pass, salt, iters);
-	sys->print("%s:pbkdf2-sha256:%d:%s:%s\n", user, iters, base64->enc(salt), base64->enc(h));
+	line := array of byte sys->sprint("%s:pbkdf2-sha256:%d:%s:%s\n", user, iters, base64->enc(salt), base64->enc(h));
+	if(sys->write(sys->fildes(1), line, len line) != len line)
+		fatal(sys->sprint("cannot write the line: %r"));
 }
 
 hasnl(b: array of byte): int

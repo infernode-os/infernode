@@ -2565,23 +2565,33 @@ User: adt {
 users: list of ref User;
 pwqid: Sys->Qid;
 pwmtime := -1;
+pwlen := big -1;
+pwbad := 0;	# the file could not be read when last looked at: looked at again each time
+pwsaid: string;	# what was last said of it, said once
 
 DEFITERS: con 100000;
 WINDOW: con 600;	# seconds a source's failures are counted, and it is refused for after ten
 MAXFAIL: con 10;
 CACHETIME: con 300;	# seconds a checked password is taken again without its hash
 
-# user:pbkdf2-sha256:iterations:salt:hash, the last two base64
+# user:pbkdf2-sha256:iterations:salt:hash, the last two base64.
+#
+# The file is who may log in: one that has gone, cannot be read or
+# holds no users is no users, and every password is refused.  (Any of
+# the three left the users of the last good file in force: the last
+# user's line taken out, or the file removed, and they still logged
+# in.)  Of two lines for one name the last is the user's: a password
+# is changed by adding a line (the first was, so the password meant to
+# be retired stayed the one in force).
 loadpasswords(): list of ref User
 {
 	(ok, d) := sys->stat(pwfile);
-	if(ok < 0) {
-		sys->fprint(stderr, "httpd: cannot stat %s: %r\n", pwfile);
-		return users;
+	if(ok < 0 || sys->open(pwfile, Sys->OREAD) == nil) {
+		nousers(sys->sprint("cannot read %s: %r", pwfile));
+		pwbad = 1;
+		return nil;
 	}
 	text := readfile(pwfile, 1<<20);
-	if(text == nil)
-		return users;
 	nu: list of ref User;
 	n := 0;
 	for(ls := split(text, '\n'); ls != nil; ls = tl ls) {
@@ -2604,12 +2614,32 @@ loadpasswords(): list of ref User
 			sys->fprint(stderr, "httpd: %s:%d: not a password line, left out\n", pwfile, n);
 			continue;
 		}
-		nu = u :: nu;
+		keep: list of ref User;
+		for(pl := nu; pl != nil; pl = tl pl)
+			if((hd pl).name != u.name)
+				keep = hd pl :: keep;
+		if(len keep != len nu)
+			sys->fprint(stderr, "httpd: %s:%d: %s again: this line is the user's, not the one before\n", pwfile, n, logname(u.name));
+		nu = u :: keep;
 	}
 	users = nu;
 	pwqid = d.qid;
 	pwmtime = d.mtime;
+	pwlen = d.length;
+	pwbad = 0;
+	if(users == nil)
+		nousers(pwfile + ": no users");
+	else
+		pwsaid = nil;
 	return users;
+}
+
+nousers(why: string)
+{
+	users = nil;
+	if(why != pwsaid)
+		sys->fprint(stderr, "httpd: %s: every password is refused\n", why);
+	pwsaid = why;
 }
 
 Fail: adt {
@@ -2632,7 +2662,8 @@ Cached: adt {
 # found right is taken again for five minutes without its hash (a
 # browser sends it with every request), lockout or not, so one guesser
 # behind a NAT does not lock out those already in.  The password file
-# is read again when it changes.
+# is read again when it changes, and what was found right under the
+# old one is forgotten.
 authenticator()
 {
 	fails: list of ref Fail;
@@ -2663,9 +2694,9 @@ check(user, pass, ip: string, fails: list of ref Fail, cache: list of ref Cached
 	ccache = cache;
 	t := now();
 	(ok, d) := sys->stat(pwfile);
-	if(ok >= 0 && (d.mtime != pwmtime || d.qid.vers != pwqid.vers || d.qid.path != pwqid.path)) {
+	if(ok < 0 || pwbad || d.mtime != pwmtime || d.qid.vers != pwqid.vers || d.qid.path != pwqid.path || d.length != pwlen) {
 		loadpasswords();
-		cache = nil;
+		cache = nil;	# a password found right was the old file's
 	}
 	key := sha256(array of byte (user + "\0" + pass));
 	nc: list of ref Cached;
@@ -2699,15 +2730,21 @@ check(user, pass, ip: string, fails: list of ref Fail, cache: list of ref Cached
 	u: ref User;
 	most := DEFITERS;
 	for(ul := users; ul != nil; ul = tl ul) {
-		if((hd ul).name == user)
+		if(u == nil && (hd ul).name == user)
 			u = hd ul;
 		if((hd ul).iters > most)
 			most = (hd ul).iters;
 	}
+	# Every guess costs most rounds: a user whose line has fewer makes
+	# up the rest against no one's salt.  (A known user cost its own
+	# rounds and an unknown one the most, so a name whose line was made
+	# with fewer was told from one that is no user by the time.)
 	good := 0;
-	if(u != nil)
+	if(u != nil) {
 		good = bytesame(pbkdf2(array of byte pass, u.salt, u.iters), u.hash);
-	else
+		if(u.iters < most)
+			pbkdf2(array of byte pass, dummysalt, most - u.iters);
+	} else
 		pbkdf2(array of byte pass, dummysalt, most);
 	if(good) {
 		if(len cache < 64)

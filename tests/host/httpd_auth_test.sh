@@ -17,7 +17,10 @@
 # another CA, revoked, self-signed; by CN and by fingerprint.
 # Passwords: right, wrong, unknown users, malformed Authorization, two
 # of them, a 401 then the password on one connection, the hash cached,
-# an unknown user's time, the file changed while serving.  Rules: 14
+# an unknown user's time and a user's with fewer rounds, the file
+# changed while serving, a second line for a user (the last is the
+# user's), the file emptied and removed (every password refused);
+# names and passwords svc/httpd/passwd makes no line of.  Rules: 14
 # ways at /admin (case, dots, blanks, backslashes, an 8.3 name,
 # absolute-form, encoded slashes), prefix boundaries, HEAD, methods,
 # the defaults, a path no rule names, the log's user field; the
@@ -129,7 +132,8 @@ printf '/x pasword\n' > badrules
 pw() { echo "$2" | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i "$3" "$1" </dev/stdin 2>&1 | grep "^$1:"; }
 { pw alice opensesame 20000; pw bob bobpass 20000; pw carol carolpass 100000; } > pw
 pw dave davepass 20000 > dave.pw
-[ "$(wc -l < pw)" -eq 3 ] && [ -s dave.pw ] || { echo "FAIL: svc/httpd/passwd made no lines"; cat pw; exit 1; }
+pw alice newsesame 20000 > alice2.pw
+[ "$(wc -l < pw)" -eq 3 ] && [ -s dave.pw ] && [ -s alice2.pw ] || { echo "FAIL: svc/httpd/passwd made no lines"; cat pw; exit 1; }
 python3 - "$W/pw" <<'PY' && echo "PASS: svc/httpd/passwd's lines are PBKDF2-HMAC-SHA-256 (checked by hashlib)" || { echo "FAIL: svc/httpd/passwd's hash is not PBKDF2"; exit 1; }
 import sys, hashlib, base64
 want = {"alice": b"opensesame", "bob": b"bobpass", "carol": b"carolpass"}
@@ -138,6 +142,25 @@ for l in open(sys.argv[1]):
     assert alg == "pbkdf2-sha256" and len(base64.b64decode(salt)) == 16
     assert hashlib.pbkdf2_hmac("sha256", want[u], base64.b64decode(salt), int(it)) == base64.b64decode(h), u
 PY
+
+# what httpd would take from no client, passwd makes no line of
+fails=0
+nopw() {
+	local why=$1 user=$2
+	out=$("$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i 1000 "$user" 2>&1)
+	if echo "$out" | grep -q 'pbkdf2-sha256'; then
+		echo "FAIL: svc/httpd/passwd made a line: $why"; fails=$((fails+1))
+	else
+		echo "PASS: svc/httpd/passwd makes no line: $why ($(echo "$out" | grep -a '^passwd:' | head -1 | cut -c1-60))"
+	fi
+}
+echo x | nopw "an empty name" ''
+python3 -c 'print("p" * 2000)' | nopw "a password of 2000 bytes (its first 1024 were hashed)" long
+python3 -c 'print("p" * 257)' | nopw "a password of 257 bytes" long
+printf 'a\tb\n' | nopw "a password with a tab" tab
+printf 'caf\351\n' | nopw "a password that is not UTF-8" latin
+python3 -c 'print("p" * 256)' | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i 1000 ok 2>&1 | grep -q '^ok:pbkdf2-sha256:1000:' &&
+	echo "PASS: a password of 256 bytes makes one" || { echo "FAIL: a password of 256 bytes refused"; fails=$((fails+1)); }
 
 # ---------------------------------------------------------------- refused configurations
 refuse() {
@@ -150,7 +173,6 @@ refuse() {
 		echo "FAIL: started, or not saying why: $why (want '$want')"; tail -3 refuse.log; fails=$((fails+1))
 	fi
 }
-fails=0
 P0=$((21000 + $$ % 15000))
 refuse "-P without TLS" "need TLS" -P $T/pw -a tcp!127.0.0.1!$P0
 refuse "-A without TLS" "need TLS" -A $T/trust.pem -a tcp!127.0.0.1!$P0

@@ -307,10 +307,21 @@ iterations unless
 .B -i
 says.
 .B Svc/httpd/passwd
-reads the password from its standard input.
-The file is read again when it changes.
-Passwords are checked by one process, one at a time; an unknown user
-costs as much as a known one, so a name is not learnt by the time; a
+reads the password from its standard input (its first line: at most
+256 bytes of UTF-8, no control character) and prints the line, to be
+added to the file.
+Of two lines for one user the last is the user's, and
+.I httpd
+says so when it reads them: a password is changed by adding a line.
+The file is read again when it changes, and what was found right
+under the old one is forgotten.
+A file that has gone, cannot be read or holds no users refuses every
+password, said once on standard error, until there is one with users
+again.
+Passwords are checked by one process, one at a time; every guess
+costs as many iterations as the file's most (100000 at least), a user
+whose line has fewer and a name that is no user alike, so a name is
+not learnt by the time; a
 password found right is taken again for five minutes without its hash.
 Ten wrong passwords from one network (an IPv4 address, an IPv6 /64)
 in ten minutes, or fifty for one user from anywhere, and further

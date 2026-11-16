@@ -79,6 +79,7 @@ TARG=\
 	ninep_msize_test.dis\
 	export_hostile_test.dis\
 	export_limits.dis\
+	logon_unlock.dis\
 	mnt_smallmsize_test.dis\
 	styxservers_hostile_test.dis\
 	keyring_degenerate_test.dis\

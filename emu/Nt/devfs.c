@@ -884,6 +884,16 @@ fswstat(Chan *c, uchar *buf, int n)
 	wchar_t *wpath;
 	int nmatch;
 
+	/*
+	 * convM2D copies the stat's four strings into strs, each with its
+	 * NUL, and is given no length for it: a stat of n bytes has at
+	 * most n bytes of them.  The names are a program's (Sys->wstat) or
+	 * a 9P client's (an export), of any length that fits a message,
+	 * and they went on past strs, over the stack.  No name this file
+	 * system has is that long.
+	 */
+	if(n > sizeof(strs))
+		error(Ebadstat);
 	n = convM2D(buf, n, &dir, strs);
 	if(n == 0)
 		error(Eshortstat);

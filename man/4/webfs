@@ -139,7 +139,8 @@ when no byte has moved on its connection for five minutes, or when an
 hour has passed since it began; its connection is then hung up.
 A body that ends before its length or its last chunk is an error, not
 a short body.
-A body sent with a gzip or deflate Content-Encoding is decoded.
+A body sent with a gzip or deflate Content-Encoding is decoded; one
+that does not decode, or decodes to more than 64 megabytes, is an error.
 .TP
 .B status
 The status code and line, or

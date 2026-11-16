@@ -159,6 +159,7 @@ TARG=\
 	webclient_body_test.dis\
 	webclient_cookie_test.dis\
 	webclient_deadline_test.dis\
+	webclient_origin_test.dis\
 	webclient_tlsfd_test.dis\
 	veltro_coord_test.dis\
 	link_digest_test.dis\

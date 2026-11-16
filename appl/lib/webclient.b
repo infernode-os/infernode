@@ -517,37 +517,53 @@ requesttypes(method, requrl: string, hdrs: list of Header, body: array of byte, 
 {
 	(resp, err) := runreq(newreq(totalms, stallms, 0), method, requrl, hdrs, body, 0, jar, types);
 	if(resp != nil && resp.body != nil) {
+		# A body that does not decode is an error.  It was handed on
+		# as it came, compressed, with nothing to say so; and one that
+		# decoded to more than MAXBODY left its inflater's process
+		# waiting to be asked for more, one for each such body.
 		ce := str->tolower(resp.hdrval("Content-Encoding"));
+		b: array of byte;
+		derr: string;
 		case ce {
 		"gzip" or "x-gzip" =>
-			if((b := decompress(resp.body, "h")) != nil)
-				resp.body = b;
+			(b, derr) = decompress(resp.body, "h");
 		"deflate" =>
 			# servers send both zlib-wrapped and raw deflate
-			if((b := decompress(resp.body, "z")) != nil)
-				resp.body = b;
-			else if((b = decompress(resp.body, "")) != nil)
-				resp.body = b;
+			(b, derr) = decompress(resp.body, "z");
+			if(b == nil && derr != Ebig)
+				(b, derr) = decompress(resp.body, "");
 		"br" =>
 			if(brotli == nil)
 				brotli = load Brotli Brotli->PATH;
-			if(brotli != nil) {
-				(b, nil) := brotli->decompress(resp.body, -1);
-				if(b != nil)
-					resp.body = b;
-			}
+			if(brotli == nil)
+				derr = sys->sprint("cannot load %s: %r", Brotli->PATH);
+			else
+				(b, derr) = brotli->decompress(resp.body, -1);
+		* =>
+			return (resp, err);
 		}
+		if(b == nil) {
+			if(derr == nil)
+				derr = "bad " + ce + " encoding";
+			if(resp.truncated)
+				derr = Ebig;
+			return (nil, "response body: " + derr);
+		}
+		resp.body = b;
 	}
 	return (resp, err);
 }
 
+Ebig: con "too large";
+
 # Inflate data: param "h" for a gzip stream, "z" for zlib, "" for raw.
-decompress(data: array of byte, param: string): array of byte
+# The bytes, or why not: no more than MAXBODY are made.
+decompress(data: array of byte, param: string): (array of byte, string)
 {
 	if(inflate == nil) {
 		inflate = load Filter Filter->INFLATEPATH;
 		if(inflate == nil)
-			return nil;
+			return (nil, sys->sprint("cannot load %s: %r", Filter->INFLATEPATH));
 		inflate->init();
 	}
 	rq := inflate->start(param);
@@ -566,19 +582,23 @@ decompress(data: array of byte, param: string): array of byte
 			in += n;
 			m.reply <-= n;
 		Result =>
+			if(total + len m.buf > MAXBODY) {
+				m.reply <-= -1;	# the filter's process ends
+				return (nil, Ebig);
+			}
 			b := array[len m.buf] of byte;
 			b[0:] = m.buf;
 			out = b :: out;
 			total += len b;
 			m.reply <-= 0;
-			if(total > MAXBODY)
-				return nil;
 		Info =>
 			;
 		Finished =>
-			return concatchunks(out, total);
+			if(total == 0)
+				return (array[0] of byte, nil);
+			return (concatchunks(out, total), nil);
 		Error =>
-			return nil;
+			return (nil, nil);
 		}
 	}
 }
@@ -710,6 +730,19 @@ validrequesttext(method, requrl: string, hdrs: list of Header): string
 	return nil;
 }
 
+# The headers the request gives itself, which a caller's are not sent
+# beside (a browser leaves a script's out the same way): a second Host,
+# or a length that is not the body's, is a different request to each
+# server that reads it.
+ownheader(name: string): int
+{
+	case str->tolower(name) {
+	"host" or "content-length" or "transfer-encoding" =>
+		return 1;
+	}
+	return 0;
+}
+
 validtoken(s: string): int
 {
 	if(s == nil || len s == 0)
@@ -784,12 +817,15 @@ schemehost(requrl: string): string
 	u := url->makeurl(requrl);
 	if(u == nil)
 		return "";
-	port := u.port;
-	if(port == nil) {
-		case u.scheme {
-		Url->HTTPS => port = "443";
-		* => port = "80";
-		}
+	# The origin: scheme, host, and the port unless it is the scheme's
+	# own.  Ports 80 and 443 were left out under either scheme, so
+	# http://h/ and http://h:443/ were one origin: a request's
+	# credentials followed a redirect from one port to the other, and
+	# a relative redirect from http://h:443/ went to port 80.
+	def: string;
+	case u.scheme {
+	Url->HTTPS => def = "443";
+	Url->HTTP => def = "80";
 	}
 	h := u.host;
 	for(i := 0; i < len h; i++)
@@ -798,8 +834,8 @@ schemehost(requrl: string): string
 			break;
 		}
 	s := url->schemes[u.scheme] + "://" + h;
-	if(port != "80" && port != "443")
-		s += ":" + port;
+	if(u.port != nil && u.port != def)
+		s += ":" + u.port;
 	return s;
 }
 
@@ -870,7 +906,8 @@ buildrequest(method: string, u: ref ParsedUrl, host: string,
 	# Add user headers
 	for(h = hdrs; h != nil; h = tl h) {
 		hdr := hd h;
-		req += hdr.name + ": " + hdr.value + "\r\n";
+		if(!ownheader(hdr.name))
+			req += hdr.name + ": " + hdr.value + "\r\n";
 	}
 
 	req += "\r\n";

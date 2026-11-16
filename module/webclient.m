@@ -70,6 +70,9 @@ Webclient: module {
 	STALL: con 5*60*1000;
 	setdeadline:	fn(total, stall: int);
 
+	# Host, Content-Length and Transfer-Encoding are the request's own:
+	# ones among hdrs are not sent.  Credentials among hdrs go no
+	# further than the origin asked (scheme, host and port).
 	request:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte): (ref Response, string);
 	# Resolve and dial only validated public IPv4 destinations. Revalidates every
@@ -87,8 +90,9 @@ Webclient: module {
 	requestbounded: fn(method, url: string, hdrs: list of Header,
 			   body: array of byte, public, ms, maxbody: int): (ref Response, string);
 	# request, keeping cookies in jar across redirects, and decoding a
-	# gzip or deflate Content-Encoding (asked for by the caller's
-	# Accept-Encoding header)
+	# gzip, deflate or br Content-Encoding (asked for by the caller's
+	# Accept-Encoding header).  A body that does not decode, or decodes
+	# to more than MAXBODY, is an error.
 	requestjar:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte, jar: ref Jar): (ref Response, string);
 	# requestjar, reading a successful response's body only if its

@@ -100,7 +100,8 @@ mlkem_poly_sample_ntt(int16 r[MLKEM_N], const uchar seed[32], uchar x, uchar y)
 
 /*
  * Sample noise polynomial using CBD from SHAKE-256 output.
- * eta=2 for ML-KEM-768, eta=3 for ML-KEM-512.
+ * eta=2 for ML-KEM-768 and ML-KEM-1024 (eta=3 is ML-KEM-512's eta1,
+ * which is not offered).
  */
 void
 mlkem_poly_sample_cbd(int16 r[MLKEM_N], const uchar seed[32], uchar nonce, int eta)
@@ -121,6 +122,13 @@ mlkem_poly_sample_cbd(int16 r[MLKEM_N], const uchar seed[32], uchar nonce, int e
 		mlkem_cbd2(r, buf);
 	else
 		mlkem_cbd3(r, buf);
+
+	/*
+	 * buf is the bits s, e and the encryption's r, e1, e2 are made
+	 * of, and the state holds the seed they come from
+	 */
+	secureZero(buf, sizeof(buf));
+	secureZero(&s, sizeof(s));
 }
 
 /*

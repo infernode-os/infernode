@@ -134,6 +134,8 @@ matvec_mul_dsa(int32 t[][MLDSA_N],
 		mldsa_poly_reduce(t[i]);
 	}
 
+	/* tmp held a product with s (the secret s1, or a signature's mask) */
+	secureZero(tmp, MLDSA_N * sizeof(int32));
 	free(a_ij);
 	free(tmp);
 	return 0;
@@ -184,10 +186,12 @@ mldsa_keygen_internal(uchar *pk, uchar *sk,
 		shake256_absorb(&hs, kl, 2);
 		shake256_finalize(&hs);
 		shake256_squeeze(&hs, buf, 128);
+		secureZero(&hs, sizeof(hs));
 	}
 	memmove(rho, buf, 32);
 	memmove(rhoprime, buf+32, 64);
 	memmove(K, buf+96, 32);
+	secureZero(buf, sizeof(buf));	/* rho' and K: the secret key's seeds */
 
 	/* Sample s1 (l polynomials) and s2 (k polynomials) */
 	nonce = 0;
@@ -218,6 +222,9 @@ mldsa_keygen_internal(uchar *pk, uchar *sk,
 
 	/* t = A * NTT(s1) */
 	if(matvec_mul_dsa(st->t, rho, k, l, st->s1) != 0){
+		secureZero(seed, sizeof(seed));
+		secureZero(rhoprime, sizeof(rhoprime));
+		secureZero(K, sizeof(K));
 		secureZero(st, sizeof(MLDSAKeygenState));
 		free(st);
 		return -1;
@@ -377,6 +384,7 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 		shake256_absorb(&hs, mu, 64);
 		shake256_finalize(&hs);
 		shake256_squeeze(&hs, rhoprime, 64);
+		secureZero(&hs, sizeof(hs));	/* it absorbed K */
 	}
 	secureZero(rnd, sizeof(rnd));
 
@@ -410,6 +418,8 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 			mldsa_ntt(st->yhat[i]);
 		}
 		if(matvec_mul_dsa(st->w, rho, k, l, st->yhat) != 0){
+			secureZero(K, sizeof(K));
+			secureZero(rhoprime, sizeof(rhoprime));
 			secureZero(st, sizeof(MLDSASignState));
 			free(st);
 			return -1;

@@ -7,14 +7,14 @@
  * ADRS (address) is a 32-byte structure used for domain separation.
  *
  * Reference: NIST FIPS 205 "Stateless Hash-Based Digital Signature
- * Standard" (August 2024), Sections 4, 7.1, 10.1 (SHAKE instantiation).
+ * Standard" (August 2024), Sections 4 and 11.1 (SHAKE instantiation).
  */
 #include "os.h"
 #include <libsec.h>
 
 /*
  * ADRS byte offsets (32 bytes total)
- * See FIPS 205 Section 4.1
+ * See FIPS 205 Section 4.2
  */
 enum {
 	ADRS_LAYER	= 0,	/* bytes 0-3: layer address */
@@ -141,7 +141,7 @@ slhdsa_adrs_copy(uchar dst[ADRS_BYTES], const uchar src[ADRS_BYTES])
  * One-block tweakable hash function
  * Output: n bytes
  *
- * FIPS 205 Section 10.1, Algorithm 1
+ * FIPS 205 Section 11.1
  */
 void
 slhdsa_F(uchar *out, int n,
@@ -157,6 +157,12 @@ slhdsa_F(uchar *out, int n,
 	shake256_absorb(&s, m, mlen);
 	shake256_finalize(&s);
 	shake256_squeeze(&s, out, n);
+
+	/*
+	 * m is a secret when a WOTS+ chain is walked from its start or a
+	 * FORS leaf is made: a value below the one a signature shows
+	 */
+	secureZero(&s, sizeof(s));
 }
 
 /*
@@ -164,7 +170,7 @@ slhdsa_F(uchar *out, int n,
  * Two-block tweakable hash function
  * Output: n bytes
  *
- * FIPS 205 Section 10.1, Algorithm 2
+ * FIPS 205 Section 11.1
  */
 void
 slhdsa_H(uchar *out, int n,
@@ -189,7 +195,7 @@ slhdsa_H(uchar *out, int n,
  * Multi-block tweakable hash for WOTS+ public key compression
  * Output: n bytes
  *
- * FIPS 205 Section 10.1, Algorithm 3
+ * FIPS 205 Section 11.1
  */
 void
 slhdsa_Tl(uchar *out, int n,
@@ -212,7 +218,7 @@ slhdsa_Tl(uchar *out, int n,
  * Pseudorandom function for secret value generation
  * Output: n bytes
  *
- * FIPS 205 Section 10.1
+ * FIPS 205 Section 11.1
  */
 void
 slhdsa_PRF(uchar *out, int n,
@@ -228,6 +234,12 @@ slhdsa_PRF(uchar *out, int n,
 	shake256_absorb(&s, skseed, skseedlen);
 	shake256_finalize(&s);
 	shake256_squeeze(&s, out, n);
+
+	/*
+	 * the state took SK.seed in one block, and Keccak's permutation
+	 * runs backwards: what is left of it is the seed
+	 */
+	secureZero(&s, sizeof(s));
 }
 
 /*
@@ -256,6 +268,8 @@ slhdsa_PRF_msg(uchar *out, int n,
 	shake256_absorb(&s, msg, msglen);
 	shake256_finalize(&s);
 	shake256_squeeze(&s, out, n);
+
+	secureZero(&s, sizeof(s));	/* it absorbed SK.prf */
 }
 
 /*

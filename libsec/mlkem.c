@@ -75,6 +75,7 @@ matvec_mul(int16 t[][MLKEM_N], int16 a[][MLKEM_MAXK][MLKEM_N],
 		}
 		mlkem_poly_reduce(t[i]);
 	}
+	secureZero(tmp, sizeof(tmp));	/* a product with the secret vector */
 }
 
 /*
@@ -93,6 +94,7 @@ inner_product(int16 r[MLKEM_N], int16 a[][MLKEM_N],
 		mlkem_poly_add(r, r, tmp);
 	}
 	mlkem_poly_reduce(r);
+	secureZero(tmp, sizeof(tmp));
 }
 
 /*
@@ -180,7 +182,11 @@ cpapke_keygen(uchar *pk, uchar *sk, const uchar seed[32], int k, int eta1)
 		mlkem_poly_encode(sk + i * 384, st->s[i], 12);
 	}
 
-	/* Clear sensitive data */
+	/*
+	 * Clear sensitive data: sigma is the seed of s and e, the whole
+	 * secret key, and buf held it too (and was left).
+	 */
+	secureZero(buf, sizeof(buf));
 	secureZero(sigma, sizeof(sigma));
 	secureZero(st, sizeof(MLKEMKeygenState));
 	free(st);
@@ -211,6 +217,7 @@ cpapke_enc(uchar *ct, const uchar *pk, const uchar msg[32],
 {
 	MLKEMEncState *st;
 	uchar rho[32];
+	int16 tmp[MLKEM_N];
 	int i, j;
 	uchar nonce;
 	int du_bytes, dv_bytes;
@@ -249,7 +256,6 @@ cpapke_enc(uchar *ct, const uchar *pk, const uchar msg[32],
 	/* u = A^T * r + e1 */
 	/* Note: A^T means we swap i,j indices */
 	for(i = 0; i < k; i++){
-		int16 tmp[MLKEM_N];
 		mlkem_poly_basemul(st->u[i], st->a[0][i], st->r[0]);
 		for(j = 1; j < k; j++){
 			mlkem_poly_basemul(tmp, st->a[j][i], st->r[j]);
@@ -284,6 +290,7 @@ cpapke_enc(uchar *ct, const uchar *pk, const uchar msg[32],
 	mlkem_poly_encode(ct + k * du_bytes, st->v, dv);
 
 	/* Clear sensitive data */
+	secureZero(tmp, sizeof(tmp));
 	secureZero(st, sizeof(MLKEMEncState));
 	free(st);
 	return 0;
@@ -608,6 +615,11 @@ mlkem_decaps_internal(uchar *ss, const uchar *ct, const uchar *sk,
 	secureZero(g_output, sizeof(g_output));
 	secureZero(Krej, sizeof(Krej));
 	secureZero(ct2, sizeof(ct2));
+	/*
+	 * the state of J(z || c): Keccak's permutation runs backwards and
+	 * c is public, so what is left of the state gives z
+	 */
+	secureZero(&js, sizeof(js));
 	return 0;
 }
 

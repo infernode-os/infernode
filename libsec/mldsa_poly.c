@@ -241,11 +241,16 @@ mldsa_poly_uniform_eta(int32 r[MLDSA_N], const uchar rhoprime[64],
 			}
 		}
 	}
+
+	/* the half bytes s1 and s2 are made of, and the state they come from */
+	secureZero(buf, sizeof(buf));
+	secureZero(&s, sizeof(s));
 }
 
 /*
  * Sample masking polynomial with coefficients in [-(gamma1-1), gamma1].
- * gamma1 = 2^17 for ML-DSA-65, 2^19 for ML-DSA-87.
+ * gamma1 = 2^19 for ML-DSA-65 and ML-DSA-87 (2^17 is ML-DSA-44's, which
+ * is not offered).
  */
 void
 mldsa_poly_uniform_gamma1(int32 r[MLDSA_N], const uchar seed[64],
@@ -315,6 +320,13 @@ mldsa_poly_uniform_gamma1(int32 r[MLDSA_N], const uchar seed[64],
 			r[2*i+1] = (1 << 19) - (int32)t1;
 		}
 	}
+
+	/*
+	 * buf is one polynomial of the mask y, and with the z and c of the
+	 * signature it masks, y gives s1; the state holds y's seed
+	 */
+	secureZero(buf, sizeof(buf));
+	secureZero(&s, sizeof(s));
 }
 
 /*

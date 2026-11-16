@@ -18,9 +18,19 @@ It requests the time from the SNTP service on
 .BR udp!$ntp!ntp ),
 and if it receives a plausible reply,
 sets the local time accordingly, in both
-.IR rtc (3)
+.IR rtc (3),
+where there is one,
 and
 .BR /dev/time .
+A reply is taken only if it answers the request (RFC 4330): the
+request carries 64 random bits as its transmit timestamp, and the
+reply must give them back as its originate timestamp, be in server
+mode, and say a time (not leap indicator 3, a server whose own clock
+is not set; not stratum 0, a kiss-of-death).
+Other datagrams are passed over, and after four tries of three seconds
+.I sntp
+fails, saying why the last was refused if any came.
+It also fails if the clock could not be written.
 The
 .B -d
 option prints debugging text, including the time received;
@@ -37,5 +47,10 @@ from actually updating the local time.
 .B /appl/cmd/ip/sntp.b
 .SH SEE ALSO
 .IR date (1),
-.IR cons (3)
+.IR cons (3),
+.IR timesync (8)
+.SH BUGS
+SNTP is not authenticated: a reply that answers the request is
+believed, whatever time it says from 2005 to 2036, so whoever is on
+the path to the server chooses the clock.
 

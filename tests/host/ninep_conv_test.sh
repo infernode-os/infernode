@@ -101,8 +101,8 @@ LIB9A="$ROOT/$EMUHOST/$OBJTYPE/lib/lib9.a"
 
 SRC="${NINEP_CONV_SRC:-$ROOT/lib9}"
 INC="-I$ROOT/$EMUHOST/$OBJTYPE/include -I$ROOT/include"
-# (fcall.h's GBIT32 shifts a byte into an int's sign: not what is tested here)
-CFLAGS="-g -O -fno-strict-aliasing -w -fsanitize=address,undefined -fno-sanitize=shift -fno-sanitize-recover=undefined"
+# (the shift check is on: fcall.h's GBIT32 shifted a byte into an int's sign)
+CFLAGS="-g -O -fno-strict-aliasing -w -fsanitize=address,undefined -fno-sanitize-recover=undefined"
 if ! $CC $CFLAGS $INC -o "$TMP/convtest" "$D/convtest.c" \
 	"$SRC/convM2S.c" "$SRC/convS2M.c" "$SRC/convM2D.c" "$SRC/convD2M.c" "$SRC/fcallfmt.c" \
 	"$LIB9A" -lm 2>"$TMP/cc.log"; then

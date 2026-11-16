@@ -195,6 +195,7 @@ TARG=\
 	keyring_rsa_test.dis\
 	keyring_dsa_test.dis\
 	ipints_prime_test.dis\
+	prime_kill_test.dis\
 	elgamal_forge_test.dis\
 	namec_clone_test.dis\
 	nil_far_test.dis\

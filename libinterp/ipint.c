@@ -108,10 +108,19 @@ static void	freeheld(Heap*, int);
 
 #define	MP(x)	checkIPint((x))
 
+/*
+ * Is this process's Prog being killed (the kernels' dis.c)?  Asked by
+ * libsec's searches for a prime between candidates, so that a Prog
+ * killed in one stops searching: they run with the VM let go, where a
+ * kill only marks the Prog, and went on for as long as they took.
+ */
+extern int	upkilled(void);
+
 void
 ipintsmodinit(void)
 {
 	/* can be called from modinit, Keyring or Crypt */
+	secstop = upkilled;
 	if(TIPint == nil)
 		TIPint = dtype(freeIPint, sizeof(IPint), IPintmap, sizeof(IPintmap));
 	if(THeld == nil)
@@ -648,17 +657,14 @@ void
 IPint_bits(void *fp)
 {
 	F_IPint_bits *f;
-	int n;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->i == H)
 		return;
 
-	n = mpsignif(MP(f->i));
-	if(n == 0)
-		n = 1;	/* compatibility */
-	*f->ret = n;
+	/* zero has no bits (it was given one, "for compatibility": a zero and a one were of a length) */
+	*f->ret = mpsignif(MP(f->i));
 }
 
 /* create a new IP from an int */
@@ -1360,8 +1366,15 @@ IPints_genprime(void *fp)
 	bitscheck(f->nbits, 2, Maxprimebits);
 	p = mpnew(0);
 	release();
-	genprime(p, f->nbits, f->nrep);
+	r = nil;
+	if(genprimestop(p, f->nbits, f->nrep, upkilled) < 0)
+		r = p;
 	acquire();
+	if(r != nil){
+		/* stopped: this Prog is being killed, and its kill is raised as the call returns */
+		mpfree(p);
+		return;
+	}
 	*f->ret = newIPint(p);
 }
 
@@ -1379,8 +1392,14 @@ IPints_genstrongprime(void *fp)
 	bitscheck(f->nbits < 64? 64: f->nbits, 64, Maxprimebits);	/* fewer than 64 bits are 64 */
 	p = mpnew(0);
 	release();
-	genstrongprime(p, f->nbits, f->nrep);
+	r = nil;
+	if(genstrongprimestop(p, f->nbits, f->nrep, upkilled) < 0)
+		r = p;
 	acquire();
+	if(r != nil){
+		mpfree(p);
+		return;
+	}
 	*f->ret = newIPint(p);
 }
 
@@ -1390,6 +1409,7 @@ IPints_gensafeprime(void *fp)
 	F_IPints_gensafeprime *f;
 	mpint *p, *alpha;
 	void *v;
+	int ok;
 
 	f = fp;
 	v = f->ret->t0;
@@ -1403,8 +1423,20 @@ IPints_gensafeprime(void *fp)
 	p = mpnew(0);
 	alpha = mpnew(0);
 	release();
-	gensafeprime(p, alpha, f->nbits, f->nrep);
+	ok = gensafeprimestop(p, alpha, f->nbits, f->nrep, upkilled);
 	acquire();
+	if(ok < 0){
+		/*
+		 * stopped because this Prog is being killed (its kill is
+		 * raised as the call returns), or no prime in all the
+		 * candidates the search allows itself: no numbers
+		 */
+		mpfree(p);
+		mpfree(alpha);
+		if(!upkilled())
+			error("gensafeprime: no prime found");
+		return;
+	}
 	f->ret->t0 = newIPint(p);
 	f->ret->t1 = newIPint(alpha);
 }

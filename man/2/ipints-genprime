@@ -94,6 +94,18 @@ The random
 .I seed
 used is also returned, so that sceptics
 can later confirm the computation.
+.PP
+A search for a prime can take minutes at the larger sizes.
+It runs without holding up other threads, and a thread killed in
+.IR genprime ,
+.I gensafeprime
+or
+.I genstrongprime
+stops searching.
+.I Gensafeprime
+raises an exception if it has found no safe prime after
+.RI 64* nbits +1000
+candidates, many times what a search is expected to take.
 .SH SOURCE
 .B /libinterp/ipint.c
 .br

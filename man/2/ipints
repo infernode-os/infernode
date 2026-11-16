@@ -113,7 +113,8 @@ Returns a reference to the same value as
 .TP
 .IB i .bits()
 Returns the number of bits of precision of
-.IR i .
+.IR i ,
+which is 0 for zero.
 .TP
 .IB base .expmod( "exp , mod" )
 Returns

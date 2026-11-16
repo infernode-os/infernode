@@ -81,10 +81,17 @@ eggen(int nlen, int rounds)
 	 * key alone (see egverify.c).  2 is right for Diffie-Hellman,
 	 * which is what getdhparams is for.
 	 */
+	// (no prime found, or the search stopped because its Prog is
+	// being killed: no key.  See genprime.c)
 	g = mpnew(0);
 	for(;;){
 		if(!getdhparams(nlen, pub->p, g))
-			gensafeprime(pub->p, g, nlen, rounds);
+			if(gensafeprime(pub->p, g, nlen, rounds) < 0){
+				mpfree(g);
+				egprivfree(priv);
+				werrstr("eggen: no safe prime");
+				return nil;
+			}
 		if(mpsignif(pub->p) > 3 || mptoi(pub->p) != 5)
 			break;
 	}

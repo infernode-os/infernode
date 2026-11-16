@@ -580,9 +580,14 @@ void	secureZero(void *buf, ulong nbytes);
 /* primes */
 /* ===================================================== */
 void	genprime(mpint *p, int n, int accuracy); /* generate an n bit probable prime */
-void	gensafeprime(mpint *p, mpint *alpha, int n, int accuracy);	/* prime and generator */
+/* the searches for a prime, stopped when stop() says so (-1): genprime.c */
+extern int	(*secstop)(void);
+int	genprimestop(mpint *p, int n, int accuracy, int (*stop)(void));
+int	gensafeprimestop(mpint *p, mpint *alpha, int n, int accuracy, int (*stop)(void));
+int	genstrongprimestop(mpint *p, int n, int accuracy, int (*stop)(void));
+int	gensafeprime(mpint *p, mpint *alpha, int n, int accuracy);	/* prime and generator; -1 if none was found, or secstop said to stop */
 int	getdhparams(int bits, mpint *p, mpint *alpha);	/* get pre-computed RFC 3526 params */
-void	genstrongprime(mpint *p, int n, int accuracy);	/* generate an n bit strong prime */
+int	genstrongprime(mpint *p, int n, int accuracy);	/* generate an n bit strong prime; -1 if secstop said to stop */
 void	DSAprimes(mpint *q, mpint *p, uchar seed[SHA1dlen]);
 int	probably_prime(mpint *n, int nrep);	/* miller-rabin test */
 int	smallprimetest(mpint *p);		/* returns -1 if not prime, 0 otherwise */

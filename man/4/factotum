@@ -93,10 +93,6 @@ any particular authentication protocol.
 currently supports the following protocols:
 .TF mschap
 .TP
-.B infauth
-Inferno's authentication protocol
-.IR auth (6)
-.TP
 .B p9any
 a metaprotocol used to negotiate which actual protocol to use.
 .TP
@@ -614,45 +610,6 @@ can support many authentication protocols, each implemented by a separate
 module in the directory
 .BR /dis/auth/proto .
 Currently only a few are implemented in Inferno:
-.PP
-.B Infauth
-is the Inferno public-key authentication protocol described by
-.IR auth (6).
-It requires a key with
-.BR proto = infauth ,
-and a
-.B !authinfo
-attribute providing Inferno authentication data as an S-expression (see
-.IR sexprs (6)).
-The S-expression has five string elements:
-the signer's public key, the certificate for the user's public key,
-the user's secret key, and the values for parameters
-.I alpha
-and
-.IR p ,
-selected by the signer when the key was generated.
-The keys and certificates are represented as strings of the form produced by
-.IR keyring-certtostr (2);
-the parameter values are represented as binary in the form produced by
-.B IPint.iptobytes
-(see
-.IR keyring-ipint (2)).
-Normally
-.B infauth
-checks that the other party's key was signed by the signer in the
-.B !authinfo
-data, but
-if the key has the attribute
-.B anysigner
-with non-zero integer value,
-.B infauth
-will accept keys signed by any signer.
-The actual signer can be determined by inspecting the data
-returned by the
-.B authinfo
-request;
-the option is intended for use by services that support calls from many domains,
-each with its own signer.
 .PP
 .BR P9sk1
 is the shared-secret protocol used to authenticate to various Plan 9 services.

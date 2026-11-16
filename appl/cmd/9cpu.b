@@ -28,8 +28,9 @@ include "security.m";
 #
 # algorithm negotiation - would it be reasonable to
 #	add algorithm specification to keyspec?
-#	e.g. proto=infauth role=server 'algs=rc4_256 sha1 md5'
-#	or proto=infauth role=client 'alg=rc4_256/sha1'
+#	e.g. role=server 'algs=aes_256_gcm' or role=client 'alg=aes_256_gcm'
+#	(factotum has no protocol for Inferno's own authentication:
+#	Keyring's auth does that handshake, see auth(2))
 # if not, how can the desired/allowed algorithm(s) be specified?
 
 MaxStr: con 128;		# as defined in /sys/src/cmd/cpu.c

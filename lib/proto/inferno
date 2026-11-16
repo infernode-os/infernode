@@ -317,9 +317,6 @@ appl
 				factotum.b
 				feedkey.b
 				proto
-					infauth.b
-					keyreps.b
-					keyreps.m
 					mkfile
 					p9any.b
 					pass.b

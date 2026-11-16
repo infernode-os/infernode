@@ -31,6 +31,8 @@ plumber plumber
 rdbgsrv rdbgsrv
 register register
 rip rip
+dsagen rsagen
+rsagen rsagen
 rstyxd rstyxd
 styxd rstyxd
 shutdown shutdown

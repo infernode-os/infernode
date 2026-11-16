@@ -100,25 +100,33 @@ p9any(attrs: list of ref Attr, io: ref IO): string
 	#
 	# The first domain offered that there is a key for. The last one
 	# offered was taken, whether or not it was the one with a key.
+	# The domains are looked at without asking anybody (findkeys): an
+	# agent reading needkey was asked for a key for each domain there
+	# was none for, though the next one had one.  Only when none has a
+	# key is one asked for, for the first domain offered, as Plan 9's
+	# p9any does.
 	#
 	mykey: ref Key;
-	dom, diag: string;
+	dom: string;
 	nd := 0;
 	for(l := doms; l != nil && nd < Maxdoms; l = tl l){
 		if(Debug)
 			sys->print("dom: %q\n", hd l);
 		nd++;
-		(k, e) := io.findkey(attrs, sys->sprint("dom=%q proto=p9sk1 user? !password?", hd l));
-		if(k != nil){
-			mykey = k;
+		(kl, nil) := io.findkeys(attrs, sys->sprint("dom=%q proto=p9sk1 user? !password?", hd l));
+		if(kl != nil){
+			mykey = hd kl;
 			dom = hd l;
 			break;
 		}
-		if(diag == nil)
-			diag = e;
 	}
-	if(mykey == nil)
-		return "p9any: can't find key: "+diag;
+	if(mykey == nil){
+		dom = hd doms;
+		e: string;
+		(mykey, e) = io.findkey(attrs, sys->sprint("dom=%q proto=p9sk1 user? !password?", dom));
+		if(mykey == nil)
+			return "p9any: can't find key: "+e;
+	}
 	#
 	# The answer is in an array of its own. It was written into the
 	# offer's: a domain that is not UTF-8 is longer said back than it
@@ -136,7 +144,7 @@ p9any(attrs: list of ref Attr, io: ref IO): string
 		if(Debug)
 			sys->print("OK\n");
 	}
-	return p9sk1client(io, mykey);
+	return p9sk1client(io, mykey, dom);
 }
 
 #p9sk1:
@@ -150,7 +158,25 @@ p9any(attrs: list of ref Attr, io: ref IO): string
 #asserts that uid-S and uid-C share new secret Kn
 #increment the counter to reuse the ticket.
 
-p9sk1client(io: ref IO, mykey: ref Key): string
+p9sk1client(io: ref IO, mykey: ref Key, dom: string): string
+{
+	r := p9sk1client1(io, mykey, dom);
+	# the DES keys made here are zeroed however it ended (the password
+	# is a string of the stored key's, which stays factotum's)
+	for(; wipe != nil; wipe = tl wipe)
+		clear(hd wipe);
+	return r;
+}
+
+wipe: list of array of byte;
+
+clear(a: array of byte)
+{
+	for(i := 0; i < len a; i++)
+		a[i] = byte 0;
+}
+
+p9sk1client1(io: ref IO, mykey: ref Key, dom: string): string
 {
 
 	#	C->S:	nonce-C
@@ -171,14 +197,29 @@ p9sk1client(io: ref IO, mykey: ref Key): string
 		sys->print("ticketreq: type=%d authid=%q authdom=%q chal= hostid=%q uid=%q\n",
 			tr.rtype, tr.authid, tr.authdom, tr.hostid, tr.uid);
 
+	#
+	# One domain is the rule: the one negotiated, which the key was
+	# found by, is the one the ticket request must name, and the one
+	# whose authentication server is asked.  The key was found by the
+	# first and the server by the second, with nothing comparing them:
+	# a server could negotiate domain A and have A's key used against
+	# the authentication server of a domain B that it named here.
+	# (Plan 9's p9sk1 looks its key up by the request's domain under
+	# the negotiated one, which finds nothing when they differ.)
+	#
+	if(tr.authdom != dom)
+		return sys->sprint("p9sk1: the server's ticket request is for domain %q, not %q, the one negotiated", tr.authdom, dom);
+
 	ukey: array of byte;
 	if((a := authio->lookattrval(mykey.secrets, "!hex")) != nil){
 		ukey = base16->dec(a);
+		wipe = ukey :: wipe;
 		if(len ukey != DESKEYLEN)
 			return "p9sk1: invalid !hex key";
-	}else	if((a = authio->lookattrval(mykey.secrets, "!password")) != nil)
+	}else	if((a = authio->lookattrval(mykey.secrets, "!password")) != nil){
 		ukey = auth9->passtokey(a);
-	else
+		wipe = ukey :: wipe;
+	}else
 		return "no !password (or !hex) in key";
 
 	#	A->C:	Kc{nonce-S, uid-C, uid-S, Kn}, Ks{nonce-S, uid-C, uid-S, K-n}
@@ -188,11 +229,23 @@ p9sk1client(io: ref IO, mykey: ref Key): string
 	tr.rtype = Auth9->AuthTreq;
 	tr.hostid = user;
 	tr.uid = tr.hostid;	# not speaking for anyone else
-	(tick, serverbits) := getastickets(tr, ukey);
+	(tick, serverbits, aerr) := getastickets(tr, ukey);
 	if(tick == nil)
-		return sys->sprint("p9sk1: getasticket failed: %r");
+		return "p9sk1: getasticket failed: " + aerr;
+	wipe = tick.key :: wipe;
 	if(tick.num != Auth9->AuthTc)
 		return "p9sk1: getasticket: failed: wrong key?";
+	#
+	# The ticket is the one asked for: the server's challenge, and the
+	# user it was asked for, as both ids (the request speaks for nobody
+	# else, and an authentication server then puts the user in both).
+	# Only the type was looked at, so a ticket for another conversation
+	# or another user, under the same key, was taken.
+	#
+	if(!eqbytes(tick.chal, tr.chal))
+		return "p9sk1: the ticket is not for this conversation (its challenge is not the server's)";
+	if(tick.cuid != user || tick.suid != user)
+		return sys->sprint("p9sk1: the ticket is for %q as %q, not for %q", tick.cuid, tick.suid, user);
 	if(Debug)
 		sys->print("ticket: num=%d chal= cuid=%q suid=%q key=\n", tick.num, tick.cuid, tick.suid);
 
@@ -205,7 +258,7 @@ p9sk1client(io: ref IO, mykey: ref Key): string
 	obuf[0:] = serverbits;
 	obuf[TICKETLEN:] = ar.pack(tick.key);
 	if(io.write(obuf, len obuf) != len obuf)
-		return "p9sk1: error writing authenticator: %r";
+		return sys->sprint("p9sk1: error writing authenticator: %r");
 
 	#	S->C:	Kn{nonce-C, counter}
 	sbuf := io.readn(AUTHENTLEN);
@@ -221,9 +274,11 @@ p9sk1client(io: ref IO, mykey: ref Key): string
 	return nil;
 }
 
-getastickets(tr: ref Ticketreq, key: array of byte): (ref Ticket, array of byte)
+# the tickets, or nil and why (the error is the asking process's own:
+# it was read from this one's error string, which had some other error)
+getastickets(tr: ref Ticketreq, key: array of byte): (ref Ticket, array of byte, string)
 {
-	result := chan[1] of (ref Ticket, array of byte);
+	result := chan[1] of (ref Ticket, array of byte, string);
 	workerpid := chan[1] of int;
 	timerpid := chan[1] of int;
 	timeout := chan[1] of int;
@@ -232,26 +287,29 @@ getastickets(tr: ref Ticketreq, key: array of byte): (ref Ticket, array of byte)
 	spawn timeoutproc(timerpid, timeout);
 	tpid := <-timerpid;
 	alt {
-	(tick, serverbits) := <-result =>
+	(tick, serverbits, err) := <-result =>
 		killproc(tpid);
-		return (tick, serverbits);
+		return (tick, serverbits, err);
 	<-timeout =>
 		killproc(wpid);
-		sys->werrstr("auth server timeout");
-		return (nil, nil);
+		return (nil, nil, "auth server timeout");
 	}
 }
 
-getasticketsproc(pidc: chan of int, result: chan of (ref Ticket, array of byte),
+getasticketsproc(pidc: chan of int, result: chan of (ref Ticket, array of byte, string),
 	tr: ref Ticketreq, key: array of byte)
 {
 	pidc <-= sys->pctl(0, nil);
 	afd := authdial(nil, tr.authdom);
 	if(afd == nil){
-		result <-= (nil, nil);
+		result <-= (nil, nil, sys->sprint("%r"));
 		return;
 	}
-	result <-= auth9->_asgetticket(afd, tr, key);
+	(tick, bits) := auth9->_asgetticket(afd, tr, key);
+	err: string;
+	if(tick == nil)
+		err = sys->sprint("%r");
+	result <-= (tick, bits, err);
 }
 
 timeoutproc(pidc, timeout: chan of int)
@@ -305,19 +363,47 @@ authdial(netroot: string, dom: string): ref Sys->FD
 		# if that didn't work, just try the IP domain
 		if(p == nil)
 			p = csgetvalue(netroot, "dom", dom, "auth");
-		if(p == nil)
-			p = "$auth";	# temporary ...
+		# A domain with no authentication server named for it has
+		# none.  $auth, this machine's own, was asked in its place
+		# ("temporary"), so the refusal below was never reached and
+		# a key for any domain went to whatever $auth was.
 		if(p == nil){
-			sys->werrstr("no auth server found for "+dom);
+			sys->werrstr("no auth server found for "+dom+" (ndb: authdom="+dom+" auth=server)");
 			return nil;
 		}
 	}else
 		p = "$auth";	# look for one relative to my machine
-	(nil, conn) := sys->dial(netmkaddr(p, netroot, "ticket"), nil);
+	(ok, conn) := sys->dial(netmkaddr(p, netroot, "ticket"), nil);
+	if(ok < 0)
+		return nil;
 	return conn.dfd;
 }
 
-keycheck(nil: ref Authio->Key): string
+#
+# factotum gives this p9sk1's keys to check (there is no module of that
+# name): a domain, a user, and a password or the DES key made from one
+# (!hex, fourteen digits), without which the key can never be used.
+#
+keycheck(k: ref Authio->Key): string
 {
+	if(authio->lookattrval(k.attrs, "proto") != "p9sk1")
+		return nil;
+	if(authio->lookattrval(k.attrs, "dom") == nil)
+		return "a p9sk1 key needs dom=";
+	if(authio->lookattrval(k.attrs, "user") == nil)
+		return "a p9sk1 key needs user=";
+	hex := authio->lookattrval(k.secrets, "!hex");
+	if(hex != nil){
+		if(len hex != 2*DESKEYLEN)
+			return sys->sprint("a p9sk1 key's !hex is %d hexadecimal digits", 2*DESKEYLEN);
+		for(i := 0; i < len hex; i++){
+			c := hex[i];
+			if(!(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'))
+				return "a p9sk1 key's !hex is hexadecimal digits";
+		}
+		return nil;
+	}
+	if(authio->lookattrval(k.secrets, "!password") == nil)
+		return "a p9sk1 key needs !password= (or !hex=)";
 	return nil;
 }

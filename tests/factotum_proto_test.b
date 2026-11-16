@@ -210,21 +210,124 @@ testBtpin(t: ref T)
 testPass(t: ref T)
 {
 	ctl(t, "key proto=pass service=protoa user=alice !password=apw");
-	ctl(t, "key proto=pass service=protob user=bob !password=");
+	# a key with no password is not stored now (keycheck); asked for,
+	# there is none
+	e := ctle("key proto=pass service=protob user=bob !password=");
+	t.assert(contains(e, "password"), "a key with an empty password is refused when stored: " + e);
 	t.assertseq(ask(t, "proto=pass service=protoa"), "ok alice apw", "a password is given");
 	r := ask(t, "proto=pass service=protob");
-	t.assert(contains(r, "error") && !contains(r, "ok bob"), "a key with an empty password is an error, not a success: " + r);
+	t.assert(contains(r, "error") && !contains(r, "ok bob"), "and asked for, is an error, not a success: " + r);
+}
+
+# a write to ctl: nil, or the error
+ctle(s: string): string
+{
+	fd := sys->open(MNT + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("open ctl: %r");
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("%r");
+	return nil;
+}
+
+keys(): string
+{
+	fd := sys->open(MNT + "/ctl", Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("open ctl: %r");
+	s := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		s += string buf[0:n];
+	return s;
+}
+
+#
+# Every attribute of a request is a pattern, the secret ones too: a
+# request carrying !password=guess found the key when the guess was
+# right and none when it was not, and the two answers differed (pass,
+# btpin, btlink, btltk; wpapsk had its own refusal).  delkey always
+# refused a secret with a value; start does now, for every protocol.
+#
+testSecretQuery(t: ref T)
+{
+	ctl(t, "key proto=pass service=oracle user=olive !password=rightpw");
+	ctl(t, "key proto=btpin addr=aa:aa:aa:aa:aa:aa !pin=2468");
+	ctl(t, "key proto=btlink addr=bb:bb:bb:bb:bb:bb type=4 !key=00112233445566778899aabbccddeeff");
+	ctl(t, "key proto=btltk addr=cc:cc:cc:cc:cc:cc !ltk=ffeeddccbbaa99887766554433221100");
+	ctl(t, "key proto=wpapsk role=client essid=oracle !password=oraclepassphrase");
+	cases := array[] of {
+		("proto=pass service=oracle", "!password", "rightpw"),
+		("proto=btpin addr=aa:aa:aa:aa:aa:aa", "!pin", "2468"),
+		("proto=btlink addr=bb:bb:bb:bb:bb:bb", "!key", "00112233445566778899aabbccddeeff"),
+		("proto=btltk addr=cc:cc:cc:cc:cc:cc", "!ltk", "ffeeddccbbaa99887766554433221100"),
+		("proto=wpapsk role=client essid=oracle", "!password", "oraclepassphrase"),
+	};
+	for(i := 0; i < len cases; i++){
+		(q, name, val) := cases[i];
+		right := ask(t, q + " " + name + "=" + val);
+		wrong := ask(t, q + " " + name + "=wrongguess");
+		t.assert(contains(right, "private fields") && !contains(right, val), q + ": a request with the right secret in it is refused: " + right);
+		t.assertseq(right, wrong, q + ": and answered as a wrong guess is");
+		ok := ask(t, q);
+		t.assert(contains(ok, "ok") && contains(ok, val), q + ": asked for properly, the secret is given");
+		quest := ask(t, q + " " + name + "?");
+		t.assert(contains(quest, "ok"), q + ": and a secret asked for by name alone (" + name + "?) is no guess: " + quest);
+	}
+}
+
+#
+# Each protocol's check of its own keys, which no code called: a key
+# the protocol could never use is refused when it is stored.
+#
+testKeycheck(t: ref T)
+{
+	bad := array[] of {
+		("key proto=btlink addr=dd:dd:dd:dd:dd:dd !key=short", "32 hex"),
+		("key proto=btlink addr=dd:dd:dd:dd:dd:dd !key=zz112233445566778899aabbccddeeff", "32 hex"),
+		("key proto=btlink !key=00112233445566778899aabbccddeeff", "addr"),
+		("key proto=btltk addr=dd:dd:dd:dd:dd:dd !ltk=0011", "32 hex"),
+		("key proto=btltk addr=dd:dd:dd:dd:dd:dd rand=12 !ltk=00112233445566778899aabbccddeeff", "16 hex"),
+		("key proto=btpin addr=dd:dd:dd:dd:dd:dd !pin=12345678901234567", "16 bytes"),
+		("key proto=btpin addr=dd:dd:dd:dd:dd:dd", "!pin"),
+		("key proto=wpapsk role=client essid=kc !password=short", "8 to 63"),
+		("key proto=wpapsk role=client !password=longenoughpassphrase", "essid"),
+		("key proto=pass service=kc !password=pw", "user"),
+		("key proto=sign service=kc !sk=notakey", "secret key"),
+		("key proto=sign !sk=notakey", "service"),
+		("key proto=p9sk1 user=kc !password=pw", "dom"),
+		("key proto=p9sk1 dom=kc !password=pw", "user"),
+		("key proto=p9sk1 dom=kc user=kc", "!password"),
+		("key proto=p9sk1 dom=kc user=kc !hex=00", "14 hex"),
+	};
+	for(i := 0; i < len bad; i++){
+		(k, why) := bad[i];
+		e := ctle(k);
+		t.assert(e != nil && contains(e, why), k + ": refused, saying why: " + e);
+	}
+	t.assert(!contains(keys(), "dd:dd:dd:dd:dd:dd") && !contains(keys(), "=kc"), "and none of them is stored");
+	good := array[] of {
+		"key proto=btlink addr=ee:ee:ee:ee:ee:ee type=4 !key=00112233445566778899AABBCCDDEEFF",
+		"key proto=btltk addr=ee:ee:ee:ee:ee:ee type=1 ediv=4660 rand=0102030405060708 irk=00 !ltk=00112233445566778899aabbccddeeff",
+		"key proto=btpin !pin=1234567890123456",
+		"key proto=wpapsk role=client essid=kcgood !password=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"key proto=p9sk1 dom=kcgood user=kc !hex=00112233445566",
+		"key proto=somethingelse service=kcgood whatever=1 !secret=x",
+	};
+	for(i = 0; i < len good; i++)
+		t.assertnil(ctle(good[i]), good[i] + ": taken");
 }
 
 testWpapsk(t: ref T)
 {
-	ctl(t, "key proto=wpapsk role=client essid=home !password=homepsk");
-	ctl(t, "key proto=wpapsk role=client essid=work !password=workpsk");
-	t.assertseq(ask(t, "proto=wpapsk role=client essid=work"), "ok workpsk", "a network's passphrase is given for its name");
+	ctl(t, "key proto=wpapsk role=client essid=home !password=homepassphrase");
+	ctl(t, "key proto=wpapsk role=client essid=work !password=workpassphrase");
+	t.assertseq(ask(t, "proto=wpapsk role=client essid=work"), "ok workpassphrase", "a network's passphrase is given for its name");
 	r := ask(t, "proto=wpapsk role=client");
-	t.assert(contains(r, "error") && !contains(r, "psk"), "a query naming no network is given no passphrase: " + r);
-	right := ask(t, "proto=wpapsk role=client essid=work !password=workpsk");
-	wrong := ask(t, "proto=wpapsk role=client essid=work !password=wrongpsk");
+	t.assert(contains(r, "error") && !contains(r, "passphrase"), "a query naming no network is given no passphrase: " + r);
+	right := ask(t, "proto=wpapsk role=client essid=work !password=workpassphrase");
+	wrong := ask(t, "proto=wpapsk role=client essid=work !password=wrongpassphrase");
 	t.assert(contains(right, "error") && !contains(right, "ok"), "a query with a secret in it is refused: " + right);
 	t.assertseq(right, wrong, "and a right guess is answered as a wrong one is");
 }
@@ -344,8 +447,7 @@ p9offer(t: ref T, start: string, o: array of byte): (ref Sys->FD, string)
 
 testP9any(t: ref T)
 {
-	# alice's key cannot be used (its !hex is not a key), bob's can
-	ctl(t, "key proto=p9sk1 dom=corp user=alice !hex=00 !password=x");
+	ctl(t, "key proto=p9sk1 dom=corp user=alice !hex=ffeeddccbbaa99 !password=x");
 	ctl(t, "key proto=p9sk1 dom=corp user=bob !hex=00112233445566 !password=x");
 	ctl(t, "key proto=p9sk1 dom=lab user=carol !password=short");
 	ctl(t, "key proto=p9sk1 dom=� user=dave !password=short");
@@ -383,8 +485,33 @@ testP9any(t: ref T)
 	if(r == "ok")
 		r = rpc(fd, "read");
 	t.log("after the ticket request: " + r);
-	t.assert(!contains(r, "invalid !hex key"), "user=bob is not given alice's key: " + r);
-	t.assert(contains(r, "getasticket"), "but bob's, which gets as far as the authentication server: " + r);
+	t.assert(contains(r, "getasticket"), "bob's key gets as far as the authentication server: " + r);
+	# A domain with no authentication server named for it (ndb) has
+	# none: $auth, the machine's own, was dialled in its place, with a
+	# key for whatever domain the server had named.
+	t.assert(contains(r, "no auth server found for corp"), "and there is none for corp, so none is dialled: " + r);
+
+	# The ticket request must be for the domain negotiated: the key
+	# was found by that one and the authentication server by the
+	# request's, and a server could name another's.
+	(fd, r) = p9offer(t, "proto=p9any role=client user=bob", offer("p9sk1@corp\0"));
+	t.assertseq(r, "ok p9sk1 corp\0", "corp negotiated again");
+	rpcb(fd, array of byte "read");
+	tr = ref Ticketreq(Auth9->AuthTreq, "bootes", "evil", array[Auth9->CHALLEN] of {* => byte 'c'}, "x", "y");
+	p = tr.pack();
+	w = array[6 + len p] of byte;
+	w[0:] = array of byte "write ";
+	w[6:] = p;
+	r = string rpcb(fd, w);
+	if(r == "ok")
+		r = rpc(fd, "read");
+	t.assert(contains(r, "negotiated") && !contains(r, "getasticket"), "a ticket request for another domain is refused before anything is asked of anybody: " + r);
+
+	# the caller's user chooses the key: with bob's gone, user=bob is
+	# not given alice's
+	ctl(t, "delkey proto=p9sk1 dom=corp user=bob");
+	(nil, r) = p9offer(t, "proto=p9any role=client user=bob", offer("p9sk1@corp\0"));
+	t.assert(contains(r, "error") && contains(r, "key"), "user=bob is not given alice's key: " + r);
 }
 
 # auth/rpc with text as its standard input: what it prints
@@ -527,6 +654,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Wpapsk", testWpapsk);
 	run("Sign", testSign);
 	run("P9any", testP9any);
+	run("SecretQuery", testSecretQuery);
+	run("Keycheck", testKeycheck);
 	run("RpcTool", testRpcTool);
 	run("Alive", testAlive);
 

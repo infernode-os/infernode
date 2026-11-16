@@ -32,7 +32,14 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	return nil;
 }
 
-keycheck(nil: ref Authio->Key): string
+# A key of this protocol is a user and a password: with either missing
+# it is answered "unknown user" or "key has no password" whenever it is
+# asked for, so it is refused when it is stored.
+keycheck(k: ref Authio->Key): string
 {
+	if(authio->lookattrval(k.attrs, "user") == nil)
+		return "a pass key needs user=";
+	if(authio->lookattrval(k.secrets, "!password") == nil)
+		return "a pass key needs !password=, not empty";
 	return nil;
 }

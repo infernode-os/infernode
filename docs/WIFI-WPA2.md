@@ -39,10 +39,12 @@ through `/prog` by anyone who can see the process — and never a file in
 the tree. It goes to `factotum`, keyed by the network it belongs to:
 
 ```
-echo 'key proto=wpapsk role=client essid=home !password=secret' >/mnt/factotum/ctl
+echo 'key proto=wpapsk role=client essid=home !password=correct-horse-battery' >/mnt/factotum/ctl
 ```
 
-One key per network. A machine that moves between several keeps them all
+The passphrase is 8 to 63 characters, as WPA2 has it (or the 256-bit key
+made from one, as 64 hexadecimal digits): factotum refuses any other when
+the key is stored. One key per network. A machine that moves between several keeps them all
 and `ip/wpa` asks for the one matching the network it is joining, so
 nothing has to be edited when the machine moves.
 

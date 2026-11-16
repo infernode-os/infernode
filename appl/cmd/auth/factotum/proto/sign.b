@@ -50,6 +50,8 @@ include "draw.m";
 include "keyring.m";
 	kr: Keyring;
 
+include "security.m";
+
 include "../authio.m";
 	authio:	Authio;
 	Attr, IO, Key: import authio;
@@ -131,6 +133,12 @@ interaction(attrs: list of ref Attr, io: ref IO): string
 		return nil;
 	}
 
+	# In CNSA mode (/env/cnsamode) a signature is ML-DSA-87's or is
+	# not made: a key of another algorithm, stored before the mode was
+	# set, signed all the same.
+	if((cerr := cnsarefuses(sk.sa.name)) != nil)
+		return "sign: " + cerr;
+
 	# the caller writes the bytes to sign
 	content := io.read();
 	if(content == nil || len content == 0)
@@ -157,9 +165,26 @@ send(io: ref IO, b: array of byte)
 	}
 }
 
-keycheck(nil: ref Key): string
+# A signing key names its service (a query must) and holds a secret
+# key that reads as one.
+keycheck(k: ref Key): string
 {
+	if(authio->lookattrval(k.attrs, "service") == nil)
+		return "a sign key needs service=";
+	skenc := authio->lookattrval(k.secrets, "!sk");
+	if(skenc == nil)
+		return "a sign key needs !sk=";
+	if(kr->strtosk(decode(skenc)) == nil)
+		return "a sign key's !sk does not read as a secret key";
 	return nil;
+}
+
+cnsarefuses(alg: string): string
+{
+	login := load Login Login->PATH;
+	if(login == nil || !login->cnsamode())
+		return nil;
+	return login->cnsaalg(alg);
 }
 
 # decode reverses mkauditkey's single-line encoding of sktostr: '@' back

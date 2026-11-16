@@ -318,6 +318,17 @@ add a new key.  This will replace any old key whose
 public attributes match (ie, non
 .B !
 attributes).
+The key is first given to its protocol's module to check, if its
+.B proto
+has one (a
+.B p9sk1
+key goes to
+.BR p9any ),
+and a key the protocol could never use is refused with the reason:
+see each protocol below.
+A key whose
+.B proto
+names no module is kept as it is.
 .TP
 .B "delkey \fIattribute-value-list\fP
 delete a key whose attributes match those given.
@@ -326,6 +337,65 @@ delete a key whose attributes match those given.
 synchronously save all keys through the configured encrypted keyfile or
 secstore backend.  The write fails if no persistence backend is configured or
 if the save fails; success means the backend accepted the complete key set.
+A save that cannot be made is always answered with its reason
+(with no random numbers for a nonce, a
+.B sync
+was once never answered, and
+.I factotum
+then served nothing more).
+If the keys in secstore could not be read when
+.I factotum
+started with
+.BR -S ,
+nothing is saved there, by
+.B sync
+or otherwise, until a
+.B secstore
+request says where to save: keys added after a failed load were once saved
+over the file that had not been read.
+.TP
+.B "secstore \fIaddress user password\fP [\fIdatakey\fP]"
+save the keys, from now on, in the account
+.I user
+of the
+.IR secstore (1)
+server at
+.IR address ,
+authenticating with
+.IR password ;
+with
+.IR datakey
+(64 hexadecimal digits) the file is encrypted under that key and not under the
+one made from the password (a second-factor account).
+The fields are parted by blanks, so none can hold one.
+.TP
+.B "secstoreq \fIaddress user password\fP [\fIdatakey\fP]"
+the same, the fields quoted as
+.B %q
+writes them (see
+.IR sys-print (2)),
+for a password with a blank or a quote in it.
+.TP
+.B "genkey \fIattribute-value-list\fP
+make a signing key inside
+.I factotum
+and keep it as a key with the attributes given and the secret key as
+.BR !sk ;
+.B alg
+(default
+.BR mldsa87 )
+and
+.B owner
+(default
+.BR audit )
+say what is made and are not kept.
+In CNSA mode
+.RB ( /env/cnsamode ,
+see
+.IR security-login (2))
+only
+.B alg=mldsa87
+is taken.
 .TP
 .B debug
 toggle debugging on and off, i.e., the debugging also
@@ -645,6 +715,50 @@ key matching the attributes the caller gave
 or
 .B dom
 attribute chooses among several keys).
+The offered domains are looked at without asking anybody; only if none has a key is
+an agent reading
+.B needkey
+asked for one, for the first domain offered.
+The server's ticket request must then be for the domain negotiated, or
+.B p9sk1
+stops before it asks anything of anybody:
+the key is found by that domain, and the authentication server is the one
+the network database names for it
+.RB ( "authdom=\fIdom\fP auth=\fIserver\fP" ,
+see
+.IR ndb (6)).
+A domain with no authentication server named has none;
+the machine's own
+.B $auth
+is not asked in its place.
+The ticket that comes back must carry the server's challenge and the user it was asked for.
+A
+.B p9sk1
+key without
+.BR dom ,
+.B user
+or a
+.B !password
+(or a
+.B !hex
+of 14 digits) is refused when it is stored.
+.B P9sk1
+needs DES, which is in the
+.B $Crypt
+module of the Windows and Plan 9 hosted emulators only;
+elsewhere it stops at the ticket.
+.PP
+A request
+.RB ( start )
+for any protocol may not give a secret attribute a value
+.RB ( !password=\fIguess\fP ):
+every attribute is a pattern, and the answer would say whether the guess was right.
+It is refused, as
+.B delkey
+refuses it.
+A secret asked for by name
+.RB ( !password? )
+is no guess.
 .PP
 .B Pass
 requires a key with
@@ -654,7 +768,9 @@ in addition to
 and
 .B !password
 attributes.
-A key whose password is empty is an error.
+A key with no
+.B user
+or an empty password is refused when it is stored.
 .PP
 .B Wpapsk
 gives the passphrase of a wireless network to
@@ -667,8 +783,13 @@ attribute naming the network, and a
 .B !password
 attribute.
 The request must name the network with
-.BR essid ,
-and may not give a secret attribute itself.
+.BR essid .
+The key must have an
+.B essid
+and a
+.B !password
+that WPA2 can use: a passphrase of 8 to 63 characters, or the key made from one
+as 64 hexadecimal digits; any other is refused when it is stored.
 .PP
 .B Btpin
 gives a Bluetooth pairing PIN to
@@ -686,6 +807,23 @@ A request with an
 is answered only by that peer's key,
 and one without only by a key that has no
 .BR addr .
+A PIN is 1 to 16 bytes.
+.PP
+.B Btlink
+and
+.B btltk
+give
+.IR bt9p (4)
+the link key or long-term key it shares with a peer.
+Their keys need an
+.B addr
+and a
+.B !key
+(or
+.BR !ltk )
+of 32 hexadecimal digits, and a
+.B rand
+of 16 if there is one; any other is refused when it is stored.
 .PP
 .B Sign
 signs what its caller writes with a signing key that stays in
@@ -699,6 +837,12 @@ attribute and an
 attribute (made by the
 .B genkey
 request).
+A key whose
+.B !sk
+does not read as a secret key, or with no
+.BR service ,
+is refused when it is stored.
+In CNSA mode only an ML-DSA-87 key signs.
 The request must name the
 .BR service ;
 .B op=pubkey

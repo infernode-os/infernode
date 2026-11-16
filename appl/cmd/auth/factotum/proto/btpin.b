@@ -32,9 +32,16 @@ init(f: Authio): string
 
 interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 {
+	# every key that matches, to choose among; with none, the key is
+	# asked for (findkeys only looks)
 	(keys, err) := io.findkeys(attrs, "!pin?");
-	if(keys == nil)
-		return err;
+	if(keys == nil){
+		k: ref Authio->Key;
+		(k, err) = io.needkey(attrs, "!pin?");
+		if(k == nil)
+			return err;
+		keys = k :: nil;
+	}
 	key := hd keys;
 	if(authio->lookattrval(attrs, "addr") == nil){
 		# the PIN for anything not named is the key with no addr.
@@ -58,7 +65,13 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	return nil;
 }
 
-keycheck(nil: ref Authio->Key): string
+# A PIN is 1 to 16 bytes (Bluetooth Core, vol 2 part H 3.2.2).
+keycheck(k: ref Authio->Key): string
 {
+	pin := authio->lookattrval(k.secrets, "!pin");
+	if(pin == nil)
+		return "a btpin key needs !pin=";
+	if(len array of byte pin > 16)
+		return "a Bluetooth PIN is at most 16 bytes";
 	return nil;
 }

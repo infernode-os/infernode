@@ -40,11 +40,8 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	# network's key, and the first one's passphrase was given
 	if(authio->lookattrval(attrs, "essid") == nil)
 		return "no essid given";
-	# a secret in the query is a guess at one: "!password=guess" was a
-	# pattern like any other, so the answer said whether it was right
-	for(l := attrs; l != nil; l = tl l)
-		if((a := hd l).tag == Authio->Aval && len a.name > 0 && a.name[0] == '!')
-			return "a query may not give a secret attribute";
+	# (a secret given in the query, a guess at one, is refused by
+	# factotum itself before any protocol is started)
 	(key, err) := io.findkey(attrs, "!password?");
 	if(key == nil)
 		return err;
@@ -56,7 +53,29 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	return nil;
 }
 
-keycheck(nil: ref Authio->Key): string
+# A network's key names the network and holds what WPA2 can use: a
+# passphrase of 8 to 63 characters, or the 256-bit key made from one
+# as 64 hexadecimal digits (IEEE 802.11-2020 12.7.1.3 and annex J.4).
+keycheck(k: ref Authio->Key): string
 {
+	if(authio->lookattrval(k.attrs, "essid") == nil)
+		return "a wpapsk key needs essid=";
+	pass := authio->lookattrval(k.secrets, "!password");
+	if(pass == nil)
+		return "a wpapsk key needs !password=";
+	n := len array of byte pass;
+	if(n == 64){
+		for(i := 0; i < len pass; i++)
+			if(!ishex(pass[i]))
+				return "a wpapsk key of 64 characters is 64 hexadecimal digits";
+		return nil;
+	}
+	if(n < 8 || n > 63)
+		return "a WPA2 passphrase is 8 to 63 characters (or its key, 64 hexadecimal digits)";
 	return nil;
+}
+
+ishex(c: int): int
+{
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F';
 }

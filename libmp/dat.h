@@ -36,6 +36,11 @@ int	mpextendedgcdtry(mpint *a, mpint *b, mpint *d, mpint *x, mpint *y);
 int	mpreservetry(mpint *b, int n);
 mpint*	mptrycopy(mpint *b);
 
+// n bytes cleared, by stores a compiler keeps before a free: the
+// bytes of a number in another form (text decoded, bytes for text,
+// random bytes) are the number, which may be a key
+void	mpwipe(void *p, ulong n);
+
 // for converting between int's and mpint's
 #define MAXUINT ((uint)-1)
 #define MAXINT (MAXUINT>>1)

@@ -9,7 +9,6 @@ mprand(int bits, void (*gen)(uchar*, int), mpint *b)
 	int n, m, made;
 	mpdigit mask;
 	uchar *p;
-	volatile uchar *v;
 
 	// a count of bits is the caller's: see dat.h
 	bits = mpsizebits(0, bits, "mprand");
@@ -38,9 +37,7 @@ mprand(int bits, void (*gen)(uchar*, int), mpint *b)
 		b->p[m] = 0;
 	// they are the number, which may be a key or a nonce: cleared, by
 	// stores a compiler keeps before a free
-	v = p;
-	for(m = n*Dbytes; m > 0; m--)
-		*v++ = 0;
+	mpwipe(p, n*Dbytes);
 	free(p);
 
 	// make sure we don't give too many bits

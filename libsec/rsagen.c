@@ -12,7 +12,7 @@ rsagen(int nlen, int elen, int rounds)
 	q = mpnew(nlen/2);
 	n = mpnew(nlen);
 	e = mpnew(elen);
-	d = mpnew(0);
+	d = mpnew(nlen+Dbits);	// all it will hold: no buffer of it is left behind as it grows
 	phi = mpnew(nlen);
 
 	// create the prime factors and euclid's function
@@ -25,14 +25,29 @@ rsagen(int nlen, int elen, int rounds)
 		genprime(q, nlen - mpsignif(p) + 1, rounds);
 	while(mpcmp(p, q) == 0);
 	mpmul(p, q, n);
-	mpsub(p, mpone, e);
-	mpsub(q, mpone, d);
-	mpmul(e, d, phi);
+	// p-1 and q-1 in numbers of their own, which are cleared when
+	// they are freed.  They were made in e and d: the public exponent
+	// then had p-1's digits above its own in its buffer, and d's first
+	// buffer, with q-1 in it, was given back to the pool as it was
+	// when d grew.
+	t1 = mpnew(nlen);
+	t2 = mpnew(nlen);
+	mpsub(p, mpone, t1);
+	mpsub(q, mpone, t2);
+	mpmul(t1, t2, phi);
 
-	// find an e relatively prime to phi
-	t1 = mpnew(0);
-	t2 = mpnew(0);
+	// find an e relatively prime to phi: of elen bits exactly, and
+	// odd (an even one has no inverse; FIPS 186-5 A.1.1 wants it odd
+	// and above 2^16, which a caller that asks for 17 bits or more
+	// now gets: the top bit asked for was set one time in two)
 	mprand(elen, genrandom, e);
+	if(elen >= 2 && elen <= mpsignif(phi) - 2){
+		mpleft(mpone, elen-1, t1);
+		if(mpcmp(e, t1) < 0)
+			mpadd(e, t1, e);
+	}
+	if(e->top > 0)
+		e->p[0] |= 1;
 	if(mpcmp(e,mptwo) <= 0)
 		itomp(3, e);
 	// See Menezes et al. p.291 "8.8 Note (selecting primes)" for discussion
@@ -43,7 +58,7 @@ rsagen(int nlen, int elen, int rounds)
 		mpextendedgcd(e, phi, t1, d, t2);
 		if(mpcmp(t1, mpone) == 0)
 			break;
-		mpadd(mpone, e, e);
+		mpadd(mptwo, e, e);	// the next odd one
 	}
 	mpfree(t1);
 	mpfree(t2);

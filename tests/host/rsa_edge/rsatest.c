@@ -245,6 +245,26 @@ fill(void)
 	check(!RAISES(k = rsafill(num(35), num(5), num(-19), num(5), num(7))) && k == nil, "rsafill with d = -19 made a key");
 	check(!RAISES(k = rsafill(num(-35), num(5), num(5), num(5), num(7))) && k == nil, "rsafill with n = -35 made a key");
 
+	/* e = d = 1, or an e that is 1 mod lcm(p-1, q-1): a key that changes nothing */
+	check(!RAISES(k = rsafill(num(35), one, one, num(5), num(7))) && k == nil, "rsafill with e = d = 1 made a key");
+	check(!RAISES(k = rsafill(num(6), num(5), num(5), num(2), num(3))) && k == nil, "rsafill(6, 5, 5, 2, 3) made a key: e is 1 mod lcm(1, 2)");
+	check(!RAISES(k = rsafill(num(35), num(13), num(13), num(5), num(7))) && k == nil, "rsafill(35, 13, 13, 5, 7) made a key: e is 1 mod 12");
+	/* d = 1/e mod lcm(p-1, q-1), as RFC 8017 3.2 has it and OpenSSL writes it: a key (it was refused) */
+	k = nil;
+	check(!RAISES(k = rsafill(num(253), three, num(37), num(11), num(23))) && k != nil, "rsafill(253, 3, 37, 11, 23), d mod lambda: %s", msg);
+	if(k != nil){
+		mpint *t;
+
+		t = rsadecrypt(k, num(100), nil);
+		check(t != nil, "rsadecrypt with it");
+		if(t != nil){
+			mpexp(t, three, num(253), t);
+			check(mptoi(t) == 100, "its signature of 100, cubed, is %d", mptoi(t));
+		}
+	}
+	/* and with d mod (p-1)(q-1), as before */
+	check(!RAISES(k = rsafill(num(253), three, num(147), num(11), num(23))) && k != nil, "rsafill(253, 3, 147, 11, 23), d mod phi: %s", msg);
+
 	/* and a key that is one */
 	k = nil;
 	check(!RAISES(k = rsafill(num(35), num(5), num(5), num(5), num(7))) && k != nil, "rsafill(35, 5, 5, 5, 7): %s", msg);
@@ -258,14 +278,17 @@ gen(void)
 {
 	RSApriv *k, *k2;
 	mpint *t, *m, *s;
-	int i, neg, refused, wrong;
+	int i, neg, refused, wrong, bade;
 
-	neg = refused = wrong = 0;
+	neg = refused = wrong = bade = 0;
 	m = num(0x12345);
 	for(i = 0; i < 150; i++){
 		k = rsagen(128, 6, 0);
 		if(k->dk->sign < 0 || k->dk->top == 0)
 			neg++;
+		/* e odd, with the bits asked for (a carry may add one) */
+		if((k->pub.ek->p[0] & 1) == 0 || mpsignif(k->pub.ek) < 6 || mpsignif(k->pub.ek) > 7)
+			bade++;
 		k2 = nil;
 		if(RAISES(k2 = rsafill(k->pub.n, k->pub.ek, k->dk, k->p, k->q)) || k2 == nil)
 			refused++;
@@ -284,6 +307,15 @@ gen(void)
 		rsaprivfree(k);
 	}
 	check(neg == 0, "%d of 150 keys from rsagen have a d that is not positive", neg);
+	check(bade == 0, "%d of 150 keys from rsagen(128, 6) have an e that is even or not of six bits", bade);
+	bade = 0;
+	for(i = 0; i < 20; i++){
+		k = rsagen(256, 17, 0);
+		if(mpsignif(k->pub.ek) < 17 || (k->pub.ek->p[0] & 1) == 0)
+			bade++;
+		rsaprivfree(k);
+	}
+	check(bade == 0, "%d of 20 keys from rsagen(256, 17) have an e that is not above 2^16 (FIPS 186-5 A.1.1) or even", bade);
 	check(refused == 0, "rsafill refused %d of 150 keys from rsagen", refused);
 	check(wrong == 0, "%d of 150 keys from rsagen do not undo their own exponent", wrong);
 }

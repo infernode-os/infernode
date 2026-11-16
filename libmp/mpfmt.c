@@ -16,10 +16,12 @@ to64(mpint *b, char *buf, int len)
 	// all of it or none: enc64 stops where the room does, and what it
 	// had written was returned as the number
 	if(len < 4*((n+2)/3) + 1){
+		mpwipe(p, n);
 		free(p);
 		return -1;
 	}
 	rv = enc64(buf, len, p, n);
+	mpwipe(p, n);	// the number's bytes: see dat.h
 	free(p);
 	return rv;
 }
@@ -52,6 +54,7 @@ to32(mpint *b, char *buf, int len)
 		n += pad;
 	}
 	rv = enc32(buf, len, p, n);
+	mpwipe(p, n);
 	free(p);
 	return rv;
 }

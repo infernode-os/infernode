@@ -189,6 +189,15 @@ mpbits(mpint *b, int m)
 }
 
 void
+mpwipe(void *p, ulong n)
+{
+	volatile uchar *v;
+
+	for(v = p; n > 0; n--)
+		*v++ = 0;
+}
+
+void
 mpfree(mpint *b)
 {
 	if(b == nil)

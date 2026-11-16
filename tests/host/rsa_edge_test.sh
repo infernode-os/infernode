@@ -19,7 +19,13 @@
 #     from RSAsk.fill), with a negative part nil (a raise, or a key every
 #     use of which raised)
 #   - rsagen's d is the least positive inverse of e (it was negative for
-#     one key in ten, and rsafill refused such a key), 150 keys
+#     one key in ten, and rsafill refused such a key), 150 keys; its e
+#     is odd and has the bits asked for (FIPS 186-5 A.1.1: above 2^16
+#     for a caller that asks for 17)
+#   - rsafill takes a d that inverts e mod lcm(p-1, q-1), which is what
+#     RFC 8017 3.2 and FIPS 186-5 define and OpenSSL writes (it wanted
+#     (p-1)(q-1), and refused such keys), and refuses e = d = 1 and
+#     any e that is 1 mod it (a key that changes nothing)
 #   - libmp's mpexpcrt, the private operation in constant time, gives
 #     what the general arithmetic gives for keys of 64 to 1024 bits and
 #     inputs at the edges and at random, and for primes of unlike

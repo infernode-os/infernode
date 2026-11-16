@@ -243,8 +243,8 @@ md4(uchar *p, ulong len, uchar *digest, MD4state *s)
 	if(s->malloced == 1){
 		secureZero(s, sizeof(*s));
 		free(s);
-	}else if(s == &own)
-		secureZero(s, sizeof(*s));
+	}else
+		secureZero(s, sizeof(*s));	/* the caller's too: it is done with, and begins again if used again */
 	secureZero(buf, sizeof(buf));
 	return nil;
 }

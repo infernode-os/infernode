@@ -3,14 +3,15 @@
 #include <libsec.h>
 #include "dat.h"
 
-static struct {
-	int	inited;
-
+typedef struct Tab Tab;
+struct Tab {
 	uchar	t64[256];
 	uchar	t32[256];
 	uchar	t16[256];
 	uchar	t10[256];
-} tab;
+};
+static Tab tab;
+static int tabinited;
 
 enum {
 	INVAL=	255
@@ -21,26 +22,30 @@ static char set32[] = "23456789abcdefghijkmnpqrstuvwxyz";
 static char set16[] = "0123456789ABCDEF0123456789abcdef";
 static char set10[] = "0123456789";
 
+// The tables are made once, at the first conversion, with no lock:
+// two processes can both be first (two Dis VMs of the native kernel).
+// They were filled in place, starting with every entry "no digit", so
+// a reader that came once the other maker had finished read a table
+// the second was still filling, and took digits for the end of a
+// number.  They are made aside and copied whole: a second copy writes
+// the bytes that are there.
 static void
 init(void)
 {
+	Tab t;
 	char *p;
 
-	memset(tab.t64, INVAL, sizeof(tab.t64));
-	memset(tab.t32, INVAL, sizeof(tab.t32));
-	memset(tab.t16, INVAL, sizeof(tab.t16));
-	memset(tab.t10, INVAL, sizeof(tab.t10));
-
+	memset(&t, INVAL, sizeof t);
 	for(p = set64; *p; p++)
-		tab.t64[*p] = p-set64;
+		t.t64[(uchar)*p] = p-set64;
 	for(p = set32; *p; p++)
-		tab.t32[*p] = p-set32;
+		t.t32[(uchar)*p] = p-set32;
 	for(p = set16; *p; p++)
-		tab.t16[*p] = (p-set16)%16;
+		t.t16[(uchar)*p] = (p-set16)%16;
 	for(p = set10; *p; p++)
-		tab.t10[*p] = (p-set10);
-
-	tab.inited = 1;
+		t.t10[(uchar)*p] = (p-set10);
+	tab = t;
+	tabinited = 1;
 }
 
 // Room in b for a number of bits, or -1: there is no memory, or no
@@ -177,10 +182,12 @@ from64(char *a, mpint *b)
 		return buf;	// no number read: it was "a number", of whatever b held
 	m = dec64(p, n, buf, n);
 	if(m < 0){
+		mpwipe(p, n);
 		free(p);
 		return buf;
 	}
 	betomp(p, m, b);
+	mpwipe(p, n);	// the number's bytes: see dat.h
 	free(p);
 	return a;
 }
@@ -210,6 +217,7 @@ from32(char *a, mpint *b)
 		return buf;
 	}
 	betomp(p, m, b);
+	mpwipe(p, n);	// the number's bytes: see dat.h
 	free(p);
 	return a;
 }
@@ -226,7 +234,7 @@ strtomp(char *a, char **pp, int base, mpint *b)
 		alloced = 1;
 	}
 
-	if(tab.inited == 0)
+	if(tabinited == 0)
 		init();
 
 	while(*a==' ' || *a=='\t')

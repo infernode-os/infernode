@@ -62,6 +62,11 @@ A client's reads and writes wait for the connection's server, in the
 order they were made, and never hold up another connection or a new one.
 One connection can have 1024 reads and 1024 writes waiting; more are
 refused.
+A post has at most 256 connections at once; one more is refused in answer
+to its first request.
+What the server sent for a read whose client had gone by then (it was
+killed, or its request flushed) is kept for the connection's next read,
+and a request given up while it waited is not passed on.
 A write to a connection whose server has closed its end is an error.
 When a client closes its connection the server sees the end of it,
 whatever was waiting.

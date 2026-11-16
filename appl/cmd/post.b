@@ -66,7 +66,36 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	for(;;){
 		fd := <-conns;
-		if(sys->export(fd, dir, Sys->EXPASYNC) < 0)
-			sys->fprint(stderr, "post: export %s: %r\n", dir);
+		if(sys->export(fd, dir, Sys->EXPASYNC) < 0){
+			e := sys->sprint("%r");
+			sys->fprint(stderr, "post: export %s: %s\n", dir, e);
+			spawn refuse(fd, "post: cannot export " + dir + ": " + e);
+		}
 	}
+}
+
+# A connection that cannot be served is told why, in answer to its first
+# 9P message: it was only closed, the reason on post's own stderr, and
+# its client saw a server that had hung up.
+refuse(fd: ref Sys->FD, why: string)
+{
+	hdr := array[7] of byte;	# size[4] type[1] tag[2]
+	if(sys->readn(fd, hdr, len hdr) != len hdr)
+		return;
+	e := array of byte why;
+	if(len e > 255)
+		e = e[0:255];
+	n := 7 + 2 + len e;
+	r := array[n] of byte;
+	r[0] = byte n;
+	r[1] = byte (n>>8);
+	r[2] = byte 0;
+	r[3] = byte 0;
+	r[4] = byte 107;	# Rerror
+	r[5] = hdr[5];
+	r[6] = hdr[6];
+	r[7] = byte len e;
+	r[8] = byte (len e >> 8);
+	r[9:] = e;
+	sys->write(fd, r, len r);
 }

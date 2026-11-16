@@ -36,6 +36,28 @@ A recorded video served in VM 1 and played in VM 0:
 vm 1 sh -c 'mount {vid9p clip.y4m} /mnt/video; post video /mnt/video'
 mount -A '#svideo/fs' /mnt/video
 .EE
+A connection that cannot be served (the directory has gone) is told why
+in answer to its first message.
+.PP
+.BI #s spec
+is the user's own: another user cannot attach it, nor can a process that
+has given up its devices
+.RB ( NODEVS ),
+but any other process of the user can, and whichever posts a name first
+has it; a second post of the name is refused and says so.
+A client cannot tell who posted what it mounts, and need not: a process
+that could post there can already do all the user can.
+.PP
+Whoever opens the posted file has the directory with
+.IR post 's
+own rights to it, writing included.
+There is no read-only post:
+.IR sys-export (2)
+has no such mode (the kernel's export has the check, and nothing that
+turns it on).
+A client can make its own view read-only with
+.BR "mount -R" ,
+which protects the client's side only.
 .SH SOURCE
 .B /appl/cmd/post.b
 .SH SEE ALSO

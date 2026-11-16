@@ -268,7 +268,9 @@ testSetup(t: ref T)
 		t.fatal("luciuisrv did not load or mount");
 	t.assert(writefile(UI + "/ctl", "activity create Main") > 0, "activity 0");
 
-	# tools9p's files for activity 0
+	# tools9p's files for activity 0, on mount points a fresh tree lacks
+	sys->create("/tool", Sys->OREAD, Sys->DMDIR | 8r755);
+	sys->create("/mnt/toolctl", Sys->OREAD, Sys->DMDIR | 8r755);
 	if(sys->bind("#s", "/tool", Sys->MREPL) < 0 || sys->bind("#s", "/mnt/toolctl", Sys->MREPL) < 0)
 		t.fatal(sys->sprint("bind #s: %r"));
 	budget := sys->file2chan("/tool", "budget");

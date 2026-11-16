@@ -350,6 +350,8 @@ init(nil: ref Draw->Context, args: list of string)
 	mkdir("/tmp/veltro");
 	mkdir("/tmp/veltro/scratch");
 	scratch = "/tmp/veltro/scratch/limbo_tool_test_" + string pid;
+	mkdir("/tool");	# the mount points: a fresh tree has neither
+	mkdir("/mnt/llm");
 	if(sys->bind(top + "/tool", "/tool", Sys->MREPL) < 0 ||
 	   sys->bind(top + "/llm", "/mnt/llm", Sys->MREPL | Sys->MCREATE) < 0) {
 		sys->fprint(sys->fildes(2), "cannot bind the stand-ins: %r\n");

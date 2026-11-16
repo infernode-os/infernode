@@ -107,7 +107,7 @@ ls /tmp
 echo '<<< stall >>>'
 /tests/pop3cli.dis 127.0.0.1!$P_STALL
 echo '<<< procs >>>'
-ps | grep -i 'broken\|mailconn'
+ps
 echo '<<< end >>>'
 echo halt > /dev/sysctl
 " </dev/null >"$T" 2>&1
@@ -163,7 +163,8 @@ expect uidl "the file is named by the message's number" '/tmp/1$'
 if [[ -e "$D/x" || -e "$D/../x" ]]; then fail "uidl: a file was made outside the directory"; else pass "uidl: nothing was made outside the directory"; fi
 expect stall "PASS never answered: open fails at its deadline" '^open: -1 PASS receive failed (pop3 timed out)'
 refuse stall "and does not wait long past it" '([4-9][0-9][0-9][0-9][0-9] ms)'
-refuse procs "no process is broken or left" 'roken\|Mailconn'
+expect procs "the processes are listed" 'Sh\|Ps'
+refuse procs "none is broken or left from a connection" 'roken\|Mailconn\|Pop3\|TLS'
 
 echo ""
 echo "Total: $PASSED passed, $FAILED failed"

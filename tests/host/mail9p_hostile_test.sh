@@ -26,7 +26,7 @@
 #              answered 250 sends no message; a carriage return inside a
 #              body line ends the line (and a dot after it is doubled),
 #              inside a header line refuses the message
-#   exists biglit backslash spoof tagforge unsol envcrlf
+#   exists biglit backslash spoof tagforge unsol envcrlf addrcrlf
 #              a server's counts, literals and strings (see fake_imap.py):
 #              each is refused or read as data, and another account's
 #              files answer throughout
@@ -424,8 +424,12 @@ c_parse() {
         expect $sc b102 "a message's text is the one asked for" '^It is attached'
         refuse $sc b102 "not another's the server sent after it" 'Shall we meet'
         ;;
-    envcrlf)
-        expect $sc reply "a reply to an address with a line break in it is refused" '^not sent: .*not an address'
+    envcrlf|addrcrlf)
+        if [[ $sc = addrcrlf ]]; then
+            expect $sc reply "a reply to an address with a line break in it is refused" '^not sent: .*not an address'
+        else
+            expect $sc reply "a reply to a message whose literal holds addresses with line breaks is not sent" '^not sent: '
+        fi
         if grep -q 'victim\|X-Injected' "$D/$sc-s.wire" 2>/dev/null; then
             fail "$sc: the SMTP server was sent the injected lines: $(grep 'victim\|X-Injected' "$D/$sc-s.wire")"
         else
@@ -493,12 +497,12 @@ sleep 2
 echo '<<< log >>>'
 cat '#U*'$D/un-a.log
 echo '<<< procs >>>'
-ps | grep -i 'mail9p\|mailconn\|imap\|webclient\|tls'
-echo end-of-procs"
+ps"
 }
 c_unmount() {
     expect unmount log "after the unmount the session is logged out" '^LOGOUT'
-    refuse unmount procs "and no process of mail9p or its connection is left" 'Mail9p\|Mailconn\|Imap\|Webclient\|TLS'
+    expect unmount procs "the processes are listed" 'Sh\|Ps'
+    refuse unmount procs "and none of mail9p or its connection is left" 'Mail9p\|Mailconn\|Imap\|Webclient\|TLS'
 }
 
 slice() {	# name marker: the transcript from "<<< marker >>>" to the next
@@ -522,7 +526,7 @@ wired() {	# label description pattern: the SMTP server was sent it
     if grep -q -- "$3" "$D/$1.wire"; then pass "${1%-*}: $2"; else fail "${1%-*}: $2: the server was sent: $(cat "$D/$1.wire")"; fi
 }
 
-PARSE="exists biglit backslash spoof tagforge unsol envcrlf"
+PARSE="exists biglit backslash spoof tagforge unsol envcrlf addrcrlf"
 NET="stall close idleclose"
 ALL="uid slot inject reply bigcompose authleak smtpproto $PARSE $NET unmount"
 [[ -n "${ONLY:-}" ]] && ALL=$ONLY

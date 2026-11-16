@@ -30,7 +30,9 @@
 #   spoof      message 3's subject is a literal holding the rest of an
 #              envelope: a From and Reply-To of its sender's choosing
 #   tagforge   message 2's line has two literals, the second "A004 OK ..."
-#   envcrlf    message 3's addresses and id are literals with CR LF in them
+#   envcrlf    message 3's subject is a literal holding the rest of an
+#              envelope, with CR LF in its address and its message id
+#   addrcrlf   message 3's address and id are literals with CR LF in them
 #   unsol      a message's text is followed by another message's, unasked
 #   stall      SELECT is never answered
 #   close      the connection is closed in answer to SELECT
@@ -125,6 +127,10 @@ def listline(i, m):
         return (head + b'{%d}\r\n' % len(subj) + subj + b' (({%d}\r\n' % len(name) + name
                 + b' NIL "carol" "example.org")) NIL NIL NIL NIL NIL NIL "<102@fake>"))\r\n')
     if SCEN == "envcrlf" and m["uid"] == 103:
+        subj = (b'(("" NIL "mallory" "evil.example>\r\nRCPT TO:<victim@third.example")) NIL NIL NIL NIL NIL NIL '
+                b'"<103@fake>\r\nX-Injected: yes" "')
+        return (head + b'{%d}\r\n' % len(subj) + subj + b' NIL NIL NIL NIL NIL NIL NIL NIL))\r\n')
+    if SCEN == "addrcrlf" and m["uid"] == 103:
         mbox = b'mallory'
         host = b'evil.example>\r\nRCPT TO:<victim@third.example'
         mid = b'<103@fake>\r\nX-Injected: yes'
@@ -274,6 +280,9 @@ class Session:
                 if what.startswith("BODY[HEADER]"):
                     b = b[:b.index(b"\r\n\r\n") + 4]
                 self.send(b"* %d FETCH (%s {%d}\r\n" % (i, what.encode(), len(b)) + b + b")\r\n")
+                if SCEN == "unsol":
+                    o = raw(MSGS[0])
+                    self.send(b"* 1 FETCH (FLAGS (\\Seen) BODY[] {%d}\r\n" % len(o) + o + b")\r\n")
             self.send("%s OK FETCH completed\r\n" % tag)
         elif cmd == "SEARCH" and args.upper().startswith("UID "):
             hits = [str(i + 1) for i, m in enumerate(MSGS)

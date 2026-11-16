@@ -67,7 +67,11 @@ done
 [ $ok = 1 ] && pass "three runs: eight reports each, every one with the text its Rerror had"
 
 SANEMU=${SANEMU:-$ROOT/tmp/sanemu/o.emu}
-if [ -x "$SANEMU" ] && [ -x "$ROOT/tools/sanemu" ]; then
+# An emulator built before the mount driver's source was last changed
+# is another emulator: its report would be of the code before.
+if [ -x "$SANEMU" ] && [ "$ROOT/emu/port/devmnt.c" -nt "$SANEMU" ]; then
+	echo "mnt_unexpected_test: the sanitizer emulator is older than emu/port/devmnt.c (tools/sanemu build): that run skipped"
+elif [ -x "$SANEMU" ] && [ -x "$ROOT/tools/sanemu" ]; then
 	log=$(mktemp -d)
 	out=$(export $("$ROOT/tools/sanemu" env | sed "s|log_path=[^:]*|log_path=$log/san|g"); with_timeout 300 "$SANEMU" -c1 -r"$ROOT" /dis/tests/mnt_unexpected.dis 2>&1 < /dev/null)
 	if cat "$log"/san* 2>/dev/null | grep -q 'ERROR: AddressSanitizer'; then

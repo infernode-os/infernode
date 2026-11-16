@@ -30,7 +30,13 @@ PASSED=0; FAILED=0
 pass()  { echo "PASS: $1"; PASSED=$((PASSED+1)); }
 fail()  { echo "FAIL: $1"; FAILED=$((FAILED+1)); }
 
-found=$(find appl module dis lib os tests -iname 'ssl3.*' -o -iname 'sslsession.*' 2>/dev/null | grep -v '^tests/host/legacy_ssl_gone_test.sh$')
+# Under dis/ any file of theirs counts: it is what a load would find.
+# Beside the sources a .dis or .sbl is what an earlier build left in a
+# tree that has since been pulled (mk no longer knows to remove it); it
+# is loaded by nothing and is not the tree's.
+found=$(find appl module dis lib os tests \( -iname 'ssl3.*' -o -iname 'sslsession.*' \) 2>/dev/null |
+	grep -v '^tests/host/legacy_ssl_gone_test.sh$' |
+	grep -Ev '^(appl|module|lib|os|tests)/.*\.(dis|sbl)$')
 if [[ -z "$found" ]]; then
     pass "no ssl3 or sslsession source, interface or Dis file"
 else

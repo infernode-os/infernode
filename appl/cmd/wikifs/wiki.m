@@ -26,6 +26,7 @@ Wiki: module {
 	Tcache : con 5;
 	Maxmap: con 10*1024*1024;
 	Maxfile: con 100*1024;
+	Maxpages: con 65536;	# pages: what a qid's 16 bits can number
 	Wpara, Wheading, Wbullet, Wlink, Wman, Wplain, Wpre, Nwtxt: con iota;
 	Tpage, Tedit, Tdiff, Thistory, Tnew, Toldpage, Twerror, Ntemplate: con iota;
 

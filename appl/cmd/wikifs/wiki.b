@@ -151,6 +151,8 @@ voidcache(n: int)
 getcache(n, hist: int): ref Whist
 {
 	wh: ref Whist;
+	if(n < 0 || n >= Maxpages)
+		return nil;
 	if((c := findcache(n)) != nil){
 		current(c);
 		if(hist)
@@ -161,30 +163,15 @@ getcache(n, hist: int): ref Whist
 			wh = c.current;
 		return wh;
 	}
+	# A number that is no page has no place here: any number can be
+	# asked for, and each took a page's place.
+	if(wdirstat(sys->sprint("d/%d", n)) == nil)
+		return nil;
 	h := n%Nhash;
-	ol := tab[h];
-	c = ref Wcache(0, 0, 0, 0, nil, nil, nil, nil);
-	c.qid = ref Qid(big 0, 0, 0);
-	c.qidhist = ref Qid(big 0, 0, 0);
-	while(len ol >= Mcache){
-		evict := -1;
-		t := ~0;
-		for(l := ol; l != nil; l = tl l){
-			if((hd l).use < t){
-				t = (hd l).use;
-				evict = (hd l).n;
-			}
-		}
-		l = nil;
-		for(;ol != nil; ol = tl ol)
-			if((hd ol).n != evict)
-				l = hd ol :: l;
-		ol = l;
-	}
-	c.n = n;
+	c = ref Wcache(n, now(), 0, 0, nil, nil, ref Qid(big -1, 0, 0), ref Qid(big -1, 0, 0));
 
 	# last in wins!
-	tab[h] = c :: ol;
+	tab[h] = c :: evict(tab[h]);
 	current(c);
 	if(hist)
 		currenthist(c);
@@ -193,6 +180,26 @@ getcache(n, hist: int): ref Whist
 	else
 		wh = c.current;
 	return wh;
+}
+
+# A bucket with room for one more, its least recently used gone.  (The
+# least use was looked for below ~0, which is -1: nothing was less,
+# nothing was evicted, and the loop that waits for room never ended;
+# the fifth page of a bucket stopped every walk in the wiki for good.)
+evict(ol: list of ref Wcache): list of ref Wcache
+{
+	while(len ol >= Mcache){
+		old := hd ol;
+		for(l := tl ol; l != nil; l = tl l)
+			if((hd l).use <= old.use)
+				old = hd l;
+		keep: list of ref Wcache;
+		for(; ol != nil; ol = tl ol)
+			if(hd ol != old)
+				keep = hd ol :: keep;
+		ol = keep;
+	}
+	return ol;
 }
 
 getcurrent(n: int): ref Whist

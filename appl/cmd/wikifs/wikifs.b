@@ -16,7 +16,7 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "wiki.m";
 	wiki: Wiki;
-	Map, Wpage, Wdoc, Whist, Tpage, Toldpage, Thistory, Tdiff, Tedit, Twerror: import wiki;
+	Map, Wpage, Wdoc, Whist, Tpage, Toldpage, Thistory, Tdiff, Tedit, Twerror, Maxpages: import wiki;
 include "string.m";
 	str: String;
 include "arg.m";
@@ -80,9 +80,11 @@ Aux: adt {
 	s:		string;
 };
 
+# Each field in its own bits: a page number past 16 bits ran into the
+# type, so /262144 was page 0's index.html, a file at the root.
 mkqid(typ, num, vers, file: int): big
 {
-	return  ((big typ)<< 40) |  ((big num)<<24) | big (vers<<8) | big file;
+	return  ((big (typ & 16rFF))<< 40) |  ((big (num & 16rFFFF))<<24) | big ((vers & 16rFFFF)<<8) | big (file & 16rFF);
 }
 
 qidtype(path: big): int
@@ -342,6 +344,24 @@ newfile(file: string): (int, string)
 	return (n, nil);
 }
 
+# A page's number as a name: -1 if the name is not digits, -2 if it is
+# and names no page a qid can number
+pagenum(s: string): int
+{
+	if(s == nil)
+		return -1;
+	n := 0;
+	for(i := 0; i < len s; i++){
+		if(s[i] < '0' || s[i] > '9')
+			return -1;
+		if(n < Maxpages)
+			n = n*10 + s[i] - '0';
+	}
+	if(n >= Maxpages)
+		return -2;
+	return n;
+}
+
 loadpath(path: big): array of byte
 {
 	s : string;
@@ -415,10 +435,14 @@ navigator(navops: chan of ref Navop)
 				"map" =>
 					path = mkqid(Fmap, 0, 0, 0);
 				* =>
-					(num, q) := str->toint(name, 10);
-					if(q != nil)
+					# A number is a page's if there is that page: any
+					# integer walked (to an empty page, each taking a
+					# place in the cache), and one past 65535 to
+					# another page's files.
+					num := pagenum(name);
+					if(num == -1)
 						num = wiki->nametonum(name);
-					if(num != -1)
+					if(num >= 0 && wiki->numtoname(num) != nil && wiki->getcurrent(num) != nil)
 						path = mkqid(D1st, num, 0, 0);
 				}
 			D1st =>

@@ -19,10 +19,10 @@ typedef struct SHA3state SHA3state;
 struct SHA3state
 {
 	u64int	a[25];
-	uchar	buf[200];
 	int	rate;
 	int	pt;
 	int	mdlen;
+	int	phase;
 };
 
 /* SHA-3 / SHAKE functions (not needed by verified harnesses) */

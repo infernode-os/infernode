@@ -342,11 +342,19 @@ typedef struct SHA3state SHA3state;
 struct SHA3state
 {
 	u64int	a[25];		/* Keccak state (5x5 x 64-bit) */
-	uchar	buf[200];	/* rate buffer */
 	int	rate;		/* rate in bytes */
-	int	pt;		/* buffer position */
+	int	pt;		/* position in the block */
 	int	mdlen;		/* output length (0 for XOF) */
+	int	phase;		/* absorbing, or padded and squeezing */
 };
+
+/*
+ * A SHAKE is init, absorb any number of times, finalize, squeeze any
+ * number of times.  Out of turn: a squeeze with no finalize finalizes
+ * first, and an absorb after it takes nothing.  A state that absorbed a
+ * secret is the caller's to clear (secureZero): Keccak's permutation
+ * runs backwards.  The one-call forms clear their own.
+ */
 
 void	sha3_256(const uchar *in, ulong inlen, uchar out[32]);
 void	sha3_512(const uchar *in, ulong inlen, uchar out[64]);

@@ -10,13 +10,21 @@
  *   ML-KEM key generation	sigma, the seed of s and e (it stayed in a
  *				copy of G's output); the bits its last noise
  *				polynomial was made of
- *   ML-KEM decapsulation	the Keccak state of J(z || c), which gives z
+ *   ML-KEM encapsulation	m, and r: the second half of G(m || H(ek)),
+ *				which with the public key gives the shared
+ *				secret; the shared secret itself
+ *   ML-KEM decapsulation	the Keccak state of J(z || c), which gives z;
+ *				m and r again
  *   ML-DSA key generation	K and rho', the secret key's seeds (they
  *				stayed in a copy of H's output); the half
  *				bytes its last secret polynomial was made of
  *   ML-DSA signing		rho'', the seed of the masks; a mask
  *				polynomial's bytes
  *   SLH-DSA key generation	SK.seed, SK.prf
+ *   SHA-3's one-call forms	the sponge's state when the call returns: it
+ *				begins with the digest (Keyring's auth makes
+ *				its session secret with sha3_512), and for a
+ *				short input gives the input back
  *
  * A value still found is printed and is the exit status.  The search is
  * for the bytes wherever they lie, so it also sees a copy the compiler
@@ -91,10 +99,21 @@ find(const char *what, const uchar *pat, int n)
 }
 
 static void __attribute__((noinline)) kemkeygen(uchar *pk, uchar *sk){ if(mlkem768_keygen(pk, sk) != 0) abort(); }
+static void __attribute__((noinline)) kemencaps(uchar *ct, uchar *ss, uchar *pk){ if(mlkem768_encaps(ct, ss, pk) != 0) abort(); }
 static void __attribute__((noinline)) kemdecaps(uchar *ss, uchar *ct, uchar *sk){ if(mlkem768_decaps(ss, ct, sk) != 0) abort(); }
 static void __attribute__((noinline)) mldsakeygen_(int set, uchar *pk, uchar *sk){ if((set == 65 ? mldsa65_keygen(pk, sk) : mldsa87_keygen(pk, sk)) != 0) abort(); }
 static void __attribute__((noinline)) mldsasign_(uchar *sig, uchar *sk){ if(mldsa65_sign(sig, (uchar*)"msg", 3, sk) != 0) abort(); }
 static void __attribute__((noinline)) slhkeygen(uchar *pk, uchar *sk){ if(slhdsa192s_keygen(pk, sk) != 0) abort(); }
+
+static void __attribute__((noinline)) onecall(int which, uchar *out, const uchar *in, int n)
+{
+	switch(which){
+	case 0: sha3_256(in, n, out); break;
+	case 1: sha3_512(in, n, out); break;
+	case 2: shake128(in, n, out, 16); break;
+	case 3: shake256(in, n, out, 16); break;
+	}
+}
 
 static void
 xof(uchar *out, int n, const uchar *a, int na, const uchar *b, int nb, const uchar *c, int nc)
@@ -133,11 +152,29 @@ main(void)
 	xof(buf, 128, g + 32, 32, nb, 1, nb, 0);
 	find("ML-KEM key generation: the bits of a noise polynomial", buf, 32);
 
-	/* ML-KEM decapsulation: the state of J(z || c) */
-	if(mlkem768_encaps(ct, ss, pk) != 0)
-		abort();
+	/* ML-KEM encapsulation: (K, r) = G(m || H(ek)) */
+	for(i = 0; i < 32; i++)
+		rnd[i] = 0x10 + i;
+	queue(rnd, 32);
+	kemencaps(ct, ss, pk);
+	grab();
+	memmove(buf, rnd, 32);
+	sha3_256(pk, MLKEM768_PKLEN, buf + 32);
+	sha3_512(buf, 64, g);
+	if(memcmp(g, ss, 32) != 0){
+		printf("the shared secret is not the first half of G(m || H(ek))\n");
+		found++;
+	}
+	find("ML-KEM encapsulation: m", rnd, 32);
+	find("ML-KEM encapsulation: r, the seed of the encryption's noise", g + 32, 32);
+	find("ML-KEM encapsulation: the shared secret", g, 32);
+
+	/* ML-KEM decapsulation: the state of J(z || c); m and r again */
 	kemdecaps(ss2, ct, sk);
 	grab();
+	find("ML-KEM decapsulation: m", rnd, 32);
+	find("ML-KEM decapsulation: r", g + 32, 32);
+	find("ML-KEM decapsulation: the shared secret", g, 32);
 	shake256_init(&js);
 	shake256_absorb(&js, sk + MLKEM768_SKLEN - 32, 32);
 	shake256_absorb(&js, ct, MLKEM768_CTLEN);
@@ -204,7 +241,46 @@ main(void)
 	find("SLH-DSA key generation: SK.seed", sk, 24);
 	find("SLH-DSA key generation: SK.prf", sk + 24, 24);
 
+	/*
+	 * the one-call hashes: the state after the output was taken (its
+	 * first bytes are the output, the rest what a longer output would
+	 * be).  16 bytes are asked of the SHAKEs and 64 of their state
+	 * looked for.
+	 */
+	{
+		static const char *name[] = { "sha3_256", "sha3_512", "shake128", "shake256" };
+		SHA3state st;
+		char what[100];
+		int w;
+
+		for(i = 0; i < 48; i++)
+			d[i] = 0x90 + i;
+		for(w = 0; w < 4; w++){
+			onecall(w, buf, d, 48);
+			grab();
+			if(w < 2){
+				/* a SHA-3's digest is the first bytes of its state */
+				snprintf(what, sizeof what, "%s: the digest, in the state it left", name[w]);
+				find(what, buf, w == 0 ? 32 : 64);
+				continue;
+			}
+			/* a SHAKE's state, made again with the streaming calls */
+			if(w == 2){
+				shake128_init(&st);
+				shake128_absorb(&st, d, 48);
+				shake128_finalize(&st);
+			}else{
+				shake256_init(&st);
+				shake256_absorb(&st, d, 48);
+				shake256_finalize(&st);
+			}
+			snprintf(what, sizeof what, "%s: the state it left", name[w]);
+			find(what, (uchar*)st.a, 64);
+			secureZero(&st, sizeof st);
+		}
+	}
+
 	if(found == 0)
-		printf("none of the seeds, sampler buffers and hash states looked for is left on the stack\n");
+		printf("none of the seeds, sampler buffers, hash states and shared secrets looked for is left on the stack\n");
 	return found != 0;
 }

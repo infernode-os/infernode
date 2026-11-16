@@ -8,7 +8,9 @@
 # stack below is copied, and it is searched for
 #
 #   ML-KEM   sigma (the seed of s and e), the bits a noise polynomial
-#            was made of, the Keccak state of J(z || c), d and z
+#            was made of, the Keccak state of J(z || c), d and z; after
+#            encapsulation and decapsulation, m, r (the second half of
+#            G(m || H(ek))) and the shared secret
 #   ML-DSA   K and rho' (the secret key's seeds), the half bytes a secret
 #            polynomial was made of, rho'' (the seed of a signature's
 #            masks), a mask's bytes, the signing randomness, xi

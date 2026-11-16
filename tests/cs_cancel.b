@@ -89,6 +89,14 @@ tquery(q: string, ms: int): string
 	return <-c;
 }
 
+has(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
 kill(pid: int)
 {
 	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
@@ -159,6 +167,12 @@ writer(fd: ref Sys->FD, q: string, done: chan of string)
 		done <-= "written";
 }
 
+pwriter(fd: ref Sys->FD, q: string, done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	writer(fd, q, done);
+}
+
 # a dns file that takes a question and never answers it
 ndnsclose := 0;
 ndnsasked := 0;
@@ -169,25 +183,69 @@ fakedns(ready: chan of int)
 	ready <-= fio != nil;
 	if(fio == nil)
 		return;
+	# what is to be read back by a question that is answered: (fid, lines)
+	ans: list of (int, list of string);
 	for(;;) alt{
-	(nil, nil, nil, rc) := <-fio.read =>
-		if(rc != nil)
-			rc <-= (nil, "no answer");
-	(nil, nil, nil, wc) := <-fio.write =>
-		if(wc == nil)
-			ndnsclose++;	# the asker has gone
+	(nil, nil, fid, rc) := <-fio.read =>
+		if(rc == nil)
+			continue;
+		line: string;
+		na: list of (int, list of string);
+		for(; ans != nil; ans = tl ans){
+			(f, l) := hd ans;
+			if(f == fid && l != nil){
+				line = hd l;
+				l = tl l;
+			}
+			na = (f, l) :: na;
+		}
+		ans = na;
+		if(line != nil)
+			rc <-= (array of byte line, nil);
 		else
+			rc <-= (nil, nil);
+	(nil, data, fid, wc) := <-fio.write =>
+		if(wc == nil){
+			ndnsclose++;	# the asker has gone
+			na: list of (int, list of string);
+			for(; ans != nil; ans = tl ans)
+				if((hd ans).t0 != fid)
+					na = hd ans :: na;
+			ans = na;
+			continue;
+		}
+		q := string data;
+		# names that are answered: with an address, with what is
+		# none, with another type's record, with both kinds
+		if(q == "answers-good ip"){
+			ans = (fid, "answers-good ip 10.9.8.7" :: nil) :: ans;
+			wc <-= (len data, nil);
+		}else if(q == "answers-bad ip"){
+			ans = (fid, "answers-bad ip /tmp/x/clone" :: "answers-bad ip not-an-address" :: nil) :: ans;
+			wc <-= (len data, nil);
+		}else if(q == "answers-txt ip"){
+			ans = (fid, "answers-txt txt 10.1.1.1" :: nil) :: ans;
+			wc <-= (len data, nil);
+		}else if(q == "answers-mixed ip"){
+			ans = (fid, "answers-mixed ip 300.1.2.3.4.5" :: "answers-mixed ip 10.9.8.6" :: nil) :: ans;
+			wc <-= (len data, nil);
+		}else
 			ndnsasked++;	# and is left waiting
 	}
 }
 
-# the Progs running ndb/cs: its loop, and the queries it is answering
+# the Progs running ndb/cs: its loop, its ticker, and the queries it is answering
 nprogs(): int
+{
+	return len cspids();
+}
+
+cspids(): list of int
 {
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
-		return -1;
-	n := 0;
+		return nil;
+	n: list of int;
 	for(;;){
 		(nr, dirs) := sys->dirread(fd);
 		if(nr <= 0)
@@ -203,8 +261,9 @@ nprogs(): int
 			(nf, fl) := sys->tokenize(string buf[0:m], " \t\n");
 			for(; nf > 1; nf--)
 				fl = tl fl;
-			if(fl != nil && hd fl == "Cs")
-				n++;
+			# "Cs", or "Cs[$Sys]" in a system call (its ticker's sleep)
+			if(fl != nil && (hd fl == "Cs" || len hd fl > 3 && (hd fl)[0:3] == "Cs["))
+				n = int dirs[i].name :: n;
 		}
 	}
 	return n;
@@ -306,7 +365,7 @@ init(nil: ref Draw->Context, nil: list of string)
 		check(r == "/net/tcp/clone 127.0.0.1!83", "the database is still searched: " + r);
 		sys->sleep(500);
 		after := nprogs();
-		check(before == 1 && after == 1, sys->sprint("the cancelled queries left no Prog of cs behind (%d before, %d after)", before, after));
+		check(before == after, sys->sprint("the cancelled queries left no Prog of cs behind (%d before, %d after)", before, after));
 	}
 
 	# a query waiting for dns, cancelled.  The name is asked only once
@@ -352,11 +411,61 @@ init(nil: ref Draw->Context, nil: list of string)
 			for(i = 0; i < 100 && ndnsclose < 2; i++)
 				sys->sleep(50);
 			check(ndnsclose == 2, "and that question to dns is given up too");
+
+			# what dns answers is taken only if it is an address
+			r = tquery("tcp!answers-good!80", 10000);
+			check(r == "/net/tcp/clone 10.9.8.7!80", "an address from dns is the translation: " + r);
+			r = tquery("tcp!answers-bad!80", 10000);
+			check(len r > 6 && r[0:6] == "write:" && !has(r, "clone"), "what dns gives that is no address is not one: " + r);
+			r = tquery("tcp!answers-txt!80", 10000);
+			check(len r > 6 && r[0:6] == "write:", "nor a record of another type: " + r);
+			r = tquery("tcp!answers-mixed!80", 10000);
+			check(r == "/net/tcp/clone 10.9.8.6!80", "the address among dns's answers is taken alone: " + r);
+
+			# no more than 64 queries are answered at once
+			asked := ndnsasked;
+			N: con 70;
+			fds := array[N] of ref Sys->FD;
+			wd := chan[N] of string;
+			wpids := array[N] of int;
+			wpidc := chan of int;
+			for(i = 0; i < N; i++){
+				fds[i] = sys->open("/net/cs", Sys->ORDWR);
+				spawn pwriter(fds[i], "tcp!waits-for-dns!80", wd, wpidc);
+				wpids[i] = <-wpidc;
+			}
+			for(i = 0; i < 100 && ndnsasked < asked+64; i++)
+				sys->sleep(50);
+			sys->sleep(300);
+			refused := 0;
+		Drain:
+			for(;;) alt{
+			w := <-wd =>
+				if(has(w, "too many queries"))
+					refused++;
+			* =>
+				break Drain;
+			}
+			check(ndnsasked == asked+64 && refused == N-64,
+				sys->sprint("64 queries are answered at once and the rest refused (%d waiting for dns, %d refused)", ndnsasked-asked, refused));
+			# a few at a time: the kernel tells a server of a close
+			# only if there is room in its channel at that moment
+			for(i = 0; i < N; i++){
+				kill(wpids[i]);
+				fds[i] = nil;
+				if(i%4 == 3)
+					sys->sleep(20);
+			}
+			for(i = 0; i < 100 && nprogs() > 2; i++)
+				sys->sleep(50);
+			r = tquery("tcp!127.0.0.1!87", 10000);
+			check(r == "/net/tcp/clone 127.0.0.1!87", "and cs answers once they have gone: " + r);
 			sys->remove("/net/dns");
 		}
 	}
 
 	# started again while the first is still bound
+	first := cspids();
 	spawn startcs(db, done);
 	if((e = <-done) != nil)
 		fail("second start: " + e);
@@ -364,6 +473,18 @@ init(nil: ref Draw->Context, nil: list of string)
 		modes("started again");
 		r = tquery("tcp!127.0.0.1!85", 10000);
 		check(r == "/net/tcp/clone 127.0.0.1!85", "the second cs answers: " + r);
+		# the first one's loop finds its file replaced and ends (two
+		# Progs each: the loop and its ticker)
+		left := len first;
+		for(i = 0; i < 80 && left > 0; i++){
+			sys->sleep(100);
+			left = 0;
+			for(l := cspids(); l != nil; l = tl l)
+				for(f := first; f != nil; f = tl f)
+					if(hd f == hd l)
+						left++;
+		}
+		check(left == 0, sys->sprint("the cs that was replaced has ended (%d of its %d Progs left)", left, len first));
 	}
 
 	sys->remove(DIR + "/fakenet/clone");

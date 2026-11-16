@@ -206,10 +206,11 @@ testWork(t: ref T)
 	m := odd(16384);
 	refused(t, "expmod with 16384 bits of modulus and 16385 of exponent", "expmod", ip(3), pow2(16384), m);
 	refused(t, "expmod with 32768 bits of modulus and 4097 of exponent", "expmod", ip(3), pow2(4096), odd(32768));
-	# the general path (an even modulus, a negative base): a sixteenth
+	# the general path (an even modulus): a sixteenth.  A negative base
+	# no longer takes it (libmp reduces the base and keeps the fast path)
 	ev := pow2(8191).add(ip(2));
 	refused(t, "expmod with an even modulus of 8192 bits and 4097 of exponent", "expmod", ip(3), pow2(4096), ev);
-	refused(t, "expmod of a negative base, 8192 bits of modulus and 4097 of exponent", "expmod", ip(-3), pow2(4096), odd(8192));
+	allowed(t, "expmod of a negative base, 8192 bits of modulus and 4097 of exponent", "expmod", ip(-3), pow2(4096), odd(8192));
 	allowed(t, "expmod with an even modulus of 8192 bits and 1024 of exponent", "expmod", ip(3), odd(1024), ev);
 	# what the tree does: Diffie-Hellman at 8192 bits
 	p := odd(8192);

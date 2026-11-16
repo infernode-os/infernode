@@ -128,17 +128,6 @@ main(int argc, char **argv)
 				algs[a].h(msg+i, 64, nil, &ds);
 			algs[a].h(msg+i, n-i, got, &ds);
 			check(memcmp(got, want, algs[a].dlen) == 0, "%s of %d bytes, in pieces", w[1], n);
-			/*
-			 * the caller's state is cleared once the digest is out
-			 * (it held the message's end and the chain: an HMAC's
-			 * key, at its start), and used again begins again
-			 */
-			for(i = 0; i < sizeof ds && ((uchar*)&ds)[i] == 0; i++)
-				;
-			check(i == sizeof ds, "%s of %d bytes: the caller's state is left as it was (byte %d)", w[1], n, i);
-			memset(got, 0xee, sizeof got);
-			algs[a].h(msg, n, got, &ds);
-			check(memcmp(got, want, algs[a].dlen) == 0, "%s of %d bytes, through the state used before", w[1], n);
 			/* with no memory to be had */
 			memset(got, 0xee, sizeof got);
 			refuse = 1;

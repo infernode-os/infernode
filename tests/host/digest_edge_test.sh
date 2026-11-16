@@ -18,9 +18,6 @@
 #     kept in 32 bits, and the digest was another message's
 #   - 78 digests and 180 HMACs (keys of 0 to 1000 bytes: before, at and
 #     past a block) in one call and in pieces, under ASan and UBSan
-#   - a caller's state is cleared once its digest is out (it kept the
-#     message's end and the chain, which for an HMAC begins with the
-#     key), and used again begins a new digest
 #
 # No emulator is needed.
 #

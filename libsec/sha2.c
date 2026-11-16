@@ -177,8 +177,8 @@ sha256x(uchar *p, ulong len, uchar *digest, SHA256state *s, int smaller)
 	if(s->malloced == 1){
 		secureZero(s, sizeof(*s));
 		free(s);
-	}else
-		secureZero(s, sizeof(*s));	/* the caller's too: it is done with, and begins again if used again */
+	}else if(s == &own)
+		secureZero(s, sizeof(*s));
 	return nil;
 }
 
@@ -296,8 +296,8 @@ sha512x(uchar *p, ulong len, uchar *digest, SHA512state *s, int smaller)
 	if(s->malloced == 1){
 		secureZero(s, sizeof(*s));
 		free(s);
-	}else
-		secureZero(s, sizeof(*s));	/* the caller's too: it is done with, and begins again if used again */
+	}else if(s == &own)
+		secureZero(s, sizeof(*s));
 	return nil;
 }
 

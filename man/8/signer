@@ -106,8 +106,10 @@ A caller that is refused is sent an error message saying why
 message, which
 .B Keyring->getmsg
 gives as the error string); a refusal was once a connection that closed.
-A certificate that would not fit one of the protocol's messages (4096 bytes:
-an ML-DSA-87 signature is larger) is refused before any record of the request is made.
+A certificate that would not fit one of the protocol's messages
+.RB ( Keyring->Maxmsg ,
+which holds the largest: an ML-DSA-87 or SLH-DSA-256s one)
+is refused before any record of the request is made.
 .PP
 .I Signer
 `blinds'

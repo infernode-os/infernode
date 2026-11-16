@@ -21,8 +21,8 @@ Signer: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-# the most Keyring's getmsg takes (libinterp/keyring.c Maxmsg)
-Maxmsg:	con 4096;
+# the most one of Keyring's messages holds
+Maxmsg:	con Keyring->Maxmsg;
 
 # the least modulus of an RSA, ElGamal or DSA key that is certified
 Minmodlen:	con 2048;

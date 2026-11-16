@@ -1893,6 +1893,7 @@ Keyring_dhparams(void *fp)
 	mpint *p, *alpha;
 	Cres *c;
 	void *v;
+	int ok;
 
 	f = fp;
 	v = f->ret->t0;
@@ -1905,12 +1906,19 @@ Keyring_dhparams(void *fp)
 	genbits(f->nbits, MinDHbits, Maxgenbits);
 	p = mpnew(0);
 	alpha = mpnew(0);
+	ok = 0;
 	release();
 	if(f->nbits == 1024)
 		DSAprimes(alpha, p, nil);
 	else if(!getdhparams(f->nbits, p, alpha))
-		gensafeprime(p, alpha, f->nbits, 0);
+		ok = gensafeprime(p, alpha, f->nbits, 0);
 	acquire();
+	if(ok < 0){
+		/* the search gave up: two zeros are no group */
+		mpfree(p);
+		mpfree(alpha);
+		error("dhparams: no prime found");
+	}
 	/* newIPint frees its number when it raises, but not the other one */
 	c = cres(p, (void(*)(void*))mpfree);
 	f->ret->t0 = newIPint(alpha);
@@ -4043,6 +4051,8 @@ DSAsk_sign(void *fp)
 	s = dsasign(&p, m);
 	acquire();
 	unkeep(&f->k);
+	if(s == nil)	/* a group that is none: dsasign makes no signature */
+		error(exBadKey);
 	c = cres(s, (void(*)(void*))dsasigfree);
 	sig = newthing(TDSAsig, 0);
 	sig->r = ipcopymp(s->r);
@@ -4130,11 +4140,13 @@ EGsk_gen(void *fp)
 	release();
 	for(;;){
 		p = eggen(f->nlen, f->nrep);
-		if(mpsignif(p->pub.p) == f->nlen)
+		if(p == nil || mpsignif(p->pub.p) == f->nlen)
 			break;
 		egprivfree(p);
 	}
 	acquire();
+	if(p == nil)	/* eggen found no group, or was told to stop */
+		error("EGsk.gen: no key made");
 	c = cres(p, (void(*)(void*))egprivfree);
 	sk = newthing(TEGsk, 0);
 	sk->pk = newthing(TEGpk, 0);

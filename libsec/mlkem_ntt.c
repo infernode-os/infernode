@@ -17,7 +17,7 @@ enum {
 	MLKEM_N = 256,
 	MLKEM_QINV = 62209,	/* q^{-1} mod 2^16 */
 	MLKEM_MONT = 2285,	/* 2^16 mod q */
-	MLKEM_HALF_Q = 1665,	/* (q-1)/2 */
+	MLKEM_HALF_Q = 1665,	/* (q+1)/2 */
 };
 
 /*
@@ -45,8 +45,9 @@ static const int16 mlkem_zetas[128] = {
 };
 
 /*
- * Barrett reduction: compute a mod q for |a| < 2^15 * q.
- * Returns r in [0, q) such that r ≡ a (mod q).
+ * Barrett reduction: for any int16 a, the representative of a mod q
+ * nearest 0, between about -q/2 and q/2.  It is not in [0, q):
+ * mlkem_poly_normalize makes that, where an encoding needs it.
  */
 int16
 mlkem_barrett_reduce(int16 a)
@@ -117,17 +118,19 @@ mlkem_ntt(int16 r[MLKEM_N])
 /*
  * Inverse NTT (in-place, Gentleman-Sande butterfly).
  *
- * Input: NTT representation.
- * Output: polynomial coefficients (not yet reduced by Montgomery factor).
- *
- * The output needs to be multiplied by N^{-1} = 3303 (Montgomery form).
+ * Input: NTT representation, as mlkem_poly_basemul leaves it (its
+ * Montgomery reduction has divided the product by 2^16).
+ * Output: polynomial coefficients.  The last loop multiplies by
+ * f = 2^32/128 mod q under a Montgomery reduction, that is by 2^16/128:
+ * the 1/128 of the transform and the 2^16 the product was short of.
+ * Nothing is left for the caller to scale.
  */
 void
 mlkem_invntt(int16 r[MLKEM_N])
 {
 	int len, start, j, k;
 	int16 t, zeta;
-	static const int16 f = 1441;	/* 128^{-1} * 2^16 mod q */
+	static const int16 f = 1441;	/* 128^{-1} * 2^32 mod q */
 
 	k = 127;
 	for(len = 2; len <= 128; len <<= 1){

@@ -79,7 +79,10 @@ ndb/cs
 mkdir -p /mnt/wiki
 mount {wikifs -d /$SCRATCH/store} /mnt/wiki
 /dis/veltro/wiki9p.dis &
-while {! ftest -e /mnt/wikia/ctl} {sleep 1}
+# wiki9p's own answer, not a ctl file: earlier tests leave a plain
+# mnt/wikia/ctl and status in the tree, and a lint written to that went
+# nowhere
+while {! grep -s '^state:' /mnt/wikia/status} {sleep 1}
 echo '== lint without a model'
 {echo lint >[1=0]; cat} <>[0] /mnt/wikia/ctl
 echo

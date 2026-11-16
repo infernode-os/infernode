@@ -1002,12 +1002,18 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	int n;
 	SigAlg *sa;
 	SigAlgVec *vec;
-	DigestState *ds;
+	DigestState ds0;
 	uchar digest[SHA256dlen];
 	char *buf;
 	String *hastr;
 	void *signa;
 
+	/*
+	 * the digest's state is this function's: asked to allocate one,
+	 * the hash gave nil when it could not, and the second call then
+	 * hashed the signer's name and expiry alone, not the data
+	 */
+	memset(&ds0, 0, sizeof(ds0));
 	hastr = H;
 	sa = checkSigAlg(sk->x.sa);
 	buf = malloc(Maxbuf);
@@ -1017,20 +1023,20 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	/* add signer name and expiration time to hash */
 	n = snprint(buf, Maxbuf, "%s %lud", string2c(sk->x.owner), exp);
 	if(strcmp(ha, "sha256") == 0){
-		ds = sha256(a, len, 0, 0);
-		sha256((uchar*)buf, n, digest, ds);
+		sha256(a, len, 0, &ds0);
+		sha256((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA256dlen;
 	} else if(strcmp(ha, "sha") == 0 || strcmp(ha, "sha1") == 0){
-		ds = sha1(a, len, 0, 0);
-		sha1((uchar*)buf, n, digest, ds);
+		sha1(a, len, 0, &ds0);
+		sha1((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(ha, "md5") == 0){
-		ds = md5(a, len, 0, 0);
-		md5((uchar*)buf, n, digest, ds);
+		md5(a, len, 0, &ds0);
+		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else if(strcmp(ha, "md4") == 0){
-		ds = md4(a, len, 0, 0);
-		md4((uchar*)buf, n, digest, ds);
+		md4(a, len, 0, &ds0);
+		md4((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1184,13 +1190,14 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	mpint *b;
 	int n;
 	SigAlgVec *vec;
-	DigestState *ds;
+	DigestState ds0;
 	uchar digest[SHA512dlen];
 	char *buf;
 
 	vec = c->vec;
 	if(vec != pk->vec)
 		return 0;
+	memset(&ds0, 0, sizeof(ds0));	/* see sign */
 
 	/* add signer name and expiration time to hash */
 	buf = malloc(Maxbuf);
@@ -1198,28 +1205,28 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		return 0;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(c->x.signer), c->x.exp);
 	if(strcmp(string2c(c->x.ha), "sha256") == 0){
-		ds = sha256((uchar*)a, len, 0, 0);
-		sha256((uchar*)buf, n, digest, ds);
+		sha256((uchar*)a, len, 0, &ds0);
+		sha256((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA256dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha384") == 0){
-		ds = sha384((uchar*)a, len, 0, 0);
-		sha384((uchar*)buf, n, digest, ds);
+		sha384((uchar*)a, len, 0, &ds0);
+		sha384((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA384dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha512") == 0){
-		ds = sha512((uchar*)a, len, 0, 0);
-		sha512((uchar*)buf, n, digest, ds);
+		sha512((uchar*)a, len, 0, &ds0);
+		sha512((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA512dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
-		ds = sha1((uchar*)a, len, 0, 0);
-		sha1((uchar*)buf, n, digest, ds);
+		sha1((uchar*)a, len, 0, &ds0);
+		sha1((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(c->x.ha), "md5") == 0){
-		ds = md5((uchar*)a, len, 0, 0);
-		md5((uchar*)buf, n, digest, ds);
+		md5((uchar*)a, len, 0, &ds0);
+		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else if(strcmp(string2c(c->x.ha), "md4") == 0){
-		ds = md4((uchar*)a, len, 0, 0);
-		md4((uchar*)buf, n, digest, ds);
+		md4((uchar*)a, len, 0, &ds0);
+		md4((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);

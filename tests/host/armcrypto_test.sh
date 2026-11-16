@@ -104,7 +104,7 @@ for c in $ccs; do
 		echo "SKIP: $c: GHASH constant-time check (needs valgrind and its headers)"
 	fi
 	if $c $CFLAGS $INC -o "$TMP/shatest" "$ROOT/tests/host/sha256/shatest.c" \
-		"$S/sha2.c" "$S/sha256block.c" "$S/sha512block.c" "$S/sha256arm64.c" 2>"$TMP/cc.log"; then
+		"$S/sha2.c" "$S/sha256block.c" "$S/sha512block.c" "$S/sha256arm64.c" "$S/securezero.c" 2>"$TMP/cc.log"; then
 		if "$TMP/shatest" >"$TMP/out" 2>&1; then
 			sed "s/^/$c: /" "$TMP/out"
 		else

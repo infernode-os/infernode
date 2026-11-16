@@ -73,9 +73,10 @@ The
 must be provided in each call, but otherwise
 the calling conventions are those of
 .BR sha1 .
-The
+A
 .I key
-must currently be no more than 64 bytes.
+longer than the hash's block (64 bytes; 128 for SHA-384 and SHA-512)
+is hashed first, as the RFC has it.
 .PP
 .B Sign
 creates a digital signature of a digest from the concatenation of: a message, the name of the signer, and an expiration time.

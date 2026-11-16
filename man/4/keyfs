@@ -176,9 +176,16 @@ and the master key.
 It had no check of its integrity beyond those sixteen bytes,
 and a copy of it tested a guess at the master key with one hash.
 .I Keyfs
-still reads a file in that format, says that it is one,
-and writes it in the new format at the next change;
-nothing writes the old format.
+still reads a file in that format, and writes it in the new format at once,
+as it starts (beside the old file and renamed over it, as every change is),
+saying that it has; a copy of the file made before then is still in the old format.
+(The file was once left until its next change, and a store nobody changed stayed
+one SHA-1 from its master key.)
+If the file cannot be rewritten (the store cannot be written),
+.I keyfs
+serves it as it is and prints a warning that it is in the old format at every start,
+until it can.
+Nothing writes the old format.
 .PD
 .PP
 If the
@@ -188,7 +195,29 @@ option is given, instead of prompting for the master key,
 will read it from the file
 .IR nvram .
 Obviously that file should be well-protected from ordinary observers.
-The key is the file's bytes as they are (at most 256), a final newline included.
+The key is the file's bytes (at most 256) less one final newline,
+and a carriage return before it, if there is one:
+a file made by
+.IR echo (1)
+holds the key that is typed at the prompt.
+(The newline was once part of the key, so the same password typed and kept in a file
+were two keys.)
+A store that was made under the key with its newline is opened by trying
+that key second, and is then put under the key without it,
+.I keyfs
+saying so; if it cannot be rewritten it is served, with a warning at every start.
+.PP
+.I Keyfs
+serves one user, the one that started it, which mounts it once:
+an attach in another name is refused,
+and so is a remove or a rename (wstat) by any other.
+The files' modes say what each file is (a user's directory holds its four files and no others,
+so it is not writable), not who may do what:
+whoever reaches the mount point acts as that user, for every file.
+The protection is the name space
+.I keyfs
+is mounted in, which a signer keeps to its own authentication services (see
+.IR svc (8)).
 .PP
 .I Keyfs
 does not start where it cannot read the time

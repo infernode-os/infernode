@@ -126,10 +126,27 @@ init(nil: ref Draw->Context, args: list of string)
 	timefd = nil;	# the server opens its own, in its own fd group
 
 	pwd, err: string;
+	# The key as the nvram file has it, when that is not the key: a
+	# file made by echo ends in a newline, which was taken as part of
+	# the key, so the password typed at the console and the same one
+	# kept in a file were two keys.  One trailing newline (and a
+	# carriage return before it) is no part of the key; a store made
+	# under the key with it is opened by trying that second, and put
+	# under the key without it.
+	rawkey: array of byte;
 	if(nvram != nil){
 		pwd = rf(nvram);
 		if(pwd == nil)
 			error(sys->sprint("can't read %s: %r", nvram));
+		raw := pwd;
+		if(len pwd > 0 && pwd[len pwd-1] == '\n')
+			pwd = pwd[0:len pwd-1];
+		if(len pwd > 0 && pwd[len pwd-1] == '\r')
+			pwd = pwd[0:len pwd-1];
+		if(pwd == nil)
+			error(sys->sprint("%s holds no key", nvram));
+		if(pwd != raw)
+			rawkey = array of byte raw;
 	}
 	if(pwd == nil){
 		# an error first: a line too long came back with no key,
@@ -162,8 +179,9 @@ init(nil: ref Draw->Context, args: list of string)
 	master := array of byte pwd;
 	for(i:=0; i<len pwd; i++)
 		pwd[i] = ' ';	# clear it out
-	readkeys(keyfile, master);
+	readkeys(keyfile, master, rawkey);
 	clear(master);
+	clear(rawkey);
 
 	user = rf("/dev/user");
 	if(user == nil)
@@ -196,7 +214,9 @@ rf(f: string): string
 	n := sys->read(fd, b, len b);
 	if(n < 0)
 		return nil;
-	return string b[0:n];
+	s := string b[0:n];
+	clear(b);	# it may have been the master key
+	return s;
 }
 
 quit(err: string)
@@ -291,6 +311,19 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 		pick m := gm {
 		Readerror =>
 			error(sys->sprint("mount read error: %s", m.error));
+		Attach =>
+			# One user is served: the one that started keyfs, which
+			# mounts it once on its own pipe.  The files' modes say
+			# what each is (a user's directory holds its four files
+			# and no others, so it is not writable), not who may do
+			# what: there is no other user to keep out, and none is
+			# let in.  Remove and Wstat, which styxservers does not
+			# check, ask the same question.
+			if(m.uname != user){
+				srv.reply(ref Rmsg.Error(m.tag, "keyfs serves the user that started it, and no other"));
+				break;
+			}
+			srv.default(gm);
 		Create =>
 			(c, mode, nil, err) := srv.cancreate(m);
 			if(c == nil){
@@ -440,6 +473,11 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 				srv.remove(m);	# let it diagnose the errors
 				break;
 			}
+			if(c.uname != user){
+				srv.delfid(c);
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
 			case TYPE(c.path) {
 			Quser =>
 				srv.delfid(c);
@@ -469,6 +507,10 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 			c := srv.getfid(m.fid);
 			if(c == nil || TYPE(c.path) != Quser){
 				srv.default(gm);	# let it reject it
+				break;
+			}
+			if(c.uname != user){
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				break;
 			}
 			u := finduserpath(c.path);
@@ -743,7 +785,11 @@ time(): int
 # changed an entry (the first byte, a disabled account to ok) and nothing
 # noticed; and it was rewritten in place, so a crash between the truncate
 # and the write left an empty file, which is a new store. A file in that
-# format is still read, and written in this one at the next change.
+# format is still read, and is written in this one at once, when keyfs
+# starts (it was left until the next change, and until then a copy of it
+# was still one SHA-1 from the master key). If it cannot be rewritten (a
+# store that cannot be written) it is served as it is, and keyfs says so
+# at every start.
 #
 Checkpat: con "XXXXXXXXXXXXXXXX";	# it's what Plan 9's aescbc uses
 Checklen: con len Checkpat;
@@ -851,8 +897,12 @@ unpack(a: array of byte): (ref User, int, string)
 	return (u, j+n, nil);
 }
 
+trying := 0;	# a key that may not be the one: a failure is raised, not fatal
+
 corrupt(keyfile: string)
 {
+	if(trying)
+		raise "keyfs:badkey";
 	error(sys->sprint("%s: incorrect key or corrupt/damaged keyfile", keyfile));
 }
 
@@ -952,7 +1002,7 @@ newname(keyfile: string): string
 	return keyfile+".new";
 }
 
-readkeys(keyfile: string, master: array of byte)
+readkeys(keyfile: string, master, rawkey: array of byte)
 {
 	fd := sys->open(keyfile, Sys->OREAD);
 	if(fd == nil){
@@ -961,15 +1011,58 @@ readkeys(keyfile: string, master: array of byte)
 		if(fd == nil)
 			error(sys->sprint("can't open %s: %s", keyfile, why));
 		warn(sys->sprint("%s is not there: reading %s, left by a change that was interrupted", keyfile, newname(keyfile)));
-		rdkeys(fd, newname(keyfile), master, 1);
+		loadkeys(fd, newname(keyfile), keyfile, master, rawkey, 1);
 		fd = nil;
+		# loadkeys may have written the file anew, at its own name
+		(ok, nil) := sys->stat(keyfile);
+		if(ok >= 0){
+			sys->remove(newname(keyfile));
+			return;
+		}
 		d := sys->nulldir;
 		d.name = lastelem(keyfile);
 		if(sys->wstat(newname(keyfile), d) < 0)
 			error(sys->sprint("can't rename %s to %s: %r", newname(keyfile), keyfile));
 		return;
 	}
-	rdkeys(fd, keyfile, master, 0);
+	loadkeys(fd, keyfile, keyfile, master, rawkey, 0);
+}
+
+#
+# Read the file at name (to be the store keyfile) under master; or, if
+# it does not open under master and rawkey is given, under rawkey (the
+# nvram file's bytes, newline and all), and then put the store under
+# master.
+#
+loadkeys(fd: ref Sys->FD, name, keyfile: string, master, rawkey: array of byte, mustnew: int)
+{
+	if(rawkey == nil){
+		rdkeys(fd, name, keyfile, master, mustnew);
+		return;
+	}
+	{
+		trying = 1;
+		rdkeys(fd, name, keyfile, master, mustnew);
+		trying = 0;
+		return;
+	} exception {
+	"keyfs:badkey" =>
+		;
+	}
+	trying = 0;
+	sys->seek(fd, big 0, 0);
+	rdkeys(fd, name, keyfile, rawkey, mustnew);	# the end, if this is not the key either
+	under := thekey;
+	thekey = pbkdf2(master, salt, iterations);
+	err := putkeys(keyfile);
+	if(err == nil){
+		clear(under);
+		warn(sys->sprint("%s was under a key ending in a newline (the nvram file's last byte): it is now under the key without it, which is the one typed at the console", keyfile));
+		return;
+	}
+	clear(thekey);
+	thekey = under;
+	warn(sys->sprint("WARNING: %s is under a key ending in a newline (the nvram file's last byte) and cannot be rewritten under the key without it: %s", keyfile, err));
 }
 
 warn(s: string)
@@ -977,8 +1070,12 @@ warn(s: string)
 	sys->fprint(sys->fildes(2), "keyfs: %s\n", s);
 }
 
-rdkeys(fd: ref Sys->FD, keyfile: string, master: array of byte, mustnew: int)
+# name is the file read; keyfile where the store is kept (the same, but
+# after a change that was interrupted)
+rdkeys(fd: ref Sys->FD, name, keyfile: string, master: array of byte, mustnew: int)
 {
+	keyfile0 := keyfile;
+	keyfile = name;
 	(rc, d) := sys->fstat(fd);
 	if(rc < 0)
 		error(sys->sprint("can't get status of %s: %r", keyfile));
@@ -1067,9 +1164,16 @@ rdkeys(fd: ref Sys->FD, keyfile: string, master: array of byte, mustnew: int)
 		i += n;
 	}
 	clear(buf);
-	warn(sys->sprint("%s is in the old format, which has no check of its integrity and a key one SHA-1 from the master key: it will be written in the new one at the next change", keyfile));
 	salt = random(Saltlen);
 	thekey = pbkdf2(master, salt, iterations);
+	# Written in the new format now, not at the next change: until
+	# then a copy of the file was one SHA-1 from the master key, and a
+	# store nobody changed stayed that way for good.
+	err := putkeys(keyfile0);
+	if(err == nil)
+		warn(sys->sprint("%s was in the old format (no check of its integrity, a key one SHA-1 from the master key) and has been written in the new one; a copy made before this is still in the old", keyfile0));
+	else
+		warn(sys->sprint("WARNING: %s is in the old format, which has no check of its integrity and a key one SHA-1 from the master key, and cannot be written in the new one: %s. It is served as it is. Make the store writable and start keyfs again", keyfile0, err));
 }
 
 #
@@ -1095,6 +1199,15 @@ adduser(keyfile: string, e: int, u: ref User)
 }
 
 writekeys(keyfile: string)
+{
+	err := putkeys(keyfile);
+	if(err != nil)
+		error(err);
+}
+
+# the file written whole in the new format; nil, or why not (and then
+# the file is as it was)
+putkeys(keyfile: string): string
 {
 	seen = nil;
 	length := 4;
@@ -1125,12 +1238,14 @@ writekeys(keyfile: string)
 	nonce := random(Noncelen);
 	hdr[o:] = nonce;
 	state := kr->aesgcmsetup(thekey, nonce);
-	if(state == nil)
-		error("can't initialise AES");
+	if(state == nil){
+		clear(plain);
+		return "can't initialise AES";
+	}
 	(ct, tag) := kr->aesgcmencrypt(state, plain, hdr);
 	clear(plain);
 	if(ct == nil || len ct != length || tag == nil || len tag != Taglen)
-		error("can't encrypt the key file");
+		return "can't encrypt the key file";
 	buf := array[Filehdrlen+length+Taglen] of byte;
 	buf[0:] = hdr;
 	buf[Filehdrlen:] = ct;
@@ -1141,12 +1256,12 @@ writekeys(keyfile: string)
 	sys->remove(new);
 	fd := sys->create(new, Sys->OWRITE, 8r600);
 	if(fd == nil)
-		error(sys->sprint("can't create %s: %r", new));
+		return sys->sprint("can't create %s: %r", new);
 	if(sys->write(fd, buf, len buf) != len buf){
 		why := sys->sprint("%r");
 		fd = nil;
 		sys->remove(new);
-		error(sys->sprint("error writing to %s: %s", new, why));
+		return sys->sprint("error writing to %s: %s", new, why);
 	}
 	# a wstat that changes nothing is a request to commit the file (stat(5))
 	sys->fwstat(fd, sys->nulldir);
@@ -1156,6 +1271,7 @@ writekeys(keyfile: string)
 	if(sys->wstat(new, d) < 0){
 		sys->remove(keyfile);
 		if(sys->wstat(new, d) < 0)
-			error(sys->sprint("can't rename %s to %s: %r", new, keyfile));
+			return sys->sprint("can't rename %s to %s: %r", new, keyfile);
 	}
+	return nil;
 }

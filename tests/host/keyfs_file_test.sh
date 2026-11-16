@@ -9,9 +9,17 @@
 # The file was Plan 9's aescbc: AES-128-CBC under one unsalted SHA-1 of
 # the master key, sixteen X's as its only check, rewritten in place, its
 # mode whatever its maker's was. So:
-#   - a file in that format is still read, and written at the next change
-#     in the new one (PBKDF2-HMAC-SHA-384 with a salt, AES-256-GCM), which
-#     the old recipe does not open and the manual's new one does;
+#   - a file in that format is still read, and written at once, when
+#     keyfs starts, in the new one (PBKDF2-HMAC-SHA-384 with a salt,
+#     AES-256-GCM), which the old recipe does not open and the manual's
+#     new one does (it was left until the next change, and until then a
+#     copy was one SHA-1 from the master key); one that cannot be
+#     rewritten is served as it is, keyfs saying so at every start; an
+#     emulator ended as it converted leaves the old file whole;
+#   - a newline (and a carriage return before it) at the end of the
+#     nvram file is no part of the key: "masterpw\n" in a file and
+#     masterpw typed were two keys. A store made under the key with its
+#     newline is opened, and put under the key without;
 #   - a byte changed anywhere in the new file, a file cut short, and
 #     another key are refused, and nothing is served (a byte changed in
 #     the old one made a disabled account ok);
@@ -86,10 +94,99 @@ echo A-status: \`{cat $G/mnt.a/alice/status} \`{cat $G/mnt.a/bob/status} \`{cat 
 EOF
 )
 check "a file in the old format is read" '^A-status: disabled expired ok 3 CC$'
-check "and keyfs says it is the old format" 'keyfs: .*old format'
+check "and keyfs says it was in the old format, and is written in the new" 'keyfs: .*was in the old format.*written in the new one'
 check "and that its mode was open to others" 'keyfs: .*had mode 644'
-if cmp -s "$DIR/keys" "$DIR/keys.orig"; then ok "reading it does not change it"; else bad "the old file was rewritten by a start"; fi
+D=$(kf dumpold "$DIR/keys" $PW)
+[ "$D" = "old recipe: no" ] && ok "after the start alone the old recipe no longer opens the file" || bad "the file is still in the old format after a start: $D"
+D=$(kf dumpnew "$DIR/keys" $PW)
+if echo "$D" | grep -q '^new recipe: yes, 200000 iterations, 3 entries$' && echo "$D" | grep -q "^1 0 0 alice $SEC\$" &&
+   echo "$D" | grep -q "^0 0 1700000000 bob $SEC\$" && echo "$D" | grep -q '^0 3 0 carol 4343$'; then
+	ok "it is the manual's new format, every entry as it was"
+else
+	bad "after a start the manual's new recipe gives: $(echo "$D" | tr '\n' '|')"
+fi
 [ "$(mode "$DIR/keys")" = "-rw-------" ] && ok "its mode is 600 after the start" || bad "mode after a start: $(mode "$DIR/keys")"
+[ ! -e "$DIR/keys.new" ] && ok "nothing is left beside it" || bad "keys.new was left by the conversion"
+
+# --- an old file that cannot be rewritten is served, and said to be old, each start
+cp "$DIR/keys.orig" "$DIR/ro.keys"; chmod 600 "$DIR/ro.keys"
+# keys.new cannot be made: a directory with something in it is in its place
+mkdir -p "$DIR/ro.keys.new/x" "$DIR/mnt.ro" "$DIR/mnt.ro2"
+OUT=$(emu ro <<EOF
+auth/keyfs -n $G/nvram -m $G/mnt.ro $G/ro.keys
+echo RO-1: \$status. \`{cat $G/mnt.ro/alice/status} \`{cat $G/mnt.ro/carol/secret}
+auth/keyfs -n $G/nvram -m $G/mnt.ro2 $G/ro.keys
+echo RO-2: \$status. \`{cat $G/mnt.ro2/bob/status}
+EOF
+)
+check "an old file that cannot be rewritten is still served" '^RO-1: \. disabled CC$'
+check "and at the next start" '^RO-2: \. expired$'
+n=$(echo "$OUT" | grep -c 'keyfs: WARNING: .*old format.*cannot be written in the new one')
+[ "$n" = 2 ] && ok "with a warning at each start that it is in the old format" || bad "$n of 2 starts warned: $(echo "$OUT" | grep keyfs: | cut -c1-160 | tr '\n' '|')"
+cmp -s "$DIR/ro.keys" "$DIR/keys.orig" && ok "and the file is as it was" || bad "the file that could not be rewritten was changed"
+rmdir "$DIR/ro.keys.new/x" "$DIR/ro.keys.new"
+
+# --- an emulator ended as it converted an old file leaves it whole
+cp "$DIR/keys.orig" "$DIR/cv.keys"; chmod 600 "$DIR/cv.keys"
+mkdir -p "$DIR/mnt.cv"
+{ echo "load std"
+  echo "auth/keyfs -n $G/nvram -m $G/mnt.cv $G/cv.keys"
+  echo "echo CV-survived"
+  echo "echo halt > /dev/sysctl"; } > "$DIR/script.cv"
+OUT=$( (ulimit -f 0; with_timeout 60 "$EMU" -r"$ROOT" ${KEYS_EMUFLAGS:--c1} sh "$G/script.cv" 2>&1 < /dev/null | cat) || true)
+if ! has 'CV-survived'; then
+	cmp -s "$DIR/cv.keys" "$DIR/keys.orig" && ok "an emulator ended as it converted the old file leaves it whole" ||
+		bad "the old file after an interrupted conversion is $(wc -c < "$DIR/cv.keys" | tr -d ' ') bytes, not $(wc -c < "$DIR/keys.orig" | tr -d ' ')"
+	rm -f "$DIR/cv.keys.new"
+	OUT=$(emu cv2 <<EOF
+auth/keyfs -n $G/nvram -m $G/mnt.cv $G/cv.keys
+echo CV-again: \$status. \`{cat $G/mnt.cv/alice/status} \`{cat $G/mnt.cv/carol/secret}
+EOF
+)
+	check "and the next start reads and converts it" '^CV-again: \. disabled CC$'
+	[ "$(kf dumpold "$DIR/cv.keys" $PW)" = "old recipe: no" ] && ok "into the new format" || bad "it is still in the old format"
+else
+	echo "SKIP: the file-size limit did not end the emulator in the conversion (ulimit -f)"
+fi
+
+# --- the nvram file's trailing newline is no part of the key
+printf '%s\n' "$PW" > "$DIR/nvram.nl"
+printf '%s\r\n' "$PW" > "$DIR/nvram.crnl"
+printf '\n' > "$DIR/nvram.empty"
+kf make "$DIR/nl.plain" $PW  0 0 0 alice 4141
+NLPW=$(printf '%s\nX' "$PW"); NLPW=${NLPW%X}
+kf make "$DIR/nl.with" "$NLPW"  0 0 0 bob 4242
+: > "$DIR/nl.fresh"
+for m in 1 2 3 4 5 6 7; do mkdir -p "$DIR/mnt.nl$m"; done
+OUT=$(emu nl 120 <<EOF
+auth/keyfs -n $G/nvram.nl -m $G/mnt.nl1 $G/nl.plain
+echo NL-plain: \$status. \`{cat $G/mnt.nl1/alice/secret}
+auth/keyfs -n $G/nvram.crnl -m $G/mnt.nl2 $G/nl.plain
+echo NL-crnl: \$status. \`{cat $G/mnt.nl2/alice/secret}
+auth/keyfs -n $G/nvram.nl -m $G/mnt.nl3 $G/nl.with
+echo NL-with: \$status. \`{cat $G/mnt.nl3/bob/secret}
+auth/keyfs -n $G/nvram -m $G/mnt.nl4 $G/nl.with
+echo NL-after: \$status. \`{cat $G/mnt.nl4/bob/secret}
+auth/keyfs -n $G/nvram.nl -m $G/mnt.nl5 $G/nl.fresh
+mkdir $G/mnt.nl5/carol
+echo NL-fresh: \$status.
+auth/keyfs -n $G/nvram.empty -m $G/mnt.nl6 $G/nl.plain
+echo NL-empty: \$status.
+auth/keyfs -n $G/nvram2 -m $G/mnt.nl7 $G/nl.plain
+echo NL-other: \$status.
+EOF
+)
+check "a key file ending in a newline opens the store its key made" '^NL-plain: \. AA$'
+check "and one ending in a carriage return and a newline" '^NL-crnl: \. AA$'
+check "a store made under the key with its newline is opened" '^NL-with: \. BB$'
+check "keyfs saying it is now under the key without" 'keyfs: .*nl.with was under a key ending in a newline'
+check "and it then opens under the key with no newline" '^NL-after: \. BB$'
+D=$(kf dumpnew "$DIR/nl.with" $PW)
+echo "$D" | grep -q '^0 0 0 bob 4242$' && ok "which is the key the control opens it with" || bad "the control, with the key without a newline: $(echo "$D" | tr '\n' '|')"
+D=$(kf dumpnew "$DIR/nl.fresh" $PW)
+echo "$D" | grep -q '^0 0 0 carol $' && ok "a new store from a key file ending in a newline is under the key without it" || bad "the new store: $(echo "$D" | tr '\n' '|')"
+check "a key file that is only a newline holds no key" '^NL-empty: error\.$'
+check "another key is still refused" '^NL-other: error\.$'
 
 # --- the next change writes the new format
 OUT=$(emu b <<EOF
@@ -240,6 +337,12 @@ check "nor that user's this one's" '^F-mallory: MMMM VVVV \.$'
 
 # --- an emulator ended in the middle of a change
 kf make "$DIR/g.keys" $PW  0 0 0 alice $SEC  0 0 0 bob 4242
+# in the new format first (a start converts it), so that the change is
+# the first write the limit meets
+OUT=$(emu g0 <<EOF
+auth/keyfs -n $G/nvram -m $G/mnt.d $G/g.keys
+EOF
+)
 cp "$DIR/g.keys" "$DIR/g.orig"
 { echo "load std"
   echo "auth/keyfs -n $G/nvram -m $G/mnt.d $G/g.keys"

@@ -90,6 +90,40 @@ utflen(s: string): int
 	return n;
 }
 
+MAXSTR: con 16rFFFF;	# the most a string's, or a stat's, 16-bit count can say
+
+# Whether each string fits its count.  One that did not was packed with
+# its length modulo 65536 in front of all of its bytes: a message its
+# own unpack reads as a shorter string with another message after it.
+fits(l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(utflen(hd l) > MAXSTR)
+			return 0;
+	return 1;
+}
+
+dirfits(d: Sys->Dir): int
+{
+	return fits(d.name :: d.uid :: d.gid :: d.muid :: nil) && packdirsize(d)-LEN <= MAXSTR;
+}
+
+# An error's text, cut to what its count can say: a server must always
+# be able to say no.
+cuterr(s: string): string
+{
+	if(utflen(s) <= MAXSTR)
+		return s;
+	n := 0;
+	for(i := 0; i < len s; i++){
+		k := utflen(s[i:i+1]);
+		if(n+k > MAXSTR)
+			break;
+		n += k;
+	}
+	return s[0:i];
+}
+
 packdirsize(d: Sys->Dir): int
 {
 	return STATFIXLEN+utflen(d.name)+utflen(d.uid)+utflen(d.gid)+utflen(d.muid);
@@ -268,6 +302,12 @@ gstring(a: array of byte, o: int): (string, int)
 	e := o+l;
 	if(e > len a)
 		return (nil, -1);
+	# No name, user, version or error has a zero byte in it.  One was
+	# kept as a character of the string: a name that ends there for
+	# every C program that is given it, and goes on for a Limbo one.
+	for(i := o; i < e; i++)
+		if(a[i] == byte 0)
+			return (nil, -1);
 	return (string a[o:e], e);
 }
 
@@ -299,21 +339,39 @@ Tmsg.packedsize(t: self ref Tmsg): int
 	if(mtype <= 0)
 		return 0;
 	ml := hdrlen[mtype];
+	# 0, as for a message of no type, for one that cannot be packed: a
+	# string or stat too long for its 16-bit count, more names than a
+	# walk carries
 	pick m := t {
 	Version =>
+		if(!fits(m.version :: nil))
+			return 0;
 		ml += utflen(m.version);
 	Auth =>
+		if(!fits(m.uname :: m.aname :: nil))
+			return 0;
 		ml += utflen(m.uname)+utflen(m.aname);
 	Attach =>
+		if(!fits(m.uname :: m.aname :: nil))
+			return 0;
 		ml += utflen(m.uname)+utflen(m.aname);
 	Walk =>
-		for(i:=0; i<len m.names; i++)
+		if(len m.names > MAXWELEM)
+			return 0;
+		for(i:=0; i<len m.names; i++){
+			if(!fits(m.names[i] :: nil))
+				return 0;
 			ml += STR+utflen(m.names[i]);
+		}
 	Create =>
+		if(!fits(m.name :: nil))
+			return 0;
 		ml += utflen(m.name);
 	Write =>
 		ml += len m.data;
 	Wstat =>
+		if(!dirfits(m.stat))
+			return 0;
 		ml += packdirsize(m.stat);
 	}
 	return ml;
@@ -399,7 +457,26 @@ Tmsg.pack(t: self ref Tmsg): array of byte
 	return d;
 }
 
+# The first message of f.  Its fields must end where its size says the
+# message does, as the kernel's convM2S has it.  Bytes after the fields
+# were passed over and the count returned was the fields', not the
+# message's: a caller holding several messages took the padding for the
+# start of the next.
 Tmsg.unpack(f: array of byte): (int, ref Tmsg)
+{
+	(n, m) := tunpack(f);
+	if(m != nil && n != msgsize(f))
+		return (-1, nil);
+	return (n, m);
+}
+
+# the size a message of at least a header's bytes gives itself
+msgsize(f: array of byte): int
+{
+	return (((((int f[3] << 8) | int f[2]) << 8) | int f[1]) << 8) | int f[0];
+}
+
+tunpack(f: array of byte): (int, ref Tmsg)
 {
 	if(len f < H)
 		return (0, nil);
@@ -430,7 +507,7 @@ Tmsg.unpack(f: array of byte): (int, ref Tmsg)
 Decode:
 	case mtype {
 	* =>
-		sys->print("styx: Tmsg.unpack: bad type %d\n", mtype);
+		;	# no such message (it was said so on standard output, the server's own)
 	Tversion =>
 		msize := fid;
 		(version, o) := gstring(f, H+COUNT);
@@ -510,13 +587,40 @@ Decode:
 		(ds, stat) := unpackdir(f[H+FID+LEN:]);
 		if(ds <= 0)
 			break;	# a stat of no bytes was taken for one of all zeros
-		if(ds != n){
-			sys->print("Styx->Tmsg.unpack: wstat count: %d/%d\n", ds, n);	# temporary
+		if(ds != n)
 			break;
-		}
 		return (H+FID+LEN+n, ref Tmsg.Wstat(tag, fid, stat));
 	}
 	return (-1, nil);		# illegal
+}
+
+# A string as text() writes it: in quotes, with whatever would end the
+# quotes or the line written as Limbo writes it, so that one message is
+# one line whatever a peer put in a name.
+quote(s: string): string
+{
+	r := "\"";
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		case c {
+		'"' =>
+			r += "\\\"";
+		'\\' =>
+			r += "\\\\";
+		'\n' =>
+			r += "\\n";
+		'\r' =>
+			r += "\\r";
+		'\t' =>
+			r += "\\t";
+		* =>
+			if(c < ' ' || c == 16r7F)
+				r += sys->sprint("\\u%.4ux", c);
+			else
+				r[len r] = c;
+		}
+	}
+	return r + "\"";
 }
 
 tmsgname := array[] of {
@@ -545,15 +649,15 @@ Tmsg.text(t: self ref Tmsg): string
 	* =>
 		return s + ",ILLEGAL)";
 	Readerror =>
-		return s + sys->sprint(",\"%s\")", m.error);
+		return s + sys->sprint(",%s)", quote(m.error));
 	Version =>
-		return s + sys->sprint(",%d,\"%s\")", m.msize, m.version);
+		return s + sys->sprint(",%d,%s)", m.msize, quote(m.version));
 	Auth =>
-		return s + sys->sprint(",%ud,\"%s\",\"%s\")", m.afid, m.uname, m.aname);
+		return s + sys->sprint(",%ud,%s,%s)", m.afid, quote(m.uname), quote(m.aname));
 	Flush =>
 		return s + sys->sprint(",%ud)", m.oldtag);
 	Attach =>
-		return s + sys->sprint(",%ud,%ud,\"%s\",\"%s\")", m.fid, m.afid, m.uname, m.aname);
+		return s + sys->sprint(",%ud,%ud,%s,%s)", m.fid, m.afid, quote(m.uname), quote(m.aname));
 	Walk =>
 		s += sys->sprint(",%ud,%ud", m.fid, m.newfid);
 		if(len m.names != 0){
@@ -562,7 +666,7 @@ Tmsg.text(t: self ref Tmsg): string
 				c := ",";
 				if(i == 0)
 					c = "";
-				s += sys->sprint("%s\"%s\"", c, m.names[i]);
+				s += c + quote(m.names[i]);
 			}
 			s += "}";
 		}else
@@ -571,7 +675,7 @@ Tmsg.text(t: self ref Tmsg): string
 	Open =>
 		return s + sys->sprint(",%ud,%d)", m.fid, m.mode);
 	Create =>
-		return s + sys->sprint(",%ud,\"%s\",8r%uo,%d)", m.fid, m.name, m.perm, m.mode);
+		return s + sys->sprint(",%ud,%s,8r%uo,%d)", m.fid, quote(m.name), m.perm, m.mode);
 	Read =>
 		return s + sys->sprint(",%ud,%bd,%ud)", m.fid, m.offset, m.count);
 	Write =>
@@ -626,16 +730,24 @@ Rmsg.packedsize(r: self ref Rmsg): int
 	if(mtype <= 0)
 		return 0;
 	ml := hdrlen[mtype];
+	# 0 for one that cannot be packed, as Tmsg's; an error's text is
+	# cut to fit instead
 	pick m := r {
 	Version =>
+		if(!fits(m.version :: nil))
+			return 0;
 		ml += utflen(m.version);
 	Error =>
-		ml += utflen(m.ename);
+		ml += utflen(cuterr(m.ename));
 	Walk =>
+		if(len m.qids > MAXWELEM)
+			return 0;
 		ml += QID*len m.qids;
 	Read =>
 		ml += len m.data;
 	Stat =>
+		if(!dirfits(m.stat))
+			return 0;
 		ml += packdirsize(m.stat);
 	}
 	return ml;
@@ -668,7 +780,7 @@ Rmsg.pack(r: self ref Rmsg): array of byte
 	Wstat =>
 		;	# nothing more required
 	Error	=>
-		pstring(d, H, m.ename);
+		pstring(d, H, cuterr(m.ename));
 	Attach =>
 		pqid(d, H, m.qid);
 	Walk =>
@@ -711,6 +823,14 @@ Rmsg.pack(r: self ref Rmsg): array of byte
 
 Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 {
+	(n, m) := runpack(f);
+	if(m != nil && n != msgsize(f))
+		return (-1, nil);	# as Tmsg.unpack
+	return (n, m);
+}
+
+runpack(f: array of byte): (int, ref Rmsg)
+{
 	if(len f < H)
 		return (0, nil);
 	size := (int f[1] << 8) | int f[0];
@@ -736,7 +856,7 @@ Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 
 	case mtype {
 	* =>
-		sys->print("Styx->Rmsg.unpack: bad type %d\n", mtype);	# temporary
+		;
 	Rversion =>
 		msize := g32(f, H);
 		(version, o) := gstring(f, H+BIT32SZ);
@@ -751,6 +871,10 @@ Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 		(ename, o) := gstring(f, H);
 		if(o <= 0)
 			break;
+		# an error with no text is an error still: an empty string is
+		# nil, which a client reads as no error at all
+		if(ename == nil)
+			ename = "unknown error";
 		return (o, ref Rmsg.Error(tag, ename));
 	Rclunk =>
 		return (H, ref Rmsg.Clunk(tag));
@@ -762,7 +886,9 @@ Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 		return (H+QID, ref Rmsg.Attach(tag, gqid(f, H)));
 	Rwalk =>
 		nqid := (int f[H+1] << 8) | int f[H];
-		if(len f < H+LEN+nqid*QID)
+		# no more qids than a walk has names (a Twalk with more is
+		# refused above; an Rwalk of 5000 was unpacked)
+		if(nqid > MAXWELEM || len f < H+LEN+nqid*QID)
 			break;
 		o := H+LEN;
 		qids := array[nqid] of Sys->Qid;
@@ -791,10 +917,8 @@ Rmsg.unpack(f: array of byte): (int, ref Rmsg)
 		(ds, d) := unpackdir(f[H+LEN:]);
 		if(ds <= 0)
 			break;
-		if(ds != n){
-			sys->print("Styx->Rmsg.unpack: stat count: %d/%d\n", ds, n);		# temporary
+		if(ds != n)
 			break;
-		}
 		return (H+LEN+n, ref Rmsg.Stat(tag, d));
 	}
 	return (-1, nil);		# illegal
@@ -828,13 +952,13 @@ Rmsg.text(r: self ref Rmsg): string
 	* =>
 		return s + "ERROR)";
 	Readerror =>
-		return s + sys->sprint(",\"%s\")", m.error);
+		return s + sys->sprint(",%s)", quote(m.error));
 	Version =>
-		return s + sys->sprint(",%d,\"%s\")", m.msize, m.version);
+		return s + sys->sprint(",%d,%s)", m.msize, quote(m.version));
 	Auth =>
 		return s+sys->sprint(",%s)", qid2text(m.aqid));
 	Error =>
-		return s+sys->sprint(",\"%s\")", m.ename);
+		return s+sys->sprint(",%s)", quote(m.ename));
 	Flush or
 	Clunk or
 	Remove or
@@ -878,8 +1002,8 @@ Rmsg.read(fd: ref Sys->FD, msglim: int): ref Rmsg
 
 dir2text(d: Sys->Dir): string
 {
-	return sys->sprint("Dir(\"%s\",\"%s\",\"%s\",%s,8r%uo,%d,%d,%bd,16r%ux,%d)",
-		d.name, d.uid, d.gid, qid2text(d.qid), d.mode, d.atime, d.mtime, d.length, d.dtype, d.dev);
+	return sys->sprint("Dir(%s,%s,%s,%s,8r%uo,%d,%d,%bd,16r%ux,%d)",
+		quote(d.name), quote(d.uid), quote(d.gid), qid2text(d.qid), d.mode, d.atime, d.mtime, d.length, d.dtype, d.dev);
 }
 
 qid2text(q: Sys->Qid): string
@@ -892,9 +1016,15 @@ readmsg(fd: ref Sys->FD, msglim: int): (array of byte, string)
 	if(msglim <= 0)
 		msglim = MAXRPC;
 	sbuf := array[BIT32SZ] of byte;
+	# A message the connection ended in the middle of is said to be
+	# that.  With some of its bytes read there is no error string: %r
+	# gave whatever the process's last failed call had left (another
+	# file's "does not exist"), or nothing, which read as a clean end.
 	if((n := sys->readn(fd, sbuf, BIT32SZ)) != BIT32SZ){
 		if(n == 0)
 			return (nil, nil);
+		if(n > 0)
+			return (nil, "9P message truncated");
 		return (nil, sys->sprint("%r"));
 	}
 	ml := (int sbuf[1] << 8) | int sbuf[0];
@@ -906,7 +1036,7 @@ readmsg(fd: ref Sys->FD, msglim: int): (array of byte, string)
 	buf := array[ml] of byte;
 	buf[0:] = sbuf;
 	if((n = sys->readn(fd, buf[BIT32SZ:], ml-BIT32SZ)) != ml-BIT32SZ){
-		if(n == 0)
+		if(n >= 0)
 			return (nil, "9P message truncated");
 		return (nil, sys->sprint("%r"));
 	}
@@ -916,7 +1046,7 @@ readmsg(fd: ref Sys->FD, msglim: int): (array of byte, string)
 istmsg(f: array of byte): int
 {
 	if(len f < H)
-		return -1;
+		return 0;	# no type byte to judge by (it was -1, which is true)
 	return (int f[BIT32SZ] & 1) == 0;
 }
 

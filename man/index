@@ -540,13 +540,11 @@
 1	/man/8/plumber
 1	/man/8/rdbgsrv
 1	/man/8/register
-1	/man/8/rip
 1	/man/8/rstyxd
 1	/man/8/shutdown
 1	/man/8/srv
 1	/man/8/styxchat
 1	/man/8/svc
-1	/man/8/virgild
 1	/man/9/1copyright
 10	/man/1/0intro
 10	/man/1/ar
@@ -1103,7 +1101,6 @@
 2	/man/2/draw-screen
 2	/man/2/encoding
 2	/man/2/env
-2	/man/2/ether
 2	/man/2/exception
 2	/man/2/factotum
 2	/man/2/filepat
@@ -1190,13 +1187,11 @@
 2	/man/2/sys-tokenize
 2	/man/2/sys-utfbytes
 2	/man/2/sys-werrstr
-2	/man/2/tftp
 2	/man/2/timers
 2	/man/2/tk
 2	/man/2/tkclient
 2	/man/2/translate
 2	/man/2/venti
-2	/man/2/virgil
 2	/man/2/volume
 2	/man/2/w3c-css
 2	/man/2/w3c-xpointers
@@ -1275,7 +1270,6 @@
 2	/man/6/sexprs
 2	/man/6/translate
 2	/man/6/utf
-2	/man/8/bootpd
 2	/man/8/changelogin
 2	/man/8/createsignerkey
 2	/man/8/cs
@@ -1285,12 +1279,10 @@
 2	/man/8/plumber
 2	/man/8/rdbgsrv
 2	/man/8/register
-2	/man/8/rip
 2	/man/8/rstyxd
 2	/man/8/srv
 2	/man/8/styxchat
 2	/man/8/styxmon
-2	/man/8/virgild
 2	/man/9/1copyright
 20	/man/1/strings
 20	/man/2/keyring-sha1
@@ -1324,8 +1316,6 @@
 22	/man/1/fc
 22	/man/1/p
 2200	/man/1/unicode
-2202	/man/2/virgil
-2202	/man/8/virgild
 22050	/man/1/auplay
 22050	/man/3/audio
 22050	/man/6/audio
@@ -1340,7 +1330,6 @@
 24	/man/6/colour
 242725	/man/3/sd
 25	/man/2/print
-25	/man/2/tftp
 250	/man/2/draw-example
 252	/man/9/1copyright
 253	/man/2/draw-image
@@ -1454,7 +1443,6 @@
 3	/man/2/draw-example
 3	/man/2/draw-image
 3	/man/2/env
-3	/man/2/ether
 3	/man/2/exception
 3	/man/2/factotum
 3	/man/2/imagefile
@@ -1478,7 +1466,6 @@
 3	/man/2/sys-file2chan
 3	/man/2/sys-pctl
 3	/man/2/sys-pipe
-3	/man/2/tftp
 3	/man/2/volume
 3	/man/2/wait
 3	/man/3/0intro
@@ -1528,7 +1515,6 @@
 3	/man/6/sbl
 3	/man/6/scancode
 3	/man/6/sexprs
-3	/man/8/bootpd
 3	/man/8/cs
 3	/man/8/format
 3	/man/8/getauthinfo
@@ -1538,7 +1524,6 @@
 3	/man/8/manufacture
 3	/man/8/ping
 3	/man/8/register
-3	/man/8/rip
 3	/man/8/rstyxd
 3	/man/8/shutdown
 3	/man/8/srv
@@ -1776,7 +1761,6 @@
 5	/man/2/sys-open
 5	/man/2/sys-read
 5	/man/2/sys-stat
-5	/man/2/virgil
 5	/man/3/0intro
 5	/man/3/cap
 5	/man/3/dbg
@@ -1900,7 +1884,6 @@
 6	/man/2/draw-font
 6	/man/2/draw-image
 6	/man/2/encoding
-6	/man/2/ether
 6	/man/2/fsproto
 6	/man/2/ip
 6	/man/2/keyring-getmsg
@@ -1963,7 +1946,6 @@
 6	/man/6/users
 6	/man/6/utf
 6	/man/8/applylog
-6	/man/8/bootpd
 6	/man/8/changelogin
 6	/man/8/cs
 6	/man/8/dns
@@ -1972,10 +1954,8 @@
 6	/man/8/mkfs
 6	/man/8/plumber
 6	/man/8/register
-6	/man/8/rip
 6	/man/8/rstyxd
 6	/man/8/srv
-6	/man/8/virgild
 60	/man/1/charon
 60	/man/10/ar
 60	/man/10/mk
@@ -2022,7 +2002,6 @@
 6700	/man/10/odbc
 6701	/man/10/styxserver
 68	/man/2/daytime
-69	/man/8/bootpd
 6n	/man/10/parsecmd
 6n	/man/10/print
 6n	/man/10/styx
@@ -2107,7 +2086,6 @@
 8	/man/2/draw-0intro
 8	/man/2/draw-display
 8	/man/2/draw-image
-8	/man/2/ether
 8	/man/2/fsproto
 8	/man/2/ip
 8	/man/2/keyring-crypt
@@ -2125,9 +2103,7 @@
 8	/man/2/sys-dial
 8	/man/2/sys-pctl
 8	/man/2/sys-stat
-8	/man/2/tftp
 8	/man/2/translate
-8	/man/2/virgil
 8	/man/3/0intro
 8	/man/3/arch
 8	/man/3/audio
@@ -2163,7 +2139,6 @@
 8	/man/6/utf
 8	/man/8/0intro
 8	/man/8/applylog
-8	/man/8/bootpd
 8	/man/8/changelogin
 8	/man/8/create
 8	/man/8/createsignerkey
@@ -2181,7 +2156,6 @@
 8	/man/8/plumber
 8	/man/8/rdbgsrv
 8	/man/8/register
-8	/man/8/rip
 8	/man/8/rstyxd
 8	/man/8/shutdown
 8	/man/8/signer
@@ -2189,7 +2163,6 @@
 8	/man/8/styxchat
 8	/man/8/styxmon
 8	/man/8/svc
-8	/man/8/virgild
 80	/man/1/charon
 80	/man/2/draw-example
 80	/man/2/sys-dial
@@ -2505,7 +2478,6 @@ a	/man/2/draw-rect
 a	/man/2/draw-screen
 a	/man/2/encoding
 a	/man/2/env
-a	/man/2/ether
 a	/man/2/exception
 a	/man/2/factotum
 a	/man/2/filepat
@@ -2589,13 +2561,11 @@ a	/man/2/sys-stat
 a	/man/2/sys-tokenize
 a	/man/2/sys-utfbytes
 a	/man/2/sys-werrstr
-a	/man/2/tftp
 a	/man/2/timers
 a	/man/2/tk
 a	/man/2/tkclient
 a	/man/2/translate
 a	/man/2/venti
-a	/man/2/virgil
 a	/man/2/volume
 a	/man/2/w3c-css
 a	/man/2/w3c-xpointers
@@ -2689,7 +2659,6 @@ a	/man/6/users
 a	/man/6/utf
 a	/man/7/cddb
 a	/man/8/applylog
-a	/man/8/bootpd
 a	/man/8/changelogin
 a	/man/8/create
 a	/man/8/createsignerkey
@@ -2707,7 +2676,6 @@ a	/man/8/ping
 a	/man/8/plumber
 a	/man/8/rdbgsrv
 a	/man/8/register
-a	/man/8/rip
 a	/man/8/rstyxd
 a	/man/8/shutdown
 a	/man/8/signer
@@ -2715,7 +2683,6 @@ a	/man/8/srv
 a	/man/8/styxchat
 a	/man/8/styxmon
 a	/man/8/svc
-a	/man/8/virgild
 a	/man/9/1copyright
 a0	/man/6/sbl
 a1	/man/1/acme
@@ -2808,7 +2775,6 @@ about	/man/6/image
 about	/man/6/login
 about	/man/8/create
 about	/man/8/httpd
-about	/man/8/rip
 above	/man/1/acme
 above	/man/1/bind
 above	/man/1/cprof
@@ -2906,7 +2872,6 @@ absolute	/man/10/conf
 absolute	/man/2/math-fp
 absolute	/man/2/sys-millisec
 absolute	/man/2/w3c-xpointers
-absolute	/man/8/bootpd
 absolutely	/man/1/chmod
 absolutely	/man/2/tkclient
 absolutely	/man/2/wmclient
@@ -2969,7 +2934,6 @@ accepts	/man/1/sh-arg
 accepts	/man/1/wm
 accepts	/man/2/dbm
 accepts	/man/2/spki
-accepts	/man/2/virgil
 accepts	/man/3/boot
 accepts	/man/3/cmd
 accepts	/man/3/dbg
@@ -3284,7 +3248,6 @@ active	/man/2/plumbmsg
 active	/man/2/registries
 active	/man/2/styxservers
 active	/man/2/sys-file2chan
-active	/man/2/tftp
 active	/man/2/translate
 active	/man/2/venti
 active	/man/3/ip
@@ -3452,7 +3415,6 @@ addr	/man/10/ms2
 addr	/man/2/bufio
 addr	/man/2/dis
 addr	/man/2/diskblocks
-addr	/man/2/ether
 addr	/man/2/registries
 addr	/man/2/security-login
 addr	/man/2/srv
@@ -3485,14 +3447,12 @@ address	/man/10/xalloc
 address	/man/2/debug
 address	/man/2/dis
 address	/man/2/diskblocks
-address	/man/2/ether
 address	/man/2/ip
 address	/man/2/registries
 address	/man/2/security-login
 address	/man/2/srv
 address	/man/2/sys-0intro
 address	/man/2/sys-dial
-address	/man/2/virgil
 address	/man/3/arch
 address	/man/3/boot
 address	/man/3/dbg
@@ -3507,14 +3467,11 @@ address	/man/6/attrdb
 address	/man/6/colour
 address	/man/6/dis
 address	/man/6/ndb
-address	/man/8/bootpd
 address	/man/8/cs
 address	/man/8/dns
 address	/man/8/format
 address	/man/8/getauthinfo
-address	/man/8/rip
 address	/man/8/styxchat
-address	/man/8/virgild
 addressable	/man/2/draw-display
 addressed	/man/1/mdb
 addressed	/man/1/telnet
@@ -3529,7 +3486,6 @@ addresses	/man/1/charon
 addresses	/man/1/xd
 addresses	/man/10/allocb
 addresses	/man/10/plan9.ini
-addresses	/man/2/ether
 addresses	/man/2/ip
 addresses	/man/2/srv
 addresses	/man/2/sys-dial
@@ -3541,7 +3497,6 @@ addresses	/man/3/prog
 addresses	/man/4/acme
 addresses	/man/6/dis
 addresses	/man/6/ndb
-addresses	/man/8/bootpd
 addresses	/man/8/dns
 addresses	/man/8/init
 addresses	/man/8/ping
@@ -3550,7 +3505,6 @@ addressing	/man/2/dis
 addressing	/man/2/ip
 addressing	/man/3/ip
 addressing	/man/6/dis
-addressof	/man/2/ether
 addrs	/man/2/ip
 adds	/man/1/acme
 adds	/man/1/auplay
@@ -4132,7 +4086,6 @@ all	/man/2/sys-stat
 all	/man/2/tkclient
 all	/man/2/translate
 all	/man/2/venti
-all	/man/2/virgil
 all	/man/2/w3c-css
 all	/man/2/w3c-xpointers
 all	/man/2/wmclient
@@ -4179,7 +4132,6 @@ all	/man/6/sexprs
 all	/man/6/utf
 all	/man/7/cddb
 all	/man/8/applylog
-all	/man/8/bootpd
 all	/man/8/create
 all	/man/8/createsignerkey
 all	/man/8/cs
@@ -4661,7 +4613,6 @@ also	/man/2/draw-point
 also	/man/2/draw-pointer
 also	/man/2/encoding
 also	/man/2/env
-also	/man/2/ether
 also	/man/2/exception
 also	/man/2/factotum
 also	/man/2/filepat
@@ -4735,12 +4686,10 @@ also	/man/2/sys-stat
 also	/man/2/sys-tokenize
 also	/man/2/sys-utfbytes
 also	/man/2/sys-werrstr
-also	/man/2/tftp
 also	/man/2/timers
 also	/man/2/tk
 also	/man/2/tkclient
 also	/man/2/translate
-also	/man/2/virgil
 also	/man/2/volume
 also	/man/2/w3c-css
 also	/man/2/w3c-xpointers
@@ -4824,7 +4773,6 @@ also	/man/6/utf
 also	/man/7/cddb
 also	/man/8/0intro
 also	/man/8/applylog
-also	/man/8/bootpd
 also	/man/8/changelogin
 also	/man/8/create
 also	/man/8/createsignerkey
@@ -4841,7 +4789,6 @@ also	/man/8/ping
 also	/man/8/plumber
 also	/man/8/rdbgsrv
 also	/man/8/register
-also	/man/8/rip
 also	/man/8/rstyxd
 also	/man/8/shutdown
 also	/man/8/signer
@@ -4849,7 +4796,6 @@ also	/man/8/srv
 also	/man/8/styxchat
 also	/man/8/styxmon
 also	/man/8/svc
-also	/man/8/virgild
 alt	/man/1/limbo
 alt	/man/1/sh-tk
 alt	/man/2/0intro
@@ -5126,7 +5072,6 @@ an	/man/2/draw-image
 an	/man/2/draw-screen
 an	/man/2/encoding
 an	/man/2/env
-an	/man/2/ether
 an	/man/2/factotum
 an	/man/2/filter
 an	/man/2/filter-deflate
@@ -5193,7 +5138,6 @@ an	/man/2/sys-stat
 an	/man/2/sys-tokenize
 an	/man/2/sys-utfbytes
 an	/man/2/sys-werrstr
-an	/man/2/tftp
 an	/man/2/timers
 an	/man/2/tk
 an	/man/2/tkclient
@@ -5274,7 +5218,6 @@ an	/man/6/sexprs
 an	/man/6/utf
 an	/man/7/cddb
 an	/man/8/applylog
-an	/man/8/bootpd
 an	/man/8/changelogin
 an	/man/8/create
 an	/man/8/cs
@@ -5492,7 +5435,6 @@ and	/man/2/draw-rect
 and	/man/2/draw-screen
 and	/man/2/encoding
 and	/man/2/env
-and	/man/2/ether
 and	/man/2/exception
 and	/man/2/factotum
 and	/man/2/filepat
@@ -5577,13 +5519,11 @@ and	/man/2/sys-stat
 and	/man/2/sys-tokenize
 and	/man/2/sys-utfbytes
 and	/man/2/sys-werrstr
-and	/man/2/tftp
 and	/man/2/timers
 and	/man/2/tk
 and	/man/2/tkclient
 and	/man/2/translate
 and	/man/2/venti
-and	/man/2/virgil
 and	/man/2/w3c-css
 and	/man/2/w3c-xpointers
 and	/man/2/wait
@@ -5673,7 +5613,6 @@ and	/man/7/0intro
 and	/man/7/cddb
 and	/man/8/0intro
 and	/man/8/applylog
-and	/man/8/bootpd
 and	/man/8/changelogin
 and	/man/8/create
 and	/man/8/createsignerkey
@@ -5690,14 +5629,12 @@ and	/man/8/ping
 and	/man/8/plumber
 and	/man/8/rdbgsrv
 and	/man/8/register
-and	/man/8/rip
 and	/man/8/rstyxd
 and	/man/8/signer
 and	/man/8/srv
 and	/man/8/styxchat
 and	/man/8/styxmon
 and	/man/8/svc
-and	/man/8/virgild
 and	/man/9/1copyright
 anded	/man/2/sys-open
 angle	/man/1/yacc
@@ -5721,7 +5658,6 @@ announced	/man/1/listen
 announced	/man/3/ip
 announcement	/man/1/listen
 announcement	/man/2/sys-dial
-announcements	/man/8/rip
 announces	/man/10/qlock
 announces	/man/8/srv
 announcing	/man/1/listen
@@ -5769,12 +5705,10 @@ another	/man/6/attrdb
 another	/man/6/login
 another	/man/6/ndb
 another	/man/6/sexprs
-another	/man/8/bootpd
 another	/man/8/create
 another	/man/8/cs
 another	/man/8/mkfs
 another	/man/8/svc
-another	/man/8/virgild
 ansi	/man/10/0intro
 ansi	/man/10/error
 ansi	/man/10/memory
@@ -5784,11 +5718,9 @@ ansi	/man/2/security-0intro
 anstu	/man/1/du
 answer	/man/2/styxservers
 answer	/man/2/translate
-answer	/man/2/virgil
 answer	/man/5/flush
 answer	/man/8/signer
 answering	/man/2/translate
-answering	/man/8/bootpd
 answering	/man/8/cs
 answers	/man/8/ping
 antecedent	/man/1/mdb
@@ -5880,7 +5812,6 @@ any	/man/2/draw-display
 any	/man/2/draw-image
 any	/man/2/draw-screen
 any	/man/2/env
-any	/man/2/ether
 any	/man/2/factotum
 any	/man/2/filepat
 any	/man/2/filter
@@ -5925,9 +5856,7 @@ any	/man/2/sys-read
 any	/man/2/sys-self
 any	/man/2/sys-stat
 any	/man/2/sys-tokenize
-any	/man/2/tftp
 any	/man/2/translate
-any	/man/2/virgil
 any	/man/2/volume
 any	/man/2/w3c-css
 any	/man/2/w3c-xpointers
@@ -5989,10 +5918,8 @@ any	/man/8/httpd
 any	/man/8/logind
 any	/man/8/mkfs
 any	/man/8/ping
-any	/man/8/rip
 any	/man/8/rstyxd
 any	/man/8/srv
-any	/man/8/virgild
 any	/man/9/1copyright
 anybody	/man/1/ls
 anyone	/man/10/styxserver
@@ -6271,7 +6198,6 @@ appl	/man/2/dis
 appl	/man/2/diskblocks
 appl	/man/2/encoding
 appl	/man/2/env
-appl	/man/2/ether
 appl	/man/2/exception
 appl	/man/2/factotum
 appl	/man/2/filepat
@@ -6311,11 +6237,9 @@ appl	/man/2/styxconv
 appl	/man/2/styxpersist
 appl	/man/2/styxservers
 appl	/man/2/styxservers-nametree
-appl	/man/2/tftp
 appl	/man/2/tkclient
 appl	/man/2/translate
 appl	/man/2/venti
-appl	/man/2/virgil
 appl	/man/2/volume
 appl	/man/2/w3c-css
 appl	/man/2/w3c-xpointers
@@ -6346,7 +6270,6 @@ appl	/man/4/registry
 appl	/man/4/tarfs
 appl	/man/7/cddb
 appl	/man/8/applylog
-appl	/man/8/bootpd
 appl	/man/8/changelogin
 appl	/man/8/create
 appl	/man/8/createsignerkey
@@ -6364,7 +6287,6 @@ appl	/man/8/ping
 appl	/man/8/plumber
 appl	/man/8/rdbgsrv
 appl	/man/8/register
-appl	/man/8/rip
 appl	/man/8/rstyxd
 appl	/man/8/shutdown
 appl	/man/8/signer
@@ -6372,7 +6294,6 @@ appl	/man/8/srv
 appl	/man/8/styxchat
 appl	/man/8/styxmon
 appl	/man/8/svc
-appl	/man/8/virgild
 applets	/man/1/charon
 applicable	/man/1/ls
 applicable	/man/2/dis
@@ -6426,7 +6347,6 @@ applications	/man/10/splhi
 applications	/man/2/bufio
 applications	/man/2/command
 applications	/man/2/draw-pointer
-applications	/man/2/ether
 applications	/man/2/imagefile
 applications	/man/2/keyring-certtostr
 applications	/man/2/plumbmsg
@@ -6573,7 +6493,6 @@ appropriate	/man/6/colour
 appropriate	/man/6/scancode
 appropriate	/man/8/create
 appropriate	/man/8/mkfs
-appropriate	/man/8/rip
 appropriate	/man/8/signer
 appropriate	/man/8/styxchat
 appropriately	/man/1/sh-tk
@@ -6583,7 +6502,6 @@ appropriately	/man/2/bufio-chanfill
 appropriately	/man/2/draw-context
 appropriately	/man/2/styxservers
 appropriately	/man/4/registry
-appropriately	/man/8/rip
 approximate	/man/1/sh-file2chan
 approximate	/man/2/geodesy
 approximately	/man/2/bloomfilter
@@ -6819,7 +6737,6 @@ are	/man/2/draw-point
 are	/man/2/draw-rect
 are	/man/2/draw-screen
 are	/man/2/encoding
-are	/man/2/ether
 are	/man/2/factotum
 are	/man/2/filter
 are	/man/2/geodesy
@@ -6876,7 +6793,6 @@ are	/man/2/sys-read
 are	/man/2/sys-sleep
 are	/man/2/sys-stat
 are	/man/2/sys-tokenize
-are	/man/2/tftp
 are	/man/2/timers
 are	/man/2/tk
 are	/man/2/tkclient
@@ -6954,7 +6870,6 @@ are	/man/6/users
 are	/man/6/utf
 are	/man/8/0intro
 are	/man/8/applylog
-are	/man/8/bootpd
 are	/man/8/create
 are	/man/8/createsignerkey
 are	/man/8/cs
@@ -6968,7 +6883,6 @@ are	/man/8/mkfs
 are	/man/8/ping
 are	/man/8/plumber
 are	/man/8/register
-are	/man/8/rip
 are	/man/8/rstyxd
 are	/man/8/signer
 are	/man/8/srv
@@ -7047,7 +6961,6 @@ args	/man/2/spki
 args	/man/2/string
 args	/man/2/styxservers-nametree
 args	/man/2/translate
-args	/man/2/virgil
 args	/man/2/w3c-css
 args	/man/2/w3c-xpointers
 args	/man/3/cmd
@@ -7184,7 +7097,6 @@ arguments	/man/2/sexprs
 arguments	/man/2/sh
 arguments	/man/2/sys-print
 arguments	/man/2/tk
-arguments	/man/2/virgil
 arguments	/man/2/w3c-css
 arguments	/man/3/cmd
 arguments	/man/3/ds
@@ -7255,7 +7167,6 @@ array	/man/2/diskblocks
 array	/man/2/draw-image
 array	/man/2/draw-screen
 array	/man/2/encoding
-array	/man/2/ether
 array	/man/2/factotum
 array	/man/2/filter
 array	/man/2/imagefile
@@ -7476,7 +7387,6 @@ as	/man/2/draw-pointer
 as	/man/2/draw-screen
 as	/man/2/encoding
 as	/man/2/env
-as	/man/2/ether
 as	/man/2/factotum
 as	/man/2/filepat
 as	/man/2/filter-deflate
@@ -7541,7 +7451,6 @@ as	/man/2/sys-read
 as	/man/2/sys-seek
 as	/man/2/sys-self
 as	/man/2/sys-stat
-as	/man/2/tftp
 as	/man/2/tk
 as	/man/2/tkclient
 as	/man/2/venti
@@ -7622,7 +7531,6 @@ as	/man/6/sexprs
 as	/man/6/translate
 as	/man/6/utf
 as	/man/8/applylog
-as	/man/8/bootpd
 as	/man/8/changelogin
 as	/man/8/create
 as	/man/8/createsignerkey
@@ -7643,7 +7551,6 @@ as	/man/8/signer
 as	/man/8/srv
 as	/man/8/styxchat
 as	/man/8/svc
-as	/man/8/virgild
 as	/man/9/1copyright
 ascending	/man/10/dynld
 ascending	/man/6/regexp
@@ -7996,7 +7903,6 @@ at	/man/2/sys-pipe
 at	/man/2/sys-print
 at	/man/2/sys-read
 at	/man/2/sys-tokenize
-at	/man/2/tftp
 at	/man/2/timers
 at	/man/2/tkclient
 at	/man/2/w3c-xpointers
@@ -8062,7 +7968,6 @@ at	/man/8/mkfs
 at	/man/8/ping
 at	/man/8/rdbgsrv
 at	/man/8/register
-at	/man/8/rip
 at	/man/8/srv
 at	/man/8/svc
 ata	/man/3/sd
@@ -8138,7 +8043,6 @@ attached	/man/2/sys-pctl
 attached	/man/3/ip
 attached	/man/3/sd
 attached	/man/5/0intro
-attached	/man/8/rip
 attaches	/man/1/0intro
 attaches	/man/1/listen
 attaches	/man/1/logon
@@ -8196,7 +8100,6 @@ attempts	/man/2/security-0intro
 attempts	/man/2/styx
 attempts	/man/2/sys-0intro
 attempts	/man/2/sys-bind
-attempts	/man/2/tftp
 attempts	/man/2/timers
 attempts	/man/3/cmd
 attempts	/man/3/cons
@@ -8228,7 +8131,6 @@ attrdb	/man/2/registries
 attrdb	/man/4/registry
 attrdb	/man/6/attrdb
 attrdb	/man/6/ndb
-attrdb	/man/8/bootpd
 attrib	/man/2/w3c-css
 attribute	/man/1/ftest
 attribute	/man/1/grid-register
@@ -8248,7 +8150,6 @@ attribute	/man/2/xml
 attribute	/man/4/registry
 attribute	/man/6/attrdb
 attribute	/man/6/ndb
-attribute	/man/8/bootpd
 attribute	/man/8/cs
 attribute	/man/8/dns
 attribute	/man/8/format
@@ -8279,7 +8180,6 @@ attributes	/man/5/stat
 attributes	/man/6/attrdb
 attributes	/man/6/ndb
 attributes	/man/6/proto
-attributes	/man/8/bootpd
 attributes	/man/8/dns
 attrs	/man/2/cfg
 attrs	/man/2/plumbmsg
@@ -8341,7 +8241,6 @@ auth	/man/5/attach
 auth	/man/6/auth
 auth	/man/6/keys
 auth	/man/6/ndb
-auth	/man/8/bootpd
 auth	/man/8/changelogin
 auth	/man/8/createsignerkey
 auth	/man/8/logind
@@ -8425,7 +8324,6 @@ authentication	/man/6/auth
 authentication	/man/6/keys
 authentication	/man/6/ndb
 authentication	/man/8/0intro
-authentication	/man/8/bootpd
 authentication	/man/8/createsignerkey
 authentication	/man/8/getauthinfo
 authentication	/man/8/kfscmd
@@ -8822,7 +8720,6 @@ b	/man/2/draw-rect
 b	/man/2/draw-screen
 b	/man/2/encoding
 b	/man/2/env
-b	/man/2/ether
 b	/man/2/exception
 b	/man/2/factotum
 b	/man/2/filepat
@@ -8909,13 +8806,11 @@ b	/man/2/sys-stat
 b	/man/2/sys-tokenize
 b	/man/2/sys-utfbytes
 b	/man/2/sys-werrstr
-b	/man/2/tftp
 b	/man/2/timers
 b	/man/2/tk
 b	/man/2/tkclient
 b	/man/2/translate
 b	/man/2/venti
-b	/man/2/virgil
 b	/man/2/volume
 b	/man/2/w3c-css
 b	/man/2/w3c-xpointers
@@ -9005,7 +8900,6 @@ b	/man/6/translate
 b	/man/6/users
 b	/man/7/cddb
 b	/man/8/applylog
-b	/man/8/bootpd
 b	/man/8/changelogin
 b	/man/8/create
 b	/man/8/createsignerkey
@@ -9023,7 +8917,6 @@ b	/man/8/ping
 b	/man/8/plumber
 b	/man/8/rdbgsrv
 b	/man/8/register
-b	/man/8/rip
 b	/man/8/rstyxd
 b	/man/8/shutdown
 b	/man/8/signer
@@ -9031,7 +8924,6 @@ b	/man/8/srv
 b	/man/8/styxchat
 b	/man/8/styxmon
 b	/man/8/svc
-b	/man/8/virgild
 b1	/man/2/keyring-crypt
 b19200	/man/10/plan9.ini
 b19200	/man/3/dbg
@@ -9189,7 +9081,6 @@ based	/man/6/ndb
 based	/man/6/utf
 based	/man/8/applylog
 based	/man/8/register
-based	/man/8/rip
 based	/man/8/rstyxd
 baseline	/man/2/draw-font
 baseline	/man/2/imagefile
@@ -9366,7 +9257,6 @@ be	/man/2/draw-rect
 be	/man/2/draw-screen
 be	/man/2/encoding
 be	/man/2/env
-be	/man/2/ether
 be	/man/2/exception
 be	/man/2/factotum
 be	/man/2/filter
@@ -9441,13 +9331,11 @@ be	/man/2/sys-sleep
 be	/man/2/sys-stat
 be	/man/2/sys-tokenize
 be	/man/2/sys-utfbytes
-be	/man/2/tftp
 be	/man/2/timers
 be	/man/2/tk
 be	/man/2/tkclient
 be	/man/2/translate
 be	/man/2/venti
-be	/man/2/virgil
 be	/man/2/volume
 be	/man/2/w3c-css
 be	/man/2/w3c-xpointers
@@ -9530,7 +9418,6 @@ be	/man/6/users
 be	/man/6/utf
 be	/man/7/cddb
 be	/man/8/applylog
-be	/man/8/bootpd
 be	/man/8/changelogin
 be	/man/8/create
 be	/man/8/createsignerkey
@@ -9544,14 +9431,12 @@ be	/man/8/logind
 be	/man/8/mkfs
 be	/man/8/rdbgsrv
 be	/man/8/register
-be	/man/8/rip
 be	/man/8/rstyxd
 be	/man/8/shutdown
 be	/man/8/signer
 be	/man/8/srv
 be	/man/8/styxchat
 be	/man/8/svc
-be	/man/8/virgild
 be	/man/9/1copyright
 bears	/man/2/asn1
 bebytestoip	/man/2/keyring-ipint
@@ -9584,7 +9469,6 @@ because	/man/6/colour
 because	/man/6/sexprs
 because	/man/8/createsignerkey
 because	/man/8/getauthinfo
-because	/man/8/rip
 become	/man/1/dd
 become	/man/1/logon
 become	/man/1/sh
@@ -9748,7 +9632,6 @@ before	/man/2/debug
 before	/man/2/dis
 before	/man/2/diskblocks
 before	/man/2/draw-image
-before	/man/2/ether
 before	/man/2/factotum
 before	/man/2/filter
 before	/man/2/filter-deflate
@@ -9774,7 +9657,6 @@ before	/man/2/styxconv
 before	/man/2/styxservers
 before	/man/2/sys-export
 before	/man/2/sys-open
-before	/man/2/tftp
 before	/man/2/timers
 before	/man/2/translate
 before	/man/2/w3c-css
@@ -9801,12 +9683,10 @@ before	/man/5/flush
 before	/man/5/stat
 before	/man/6/man
 before	/man/6/namespace
-before	/man/8/bootpd
 before	/man/8/cs
 before	/man/8/dns
 before	/man/8/getauthinfo
 before	/man/8/signer
-before	/man/8/virgild
 beforehand	/man/2/styx
 beg	/man/2/regex
 begin	/man/1/acme
@@ -10016,7 +9896,6 @@ below	/man/6/login
 below	/man/6/ndb
 below	/man/6/proto
 below	/man/6/sexprs
-below	/man/8/bootpd
 below	/man/8/dns
 below	/man/8/httpd
 below	/man/8/kfscmd
@@ -10145,7 +10024,6 @@ beware	/man/4/import
 beyond	/man/10/devattach
 beyond	/man/10/odbc
 beyond	/man/10/qio
-beyond	/man/2/ether
 beyond	/man/2/regex
 beyond	/man/2/styxservers
 bezier	/man/2/draw-image
@@ -10314,7 +10192,6 @@ bi	/man/6/sbl
 bi	/man/6/sexprs
 bi	/man/6/translate
 bi	/man/8/applylog
-bi	/man/8/bootpd
 bi	/man/8/changelogin
 bi	/man/8/createsignerkey
 bi	/man/8/cs
@@ -10327,7 +10204,6 @@ bi	/man/8/mkfs
 bi	/man/8/ping
 bi	/man/8/plumber
 bi	/man/8/rdbgsrv
-bi	/man/8/rip
 bi	/man/8/rstyxd
 bi	/man/8/signer
 bi	/man/8/srv
@@ -10760,7 +10636,6 @@ blocks	/man/2/keyring-crypt
 blocks	/man/2/keyring-sha1
 blocks	/man/2/sys-export
 blocks	/man/2/sys-file2chan
-blocks	/man/2/tftp
 blocks	/man/2/venti
 blocks	/man/3/cmd
 blocks	/man/3/cons
@@ -10820,40 +10695,28 @@ boost	/man/10/lock
 boot	/man/1/sh
 boot	/man/10/plan9.ini
 boot	/man/10/seconds
-boot	/man/2/tftp
 boot	/man/3/boot
 boot	/man/3/cons
 boot	/man/3/dbg
 boot	/man/3/ds
 boot	/man/3/srv9
-boot	/man/8/bootpd
 boot	/man/8/format
 boot	/man/8/rdbgsrv
 bootable	/man/10/conf
 booted	/man/3/srv9
 bootes	/man/4/kfs
 bootf	/man/6/ndb
-bootf	/man/8/bootpd
 bootfile	/man/10/plan9.ini
 booting	/man/10/plan9.ini
-booting	/man/2/tftp
 booting	/man/6/ndb
-booting	/man/8/bootpd
 booting	/man/8/kfscmd
 bootp	/man/3/ip
-bootp	/man/8/bootpd
 bootp	/man/8/init
-bootp	/man/8/rip
 bootp	/man/8/srv
-bootpd	/man/2/ether
-bootpd	/man/2/tftp
-bootpd	/man/6/ndb
-bootpd	/man/8/bootpd
 boots	/man/2/sys-chdir
 boots	/man/2/workdir
 boots	/man/3/ds
 boots	/man/5/attach
-boots	/man/8/bootpd
 bootstrap	/man/10/0intro
 bootstrap	/man/10/plan9.ini
 bootstrap	/man/3/ip
@@ -10950,7 +10813,6 @@ both	/man/6/proto
 both	/man/6/sbl
 both	/man/6/sexprs
 both	/man/8/init
-both	/man/8/rip
 both	/man/8/rstyxd
 both	/man/8/signer
 bottom	/man/1/acme
@@ -11162,7 +11024,6 @@ br	/man/2/draw-point
 br	/man/2/draw-pointer
 br	/man/2/draw-rect
 br	/man/2/draw-screen
-br	/man/2/ether
 br	/man/2/factotum
 br	/man/2/filepat
 br	/man/2/filter
@@ -11233,7 +11094,6 @@ br	/man/2/tk
 br	/man/2/tkclient
 br	/man/2/translate
 br	/man/2/venti
-br	/man/2/virgil
 br	/man/2/w3c-css
 br	/man/2/w3c-xpointers
 br	/man/2/wait
@@ -11314,7 +11174,6 @@ br	/man/6/scancode
 br	/man/6/sexprs
 br	/man/6/translate
 br	/man/8/applylog
-br	/man/8/bootpd
 br	/man/8/changelogin
 br	/man/8/create
 br	/man/8/createsignerkey
@@ -11329,13 +11188,11 @@ br	/man/8/logind
 br	/man/8/mkfs
 br	/man/8/plumber
 br	/man/8/rdbgsrv
-br	/man/8/rip
 br	/man/8/rstyxd
 br	/man/8/signer
 br	/man/8/srv
 br	/man/8/styxchat
 br	/man/8/svc
-br	/man/8/virgild
 br	/man/9/1copyright
 brace	/man/1/acme
 brace	/man/1/bind
@@ -11414,11 +11271,7 @@ britainpound	/man/1/units
 british	/man/1/units
 broad	/man/1/0intro
 broadcast	/man/2/ip
-broadcast	/man/2/virgil
 broadcast	/man/3/ip
-broadcast	/man/8/rip
-broadcasts	/man/8/bootpd
-broadcasts	/man/8/rip
 broadly	/man/3/audio
 broke	/man/1/kill
 broken	/man/1/deb
@@ -11619,7 +11472,6 @@ bugs	/man/2/sys-file2chan
 bugs	/man/2/sys-fversion
 bugs	/man/2/sys-print
 bugs	/man/2/venti
-bugs	/man/2/virgil
 bugs	/man/2/xml
 bugs	/man/3/audio
 bugs	/man/3/cmd
@@ -11648,7 +11500,6 @@ bugs	/man/8/dns
 bugs	/man/8/ping
 bugs	/man/8/rdbgsrv
 bugs	/man/8/srv
-bugs	/man/8/virgild
 build	/man/1/0intro
 build	/man/1/mk
 build	/man/1/nsbuild
@@ -11800,7 +11651,6 @@ but	/man/2/draw-context
 but	/man/2/draw-display
 but	/man/2/draw-image
 but	/man/2/draw-screen
-but	/man/2/ether
 but	/man/2/factotum
 but	/man/2/fsproto
 but	/man/2/imagefile
@@ -11876,7 +11726,6 @@ but	/man/6/regexp
 but	/man/6/sexprs
 but	/man/6/utf
 but	/man/8/applylog
-but	/man/8/bootpd
 but	/man/8/create
 but	/man/8/cs
 but	/man/8/dns
@@ -11884,10 +11733,8 @@ but	/man/8/init
 but	/man/8/kfscmd
 but	/man/8/plumber
 but	/man/8/rdbgsrv
-but	/man/8/rip
 but	/man/8/signer
 but	/man/8/svc
-but	/man/8/virgild
 but	/man/9/1copyright
 buts	/man/2/tkclient
 buts	/man/2/wmclient
@@ -12068,7 +11915,6 @@ by	/man/2/draw-rect
 by	/man/2/draw-screen
 by	/man/2/encoding
 by	/man/2/env
-by	/man/2/ether
 by	/man/2/factotum
 by	/man/2/filepat
 by	/man/2/filter
@@ -12223,7 +12069,6 @@ by	/man/6/translate
 by	/man/6/users
 by	/man/6/utf
 by	/man/8/applylog
-by	/man/8/bootpd
 by	/man/8/changelogin
 by	/man/8/create
 by	/man/8/createsignerkey
@@ -12241,14 +12086,12 @@ by	/man/8/ping
 by	/man/8/plumber
 by	/man/8/rdbgsrv
 by	/man/8/register
-by	/man/8/rip
 by	/man/8/rstyxd
 by	/man/8/signer
 by	/man/8/srv
 by	/man/8/styxchat
 by	/man/8/styxmon
 by	/man/8/svc
-by	/man/8/virgild
 by	/man/9/1copyright
 by2v	/man/10/xalloc
 bypass	/man/1/fs
@@ -12285,7 +12128,6 @@ byte	/man/2/draw-0intro
 byte	/man/2/draw-display
 byte	/man/2/draw-image
 byte	/man/2/encoding
-byte	/man/2/ether
 byte	/man/2/factotum
 byte	/man/2/filter
 byte	/man/2/imagefile
@@ -12393,7 +12235,6 @@ bytes	/man/2/dis
 bytes	/man/2/diskblocks
 bytes	/man/2/draw-image
 bytes	/man/2/encoding
-bytes	/man/2/ether
 bytes	/man/2/factotum
 bytes	/man/2/filter
 bytes	/man/2/filter-slip
@@ -12797,7 +12638,6 @@ called	/man/2/debug
 called	/man/2/dis
 called	/man/2/diskblocks
 called	/man/2/draw-image
-called	/man/2/ether
 called	/man/2/factotum
 called	/man/2/filter
 called	/man/2/filter-slip
@@ -12831,7 +12671,6 @@ called	/man/2/sys-export
 called	/man/2/sys-fauth
 called	/man/2/sys-pctl
 called	/man/2/sys-print
-called	/man/2/tftp
 called	/man/2/timers
 called	/man/2/tk
 called	/man/2/tkclient
@@ -13050,7 +12889,6 @@ can	/man/2/draw-context
 can	/man/2/draw-display
 can	/man/2/draw-image
 can	/man/2/draw-screen
-can	/man/2/ether
 can	/man/2/factotum
 can	/man/2/filter
 can	/man/2/filter-deflate
@@ -13095,7 +12933,6 @@ can	/man/2/sys-pipe
 can	/man/2/sys-print
 can	/man/2/sys-self
 can	/man/2/sys-stat
-can	/man/2/tftp
 can	/man/2/tk
 can	/man/2/tkclient
 can	/man/2/translate
@@ -13161,7 +12998,6 @@ can	/man/6/sexprs
 can	/man/6/translate
 can	/man/6/users
 can	/man/8/applylog
-can	/man/8/bootpd
 can	/man/8/changelogin
 can	/man/8/createsignerkey
 can	/man/8/cs
@@ -13173,7 +13009,6 @@ can	/man/8/kfscmd
 can	/man/8/logind
 can	/man/8/plumber
 can	/man/8/register
-can	/man/8/rip
 can	/man/8/rstyxd
 can	/man/8/signer
 can	/man/8/styxchat
@@ -13243,7 +13078,6 @@ cannot	/man/6/dis
 cannot	/man/6/image
 cannot	/man/6/users
 cannot	/man/8/cs
-cannot	/man/8/virgild
 canon	/man/2/draw-rect
 canonical	/man/2/draw-rect
 canonical	/man/2/keyset
@@ -13521,11 +13355,9 @@ causes	/man/5/0intro
 causes	/man/5/walk
 causes	/man/6/attrdb
 causes	/man/7/cddb
-causes	/man/8/bootpd
 causes	/man/8/changelogin
 causes	/man/8/cs
 causes	/man/8/plumber
-causes	/man/8/rip
 causes	/man/8/styxchat
 causing	/man/1/charon
 causing	/man/10/kproc
@@ -13792,7 +13624,6 @@ change	/man/6/man
 change	/man/6/namespace
 change	/man/8/applylog
 change	/man/8/kfscmd
-change	/man/8/rip
 change	/man/8/styxchat
 changed	/man/1/acme
 changed	/man/1/charon
@@ -13822,7 +13653,6 @@ changed	/man/5/0intro
 changed	/man/5/stat
 changed	/man/6/ndb
 changed	/man/6/users
-changed	/man/8/bootpd
 changed	/man/8/kfscmd
 changed	/man/8/svc
 changelogin	/man/1/passwd
@@ -13873,7 +13703,6 @@ changes	/man/5/stat
 changes	/man/5/walk
 changes	/man/6/colour
 changes	/man/8/applylog
-changes	/man/8/rip
 changing	/man/1/dd
 changing	/man/2/bufio
 changing	/man/2/complete
@@ -14041,7 +13870,6 @@ character	/man/2/sys-0intro
 character	/man/2/sys-byte2char
 character	/man/2/sys-print
 character	/man/2/sys-tokenize
-character	/man/2/tftp
 character	/man/2/w3c-css
 character	/man/2/w3c-xpointers
 character	/man/2/wmsrv
@@ -14431,7 +14259,6 @@ client	/man/2/styxservers
 client	/man/2/sys-export
 client	/man/2/sys-file2chan
 client	/man/2/tkclient
-client	/man/2/virgil
 client	/man/2/wmsrv
 client	/man/3/0intro
 client	/man/3/draw
@@ -14454,7 +14281,6 @@ client	/man/5/walk
 client	/man/6/keys
 client	/man/6/login
 client	/man/8/applylog
-client	/man/8/bootpd
 client	/man/8/cs
 client	/man/8/getauthinfo
 client	/man/8/httpd
@@ -14463,7 +14289,6 @@ client	/man/8/register
 client	/man/8/rstyxd
 client	/man/8/signer
 client	/man/8/styxchat
-client	/man/8/virgild
 clientfd	/man/2/styxpersist
 clientlog	/man/8/applylog
 clientroot	/man/8/applylog
@@ -14481,11 +14306,9 @@ clients	/man/4/export
 clients	/man/5/0intro
 clients	/man/5/error
 clients	/man/5/stat
-clients	/man/8/bootpd
 clients	/man/8/dns
 clients	/man/8/getauthinfo
 clients	/man/8/styxchat
-clients	/man/8/virgild
 clip	/man/2/draw-image
 clip	/man/2/draw-rect
 clipped	/man/3/draw
@@ -14720,7 +14543,6 @@ cmd	/man/4/registry
 cmd	/man/4/tarfs
 cmd	/man/7/cddb
 cmd	/man/8/applylog
-cmd	/man/8/bootpd
 cmd	/man/8/changelogin
 cmd	/man/8/create
 cmd	/man/8/createsignerkey
@@ -14735,13 +14557,11 @@ cmd	/man/8/manufacture
 cmd	/man/8/mkfs
 cmd	/man/8/ping
 cmd	/man/8/plumber
-cmd	/man/8/rip
 cmd	/man/8/rstyxd
 cmd	/man/8/shutdown
 cmd	/man/8/signer
 cmd	/man/8/styxchat
 cmd	/man/8/styxmon
-cmd	/man/8/virgild
 cmd2string	/man/2/sh
 cmd640	/man/3/sd
 cmdbuf	/man/10/parsecmd
@@ -14806,8 +14626,6 @@ code	/man/6/login
 code	/man/6/scancode
 codec	/man/10/kproc
 coded	/man/2/convcs
-coded	/man/2/virgil
-coded	/man/8/virgild
 codepage	/man/2/convcs
 codes	/man/1/tr
 codes	/man/1/xd
@@ -14850,7 +14668,6 @@ colon	/man/1/mc
 colon	/man/1/mk
 colon	/man/10/mk
 colon	/man/10/odbc
-colon	/man/2/ether
 colon	/man/2/ip
 colon	/man/4/acme
 colonies	/man/1/cal
@@ -15019,7 +14836,6 @@ command	/man/2/draw-context
 command	/man/2/sh
 command	/man/2/sys-pctl
 command	/man/2/tk
-command	/man/2/virgil
 command	/man/2/wmsrv
 command	/man/3/0intro
 command	/man/3/cmd
@@ -15162,7 +14978,6 @@ common	/man/6/colour
 common	/man/6/ndb
 common	/man/6/scancode
 common	/man/6/sexprs
-common	/man/8/rip
 commonly	/man/1/0intro
 commonly	/man/10/odbc
 commonly	/man/10/sleep
@@ -15361,7 +15176,6 @@ complete	/man/6/sexprs
 completed	/man/1/sh
 completed	/man/2/keyring-0intro
 completed	/man/2/keyring-sha1
-completed	/man/2/tftp
 completed	/man/3/cmd
 completed	/man/5/flush
 completely	/man/1/0intro
@@ -15517,7 +15331,6 @@ con	/man/2/convcs
 con	/man/2/draw-display
 con	/man/2/draw-example
 con	/man/2/draw-image
-con	/man/2/ether
 con	/man/2/factotum
 con	/man/2/geodesy
 con	/man/2/keyring-crypt
@@ -15616,7 +15429,6 @@ configuration	/man/10/panic
 configuration	/man/10/plan9.ini
 configuration	/man/2/cfg
 configuration	/man/2/print
-configuration	/man/2/tftp
 configuration	/man/3/cons
 configuration	/man/3/dbg
 configuration	/man/3/ds
@@ -15627,7 +15439,6 @@ configuration	/man/4/namespace
 configuration	/man/6/attrdb
 configuration	/man/6/ndb
 configuration	/man/8/0intro
-configuration	/man/8/bootpd
 configuration	/man/8/cs
 configuration	/man/8/dns
 configuration	/man/8/getauthinfo
@@ -15643,7 +15454,6 @@ configure	/man/2/sys-stat
 configure	/man/4/cpu
 configure	/man/8/0intro
 configure	/man/8/httpd
-configure	/man/8/rip
 configure	/man/8/svc
 configured	/man/1/charon
 configured	/man/10/dev
@@ -15713,7 +15523,6 @@ connected	/man/3/ip
 connected	/man/3/pipe
 connected	/man/3/srv9
 connected	/man/4/dossrv
-connected	/man/8/rip
 connected	/man/8/rstyxd
 connecting	/man/10/devattach
 connecting	/man/10/plan9.ini
@@ -15779,7 +15588,6 @@ connection	/man/8/cs
 connection	/man/8/rstyxd
 connection	/man/8/srv
 connection	/man/8/styxchat
-connection	/man/8/virgild
 connectionless	/man/3/ip
 connections	/man/1/bind
 connections	/man/1/grid-register
@@ -16104,7 +15912,6 @@ contain	/man/6/dis
 contain	/man/6/image
 contain	/man/6/sexprs
 contain	/man/6/translate
-contain	/man/8/bootpd
 contain	/man/8/cs
 contain	/man/8/styxchat
 contained	/man/1/acme
@@ -16123,7 +15930,6 @@ contained	/man/3/ip
 contained	/man/3/sd
 contained	/man/6/auth
 contained	/man/6/keyboard
-contained	/man/8/bootpd
 contained	/man/8/srv
 container	/man/1/deb
 containing	/man/1/Mail
@@ -16322,7 +16128,6 @@ contains	/man/6/namespace
 contains	/man/6/proto
 contains	/man/6/sbl
 contains	/man/6/sexprs
-contains	/man/8/bootpd
 contains	/man/8/cs
 contains	/man/8/dns
 contains	/man/8/getauthinfo
@@ -16395,7 +16200,6 @@ contents	/man/2/sys-dirread
 contents	/man/2/sys-file2chan
 contents	/man/2/sys-remove
 contents	/man/2/sys-stat
-contents	/man/2/tftp
 contents	/man/2/tkclient
 contents	/man/2/venti
 contents	/man/2/wmclient
@@ -16810,7 +16614,6 @@ conveyed	/man/2/keyring-0intro
 conveyed	/man/2/plumbmsg
 conveys	/man/2/draw-0intro
 conveys	/man/2/sexprs
-conveys	/man/8/bootpd
 convinced	/man/8/register
 convinced	/man/8/signer
 convm2d	/man/10/dev
@@ -17043,7 +16846,6 @@ corresponding	/man/2/dis
 corresponding	/man/2/draw-0intro
 corresponding	/man/2/draw-display
 corresponding	/man/2/draw-image
-corresponding	/man/2/ether
 corresponding	/man/2/keyring-getstring
 corresponding	/man/2/math-export
 corresponding	/man/2/plumbmsg
@@ -17555,18 +17357,15 @@ cs	/man/2/security-login
 cs	/man/2/smtp
 cs	/man/2/srv
 cs	/man/2/sys-dial
-cs	/man/2/virgil
 cs	/man/4/ftpfs
 cs	/man/4/namespace
 cs	/man/6/attrdb
 cs	/man/6/ndb
-cs	/man/8/bootpd
 cs	/man/8/cs
 cs	/man/8/dns
 cs	/man/8/register
 cs	/man/8/srv
 cs	/man/8/svc
-cs	/man/8/virgild
 csfile	/man/2/convcs
 csize	/man/8/format
 csname	/man/1/tcs
@@ -17756,7 +17555,6 @@ current	/man/6/namespace
 current	/man/6/plumbing
 current	/man/6/proto
 current	/man/8/applylog
-current	/man/8/bootpd
 current	/man/8/changelogin
 current	/man/8/create
 current	/man/8/cs
@@ -17824,11 +17622,8 @@ currently	/man/5/version
 currently	/man/6/dis
 currently	/man/6/namespace
 currently	/man/6/plumbing
-currently	/man/8/bootpd
 currently	/man/8/createsignerkey
 currently	/man/8/dns
-currently	/man/8/rip
-currently	/man/8/virgild
 cursor	/man/1/acme
 cursor	/man/2/draw-context
 cursor	/man/2/draw-display
@@ -17941,7 +17736,6 @@ d	/man/6/man
 d	/man/6/proto
 d	/man/7/cddb
 d	/man/8/applylog
-d	/man/8/bootpd
 d	/man/8/create
 d	/man/8/format
 d	/man/8/httpd
@@ -17949,7 +17743,6 @@ d	/man/8/init
 d	/man/8/kfscmd
 d	/man/8/mkfs
 d	/man/8/rdbgsrv
-d	/man/8/rip
 d	/man/8/styxchat
 d0	/man/6/dis
 d1	/man/6/dis
@@ -18074,7 +17867,6 @@ data	/man/2/sys-iounit
 data	/man/2/sys-pipe
 data	/man/2/sys-read
 data	/man/2/sys-self
-data	/man/2/tftp
 data	/man/2/timers
 data	/man/2/venti
 data	/man/2/w3c-xpointers
@@ -18121,7 +17913,6 @@ data	/man/6/ndb
 data	/man/6/plumbing
 data	/man/6/sbl
 data	/man/6/sexprs
-data	/man/8/bootpd
 data	/man/8/changelogin
 data	/man/8/cs
 data	/man/8/dns
@@ -18143,7 +17934,6 @@ database	/man/4/registry
 database	/man/6/attrdb
 database	/man/6/ndb
 database	/man/7/cddb
-database	/man/8/bootpd
 database	/man/8/cs
 database	/man/8/dns
 database	/man/8/getauthinfo
@@ -18217,7 +18007,6 @@ dbentry	/man/2/attrdb
 dbf	/man/2/attrdb
 dbf	/man/2/dbm
 dbfile	/man/4/registry
-dbfile	/man/8/bootpd
 dbfs	/man/1/calendar
 dbfs	/man/4/dbfs
 dbg	/man/3/dbg
@@ -18316,10 +18105,8 @@ debugging	/man/4/dossrv
 debugging	/man/4/keyfs
 debugging	/man/6/dis
 debugging	/man/6/sbl
-debugging	/man/8/bootpd
 debugging	/man/8/httpd
 debugging	/man/8/rdbgsrv
-debugging	/man/8/rip
 debugon	/man/3/draw
 dec	/man/10/plan9.ini
 dec	/man/2/encoding
@@ -18585,7 +18372,6 @@ default	/man/6/ndb
 default	/man/6/translate
 default	/man/7/cddb
 default	/man/8/applylog
-default	/man/8/bootpd
 default	/man/8/changelogin
 default	/man/8/create
 default	/man/8/createsignerkey
@@ -18602,7 +18388,6 @@ default	/man/8/ping
 default	/man/8/plumber
 default	/man/8/rdbgsrv
 default	/man/8/register
-default	/man/8/rip
 default	/man/8/rstyxd
 default	/man/8/srv
 default	/man/8/styxchat
@@ -18714,7 +18499,6 @@ defined	/man/6/ndb
 defined	/man/6/sbl
 defined	/man/6/sexprs
 defined	/man/8/styxchat
-defined	/man/8/virgild
 defined	/man/9/1copyright
 defines	/man/1/sh-file2chan
 defines	/man/1/sh-regex
@@ -18824,7 +18608,6 @@ delay	/man/10/plan9.ini
 delay	/man/10/sleep
 delay	/man/2/sys-sleep
 delay	/man/5/0intro
-delay	/man/8/virgild
 delayed	/man/2/spki
 delays	/man/10/delay
 delays	/man/10/seconds
@@ -19139,11 +18922,9 @@ described	/man/6/proto
 described	/man/6/sbl
 described	/man/6/utf
 described	/man/8/applylog
-described	/man/8/bootpd
 described	/man/8/cs
 described	/man/8/kfscmd
 described	/man/8/plumber
-described	/man/8/rip
 described	/man/8/rstyxd
 described	/man/9/1copyright
 describes	/man/1/0intro
@@ -19364,7 +19145,6 @@ description	/man/2/draw-rect
 description	/man/2/draw-screen
 description	/man/2/encoding
 description	/man/2/env
-description	/man/2/ether
 description	/man/2/exception
 description	/man/2/factotum
 description	/man/2/filepat
@@ -19451,13 +19231,11 @@ description	/man/2/sys-stat
 description	/man/2/sys-tokenize
 description	/man/2/sys-utfbytes
 description	/man/2/sys-werrstr
-description	/man/2/tftp
 description	/man/2/timers
 description	/man/2/tk
 description	/man/2/tkclient
 description	/man/2/translate
 description	/man/2/venti
-description	/man/2/virgil
 description	/man/2/volume
 description	/man/2/w3c-css
 description	/man/2/w3c-xpointers
@@ -19553,7 +19331,6 @@ description	/man/7/0intro
 description	/man/7/cddb
 description	/man/8/0intro
 description	/man/8/applylog
-description	/man/8/bootpd
 description	/man/8/changelogin
 description	/man/8/create
 description	/man/8/createsignerkey
@@ -19571,7 +19348,6 @@ description	/man/8/ping
 description	/man/8/plumber
 description	/man/8/rdbgsrv
 description	/man/8/register
-description	/man/8/rip
 description	/man/8/rstyxd
 description	/man/8/shutdown
 description	/man/8/signer
@@ -19579,7 +19355,6 @@ description	/man/8/srv
 description	/man/8/styxchat
 description	/man/8/styxmon
 description	/man/8/svc
-description	/man/8/virgild
 description	/man/9/0intro
 description	/man/9/1copyright
 descriptions	/man/1/sh-std
@@ -19745,7 +19520,6 @@ detailed	/man/2/debug
 detailed	/man/2/security-0intro
 detailed	/man/2/sys-0intro
 detailed	/man/3/cons
-detailed	/man/8/rip
 details	/man/1/0intro
 details	/man/1/bind
 details	/man/1/crypt
@@ -19871,7 +19645,6 @@ dev	/man/10/plan9.ini
 dev	/man/2/daytime
 dev	/man/2/devpointer
 dev	/man/2/draw-display
-dev	/man/2/ether
 dev	/man/2/ip
 dev	/man/2/keyring-auth
 dev	/man/2/keyset
@@ -19984,7 +19757,6 @@ device	/man/2/draw-0intro
 device	/man/2/draw-context
 device	/man/2/draw-display
 device	/man/2/draw-pointer
-device	/man/2/ether
 device	/man/2/exception
 device	/man/2/ip
 device	/man/2/keyring-0intro
@@ -20117,7 +19889,6 @@ dfd	/man/2/sys-dial
 dfnixt	/man/1/look
 dge	/man/10/plan9.ini
 dhcp	/man/10/plan9.ini
-dhcp	/man/8/rip
 dhmagic	/man/10/seconds
 dhparams	/man/2/keyring-gensk
 dhz	/man/10/mk
@@ -20156,7 +19927,6 @@ diagnostic	/man/2/styx
 diagnostic	/man/2/styxservers
 diagnostic	/man/2/sys-file2chan
 diagnostic	/man/2/sys-utfbytes
-diagnostic	/man/2/tftp
 diagnostic	/man/2/translate
 diagnostic	/man/2/w3c-css
 diagnostic	/man/2/w3c-xpointers
@@ -20211,7 +19981,6 @@ diagnostics	/man/2/sys-fd2path
 diagnostics	/man/2/sys-fversion
 diagnostics	/man/2/sys-iounit
 diagnostics	/man/2/sys-pipe
-diagnostics	/man/2/virgil
 diagnostics	/man/2/w3c-css
 diagnostics	/man/3/boot
 diagnostics	/man/3/cap
@@ -20237,7 +20006,6 @@ dial	/man/2/styxpersist
 dial	/man/2/sys-dial
 dial	/man/2/sys-export
 dial	/man/2/venti
-dial	/man/2/virgil
 dial	/man/3/ip
 dial	/man/4/cpu
 dial	/man/4/export
@@ -20428,7 +20196,6 @@ digits	/man/1/tr
 digits	/man/10/atoi
 digits	/man/10/print
 digits	/man/2/encoding
-digits	/man/2/ether
 digits	/man/2/sexprs
 digits	/man/2/sys-print
 digits	/man/2/w3c-css
@@ -20563,7 +20330,6 @@ directly	/man/8/dns
 directly	/man/8/getauthinfo
 directly	/man/8/plumber
 directly	/man/8/rdbgsrv
-directly	/man/8/rip
 directories	/man/1/0intro
 directories	/man/1/acme
 directories	/man/1/bind
@@ -20741,7 +20507,6 @@ directory	/man/6/plumbing
 directory	/man/6/proto
 directory	/man/6/sbl
 directory	/man/8/applylog
-directory	/man/8/bootpd
 directory	/man/8/create
 directory	/man/8/cs
 directory	/man/8/dns
@@ -20752,7 +20517,6 @@ directory	/man/8/mkfs
 directory	/man/8/svc
 directs	/man/1/cp
 directs	/man/1/sh
-directs	/man/2/virgil
 direntry	/man/2/fsproto
 dirfmt	/man/10/styx
 dirlen	/man/10/devattach
@@ -21106,7 +20870,6 @@ dns	/man/2/srv
 dns	/man/4/namespace
 dns	/man/6/attrdb
 dns	/man/6/ndb
-dns	/man/8/bootpd
 dns	/man/8/cs
 dns	/man/8/dns
 dns	/man/8/svc
@@ -21255,7 +21018,6 @@ does	/man/2/draw-display
 does	/man/2/draw-image
 does	/man/2/draw-screen
 does	/man/2/env
-does	/man/2/ether
 does	/man/2/exception
 does	/man/2/factotum
 does	/man/2/keyring-auth
@@ -21329,14 +21091,12 @@ doing	/man/5/flush
 doing	/man/8/create
 dollar	/man/6/keyboard
 dom	/man/6/ndb
-dom	/man/8/bootpd
 domain	/man/1/sendmail
 domain	/man/1/webgrab
 domain	/man/2/ip
 domain	/man/2/sys-dial
 domain	/man/6/attrdb
 domain	/man/6/ndb
-domain	/man/8/bootpd
 domain	/man/8/cs
 domain	/man/8/dns
 domains	/man/1/charon
@@ -21473,7 +21233,6 @@ dpi	/man/2/print
 dpi	/man/2/pslib
 dpms	/man/10/plan9.ini
 dpq	/man/4/ftpfs
-dr	/man/8/bootpd
 draft	/man/2/sexprs
 draft	/man/6/sexprs
 drag	/man/1/wm
@@ -21603,7 +21362,6 @@ ds	/man/3/sd
 ds	/man/6/dis
 ds	/man/6/sbl
 dsize	/man/2/dis
-dsq	/man/8/bootpd
 dsr	/man/3/eia
 dss	/man/2/security-0intro
 dst	/man/2/dis
@@ -21730,7 +21488,6 @@ dynamically	/man/2/draw-image
 dynamically	/man/3/indir
 dynamically	/man/4/mntgen
 dynamically	/man/4/registry
-dynamically	/man/8/rip
 dynfindsym	/man/10/dynld
 dynfindysm	/man/10/dynld
 dynfreeimport	/man/10/dynld
@@ -21931,7 +21688,6 @@ each	/man/2/draw-image
 each	/man/2/draw-pointer
 each	/man/2/draw-rect
 each	/man/2/encoding
-each	/man/2/ether
 each	/man/2/filter
 each	/man/2/filter-deflate
 each	/man/2/filter-slip
@@ -22029,7 +21785,6 @@ each	/man/6/translate
 each	/man/6/users
 each	/man/7/cddb
 each	/man/8/applylog
-each	/man/8/bootpd
 each	/man/8/changelogin
 each	/man/8/create
 each	/man/8/createsignerkey
@@ -22038,14 +21793,11 @@ each	/man/8/dns
 each	/man/8/mkfs
 each	/man/8/ping
 each	/man/8/plumber
-each	/man/8/rip
 each	/man/8/rstyxd
 each	/man/8/srv
 each	/man/8/styxchat
 each	/man/8/svc
-each	/man/8/virgild
 each	/man/9/1copyright
-eaddrlen	/man/2/ether
 eano	/man/2/geodesy
 earg	/man/2/arg
 earlier	/man/1/mv
@@ -22306,13 +22058,11 @@ ee	/man/2/sys-stat
 ee	/man/2/sys-tokenize
 ee	/man/2/sys-utfbytes
 ee	/man/2/sys-werrstr
-ee	/man/2/tftp
 ee	/man/2/timers
 ee	/man/2/tk
 ee	/man/2/tkclient
 ee	/man/2/translate
 ee	/man/2/venti
-ee	/man/2/virgil
 ee	/man/2/volume
 ee	/man/2/w3c-css
 ee	/man/2/w3c-xpointers
@@ -22409,7 +22159,6 @@ efficient	/man/2/sets
 efficient	/man/2/sys-pipe
 efficient	/man/2/sys-read
 efficient	/man/6/sexprs
-efficient	/man/8/rip
 efficiently	/man/10/memory
 efficiently	/man/2/math-linalg
 efficiently	/man/2/sexprs
@@ -22435,7 +22184,6 @@ eg	/man/2/command
 eg	/man/2/dbm
 eg	/man/2/draw-context
 eg	/man/2/draw-display
-eg	/man/2/ether
 eg	/man/2/filter
 eg	/man/2/fsproto
 eg	/man/2/imagefile
@@ -23384,7 +23132,6 @@ entries	/man/6/font
 entries	/man/6/keys
 entries	/man/6/sbl
 entries	/man/8/applylog
-entries	/man/8/bootpd
 entries	/man/8/changelogin
 entries	/man/8/cs
 entry	/man/1/0intro
@@ -23438,7 +23185,6 @@ entry	/man/6/keys
 entry	/man/6/ndb
 entry	/man/6/sbl
 entry	/man/8/applylog
-entry	/man/8/bootpd
 entry	/man/8/changelogin
 entry	/man/8/create
 entry	/man/8/cs
@@ -23559,7 +23305,6 @@ eq	/man/2/sexprs
 eq	/man/2/spki
 eq	/man/2/venti
 eq	/man/6/man
-eqaddr	/man/2/ether
 eqchan	/man/10/newchan
 eqn	/man/6/man
 eqqid	/man/10/newchan
@@ -23737,7 +23482,6 @@ error	/man/2/dis
 error	/man/2/diskblocks
 error	/man/2/draw-0intro
 error	/man/2/draw-image
-error	/man/2/ether
 error	/man/2/factotum
 error	/man/2/filter
 error	/man/2/fsproto
@@ -23778,7 +23522,6 @@ error	/man/2/sys-print
 error	/man/2/sys-read
 error	/man/2/sys-utfbytes
 error	/man/2/sys-werrstr
-error	/man/2/tftp
 error	/man/2/translate
 error	/man/2/venti
 error	/man/2/w3c-css
@@ -23946,26 +23689,20 @@ etc	/man/5/stat
 etc	/man/6/plumbing
 ether	/man/10/0intro
 ether	/man/10/plan9.ini
-ether	/man/2/ether
 ether	/man/2/ip
 ether	/man/3/indir
 ether	/man/3/ip
 ether	/man/6/ndb
-ether	/man/8/bootpd
 ether	/man/8/init
 ether0	/man/10/plan9.ini
-ether0	/man/2/ether
 ether0	/man/3/ip
 etherexpress	/man/10/plan9.ini
 etherez	/man/10/plan9.ini
 etherfast	/man/10/plan9.ini
 etherlink	/man/10/plan9.ini
-ethern	/man/2/ether
 ethernet	/man/10/plan9.ini
-ethernet	/man/2/ether
 ethernet	/man/3/ip
 ethernet	/man/6/ndb
-ethernet	/man/8/bootpd
 ethernetcard	/man/10/plan9.ini
 ethernets	/man/10/plan9.ini
 etherpair	/man/10/plan9.ini
@@ -24057,7 +23794,6 @@ even	/man/5/clunk
 even	/man/5/remove
 even	/man/6/image
 even	/man/6/sexprs
-even	/man/8/bootpd
 even	/man/8/create
 even	/man/8/mkfs
 even	/man/9/1copyright
@@ -24116,7 +23852,6 @@ every	/man/2/styx
 every	/man/2/sys-fd2path
 every	/man/2/sys-millisec
 every	/man/2/sys-print
-every	/man/2/tftp
 every	/man/3/audio
 every	/man/4/dbfs
 every	/man/4/keysrv
@@ -24125,7 +23860,6 @@ every	/man/6/dis
 every	/man/6/sbl
 every	/man/6/sexprs
 every	/man/8/plumber
-every	/man/8/rip
 everybody	/man/1/sh
 everyone	/man/3/fs
 everyone	/man/4/memfs
@@ -24219,7 +23953,6 @@ ex	/man/2/draw-rect
 ex	/man/2/draw-screen
 ex	/man/2/encoding
 ex	/man/2/env
-ex	/man/2/ether
 ex	/man/2/exception
 ex	/man/2/factotum
 ex	/man/2/filepat
@@ -24306,13 +24039,11 @@ ex	/man/2/sys-stat
 ex	/man/2/sys-tokenize
 ex	/man/2/sys-utfbytes
 ex	/man/2/sys-werrstr
-ex	/man/2/tftp
 ex	/man/2/timers
 ex	/man/2/tk
 ex	/man/2/tkclient
 ex	/man/2/translate
 ex	/man/2/venti
-ex	/man/2/virgil
 ex	/man/2/volume
 ex	/man/2/w3c-css
 ex	/man/2/w3c-xpointers
@@ -24912,7 +24643,6 @@ exist	/man/10/styxserver
 exist	/man/2/0intro
 exist	/man/2/draw-0intro
 exist	/man/2/draw-image
-exist	/man/2/ether
 exist	/man/2/exception
 exist	/man/2/styxservers
 exist	/man/2/styxservers-nametree
@@ -25113,7 +24843,6 @@ expected	/man/8/applylog
 expects	/man/1/acme
 expects	/man/1/charon
 expects	/man/1/logon
-expects	/man/2/virgil
 expects	/man/4/registry
 expects	/man/8/rstyxd
 expense	/man/6/dis
@@ -25164,7 +24893,6 @@ explicit	/man/3/ip
 explicit	/man/5/0intro
 explicit	/man/5/stat
 explicit	/man/6/sexprs
-explicit	/man/8/rip
 explicitly	/man/1/acme
 explicitly	/man/1/mc
 explicitly	/man/1/sh
@@ -25450,7 +25178,6 @@ f	/man/4/registry
 f	/man/6/keyboard
 f	/man/6/sbl
 f	/man/6/sexprs
-f	/man/8/bootpd
 f	/man/8/changelogin
 f	/man/8/create
 f	/man/8/createsignerkey
@@ -25963,7 +25690,6 @@ fd	/man/2/sys-print
 fd	/man/2/sys-read
 fd	/man/2/sys-seek
 fd	/man/2/sys-stat
-fd	/man/2/tftp
 fd	/man/2/venti
 fd	/man/2/wait
 fd	/man/3/dup
@@ -26007,7 +25733,6 @@ fetch	/man/1/webgrab
 fetch	/man/10/inb
 fetch	/man/2/dbm
 fetch	/man/2/security-auth
-fetch	/man/2/tftp
 fetch	/man/4/ftpfs
 fetched	/man/1/mdb
 fetched	/man/2/styxservers
@@ -26015,7 +25740,6 @@ fetched	/man/3/draw
 fetches	/man/1/mdb
 fetches	/man/1/webgrab
 fetches	/man/2/attrdb
-fetches	/man/2/tftp
 fetching	/man/10/allocb
 fetching	/man/10/print
 fetching	/man/2/sexprs
@@ -26033,7 +25757,6 @@ few	/man/10/print
 few	/man/10/qio
 few	/man/2/0intro
 few	/man/2/draw-0intro
-few	/man/2/ether
 few	/man/2/security-0intro
 few	/man/2/styx
 few	/man/2/sys-millisec
@@ -26390,7 +26113,6 @@ file	/man/2/diskblocks
 file	/man/2/draw-context
 file	/man/2/draw-display
 file	/man/2/draw-font
-file	/man/2/ether
 file	/man/2/factotum
 file	/man/2/filepat
 file	/man/2/filter
@@ -26438,7 +26160,6 @@ file	/man/2/sys-read
 file	/man/2/sys-remove
 file	/man/2/sys-seek
 file	/man/2/sys-stat
-file	/man/2/tftp
 file	/man/2/tk
 file	/man/2/translate
 file	/man/2/wait
@@ -26519,7 +26240,6 @@ file	/man/6/translate
 file	/man/6/users
 file	/man/8/0intro
 file	/man/8/applylog
-file	/man/8/bootpd
 file	/man/8/changelogin
 file	/man/8/create
 file	/man/8/createsignerkey
@@ -26592,7 +26312,6 @@ filename	/man/2/complete
 filename	/man/2/debug
 filename	/man/2/filter-deflate
 filename	/man/2/keyring-auth
-filename	/man/2/tftp
 filename	/man/4/dbfs
 filename	/man/6/attrdb
 filenames	/man/1/du
@@ -26691,7 +26410,6 @@ files	/man/2/devpointer
 files	/man/2/dis
 files	/man/2/draw-display
 files	/man/2/draw-font
-files	/man/2/ether
 files	/man/2/exception
 files	/man/2/fsproto
 files	/man/2/imagefile
@@ -26716,7 +26434,6 @@ files	/man/2/sys-file2chan
 files	/man/2/sys-iounit
 files	/man/2/sys-pctl
 files	/man/2/sys-stat
-files	/man/2/tftp
 files	/man/2/tkclient
 files	/man/2/translate
 files	/man/2/volume
@@ -26777,7 +26494,6 @@ files	/man/6/sbl
 files	/man/6/translate
 files	/man/6/utf
 files	/man/8/applylog
-files	/man/8/bootpd
 files	/man/8/changelogin
 files	/man/8/create
 files	/man/8/createsignerkey
@@ -26794,7 +26510,6 @@ files	/man/8/mkfs
 files	/man/8/plumber
 files	/man/8/rdbgsrv
 files	/man/8/register
-files	/man/8/rip
 files	/man/8/rstyxd
 files	/man/8/shutdown
 files	/man/8/signer
@@ -26946,7 +26661,6 @@ find	/man/2/keyset
 find	/man/2/registries
 find	/man/2/spki
 find	/man/2/styxservers
-find	/man/2/virgil
 find	/man/2/wmclient
 find	/man/2/wmsrv
 find	/man/3/ip
@@ -27115,7 +26829,6 @@ first	/man/2/sys-export
 first	/man/2/sys-print
 first	/man/2/sys-stat
 first	/man/2/timers
-first	/man/2/virgil
 first	/man/2/w3c-css
 first	/man/2/wmclient
 first	/man/2/wmsrv
@@ -27527,7 +27240,6 @@ fn	/man/2/draw-rect
 fn	/man/2/draw-screen
 fn	/man/2/encoding
 fn	/man/2/env
-fn	/man/2/ether
 fn	/man/2/exception
 fn	/man/2/factotum
 fn	/man/2/filepat
@@ -27609,13 +27321,11 @@ fn	/man/2/sys-sleep
 fn	/man/2/sys-stat
 fn	/man/2/sys-tokenize
 fn	/man/2/sys-utfbytes
-fn	/man/2/tftp
 fn	/man/2/timers
 fn	/man/2/tk
 fn	/man/2/tkclient
 fn	/man/2/translate
 fn	/man/2/venti
-fn	/man/2/virgil
 fn	/man/2/volume
 fn	/man/2/w3c-css
 fn	/man/2/w3c-xpointers
@@ -27820,7 +27530,6 @@ following	/man/6/sbl
 following	/man/6/sexprs
 following	/man/6/translate
 following	/man/8/applylog
-following	/man/8/bootpd
 following	/man/8/changelogin
 following	/man/8/getauthinfo
 following	/man/8/httpd
@@ -27831,7 +27540,6 @@ following	/man/8/rstyxd
 following	/man/8/signer
 following	/man/8/srv
 following	/man/8/styxchat
-following	/man/8/virgild
 following	/man/9/1copyright
 follows	/man/1/acme
 follows	/man/1/ls
@@ -28045,7 +27753,6 @@ for	/man/2/draw-image
 for	/man/2/draw-rect
 for	/man/2/draw-screen
 for	/man/2/env
-for	/man/2/ether
 for	/man/2/exception
 for	/man/2/factotum
 for	/man/2/filter
@@ -28116,13 +27823,11 @@ for	/man/2/sys-seek
 for	/man/2/sys-self
 for	/man/2/sys-sleep
 for	/man/2/sys-stat
-for	/man/2/tftp
 for	/man/2/timers
 for	/man/2/tk
 for	/man/2/tkclient
 for	/man/2/translate
 for	/man/2/venti
-for	/man/2/virgil
 for	/man/2/volume
 for	/man/2/w3c-css
 for	/man/2/w3c-xpointers
@@ -28202,7 +27907,6 @@ for	/man/6/translate
 for	/man/6/utf
 for	/man/7/cddb
 for	/man/8/applylog
-for	/man/8/bootpd
 for	/man/8/changelogin
 for	/man/8/create
 for	/man/8/createsignerkey
@@ -28219,12 +27923,10 @@ for	/man/8/ping
 for	/man/8/plumber
 for	/man/8/rdbgsrv
 for	/man/8/register
-for	/man/8/rip
 for	/man/8/signer
 for	/man/8/srv
 for	/man/8/styxchat
 for	/man/8/svc
-for	/man/8/virgild
 for	/man/9/1copyright
 force	/man/1/emu
 force	/man/1/mk
@@ -28309,7 +28011,6 @@ form	/man/2/command
 form	/man/2/dis
 form	/man/2/draw-display
 form	/man/2/draw-rect
-form	/man/2/ether
 form	/man/2/fsproto
 form	/man/2/geodesy
 form	/man/2/ip
@@ -28333,7 +28034,6 @@ form	/man/2/sys-dup
 form	/man/2/sys-open
 form	/man/2/sys-print
 form	/man/2/tk
-form	/man/2/virgil
 form	/man/2/w3c-xpointers
 form	/man/3/audio
 form	/man/3/cap
@@ -28365,7 +28065,6 @@ form	/man/8/plumber
 form	/man/8/register
 form	/man/8/rstyxd
 form	/man/8/styxchat
-form	/man/8/virgild
 formally	/man/1/acme
 format	/man/1/0intro
 format	/man/1/Mail
@@ -28463,7 +28162,6 @@ format	/man/6/scancode
 format	/man/6/users
 format	/man/6/utf
 format	/man/8/applylog
-format	/man/8/bootpd
 format	/man/8/changelogin
 format	/man/8/create
 format	/man/8/format
@@ -28620,7 +28318,6 @@ found	/man/4/archfs
 found	/man/4/dbfs
 found	/man/5/0intro
 found	/man/6/image
-found	/man/8/bootpd
 found	/man/8/cs
 four	/man/1/fc
 four	/man/1/gettar
@@ -29024,7 +28721,6 @@ from	/man/2/draw-image
 from	/man/2/draw-pointer
 from	/man/2/draw-screen
 from	/man/2/encoding
-from	/man/2/ether
 from	/man/2/factotum
 from	/man/2/filter
 from	/man/2/fsproto
@@ -29072,7 +28768,6 @@ from	/man/2/sys-read
 from	/man/2/sys-remove
 from	/man/2/sys-stat
 from	/man/2/sys-tokenize
-from	/man/2/tftp
 from	/man/2/timers
 from	/man/2/tk
 from	/man/2/tkclient
@@ -29133,7 +28828,6 @@ from	/man/6/sexprs
 from	/man/6/utf
 from	/man/7/cddb
 from	/man/8/applylog
-from	/man/8/bootpd
 from	/man/8/changelogin
 from	/man/8/create
 from	/man/8/cs
@@ -29144,7 +28838,6 @@ from	/man/8/logind
 from	/man/8/mkfs
 from	/man/8/ping
 from	/man/8/rdbgsrv
-from	/man/8/rip
 from	/man/8/rstyxd
 from	/man/8/signer
 from	/man/8/srv
@@ -29174,7 +28867,6 @@ fs	/man/3/ip
 fs	/man/6/ndb
 fs	/man/6/proto
 fs	/man/8/applylog
-fs	/man/8/bootpd
 fs	/man/8/mkfs
 fs	/man/8/rdbgsrv
 fsconfig	/man/3/ds
@@ -29257,7 +28949,6 @@ fully	/man/2/wmclient
 fully	/man/3/draw
 fully	/man/4/acme
 fully	/man/6/colour
-fully	/man/8/bootpd
 fume	/man/10/odbc
 fun1	/man/2/hash
 fun2	/man/2/hash
@@ -29310,7 +29001,6 @@ function	/man/2/diskblocks
 function	/man/2/draw-0intro
 function	/man/2/draw-image
 function	/man/2/draw-screen
-function	/man/2/ether
 function	/man/2/factotum
 function	/man/2/fsproto
 function	/man/2/hash
@@ -29340,7 +29030,6 @@ function	/man/2/styxservers
 function	/man/2/styxservers-nametree
 function	/man/2/sys-export
 function	/man/2/sys-werrstr
-function	/man/2/tftp
 function	/man/2/tk
 function	/man/2/tkclient
 function	/man/2/translate
@@ -29416,7 +29105,6 @@ functions	/man/2/draw-display
 functions	/man/2/draw-font
 functions	/man/2/draw-image
 functions	/man/2/draw-rect
-functions	/man/2/ether
 functions	/man/2/geodesy
 functions	/man/2/hash
 functions	/man/2/imagefile
@@ -29583,9 +29271,6 @@ gate	/man/1/fs
 gate	/man/10/plan9.ini
 gateway	/man/3/ip
 gateway	/man/6/ndb
-gateway	/man/8/bootpd
-gateway	/man/8/rip
-gateways	/man/8/rip
 gather	/man/1/fs
 gather	/man/2/draw-image
 gather	/man/2/prof
@@ -29625,7 +29310,6 @@ general	/man/3/ip
 general	/man/3/srv
 general	/man/6/ndb
 general	/man/6/plumbing
-general	/man/8/bootpd
 generalizedtime	/man/2/asn1
 generally	/man/1/0intro
 generally	/man/1/charon
@@ -29638,7 +29322,6 @@ generally	/man/3/ip
 generally	/man/3/sign
 generally	/man/6/keyboard
 generally	/man/6/ndb
-generally	/man/8/bootpd
 generalstring	/man/2/asn1
 generate	/man/1/asm
 generate	/man/1/limbo
@@ -29972,7 +29655,6 @@ given	/man/2/draw-display
 given	/man/2/draw-image
 given	/man/2/draw-screen
 given	/man/2/encoding
-given	/man/2/ether
 given	/man/2/exception
 given	/man/2/factotum
 given	/man/2/filter
@@ -30010,11 +29692,9 @@ given	/man/2/sys-pipe
 given	/man/2/sys-print
 given	/man/2/sys-self
 given	/man/2/sys-stat
-given	/man/2/tftp
 given	/man/2/tk
 given	/man/2/tkclient
 given	/man/2/translate
-given	/man/2/virgil
 given	/man/2/w3c-css
 given	/man/2/w3c-xpointers
 given	/man/2/wmclient
@@ -30056,7 +29736,6 @@ given	/man/6/sbl
 given	/man/6/sexprs
 given	/man/6/users
 given	/man/8/applylog
-given	/man/8/bootpd
 given	/man/8/changelogin
 given	/man/8/create
 given	/man/8/cs
@@ -30067,7 +29746,6 @@ given	/man/8/httpd
 given	/man/8/init
 given	/man/8/ping
 given	/man/8/plumber
-given	/man/8/rip
 given	/man/8/rstyxd
 given	/man/8/shutdown
 given	/man/8/srv
@@ -30187,7 +29865,6 @@ giving	/man/6/font
 giving	/man/6/ndb
 giving	/man/6/proto
 giving	/man/8/applylog
-giving	/man/8/bootpd
 giving	/man/8/ping
 glean	/man/2/debug
 global	/man/1/deb
@@ -30516,7 +30193,6 @@ h	/man/5/0intro
 h	/man/5/attach
 h	/man/6/dis
 h	/man/6/keyboard
-h	/man/8/bootpd
 h	/man/8/create
 h	/man/8/dns
 h	/man/8/mkfs
@@ -30629,9 +30305,7 @@ hard	/man/1/mdb
 hard	/man/1/passwd
 hard	/man/1/sh
 hard	/man/10/plan9.ini
-hard	/man/2/virgil
 hard	/man/8/format
-hard	/man/8/virgild
 hardly	/man/1/asm
 hardware	/man/10/0intro
 hardware	/man/10/conf
@@ -30641,11 +30315,9 @@ hardware	/man/10/inb
 hardware	/man/10/intrenable
 hardware	/man/10/plan9.ini
 hardware	/man/10/xalloc
-hardware	/man/2/ether
 hardware	/man/2/math-0intro
 hardware	/man/3/arch
 hardware	/man/3/cons
-hardware	/man/8/bootpd
 has	/man/1/0intro
 has	/man/1/Mail
 has	/man/1/acme
@@ -30752,7 +30424,6 @@ has	/man/2/sys-pipe
 has	/man/2/sys-print
 has	/man/2/sys-stat
 has	/man/2/sys-tokenize
-has	/man/2/tftp
 has	/man/2/timers
 has	/man/2/tk
 has	/man/2/tkclient
@@ -30809,7 +30480,6 @@ has	/man/6/sexprs
 has	/man/6/users
 has	/man/7/cddb
 has	/man/8/applylog
-has	/man/8/bootpd
 has	/man/8/changelogin
 has	/man/8/create
 has	/man/8/createsignerkey
@@ -30820,12 +30490,10 @@ has	/man/8/ping
 has	/man/8/plumber
 has	/man/8/rdbgsrv
 has	/man/8/register
-has	/man/8/rip
 has	/man/8/signer
 has	/man/8/srv
 has	/man/8/styxchat
 has	/man/8/svc
-has	/man/8/virgild
 has	/man/9/0intro
 hasattr	/man/2/attrdb
 hasexcept	/man/6/dis
@@ -30996,7 +30664,6 @@ have	/man/8/create
 have	/man/8/format
 have	/man/8/kfscmd
 have	/man/8/plumber
-have	/man/8/rip
 have	/man/8/svc
 have	/man/9/1copyright
 having	/man/1/acme
@@ -31012,7 +30679,6 @@ having	/man/5/0intro
 having	/man/6/attrdb
 having	/man/6/translate
 having	/man/6/users
-having	/man/8/rip
 having	/man/8/rstyxd
 hc	/man/3/sd
 hd	/man/1/sh-std
@@ -31145,7 +30811,6 @@ helper	/man/2/wmsrv
 helpers	/man/2/rfc822
 helpful	/man/1/unicode
 helpful	/man/8/cs
-helpful	/man/8/rip
 helps	/man/2/registries
 helps	/man/2/styxservers
 helps	/man/2/wait
@@ -31206,7 +30871,6 @@ hexadecimal	/man/10/atoi
 hexadecimal	/man/10/inm
 hexadecimal	/man/10/print
 hexadecimal	/man/2/encoding
-hexadecimal	/man/2/ether
 hexadecimal	/man/2/ip
 hexadecimal	/man/2/keyset
 hexadecimal	/man/2/registries
@@ -31292,7 +30956,6 @@ higher	/man/2/sets
 higher	/man/2/wmlib
 higher	/man/5/0intro
 higher	/man/6/utf
-higher	/man/8/bootpd
 highest	/man/1/mc
 highest	/man/10/kproc
 highest	/man/10/lock
@@ -31406,7 +31069,6 @@ home	/man/1/charon
 home	/man/1/logon
 home	/man/4/ftpfs
 home	/man/6/proto
-homedir	/man/8/bootpd
 homeurl	/man/1/charon
 honor	/man/5/flush
 honor	/man/5/version
@@ -31442,8 +31104,6 @@ host	/man/2/ip
 host	/man/2/registries
 host	/man/2/srv
 host	/man/2/sys-dial
-host	/man/2/tftp
-host	/man/2/virgil
 host	/man/3/audio
 host	/man/3/boot
 host	/man/3/cap
@@ -31774,7 +31434,6 @@ i	/man/2/draw-point
 i	/man/2/draw-rect
 i	/man/2/draw-screen
 i	/man/2/env
-i	/man/2/ether
 i	/man/2/exception
 i	/man/2/factotum
 i	/man/2/filepat
@@ -31854,13 +31513,11 @@ i	/man/2/sys-sleep
 i	/man/2/sys-stat
 i	/man/2/sys-tokenize
 i	/man/2/sys-utfbytes
-i	/man/2/tftp
 i	/man/2/timers
 i	/man/2/tk
 i	/man/2/tkclient
 i	/man/2/translate
 i	/man/2/venti
-i	/man/2/virgil
 i	/man/2/volume
 i	/man/2/w3c-css
 i	/man/2/w3c-xpointers
@@ -31945,7 +31602,6 @@ i	/man/6/translate
 i	/man/6/users
 i	/man/7/cddb
 i	/man/8/applylog
-i	/man/8/bootpd
 i	/man/8/changelogin
 i	/man/8/create
 i	/man/8/createsignerkey
@@ -31963,7 +31619,6 @@ i	/man/8/ping
 i	/man/8/plumber
 i	/man/8/rdbgsrv
 i	/man/8/register
-i	/man/8/rip
 i	/man/8/rstyxd
 i	/man/8/shutdown
 i	/man/8/signer
@@ -31971,7 +31626,6 @@ i	/man/8/srv
 i	/man/8/styxchat
 i	/man/8/styxmon
 i	/man/8/svc
-i	/man/8/virgild
 i0	/man/3/ip
 i1	/man/2/keyring-ipint
 i2	/man/2/keyring-ipint
@@ -32023,7 +31677,6 @@ ib	/man/2/draw-image
 ib	/man/2/draw-point
 ib	/man/2/draw-rect
 ib	/man/2/draw-screen
-ib	/man/2/ether
 ib	/man/2/factotum
 ib	/man/2/hash
 ib	/man/2/ip
@@ -32073,8 +31726,6 @@ ib	/man/6/sbl
 ib	/man/6/users
 ib	/man/8/cs
 ib	/man/8/getauthinfo
-ib	/man/8/rip
-ib	/man/8/virgild
 ibm	/man/1/dd
 ibm866	/man/2/convcs
 ibs	/man/1/dd
@@ -32212,7 +31863,6 @@ identifier	/man/3/draw
 identifier	/man/3/prog
 identifier	/man/6/sbl
 identifier	/man/6/scancode
-identifier	/man/8/bootpd
 identifiers	/man/2/0intro
 identifiers	/man/2/asn1
 identifiers	/man/3/draw
@@ -32474,7 +32124,6 @@ if	/man/2/draw-image
 if	/man/2/draw-point
 if	/man/2/draw-rect
 if	/man/2/env
-if	/man/2/ether
 if	/man/2/exception
 if	/man/2/factotum
 if	/man/2/filepat
@@ -32545,12 +32194,10 @@ if	/man/2/sys-sleep
 if	/man/2/sys-stat
 if	/man/2/sys-tokenize
 if	/man/2/sys-utfbytes
-if	/man/2/tftp
 if	/man/2/timers
 if	/man/2/tk
 if	/man/2/tkclient
 if	/man/2/translate
-if	/man/2/virgil
 if	/man/2/w3c-css
 if	/man/2/w3c-xpointers
 if	/man/2/wait
@@ -32619,7 +32266,6 @@ if	/man/6/plumbing
 if	/man/6/proto
 if	/man/6/sbl
 if	/man/8/applylog
-if	/man/8/bootpd
 if	/man/8/changelogin
 if	/man/8/create
 if	/man/8/cs
@@ -32632,16 +32278,13 @@ if	/man/8/mkfs
 if	/man/8/ping
 if	/man/8/plumber
 if	/man/8/register
-if	/man/8/rip
 if	/man/8/shutdown
 if	/man/8/signer
 if	/man/8/srv
 if	/man/8/styxchat
 if	/man/8/svc
-if	/man/8/virgild
 if	/man/9/1copyright
 ifcaddr	/man/2/ip
-iff	/man/2/ether
 iff	/man/2/names
 iff	/man/2/rfc822
 iff	/man/2/sexprs
@@ -32719,7 +32362,6 @@ ignores	/man/10/ms2
 ignores	/man/10/qio
 ignores	/man/10/sleep
 ignores	/man/2/draw-image
-ignores	/man/2/ether
 ignores	/man/6/colour
 ignoring	/man/1/uuencode
 ignoring	/man/10/newchan
@@ -32977,7 +32619,6 @@ implements	/man/3/draw
 implements	/man/3/prof
 implements	/man/3/ssl
 implements	/man/4/kfs
-implements	/man/8/rip
 implication	/man/1/mc
 implication	/man/2/filter
 implicit	/man/1/mk
@@ -32993,7 +32634,6 @@ implicitly	/man/2/bufio
 implied	/man/2/keyring-sha1
 implied	/man/5/open
 implied	/man/5/walk
-implied	/man/8/rip
 implied	/man/9/1copyright
 implies	/man/1/du
 implies	/man/1/sh
@@ -33231,7 +32871,6 @@ in	/man/2/draw-rect
 in	/man/2/draw-screen
 in	/man/2/encoding
 in	/man/2/env
-in	/man/2/ether
 in	/man/2/factotum
 in	/man/2/filepat
 in	/man/2/filter
@@ -33401,7 +33040,6 @@ in	/man/6/users
 in	/man/6/utf
 in	/man/7/cddb
 in	/man/8/applylog
-in	/man/8/bootpd
 in	/man/8/changelogin
 in	/man/8/create
 in	/man/8/createsignerkey
@@ -33419,20 +33057,17 @@ in	/man/8/ping
 in	/man/8/plumber
 in	/man/8/rdbgsrv
 in	/man/8/register
-in	/man/8/rip
 in	/man/8/rstyxd
 in	/man/8/signer
 in	/man/8/srv
 in	/man/8/styxchat
 in	/man/8/styxmon
 in	/man/8/svc
-in	/man/8/virgild
 in	/man/9/1copyright
 inaccessible	/man/1/ns
 inaccessible	/man/1/os
 inaccurate	/man/2/prof
 inactivity	/man/2/volume
-inadequate	/man/8/rip
 inappropriate	/man/2/convcs
 inb	/man/10/inb
 inbalt	/man/2/dis
@@ -33501,7 +33136,6 @@ include	/man/2/draw-rect
 include	/man/2/draw-screen
 include	/man/2/encoding
 include	/man/2/env
-include	/man/2/ether
 include	/man/2/exception
 include	/man/2/factotum
 include	/man/2/filepat
@@ -33593,7 +33227,6 @@ include	/man/2/tk
 include	/man/2/tkclient
 include	/man/2/translate
 include	/man/2/venti
-include	/man/2/virgil
 include	/man/2/volume
 include	/man/2/w3c-css
 include	/man/2/w3c-xpointers
@@ -33622,7 +33255,6 @@ include	/man/8/cs
 include	/man/8/init
 include	/man/8/ping
 include	/man/8/rdbgsrv
-include	/man/8/rip
 included	/man/1/fs
 included	/man/1/mk
 included	/man/1/sh
@@ -33639,7 +33271,6 @@ included	/man/3/cap
 included	/man/4/acme
 included	/man/5/stat
 included	/man/8/create
-included	/man/8/virgild
 included	/man/9/1copyright
 includes	/man/1/acme
 includes	/man/1/gettar
@@ -33753,7 +33384,6 @@ incoming	/man/4/cpu
 incoming	/man/4/ftpfs
 incoming	/man/4/lockfs
 incoming	/man/6/plumbing
-incoming	/man/8/bootpd
 incoming	/man/8/httpd
 incoming	/man/8/rstyxd
 incoming	/man/8/srv
@@ -34103,7 +33733,6 @@ inferno	/man/6/sexprs
 inferno	/man/6/utf
 inferno	/man/7/0intro
 inferno	/man/8/applylog
-inferno	/man/8/bootpd
 inferno	/man/8/create
 inferno	/man/8/cs
 inferno	/man/8/dns
@@ -34202,14 +33831,12 @@ information	/man/6/font
 information	/man/6/sbl
 information	/man/6/sexprs
 information	/man/6/utf
-information	/man/8/bootpd
 information	/man/8/changelogin
 information	/man/8/create
 information	/man/8/getauthinfo
 information	/man/8/httpd
 information	/man/8/kfscmd
 information	/man/8/logind
-information	/man/8/rip
 information	/man/8/signer
 information	/man/8/styxmon
 informational	/man/1/sh
@@ -34259,7 +33886,6 @@ init	/man/2/dis
 init	/man/2/diskblocks
 init	/man/2/draw-context
 init	/man/2/draw-example
-init	/man/2/ether
 init	/man/2/factotum
 init	/man/2/filter
 init	/man/2/filter-deflate
@@ -34290,7 +33916,6 @@ init	/man/2/styxpersist
 init	/man/2/styxservers
 init	/man/2/styxservers-nametree
 init	/man/2/sys-self
-init	/man/2/tftp
 init	/man/2/timers
 init	/man/2/tkclient
 init	/man/2/translate
@@ -34753,7 +34378,6 @@ instance	/man/6/dis
 instance	/man/6/proto
 instance	/man/6/sbl
 instance	/man/6/sexprs
-instance	/man/8/bootpd
 instance	/man/8/cs
 instances	/man/1/calendar
 instances	/man/1/ls
@@ -34809,7 +34433,6 @@ instead	/man/2/names
 instead	/man/2/security-0intro
 instead	/man/2/styxservers
 instead	/man/2/sys-0intro
-instead	/man/2/virgil
 instead	/man/3/indir
 instead	/man/3/srv9
 instead	/man/4/ramfile
@@ -34820,7 +34443,6 @@ instead	/man/8/cs
 instead	/man/8/init
 instead	/man/8/mkfs
 instead	/man/8/register
-instead	/man/8/rip
 instead	/man/8/svc
 institute	/man/1/sum
 instituted	/man/2/keyring-0intro
@@ -34914,7 +34536,6 @@ int	/man/2/draw-pointer
 int	/man/2/draw-rect
 int	/man/2/draw-screen
 int	/man/2/env
-int	/man/2/ether
 int	/man/2/exception
 int	/man/2/factotum
 int	/man/2/filepat
@@ -34986,7 +34607,6 @@ int	/man/2/sys-stat
 int	/man/2/sys-tokenize
 int	/man/2/sys-utfbytes
 int	/man/2/sys-werrstr
-int	/man/2/tftp
 int	/man/2/timers
 int	/man/2/tk
 int	/man/2/tkclient
@@ -35141,7 +34761,6 @@ interaction	/man/2/tkclient
 interaction	/man/2/wmclient
 interaction	/man/2/wmlib
 interaction	/man/2/wmsrv
-interactions	/man/2/virgil
 interactive	/man/1/acme
 interactive	/man/1/acme-misc
 interactive	/man/1/look
@@ -35222,7 +34841,6 @@ interface	/man/2/sys-pipe
 interface	/man/2/sys-werrstr
 interface	/man/2/tk
 interface	/man/2/tkclient
-interface	/man/2/virgil
 interface	/man/2/volume
 interface	/man/2/wait
 interface	/man/2/wmclient
@@ -35258,7 +34876,6 @@ interfaces	/man/3/ip
 interfaces	/man/3/pipe
 interfaces	/man/4/namespace
 interfaces	/man/8/0intro
-interfaces	/man/8/rip
 interference	/man/2/sys-read
 interim	/man/5/0intro
 interior	/man/2/draw-image
@@ -35289,7 +34906,6 @@ internal	/man/2/crc
 internal	/man/2/dbm
 internal	/man/2/dis
 internal	/man/2/draw-image
-internal	/man/2/ether
 internal	/man/2/imagefile
 internal	/man/2/ip
 internal	/man/2/math-export
@@ -35334,17 +34950,14 @@ internet	/man/2/keyring-sha1
 internet	/man/2/rfc822
 internet	/man/2/sexprs
 internet	/man/2/srv
-internet	/man/2/tftp
 internet	/man/3/ip
 internet	/man/4/ftpfs
 internet	/man/6/ndb
 internet	/man/6/sexprs
 internet	/man/7/cddb
-internet	/man/8/bootpd
 internet	/man/8/cs
 internet	/man/8/dns
 internet	/man/8/ping
-internet	/man/8/rip
 interp	/man/10/kproc
 interparagraph	/man/6/man
 interposes	/man/8/rdbgsrv
@@ -35408,7 +35021,6 @@ interpreted	/man/6/man
 interpreted	/man/6/namespace
 interpreted	/man/6/plumbing
 interpreted	/man/6/sexprs
-interpreted	/man/8/bootpd
 interpreted	/man/8/styxchat
 interpreter	/man/1/deb
 interpreter	/man/1/emu
@@ -35443,7 +35055,6 @@ interprets	/man/2/wmlib
 interprets	/man/3/indir
 interprets	/man/6/ndb
 interprets	/man/8/cs
-interprets	/man/8/rip
 interprocess	/man/2/sys-pipe
 interprocess	/man/3/pipe
 interrogate	/man/2/debug
@@ -35723,7 +35334,6 @@ invalid	/man/10/newchan
 invalid	/man/10/styxserver
 invalid	/man/2/0intro
 invalid	/man/2/draw-display
-invalid	/man/2/ether
 invalid	/man/2/ip
 invalid	/man/2/keyring-certtostr
 invalid	/man/2/keyring-sha1
@@ -35732,7 +35342,6 @@ invalid	/man/2/sh
 invalid	/man/2/styx
 invalid	/man/2/styxservers
 invalid	/man/2/sys-byte2char
-invalid	/man/2/virgil
 invalid	/man/3/boot
 invalid	/man/3/cap
 invalid	/man/3/dbg
@@ -35921,7 +35530,6 @@ ip	/man/2/dis
 ip	/man/2/draw-display
 ip	/man/2/draw-image
 ip	/man/2/draw-screen
-ip	/man/2/ether
 ip	/man/2/factotum
 ip	/man/2/ip
 ip	/man/2/keyring-0intro
@@ -35939,9 +35547,7 @@ ip	/man/2/sys-print
 ip	/man/2/sys-seek
 ip	/man/2/sys-self
 ip	/man/2/sys-stat
-ip	/man/2/tftp
 ip	/man/2/timers
-ip	/man/2/virgil
 ip	/man/2/w3c-css
 ip	/man/2/w3c-xpointers
 ip	/man/3/0intro
@@ -35985,7 +35591,6 @@ ip	/man/6/sexprs
 ip	/man/6/translate
 ip	/man/6/users
 ip	/man/8/applylog
-ip	/man/8/bootpd
 ip	/man/8/create
 ip	/man/8/cs
 ip	/man/8/dns
@@ -35998,9 +35603,7 @@ ip	/man/8/mkfs
 ip	/man/8/ping
 ip	/man/8/rdbgsrv
 ip	/man/8/register
-ip	/man/8/rip
 ip	/man/8/styxchat
-ip	/man/8/virgild
 ip	/man/9/1copyright
 ipa2h	/man/2/srv
 ipaddr	/man/2/ip
@@ -36008,13 +35611,10 @@ ipaddr	/man/3/ip
 ipaddress	/man/3/ip
 ipaq	/man/10/conf
 ipattr	/man/6/attrdb
-ipconfig	/man/8/rip
 ipgw	/man/6/ndb
-ipgw	/man/8/bootpd
 iph2a	/man/2/srv
 ipifc	/man/2/ip
 ipifc	/man/3/ip
-ipifc	/man/8/rip
 ipint	/man/2/keyring-0intro
 ipint	/man/2/keyring-gensk
 ipint	/man/2/keyring-ipint
@@ -36022,13 +35622,10 @@ ipint	/man/3/cap
 iplifc	/man/2/ip
 ipmask	/man/3/ip
 ipmask	/man/6/ndb
-ipmask	/man/8/bootpd
 ipmsg	/man/3/ip
 ipn2p	/man/2/srv
 ipnet	/man/6/ndb
-ipnet	/man/8/bootpd
 iproute	/man/3/ip
-iproute	/man/8/rip
 iprouter	/man/3/ip
 iprouting	/man/3/ip
 ipselftab	/man/3/ip
@@ -36211,7 +35808,6 @@ ir	/man/2/draw-rect
 ir	/man/2/draw-screen
 ir	/man/2/encoding
 ir	/man/2/env
-ir	/man/2/ether
 ir	/man/2/exception
 ir	/man/2/factotum
 ir	/man/2/filepat
@@ -36297,13 +35893,11 @@ ir	/man/2/sys-stat
 ir	/man/2/sys-tokenize
 ir	/man/2/sys-utfbytes
 ir	/man/2/sys-werrstr
-ir	/man/2/tftp
 ir	/man/2/timers
 ir	/man/2/tk
 ir	/man/2/tkclient
 ir	/man/2/translate
 ir	/man/2/venti
-ir	/man/2/virgil
 ir	/man/2/volume
 ir	/man/2/w3c-css
 ir	/man/2/w3c-xpointers
@@ -36395,7 +35989,6 @@ ir	/man/6/users
 ir	/man/6/utf
 ir	/man/7/cddb
 ir	/man/8/applylog
-ir	/man/8/bootpd
 ir	/man/8/changelogin
 ir	/man/8/create
 ir	/man/8/createsignerkey
@@ -36413,7 +36006,6 @@ ir	/man/8/ping
 ir	/man/8/plumber
 ir	/man/8/rdbgsrv
 ir	/man/8/register
-ir	/man/8/rip
 ir	/man/8/rstyxd
 ir	/man/8/shutdown
 ir	/man/8/signer
@@ -36421,7 +36013,6 @@ ir	/man/8/srv
 ir	/man/8/styxchat
 ir	/man/8/styxmon
 ir	/man/8/svc
-ir	/man/8/virgild
 iraise	/man/2/dis
 iref	/man/10/newchan
 ireland	/man/2/geodesy
@@ -36608,7 +36199,6 @@ is	/man/2/draw-image
 is	/man/2/draw-rect
 is	/man/2/draw-screen
 is	/man/2/env
-is	/man/2/ether
 is	/man/2/exception
 is	/man/2/factotum
 is	/man/2/filepat
@@ -36689,13 +36279,11 @@ is	/man/2/sys-self
 is	/man/2/sys-sleep
 is	/man/2/sys-stat
 is	/man/2/sys-tokenize
-is	/man/2/tftp
 is	/man/2/timers
 is	/man/2/tk
 is	/man/2/tkclient
 is	/man/2/translate
 is	/man/2/venti
-is	/man/2/virgil
 is	/man/2/volume
 is	/man/2/w3c-css
 is	/man/2/w3c-xpointers
@@ -36786,7 +36374,6 @@ is	/man/6/users
 is	/man/6/utf
 is	/man/7/cddb
 is	/man/8/applylog
-is	/man/8/bootpd
 is	/man/8/changelogin
 is	/man/8/create
 is	/man/8/createsignerkey
@@ -36804,13 +36391,11 @@ is	/man/8/ping
 is	/man/8/plumber
 is	/man/8/rdbgsrv
 is	/man/8/register
-is	/man/8/rip
 is	/man/8/rstyxd
 is	/man/8/signer
 is	/man/8/srv
 is	/man/8/styxchat
 is	/man/8/svc
-is	/man/8/virgild
 is	/man/9/1copyright
 isa	/man/10/dmainit
 isa	/man/10/plan9.ini
@@ -36998,7 +36583,6 @@ it	/man/2/draw-example
 it	/man/2/draw-image
 it	/man/2/draw-screen
 it	/man/2/env
-it	/man/2/ether
 it	/man/2/factotum
 it	/man/2/filter
 it	/man/2/filter-slip
@@ -37064,13 +36648,11 @@ it	/man/2/sys-self
 it	/man/2/sys-sleep
 it	/man/2/sys-stat
 it	/man/2/sys-werrstr
-it	/man/2/tftp
 it	/man/2/timers
 it	/man/2/tk
 it	/man/2/tkclient
 it	/man/2/translate
 it	/man/2/venti
-it	/man/2/virgil
 it	/man/2/volume
 it	/man/2/w3c-css
 it	/man/2/w3c-xpointers
@@ -37149,7 +36731,6 @@ it	/man/6/sexprs
 it	/man/6/users
 it	/man/8/0intro
 it	/man/8/applylog
-it	/man/8/bootpd
 it	/man/8/changelogin
 it	/man/8/create
 it	/man/8/cs
@@ -37163,7 +36744,6 @@ it	/man/8/ping
 it	/man/8/plumber
 it	/man/8/rdbgsrv
 it	/man/8/register
-it	/man/8/rip
 it	/man/8/rstyxd
 it	/man/8/shutdown
 it	/man/8/signer
@@ -37171,7 +36751,6 @@ it	/man/8/srv
 it	/man/8/styxchat
 it	/man/8/styxmon
 it	/man/8/svc
-it	/man/8/virgild
 italic	/man/6/man
 italicize	/man/6/man
 italics	/man/1/0intro
@@ -37190,7 +36769,6 @@ item	/man/2/sys-tokenize
 item	/man/2/xml
 item	/man/6/dis
 item	/man/6/sbl
-item	/man/8/bootpd
 items	/man/1/charon
 items	/man/1/deb
 items	/man/1/fc
@@ -37307,7 +36885,6 @@ its	/man/2/draw-display
 its	/man/2/draw-example
 its	/man/2/draw-image
 its	/man/2/draw-screen
-its	/man/2/ether
 its	/man/2/filter
 its	/man/2/fsproto
 its	/man/2/imagefile
@@ -37391,7 +36968,6 @@ its	/man/6/sbl
 its	/man/6/sexprs
 its	/man/6/utf
 its	/man/8/applylog
-its	/man/8/bootpd
 its	/man/8/createsignerkey
 its	/man/8/dns
 its	/man/8/getauthinfo
@@ -37400,7 +36976,6 @@ its	/man/8/init
 its	/man/8/kfscmd
 its	/man/8/logind
 its	/man/8/plumber
-its	/man/8/rip
 its	/man/8/rstyxd
 its	/man/8/srv
 its	/man/8/styxchat
@@ -37565,7 +37140,6 @@ just	/man/6/dis
 just	/man/6/image
 just	/man/8/httpd
 just	/man/8/mkfs
-just	/man/8/rip
 justification	/man/10/print
 justification	/man/2/sys-print
 justified	/man/10/print
@@ -37632,7 +37206,6 @@ keep	/man/3/ip
 keepalive	/man/3/ip
 keeps	/man/2/styxservers
 keeps	/man/4/ftpfs
-keeps	/man/8/bootpd
 keeps	/man/8/rdbgsrv
 kelvin	/man/1/units
 kenwood	/man/3/sd
@@ -37704,11 +37277,8 @@ kernels	/man/10/dev
 kernels	/man/10/plan9.ini
 kernels	/man/10/print
 kernels	/man/10/styx
-kernels	/man/2/tftp
-kernels	/man/8/bootpd
 kernels	/man/8/init
 kernighan	/man/1/yacc
-kexec	/man/2/tftp
 kexec	/man/3/boot
 key	/man/1/acme
 key	/man/1/ar
@@ -38073,7 +37643,6 @@ l	/man/2/rfc822
 l	/man/2/sexprs
 l	/man/2/string
 l	/man/2/translate
-l	/man/2/virgil
 l	/man/2/w3c-xpointers
 l	/man/3/0intro
 l	/man/3/cons
@@ -38271,7 +37840,6 @@ last	/man/6/ndb
 last	/man/6/plumbing
 last	/man/6/proto
 last	/man/8/applylog
-last	/man/8/bootpd
 last	/man/8/create
 lasterror	/man/2/prof
 lasting	/man/3/eia
@@ -38388,7 +37956,6 @@ leaf	/man/10/inm
 leaks	/man/10/allocb
 learn	/man/1/mk
 learn	/man/10/mk
-learns	/man/8/rip
 least	/man/1/charon
 least	/man/1/grid-register
 least	/man/1/mdb
@@ -38425,9 +37992,7 @@ least	/man/5/0intro
 least	/man/5/stat
 least	/man/6/colour
 least	/man/6/image
-least	/man/8/bootpd
 least	/man/8/changelogin
-least	/man/8/rip
 least	/man/8/srv
 leave	/man/10/dev
 leave	/man/2/styxservers
@@ -38543,7 +38108,6 @@ length	/man/10/styx
 length	/man/2/asn1
 length	/man/2/convcs
 length	/man/2/dis
-length	/man/2/ether
 length	/man/2/ip
 length	/man/2/keyring-crypt
 length	/man/2/keyring-gensk
@@ -38604,7 +38168,6 @@ less	/man/2/bloomfilter
 less	/man/2/daytime
 less	/man/2/draw-0intro
 less	/man/2/draw-image
-less	/man/2/ether
 less	/man/2/keyring-crypt
 less	/man/2/math-fp
 less	/man/2/rand
@@ -38789,7 +38352,6 @@ lib	/man/2/dis
 lib	/man/2/diskblocks
 lib	/man/2/encoding
 lib	/man/2/env
-lib	/man/2/ether
 lib	/man/2/exception
 lib	/man/2/factotum
 lib	/man/2/filepat
@@ -38827,11 +38389,9 @@ lib	/man/2/styxconv
 lib	/man/2/styxpersist
 lib	/man/2/styxservers
 lib	/man/2/styxservers-nametree
-lib	/man/2/tftp
 lib	/man/2/tkclient
 lib	/man/2/translate
 lib	/man/2/venti
-lib	/man/2/virgil
 lib	/man/2/volume
 lib	/man/2/w3c-css
 lib	/man/2/w3c-xpointers
@@ -38848,7 +38408,6 @@ lib	/man/6/plumbing
 lib	/man/6/proto
 lib	/man/6/sexprs
 lib	/man/8/applylog
-lib	/man/8/bootpd
 lib	/man/8/cs
 lib	/man/8/dns
 lib	/man/8/getauthinfo
@@ -39169,7 +38728,6 @@ line	/man/2/sexprs
 line	/man/2/sh
 line	/man/2/sys-dial
 line	/man/2/sys-read
-line	/man/2/virgil
 line	/man/2/xml
 line	/man/3/arch
 line	/man/3/audio
@@ -39396,7 +38954,6 @@ list	/man/2/sys-stat
 list	/man/2/sys-tokenize
 list	/man/2/tkclient
 list	/man/2/translate
-list	/man/2/virgil
 list	/man/2/w3c-css
 list	/man/2/w3c-xpointers
 list	/man/2/wmclient
@@ -39452,7 +39009,6 @@ listed	/man/6/attrdb
 listed	/man/6/plumbing
 listed	/man/8/applylog
 listed	/man/8/format
-listed	/man/8/rip
 listed	/man/8/rstyxd
 listen	/man/1/listen
 listen	/man/10/odbc
@@ -39482,7 +39038,6 @@ listening	/man/10/odbc
 listening	/man/2/security-0intro
 listening	/man/6/plumbing
 listening	/man/8/plumber
-listens	/man/8/bootpd
 listens	/man/8/httpd
 listens	/man/8/srv
 listens	/man/8/svc
@@ -39631,7 +39186,6 @@ load	/man/2/draw-rect
 load	/man/2/draw-screen
 load	/man/2/encoding
 load	/man/2/env
-load	/man/2/ether
 load	/man/2/exception
 load	/man/2/factotum
 load	/man/2/filepat
@@ -39717,13 +39271,11 @@ load	/man/2/sys-stat
 load	/man/2/sys-tokenize
 load	/man/2/sys-utfbytes
 load	/man/2/sys-werrstr
-load	/man/2/tftp
 load	/man/2/timers
 load	/man/2/tk
 load	/man/2/tkclient
 load	/man/2/translate
 load	/man/2/venti
-load	/man/2/virgil
 load	/man/2/volume
 load	/man/2/w3c-css
 load	/man/2/w3c-xpointers
@@ -39844,17 +39396,14 @@ local	/man/4/registry
 local	/man/6/man
 local	/man/6/ndb
 local	/man/8/applylog
-local	/man/8/bootpd
 local	/man/8/create
 local	/man/8/cs
 local	/man/8/dns
 local	/man/8/getauthinfo
 local	/man/8/init
 local	/man/8/mkfs
-local	/man/8/rip
 local	/man/8/srv
 local	/man/8/svc
-local	/man/8/virgild
 locale	/man/1/date
 locale	/man/2/translate
 locale	/man/4/namespace
@@ -39888,7 +39437,6 @@ located	/man/2/debug
 located	/man/2/registries
 locates	/man/1/acme
 locating	/man/2/convcs
-locating	/man/8/rip
 location	/man/1/0intro
 location	/man/1/deb
 location	/man/1/mdb
@@ -39944,7 +39492,6 @@ log	/man/4/logfile
 log	/man/8/applylog
 log	/man/8/httpd
 log	/man/8/plumber
-log	/man/8/rip
 log10	/man/1/mc
 log10	/man/2/math-elem
 log1p	/man/2/math-elem
@@ -40256,7 +39803,6 @@ lr	/man/10/eve
 lr	/man/10/mk
 lr	/man/10/styx
 lr	/man/10/xalloc
-lr	/man/2/ether
 lr	/man/2/names
 lr	/man/2/pop3
 lr	/man/2/sexprs
@@ -40275,7 +39821,6 @@ lr	/man/6/sexprs
 lr	/man/6/users
 lr	/man/8/create
 lr	/man/8/httpd
-lr	/man/8/rip
 lr	/man/8/signer
 ls	/man/1/ar
 ls	/man/1/chgrp
@@ -40362,7 +39907,6 @@ m	/man/2/draw-rect
 m	/man/2/draw-screen
 m	/man/2/encoding
 m	/man/2/env
-m	/man/2/ether
 m	/man/2/exception
 m	/man/2/factotum
 m	/man/2/filepat
@@ -40454,7 +39998,6 @@ m	/man/2/tk
 m	/man/2/tkclient
 m	/man/2/translate
 m	/man/2/venti
-m	/man/2/virgil
 m	/man/2/volume
 m	/man/2/w3c-css
 m	/man/2/w3c-xpointers
@@ -40494,9 +40037,7 @@ m1	/man/3/ds
 m1	/man/6/dis
 m8	/man/3/draw
 m8	/man/6/image
-mac	/man/2/ether
 mac	/man/3/ip
-mac	/man/8/bootpd
 mach	/man/10/dynld
 macheps	/man/1/fc
 macheps	/man/2/math-fp
@@ -40547,16 +40088,13 @@ machine	/man/8/create
 machine	/man/8/getauthinfo
 machine	/man/8/mkfs
 machine	/man/8/register
-machine	/man/8/rip
 machine	/man/8/signer
-machine	/man/8/virgild
 machines	/man/1/0intro
 machines	/man/10/plan9.ini
 machines	/man/2/draw-screen
 machines	/man/3/arch
 machines	/man/3/ip
 machines	/man/6/keyboard
-machines	/man/8/bootpd
 machines	/man/8/getauthinfo
 macos	/man/3/fs
 macro	/man/1/man
@@ -40622,7 +40160,6 @@ made	/man/6/sbl
 made	/man/8/applylog
 made	/man/8/create
 made	/man/8/mkfs
-made	/man/8/rip
 made	/man/9/1copyright
 mafter	/man/2/sys-bind
 mafter	/man/3/fs
@@ -40687,7 +40224,6 @@ mainly	/man/10/styxserver
 mainly	/man/2/ip
 mainly	/man/3/cons
 mainly	/man/3/dbg
-mainly	/man/8/bootpd
 mainly	/man/8/dns
 mainmem	/man/10/malloc
 maintain	/man/1/mk
@@ -40808,9 +40344,7 @@ makes	/man/4/tarfs
 makes	/man/6/keys
 makes	/man/8/cs
 makes	/man/8/getauthinfo
-makes	/man/8/rip
 makes	/man/8/styxchat
-makes	/man/8/virgild
 maketag	/man/2/spki
 making	/man/1/0intro
 making	/man/1/ar
@@ -40905,7 +40439,6 @@ manipulate	/man/1/ar
 manipulate	/man/10/dev
 manipulate	/man/10/odbc
 manipulate	/man/2/env
-manipulate	/man/2/ether
 manipulate	/man/2/ip
 manipulate	/man/3/ip
 manipulate	/man/3/sd
@@ -40918,7 +40451,6 @@ manipulating	/man/2/draw-0intro
 manipulating	/man/2/sets
 manipulating	/man/2/styx
 manipulation	/man/1/sh-string
-manipulation	/man/2/ether
 manipulation	/man/2/keyring-ipint
 manipulation	/man/2/names
 manipulation	/man/2/sys-0intro
@@ -41107,7 +40639,6 @@ mask	/man/3/draw
 mask	/man/3/ip
 mask	/man/6/dis
 mask	/man/6/ndb
-mask	/man/8/bootpd
 mask	/man/8/rdbgsrv
 mask	/man/8/register
 mask	/man/8/signer
@@ -41195,7 +40726,6 @@ matches	/man/4/keysrv
 matches	/man/4/registry
 matches	/man/6/plumbing
 matches	/man/6/regexp
-matches	/man/8/bootpd
 matches	/man/8/cs
 matching	/man/1/acme
 matching	/man/1/cat
@@ -41796,7 +41326,6 @@ message	/man/5/walk
 message	/man/6/image
 message	/man/6/login
 message	/man/6/plumbing
-message	/man/8/bootpd
 message	/man/8/ping
 message	/man/8/plumber
 message	/man/8/rdbgsrv
@@ -42069,7 +41598,6 @@ miscellaneous	/man/1/unicode
 miscellaneous	/man/3/cons
 miscellany	/man/1/acme
 mishandled	/man/3/draw
-misleading	/man/8/rip
 mismatches	/man/2/sys-stat
 missing	/man/1/acme
 missing	/man/1/ar
@@ -42085,7 +41613,6 @@ missing	/man/3/ip
 missing	/man/4/logfile
 missing	/man/6/sbl
 missing	/man/6/translate
-missing	/man/8/bootpd
 missing	/man/8/mkfs
 misspelled	/man/1/acme-misc
 mit	/man/2/sexprs
@@ -42160,7 +41687,6 @@ mnt	/man/8/svc
 mntdir	/man/1/calendar
 mntgen	/man/4/mntgen
 mntpt	/man/4/registry
-mntpt	/man/8/rip
 mod	/man/1/limbo
 mod	/man/10/ar
 mod	/man/10/conf
@@ -42362,7 +41888,6 @@ module	/man/2/draw-context
 module	/man/2/draw-display
 module	/man/2/draw-example
 module	/man/2/env
-module	/man/2/ether
 module	/man/2/exception
 module	/man/2/filter
 module	/man/2/filter-deflate
@@ -42399,7 +41924,6 @@ module	/man/2/sys-0intro
 module	/man/2/sys-dup
 module	/man/2/sys-self
 module	/man/2/sys-werrstr
-module	/man/2/tftp
 module	/man/2/timers
 module	/man/2/tk
 module	/man/2/tkclient
@@ -42601,10 +42125,8 @@ more	/man/6/sexprs
 more	/man/6/translate
 more	/man/6/utf
 more	/man/8/applylog
-more	/man/8/bootpd
 more	/man/8/cs
 more	/man/8/httpd
-more	/man/8/rip
 moreover	/man/2/dbm
 moreover	/man/8/changelogin
 moribund	/man/3/dbg
@@ -43058,7 +42580,6 @@ must	/man/2/draw-display
 must	/man/2/draw-example
 must	/man/2/draw-image
 must	/man/2/draw-screen
-must	/man/2/ether
 must	/man/2/factotum
 must	/man/2/filter
 must	/man/2/filter-slip
@@ -43101,7 +42622,6 @@ must	/man/2/sys-open
 must	/man/2/sys-pipe
 must	/man/2/sys-read
 must	/man/2/sys-remove
-must	/man/2/tftp
 must	/man/2/timers
 must	/man/2/tk
 must	/man/2/venti
@@ -43154,7 +42674,6 @@ must	/man/8/getauthinfo
 must	/man/8/rdbgsrv
 must	/man/8/register
 must	/man/8/svc
-must	/man/8/virgild
 mustcompile	/man/2/dis
 mustcompile	/man/6/dis
 mutual	/man/10/qlock
@@ -43251,7 +42770,6 @@ n	/man/2/bufio
 n	/man/2/dis
 n	/man/2/diskblocks
 n	/man/2/draw-rect
-n	/man/2/ether
 n	/man/2/geodesy
 n	/man/2/hash
 n	/man/2/ip
@@ -43315,7 +42833,6 @@ n	/man/8/kfscmd
 n	/man/8/mkfs
 n	/man/8/ping
 n	/man/8/rdbgsrv
-n	/man/8/rip
 n	/man/8/rstyxd
 n	/man/8/srv
 n	/man/8/styxchat
@@ -43513,7 +43030,6 @@ name	/man/2/draw-rect
 name	/man/2/draw-screen
 name	/man/2/encoding
 name	/man/2/env
-name	/man/2/ether
 name	/man/2/exception
 name	/man/2/factotum
 name	/man/2/filepat
@@ -43600,13 +43116,11 @@ name	/man/2/sys-stat
 name	/man/2/sys-tokenize
 name	/man/2/sys-utfbytes
 name	/man/2/sys-werrstr
-name	/man/2/tftp
 name	/man/2/timers
 name	/man/2/tk
 name	/man/2/tkclient
 name	/man/2/translate
 name	/man/2/venti
-name	/man/2/virgil
 name	/man/2/volume
 name	/man/2/w3c-css
 name	/man/2/w3c-xpointers
@@ -43702,7 +43216,6 @@ name	/man/7/0intro
 name	/man/7/cddb
 name	/man/8/0intro
 name	/man/8/applylog
-name	/man/8/bootpd
 name	/man/8/changelogin
 name	/man/8/create
 name	/man/8/createsignerkey
@@ -43720,7 +43233,6 @@ name	/man/8/ping
 name	/man/8/plumber
 name	/man/8/rdbgsrv
 name	/man/8/register
-name	/man/8/rip
 name	/man/8/rstyxd
 name	/man/8/shutdown
 name	/man/8/signer
@@ -43728,7 +43240,6 @@ name	/man/8/srv
 name	/man/8/styxchat
 name	/man/8/styxmon
 name	/man/8/svc
-name	/man/8/virgild
 name	/man/9/0intro
 name	/man/9/1copyright
 namec	/man/10/newchan
@@ -43886,7 +43397,6 @@ names	/man/6/proto
 names	/man/6/sbl
 names	/man/6/users
 names	/man/8/applylog
-names	/man/8/bootpd
 names	/man/8/create
 names	/man/8/cs
 names	/man/8/dns
@@ -44008,13 +43518,10 @@ ndb	/man/4/namespace
 ndb	/man/4/registry
 ndb	/man/6/attrdb
 ndb	/man/6/ndb
-ndb	/man/8/bootpd
 ndb	/man/8/cs
 ndb	/man/8/dns
 ndb	/man/8/getauthinfo
-ndb	/man/8/rip
 ndb	/man/8/svc
-ndb	/man/8/virgild
 ne	/man/1/acme
 ne	/man/1/fc
 ne	/man/1/sh
@@ -44228,7 +43735,6 @@ neither	/man/2/sys-export
 neither	/man/3/fs
 neither	/man/3/ip
 neither	/man/6/namespace
-neither	/man/8/rip
 nelem	/man/10/devattach
 neq	/man/1/sh-expr
 nested	/man/1/acme
@@ -44245,7 +43751,6 @@ net	/man/1/rcmd
 net	/man/1/telnet
 net	/man/10/plan9.ini
 net	/man/2/bufio
-net	/man/2/ether
 net	/man/2/ip
 net	/man/2/keyring-auth
 net	/man/2/registries
@@ -44255,12 +43760,10 @@ net	/man/3/root
 net	/man/4/namespace
 net	/man/4/registry
 net	/man/6/ndb
-net	/man/8/bootpd
 net	/man/8/cs
 net	/man/8/dns
 net	/man/8/getauthinfo
 net	/man/8/init
-net	/man/8/rip
 net	/man/8/svc
 netaddr	/man/2/sys-dial
 netaddr	/man/8/cs
@@ -44296,7 +43799,6 @@ network	/man/2/sys-bind
 network	/man/2/sys-dial
 network	/man/2/sys-open
 network	/man/2/sys-stat
-network	/man/2/virgil
 network	/man/3/cmd
 network	/man/3/ip
 network	/man/3/ssl
@@ -44309,27 +43811,22 @@ network	/man/6/attrdb
 network	/man/6/ndb
 network	/man/6/sexprs
 network	/man/8/0intro
-network	/man/8/bootpd
 network	/man/8/cs
 network	/man/8/dns
 network	/man/8/getauthinfo
 network	/man/8/init
 network	/man/8/logind
 network	/man/8/ping
-network	/man/8/rip
 network	/man/8/rstyxd
 network	/man/8/signer
 network	/man/8/srv
 network	/man/8/styxchat
 network	/man/8/svc
-network	/man/8/virgild
 networks	/man/2/keyring-0intro
 networks	/man/2/keyring-certtostr
 networks	/man/2/keyring-getstring
 networks	/man/2/sys-dial
 networks	/man/3/ip
-networks	/man/8/bootpd
-networks	/man/8/rip
 never	/man/1/Mail
 never	/man/1/acme
 never	/man/1/charon
@@ -44690,7 +44187,6 @@ nil	/man/2/draw-example
 nil	/man/2/draw-image
 nil	/man/2/draw-screen
 nil	/man/2/env
-nil	/man/2/ether
 nil	/man/2/exception
 nil	/man/2/factotum
 nil	/man/2/fsproto
@@ -44739,11 +44235,9 @@ nil	/man/2/sys-open
 nil	/man/2/sys-self
 nil	/man/2/sys-stat
 nil	/man/2/sys-tokenize
-nil	/man/2/tftp
 nil	/man/2/tk
 nil	/man/2/tkclient
 nil	/man/2/translate
-nil	/man/2/virgil
 nil	/man/2/w3c-css
 nil	/man/2/w3c-xpointers
 nil	/man/2/wait
@@ -44946,9 +44440,7 @@ no	/man/8/ping
 no	/man/8/plumber
 no	/man/8/rdbgsrv
 no	/man/8/register
-no	/man/8/rip
 no	/man/8/styxchat
-no	/man/8/virgild
 no	/man/9/1copyright
 noaddr	/man/2/ip
 nobios	/man/10/plan9.ini
@@ -45055,7 +44547,6 @@ non	/man/2/sys-byte2char
 non	/man/2/sys-dial
 non	/man/2/sys-export
 non	/man/2/sys-tokenize
-non	/man/2/tftp
 non	/man/2/translate
 non	/man/2/w3c-css
 non	/man/2/w3c-xpointers
@@ -45132,7 +44623,6 @@ none	/man/4/namespace
 none	/man/4/registry
 none	/man/5/stat
 none	/man/6/dis
-none	/man/8/bootpd
 none	/man/8/rstyxd
 none	/man/8/srv
 none	/man/8/styxchat
@@ -45163,7 +44653,6 @@ nor	/man/3/cmd
 nor	/man/3/fs
 nor	/man/3/ip
 nor	/man/6/namespace
-nor	/man/8/rip
 norm	/man/2/math-linalg
 norm1	/man/2/math-linalg
 norm2	/man/2/math-linalg
@@ -45229,7 +44718,6 @@ normally	/man/2/sys-chdir
 normally	/man/2/sys-self
 normally	/man/2/sys-sleep
 normally	/man/2/translate
-normally	/man/2/virgil
 normally	/man/2/wmsrv
 normally	/man/3/cmd
 normally	/man/3/cons
@@ -45242,7 +44730,6 @@ normally	/man/4/keysrv
 normally	/man/6/colour
 normally	/man/6/keys
 normally	/man/6/utf
-normally	/man/8/bootpd
 normally	/man/8/cs
 normally	/man/8/dns
 normally	/man/8/logind
@@ -45364,7 +44851,6 @@ not	/man/2/draw-rect
 not	/man/2/draw-screen
 not	/man/2/encoding
 not	/man/2/env
-not	/man/2/ether
 not	/man/2/exception
 not	/man/2/factotum
 not	/man/2/filepat
@@ -45421,7 +44907,6 @@ not	/man/2/sys-stat
 not	/man/2/timers
 not	/man/2/tk
 not	/man/2/tkclient
-not	/man/2/virgil
 not	/man/2/w3c-css
 not	/man/2/w3c-xpointers
 not	/man/2/wmclient
@@ -45485,7 +44970,6 @@ not	/man/6/sbl
 not	/man/6/sexprs
 not	/man/6/utf
 not	/man/8/applylog
-not	/man/8/bootpd
 not	/man/8/create
 not	/man/8/createsignerkey
 not	/man/8/cs
@@ -45495,7 +44979,6 @@ not	/man/8/kfscmd
 not	/man/8/mkfs
 not	/man/8/plumber
 not	/man/8/rdbgsrv
-not	/man/8/rip
 not	/man/8/rstyxd
 not	/man/8/signer
 not	/man/8/styxchat
@@ -45588,7 +45071,6 @@ noted	/man/1/crypt
 noted	/man/10/dynld
 noted	/man/2/sys-0intro
 notes	/man/2/imagefile
-notes	/man/8/rip
 nothing	/man/1/cmp
 nothing	/man/1/diff
 nothing	/man/1/sh-string
@@ -45953,7 +45435,6 @@ numeric	/man/10/plan9.ini
 numeric	/man/10/print
 numeric	/man/2/styxservers
 numeric	/man/2/sys-print
-numeric	/man/2/virgil
 numeric	/man/3/cons
 numeric	/man/4/tarfs
 numeric	/man/6/font
@@ -46101,7 +45582,6 @@ obtain	/man/2/styxservers
 obtain	/man/2/sys-self
 obtain	/man/6/keys
 obtain	/man/6/sbl
-obtain	/man/8/bootpd
 obtain	/man/8/getauthinfo
 obtain	/man/8/register
 obtain	/man/8/svc
@@ -46420,7 +45900,6 @@ of	/man/2/draw-rect
 of	/man/2/draw-screen
 of	/man/2/encoding
 of	/man/2/env
-of	/man/2/ether
 of	/man/2/exception
 of	/man/2/factotum
 of	/man/2/filepat
@@ -46505,13 +45984,11 @@ of	/man/2/sys-stat
 of	/man/2/sys-tokenize
 of	/man/2/sys-utfbytes
 of	/man/2/sys-werrstr
-of	/man/2/tftp
 of	/man/2/timers
 of	/man/2/tk
 of	/man/2/tkclient
 of	/man/2/translate
 of	/man/2/venti
-of	/man/2/virgil
 of	/man/2/volume
 of	/man/2/w3c-css
 of	/man/2/w3c-xpointers
@@ -46603,7 +46080,6 @@ of	/man/6/utf
 of	/man/7/cddb
 of	/man/8/0intro
 of	/man/8/applylog
-of	/man/8/bootpd
 of	/man/8/changelogin
 of	/man/8/create
 of	/man/8/createsignerkey
@@ -46621,14 +46097,12 @@ of	/man/8/ping
 of	/man/8/plumber
 of	/man/8/rdbgsrv
 of	/man/8/register
-of	/man/8/rip
 of	/man/8/rstyxd
 of	/man/8/signer
 of	/man/8/srv
 of	/man/8/styxchat
 of	/man/8/styxmon
 of	/man/8/svc
-of	/man/8/virgild
 of	/man/9/1copyright
 off	/man/1/charon
 off	/man/1/netkey
@@ -47010,13 +46484,11 @@ on	/man/2/sys-pctl
 on	/man/2/sys-pipe
 on	/man/2/sys-print
 on	/man/2/sys-stat
-on	/man/2/tftp
 on	/man/2/timers
 on	/man/2/tk
 on	/man/2/tkclient
 on	/man/2/translate
 on	/man/2/venti
-on	/man/2/virgil
 on	/man/2/volume
 on	/man/2/w3c-css
 on	/man/2/w3c-xpointers
@@ -47095,7 +46567,6 @@ on	/man/6/utf
 on	/man/7/0intro
 on	/man/8/0intro
 on	/man/8/applylog
-on	/man/8/bootpd
 on	/man/8/changelogin
 on	/man/8/create
 on	/man/8/createsignerkey
@@ -47112,14 +46583,12 @@ on	/man/8/ping
 on	/man/8/plumber
 on	/man/8/rdbgsrv
 on	/man/8/register
-on	/man/8/rip
 on	/man/8/rstyxd
 on	/man/8/signer
 on	/man/8/srv
 on	/man/8/styxchat
 on	/man/8/styxmon
 on	/man/8/svc
-on	/man/8/virgild
 on	/man/9/1copyright
 onametest	/man/2/w3c-xpointers
 once	/man/1/0intro
@@ -47154,9 +46623,7 @@ once	/man/2/sh
 once	/man/2/styxservers
 once	/man/2/sys-dirread
 once	/man/2/sys-pctl
-once	/man/2/tftp
 once	/man/2/tkclient
-once	/man/2/virgil
 once	/man/2/wmclient
 once	/man/2/wmlib
 once	/man/2/xml
@@ -47310,7 +46777,6 @@ one	/man/2/sys-print
 one	/man/2/sys-read
 one	/man/2/sys-self
 one	/man/2/sys-stat
-one	/man/2/tftp
 one	/man/2/tk
 one	/man/2/tkclient
 one	/man/2/translate
@@ -47379,10 +46845,8 @@ one	/man/8/dns
 one	/man/8/init
 one	/man/8/mkfs
 one	/man/8/ping
-one	/man/8/rip
 one	/man/8/styxchat
 one	/man/8/svc
-one	/man/8/virgild
 oneg	/man/2/w3c-xpointers
 ones	/man/10/intrenable
 ones	/man/10/plan9.ini
@@ -47503,7 +46967,6 @@ only	/man/2/sys-pipe
 only	/man/2/sys-print
 only	/man/2/sys-seek
 only	/man/2/sys-stat
-only	/man/2/tftp
 only	/man/2/tkclient
 only	/man/2/w3c-xpointers
 only	/man/2/wmclient
@@ -47555,7 +47018,6 @@ only	/man/6/sexprs
 only	/man/6/users
 only	/man/6/utf
 only	/man/8/applylog
-only	/man/8/bootpd
 only	/man/8/changelogin
 only	/man/8/create
 only	/man/8/createsignerkey
@@ -47565,7 +47027,6 @@ only	/man/8/kfscmd
 only	/man/8/mkfs
 only	/man/8/ping
 only	/man/8/register
-only	/man/8/rip
 only	/man/8/svc
 only	/man/9/1copyright
 onodetype	/man/2/w3c-xpointers
@@ -47667,7 +47128,6 @@ open	/man/2/sys-print
 open	/man/2/sys-read
 open	/man/2/sys-seek
 open	/man/2/sys-stat
-open	/man/2/tftp
 open	/man/2/wait
 open	/man/2/xml
 open	/man/3/arch
@@ -48022,7 +47482,6 @@ option	/man/2/prof
 option	/man/2/readdir
 option	/man/2/styxservers
 option	/man/2/sys-chdir
-option	/man/2/virgil
 option	/man/3/cmd
 option	/man/3/dbg
 option	/man/3/env
@@ -48044,7 +47503,6 @@ option	/man/6/namespace
 option	/man/6/sbl
 option	/man/7/cddb
 option	/man/8/applylog
-option	/man/8/bootpd
 option	/man/8/changelogin
 option	/man/8/create
 option	/man/8/createsignerkey
@@ -48056,7 +47514,6 @@ option	/man/8/kfscmd
 option	/man/8/mkfs
 option	/man/8/plumber
 option	/man/8/rdbgsrv
-option	/man/8/rip
 option	/man/8/srv
 option	/man/8/styxchat
 optional	/man/1/acme
@@ -48111,7 +47568,6 @@ optionally	/man/1/du
 optionally	/man/1/echo
 optionally	/man/10/atoi
 optionally	/man/10/conf
-optionally	/man/2/ether
 optionally	/man/2/spki-verifier
 optionally	/man/2/sys-dirread
 optionally	/man/2/sys-export
@@ -48330,7 +47786,6 @@ or	/man/2/draw-pointer
 or	/man/2/draw-screen
 or	/man/2/encoding
 or	/man/2/env
-or	/man/2/ether
 or	/man/2/exception
 or	/man/2/factotum
 or	/man/2/filepat
@@ -48394,7 +47849,6 @@ or	/man/2/sys-self
 or	/man/2/sys-sleep
 or	/man/2/sys-stat
 or	/man/2/sys-tokenize
-or	/man/2/tftp
 or	/man/2/timers
 or	/man/2/tk
 or	/man/2/tkclient
@@ -48471,7 +47925,6 @@ or	/man/6/sexprs
 or	/man/6/translate
 or	/man/6/utf
 or	/man/8/applylog
-or	/man/8/bootpd
 or	/man/8/create
 or	/man/8/createsignerkey
 or	/man/8/cs
@@ -48480,7 +47933,6 @@ or	/man/8/init
 or	/man/8/mkfs
 or	/man/8/plumber
 or	/man/8/register
-or	/man/8/rip
 or	/man/8/rstyxd
 or	/man/8/shutdown
 or	/man/8/signer
@@ -48825,7 +48277,6 @@ other	/man/2/draw-image
 other	/man/2/draw-rect
 other	/man/2/draw-screen
 other	/man/2/env
-other	/man/2/ether
 other	/man/2/factotum
 other	/man/2/filter
 other	/man/2/filter-slip
@@ -48860,7 +48311,6 @@ other	/man/2/sys-open
 other	/man/2/sys-pctl
 other	/man/2/sys-pipe
 other	/man/2/sys-stat
-other	/man/2/tftp
 other	/man/2/tk
 other	/man/2/tkclient
 other	/man/2/venti
@@ -48910,7 +48360,6 @@ other	/man/6/regexp
 other	/man/6/sbl
 other	/man/6/sexprs
 other	/man/7/cddb
-other	/man/8/bootpd
 other	/man/8/cs
 other	/man/8/getauthinfo
 other	/man/8/ping
@@ -48945,7 +48394,6 @@ others	/man/6/keys
 others	/man/6/proto
 others	/man/6/sbl
 others	/man/6/users
-others	/man/8/rip
 others	/man/8/styxchat
 others	/man/8/svc
 others	/man/9/1copyright
@@ -49037,7 +48485,6 @@ otherwise	/man/2/sys-fversion
 otherwise	/man/2/sys-print
 otherwise	/man/2/sys-read
 otherwise	/man/2/sys-remove
-otherwise	/man/2/tftp
 otherwise	/man/2/tk
 otherwise	/man/2/venti
 otherwise	/man/2/w3c-xpointers
@@ -49116,7 +48563,6 @@ out	/man/5/stat
 out	/man/6/sexprs
 out	/man/8/create
 out	/man/8/mkfs
-out	/man/8/virgild
 out	/man/9/1copyright
 outb	/man/10/inb
 outcome	/man/10/strcat
@@ -49237,7 +48683,6 @@ output	/man/6/colour
 output	/man/6/man
 output	/man/7/cddb
 output	/man/8/applylog
-output	/man/8/bootpd
 output	/man/8/create
 output	/man/8/cs
 output	/man/8/mkfs
@@ -49381,7 +48826,6 @@ own	/man/6/ndb
 own	/man/8/dns
 own	/man/8/getauthinfo
 own	/man/8/kfscmd
-own	/man/8/rip
 own	/man/8/srv
 owned	/man/1/kill
 owned	/man/2/styxservers
@@ -49513,7 +48957,6 @@ p	/man/6/login
 p	/man/6/man
 p	/man/6/sbl
 p	/man/8/applylog
-p	/man/8/bootpd
 p	/man/8/create
 p	/man/8/httpd
 p	/man/8/kfscmd
@@ -49554,13 +48997,10 @@ packedsize	/man/2/styx
 packet	/man/10/qio
 packet	/man/3/ip
 packet	/man/8/ping
-packet	/man/8/rip
 packets	/man/10/plan9.ini
-packets	/man/2/ether
 packets	/man/2/ip
 packets	/man/3/ip
 packets	/man/8/ping
-packets	/man/8/rip
 packing	/man/1/dd
 packing	/man/10/styx
 packing	/man/2/venti
@@ -49634,7 +49074,6 @@ pair	/man/2/attrdb
 pair	/man/2/dbm
 pair	/man/2/dict
 pair	/man/2/encoding
-pair	/man/2/ether
 pair	/man/2/hash
 pair	/man/2/keyring-0intro
 pair	/man/2/keyring-gensk
@@ -49833,7 +49272,6 @@ parse	/man/1/yacc
 parse	/man/10/parsecmd
 parse	/man/2/arg
 parse	/man/2/cfg
-parse	/man/2/ether
 parse	/man/2/ip
 parse	/man/2/math-0intro
 parse	/man/2/rfc822
@@ -49937,10 +49375,8 @@ part	/man/6/ndb
 part	/man/6/plumbing
 part	/man/6/regexp
 part	/man/6/sbl
-part	/man/8/bootpd
 part	/man/8/cs
 part	/man/8/httpd
-part	/man/8/virgild
 partial	/man/1/cprof
 partial	/man/1/dd
 partial	/man/1/tsort
@@ -50221,7 +49657,6 @@ path	/man/2/draw-rect
 path	/man/2/draw-screen
 path	/man/2/encoding
 path	/man/2/env
-path	/man/2/ether
 path	/man/2/exception
 path	/man/2/factotum
 path	/man/2/filepat
@@ -50303,13 +49738,11 @@ path	/man/2/sys-stat
 path	/man/2/sys-tokenize
 path	/man/2/sys-utfbytes
 path	/man/2/sys-werrstr
-path	/man/2/tftp
 path	/man/2/timers
 path	/man/2/tk
 path	/man/2/tkclient
 path	/man/2/translate
 path	/man/2/venti
-path	/man/2/virgil
 path	/man/2/volume
 path	/man/2/w3c-css
 path	/man/2/w3c-xpointers
@@ -50333,7 +49766,6 @@ path	/man/5/walk
 path	/man/6/namespace
 path	/man/6/proto
 path	/man/8/applylog
-path	/man/8/bootpd
 path	/man/8/create
 path	/man/8/mkfs
 path	/man/8/srv
@@ -50347,7 +49779,6 @@ pathname	/man/2/names
 pathname	/man/2/sys-0intro
 pathname	/man/2/sys-dial
 pathnames	/man/1/0intro
-pathnames	/man/8/bootpd
 pathonly	/man/10/newchan
 pathprefix	/man/2/print
 paths	/man/1/fs
@@ -50494,7 +49925,6 @@ pd	/man/6/plumbing
 pd	/man/6/sbl
 pd	/man/6/sexprs
 pd	/man/8/applylog
-pd	/man/8/bootpd
 pd	/man/8/create
 pd	/man/8/dns
 pd	/man/8/kfscmd
@@ -50639,8 +50069,6 @@ period	/man/5/stat
 period	/man/5/version
 periodic	/man/2/draw-image
 periodically	/man/10/kbdputc
-periodically	/man/2/tftp
-periodically	/man/8/rip
 periods	/man/2/spki
 perle	/man/10/plan9.ini
 perm	/man/10/dev
@@ -50691,7 +50119,6 @@ permission	/man/5/open
 permission	/man/5/remove
 permission	/man/5/stat
 permission	/man/5/walk
-permission	/man/8/bootpd
 permission	/man/8/kfscmd
 permission	/man/9/1copyright
 permissions	/man/1/chmod
@@ -51343,7 +50770,6 @@ port	/man/2/sys-export
 port	/man/2/sys-file2chan
 port	/man/2/sys-iounit
 port	/man/2/sys-print
-port	/man/2/virgil
 port	/man/3/arch
 port	/man/3/audio
 port	/man/3/boot
@@ -51373,14 +50799,12 @@ port	/man/4/ftpfs
 port	/man/4/namespace
 port	/man/6/ndb
 port	/man/6/plumbing
-port	/man/8/bootpd
 port	/man/8/cs
 port	/man/8/httpd
 port	/man/8/logind
 port	/man/8/plumber
 port	/man/8/rdbgsrv
 port	/man/8/svc
-port	/man/8/virgild
 portability	/man/10/inb
 portability	/man/6/colour
 portable	/man/1/0intro
@@ -51419,7 +50843,6 @@ ports	/man/4/ftpfs
 ports	/man/8/signer
 pos	/man/2/debug
 pos	/man/6/sbl
-pose	/man/2/virgil
 position	/man/1/0intro
 position	/man/1/charon
 position	/man/1/cmp
@@ -51724,7 +51147,6 @@ pp	/man/2/draw-image
 pp	/man/2/draw-point
 pp	/man/2/draw-pointer
 pp	/man/2/encoding
-pp	/man/2/ether
 pp	/man/2/exception
 pp	/man/2/factotum
 pp	/man/2/filepat
@@ -51802,12 +51224,10 @@ pp	/man/2/sys-self
 pp	/man/2/sys-sleep
 pp	/man/2/sys-stat
 pp	/man/2/sys-tokenize
-pp	/man/2/tftp
 pp	/man/2/timers
 pp	/man/2/tk
 pp	/man/2/tkclient
 pp	/man/2/translate
-pp	/man/2/virgil
 pp	/man/2/volume
 pp	/man/2/w3c-css
 pp	/man/2/w3c-xpointers
@@ -51896,7 +51316,6 @@ pp	/man/6/users
 pp	/man/6/utf
 pp	/man/7/cddb
 pp	/man/8/applylog
-pp	/man/8/bootpd
 pp	/man/8/changelogin
 pp	/man/8/create
 pp	/man/8/createsignerkey
@@ -51913,14 +51332,12 @@ pp	/man/8/ping
 pp	/man/8/plumber
 pp	/man/8/rdbgsrv
 pp	/man/8/register
-pp	/man/8/rip
 pp	/man/8/rstyxd
 pp	/man/8/shutdown
 pp	/man/8/signer
 pp	/man/8/srv
 pp	/man/8/styxchat
 pp	/man/8/svc
-pp	/man/8/virgild
 pp	/man/9/1copyright
 ppath	/man/10/styxserver
 ppp	/man/3/ip
@@ -52013,7 +51430,6 @@ prefab	/man/2/draw-0intro
 prefab	/man/2/draw-context
 prefab	/man/2/volume
 preferable	/man/10/qio
-preferable	/man/8/rip
 preferred	/man/1/deb
 preferred	/man/1/tcs
 preferred	/man/2/ip
@@ -52354,13 +51770,11 @@ print	/man/2/sets
 print	/man/2/sys-0intro
 print	/man/2/sys-print
 print	/man/2/sys-werrstr
-print	/man/2/tftp
 print	/man/2/w3c-css
 print	/man/3/cons
 print	/man/4/dossrv
 print	/man/4/registry
 print	/man/8/applylog
-print	/man/8/bootpd
 print	/man/8/changelogin
 print	/man/8/create
 print	/man/8/cs
@@ -52480,7 +51894,6 @@ prints	/man/2/sys-print
 prints	/man/3/cons
 prints	/man/4/registry
 prints	/man/7/cddb
-prints	/man/8/bootpd
 prints	/man/8/create
 prints	/man/8/cs
 prints	/man/8/dns
@@ -52528,7 +51941,6 @@ privately	/man/2/asn1
 privilege	/man/1/wm
 privileged	/man/10/eve
 privileged	/man/3/cons
-privileged	/man/8/bootpd
 privileges	/man/10/eve
 privileges	/man/3/ip
 privileges	/man/5/0intro
@@ -53018,7 +52430,6 @@ programs	/man/8/httpd
 progress	/man/1/charon
 progress	/man/1/webgrab
 progress	/man/2/complete
-progress	/man/2/tftp
 progresses	/man/1/charon
 projection	/man/2/geodesy
 projections	/man/2/geodesy
@@ -53152,7 +52563,6 @@ protocol	/man/2/sys-fauth
 protocol	/man/2/sys-fversion
 protocol	/man/2/sys-iounit
 protocol	/man/2/sys-pipe
-protocol	/man/2/tftp
 protocol	/man/3/0intro
 protocol	/man/3/dbg
 protocol	/man/3/draw
@@ -53172,11 +52582,9 @@ protocol	/man/5/walk
 protocol	/man/6/auth
 protocol	/man/6/login
 protocol	/man/6/ndb
-protocol	/man/8/bootpd
 protocol	/man/8/cs
 protocol	/man/8/httpd
 protocol	/man/8/logind
-protocol	/man/8/rip
 protocol	/man/8/styxchat
 protocols	/man/1/charon
 protocols	/man/10/allocb
@@ -53345,7 +52753,6 @@ provides	/man/2/draw-context
 provides	/man/2/draw-image
 provides	/man/2/draw-screen
 provides	/man/2/env
-provides	/man/2/ether
 provides	/man/2/exception
 provides	/man/2/filter-slip
 provides	/man/2/fsproto
@@ -53384,7 +52791,6 @@ provides	/man/2/tk
 provides	/man/2/tkclient
 provides	/man/2/translate
 provides	/man/2/venti
-provides	/man/2/virgil
 provides	/man/2/volume
 provides	/man/2/wait
 provides	/man/2/wmclient
@@ -53602,7 +53008,6 @@ q	/man/4/acme
 q	/man/4/ftpfs
 q	/man/4/registry
 q	/man/6/keyboard
-q	/man/8/bootpd
 q	/man/8/kfscmd
 q	/man/8/ping
 qbread	/man/10/qio
@@ -53705,7 +53110,6 @@ qualified	/man/2/translate
 qualified	/man/4/acme
 qualified	/man/6/dis
 qualified	/man/6/sbl
-qualified	/man/8/bootpd
 qualifier	/man/2/0intro
 qualifier	/man/2/w3c-css
 qualifiers	/man/2/w3c-css
@@ -53750,7 +53154,6 @@ question	/man/1/prof
 question	/man/10/styxserver
 question	/man/2/styxservers
 question	/man/2/sys-byte2char
-question	/man/2/virgil
 questionable	/man/2/rand
 queue	/man/10/allocb
 queue	/man/10/kbdputc
@@ -53774,7 +53177,6 @@ quick	/man/4/namespace
 quickly	/man/1/charon
 quiet	/man/2/math-fp
 quiet	/man/3/audio
-quiet	/man/8/bootpd
 quiet	/man/8/kfscmd
 quietly	/man/1/read
 quit	/man/1/p
@@ -53934,7 +53336,6 @@ r	/man/6/man
 r	/man/6/sbl
 r	/man/6/sexprs
 r	/man/8/applylog
-r	/man/8/bootpd
 r	/man/8/create
 r	/man/8/dns
 r	/man/8/kfscmd
@@ -54116,7 +53517,6 @@ rather	/man/6/font
 rather	/man/6/keys
 rather	/man/8/create
 rather	/man/8/mkfs
-rather	/man/8/rip
 ratio	/man/1/gzip
 ratio	/man/1/units
 ratio	/man/2/draw-display
@@ -54214,7 +53614,6 @@ rb	/man/2/sys-file2chan
 rb	/man/2/sys-pipe
 rb	/man/2/sys-print
 rb	/man/2/sys-stat
-rb	/man/2/tftp
 rb	/man/2/tk
 rb	/man/2/w3c-css
 rb	/man/2/w3c-xpointers
@@ -54246,14 +53645,12 @@ rb	/man/6/plumbing
 rb	/man/6/proto
 rb	/man/6/regexp
 rb	/man/6/sexprs
-rb	/man/8/bootpd
 rb	/man/8/create
 rb	/man/8/cs
 rb	/man/8/init
 rb	/man/8/kfscmd
 rb	/man/8/mkfs
 rb	/man/8/ping
-rb	/man/8/rip
 rb	/man/8/shutdown
 rb	/man/8/styxchat
 rblock	/man/1/sh-file2chan
@@ -54278,7 +53675,6 @@ rclunk	/man/5/clunk
 rclunk	/man/8/styxchat
 rcmd	/man/1/os
 rcmd	/man/1/rcmd
-rcmd	/man/8/virgild
 rcondbreak	/man/3/dbg
 rcreate	/man/10/styx
 rcreate	/man/5/0intro
@@ -54406,7 +53802,6 @@ read	/man/2/diskblocks
 read	/man/2/draw-display
 read	/man/2/draw-font
 read	/man/2/draw-image
-read	/man/2/ether
 read	/man/2/exception
 read	/man/2/fsproto
 read	/man/2/imagefile
@@ -54484,7 +53879,6 @@ read	/man/6/ndb
 read	/man/6/proto
 read	/man/6/sexprs
 read	/man/8/applylog
-read	/man/8/bootpd
 read	/man/8/create
 read	/man/8/cs
 read	/man/8/dns
@@ -54596,7 +53990,6 @@ reading	/man/6/image
 reading	/man/6/ndb
 reading	/man/8/kfscmd
 reading	/man/8/rdbgsrv
-reading	/man/8/rip
 reading	/man/8/styxchat
 readipifc	/man/2/ip
 readjpg	/man/2/imagefile
@@ -54647,7 +54040,6 @@ reads	/man/10/plan9.ini
 reads	/man/10/qio
 reads	/man/2/devpointer
 reads	/man/2/dis
-reads	/man/2/ether
 reads	/man/2/fsproto
 reads	/man/2/keyring-auth
 reads	/man/2/keyring-getmsg
@@ -54797,7 +54189,6 @@ receive	/man/2/styx
 receive	/man/2/styxpersist
 receive	/man/2/sys-bind
 receive	/man/2/sys-file2chan
-receive	/man/2/tftp
 receive	/man/2/tkclient
 receive	/man/2/wmsrv
 receive	/man/3/cmd
@@ -54817,7 +54208,6 @@ received	/man/2/styxconv
 received	/man/2/styxpersist
 received	/man/2/sys-dial
 received	/man/2/sys-file2chan
-received	/man/2/tftp
 received	/man/2/tkclient
 received	/man/2/wmclient
 received	/man/2/wmlib
@@ -54843,7 +54233,6 @@ receives	/man/2/styx
 receives	/man/2/sys-export
 receives	/man/2/sys-file2chan
 receives	/man/2/tk
-receives	/man/2/virgil
 receives	/man/2/volume
 receives	/man/3/dbg
 receives	/man/5/0intro
@@ -54851,7 +54240,6 @@ receives	/man/6/login
 receives	/man/6/utf
 receives	/man/8/logind
 receives	/man/8/plumber
-receives	/man/8/virgild
 receiving	/man/10/memory
 receiving	/man/2/keyring-getstring
 receiving	/man/2/security-0intro
@@ -54859,7 +54247,6 @@ receiving	/man/2/sys-0intro
 receiving	/man/3/ip
 receiving	/man/3/prog
 receiving	/man/5/0intro
-receiving	/man/8/bootpd
 recent	/man/1/acme
 recent	/man/1/ls
 recent	/man/1/mk
@@ -54928,7 +54315,6 @@ record	/man/2/wmsrv
 record	/man/3/pointer
 record	/man/3/ssl
 record	/man/4/dbfs
-record	/man/8/rip
 recorded	/man/1/cprof
 recorded	/man/2/sys-stat
 recorded	/man/3/audio
@@ -55148,7 +54534,6 @@ ref	/man/2/sys-read
 ref	/man/2/sys-seek
 ref	/man/2/sys-self
 ref	/man/2/sys-stat
-ref	/man/2/tftp
 ref	/man/2/timers
 ref	/man/2/tk
 ref	/man/2/tkclient
@@ -55183,7 +54568,6 @@ refer	/man/3/ip
 refer	/man/5/0intro
 refer	/man/6/ndb
 refer	/man/6/plumbing
-refer	/man/8/bootpd
 refer	/man/8/srv
 reference	/man/1/0intro
 reference	/man/1/charon
@@ -55369,7 +54753,6 @@ register	/man/2/crc
 register	/man/2/math-fp
 register	/man/2/registries
 register	/man/2/security-0intro
-register	/man/2/virgil
 register	/man/3/dbg
 register	/man/4/cpu
 register	/man/4/registry
@@ -55474,7 +54857,6 @@ relative	/man/6/man
 relative	/man/6/proto
 relative	/man/6/sbl
 relative	/man/8/applylog
-relative	/man/8/bootpd
 relatives	/man/10/print
 relaxed	/man/5/stat
 release	/man/1/acme
@@ -55624,7 +55006,6 @@ remote	/man/4/lockfs
 remote	/man/4/namespace
 remote	/man/5/attach
 remote	/man/6/namespace
-remote	/man/8/bootpd
 remote	/man/8/getauthinfo
 remote	/man/8/init
 remote	/man/8/mkfs
@@ -55632,7 +55013,6 @@ remote	/man/8/rdbgsrv
 remote	/man/8/rstyxd
 remote	/man/8/signer
 remote	/man/8/svc
-remote	/man/8/virgild
 remotedir	/man/6/namespace
 remotefile	/man/1/uuencode
 remotely	/man/1/cpu
@@ -55852,9 +55232,6 @@ replies	/man/2/wmsrv
 replies	/man/3/ip
 replies	/man/3/mnt
 replies	/man/5/0intro
-replies	/man/8/bootpd
-replies	/man/8/rip
-replies	/man/8/virgild
 reply	/man/1/Mail
 reply	/man/1/acme
 reply	/man/1/sh-file2chan
@@ -55863,7 +55240,6 @@ reply	/man/2/filter
 reply	/man/2/styx
 reply	/man/2/styxservers
 reply	/man/2/sys-file2chan
-reply	/man/2/virgil
 reply	/man/2/wmsrv
 reply	/man/3/dbg
 reply	/man/3/ip
@@ -55875,7 +55251,6 @@ reply	/man/5/open
 reply	/man/5/read
 reply	/man/5/stat
 reply	/man/5/version
-reply	/man/8/bootpd
 reply	/man/8/ping
 reply	/man/8/rdbgsrv
 report	/man/1/date
@@ -55960,7 +55335,6 @@ representation	/man/2/debug
 representation	/man/2/dis
 representation	/man/2/draw-0intro
 representation	/man/2/draw-display
-representation	/man/2/ether
 representation	/man/2/imagefile
 representation	/man/2/ip
 representation	/man/2/keyring-auth
@@ -56197,7 +55571,6 @@ request	/man/2/sys-fversion
 request	/man/2/timers
 request	/man/2/tk
 request	/man/2/tkclient
-request	/man/2/virgil
 request	/man/2/wmclient
 request	/man/2/wmlib
 request	/man/2/wmsrv
@@ -56218,12 +55591,10 @@ request	/man/5/version
 request	/man/5/walk
 request	/man/6/man
 request	/man/6/ndb
-request	/man/8/bootpd
 request	/man/8/cs
 request	/man/8/getauthinfo
 request	/man/8/ping
 request	/man/8/rstyxd
-request	/man/8/virgild
 requested	/man/1/charon
 requested	/man/1/sh-file2chan
 requested	/man/1/wm
@@ -56247,15 +55618,12 @@ requested	/man/5/0intro
 requested	/man/5/attach
 requested	/man/5/read
 requested	/man/5/walk
-requested	/man/8/bootpd
 requested	/man/8/httpd
 requested	/man/8/signer
 requesting	/man/10/qlock
 requesting	/man/2/styxservers
 requesting	/man/6/keys
-requesting	/man/8/bootpd
 requesting	/man/8/signer
-requesting	/man/8/virgild
 requests	/man/1/sh-file2chan
 requests	/man/1/sh-tk
 requests	/man/1/wm
@@ -56288,16 +55656,13 @@ requests	/man/5/0intro
 requests	/man/5/version
 requests	/man/6/man
 requests	/man/8/applylog
-requests	/man/8/bootpd
 requests	/man/8/cs
 requests	/man/8/getauthinfo
 requests	/man/8/httpd
 requests	/man/8/logind
 requests	/man/8/ping
 requests	/man/8/plumber
-requests	/man/8/rip
 requests	/man/8/signer
-requests	/man/8/virgild
 require	/man/10/plan9.ini
 require	/man/2/0intro
 require	/man/2/factotum
@@ -56386,7 +55751,6 @@ requires	/man/5/open
 requires	/man/5/stat
 requires	/man/6/colour
 requires	/man/6/image
-requires	/man/8/virgild
 requiring	/man/10/allocb
 requiring	/man/10/error
 requiring	/man/2/draw-image
@@ -56399,7 +55763,6 @@ reread	/man/2/bufio
 reread	/man/3/cons
 reread	/man/6/ndb
 rereading	/man/2/draw-font
-rereads	/man/8/bootpd
 rerouting	/man/3/ip
 rerr	/man/3/dbg
 rerror	/man/1/sh-file2chan
@@ -56478,13 +55841,10 @@ resizing	/man/2/draw-context
 resolution	/man/2/print
 resolution	/man/2/srv
 resolution	/man/2/sys-millisec
-resolution	/man/2/virgil
 resolution	/man/3/ip
 resolution	/man/6/colour
 resolve	/man/8/applylog
 resolved	/man/1/fs
-resolved	/man/2/virgil
-resolver	/man/2/virgil
 resolver	/man/6/ndb
 resolver	/man/8/dns
 resolvers	/man/6/ndb
@@ -56570,7 +55930,6 @@ responds	/man/2/styxservers
 responds	/man/3/ip
 responds	/man/5/0intro
 responds	/man/5/version
-responds	/man/8/bootpd
 responds	/man/8/getauthinfo
 response	/man/1/netkey
 response	/man/1/wm
@@ -56590,7 +55949,6 @@ response	/man/7/cddb
 response	/man/8/plumber
 response	/man/8/rstyxd
 response	/man/8/signer
-response	/man/8/virgild
 responses	/man/2/tk
 responses	/man/5/0intro
 responsibility	/man/10/dynld
@@ -56652,8 +56010,6 @@ restricted	/man/3/sign
 restricted	/man/5/0intro
 restricted	/man/6/sexprs
 restricted	/man/8/applylog
-restricted	/man/8/bootpd
-restricted	/man/8/rip
 restricted	/man/9/1copyright
 restriction	/man/2/asn1
 restriction	/man/2/spki
@@ -56828,7 +56184,6 @@ retransmission	/man/10/allocb
 retransmission	/man/10/qio
 retransmissions	/man/2/keyring-rc4
 retransmitted	/man/3/ip
-retransmitting	/man/2/virgil
 retries	/man/10/malloc
 retrieval	/man/1/charon
 retrieve	/man/1/charon
@@ -57068,7 +56423,6 @@ returning	/man/2/styxservers
 returning	/man/2/sys-dirread
 returning	/man/2/sys-read
 returning	/man/2/sys-sleep
-returning	/man/2/tftp
 returning	/man/2/translate
 returning	/man/2/venti
 returning	/man/2/w3c-xpointers
@@ -57129,7 +56483,6 @@ returns	/man/2/draw-point
 returns	/man/2/draw-rect
 returns	/man/2/encoding
 returns	/man/2/env
-returns	/man/2/ether
 returns	/man/2/exception
 returns	/man/2/factotum
 returns	/man/2/filepat
@@ -57198,13 +56551,11 @@ returns	/man/2/sys-sleep
 returns	/man/2/sys-tokenize
 returns	/man/2/sys-utfbytes
 returns	/man/2/sys-werrstr
-returns	/man/2/tftp
 returns	/man/2/timers
 returns	/man/2/tk
 returns	/man/2/tkclient
 returns	/man/2/translate
 returns	/man/2/venti
-returns	/man/2/virgil
 returns	/man/2/w3c-css
 returns	/man/2/w3c-xpointers
 returns	/man/2/wait
@@ -57282,12 +56633,10 @@ rewritten	/man/4/dbfs
 rf	/man/1/tail
 rfc	/man/2/xml
 rfc1055	/man/2/filter-slip
-rfc1058	/man/8/rip
 rfc1942	/man/1/charon
 rfc2045	/man/2/rfc822
 rfc2104	/man/2/keyring-sha1
 rfc2373	/man/2/ip
-rfc2453	/man/8/rip
 rfc2822	/man/2/rfc822
 rfc3548	/man/2/encoding
 rfc822	/man/2/rfc822
@@ -57359,7 +56708,6 @@ ri	/man/2/sys-print
 ri	/man/2/tk
 ri	/man/2/tkclient
 ri	/man/2/venti
-ri	/man/2/virgil
 ri	/man/2/xml
 ri	/man/3/0intro
 ri	/man/3/draw
@@ -57415,7 +56763,6 @@ rijndael	/man/2/keyring-crypt
 rimagefile	/man/2/imagefile
 rings	/man/2/translate
 rint	/man/2/math-fp
-rip	/man/8/rip
 rise	/man/1/charon
 rivest	/man/2/sexprs
 rivest	/man/6/sexprs
@@ -57444,7 +56791,6 @@ road	/man/6/attrdb
 rob	/man/1/acme
 rob	/man/1/yacc
 rock	/man/4/dossrv
-rogue	/man/8/rip
 role	/man/6/login
 rollback	/man/10/odbc
 rolled	/man/1/0intro
@@ -57542,17 +56888,13 @@ route	/man/2/plumbmsg
 route	/man/3/ip
 route	/man/6/plumbing
 route	/man/8/plumber
-route	/man/8/rip
 routed	/man/2/plumbmsg
 routed	/man/8/plumber
-routed	/man/8/rip
 router	/man/2/ip
-router	/man/8/rip
 routerlt	/man/2/ip
 routers	/man/2/ip
 routes	/man/3/ip
 routes	/man/8/init
-routes	/man/8/rip
 routine	/man/1/yacc
 routine	/man/10/devattach
 routine	/man/10/lock
@@ -57611,7 +56953,6 @@ routing	/man/2/ip
 routing	/man/2/plumbmsg
 routing	/man/3/ip
 routing	/man/8/plumber
-routing	/man/8/rip
 row	/man/1/sh-csv
 row	/man/6/image
 rows	/man/6/image
@@ -57874,10 +57215,8 @@ running	/man/8/createsignerkey
 running	/man/8/dns
 running	/man/8/rdbgsrv
 running	/man/8/register
-running	/man/8/rip
 running	/man/8/signer
 running	/man/8/svc
-running	/man/8/virgild
 runpipeline	/man/1/stack
 runs	/man/1/acme
 runs	/man/1/acme-misc
@@ -57904,7 +57243,6 @@ runs	/man/3/fs
 runs	/man/3/ip
 runs	/man/4/dbfs
 runs	/man/6/keys
-runs	/man/8/bootpd
 runs	/man/8/getauthinfo
 runs	/man/8/register
 runs	/man/8/svc
@@ -58049,7 +57387,6 @@ s	/man/2/draw-pointer
 s	/man/2/draw-rect
 s	/man/2/draw-screen
 s	/man/2/encoding
-s	/man/2/ether
 s	/man/2/factotum
 s	/man/2/filepat
 s	/man/2/fsproto
@@ -58105,7 +57442,6 @@ s	/man/2/sys-self
 s	/man/2/sys-stat
 s	/man/2/sys-tokenize
 s	/man/2/sys-werrstr
-s	/man/2/tftp
 s	/man/2/tk
 s	/man/2/tkclient
 s	/man/2/translate
@@ -58177,7 +57513,6 @@ s	/man/6/sexprs
 s	/man/6/users
 s	/man/7/cddb
 s	/man/8/applylog
-s	/man/8/bootpd
 s	/man/8/create
 s	/man/8/createsignerkey
 s	/man/8/cs
@@ -58192,12 +57527,10 @@ s	/man/8/ping
 s	/man/8/plumber
 s	/man/8/rdbgsrv
 s	/man/8/register
-s	/man/8/rip
 s	/man/8/rstyxd
 s	/man/8/signer
 s	/man/8/srv
 s	/man/8/styxchat
-s	/man/8/virgild
 s	/man/9/1copyright
 s0	/man/2/keyring-0intro
 s0	/man/2/math-fp
@@ -58305,7 +57638,6 @@ same	/man/2/draw-0intro
 same	/man/2/draw-display
 same	/man/2/draw-image
 same	/man/2/draw-rect
-same	/man/2/ether
 same	/man/2/filter-deflate
 same	/man/2/fsproto
 same	/man/2/hash
@@ -58460,7 +57792,6 @@ say	/man/2/wmclient
 say	/man/2/wmlib
 say	/man/2/wmsrv
 say	/man/2/xml
-say	/man/8/rip
 saying	/man/1/fortune
 says	/man/2/spki
 says	/man/2/sys-open
@@ -58676,7 +58007,6 @@ second	/man/2/sexprs
 second	/man/2/sys-dial
 second	/man/2/sys-fauth
 second	/man/2/sys-print
-second	/man/2/virgil
 second	/man/2/xml
 second	/man/3/indir
 second	/man/3/ip
@@ -58692,7 +58022,6 @@ second	/man/6/plumbing
 second	/man/8/create
 second	/man/8/cs
 second	/man/8/ping
-second	/man/8/rip
 second	/man/8/styxchat
 secondary	/man/6/colour
 secondary	/man/6/man
@@ -58708,7 +58037,6 @@ seconds	/man/2/daytime
 seconds	/man/2/geodesy
 seconds	/man/2/rfc822
 seconds	/man/2/sys-stat
-seconds	/man/2/virgil
 seconds	/man/2/volume
 seconds	/man/3/cap
 seconds	/man/3/prog
@@ -58846,7 +58174,6 @@ security	/man/2/security-ssl
 security	/man/2/styxservers
 security	/man/2/sys-export
 security	/man/2/sys-fauth
-security	/man/2/virgil
 security	/man/3/cap
 security	/man/3/fs
 security	/man/3/mnt
@@ -59018,7 +58345,6 @@ see	/man/2/draw-pointer
 see	/man/2/draw-screen
 see	/man/2/encoding
 see	/man/2/env
-see	/man/2/ether
 see	/man/2/exception
 see	/man/2/factotum
 see	/man/2/filepat
@@ -59095,12 +58421,10 @@ see	/man/2/sys-stat
 see	/man/2/sys-tokenize
 see	/man/2/sys-utfbytes
 see	/man/2/sys-werrstr
-see	/man/2/tftp
 see	/man/2/timers
 see	/man/2/tk
 see	/man/2/tkclient
 see	/man/2/translate
-see	/man/2/virgil
 see	/man/2/volume
 see	/man/2/w3c-css
 see	/man/2/w3c-xpointers
@@ -59188,7 +58512,6 @@ see	/man/6/users
 see	/man/6/utf
 see	/man/7/cddb
 see	/man/8/applylog
-see	/man/8/bootpd
 see	/man/8/changelogin
 see	/man/8/create
 see	/man/8/createsignerkey
@@ -59206,7 +58529,6 @@ see	/man/8/ping
 see	/man/8/plumber
 see	/man/8/rdbgsrv
 see	/man/8/register
-see	/man/8/rip
 see	/man/8/rstyxd
 see	/man/8/shutdown
 see	/man/8/signer
@@ -59214,7 +58536,6 @@ see	/man/8/srv
 see	/man/8/styxchat
 see	/man/8/styxmon
 see	/man/8/svc
-see	/man/8/virgild
 seed	/man/2/keyring-ipint
 seed	/man/2/keyring-rc4
 seed	/man/2/rand
@@ -59422,7 +58743,6 @@ send	/man/5/0intro
 send	/man/5/open
 send	/man/6/login
 send	/man/6/ndb
-send	/man/8/bootpd
 send	/man/8/ping
 sender	/man/1/Mail
 sender	/man/1/sendmail
@@ -59444,7 +58764,6 @@ sending	/man/2/wmsrv
 sending	/man/3/ip
 sending	/man/3/prog
 sending	/man/5/flush
-sending	/man/8/bootpd
 sending	/man/8/plumber
 sendmail	/man/1/sendmail
 sendmail	/man/2/smtp
@@ -59479,7 +58798,6 @@ sends	/man/8/ping
 sends	/man/8/rdbgsrv
 sends	/man/8/signer
 sends	/man/8/styxchat
-sends	/man/8/virgild
 sendtextfd	/man/2/print
 sense	/man/1/acme
 sense	/man/1/sh
@@ -59580,7 +58898,6 @@ separated	/man/10/parsecmd
 separated	/man/10/plan9.ini
 separated	/man/2/asn1
 separated	/man/2/attrdb
-separated	/man/2/ether
 separated	/man/2/factotum
 separated	/man/2/ip
 separated	/man/2/keyring-certtostr
@@ -59669,7 +58986,6 @@ sequence	/man/2/styxservers
 sequence	/man/2/sys-bind
 sequence	/man/2/sys-byte2char
 sequence	/man/2/sys-utfbytes
-sequence	/man/2/tftp
 sequence	/man/2/w3c-css
 sequence	/man/2/w3c-xpointers
 sequence	/man/3/audio
@@ -59808,7 +59124,6 @@ server	/man/2/sys-file2chan
 server	/man/2/sys-fversion
 server	/man/2/sys-open
 server	/man/2/sys-stat
-server	/man/2/tftp
 server	/man/2/venti
 server	/man/3/0intro
 server	/man/3/draw
@@ -59839,7 +59154,6 @@ server	/man/6/ndb
 server	/man/6/users
 server	/man/7/cddb
 server	/man/8/applylog
-server	/man/8/bootpd
 server	/man/8/createsignerkey
 server	/man/8/cs
 server	/man/8/dns
@@ -59855,7 +59169,6 @@ server	/man/8/signer
 server	/man/8/srv
 server	/man/8/styxchat
 server	/man/8/svc
-server	/man/8/virgild
 serverpath	/man/8/applylog
 serverroot	/man/8/applylog
 servers	/man/1/bind
@@ -59870,7 +59183,6 @@ servers	/man/2/styx
 servers	/man/2/styxpersist
 servers	/man/2/styxservers
 servers	/man/2/sys-stat
-servers	/man/2/virgil
 servers	/man/3/mnt
 servers	/man/4/0intro
 servers	/man/4/namespace
@@ -59878,7 +59190,6 @@ servers	/man/5/0intro
 servers	/man/5/stat
 servers	/man/5/walk
 servers	/man/6/ndb
-servers	/man/8/bootpd
 servers	/man/8/changelogin
 servers	/man/8/cs
 servers	/man/8/dns
@@ -59921,7 +59232,6 @@ serves	/man/5/attach
 serves	/man/8/cs
 serves	/man/8/dns
 serves	/man/8/httpd
-serves	/man/8/rip
 serves	/man/8/styxmon
 service	/man/1/0intro
 service	/man/1/bind
@@ -59941,7 +59251,6 @@ service	/man/2/styxpersist
 service	/man/2/sys-bind
 service	/man/2/sys-dial
 service	/man/2/sys-export
-service	/man/2/virgil
 service	/man/3/ip
 service	/man/3/mnt
 service	/man/3/srv
@@ -59966,7 +59275,6 @@ service	/man/8/signer
 service	/man/8/srv
 service	/man/8/styxchat
 service	/man/8/svc
-service	/man/8/virgild
 service1	/man/3/srv9
 service2	/man/3/srv9
 services	/man/1/0intro
@@ -59995,7 +59303,6 @@ services	/man/4/registry
 services	/man/6/keys
 services	/man/6/namespace
 services	/man/8/0intro
-services	/man/8/bootpd
 services	/man/8/cs
 services	/man/8/getauthinfo
 services	/man/8/httpd
@@ -60003,7 +59310,6 @@ services	/man/8/register
 services	/man/8/rstyxd
 services	/man/8/srv
 services	/man/8/svc
-services	/man/8/virgild
 serving	/man/1/bind
 serving	/man/2/styxservers
 serving	/man/2/sys-bind
@@ -60094,7 +59400,6 @@ set	/man/2/draw-example
 set	/man/2/draw-image
 set	/man/2/draw-screen
 set	/man/2/env
-set	/man/2/ether
 set	/man/2/exception
 set	/man/2/imagefile
 set	/man/2/keyring-0intro
@@ -60228,7 +59533,6 @@ sets	/man/2/dbm
 sets	/man/2/debug
 sets	/man/2/draw-image
 sets	/man/2/env
-sets	/man/2/ether
 sets	/man/2/filter
 sets	/man/2/keyring-getmsg
 sets	/man/2/keyring-rc4
@@ -60339,7 +59643,6 @@ several	/man/6/dis
 several	/man/6/keyboard
 several	/man/8/rdbgsrv
 several	/man/8/register
-several	/man/8/rip
 several	/man/8/svc
 severity	/man/1/sh-test
 sexp	/man/1/sh-sexprs
@@ -60540,7 +59843,6 @@ sh	/man/2/draw-rect
 sh	/man/2/draw-screen
 sh	/man/2/encoding
 sh	/man/2/env
-sh	/man/2/ether
 sh	/man/2/exception
 sh	/man/2/factotum
 sh	/man/2/filepat
@@ -60627,13 +59929,11 @@ sh	/man/2/sys-stat
 sh	/man/2/sys-tokenize
 sh	/man/2/sys-utfbytes
 sh	/man/2/sys-werrstr
-sh	/man/2/tftp
 sh	/man/2/timers
 sh	/man/2/tk
 sh	/man/2/tkclient
 sh	/man/2/translate
 sh	/man/2/venti
-sh	/man/2/virgil
 sh	/man/2/volume
 sh	/man/2/w3c-css
 sh	/man/2/w3c-xpointers
@@ -60729,7 +60029,6 @@ sh	/man/7/0intro
 sh	/man/7/cddb
 sh	/man/8/0intro
 sh	/man/8/applylog
-sh	/man/8/bootpd
 sh	/man/8/changelogin
 sh	/man/8/create
 sh	/man/8/createsignerkey
@@ -60747,7 +60046,6 @@ sh	/man/8/ping
 sh	/man/8/plumber
 sh	/man/8/rdbgsrv
 sh	/man/8/register
-sh	/man/8/rip
 sh	/man/8/rstyxd
 sh	/man/8/shutdown
 sh	/man/8/signer
@@ -60755,7 +60053,6 @@ sh	/man/8/srv
 sh	/man/8/styxchat
 sh	/man/8/styxmon
 sh	/man/8/svc
-sh	/man/8/virgild
 sh	/man/9/0intro
 sh	/man/9/1copyright
 sha	/man/1/sum
@@ -61125,7 +60422,6 @@ side	/man/1/acme
 side	/man/2/factotum
 side	/man/2/security-auth
 side	/man/2/sh
-side	/man/2/virgil
 side	/man/3/draw
 side	/man/3/ip
 side	/man/3/pipe
@@ -61400,7 +60696,6 @@ simple	/man/8/httpd
 simpler	/man/1/fs
 simpler	/man/10/plan9.ini
 simpler	/man/3/ds
-simpler	/man/8/rip
 simplesel	/man/2/w3c-css
 simplest	/man/1/mprof
 simplest	/man/1/sh
@@ -61483,7 +60778,6 @@ since	/man/5/stat
 since	/man/6/image
 since	/man/6/ndb
 since	/man/8/applylog
-since	/man/8/bootpd
 since	/man/8/createsignerkey
 sind	/man/2/draw-image
 single	/man/1/Mail
@@ -61580,10 +60874,8 @@ single	/man/6/sexprs
 single	/man/8/cs
 single	/man/8/format
 single	/man/8/kfscmd
-single	/man/8/rip
 single	/man/8/rstyxd
 single	/man/8/styxchat
-single	/man/8/virgild
 singly	/man/2/math-linalg
 sinh	/man/1/mc
 sinh	/man/2/math-elem
@@ -61598,13 +60890,11 @@ site	/man/8/cs
 site	/man/8/getauthinfo
 site	/man/8/register
 site	/man/8/svc
-sits	/man/8/rip
 situation	/man/1/charon
 situation	/man/5/0intro
 sitution	/man/2/styxpersist
 six	/man/1/fs
 six	/man/1/ps
-six	/man/2/ether
 six	/man/3/ip
 six	/man/3/prog
 six	/man/6/man
@@ -61824,7 +61114,6 @@ small	/man/10/delay
 small	/man/10/styxserver
 small	/man/2/command
 small	/man/2/draw-image
-small	/man/2/ether
 small	/man/2/sets
 small	/man/2/sexprs
 small	/man/2/sys-byte2char
@@ -61873,7 +61162,6 @@ snarfput	/man/2/tkclient
 snarfput	/man/2/wmclient
 snarfput	/man/2/wmlib
 snicker	/man/2/sexprs
-sniff	/man/8/bootpd
 snmp	/man/3/ip
 snprint	/man/10/print
 so	/man/1/0intro
@@ -62159,7 +61447,6 @@ sought	/man/1/limbo
 sought	/man/10/conf
 sought	/man/10/devattach
 sought	/man/2/sys-dial
-sought	/man/8/bootpd
 sound	/man/10/plan9.ini
 sound	/man/3/dbg
 source	/man/1/0intro
@@ -62319,7 +61606,6 @@ source	/man/2/draw-example
 source	/man/2/draw-image
 source	/man/2/encoding
 source	/man/2/env
-source	/man/2/ether
 source	/man/2/exception
 source	/man/2/factotum
 source	/man/2/filepat
@@ -62379,12 +61665,10 @@ source	/man/2/sys-export
 source	/man/2/sys-file2chan
 source	/man/2/sys-iounit
 source	/man/2/sys-print
-source	/man/2/tftp
 source	/man/2/tk
 source	/man/2/tkclient
 source	/man/2/translate
 source	/man/2/venti
-source	/man/2/virgil
 source	/man/2/volume
 source	/man/2/w3c-css
 source	/man/2/w3c-xpointers
@@ -62446,7 +61730,6 @@ source	/man/6/sbl
 source	/man/6/translate
 source	/man/7/cddb
 source	/man/8/applylog
-source	/man/8/bootpd
 source	/man/8/changelogin
 source	/man/8/create
 source	/man/8/createsignerkey
@@ -62464,7 +61747,6 @@ source	/man/8/ping
 source	/man/8/plumber
 source	/man/8/rdbgsrv
 source	/man/8/register
-source	/man/8/rip
 source	/man/8/rstyxd
 source	/man/8/shutdown
 source	/man/8/signer
@@ -62472,7 +61754,6 @@ source	/man/8/srv
 source	/man/8/styxchat
 source	/man/8/styxmon
 source	/man/8/svc
-source	/man/8/virgild
 sourcefile	/man/1/uuencode
 sources	/man/10/odbc
 sources	/man/10/styxserver
@@ -62750,7 +62031,6 @@ specific	/man/4/namespace
 specific	/man/6/ndb
 specific	/man/6/sexprs
 specific	/man/6/translate
-specific	/man/8/bootpd
 specific	/man/8/create
 specific	/man/8/httpd
 specific	/man/8/init
@@ -62854,7 +62134,6 @@ specified	/man/5/walk
 specified	/man/6/font
 specified	/man/6/proto
 specified	/man/6/scancode
-specified	/man/8/bootpd
 specified	/man/8/create
 specified	/man/8/cs
 specified	/man/8/dns
@@ -63278,7 +62557,6 @@ standard	/man/6/sexprs
 standard	/man/6/utf
 standard	/man/7/cddb
 standard	/man/8/applylog
-standard	/man/8/bootpd
 standard	/man/8/create
 standard	/man/8/cs
 standard	/man/8/dns
@@ -63416,7 +62694,6 @@ started	/man/8/rdbgsrv
 started	/man/8/rstyxd
 started	/man/8/shutdown
 started	/man/8/svc
-started	/man/8/virgild
 starting	/man/1/0intro
 starting	/man/1/acme
 starting	/man/1/mdb
@@ -63520,7 +62797,6 @@ starts	/man/6/image
 starts	/man/6/sbl
 starts	/man/8/getauthinfo
 starts	/man/8/plumber
-starts	/man/8/rip
 starts	/man/8/srv
 starts	/man/8/svc
 startstate	/man/2/convcs
@@ -63653,7 +62929,6 @@ static	/man/4/namespace
 static	/man/4/registry
 static	/man/8/svc
 statically	/man/1/disdep
-statically	/man/8/rip
 stating	/man/2/styxservers
 station	/man/10/plan9.ini
 station	/man/2/keyring-0intro
@@ -63814,7 +63089,6 @@ still	/man/3/sd
 still	/man/3/sign
 still	/man/6/image
 still	/man/8/svc
-still	/man/8/virgild
 stipple	/man/2/draw-example
 stmt	/man/6/sbl
 stob	/man/2/convcs
@@ -64110,7 +63384,6 @@ string	/man/2/draw-font
 string	/man/2/draw-image
 string	/man/2/encoding
 string	/man/2/env
-string	/man/2/ether
 string	/man/2/exception
 string	/man/2/factotum
 string	/man/2/filepat
@@ -64175,12 +63448,10 @@ string	/man/2/sys-self
 string	/man/2/sys-stat
 string	/man/2/sys-tokenize
 string	/man/2/sys-werrstr
-string	/man/2/tftp
 string	/man/2/tk
 string	/man/2/tkclient
 string	/man/2/translate
 string	/man/2/venti
-string	/man/2/virgil
 string	/man/2/volume
 string	/man/2/w3c-css
 string	/man/2/w3c-xpointers
@@ -64589,8 +63860,6 @@ subjects	/man/2/spki
 sublists	/man/2/sexprs
 subnet	/man/2/ip
 subnet	/man/3/ip
-subnet	/man/8/bootpd
-subnets	/man/8/rip
 subnetwork	/man/6/ndb
 subordinate	/man/1/du
 subordinate	/man/1/webgrab
@@ -64658,7 +63927,6 @@ subsequent	/man/6/attrdb
 subsequent	/man/6/image
 subsequent	/man/8/cs
 subsequent	/man/8/styxchat
-subsequent	/man/8/virgild
 subsequently	/man/1/sh-file2chan
 subsequently	/man/10/plan9.ini
 subsequently	/man/2/registries
@@ -64790,7 +64058,6 @@ success	/man/2/sys-dial
 success	/man/2/sys-export
 success	/man/2/sys-pipe
 success	/man/2/sys-stat
-success	/man/2/tftp
 success	/man/3/boot
 success	/man/3/cmd
 successful	/man/1/0intro
@@ -64862,7 +64129,6 @@ successive	/man/4/registry
 successive	/man/5/walk
 successive	/man/6/font
 successive	/man/6/man
-successively	/man/8/bootpd
 successor	/man/1/mk
 successor	/man/1/tr
 successor	/man/10/mk
@@ -64905,7 +64171,6 @@ such	/man/2/draw-image
 such	/man/2/draw-pointer
 such	/man/2/draw-screen
 such	/man/2/encoding
-such	/man/2/ether
 such	/man/2/imagefile
 such	/man/2/ip
 such	/man/2/math-fp
@@ -64965,7 +64230,6 @@ such	/man/6/proto
 such	/man/6/sexprs
 such	/man/6/users
 such	/man/6/utf
-such	/man/8/bootpd
 such	/man/8/createsignerkey
 such	/man/8/dns
 such	/man/8/mkfs
@@ -65044,7 +64308,6 @@ suitable	/man/4/keysrv
 suitable	/man/6/audio
 suitable	/man/6/colour
 suitable	/man/6/keyboard
-suitable	/man/8/bootpd
 suitable	/man/8/dns
 suitable	/man/8/format
 suitable	/man/8/getauthinfo
@@ -65177,7 +64440,6 @@ supported	/man/4/ftpfs
 supported	/man/4/tarfs
 supported	/man/6/keyboard
 supported	/man/6/sexprs
-supported	/man/8/bootpd
 supported	/man/8/srv
 supporting	/man/1/charon
 supporting	/man/10/dev
@@ -65522,7 +64784,6 @@ synopsis	/man/2/draw-rect
 synopsis	/man/2/draw-screen
 synopsis	/man/2/encoding
 synopsis	/man/2/env
-synopsis	/man/2/ether
 synopsis	/man/2/exception
 synopsis	/man/2/factotum
 synopsis	/man/2/filepat
@@ -65609,13 +64870,11 @@ synopsis	/man/2/sys-stat
 synopsis	/man/2/sys-tokenize
 synopsis	/man/2/sys-utfbytes
 synopsis	/man/2/sys-werrstr
-synopsis	/man/2/tftp
 synopsis	/man/2/timers
 synopsis	/man/2/tk
 synopsis	/man/2/tkclient
 synopsis	/man/2/translate
 synopsis	/man/2/venti
-synopsis	/man/2/virgil
 synopsis	/man/2/volume
 synopsis	/man/2/w3c-css
 synopsis	/man/2/w3c-xpointers
@@ -65687,7 +64946,6 @@ synopsis	/man/6/ndb
 synopsis	/man/6/translate
 synopsis	/man/7/cddb
 synopsis	/man/8/applylog
-synopsis	/man/8/bootpd
 synopsis	/man/8/changelogin
 synopsis	/man/8/create
 synopsis	/man/8/createsignerkey
@@ -65704,7 +64962,6 @@ synopsis	/man/8/ping
 synopsis	/man/8/plumber
 synopsis	/man/8/rdbgsrv
 synopsis	/man/8/register
-synopsis	/man/8/rip
 synopsis	/man/8/rstyxd
 synopsis	/man/8/shutdown
 synopsis	/man/8/signer
@@ -65712,7 +64969,6 @@ synopsis	/man/8/srv
 synopsis	/man/8/styxchat
 synopsis	/man/8/styxmon
 synopsis	/man/8/svc
-synopsis	/man/8/virgild
 synopsys	/man/8/cs
 syntactic	/man/1/sh-std
 syntactic	/man/2/w3c-css
@@ -65854,10 +65110,8 @@ sys	/man/2/sys-stat
 sys	/man/2/sys-tokenize
 sys	/man/2/sys-utfbytes
 sys	/man/2/sys-werrstr
-sys	/man/2/tftp
 sys	/man/2/timers
 sys	/man/2/venti
-sys	/man/2/virgil
 sys	/man/2/wait
 sys	/man/2/wmlib
 sys	/man/2/wmsrv
@@ -65905,10 +65159,8 @@ sys	/man/6/audio
 sys	/man/6/namespace
 sys	/man/6/ndb
 sys	/man/6/utf
-sys	/man/8/bootpd
 sys	/man/8/cs
 sys	/man/8/ping
-sys	/man/8/rip
 sys	/man/8/rstyxd
 sys	/man/8/styxchat
 sysctl	/man/3/cons
@@ -66034,7 +65286,6 @@ system	/man/6/ndb
 system	/man/6/proto
 system	/man/8/0intro
 system	/man/8/applylog
-system	/man/8/bootpd
 system	/man/8/changelogin
 system	/man/8/create
 system	/man/8/cs
@@ -66132,7 +65383,6 @@ t	/man/2/styxservers
 t	/man/2/styxservers-nametree
 t	/man/2/sys-self
 t	/man/2/sys-stat
-t	/man/2/tftp
 t	/man/2/timers
 t	/man/2/tk
 t	/man/3/cons
@@ -66270,7 +65520,6 @@ table	/man/6/man
 table	/man/6/sbl
 table	/man/7/cddb
 table	/man/8/format
-table	/man/8/rip
 tablename	/man/10/odbc
 tables	/man/1/date
 tables	/man/1/yacc
@@ -66281,7 +65530,6 @@ tables	/man/2/dis
 tables	/man/3/ip
 tables	/man/6/man
 tables	/man/6/sbl
-tables	/man/8/rip
 tabs	/man/1/diff
 tabs	/man/1/look
 tabs	/man/1/sh
@@ -66457,7 +65705,6 @@ takes	/man/2/arg
 takes	/man/2/attrdb
 takes	/man/2/bufio
 takes	/man/2/draw-image
-takes	/man/2/ether
 takes	/man/2/filter-slip
 takes	/man/2/keyring-certtostr
 takes	/man/2/plumbmsg
@@ -66617,9 +65864,7 @@ tells	/man/2/draw-image
 tells	/man/2/security-auth
 tells	/man/2/venti
 tells	/man/2/wmlib
-tells	/man/8/bootpd
 tells	/man/8/register
-tells	/man/8/rip
 telnet	/man/1/telnet
 temp	/man/10/plan9.ini
 tempfile	/man/2/diskblocks
@@ -66790,7 +66035,6 @@ text	/man/2/draw-example
 text	/man/2/draw-font
 text	/man/2/draw-image
 text	/man/2/encoding
-text	/man/2/ether
 text	/man/2/ip
 text	/man/2/keyring-certtostr
 text	/man/2/names
@@ -66851,7 +66095,6 @@ textual	/man/2/asn1
 textual	/man/2/attrdb
 textual	/man/2/draw-font
 textual	/man/2/encoding
-textual	/man/2/ether
 textual	/man/2/ip
 textual	/man/2/keyring-0intro
 textual	/man/2/keyring-certtostr
@@ -66911,7 +66154,6 @@ tf	/man/2/dis
 tf	/man/2/diskblocks
 tf	/man/2/draw-0intro
 tf	/man/2/draw-context
-tf	/man/2/ether
 tf	/man/2/filter
 tf	/man/2/filter-slip
 tf	/man/2/ip
@@ -66951,7 +66193,6 @@ tf	/man/6/ndb
 tf	/man/6/plumbing
 tf	/man/6/proto
 tf	/man/6/sbl
-tf	/man/8/bootpd
 tf	/man/8/changelogin
 tf	/man/8/cs
 tf	/man/8/dns
@@ -66972,11 +66213,7 @@ tflush	/man/10/styx
 tflush	/man/5/0intro
 tflush	/man/5/flush
 tflush	/man/8/styxchat
-tftp	/man/2/tftp
 tftp	/man/3/boot
-tftp	/man/8/bootpd
-tftpd	/man/8/bootpd
-tftpd	/man/8/srv
 tgz	/man/4/ftpfs
 tgz	/man/8/rdbgsrv
 th	/man/1/0intro
@@ -67161,7 +66398,6 @@ th	/man/2/draw-rect
 th	/man/2/draw-screen
 th	/man/2/encoding
 th	/man/2/env
-th	/man/2/ether
 th	/man/2/exception
 th	/man/2/factotum
 th	/man/2/filepat
@@ -67248,13 +66484,11 @@ th	/man/2/sys-stat
 th	/man/2/sys-tokenize
 th	/man/2/sys-utfbytes
 th	/man/2/sys-werrstr
-th	/man/2/tftp
 th	/man/2/timers
 th	/man/2/tk
 th	/man/2/tkclient
 th	/man/2/translate
 th	/man/2/venti
-th	/man/2/virgil
 th	/man/2/volume
 th	/man/2/w3c-css
 th	/man/2/w3c-xpointers
@@ -67350,7 +66584,6 @@ th	/man/7/0intro
 th	/man/7/cddb
 th	/man/8/0intro
 th	/man/8/applylog
-th	/man/8/bootpd
 th	/man/8/changelogin
 th	/man/8/create
 th	/man/8/createsignerkey
@@ -67368,7 +66601,6 @@ th	/man/8/ping
 th	/man/8/plumber
 th	/man/8/rdbgsrv
 th	/man/8/register
-th	/man/8/rip
 th	/man/8/rstyxd
 th	/man/8/shutdown
 th	/man/8/signer
@@ -67376,7 +66608,6 @@ th	/man/8/srv
 th	/man/8/styxchat
 th	/man/8/styxmon
 th	/man/8/svc
-th	/man/8/virgild
 th	/man/9/0intro
 th	/man/9/1copyright
 than	/man/1/0intro
@@ -67437,7 +66668,6 @@ than	/man/2/draw-0intro
 than	/man/2/draw-display
 than	/man/2/draw-font
 than	/man/2/draw-image
-than	/man/2/ether
 than	/man/2/keyring-crypt
 than	/man/2/keyring-getstring
 than	/man/2/keyring-sha1
@@ -67492,12 +66722,10 @@ than	/man/6/image
 than	/man/6/man
 than	/man/6/sbl
 than	/man/8/applylog
-than	/man/8/bootpd
 than	/man/8/changelogin
 than	/man/8/create
 than	/man/8/cs
 than	/man/8/mkfs
-than	/man/8/rip
 that	/man/1/0intro
 that	/man/1/Mail
 that	/man/1/acme
@@ -67623,7 +66851,6 @@ that	/man/2/draw-example
 that	/man/2/draw-font
 that	/man/2/draw-image
 that	/man/2/draw-screen
-that	/man/2/ether
 that	/man/2/factotum
 that	/man/2/filepat
 that	/man/2/filter
@@ -67776,7 +67003,6 @@ that	/man/6/utf
 that	/man/7/0intro
 that	/man/8/0intro
 that	/man/8/applylog
-that	/man/8/bootpd
 that	/man/8/changelogin
 that	/man/8/create
 that	/man/8/createsignerkey
@@ -67793,14 +67019,12 @@ that	/man/8/ping
 that	/man/8/plumber
 that	/man/8/rdbgsrv
 that	/man/8/register
-that	/man/8/rip
 that	/man/8/rstyxd
 that	/man/8/signer
 that	/man/8/srv
 that	/man/8/styxchat
 that	/man/8/styxmon
 that	/man/8/svc
-that	/man/8/virgild
 that	/man/9/1copyright
 the	/man/1/0intro
 the	/man/1/Mail
@@ -67986,7 +67210,6 @@ the	/man/2/draw-rect
 the	/man/2/draw-screen
 the	/man/2/encoding
 the	/man/2/env
-the	/man/2/ether
 the	/man/2/exception
 the	/man/2/factotum
 the	/man/2/filepat
@@ -68073,13 +67296,11 @@ the	/man/2/sys-stat
 the	/man/2/sys-tokenize
 the	/man/2/sys-utfbytes
 the	/man/2/sys-werrstr
-the	/man/2/tftp
 the	/man/2/timers
 the	/man/2/tk
 the	/man/2/tkclient
 the	/man/2/translate
 the	/man/2/venti
-the	/man/2/virgil
 the	/man/2/volume
 the	/man/2/w3c-css
 the	/man/2/w3c-xpointers
@@ -68173,7 +67394,6 @@ the	/man/7/0intro
 the	/man/7/cddb
 the	/man/8/0intro
 the	/man/8/applylog
-the	/man/8/bootpd
 the	/man/8/changelogin
 the	/man/8/create
 the	/man/8/createsignerkey
@@ -68191,7 +67411,6 @@ the	/man/8/ping
 the	/man/8/plumber
 the	/man/8/rdbgsrv
 the	/man/8/register
-the	/man/8/rip
 the	/man/8/rstyxd
 the	/man/8/shutdown
 the	/man/8/signer
@@ -68199,7 +67418,6 @@ the	/man/8/srv
 the	/man/8/styxchat
 the	/man/8/styxmon
 the	/man/8/svc
-the	/man/8/virgild
 the	/man/9/1copyright
 their	/man/1/0intro
 their	/man/1/acme
@@ -68316,7 +67534,6 @@ them	/man/2/dict
 them	/man/2/draw-0intro
 them	/man/2/draw-display
 them	/man/2/draw-image
-them	/man/2/ether
 them	/man/2/factotum
 them	/man/2/geodesy
 them	/man/2/keyring-0intro
@@ -68600,7 +67817,6 @@ there	/man/8/createsignerkey
 there	/man/8/cs
 there	/man/8/getauthinfo
 there	/man/8/register
-there	/man/8/rip
 thereby	/man/1/acme
 thereby	/man/10/kproc
 thereby	/man/3/srv
@@ -68790,7 +68006,6 @@ they	/man/2/sys-bind
 they	/man/2/sys-print
 they	/man/2/sys-read
 they	/man/2/sys-stat
-they	/man/2/tftp
 they	/man/2/tk
 they	/man/2/translate
 they	/man/2/w3c-css
@@ -69015,7 +68230,6 @@ this	/man/8/kfscmd
 this	/man/8/logind
 this	/man/8/mkfs
 this	/man/8/register
-this	/man/8/rip
 this	/man/8/srv
 this	/man/8/styxchat
 this	/man/9/0intro
@@ -69110,7 +68324,6 @@ thread	/man/2/sys-pctl
 thread	/man/2/sys-sleep
 thread	/man/6/dis
 threaded	/man/1/sh-file2chan
-threaded	/man/8/virgild
 threads	/man/1/deb
 threads	/man/10/ntsrv
 threads	/man/2/sys-0intro
@@ -69321,7 +68534,6 @@ time	/man/2/sys-byte2char
 time	/man/2/sys-millisec
 time	/man/2/sys-sleep
 time	/man/2/sys-stat
-time	/man/2/tftp
 time	/man/2/w3c-css
 time	/man/2/wmsrv
 time	/man/3/boot
@@ -69346,18 +68558,15 @@ time	/man/6/ndb
 time	/man/6/utf
 time	/man/7/cddb
 time	/man/8/applylog
-time	/man/8/bootpd
 time	/man/8/changelogin
 time	/man/8/create
 time	/man/8/ping
 time	/man/8/styxchat
-time	/man/8/virgild
 time2secs	/man/2/spki
 timed	/man/2/timers
 timefile	/man/8/applylog
 timeout	/man/10/plan9.ini
 timeout	/man/10/sleep
-timeout	/man/2/tftp
 timeout	/man/2/timers
 timeout	/man/5/stat
 timeouts	/man/2/timers
@@ -69640,7 +68849,6 @@ to	/man/2/draw-rect
 to	/man/2/draw-screen
 to	/man/2/encoding
 to	/man/2/env
-to	/man/2/ether
 to	/man/2/exception
 to	/man/2/factotum
 to	/man/2/filepat
@@ -69722,13 +68930,11 @@ to	/man/2/sys-self
 to	/man/2/sys-sleep
 to	/man/2/sys-stat
 to	/man/2/sys-werrstr
-to	/man/2/tftp
 to	/man/2/timers
 to	/man/2/tk
 to	/man/2/tkclient
 to	/man/2/translate
 to	/man/2/venti
-to	/man/2/virgil
 to	/man/2/volume
 to	/man/2/w3c-css
 to	/man/2/w3c-xpointers
@@ -69822,7 +69028,6 @@ to	/man/7/0intro
 to	/man/7/cddb
 to	/man/8/0intro
 to	/man/8/applylog
-to	/man/8/bootpd
 to	/man/8/changelogin
 to	/man/8/create
 to	/man/8/createsignerkey
@@ -69840,14 +69045,12 @@ to	/man/8/ping
 to	/man/8/plumber
 to	/man/8/rdbgsrv
 to	/man/8/register
-to	/man/8/rip
 to	/man/8/rstyxd
 to	/man/8/signer
 to	/man/8/srv
 to	/man/8/styxchat
 to	/man/8/styxmon
 to	/man/8/svc
-to	/man/8/virgild
 to	/man/9/0intro
 to	/man/9/1copyright
 tobig	/man/2/string
@@ -70105,7 +69308,6 @@ tp	/man/2/draw-pointer
 tp	/man/2/draw-rect
 tp	/man/2/draw-screen
 tp	/man/2/encoding
-tp	/man/2/ether
 tp	/man/2/filter
 tp	/man/2/filter-deflate
 tp	/man/2/filter-slip
@@ -70183,7 +69385,6 @@ tp	/man/6/plumbing
 tp	/man/6/proto
 tp	/man/6/sbl
 tp	/man/8/applylog
-tp	/man/8/bootpd
 tp	/man/8/changelogin
 tp	/man/8/create
 tp	/man/8/cs
@@ -70215,7 +69416,6 @@ trace	/man/1/stack
 trace	/man/2/styxservers
 trace	/man/3/prog
 trace	/man/4/dossrv
-trace	/man/8/bootpd
 trace	/man/8/rdbgsrv
 traceback	/man/1/stack
 traces	/man/1/emu
@@ -70238,7 +69438,6 @@ traditional	/man/2/security-0intro
 traditionally	/man/1/sh
 traditionally	/man/2/arg
 traffic	/man/3/ip
-traffic	/man/8/bootpd
 trailers	/man/10/allocb
 trailing	/man/1/acme
 trailing	/man/1/crypt
@@ -70274,14 +69473,12 @@ transfer	/man/2/keyring-0intro
 transfer	/man/2/rfc822
 transfer	/man/2/smtp
 transfer	/man/2/sys-iounit
-transfer	/man/2/tftp
 transfer	/man/3/boot
 transfer	/man/3/ip
 transfer	/man/3/sd
 transfer	/man/4/ftpfs
 transfer	/man/5/open
 transfer	/man/5/read
-transfer	/man/8/bootpd
 transferred	/man/1/sh
 transferred	/man/1/sh-std
 transferred	/man/10/dmainit
@@ -70292,7 +69489,6 @@ transferred	/man/5/read
 transfers	/man/1/webgrab
 transfers	/man/10/dmainit
 transfers	/man/3/ip
-transfers	/man/8/bootpd
 transform	/man/2/keyring-0intro
 transformation	/man/2/devpointer
 transformation	/man/2/geodesy
@@ -70321,15 +69517,12 @@ translated	/man/3/draw
 translated	/man/3/mnt
 translated	/man/5/0intro
 translated	/man/8/cs
-translated	/man/8/virgild
 translates	/man/1/asm
 translates	/man/1/bind
 translates	/man/1/unicode
 translates	/man/2/sys-byte2char
 translates	/man/3/mnt
-translates	/man/8/virgild
 translating	/man/2/security-0intro
-translating	/man/8/virgild
 translation	/man/1/yacc
 translation	/man/10/styx
 translation	/man/2/draw-display
@@ -70360,7 +69553,6 @@ transmit	/man/2/filter-deflate
 transmit	/man/3/ip
 transmits	/man/2/styx
 transmits	/man/5/0intro
-transmits	/man/8/rip
 transmitted	/man/1/idea
 transmitted	/man/1/sh-file2chan
 transmitted	/man/10/print
@@ -70523,7 +69715,6 @@ triple	/man/2/exception
 triple	/man/2/w3c-css
 triple	/man/6/colour
 triplets	/man/2/draw-0intro
-trivial	/man/2/tftp
 trivial	/man/6/colour
 trivial	/man/8/httpd
 trnote	/man/3/dbg
@@ -70551,7 +69742,6 @@ true	/man/2/complete
 true	/man/2/dbm
 true	/man/2/draw-0intro
 true	/man/2/draw-display
-true	/man/2/ether
 true	/man/2/ip
 true	/man/2/keyring-sha1
 true	/man/2/names
@@ -70748,14 +69938,12 @@ twalk	/man/5/flush
 twalk	/man/5/walk
 twalk	/man/8/styxchat
 twelve	/man/1/cal
-twelve	/man/2/ether
 twelve	/man/3/cons
 twelve	/man/6/image
 twice	/man/1/ar
 twice	/man/1/charon
 twice	/man/2/cfg
 twice	/man/5/stat
-twice	/man/8/bootpd
 two	/man/1/acme
 two	/man/1/auplay
 two	/man/1/bind
@@ -71051,7 +70239,6 @@ typically	/man/2/sys-fd2path
 typically	/man/2/sys-pctl
 typically	/man/2/sys-pipe
 typically	/man/2/sys-self
-typically	/man/2/tftp
 typically	/man/3/cons
 typically	/man/3/dbg
 typically	/man/3/fs
@@ -71071,12 +70258,10 @@ typically	/man/6/audio
 typically	/man/6/keys
 typically	/man/6/namespace
 typically	/man/8/applylog
-typically	/man/8/bootpd
 typically	/man/8/create
 typically	/man/8/createsignerkey
 typically	/man/8/logind
 typically	/man/8/plumber
-typically	/man/8/rip
 typically	/man/8/signer
 typically	/man/8/srv
 typically	/man/8/styxchat
@@ -71193,12 +70378,9 @@ ud	/man/1/uniq
 udp	/man/1/netstat
 udp	/man/2/srv
 udp	/man/2/sys-dial
-udp	/man/2/virgil
 udp	/man/3/ip
 udp	/man/6/ndb
-udp	/man/8/bootpd
 udp	/man/8/srv
-udp	/man/8/virgild
 udpmsg	/man/3/ip
 uexp	/man/1/yacc
 ugo	/man/1/chmod
@@ -71384,7 +70566,6 @@ understand	/man/2/plumbmsg
 understand	/man/5/version
 understands	/man/1/tcs
 understands	/man/1/wm
-understands	/man/8/rip
 understood	/man/1/0intro
 understood	/man/1/fc
 understood	/man/1/fs
@@ -71613,7 +70794,6 @@ unless	/man/5/walk
 unless	/man/8/changelogin
 unless	/man/8/format
 unless	/man/8/init
-unless	/man/8/virgild
 unless	/man/9/1copyright
 unlex	/man/2/rfc822
 unlike	/man/1/sh-std
@@ -71814,7 +70994,6 @@ unused	/man/5/stat
 unused	/man/6/image
 unused	/man/6/sbl
 unused	/man/6/sexprs
-unused	/man/8/virgild
 unusedbits	/man/2/asn1
 unusually	/man/8/rstyxd
 unwritable	/man/4/acme
@@ -71881,7 +71060,6 @@ up	/man/2/sys-open
 up	/man/2/sys-print
 up	/man/2/sys-sleep
 up	/man/2/timers
-up	/man/2/virgil
 up	/man/2/wmsrv
 up	/man/2/xml
 up	/man/3/cons
@@ -71944,7 +71122,6 @@ updates	/man/2/math-linalg
 updates	/man/3/prog
 updates	/man/8/applylog
 updates	/man/8/create
-updates	/man/8/rip
 updates	/man/9/1copyright
 updating	/man/1/mk
 updating	/man/10/mk
@@ -72087,7 +71264,6 @@ use	/man/2/draw-0intro
 use	/man/2/draw-display
 use	/man/2/draw-example
 use	/man/2/draw-image
-use	/man/2/ether
 use	/man/2/filter
 use	/man/2/keyring-0intro
 use	/man/2/keyring-crypt
@@ -72159,7 +71335,6 @@ use	/man/6/proto
 use	/man/6/sbl
 use	/man/7/cddb
 use	/man/8/applylog
-use	/man/8/bootpd
 use	/man/8/create
 use	/man/8/format
 use	/man/8/getauthinfo
@@ -72252,7 +71427,6 @@ used	/man/2/draw-context
 used	/man/2/draw-display
 used	/man/2/draw-image
 used	/man/2/draw-screen
-used	/man/2/ether
 used	/man/2/factotum
 used	/man/2/filter
 used	/man/2/filter-deflate
@@ -72300,7 +71474,6 @@ used	/man/2/sys-pctl
 used	/man/2/sys-print
 used	/man/2/sys-self
 used	/man/2/sys-stat
-used	/man/2/tftp
 used	/man/2/tk
 used	/man/2/translate
 used	/man/2/volume
@@ -72352,7 +71525,6 @@ used	/man/6/scancode
 used	/man/6/sexprs
 used	/man/6/users
 used	/man/6/utf
-used	/man/8/bootpd
 used	/man/8/changelogin
 used	/man/8/createsignerkey
 used	/man/8/cs
@@ -72365,7 +71537,6 @@ used	/man/8/logind
 used	/man/8/manufacture
 used	/man/8/mkfs
 used	/man/8/register
-used	/man/8/rip
 used	/man/8/rstyxd
 used	/man/8/srv
 used	/man/8/svc
@@ -72495,7 +71666,6 @@ user	/man/6/plumbing
 user	/man/6/proto
 user	/man/6/sexprs
 user	/man/6/users
-user	/man/8/bootpd
 user	/man/8/changelogin
 user	/man/8/create
 user	/man/8/createsignerkey
@@ -72508,7 +71678,6 @@ user	/man/8/rstyxd
 user	/man/8/signer
 user	/man/8/svc
 userdir	/man/1/charon
-userid	/man/8/virgild
 username	/man/1/deb
 username	/man/1/rcmd
 username	/man/10/odbc
@@ -72596,12 +71765,10 @@ uses	/man/6/colour
 uses	/man/6/dis
 uses	/man/6/sbl
 uses	/man/6/utf
-uses	/man/8/bootpd
 uses	/man/8/cs
 uses	/man/8/dns
 uses	/man/8/format
 uses	/man/8/init
-uses	/man/8/rip
 uses	/man/8/signer
 uses	/man/9/1copyright
 usessl	/man/1/charon
@@ -72668,7 +71835,6 @@ using	/man/2/draw-example
 using	/man/2/draw-image
 using	/man/2/draw-screen
 using	/man/2/encoding
-using	/man/2/ether
 using	/man/2/filepat
 using	/man/2/geodesy
 using	/man/2/imagefile
@@ -72700,7 +71866,6 @@ using	/man/2/sys-pctl
 using	/man/2/sys-read
 using	/man/2/sys-self
 using	/man/2/sys-stat
-using	/man/2/tftp
 using	/man/2/timers
 using	/man/2/tk
 using	/man/2/translate
@@ -72752,12 +71917,10 @@ using	/man/8/dns
 using	/man/8/getauthinfo
 using	/man/8/httpd
 using	/man/8/init
-using	/man/8/rip
 using	/man/8/rstyxd
 using	/man/8/signer
 using	/man/8/srv
 using	/man/8/styxchat
-using	/man/8/virgild
 usr	/man/1/bind
 usr	/man/1/cd
 usr	/man/1/charon
@@ -72842,7 +72005,6 @@ usually	/man/6/audio
 usually	/man/6/keys
 usually	/man/6/sexprs
 usually	/man/8/init
-usually	/man/8/rip
 usually	/man/8/rstyxd
 usually	/man/8/styxchat
 utctime	/man/2/asn1
@@ -72950,7 +72112,6 @@ v	/man/2/spki
 v	/man/2/styx
 v	/man/2/sys-self
 v	/man/2/tk
-v	/man/2/virgil
 v	/man/3/draw
 v	/man/3/prog
 v	/man/4/acme
@@ -73203,7 +72364,6 @@ value	/man/6/sbl
 value	/man/6/sexprs
 value	/man/6/utf
 value	/man/7/cddb
-value	/man/8/bootpd
 value	/man/8/changelogin
 value	/man/8/cs
 value	/man/8/getauthinfo
@@ -73470,7 +72630,6 @@ vector	/man/5/stat
 vector	/man/6/login
 vectors	/man/10/intrenable
 vectors	/man/2/math-linalg
-vendor	/man/8/bootpd
 venti	/man/2/venti
 verb	/man/1/fs
 verb	/man/10/print
@@ -73557,10 +72716,8 @@ version	/man/6/sbl
 version	/man/8/applylog
 version	/man/8/getauthinfo
 version	/man/8/httpd
-version	/man/8/rip
 version	/man/8/signer
 version	/man/8/styxchat
-version1	/man/8/rip
 version2	/man/1/charon
 versions	/man/1/charon
 versions	/man/10/conf
@@ -73599,7 +72756,6 @@ via	/man/1/rcmd
 via	/man/1/wm
 via	/man/10/allocb
 via	/man/10/plan9.ini
-via	/man/2/ether
 via	/man/2/filter-slip
 via	/man/2/plumbmsg
 via	/man/2/sh
@@ -73647,12 +72803,6 @@ viewed	/man/1/0intro
 viewing	/man/1/charon
 viewing	/man/1/deb
 villas	/man/6/attrdb
-virgil	/man/2/virgil
-virgil	/man/8/srv
-virgil	/man/8/virgild
-virgild	/man/2/virgil
-virgild	/man/8/srv
-virgild	/man/8/virgild
 virtual	/man/1/0intro
 virtual	/man/1/asm
 virtual	/man/1/emu
@@ -73900,7 +73050,6 @@ waits	/man/10/styxserver
 waits	/man/2/bufio-chanfill
 waits	/man/2/debug
 waits	/man/2/plumbmsg
-waits	/man/2/virgil
 waits	/man/8/styxchat
 wake	/man/10/kproc
 wake	/man/10/sleep
@@ -73999,7 +73148,6 @@ was	/man/2/sys-file2chan
 was	/man/2/sys-fversion
 was	/man/2/sys-print
 was	/man/2/sys-sleep
-was	/man/2/virgil
 was	/man/2/w3c-xpointers
 was	/man/2/xml
 was	/man/3/audio
@@ -74028,7 +73176,6 @@ watch	/man/1/tail
 watch	/man/10/plan9.ini
 watch	/man/2/command
 watch	/man/2/wait
-watches	/man/8/rip
 water	/man/1/mprof
 water	/man/1/units
 water	/man/10/qio
@@ -74173,7 +73320,6 @@ what	/man/3/dup
 what	/man/3/ip
 what	/man/4/namespace
 what	/man/5/stat
-what	/man/8/rip
 whatever	/man/1/acme
 whatever	/man/10/intrenable
 whatever	/man/3/draw
@@ -74294,7 +73440,6 @@ when	/man/2/sys-read
 when	/man/2/sys-stat
 when	/man/2/sys-utfbytes
 when	/man/2/sys-werrstr
-when	/man/2/tftp
 when	/man/2/timers
 when	/man/2/tk
 when	/man/2/tkclient
@@ -74363,7 +73508,6 @@ when	/man/8/mkfs
 when	/man/8/ping
 when	/man/8/plumber
 when	/man/8/rdbgsrv
-when	/man/8/rip
 when	/man/8/rstyxd
 when	/man/8/shutdown
 when	/man/8/signer
@@ -74477,7 +73621,6 @@ where	/man/8/create
 where	/man/8/cs
 where	/man/8/dns
 where	/man/8/getauthinfo
-where	/man/8/rip
 where	/man/8/styxchat
 where	/man/9/1copyright
 whereas	/man/2/asn1
@@ -74606,7 +73749,6 @@ which	/man/2/draw-font
 which	/man/2/draw-image
 which	/man/2/draw-screen
 which	/man/2/env
-which	/man/2/ether
 which	/man/2/geodesy
 which	/man/2/imagefile
 which	/man/2/ip
@@ -74651,7 +73793,6 @@ which	/man/2/timers
 which	/man/2/tk
 which	/man/2/tkclient
 which	/man/2/translate
-which	/man/2/virgil
 which	/man/2/volume
 which	/man/2/w3c-xpointers
 which	/man/2/wait
@@ -74722,7 +73863,6 @@ which	/man/8/logind
 which	/man/8/ping
 which	/man/8/plumber
 which	/man/8/register
-which	/man/8/rip
 which	/man/8/rstyxd
 which	/man/8/srv
 which	/man/8/styxmon
@@ -75063,7 +74203,6 @@ will	/man/2/sys-read
 will	/man/2/sys-stat
 will	/man/2/sys-tokenize
 will	/man/2/sys-utfbytes
-will	/man/2/tftp
 will	/man/2/timers
 will	/man/2/tk
 will	/man/2/tkclient
@@ -75123,13 +74262,11 @@ will	/man/8/cs
 will	/man/8/dns
 will	/man/8/getauthinfo
 will	/man/8/rdbgsrv
-will	/man/8/rip
 will	/man/8/rstyxd
 will	/man/8/shutdown
 will	/man/8/srv
 will	/man/8/styxchat
 will	/man/8/svc
-will	/man/8/virgild
 willing	/man/8/logind
 willis	/man/6/attrdb
 willsend	/man/2/plumbmsg
@@ -75340,7 +74477,6 @@ with	/man/2/draw-image
 with	/man/2/draw-rect
 with	/man/2/draw-screen
 with	/man/2/encoding
-with	/man/2/ether
 with	/man/2/exception
 with	/man/2/factotum
 with	/man/2/filter
@@ -75410,7 +74546,6 @@ with	/man/2/tk
 with	/man/2/tkclient
 with	/man/2/translate
 with	/man/2/venti
-with	/man/2/virgil
 with	/man/2/volume
 with	/man/2/w3c-css
 with	/man/2/w3c-xpointers
@@ -75482,7 +74617,6 @@ with	/man/6/users
 with	/man/6/utf
 with	/man/7/cddb
 with	/man/8/applylog
-with	/man/8/bootpd
 with	/man/8/create
 with	/man/8/createsignerkey
 with	/man/8/cs
@@ -75749,7 +74883,6 @@ work	/man/10/intrenable
 work	/man/10/memory
 work	/man/10/mk
 work	/man/10/plan9.ini
-work	/man/2/ether
 work	/man/2/keyring-0intro
 work	/man/2/math-linalg
 work	/man/2/spki
@@ -75829,7 +74962,6 @@ would	/man/6/colour
 would	/man/8/applylog
 would	/man/8/create
 would	/man/8/manufacture
-would	/man/8/rip
 would	/man/8/styxchat
 wp	/man/10/allocb
 wqid	/man/10/styx
@@ -75846,7 +74978,6 @@ writable	/man/1/ftest
 writable	/man/2/styxservers
 writable	/man/4/acme
 writable	/man/6/keys
-writable	/man/8/bootpd
 write	/man/1/0intro
 write	/man/1/Mail
 write	/man/1/acme
@@ -75935,7 +75066,6 @@ write	/man/5/remove
 write	/man/5/stat
 write	/man/6/audio
 write	/man/6/users
-write	/man/8/bootpd
 write	/man/8/cs
 write	/man/8/dns
 write	/man/8/kfscmd
@@ -76006,7 +75136,6 @@ writes	/man/2/sys-iounit
 writes	/man/2/sys-pipe
 writes	/man/2/sys-print
 writes	/man/2/sys-read
-writes	/man/2/tftp
 writes	/man/2/venti
 writes	/man/3/arch
 writes	/man/3/audio
@@ -76111,7 +75240,6 @@ written	/man/2/bufio
 written	/man/2/bufio-chanfill
 written	/man/2/dbm
 written	/man/2/draw-image
-written	/man/2/ether
 written	/man/2/keyring-0intro
 written	/man/2/keyring-getstring
 written	/man/2/plumbmsg
@@ -76256,13 +75384,11 @@ x	/man/6/keyboard
 x	/man/6/man
 x	/man/6/utf
 x	/man/8/applylog
-x	/man/8/bootpd
 x	/man/8/create
 x	/man/8/cs
 x	/man/8/dns
 x	/man/8/format
 x	/man/8/mkfs
-x	/man/8/rip
 x11	/man/1/emu
 x11	/man/6/keyboard
 x11	/man/6/scancode
@@ -76315,7 +75441,6 @@ xxx	/man/10/plan9.ini
 xxx	/man/6/login
 xxxdevtab	/man/10/dynld
 xxxx	/man/10/styx
-xxxxx	/man/8/bootpd
 xy	/man/2/draw-pointer
 xyeeeeennnnn	/man/2/geodesy
 xyeeeennnn	/man/2/geodesy
@@ -76546,7 +75671,6 @@ zero	/man/2/sys-remove
 zero	/man/2/sys-seek
 zero	/man/2/sys-stat
 zero	/man/2/sys-tokenize
-zero	/man/2/tftp
 zero	/man/2/tk
 zero	/man/2/venti
 zero	/man/2/w3c-css

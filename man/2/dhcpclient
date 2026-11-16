@@ -370,5 +370,4 @@ and a host or domain name that is not one word is not written to
 .SH SOURCE
 .B /appl/lib/dhcpclient.b
 .SH SEE ALSO
-.IR bootpd (8),
 .IR dhcp (8)

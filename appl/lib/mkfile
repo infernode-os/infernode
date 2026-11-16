@@ -64,7 +64,6 @@ TARG=\
 	env.dis\
 	ethcrypto.dis\
 	ethrpc.dis\
-	ether.dis\
 	exception.dis\
 	factotum.dis\
 	fdrun.dis\
@@ -163,7 +162,6 @@ TARG=\
 	styxpersist.dis\
 	styxservers.dis\
 	tables.dis\
-	tftp.dis\
 	timers.dis\
 	titlebar.dis\
 	tkclient.dis\
@@ -174,7 +172,6 @@ TARG=\
 	url.dis\
 	vac.dis\
 	venti.dis\
-	virgil.dis\
 	wait.dis\
 	wallet.dis\
 	watchvars.dis\
@@ -260,7 +257,6 @@ SYSMODULES=\
 	env.m\
 	ethcrypto.m\
 	ethrpc.m\
-	ether.m\
 	exception.m\
 	factotum.m\
 	fdrun.m\
@@ -347,7 +343,6 @@ SYSMODULES=\
 	tables.m\
 	testing.m\
 	textwidget.m\
-	tftp.m\
 	timers.m\
 	titlebar.m\
 	tk.m\

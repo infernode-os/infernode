@@ -37,9 +37,6 @@ A network database gives particular meaning to the following attributes:
 .B auth
 name or address of authentication server
 .TP
-.B bootf
-name of the file to send to a device on request when booting
-.TP
 .B dns
 name or address of DNS resolver (see also the
 .B ns
@@ -52,8 +49,7 @@ domain in which the local host lives (used to qualify unqualified names)
 Internet domain name (host or DNS zone)
 .TP
 .B ether
-Ethernet address in the form accepted by
-.IR ether (2)
+Ethernet address, as twelve hexadecimal digits
 .TP
 .B fs
 name or address of file server
@@ -214,6 +210,5 @@ infernosite=
 .SH SEE ALSO
 .IR attrdb (2),
 .IR attrdb (6),
-.IR bootpd (8),
 .IR cs (8),
 .IR dns (8)

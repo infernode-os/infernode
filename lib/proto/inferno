@@ -470,7 +470,6 @@ appl
 			wrap.m
 			wrap2list.b
 		ip
-			bootpd.b
 			mkfile
 			nppp
 				mkfile
@@ -481,7 +480,6 @@ appl
 				ppptest.b
 				script.b
 				script.m
-			obootpd.b
 			ping.b
 			ppp
 				mkfile
@@ -495,9 +493,6 @@ appl
 				ppptest.b
 				script.b
 				script.m
-			rip.b
-			tftpd.b
-			virgild.b
 		irtest.b
 		itest.b
 		itreplay.b
@@ -857,7 +852,6 @@ appl
 			base64.b
 			mkfile
 		env.b
-		ether.b
 		exception.b
 		factotum.b
 		filepat.b
@@ -965,7 +959,6 @@ appl
 		tcl_symhash.b
 		tcl_tk.b
 		tcl_utils.b
-		tftp.b
 		timers.b
 		titlebar.b
 		tkclient.b
@@ -979,7 +972,6 @@ appl
 			usbmouse.b
 		utils.m
 		venti.b
-		virgil.b
 		volume.b
 		w3c
 			css.b
@@ -1409,7 +1401,6 @@ dis
 		encoding
 			+
 		env.dis
-		ether.dis
 		exception.dis
 		factotum.dis
 		filepat.dis
@@ -1504,7 +1495,6 @@ dis
 		tcl_symhash.dis
 		tcl_tk.dis
 		tcl_utils.dis
-		tftp.dis
 		timers.dis
 		titlebar.dis
 		tkclient.dis
@@ -1516,7 +1506,6 @@ dis
 			usbmct.dis
 			usbmouse.dis
 		venti.dis
-		virgil.dis
 		volume.dis
 		w3c
 			+
@@ -1996,7 +1985,6 @@ module
 	emio.m
 	encoding.m
 	env.m
-	ether.m
 	exception.m
 	factotum.m
 	ffts.m
@@ -2089,7 +2077,6 @@ module
 	tables.m
 	tabs.m
 	tcllib.m
-	tftp.m
 	timers.m
 	titlebar.m
 	tk.m

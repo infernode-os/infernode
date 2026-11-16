@@ -70,7 +70,6 @@ dec encoding
 enc encoding
 encoding encoding
 env env
-ether ether
 exception exception
 factotum factotum
 mount factotum
@@ -401,14 +400,12 @@ werrstr sys-werrstr
 mktabs tabs
 tabs tabs
 tabsctl tabs
-tftp tftp
 timers timers
 mkdictname translate
 opendict translate
 opendicts translate
 translate translate
 venti venti
-virgil virgil
 volume volume
 w3c w3c-css
 w3c-css w3c-css

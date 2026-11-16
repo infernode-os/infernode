@@ -5,11 +5,7 @@ DIRS=\
 #	nppp\
 
 TARG=\
-	bootpd.dis\
 	ping.dis\
-	rip.dis\
-	tftpd.dis\
-	virgild.dis\
 	sntp.dis\
 	dhcp.dis\
 	wpa.dis\
@@ -19,7 +15,6 @@ SYSMODULES=\
 	attrdb.m\
 	bufio.m\
 	draw.m\
-	ether.m\
 	factotum.m\
 	ip.m\
 	ipattr.m\

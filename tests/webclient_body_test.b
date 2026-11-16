@@ -506,7 +506,8 @@ testIdleReaped(t: ref T)
 	# the reaper has gone with the last connection (and the server's own timer)
 	for(i := 0; i < 60 && nprocs() > before; i++)
 		sys->sleep(50);
-	t.asserteq(nprocs(), before, "and no Prog is left once nothing is kept");
+	# (no more than before: in the runner, a Prog of an earlier test may end meanwhile)
+	t.assert(nprocs() <= before, sys->sprint("and no Prog is left once nothing is kept: %d, %d before", nprocs(), before));
 
 	# one that is used again within its time is the same connection, and is closed after its last use
 	(c, url) = announce(t);
@@ -519,7 +520,7 @@ testIdleReaped(t: ref T)
 	t.assert(ms >= 300 && ms < 1400, sys->sprint("on the same connection, closed 400ms after its last use: %dms", ms));
 	for(i = 0; i < 60 && nprocs() > before; i++)
 		sys->sleep(50);
-	t.asserteq(nprocs(), before, "and again no Prog is left");
+	t.assert(nprocs() <= before, sys->sprint("and again no Prog is left: %d, %d before", nprocs(), before));
 	webclient->setidle(Webclient->IDLEMS);
 }
 

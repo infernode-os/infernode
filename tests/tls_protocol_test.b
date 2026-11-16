@@ -284,7 +284,7 @@ testRecordPayloadTruncated(t: ref T)
 	response[3] = byte 0;
 	response[4] = byte 100;	# claims 100 bytes payload
 	# only 10 bytes of payload follow (bytes 5-14)
-	expecterr(t, response, "record payload read failed");
+	expecterr(t, response, "record cut short");
 }
 
 # Record with content type 23 (APPLICATION_DATA) instead of 22 (HANDSHAKE)
@@ -449,7 +449,7 @@ testAlertReceived(t: ref T)
 # Close pipe immediately after draining ClientHello (no response at all)
 testConnectionClosed(t: ref T)
 {
-	expecterr(t, nil, "record read failed");
+	expecterr(t, nil, "connection closed");
 }
 
 # ================================================================

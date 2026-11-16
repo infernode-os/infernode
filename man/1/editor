@@ -128,6 +128,13 @@ supports commands:
 .BR open " path,"
 .BR new ","
 .BR quit "."
+.B open
+refuses a document with unsaved changes, whoever asks: save it, or write
+.B clean
+to its
+.B ctl
+to throw them away, and open again.
+Opening the file it already holds is taken and changes nothing.
 .PP
 Writing to
 .B /edit/1/ctl

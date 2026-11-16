@@ -853,7 +853,20 @@ handlegctl(cmd: string): string
 	op = str->tolower(op);
 	case op {
 	"open" =>
+		# a path, less a writer's newline: `echo open f > /edit/ctl`
+		while(rest != "" && (rest[len rest-1] == '\n' || rest[len rest-1] == '\r' || rest[len rest-1] == ' ' || rest[len rest-1] == '\t'))
+			rest = rest[0:len rest-1];
 		sys->fprint(stderr, "edit: handlegctl open: rest=%s\n", rest);
+		# A document with unsaved changes is not replaced, whoever asks
+		# (lucipres, lucictx, matrix, the agent's editor tool): the
+		# write is refused and the typing kept.  The file it already
+		# holds is left as it is.  Save it, or `clean` it in its ctl to
+		# throw the changes away, and open again.
+		if(rest != "" && doc.dirty) {
+			if(rest == doc.filepath)
+				return "ok";
+			return "error: unsaved changes in " + docname() + ": save them first";
+		}
 		if(rest != "") {
 			doc.filepath = rest;
 			loadfile(doc.filepath);
@@ -1452,6 +1465,14 @@ handlefswrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 }
 
 # ---------- Title ----------
+
+# The document as a refusal names it.
+docname(): string
+{
+	if(doc.filepath != "")
+		return doc.filepath;
+	return "the new document";
+}
 
 titlestr(): string
 {
@@ -2304,7 +2325,11 @@ splitfirst(s: string): (string, string)
 			return (s[0:j], rest[k:]);
 		}
 	}
-	return (s, "");
+	# A word alone: a writer's newline (sh's echo) is not part of it.
+	j = len s;
+	while(j > 0 && (s[j-1] == '\n' || s[j-1] == '\r'))
+		j--;
+	return (s[0:j], "");
 }
 
 readf(path: string): string

@@ -52,6 +52,9 @@ include "wmsrv.m";
 
 include "lucitheme.m";
 
+include "plumbmsg.m";
+	plumbmsg: Plumbmsg;
+	Msg: import plumbmsg;
 include "readdir.m";
 	readdir: Readdir;
 
@@ -2552,17 +2555,28 @@ domenuitem(action: string)
 # Open the current composition file in the Lucifer editor.  Shared by
 # the context menu and the ctl "edit" verb (so sh, agents, and Tk
 # buttons like the picker's all reach it over the same wire).
+#
+# The file is plumbed: lucipres's plumb handler (plumbeditor) is the one
+# policy for which editor a file goes to, and it never replaces unsaved
+# changes.  With no plumber, the same policy here: the running editor
+# is given it only if its document is clean (/edit/index), else the
+# file gets an editor of its own.  Writing `create id=editor` while one
+# exists is refused by luciuisrv ("artifact already exists"): the file
+# never opened, which is what this did before.
+#
+# Either way luciuisrv launches the editor, not matrix: each Lucifer app
+# slot has a single-shot appwm (lucifer.b:appwmrelay reads exactly
+# once), matrix already consumed its slot for its own window, so
+# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would leave
+# editor's wmclient->window blocked with no reader.
+editseq := 0;
+
 editcurrent()
 {
 	if(comppath == "")
 		return;
-	# Route through luciuisrv's artifact ctl rather than spawning
-	# wm/editor in matrix's own slot.  Each Lucifer app slot has a
-	# single-shot appwm (lucifer.b:appwmrelay reads exactly once);
-	# matrix already consumed its slot for its own window, so
-	# `load Command "/dis/wm/editor.dis"; spawn ed->init(...)` would
-	# leave editor's wmclient->window blocked with no reader.
-	# Letting luciuisrv launch editor gives it its own slot + ctxt.
+	if(plumbcomp(comppath))
+		return;
 	s := readfile("/mnt/ui/activity/current");
 	if(s == nil)
 		s = "0";
@@ -2573,23 +2587,89 @@ editcurrent()
 			s = s[0:i+1];
 			break;
 		}
-	pctl := "/mnt/ui/activity/" + s + "/presentation/ctl";
-	cmd := "create id=editor type=app dis=/dis/wm/editor.dis " +
-		"label=Edit data=" + comppath;
-	fd := sys->open(pctl, Sys->OWRITE);
-	if(fd == nil) {
-		sys->fprint(stderr, "matrix: cannot open %s: %r\n", pctl);
+	pres := "/mnt/ui/activity/" + s + "/presentation";
+	pctl := pres + "/ctl";
+	id := "editor";
+	done := chan of int;
+	spawn editorgive(comppath, done);
+	if(<-done <= 0) {
+		if(sys->stat(pres + "/editor").t0 >= 0)
+			id = sys->sprint("matrix-edit-%d", ++editseq);
+		if(writectl(pctl, "create id=" + id + " type=app dis=/dis/wm/editor.dis " +
+				"label=Edit data=" + comppath) < 0)
+			return;
+	}
+	# Surface the editor tab.
+	writectl(pctl, "center id=" + id);
+}
+
+# Send path to the plumber; 0 if none takes it.
+plumbcomp(path: string): int
+{
+	if(plumbmsg == nil) {
+		plumbmsg = load Plumbmsg Plumbmsg->PATH;
+		if(plumbmsg == nil)
+			return 0;
+	}
+	if(plumbmsg->init(1, nil, 0) < 0)
+		return 0;
+	dir := "/";
+	for(i := len path - 1; i > 0; i--)
+		if(path[i] == '/') {
+			dir = path[0:i];
+			break;
+		}
+	msg := ref Msg("matrix", nil, dir, "text", "", array of byte path);
+	return msg.send() >= 0;
+}
+
+# Give the running editor path: 1 if it took it (or holds it already),
+# 0 if its document has unsaved changes, -1 if there is none to ask.
+editorgive(path: string, done: chan of int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
+		done <-= -1;
 		return;
 	}
-	b := array of byte cmd;
-	sys->write(fd, b, len b);
 	fd = nil;
-	# Surface the new editor tab.
-	fd = sys->open(pctl, Sys->OWRITE);
-	if(fd != nil) {
-		cb := array of byte "center id=editor";
-		sys->write(fd, cb, len cb);
+	idx := readfile("/mnt/editor/index");
+	if(idx == nil) {
+		done <-= -1;
+		return;
 	}
+	(nil, lines) := sys->tokenize(idx, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(n, f) := sys->tokenize(hd lines, " \t");
+		if(n < 3)
+			continue;
+		if(hd tl f == path) {
+			done <-= 1;
+			return;
+		}
+		if(hd tl tl f != "0") {
+			done <-= 0;
+			return;
+		}
+	}
+	if(writectl("/mnt/editor/ctl", "open " + path) < 0)
+		done <-= 0;	# refused: changes made since the index was read
+	else
+		done <-= 1;
+}
+
+writectl(path, cmd: string): int
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		sys->fprint(stderr, "matrix: cannot open %s: %r\n", path);
+		return -1;
+	}
+	b := array of byte cmd;
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return 0;
 }
 
 basename(p: string): string

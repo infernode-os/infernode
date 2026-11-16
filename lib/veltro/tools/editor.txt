@@ -42,7 +42,8 @@ Commands (only work after "launch editor"):
   write <text>             Replace entire document body
   append <text>            Append text to body
   save                     Save current file
-  open <path>              Open file in editor
+  open <path>              Open file in editor (refused while the
+                           document has unsaved changes: save first)
   goto <line>              Move cursor to line number
   find <string>            Search for text in document
   replace <find> <repl>    Replace next occurrence

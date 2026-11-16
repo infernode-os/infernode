@@ -2132,10 +2132,19 @@ openpath(path: string)
 	} else if(len path > 4 && path[len path - 4:] == ".dis") {
 		# Non-launchable .dis bytecode: skip (not useful in editor)
 		sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", path);
-	} else {
-		# File: open in edit (ensure it's running first)
+	} else if(!plumbopenfile(path, dirname(path))) {
+		# File: plumbed, so lucipres's one policy (plumbeditor) says
+		# which editor has it; with no plumber, the editor directly.
 		openineditor(path);
 	}
+}
+
+dirname(path: string): string
+{
+	for(i := len path - 1; i > 0; i--)
+		if(path[i] == '/')
+			return path[0:i];
+	return "/";
 }
 
 # Allowed dis path prefixes for GUI app launch from context zone.
@@ -2222,29 +2231,69 @@ plumbopenfile(path, dir: string): int
 	return 1;
 }
 
-# Open path in the editor: through its posted server (#seditor/fs,
-# post9p(2)) when one runs, mounted in a name space of the proc's own;
-# else start one on the file.  Nothing waits for it to appear.
+# Open path in the editor with no plumber to send it to (lucipres's
+# plumbeditor is the policy when there is one, and this keeps to it):
+# the running editor, through its posted server (#seditor/fs,
+# post9p(2)) mounted in a name space of the proc's own, is given the
+# file only when its document has no unsaved changes (/edit/index,
+# "id path dirty"; the editor refuses such an open itself too).  One
+# with changes keeps them and the file gets an editor of its own; with
+# none running, the artifact `editor` is started on it.  Nothing waits
+# for it to appear.
+editseq := 0;
+
 openineditor(path: string)
 {
 	done := chan of int;
 	spawn editoropen(path, done);
-	if(<-done)
-		return;
+	r := <-done;
 	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-	writetofile(pctl, "create id=editor type=app dis=/dis/wm/editor.dis label=editor data=" + path);
-	writetofile(pctl, "center id=editor");
+	if(r > 0) {
+		writetofile(pctl, "center id=editor");
+		return;
+	}
+	id := "editor";
+	(ok, nil) := sys->stat(sys->sprint("%s/activity/%d/presentation/editor", mountpt_g, actid_g));
+	if(ok >= 0)
+		id = sys->sprint("lucictx-edit-%d", ++editseq);	# `editor` again is refused: luciuisrv has one
+	writetofile(pctl, sys->sprint("create id=%s type=app dis=/dis/wm/editor.dis label=editor data=%s", id, path));
+	writetofile(pctl, "center id=" + id);
 }
 
+# 1 if the editor took path (or holds it already), 0 if its document
+# has unsaved changes, -1 if there is none to ask.
 editoropen(path: string, done: chan of int)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	fd := sys->open("#seditor/fs", Sys->ORDWR);
 	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
-		done <-= 0;
+		done <-= -1;
 		return;
 	}
-	done <-= writetofile("/mnt/editor/ctl", "open " + path) > 0;
+	fd = nil;
+	idx := readfile("/mnt/editor/index");
+	if(idx == nil) {
+		done <-= -1;
+		return;
+	}
+	(nil, lines) := sys->tokenize(idx, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(n, f) := sys->tokenize(hd lines, " \t");
+		if(n < 3)
+			continue;
+		if(hd tl f == path) {
+			done <-= 1;
+			return;
+		}
+		if(hd tl tl f != "0") {
+			done <-= 0;
+			return;
+		}
+	}
+	if(writetofile("/mnt/editor/ctl", "open " + path) > 0)
+		done <-= 1;
+	else
+		done <-= 0;	# refused: changes made since the index was read
 }
 
 # Find a PinnedPath matching the given source path, or nil if not found.

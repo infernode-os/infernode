@@ -58,8 +58,10 @@ testRejectsUnsafeNumber(t: ref T)
 		"rejects non-phone recipient token before /phone/sms write: " + r);
 
 	r = tool->exec("+1-555-1234 hello");
-	t.assert(hassubstr(r, "/phone/sms") || hassubstr(r, "queued"),
-		"accepts a syntactically safe number");
+	# sent (a /phone/sms an earlier test left in the tree) or refused by
+	# the phone's absence: either way past the number's check
+	t.assert(hassubstr(r, "given to the phone") || hassubstr(r, "/phone/sms"),
+		"accepts a syntactically safe number: " + r);
 }
 
 hassubstr(s, sub: string): int

@@ -12,6 +12,7 @@ load std
 
 path=(/dis/veltro /dis/cmd /dis .)
 mkdir -p /tmp/usr/inferno/audit /tmp/llm /tmp/venti /tmp/empty
+mkdir -p /mnt/llm /mnt/audit	# mount points a fresh tree lacks
 bind -c /tmp/usr /usr
 bind -a '#I' /net >[2] /dev/null
 echo -n > /tmp/venti/data

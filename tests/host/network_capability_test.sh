@@ -22,8 +22,10 @@ else
 	echo "FAIL: a non-network invocation may have reached /net"; echo "$output"; exit 1
 fi
 
-if grep -q 'private or reserved destination denied' <<<"$output"; then
-	echo "PASS: browser transport rejects private destinations"
+# refused by the tool before any request (browse.b's own check) or by
+# the transport (publicnet): either way no private destination is reached
+if grep -Eq 'private or reserved destination denied|requests to internal/private network addresses are not allowed' <<<"$output"; then
+	echo "PASS: browser rejects private destinations"
 else
 	echo "FAIL: browser did not enforce public destination policy"; echo "$output"; exit 1
 fi

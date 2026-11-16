@@ -1,31 +1,31 @@
 # InferNode analytics
 
-Snapshot captured `2026-11-15T11:08:13+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-11-16T11:37:32+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
 | Metric | Current | Δ 7d | Δ 30d |
 |---|---:|---:|---:|
-| Stars | 33 | +1 | +7 |
+| Stars | 35 | +3 | +8 |
 | Forks | 6 | +1 | +1 |
-| Watchers | 33 | +1 | +7 |
+| Watchers | 35 | +3 | +8 |
 | Subscribers | 2 | 0 | 0 |
 
 ## Issues & pull requests
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 37 | 11 |
-| Merged | — | 1087 |
+| Open | 37 | 10 |
+| Merged | — | 1093 |
 | Closed (unmerged) | 36 | 29 |
 
 ## Release downloads
 
-Lifetime downloads across published releases: **1262** (Δ 7d +208, Δ 30d +885).
+Lifetime downloads across published releases: **1265** (Δ 7d +208, Δ 30d +884).
 
 | Release | Published | Downloads |
 |---|---|---:|
-| `v0.10.1` | 2026-11-12 | 104 |
+| `v0.10.1` | 2026-11-12 | 107 |
 | `v0.10.0` | 2026-11-09 | 96 |
 | `v0.9.0` | 2026-10-29 | 81 |
 | `v0.8.1` | 2026-10-22 | 86 |
@@ -59,9 +59,9 @@ Lifetime downloads across published releases: **1262** (Δ 7d +208, Δ 30d +885)
 | `v0.1.3` | `infernode-0.1.3-linux-amd64.tar.gz` | 10 |
 | `v0.1.3` | `infernode-0.1.3-macos-arm64.dmg` | 10 |
 | `v0.10.1` | `infernode-0.10.1-linux-amd64-gui.tar.gz` | 9 |
+| `v0.10.1` | `infernode-0.10.1-macos-amd64.dmg` | 9 |
 | `v0.10.1` | `infernode-0.10.1-macos-arm64.dmg` | 9 |
 | `v0.10.1` | `infernode-0.10.1-windows-amd64-gui.zip` | 9 |
-| `v0.10.1` | `infernode-0.10.1-macos-amd64.dmg` | 8 |
 | `v0.10.0` | `infernode-0.10.0-rpi3bplus.img.xz` | 8 |
 | `v0.3.6` | `infernode-0.3.6-linux-amd64-gui.tar.gz` | 8 |
 | `v0.10.0` | `infernode-0.10.0-linux-amd64-gui.tar.gz` | 7 |

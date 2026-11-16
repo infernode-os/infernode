@@ -154,6 +154,7 @@ TARG=\
 	math_edge_test.dis\
 	alt_edge_test.dis\
 	attrdb_test.dis\
+	dial_lib_test.dis\
 	post9p_test.dis\
 	auth_algs_test.dis\
 	registry_test.dis\

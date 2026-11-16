@@ -5,6 +5,8 @@ include "sys.m";
 
 include "dial.m";
 
+Maxrecipes: con 64;	# translations of one address tried; a connection server could go on for ever
+
 #
 # the dialstring is of the form '[/net/]proto!dest'
 #
@@ -51,11 +53,19 @@ csdial(netdir: string, proto: string, rem: string, local: string): ref Connectio
 	# try each recipe until we get one that works
 	besterr, err: string;
 	sys->seek(fd, big 0, 0);
-	for(;;){
+	# if nothing is tried the error says so; it used to be set to the
+	# empty string, which read as no error at all
+	sys->werrstr("cs: no translation");
+	for(n := 0; n < Maxrecipes; n++){
 		(clonefile, addr) := csread(fd);
 		if(clonefile == nil)
 			break;
-		c := call(redir(clonefile, netdir), addr, local);
+		cf := redir(clonefile, netdir);
+		if(cf == nil){
+			err = sys->sprint("cs: bad clone file name: %q", clonefile);
+			continue;
+		}
+		c := call(cf, addr, local);
 		if(c != nil)
 			return c;
 		err = sys->sprint("%r");
@@ -64,7 +74,7 @@ csdial(netdir: string, proto: string, rem: string, local: string): ref Connectio
 	}
 	if(besterr != nil)
 		sys->werrstr(besterr);
-	else
+	else if(err != nil)
 		sys->werrstr(err);
 	return nil;
 }
@@ -114,7 +124,23 @@ readchan(cfd: ref Sys->FD): string
 		sys->werrstr("empty clone file");
 		return nil;
 	}
-	return string int string buf[0: n];
+	# a conversation's number, and nothing else: whatever else the file
+	# held was read as conversation 0
+	s := string buf[0: n];
+	while(len s > 0 && (s[0] == ' ' || s[0] == '\t'))
+		s = s[1:];
+	while(len s > 0 && (s[len s-1] == ' ' || s[len s-1] == '\n' || s[len s-1] == '\t'))
+		s = s[0: len s-1];
+	if(len s == 0 || len s > 9){
+		sys->werrstr("clone file's reply is not a number");
+		return nil;
+	}
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9'){
+			sys->werrstr("clone file's reply is not a number");
+			return nil;
+		}
+	return string int s;
 }
 
 redir(old: string, newdir: string): string
@@ -124,8 +150,16 @@ redir(old: string, newdir: string): string
 	if(len old > 1 && old[0] == '/'){
 		p := lookc(old[1:], '/');
 		if(p >= 0)
-			return newdir+"/"+old[1+p+1:];
+			old = old[1+p+1:];
 	}
+	# what is left names a protocol's clone file in the network
+	# directory dialled, proto/clone, and nothing else.  The connection
+	# server is whatever file is at netdir/cs; with more elements in
+	# its answer (x/../../t/clone) the file opened, and written to,
+	# was anywhere the caller could reach.
+	p := lookc(old, '/');
+	if(p <= 0 || old[p+1:] != "clone" || old[0:p] == "." || old[0:p] == "..")
+		return nil;
 	return newdir+"/"+old;
 }
 
@@ -260,8 +294,12 @@ nettrans(addr: string): (string, string)
 	(clonefile, naddr) := csread(fd);
 	if(clonefile == nil)
 		return (nil, nil);
-
-	return (naddr, redir(clonefile, netdir));
+	cf := redir(clonefile, netdir);
+	if(cf == nil){
+		sys->werrstr(sys->sprint("cs: bad clone file name: %q", clonefile));
+		return (nil, nil);
+	}
+	return (naddr, cf);
 }
 
 csread(fd: ref Sys->FD): (string, string)
@@ -270,15 +308,29 @@ csread(fd: ref Sys->FD): (string, string)
 	n := sys->read(fd, buf, len buf);
 	if(n < 0)
 		return (nil, nil);
+	if(n == 0)
+		return (nil, nil);	# no more
 	line := string buf[0: n];
 	p := lookc(line, ' ');
-	if(p < 0)
+	if(p < 0){
+		sys->werrstr(sys->sprint("cs: bad translation: %q", line));
 		return (nil, nil);
+	}
 	if(p == 0){
 		sys->werrstr("cs: no translation");
 		return (nil, nil);
 	}
-	return (line[0:p], line[p+1:]);
+	# the address is one word: it goes into the connect request, where
+	# a second word is the local address and a new line another request
+	addr := line[p+1:];
+	if(len addr > 0 && addr[len addr-1] == '\n')
+		addr = addr[0: len addr-1];
+	for(i := 0; i < len addr; i++)
+		if(addr[i] <= ' '){
+			sys->werrstr(sys->sprint("cs: bad translation: %q", line));
+			return (nil, nil);
+		}
+	return (line[0:p], addr);
 }
 
 #

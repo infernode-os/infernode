@@ -948,10 +948,19 @@ Link: adt {
 
 MAXIDLE: con 6;		# kept for each place, as many as fetch at once
 MAXPOOL: con 32;	# kept at all
-IDLEMS: con 30*1000;	# not reused after; servers close idle connections
+idlems := IDLEMS;	# not reused after; servers close idle connections
 
 pool: list of ref Link;
 poollk: chan of int;
+reaping: int;		# a reaper is asleep,
+reapdue: int;		# to look at the pool again at this time
+
+setidle(ms: int)
+{
+	if(ms < 0)
+		ms = 0;
+	idlems = ms;
+}
 
 Link.read(l: self ref Link, a: array of byte): int
 {
@@ -1042,8 +1051,10 @@ takelink(key: string): ref Link
 	keep: list of ref Link;
 	for(pl := pool; pl != nil; pl = tl pl) {
 		k := hd pl;
-		if(now - k.idle > IDLEMS)
-			continue;	# dropped, and closed when collected
+		if(now - k.idle > idlems) {
+			keep = k :: keep;	# too old to use: the reaper's to close
+			continue;
+		}
 		if(l == nil && k.key == key)
 			l = k;
 		else
@@ -1065,13 +1076,69 @@ putlink(l: ref Link)
 		if((hd pl).key == l.key)
 			n++;
 	}
+	start := 0;
 	if(n < MAXIDLE && t < MAXPOOL) {
 		pool = l :: pool;
+		# a reaper for it, if none is due (one whose time is well
+		# past went with the Progs of the request that started it)
+		if(!reaping || l.idle - reapdue > 2000) {
+			reaping = 1;
+			reapdue = l.idle + idlems;
+			start = 1;
+		}
 		l = nil;
 	}
 	<-poollk;
 	if(l != nil)
 		l.close();
+	if(start)
+		spawn reaper();
+}
+
+# Close the kept connections that have been idle too long.  They were
+# only dropped, and only when the next request went looking for one: a
+# program that made a request and then none kept its connections, TLS
+# state and descriptors until it ended, and the servers kept theirs.
+# One Prog, there only while the pool holds something: it sleeps until
+# the oldest connection is due, and goes when the pool is empty.
+reaper()
+{
+	for(;;) {
+		lockpool();
+		now := sys->millisec();
+		gone, keep: list of ref Link;
+		next := -1;
+		for(pl := pool; pl != nil; pl = tl pl) {
+			k := hd pl;
+			left := idlems - (now - k.idle);
+			if(left < 0)
+				gone = k :: gone;
+			else {
+				keep = k :: keep;
+				if(next < 0 || left < next)
+					next = left;
+			}
+		}
+		pool = keep;
+		if(keep == nil)
+			reaping = 0;
+		else
+			reapdue = now + next + 1;
+		<-poollk;
+		for(; gone != nil; gone = tl gone) {
+			# (a TLS connection's close_notify among it)
+			{
+				(hd gone).close();
+			} exception {
+			"*" =>
+				;
+			}
+		}
+		if(keep == nil)
+			return;
+		keep = nil;
+		sys->sleep(next + 1);
+	}
 }
 
 # A new connection, the request's own (attached) from before its TLS

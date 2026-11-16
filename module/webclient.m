@@ -70,6 +70,14 @@ Webclient: module {
 	STALL: con 5*60*1000;
 	setdeadline:	fn(total, stall: int);
 
+	# A connection is kept after its response for the next request to
+	# the same place, for IDLEMS milliseconds; then it is closed, by
+	# a Prog that is there only while a connection is kept.  setidle
+	# changes the time for this load of the module (0: none is kept
+	# past its response's use).
+	IDLEMS: con 30*1000;
+	setidle:	fn(ms: int);
+
 	# Host, Content-Length and Transfer-Encoding are the request's own:
 	# ones among hdrs are not sent.  Credentials among hdrs go no
 	# further than the origin asked (scheme, host and port).

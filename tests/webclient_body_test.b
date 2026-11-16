@@ -199,6 +199,24 @@ serve(c: Sys->Connection, mode: string, n: int, done: chan of int)
 		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
 	"real" =>
 		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nREAL");
+	"kept" =>
+		# a response that leaves the connection open, then: how long
+		# until the client closes it (told on done, in milliseconds;
+		# -2 if it had not by n)
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nKEPT");
+		t0 := sys->millisec();
+		got := chan[1] of int;
+		spawn eofwait(fd, got);
+		tmo := chan[1] of int;
+		spawn timer(tmo, n);
+		alt {
+		<-got =>
+			done <-= sys->millisec() - t0;
+		<-tmo =>
+			sys->fprint(sys->open(nc.dir + "/ctl", Sys->OWRITE), "hangup");
+			done <-= -2;
+		}
+		return;
 	"br" =>
 		# a Brotli body from a file of the tests' (n: which)
 		f := "/tests/web/brotli/hello.br";
@@ -219,6 +237,15 @@ serve(c: Sys->Connection, mode: string, n: int, done: chan of int)
 	}
 	fd = nil;
 	done <-= 0;
+}
+
+# tell when fd's other end has closed it
+eofwait(fd: ref Sys->FD, got: chan of int)
+{
+	buf := array[64] of byte;
+	while(sys->read(fd, buf, len buf) > 0)
+		;
+	got <-= 1;
 }
 
 # two connections, one after the other
@@ -443,6 +470,95 @@ testBrotliCeiling(t: ref T)
 	t.assert(r == nil && contains(err, "too large"), sys->sprint("96MB from 77 bytes is refused as too large (it was a response of 96MB): %s (%dms)", err, sys->millisec() - t0));
 }
 
+# A kept connection is closed when it has been idle long enough,
+# whether or not another request is ever made.  It was dropped only
+# when the next request went looking for one, and closed when the
+# collector found it: a program that made one request kept the
+# connection, and the server its end, until the program ended.  The
+# Prog that closes them is there only while something is kept.
+nprocs(): int
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	t := 0;
+	for(;;) {
+		(n, nil) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		t += n;
+	}
+	return t;
+}
+
+testIdleReaped(t: ref T)
+{
+	webclient->setidle(400);
+	sys->sleep(100);
+	before := nprocs();
+	(c, url) := announce(t);
+	done := chan[1] of int;
+	spawn serve(c, "kept", 1500, done);
+	(r, err) := webclient->request("GET", url, nil, nil);
+	t.assert(r != nil && err == nil && string r.body == "KEPT", "the response: " + err);
+	ms := <-done;
+	t.assert(ms >= 300 && ms < 1400, sys->sprint("a connection kept and not used again is closed after its 400ms (it never was): %dms", ms));
+	# the reaper has gone with the last connection (and the server's own timer)
+	for(i := 0; i < 60 && nprocs() > before; i++)
+		sys->sleep(50);
+	t.asserteq(nprocs(), before, "and no Prog is left once nothing is kept");
+
+	# one that is used again within its time is the same connection, and is closed after its last use
+	(c, url) = announce(t);
+	spawn serve2kept(c, done);
+	(r, err) = webclient->request("GET", url, nil, nil);
+	sys->sleep(200);
+	(r, err) = webclient->request("GET", url, nil, nil);
+	t.assert(r != nil && err == nil && string r.body == "KEPT", "a second request within the time: " + err);
+	ms = <-done;
+	t.assert(ms >= 300 && ms < 1400, sys->sprint("on the same connection, closed 400ms after its last use: %dms", ms));
+	for(i = 0; i < 60 && nprocs() > before; i++)
+		sys->sleep(50);
+	t.asserteq(nprocs(), before, "and again no Prog is left");
+	webclient->setidle(Webclient->IDLEMS);
+}
+
+# one connection, two requests on it, then how long until it is closed
+serve2kept(c: Sys->Connection, done: chan of int)
+{
+	(ok, nc) := sys->listen(c);
+	if(ok < 0) {
+		done <-= -1;
+		return;
+	}
+	fd := sys->open(nc.dir + "/data", Sys->ORDWR);
+	buf := array[4096] of byte;
+	for(i := 0; i < 2; i++) {
+		req := "";
+		while(!hasend(req)) {
+			k := sys->read(fd, buf, len buf);
+			if(k <= 0) {
+				done <-= -3;
+				return;
+			}
+			req += string buf[0:k];
+		}
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nKEPT");
+	}
+	t0 := sys->millisec();
+	got := chan[1] of int;
+	spawn eofwait(fd, got);
+	tmo := chan[1] of int;
+	spawn timer(tmo, 1500);
+	alt {
+	<-got =>
+		done <-= sys->millisec() - t0;
+	<-tmo =>
+		sys->fprint(sys->open(nc.dir + "/ctl", Sys->OWRITE), "hangup");
+		done <-= -2;
+	}
+}
+
 # What is not a response is refused as what it is.
 testNotAResponse(t: ref T)
 {
@@ -530,6 +646,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RedirectToFile", testRedirectToFile);
 	run("CutShort", testCutShort);
 	run("BrotliCeiling", testBrotliCeiling);
+	run("IdleReaped", testIdleReaped);
 	run("NotAResponse", testNotAResponse);
 	run("NegativeLength", testNegativeLength);
 

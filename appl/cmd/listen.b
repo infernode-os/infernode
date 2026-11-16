@@ -109,16 +109,13 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	doauth := 1;
 	synchronous := 0;
 	trusted := 0;
-	mixed := 0;
-	arg->setusage("listen [-i {initscript}] [-AMst] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
+	arg->setusage("listen [-i {initscript}] [-Ast] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
 		'a' =>
 			algs = arg->earg() :: algs;
 		'A' =>
 			doauth = 0;
-		'M' =>
-			mixed = 1;
 		'f' or
 		'k' =>
 			keyfile = arg->earg();
@@ -154,24 +151,35 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 			arg->usage();
 		}
 	}
+	# -A with an algorithm asked for both ways at once, and the -a won
+	# without a word: the listener authenticated (styxlisten refused)
+	if (!doauth && algs != nil) {
+		sys->fprint(stderr(), "listen: -A (no authentication) and -a (the algorithm of an authenticated connection) contradict each other\n");
+		raise "fail:usage";
+	}
 	if (doauth && algs == nil)
 		algs = "aes_256_gcm" :: nil;
 	if (doauth && algs == nil) {
 		sys->fprint(stderr(), "listen: authentication requested, but no SSL algorithms are available\n");
 		raise "fail:no auth algorithms";
 	}
+	# What is hidden from the command below (the key file, /mnt/keys)
+	# is hidden in a name space of the listener's own.  With -A there
+	# was none, and the unmount took /mnt/keys from whoever started
+	# the listener as well.
+	if(!trusted && sys->pctl(Sys->FORKNS, nil) < 0) {
+		sys->fprint(stderr(), "listen: cannot fork key namespace: %r\n");
+		raise "fail:key namespace";
+	}
 	if (algs != nil) {
-		checkalgs(algs, mixed);
+		checkalgs(algs);
+		warnuser();
 		authslots = chan[authlimit] of int;
 		srclock = chan[1] of int;
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";
 		# Keep key masking private to this listener.  Children need the
 		# in-memory Authinfo, never the credential file itself.
-		if(!trusted && sys->pctl(Sys->FORKNS, nil) < 0) {
-			sys->fprint(stderr(), "listen: cannot fork key namespace: %r\n");
-			raise "fail:key namespace";
-		}
 		serverkey = keyring->readauthinfo(keyfile);
 		if (serverkey == nil) {
 			sys->fprint(stderr(), "listen: cannot read %s: %r\n", keyfile);
@@ -267,11 +275,11 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 							sys->fprint(stderr(), "listen: pre-auth limit per source (%d) reached for %s on %s\n", perlimit, host, addr);
 						nethangup(c.cfd);
 						c.dfd = c.cfd = nil;
-					} else if(!rateallow()) {
+					} else if(!rateallow(host)) {
 						srcrelease(host);
 						<-authslots;
 						if(verbose)
-							sys->fprint(stderr(), "listen: pre-auth rate limit reached on %s\n", addr);
+							sys->fprint(stderr(), "listen: pre-auth rate limit reached on %s for %s\n", addr, host);
 						nethangup(c.cfd);
 						c.dfd = c.cfd = nil;
 					} else {
@@ -315,15 +323,39 @@ plaincommand(c: Sys->Connection, ctxt: ref Context, cmd: list of ref Sh->Listnod
 	ctxt.run(cmd, 0);
 }
 
-rateallow(): int
+# One address may start at most half of a second's exchanges (and
+# always one): the budget was one count for every caller, so eight
+# connections a second from one address, each within its own limit of
+# exchanges in flight, used all of it and every other caller was hung
+# up.  Called only by the listener's own process.
+Srcrate: adt {
+	host:	string;
+	n:	int;
+};
+srcrates: list of ref Srcrate;
+
+rateallow(host: string): int
 {
 	now := sys->millisec();
 	if(ratecount == 0 || now < ratewindow || now-ratewindow >= 1000) {
 		ratewindow = now;
 		ratecount = 0;
+		srcrates = nil;
 	}
 	if(ratecount >= authrate)
 		return 0;
+	share := (authrate+1)/2;
+	sr: ref Srcrate;
+	for(l := srcrates; l != nil; l = tl l)
+		if((hd l).host == host)
+			sr = hd l;
+	if(sr == nil){
+		sr = ref Srcrate(host, 0);
+		srcrates = sr :: srcrates;
+	}
+	if(sr.n >= share)
+		return 0;
+	sr.n++;
 	ratecount++;
 	return 1;
 }
@@ -375,8 +407,15 @@ authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
 	ctxt = ctxt.copy(1);
 	err: string;
 	cancel := chan[1] of int;
-	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout, host);
+	decided := chan[1] of int;
+	spawn authwatchdog(cancel, decided, sys->pctl(0, nil), c.cfd, authtimeout, host);
 	(c.dfd, err) = auth->server(algs, serverkey, c.dfd, 1);
+	alt {
+	decided <-= 1 =>
+		;
+	* =>
+		return;	# the deadline came first: the watchdog has hung up
+	}
 	cancel <-= 1;
 	if (c.dfd == nil) {
 		sys->fprint(stderr(), "listen: auth on %s failed: %s\n", addr, err);
@@ -416,7 +455,7 @@ kill(pid: int, how: string)
 		sys->fprint(fd, "%s", how);
 }
 
-authwatchdog(cancel: chan of int, pid: int, cfd: ref Sys->FD, ms: int, host: string)
+authwatchdog(cancel, decided: chan of int, pid: int, cfd: ref Sys->FD, ms: int, host: string)
 {
 	tmo := chan[1] of int;
 	spawn timerproc(tmo, ms);
@@ -426,10 +465,21 @@ authwatchdog(cancel: chan of int, pid: int, cfd: ref Sys->FD, ms: int, host: str
 		srcrelease(host);
 		return;
 	<-tmo =>
-		<-authslots;
-		srcrelease(host);
-		nethangup(cfd);
-		kill(pid, "kill");
+		# with both ready alt takes either: an exchange that ended at
+		# its deadline was killed all the same.  Whichever of the two
+		# puts its word in decided first has the connection.
+		alt {
+		decided <-= 1 =>
+			<-authslots;
+			srcrelease(host);
+			nethangup(cfd);
+			kill(pid, "kill");
+			sys->fprint(stderr(), "listen: auth with %s not finished in %d ms: hung up\n", host, ms);
+		* =>
+			<-cancel;
+			<-authslots;
+			srcrelease(host);
+		}
 	}
 }
 
@@ -465,24 +515,18 @@ PROG: con "listen";
 # The algorithms a listener is given are checked when it starts, not at
 # each call.  A name ssl(3) does not have (a mistyped one; the rc4_256
 # and sha1 of old scripts) was passed on as it was, and a list of such
-# names let a caller that named nothing have a clear session.  And "none"
-# beside an algorithm protects nobody's session here: the caller's choice
-# is sent in clear and is not part of what was authenticated, so someone
-# on the path can change any caller's choice to "none" and speak to this
-# end as that caller.  That has to be asked for (-M).
-checkalgs(algs: list of string, mixed: int)
+# names let a caller that named nothing have a clear session.  "none"
+# may stand beside an algorithm: each caller's choice is confirmed under
+# the secret the two ends authenticated with and is part of the keys
+# (security-auth(2)), so nobody on the path can change it.  (While the
+# choice went in clear that mixture needed -M; the option is gone.)
+checkalgs(algs: list of string)
 {
 	known := getalgs();
 	bad := "";
-	plain := "";
-	prot := "";
 	for(l := algs; l != nil; l = tl l){
 		a := hd l;
-		if(a == "none" || a == "clear")
-			plain = a;
-		else if(member(a, known))
-			prot = a;
-		else
+		if(a != "none" && a != "clear" && !member(a, known))
 			bad += " " + a;
 	}
 	if(bad != nil){
@@ -492,10 +536,18 @@ checkalgs(algs: list of string, mixed: int)
 		sys->fprint(stderr(), "%s: -a:%s: not an algorithm of ssl(3), which has:%s\n", PROG, bad, have);
 		raise "fail:bad algorithm";
 	}
-	if(plain != nil && prot != nil && !mixed){
-		sys->fprint(stderr(), "%s: -a %s beside -a %s: anyone on the path can make a caller's session here a clear one; give -M to allow that\n", PROG, plain, prot);
-		raise "fail:mixed algorithms";
-	}
+}
+
+# Each caller is to run as itself: Auth->server writes the caller's name
+# to /dev/user, which the system takes only from the host owner.  A
+# listener started by anyone else serves every caller under its own
+# name, with its own rights to files; it said nothing of it.
+warnuser()
+{
+	me := readfile("/dev/user");
+	owner := readfile("/dev/hostowner");
+	if(owner != nil && me != owner)
+		sys->fprint(stderr(), "%s: running as %s, not the host owner %s: cannot become the callers it authenticates, so each is served as %s\n", PROG, me, owner, me);
 }
 
 member(s: string, l: list of string): int

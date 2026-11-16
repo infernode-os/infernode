@@ -203,6 +203,7 @@ TARG=\
 	timerec.dis\
 	wpadrive.dis\
 	ipint_nomem.dis\
+	mnt_unexpected.dis\
 	tool9call.dis\
 	exec_fd_probe.dis\
 	load_heapfull.dis\

@@ -271,6 +271,25 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 		sin6 = (struct sockaddr_in6*)&sa;
 		l = sizeof(sa);
 		r = recvfrom(sock, va, len, 0, (struct sockaddr*)&sa, &l);
+		if(r >= 0 && sa.ss_family == AF_INET) {
+			/*
+			 * macOS gives the sender of a datagram to a dual-stack
+			 * socket bound to a v4-mapped address (an announce on
+			 * udp!127.0.0.1!n) as an AF_INET sockaddr, not the
+			 * v4-mapped AF_INET6 one Linux gives.  Read as a
+			 * sockaddr_in6 it was another address, and a reply sent
+			 * to it was refused (EINVAL): such a server never
+			 * answered.  Made the v4-mapped address it is.
+			 */
+			uchar rip[IPaddrlen];
+			ushort rport;
+
+			ipfromsockaddr(&sa, rip, &rport);
+			memset(&sa, 0, sizeof(sa));
+			sin6->sin6_family = AF_INET6;
+			memmove(&sin6->sin6_addr, rip, IPaddrlen);
+			hnputs((uchar*)&sin6->sin6_port, rport);
+		}
 		if(r >= 0) {
 			memset(h, 0, sizeof(h));
 			switch(hdrlen){

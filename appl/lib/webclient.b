@@ -32,6 +32,7 @@ include "daytime.m";
 	daytime: Daytime;
 
 MAXREDIRECTS: con 10;
+MAXTRAILER: con 64;	# trailer fields read after a chunked body
 
 init(): string
 {
@@ -209,6 +210,13 @@ requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte)
 # and ends when the connect does, holding nothing.
 
 Etimeout: con "request timed out";
+# A body that ended before its header said it would.  It was a
+# response like any other, its first bytes its body: whoever could cut
+# the connection of a download (no need to break its TLS) chose where
+# the file ended, and the caller was told 200.  It is not `truncated',
+# which is the caller's own limit reached.
+Ecut: con "response body cut short";
+Ebadlength: con "bad Content-Length in response";
 POLLMS: con 100;	# how often the deadline is looked at
 
 Req: adt {
@@ -997,22 +1005,34 @@ readresponse(rq: ref Req, l: ref Link, method: string, types: list of string): (
 		keep = conn == "keep-alive";
 	else if(contains(conn, "close"))
 		keep = 0;
-	clen := resp.hdrval("Content-Length");
+	(cl, clerr) := contentlength(resp);
+	if(clerr != nil)
+		return (nil, 0, clerr);
 	te := str->tolower(resp.hdrval("Transfer-Encoding"));
+	if(te == "identity")
+		te = nil;
 	code := resp.statuscode;
+	if(code == 101)
+		keep = 0;	# what follows is not HTTP
 	if(method == "HEAD" || code == 204 || code == 304 || code < 200)
 		return (resp, keep, nil);
 	if(code < 300 && types != nil && !typeok(resp.hdrval("Content-Type"), types))
 		return (resp, 0, nil);	# not wanted: not read, and the connection with it not kept
 	g := ref Grow(nil, 0, rq.maxbody);
 	if(te != nil && contains(te, "chunked")) {
-		ok: int;
-		(ok, resp.truncated) = readchunked(rq, l, g);
+		(ok, trunc, cerr) := readchunked(rq, l, g);
+		if(cerr != nil) {
+			if(rq.over)
+				cerr = Etimeout;
+			return (nil, 0, cerr);
+		}
+		resp.truncated = trunc;
 		resp.body = g.bytes();
-		return (resp, keep && ok, nil);
+		# with a Content-Length too the two may disagree about where
+		# the next response begins (RFC 9112 §6.3): not kept
+		return (resp, keep && ok && cl < big 0, nil);
 	}
-	if(clen != nil) {
-		(cl, nil) := str->tobig(clen, 10);
+	if(te == nil && cl >= big 0) {
 		nbytes := g.max;
 		if(cl > big g.max) {
 			resp.truncated = 1;
@@ -1021,12 +1041,17 @@ readresponse(rq: ref Req, l: ref Link, method: string, types: list of string): (
 			nbytes = int cl;
 		if(nbytes <= 0)
 			return (resp, keep, nil);
-		if(readinto(rq, l, g, nbytes) < nbytes)
-			keep = 0;
+		got := readinto(rq, l, g, nbytes);
+		if(got < nbytes) {
+			if(rq.over)
+				return (nil, 0, Etimeout);
+			return (nil, 0, sys->sprint("%s: %d bytes of %bd", Ecut, got, cl));
+		}
 		resp.body = g.bytes();
 		return (resp, keep, nil);
 	}
-	# the body runs to the end of the connection
+	# the body runs to the end of the connection (as it does under a
+	# transfer coding that is not chunked, RFC 9112 §6.3)
 	readinto(rq, l, g, g.max);
 	if(g.n == g.max) {
 		one := array[1] of byte;
@@ -1034,6 +1059,35 @@ readresponse(rq: ref Req, l: ref Link, method: string, types: list of string): (
 	}
 	resp.body = g.bytes();
 	return (resp, 0, nil);
+}
+
+# The length Content-Length gives a body: -1 with none.  One that is
+# not a number, or two that differ, is an error (RFC 9112 §6.3): "-1"
+# read as no body, and the connection went back to the pool with the
+# body, or whatever the server sent in its place, as the next answer.
+contentlength(resp: ref Response): (big, string)
+{
+	cl := big -1;
+	for(h := resp.headers; h != nil; h = tl h) {
+		if(str->tolower((hd h).name) != "content-length")
+			continue;
+		(nil, vl) := sys->tokenize((hd h).value, ",");
+		if(vl == nil)
+			return (big -1, Ebadlength);
+		for(; vl != nil; vl = tl vl) {
+			v := trimsp(hd vl);
+			if(v == "" || len v > 18)
+				return (big -1, Ebadlength);
+			for(i := 0; i < len v; i++)
+				if(v[i] < '0' || v[i] > '9')
+					return (big -1, Ebadlength);
+			n := big v;
+			if(cl >= big 0 && n != cl)
+				return (big -1, Ebadlength);
+			cl = n;
+		}
+	}
+	return (cl, nil);
 }
 
 # [private]
@@ -1082,7 +1136,8 @@ readheader(l: ref Link): (string, string)
 		return (nil, "empty response");
 	if(hlen == len hbuf)
 		return (nil, "response header too long");
-	return (string hbuf[:hlen], nil);	# as much as came, as before
+	# (as much as came was taken for the header, and nothing for the body)
+	return (nil, "response header cut short");
 }
 
 # [private]
@@ -1102,11 +1157,17 @@ parseresponse(hdrstr: string): (ref Response, int, string)
 	if(statusline == nil)
 		return (nil, 0, "no status line");
 
-	# Parse "HTTP/1.1 200 OK"
+	# Parse "HTTP/1.1 200 OK".  Anything else is not an answer (an
+	# SMTP server's greeting was status 0 and no error).
+	if(len statusline < 5 || statusline[0:5] != "HTTP/")
+		return (nil, 0, "not an HTTP response: " + printable(statusline));
 	(nf, fields) := sys->tokenize(statusline, " ");
 	if(nf < 2)
-		return (nil, 0, "bad status line: " + statusline);
-	code := int hd tl fields;
+		return (nil, 0, "bad status line: " + printable(statusline));
+	sc := hd tl fields;
+	if(len sc != 3 || sc[0] < '1' || sc[0] > '9' || sc[1] < '0' || sc[1] > '9' || sc[2] < '0' || sc[2] > '9')
+		return (nil, 0, "bad status line: " + printable(statusline));
+	code := int sc;
 	status := statusline;
 
 	# Parse headers
@@ -1127,6 +1188,21 @@ parseresponse(hdrstr: string): (ref Response, int, string)
 
 	resp := ref Response(code, status, headers, nil, nil, 0);
 	return (resp, bodystart, nil);
+}
+
+# [private]
+# the start of what a server sent, fit for an error message
+printable(s: string): string
+{
+	if(len s > 60)
+		s = s[0:60];
+	r := "";
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] == 16r7F)
+			r[len r] = '?';
+		else
+			r[len r] = s[i];
+	return r;
 }
 
 # [private]
@@ -1157,37 +1233,46 @@ splitheader(line: string): (string, string)
 }
 
 # [private]
-# A chunked body (RFC 9112 §7.1), and whether it ended as it should:
-# the last chunk and the trailer section read, so that the connection
-# is at the next response.
-# Into g; whether it ended as it should, and whether it was cut at g's
-# limit.
-readchunked(rq: ref Req, l: ref Link, g: ref Grow): (int, int)
+# A chunked body (RFC 9112 §7.1) into g: whether it ended as it should
+# (the last chunk and the trailer section read, so that the connection
+# is at the next response), whether it was cut at g's limit, and what
+# was wrong with it: a connection that ended before the last chunk, a
+# size that is no number.
+readchunked(rq: ref Req, l: ref Link, g: ref Grow): (int, int, string)
 {
 	for(;;) {
 		line := readline(l);
 		if(line == nil)
-			return (0, 0);
+			return (0, 0, Ecut);
 		chunksize := hexval(line);
-		if(chunksize <= 0)
+		if(chunksize < 0)
+			return (0, 0, "bad chunk size in response");
+		if(chunksize == 0)
 			break;
 		if(chunksize > g.max - g.n) {
-			readinto(rq, l, g, g.max - g.n);
-			return (0, 1);
+			want := g.max - g.n;
+			if(readinto(rq, l, g, want) < want)
+				return (0, 0, Ecut);
+			return (0, 1, nil);
 		}
 		if(readinto(rq, l, g, chunksize) < chunksize)
-			return (0, 0);
-		readline(l);	# the CRLF after the data
-	}
-	# the trailer section, to its blank line
-	for(;;) {
-		line := readline(l);
+			return (0, 0, Ecut);
+		line = readline(l);	# the CRLF after the data
 		if(line == nil)
-			return (0, 0);
+			return (0, 0, Ecut);
+		if(line != "\r\n" && line != "\n")
+			return (0, 0, "bad chunked encoding in response");
+	}
+	# the trailer section, to its blank line.  The body is whole
+	# without it; the connection is not kept.
+	for(n := 0; ; n++) {
+		line := readline(l);
+		if(line == nil || n >= MAXTRAILER)
+			return (0, 0, nil);
 		if(line == "\r\n" || line == "\n")
 			break;
 	}
-	return (1, 0);
+	return (1, 0, nil);
 }
 
 # [private]
@@ -1233,6 +1318,8 @@ hexval(s: string): int
 			return 16r7fffffff;	# more than any body kept; not left to wrap
 		n = n * 16 + d;
 	}
+	if(i == 0)
+		return -1;	# no number (it was 0: the end of the body)
 	return n;
 }
 

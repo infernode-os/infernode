@@ -15,6 +15,18 @@ implement WebclientBodyTest;
 # of every framing still arrive whole.  A redirect to an address that is
 # not http is refused (file:///x was a request to localhost, port 80).
 #
+# A body that ends before its framing says it does is an error that
+# says so.  It was a response like any other: 50 bytes of a promised
+# 100, or a connection gone in the middle of a chunk, came back as
+# status 200 with no error and `truncated' 0, through requestbounded
+# too, so whoever could cut the connection of a download chose where
+# the file ended.  `truncated' keeps its one meaning: the body was
+# longer than the caller's limit.  And what is not a response is not
+# one: a Content-Length of -1 (read as no body, the connection kept,
+# and whatever followed taken as the next request's answer), two
+# lengths that differ, a chunk size that is no number, a header with
+# no end, a greeting that is not HTTP (status 0, no error).
+#
 
 include "sys.m";
 	sys: Sys;
@@ -149,8 +161,57 @@ serve(c: Sys->Connection, mode: string, n: int, done: chan of int)
 		sys->write(fd, body(n), n);
 	"tofile" =>
 		say(fd, "HTTP/1.1 302 Found\r\nLocation: file:///lib/ndb/local\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+	"short" =>
+		# n promised, half of it sent, and the connection closed
+		say(fd, sys->sprint("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n", n));
+		sys->write(fd, body(n/2), n/2);
+	"chunkcut" =>
+		# cut inside its second chunk
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n32\r\n");
+		sys->write(fd, body(50), 50);
+		say(fd, "\r\n400\r\nzzzz");
+	"chunknolast" =>
+		# every chunk whole, and no last one
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n32\r\n");
+		sys->write(fd, body(50), 50);
+		say(fd, "\r\n");
+	"badchunk" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nabc\r\n0\r\n\r\n");
+	"chunknocrlf" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcXX\r\n0\r\n\r\n");
+	"clneg" =>
+		# a length that is none, and then what a kept connection
+		# would take for the next request's answer
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n" +
+			"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nSet-Cookie: planted=1\r\n\r\nPOISON");
+		sys->sleep(300);
+	"cltext" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 5x\r\nConnection: close\r\n\r\nhello");
+	"cldiffer" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 3\r\nConnection: close\r\n\r\nhello");
+	"clsame" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 5, 5\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+	"nothttp" =>
+		say(fd, "220 mail.example ESMTP ready\r\n\r\n");
+	"badcode" =>
+		say(fd, "HTTP/1.1 OK 200\r\nContent-Length: 0\r\n\r\n");
+	"hdrcut" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
+	"real" =>
+		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nREAL");
 	}
 	fd = nil;
+	done <-= 0;
+}
+
+# two connections, one after the other
+serve2(c: Sys->Connection, mode1, mode2: string, done: chan of int)
+{
+	d := chan[1] of int;
+	serve(c, mode1, 0, d);
+	<-d;
+	serve(c, mode2, 0, d);
+	<-d;
 	done <-= 0;
 }
 
@@ -230,11 +291,8 @@ promised(t: ref T, mode: string)
 	stop <-= 1;
 	grew := <-most - before;
 	<-done;
-	t.assert(err == nil && r != nil, "request: " + err);
-	if(r != nil) {
-		t.asserteq(len r.body, 1000, "the bytes that came");
-		t.assert(len r.body == 1000 && r.body[999] == pat(999), "as they were sent");
-	}
+	# (the server then closes: the body was cut short, and is no response)
+	t.assert(r == nil && contains(err, "cut short"), "a body of 1000 bytes where 64 MB were promised: " + err);
 	t.assert(grew < 8*MB, sys->sprint("the heap grew by %d bytes for a body of 1000 (the header promised %d)", grew, HUGE));
 	r = nil;
 	t.assert(heapsize() - before < 8*MB, sys->sprint("%d bytes kept after it", heapsize() - before));
@@ -290,6 +348,109 @@ contains(s, sub: string): int
 	return 0;
 }
 
+# what a request of a server in mode gives: (response, error)
+ask(t: ref T, mode: string, n: int): (ref Webclient->Response, string)
+{
+	(c, url) := announce(t);
+	done := chan[1] of int;
+	spawn serve(c, mode, n, done);
+	(r, err) := webclient->request("GET", url, nil, nil);
+	<-done;
+	return (r, err);
+}
+
+refused(t: ref T, mode, why: string)
+{
+	(r, err) := ask(t, mode, 100);
+	what := "";
+	if(r != nil)
+		what = sys->sprint("status %d, %d bytes of body, truncated %d", r.statuscode, len r.body, r.truncated);
+	t.assert(r == nil, mode + ": no response (" + what + ")");
+	t.assert(contains(err, why), mode + ": the error says \"" + why + "\": " + err);
+}
+
+# A body the connection's end cut short is an error, by every framing
+# that says where a body ends.
+testCutShort(t: ref T)
+{
+	refused(t, "short", "cut short");
+	refused(t, "chunkcut", "cut short");
+	refused(t, "chunknolast", "cut short");
+
+	# through requestbounded too; and it is not `truncated', which is
+	# the caller's limit reached
+	(c, url) := announce(t);
+	done := chan[1] of int;
+	spawn serve(c, "short", 100, done);
+	(r, err) := webclient->requestbounded("GET", url, nil, nil, 0, 5000, 0);
+	<-done;
+	t.assert(r == nil && contains(err, "cut short"), "requestbounded: " + err);
+
+	# cut before the caller's limit: an error still
+	(c, url) = announce(t);
+	spawn serve(c, "short", 300, done);
+	(r, err) = webclient->requestbounded("GET", url, nil, nil, 0, 5000, 200);
+	<-done;
+	t.assert(r == nil && contains(err, "cut short"), "150 bytes of 300 with a limit of 200: " + err);
+
+	# the caller's limit reached first: truncated, and no error
+	(c, url) = announce(t);
+	spawn serve(c, "length", 300, done);
+	(r, err) = webclient->requestbounded("GET", url, nil, nil, 0, 5000, 100);
+	<-done;
+	t.assert(r != nil && err == nil, "a body of 300 with a limit of 100: " + err);
+	if(r != nil) {
+		t.asserteq(len r.body, 100, "bytes kept");
+		t.asserteq(r.truncated, 1, "said to be longer");
+	}
+}
+
+# What is not a response is refused as what it is.
+testNotAResponse(t: ref T)
+{
+	refused(t, "cltext", "Content-Length");
+	refused(t, "cldiffer", "Content-Length");
+	refused(t, "badchunk", "chunk");
+	refused(t, "chunknocrlf", "chunk");
+	refused(t, "nothttp", "not an HTTP response");
+	refused(t, "badcode", "status line");
+	refused(t, "hdrcut", "header cut short");
+
+	# lengths that agree are one length
+	(r, err) := ask(t, "clsame", 0);
+	t.assert(r != nil && err == nil && string r.body == "hello", "Content-Length: 5, 5: " + err);
+}
+
+# A Content-Length of -1 is no length: the response is refused and its
+# connection is not kept, so the next request is answered by the server
+# and not by what was left on the old connection.
+testNegativeLength(t: ref T)
+{
+	(c, url) := announce(t);
+	done := chan[1] of int;
+	spawn serve2(c, "clneg", "real", done);
+	(r, err) := webclient->request("GET", url, nil, nil);
+	t.assert(r == nil && contains(err, "Content-Length"), "Content-Length: -1: " + err);
+	(r, err) = webclient->request("GET", url, nil, nil);
+	t.assert(r != nil && err == nil, "the request after it: " + err);
+	if(r != nil)
+		t.assertseq(string r.body, "REAL", "is answered on a connection of its own");
+	tmo := chan[1] of int;
+	spawn timer(tmo, 3000);
+	alt {
+	<-done =>
+		;
+	<-tmo =>
+		t.error("the second request was not made on a new connection");
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
 # A redirect to a file: address is refused as what it is.
 testRedirectToFile(t: ref T)
 {
@@ -329,6 +490,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ChunkPromised", testChunkPromised);
 	run("WholeBodies", testWholeBodies);
 	run("RedirectToFile", testRedirectToFile);
+	run("CutShort", testCutShort);
+	run("NotAResponse", testNotAResponse);
+	run("NegativeLength", testNegativeLength);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

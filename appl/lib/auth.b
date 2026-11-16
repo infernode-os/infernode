@@ -1,6 +1,43 @@
 # Inferno authentication protocol
 implement Auth;
 
+#
+# After Keyring->auth both ends hold a secret nobody else has, and the
+# client says which ssl(3) algorithm the connection is to run under.
+# It said so in one message, in clear, that nothing vouched for: where
+# a server would take "none" beside a cipher, whoever carried the bytes
+# could put "none" where the client had written its cipher, and the
+# server then ran that client's session in clear, for whoever was
+# carrying the bytes to speak in.  The client failed at its own end,
+# having turned its cipher on, and knew nothing of it.
+#
+# The choice is now confirmed with the secret, and the keys are made of
+# it (version 2 of the exchange):
+#
+#	client:	"infernode-auth 2" \n algorithms \n
+#		hex HMAC-SHA256(kc, "client" \n algorithms)
+#	server:	"ok" \n its list \n
+#		hex HMAC-SHA256(kc, "server" \n "ok" \n algorithms \n its list)
+#	   or:	"no" \n why \n its list \n
+#		hex HMAC-SHA256(kc, "server" \n "no" \n why \n algorithms \n its list)
+#
+# each a Keyring->sendmsg message, where kc = HMAC-SHA256(secret,
+# "infernode auth 2 confirm"), and ssl's secret is HMAC-SHA384(secret,
+# "infernode auth 2 ssl" \n algorithms \n the server's list).  A
+# server acts on a choice only when the client's tag says it is the
+# client's; a client goes on only when the server's says the server
+# took that choice, so a choice changed on the way fails at both ends,
+# and one refused is refused in the server's own words.  Since the
+# keys are made of what each end saw, ends that were shown different
+# things have different keys as well.
+#
+# An end of the exchange before this one is refused, each way: a
+# server that is sent a bare algorithm says the client is an old one,
+# and a client whose message an old server cannot read (it takes
+# "infernode-auth" for an algorithm it does not have) is told the
+# server did not confirm.  Both ends of a connection are of one kind.
+#
+
 include "sys.m";
 	sys: Sys;
 
@@ -10,6 +47,8 @@ include "security.m";
 	ssl: SSL;
 
 encalgs, hashalgs: list of string;
+
+VERSION: con "infernode-auth 2";
 
 init(): string
 {
@@ -71,9 +110,56 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	# check if the client algorithm is in the server algorithm list
 	# client algorithm ::= ident (' ' ident)*
 	# where ident is defined by ssl(3)
-	algbuf := string kr->getmsg(fd);
-	if(algbuf == nil)
+	msg := kr->getmsg(fd);
+	if(msg == nil)
 		return (nil, sys->sprint("can't read client ssl algorithm: %r"));
+	kc := confirmkey(kr, secret);
+	offered := names(algs);
+	if(offered != nil)
+		offered = offered[1:];
+	(nl, lines) := sys->tokenize(string msg, "\n");
+	if(nl < 1 || hd lines != VERSION)
+		return (nil, "the client did not confirm its ssl algorithm: it is of a version before \"" + VERSION + "\", and both ends must be of one");
+	algbuf := "";
+	tag := "";
+	if(nl == 3){
+		algbuf = hd tl lines;
+		tag = hd tl tl lines;
+	}else if(nl == 2)
+		tag = hd tl lines;	# a choice of no words
+	if(nl > 3 || !sametag(tag, mac(kr, kc, "client\n" + algbuf)))
+		return (nil, "the client's choice of ssl algorithm is not confirmed by its key: changed on the way, or not the client's");
+
+	(alg, why) := choose(algs, algbuf);
+	if(why != nil){
+		# in the server's words, under its key: the client can say why
+		r := "no\n" + why + "\n" + offered + "\n";
+		b := array of byte (r + mac(kr, kc, "server\nno\n" + why + "\n" + algbuf + "\n" + offered));
+		kr->sendmsg(fd, b, len b);
+		return (nil, why);
+	}
+	b := array of byte ("ok\n" + offered + "\n" + mac(kr, kc, "server\nok\n" + algbuf + "\n" + offered));
+	if(kr->sendmsg(fd, b, len b) < 0)
+		return (nil, sys->sprint("can't confirm ssl algorithm: %r"));
+
+	# don't push ssl if server supports nossl
+	if(alg == nil || alg == "none")
+		return (fd, id_or_err);
+
+	# push ssl and turn on algorithms
+	ssl = load SSL SSL->PATH;
+	if(ssl == nil)
+		return (nil, sys->sprint("can't load ssl: %r"));
+	(c, err) := pushssl(fd, sslsecret(kr, secret, algbuf, offered), 0, alg);
+	if(c == nil)
+		return (nil, "push ssl: " + err);
+	return (c, id_or_err);
+}
+
+# What a server makes of a client's choice: (the algorithms to turn
+# on, nil), or (nil, why not)
+choose(algs: list of string, algbuf: string): (string, string)
+{
 	alg := "";
 	(nil, calgs) := sys->tokenize(algbuf, " /");
 	clientenc := clienthash := 0;
@@ -120,22 +206,122 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	}
 	if(alg != nil)
 		alg = alg[0:len alg - 1];
+	return (alg, nil);
+}
 
-	# don't push ssl if server supports nossl
-	if(alg == nil || alg == "none")
-		return (fd, id_or_err);
+# The key the two ends confirm the choice with, and the secret ssl's
+# keys are made of: each of the shared secret, the second of what the
+# two ends said as well
+confirmkey(kr: Keyring, secret: array of byte): array of byte
+{
+	l := array of byte "infernode auth 2 confirm";
+	k := array[Keyring->SHA256dlen] of byte;
+	kr->hmac_sha256(l, len l, secret, k, nil);
+	return k;
+}
 
-	# push ssl and turn on algorithms
+sslsecret(kr: Keyring, secret: array of byte, algbuf, offered: string): array of byte
+{
+	l := array of byte ("infernode auth 2 ssl\n" + algbuf + "\n" + offered);
+	k := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(l, len l, secret, k, nil);
+	return k;
+}
+
+mac(kr: Keyring, key: array of byte, text: string): string
+{
+	b := array of byte text;
+	d := array[Keyring->SHA256dlen] of byte;
+	kr->hmac_sha256(b, len b, key, d, nil);
+	return dump(d);
+}
+
+# equal, in time that does not say where they differ
+sametag(a, b: string): int
+{
+	if(len a != len b)
+		return 0;
+	d := 0;
+	for(i := 0; i < len a; i++)
+		d |= a[i] ^ b[i];
+	return d == 0;
+}
+
+# The client's half, after Keyring->auth: say alg, have it confirmed,
+# and turn it on.  (the connection, nil) or (nil, why not)
+negotiate(kr: Keyring, fd: ref Sys->FD, secret: array of byte, alg: string): (ref Sys->FD, string)
+{
+	for(i := 0; i < len alg; i++)
+		if(alg[i] == '\n')
+			return (nil, "bad ssl algorithm");
+	kc := confirmkey(kr, secret);
+	# send algorithm
+	buf := array of byte (VERSION + "\n" + alg + "\n" + mac(kr, kc, "client\n" + alg));
+	if(kr->sendmsg(fd, buf, len buf) < 0)
+		return (nil, sys->sprint("can't send ssl algorithm: %r"));
+
+	# the server's answer, which only the holder of the secret can make
+	msg := kr->getmsg(fd);
+	if(msg == nil)
+		return (nil, sys->sprint("the server did not confirm the ssl algorithm (%r): it refused it, or is of a version before \"%s\"", VERSION));
+	text := string msg;
+	(nil, lines) := sys->tokenize(text, "\n");
+	bad := "the server's answer about the ssl algorithm is not confirmed by its key: changed on the way, or not the server's";
+	if(lines == nil)
+		return (nil, bad);
+	offered := "";
+	case hd lines {
+	"ok" =>
+		# "ok", the list (not there when the server has none), the tag
+		tag: string;
+		case len lines {
+		3 =>
+			offered = hd tl lines;
+			tag = hd tl tl lines;
+		2 =>
+			tag = hd tl lines;
+		* =>
+			return (nil, bad);
+		}
+		if(!sametag(tag, mac(kr, kc, "server\nok\n" + alg + "\n" + offered)))
+			return (nil, bad);
+	"no" =>
+		why, tag: string;
+		case len lines {
+		4 =>
+			why = hd tl lines;
+			offered = hd tl tl lines;
+			tag = hd tl tl tl lines;
+		3 =>
+			why = hd tl lines;
+			tag = hd tl tl lines;
+		* =>
+			return (nil, bad);
+		}
+		if(!sametag(tag, mac(kr, kc, "server\nno\n" + why + "\n" + alg + "\n" + offered)))
+			return (nil, bad);
+		if(offered != nil)
+			why += " (the server takes: " + offered + ")";
+		return (nil, "server: " + why);
+	* =>
+		return (nil, bad);
+	}
+
+	# don't push ssl if server supports no ssl connection
+	if(alg == "none")
+		return (fd, nil);
+
+	# push ssl and turn on algorithm
 	ssl = load SSL SSL->PATH;
 	if(ssl == nil)
 		return (nil, sys->sprint("can't load ssl: %r"));
-	(c, err) := pushssl(fd, secret, 0, alg);
+	(c, err) := pushssl(fd, sslsecret(kr, secret, alg, offered), 1, alg);
 	if(c == nil)
 		return (nil, "push ssl: " + err);
-	return (c, id_or_err);
+	return (c, nil);
 }
 
-# Match Keyring.auth's documented setid behaviour.  Failure is deliberately
+# Match Keyring.auth's documented setid behaviour.# Match Keyring.auth's documented setid behaviour.  Failure is deliberately
 # ignored: changing identity has historically been best-effort for callers
 # without permission to write /dev/user.
 setuser(user: string)
@@ -220,22 +406,9 @@ client(alg: string, ai: ref Keyring->Authinfo, fd: ref Sys->FD): (ref Sys->FD, s
 	if(secret == nil)
 		return (nil, id_or_err);
 
-	# send algorithm
-	buf := array of byte alg;
-	if(kr->sendmsg(fd, buf, len buf) < 0)
-		return (nil, sys->sprint("can't send ssl algorithm: %r"));
-
-	# don't push ssl if server supports no ssl connection
-	if(alg == "none")
-		return (fd, id_or_err);
-
-	# push ssl and turn on algorithm
-	ssl = load SSL SSL->PATH;
-	if(ssl == nil)
-		return (nil, sys->sprint("can't load ssl: %r"));
-	(c, err) := pushssl(fd, secret, 1, alg);
+	(c, err) := negotiate(kr, fd, secret, alg);
 	if(c == nil)
-		return (nil, "push ssl: " + err);
+		return (nil, err);
 	return (c, id_or_err);
 }
 
@@ -259,29 +432,9 @@ auth(ai: ref Keyring->Authinfo, keyspec: string, alg: string, fd: ref Sys->FD): 
 	if(secret == nil)
 		return (nil, nil, id_or_err);
 
-	# send algorithm
-	buf := array of byte alg;
-	if(kr->sendmsg(fd, buf, len buf) < 0)
-		return (nil, nil, sys->sprint("can't send ssl algorithm: %r"));
-
-	if(0){		# TO DO
-		hisalg := string kr->getmsg(fd);
-		if(hisalg == nil)
-			return (nil, nil, sys->sprint("can't get remote algorithm: %r"));
-		# TO DO: compare the two, sort it out if they aren't equal
-	}
-
-	# don't push ssl if server supports no ssl connection
-	if(alg == "none")
-		return (fd, nil, id_or_err);
-
-	# push ssl and turn on algorithm
-	ssl = load SSL SSL->PATH;
-	if(ssl == nil)
-		return (nil, nil, sys->sprint("can't load ssl: %r"));
-	(c, err) := pushssl(fd, secret, 1, alg);	# as the client: it sent the algorithm
+	(c, err) := negotiate(kr, fd, secret, alg);	# as the client: it says the algorithm
 	if(c == nil)
-		return (nil, nil, "push ssl: " + err);
+		return (nil, nil, err);
 	return (c, nil, id_or_err);
 }
 

@@ -243,6 +243,44 @@ time.sleep(1.2)
 st, h, html = page("/about")
 check(st == 200 and 'href="/nested"' not in menu(html), "and when they are gone", str(st))
 
+# --- _werc by any spelling, and a page by any spelling of its path
+# The site's _werc is bound at _WERC too, and about.md at ABOUT.md: what
+# a host that folds case gives for a name in another case.  Only the
+# spelling _werc was refused, so its config and lib/ were served as
+# they are under the other; and each spelling of a page's path had a
+# page, and a number, of its own, kept for good.
+st, h, b = get("/_werc/config")
+check(st == 404, "_werc/config is not served", str(st))
+for path in ("/_WERC/config", "/_WERC/lib/footer.inc", "/_Werc/config"):
+    st, h, b = get(path)
+    check(st == 404 and b"siteTitle" not in b and b"site footer" not in b, "nor is %s" % path, "%d %r" % (st, b[:40]))
+st, h, b = get("/_WERC/pub/style.css")
+check(st == 200 and b == b"site { }\n", "_WERC/pub/ is _werc/pub/, as it may be", str(st))
+st, h1, html1 = page("/about")
+st2, h2, html2 = page("/ABOUT")
+check(st == 200 and st2 == 200 and "About us." in html2, "a page under another spelling of its path is served", "%d %d" % (st, st2))
+check(h1.get("etag") and h1.get("etag") == h2.get("etag") and html1 == html2,
+      "and is the page already made, not one more", "%s %s" % (h1.get("etag"), h2.get("etag")))
+
+# --- a page made from a file dated tomorrow
+# It was never kept (a page is kept once it is older than what it was
+# made from), so it was made again at every stat and open; and it was
+# dated tomorrow itself.
+import email.utils
+with open(SITE + "/tomorrow.md", "w") as f:
+    f.write("dated tomorrow\n")
+os.utime(SITE + "/tomorrow.md", (time.time() + 86400, time.time() + 86400))
+st, h, html = page("/tomorrow")
+lm = email.utils.parsedate_to_datetime(h.get("last-modified", "Thu, 01 Jan 1970 00:00:00 GMT")).timestamp()
+check(st == 200 and "dated tomorrow" in html and abs(lm - time.time()) < 120,
+      "a page made from a file dated tomorrow is dated now", "%d, %.0f s from now" % (st, lm - time.time()))
+time.sleep(2.5)
+st, h2, html = page("/tomorrow")
+check(st == 200 and h2.get("etag") == h.get("etag") and h2.get("last-modified") == h.get("last-modified"),
+      "and is kept: the same page two seconds later", "%s %s" % (h.get("last-modified"), h2.get("last-modified")))
+os.remove(SITE + "/tomorrow.md")
+time.sleep(1.2)
+
 # --- many at once
 results = []
 def worker(i):

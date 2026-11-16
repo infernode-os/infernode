@@ -356,7 +356,10 @@ walk(q: big, name: string): (ref Sys->Dir, string)
 		return (nil, Enotfound);
 	if(name == ".."){
 		(pp, nil) := splitlast(p);
-		return stat(big idof(pp));
+		pe := resolve(pp);
+		if(pe == nil)
+			return (nil, Enotfound);
+		return (dirof(pp, pe), nil);
 	}
 	if(p != nil)
 		p += "/";
@@ -405,7 +408,7 @@ content(q: big): (ref Sys->Dir, array of byte, string, string)
 		pg := page(p, e);
 		if(pg.err != nil)
 			return (nil, nil, nil, pg.err);
-		return (pagedir(p, pg), pg.data, nil, nil);
+		return (pagedir(p, e, pg), pg.data, nil, nil);
 	}
 	return (nil, nil, nil, Eperm);
 }
@@ -414,28 +417,66 @@ content(q: big): (ref Sys->Dir, array of byte, string, string)
 # Names
 #
 
-# qid paths: each name looked at is given one, the site's root 0
+# qid paths: each name looked at is given one, the site's root 0.
+#
+# A name is the path as it was walked, and on a host whose file system
+# folds case (macOS, Windows) every spelling of a path opens the same
+# file: each spelling had a number of its own, and a page of its own,
+# for good, so whoever asked for a page in the 2^n spellings of its
+# name grew both without bound.  A path that differs only in case from
+# one already numbered, and is the same file (its device and qid), is
+# that one; two files whose names differ in case (a host that keeps
+# case) are two.
 NHASH: con 1024;
-ids := array[NHASH] of list of (string, int);
+
+Id: adt {
+	lp:	string;	# the path in lower case
+	p:	string;	# as first walked
+	ident:	string;	# what it was then (ident)
+	n:	int;
+};
+
+ids := array[NHASH] of list of ref Id;
 idnames := array[64] of string;
 nnames := 1;
 
-idof(p: string): int
+idof(p: string, e: ref Ent): int
 {
 	if(p == nil)
 		return 0;
-	h := strhash(p) % NHASH;
+	lp := lower(p);
+	id := ident(e);
+	h := strhash(lp) % NHASH;
 	for(l := ids[h]; l != nil; l = tl l)
-		if((hd l).t0 == p)
-			return (hd l).t1;
+		if((hd l).p == p){
+			(hd l).ident = id;
+			return (hd l).n;
+		}
+	for(l = ids[h]; l != nil; l = tl l)
+		if((hd l).lp == lp && (hd l).ident == id && id != "-")
+			return (hd l).n;
 	if(nnames == len idnames){
 		a := array[2*len idnames] of string;
 		a[0:] = idnames;
 		idnames = a;
 	}
 	idnames[nnames] = p;
-	ids[h] = (p, nnames) :: ids[h];
+	ids[h] = ref Id(lp, p, id, nnames) :: ids[h];
 	return nnames++;
+}
+
+# What e is, whatever it was called: its kind, and the device and qid
+# of the file or directory it is made from
+ident(e: ref Ent): string
+{
+	d := e.d;
+	if(d == nil){
+		(ok, sd) := cstat(e.src);
+		if(ok < 0)
+			return "-";
+		d = ref sd;
+	}
+	return sys->sprint("%d %d %d %bux", e.kind, d.dtype, d.dev, d.qid.path);
 }
 
 pathof(q: big): string
@@ -475,6 +516,10 @@ child(e: ref Ent, pp, name: string): ref Ent
 {
 	if(name == nil || name[0] == '.' || contains(name, "/"))
 		return nil;
+	# _werc and pub are looked for in any case: a host that folds case
+	# opens the site's _werc for _WERC, which was then an ordinary
+	# directory and its config and lib/ files served as they are.
+	lname := lower(name);
 	full := e.src + "/" + name;
 	case e.kind {
 	Kraw =>
@@ -497,7 +542,7 @@ child(e: ref Ent, pp, name: string): ref Ent
 		}
 		return ref Ent(Kfile, full, ref d, nil);
 	Kwerc =>
-		if(name != "pub")
+		if(lname != "pub")
 			return nil;
 		(ok, d) := cstat(full);
 		if(ok < 0 || (d.mode & Sys->DMDIR) == 0)
@@ -506,16 +551,16 @@ child(e: ref Ent, pp, name: string): ref Ent
 	Kdir =>
 		# werc's pub/: the site's, and werc's for what the site's has not
 		wpub: string;
-		if(pp == nil && name == "pub" && wercroot != nil && isdir(wercroot + "/pub"))
+		if(pp == nil && lname == "pub" && wercroot != nil && isdir(wercroot + "/pub"))
 			wpub = wercroot + "/pub";
 		(ok, d) := cstat(full);
 		if(ok >= 0 && (d.mode & Sys->DMDIR)){
-			if(name == "_werc"){
+			if(lname == "_werc"){
 				if(isdir(full + "/pub"))
 					return ref Ent(Kwerc, full, ref d, nil);
 				return nil;
 			}
-			if(pp == nil && name == "pub")
+			if(pp == nil && lname == "pub")
 				return ref Ent(Kraw, full, ref d, wpub);
 			return ref Ent(Kdir, full, ref d, nil);
 		}
@@ -578,14 +623,14 @@ dirof(p: string, e: ref Ent): ref Sys->Dir
 {
 	case e.kind {
 	Kpage or Kindex =>
-		return pagedir(p, page(p, e));
+		return pagedir(p, e, page(p, e));
 	}
 	d := ref sys->zerodir;
 	(nil, d.name) = splitlast(p);
 	if(p == nil)
 		d.name = ".";
 	d.uid = d.gid = d.muid = user;
-	d.qid = Qid(big idof(p), e.d.qid.vers, Sys->QTFILE);
+	d.qid = Qid(big idof(p, e), e.d.qid.vers, Sys->QTFILE);
 	d.mtime = d.atime = e.d.mtime;
 	if(e.kind == Kfile){
 		d.mode = 8r444;
@@ -597,12 +642,12 @@ dirof(p: string, e: ref Ent): ref Sys->Dir
 	return d;
 }
 
-pagedir(p: string, pg: ref Page): ref Sys->Dir
+pagedir(p: string, e: ref Ent, pg: ref Page): ref Sys->Dir
 {
 	d := ref sys->zerodir;
 	(nil, d.name) = splitlast(p);
 	d.uid = d.gid = d.muid = user;
-	d.qid = Qid(big idof(p), pg.vers, Sys->QTFILE);
+	d.qid = Qid(big idof(p, e), pg.vers, Sys->QTFILE);
 	d.mode = 8r444;
 	d.mtime = d.atime = pg.mtime;
 	d.length = big len pg.data;
@@ -614,7 +659,18 @@ pagedir(p: string, pg: ref Page): ref Sys->Dir
 #
 
 PHASH: con 256;
-pages := array[PHASH] of list of (string, ref Page);
+
+# a page kept: under the path it was made for, in lower case, and what
+# it was made from (ident), so that another spelling of its path on a
+# host that folds case is the same page and not one more
+Kept: adt {
+	lp:	string;
+	p:	string;
+	ident:	string;
+	pg:	ref Page;
+};
+
+pages := array[PHASH] of list of ref Kept;
 
 # The page at p, made again only if what it was made from has
 # changed.  A stat's times are in seconds, so what changed in the
@@ -622,19 +678,31 @@ pages := array[PHASH] of list of (string, ref Page);
 # something that new is made again each time, until it is older.
 page(p: string, e: ref Ent): ref Page
 {
-	h := strhash(p) % PHASH;
+	lp := lower(p);
+	id := ident(e);
+	h := strhash(lp) % PHASH;
+	k: ref Kept;
 	for(l := pages[h]; l != nil; l = tl l)
-		if((hd l).t0 == p){
-			pg := (hd l).t1;
-			if(pg.err == nil && pg.made > pg.mtime + 1 && current(pg.deps))
-				return pg;
-			# one that could not be made is not tried at every stat
-			# and open of a request, and is tried again soon: what was
-			# wrong (a file's permissions) may not show in a stat
-			if(pg.err != nil && daytime->now() - pg.made < ERRKEEP && current(pg.deps))
-				return pg;
+		if((hd l).p == p){
+			k = hd l;
 			break;
 		}
+	if(k == nil)
+		for(l = pages[h]; l != nil; l = tl l)
+			if((hd l).lp == lp && (hd l).ident == id && id != "-"){
+				k = hd l;
+				break;
+			}
+	if(k != nil){
+		pg := k.pg;
+		if(pg.err == nil && pg.made > pg.mtime + 1 && current(pg.deps))
+			return pg;
+		# one that could not be made is not tried at every stat
+		# and open of a request, and is tried again soon: what was
+		# wrong (a file's permissions) may not show in a stat
+		if(pg.err != nil && daytime->now() - pg.made < ERRKEEP && current(pg.deps))
+			return pg;
+	}
 	# A page that cannot be made is that page's error: its open says
 	# why, and the site goes on.
 	mk := ref Mk(nil, 0, nil, nil);
@@ -646,11 +714,11 @@ page(p: string, e: ref Ent): ref Page
 		sayonce(sys->sprint("/%s: cannot make the page: %s", p, ex));
 		pg = ref Page(nil, 0, mk.mtime, daytime->now(), mk.deps, "cannot make the page: " + ex);
 	}
-	r: list of (string, ref Page);
-	for(l = pages[h]; l != nil; l = tl l)
-		if((hd l).t0 != p)
-			r = hd l :: r;
-	pages[h] = (p, pg) :: r;
+	if(k == nil){
+		k = ref Kept(lp, p, id, pg);
+		pages[h] = k :: pages[h];
+	}else
+		(k.p, k.ident, k.pg) = (p, id, pg);
 	return pg;
 }
 
@@ -699,7 +767,13 @@ Mk.probe(mk: self ref Mk, name: string): (int, Sys->Dir)
 		sig := "-";
 		if(ok >= 0){
 			sig = sys->sprint("%bux %ud %ud %bd", d.qid.path, d.qid.vers, d.mtime, d.length);
-			if(d.mtime > mk.mtime)
+			# A file dated after now (a contributor's clock, or
+			# ours) does not date the page: a page is kept once it
+			# is older than what it was made from, and one made
+			# from a file dated tomorrow never was (made again at
+			# every stat and open, and the site's every page if the
+			# file is its config).
+			if(d.mtime > mk.mtime && d.mtime <= daytime->now())
 				mk.mtime = d.mtime;
 		}
 		mk.deps = (name, sig) :: mk.deps;

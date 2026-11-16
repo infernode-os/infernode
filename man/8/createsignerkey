@@ -6,6 +6,8 @@ createsignerkey \- create signer key on authentication server
 [
 .BI -a " alg"
 ] [
+.B -c
+] [
 .BI -f " keyfile"
 ] [
 .BI -e " expiry"
@@ -27,11 +29,14 @@ is converted to seconds since the epoch
 .IR daytime (2))
 and stored in the
 .IR keyfile ;
-by default the server's certificate never expires.
+the certificate is good until the last second of that day, local time.
+A date that is not one (month 00, 31 February), one already past,
+and a year from 2038 on, which an expiry time cannot hold, are refused.
+By default the server's certificate never expires.
 .PP
-The key will be
+For the algorithms that take a size, the key will be
 .I bitsize
-long (default: 512 bits) with a minimum of 32 bits and a maximum of 4096 bits.
+long (default: 2048 bits) with a minimum of 32 bits and a maximum of 4096 bits.
 .I Keyfile
 is the file in which the server stores its keys;
 the default is
@@ -41,21 +46,39 @@ and many authentication programs such as
 by default expect to find their server key there.
 Creating a signer's default key afresh typically invalidates all certificates previously issued by that signer,
 because their signatures will not verify.
-The mode of the
+The
 .I keyfile
-should be set to be readable only by the user running
-those programs.
+holds the signer's secret key and
+should be readable only by the user running
+those programs:
+a new file is made mode 600, and a file that is already there
+has the permissions of other users taken from it before the key is written
+(if they cannot be,
+.I createsignerkey
+writes nothing).
 .PP
 The
 .B -a
-option specifies the signature algorithm.
-Currently
-.I alg
-can be either
+option specifies the signature algorithm, one of
+.BR ed25519
+(the default),
+.BR mldsa65 ,
+.BR mldsa87 ,
+.BR slhdsa192s ,
+.BR slhdsa256s ,
+.BR rsa ,
 .B elgamal
 or
-.BR rsa .
-RSA keys are now used by default.
+.BR dsa .
+The
+.B -c
+option, or the environment variable
+.B cnsamode
+set, makes
+.B mldsa87
+the default; an
+.B -a
+after it still chooses another.
 .SH FILES
 .B /keydb/signerkey
 .SH SOURCE

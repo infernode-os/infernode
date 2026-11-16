@@ -46,10 +46,12 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(argv == nil)
 		arg->usage();
 	multi := len argv > 1;
+	bad := 0;
 	for(; argv != nil; argv = tl argv){
 		info := keyring->readauthinfo(hd argv);
 		if(info == nil){
 			sys->fprint(sys->fildes(2), "getpk: cannot read %s: %r\n", hd argv);
+			bad = 1;
 			continue;
 		}
 		pk := info.mypk;
@@ -64,6 +66,9 @@ init(nil: ref Draw->Context, argv: list of string)
 			s += " " + pk.owner;
 		sys->print("%s\n", s);
 	}
+	# a file that could not be read was reported, and the status was success
+	if(bad)
+		raise "fail:error";
 }
 
 hash(s: string): array of byte

@@ -136,6 +136,8 @@ init(nil: ref Draw->Context, argv: list of string)
 
 	(info.alpha, info.p) = kr->dhparams(DHmodlen);
 
+	if((err = private(filename)) != nil)
+		error(err);
 	if(kr->writeauthinfo(filename, info) < 0)
 		error(sys->sprint("can't write signerkey file %s: %r", filename));
 }
@@ -151,10 +153,48 @@ error(s: string)
 	raise "fail:error";
 }
 
+#
+# A file that is already there keeps its mode when a key is written to
+# it: writeauthinfo opens it and truncates it, and makes it, mode 600,
+# only if it is not there. A signer's key written over a file made by
+# touch(1) was readable by every user of the host. The mode is put
+# right before the key goes in, or the file is refused; what is not a
+# file on a file server (a pipe, a device, a file2chan) is left alone.
+#
+private(file: string): string
+{
+	fd := sys->open(file, Sys->OREAD);
+	if(fd == nil)
+		fd = sys->open(file, Sys->OWRITE);
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0 || (d.mode & Sys->DMDIR) || d.dtype != 'U' && d.dtype != 'M')
+		return nil;
+	if((d.mode & 8r077) == 0)
+		return nil;
+	nd := sys->nulldir;
+	nd.mode = d.mode & ~8r077;
+	if(sys->fwstat(fd, nd) < 0)
+		return sys->sprint("%s is open to other users (mode %uo) and its mode cannot be changed: %r", file, d.mode & 8r777);
+	return nil;
+}
+
+#
+# ddmmyyyy: the last second of that day, local time.
+# The month was not tested for being less than 1 (the day was, twice), so
+# month 00 was December of the year before; a day past its month's end
+# was a day of the next; the hour was set to 24, the day after; a year
+# past 2038 does not fit an expiry time and came out as another year
+# (2170 as 2033); and "1x" was day 1.
+#
 checkdate(word: string): (string, int)
 {
 	if(len word != 8)
 		return ("!date must be in form ddmmyyyy", 0);
+	for(i := 0; i < len word; i++)
+		if(word[i] < '0' || word[i] > '9')
+			return ("!date must be in form ddmmyyyy", 0);
 
 	daytime := load Daytime Daytime->PATH;
 	if(daytime == nil)
@@ -165,14 +205,14 @@ checkdate(word: string): (string, int)
 	tm := daytime->local(now);
 	tm.sec = 59;
 	tm.min = 59;
-	tm.hour = 24;
+	tm.hour = 23;
 
 	tm.mday = int word[0:2];
 	if(tm.mday > 31 || tm.mday < 1)
 		return ("!bad day of month", 0);
 
 	tm.mon = int word[2:4] - 1;
-	if(tm.mon > 11 || tm.mday < 0)
+	if(tm.mon > 11 || tm.mon < 0)
 		return ("!bad month", 0);
 
 	tm.year = int word[4:8] - 1900;
@@ -180,6 +220,15 @@ checkdate(word: string): (string, int)
 		return ("!bad year", 0);
 
 	newdate := daytime->tm2epoch(tm);
+	# the date as it was taken: tm2epoch counts days and seconds from
+	# the fields whatever they are
+	back := daytime->gmt(newdate + tm.tzoff);
+	if(back.year != tm.year)
+		return ("!year too late: an expiry time ends in January 2038", 0);
+	if(back.mon != tm.mon || back.mday != tm.mday)
+		return ("!no such day in that month", 0);
+	# the zone was today's: on that day the clocks may be an hour off it
+	newdate -= daytime->local(newdate).tzoff - tm.tzoff;
 	if(newdate < now)
 		return ("!expiration date must be in the future", 0);
 

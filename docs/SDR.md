@@ -4,8 +4,11 @@ Status: M0 and M1 built. `sdrfs(4)` serves the file interface below over
 `rtl_tcp` (`appl/cmd/sdrfs.b`, tested by `tests/host/sdrfs_test.sh`
 against a fake `rtl_tcp`); `sdr/fm` and `sdr/am` (`sdr(1)`,
 `appl/cmd/sdr/`, the arithmetic in `appl/lib/sdrdsp.b`) demodulate its
-`iq` to `/dev/audio`'s samples (tested by `tests/host/sdr_demod_test.sh`
-on synthetic signals and `tests/sdrdsp_test.b`). `sdrfs` has been run on
+`iq` to `audio(6)` sound for `auplay(1)` (tested by `tests/host/sdr_demod_test.sh`
+on synthetic signals and `tests/sdrdsp_test.b`). `iq` describes itself
+(#1094): each open starts with a header saying its rate, encoding and
+frequency, and the demodulators take their rate from it, so no rate is
+given twice. `sdrfs` has been run on
 an RTL-SDR Blog V4 (R828D) on macOS arm64 and Linux amd64, the
 demodulators on Linux amd64; see [Measured](#measured). The rest is the design, written before the
 code, as [DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) asks: the file
@@ -117,12 +120,31 @@ changing anything that reads `/mnt/sdr`:
     status    r   attr=value: tuner=R820T link=open|closed|error
                   source=tcp!localhost!1234 readers=N dropped=N error='...'
     gains     r   the tuner's gains, one a line, dB
-    iq        r   the samples, 8-bit unsigned I then Q, from the open on;
-                  each read waits for more.  Every open has its own queue;
-                  a reader that falls behind loses the oldest, counted in
-                  status.  The first open starts the samples, the last
-                  close stops them.
+    iq        r   each open: a header, then the samples, 8-bit unsigned
+                  I then Q, from the open on; each read waits for more.
+                    rate 2400000
+                    enc cu8
+                    freq 99500000
+                    <empty line>
+                  audio(6)'s form: every line a command ctl takes, padded
+                  to a multiple of 4 bytes.  A write to ctl changing rate
+                  or freq ends every open's stream (end of file), so a
+                  header is true for its whole stream; reopen for the new
+                  one (the connection is held).  Every open has its own
+                  queue; a reader that falls behind loses the oldest,
+                  counted in status.  The first open starts the samples,
+                  the last close stops them.
 ```
+
+The header is audio(6)'s precedent: an Inferno sound file starts with
+the `audioctl` commands that play it, and `auplay` writes them there.
+A stream that says its own format can be piped, recorded, exported and
+read on another core or machine (`vm 1 sdr/fm ...`) with nothing told
+its rate a second time, where two copies (ctl's and a `-r` flag) could
+disagree and give wrong or silent sound with no error. A headerless
+capture gets one from `sdr/rawiq -r 2.4M -f 99.5M`, the single place
+its rate is said, and `sdr/iqhdr < rec > /mnt/sdr/ctl` tunes the radio
+to what a recording was made at.
 
 ```
 ; sdrfs source tcp!localhost!1234
@@ -152,15 +174,15 @@ is a program reading `iq` and writing what it found, as Unix filters do:
 
 ```
 ; echo freq 98500000 > /mnt/sdr/ctl
-; sdr/fm -w < /mnt/sdr/iq > /dev/audio          # broadcast FM, to the speaker
+; sdr/fm -o 44100 < /mnt/sdr/iq | auplay /fd/0  # broadcast FM, to the speaker
 ; echo freq 121500000 > /mnt/sdr/ctl
-; sdr/am < /mnt/sdr/iq > /dev/audio             # the air band's emergency frequency
+; sdr/am < /mnt/sdr/iq | auplay /fd/0           # the air band's emergency frequency
 ```
 
 | Program | Input | Output | Notes |
 |---|---|---|---|
-| `sdr/fm` | iq | PCM for `/dev/audio` | wide FM (broadcast) or narrow (`-n`: marine VHF, 2 m ham, NOAA weather) |
-| `sdr/am` | iq | PCM | the aviation band, 118–137 MHz, is AM |
+| `sdr/fm` | iq | audio(6) sound (`-R`: raw PCM) | wide FM (broadcast) or narrow (`-n`: marine VHF, 2 m ham, NOAA weather) |
+| `sdr/am` | iq | audio(6) sound (`-R`: raw PCM) | the aviation band, 118–137 MHz, is AM |
 | `sdr/adsb` | iq at 2 MS/s, 1090 MHz | Mode S messages as AVR text (`*8D4840D6...;`) | the format dump1090 serves on port 30002 |
 | `sdr/ais` | iq, 162 MHz | `!AIVDM` sentences | 9600-baud GMSK, two channels |
 | `sdr/aprs` | iq, 144.39 MHz (Americas) or 144.8 | positions | 1200-baud AFSK, AX.25 frames |

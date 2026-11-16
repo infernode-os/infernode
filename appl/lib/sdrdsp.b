@@ -2,6 +2,7 @@ implement Sdrdsp;
 
 #
 # sdrdsp - the arithmetic sdr(1)'s demodulators share (module/sdrdsp.m).
+# Headers too: text in a buffer, still no files.
 # The loops run once a sample, millions a second, so they keep their
 # state in locals and call nothing.
 #
@@ -236,4 +237,114 @@ rate(s: string): int
 	if(v < 1.0 || v > 1e8)
 		return 0;
 	return int v;	# rounds
+}
+
+#
+# headers (audio(6)'s form)
+#
+
+header(b: array of byte, n: int): (int, list of list of string, string)
+{
+	if(n > len b)
+		n = len b;
+	magic := "rate";
+	for(i := 0; i < n && i < len magic; i++)
+		if(int b[i] != magic[i])
+			return (0, nil, "no header: it does not start with rate");
+	end := -1;
+	for(i = 0; i < n && i < Maxheader; i++) {
+		c := int b[i];
+		if(c == '\n') {
+			if(i > 0 && int b[i-1] == '\n') {
+				end = i + 1;
+				break;
+			}
+		} else if(c < ' ' && c != '\t' && c != '\r' || c == 16r7f)
+			return (0, nil, "no header: a control character in it");
+	}
+	if(end < 0) {
+		if(n >= Maxheader)
+			return (0, nil, "no header: no empty line in its first " + string Maxheader + " bytes");
+		return (0, nil, nil);
+	}
+	if(end % 4 != 0)
+		return (0, nil, "header not padded to a multiple of 4 bytes");
+	lines: list of list of string;
+	s := string b[0:end];
+	ws: list of string;
+	w := "";
+	for(i = 0; i < len s; i++) {
+		c := s[i];
+		if(c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+			if(w != "") {
+				ws = w :: ws;
+				w = "";
+			}
+			if(c == '\n' && ws != nil) {
+				lines = revs(ws) :: lines;
+				ws = nil;
+			}
+		} else
+			w[len w] = c;
+	}
+	r: list of list of string;
+	for(; lines != nil; lines = tl lines)
+		r = hd lines :: r;
+	return (end, r, nil);
+}
+
+revs(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+mkheader(lines: list of string): array of byte
+{
+	s := "";
+	for(; lines != nil; lines = tl lines)
+		s += hd lines + "\n";
+	b := array of byte s;
+	# a line of k blanks, then the empty line: len b + k + 2 bytes
+	k := (2 - len b % 4 + 4) % 4;
+	if(k == 0)
+		k = 4;
+	for(; k > 0; k--)
+		s += " ";
+	return array of byte (s + "\n\n");
+}
+
+hdrval(h: list of list of string, verb: string): string
+{
+	for(; h != nil; h = tl h) {
+		l := hd h;
+		if(l != nil && hd l == verb && tl l != nil && tl tl l == nil)
+			return hd tl l;
+	}
+	return nil;
+}
+
+iqformat(h: list of list of string): (int, big, string)
+{
+	rs := hdrval(h, "rate");
+	r := rate(rs);
+	if(r == 0)
+		return (0, big 0, "header: bad rate " + rs);
+	enc := hdrval(h, "enc");
+	if(enc == nil)
+		return (0, big 0, "header: no enc");
+	if(enc != "cu8")
+		return (0, big 0, "header: enc " + enc + ", not cu8 (8-bit unsigned I then Q)");
+	f := big -1;
+	if((fs := hdrval(h, "freq")) != nil) {
+		for(i := 0; i < len fs; i++)
+			if(fs[i] < '0' || fs[i] > '9')
+				return (0, big 0, "header: bad freq " + fs);
+		if(fs == "")
+			return (0, big 0, "header: bad freq");
+		f = big fs;
+	}
+	return (r, f, nil);
 }

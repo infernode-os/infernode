@@ -4,7 +4,7 @@ implement Am;
 # sdr/am - AM demodulated: sdrfs(4)'s iq in, audio(3)'s sound out.
 #
 #	echo freq 121.5M > /mnt/sdr/ctl
-#	sdr/am < /mnt/sdr/iq > /dev/audio
+#	sdr/am -o 44100 < /mnt/sdr/iq | auplay /fd/0
 #
 # The air band (118-137 MHz) is AM, as are short wave and the medium
 # wave broadcasts (through direct sampling, or an upconverter).  The
@@ -14,11 +14,12 @@ implement Am;
 # over the carrier's (its magnitude averaged over a tenth of a second)
 # is the sound: the level out does not follow the signal's strength.
 #
-# -r is the rate in (sdrfs's rate; 2048000, its default), -o the rate
-# out (8000, /dev/audio's default) and -c the channels out (2, as
-# audio(3); the same sound in each).  -g multiplies the volume.
+# The rate in is the samples' own, from their header, as sdr/fm's;
+# -o is the rate out (8000, /dev/audio's default) and -c the channels
+# out (2, as audio(3); the same sound in each), said in audio(6)'s
+# header before the sound, or with -R not.  -g multiplies the volume.
 #
-# Usage:	sdr/am [-b hertz] [-c chans] [-g gain] [-o rate] [-r rate]
+# Usage:	sdr/am [-R] [-b hertz] [-c chans] [-g gain] [-o rate]
 #
 
 include "sys.m";
@@ -54,15 +55,17 @@ init(nil: ref Draw->Context, argv: list of string)
 		fatal(sys->sprint("cannot load modules: %r"));
 	dsp->init();
 
+	raw := 0;
 	chans := 2;
 	bw := 5000.0;
 	gain := 1.0;
 	fout := 8000;
-	fin := 2048000;
 	arg->init(argv);
-	arg->setusage("sdr/am [-b hertz] [-c chans] [-g gain] [-o rate] [-r rate]");
+	arg->setusage("sdr/am [-R] [-b hertz] [-c chans] [-g gain] [-o rate]");
 	while((o := arg->opt()) != 0)
 		case o {
+		'R' =>
+			raw = 1;
 		'b' =>
 			bw = real arg->earg();
 			if(bw < 100.0)
@@ -76,14 +79,18 @@ init(nil: ref Draw->Context, argv: list of string)
 		'o' =>
 			if((fout = dsp->rate(arg->earg())) == 0)
 				arg->usage();
-		'r' =>
-			if((fin = dsp->rate(arg->earg())) == 0)
-				arg->usage();
 		* =>
 			arg->usage();
 		}
 	if(arg->argv() != nil)
 		arg->usage();
+
+	# the rate in is what the samples' header says
+	rc := chan[Ahead] of (array of byte, string);
+	pidc := chan of int;
+	spawn readahead(sys->fildes(0), rc, pidc);
+	readerpid = <-pidc;
+	(fin, pend) := readheader(rc);
 
 	# the samples summed to about 240k a second, then the channel
 	# (-b hertz either side) filtered out and decimated to about 48k
@@ -117,7 +124,6 @@ init(nil: ref Draw->Context, argv: list of string)
 	r := Resamp.new(fin, fout * n);
 	p := Pcm.new(fout, chans);
 
-	stdin := sys->fildes(0);
 	stdout := sys->fildes(1);
 	buf := array[Chunk+1] of byte;	# a byte carried, and a chunk
 	i := array[Chunk/2] of real;
@@ -125,17 +131,28 @@ init(nil: ref Draw->Context, argv: list of string)
 	out := array[Chunk/2 * 2 * chans + 16] of byte;
 	have := 0;
 	carrier := 0.0;
-	rc := chan[Ahead] of (array of byte, string);
-	pidc := chan of int;
-	spawn readahead(stdin, rc, pidc);
-	readerpid = <-pidc;
+	if(!raw) {
+		h := dsp->mkheader("rate " + string fout :: "chans " + string chans :: "bits 16" :: "enc pcm" :: nil);
+		if(sys->write(stdout, h, len h) != len h)
+			fatal(sys->sprint("write: %r"));
+	}
 	for(;;) {
-		(b, err) := <-rc;
-		if(b == nil) {
-			readerpid = -1;
-			if(err != nil)
-				fatal("read: " + err);
-			break;
+		b: array of byte;
+		if(len pend > 0) {
+			# the samples that came with the header
+			b = pend;
+			if(len b > Chunk)
+				b = b[0:Chunk];
+			pend = pend[len b:];
+		} else {
+			err: string;
+			(b, err) = <-rc;
+			if(b == nil) {
+				readerpid = -1;
+				if(err != nil)
+					fatal("read: " + err);
+				break;
+			}
 		}
 		buf[have:] = b;
 		k := have + len b;
@@ -191,6 +208,37 @@ readahead(fd: ref Sys->FD, c: chan of (array of byte, string), pidc: chan of int
 			return;
 		}
 		c <-= (b[0:n], nil);
+	}
+}
+
+# the samples' header, from the reader's first chunks: the rate it
+# says, and the samples that came after it in them
+readheader(rc: chan of (array of byte, string)): (int, array of byte)
+{
+	b := array[0] of byte;
+	for(;;) {
+		(c, err) := <-rc;
+		if(c == nil) {
+			readerpid = -1;
+			if(err != nil)
+				fatal("read: " + err);
+			if(len b == 0)
+				fatal("no header: no input");
+			fatal("no header: the input ended in it");
+		}
+		nb := array[len b + len c] of byte;
+		nb[0:] = b;
+		nb[len b:] = c;
+		b = nb;
+		(hl, h, e) := dsp->header(b, len b);
+		if(e != nil)
+			fatal(e);
+		if(hl > 0) {
+			(r, nil, fe) := dsp->iqformat(h);
+			if(fe != nil)
+				fatal(fe);
+			return (r, b[hl:]);
+		}
 	}
 }
 

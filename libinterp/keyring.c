@@ -43,9 +43,37 @@ static Type*	TRSApk;
 static Type*	TRSAsig;
 
 enum {
-	Maxmsg=	4096,
+	/*
+	 * The longest message getmsg and sendmsg carry, and getstring,
+	 * putstring and the byte-array forms: what holds the text of the
+	 * largest certificate of the algorithms offered.  That is an
+	 * SLH-DSA-256s one: 29792 bytes of signature are 39724 characters
+	 * of base 64, after under 300 of algorithm, hash, signer and
+	 * expiry; Maxbuf (48K), which certtostr and its fellows already
+	 * write such text into, leaves it 9K of room.  It was 4096, less
+	 * than an ML-DSA-87 certificate's 6197, and what was longer was
+	 * cut with nothing said.
+	 */
+	Maxmsg=	Maxbuf-1,
+	/*
+	 * getmsg's header is four digits and a newline, which count to
+	 * 9999; a longer message has its length in five or six
+	 */
+	Maxshorthdr=	9999,
+	/*
+	 * putstring's messages are one write on a channel that keeps a
+	 * write's bounds, a first byte saying whether data or an error;
+	 * up to this much, as ever, and a longer one in the long form
+	 */
+	Shortbuf=	4096,
+	Longhdr=	5,	/* 01, and a length of four bytes */
 	Maxdhbits=	1<<15,	/* a Diffie-Hellman modulus auth will use */
 };
+
+static char Etoolong[] = "message too long";
+
+/* keyring.m tells programs the limit */
+typedef char maxmsgcheck[Maxmsg == Keyring_Maxmsg? 1: -1];
 
 static uchar DigestStatemap[] = Keyring_DigestState_map;
 static uchar AESstatemap[] = Keyring_AESstate_map;
@@ -1827,14 +1855,32 @@ Keyring_dhparams(void *fp)
 	f->ret->t1 = newIPint(p);
 }
 
+/*
+ * Messages on a stream: a count in decimal and a newline, then that
+ * many bytes.  The count is four digits, zero-padded, up to 9999, as it
+ * always was; a longer message's is its five or six digits with no
+ * leading zero.  (An end that knows only the four reads a digit where
+ * it wants the newline and says "input or format error"; it could not
+ * have been sent such a message before, when the sender wrote five
+ * bytes of a six-byte header and then the data.)  One length has one
+ * form.  An error is "!ddd" and a newline, then the text.
+ */
 static int
 sendmsg(int fd, void *buf, int n)
 {
-	char num[10];
+	char num[16];
+	int hn;
 
+	if(n < 0 || n > Maxmsg){
+		kwerrstr(Etoolong);
+		return -1;
+	}
+	if(n <= Maxshorthdr)
+		hn = snprint(num, sizeof(num), "%4.4d\n", n);
+	else
+		hn = snprint(num, sizeof(num), "%d\n", n);
 	release();
-	snprint(num, sizeof(num), "%4.4d\n", n);
-	if(kwrite(fd, num, 5) != 5){
+	if(kwrite(fd, num, hn) != hn){
 		acquire();
 		return -1;
 	}
@@ -1865,11 +1911,16 @@ senderr(int fd, char *err, int addrmt)
 	char num[10];
 	int n, m;
 
-	release();
 	n = strlen(err);
 	m = 0;
 	if(addrmt)
 		m = strlen("remote: ");
+	/* three digits of count: a longer text made a header of six bytes, of which five were sent */
+	if(n+m > 999){
+		kwerrstr(Etoolong);
+		return -1;
+	}
+	release();
 	snprint(num, sizeof(num), "!%3.3d\n", n+m);
 	if(kwrite(fd, num, 5) != 5){
 		acquire();
@@ -1937,42 +1988,97 @@ getmsgerr(char *buf, int n, int r)
 	buf[n-1] = 0;
 }
 
+/*
+ * A message's header: its length, with *iserr set for an error
+ * message; or -1 with the reason in err.  Called with the VM let go.
+ *
+ * Authentication framing is exactly "dddd\n" for data up to 9999
+ * bytes, "ddddd\n" or "dddddd\n" with no leading zero for more, and
+ * "!ddd\n" for errors.  strtoul accepted signs, whitespace, and a
+ * missing newline, allowing non-canonical pre-auth frames to reach the
+ * expensive handshake state machine.
+ */
 static int
-getmsg(int fd, char *buf, int n)
+getmsghdr(int fd, int *iserr, char *err, int nerr)
 {
-	char num[6];
+	char num[8];
 	int i, len, r, start;
 
-	release();
+	*iserr = 0;
 	if((r = nreadn(fd, num, 5)) != 5){
-		getmsgerr(buf, n, r);
-		acquire();
+		getmsgerr(err, nerr, r);
 		return -1;
 	}
-	num[5] = 0;
-
-	/* Authentication framing is exactly "dddd\\n" for data and
-	 * "!ddd\\n" for errors.  strtoul accepted signs, whitespace, and a
-	 * missing newline, allowing non-canonical pre-auth frames to reach the
-	 * expensive handshake state machine. */
-	start = num[0] == '!' ? 1 : 0;
-	if(num[4] != '\n'){
-		getmsgerr(buf, n, 1);
-		acquire();
-		return -1;
+	start = 0;
+	if(num[0] == '!'){
+		*iserr = 1;
+		start = 1;
 	}
 	len = 0;
 	for(i = start; i < 4; i++){
 		if(num[i] < '0' || num[i] > '9'){
-			getmsgerr(buf, n, 1);
-			acquire();
+			getmsgerr(err, nerr, 1);
 			return -1;
 		}
 		len = len*10 + num[i]-'0';
 	}
+	if(num[4] == '\n')
+		return len;
 
-	r = -1;
-	if(len < 0 || len >= n || (r = nreadn(fd, buf, len)) != len){
+	/* the long form: one or two digits more, the first not 0 */
+	if(*iserr || num[0] == '0' || num[4] < '0' || num[4] > '9'){
+		getmsgerr(err, nerr, 1);
+		return -1;
+	}
+	len = len*10 + num[4]-'0';
+	if((r = nreadn(fd, num, 1)) != 1){
+		getmsgerr(err, nerr, r);
+		return -1;
+	}
+	if(num[0] >= '0' && num[0] <= '9'){
+		len = len*10 + num[0]-'0';
+		if((r = nreadn(fd, num, 1)) != 1){
+			getmsgerr(err, nerr, r);
+			return -1;
+		}
+	}
+	if(num[0] != '\n'){
+		getmsgerr(err, nerr, 1);
+		return -1;
+	}
+	/*
+	 * The length is the sender's: nothing is allocated or read for
+	 * one beyond what a message may be.
+	 */
+	if(len > Maxmsg){
+		strecpy(err, err+nerr, Etoolong);
+		return -1;
+	}
+	return len;
+}
+
+/*
+ * The next message into buf (n bytes), with a zero byte after it: its
+ * length, minus its length for an error message, or -1 with the reason
+ * in buf.  A message that does not fit buf is an error, not a part.
+ */
+static int
+getmsg(int fd, char *buf, int n)
+{
+	int len, r, iserr;
+
+	release();
+	len = getmsghdr(fd, &iserr, buf, n);
+	if(len < 0){
+		acquire();
+		return -1;
+	}
+	if(len >= n){
+		strecpy(buf, buf+n, Etoolong);
+		acquire();
+		return -1;
+	}
+	if((r = nreadn(fd, buf, len)) != len){
 		getmsgerr(buf, n, r);
 		acquire();
 		return -1;
@@ -1980,7 +2086,7 @@ getmsg(int fd, char *buf, int n)
 
 	buf[len] = 0;
 	acquire();
-	if(num[0] == '!')
+	if(iserr)
 		return -len;
 
 	return len;
@@ -2057,27 +2163,48 @@ void
 Keyring_getmsg(void *fp)
 {
 	F_Keyring_getmsg *f;
-	char *buf;
-	int n;
-	void *r;
+	char *buf, err[128];
+	int n, r, fd, iserr;
+	void *v;
 
 	f = fp;
-	r = *f->ret;
+	v = *f->ret;
 	*f->ret = H;
-	destroy(r);
+	destroy(v);
 	if(f->fd == H){
 		kwerrstr("nil fd");
 		return;
 	}
+	fd = f->fd->fd;
 
-	buf = malloc(Maxmsg);
-	if(buf == nil){
-		kwerrstr(exNomem);
+	/*
+	 * The message's own length is allocated, once its header has
+	 * said what that is and it is within Maxmsg (it was 4096 bytes
+	 * for every message, and a longer one was "input or format
+	 * error" with its bytes left in the stream).
+	 */
+	buf = nil;
+	release();
+	n = getmsghdr(fd, &iserr, err, sizeof(err));
+	if(n >= 0){
+		buf = malloc(n+1);
+		if(buf == nil){
+			strecpy(err, err+sizeof(err), exNomem);
+			n = -1;
+		}else if((r = nreadn(fd, buf, n)) != n){
+			getmsgerr(err, sizeof(err), r);
+			n = -1;
+		}else
+			buf[n] = 0;
+	}
+	acquire();
+	if(n < 0){
+		kwerrstr("%s", err);
+		free(buf);
 		return;
 	}
-
-	n = getmsg(f->fd->fd, buf, Maxmsg);
-	if(n < 0){
+	if(iserr){
+		/* an error message: its text is the error */
 		kwerrstr("%s", buf);
 		free(buf);
 		return;
@@ -2912,48 +3039,122 @@ keyringmodinit(void)
 }
 
 /*
- *  IO on a delimited channel.  A message starting with 0x00 is a normal
- *  message.  One starting with 0xff is an error string.
+ *  IO on a delimited channel (one that keeps a write's bounds: ssl(3)
+ *  for up to a record, a pipe).  A message starting with 0x00 is a
+ *  normal message.  One starting with 0xff is an error string.  Either
+ *  is one write of at most Shortbuf bytes, and one read.
  *
- *  return negative number for error messages (including hangup)
+ *  A longer message, up to Maxmsg bytes, starts with 0x01 and its
+ *  length as four bytes, most significant first, and is read until
+ *  that many bytes have come, in however many reads: ssl(3) sends a
+ *  write past its record's 32K as several records.  (There was no such
+ *  form: what was longer than 4095 bytes was cut to that by the sender
+ *  with nothing said, so a certificate of ML-DSA-87, 6197 bytes of
+ *  text, arrived as its first two thirds.  An end that does not know
+ *  the long form takes its first byte for neither data nor an error,
+ *  and says "failure".)
+ *
+ *  getbuf returns the message in *bufp, to be freed, and its length;
+ *  or -1 with the reason in err, which for an error message is its
+ *  text.
  */
 static int
-getbuf(int fd, uchar *buf, int n, char *err, int nerr)
+getbuf(int fd, uchar **bufp, char *err, int nerr)
 {
-	int len;
+	uchar *buf, *big;
+	int len, m;
+	ulong need;
 
-	release();
-	len = kread(fd, buf, n);
-	acquire();
-	if(len <= 0){
-		strncpy(err, "hungup", nerr);
-		err[nerr-1] = 0;
+	*bufp = nil;
+	buf = malloc(Shortbuf);
+	if(buf == nil){
+		strecpy(err, err+nerr, exNomem);
 		return -1;
 	}
-	if(buf[0] == 0)
+	release();
+	len = kread(fd, buf, Shortbuf);
+	if(len <= 0){
+		acquire();
+		free(buf);
+		strecpy(err, err+nerr, "hungup");
+		return -1;
+	}
+	if(buf[0] == 0){
+		acquire();
+		memmove(buf, buf+1, len-1);
+		*bufp = buf;
 		return len-1;
+	}
+	if(buf[0] == 1){
+		/* the header may come alone or with the first of the data */
+		while(len < Longhdr){
+			m = kread(fd, buf+len, Longhdr-len);
+			if(m <= 0)
+				break;
+			len += m;
+		}
+		need = 0;
+		if(len >= Longhdr)
+			need = (ulong)buf[1]<<24 | buf[2]<<16 | buf[3]<<8 | buf[4];
+		/*
+		 * the length is the sender's: within what a message may be,
+		 * and more than fits the short form, which is the only way
+		 * to send what does
+		 */
+		if(len < Longhdr || need < Shortbuf || need > Maxmsg || len-Longhdr > need){
+			acquire();
+			free(buf);
+			strecpy(err, err+nerr, len < Longhdr? "hungup": need > Maxmsg? Etoolong: "failure");
+			return -1;
+		}
+		big = malloc(need+1);
+		if(big == nil){
+			acquire();
+			free(buf);
+			strecpy(err, err+nerr, exNomem);
+			return -1;
+		}
+		len -= Longhdr;
+		memmove(big, buf+Longhdr, len);
+		free(buf);
+		while(len < need){
+			m = kread(fd, big+len, need-len);
+			if(m <= 0)
+				break;
+			len += m;
+		}
+		acquire();
+		if(len < need){
+			free(big);
+			strecpy(err, err+nerr, "hungup");
+			return -1;
+		}
+		*bufp = big;
+		return len;
+	}
+	acquire();
 	if(buf[0] != 0xff){
 		/*
 		 * this happens when the client's password is wrong: both sides use a digest of the
 		 * password as a crypt key for devssl. When they don't match decryption garbles
 		 * messages
 		 */
-		strncpy(err, "failure", nerr);
-		err[nerr-1] = 0;
+		free(buf);
+		strecpy(err, err+nerr, "failure");
 		return -1;
 	}
 
-	/* error string */
+	/* error string, whole (it was cut to 63 bytes) */
 	len--;
-	if(len < 1){
-		strncpy(err, "unknown", nerr);
-		err[nerr-1] = 0;
-	} else {
+	if(len < 1)
+		strecpy(err, err+nerr, "unknown");
+	else {
 		if(len >= nerr)
 			len = nerr-1;
 		memmove(err, buf+1, len);
 		err[len] = 0;
 	}
+	free(buf);
 	return -1;
 }
 
@@ -2962,7 +3163,7 @@ Keyring_getstring(void *fp)
 {
 	F_Keyring_getstring *f;
 	uchar *buf;
-	char err[64];
+	char *err;
 	int n;
 
 	f = fp;
@@ -2974,17 +3175,17 @@ Keyring_getstring(void *fp)
 	if(f->fd == H)
 		return;
 
-	buf = malloc(Maxmsg);
-	if(buf == nil)
+	err = malloc(Shortbuf);
+	if(err == nil)
 		return;
-
-	n = getbuf(f->fd->fd, buf, Maxmsg, err, sizeof(err));
+	n = getbuf(f->fd->fd, &buf, err, Shortbuf);
 	if(n < 0)
 		retnstr(err, strlen(err), &f->ret->t1);
 	else
-		retnstr(((char*)buf)+1, n, &f->ret->t0);
+		retnstr((char*)buf, n, &f->ret->t0);
 
 	free(buf);
+	free(err);
 }
 
 void
@@ -2992,7 +3193,7 @@ Keyring_getbytearray(void *fp)
 {
 	F_Keyring_getbytearray *f;
 	uchar *buf;
-	char err[64];
+	char *err;
 	int n;
 
 	f = fp;
@@ -3004,38 +3205,57 @@ Keyring_getbytearray(void *fp)
 	if(f->fd == H)
 		return;
 
-	buf = malloc(Maxmsg);
-	if(buf == nil)
+	err = malloc(Shortbuf);
+	if(err == nil)
 		return;
-
-	n = getbuf(f->fd->fd, buf, Maxmsg, err, sizeof(err));
+	n = getbuf(f->fd->fd, &buf, err, Shortbuf);
 	if(n < 0)
 		retnstr(err, strlen(err), &f->ret->t1);
 	else
-		f->ret->t0 = mem2array(buf+1, n);
+		f->ret->t0 = mem2array(buf, n);
 
 	free(buf);
+	free(err);
 }
 
+/*
+ * n bytes of data, or -n of an error's text: the number of bytes
+ * written, or -1 (a message longer than one may be is not sent).
+ */
 static int
 putbuf(int fd, void *p, int n)
 {
-	char *buf;
+	uchar *buf;
+	int iserr, hn;
 
-	buf = malloc(Maxmsg);
+	iserr = 0;
+	if(n < 0){
+		iserr = 1;
+		n = -n;
+	}
+	if(n > Maxmsg || (iserr && n >= Shortbuf)){
+		kwerrstr(Etoolong);
+		return -1;
+	}
+	buf = malloc(n+Longhdr);
 	if(buf == nil)
 		return -1;
 
-	release();
-	buf[0] = 0;
-	if(n < 0){
-		buf[0] = 0xff;
-		n = -n;
+	if(n < Shortbuf){
+		buf[0] = iserr? 0xff: 0;
+		hn = 1;
+	}else{
+		buf[0] = 1;
+		buf[1] = n>>24;
+		buf[2] = n>>16;
+		buf[3] = n>>8;
+		buf[4] = n;
+		hn = Longhdr;
 	}
-	if(n >= Maxmsg)
-		n = Maxmsg - 1;
-	memmove(buf+1, p, n);
-	n = kwrite(fd, buf, n+1);
+	/* copied before the VM is let go: p may be a string's own bytes */
+	memmove(buf+hn, p, n);
+	release();
+	n = kwrite(fd, buf, n+hn);
 	acquire();
 
 	free(buf);

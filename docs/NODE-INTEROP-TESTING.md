@@ -134,8 +134,8 @@ with each, over a real TCP socket + `aes_256_gcm` ssl:
 | `elgamal` (2048) | classical | ✅ | 2048 selects precomputed RFC 3526 DH params |
 | `mldsa65`    | post-quantum (ML-DSA-65) | ✅ | |
 | `mldsa87`    | post-quantum (ML-DSA-87) | ✅ | |
-| `slhdsa192s` | post-quantum (SLH-DSA-SHAKE-192s) | ✅ | ~16 KB cert; ~9 s/sign |
-| `slhdsa256s` | post-quantum (SLH-DSA-SHAKE-256s) | ✅ over TCP | ~40 KB cert; ~8 s/sign; see deadlock note |
+| `slhdsa192s` | post-quantum (SLH-DSA-SHAKE-192s) | ✅ | ~22 KB cert; ~2 s/sign |
+| `slhdsa256s` | post-quantum (SLH-DSA-SHAKE-256s) | ✅ over TCP | ~40 KB cert; ~2 s/sign; see deadlock note |
 
 `tests/interop_test.b` auto-runs the six fast algorithms end-to-end. The two
 SLH-DSA variants are validated separately because their multi-second signing
@@ -171,6 +171,18 @@ nil, and `Keyring_genSK` propagates a nil key as a nil `SK` per its contract
 (size-agnostic signers such as ed25519/ML-DSA/SLH-DSA are unaffected — they
 legitimately accept `0`). The CLI (`auth/createsignerkey`) already validates
 `32..4096`, so this only hardens direct `genSK` callers.
+
+### Note: messages longer than 9999 bytes
+
+`Keyring->getmsg`/`sendmsg`, which the handshake is made of, count a message's
+length in four decimal digits. A message of 10000 bytes or more (an SLH-DSA
+certificate, 22 KB or 40 KB of text) has its length as five digits and a newline;
+`sendmsg` used to write five bytes of that six-byte header, which a lenient
+`getmsg` read as a count and a strict one (the present one) refused, so SLH-DSA
+certificates could not be exchanged at all for a time. The longest message is
+`Keyring->Maxmsg`, 49151 bytes; see keyring-getmsg(2). `tests/keyring_msg_test.b`
+runs `auth` between holders of ML-DSA-87, SLH-DSA-192s and SLH-DSA-256s
+certificates, and a login from signers with ML-DSA-87 and SLH-DSA-256s keys.
 
 ### Note: large SLH-DSA certs and the handshake's batch send
 
@@ -219,5 +231,5 @@ certificate algorithm and encrypted-channel throughput per `ssl` cipher
 environment-dependent. See `tests/bench/README.md`. The shape it reveals: the
 handshake is dominated by the shared DH-2048 + ML-KEM-768 key agreement (so
 ed25519/ML-DSA/RSA/DSA land within ~10% of each other), ElGamal verify is ~3×
-heavier, and SLH-DSA signing is in a different league (~9 s+, a conservative
+heavier, and SLH-DSA signing is in a different league (~2 s, a conservative
 backup not a default); line encryption costs ~7× vs plaintext with AES ≳ IDEA.

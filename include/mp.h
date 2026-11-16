@@ -64,6 +64,10 @@ void	mpleft(mpint *b, int shift, mpint *res);	/* res = b<<shift */
 void	mpright(mpint *b, int shift, mpint *res);	/* res = b>>shift */
 void	mpmul(mpint *b1, mpint *b2, mpint *prod);	/* prod = b1*b2 */
 void	mpexp(mpint *b, mpint *e, mpint *m, mpint *res);	/* res = b**e mod m */
+/* res = x**kp mod p and x**kq mod q, c2 = 1/p mod q, in constant time; -1 if the numbers' lengths do not suit */
+int	mpexpcrt(mpint *x, mpint *p, mpint *q, mpint *kp, mpint *kq, mpint *c2, mpint *res);
+/* res = (a*b + c) mod m, in constant time for an odd m and a, b, c no longer than it; c may be nil */
+void	mpmuladdmod(mpint *a, mpint *b, mpint *c, mpint *m, mpint *res);
 void	mpmod(mpint *b, mpint *m, mpint *remainder);	/* remainder = b mod m */
 
 /* quotient = dividend/divisor, remainder = dividend % divisor */

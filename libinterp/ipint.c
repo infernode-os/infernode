@@ -46,7 +46,7 @@ enum
  *   work of a 16384-bit modulus and exponent (RSA-16384's private
  *   operation without the CRT; Diffie-Hellman at 8192 bits is an
  *   eighth of it); a sixteenth of that where libmp takes its general
- *   path (an even modulus, a negative base), which is that much slower;
+ *   path (an even modulus), which is that much slower;
  * - expmod with no modulus: a result no longer than Maxpowbits;
  * - mul: (digits) x (digits) no more than Maxmulwork: two numbers of
  *   two megabits, or the longest number by one of 4096 bits (two of
@@ -761,7 +761,7 @@ IPint_expmod(void *fp)
 		if(eb != 0 && work > Maxexpwork/eb)
 			error(exToolarge);
 		/* libmp's general path (see mpexp): sixteen times less */
-		if(mod->sign < 0 || (mod->p[0] & 1) == 0 || base->sign < 0)
+		if(mod->sign < 0 || (mod->p[0] & 1) == 0)
 			if(eb != 0 && work > (Maxexpwork>>4)/eb)
 				error(exToolarge);
 		/* the base is brought below the modulus first, by division */

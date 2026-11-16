@@ -25,6 +25,16 @@ int	mpsizebits(vlong nd, vlong extra, char *who);
 mpint*	mptrynew(int n);
 void	mpreserve(mpint *b, int n);
 
+// mpdiv, mpmod and mpmul for a function that holds something: -1 when
+// there is no memory (or the result would be too large), with nothing
+// raised and nothing of theirs left behind.  The other refusals (a
+// zero divisor) are still raised: the caller asks first.
+int	mpdivtry(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder);
+int	mpmodtry(mpint *b, mpint *m, mpint *remainder);
+int	mpmultry(mpint *b1, mpint *b2, mpint *prod);
+int	mpreservetry(mpint *b, int n);
+mpint*	mptrycopy(mpint *b);
+
 // for converting between int's and mpint's
 #define MAXUINT ((uint)-1)
 #define MAXINT (MAXUINT>>1)

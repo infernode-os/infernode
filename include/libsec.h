@@ -314,6 +314,22 @@ DigestState* hmac_sha1(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha256(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha384(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 
+/* a signature's nonce: RFC 6979 3.2 with 3.6's additional data (nonce.c) */
+typedef struct Noncestate Noncestate;
+struct Noncestate
+{
+	int	hlen;
+	int	used;
+	uchar	k[SHA512dlen];
+	uchar	v[SHA512dlen];
+};
+int	noncehlen(int nbits);
+void	noncestart(Noncestate*, int hlen, uchar *x, int nx, uchar *h1, int nh, uchar *extra, int nextra);
+void	noncenext(Noncestate*, uchar *t, int n);
+void	nonceclear(Noncestate*);
+int	mpnoncestart(Noncestate*, mpint *x, mpint *m, mpint *q, uchar *extra, int nextra);
+int	mpnoncenext(Noncestate*, mpint *q, mpint *k);
+
 /* HMAC_DRBG, SHA-512, SP 800-90A 10.1.2 (hmacdrbg.c): K and V the caller's */
 enum
 {
@@ -673,6 +689,7 @@ EGpriv*		eggen(int nlen, int rounds);
 mpint*		egencrypt(EGpub *k, mpint *in, mpint *out);	/* deprecated */
 mpint*		egdecrypt(EGpriv *k, mpint *in, mpint *out);
 EGsig*		egsign(EGpriv *k, mpint *m);
+EGsig*		egsignrnd(EGpriv *k, mpint *m, uchar *rnd, int nrnd);	/* the nonce's random bytes given: none, RFC 6979's own */
 int		egverify(EGpub *k, EGsig *sig, mpint *m);
 int		egpubvalid(EGpub *k);		/* 0 if signatures may be checked with k: see egverify.c */
 int		egsafeprime(mpint *p);		/* 0 if p and (p-1)/2 are prime */
@@ -717,6 +734,7 @@ struct DSAsig
 DSApriv*	dsagen(DSApub *opub);
 int		dsaparamsok(mpint *p, mpint *q);	/* 0 if p and q can be a key's: see dsagen.c */	/* opub not checked for consistency! */
 DSAsig*		dsasign(DSApriv *k, mpint *m);
+DSAsig*		dsasignrnd(DSApriv *k, mpint *m, uchar *rnd, int nrnd);	/* the nonce's random bytes given: none, RFC 6979's own */
 int		dsaverify(DSApub *k, DSAsig *sig, mpint *m);
 DSApub*		dsapuballoc(void);
 void		dsapubfree(DSApub*);

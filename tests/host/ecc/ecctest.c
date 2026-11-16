@@ -29,6 +29,7 @@
 
 void *mallocz(ulong n, int clr){ void *p = malloc(n); if(p != nil && clr) memset(p, 0, n); return p; }
 
+static int stuckrng;	/* every byte the same (a generator that repeats) */
 static int secretrng;	/* mark what genrandom makes undefined (ct mode) */
 
 void
@@ -40,6 +41,8 @@ genrandom(uchar *p, int n)
 		fd = open("/dev/urandom", O_RDONLY);
 	if(fd < 0 || read(fd, p, n) != n)
 		abort();
+	if(stuckrng)
+		memset(p, 0x42, n);
 	if(secretrng)
 		VALGRIND_MAKE_MEM_UNDEFINED(p, n);
 }
@@ -301,6 +304,85 @@ badkeys(void)
 	check(p256_ecdsa_sign(sig, d, hash, 32) == 0, "P-256 signing with a key of 1", "");
 }
 
+/*
+ * RFC 6979 A.2.5 and A.2.6: the deterministic signatures of "sample"
+ * and "test" with P-256 and SHA-256, and of "sample" with P-384 and
+ * SHA-384 (the digests are the messages': hashlib's).  With random
+ * bytes beside the key and the digest, another signature each time,
+ * which verifies.
+ */
+static void
+rfc6979(void)
+{
+	static struct { int c; const char *x, *h, *r, *s; } v[] = {
+	{ 256, "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721",
+		"AF2BDBE1AA9B6EC1E2ADE1D694F41FC71A831D0268E9891562113D8A62ADD1BF",
+		"EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716",
+		"F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8" },
+	{ 256, "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721",
+		"9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+		"F1ABB023518351CD71D881567B1EA663ED3EFCF6C5132B354F28D3B0B7D38367",
+		"019F4113742A2B14BD25926B49C649155F267E60D3814B4C0CC84250E46F0083" },
+	{ 384, "6B9D3DAD2E1B8C1C05B19875B6659F4DE23C3B667BF297BA9AA47740787137D896D5724E4C70A825F872C9EA60D2EDF5",
+		"9A9083505BC92276AEC4BE312696EF7BF3BF603F4BBD381196A029F340585312313BCA4A9B5B890EFEE42C77B1EE25FE",
+		"94EDBB92A5ECB8AAD4736E56C691916B3F88140666CE9FA73D64C4EA95AD133C81A648152E44ACF96E36DD1E80FABE46",
+		"99EF4AEB15F178CEA1FE40DB2603138F130E740A19624526203B6351D0A3A94FA329C145786E679E7B82C71A38628AC8" },
+	};
+	uchar x[48], h[48], want[96], sig[96], sig2[96], rnd[32];
+	const Curve *C;
+	ECpoint A;
+	Pt g, r;
+	felem ax, ay;
+	int i, nb;
+
+	for(i = 0; i < nelem(v); i++){
+		C = v[i].c == 256? &P256: &P384;
+		nb = C->nbytes;
+		unhex(v[i].x, x, nb);
+		unhex(v[i].h, h, nb);
+		unhex(v[i].r, want, nb);
+		unhex(v[i].s, want+nb, nb);
+		memset(sig, 0, sizeof sig);
+		check(ecdsasignrnd(C, sig, x, h, nb, nil, 0) == 0 && memcmp(sig, want, 2*nb) == 0,
+			"RFC 6979's signature", v[i].r);
+		/* hedged: another, and good */
+		genrandom(rnd, sizeof rnd);
+		check(ecdsasignrnd(C, sig2, x, h, nb, rnd, sizeof rnd) == 0 && memcmp(sig2, sig, 2*nb) != 0,
+			"a hedged signature is another", v[i].r);
+		if(v[i].c == 256){
+			ptbase(C, &g);
+			ptmul(C, &r, x, &g);
+			ptaffine(C, ax, ay, &r);
+			ftobytes(A.x, ax, C->p.n);
+			ftobytes(A.y, ay, C->p.n);
+			check(p256_ecdsa_verify(sig, &A, h, nb) == 1, "RFC 6979's signature verifies", v[i].r);
+			check(p256_ecdsa_verify(sig2, &A, h, nb) == 1, "a hedged signature verifies", v[i].r);
+			check(p256_ecdsa_sign(sig2, x, h, nb) == 0 && memcmp(sig2, sig, 2*nb) != 0
+				&& p256_ecdsa_verify(sig2, &A, h, nb) == 1, "p256_ecdsa_sign is hedged", v[i].r);
+		}
+	}
+}
+
+/*
+ * A generator that repeats (a machine's image started twice): two
+ * messages signed with it must not have one nonce, which is one r.
+ */
+static void
+stuck(void)
+{
+	uchar d[32], h1[32], h2[32], s1[64], s2[64];
+	ECpoint A;
+
+	p256_keygen(d, &A);
+	genrandom(h1, sizeof h1);
+	genrandom(h2, sizeof h2);
+	stuckrng = 1;
+	check(p256_ecdsa_sign(s1, d, h1, 32) == 0 && p256_ecdsa_sign(s2, d, h2, 32) == 0, "signing with a stuck generator", "");
+	stuckrng = 0;
+	check(memcmp(s1, s2, 32) != 0, "two messages signed with a generator that repeats have one nonce (r)", "");
+	check(p256_ecdsa_verify(s1, &A, h1, 32) == 1 && p256_ecdsa_verify(s2, &A, h2, 32) == 1, "and verify", "");
+}
+
 static void
 timing(void)
 {
@@ -408,6 +490,8 @@ main(int argc, char **argv)
 	roundtrips();
 	badpoints();
 	badkeys();
+	rfc6979();
+	stuck();
 	timing();
 	if(fails){
 		printf("%d FAILED\n", fails);

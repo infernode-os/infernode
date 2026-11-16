@@ -3,6 +3,12 @@
  * the libmp and libsec sources under AddressSanitizer:
  *
  *	rsatest vectors.txt
+ *	rsatest ct crt|general|rsa vectors.txt
+ *		under valgrind, built -DCTGRIND and without the sanitizer:
+ *		the private key's numbers marked undefined (ctgrind), then
+ *		libmp's mpexpcrt, the arithmetic rsadecrypt had before it,
+ *		or all of rsadecrypt; a branch or an address that depends on
+ *		the key is reported
  *
  * libmp's sysfatal is a raise in the kernels; here it comes back to the
  * check that made the call, which counts it as the wrong way to refuse.
@@ -14,11 +20,21 @@
 #include <setjmp.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifdef CTGRIND
+#include <valgrind/memcheck.h>
+#else
+#define VALGRIND_MAKE_MEM_UNDEFINED(p, n)	USED(p)
+#define VALGRIND_MAKE_MEM_DEFINED(p, n)	USED(p)
+#endif
 
-static int fails, checks, allocs;
+static int fails, checks, allocs, randoms;
 static jmp_buf raised;
 static char msg[256];
 
+#ifdef CTGRIND
+#define xmalloc malloc
+#define xfree free
+#else
 void*
 xmalloc(size_t n)
 {
@@ -33,6 +49,7 @@ xfree(void *p)
 		allocs--;
 	free(p);
 }
+#endif
 
 void*
 mallocz(ulong n, int clr)
@@ -71,6 +88,7 @@ genrandom(uchar *p, int n)
 {
 	static int fd = -1;
 
+	randoms++;
 	if(fd < 0)
 		fd = open("/dev/urandom", O_RDONLY);
 	if(read(fd, p, n) != n)
@@ -270,17 +288,199 @@ gen(void)
 	check(wrong == 0, "%d of 150 keys from rsagen do not undo their own exponent", wrong);
 }
 
+/* the private operation as rsadecrypt had it: libmp's general arithmetic */
+static void
+oldcrt(RSApriv *rsa, mpint *in, mpint *out)
+{
+	mpint *v1, *v2;
+
+	v1 = mpnew(0);
+	mpmod(in, rsa->p, v1);
+	v2 = mpnew(0);
+	mpmod(in, rsa->q, v2);
+	mpexp(v1, rsa->kp, rsa->p, v1);
+	mpexp(v2, rsa->kq, rsa->q, v2);
+	mpsub(v2, v1, v2);
+	mpmul(v2, rsa->c2, v2);
+	mpmod(v2, rsa->q, v2);
+	mpmul(v2, rsa->p, out);
+	mpadd(v1, out, out);
+	mpfree(v1);
+	mpfree(v2);
+}
+
+/*
+ * mpexpcrt against the general arithmetic: keys of every size from two
+ * limbs of 32 bits up, inputs at the edges and at random, primes of
+ * unlike lengths; what it is not for refused.
+ */
+static void
+crt(RSApriv *k0)
+{
+	static int sizes[] = { 64, 96, 128, 130, 190, 192, 256, 384, 512, 1024 };
+	RSApriv *k;
+	mpint *x, *a, *b, *big, *small, *n2;
+	int i, j, bad, refused, r;
+
+	x = mpnew(0);
+	a = mpnew(0);
+	b = mpnew(0);
+	bad = refused = 0;
+	for(i = 0; i < nelem(sizes); i++){
+		k = rsagen(sizes[i], 17, 0);
+		for(j = 0; j < 40; j++){
+			switch(j){
+			case 0:	mpassign(mpzero, x); break;
+			case 1:	mpassign(mpone, x); break;
+			case 2:	mpsub(k->pub.n, mpone, x); break;
+			case 3:	mpassign(k->p, x); break;
+			case 4:	mpassign(k->q, x); break;
+			case 5:	mpsub(k->p, mpone, x); break;
+			case 6:	mpadd(k->q, mpone, x); break;
+			default:
+				mprand(sizes[i] + 64, genrandom, x);
+				mpmod(x, k->pub.n, x);
+				if(j & 1)
+					mpright(x, sizes[i]/2 + j, x);	/* short ones */
+				break;
+			}
+			oldcrt(k, x, a);
+			r = mpexpcrt(x, k->p, k->q, k->kp, k->kq, k->c2, b);
+			if(r < 0)
+				refused++;
+			else if(mpcmp(a, b) != 0)
+				bad++;
+			/* and with the result in place of the input */
+			if(r == 0){
+				mpassign(x, b);
+				if(mpexpcrt(b, k->p, k->q, k->kp, k->kq, k->c2, b) < 0 || mpcmp(a, b) != 0)
+					bad++;
+			}
+		}
+		rsaprivfree(k);
+	}
+	check(bad == 0, "mpexpcrt differs from the general arithmetic in %d of 800 cases", bad);
+	check(refused == 0, "mpexpcrt refused %d of 400 inputs to rsagen's keys", refused);
+
+	/* numbers it is not for: refused, nothing done */
+	mpassign(mpzero, b);
+	mpsub(mpzero, mpone, x);
+	check(mpexpcrt(x, k0->p, k0->q, k0->kp, k0->kq, k0->c2, b) < 0, "mpexpcrt took a negative input");
+	mpmul(k0->pub.n, k0->pub.n, x);
+	mpmul(x, k0->pub.n, x);
+	check(mpexpcrt(x, k0->p, k0->q, k0->kp, k0->kq, k0->c2, b) < 0, "mpexpcrt took an input three times the modulus's length");
+	check(mpexpcrt(M, k0->p, k0->q, k0->pub.n, k0->kq, k0->c2, b) < 0, "mpexpcrt took an exponent longer than its prime");
+	check(mpexpcrt(M, k0->p, mpzero, k0->kp, k0->kq, k0->c2, b) < 0, "mpexpcrt took a q of zero");
+
+	/* primes of unlike lengths */
+	big = mpnew(0);
+	small = mpnew(0);
+	n2 = mpnew(0);
+	genprime(big, 320, 10);
+	genprime(small, 96, 10);
+	mpmul(big, small, n2);
+	mpsub(big, mpone, a);
+	mpsub(small, mpone, b);
+	mpmul(a, b, a);
+	mpextendedgcd(itomp(65537, x), a, b, x, mpnew(0));	/* x = d */
+	mpmod(x, a, x);
+	k = nil;
+	if(mptoi(b) == 1 && !RAISES(k = rsafill(n2, itomp(65537, nil), x, big, small)) && k != nil){
+		mprand(300, genrandom, x);
+		oldcrt(k, x, a);
+		check(mpexpcrt(x, k->p, k->q, k->kp, k->kq, k->c2, b) == 0 && mpcmp(a, b) == 0, "mpexpcrt with primes of 320 and 96 bits");
+		check(mpexpcrt(x, k->q, k->p, k->kq, k->kp, k->c2, b) == 0, "mpexpcrt with primes of 96 and 320 bits refused");
+		a = rsadecrypt(k, x, nil);
+		b = mpnew(0);
+		if(a != nil)
+			mpexp(a, k->pub.ek, k->pub.n, b);
+		check(a != nil && mpcmp(b, x) == 0, "rsadecrypt with primes of 320 and 96 bits");
+	}
+}
+
+/* blinding: a number from the generator for every call, and the same answer */
+static void
+blind(RSApriv *k)
+{
+	mpint *t;
+	int i, before, drew;
+
+	drew = 0;
+	for(i = 0; i < 20; i++){
+		before = randoms;
+		t = rsadecrypt(k, M, nil);
+		if(randoms > before)
+			drew++;
+		check(t != nil && mpcmp(t, S) == 0, "rsadecrypt(m), call %d, is not OpenSSL's m^d mod n", i);
+		mpfree(t);
+	}
+	check(drew == 20, "rsadecrypt drew a blinding number in %d of 20 calls", drew);
+}
+
+static void
+secret(mpint *b)
+{
+	VALGRIND_MAKE_MEM_UNDEFINED(b->p, b->top*sizeof(mpdigit));
+}
+
+static void
+public(mpint *b)
+{
+	VALGRIND_MAKE_MEM_DEFINED(b->p, b->size*sizeof(mpdigit));
+	VALGRIND_MAKE_MEM_DEFINED(&b->top, sizeof b->top);
+	VALGRIND_MAKE_MEM_DEFINED(&b->sign, sizeof b->sign);
+}
+
+static int
+ct(char *what, RSApriv *k)
+{
+	mpint *out, *x;
+
+	out = mpnew(0);
+	x = mpcopy(M);
+	secret(k->p);
+	secret(k->q);
+	secret(k->kp);
+	secret(k->kq);
+	secret(k->c2);
+	if(strcmp(what, "crt") == 0){
+		secret(x);
+		if(mpexpcrt(x, k->p, k->q, k->kp, k->kq, k->c2, out) < 0)
+			return 1;
+	}else if(strcmp(what, "general") == 0){
+		secret(x);
+		oldcrt(k, x, out);
+	}else{
+		out = rsadecrypt(k, M, nil);
+		if(out == nil)
+			return 1;
+	}
+	public(out);
+	if(mpcmp(out, S) != 0){
+		printf("FAIL: ct %s: not m^d mod n\n", what);
+		return 1;
+	}
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
 	FILE *f;
+	char *ctwhat;
 	char nm[8];
 	static char v[2000];
 	RSApriv *k;
 	mpint *b;
 
+	ctwhat = nil;
+	if(argc == 4 && strcmp(argv[1], "ct") == 0){
+		ctwhat = argv[2];
+		argv += 2;
+		argc -= 2;
+	}
 	if(argc != 2 || (f = fopen(argv[1], "r")) == nil){
-		fprintf(stderr, "usage: rsatest vectors.txt\n");
+		fprintf(stderr, "usage: rsatest [ct crt|general|rsa] vectors.txt\n");
 		return 2;
 	}
 	while(fscanf(f, "%7s %1999s", nm, v) == 2){
@@ -301,8 +501,12 @@ main(int argc, char **argv)
 		printf("FAIL: rsafill refused OpenSSL's key: %s\n", msg);
 		return 1;
 	}
+	if(ctwhat != nil)
+		return ct(ctwhat, k);
 	ranges(k);
 	faults(k);
+	crt(k);
+	blind(k);
 	fill();
 	gen();
 	if(fails){

@@ -88,26 +88,55 @@ mpnew(int n)
 	return b;
 }
 
-// room for n bits, the number unchanged
-void
-mpreserve(mpint *b, int m)
+// room for n bits, the number unchanged: -1 if there is no memory
+// for it or a number may not be that long
+int
+mpreservetry(mpint *b, int m)
 {
 	int n;
 	mpdigit *p;
 
 	if(m < 0 || m > MAXBITS)
-		sysfatal("mpbits: number too large");
+		return -1;
 	n = DIGITS(m);
 	if(b->size >= n)
-		return;
+		return 0;
+	if(b->flags & MPstatic)
+		return -1;
 	p = (mpdigit*)mallocz(n*Dbytes, 1);
 	if(p == nil)
-		sysfatal("mpbits: %r");
+		return -1;
 	memmove(p, b->p, b->top*Dbytes);
 	memset(b->p, 0, b->size*Dbytes);
 	free(b->p);
 	b->p = p;
 	b->size = n;
+	return 0;
+}
+
+// room for n bits, the number unchanged
+void
+mpreserve(mpint *b, int m)
+{
+	if(m < 0 || m > MAXBITS)
+		sysfatal("mpbits: number too large");
+	if(mpreservetry(b, m) < 0)
+		sysfatal("mpbits: no memory");
+}
+
+// mpcopy, or nil if there is no memory
+mpint*
+mptrycopy(mpint *old)
+{
+	mpint *new;
+
+	new = mptrynew(Dbits*old->size);
+	if(new == nil)
+		return nil;
+	new->top = old->top;
+	new->sign = old->sign;
+	memmove(new->p, old->p, Dbytes*old->top);
+	return new;
 }
 
 // bits for nd digits and extra more bits: a size made of other sizes,

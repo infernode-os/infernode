@@ -50,7 +50,8 @@ for f in mpaux mpadd mpsub mpcmp mpmul mpleft mpright mpvecadd mpvecsub \
 	betomp letomp mptobe mprand mptoi mptoui mpfmt strtomp; do
 	SRCS="$SRCS $ROOT/libmp/$f.c"
 done
-for f in egverify eggen egsign egalloc dhparams gensafeprime genprime probably_prime smallprimetest; do
+for f in egverify eggen egsign egalloc dhparams gensafeprime genprime probably_prime smallprimetest \
+	nonce mpnonce hmac sha1 sha1block sha2 sha256block sha256arm64 sha512block md5 md5block securezero; do
 	SRCS="$SRCS $ROOT/libsec/$f.c"
 done
 if ! $CC $CFLAGS $INC -o "$TMP/egtest" "$D/egtest.c" $SRCS "$ROOT/lib9/u32.c" "$ROOT/lib9/u64.c" 2>"$TMP/cc.log"; then

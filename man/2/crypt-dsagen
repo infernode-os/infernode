@@ -94,6 +94,20 @@ result, and a signature does not verify.
 .B Rsadecrypt
 and signing check their result against the public key before returning it,
 and have none when the private key's parts do not agree.
+The private operation is done in constant time for the key
+(no step's time or address follows the primes, the exponents or the number operated on),
+and on a number blinded with a random one drawn for each call.
+.PP
+A DSA, ElGamal or ECDSA signature's nonce is made as RFC 6979 makes it,
+from the private key, the digest and 32 random bytes drawn for the signature
+(the RFC's section 3.6):
+a random number generator that repeats does not make two signatures with one nonce.
+DSA and ECDSA sign in constant time for the key and the nonce;
+ElGamal's arithmetic modulo
+.IR p \-1
+is general, on blinded numbers.
+.B Dsasign
+and the ElGamal signature have no result (nil) when the key's group is not one.
 .B Rsafill
 returns nil when
 .I p

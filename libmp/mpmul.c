@@ -145,21 +145,32 @@ mpvecmul(mpdigit *a, int alen, mpdigit *b, int blen, mpdigit *p)
 	}
 }
 
-void
-mpmul(mpint *b1, mpint *b2, mpint *prod)
+// mpmultry is the product: -1 if there is no memory for it (or it
+// would be longer than a number may be), nothing raised: see dat.h
+int
+mpmultry(mpint *b1, mpint *b2, mpint *prod)
 {
 	mpint *oprod;
-	int bits;
+	vlong bits;
 
 	// the product's digits, asked for before anything is made: the sum
 	// was an int, and wrapped (see dat.h)
-	bits = mpsizebits((vlong)b1->top + b2->top + 1, 0, "mpmul");
+	bits = ((vlong)b1->top + b2->top + 1)*Dbits;
+	if(bits > MAXBITS)
+		return -1;
 
 	oprod = nil;
 	if(prod == b1 || prod == b2){
+		// room in the operand the product replaces, before the
+		// product is made beside it
+		if(mpreservetry(prod, bits) < 0)
+			return -1;
 		oprod = prod;
-		prod = mpnew(bits);
-	}
+		prod = mptrynew(bits);
+		if(prod == nil)
+			return -1;
+	}else if(mpreservetry(prod, bits) < 0)
+		return -1;
 
 	prod->top = 0;
 	mpbits(prod, bits);
@@ -172,4 +183,13 @@ mpmul(mpint *b1, mpint *b2, mpint *prod)
 		mpassign(prod, oprod);
 		mpfree(prod);
 	}
+	return 0;
+}
+
+void
+mpmul(mpint *b1, mpint *b2, mpint *prod)
+{
+	mpsizebits((vlong)b1->top + b2->top + 1, 0, "mpmul");
+	if(mpmultry(b1, b2, prod) < 0)
+		sysfatal("mpmul: no memory");
 }

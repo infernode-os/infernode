@@ -7,22 +7,24 @@
 # CNSA mode), built on the host with tests/host/mldsa/dsatest.c:
 #
 #   - OpenSSL's answers (tests/host/mldsa/vectors.txt, made by gen.py
-#     there): keys from the seed; Sign_internal with the randomness given
-#     makes OpenSSL's signature byte for byte (rho'' is H(K || rnd || mu),
-#     FIPS 204 Algorithm 7; it was H(K || mu), which is neither the hedged
-#     nor the deterministic variant, so no rnd gave these bytes), signing
-#     takes 32 fresh random bytes each time and two signatures of one
-#     message differ; signatures verify, and not once changed; under ASan
-#     and UBSan too, in heap buffers exactly their length
+#     there): keys from the seed; ML-DSA.Sign (FIPS 204 Algorithm 2: the
+#     pure signature, M' = 0 || |ctx| || ctx || M) with the randomness
+#     given makes OpenSSL's signature byte for byte, with an empty
+#     context string and with one, and Sign_internal (Algorithm 7) on M'
+#     whole makes OpenSSL's; signing takes 32 fresh random bytes each
+#     time and two signatures of one message differ; signatures verify,
+#     and not once changed, under another context string, or as the
+#     other interface's; a context string of more than 255 bytes is
+#     refused; under ASan and UBSan too, in heap buffers exactly their
+#     length.  (mldsa65_sign and mldsa87_sign used to be Sign_internal
+#     on the caller's message: a signature on 00 00 || X was to every
+#     conforming verifier the signature of X, and none made here
+#     verified elsewhere.  rho'' used to be H(K || mu), with no rnd.)
 #   - the rejection loop is bounded: built to allow one round, signing
 #     gives up most of the time, with nothing written (it had no bound)
-#   - where Python's cryptography package has ML-DSA, random keys and
-#     messages against OpenSSL both ways
-#
-# What these functions sign is the caller's message as Sign_internal's
-# M': Keyring signs a digest of its own format, and the framing of the
-# standard's external interface (Algorithm 2) is not applied.  Two lines
-# of the vectors say so.
+#   - where Python's cryptography package has ML-DSA, random keys,
+#     messages and context strings against OpenSSL both ways, through
+#     the package's own sign and verify
 #
 # No emulator is needed.
 #

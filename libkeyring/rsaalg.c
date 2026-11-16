@@ -274,6 +274,9 @@ rsainit(void)
 	vec->genskfrompk = rsa_genfrompk;
 	vec->sign = rsa_sign;
 	vec->verify = rsa_verify;
+	/* signs a number: a digest's leading zero bytes are not part of it */
+	vec->signb = nil;
+	vec->verifyb = nil;
 
 	vec->skfree = rsa_freepriv;
 	vec->pkfree = rsa_freepub;

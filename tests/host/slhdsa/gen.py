@@ -7,14 +7,20 @@
 #   ossl.py      OpenSSL's SLH-DSA (the one inside Python's cryptography
 #                package), where it can be reached; the header of the
 #                file says whether it was
-# Signing is the standard's deterministic variant (opt_rand = PK.seed),
-# pure, with an empty context string: what slhdsa192s_sign and
-# slhdsa256s_sign make.
+# slhdsa192s_sign and slhdsa256s_sign make the standard's pure signature
+# with an empty context string, hedged: opt_rand is n random bytes.  The
+# kat lines are of the deterministic variant (opt_rand = PK.seed), which
+# the library makes through slhdsa_sign_internal on M'; the hkat lines
+# give the randomness.
 #
 # Lines:
 #   kat SET SEED PK SK MSG SIGSUM
 #       key generation from SEED = SK.seed || SK.prf || PK.seed gives PK
-#       and SK; the signature of MSG has SHAKE256-256 digest SIGSUM
+#       and SK; the deterministic signature of MSG has SHAKE256-256
+#       digest SIGSUM
+#   hkat SET SK MSG CTX ADDRND SIGSUM
+#       the signature of MSG under the context string CTX with ADDRND as
+#       opt_rand has digest SIGSUM
 #   sig SET EXPECT WHAT PK MSG SIG
 #       verifying SIG on MSG under PK gives EXPECT (1 accepted, 0 refused)
 # MSG is hex, "-" for the empty message.
@@ -84,6 +90,32 @@ for name, par, alg in SETS:
 		sig = ossl.sign(alg, sk, msg)
 		out.append("kat %d %s %s %s %s %s" % (name, seed.hex(), pk.hex(), sk.hex(), hx(msg), shake(sig)))
 
+# hedged, with and without a context string: the reference's, and
+# OpenSSL's given the same randomness (test-entropy)
+rnd2 = random.Random(2052)
+for name, par, alg in SETS:
+	n = par.n
+	seed = rnd2.randbytes(3 * n)
+	pk, sk = SLH(par).keygen(seed[:n], seed[n:2*n], seed[2*n:])
+	for ctx in (b"", b"InferNode"):
+		msg = rnd2.randbytes(32)
+		addrnd = rnd2.randbytes(n)
+		sig = slh_sign(par, msg, sk, ctx, addrnd)
+		if not slh_verify(par, msg, sig, pk, ctx):
+			die("the reference does not verify its own hedged signature")
+		if have:
+			if ossl.sign(alg, sk, msg, ctx, params=[(b"test-entropy", addrnd)]) != sig:
+				die("%s: OpenSSL's hedged signature differs from the reference's" % alg)
+		out.append("hkat %d %s %s %s %s %s" % (name, sk.hex(), hx(msg), hx(ctx), addrnd.hex(), shake(sig)))
+		sys.stderr.write("%s hkat\n" % alg)
+
+if len(sys.argv) > 1 and sys.argv[1] == "hkat":
+	# the hkat lines alone, to add to a file made before there were any
+	for l in out:
+		if l.startswith("hkat "):
+			print(l)
+	sys.exit(0)
+
 print("# SLH-DSA-SHAKE-192s and -256s known answers, made by tests/host/slhdsa/gen.py.")
 print("# The first %d kat lines of each set and the sig lines are the FIPS 205" % (2 if have else 3))
 print("# reference's (slh_ref.py)" + ("; its keys and pure signatures were equal byte for byte to" if have else "."))
@@ -93,6 +125,7 @@ if have:
 else:
 	print("# OpenSSL's SLH-DSA could not be reached when this was made: the reference alone.")
 print("#   kat SET SEED PK SK MSG SHAKE256-256(SIG)")
+print("#   hkat SET SK MSG CTX ADDRND SHAKE256-256(SIG)")
 print("#   sig SET EXPECT WHAT PK MSG SIG")
 for l in out:
 	print(l)

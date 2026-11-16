@@ -5,15 +5,21 @@
  *   slhtest vectors.txt [quick]
  *		the known answers (tests/host/slhdsa/gen.py: the FIPS 205
  *		reference's, equal to OpenSSL's): key generation from the
- *		three seeds gives the public and secret key, the signature
- *		of a message is the standard's byte for byte and verifies,
- *		a signature made elsewhere verifies, and what is not a pure
- *		signature with an empty context is refused: the format this
- *		code made before it was held to the standard, the internal
- *		interface on the bare message, a context string; signatures
- *		cut short, lengthened and changed are refused, each in a
- *		heap buffer exactly its length.  quick: one kat a set (the
- *		sanitizers' build).
+ *		three seeds gives the public and secret key; the
+ *		deterministic signature of a message (slh_sign_internal
+ *		on M' with no added randomness) is the standard's byte for
+ *		byte; signing is hedged: it takes n bytes from the
+ *		generator as opt_rand, makes the standard's signature for
+ *		them (hkat lines: with and without a context string),
+ *		and two signatures of one message differ (it was the
+ *		deterministic variant); a signature made elsewhere
+ *		verifies, and what is not a pure signature with an empty
+ *		context is refused: the format this code made before it
+ *		was held to the standard, the internal interface on the
+ *		bare message, a context string; signatures cut short,
+ *		lengthened and changed are refused, each in a heap buffer
+ *		exactly its length.  quick: one kat a set (the sanitizers'
+ *		build).
  *   slhtest forge
  *		a WOTS+ signature chained forward with the public F to a
  *		message whose digits are all at least the signed one's and
@@ -30,15 +36,17 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-/* genrandom: the bytes a test queued (key generation's seeds), else the host's */
+/* genrandom: the bytes a test queued (key generation's seeds, opt_rand), else the host's */
 static uchar rngq[256];
 static int rngqn, rngqp;
+static long rngbytes;
 
 void
 genrandom(uchar *p, int n)
 {
 	static int fd = -1;
 
+	rngbytes += n;
 	if(rngqp + n <= rngqn){
 		memmove(p, rngq + rngqp, n);
 		rngqp += n;
@@ -118,6 +126,30 @@ verify(int set, const uchar *sig, int siglen, const uchar *msg, int n, const uch
 	return set == 192 ? slhdsa192s_verify(sig, siglen, msg, n, pk) : slhdsa256s_verify(sig, siglen, msg, n, pk);
 }
 
+static int
+signctx(int set, uchar *sig, const uchar *msg, int n, const uchar *ctx, int nctx, const uchar *sk)
+{
+	return set == 192 ? slhdsa192s_sign_ctx(sig, msg, n, ctx, nctx, sk) : slhdsa256s_sign_ctx(sig, msg, n, ctx, nctx, sk);
+}
+
+static int
+verifyctx(int set, const uchar *sig, int siglen, const uchar *msg, int n, const uchar *ctx, int nctx, const uchar *pk)
+{
+	return set == 192 ? slhdsa192s_verify_ctx(sig, siglen, msg, n, ctx, nctx, pk) : slhdsa256s_verify_ctx(sig, siglen, msg, n, ctx, nctx, pk);
+}
+
+/* M' of the pure signature with an empty context string: 0 || 0 || M */
+static uchar*
+mprime(const uchar *msg, int n)
+{
+	uchar *m;
+
+	m = malloc(n + 2);
+	m[0] = m[1] = 0;
+	memmove(m + 2, msg, n);
+	return m;
+}
+
 /* verify a copy of sig[0:n] in a buffer of exactly n bytes */
 static int
 verifyexact(int set, const uchar *sig, int n, const uchar *msg, int msglen, const uchar *pk)
@@ -140,7 +172,8 @@ vectors(const char *file, int quick)
 	static char line[200000];
 	char *f[8];
 	FILE *fp;
-	int nf, set, lineno, n, n1, n2, n3, n4, i, l, nkat[2], nsig, nref, expect, L;
+	int nf, set, lineno, n, n1, n2, n3, n4, i, l, nkat[2], nsig, nref, nhkat, expect, L;
+	long before;
 	uchar *seed, *pk, *sk, *msg, *want, *sig, *mypk, *mysk, sum[32], *b;
 	char *t;
 	unsigned x;
@@ -151,7 +184,7 @@ vectors(const char *file, int quick)
 		return 1;
 	}
 	lineno = 0;
-	nkat[0] = nkat[1] = nsig = nref = 0;
+	nkat[0] = nkat[1] = nsig = nref = nhkat = 0;
 	x = 12345;
 	while(fgets(line, sizeof line, fp) != nil){
 		lineno++;
@@ -191,11 +224,45 @@ vectors(const char *file, int quick)
 			rngqn = 0;
 			check(memcmp(mypk, pk, n2) == 0, "public key differs from FIPS 205 slh_keygen_internal's", set, lineno);
 			check(memcmp(mysk, sk, n3) == 0, "secret key differs from FIPS 205 slh_keygen_internal's", set, lineno);
+			/* the deterministic variant: slh_sign_internal on M', no added randomness */
 			memset(sig, 0, L);
-			check(sign(set, sig, msg, n4, sk) == 0, "sign fails", set, lineno);
+			b = mprime(msg, n4);
+			before = rngbytes;
+			check(slhdsa_sign_internal(set, sig, b, n4 + 2, nil, sk) == 0, "sign_internal fails", set, lineno);
+			check(rngbytes == before, "sign_internal took bytes from the generator", set, lineno);
 			shake256(sig, L, sum, 32);
 			check(memcmp(sum, want, 32) == 0, "signature differs from FIPS 205 slh_sign's (pure, empty context, deterministic)", set, lineno);
 			check(verify(set, sig, L, msg, n4, pk) == 1, "own signature refused", set, lineno);
+			check(slhdsa_verify_internal(set, sig, L, b, n4 + 2, pk) == 1, "verify_internal refuses the signature of M'", set, lineno);
+			if(nkat[set == 256] == 2){
+				/*
+				 * hedged (FIPS 205 Algorithm 22 line 5): signing takes n
+				 * bytes from the generator, the signature is
+				 * slh_sign_internal's with them as opt_rand, and is not
+				 * the deterministic one
+				 */
+				uchar *h1, *h2;
+
+				h1 = malloc(L);
+				h2 = malloc(L);
+				memset(rngq, 0x5A, n);
+				rngqn = n;
+				rngqp = 0;
+				before = rngbytes;
+				check(sign(set, h1, msg, n4, sk) == 0, "sign fails", set, lineno);
+				check(rngbytes - before == n && rngqp == n, "signing does not take n random bytes for opt_rand", set, lineno);
+				rngqn = 0;
+				check(slhdsa_sign_internal(set, h2, b, n4 + 2, rngq, sk) == 0, "sign_internal fails", set, lineno);
+				check(memcmp(h1, h2, L) == 0, "signing is not slh_sign_internal with the generator's bytes as opt_rand", set, lineno);
+				check(memcmp(h1, sig, L) != 0, "signing is deterministic: opt_rand is not the generator's bytes", set, lineno);
+				check(verify(set, h1, L, msg, n4, pk) == 1, "own hedged signature refused", set, lineno);
+				/* and with the generator's own bytes, two signatures differ */
+				check(sign(set, h2, msg, n4, sk) == 0, "sign fails", set, lineno);
+				check(memcmp(h1, h2, L) != 0 && memcmp(h2, sig, L) != 0, "two signatures of one message are the same: no randomness went into them", set, lineno);
+				check(verify(set, h2, L, msg, n4, pk) == 1, "own hedged signature refused", set, lineno);
+				free(h1); free(h2);
+			}
+			free(b);
 			/* another message, another key (the seed's bytes as one) */
 			if(n4 > 0){
 				msg[0] ^= 1;
@@ -204,6 +271,40 @@ vectors(const char *file, int quick)
 			}
 			check(verify(set, sig, L, msg, n4, seed) == 0, "signature accepted under another key", set, lineno);
 			free(seed); free(pk); free(sk); free(msg); free(want); free(mypk); free(mysk); free(sig);
+		}else if(strcmp(f[0], "hkat") == 0 && nf == 7){
+			/* hkat SET SK MSG CTX ADDRND SIGSUM */
+			if(quick && nhkat > 0)
+				continue;
+			nhkat++;
+			sk = unhex(f[2], &n1);
+			msg = unhex(f[3], &n2);
+			b = unhex(f[4], &n3);
+			seed = unhex(f[5], &n4);
+			want = unhex(f[6], &i);
+			check(n1 == sklen(set) && n4 == n && i == 32, "malformed hkat line", set, lineno);
+			sig = malloc(L);
+			memmove(rngq, seed, n);
+			rngqn = n;
+			rngqp = 0;
+			check(signctx(set, sig, msg, n2, b, n3, sk) == 0, "sign_ctx fails", set, lineno);
+			check(rngqp == n, "signing does not take n random bytes for opt_rand", set, lineno);
+			rngqn = 0;
+			shake256(sig, L, sum, 32);
+			check(memcmp(sum, want, 32) == 0, "signature differs from FIPS 205 slh_sign's with the same opt_rand", set, lineno);
+			check(verifyctx(set, sig, L, msg, n2, b, n3, sk + 2*n) == 1, "own signature refused", set, lineno);
+			if(n3 > 0){
+				check(verify(set, sig, L, msg, n2, sk + 2*n) == 0, "a signature under a context string accepted with none", set, lineno);
+				check(verifyctx(set, sig, L, msg, n2, b, n3 - 1, sk + 2*n) == 0, "a signature accepted under a shorter context string", set, lineno);
+				/* FIPS 205 Algorithm 22 line 1: at most 255 bytes of context */
+				mypk = malloc(256);
+				memset(mypk, 'c', 256);
+				memset(sig, 0xA5, L);
+				check(signctx(set, sig, msg, n2, mypk, 256, sk) != 0, "a context string of 256 bytes signed under", set, lineno);
+				check(sig[0] == 0xA5 && sig[L-1] == 0xA5, "a refused context string wrote to the signature", set, lineno);
+				check(verifyctx(set, sig, L, msg, n2, mypk, 256, sk + 2*n) == 0, "a context string of 256 bytes verified under", set, lineno);
+				free(mypk);
+			}
+			free(sk); free(msg); free(b); free(seed); free(want); free(sig);
 		}else if(strcmp(f[0], "sig") == 0 && nf == 7){
 			nsig++;
 			expect = atoi(f[2]);
@@ -258,7 +359,11 @@ vectors(const char *file, int quick)
 		fprintf(stderr, "FAIL: %s has too few vectors (%d and %d kat, %d sig)\n", file, nkat[0], nkat[1], nsig);
 		fails++;
 	}
-	printf("%d and %d known answers (192s, 256s), %d signatures from elsewhere\n", nkat[0], nkat[1], nsig);
+	if(nhkat == 0){
+		fprintf(stderr, "FAIL: %s has no hedged known answers\n", file);
+		fails++;
+	}
+	printf("%d and %d known answers (192s, 256s), %d hedged, %d signatures from elsewhere\n", nkat[0], nkat[1], nhkat, nsig);
 	return fails != 0;
 }
 
@@ -398,8 +503,8 @@ cli(void)
 {
 	static char line[200000];
 	char *f[8], *t;
-	int nf, set, n1, n2, n3, rc;
-	uchar *a, *b, *c, *pk, *sk, *sig;
+	int nf, set, n1, n2, n3, n4, rc;
+	uchar *a, *b, *c, *d, *pk, *sk, *sig;
 
 	while(fgets(line, sizeof line, stdin) != nil){
 		nf = 0;
@@ -426,21 +531,40 @@ cli(void)
 			phex("sk", sk, sklen(set));
 			free(a); free(pk); free(sk);
 		}else if(strcmp(f[0], "sign") == 0 && nf >= 4){
+			/* sign SET SK MSG [ADDRND [CTX]]: ADDRND is given to the generator; "-" for the deterministic variant */
 			a = unhex(f[2], &n1);
 			b = unhex(f[3], &n2);
+			c = unhex(nf >= 5 ? f[4] : "-", &n3);
+			d = unhex(nf >= 6 ? f[5] : "-", &n4);
 			sig = malloc(siglen(set));
 			memset(sig, 0, siglen(set));
-			rc = n1 == sklen(set) ? sign(set, sig, b, n2, a) : -2;
+			if(n1 != sklen(set))
+				rc = -2;
+			else if(n3 == 0){
+				uchar *m;
+
+				m = mprime(b, n2);
+				rc = slhdsa_sign_internal(set, sig, m, n2 + 2, nil, a);
+				free(m);
+			}else{
+				memmove(rngq, c, n3);
+				rngqn = n3;
+				rngqp = 0;
+				rc = signctx(set, sig, b, n2, d, n4, a);
+				rngqn = 0;
+			}
 			printf("rc %d\n", rc);
 			phex("sig", sig, siglen(set));
-			free(a); free(b); free(sig);
+			free(a); free(b); free(c); free(d); free(sig);
 		}else if(strcmp(f[0], "verify") == 0 && nf >= 5){
+			/* verify SET PK MSG SIG [CTX] */
 			a = unhex(f[2], &n1);
 			b = unhex(f[3], &n2);
 			c = unhex(f[4], &n3);
-			rc = n1 == pklen(set) ? verify(set, c, n3, b, n2, a) : -2;
+			d = unhex(nf >= 6 ? f[5] : "-", &n4);
+			rc = n1 == pklen(set) ? verifyctx(set, c, n3, b, n2, d, n4, a) : -2;
 			printf("ok %d\n", rc);
-			free(a); free(b); free(c);
+			free(a); free(b); free(c); free(d);
 		}
 		fflush(stdout);
 	}

@@ -75,17 +75,29 @@ extern int  slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int,
 extern int  slhdsa_wots_len(int);
 
 /*
- * The header of M' for the pure signature with an empty context string:
- * FIPS 205 Algorithms 22 (slh_sign) and 24 (slh_verify),
+ * M' for the pure signature: FIPS 205 Algorithms 22 (slh_sign) and 24
+ * (slh_verify),
  *	M' = toByte(0, 1) || toByte(|ctx|, 1) || ctx || M
- * The functions below are the standard's slh_sign and slh_verify with
- * ctx empty; M' is what slh_sign_internal and slh_verify_internal hash.
- * (The caller's message used to be hashed as it came: the internal
- * interface, which section 9 says is not to be an application's, and
- * under which a message beginning 00 00 was to a conforming verifier a
- * signature on the rest of it.)
+ * with ctx a context string of at most 255 bytes.  The header and the
+ * message are hashed one after the other and need not be joined: the
+ * functions below take M' as pre || msg.  (The caller's message used to
+ * be hashed as it came: the internal interface, which section 9 says is
+ * not to be an application's, and under which a message beginning 00 00
+ * was to a conforming verifier a signature on the rest of it.)
  */
-static const uchar mprefix[2] = { 0, 0 };
+enum { Maxctx = 255 };
+
+static int
+mheader(uchar *pre, const uchar *ctx, int ctxlen)
+{
+	if(ctxlen < 0 || ctxlen > Maxctx || (ctxlen > 0 && ctx == nil))
+		return -1;
+	pre[0] = 0;
+	pre[1] = ctxlen;
+	if(ctxlen > 0)
+		memmove(pre+2, ctx, ctxlen);
+	return 2+ctxlen;
+}
 
 /*
  * Tree index and leaf index from the message digest.
@@ -131,25 +143,23 @@ split_digest(const uchar *digest,
 }
 
 /*
- * SLH-DSA key generation (generic for both parameter sets)
- *
- * Algorithms 21 and 18 from FIPS 205
+ * slh_keygen_internal, FIPS 205 Algorithm 18: the key pair of the three
+ * n-byte seeds.
  *
  * SK = (SK.seed || SK.prf || PK.seed || PK.root)
  * PK = (PK.seed || PK.root)
- *
- * SK.seed, SK.prf, PK.seed are random; PK.root is computed.
  */
 static int
-slhdsa_keygen(uchar *pk, uchar *sk, int n, int hprime, int d)
+keygen_seeds(uchar *pk, uchar *sk,
+	const uchar *skseed0, const uchar *skprf0, const uchar *pkseed0,
+	int n, int hprime, int d)
 {
 	uchar skseed[32], skprf[32], pkseed[32];
 	uchar root[32];
 
-	/* Generate random seeds */
-	genrandom(skseed, n);
-	genrandom(skprf, n);
-	genrandom(pkseed, n);
+	memmove(skseed, skseed0, n);
+	memmove(skprf, skprf0, n);
+	memmove(pkseed, pkseed0, n);
 
 	/* Compute root of the top XMSS tree */
 	if(slhdsa_treehash(root, nil, n, pkseed, n, skseed, n,
@@ -176,16 +186,32 @@ slhdsa_keygen(uchar *pk, uchar *sk, int n, int hprime, int d)
 }
 
 /*
- * SLH-DSA signing (generic): slh_sign, FIPS 205 Algorithm 22, with an
- * empty context string, over slh_sign_internal (Algorithm 19) in its
- * deterministic variant (opt_rand = PK.seed).
+ * slh_keygen, FIPS 205 Algorithm 21: the seeds are random.
+ */
+static int
+slhdsa_keygen(uchar *pk, uchar *sk, int n, int hprime, int d)
+{
+	uchar seeds[3*32];
+	int r;
+
+	genrandom(seeds, 3*n);
+	r = keygen_seeds(pk, sk, seeds, seeds+n, seeds+2*n, n, hprime, d);
+	secureZero(seeds, sizeof(seeds));
+	return r;
+}
+
+/*
+ * slh_sign_internal, FIPS 205 Algorithm 19, on M' = pre || msg.
+ * addrnd is the n bytes of additional randomness: opt_rand is addrnd,
+ * or with none (nil) PK.seed, the deterministic variant.
  *
  * Returns 0 with the signature in sig, or -1 with sig cleared.
  *
  * sig = R || SIG_FORS || SIG_HT
  */
 static int
-slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
+sign_core(uchar *sig, const uchar *pre, int prelen,
+	const uchar *msg, ulong msglen, const uchar *addrnd,
 	const uchar *sk, int n, int h, int d, int hprime, int a, int k)
 {
 	const uchar *skseed, *skprf, *pkseed, *pkroot;
@@ -213,17 +239,19 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	sig0 = sig;
 	R = sig;
 
-	/* opt_rand = PK.seed for deterministic signing */
-	opt_rand = pkseed;
+	/* Algorithm 19 lines 2 to 4 */
+	opt_rand = addrnd;
+	if(opt_rand == nil)
+		opt_rand = pkseed;
 
 	/* R = PRF_msg(SK.prf, opt_rand, M') */
 	slhdsa_PRF_msg(R, n, skprf, n, opt_rand, n,
-		mprefix, sizeof(mprefix), msg, msglen);
+		pre, prelen, msg, msglen);
 	sig += n;
 
 	/* Compute message digest */
 	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n,
-		mprefix, sizeof(mprefix), msg, msglen);
+		pre, prelen, msg, msglen);
 
 	/* Extract tree and leaf indices */
 	split_digest(digest, k, a, h, hprime, &idx_tree, &idx_leaf);
@@ -276,16 +304,15 @@ fail:
 }
 
 /*
- * SLH-DSA verification (generic): slh_verify, FIPS 205 Algorithm 24,
- * with an empty context string, over slh_verify_internal (Algorithm 20).
+ * slh_verify_internal, FIPS 205 Algorithm 20, on M' = pre || msg.
  *
  * Returns 1 if valid, 0 if invalid, or if the answer could not be
  * worked out (no memory): a step that fails is a refusal, where it used
  * to leave the walk going on with whatever its buffer held.
  */
 static int
-slhdsa_verify_internal(const uchar *sig, ulong siglen,
-	const uchar *msg, ulong msglen,
+verify_core(const uchar *sig, ulong siglen,
+	const uchar *pre, int prelen, const uchar *msg, ulong msglen,
 	const uchar *pk, int n, int h, int d, int hprime, int a, int k)
 {
 	const uchar *pkseed, *pkroot;
@@ -321,7 +348,7 @@ slhdsa_verify_internal(const uchar *sig, ulong siglen,
 		return 0;
 
 	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n,
-		mprefix, sizeof(mprefix), msg, msglen);
+		pre, prelen, msg, msglen);
 
 	/* Extract tree and leaf indices */
 	split_digest(digest, k, a, h, hprime, &idx_tree, &idx_leaf);
@@ -342,6 +369,117 @@ slhdsa_verify_internal(const uchar *sig, ulong siglen,
 }
 
 /*
+ * The two parameter sets, by number.
+ */
+typedef struct Set Set;
+struct Set
+{
+	int	n, h, d, hprime, a, k;
+};
+static const Set s192 = { S192_N, S192_H, S192_D, S192_HPRIME, S192_A, S192_K };
+static const Set s256 = { S256_N, S256_H, S256_D, S256_HPRIME, S256_A, S256_K };
+
+static const Set*
+setof(int set)
+{
+	if(set == 192)
+		return &s192;
+	if(set == 256)
+		return &s256;
+	return nil;
+}
+
+/*
+ * slh_sign, FIPS 205 Algorithm 22: the pure signature of msg under the
+ * context string ctx, hedged.  addrnd is n fresh random bytes (line 5;
+ * section 9.2 makes this the default: without it every signature of a
+ * message is the same, which is what a fault induced while signing
+ * needs to have one-time keys sign twice).  It was the deterministic
+ * variant, opt_rand = PK.seed.  With no generator nothing is signed:
+ * genrandom gives bytes or does not return.
+ */
+static int
+sign(const Set *p, uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *sk)
+{
+	uchar pre[2+Maxctx], addrnd[32];
+	int prelen, r;
+
+	prelen = mheader(pre, ctx, ctxlen);
+	if(prelen < 0)
+		return -1;
+	genrandom(addrnd, p->n);
+	r = sign_core(sig, pre, prelen, msg, msglen, addrnd, sk,
+		p->n, p->h, p->d, p->hprime, p->a, p->k);
+	secureZero(addrnd, sizeof(addrnd));
+	return r;
+}
+
+/*
+ * slh_verify, FIPS 205 Algorithm 24.
+ */
+static int
+verify(const Set *p, const uchar *sig, ulong siglen,
+	const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen,
+	const uchar *pk)
+{
+	uchar pre[2+Maxctx];
+	int prelen;
+
+	prelen = mheader(pre, ctx, ctxlen);
+	if(prelen < 0)
+		return 0;
+	return verify_core(sig, siglen, pre, prelen, msg, msglen, pk,
+		p->n, p->h, p->d, p->hprime, p->a, p->k);
+}
+
+/*
+ * The standard's internal interfaces (Algorithms 18, 19 and 20), which
+ * take the randomness as an argument: for known-answer tests (NIST's
+ * ACVP vectors are of these as well as of the external ones), not for
+ * an application (FIPS 205 section 9).  set is 192 or 256; the seeds
+ * and addrnd are n bytes (24 or 32); mp is M' whole; with addrnd nil
+ * the signature is the deterministic one.
+ */
+int
+slhdsa_keygen_internal(int set, uchar *pk, uchar *sk,
+	const uchar *skseed, const uchar *skprf, const uchar *pkseed)
+{
+	const Set *p;
+
+	p = setof(set);
+	if(p == nil)
+		return -1;
+	return keygen_seeds(pk, sk, skseed, skprf, pkseed, p->n, p->hprime, p->d);
+}
+
+int
+slhdsa_sign_internal(int set, uchar *sig, const uchar *mp, ulong mplen,
+	const uchar *addrnd, const uchar *sk)
+{
+	const Set *p;
+
+	p = setof(set);
+	if(p == nil)
+		return -1;
+	return sign_core(sig, nil, 0, mp, mplen, addrnd, sk,
+		p->n, p->h, p->d, p->hprime, p->a, p->k);
+}
+
+int
+slhdsa_verify_internal(int set, const uchar *sig, ulong siglen,
+	const uchar *mp, ulong mplen, const uchar *pk)
+{
+	const Set *p;
+
+	p = setof(set);
+	if(p == nil)
+		return 0;
+	return verify_core(sig, siglen, nil, 0, mp, mplen, pk,
+		p->n, p->h, p->d, p->hprime, p->a, p->k);
+}
+
+/*
  * Public API: SLH-DSA-SHAKE-192s
  */
 int
@@ -353,16 +491,29 @@ slhdsa192s_keygen(uchar *pk, uchar *sk)
 int
 slhdsa192s_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk)
 {
-	return slhdsa_sign_internal(sig, msg, msglen, sk,
-		S192_N, S192_H, S192_D, S192_HPRIME, S192_A, S192_K);
+	return sign(&s192, sig, msg, msglen, nil, 0, sk);
+}
+
+int
+slhdsa192s_sign_ctx(uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *sk)
+{
+	return sign(&s192, sig, msg, msglen, ctx, ctxlen, sk);
 }
 
 int
 slhdsa192s_verify(const uchar *sig, ulong siglen,
 	const uchar *msg, ulong msglen, const uchar *pk)
 {
-	return slhdsa_verify_internal(sig, siglen, msg, msglen, pk,
-		S192_N, S192_H, S192_D, S192_HPRIME, S192_A, S192_K);
+	return verify(&s192, sig, siglen, msg, msglen, nil, 0, pk);
+}
+
+int
+slhdsa192s_verify_ctx(const uchar *sig, ulong siglen,
+	const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen,
+	const uchar *pk)
+{
+	return verify(&s192, sig, siglen, msg, msglen, ctx, ctxlen, pk);
 }
 
 /*
@@ -377,14 +528,27 @@ slhdsa256s_keygen(uchar *pk, uchar *sk)
 int
 slhdsa256s_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk)
 {
-	return slhdsa_sign_internal(sig, msg, msglen, sk,
-		S256_N, S256_H, S256_D, S256_HPRIME, S256_A, S256_K);
+	return sign(&s256, sig, msg, msglen, nil, 0, sk);
+}
+
+int
+slhdsa256s_sign_ctx(uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *sk)
+{
+	return sign(&s256, sig, msg, msglen, ctx, ctxlen, sk);
 }
 
 int
 slhdsa256s_verify(const uchar *sig, ulong siglen,
 	const uchar *msg, ulong msglen, const uchar *pk)
 {
-	return slhdsa_verify_internal(sig, siglen, msg, msglen, pk,
-		S256_N, S256_H, S256_D, S256_HPRIME, S256_A, S256_K);
+	return verify(&s256, sig, siglen, msg, msglen, nil, 0, pk);
+}
+
+int
+slhdsa256s_verify_ctx(const uchar *sig, ulong siglen,
+	const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen,
+	const uchar *pk)
+{
+	return verify(&s256, sig, siglen, msg, msglen, ctx, ctxlen, pk);
 }

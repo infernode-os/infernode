@@ -2,20 +2,24 @@
  * libsec/mldsa*.c (ML-DSA-65 and -87, FIPS 204) on the host, built by
  * tests/host/mldsa_test.sh with the library's sources.
  *
- * mldsa65_sign and mldsa87_sign are the standard's Sign_internal
- * (Algorithm 7) with the caller's message as M' and rnd from the
- * generator; mldsa65_verify and mldsa87_verify are Verify_internal.
+ * mldsa65_sign and mldsa87_sign are the standard's ML-DSA.Sign
+ * (Algorithm 2: the pure signature, M' = 0 || |ctx| || ctx || M) with an
+ * empty context string and rnd from the generator, the _ctx forms with
+ * a context string; mldsa_sign_internal and its fellows are Algorithms
+ * 6, 7 and 8 with the randomness given.  (The plain functions used to
+ * be Sign_internal on the caller's message.)
  *
  *   dsatest vectors.txt
  *		OpenSSL's answers (tests/host/mldsa/gen.py): key generation
  *		from the seed gives its public and secret key; signing
  *		takes 32 bytes from the generator as rnd and, given
- *		OpenSSL's, makes OpenSSL's signature byte for byte (rho''
- *		is H(K || rnd || mu); it was H(K || mu), which no rnd
- *		gives); the signature verifies, and not for another
- *		message, under another key, or with a bit changed; signing
- *		twice gives two signatures (hedged) that both verify.
- *		Everything is in heap buffers exactly its length.
+ *		OpenSSL's, makes OpenSSL's pure signature byte for byte,
+ *		with and without a context string; so does Sign_internal
+ *		on M' whole; the signature verifies, and not for another
+ *		message, context or key, with a bit changed, or as the
+ *		other interface's; signing twice gives two signatures
+ *		(hedged) that both verify.  Everything is in heap buffers
+ *		exactly its length.
  *   dsatest rounds	built with -DMLDSA_MAXROUNDS=1: signing gives up after
  *		the round it is allowed, with nothing written, and a
  *		signature it does make verifies.  (The loop had no bound.)
@@ -122,6 +126,31 @@ sign(int set, uchar *sig, const uchar *msg, int n, const uchar *sk)
 	return set == 65 ? mldsa65_sign(sig, msg, n, sk) : mldsa87_sign(sig, msg, n, sk);
 }
 
+static int
+signctx(int set, uchar *sig, const uchar *msg, int n, const uchar *ctx, int nctx, const uchar *sk)
+{
+	return set == 65 ? mldsa65_sign_ctx(sig, msg, n, ctx, nctx, sk) : mldsa87_sign_ctx(sig, msg, n, ctx, nctx, sk);
+}
+
+static int
+verifyctx(int set, const uchar *sig, const uchar *msg, int n, const uchar *ctx, int nctx, const uchar *pk)
+{
+	uchar *s, *p, *m, *c;
+	int r;
+
+	s = malloc(siglen(set));
+	p = malloc(pklen(set));
+	m = malloc(n ? n : 1);
+	c = malloc(nctx ? nctx : 1);
+	memmove(s, sig, siglen(set));
+	memmove(p, pk, pklen(set));
+	memmove(m, msg, n);
+	memmove(c, ctx, nctx);
+	r = set == 65 ? mldsa65_verify_ctx(s, m, n, c, nctx, p) : mldsa87_verify_ctx(s, m, n, c, nctx, p);
+	free(s); free(p); free(m); free(c);
+	return r;
+}
+
 /* in buffers exactly as long as the signature and the key */
 static int
 verify(int set, const uchar *sig, const uchar *msg, int n, const uchar *pk)
@@ -146,7 +175,8 @@ vectors(const char *file)
 	static char line[40000];
 	char *f[10], *t;
 	FILE *fp;
-	int nf, set, lineno, n[8], i, l, nkat[2], nexact, nsig, L, expect;
+	int nf, set, lineno, n[8], i, l, nkat[2], nexact, nsig, nctx, nint, L, expect;
+	static uchar zero[32];
 	uchar *xi, *pk, *want, *msg, *rnd, *sig, *mypk, *mysk, *mysig, *b, sum[32];
 	long before;
 	unsigned x;
@@ -157,7 +187,7 @@ vectors(const char *file)
 		return 1;
 	}
 	lineno = 0;
-	nkat[0] = nkat[1] = nexact = nsig = 0;
+	nkat[0] = nkat[1] = nexact = nsig = nctx = nint = 0;
 	x = 4321;
 	while(fgets(line, sizeof line, fp) != nil){
 		lineno++;
@@ -212,7 +242,7 @@ vectors(const char *file)
 				check(sign(set, mysig, msg, n[3], mysk) == 0, "sign fails", set, lineno);
 				check(rngbytes - before == 32 && rngqp == 32, "signing does not take 32 random bytes for rnd", set, lineno);
 				rngqn = 0;
-				check(memcmp(mysig, sig, L) == 0, "signature differs from Sign_internal(sk, M, rnd)'s: rho'' is not H(K || rnd || mu)", set, lineno);
+				check(memcmp(mysig, sig, L) == 0, "signature differs from ML-DSA.Sign(sk, M, empty context)'s with the same rnd", set, lineno);
 			}
 
 			/* hedged: two signatures of one message differ, and both verify */
@@ -240,6 +270,78 @@ vectors(const char *file)
 			}
 			free(b);
 			free(xi); free(pk); free(want); free(msg); free(rnd); free(sig); free(mypk); free(mysk); free(mysig);
+		}else if(strcmp(f[0], "ctx") == 0 && nf == 7){
+			/* ctx SET XI MSG CTX RND SIG: the pure signature under a context string */
+			nctx++;
+			xi = unhex(f[2], &n[0]);
+			msg = unhex(f[3], &n[1]);
+			b = unhex(f[4], &n[2]);
+			rnd = unhex(f[5], &n[3]);
+			sig = unhex(f[6], &n[4]);
+			if(n[0] != 32 || n[3] != 32 || n[4] != L){
+				check(0, "malformed ctx line", set, lineno);
+				continue;
+			}
+			mypk = malloc(pklen(set));
+			mysk = malloc(sklen(set));
+			mysig = malloc(L);
+			check(mldsa_keygen_internal(set, mypk, mysk, xi) == 0, "keygen fails", set, lineno);
+			memset(mysig, 0, L);
+			queue(rnd, 32);
+			if(n[2] > 255){
+				/* FIPS 204 Algorithm 2 line 1: a context string is at most 255 bytes */
+				memset(mysig, 0xA5, L);
+				check(signctx(set, mysig, msg, n[1], b, n[2], mysk) != 0, "a context string of more than 255 bytes signed under", set, lineno);
+				for(i = 0; i < L; i++)
+					if(mysig[i] != 0xA5)
+						break;
+				check(i == L, "a refused context string wrote to the signature", set, lineno);
+				check(verifyctx(set, sig, msg, n[1], b, n[2], mypk) == 0, "a context string of more than 255 bytes verified under", set, lineno);
+			}else{
+				check(signctx(set, mysig, msg, n[1], b, n[2], mysk) == 0, "sign_ctx fails", set, lineno);
+				check(memcmp(mysig, sig, L) == 0, "signature differs from ML-DSA.Sign(sk, M, ctx)'s with the same rnd", set, lineno);
+				check(verifyctx(set, sig, msg, n[1], b, n[2], mypk) == 1, "OpenSSL's signature under a context string refused", set, lineno);
+				if(n[2] > 0){
+					check(verify(set, sig, msg, n[1], mypk) == 0, "a signature under a context string accepted with none", set, lineno);
+					b[0] ^= 1;
+					check(verifyctx(set, sig, msg, n[1], b, n[2], mypk) == 0, "a signature accepted under another context string", set, lineno);
+					check(verifyctx(set, sig, msg, n[1], b, n[2] - 1, mypk) == 0, "a signature accepted under a shorter context string", set, lineno);
+				}
+			}
+			rngqn = 0;
+			free(xi); free(msg); free(b); free(rnd); free(sig); free(mypk); free(mysk); free(mysig);
+		}else if(strcmp(f[0], "int") == 0 && nf == 6){
+			/* int SET XI MP RND SIG: Sign_internal on M' whole */
+			nint++;
+			xi = unhex(f[2], &n[0]);
+			msg = unhex(f[3], &n[1]);
+			rnd = unhex(f[4], &n[2]);
+			sig = unhex(f[5], &n[3]);
+			if(n[0] != 32 || n[2] != 32 || n[3] != L){
+				check(0, "malformed int line", set, lineno);
+				continue;
+			}
+			mypk = malloc(pklen(set));
+			mysk = malloc(sklen(set));
+			mysig = malloc(L);
+			check(mldsa_keygen_internal(set, mypk, mysk, xi) == 0, "keygen fails", set, lineno);
+			before = rngbytes;
+			check(mldsa_sign_internal(set, mysig, msg, n[1], nil, rnd, mysk) == 0, "sign_internal fails", set, lineno);
+			check(rngbytes == before, "sign_internal took bytes from the generator", set, lineno);
+			check(memcmp(mysig, sig, L) == 0, "signature differs from Sign_internal(sk, M', rnd)'s", set, lineno);
+			check(mldsa_verify_internal(set, sig, msg, n[1], nil, mypk) == 1, "verify_internal refuses Sign_internal's signature", set, lineno);
+			/* the internal interface's signature of M is not the pure signature of M */
+			check(verify(set, sig, msg, n[1], mypk) == 0, "Sign_internal's signature of M accepted as ML-DSA.Sign's", set, lineno);
+			/* and the pure signature is the internal one of 0 || 0 || M */
+			b = malloc(n[1] + 2);
+			b[0] = b[1] = 0;
+			memmove(b + 2, msg, n[1]);
+			queue(zero, 32);
+			check(sign(set, mysig, msg, n[1], mysk) == 0, "sign fails", set, lineno);
+			rngqn = 0;
+			check(mldsa_verify_internal(set, mysig, b, n[1] + 2, nil, mypk) == 1, "the pure signature is not Sign_internal's on 0 || 0 || M", set, lineno);
+			free(b);
+			free(xi); free(msg); free(rnd); free(sig); free(mypk); free(mysk); free(mysig);
 		}else if(strcmp(f[0], "sig") == 0 && nf == 7){
 			nsig++;
 			expect = atoi(f[2]);
@@ -264,7 +366,11 @@ vectors(const char *file)
 		fprintf(stderr, "FAIL: %s has no vectors for a set\n", file);
 		fails++;
 	}
-	printf("%d and %d known answers (ML-DSA-65, -87), %d signatures made byte for byte, %d framings\n", nkat[0], nkat[1], nexact, nsig);
+	if(nctx == 0 || nint == 0){
+		fprintf(stderr, "FAIL: %s has no context-string or internal-interface vectors\n", file);
+		fails++;
+	}
+	printf("%d and %d known answers (ML-DSA-65, -87), %d pure signatures made byte for byte, %d under context strings, %d by Sign_internal, %d framings\n", nkat[0], nkat[1], nexact, nctx, nint, nsig);
 	return fails != 0;
 }
 
@@ -319,8 +425,8 @@ cli(void)
 {
 	static char line[40000];
 	char *f[8], *t;
-	int nf, set, n1, n2, n3, rc;
-	uchar *a, *b, *c, *pk, *sk, *sig;
+	int nf, set, n1, n2, n3, n4, rc;
+	uchar *a, *b, *c, *d, *pk, *sk, *sig;
 
 	while(fgets(line, sizeof line, stdin) != nil){
 		nf = 0;
@@ -343,25 +449,38 @@ cli(void)
 			phex("sk", sk, sklen(set));
 			free(a); free(pk); free(sk);
 		}else if(strcmp(f[0], "sign") == 0 && nf >= 5){
-			/* sign SET SK MSG RND */
+			/* sign SET SK MSG RND [CTX] */
 			a = unhex(f[2], &n1);
 			b = unhex(f[3], &n2);
 			c = unhex(f[4], &n3);
+			d = unhex(nf >= 6 ? f[5] : "-", &n4);
 			queue(c, n3);
 			sig = malloc(siglen(set));
 			memset(sig, 0, siglen(set));
-			rc = n1 == sklen(set) ? sign(set, sig, b, n2, a) : -2;
+			if(n1 != sklen(set))
+				rc = -2;
+			else if(nf >= 6)
+				rc = signctx(set, sig, b, n2, d, n4, a);
+			else
+				rc = sign(set, sig, b, n2, a);
 			rngqn = 0;
 			printf("rc %d\n", rc);
 			phex("sig", sig, siglen(set));
-			free(a); free(b); free(c); free(sig);
+			free(a); free(b); free(c); free(d); free(sig);
 		}else if(strcmp(f[0], "verify") == 0 && nf >= 5){
+			/* verify SET PK MSG SIG [CTX] */
 			a = unhex(f[2], &n1);
 			b = unhex(f[3], &n2);
 			c = unhex(f[4], &n3);
-			rc = n1 == pklen(set) && n3 == siglen(set) ? verify(set, c, b, n2, a) : -2;
+			d = unhex(nf >= 6 ? f[5] : "-", &n4);
+			if(n1 != pklen(set) || n3 != siglen(set))
+				rc = -2;
+			else if(nf >= 6)
+				rc = verifyctx(set, c, b, n2, d, n4, a);
+			else
+				rc = verify(set, c, b, n2, a);
 			printf("ok %d\n", rc);
-			free(a); free(b); free(c);
+			free(a); free(b); free(c); free(d);
 		}
 		fflush(stdout);
 	}

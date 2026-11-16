@@ -9,8 +9,13 @@
 #   - known answers (tests/host/slhdsa/vectors.txt, made by gen.py there
 #     from slh_ref.py, FIPS 205 written out in Python, and equal byte for
 #     byte to OpenSSL's): key generation from the three seeds, the pure
-#     deterministic signature with an empty context string, a signature
-#     made elsewhere verified
+#     deterministic signature with an empty context string (now
+#     slh_sign_internal on M'), a signature made elsewhere verified
+#   - signing is hedged (FIPS 205 Algorithm 22 line 5: opt_rand is n
+#     random bytes; it was PK.seed, the deterministic variant): it takes
+#     n bytes from the generator and makes the standard's signature for
+#     them, with and without a context string, and two signatures of one
+#     message differ; a context string of 256 bytes is refused
 #   - what is not such a signature refused: the format this code made
 #     before it was held to the standard (its WOTS+ checksum kept only
 #     its low byte, the tree and leaf index were other bits of the

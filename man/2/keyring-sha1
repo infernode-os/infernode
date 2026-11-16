@@ -107,11 +107,54 @@ It returns a certificate containing the digital signature of the digest, signer 
 If any parameter is invalid,
 .B sign
 returns nil.
-It also returns nil when an RSA key makes no signature:
-the digest, as a number, is not below the key's modulus,
+It also returns nil when the key makes no signature:
+for an RSA key, when the digest, as a number, is not below the key's modulus,
 or the key's parts do not agree
-(the signature is checked against the public key before it is returned).
+(the signature is checked against the public key before it is returned);
+for any key, when there is no memory for the signature.
 The signature algorithm is implied by the type of the private key.
+.PP
+What is signed depends on the algorithm.
+RSA, DSA and ElGamal
+.RB ( rsa ,
+.BR dsa ,
+.BR elgamal )
+sign a number: the digest's bytes read most significant first, so that its
+leading zero bytes are no part of what is signed.
+The others sign bytes, and are given the digest's, at the hash's full length:
+.B ed25519
+signs them as its message (RFC 8032);
+.B mldsa65
+and
+.B mldsa87
+make FIPS 204's pure signature of them (ML-DSA.Sign, Algorithm 2) and
+.B slhdsa192s
+and
+.B slhdsa256s
+FIPS 205's (slh_sign, Algorithm 22), each with an empty context string and
+hedged: fresh random bytes go into every signature, so two signatures of one
+digest differ.
+A certificate of these algorithms can thus be made or checked by any
+implementation of the standard given the digest.
+.PP
+Certificates made before this was so are affected as follows; the keys
+themselves are unchanged, and the remedy is to sign again with the same key
+(a signer issues its certificates again).
+An
+.B mldsa65
+or
+.B mldsa87
+certificate made earlier is refused: those signatures were of the standard's
+internal interface (Sign_internal on the digest), which no other
+implementation makes or accepts.
+An
+.B slhdsa192s
+or
+.B slhdsa256s
+certificate made earlier with a digest that begins with a zero byte (one in 256)
+is refused, and so is an
+.B ed25519
+one: they were signatures of the digest without its leading zero bytes.
 .PP
 .B Verify
 uses public key

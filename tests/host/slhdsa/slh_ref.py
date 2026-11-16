@@ -224,11 +224,12 @@ class SLH:
         adrs = ADRS(); adrs.setLayer(s.p.d - 1)
         root = s.xmss_tree(skseed, pkseed, adrs)[s.p.hp][0]
         return pkseed + root, skseed + skprf + pkseed + root
-    # Alg 19, slh_sign_internal, deterministic (opt_rand = PK.seed)
-    def sign(s, M, sk):
+    # Alg 19, slh_sign_internal: opt_rand is addrnd, or PK.seed (the
+    # deterministic variant) with none
+    def sign(s, M, sk, addrnd=None):
         n = s.p.n
         skseed, skprf, pkseed, pkroot = sk[:n], sk[n:2*n], sk[2*n:3*n], sk[3*n:]
-        R = s.PRF_msg(skprf, pkseed, M)
+        R = s.PRF_msg(skprf, pkseed if addrnd is None else addrnd, M)
         md, it, il = s.indices(s.H_msg(R, pkseed, pkroot, M))
         adrs = ADRS(); adrs.setTree(it); adrs.setTypeAndClear(FORS_TREE); adrs.setKeyPair(il)
         fs = s.fors_sign(md, skseed, pkseed, adrs)
@@ -251,8 +252,8 @@ def mprime(M, ctx=b""):
     if len(ctx) > 255: raise ValueError("context longer than 255 bytes")
     return bytes([0, len(ctx)]) + ctx + M
 
-def slh_sign(par, M, sk, ctx=b""):         # Alg 22, deterministic variant
-    return SLH(par).sign(mprime(M, ctx), sk)
+def slh_sign(par, M, sk, ctx=b"", addrnd=None):   # Alg 22; deterministic with no addrnd
+    return SLH(par).sign(mprime(M, ctx), sk, addrnd)
 
 def slh_verify(par, M, sig, pk, ctx=b""):  # Alg 24
     return SLH(par).verify(mprime(M, ctx), sig, pk)

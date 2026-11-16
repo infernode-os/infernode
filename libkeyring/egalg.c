@@ -256,6 +256,9 @@ elgamalinit(void)
 	vec->genskfrompk = eg_genfrompk;
 	vec->sign = eg_sign;
 	vec->verify = eg_verify;
+	/* signs a number: a digest's leading zero bytes are not part of it */
+	vec->signb = nil;
+	vec->verifyb = nil;
 
 	vec->skfree = eg_freepriv;
 	vec->pkfree = eg_freepub;

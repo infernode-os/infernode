@@ -153,11 +153,11 @@ typedef struct {
 } MLDSAKeygenState;
 
 /*
- * ML-DSA.KeyGen: Key generation.
- * Algorithms 1 and 6 in FIPS 204.
+ * ML-DSA.KeyGen_internal: the key pair of the seed xi.
+ * Algorithm 6 in FIPS 204.
  */
 static int
-mldsa_keygen_internal(uchar *pk, uchar *sk,
+keygen_xi(uchar *pk, uchar *sk, const uchar xi[32],
 	int k, int l, int eta)
 {
 	MLDSAKeygenState *st;
@@ -171,8 +171,7 @@ mldsa_keygen_internal(uchar *pk, uchar *sk,
 	if(st == nil)
 		return -1;
 
-	/* Random seed */
-	genrandom(seed, 32);
+	memmove(seed, xi, 32);
 
 	/* (rho, rhoprime, K) = H(seed || k || l) */
 	{
@@ -310,21 +309,25 @@ typedef struct {
 
 /*
  * ML-DSA.Sign_internal: Signature generation.
- * Algorithm 7 in FIPS 204, on the caller's message as M' (the caller,
- * Keyring, signs a digest of its own format; the framing of Algorithm 2
- * is not applied here).  Hedged: rnd is 32 fresh random bytes.
+ * Algorithm 7 in FIPS 204.  M' is pre || msg (the header of Algorithm 2
+ * and the message, which need not be joined to be hashed); or, with
+ * extmu not nil, mu is given and no message is hashed (the standard's
+ * note on line 6: mu may be made outside the module).  rnd is the 32
+ * bytes of Algorithm 2 line 5: fresh random bytes for the hedged
+ * variant, zeros for the deterministic one.
  *
  * Returns 0, or -1 with nothing written to sig.
  */
 static int
-mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
+sign_core(uchar *sig, const uchar *pre, int prelen,
+	const uchar *msg, ulong msglen, const uchar *extmu,
+	const uchar rnd[32],
 	const uchar *sk, int k, int l, int eta, int tau, int32 beta,
 	int gamma1_bits, int32 gamma2, int omega, int ctildelen)
 {
 	MLDSASignState *st;
 	uchar rho[32], K[32], tr[64];
 	uchar mu[64], rhoprime[64];
-	uchar rnd[32];
 	uchar ctilde[64];
 	int skoff, i, j;
 	u16int kappa;
@@ -355,38 +358,37 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 		skoff += 416;
 	}
 
-	/* mu = H(tr || msg) */
-	{
+	/* mu = H(tr || M') */
+	if(extmu != nil)
+		memmove(mu, extmu, 64);
+	else{
 		SHA3state hs;
 		shake256_init(&hs);
 		shake256_absorb(&hs, tr, 64);
+		shake256_absorb(&hs, pre, prelen);
 		shake256_absorb(&hs, msg, msglen);
 		shake256_finalize(&hs);
 		shake256_squeeze(&hs, mu, 64);
 	}
 
 	/*
-	 * rho'' = H(K || rnd || mu): FIPS 204 Algorithm 7 line 7, with rnd
-	 * 32 random bytes (Algorithm 2's hedged variant, the standard's
-	 * default).  It was H(K || mu), with no rnd at all: neither the
-	 * hedged variant nor the deterministic one (rnd of 32 zero bytes),
-	 * and the same masks every time a message was signed, which is
-	 * what an induced fault needs to recover the key from two
-	 * signatures.  A verifier never sees rho'', so signatures verify
-	 * as they did.
+	 * rho'' = H(K || rnd || mu): FIPS 204 Algorithm 7 line 7.  It was
+	 * H(K || mu), with no rnd at all: neither the hedged variant nor
+	 * the deterministic one (rnd of 32 zero bytes), and the same masks
+	 * every time a message was signed, which is what an induced fault
+	 * needs to recover the key from two signatures.  A verifier never
+	 * sees rho''.
 	 */
-	genrandom(rnd, sizeof(rnd));
 	{
 		SHA3state hs;
 		shake256_init(&hs);
 		shake256_absorb(&hs, K, 32);
-		shake256_absorb(&hs, rnd, sizeof(rnd));
+		shake256_absorb(&hs, rnd, 32);
 		shake256_absorb(&hs, mu, 64);
 		shake256_finalize(&hs);
 		shake256_squeeze(&hs, rhoprime, 64);
 		secureZero(&hs, sizeof(hs));	/* it absorbed K */
 	}
-	secureZero(rnd, sizeof(rnd));
 
 	/* NTT(s1), NTT(s2), NTT(t0) for later use */
 	for(i = 0; i < l; i++)
@@ -603,10 +605,12 @@ typedef struct {
 
 /*
  * ML-DSA.Verify_internal: Signature verification.
- * Algorithm 8 in FIPS 204, on the caller's message as M'.
+ * Algorithm 8 in FIPS 204; M' is pre || msg, or mu is given, as in
+ * sign_core.
  */
 static int
-mldsa_verify_internal(const uchar *sig, const uchar *msg, ulong msglen,
+verify_core(const uchar *sig, const uchar *pre, int prelen,
+	const uchar *msg, ulong msglen, const uchar *extmu,
 	const uchar *pk, int k, int l, int eta, int tau, int32 beta,
 	int gamma1_bits, int32 gamma2, int omega, int ctildelen, int siglen)
 {
@@ -642,11 +646,14 @@ mldsa_verify_internal(const uchar *sig, const uchar *msg, ulong msglen,
 	/* tr = H(pk) */
 	shake256((const uchar *)pk, pkoff, tr, 64);
 
-	/* mu = H(tr || msg) */
-	{
+	/* mu = H(tr || M') */
+	if(extmu != nil)
+		memmove(mu, extmu, 64);
+	else{
 		SHA3state hs;
 		shake256_init(&hs);
 		shake256_absorb(&hs, tr, 64);
+		shake256_absorb(&hs, pre, prelen);
 		shake256_absorb(&hs, msg, msglen);
 		shake256_finalize(&hs);
 		shake256_squeeze(&hs, mu, 64);
@@ -794,29 +801,172 @@ mldsa_verify_internal(const uchar *sig, const uchar *msg, ulong msglen,
 }
 
 /*
+ * The two parameter sets, by number.
+ */
+static int
+keygen_set(int set, uchar *pk, uchar *sk, const uchar xi[32])
+{
+	if(set == 65)
+		return keygen_xi(pk, sk, xi, MLDSA65_K, MLDSA65_L, MLDSA65_ETA);
+	if(set == 87)
+		return keygen_xi(pk, sk, xi, MLDSA87_K, MLDSA87_L, MLDSA87_ETA);
+	return -1;
+}
+
+static int
+sign_set(int set, uchar *sig, const uchar *pre, int prelen,
+	const uchar *msg, ulong msglen, const uchar *mu,
+	const uchar rnd[32], const uchar *sk)
+{
+	if(set == 65)
+		return sign_core(sig, pre, prelen, msg, msglen, mu, rnd, sk,
+			MLDSA65_K, MLDSA65_L, MLDSA65_ETA, MLDSA65_TAU, MLDSA65_BETA,
+			19, MLDSA65_GAMMA2, MLDSA65_OMEGA, MLDSA65_CTILDELEN);
+	if(set == 87)
+		return sign_core(sig, pre, prelen, msg, msglen, mu, rnd, sk,
+			MLDSA87_K, MLDSA87_L, MLDSA87_ETA, MLDSA87_TAU, MLDSA87_BETA,
+			19, MLDSA87_GAMMA2, MLDSA87_OMEGA, MLDSA87_CTILDELEN);
+	return -1;
+}
+
+static int
+verify_set(int set, const uchar *sig, const uchar *pre, int prelen,
+	const uchar *msg, ulong msglen, const uchar *mu, const uchar *pk)
+{
+	if(set == 65)
+		return verify_core(sig, pre, prelen, msg, msglen, mu, pk,
+			MLDSA65_K, MLDSA65_L, MLDSA65_ETA, MLDSA65_TAU, MLDSA65_BETA,
+			19, MLDSA65_GAMMA2, MLDSA65_OMEGA, MLDSA65_CTILDELEN, MLDSA65_SIGLEN);
+	if(set == 87)
+		return verify_core(sig, pre, prelen, msg, msglen, mu, pk,
+			MLDSA87_K, MLDSA87_L, MLDSA87_ETA, MLDSA87_TAU, MLDSA87_BETA,
+			19, MLDSA87_GAMMA2, MLDSA87_OMEGA, MLDSA87_CTILDELEN, MLDSA87_SIGLEN);
+	return 0;
+}
+
+/*
+ * ML-DSA.KeyGen, FIPS 204 Algorithm 1: a key pair from 32 random bytes.
+ */
+static int
+keygen(int set, uchar *pk, uchar *sk)
+{
+	uchar xi[32];
+	int r;
+
+	genrandom(xi, sizeof(xi));
+	r = keygen_set(set, pk, sk, xi);
+	secureZero(xi, sizeof(xi));
+	return r;
+}
+
+/*
+ * ML-DSA.Sign, FIPS 204 Algorithm 2: the pure signature of msg under the
+ * context string ctx (at most 255 bytes, line 1), hedged (line 5: rnd
+ * is 32 fresh random bytes).  What is signed is
+ *	M' = IntegerToBytes(0, 1) || IntegerToBytes(|ctx|, 1) || ctx || M
+ * (line 10).  These functions used to be Sign_internal on the caller's
+ * bytes, the interface section 5 keeps for testing: with no header, a
+ * signature made here on 00 00 || X was to every conforming verifier
+ * the signature of X, and none made here verified elsewhere.
+ */
+static int
+sign(int set, uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *sk)
+{
+	uchar pre[2+255], rnd[32];
+	int r;
+
+	if(ctxlen < 0 || ctxlen > 255 || (ctxlen > 0 && ctx == nil))
+		return -1;
+	pre[0] = 0;
+	pre[1] = ctxlen;
+	if(ctxlen > 0)
+		memmove(pre+2, ctx, ctxlen);
+	genrandom(rnd, sizeof(rnd));
+	r = sign_set(set, sig, pre, 2+ctxlen, msg, msglen, nil, rnd, sk);
+	secureZero(rnd, sizeof(rnd));
+	return r;
+}
+
+/*
+ * ML-DSA.Verify, FIPS 204 Algorithm 3.
+ */
+static int
+verify(int set, const uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *pk)
+{
+	uchar pre[2+255];
+
+	if(ctxlen < 0 || ctxlen > 255 || (ctxlen > 0 && ctx == nil))
+		return 0;
+	pre[0] = 0;
+	pre[1] = ctxlen;
+	if(ctxlen > 0)
+		memmove(pre+2, ctx, ctxlen);
+	return verify_set(set, sig, pre, 2+ctxlen, msg, msglen, nil, pk);
+}
+
+/*
+ * The standard's internal interfaces (Algorithms 6, 7 and 8), which
+ * take the randomness as an argument: for known-answer tests (NIST's
+ * ACVP vectors are of these as well as of the external ones), not for
+ * an application (FIPS 204 section 5).  set is 65 or 87.  mp is M'
+ * whole; with mu not nil it is used and mp is not looked at.
+ */
+int
+mldsa_keygen_internal(int set, uchar *pk, uchar *sk, const uchar xi[32])
+{
+	return keygen_set(set, pk, sk, xi);
+}
+
+int
+mldsa_sign_internal(int set, uchar *sig, const uchar *mp, ulong mplen,
+	const uchar *mu, const uchar rnd[32], const uchar *sk)
+{
+	return sign_set(set, sig, nil, 0, mp, mplen, mu, rnd, sk);
+}
+
+int
+mldsa_verify_internal(int set, const uchar *sig, const uchar *mp, ulong mplen,
+	const uchar *mu, const uchar *pk)
+{
+	return verify_set(set, sig, nil, 0, mp, mplen, mu, pk);
+}
+
+/*
  * Public API: ML-DSA-65
  */
 
 int
 mldsa65_keygen(uchar *pk, uchar *sk)
 {
-	return mldsa_keygen_internal(pk, sk, MLDSA65_K, MLDSA65_L, MLDSA65_ETA);
+	return keygen(65, pk, sk);
 }
 
 int
 mldsa65_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk)
 {
-	return mldsa_sign_internal(sig, msg, msglen, sk,
-		MLDSA65_K, MLDSA65_L, MLDSA65_ETA, MLDSA65_TAU, MLDSA65_BETA,
-		19, MLDSA65_GAMMA2, MLDSA65_OMEGA, MLDSA65_CTILDELEN);
+	return sign(65, sig, msg, msglen, nil, 0, sk);
+}
+
+int
+mldsa65_sign_ctx(uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *sk)
+{
+	return sign(65, sig, msg, msglen, ctx, ctxlen, sk);
 }
 
 int
 mldsa65_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk)
 {
-	return mldsa_verify_internal(sig, msg, msglen, pk,
-		MLDSA65_K, MLDSA65_L, MLDSA65_ETA, MLDSA65_TAU, MLDSA65_BETA,
-		19, MLDSA65_GAMMA2, MLDSA65_OMEGA, MLDSA65_CTILDELEN, MLDSA65_SIGLEN);
+	return verify(65, sig, msg, msglen, nil, 0, pk);
+}
+
+int
+mldsa65_verify_ctx(const uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *pk)
+{
+	return verify(65, sig, msg, msglen, ctx, ctxlen, pk);
 }
 
 /*
@@ -826,21 +976,31 @@ mldsa65_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk
 int
 mldsa87_keygen(uchar *pk, uchar *sk)
 {
-	return mldsa_keygen_internal(pk, sk, MLDSA87_K, MLDSA87_L, MLDSA87_ETA);
+	return keygen(87, pk, sk);
 }
 
 int
 mldsa87_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk)
 {
-	return mldsa_sign_internal(sig, msg, msglen, sk,
-		MLDSA87_K, MLDSA87_L, MLDSA87_ETA, MLDSA87_TAU, MLDSA87_BETA,
-		19, MLDSA87_GAMMA2, MLDSA87_OMEGA, MLDSA87_CTILDELEN);
+	return sign(87, sig, msg, msglen, nil, 0, sk);
+}
+
+int
+mldsa87_sign_ctx(uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *sk)
+{
+	return sign(87, sig, msg, msglen, ctx, ctxlen, sk);
 }
 
 int
 mldsa87_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk)
 {
-	return mldsa_verify_internal(sig, msg, msglen, pk,
-		MLDSA87_K, MLDSA87_L, MLDSA87_ETA, MLDSA87_TAU, MLDSA87_BETA,
-		19, MLDSA87_GAMMA2, MLDSA87_OMEGA, MLDSA87_CTILDELEN, MLDSA87_SIGLEN);
+	return verify(87, sig, msg, msglen, nil, 0, pk);
+}
+
+int
+mldsa87_verify_ctx(const uchar *sig, const uchar *msg, ulong msglen,
+	const uchar *ctx, int ctxlen, const uchar *pk)
+{
+	return verify(87, sig, msg, msglen, ctx, ctxlen, pk);
 }

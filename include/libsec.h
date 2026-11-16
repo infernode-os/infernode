@@ -428,12 +428,29 @@ enum
 	MLDSA87_SIGLEN=		4627,
 };
 
+/*
+ * FIPS 204's external interface (Algorithms 1, 2, 3): the pure, hedged
+ * signature, of msg under an empty context string, or (_ctx) under one
+ * of up to 255 bytes.  sign: 0, or -1 with nothing in sig; verify: 1 or 0.
+ */
 int	mldsa65_keygen(uchar *pk, uchar *sk);
 int	mldsa65_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	mldsa65_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	mldsa65_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk);
+int	mldsa65_verify_ctx(const uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
 int	mldsa87_keygen(uchar *pk, uchar *sk);
 int	mldsa87_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	mldsa87_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	mldsa87_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk);
+int	mldsa87_verify_ctx(const uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
+/*
+ * its internal one (Algorithms 6, 7, 8), for known-answer tests only:
+ * set is 65 or 87, the randomness is an argument, mp is M' whole, and
+ * mu, when not nil, is used in place of H(tr || mp)
+ */
+int	mldsa_keygen_internal(int set, uchar *pk, uchar *sk, const uchar xi[32]);
+int	mldsa_sign_internal(int set, uchar *sig, const uchar *mp, ulong mplen, const uchar *mu, const uchar rnd[32], const uchar *sk);
+int	mldsa_verify_internal(int set, const uchar *sig, const uchar *mp, ulong mplen, const uchar *mu, const uchar *pk);
 
 /* internal NTT/poly functions used across mldsa_*.c files */
 int32	mldsa_barrett_reduce(int32 a);
@@ -462,12 +479,30 @@ enum
 	SLHDSA256S_SIGLEN=	29792,
 };
 
+/*
+ * FIPS 205's external interface (Algorithms 21, 22, 24): the pure,
+ * hedged signature, of msg under an empty context string, or (_ctx)
+ * under one of up to 255 bytes.  sign: 0, or -1 with sig cleared;
+ * verify: 1 or 0.
+ */
 int	slhdsa192s_keygen(uchar *pk, uchar *sk);
 int	slhdsa192s_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	slhdsa192s_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	slhdsa192s_verify(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *pk);
+int	slhdsa192s_verify_ctx(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
 int	slhdsa256s_keygen(uchar *pk, uchar *sk);
 int	slhdsa256s_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	slhdsa256s_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	slhdsa256s_verify(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *pk);
+int	slhdsa256s_verify_ctx(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
+/*
+ * its internal one (Algorithms 18, 19, 20), for known-answer tests
+ * only: set is 192 or 256, the seeds and addrnd are n bytes (24 or 32),
+ * mp is M' whole, and with addrnd nil the signature is deterministic
+ */
+int	slhdsa_keygen_internal(int set, uchar *pk, uchar *sk, const uchar *skseed, const uchar *skprf, const uchar *pkseed);
+int	slhdsa_sign_internal(int set, uchar *sig, const uchar *mp, ulong mplen, const uchar *addrnd, const uchar *sk);
+int	slhdsa_verify_internal(int set, const uchar *sig, ulong siglen, const uchar *mp, ulong mplen, const uchar *pk);
 
 /* internal SLH-DSA functions used across slhdsa_*.c files */
 void	slhdsa_adrs_init(uchar*);

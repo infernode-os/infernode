@@ -190,6 +190,81 @@ newthing(Type *t, int add)
 	return H2D(void*, h);
 }
 
+/*
+ * What a builtin goes on using while the VM is let go.  Its arguments
+ * are the call's (the frame holds them, and no other Prog reaches the
+ * frame), but what they refer to is not: a key adt's numbers are fields
+ * any Prog with the adt can assign, and an assignment frees the number
+ * that was there, under an exponentiation that takes seconds; and the
+ * place a result goes to (*f->ret) may be a variable another Prog
+ * assigns, which frees a result stored there early and written to after.
+ * keep hangs an array on one of the call's own pointer arguments, with
+ * the argument's value in its first place and n more for what must
+ * last: the frame is a root for the collector while the call runs, and
+ * unwinds with it if something raises.  unkeep puts the argument back.
+ * (libinterp/ipint.c's hold is the same device.)
+ */
+static void**
+keep(void *slot, int n)
+{
+	void **arg, **k;
+	Array *a;
+
+	arg = slot;
+	a = H2D(Array*, heaparray(&Tptr, n+1));
+	k = (void**)a->data;
+	k[0] = *arg;
+	if(k[0] != H)
+		Setmark(D2H(k[0]));
+	*arg = a;
+	return k;
+}
+
+/* another reference to v, something of the heap's, in k[i] */
+static void*
+keepref(void **k, int i, void *v)
+{
+	Heap *h;
+
+	if(v != H && v != nil){
+		h = D2H(v);
+		h->ref++;
+		Setmark(h);
+		k[i] = v;
+	}
+	return v;
+}
+
+static void
+unkeep(void *slot)
+{
+	void **arg, **k;
+	Array *a;
+
+	arg = slot;
+	a = *arg;
+	k = (void**)a->data;
+	*arg = k[0];
+	if(k[0] != H)
+		Setmark(D2H(k[0]));
+	k[0] = H;
+	destroy(a);
+}
+
+/*
+ * v, kept until now, as it is stored where a result goes.  The collector
+ * may have looked there already this round and not yet at the array v
+ * was kept in, which is about to go: unmarked for a round, v's parts
+ * would be swept the next before v was reached again.
+ */
+static void*
+kept(void *v)
+{
+	if(v != H)
+		Setmark(D2H(v));
+	return v;
+}
+
 static Keyring_IPint*
 ipcopymp(mpint* b)
 {
@@ -1044,21 +1119,42 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return nil;
+	/*
+	 * A digest is a number to the algorithms that sign numbers, and
+	 * bytes, at their full length, to those that sign bytes: see
+	 * SigAlgVec.
+	 */
+	vec = sk->vec;
+	b = nil;
+	if(vec->signb == nil){
+		b = betomp(digest, n, nil);
+		if(b == nil)
+			return nil;
+	}
 
 	/* sign */
 	retstr(ha, &hastr);
 	c = newCertificate(sa, hastr, stringdup(sk->x.owner), exp, 1);
 	certimmutable(c);		/* hide from the garbage collector */
-	vec = sk->vec;
 	release();
-	signa = (*vec->sign)(b, sk->key);
+	if(vec->signb != nil)
+		signa = (*vec->signb)(digest, n, sk->key);
+	else
+		signa = (*vec->sign)(b, sk->key);
 	acquire();
-	c->signa = signa;
 	mpfree(b);
+	/*
+	 * No signature (no memory for an SLH-DSA signature's parts, ML-DSA
+	 * at its loop's bound, an RSA key whose parts do not agree) is no
+	 * certificate: one with no signature was returned, and its first
+	 * use raised "bad certificate".
+	 */
+	if(signa == nil){
+		certmutable(c);
+		destroy(c);
+		return nil;
+	}
+	c->signa = signa;
 
 	return c;
 }
@@ -1076,7 +1172,7 @@ Keyring_sign(void *fp)
 	XDigestState *ds;
 	uchar digest[SHA512dlen];
 	char *buf;
-	void *v, *signa;
+	void *v, *signa, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -1125,25 +1221,39 @@ Keyring_sign(void *fp)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return;
-
-	/* sign */
-	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), f->exp, 1);
-	*f->ret = (Keyring_Certificate*)c;
+	/*
+	 * sign.  The certificate is the call's until it is whole (see
+	 * keep): it was put where the result goes first, and filled in
+	 * after the VM had been let go for as long as signing takes.
+	 */
 	vec = sk->vec;
-	release();
-	signa = (*vec->sign)(b, sk->key);
-	acquire();
-	c->signa = signa;
-	mpfree(b);
-	/* no signature made (an RSA key whose parts do not agree): no certificate */
-	if(signa == nil){
-		*f->ret = H;
-		destroy(c);
+	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), f->exp, 1);
+	k = keep(&f->sk, 1);
+	k[1] = c;
+	b = nil;
+	if(vec->signb == nil){	/* see sign */
+		b = betomp(digest, n, nil);
+		if(b == nil){
+			unkeep(&f->sk);
+			return;
+		}
 	}
+	release();
+	if(vec->signb != nil)
+		signa = (*vec->signb)(digest, n, sk->key);
+	else
+		signa = (*vec->sign)(b, sk->key);
+	acquire();
+	mpfree(b);
+	/* no signature made: no certificate (see sign) */
+	if(signa == nil){
+		unkeep(&f->sk);
+		return;
+	}
+	c->signa = signa;
+	k[1] = H;
+	unkeep(&f->sk);
+	*f->ret = kept(c);
 }
 
 void
@@ -1155,7 +1265,7 @@ Keyring_signm(void *fp)
 	SigAlg *sa;
 	SigAlgVec *vec;
 	SK *sk;
-	void *v, *signa;
+	void *v, *signa, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -1169,19 +1279,26 @@ Keyring_signm(void *fp)
 		return;
 	b = checkIPint(f->m);
 
-	/* sign */
+	/*
+	 * sign the number (an algorithm that signs bytes signs the
+	 * number's, with no leading zero); m is the call's argument, and
+	 * the certificate the call's until it is whole: see Keyring_sign
+	 */
 	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), 0, 1);
-	*f->ret = (Keyring_Certificate*)c;
+	k = keep(&f->sk, 1);
+	k[1] = c;
 	vec = sk->vec;
 	release();
 	signa = (*vec->sign)(b, sk->key);
 	acquire();
-	c->signa = signa;
-	/* see Keyring_sign */
 	if(signa == nil){
-		*f->ret = H;
-		destroy(c);
+		unkeep(&f->sk);
+		return;
 	}
+	c->signa = signa;
+	k[1] = H;
+	unkeep(&f->sk);
+	*f->ret = kept(c);
 }
 
 static int
@@ -1234,13 +1351,18 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return 0;
-	/* verify */
+	/* verify: the digest as a number or as bytes, as it was signed (see sign) */
+	b = nil;
+	if(vec->verifyb == nil){
+		b = betomp(digest, n, nil);
+		if(b == nil)
+			return 0;
+	}
 	release();
-	n = (*vec->verify)(b, c->signa, pk->key);
+	if(vec->verifyb != nil)
+		n = (*vec->verifyb)(digest, n, c->signa, pk->key);
+	else
+		n = (*vec->verify)(b, c->signa, pk->key);
 	acquire();
 
 	mpfree(b);
@@ -1302,14 +1424,18 @@ Keyring_verify(void *fp)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return;
-
-	/* verify */
+	/* verify: see sign */
+	b = nil;
+	if(vec->verifyb == nil){
+		b = betomp(digest, n, nil);
+		if(b == nil)
+			return;
+	}
 	release();
-	n = (*vec->verify)(b, c->signa, pk->key);
+	if(vec->verifyb != nil)
+		n = (*vec->verifyb)(digest, n, c->signa, pk->key);
+	else
+		n = (*vec->verify)(b, c->signa, pk->key);
 	acquire();
 	*f->ret = n;
 
@@ -2349,14 +2475,13 @@ Keyring_auth(void *fp)
 	memmove(buf+n, hisek, pklen); n += pklen;
 	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
 	/*
-	 * sign gives nil when it has no memory for its buffer, and a
-	 * certificate with no signature when the algorithm makes none:
-	 * either went on to be printed, through nil
+	 * sign gives nil when it has no memory for its buffer or the
+	 * algorithm made no signature: it went on to be printed, through
+	 * nil
 	 */
-	if(alphacert == nil || alphacert->signa == nil){
-		if(alphacert == nil)
-			alphacert = H;
-		err = exNomem;
+	if(alphacert == nil){
+		alphacert = H;
+		err = "cannot sign";
 		goto out;
 	}
 	n = certtostr(alphacert, buf, Maxbuf);

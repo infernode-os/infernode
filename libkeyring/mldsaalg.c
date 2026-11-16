@@ -516,40 +516,31 @@ mldsa87_genfrompk(void *vpub)
 }
 
 /*
- * Sign a message hash
- * Inferno's SigAlgVec passes an mpint (the hash). We convert it
- * to bytes and sign those bytes directly with ML-DSA.
+ * Sign bytes: Keyring's digest, at its length, as the message of the
+ * pure ML-DSA signature with an empty context string (FIPS 204
+ * Algorithm 2).
  */
 static void*
-mldsa_sign_hash(mpint *mp, void *key)
+mldsa_signb(uchar *m, int n, void *key)
 {
 	MLDSApriv *sk = (MLDSApriv*)key;
 	MLDSAsig *sig;
-	uchar hash[SHA512dlen];
-	int n, rv, sklen, pklen, siglen;
+	int rv, sklen, pklen, siglen;
 
 	sig = mldsasigalloc();
 	if(sig == nil)
 		return nil;
-
-	/* Convert mpint to bytes (the hash to sign) */
-	n = mptobe(mp, hash, sizeof(hash), nil);
-	if(n < 0){
-		mldsasigfree(sig);
-		return nil;
-	}
 
 	sig->level = sk->level;
 	mldsa_sizes(sk->level, &sklen, &pklen, &siglen);
 	sig->siglen = siglen;
 
 	if(sk->level == 87)
-		rv = mldsa87_sign(sig->sig, hash, n, sk->sk);
+		rv = mldsa87_sign(sig->sig, m, n, sk->sk);
 	else
-		rv = mldsa65_sign(sig->sig, hash, n, sk->sk);
+		rv = mldsa65_sign(sig->sig, m, n, sk->sk);
 
-	secureZero(hash, sizeof(hash));
-
+	/* -1: no memory, or the rejection loop's bound: no signature */
 	if(rv != 0){
 		mldsasigfree(sig);
 		return nil;
@@ -558,27 +549,46 @@ mldsa_sign_hash(mpint *mp, void *key)
 	return sig;
 }
 
-/*
- * Verify a signature
- */
 static int
-mldsa_verify_hash(mpint *mp, void *vsig, void *vkey)
+mldsa_verifyb(uchar *m, int n, void *vsig, void *vkey)
 {
 	MLDSApub *pk = (MLDSApub*)vkey;
 	MLDSAsig *sig = (MLDSAsig*)vsig;
+
+	if(pk->level == 87)
+		return mldsa87_verify(sig->sig, m, n, pk->key);
+	return mldsa65_verify(sig->sig, m, n, pk->key);
+}
+
+/*
+ * Sign a number (Keyring's signm): its bytes, most significant first,
+ * with no leading zero.
+ */
+static void*
+mldsa_sign_hash(mpint *mp, void *key)
+{
+	uchar hash[SHA512dlen];
+	void *sig;
+	int n;
+
+	n = mptobe(mp, hash, sizeof(hash), nil);
+	if(n < 0)
+		return nil;
+	sig = mldsa_signb(hash, n, key);
+	secureZero(hash, sizeof(hash));
+	return sig;
+}
+
+static int
+mldsa_verify_hash(mpint *mp, void *vsig, void *vkey)
+{
 	uchar hash[SHA512dlen];
 	int n, ok;
 
-	/* Convert mpint to bytes */
 	n = mptobe(mp, hash, sizeof(hash), nil);
 	if(n < 0)
 		return 0;
-
-	if(pk->level == 87)
-		ok = mldsa87_verify(sig->sig, hash, n, pk->key);
-	else
-		ok = mldsa65_verify(sig->sig, hash, n, pk->key);
-
+	ok = mldsa_verifyb(hash, n, vsig, vkey);
 	secureZero(hash, sizeof(hash));
 	return ok;
 }
@@ -636,6 +646,8 @@ mldsa65init(void)
 	vec->genskfrompk = mldsa65_genfrompk;
 	vec->sign = mldsa_sign_hash;
 	vec->verify = mldsa_verify_hash;
+	vec->signb = mldsa_signb;
+	vec->verifyb = mldsa_verifyb;
 
 	vec->skfree = mldsa_freepriv;
 	vec->pkfree = mldsa_freepub;
@@ -676,6 +688,8 @@ mldsa87init(void)
 	vec->genskfrompk = mldsa87_genfrompk;
 	vec->sign = mldsa_sign_hash;
 	vec->verify = mldsa_verify_hash;
+	vec->signb = mldsa_signb;
+	vec->verifyb = mldsa_verifyb;
 
 	vec->skfree = mldsa_freepriv;
 	vec->pkfree = mldsa_freepub;

@@ -241,6 +241,9 @@ dsainit(void)
 	vec->genskfrompk = dsa_genfrompk;
 	vec->sign = dsa_sign;
 	vec->verify = dsa_verify;
+	/* signs a number: a digest's leading zero bytes are not part of it */
+	vec->signb = nil;
+	vec->verifyb = nil;
 
 	vec->skfree = dsa_freepriv;
 	vec->pkfree = dsa_freepub;

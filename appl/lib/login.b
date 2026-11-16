@@ -639,35 +639,22 @@ cnsakey(info: ref Keyring->Authinfo): string
 	return nil;
 }
 
-# Keyring's putstring cuts what does not fit one of its messages and
-# says it sent it: a certificate cut short was "not a certificate" at
-# the far end, with nothing to say why.
+# Keyring's putstring refuses what does not fit one of its messages
+# (it cut it once and said it had sent it: a certificate cut short was
+# "not a certificate" at the far end, with nothing to say why).  What
+# it returns is the bytes written, the message's header among them.
 putstring(fd: ref Sys->FD, s: string): string
 {
 	if(init() != nil)
 		return "cannot load Keyring";
 	n := len array of byte s;
-	# What a message holds is Keyring's to say (4096 bytes once, and
-	# every message that size or less has always fitted), and it says
-	# so only by the count it returns: so a longer string goes first
-	# into a pipe nobody reads, and to fd only if all of it went.
-	if(n >= Fits && n < Pipeholds){
-		p := array[2] of ref Sys->FD;
-		if(sys->pipe(p) < 0)
-			return sys->sprint("pipe: %r");
-		if(kr->putstring(p[0], s) != n+1)
-			return sys->sprint("%d bytes are more than one of Keyring's messages holds", n);
-	}
 	m := kr->putstring(fd, s);
 	if(m < 0)
-		return sys->sprint("%r");
-	if(m != n+1)
-		return sys->sprint("%d bytes are more than one of Keyring's messages holds (%d sent)", n, m-1);
+		return sys->sprint("%d bytes: %r", n);
+	if(m <= n)
+		return sys->sprint("%d bytes are more than was sent (%d)", n, m);
 	return nil;
 }
-
-Fits: con 4000;	# a string this long has always fitted a message
-Pipeholds: con 16*1024;	# and one this long might fill a pipe
 
 #
 # A secret as it is typed.  Limbo cannot clear a string (a store into

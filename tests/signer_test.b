@@ -500,16 +500,18 @@ testOwner(t: ref T)
 	t.assert(!exists("/keydb/signed/signer"), "and leaves no record");
 }
 
-# A certificate too large for one of the protocol's messages (an
-# ML-DSA-87 signature) was signed, recorded, and then could not be sent.
+# An ML-DSA-87 certificate is larger than the 4096 bytes a message once
+# held: it was signed, recorded, and then could not be sent.  It fits
+# now, and a CNSA signer delivers what it signs.
 testLargeCert(t: ref T)
 {
 	keydb := testdir + "/pq";
 	(spk, nil, blinded, e) := asksignerwith("mldsa87", "dave", keydb);
 	t.assert(spk != nil, "a signer with an ML-DSA-87 key sends its key");
-	t.assert(blinded == nil, "its certificate, which no message holds, is not sent");
-	t.assert(contains(e, "does not fit"), "and the caller is told it does not fit: " + e);
-	t.assert(!exists(keydb+"/signed/dave"), "and no record of a request that cannot be answered is left");
+	# 4096 bytes was the most a message held, and the signer refused:
+	# Keyring's messages now hold the largest certificate there is
+	t.assert(blinded != nil, "its certificate, which fits one of Keyring's messages, is sent: " + e);
+	t.assert(exists(keydb+"/signed/dave"), "and the request is recorded for the operator");
 }
 
 # One request waits for a name: a second replaced it, and the operator

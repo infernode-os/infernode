@@ -486,16 +486,16 @@ void	slhdsa_Tl(uchar*, int, const uchar*, int, const uchar*, const uchar*, int);
 void	slhdsa_PRF(uchar*, int, const uchar*, int, const uchar*, int, const uchar*);
 void	slhdsa_PRF_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
 void	slhdsa_H_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
-void	slhdsa_wots_pkgen(uchar*, int, const uchar*, int, const uchar*, int, uchar*);
-void	slhdsa_wots_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*);
-void	slhdsa_wots_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*);
+int	slhdsa_wots_pkgen(uchar*, int, const uchar*, int, const uchar*, int, uchar*);
+int	slhdsa_wots_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*);
+int	slhdsa_wots_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*);
 int	slhdsa_wots_len(int);
-void	slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
-void	slhdsa_fors_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*, int, int);
+int	slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
+int	slhdsa_fors_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*, int, int);
 int	slhdsa_treehash(uchar*, uchar*, int, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
-void	slhdsa_xmss_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
-void	slhdsa_xmss_root_from_sig(uchar*, int, const uchar*, int, const uchar*, const uchar*, int, u32int, u64int, int);
-void	slhdsa_ht_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u64int, u32int, int, int);
+int	slhdsa_xmss_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
+int	slhdsa_xmss_root_from_sig(uchar*, int, const uchar*, int, const uchar*, const uchar*, int, u32int, u64int, int);
+int	slhdsa_ht_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u64int, u32int, int, int);
 int	slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int, const uchar*, u64int, u32int, int, int);
 
 /* ===================================================== */

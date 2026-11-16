@@ -21,6 +21,11 @@
 #   - a WOTS+ signature chained forward to a message with digits raised
 #     by 256 is not the key's signature (it was: only the checksum mod
 #     256 was signed), alone and under an XMSS root
+#   - an allocation that fails while signing is a failed signature with
+#     nothing left in the buffer (slhfault.c; it was success, and a
+#     signature that verified with its FORS part or an authentication
+#     path zero: a one-time key had signed a second value), a failure
+#     while verifying a refusal
 #   - where OpenSSL's SLH-DSA can be reached from Python (ossl.py: the
 #     OpenSSL inside the cryptography package), random keys and messages
 #     against it both ways
@@ -83,6 +88,29 @@ if "$TMP/slhtest" forge >"$TMP/out" 2>&1; then
 else
 	sed 's/^/  /' "$TMP/out"
 	echo "FAIL: a WOTS+ signature chained forward to another message is accepted"
+	fails=$((fails+1))
+fi
+
+# allocation failures: the library with malloc renamed, so that slhfault.c
+# can refuse the ones it chooses
+ok=1
+OBJ=""
+for f in slhdsa slhdsa_fors slhdsa_wots slhdsa_tree slhdsa_hash securezero; do
+	$CC $CFLAGS $INC -Dmalloc=slhfault_malloc -c -o "$TMP/f_$f.o" "$ROOT/libsec/$f.c" 2>>"$TMP/cc.log" || ok=0
+	OBJ="$OBJ $TMP/f_$f.o"
+done
+if [ $ok = 1 ] && $CC $CFLAGS $INC -o "$TMP/slhfault" "$D/slhfault.c" $OBJ "$TMP/sha3.o" 2>>"$TMP/cc.log"; then
+	if "$TMP/slhfault" >"$TMP/out" 2>&1; then
+		sed 's/^/  /' "$TMP/out"
+		echo "PASS: a failed allocation is a failed signature, a refused verification, no key"
+	else
+		sed 's/^/  /' "$TMP/out"
+		echo "FAIL: allocation failure while signing or verifying"
+		fails=$((fails+1))
+	fi
+else
+	cat "$TMP/cc.log"
+	echo "FAIL: slhfault does not compile"
 	fails=$((fails+1))
 fi
 

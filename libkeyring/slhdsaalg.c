@@ -123,7 +123,8 @@ slhdsasigfree(SLHDSAsig *s)
 	if(s == nil)
 		return;
 	if(s->sig != nil){
-		memset(s->sig, 0, s->siglen);
+		/* a signing that failed leaves nothing; nor does this */
+		secureZero(s->sig, s->siglen);
 		free(s->sig);
 	}
 	free(s);
@@ -527,6 +528,12 @@ slhdsa_sign_hash(mpint *mp, void *key)
 
 	secureZero(hash, sizeof(hash));
 
+	/*
+	 * -1: there was no memory for some part of the signature, and the
+	 * buffer has been cleared.  No signature is returned (it used to be
+	 * one, with success, from a signer that had gone on without the
+	 * part it could not make).
+	 */
 	if(rv != 0){
 		slhdsasigfree(sig);
 		return nil;

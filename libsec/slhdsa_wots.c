@@ -21,6 +21,8 @@ enum {
 	WOTS_W = 16,		/* Winternitz parameter */
 	WOTS_LOGW = 4,		/* log2(w) */
 	WOTS_LEN2 = 3,		/* checksum digits, n = 24 and n = 32 */
+	WOTS_MAXN = 32,		/* the largest n offered (256s) */
+	WOTS_MAXLEN = 2*WOTS_MAXN + WOTS_LEN2,
 };
 
 /* Forward declarations for hash functions (slhdsa_hash.c) */
@@ -123,8 +125,13 @@ wots_chain(uchar *out, const uchar *in, int n,
  * Generate WOTS+ public key
  *
  * Algorithm 6 from FIPS 205
+ *
+ * Returns 0, or -1 with pk untouched if there is no memory.  These
+ * functions returned nothing, and a caller went on with whatever its
+ * buffer held: a signer then signed, with a one-time key, a value it
+ * had not computed.  Every caller checks.
  */
-void
+int
 slhdsa_wots_pkgen(uchar *pk, int n,
 	const uchar *pkseed, int seedlen,
 	const uchar *skseed, int skseedlen,
@@ -136,12 +143,14 @@ slhdsa_wots_pkgen(uchar *pk, int n,
 	uchar sk[64];	/* max n=32 */
 	int i, len;
 
+	if(n > WOTS_MAXN)
+		return -1;
 	len = slhdsa_wots_len(n);
 
 	/* Allocate temporary buffer for concatenated public key chains */
 	tmp = malloc(len * n);
 	if(tmp == nil)
-		return;
+		return -1;
 
 	/* Generate each chain's public value */
 	slhdsa_adrs_copy(skadrs, adrs);
@@ -171,14 +180,18 @@ slhdsa_wots_pkgen(uchar *pk, int n,
 	secureZero(sk, sizeof(sk));
 	secureZero(tmp, len * n);
 	free(tmp);
+	return 0;
 }
 
 /*
  * Generate WOTS+ signature
  *
  * Algorithm 7 from FIPS 205
+ *
+ * Returns 0, or -1 with sig untouched.  The digits are on the stack
+ * (67 at most), so nothing here can run out of memory.
  */
-void
+int
 slhdsa_wots_sign(uchar *sig, int n,
 	const uchar *msg,
 	const uchar *pkseed, int seedlen,
@@ -187,14 +200,12 @@ slhdsa_wots_sign(uchar *sig, int n,
 {
 	uchar skadrs[32];
 	uchar sk[64];
-	int *digits;
+	int digits[WOTS_MAXLEN];
 	int i, len;
 
+	if(n > WOTS_MAXN)
+		return -1;
 	len = slhdsa_wots_len(n);
-
-	digits = malloc(len * sizeof(int));
-	if(digits == nil)
-		return;
 
 	wots_chain_lengths(digits, msg, n);
 
@@ -213,15 +224,17 @@ slhdsa_wots_sign(uchar *sig, int n,
 	}
 
 	secureZero(sk, sizeof(sk));
-	free(digits);
+	return 0;
 }
 
 /*
  * Compute WOTS+ public key from signature
  *
  * Algorithm 8 from FIPS 205
+ *
+ * Returns 0, or -1 with pk untouched if there is no memory.
  */
-void
+int
 slhdsa_wots_pk_from_sig(uchar *pk, int n,
 	const uchar *sig,
 	const uchar *msg,
@@ -230,18 +243,16 @@ slhdsa_wots_pk_from_sig(uchar *pk, int n,
 {
 	uchar pkadrs[32];
 	uchar *tmp;
-	int *digits;
+	int digits[WOTS_MAXLEN];
 	int i, len;
 
+	if(n > WOTS_MAXN)
+		return -1;
 	len = slhdsa_wots_len(n);
 
-	digits = malloc(len * sizeof(int));
 	tmp = malloc(len * n);
-	if(digits == nil || tmp == nil){
-		free(digits);
-		free(tmp);
-		return;
-	}
+	if(tmp == nil)
+		return -1;
 
 	wots_chain_lengths(digits, msg, n);
 
@@ -260,7 +271,7 @@ slhdsa_wots_pk_from_sig(uchar *pk, int n,
 
 	slhdsa_Tl(pk, n, pkseed, seedlen, pkadrs, tmp, len * n);
 
-	free(digits);
 	secureZero(tmp, len * n);
 	free(tmp);
+	return 0;
 }

@@ -54,6 +54,7 @@ enum {
 	/* Message digest sizes: ceil(k*a/8) + ceil((h-h')/8) + ceil(h'/8) */
 	S192_MD_LEN	= 30 + 7 + 2,	/* 39 bytes */
 	S256_MD_LEN	= 39 + 7 + 1,	/* 47 bytes */
+	MAX_MD_LEN	= S256_MD_LEN,
 };
 
 /* Forward declarations */
@@ -67,9 +68,9 @@ extern void slhdsa_H_msg(uchar*, int, const uchar*, int, const uchar*, int, cons
 extern void slhdsa_PRF_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
 
 extern int  slhdsa_treehash(uchar*, uchar*, int, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
-extern void slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
-extern void slhdsa_fors_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*, int, int);
-extern void slhdsa_ht_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u64int, u32int, int, int);
+extern int  slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
+extern int  slhdsa_fors_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*, int, int);
+extern int  slhdsa_ht_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u64int, u32int, int, int);
 extern int  slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int, const uchar*, u64int, u32int, int, int);
 extern int  slhdsa_wots_len(int);
 
@@ -179,6 +180,8 @@ slhdsa_keygen(uchar *pk, uchar *sk, int n, int hprime, int d)
  * empty context string, over slh_sign_internal (Algorithm 19) in its
  * deterministic variant (opt_rand = PK.seed).
  *
+ * Returns 0 with the signature in sig, or -1 with sig cleared.
+ *
  * sig = R || SIG_FORS || SIG_HT
  */
 static int
@@ -187,11 +190,11 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 {
 	const uchar *skseed, *skprf, *pkseed, *pkroot;
 	uchar adrs[32];
-	uchar *R;
+	uchar *sig0, *R;
 	const uchar *opt_rand;
-	uchar *digest;
+	uchar digest[MAX_MD_LEN];
 	int digestlen;
-	int fors_siglen;
+	int fors_siglen, siglen;
 	u64int idx_tree;
 	u32int idx_leaf;
 	uchar fors_pk[32];
@@ -201,6 +204,13 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	pkseed = sk + 2*n;
 	pkroot = sk + 3*n;
 
+	fors_siglen = k * (a + 1) * n;
+	siglen = n + fors_siglen + d * (slhdsa_wots_len(n) + hprime) * n;
+	digestlen = (k * a + 7) / 8 + (h - hprime + 7) / 8 + (hprime + 7) / 8;
+	if(digestlen > sizeof(digest))
+		return -1;
+
+	sig0 = sig;
 	R = sig;
 
 	/* opt_rand = PK.seed for deterministic signing */
@@ -212,11 +222,6 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	sig += n;
 
 	/* Compute message digest */
-	digestlen = (k * a + 7) / 8 + (h - hprime + 7) / 8 + (hprime + 7) / 8;
-	digest = malloc(digestlen);
-	if(digest == nil)
-		return -1;
-
 	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n,
 		mprefix, sizeof(mprefix), msg, msglen);
 
@@ -229,28 +234,54 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	slhdsa_adrs_set_type(adrs, 3);	/* FORS_TREE */
 	slhdsa_adrs_set_keypair(adrs, idx_leaf);
 
-	fors_siglen = k * (a + 1) * n;
-	slhdsa_fors_sign(sig, n, digest, pkseed, n, skseed, n, adrs, k, a);
+	if(slhdsa_fors_sign(sig, n, digest, pkseed, n, skseed, n, adrs, k, a) != 0)
+		goto fail;
 
 	/* Compute FORS public key */
 	slhdsa_adrs_set_type(adrs, 3);
 	slhdsa_adrs_set_keypair(adrs, idx_leaf);
-	slhdsa_fors_pk_from_sig(fors_pk, n, sig, digest, pkseed, n, adrs, k, a);
+	if(slhdsa_fors_pk_from_sig(fors_pk, n, sig, digest, pkseed, n, adrs, k, a) != 0)
+		goto fail;
 	sig += fors_siglen;
 
 	/* Hypertree signature on FORS public key */
-	slhdsa_ht_sign(sig, n, fors_pk, pkseed, n, skseed, n,
-		idx_tree, idx_leaf, hprime, d);
+	if(slhdsa_ht_sign(sig, n, fors_pk, pkseed, n, skseed, n,
+		idx_tree, idx_leaf, hprime, d) != 0)
+		goto fail;
 
-	free(digest);
+	/*
+	 * What was made must lead to PK.root, or it does not leave: a
+	 * computation that went wrong on the way up (and was not told of
+	 * above) has had one-time keys sign values that are not the
+	 * tree's.  A few thousand hashes after three million.
+	 */
+	if(slhdsa_ht_verify(sig, n, fors_pk, pkseed, n, pkroot,
+		idx_tree, idx_leaf, hprime, d) != 1)
+		goto fail;
+
+	secureZero(fors_pk, sizeof(fors_pk));
 	return 0;
+
+fail:
+	/*
+	 * No signature, and nothing of one: a part made before the failure
+	 * (a FORS signature with no hypertree over it, some layers' WOTS+
+	 * signatures) is still the secret key's work on this message.
+	 * The whole buffer is cleared, R included, and the caller is told.
+	 * It used to be told 0 with the signature half made.
+	 */
+	secureZero(sig0, siglen);
+	secureZero(fors_pk, sizeof(fors_pk));
+	return -1;
 }
 
 /*
  * SLH-DSA verification (generic): slh_verify, FIPS 205 Algorithm 24,
  * with an empty context string, over slh_verify_internal (Algorithm 20).
  *
- * Returns 1 if valid, 0 if invalid.
+ * Returns 1 if valid, 0 if invalid, or if the answer could not be
+ * worked out (no memory): a step that fails is a refusal, where it used
+ * to leave the walk going on with whatever its buffer held.
  */
 static int
 slhdsa_verify_internal(const uchar *sig, ulong siglen,
@@ -260,7 +291,7 @@ slhdsa_verify_internal(const uchar *sig, ulong siglen,
 	const uchar *pkseed, *pkroot;
 	const uchar *R;
 	uchar adrs[32];
-	uchar *digest;
+	uchar digest[MAX_MD_LEN];
 	int digestlen;
 	int fors_siglen, ht_siglen;
 	int xmss_siglen;
@@ -286,8 +317,7 @@ slhdsa_verify_internal(const uchar *sig, ulong siglen,
 
 	/* Compute message digest */
 	digestlen = (k * a + 7) / 8 + (h - hprime + 7) / 8 + (hprime + 7) / 8;
-	digest = malloc(digestlen);
-	if(digest == nil)
+	if(digestlen > sizeof(digest))
 		return 0;
 
 	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n,
@@ -302,10 +332,9 @@ slhdsa_verify_internal(const uchar *sig, ulong siglen,
 	slhdsa_adrs_set_type(adrs, 3);	/* FORS_TREE */
 	slhdsa_adrs_set_keypair(adrs, idx_leaf);
 
-	slhdsa_fors_pk_from_sig(fors_pk, n, sig, digest, pkseed, n, adrs, k, a);
+	if(slhdsa_fors_pk_from_sig(fors_pk, n, sig, digest, pkseed, n, adrs, k, a) != 0)
+		return 0;
 	sig += fors_siglen;
-
-	free(digest);
 
 	/* Verify hypertree signature on FORS public key */
 	return slhdsa_ht_verify(sig, n, fors_pk, pkseed, n, pkroot,

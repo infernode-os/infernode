@@ -336,8 +336,12 @@ mkdir -p "$DIR/mnt.c1" "$DIR/mnt.c2" "$DIR/mnt.c3"
 # a line of 300 characters (the 44 left over are the second keyfs's key,
 # which its confirmation then does not match), then a key and the same again;
 # the console is kept open until the emulator has read them
-OUT=$( { python3 -c "print('x'*300); print('a'); print('conspw'); print('conspw')"; sleep 4; } |
-	with_timeout 60 "$EMU" -r"$ROOT" -c1 sh "$G/script.k" 2>&1 || true)
+mkfifo "$DIR/cons"
+( python3 -c "print('x'*300); print('a'); print('conspw'); print('conspw')"; exec sleep 120 ) > "$DIR/cons" &
+conspid=$!
+OUT=$(with_timeout 60 "$EMU" -r"$ROOT" -c1 sh "$G/script.k" 2>&1 < "$DIR/cons" || true)
+kill $conspid 2>/dev/null
+wait $conspid 2>/dev/null
 check "a key of 300 characters is refused as too long" "couldn't get key: line too long"
 check "with an error status" '^K-long: error\.$'
 check "a confirmation that differs is refused" 'keyfs: key mismatch'

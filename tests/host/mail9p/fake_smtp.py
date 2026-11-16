@@ -8,11 +8,26 @@
 # It prints its port, then serves one connection after another until
 # killed.  Each command goes to --log, a line each: AUTH as the user it
 # names (never the password), DATA as the message's Subject line, and
-# what a client sent after it was refused STARTTLS.
+# what a client sent after it was refused STARTTLS.  With --wire F every
+# line received goes to F as Python shows its bytes, "cmd b'...'" for a
+# command and "data b'...'" for a line of a message (the credential
+# line as "cred"), for tests that look at what is on the wire.
+#
+# --scen makes it a server that is broken or refuses, for
+# tests/host/mail9p_hostile_test.sh:
+#   authfail   the credentials are refused (535)
+#   authstall  the credentials are never answered
+#   authecho   they are refused in a reply that says them back
+#   blank      EHLO's reply is followed by an empty line
+#   data250    DATA is answered 250, not 354
 #
 # usage: fake_smtp.py --mode tls|starttls|nostarttls|refuse --cert C --key K --log F
+#            [--wire F] [--scen S]
 
-import argparse, base64, socket, ssl, threading
+import argparse, base64, socket, ssl, threading, time
+
+SCEN = "ok"
+WIRE = None
 
 
 def serve(f, log, intls, mode):
@@ -20,8 +35,14 @@ def serve(f, log, intls, mode):
         f.write(s.encode())
         f.flush()
 
-    def line():
+    def line(what="cmd"):
         l = f.readline()
+        if l and WIRE is not None:
+            if what == "cred":
+                WIRE.write("cred\n")
+            else:
+                WIRE.write("%s %r\n" % (what, l))
+            WIRE.flush()
         return None if not l else l.decode(errors="replace").rstrip("\r\n")
 
     while True:
@@ -32,14 +53,27 @@ def serve(f, log, intls, mode):
         if verb == "AUTH":
             log.write("AUTH PLAIN\n")
             send("334 \r\n")
-            creds = base64.b64decode(line() or "").split(b"\0")
+            cred = line("cred") or ""
+            creds = base64.b64decode(cred).split(b"\0")
             log.write("user %s\n" % (creds[1].decode() if len(creds) == 3 else "?"))
-            send("235 2.7.0 Authentication successful\r\n")
+            log.flush()
+            if SCEN == "authfail":
+                send("535 5.7.8 bad credentials\r\n")
+            elif SCEN == "authecho":
+                send("535 5.7.8 %s is not accepted\r\n" % cred)
+            elif SCEN == "authstall":
+                time.sleep(120)
+                return None
+            else:
+                send("235 2.7.0 Authentication successful\r\n")
+        elif verb == "DATA" and SCEN == "data250":
+            log.write("DATA\n")
+            send("250 2.0.0 Ok\r\n")
         elif verb == "DATA":
             log.write("DATA\n")
             send("354 End data with <CR><LF>.<CR><LF>\r\n")
             while True:
-                d = line()
+                d = line("data")
                 if d is None or d == ".":
                     break
                 if d.lower().startswith("subject:"):
@@ -52,6 +86,8 @@ def serve(f, log, intls, mode):
                 if not intls and mode in ("starttls", "refuse"):
                     send("250-STARTTLS\r\n")
                 send("250 AUTH PLAIN\r\n")
+                if SCEN == "blank":
+                    send("\n")
             elif verb == "STARTTLS" and not intls:
                 if mode == "refuse":
                     send("454 4.7.0 TLS not available\r\n")
@@ -72,7 +108,13 @@ def main():
     ap.add_argument("--cert", required=True)
     ap.add_argument("--key", required=True)
     ap.add_argument("--log", required=True)
+    ap.add_argument("--wire")
+    ap.add_argument("--scen", default="ok")
     a = ap.parse_args()
+    global SCEN, WIRE
+    SCEN = a.scen
+    if a.wire:
+        WIRE = open(a.wire, "a")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)
     log = open(a.log, "a")
@@ -84,7 +126,7 @@ def main():
     # one thread a connection: a session left open (an account not
     # disconnected) does not keep the next waiting
     def handle(c):
-        c.settimeout(30)
+        c.settimeout(150)
         try:
             if a.mode == "tls":
                 f = ctx.wrap_socket(c, server_side=True).makefile("rwb")

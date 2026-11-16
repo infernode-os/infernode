@@ -163,6 +163,7 @@ TARG=\
 	mailconn_test.dis\
 	imap_hostile_test.dis\
 	smtp_refuse_test.dis\
+	mailconn_test.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\
 	llmclient_edge_test.dis\
@@ -188,6 +189,7 @@ TARG=\
 	string_edge_test.dis\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\
+	mail9p_hold.dis\
 	pop3cli.dis\
 	webgetcli.dis\
 	print_heapfull.dis\

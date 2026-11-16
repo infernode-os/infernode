@@ -115,6 +115,15 @@ The
 option causes
 .I convpasswd
 to print each user name after it successfully installs it.
+.PP
+The secret is typed with the console's echo off and edited as it is read
+(a backspace removes a character, control-U the line; see
+.B readsecret
+in
+.IR security-login (2)):
+in raw mode the console edits nothing, and a backspace typed to correct a slip
+was once a character of the secret.
+It is kept as bytes and zeroed once its SHA-256 is taken.
 .SH FILES
 .TF /keydb/keys
 .TP

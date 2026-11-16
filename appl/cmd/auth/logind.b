@@ -29,8 +29,21 @@ Logind: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-TimeLimit: con 5*60*1000;	# five minutes
+TimeLimit: con 5*60*1000;	# five minutes for a whole login
 keydb := "/mnt/keys";
+
+#
+# A connection costs a process group until it ends, and anybody may
+# open one.  The whole login had five minutes and nothing less, and
+# there was no limit on how many waited: connections that said nothing
+# held their loginds for five minutes each, as many as were opened.
+# Each wait for the client now has Idle seconds (-i), and when more
+# than Maxconn (-n) loginds are waiting for their clients a new one is
+# refused, told the service is busy.
+#
+idle := 30;	# -i: seconds a client may take over each message
+maxconn := 64;	# -n: loginds in an exchange at once
+steps := 0;	# messages had from the client: the stalker's sign of life
 
 #
 # The exchange is login(6)'s, version 2; the pieces both ends compute
@@ -80,20 +93,36 @@ init(nil: ref Draw->Context, args: list of string)
 			(gp, nil) := login->group(mingroup);
 			if(gp == nil)
 				fatal("-g: no group " + hd args + " (14, 15 or 16)");
+		}else if(hd args == "-i" && tl args != nil){
+			args = tl args;
+			idle = int hd args;
+			if(idle < 1 || idle > TimeLimit/1000)
+				fatal("-i: seconds, 1 to 300");
+		}else if(hd args == "-n" && tl args != nil){
+			args = tl args;
+			maxconn = int hd args;
+			if(maxconn < 1)
+				fatal("-n: at least one login at a time");
 		}else
-			fatal("usage: logind [-g group]");
+			fatal("usage: logind [-g group] [-i idle-seconds] [-n logins-at-once]");
 	}
 
+	grpid := sys->pctl(Sys->NEWPGRP,nil);
 	(err, c) := ssl->connect(sys->fildes(0));     
 	if(c == nil)
 		fatal("pushing ssl: " + err);
 
 	# impose time out to ensure dead network connections recovered well before TCP/IP's long time out
-
-	grpid := sys->pctl(Sys->NEWPGRP,nil);
 	pidc := chan of int;
 	spawn stalker(pidc, grpid);
 	tpid := <-pidc;
+	n := waiting();
+	if(n > maxconn){
+		sys->fprint(stderr, "logind: %d logins in progress (the most is %d): refusing one\n", n-1, maxconn);
+		kr->puterror(c.dfd, "login service busy; retry later");
+		kill(tpid, "kill");
+		return;
+	}
 	err = dologin(c);
 	if(err != nil){
 		sys->fprint(stderr, "logind: %s\n", err);
@@ -102,9 +131,22 @@ init(nil: ref Draw->Context, args: list of string)
 	kill(tpid, "kill");
 }
 
+# The stored secret and what the exchange makes from it are zeroed
+# when the login is over, however it ends (the arrays of bytes: an
+# IPint cannot be cleared).
+wipe: list of array of byte;
+
+dologin(c: ref Sys->Connection): string
+{
+	err := dologin1(c);
+	for(; wipe != nil; wipe = tl wipe)
+		login->zero(hd wipe);
+	return err;
+}
+
 # What is said to the client is at most 63 bytes: Keyring's getstring
 # keeps no more of an error.
-dologin(c: ref Sys->Connection): string
+dologin1(c: ref Sys->Connection): string
 {
 	(info, err) := signerkey("/keydb/signerkey");
 	if(info == nil){
@@ -129,6 +171,7 @@ dologin(c: ref Sys->Connection): string
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return err;
+	steps++;
 	name := s;
 	err = login->okname(name);
 	if(err != nil){
@@ -148,6 +191,7 @@ dologin(c: ref Sys->Connection): string
 	(hello, err) = kr->getbytearray(c.dfd);
 	if(err != nil)
 		return "can't get hello: "+err;
+	steps++;
 	if(len hello == 32 || len hello == 44)
 		return "signer speaks login version 2; update the client (login(6))";
 	if(len hello != 2+Login->Noncelen || int hello[0] != Login->Version)
@@ -193,6 +237,7 @@ dologin(c: ref Sys->Connection): string
 	# alone, and both paths do the same work: both lookups, the key
 	# derivation, the expmods, the same messages.
 	pw := getsecret(s);
+	wipe = pw :: wipe;
 	why := "";
 	if(pw == nil)
 		why = sys->sprint("no password entry for %s: %r", s);
@@ -211,7 +256,13 @@ dologin(c: ref Sys->Connection): string
 		auditlog("authfail", sys->sprint("user=%s reason=unusable", auditval(name)));
 		# the DRBG (#c/notquiterandom): ReallyRandom takes seconds, a
 		# delay a wrong password does not have
-		pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
+		{
+			pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
+		} exception e {
+		"random:*" =>
+			sys->fprint(stderr, "logind: %s\n", e);
+			return "login service unavailable";
+		}
 		userexp = 0;
 	}
 	pw = pw[0:Keyring->SHA256dlen];
@@ -251,6 +302,7 @@ dologin(c: ref Sys->Connection): string
 		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
 		return "can't get 2**r1 mod p: "+err;
 	}
+	steps++;
 	if(len msg != n+hlen){
 		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
 		return "bad Diffie-Hellman message";
@@ -269,6 +321,7 @@ dologin(c: ref Sys->Connection): string
 	}
 	z := login->bebytes(y.expmod(r0.shl(1), p), n);
 	(cproof, sproof, sk) := login->keys(suite, name, pw, hello, reply, msg[0:n], z);
+	wipe = z :: sproof :: sk :: wipe;
 
 	# A name that cannot log in: no client has the stand-in, so none
 	# has the proof; if one did, it is still refused, uncleared, unsigned.
@@ -285,6 +338,7 @@ dologin(c: ref Sys->Connection): string
 	if(kr->putbytearray(c.dfd, sproof, len sproof) < 0)
 		return sys->sprint("can't send proof: %r");
 	(secretin, secretout) := ssl->secrets(sk, 0);
+	wipe = secretin :: secretout :: wipe;
 	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
 		return "can't set secrets: "+err;
@@ -304,6 +358,7 @@ dologin(c: ref Sys->Connection): string
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return "client public key: "+err;
+	steps++;
 	hisPKbuf := array of byte s;
 	hisPK := kr->strtopk(s);
 	if(hisPK == nil)
@@ -432,12 +487,71 @@ auditval(s: string): string
 	return audit->value(s);
 }
 
+# Ends the login when the whole of it has had TimeLimit, or the client
+# has been waited for, for one message, longer than idle seconds.
 stalker(pidc: chan of int, killpid: int)
 {
 	pidc <-= sys->pctl(0, nil);
-	sys->sleep(TimeLimit);
+	t0 := sys->millisec();
+	last := t0;
+	seen := steps;
+	for(;;){
+		sys->sleep(250);
+		now := sys->millisec();
+		if(steps != seen){
+			seen = steps;
+			last = now;
+		}
+		if(now - t0 > TimeLimit || now - last > idle*1000)
+			break;
+	}
 	sys->fprint(stderr, "logind: login timed out\n");
 	kill(killpid, "killgrp");
+}
+
+# The loginds that are in an exchange, this one among them: the
+# process groups with a process in this module.  (Each connection is a
+# logind of its own, started by listen(1), so the count is the system's
+# and not a variable's.)
+waiting(): int
+{
+	fd := sys->open("#p", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	grps: list of string;
+	n := 0;
+	for(;;){
+		(nd, dirs) := sys->dirread(fd);
+		if(nd <= 0)
+			break;
+		for(i := 0; i < nd; i++){
+			sfd := sys->open("#p/" + dirs[i].name + "/status", Sys->OREAD);
+			if(sfd == nil)
+				continue;
+			buf := array[256] of byte;
+			m := sys->read(sfd, buf, len buf);
+			if(m <= 0)
+				continue;
+			(nf, f) := sys->tokenize(string buf[0:m], " \t\n");
+			if(nf < 7)
+				continue;
+			mod := "";
+			for(l := f; l != nil; l = tl l)
+				mod = hd l;
+			# Logind, or Logind[$Keyring] while it is in a builtin
+			if(mod != "Logind" && (len mod < 7 || mod[0:7] != "Logind["))
+				continue;
+			g := hd tl f;
+			for(l = grps; l != nil; l = tl l)
+				if(hd l == g)
+					break;
+			if(l == nil){
+				grps = g :: grps;
+				n++;
+			}
+		}
+	}
+	return n;
 }
 
 kill(pid: int, how: string)

@@ -165,7 +165,15 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 		err = "bad user name: " + err;
 	chal := login->nonce();
 	wrong := 0;
-	for(;;)alt{
+	# The stored secret, the proof wanted, the key a new secret comes
+	# under and the new secret are each zeroed when the request that
+	# read or made them has been answered: they stayed in the heap for
+	# as long as the session, and after.
+	w: list of array of byte;
+	for(;;){
+	for(; w != nil; w = tl w)
+		login->zero(hd w);
+	alt{
 	<-exitc =>
 		exit;
 	(offset, count, nil, rc) := <-file.read =>
@@ -174,6 +182,7 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 		if(err == nil){
 			# the user as it is now, not as it was when the session began
 			(keydir, secret, e) := getuser(user);
+			w = secret :: w;
 			if(e == nil && (keydir == nil || secret == nil))
 				e = "no existing secret";		# can't change it remotely until set
 			if(e != nil){
@@ -234,6 +243,7 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 		# the secret as it is now: one changed since the session began
 		# (by an operator, or by this session) is the one to prove
 		(keydir, secret, e) := getuser(user);
+		w = secret :: w;
 		if(e == nil && (keydir == nil || secret == nil))
 			e = "no existing secret";
 		if(e != nil){
@@ -241,6 +251,7 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 			break;
 		}
 		(want, key) := answers(c, secret, user);
+		w = want :: key :: w;
 		if(!login->same(proof, want)){
 			auditlog("authfail", sys->sprint("user=%s reason=secret", auditval(user)));
 			if(++wrong >= Maxwrong)
@@ -254,6 +265,7 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 			break;
 		}
 		newsecret := kr->aesgcmdecrypt(kr->aesgcmsetup(key[0:32], key[32:]), sealed[0:Keyring->SHA256dlen], array of byte Wraplabel, sealed[Keyring->SHA256dlen:]);
+		w = newsecret :: w;
 		if(newsecret == nil || len newsecret != Keyring->SHA256dlen){
 			wc <-= (0, "unacceptable secret");
 			break;
@@ -264,6 +276,7 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 		}
 		auditlog("secretchange", sys->sprint("user=%s", auditval(user)));
 		wc <-= (len data, nil);
+	}
 	}
 }
 
@@ -276,8 +289,10 @@ answers(c, secret: array of byte, user: string): (array of byte, array of byte)
 {
 	prk := array[Keyring->SHA384dlen] of byte;
 	kr->hmac_sha384(secret, len secret, c, prk, nil);
-	return (expand(prk, array of byte (Prooflabel + user), Prooflen),
-		expand(prk, array of byte (Wraplabel + user), 32+12));
+	proof := expand(prk, array of byte (Prooflabel + user), Prooflen);
+	key := expand(prk, array of byte (Wraplabel + user), 32+12);
+	login->zero(prk);
+	return (proof, key);
 }
 
 # HKDF-Expand (RFC 5869 2.3) with HMAC-SHA-384: one block is enough
@@ -288,7 +303,11 @@ expand(prk, info: array of byte, n: int): array of byte
 	b[0:] = info;
 	b[len info] = byte 1;
 	kr->hmac_sha384(b, len b, prk, t, nil);
-	return t[0:n];
+	# a copy: a slice left the rest of the block behind its result
+	r := array[n] of byte;
+	r[0:] = t[0:n];
+	login->zero(t);
+	return r;
 }
 
 hex(a: array of byte): string

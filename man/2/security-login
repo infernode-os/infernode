@@ -16,6 +16,9 @@ cnsaalg:  fn(alg: string): string;
 cnsahash: fn(ha: string): string;
 cnsakey:  fn(info: ref Keyring->Authinfo): string;
 putstring: fn(fd: ref Sys->FD, s: string): string;
+readsecret: fn(io: ref Sys->FD): (array of byte, string);
+zero:     fn(a: array of byte);
+runes:    fn(a: array of byte): int;
 charge:  fn(prog, name: string): (int, string);
 cleared: fn(prog, name: string);
 .EE
@@ -147,6 +150,31 @@ and returns nil, or sends nothing and returns the reason when
 does not fit one:
 .B Keyring->putstring
 cuts such a string short and reports success.
+.PP
+.B Readsecret
+reads a line typed on
+.I io
+with the console's echo off (it writes
+.B rawon
+and then
+.B rawoff
+to
+.BR /dev/consctl )
+and returns its bytes, without the newline, or nil and the reason.
+In raw mode the console edits nothing, so
+.B readsecret
+does: a backspace or delete removes the character before it,
+control-U the line so far, and a carriage return is dropped.
+The secret is never a string, which a Limbo program cannot clear;
+the caller zeroes the array with
+.B zero
+when it is done.
+.B Runes
+counts the characters of UTF-8 in an array.
+.B Login
+itself zeroes the password's bytes and digest, the shared secret's bytes
+and the session's keys before it returns;
+the password it is given is a string, and stays the caller's.
 .PP
 The other functions are for the signer's programs, which share them so
 that there is one of each.

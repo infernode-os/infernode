@@ -112,8 +112,25 @@ init(): string
 	return nil;
 }
 
+# What a login made that is secret, to be zeroed when it is over
+# however it ends (arrays of bytes: the exponents and the shared number
+# are IPints, which Limbo gives no way to clear, and the password came
+# as a string).
+Wipe: adt {
+	l:	list of array of byte;
+};
+
 # see login(6)
 login(id, password, dest: string): (string, ref Keyring->Authinfo)
+{
+	w := ref Wipe;
+	r := login1(id, password, dest, w);
+	for(l := w.l; l != nil; l = tl l)
+		zero(hd l);
+	return r;
+}
+
+login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 {
 	err := init();
 	if(err != nil)
@@ -206,6 +223,7 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	# The stored form of the password (changelogin(8)): its SHA-256.
 	pwbuf := array of byte password;
 	pw := array[Keyring->SHA256dlen] of byte;
+	w.l = pwbuf :: pw :: w.l;
 	kr->sha256(pwbuf, len pwbuf, pw, nil);
 
 	# The signer's value, +-2**r0 mod p.  With another password this
@@ -223,6 +241,7 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	y := bebytes(IPint.inttoip(2).expmod(r1, p), n);
 	z := bebytes(x.expmod(r1.shl(1), p), n);
 	(cproof, sproof, sk) := keys(suite, id, pw, hello, reply, y, z);
+	w.l = z :: sproof :: sk :: w.l;
 	msg := array[n + len cproof] of byte;
 	msg[0:] = y;
 	msg[n:] = cproof;
@@ -239,6 +258,7 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 
 	# protect the rest: aes_256_gcm, each way under its own secret
 	(secretin, secretout) := ssl->secrets(sk, 1);
+	w.l = secretin :: secretout :: w.l;
 	err = ssl->secret(c, secretin, secretout);
 	if(err != nil)
 		return ("can't set secrets: " + err, nil);
@@ -460,9 +480,16 @@ expand(suite: int, prk, info: array of byte, n: int): array of byte
 	t := array[0] of byte;
 	for(i := 1; len out < n; i++){
 		t = hmac(suite, cat(cat(t, info), array[] of {byte i}), prk);
+		old := out;
 		out = cat(out, t);
+		zero(old);
 	}
-	return out[0:n];
+	# a copy, so that zeroing the result leaves nothing of it behind
+	r := array[n] of byte;
+	r[0:] = out[0:n];
+	zero(out);
+	zero(t);
+	return r;
 }
 
 #
@@ -486,6 +513,8 @@ mask(suite, gid: int, name: string, pw, cnonce, snonce, x: array of byte): array
 		(out, nil) = kr->aesgcmencrypt(kr->aesgcmsetup(okm[0:32], okm[32:]), x, nil);
 	else
 		(out, nil) = kr->ccpolyencrypt(x, nil, okm[0:32], okm[32:]);
+	zero(prk);
+	zero(okm);
 	return out;
 }
 
@@ -519,11 +548,15 @@ keys(suite: int, name: string, pw, hello, reply, share, z: array of byte): (arra
 		th = array[Keyring->SHA256dlen] of byte;
 		kr->sha256(tr, len tr, th, nil);
 	}
-	prk := hmac(suite, cat(z, pw), th);
+	ikm := cat(z, pw);
+	prk := hmac(suite, ikm, th);
+	zero(ikm);
 	n := len th;
-	return (expand(suite, prk, array of byte "infernode login 2 client proof", n),
-		expand(suite, prk, array of byte "infernode login 2 signer proof", n),
-		expand(suite, prk, array of byte "infernode login 2 session", n));
+	cproof := expand(suite, prk, array of byte "infernode login 2 client proof", n);
+	sproof := expand(suite, prk, array of byte "infernode login 2 signer proof", n);
+	sk := expand(suite, prk, array of byte "infernode login 2 session", n);
+	zero(prk);
+	return (cproof, sproof, sk);
 }
 
 #
@@ -636,6 +669,85 @@ putstring(fd: ref Sys->FD, s: string): string
 Fits: con 4000;	# a string this long has always fitted a message
 Pipeholds: con 16*1024;	# and one this long might fill a pipe
 
+#
+# A secret as it is typed.  Limbo cannot clear a string (a store into
+# one copies it, and the copy is what is changed), nor an IPint or a
+# digest's state: so a secret is kept as an array of bytes from the
+# read that brought it, and zeroed by whoever is done with it.  The
+# programs that asked for one each read a line into a string in raw
+# mode, where the console does no editing: a backspace typed to
+# correct a slip was a character of the password, and so was a \r.
+#
+readsecret(io: ref Sys->FD): (array of byte, string)
+{
+	if(init() != nil)
+		return (nil, "cannot load Keyring");
+	ctl := sys->open("/dev/consctl", Sys->OWRITE);
+	if(ctl == nil || sys->fprint(ctl, "rawon") < 0)
+		return (nil, sys->sprint("cannot turn the console's echo off: %r"));
+	line := array[Maxsecret] of byte;
+	n := 0;
+	buf := array[256] of byte;
+	err: string;
+	done := 0;
+	while(!done){
+		r := sys->read(io, buf, len buf);
+		if(r <= 0){
+			err = "end of input";
+			break;
+		}
+		for(i := 0; i < r && !done; i++){
+			case int buf[i] {
+			'\n' =>
+				done = 1;
+			'\r' =>
+				;
+			'\b' or 16r7f =>
+				# one character: its continuation bytes, then its first
+				while(n > 0 && (int line[n-1] & 16rC0) == 16r80)
+					line[--n] = byte 0;
+				if(n > 0)
+					line[--n] = byte 0;
+			16r15 =>	# ^U
+				zero(line);
+				n = 0;
+			* =>
+				if(n >= len line){
+					err = "secret too long";
+					done = 1;
+				}else
+					line[n++] = buf[i];
+			}
+		}
+	}
+	zero(buf);
+	sys->fprint(ctl, "rawoff");
+	sys->fprint(sys->fildes(1), "\n");
+	if(err != nil){
+		zero(line);
+		return (nil, err);
+	}
+	out := array[n] of byte;
+	out[0:] = line[0:n];
+	zero(line);
+	return (out, nil);
+}
+
+zero(a: array of byte)
+{
+	for(i := 0; i < len a; i++)
+		a[i] = byte 0;
+}
+
+runes(a: array of byte): int
+{
+	n := 0;
+	for(i := 0; i < len a; i++)
+		if((int a[i] & 16rC0) != 16r80)
+			n++;
+	return n;
+}
+
 nomod(mod: string): (string, ref Keyring->Authinfo)
 {
 	return (sys->sprint("can't load module %s: %r", mod), nil);
@@ -675,8 +787,9 @@ Maxfail: con 10;	# attempts in a row not proving the password
 Locksecs: con 60;	# then refused for this long
 Forgetsecs: con 15*60;	# a count left this long is forgotten
 Maxentries: con 4096;	# unlocked counts kept
-Lockwait: con 5000;	# ms to wait for Failfile.lock
-Lockstale: con 60;	# s: a lock older than this was left by a crash
+Lockwait: con 8000;	# ms to wait for Failfile.lock
+Lockstale: con 2000;	# ms a lock's word is unchanged before it is taken for abandoned
+Stalepolls: con 100;	# and looks at it, 10 ms apart
 failfile := "/keydb/loginfail";
 
 Fail: adt {
@@ -896,32 +1009,78 @@ storefails(fl: list of ref Fail): string
 	return nil;
 }
 
-# Failfile.lock, made exclusively and removed when its fd goes; one
-# older than Lockstale (a host that went down holding it) is removed.
+#
+# Failfile.lock, made exclusively and removed when its fd goes; its
+# holder writes a word of its own into it.  A lock is held for a read
+# and a write of a small file, so one whose word has not changed for
+# Lockstale ms of this waiter's own clock, through Stalepolls looks,
+# was left by a holder that is gone (a host that went down), and is
+# removed: if it still has that word, so that a lock taken since by
+# somebody else is not the one removed.  The time is the waiter's
+# millisecond clock and not the file's: staleness was "older than a
+# minute by the time of day", so a lock left with the clock ahead (and
+# then stepped back, as timesync does) refused every login until the
+# clock caught up, and a clock stepped forward made a live lock look
+# abandoned; and the remove was by name, after a stat, of whatever was
+# there by then.
+#
 failock(): (ref Sys->FD, string)
 {
 	lf := failfile + ".lock";
 	t0 := sys->millisec();
+	seen := "";
+	seenat := t0;
+	polls := 0;
 	for(;;){
 		fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
-		if(fd != nil)
+		if(fd != nil){
+			sys->fprint(fd, "%d %d %s\n", sys->pctl(0, nil), t0, IPint.random(0, 64).iptostr(16));
 			return (fd, nil);
+		}
 		err := sys->sprint("%r");
-		(ok, d) := sys->stat(lf);
+		(ok, nil) := sys->stat(lf);
 		if(ok < 0){
 			# not made and not there: the directory refuses it, unless
 			# a holder let go between the two
 			fd = sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
-			if(fd != nil)
+			if(fd != nil){
+				sys->fprint(fd, "%d %d %s\n", sys->pctl(0, nil), t0, IPint.random(0, 64).iptostr(16));
 				return (fd, nil);
+			}
 			(ok, nil) = sys->stat(lf);
 			if(ok < 0)
 				return (nil, sys->sprint("can't make %s: %s", lf, err));
-		}else if(daytime->now() - d.mtime > Lockstale)
-			sys->remove(lf);
-		if(sys->millisec() - t0 > Lockwait)
+		}
+		now := sys->millisec();
+		word := lockword(lf);
+		if(word != seen || polls == 0){
+			seen = word;
+			seenat = now;
+			polls = 1;
+		}else if(++polls >= Stalepolls && now - seenat > Lockstale){
+			if(lockword(lf) == seen){
+				sys->fprint(cons, "login: removing %s, left by a holder that is gone\n", lf);
+				sys->remove(lf);
+			}
+			polls = 0;
+		}
+		if(now - t0 > Lockwait)
 			return (nil, sys->sprint("%s held for %d ms", lf, Lockwait));
 		sys->sleep(10);
 	}
+}
+
+# what a lock file holds: its holder's word ("" before it is written,
+# and for a lock of the form before, which held nothing)
+lockword(lf: string): string
+{
+	fd := sys->open(lf, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }
 

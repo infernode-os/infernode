@@ -10,6 +10,7 @@ include "keyring.m";
 
 include "security.m";
 	auth: Auth;
+	login: Login;
 
 include "arg.m";
 
@@ -43,6 +44,9 @@ init(nil: ref Draw->Context, args: list of string)
 	if(auth == nil)
 		noload(Auth->PATH);
 	auth->init();
+	login = load Login Login->PATH;
+	if(login == nil)
+		noload(Login->PATH);
 
 	keyfile, id: string;
 	arg := load Arg Arg->PATH;
@@ -92,72 +96,84 @@ init(nil: ref Draw->Context, args: list of string)
 		err(sys->sprint("%s authenticated as %q, not as %q, the signer of %s: nothing sent", signer, srvid, ai.spk.owner, keyfile));
 	user := ai.mypk.owner;
 
-	# get password
-	ok: int;
+	# The secrets are read as bytes and zeroed when used (login(2)'s
+	# readsecret): they were strings, which a program cannot clear
+	# (the loop that "blanked" them changed a copy), and in raw mode a
+	# backspace typed was a character of the secret.
 	old: array of byte;
-	word: string;
 	for(;;){
 		sys->print("Inferno secret: ");
-		(ok, word) = readline(stdin, "rawon");
-		if(!ok)
-			err("can't read the secret");
+		(word, e) := login->readsecret(stdin);
 		if(word == nil)
+			err("can't read the secret: " + e);
+		if(len word == 0)
 			err("no secret given; nothing changed");
 		old = hashpw(word);
-		word = blank(word);
-		e := putsecret(user, old, nil);
+		e = putsecret(user, old, nil);
 		if(e != "wrong secret"){
 			if(e == nil)
 				break;
+			login->zero(old);
 			err(e);
 		}
+		login->zero(old);
 		sys->fprint(stderr, "!wrong secret\n");
 	}
 	for(;;){
+		word: array of byte;
+		e: string;
 		for(;;){
 			sys->print("new secret [default = don't change]: ");
-			(ok, word) = readline(stdin, "rawon");
-			if(!ok)
+			(word, e) = login->readsecret(stdin);
+			if(word == nil){
+				login->zero(old);
 				err("can't read the new secret; nothing changed");
-			if(word == "")
+			}
+			if(len word == 0)
 				break;
-			if(len word >= 8)
+			if(login->runes(word) >= 8)
 				break;
+			login->zero(word);
 			sys->print("!secret must be at least 8 characters\n");
 		}
-		if(word == ""){
+		if(len word == 0){
 			sys->print("secret not changed\n");
 			break;
 		}
 		# confirm password change
-		word1 := word;
 		sys->print("confirm: ");
-		(ok, word) = readline(stdin, "rawon");
-		if(!ok || word != word1){
-			word = blank(word);
-			word1 = blank(word1);
+		(word1, e1) := login->readsecret(stdin);
+		if(word1 == nil || !eq(word, word1)){
+			login->zero(word);
+			login->zero(word1);
 			sys->fprint(stderr, "!entries didn't match\n");
-			if(!ok)
-				err("can't read the new secret again; nothing changed");
+			if(word1 == nil){
+				login->zero(old);
+				err("can't read the new secret again (" + e1 + "); nothing changed");
+			}
 			continue;
 		}
+		login->zero(word1);
 		# What keyfs holds, and login(6) uses, is the SHA-256 of the
 		# password: the password itself was sent and stored, and the
 		# account could not log in again.
 		new := hashpw(word);
-		word = blank(word);
-		word1 = blank(word1);
 		if(eq(new, old)){
+			login->zero(new);
 			sys->print("secret not changed\n");
 			break;
 		}
-		if((e := putsecret(user, old, new)) != nil){
+		e = putsecret(user, old, new);
+		login->zero(new);
+		if(e != nil){
+			login->zero(old);
 			sys->fprint(stderr, "passwd: can't update secret for %s: %s\n", user, e);
 			raise "fail:error";
 		}
 		sys->print("secret changed\n");
 		break;
 	}
+	login->zero(old);
 }
 
 noload(s: string)
@@ -208,22 +224,14 @@ eq(a, b: array of byte): int
 	return 1;
 }
 
-# the SHA-256 of a password: what keyfs(4) holds (changelogin(8))
-hashpw(word: string): array of byte
+# the SHA-256 of a password: what keyfs(4) holds (changelogin(8)).
+# The password is zeroed: it is not wanted again.
+hashpw(a: array of byte): array of byte
 {
-	a := array of byte word;
 	hash := array[Keyring->SHA256dlen] of byte;
 	kr->sha256(a, len a, hash, nil);
-	for(i := 0; i < len a; i++)
-		a[i] = byte 0;
+	login->zero(a);
 	return hash;
-}
-
-blank(word: string): string
-{
-	for(i := 0; i < len word; i++)
-		word[i] = ' ';
-	return nil;
 }
 
 #
@@ -258,8 +266,10 @@ putsecret(user: string, old: array of byte, new: array of byte): string
 	if(new != nil){
 		key := expand(prk, array of byte (Wraplabel + user), 32+12);
 		(ct, tag) := kr->aesgcmencrypt(kr->aesgcmsetup(key[0:32], key[32:]), new, array of byte Wraplabel);
+		login->zero(key);
 		msg += " " + hex(ct) + hex(tag);
 	}
+	login->zero(prk);
 	b := array of byte msg;
 	if(sys->write(fd, b, len b) < 0)
 		return sys->sprint("%r");
@@ -274,7 +284,10 @@ expand(prk, info: array of byte, n: int): array of byte
 	b[0:] = info;
 	b[len info] = byte 1;
 	kr->hmac_sha384(b, len b, prk, t, nil);
-	return t[0:n];
+	r := array[n] of byte;
+	r[0:] = t[0:n];
+	login->zero(t);
+	return r;
 }
 
 hex(a: array of byte): string
@@ -324,58 +337,4 @@ netmkaddr(addr, net, svc: string): string
 	if(svc == nil || n > 2)
 		return addr;
 	return sys->sprint("%s!%s", addr, svc);
-}
-
-readline(io: ref Sys->FD, mode: string): (int, string)
-{
-	r : int;
-	line : string;
-	buf := array[8192] of byte;
-	fdctl : ref Sys->FD;
-	rawoff := array of byte "rawoff";
-
-	if(mode == "rawon"){
-		fdctl = sys->open("/dev/consctl", sys->OWRITE);
-		if(fdctl == nil || sys->write(fdctl,array of byte mode,len mode) != len mode){
-			sys->fprint(stderr, "unable to change console mode");
-			return (0,nil);
-		}
-	}
-
-	line = "";
-	for(;;) {
-		r = sys->read(io, buf, len buf);
-		if(r <= 0){
-			sys->fprint(stderr, "error read from console mode");
-			if(mode == "rawon")
-				sys->write(fdctl,rawoff,6);
-			return (0, nil);
-		}
-
-		line += string buf[0:r];
-		if ((len line >= 1) && (line[(len line)-1] == '\n')){
-			if(mode == "rawon"){
-				r = sys->write(stdout,array of byte "\n",1);
-				if(r <= 0) {
-					sys->write(fdctl,rawoff,6);
-					return (0, nil);
-				}
-			}
-			break;
-		}
-		else {
-			if(mode == "rawon"){
-				#r = sys->write(stdout, array of byte "*",1);
-				if(r <= 0) {
-					sys->write(fdctl,rawoff,6);
-					return (0, nil);
-				}
-			}
-		}
-	}
-
-	if(mode == "rawon")
-		sys->write(fdctl,rawoff,6);
-
-	return (1, line[0:len line - 1]);
 }

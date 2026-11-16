@@ -5,6 +5,10 @@ logind \- login daemon
 .B auth/logind
 [
 .BI -g " group"
+] [
+.BI -i " seconds"
+] [
+.BI -n " logins"
 ]
 .SH DESCRIPTION
 .I Logind
@@ -189,12 +193,35 @@ when the last attempt began and when the cooldown ends (0 if not set),
 in seconds since the epoch.
 It is read and written whole under
 .BR /keydb/loginfail.lock ,
-made exclusively and removed when closed; a lock more than a minute old
-is taken to be left by a crash and removed.
+made exclusively and removed when closed.
+Its holder writes a word of its own into it, and a lock whose word has not
+changed for two seconds of a waiter's own clock was left by a holder that is gone,
+and is removed.
+(It was once a lock ``more than a minute old'' by the time of day:
+one left behind with the clock ahead refused every login until the clock caught up.)
 Removing an entry, or the file, ends a cooldown at once.
 If the file or its lock cannot be had,
 .I logind
 refuses the login rather than go without the limit.
+.PP
+A connection costs a process until it ends, and anybody may open one.
+A whole login has five minutes; each wait for a message from the client has
+.I seconds
+(default 30,
+.BR -i ),
+after which the connection is hung up; and when more than
+.I logins
+(default 64,
+.BR -n )
+instances of
+.I logind
+are in an exchange, a new connection is told the service is busy and closed.
+.PP
+The stored secret, and the proofs and keys an exchange makes from it,
+are zeroed when the exchange is over, however it ends.
+(The Diffie-Hellman exponents are numbers of
+.IR keyring-ipint (2),
+which Limbo gives no way to clear; they are left to the collector.)
 .SH FILES
 .TF /keydb/loginfail.lock
 .TP

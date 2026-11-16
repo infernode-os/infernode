@@ -56,6 +56,9 @@ include "security.m";
 
 include "sh.m";
 
+include "daytime.m";
+	daytime: Daytime;
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -254,6 +257,7 @@ cnsaloggedin(t: ref T, what: string, err: string, info: ref Keyring->Authinfo)
 #
 serve(cnsa: int, addrc: chan of string)
 {
+	args := logindargs;
 	sys->pctl(Sys->FORKENV|Sys->FORKNS|Sys->NEWPGRP, nil);
 	other := cnsa & Otherkey;
 	cnsa &= 1;
@@ -294,8 +298,10 @@ serve(cnsa: int, addrc: chan of string)
 	logind := load Command "/dis/auth/logind.dis";
 	if(logind == nil)
 		return;
-	logind->init(nil, "logind" :: nil);
+	logind->init(nil, "logind" :: args);
 }
+
+logindargs: list of string;	# what the next logind is started with
 
 #
 # A login with cnsamode as given on each side; the error, or nil and
@@ -451,6 +457,130 @@ wrongs(t: ref T, user: string, n: int, what: string)
 			return;
 		}
 	}
+}
+
+#
+# The throttle's lock left behind (a host that went down holding it),
+# its time ahead of the clock (the clock since stepped back): it was
+# stale only when a minute older than the time of day, so it refused
+# every login until the clock caught up.  A lock nobody is holding is
+# known by its not changing, on the waiter's own clock.
+#
+testStaleLock(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	lf := "/keydb/loginfail.lock";
+	fd := sys->create(lf, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		t.fatal(sys->sprint("can't make %s: %r", lf));
+	sys->fprint(fd, "a holder that is gone\n");
+	fd = nil;
+	nd := sys->nulldir;
+	nd.mtime = daytime->now() + 24*3600;
+	if(sys->wstat(lf, nd) < 0)
+		t.fatal(sys->sprint("can't date %s: %r", lf));
+	t0 := sys->millisec();
+	(err, info) := userlogin(t, User, 0, 0, Password);
+	ms := sys->millisec() - t0;
+	userloggedin(t, User, "a lock left behind, dated tomorrow", err, info);
+	t.assert(ms < 8000, sys->sprint("in %d ms", ms));
+	(ok, nil) := sys->stat(lf);
+	t.assert(ok < 0, "and the lock is gone");
+	sys->remove(lf);
+	# and the form before, which held nothing
+	fd = sys->create(lf, Sys->OWRITE, 8r600);
+	fd = nil;
+	(err, info) = userlogin(t, User, 0, 0, Password);
+	userloggedin(t, User, "an empty lock left behind", err, info);
+	sys->remove(lf);
+}
+
+#
+# Connections that say nothing: each held a logind for five minutes,
+# and there was no end to how many.
+#
+testIdle(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	base := loginds();
+	logindargs = "-i" :: "2" :: "-n" :: string (base+2) :: nil;
+	a1 := logind(t, 0);
+	a2 := logind(t, 0);
+	a3 := logind(t, 0);
+	a4 := logind(t, 0);
+	logindargs = nil;
+
+	# two clients that connect and then say nothing more
+	(c1, e1) := begin(a1, User, Chacha, nil);
+	(c2, e2) := begin(a2, User, Chacha, nil);
+	if(c1 == nil || c2 == nil)
+		t.fatal("can't begin two logins: " + e1 + " " + e2);
+	t.asserteq(loginds(), base+2, "two loginds wait for their clients");
+
+	# a third, while they wait, is refused: busy
+	(c3, e3) := begin(a3, User, Chacha, nil);
+	t.assert(c3 == nil && contains(e3, "busy"), "a third login while two wait is told the service is busy: " + e3);
+
+	# and the two are hung up on when they have said nothing for two seconds
+	t0 := sys->millisec();
+	(b, e) := getbytes(c1.c.dfd);
+	ms := sys->millisec() - t0;
+	t.assert(b == nil && e != "no answer", sys->sprint("a client that says nothing is hung up on (%s, after %d ms)", e, ms));
+	t.assert(ms < 6000, "within a few seconds, not five minutes");
+	(b, e) = getbytes(c2.c.dfd);
+	t.assert(b == nil && e != "no answer", "and the other: " + e);
+
+	# after which there is room again
+	for(i := 0; i < 50 && loginds() > base; i++)
+		sys->sleep(100);
+	t.asserteq(loginds(), base, "their loginds are gone");
+	sys->remove("/keydb/loginfail");
+	(c4, e4) := begin(a4, User, Chacha, nil);
+	if(c4 == nil)
+		t.fatal("a login once they are gone: " + e4);
+	(err, info) := finish(c4, Password);
+	loggedin(t, "a login once they are gone", err, info);
+}
+
+# the process groups with a process in logind, as logind counts them
+loginds(): int
+{
+	fd := sys->open("#p", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	grps: list of string;
+	n := 0;
+	for(;;){
+		(nd, dirs) := sys->dirread(fd);
+		if(nd <= 0)
+			break;
+		for(i := 0; i < nd; i++){
+			sfd := sys->open("#p/" + dirs[i].name + "/status", Sys->OREAD);
+			if(sfd == nil)
+				continue;
+			buf := array[256] of byte;
+			m := sys->read(sfd, buf, len buf);
+			if(m <= 0)
+				continue;
+			(nf, f) := sys->tokenize(string buf[0:m], " \t\n");
+			if(nf < 7)
+				continue;
+			mod := "";
+			for(l := f; l != nil; l = tl l)
+				mod = hd l;
+			if(mod != "Logind" && (len mod < 7 || mod[0:7] != "Logind["))
+				continue;
+			g := hd tl f;
+			for(l = grps; l != nil; l = tl l)
+				if(hd l == g)
+					break;
+			if(l == nil){
+				grps = g :: grps;
+				n++;
+			}
+		}
+	}
+	return n;
 }
 
 carolrefusal: string;	# testLockout's refusal, for testUnknownName
@@ -1696,6 +1826,7 @@ init(nil: ref Draw->Context, args: list of string)
 	kr = load Keyring Keyring->PATH;
 	login = load Login Login->PATH;
 	ssl = load SSL SSL->PATH;
+	daytime = load Daytime Daytime->PATH;
 	testing = load Testing Testing->PATH;
 
 	if(testing == nil){
@@ -1741,6 +1872,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Login/Relay", testRelay);
 	run("Login/OldExchange", testOldExchange);
 	run("Login/SignerName", testSignerName);
+	run("Login/StaleLock", testStaleLock);
+	run("Login/Idle", testIdle);
 	run("Login/Audit", testAudit);
 
 	rmtree(testdir);

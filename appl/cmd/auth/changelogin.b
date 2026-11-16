@@ -62,7 +62,6 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "%s: %q is not an account name: %s\n", argv0, id, why);
 		raise "fail:bad name";
 	}
-	login = nil;
 
 	# get password
 	(dbdir, secret, expiry, err) := getuser(id);
@@ -73,34 +72,44 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 		sys->print("new account\n");
 	}
+	# The secret is read as bytes and zeroed once hashed (login(2)'s
+	# readsecret): it was a string, which cannot be cleared, read in raw
+	# mode, where a backspace or a \r typed became part of it.
+	pwbuf: array of byte;
 	for(;;){
 		if(secret != nil)
 			sys->print("secret [default = don't change]: ");
 		else
 			sys->print("secret: ");
-		(ok, word) = readline(stdin, "rawon");
-		if(!ok)
-			exit;
-		if(word == "" && secret != nil)
+		rerr: string;
+		(pwbuf, rerr) = login->readsecret(stdin);
+		if(pwbuf == nil){
+			sys->fprint(stderr, "%s: can't read the secret: %s\n", argv0, rerr);
+			raise "fail:read";
+		}
+		if(len pwbuf == 0 && secret != nil)
 			break;
-		if(len word >= 8)
+		if(login->runes(pwbuf) >= 8)
 			break;
+		login->zero(pwbuf);
 		sys->print("!secret must be at least 8 characters\n");
 	}
 	newsecret: array of byte;
-	if(word != ""){
+	if(len pwbuf != 0){
 		# confirm password change
-		word1 := word;
 		sys->print("confirm: ");
-		(ok, word) = readline(stdin, "rawon");
-		if(!ok || word != word1) {
+		(again, nil) := login->readsecret(stdin);
+		same := again != nil && eq(again, pwbuf);
+		login->zero(again);
+		if(!same){
+			login->zero(pwbuf);
 			sys->print("Entries do not match. Authinfo record unchanged.\n"); 
 			raise "fail:mismatch";
 		}
 
-		pwbuf := array of byte word;
 		newsecret = array[Keyring->SHA256dlen] of byte;
 		kr->sha256(pwbuf, len pwbuf, newsecret, nil);
+		login->zero(pwbuf);
 	}
 
 	# get expiration time (midnight of date specified)
@@ -214,6 +223,8 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 		changed = 1;
 	}
+	login->zero(newsecret);
+	login->zero(secret);
 	sys->print("change written\n");
 }
 

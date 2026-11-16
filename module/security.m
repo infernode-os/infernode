@@ -81,6 +81,14 @@ Login: module
 	# a string as one of Keyring's messages, whole or not at all
 	putstring:	fn(fd: ref Sys->FD, s: string): string;
 
+	# A secret typed on io with the console's echo off: its bytes (the
+	# line edited as typed: backspace, ^U; no \r), or nil and why.  It
+	# is never a string, which cannot be cleared: the caller zeroes it.
+	Maxsecret:	con 1024;
+	readsecret:	fn(io: ref Sys->FD): (array of byte, string);
+	zero:	fn(a: array of byte);
+	runes:	fn(a: array of byte): int;	# characters in UTF-8
+
 	# logind(8)'s count, by name, of attempts that did not prove a
 	# password: the seconds name is still refused for, or 0 and this
 	# attempt counted until cleared

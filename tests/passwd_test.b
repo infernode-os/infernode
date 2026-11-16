@@ -817,6 +817,29 @@ testChangelogin(t: ref T)
 	sys->remove("/keydb/loginfail");
 }
 
+#
+# A secret is typed with the console raw, where nothing edits the line:
+# a backspace typed to correct a slip, a line killed with ^U, and a \r
+# before the newline were each characters of the secret that was
+# hashed.  login(2)'s readsecret edits the line as it reads it.
+#
+testTyped(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	typed := "zzzz\u0015" + New[0:5] + "Qé\b\b" + New[5:] + "\r";
+	(said, end) := dialog("/dis/auth/changelogin.dis", "hank" :: nil,
+		("secret: ", typed) :: ("confirm: ", New) :: ("expires [", "permanent") :: nil);
+	t.assertseq(end, "returned", "changelogin, a secret typed with corrections, confirmed without: " + said);
+	t.assert(eq(readfile("/mnt/keys/hank/secret"), pwdigest(New)), "the secret is the SHA-256 of what was meant");
+	(err, info) := dologin(t, "hank", New);
+	t.assert(info != nil, "and the account logs in with it: " + err);
+	# seven characters, however many bytes, are too few
+	(said, end) = dialog("/dis/auth/changelogin.dis", "hank" :: nil,
+		("don't change]: ", "ééééééé") :: ("don't change]: ", "") :: ("expires [", "") :: nil);
+	t.assert(contains(said, "at least 8 characters"), "seven characters of fourteen bytes are too few: " + said);
+	sys->remove("/keydb/loginfail");
+}
+
 kill(pid: int, how: string)
 {
 	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
@@ -884,6 +907,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Keysrv/Stale", testStale);
 	run("Keysrv/Name", testName);
 	run("Changelogin/Dates", testChangelogin);
+	run("Changelogin/Typed", testTyped);
 
 	sys->unmount(nil, "/mnt/kc");
 	sys->unmount(nil, "/mnt/keys");

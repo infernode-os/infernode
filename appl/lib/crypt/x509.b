@@ -87,6 +87,7 @@ CRLEntry: adt {
 };
 crl_store: list of ref CRLEntry;
 crl_store_loaded: int;
+crl_store_err: string;	# a file of the store that could not be used
 
 TAG_MASK 				: con 16r1F;
 CONSTR_MASK 				: con 16r20;
@@ -222,7 +223,7 @@ load_trust_store()
 			if(len name < 4 || name[len name - 4:] != ".der")
 				continue;
 			path := certdir + "/" + name;
-			der := readfile(path);
+			der := readfile(path, MAXCERTFILE);
 			if(der == nil)
 				continue;
 			(serr, s) := Signed.decode(der);
@@ -241,7 +242,7 @@ load_trust_store()
 # [private]
 # Read entire file into byte array
 
-readfile(path: string): array of byte
+readfile(path: string, max: int): array of byte
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
@@ -249,17 +250,20 @@ readfile(path: string): array of byte
 	(ok, d) := sys->fstat(fd);
 	if(ok < 0)
 		return nil;
+	if(d.length <= big 0 || d.length > big max)
+		return nil;
 	sz := int d.length;
-	if(sz <= 0 || sz > 65536)
-		return nil;
 	buf := array [sz] of byte;
-	n := sys->read(fd, buf, sz);
-	if(n <= 0)
+	tot := 0;
+	while(tot < sz && (n := sys->read(fd, buf[tot:], sz - tot)) > 0)
+		tot += n;
+	if(tot <= 0)
 		return nil;
-	if(n < sz)
-		return buf[:n];
-	return buf;
+	return buf[:tot];
 }
+
+MAXCERTFILE: con 65536;
+MAXCRLFILE: con 4*1024*1024;	# a busy CA's list of revoked certificates is long
 
 # [private]
 # Find a trusted root CA matching the given issuer name
@@ -279,18 +283,28 @@ find_trusted_root(issuer: ref Name): ref TrustedRoot
 
 # [private]
 # Load CRL DER files from /lib/crls/
+#
+# A list put there is there to revoke.  One that cannot be read (too
+# long, not a CRL, a critical extension that changes what it covers)
+# was left out without a word, and the certificates it names verified
+# again: it now fails every verification, with an error that names the
+# file, as a CRL given to verify_certchain_roots that cannot be used
+# fails that call.  One past its nextUpdate is kept and said so once
+# on standard error: it still names what it revoked (check_revoked).
 
 load_crl_store()
 {
 	if(crl_store_loaded)
 		return;
 	cs: list of ref CRLEntry;	# built whole, then published, as the trust store
+	cerr: string;
 	crldir := "/lib/crls";
 	fd := sys->open(crldir, Sys->OREAD);
 	if(fd == nil) {
 		crl_store_loaded = 1;
 		return;
 	}
+	now := big daytime->now();
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -300,19 +314,30 @@ load_crl_store()
 			if(len name < 4 || name[len name - 4:] != ".der")
 				continue;
 			path := crldir + "/" + name;
-			der := readfile(path);
+			err: string;
+			s: ref Signed;
+			crl: ref CRL;
+			der := readfile(path, MAXCRLFILE);
 			if(der == nil)
+				err = sys->sprint("cannot be read, is empty, or is past %d bytes", MAXCRLFILE);
+			else
+				(err, s) = Signed.decode(der);
+			if(err == "")
+				(err, crl) = CRL.decode(s.tobe_signed);
+			if(err != "") {
+				sys->fprint(sys->fildes(2), "x509: %s: %s: no certificate verifies until it is put right or removed\n", path, err);
+				if(cerr == nil)
+					cerr = "CRL store: " + path + ": " + err;
 				continue;
-			(serr, s) := Signed.decode(der);
-			if(serr != "")
-				continue;
-			(cerr, crl) := CRL.decode(s.tobe_signed);
-			if(cerr != "")
-				continue;
+			}
+			if(crl.next_update != big 0 && crl.next_update < now)
+				sys->fprint(sys->fildes(2), "x509: %s: this CRL is past its nextUpdate (%s): still applied, but what its issuer has revoked since is not known here\n",
+					path, timetext(crl.next_update, 0));
 			cs = ref CRLEntry(s, crl) :: cs;
 		}
 	}
 	crl_store = cs;
+	crl_store_err = cerr;
 	crl_store_loaded = 1;
 }
 
@@ -327,21 +352,19 @@ check_revoked(cert: ref Certificate, ctx: ref VCtx): (int, string)
 		l = ctx.crls;
 	else {
 		load_crl_store();
+		if(crl_store_err != nil)
+			return (1, crl_store_err);
 		l = crl_store;
 	}
-	now := ctxnow(ctx);
 	while(l != nil) {
 		entry := hd l;
 		# Match CRL issuer to certificate issuer
 		if(entry.crl.issuer.equal(cert.issuer)) {
-			# Skip expired CRLs (next_update == 0 means no expiry); but
-			# not those a caller gave (ctx): a stale list of revoked
-			# certificates still names them, and skipping it would let
-			# them back in
-			if((ctx == nil || ctx.stores) && entry.crl.next_update != big 0 && entry.crl.next_update < big now) {
-				l = tl l;
-				continue;
-			}
+			# A CRL past its nextUpdate is used all the same, the
+			# store's as a caller's: a stale list of revoked
+			# certificates still names them.  (The store's were
+			# skipped, which let a revoked certificate back in as
+			# soon as its CRL aged; nothing here fetches a new one.)
 			if(entry.crl.is_revoked(cert.serial_number))
 				return (1, "certificate revoked (serial " +
 					cert.serial_number.iptostr(16) + ")");
@@ -366,6 +389,19 @@ check_revoked(cert: ref Certificate, ctx: ref VCtx): (int, string)
 # [public]
 
 Signed.decode(a: array of byte): (string, ref Signed)
+{
+	# The bytes are a peer's.  Each read below is bounded, and should
+	# one not be, the answer is still an error and not an exception in
+	# whoever is in the middle of a handshake.
+	{
+		return signeddecode(a);
+	} exception e {
+	"*" =>
+		return ("signed: internal error: " + e, nil);
+	}
+}
+
+signeddecode(a: array of byte): (string, ref Signed)
 {
 parse:
 	for(;;) {
@@ -672,13 +708,18 @@ der_dec1(a: array of byte, i, n: int): (int, Tag, int, int)
 				length = n - i;
 			}
 			else {
-				if(i+length > n)
+				# counted without adding: with a length near the
+				# largest int, i+length was negative, passed, and
+				# Signed.decode sliced the certificate with it
+				if(length < 0 || length > n - i)
 					ok = 0;
 			}
 		}
 	}
 	if(!ok && X509_DEBUG)
 		log("der_dec1: syntax error");
+	if(!ok)
+		return (0, tag, i, i);
 	return (ok, tag, i, i+length);
 }
 
@@ -716,7 +757,7 @@ int_decode(a: array of byte, i, n, count, unsigned: int): (int, int, int)
 	num := 0;
 	if(n-i >= count) {
 		if((count > 4) || (unsigned && count == 4 && (int a[i] & 16r80)))
-			ok = 1;
+			ok = 0;		# does not fit an int (it was taken, as 0)
 		else {
 			if(!unsigned && count > 0 && count < 4 && (int a[i] & 16r80))
 				num = -1;		# all bits set
@@ -769,10 +810,10 @@ der_declen(a: array of byte, i, n: int): (int, int, int)
 	num := 0;
 	if(i < n) {
 		v := int a[i++];
-		if(v & 16r80)
+		if(v == 16r80) # indefinite length (it was asked after the
+			ok = 0;	# long form, which had already taken it)
+		else if(v & 16r80)
 			return int_decode(a, i, n, v&16r7F, 1);
-		else if(v == 16r80) # indefinite length
-			ok = 0;
 		else
 			num = v;
 	}
@@ -866,11 +907,22 @@ certsyn(s: string): (string, ref Certificate)
 
 Certificate.decode(a: array of byte): (string, ref Certificate)
 {
+	# as Signed.decode: a peer's bytes are an error at worst
+	{
+		return certdecode(a);
+	} exception e {
+	"*" =>
+		return ("certificate: internal error: " + e, nil);
+	}
+}
+
+certdecode(a: array of byte): (string, ref Certificate)
+{
 parse:
 	# break on error
 	for(;;) {
 		(err, all) := asn1->decode(a);
-		if(err != "")
+		if(err != "" || all == nil)
 			return certsyn(err);
 		c := ref Certificate;
 
@@ -890,14 +942,22 @@ parse:
 				return certsyn("invalid certificate info sequence");
 		}
 
+		# serialNumber to subjectPublicKeyInfo are six, taken below one
+		# after the other (a shorter list was "dereference of nil": the
+		# count was asked only when a version came first)
+		if(len el < 6)
+			return certsyn("short certificate info");
 		c.version = 0; # set to default (v1)
 		(ok, c.version) = parse_version(hd el);
 		if(!ok)
 			return certsyn("can't parse version");
-		if(c.version > 0) {
+		(hasver, nil) := is_context(hd el, 0);
+		if(hasver) {
+			# a version written out, v1 too: [0] is not the serial
+			# number (RFC 5280 4.1.2.1 would have v1 left out)
 			el = tl el;
 			if(len el < 6)
-				break parse;
+				return certsyn("short certificate info");
 		}
 		# serial number
 		(ok, c.serial_number) = parse_sernum(hd el);
@@ -945,7 +1005,7 @@ parse:
 		if(el != nil) {
 			if(c.version < 1) # v2 or v3
 				return certsyn("invalid v1 cert");
-			(ok, c.issuer_uid) = parse_uid(hd el, 2);
+			(ok, c.subject_uid) = parse_uid(hd el, 2);
 			if(ok)
 				el = tl el;
 		}
@@ -1775,7 +1835,9 @@ parse:
 	for(;;) {
 		ext := ref Extension;
 		(ok, el) := e.is_seq();
-		if(!ok)
+		# an OID, perhaps a BOOLEAN, an OCTET STRING (an empty
+		# SEQUENCE, or the OID alone, was "dereference of nil")
+		if(!ok || len el < 2 || len el > 3)
 			break parse;
 		oid: ref Oid;
 		(ok, oid) = (hd el).is_oid(); 
@@ -1784,16 +1846,12 @@ parse:
 		ext.oid = oid; 
 		el = tl el;
 		# BOOLEAN DEFAULT FALSE
-		if((hd el).tag.num == BOOLEAN) {
-			pick v := (hd el).val {
-			Bool or Int =>
-				ext.critical = (v.v != 0);
-			* =>
-				ext.critical = 0;
-			}
+		ext.critical = 0;
+		if(len el == 2) {
+			(ok, ext.critical) = derbool(hd el);
+			if(!ok)
+				break parse;
 			el = tl el;
-		} else {
-			ext.critical = 0;
 		}
 		if (len el != 1) {
 			break parse;
@@ -1806,6 +1864,30 @@ parse:
 	if(X509_DEBUG)
 		log("parse_extension: syntax error");
 	return (0, nil);
+}
+
+# [private]
+# A BOOLEAN of a certificate or CRL: the universal type, and DER's two
+# values, 16rFF true and 0 false (X.690 11.1).  BER takes any other
+# byte for true; a certificate is DER (RFC 5280 4.1), and a reader
+# that takes 16r01 for true where another takes it for malformed is
+# not one to decide who is a CA.  FALSE written out where it is the
+# default is not DER either, but CAs have written it, and it has only
+# the one meaning.
+# returns (ok, value)
+
+derbool(e: ref Elem): (int, int)
+{
+	if(e == nil || e.tag.class != Universal || e.tag.num != BOOLEAN)
+		return (0, 0);
+	pick v := e.val {
+	Bool =>
+		if(v.v == 16rFF)
+			return (1, 1);
+		if(v.v == 0)
+			return (1, 0);
+	}
+	return (0, 0);
 }
 
 # [private]
@@ -1972,7 +2054,7 @@ parse:
 		PKCS->id_pkcs_md5WithRSAEncryption =>
 			(err, k) := pkcs->decode_rsapubkey(pkinfo.subject_pk);
 			if(err != nil)
-				break parse;
+				return ("subject public key: " + err, -1, nil);
 			pk = ref PublicKey.RSA(k);
 		PKCS->id_algorithm_shaWithDSS =>
 			(err, k) :=  pkcs->decode_dsspubkey(pkinfo.subject_pk);
@@ -2049,7 +2131,15 @@ Extension.tostring(e: self ref Extension): string
 
 verify_certchain(cs: list of array of byte): (int, string)
 {
-	return verify_chain(cs, nil);
+	# The chain is a peer's, and the caller is as a rule in the middle
+	# of a handshake with nothing to catch an exception: whatever goes
+	# wrong in here is a chain that did not verify.
+	{
+		return verify_chain(cs, nil);
+	} exception e {
+	"*" =>
+		return (0, "certificate chain: internal error: " + e);
+	}
 }
 
 verify_chain(cs: list of array of byte, ctx: ref VCtx): (int, string)
@@ -2068,7 +2158,7 @@ verify_chain(cs: list of array of byte, ctx: ref VCtx): (int, string)
 		(err, c) = Certificate.decode(s.tobe_signed);
 		if(err != "")
 			return (0, "certificate: " + err);
-		nodes = ref Node(der, s, c) :: nodes;
+		nodes = ref Node(der, s, c, nil, nil, 0) :: nodes;
 	}
 	if(nodes == nil)
 		return (0, "no certificates");
@@ -2080,6 +2170,17 @@ verify_chain(cs: list of array of byte, ctx: ref VCtx): (int, string)
 
 # [public]
 verify_certchain_roots(cs: list of array of byte, roots: list of array of byte,
+	crls: list of array of byte, now: int): (int, string)
+{
+	{
+		return verify_roots(cs, roots, crls, now);
+	} exception e {
+	"*" =>
+		return (0, "certificate chain: internal error: " + e);
+	}
+}
+
+verify_roots(cs: list of array of byte, roots: list of array of byte,
 	crls: list of array of byte, now: int): (int, string)
 {
 	ctx := ref VCtx(nil, nil, now, 0, MAXWORK);
@@ -2123,10 +2224,27 @@ verify_certchain_roots(cs: list of array of byte, roots: list of array of byte,
 
 verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 {
+	{
+		return verify_path(sc);
+	} exception e {
+	"*" =>
+		return (0, "certificate chain: internal error: " + e);
+	}
+}
+
+verify_path(sc: list of (ref Signed, ref Certificate)): (int, string)
+{
 	l: list of ref Node;
 	for(; sc != nil; sc = tl sc) {
-		(s, c) := hd sc;
-		l = ref Node(s.tobe_signed, s, c) :: l;	# reversed: leaf first
+		(s, nil) := hd sc;
+		if(s == nil)
+			return (0, "no certificate");
+		# what is verified is what was signed: the certificate is
+		# read from the signed bytes, not taken from the caller
+		(err, c) := Certificate.decode(s.tobe_signed);
+		if(err != "")
+			return (0, "certificate: " + err);
+		l = ref Node(s.tobe_signed, s, c, nil, nil, 0) :: l;	# reversed: leaf first
 	}
 	if(l == nil)
 		return (0, "no certificates");
@@ -2134,21 +2252,77 @@ verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 }
 
 # [private]
-# Chain validation, RFC 5280 section 6 reduced to what TLS server
-# authentication needs: signatures, validity, basicConstraints, keyUsage,
-# pathLenConstraint, CRLs, and termination at a trust anchor. It fails
-# closed: an unsupported signature algorithm is an error, not a pass.
+# Chain validation, RFC 5280 section 6, for a verifier that is asked
+# whether a chain ends at a root and names no policy of its own:
+# signatures, validity (the trust anchor's too), basicConstraints,
+# keyUsage, pathLenConstraint, CRLs, name constraints, and the rule of
+# 4.2 that a critical extension is processed or the certificate is
+# refused.  It fails closed: an unsupported signature algorithm, an
+# extension it cannot read, a constraint on a kind of name it does not
+# compare, are errors and not passes.
 
 MAXPATH: con 8;		# intermediates between leaf and trust anchor
+MAXEXTS: con 128;	# extensions in one certificate (each is asked for a twin)
 
 Node: adt {
 	der:	array of byte;
 	s:	ref Signed;
 	c:	ref Certificate;
+	x:	ref Xinfo;	# what its extensions say, once read
+	xerr:	string;		# or why they cannot be taken
+	xdone:	int;
 };
+
+# A certificate's extensions as the path uses them
+Xinfo: adt {
+	bc:	int;		# has basicConstraints
+	ca:	int;
+	pathlen:	int;	# -1: none
+	ku:	int;		# has keyUsage
+	usage:	int;		# its bits, KeyUsage_*
+	san:	int;		# has subjectAltName
+	names:	list of ref GName;	# its names
+	nc:	ref NameCons;	# nameConstraints, or nil
+	explicit:	int;	# policyConstraints' requireExplicitPolicy, or -1
+	subject:	list of list of ref Av;	# the subject, with its strings' types
+};
+
+# An attribute of a distinguished name with the type of its string
+Av: adt {
+	oid:	ref Oid;
+	kind:	int;	# universal tag of the value
+	s:	string;
+};
+
+# A GeneralName, as far as names are compared here: the form is its
+# context tag (RFC 5280 4.2.1.6)
+GNother, GNrfc822, GNdns, GNx400, GNdir, GNedi, GNuri, GNip, GNrid: con iota;
+GName: adt {
+	form:	int;
+	s:	string;			# rfc822Name, dNSName, URI
+	b:	array of byte;		# iPAddress
+	dn:	list of list of ref Av;	# directoryName
+};
+
+NameCons: adt {
+	permitted:	list of ref GName;
+	excluded:	list of ref GName;
+};
+
+nodeinfo(n: ref Node): (ref Xinfo, string)
+{
+	if(!n.xdone) {
+		(n.x, n.xerr) = certinfo(n.c, n.s.tobe_signed);
+		n.xdone = 1;
+	}
+	return (n.x, n.xerr);
+}
 
 verify_leaf(leaf: ref Node, pool: list of ref Node, ctx: ref VCtx): (int, string)
 {
+	(nil, xerr) := nodeinfo(leaf);
+	if(xerr != nil)
+		return (0, "certificate: " + xerr + ": " + leaf.c.subject.tostring());
 	if(!validat(leaf.c.validity, ctxnow(ctx)))
 		return (0, "certificate expired or not yet valid: " + leaf.c.subject.tostring());
 	(revoked, reason) := check_revoked(leaf.c, ctx);
@@ -2158,11 +2332,16 @@ verify_leaf(leaf: ref Node, pool: list of ref Node, ctx: ref VCtx): (int, string
 }
 
 # n is accepted; find its issuer. depth counts the intermediates already
-# on the path below n's issuer (0 when n is the leaf).
+# on the path below n's issuer (0 when n is the leaf).  path is the
+# certificates from n down to the leaf.
 findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node, ctx: ref VCtx): (int, string)
 {
-	if(is_anchor(n, ctx))
+	if(is_anchor(n, ctx)) {
+		err := check_path(nil, path);
+		if(err != nil)
+			return (0, err);
 		return (1, "");
+	}
 	if(depth > MAXPATH)
 		return (0, "certificate path too long");
 	lasterr := "no trusted root CA for " + n.c.issuer.tostring();
@@ -2172,11 +2351,23 @@ findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node
 		tr := hd t;
 		if(!tr.cert.subject.equal(n.c.issuer))
 			continue;
+		# A root is trusted for as long as it says: RFC 5280 6.1 takes
+		# a trust anchor as a name and a key and has no date to ask
+		# of it, but a root given as a certificate carries the dates
+		# its CA meant, and OpenSSL, Go and NSS hold it to them.  (An
+		# expired root in the store went on vouching for chains.)
+		if(!validat(tr.cert.validity, ctxnow(ctx))) {
+			lasterr = "trust anchor " + tr.cert.subject.tostring() + ": expired or not yet valid";
+			continue;
+		}
 		if(--ctx.work < 0)
 			return (0, "certificate path: too many signatures to check");
 		(ok, err) := verify_issued(n.s, tr.cert);
-		if(ok)
-			return (1, "");
+		if(ok) {
+			err = check_path(tr, path);
+			if(err == nil)
+				return (1, "");
+		}
 		lasterr = "trust anchor " + tr.cert.subject.tostring() + ": " + err;
 	}
 
@@ -2186,7 +2377,7 @@ findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node
 		cand := hd p;
 		if(onpath(path, cand) || !cand.c.subject.equal(n.c.issuer))
 			continue;
-		err := check_ca(cand.c, depth, ctx);
+		err := check_ca(cand, depth, ctx);
 		if(err == nil) {
 			if(--ctx.work < 0)
 				return (0, "certificate path: too many signatures to check");
@@ -2245,34 +2436,19 @@ bytesequal(a, b: array of byte): int
 	return 1;
 }
 
-# May c issue certificates at this depth? nil if so, else why not.
-check_ca(c: ref Certificate, depth: int, ctx: ref VCtx): string
+# May n issue certificates at this depth? nil if so, else why not.
+check_ca(n: ref Node, depth: int, ctx: ref VCtx): string
 {
-	if(!validat(c.validity, ctxnow(ctx)))
+	if(!validat(n.c.validity, ctxnow(ctx)))
 		return "issuer certificate expired or not yet valid";
-	ca := 0;
-	pathlen := -1;
-	bc := 0;
-	for(l := c.exts; l != nil; l = tl l) {
-		e := hd l;
-		if(oideq(e.oid, OID_BASICCONSTRAINTS)) {
-			bc = 1;
-			(ok, isca, plen) := parse_basicconstraints(e.value);
-			if(!ok)
-				return "bad basicConstraints";
-			ca = isca;
-			pathlen = plen;
-		} else if(oideq(e.oid, OID_KEYUSAGE)) {
-			(ok, certsign) := parse_keycertsign(e.value);
-			if(!ok)
-				return "bad keyUsage";
-			if(!certsign)
-				return "issuer keyUsage lacks keyCertSign";
-		}
-	}
-	if(!bc || !ca)
+	(x, xerr) := nodeinfo(n);
+	if(xerr != nil)
+		return xerr;
+	if(x.ku && !(x.usage & KeyUsage_KeyCertSign))
+		return "issuer keyUsage lacks keyCertSign";
+	if(!x.bc || !x.ca)
 		return "issuer is not a CA (basicConstraints)";
-	if(pathlen >= 0 && depth > pathlen)
+	if(x.pathlen >= 0 && depth > x.pathlen)
 		return "issuer pathLenConstraint exceeded";
 	return nil;
 }
@@ -2281,6 +2457,16 @@ OID_BASICCONSTRAINTS := array [] of {2,5,29,19};
 OID_CRLNUMBER := array [] of {2,5,29,20};
 OID_AUTHKEYID := array [] of {2,5,29,35};
 OID_KEYUSAGE := array [] of {2,5,29,15};
+OID_SUBJECTALTNAME := array [] of {2,5,29,17};
+OID_NAMECONSTRAINTS := array [] of {2,5,29,30};
+OID_EXTKEYUSAGE := array [] of {2,5,29,37};
+OID_CERTPOLICIES := array [] of {2,5,29,32};
+OID_POLICYMAPPINGS := array [] of {2,5,29,33};
+OID_POLICYCONSTRAINTS := array [] of {2,5,29,36};
+OID_INHIBITANYPOLICY := array [] of {2,5,29,54};
+OID_ANYPOLICY := array [] of {2,5,29,32,0};
+OID_COMMONNAME := array [] of {2,5,4,3};
+OID_EMAILADDRESS := array [] of {1,2,840,113549,1,9,1};
 OID_SHA512RSA := array [] of {1,2,840,113549,1,1,13};
 OID_ECDSASHA512 := array [] of {1,2,840,10045,4,3,4};
 
@@ -2294,28 +2480,110 @@ oideq(o: ref Oid, nums: array of int): int
 	return 1;
 }
 
+# What a certificate's extensions say, or why the certificate cannot
+# be used (RFC 5280 4.2).  An extension is here either read and acted
+# on, or, if it is critical, a reason to refuse: "MUST reject the
+# certificate if it encounters a critical extension it does not
+# recognize or a critical extension that contains information that it
+# cannot process".  Before, only basicConstraints and keyUsage were
+# looked at, and those of issuers alone: a CA held to some names by a
+# critical nameConstraints issued for any name, and a critical
+# extension nobody had heard of changed nothing.
+#
+# Read: basicConstraints, keyUsage, subjectAltName, nameConstraints,
+# and policyConstraints for the one thing in it that can fail a path
+# here (see check_path).  Checked for form and otherwise the caller's:
+# extendedKeyUsage (the purpose is the application's to ask: TLS does),
+# certificatePolicies, policyMappings, inhibitAnyPolicy (see check_path).
+# Everything else is refused if critical: among them
+# cRLDistributionPoints, which critical says to fetch a CRL this does
+# not fetch, and the key identifiers and authorityInfoAccess, which
+# 4.2.1 says are never critical.
+certinfo(c: ref Certificate, tbs: array of byte): (ref Xinfo, string)
+{
+	x := ref Xinfo(0, 0, -1, 0, 0, 0, nil, nil, -1, nil);
+	if(len c.exts > MAXEXTS)
+		return (nil, "too many extensions");
+	for(l := c.exts; l != nil; l = tl l) {
+		e := hd l;
+		# 4.2: "A certificate MUST NOT include more than one instance
+		# of a particular extension" (of two basicConstraints the
+		# last won, of two subjectAltNames either would do)
+		for(m := tl l; m != nil; m = tl m)
+			if(oid_cmp(e.oid, (hd m).oid))
+				return (nil, "extension " + e.oid.tostring() + " twice");
+		ok := 1;
+		if(oideq(e.oid, OID_BASICCONSTRAINTS)) {
+			x.bc = 1;
+			(ok, x.ca, x.pathlen) = parse_basicconstraints(e.value);
+			if(!ok)
+				return (nil, "bad basicConstraints");
+		} else if(oideq(e.oid, OID_KEYUSAGE)) {
+			x.ku = 1;
+			(ok, x.usage) = parse_keyusage(e.value);
+			if(!ok)
+				return (nil, "bad keyUsage");
+		} else if(oideq(e.oid, OID_SUBJECTALTNAME)) {
+			x.san = 1;
+			(ok, x.names) = parse_gnames(e.value, 0);
+			# 4.2.1.6: at least one entry
+			if(!ok || x.names == nil)
+				return (nil, "bad subjectAltName");
+		} else if(oideq(e.oid, OID_NAMECONSTRAINTS)) {
+			(ok, x.nc) = parse_nameconstraints(e.value);
+			if(!ok)
+				return (nil, "bad nameConstraints");
+		} else if(oideq(e.oid, OID_EXTKEYUSAGE)) {
+			if(!oidseq(e.value, 0))
+				return (nil, "bad extendedKeyUsage");
+		} else if(oideq(e.oid, OID_CERTPOLICIES)) {
+			if(!oidseq(e.value, 1))
+				return (nil, "bad certificatePolicies");
+		} else if(oideq(e.oid, OID_POLICYMAPPINGS)) {
+			if(!policymappings(e.value))
+				return (nil, "bad policyMappings");
+		} else if(oideq(e.oid, OID_POLICYCONSTRAINTS)) {
+			(ok, x.explicit) = parse_policyconstraints(e.value);
+			if(!ok)
+				return (nil, "bad policyConstraints");
+		} else if(oideq(e.oid, OID_INHIBITANYPOLICY)) {
+			(ierr, ie) := asn1->decode(e.value);
+			skip := -1;
+			if(ierr == "" && ie != nil)
+				(ok, skip) = ie.is_int();
+			if(ierr != "" || !ok || skip < 0 || ie.tag.num != INTEGER)
+				return (nil, "bad inhibitAnyPolicy");
+		} else if(e.critical)
+			return (nil, "unrecognized critical extension " + e.oid.tostring());
+	}
+	ok: int;
+	(ok, x.subject) = tbssubject(tbs);
+	if(!ok)
+		return (nil, "bad subject");
+	return (x, nil);
+}
+
 # BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLenConstraint INTEGER OPTIONAL }
 # returns (ok, ca, pathlen or -1)
 parse_basicconstraints(der: array of byte): (int, int, int)
 {
 	(err, e) := asn1->decode(der);
-	if(err != "")
+	if(err != "" || e == nil)
 		return (0, 0, -1);
 	(ok, el) := e.is_seq();
-	if(!ok)
+	if(!ok || len el > 2)
 		return (0, 0, -1);
 	ca := 0;
 	pathlen := -1;
-	if(el != nil && (hd el).tag.num == BOOLEAN) {
-		pick v := (hd el).val {
-		Bool or Int =>
-			ca = v.v != 0;
-		* =>
+	if(el != nil && (hd el).tag.class == Universal && (hd el).tag.num == BOOLEAN) {
+		(ok, ca) = derbool(hd el);
+		if(!ok)
 			return (0, 0, -1);
-		}
 		el = tl el;
 	}
 	if(el != nil) {
+		if((hd el).tag.class != Universal || (hd el).tag.num != INTEGER || tl el != nil)
+			return (0, 0, -1);
 		(ok, pathlen) = (hd el).is_int();
 		if(!ok || pathlen < 0)
 			return (0, 0, -1);
@@ -2323,19 +2591,670 @@ parse_basicconstraints(der: array of byte): (int, int, int)
 	return (1, ca, pathlen);
 }
 
-# KeyUsage ::= BIT STRING; keyCertSign is bit 5 (counting from the most
-# significant bit of the first byte). returns (ok, keycertsign)
-parse_keycertsign(der: array of byte): (int, int)
+# KeyUsage ::= BIT STRING, bit 0 the most significant of the first byte
+# (RFC 5280 4.2.1.3).  returns (ok, the bits as KeyUsage_*)
+parse_keyusage(der: array of byte): (int, int)
 {
 	(err, e) := asn1->decode(der);
-	if(err != "")
+	if(err != "" || e == nil)
 		return (0, 0);
 	(ok, nil, bits) := e.is_bitstring();
 	if(!ok)
 		return (0, 0);
-	if(len bits == 0)
-		return (1, 0);
-	return (1, (int bits[0] & 16r04) != 0);
+	usage := 0;
+	for(i := 0; i < 9 && i/8 < len bits; i++)
+		if(int bits[i/8] & (16r80 >> (i%8)))
+			usage |= 1 << i;
+	# "at least one of the bits MUST be set to 1"
+	if(usage == 0)
+		return (0, 0);
+	return (1, usage);
+}
+
+# A SEQUENCE SIZE (1..MAX) OF OBJECT IDENTIFIER (extendedKeyUsage), or
+# of SEQUENCE { OBJECT IDENTIFIER, ... } (certificatePolicies, whose
+# policies may each appear once: 4.2.1.4)
+oidseq(der: array of byte, inseq: int): int
+{
+	(err, e) := asn1->decode(der);
+	if(err != "" || e == nil)
+		return 0;
+	(ok, el) := e.is_seq();
+	if(!ok || el == nil || len el > 256)
+		return 0;
+	had: list of ref Oid;
+	for(; el != nil; el = tl el) {
+		o := hd el;
+		if(inseq) {
+			pl: list of ref Elem;
+			(ok, pl) = o.is_seq();
+			if(!ok || pl == nil || len pl > 2)
+				return 0;
+			if(tl pl != nil) {
+				(ok, nil) = (hd tl pl).is_seq();	# policyQualifiers
+				if(!ok)
+					return 0;
+			}
+			o = hd pl;
+		}
+		oid: ref Oid;
+		(ok, oid) = o.is_oid();
+		if(!ok)
+			return 0;
+		if(inseq) {
+			for(h := had; h != nil; h = tl h)
+				if(oid_cmp(hd h, oid))
+					return 0;
+			had = oid :: had;
+		}
+	}
+	return 1;
+}
+
+# PolicyMappings ::= SEQUENCE SIZE (1..MAX) OF SEQUENCE {
+#	issuerDomainPolicy, subjectDomainPolicy OBJECT IDENTIFIER }
+# neither of them anyPolicy (4.2.1.5, 6.1.4 (a))
+policymappings(der: array of byte): int
+{
+	(err, e) := asn1->decode(der);
+	if(err != "" || e == nil)
+		return 0;
+	(ok, el) := e.is_seq();
+	if(!ok || el == nil)
+		return 0;
+	for(; el != nil; el = tl el) {
+		pl: list of ref Elem;
+		(ok, pl) = (hd el).is_seq();
+		if(!ok || len pl != 2)
+			return 0;
+		for(; pl != nil; pl = tl pl) {
+			oid: ref Oid;
+			(ok, oid) = (hd pl).is_oid();
+			if(!ok || oideq(oid, OID_ANYPOLICY))
+				return 0;
+		}
+	}
+	return 1;
+}
+
+# PolicyConstraints ::= SEQUENCE {
+#	requireExplicitPolicy [0] INTEGER OPTIONAL,
+#	inhibitPolicyMapping  [1] INTEGER OPTIONAL }
+# not empty (4.2.1.11).  returns (ok, requireExplicitPolicy or -1)
+parse_policyconstraints(der: array of byte): (int, int)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "" || e == nil)
+		return (0, -1);
+	(ok, el) := e.is_seq();
+	if(!ok || el == nil || len el > 2)
+		return (0, -1);
+	explicit := -1;
+	last := -1;
+	for(; el != nil; el = tl el) {
+		f := hd el;
+		if(f.tag.class != Context || f.tag.num <= last || f.tag.num > 1)
+			return (0, -1);
+		last = f.tag.num;
+		v: int;
+		(ok, v) = ctxint(f);
+		if(!ok)
+			return (0, -1);
+		if(f.tag.num == 0)
+			explicit = v;
+	}
+	return (1, explicit);
+}
+
+# an INTEGER under an implicit context tag, not negative; one too
+# large for an int is the largest
+ctxint(e: ref Elem): (int, int)
+{
+	pick v := e.val {
+	Octets =>
+		b := v.bytes;
+		if(len b == 0 || (int b[0] & 16r80))
+			return (0, 0);
+		n := 0;
+		for(i := 0; i < len b; i++) {
+			if(n > 16r7fffff)
+				return (1, 16r7fffffff);
+			n = (n << 8) | int b[i];
+		}
+		return (1, n);
+	}
+	return (0, 0);
+}
+
+# GeneralNames ::= SEQUENCE OF GeneralName, each under its context tag
+# (RFC 5280 4.2.1.6); or one GeneralName, a subtree's base, when
+# base is set, where an iPAddress is an address and its mask.
+# returns (ok, names)
+parse_gnames(der: array of byte, base: int): (int, list of ref GName)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "" || e == nil)
+		return (0, nil);
+	(ok, el) := e.is_seq();
+	if(!ok)
+		return (0, nil);
+	l: list of ref GName;
+	for(; el != nil; el = tl el) {
+		g: ref GName;
+		(ok, g) = parse_gn(hd el, base);
+		if(!ok)
+			return (0, nil);
+		l = g :: l;
+	}
+	return (1, l);
+}
+
+parse_gn(e: ref Elem, base: int): (int, ref GName)
+{
+	if(e == nil || e.tag.class != Context || e.tag.num < 0 || e.tag.num > GNrid)
+		return (0, nil);
+	g := ref GName(e.tag.num, nil, nil, nil);
+	pick v := e.val {
+	Octets =>
+		case g.form {
+		GNrfc822 or GNdns or GNuri =>
+			g.s = string v.bytes;
+		GNip =>
+			# 4 or 16 bytes; in a constraint, with a mask as long
+			n := len v.bytes;
+			if(base)
+				n /= 2;
+			if(n != 4 && n != 16 || base && len v.bytes != 2*n)
+				return (0, nil);
+			g.b = v.bytes;
+		GNdir =>
+			# [4] is explicit: a Name is a CHOICE
+			(err, ne) := asn1->decode(v.bytes);
+			if(err != "" || ne == nil)
+				return (0, nil);
+			ok: int;
+			(ok, g.dn) = parse_dn(ne);
+			if(!ok)
+				return (0, nil);
+		}
+		return (1, g);
+	}
+	return (0, nil);
+}
+
+# A Name with each value's string type kept: whether two values can be
+# compared depends on it (asn1 gives every string type as its bytes)
+parse_dn(e: ref Elem): (int, list of list of ref Av)
+{
+	(ok, el) := e.is_seq();
+	if(!ok)
+		return (0, nil);
+	rdns: list of list of ref Av;
+	for(; el != nil; el = tl el) {
+		sl: list of ref Elem;
+		(ok, sl) = (hd el).is_set();
+		if(!ok || sl == nil)
+			return (0, nil);
+		avs: list of ref Av;
+		for(; sl != nil; sl = tl sl) {
+			al: list of ref Elem;
+			(ok, al) = (hd sl).is_seq();
+			if(!ok || len al != 2)
+				return (0, nil);
+			a := ref Av(nil, (hd tl al).tag.num, nil);
+			(ok, a.oid) = (hd al).is_oid();
+			if(!ok)
+				return (0, nil);
+			(ok, a.s) = (hd tl al).is_string();
+			if(!ok)
+				return (0, nil);
+			avs = a :: avs;
+		}
+		rdns = avs :: rdns;
+	}
+	r: list of list of ref Av;
+	for(; rdns != nil; rdns = tl rdns)
+		r = hd rdns :: r;
+	return (1, r);
+}
+
+# The subject of a TBSCertificate that Certificate.decode has taken:
+# the fifth field after the version, if there is one
+tbssubject(tbs: array of byte): (int, list of list of ref Av)
+{
+	(err, e) := asn1->decode(tbs);
+	if(err != "" || e == nil)
+		return (0, nil);
+	(ok, el) := e.is_seq();
+	if(!ok || el == nil)
+		return (0, nil);
+	(hasver, nil) := is_context(hd el, 0);
+	if(hasver)
+		el = tl el;
+	for(i := 0; i < 4 && el != nil; i++)
+		el = tl el;
+	if(el == nil)
+		return (0, nil);
+	return parse_dn(hd el);
+}
+
+# NameConstraints ::= SEQUENCE {
+#	permittedSubtrees [0] GeneralSubtrees OPTIONAL,
+#	excludedSubtrees  [1] GeneralSubtrees OPTIONAL }
+# GeneralSubtree ::= SEQUENCE { base GeneralName,
+#	minimum [0] INTEGER DEFAULT 0, maximum [1] INTEGER OPTIONAL }
+# RFC 5280 4.2.1.10: one of the two at least; minimum is 0 and there is
+# no maximum, and a certificate that says otherwise is refused.
+parse_nameconstraints(der: array of byte): (int, ref NameCons)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "" || e == nil)
+		return (0, nil);
+	(ok, el) := e.is_seq();
+	if(!ok || el == nil || len el > 2)
+		return (0, nil);
+	nc := ref NameCons(nil, nil);
+	last := -1;
+	for(; el != nil; el = tl el) {
+		f := hd el;
+		if(f.tag.class != Context || f.tag.num <= last || f.tag.num > 1)
+			return (0, nil);
+		last = f.tag.num;
+		subs: list of ref GName;
+		pick v := f.val {
+		Octets =>
+			# the tag is implicit: what it holds is the subtrees,
+			# one after another
+			(serr, sl) := asn1->decode_seq(v.bytes);
+			if(serr != "" || sl == nil)
+				return (0, nil);
+			for(; sl != nil; sl = tl sl) {
+				gl: list of ref Elem;
+				(ok, gl) = (hd sl).is_seq();
+				if(!ok || gl == nil)
+					return (0, nil);
+				g: ref GName;
+				(ok, g) = parse_gn(hd gl, 1);
+				if(!ok)
+					return (0, nil);
+				for(gl = tl gl; gl != nil; gl = tl gl) {
+					# minimum, written out though it is the default
+					m := hd gl;
+					n: int;
+					(ok, n) = ctxint(m);
+					if(m.tag.class != Context || m.tag.num != 0 || !ok || n != 0 || tl gl != nil)
+						return (0, nil);
+				}
+				subs = g :: subs;
+			}
+		* =>
+			return (0, nil);
+		}
+		if(f.tag.num == 0)
+			nc.permitted = subs;
+		else
+			nc.excluded = subs;
+	}
+	return (1, nc);
+}
+
+# The certificates from a trust anchor (tr, or nil when the first of
+# path is itself the anchor) down to the leaf make a path whose
+# signatures, dates and CA bits have been checked.  What is asked of
+# the path as a whole (RFC 5280 6.1): nil if it stands, else why not.
+check_path(tr: ref TrustedRoot, path: list of ref Node): string
+{
+	n := len path;
+	xs := array[n+1] of ref Xinfo;	# 0 the anchor (nil if path's first is)
+	cs := array[n+1] of ref Certificate;
+	i := 1;
+	for(p := path; p != nil; p = tl p) {
+		xerr: string;
+		(xs[i], xerr) = nodeinfo(hd p);
+		if(xerr != nil)
+			return xerr;
+		cs[i++] = (hd p).c;
+	}
+	if(tr != nil) {
+		# The anchor's extensions, when it is a certificate, are held
+		# to the same rule, and its name constraints kept (6.2: a
+		# trust anchor's constraints may be applied; a root limited
+		# to its own names is limited whether it or its issue is the
+		# anchor)
+		xerr: string;
+		(xs[0], xerr) = certinfo(tr.cert, tr.signed.tobe_signed);
+		if(xerr != nil)
+			return "trust anchor: " + xerr;
+		cs[0] = tr.cert;
+	}
+
+	# Name constraints, 6.1.3 (b) and (c), 6.1.4 (g): each CA's are
+	# applied to every certificate below it.  Applying each CA's by
+	# itself is the intersection of the permitted and the union of the
+	# excluded.  A certificate issued to its own issuer's name is let
+	# by, unless it is the last (6.1.3: "self-issued").
+	for(i = 0; i < n; i++) {
+		if(xs[i] == nil || xs[i].nc == nil)
+			continue;
+		for(j := i+1; j <= n; j++) {
+			if(j < n && cs[j].subject.equal(cs[j].issuer))
+				continue;
+			err := nc_check(xs[i].nc, xs[j], j == n);
+			if(err != nil)
+				return err + " (nameConstraints of " + cs[i].subject.tostring() + ")";
+		}
+	}
+
+	# Policies.  Nothing here names a policy it wants (the initial
+	# policy set is anyPolicy, and no explicit policy is asked for), so
+	# by 6.1.5 (g) a path stands if explicit_policy is still above 0
+	# at its end, whatever its policy tree: certificatePolicies,
+	# policyMappings and inhibitAnyPolicy shape only the tree.  What
+	# can bring explicit_policy to 0 is a policyConstraints with
+	# requireExplicitPolicy (6.1.4 (i), 6.1.5 (b)); the path then
+	# stands only if the tree is not empty, which is not worked out
+	# here: such a path is refused.
+	explicit := n + 1;
+	if(tr == nil)
+		explicit = n;	# the anchor is no part of the path
+	first := 1;
+	if(tr == nil)
+		first = 2;
+	for(i = first; i <= n; i++) {
+		if(explicit == 0)
+			return "the path requires an explicit certificate policy (policyConstraints), which is not evaluated";
+		if(i < n) {
+			if(explicit > 0 && !cs[i].subject.equal(cs[i].issuer))
+				explicit--;
+			if(xs[i].explicit >= 0 && xs[i].explicit < explicit)
+				explicit = xs[i].explicit;
+		} else {
+			if(explicit > 0)
+				explicit--;
+			if(xs[i].explicit == 0)
+				explicit = 0;
+		}
+	}
+	if(explicit == 0 && n >= first)
+		return "the path requires an explicit certificate policy (policyConstraints), which is not evaluated";
+	return nil;
+}
+
+# The names of a certificate against a CA's name constraints: nil if
+# they are allowed.  The subject (when not empty) is a directoryName;
+# the subjectAltName's entries are what they are; and, with no
+# subjectAltName, an emailAddress in the subject is an rfc822Name
+# (4.2.1.10) and, in the last certificate, a commonName is a dNSName,
+# since that is what a TLS client reads it as when there is no
+# subjectAltName.
+nc_check(nc: ref NameCons, x: ref Xinfo, last: int): string
+{
+	names := x.names;
+	if(x.subject != nil)
+		names = ref GName(GNdir, nil, nil, x.subject) :: names;
+	if(!x.san)
+		for(rd := x.subject; rd != nil; rd = tl rd)
+			for(a := hd rd; a != nil; a = tl a) {
+				if(oideq((hd a).oid, OID_EMAILADDRESS))
+					names = ref GName(GNrfc822, (hd a).s, nil, nil) :: names;
+				if(last && oideq((hd a).oid, OID_COMMONNAME) && hostlike((hd a).s))
+					names = ref GName(GNdns, (hd a).s, nil, nil) :: names;
+			}
+	for(; names != nil; names = tl names) {
+		g := hd names;
+		for(l := nc.excluded; l != nil; l = tl l)
+			if((hd l).form == g.form) {
+				r := gn_within(hd l, g, 1);
+				if(r < 0)
+					return "a name constraint on " + gn_form(g.form) + " names is not one this verifier applies";
+				if(r)
+					return gn_text(g) + " is in an excluded subtree";
+			}
+		constrained := 0;
+		within := 0;
+		for(l = nc.permitted; l != nil; l = tl l)
+			if((hd l).form == g.form) {
+				constrained = 1;
+				r := gn_within(hd l, g, 0);
+				if(r < 0)
+					return "a name constraint on " + gn_form(g.form) + " names is not one this verifier applies";
+				if(r)
+					within = 1;
+			}
+		if(constrained && !within)
+			return gn_text(g) + " is not in a permitted subtree";
+	}
+	return nil;
+}
+
+# Is name g within the subtree c of its form?  1, 0, or -1 for a form
+# not compared here: 4.2.1.10 has a critical constraint on such a form
+# refuse a certificate that carries a name of it, and it is refused
+# critical or not.  excl says the subtree is an excluded one: where it
+# cannot be told whether a name is inside, it is, and where it is a
+# permitted one, it is not.
+gn_within(c, g: ref GName, excl: int): int
+{
+	case c.form {
+	GNdns =>
+		return dns_within(c.s, g.s, excl);
+	GNip =>
+		if(len c.b != 2*len g.b)
+			return 0;	# the other family
+		n := len g.b;
+		for(i := 0; i < n; i++)
+			if((g.b[i] & c.b[n+i]) != (c.b[i] & c.b[n+i]))
+				return 0;
+		return 1;
+	GNdir =>
+		return dn_within(c.dn, g.dn, excl);
+	}
+	return -1;
+}
+
+# RFC 5280 4.2.1.10: "Any DNS name that can be constructed by simply
+# adding zero or more labels to the left-hand side of the name
+# satisfies the name constraint."  A constraint that begins with a dot
+# is taken as others take it, for names below it only.  A name whose
+# first label is * stands for every name with one label there (as TLS
+# reads it): it is within a permitted subtree if they all are, and
+# within an excluded one if any of them is.
+dns_within(c, name: string, excl: int): int
+{
+	c = dnscanon(c);
+	name = dnscanon(name);
+	if(len name < 2 || name[0:2] != "*.")
+		return dns_below(c, name);
+	rest := name[2:];
+	if(dns_below(c, rest))
+		return 1;
+	if(c != nil && c[0] == '.')
+		c = c[1:];
+	if(!excl)
+		return c == rest;
+	return dns_below(rest, c);
+}
+
+dns_below(c, name: string): int
+{
+	if(c == nil)
+		return 1;
+	if(c[0] == '.')
+		return len name > len c && name[len name - len c:] == c;
+	if(name == c)
+		return 1;
+	return len name > len c + 1 && name[len name - len c - 1:] == "." + c;
+}
+
+# lower case (names in certificates are ASCII) and no final dot
+dnscanon(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++) {
+		ch := s[i];
+		if(ch >= 'A' && ch <= 'Z')
+			ch += 'a' - 'A';
+		r[len r] = ch;
+	}
+	if(len r > 1 && r[len r - 1] == '.')
+		r = r[0:len r - 1];
+	return r;
+}
+
+# a commonName that a TLS client could take for a host's name
+hostlike(s: string): int
+{
+	if(s == nil)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		ch := s[i];
+		if(!(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9'
+		   || ch == '-' || ch == '.' || ch == '*' || ch == '_'))
+			return 0;
+	}
+	return 1;
+}
+
+# A directoryName is within a subtree when the subtree's name is the
+# beginning of it, RDN for RDN (RFC 5280 7.1).
+dn_within(c, name: list of list of ref Av, excl: int): int
+{
+	for(; c != nil; c = tl c) {
+		if(name == nil)
+			return 0;
+		if(!rdn_equal(hd c, hd name, excl))
+			return 0;
+		name = tl name;
+	}
+	return 1;
+}
+
+rdn_equal(a, b: list of ref Av, excl: int): int
+{
+	if(len a != len b)
+		return 0;
+	for(; a != nil; a = tl a) {
+		found := 0;
+		for(l := b; l != nil && !found; l = tl l)
+			if(oid_cmp((hd a).oid, (hd l).oid) && av_equal(hd a, hd l, excl))
+				found = 1;
+		if(!found)
+			return 0;
+	}
+	return 1;
+}
+
+# Two attribute values, by RFC 5280 7.1's rules as far as they can be
+# kept here: letters' case and the amount of white space do not count.
+# That is the whole of the rule for ASCII.  Beyond ASCII the rule
+# (RFC 4518) wants Unicode's tables, and a string type whose bytes are
+# not UTF-8 (TeletexString, BMPString, UniversalString) is not decoded
+# by asn1 at all: such values are equal for an excluded subtree and
+# unequal for a permitted one unless they are the same text of the
+# same kind, so that what cannot be compared is never a way through.
+av_equal(a, b: ref Av, excl: int): int
+{
+	pa := av_plain(a);
+	pb := av_plain(b);
+	if(pa == 2 && pb == 2)
+		return av_canon(a.s) == av_canon(b.s);
+	if(excl)
+		return 1;
+	return pa && pb && av_canon(a.s) == av_canon(b.s);
+}
+
+# 2: ASCII in a type whose bytes are its text; 1: text beyond ASCII in
+# such a type; 0: not comparable
+av_plain(a: ref Av): int
+{
+	case a.kind {
+	ASN1->UTF8String or ASN1->PrintableString or ASN1->IA5String
+	or ASN1->NumericString or ASN1->VisibleString =>
+		;
+	* =>
+		return 0;
+	}
+	r := 2;
+	for(i := 0; i < len a.s; i++) {
+		ch := a.s[i];
+		if(ch < 16r20 || ch == 16r7f || ch == 16rfffd)
+			return 0;
+		if(ch > 16r7f)
+			r = 1;
+	}
+	return r;
+}
+
+av_canon(s: string): string
+{
+	r := "";
+	sp := 0;
+	for(i := 0; i < len s; i++) {
+		ch := s[i];
+		if(ch == ' ') {
+			sp = 1;
+			continue;
+		}
+		if(sp && r != nil)
+			r[len r] = ' ';
+		sp = 0;
+		if(ch >= 'A' && ch <= 'Z')
+			ch += 'a' - 'A';
+		r[len r] = ch;
+	}
+	return r;
+}
+
+gn_form(form: int): string
+{
+	case form {
+	GNother =>	return "otherName";
+	GNrfc822 =>	return "rfc822Name";
+	GNdns =>	return "dNSName";
+	GNx400 =>	return "x400Address";
+	GNdir =>	return "directoryName";
+	GNedi =>	return "ediPartyName";
+	GNuri =>	return "uniformResourceIdentifier";
+	GNip =>		return "iPAddress";
+	GNrid =>	return "registeredID";
+	}
+	return "unknown";
+}
+
+# a name for an error message: it is a certificate's, and may hold anything
+printable(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s && i < 128; i++) {
+		ch := s[i];
+		if(ch < 16r20 || ch == 16r7f || ch == 16rfffd)
+			ch = '?';
+		r[len r] = ch;
+	}
+	return r;
+}
+
+gn_text(g: ref GName): string
+{
+	case g.form {
+	GNrfc822 or GNdns or GNuri =>
+		return gn_form(g.form) + " " + printable(g.s);
+	GNip =>
+		s := "";
+		for(i := 0; i < len g.b; i++) {
+			if(i > 0)
+				s += ".";
+			s += string int g.b[i];
+		}
+		return "iPAddress " + s;
+	GNdir =>
+		s := "";
+		for(r := g.dn; r != nil; r = tl r)
+			for(a := hd r; a != nil; a = tl a)
+				s += "/" + (hd a).oid.tostring() + "=" + printable((hd a).s);
+		return "directoryName " + s;
+	}
+	return "a name of form " + gn_form(g.form);
 }
 
 # Verify that child was signed by the key in issuer. Fails closed.
@@ -2480,11 +3399,21 @@ is_validpair(): int
 
 CRL.decode(a: array of byte): (string, ref CRL)
 {
+	{
+		return crldecode(a);
+	} exception e {
+	"*" =>
+		return ("CRL: internal error: " + e, nil);
+	}
+}
+
+crldecode(a: array of byte): (string, ref CRL)
+{
 parse:
 	# break on error
 	for(;;) {
 		(err, all) := asn1->decode(a);
-		if(err != "")
+		if(err != "" || all == nil)
 			break parse;
 		c := ref CRL;
 		# CRL must be a ASN1 sequence
@@ -2550,8 +3479,14 @@ parse:
 			# read as its issuer meant (a delta CRL, a partial scope)
 			for(x := c.exts; x != nil; x = tl x)
 				if((hd x).critical && !oideq((hd x).oid, OID_CRLNUMBER) && !oideq((hd x).oid, OID_AUTHKEYID))
-					break parse;
+					return ("CRL: unrecognized critical extension " + (hd x).oid.tostring(), nil);
 		}
+		# the same of an entry's (RFC 5280 5.3): certificateIssuer,
+		# critical, says the entry is another issuer's certificate
+		for(rc := c.revoked_certs; rc != nil; rc = tl rc)
+			for(x := (hd rc).exts; x != nil; x = tl x)
+				if((hd x).critical)
+					return ("CRL: unrecognized critical entry extension " + (hd x).oid.tostring(), nil);
 		# must be no more left
 		if(el != nil)
 			break parse;
@@ -2860,6 +3795,18 @@ parse_exts(exts: list of ref Extension): (string, list of ref ExtClass)
 
 ExtClass.decode(ext: ref Extension): (string, ref ExtClass)
 {
+	# an extension's bytes are a certificate's: an error, never an
+	# exception (TLS reads a server's subjectAltName through this)
+	{
+		return extdecode(ext);
+	} exception e {
+	"*" =>
+		return ("extension: internal error: " + e, nil);
+	}
+}
+
+extdecode(ext: ref Extension): (string, ref ExtClass)
+{
 	err: string;
 	eclass: ref ExtClass;
 
@@ -2873,7 +3820,7 @@ ExtClass.decode(ext: ref Extension): (string, ref ExtClass)
 		}
 	id_ce_subjectKeyIdentifier =>
 		(err, eclass) = decode_subjectKeyIdentifier(ext);
-		if(err != "" && ext.critical != 0) {
+		if(err == "" && ext.critical != 0) {
 			err = "subject key identifier: should be non-critical";
 			break;
 		}
@@ -3187,30 +4134,49 @@ parse:
 		if(!ok)
 			break parse;
 		ak := ref ExtClass.AuthorityKeyIdentifier;
-		e := hd el;
-		(ok, e) = is_context(e, 0);
-		if(ok) {
-			(ok, ak.id) = e.is_octetstring();
-			if(!ok)
+		# AuthorityKeyIdentifier ::= SEQUENCE {
+		#	keyIdentifier             [0] IMPLICIT OCTET STRING OPTIONAL,
+		#	authorityCertIssuer       [1] IMPLICIT GeneralNames OPTIONAL,
+		#	authorityCertSerialNumber [2] IMPLICIT INTEGER OPTIONAL }
+		# each optional, and as a rule the key identifier alone (which
+		# was "syntax error"; an empty SEQUENCE was "dereference of
+		# nil").  The tags are implicit: the bytes are the values.
+		if(el != nil && (hd el).tag.class == Context && (hd el).tag.num == 0) {
+			pick v := (hd el).val {
+			Octets =>
+				ak.id = v.bytes;
+			* =>
 				break parse;
+			}
 			el = tl el;
 		}
-		if(el != nil && len el != 2)
+		if(el != nil && (hd el).tag.class == Context && (hd el).tag.num == 1) {
+			pick v := (hd el).val {
+			Octets =>
+				(derr, gel) := asn1->decode_seq(v.bytes);
+				if(derr != "" || gel == nil)
+					break parse;
+				(ok, ak.issuer) = parse_gname(hd gel);
+				if(!ok)
+					break parse;
+			* =>
+				break parse;
+			}
+			el = tl el;
+		}
+		if(el != nil && (hd el).tag.class == Context && (hd el).tag.num == 2) {
+			pick v := (hd el).val {
+			Octets =>
+				if(len v.bytes == 0)
+					break parse;
+				ak.serial_number = IPint.bebytestoip(v.bytes);
+			* =>
+				break parse;
+			}
+			el = tl el;
+		}
+		if(el != nil)
 			break parse;
-		e = hd el;
-		(ok, e) = is_context(e, 1);
-		if(!ok)
-			break parse;
-		(ok, ak.issuer) = parse_gname(e);
-		if(!ok)
-			break parse;
-		e = hd tl el;
-		(ok, e) = is_context(e, 2);
-		if(!ok)
-			break parse;
-		(ok, ak.serial_number) = parse_sernum(e);
-		if(!ok)
-			break;
 		return ("", ak);
 	}
 	return ("syntax error", nil);	
@@ -3299,18 +4265,15 @@ parse:
 			break parse;
 		ca := 0;
 		depth := -1;
-		if(el != nil && (hd el).tag.num == BOOLEAN) {
-			pick v := (hd el).val {
-			Bool or Int =>
-				ca = v.v;
-			* =>
+		if(el != nil && (hd el).tag.class == Universal && (hd el).tag.num == BOOLEAN) {
+			(ok, ca) = derbool(hd el);
+			if(!ok)
 				break parse;
-			}
 			el = tl el;
 		}
 		if(el != nil) {
 			(ok, depth) = (hd el).is_int();
-			if(!ok || depth < 0)
+			if(!ok || depth < 0 || (hd el).tag.num != INTEGER)
 				break parse;
 		}
 		if(ca == 0)
@@ -3337,10 +4300,12 @@ decode_keyUsage(ext: ref Extension): (string, ref ExtClass)
 {
 parse:
 	for(;;) {
-		# assert bits can fit into a limbo int
-		if(len ext.value > 4)
+		# the BIT STRING's bits as KeyUsage_* (it gave the extension's
+		# DER, tag and length and all, as a number)
+		(ok, usage) := parse_keyusage(ext.value);
+		if(!ok)
 			break parse;
-		return ("", ref ExtClass.KeyUsage(b4int(ext.value)));
+		return ("", ref ExtClass.KeyUsage(usage));
 	}
 	return ("key usage: syntax error", nil);
 }
@@ -3349,7 +4314,18 @@ parse:
 
 encode_keyUsage(c: ref ExtClass.KeyUsage): (string, array of byte)
 {
-	return ("", int4b(c.usage));
+	bits := array[2] of {* => byte 0};
+	top := -1;
+	for(i := 0; i < 9; i++)
+		if(c.usage & (1 << i)) {
+			bits[i/8] |= byte (16r80 >> (i%8));
+			top = i;
+		}
+	if(top < 0)
+		return ("key usage: no bits", nil);
+	n := top/8 + 1;
+	e := ref Elem(Tag(Universal, BIT_STRING, 0), ref Value.BitString(7 - top%8, bits[0:n]));
+	return asn1->encode(e);
 }
 
 # [private]
@@ -3978,13 +4954,18 @@ parse:
 		(err, all) := asn1->decode(ext.value);
 		if(err != "")
 			break parse;
-		(ok, un_used_bits, code) := all.is_bitstring();
-		if(!ok)
+		# CRLReason ::= ENUMERATED (RFC 5280 5.3.1), Reason_*; it was
+		# read as a BIT STRING, which no reason code is
+		if(all == nil || all.tag.class != Universal || all.tag.num != ASN1->ENUMERATED)
 			break parse;
-		# no harm to ignore unused bits
-		if(len code > 4)
+		code := -1;
+		pick v := all.val {
+		Int =>
+			code = v.v;
+		}
+		if(code < 0 || code > 10 || code == 7)
 			break parse;
-		return ("", ref ExtClass.ReasonCode(b4int(code))); 
+		return ("", ref ExtClass.ReasonCode(code)); 
 	}
 	return ("crl reason: syntax error", nil);
 }
@@ -3993,10 +4974,7 @@ parse:
 
 encode_reasonCode(c: ref ExtClass.ReasonCode): (string, array of byte)
 {
-	e := ref Elem(
-			Tag(Universal, BIT_STRING, 0), 
-			ref Value.BitString(0, int4b(c.code))
-		);
+	e := ref Elem(Tag(Universal, ASN1->ENUMERATED, 0), ref Value.Int(c.code));
 	return asn1->encode(e);
 }
 
@@ -4042,7 +5020,7 @@ parse:
 			break parse;
 		return ("", ref ExtClass.InvalidityDate(t));
 	}
-	return ("", nil);
+	return ("invalidity date: syntax error", nil);
 }
 
 # [private]
@@ -4671,16 +5649,28 @@ parse:
 	for(;;) {
 		g: ref GeneralName;
 		ok := 1;
+		if(e == nil || e.tag.class != ASN1->Context)
+			break parse;
 		case e.tag.num {
 		0 =>
-			(ok, e) = is_context(e, 0);
-			if(!ok)
+			# otherName [0] IMPLICIT SEQUENCE { type-id OBJECT
+			# IDENTIFIER, value [0] EXPLICIT ANY }: kept as its
+			# type's OID.  (It was read as a string, which it never
+			# is: a certificate with a UPN beside its DNS names had
+			# no subjectAltName that could be read.)
+			pick ev := e.val {
+			Octets =>
+				(derr, ol) := asn1->decode_seq(ev.bytes);
+				if(derr != "" || len ol != 2)
+					break parse;
+				oid: ref Oid;
+				(ok, oid) = (hd ol).is_oid();
+				if(!ok)
+					break parse;
+				g = ref GeneralName.otherName(oid.tostring());
+			* =>
 				break parse;
-			str: string;
-			(ok, str) = e.is_string();
-			if(!ok)
-				break parse;
-			g = ref GeneralName.otherName(str);
+			}
 		1 =>
 			# rfc822Name [1] IMPLICIT IA5String — raw bytes are the string content
 			if(e.tag.class != ASN1->Context || e.tag.num != 1)

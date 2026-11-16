@@ -73,6 +73,8 @@ X509: module {
 
 	## Certificate Path
 
+	# Each returns (1, "") for a chain that verifies and (0, why) for one
+	# that does not; none raises an exception, whatever the bytes.
 	verify_certchain: fn(cs: list of array of byte): (int, string);
 	verify_certpath: fn(cp: list of (ref Signed, ref Certificate)): (int, string);
 	# The same against roots given, not /lib/certs: a client's chain
@@ -276,15 +278,19 @@ X509: module {
 		tostring: fn(et: self ref ExtClass): string;
 	};
 
-	# key usage
+	# key usage: ExtClass.KeyUsage.usage is the or of these, one bit for
+	# each of RFC 5280 4.2.1.3's, digitalSignature (bit 0) the lowest.
+	# (They were iota << 1: 0, 2, 4, 6, ... which are not bits.)
 	KeyUsage_DigitalSignature, KeyUsage_NonRepudiation, KeyUsage_KeyEncipherment,
 	KeyUsage_DataEncipherment, KeyUsage_KeyAgreement, KeyUsage_KeyCertSign, 
-	KeyUsage_CRLSign, KeyUsage_EncipherOnly, KeyUsage_DecipherOnly : con iota << 1;
+	KeyUsage_CRLSign, KeyUsage_EncipherOnly, KeyUsage_DecipherOnly : con 1 << iota;
 
-	# CRL reason
+	# CRL reason: ExtClass.ReasonCode.code is one of these, CRLReason's
+	# values (RFC 5280 5.3.1; 7 is not used)
 	Reason_Unspecified, Reason_KeyCompromise, Reason_CACompromise, 
 	Reason_AffiliationChanged, Reason_Superseded, Reason_CessationOfOperation, 
-	Reason_CertificateHold, Reason_RemoveFromCRL : con iota << 1;
+	Reason_CertificateHold : con iota;
+	Reason_RemoveFromCRL : con 8;
 
 	# General Name
 	GeneralName: adt {

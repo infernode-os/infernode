@@ -15,7 +15,8 @@
 #      version refused to werror.html and not shown; the same edit sent
 #      twice taken once; what anyone may write kept out of the markup
 #      (a link's URL, a javascript: link, a title, </textarea>); numbers
-#      that are no page not found (five of them stopped the wiki); timings.
+#      that are no page not found (five of them stopped the wiki), titles
+#      that can name no page and one too long refused; timings.
 #
 # Prints PASS:/FAIL: lines; exits with the number failed.
 #
@@ -170,6 +171,16 @@ for path in ("/wiki/262144", "/wiki/65536/index.html", "/wiki/999999999999999999
     check(st == 404 and b != p0, "%s is not found, and not page 0 (%d)" % (path, st))
 st, hd, b = req("GET", "/wiki/0/index.html")
 check(st == 200 and b == p0 and len(p0) > 100, "page 0 by its number still is (%d)" % st)
+
+# Titles that can name no page, and one that is too long, are refused
+# with the reason: "Map", " new" and "42" made pages that a walk took
+# for wikifs's own files or a page's number, and a title had no limit
+# (the map of titles has one, past which the wiki no longer started).
+for title, why in (("Map", "reserved"), (" new", "reserved"), ("42", "digits"), ("   ", ""), ("t" * 300, "title too long")):
+    form = urllib.parse.urlencode({"title": title, "version": "0", "author": "host", "text": "x\n"})
+    st, hd, b = req("POST", "/magic/wikipost", form, {"Content-Type": "application/x-www-form-urlencoded"})
+    check(st in (400, 422) and why.encode() in b, "a page titled %r refused, saying why (%d %r)" % (title[:12], st, b[:60]))
+check(req("GET", "/wiki/1/index.html")[0] == 200, "and the wiki answers")
 
 for f in ("", "create.html", "1/", "wiki_syntax/"):
     st, hd, b = req("GET", "/wiki/" + f)

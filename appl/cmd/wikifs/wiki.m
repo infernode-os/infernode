@@ -24,8 +24,9 @@ Wiki: module {
 	};
 
 	Tcache : con 5;
-	Maxmap: con 10*1024*1024;
+	Maxmap: con 10*1024*1024;	# bytes of d/map
 	Maxfile: con 100*1024;
+	Maxtitle: con 128;		# characters of a page's title
 	Maxpages: con 65536;	# pages: what a qid's 16 bits can number
 	Wpara, Wheading, Wbullet, Wlink, Wman, Wplain, Wpre, Nwtxt: con iota;
 	Tpage, Tedit, Tdiff, Thistory, Tnew, Toldpage, Twerror, Ntemplate: con iota;
@@ -46,6 +47,7 @@ Wiki: module {
 		t: int;
 		buf: string;
 		qid: Sys->Qid;
+		byn: array of ref Mapel;	# by page number
 	};
 
 	wikidir: string;

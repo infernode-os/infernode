@@ -241,6 +241,15 @@ kept in the page's history, and redirected to the page's
 as Plan 9's
 .B wikipost
 does.
+.I Wikifs
+has its limits: a title of at most 128 characters, a page of at most a
+megabyte, 65536 pages, and 10 megabytes of titles in all (its map).
+A title past that, one that can name no page (blank, digits alone,
+.B map
+or
+.BR new ),
+and a new page when the wiki is full are refused (422), the answer
+saying which.
 Either is refused (403) when the request comes from another site: an
 .B Origin
 that is not this server's, or a

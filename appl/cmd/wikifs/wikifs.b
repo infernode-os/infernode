@@ -71,6 +71,7 @@ Derror, Droot, D1st, D2nd, Fnew, Fmap, F1st, F2nd: con iota;
 
 Maxreqidle: con 3;
 Maxreplyidle: con 3;
+Maxnew: con 1024*1024;	# bytes of a page written to new
 
 Aux: adt {
 	path:		big;
@@ -241,7 +242,10 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 		Write =>
 			case qidtype(path) {
 			Fnew =>
-				if(len m.data != 0){
+				if(len fid.data + len m.data > Maxnew){
+					fid.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, sys->sprint("page too long: at most %d bytes", Maxnew)));
+				}else if(len m.data != 0){
 					n := len fid.data;
 					fid.data = (array[len fid.data + len m.data] of byte)[0:] = fid.data;
 					p := fid.data[n:];
@@ -250,8 +254,11 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 				}else if(len fid.data != 0) {
 					(n, err) := newfile(string fid.data);
 					if(n < 0){
+						# why: a title that names no page, a full wiki
 						fid.data = nil;
-						srv.reply(ref Rmsg.Error(m.tag, "newfile failed"));
+						if(err == nil)
+							err = "newfile failed";
+						srv.reply(ref Rmsg.Error(m.tag, err));
 					}else{
 						# as Plan 9's: a write refused (an update
 						# conflict) still names the page, so the
@@ -305,6 +312,7 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 }
 
 # a page written to new: its number, and why its write was refused
+# (-1: it names no page, or none could be made, and why)
 newfile(file: string): (int, string)
 {
 	w: ref Whist;
@@ -313,7 +321,7 @@ newfile(file: string): (int, string)
 
 	fd := bufio->sopen(file);
 	if((title = fd.gets('\n')) == nil)
-		return (-1, nil);
+		return (-1, "no title");
 	w = ref Whist;
 	w.title = title[0:len title-1];
 	author = "me";
@@ -333,11 +341,11 @@ newfile(file: string): (int, string)
 	
 	w.doc[0].wtxt = wiki->Brdpage(fd, wiki->Srdwline);
 	if(w.doc[0].wtxt == nil)
-		return (-1, nil);
+		return (-1, "a page with no text");
 	w.ndoc = 1;
 	n = wiki->allocnum(w.title, 0);
 	if(n < 0)
-		return (-1, nil);
+		return (-1, sys->sprint("%r"));
 	s = wiki->doctext(w.doc[0]);
 	if(wiki->writepage(n, t, s, w.title) < 0)
 		return (n, sys->sprint("%r"));
@@ -384,6 +392,8 @@ loadpath(path: big): array of byte
 	else
 		t = Toldpage;
 	n := qidvers(path);
+	if(n >= wh.ndoc)
+		return nil;	# a history that has lost versions since the walk
 	case qidfile(path) {
 	Qindexhtml =>
 		s = wiki->tohtml(wh, wh.doc[n], t);
@@ -415,107 +425,127 @@ qid(path: big): Sys->Qid
 navigator(navops: chan of ref Navop)
 {
 	while((m := <-navops) != nil){
-		wiki->currentmap(0);
-		path := big 0;
-		pick n := m {
-		Stat =>
-			# stats from here return 0 length 
-			# (used by styxservers' attach, canopen, cancreate, walk)
-			# but for stat from client the above stat, not this one, is used.
-			n.reply <-= dirgen(n.path);
-		Walk =>
-			name := n.name;
-			case qidtype(m.path) {
-			Droot =>
-				case name {
-				".." =>
-					path = m.path;
-				"new" =>
-					path = mkqid(Fnew, 0, 0, 0);
-				"map" =>
-					path = mkqid(Fmap, 0, 0, 0);
-				* =>
-					# A number is a page's if there is that page: any
-					# integer walked (to an empty page, each taking a
-					# place in the cache), and one past 65535 to
-					# another page's files.
-					num := pagenum(name);
-					if(num == -1)
-						num = wiki->nametonum(name);
-					if(num >= 0 && wiki->numtoname(num) != nil && wiki->getcurrent(num) != nil)
-						path = mkqid(D1st, num, 0, 0);
-				}
-			D1st =>
-				case name{
-				".." =>
-					path = mkqid(Droot, 0, 0, 0);
-				* =>
-					(num, q) := str->toint(name, 10);
-					if(q == nil){
-						wh := wiki->gethistory(qidnum(m.path));
-						if(wh == nil)
-							break;
-						for(i:=0;i<wh.ndoc;i++)
-							if(wh.doc[i].time==num){
-								path = mkqid(D2nd, qidnum(m.path), i, 0);
-								break;
-							}
-					}else{
-						for(i:=0;i<len filelist; i++)
-							if(name == filelist[i]){
-								path = mkqid(F1st, qidnum(m.path), 0, i);
-								break;
-							}
-					}
-				}
-			D2nd =>
-				case name {
-				".." =>
-					path = mkqid(D1st, qidnum(m.path), 0, 0);
-				* =>
-					for(i:=0;i<=Qraw;i++){
-						if(name==filelist[i]){
-							path = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
+		# whatever goes wrong with one request is that request's error:
+		# every walk and stat waits for this process
+		{
+			navop(m);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "wikifs: %s\n", e);
+			m.reply <-= (nil, "wikifs: " + e);
+		}
+	}
+}
+
+navop(m: ref Navop)
+{
+	wiki->currentmap(0);
+	path := big 0;
+	pick n := m {
+	Stat =>
+		# stats from here return 0 length 
+		# (used by styxservers' attach, canopen, cancreate, walk)
+		# but for stat from client the above stat, not this one, is used.
+		n.reply <-= dirgen(n.path);
+	Walk =>
+		name := n.name;
+		case qidtype(m.path) {
+		Droot =>
+			case name {
+			".." =>
+				path = m.path;
+			"new" =>
+				path = mkqid(Fnew, 0, 0, 0);
+			"map" =>
+				path = mkqid(Fmap, 0, 0, 0);
+			* =>
+				# A number is a page's if there is that page: any
+				# integer walked (to an empty page, each taking a
+				# place in the cache), and one past 65535 to
+				# another page's files.
+				num := pagenum(name);
+				if(num == -1)
+					num = wiki->nametonum(name);
+				if(num >= 0 && wiki->numtoname(num) != nil && wiki->getcurrent(num) != nil)
+					path = mkqid(D1st, num, 0, 0);
+			}
+		D1st =>
+			case name{
+			".." =>
+				path = mkqid(Droot, 0, 0, 0);
+			* =>
+				(num, q) := str->toint(name, 10);
+				if(q == nil){
+					wh := wiki->gethistory(qidnum(m.path));
+					if(wh == nil)
+						break;
+					for(i:=0;i<wh.ndoc && i < 16r10000;i++)
+						if(wh.doc[i].time==num){
+							path = mkqid(D2nd, qidnum(m.path), i, 0);
 							break;
 						}
+				}else{
+					for(i:=0;i<len filelist; i++)
+						if(name == filelist[i]){
+							path = mkqid(F1st, qidnum(m.path), 0, i);
+							break;
+						}
+				}
+			}
+		D2nd =>
+			case name {
+			".." =>
+				path = mkqid(D1st, qidnum(m.path), 0, 0);
+			* =>
+				for(i:=0;i<=Qraw;i++){
+					if(name==filelist[i]){
+						path = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
+						break;
 					}
 				}
 			}
-			n.reply <-= dirgen(path);
-		Readdir =>
-			d: array of big;
-			wh: ref Whist;
-			case qidtype(m.path){
-			Droot =>
-				map := wiki->map;
-				d = array[2+map.nel] of big;
-				d[0] = mkqid(Fnew, 0, 0, 0);
-				d[1] = mkqid(Fmap, 0, 0, 0);
-				for(i:=0;i<map.nel;i++)
-					d[i+2] = mkqid(D1st, map.el[i].n, 0, 0);
-			D1st =>
-				nfiles := Nfile;
-				wh = wiki->gethistory(qidnum(m.path));
-				if(wh != nil)
-					nfiles += wh.ndoc;
-				d = array[nfiles] of big;
-				for(i:=0; i<Nfile; i++)
-					d[i] = mkqid(F1st, qidnum(m.path), 0, i);
-				for(; i<nfiles; i++)
-					d[i] = mkqid(D2nd, qidnum(m.path), i - Nfile, 0);
-			D2nd =>
-				d = array[Qraw+1] of big;
-				for(i:=0; i<=Qraw; i++)
-					d[i] = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
-			}
-			if(d == nil){
-				n.reply <-= (nil, Enotdir);
-				break;
-			}
-			for (i := n.offset; i < len d; i++)
-				n.reply <-= dirgen(d[i]);
-			n.reply <-= (nil, nil);
 		}
+		n.reply <-= dirgen(path);
+	Readdir =>
+		d: array of big;
+		wh: ref Whist;
+		case qidtype(m.path){
+		Droot =>
+			map := wiki->map;
+			if(map == nil)
+				map = ref Map;
+			d = array[2+map.nel] of big;
+			d[0] = mkqid(Fnew, 0, 0, 0);
+			d[1] = mkqid(Fmap, 0, 0, 0);
+			for(i:=0;i<map.nel;i++)
+				d[i+2] = mkqid(D1st, map.el[i].n, 0, 0);
+		D1st =>
+			nfiles := Nfile;
+			wh = wiki->gethistory(qidnum(m.path));
+			if(wh != nil)
+				nfiles += wh.ndoc;
+			if(nfiles > Nfile + 16r10000)
+				nfiles = Nfile + 16r10000;	# the versions a qid can number
+			d = array[nfiles] of big;
+			for(i:=0; i<Nfile; i++)
+				d[i] = mkqid(F1st, qidnum(m.path), 0, i);
+			for(; i<nfiles; i++)
+				d[i] = mkqid(D2nd, qidnum(m.path), i - Nfile, 0);
+		D2nd =>
+			d = array[Qraw+1] of big;
+			for(i:=0; i<=Qraw; i++)
+				d[i] = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
+		}
+		if(d == nil){
+			n.reply <-= (nil, Enotdir);
+			break;
+		}
+		for (i := n.offset; i < len d; i++){
+			(dir, nil) := dirgen(d[i]);
+			if(dir != nil)	# (a nil one ends the listing)
+				n.reply <-= (dir, nil);
+		}
+		n.reply <-= (nil, nil);
 	}
 }
 
@@ -541,7 +571,7 @@ dirgen(path: big): (ref Sys->Dir, string)
 		wh = wiki->getcurrent(qidnum(path));
 	D2nd =>
 		wh = wiki->gethistory(qidnum(path));
-		if(wh == nil)
+		if(wh == nil || vers >= wh.ndoc)
 			return (nil, Enotfound);
 		d.name = sys->sprint("%ud", wh.doc[vers].time);
 		d.mode = 8r555|Sys->DMDIR;
@@ -566,7 +596,9 @@ dirgen(path: big): (ref Sys->Dir, string)
 		d.qid.qtype = Sys->QTDIR;
 	d.uid = user;
 	d.gid = user;
-	if(wh != nil)
+	# (a file of a title and nothing else was a history of no versions,
+	# indexed here: the navigator ended, and the wiki with it)
+	if(wh != nil && vers < wh.ndoc)
 		d.mtime = d.atime = wh.doc[vers].time;
 	else
 		d.mtime = d.atime = daytime->now();

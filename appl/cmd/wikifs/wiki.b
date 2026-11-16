@@ -85,6 +85,10 @@ Wcache: adt {
 
 tab := array[Nhash] of list of ref Wcache;
 
+# Counted at each write (voidcache): a file read while it was being
+# written may have been read in part, and is read again
+wgen := 0;
+
 findcache(n: int): ref Wcache
 {
 	for(wl :=tab[n%Nhash]; wl != nil; wl= tl wl){
@@ -97,20 +101,28 @@ findcache(n: int): ref Wcache
 	return nil;
 }
 
+# What the store holds is what is shown: a file that can no longer be
+# read as a page is no page (it stayed the last one read), and is not
+# read again until it changes.
 current(w: ref Wcache)
 {
 	lock := sys->sprint("d/L.%d", w.n);
 	file := sys->sprint("d/%d", w.n);
-	if(w != nil && w.tcurrent + Tcache >= now())
+	if(w.tcurrent + Tcache >= now())
 		return;
 	if(((d := wdirstat(file)) == nil) || (d.qid.path == w.qid.path && d.qid.vers == w.qid.vers)){
 		w.tcurrent = now();
 		return;
 	}
-	if((wh := readwhist(file, lock, w.qid)) != nil){
+	g := wgen;
+	wh := readwhist(file, lock, w.qid);
+	if(wh != nil)
 		wh.n = w.n;
-		w.tcurrent = now();
-		w.current = wh;
+	w.current = wh;
+	w.tcurrent = now();
+	if(g != wgen){
+		w.tcurrent = 0;
+		w.qid = ref Qid(big -1, 0, 0);
 	}
 }
 
@@ -118,22 +130,28 @@ currenthist(w: ref Wcache)
 {
 	lock := sys->sprint("d/L.%d", w.n);
 	file := sys->sprint("d/%d.hist", w.n);
-	if(w != nil && w.thist + Tcache >= now())
+	if(w.thist + Tcache >= now())
 		return;
 	if(((d := wdirstat(file)) == nil) || (d.qid.path == w.qidhist.path && d.qid.vers == w.qidhist.vers)){
 		w.thist = now();
 		return;
 	}
-	if((wh := readwhist(file, lock, w.qidhist)) != nil){
+	g := wgen;
+	wh := readwhist(file, lock, w.qidhist);
+	if(wh != nil)
 		wh.n = w.n;
-		w.thist = now();
-		w.hist = wh;
+	w.hist = wh;
+	w.thist = now();
+	if(g != wgen){
+		w.thist = 0;
+		w.qidhist = ref Qid(big -1, 0, 0);
 	}
 }
 
 voidcache(n: int)
 {
-	if((c := findcache(n)) != nil){
+	wgen++;
+	if(n >= 0 && (c := findcache(n)) != nil){
 		c.tcurrent = 0;
 		c.thist = 0;
 		# and forget the files' qids: a host file's version is its
@@ -246,17 +264,17 @@ readwhist(file: string, lock: string, qid: ref Qid): ref Whist
 
 	if((lfd = getlock(lock)) == nil)
 		return nil;
-
-	if(qid != nil){
-		if((d = wdirstat(file)) == nil){
-			return nil;
-		}
-		*qid =  d.qid;
-	}
-
+	if((d = wdirstat(file)) == nil)
+		return nil;
 	if((b = wBopen(file, Sys->OREAD)) == nil)
 		return nil;
 	wh = Brdwhist(b);
+	# a page or not, it is the file as it is now: one that is no page
+	# is said to be once, and read again when it changes
+	if(qid != nil)
+		*qid =  d.qid;
+	if(wh == nil)
+		sys->fprint(sys->fildes(2), "wikifs: %s: no version of a page in it, left out\n", wname(file));
 	lfd = nil;
 	return wh;
 }
@@ -316,25 +334,32 @@ Brdwhist(b: ref Iobuf): ref Whist
 			};
 		}else {
 			b.ungetc();
-			if(n%8 == 0)
-				w = (array[n+8] of ref Wdoc)[0:] = w;
+			if(n == len w)
+				w = (array[2*n+8] of ref Wdoc)[0:] = w;
 			w[n] = ref Wdoc;
 			w[n].time = t;
 			w[n].author = author;
 			w[n].comment = comment;
 			w[n].wtxt = Brdpage(b, Brdwline);
 			w[n].conflict = conflict;
+			# a version with no text (a file cut short) is left out:
+			# it raised, in whoever was reading the page
 			if(w[n].wtxt == nil)
-				raise "Error";
-			if(!conflict)
-				current = n;	
-			n++;
+				w[n] = nil;
+			else{
+				if(!conflict)
+					current = n;
+				n++;
+			}
 			comment = nil;
 			author = nil;
 			conflict = 0;
 			t = -1;
 		}
 	}
+	# a title and nothing else is no page: its callers index doc
+	if(n == 0)
+		return nil;
 	h = ref Whist;
 	h.title = title;
 	h.doc = w;
@@ -361,7 +386,7 @@ Brdpage(b: ref Iobuf, rdwline: ref fn(b: ref Iobuf, sep: int): string): list of 
 {
 	p: string;
 	pw: list of ref Wpage;
-	waspara: int;
+	waspara := 0;
 
 	while((p = rdwline(b, '\n')) != nil){
 		if(p[0] != '!')
@@ -490,17 +515,24 @@ ismanchar(c: int): int
 
 # map
 
-# this should be a proc that reads from a channel to force a refresh.
-# maybe it's not even neccessary. last to complete wins.
-# the map can't be corrupted.
+# The map is d/map, a line a page: its number, a blank, its title.
+# What is read of it never raises and is never nil: a line that is no
+# entry is left out and said, a file past Maxmap is not read (the map
+# before it stays; at the start that is no pages), so a store that has
+# been damaged or filled answers "not found" where it stopped the
+# wiki.  (With no map read, nametonum and numtoname went through nil,
+# in the one process that every walk waits for.)
 currentmap(force: int)
 {
 	lfd: ref Sys->FD;
 	d: ref Sys->Dir;
-	fd: ref Iobuf;
 
 	if(!force && map != nil && map.t+Tcache >= now())
 		return;
+	if(map == nil){
+		map = ref Map;
+		map.qid = Qid(big -1, 0, 0);
+	}
 
 	if((lfd = getlock("d/L.map")) == nil)
 		return;
@@ -509,32 +541,112 @@ currentmap(force: int)
 	# A forced load (after allocnum adds a page) must not trust the qid:
 	# a host file system can leave vers unchanged by a write within the
 	# same second, which hid the new page from listings.
-	if(!force && map != nil && d.qid.path == map.qid.path && d.qid.vers == map.qid.vers){
+	if(!force && d.qid.path == map.qid.path && d.qid.vers == map.qid.vers){
 		map.t = now();
 		return;
 	}
 
-	if(d.length > big Maxmap)
+	if(d.length > big Maxmap){
+		if(d.qid.path != map.qid.path || d.qid.vers != map.qid.vers)
+			sys->fprint(sys->fildes(2), "wikifs: %s is %bd bytes, more than the %d a map may be: not read\n",
+				wname("d/map"), d.length, Maxmap);
+		map.qid = d.qid;
+		map.t = now();
 		return;
-	if((fd = wBopen("d/map", Sys->OREAD)) == nil)
+	}
+	(text, ok) := readmap(int d.length);
+	if(ok < 0)
 		return;
 
 	nmap := ref Map;
 	m := 0;
-	while((s := fd.gets('\n')) != nil) {
-		(n, rest) := str->toint(s, 10);
-		el := ref Mapel(strcondense(rest), n);
-		if(m%8 == 0)
-			nmap.el = (array[m + 8] of ref Mapel)[0:] = nmap.el;
-		nmap.el[m] = el;
-		m++;
+	bad := 0;
+	top := -1;
+	e := 0;
+	for(b := 0; b < len text; b = e) {
+		e = lineend(text, b);
+		s := text[b:e];
+		(n, title) := mapline(s);
+		if(n < 0){
+			if(n == -1 && bad++ < 3)
+				sys->fprint(sys->fildes(2), "wikifs: %s: \"%s\" is no entry, left out\n", wname("d/map"), printable(s, 40));
+			continue;
+		}
+		if(m == len nmap.el)
+			nmap.el = (array[2*m + 8] of ref Mapel)[0:] = nmap.el;
+		nmap.el[m++] = ref Mapel(title, n);
+		if(n > top)
+			top = n;
 	}
+	if(bad > 3)
+		sys->fprint(sys->fildes(2), "wikifs: %s: and %d more\n", wname("d/map"), bad - 3);
+	nmap.byn = array[top + 1] of ref Mapel;
+	for(i := 0; i < m; i++)
+		nmap.byn[nmap.el[i].n] = nmap.el[i];
 	mergesort(nmap.el[:m], array[m] of ref Mapel, m);
 	nmap.qid = d.qid;
 	nmap.t = now();
 	nmap.nel = m;
 	map = nmap;
 	lfd = nil;
+}
+
+# The map file whole, n bytes of it (no more than Maxmap: its callers
+# have looked), as text
+readmap(n: int): (string, int)
+{
+	fd := wopen("d/map", Sys->OREAD);
+	if(fd == nil)
+		return (nil, -1);
+	buf := array[n] of byte;
+	for(i := 0; i < n; ){
+		k := sys->read(fd, buf[i:], n - i);
+		if(k <= 0)
+			break;
+		i += k;
+	}
+	return (string buf[0:i], 0);
+}
+
+# where the line of s that starts at i ends: past its newline
+lineend(s: string, i: int): int
+{
+	for(; i < len s; i++)
+		if(s[i] == '\n')
+			return i+1;
+	return i;
+}
+
+# A line of the map: (number, title); (-1, nil) if it is not one,
+# (-2, nil) if it is empty
+mapline(s: string): (int, string)
+{
+	if(s == "\n" || s == "")
+		return (-2, nil);
+	n := 0;
+	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++){
+		n = n*10 + s[i] - '0';
+		if(n >= Maxpages)
+			return (-1, nil);
+	}
+	if(i == 0 || i >= len s || s[i] != ' ')
+		return (-1, nil);
+	title := strcondense(s[i:]);
+	if(title == nil)
+		return (-1, nil);
+	return (n, title);
+}
+
+# what a file held, fit to print: no control characters, no more than max
+printable(s: string, max: int): string
+{
+	t := "";
+	for(i := 0; i < len s && i < max; i++)
+		if(s[i] < ' ' || s[i] == 16r7f)
+			t[len t] = ' ';
+		else
+			t[len t] = s[i];
+	return t;
 }
 
 mergesort(a, b: array of ref Mapel, r: int)
@@ -570,8 +682,10 @@ nametonum(s: string): int
 			s[i] = ' ';
 	currentmap(0);
 	p = map;
+	if(p == nil)
+		return -1;
 	lo = 0;
-	hi = map.nel;
+	hi = p.nel;
 	while(hi-lo >1){
 		m = (lo+hi)/2;
 		if(s < p.el[m].s)
@@ -591,26 +705,67 @@ numtoname(n: int): string
 	p: ref Map;
 	currentmap(0);
 	p = map;
-	for(i:=0; i<p.nel;i++){
-		if(p.el[i].n == n)
-			break;
-	}
-	if(i == p.nel)
+	if(p == nil || n < 0 || n >= len p.byn || p.byn[n] == nil)
 		return nil;
-	return p.el[i].s;
+	return p.byn[n].s;
 }
 
-allocnum(title: string, mustbenew:int): int
+# A title as the map keeps it and a walk looks it up: lower case, its
+# blanks single, a _ a blank (a page is named in a URL with _ for a
+# blank).  nil, with the error string set, for one that can name no
+# page: it was looked at before it was put in this form, so "Map",
+# " new" and "42" made pages that a walk took for wikifs's own files
+# or for a page's number, and a title of blanks a page named "".
+goodtitle(title: string): string
 {
-	if(title == "map" || title == "new"){
+	for(i := 0; i < len title; i++){
+		c := title[i];
+		if(c == '_')
+			title[i] = ' ';
+		else if(c < ' ' && c != '\t' || c == 16r7f){
+			werrstr("a control character in the title");
+			return nil;
+		}
+	}
+	title = str->tolower(strcondense(title));
+	if(title == nil){
+		werrstr("no title");
+		return nil;
+	}
+	if(len title > Maxtitle){
+		werrstr(sys->sprint("title too long: at most %d characters", Maxtitle));
+		return nil;
+	}
+	if(title == "map" || title == "new" || title == "." || title == ".."){
 		werrstr("reserved title name");
-		return -1;
+		return nil;
 	}
 	(nil, b) := str->splitl(title, "/<>:");
 	if(len b != 0){
 		werrstr("invalid character in name");
-		return -1;
+		return nil;
 	}
+	for(i = 0; i < len title; i++)
+		if(title[i] < '0' || title[i] > '9')
+			break;
+	if(i == len title){
+		werrstr("a title of digits alone is a page's number");
+		return nil;
+	}
+	return title;
+}
+
+# The number of the page titled title, added to the map if it is new.
+# A title is at most Maxtitle characters, the map at most Maxmap bytes
+# and Maxpages pages: past either the wiki is full and says so (nothing
+# was bounded: a title could be a whole request, a few hundred of them
+# took the map past Maxmap, where it was no longer read while lines
+# went on being added to it, twice for a title, and after the next
+# start there was no map at all).
+allocnum(title: string, mustbenew:int): int
+{
+	if((title = goodtitle(title)) == nil)
+		return -1;
 	if((n := nametonum(title)) >=0){
 		if(mustbenew){
 			werrstr("duplicate title");
@@ -619,33 +774,62 @@ allocnum(title: string, mustbenew:int): int
 		return n;
 	}
 
-	title = strcondense(title);
-	title = str->tolower(title);
-
 	if((lfd := getlock("d/L.map")) == nil)
 		return -1;
-	if((fd := wBopen("d/map", Sys->ORDWR)) == nil){
-		lfd = nil;
+	d := wdirstat("d/map");
+	if(d == nil){
+		werrstr(sys->sprint("cannot open %s: %r", wname("d/map")));
 		return -1;
 	}
+	# full already: said before the file is read for the title
+	if(d.length + big (len title + 3) > big Maxmap){
+		werrstr("the wiki is full: no page can be added");
+		return -1;
+	}
+	(text, ok) := readmap(int d.length);
+	if(ok < 0){
+		werrstr(sys->sprint("cannot open %s: %r", wname("d/map")));
+		return -1;
+	}
+	# the file itself, for a title another server of the store has added
 	n = 0;
-	rest: string;
-	while((s := fd.gets('\n')) != nil){
-		(n, rest) = str->toint(s, 10);
-		n++;
-		if(rest[1:] == title){
+	last := "\n";
+	size := d.length;
+	e := 0;
+	for(o := 0; o < len text; o = e){
+		e = lineend(text, o);
+		s := text[o:e];
+		last = s;
+		(en, et) := mapline(s);
+		if(en < 0)
+			continue;
+		if(et == title){
+			lfd = nil;
+			currentmap(1);
 			if(mustbenew){
 				werrstr("duplicate title");
 				return -1;
 			}
-			else
-				return n;
+			return en;
 		}
+		if(en >= n)
+			n = en + 1;
 	}
-	fd.seek(big 0, Sys->SEEKEND);
-	buf := sys->sprint("%d %s\n", n, title);
-	fd.write(array of byte buf, len array of byte buf);
-	fd.close();
+	line := sys->sprint("%d %s\n", n, title);
+	# a line a failed write cut short is ended, not joined to this one
+	if(last[len last - 1] != '\n')
+		line = "\n" + line;
+	b := array of byte line;
+	if(n >= Maxpages || size + big len b > big Maxmap){
+		werrstr("the wiki is full: no page can be added");
+		return -1;
+	}
+	afd := wopen("d/map", Sys->OWRITE);
+	if(afd == nil || sys->seek(afd, big 0, Sys->SEEKEND) < big 0 || sys->write(afd, b, len b) != len b){
+		werrstr(sys->sprint("cannot add to %s: %r", wname("d/map")));
+		return -1;
+	}
+	afd = nil;
 	lfd = nil;
 	currentmap(1);
 	return n;
@@ -698,6 +882,62 @@ histlast(hist: string): int
 	}
 }
 
+# does the file end in a newline (or hold nothing)?
+endsline(fd: ref Sys->FD): int
+{
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0 || d.length == big 0)
+		return 1;
+	buf := array[1] of byte;
+	return sys->pread(fd, buf, 1, d.length - big 1) != 1 || buf[0] == byte '\n';
+}
+
+# A file replaced whole: written beside it and renamed over it, so that
+# a reader has the old file or the new and never a part, and a write
+# that fails leaves the old.
+replacefile(file: string, b: array of byte): int
+{
+	# a page made read-only is not to be written, by a rename either
+	if(wdirstat(file) != nil && wopen(file, Sys->OWRITE) == nil)
+		return -1;
+	new := file + ".new";
+	fd := wcreate(new, Sys->OWRITE, 8r666);
+	if(fd == nil)
+		return -1;
+	if(sys->write(fd, b, len b) != len b){
+		e := sys->sprint("%r");
+		fd = nil;
+		sys->remove(wname(new));
+		werrstr(e);
+		return -1;
+	}
+	fd = nil;
+	(nil, base) := str->splitr(file, "/");
+	nd := sys->nulldir;
+	nd.name = base;
+	if(sys->wstat(wname(new), nd) >= 0)
+		return 0;
+	# a file server that will not rename over a file: the old one
+	# goes first, with the new one already whole beside it
+	sys->remove(wname(file));
+	if(sys->wstat(wname(new), nd) >= 0)
+		return 0;
+	sys->remove(wname(new));
+	if((fd = wcreate(file, Sys->OWRITE, 8r666)) == nil)
+		return -1;
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return 0;
+}
+
+# A version of page num written: s is its doctext, t the version it was
+# made from.  Its caller is the one process of wikifs that writes pages
+# (the lock is a file made for exclusive use, which the emulator's host
+# file system does not have: two edits of one version at once were both
+# told they were the page).  Each write is checked, and the page is
+# replaced whole or not at all: it was truncated and then written in
+# two writes whose results nobody looked at, so a full disk, or a
+# reader between them, had a page of a title and nothing else.
 writepage(num: int, t: int, s: string, title: string): int
 {
 	err: string;
@@ -731,6 +971,7 @@ writepage(num: int, t: int, s: string, title: string): int
 				conflict = 1;
 			}
 		}
+		b.close();
 	}else{
 		if(t != 0){
 			lfd = nil;
@@ -741,19 +982,26 @@ writepage(num: int, t: int, s: string, title: string): int
 
 	# later than every version in the history, a conflicting one too
 	s = laterthan(s, histlast(hist));
-	if((fd := wopen(hist, Sys->OWRITE)) == nil){
-		if((fd = wcreate(hist, Sys->OWRITE, 8r666)) == nil){
+	rec := s + "\n";
+	if(conflict)
+		rec = "X\n" + rec;
+	if((fd := wopen(hist, Sys->ORDWR)) == nil){
+		if((fd = wcreate(hist, Sys->ORDWR, 8r666)) == nil){
 			lfd = nil;
 			return -1;
-		}else
-			sys->fprint(fd, "%s\n", title);
-	}
-	if(sys->seek(fd, big 0, 2) < big 0
-	|| (conflict && fprint(fd, "X\n") != 2)
-	|| fprint(fd, "%s\n", s) < 0){
+		}
+		rec = title + "\n" + rec;
+	}else if(!endsline(fd))
+		rec = "\n" + rec;	# after a record a failed write cut short
+	hb := array of byte rec;
+	if(sys->seek(fd, big 0, Sys->SEEKEND) < big 0 || sys->write(fd, hb, len hb) != len hb){
+		e := sys->sprint("cannot write the page's history: %r");
 		lfd = nil;
+		voidcache(num);
+		werrstr(e);
 		return -1;
 	}
+	fd = nil;
 
 	if(conflict){
 		lfd = nil;
@@ -762,13 +1010,13 @@ writepage(num: int, t: int, s: string, title: string): int
 		return -1;
 	}
 
-	if((fd = wcreate(tmp, Sys->OWRITE, 8r666)) == nil){
+	if(replacefile(tmp, array of byte (title + "\n" + s + "\n")) < 0){
+		e := sys->sprint("cannot write the page: %r");
 		lfd = nil;
 		voidcache(num);
+		werrstr(e);
 		return -1;
 	}
-	fprint(fd, "%s\n", title);
-	fprint(fd, "%s\n", s);
 	lfd = nil;
 	voidcache(num);
 	return 0;
@@ -1160,6 +1408,8 @@ gettemplate(typ: int): string
 	d := wdirstat(name[typ]);
 	if(d == nil && c != nil)
 		return c.s;
+	if(d == nil)
+		return nil;
 	if(c != nil && d.qid.vers == c.qid.vers && d.qid.path == c.qid.path){
 		nt := ref Template(c.s, now(), d.qid);
 		cache[typ] = nt;

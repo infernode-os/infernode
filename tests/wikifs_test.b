@@ -12,6 +12,14 @@ implement WikifsTest;
 # waits for.  A number past 65535 ran into the qid's type: /262144 was
 # page 0's index.html.
 #
+# Nothing bounded a title or the map: past its limit the map was no
+# longer read while lines went on being added to it, and at the next
+# start there was none (nil, in the same process).  A title was checked
+# before it was put in the map's form, so "Map", " new" and "42" made
+# pages no walk could reach.  A page was written by truncating it and
+# then two writes nobody checked; one holding its title alone was a
+# history of no versions, indexed by whoever looked at it.
+#
 #
 
 include "sys.m";
@@ -248,6 +256,185 @@ testEviction(t: ref T)
 	rmrf(dir);
 }
 
+# ---- titles and the map
+
+testTitles(t: ref T)
+{
+	dir := hoststore(t);
+	w := wikion(t, dir);
+	long := "";
+	for(i := 0; i < Wiki->Maxtitle + 1; i++)
+		long[i] = 'a' + i%26;
+	bad := array[] of {"Map", " new", "NEW", "map_", "42", " 0 ", "   ", "", "___", ".", "..", "a/b", "a\u0001b", long};
+	for(i = 0; i < len bad; i++){
+		n := w->allocnum(bad[i], 0);
+		t.assert(n < 0, sys->sprint("title %q refused (%d)", clip(bad[i]), n));
+	}
+	t.assertseq(getfile(dir + "/d/map"), "", "and nothing was added to the map");
+
+	n := w->allocnum("  A   Good_Title ", 0);
+	t.assert(n >= 0, sys->sprint("a good title taken: %r"));
+	t.assertseq(getfile(dir + "/d/map"), sys->sprint("%d a good title\n", n), "in the map in the form a walk looks up");
+	t.asserteq(w->nametonum("A_Good_Title"), n, "found by its name");
+	t.assertseq(w->numtoname(n), "a good title", "and by its number");
+	t.asserteq(w->allocnum("a good title", 0), n, "the same title again is the same page");
+	t.asserteq(w->allocnum("A_good  TITLE", 0), n, "in any spelling");
+	t.assert(w->allocnum("a good title", 1) < 0, "and refused where it must be new");
+	t.assert(w->allocnum(long[0:Wiki->Maxtitle], 0) >= 0, "a title of Maxtitle characters taken");
+	rmrf(dir);
+}
+
+testMapFull(t: ref T)
+{
+	# the last number a qid can carry is taken: no page more
+	dir := hoststore(t);
+	putfile(dir + "/d/map", sys->sprint("0 first\n%d last\n", Wiki->Maxpages - 1));
+	w := wikion(t, dir);
+	t.asserteq(w->nametonum("last"), Wiki->Maxpages - 1, "the last page a qid can number is in the map");
+	before := getfile(dir + "/d/map");
+	t.assert(w->allocnum("one more", 0) < 0, "a page past it refused");
+	t.assert(contains(sys->sprint("%r"), "full"), sys->sprint("saying the wiki is full: %r"));
+	t.assertseq(getfile(dir + "/d/map"), before, "the map unchanged");
+	rmrf(dir);
+
+	# a map twenty bytes short of its size: nothing longer is added to it
+	dir = hoststore(t);
+	line := "7 ";
+	for(i := 0; i < 100000; i++)
+		line[len line] = 'x';
+	line += "\n";
+	lb := array of byte line;
+	fd := sys->create(dir + "/d/map", Sys->OWRITE, 8r666);
+	for(n := 0; n + 2*len lb <= Wiki->Maxmap; n += len lb)
+		sys->write(fd, lb, len lb);
+	room := Wiki->Maxmap - n - 20;
+	pad := array[room] of { * => byte 'y' };
+	pad[0] = byte '9';
+	pad[1] = byte ' ';
+	pad[room - 1] = byte '\n';
+	sys->write(fd, pad, room);
+	fd = nil;
+	w = wikion(t, dir);
+	(nil, d0) := sys->stat(dir + "/d/map");
+	t.assert(int d0.length == Wiki->Maxmap - 20, "a map 20 bytes short of Maxmap");
+	t.assert(w->allocnum("a title that would take the map past its size", 0) < 0, "a title that would take the map past Maxmap refused");
+	t.assert(contains(sys->sprint("%r"), "full"), sys->sprint("saying the wiki is full: %r"));
+	(nil, d1) := sys->stat(dir + "/d/map");
+	t.assert(d1.length == d0.length, "the map unchanged");
+	t.assert(w->allocnum("short", 0) >= 0, sys->sprint("one that fits taken: %r"));
+
+	# a map past its size (made by hand, or by wikifs before it had a
+	# limit): not read, and nothing that asks of it raises
+	fd = sys->open(dir + "/d/map", Sys->OWRITE);
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	sys->write(fd, lb, len lb);
+	fd = nil;
+	w = wikion(t, dir);
+	t.asserteq(w->nametonum("short"), -1, "a map past Maxmap is not read: no page by name");
+	t.assertnil(w->numtoname(7), "none by number");
+	(nil, d2) := sys->stat(dir + "/d/map");
+	t.assert(w->allocnum("after the cap", 0) < 0, "and no page is added");
+	t.assert(w->allocnum("after the cap", 0) < 0, "nor at a second try");
+	(nil, d3) := sys->stat(dir + "/d/map");
+	t.assert(d2.length == d3.length, "the map does not grow");
+	rmrf(dir);
+}
+
+testDamagedStore(t: ref T)
+{
+	# no map at all
+	dir := hoststore(t);
+	sys->remove(dir + "/d/map");
+	w := wikion(t, dir);
+	t.asserteq(w->nametonum("anything"), -1, "no map: no page by name");
+	t.assertnil(w->numtoname(0), "none by number");
+	t.assert(w->allocnum("a page", 0) < 0, "and none made");
+	rmrf(dir);
+
+	# a map with lines that are no entries
+	dir = hoststore(t);
+	addpage(dir, 3, "good page", "good");
+	fd := sys->open(dir + "/d/map", Sys->OWRITE);
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	sys->fprint(fd, "garbage\n\n-4 minus\n99999999999 huge\n12\n12 \n5 another page\n8 cut sho");
+	fd = nil;
+	addpage(dir, 5, "another page", "another");
+	w = wikion(t, dir);
+	t.asserteq(w->nametonum("good page"), 3, "a damaged map: its good entries read");
+	t.asserteq(w->nametonum("another page"), 5, "after the bad ones too");
+	t.asserteq(w->nametonum("garbage"), -1, "a line with no number is no page");
+	t.asserteq(w->nametonum("minus"), -1, "nor one with a negative number");
+	t.asserteq(w->nametonum("huge"), -1, "nor a number no qid holds");
+	n := w->allocnum("added after", 0);
+	t.assert(n > 8, sys->sprint("a page added to it has a number of its own (%d)", n));
+	w = wikion(t, dir);
+	t.asserteq(w->nametonum("added after"), n, "and is read back: the line cut short before it was ended");
+
+	# a page that holds its title alone, and one that is not a page
+	putfile(dir + "/d/3", "good page\n");
+	putfile(dir + "/d/5", "");
+	w = wikion(t, dir);
+	t.assert(w->getcurrent(3) == nil, "a page file of a title and nothing else is no page");
+	t.assert(w->getcurrent(5) == nil, "nor an empty one");
+
+	# a history whose last version was cut short
+	putfile(dir + "/d/3.hist", "good page\nD1000\nAtest\n#one\nD1001\nAtest\n#");
+	wh := w->gethistory(3);
+	t.assert(wh != nil && wh.ndoc == 1, "a history cut short in its last version: the versions before it");
+	putfile(dir + "/d/3.hist", "good page\nD1000\nAtest\n");
+	w = wikion(t, dir);
+	t.assert(w->gethistory(3) == nil, "a history of no versions is none");
+	rmrf(dir);
+}
+
+# A write that fails says so and leaves the page: on memfs with room
+# for the history's record and not for the page.
+testWriteChecked(t: ref T)
+{
+	memfs := load Command "/dis/memfs.dis";
+	if(memfs == nil)
+		t.skip("no memfs");
+	memfs->init(nil, "memfs" :: "-m" :: "131072" :: "/n" :: nil);
+	dir := "/n/store";
+	mkstore(t, dir);
+	w := wikion(t, dir);
+	n := w->allocnum("small page", 0);
+	t.assert(n >= 0, sys->sprint("a page made on memfs: %r"));
+	t.asserteq(w->writepage(n, 0, "D1000\nAtest\n#the old text\n#", "small page"), 0, "its first version written");
+	wh := w->getcurrent(n);
+	t.assert(wh != nil && contains(words(wh.doc[0].wtxt), "the old text"), "and read");
+
+	# all the room but what a reserve file holds: 12K
+	block := array[512] of { * => byte 'r' };
+	rfd := sys->create("/n/reserve", Sys->OWRITE, 8r666);
+	for(i := 0; i < 24; i++)
+		sys->write(rfd, block, len block);
+	rfd = nil;
+	ffd := sys->create("/n/filler", Sys->OWRITE, 8r666);
+	while(sys->write(ffd, block, len block) == len block)
+		;
+	ffd = nil;
+	sys->remove("/n/reserve");
+
+	text := "";
+	for(i = 0; i < 100; i++)
+		text += "#the new text, line " + string i + " of a version of about ten thousand bytes in all, too long to fit\n";
+	r := w->writepage(n, 1000, "D2000\nAtest\n" + text + "#", "small page");
+	t.assert(r < 0, sys->sprint("a version there is no room for is refused (%d)", r));
+	raw := getfile(dir + "/d/" + string n);
+	t.assert(contains(raw, "the old text") && !contains(raw, "the new text"), "and the page's file is the old version, whole: " + clip(raw));
+	w = wikion(t, dir);
+	wh = w->getcurrent(n);
+	t.assert(wh != nil && contains(words(wh.doc[0].wtxt), "the old text"), "which is still the page");
+
+	sys->remove("/n/filler");
+	r = w->writepage(n, 1000, "D2000\nAtest\n" + text + "#", "small page");
+	t.asserteq(r, 0, "with room again it is written");
+	w = wikion(t, dir);
+	wh = w->getcurrent(n);
+	t.assert(wh != nil && contains(words(wh.doc[0].wtxt), "the new text, line 99"), "and is the page");
+}
+
 # ---- through a mount
 
 # wikifs on dir, mounted on /n/wiki of the caller's name space
@@ -318,6 +505,14 @@ testWalkNumbers(t: ref T)
 	s := getfile("/n/0/index.html");
 	t.assert(contains(s, "front"), "and serves page 0");
 
+	# a page the map names and no file holds (its write never came)
+	putfile(dir + "/d/map", getfile(dir + "/d/map") + "9 never written\n");
+	sys->sleep(100);
+	fd := sys->open("/n/map", Sys->ORDWR);
+	t.assert(fd != nil, "the map file opens");
+	unmountwiki();
+	mountwiki(t, dir);
+	t.assert(!exists("/n/never_written/index.html") && !exists("/n/9"), "a title in the map with no page file is not found");
 	unmountwiki();
 	rmrf(dir);
 }
@@ -358,6 +553,34 @@ version(name: string): int
 	return -1;
 }
 
+testPostRefusals(t: ref T)
+{
+	dir := hoststore(t);
+	addpage(dir, 0, "front page", "the front page");
+	mountwiki(t, dir);
+	(name, err) := post("A new page", 0, "itstext\n");
+	t.assertseq(name, "a_new_page", "a page posted: its name");
+	t.assertnil(err, "taken");
+	t.assert(contains(getfile("/n/a_new_page/index.html"), "itstext"), "and served");
+	long := "";
+	for(i := 0; i < 300; i++)
+		long[i] = 'l';
+	(name, err) = post(long, 0, "x\n");
+	t.assert(name == nil && contains(err, "title too long"), "a title of 300 characters refused, saying so: " + err);
+	(name, err) = post("Map", 0, "x\n");
+	t.assert(name == nil && contains(err, "reserved"), "the title Map refused: " + err);
+	(name, err) = post("42", 0, "x\n");
+	t.assert(name == nil && contains(err, "digits"), "a title of digits refused: " + err);
+	(name, err) = post("   ", 0, "x\n");
+	t.assert(name == nil && err != nil, "a title of blanks refused: " + err);
+	(name, err) = post("no text", 0, "");
+	t.assert(name == nil && err != nil, "a page with no text refused: " + err);
+	t.assertseq(getfile(dir + "/d/map"), "0 front page\n1 a new page\n", "the map has the one page added");
+
+	unmountwiki();
+	rmrf(dir);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -380,6 +603,11 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Eviction", testEviction);
 	run("WalkNumbers", testWalkNumbers);
+	run("Titles", testTitles);
+	run("MapFull", testMapFull);
+	run("DamagedStore", testDamagedStore);
+	run("WriteChecked", testWriteChecked);
+	run("PostRefusals", testPostRefusals);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

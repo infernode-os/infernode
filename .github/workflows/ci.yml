@@ -817,6 +817,7 @@ jobs:
               mail9p_hostile_test pop3_tls_test webget_https_test legacy_ssl_gone_test
               cs_cancel_test registry_test secstore_cmd_test logon_unlock_test sntp_test
               vid9p_ctl_test wpa_log_test
+              acvp_pq_test sha3_test sign_nonce_test tls_keyupdate_test auth_services_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test

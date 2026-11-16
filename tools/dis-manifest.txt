@@ -62,7 +62,6 @@ dis/auditget.dis
 dis/auditverify.dis
 dis/auplay.dis
 dis/auth/aescbc.dis
-dis/auth/ai2key.dis
 dis/auth/changelogin.dis
 dis/auth/convpasswd.dis
 dis/auth/countersigner.dis
@@ -79,7 +78,6 @@ dis/auth/passwd.dis
 dis/auth/proto/btlink.dis
 dis/auth/proto/btltk.dis
 dis/auth/proto/btpin.dis
-dis/auth/proto/infauth.dis
 dis/auth/proto/p9any.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
@@ -1329,3 +1327,15 @@ dis/tests/wikifs_test.dis
 dis/tests/wpadrive.dis
 dis/tests/x509_chain.dis
 dis/tests/x509_total_test.dis
+dis/tests/keyring_letgo_test.dis
+dis/tests/keyring_msg_test.dis
+dis/tests/auth_bind_test.dis
+dis/tests/tls_record_test.dis
+dis/tests/random_fail_test.dis
+dis/tests/cnsa_mode_test.dis
+dis/tests/secstored_test.dis
+dis/tests/wstat_owner_test.dis
+dis/tests/file2chan_gaveup_test.dis
+dis/tests/dial_kernel_test.dis
+dis/tests/udp_empty_test.dis
+dis/tests/prime_kill_test.dis

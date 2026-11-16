@@ -616,16 +616,21 @@ testOverSSL(t: ref T)
 	spawn bytesgetter(cfd, res);
 	b: array of byte;
 	err: string;
+	other := "not heard from";
 	alt {
 	(b, err) = <-res =>
 		;
-	e := <-rc =>
-		t.fatal("the other end: " + e);
+	other = <-rc =>
+		if(other != nil)
+			t.fatal("the other end: " + other);
+		(b, err) = <-res;	# it has sent everything: the reply is on its way
 	}
 	t.assert(b != nil && eq(a, b), sys->sprint("39751 bytes come back whole through ssl's records (%d did: %s)", len b, err));
 	(s, e2) := kr->getstring(cfd);
 	t.assertseq(s, "done", "and the message after it is the next: " + e2);
-	t.assertnil(<-rc, "the other end");
+	if(other != nil)
+		other = <-rc;
+	t.assertnil(other, "the other end");
 }
 
 bytesgetter(fd: ref Sys->FD, res: chan of (array of byte, string))

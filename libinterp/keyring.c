@@ -221,15 +221,18 @@ newthing(Type *t, int add)
 /*
  * What a builtin goes on using while the VM is let go.  Its arguments
  * are the call's (the frame holds them, and no other Prog reaches the
- * frame), but what they refer to is not: a key adt's numbers are fields
- * any Prog with the adt can assign, and an assignment frees the number
- * that was there, under an exponentiation that takes seconds; and the
- * place a result goes to (*f->ret) may be a variable another Prog
- * assigns, which frees a result stored there early and written to after.
- * keep hangs an array on one of the call's own pointer arguments, with
- * the argument's value in its first place and n more for what must
- * last: the frame is a root for the collector while the call runs, and
- * unwinds with it if something raises.  unkeep puts the argument back.
+ * frame), but what they refer to is not: a key adt's numbers, and an
+ * Authinfo's keys, are fields any Prog with the adt can assign, and an
+ * assignment frees what was there, under an exponentiation that takes
+ * milliseconds or a signature that takes seconds; and the place a
+ * result goes to (*f->ret) is the caller's, so a result stored there
+ * early and written to after the VM comes back relies on the caller
+ * (compiled Limbo has results land in its frame; a module made by hand
+ * can name a variable other threads assign).  keep hangs an array on
+ * one of the call's own pointer arguments, with the argument's value in
+ * its first place and n more for what must last: the frame is a root
+ * for the collector while the call runs, and unwinds with it if
+ * something raises.  unkeep puts the argument back.
  * (libinterp/ipint.c's hold is the same device.)
  */
 static void**
@@ -291,6 +294,53 @@ kept(void *v)
 	if(v != H)
 		Setmark(D2H(v));
 	return v;
+}
+
+/*
+ * Something of C's (a key or signature libsec made) that is the
+ * collector's to free: what is made from it afterwards (the adt's
+ * cells, copies of its numbers) can raise for want of heap, and the
+ * raise left it held by nothing.  The cell is made without a raise
+ * (with no room the thing is freed first); nothing refers to it, the VM
+ * is held until it is destroyed, and if a raise goes by, the sweep
+ * frees it and what it holds.
+ */
+typedef struct Cres Cres;
+struct Cres
+{
+	void	*p;
+	void	(*free)(void*);
+};
+static Type*	TCres;
+
+static void
+freeCres(Heap *h, int swept)
+{
+	Cres *c;
+
+	c = H2D(Cres*, h);
+	if(c->p != nil)
+		(*c->free)(c->p);
+	freeheap(h, swept);
+}
+
+static Cres*
+cres(void *p, void (*fr)(void*))
+{
+	Heap *h;
+	Cres *c;
+
+	h = nheapok(sizeof(Cres));
+	if(h == nil){
+		(*fr)(p);
+		error(exHeap);
+	}
+	h->t = TCres;
+	TCres->ref++;
+	c = H2D(Cres*, h);
+	c->p = p;
+	c->free = fr;
+	return c;
 }
 
 static Keyring_IPint*
@@ -533,7 +583,7 @@ Keyring_genSK(void *fp)
 	SK *sk;
 	SigAlg *sa;
 	SigAlgVec *vec;
-	void *v, *key;
+	void *v, *key, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -544,8 +594,10 @@ Keyring_genSK(void *fp)
 	if(sa == nil)
 		return;
 
+	/* the key is the call's until it is whole: see keep */
 	sk = newSK(sa, stringdup(f->owner), 0);
-	*f->ret = (Keyring_SK*)sk;
+	k = keep(&f->owner, 1);
+	k[1] = sk;
 	vec = sk->vec;
 	release();
 	key = (*vec->gensk)(f->length);
@@ -558,9 +610,12 @@ Keyring_genSK(void *fp)
 	 * later use.
 	 */
 	if(key == nil){
-		*f->ret = H;
-		destroy(sk);
+		unkeep(&f->owner);
+		return;
 	}
+	k[1] = H;
+	unkeep(&f->owner);
+	*f->ret = kept(sk);
 }
 
 void
@@ -571,7 +626,7 @@ Keyring_genSKfromPK(void *fp)
 	SigAlgVec *vec;
 	PK *pk;
 	SK *sk;
-	void *v, *key;
+	void *v, *key, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -581,7 +636,8 @@ Keyring_genSKfromPK(void *fp)
 	pk = checkPK(f->pk);
 	sa = checkSigAlg(pk->x.sa);
 	sk = newSK(sa, stringdup(f->owner), 1);
-	*f->ret = (Keyring_SK*)sk;
+	k = keep(&f->pk, 1);
+	k[1] = sk;
 	vec = sk->vec;
 	release();
 	key = (*vec->genskfrompk)(pk->key);
@@ -589,9 +645,12 @@ Keyring_genSKfromPK(void *fp)
 	sk->key = key;
 	/* as genSK: nil for a key that cannot be made, not an SK with none */
 	if(key == nil){
-		*f->ret = H;
-		destroy(sk);
+		unkeep(&f->pk);
+		return;
 	}
+	k[1] = H;
+	unkeep(&f->pk);
+	*f->ret = kept(sk);
 }
 
 /* converts a sequence of newline-separated base64-encoded mpints to attr=hexval ... in f */
@@ -1832,6 +1891,7 @@ Keyring_dhparams(void *fp)
 {
 	F_Keyring_dhparams *f;
 	mpint *p, *alpha;
+	Cres *c;
 	void *v;
 
 	f = fp;
@@ -1851,7 +1911,11 @@ Keyring_dhparams(void *fp)
 	else if(!getdhparams(f->nbits, p, alpha))
 		gensafeprime(p, alpha, f->nbits, 0);
 	acquire();
+	/* newIPint frees its number when it raises, but not the other one */
+	c = cres(p, (void(*)(void*))mpfree);
 	f->ret->t0 = newIPint(alpha);
+	c->p = nil;
+	destroy(c);
 	f->ret->t1 = newIPint(p);
 }
 
@@ -2281,6 +2345,7 @@ Keyring_auth(void *fp)
 	Kembuf *kem;
 	uchar *myek, *mydk, *hisek, *myct, *hisct, *ss_local, *ss_remote;
 	uchar *kss_lo, *kss_hi, *ek_lo, *ek_hi;
+	void **k;
 	int cmp;
 	int cnsa = cnsamode();
 	int pklen = cnsa ? MLKEM1024_PKLEN : MLKEM768_PKLEN;
@@ -2347,14 +2412,33 @@ Keyring_auth(void *fp)
 			argerr = "bad diffie hellman mod";
 	}
 
+	/*
+	 * The keys, the certificate and the two numbers are the
+	 * Authinfo's fields, and the exchange lets the VM go at every
+	 * message and every exponentiation: each is kept for the call
+	 * (see keep), as a thread assigning a field meanwhile freed what
+	 * the exchange was signing with or sending.
+	 */
+	k = keep(&f->info, 6);
+	if(info != H && info->p != H && info->alpha != H){
+		keepref(k, 1, mysk);
+		keepref(k, 2, mypk);
+		keepref(k, 3, cert);
+		keepref(k, 4, spk);
+		keepref(k, 5, info->p);
+		keepref(k, 6, info->alpha);
+	}
+
 	buf = malloc(Maxbuf);
 	if(buf == nil){
+		unkeep(&f->info);
 		retstr(exNomem, &f->ret->t0);
 		return;
 	}
 	kem = malloc(sizeof(Kembuf));
 	if(kem == nil){
 		free(buf);
+		unkeep(&f->info);
 		retstr(exNomem, &f->ret->t0);
 		return;
 	}
@@ -2773,6 +2857,7 @@ out:
 		mpfree(alphar0r1);
 	}
 	mpfree(pm1);
+	unkeep(&f->info);
 }
 
 static Keyring_Authinfo*
@@ -2786,28 +2871,46 @@ Keyring_writeauthinfo(void *fp)
 {
 	F_Keyring_writeauthinfo *f;
 	int n, fd;
-	char *buf;
+	char *buf, *name;
 	PK *spk;
 	SK *mysk;
 	Certificate *c;
 	mpint *p, *alpha;
+	Keyring_Authinfo *info;
+	void **k;
 
 	f = fp;
 	*f->ret = -1;
 
 	if(f->filename == H)
 		error(exNilref);
-	if(f->info == H)
+	info = f->info;
+	if(info == H)
 		error(exNilref);
-	alpha = checkIPint(f->info->alpha);
-	p = checkIPint(f->info->p);
-	spk = checkPK(f->info->spk);
-	mysk = checkSK(f->info->mysk);
-	c = checkCertificate(f->info->cert);
+	alpha = checkIPint(info->alpha);
+	p = checkIPint(info->p);
+	spk = checkPK(info->spk);
+	mysk = checkSK(info->mysk);
+	c = checkCertificate(info->cert);
+	/* the file's name, made while the VM is held: string2c may allocate */
+	name = string2c(f->filename);
+
+	/*
+	 * what is written is the Authinfo's fields, and each write lets
+	 * the VM go: kept for the call, as in auth
+	 */
+	k = keep(&f->info, 5);
+	keepref(k, 1, info->alpha);
+	keepref(k, 2, info->p);
+	keepref(k, 3, spk);
+	keepref(k, 4, mysk);
+	keepref(k, 5, c);
 
 	buf = malloc(Maxbuf);
-	if(buf == nil)
+	if(buf == nil){
+		unkeep(&f->info);
 		return;
+	}
 
 	/*
 	 *  The file may already exist or be a file2chan file so first
@@ -2816,11 +2919,11 @@ Keyring_writeauthinfo(void *fp)
 	 *  file2chan.
 	 */
 	release();
-	fd = kopen(string2c(f->filename), OTRUNC|OWRITE);
+	fd = kopen(name, OTRUNC|OWRITE);
 	if(fd < 0)
-		fd = kcreate(string2c(f->filename), OWRITE, 0600);
+		fd = kcreate(name, OWRITE, 0600);
 	if(fd < 0)
-		fd = kopen(string2c(f->filename), OWRITE);
+		fd = kopen(name, OWRITE);
 	acquire();
 	if(fd < 0)
 		goto out;
@@ -2858,6 +2961,7 @@ out:
 		kclose(fd);
 		acquire();
 	}
+	unkeep(&f->info);
 }
 
 void
@@ -2872,7 +2976,8 @@ Keyring_readauthinfo(void *fp)
 	SigAlg *sa;
 	Keyring_Authinfo *ai;
 	mpint *b;
-	void *r;
+	char *name;
+	void *r, **k;
 
 	f = fp;
 	r = *f->ret;
@@ -2884,18 +2989,24 @@ Keyring_readauthinfo(void *fp)
 	if(f->filename == H)
 		return;
 
+	/*
+	 * the Authinfo is the call's until it is whole (see keep): it
+	 * was stored where the result goes and filled in field by field,
+	 * the VM let go for each read
+	 */
+	name = string2c(f->filename);
 	ai = newAuthinfo();
-	*f->ret = ai;
+	k = keep(&f->filename, 1);
+	k[1] = ai;
 
 	buf = malloc(Maxbuf);
 	if(buf == nil){
-		*f->ret = H;
-		destroy(ai);
+		unkeep(&f->filename);
 		return;
 	}
 
 	release();
-	fd = kopen(string2c(f->filename), OREAD);
+	fd = kopen(name, OREAD);
 	acquire();
 	if(fd < 0)
 		goto out;
@@ -2954,18 +3065,19 @@ Keyring_readauthinfo(void *fp)
 	ai->p = newIPint(b);
 	ok = 1;
 out:
-	if(!ok){
-		r = *f->ret;
-		*f->ret = H;
-		destroy(r);
-	}
 	free(buf);
 	if(fd >= 0){
 		release();
 		kclose(fd);
 		acquire();
-		kwerrstr("%q: %s", string2c(f->filename), MSG);
+		if(!ok)
+			kwerrstr("%q: %s", name, MSG);
 	}
+	if(ok)
+		k[1] = H;
+	unkeep(&f->filename);
+	if(ok)
+		*f->ret = kept(ai);
 }
 
 void
@@ -3033,6 +3145,8 @@ keyringmodinit(void)
 		algs[nalg++] = sav;
 	if((sav = slhdsa256sinit()) != nil)
 		algs[nalg++] = sav;
+
+	TCres = dtype(freeCres, sizeof(Cres), nil, 0);
 
 	fmtinstall('U', big64conv);
 	builtinmod("$Keyring", Keyringmodtab, Keyringmodlen);
@@ -3782,15 +3896,33 @@ keynum(void *ip)
 	return b;
 }
 
+/*
+ * A key adt's number for libsec: the number, with its cell kept in
+ * k[i] until the call is over.  The builtins below let the VM go while
+ * libsec works on the numbers, and they are fields: assigned by
+ * another thread meanwhile, the number that was there was freed under
+ * the computation.  See keep.
+ */
+static mpint*
+keptnum(void **k, int i, void *ip)
+{
+	mpint *b;
+
+	b = keynum(ip);
+	keepref(k, i, ip);
+	return b;
+}
+
+/* the numbers of a DSA public key, kept in k[i..i+3] */
 static void
-dsapk2pub(DSApub* p, Keyring_DSApk* pk)
+dsapk2pub(DSApub* p, Keyring_DSApk* pk, void **k, int i)
 {
 	if(pk == H)
 		error(exNilref);
-	p->p = keynum(pk->p);
-	p->q = keynum(pk->q);
-	p->alpha = keynum(pk->alpha);
-	p->key = keynum(pk->key);
+	p->p = keptnum(k, i, pk->p);
+	p->q = keptnum(k, i+1, pk->q);
+	p->alpha = keptnum(k, i+2, pk->alpha);
+	p->key = keptnum(k, i+3, pk->key);
 	modulusok(p->p);
 	modulusok(p->q);
 }
@@ -3823,14 +3955,15 @@ dsagenok(DSApub *p)
 		error(exBadKey);
 }
 
+/* a DSA secret key's numbers, kept in k[1..5] */
 static void
-dsask2priv(DSApriv* p, Keyring_DSAsk* sk)
+dsask2priv(DSApriv* p, Keyring_DSAsk* sk, void **k)
 {
 	if(sk == H || sk->pk == H)
 		error(exNilref);
-	dsapk2pub(&p->pub, sk->pk);
+	dsapk2pub(&p->pub, sk->pk, k, 1);
 	dsagenok(&p->pub);
-	p->secret = keynum(sk->secret);
+	p->secret = keptnum(k, 5, sk->secret);
 }
 
 static void
@@ -3846,32 +3979,43 @@ dsapriv2sk(Keyring_DSAsk* sk, DSApriv* p)
 	sk->secret = ipcopymp(p->secret);
 }
 
+/*
+ * In each builtin below the result is made once libsec has answered,
+ * of new cells, and then stored: the cell used to be stored where the
+ * result goes before the VM was let go, and written to after.
+ */
 void
 DSAsk_gen(void *fp)
 {
 	F_DSAsk_gen *f;
 	Keyring_DSAsk *sk;
+	Keyring_DSApk *opk;
 	DSApriv *p;
 	DSApub pub, *oldpk;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
-	v = *f->ret;
-	sk = newthing(TDSAsk, 0);
-	sk->pk = newthing(TDSApk, 0);
-	*f->ret = sk;
-	destroy(v);
 	oldpk = nil;
-	if(f->oldpk != H){
-		dsapk2pub(&pub, f->oldpk);
+	opk = f->oldpk;
+	k = keep(&f->oldpk, 4);
+	if(opk != H){
+		dsapk2pub(&pub, opk, k, 1);
 		dsagenok(&pub);
 		oldpk = &pub;
 	}
 	release();
 	p = dsagen(oldpk);
 	acquire();
+	unkeep(&f->oldpk);
+	c = cres(p, (void(*)(void*))dsaprivfree);
+	sk = newthing(TDSAsk, 0);
+	sk->pk = newthing(TDSApk, 0);
 	dsapriv2sk(sk, p);
-	dsaprivfree(p);
+	destroy(c);
+	v = *f->ret;
+	*f->ret = sk;
+	destroy(v);
 }
 
 void
@@ -3879,69 +4023,85 @@ DSAsk_sign(void *fp)
 {
 	F_DSAsk_sign *f;
 	Keyring_DSAsig *sig;
+	Keyring_DSAsk *sk;
 	DSApriv p;
 	mpint *m;
 	DSAsig *s;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
-	sig = newthing(TDSAsig, 0);
-	*f->ret = sig;
+	*f->ret = H;
 	destroy(v);
 
-	dsask2priv(&p, f->k);
+	sk = f->k;
+	k = keep(&f->k, 5);
+	dsask2priv(&p, sk, k);
 	m = keynum(f->m);
 	release();
 	s = dsasign(&p, m);
 	acquire();
+	unkeep(&f->k);
+	c = cres(s, (void(*)(void*))dsasigfree);
+	sig = newthing(TDSAsig, 0);
 	sig->r = ipcopymp(s->r);
 	sig->s = ipcopymp(s->s);
-	dsasigfree(s);
+	destroy(c);
+	*f->ret = sig;
 }
 
 void
 DSApk_verify(void *fp)
 {
 	F_DSApk_verify *f;
+	Keyring_DSApk *pk;
 	DSApub p;
 	DSAsig sig;
 	mpint *m;
+	void **k;
+	int ok;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->m == H || f->sig == H)
 		return;
-	dsapk2pub(&p, f->k);
-	sig.r = keynum(f->sig->r);
-	sig.s = keynum(f->sig->s);
+	pk = f->k;
+	k = keep(&f->k, 6);
+	dsapk2pub(&p, pk, k, 1);
+	sig.r = keptnum(k, 5, f->sig->r);
+	sig.s = keptnum(k, 6, f->sig->s);
 	m = keynum(f->m);
 	release();
-	*f->ret = dsaverify(&p, &sig, m) == 0;
+	ok = dsaverify(&p, &sig, m) == 0;
 	acquire();
+	unkeep(&f->k);
+	*f->ret = ok;
 }
 
+/* the numbers of an ElGamal public key, kept in k[i..i+2] */
 static void
-egpk2pub(EGpub* p, Keyring_EGpk* pk)
+egpk2pub(EGpub* p, Keyring_EGpk* pk, void **k, int i)
 {
 	if(pk == H)
 		error(exNilref);
-	p->p = keynum(pk->p);
-	p->alpha = keynum(pk->alpha);
-	p->key = keynum(pk->key);
+	p->p = keptnum(k, i, pk->p);
+	p->alpha = keptnum(k, i+1, pk->alpha);
+	p->key = keptnum(k, i+2, pk->key);
 	modulusok(p->p);
 }
 
+/* an ElGamal secret key's numbers, kept in k[1..4] */
 static void
-egsk2priv(EGpriv* p, Keyring_EGsk* sk)
+egsk2priv(EGpriv* p, Keyring_EGsk* sk, void **k)
 {
 	if(sk == H || sk->pk == H)
 		error(exNilref);
-	egpk2pub(&p->pub, sk->pk);
+	egpk2pub(&p->pub, sk->pk, k, 1);
 	/* egsign looks for a k from 1 to p-2: see dsagenok */
 	if(mpcmp(p->pub.p, mptwo) <= 0)
 		error(exBadKey);
-	p->secret = keynum(sk->secret);
+	p->secret = keptnum(k, 4, sk->secret);
 }
 
 static void
@@ -3962,15 +4122,11 @@ EGsk_gen(void *fp)
 	F_EGsk_gen *f;
 	Keyring_EGsk *sk;
 	EGpriv *p;
+	Cres *c;
 	void *v;
 
 	f = fp;
-	v = *f->ret;
 	genbits(f->nlen, MinDHbits, Maxgenbits);
-	sk = newthing(TEGsk, 0);
-	sk->pk = newthing(TEGpk, 0);
-	*f->ret = sk;
-	destroy(v);
 	release();
 	for(;;){
 		p = eggen(f->nlen, f->nrep);
@@ -3979,8 +4135,14 @@ EGsk_gen(void *fp)
 		egprivfree(p);
 	}
 	acquire();
+	c = cres(p, (void(*)(void*))egprivfree);
+	sk = newthing(TEGsk, 0);
+	sk->pk = newthing(TEGpk, 0);
 	egpriv2sk(sk, p);
-	egprivfree(p);
+	destroy(c);
+	v = *f->ret;
+	*f->ret = sk;
+	destroy(v);
 }
 
 void
@@ -3988,18 +4150,21 @@ EGsk_sign(void *fp)
 {
 	F_EGsk_sign *f;
 	Keyring_EGsig *sig;
+	Keyring_EGsk *sk;
 	EGpriv p;
 	mpint *m;
 	EGsig *s;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
-	sig = newthing(TEGsig, 0);
-	*f->ret = sig;
+	*f->ret = H;
 	destroy(v);
 
-	egsk2priv(&p, f->k);
+	sk = f->k;
+	k = keep(&f->k, 4);
+	egsk2priv(&p, sk, k);
 	m = keynum(f->m);
 	/*
 	 * a key signatures can be made for without its secret is no key
@@ -4011,63 +4176,75 @@ EGsk_sign(void *fp)
 	if(egpubvalid(&p.pub) == 0)
 		s = egsign(&p, m);
 	acquire();
-	if(s == nil){
-		*f->ret = H;
-		destroy(sig);
+	unkeep(&f->k);
+	if(s == nil)
 		error(exBadKey);
-	}
+	c = cres(s, (void(*)(void*))egsigfree);
+	sig = newthing(TEGsig, 0);
 	sig->r = ipcopymp(s->r);
 	sig->s = ipcopymp(s->s);
-	egsigfree(s);
+	destroy(c);
+	*f->ret = sig;
 }
 
 void
 EGpk_verify(void *fp)
 {
 	F_EGpk_verify *f;
+	Keyring_EGpk *pk;
 	EGpub p;
 	EGsig sig;
 	mpint *m;
+	void **k;
+	int ok;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->m == H || f->sig == H)
 		return;
-	egpk2pub(&p, f->k);
-	sig.r = keynum(f->sig->r);
-	sig.s = keynum(f->sig->s);
+	pk = f->k;
+	k = keep(&f->k, 5);
+	egpk2pub(&p, pk, k, 1);
+	sig.r = keptnum(k, 4, f->sig->r);
+	sig.s = keptnum(k, 5, f->sig->s);
 	m = keynum(f->m);
-	if(sig.s->sign < 0 || m->sign < 0)
+	if(sig.s->sign < 0 || m->sign < 0){
+		unkeep(&f->k);
 		return;	/* exponents, to egverify: no signature */
+	}
 	release();
-	*f->ret = egverify(&p, &sig, m) == 0;
+	ok = egverify(&p, &sig, m) == 0;
 	acquire();
+	unkeep(&f->k);
+	*f->ret = ok;
 }
 
+/* the numbers of an RSA public key, kept in k[i..i+1] */
 static void
-rsapk2pub(RSApub* p, Keyring_RSApk* pk)
+rsapk2pub(RSApub* p, Keyring_RSApk* pk, void **k, int i)
 {
 	if(pk == H)
 		error(exNilref);
 	memset(p, 0, sizeof(*p));
-	p->n = keynum(pk->n);
-	p->ek = keynum(pk->ek);
+	p->n = keptnum(k, i, pk->n);
+	p->ek = keptnum(k, i+1, pk->ek);
 	modulusok(p->n);
 	exponentok(p->ek);
 }
 
+/* an RSA secret key's numbers, kept in k[1..8] */
 static void
-rsask2priv(RSApriv* p, Keyring_RSAsk* sk)
+rsask2priv(RSApriv* p, Keyring_RSAsk* sk, void **k)
 {
 	if(sk == H || sk->pk == H)
 		error(exNilref);
-	rsapk2pub(&p->pub, sk->pk);
-	p->dk = keynum(sk->dk);
-	p->p = keynum(sk->p);
-	p->q = keynum(sk->q);
-	p->kp = keynum(sk->kp);
-	p->kq = keynum(sk->kq);
-	p->c2 = keynum(sk->c2);
+	rsapk2pub(&p->pub, sk->pk, k, 1);
+	p->dk = keptnum(k, 3, sk->dk);
+	p->p = keptnum(k, 4, sk->p);
+	p->q = keptnum(k, 5, sk->q);
+	p->kp = keptnum(k, 6, sk->kp);
+	p->kq = keptnum(k, 7, sk->kq);
+	p->c2 = keptnum(k, 8, sk->c2);
 	modulusok(p->p);
 	modulusok(p->q);
 	exponentok(p->kp);
@@ -4094,20 +4271,24 @@ void
 RSApk_encrypt(void *fp)
 {
 	F_RSApk_encrypt *f;
+	Keyring_RSApk *pk;
 	RSApub p;
 	mpint *m, *o;
-	void *v;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
 	*f->ret = H;
 	destroy(v);
 
-	rsapk2pub(&p, f->k);
+	pk = f->k;
+	k = keep(&f->k, 2);
+	rsapk2pub(&p, pk, k, 1);
 	m = keynum(f->m);
 	release();
 	o = rsaencrypt(&p, m, nil);
 	acquire();
+	unkeep(&f->k);
 	/* nil for an m outside 0..n-1 (RFC 8017 5.1.1) */
 	if(o != nil)
 		*f->ret = newIPint(o);
@@ -4119,16 +4300,12 @@ RSAsk_gen(void *fp)
 	F_RSAsk_gen *f;
 	Keyring_RSAsk *sk;
 	RSApriv *p;
+	Cres *c;
 	void *v;
 
 	f = fp;
-	v = *f->ret;
 	genbits(f->nlen, MinRSAbits, Maxgenbits);
 	genbits(f->elen, 1, f->nlen);
-	sk = newthing(TRSAsk, 0);
-	sk->pk = newthing(TRSApk, 0);
-	*f->ret = sk;
-	destroy(v);
 	release();
 	for(;;){
 		p = rsagen(f->nlen, f->elen, f->nrep);
@@ -4137,8 +4314,14 @@ RSAsk_gen(void *fp)
 		rsaprivfree(p);
 	}
 	acquire();
+	c = cres(p, (void(*)(void*))rsaprivfree);
+	sk = newthing(TRSAsk, 0);
+	sk->pk = newthing(TRSApk, 0);
 	rsapriv2sk(sk, p);
-	rsaprivfree(p);
+	destroy(c);
+	v = *f->ret;
+	*f->ret = sk;
+	destroy(v);
 }
 
 void
@@ -4148,15 +4331,17 @@ RSAsk_fill(void *fp)
 	Keyring_RSAsk *sk;
 	RSApriv *p;
 	mpint *n, *e, *d, *pp, *q;
+	Cres *c;
 	void *v;
 
 	f = fp;
 	v = *f->ret;
-	sk = newthing(TRSAsk, 0);
-	sk->pk = newthing(TRSApk, 0);
-	*f->ret = sk;
+	*f->ret = H;
 	destroy(v);
-	/* (the parts were looked at with the VM let go) */
+	/*
+	 * the numbers are the call's own arguments, which the frame
+	 * holds (the parts were looked at with the VM let go)
+	 */
 	n = keynum(f->n);
 	e = keynum(f->e);
 	d = keynum(f->d);
@@ -4165,33 +4350,38 @@ RSAsk_fill(void *fp)
 	release();
 	p = rsafill(n, e, d, pp, q);
 	acquire();
-	if(p == nil) {
-		*f->ret = H;
-		destroy(sk);
-	}else{
-		rsapriv2sk(sk, p);
-		rsaprivfree(p);
-	}
+	if(p == nil)
+		return;
+	c = cres(p, (void(*)(void*))rsaprivfree);
+	sk = newthing(TRSAsk, 0);
+	sk->pk = newthing(TRSApk, 0);
+	rsapriv2sk(sk, p);
+	destroy(c);
+	*f->ret = sk;
 }
 
 void
 RSAsk_decrypt(void *fp)
 {
 	F_RSAsk_decrypt *f;
+	Keyring_RSAsk *sk;
 	RSApriv p;
 	mpint *m, *o;
-	void *v;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
 	*f->ret = H;
 	destroy(v);
 
-	rsask2priv(&p, f->k);
+	sk = f->k;
+	k = keep(&f->k, 8);
+	rsask2priv(&p, sk, k);
 	m = keynum(f->m);
 	release();
 	o = rsadecrypt(&p, m, nil);
 	acquire();
+	unkeep(&f->k);
 	/* nil for an m outside 0..n-1, or a key whose parts do not agree */
 	if(o != nil)
 		*f->ret = newIPint(o);
@@ -4202,50 +4392,63 @@ RSAsk_sign(void *fp)
 {
 	F_RSAsk_sign *f;
 	Keyring_RSAsig *sig;
+	Keyring_RSAsk *sk;
 	RSApriv p;
 	mpint *m, *s;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
-	sig = newthing(TRSAsig, 0);
-	*f->ret = sig;
+	*f->ret = H;
 	destroy(v);
 
-	rsask2priv(&p, f->k);
+	sk = f->k;
+	k = keep(&f->k, 8);
+	rsask2priv(&p, sk, k);
 	m = keynum(f->m);
 	release();
 	s = rsadecrypt(&p, m, nil);
 	acquire();
+	unkeep(&f->k);
 	/* see RSAsk_decrypt: no signature */
-	if(s == nil){
-		*f->ret = H;
-		destroy(sig);
+	if(s == nil)
 		return;
-	}
+	c = cres(s, (void(*)(void*))mpfree);
+	sig = newthing(TRSAsig, 0);
+	c->p = nil;	/* newIPint frees the number if it raises */
+	destroy(c);
 	sig->n = newIPint(s);
+	*f->ret = sig;
 }
 
 void
 RSApk_verify(void *fp)
 {
 	F_RSApk_verify *f;
+	Keyring_RSApk *pk;
 	RSApub p;
 	mpint *sig, *m, *t;
+	void **k;
+	int ok;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->m == H || f->sig == H)
 		return;
-	rsapk2pub(&p, f->k);
-	sig = keynum(f->sig->n);
+	pk = f->k;
+	k = keep(&f->k, 3);
+	rsapk2pub(&p, pk, k, 1);
+	sig = keptnum(k, 3, f->sig->n);
 	m = keynum(f->m);
 	release();
 	t = rsaencrypt(&p, sig, nil);
 	/* nil for a signature outside 0..n-1 (RFC 8017 5.2.2): none */
-	*f->ret = t != nil && mpcmp(t, m) == 0;
+	ok = t != nil && mpcmp(t, m) == 0;
 	mpfree(t);
 	acquire();
+	unkeep(&f->k);
+	*f->ret = ok;
 }
 
 void

@@ -161,6 +161,7 @@ TARG=\
 	cs_cancel.dis\
 	pqsig_test.dis\
 	mailconn_test.dis\
+	smtp_refuse_test.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\
 	llmclient_edge_test.dis\
@@ -588,6 +589,7 @@ SYSMODULES=\
 	post9p.m\
 	pop3.m\
 	webget.m\
+	smtp.m\
 
 DISBIN=$ROOT/dis/tests
 

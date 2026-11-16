@@ -92,16 +92,42 @@ addrtostr(addr: array of byte): string
 }
 
 #
-# Parse hex address string to 20 bytes
+# Parse an address: exactly "0x" and 40 hex digits, 20 bytes; nil for
+# anything else.
+#
+# The prefix was stripped here and the rest handed to hexdecode, which
+# stripped a prefix again: "0x0x" and 38 digits came back as 19 bytes,
+# and every caller asks only whether the result is nil. A token transfer
+# then went to those 19 bytes and a zero, and an x402 authorization was
+# signed for the zero address: neither the address the approver saw.
+#
+# EIP-55: a string with letters of both cases carries a checksum in the
+# cases, and it must be right; all lower case and all upper case carry
+# none and are taken, as wallets take them.
 #
 strtoaddr(s: string): array of byte
 {
-	# strip 0x prefix
-	if(len s >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
-		s = s[2:];
-	if(len s != 40)
+	if(len s != 42 || s[0] != '0' || s[1] != 'x')
 		return nil;
-	return hexdecode(s);
+	addr := array[20] of byte;
+	lower := 0;
+	upper := 0;
+	for(i := 0; i < 20; i++) {
+		hc := s[2+2*i];
+		lc := s[2+2*i+1];
+		hi := hextoval(hc);
+		lo := hextoval(lc);
+		if(hi < 0 || lo < 0)
+			return nil;
+		if(hc >= 'a' || lc >= 'a')
+			lower = 1;
+		if((hc >= 'A' && hc <= 'F') || (lc >= 'A' && lc <= 'F'))
+			upper = 1;
+		addr[i] = byte (hi * 16 + lo);
+	}
+	if(lower && upper && addrtostr(addr) != s)
+		return nil;
+	return addr;
 }
 
 #
@@ -145,10 +171,14 @@ rlpencode_bytes(s: array of byte): array of byte
 
 rlpencode_list(items: list of array of byte): array of byte
 {
-	# concatenate all items
+	# concatenate all items; an item that could not be encoded
+	# (rlpencode_uint of a negative number) makes no list
 	total := 0;
-	for(l := items; l != nil; l = tl l)
+	for(l := items; l != nil; l = tl l) {
+		if(hd l == nil)
+			return nil;
 		total += len hd l;
+	}
 
 	payload := array[total] of byte;
 	off := 0;
@@ -182,6 +212,10 @@ rlpencode_list(items: list of array of byte): array of byte
 #
 rlpencode_uint(v: big): array of byte
 {
+	# unsigned: a negative number has no encoding (bigtobytes made no
+	# bytes of one, which reads back as zero)
+	if(v < big 0)
+		return nil;
 	if(v == big 0)
 		return array[] of { byte 16r80 };
 
@@ -286,6 +320,8 @@ signtx(tx: ref EthTx, privkey: array of byte): array of byte
 	fields = rlpencode_uint(tx.nonce) :: fields;
 
 	unsigned := rlpencode_list(fields);
+	if(unsigned == nil)
+		return nil;
 
 	# Keccak-256 hash for signing
 	hash := array[32] of byte;
@@ -359,11 +395,12 @@ hexencode(b: array of byte): string
 
 hexdecode(s: string): array of byte
 {
-	if(len s % 2 != 0)
-		return nil;
-	# strip 0x prefix
+	# strip one 0x prefix, then ask for whole bytes: the other way
+	# round a prefix was part of the count
 	if(len s >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
 		s = s[2:];
+	if(len s % 2 != 0)
+		return nil;
 	buf := array[len s / 2] of byte;
 	for(i := 0; i < len buf; i++) {
 		hi := hextoval(s[2*i]);

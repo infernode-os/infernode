@@ -335,9 +335,9 @@ testCheckoutHostileTree(t: ref T)
 		t.assertnotnil(err, sprint("checkout refuses a tree with an entry %q", evil[i].name));
 		t.assertseq(escaped(dir), "", sprint("an entry %q writes nothing outside the work tree", evil[i].name));
 		t.assertseq(slurp(gitdir + "/config"), config, sprint("an entry %q leaves .git/config alone", evil[i].name));
-		(gok, nil) := sys->stat(work + "/.GIT");
-		(dok, nil) := sys->stat(work + "/.git.");
-		t.assert(gok < 0 && dok < 0, "nothing that a host reads as .git is made");
+		# by the names made, not by stat: on a host that folds case
+		# (macOS) a stat of .GIT finds the repository's own .git
+		t.assertseq(strangers(work), "", "nothing that a host reads as .git is made");
 	}
 
 	# an ordinary tree is checked out as it was
@@ -351,6 +351,25 @@ testCheckoutHostileTree(t: ref T)
 	(nil, perr) := git->parsetree(git->encodetree(array[] of {TreeEntry(8r40000, "..", inner)}));
 	t.assertnotnil(perr, "parsetree refuses the name");
 	cleanup(dir);
+}
+
+# The names in a work tree other than the repository and the file
+# every hostile tree carries
+strangers(work: string): string
+{
+	fd := sys->open(work, Sys->OREAD);
+	if(fd == nil)
+		return sprint("cannot open %s: %r", work);
+	s := "";
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			if(dirs[i].name != ".git" && dirs[i].name != "ok.txt")
+				s += " " + dirs[i].name;
+	}
+	return s;
 }
 
 # What HEAD and a symbolic ref say is a ref's name

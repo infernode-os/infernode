@@ -156,7 +156,7 @@ msgfieldfromname(s: string): int
 Folder: adt {
 	name:     string;	# IMAP name; empty if folder no longer exists
 	dispname: string;	# 9P-safe entry name (IMAP '/' delimiter shown as ':')
-	uidvalidity: int;	# of the mailbox when it was last selected; 0 before
+	uidvalidity: big;	# of the mailbox when it was last selected; 0 before
 };
 
 # Per-message wrapper. Envelope + flags + UID come from the
@@ -192,6 +192,7 @@ Account: adt {
 	name:      string;
 	server:    string;	# IMAP server hostname
 	smtpserver: string;	# SMTP server (defaults to server)
+	smtpnamed: int;		# the user gave it (smtp=); else it was derived from server
 	mode:      int;		# Imap->IMPLICIT_TLS | Imap->STARTTLS
 	imap:      Imap;	# loaded Imap module instance
 	connected: int;
@@ -383,7 +384,7 @@ getacct(idx: int): ref Account
 # A place for a new account: (-1, nil) if the name is taken, (-2, nil)
 # if there are no more places.  The account has no files until it has
 # connected (live).
-newaccount(name, server, smtpserver: string, mode: int): (int, ref Account)
+newaccount(name, server, smtpserver: string, smtpnamed, mode: int): (int, ref Account)
 {
 	# Reject duplicates by name, of accounts connecting too.
 	for(i := 0; i < naccounts; i++)
@@ -418,6 +419,7 @@ newaccount(name, server, smtpserver: string, mode: int): (int, ref Account)
 	a.name = name;
 	a.server = server;
 	a.smtpserver = smtpserver;
+	a.smtpnamed = smtpnamed;
 	a.mode = mode;
 	a.imap = nil;
 	a.connected = 0;
@@ -500,7 +502,7 @@ appendfolder(a: ref Account, name: string)
 		ns[0:] = a.folders[0:a.nfolders];
 		a.folders = ns;
 	}
-	a.folders[a.nfolders] = ref Folder(name, safename(name), 0);
+	a.folders[a.nfolders] = ref Folder(name, safename(name), big 0);
 	a.nfolders++;
 }
 
@@ -560,7 +562,8 @@ delaccount(name: string): int
 # Default the SMTP server when only the IMAP server was given. We follow
 # the convention `imap.<rest>` → `smtp.<rest>`; if the IMAP server does
 # not start with `imap.`, fall back to the IMAP server itself (so a
-# generic mail host works).
+# generic mail host works).  A host made up here is a guess: it is sent
+# only a key that names it (smtpcreds).
 defaultsmtp(imapserver: string): string
 {
 	imapserver = hostof(imapserver);
@@ -1437,10 +1440,11 @@ newconnect(rest: string): (ref Account, string)
 		else
 			return (nil, "connect: unrecognised arg: " + tok);
 	}
-	if(smtpserver == "")
+	smtpnamed := smtpserver != "";
+	if(!smtpnamed)
 		smtpserver = defaultsmtp(server);
 
-	(idx, a) := newaccount(name, server, smtpserver, mode);
+	(idx, a) := newaccount(name, server, smtpserver, smtpnamed, mode);
 	if(idx == -2)
 		return (nil, sys->sprint("connect: %d accounts have been made, as many as there can be: start mail9p again", MAXACCTS));
 	if(idx < 0)
@@ -1973,20 +1977,36 @@ include_smtp(): (Smtp, string)
 	return (smtp, nil);
 }
 
-# Lookup SMTP credentials in factotum. Tries the smtp-specific key
-# first, then falls back to the imap key (most providers share creds).
+member(x: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == x)
+			return 1;
+	return 0;
+}
+
+# Lookup SMTP credentials in factotum: the service=smtp key of the SMTP
+# host, and the IMAP server's key only when the SMTP host is the IMAP
+# host or is one the user named with smtp=.  The IMAP key was tried for
+# any SMTP host, so the password of "service=imap dom=imap.X" went to
+# smtp.X, a host no key names and nobody chose: its certificate says it
+# is smtp.X, not that it should have the password.
 smtpcreds(a: ref Account): (string, string, string)
 {
 	fac := load Factotum Factotum->PATH;
 	if(fac == nil)
 		return (nil, nil, "cannot load Factotum");
 	fac->init();
-	(u, p) := fac->getuserpasswd("proto=pass service=smtp dom=" + hostof(a.smtpserver));
-	if(u != nil && p != nil)
-		return (u, p, nil);
-	(u, p) = fac->getuserpasswd("proto=pass service=imap dom=" + hostof(a.server));
-	if(u != nil && p != nil)
-		return (u, p, nil);
+	imaphost := hostof(a.server);
+	smtphost := hostof(a.smtpserver);
+	for(keys := mailparse->smtpkeys(imaphost, smtphost, a.smtpnamed); keys != nil; keys = tl keys) {
+		(u, p) := fac->getuserpasswd(hd keys);
+		if(u != nil && p != nil)
+			return (u, p, nil);
+	}
+	if(!a.smtpnamed && smtphost != imaphost)
+		return (nil, nil, "no service=smtp key in factotum for " + smtphost +
+			": the key of " + imaphost + " is not sent to a host it does not name (add a key, or connect with smtp=host)");
 	return (nil, nil, "no SMTP creds in factotum (tried service=smtp,imap)");
 }
 
@@ -2027,6 +2047,11 @@ draftreply(a: ref Account, path: big, body: string): (string, string)
 	# the envelope's sender too.
 	if(mailparse->hasheaderfield(body, "From:"))
 		return (nil, "a reply is from the account: leave From out");
+	# And it goes to the message's sender, whom the from and replyto
+	# files show: a Cc or Bcc in the text would be a header naming
+	# people the reply is not sent to.
+	if(mailparse->hasheaderfield(body, "Cc:") || mailparse->hasheaderfield(body, "Bcc:"))
+		return (nil, "a reply goes to the message's sender alone: leave Cc and Bcc out (compose sends to others)");
 
 	subj := env.subject;
 	if(subj == "")
@@ -2077,7 +2102,9 @@ draftreply(a: ref Account, path: big, body: string): (string, string)
 # Header-presence and body/blank-line predicates live in mailparse.
 
 # Open SMTP, authenticate via factotum creds, send, close. Recipients
-# (`recips`, nil to extract from the To: header in body) and the
+# (`recips`, nil to take them from the message's To:, Cc: and Bcc:
+# headers, every occurrence, a Bcc: then left out of what is sent: To:
+# alone was read, so a Cc got nothing and a Bcc was a header) and the
 # envelope's sender: the credential user if acctfrom, else the address
 # of the message's From: header (the address: "Name <user@host>" went
 # into MAIL FROM whole), or the credential user if it has none.
@@ -2098,8 +2125,19 @@ smtpsend(a: ref Account, msg: string, recips: list of string, acctfrom: int): (s
 		if(from == "")
 			from = u;
 	}
+	if(recips == nil) {
+		fields := array[] of {"To:", "Cc:", "Bcc:"};
+		all: list of string;
+		for(i := 0; i < len fields; i++)
+			for(r := mailparse->parseaddrlist(mailparse->headerall(msg, fields[i])); r != nil; r = tl r)
+				if(!member(hd r, all))
+					all = hd r :: all;
+		for(; all != nil; all = tl all)
+			recips = hd all :: recips;
+		msg = mailparse->dropheader(msg, "Bcc:");
+	}
 	if(recips == nil)
-		recips = mailparse->parseaddrlist(mailparse->extractheader(msg, "To:"));
+		return (nil, "the message names nobody to send to (To:, Cc: or Bcc:)");
 	dst := "";
 	for(l := recips; l != nil; l = tl l) {
 		if(dst != "")
@@ -2224,7 +2262,7 @@ doselect(a: ref Account, box: string): string
 	# were read in (RFC 3501 2.3.1.1): it gets a new place among the
 	# boxes, and files open in the old one name nothing.
 	i := findfolderidx(a, mbox.name);
-	if(i >= 0 && a.folders[i].uidvalidity != 0 && a.folders[i].uidvalidity != mbox.uidvalidity) {
+	if(i >= 0 && a.folders[i].uidvalidity != big 0 && a.folders[i].uidvalidity != mbox.uidvalidity) {
 		a.folders[i] = nil;
 		i = -1;
 	}

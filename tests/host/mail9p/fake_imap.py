@@ -21,6 +21,7 @@
 #
 # --msgs 3 adds a third message, from Mallory with a Reply-To elsewhere;
 # --who X marks the subjects and bodies, so that two servers' mail differs.
+# --validity N is the mailbox's UIDVALIDITY (7 without it).
 #
 # --scen makes it a server that is hostile or broken, for
 # tests/host/mail9p_hostile_test.sh (all need --msgs 3):
@@ -41,7 +42,7 @@
 #   novalidity each SELECT has a new UIDVALIDITY
 #
 # usage: fake_imap.py --mode tls|starttls|refuse --cert C --key K --log F
-#            [--expunge FILE] [--msgs 3] [--who X] [--scen S]
+#            [--expunge FILE] [--msgs 3] [--who X] [--scen S] [--validity N]
 
 import argparse, os, socket, ssl, sys, threading, time
 
@@ -327,8 +328,11 @@ def main():
     ap.add_argument("--msgs", type=int, default=2)
     ap.add_argument("--who", default="")
     ap.add_argument("--scen", default="base")
+    ap.add_argument("--validity", type=int)
     a = ap.parse_args()
-    global EXPUNGE, SCEN
+    global EXPUNGE, SCEN, VALIDITY
+    if a.validity is not None:
+        VALIDITY = a.validity
     EXPUNGE = a.expunge
     SCEN = a.scen
     if a.msgs >= 3:

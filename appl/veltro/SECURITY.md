@@ -1089,6 +1089,18 @@ client put in a document is not saved on the user's way out without the user
 asking. The same holds for Xenith: an agent's windows are labels, never file
 names.
 
+Xenith's window `ctl` keeps Acme's rule, one write is whole commands, and does
+not gather a request across messages as `luciuisrv` does. A write longer than
+one 9P message (8192 bytes of data) reaches it in pieces, and it ran each as
+commands of its own, so the end of a long line became a command its writer
+never wrote (`name`, `put`). The `xenith` tool writes no request that long.
+Xenith now also refuses a `ctl` write that fills its message and does not end
+a line, before any of it is run; the mount driver stops at the refusal, so the
+rest is not sent. Whole lines that fill a message are still taken. A program
+that writes a `ctl` through a connection with a smaller message size than
+Xenith's is cut where Xenith cannot see it: such a program must keep its
+requests short itself, as the tool does.
+
 The `matrix` tool composes into Matrix's name space, which is also the user's.
 An agent's composition places display modules, and names a service or a watch
 only over Matrix's own data (`/tmp/matrix`) or exactly as the live composition

@@ -83,6 +83,7 @@ TARG=\
 	auth_keyfile_test.dis\
 	factotum_needkey_test.dis\
 	factotum_proto_test.dis\
+	spki_pre0_test.dis\
 	auth9_short_test.dis\
 	ninep_disconnect_test.dis\
 	crypto_bench.dis\
@@ -558,6 +559,8 @@ SYSMODULES=\
 	pngload.m\
 	newns.m\
 	audit.m\
+	sexprs.m\
+	spki.m\
 
 DISBIN=$ROOT/dis/tests
 

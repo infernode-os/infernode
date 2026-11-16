@@ -563,8 +563,15 @@ ptmul(const Curve *C, Pt *r, const uchar *k, const Pt *a)
 		ptadd(C, &acc, &acc, &t, bm);
 	}
 	*r = acc;
-	memset(tab, 0, sizeof tab);
-	memset(&t, 0, sizeof t);
+	/*
+	 * multiples of the point by the scalar's digits: cleared by
+	 * secureZero, here and below.  The memsets that were here are
+	 * stores to locals about to go, which a compiler leaves out (gcc
+	 * -O did: the nonce of a signature was still on the stack after it)
+	 */
+	secureZero(tab, sizeof tab);
+	secureZero(&t, sizeof t);
+	secureZero(&acc, sizeof acc);
 }
 
 /* the base point */
@@ -647,10 +654,11 @@ randscalar(const Curve *C, uchar *k)
 		genrandom(k, C->nbytes);
 		bytestof(s, k, C->q.n);
 		if(!fiszero(s, C->q.n) && fless(s, C->q.m, C->q.n)){
-			memset(s, 0, sizeof s);
+			secureZero(s, sizeof s);
 			return 0;
 		}
 	}
+	secureZero(s, sizeof s);
 	return -1;
 }
 
@@ -683,10 +691,13 @@ ecdh(const Curve *C, uchar *shared, const uchar *priv, const uchar *peerx, const
 	if(ptload(C, &p, peerx, peery) < 0)
 		return -1;
 	ptmul(C, &r, priv, &p);
-	if(ptaffine(C, x, nil, &r) < 0)
+	if(ptaffine(C, x, nil, &r) < 0){
+		secureZero(&r, sizeof r);
 		return -1;
+	}
 	ftobytes(shared, x, C->p.n);
-	memset(&r, 0, sizeof r);
+	secureZero(&r, sizeof r);
+	secureZero(x, sizeof x);	/* the shared secret */
 	return 0;
 }
 
@@ -718,6 +729,12 @@ ecdsasign(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int 
 	hashtoscalar(C, e, hash, hashlen);
 	bytestof(d, priv, Q->n);
 	freduce(Q, d, d);
+	/*
+	 * FIPS 186-5 6.3.1: a private key is from 1 to n-1.  With 0 (or n)
+	 * a signature was made that no key verifies.
+	 */
+	if(fiszero(d, Q->n))
+		return -1;
 	mto(Q, d, d);
 	mto(Q, e, e);
 	ptbase(C, &g);
@@ -745,13 +762,18 @@ ecdsasign(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int 
 		if(fiszero(s, Q->n))
 			continue;
 		ftobytes(sig + C->nbytes, s, Q->n);
-		memset(k, 0, sizeof k);
-		memset(km, 0, sizeof km);
-		memset(d, 0, sizeof d);
+		secureZero(k, sizeof k);
+		secureZero(km, sizeof km);
+		secureZero(d, sizeof d);
+		secureZero(t, sizeof t);
+		secureZero(&R, sizeof R);
 		return 0;
 	}
-	memset(k, 0, sizeof k);
-	memset(d, 0, sizeof d);
+	secureZero(k, sizeof k);
+	secureZero(km, sizeof km);
+	secureZero(d, sizeof d);
+	secureZero(t, sizeof t);
+	secureZero(&R, sizeof R);
 	return -1;
 }
 

@@ -280,6 +280,27 @@ badpoints(void)
 	check(p384_ecdh(s, d, &bad3) != 0, "P-384 y = p refused", "");
 }
 
+/*
+ * FIPS 186-5 6.3.1: a private key is from 1 to n-1.  With 0 or n (which
+ * is 0 once reduced) a signature was made, which no key verifies.
+ */
+static void
+badkeys(void)
+{
+	uchar d[48], sig[96], hash[32];
+
+	memset(hash, 0x5a, sizeof hash);
+	memset(d, 0, sizeof d);
+	check(p256_ecdsa_sign(sig, d, hash, 32) != 0, "P-256 signing with a key of 0 refused", "");
+	ftobytes(d, P256.q.m, 4);
+	check(p256_ecdsa_sign(sig, d, hash, 32) != 0, "P-256 signing with a key of n refused", "");
+	d[31] ^= 1;	/* n is odd: n-1 */
+	check(p256_ecdsa_sign(sig, d, hash, 32) == 0, "P-256 signing with a key of n-1", "");
+	memset(d, 0, sizeof d);
+	d[31] = 1;
+	check(p256_ecdsa_sign(sig, d, hash, 32) == 0, "P-256 signing with a key of 1", "");
+}
+
 static void
 timing(void)
 {
@@ -386,6 +407,7 @@ main(int argc, char **argv)
 	edgecases(&P384, "P-384");
 	roundtrips();
 	badpoints();
+	badkeys();
 	timing();
 	if(fails){
 		printf("%d FAILED\n", fails);

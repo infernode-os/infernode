@@ -392,7 +392,9 @@ mpow(const Mont *M, limb *r, const limb *a, const limb *e)
 		mmul(M, x, x, tab[w]);
 	}
 	fcopy(r, x);
-	memset(tab, 0, sizeof tab);
+	/* see ptmul: powers of a nonce, when it is one being inverted */
+	secureZero(tab, sizeof tab);
+	secureZero(x, sizeof x);
 }
 
 /*
@@ -641,8 +643,14 @@ ptmul(Pt *r, const uchar *k, const Pt *a)
 		ptadd(&acc, &acc, &t, b3);
 	}
 	*r = acc;
-	memset(tab, 0, sizeof tab);
-	memset(&t, 0, sizeof t);
+	/*
+	 * multiples of the point by the scalar's digits: cleared by
+	 * secureZero, here and below.  The memsets that were here are
+	 * stores to locals about to go, which a compiler leaves out.
+	 */
+	secureZero(tab, sizeof tab);
+	secureZero(&t, sizeof t);
+	secureZero(&acc, sizeof acc);
 }
 
 /* the base point */
@@ -724,7 +732,7 @@ scalarok(const uchar *a)
 
 	bytestof(s, a);
 	ok = ~fiszero(s) & fless(s, K1N.m);
-	memset(s, 0, sizeof s);
+	secureZero(s, sizeof s);
 	return ok;
 }
 
@@ -764,7 +772,7 @@ pubfrompriv(uchar pub[65], const uchar priv[32])
 	if(ptaffine(x, y, &r) < 0)
 		return -1;
 	pubbytes(pub, x, y);
-	memset(&r, 0, sizeof r);
+	secureZero(&r, sizeof r);
 	/* a fault check: the public key must be on the curve */
 	if(ptload(&g, pub + 1, pub + 33) < 0)
 		return -1;

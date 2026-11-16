@@ -22,12 +22,11 @@ static void
 ccpoly_otk(uchar otk[32], uchar key[32], uchar nonce[12])
 {
 	ChaChastate s;
-	uchar zeros[32];
 
+	/* into otk itself: a copy of the key was left in a local here */
 	setupChaChastate(&s, key, 32, nonce, 12, 20);
-	memset(zeros, 0, 32);
-	chacha_encrypt(zeros, 32, &s);
-	memmove(otk, zeros, 32);
+	memset(otk, 0, 32);
+	chacha_encrypt(otk, 32, &s);
 	secureZero(&s, sizeof(s));
 }
 
@@ -116,8 +115,15 @@ ccpoly_decrypt(uchar *dat, int ndat, uchar *aad, int naad,
 	diff = 0;
 	for(i = 0; i < 16; i++)
 		diff |= computed[i] ^ tag[i];
-	if(diff != 0)
+	if(diff != 0){
+		/*
+		 * the one-time key, and the tag that would have opened
+		 * this text: a refusal left both on the stack
+		 */
+		secureZero(otk, sizeof(otk));
+		secureZero(computed, sizeof(computed));
 		return -1;
+	}
 
 	/* decrypt with ChaCha20 starting at counter 1 */
 	setupChaChastate(&s, key, 32, nonce, 12, 20);

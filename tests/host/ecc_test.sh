@@ -47,7 +47,7 @@ CFLAGS="-g -O -fno-strict-aliasing -w"
 
 fails=0
 
-if ! $CC $CFLAGS $INC -o "$TMP/ecctest" "$D/ecctest.c" 2>"$TMP/cc.log"; then
+if ! $CC $CFLAGS $INC -o "$TMP/ecctest" "$D/ecctest.c" "$ROOT/libsec/securezero.c" 2>"$TMP/cc.log"; then
 	cat "$TMP/cc.log"
 	echo "FAIL: ecctest does not compile"
 	exit 1
@@ -74,7 +74,7 @@ else
 	ccs="$CC"
 	command -v clang >/dev/null 2>&1 && [ "$CC" != clang ] && ccs="$ccs clang"
 	for cc in $ccs; do
-		$cc $CFLAGS -DCTGRIND $INC -o "$TMP/ecctest-ct" "$D/ecctest.c" || { echo "FAIL: ecctest -DCTGRIND does not compile with $cc"; exit 1; }
+		$cc $CFLAGS -DCTGRIND $INC -o "$TMP/ecctest-ct" "$D/ecctest.c" "$ROOT/libsec/securezero.c" || { echo "FAIL: ecctest -DCTGRIND does not compile with $cc"; exit 1; }
 		for what in ptmul256 ptmul384 ecdh256 ecdh384 keygen256 keygen384 sign256; do
 			valgrind --error-limit=no --read-inline-info=yes --log-file="$TMP/vg.$what" "$TMP/ecctest-ct" ct "$what" >/dev/null 2>&1
 			# the function each report is in

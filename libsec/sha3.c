@@ -198,6 +198,8 @@ sha3_256(const uchar *in, ulong inlen, uchar out[32])
 	sha3_init(&s, 136, 32);
 	sha3_update(&s, in, inlen);
 	sha3_final(out, &s);
+	/* Keccak-f can be run backwards: the state of a short input is the input */
+	secureZero(&s, sizeof s);
 }
 
 /*
@@ -211,6 +213,7 @@ sha3_512(const uchar *in, ulong inlen, uchar out[64])
 	sha3_init(&s, 72, 64);
 	sha3_update(&s, in, inlen);
 	sha3_final(out, &s);
+	secureZero(&s, sizeof s);
 }
 
 /*

@@ -3921,12 +3921,12 @@ Keyring_x25519(void *fp)
 	for(i = 0; i < nelem(out); i++)
 		nz |= out[i];
 	if(nz == 0){
-		memset(out, 0, sizeof(out));
+		secureZero(out, sizeof(out));
 		return;
 	}
 
 	*f->ret = mem2array(out, 32);
-	memset(out, 0, sizeof(out));
+	secureZero(out, sizeof(out));	/* (a memset here is one compilers drop) */
 }
 
 void

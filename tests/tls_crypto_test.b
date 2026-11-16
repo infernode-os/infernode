@@ -487,6 +487,19 @@ testX25519(t: ref T)
 	loworder := array[32] of byte;
 	t.assert(kr->x25519(alice_priv, loworder) == nil,
 		"X25519 rejects all-zero shared secret");
+
+	# A result whose low 51 bits are within 19 of 2^51, which none of
+	# RFC 7748's vectors is: the last step, which writes the field
+	# element out, borrowed and added the borrow. The scalar is -1 mod
+	# the group's order (a fixed point of clamping), so the result is
+	# the point; the answer is OpenSSL's (tests/host/x25519/gen.py).
+	k := hexdecode(
+		"a023cdd083ef5bb82f10d62e59e15a68"
+		+ "00000000000000000000000000000050");
+	u := hexdecode(
+		"ffffffffffffc7000000000000000000"
+		+ "00000000000000000000000000000000");
+	assertbytes(t, kr->x25519(k, u), u, "x25519 of a result with a low limb of 2^51-1");
 }
 
 # ============================================================

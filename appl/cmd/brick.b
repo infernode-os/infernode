@@ -251,8 +251,15 @@ wifi(mnt: string)
 	creds := string buf[0:n];
 	if(n == 0 || n == len buf || !hasprefix(creds, "ssid "))
 		fail("wifi", "expected \"ssid NAME\\npass PASSPHRASE\\n\" on standard input");
+	# The record says that credentials were set, and the network's name
+	# when the passphrase has a line of its own after it.  It held the
+	# first line whatever was on it: "ssid NAME pass PASSPHRASE" on one
+	# line put the passphrase in the audit log.
 	(nil, ws) := sys->tokenize(creds, "\n");
-	if((e := auditlog("wifi", "mnt=" + mnt + " " + hd ws)) != nil)	# the ssid line, never the passphrase
+	what := "mnt=" + mnt + " credentials=set";
+	if(ws != nil && tl ws != nil && hasprefix(hd tl ws, "pass "))
+		what += " ssid=" + auditvalue((hd ws)[5:]);
+	if((e := auditlog("wifi", what)) != nil)
 		fail("wifi", e);
 	writefile(mnt + "/config/wifi", creds);
 }
@@ -411,8 +418,12 @@ d2serve(bmnt, dir: string)
 			# "... max N": a lease may be no longer than that (D2's C8)
 			m := leasems;
 			for(g := f; g != nil && tl g != nil; g = tl g)
-				if(hd g == "max")
-					m = int hd tl g;
+				if(hd g == "max"){
+					(mv, mok) := num(hd tl g);
+					if(!mok)
+						fail("d2", sys->sprint("%s reports a lease maximum that is no number: %s", hd f, hd tl g));
+					m = mv;
+				}
 			if(m < MINLEASE)
 				fail("d2", sys->sprint("%s reports unsafe lease maximum %d ms", hd f, m));
 			outs = ref Out(hd f, 0, 0, nil, m) :: outs;
@@ -457,8 +468,12 @@ d2open(d: ref D2): string
 		return "bad answer from " + d.bmnt + "/d2/clone";
 	d.devid = hd w;
 	d.boot = hd tl w;
-	d.epoch = int hd tl tl w;
-	d.tau = int hd tl tl tl w;
+	(epoch, eok) := num(hd tl tl w);
+	(tau, tok) := num(hd tl tl tl w);
+	if(!eok || !tok)
+		return "bad answer from " + d.bmnt + "/d2/clone";
+	d.epoch = epoch;
+	d.tau = tau;
 	d.seq = 0;
 	# The old session's files, if any, are closed elsewhere: closing a
 	# file on a dead mount waits out a request deadline (5 s each, seen
@@ -601,13 +616,14 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			wc <-= (len data, e);
 			break;
 		}
-		if(len v == 0 || !isnum(v)){
+		(nv, nok) := num(v);
+		if(!nok){
 			wc <-= (0, "want a value, or release");
 			break;
 		}
 		oldval := o[i].val;
 		oldheld := o[i].held;
-		o[i].val = int v;
+		o[i].val = nv;
 		o[i].held = 1;
 		g := newgen(d);
 		# Apply at once (and so learn at once if it is refused).
@@ -689,8 +705,15 @@ d2send(d: ref D2, kind: string, outs: list of string, lease, gen: int): string
 		(nil, w) := sys->tokenize(string buf[0:n], " \n");
 		if(len w != 3)
 			return d2refused(d, "grant: bad answer");
-		gid = int hd tl tl w;
+		gok: int;
+		(gid, gok) = num(hd tl tl w);
+		if(!gok)
+			return d2refused(d, "grant: bad answer");
 	}
+	# the sequence only rises: at its end the session is, not wrapped
+	# round to numbers the brick has already seen
+	if(d.seq == 16r7fffffff)
+		return d2refused(d, "command sequence used up: start brick d2 again");
 	d.seq++;
 	if(lease)
 		lease = leasems;
@@ -772,6 +795,16 @@ auditlog(event, msg: string): string
 	return "auditing is required here and the record could not be made";
 }
 
+# text that is not ours, as one word of an audit record
+auditvalue(v: string): string
+{
+	if(audit == nil && (audit = load Audit Audit->PATH) != nil)
+		audit->init();
+	if(audit != nil)
+		return audit->value(v);
+	return string len v + "-characters";
+}
+
 armedstr(d: ref D2): string
 {
 	if(d.armed)
@@ -787,6 +820,19 @@ sliced(s: string, off: int): array of byte
 	if(off >= len b)
 		return nil;
 	return b[off:];
+}
+
+# A number the brick or an application wrote, as the int it is: decimal
+# digits, no more than an int holds.  int of a longer string wrapped (a
+# lease maximum of 4294967796 read as 500).
+num(s: string): (int, int)
+{
+	if(len s == 0 || len s > 10 || !isnum(s))
+		return (0, 0);
+	v := big s;
+	if(v > big 16r7fffffff)
+		return (0, 0);
+	return (int v, 1);
 }
 
 isnum(s: string): int
@@ -851,14 +897,46 @@ kill(pid: int)
 secretsdirty := 0;
 legacyremove: list of string;
 
+# The lock is removed when its owner closes it or dies, but not when the
+# emulator itself is killed: it then stayed, and every later key or pair
+# was refused with a message naming only the directory.  One older than
+# any operation lasts is taken; a newer one is named, with what to do.
+STALELOCK: con 600;	# seconds
+
 pairlock(): ref Sys->FD
 {
 	mkdirs(keydir);
-	fd := sys->create(keydir + "/pair.lock",
-		Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+	lf := keydir + "/pair.lock";
+	fd := sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+	if(fd == nil){
+		(ok, d) := sys->stat(lf);
+		t := nowsecs();
+		if(ok >= 0 && t > 0 && t - d.mtime > STALELOCK){
+			# still the file that was looked at, as far as can be told
+			(ok2, d2) := sys->stat(lf);
+			if(ok2 >= 0 && d2.mtime == d.mtime && d2.qid.path == d.qid.path){
+				sys->fprint(sys->fildes(2), "brick: taking %s, left %d s ago\n", lf, t - d.mtime);
+				sys->remove(lf);
+				fd = sys->create(lf, Sys->OWRITE|Sys->OEXCL|Sys->ORCLOSE, 8r600);
+			}
+		}
+	}
 	if(fd == nil)
-		fail("keys", "another brick key or pair operation owns " + keydir);
+		fail("keys", "another brick key or pair operation holds " + lf +
+			"; if none is running it was left by a crash: remove it");
 	return fd;
+}
+
+nowsecs(): int
+{
+	fd := sys->open("/dev/time", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	return int (big string buf[0:n] / big 1000000);
 }
 
 ftinit()
@@ -929,10 +1007,27 @@ syncsecrets(force: int)
 	secretsdirty = 0;
 	for(; legacyremove != nil; legacyremove = tl legacyremove){
 		path := hd legacyremove;
+		scrub(path);
 		sys->remove(path);
 		if(sys->stat(path).t0 >= 0)
 			fail("keys", "persisted legacy secret but cannot remove " + path);
 	}
+}
+
+# Write over a cleartext secret before its name is removed (as far as
+# the file system writes in place): removing the name alone left the
+# bytes in the freed blocks.
+scrub(path: string)
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0 || d.length <= big 0 || d.length > big 65536)
+		return;
+	z := array[int d.length] of {* => byte 0};
+	sys->pwrite(fd, z, len z, big 0);
+	sys->fwstat(fd, sys->nulldir);	# a wstat changing nothing is a sync
 }
 
 rand32(): array of byte
@@ -944,8 +1039,26 @@ rand32(): array of byte
 	return random->randombuf(Random->ReallyRandom, 32);
 }
 
+# A legacy cleartext file while credentials are being replaced: not read,
+# said, and removed with the others once the new set is saved.
+notimported(legacy: string): int
+{
+	if(!rotate)
+		return 0;
+	if(sys->stat(legacy).t0 >= 0){
+		sys->fprint(sys->fildes(2), "brick: -R: not importing %s; it is removed once the new keys are saved\n", legacy);
+		queuelegacy(legacy);
+		secretsdirty = 1;
+	}
+	return 1;
+}
+
 # A 32-byte raw secret.  Legacy cleartext files are imported, synchronously
 # persisted by the caller, and removed only after that save succeeds.
+# Not with -R: it replaces credentials that may have been read, and the
+# cleartext files are where they were read from.  -R deleted the
+# factotum entries and this then imported the files again, so the brick
+# was given the old PSK and D2 key as the new ones.
 loadraw(purpose, legacy: string, make: int): array of byte
 {
 	s := getsecret(purpose);
@@ -959,7 +1072,10 @@ loadraw(purpose, legacy: string, make: int): array of byte
 		}
 		return key;
 	}
-	s = trim(readfile0(legacy));
+	if(notimported(legacy))
+		s = nil;
+	else
+		s = trim(readfile0(legacy));
 	if(s != nil){
 		key := unhex(s);
 		if(key == nil || len key != 32)
@@ -997,10 +1113,13 @@ loadkeys(make, commit: int): (array of byte, array of byte)
 			secretsdirty = 1;
 		}
 	}else{
-		# One-time migration from #1015's draft cleartext scalar.
+		# One-time migration from #1015's draft cleartext scalar
+		# (not with -R: see loadraw).
 		legacy := keydir + "/client.key";
-		key = unhex(trim(readfile0(legacy)));
-		cert = readbytes(keydir + "/client.crt");
+		if(!notimported(legacy)){
+			key = unhex(trim(readfile0(legacy)));
+			cert = readbytes(keydir + "/client.crt");
+		}
 		if(key != nil && len key == 32 && cert != nil){
 			addsecret("tls", hex(key) + ":" + hex(cert));
 			queuelegacy(legacy);

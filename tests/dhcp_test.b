@@ -1238,6 +1238,10 @@ command(argv: list of string, done: chan of string, pidc: chan of int)
 	"*" =>
 		done <-= "raised " + x;
 	}
+	# killgrp finds the group by this process: gone, the server and the
+	# name space's file servers would be left, and emu does not exit
+	# while a process is.
+	<-chan of int;
 }
 
 killgrp(pid: int)

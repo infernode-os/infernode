@@ -555,7 +555,20 @@ an old client is told `signer speaks login version 2`, and a new client
 given the old signer's answer says the signer speaks the old exchange.
 Password entries (`keyfs`) and certificates already issued are unchanged.
 
-Tests: `tests/login_test.b`, `tests/host/login_test.sh`.
+`auth/passwd` and `keysrv(4)` now speak one protocol, which they did not
+(passwd proved the old secret one way and keysrv checked it another, so no
+change ever worked). The server proves it is the signer: it runs with the
+signer's key, whose name `logind` and `signer` certify for nobody else, and
+passwd asks for nothing until it has seen that. The old password is proved
+by answering a challenge of the server's, fresh for every write; the new one
+is sent as its SHA-256, which is what `keyfs` holds, sealed under a key from
+the old; wrong proofs are counted in `logind`'s throttle.
+
+`signer(8)`, `countersigner`, `keysrv(4)` and `changelogin(8)` take a name by
+the same rule as `logind`.
+
+Tests: `tests/login_test.b`, `tests/host/login_test.sh`,
+`tests/signer_test.b`, `tests/passwd_test.b`.
 
 ## Security Properties (Updated)
 

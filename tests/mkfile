@@ -64,6 +64,7 @@ TARG=\
 	crypto_test.dis\
 	login_test.dis\
 	signer_test.dis\
+	passwd_test.dis\
 	ssl_record_test.dis\
 	delegation_budget_test.dis\
 	destructor_test.dis\

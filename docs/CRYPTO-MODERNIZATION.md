@@ -85,7 +85,7 @@ After these changes:
 - **Certificates:** SHA-256 hash prevents collision attacks
 - **Key exchange:** 2048-bit DH provides ~112-bit security
 - **Login EKE:** login(6) version 2: nothing a guessed password can be tested against (see "Login: version 2")
-- **SSL3 negotiation:** Weak ciphers rejected during handshake (no downgrade)
+- **TLS:** 1.3 and 1.2 with AEAD suites only (the SSL 3.0 client and its suites are gone)
 - **Revocation:** CRL-based certificate revocation checking
 - **Transport:** WireGuard + Rosenpass handles (external to Inferno)
 
@@ -130,23 +130,66 @@ Weak cipher suites are now rejected during SSL3 negotiation before selection, ra
 
 ### 7. Certificate Revocation Lists (Phase 5)
 
-X.509 certificate verification now checks CRLs loaded from `/lib/crls/*.der`.
+X.509 path validation (`X509->verify_certchain`, `verify_certchain_roots`) checks CRLs.
 
 | Aspect | Before | After |
 |--------|--------|-------|
 | Revocation checking | None | **CRL-based** |
-| CRL store | N/A | **`/lib/crls/*.der`** (DER-encoded CRLs) |
-| Check point | N/A | **During `verify_certpath()`** |
+| CRL store | N/A | **`/lib/crls/*.der`** (DER-encoded CRLs), read again whenever a file there changes |
+| A caller's CRLs | N/A | **`verify_certchain_roots(cs, roots, crls, now, usage)`**: each CRL signed by a root, or by a CA of the chain with the key the path verified (and cRLSign, if the CA has a keyUsage) |
+| Check point | N/A | **As each certificate's issuer is found on the path**; an intermediate given as a trust anchor is checked against the roots' CRLs too |
 
-**Files modified:**
-- `appl/lib/crypt/x509.b` - CRL store loading and revocation checking in cert path validation
-- `lib/crls/` - New directory for CRL DER files
+A CRL past its `nextUpdate` is still applied (and said so on standard error when the store
+is read): a stale list still names what it revoked. A CRL that cannot be used (not DER, a
+critical extension that is not processed, a signature that is not its issuer's, an issuer
+that is neither a root nor in the chain) fails every verification rather than being left
+out. The store's own CRLs are not signature-checked: the directory is the administrator's.
+Nothing fetches CRLs, and there is no OCSP.
+
+**Files:**
+- `appl/lib/crypt/x509.b` - `check_revoked`, `load_crl_store`
+- `lib/crls/` - directory for CRL DER files (ships empty)
+
+### 8. X.509 and TLS, as they stand (tranche-6 review)
+
+The certificate code was reviewed against RFC 5280 and the TLS code against RFC 8446 and
+RFC 5246; what follows replaces the earlier descriptions of both.
+
+- **One reading of a certificate.** `asn1.b` decodes DER and nothing else (it took BER),
+  and no longer encodes. A certificate's two signature algorithms are compared
+  (RFC 5280 4.1.1.2); validity times are the two forms of 4.1.2.5; an EC key is a point of
+  the curve its certificate names (P-256 or P-384, uncompressed); an ECDSA signature is DER;
+  string types are decoded as what they are and a name has no NUL.
+- **Keys and signatures taken.** RSA PKCS #1 v1.5 with a modulus of 2048 to 8192 bits and
+  an odd exponent of 3 or more, and ECDSA P-256 and P-384, each with SHA-256, SHA-384 or
+  SHA-512. Nothing else: no MD5 or SHA-1, no DSA, no RSA-PSS in certificates (TLS 1.3's
+  CertificateVerify takes RSA-PSS), no post-quantum signature in a certificate.
+- **Path validation.** Signatures, validity (the anchor's too), basicConstraints,
+  pathLenConstraint, keyUsage, name constraints, critical extensions processed or refused,
+  and a usage: every certificate below the anchor with an extendedKeyUsage must allow
+  server (or client) authentication, CAs as well as the leaf.
+- **What was removed.** `ssl3.b` and `sslsession.b`; from `pkcs.b` everything but the OID
+  table, `RSAKey`, `decode_rsapubkey` and `rsa_encrypt` (PKCS #1 decryption and signing,
+  DSS, PKCS #3 Diffie-Hellman, PKCS #5 password-based DES); from `x509.b` every encoder,
+  `Signed.sign`, `verify_certpath` and the extension classes the path reads for itself;
+  `asn1->encode`.
+- **TLS after the handshake.** `Conn.read` is data, 0 for the peer's close_notify, or -1
+  with the reason in the error string; record sizes are held to RFC 8446 5.1 and 5.2;
+  KeyUpdate is handled both ways and sent before AES-GCM's limit of records under a key
+  (5.5); renegotiation is refused. A TLS 1.2 client asked for a certificate sends an
+  empty one (it has none to give under TLS 1.2).
+- **The node-to-node exchange.** After `Keyring->auth`, the client's choice of ssl
+  algorithm is confirmed by both ends with the shared secret and made part of ssl's keys
+  (`appl/lib/auth.b`, version 2 of the exchange): it used to be one unauthenticated
+  message. Both ends of a connection must be of this version.
+
+See [`compliance/X509-mTLS.md`](compliance/X509-mTLS.md) for the evidence, test by test.
 
 ## What's Not Changed
 
-### HMAC-SHA1 in SSL3
+### HMAC-SHA1
 
-SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the attacks on SHA-1 are collision attacks, not applicable to HMAC).
+HMAC-SHA1 remains where a protocol still names it (HMAC-SHA1 is still considered secure; the attacks on SHA-1 are collision attacks, not applicable to HMAC). The SSL 3.0 client that used it is gone.
 
 ## Migration Guide
 
@@ -171,7 +214,7 @@ SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the 
 
 4. **Install CRLs (optional):**
    - Place DER-encoded CRL files in `/lib/crls/` for revocation checking
-   - CRLs are matched by issuer name against certificate issuers
+   - CRLs are matched by issuer name against certificate issuers; a file there that is not a usable CRL fails every verification until it is put right or removed
 
 ### For New Deployments
 
@@ -280,14 +323,14 @@ OpenSSL.
 - `appl/lib/crypt/tls.b` — Hybrid key exchange in TLS 1.3 handshake
 - `module/tls.m` — `X25519MLKEM768` constant
 
-#### X.509 Certificate Support
+#### Certificates
 
-ML-DSA OIDs added for certificate signing:
-- `id-ML-DSA-65`: 2.16.840.1.101.3.4.3.18
-- `id-ML-DSA-87`: 2.16.840.1.101.3.4.3.19
+ML-DSA signs the native (Keyring) certificates that the node-to-node exchange uses. It is
+not an X.509 signature algorithm here: the X.509 verifier takes RSA and ECDSA only, and the
+ML-DSA OID constants that `pkcs.m` once carried were looked up by nothing and have been
+removed.
 
 **Files modified:**
-- `module/pkcs.m`, `appl/lib/crypt/pkcs.b` — ML-DSA OIDs
 - `appl/cmd/auth/createsignerkey.b` — `mldsa65`/`mldsa87` algorithm options
 
 #### Migration
@@ -339,9 +382,10 @@ Conservative backup for ML-DSA — no lattice assumptions, purely hash-based (WO
 
 **Keyring API:** Registered as SigAlgVec (`genSK("slhdsa192s", ...)`, standard sign/verify). Uses slots 7-8 of the 8-slot `algs[]` array (all slots now filled).
 
-**X.509 OIDs:**
-- `id-SLH-DSA-SHAKE-192s`: 2.16.840.1.101.3.4.3.22
-- `id-SLH-DSA-SHAKE-256s`: 2.16.840.1.101.3.4.3.26
+**X.509:** none. The parameter sets' OIDs (id-slh-dsa-shake-192s is 2.16.840.1.101.3.4.3.28
+and id-slh-dsa-shake-256s 2.16.840.1.101.3.4.3.30; this page once gave .22 and .26, which
+are other sets) were constants in `pkcs.m` that nothing used, and are gone: the X.509
+verifier takes no post-quantum signature.
 
 **Files modified:**
 - `include/libsec.h` — SLH-DSA declarations
@@ -350,7 +394,6 @@ Conservative backup for ML-DSA — no lattice assumptions, purely hash-based (WO
 - `libkeyring/mkfile` — Add slhdsaalg.o
 - `libinterp/keyring.c` — Register SLH-DSA algs + SHA-3 builtins
 - `module/keyring.m` — SHA3-256/512 digest functions
-- `module/pkcs.m`, `appl/lib/crypt/pkcs.b` — SLH-DSA OIDs
 - `appl/cmd/auth/createsignerkey.b` — SLH-DSA algorithm options
 
 #### SHA-3 Keyring Builtins
@@ -591,4 +634,4 @@ Optional improvements not yet implemented:
 
 1. **OCSP stapling** - Online certificate status checking (alternative to CRL)
 2. **CRL auto-fetch** - Fetch CRLs from CRL Distribution Point URLs in certificates
-3. **TLS 1.3 for SSL3 path** - Migrate remaining SSL3 users to TLS 1.3 (already available in tls.b)
+3. **Client certificates under TLS 1.2** - the TLS 1.3 client and server have them; a TLS 1.2 client sends none

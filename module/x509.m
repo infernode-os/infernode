@@ -103,6 +103,13 @@ X509: module {
 	# fails: signed by one of the roots, or by a CA certificate of the
 	# chain, which then signs it with the key the path verifies (and
 	# with cRLSign, if it has a keyUsage).
+	#
+	# now is an int, as Daytime->now is and every clock in the system
+	# that counts seconds: from 19 January 2038 it is negative, every
+	# certificate is "not yet valid" and every verification fails
+	# (closed).  A certificate's own dates are bigs and good past then.
+	# The repair is the system's, not this module's: Daytime->now and
+	# the callers' clocks as big, and this argument with them.
 	verify_certchain_roots: fn(cs: list of array of byte, roots: list of array of byte,
 		crls: list of array of byte, now: int, usage: int): (int, string);
 

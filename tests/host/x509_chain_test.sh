@@ -28,7 +28,26 @@
 #   - a revoked certificate against a CRL past its nextUpdate, and a CRL
 #     that cannot be used, the same from a caller's list and from the
 #     store, where the error names the file;
-#   - a trust anchor outside its own dates.
+#   - a trust anchor outside its own dates;
+#   - one reading for a certificate: its two signature algorithms compared
+#     (RFC 5280 4.1.1.2; a CRL's too), an ECDSA signature in DER and
+#     nothing else, an EC key that is a point of the curve its certificate
+#     names (prime256v1, secp384r1, uncompressed) and an RSA key with NULL
+#     parameters, times in RFC 5280 4.1.2.5's two forms only, lengths,
+#     INTEGERs, OIDs and strings in DER, names in each string type as
+#     their text (a BMPString issuer chains to its UTF8String subject)
+#     and none with a NUL, a serial number of -128 not on a CRL that
+#     lists 128; ECDSA with SHA-384 and SHA-512 and RSA with SHA-512
+#     still taken;
+#   - what a path is for: a CA whose extendedKeyUsage leaves out the
+#     usage asked for (server, client) issues nothing for it, one or two
+#     levels up; the anchor is not asked, and no usage asks nothing;
+#   - an intermediate's CRL: it revokes what the intermediate issued,
+#     signed by the key the path verified, with cRLSign if the CA has a
+#     keyUsage (a root's CRL the same); forged, or of a CA that is not in
+#     the chain, it fails the call; two levels each with its own; an
+#     intermediate given as a trust anchor refused once a root's CRL
+#     names it.
 #
 # Handshakes on the loopback (tests/tlsverify.b: tls->client with
 # verification on):

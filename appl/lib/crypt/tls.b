@@ -1245,7 +1245,9 @@ handshake12(cs: ref ConnState, config: ref Config,
 			st12 = S12kx;
 
 		HT_CERTIFICATE_REQUEST =>
-			# Client cert requested - we don't support this yet
+			# a client certificate is asked for: there is none under
+			# TLS 1.2 (Config.clientcert is TLS 1.3's), and the
+			# server is told so below
 			if(st12 != S12cert && st12 != S12kx)
 				return "tls: CertificateRequest out of order or sent twice";
 			st12 = S12req;
@@ -1270,6 +1272,17 @@ handshake12(cs: ref ConnState, config: ref Config,
 	}
 	if(isecdhe(cs.suite) && !uses_ecdhe)
 		return "tls: ECDHE suite without ServerKeyExchange";
+
+	# RFC 5246 7.4.6: a client asked for a certificate that has none
+	# to give "MUST send a certificate message containing no
+	# certificates", before its key exchange.  (It sent nothing, so
+	# every TLS 1.2 server that asks, even one that does not insist,
+	# refused the key exchange as out of order.)
+	if(st12 == S12req) {
+		cerr := sendhsmsg(cs, HT_CERTIFICATE, array[3] of {* => byte 0});
+		if(cerr != nil)
+			return cerr;
+	}
 
 	# Compute premaster secret
 	premaster: array of byte;

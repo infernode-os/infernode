@@ -6,7 +6,6 @@ OFILES=\
 	alt.$O\
 	comp-$OBJTYPE.$O\
 	conv.$O\
-	crypt.$O\
 	dec.$O\
 #	dlm-$TARGMODEL.$O\
 	draw.$O\
@@ -52,7 +51,6 @@ MODULES=\
 	$ROOT/module/keyring.m\
 	$ROOT/module/loader.m\
 	$ROOT/module/ipints.m\
-	$ROOT/module/crypt.m\
 	keyringif.m\
 	$ROOT/module/i420.m\
 	i420if.m\
@@ -84,9 +82,6 @@ loadermod.h:D: $MODULES
 
 ipintsmod.h:D: $MODULES
 	rm -f $target && limbo -t IPints -I$ROOT/module $ROOT/module/ipints.m > $target
-
-cryptmod.h:D: $MODULES
-	rm -f $target && limbo -t Crypt -I$ROOT/module $ROOT/module/runt.m > $target
 
 tkmod.h:D: $MODULES
 	rm -f $target && limbo -t Tk -I$ROOT/module $ROOT/module/runt.m > $target
@@ -126,7 +121,6 @@ tensorif.h:D: $MODULES tensorif.m
 bayer.$O:	bayermod.h bayerif.h
 
 ipint.$O:	ipint.h ipintsmod.h
-crypt.$O:	ipint.h runt.h cryptmod.h
 loader.$O:	loadermod.h
 math.$O:	../include/mathi.h
 
@@ -146,5 +140,5 @@ kif.$O: kif.c
 #	it works only on UNIX and Plan 9.
 
 nuke:EV:	nuke-std
-	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c cryptmod.h keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
+	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
 

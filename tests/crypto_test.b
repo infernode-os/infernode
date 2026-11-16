@@ -381,20 +381,18 @@ testRC4Disabled(t: ref T)
 {
 	t.log("Testing that RC4 is disabled...");
 
-	# RC4 setup should still work at the low level (keyring)
-	# but SSL3 should reject it at the protocol level
-	# We can only test the low-level here; protocol tests need full SSL
+	# RC4 setup should still work at the low level (keyring).  Nothing
+	# in the tree negotiates it: the SSL 3.0 client that had its suites
+	# is gone, and tls(2) offers none.
 
 	seed := array of byte "test-seed-for-rc4";
 	state := kr->rc4setup(seed);
 
 	# Note: We're testing that the keyring module still provides RC4
-	# (for potential legacy use), but ssl3.b will reject it.
-	# Full SSL3 rejection testing requires a socket connection.
+	# (for potential legacy use).
 
 	if(state != nil) {
 		t.log("RC4 is available at keyring level (expected)");
-		t.log("SSL3 protocol-level rejection tested separately");
 	} else {
 		t.log("RC4 setup returned nil - may be completely removed");
 	}

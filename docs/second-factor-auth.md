@@ -63,6 +63,41 @@ The KDF lives in `appl/lib/secstore.b`:
 **device-bound secret** into that derivation, the blob becomes undecryptable
 without the physical factor present. No protocol rewrite — we extend the KDF.
 
+### 3.1 The states of an account's second factor (as built, 2026-11)
+
+The vault's *confidentiality* was two factors from the start; its *integrity*
+was one. `secstored` took a `PUT factotum` from any session that had proved the
+password, and the login screen loaded a vault that decrypted under the
+password alone "during an incomplete enroll/disable": whoever had the password
+could store a vault of their own making and have it loaded with no key
+present. Both ends now hold explicit state.
+
+**At the server** (`secstored(8)`): an account is either not enrolled, or
+*enrolled*, which is the file `VAULTKEY` in its directory holding the SHA-256
+of the account's *vault key* (HMAC-SHA-256 of the data key DK; `vaultkey` in
+`secstore(2)`). Once enrolled, the server stores and removes that account's
+files only in a session that has shown the vault key (`VAULTKEY`), and
+enrolment itself can be replaced or removed only by such a session. The
+password alone reads the files, which are under DK, and changes nothing.
+
+**On the machine holding the slots** (`twofaslot(2)`, `state`):
+
+| State | Slots | Mark in `2fa/` | A vault under the password alone |
+|-------|-------|----------------|----------------------------------|
+| `none` | no | – | is the vault |
+| `enrolling` | yes | none | taken (an enrolment that stopped before its last step; an account enrolled before the mark was kept, until its vault is first read under DK) |
+| `enrolled` | yes | `.enrolled` | **refused** |
+| `disabling` | yes | `.disabling` | taken (a disable that stopped after putting the vault back) |
+
+`enroll` stores the DK-encrypted vault, has the server lock the account to the
+vault key, and only then writes `.enrolled`. `disable` shows the vault key,
+writes `.disabling`, stores the vault under the password, has the server
+unlock, and removes the slots. `wm/logon` marks an account `enrolled` the first
+time its vault decrypts under DK, and factotum's save-back shows the vault key
+before each store (enrolling an account the server does not yet hold a key
+for). A crash at any point leaves a state from the table, never a vault that
+a password holder could have substituted after enrolment completed.
+
 ## 4. Historical reference: Plan 9 challenge-response
 
 InferNode is Inferno; Inferno is Plan 9's sibling. Plan 9 shipped token auth ~30

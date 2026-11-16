@@ -156,6 +156,14 @@ seq  time        source   event      hash             message
   **Signed-only:** a checkpoint exists only if factotum signs it. An unsigned marker proves
   nothing the chain doesn't already, and the strict verifier reads one as tampering; a
   chain-only install (no signer key) simply has no checkpoints and relies on `-a` anchoring.
+  **Signatures made before the signature formats were held to the standards:** ML-DSA
+  checkpoints signed FIPS 204's internal interface, and every byte-signing algorithm
+  signed the digest without its leading zero bytes; `Keyring->verify` now takes only the
+  standards' signatures (keyring-sha1(2)). A log whose checkpoints were signed by an
+  ML-DSA key before that change (and one in 256 of an Ed25519 or SLH-DSA key's) fails
+  `auditverify -k` at its first such checkpoint, though its hash chain is intact: verify
+  an old log's signatures with the build that wrote it, record its head as the anchor
+  (`-a`), and let the new build sign from there. The key itself is unchanged.
 - **External anchoring:** `head` is copied off-host per namespace policy (`cp /mnt/audit/head
   <elsewhere>` — no machinery), and `auditverify -a <head-copy>` requires the chain to reach
   that seq with that tip. This is what catches **truncation**, which is chain-valid by

@@ -13,7 +13,10 @@
 # whole samples; localhost dialled as 127.0.0.1; refused: something that is not rtl_tcp, nothing
 # listening, an rtl_tcp that does not greet (busy with another
 # client), bad settings, a write with one bad line (none of it done);
-# stop; a second sdrfs finds it served.
+# stop; a second sdrfs finds it served; a server that is not posted
+# (-S) gone whole two seconds after its mount, its reader and its
+# timers with it (they stayed, and rtl_tcp, which takes one client,
+# stayed taken).
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -97,7 +100,8 @@ has status.idle "^link=open source=tcp!127.0.0.1!$PR tuner=R828D gains=29 reader
 want="cmd rate 250000|cmd freq 1090000000|cmd ppm -3|cmd biastee 0|cmd agc 0|cmd direct 0|cmd gainmode 1|cmd gain 386|"
 [ "$(conn 1 | grep '^cmd' | tr '\n' '|')" = "$want" ] &&
 	pass "the source's dial: every setting sent, the gain last" || fail "conn 1: $(conn 1 | tr '\n' '|')"
-[ "$(grep -c '^connect' "$D/rtl.log")" = 4 ] &&
+# (the fifth is the unposted server's, at the end)
+[ "$(grep -c '^connect' "$D/rtl.log")" = 5 ] &&
 	pass "the reader took the held connection: one dial a phase" || fail "connects: $(grep '^connect' "$D/rtl.log" | tr '\n' ' ')"
 for i in 1 2 3; do
 	[ "$(samples iq.$i)" = ok ] || fail "iq.$i: $(samples iq.$i)"
@@ -147,6 +151,11 @@ has err.half "bad rate 1" && has ctl.after "^freq 162025000$" &&
 [ -z "$(f err.localhost)" ] && has ctl.localhost "^source tcp!127.0.0.1!$PR$" &&
 	pass "localhost dialled as 127.0.0.1" || fail "localhost: '$(f err.localhost)' $(f ctl.localhost | head -1)"
 has again "served already" && pass "a second sdrfs finds it served" || fail "again: '$(f again)'"
+
+b=$(f procs.before | tr -d ' '); u=$(f procs.during | tr -d ' '); a=$(f procs.after | tr -d ' ')
+[ -z "$(f err.unposted)" ] && [ -n "$b" ] && [ "${u:-0}" -gt "$b" ] && [ "$a" -le "$b" ] && grep -q '^hangup 5' "$D/rtl.log" &&
+	pass "an unposted server ends whole with its mount ($b sdrfs processes before, $u while it ran, $a after)" ||
+	fail "an unposted server after its mount went: $b processes before, $u while it ran, $a after; '$(f err.unposted)'"
 
 [ $failed = 0 ] && echo "sdrfs_test: PASS"
 exit $failed

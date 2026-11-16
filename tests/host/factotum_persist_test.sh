@@ -104,4 +104,34 @@ if line plain | grep -q "user=alice "; then
 else
 	bad "service=plain came back as: $(line plain | cut -c1-160)"
 fi
+
+# A save that cannot be made is an answer. With no random numbers there
+# is no nonce: the thread that saves raised an exception and ended, the
+# writer of "sync" waited for an answer that never came, and factotum's
+# one loop, waiting with it, served nothing more.
+cat > "$DIR/phase3.sh" <<INFERNO
+load std
+bind /dev/null /dev/random
+auth/factotum -f $GDIR/keys3.enc -p testpassword123
+sleep 1
+echo 'key proto=pass service=p3 user=u3 !password=x' > /mnt/factotum/ctl
+echo sync > /mnt/factotum/ctl
+echo P3-sync: \$status.
+echo sync > /mnt/factotum/ctl
+echo P3-again: \$status.
+echo P3-keys: \`{cat /mnt/factotum/ctl}
+echo '--- phase3 done ---'
+INFERNO
+OUT3=$(with_timeout 30 "$EMU" -r"$ROOT" -c1 sh "$GDIR/phase3.sh" 2>&1 < /dev/null || true)
+if echo "$OUT3" | grep -q '^P3-sync: ..*\.$' && echo "$OUT3" | grep -q '^P3-again: ..*\.$'; then
+	ok "with no random numbers a sync is answered, with an error, each time"
+else
+	bad "sync with no /dev/random: $(echo "$OUT3" | grep -v fsqid | tail -3 | cut -c1-200 | tr '\n' '|')"
+fi
+if echo "$OUT3" | grep -q '^P3-keys: .*service=p3'; then
+	ok "and factotum still serves its keys"
+else
+	bad "factotum after a save that failed: $(echo "$OUT3" | grep -v fsqid | tail -3 | cut -c1-200 | tr '\n' '|')"
+fi
+[ ! -s "$DIR/keys3.enc" ] && ok "and no key file was written under no nonce" || bad "a key file was written with no random numbers"
 exit $rc

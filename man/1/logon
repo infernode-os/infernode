@@ -86,6 +86,38 @@ overlay and are created with
 The original behaviour documented above still describes upstream
 Inferno and native ports.
 .PP
+An unlock reads the account's key file from the secstore, loads its keys into
+.IR factotum (4)
+and tells factotum to save there.
+An account with no key file yet unlocks with nothing to load.
+A key file that is there and cannot be read (the server's error, a connection
+that ended part way, a file of no bytes) is a failed unlock, with the reason
+shown: the password may be tried again or the screen skipped, and nothing is
+saved over a file that was not read.
+A password with a blank in it is given to factotum quoted (the
+.B secstoreq
+request); a factotum that does not take it leaves saving off for the session,
+and the screen says so.
+While a boot's keys have been unlocked from the secstore the file
+.B /tmp/.secstore-unlocked
+exists, for programs that show it; it is removed when the screen next starts,
+and when a boot starts its
+.IR factotum (4)
+(so a boot that skips the screen does not inherit the last one's).
+It is a file anybody can make; what says where keys are saved, and cannot be made by another, is
+.BR /mnt/factotum/secstore .
+.PP
+A new account's password must be at least 8 characters.
+An account with a second factor (see
+.IR secstored (8))
+is unlocked by its key or its recovery passphrase;
+a key file under the password alone is taken for such an account only while its
+second factor is being enrolled or disabled, not once it has been read under the factor's data key.
+A key file in one of the two formats before the current one is not read:
+.B "auth/secstore m factotum"
+moves it (see
+.IR secstore (1)).
+.PP
 On a screen with no keyboard (a phone, the Raspberry Pi's touch panel)
 the boot starts the keyboard on the screen,
 .IR wm-osk (1),

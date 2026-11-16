@@ -1,0 +1,115 @@
+.TH RSAGEN 8
+.SH NAME
+dsagen, rsagen \- generate public keys
+.SH SYNOPSIS
+.B dsagen
+[
+.BI -t " tag"
+]
+.PP
+.B rsagen
+[
+.BI -b " nbits"
+] [
+.BI -t " tag"
+]
+.SH DESCRIPTION
+.IR Factotum (4)
+represents public keys as lists of attribute-value pairs, each key on a single line prefixed with the string
+.BR key .
+.PP
+.I Dsagen
+prints a randomly-generated DSA private key using the NIST-recommended algorithm.
+If
+.I tag
+text is specified, it is printed after the
+.B proto
+attribute-value pair.
+Typically,
+.I tag
+is a sequence of attribute-value comments describing the key.
+A DSA key has the following attributes
+.RS
+.TP 8n
+.B p
+prime public modulus
+.PD 0
+.TP
+.B q
+prime group order; divides
+.BR p -1
+.TP
+.B alpha
+group generator
+.TP
+.B key
+.BR alpha ^ !secret
+mod
+.B p
+.TP
+.B !secret
+the secret exponent
+.RE
+.PD
+.PP
+.I Rsagen
+prints a randomly generated RSA private key
+whose
+.B n
+has exactly
+.I nbits
+(default 4096)
+significant bits.
+The key has the following attributes:
+.RS
+.TP
+.B size
+the number of significant bits in
+.B n
+.PD 0
+.TP
+.B ek
+the encryption exponent
+.TP
+.B n
+the product of
+.B !p
+and
+.B !q
+.TP
+.B !dk
+the decryption exponent
+.TP
+.B !p
+a large prime
+.TP
+.B !q
+another large prime
+.TP
+.B "!kp\fR, \fL!kq\fR, \fL!c2
+parameters derived from the other attributes, cached to speed decryption
+.RE
+.PD
+.PP
+All the numbers in
+.I dsagen
+and
+.I rsagen
+output are in hexadecimal except RSA's
+.BR size ,
+which is decimal.
+A public key omits the attributes beginning with
+.L ! .
+A key may have other attributes as well, for example a
+.B service
+attribute identifying how this key is typically used,
+but to these utilities such attributes are merely comments.
+They can be provided in a
+.I tag
+argument.
+.SH SOURCE
+.B /appl/cmd/auth/dsagen.b
+.br
+.B /appl/cmd/auth/rsagen.b
+.SH "SEE ALSO"
+.IR factotum (4)

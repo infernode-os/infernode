@@ -177,7 +177,13 @@ and
 messages,
 .B data
 is set to a pointer into the argument message,
-not a copy.
+not a copy; so are the strings, each moved down over its count
+to make room for its terminating zero, so the message
+is changed and the
+.B Fcall
+is good only while the message is.
+A string with a zero byte in it is not properly formatted:
+C would read it as a shorter string than was sent.
 .PP
 .I ConvS2M
 does the reverse conversion, turning
@@ -194,6 +200,18 @@ messages,
 bytes starting at
 .B data
 are copied into the message.
+The value is 0, and nothing is to be sent, if the message does not fit in
+.I nap
+bytes or
+.I f
+has no encoding: a type that is not a message's,
+more than
+.B MAXWELEM
+names or qids,
+a string of 65536 bytes or more (a string's count is 16 bits),
+or a
+.B count
+that takes the size past 32 bits.
 .PP
 The constant
 .B IOHDRSZ
@@ -217,7 +235,8 @@ structure
 including its initial 32-bit size field.
 In other words, it reports the number of bytes produced
 by a successful call to
-.IR convS2M .
+.IR convS2M ,
+and 0 where that call would not succeed in a buffer of any size.
 .PP
 Another structure is
 .BR Dir ,
@@ -246,6 +265,15 @@ pointer, in which case the string pointers in the returned
 are all
 .BR nil ;
 however, the return value still includes their length.
+.I ConvM2D
+is given no length for
+.IR strs :
+.I nap
+bytes are always enough (each string takes the room of its count, less one),
+and a caller whose storage is of some other size must compare
+.I nap
+with it first.
+The value is 0 if the encoding is cut short or one of its strings has a zero byte in it.
 .PP
 .I ConvD2M
 does the reverse translation,
@@ -279,6 +307,13 @@ returns the number of bytes required to store the machine-independent representa
 structure
 .IR d ,
 including its initial 16-bit size field.
+A
+.B Dir
+whose strings are too long for that field has no encoding:
+.I sizeD2M
+and
+.I convD2M
+return 0 for it.
 .PP
 The routine
 .B statcheck
@@ -303,7 +338,8 @@ in other words,
 is 2 plus the sum of the sizes of the entry itself.
 .I Statcheck
 also verifies that the length field has the correct value (that is,
-.IB nbuf -2\f1).
+.IB nbuf -2\f1),
+and that no string has a zero byte in it.
 It returns
 .B 0
 for a valid entry and

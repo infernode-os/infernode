@@ -25,7 +25,8 @@ mpmagadd(mpint *b1, mpint *b2, mpint *sum)
 		mpassign(b1, sum);
 		return;
 	}
-	mpbits(sum, (n+1)*Dbits);
+	// (the longest number and a digit more wrapped an int: see dat.h)
+	mpbits(sum, mpsizebits((vlong)n+1, 0, "mpadd"));
 	sum->top = n+1;
 
 	mpvecadd(b1->p, n, b2->p, m, sum->p);

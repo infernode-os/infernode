@@ -212,6 +212,90 @@ testAskerGone(t: ref T)
 	alive(t);
 }
 
+# a request and its answer on an rpc file, given 5 seconds each way
+rpcreq(rpc: ref Sys->FD, req: array of byte): string
+{
+	c := chan[1] of string;
+	spawn bwriter(rpc, req, c);
+	r := within(c, 5000);
+	if(r == nil)
+		return "TIMEOUT in write";
+	spawn reader(rpc, c);
+	r = within(c, 5000);
+	if(r == nil)
+		return "TIMEOUT in read";
+	return r;
+}
+
+bwriter(fd: ref Sys->FD, b: array of byte, c: chan of string)
+{
+	if(sys->write(fd, b, len b) < 0)
+		c <-= sys->sprint("error: %r");
+	else
+		c <-= "ok";
+}
+
+setkey(t: ref T, s: string)
+{
+	ctl := sys->open(MNT + "/ctl", Sys->OWRITE);
+	if(ctl == nil || sys->fprint(ctl, "%s", s) < 0)
+		t.fatal(sys->sprint("ctl %s: %r", s));
+}
+
+#
+# A protocol that looks for a key under each of several names (p9any,
+# the domains a server offers) asked the agent for every one it did not
+# find, though the next had a key: findkeys asked as findkey does.  It
+# only looks now; the agent is asked once, when no domain has a key,
+# for the first.
+#
+testProbe(t: ref T)
+{
+	if(nk == nil)
+		t.fatal(sys->sprint("open needkey: %r"));
+	setkey(t, "key proto=p9sk1 dom=lab user=carol !password=short");
+	rc := chan[1] of string;
+	spawn reader(nk, rc);
+	sys->sleep(200);	# the agent has the read
+
+	rpc := sys->open(MNT + "/rpc", Sys->ORDWR);
+	if(rpc == nil)
+		t.fatal(sys->sprint("open rpc: %r"));
+	t.assert(contains(rpcreq(rpc, array of byte "start proto=p9any role=client"), "ok"), "start p9any");
+	offer := array of byte "write p9sk1@nokey1 p9sk1@nokey2 p9sk1@lab\0";
+	t.assert(contains(rpcreq(rpc, offer), "ok"), "the server's offer is written");
+	r := rpcreq(rpc, array of byte "read");
+	t.assert(contains(r, "ok p9sk1 lab"), "of three domains the one with a key is taken: " + r);
+	asked := within(rc, 300);
+	t.assert(asked == nil, "and the agent is not asked for a key for the others: " + asked);
+	rpc = nil;
+
+	# no domain has a key: the agent is asked, once, for the first
+	rpc = sys->open(MNT + "/rpc", Sys->ORDWR);
+	t.assert(contains(rpcreq(rpc, array of byte "start proto=p9any role=client"), "ok"), "start p9any again");
+	offer = array of byte "write p9sk1@nokey1 p9sk1@nokey2\0";
+	# the answer to this write waits for the key
+	wc := chan[1] of string;
+	spawn bwriter(rpc, offer, wc);
+	t.assert(within(wc, 5000) != nil, "an offer of two domains with no key");
+	ac := chan[1] of string;
+	spawn reader(rpc, ac);
+	if(asked == nil)
+		asked = within(rc, 5000);
+	if(asked == nil)
+		t.fatal("the agent was not asked for a key when no domain had one");
+	t.assert(contains(asked, "nokey1") && !contains(asked, "nokey2"), "the agent is asked for the first domain's key: " + asked);
+	(nil, f) := sys->tokenize(asked, " ");
+	t.assertseq(within2(hd tl f), "ok", "and its answer is taken");
+	ans := within(ac, 5000);
+	t.assert(ans != nil && contains(ans, "can't find key"), "the protocol, told there is no key, says so: " + ans);
+	spawn reader(nk, rc);
+	again := within(rc, 500);
+	t.assert(again == nil, "and the agent is not asked again for the second domain: " + again);
+	rpc = nil;
+	alive(t);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -245,6 +329,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("AnsweredTwice", testAnsweredTwice);
 	run("AskerGone", testAskerGone);
+	run("Probe", testProbe);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

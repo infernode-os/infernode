@@ -4,7 +4,7 @@ listen, styxlisten, dial \- network connections
 .SH SYNOPSIS
 .B listen
 [
-.B -Ats
+.B -AMts
 ] [
 .B -a
 .I alg
@@ -35,7 +35,7 @@ listen, styxlisten, dial \- network connections
 .br
 .B styxlisten
 [
-.B -Ats
+.B -AMts
 ] [
 .B -a
 .I alg
@@ -108,6 +108,32 @@ including the plaintext
 .B none
 algorithm, must be selected explicitly with
 .BR -a .
+Each
+.I alg
+must be one that
+.IR ssl (3)
+has here
+.RB ( aes_256_gcm
+and
+.BR hmac_sha384 ),
+or
+.B none
+or
+.BR clear ;
+given any other name (the algorithms of older systems, say) the listener
+says which it does not know and does not start.
+A caller's choice among the algorithms offered is sent in the clear after
+authentication and is not itself authenticated, so offering
+.B none
+(or
+.BR clear )
+beside an algorithm protects no caller's session at this end:
+someone on the path can change any caller's choice to
+.B none
+and then speak to the listener's command as that caller.
+The listener therefore refuses to start with such a list unless
+.B -M
+is given.
 If
 .I keyfile
 is specified, then that will be used as the server's certificate;

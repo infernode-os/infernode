@@ -139,6 +139,88 @@ testStrToAddr(t: ref T)
 }
 
 #
+# An address is "0x" and forty hex digits, twenty bytes, and nothing
+# else is one. strtoaddr stripped the prefix and hexdecode stripped one
+# again: the prefix twice and 38 digits came back as 19 bytes, which
+# every caller took (they ask only for nil).
+#
+testStrToAddrExact(t: ref T)
+{
+	h38 := "11223344556677889900aabbccddeeff112233";
+	t.assert(ethcrypto->strtoaddr("0x0x" + h38) == nil, "the prefix twice and 38 digits is no address");
+	t.assert(ethcrypto->strtoaddr("0X0x" + h38) == nil, "nor with the other prefix first");
+	t.assert(ethcrypto->strtoaddr("0x" + h38 + "0x") == nil, "nor with it last");
+	t.assert(ethcrypto->strtoaddr("0x" + h38) == nil, "19 bytes");
+	t.assert(ethcrypto->strtoaddr("0x" + h38 + "4455") == nil, "21 bytes");
+	t.assert(ethcrypto->strtoaddr(h38 + "44") == nil, "no prefix");
+	t.assert(ethcrypto->strtoaddr("0X" + h38 + "44") == nil, "0X is not the prefix");
+	t.assert(ethcrypto->strtoaddr("0x" + h38 + "4g") == nil, "a digit that is none");
+	t.assert(ethcrypto->strtoaddr("0x" + h38 + " 4") == nil, "a blank");
+	t.assert(ethcrypto->strtoaddr("") == nil, "nothing");
+	t.assert(ethcrypto->strtoaddr("0x") == nil, "the prefix alone");
+	a := ethcrypto->strtoaddr("0x" + h38 + "44");
+	t.assert(a != nil && len a == 20, "forty digits are an address");
+
+	# hexdecode: the prefix is not part of the count
+	t.assert(ethcrypto->hexdecode("0x0x00") == nil, "hexdecode: the prefix twice");
+	t.assert(ethcrypto->hexdecode("0x0") == nil, "hexdecode: half a byte after the prefix");
+	b := ethcrypto->hexdecode("0x0102");
+	t.assert(b != nil && len b == 2 && int b[0] == 1 && int b[1] == 2, "hexdecode: a prefix and two bytes");
+}
+
+#
+# EIP-55: letters of both cases carry a checksum, which must be right;
+# all lower case and all upper case carry none.
+#
+testEIP55Strict(t: ref T)
+{
+	# the specification's examples
+	good := array[] of {
+		"0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+		"0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+		"0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+		"0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+		"0x52908400098527886E0F7030069857D2E4169EE7",	# all upper
+		"0xde709f2102306220921060314715629080e2fb77",	# all lower
+		# the wallet's own token contracts
+		"0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+		"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+		"0x000000000000000000000000000000000000dEaD",
+	};
+	for(i := 0; i < len good; i++) {
+		a := ethcrypto->strtoaddr(good[i]);
+		t.assert(a != nil && len a == 20, "taken: " + good[i]);
+		if(a != nil && i < 4)
+			t.assertseq(ethcrypto->addrtostr(a), good[i], "and written back the same");
+	}
+	bad := array[] of {
+		"0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD",	# last letter's case
+		"0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",	# second letter's
+		"0xfb6916095ca1df60bB79Ce92cE3Ea74c37c5d359",	# one lowered
+		"0x000000000000000000000000000000000000DeaD",
+	};
+	for(i = 0; i < len bad; i++)
+		t.assert(ethcrypto->strtoaddr(bad[i]) == nil, "a wrong checksum refused: " + bad[i]);
+	# the same digits with no checksum claimed are an address
+	t.assert(ethcrypto->strtoaddr("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed") != nil, "all lower taken");
+	t.assert(ethcrypto->strtoaddr("0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED") != nil, "all upper taken");
+}
+
+#
+# A negative number has no RLP encoding (it was encoded as zero).
+#
+testRLPNegative(t: ref T)
+{
+	t.assert(ethcrypto->rlpencode_uint(big -1) == nil, "rlpencode_uint(-1) is nil");
+	t.assert(ethcrypto->rlpencode_list(ethcrypto->rlpencode_uint(big 1) ::
+		ethcrypto->rlpencode_uint(big -5) :: nil) == nil, "and a list holding one is none");
+	z := ethcrypto->rlpencode_uint(big 0);
+	t.assert(z != nil && len z == 1 && int z[0] == 16r80, "zero is still 0x80");
+}
+
+#
 # RLP encoding (test vectors from Ethereum wiki)
 #
 
@@ -489,6 +571,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Address/FromPubkey", testAddressFromPubkey);
 	run("Address/EIP55", testEIP55Checksum);
 	run("Address/StrToAddr", testStrToAddr);
+	run("Address/StrToAddrExact", testStrToAddrExact);
+	run("Address/EIP55Strict", testEIP55Strict);
+	run("RLP/Negative", testRLPNegative);
 
 	# RLP tests
 	run("RLP/SingleByte", testRLPSingleByte);

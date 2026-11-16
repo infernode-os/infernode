@@ -104,10 +104,14 @@ def closure(src, dirs):
 				missing.add(name)
 	return seen
 
+# A header counts unless git ignores it (one a build makes).  A new one
+# not yet added counts too: asked only of tracked files, a mkfile that
+# did not name a header written in the same change was passed, and the
+# header was reported by the run after the commit.
 def tracked(path):
-	r = subprocess.run(['git', '-C', ROOT, 'ls-files', '--error-unmatch', rel(path)],
+	r = subprocess.run(['git', '-C', ROOT, 'check-ignore', '-q', rel(path)],
 		capture_output=True)
-	return r.returncode == 0
+	return r.returncode != 0
 
 def mkdislists(text, d):
 	# MODULES and SYSMODULES as they stand where mkdis is read

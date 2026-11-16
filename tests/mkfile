@@ -63,6 +63,8 @@ TARG=\
 	errlabel_leak_test.dis\
 	crypto_test.dis\
 	login_test.dis\
+	signer_test.dis\
+	passwd_test.dis\
 	ssl_record_test.dis\
 	delegation_budget_test.dis\
 	destructor_test.dis\
@@ -77,11 +79,16 @@ TARG=\
 	ninep_msize_test.dis\
 	export_hostile_test.dis\
 	export_limits.dis\
+	logon_unlock.dis\
 	mnt_smallmsize_test.dis\
 	styxservers_hostile_test.dis\
 	keyring_degenerate_test.dis\
+	keyring_letgo_test.dis\
+	keyring_msg_test.dis\
 	auth_keyfile_test.dis\
 	factotum_needkey_test.dis\
+	factotum_proto_test.dis\
+	spki_pre0_test.dis\
 	auth9_short_test.dis\
 	ninep_disconnect_test.dis\
 	crypto_bench.dis\
@@ -149,19 +156,51 @@ TARG=\
 	print_edge_test.dis\
 	math_edge_test.dis\
 	alt_edge_test.dis\
+	auth_bind_test.dis\
+	tls_record_test.dis\
+	random_fail_test.dis\
+	cnsa_mode_test.dis\
+	secstored_test.dis\
+	wstat_owner_test.dis\
+	file2chan_gaveup_test.dis\
+	dial_kernel_test.dis\
+	udp_empty_test.dis\
+	attrdb_test.dis\
+	dial_lib_test.dis\
+	post9p_test.dis\
+	auth_algs_test.dis\
+	registry_test.dis\
+	cs_cancel.dis\
+	pqsig_test.dis\
+	mailconn_test.dis\
+	imap_hostile_test.dis\
+	smtp_refuse_test.dis\
+	mailconn_test.dis\
+	wikifs_test.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\
 	llmclient_edge_test.dis\
 	fetchtools_edge_test.dis\
 	fakecs.dis\
+	ftpfs_test.dis\
 	webclient_body_test.dis\
+	webclient_cookie_test.dis\
 	webclient_deadline_test.dis\
+	webclient_origin_test.dis\
+	webclient_tlsfd_test.dis\
 	veltro_coord_test.dis\
 	link_digest_test.dis\
 	link_digest_a.dis\
 	link_digest_b.dis\
 	keyring_args_test.dis\
 	ipint_edge_test.dis\
+	ipint_size_test.dis\
+	ninep_nul_test.dis\
+	keyring_rsa_test.dis\
+	keyring_dsa_test.dis\
+	ipints_prime_test.dis\
+	prime_kill_test.dis\
+	elgamal_forge_test.dis\
 	namec_clone_test.dis\
 	nil_far_test.dis\
 	slice_end_test.dis\
@@ -170,7 +209,14 @@ TARG=\
 	string_edge_test.dis\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\
+	mail9p_hold.dis\
+	pop3cli.dis\
+	webgetcli.dis\
 	print_heapfull.dis\
+	timerec.dis\
+	wpadrive.dis\
+	ipint_nomem.dis\
+	mnt_unexpected.dis\
 	tool9call.dis\
 	exec_fd_probe.dis\
 	load_heapfull.dis\
@@ -334,6 +380,7 @@ TARG=\
 	tls_pq_test.dis\
 	x509_test.dis\
 	x509_path_test.dis\
+	x509_total_test.dis\
 	tls_chain_live.dis\
 	xml_test.dis\
 	xenith_concurrency_test.dis\
@@ -346,6 +393,7 @@ TARG=\
 	spawn_helpers_test.dis\
 	shell_tool_test.dis\
 	fractal_tool_test.dis\
+	secstore_client_test.dis\
 	secstore_crypto_test.dis\
 	secstore_abort_probe.dis\
 	twofaslot_test.dis\
@@ -370,6 +418,7 @@ TARG=\
 	brick_d2_test.dis\
 	ethcrypto_test.dis\
 	ethrpc_conv_test.dis\
+	ethrpc_node_test.dis\
 	publicnet_host_test.dis\
 	wallet_policy_test.dis\
 	wallet9p_test.dis\
@@ -385,12 +434,15 @@ TARG=\
 	llmclient_proxy_test.dis\
 	llmclient_pool_test.dis\
 	tlsclient.dis\
+	tlsverify.dis\
+	x509_chain.dis\
 	tlspinclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\
 
 MODULES=\
 	$ROOT/appl/mpeg/mpegio.m\
+	$ROOT/appl/cmd/wikifs/wiki.m\
 	$ROOT/appl/xenith/asyncio.m\
 	$ROOT/appl/xenith/buff.m\
 	$ROOT/appl/xenith/col.m\
@@ -515,6 +567,7 @@ SYSMODULES=\
 	keyringinst.m\
 	l2cap.m\
 	mailparse.m\
+	mailconn.m\
 	memfs.m\
 	msgsrc.m\
 	plumbmsg.m\
@@ -557,6 +610,16 @@ SYSMODULES=\
 	pngload.m\
 	newns.m\
 	audit.m\
+	sexprs.m\
+	spki.m\
+	msgio.m\
+	attrdb.m\
+	ip.m\
+	ipattr.m\
+	post9p.m\
+	pop3.m\
+	webget.m\
+	smtp.m\
 
 DISBIN=$ROOT/dis/tests
 

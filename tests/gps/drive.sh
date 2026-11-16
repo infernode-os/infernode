@@ -63,6 +63,14 @@ sh -c 'echo source garmin '^$d^'/garmin.txt > '^$g^'/ctl' >[2] $d/err.garmin
 sleep 1
 cat $g/fix > $d/fix.garmin
 
+# what anyone can send to a port that is listened to: sentences written
+# to end or stop the parser, between two good ones ($6: their port)
+sh -c 'echo source udp!*!'^$6^' > '^$g^'/ctl' >[2] $d/err.hostile
+sleep 3
+cat $g/status > $d/status.hostile
+cat $g/fix > $d/fix.hostile
+cat $g/traffic > $d/traffic.hostile
+
 # refusals
 sh -c 'echo source gdl90 tcp!*!4000 > '^$g^'/ctl' >[2] $d/err.tcplisten
 sh -c 'echo source udp!*!4000 9600 > '^$g^'/ctl' >[2] $d/err.netbaud
@@ -87,6 +95,12 @@ sh -c 'cat '^$g^'/position' > $d/position.lost >[2] $d/err.lost
 # for, up to 20s, as tools9p's start is not quick): tools9p
 # mounts the posted #sgps/fs for it
 @{pctl forkns; unmount /mnt/gps; path=(/dis/veltro /dis/cmd /dis .); tools9p -m /tool gps &; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 { ftest -e /tool/gps/ctl || sleep 1 }; echo position > /tool/gps/ctl; cat /tool/gps/ctl > $d/tool.position}
+
+# more opens of event than could be wanted: each has a queue of its own
+for i in 0 1 2 3 4 5 6 7 { for j in 0 1 2 3 4 5 6 7 8 { cat $g/event > /dev/null >[2] $d/err.open.$i$j & } }
+sleep 2
+cat $d/err.open.* > $d/err.opens
+cat $g/status > $d/status.opens
 
 gpsfs >[2] $d/again
 echo R done

@@ -11,6 +11,17 @@ implement SdgsrvTest;
 # export; a reader killed in the middle of its reads (a Tflush through
 # the server's own tags), and the mount still reading after it.
 #
+# Through a relay of the test's own, which keeps the first initiation it
+# passes and the session's index (both are in the clear on the wire):
+# junk sent under the session's index from another socket while a read
+# waits gets none of the session's replies (the address replies go to,
+# and the session's idle clock, were set from any packet carrying the
+# index, before it had been opened: three replies went to the other
+# socket); and the kept initiation, sent again to a server started again
+# with its keys, is not answered (the newest counter accepted was not
+# kept across a start: it opened a session), while a new handshake is.
+# A counter store that cannot be read stops the server at its start.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -274,6 +285,296 @@ same(a, b: array of byte): int
 	return 1;
 }
 
+# ---- a relay, another socket, a second server ----
+
+Udphdr: con 52;
+
+Tap: adt {
+	first:	array of byte;	# the first initiation passed
+	index:	int;		# the session's index, from a data packet
+	have:	int;
+	hdr:	array of byte;	# the client's address, as UDP headers give it
+	njunk:	int;		# datagrams the other socket has been sent by the server
+};
+
+get4(a: array of byte, o: int): int
+{
+	return int a[o] | int a[o+1] << 8 | int a[o+2] << 16 | int a[o+3] << 24;
+}
+
+put4(a: array of byte, o, v: int)
+{
+	for(i := 0; i < 4; i++)
+		a[o+i] = byte (v >> (8*i));
+}
+
+# client <-> server at saddr, on port
+udprelay(port: int, saddr: string, tap: ref Tap, pidc: chan of int)
+{
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	(ok, c) := sys->announce(sys->sprint("udp!127.0.0.1!%d", port));
+	if(ok < 0 || sys->fprint(c.cfd, "headers") < 0){
+		pidc <-= -1;
+		return;
+	}
+	cfd := sys->open(c.dir + "/data", Sys->ORDWR);
+	(ok2, sc) := sys->dial(saddr, nil);
+	if(cfd == nil || ok2 < 0){
+		pidc <-= -1;
+		return;
+	}
+	spawn fromserver(sc.dfd, cfd, tap);
+	pidc <-= pid;
+	buf := array[2048] of byte;
+	for(;;){
+		n := sys->read(cfd, buf, len buf);
+		if(n <= 0)
+			return;
+		if(n <= Udphdr)
+			continue;
+		h := array[Udphdr] of byte;
+		h[0:] = buf[0:Udphdr];
+		tap.hdr = h;
+		m := array[n - Udphdr] of byte;
+		m[0:] = buf[Udphdr:n];
+		if(int m[0] == 1 && tap.first == nil)
+			tap.first = m;
+		if(int m[0] == 3 && len m >= 5){
+			tap.index = get4(m, 1);
+			tap.have = 1;
+		}
+		sys->write(sc.dfd, m, len m);
+	}
+}
+
+fromserver(sfd, cfd: ref Sys->FD, tap: ref Tap)
+{
+	buf := array[2048] of byte;
+	for(;;){
+		n := sys->read(sfd, buf, len buf);
+		if(n <= 0){
+			sys->sleep(50);
+			continue;
+		}
+		if(tap.hdr == nil)
+			continue;
+		p := array[Udphdr + n] of byte;
+		p[0:] = tap.hdr;
+		p[Udphdr:] = buf[0:n];
+		sys->write(cfd, p, len p);
+	}
+}
+
+# count what the server sends to fd
+junkreader(fd: ref Sys->FD, tap: ref Tap, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	buf := array[2048] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n > 0)
+			tap.njunk++;
+		else
+			sys->sleep(20);
+	}
+}
+
+# data packets under the session's index that open under no key
+junker(fd: ref Sys->FD, tap: ref Tap, n: int, done: chan of int)
+{
+	for(i := 0; i < n; i++){
+		p := array[1 + 4 + 8 + 24] of byte;
+		r := random->randombuf(Random->NotQuiteRandom, len p);
+		p[0:] = r;
+		p[0] = byte 3;
+		put4(p, 1, tap.index);
+		p[12] &= byte 16r7f;
+		sys->write(fd, p, len p);
+		sys->sleep(10);
+	}
+	done <-= 1;
+}
+
+killgrp(pid: int)
+{
+	if(pid < 0)
+		return;
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+copykeys(from, dst: string): string
+{
+	mkdir(dst);
+	for(l := "sdgsrv.key" :: "sdgsrv.peer" :: "sdg.psk" :: "sdg.key" :: "sdg.brick" :: nil; l != nil; l = tl l){
+		fd := sys->open(from + "/" + hd l, Sys->OREAD);
+		b := array[256] of byte;
+		n := -1;
+		if(fd != nil)
+			n = sys->read(fd, b, len b);
+		o := sys->create(dst + "/" + hd l, Sys->OWRITE, 8r600);
+		if(n <= 0 || o == nil || sys->write(o, b, n) != n)
+			return sys->sprint("copy %s: %r", hd l);
+	}
+	return nil;
+}
+
+s3pid := -1;
+relaypid := -1;
+s3port: int;
+tap: ref Tap;
+
+# the second server, its relay, and a session through the relay on m4
+setup2(t: ref T)
+{
+	if(tap != nil)
+		return;
+	kd2 := scratch + "/keys2";
+	if((e := copykeys(scratch + "/keys", kd2)) != nil)
+		t.fatal(e);
+	(nil, f) := sys->tokenize(addr, "!");
+	s3port = int hd tl tl f + 2;
+	pidc := chan of int;
+	spawn server(nil, kd2, sys->sprint("udp!127.0.0.1!%d", s3port), scratch + "/srv", pidc);
+	s3pid = <-pidc;
+	sys->sleep(300);
+	tap = ref Tap(nil, 0, 0, nil, 0);
+	spawn udprelay(s3port + 1, sys->sprint("udp!127.0.0.1!%d", s3port), tap, pidc);
+	relaypid = <-pidc;
+	if(relaypid < 0)
+		t.fatal(sys->sprint("relay: %r"));
+	if((e = mountat(sys->sprint("udp!127.0.0.1!%d", s3port + 1), scratch + "/m4")) != nil)
+		t.fatal(e);
+}
+
+# Junk under the session's index from another socket: none of the
+# session's replies go to it.
+testJunk(t: ref T)
+{
+	setup2(t);
+	t.assert(tap.have, "the relay saw the session's index");
+	(ok, j) := sys->dial(sys->sprint("udp!127.0.0.1!%d", s3port), nil);
+	if(ok < 0)
+		t.fatal(sys->sprint("dial: %r"));
+	pidc := chan of int;
+	spawn junkreader(j.dfd, tap, pidc);
+	jpid := <-pidc;
+	done := chan of int;
+	spawn junker(j.dfd, tap, 220, done);
+	sys->sleep(100);
+	fd := sys->open(scratch + "/m4/slow", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open slow: %r"));
+	b := array[100] of byte;
+	n := sys->read(fd, b, len b);
+	t.assert(n > 0 && string b[0:n] == "slow but here", sys->sprint("the read waiting through the junk gets its bytes (%d: %r)", n));
+	<-done;
+	sys->sleep(200);
+	t.asserteq(tap.njunk, 0, "datagrams the server sent to the junk's socket");
+	# and the session still serves
+	(bb, err) := readways(scratch + "/m4/big", 4);
+	t.assertnil(err, "the session reads on");
+	t.assert(same(bb, want), "byte for byte");
+	jfd := sys->open(sys->sprint("/prog/%d/ctl", jpid), Sys->OWRITE);
+	if(jfd != nil)
+		sys->fprint(jfd, "kill");
+}
+
+# is the initiation m, sent to the server now, answered?
+answered(m: array of byte): int
+{
+	(ok, c) := sys->dial(sys->sprint("udp!127.0.0.1!%d", s3port), nil);
+	if(ok < 0)
+		return -1;
+	got := chan[1] of int;
+	spawn readone(c.dfd, got);
+	sys->write(c.dfd, m, len m);
+	tick := chan[1] of int;
+	spawn after(tick, 800);
+	alt {
+	n := <-got =>
+		return n;
+	<-tick =>
+		sys->fprint(c.cfd, "hangup");
+		return 0;
+	}
+}
+
+readone(fd: ref Sys->FD, got: chan of int)
+{
+	buf := array[2048] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n > 0)
+		got <-= n;
+}
+
+after(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# An initiation recorded from the wire, sent again: not answered by the
+# server that took it, nor by one started again with its keys.
+testRestart(t: ref T)
+{
+	setup2(t);
+	if(tap.first == nil)
+		t.fatal("the relay kept no initiation");
+	t.asserteq(answered(tap.first), 0, "the initiation sent again to the same server: bytes answered");
+	sys->unmount(nil, scratch + "/m4");
+	killgrp(s3pid);
+	sys->sleep(300);
+	pidc := chan of int;
+	spawn server(nil, scratch + "/keys2", sys->sprint("udp!127.0.0.1!%d", s3port), scratch + "/srv", pidc);
+	s3pid = <-pidc;
+	sys->sleep(400);
+	t.asserteq(answered(tap.first), 0, "and to the server started again: bytes answered");
+	# a handshake of now is taken
+	e := mountat(sys->sprint("udp!127.0.0.1!%d", s3port), scratch + "/m5");
+	t.assertnil(e, "a new handshake with the restarted server");
+	if(e == nil){
+		(b, err) := readways(scratch + "/m5/big", 4);
+		t.assert(err == nil && same(b, want), "and its session reads: " + err);
+	}
+}
+
+tryserver(kd, a: string, c: chan of string)
+{
+	sys->pctl(Sys->NEWPGRP|Sys->NEWFD, 0 :: 1 :: nil);
+	srv := load Command "/dis/sdgsrv.dis";
+	{
+		srv->init(nil, "sdgsrv" :: kd :: a :: scratch + "/srv" :: nil);
+		c <-= "returned";
+	} exception e {
+	"*" =>
+		c <-= e;
+	}
+}
+
+# A counter store with nothing in it to trust: the server does not start.
+testBadStore(t: ref T)
+{
+	setup2(t);
+	kd3 := scratch + "/keys3";
+	if((e := copykeys(scratch + "/keys", kd3)) != nil)
+		t.fatal(e);
+	fd := sys->create(kd3 + "/sdgsrv.ctr.a", Sys->OWRITE, 8r600);
+	sys->fprint(fd, "000000000000000000000001 0000000000000000\n");
+	fd = nil;
+	c := chan[1] of string;
+	spawn tryserver(kd3, sys->sprint("udp!127.0.0.1!%d", s3port + 2), c);
+	tick := chan[1] of int;
+	spawn after(tick, 2000);
+	alt {
+	e := <-c =>
+		t.assert(len e > 5 && e[0:5] == "fail:", "a store that cannot be trusted stops the server: " + e);
+	<-tick =>
+		t.error("the server started on a counter store it cannot trust");
+	}
+}
+
 testRead(t: ref T)
 {
 	if((e := mountsdg(scratch + "/m1")) != nil)
@@ -430,11 +731,16 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Sdgsrv/Window", testWindow);
 	run("Sdgsrv/KilledReader", testKilled);
 	run("Sdgsrv/Lossy", testLossy);
+	run("Sdgsrv/Junk", testJunk);
+	run("Sdgsrv/Restart", testRestart);
+	run("Sdgsrv/BadStore", testBadStore);
 	# the mounts (their relays end), the server and the slow file's, so that emu can exit
 	sys->unmount(nil, scratch + "/m1");
 	sys->unmount(nil, scratch + "/m2");
 	sys->unmount(nil, scratch + "/m3");
-	for(pl := srvpid :: lossypid :: slowpid :: nil; pl != nil; pl = tl pl)
+	sys->unmount(nil, scratch + "/m4");
+	sys->unmount(nil, scratch + "/m5");
+	for(pl := srvpid :: lossypid :: slowpid :: s3pid :: relaypid :: nil; pl != nil; pl = tl pl)
 		if(hd pl >= 0){
 			fd := sys->open(sys->sprint("/prog/%d/ctl", hd pl), Sys->OWRITE);
 			if(fd != nil)

@@ -47,8 +47,8 @@ X402: module {
 	# Parse a 402 response body (JSON) into PaymentRequired
 	parse402:	fn(body: string): (ref PaymentRequired, string);
 
-	# Select the best payment option from accepts list
-	# Prefers EVM networks the wallet supports
+	# The payment option on the named chain's network, or nil:
+	# never another network in its place
 	selectoption:	fn(pr: ref PaymentRequired, chain: string): ref PaymentReq;
 
 	# Request a signed EIP-3009 payment authorization from wallet9p.
@@ -71,7 +71,8 @@ X402: module {
 	# Parse a settlement response from the server
 	parsesettlement:	fn(body: string): (ref SettlementResp, string);
 
-	# Map chain name to CAIP-2 network identifier
+	# Map chain name to CAIP-2 network identifier; nil for a name
+	# that is none
 	chaintonetwork:	fn(chain: string): string;
 	# "eip155:NNNN" -> NNNN; 0 if not a well-formed EIP-155 id.
 	# Never defaults to a real chain: callers pin payments with it.

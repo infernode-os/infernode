@@ -16,7 +16,7 @@ include "styx.m";
 include "styxservers.m";
 	styxservers: Styxservers;
 	Styxserver, Fid, Navigator, Navop: import styxservers;
-	Enotdir, Enotfound: import Styxservers;
+	Enotdir, Enotfound, Eperm, Ebadfid: import Styxservers;
 include "arg.m";
 
 # files:
@@ -159,7 +159,9 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn navigator(navops);
 	tchan: chan of ref Tmsg;
 	(tchan, srv) = Styxserver.new(sys->fildes(0), Navigator.new(navops), big Qroot);
-	spawn serve(tchan, navops);
+	# serve until the connection ends, as export does: styxlisten(1)
+	# takes a command that returns to have finished, and stops listening
+	serve(tchan, navops);
 }
 
 loaderr(p: string)
@@ -209,13 +211,25 @@ Serve:
 		Clunk =>
 			clunk(srv.clunk(m));
 		Remove =>
-			(fid, nil, e) := srv.canremove(m);
-			srv.delfid(fid);	# always clunked even on error
-			if((err = e) != nil)
+			# canremove gives no fid when it refuses (the root, a
+			# fid not in use): what it gave was clunked whatever
+			# it was, and a remove of the registry's root, from
+			# a mount or through an export of one, ended the
+			# registry on a nil fid.
+			fid := srv.getfid(m.fid);
+			if(fid == nil){
+				err = Ebadfid;
 				break;
-			err = remove(fid);
-			if(err == nil)
-				srv.reply(ref Rmsg.Remove(m.tag));
+			}
+			(nil, nil, e) := srv.canremove(m);
+			srv.delfid(fid);	# always clunked even on error
+			if(e == nil)
+				e = remove(fid);
+			if((err = e) != nil){
+				clunk(fid);	# the fid has gone all the same
+				break;
+			}
+			srv.reply(ref Rmsg.Remove(m.tag));
 		Flush =>
 			Event.flush(m.oldtag);
 			srv.default(gm);
@@ -232,6 +246,19 @@ open(m: ref Tmsg.Open, fid: ref Fid)
 {
 	path := int fid.path;
 	case path & Mask {
+	Qsvc =>
+		# closing a file opened ORCLOSE removes it, and removing a
+		# service is its owner's to do
+		svc := Service.find(path >> Shift);
+		if(svc == nil){
+			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			return;
+		}
+		if(m.mode & Sys->ORCLOSE && fid.uname != svc.owner){
+			srv.reply(ref Rmsg.Error(m.tag, Eperm));
+			return;
+		}
+		fid.open(m.mode, (fid.path, 0, fid.qtype));
 	Qnew =>
 		svc := Service.new(fid.uname);
 		svc.fid = fid.fid;
@@ -267,6 +294,8 @@ read(m: ref Tmsg.Read, fid: ref Fid): string
 		srv.reply(styxservers->readbytes(m, fid.data));
 	Qevent =>
 		e := Event.find(fid.fid);
+		if(e == nil)
+			return Egreg;
 		if(e.vers == rootvers)
 			return e.queue(m);
 		else{
@@ -294,16 +323,25 @@ write(m: ref Tmsg.Write, fid: ref Fid): string
 		toks := str->unquoted(s);
 		if(toks == nil)
 			return "bad syntax";
-		# first write names the service (possibly with attributes)
+		# first write names the service (possibly with attributes).
+		# Nothing of a write is taken unless all of it is: a name
+		# followed by an odd number of words was refused and the
+		# service listed under the name all the same.
+		name: string;
 		if(svc.name == nil){
-			err := svcnameok(hd toks);
+			name = hd toks;
+			err := svcnameok(name);
 			if(err != nil)
 				return err;
-			svc.name = hd toks;
 			toks = tl toks;
 		}
 		if(len toks % 2 != 0)
 			return "odd attribute/value pairs";
+		for(tk := toks; tk != nil; tk = tl tl tk)
+			if(hd tk == nil || !textok(hd tk) || !textok(hd tl tk))
+				return "bad character in attribute";
+		if(name != nil)
+			svc.name = name;
 		svc.mtime = now;
 		svc.vers++;
 		for(; toks != nil; toks = tl tl toks)
@@ -336,13 +374,30 @@ write(m: ref Tmsg.Write, fid: ref Fid): string
 	return nil;
 }
 
+#
+# A service is its owner's: the user name its creator attached with.
+# It goes when the fid that made it is closed (unless it is to persist),
+# when its owner closes a fid opened ORCLOSE on it, and when its owner
+# removes it.  The fid that made it was known by its number alone, and
+# a client uses a number again as soon as it is free: after the creator
+# had closed, any fid of that number opened ORCLOSE on the file, by
+# anyone and for reading, removed a persistent service when it closed.
+#
 clunk(fid: ref Fid)
 {
+	if(fid == nil)
+		return;	# not a fid in use: srv.clunk has said so
 	path := int fid.path;
 	case path & Mask {
 	Qsvc =>
 		svc := Service.find(path >> Shift);
-		if(svc != nil && svc.fid == fid.fid && (fid.mode & Sys->ORCLOSE || int svc.get("persist") == 0)){
+		if(svc == nil)
+			break;
+		creator := svc.fid == fid.fid;
+		if(creator)
+			svc.fid = Styx->NOFID;	# the number is free for another fid now
+		if(fid.uname == svc.owner &&
+		   (fid.isopen && fid.mode & Sys->ORCLOSE || creator && int svc.get("persist") == 0)){
 			svc.remove();
 			if(svc.name != nil){	# otherwise there's no visible change
 				rootvers++;
@@ -362,15 +417,31 @@ remove(fid: ref Fid): string
 {
 	path := int fid.path;
 	if((path & Mask) == Qsvc){
+		# it may have gone since the fid was walked to it (its
+		# creator closed it): the owner of nothing was asked for
 		svc := Service.find(path >> Shift);
+		if(svc == nil)
+			return Enotfound;
 		if(fid.uname == svc.owner){
 			svc.remove();
-			rootvers++;
-			Event.post(rootvers);
+			if(svc.name != nil){
+				rootvers++;
+				Event.post(rootvers);
+			}
 			return nil;
 		}
 	}
-	return "permission denied";
+	return Eperm;
+}
+
+# no control characters: a newline in a name or a value was another
+# service's line to a reader of index
+textok(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < 32 || s[i] == 16r7f)
+			return 0;
+	return 1;
 }
 
 svcnameok(s: string): string
@@ -386,6 +457,8 @@ svcnameok(s: string): string
 	"event" or
 	"find" or
 	"index" or
+	"." or
+	".." or
 	"" =>
 		return "bad service name";
 	}

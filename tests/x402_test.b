@@ -220,6 +220,8 @@ testAuthDigest(t: ref T)
 		"10000", big 1000, big 2000, nonce, "USDC", "2");
 	t.assert(e1 == nil, "authdigest succeeds on valid input");
 	t.assert(d1 != nil && len d1 == 32, "digest is 32 bytes");
+	# pinned: the digest this input has always had
+	t.assertseq(ethcrypto->hexencode(d1), "26e4566ae201f92613f83be056941eb966b7ecca44728ab3c484640cb4ca78fc", "the digest is the one it was");
 
 	(d2, nil) := x402->authdigest("eip155:84532",
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -266,6 +268,66 @@ testAuthDigest(t: ref T)
 		"0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
 		"10000", big 1000, big 2000, badnonce, "USDC", "2");
 	t.assert(dx == nil && ex != nil, "short nonce rejected");
+}
+
+#
+# An address that is not one makes no digest. "0x0x" and 38 digits was
+# taken by strtoaddr as 19 bytes, which pad32addr encoded as the zero
+# address: the digest, and so the signature, was for a transfer to
+# 0x0000...0000, with no error.
+#
+testAuthDigestAddress(t: ref T)
+{
+	nonce := array[32] of byte;
+	for(i := 0; i < 32; i++)
+		nonce[i] = byte i;
+	asset := "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+	from := "0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF";
+	payto := "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
+	bad := array[] of {
+		"0x0x11223344556677889900aabbccddeeff112233",
+		"0x11223344556677889900aabbccddeeff112233",
+		"0x7E5F4552091A69125d5DfCb7b8C2659029395BdF",	# checksum wrong
+		"7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+	};
+	(zero, nil) := x402->authdigest("eip155:84532", asset,
+		"0x0000000000000000000000000000000000000000", from,
+		"10000", big 1000, big 2000, nonce, "USDC", "2");
+	t.assert(zero != nil, "the zero address has a digest of its own");
+	for(i = 0; i < len bad; i++) {
+		(d, e) := x402->authdigest("eip155:84532", asset, bad[i], from,
+			"10000", big 1000, big 2000, nonce, "USDC", "2");
+		t.assert(d == nil && e != nil, "no digest for payto " + bad[i]);
+		if(d != nil && zero != nil)
+			t.assert(ethcrypto->hexencode(d) != ethcrypto->hexencode(zero),
+				"and not the zero address's");
+		(d, e) = x402->authdigest("eip155:84532", bad[i], payto, from,
+			"10000", big 1000, big 2000, nonce, "USDC", "2");
+		t.assert(d == nil && e != nil, "no digest for asset " + bad[i]);
+		(d, e) = x402->authdigest("eip155:84532", asset, payto, bad[i],
+			"10000", big 1000, big 2000, nonce, "USDC", "2");
+		t.assert(d == nil && e != nil, "no digest for from " + bad[i]);
+	}
+}
+
+#
+# The option chosen is on the network asked for, or there is none: it
+# fell back to any EVM network and then to the server's first option;
+# and a chain name that is none was mainnet.
+#
+testSelectExact(t: ref T)
+{
+	body := "{\"x402Version\":2,\"accepts\":[{\"scheme\":\"exact\",\"network\":\"solana:mainnet\",\"amount\":\"1\",\"asset\":\"0xA\",\"payTo\":\"0xB\",\"maxTimeoutSeconds\":60},{\"scheme\":\"exact\",\"network\":\"eip155:8453\",\"amount\":\"100\",\"asset\":\"0xA\",\"payTo\":\"0xB\",\"maxTimeoutSeconds\":60}]}";
+	(pr, nil) := x402->parse402(body);
+	t.assert(pr != nil, "parsed");
+	opt := x402->selectoption(pr, "base");
+	t.assert(opt != nil && opt.network == "eip155:8453", "the network asked for is found");
+	t.assert(x402->selectoption(pr, "polygon") == nil, "another EVM network is not given in its place");
+	t.assert(x402->selectoption(pr, "ethereum") == nil, "nor for mainnet");
+	t.assert(x402->selectoption(pr, "nosuchchain") == nil, "an unknown chain selects nothing");
+	t.assert(x402->chaintonetwork("nosuchchain") == nil, "an unknown chain is no network");
+	t.assert(x402->chaintonetwork("") == nil, "nor is no name");
+	t.assertseq(x402->chaintonetwork("mainnet"), "eip155:1", "mainnet is still mainnet");
 }
 
 #
@@ -344,6 +406,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# EIP-712 / EIP-3009
 	run("EIP712/TypeHashes", testEIP712TypeHashes);
 	run("EIP712/AuthDigest", testAuthDigest);
+	run("EIP712/AuthDigestAddress", testAuthDigestAddress);
+	run("Select/Exact", testSelectExact);
 
 	# Network id parsing must fail closed
 	run("Chain/FailClosed", testNetworkFailClosed);

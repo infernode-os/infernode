@@ -15,7 +15,6 @@ include "sys.m";
 include "keyring.m";
 	keyring: Keyring;
 include "security.m";
-	random: Random;
 include "sdg.m";
 
 HASHLEN:	con 32;
@@ -50,9 +49,6 @@ init(): string
 	keyring = load Keyring Keyring->PATH;
 	if(keyring == nil)
 		return sys->sprint("can't load %s: %r", Keyring->PATH);
-	random = load Random Random->PATH;
-	if(random == nil)
-		return sys->sprint("can't load %s: %r", Random->PATH);
 	return nil;
 }
 
@@ -210,7 +206,9 @@ handshake1(k: ref Keys, payload: array of byte): (ref Hs, array of byte)
 	hs.rs = k.server;
 	hs.psk = k.psk;
 	hs.mixhash(hs.rs);		# pre-message: the responder's static key
-	hs.e = random->randombuf(KEYRANDOM, 32);
+	hs.e = randbytes(32);
+	if(hs.e == nil)
+		return (nil, nil);	# no random numbers: connect has said so
 	hs.epub = keyring->x25519_base(hs.e);
 	m := hs.epub;
 	hs.mixhash(hs.epub);		# e (and, in a psk handshake, MixKey too)
@@ -247,6 +245,45 @@ split(hs: ref Hs): (array of byte, array of byte)
 	return (k1, k2);
 }
 
+# A handshake's own secrets, done with: its ephemeral key, chaining key
+# and cipher key.  (The static key and PSK are the caller's, and stay.)
+wipe(hs: ref Hs)
+{
+	if(hs == nil)
+		return;
+	zero(hs.e);
+	zero(hs.ck);
+	zero(hs.k);
+}
+
+zero(a: array of byte)
+{
+	for(i := 0; i < len a; i++)
+		a[i] = byte 0;
+}
+
+# n bytes from KEYRANDOM's device, or nil.  random(2)'s randombuf gives
+# zeros, with no error, when the device cannot be opened or read: an
+# ephemeral key of zeros, the same every time, in a name space without
+# the device.
+randbytes(n: int): array of byte
+{
+	f := "/dev/notquiterandom";
+	if(KEYRANDOM == Random->ReallyRandom)
+		f = "/dev/random";
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[n] of byte;
+	for(o := 0; o < n;){
+		k := sys->read(fd, buf[o:], n - o);
+		if(k <= 0)
+			return nil;
+		o += k;
+	}
+	return buf;
+}
+
 #
 # The session.
 #
@@ -279,6 +316,10 @@ Sess.send(s: self ref Sess, plain: array of byte)
 # The anti-replay window (64): 1 if c is new, recording it.
 Sess.fresh(s: self ref Sess, c: big): int
 {
+	# a counter with its top bit set is negative here, and no sender
+	# reaches it: the comparisons below are of signed numbers
+	if(c < big 0)
+		return 0;
 	if(s.recvmax >= big 64 && c + big 64 <= s.recvmax)
 		return 0;
 	if(c > s.recvmax || (s.recvmax == big 0 && s.window == big 0)){
@@ -511,21 +552,27 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	# reader1 (forge1: a forged response made us drop the genuine one).
 	pkts := chan[16] of array of byte;
 	rpid := chan of int;
-	spawn reader1(s.fd, pkts, rpid);
+	stop := ref Stop(0);
+	spawn reader1(s.fd, pkts, rpid, stop);
 	reader := <-rpid;
 	deadline := sys->millisec() + HSDEADLINE;
 	wait := 250;
 	while(sys->millisec() < deadline){
 		# A fresh initiation each try (an accepted one would be refused as old).
-		me := get4(random->randombuf(KEYRANDOM, 4), 0);
+		mer := randbytes(4);
+		if(mer == nil){
+			endreader(reader, stop);
+			return (nil, sys->sprint("sdg: no random numbers: %r"));
+		}
+		me := get4(mer, 0);
 		(ictr, cerr) := counter(k.ctrfile);
 		if(cerr != nil){
-			kill(reader);
+			endreader(reader, stop);
 			return (nil, cerr);
 		}
 		(hs, m1) := handshake1(k, ictr);
 		if(hs == nil){
-			kill(reader);
+			endreader(reader, stop);
 			return (nil, "sdg: the server's key gives no shared secret with ours (a low-order point?)");
 		}
 		p := array[1 + 4] of byte;
@@ -550,6 +597,7 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	wait:
 		for(;;) alt {
 		<-timer =>
+			wipe(hs);	# this try is over
 			break wait;
 		r := <-pkts =>
 			if(len r == COOKIELEN && int r[0] == Pcookie && get4(r, 1) == me){
@@ -560,6 +608,7 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 				ck := unseal(ckey, ctr, p[len p - 32:len p - 16], r[13:]);
 				if(ck != nil){
 					cookie = ck;
+					wipe(hs);
 					break wait;
 				}
 				continue;
@@ -573,27 +622,45 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 				v := handshake2(h, r[9:]);
 				if(v == nil || len v != 1 || int v[0] != 1)
 					continue;
+				wipe(hs);
 				hs = h;
-				kill(reader);	# from here on the relay reads the network
+				endreader(reader, stop);	# from here on the relay reads the network
 				s.me = me;
 				s.them = get4(r, 1);
 				(s.ksend, s.krecv) = split(hs);
+				wipe(hs);
 				s.lastsend = sys->millisec();
 				return (s, nil);
 			}
 		}
 	}
-	kill(reader);
+	endreader(reader, stop);
 	return (nil, "no handshake response from " + addr);
 }
 
+# The handshake's reader is told to stop, then killed.  Where it cannot
+# be killed (a name space with no /prog) it was left reading the socket
+# beside the relay, for good; told, it ends at its next read, having
+# taken at most one packet (which the sender will send again).
+Stop: adt {
+	v:	int;
+};
+
+endreader(pid: int, stop: ref Stop)
+{
+	stop.v = 1;
+	kill(pid);
+}
+
 # Datagrams from the network, raw, for the handshake.
-reader1(fd: ref Sys->FD, pkts: chan of array of byte, pid: chan of int)
+reader1(fd: ref Sys->FD, pkts: chan of array of byte, pid: chan of int, stop: ref Stop)
 {
 	pid <-= sys->pctl(0, nil);
 	buf := array[2048] of byte;
 	for(;;){
 		n := sys->read(fd, buf, len buf);
+		if(stop.v)
+			return;
 		if(n <= 0){
 			# An ICMP error (nobody listening yet) fails one read: keep on.
 			sys->sleep(50);

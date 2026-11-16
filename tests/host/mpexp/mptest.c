@@ -12,6 +12,9 @@
  *			reported
  *   mptest ctslow BITS	the same through the general path, which the
  *			check must catch (it branches on each bit)
+ *   mptest ctbase BITS	an exponentiation with the base's digits undefined
+ *			(DSA's 1/k is k^(q-2)), and mpmuladdmod with all
+ *			three of its numbers undefined
  *
  * mpexp.c is included, so its static functions are reachable.
  */
@@ -166,7 +169,7 @@ vectors(char *file)
 			fail("res == m", line);
 		mpfree(x);
 
-		// a negative base takes the general path: (-b)^e = (m-b)^e or -(m-b)^e
+		// a negative base is reduced and takes the same path: against the general one
 		if(b->top > 0){
 			x = mpcopy(b);
 			x->sign = -1;
@@ -229,6 +232,67 @@ randoms(int count)
 	mpfree(r2);
 }
 
+/* mpmuladdmod against the product, sum and division it stands for */
+static void
+muladd(int count)
+{
+	mpint *a, *b, *c, *m, *r1, *r2, *x;
+	int i, mb;
+	uchar v[2];
+
+	a = mpnew(0);
+	b = mpnew(0);
+	c = mpnew(0);
+	m = mpnew(0);
+	r1 = mpnew(0);
+	r2 = mpnew(0);
+	for(i = 0; i < count; i++){
+		gen(v, 2);
+		mb = 2 + (v[0] | v[1]<<8) % 700;
+		mprand(mb, gen, m);
+		if(m->top == 0)
+			itomp(3, m);
+		if(i % 5 != 0)
+			m->p[0] |= 1;	/* one in five even, or 1: the general way */
+		gen(v, 2);
+		mprand(i % 7 == 0? mb + v[0] % 90: 1 + v[0] % mb, gen, a);
+		mprand(i % 11 == 0? mb + v[1] % 90: mb, gen, b);
+		mprand(mb, gen, c);
+		if(i % 13 == 0)
+			a->sign = -1;
+		if(m->top == 0)
+			continue;
+		mpmul(a, b, r2);
+		mpadd(r2, c, r2);
+		mpmod(r2, m, r2);
+		mpmuladdmod(a, b, c, m, r1);
+		if(!same(r1, r2))
+			fail("mpmuladdmod", i);
+		mpmul(a, b, r2);
+		mpmod(r2, m, r2);
+		mpmuladdmod(a, b, nil, m, r1);
+		if(!same(r1, r2))
+			fail("mpmuladdmod with no c", i);
+		// the result in place of an operand
+		x = mpcopy(a);
+		mpmuladdmod(x, b, nil, m, x);
+		if(!same(x, r2))
+			fail("mpmuladdmod res == a", i);
+		mpfree(x);
+		x = mpcopy(b);
+		mpmuladdmod(a, x, nil, m, x);
+		if(!same(x, r2))
+			fail("mpmuladdmod res == b", i);
+		mpfree(x);
+	}
+	mpfree(a);
+	mpfree(b);
+	mpfree(c);
+	mpfree(m);
+	mpfree(r1);
+	mpfree(r2);
+}
+
 static void
 timing(int bits)
 {
@@ -283,6 +347,29 @@ ct(int bits, int slow)
 	return r->top > 0? 0: 1;
 }
 
+/* a secret base (and nothing else): k^(q-2) mod q; and mpmuladdmod's numbers */
+static int
+ctbase(int bits)
+{
+	mpint *b, *e, *m, *r, *c;
+
+	b = mprand(bits-1, gen, nil);
+	e = mprand(bits, gen, nil);
+	c = mprand(bits-1, gen, nil);
+	m = mprand(bits, gen, nil);
+	m->p[0] |= 1;
+	m->p[m->top-1] |= mpdighi;
+	r = mpnew(0);
+	VALGRIND_MAKE_MEM_UNDEFINED(b->p, b->top*sizeof(mpdigit));
+	VALGRIND_MAKE_MEM_UNDEFINED(c->p, c->top*sizeof(mpdigit));
+	mpexp(b, e, m, r);
+	mpmuladdmod(r, b, c, m, r);
+	VALGRIND_MAKE_MEM_DEFINED(r->p, r->size*sizeof(mpdigit));
+	VALGRIND_MAKE_MEM_DEFINED(&r->top, sizeof r->top);
+	VALGRIND_MAKE_MEM_DEFINED(&r->sign, sizeof r->sign);
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -290,10 +377,12 @@ main(int argc, char **argv)
 
 	if(argc == 3 && strcmp(argv[1], "ct") == 0)
 		return ct(atoi(argv[2]), 0);
+	if(argc == 3 && strcmp(argv[1], "ctbase") == 0)
+		return ctbase(atoi(argv[2]));
 	if(argc == 3 && strcmp(argv[1], "ctslow") == 0)
 		return ct(atoi(argv[2]), 1);
 	if(argc != 2){
-		fprintf(stderr, "usage: mptest vectors.txt | mptest ct|ctslow bits\n");
+		fprintf(stderr, "usage: mptest vectors.txt | mptest ct|ctslow|ctbase bits\n");
 		return 2;
 	}
 	n = vectors(argv[1]);
@@ -303,6 +392,8 @@ main(int argc, char **argv)
 	fflush(stdout);
 	randoms(2000);
 	printf("2000 random operands against the general path\n");
+	muladd(3000);
+	printf("3000 mpmuladdmod against the product, sum and division\n");
 	if(fails == 0){
 		timing(1024);
 		timing(2048);

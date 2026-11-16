@@ -237,6 +237,74 @@ testKeys(t: ref T)
 	t.assertnotnil(tls->checkserver(ref ServerConfig(nil, k8, nil, 0, nil, nil, nil, 0, nil)), "no certificate refused");
 }
 
+# KeyUpdate between the module's own client and server, after a real
+# handshake (RFC 8446 4.6.3; tests/tls_record_test.b has each message
+# against keys of the test's own).  A writer changes its key when it
+# has sealed 2^23 records, and the other end reads on; a reader whose
+# peer's key has opened that many has its writer ask for a new one,
+# and the peer's writer answers before its next data.  A client never
+# sent a KeyUpdate; a server sent its answer from its reader.
+testKeyUpdate(t: ref T)
+{
+	suites := TLS->TLS_AES_128_GCM_SHA256 :: TLS->TLS_AES_256_GCM_SHA384 :: nil;
+	for(; suites != nil; suites = tl suites) {
+		cfg := clientconfig();
+		cfg.suites = hd suites :: nil;
+		(cc, sc) := connect(t, serverconfig(t), cfg);
+		done := chan of int;
+		ckey := cc.st.writekey;
+		skey := sc.st.writekey;
+		srkey := sc.st.readkey;
+
+		# the client's key at its limit: its next record is a KeyUpdate
+		cc.st.writeseq = big (1<<23);
+		sc.st.readseq = big (1<<23);
+		msg := pattern(40000, 5);
+		spawn writer(cc, msg, done);
+		got := readn(sc, len msg);
+		<-done;
+		t.assert(same(got, msg), sys->sprint("suite %x: 40000 bytes across the client's KeyUpdate", hd suites));
+		t.assert(!same(cc.st.writekey, ckey) && same(cc.st.writekey, sc.st.readkey) && !same(sc.st.readkey, srkey),
+			"the client writes under a new key, which the server reads with");
+		t.assert(cc.st.writeseq < big 8, "and its sequence numbers begin again");
+
+		t.asserteq(sc.st.kuask, 0, "a peer that changes its key at the limit is asked for nothing");
+
+		# a peer past the limit: the server takes its record, and its writer will ask
+		ckey = cc.st.writekey;
+		skey = sc.st.writekey;
+		cc.st.writeseq = big (1<<23) + big 5;
+		sc.st.readseq = big (1<<23) + big 5;
+		spawn writer(cc, pattern(10, 4), done);
+		got = readn(sc, 10);
+		<-done;
+		t.assert(same(got, pattern(10, 4)) && !same(cc.st.writekey, ckey), "data across the client's second KeyUpdate");
+		t.asserteq(sc.st.kuask, 1, "the server has opened more than 2^23 records under one key: its writer is to ask for another");
+
+		# the server asks the client for a new key, and the client's writer gives one
+		ckey = cc.st.writekey;
+		spawn writer(sc, pattern(20, 6), done);	# the server's KeyUpdate, asking, then its data
+		got = readn(cc, 20);
+		<-done;
+		t.assert(same(got, pattern(20, 6)) && !same(sc.st.writekey, skey), "the server's KeyUpdate and its data read by the client");
+		t.asserteq(cc.st.kureply, 1, "the client's reader has told its writer to answer");
+		t.assert(same(cc.st.writekey, ckey), "and has not written itself");
+		spawn writer(cc, pattern(30, 7), done);
+		got = readn(sc, 30);
+		<-done;
+		t.assert(same(got, pattern(30, 7)) && !same(cc.st.writekey, ckey) && cc.st.kureply == 0, "the client's next write is under a new key, after its KeyUpdate, which the server takes");
+		spawn writer(sc, pattern(30, 8), done);
+		got = readn(cc, 30);
+		<-done;
+		t.assert(same(got, pattern(30, 8)), "and the connection goes on both ways");
+
+		sc.close();
+		b := array[10] of byte;
+		t.asserteq(cc.read(b, len b), 0, "close_notify read as end of file");
+		t.asserteq(cc.read(b, len b), 0, "and again at the next read");
+	}
+}
+
 testHandshake(t: ref T)
 {
 	(cc, sc) := connect(t, serverconfig(t), clientconfig());
@@ -552,15 +620,15 @@ testClientCerts(t: ref T)
 	scfg.clock = nil;
 
 	# chains, through x509 itself (this client sends one certificate)
-	(ok, err) := x509->verify_certchain_roots(hex(C_VIAINT) :: hex(C_INT) :: nil, roots, nil, 1800000000);
+	(ok, err) := x509->verify_certchain_roots(hex(C_VIAINT) :: hex(C_INT) :: nil, roots, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(ok, "a leaf with its intermediate, to the root: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_VIAINT) :: nil, roots, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_VIAINT) :: nil, roots, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(!ok, "without its intermediate refused: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, hex(C_OTHER) :: nil, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, hex(C_OTHER) :: nil, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(!ok, "a root that did not issue it refused: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, nil, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, nil, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(!ok, "no roots: refused: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, roots, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, roots, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(ok, "the same leaf to its root: " + err);
 }
 
@@ -591,6 +659,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Keys", testKeys);
 	run("Handshake", testHandshake);
+	run("KeyUpdate", testKeyUpdate);
 	run("Suites", testSuites);
 	run("Preference", testPreference);
 	run("ClientCerts", testClientCerts);

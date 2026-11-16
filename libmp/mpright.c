@@ -22,7 +22,9 @@ mpright(mpint *b, int shift, mpint *res)
 		return;
 	}
 
-	if(res != b)
+	// (no room for a shift past the number's own bits, which leaves
+	// nothing: the difference was negative)
+	if(res != b && shift < b->top*Dbits)
 		mpbits(res, b->top*Dbits - shift);
 	d = shift/Dbits;
 	r = shift - d*Dbits;

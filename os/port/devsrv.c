@@ -627,6 +627,54 @@ srvremove(Chan *c)
 	srvclunk(c, 1);
 }
 
+/*
+ * A request that will not be waited for any longer: its reader or
+ * writer was interrupted (killed, or its 9P request flushed) before
+ * the server answered.  The server was not told.  Its answer, when it
+ * came, went into the reply channel's buffer and nowhere else, which
+ * is right for a file that answers each request on its own; but a
+ * server that hands out a stream (a posted 9P connection's replies,
+ * post9p(2)) took the next piece of it for the request that had gone,
+ * and the reader after it waited for a reply that had been spent.
+ *
+ * The reply channel now says so.  It has room for two: when the
+ * request is given up, (nil, "interrupted") is put there (for a write,
+ * (0, "interrupted")), which the server can take with a receive that
+ * does not wait:
+ *
+ *	alt{
+ *	<-rc =>	the reader has gone: keep what was for it
+ *	* =>	rc <-= (data, nil);
+ *	}
+ *
+ * A server that does not look is as before: its answer still goes into
+ * the buffer, never waits, and reaches nobody.  Each request has a
+ * channel of its own, so an answer that comes late is never a later
+ * request's.
+ */
+static char Einterrupted[] = "interrupted";
+
+static void
+gaveup(Channel *rc, Channel *wc)
+{
+	Sys_Rread rreply;
+	Sys_Rwrite wreply;
+
+	if(waserror())
+		return;		/* no memory to say so with */
+	if(rc != nil){
+		rreply.t0 = H;
+		rreply.t1 = c2string(Einterrupted, strlen(Einterrupted));
+		csend(rc, &rreply);
+	}
+	if(wc != nil){
+		wreply.t0 = 0;
+		wreply.t1 = c2string(Einterrupted, strlen(Einterrupted));
+		csend(wc, &wreply);
+	}
+	poperror();
+}
+
 static void
 addwaiting(SrvFile *sp, Pending *w)
 {
@@ -694,7 +742,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 	if(rd == H)
 		error(Ehungup);
 
-	rc = cnewc(dev.Rread, movtmp, 1);
+	rc = cnewc(dev.Rread, movtmp, 2);	/* the answer, and "interrupted": see gaveup */
 	ptradd(D2H(rc));
 	if(waserror()){
 		ptrdel(D2H(rc));
@@ -723,6 +771,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 	addwaiting(sp, &wait);
 	if(waserror()){
 		delwaiting(&wait);
+		gaveup(rc, nil);
 		nexterror();
 	}
 	crecv(rc, r);
@@ -782,7 +831,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	if(wr == H)
 		error(Ehungup);
 
-	wc = cnewc(dev.Rwrite, movtmp, 1);
+	wc = cnewc(dev.Rwrite, movtmp, 2);	/* the answer, and "interrupted": see gaveup */
 	ptradd(D2H(wc));
 	if(waserror()){
 		ptrdel(D2H(wc));
@@ -825,6 +874,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	addwaiting(sp, &wait);
 	if(waserror()){
 		delwaiting(&wait);
+		gaveup(nil, wc);
 		nexterror();
 	}
 	crecv(wc, w);

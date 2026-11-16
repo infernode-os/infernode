@@ -13040,12 +13040,88 @@ face(st: ref St): ref Typeface
 	Style->FSoblique =>	fstyle = 2;
 	}
 	f := fonts->facevar(st.family, st.weight, fstyle, st.slant, st.stretch, st.fontsize, st.fontvars, st.synth);
-	if(f != nil && st.nokern) {
-		f = ref *f;
-		f.nokern = 1;
-	}
+	if(f != nil && (st.nokern || st.fvlig != nil || st.fvcaps != nil || st.fvnum != nil ||
+	   st.fvea != nil || st.fvpos != nil || st.fvalt != nil || st.ffs != nil || st.langover != nil || spaced(st)))
+		f = fonts->features(f, fontfeats(st), st.nokern, st.langover);
 	faces[h] = (st, f) :: faces[h];
 	return f;
+}
+
+# The OpenType features a style sets (Fonts 4 §7.2): font-variant's,
+# then font-feature-settings', a later setting of a tag winning
+fontfeats(st: ref St): list of (string, int)
+{
+	r: list of (string, int);
+	# letters spaced apart, by letter-spacing or justification between
+	# them, are not joined by the optional ligatures (Text 3 §8.2, §7.3);
+	# font-feature-settings may still turn one on
+	if(spaced(st))
+		r = ("calt", 0) :: ("hlig", 0) :: ("dlig", 0) :: ("clig", 0) :: ("liga", 0) :: nil;
+	for(g := st.fvlig :: st.fvcaps :: st.fvnum :: st.fvea :: st.fvpos :: altfeats(st) :: nil; g != nil; g = tl g)
+		for(l := hd g; l != nil; l = tl l)
+			if(!spaced(st) || !optlig((hd l).t0))
+				r = hd l :: r;
+	for(fl := st.ffs; fl != nil; fl = tl fl)
+		r = hd fl :: r;
+	o: list of (string, int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+spaced(st: ref St): int
+{
+	return st.letterspacing != 0.0 || st.textjustify == 3 && (st.align == Style->Ajustify || st.alignlast == Style->Ajustify);
+}
+
+optlig(t: string): int
+{
+	return t == "liga" || t == "clig" || t == "dlig" || t == "hlig" || t == "calt";
+}
+
+# font-variant-alternates' functions, through the values
+# @font-feature-values gives their names for the style's families
+# (Fonts 4 §6.8); a name none defines sets nothing
+altfeats(st: ref St): list of (string, int)
+{
+	r: list of (string, int);
+	for(l := st.fvalt; l != nil; l = tl l) {
+		(fun, name) := hd l;
+		if(fun == "historical-forms") {
+			r = ("hist", 1) :: r;
+			continue;
+		}
+		v: array of int;
+		for(fl := st.family; fl != nil && v == nil; fl = tl fl)
+			v = fonts->featurevalues(hd fl, fun, name);
+		if(len v == 0)
+			continue;
+		case fun {
+		"stylistic" =>
+			r = ("salt", v[0]) :: r;
+		"swash" =>
+			r = ("cswh", v[0]) :: ("swsh", v[0]) :: r;
+		"ornaments" =>
+			r = ("ornm", v[0]) :: r;
+		"annotation" =>
+			r = ("nalt", v[0]) :: r;
+		"styleset" =>
+			for(i := 0; i < len v; i++)
+				if(v[i] >= 1 && v[i] <= 20)
+					r = (sys->sprint("ss%02d", v[i]), 1) :: r;
+		"character-variant" =>
+			if(v[0] >= 1 && v[0] <= 99) {
+				n := 1;
+				if(len v > 1)
+					n = v[1];
+				r = (sys->sprint("cv%02d", v[0]), n) :: r;
+			}
+		}
+	}
+	o: list of (string, int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
 }
 
 # ---- painting (CSS 2.2 Appendix E, simplified to tree order) ----

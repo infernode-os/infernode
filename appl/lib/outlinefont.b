@@ -1186,6 +1186,21 @@ Gsub: adt {
 	data:	array of byte;
 	lookups:	array of ref Lookup;
 	features:	list of (string, array of int);	# tag, lookup indices
+	ftags:	array of string;	# the feature list, by index
+	flk:	array of array of int;	# each feature's lookups
+	fdef:	array of int;	# 1: in a script's default language system (all, if the font has no scripts)
+	plans:	list of ref Plan;	# substitute()'s, by its key
+	off:	int;		# the table
+	langs:	list of (string, array of int);	# fdef for a script and language system named, by the two tags
+};
+
+# The lookups a set of features applies, in lookup order, with each
+# one's value (an alternate's number)
+Plan: adt {
+	key:	string;
+	script, lang:	string;
+	lk:	array of int;
+	val:	array of int;
 };
 
 Lookup: adt {
@@ -1248,7 +1263,90 @@ parsegsub(data: array of byte, off, ext: int): ref Gsub
 			li[j] = getu16be(data, fo + 4 + j*2);
 		feats = (tag, li) :: feats;
 	}
-	return ref Gsub(data, lookups, feats);
+	ftags := array[nf] of string;
+	flk := array[nf] of array of int;
+	for(i = 0; i < nf && flist + 2 + i*6 + 6 <= len data; i++) {
+		e := flist + 2 + i*6;
+		ftags[i] = string data[e:e+4];
+		fo := flist + getu16be(data, e + 4);
+		if(fo + 4 > len data)
+			continue;
+		cnt := getu16be(data, fo + 2);
+		if(fo + 4 + cnt*2 > len data)
+			continue;
+		li := array[cnt] of int;
+		for(j := 0; j < cnt; j++)
+			li[j] = getu16be(data, fo + 4 + j*2);
+		flk[i] = li;
+	}
+	return ref Gsub(data, lookups, feats, ftags, flk, langfeats(data, off, nf, nil, nil), nil, off, nil);
+}
+
+# Which features a script's default language system names (or
+# requires): those a run of text takes when its language is not known.
+# A feature only a language names (locl for Serbian, Romanian) is not
+# one.  The script is the run's (an OpenType tag, "latn ", nil for
+# none known), else DFLT, else latn (as HarfBuzz falls back), else
+# every script; lang (a language system tag, "TRK ") chooses that
+# language's system where the script has one.  With no scripts at all,
+# every feature.
+langfeats(data: array of byte, off, nf: int, script, lang: string): array of int
+{
+	d := array[nf] of {* => 0};
+	sl := off + getu16be(data, off + 4);
+	any := 0;
+	if(getu16be(data, off + 4) != 0 && sl + 2 <= len data) {
+		ns := getu16be(data, sl);
+		# the script to take, by its record
+		sel := -1;
+		for(w := 0; w < 3 && sel < 0; w++) {
+			want := script;
+			case w {
+			1 =>	want = "DFLT";
+			2 =>	want = "latn";
+			}
+			if(want == nil)
+				continue;
+			for(i := 0; i < ns && sl + 2 + i*6 + 6 <= len data; i++)
+				if(string data[sl+2+i*6:sl+2+i*6+4] == want) {
+					sel = i;
+					break;
+				}
+		}
+		for(i := 0; i < ns && sl + 2 + i*6 + 6 <= len data; i++) {
+			if(sel >= 0 && i != sel)
+				continue;
+			so := sl + getu16be(data, sl + 2 + i*6 + 4);
+			if(so + 4 > len data)
+				continue;
+			lso := getu16be(data, so);
+			if(lang != nil) {
+				nls := getu16be(data, so + 2);
+				for(k := 0; k < nls && so + 4 + k*6 + 6 <= len data; k++)
+					if(string data[so+4+k*6:so+4+k*6+4] == lang) {
+						lso = getu16be(data, so + 4 + k*6 + 4);
+						break;
+					}
+			}
+			if(lso == 0)
+				continue;
+			ls := so + lso;
+			if(ls + 6 > len data)
+				continue;
+			any = 1;
+			req := getu16be(data, ls + 2);
+			if(req < nf)
+				d[req] = 1;
+			n := getu16be(data, ls + 4);
+			for(j := 0; j < n && ls + 6 + j*2 + 2 <= len data; j++)
+				if((fi := getu16be(data, ls + 6 + j*2)) < nf)
+					d[fi] = 1;
+		}
+	}
+	if(!any)
+		for(i := 0; i < nf; i++)
+			d[i] = 1;
+	return d;
 }
 
 # the coverage index of gid in the coverage table at off, or -1
@@ -1344,6 +1442,135 @@ Face.ligatures(f: self ref Face, gids: array of int, feats: list of string): (ar
 				(gids, cnt) = applylig(g.data, lk.subs[j], gids, cnt);
 		}
 	return (gids, cnt);
+}
+
+# The plan for a list of feature settings, in order, a later setting
+# of a tag replacing an earlier one: the lookups of the features turned
+# on, each once (with the first value that names it), by index, as
+# OpenType applies them.
+plan(g: ref Gsub, feats: list of (string, int), script, lang, key: string): ref Plan
+{
+	for(pl := g.plans; pl != nil; pl = tl pl)
+		if((hd pl).key == key && (hd pl).script == script && (hd pl).lang == lang)
+			return hd pl;
+	fdef := g.fdef;
+	if(script != nil || lang != nil) {
+		sk := script + "/" + lang;
+		ll: list of (string, array of int);
+		for(ll = g.langs; ll != nil; ll = tl ll)
+			if((hd ll).t0 == sk)
+				break;
+		if(ll == nil) {
+			g.langs = (sk, langfeats(g.data, g.off, len g.ftags, script, lang)) :: g.langs;
+			ll = g.langs;
+		}
+		fdef = (hd ll).t1;
+	}
+	nl := len g.lookups;
+	val := array[nl] of {* => 0};
+	for(i := 0; i < len g.ftags; i++) {
+		if(!fdef[i] || g.flk[i] == nil)
+			continue;
+		v := 0;
+		for(l := feats; l != nil; l = tl l)
+			if((hd l).t0 == g.ftags[i])
+				v = (hd l).t1;
+		if(v <= 0)
+			continue;
+		li := g.flk[i];
+		for(j := 0; j < len li; j++)
+			if(li[j] < nl && val[li[j]] == 0)
+				val[li[j]] = v;
+	}
+	n := 0;
+	for(i = 0; i < nl; i++)
+		if(val[i] > 0 && applied(g.lookups[i].kind))
+			n++;
+	p := ref Plan(key, script, lang, array[n] of int, array[n] of int);
+	n = 0;
+	for(i = 0; i < nl; i++)
+		if(val[i] > 0 && applied(g.lookups[i].kind)) {
+			p.lk[n] = i;
+			p.val[n++] = val[i];
+		}
+	g.plans = p :: g.plans;
+	return p;
+}
+
+# the lookup types substitute() applies: single, alternate, ligature
+applied(kind: int): int
+{
+	return kind == 1 || kind == 3 || kind == 4;
+}
+
+Face.substitute(f: self ref Face, gids: array of int, feats: list of (string, int), script, lang, key: string): (array of int, array of int)
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil || len gids == 0)
+		return (gids, nil);
+	g := fd.gsub;
+	p := plan(g, feats, script, lang, key);
+	if(len p.lk == 0)
+		return (gids, nil);
+	out := gids;
+	cnt: array of int;
+	data := g.data;
+	for(i := 0; i < len p.lk; i++) {
+		lk := g.lookups[p.lk[i]];
+		case lk.kind {
+		1 or 3 =>
+			# at each glyph, the first subtable that covers it
+			for(k := 0; k < len out; k++)
+				for(j := 0; j < len lk.subs; j++) {
+					ng := single(data, lk.kind, lk.subs[j], out[k], p.val[i]);
+					if(ng < 0)
+						continue;
+					if(ng != out[k]) {
+						if(out == gids) {
+							out = array[len gids] of int;
+							out[0:] = gids;
+						}
+						out[k] = ng;
+					}
+					break;
+				}
+		4 =>
+			for(j := 0; j < len lk.subs && len out > 1; j++) {
+				if(cnt == nil)
+					cnt = array[len out] of {* => 1};
+				(out, cnt) = applylig(data, lk.subs[j], out, cnt);
+			}
+		}
+	}
+	if(cnt != nil && len cnt == len gids)
+		cnt = nil;
+	return (out, cnt);
+}
+
+# a single (1) or alternate (3) substitution subtable's glyph for gid,
+# or -1 when it does not cover gid: an alternate's value is its
+# number, from 1 (one past its count leaves the glyph)
+single(data: array of byte, kind, so, gid, val: int): int
+{
+	if(so + 6 > len data)
+		return -1;
+	fmt := getu16be(data, so);
+	ci := coverage(data, so + getu16be(data, so + 2), gid);
+	if(ci < 0)
+		return -1;
+	if(kind == 1) {
+		if(fmt == 1)
+			return (gid + getu16be(data, so + 4)) & 16rFFFF;
+		if(fmt == 2 && ci < getu16be(data, so + 4) && so + 6 + ci*2 + 2 <= len data)
+			return getu16be(data, so + 6 + ci*2);
+		return -1;
+	}
+	if(fmt != 1 || ci >= getu16be(data, so + 4) || so + 6 + ci*2 + 2 > len data)
+		return -1;
+	aset := so + getu16be(data, so + 6 + ci*2);
+	if(aset + 2 > len data || val > getu16be(data, aset) || aset + 2 + val*2 > len data)
+		return gid;
+	return getu16be(data, aset + 2 + (val-1)*2);
 }
 
 # a ligature subtable (format 1) over a run of glyphs: at each glyph

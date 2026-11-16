@@ -221,7 +221,7 @@ facevar(families: list of string, weight, style: int, slant, stretch, size: real
 		o := parts[0].outline;
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0, emb);
+		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0, emb, nil, nil, nil);
 		f.next = next;
 		f.space = advance(f, ' ');
 		cache[h] = f :: cache[h];
@@ -287,7 +287,7 @@ shipped1(fam, weight, italic: int, size: real): ref Typeface
 			desc = vd * size;
 			gap = real int (vg * size);	# (int rounds)
 		}
-		f = ref Typeface(o, size, asc, desc, normal(asc, desc) + gap, 0.0, fallback(size), nil, nil, 0, 0);
+		f = ref Typeface(o, size, asc, desc, normal(asc, desc) + gap, 0.0, fallback(size), nil, nil, 0, 0, nil, nil, nil);
 		if((bf := behind(fam)) >= 0)
 			f.next = shipped1(bf, weight, italic, size);
 	} else {
@@ -299,7 +299,7 @@ shipped1(fam, weight, italic: int, size: real): ref Typeface
 			asc = real fb.ascent;
 			desc = real (fb.height - fb.ascent);
 		}
-		f = ref Typeface(nil, size, asc, desc, asc + desc, 0.0, fb, nil, nil, 0, 0);
+		f = ref Typeface(nil, size, asc, desc, asc + desc, 0.0, fb, nil, nil, 0, 0, nil, nil, nil);
 	}
 	f.space = advance(f, ' ');
 	cache[h] = f :: cache[h];
@@ -489,17 +489,166 @@ Slot: adt {
 	at:	int;		# the index of its first character in the string shaped
 };
 
-ligfeats(): list of string
+# The features every run takes (Fonts 4 §7.1, as HarfBuzz enables
+# them for horizontal text), before a Typeface's own
+deffeats: list of (string, int);
+
+defaults(): list of (string, int)
 {
-	return "liga" :: "clig" :: "rlig" :: nil;
+	if(deffeats == nil)
+		deffeats = ("rvrn", 1) :: ("ccmp", 1) :: ("locl", 1) :: ("rlig", 1) :: ("rclt", 1) ::
+			("calt", 1) :: ("clig", 1) :: ("liga", 1) :: ("kern", 1) :: ("mark", 1) :: ("mkmk", 1) :: nil;
+	return deffeats;
 }
 
-hasligs(o: ref OutlineFont->Face): int
+# The features of a run of f in o, and their plan's key: the defaults,
+# o's @font-face settings, then f's own
+partfeats := 0;	# a face has @font-face settings
+
+featset(f: ref Typeface, o: ref OutlineFont->Face): (list of (string, int), string)
 {
-	for(l := ligfeats(); l != nil; l = tl l)
-		if(o.hasfeature(hd l))
-			return 1;
-	return 0;
+	p: ref Part;
+	if(partfeats)
+		for(t := f; t != nil && p == nil; t = t.next)
+			for(i := 0; i < len t.parts; i++)
+				if(t.parts[i].outline == o && t.parts[i].feats != nil) {
+					p = t.parts[i];
+					break;
+				}
+	if(f.feats == nil && p == nil)
+		return (defaults(), f.fkey);	# (nil, or names a language)
+	l := rev(defaults());
+	if(p != nil)
+		for(pr := p.feats; pr != nil; pr = tl pr)
+			l = hd pr :: l;
+	for(fr := f.feats; fr != nil; fr = tl fr)
+		l = hd fr :: l;
+	key := f.fkey;
+	if(p != nil)
+		key = p.fkey + "|" + key;
+	return (rev(l), key);
+}
+
+# The OpenType script of a character, for choosing a font's features;
+# nil for those of every script (digits, punctuation, marks) and the
+# scripts not listed
+scripttag(c: int): string
+{
+	if(c < 16r41)
+		return nil;
+	if(c < 16r250) {
+		if(c >= 16rC0 && c != 16rD7 && c != 16rF7 || c >= 16r41 && c <= 16r5A || c >= 16r61 && c <= 16r7A)
+			return "latn";
+		return nil;
+	}
+	if(c >= 16r1E00 && c <= 16r1EFF || c >= 16r2C60 && c <= 16r2C7F || c >= 16rA720 && c <= 16rA7FF ||
+	   c >= 16rFB00 && c <= 16rFB06 || c >= 16rFF21 && c <= 16rFF3A || c >= 16rFF41 && c <= 16rFF5A)
+		return "latn";
+	if(c >= 16r370 && c <= 16r3FF || c >= 16r1F00 && c <= 16r1FFF)
+		return "grek";
+	if(c >= 16r400 && c <= 16r52F || c >= 16r2DE0 && c <= 16r2DFF || c >= 16rA640 && c <= 16rA69F)
+		return "cyrl";
+	if(c >= 16r531 && c <= 16r58F)
+		return "armn";
+	if(c >= 16r5D0 && c <= 16r5FF || c >= 16rFB1D && c <= 16rFB4F)
+		return "hebr";
+	if(c >= 16r620 && c <= 16r6FF || c >= 16r750 && c <= 16r77F || c >= 16r8A0 && c <= 16r8FF ||
+	   c >= 16rFB50 && c <= 16rFDFF || c >= 16rFE70 && c <= 16rFEFF)
+		return "arab";
+	if(c >= 16rE00 && c <= 16rE7F)
+		return "thai";
+	if(c >= 16r10A0 && c <= 16r10FF)
+		return "geor";
+	if(c >= 16r1100 && c <= 16r11FF || c >= 16r3130 && c <= 16r318F || c >= 16rAC00 && c <= 16rD7AF)
+		return "hang";
+	if(c >= 16r3040 && c <= 16r30FF)
+		return "kana";
+	if(c >= 16r3400 && c <= 16r4DBF || c >= 16r4E00 && c <= 16r9FFF)
+		return "hani";
+	return nil;
+}
+
+rev(l: list of (string, int)): list of (string, int)
+{
+	r: list of (string, int);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+Fcache: adt {
+	base:	ref Typeface;
+	key:	string;
+	nokern:	int;
+	f:	ref Typeface;
+};
+fcache: array of list of ref Fcache;
+Nfcache: con 512;
+
+features(f: ref Typeface, feats: list of (string, int), nokern: int, lang: string): ref Typeface
+{
+	if(f == nil || feats == nil && !nokern && lang == nil)
+		return f;
+	key := "";
+	if(lang != nil)
+		key = "lang=" + lang + ";";
+	for(l := feats; l != nil; l = tl l) {
+		(t, v) := hd l;
+		key += sys->sprint("%s=%d;", t, v);
+		if(t == "kern")
+			nokern = v == 0;
+	}
+	if(nokern)
+		feats = rev(("kern", 0) :: rev(feats));
+	h := (hashstr(key) + nokern) & 16r7FFFFFFF;
+	h %= Nfcache;
+	if(fcache == nil)
+		fcache = array[Nfcache] of list of ref Fcache;
+	for(cl := fcache[h]; cl != nil; cl = tl cl) {
+		c := hd cl;
+		if(c.base == f && c.key == key && c.nokern == nokern)
+			return c.f;
+	}
+	n := ref *f;
+	n.nokern = nokern;
+	n.feats = feats;
+	n.lang = lang;
+	n.fkey = key + sys->sprint("k%d", nokern);
+	fcache[h] = ref Fcache(f, key, nokern, n) :: fcache[h];
+	return n;
+}
+
+fvalues: list of (string, string, string, array of int);
+
+addfeaturevalues(family, kind, name: string, vals: array of int)
+{
+	family = lowerstr(family);
+	r: list of (string, string, string, array of int);
+	for(l := fvalues; l != nil; l = tl l) {
+		(f, k, n, nil) := hd l;
+		if(f != family || k != kind || n != name)
+			r = hd l :: r;
+	}
+	fvalues = (family, kind, name, vals) :: r;
+}
+
+featurevalues(family, kind, name: string): array of int
+{
+	family = lowerstr(family);
+	for(l := fvalues; l != nil; l = tl l) {
+		(f, k, n, v) := hd l;
+		if(f == family && k == kind && n == name)
+			return v;
+	}
+	return nil;
+}
+
+lowerstr(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] >= 'A' && s[i] <= 'Z')
+			s[i] += 'a' - 'A';
+	return s;
 }
 
 shape(f: ref Typeface, s: string): array of ref Slot
@@ -517,30 +666,37 @@ shape(f: ref Typeface, s: string): array of ref Slot
 	}
 	a = a[0:n];
 	joinforms(s, slot, a);
-	# ligatures, over runs of one outline face
+	# the font's substitutions (single, alternate, ligature), over
+	# runs of one outline face
 	for(i = 0; i < n; ) {
 		o := a[i].o;
 		j := i + 1;
 		while(j < n && a[j].o == o)
 			j++;
-		if(o != nil && j - i > 1 && hasligs(o)) {
+		if(o != nil) {
 			gids := array[j - i] of int;
 			for(k := i; k < j; k++)
 				gids[k - i] = a[k].g;
-			(r, cnt) := o.ligatures(gids, ligfeats());
-			if(len r != len gids) {
+			(feats, key) := featset(f, o);
+			sc: string;
+			for(k = i; k < j && sc == nil; k++)
+				sc = scripttag(a[k].c);
+			(r, cnt) := o.substitute(gids, feats, sc, f.lang, key);
+			if(cnt == nil) {
+				if(r != gids)
+					for(k = i; k < j; k++)
+						a[k].g = r[k - i];
+			} else {
 				b := array[n - (j - i) + len r] of ref Slot;
 				b[0:] = a[0:i];
+				# each result begins where its first component did,
+				# and keeps its character when it stands for one
+				at := i;
 				for(k = 0; k < len r; k++) {
 					c := 0;
 					if(cnt[k] == 1)
-						c = a[i + k].c;
-					b[i + k] = ref Slot(o, r[k], c, cnt[k], 0);
-				}
-				# each result begins where its first component did
-				at := i;
-				for(k = 0; k < len r; k++) {
-					b[i + k].at = a[at].at;
+						c = a[at].c;
+					b[i + k] = ref Slot(o, r[k], c, cnt[k], a[at].at);
 					at += cnt[k];
 				}
 				b[i + len r:] = a[j:];
@@ -802,6 +958,9 @@ webfaces: list of ref Web;
 
 clearfaces(): list of ref OutlineFont->Face
 {
+	fcache = nil;
+	fvalues = nil;
+	partfeats = 0;
 	# the faces read, and those made from them for each variation (a
 	# variable face, one for each size: bbc.com's), for the caller
 	made: list of ref OutlineFont->Face;
@@ -889,7 +1048,7 @@ addface(family: string, weight, italic: int, ranges: array of int, data: array o
 	# SVG font); the rest is read when it is used (ready)
 	if((err := fontheader(data)) != nil)
 		return "cannot read the font: " + err;
-	webfaces = ref Web(family, weight, italic, ref Part(nil, ranges), nil, data, 0) :: webfaces;
+	webfaces = ref Web(family, weight, italic, ref Part(nil, ranges, nil, nil), nil, data, 0) :: webfaces;
 	return nil;
 }
 
@@ -902,6 +1061,13 @@ addfacedesc(family: string, d: ref Desc, ranges: array of int, data: array of by
 		return err;
 	wf := hd webfaces;
 	wf.desc = d;	# (an auto weight is the face's own, which ready reads)
+	if(d.feats != nil) {
+		wf.part.feats = d.feats;
+		wf.part.fkey = "";
+		for(l := d.feats; l != nil; l = tl l)
+			wf.part.fkey += sys->sprint("%s=%d;", (hd l).t0, (hd l).t1);
+		partfeats = 1;
+	}
 	return nil;
 }
 
@@ -1133,7 +1299,7 @@ varied(w: ref Web, weight, style: int, slant, stretch, opsz: real, vars: list of
 	r: list of (string, real);
 	for(; values != nil; values = tl values)
 		r = hd values :: r;
-	return ref Part(ofont->vary(p.outline, r), p.ranges);
+	return ref Part(ofont->vary(p.outline, r), p.ranges, p.feats, p.fkey);
 }
 
 hasaxis(axes: list of (string, real, real, real), tag: string): int

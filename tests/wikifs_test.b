@@ -693,6 +693,10 @@ writer(go: chan of int, res: chan of string, v: int, text: string)
 # ---- the server itself
 
 # Progs that are wikifs's
+# The test logging the processes it reads, while it hangs only on
+# macOS's Intel runner: the last one logged is the one that blocks.
+tracet: ref T;
+
 wikiprogs(): int
 {
 	n := 0;
@@ -704,6 +708,8 @@ wikiprogs(): int
 		if(k <= 0)
 			break;
 		for(i := 0; i < k; i++){
+			if(tracet != nil)
+				tracet.log("reading /prog/" + d[i].name + "/status");
 			s := getfile("/prog/" + d[i].name + "/status");
 			if(contains(s, "Wikifs") && !contains(s, "WikifsTest") || contains(s, " Wiki") && !contains(s, "Wikifs"))
 				n++;
@@ -716,13 +722,20 @@ testEndsWithConnection(t: ref T)
 {
 	dir := hoststore(t);
 	addpage(dir, 0, "front page", "the front page");
+	tracet = t;
 	before := wikiprogs();
+	tracet = nil;
+	t.log(sys->sprint("%d of its processes before", before));
 	mountwiki(t, dir);
+	t.log("mounted");
 	for(i := 0; i < 5; i++)
 		getfile("/n/0/index.html");
+	t.log("index read");
 	post("another", 0, "text\n");
+	t.log("posted");
 	t.assert(wikiprogs() > before, "wikifs is running");
 	unmountwiki();
+	t.log("unmounted");
 	for(i = 0; i < 50 && wikiprogs() > before; i++)
 		sys->sleep(100);
 	t.asserteq(wikiprogs(), before, "none of its processes is left when its connection has gone");

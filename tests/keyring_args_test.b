@@ -597,7 +597,8 @@ gencall(which: string, n: int, c: chan of string)
 			# q 2, so that it is p that has no generator
 			DSAsk.gen(ref DSApk(IPint.inttoip(n), IPint.inttoip(2), IPint.inttoip(2), IPint.inttoip(4)));
 		"EGsk.sign p" =>
-			sk := ref EGsk(ref EGpk(IPint.inttoip(n), IPint.inttoip(2), IPint.inttoip(4)), IPint.inttoip(3));
+			# for p 23: 4 has order 11 and does not divide 22, and 18 is 4^3
+			sk := ref EGsk(ref EGpk(IPint.inttoip(n), IPint.inttoip(4), IPint.inttoip(18)), IPint.inttoip(3));
 			sk.sign(IPint.inttoip(5));
 		}
 	} exception e {

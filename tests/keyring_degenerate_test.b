@@ -167,7 +167,11 @@ testElGamalDSA(t: ref T)
 	nopk(t, "elgamal", b64(array[] of {byte 23}) + "\n" + ZERO + "\n" + THREE + "\n", "a generator of 0");
 	nopk(t, "elgamal", b64(array[] of {byte 23}) + "\n" + b64(array[] of {byte 23}) + "\n" + THREE + "\n", "a generator that is its modulus");
 	nopk(t, "elgamal", b64(array[] of {byte 23}) + "\n" + FIVE + "\n" + b64(array[] of {byte 40}) + "\n", "a key past its modulus");
-	eg := kr->strtopk("elgamal\nt\n" + b64(array[] of {byte 23}) + "\n" + FIVE + "\n" + THREE + "\n");
+	# 5 generates all of 1..22, and 2 divides 22: neither is a generator
+	# a signature can be trusted under (tests/elgamal_forge_test.b)
+	nopk(t, "elgamal", b64(array[] of {byte 23}) + "\n" + FIVE + "\n" + THREE + "\n", "a generator of the whole group");
+	nopk(t, "elgamal", b64(array[] of {byte 23}) + "\n" + b64(array[] of {byte 2}) + "\n" + THREE + "\n", "a generator that divides p-1");
+	eg := kr->strtopk("elgamal\nt\n" + b64(array[] of {byte 23}) + "\n" + b64(array[] of {byte 4}) + "\n" + b64(array[] of {byte 18}) + "\n");
 	t.assert(eg != nil, "elgamal: a key in its domain is read");
 
 	# DSA: p, q, alpha, key

@@ -3641,9 +3641,21 @@ EGsk_sign(void *fp)
 
 	egsk2priv(&p, f->k);
 	m = keynum(f->m);
+	/*
+	 * a key signatures can be made for without its secret is no key
+	 * to sign with (libsec/egverify.c, which refuses to verify with
+	 * one); looked at with the VM let go, as it is two exponentiations
+	 */
 	release();
-	s = egsign(&p, m);
+	s = nil;
+	if(egpubvalid(&p.pub) == 0)
+		s = egsign(&p, m);
 	acquire();
+	if(s == nil){
+		*f->ret = H;
+		destroy(sig);
+		error(exBadKey);
+	}
 	sig->r = ipcopymp(s->r);
 	sig->s = ipcopymp(s->s);
 	egsigfree(s);

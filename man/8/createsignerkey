@@ -79,6 +79,14 @@ set, makes
 the default; an
 .B -a
 after it still chooses another.
+.PP
+An
+.B elgamal
+signer key made by an earlier version is no longer accepted
+(a certificate could be forged from its public half: see
+.IR keyring-gensk (2)),
+and neither are the keys users were given under it:
+make the signer's key again and have the users enrol again.
 .SH FILES
 .B /keydb/signerkey
 .SH SOURCE

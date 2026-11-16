@@ -629,6 +629,9 @@ mpint*		egencrypt(EGpub *k, mpint *in, mpint *out);	/* deprecated */
 mpint*		egdecrypt(EGpriv *k, mpint *in, mpint *out);
 EGsig*		egsign(EGpriv *k, mpint *m);
 int		egverify(EGpub *k, EGsig *sig, mpint *m);
+int		egpubvalid(EGpub *k);		/* 0 if signatures may be checked with k: see egverify.c */
+int		egsafeprime(mpint *p);		/* 0 if p and (p-1)/2 are prime */
+void		egsecret(EGpriv *k);		/* a secret and public value for k's p and alpha */
 EGpub*		egpuballoc(void);
 void		egpubfree(EGpub*);
 EGpriv*		egprivalloc(void);

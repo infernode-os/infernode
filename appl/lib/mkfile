@@ -335,8 +335,6 @@ SYSMODULES=\
 	sh.m\
 	smtp.m\
 	sort.m\
-	ssl3.m\
-	sslsession.m\
 	string.m\
 	stripe.m\
 	strinttab.m\

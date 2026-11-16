@@ -840,8 +840,6 @@ appl
 		crypt
 			mkfile
 			pkcs.b
-			ssl3.b
-			sslsession.b
 			x509.b
 		daytime.b
 		db.b
@@ -2083,8 +2081,6 @@ module
 	strokes.m
 	srv.m
 	srvrunt.b
-	ssl3.m
-	sslsession.m
 	string.m
 	strinttab.m
 	styx.m

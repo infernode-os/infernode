@@ -6,7 +6,7 @@ pop3 \- Post Office Protocol
 include "pop3.m";
 pop3 := load Pop3 Pop3->PATH;
 
-open:       fn(user, password, server: string): (int, string);
+open:       fn(user, password, server: string, usessl: int): (int, string);
 stat:       fn(): (int, string, int, int);
 msglist:    fn(): (int, string, list of (int, int));
 msgnolist:  fn(): (int, string, list of int);
@@ -14,6 +14,7 @@ top:        fn(m: int): (int, string, string);
 get:        fn(m: int): (int, string, string);
 delete:     fn(m: int): (int, string);
 close:      fn(): (int, string);
+timeout:    fn(ms: int);
 .EE
 .SH DESCRIPTION
 .B Pop3
@@ -36,7 +37,25 @@ uses
 .BR $pop3 ,
 which must be defined in
 .IR ndb (6).
+.I Server
+is a host, or
+.IB host ! port
+for another port than POP3's (110, or 995 with TLS).
+If
+.I usessl
+is non-zero the connection is TLS from the start, made by
+.IR tls (2)'s
+client: the server's certificate chain is verified against the
+system's roots and its name against the certificate, so the server
+must be given by name.
+Otherwise the user name and password are sent in clear.
 The remaining functions assume a successfully opened connection.
+.PP
+.B Timeout
+sets how long, in milliseconds, the connection's making and each line
+from the server are waited for (30 seconds by default); after a
+timeout the connection is closed.
+A line is at most 64K and a message 64MB.
 .PP
 .B Stat
 returns the status of the user's mailbox.
@@ -64,7 +83,9 @@ deletes message
 .IR m .
 .PP
 .B Close
-closes the connection to the POP3 server.
+sends QUIT, which is what makes the server remove the messages
+deleted, waits for its answer, and closes the connection to the POP3
+server; it fails if the server did not answer.
 Note that subsequent reconnections to the server
 may renumber the messages in the mail box and will certainly do so if the last connection
 deleted messages.
@@ -73,8 +94,11 @@ Note also that a connection is static in the sense that mail messages entering t
 a connection will not be accessible. A reconnection is needed to see newly arrived messages.
 .SH SOURCE
 .B /appl/lib/pop3.b
+.br
+.B /appl/lib/mailconn.b
 .SH SEE ALSO
-.IR acme (1)
+.IR acme (1),
+.IR mailconn (2)
 .SH DIAGNOSTICS
 All these functions return -1
 and an error message on failure as the first two entries in their return tuples.

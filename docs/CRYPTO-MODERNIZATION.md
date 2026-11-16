@@ -126,7 +126,7 @@ Weak cipher suites are now rejected during SSL3 negotiation before selection, ra
 **Remaining allowed suites:** 3DES-EDE-CBC and IDEA-CBC with RSA/DH/DHE key exchange and SHA-1 MAC.
 
 **Files modified:**
-- `appl/lib/crypt/ssl3.b` - Added `is_weak_suite()` filter in `find_cipher_suite()`
+- `appl/lib/crypt/ssl3.b` - Added `is_weak_suite()` filter in `find_cipher_suite()` (the module has since been removed: nothing in the tree speaks SSL 3.0; POP3 and webget's https use `tls(2)`)
 
 ### 7. Certificate Revocation Lists (Phase 5)
 

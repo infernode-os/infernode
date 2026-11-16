@@ -186,6 +186,8 @@ TARG=\
 	string_edge_test.dis\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\
+	pop3cli.dis\
+	webgetcli.dis\
 	print_heapfull.dis\
 	tool9call.dis\
 	exec_fd_probe.dis\
@@ -584,6 +586,8 @@ SYSMODULES=\
 	ip.m\
 	ipattr.m\
 	post9p.m\
+	pop3.m\
+	webget.m\
 
 DISBIN=$ROOT/dis/tests
 

@@ -1,13 +1,13 @@
 /*
  * AES with the ARMv8 Cryptography Extension's instructions (AESE, AESD,
- * AESMC, AESIMC): several times the speed of aes.c's table code, and no
- * table indexed by key-dependent bytes for a cache to leak.
+ * AESMC, AESIMC): many times the speed of aes.c's C, which is constant
+ * time by bit planes; these are constant time by construction.
  *
  * Used where aes.c asks (aesarm64ok) and the processor has them: Apple's
  * (always), Linux's and Android's where getauxval says so.  The native kernels build this file with
  * NEON (tests/host/baremetal_test.sh), though the rest of their C is
  * -mgeneral-regs-only, and ask ID_AA64ISAR0_EL1: a Pi 5 has the
- * instructions, a Pi 3 or 4 does not and keeps the C.  That is safe
+ * instructions, a Pi 3 or 4 does not and keeps the C (aes.c).  That is safe
  * because only processes reach it (devssl, Keyring, the generator), no
  * interrupt does, and a process's FP/SIMD registers are saved at every
  * switch (os/arm64/main.c's procsave); an interrupt touches none of them.

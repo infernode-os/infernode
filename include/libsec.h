@@ -21,9 +21,9 @@ struct AESstate
 	ulong	setup;
 	int	rounds;
 	int	keybytes;
-	uchar	key[AESmaxkey];		/* unexpanded key */
 	u32int	ekey[4*(AESmaxrounds + 1)];	/* encryption key */
-	u32int	dkey[4*(AESmaxrounds + 1)];	/* decryption key */
+	u32int	dkey[4*(AESmaxrounds + 1)];	/* decryption key (the equivalent inverse cipher's) */
+	u64int	bkey[8*(AESmaxrounds + 1)];	/* encryption key as bit planes (aes.c) */
 	uchar	ivec[AESbsize];	/* initialization vector */
 };
 
@@ -31,6 +31,8 @@ void	setupAESstate(AESstate *s, uchar key[], int keybytes, uchar *ivec);
 void	aesCBCencrypt(uchar *p, int len, AESstate *s);
 void	aesCBCdecrypt(uchar *p, int len, AESstate *s);
 void	aesEncryptBlock(AESstate *s, uchar pt[16], uchar ct[16]);
+void	aesCTR32(AESstate *s, const uchar ctr[16], uchar *p, ulong n);
+void	clearAESstate(AESstate *s);	/* when done with one: it holds the key */
 
 /* ===================================================== */
 /* AES-CTR */

@@ -27,6 +27,7 @@
 #endif
 
 void aesarm64use(int);
+int aesarm64ok(void);
 void ghasharm64use(int);
 
 static int fails;

@@ -9,15 +9,13 @@
  * which takes the same time whatever the data and the key: it looks up no
  * table.  The 4-bit table it replaces (Shoup's) was indexed by nibbles of
  * the running hash, which a cache shared with an attacker shows.  The
- * counter mode is aesarm64.c's where AES has its instructions, else
- * aesEncryptBlock a block at a time.
+ * counter mode is aes.c's aesCTR32: four counters at a time through its
+ * bit planes, or aesarm64.c's where AES has its instructions.
  */
 
-/* ghasharm64.c and aesarm64.c: the ARMv8 instructions, where the processor has them */
+/* ghasharm64.c: the ARMv8 instructions, where the processor has them */
 int	ghasharm64ok(void);
 void	ghasharm64(uchar y[16], const uchar h[16], const uchar *p, ulong n);
-int	aesarm64ok(void);
-void	aesarm64ctr32(const u32int*, int, const uchar*, uchar*, ulong);
 
 static u64int
 be64(const uchar *b)
@@ -197,31 +195,20 @@ gcm_inc32(uchar J[16])
 			break;
 }
 
-/* dat ^= AES_K(J0+1), AES_K(J0+2), ...: counter mode from J0's successor */
+/*
+ * dat ^= AES_K(J0+1), AES_K(J0+2), ...: counter mode from J0's
+ * successor.  aesCTR32 takes four counters at a time (and the
+ * instructions' code where the processor has it).
+ */
 static void
 gcm_ctr(AESGCMstate *s, uchar *dat, ulong ndat)
 {
-	uchar J[AESbsize], block[AESbsize];
-	ulong i, k, n;
+	uchar J[AESbsize];
 
 	memmove(J, s->J0, AESbsize);
 	gcm_inc32(J);
-	if(!ghashc && aesarm64ok()){
-		aesarm64ctr32(s->a.ekey, s->a.rounds, J, dat, ndat);
-		secureZero(J, sizeof(J));
-		return;
-	}
-	for(i = 0; i < ndat; i += AESbsize){
-		aesEncryptBlock(&s->a, J, block);
-		gcm_inc32(J);
-		n = ndat - i;
-		if(n > AESbsize)
-			n = AESbsize;
-		for(k = 0; k < n; k++)
-			dat[i+k] ^= block[k];
-	}
+	aesCTR32(&s->a, J, dat, ndat);
 	secureZero(J, sizeof(J));
-	secureZero(block, sizeof(block));
 }
 
 /* a state setupAESGCMstate made of a key and an IV that are ones */

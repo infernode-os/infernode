@@ -1,7 +1,14 @@
 /*
- * libsec's AES, aes.c's table code and aesarm64.c's ARMv8 instructions,
- * against FIPS-197 and NIST SP 800-38A, and against each other.
+ * libsec's AES, aes.c's constant-time C (bit planes) and aesarm64.c's
+ * ARMv8 instructions, against FIPS-197 and NIST SP 800-38A, against a
+ * plain reference written from FIPS 197 here, and against each other.
  * Built by tests/host/armcrypto_test.sh.
+ *
+ *	aestest		known answers, the S-box circuit on every byte,
+ *			random cases against the reference; speeds
+ *	aestest ct	the C on a key, IV and data valgrind is told are
+ *			secret (-DCTGRIND): any branch or address that
+ *			depends on them is reported
  */
 #include "../../../libsec/aes.c"
 
@@ -9,6 +16,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef CTGRIND
+#include <valgrind/memcheck.h>
+#else
+#define VALGRIND_MAKE_MEM_UNDEFINED(p, n)	USED(p)
+#define VALGRIND_MAKE_MEM_DEFINED(p, n)	USED(p)
+#endif
 
 void aesarm64use(int);	/* aesarm64.c, built beside this */
 
@@ -137,6 +150,301 @@ cross(void)
 		printf("PASS: the two paths agree on 6000 random keys, IVs and lengths, both ways\n");
 }
 
+/*
+ * The reference: FIPS 197 a byte at a time, its S-box from the
+ * definition (the inverse in GF(2^8), then the affine map).  Slow,
+ * and nothing of aes.c's in it.
+ */
+static uchar rsbox[256], risbox[256];
+
+static uchar
+gmul(uchar a, uchar b)
+{
+	uchar p;
+	int i;
+
+	p = 0;
+	for(i = 0; i < 8; i++){
+		if(b & 1)
+			p ^= a;
+		a = (a << 1) ^ ((a & 0x80) ? 0x1b : 0);
+		b >>= 1;
+	}
+	return p;
+}
+
+static void
+refinit(void)
+{
+	int x, y, i;
+	uchar inv, v;
+
+	for(x = 0; x < 256; x++){
+		inv = 0;
+		for(y = 1; y < 256; y++)
+			if(gmul(x, y) == 1)
+				inv = y;
+		v = 0;
+		for(i = 0; i < 8; i++)
+			v |= (((inv >> i) ^ (inv >> ((i+4)%8)) ^ (inv >> ((i+5)%8))
+				^ (inv >> ((i+6)%8)) ^ (inv >> ((i+7)%8)) ^ (0x63 >> i)) & 1) << i;
+		rsbox[x] = v;
+		risbox[v] = x;
+	}
+}
+
+static void
+refkeys(uchar rk[15][16], uchar *key, int kb)
+{
+	uchar w[60][4], t[4], x, rc;
+	int nk, nr, i, j;
+
+	nk = kb/4;
+	nr = nk + 6;
+	memcpy(w, key, kb);
+	rc = 1;
+	for(i = nk; i < 4*(nr+1); i++){
+		memcpy(t, w[i-1], 4);
+		if(i % nk == 0){
+			x = t[0];
+			t[0] = rsbox[t[1]] ^ rc;
+			t[1] = rsbox[t[2]];
+			t[2] = rsbox[t[3]];
+			t[3] = rsbox[x];
+			rc = gmul(rc, 2);
+		}else if(nk > 6 && i % nk == 4)
+			for(j = 0; j < 4; j++)
+				t[j] = rsbox[t[j]];
+		for(j = 0; j < 4; j++)
+			w[i][j] = w[i-nk][j] ^ t[j];
+	}
+	for(i = 0; i <= nr; i++)
+		memcpy(rk[i], w[4*i], 16);
+}
+
+static void
+refenc(uchar *key, int kb, uchar *in, uchar *out)
+{
+	uchar rk[15][16], s[16], t[16];
+	int nr, r, i, c;
+
+	nr = kb/4 + 6;
+	refkeys(rk, key, kb);
+	for(i = 0; i < 16; i++)
+		s[i] = in[i] ^ rk[0][i];
+	for(r = 1; r <= nr; r++){
+		for(i = 0; i < 16; i++)
+			t[i] = rsbox[s[i]];
+		for(c = 0; c < 4; c++)
+			for(i = 0; i < 4; i++)
+				s[4*c+i] = t[4*((c+i)%4)+i];
+		if(r != nr)
+			for(c = 0; c < 4; c++){
+				memcpy(t, s+4*c, 4);
+				for(i = 0; i < 4; i++)
+					s[4*c+i] = gmul(t[i], 2) ^ gmul(t[(i+1)%4], 3) ^ t[(i+2)%4] ^ t[(i+3)%4];
+			}
+		for(i = 0; i < 16; i++)
+			s[i] ^= rk[r][i];
+	}
+	memcpy(out, s, 16);
+}
+
+static void
+refdec(uchar *key, int kb, uchar *in, uchar *out)
+{
+	uchar rk[15][16], s[16], t[16];
+	int nr, r, i, c;
+
+	nr = kb/4 + 6;
+	refkeys(rk, key, kb);
+	for(i = 0; i < 16; i++)
+		s[i] = in[i] ^ rk[nr][i];
+	for(r = nr-1; r >= 0; r--){
+		for(c = 0; c < 4; c++)
+			for(i = 0; i < 4; i++)
+				t[4*((c+i)%4)+i] = s[4*c+i];
+		for(i = 0; i < 16; i++)
+			s[i] = risbox[t[i]] ^ rk[r][i];
+		if(r != 0)
+			for(c = 0; c < 4; c++){
+				memcpy(t, s+4*c, 4);
+				for(i = 0; i < 4; i++)
+					s[4*c+i] = gmul(t[i], 14) ^ gmul(t[(i+1)%4], 11)
+						^ gmul(t[(i+2)%4], 13) ^ gmul(t[(i+3)%4], 9);
+			}
+	}
+	memcpy(out, s, 16);
+}
+
+/* the S-box circuit and its inverse on every byte, in every one of the 64 places */
+static void
+sboxes(void)
+{
+	u64 q[8];
+	int x, pos, b, bad;
+	uchar got;
+
+	bad = 0;
+	for(x = 0; x < 256; x++){
+		for(b = 0; b < 8; b++)
+			q[b] = ((x >> b) & 1) ? ~0ULL : 0;
+		subbytes(q);
+		for(pos = 0; pos < 64; pos++){
+			got = 0;
+			for(b = 0; b < 8; b++)
+				got |= ((q[b] >> pos) & 1) << b;
+			if(got != rsbox[x])
+				bad++;
+		}
+		for(b = 0; b < 8; b++)
+			q[b] = ((x >> b) & 1) ? ~0ULL : 0;
+		invsubbytes(q);
+		for(pos = 0; pos < 64; pos++){
+			got = 0;
+			for(b = 0; b < 8; b++)
+				got |= ((q[b] >> pos) & 1) << b;
+			if(got != risbox[x])
+				bad++;
+		}
+	}
+	if(rsbox[0] != 0x63 || rsbox[0x53] != 0xed || risbox[0x63] != 0){
+		printf("FAIL: the test's own S-box is not FIPS 197's\n");
+		failed = 1;
+	}
+	if(bad){
+		printf("FAIL: the S-box circuit is wrong for %d of 32768 bytes and places\n", bad);
+		failed = 1;
+	}
+}
+
+/*
+ * aes.c's C against the reference: the round keys, CBC both ways at
+ * every length (so one, two, three and four blocks in the planes, and
+ * the short tail), and the counter mode across its 32-bit wrap.
+ */
+static void
+reference(void)
+{
+	uchar key[32], iv[16], buf[300], a[300], want[300], prev[16], ks[16], ctr[16];
+	uchar rk[15][16], blk[16];
+	AESstate s;
+	int t, i, j, n, kb, bad;
+	u32 c0, v;
+
+	srand(7);
+	bad = 0;
+	for(t = 0; t < 3000; t++){
+		kb = 16 + 8*(t%3);
+		for(i = 0; i < 32; i++)
+			key[i] = rand();
+		for(i = 0; i < 16; i++)
+			iv[i] = rand();
+		n = t < 300 ? t : rand() % 300;
+		for(i = 0; i < n; i++)
+			buf[i] = rand();
+
+		setupAESstate(&s, key, kb, iv);
+		refkeys(rk, key, kb);
+		for(i = 0; i <= s.rounds; i++){
+			wordstobytes(blk, s.ekey + 4*i);
+			if(memcmp(blk, rk[i], 16) != 0)
+				bad++;
+		}
+
+		/* CBC as libsec has it: whole blocks chained, a tail exclusive-ored with E(chain) */
+		memcpy(prev, iv, 16);
+		for(i = 0; i + 16 <= n; i += 16){
+			for(j = 0; j < 16; j++)
+				want[i+j] = buf[i+j] ^ prev[j];
+			refenc(key, kb, want+i, want+i);
+			memcpy(prev, want+i, 16);
+		}
+		if(i < n){
+			refenc(key, kb, prev, ks);
+			for(j = 0; i+j < n; j++)
+				want[i+j] = buf[i+j] ^ ks[j];
+		}
+		memcpy(a, buf, n);
+		aesCBCencrypt(a, n, &s);
+		if(memcmp(a, want, n) != 0)
+			bad++;
+		setupAESstate(&s, key, kb, iv);
+		aesCBCdecrypt(a, n, &s);
+		if(memcmp(a, buf, n) != 0)
+			bad++;
+		/* and the reference's own inverse, on a block */
+		if(n >= 16){
+			refdec(key, kb, want, blk);
+			for(j = 0; j < 16; j++)
+				blk[j] ^= iv[j];
+			if(memcmp(blk, buf, 16) != 0)
+				bad++;
+		}
+
+		/* counter mode, the count starting near its wrap one time in four */
+		memcpy(ctr, iv, 16);
+		if(t % 4 == 0){
+			ctr[12] = ctr[13] = ctr[14] = 0xff;
+			ctr[15] = 0xf0 + t%16;
+		}
+		c0 = (u32)ctr[12]<<24 | (u32)ctr[13]<<16 | (u32)ctr[14]<<8 | ctr[15];
+		for(i = 0; i < n; i += 16){
+			memcpy(blk, ctr, 12);
+			v = c0 + i/16;
+			blk[12] = v>>24; blk[13] = v>>16; blk[14] = v>>8; blk[15] = v;
+			refenc(key, kb, blk, ks);
+			for(j = 0; j < 16 && i+j < n; j++)
+				want[i+j] = buf[i+j] ^ ks[j];
+		}
+		memcpy(a, buf, n);
+		aesCTR32(&s, ctr, a, n);
+		if(memcmp(a, want, n) != 0)
+			bad++;
+	}
+	if(bad){
+		printf("FAIL: aes.c and the reference disagree %d times in 3000 random keys, IVs and lengths\n", bad);
+		failed = 1;
+	}else
+		printf("PASS: aes.c is the reference's cipher on 3000 random keys, IVs and lengths: round keys, CBC both ways, counter mode\n");
+}
+
+/*
+ * Constant time: the key, the IV and the data are marked as valgrind's
+ * "undefined", which it follows through every operation; a branch or
+ * an address made from them is reported.
+ */
+static void
+ct(void)
+{
+	uchar key[32], iv[16], buf[200], ctr[16];
+	AESstate s;
+	int kb, i;
+
+	for(kb = 16; kb <= 32; kb += 8){
+		for(i = 0; i < 32; i++)
+			key[i] = 3*i + kb;
+		for(i = 0; i < 16; i++)
+			iv[i] = ctr[i] = 5*i;
+		for(i = 0; i < sizeof buf; i++)
+			buf[i] = i;
+		VALGRIND_MAKE_MEM_UNDEFINED(key, sizeof key);
+		VALGRIND_MAKE_MEM_UNDEFINED(iv, sizeof iv);
+		VALGRIND_MAKE_MEM_UNDEFINED(buf, sizeof buf);
+		setupAESstate(&s, key, kb, iv);
+		VALGRIND_MAKE_MEM_DEFINED(&s.setup, sizeof s.setup);
+		VALGRIND_MAKE_MEM_DEFINED(&s.rounds, sizeof s.rounds);
+		aesCBCencrypt(buf, sizeof buf, &s);
+		aesCBCdecrypt(buf, sizeof buf, &s);
+		aesEncryptBlock(&s, buf, buf+16);
+		aesCTR32(&s, ctr, buf, sizeof buf);
+		clearAESstate(&s);
+		VALGRIND_MAKE_MEM_DEFINED(key, sizeof key);
+		VALGRIND_MAKE_MEM_DEFINED(iv, sizeof iv);
+		VALGRIND_MAKE_MEM_DEFINED(buf, sizeof buf);
+	}
+}
+
 static double
 speed(int dec)
 {
@@ -213,14 +521,21 @@ keylengths(const char *path)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	double te, td, ae, ad;
 
 	aesarm64use(0);
-	fips197("tables");
-	sp80038a("tables");
-	keylengths("tables");
+	if(argc > 1 && strcmp(argv[1], "ct") == 0){
+		ct();
+		return 0;
+	}
+	refinit();
+	sboxes();
+	fips197("C");
+	sp80038a("C");
+	keylengths("C");
+	reference();
 	te = speed(0);
 	td = speed(1);
 	if(aesarm64ok() || (aesarm64use(1), aesarm64ok())){
@@ -231,9 +546,9 @@ main(void)
 		cross();
 		ae = speed(0);
 		ad = speed(1);
-		printf("AES-256-CBC MB/s: tables %.0f encrypt %.0f decrypt; ARMv8 %.0f encrypt %.0f decrypt\n", te, td, ae, ad);
+		printf("AES-256-CBC MB/s: C %.0f encrypt %.0f decrypt; ARMv8 %.0f encrypt %.0f decrypt\n", te, td, ae, ad);
 	}else
-		printf("SKIP: no ARMv8 AES here; tables %.0f encrypt %.0f decrypt MB/s\n", te, td);
+		printf("SKIP: no ARMv8 AES here; AES-256-CBC in C %.0f encrypt %.0f decrypt MB/s\n", te, td);
 	if(!failed)
 		printf("PASS: FIPS-197 and SP 800-38A vectors on every path; a key that is none gives zeros\n");
 	return failed;

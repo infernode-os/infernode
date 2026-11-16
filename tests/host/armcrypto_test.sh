@@ -7,9 +7,16 @@
 # on the host:
 #
 #   - tests/host/aes/aestest.c: FIPS-197 blocks and NIST SP 800-38A's
-#     CBC vectors for AES-128, -192 and -256 through aes.c's tables and
-#     through the instructions; 6000 random keys, IVs and lengths
-#     encrypted and decrypted by both, the same bytes; speeds
+#     CBC vectors for AES-128, -192 and -256 through aes.c's
+#     constant-time C (bit planes) and through the instructions; the
+#     C's S-box circuit and its inverse on every byte; 3000 random keys,
+#     IVs and lengths against a plain reference written from FIPS 197
+#     in the test (round keys, CBC both ways, counter mode across its
+#     wrap); 6000 encrypted and decrypted by the C and the
+#     instructions, the same bytes; speeds; with valgrind (Linux), the
+#     C constant time (ctgrind): no branch or address depends on the
+#     key, the IV or the data, in the key schedule, CBC either way, a
+#     block or the counter mode
 #   - tests/host/gcm/gcmtest.c: OpenSSL's AES-GCM answers
 #     (tests/host/gcm/vectors.txt, from gen.py) for 128-, 192- and 256-bit
 #     keys, IVs of 12 bytes and others, every length across the blocks,
@@ -65,6 +72,29 @@ for c in $ccs; do
 		cat "$TMP/cc.log"
 		echo "FAIL: $c: aestest does not compile"
 		fails=$((fails+1))
+	fi
+	if command -v valgrind >/dev/null 2>&1 && [ -f /usr/include/valgrind/memcheck.h ]; then
+		if $c $CFLAGS -DCTGRIND $INC -o "$TMP/aestest-ct" "$ROOT/tests/host/aes/aestest.c" "$S/aesarm64.c" \
+			"$S/securezero.c" 2>"$TMP/cc.log"; then
+			valgrind --error-limit=no --log-file="$TMP/vg" "$TMP/aestest-ct" ct >/dev/null 2>&1
+			n=$(grep -c 'depends on uninitialised\|Use of uninitialised' "$TMP/vg")
+			if [ "$n" -eq 0 ]; then
+				echo "$c: AES in C is constant time (valgrind: no branch or address on its key, IV or data)"
+			else
+				grep -A3 'depends on uninitialised\|Use of uninitialised' "$TMP/vg" | head -20
+				echo "FAIL: $c: AES in C branches or indexes on its key or data ($n reports)"
+				fails=$((fails+1))
+			fi
+		else
+			cat "$TMP/cc.log"
+			echo "FAIL: $c: aestest -DCTGRIND does not compile"
+			fails=$((fails+1))
+		fi
+	elif [ -n "${CI:-}" ] && [ "$(uname)" = Linux ]; then
+		echo "FAIL: CI has no valgrind (and valgrind's memcheck.h): the AES constant-time check did not run"
+		fails=$((fails+1))
+	else
+		echo "SKIP: $c: AES constant-time check (needs valgrind and its headers)"
 	fi
 	if $c $CFLAGS $INC -o "$TMP/gcmtest" "$ROOT/tests/host/gcm/gcmtest.c" "$S/aes.c" "$S/aesarm64.c" \
 		"$S/ghasharm64.c" "$S/securezero.c" 2>"$TMP/cc.log"; then

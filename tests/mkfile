@@ -396,6 +396,7 @@ TARG=\
 	brick_d2_test.dis\
 	ethcrypto_test.dis\
 	ethrpc_conv_test.dis\
+	ethrpc_node_test.dis\
 	publicnet_host_test.dis\
 	wallet_policy_test.dis\
 	wallet9p_test.dis\

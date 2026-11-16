@@ -154,6 +154,7 @@ TARG=\
 	math_edge_test.dis\
 	alt_edge_test.dis\
 	attrdb_test.dis\
+	registry_test.dis\
 	cs_cancel.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\

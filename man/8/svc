@@ -93,10 +93,21 @@ putting it at the conventional location for the local registry,
 Initial (static) service descriptions are taken from
 .B /lib/ndb/registry
 if it exists.
-It then starts a listener to give other hosts access to the registry as a 9P
-service at
+It serves the registry with
+.I styxlisten
+(see
+.IR listen (1))
+as a 9P service at
 .BR tcp!*!registry ,
-normally port 6675.
+normally port 6675,
+so that each authenticated caller owns the services it registers,
+and mounts that service on
+.B /mnt/registry
+as one more caller.
+If the listener cannot be started (there is no certificate, for instance)
+the registry is mounted for this machine alone;
+if a registry is already mounted, that one is exported as it is,
+every caller acting as the user who mounted it.
 .PP
 .I Rstyx
 listens for incoming calls to the

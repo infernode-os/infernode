@@ -673,6 +673,21 @@ normally is invoked by Plan 9's general authentication protocol,
 .BR p9any ,
 which is supported by Inferno's
 .IR factotum .
+Only the client's side of
+.B p9any
+is implemented
+.RB ( role=server
+is refused).
+Of the domains a server offers,
+.B p9any
+takes the first for which there is a
+.B p9sk1
+key matching the attributes the caller gave
+(a
+.B user
+or
+.B dom
+attribute chooses among several keys).
 .PP
 .B Pass
 requires a key with
@@ -682,6 +697,63 @@ in addition to
 and
 .B !password
 attributes.
+A key whose password is empty is an error.
+.PP
+.B Wpapsk
+gives the passphrase of a wireless network to
+.IR wpa (8).
+It requires a key with
+.BR proto=wpapsk ,
+an
+.B essid
+attribute naming the network, and a
+.B !password
+attribute.
+The request must name the network with
+.BR essid ,
+and may not give a secret attribute itself.
+.PP
+.B Btpin
+gives a Bluetooth pairing PIN to
+.IR bt9p (4).
+It requires a key with
+.B proto=btpin
+and a
+.B !pin
+attribute; a key with an
+.B addr
+attribute is the PIN for the peer with that address,
+and a key with none is the PIN for any peer not named.
+A request with an
+.B addr
+is answered only by that peer's key,
+and one without only by a key that has no
+.BR addr .
+.PP
+.B Sign
+signs what its caller writes with a signing key that stays in
+.IR factotum .
+It requires a key with
+.BR proto=sign ,
+a
+.B service
+attribute and an
+.B !sk
+attribute (made by the
+.B genkey
+request).
+The request must name the
+.BR service ;
+.B op=pubkey
+returns the public key instead of signing, and any other
+.B op
+is refused.
+The result is in the form of
+.IR keyring-certtostr (2),
+with an expiry time of 1, a second into 1970:
+it is a signature over the caller's bytes and can never be taken for
+a certificate that vouches for a public key,
+which everything that authenticates refuses once expired.
 .\" .PP
 .\" .B Rsa
 .\" requires a key with

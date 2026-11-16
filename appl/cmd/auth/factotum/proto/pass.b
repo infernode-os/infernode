@@ -22,7 +22,11 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	user := authio->lookattrval(key.attrs, "user");
 	if(user == nil)
 		return "unknown user";
+	# a key with !password= and nothing after it was answered "ok user ''":
+	# a success, with no password
 	pass := authio->lookattrval(key.secrets, "!password");
+	if(pass == nil)
+		return "key has no password";
 	a := sys->aprint("%q %q", user, pass);
 	io.write(a, len a);
 	return nil;

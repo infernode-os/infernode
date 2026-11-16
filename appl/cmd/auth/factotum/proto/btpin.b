@@ -32,9 +32,24 @@ init(f: Authio): string
 
 interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 {
-	(key, err) := io.findkey(attrs, "!pin?");
-	if(key == nil)
+	(keys, err) := io.findkeys(attrs, "!pin?");
+	if(keys == nil)
 		return err;
+	key := hd keys;
+	if(authio->lookattrval(attrs, "addr") == nil){
+		# the PIN for anything not named is the key with no addr.
+		# A query with no addr matches every key, and the first was
+		# given: a board holding only PINs for named peers answered
+		# a stranger's pairing with one of them, and a default stored
+		# after a named key was never the one given
+		for(key = nil; keys != nil; keys = tl keys)
+			if(authio->lookattrval((hd keys).attrs, "addr") == nil){
+				key = hd keys;
+				break;
+			}
+		if(key == nil)
+			return "no pin for a peer not named";
+	}
 	pin := authio->lookattrval(key.secrets, "!pin");
 	if(pin == nil)
 		return "no pin";

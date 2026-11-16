@@ -36,14 +36,23 @@ init(f: Authio): string
 
 interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 {
+	# the network is named: with no essid the query matched every
+	# network's key, and the first one's passphrase was given
+	if(authio->lookattrval(attrs, "essid") == nil)
+		return "no essid given";
+	# a secret in the query is a guess at one: "!password=guess" was a
+	# pattern like any other, so the answer said whether it was right
+	for(l := attrs; l != nil; l = tl l)
+		if((a := hd l).tag == Authio->Aval && len a.name > 0 && a.name[0] == '!')
+			return "a query may not give a secret attribute";
 	(key, err) := io.findkey(attrs, "!password?");
 	if(key == nil)
 		return err;
 	pass := authio->lookattrval(key.secrets, "!password");
 	if(pass == nil)
 		return "no passphrase";
-	a := array of byte pass;
-	io.write(a, len a);
+	b := array of byte pass;
+	io.write(b, len b);
 	return nil;
 }
 

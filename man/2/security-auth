@@ -81,6 +81,28 @@ If an authenticated connection cannot be established,
 or the client's chosen algorithm is not listed,
 .B server
 returns a nil file descriptor and an error message.
+When
+.I algs
+is not nil, a client that names no algorithm at all is refused
+(it is not taken to have asked for
+.BR none ),
+as is one that names
+.B none
+together with an algorithm;
+and if no name in
+.I algs
+is one that
+.IR ssl (3)
+has, or
+.B none
+or
+.BR clear ,
+every client is refused.
+The client's choice is sent in the clear and is not bound to the
+authentication, so a list that has
+.B none
+in it beside an algorithm lets someone on the path have the server's end
+of any client's session in the clear.
 .PP
 Any string acceptable to
 .IR ssl (3),

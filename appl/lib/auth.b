@@ -27,6 +27,18 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	kr := load Keyring Keyring->PATH;
 	if(kr == nil)
 		return (nil, sys->sprint("%r"));
+	if(encalgs == nil && hashalgs == nil)
+		(encalgs, hashalgs) = sslalgs();
+
+	# A list in which ssl(3) knows no name (a mistyped one; the old
+	# rc4_256 and sha1) asked for no encryption and no integrity
+	# below, and then a client that named nothing was given a clear
+	# session: the operator asked for a cipher and got none, and
+	# someone on the path, by putting a blank where an honest
+	# client's choice was, held the session the server had just
+	# made for that client.  Such a list serves nobody.
+	if(algs != nil && !usable(algs))
+		return (nil, "no algorithm in the server's list that ssl has:" + names(algs));
 
 	# mutual authentication
 	# Keyring.auth changes /dev/user before returning when setid is true.
@@ -65,8 +77,12 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	alg := "";
 	(nil, calgs) := sys->tokenize(algbuf, " /");
 	clientenc := clienthash := 0;
+	nwords := noneamong := 0;
 	for(; calgs != nil; calgs = tl calgs){
 		calg := hd calgs;
+		nwords++;
+		if(calg == "none")
+			noneamong = 1;
 		if(algs != nil){	# otherwise we suck it and see
 			for(sl := algs; sl != nil; sl = tl sl)
 				if(hd sl == calg)
@@ -79,6 +95,16 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 		alg += calg + " ";
 	}
 	clienthash |= clientenc;	# aes_256_gcm, the only cipher, authenticates its records too
+	if(algs != nil){
+		# the client's choice is one of the list's names, in so
+		# many words: a message of blanks named none of them, and
+		# was taken for "none" whether or not the list had it
+		if(alg == nil)
+			return (nil, "client named no algorithm");
+		# no ssl at all is asked for alone
+		if(nwords > 1 && noneamong)
+			return (nil, "client asked for none and an algorithm");
+	}
 	if(algs != nil && !member("none", algs)){
 		if(encalgs == nil && hashalgs == nil)
 			return (nil, "cannot enforce ssl algorithm policy");
@@ -117,6 +143,26 @@ setuser(user: string)
 	ufd := sys->open("/dev/user", Sys->OWRITE);
 	if(ufd != nil)
 		sys->write(ufd, array of byte user, len user);
+}
+
+# is there a name in a server's list that can make a session: one ssl(3)
+# has, or the two that ask for none of it
+usable(algs: list of string): int
+{
+	for(; algs != nil; algs = tl algs){
+		a := hd algs;
+		if(a == "none" || a == "clear" || member(a, encalgs) || member(a, hashalgs))
+			return 1;
+	}
+	return 0;
+}
+
+names(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l)
+		s += " " + hd l;
+	return s;
 }
 
 member(s: string, l: list of string): int

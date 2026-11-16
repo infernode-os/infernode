@@ -109,13 +109,16 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	doauth := 1;
 	synchronous := 0;
 	trusted := 0;
-	arg->setusage("listen [-i {initscript}] [-Ast] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
+	mixed := 0;
+	arg->setusage("listen [-i {initscript}] [-AMst] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
 		'a' =>
 			algs = arg->earg() :: algs;
 		'A' =>
 			doauth = 0;
+		'M' =>
+			mixed = 1;
 		'f' or
 		'k' =>
 			keyfile = arg->earg();
@@ -158,6 +161,7 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		raise "fail:no auth algorithms";
 	}
 	if (algs != nil) {
+		checkalgs(algs, mixed);
 		authslots = chan[authlimit] of int;
 		srclock = chan[1] of int;
 		if (keyfile == nil)
@@ -454,6 +458,52 @@ readfile(f: string): string
 		return nil;
 
 	return string buf[0:n];	
+}
+
+PROG: con "listen";
+
+# The algorithms a listener is given are checked when it starts, not at
+# each call.  A name ssl(3) does not have (a mistyped one; the rc4_256
+# and sha1 of old scripts) was passed on as it was, and a list of such
+# names let a caller that named nothing have a clear session.  And "none"
+# beside an algorithm protects nobody's session here: the caller's choice
+# is sent in clear and is not part of what was authenticated, so someone
+# on the path can change any caller's choice to "none" and speak to this
+# end as that caller.  That has to be asked for (-M).
+checkalgs(algs: list of string, mixed: int)
+{
+	known := getalgs();
+	bad := "";
+	plain := "";
+	prot := "";
+	for(l := algs; l != nil; l = tl l){
+		a := hd l;
+		if(a == "none" || a == "clear")
+			plain = a;
+		else if(member(a, known))
+			prot = a;
+		else
+			bad += " " + a;
+	}
+	if(bad != nil){
+		have := "";
+		for(; known != nil; known = tl known)
+			have += " " + hd known;
+		sys->fprint(stderr(), "%s: -a:%s: not an algorithm of ssl(3), which has:%s\n", PROG, bad, have);
+		raise "fail:bad algorithm";
+	}
+	if(plain != nil && prot != nil && !mixed){
+		sys->fprint(stderr(), "%s: -a %s beside -a %s: anyone on the path can make a caller's session here a clear one; give -M to allow that\n", PROG, plain, prot);
+		raise "fail:mixed algorithms";
+	}
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 getalgs(): list of string

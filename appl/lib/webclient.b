@@ -107,7 +107,7 @@ tlsdial(addr, servername: string): (ref Sys->FD, string)
 	if(c == nil)
 		return (nil, sys->sprint("dial %s: %r", addr));
 
-	return tlsclient(c.dfd, servername);
+	return tlsclient0(c.dfd, c.cfd, servername);
 }
 
 tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
@@ -115,7 +115,23 @@ tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
 	err := loadtls();
 	if(err != nil)
 		return (nil, err);
+	return tlsclient0(fd, ctlof(fd), servername);
+}
 
+# [private]
+# The ctl file of the connection fd is the data file of, to hang it up
+# by; nil if it is not one (a pipe).
+ctlof(fd: ref Sys->FD): ref Sys->FD
+{
+	p := sys->fd2path(fd);
+	if(len p > 5 && p[len p - 5:] == "/data")
+		return sys->open(p[0:len p - 5] + "/ctl", Sys->OWRITE);
+	return nil;
+}
+
+# [private]
+tlsclient0(fd, cfd: ref Sys->FD, servername: string): (ref Sys->FD, string)
+{
 	cfg := tls->defaultconfig();
 	cfg.servername = servername;
 
@@ -127,58 +143,115 @@ tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
 	}
 
 	# Wrap TLS conn as a pipe-like FD pair
-	return tlsconnfd(conn);
+	return tlsconnfd(conn, cfd);
 }
 
+# ---- a TLS connection as a file ----
+#
+# The caller has one end of a pipe; two processes carry bytes between
+# the other end and the connection, one each way.  Both held their end
+# of the pipe, and the one carrying the caller's writes sat in a read
+# of it: so when the server closed the connection the other finished,
+# but the pipe stayed open and the caller's read never returned.  An
+# IMAP session whose server had closed it while idle (they all do)
+# hung its reader for good, and mail9p with it.  And when the caller
+# closed its end, the process reading the connection stayed in that
+# read, with the connection, until the server chose to close it.
+#
+# Each now ends the other as far as it can be ended.  When the
+# connection ends, the caller is told by a write of no bytes, which its
+# read returns as 0, the end of the file, though the pipe is still
+# open; the connection is hung up; and the writing process ends at the
+# caller's next write or when the caller lets go, whichever is first
+# (it cannot be woken from its read of the pipe, and holds nothing but
+# that).  After that write a read returns 0 at once and a write fails
+# as on any closed pipe.  When the caller closes its end, or a write to
+# the connection fails, the connection is closed (its close_notify
+# sent); a server answers that by closing its side, which ends the
+# reading process's read, and one that has not within GRACEMS is hung
+# up on, which ends it too.  (Not at once: a hangup discards what has
+# been written and not yet sent, a caller's last words among it.)  A
+# connection with no ctl file to be hung up by (TLS over a pipe) is as
+# it was: its reading process stays until the other side closes.
+
+GRACEMS: con 3000;
+
+Tpipe: adt {
+	conn:	ref Conn;
+	cfd:	ref Sys->FD;	# the connection's ctl file; nil if it has none
+	dead:	int;	# the connection has ended: nothing more goes to it
+	rdone:	int;	# the reading process has gone
+};
+
 # [private]
-# Create a bidirectional FD from a TLS connection using a pipe
-tlsconnfd(conn: ref Conn): (ref Sys->FD, string)
+tlsconnfd(conn: ref Conn, cfd: ref Sys->FD): (ref Sys->FD, string)
 {
 	fds := array [2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
 		return (nil, sys->sprint("pipe: %r"));
 
-	# Spawn read and write pumps
-	spawn tlsreadpump(conn, fds[1]);
-	spawn tlswritepump(conn, fds[1]);
+	p := ref Tpipe(conn, cfd, 0, 0);
+	spawn tlsreadpump(p, fds[1]);
+	spawn tlswritepump(p, fds[1]);
 
 	return (fds[0], nil);
 }
 
 # [private]
-tlsreadpump(conn: ref Conn, fd: ref Sys->FD)
+tlsreadpump(p: ref Tpipe, fd: ref Sys->FD)
 {
 	buf := array [16384] of byte;
 	{
 		for(;;) {
-			n := conn.read(buf, len buf);
+			n := p.conn.read(buf, len buf);
 			if(n <= 0)
 				break;
 			if(sys->write(fd, buf[:n], n) != n)
 				break;
 		}
+		p.dead = 1;
+		# the end of the file, to a caller still there
+		sys->write(fd, buf, 0);
 	} exception {
-	"write on closed pipe" =>
-		# the caller closed its end while the server still sent
-		# (an SMTP server's 221 after QUIT): nobody to read it
+	"*" =>
+		# "write on closed pipe": the caller closed its end while
+		# the server still sent (an SMTP server's 221 after QUIT)
 		;
 	}
-	# Signal EOF by closing our end
+	p.dead = 1;
+	p.rdone = 1;
+	if(p.cfd != nil)
+		sys->fprint(p.cfd, "hangup");
 	fd = nil;
 }
 
 # [private]
-tlswritepump(conn: ref Conn, fd: ref Sys->FD)
+tlswritepump(p: ref Tpipe, fd: ref Sys->FD)
 {
 	buf := array [16384] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		if(conn.write(buf[:n], n) != n)
-			break;
+	{
+		for(;;) {
+			n := sys->read(fd, buf, len buf);
+			if(n <= 0 || p.dead)
+				break;
+			if(p.conn.write(buf[:n], n) != n)
+				break;
+		}
+		p.dead = 1;
+		fd = nil;
+		p.conn.close();
+	} exception {
+	"*" =>
+		;
 	}
-	conn.close();
+	p.dead = 1;
+	if(p.cfd == nil)
+		return;
+	for(ms := 0; ms < GRACEMS && !p.rdone; ms += 100)
+		sys->sleep(100);
+	# the reading process's read of the connection ends
+	if(!p.rdone)
+		sys->fprint(p.cfd, "hangup");
 }
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)

@@ -87,7 +87,11 @@ Webclient: module {
 	post:		fn(url, contenttype: string,
 			   body: array of byte): (ref Response, string);
 
-	# TLS-integrated dial: connect TCP + TLS handshake
+	# TLS-integrated dial: connect TCP + TLS handshake.  The fd is one
+	# end of a pipe carried to and from the connection.  When the
+	# server closes, or the connection fails, a read of it returns 0;
+	# after the next write, reads return 0 and writes fail as on a
+	# closed pipe.  Dropping the fd closes the connection.
 	tlsdial:	fn(addr, servername: string): (ref Sys->FD, string);
 	# TLS on a connection already open (STARTTLS); fd is not to be used after
 	tlsclient:	fn(fd: ref Sys->FD, servername: string): (ref Sys->FD, string);

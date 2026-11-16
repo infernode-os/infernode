@@ -11,6 +11,8 @@ include "draw.m";
 include "keyring.m";
 	kr: Keyring;
 
+include "security.m";
+
 Changelogin: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -45,8 +47,24 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:load";
 	}
 
-	# get password
+	# The account's name is a directory of keyfs and the name logind
+	# will be given: one name, by logind's own rule (login(6)), so that
+	# what is made here is what logind accepts.  "../x" made an account
+	# outside keyfs, its secret in a plain file.
 	id := hd args;
+	login := load Login Login->PATH;
+	if(login == nil){
+		sys->fprint(stderr, "%s: can't load %s: %r\n", argv0, Login->PATH);
+		raise "fail:load";
+	}
+	why := login->okname(id);
+	if(why != nil){
+		sys->fprint(stderr, "%s: %q is not an account name: %s\n", argv0, id, why);
+		raise "fail:bad name";
+	}
+	login = nil;
+
+	# get password
 	(dbdir, secret, expiry, err) := getuser(id);
 	if(dbdir == nil){
 		if(err != nil){
@@ -113,33 +131,47 @@ init(nil: ref Draw->Context, args: list of string)
 			expsecs = 0;
 			break;
 		}
-		if(len word != 8){
+		if(len word != 8 || !alldigits(word)){
 			sys->print("!bad date format %s\n", word);
 			continue;
 		}
-		tm.mday = int word[0:2];
-		if(tm.mday > 31 || tm.mday < 1){
-			sys->print("!bad day of month %d\n", tm.mday);
+		# The month was tested with the day's variable, so month 00 was
+		# taken (as January); a day past its month's end ran on into the
+		# next (31 February was 3 March).
+		mon := int word[2:4] - 1;
+		if(mon > 11 || mon < 0){
+			sys->print("!bad month %d\n", mon + 1);
 			continue;
 		}
-		tm.mon = int word[2:4] - 1;
-		if(tm.mon > 11 || tm.mday < 0){
-			sys->print("!bad month %d\n", tm.mon + 1);
+		year := int word[4:8] - 1900;
+		if(year < 70){
+			sys->print("!bad year %d (year may be no earlier than 1970)\n", year + 1900);
 			continue;
 		}
-		tm.year = int word[4:8] - 1900;
-		if(tm.year < 70){
-			sys->print("!bad year %d (year may be no earlier than 1970)\n", tm.year + 1900);
+		mday := int word[0:2];
+		if(mday > monthdays(mon, year+1900) || mday < 1){
+			sys->print("!bad day of month %d\n", mday);
 			continue;
 		}
-		expsecs = daytime->tm2epoch(tm);
+		# The end of the day, set each time round: a date refused left
+		# the time of day at the moment it was typed.  A date past
+		# maxdate is refused as such: its seconds do not fit an int, and
+		# were compared after they had wrapped.
+		tm.mday = mday;
+		tm.mon = mon;
+		tm.year = year;
+		tm.sec = 59;
+		tm.min = 59;
+		tm.hour = 23;
+		expsecs = now;
+		if((year+1900)*10000 + (mon+1)*100 + mday <= 20380117)
+			expsecs = daytime->tm2epoch(tm);
 		if(expsecs > now)
 			break;
 		else {
-			newexpdate := sys->sprint("%2.2d%2.2d%4.4d", tm.mday, tm.mon+1, tm.year+1900);
-			tm          = daytime->local(daytime->now());
-			today      := sys->sprint("%2.2d%2.2d%4.4d", tm.mday, tm.mon+1, tm.year+1900);
-			sys->print("!bad expiration date %s (must be between %s and %s)\n", newexpdate, today, maxdate);
+			ttm := daytime->local(daytime->now());
+			today := sys->sprint("%2.2d%2.2d%4.4d", ttm.mday, ttm.mon+1, ttm.year+1900);
+			sys->print("!bad expiration date %s (must be between %s and %s)\n", word, today, maxdate);
 			expsecs = now;
 		}
 	}
@@ -166,7 +198,9 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	}
 	changed := 0;
-	if(!eq(newsecret, secret)){
+	# no new secret typed: none is written (keyfs happens to keep the
+	# old one when it is sent no bytes)
+	if(newsecret != nil && !eq(newsecret, secret)){
 		if(putsecret(dbdir, newsecret) < 0){
 			sys->fprint(stderr, "%s: can't update secret for %s: %r\n", argv0, id);
 			raise "fail:update";
@@ -181,6 +215,23 @@ init(nil: ref Draw->Context, args: list of string)
 		changed = 1;
 	}
 	sys->print("change written\n");
+}
+
+alldigits(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+# days in month mon (0 is January) of year
+monthdays(mon, year: int): int
+{
+	days := array[] of {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+	if(mon == 1 && year%4 == 0 && (year%100 != 0 || year%400 == 0))
+		return 29;
+	return days[mon];
 }
 
 getuser(id: string): (string, array of byte, int, string)

@@ -27,6 +27,8 @@ implement PasswdTest;
 # sealed under a key from the old one; wrong proofs are counted in
 # logind's file, and a session takes five.
 #
+# changelogin(8) is driven here too, for its dates.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -39,6 +41,9 @@ include "keyring.m";
 include "security.m";
 	login: Login;
 	auth: Auth;
+
+include "daytime.m";
+	daytime: Daytime;
 
 include "sh.m";
 
@@ -748,6 +753,70 @@ testName(t: ref T)
 	t.assert(c == nil && err != nil, "a certificate for a name with no account: " + err);
 }
 
+#
+# changelogin(8), its answers typed as it asks.
+#
+expiry(user: string): ref Daytime->Tm
+{
+	b := readfile("/mnt/keys/"+user+"/expire");
+	if(b == nil || string b == "never")
+		return nil;
+	return daytime->local(int string b);
+}
+
+testChangelogin(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	# A new account; dates that are none are each refused and asked for
+	# again: month 00 (it was taken, as January), 31 February (it was 3
+	# March), a year whose seconds do not fit, a date in the past.
+	(said, end) := dialog("/dis/auth/changelogin.dis", "gina" :: nil,
+		("secret: ", New) :: ("confirm: ", New) ::
+		("expires [", "15002031") :: ("expires [", "31022031") :: ("expires [", "29022031") ::
+		("expires [", "01012039") :: ("expires [", "0101203x") ::
+		("expires [", "01012000") :: ("expires [", "01032031") :: nil);
+	t.assertseq(end, "returned", "changelogin, a new account, six dates that are none and one that is: " + said);
+	t.assert(contains(said, "!bad month 0"), "month 00 is refused: " + said);
+	t.assert(contains(said, "!bad day of month 31") && contains(said, "!bad day of month 29"), "31 and 29 February 2031 are refused");
+	t.assert(contains(said, "!bad expiration date 01012039"), "a date past the last an int holds is refused");
+	t.assert(contains(said, "!bad date format 0101203x"), "a date that is not digits is refused");
+	t.assert(contains(said, "!bad expiration date 01012000"), "a date in the past is refused");
+	tm := expiry("gina");
+	if(tm == nil)
+		t.fatal("gina has no expiry");
+	t.assert(tm.mday == 1 && tm.mon == 2 && tm.year == 131, sys->sprint("the expiry is 1 March 2031: %d/%d/%d", tm.mday, tm.mon+1, tm.year+1900));
+	t.assert(tm.hour == 23 && tm.min == 59 && tm.sec == 59,
+		sys->sprint("at the end of that day, though dates were refused before it: %.2d:%.2d:%.2d", tm.hour, tm.min, tm.sec));
+	t.assert(eq(readfile("/mnt/keys/gina/secret"), pwdigest(New)), "the secret is the password's SHA-256");
+	(err, info) := dologin(t, "gina", New);
+	t.assert(info != nil, "and the account logs in: " + err);
+
+	# no new secret and no new date: the entry is as it was
+	(said, end) = dialog("/dis/auth/changelogin.dis", "gina" :: nil,
+		("don't change]: ", "") :: ("expires [", "") :: nil);
+	t.assertseq(end, "returned", "changelogin, return at both questions: " + said);
+	t.assert(eq(readfile("/mnt/keys/gina/secret"), pwdigest(New)), "leaves the secret");
+	tm2 := expiry("gina");
+	t.assert(tm2 != nil && daytime->tm2epoch(tm2) == daytime->tm2epoch(tm), "and the expiry");
+
+	# a leap day is a day
+	(said, end) = dialog("/dis/auth/changelogin.dis", "gina" :: nil,
+		("don't change]: ", "") :: ("expires [", "29022032") :: nil);
+	tm = expiry("gina");
+	t.assert(end == "returned" && tm != nil && tm.mday == 29 && tm.mon == 1 && tm.year == 132, "29 February 2032 is taken: " + said);
+
+	# a name that is a path is no account's
+	names := array[] of {"../x", "gina/.", "a/b", ".."};
+	for(i := 0; i < len names; i++){
+		(said, end) = dialog("/dis/auth/changelogin.dis", names[i] :: nil,
+			("secret: ", New) :: ("confirm: ", New) :: ("expires [", "") :: nil);
+		t.assert(contains(end, "raised fail:") && contains(said, "not an account name"),
+			sys->sprint("changelogin %s is refused before it asks anything: %s (%s)", names[i], said, end));
+		t.assert(!contains(said, "secret: "), sys->sprint("changelogin %s asks nothing", names[i]));
+	}
+	sys->remove("/keydb/loginfail");
+}
+
 kill(pid: int, how: string)
 {
 	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
@@ -780,6 +849,7 @@ init(nil: ref Draw->Context, args: list of string)
 	kr = load Keyring Keyring->PATH;
 	login = load Login Login->PATH;
 	auth = load Auth Auth->PATH;
+	daytime = load Daytime Daytime->PATH;
 	testing = load Testing Testing->PATH;
 
 	if(testing == nil){
@@ -790,8 +860,8 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
-	if(login == nil || auth == nil){
-		sys->fprint(sys->fildes(2), "cannot load Login or Auth: %r\n");
+	if(login == nil || auth == nil || daytime == nil){
+		sys->fprint(sys->fildes(2), "cannot load Login, Auth or Daytime: %r\n");
 		raise "fail:cannot load";
 	}
 	auth->init();
@@ -813,6 +883,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Keysrv/Replay", testReplay);
 	run("Keysrv/Stale", testStale);
 	run("Keysrv/Name", testName);
+	run("Changelogin/Dates", testChangelogin);
 
 	sys->unmount(nil, "/mnt/kc");
 	sys->unmount(nil, "/mnt/keys");

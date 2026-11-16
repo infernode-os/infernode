@@ -1128,7 +1128,6 @@ appl
 			mkfile
 			transport.m
 			webget.b
-			webget.log
 			wgutils.b
 			wgutils.m
 	tiny

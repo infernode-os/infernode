@@ -10,7 +10,7 @@ import, 9export \- exchange name spaces with a Plan 9 system
 ] [
 .BI -k " keyspec"
 ] [
-.BI -e " crypt hash"
+.B -e clear
 ]
 .I host
 .I file
@@ -24,7 +24,7 @@ import, 9export \- exchange name spaces with a Plan 9 system
 ] [
 .BI -k " keyspec"
 ] [
-.BI -e " crypt hash"
+.B -e clear
 ]
 .SH DESCRIPTION
 .I Import
@@ -50,6 +50,23 @@ to the same name in Inferno's own name space. See
 The remote files are accessed with the permissions of the user authenticated
 to the remote system by
 .IR factotum .
+.PP
+.B "Plan 9 authentication cannot run in this system."
+Its p9sk1 enciphers its tickets with DES, which is no longer built into any
+kernel, hosted or native.
+.I Import
+therefore says so and stops before it dials, and
+.I 9export
+does the same unless it is given
+.BR -A .
+Between InferNode machines use
+.IR mount (1)
+and
+.IR listen (1)
+with
+.IR export (4),
+which authenticate with certificates and encrypt.
+What follows describes the commands as they would run with the protocol.
 .PP
 If the remote
 .I file
@@ -117,6 +134,13 @@ options are as for
 naming an algorithm is refused with
 .B -A
 too, since nothing would be encrypted.
+A caller has 30 seconds to authenticate, name its tree and say how it will
+speak, and must ask for what is done here
+.RB (` "impo nofilter clear" '):
+one that asks for a filter or for encryption is refused, not served in
+clear.
+A tree that cannot be exported is refused without this system's reason for
+it.
 Normally
 .I 9export
 returns when the client closes the connection; the

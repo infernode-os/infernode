@@ -26,7 +26,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(argv != nil)
 		argv = tl argv;
 	flag := Sys->EXPWAIT;
-	for(; argv != nil && len hd argv && (hd argv)[0] == '-'; argv = tl argv)
+	for(; argv != nil && len hd argv && (hd argv)[0] == '-'; argv = tl argv){
+		if(len hd argv == 1)
+			usage();	# a lone - was an option with no letters
 		for(i := 1; i < len hd argv; i++)
 			case (hd argv)[i] {
 			'a' =>
@@ -34,6 +36,7 @@ init(nil: ref Draw->Context, argv: list of string)
 			* =>
 				usage();
 			}
+	}
 	n := len argv;
 	if (n < 1 || n > 2)
 		usage();

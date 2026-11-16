@@ -679,6 +679,55 @@ hascall(n: ref Node): int
 	return 0;
 }
 
+#
+# can evaluating n free memory, or let other code run that can?
+# a call, a spawn, a send, a receive and a load do; so does storing
+# a pointer, which drops what was there; and an array's initializer
+# that loops, as compiled code gives up the processor at a backward
+# branch.  an address found before such code (an array element's by
+# indx, a field's of what a pointer names) may be of freed memory
+# after it.  arithmetic and its assignments free nothing an address
+# can be in (a string at most).
+#
+canfree(n: ref Node): int
+{
+	for(; n != nil; n = n.right){
+		case n.op{
+		Ocall or
+		Ospawn or
+		Osnd or
+		Orcv or
+		Oload =>
+			return 1;
+		Oas or
+		Odas =>
+			if(n.ty == nil)
+				return 1;
+			case n.ty.kind{
+			Tint or
+			Tbig or
+			Tbyte or
+			Treal or
+			Tfix =>
+				;
+			* =>
+				return 1;
+			}
+		Oarray =>
+			for(e := n.right; e != nil; e = e.right){
+				if(e.left == nil)
+					continue;
+				for(q := e.left.left; q != nil; q = q.right)
+					if(q.left != nil && (q.left.op == Owild || q.left.op == Orange))
+						return 1;
+			}
+		}
+		if(canfree(n.left))
+			return 1;
+	}
+	return 0;
+}
+
 hasasgns(n: ref Node): int
 {
 	if(n == nil)

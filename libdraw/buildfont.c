@@ -98,7 +98,13 @@ buildfont(Display *d, char *buf, char *name)
 		t = s;
 		while(*s && *s!=' ' && *s!='\n' && *s!='\t')
 			s++;
-		*s++ = 0;
+		/*
+		 * A name that ends the description ends at its zero byte:
+		 * s was stepped past it, and what lay after the buffer was
+		 * read as more of the font (and cut up in its turn).
+		 */
+		if(*s != 0)
+			*s++ = 0;
 		c->subfontname = 0;
 		c->name = strdup(t);
 		if(c->name == 0){

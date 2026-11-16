@@ -2,6 +2,7 @@
 
 static Node* putinline(Node*);
 static void fpcall(Src*, int, Node*, Node*);
+static Node* eacomv(Node*, Node*, Node*, int);
 
 void
 optabinit(void)
@@ -843,7 +844,7 @@ Node*
 ecom(Src *src, Node *nto, Node *n)
 {
 	Node *left, *right, *tn;
-	Node tl, tr, tto, ttn;
+	Node tl, tr, tto, ttn, tv;
 	Type *t, *tt;
 	Inst *p, *pp;
 	int op;
@@ -867,6 +868,7 @@ ecom(Src *src, Node *nto, Node *n)
 	tr.decl = nil;
 	tto.decl = nil;
 	ttn.decl = nil;
+	tv.decl = nil;
 
 	left = n->left;
 	right = n->right;
@@ -998,8 +1000,13 @@ ecom(Src *src, Node *nto, Node *n)
 		 * address passed as where the result goes); p.x = f() so
 		 * too, f making a new p.  So right first, into a temporary,
 		 * then the address.  (Only a name's address is fixed.)
+		 * Not only a call: whatever in right can free memory
+		 * (canfree) is done before an address that has to be
+		 * computed is; a[0] = len (a = nil) stored into the array
+		 * it had just dropped.
 		 */
-		if(left->op != Oname && right != &tr && hascall(right))
+		if(right != &tr
+		&& (left->op != Oname && hascall(right) || left->addable >= Rcant && canfree(right)))
 			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 
 		/*
@@ -1029,7 +1036,7 @@ ecom(Src *src, Node *nto, Node *n)
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nil);
 		}else{
-			left = eacom(left, &tl, nil);
+			left = eacomv(left, &tl, nil, canfree(right));
 			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 		}
 		genop(&n->src, op, left, right, nto);
@@ -1041,12 +1048,24 @@ ecom(Src *src, Node *nto, Node *n)
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nto);
 		}else if(left->temps < right->temps){
-			right = eacom(right, &tr, nto);
+			right = eacomv(right, &tr, nto, canfree(left));
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nil);
 		}else{
-			left = eacom(left, &tl, nto);
+			left = eacomv(left, &tl, nto, canfree(right));
 			right = eacom(right, &tr, nil);
+		}
+		/*
+		 * a send that blocks keeps the address of its value until
+		 * a receiver comes for it.  g.n and a[i] are in objects
+		 * that can be freed by then (g = nil, in another thread):
+		 * the receiver was given what had taken their place.
+		 * Only the frame and the module's data stay put, so
+		 * anything else is sent from a copy in the frame.
+		 */
+		if(!stayput(right)){
+			genmove(&n->src, Mas, right->ty, right, talloc(&tv, right->ty, nil));
+			right = &tv;
 		}
 		p = genrawop(&n->src, ISEND, right, nil, left);
 		p->m.offset = n->ty->size;	/* for optimizer */
@@ -1054,6 +1073,7 @@ ecom(Src *src, Node *nto, Node *n)
 			genmove(src, Mas, right->ty, right, nto);
 		tfree(&tl);
 		tfree(&tr);
+		tfree(&tv);
 		break;
 	case Orcv:
 		if(nto == nil){
@@ -1061,6 +1081,18 @@ ecom(Src *src, Node *nto, Node *n)
 			tfree(&tto);
 			return nil;
 		}
+		/*
+		 * a receive that blocks keeps the address the value is to
+		 * go to until a sender comes.  g.n = <-c gave it an address
+		 * in the object g names, which another thread can drop
+		 * meanwhile: the value was then written into freed memory,
+		 * or into whatever had been allocated there.  So it is
+		 * received in the frame and moved from there, by an
+		 * instruction that finds the destination afresh.
+		 */
+		tn = nto;
+		if(!stayput(nto))
+			nto = talloc(&tv, n->ty, nil);
 		if(left->addable >= Rcant)
 			left = eacom(left, &tl, nto);
 		if(left->ty->kind == Tchan){
@@ -1070,13 +1102,18 @@ ecom(Src *src, Node *nto, Node *n)
 			recvacom(src, nto, n);
 		}
 		tfree(&tl);
+		if(nto != tn){
+			genmove(src, Mas, n->ty, nto, tn);
+			tfree(&tv);
+			nto = tn;
+		}
 		break;
 	case Ocons:
 		/*
 		 * another temp which can go with analysis
 		 */
 		if(left->addable >= Rcant)
-			left = eacom(left, &tl, nil);
+			left = eacomv(left, &tl, nil, !sameaddr(right, nto) && canfree(right));
 		if(!sameaddr(right, nto)){
 			ecom(&right->src, talloc(&tto, n->ty, nto), right);
 			genmove(src, Mcons, left->ty, left, &tto);
@@ -1152,7 +1189,7 @@ ecom(Src *src, Node *nto, Node *n)
 			if(right->addable >= Rcant)
 				right = eacom(right, &tr, nil);
 		}else{
-			right = eacom(right, &tr, nto);
+			right = eacomv(right, &tr, nto, canfree(left));
 			left = ecom(&left->src, talloc(&tl, left->ty, nil), left);
 		}
 
@@ -1186,8 +1223,8 @@ ecom(Src *src, Node *nto, Node *n)
 		if(right->addable < Rcant){
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nto);
-		}else if(left->temps < right->temps || hascall(right)){	/* (a call first: as for Oas) */
-			right = eacom(right, &tr, nto);
+		}else if(left->temps < right->temps || canfree(right)){	/* (what can free first: as for Oas) */
+			right = eacomv(right, &tr, nto, canfree(left));
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nil);
 		}else{
@@ -1331,8 +1368,27 @@ ecom(Src *src, Node *nto, Node *n)
 		tfree(&tto);
 		break;
 	case Oload:
+		/*
+		 * a load lets other threads run while it reads the file,
+		 * and stores the module when it has it: g.m = load M p
+		 * stored it in the object g had named, freed meanwhile.
+		 * As for a receive, the module is loaded into the frame
+		 * and moved from there.
+		 */
+		tn = nto;
+		if(nto != nil && !stayput(nto))
+			nto = talloc(&tv, n->ty, nil);
 		if(left->addable >= Rcant)
 			left = eacom(left, &tl, nto);
+		/*
+		 * the load uses the path's text meanwhile, too: a string
+		 * only a variable other threads can change, or an object,
+		 * holds is held by the frame for as long.
+		 */
+		if(left->addable != Rreg && left->op != Oconst){
+			genmove(src, Mas, tstring, left, talloc(&ttn, tstring, nil));
+			left = &ttn;
+		}
 		talloc(&tr, tint, nil);
 		if(LDT)
 			genrawop(src, ILOAD, left, right, nto);
@@ -1342,6 +1398,12 @@ ecom(Src *src, Node *nto, Node *n)
 		}
 		tfree(&tl);
 		tfree(&tr);
+		tfree(&ttn);
+		if(nto != tn){
+			genmove(src, Mas, n->ty, nto, tn);
+			tfree(&tv);
+			nto = tn;
+		}
 		break;
 	case Ocast:
 		if(left->addable >= Rcant)
@@ -1378,7 +1440,7 @@ ecom(Src *src, Node *nto, Node *n)
 		 * left's tree won't be rewritten
 		 */
 		if(left->addable >= Rcant)
-			left = eacom(left, &tl, nil);
+			left = eacomv(left, &tl, nil, canfree(right) || canfree(tn));
 
 		if(tn->op == Onothing){
 			tn = mkn(Olen, left, nil);
@@ -1394,7 +1456,7 @@ ecom(Src *src, Node *nto, Node *n)
 			if(right->addable >= Rcant)
 				right = eacom(right, &tr, nil);
 		}else{
-			right = eacom(right, &tr, nil);
+			right = eacomv(right, &tr, nil, canfree(tn));
 			tn = ecom(&tn->src, talloc(&ttn, tn->ty, nil), tn);
 		}
 		op = ISLICEA;
@@ -1405,24 +1467,34 @@ ecom(Src *src, Node *nto, Node *n)
 		 * overwrite the destination last,
 		 * since it might be used in computing the slice bounds
 		 */
-		if(!sameaddr(left, nto))
+		if(!sameaddr(left, nto)){
+			/*
+			 * and it can be all that held what the lower bound's
+			 * address is in (v = t[v[i]:]): its value then
+			 */
+			if(tr.decl != nil && right != &tr){
+				genmove(src, Mas, right->ty, right, talloc(&tv, right->ty, nil));
+				right = &tv;
+			}
 			ecom(&left->src, nto, left);
+		}
 
 		genrawop(src, op, right, tn, nto);
 		tfree(&tl);
 		tfree(&tr);
 		tfree(&ttn);
+		tfree(&tv);
 		break;
 	case Oindx:
 		if(right->addable < Rcant){
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nto);
 		}else if(left->temps < right->temps){
-			right = eacom(right, &tr, nto);
+			right = eacomv(right, &tr, nto, canfree(left));
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nil);
 		}else{
-			left = eacom(left, &tl, nto);
+			left = eacomv(left, &tl, nto, canfree(right));
 			right = eacom(right, &tr, nil);
 		}
 		if(nto->addable >= Ralways)
@@ -1565,6 +1637,24 @@ eacom(Node *n, Node *reg, Node *t)
 }
 
 /*
+ * make n addressable, as eacom does, where code for something else
+ * is to run before n is used.  If that code can free memory (later,
+ * from canfree), an address found now, an array element's or a field's
+ * of what a pointer names, can be of freed memory by the time it is
+ * used: f(1) - a[i][j] read the element after f had dropped a.
+ * So n's value is taken now instead.
+ */
+static Node*
+eacomv(Node *n, Node *reg, Node *t, int later)
+{
+	if(!later)
+		return eacom(n, reg, t);
+	ecom(&n->src, talloc(reg, n->ty, t), n);
+	reg->src = n->src;
+	return reg;
+}
+
+/*
  * compile an assignment to an array slice
  */
 Node*
@@ -1581,15 +1671,19 @@ slicelcom(Src *src, Node *nto, Node *n)
 	left = n->left->left;
 	right = n->left->right->left;
 	v = n->right;
+	/*
+	 * the array is found before its index and the value to go in
+	 * it are made: if they can free it, hold it by value
+	 */
 	if(right->addable < Ralways){
 		if(left->addable >= Rcant)
-			left = eacom(left, &tl, nto);
+			left = eacomv(left, &tl, nto, canfree(v));
 	}else if(left->temps <= right->temps){
 		right = ecom(&right->src, talloc(&tr, right->ty, nto), right);
 		if(left->addable >= Rcant)
-			left = eacom(left, &tl, nil);
+			left = eacomv(left, &tl, nil, canfree(v));
 	}else{
-		left = eacom(left, &tl, nil);		/* dangle on right and v */
+		left = eacomv(left, &tl, nil, canfree(right) || canfree(v));
 		right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 	}
 
@@ -1627,7 +1721,18 @@ indsascom(Src *src, Node *nto, Node *n)
 	left = n->left->left;
 	right = n->left->right;
 	v = n->right;
-	if(right->addable < Ralways){
+	if(left->addable >= Rcant && (canfree(right) || canfree(v))){
+		/*
+		 * the string is changed where it is, so its address it
+		 * has to be; the index and the value, which can free what
+		 * it is in (ss[i][0] = f(), f making a new ss), first
+		 */
+		if(right->addable >= Ralways)
+			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
+		if(v->addable >= Rcant)
+			v = ecom(&v->src, talloc(&tv, v->ty, nil), v);
+		left = eacom(left, &tl, nil);
+	}else if(right->addable < Ralways){
 		if(left->addable >= Rcant)
 			left = eacom(left, &tl, nto);
 	}else if(left->temps <= right->temps){
@@ -1693,7 +1798,7 @@ callcom(Src *src, int op, Node *n, Node *ret)
 	Inst *in,*p;
 	Decl *d, *callee;
 	long off;
-	int iop;
+	int iop, later;
 
 	args = n->right;
 	nfn = n->left;
@@ -1719,6 +1824,18 @@ callcom(Src *src, int op, Node *n, Node *ret)
 		tfree(&tmod);
 		return;
 	}
+	/*
+	 * the callee is given the address its result goes to, and
+	 * stores there when it returns; it can have freed what an
+	 * address outside the frame and the module's data was in
+	 */
+	if(ret != nil && !stayput(ret)){
+		talloc(&tmod, nfn->ty->tof, nil);
+		callcom(src, op, n, &tmod);
+		genmove(src, Mas, nfn->ty->tof, &tmod, ret);
+		tfree(&tmod);
+		return;
+	}
 	if(ispoly(callee))
 		addfnptrs(callee, 0);
 	if(nfn->ty->varargs){
@@ -1732,8 +1849,28 @@ callcom(Src *src, int op, Node *n, Node *ret)
 	ind = nfn->right;
 	tmod.decl = tind.decl = nil;
 	if(nfn->addable == Rmpc){
+		/*
+		 * the module is used twice, for the frame and for the
+		 * call, with the arguments made between: found by an
+		 * address that making them can free (mods[i]->f(g()),
+		 * g making a new mods), it is held by value.  So is one
+		 * in a variable when an argument made after the frame
+		 * (those with calls are made before it) can block, loop
+		 * or assign: another thread, or the argument, can change
+		 * the variable, and the call would be of one module's
+		 * function with the frame of another's.
+		 */
+		later = 0;
+		for(a = args; a != nil; a = a->right)
+			if(!hascall(a->left) && canfree(a->left))
+				later = 1;
 		if(mod->addable >= Rcant)
-			mod = eacom(mod, &tmod, nil);		/* dangle always */
+			mod = eacomv(mod, &tmod, nil, canfree(args));
+		else if(later && tattr[mod->ty->kind].isptr){
+			genmove(src, Mas, mod->ty, mod, talloc(&tmod, mod->ty, nil));
+			tmod.src = mod->src;
+			mod = &tmod;
+		}
 		if(ind->op != Oname && ind->addable >= Ralways){
 			talloc(&tind, ind->ty, nil);
 			ecom(&ind->src, &tind, ind);
@@ -1851,7 +1988,7 @@ callcom(Src *src, int op, Node *n, Node *ret)
 void
 arraycom(Node *a, Node *elems)
 {
-	Node tindex, fake, tmp, ri, *e, *n, *q, *body, *wild;
+	Node tindex, fake, tmp, ri, tb, *e, *n, *q, *body, *wild;
 	Inst *top, *out;
 	/* Case *c; */
 
@@ -1915,11 +2052,26 @@ arraycom(Node *a, Node *elems)
 				tindex.right = q->left;
 			}
 	
+			/*
+			 * an element that can free the array (canfree) is
+			 * made before the place for it is found: the address
+			 * found first was of the array f dropped, in
+			 * ga = array[] of {f()}
+			 */
+			tb.decl = nil;
+			if(canfree(body)){
+				talloc(&tb, fake.ty, nil);
+				tb.src = body->src;
+				ecom(&tb.src, &tb, body);
+				body = &tb;
+			}
+
 			tindex.addable = Rcant;
 			tindex.src = q->left->src;
 			ecom(&tindex.src, &tmp, &tindex);
 	
 			ecom(&body->src, &fake, body);
+			tfree(&tb);
 	
 			if(q->left->op == Orange){
 				/* i++ */
@@ -2195,7 +2347,7 @@ bcom(Node *n, int iftrue, Inst *b)
 		if(left->addable >= Rcant)
 			left = eacom(left, &tl, nil);
 	}else{
-		left = eacom(left, &tl, nil);
+		left = eacomv(left, &tl, nil, canfree(right));
 		right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 	}
 	bb = genbra(&n->src, op, left, right);
@@ -2613,8 +2765,20 @@ fpcall(Src *src, int op, Node *n, Node *ret)
 
 	tp.decl = nil;
 	e = n->left->left;
-	if(e->addable >= Rcant)
-		e = eacom(e, &tp, nil);
+	/*
+	 * the reference names a module and a function of it, used
+	 * for the frame and for the call with the arguments made
+	 * between.  Only a local the arguments leave alone is sure
+	 * to be the same reference each time: anything else (a
+	 * global, a field, an element) is held by value, or
+	 * gf(h()), h giving gf another function, called one
+	 * module's function by another's index.
+	 */
+	if(e->addable != Rreg || canfree(n->right)){
+		ecom(&e->src, talloc(&tp, e->ty, nil), e);
+		tp.src = e->src;
+		e = &tp;
+	}
 	mod = mkunary(Oind, e);
 	ind = mkunary(Oind, mkbin(Oadd, dupn(0, src, e), mkconst(src, IBY2WD)));
 	n->left = mkbin(Omdot, mod, ind);

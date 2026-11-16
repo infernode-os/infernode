@@ -655,8 +655,12 @@ tkfreename(TkName *f)
 	}
 }
 
-void
-tkfreeobj(Tk *tk)
+/*
+ * tk is going: nothing that remembers a widget between events may
+ * remember it.
+ */
+static void
+tkforget(Tk *tk)
 {
 	TkCtxt *c;
 
@@ -679,6 +683,48 @@ tkfreeobj(Tk *tk)
 	}
 	if (tk == blinkw)
 		blinkw = nil;
+}
+
+/*
+ * A widget destroyed by a script is not freed there.  The script may
+ * be a binding's, run in the middle of delivering an event to that
+ * very widget: tkdeliver, the widget's own code and Tk's pointer and
+ * keyboard entry points all go on using it when the script returns,
+ * and it had been freed (and, if the script allocated, was by then
+ * something else).  It is taken out of everything here and kept, its
+ * memory whole, on the top's list of the dead, which tkfreedead
+ * empties once no event is in delivery: at the end of each of Tk's
+ * entry points, and when the top itself goes.
+ */
+void
+tkfreelater(Tk *tk)
+{
+	TkTop *t;
+
+	t = tk->env->top;
+	tkforget(tk);
+	tk->flag |= Tkdestroy|Tkdying;
+	tk->siblings = t->dead;
+	t->dead = tk;
+}
+
+void
+tkfreedead(TkTop *t)
+{
+	Tk *tk;
+
+	/* freeing one may destroy others (a text's windows): until none is left */
+	while((tk = t->dead) != nil){
+		t->dead = tk->siblings;
+		tk->siblings = nil;
+		tkfreeobj(tk);
+	}
+}
+
+void
+tkfreeobj(Tk *tk)
+{
+	tkforget(tk);
 	tkextnfreeobj(tk);
 	tkmethod[tk->type]->free(tk);
 	tkputenv(tk->env);
@@ -1746,8 +1792,32 @@ tkmatch(int inc, int dec, char *p)
 	return nil;
 }
 
+static char*	tkexec1(TkTop*, char*, char**);
+
+/*
+ * A script runs commands, and a command may run a script: a binding's,
+ * when it causes an event; a widget's own (a button's -command that
+ * invokes the button).  The count below is of commands in one binding,
+ * begun again by each binding and not kept at all outside one, so
+ * nothing bounded scripts one inside another but the C stack, and a
+ * script that ran itself ended the emulator when that ran out.  They
+ * are held to Tkmaxnest deep.
+ */
 char*
 tkexec(TkTop *t, char *arg, char **val)
+{
+	char *e;
+
+	if(t->execnest >= Tkmaxnest)
+		return TkDepth;
+	t->execnest++;
+	e = tkexec1(t, arg, val);
+	t->execnest--;
+	return e;
+}
+
+static char*
+tkexec1(TkTop *t, char *arg, char **val)
 {
 	int cmdsz, n;
 	char *p, *cmd, *e, *c;

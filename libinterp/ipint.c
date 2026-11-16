@@ -11,9 +11,13 @@
 
 #include "ipintsmod.h"
 
+/* when a long computation leaves the VM to other threads: see IPint_expmod */
 enum
 {
-	MaxBigBytes = 1024
+	ExpRelModBits=	512,	/* expmod: a modulus longer than this */
+	ExpRelExpBits=	32,	/* and an exponent longer than this */
+	InvRelBits=	1024,	/* invert: a modulus longer than this (1 ms at 2048 bits) */
+	OpRelBits=	16384,	/* mul, div, mod, text: an operand longer than this */
 };
 
 /* infinite precision integer */
@@ -79,12 +83,85 @@ freeIPint(Heap *h, int swept)
 	freeheap(h, 0);
 }
 
+/*
+ * A number's bytes and text are as long as the number, which is as long
+ * as a program makes it (a shift, a product, bytes of its own). They
+ * were formatted into 1024 bytes on the stack whatever the length:
+ * libmp's hexadecimal filled the buffer and left it unterminated, so
+ * the string returned ran on into the stack beyond it; its base 32
+ * wrote nothing, and the string was what the stack held; decimal gave
+ * the low digits alone; base 64 a shorter number that read back as
+ * another; and the bytes of a number past 1024 were an empty array. The
+ * room is now taken from the number, in the Dis heap: what is made of
+ * it can raise for want of heap, and an array nothing refers to is the
+ * collector's to free, where malloc'd memory would be lost.
+ */
+static int
+nbytes(mpint *b)
+{
+	int n;
+
+	n = (mpsignif(b)+7)/8;
+	if(n == 0)
+		n = 1;	/* zero is one byte */
+	return n;
+}
+
+static Array*
+mpbytes(mpint *b)
+{
+	Array *a;
+	int n;
+
+	n = nbytes(b);
+	a = H2D(Array*, heaparray(&Tbyte, n));
+	if(mptobe(b, a->data, n, nil) != n){
+		destroy(a);
+		error(exHeap);
+	}
+	return a;
+}
+
+static void
+retmptoa(mpint *b, int base, String **ret)
+{
+	Array *a;
+	mpint *c;
+	char *s;
+	int n;
+
+	/* libmp's own allowance: enough for any base, a sign and the terminator */
+	n = ((b->top+1)*Dbits+2)/3 + 2;
+	a = H2D(Array*, heaparray(&Tbyte, n));
+	if(mpsignif(b) > OpRelBits){
+		/*
+		 * decimal takes time as the square of the length (a minute
+		 * at 8MB of number): not with the VM held.  The array is
+		 * kept from the collector meanwhile.
+		 */
+		c = mpcopy(b);
+		poolimmutable(D2H(a));
+		release();
+		s = mptoa(c, base, (char*)a->data, n);
+		acquire();
+		poolmutable(D2H(a));
+		mpfree(c);
+	}else
+		s = mptoa(b, base, (char*)a->data, n);
+	if(s == nil){
+		destroy(a);
+		error(exHeap);
+	}
+	retstr(s, ret);
+	destroy(a);
+}
+
 void
 IPint_iptob64z(void *fp)
 {
 	F_IPint_iptob64 *f;
 	mpint *b;
-	char buf[MaxBigBytes];	/* TO DO: should allocate these */
+	Array *a, *t;
 	uchar *p;
 	int n, o;
 	void *v;
@@ -95,13 +172,12 @@ IPint_iptob64z(void *fp)
 	destroy(v);
 
 	b = MP(f->i);
-	n = (b->top+1)*Dbytes;
-	p = malloc(n+1);
-	if(p == nil)
-		error(exHeap);
+	n = nbytes(b);
+	a = H2D(Array*, heaparray(&Tbyte, n+1));
+	p = a->data;
 	n = mptobe(b, p+1, n, nil);
 	if(n < 0){
-		free(p);
+		destroy(a);
 		return;
 	}
 	p[0] = 0;
@@ -111,16 +187,17 @@ IPint_iptob64z(void *fp)
 		n++;
 	}else
 		o = 1;
-	enc64(buf, sizeof(buf), p+o, n);
-	retstr(buf, f->ret);
-	free(p);
+	t = H2D(Array*, heaparray(&Tbyte, (n+2)/3*4 + 1));
+	enc64((char*)t->data, t->len, p+o, n);
+	retstr((char*)t->data, f->ret);
+	destroy(t);
+	destroy(a);
 }
 
 void
 IPint_iptob64(void *fp)
 {
 	F_IPint_iptob64 *f;
-	char buf[MaxBigBytes];
 	void *v;
 
 	f = fp;
@@ -128,15 +205,13 @@ IPint_iptob64(void *fp)
 	*f->ret = H;
 	destroy(v);
 
-	mptoa(MP(f->i), 64, buf, sizeof(buf));
-	retstr(buf, f->ret);
+	retmptoa(MP(f->i), 64, f->ret);
 }
 
 void
 IPint_iptobytes(void *fp)
 {
 	F_IPint_iptobytes *f;
-	uchar buf[MaxBigBytes];
 	void *v;
 
 	f = fp;
@@ -145,14 +220,13 @@ IPint_iptobytes(void *fp)
 	destroy(v);
 
 	/* TO DO: two's complement or have ipmagtobe? */
-	*f->ret = mem2array(buf, mptobe(MP(f->i), buf, sizeof(buf), nil));	/* for now we'll ignore sign */
+	*f->ret = mpbytes(MP(f->i));	/* for now we'll ignore sign */
 }
 
 void
 IPint_iptobebytes(void *fp)
 {
 	F_IPint_iptobebytes *f;
-	uchar buf[MaxBigBytes];
 	void *v;
 
 	f = fp;
@@ -160,14 +234,13 @@ IPint_iptobebytes(void *fp)
 	*f->ret = H;
 	destroy(v);
 
-	*f->ret = mem2array(buf, mptobe(MP(f->i), buf, sizeof(buf), nil));
+	*f->ret = mpbytes(MP(f->i));
 }
 
 void
 IPint_iptostr(void *fp)
 {
 	F_IPint_iptostr *f;
-	char buf[MaxBigBytes];
 	void *v;
 
 	f = fp;
@@ -175,8 +248,7 @@ IPint_iptostr(void *fp)
 	*f->ret = H;
 	destroy(v);
 
-	mptoa(MP(f->i), f->base, buf, sizeof(buf));
-	retstr(buf, f->ret);
+	retmptoa(MP(f->i), f->base, f->ret);
 }
 
 static IPints_IPint*
@@ -264,6 +336,29 @@ IPint_strtoip(void *fp)
 	*f->ret = strtoipint(f->str, f->base);
 }
 
+enum {
+	Maxshiftbits	= 1<<26,	/* 8MB of number: see the shifts */
+	Maxprimebits	= 1<<16,
+};
+
+/*
+ * A count of bits for a random number or a prime is the program's.
+ * genprime takes its number's top digit from the count: with none or
+ * fewer it masked and set a word before the digits, in the block in
+ * front of them in the kernel's pool (minus a thousand ended the
+ * emulator: "pool main CORRUPT"), and near the largest int the digit
+ * count wrapped and the word was a quarter of a gigabyte away. One bit
+ * has no prime, and the search never ended (libsec's probably_prime
+ * looked for ever for a witness for 3, which every search from below it
+ * meets). A count is held to what the generator can make.
+ */
+static void
+bitscheck(int n, int min, int max)
+{
+	if(n < min || n > max)
+		error("IPint: bad bit count");
+}
+
 /* create a random integer */
 void
 IPint_random(void *fp)
@@ -277,6 +372,7 @@ IPint_random(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	bitscheck(f->nbits, 0, Maxshiftbits);
 	release();
 	b = mprand(f->nbits, genrandom, nil);
 	acquire();
@@ -349,13 +445,6 @@ IPint_iptoint(void *fp)
  * release: an RSA public-key operation (e = 65537, 0.6 ms at 2048 bits;
  * TLS's certificate checks) keeps the VM.
  */
-enum
-{
-	ExpRelModBits=	512,	/* expmod: a modulus longer than this */
-	ExpRelExpBits=	32,	/* and an exponent longer than this */
-	InvRelBits=	1024,	/* invert: a modulus longer than this (1 ms at 2048 bits) */
-	OpRelBits=	16384,	/* mul, div, mod: an operand longer than this */
-};
 
 static int
 bigop(mpint *a, mpint *b)
@@ -369,6 +458,8 @@ IPint_expmod(void *fp)
 {
 	F_IPint_expmod *f;
 	mpint *ret, *mod, *base, *exp;
+	int rel, nb;
+	vlong bits;
 	void *v;
 
 	f = fp;
@@ -382,14 +473,45 @@ IPint_expmod(void *fp)
 		mod = MP(f->mod);
 	else
 		mod = nil;
+	/*
+	 * what libmp would raise, raised before the result is allocated
+	 * (it was lost at each raise) and before the VM is let go
+	 */
 	if(mpcmp(exp, mpzero) < 0)
-		error("mpexp: negative exponent");	/* as libmp would */
+		error("mpexp: negative exponent");
+	if(mod != nil && mod->top == 0 && exp->top != 0)
+		error("mpdiv: divide by zero");
+	rel = mpsignif(exp) > OpRelBits;	/* a loop that long, whatever it multiplies */
+	if(mod != nil){
+		if(mpsignif(mod) > ExpRelModBits && mpsignif(exp) > ExpRelExpBits)
+			rel = 1;
+	}else{
+		/*
+		 * With no modulus the result is as long as the base times
+		 * the exponent, and it was computed with the VM held
+		 * whatever that came to: two to the power of 2**30 stopped
+		 * every Limbo thread for minutes. A result is no longer
+		 * than a shift may make one, and a long one is computed
+		 * with the VM let go, as a long product is.
+		 */
+		nb = mpsignif(base);
+		if(nb > 1 && exp->top != 0){
+			if(mpsignif(exp) > 31)
+				error("IPint: number too large");
+			bits = (vlong)mptoi(exp)*nb;
+			if(bits > Maxshiftbits)
+				error("IPint: number too large");
+			if(bits > OpRelBits)
+				rel = 1;
+		}
+	}
 	ret = mpnew(0);
-	if(mod != nil && mpsignif(mod) > ExpRelModBits && mpsignif(exp) > ExpRelExpBits){
+	if(rel){
 		/* mod is not zero, exp is positive: mpexp cannot raise */
 		base = mpcopy(base);
 		exp = mpcopy(exp);
-		mod = mpcopy(mod);
+		if(mod != nil)
+			mod = mpcopy(mod);
 		release();
 		mpexp(base, exp, mod, ret);
 		acquire();
@@ -407,7 +529,7 @@ IPint_invert(void *fp)
 {
 	F_IPint_invert *f;
 	mpint *ret, *base, *mod, *g, *dc;
-	int ok;
+	int ok, zero, rel;
 	void *v;
 
 	f = fp;
@@ -417,34 +539,39 @@ IPint_invert(void *fp)
 
 	base = MP(f->base);
 	mod = MP(f->mod);
-	ret = mpnew(0);
-	if(mpsignif(mod) <= InvRelBits){
-		mpinvert(base, mod, ret);
-		*f->ret = newIPint(ret);
-		return;
-	}
+	zero = mod->top == 0;
+	rel = mpsignif(mod) > InvRelBits;
 
 	/*
-	 * mpinvert, its "no inverse" raised after acquire();
-	 * mod is not zero, so mpmod cannot raise
+	 * mpinvert, its "no inverse" and its division by a modulus of
+	 * zero raised here once everything is freed (libmp raised them
+	 * itself for a short modulus, and the result was lost each time),
+	 * and after acquire()
 	 */
-	base = mpcopy(base);
-	mod = mpcopy(mod);
+	ret = mpnew(0);
 	g = mpnew(0);
 	dc = mpnew(0);
-	release();
+	if(rel){
+		base = mpcopy(base);
+		mod = mpcopy(mod);
+		release();
+	}
 	mpextendedgcd(base, mod, g, ret, dc);
 	ok = mpcmp(g, mpone) == 0;
-	if(ok)
+	if(ok && !zero)
 		mpmod(ret, mod, ret);
-	acquire();
+	if(rel){
+		acquire();
+		mpfree(base);
+		mpfree(mod);
+	}
 	mpfree(g);
 	mpfree(dc);
-	mpfree(base);
-	mpfree(mod);
-	if(!ok){
+	if(!ok || zero){
 		mpfree(ret);
-		error("mpinvert: no inverse");	/* as libmp would */
+		if(!ok)
+			error("mpinvert: no inverse");	/* as libmp would */
+		error("mpdiv: divide by zero");
 	}
 	*f->ret = newIPint(ret);
 }
@@ -535,6 +662,9 @@ IPint_div(void *fp)
 
 	i1 = MP(f->i1);
 	i2 = MP(f->i2);
+	/* as libmp would, but before there is a quotient to lose */
+	if(i2->top == 0)
+		error("mpdiv: divide by zero");
 	quo = mpnew(0);
 	if(quo == nil)
 		error(exHeap);
@@ -543,7 +673,7 @@ IPint_div(void *fp)
 		mpfree(quo);
 		error(exHeap);
 	}
-	if(i2->top != 0 && bigop(i1, i2)){
+	if(bigop(i1, i2)){
 		/* the divisor is not zero: mpdiv cannot raise */
 		i1 = mpcopy(i1);
 		i2 = mpcopy(i2);
@@ -572,8 +702,10 @@ IPint_mod(void *fp)
 
 	i1 = MP(f->i1);
 	i2 = MP(f->i2);
+	if(i2->top == 0)
+		error("mpdiv: divide by zero");	/* see IPint_div */
 	ret = mpnew(0);
-	if(i2->top != 0 && bigop(i1, i2)){
+	if(bigop(i1, i2)){
 		/* the divisor is not zero: mpmod cannot raise */
 		i1 = mpcopy(i1);
 		i2 = mpcopy(i2);
@@ -602,7 +734,9 @@ IPint_neg(void *fp)
 	ret = mpcopy(MP(f->i));
 	if(ret == nil)
 		error(exHeap);
-	ret->sign = -ret->sign;
+	/* zero has no sign: its negative equalled no zero, and printed "-0" */
+	if(ret->top != 0)
+		ret->sign = -ret->sign;
 
 	*f->ret = newIPint(ret);
 }
@@ -653,10 +787,6 @@ IPint_cmp(void *fp)
  * merely large asked the pool for more than it has, which libmp answers
  * by ending the emulator. A number here is no longer than Maxshiftbits.
  */
-enum {
-	Maxshiftbits	= 1<<26,	/* 8MB of number */
-};
-
 static void
 shiftcheck(mpint *i, int n)
 {
@@ -715,6 +845,7 @@ mpand(mpint *b, mpint *m, mpint *res)
 	res->sign = b->sign;
 	if(b->top == 0 || m->top == 0){
 		res->top = 0;
+		res->sign = 1;	/* as mpnorm leaves a zero */
 		return;
 	}
 	mpbits(res, b->top*Dbits);
@@ -879,11 +1010,17 @@ void
 IPints_probably_prime(void *fp)
 {
 	F_IPints_probably_prime *f;
+	mpint *n;
+	int r;
 
 	f = fp;
+	n = checkIPint(f->n);
+	if(n->sign < 0)
+		error("negative prime candidate");	/* as libsec would */
 	release();
-	*f->ret = probably_prime(checkIPint(f->n), f->nrep);
+	r = probably_prime(n, f->nrep);
 	acquire();
+	*f->ret = r;
 }
 
 void
@@ -897,6 +1034,7 @@ IPints_genprime(void *fp)
 	r = *f->ret;
 	*f->ret = H;
 	destroy(r);
+	bitscheck(f->nbits, 2, Maxprimebits);
 	p = mpnew(0);
 	release();
 	genprime(p, f->nbits, f->nrep);
@@ -915,6 +1053,7 @@ IPints_genstrongprime(void *fp)
 	r = *f->ret;
 	*f->ret = H;
 	destroy(r);
+	bitscheck(f->nbits < 64? 64: f->nbits, 64, Maxprimebits);	/* fewer than 64 bits are 64 */
 	p = mpnew(0);
 	release();
 	genstrongprime(p, f->nbits, f->nrep);
@@ -937,6 +1076,7 @@ IPints_gensafeprime(void *fp)
 	f->ret->t1 = H;
 	destroy(v);
 
+	bitscheck(f->nbits, 3, Maxprimebits);	/* the least safe prime is 7 */
 	p = mpnew(0);
 	alpha = mpnew(0);
 	release();

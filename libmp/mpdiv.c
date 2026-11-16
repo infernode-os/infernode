@@ -13,9 +13,23 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 	mpdigit qd, *up, *vp, *qp;
 	mpint *u, *v, *t;
 
-	// divide bv zero
-	if(divisor->top == 0)
+	// divide bv zero, however the zero is written.  only top was
+	// looked at, and a divisor whose top digit is zero (a number made
+	// from bytes and not normalized) went on to D1, which shifts that
+	// digit left until its high bit is set: for ever
+	vn = divisor->top;
+	while(vn > 0 && divisor->p[vn-1] == 0)
+		vn--;
+	if(vn == 0)
 		sysfatal("mpdiv: divide by zero");
+	if(vn != divisor->top){
+		// zero digits above a number: divide by the number
+		v = mpcopy(divisor);
+		v->top = vn;
+		mpdiv(dividend, v, quotient, remainder);
+		mpfree(v);
+		return;
+	}
 
 	// quick check
 	if(mpmagcmp(dividend, divisor) < 0){
@@ -102,7 +116,13 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 
 	if(remainder != nil){
 		mpright(u, s, remainder);	// u is the remainder shifted
-		remainder->sign = dividend->sign;
+		// a remainder of nothing has no sign: with a negative dividend
+		// it was a zero less than zero, to which mpmod then added the
+		// modulus (-6 mod 3 was 3)
+		if(remainder->top != 0)
+			remainder->sign = dividend->sign;
+		else
+			remainder->sign = 1;
 	}
 
 	mpfree(t);

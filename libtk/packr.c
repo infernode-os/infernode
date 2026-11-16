@@ -359,10 +359,34 @@ tkisslave(Tk *in, Tk *tk)
 	return 0;
 }
 
+/*
+ * Is tk the widget in, or inside it: packed in it, or a window of a
+ * canvas or text that is, however far up?  A widget put inside itself
+ * that way (a frame made a window of the canvas packed in it; a canvas
+ * packed in a frame that is one of its windows) is a ring, and
+ * everything that walks up from a widget to its window went round it
+ * for ever, holding the VM.  tkisslave sees only what is packed.
+ */
+int
+tkisinside(Tk *tk, Tk *in)
+{
+	int n;
+
+	for(n = 0; tk != nil; n++){
+		if(tk == in || n > 100000)
+			return 1;
+		if(tk->master != nil)
+			tk = tk->master;
+		else
+			tk = tk->parent;
+	}
+	return 0;
+}
+
 static char*
 tkcanpack(Tk *tk, Tk *parent)
 {
-	if(tkisslave(parent, tk))
+	if(tkisslave(parent, tk) || tkisinside(parent, tk))
 		return TkRecur;
 	if (parent->grid != nil) {
 		if (parent->slave != nil)

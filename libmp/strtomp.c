@@ -154,11 +154,14 @@ from32(char *a, mpint *b)
 mpint*
 strtomp(char *a, char **pp, int base, mpint *b)
 {
-	int sign;
+	int sign, alloced;
 	char *e;
 
-	if(b == nil)
+	alloced = 0;
+	if(b == nil){
 		b = mpnew(0);
+		alloced = 1;
+	}
 
 	if(tab.inited == 0)
 		init();
@@ -193,8 +196,13 @@ strtomp(char *a, char **pp, int base, mpint *b)
 	}
 
 	// if no characters parsed, there wasn't a number to convert
-	if(e == a)
+	// (and the number made here for it is not the caller's to free:
+	// each string that was no number cost one)
+	if(e == a){
+		if(alloced)
+			mpfree(b);
 		return nil;
+	}
 
 	mpnorm(b);
 	b->sign = sign;

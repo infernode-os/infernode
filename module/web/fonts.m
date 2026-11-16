@@ -36,6 +36,7 @@ Fonts: module
 		xheight:	fn(f: self ref Typeface): real;
 		kernpair:	fn(f: self ref Typeface, a, b: int): real;	# px between the characters a and b	# px: the top of "x" (the ex unit)
 		draw:	fn(f: self ref Typeface, dst: ref Draw->Image, p: Draw->Point, s: string, src: ref Draw->Image, rtl: int): real;	# p is on the baseline; s in logical order, drawn from the right if rtl
+		drawat:	fn(f: self ref Typeface, dst: ref Draw->Image, p: Draw->Point, dx: real, s: string, src: ref Draw->Image, rtl: int): real;	# as draw, from dx (a fraction) past p: each glyph is placed by its own position from there, rounded once
 	};
 
 	# one face of a web font family, for the code points in ranges

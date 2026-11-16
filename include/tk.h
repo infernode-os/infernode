@@ -107,6 +107,7 @@ enum
 	BoolF,
 
 	Tkmaxitem	= 128,
+	Tkmaxnest	= 16,		/* scripts run one inside another: each is some hundreds of bytes of C stack */
 	Tkminitem	= 32,
 	Tkcvstextins	= 1024,
 	Tkmaxdump	= 1024,
@@ -304,6 +305,7 @@ enum
 	Tkcenter		= 0,
 	Tkanchor	= Tknorth|Tkeast|Tksouth|Tkwest,
 	Tksuspended	= (1<<14),		/* window suspended pending resize */
+	Tkdying		= (1<<15),		/* destroyed: its Destroy event delivered, freed when no event is in delivery */
 
 	Tkgridpack	= (1<<17),		/* temporary flag marking addition to grid */
 	Tkgridremove	= (1<<18),		/* marked for removal from grid */
@@ -609,6 +611,8 @@ struct TkTop
 	char*	err;
 	char		errcmd[32];
 	char		errx[32];
+	Tk*		dead;			/* destroyed widgets not yet freed (tkfreedead), by siblings */
+	int		execnest;		/* scripts (tkexec) running, one inside another */
 };
 
 #define TKobj(t, p)	((t*)((p)+1))
@@ -733,6 +737,7 @@ extern	void		tkrunpack(TkTop*);
 extern	void		tkpackreq(Tk*);
 extern	int		tksetslavereq(Tk*, TkGeom);
 extern	int		tkisslave(Tk*, Tk*);
+extern	int		tkisinside(Tk*, Tk*);
 
 /* General - grids.c */
 extern	int		tkgridder(Tk*);
@@ -768,6 +773,8 @@ extern	Tk*		tkfindsub(Tk*);
 extern	void		tkfreebind(TkAction*);
 extern	void		tkfreename(TkName*);
 extern	void		tkfreeobj(Tk*);
+extern	void		tkfreelater(Tk*);
+extern	void		tkfreedead(TkTop*);
 extern	char*		tkaddchild(TkTop*, Tk*, TkName**);
 extern	Tk*		tklook(TkTop*, char*, int);
 extern	void		tktextsdraw(Image*, Rectangle, TkEnv*, int);

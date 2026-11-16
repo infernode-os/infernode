@@ -2,6 +2,7 @@
 #include "isa.h"
 #include "interp.h"
 #include "raise.h"
+#include "kernel.h"
 #include "pool.h"
 
 Vm	vm0 = {		/* the VM; R is the running VM's registers (interp.h) */
@@ -184,6 +185,8 @@ OP(iexpw)
 	n = W(s);
 	inv = 0;
 	if(n < 0){
+		if(x == 0)
+			error(exZdiv);	/* as the compiler says of a constant */
 		n = -n;
 		inv = 1;
 	}
@@ -196,7 +199,7 @@ OP(iexpw)
 		x *= x;
 	}
 	if(inv)
-		r = 1/r;
+		r = r == 1 || r == -1? r: 0;	/* 1/r, and r may have wrapped to 0 */
 	W(d) = CW(r);
 }
 OP(iexpl)
@@ -209,6 +212,8 @@ OP(iexpl)
 	n = W(s);
 	inv = 0;
 	if(n < 0){
+		if(x == 0)
+			error(exZdiv);
 		n = -n;
 		inv = 1;
 	}
@@ -221,7 +226,7 @@ OP(iexpl)
 		x *= x;
 	}
 	if(inv)
-		r = 1/r;
+		r = r == 1 || r == -1? r: 0;	/* 1/r, and r may have wrapped to 0 */
 	V(d) = r;
 }
 OP(iexpf)
@@ -325,6 +330,13 @@ OP(movmp)
 
 	t = R.M->type[W(m)];
 
+	/*
+	 * Compiled code gives this copy to C with the addresses it made:
+	 * of a nil ref, nil and a displacement.  Asked for here, as hd
+	 * and tl are below.
+	 */
+	if((uintptr)R.s + 1 <= 64*1024 || (uintptr)R.d + 1 <= 64*1024)
+		error(exNilref);
 	incmem(R.s, t);
 	if (t->np)
 		freeptrs(R.d, t);
@@ -610,18 +622,50 @@ OP(newcb)  { newc(&Tbyte, movb);  }
 OP(newcw)  { newc(&Tword, movw);  }
 OP(newcf)  { newc(&Treal, movf);  }
 OP(newcp)  { newc(&Tptr, movp);  }
+/*
+ * A channel of values with no pointers, of a size no instruction names.
+ * Its buffer is an array of a type made for it, which is malloc'd: made
+ * first, it was lost whenever the channel or the buffer could not be
+ * (a buffer too big for the heap, in a loop: the kernel's pool, for
+ * good), and was not looked at for nil.  The channel is made first, with
+ * no buffer, and then the type and the buffer's storage without raising.
+ */
 OP(newcm)
 {
-	Channel *c;
+	Channel *c, **cp, *oldc;
 	Type *t;
+	Heap *h;
+	WORD len, size;
 
-	t = nil;
-	if(R.m != R.d && W(m) > 0)
-		t = dtype(nil, W(s), nil, 0);
-	c = newc(t, movm);
-	c->mid.w = W(s);
-	if(t != nil)
-		freetype(t);
+	size = W(s);
+	len = 0;
+	if(R.m != R.d)
+		len = W(m);
+	if(len < 0)
+		error(exNegsize);
+	if(len > 0)
+		acheck(size, len);
+	c = cnewc(nil, movm, 0);
+	c->mid.w = size;
+	if(len > 0){
+		t = dtype(nil, size, nil, 0);
+		h = nil;
+		if(t != nil)
+			h = heaparrayok(t, len);
+		if(h == nil){
+			destroy(c);
+			if(t == nil)
+				error(exNomem);
+			freetype(t);
+			error(exHeap);
+		}
+		c->buf = H2D(Array*, h);
+		freetype(t);	/* the array has it now */
+	}
+	cp = R.d;
+	oldc = *cp;
+	*cp = c;
+	destroy(oldc);
 }
 OP(newcmp)
 {
@@ -937,8 +981,27 @@ OP(iload)
 	Module *m;
 	Modlink *ml, **mp, *t;
 	Heap *h;
+	int nn;
+	char path[1024];
 
+	/*
+	 * The path is copied: readmod lets the VM go while it reads the
+	 * file, and the string it came from may be another Prog's to free
+	 * meanwhile.
+	 */
 	n = string2c(S(s));
+	nn = strlen(n);
+	if(nn >= sizeof(path)){
+		/* no module: nil, as for any file that cannot be opened */
+		kwerrstr("module path too long");
+		mp = R.d;
+		t = *mp;
+		*mp = H;
+		destroy(t);
+		return;
+	}
+	memmove(path, n, nn+1);
+	n = path;
 	m = R.M->m;
 	if(m->rt & HASLDT)
 		ldt = m->ldt[W(m)];
@@ -1139,12 +1202,34 @@ cqsize(Progq *q)
 }
 */
 /*
+ * A channel's queue always has a first element, whose prog is nil when
+ * nobody waits; isend, irecv and alt look at q->prog without asking
+ * whether q is there.  (Only killcomm, freeing the channel, takes the
+ * first away.)
+ */
+
+/* is p waiting on q? */
+int
+cqhas(Progq *q, Prog *p)
+{
+	for( ; q != nil; q = q->next)
+		if(q->prog == p)
+			return 1;
+	return 0;
+}
+
+/*
  * p queued on q, or 0 if there is no memory for it, q as it was. A
  * caller that has queued p elsewhere, or taken it off the run queue,
  * must undo that before raising the error: alt's queuing on its
  * channels, and isend and irecv, raised it with p left on the first
  * channels (to be woken freed) or off the run queue (its exception
  * handled with no Prog current). Malloc refused, os/port/chaos.c.
+ *
+ * A Prog is on a queue once.  An alt naming a channel twice (or an
+ * array holding it n times) queued it once for each, at the queue's end
+ * each time: n*n steps holding the VM for an array of n, and cqdelp
+ * then freed the whole queue.
  */
 int
 cqaddok(Progq **q, Prog *p)
@@ -1155,13 +1240,14 @@ cqaddok(Progq **q, Prog *p)
 		(*q)->prog = p;
 		return 1;
 	}
+	for( ; *q != nil; q = &(*q)->next)
+		if((*q)->prog == p)
+			return 1;
 	n = (Progq*)malloc(sizeof(Progq));
 	if(n == nil)
 		return 0;
 	n->prog = p;
 	n->next = nil;
-	for( ; *q != nil; q = &(*q)->next)
-		;
 	*q = n;
 	return 1;
 }
@@ -1185,26 +1271,32 @@ cqdel(Progq **q)
 	*q = f->next;
 	free(f);
 }
+/*
+ * p off q, wherever it is.  The last element stays, empty: with p in
+ * every element (an alt with a channel in two of its arms) they were
+ * all freed and the channel left with no queue, which the alt's own
+ * next look at it, and everything after, read through.  A queue that
+ * killcomm has taken away has nothing of p's.
+ */
 void
 cqdelp(Progq **q, Prog *p)
 {
-	Progq *f;
+	Progq *f, **l;
 
-	if((*q)->next == nil){
-		if((*q)->prog == p)
-			(*q)->prog = nil;
-		return;
-	}
-	for( ; *q != nil; ){
-		if((*q)->prog == p){
-			f = *q;
-			*q = (*q)->next;
-			free(f);
+	for(l = q; *l != nil; ){
+		if((*l)->prog != p){
+			l = &(*l)->next;
+			continue;
 		}
-		else
-			q = &(*q)->next;
+		f = *l;
+		if(l == q && f->next == nil){
+			f->prog = nil;
+			return;
+		}
+		*l = f->next;
+		free(f);
 	}
-}	
+}
 OP(isend)
 {
 	Channel *c;
@@ -1399,11 +1491,18 @@ OP(consmp)
 	l->t = t;
 	t->ref++;
 }
+/*
+ * hd and tl of nil are asked, not found by the fault: compiled code
+ * calls some of these (headmp), and a fault in the kernel's own C is a
+ * panic in the native kernels.
+ */
 OP(headb)
 {
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	B(d) = *(BYTE*)l->data;
 }
 OP(headw)
@@ -1411,6 +1510,8 @@ OP(headw)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	W(d) = *(WORD*)l->data;
 }
 OP(headl)
@@ -1418,6 +1519,8 @@ OP(headl)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	V(d) = *(LONG*)l->data;
 }
 OP(headp)
@@ -1425,6 +1528,8 @@ OP(headp)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	R.s = l->data;
 	movp(OPCALL);
 }
@@ -1433,6 +1538,8 @@ OP(headf)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	F(d) = *(REAL*)l->data;
 }
 OP(headm)
@@ -1440,6 +1547,8 @@ OP(headm)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	memmove(R.d, l->data, W(m));
 }
 OP(headmp)
@@ -1447,6 +1556,8 @@ OP(headmp)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	R.s = l->data;
 	movmp(OPCALL);
 }
@@ -1455,6 +1566,8 @@ OP(tail)
 	List *l;
 
 	l = L(s);
+	if(l == H)
+		error(exNilref);
 	R.s = &l->tail;
 	movp(OPCALL);
 }
@@ -1610,6 +1723,21 @@ OP(mulx)
 		r >>= (-p);
 	W(d) = CW(r);
 }
+/*
+ * A fixed-point divide.  By zero it was the host's own trap (an
+ * exception that was not "zero divide", or on arm64 and riscv64 no
+ * exception and 0), and the most negative value over -1 traps too.
+ */
+static LONG
+xdiv(LONG s, LONG y)
+{
+	if(y == 0)
+		error(exZdiv);
+	if(y == -1)
+		return (LONG)(0 - (uvlong)s);
+	return s / y;
+}
+
 OP(divx)
 {
 	WORD p;
@@ -1621,7 +1749,7 @@ OP(divx)
 		s <<= p;
 	else
 		s >>= (-p);
-	s /= (LONG)W(s);
+	s = xdiv(s, (LONG)W(s));
 	W(d) = CW(s);
 }
 OP(cvtxx)
@@ -1655,7 +1783,7 @@ OP(mulx0)
 		r <<= p;
 	else
 		r >>= (-p);
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 OP(divx0)
@@ -1676,7 +1804,7 @@ OP(divx0)
 		s <<= p;
 	else
 		s >>= (-p);
-	s /= (LONG)y;
+	s = xdiv(s, (LONG)y);
 	W(d) = CW(s);
 }
 OP(cvtxx0)
@@ -1696,7 +1824,7 @@ OP(cvtxx0)
 		r <<= p;
 	else
 		r >>= (-p);
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 OP(mulx1)
@@ -1734,7 +1862,7 @@ OP(mulx1)
 	else
 		r >>= (-p);
 	r += (LONG)v;
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 OP(divx1)
@@ -1770,7 +1898,7 @@ OP(divx1)
 		s <<= p;
 	else
 		s >>= (-p);
-	s /= (LONG)y;
+	s = xdiv(s, (LONG)y);
 	W(d) = CW(s + v);
 }
 OP(cvtxx1)
@@ -1806,7 +1934,7 @@ OP(cvtxx1)
 	else
 		r >>= (-p);
 	r += (LONG)v;
-	r /= (LONG)a;
+	r = xdiv(r, (LONG)a);
 	W(d) = CW(r);
 }
 /*
@@ -1998,7 +2126,10 @@ void
 xec(Prog *p)
 {
 	RPDECL;
-	int op;
+	int op, over;
+	Inst *pc0;
+	uchar *fp0;
+	enum { Over = 2 };	/* R.IC while running on to the slice's end */
 
 	/*
 	 * R is p's before the pending Modlink is released, not after.
@@ -2046,12 +2177,44 @@ xec(Prog *p)
 		comvec();
 	}
 	else {
-		do {
-		dec[R.PC->add](OPCALL);
-		op = R.PC->op;
-		R.PC++;
-		optab[op](OPCALL);
-	} while(--R.IC != 0);
+		/*
+		 * The slice is R.IC instructions, and it ends only where
+		 * compiled code's would: after a backward branch, a call or
+		 * a return.  It ended wherever the count ran out, between
+		 * any two instructions, and the compiler's code is written
+		 * for a VM that does not do that: an element's address is
+		 * found by one instruction (indx) and used by the next, with
+		 * nothing holding the array meanwhile.  Another Prog run
+		 * between the two could drop the array, and the store went
+		 * into whatever was allocated there.  So when the count is
+		 * down to its last instruction the Prog goes on (over) until
+		 * one that leaves the straight line.  An instruction that
+		 * must stop the Prog now (it has blocked, or changed to a
+		 * compiled module) sets R.IC to 1, as before: that is seen
+		 * as a count that is no longer Over.
+		 */
+		over = 0;
+		for(;;) {
+			if(R.IC == 1 && !over) {
+				over = 1;
+				R.IC = Over;
+			}
+			pc0 = R.PC;
+			fp0 = R.FP;
+			dec[R.PC->add](OPCALL);
+			op = R.PC->op;
+			R.PC++;
+			optab[op](OPCALL);
+			if(!over) {
+				if(--R.IC == 0)
+					break;
+				continue;
+			}
+			if(R.IC != Over || R.PC <= pc0 || R.FP != fp0) {
+				R.IC = 0;
+				break;
+			}
+		}
 	}
 
 	if(R.M->compiled && PC_MISALIGNED(R.PC)) {

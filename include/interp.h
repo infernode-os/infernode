@@ -526,6 +526,7 @@ extern	void		cmovw(void*, void*);
 extern	Channel*	cnewc(Type*, void (*)(OPARGS), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
+extern	void		compileabort(void);	/* the 64-bit code generators': a compile that raised gives back what it held */
 /*
  * The detectors in heap.c and the JIT (#622, #635) call panic(). The
  * native kernel declares it in portfns.h and the hosted emulator in its
@@ -538,6 +539,7 @@ extern	void		cqadd(Progq**, Prog*);
 extern	int		cqaddok(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);
+extern	int		cqhas(Progq*, Prog*);
 extern	void		crecv(Channel*, void*);
 extern	void		csend(Channel*, void*);
 extern	int		csendalt(Channel*, void*, Type *, int);
@@ -584,6 +586,7 @@ extern	void		go(Module*);
 extern	int		handler(char*);
 extern	Heap*	heap(Type*);
 extern	Heap*	heaparray(Type*, int);
+extern	Heap*	heaparrayok(Type*, int);
 extern	void		(*heapmonitor)(int, void*, ulong);
 extern	int		heapref(void*);
 extern	Heap*		heapz(Type*);
@@ -626,10 +629,12 @@ extern	void		newmp(void*, void*, Type*);
 extern	Prog*		newprog(Prog*, Modlink*);
 extern	void		newstack(Prog*);
 extern	Heap*		nheap(int);
+extern	Heap*		nheapok(int);
 extern	void		noptrs(Type*, void*);
 extern	int		nprog(void);
 extern	void		opinit(void);
-extern	Module*		parsemod(char*, uchar*, ulong, Dir*);
+extern	Module*		parsemod(char*, uchar*, ulong, Dir*, Module*volatile*);
+extern	void		parsefail(Module*);
 extern	Module*		parsedmod(char*, int, ulong, Qid);
 extern	void		prefabmodinit(void);
 extern	Prog*		progn(int);

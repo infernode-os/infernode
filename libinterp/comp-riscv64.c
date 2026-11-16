@@ -247,6 +247,8 @@ enum
 static	u32int*	code;
 static	u32int*	codestart;	/* code's buffer: tmp while sizing, base when emitting */
 static	u32int*	base;
+static	ulong	codesize;	/* bytes at base, until the module has them */
+static	u32int*	comptmp;	/* the sizing passes' scratch */
 static	ulong*	patch;
 static	ulong*	patch0;		/* pass 0's layout, which pass 1's choices are made against */
 static	long	codeoff;
@@ -394,6 +396,156 @@ urk(char *s)
 {
 	print("compile failed: %s\n", s);
 	error(exCompile);
+}
+
+/*
+ * The instruction a branch goes to, as an index into patch[].  load.c
+ * makes a destination an address, and checks it, only where it is an
+ * immediate: any other mode is whatever the file's operand bytes
+ * were, which was subtracted from the module's start and patch[] read
+ * there.  limbo writes no such branch.
+ */
+static int
+brpc(Inst *i)
+{
+	uvlong o;
+
+	if(UXDST(i->add) != DST(AIMM))
+		urk("branch destination");
+	o = (uvlong)((uchar*)i->d.ins - (uchar*)mod->prog);
+	if(o % sizeof(Inst) != 0 || o/sizeof(Inst) >= (uvlong)mod->nprog)
+		urk("branch destination");
+	return o/sizeof(Inst);
+}
+
+/*
+ * The table of a case or goto, in the module's data: the word that
+ * counts its entries is off bytes from the operand, the first entry
+ * hdr words after that, an entry is width words, and more words follow
+ * the last (a case's default).  nil if the operand is not module data
+ * or the table is not all inside it: load.c looks at no table, and one
+ * was marked and relocated wherever a file's operand said it was.  A
+ * count that tabreloc has marked is read as the count it stands for.
+ */
+static WORD*
+modtab(Inst *i, int off, int hdr, int width, int more)
+{
+	WORD *c, l;
+	uvlong o, dsize, room;
+
+	if(UXDST(i->add) != DST(AMP) || mod->origmp == H || mod->ntype < 1 || mod->type[0] == nil)
+		return nil;
+	dsize = mod->type[0]->size;
+	o = (uvlong)(i->d.ind + off);
+	if(o >= dsize || o % sizeof(WORD) != 0)
+		return nil;
+	room = (dsize - o)/sizeof(WORD);
+	if(room < hdr + more)
+		return nil;
+	c = (WORD*)(mod->origmp + o);
+	l = *c;
+	if(l < 0)
+		l = -(l+1);
+	if((uvlong)l > (room - hdr - more)/width)
+		return nil;
+	return c + hdr;
+}
+
+/*
+ * A table as limbo writes one: n entries whose pc (the word at pcoff
+ * of each) is an instruction of this module.  Looked at in pass 0,
+ * before there is anything to undo; patch[] was indexed by whatever
+ * was there.
+ */
+static void
+tabcheck(WORD *t, WORD n, int width, int pcoff)
+{
+	WORD *e;
+
+	if(t == nil || n < 0)
+		urk("table");
+	for(e = t + n*width; t < e; t += width)
+		if(t[pcoff] < 0 || t[pcoff] >= mod->nprog)
+			urk("table pc");
+}
+
+static void
+relocpc(WORD *w)
+{
+	if(*w >= 0 && *w < mod->nprog)
+		*w = RELPC(patch[*w]);
+}
+
+static void
+caserelocate(WORD *t, int hdr, int width)
+{
+	WORD *e, l;
+
+	if(t == nil || (l = t[-hdr]) >= 0)
+		return;
+	l = -(l+1);
+	t[-hdr] = l;
+	for(e = t + l*width; t < e; t += width)
+		relocpc(&t[2]);
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	relocpc(t);
+}
+
+/*
+ * The pcs in the module's case and goto tables made addresses of its
+ * new code.  This is done last, when nothing can stop the compile:
+ * the passes used to mark and relocate the tables as they met them,
+ * and a compile that then failed (a type's code that could not be
+ * made) left the module to be interpreted with addresses where its
+ * tables had pcs.  Its next case jumped to prog + an address.
+ *
+ * A table two instructions name is relocated once: all are marked
+ * first, by a count made negative, and a marked one is relocated and
+ * its count put back.  A goto's count is cleared instead: nothing
+ * reads it again.
+ */
+static void
+tabreloc(void)
+{
+	Inst *i, *ie;
+	WORD *t, *e, l;
+
+	ie = mod->prog + mod->nprog;
+	for(i = mod->prog; i < ie; i++){
+		t = nil;
+		switch(i->op){
+		case ICASE:
+		case ICASEC:
+			t = modtab(i, 0, 1, 3, 1);
+			break;
+		case ICASEL:
+			t = modtab(i, 0, 2, 4, 1);
+			if(t != nil)
+				t--;	/* the count is two words before the entries */
+			break;
+		}
+		if(t != nil && t[-1] >= 0)
+			t[-1] = -t[-1]-1;
+	}
+	for(i = mod->prog; i < ie; i++){
+		switch(i->op){
+		case ICASE:
+		case ICASEC:
+			caserelocate(modtab(i, 0, 1, 3, 1), 1, 3);
+			break;
+		case ICASEL:
+			caserelocate(modtab(i, 0, 2, 4, 1), 2, 4);
+			break;
+		case IGOTO:
+			t = modtab(i, -(int)sizeof(WORD), 1, 1, 0);
+			if(t == nil || (l = t[-1]) <= 0)
+				break;
+			t[-1] = 0;
+			for(e = t + l; t < e; t++)
+				relocpc(t);
+			break;
+		}
+	}
 }
 
 static void
@@ -682,10 +834,14 @@ relbr(int kind, int f3, int rs1, int rs2, long target)
 
 	if(pass == 0) {
 		if(nsite >= maxsite) {
-			maxsite = maxsite? 2*maxsite: 1024;
-			sitepos0 = realloc(sitepos0, maxsite * sizeof(*sitepos0));
-			if(sitepos0 == nil)
+			long *np;
+
+			/* the old block is still ours if there is no larger one: it was dropped */
+			np = realloc(sitepos0, (maxsite? 2*maxsite: 1024) * sizeof(*sitepos0));
+			if(np == nil)
 				urk("no memory for branch sites");
+			sitepos0 = np;
+			maxsite = maxsite? 2*maxsite: 1024;
 		}
 		sitepos0[nsite++] = pos();
 		form = FLong;
@@ -1067,7 +1223,7 @@ punt(Inst *i, int m, void (*fn)(void))
 		mem(Stw, O(REG, PC), RREG, RA0);
 	}
 	if(m & DBRAN) {
-		pc = patch[i->d.ins - mod->prog];
+		pc = patch[brpc(i)];
 		literal(RELPC(pc), O(REG, d));
 	}
 
@@ -1144,7 +1300,7 @@ cbra(Inst *i, int cond, int ld)
 		schedcheck(i);
 	opwld(i, ld, RA0);
 	mid(i, ld, RA1);
-	cmpbra(cond, RA0, RA1, i->d.ins - mod->prog);
+	cmpbra(cond, RA0, RA1, brpc(i));
 }
 
 static void
@@ -1156,15 +1312,15 @@ cbraf(Inst *i, int cond)
 	midfl(i, Ldw, FA1);
 	/* a NaN makes every relation false, and so != true, as in C */
 	switch(cond) {
-	case EQ:	FEQD(RA0, FA0, FA1); cmpbra(NE, RA0, RZERO, i->d.ins - mod->prog); return;
-	case NE:	FEQD(RA0, FA0, FA1); cmpbra(EQ, RA0, RZERO, i->d.ins - mod->prog); return;
+	case EQ:	FEQD(RA0, FA0, FA1); cmpbra(NE, RA0, RZERO, brpc(i)); return;
+	case NE:	FEQD(RA0, FA0, FA1); cmpbra(EQ, RA0, RZERO, brpc(i)); return;
 	case LT:	FLTD(RA0, FA0, FA1); break;
 	case LE:	FLED(RA0, FA0, FA1); break;
 	case GT:	FLTD(RA0, FA1, FA0); break;
 	case GE:	FLED(RA0, FA1, FA0); break;
 	default:	urk("cbraf");
 	}
-	cmpbra(NE, RA0, RZERO, i->d.ins - mod->prog);
+	cmpbra(NE, RA0, RZERO, brpc(i));
 }
 
 /*
@@ -1173,68 +1329,56 @@ cbraf(Inst *i, int cond)
 static void
 comcase(Inst *i, int w)
 {
-	int l;
-	WORD *t, *e;
+	WORD *t;
+
+	/*
+	 * The table is checked here and left as it is: tabreloc makes
+	 * its pcs addresses when the compile is sure to finish.
+	 */
+	if(pass == 0) {
+		t = modtab(i, 0, 1, 3, 1);
+		if(t == nil)
+			urk("case table");
+		tabcheck(t, t[-1], 3, 2);
+		if(t[t[-1]*3] >= mod->nprog)	/* the default; -1 for none */
+			urk("case default");
+	}
 
 	if(w != 0) {
 		opwld(i, Ldw, RA1);
 		opwst(i, Lea, RA3);
 		bramac(MacCASE);
 	}
-
-	t = (WORD*)(mod->origmp + i->d.ind + IBY2WD);
-	l = t[-1];
-
-	/* pass 0 marks the table for relocation; only the emit pass relocates */
-	if(pass != PASSEMIT) {
-		if(pass == 0 && l >= 0)
-			t[-1] = -l - 1;
-		return;
-	}
-	if(l >= 0)
-		return;
-	t[-1] = -l - 1;
-	e = t + t[-1] * 3;
-	while(t < e) {
-		t[2] = RELPC(patch[t[2]]);
-		t += 3;
-	}
-	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
-	if(t[0] >= 0)
-		t[0] = RELPC(patch[t[0]]);
 }
 
 static void
 comcasel(Inst *i)
 {
-	int l;
-	WORD *t, *e;
+	WORD *t;
 
-	/* casel table: count in a 2*IBY2WD slot, then [lo][hi][pc+pad] (INFR-355) */
-	t = (WORD*)(mod->origmp + i->d.ind + 2*IBY2WD);
-	l = t[-2];
-	if(pass != PASSEMIT) {
-		if(pass == 0 && l >= 0)
-			t[-2] = -l - 1;
+	/* casel table: count in a 2*IBY2WD slot, then [lo][hi][pc+pad] (INFR-355); checked here, relocated by tabreloc */
+	if(pass != 0)
 		return;
-	}
-	if(l >= 0)
-		return;
-	t[-2] = -l - 1;
-	e = t + t[-2] * 4;
-	while(t < e) {
-		t[2] = RELPC(patch[t[2]]);
-		t += 4;
-	}
-	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
-	if(t[0] >= 0)
-		t[0] = RELPC(patch[t[0]]);
+	t = modtab(i, 0, 2, 4, 1);
+	if(t == nil)
+		urk("casel table");
+	tabcheck(t, t[-2], 4, 2);
+	if(t[t[-2]*4] >= mod->nprog)	/* the default; -1 for none */
+		urk("casel default");
 }
 
 static void
 comgoto(Inst *i)
 {
-	WORD *t, *e;
+	WORD *t;
+
+	/* the table is checked here; tabreloc relocates it */
+	if(pass == 0) {
+		t = modtab(i, -(int)sizeof(WORD), 1, 1, 0);
+		if(t == nil)
+			urk("goto table");
+		tabcheck(t, t[-1], 1, 0);
+	}
 
 	opwld(i, Ldw, RA1);		/* index */
 	opwst(i, Lea, RA0);		/* table base */
@@ -1242,17 +1386,6 @@ comgoto(Inst *i)
 	ADD(RA0, RA0, RA1);
 	LD(RTA, RA0, 0);
 	JR(RTA);
-
-	if(pass != PASSEMIT)
-		return;
-
-	t = (WORD*)(mod->origmp + i->d.ind);
-	e = t + t[-1];
-	t[-1] = 0;
-	while(t < e) {
-		t[0] = RELPC(patch[t[0]]);
-		t++;
-	}
 }
 
 /*
@@ -1452,6 +1585,9 @@ comp(Inst *i)
 		opwst(i, Stw, RA0);
 		break;
 	case IMOVPC:
+		/* the pc is the file's: patch[] was read wherever it said */
+		if(UXSRC(i->add) != SRC(AIMM) || i->s.imm < 0 || i->s.imm >= mod->nprog)
+			urk("movpc");
 		conpos(patch[i->s.imm], RA0);
 		opwst(i, Stw, RA0);
 		break;
@@ -1727,7 +1863,7 @@ comp(Inst *i)
 	case IJMP:
 		if(RESCHED)
 			schedcheck(i);
-		bradis(i->d.ins - mod->prog);
+		bradis(brpc(i));
 		break;
 	case ICALL:
 		opwld(i, Ldw, RA0);
@@ -1735,7 +1871,7 @@ comp(Inst *i)
 		mem(Stw, O(Frame, lr), RA0, RA1);
 		mem(Stw, O(Frame, fp), RA0, RFP);
 		MV(RFP, RA0);
-		bradis(i->d.ins - mod->prog);
+		bradis(brpc(i));
 		break;
 	case IRET:
 		mem(Ldw, O(Frame, t), RFP, RA1);
@@ -1746,6 +1882,9 @@ comp(Inst *i)
 			puntop(i, SRCOP|DSTOP);
 			break;
 		}
+		/* the type's number is the file's: tinit[] was written and type[] read wherever it said */
+		if(i->s.imm < 0 || i->s.imm >= mod->ntype || mod->type[i->s.imm] == nil)
+			urk("frame type");
 		tinit[i->s.imm] = 1;
 		conaddr((uvlong)mod->type[i->s.imm], RA3);
 		blmac(MacFRAM);	/* it sets R.PC if it must extend the stack */
@@ -2410,17 +2549,25 @@ typecom(Type *t)
 		inmod = saveinmod;
 		code = savecode;
 		print("typecom: emitted %d > bound %lud for np=%d\n", n, need, t->np);
-		error(exCompile);
+		typecomfailed = 1;
+		return;
 	}
 	free(tmp);
 
 	sz = n * sizeof(u32int) + Typejithdr;
 
+	/*
+	 * No memory for it is a compile that fails, like the two above:
+	 * these returned as though the type had its code, the module was
+	 * compiled, and its frame instruction called the type's
+	 * initialize, which was nil.
+	 */
 #ifdef INFERNO_NATIVE
 	start = malloc(sz);
 	if(start == nil) {
 		inmod = saveinmod;
 		code = savecode;
+		typecomfailed = 1;
 		return;
 	}
 #else
@@ -2429,6 +2576,7 @@ typecom(Type *t)
 	if(start == MAP_FAILED) {
 		inmod = saveinmod;
 		code = savecode;
+		typecomfailed = 1;
 		return;
 	}
 #endif
@@ -2592,6 +2740,55 @@ compass(Module *m, int size, u32int *tmp, ulong tmpsize)
 	return n;
 }
 
+/*
+ * What a compile holds, given back, and its state as it was before:
+ * for every way out of compile() that is not a module compiled.
+ */
+static void
+compclean(void)
+{
+	free(patch);
+	patch = nil;
+	free(patch0);
+	patch0 = nil;
+	free(siteform);
+	siteform = nil;
+	free(sitepos0);
+	sitepos0 = nil;
+	free(chash);
+	chash = nil;
+	free(tinit);
+	tinit = nil;
+	free(comptmp);
+	comptmp = nil;
+	if(base != nil && codesize != 0) {
+#ifdef INFERNO_NATIVE
+		free(base);
+#else
+		munmap(base, codesize);
+#endif
+	}
+	base = nil;
+	codesize = 0;
+	nsite = maxsite = 0;
+	ncon = ncpool = 0;
+	mod = nil;
+	compiledone();
+}
+
+/*
+ * For libcompile's error label (emu/port/discall.c, os/port/discall.c):
+ * the code generator raises for an instruction it will not compile, and
+ * a fault in it is raised too.  compile() has no label of its own, so
+ * what it had allocated stayed allocated, and incompile and inmod
+ * stayed set: the next compile, of any module, panicked on the first.
+ */
+void
+compileabort(void)
+{
+	compclean();
+}
+
 int
 compile(Module *m, int size, Modlink *ml)
 {
@@ -2600,21 +2797,14 @@ compile(Module *m, int size, Modlink *ml)
 	int i;
 	long n, n0;
 	u32int *tmp;
-	ulong codesize, tmpsize, poolbytes;
+	ulong tmpsize, poolbytes;
 
 	if(incompile)
 		panic("compile: re-entered while compiling %s (this: %s)", mod? mod->name : "?", m->name);
+	compclean();
 	incompile = 1;
 	inmod = 1;
-	base = nil;
-	tmp = nil;
-	codesize = 0;
-	patch0 = nil;
-	siteform = nil;
-	sitepos0 = nil;
-	chash = nil;
-	nsite = maxsite = 0;
-	ncon = ncpool = 0;
+	mod = m;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
 	/*
@@ -2624,14 +2814,13 @@ compile(Module *m, int size, Modlink *ml)
 	 * that does not fit is caught in compass().
 	 */
 	tmpsize = 8192;
-	tmp = malloc(tmpsize * sizeof(u32int));
+	comptmp = malloc(tmpsize * sizeof(u32int));
+	tmp = comptmp;
 	if(tinit == nil || patch == nil || tmp == nil)
 		goto bad;
 
 	if(!preamble())
 		goto bad;
-
-	mod = m;
 
 	/* pass 0: every site at its longest; where each is */
 	pass = 0;
@@ -2716,6 +2905,12 @@ compile(Module *m, int size, Modlink *ml)
 	if(typecomfailed)
 		goto bad;
 
+	/*
+	 * Nothing from here on fails or raises, and only from here on is
+	 * the module changed: its tables, links, handlers and entry.
+	 */
+	tabreloc();
+
 	for(l = m->ext; l->name; l++) {
 		if(l->u.pc - m->prog == -1){
 			l->u.pc = (Inst*)-1;
@@ -2775,31 +2970,18 @@ compile(Module *m, int size, Modlink *ml)
 	m->prog = (Inst*)base;
 	m->jitsize = codesize;
 	m->compiled = 1;
-	free(tinit);
-	free(tmp);
-	free(patch0);
-	free(siteform);
-	free(sitepos0);
-	free(chash);
-	sitepos0 = nil;
-	compiledone();
+	patch = nil;	/* the module's now: its pctab */
+	base = nil;	/* and its text */
+	codesize = 0;
+	compclean();
 	return 1;
 bad:
-	compiledone();
-	free(patch);
-	free(patch0);
-	free(siteform);
-	free(sitepos0);
-	free(chash);
-	sitepos0 = nil;
-	free(tinit);
-	free(tmp);
-	if(base != nil && codesize != 0)
-#ifdef INFERNO_NATIVE
-		free(base);
-#else
-		munmap(base, codesize);
-#endif
-	base = nil;
+	/*
+	 * The module goes on as it was, interpreted: the code made for
+	 * its types calls into the text given back below.
+	 */
+	for(i = 0; i < m->ntype; i++)
+		freetypejit(m->type[i]);
+	compclean();
 	return 0;
 }

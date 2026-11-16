@@ -863,15 +863,21 @@ Typeface.width(f: self ref Typeface, s: string): real
 
 Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image, rtl: int): real
 {
+	return f.drawat(dst, p, 0.0, s, src, rtl);
+}
+
+Typeface.drawat(f: self ref Typeface, dst: ref Image, p: Point, dx: real, s: string, src: ref Image, rtl: int): real
+{
 	a := shape(f, s);
 	(xs, adv, ys, on, w) := positions(f, a);
+	x0 := real p.x + dx;
 	for(i := 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
-		gx := real p.x + xs[i];
+		gx := x0 + xs[i];
 		if(rtl) {	# the first glyph at the right end
-			gx = real p.x + w - xs[i] - adv[i];
+			gx = x0 + w - xs[i] - adv[i];
 			if(on[i] >= 0)	# a mark keeps its offset from its base
-				gx = real p.x + w - xs[on[i]] - adv[on[i]] + xs[i] - xs[on[i]];
+				gx = x0 + w - xs[on[i]] - adv[on[i]] + xs[i] - xs[on[i]];
 		}
 		gy := p.y - int ys[i];
 		if(o == nil && f.fallback != nil) {

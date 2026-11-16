@@ -595,7 +595,7 @@ tkgridconfigure(TkTop *t, TkGridparam *p, TkName *names)
 			return TkBadspan;
 		case '.':
 			tkp = n->obj;
-			if(tkisslave(p->in, tkp))
+			if(tkisslave(p->in, tkp) || tkisinside(p->in, tkp))
 				return TkRecur;
 			n = n->link;
 			if(tkp->flag & Tkgridpack)

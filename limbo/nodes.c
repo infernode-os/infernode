@@ -631,6 +631,60 @@ hascall(Node *n)
 	return 0;
 }
 
+/*
+ * can evaluating n free memory, or let other code run that can?
+ * a call, a spawn, a send, a receive and a load do; so does storing
+ * a pointer, which drops what was there; and an array's initializer
+ * that loops, as compiled code gives up the processor at a backward
+ * branch.  an address found before such code (an array element's by
+ * indx, a field's of what a pointer names) may be of freed memory
+ * after it.  arithmetic and its assignments free nothing an address
+ * can be in (a string at most).
+ */
+int
+canfree(Node *n)
+{
+	Node *e, *q;
+
+	for(; n != nil; n = n->right){
+		switch(n->op){
+		case Ocall:
+		case Ospawn:
+		case Osnd:
+		case Orcv:
+		case Oload:
+			return 1;
+		case Oas:
+		case Odas:
+			if(n->ty == nil)
+				return 1;
+			switch(n->ty->kind){
+			case Tint:
+			case Tbig:
+			case Tbyte:
+			case Treal:
+			case Tfix:
+				break;
+			default:
+				return 1;
+			}
+			break;
+		case Oarray:
+			for(e = n->right; e != nil; e = e->right){
+				if(e->left == nil)
+					continue;
+				for(q = e->left->left; q != nil; q = q->right)
+					if(q->left != nil && (q->left->op == Owild || q->left->op == Orange))
+						return 1;
+			}
+			break;
+		}
+		if(canfree(n->left))
+			return 1;
+	}
+	return 0;
+}
+
 int
 hasasgns(Node *n)
 {

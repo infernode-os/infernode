@@ -23,6 +23,8 @@ gensafeprime(mpint *p, mpint *alpha, int n, int accuracy)
 	while(1){
 		mprand(n, genrandom, alpha);
 		mpmod(alpha, p, alpha);
+		if(alpha->top == 0)
+			continue;	// 0 passes the tests below and generates nothing
 		mpmul(alpha, alpha, b);
 		mpmod(b, p, b);
 		if(mpcmp(b, mpone) == 0)

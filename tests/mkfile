@@ -140,7 +140,29 @@ TARG=\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
 	jit_small_helper.dis\
+	print_edge_test.dis\
+	math_edge_test.dis\
+	alt_edge_test.dis\
+	keyring_args_test.dis\
+	ipint_edge_test.dis\
+	namec_clone_test.dis\
+	nil_far_test.dis\
+	slice_end_test.dis\
+	draw_edge_test.dis\
+	tk_edge_test.dis\
+	string_edge_test.dis\
+	geom_edge_test.dis\
 	pool_nomem_helper.dis\
+	print_heapfull.dis\
+	load_heapfull.dis\
+	load_heapfull_mod.dis\
+	jit_4gb.dis\
+	jit_4gb_mod.dis\
+	jit_compile_fail.dis\
+	jit_compile_fail_mod.dis\
+	jit_compile_fail_ok.dis\
+	draw_pools.dis\
+	tk_nomem.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\
 	wmapp_fuzz.dis\
@@ -195,6 +217,7 @@ TARG=\
 	limbo_fold_test.dis\
 	limbo_ldt_test.dis\
 	limbo_asgcall_test.dis\
+	limbo_stale_test.dis\
 	refadt_zero_test.dis\
 	regex_test.dis\
 	runner.dis\

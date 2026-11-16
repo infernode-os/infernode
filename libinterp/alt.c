@@ -58,7 +58,7 @@ altunmark(Channel *c, WORD *ptr, Prog *p, int sr, Channel **sel, int dn)
 	ec = ca + a->len;
 	while(ca < ec) {
 		c = *ca;
-		if(c != H && c->recv->prog)
+		if(c != H)
 			cqdelp(&c->recv, p);
 		if(sr == 1 && *sel == c) {
 			W(p->reg.d) = dn;
@@ -116,13 +116,18 @@ altrdy(Alt *a, Prog *p)
 			e = exNilref;
 			continue;
 		}
-		if(c->recv->prog || CANPUT(c)) {
-			if(c->recv->prog == p) {
-				e = exAlt;
-				continue;
-			}
-			nrdy++;
+		/*
+		 * Anywhere on the queue, not only first: behind another
+		 * receiver the channel was taken for one this Prog could
+		 * send to, and then for one it could receive from (itself,
+		 * queued just below): it received from itself, through nil.
+		 */
+		if(cqhas(c->recv, p)) {
+			e = exAlt;
+			continue;
 		}
+		if(c->recv->prog || CANPUT(c))
+			nrdy++;
 		if(!cqaddok(&c->send, p))
 			e = exNomem;
 	}
@@ -137,6 +142,13 @@ altrdy(Alt *a, Prog *p)
 
 /*
  * ALT Pass 3 - Pull out of an ALT cancelling the channel pointers in each item
+ *
+ * One of the channels may be on its way out: the alt's table does not
+ * count its references, so the last can be dropped while the Prog waits,
+ * and freechan's killcomm takes that channel's queues away before it
+ * calls altgone.  cqdelp takes a queue that is not there; nothing here
+ * looks at one.  (It looked at c->send->prog: a fault inside the
+ * collector's lock, which left the collector off for good.)
  */
 void
 altdone(Alt *a, Prog *p, Channel *sel, int sr)
@@ -152,8 +164,7 @@ altdone(Alt *a, Prog *p, Channel *sel, int sr)
 	while(ac < eac) {
 		c = ac->c;
 		if(c != H) {
-			if(c->send->prog)
-				cqdelp(&c->send, p);
+			cqdelp(&c->send, p);
 			if(sr == 0 && c == sel) {
 				p->ptr = ac->ptr;
 				W(p->reg.d) = n;
@@ -172,8 +183,7 @@ altdone(Alt *a, Prog *p, Channel *sel, int sr)
 			if(t == &Tarray)
 				altunmark(c, ac->ptr, p, sr, &sel, n);
 			else {
-				if(c->recv->prog)
-					cqdelp(&c->recv, p);
+				cqdelp(&c->recv, p);
 				if(sr == 1 && c == sel) {
 					p->ptr = ac->ptr;
 					W(p->reg.d) = n;
@@ -189,7 +199,7 @@ altdone(Alt *a, Prog *p, Channel *sel, int sr)
 /*
  * ALT Pass 2 - Perform the communication on the chosen channel
  */
-static void
+static int
 altcomm(Alt *a, int which)
 {
 	RPDECL;
@@ -210,7 +220,7 @@ altcomm(Alt *a, int which)
 			R.s = ac->ptr;
 			R.d = &c;
 			isend(OPCALL);
-			return;
+			return 1;
 		}
 		ac++;
 		n++;
@@ -234,7 +244,7 @@ altcomm(Alt *a, int which)
 					R.d = ptr + 1;
 					ptr[0] = an;
 					irecv(OPCALL);
-					return;
+					return 1;
 				}
 				ca++;
 				an++;
@@ -246,12 +256,12 @@ altcomm(Alt *a, int which)
 			R.s = &c;
 			R.d = ac->ptr;
 			irecv(OPCALL);
-			return;	
+			return 1;
 		}
 		ac++;
 		n++;
 	}
-	return;
+	return 0;
 }
 
 void
@@ -295,6 +305,10 @@ xecalt(int block)
 	}
 
 	xrand = xrand*1103515245 + 12345;
-	altcomm(a, (xrand>>8)%nrdy);
+	if(!altcomm(a, (xrand>>8)%nrdy)) {
+		/* altrdy and altcomm disagree: not an arm chosen at random */
+		altdone(a, p, nil, -1);
+		error(exAlt);
+	}
 	altdone(a, p, nil, -1);
 }

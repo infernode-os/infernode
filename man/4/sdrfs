@@ -218,6 +218,27 @@ milliseconds (300) more, were tuned before it took, and are dropped,
 so a stream opened after a retune starts with samples tuned as its
 header says.
 A hang-up waits for them too.
+A setting written while
+.I rtl_tcp
+is still applying the last is kept and sent when it should have done,
+once, as it then is: a frequency written a hundred times in a second (a
+knob turned) is a few commands, the last the last value, and
+.B ctl
+reads back what was written at once.
+Commands are written by a process of their own: an
+.I rtl_tcp
+that stops taking them is hung up on
+.RB ( "rtl_tcp is not taking commands" )
+and the files go on answering.
+The stream is given to the readers in pieces of at least 4096 bytes
+however
+.I rtl_tcp
+sends it.
+A
+.B source
+command whose writer gives it up before
+.I rtl_tcp
+has greeted (the write interrupted) is not done.
 Every open has its own queue; one that falls more than 8 MB behind
 loses the oldest, whole samples, counted in
 .BR status .

@@ -196,9 +196,15 @@ popen(ctxt: ref Draw->Context, argv: list of string): ref Sys->FD
 
 runcmd(sh: Sh, ctxt: ref Draw->Context, argv: list of string, stdin: ref Sys->FD, sync: chan of int)
 {
+	# the command keeps its end of the pipe, as 0, and the caller's 1 and 2;
+	# nothing else. FORKFD alone kept the mount's end of the pipe too, so an
+	# unmount never hung the command up: camsrv, an export, any server
+	# mounted with {} ran on for ever after it (a Pi 5 soak's hourly camera
+	# probe left five processes behind each hour, 2026-11-16)
 	sys->pctl(Sys->FORKFD, nil);
 	sys->dup(stdin.fd, 0);
 	stdin = nil;
+	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	sync <-= 0;
 	sh->run(ctxt, argv);
 }

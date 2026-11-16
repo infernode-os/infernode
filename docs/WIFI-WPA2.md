@@ -95,7 +95,7 @@ Every line begins `wpa: `.
 | `/net/ether1: network home` | the name it will derive the key from — check it. A name containing spaces is printed quoted |
 | `still waiting for the radio to associate (40s)` | `ifstats` has said `unassociated`, `connecting` or `unauthenticated` for that long. The radio has not found or not joined the network: wrong name, out of range, or the firmware never started. The time in brackets is the point — see *How loudly it complains* below |
 | `associated; starting the four-way handshake` | the radio joined, and the RSN element has been written to `ctl` |
-| `pairwise receive key installed` | message 3 arrived and verified: the access point has the same passphrase |
+| `pairwise receive key accepted` | message 3 arrived and verified: the access point has the same passphrase. The driver takes this key and does nothing with it (the radio has one pairwise key, which the next line installs), so it is not called installed |
 | `pairwise transmit key installed` | message 4 has gone out and the transmit key is in |
 | `group key 1 installed` | the broadcast key from message 3 |
 | `bad MIC` | a frame's integrity check did not match. One against a noisy network is nothing. Note that a wrong passphrase more often shows as a handshake that stops after our second message, with no `bad MIC` at all |
@@ -134,6 +134,16 @@ have to be able to tell a supplicant that is trying from one that is
 stuck, so the lines that survive carry the elapsed time and the number
 of attempts, and it is those numbers *changing* between two lines that
 says the program is alive.
+
+Frames it refuses are on the same schedule, by kind (`bad MIC`, `stale
+replay counter N`, a descriptor version it does not do, a frame cut
+short): the first of a kind at once, then that kind again only with a
+count, `bad MIC (212 of these since the last was reported, 213 in all)`,
+at the doubling intervals. Anyone in range can send such frames, with no
+key, and each used to be a line: on a board the log is `/tmp/wpa.log`,
+on 8MB of RAM that everything's `/tmp` shares. And the log itself is
+held to 64K: when that much has been written and standard error is a
+file that has kept it, the file is begun again, saying so.
 
 An association that installs a key and lasts more than a second counts
 as real: it clears the history, so an ordinary drop on a working network

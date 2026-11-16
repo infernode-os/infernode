@@ -118,6 +118,43 @@ SHAKE-128/256); Keyring builtins `sha3_256`/`sha3_512` (`libinterp/keyring.c:136
 Evidence: `tests/sha3_test.b`. Constant-time by construction (no data-dependent
 branches/table lookups). **Met.**
 
+### 3.7 What the mode enforces in the authentication programs
+
+CNSA mode (`/env/cnsamode`) was a set of defaults. It is a rule: every program
+that makes or takes a signing key in the mode asks `appl/lib/login.b`
+(`cnsaalg`, `cnsahash`, `cnsakey`), and what is not CNSA's is refused with the
+reason.
+
+| Program | In CNSA mode |
+|---------|--------------|
+| `auth/createsignerkey` (or `-c`) | Makes ML-DSA-87, certificate under SHA-384, RFC 3526's 3072-bit Diffie-Hellman group in the key file (it was the 2048-bit one). `-a` naming another algorithm and any `-b` are refused. |
+| `auth/mkauthinfo` | Signs only with a key file that is CNSA's whole (keys, signer's key, certificate algorithm and hash, modulus ≥ 3072 bits). |
+| `auth/logind` | Suite 2 of login(6) alone (AES-256, SHA-384, group ≥ 3072 bits), and a signer's key that is CNSA's whole, checked at each connection: with any other key every login is refused, "signer's key is not CNSA's". The key certified is of the signer's algorithm. |
+| login client (`login(2)`, `getauthinfo`) | Suite 2 alone; refuses a signer's key that is not ML-DSA-87, a signer's modulus under 3072 bits, a certificate not ML-DSA-87's under SHA-384/512. |
+| `auth/signer` | As logind for its key; certifies only keys of its own algorithm. Not started by default (signer(8)). |
+| `auth/factotum` | `genkey` makes ML-DSA-87 alone; `proto=sign` signs with an ML-DSA-87 key alone. |
+
+Known limits, stated rather than hidden:
+
+- **Certificate delivery.** An ML-DSA-87 certificate is 6197 bytes as text and
+  Keyring's `getstring`/`putstring` messages hold 4096 (`libinterp/keyring.c`
+  `Maxmsg`). Until that limit is raised, a CNSA signer completes the exchange
+  and then tells the client that the certificate does not fit a message (it was
+  sent cut short); `tests/login_test.b`'s three CNSA logins check that and are
+  skipped, and run whole once a 7000-byte string passes. Key files made by
+  `mkauthinfo` are not affected.
+- **The peer-to-peer handshake** (`Keyring->auth`, C) reads the mode for
+  ML-KEM-1024 but does not itself refuse a certificate or key file that is not
+  ML-DSA-87 with a 3072-bit modulus; `login->cnsakey` is the check a caller of
+  `auth(2)` can make on the key file it reads.
+- **Stored secrets.** keyfs(4)'s key file is PBKDF2-HMAC-SHA-384 and AES-256-GCM
+  in every mode. An account's stored secret is the SHA-256 of its password
+  (keys(6), changelogin(8)) in every mode: it enters login(6)'s suite 2 only as
+  key material to HKDF-SHA-384 and is never a signature's hash. secstore's file
+  key and PAK verifier are HMAC-SHA-256 and SHA-256 (`appl/lib/secstore.b`), with
+  AES-256-GCM for the files and the session: outside the mode's signature and
+  key-establishment rules, and not SHA-384.
+
 ---
 
 ## 4. Defense-in-depth note (hybrid posture)
@@ -142,7 +179,7 @@ stricter, transition-safe posture.
 | ID | CNSA 2.0 requirement | Resolution | Tracking |
 |----|----------------------|------------|----------|
 | **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1891`–`2177`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
-| **G2** | **ML-DSA-87** (Cat 5) across all signing surfaces | **Closed.** Under CNSA mode, `createsignerkey` and `auth/signer` (the auth-domain CA, first-run key) default to ML-DSA-87; the native STS / TLS / factotum / X.509 signers are algorithm-agnostic and honor the signer key's algorithm. `createsignerkey -c` selects it in one flag regardless of mode. | INFR-330 |
+| **G2** | **ML-DSA-87** (Cat 5) across all signing surfaces | **Closed, and enforced.** Under CNSA mode `createsignerkey` makes ML-DSA-87 and refuses anything else asked for; `logind`, `signer`, `mkauthinfo`, factotum's `genkey` and `proto=sign`, and the login client each refuse a key that is not ML-DSA-87 (§3.7). `auth/signer` no longer makes a key of its own when it finds none: `createsignerkey` is the one maker. `createsignerkey -c` is the mode for that command regardless of the environment. | INFR-330 |
 | **G3** | LMS/XMSS (SP 800-208) firmware signing | **Resolved — Not Applicable** (§3.5): no firmware / in-system signed-image use case; compensating control is hardware (YubiKey) release signing, with ML-DSA-87 / SLH-DSA available. Accreditor to confirm the determination. | INFR-331 |
 
 None of G1–G3 require architectural change; G1/G2 are selection of already-implemented

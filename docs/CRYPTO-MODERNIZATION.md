@@ -199,10 +199,16 @@ HMAC-SHA1 remains where a protocol still names it (HMAC-SHA1 is still considered
    ```sh
    # Generate new signer key with Ed25519
    auth/createsignerkey -a ed25519 signer_name
+   # or, in CNSA mode (ML-DSA-87, SHA-384, a 3072-bit group; -a and -b
+   # naming anything else are refused in the mode)
+   auth/createsignerkey -c signer_name
 
    # Recreate user accounts
    auth/changelogin username
    ```
+   A signer key made with `-c` before the mode was a rule has a 2048-bit
+   Diffie-Hellman group and is refused by `logind` in CNSA mode: make it
+   again. `createsignerkey -b` takes 2048 to 4096 bits (it took 32).
 
 2. **Update client certificates:**
    - Old certificates will fail verification (SHA-1 vs SHA-256)
@@ -211,6 +217,21 @@ HMAC-SHA1 remains where a protocol still names it (HMAC-SHA1 is still considered
 3. **Update all clients and servers together:**
    - Login is version 2 of `login(6)` (incompatible with every exchange before it)
    - Both `login.b` (client) and `logind.b` (server) must be updated simultaneously
+
+   What needs no action, because the programs do it:
+   - `keyfs` converts a key file in the old format (AES-CBC under one SHA-1)
+     to the current one (PBKDF2-HMAC-SHA-384, AES-256-GCM) when it starts,
+     and says so; a backup made before is still in the old format.
+   - A secstore account's verifier is moved to version 4 (made at the file
+     key's cost) by its next login; the old verifier is removed after the
+     first version 4 login (secstored(8)).
+
+   What does need action:
+   - A secstore file still in one of the two formats before SGCM2 is no
+     longer read by a login: move it once with `auth/secstore m factotum`.
+   - `svc/auth` no longer starts `auth/signer` and `auth/countersigner`
+     (signer(8) says how to start them on purpose).
+   - `p9any` needs `authdom=dom auth=server` in ndb for each domain.
 
 4. **Install CRLs (optional):**
    - Place DER-encoded CRL files in `/lib/crls/` for revocation checking

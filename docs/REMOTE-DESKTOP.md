@@ -458,8 +458,12 @@ The steps above assume a release with the fixes from September 2026
   quoted exactly so. Older `cpu` defaulted to no encryption, and a node that
   requires both refuses encryption without the MAC (`client omitted
   required integrity algorithm`).
-- **`mkauthinfo` ignored its file argument**: write
-  `auth/mkauthinfo -k 'key=signer' $user > /usr/$user/keyring/default`.
+- **`mkauthinfo` writes the key file itself**: name the file,
+  `auth/mkauthinfo -k 'key=signer' $user /usr/$user/keyring/default`,
+  and it is made mode 600. Do not redirect its output into the file: the
+  shell makes a redirection's file readable by other users before the
+  secret key goes into it. (Older versions ignored the file argument, and
+  this page once said to redirect.)
 - **Starting the viewer's emulator closed your Lucia desktop** (its
   login shell stopped the other instance's key server). Quit the
   desktop before starting a viewer.

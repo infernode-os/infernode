@@ -222,7 +222,19 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	cs.hsbuf = nil;
 	cs.hsoff = 0;
 
-	err := handshake(cs, config);
+	# What the handshake reads is a peer's, most of it before anything
+	# says who the peer is.  Whatever it makes of that, the answer is
+	# an error: the callers (an LLM client, a mail file server, an MCP
+	# client) have no handler, and a server's few bytes ended them.
+	# The server side has had the same since it was written.
+	err: string;
+	{
+		err = handshake(cs, config);
+	} exception e {
+	"*" =>
+		clearephemeral(cs);
+		err = "tls: handshake: " + e;
+	}
 	if(err != nil)
 		return (nil, err);
 
@@ -1975,6 +1987,12 @@ verifycerts(cs: ref ConnState, certs: list of array of byte): string
 		if(herr != nil && !cs.insecure)
 			return herr;
 	}
+
+	# and that it is a server's certificate, for what this handshake
+	# does with its key
+	uerr := serverusage(hd certs, cs.version == TLS13 || isecdhe(cs.suite));
+	if(uerr != nil && !cs.insecure)
+		return uerr;
 	return nil;
 }
 
@@ -2604,6 +2622,12 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 	saltlen := hashlen;
 	if(len sig != rsakey.modlen)
 		return "PSS: bad signature length";
+	# RFC 8017 5.2.2: the signature is a number below the modulus (and
+	# the modulus one that can be divided by: x509 refuses a key
+	# whose modulus is not a modulus, but the arithmetic is here)
+	if(rsakey.modulus == nil || rsakey.exponent == nil || rsakey.modulus.bits() < 2 ||
+	   IPint.bebytestoip(sig).cmp(rsakey.modulus) >= 0)
+		return "PSS: signature representative out of range";
 
 	# Step 1: raw RSA public-key operation (modular exponentiation).
 	# Do NOT use pkcs->rsa_decrypt — that strips PKCS#1 v1.5 padding,
@@ -4328,42 +4352,65 @@ verifyclientcv(data: array of byte, certs: list of array of byte, transcript_has
 OID_EKU := array[] of {2,5,29,37};
 OID_KU := array[] of {2,5,29,15};
 CLIENTAUTH := array[] of {byte 16r2B, byte 16r06, byte 16r01, byte 16r05, byte 16r05, byte 16r07, byte 16r03, byte 16r02};
+SERVERAUTH := array[] of {byte 16r2B, byte 16r06, byte 16r01, byte 16r05, byte 16r05, byte 16r07, byte 16r03, byte 16r01};
 ANYEKU := array[] of {byte 16r55, byte 16r1D, byte 16r25, byte 16r00};
 
 clientusage(der: array of byte): string
 {
+	return leafusage(der, "client", CLIENTAUTH, "client authentication", 1);
+}
+
+# The mirror image, for the server's leaf (it was not asked: a
+# certificate issued to a client, or for signing mail, with the host's
+# name in it, was a server's).  RFC 5280 4.2.1.12: with an extended
+# key usage, the certificate is for the purposes it names, serverAuth
+# here or anyExtendedKeyUsage; with none, for any.  Its key usage, if
+# it has one, must allow what the handshake does with the key: sign
+# (TLS 1.3's CertificateVerify, RFC 8446 4.4.2.2; an ECDHE
+# ServerKeyExchange, RFC 5246 7.4.2) or, for RSA key exchange,
+# encipher a key.
+serverusage(der: array of byte, signs: int): string
+{
+	return leafusage(der, "server", SERVERAUTH, "server authentication", signs);
+}
+
+leafusage(der: array of byte, who: string, purpose: array of byte, what: string, signs: int): string
+{
 	(serr, signed) := x509->Signed.decode(der);
 	if(serr != nil)
-		return "tls: client certificate: " + serr;
+		return "tls: " + who + " certificate: " + serr;
 	(cerr, c) := x509->Certificate.decode(signed.tobe_signed);
 	if(cerr != nil)
-		return "tls: client certificate: " + cerr;
+		return "tls: " + who + " certificate: " + cerr;
 	for(l := c.exts; l != nil; l = tl l) {
 		e := hd l;
 		if(oidis(e.oid, OID_EKU)) {
 			v := e.value;
 			(t, h, n) := dertlv(v, 0);
 			if(t != 16r30 || h + n != len v)
-				return "tls: client certificate's extended key usage malformed";
+				return "tls: " + who + " certificate's extended key usage malformed";
 			found := 0;
 			for(off := h; off < len v; ) {
 				(ot, oh, on) := dertlv(v, off);
 				if(ot != 16r06)
-					return "tls: client certificate's extended key usage malformed";
+					return "tls: " + who + " certificate's extended key usage malformed";
 				o := v[off+oh:off+oh+on];
-				if(bytescmp(o, CLIENTAUTH) || bytescmp(o, ANYEKU))
+				if(bytescmp(o, purpose) || bytescmp(o, ANYEKU))
 					found = 1;
 				off += oh + on;
 			}
 			if(!found)
-				return "tls: client certificate not for client authentication (extended key usage)";
+				return "tls: " + who + " certificate not for " + what + " (extended key usage)";
 		} else if(oidis(e.oid, OID_KU)) {
 			v := e.value;
 			(t, h, n) := dertlv(v, 0);
 			if(t != 16r03 || h + n != len v || n < 2)
-				return "tls: client certificate's key usage malformed";
-			if((int v[h+1] & 16r80) == 0)
-				return "tls: client certificate's key usage lacks digitalSignature";
+				return "tls: " + who + " certificate's key usage malformed";
+			# digitalSignature is bit 0, keyEncipherment bit 2
+			if(signs && (int v[h+1] & 16r80) == 0)
+				return "tls: " + who + " certificate's key usage lacks digitalSignature";
+			if(!signs && (int v[h+1] & 16r20) == 0)
+				return "tls: " + who + " certificate's key usage lacks keyEncipherment";
 		}
 	}
 	return nil;

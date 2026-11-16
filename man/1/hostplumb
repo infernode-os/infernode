@@ -39,7 +39,12 @@ host paths, in the data and the working directory, are placed under
 where the profile mounts the host's file system);
 .IP \(bu
 data that is not an absolute path is joined to the message's
-working directory;
+working directory; a message whose path has a
+.B ..
+element, or is not absolute with no absolute working directory to make
+it so, names no place under
+.I root
+and is reported and dropped;
 .IP \(bu
 an
 .B addr
@@ -84,8 +89,10 @@ A Windows path on
 .BR C: ,
 the drive mounted at
 .BR /n/local ,
-is made a Unix one; a path on another drive, or one that is not
-absolute, is reported and skipped.
+is made a Unix one; a path on another drive, one that is not
+absolute, or one through
+.BR .. ,
+is reported and skipped.
 .PP
 If the plumber is not there yet,
 .I hostplumb

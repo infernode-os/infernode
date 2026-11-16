@@ -138,9 +138,12 @@ ms0 := 0;
 Watch: adt {
 	deadline:	int;	# sys->millisec() past which it is hung up; 0: none
 	pid:	int;	# its process (group), to kill
-	orphans:	int;	# it leaves a process behind (an event stream's reader blocked in a read), killed with its group when it ends
+	orphans:	int;	# it has started processes (an event stream's reader, perhaps in a read that never ends), killed with its group when it ends
 	ip:	string;	# the client's address
 	stream:	int;	# it holds an event stream (the watchdog's to set)
+	gone:	chan of int;	# the watchdog's answer to its end: only then does it go
+	inreq:	int;	# a request has begun and is not yet answered: cut at a deadline, it is logged
+	r:	ref Req;	# that request, once its headers are read
 };
 
 Entry: adt {
@@ -369,7 +372,7 @@ watchdog()
 			rc <-= nil;
 			continue;
 		}
-		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0, 0, ip, 0);
+		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0, 0, ip, 0, chan[1] of int, 0, nil);
 		conns = ref Entry(w, cfd, ip) :: conns;
 		n++;
 		rc <-= w;
@@ -392,8 +395,13 @@ watchdog()
 			src <-= 1;
 		}
 	w := <-donec =>
+		# Its group is killed while its leader, which named the group,
+		# waits here to be told (ended): once it has gone nothing can
+		# name the group, and the leader went first, so a stream's
+		# reader stayed for good with its open file and its read.
 		if(w.orphans && w.pid > 0)
-			writefile("/prog/" + string w.pid + "/ctl", "killgrp");
+			killgrp(w.pid);
+		w.gone <-= 1;
 		keep: list of ref Entry;
 		for(l := conns; l != nil; l = tl l)
 			if((hd l).w == w)
@@ -411,14 +419,42 @@ watchdog()
 				if(verbose)
 					sys->fprint(stderr, "httpd: %s: past its deadline, hung up\n", e.ip);
 				if(w.pid > 0)
-					writefile("/prog/" + string w.pid + "/ctl", "killgrp");
+					killgrp(w.pid);
+				w.pid = 0;	# (its end may be on its way here too)
 				sys->fprint(e.cfd, "hangup");
+				# a request cut here is in the log too (it was nowhere
+				# but in -v's line: a slow client left no trace)
+				if(w.inreq)
+					logcut(e.ip, w.r);
 				n--;
 				continue;
 			}
 			keep = e :: keep;
 		}
 		conns = keep;
+	}
+}
+
+# what a connection started, and the connection, killed; said if it
+# could not be (it was not looked at)
+killgrp(pid: int)
+{
+	if(writefile("/prog/" + string pid + "/ctl", "killgrp") < 0)
+		sys->fprint(stderr, "httpd: cannot kill the processes of %d: %r\n", pid);
+}
+
+# A request cut at a deadline, in the log as 408.  The watchdog's: it
+# does not wait for a logger that is behind.
+logcut(ip: string, r: ref Req)
+{
+	if(r == nil)
+		r = ref Req("-", "-", nil, nil, 11, nil, big -1, 1, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
+	line := logline(ip, r, 408, big 0);
+	alt {
+	logc <-= line =>
+		;
+	* =>
+		;
 	}
 }
 
@@ -440,14 +476,26 @@ connection(dfd: ref FD, ip: string, w: ref Watch, sync: chan of int)
 	if(tls != nil)
 		for(l := tls->keptfds(); l != nil; l = tl l)
 			keep = hd l :: keep;
-	sys->pctl(Sys->FORKNS|Sys->NEWENV|Sys->NEWFD, keep);
+	# Its own name space, or nothing: with no fork (the kernel short
+	# of memory) the bind below would replace the listener's own /,
+	# and with it every later connection's site and /prog.
+	forked := sys->pctl(Sys->FORKNS|Sys->NEWENV|Sys->NEWFD, keep);
 	sync <-= pid;
-	if(sys->bind(root, "/", Sys->MREPL) < 0 || sys->chdir("/") < 0) {
-		sys->fprint(stderr, "httpd: cannot make %s the root: %r\n", root);
-		donec <-= w;
+	if(forked < 0) {
+		sys->fprint(stderr, "httpd: cannot confine a connection: %r\n");
+		ended(w);
 		return;
 	}
-	sys->pctl(Sys->NODEVS, nil);
+	if(sys->bind(root, "/", Sys->MREPL) < 0 || sys->chdir("/") < 0) {
+		sys->fprint(stderr, "httpd: cannot make %s the root: %r\n", root);
+		ended(w);
+		return;
+	}
+	if(sys->pctl(Sys->NODEVS, nil) < 0) {
+		sys->fprint(stderr, "httpd: cannot confine a connection: %r\n");
+		ended(w);
+		return;
+	}
 	{
 		serve(ref Io(dfd, nil, array[BUFSIZE] of byte, 0, 0, nil, 0, w, nil, nil), ip);
 	} exception e {
@@ -455,7 +503,15 @@ connection(dfd: ref FD, ip: string, w: ref Watch, sync: chan of int)
 		if(verbose)
 			sys->fprint(stderr, "httpd: %s: %s\n", ip, e);
 	}
+	ended(w);
+}
+
+# The connection's end, told to the watchdog, which kills what it
+# started; killed with them if it started any
+ended(w: ref Watch)
+{
 	donec <-= w;
+	<-w.gone;
 }
 
 # ================================================================
@@ -505,8 +561,10 @@ Io.fill(io: self ref Io): int
 		n = io.tc.read(io.rbuf[io.re:], len io.rbuf - io.re);
 	else
 		n = sys->read(io.fd, io.rbuf[io.re:], len io.rbuf - io.re);
-	if(n > 0)
+	if(n > 0) {
 		io.re += n;
+		io.w.inreq = 1;
+	}
 	return n;
 }
 
@@ -665,6 +723,8 @@ serve(io: ref Io, ip: string)
 		(r, code, why) := readreq(io);
 		if(r == nil && code == 0)
 			break;	# the client went
+		io.w.inreq = 1;
+		io.w.r = r;
 		if(code != 0) {
 			if(r == nil)
 				r = ref Req("-", "-", nil, nil, 11, nil, big -1, 1, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
@@ -680,6 +740,8 @@ serve(io: ref Io, ip: string)
 			r.close = 1;
 		(status, n, keep) := handle(io, r);
 		logreq(ip, r, status, n);
+		io.w.inreq = 0;
+		io.w.r = nil;
 		if(io.flush() < 0 || !keep || r.close)
 			break;
 	}
@@ -962,7 +1024,12 @@ get(io: ref Io, r: ref Req): (int, big, int)
 			return errorpage(io, r, 403, nil);
 		return listing(io, r, path, fd);
 	}
-	if(contains(r.accept, "text/event-stream"))
+	# A stream's source is a file whose server gives it no length (a
+	# device's file, a file2chan's: what waits for something to
+	# happen).  A file with a length is sent as the file it is, whatever
+	# the client says it accepts: asked for as a stream, a large one
+	# was read and sent 16K to an event.
+	if(d.length == big 0 && contains(r.accept, "text/event-stream"))
 		return eventstream(io, r, fd);
 	return sendvariant(io, r, path, fd, d);
 }
@@ -1008,9 +1075,10 @@ acceptsgzip(h: string): int
 	return 0;
 }
 
-# A file read as Server-Sent Events (the client's Accept names
-# text/event-stream, as a browser's EventSource sends): each read of
-# the file is an event, its lines its data.  A device's event file
+# A file of no stated length read as Server-Sent Events (the client's
+# Accept names text/event-stream, as a browser's EventSource sends):
+# each read of the file is an event, its lines its data.  A device's
+# event file
 # (gpsfs's, themefs's) waits for a change before it answers, so there
 # is no deadline on the file's reads, only on the writes; every 15
 # seconds of silence a comment goes out, which keeps proxies from
@@ -1042,18 +1110,26 @@ eventstream0(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
 		return (200, big 0, 0);
 
 	c := chan of array of byte;
-	io.w.orphans = 1;	# the reader may be in a read that never ends
+	io.w.orphans = 1;	# the reader, and a sleeper: killed when the connection ends
 	spawn eventreader(fd, c);
+	# One sleeper at a time, for the silence: a comment goes out at
+	# most 15 s after the last thing sent.  (There was one to an
+	# event, each alive 15 s: a stream of many events a second had
+	# thousands of them.)
+	beat := chan[1] of int;
+	sleeping := 0;
 	sent := big 0;
 	for(;;) {
 		io.w.deadline = 0;	# a file may wait as long as it likes
-		beat := chan[1] of int;
-		spawn sleeper(BEATWAIT, beat);
+		if(!sleeping) {
+			spawn sleeper(BEATWAIT, beat);
+			sleeping = 1;
+		}
 		ev: string;
 		alt {
 		b := <-c =>
 			if(b == nil) {
-				io.w.orphans = 0;	# the reader saw the end, and has gone
+				# (the reader saw the end, and has gone)
 				if(chunked) {
 					io.puts("0\r\n\r\n");
 					return (200, sent, keep);
@@ -1062,6 +1138,7 @@ eventstream0(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
 			}
 			ev = sseevent(b);
 		<-beat =>
+			sleeping = 0;
 			ev = ": keep-alive\n\n";
 		}
 		eb := array of byte ev;
@@ -1496,11 +1573,16 @@ reason(code: int): string
 # Common Log Format, with the referer and agent (Apache's "combined")
 logreq(ip: string, r: ref Req, code: int, n: big)
 {
+	logc <-= logline(ip, r, code, n);
+}
+
+logline(ip: string, r: ref Req, code: int, n: big): array of byte
+{
 	t := daytime->gmt(now());
 	s := sys->sprint("%s - %s [%02d/%s/%d:%02d:%02d:%02d +0000] \"%s %s %s\" %d %bd \"%s\" \"%s\"\n",
 		ip, logname(r.user), t.mday, months[t.mon], t.year + 1900, t.hour, t.min, t.sec,
 		logesc(r.meth), logesc(r.target), vers(r.vers), code, n, logesc(r.referer), logesc(r.agent));
-	logc <-= array of byte s;
+	return array of byte s;
 }
 
 # The log, opened to append
@@ -2114,11 +2196,12 @@ readfile(f: string, max: int): string
 	return string b[0:n];
 }
 
-writefile(f, s: string)
+writefile(f, s: string): int
 {
 	fd := sys->open(f, Sys->OWRITE);
-	if(fd != nil)
-		sys->fprint(fd, "%s", s);
+	if(fd == nil || sys->fprint(fd, "%s", s) < 0)
+		return -1;
+	return 0;
 }
 
 fatal(s: string)

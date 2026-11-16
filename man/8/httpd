@@ -168,16 +168,20 @@ takes gzip, and as itself to one that does not; both answers carry
 .BR "Vary: Accept-Encoding" .
 Nothing is compressed as it is sent.
 .PP
-A file asked for with an
+A file whose server gives it no length (a device's file, a
+.IR file2chan (1)
+file: what waits for something to happen), asked for with an
 .B Accept
 naming
 .B text/event-stream
 (as a browser's
 .B EventSource
-asks) is sent as Server-Sent Events: each read of the file is an event,
+asks), is sent as Server-Sent Events: each read of the file is an event,
 each line of it a
 .B data:
 line.
+A file with a length is no stream's source, and is sent as the file
+it is whatever its client accepts.
 A device's event file, whose read waits for a change (gpsfs's
 .BR event ,
 the theme's
@@ -188,6 +192,8 @@ open through proxies and finds a client that has gone.
 The file ending ends the stream; an
 .B EventSource
 then opens it again.
+A stream is two processes beside its connection's, however many its
+events, and they end with the connection.
 At most half of
 .I maxconns
 connections hold event streams, and half of
@@ -419,6 +425,8 @@ whole of a request's body.
 A connection past one is hung up and its processes killed by the
 listener, which holds the connections' control files; a file server that
 never answers holds a connection only that long.
+A request cut so, begun and not yet answered, is in the log with
+status 408.
 The listener admits at most
 .I maxconns
 connections at once (default 64), and at most

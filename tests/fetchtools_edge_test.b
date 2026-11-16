@@ -150,15 +150,25 @@ testLinks(t: ref T)
 		"see the page (http://x.example/) now", "a link, with its address");
 	t.assertseq(webfetch->html2text("<p>one <a href=\"http://x.example/\">unclosed, <a class=k>twice"),
 		"one unclosed, twice", "links never closed: their text");
-	# 128KB of links never closed
+	# 128KB of links never closed.  Each unclosed <a> was looked at to the
+	# end of the page, the square of its length (16 s on a developer's
+	# machine).  Judged by how the time grows from a quarter of it, not by
+	# a time alone: macOS runners take 4 s for what Linux does in 0.07 s.
+	(r, ms) := unclosedlinks(32768);
+	t.assertseq(r, "end", "128KB of unclosed links: the text after them");
+	(nil, qms) := unclosedlinks(8192);
+	t.assert(ms < 1000 || ms < 8 * (qms + 10),
+		sys->sprint("in time: %d ms, and %d ms for a quarter of it (linear is 4 times, the square 16)", ms, qms));
+}
+
+unclosedlinks(n: int): (string, int)
+{
 	s := "<html><body>";
-	for(i := 0; i < 32768; i++)
+	for(i := 0; i < n; i++)
 		s += "<a >";
 	t0 := sys->millisec();
 	r := webfetch->html2text(s + "end");
-	ms := sys->millisec() - t0;
-	t.assertseq(r, "end", "128KB of unclosed links: the text after them");
-	t.assert(ms < 4000, sys->sprint("in time: %d ms", ms));
+	return (r, sys->millisec() - t0);
 }
 
 init(nil: ref Draw->Context, args: list of string)

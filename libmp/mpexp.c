@@ -144,7 +144,9 @@ tolimbs(mpint *b, limb *r, int n)
 
 	for(i = 0; i < n; i++)
 		r[i] = 0;
-	for(i = 0; i < b->top; i++){
+	// (no further than the limbs: zero digits above a number, which
+	// mpsignif does not count, were stored past them)
+	for(i = 0; i < b->top && i < n*(Lbits/Dbits); i++){
 		k = i*Dbits;
 		r[k/Lbits] |= (limb)b->p[i] << (k%Lbits);
 	}
@@ -198,11 +200,13 @@ static void
 mpexpmont(mpint *b, mpint *e, mpint *m, mpint *res)
 {
 	Mont M;
-	mpint *t;
+	mpint *t, *tb;
 	limb *mem, *tab, *acc, *x, *rr, inv;
-	int n, w, nent, nbits, pos, i;
+	int n, w, nent, nbits, pos, i, rbits;
 
 	n = (mpsignif(m) + Lbits-1)/Lbits;
+	// R^2 has twice the modulus's bits: an int's worth, asked first
+	rbits = mpsizebits(0, (vlong)2*n*Lbits + Dbits, "mpexp");
 
 	// the window: as OpenSSL's BN_window_bits_for_ctime_exponent_size
 	nbits = e->top*Dbits;
@@ -218,9 +222,26 @@ mpexpmont(mpint *b, mpint *e, mpint *m, mpint *res)
 		w = 1;
 	nent = 1<<w;
 
-	mem = mallocz(sizeof(limb)*(n*(nent+4) + n+2), 1);
-	if(mem == nil)
+	// b mod m, and R^2 mod m: public.  Made before the table, the
+	// longer division first: what raises for want of memory then
+	// leaves little or nothing of this function's behind (see
+	// mpreserve), and the table is not made to be lost
+	tb = mpnew(0);
+	mpmod(b, m, tb);
+	t = mptrynew(rbits);
+	if(t == nil){
+		mpfree(tb);
+		sysfatal("mpexp: no memory");
+	}
+	mpleft(mpone, rbits - Dbits, t);
+	mpmod(t, m, t);
+
+	mem = mallocz(sizeof(limb)*((ulong)n*(nent+4) + n+2), 1);
+	if(mem == nil){
+		mpfree(tb);
+		mpfree(t);
 		sysfatal("mpexp: %r");
+	}
 	tab = mem;
 	acc = tab + n*nent;
 	x = acc + n;
@@ -236,14 +257,10 @@ mpexpmont(mpint *b, mpint *e, mpint *m, mpint *res)
 		inv *= 2 - M.m[0]*inv;
 	M.minv = 0 - inv;
 
-	// R^2 mod m, and b mod m: public
-	t = mpnew(0);
-	mpleft(mpone, 2*n*Lbits, t);
-	mpmod(t, m, t);
 	tolimbs(t, rr, n);
-	mpmod(b, m, t);
-	tolimbs(t, x, n);
+	tolimbs(tb, x, n);
 	mpfree(t);
+	mpfree(tb);
 
 	// tab[i] = b^i R mod m
 	for(i = 0; i < n; i++)
@@ -290,17 +307,38 @@ mpexpslow(mpint *b, mpint *e, mpint *m, mpint *res)
 	mpint *t[2];
 	int tofree;
 	mpdigit d, bit;
-	int i, j;
+	int i, j, etop, rbits;
+	vlong v;
 
-	i = mpcmp(e,mpzero);
-	if(i==0){
-		mpassign(mpone, res);
+	// zero digits above the exponent are not its digits: the loop
+	// below looked in the top one for a bit, for ever
+	etop = e->top;
+	while(etop > 0 && e->p[etop-1] == 0)
+		etop--;
+	if(etop == 0){
+		// b^0 is 1, which mod 1 (or -1) is 0: it was 1
+		if(m != nil && m->top == 1 && m->p[0] == 1)
+			mpassign(mpzero, res);
+		else
+			mpassign(mpone, res);
 		return;
 	}
-	if(i<0)
+	if(e->sign < 0)
 		sysfatal("mpexp: negative exponent");
 
-	t[0] = mpcopy(b);
+	// with no modulus the result is as long as the base for each of
+	// the exponent: room for it in both working numbers now, so that
+	// no product raises for want of memory with the other one held
+	// (see mpreserve)
+	rbits = Dbits*b->size;
+	if(m == nil && etop == 1){
+		v = (vlong)mpsignif(b)*e->p[0] + 4*Dbits;
+		if(v <= MAXBITS && v > rbits)
+			rbits = v;
+		mpreserve(res, rbits);
+	}
+	t[0] = mpnew(rbits);
+	mpassign(b, t[0]);
 	t[1] = res;
 
 	tofree = 0;
@@ -318,7 +356,7 @@ mpexpslow(mpint *b, mpint *e, mpint *m, mpint *res)
 	}
 
 	// skip first bit
-	i = e->top-1;
+	i = etop-1;
 	d = e->p[i];
 	for(bit = mpdighi; (bit & d) == 0; bit >>= 1)
 		;

@@ -183,6 +183,7 @@ TARG=\
 	link_digest_b.dis\
 	keyring_args_test.dis\
 	ipint_edge_test.dis\
+	ipint_size_test.dis\
 	namec_clone_test.dis\
 	nil_far_test.dis\
 	slice_end_test.dis\
@@ -197,6 +198,7 @@ TARG=\
 	print_heapfull.dis\
 	timerec.dis\
 	wpadrive.dis\
+	ipint_nomem.dis\
 	tool9call.dis\
 	exec_fd_probe.dis\
 	load_heapfull.dis\

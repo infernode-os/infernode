@@ -9,9 +9,21 @@
 void
 mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 {
-	int j, s, vn, sign;
+	int j, s, vn, sign, qsign, rsign;
 	mpdigit qd, *up, *vp, *qp;
 	mpint *u, *v, *t;
+
+	// one number cannot be both results: the second written won, the
+	// quotient or the remainder by the path taken
+	if(quotient != nil && quotient == remainder)
+		sysfatal("mpdiv: quotient and remainder are one number");
+
+	// the results' signs, from the operands before either may have
+	// been written as a result.  The quotient's was only ever set to
+	// -1 (6/3 into a number that had held -5 was -2), and a quotient
+	// written over the dividend gave its sign to the remainder
+	qsign = dividend->sign == divisor->sign? 1: -1;
+	rsign = dividend->sign;
 
 	// divide bv zero, however the zero is written.  only top was
 	// looked at, and a divisor whose top digit is zero (a number made
@@ -31,6 +43,12 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 		return;
 	}
 
+	// room in the results before anything is made: see mpreserve
+	if(quotient != nil)
+		mpreserve(quotient, mpsizebits((vlong)dividend->top+2, 0, "mpdiv"));
+	if(remainder != nil)
+		mpreserve(remainder, mpsizebits((vlong)dividend->top+2, 0, "mpdiv"));
+
 	// quick check
 	if(mpmagcmp(dividend, divisor) < 0){
 		if(remainder != nil)
@@ -45,13 +63,24 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 	qd = divisor->p[divisor->top-1];
 	for(s = 0; (qd & mpdighi) == 0; s++)
 		qd <<= 1;
-	u = mpnew((dividend->top+2)*Dbits + s);
-	if(s == 0 && divisor != quotient && divisor != remainder) {
+	// the three working numbers together, each with all the room it
+	// will use, or none of them (a raise for the second lost the first)
+	u = mptrynew(mpsizebits((vlong)dividend->top+2, s, "mpdiv"));
+	v = divisor;
+	if(!(s == 0 && divisor != quotient && divisor != remainder))
+		v = mptrynew((divisor->top+1)*Dbits);
+	t = mptrynew(4*Dbits);	// storage for multiplies
+	if(u == nil || v == nil || t == nil){
+		mpfree(u);
+		if(v != divisor)
+			mpfree(v);
+		mpfree(t);
+		sysfatal("mpdiv: no memory");
+	}
+	if(v == divisor)
 		mpassign(dividend, u);
-		v = divisor;
-	} else {
+	else{
 		mpleft(dividend, s, u);
-		v = mpnew(divisor->top*Dbits);
 		mpleft(divisor, s, v);
 	}
 	up = u->p+u->top-1;
@@ -63,9 +92,6 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 		*++up = 0;
 		u->top++;
 	}
-
-	// storage for multiplies
-	t = mpnew(4*Dbits);
 
 	qp = nil;
 	if(quotient != nil){
@@ -110,8 +136,8 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 	}
 	if(qp != nil){
 		mpnorm(quotient);
-		if(dividend->sign != divisor->sign)
-			quotient->sign = -1;
+		if(quotient->top != 0)
+			quotient->sign = qsign;
 	}
 
 	if(remainder != nil){
@@ -120,7 +146,7 @@ mpdiv(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder)
 		// it was a zero less than zero, to which mpmod then added the
 		// modulus (-6 mod 3 was 3)
 		if(remainder->top != 0)
-			remainder->sign = dividend->sign;
+			remainder->sign = rsign;
 		else
 			remainder->sign = 1;
 	}

@@ -13,7 +13,7 @@ void
 mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
 {
 	mpint *u, *A, *B, *C, *D;
-	int g;
+	int g, atop, btop;
 
 	if(a->sign < 0 || b->sign < 0){
 		mpassign(mpzero, v);
@@ -22,14 +22,25 @@ mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
 		return;
 	}
 
-	if(a->top == 0){
+	// zero digits above a number are not the number: a zero written
+	// with digits passed these tests, and the loops below, which look
+	// at the low digit, halved it for ever
+	atop = a->top;
+	while(atop > 0 && a->p[atop-1] == 0)
+		atop--;
+	btop = b->top;
+	while(btop > 0 && b->p[btop-1] == 0)
+		btop--;
+	if(atop == 0){
 		mpassign(b, v);
+		mpnorm(v);
 		mpassign(mpone, y);
 		mpassign(mpzero, x);
 		return;
 	}
-	if(b->top == 0){
+	if(btop == 0){
 		mpassign(a, v);
+		mpnorm(v);
 		mpassign(mpone, x);
 		mpassign(mpzero, y);
 		return;
@@ -38,6 +49,8 @@ mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
 	g = 0;
 	a = mpcopy(a);
 	b = mpcopy(b);
+	a->top = atop;
+	b->top = btop;
 
 	while(iseven(a) && iseven(b)){
 		mpright(a, 1, a);

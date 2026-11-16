@@ -54,7 +54,8 @@ from16(char *a, mpint *b)
 	for(p = a; *p; p++)
 		if(tab.t16[*(uchar*)p] == INVAL)
 			break;
-	mpbits(b, (p-a)*4);
+	// the digits' bits were an int: see dat.h
+	mpbits(b, mpsizebits(0, (vlong)(p-a)*4, "strtomp"));
 	b->top = 0;
 	next = p;
 	while(p > a){
@@ -62,7 +63,7 @@ from16(char *a, mpint *b)
 		for(i = 0; i < Dbits; i += 4){
 			if(p <= a)
 				break;
-			x |= tab.t16[*(uchar*)--p]<<i;
+			x |= (mpdigit)tab.t16[*(uchar*)--p]<<i;
 		}
 		b->p[b->top++] = x;
 	}
@@ -73,15 +74,43 @@ static ulong mppow10[] = {
 	1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000
 };
 
+// b = b*m + a, in place; b has room for a digit more
+static void
+muladd(mpint *b, ulong m, ulong a)
+{
+	uvlong x;
+	int i;
+
+	x = a;
+	for(i = 0; i < b->top; i++){
+		x += (uvlong)b->p[i]*m;
+		b->p[i] = x;
+		x >>= Dbits;
+	}
+	if(x != 0)
+		b->p[b->top++] = x;
+}
+
 static char*
 from10(char *a, mpint *b)
 {
 	ulong x, y;
 	mpint *pow, *r;
+	char *p;
 	int i;
 
-	pow = mpnew(0);
-	r = mpnew(0);
+	// room for all of it first: four bits a digit is more than enough
+	// (and the count of them an int's worth: see dat.h)
+	for(p = a; tab.t10[*(uchar*)p] != INVAL; p++)
+		;
+	mpbits(b, mpsizebits(1, (vlong)(p-a)*4, "strtomp"));
+
+	pow = nil;
+	r = nil;
+	if(Dbits > 32){
+		pow = mpnew(0);
+		r = mpnew(0);
+	}
 
 	b->top = 0;
 	for(;;){
@@ -98,11 +127,15 @@ from10(char *a, mpint *b)
 		if(i == 0)
 			break;
 
-		// accumulate into mpint
-		uitomp(mppow10[i], pow);
-		uitomp(x, r);
-		mpmul(b, pow, b);
-		mpadd(b, r, b);
+		// accumulate into mpint.  (mpmul and mpadd did it, with a
+		// copy of the number made and freed for every nine digits)
+		if(Dbits > 32){
+			uitomp(mppow10[i], pow);
+			uitomp(x, r);
+			mpmul(b, pow, b);
+			mpadd(b, r, b);
+		}else
+			muladd(b, mppow10[i], x);
 		if(i != 9)
 			break;
 	}
@@ -120,12 +153,16 @@ from64(char *a, mpint *b)
 
 	for(; tab.t64[*(uchar*)a] != INVAL; a++)
 		;
+	mpsizebits(0, (vlong)(a-buf)*6, "strtomp");
 	n = a-buf;
-	mpbits(b, n*6);
 	p = malloc(n);
 	if(p == nil)
-		return a;
+		return buf;	// no number read: it was "a number", of whatever b held
 	m = dec64(p, n, buf, n);
+	if(m < 0){
+		free(p);
+		return buf;
+	}
 	betomp(p, m, b);
 	free(p);
 	return a;
@@ -138,14 +175,22 @@ from32(char *a, mpint *b)
 	uchar *p;
 	int n, m;
 
-	for(; tab.t64[*(uchar*)a] != INVAL; a++)
+	// base 32's own digits (base 64's were looked for, and the ones
+	// that are not base 32's read as zeros)
+	for(; tab.t32[*(uchar*)a] != INVAL; a++)
 		;
+	mpsizebits(0, (vlong)(a-buf)*5, "strtomp");
 	n = a-buf;
-	mpbits(b, n*5);
 	p = malloc(n);
 	if(p == nil)
-		return a;
+		return buf;	// see from64
 	m = dec32(p, n, buf, n);
+	if(m < 0){
+		// not a length base 32 has (1, 3 or 6 digits past a multiple
+		// of 8): dec32's -1 went to betomp as a count of bytes
+		free(p);
+		return buf;
+	}
 	betomp(p, m, b);
 	free(p);
 	return a;
@@ -204,8 +249,11 @@ strtomp(char *a, char **pp, int base, mpint *b)
 		return nil;
 	}
 
+	// zero has no sign: "-0" was a zero that equalled no zero and
+	// printed as it was read
 	mpnorm(b);
-	b->sign = sign;
+	if(b->top != 0)
+		b->sign = sign;
 	if(pp != nil)
 		*pp = e;
 

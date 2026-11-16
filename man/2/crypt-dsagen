@@ -87,6 +87,32 @@ decrypts
 using private key
 .IR sk .
 The result is again returned as an IPint.
+.PP
+A message, ciphertext or signature must be a number from 0 to one less
+than the key's modulus (RFC 8017): for any other the operations have no
+result, and a signature does not verify.
+.B Rsadecrypt
+and signing check their result against the public key before returning it,
+and have none when the private key's parts do not agree.
+.B Rsafill
+returns nil when
+.I p
+and
+.I q
+are equal or not prime, a value is negative, or the values are not one key's.
+A key's numbers may be at most 65536 bits long.
+The
+.B RSApk
+and
+.B RSAsk
+adts of
+.IR keyring-0intro (2)
+are the same functions:
+.BR encrypt ,
+.B decrypt
+and
+.B sign
+return nil where there is no result.
 .SH SEE ALSO
 .IR crypt-gensk (2),
 .IR crypt-sha1 (2),

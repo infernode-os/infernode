@@ -184,6 +184,7 @@ TARG=\
 	keyring_args_test.dis\
 	ipint_edge_test.dis\
 	ipint_size_test.dis\
+	keyring_rsa_test.dis\
 	namec_clone_test.dis\
 	nil_far_test.dis\
 	slice_end_test.dis\

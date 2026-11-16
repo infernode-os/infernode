@@ -24,8 +24,16 @@ dsasign(DSApriv *priv, mpint *m)
 		if((mpcmp(mpone, k) > 0) || (mpcmp(k, pub->q) >= 0))
 			continue;
 		mpextendedgcd(k, q, r, kinv, s);
-		if(mpcmp(r, mpone) != 0)
+		if(mpcmp(r, mpone) != 0){
+			// (what is held, given back first: the raise lost it,
+			// 800 bytes of the kernel's pool a call)
+			mpfree(qm1);
+			mpfree(k);
+			mpfree(kinv);
+			mpfree(r);
+			mpfree(s);
 			sysfatal("dsasign: pub->q not prime");
+		}
 		break;
 	}
 

@@ -218,7 +218,10 @@ rsa_verify(mpint* m, void *sig, void *key)
 	mpint *t;
 	int r;
 
+	/* nil for a signature outside 0..n-1 (RFC 8017 5.2.2): none */
 	t = rsaencrypt((RSApub*)key, (mpint*)sig, nil);
+	if(t == nil)
+		return 0;
 	r = mpcmp(t, m) == 0;
 	mpfree(t);
 	return r;

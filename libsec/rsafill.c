@@ -8,6 +8,22 @@ rsafill(mpint *n, mpint *e, mpint *d, mpint *p, mpint *q)
 	mpint *c2, *kq, *kp, *x;
 	RSApriv *rsa;
 
+	// The parts are the caller's, a Limbo program's through
+	// RSAsk.fill.  A negative p or q raised in probably_prime where nil
+	// is the refusal, and negative e or d made a key every use of
+	// which raised; p equal to q has no CRT coefficient, and mpinvert
+	// raised for it with x and c2 made and nothing to free them: 768
+	// bytes of the kernel's pool a call, for good.  (RFC 8017 3.2: the
+	// primes are distinct.)
+	if(n->sign < 0 || e->sign < 0 || d->sign < 0 || p->sign < 0 || q->sign < 0){
+		werrstr("rsafill: negative number");
+		return nil;
+	}
+	if(mpcmp(p, q) == 0){
+		werrstr("rsafill: p == q");
+		return nil;
+	}
+
 	// make sure we're not being hoodwinked
 	if(!probably_prime(p, 10) || !probably_prime(q, 10)){
 		werrstr("rsafill: p or q not prime");
@@ -33,12 +49,23 @@ rsafill(mpint *n, mpint *e, mpint *d, mpint *p, mpint *q)
 		return nil;
 	}
 
-	// compute chinese remainder coefficient
-	mpinvert(p, q, c2);
-
-	// for crt a**k mod p == (a**(k mod p-1)) mod p
+	// compute chinese remainder coefficient.  p and q are only
+	// probably prime: if p has no inverse mod q this is no key (not
+	// mpinvert's raise, with these numbers held)
 	kq = mpnew(0);
 	kp = mpnew(0);
+	mpextendedgcd(p, q, kq, c2, kp);
+	if(mpcmp(kq, mpone) != 0){
+		werrstr("rsafill: p has no inverse mod q");
+		mpfree(x);
+		mpfree(c2);
+		mpfree(kq);
+		mpfree(kp);
+		return nil;
+	}
+	mpmod(c2, q, c2);
+
+	// for crt a**k mod p == (a**(k mod p-1)) mod p
 	mpsub(p, mpone, x);
 	mpmod(d, x, kp);
 	mpsub(q, mpone, x);

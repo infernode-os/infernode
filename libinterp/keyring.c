@@ -1133,6 +1133,11 @@ Keyring_sign(void *fp)
 	acquire();
 	c->signa = signa;
 	mpfree(b);
+	/* no signature made (an RSA key whose parts do not agree): no certificate */
+	if(signa == nil){
+		*f->ret = H;
+		destroy(c);
+	}
 }
 
 void
@@ -1166,6 +1171,11 @@ Keyring_signm(void *fp)
 	signa = (*vec->sign)(b, sk->key);
 	acquire();
 	c->signa = signa;
+	/* see Keyring_sign */
+	if(signa == nil){
+		*f->ret = H;
+		destroy(c);
+	}
 }
 
 static int
@@ -3395,15 +3405,32 @@ exponentok(mpint *e)
 		error(exBadKey);
 }
 
+/*
+ * And their length: a key's numbers and what it is used on are IPints,
+ * which may be megabytes, and libsec's time grows as the cube of a
+ * modulus's length with nothing to end it sooner (see libinterp/ipint.c).
+ * None is longer than a key the generators here make.
+ */
+static mpint*
+keynum(void *ip)
+{
+	mpint *b;
+
+	b = checkIPint(ip);
+	if(mpsignif(b) > Maxgenbits)
+		error(exBadKey);
+	return b;
+}
+
 static void
 dsapk2pub(DSApub* p, Keyring_DSApk* pk)
 {
 	if(pk == H)
 		error(exNilref);
-	p->p = checkIPint(pk->p);
-	p->q = checkIPint(pk->q);
-	p->alpha = checkIPint(pk->alpha);
-	p->key = checkIPint(pk->key);
+	p->p = keynum(pk->p);
+	p->q = keynum(pk->q);
+	p->alpha = keynum(pk->alpha);
+	p->key = keynum(pk->key);
 	modulusok(p->p);
 	modulusok(p->q);
 }
@@ -3428,7 +3455,7 @@ dsask2priv(DSApriv* p, Keyring_DSAsk* sk)
 		error(exNilref);
 	dsapk2pub(&p->pub, sk->pk);
 	dsagenok(&p->pub);
-	p->secret = checkIPint(sk->secret);
+	p->secret = keynum(sk->secret);
 }
 
 static void
@@ -3489,7 +3516,7 @@ DSAsk_sign(void *fp)
 	destroy(v);
 
 	dsask2priv(&p, f->k);
-	m = checkIPint(f->m);
+	m = keynum(f->m);
 	release();
 	s = dsasign(&p, m);
 	acquire();
@@ -3511,9 +3538,9 @@ DSApk_verify(void *fp)
 	if(f->m == H || f->sig == H)
 		return;
 	dsapk2pub(&p, f->k);
-	sig.r = checkIPint(f->sig->r);
-	sig.s = checkIPint(f->sig->s);
-	m = checkIPint(f->m);
+	sig.r = keynum(f->sig->r);
+	sig.s = keynum(f->sig->s);
+	m = keynum(f->m);
 	release();
 	*f->ret = dsaverify(&p, &sig, m) == 0;
 	acquire();
@@ -3524,9 +3551,9 @@ egpk2pub(EGpub* p, Keyring_EGpk* pk)
 {
 	if(pk == H)
 		error(exNilref);
-	p->p = checkIPint(pk->p);
-	p->alpha = checkIPint(pk->alpha);
-	p->key = checkIPint(pk->key);
+	p->p = keynum(pk->p);
+	p->alpha = keynum(pk->alpha);
+	p->key = keynum(pk->key);
 	modulusok(p->p);
 }
 
@@ -3539,7 +3566,7 @@ egsk2priv(EGpriv* p, Keyring_EGsk* sk)
 	/* egsign looks for a k from 1 to p-2: see dsagenok */
 	if(mpcmp(p->pub.p, mptwo) <= 0)
 		error(exBadKey);
-	p->secret = checkIPint(sk->secret);
+	p->secret = keynum(sk->secret);
 }
 
 static void
@@ -3598,7 +3625,7 @@ EGsk_sign(void *fp)
 	destroy(v);
 
 	egsk2priv(&p, f->k);
-	m = checkIPint(f->m);
+	m = keynum(f->m);
 	release();
 	s = egsign(&p, m);
 	acquire();
@@ -3620,9 +3647,9 @@ EGpk_verify(void *fp)
 	if(f->m == H || f->sig == H)
 		return;
 	egpk2pub(&p, f->k);
-	sig.r = checkIPint(f->sig->r);
-	sig.s = checkIPint(f->sig->s);
-	m = checkIPint(f->m);
+	sig.r = keynum(f->sig->r);
+	sig.s = keynum(f->sig->s);
+	m = keynum(f->m);
 	if(sig.s->sign < 0 || m->sign < 0)
 		return;	/* exponents, to egverify: no signature */
 	release();
@@ -3636,8 +3663,8 @@ rsapk2pub(RSApub* p, Keyring_RSApk* pk)
 	if(pk == H)
 		error(exNilref);
 	memset(p, 0, sizeof(*p));
-	p->n = checkIPint(pk->n);
-	p->ek = checkIPint(pk->ek);
+	p->n = keynum(pk->n);
+	p->ek = keynum(pk->ek);
 	modulusok(p->n);
 	exponentok(p->ek);
 }
@@ -3648,12 +3675,12 @@ rsask2priv(RSApriv* p, Keyring_RSAsk* sk)
 	if(sk == H || sk->pk == H)
 		error(exNilref);
 	rsapk2pub(&p->pub, sk->pk);
-	p->dk = checkIPint(sk->dk);
-	p->p = checkIPint(sk->p);
-	p->q = checkIPint(sk->q);
-	p->kp = checkIPint(sk->kp);
-	p->kq = checkIPint(sk->kq);
-	p->c2 = checkIPint(sk->c2);
+	p->dk = keynum(sk->dk);
+	p->p = keynum(sk->p);
+	p->q = keynum(sk->q);
+	p->kp = keynum(sk->kp);
+	p->kq = keynum(sk->kq);
+	p->c2 = keynum(sk->c2);
 	modulusok(p->p);
 	modulusok(p->q);
 	exponentok(p->kp);
@@ -3690,11 +3717,13 @@ RSApk_encrypt(void *fp)
 	destroy(v);
 
 	rsapk2pub(&p, f->k);
-	m = checkIPint(f->m);
+	m = keynum(f->m);
 	release();
 	o = rsaencrypt(&p, m, nil);
 	acquire();
-	*f->ret = newIPint(o);
+	/* nil for an m outside 0..n-1 (RFC 8017 5.1.1) */
+	if(o != nil)
+		*f->ret = newIPint(o);
 }
 
 void
@@ -3731,6 +3760,7 @@ RSAsk_fill(void *fp)
 	F_RSAsk_fill *f;
 	Keyring_RSAsk *sk;
 	RSApriv *p;
+	mpint *n, *e, *d, *pp, *q;
 	void *v;
 
 	f = fp;
@@ -3739,9 +3769,14 @@ RSAsk_fill(void *fp)
 	sk->pk = newthing(TRSApk, 0);
 	*f->ret = sk;
 	destroy(v);
+	/* (the parts were looked at with the VM let go) */
+	n = keynum(f->n);
+	e = keynum(f->e);
+	d = keynum(f->d);
+	pp = keynum(f->p);
+	q = keynum(f->q);
 	release();
-	p = rsafill(checkIPint(f->n), checkIPint(f->e), checkIPint(f->d),
-			checkIPint(f->p), checkIPint(f->q));
+	p = rsafill(n, e, d, pp, q);
 	acquire();
 	if(p == nil) {
 		*f->ret = H;
@@ -3766,11 +3801,13 @@ RSAsk_decrypt(void *fp)
 	destroy(v);
 
 	rsask2priv(&p, f->k);
-	m = checkIPint(f->m);
+	m = keynum(f->m);
 	release();
 	o = rsadecrypt(&p, m, nil);
 	acquire();
-	*f->ret = newIPint(o);
+	/* nil for an m outside 0..n-1, or a key whose parts do not agree */
+	if(o != nil)
+		*f->ret = newIPint(o);
 }
 
 void
@@ -3789,10 +3826,16 @@ RSAsk_sign(void *fp)
 	destroy(v);
 
 	rsask2priv(&p, f->k);
-	m = checkIPint(f->m);
+	m = keynum(f->m);
 	release();
 	s = rsadecrypt(&p, m, nil);
 	acquire();
+	/* see RSAsk_decrypt: no signature */
+	if(s == nil){
+		*f->ret = H;
+		destroy(sig);
+		return;
+	}
 	sig->n = newIPint(s);
 }
 
@@ -3808,11 +3851,12 @@ RSApk_verify(void *fp)
 	if(f->m == H || f->sig == H)
 		return;
 	rsapk2pub(&p, f->k);
-	sig = checkIPint(f->sig->n);
-	m = checkIPint(f->m);
+	sig = keynum(f->sig->n);
+	m = keynum(f->m);
 	release();
 	t = rsaencrypt(&p, sig, nil);
-	*f->ret = mpcmp(t, m) == 0;
+	/* nil for a signature outside 0..n-1 (RFC 8017 5.2.2): none */
+	*f->ret = t != nil && mpcmp(t, m) == 0;
 	mpfree(t);
 	acquire();
 }

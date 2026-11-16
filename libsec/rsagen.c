@@ -47,6 +47,11 @@ rsagen(int nlen, int elen, int rounds)
 	}
 	mpfree(t1);
 	mpfree(t2);
+	// the gcd's coefficient is negative as often as not: d is the
+	// least positive one (RFC 8017 3.2), the number a key's text holds
+	// (a negative d was written as its magnitude, which is not e's
+	// inverse, and rsafill refused the key rsagen had made)
+	mpmod(d, phi, d);
 
 	// compute chinese remainder coefficient
 	c2 = mpnew(0);

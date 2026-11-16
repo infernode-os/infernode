@@ -1359,7 +1359,8 @@ Crypt_verify(void *fp)
 			sig = MPX(f->sig->u.RSA.n);
 			release();
 			t = rsaencrypt(&p, sig, nil);
-			*f->ret = mpcmp(t, m) == 0;
+			/* nil for a signature outside 0..n-1 */
+			*f->ret = t != nil && mpcmp(t, m) == 0;
 			mpfree(t);
 			acquire();
 		}

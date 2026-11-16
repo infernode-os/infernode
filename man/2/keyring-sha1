@@ -106,6 +106,10 @@ It returns a certificate containing the digital signature of the digest, signer 
 If any parameter is invalid,
 .B sign
 returns nil.
+It also returns nil when an RSA key makes no signature:
+the digest, as a number, is not below the key's modulus,
+or the key's parts do not agree
+(the signature is checked against the public key before it is returned).
 The signature algorithm is implied by the type of the private key.
 .PP
 .B Verify

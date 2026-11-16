@@ -233,57 +233,214 @@ docompose(text: string): string
 		return "error: compose needs composition text (';' separates lines)";
 	# The ctl-line transport is single-line; accept ';' as a line
 	# separator when the text carries no real newlines.
-	if(!contains(text, "\n")) {
-		out := "";
-		(nil, parts) := sys->tokenize(text, ";");
-		for(; parts != nil; parts = tl parts)
-			out += strip(hd parts) + "\n";
-		text = out;
-	}
+	text = normalizecompose(text);
+	if(len text == 0 || text[len text - 1] != '\n')
+		text += "\n";
 	cerr := agentcomposepolicy(text);
 	if(cerr != nil)
 		return "error: " + cerr;
+	# The runtime takes a composition as one 9P message.  A longer one
+	# was sent as several, and each could be taken for a composition of
+	# its own: its lines as checked above were not the lines loaded.
+	if(len array of byte text > MAXCOMPOSE)
+		return sys->sprint("error: composition too long (%d bytes; the limit is %d)",
+			len array of byte text, MAXCOMPOSE);
 	if(writestr(MATRIX + "/composition", text) < 0)
 		return sys->sprint("error: composition write failed: %r");
-	return "composition written; reload applied.\n\n" + readfile(MATRIX + "/composition");
+	# The runtime loads it after the write returns, and keeps the old
+	# one if it does not parse: say which happened.  (It said "reload
+	# applied" whatever the runtime did.)
+	live := "";
+	for(i := 0; i < 50; i++) {
+		live = readfile(MATRIX + "/composition");
+		if(same(live, text))
+			return "composition written; reload applied.\n\n" + live;
+		sys->sleep(100);
+	}
+	return "error: composition written, but the runtime has not loaded it " +
+		"(a line it does not accept, or a reload still running); the live composition is:\n\n" + live;
 }
 
+MAXCOMPOSE: con 7000;
+
+same(a, b: string): int
+{
+	return strip(a) == strip(b);
+}
+
+# What an agent may compose.  The runtime's grammar (matrixlib) is the
+# guide, read as strictly as the runtime reads it: a line is a comment,
+# a layout, a split of a region, a display module in a region, a service,
+# a watch or one of its arms, and anything else is refused.  (Only lines
+# that began "service", "layout" or "watch", in those letters, were
+# looked at; the rest was let through, and arms with a blank in them,
+# which is most, were refused as display modules.)
+#
+# A composition is written into Matrix's name space, which is the
+# user's, and two kinds of line bring something of it back to the agent:
+# a service, whose outputs the agent reads with "out", and a watch,
+# whose arms tell it what a file holds.  Both may name only Matrix's own
+# data, /tmp/matrix, or be a line the live composition already has: a
+# grant the user loaded (ctl load <name>) may be kept, not made.  A
+# service was refused the mount / and given any other: /prog, the whole
+# process table, /mnt/llm.  Hosting an app is never an agent's line.
 agentcomposepolicy(text: string): string
 {
 	text = normalizecompose(text);
+	live := "";
+	if(running())
+		live = readfile(MATRIX + "/composition");
+	inwatch := 0;
 	(nil, lines) := sys->tokenize(text, "\n");
 	for(; lines != nil; lines = tl lines) {
 		line := strip(hd lines);
 		if(line == "" || line[0] == '#')
 			continue;
-		(nil, toks) := sys->tokenize(line, " \t");
-		if(toks == nil)
-			continue;
+		for(ci := 0; ci < len line; ci++)
+			if(line[ci] < ' ' && line[ci] != '\t')
+				return "control text in a composition line";
+		if(inwatch) {
+			a := findarrow(line);
+			if(a >= 0) {
+				if(strip(line[0:a]) == "")
+					return "watch arm with no pattern";
+				aerr := validaction(strip(line[a+2:]));
+				if(aerr != nil)
+					return aerr;
+				continue;
+			}
+			inwatch = 0;
+		}
+		(n, toks) := sys->tokenize(line, " \t");
 		first := hd toks;
 		rest := tl toks;
-		if(first == "service") {
-			if(len rest != 2)
+		case first {
+		"watch" =>
+			if(n != 2)
+				return "watch needs: path";
+			if(!safeabspath(hd rest))
+				return "unsafe watch path";
+			if(!matrixdata(hd rest) && !haslive(live, line))
+				return "an agent's watch reads Matrix's own data (/tmp/matrix/...): " + hd rest;
+			inwatch = 1;
+		"layout" =>
+			if(n != 4 || !orient(hd rest) || !ratio(hd tl rest) || !ratio(hd tl tl rest))
+				return "layout needs: hsplit|vsplit ratio ratio";
+		"service" =>
+			if(n != 3)
 				return "service needs: name mount";
-			if(len rest >= 1 && !safeleaf(hd rest))
-				return "unsafe service module name";
-			if(len rest >= 2 && hd tl rest == "/")
-				return "service whole-namespace grants are not agent-composeable";
-			if(len rest >= 2 && !safeabspath(hd tl rest))
-				return "unsafe service mount path";
-			continue;
-		}
-		if(first == "layout" || first == "watch")
-			continue;
-		if(rest != nil && hd rest == "app")
-			return "app hosting is not agent-composeable";
-		if(rest != nil && tl rest != nil) {
-			if(len rest != 2)
-				return "display module needs: name mount";
 			if(!safeleaf(hd rest))
-				return "unsafe matrix module name";
-			if(!safeabspath(hd tl rest))
-				return "unsafe matrix mount path";
+				return "unsafe service module name";
+			mount := hd tl rest;
+			if(!safeabspath(mount))
+				return "unsafe service mount path";
+			if(mount == "/" && !haslive(live, line))
+				return "service whole-namespace grants are not agent-composeable " +
+					"(one the live composition already has may be kept: ctl load <name> first)";
+			if(!matrixdata(mount) && !haslive(live, line))
+				return "service mount " + mount + " is not agent-composeable: an agent's service " +
+					"mounts Matrix's own data (/tmp/matrix/...), or is one the live composition " +
+					"already has (load a library composition first: ctl load <name>)";
+		* =>
+			if(!saferegion(first))
+				return "unrecognized line: " + line;
+			if(rest != nil && hd rest == "app")
+				return "app hosting is not agent-composeable";
+			if(n == 4 && orient(hd rest)) {
+				if(!ratio(hd tl rest) || !ratio(hd tl tl rest))
+					return first + ": split needs: hsplit|vsplit ratio ratio";
+			} else if(n == 3) {
+				if(!safeleaf(hd rest))
+					return "unsafe matrix module name";
+				if(!safeabspath(hd tl rest))
+					return "unsafe matrix mount path";
+			} else
+				return "display module needs: region name mount";
 		}
+	}
+	return nil;
+}
+
+# Under Matrix's own data directory, where its services write.
+matrixdata(path: string): int
+{
+	d := "/tmp/matrix";
+	return path == d || hasprefix(path, d + "/");
+}
+
+# The live composition has this line (its words, whatever the blanks).
+haslive(live, line: string): int
+{
+	(nil, want) := sys->tokenize(line, " \t");
+	(nil, lines) := sys->tokenize(live, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(nil, got) := sys->tokenize(hd lines, " \t");
+		w := want;
+		for(; got != nil && w != nil && hd got == hd w; got = tl got)
+			w = tl w;
+		if(got == nil && w == nil)
+			return 1;
+	}
+	return 0;
+}
+
+orient(s: string): int
+{
+	return s == "hsplit" || s == "vsplit";
+}
+
+ratio(s: string): int
+{
+	if(s == "" || len s > 4)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+# left, right, top, bottom, and the halves of a split region: left/top
+saferegion(s: string): int
+{
+	(nil, parts) := sys->tokenize(s, "/");
+	if(parts == nil || s[0] == '/' || s[len s - 1] == '/' || contains(s, "//"))
+		return 0;
+	for(; parts != nil; parts = tl parts)
+		case hd parts {
+		"left" or "right" or "top" or "bottom" =>
+			;
+		* =>
+			return 0;
+		}
+	return 1;
+}
+
+findarrow(s: string): int
+{
+	for(i := 0; i + 1 < len s; i++)
+		if(s[i] == '-' && s[i+1] == '>')
+			return i;
+	return -1;
+}
+
+# A watch arm's action: what the runtime's ctl takes, and notify.
+validaction(act: string): string
+{
+	(n, toks) := sys->tokenize(act, " \t");
+	if(n == 0)
+		return "watch arm with no action";
+	case hd toks {
+	"load" or "pin" =>
+		if(n != 2 || !safeleaf(hd tl toks))
+			return hd toks + " needs one composition name";
+	"unload" =>
+		if(n != 1)
+			return "unload takes no arguments";
+	"notify" =>
+		if(n < 2)
+			return "notify needs a message";
+	* =>
+		return "unknown watch action: " + hd toks;
 	}
 	return nil;
 }
@@ -362,17 +519,25 @@ running(): int
 	return ok >= 0;
 }
 
+# The most of a file that is given to the model: a service's output can
+# be of any length, or never end.
+MAXREAD: con 256*1024;
+
 readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r", path);
 	result := "";
+	total := 0;
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
+		total += n;
+		if(total > MAXREAD)
+			return result + sys->sprint("\n[cut at %d bytes]\n", MAXREAD);
 		result += string buf[0:n];
 	}
 	return result;

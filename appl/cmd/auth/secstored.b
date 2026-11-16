@@ -126,6 +126,14 @@ auditlog(source, event, msg: string): int
 	return audit->log(source, event, msg);
 }
 
+# a name the client claimed, as one value of a record
+auditval(s: string): string
+{
+	if(audit == nil)
+		return "";
+	return audit->value(s);
+}
+
 # auditrequired reports whether this install opted into auditing (the
 # marker audit-setup / AUDITMODE creates). If so, the completeness
 # contract applies: an authentication that cannot be sealed into the
@@ -208,7 +216,7 @@ notefail(user: string)
 	if(nf == Maxfail){
 		log(sys->sprint("account %s locked after %d failed attempts (%ds cooldown)", user, nf, Locksecs));
 		auditlog("secstore", "authlock",
-			sys->sprint("user=%s fails=%d locksecs=%d", user, nf, Locksecs));
+			sys->sprint("user=%s fails=%d locksecs=%d", auditval(user), nf, Locksecs));
 	}
 }
 
@@ -322,14 +330,14 @@ serve(lconn: ref Dial->Connection)
 	if(user == nil){
 		log("PAK auth failed");
 		if(claimed != nil)
-			auditlog("secstore", "authfail", "user=" + claimed);
+			auditlog("secstore", "authfail", "user=" + auditval(claimed));
 		else
 			auditlog("secstore", "authfail", "");
 		return;
 	}
 
 	log("authenticated: " + user);
-	if(auditlog("secstore", "authok", "user=" + user) < 0 && auditrequired()){
+	if(auditlog("secstore", "authok", "user=" + auditval(user)) < 0 && auditrequired()){
 		log("audit sink unavailable — refusing session (fail-closed)");
 		return;
 	}
@@ -414,7 +422,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	if(rem > 0){
 		log(sys->sprint("rejected locked account %s (%ds remaining)", C, rem));
 		writerr(fd, sys->sprint("account locked; retry in %ds", rem));
-		auditlog("secstore", "authlock", sys->sprint("user=%s reason=throttled remaining=%d", C, rem));
+		auditlog("secstore", "authlock", sys->sprint("user=%s reason=throttled remaining=%d", auditval(C), rem));
 		return (nil, nil, C);
 	}
 
@@ -442,7 +450,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	if(m == nil || m.cmp(IPint.inttoip(0)) <= 0 || m.cmp(params.p) >= 0){
 		log(sys->sprint("rejected m outside the group for %s", C));
 		writerr(fd, "bad m");
-		auditlog("secstore", "authfail", sys->sprint("user=%s reason=badm", C));
+		auditlog("secstore", "authfail", sys->sprint("user=%s reason=badm", auditval(C)));
 		notefail(C);
 		return (nil, nil, C);
 	}

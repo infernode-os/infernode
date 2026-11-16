@@ -227,6 +227,9 @@ DYNMOD:	con	1<<3;
 HASLDT0:	con	1<<4;
 HASEXCEPT:	con	1<<5;
 HASLDT:	con	1<<6;
+HASSIGS:	con	1<<7;	# a digest of each link's and import's type, after the source path
+
+SIGDLEN:	con	32;	# SHA-256 of a signature's text
 
 DMAX:		con 1 << 4;
 

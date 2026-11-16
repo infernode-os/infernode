@@ -38,6 +38,8 @@ include "lucitheme.m";
 WmWallet: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
+	# what the approver is shown for one line of /mnt/wallet/pending
+	pendingdesc: fn(ln: string): (string, list of string);
 };
 
 Command: module
@@ -94,6 +96,7 @@ statusfg: string;	# status-strip foreground
 WALLET: con "/mnt/wallet";
 LBLW:   con "12w";	# width of the aligned label column, in characters
 			# (pixels cut the labels off on a 3x display)
+PENDW:  con 24;		# characters of a pending payment's value on one line
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -271,6 +274,23 @@ buildpending()
 	tk->cmd(top, "label " + r + ".title -text {Pending Payments}");
 	tk->cmd(top, "pack " + r + ".title -side top -anchor w -padx 12 -pady {8 4}");
 
+	tk->cmd(top, "button " + r + ".back -text {Back} -command {send act cancel}");
+	tk->cmd(top, "pack " + r + ".back -side top -anchor w -padx 12 -pady {0 4}");
+
+	# The payments scroll: each is several lines now, and those past
+	# the bottom of the window must still be reachable to be read.
+	pv := r + ".pv";
+	rows := pv + ".c.f";
+	tk->cmd(top, "frame " + pv);
+	tk->cmd(top, "scrollbar " + pv + ".sb -command {" + pv + ".c yview}");
+	tk->cmd(top, "canvas " + pv + ".c -borderwidth 0 -background " + bgc +
+		" -yscrollcommand {" + pv + ".sb set}");
+	tk->cmd(top, "frame " + rows);
+	tk->cmd(top, pv + ".c create window 0 0 -window " + rows + " -anchor nw");
+	tk->cmd(top, "pack " + pv + ".sb -side right -fill y");
+	tk->cmd(top, "pack " + pv + ".c -side left -fill both -expand 1");
+	tk->cmd(top, "pack " + pv + " -side top -fill both -expand 1");
+
 	raw := readwalletfile("", "pending");
 	(nil, lines) := sys->tokenize(raw, "\n");
 	nrows := 0;
@@ -278,43 +298,106 @@ buildpending()
 		ln := strip(hd lines);
 		if(ln == "" || ln == "(none)")
 			continue;
-		# "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
-		(ntoks, toks) := sys->tokenize(ln, " \t");
-		if(ntoks < 7)
+		(id, desc) := pendingdesc(ln);
+		if(id == nil)
 			continue;
-		id := hd toks;
-		kind := hd tl toks;
-		acct := hd tl tl toks;
-		token := hd tl tl tl toks;
-		amount := hd tl tl tl tl toks;
-		recip := hd tl tl tl tl tl toks;
-		net := hd tl tl tl tl tl tl toks;
 
-		# The network is part of what is being approved: the same
-		# amount settles very differently on a testnet and on mainnet.
-		desc := acct + ": " + amount + " " + token + " -> " + recip + " [" + net + "]";
-		if(kind == "x402")
-			desc = acct + ": x402 " + amount + " of " + token + " -> " + recip + " [" + net + "]";
-		if(len desc > 76)
-			desc = desc[0:76] + "...";
-
-		f := r + sys->sprint(".p%d", nrows);
+		# One label a line, the buttons under them: nothing shares a
+		# row with a value, so nothing of it is cut off. The text is
+		# quoted: a Stripe description is the requester's words, and a
+		# brace in it used to spoil the row.
+		f := rows + sys->sprint(".p%d", nrows);
 		tk->cmd(top, "frame " + f);
-		tk->cmd(top, "label " + f + ".l -text {#" + id + " " + desc + "}");
-		tk->cmd(top, "button " + f + ".ok -text {Approve} -command {send act approve " + id + "}");
-		tk->cmd(top, "button " + f + ".no -text {Deny} -command {send act deny " + id + "}");
-		tk->cmd(top, "pack " + f + ".l -side left -padx {12 8}");
-		tk->cmd(top, "pack " + f + ".no -side right -padx {4 12}");
-		tk->cmd(top, "pack " + f + ".ok -side right -padx 4");
-		tk->cmd(top, "pack " + f + " -side top -fill x -pady 2");
+		i := 0;
+		for(; desc != nil; desc = tl desc){
+			l := f + sys->sprint(".l%d", i++);
+			tk->cmd(top, "label " + l + " -anchor w -text " + tk->quote(hd desc));
+			tk->cmd(top, "pack " + l + " -side top -anchor w -padx {12 8}");
+		}
+		tk->cmd(top, "frame " + f + ".b");
+		tk->cmd(top, "button " + f + ".b.ok -text {Approve} -command {send act approve " + id + "}");
+		tk->cmd(top, "button " + f + ".b.no -text {Deny} -command {send act deny " + id + "}");
+		tk->cmd(top, "pack " + f + ".b.ok -side left -padx {12 4}");
+		tk->cmd(top, "pack " + f + ".b.no -side left -padx 4");
+		tk->cmd(top, "pack " + f + ".b -side top -anchor w -pady 2");
+		tk->cmd(top, "pack " + f + " -side top -fill x -pady 4");
 		nrows++;
 	}
 	if(nrows == 0){
-		tk->cmd(top, "label " + r + ".none -text {No pending payments} -foreground " + dim);
-		tk->cmd(top, "pack " + r + ".none -side top -anchor w -padx 12 -pady 8");
+		tk->cmd(top, "label " + rows + ".none -text {No pending payments} -foreground " + dim);
+		tk->cmd(top, "pack " + rows + ".none -side top -anchor w -padx 12 -pady 8");
 	}
-	tk->cmd(top, "button " + r + ".back -text {Back} -command {send act cancel}");
-	tk->cmd(top, "pack " + r + ".back -side top -anchor w -padx 12 -pady {8 4}");
+	tk->cmd(top, "update");
+	tk->cmd(top, pv + ".c configure -scrollregion {0 0 [" + rows + " cget -width] [" +
+		rows + " cget -height]}");
+}
+
+#
+# What is shown for one line of pending,
+#	id kind acct token amount payee network agent
+# The approver's word is given on this text, so it holds every field
+# whole: the payee, the amount and the network each begin a line of
+# their own, and a value too long for the pane goes on over further
+# lines. It was one line cut at 76 characters, which for every x402
+# authorization left six digits of the payee and no network, and for an
+# amount written with leading zeros (now refused by wallet9p) nothing
+# after the amount.
+#
+# Returns (nil, nil) for a line that is no payment, and for an id that
+# is not a number (it goes into the buttons' commands).
+#
+pendingdesc(ln: string): (string, list of string)
+{
+	if(sys == nil)
+		sys = load Sys Sys->PATH;
+	(ntoks, toks) := sys->tokenize(ln, " \t\r\n");
+	if(ntoks < 7)
+		return (nil, nil);
+	id := hd toks;
+	for(i := 0; i < len id; i++)
+		if(id[i] < '0' || id[i] > '9')
+			return (nil, nil);
+	kind := hd tl toks;
+	acct := hd tl tl toks;
+	token := hd tl tl tl toks;
+	amount := hd tl tl tl tl toks;
+	recip := hd tl tl tl tl tl toks;
+	net := hd tl tl tl tl tl tl toks;
+
+	what := "payment";
+	if(kind == "x402")
+		what = "x402 authorization";
+	else if(kind != "pay")
+		what = kind;
+	l := wraplines("#" + id + " " + what + " from ", acct, nil);
+	l = wraplines("amount ", amount, l);
+	l = wraplines("of ", token, l);
+	l = wraplines("to ", recip, l);
+	# The network is part of what is being approved: the same
+	# amount settles very differently on a testnet and on mainnet.
+	l = wraplines("on ", net, l);
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return (id, r);
+}
+
+# label and the whole of val, PENDW characters of it to a line, put on
+# the front of l (which is built last line first)
+wraplines(label, val: string, l: list of string): list of string
+{
+	pre := label;
+	for(;;){
+		n := len val;
+		if(n > PENDW)
+			n = PENDW;
+		l = (pre + val[0:n]) :: l;
+		val = val[n:];
+		if(val == "")
+			break;
+		pre = "    ";
+	}
+	return l;
 }
 
 doapprove(id: string)

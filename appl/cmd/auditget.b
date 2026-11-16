@@ -63,7 +63,10 @@ init(nil: ref Draw->Context, args: list of string)
 		got := ap->sha256(data);
 		if(got != sha)
 			fail("sha256 mismatch: payload " + got + ", record " + sha);
-	}
+	} else
+		# the score is SHA-1: what it names is not thereby what
+		# the chain sealed
+		sys->fprint(sys->fildes(2), "auditget: not checked against a record's sha256 (give -s)\n");
 	for(o := 0; o < len data; ) {
 		n := sys->write(sys->fildes(1), data[o:], len data - o);
 		if(n <= 0)

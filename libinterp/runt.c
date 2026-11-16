@@ -555,7 +555,7 @@ builtinmod(char *name, void *vr, int rlen)
 	}
 	while(r->name) {
 		t = dtype(freeheap, r->size, r->map, r->np);
-		runtime(m, l, r->name, r->sig, r->fn, t);
+		runtime(m, l, r->name, r->sig, r->dig, r->fn, t);
 		r++;
 		l++;
 	}

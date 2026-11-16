@@ -114,13 +114,15 @@ exec(args: string): string
 	if(fd == nil)
 		return sys->sprint("error: cannot create %s: %r", path);
 
+	# The file was emptied when it was created: a write that fails leaves
+	# it without what it held, and that is said.
 	data := array of byte content;
 	n := sys->write(fd, data, len data);
 	if(n < 0)
-		return sys->sprint("error: write failed: %r");
+		return sys->sprint("error: write to %s failed (%r): the file is now empty; write it again", path);
 
 	if(n != len data)
-		return sys->sprint("error: partial write (%d of %d bytes)", n, len data);
+		return sys->sprint("error: write to %s stopped at %d of %d bytes: the file holds only that much; write it again", path, n, len data);
 
 	return sys->sprint("wrote %d bytes to %s", n, path);
 }

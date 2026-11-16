@@ -36,9 +36,7 @@ tool-result call_error_streak_3_0:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 83 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_error_streak_0_0:read:{"args"\: "/usr/agentloop/missing1"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_error_streak_0_0:read:{"args"\: "/usr/agentloop/missing1"}\n
   | tool read: args {"args": "/usr/agentloop/missing1"}
   | tool read: calling with 35 bytes
   | tool read: done, error: cannot open /usr/agentloop/missing1: '/usr/agentloop/missing1' file does not exist
@@ -47,9 +45,7 @@ tool-result call_error_streak_3_0:
   | stream: done (0 chunks, 0 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 83 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_error_streak_1_0:read:{"args"\: "/usr/agentloop/missing2"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_error_streak_1_0:read:{"args"\: "/usr/agentloop/missing2"}\n
   | tool read: args {"args": "/usr/agentloop/missing2"}
   | tool read: calling with 35 bytes
   | tool read: done, error: cannot open /usr/agentloop/missing2: '/usr/agentloop/missing2' file does not exist
@@ -58,9 +54,7 @@ tool-result call_error_streak_3_0:
   | stream: done (0 chunks, 0 bytes)
   | step 3: waiting for LLM response...
   | step 3: LLM response 83 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_error_streak_2_0:read:{"args"\: "/usr/agentloop/missing3"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_error_streak_2_0:read:{"args"\: "/usr/agentloop/missing3"}\n
   | tool read: args {"args": "/usr/agentloop/missing3"}
   | tool read: calling with 35 bytes
   | tool read: done, error: cannot open /usr/agentloop/missing3: '/usr/agentloop/missing3' file does not exist
@@ -69,9 +63,7 @@ tool-result call_error_streak_3_0:
   | stream: done (0 chunks, 0 bytes)
   | step 4: waiting for LLM response...
   | step 4: LLM response 83 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_error_streak_3_0:read:{"args"\: "/usr/agentloop/missing4"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_error_streak_3_0:read:{"args"\: "/usr/agentloop/missing4"}\n
   | tool read: args {"args": "/usr/agentloop/missing4"}
   | tool read: calling with 35 bytes
   | tool read: done, error: cannot open /usr/agentloop/missing4: '/usr/agentloop/missing4' file does not exist
@@ -80,7 +72,5 @@ tool-result call_error_streak_3_0:
   | stream: done (1 chunks, 10 bytes)
   | step 5: waiting for LLM response...
   | step 5: LLM response 25 bytes
-  | llm: STOP:end_turn
-  | Giving up.
-  | 
+  | llm: STOP:end_turn\nGiving up.\n
   | turn done stop=end_turn steps=5

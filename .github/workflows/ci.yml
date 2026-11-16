@@ -153,7 +153,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -811,6 +811,8 @@ jobs:
               statcheck_bounds_test tools9p_env_isolation_test
               tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
               tls_clientauth_test ssl_killedcall_test vid9p_hangup_test httpd_test httpd_auth_test
+              charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
+              matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
@@ -821,7 +823,7 @@ jobs:
               usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
               usbxhci_trblen_test ip6reasm_test ipifc_guard_test devip_guard_test tcp_isn_test
               bt9p_selftest_test
-              export_limits_test devip_conv_test arpadd_test factotum_persist_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test
+              export_limits_test devip_conv_test arpadd_test factotum_persist_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test link_digest_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
@@ -835,6 +837,8 @@ jobs:
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
               write_capability_test xenith_build_test werc_test charon_werc_test
+              git_tool_test exec_fd_test limbo_tool_test lucibridge_promote_test lucibridge_turn_test
+              spawn_life_test spawn_provenance_test tools9p_call_test nsaudit_truth_test default_budget_test
     permissions:
       contents: read
     env:
@@ -883,7 +887,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1030,7 +1034,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1232,7 +1236,8 @@ jobs:
             xenith_event_test xenith_image_test xenith_browse_test \
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
-            xenith_race_test xenith_doc_test xenith_wrap_test; do
+            xenith_race_test xenith_doc_test xenith_wrap_test \
+            xenith_ctlcut_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1374,7 +1379,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1603,7 +1608,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1975,7 +1980,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi

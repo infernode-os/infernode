@@ -304,6 +304,11 @@ init()
 	cnsasetup();
 
 	#
+	# Strict linking, if the card asks for it (strictlinksetup).
+	#
+	strictlinksetup();
+
+	#
 	# The radio's firmware lives on the card just mounted. The kernel
 	# names no path: this is where the paths come from.
 	#
@@ -2725,6 +2730,29 @@ cnsasetup()
 	if(fd == nil || sys->fprint(fd, "1") < 0)
 		sys->print("init: cnsamode: /env/cnsamode: %r\n");
 	sys->print("init: cnsamode: CNSA 2.0 strict (ML-KEM-1024) for every authentication\n");
+}
+
+#
+# Strict linking. A file /n/dos/strictlink (its contents are not read)
+# makes the kernel refuse to link a module that has no type digests
+# (dis(6)), as emu -L does: a module from before the compiler wrote
+# them, or one not made by the compiler, is then not checked by its
+# 32-bit signatures, which do not tell two types apart, but refused.
+# Everything on a card built from this tree has them. One way, for the
+# whole machine (os/port/devcons.c). No file, no change.
+#
+Strictlinkfile: con "/n/dos/strictlink";
+
+strictlinksetup()
+{
+	if(sys->stat(Strictlinkfile).t0 < 0)
+		return;
+	fd := sys->open("#c/strictlink", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "1") < 0){
+		sys->print("init: strictlink: the kernel refused strict linking: %r\n");
+		return;
+	}
+	sys->print("init: strictlink: modules without type digests are refused\n");
 }
 
 rootpolicy()

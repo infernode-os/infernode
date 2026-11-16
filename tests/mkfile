@@ -16,6 +16,7 @@ TARG=\
 	nmea_test.dis\
 	gdl90_test.dis\
 	gps_capability_test.dis\
+	audit_canon_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
 	auditsign_test.dis\
@@ -56,6 +57,7 @@ TARG=\
 	concurrency_test.dis\
 	casel_test.dis\
 	cowfs_test.dis\
+	cowfs_control_test.dis\
 	cut_test.dis\
 	dhcp_test.dis\
 	errlabel_leak_test.dis\
@@ -95,6 +97,9 @@ TARG=\
 	memfs_test.dis\
 	font_format_test.dis\
 	git_test.dis\
+	git_hostile_test.dis\
+	limbo_tool_test.dis\
+	tools_truth_test.dis\
 	goroutine_leak_test.dis\
 	hello_test.dis\
 	appfs_fake.dis\
@@ -120,6 +125,7 @@ TARG=\
 	lock_stress_test.dis\
 	pgrp_race_test.dis\
 	spawn_budget_test.dis\
+	spawnfake.dis\
 	plan_test.dis\
 	rfc3339_test.dis\
 	spawn_exec_test.dis\
@@ -143,6 +149,17 @@ TARG=\
 	print_edge_test.dis\
 	math_edge_test.dis\
 	alt_edge_test.dis\
+	toolcall.dis\
+	tls_closeread_test.dis\
+	llmclient_edge_test.dis\
+	fetchtools_edge_test.dis\
+	fakecs.dis\
+	webclient_body_test.dis\
+	webclient_deadline_test.dis\
+	veltro_coord_test.dis\
+	link_digest_test.dis\
+	link_digest_a.dis\
+	link_digest_b.dis\
 	keyring_args_test.dis\
 	ipint_edge_test.dis\
 	namec_clone_test.dis\
@@ -154,6 +171,8 @@ TARG=\
 	geom_edge_test.dis\
 	pool_nomem_helper.dis\
 	print_heapfull.dis\
+	tool9call.dis\
+	exec_fd_probe.dis\
 	load_heapfull.dis\
 	load_heapfull_mod.dis\
 	jit_4gb.dis\
@@ -179,25 +198,33 @@ TARG=\
 	llmclient_anthropic_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
+	keyring_tool_test.dis\
 	ipint_expmod_test.dis\
 	mail_provision_test.dis\
 	lists_test.dis\
 	lucifer_flicker_test.dis\
 	lucifer_zorder_test.dis\
 	mail9p_test.dis\
+	mc9p_http_test.dis\
 	msg_approval_test.dis\
+	msg9p_stream_test.dis\
 	msg_badsrc.dis\
 	msg_capability_test.dis\
 	msg_inject_test.dis\
 	msg_notification_escape_test.dis\
+	msg_probesrc.dis\
 	msg_register_test.dis\
 	msg_triage_test.dis\
 	ninepsrc_config_test.dis\
+	ninepsrc_watch_test.dis\
 	lucifer_winstart_test.dis\
 	lucitheme_test.dis\
 	rlayout_test.dis\
 	mdfmt_test.dis\
 	luciuisrv_test.dis\
+	luciuisrv_frame_test.dis\
+	lucictx_click_test.dis\
+	xenith_tool_test.dis\
 	grpwait_test.dis\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\
@@ -225,6 +252,7 @@ TARG=\
 	sed_test.dis\
 	sort_test.dis\
 	spawn_test.dis\
+	speech9p_say_test.dis\
 	task_concurrent_probe.dis\
 	task_consistency_test.dis\
 	taskparse_test.dis\
@@ -234,6 +262,7 @@ TARG=\
 	memdraw_far_test.dis\
 	strcat_test.dis\
 	string_test.dis\
+	taskboard9p_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
 	textwidget_test.dis\
@@ -284,6 +313,11 @@ TARG=\
 	veltro_present_security_test.dis\
 	veltro_more_tools_test.dis\
 	veltro_security_test.dis\
+	veltro_store_test.dis\
+	veltro_child_test.dis\
+	newns_test.dis\
+	subagent_edge_test.dis\
+	subagent_tool.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
 	veltro_edit_test.dis\
@@ -521,6 +555,8 @@ SYSMODULES=\
 	mdhtml.m\
 	crc.m\
 	pngload.m\
+	newns.m\
+	audit.m\
 
 DISBIN=$ROOT/dis/tests
 
@@ -577,6 +613,13 @@ tooluse_test.dis: tooluse_test.b $ROOT/module/agentlib.m
 # tooldoc_test needs -I for appl/veltro (tool.m)
 tooldoc_test.dis: tooldoc_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tooldoc_test.b
+
+# subagent_edge_test and its tool need -I for appl/veltro/{subagent,tool}.m
+subagent_edge_test.dis: subagent_edge_test.b $ROOT/appl/veltro/subagent.m $ROOT/appl/veltro/tool.m
+	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw subagent_edge_test.b
+
+subagent_tool.dis: subagent_tool.b $ROOT/appl/veltro/tool.m
+	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw subagent_tool.b
 
 # tool_schema_test (INFR-126) needs -I for appl/veltro/{agentlib,tool}.m
 tool_schema_test.dis: tool_schema_test.b $ROOT/module/agentlib.m $ROOT/appl/veltro/tool.m

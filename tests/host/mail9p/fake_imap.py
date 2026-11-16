@@ -10,9 +10,28 @@
 # another until killed.  Every command is written to --log, a line each,
 # LOGIN's password left out.
 #
-# usage: fake_imap.py --mode tls|starttls|refuse --cert C --key K --log F
+# With --expunge FILE (tests/host/msg_email_bind_test.sh): when FILE
+# appears holding a UID, that message is gone before the next command and
+# the ones after it have moved down a sequence number, as a session sees
+# after another client's expunge.  SEARCH UID n answers with the
+# message's sequence number.
+#
+# usage: fake_imap.py --mode tls|starttls|refuse --cert C --key K --log F [--expunge FILE]
 
-import argparse, socket, ssl, sys, threading
+import argparse, os, socket, ssl, sys, threading
+
+EXPUNGE = None
+
+
+def expunge():
+    if EXPUNGE is None or not os.path.exists(EXPUNGE):
+        return
+    try:
+        uid = int(open(EXPUNGE).read().strip())
+    except ValueError:
+        return
+    os.remove(EXPUNGE)
+    MSGS[:] = [m for m in MSGS if m["uid"] != uid]
 
 MSGS = [
     {"uid": 101, "flags": ["\\Seen"],
@@ -80,6 +99,7 @@ class Session:
             else:
                 self.log.write("%s %s\n" % (cmd, args))
             self.log.flush()
+            expunge()
             if not self.command(tag, cmd, args):
                 return
 
@@ -122,6 +142,11 @@ class Session:
                     b = b[:b.index(b"\r\n\r\n") + 4]
                 self.send(b"* %d FETCH (%s {%d}\r\n" % (i, what.encode(), len(b)) + b + b")\r\n")
             self.send("%s OK FETCH completed\r\n" % tag)
+        elif cmd == "SEARCH" and args.upper().startswith("UID "):
+            hits = [str(i + 1) for i, m in enumerate(MSGS)
+                    if str(m["uid"]) == args.split(" ", 1)[1].strip()]
+            self.send("* SEARCH%s\r\n" % "".join(" " + h for h in hits))
+            self.send("%s OK SEARCH completed\r\n" % tag)
         elif cmd == "SEARCH":
             hits = [str(i + 1) for i, m in enumerate(MSGS)
                     if args.upper().startswith("FROM ")
@@ -156,7 +181,10 @@ def main():
     ap.add_argument("--cert", required=True)
     ap.add_argument("--key", required=True)
     ap.add_argument("--log", required=True)
+    ap.add_argument("--expunge")
     a = ap.parse_args()
+    global EXPUNGE
+    EXPUNGE = a.expunge
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)
     log = open(a.log, "a")

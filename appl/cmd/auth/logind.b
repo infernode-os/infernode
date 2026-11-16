@@ -159,7 +159,7 @@ dologin(c: ref Sys->Connection): string
 		return "login throttle: " + terr;
 	if(rem > 0){
 		sys->fprint(stderr, "logind: refused %q: locked for %ds more\n", name, rem);
-		auditlog("authlock", sys->sprint("user=%q reason=throttled remaining=%d", name, rem));
+		auditlog("authlock", sys->sprint("user=%s reason=throttled remaining=%d", auditval(name), rem));
 		return sys->sprint("login refused: too many failed attempts; retry in %ds", rem);
 	}
 
@@ -183,7 +183,7 @@ dologin(c: ref Sys->Connection): string
 		why = sys->sprint("expiry time for %s: %r", s);
 	if(why != nil){
 		sys->fprint(stderr, "logind: %s; answered as a wrong password\n", why);
-		auditlog("authfail", sys->sprint("user=%q reason=unusable", name));
+		auditlog("authfail", sys->sprint("user=%s reason=unusable", auditval(name)));
 		# the DRBG (#c/notquiterandom): ReallyRandom takes seconds, a
 		# delay a wrong password does not have
 		pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
@@ -410,6 +410,15 @@ auditlog(event, msg: string)
 		audit->log("logind", event, msg);
 }
 
+# a name the client sent, as one value of a record: quoted, it still read
+# as more fields when it held a blank and a key of its own
+auditval(s: string): string
+{
+	if(audit == nil)
+		return "";
+	return audit->value(s);
+}
+
 # Count an attempt for key: the seconds it is still refused for (and
 # then it is not counted), or 0 and the attempt counted. Counts reach
 # Maxfail at most, and only one at Maxfail is refused.
@@ -434,7 +443,7 @@ charge(name, key: string): (int, string)
 			e.until = e.last + Locksecs;
 			if(e.until > now){
 				sys->fprint(stderr, "logind: %q locked after %d attempts not proving the password (%ds)\n", name, e.fails, Locksecs);
-				auditlog("authlock", sys->sprint("user=%q fails=%d locksecs=%d", name, e.fails, Locksecs));
+				auditlog("authlock", sys->sprint("user=%s fails=%d locksecs=%d", auditval(name), e.fails, Locksecs));
 				err = storefails(fl);
 				if(err != nil)
 					return (0, err);

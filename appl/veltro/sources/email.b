@@ -10,6 +10,17 @@ implement EmailSrc;
 #   server=imap.example.com
 #   folder=INBOX                   (default: INBOX)
 #   smtpserver=smtp.example.com    (default: same as server)
+# A server is a host, or host!port.
+#
+# A message's id is "<uidvalidity>.<uid>": the mailbox's UIDVALIDITY and
+# the message's UID, which name one message for as long as the mailbox
+# keeps that UIDVALIDITY (RFC 3501 2.3.1.1). It was the sequence number,
+# which every expunge moves: a reply drafted against message 7 and
+# approved after the user had deleted an earlier message was addressed to
+# the sender of what had become message 7, and a flag set there too.
+# Each use finds the message's sequence number afresh (SEARCH UID), and
+# refuses if the message has gone or the mailbox's ids are no longer the
+# ones the id was made from.
 #
 
 include "sys.m";
@@ -102,7 +113,7 @@ init(config: string): string
 	factotum = load Factotum Factotum->PATH;
 	if(factotum != nil) {
 		factotum->init();
-		(u, nil) := factotum->getuserpasswd("proto=pass service=imap dom=" + imapserver);
+		(u, nil) := factotum->getuserpasswd("proto=pass service=imap dom=" + hostof(imapserver));
 		if(u != nil)
 			fromaddr = u;
 	}
@@ -322,7 +333,7 @@ fetchandnotify(seq: int, updates: chan of ref Notification)
 imaptomsg(m: ref Msg): ref Message
 {
 	msg := ref Message;
-	msg.id = string m.seq;
+	msg.id = msgid(m);
 	msg.source = "email";
 	msg.channel = folder;
 	msg.flags = 0;
@@ -409,9 +420,9 @@ fetch(id: string): (ref Message, string)
 	if(err != nil)
 		return (nil, err);
 
-	seq := int id;
-	if(seq <= 0)
-		return (nil, "invalid message id");
+	(seq, rerr) := resolve(id);
+	if(rerr != nil)
+		return (nil, rerr);
 
 	# Get envelope
 	(msgs, merr) := imap->msglist(seq, seq);
@@ -508,7 +519,7 @@ send(msg: ref Message): string
 	smtpuser := sender;
 	smtppass := "";
 	if(factotum != nil) {
-		(su, sp) := factotum->getuserpasswd("proto=pass service=smtp dom=" + smtpserver);
+		(su, sp) := factotum->getuserpasswd("proto=pass service=smtp dom=" + hostof(smtpserver));
 		if(su != nil) {
 			smtpuser = su;
 			smtppass = sp;
@@ -527,6 +538,77 @@ send(msg: ref Message): string
 	return nil;
 }
 
+#
+# The id of a message: "<uidvalidity>.<uid>", or nil if the server gave
+# no UID for it (then it cannot be named, and so not answered or flagged).
+#
+msgid(m: ref Msg): string
+{
+	if(m.uid <= 0 || currentmbox == nil || currentmbox.uidvalidity <= 0)
+		return nil;
+	return string currentmbox.uidvalidity + "." + string m.uid;
+}
+
+#
+# The sequence number, now, of the message an id names. The two FETCHes
+# and the SEARCH a caller makes with it are commands during which a
+# server may not renumber (RFC 3501 7.4.1), so the number holds for them.
+#
+resolve(id: string): (int, string)
+{
+	(vs, us) := str->splitl(id, ".");
+	if(us == nil || !alldigits(vs) || !alldigits(us[1:]))
+		return (0, "invalid message id (it is <uidvalidity>.<uid>, as the message's notification gave it)");
+	uv := int vs;
+	uid := int us[1:];
+	if(uv <= 0 || uid <= 0)
+		return (0, "invalid message id");
+	if(currentmbox == nil || currentmbox.uidvalidity != uv)
+		return (0, "message " + id + " cannot be named any more: the mailbox's ids have changed");
+	(seqs, serr) := imap->search("UID " + string uid);
+	if(serr != nil)
+		return (0, serr);
+	if(seqs == nil)
+		return (0, "message " + id + " is no longer in " + folder);
+	seq := hd seqs;
+	(msgs, merr) := imap->msglist(seq, seq);
+	if(merr != nil)
+		return (0, merr);
+	if(msgs == nil || (hd msgs).uid != uid)
+		return (0, "message " + id + " is no longer in " + folder);
+	return (seq, nil);
+}
+
+alldigits(s: string): int
+{
+	if(s == nil || len s > 10)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+# the host of host!port
+hostof(server: string): string
+{
+	(h, nil) := str->splitl(server, "!");
+	return h;
+}
+
+# The address in a From header: what is between < and >, else the header.
+addrof(from: string): string
+{
+	for(i := 0; i < len from; i++)
+		if(from[i] == '<') {
+			for(j := i + 1; j < len from; j++)
+				if(from[j] == '>')
+					return from[i+1:j];
+			break;
+		}
+	return from;
+}
+
 # reply: reply to a message preserving threading
 reply(origid, body: string): string
 {
@@ -537,9 +619,9 @@ reply(origid, body: string): string
 	if(err != nil)
 		return err;
 
-	seq := int origid;
-	if(seq <= 0)
-		return "invalid message id";
+	(seq, rerr) := resolve(origid);
+	if(rerr != nil)
+		return "reply not sent: " + rerr;
 
 	# Fetch original headers for threading
 	(hdr, herr) := imap->fetchhdr(seq);
@@ -552,6 +634,11 @@ reply(origid, body: string): string
 	origrefs := extractheader(hdr, "References");
 
 	if(origfrom == nil || origfrom == "")
+		return "cannot determine sender of original message";
+	# the envelope's recipient is an address, not the header's text
+	# ("Name <user@host>" went into RCPT TO whole)
+	rcpt := addrof(origfrom);
+	if(rcpt == "" || hasctl(rcpt))
 		return "cannot determine sender of original message";
 
 	# Build reply subject
@@ -571,8 +658,10 @@ reply(origid, body: string): string
 		refs += origmsgid;
 	}
 
-	# Get sender identity
-	sender := readfile("/dev/user");
+	# Get sender identity: the account's address, as send uses
+	sender := fromaddr;
+	if(sender == nil || sender == "")
+		sender = readfile("/dev/user");
 	if(sender == nil)
 		sender = "inferno";
 
@@ -595,20 +684,43 @@ reply(origid, body: string): string
 	for(; lines != nil; lines = tl lines)
 		rlines = hd lines :: rlines;
 
-	(ok, serr) := smtp->open(smtpserver);
+	# Submitted as send submits: authenticated, over TLS. It was a
+	# connection in clear to port 25 with nothing to authenticate it,
+	# which the servers send's comment names refuse.
+	smtpuser := sender;
+	smtppass := "";
+	if(factotum != nil) {
+		(su, sp) := factotum->getuserpasswd("proto=pass service=smtp dom=" + hostof(smtpserver));
+		if(su != nil) {
+			smtpuser = su;
+			smtppass = sp;
+		}
+	}
+	(ok, serr) := smtp->authopen(smtpuser, smtppass, smtpserver, Smtp->IMPLICIT_TLS);
 	if(ok < 0)
 		return "SMTP connect: " + serr;
 
-	(ok, serr) = smtp->sendmail(sender, origfrom :: nil, nil, rlines);
+	(ok, serr) = smtp->sendmail(smtpuser, rcpt :: nil, nil, rlines);
 	smtp->close();
 
 	if(ok < 0)
 		return "reply failed: " + serr;
 
-	# Mark as answered
-	imap->store(seq, Imap->FANSWERED, 1);
+	# Mark as answered: the message's number is found again, as other
+	# commands have been issued since
+	(seq, rerr) = resolve(origid);
+	if(rerr == nil)
+		imap->store(seq, Imap->FANSWERED, 1);
 
 	return nil;
+}
+
+hasctl(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7f)
+			return 1;
+	return 0;
 }
 
 # setflag: set/clear message flags
@@ -618,9 +730,9 @@ setflag(id: string, flag, add: int): string
 	if(err != nil)
 		return err;
 
-	seq := int id;
-	if(seq <= 0)
-		return "invalid message id";
+	(seq, rerr) := resolve(id);
+	if(rerr != nil)
+		return rerr;
 
 	# Map MsgSrc flags to IMAP flags
 	imapflags := 0;

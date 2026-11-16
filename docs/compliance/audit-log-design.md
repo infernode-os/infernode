@@ -123,8 +123,20 @@ seq  time        source   event      hash             message
 ```
 - `seq` decimal, **server-assigned** monotonic (caller can't forge order).
 - `time` **server-assigned** epoch seconds (caller can't backdate; text, so `date` converts).
-- `source` short tag; `event` verb; `message` free `key=value` remainder (server escapes newlines
-  and forces source/event to single tokens).
+- `source` short tag; `event` verb; `message` free `key=value` remainder.
+- **One canonical text.** Whatever a writer sent, the server puts the record in one form
+  before it hashes it (`Auditchain->text`, `token`): every character that is no visible mark
+  — CR, LF, tab and the other controls, the Unicode spaces and line separators, the characters
+  that reorder a line on display — is a blank; runs of blanks are one; there is none at either
+  end; the first two words are the source and the event. What is hashed, what is stored and
+  what a replay reads are then the same bytes, and a line of the file is a record only if it
+  is exactly the line the server writes for its fields (`Auditchain->parse`). (Before, the
+  record was hashed with CR/LF turned to blanks and replayed with runs of blanks made one: a
+  CR beside a blank in any field — a tool name a model chose, a user name a peer sent — left
+  a record no replay could verify.) One write is one record, at most 4096 bytes.
+- A value that is not the emitter's own text is written with `Auditchain->value`
+  (`AuditProv->value` for a provenance record):
+  blanks, controls, `=` and `%` as `%XX`, so it is one word and carries no `key=` of its own.
 - `hash` = the chain hash for that record (see §5). The caller writes only `source event msg`.
 - Record 1 of every server run is `auditfs start host=<sysname> replay=ok|broken@<n>`:
   restarts are visible in the trail, and a log is readably bound to its host.
@@ -152,9 +164,24 @@ seq  time        source   event      hash             message
   signature and at least one must be present. Rationale: the chain holds no secret, so a
   privileged rewrite can recompute every hash — the signatures are the only thing it cannot
   mint, so tolerating their absence would hand the attacker a clean bypass.
+- **Continuity:** a record follows from the one before it only if it carries the next
+  sequence number and the hash of the chain so far; a checkpoint must name the head and the
+  sequence number just before it. The server's replay and `auditverify` hold a file to both.
 - **Startup:** the server recomputes the chain from the backing file (**failing loud** on a
   break) and seals an `auditfs start` record carrying the replay outcome. While running,
   `verify` re-replays the file and reports `diverged` if it no longer matches the live tip.
+- **A file that does not verify** (an edit, a record cut short by a crash) is still served and
+  still appended to — a log that stops taking records stops every fail-closed writer — but
+  not as though it verified: the start record says `replay=broken@<n>`; sequence numbers go
+  on from the highest in the file, never one already there; the chain goes on from the last
+  record's *stored* hash, so what is added is bound to the file as it was found and an edit
+  made later is told from the break that was known (`diverged`); `verify` and `auditverify`
+  go on reporting the break (the verifier reads past it, resuming from each broken record's
+  stored hash, to count the breaks); and **no checkpoint is signed** over such a history,
+  since a signed root says the tip covers every record before it. To have signed roots
+  again the operator sets the file aside, as evidence, and starts a new one. (Before, a
+  server started on a broken file took the chain's state from *before* the break and appended
+  at the end: records numbered as ones already in the file, on a branch no verifier reached.)
 - **Bounded tail (honest residual):** records after the last signed checkpoint are chain-
   protected but not yet anchored; the built-in cadence bounds the window to
   min(`CHECKEVERY` records, `CHECKMS`).
@@ -177,6 +204,7 @@ seq  time        source   event      hash             message
 | In-namespace process / malicious agent edits past entries | Can't — only `log` is bound; can't reach `chain`. Append-only. |
 | Forges ordering / backdates | Can't — server assigns seq + time. |
 | Writer mints a fake `checkpoint` record through `log` | Can't — the event is reserved; the write errors. |
+| Writer (or text a writer seals for someone else: a model's tool name, a peer's user name) breaks the chain, or splits a record, with control characters or length | Can't — the record is made canonical before it is hashed, and a write longer than a record is refused whole. |
 | Privileged host edits the raw backing file | **Detected** — chain + externally-anchored signed checkpoint don't match. Live edits also surface as `diverged` on `verify`. (Tamper-evident, not tamper-proof — see `prior-art`.) |
 | Rewrites the whole chain to stay consistent (hashes recomputed) | Must forge a signed checkpoint (key in factotum, ideally hardware-gated) — can't. **Requires the strict verifier**: `auditverify -k` refuses unsigned or missing checkpoints, so stripping them doesn't help. |
 | Truncates the tail (chain-valid by construction) | **Detected against an off-host `head` copy** (`auditverify -a`); the signed cadence bounds the loss window. Not detectable from the file alone — honest residual. |
@@ -210,6 +238,11 @@ spawns) dropped in **without reworking the spine**, exactly as designed:
    mjl's public-domain GSoC 2007 ventivac work — the server the in-tree vac stack always
    referenced) as a vac hash tree, and the record carries
    `content=<score> sha256=<hex> size=<n>` (`auditprov(2)`; read back with `auditget(1)`).
+   Those keys are the emitter's: `auditprov` writes each once, and a word of the caller's
+   message that begins with one — or with any key the message gives twice — is written as
+   text, not as a field, so a tool name of the model's choosing cannot put its own
+   `content=` or `sha256=` in a sealed record, nor a second `status=` beside the harness's.
+   A caller writes text that is not its own with `value()`, and then it can add no field.
    The chain line stays tiny, identical content dedupes, and the sensitive payload is
    separable from the broadly-auditable trail (confidentiality/minimization).
    **The SHA-256 pin is deliberate:** venti scores are SHA-1, which is collision-broken, so

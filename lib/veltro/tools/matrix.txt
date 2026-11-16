@@ -5,7 +5,7 @@ composition, compose, ctl, out.
 Examples on this tool:
   args = "index"
   args = "man cpu-gauge"
-  args = "compose service sysmon-svc /"
+  args = "ctl load sysmon"
   args = "out sysmon-svc cpu/current"
 
 Matrix loads typed Limbo modules (display and service) described by a
@@ -33,7 +33,8 @@ Runtime:
                        "compose layout hsplit 50 50; left cpu-gauge
                        /tmp/matrix/sysmon-svc; service sysmon-svc /"
                        Unchanged entries keep their live instance
-                       (incremental reload).
+                       (incremental reload). The reply says whether
+                       the runtime loaded it. At most 7000 bytes.
   ctl load <name>      Load a pinned composition by name.
   ctl unload           Unload all modules.
   ctl pin <name>       Save the live composition to the library.
@@ -46,10 +47,17 @@ Composition grammar (one entry per line):
   layout <hsplit|vsplit> <n> <m>     split the pane
   <region> <module> <mount>          display module in a region
   service <name> <mount>             headless service module
+  watch <path>                       then arms: <pattern> -> <action>
+                                     (load <name>, unload, pin <name>,
+                                     notify <message>)
 The mount is the capability grant: a service sees ONLY its mount
-(read-only) and its outdir (read-write). "service foo /" grants the
-whole namespace — grant the narrowest mount that satisfies the
-module's man-page contract.
+(read-only) and its outdir (read-write). You cannot make a grant: a
+service line (and a watch) you compose must mount Matrix's own data,
+/tmp/matrix/..., or be a line the live composition already has. To
+use a service with a wider mount, load the library composition that
+has it (ctl load <name>, then 'composition' shows its lines) and keep
+that service line as it is in what you compose. Hosting an app
+("<region> app ...") is not yours to compose.
 
 Matrix must be running: 'launch matrix' (GUI) or wm/matrix -h
 (headless). Display modules render only in GUI mode; service modules

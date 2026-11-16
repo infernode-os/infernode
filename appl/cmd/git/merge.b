@@ -116,7 +116,7 @@ init(nil: ref Draw->Context, args: list of string)
 			branch, localhash.hex()[:7], targethash.hex()[:7]);
 
 	# Update branch ref
-	git->writeref(gitdir, headref, targethash);
+	check(git->writeref(gitdir, headref, targethash));
 
 	# Checkout new tree
 	(nil, cdata, cerr) := repo.readobj(targethash);
@@ -138,4 +138,11 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/merge: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
 }

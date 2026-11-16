@@ -8,12 +8,20 @@ implement ToolKeyring;
 # needed, but CANNOT access /mnt/factotum/ctl itself — namespace
 # isolation ensures the AI never sees secrets.
 #
+# "check" reads factotum's list of keys (attributes only: factotum
+# never lists a secret) when the tool's name space has factotum, which
+# an agent's does not: there it answers "unknown".  Where it can read
+# the list it answers for a whole service or domain name only; it
+# matched any text after "service=" or "dom=", so a caller could spell
+# out every key's attributes a character at a time.
+#
 # Usage:
 #   keyring open                     Launch the Keyring GUI app
 #   keyring need <description>       Launch Keyring and tell the user
 #                                    what credential is needed
 #   keyring check <service>          Check if a service has credentials
-#                                    configured (returns yes/no, never
+#                                    configured (yes/no, or unknown where
+#                                    the tool cannot see factotum; never
 #                                    reveals the actual key)
 #
 
@@ -59,7 +67,9 @@ doc(): string
 		"Usage:\n" +
 		"  keyring open                       Launch Keyring GUI app\n" +
 		"  keyring need <description>         Launch Keyring and describe what's needed\n" +
-		"  keyring check <service>            Check if credentials exist (yes/no)\n\n" +
+		"  keyring check <service>            Check if credentials exist (yes, no, or\n" +
+		"                                     unknown when factotum is not visible\n" +
+		"                                     to this tool, as it usually is not)\n\n" +
 		"Examples:\n" +
 		"  keyring need email credentials for imap.gmail.com\n" +
 		"  keyring need anthropic API key\n" +
@@ -136,19 +146,30 @@ launchkeyring(): string
 	if(fd == nil)
 		return sys->sprint("error: cannot open presentation/ctl: %r");
 
+	# What is reported is what the UI server said: "launched" was the
+	# answer whatever became of the write.
 	cmd := "create id=keyring type=app dis=/dis/wm/keyring.dis label=keyring";
 	b := array of byte cmd;
-	sys->write(fd, b, len b);
+	already := 0;
+	if(sys->write(fd, b, len b) < 0) {
+		err := sys->sprint("%r");
+		if(!contains(err, "already exists"))
+			return "error: Keyring was not launched: " + err;
+		already = 1;
+	}
 	fd = nil;
 
 	# Center it
 	fd = sys->open(pctl, Sys->OWRITE);
-	if(fd != nil) {
-		b = array of byte "center id=keyring";
-		sys->write(fd, b, len b);
-		fd = nil;
-	}
+	if(fd == nil)
+		return sys->sprint("error: Keyring could not be brought forward: %r");
+	b = array of byte "center id=keyring";
+	if(sys->write(fd, b, len b) < 0)
+		return sys->sprint("error: Keyring could not be brought forward: %r");
+	fd = nil;
 
+	if(already)
+		return "Keyring is already open in the presentation zone; brought forward";
 	return "launched Keyring in presentation zone";
 }
 
@@ -161,7 +182,7 @@ neededcred(desc: string): string
 	if(len r > 5 && r[0:5] == "error")
 		return r;
 
-	return "launched Keyring — please ask the user to add: " + desc + "\n" +
+	return r + " — please ask the user to add: " + desc + "\n" +
 		"The Keyring app is now open in the presentation zone.\n" +
 		"Guide the user: right-click in Keyring to add a new key.";
 }
@@ -170,6 +191,13 @@ checkcred(svc: string): string
 {
 	if(svc == "")
 		return "error: usage: keyring check <service-name>";
+	# one name, of the characters a service or domain name has
+	for(k := 0; k < len svc; k++) {
+		c := svc[k];
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		     (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'))
+			return "error: usage: keyring check <service-name> (one name: letters, digits, . - _)";
+	}
 
 	# We check if factotum has a key for this service by trying
 	# to read the proto list.  We do NOT read actual keys.
@@ -189,15 +217,11 @@ checkcred(svc: string): string
 		all += string buf[0:n];
 	}
 
-	# Search for service=<svc> in the output
-	target := "service=" + svc;
-	if(contains(all, target))
-		return "yes: credentials for '" + svc + "' are configured in factotum";
-
-	# Also check dom= for mail servers
-	target = "dom=" + svc;
-	if(contains(all, target))
-		return "yes: credentials for '" + svc + "' are configured in factotum";
+	# A key whose service or (for mail servers) dom is exactly svc
+	(nil, words) := sys->tokenize(all, " \t\r\n");
+	for(; words != nil; words = tl words)
+		if(hd words == "service=" + svc || hd words == "dom=" + svc)
+			return "yes: credentials for '" + svc + "' are configured in factotum";
 
 	return "no: no credentials found for '" + svc + "' — use 'keyring need' to ask the user to add them";
 }

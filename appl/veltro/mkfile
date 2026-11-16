@@ -82,7 +82,7 @@ agentlib.dis: agentlib.b $MODDIR/agentlib.m $MODDIR/bufio.m $MODDIR/json.m $MODD
 veltro.dis: veltro.b $MODDIR/agentlib.m tool.m $MODDIR/nsconstruct.m veltrosrv.m $MODDIR/arg.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw veltro.b
 
-tools9p.dis: tools9p.b tool.m $MODDIR/arg.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/nsconstruct.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
+tools9p.dis: tools9p.b tool.m $MODDIR/arg.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/nsconstruct.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m $MODDIR/audit.m
 	limbo $LIMBOFLAGS -gw tools9p.b
 
 nsconstruct.dis: nsconstruct.b $MODDIR/nsconstruct.m $MODDIR/audit.m $MODDIR/cowfs.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/keyring.m $MODDIR/sys.m
@@ -146,10 +146,10 @@ tools/edit.dis: tools/edit.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/json.
 tools/exec.dis: tools/exec.b tool.m $MODDIR/draw.m $MODDIR/sh.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/exec.dis tools/exec.b
 
-tools/launch.dis: tools/launch.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
+tools/launch.dis: tools/launch.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/publicnet.m
 	limbo $LIMBOFLAGS -gw -o tools/launch.dis tools/launch.b
 
-tools/spawn.dis: tools/spawn.b tool.m $MODDIR/nsconstruct.m subagent.m $MODDIR/agentlib.m $MODDIR/auditprov.m $MODDIR/bufio.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/json.m $MODDIR/rfc3339.m $MODDIR/string.m $MODDIR/sys.m
+tools/spawn.dis: tools/spawn.b tool.m $MODDIR/nsconstruct.m subagent.m $MODDIR/agentlib.m $MODDIR/auditprov.m $MODDIR/bufio.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/json.m $MODDIR/rfc3339.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/audit.m
 	limbo $LIMBOFLAGS -gw -o tools/spawn.dis tools/spawn.b
 
 tools/xenith.dis: tools/xenith.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
@@ -204,7 +204,7 @@ tools/websearch.dis: tools/websearch.b tool.m $MODDIR/draw.m $MODDIR/factotum.m 
 	limbo $LIMBOFLAGS -gw -o tools/websearch.dis tools/websearch.b
 
 # Browse tool
-tools/browse.dis: tools/browse.b tool.m $MODDIR/draw.m $MODDIR/formatter.m $MODDIR/html.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
+tools/browse.dis: tools/browse.b tool.m $MODDIR/draw.m $MODDIR/formatter.m $MODDIR/html.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m $MODDIR/publicnet.m
 	limbo $LIMBOFLAGS -gw -o tools/browse.dis tools/browse.b
 
 # Charon browser tool

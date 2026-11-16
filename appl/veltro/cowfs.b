@@ -11,7 +11,16 @@ implement Cowfs;
 # The overlay directory stores:
 #   - Modified/new files at their relative paths
 #   - .whiteout file listing deleted paths (one per line)
+#   - .cowbase file: what each base file was when first shadowed
 #   - .cowmeta file with basepath and metadata
+#
+# The last three are the overlay's own records.  They are in the directory
+# the mount's writes land in, so the server keeps them out of the mount:
+# no walk reaches one and nothing is made under one of their names
+# (guarded).  They were only left out of listings, so a task with the mount
+# read and wrote them by name: it removed .cowbase (no conflict was then
+# seen), wrote .whiteout (deletions of its choosing) and gave .cowmeta
+# another basepath, which the promoter believed.
 #
 # Module-level functions (diff, promote, revert) operate directly
 # on overlay and base directories without going through Styx.
@@ -52,7 +61,8 @@ PathEntry: adt {
 SrvState: adt {
 	basepath:   string;
 	overlaydir: string;
-	whiteouts:  list of string;   # whiteout relative paths
+	whiteouts:  list of string;   # whiteout relative paths, as of whstamp
+	whstamp:    string;           # what .whiteout was when they were read
 	entries:    list of ref PathEntry;
 	nextqpath:  big;
 	vers:       int;
@@ -110,14 +120,16 @@ start(basepath, overlaydir: string): (ref Sys->FD, string)
 		return (nil, merr);
 
 	# Write metadata
-	writemeta(overlaydir, basepath);
+	werr := writemeta(overlaydir, basepath);
+	if(werr != nil)
+		return (nil, werr);
 
 	# Load whiteouts
 	wh := loadwhiteouts(overlaydir);
 
 	# Initialize server state
 	state := ref SrvState(
-		basepath, overlaydir, wh,
+		basepath, overlaydir, wh, whstampof(overlaydir),
 		nil, big 1, 0    # root = qpath 0 added below
 	);
 
@@ -191,22 +203,19 @@ promote(basepath, overlaydir: string): (int, string)
 	count := 0;
 	conflicts: list of string;
 
-	# Apply whiteout deletes to base
+	# Apply whiteout deletes to base: one name each, a directory after
+	# what was in it.  A directory's whiteout used to be applied by
+	# removing the tree, whatever the user had put or changed in it since.
 	keptwh: list of string;
-	wh := loadwhiteouts(overlaydir);
-	for(; wh != nil; wh = tl wh) {
-		# Validate whiteout path — reject traversal attempts
-		(relpath, pathok) := cleanrelpath(hd wh);
-		if(!pathok)
+	for(wh := deepestfirst(loadwhiteouts(overlaydir)); wh != nil; wh = tl wh) {
+		relpath := hd wh;	# cleaned by loadwhiteouts
+		if(internalrel(relpath))
 			continue;
-		if(basechanged(basepath, overlaydir, relpath)) {
+		if(!applywhiteout(basepath, overlaydir, relpath)) {
 			conflicts = relpath :: conflicts;
-			keptwh = hd wh :: keptwh;
+			keptwh = relpath :: keptwh;
 			continue;
 		}
-		bpath := basepath + "/" + relpath;
-		# Remove from base (best-effort)
-		removefile(bpath);
 		count++;
 	}
 
@@ -215,26 +224,28 @@ promote(basepath, overlaydir: string): (int, string)
 	count += n;
 	for(; wc != nil; wc = tl wc)
 		conflicts = hd wc :: conflicts;
-	if(err != nil)
-		return (count, err);
 
-	if(conflicts == nil) {
+	if(err == nil && conflicts == nil) {
 		# Clear overlay
 		clearoverlay(overlaydir);
 		# Re-write metadata (overlay is now clean)
 		writemeta(overlaydir, basepath);
 		return (count, nil);
 	}
-	# What was applied is gone from the overlay; what was not stays staged.
+	# What was applied is gone from the overlay; what was not stays staged,
+	# with what its base was.  Stopped by an error, the deletions already
+	# made stayed listed, and the next promote took each for a conflict:
+	# its base had changed, by this one.
 	savewhiteouts(overlaydir, keptwh);
-	l := loadbases(overlaydir);
 	kept: list of (string, string);
-	for(; l != nil; l = tl l) {
+	for(l := loadbases(overlaydir); l != nil; l = tl l) {
 		(r, nil) := hd l;
-		if(inlist(r, conflicts))
+		if(inlist(r, keptwh) || exists(overlaydir + "/" + r))
 			kept = hd l :: kept;
 	}
 	savebases(overlaydir, kept);
+	if(err != nil)
+		return (count, err);
 	msg := "";
 	for(; conflicts != nil; conflicts = tl conflicts) {
 		if(msg != "")
@@ -248,21 +259,20 @@ promotefile(basepath, overlaydir, relpath: string): string
 {
 	initsys();
 
-	# Validate path — reject traversal attempts
+	# Validate path — reject traversal attempts, and the overlay's records
 	pathok: int;
 	(relpath, pathok) = cleanrelpath(relpath);
 	if(!pathok)
 		return "invalid path: contains traversal";
-
-	if(basechanged(basepath, overlaydir, relpath))
-		return "not applied, changed since the task's copy was made (still staged): " + relpath;
+	if(relpath == "" || internalrel(relpath))
+		return "invalid path: not a staged file";
 
 	# Check if it's a whiteout (deletion)
 	wh := loadwhiteouts(overlaydir);
 	if(inlist(relpath, wh)) {
-		# Apply delete to base
-		bpath := basepath + "/" + relpath;
-		removefile(bpath);
+		# Apply delete to base: the one name
+		if(!applywhiteout(basepath, overlaydir, relpath))
+			return "not applied, changed since the task's copy was made (still staged): " + relpath;
 		# Remove from whiteout list
 		newwh: list of string;
 		for(; wh != nil; wh = tl wh)
@@ -273,13 +283,20 @@ promotefile(basepath, overlaydir, relpath: string): string
 		return nil;
 	}
 
+	if(basechanged(basepath, overlaydir, relpath))
+		return "not applied, changed since the task's copy was made (still staged): " + relpath;
+
 	# Copy overlay file to base
 	opath := overlaydir + "/" + relpath;
 	bpath := basepath + "/" + relpath;
 
-	(ook, nil) := sys->stat(opath);
+	(ook, od) := sys->stat(opath);
 	if(ook < 0)
 		return sys->sprint("overlay file not found: %s", relpath);
+	# A directory was copied as a file: an empty file of its name in the
+	# base, what is staged under it left behind, and success said.
+	if(od.mode & Sys->DMDIR)
+		return relpath + " is a directory: name a file in it";
 
 	# Ensure parent in base
 	ensureparent(bpath);
@@ -298,21 +315,24 @@ promotefile(basepath, overlaydir, relpath: string): string
 revert(overlaydir: string): string
 {
 	initsys();
-	# The overlay's metadata stays: cleared with the rest, the overlay
-	# lost its base and its mark while its cowfs still served it.
-	meta := rf(overlaydir + "/" + META_FILE);
+	# The overlay's metadata stays (clearoverlay): cleared with the rest,
+	# the overlay lost its base and its mark while its cowfs still served it.
 	clearoverlay(overlaydir);
-	if(meta != nil) {
-		fd := sys->create(overlaydir + "/" + META_FILE, Sys->OWRITE, 8r644);
-		if(fd != nil)
-			sys->write(fd, array of byte meta, len array of byte meta);
-	}
 	return nil;
 }
 
 revertfile(overlaydir, relpath: string): string
 {
 	initsys();
+
+	# The path is a name under the overlay and none of its records: given
+	# as it came, "../x" removed a file outside the overlay.
+	pathok: int;
+	(relpath, pathok) = cleanrelpath(relpath);
+	if(!pathok)
+		return "invalid path: contains traversal";
+	if(relpath == "" || internalrel(relpath))
+		return "invalid path: not a staged file";
 
 	# Remove from whiteout list if present
 	wh := loadwhiteouts(overlaydir);
@@ -321,14 +341,22 @@ revertfile(overlaydir, relpath: string): string
 		for(; wh != nil; wh = tl wh)
 			if(hd wh != relpath)
 				newwh = hd wh :: newwh;
-		savewhiteouts(overlaydir, newwh);
+		err := savewhiteouts(overlaydir, newwh);
+		if(err != nil)
+			return err;
 		dropbase(overlaydir, relpath);
 		return nil;
 	}
 
 	# Remove overlay file
 	opath := overlaydir + "/" + relpath;
-	sys->remove(opath);
+	(ook, od) := sys->stat(opath);
+	if(ook < 0)
+		return "nothing is staged for " + relpath;
+	if(od.mode & Sys->DMDIR)
+		return relpath + " is a directory: name a file in it";
+	if(sys->remove(opath) < 0)
+		return sys->sprint("cannot remove the staged %s: %r", relpath);
 	dropbase(overlaydir, relpath);
 	return nil;
 }
@@ -355,7 +383,7 @@ MetaInfo: adt {
 # The basepath line is cowfs's; any other line (boot=, which nsconstruct
 # writes) is kept.  Rewritten without it, an overlay promoted or reverted
 # lost its mark, and was taken for one an earlier session left.
-writemeta(overlaydir, basepath: string)
+writemeta(overlaydir, basepath: string): string
 {
 	path := overlaydir + "/" + META_FILE;
 	keep := "";
@@ -366,11 +394,21 @@ writemeta(overlaydir, basepath: string)
 			if(!(len hd lines >= 9 && (hd lines)[0:9] == "basepath="))
 				keep += hd lines + "\n";
 	}
+	return putfile(path, sys->sprint("basepath=%s\n%s", basepath, keep));
+}
+
+# A record written whole, or the reason it was not.  The records' writes
+# were not looked at: a remove was answered as done with no whiteout kept,
+# a change staged with no note of its base (so never a conflict).
+putfile(path, text: string): string
+{
 	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd != nil) {
-		sys->fprint(fd, "basepath=%s\n%s", basepath, keep);
-		fd = nil;
-	}
+	if(fd == nil)
+		return sys->sprint("cannot write %s: %r", basename(path));
+	b := array of byte text;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("cannot write %s: %r", basename(path));
+	return nil;
 }
 
 # --- Whiteout management ---
@@ -405,44 +443,93 @@ loadwhiteouts(overlaydir: string): list of string
 	return result;
 }
 
-savewhiteouts(overlaydir: string, wh: list of string)
+savewhiteouts(overlaydir: string, wh: list of string): string
 {
 	path := overlaydir + "/" + WHITEOUT_FILE;
 	if(wh == nil) {
-		sys->remove(path);
-		return;
+		if(exists(path) && sys->remove(path) < 0)
+			return sys->sprint("cannot clear %s: %r", WHITEOUT_FILE);
+		return nil;
 	}
-
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd == nil)
-		return;
-
+	out := "";
 	for(; wh != nil; wh = tl wh)
-		sys->fprint(fd, "%s\n", hd wh);
-
-	fd = nil;
+		out += hd wh + "\n";
+	return putfile(path, out);
 }
 
-addwhiteout(state: ref SrvState, relpath: string)
+# The whiteouts as the file has them now.  The server read them once, at
+# its start, and wrote its own list back at each change: a deletion the
+# user had taken back since (revertfile), or applied, was listed again by
+# the task's next remove, and applied with it.
+whstampof(overlaydir: string): string
 {
-	if(!inlist(relpath, state.whiteouts))
-		state.whiteouts = relpath :: state.whiteouts;
-	savewhiteouts(state.overlaydir, state.whiteouts);
+	(ok, d) := sys->stat(overlaydir + "/" + WHITEOUT_FILE);
+	if(ok < 0)
+		return "none";
+	return sys->sprint("%bud.%ud.%ud.%bd", d.qid.path, d.qid.vers, d.mtime, d.length);
 }
 
-removewhiteout(state: ref SrvState, relpath: string)
+curwh(state: ref SrvState): list of string
+{
+	st := whstampof(state.overlaydir);
+	if(st != state.whstamp) {
+		state.whiteouts = loadwhiteouts(state.overlaydir);
+		state.whstamp = st;
+	}
+	return state.whiteouts;
+}
+
+# A change is made to the list as the file has it, read then.
+addwhiteout(state: ref SrvState, relpath: string): string
+{
+	wh := loadwhiteouts(state.overlaydir);
+	if(!inlist(relpath, wh))
+		wh = relpath :: wh;
+	err := savewhiteouts(state.overlaydir, wh);
+	state.whstamp = "";	# read again: what was written, or what is left
+	return err;
+}
+
+removewhiteout(state: ref SrvState, relpath: string): string
 {
 	newwh: list of string;
-	for(wh := state.whiteouts; wh != nil; wh = tl wh)
+	for(wh := loadwhiteouts(state.overlaydir); wh != nil; wh = tl wh)
 		if(hd wh != relpath)
 			newwh = hd wh :: newwh;
-	state.whiteouts = newwh;
-	savewhiteouts(state.overlaydir, state.whiteouts);
+	err := savewhiteouts(state.overlaydir, newwh);
+	state.whstamp = "";
+	return err;
 }
 
 iswhiteout(state: ref SrvState, relpath: string): int
 {
-	return inlist(relpath, state.whiteouts);
+	return inlist(relpath, curwh(state));
+}
+
+# Deepest first, so that what was removed from a directory goes before it.
+deepestfirst(l: list of string): list of string
+{
+	a := array[len l] of string;
+	for(n := 0; l != nil; l = tl l)
+		a[n++] = hd l;
+	for(i := 1; i < n; i++) {
+		v := a[i];
+		for(j := i; j > 0 && depth(a[j-1]) < depth(v); j--)
+			a[j] = a[j-1];
+		a[j] = v;
+	}
+	for(i = n - 1; i >= 0; i--)
+		l = a[i] :: l;
+	return l;
+}
+
+depth(relpath: string): int
+{
+	d := 0;
+	for(i := 0; i < len relpath; i++)
+		if(relpath[i] == '/')
+			d++;
+	return d;
 }
 
 # --- QID / path management ---
@@ -493,10 +580,76 @@ safename(name: string): int
 {
 	if(name == "" || name == "." || name == "..")
 		return 0;
+	# nor a control character: the records are lines, with tabs
 	for(i := 0; i < len name; i++)
-		if(name[i] == '/')
+		if(name[i] == '/' || name[i] < ' ' || name[i] == 16r7f)
 			return 0;
 	return 1;
+}
+
+# A name as a host file system that folds names finds it: letters in one
+# case, no dots or blanks at its end, nothing from a colon on.  (On such a
+# host ".COWMETA", ".cowmeta." and ".cowmeta::$DATA" all open .cowmeta.)
+foldname(name: string): string
+{
+	for(i := 0; i < len name; i++)
+		if(name[i] == ':') {
+			name = name[0:i];
+			break;
+		}
+	while(len name > 0 && (name[len name - 1] == '.' || name[len name - 1] == ' '))
+		name = name[0:len name - 1];
+	out := "";
+	for(i = 0; i < len name; i++) {
+		c := name[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		out[len out] = c;
+	}
+	return out;
+}
+
+# relpath is, by its name, one of the overlay's own records: they are at
+# the overlay's root only.
+internalrel(relpath: string): int
+{
+	for(i := 0; i < len relpath; i++)
+		if(relpath[i] == '/')
+			return 0;
+	return isinternal(foldname(relpath));
+}
+
+# relpath is one of the overlay's records, by its name or because the host
+# finds a record's file under it (a short name, any alias the fold above
+# does not know).  Asked of every walk and create: nothing through the
+# mount reaches a record or is made where one will be.
+guarded(state: ref SrvState, relpath: string): int
+{
+	if(relpath == "")
+		return 0;
+	if(internalrel(relpath))
+		return 1;
+	for(i := 0; i < len relpath; i++)
+		if(relpath[i] == '/')
+			return 0;
+	(ok, d) := sys->stat(state.overlaydir + "/" + relpath);
+	if(ok < 0)
+		return 0;
+	return samefile(d, state.overlaydir + "/" + META_FILE) ||
+		samefile(d, state.overlaydir + "/" + BASE_FILE) ||
+		samefile(d, state.overlaydir + "/" + WHITEOUT_FILE);
+}
+
+samefile(d: Sys->Dir, path: string): int
+{
+	(ok, o) := sys->stat(path);
+	return ok >= 0 && o.qid.path == d.qid.path && o.dtype == d.dtype && o.dev == d.dev;
+}
+
+exists(path: string): int
+{
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
 }
 
 # --- Path validation ---
@@ -607,6 +760,12 @@ Serve:
 				srv.reply(ref Rmsg.Error(m.tag, Ebadarg));
 				break;
 			}
+			# A directory is opened to be read, and nothing else.
+			if((c.qtype & Sys->QTDIR) &&
+			   (mode != Sys->OREAD || (m.mode & (Sys->OTRUNC|Sys->ORCLOSE)))) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
 			# Honor OTRUNC: materialise an empty overlay file shadowing
 			# the base. Otherwise a truncating open (e.g. sys->create over
 			# an existing base file) would copy the base up on the first
@@ -614,8 +773,16 @@ Serve:
 			if((m.mode & Sys->OTRUNC) && !(c.qtype & Sys->QTDIR)) {
 				tpe := lookuppath(state, c.path);
 				if(tpe != nil && tpe.relpath != "") {
+					if(internalrel(tpe.relpath)) {
+						srv.reply(ref Rmsg.Error(m.tag, Eperm));
+						break;
+					}
 					topath := state.overlaydir + "/" + tpe.relpath;
-					notebase(state.basepath, state.overlaydir, tpe.relpath);
+					terr := notebase(state.basepath, state.overlaydir, tpe.relpath);
+					if(terr != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, terr));
+						break;
+					}
 					ensureparent(topath);
 					tfd := sys->create(topath, Sys->OWRITE, FILE_PERM);
 					if(tfd == nil) {
@@ -623,8 +790,11 @@ Serve:
 						break;
 					}
 					tfd = nil;
-					if(iswhiteout(state, tpe.relpath))
-						removewhiteout(state, tpe.relpath);
+					if(iswhiteout(state, tpe.relpath) &&
+					   (terr = removewhiteout(state, tpe.relpath)) != nil) {
+						srv.reply(ref Rmsg.Error(m.tag, terr));
+						break;
+					}
 					state.vers++;
 				}
 			}
@@ -651,12 +821,23 @@ Serve:
 			}
 
 			relpath := joinrel(pe.relpath, m.name);
+			# Nothing is made under the name of one of the overlay's
+			# records, or where the host would find one.
+			if(guarded(state, relpath)) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
+			cerr: string;
 			if(!(m.perm & Sys->DMDIR))
-				notebase(state.basepath, state.overlaydir, relpath);
+				cerr = notebase(state.basepath, state.overlaydir, relpath);
 
 			# Remove whiteout if creating over a deleted file
-			if(iswhiteout(state, relpath))
-				removewhiteout(state, relpath);
+			if(cerr == nil && iswhiteout(state, relpath))
+				cerr = removewhiteout(state, relpath);
+			if(cerr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, cerr));
+				break;
+			}
 
 			# Create in overlay
 			isdir := (m.perm & Sys->DMDIR) != 0;
@@ -703,14 +884,18 @@ Serve:
 				break;
 			}
 
-			(rpath, exists, nil) := resolve(state, pe.relpath);
-			if(!exists) {
+			(rpath, found, nil) := resolve(state, pe.relpath);
+			if(!found || internalrel(pe.relpath)) {
 				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 				break;
 			}
 
 			# Read from resolved path
-			data := readat(rpath, int m.offset, m.count);
+			(data, derr) := readat(rpath, m.offset, m.count);
+			if(derr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, derr));
+				break;
+			}
 			srv.reply(ref Rmsg.Read(m.tag, data));
 
 		Write =>
@@ -721,7 +906,7 @@ Serve:
 			}
 
 			pe := lookuppath(state, c.path);
-			if(pe == nil) {
+			if(pe == nil || internalrel(pe.relpath)) {
 				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 				break;
 			}
@@ -731,7 +916,11 @@ Serve:
 			(ook, nil) := sys->stat(opath);
 			if(ook < 0) {
 				# Not in overlay yet — check base for copy-up
-				notebase(state.basepath, state.overlaydir, pe.relpath);
+				nerr := notebase(state.basepath, state.overlaydir, pe.relpath);
+				if(nerr != nil) {
+					srv.reply(ref Rmsg.Error(m.tag, nerr));
+					break;
+				}
 				bpath := state.basepath + "/" + pe.relpath;
 				(bok, nil) := sys->stat(bpath);
 				if(bok >= 0) {
@@ -765,8 +954,11 @@ Serve:
 			}
 
 			# Remove whiteout if writing over a deleted file
-			if(iswhiteout(state, pe.relpath))
-				removewhiteout(state, pe.relpath);
+			if(iswhiteout(state, pe.relpath) &&
+			   (rwerr := removewhiteout(state, pe.relpath)) != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, rwerr));
+				break;
+			}
 
 			state.vers++;
 			srv.reply(ref Rmsg.Write(m.tag, n));
@@ -788,9 +980,18 @@ Serve:
 			# of that number ("fid already in use") and wedges the mount.
 			srv.delfid(c);
 			pe := lookuppath(state, c.path);
-			if(pe == nil || pe.relpath == "") {
-				# Can't remove root
+			if(pe == nil || pe.relpath == "" || internalrel(pe.relpath)) {
+				# Can't remove root, nor the overlay's records
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
+
+			# A directory goes when nothing is in it, as anywhere.  One
+			# with files only in the base was given a whiteout at once
+			# (the overlay had nothing to refuse the remove): one remove
+			# staged the deletion of the tree.
+			if(pe.isdir && mergedirents(state, pe.relpath) != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "directory not empty"));
 				break;
 			}
 
@@ -806,8 +1007,13 @@ Serve:
 			bpath := state.basepath + "/" + pe.relpath;
 			(bok, nil) := sys->stat(bpath);
 			if(bok >= 0) {
-				notebase(state.basepath, state.overlaydir, pe.relpath);
-				addwhiteout(state, pe.relpath);
+				rerr := notebase(state.basepath, state.overlaydir, pe.relpath);
+				if(rerr == nil)
+					rerr = addwhiteout(state, pe.relpath);
+				if(rerr != nil) {
+					srv.reply(ref Rmsg.Error(m.tag, rerr));
+					break;
+				}
 			}
 			else if(inoverlay < 0) {
 				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
@@ -871,6 +1077,12 @@ navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 				continue;
 			}
 
+			# The overlay's own records are not in the tree it serves.
+			if(guarded(state, childrel)) {
+				n.reply <-= (nil, Enotfound);
+				continue;
+			}
+
 			# Check whiteout
 			if(iswhiteout(state, childrel)) {
 				n.reply <-= (nil, Enotfound);
@@ -878,8 +1090,8 @@ navigator(navops: chan of ref Navop, state: ref SrvState, readyc: chan of int)
 			}
 
 			# Resolve child
-			(rpath, exists, nil) := resolve(state, childrel);
-			if(!exists) {
+			(rpath, found, nil) := resolve(state, childrel);
+			if(!found) {
 				n.reply <-= (nil, Enotfound);
 				continue;
 			}
@@ -927,8 +1139,8 @@ cowstat(state: ref SrvState, qpath: big): (ref Sys->Dir, string)
 	if(pe == nil)
 		return (nil, Enotfound);
 
-	(rpath, exists, nil) := resolve(state, pe.relpath);
-	if(!exists && pe.relpath != "")
+	(rpath, found, nil) := resolve(state, pe.relpath);
+	if(!found && pe.relpath != "")
 		return (nil, Enotfound);
 
 	# For root, use base directory
@@ -976,6 +1188,7 @@ mergedirents(state: ref SrvState, parentrel: string): list of ref DirEnt
 {
 	seen: list of string;
 	result: list of ref DirEnt;
+	wh := curwh(state);
 
 	# 1. Read overlay entries (takes priority)
 	odir := state.overlaydir;
@@ -984,10 +1197,10 @@ mergedirents(state: ref SrvState, parentrel: string): list of ref DirEnt
 	(odirs, on) := readdir->init(odir, Readdir->NAME);
 	for(i := 0; i < on; i++) {
 		name := odirs[i].name;
-		if(isinternal(name))
-			continue;
 		childrel := joinrel(parentrel, name);
-		if(iswhiteout(state, childrel))
+		if(internalrel(childrel))
+			continue;
+		if(inlist(childrel, wh))
 			continue;
 		isdir := (odirs[i].mode & Sys->DMDIR) != 0;
 		result = ref DirEnt(childrel, name, isdir) :: result;
@@ -1002,9 +1215,9 @@ mergedirents(state: ref SrvState, parentrel: string): list of ref DirEnt
 	for(i = 0; i < bn; i++) {
 		name := bdirs[i].name;
 		childrel := joinrel(parentrel, name);
-		if(inlist(name, seen))
+		if(inlist(name, seen) || internalrel(childrel))
 			continue;
-		if(iswhiteout(state, childrel))
+		if(inlist(childrel, wh))
 			continue;
 		isdir := (bdirs[i].mode & Sys->DMDIR) != 0;
 		result = ref DirEnt(childrel, name, isdir) :: result;
@@ -1019,18 +1232,18 @@ mergedirents(state: ref SrvState, parentrel: string): list of ref DirEnt
 
 # --- File I/O helpers ---
 
-readat(path: string, offset, count: int): array of byte
+# A file that could not be opened or read is an error, not an empty file.
+readat(path: string, offset: big, count: int): (array of byte, string)
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return array[0] of byte;
+		return (nil, sys->sprint("%r"));
 
-	sys->seek(fd, big offset, Sys->SEEKSTART);
 	buf := array[count] of byte;
-	n := sys->read(fd, buf, count);
-	if(n <= 0)
-		return array[0] of byte;
-	return buf[0:n];
+	n := sys->pread(fd, buf, count, offset);
+	if(n < 0)
+		return (nil, sys->sprint("read: %r"));
+	return (buf[0:n], nil);
 }
 
 # --- What the base was when the overlay first shadowed it ---
@@ -1065,23 +1278,20 @@ loadbases(overlaydir: string): list of (string, string)
 	return l;
 }
 
-savebases(overlaydir: string, l: list of (string, string))
+savebases(overlaydir: string, l: list of (string, string)): string
 {
 	path := overlaydir + "/" + BASE_FILE;
 	if(l == nil) {
-		sys->remove(path);
-		return;
+		if(exists(path) && sys->remove(path) < 0)
+			return sys->sprint("cannot clear %s: %r", BASE_FILE);
+		return nil;
 	}
 	out := "";
 	for(; l != nil; l = tl l) {
 		(rel, sig) := hd l;
 		out += rel + "\t" + sig + "\n";
 	}
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd != nil) {
-		b := array of byte out;
-		sys->write(fd, b, len b);
-	}
+	return putfile(path, out);
 }
 
 basefor(l: list of (string, string), rel: string): string
@@ -1094,13 +1304,15 @@ basefor(l: list of (string, string), rel: string): string
 	return nil;
 }
 
-# The overlay is about to shadow relpath: note what the base is, the first time.
-notebase(basepath, overlaydir, relpath: string)
+# The overlay is about to shadow relpath: note what the base is, the first
+# time.  Not noted, the change would be applied over whatever the base had
+# become: the caller refuses the change instead.
+notebase(basepath, overlaydir, relpath: string): string
 {
 	l := loadbases(overlaydir);
 	if(basefor(l, relpath) != nil)
-		return;
-	savebases(overlaydir, (relpath, basesig(basepath + "/" + relpath)) :: l);
+		return nil;
+	return savebases(overlaydir, (relpath, basesig(basepath + "/" + relpath)) :: l);
 }
 
 dropbase(overlaydir, relpath: string)
@@ -1135,13 +1347,32 @@ copyfile(src, dst: string): string
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(sfd, buf, len buf);
-		if(n <= 0)
+		if(n < 0)	# taken for the end, a cut-short copy was a done one
+			return sys->sprint("read %s: %r", src);
+		if(n == 0)
 			break;
 		w := sys->write(dfd, buf, n);
 		if(w != n)
 			return sys->sprint("write %s: %r", dst);
 	}
 	return nil;
+}
+
+# A staged deletion made in the base: the one name, not what is under it.
+# A file goes if it is as it was when the task removed it.  A directory
+# goes if it is empty: what was removed from it has gone before it, which
+# changed it, so what it was then says nothing; with anything in it now
+# (put there since, or a file whose removal was not applied) it stays.
+# 0: not applied.
+applywhiteout(basepath, overlaydir, relpath: string): int
+{
+	bpath := basepath + "/" + relpath;
+	(ok, d) := sys->stat(bpath);
+	if(ok < 0)
+		return 1;
+	if(!(d.mode & Sys->DMDIR) && basechanged(basepath, overlaydir, relpath))
+		return 0;
+	return sys->remove(bpath) >= 0;
 }
 
 removefile(path: string)
@@ -1159,11 +1390,15 @@ removefile(path: string)
 	sys->remove(path);
 }
 
+# Everything staged goes, and the records of it; the overlay's metadata
+# stays.  Removed with the rest, a promote lost the mark nsconstruct keeps
+# there (boot=), and the overlay was taken for an earlier session's.
 clearoverlay(overlaydir: string)
 {
 	(dirs, n) := readdir->init(overlaydir, Readdir->NONE);
 	for(i := 0; i < n; i++)
-		removefile(overlaydir + "/" + dirs[i].name);
+		if(dirs[i].name != META_FILE)
+			removefile(overlaydir + "/" + dirs[i].name);
 }
 
 # --- Diff / promote walk helpers ---
@@ -1177,10 +1412,9 @@ diffwalk(overlaydir, parentrel: string, meta: ref MetaInfo, result: list of stri
 	(dirs, n) := readdir->init(odir, Readdir->NAME);
 	for(i := 0; i < n; i++) {
 		name := dirs[i].name;
-		if(isinternal(name))
-			continue;
-
 		childrel := joinrel(parentrel, name);
+		if(internalrel(childrel))
+			continue;
 
 		if(dirs[i].mode & Sys->DMDIR) {
 			# Recurse into subdirectories
@@ -1228,7 +1462,7 @@ countfiles(overlaydir, parentrel: string): int
 	(dirs, dn) := readdir->init(odir, Readdir->NONE);
 	for(i := 0; i < dn; i++) {
 		name := dirs[i].name;
-		if(isinternal(name))
+		if(internalrel(joinrel(parentrel, name)))
 			continue;
 		if(dirs[i].mode & Sys->DMDIR)
 			n += countfiles(overlaydir, joinrel(parentrel, name));
@@ -1249,10 +1483,9 @@ promotewalk(basepath, overlaydir, parentrel: string): (int, string, list of stri
 	(dirs, n) := readdir->init(odir, Readdir->NAME);
 	for(i := 0; i < n; i++) {
 		name := dirs[i].name;
-		if(isinternal(name))
-			continue;
-
 		childrel := joinrel(parentrel, name);
+		if(internalrel(childrel))
+			continue;
 		opath := overlaydir + "/" + childrel;
 		bpath := basepath + "/" + childrel;
 

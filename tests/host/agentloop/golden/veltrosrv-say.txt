@@ -24,15 +24,11 @@ tool-result call_say_0_0:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 62 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_say_0_0:say:{"args"\: "spoken words"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_say_0_0:say:{"args"\: "spoken words"}\n
   | step 2: writing 35 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 8 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 23 bytes
-  | llm: STOP:end_turn
-  | Said it.
-  | 
+  | llm: STOP:end_turn\nSaid it.\n
   | turn done stop=end_turn steps=2

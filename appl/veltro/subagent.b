@@ -283,7 +283,20 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 		results: list of (string, string);
 		for(tc := tcalls; tc != nil; tc = tl tc) {
 			(id, name, targs) := hd tc;
-			prov("subtool", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, name),
+			# The name is the model's.  Only one of this child's tools
+			# is called, or written into a record: a name that is none
+			# (or no name at all: blanks, "=", control characters) is
+			# refused here, and recorded as refused with what was asked
+			# as the record's content, not as a field of it.
+			if(!offeredtool(name)) {
+				prov("subtool", sys->sprint("agent=%s step=%d tool=(refused)", provid, step + 1),
+					array of byte (name + "\n" + targs));
+				refusal := sys->sprint("error: tool not available: %s", safeword(name));
+				logstep(step + 1, "(refused)", safeword(name), refusal);
+				results = (id, refusal) :: results;
+				continue;
+			}
+			prov("subtool", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, safeword(name)),
 				array of byte targs);
 			result := boundedcall(name, targs);
 			# The same call failing the same way, again: said, as the
@@ -304,15 +317,25 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 					result += agentlib->samefailurenote(n);
 			}
 			logstep(step + 1, name, targs, result);
-			prov("subtoolres", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, name),
+			prov("subtoolres", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, safeword(name)),
 				array of byte result);
 			if(len result > AgentLib->STREAM_THRESHOLD) {
 				# The start stays inline, so the child has something to
-				# act on, and it is told where the rest is.
-				scratchfile := writescratch(result, step);
-				result = firstlines(result, SPILLPREVIEW) +
-					sys->sprint("\n... (%d bytes in all; the whole output is in %s: read it with offset and limit)",
-						len result, scratchfile);
+				# act on, and it is told where the rest is: a file of
+				# this call's own (two long results of one step were
+				# both said to be in the one file, which held the
+				# second), or, when it could not be written, that it is
+				# nowhere (it was told to read "(cannot create scratch
+				# file)").
+				(scratchfile, werr) := writescratch(result, step, nspill++);
+				if(werr != nil)
+					result = firstlines(result, SPILLPREVIEW) +
+						sys->sprint("\n... (%d bytes in all; the rest was not kept: %s)",
+							len result, werr);
+				else
+					result = firstlines(result, SPILLPREVIEW) +
+						sys->sprint("\n... (%d bytes in all; the whole output is in %s: read it with offset and limit)",
+							len result, scratchfile);
 			}
 			results = (id, result) :: results;
 		}
@@ -346,13 +369,23 @@ boundedcall(name, args: string): string
 	r := <-rc =>
 		return r;
 	<-tc =>
-		return sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
+		return sys->sprint("error: tool '%s' timed out after %d seconds", safeword(name), TOOL_TIMEOUT / 1000);
 	}
 }
 
+# A tool that raises is answered as failed.  With no handler here the
+# worker died, nothing was sent, and the child waited out the whole
+# timeout to be told the tool had timed out.
 callworker(name, args: string, rc: chan of string)
 {
-	rc <-= calltool(name, args);
+	r: string;
+	{
+		r = calltool(name, args);
+	} exception e {
+	"*" =>
+		r = sys->sprint("error: tool '%s' failed: %s", safeword(name), e);
+	}
+	rc <-= r;
 }
 
 timer(c: chan of int, ms: int)
@@ -363,6 +396,52 @@ timer(c: chan of int, ms: int)
 
 MAXCUTS: con 2;
 SPILLPREVIEW: con 400;
+nspill := 0;	# long results written to scratch, for their names
+
+# Is name a tool this child was given: one of its modules, help, or an
+# MCP tool of a server granted to it; and a name (letters, digits, "_"
+# and "-")?
+offeredtool(name: string): int
+{
+	if(name == "" || len name > 128)
+		return 0;
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		   (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return 0;
+	}
+	l := str->tolower(name);
+	if(l == "help")
+		return 1;
+	for(nl := loadedtoolnames; nl != nil; nl = tl nl)
+		if(hd nl == l)
+			return 1;
+	if(mcpmounts != nil && agentlib != nil) {
+		(mount, nil, nil) := agentlib->mcpresolve(name, mcpmounts, mcptools);
+		if(mount != "")
+			return 1;
+	}
+	return 0;
+}
+
+# A tool's name as the model gave it, for a line of the log or a field of
+# an audit record: one word.  It is the model's text (a name that is no
+# tool is logged too), and with a newline in it wrote lines of its own
+# into the trajectory log: a forged step, a forged end.
+safeword(s: string): string
+{
+	if(len s > 64)
+		s = s[0:64];
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c <= ' ' || c == '=' || c == 16r7f)
+			c = '_';
+		r[len r] = c;
+	}
+	return r;
+}
 
 firstlines(s: string, n: int): string
 {
@@ -432,7 +511,7 @@ logstep(step: int, tool, toolargs, result: string)
 	if(logfd == nil)
 		return;
 	line := sys->sprint("step %d: %s %s -> %s\n",
-		step, tool, collapsenl(preview(toolargs)), collapsenl(preview(result)));
+		step, safeword(tool), collapsenl(preview(toolargs)), collapsenl(preview(result)));
 	data := array of byte line;
 	sys->write(logfd, data, len data);
 }
@@ -730,18 +809,19 @@ calltool(tool, args: string): string
 }
 
 # Write large result to scratch file
-writescratch(content: string, step: int): string
+writescratch(content: string, step, n: int): (string, string)
 {
 	ensuredir(SCRATCH_PATH);
-	path := sys->sprint("%s/step%d.txt", SCRATCH_PATH, step);
+	path := sys->sprint("%s/step%d-%d.txt", SCRATCH_PATH, step, n);
 
 	fd := sys->create(path, Sys->OWRITE, 8r644);
 	if(fd == nil)
-		return "(cannot create scratch file)";
+		return (nil, sys->sprint("cannot create %s: %r", path));
 
 	data := array of byte content;
-	sys->write(fd, data, len data);
-	return path;
+	if(sys->write(fd, data, len data) != len data)
+		return (nil, sys->sprint("cannot write %s: %r", path));
+	return (path, nil);
 }
 
 # Helper functions

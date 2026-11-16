@@ -440,6 +440,68 @@ macced(s, data: array of byte, n: int): array of byte
 	return b;
 }
 
+# #D is one of the few devices a program may attach after NODEVS, as its
+# private secure sockets.  The table of conversations is the system's, and
+# every program is the same user: a confined program opened another's
+# conversation by its number, read what it had deciphered and wrote under
+# its key.  After NODEVS a program opens only conversations made in its
+# own name space; what it makes itself it still opens, and a program that
+# has not given up its devices is as it was.
+confinedopens(dir: string, nodevs: int, res: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	if(nodevs && sys->pctl(Sys->NODEVS, nil) < 0){
+		res <-= "cannot set NODEVS";
+		return;
+	}
+	r := "";
+	if(sys->open(dir + "/data", Sys->ORDWR) != nil)
+		r += " data";
+	if(sys->open(dir + "/data", Sys->OREAD) != nil)
+		r += " data-read";
+	if(sys->open(dir + "/ctl", Sys->ORDWR) != nil)
+		r += " ctl";
+	if(sys->open(dir + "/secretin", Sys->OWRITE) != nil)
+		r += " secretin";
+	if(sys->open(dir + "/secretout", Sys->OWRITE) != nil)
+		r += " secretout";
+	# and its own
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		res <-= r + " (no pipe)";
+		return;
+	}
+	(err, c) := ssl->connect(p[0]);
+	if(err != nil)
+		r += " (own: " + err + ")";
+	else if(sys->open(c.dir + "/data", Sys->ORDWR) == nil)
+		r += sys->sprint(" (own data refused: %r)");
+	res <-= r;
+}
+
+testConfinedOpensOnlyItsOwn(t: ref T)
+{
+	(a, b) := pair(t, "aes_256_gcm");
+	msg := array of byte "for the owner of the conversation alone";
+	if(sys->write(b.dfd, msg, len msg) != len msg)
+		t.fatal(sys->sprint("write: %r"));
+
+	res := chan of string;
+	spawn confinedopens(a.dir, 1, res);
+	t.assertseq(<-res, "", "a program that has given up its devices opens none of another's conversation's files, and its own");
+	spawn confinedopens(a.dir, 0, res);
+	t.assertseq(<-res, " data data-read ctl secretin secretout", "a program that has not is as it was");
+
+	# nobody read what was sent, or wrote under the key
+	buf := array[256] of byte;
+	n := sys->read(a.dfd, buf, len buf);
+	t.assert(n == len msg && string buf[0:n] == string msg, "the conversation's owner reads what was sent to it");
+	reply := array of byte "and answers";
+	sys->write(a.dfd, reply, len reply);
+	n = sys->read(b.dfd, buf, len buf);
+	t.assert(n == len reply && string buf[0:n] == string reply, "and the other end what the owner wrote, next in order");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -469,6 +531,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SSL/Refused", testRefused);
 	run("SSL/Short", testShort);
 	run("SSL/PushedOnto", testPushedOnto);
+	run("SSL/ConfinedOpensOnlyItsOwn", testConfinedOpensOnlyItsOwn);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

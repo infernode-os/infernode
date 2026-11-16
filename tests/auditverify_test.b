@@ -290,6 +290,114 @@ testWrongKeyFails(t: ref T)
 		"checkpoint signed by another key fails under -k");
 }
 
+# A sound chain with text outside ASCII, a rune of it cut by the end of
+# one of the verifier's reads: each read was made a string by itself,
+# the rune became two bad ones, and the chain was "broken" there.
+testNonAsciiAcrossReads(t: ref T)
+{
+	pad := "";
+	npad := "";	# the first record's padding, a byte more each try
+	s: string;
+	for(try := 0; try < 200; try++) {
+		prev := ac->genesis();
+		s = "";
+		for(i := 1; i <= 60; i++) {
+			line: string;
+			if(i > 1)
+				pad = "";
+			msg := sys->sprint("agent=x tool=%scafé-日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語-%d", pad, i);
+			(prev, line) = mkrec(prev, i, 1000+i, "veltro", "toolcall", msg);
+			s += line;
+		}
+		b := array of byte s;
+		if(len b > 8192 && (int b[8192] & 16rC0) == 16r80)
+			break;
+		pad = npad + "a";
+		npad = pad;
+	}
+	b := array of byte s;
+	t.assert(len b > 8192 && (int b[8192] & 16rC0) == 16r80, "a rune lies across the first 8192 bytes");
+	writefile("/tmp/avtest.utf", s);
+	t.asserteq(runverify("/tmp/avtest.utf" :: nil), 0, "a sound chain of non-ASCII records verifies");
+}
+
+# Records taken out and the rest rehashed with their old numbers: every
+# hash is right, and the gap was not looked for.
+testSeqGapFails(t: ref T)
+{
+	prev := ac->genesis();
+	s := "";
+	line: string;
+	(prev, line) = mkrec(prev, 1, 1001, "login", "unlock", "user=alice");
+	s += line;
+	(prev, line) = mkrec(prev, 2, 1002, "login", "unlock", "user=bob");
+	s += line;
+	(prev, line) = mkrec(prev, 4, 1004, "login", "unlock", "user=dave");
+	s += line;
+	writefile("/tmp/avtest.gap", s);
+	t.asserteq(runverify("/tmp/avtest.gap" :: nil), -1, "a gap in the sequence numbers fails");
+
+	prev = ac->genesis();
+	s = "";
+	(prev, line) = mkrec(prev, 1, 1001, "login", "unlock", "user=alice");
+	s += line;
+	(prev, line) = mkrec(prev, 2, 1002, "login", "unlock", "user=bob");
+	s += line;
+	(prev, line) = mkrec(prev, 2, 1003, "login", "unlock", "user=carol");
+	s += line;
+	writefile("/tmp/avtest.rep", s);
+	t.asserteq(runverify("/tmp/avtest.rep" :: nil), -1, "a sequence number given twice fails");
+
+	prev = ac->genesis();
+	(prev, line) = mkrec(prev, 5, 1001, "login", "unlock", "user=alice");
+	writefile("/tmp/avtest.from5", line);
+	t.asserteq(runverify("/tmp/avtest.from5" :: nil), -1, "a chain that does not begin at 1 fails");
+}
+
+# A checkpoint's seq= is signed with its head and was never compared
+# with where the checkpoint is.
+testCheckpointSeqFails(t: ref T)
+{
+	prev := ac->genesis();
+	s := "";
+	line: string;
+	(prev, line) = mkrec(prev, 1, 1001, "login", "unlock", "user=alice");
+	s += line;
+	(prev, line) = mkrec(prev, 2, 1002, "login", "unlock", "user=bob");
+	s += line;
+	head := ac->hex(prev);
+	content := array of byte sys->sprint("audit-checkpoint %s %d", head, 7);
+	cert := kr->sign(sk, 0, kr->sha256(content, len content, nil, nil), "sha256");
+	if(cert == nil)
+		t.fatal("sign failed");
+	msg := sys->sprint("head=%s seq=7 sig=%s", head, ac->hex(array of byte kr->certtostr(cert)));
+	(prev, line) = mkrec(prev, 3, 1003, "-", "checkpoint", msg);
+	s += line;
+	writefile("/tmp/avtest.cseq", s);
+	t.asserteq(runverify("/tmp/avtest.cseq" :: nil), -1,
+		"a checkpoint naming another sequence number fails");
+	t.asserteq(runverify("-k" :: pubfile :: "/tmp/avtest.cseq" :: nil), -1,
+		"and under -k, though its signature is good");
+}
+
+# A line is a record only as the server writes it.
+testNotTheLineWrittenFails(t: ref T)
+{
+	(nil, s) := chainof(3);
+	writefile("/tmp/avtest.blank", replace(s, " user=u2", "  user=u2"));
+	t.asserteq(runverify("/tmp/avtest.blank" :: nil), -1, "a blank added between fields fails");
+	writefile("/tmp/avtest.zero", replace(s, "\n2 1002 ", "\n02 1002 "));
+	t.asserteq(runverify("/tmp/avtest.zero" :: nil), -1, "a number written another way fails");
+	writefile("/tmp/avtest.junk", replace(s, "\n2 1002 ", "\n2x 1002 "));
+	t.asserteq(runverify("/tmp/avtest.junk" :: nil), -1, "a number with something after it fails");
+
+	(tip, s5) := chainof(5);
+	writefile("/tmp/avtest.a5b", s5);
+	writefile("/tmp/avtest.head5x", sys->sprint("%s 5x\n", ac->hex(tip)));
+	t.asserteq(runverify("-a" :: "/tmp/avtest.head5x" :: "/tmp/avtest.a5b" :: nil), -1,
+		"an anchor whose number has something after it is refused");
+}
+
 replace(s, pat, sub: string): string
 {
 	for(i := 0; i + len pat <= len s; i++)
@@ -335,6 +443,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("StrippedCheckpointsFailStrict", testStrippedCheckpointsFailStrict);
 	run("ForgedCheckpointHeadFails", testForgedCheckpointHeadFails);
 	run("WrongKeyFails", testWrongKeyFails);
+	run("NonAsciiAcrossReads", testNonAsciiAcrossReads);
+	run("SeqGapFails", testSeqGapFails);
+	run("CheckpointSeqFails", testCheckpointSeqFails);
+	run("NotTheLineWrittenFails", testNotTheLineWrittenFails);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

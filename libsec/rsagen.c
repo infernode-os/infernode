@@ -17,7 +17,13 @@ rsagen(int nlen, int elen, int rounds)
 
 	// create the prime factors and euclid's function
 	genprime(p, nlen/2, rounds);
-	genprime(q, nlen - mpsignif(p) + 1, rounds);
+	// p == q has no CRT coefficient (mpinvert below raises "no inverse").
+	// genprime counts up past its width: for a 16-bit key p of 8 bits
+	// begun at 253 is 257, q is then drawn at 8 bits, and one begun at
+	// 253 or 255 is 257 too (keyring_args_test's 16-bit genSK, now and then)
+	do
+		genprime(q, nlen - mpsignif(p) + 1, rounds);
+	while(mpcmp(p, q) == 0);
 	mpmul(p, q, n);
 	mpsub(p, mpone, e);
 	mpsub(q, mpone, d);

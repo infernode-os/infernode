@@ -53,6 +53,7 @@ typedef struct Alt	Alt;
 typedef struct Channel	Channel;
 typedef struct Progq	Progq;
 typedef struct Import	Import;
+typedef struct Runtab	Runtab;
 typedef struct ILock	ILock;
 typedef struct Inst	Inst;
 typedef struct Module	Module;
@@ -201,12 +202,31 @@ union Linkpc
 	Inst*	pc;
 };
 
+#ifndef SIGDLEN
+#define SIGDLEN		32	/* isa.h's, for the files that include this without it */
+#endif
+
 struct Link
 {
 	int	sig;
 	Type*	frame;
 	Linkpc	u;
 	char	*name;
+	uchar	*dig;		/* SIGDLEN bytes, the digest of the type's text; nil if the module has none */
+};
+
+/*
+ * A builtin module's functions, as limbo -t writes them.
+ */
+struct Runtab
+{
+	char	*name;
+	long	sig;
+	void	(*fn)(void*);
+	int	size;
+	int	np;
+	uchar	map[16];
+	uchar	dig[SIGDLEN];
 };
 
 typedef union	Adr	Adr;
@@ -414,6 +434,7 @@ struct Module
 	ulong*	pctab;	/* dis pc to code pc when compiled */
 	ulong	jitsize;	/* bytes of executable memory at prog when compiled */
 	void*	dlm;		/* dynamic C module */
+	uchar*	sigs;		/* the file's type digests, which ext and ldt point into */
 };
 
 struct Modl
@@ -454,6 +475,7 @@ struct Import
 {
 	int	sig;
 	char*	name;
+	uchar*	dig;		/* as Link's */
 };
 
 struct Except
@@ -494,6 +516,7 @@ extern	void	destroyrestore(Dsave*);
 
 extern	int	bflag;
 extern	int	cflag;
+extern	int	strictlink;
 extern	int	nproc;
 extern	Type	Tarray;
 extern	Type	Tstring;
@@ -649,7 +672,7 @@ extern	void		releasex(void);
 extern	void		retnstr(char*, int, String**);
 extern	void		retstr(char*, String**);
 extern	void		rungc(Prog*);
-extern	void		runtime(Module*, Link*, char*, int, void(*)(void*), Type*);
+extern	void		runtime(Module*, Link*, char*, int, uchar*, void(*)(void*), Type*);
 extern	void		safemem(void*, Type*, void (*)(void*));
 extern	int		segflush(void *, ulong);
 extern	void		isend(OPARGS);

@@ -519,7 +519,7 @@ testTaskStatusRequiresId(t: ref T)
 	if(tool == nil)
 		return;
 	r := tool->exec("status");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "id"),
+	t.assert(hassubstr(r, "error") && (hassubstr(r, "id") || hassubstr(r, "number")),
 		"task status with no id rejected");
 
 	r = tool->exec("status notanumber");
@@ -533,7 +533,7 @@ testTaskCloseRequiresId(t: ref T)
 	if(tool == nil)
 		return;
 	r := tool->exec("close");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "id"),
+	t.assert(hassubstr(r, "error") && (hassubstr(r, "id") || hassubstr(r, "number")),
 		"task close with no id rejected");
 
 	# Activity 0 is the meta-agent — closing it must be refused

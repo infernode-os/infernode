@@ -8,6 +8,9 @@ implement ToolEditor;
 # tool alone. Supports reading/writing document body, cursor
 # positioning, search, and file operations. A command is carried out
 # before its write returns, and one the editor refuses is an error.
+# Files are read and written here, in the tool's name space (open,
+# save): the editor is given text and a name to show, and opens and
+# saves nothing the agent names.
 #
 # Commands:
 #   read [body|addr]           Read document body or cursor address
@@ -166,7 +169,10 @@ doread(args: string): string
 {
 	target := strip(args);
 	if(target == "" || target == "body") {
-		return readfile(sys->sprint("%s/1/body", EDIT_ROOT));
+		(body, err) := readfile(sys->sprint("%s/1/body", EDIT_ROOT));
+		if(err != nil)
+			return err;
+		return body;
 	}
 	if(target == "addr") {
 		return doaddr();
@@ -188,22 +194,44 @@ doappend(text: string): string
 {
 	if(text == "")
 		return "error: usage: append <text>";
-	body := readfile(sys->sprint("%s/1/body", EDIT_ROOT));
-	if(len body >= 6 && body[0:6] == "error:")
-		return body;
-	newbody := body + text;
-	return writefile(sys->sprint("%s/1/body", EDIT_ROOT), newbody);
+	(body, err) := readfile(sys->sprint("%s/1/body", EDIT_ROOT));
+	if(err != nil)
+		return err;
+	return writefile(sys->sprint("%s/1/body", EDIT_ROOT), body + text);
 }
+
+# The files a document is read from and saved to are opened here, in the
+# tool's name space, which is the agent's: the editor is given the text
+# (its body file) and told the name to show ("remote"), and reads and
+# writes no file of the agent's choosing itself.  The editor is the
+# user's program in the user's name space.  It used to be told "open
+# <path>" and "save", after checks made here on the path's spelling: but
+# there a path is another file (another activity's scratch directory,
+# the real file under an overlay), nothing is read-only, and its quit
+# saved a changed document under the name it had been given, so open,
+# write and close wrote any file the agent could see.
 
 dosave(): string
 {
 	path := currentpath();
 	if(path == "")
-		return "error: editor has no current file";
+		return "error: the document has no name (give it one with: name <path>)";
 	err := checkwritable(path);
 	if(err != nil)
 		return err;
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "save");
+	(body, rerr) := readfile(sys->sprint("%s/1/body", EDIT_ROOT));
+	if(rerr != nil)
+		return rerr;
+	fd := sys->create(path, Sys->OWRITE, 8r664);
+	if(fd == nil)
+		return sys->sprint("error: cannot create %s: %r", path);
+	b := array of byte body;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("error: writing %s: %r", path);
+	fd = nil;
+	# tell the editor, which marks the document saved if the name is ours
+	writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "saved " + path);
+	return "ok";
 }
 
 doopen(path: string): string
@@ -219,7 +247,34 @@ doopen(path: string): string
 		return sys->sprint("error: path is outside the agent namespace: %s", path);
 	if(d.mode & Sys->DMDIR)
 		return sys->sprint("error: cannot open directory: %s", path);
-	return writefile(sys->sprint("%s/ctl", EDIT_ROOT), "open " + path);
+	if(d.length > big MAXFILE)
+		return sys->sprint("error: %s is too large to open in the editor (%bd bytes)", path, d.length);
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("error: cannot open %s: %r", path);
+	text := array[0] of byte;
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n < 0)
+			return sys->sprint("error: reading %s: %r", path);
+		if(n == 0)
+			break;
+		if(len text + n > MAXFILE)
+			return sys->sprint("error: %s is too large to open in the editor", path);
+		nt := array[len text + n] of byte;
+		nt[0:] = text;
+		nt[len text:] = buf[0:n];
+		text = nt;
+	}
+	fd = nil;
+	r := writebytes(sys->sprint("%s/1/body", EDIT_ROOT), text);
+	if(r != "ok")
+		return r;
+	r = writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "remote " + path);
+	if(r != "ok")
+		return r;
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "clean");
 }
 
 dogoto(args: string): string
@@ -227,14 +282,14 @@ dogoto(args: string): string
 	args = strip(args);
 	if(args == "")
 		return "error: usage: goto <line>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "goto " + args);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "goto " + args);
 }
 
 dofind(args: string): string
 {
 	if(args == "")
 		return "error: usage: find <string>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "find " + args);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "find " + args);
 }
 
 doreplacecmd(args: string): string
@@ -245,7 +300,7 @@ doreplacecmd(args: string): string
 	if(find == "")
 		return "error: usage: replace <find> <replacement>";
 	# Use tab separator for ctl command
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "replace " + find + "\t" + repl);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "replace " + find + "\t" + repl);
 }
 
 doreplaceallcmd(args: string): string
@@ -253,26 +308,29 @@ doreplaceallcmd(args: string): string
 	(find, repl) := splitfirst(args);
 	if(find == "")
 		return "error: usage: replaceall <find> <replacement>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "replaceall " + find + "\t" + repl);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "replaceall " + find + "\t" + repl);
 }
 
 doaddr(): string
 {
-	return readfile(sys->sprint("%s/1/addr", EDIT_ROOT));
+	(addr, err) := readfile(sys->sprint("%s/1/addr", EDIT_ROOT));
+	if(err != nil)
+		return err;
+	return addr;
 }
 
 doinsert(args: string): string
 {
 	if(args == "")
 		return "error: usage: insert <line> <col> <text>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "insert " + args);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "insert " + args);
 }
 
 dodelete(args: string): string
 {
 	if(args == "")
 		return "error: usage: delete <startline> <startcol> <endline> <endcol>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "delete " + args);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "delete " + args);
 }
 
 doname(args: string): string
@@ -283,53 +341,101 @@ doname(args: string): string
 	err := checkwritable(args);
 	if(err != nil)
 		return err;
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "name " + args);
+	return writectl(sys->sprint("%s/1/ctl", EDIT_ROOT), "remote " + args);
 }
 
 doclose(): string
 {
-	return writefile(sys->sprint("%s/ctl", EDIT_ROOT), "quit");
+	# The editor's quit saves nothing, and refuses with changes unsaved.
+	r := writectl(sys->sprint("%s/ctl", EDIT_ROOT), "quit");
+	if(contains(r, "hungup"))
+		return "ok";	# it went before it answered
+	if(contains(r, "unsaved changes"))
+		return "error: the document has unsaved changes: save it first " +
+			"(save, after name <path> if it has no name), or leave closing it to the user";
+	return r;
 }
 
 dostatus(): string
 {
-	return readfile(sys->sprint("%s/index", EDIT_ROOT));
+	(idx, err) := readfile(sys->sprint("%s/index", EDIT_ROOT));
+	if(err != nil)
+		return err;
+	return idx;
 }
 
 # --- I/O helpers ---
 
-readfile(path: string): string
+# A file's text, or why it cannot be had.  (The error used to come back
+# as the text, told from it by its first six characters: a document
+# beginning "error:" could not be appended to.)
+readfile(path: string): (string, string)
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return notrunning(path);
+		return (nil, notrunning(path));
 
 	result := "";
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
+		if(n < 0)
+			return (nil, sys->sprint("error: reading %s: %r", path));
+		if(n == 0)
 			break;
 		result += string buf[0:n];
 	}
 	fd = nil;
-	return result;
+	return (result, nil);
 }
 
 writefile(path, data: string): string
 {
+	return writebytes(path, array of byte data);
+}
+
+writebytes(path: string, b: array of byte): string
+{
 	fd := sys->open(path, Sys->OWRITE);
 	if(fd == nil)
 		return notrunning(path);
-
-	b := array of byte data;
 	n := sys->write(fd, b, len b);
 	fd = nil;
-
 	if(n != len b)
-		return sys->sprint("error: %r");
-
+		return editorerr();
 	return "ok";
+}
+
+# One request to one of the editor's ctl files.  A request is one 9P
+# message: a longer write is sent as several, and the ones after the
+# first begin with whatever of the caller's text falls there, so one that
+# does not fit is refused here (the body file takes text of any length).
+MAXCTL: con 4096;
+
+writectl(path, req: string): string
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return notrunning(path);
+	b := array of byte req;
+	iou := sys->iounit(fd);
+	if(len b > MAXCTL || (iou > 0 && len b >= iou))
+		return sys->sprint("error: too long for one editor command (%d bytes; the limit is %d): " +
+			"use write or append for text of that size", len b, MAXCTL);
+	n := sys->write(fd, b, len b);
+	fd = nil;
+	if(n != len b)
+		return editorerr();
+	return "ok";
+}
+
+# The editor's refusals already begin "error:".
+editorerr(): string
+{
+	e := sys->sprint("%r");
+	if(len e >= 6 && e[0:6] == "error:")
+		return e;
+	return "error: " + e;
 }
 
 # The editor's files are there only while it runs (tools9p mounts its
@@ -344,8 +450,8 @@ notrunning(path: string): string
 
 currentpath(): string
 {
-	idx := readfile(sys->sprint("%s/index", EDIT_ROOT));
-	if(len idx >= 6 && idx[0:6] == "error:")
+	(idx, err) := readfile(sys->sprint("%s/index", EDIT_ROOT));
+	if(err != nil)
 		return "";
 	(nil, rest) := splitfirst(idx);
 	for(i := len rest - 1; i >= 0; i--)
@@ -354,8 +460,13 @@ currentpath(): string
 	return "";
 }
 
-# Mirror write/edit capability enforcement before asking the unrestricted GUI
-# process to choose a save target.
+# The largest file open reads into the editor.
+MAXFILE: con 4*1024*1024;
+
+# What the write and edit tools ask before they write: the path is in
+# the activity's scratch directory or under an rw grant.  The file is
+# then created here, in the tool's own name space, where the scratch
+# directory is the activity's own and a read-only grant is read-only.
 checkwritable(path: string): string
 {
 	perr := validatepath(path);
@@ -370,13 +481,20 @@ checkwritable(path: string): string
 	fd := sys->open("/tool/paths", Sys->OREAD);
 	if(fd == nil)
 		return "error: cannot verify writable path grants";
-	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n < 0)
-		return "error: cannot read writable path grants";
-	if(n == len buf)
-		return "error: writable path grants exceed limit";
-	raw := string buf[0:n];
+	# all of it: one read gives at most a 9P message, so grants past 8K
+	# were not seen, a narrower "ro" among them
+	raw := "";
+	buf := array[8192] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n < 0)
+			return "error: cannot read writable path grants";
+		if(n == 0)
+			break;
+		raw += string buf[0:n];
+		if(len raw > 1024*1024)
+			return "error: writable path grants exceed limit";
+	}
 
 	bestlen := -1;
 	bestperm := "";
@@ -458,4 +576,12 @@ splitfirst(s: string): (string, string)
 			return (s[0:i], strip(s[i:]));
 	}
 	return (s, "");
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i + len sub] == sub)
+			return 1;
+	return 0;
 }

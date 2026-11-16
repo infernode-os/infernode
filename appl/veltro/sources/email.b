@@ -208,8 +208,10 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 		timer := chan of int;
 		spawn idletimer(timer, IDLE_TIMEOUT);
 
-		# Start IDLE in background
-		idledone := chan of string;
+		# Start IDLE in background.  Its result waits in the channel:
+		# idle returns by itself when the connection fails, with
+		# nobody yet asking how it went.
+		idledone := chan[1] of string;
 		spawn idlewrapper(imapupdates, imapstop, idledone);
 
 		# Multiplex: IMAP updates, timer, stop

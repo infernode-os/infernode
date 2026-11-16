@@ -32,10 +32,13 @@ decode(a: array of byte) : (string, ref Elem)
 }
 
 # Like decode, but continue decoding after first element
-# of array ends.
+# of array ends: the elements that fill the array, as the contents
+# of a SEQUENCE under an implicit tag come.  (It asked for a sequence
+# of indefinite length, and so for an end-of-contents mark that
+# definite encodings do not have: it could not succeed.)
 decode_seq(a: array of byte) : (string, list of ref Elem)
 {
-	(ecode, i, elist) := seq_decode(a, 0, len a, -1, 1, 0);
+	(ecode, i, elist) := seq_decode(a, 0, len a, len a, 1, 0);
 	return (errstr(ecode, i, len a), elist);
 }
 
@@ -127,17 +130,20 @@ tag_decode(a: array of byte, i, n: int) : (int, int, Tag)
 }
 
 # Decode a length field.  Assume it fits in a Limbo int.
-# If "indefinite length", return -1.
+# The indefinite form (16r80) is refused: DER has none (X.690 10.1),
+# and what is decoded here is certificates, keys and signatures.  It
+# was read as a long form of no bytes, a length of 0, so that
+# 30 80 00 00 was an empty SEQUENCE and two bytes left over.
 length_decode(a: array of byte, i, n: int) : (int, int, int)
 {
 	err := OK;
 	num := 0;
 	if(i < n) {
 		v := int a[i++];
-		if(v & 16r80)
+		if(v == 16r80)
+			err = EINVAL;
+		else if(v & 16r80)
 			return int_decode(a, i, n, v&16r7F, 1);
-		else if(v == 16r80)
-			num = -1;
 		else
 			num = v;
 	}
@@ -158,7 +164,11 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 		if(!constr)
 			err = EINVAL;
 	}
-	else if(i+length > n)
+	# the bytes that are there, counted without adding: a length near
+	# the largest int made i+length negative, and the value was then
+	# sliced or allocated at that size (an exception in whoever was
+	# decoding a peer's certificate)
+	else if(length < 0 || length > n - i)
 		err = EVALLEN;
 	if(err != OK)
 		return (err, i, nil);
@@ -175,12 +185,20 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 		else if(length != 1)
 			err = EVALLEN;
 		else {
-			val = ref Value.Bool(int a[0]);
+			# the value's own byte (it was the buffer's first: a
+			# certificate begins 16r30, so every BOOLEAN in one
+			# was true, cA FALSE and critical FALSE included).
+			# 0 is false and anything else true, as BER has it;
+			# a caller holding its input to DER asks for 16rFF.
+			val = ref Value.Bool(int a[i]);
 			i++;
 		}
 	INTEGER or ENUMERATED =>
 		if(constr)
 			err = ECONSTR;
+		else if(length == 0)
+			# an INTEGER has at least one byte (X.690 8.3.1)
+			err = EVALLEN;
 		else if(length <= 4) {
 			num : int;
 			(err, i, num) = int_decode(a, i, i+length, length, 0);
@@ -205,7 +223,10 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 		}
 		else {
 			if(length < 2) {
-				if(length == 1 && a[0] == byte 0) {
+				# the empty bit string: its one byte says no bits
+				# are unused (it was the buffer's first byte that
+				# was asked, so the one valid form was refused)
+				if(length == 1 && a[i] == byte 0) {
 					val = ref Value.BitString(0, nil);
 					i ++;
 				}
@@ -262,8 +283,17 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 						y := hd subids;
 						subids = tl subids;
 						if(m == 1) {
-							ia[1] = y % 40;
-							ia[0] = y / 40;
+							# the first two arcs are one number,
+							# 40*X+Y with X at most 2 (X.690
+							# 8.19.4): under arc 2, Y is whatever
+							# is left (2.999 was read as 26.39)
+							if(y >= 80) {
+								ia[0] = 2;
+								ia[1] = y - 80;
+							} else {
+								ia[1] = y % 40;
+								ia[0] = y / 40;
+							}
 						}
 						else
 							ia[m--] = y;
@@ -880,7 +910,7 @@ errstr(ecode, i, n: int) : string
 	err := "BER decode: ";
 	case ecode {
 		OK =>
-			err += "OK";
+			err += "extra data after the value";
 		ESHORT =>
 			err += "need more data";
 		ETOOBIG =>
@@ -896,8 +926,6 @@ errstr(ecode, i, n: int) : string
 		* =>
 			err += "unknown error " + string ecode;
 	}
-	if(err == "" && i != n)
-		err += "extra data";
 	err += " at byte " + string i;
 	return err;
 }

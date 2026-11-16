@@ -62,6 +62,8 @@ ASN1: module {
 	Value: adt {
 		pick {
 			Bool or Int =>
+				# Bool: the value's byte, 0 for FALSE; DER's
+				# TRUE is 16rFF, BER's anything but 0
 				v: int;
 			Octets or BigInt or Real or Other =>
 				# BigInt: integer too big for limbo int
@@ -93,6 +95,8 @@ ASN1: module {
 	};
 
 	init: fn();
+	# Definite lengths only (DER has no others).  Whatever the bytes,
+	# the answer is an element or an error: no exception.
 	decode: fn(a: array of byte) : (string, ref Elem);
 	decode_seq: fn(a: array of byte) : (string, list of ref Elem);
 	decode_value: fn(a: array of byte, kind, constr: int) : (string, ref Value);

@@ -239,6 +239,12 @@ gethistory(n: int): ref Whist
 
 # io
 
+# A lock for other servers of the store, where the file server has
+# exclusive files (the emulator's host file system has none: there a
+# page's writers are put in order by wikifs itself).  A lock held is
+# waited for, with one line said of it, not ten a second; a lock that
+# cannot be made at all (no d, a store that cannot be written) is not
+# waited 200 seconds for at every look at a page.
 getlock(lock:string): ref Sys->FD
 {
 	SECS := 200;
@@ -247,11 +253,29 @@ getlock(lock:string): ref Sys->FD
 		fd := wcreate(lock, Sys->ORDWR, Sys->DMEXCL|8r666);
 		if(fd != nil)
 			return fd;
-		sys->fprint(sys->fildes(2), "wcreate error: %r\n");
+		e := sys->sprint("%r");
+		if(!held(e)){
+			werrstr(wname(lock) + ": " + e);
+			return nil;
+		}
+		if(i == 0)
+			sys->fprint(sys->fildes(2), "wikifs: waiting for %s: %s\n", wname(lock), e);
 		sys->sleep(1000/10);
 	}
 	werrstr("couldn't acquire lock");
 	return nil;
+}
+
+# the error of a file open for exclusive use somewhere else
+held(e: string): int
+{
+	e = str->tolower(e);
+	for(l := "lock" :: "exclusive" :: "in use" :: nil; l != nil; l = tl l){
+		(nil, r) := str->splitstrl(e, hd l);
+		if(r != nil)
+			return 1;
+	}
+	return 0;
 }
 
 
@@ -1382,9 +1406,12 @@ name := array[] of {
 	"new.html",
 	"oldpage.html",
 	"werror.html",
+	# the text ones, in the same order (Ntemplate+T...); nil: there is none
 	"page.txt",
+	nil,
 	"diff.txt",
 	"history.txt",
+	nil,
 	"oldpage.txt",
 	"werror.txt"
 };
@@ -1399,7 +1426,9 @@ cache := array[2*Ntemplate] of ref Template;
 
 gettemplate(typ: int): string
 {
-	if(typ >= Ntemplate)
+	# (it was typ >= Ntemplate: the text templates, which are asked for
+	# as Ntemplate+T..., were never read)
+	if(typ < 0 || typ >= len name || name[typ] == nil)
 		return nil;
 
 	c := cache[typ];
@@ -1624,7 +1653,9 @@ diffhtml(h: ref Whist): string
 {
 	s, tmp, atime: string;
 
-	for(i:=h.ndoc-1;i>=0;i--){
+	# The newest Maxdiff versions: each costs a diff, and a page
+	# with thousands of versions never answered (anyone may add one).
+	for(i:=h.ndoc-1;i>=0 && i >= h.ndoc-Maxdiff;i--){
 		s += "<hr>\n";
 		if(i==h.current)
 			tmp = "index.html";
@@ -1643,6 +1674,8 @@ diffhtml(h: ref Whist): string
 		s += sdiff(h, i, i-1);
 	}
 	s += "<hr>";
+	if(i >= 0)
+		s += sys->sprint("\n<p>The %d versions before these are in the <a href=\"history.html\">history</a>.\n", i+1);
 	return s;
 }
 

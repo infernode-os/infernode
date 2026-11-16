@@ -134,7 +134,8 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	args = arg->argv();
 
-	sys->pctl(Sys->FORKNS, nil);		# fork pgrp?
+	# a group of its own: its processes end with its connection (serve)
+	sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil);
 
 	navops := chan of ref Navop;
 	spawn navigator(navops);
@@ -181,11 +182,12 @@ Serve:
 			flush <-= (m.tag, m.oldtag, done);
 			<-done;
 		Stat =>
+			# (a stat of a fid not in use was answered and then the
+			# loop left: the server gone for one bad message)
 			c := srv.getfid(m.fid);
-			if(c == nil) {
+			if(c == nil)
 				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
-				return;
-			} else
+			else
 				request(m, c);
 		* =>
 			srv.default(gm);
@@ -197,8 +199,14 @@ Serve:
 			reqidle--;
 		}
 	}
-	commitc <-= (nil, nil);	# after the page being written, if one is
+	# The connection has gone, and with it everything that served it:
+	# idle workers, the flush process and the committer stayed for
+	# ever.  The committer first, so a page being written is whole.
+	commitc <-= (nil, nil);
 	navops <-= nil;
+	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
 }
 
 # The one process that writes pages.  An edit says which version it was
@@ -325,18 +333,20 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 			# so we have to read and generate the content and calculate it's length
 			# we can then stash it in the fid, or a cache of qid if we wanted.
 			# httpd also uses mtime for last-modified
+			# (an error here left the worker without telling the flush
+			# process or the pool; and a second stat of a file said 0)
 			(d, err) := dirgen(path);
-			if(d == nil) {
+			if(d == nil)
 				srv.reply(ref Rmsg.Error(m.tag, err));
-				return;
-			}
-			if(fid.data == nil)
+			else{
 				case qidtype(path) {
 				F1st or F2nd =>
-					fid.data = loadpath(path);
+					if(fid.data == nil)
+						fid.data = loadpath(path);
 					d.length = big len fid.data;
 				}
-			srv.reply(ref Rmsg.Stat(m.tag, *d));
+				srv.reply(ref Rmsg.Stat(m.tag, *d));
+			}
 		* =>
 			srv.reply(ref Rmsg.Error(gm.tag, "oh dear"));	
 		}
@@ -357,17 +367,21 @@ newfile(file: string): (int, string)
 	if((title = fd.gets('\n')) == nil)
 		return (-1, "no title");
 	w = ref Whist;
-	w.title = title[0:len title-1];
+	w.title = chomp(title);
 	author = "me";
 	t = 0;
 	while((s := fd.gets('\n')) != nil && s != "\n"){
+		# (a last line of one letter and no newline was sliced [1:0])
+		s = chomp(s);
+		if(s == nil)
+			continue;
 		case s[0] {
 		'A' =>
-			author = s[1:len s - 1];
+			author = s[1:];
 		'D' =>
 			t = int s[1:];
 		'C' =>
-			comment = s[1: len s - 1];
+			comment = s[1:];
 		}
 	}
 	w.doc = array[1] of ref Wdoc;
@@ -384,6 +398,13 @@ newfile(file: string): (int, string)
 	if(wiki->writepage(n, t, s, w.title) < 0)
 		return (n, sys->sprint("%r"));
 	return (n, nil);
+}
+
+chomp(s: string): string
+{
+	if(s != nil && s[len s - 1] == '\n')
+		return s[0:len s - 1];
+	return s;
 }
 
 # A page's number as a name: -1 if the name is not digits, -2 if it is
@@ -649,12 +670,14 @@ flushproc(flush: chan of (int, int, chan of int))
 	for(;;)alt{
 	(pid, tag) := <-pidregister =>
 		if(tag == -1){
+			# (an entry was dropped whether or not pid was found:
+			# after a flush had taken a worker's the count went
+			# negative and the next register indexed a[-1])
 			for(i := 0; i < n; i++)
-				if(a[i].t0 == pid)
+				if(a[i].t0 == pid){
+					a[i] = a[--n];
 					break;
-			n--;
-			if(i < n)
-				a[i] = a[n];
+				}
 		}else{
 			if(n >= len a){
 				na := array[n + 5] of (int, int);
@@ -664,22 +687,21 @@ flushproc(flush: chan of (int, int, chan of int))
 			a[n++] = (pid, tag);
 		}
 	(tag, oldtag, done) := <-flush =>
+		pid := -1;
 		for(i := 0; i < n; i++)
 			if(a[i].t1 == oldtag){
-				spawn doflush(tag, a[i].t0, done);
+				pid = a[i].t0;
+				a[i] = a[--n];	# its worker is killed: it will not say it is done
 				break;
 			}
-		if(i == n)
-			spawn doflush(tag, -1, done);
+		spawn doflush(tag, pid, done);
 	}
 }
 
 doflush(tag: int, pid: int, done: chan of int)
 {
-	if(pid != -1){
+	if(pid != -1)
 		kill(pid, "kill");
-		pidregister <-= (pid, -1);
-	}
 	srv.reply(ref Rmsg.Flush(tag));
 	done <-= 1;
 }

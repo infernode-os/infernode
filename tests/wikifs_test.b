@@ -438,6 +438,52 @@ testWriteChecked(t: ref T)
 	t.assert(wh != nil && contains(words(wh.doc[0].wtxt), "the new text, line 99"), "and is the page");
 }
 
+# ---- templates and diffs
+
+testTextTemplate(t: ref T)
+{
+	dir := hoststore(t);
+	addpage(dir, 0, "front", "some text");
+	putfile(dir + "/page.txt", "TEMPLATE-TOP TITLE\nPAGE\nTEMPLATE-END\n");
+	w := wikion(t, dir);
+	wh := w->getcurrent(0);
+	if(wh == nil)
+		t.fatal("no page");
+	s := w->totext(wh, wh.doc[0], Wiki->Tpage);
+	t.assert(contains(s, "TEMPLATE-TOP front") && contains(s, "some text") && contains(s, "TEMPLATE-END"), "a page's text is set in page.txt: " + clip(s));
+	s = w->totext(wh, wh.doc[0], Wiki->Thistory);
+	t.assert(!contains(s, "TEMPLATE-TOP"), "a history's text (no history.txt here) in none");
+	rmrf(dir);
+}
+
+testDiffBound(t: ref T)
+{
+	dir := hoststore(t);
+	addpage(dir, 0, "busy page", "v0");
+	h := "busy page\n";
+	for(i := 0; i < 300; i++)
+		h += sys->sprint("D%d\nAtest\n#version %d\n", 1000 + i, i);
+	putfile(dir + "/d/0.hist", h);
+	w := wikion(t, dir);
+	wh := w->gethistory(0);
+	if(wh == nil)
+		t.fatal("no history");
+	t.asserteq(wh.ndoc, 300, "a history of 300 versions read");
+	t0 := sys->millisec();
+	s := w->tohtml(wh, wh.doc[wh.ndoc-1], Wiki->Tdiff);
+	ms := sys->millisec() - t0;
+	nd := 0;
+	for(i = 0; i + 8 <= len s; i++)
+		if(s[i:i+8] == "<br><hr>")
+			nd++;
+	t.asserteq(nd, Wiki->Maxdiff, "its diff page compares the newest Maxdiff versions");
+	t.assert(contains(s, "history.html"), "and names the history for the rest");
+	t.log(sys->sprint("diff.html of 300 versions: %d ms, %d bytes", ms, len s));
+	s = w->tohtml(wh, wh.doc[wh.ndoc-1], Wiki->Thistory);
+	t.assert(contains(s, ">" + "Thu") || len s > 300*20, "the history lists them all");
+	rmrf(dir);
+}
+
 # ---- through a mount
 
 # wikifs on dir, mounted on /n/wiki of the caller's name space
@@ -580,6 +626,20 @@ testPostRefusals(t: ref T)
 	t.assert(name == nil && err != nil, "a page with no text refused: " + err);
 	t.assertseq(getfile(dir + "/d/map"), "0 front page\n1 a new page\n", "the map has the one page added");
 
+	# a header's last line of one byte and no newline: an error, where
+	# the worker raised and the write was never answered
+	fd := sys->open("/n/new", Sys->ORDWR);
+	b := array of byte "one byte\nA";
+	sys->write(fd, b, len b);
+	t.assert(sys->write(fd, b, 0) != 0, sys->sprint("a message ending in a header line of one byte is answered (%r)"));
+	fd = nil;
+
+	# a file's length the same at each stat
+	fd = sys->open("/n/0/index.html", Sys->OREAD);
+	(nil, d1) := sys->fstat(fd);
+	(nil, d2) := sys->fstat(fd);
+	t.assert(d1.length > big 0 && d1.length == d2.length, sys->sprint("an open page's length is the same at a second stat (%bd, %bd)", d1.length, d2.length));
+	fd = nil;
 	unmountwiki();
 	rmrf(dir);
 }
@@ -630,6 +690,88 @@ writer(go: chan of int, res: chan of string, v: int, text: string)
 	res <-= err;
 }
 
+# ---- the server itself
+
+# Progs that are wikifs's
+wikiprogs(): int
+{
+	n := 0;
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	for(;;){
+		(k, d) := sys->dirread(fd);
+		if(k <= 0)
+			break;
+		for(i := 0; i < k; i++){
+			s := getfile("/prog/" + d[i].name + "/status");
+			if(contains(s, "Wikifs") && !contains(s, "WikifsTest") || contains(s, " Wiki") && !contains(s, "Wikifs"))
+				n++;
+		}
+	}
+	return n;
+}
+
+testEndsWithConnection(t: ref T)
+{
+	dir := hoststore(t);
+	addpage(dir, 0, "front page", "the front page");
+	before := wikiprogs();
+	mountwiki(t, dir);
+	for(i := 0; i < 5; i++)
+		getfile("/n/0/index.html");
+	post("another", 0, "text\n");
+	t.assert(wikiprogs() > before, "wikifs is running");
+	unmountwiki();
+	for(i = 0; i < 50 && wikiprogs() > before; i++)
+		sys->sleep(100);
+	t.asserteq(wikiprogs(), before, "none of its processes is left when its connection has gone");
+	rmrf(dir);
+}
+
+rpc(fd: ref Sys->FD, m: ref Tmsg): ref Rmsg
+{
+	b := m.pack();
+	if(sys->write(fd, b, len b) != len b)
+		return nil;
+	rc := chan[1] of ref Rmsg;
+	pidc := chan[1] of int;
+	spawn rreader(fd, rc, pidc);
+	pid := <-pidc;
+	(tick, tpid) := timer(5000);
+	alt {
+	r := <-rc =>
+		kill(tpid);
+		return r;
+	<-tick =>
+		kill(pid);
+		return nil;
+	}
+}
+
+rreader(fd: ref Sys->FD, rc: chan of ref Rmsg, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	rc <-= Rmsg.read(fd, 0);
+}
+
+testStatBadFid(t: ref T)
+{
+	dir := hoststore(t);
+	addpage(dir, 0, "front page", "the front page");
+	fd := startwikifs(t, dir);
+	r := rpc(fd, ref Tmsg.Version(Styx->NOTAG, 8192, "9P2000"));
+	t.assert(r != nil && tagof r == tagof Rmsg.Version, "version");
+	r = rpc(fd, ref Tmsg.Attach(1, 0, Styx->NOFID, "test", ""));
+	t.assert(r != nil && tagof r == tagof Rmsg.Attach, "attach");
+	r = rpc(fd, ref Tmsg.Stat(2, 99));
+	t.assert(r != nil && tagof r == tagof Rmsg.Error, "a stat of a fid not in use is an error");
+	r = rpc(fd, ref Tmsg.Stat(3, 0));
+	t.assert(r != nil && tagof r == tagof Rmsg.Stat, "and the server answers the next request");
+	fd = nil;
+	rmrf(dir);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -658,6 +800,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WriteChecked", testWriteChecked);
 	run("PostRefusals", testPostRefusals);
 	run("Simultaneous", testSimultaneous);
+	run("TextTemplate", testTextTemplate);
+	run("DiffBound", testDiffBound);
+	run("StatBadFid", testStatBadFid);
+	run("EndsWithConnection", testEndsWithConnection);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

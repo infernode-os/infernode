@@ -24,7 +24,9 @@ OFILES=${CFILES:%.c=%.$O}
 
 HFILES=\
 	../include/libsec.h\
+	../include/mp.h\
 	../libmp/os.h\
+	uint128.h\
 
 CFLAGS=$CFLAGS -I../libmp
 

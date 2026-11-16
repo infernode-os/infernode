@@ -1294,6 +1294,8 @@ work(op: ref Op, r: ref Req)
 		markdown(a, e);
 		if(op.kind == OConnect)
 			unslot(a);
+		if(op.cf != nil)
+			notsent(a, op.cf, err);
 	}
 	<-a.lk;
 

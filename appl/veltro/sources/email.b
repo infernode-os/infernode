@@ -181,7 +181,8 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 
 	for(;;) {
 		# Ensure connected
-		if(!imapconnected) {
+		if(!imapconnected || !imap->isup()) {
+			imapconnected = 0;
 			err := reconnect();
 			if(err != nil) {
 				updates <-= ref Notification("error", nil, "reconnect: " + err);
@@ -752,10 +753,13 @@ setflag(id: string, flag, add: int): string
 
 # --- Helpers ---
 
+# imap(2) closes its connection when the server stops answering, hangs
+# up or sends more than is taken: it is asked, and connected to again.
 ensureconnected(): string
 {
-	if(imapconnected)
+	if(imapconnected && imap->isup())
 		return nil;
+	imapconnected = 0;
 	return reconnect();
 }
 

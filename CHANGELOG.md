@@ -4,6 +4,15 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **The Pi 5 card image is in Raspberry Pi Imager's entry, and is no
+  longer a preview.** It has been booted from a real card. Each release's
+  `os_list_infernode.json` now lists `infernode-<version>-rpi5.img.xz`
+  for `pi5-64bit` beside the 3B+ and 4B, and the release notes and README
+  no longer call it a preview. `tests/host/imagerjson_test.sh` checks the
+  three boards.
+
 ## [0.10.1] - 2026-11-11
 
 ### Added

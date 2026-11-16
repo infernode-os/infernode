@@ -1,16 +1,16 @@
 {
   "os_list": [
     {
-      "name": "InferNode 0.9.0 (Raspberry Pi 3B+)",
+      "name": "InferNode 0.10.1 (Raspberry Pi 3B+)",
       "description": "For the Raspberry Pi 3B+ only. Wi-Fi: put a wifi file on the card (see README.txt on it).",
-      "url": "https://github.com/infernode-os/infernode/releases/download/v0.9.0/infernode-0.9.0-rpi3bplus.img.xz",
+      "url": "https://github.com/infernode-os/infernode/releases/download/v0.10.1/infernode-0.10.1-rpi3bplus.img.xz",
       "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
       "website": "https://www.infernode.io",
-      "release_date": "2026-10-29",
+      "release_date": "2026-11-12",
       "extract_size": 1073741824,
-      "extract_sha256": "5c3951170afe6dc4182ab671ca763d2f56e113943cf742285acf12bf9409e6d9",
-      "image_download_size": 22423956,
-      "image_download_sha256": "4f87129cb285d58ef7700cc81a3108e79e7ab13936ef532ae8c859d7e8c628dd",
+      "extract_sha256": "bc56a9f1be22affb88aeaea7c54c39261252c2ccf4694291e538893b1b3ce48d",
+      "image_download_size": 21300120,
+      "image_download_sha256": "e76919a8330a45624d1196d9fe4f141e2bc8adba3113d28678fd2b3c9cf23377",
       "devices": [
         "pi3-64bit"
       ],
@@ -18,18 +18,35 @@
       "init_format": "none"
     },
     {
-      "name": "InferNode 0.9.0 (Raspberry Pi 4B)",
+      "name": "InferNode 0.10.1 (Raspberry Pi 4B)",
       "description": "For the Raspberry Pi 4B. Wi-Fi: put a wifi file on the card (see README.txt on it).",
-      "url": "https://github.com/infernode-os/infernode/releases/download/v0.9.0/infernode-0.9.0-rpi4b.img.xz",
+      "url": "https://github.com/infernode-os/infernode/releases/download/v0.10.1/infernode-0.10.1-rpi4b.img.xz",
       "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
       "website": "https://www.infernode.io",
-      "release_date": "2026-10-29",
+      "release_date": "2026-11-12",
       "extract_size": 1073741824,
-      "extract_sha256": "239d0baa359b409e9cd9cdc396bbcddf5b4d6755e3ad4ae2619b6de8a2c8d4bb",
-      "image_download_size": 22097312,
-      "image_download_sha256": "df74134477c0ae545527e81b5389c4efa63dd0d6a6aa35351a7c7a49cbc61991",
+      "extract_sha256": "3c8208ac220a0227b3c6deca73e322802a4b6df912dcacb34f2c84539e3d2368",
+      "image_download_size": 20974692,
+      "image_download_sha256": "6a0253062e594deae11f18a46d03522b2e752905fb16e3ec152352927352e8d8",
       "devices": [
         "pi4-64bit"
+      ],
+      "architecture": "armv8",
+      "init_format": "none"
+    },
+    {
+      "name": "InferNode 0.10.1 (Raspberry Pi 5)",
+      "description": "For the Raspberry Pi 5. Wi-Fi: put a wifi file on the card (see README.txt on it).",
+      "url": "https://github.com/infernode-os/infernode/releases/download/v0.10.1/infernode-0.10.1-rpi5.img.xz",
+      "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
+      "website": "https://www.infernode.io",
+      "release_date": "2026-11-12",
+      "extract_size": 1073741824,
+      "extract_sha256": "56e64e03e0b1bd1c1f5bf6d2d3c61350f8aceb5b2c19b915570991bddbd35fea",
+      "image_download_size": 19841676,
+      "image_download_sha256": "2fbe6e709df269b882bf19d7969b94eb7cff6cc087b9d074233cc3ed9a3018f8",
+      "devices": [
+        "pi5-64bit"
       ],
       "architecture": "armv8",
       "init_format": "none"

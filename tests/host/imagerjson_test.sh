@@ -28,16 +28,17 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/imagerjson.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 V=9.9.9
-for b in rpi3bplus rpi4b; do
+for b in rpi3bplus rpi4b rpi5; do
 	head -c 300000 /dev/urandom > "$tmp/infernode-$V-$b.img"
 	xz -k -T1 "$tmp/infernode-$V-$b.img"
 done
 T=docs/store/rpi-imager/os_list_infernode.json
 
-if python3 tools/mkimagerjson.py $V 2026-12-01 "$tmp/infernode-$V-rpi3bplus.img.xz" "$tmp/infernode-$V-rpi4b.img.xz" > "$tmp/out.json" 2> "$tmp/err"; then
-	pass "it writes a file for a release's two images"
+ALL="$tmp/infernode-$V-rpi3bplus.img.xz $tmp/infernode-$V-rpi4b.img.xz $tmp/infernode-$V-rpi5.img.xz"
+if python3 tools/mkimagerjson.py $V 2026-12-01 $ALL > "$tmp/out.json" 2> "$tmp/err"; then
+	pass "it writes a file for a release's three images"
 else
-	failed "it refused a release's two images: $(cat "$tmp/err")"
+	failed "it refused a release's three images: $(cat "$tmp/err")"
 fi
 
 # every field checked against the files and the template, by a reader of its own
@@ -87,14 +88,12 @@ refused() {	# refused <what> <stderr pattern> <args...>
 		failed "it refuses $what, but says: $(cat "$tmp/err")"
 	fi
 }
-refused "a board with no image" "no image for the rpi4b item" $V 2026-12-01 "$tmp/infernode-$V-rpi3bplus.img.xz"
-cp "$tmp/infernode-$V-rpi4b.img.xz" "$tmp/infernode-$V-rpi5.img.xz"
-refused "an image no item is for" "no template item for rpi5" $V 2026-12-01 \
-	"$tmp/infernode-$V-rpi3bplus.img.xz" "$tmp/infernode-$V-rpi4b.img.xz" "$tmp/infernode-$V-rpi5.img.xz"
-refused "an image named for another version" "is not infernode-9.9.8" 9.9.8 2026-12-01 \
+refused "a board with no image" "no image for the rpi5 item" $V 2026-12-01 \
 	"$tmp/infernode-$V-rpi3bplus.img.xz" "$tmp/infernode-$V-rpi4b.img.xz"
-refused "a date that is not YYYY-MM-DD" "is not YYYY-MM-DD" $V 01/12/2026 \
-	"$tmp/infernode-$V-rpi3bplus.img.xz" "$tmp/infernode-$V-rpi4b.img.xz"
+cp "$tmp/infernode-$V-rpi4b.img.xz" "$tmp/infernode-$V-rpi2.img.xz"
+refused "an image no item is for" "no template item for rpi2" $V 2026-12-01 $ALL "$tmp/infernode-$V-rpi2.img.xz"
+refused "an image named for another version" "is not infernode-9.9.8" 9.9.8 2026-12-01 $ALL
+refused "a date that is not YYYY-MM-DD" "is not YYYY-MM-DD" $V 01/12/2026 $ALL
 
 [ $fail = 0 ] || exit 1
 exit 0

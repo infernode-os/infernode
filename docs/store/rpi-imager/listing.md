@@ -42,8 +42,8 @@ device annotations.
 
 And what the entry carries:
 
-- **Images:** the release's `infernode-<version>-rpi3bplus.img.xz` and
-  `-rpi4b.img.xz`, signed (sigstore) and with build provenance, from
+- **Images:** the release's `infernode-<version>-rpi3bplus.img.xz`,
+  `-rpi4b.img.xz` and `-rpi5.img.xz`, signed (sigstore) and with build provenance, from
   https://github.com/infernode-os/infernode/releases
 - **Customisation:** none (`init_format: none`). InferNode does not read
   cloud-init or `firstrun.sh`, so Imager's settings screen is off for it. Wi-Fi
@@ -53,14 +53,17 @@ And what the entry carries:
 ## Which boards
 
 Imager's device tags are coarser than what has run InferNode. `pi3-64bit` is
-every Pi 3 and the Zero 2 W; `pi4-64bit` is the 4B, the Pi 400 and the CM4.
+every Pi 3 and the Zero 2 W; `pi4-64bit` is the 4B, the Pi 400 and the CM4;
+`pi5-64bit` is the Pi 5, the Pi 500 and the CM5.
 
 | Board | Tag | Run on |
 |-|-|-|
 | Raspberry Pi 3B+ | `pi3-64bit` | yes: boot, HDMI, the first login, Wi-Fi, Bluetooth, Ethernet |
 | Raspberry Pi 4B | `pi4-64bit` | yes: boot, HDMI0/HDMI1 and the 7" panel, the first login, Wi-Fi, Bluetooth, Ethernet |
+| Raspberry Pi 5 | `pi5-64bit` | yes, from the release's card: an 8GB rev 1.0 board -- boot, either HDMI port, the first login, Wi-Fi, Bluetooth, Ethernet. The D0 stepping (2GB boards and later) has not been run |
 | Pi 3B, 3A+, Zero 2 W | `pi3-64bit` | no. Their radio is not the CYW43455 the card carries firmware for |
 | Pi 400, CM4 | `pi4-64bit` | no |
+| Pi 500, CM5 | `pi5-64bit` | no |
 
 So each item's description names its board, as other images' do ("for RPi
 4/400/5 models with 4Gb+").

@@ -210,7 +210,7 @@ once.
 ## 4. Putting it on a Raspberry Pi 3B+
 
 **The quick way** is a release's image for the board,
-`infernode-<version>-rpi3bplus.img.xz` (or `-rpi4b`), written to a card
+`infernode-<version>-rpi3bplus.img.xz` (or `-rpi4b`, `-rpi5`), written to a card
 whole: Raspberry Pi Imager's "Use custom" (with its OS customisation
 left off: nothing here reads it), `dd`, or Etcher. It is everything
 below, the radio's Wi-Fi firmware and Bluetooth patch included (in

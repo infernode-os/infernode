@@ -244,9 +244,42 @@ dirof(q: int): Sys->Dir
 	return d;
 }
 
+# The server's fids, by number.  They were kept in sixty-four places by
+# the number's remainder: the mount driver's fids are the kernel's, so
+# after enough mounts elsewhere (the suite's tests before this one) a
+# walk's new fid fell on the root's place and its clunk forgot the root.
+Fids: adt {
+	l:	list of (int, int);
+	get:	fn(f: self ref Fids, fid: int): int;
+	set:	fn(f: self ref Fids, fid: int, q: int);
+};
+
+Fids.get(f: self ref Fids, fid: int): int
+{
+	for(l := f.l; l != nil; l = tl l){
+		(n, q) := hd l;
+		if(n == fid)
+			return q;
+	}
+	return -1;
+}
+
+Fids.set(f: self ref Fids, fid: int, q: int)
+{
+	nl: list of (int, int);
+	for(l := f.l; l != nil; l = tl l){
+		(n, nil) := hd l;
+		if(n != fid)
+			nl = hd l :: nl;
+	}
+	if(q >= 0)
+		nl = (fid, q) :: nl;
+	f.l = nl;
+}
+
 server(fd: ref Sys->FD, listbad: int)
 {
-	fids := array[64] of {* => -1};
+	fids := ref Fids;
 	for(;;){
 		m := Tmsg.read(fd, 8192);
 		if(m == nil)
@@ -259,10 +292,10 @@ server(fd: ref Sys->FD, listbad: int)
 		Version =>
 			r = ref Rmsg.Version(x.tag, 8192, "9P2000");
 		Attach =>
-			fids[x.fid%64] = Qroot;
+			fids.set(x.fid, Qroot);
 			r = ref Rmsg.Attach(x.tag, dirof(Qroot).qid);
 		Walk =>
-			q := fids[x.fid%64];
+			q := fids.get(x.fid);
 			qids := array[len x.names] of Sys->Qid;
 			e := "";
 			for(i := 0; i < len x.names; i++){
@@ -280,14 +313,14 @@ server(fd: ref Sys->FD, listbad: int)
 				r = ref Rmsg.Error(x.tag, e);
 			else{
 				if(i == len x.names)
-					fids[x.newfid%64] = q;
+					fids.set(x.newfid, q);
 				r = ref Rmsg.Walk(x.tag, qids[0:i]);
 			}
 		Open =>
-			r = ref Rmsg.Open(x.tag, dirof(fids[x.fid%64]).qid, 0);
+			r = ref Rmsg.Open(x.tag, dirof(fids.get(x.fid)).qid, 0);
 		Read =>
 			data := array[0] of byte;
-			if(fids[x.fid%64] == Qroot && x.offset == big 0){
+			if(fids.get(x.fid) == Qroot && x.offset == big 0){
 				data = styx->packdir(dirof(Qgood));
 				if(listbad){
 					bd := nul(styx->packdir(dirof(Qbad)));
@@ -299,12 +332,12 @@ server(fd: ref Sys->FD, listbad: int)
 			}
 			r = ref Rmsg.Read(x.tag, data);
 		Stat =>
-			q := fids[x.fid%64];
+			q := fids.get(x.fid);
 			r = ref Rmsg.Stat(x.tag, dirof(q));
 			if(q == Qbad)
 				b = nul(r.pack());
 		Clunk =>
-			fids[x.fid%64] = -1;
+			fids.set(x.fid, -1);
 			r = ref Rmsg.Clunk(x.tag);
 		Flush =>
 			r = ref Rmsg.Flush(x.tag);

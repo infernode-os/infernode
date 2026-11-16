@@ -354,7 +354,16 @@ testOperandsKept(t: ref T)
 	a := x.expmod(e, m);
 	b := x.mod(m).expmod(e, m);
 	t.assert(a.eq(b), "x^e mod m is (x mod m)^e mod m");
-	inv := y.invert(m);
+	# y and m are random: about one pair in five has a common factor,
+	# and then there is no inverse, which is an exception (it failed
+	# the test, one run in five)
+	inv: ref IPint;
+	{
+		inv = y.invert(m);
+	} exception {
+	"*" =>
+		inv = nil;
+	}
 	if(inv != nil)
 		t.assert(inv.mul(y).mod(m).eq(ip(1)), "y times its inverse is 1 mod m");
 	s := x.iptostr(10);

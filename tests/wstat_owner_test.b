@@ -68,13 +68,21 @@ testOwner(t: ref T)
 	if(d0.dtype != 'U')
 		t.skip(sys->sprint("%s is not a host file (device %c)", FILE, d0.dtype));
 
+	# The mode the file has is what create gave it: the mode asked for
+	# under the directory's (a /tmp of mode 700 gives 600, as CI's is),
+	# so the test asks for one it does not have.
+	mode0 := d0.mode & 8r777;
+	newmode := 8r600;
+	if(mode0 == newmode)
+		newmode = 8r400;
+
 	# another owner, and a mode with it: refused whole
 	d := sys->nulldir;
 	d.uid = "nobody-of-this-name";
-	d.mode = 8r600;
+	d.mode = newmode;
 	t.assert(sys->wstat(FILE, d) < 0, "a wstat naming another owner is refused");
 	(nil, d1) := sys->stat(FILE);
-	t.asserteq(d1.mode & 8r777, 8r644, "and the mode it asked for with it is not set");
+	t.asserteq(d1.mode & 8r777, mode0, "and the mode it asked for with it is not set");
 	t.assertseq(d1.uid, d0.uid, "and the owner is the one it was");
 
 	# a name no owner has, of any length
@@ -89,10 +97,10 @@ testOwner(t: ref T)
 	t.assert(sys->wstat(FILE, d0) >= 0, sys->sprint("a stat written back succeeds: %r"));
 	t.assert(sys->wstat(FILE, sys->nulldir) >= 0, sys->sprint("a wstat that changes nothing succeeds: %r"));
 	d = sys->nulldir;
-	d.mode = 8r600;
+	d.mode = newmode;
 	t.assert(sys->wstat(FILE, d) >= 0, sys->sprint("a wstat of the mode alone succeeds: %r"));
 	(nil, d1) = sys->stat(FILE);
-	t.asserteq(d1.mode & 8r777, 8r600, "and sets it");
+	t.asserteq(d1.mode & 8r777, newmode, "and sets it");
 	sys->remove(FILE);
 }
 

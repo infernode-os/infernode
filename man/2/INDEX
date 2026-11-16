@@ -2,7 +2,6 @@ intro 0intro
 arg arg
 asn1 asn1
 decode asn1
-encode asn1
 attrdb attrdb
 bloomfilter bloomfilter
 bufio bufio

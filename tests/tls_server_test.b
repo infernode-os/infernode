@@ -552,15 +552,15 @@ testClientCerts(t: ref T)
 	scfg.clock = nil;
 
 	# chains, through x509 itself (this client sends one certificate)
-	(ok, err) := x509->verify_certchain_roots(hex(C_VIAINT) :: hex(C_INT) :: nil, roots, nil, 1800000000);
+	(ok, err) := x509->verify_certchain_roots(hex(C_VIAINT) :: hex(C_INT) :: nil, roots, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(ok, "a leaf with its intermediate, to the root: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_VIAINT) :: nil, roots, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_VIAINT) :: nil, roots, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(!ok, "without its intermediate refused: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, hex(C_OTHER) :: nil, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, hex(C_OTHER) :: nil, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(!ok, "a root that did not issue it refused: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, nil, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, nil, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(!ok, "no roots: refused: " + err);
-	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, roots, nil, 1800000000);
+	(ok, err) = x509->verify_certchain_roots(hex(C_GOOD) :: nil, roots, nil, 1800000000, X509->Usage_ClientAuth);
 	t.assert(ok, "the same leaf to its root: " + err);
 }
 

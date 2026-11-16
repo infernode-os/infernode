@@ -1,12 +1,21 @@
 implement PKCS;
 
+#
+# What is left of the Public-Key Cryptography Standards here is what
+# X.509 and TLS use: the object identifiers of the keys and signatures
+# they take, an RSA public key read from a certificate, and RSA
+# encryption for TLS 1.2's RSA key exchange.  The rest (PKCS #1
+# decryption and MD2/MD5 signing, the DSS stubs, PKCS #3
+# Diffie-Hellman, PKCS #5 password-based DES, the PKCS #6 and #8
+# shells) served the SSL 3.0 client and went when it did.
+#
+
 include "sys.m";
 	sys				: Sys;
 
 include "keyring.m";
 	keyring				: Keyring;
 	IPint				: import keyring;
-	DESstate			: import keyring;
 
 include "security.m";
 	random				: Random;
@@ -17,60 +26,20 @@ include "asn1.m";
 
 include "pkcs.m";
 
-# pkcs object identifiers
-
 objIdTab = array [] of {
-	id_pkcs =>			Oid(array [] of {1,2,840,113549,1}),
-	id_pkcs_1 =>			Oid(array [] of {1,2,840,113549,1,1}),
 	id_pkcs_rsaEncryption => 	Oid(array [] of {1,2,840,113549,1,1,1}),
-	id_pkcs_md2WithRSAEncryption => Oid(array [] of {1,2,840,113549,1,1,2}),
-	id_pkcs_md4WithRSAEncryption => Oid(array [] of {1,2,840,113549,1,1,3}),
-	id_pkcs_md5WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,4}),
-
-	id_pkcs_3 =>			Oid(array [] of {1,2,840,113549,1,3}),
-	id_pkcs_dhKeyAgreement =>	Oid(array [] of {1,2,840,113549,1,3,1}),
-
-	id_pkcs_5 =>			Oid(array [] of {1,2,840,113549,1,5}),
-	id_pkcs_pbeWithMD2AndDESCBC => 	Oid(array [] of {1,2,840,113549,1,5,1}),
-	id_pkcs_pbeWithMD5AndDESCBC =>	Oid(array [] of {1,2,840,113549,1,5,3}),
-
-	id_pkcs_7 =>			Oid(array [] of {1,2,840,113549,1,7}),
-	id_pkcs_data =>			Oid(array [] of {1,2,840,113549,1,7,1}),
-	id_pkcs_singnedData => 		Oid(array [] of {1,2,840,113549,1,7,2}),
-	id_pkcs_envelopedData =>	Oid(array [] of {1,2,840,113549,1,7,3}),
-	id_pkcs_signedAndEnvelopedData => 	
-					Oid(array [] of {1,2,840,113549,1,7,4}),
-	id_pkcs_digestData =>		Oid(array [] of {1,2,840,113549,1,7,5}),
-	id_pkcs_encryptedData =>	Oid(array [] of {1,2,840,113549,1,7,6}),
-
-	id_pkcs_9 =>			Oid(array [] of {1,2,840,113549,1,9}),
-	id_pkcs_emailAddress => 	Oid(array [] of {1,2,840,113549,1,9,1}),
-	id_pkcs_unstructuredName =>	Oid(array [] of {1,2,840,113549,1,9,2}),
-	id_pkcs_contentType =>		Oid(array [] of {1,2,840,113549,1,9,3}),
-	id_pkcs_messageDigest =>	Oid(array [] of {1,2,840,113549,1,9,4}),
-	id_pkcs_signingTime =>		Oid(array [] of {1,2,840,113549,1,9,5}),
-	id_pkcs_countersignature =>	Oid(array [] of {1,2,840,113549,1,9,6}),
-	id_pkcs_challengePassword =>	Oid(array [] of {1,2,840,113549,1,9,7}),
-	id_pkcs_unstructuredAddress =>	Oid(array [] of {1,2,840,113549,1,9,8}),
-	id_pkcs_extCertAttrs =>		Oid(array [] of {1,2,840,113549,1,9,9}),
-	id_algorithm_shaWithDSS =>	Oid(array [] of {1,3,14,3,2,13}),
+	id_sha256WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,11}),
+	id_sha384WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,12}),
+	id_sha512WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,13}),
 	id_ec_publicKey =>		Oid(array [] of {1,2,840,10045,2,1}),
 	id_ecdsa_sha256 =>		Oid(array [] of {1,2,840,10045,4,3,2}),
 	id_ecdsa_sha384 =>		Oid(array [] of {1,2,840,10045,4,3,3}),
+	id_ecdsa_sha512 =>		Oid(array [] of {1,2,840,10045,4,3,4}),
 	id_prime256v1 =>		Oid(array [] of {1,2,840,10045,3,1,7}),
-	id_sha256WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,11}),
-	id_sha384WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,12}),
-	id_mldsa65 =>			Oid(array [] of {2,16,840,1,101,3,4,3,18}),
-	id_mldsa87 =>			Oid(array [] of {2,16,840,1,101,3,4,3,19}),
-	# SLH-DSA-SHAKE-192s and -256s, the parameter sets Keyring has
-	# (NIST's registry, RFC 9909: .28 and .30; they were .22 and .26,
-	# which are SLH-DSA-SHA2-192s and SLH-DSA-SHAKE-128s)
-	id_slhdsa192s =>		Oid(array [] of {2,16,840,1,101,3,4,3,28}),
-	id_slhdsa256s =>		Oid(array [] of {2,16,840,1,101,3,4,3,30})
+	id_secp384r1 =>			Oid(array [] of {1,3,132,0,34}),
 };
 
 # [public]
-# initialize PKCS module
 
 init(): string
 {
@@ -95,12 +64,12 @@ init(): string
 }
 
 # [public]
-# Encrypt data according to PKCS#1, with given blocktype, using given key.
+# RSAES-PKCS1-v1_5 encryption (RFC 8017 7.2.1): the block is
+# 00 02 PS 00 M, PS at least eight octets, none of them zero.
 
-rsa_encrypt(data: array of byte, key: ref RSAKey, blocktype: int)
-	: (string, array of byte)
+rsa_encrypt(data: array of byte, key: ref RSAKey): (string, array of byte)
 {
-	if(key == nil) 
+	if(key == nil || key.modulus == nil || key.exponent == nil)
 		return ("null pkcs#1 key", nil);
 	k := key.modlen;
 	dlen := len data;
@@ -108,48 +77,18 @@ rsa_encrypt(data: array of byte, key: ref RSAKey, blocktype: int)
 		return ("bad parameters for pkcs#1", nil);
 	padlen := k-3-dlen;
 	pad := random->randombuf(Random->NotQuiteRandom, padlen);
-	for(i:=0; i < padlen; i++) {
-		if(blocktype == 0)
-			pad[i] = byte 0;
-		else if(blocktype == 1)
-			pad[i] = byte 16rff;
-		else if(pad[i] == byte 0)
+	if(len pad != padlen)
+		return ("no source of random numbers", nil);
+	for(i:=0; i < padlen; i++)
+		if(pad[i] == byte 0)
 			pad[i] = byte 1;
-	}
 	eb := array[k] of byte;
 	eb[0] = byte 0;
-	eb[1] = byte blocktype;
+	eb[1] = byte 2;
 	eb[2:] = pad[0:];
 	eb[padlen+2] = byte 0;
 	eb[padlen+3:] = data[0:];
 	return ("", rsacomp(eb, key));
-}
-
-# [public]
-# Decrypt data according to PKCS#1, with given key.
-# If public is true, expect a block type of 0 or 1, else 2.
-
-rsa_decrypt(data: array of byte, key: ref RSAKey, public: int) 
-	: (string, array of byte)
-{
-	if(key == nil || key.modulus == nil || key.exponent == nil)
-		return ("null pkcs#1 key", nil);
-	eb := rsacomp(data, key);
-	k := key.modlen;
-	if(len eb == k) {
-		bt := int eb[1];
-		if(int eb[0] == 0 && ((public && (bt == 0 || bt == 1)) || (!public && bt == 2))) {
-			for(i := 2; i < k; i++)
-				if(eb[i] == byte 0)
-					break;
-			if(i < k-1) {
-				ans := array[k-(i+1)] of byte;
-				ans[0:] = eb[i+1:];
-				return ("", ans);
-			}
-		}
-	}
-	return ("pkcs1 decryption error", nil);
 }
 
 # [private]
@@ -175,74 +114,6 @@ rsacomp(block: array of byte, key: ref RSAKey): array of byte
 		ybytes = a;
 	}
 	return ybytes;
-}
-
-# [public]
-
-rsa_sign(data: array of byte, sk: ref RSAKey, algid: int): (string, array of byte)
-{
-	# digesting and add proper padding to it
-	ph := padhash(data, algid);
-	# a digest this does not make (it then signed the empty message,
-	# and said it had signed the data)
-	if(ph == nil)
-		return ("unsupported digest algorithm", nil);
-
-	return rsa_encrypt(ph, sk, 0); # blocktype <- padding with zero
-}
-
-# [private]
-# padding block A
-PA := array [] of {
-	byte 16r30, byte 16r20, byte 16r30, byte 16r0c, 
-	byte 16r06, byte 16r08, byte 16r2a, byte 16r86, 
-	byte 16r48, byte 16r86, byte 16rf7, byte 16r0d, 
-	byte 16r02
-};
-
-# [private]
-# padding block B
-PB := array [] of {byte 16r05, byte 16r00, byte 16r04, byte 16r10};
-
-# [private]
-# require either md5 or md2 of 16 bytes digest
-# length of padded digest = 13 + 1 + 4 + 16
-
-padhash(data: array of byte, algid: int): array of byte
-{
-	padded := array [34] of byte;
-	case algid {
-	MD2_WithRSAEncryption =>
-		# there is no MD2 here (the block was built with no digest in
-		# it: the same for every message)
-		return nil;
-
-	MD5_WithRSAEncryption =>	
-		padded[13] = byte 5;
-		keyring->md5(data, len data, padded[18:], nil);
-	* =>
-		return nil;
-	}
-	padded[0:] = PA;
-	padded[14:] = PB;
-
-	return padded;
-}
-
-# [private]
-# compare byte to byte of two array of byte
-
-byte_cmp(a, b: array of byte): int
-{
-	if(len a != len b)
-		return 0;
-
-	for(i := 0; i < len a; i++) {
-		if(a[i] != b[i])
-			return 0;
-	}
-
-	return 1;
 }
 
 # [public]
@@ -282,13 +153,10 @@ RSAMINBITS: con 2048;
 RSAMAXBITS: con 8192;
 
 # The bytes asn1 gives for an INTEGER, of a negative number (or none)?
-# One of more than four bytes is given as it was encoded, two's
-# complement.  A shorter one has been through an int: its bytes are
-# the int's, less leading zeros, so that 16rA88B is A8 8B and only a
-# negative number still has all four.
+# They are DER's, two's complement in the fewest bytes.
 negative(b: array of byte): int
 {
-	return len b == 0 || len b >= 4 && (int b[0] & 16r80);
+	return len b == 0 || (int b[0] & 16r80);
 }
 
 decode_rsapubkey(a: array of byte): (string, ref RSAKey)
@@ -329,276 +197,3 @@ parse:
 	}
 	return ("rsa public key: syntax error", nil);
 }
-
-
-# [public]
-# DEPRECATED: DSA key generation is not implemented and DSA is
-# deprecated by NIST (FIPS 186-5, 2023).  Use Ed25519 or ECDSA
-# via the Keyring module instead.  This stub is retained only for
-# interface compatibility.
-
-generateDSSKeyPair(strength: int): (ref DSSPublicKey, ref DSSPrivateKey)
-{
-	sys->fprint(sys->fildes(2), "pkcs: generateDSSKeyPair is deprecated and not implemented; use Ed25519\n");
-	return (nil, nil);
-}
-
-# [public]
-
-dss_sign(a: array of byte, sk: ref DSSPrivateKey): (string, array of byte)
-{
-	#signature, digest: array of byte;
-
-	#case hash {
-	#Keyring->MD4 =>
-	#	digest = array [Keyring->MD4dlen] of byte;
-	#	keyring->md4(a, len a, digest, nil);
-	#Keyring->MD5 =>
-	#	digest = array [Keyring->MD5dlen] of byte;
-	#	keyring->md5(a, len a, digest, nil);
-	#Keyring->SHA =>
-	#	digest = array [Keyring->SHA1dlen] of byte;
-	#	keyring->sha1(a, len a, digest, nil);
-	#* =>
-	#	return ("unknown hash algorithm", nil);
-	#}
-
-	# TODO: add gcd or getRandBetween in Keyring->IPint
-	return ("unsupported error", nil);
-}
-
-# [public]
-
-dss_verify(nil, nil: array of byte, nil: ref DSSPublicKey): int
-{
-	# DSA is not implemented (see dss_sign), so nothing verifies: this
-	# compared the message with an array it never filled, and so said
-	# an empty message was signed, by anyone
-	return 0;
-}
-
-# [public]
-decode_dsspubkey(a: array of byte): (string, ref DSSPublicKey)
-{
-	return ("unsupported error", nil);
-}
-
-
-# [public]
-# generate DH parameters with prime length at least (default) 512 bits
-
-generateDHParams(primelen: int): ref DHParams
-{
-	# prime - at least 512 bits
-	if(primelen < 512) # DHmodlen
-		primelen = 512;
-
-	# generate prime and base (generator) integers
-	(p, g) := keyring->dhparams(primelen);
-	if(p == nil || g == nil)
-		return nil;
-
-	return ref DHParams(p, g, 0);
-}
-
-# [public]
-# generate public and private key pair
-# Note: use iptobytes as integer to octet string conversion
-#	and bytestoip as octect string to integer reversion
-
-setupDHAgreement(dh: ref DHParams): (ref DHPrivateKey, ref DHPublicKey)
-{
-	if(dh == nil || dh.prime == nil || dh.base == nil)
-		return (nil, nil);
-
-	# prime length in bits
-	bits := dh.prime.bits();
-
-	# generate random private key of length between bits/4 and bits
-	x := IPint.random(bits/4, bits);
-	if(x == nil)
-		return (nil, nil);
-	dh.privateValueLength = x.bits();
-
-	# calculate public key
-	y := dh.base.expmod(x, dh.prime);
-	if(y == nil)
-		return (nil, nil);
-
-	return (ref DHPrivateKey(dh, y, x), ref DHPublicKey(dh, x));
-}
-
-# [public]
-# The second phase of Diffie-Hellman key agreement
-
-computeDHAgreedKey(dh: ref DHParams, mysk, upk: ref IPint)
-	: array of byte
-{
-	if(mysk == nil || upk == nil)
-		return nil;
-
-	# exponential - calculate agreed key (shared secret)
-	z := upk.expmod(mysk, dh.prime);
-
-	# integer to octet conversion
-	return z.iptobebytes();
-}
-
-# [public]
-# ASN1 encoding
-
-decode_dhpubkey(a: array of byte): (string, ref DHPublicKey)
-{
-	return ("unsupported error", nil);
-}
-
-
-# [public]
-# Digest the concatenation of password and salt with count iterations of
-# selected message-digest algorithm (either md2 or md5).
-# The first 8 bytes of the message digest become the DES key.
-# The last 8 bytes of the message digest become the initializing vector IV.
-
-generateDESKey(pw: array of byte, param: ref PBEParams, alg: int)
-	: (ref DESstate, array of byte, array of byte)
-{
-	if(param.iterationCount < 1)
-		return (nil, nil, nil);
-
-	# concanate password and salt
-	pwlen := len pw;
-	pslen := pwlen + len param.salt;
-	ps := array [pslen] of byte;
-	ps[0:] = pw;
-	ps[pwlen:] = param.salt;
-	key, iv: array of byte;
-
-	# digest iterations
-	case alg {
-	PBE_MD2_DESCBC =>
-		ds : ref Keyring->DigestState = nil;
-		# TODO: implement md2 in keyring module
-		#result := array [Keyring->MD2dlen] of byte;
-		#for(i := 0; i < param.iterationCount; i++)
-		#	ds = keyring->md2(ps, pslen, nil, ds);	
-		#keyring->md2(ps, pslen, result, ds);	
-		#key = result[0:8];
-		#iv = result[8:];
-
-	PBE_MD5_DESCBC =>
-		ds: ref Keyring->DigestState = nil;
-		result := array [Keyring->MD5dlen] of byte;
-		for(i := 0; i < param.iterationCount; i++) 
-			ds = keyring->md5(ps, pslen, nil, ds);
-		keyring->md5(ps, pslen, result, ds);
-		key = result[0:8];
-		iv = result[8:];
-
-	* =>
-		return (nil, nil, nil);
-	}
-
-	state := keyring->dessetup(key, iv);
-
-	return (state, key, iv);
-}
-
-# [public]
-# The message M and a padding string PS shall be formatted into
-# an octet string EB
-# 	EB = M + PS
-# where
-#	PS = 1 if M mod 8 = 7;
-#	PS = 2 + 2 if M mod 8 = 6;
-#	...
-#	PS = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 if M mod 8 = 0;
-
-pbe_encrypt(state: ref DESstate, m: array of byte): array of byte
-{
-	mlen := len m;
-	padvalue :=  mlen % 8;
-	pdlen := 8 - padvalue;
-
-	eb := array [mlen + pdlen] of byte;
-	eb[0:] = m;
-	for(i := mlen; i < pdlen; i++)
-		eb[i] = byte padvalue;
-
-	keyring->descbc(state, eb, len eb, Keyring->Encrypt);
-
-	return eb;
-}
-
-# [public]
-
-pbe_decrypt(state: ref DESstate, eb: array of byte): array of byte
-{
-	eblen := len eb;
-	if(eblen%8 != 0) # must a multiple of 8 bytes
-		return nil;
-
-	keyring->descbc(state, eb, eblen, Keyring->Decrypt);	
-
-	# remove padding
-	for(i := eblen -8; i < 8; i++) {
-		if(int eb[i] == i) {
-			for(j := i; j < 8; j++)
-				if(int eb[j] != i)
-					break;
-			if(j == 8)
-				break;
-		}
-	}
-
-	return eb[0:i];
-}
-
-# [public]
-
-PrivateKeyInfo.encode(p: self ref PrivateKeyInfo): (string, array of byte)
-{
-
-	return ("unsupported error", nil);
-}
-
-# [public]
-
-PrivateKeyInfo.decode(a: array of byte): (string, ref PrivateKeyInfo)
-{
-	return ("unsupported error", nil);
-}
-
-# [public]
-
-EncryptedPrivateKeyInfo.encode(p: self ref EncryptedPrivateKeyInfo)
-	: (string, array of byte)
-{
-
-	return ("unsupported error", nil);
-}
-
-# [public]
-
-EncryptedPrivateKeyInfo.decode(a: array of byte)
-	: (string, ref EncryptedPrivateKeyInfo)
-{
-	return ("unsupported error", nil);
-}
-
-# [public]
-
-decode_extcertorcert(a: array of byte): (int, int, array of byte)
-{
-	(err, all) := asn1->decode(a);
-	if(err == "") {
-
-	}
-}
-
-# [public]
-
-encode_extcertorcert(a: array of byte, which: int): (int, array of byte)
-{
-
-}
-

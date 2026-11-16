@@ -2539,7 +2539,7 @@ loadtrust()
 	if(x == nil || x->init() != nil)
 		fatal(sys->sprint("cannot load %s: %r", X509->PATH));
 	for(l := roots; l != nil; l = tl l) {
-		(ok, err) := x->verify_certchain_roots(hd l :: nil, roots, crls, now());
+		(ok, err) := x->verify_certchain_roots(hd l :: nil, roots, crls, now(), X509->Usage_Any);
 		if(!ok)
 			fatal(trustfile + ": " + err);
 	}

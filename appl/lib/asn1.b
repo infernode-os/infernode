@@ -21,10 +21,22 @@ init()
 	sys = load Sys Sys->PATH;
 }
 
-# Decode the whole array as a BER encoding of an ASN1 type.
+# Decode the whole array as the DER encoding of an ASN1 type.
 # If there's an error, the return string will contain the error.
 # Depending on the error, the returned elem may or may not
 # be nil.
+#
+# The rules are DER's (X.690 10 and 11), not BER's: what is decoded
+# here is certificates, CRLs, keys and signatures, which are DER
+# (RFC 5280 4.1), and every reader of one must find the same thing in
+# it.  A length or tag number not in its shortest form, an INTEGER
+# with a byte it does not need, a constructed string, a BOOLEAN other
+# than 00 or FF, unused bits that are not zero, an OID subidentifier
+# with a leading 80, a string that is not its type's: each has one
+# meaning to a lenient reader and none to a strict one, and was taken.
+# Not checked, as they depend on the type and not on the encoding:
+# DEFAULT values left out, the order of a SET OF's elements, a named
+# bit list's trailing zero bits.
 decode(a: array of byte) : (string, ref Elem)
 {
 	(ecode, i, elem) := ber_decode(a, 0, len a, 0);
@@ -38,11 +50,11 @@ decode(a: array of byte) : (string, ref Elem)
 # definite encodings do not have: it could not succeed.)
 decode_seq(a: array of byte) : (string, list of ref Elem)
 {
-	(ecode, i, elist) := seq_decode(a, 0, len a, len a, 1, 0);
+	(ecode, i, elist) := seq_decode(a, 0, len a, 1, 0);
 	return (errstr(ecode, i, len a), elist);
 }
 
-# Decode the whole array as a BER encoding of an ASN1 value,
+# Decode the whole array as a DER encoding of an ASN1 value,
 # (i.e., the part after the tag and length).
 # Assume the value is encoded as universal tag "kind".
 # The constr arg is 1 if the value is constructed, 0 if primitive.
@@ -88,7 +100,7 @@ ber_decode(a: array of byte, i, n, depth: int) : (int, int, ref Elem)
 			if(tag.class == Universal)
 				(err, i, val) = value_decode(a, i, n, length, tag.num, tag.constr, depth);
 			else
-				(err, i, val) = value_decode(a, i, n, length, OCTET_STRING, 0, depth);
+				(err, i, val) = value_decode(a, i, n, length, OCTET_STRING, 0, depth);	# its bytes, whatever they hold
 			if(val != nil)
 				elem = ref Elem(tag, val);
 		}
@@ -120,9 +132,16 @@ tag_decode(a: array of byte, i, n: int) : (int, int, Tag)
 		else
 			constr = 0;
 		num = v & TAG_MASK;
-		if(num == TAG_MASK)
-			# long tag number
-			(err, i, num) = uint7_decode(a, i, n);
+		if(num == TAG_MASK) {
+			# long tag number: only for 31 and above, in the
+			# fewest bytes (X.690 8.1.2.4)
+			if(i < n && a[i] == byte 16r80)
+				err = EINVAL;
+			else
+				(err, i, num) = uint7_decode(a, i, n);
+			if(err == OK && num < TAG_MASK)
+				err = EINVAL;
+		}
 	}
 	else
 		err = ESHORT;
@@ -142,8 +161,16 @@ length_decode(a: array of byte, i, n: int) : (int, int, int)
 		v := int a[i++];
 		if(v == 16r80)
 			err = EINVAL;
-		else if(v & 16r80)
-			return int_decode(a, i, n, v&16r7F, 1);
+		else if(v & 16r80) {
+			# the long form, in the fewest bytes (X.690 10.1): no
+			# leading zero byte, and not for a length the short
+			# form holds
+			if(i < n && a[i] == byte 0)
+				return (EINVAL, i, 0);
+			(err, i, num) = int_decode(a, i, n, v&16r7F, 1);
+			if(err == OK && num < 16r80)
+				err = EINVAL;
+		}
 		else
 			num = v;
 	}
@@ -160,25 +187,18 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 	err := OK;
 	val : ref Value;
 	va : array of byte;
-	if(length == -1) {
-		if(!constr)
-			err = EINVAL;
-	}
 	# the bytes that are there, counted without adding: a length near
 	# the largest int made i+length negative, and the value was then
 	# sliced or allocated at that size (an exception in whoever was
 	# decoding a peer's certificate)
-	else if(length < 0 || length > n - i)
+	if(length < 0 || length > n - i)
 		err = EVALLEN;
 	if(err != OK)
 		return (err, i, nil);
 	case kind {
 	0 =>
-		# marker for end of indefinite constructions
-		if(length == 0)
-			val = ref Value.EOC;
-		else
-			err = EINVAL;
+		# end-of-contents: there are no indefinite lengths to end
+		err = EINVAL;
 	BOOLEAN =>
 		if(constr)
 			err = ECONSTR;
@@ -188,10 +208,14 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 			# the value's own byte (it was the buffer's first: a
 			# certificate begins 16r30, so every BOOLEAN in one
 			# was true, cA FALSE and critical FALSE included).
-			# 0 is false and anything else true, as BER has it;
-			# a caller holding its input to DER asks for 16rFF.
-			val = ref Value.Bool(int a[i]);
-			i++;
+			# 0 is false and 16rFF true (X.690 11.1); BER's
+			# any-other-byte for true is refused.
+			if(a[i] != byte 0 && a[i] != byte 16rFF)
+				err = EINVAL;
+			else {
+				val = ref Value.Bool(int a[i]);
+				i++;
+			}
 		}
 	INTEGER or ENUMERATED =>
 		if(constr)
@@ -199,6 +223,11 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 		else if(length == 0)
 			# an INTEGER has at least one byte (X.690 8.3.1)
 			err = EVALLEN;
+		else if(length > 1 && (a[i] == byte 0 && (int a[i+1] & 16r80) == 0
+				|| a[i] == byte 16rFF && (int a[i+1] & 16r80) != 0))
+			# and no more than it needs (8.3.2): 00 7F and FF 80
+			# are 7F and 80 written long
+			err = EINVAL;
 		else if(length <= 4) {
 			num : int;
 			(err, i, num) = int_decode(a, i, i+length, length, 0);
@@ -212,43 +241,30 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 			i += length;
 		}
 	BIT_STRING =>
-		if(constr) {
-			if(length == -1 && i+2 <= n && a[i] == byte 0 && a[i+1] == byte 0) {
-				val = ref Value.BitString(0, nil);
-				i += 2;
-			}
-			else
-				# TODO: recurse and concat results
-				err = EUNIMPL;
-		}
+		# primitive (X.690 10.2); a first byte that counts the unused
+		# bits of the last, which are zero (11.2.1); with no bits,
+		# that byte alone and zero
+		if(constr)
+			err = ECONSTR;
+		else if(length < 1 || int a[i] > 7 || length == 1 && a[i] != byte 0)
+			err = EINVAL;
+		else if(length > 16r0FFFFFFF)
+			err = ETOOBIG;
 		else {
-			if(length < 2) {
-				# the empty bit string: its one byte says no bits
-				# are unused (it was the buffer's first byte that
-				# was asked, so the one valid form was refused)
-				if(length == 1 && a[i] == byte 0) {
-					val = ref Value.BitString(0, nil);
-					i ++;
-				}
-				else
-					err = EINVAL;
-			}
+			bitsunused := int a[i];
+			if(length > 1 && (int a[i+length-1] & ((1 << bitsunused) - 1)) != 0)
+				err = EINVAL;
 			else {
-				bitsunused := int a[i];
-				if(bitsunused > 7)
-					err = EINVAL;
-				else if(length > 16r0FFFFFFF)
-					err = ETOOBIG;
-				else {
-					va = array[length-1] of byte;
-					va[0:] = a[i+1:i+length];
-					val = ref Value.BitString(bitsunused, va);
-					i += length;
-				}
+				va = array[length-1] of byte;
+				va[0:] = a[i+1:i+length];
+				if(length == 1)
+					va = nil;
+				val = ref Value.BitString(bitsunused, va);
+				i += length;
 			}
 		}
 	OCTET_STRING or ObjectDescriptor =>
-		(err, i, va) = octet_decode(a, i, n, length, constr, depth+1);
+		(err, i, va) = octet_decode(a, i, length, constr);
 		if(err == OK)
 			val = ref Value.Octets(va);
 	NULL =>
@@ -268,7 +284,12 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 			iend := i+length;
 			while(i < iend) {
 				x : int;
-				(err, i, x) = uint7_decode(a, i, n);
+				# a subidentifier in the fewest bytes (X.690 8.19.2)
+				if(a[i] == byte 16r80) {
+					err = EINVAL;
+					break;
+				}
+				(err, i, x) = uint7_decode(a, i, iend);
 				if(err != OK)
 					break;
 				subids = x :: subids;
@@ -320,7 +341,7 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 		}
 	SEQUENCE or SET=>
 		vl : list of ref Elem;
-		(err, i, vl) = seq_decode(a, i, n, length, constr, depth+1);
+		(err, i, vl) = seq_decode(a, i, length, constr, depth+1);
 		if(err == OK) {
 			if(kind == SEQUENCE)
 				val = ref Value.Seq(vl);
@@ -331,11 +352,14 @@ value_decode(a: array of byte, i, n, length, kind, constr, depth: int) : (int, i
 	or VideotexString or IA5String or UTCTime
 	or GeneralizedTime or GraphicString or VisibleString
 	or GeneralString or UniversalString or BMPString =>
-		(err, i, va) = octet_decode(a, i, n, length, constr, depth+1);
-		if(err == OK)
-			# sometimes wrong: need to do char set conversion
-			val = ref Value.String(string va);
-		
+		(err, i, va) = octet_decode(a, i, length, constr);
+		if(err == OK) {
+			str: string;
+			(err, str) = strdecode(va, kind);
+			if(err == OK)
+				val = ref Value.String(str);
+		}
+
 	* =>
 		va = array[length] of byte;
 		va[0:] = a[i:i+length];
@@ -396,353 +420,108 @@ uint7_decode(a: array of byte, i, n: int) : (int, int, int)
 	return (err, i, num);
 }
 
-# Decode an octet string, recursively if constr.
-# We've already checked that length==-1 implies constr==1,
-# and otherwise that specified length fits within a[i..n].
-octet_decode(a: array of byte, i, n, length, constr, depth: int) : (int, int, array of byte)
+# The bytes of an OCTET STRING or of a string type: primitive, as DER
+# has them (X.690 10.2).  The caller has checked that length bytes are
+# there.
+octet_decode(a: array of byte, i, length, constr: int) : (int, int, array of byte)
 {
-	err := OK;
-	va : array of byte;
-	if(length >= 0 && !constr) {
-		va = array[length] of byte;
-		va[0:] = a[i:i+length];
-		i += length;
-	}
-	else {
-		# constructed, either definite or indefinite length
-		lva : list of array of byte = nil;
-		elem : ref Elem;
-		istart := i;
-		totbytes := 0;
-	    cloop:
-		for(;;) {
-			if(length >= 0 && i >= istart+length) {
-				if(i != istart+length)
-					err = EVALLEN;
-				break cloop;
-			}
-			oldi := i;
-			(err, i, elem) = ber_decode(a, i, n, depth);
-			if(err != OK)
-				break;
-			pick v := elem.val {
-				Octets =>
-					lva = v.bytes :: lva;
-					totbytes += len v.bytes;
-				EOC =>
-					if(length != -1) {
-						i = oldi;
-						err = EINVAL;
-					}
-					break cloop;
-				* =>
-					i = oldi;
-					err = EINVAL;
-					break cloop;
-			}
-		}
-		if(err == OK) {
-			va = array[totbytes] of byte;
-			j := totbytes;
-			while(lva != nil) {
-				x := hd lva;
-				lva = tl lva;
-				m := len x;
-				va[j-m:] = x[0:];
-				j -= m;
-			}
-		}
-	}
-	return (err, i, va);
+	if(constr)
+		return (ECONSTR, i, nil);
+	va := array[length] of byte;
+	va[0:] = a[i:i+length];
+	return (OK, i+length, va);
 }
 
-# Decode a sequence or set.
-# We've already checked that length==-1 implies constr==1,
-# and otherwise that specified length fits within a[i..n].
-seq_decode(a : array of byte, i, n, length, constr, depth: int) : (int, int, list of ref Elem)
+# The text of a string type's bytes.  Each type has its own characters
+# (X.680 41): they were all taken for UTF-8, so a BMPString read as
+# its bytes with a NUL before each letter and a TeletexString's
+# accented letters as U+FFFD, and two names that differ only in how
+# they are written could not be told to be the same or different.
+#	UTF8String: UTF-8, and nothing that is not (an overlong form,
+#		half a rune)
+#	NumericString, PrintableString, IA5String, VisibleString, and
+#		the two times: ASCII (their own subsets of it are not
+#		enforced: CAs have put '@' and '*' in PrintableStrings)
+#	BMPString: UCS-2, big-endian, no surrogates
+#	UniversalString: UCS-4, big-endian
+#	TeletexString, VideotexString, GraphicString, GeneralString:
+#		taken as Latin-1, as every other reader of certificates
+#		takes them (T.61's own escapes are not used in practice)
+# A NUL is a character like another here; a name with one is refused
+# by whoever reads names (x509).
+strdecode(va: array of byte, kind: int): (int, string)
 {
-	err := OK;
-	ans : list of ref Elem = nil;
-	if(!constr)
-		err = EPRIM;
-	else {
-		# constructed, either definite or indefinite length
-		lve : list of ref Elem = nil;
-		elem : ref Elem;
-		istart := i;
-	    cloop:
-		for(;;) {
-			if(length >= 0 && i >= istart+length) {
-				if(i != istart+length)
-					err = EVALLEN;
-				break cloop;
-			}
-			oldi := i;
-			(err, i, elem) = ber_decode(a, i, n, depth);
-			if(err != OK)
-				break;
-			pick v := elem.val {
-				EOC =>
-					if(length != -1) {
-						i = oldi;
-						err = EINVAL;
-					}
-					break cloop;
-				* =>
-					lve = elem :: lve;
-			}
+	s: string;
+	n := len va;
+	case kind {
+	UTF8String =>
+		s = string va;
+		back := array of byte s;
+		if(len back != n)
+			return (EINVAL, nil);
+		for(i := 0; i < n; i++)
+			if(back[i] != va[i])
+				return (EINVAL, nil);
+	TeletexString or VideotexString or GraphicString or GeneralString =>
+		s = "";
+		for(i := 0; i < n; i++)
+			s[i] = int va[i];
+	BMPString =>
+		if(n % 2 != 0)
+			return (EINVAL, nil);
+		s = "";
+		for(i := 0; i < n; i += 2) {
+			r := (int va[i] << 8) | int va[i+1];
+			if(r >= 16rD800 && r <= 16rDFFF)
+				return (EINVAL, nil);
+			s[i/2] = r;
 		}
-		if(err == OK) {
-			# reverse back to original order
-			while(lve != nil) {
-				e := hd lve;
-				lve = tl lve;
-				ans = e :: ans;
-			}
+	UniversalString =>
+		if(n % 4 != 0)
+			return (EINVAL, nil);
+		s = "";
+		for(i := 0; i < n; i += 4) {
+			if(va[i] != byte 0 || int va[i+1] > 16r10)
+				return (EINVAL, nil);
+			r := (int va[i+1] << 16) | (int va[i+2] << 8) | int va[i+3];
+			if(r >= 16rD800 && r <= 16rDFFF)
+				return (EINVAL, nil);
+			s[i/4] = r;
+		}
+	* =>
+		s = "";
+		for(i := 0; i < n; i++) {
+			if(int va[i] >= 16r80)
+				return (EINVAL, nil);
+			s[i] = int va[i];
 		}
 	}
+	return (OK, s);
+}
+
+# Decode a sequence or set: the elements that fill length bytes,
+# which the caller has checked are there.
+seq_decode(a : array of byte, i, length, constr, depth: int) : (int, int, list of ref Elem)
+{
+	if(!constr)
+		return (EPRIM, i, nil);
+	err := OK;
+	lve : list of ref Elem = nil;
+	elem : ref Elem;
+	iend := i+length;
+	while(i < iend) {
+		(err, i, elem) = ber_decode(a, i, iend, depth);
+		if(err != OK)
+			return (err, i, nil);
+		lve = elem :: lve;
+	}
+	ans : list of ref Elem = nil;
+	# reverse back to original order
+	for(; lve != nil; lve = tl lve)
+		ans = hd lve :: ans;
 	return (err, i, ans);
 }
 
-# Encode e by BER rules
-encode(e: ref Elem) : (string, array of byte)
-{
-	(err, n) := enc(nil, e, 0, 1);
-	if(err != "")
-		return (err, nil);
-	b := array[n] of byte;
-	enc(b, e, 0, 0);
-	return ("", b);
-}
-
-# Encode e into array b, only putting in bytes if !lenonly.
-# Start at loc i, return index after.
-enc(b: array of byte, e: ref Elem, i, lenonly: int) : (string, int)
-{
-	(err, vlen, constr) := val_enc(b, e, 0, 1);
-	if(err != "")
-		return (err, i);
-	tag := e.tag;
-	v := tag.class | constr;
-	if(tag.num < 31) {
-		if(!lenonly)
-			b[i] = byte (v | tag.num);
-		i++;
-	}
-	else {
-		if(!lenonly)
-			b[i] = byte (v | 31);
-		if(tag.num < 0)
-			return ("negative tag number", i);
-		i = uint7_enc(b, tag.num, i+1, lenonly);
-	}
-	if(vlen < 16r80) {
-		if(!lenonly)
-			b[i] = byte vlen;
-		i++;
-	}
-	else {
-		ilen := int_enc(b, vlen, 1, 0, 1);
-		if(!lenonly) {
-			b[i] = byte (16r80 | ilen);
-			i = int_enc(b, vlen, 1, i+1, 0);
-		}
-		else
-			i += 1+ilen;
-	}
-	if(!lenonly)
-		val_enc(b, e, i, 0);
-	i += vlen;
-	return ("", i);
-}
-
-# Encode e.val into array b, only putting in bytes if !lenonly.
-# Start at loc i, return (err, index after, constructed or primitive)
-val_enc(b: array of byte, e: ref Elem, i, lenonly: int) : (string, int, int)
-{
-	kind := e.tag.num;
-	cl := e.tag.class;
-	ok := 1;
-	v : int;
-	bb : array of byte;
-	constr := 0;
-	if(cl != Universal) {
-		pick vv := e.val {
-		Bool =>
-			kind = BOOLEAN;
-		Int =>
-			kind = INTEGER;
-		BigInt =>
-			kind = INTEGER;
-		Octets =>
-			kind = OCTET_STRING;
-		Real =>
-			kind = REAL;
-		Other =>
-			kind = OCTET_STRING;
-		BitString =>
-			kind = BIT_STRING;
-		Null =>
-			kind = NULL;
-		ObjId =>
-			kind = OBJECT_ID;
-		String =>
-			kind = UniversalString;
-		Seq =>
-			kind = SEQUENCE;
-		Set =>
-			kind = SET;
-		}
-	}
-	case kind {
-	BOOLEAN =>
-		(ok, v) = e.is_int();
-		if(ok) {
-			if(v != 0)
-				v = 255;
-			i = int_enc(b, v, 1, i, lenonly);
-		}
-	INTEGER or ENUMERATED =>
-		(ok, v) = e.is_int();
-		if(ok)
-			i = int_enc(b, v, 0, i, lenonly);
-		else {
-			(ok, bb) = e.is_bigint();
-			if(ok) {
-				if(!lenonly)
-					b[i:] = bb;
-				i += len bb;
-			}
-		}
-	BIT_STRING =>
-		(ok, v, bb) = e.is_bitstring();
-		if(ok) {
-			if(bb == nil) {
-				if(!lenonly)
-					b[i] = byte 0;
-				i++;
-			}
-			else {
-				if(v < 0 || v > 7)
-					ok = 0;
-				else {
-					if(!lenonly) {
-						b[i] = byte v;
-						b[i+1:] = bb;
-					}
-					i += 1 + len bb;
-				}
-			}
-		}
-	OCTET_STRING or ObjectDescriptor or EXTERNAL or REAL
-	or EMBEDDED_PDV =>
-		pick vv := e.val {
-		Octets or Real or Other =>
-			if(!lenonly && vv.bytes != nil)
-					b[i:] = vv.bytes;
-			i += len vv.bytes;
-		 * =>
-			ok = 0;
-		}
-	NULL =>
-		;
-	OBJECT_ID =>
-		oid : ref Oid;
-		(ok, oid) = e.is_oid();
-		if(ok) {
-			n := len oid.nums;
-			for(k := 0; k < n; k++) {
-				v = oid.nums[k];
-				if(k == 0) {
-					v *= 40;
-					if(n > 1)
-						v += oid.nums[++k];
-				}
-				i = uint7_enc(b, v, i, lenonly);
-			}
-		}
-	SEQUENCE or SET =>
-		pick vv := e.val {
-		Seq or Set =>
-			constr = CONSTR_MASK;
-			for(l := vv.l; l != nil; l = tl l) {
-				err : string;
-				(err, i) = enc(b, hd l, i, lenonly);
-				if(err != "")
-					return (err, i, 0);
-			}
-	}
-	UTF8String or NumericString or PrintableString or TeletexString
-	or VideotexString or IA5String or UTCTime
-	or GeneralizedTime or GraphicString or VisibleString
-	or GeneralString or UniversalString or BMPString =>
-		pick vv := e.val {
-			String =>
-				bb = array of byte vv.s;
-				if(!lenonly && bb != nil)
-					b[i:] = bb;
-				i += len bb;
-			* =>
-				ok = 0;
-		}
-	* =>
-		ok = 0;
-	}
-	if(!ok)
-		return ("bad value for encoding kind", i, constr);
-	return ("", i, constr);
-}
-
-# Encode num as unsigned 7 bit values with top bit 1 on all bytes
-# except last, into array b, only putting in bytes if !lenonly.
-# Start at loc i, return index after.
-uint7_enc(b: array of byte, num, i, lenonly: int) : int
-{
-	n := 1;
-	v := num>>7;
-	while(v > 0) {
-		v >>= 7;
-		n++;
-	}
-	if(lenonly)
-		i += n;
-	else {
-		for(k := (n-1)*7; k > 0; k -= 7)
-			b[i++] = byte ((num>>k) | 16r80);
-		b[i++] = byte (num & 16r7F);
-	}
-	return i;
-}
-
-# Encode num as unsigned or signed integer into array b,
-# only putting in bytes if !lenonly.
-# Encoding is length followed by bytes to concatenate.
-# Start at loc i, return index after.
-int_enc(b: array of byte, num, unsigned, i, lenonly: int) : int
-{
-	v := num;
-	if(v < 0)
-		v = -(v+1);
-	n := 1;
-	prevv := v;
-	v >>= 8;
-	while(v > 0) {
-		prevv = v;
-		v >>= 8;
-		n++;
-	}
-	if(!unsigned && (prevv & 16r80))
-		n++;
-	if(lenonly)
-		i += n;
-	else {
-		for(k := (n-1)*8; k >= 0; k -= 8)
-			b[i++] = byte (num>>k);
-	}
-	return i;
-}
-
-# Compare two arrays of integers; return true if they match
 intarr_eq(a: array of int, b: array of int) : int
 {
 	alen := len a;
@@ -803,9 +582,11 @@ Elem.is_int(e: self ref Elem) : (int, int)
 	return (0, 0);
 }
 
-# If e is an INTEGER that doesn't fit in a limbo int, return (1, bytes),
-# or even if it does fit, return it as an array of bytes.
-# else return (0, nil).
+# If e is an INTEGER, return (1, bytes): its contents as DER has them,
+# two's complement in the fewest bytes, so that a first byte with its
+# top bit set says a negative number whatever the length.  (One that
+# fits an int came back as the int's bytes less leading zeros: 128 as
+# 80, which is also -128's.)
 Elem.is_bigint(e: self ref Elem) : (int, array of byte)
 {
 	if(e.tag.class == Universal && e.tag.num == INTEGER) {
@@ -814,11 +595,15 @@ Elem.is_bigint(e: self ref Elem) : (int, array of byte)
 			return (1, v.bytes);
 		Int =>
 			x := v.v;
-			a := array[4] of byte;
+			a := array[5] of byte;
+			a[0] = byte 0;
+			if(x < 0)
+				a[0] = byte 16rFF;
 			for(i := 0; i < 4; i++)
-				a[i] = byte ((x >> (8*(3-i))) & 16rFF);
-			for(j := 0; j < 3; j++)
-				if(a[j] != byte 0)
+				a[i+1] = byte ((x >> (8*(3-i))) & 16rFF);
+			for(j := 0; j < 4; j++)
+				if(!(a[j] == byte 0 && (int a[j+1] & 16r80) == 0
+				  || a[j] == byte 16rFF && (int a[j+1] & 16r80) != 0))
 					break;
 			return (1, a[j:]);
 		}
@@ -907,7 +692,7 @@ errstr(ecode, i, n: int) : string
 {
 	if(ecode == OK && i == n)
 		return "";
-	err := "BER decode: ";
+	err := "DER decode: ";
 	case ecode {
 		OK =>
 			err += "extra data after the value";
@@ -1005,7 +790,7 @@ vstring(val: ref Value, indent: string) : string
 			ans += bastring(v.bytes, indent + "\t");
 		BitString =>
 			ans += " bits (unused " +string v.unusedbits + ")" +  bastring(v.bits, indent + "\t");
-		Null  or EOC =>
+		Null =>
 			;
 		ObjId =>
 			ans += v.id.tostring();

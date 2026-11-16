@@ -1094,7 +1094,7 @@ handshake12(cs: ref ConnState, config: ref Config,
 		(rsakey, pkerr) := extractrsakey(server_certs);
 		if(pkerr != nil)
 			return pkerr;
-		(encerr, encbytes) := pkcs->rsa_encrypt(premaster, rsakey, 2);
+		(encerr, encbytes) := pkcs->rsa_encrypt(premaster, rsakey);
 		if(encerr != nil)
 			return "tls: RSA encryption failed: " + encerr;
 		server_pubkey = encbytes;
@@ -1977,7 +1977,7 @@ verifycerts(cs: ref ConnState, certs: list of array of byte): string
 		return verifyspkipin(cs.pinspki, hd certs);
 
 	# Use X509 to verify certificate chain
-	(ok, err) := x509->verify_certchain(certs);
+	(ok, err) := x509->verify_certchain(certs, X509->Usage_ServerAuth);
 	if(!ok && !cs.insecure)
 		return "tls: certificate chain verification failed: " + err;
 
@@ -2630,8 +2630,8 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 		return "PSS: signature representative out of range";
 
 	# Step 1: raw RSA public-key operation (modular exponentiation).
-	# Do NOT use pkcs->rsa_decrypt — that strips PKCS#1 v1.5 padding,
-	# which PSS-encoded messages do not have.  RFC 8017 §8.1.2 step 2.
+	# The block is not PKCS#1 v1.5's: no padding to strip.
+	# RFC 8017 §8.1.2 step 2.
 	em: array of byte;
 	{
 		x := IPint.bebytestoip(sig);
@@ -2838,40 +2838,30 @@ extractecpoint(certs: list of array of byte): (ref Keyring->ECpoint, string)
 # coordlen is the byte length of each scalar: 32 for P-256, 48 for P-384.
 # Returns array of 2*coordlen bytes with r and s right-justified, or nil on error.
 # TLS CertificateVerify provides raw DER (no BIT STRING unused-bits byte).
+# DER and only that, as X509's reader of a certificate's signature: two
+# positive INTEGERs in the fewest bytes (asn1 refuses any other
+# length or padding) and nothing after them.
 parse_ecdsa_der_sig_n(sig: array of byte, coordlen: int): array of byte
 {
 	(err, e) := asn1->decode(sig);
-	if(err != nil)
+	if(err != nil || e == nil)
 		return nil;
 	(ok, el) := e.is_seq();
 	if(!ok || len el != 2)
 		return nil;
-	rbytes, sbytes: array of byte;
-	(ok, rbytes) = (hd el).is_bigint();
-	if(!ok)
-		return nil;
-	(ok, sbytes) = (hd tl el).is_bigint();
-	if(!ok)
-		return nil;
-
 	rawsig := array [2 * coordlen] of {* => byte 0};
-	# r: strip leading zeros, right-justify in coordlen bytes
-	ri := 0;
-	while(ri < len rbytes && rbytes[ri] == byte 0)
-		ri++;
-	rlen := len rbytes - ri;
-	if(rlen > coordlen)
-		return nil;
-	rawsig[coordlen - rlen:] = rbytes[ri:];
-	# s: strip leading zeros, right-justify in coordlen bytes
-	si := 0;
-	while(si < len sbytes && sbytes[si] == byte 0)
-		si++;
-	slen := len sbytes - si;
-	if(slen > coordlen)
-		return nil;
-	rawsig[2*coordlen - slen:] = sbytes[si:];
-
+	for(k := 0; k < 2; k++) {
+		b: array of byte;
+		(ok, b) = (hd el).is_bigint();
+		el = tl el;
+		if(!ok || len b == 0 || (int b[0] & 16r80))
+			return nil;	# not a positive INTEGER
+		if(b[0] == byte 0)
+			b = b[1:];
+		if(len b > coordlen)
+			return nil;
+		rawsig[(k+1)*coordlen - len b:] = b;
+	}
 	return rawsig;
 }
 
@@ -3706,7 +3696,7 @@ server0(cs: ref ConnState, config: ref ServerConfig): (int, string, string)
 				return (ALERT_UNEXPECTED_MESSAGE, nil, "tls: expected the client's CertificateVerify");
 			if((err = verifyclientcv(cv, certs, cvhash)) != nil)
 				return (ALERT_DECRYPT_ERROR, nil, err);
-			(ok, verr) := x509->verify_certchain_roots(certs, config.clientroots, config.clientcrls, clocknow(config.clock));
+			(ok, verr) := x509->verify_certchain_roots(certs, config.clientroots, config.clientcrls, clocknow(config.clock), X509->Usage_ClientAuth);
 			if(!ok)
 				return (ALERT_BAD_CERTIFICATE, nil, "tls: client certificate refused: " + verr);
 			if((err = clientusage(hd certs)) != nil)

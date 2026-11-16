@@ -138,6 +138,37 @@ cat(a, b: array of byte): array of byte
 	return r;
 }
 
+# the DER of each element of the SEQUENCE a is (short tags; the
+# fixtures' own, which are DER)
+fields(a: array of byte): array of array of byte
+{
+	(i, n) := hdr(a, 0);
+	f := array[32] of array of byte;
+	k := 0;
+	while(i < n && k < len f) {
+		(v, e) := hdr(a, i);
+		if(e <= v)
+			e = v;
+		f[k++] = a[i:e];
+		i = e;
+	}
+	return f[0:k];
+}
+
+# where the value at i begins and ends
+hdr(a: array of byte, i: int): (int, int)
+{
+	l := int a[i+1];
+	i += 2;
+	if(l & 16r80) {
+		nb := l & 16r7f;
+		l = 0;
+		for(; nb > 0; nb--)
+			l = (l << 8) | int a[i++];
+	}
+	return (i, i+l);
+}
+
 # tag, DER length, body
 tlv(tag: int, body: array of byte): array of byte
 {
@@ -173,6 +204,13 @@ show(e: ref Elem): string
 		return s + " }";
 	Octets =>
 		return sys->sprint("OCTETS %d", len v.bytes);
+	String =>
+		t := "STRING";
+		for(i := 0; i < len v.s; i++)
+			t += sys->sprint(" %x", v.s[i]);
+		return t;
+	BigInt =>
+		return sys->sprint("BIGINT %d", len v.bytes);
 	}
 	return "other";
 }
@@ -207,10 +245,6 @@ testAsn1Values(t: ref T)
 	t.assertseq(dec("060150"), "OID 2.0", "2.0");
 	t.assertseq(dec("060178"), "OID 2.40", "2.40 (it was 3.0)");
 	t.assertseq(dec("06028837"), "OID 2.999", "2.999 (it was 26.39)");
-	(eerr, enc) := asn1->encode(ref Elem(Tag(ASN1->Universal, ASN1->OBJECT_ID, 0),
-		ref Value.ObjId(ref Oid(array[] of {2, 999, 3}))));
-	t.assertseq(eerr, "", "encode 2.999.3");
-	t.assert(len enc == 5 && enc[2] == byte 16r88 && enc[3] == byte 16r37 && enc[4] == byte 3, "2.999.3 encodes as 06 03 88 37 03");
 	# an INTEGER has a byte
 	t.assertseq(dec("0200"), "error", "an INTEGER of no bytes");
 	t.assertseq(dec("020105"), "INTEGER 5", "5");
@@ -225,6 +259,79 @@ testAsn1Values(t: ref T)
 	t.asserteq(len sl, 2, "decode_seq gives both");
 	(serr, sl) = asn1->decode_seq(hex("02010502"));
 	t.assert(serr != "", "decode_seq of one and a half is an error");
+}
+
+# What is decoded is DER (X.690 10, 11): each value has one encoding.
+# Every one of these was taken: a length or an INTEGER written longer
+# than it need be, a BOOLEAN true as 01, a constructed string, unused
+# bits that are set, an OID subidentifier with a leading 80, a tag
+# number under 31 in the long form.  And a string is its type's text:
+# a BMPString was read as UTF-8 (a NUL before each letter) and a
+# TeletexString's e9 as U+FFFD.
+testAsn1Der(t: ref T)
+{
+	bad := "02020005" :: "0202007f" :: "0202ff80" :: "0203000080" :: "0206000102030405" ::
+		"04810141" :: "0482000141" :: "30810002" + "0100" :: "308100" ::
+		"1f0500" :: "1f800500" :: "5f1e00" :: "0603800101" :: "06042a800101" ::
+		"030204ff" :: "03020101" :: "0300" :: "030108" :: "23050303000102" ::
+		"010101" :: "010102" :: "01017f" ::
+		"240404024142" :: "2c050c03616263" ::
+		"0c02c080" :: "0c01e9" :: "0c02c3" :: "0c03eda080" :: "0c04f4908080" ::
+		"1e03004100" :: "1e02d800" :: "1e04d83ddc00" ::
+		"1c0300004100" :: "1c0400110000" :: "1c040000d800" :: "1c0401000041" ::
+		"1301e9" :: "1601ff" :: "170d3939303130313030303030305aff" :: nil;
+	for(; bad != nil; bad = tl bad) {
+		got := "";
+		{
+			got = dec(hd bad);
+		} exception e {
+		"*" =>
+			got = "EXCEPTION " + e;
+		}
+		t.assertseq(got, "error", "not DER, or not its type's text: " + hd bad);
+	}
+	# the same values in their one form
+	t.assertseq(dec("020105"), "INTEGER 5", "5");
+	t.assertseq(dec("02020080"), "INTEGER 128", "128 needs its 00");
+	t.assertseq(dec("020180"), "INTEGER -128", "-128");
+	t.assertseq(dec("0202ff7f"), "INTEGER -129", "-129 needs its ff");
+	t.assertseq(dec("048180" + rep("41", 128)), "OCTETS 128", "128 bytes need the long form");
+	t.assertseq(dec("04820100" + rep("41", 256)), "OCTETS 256", "and 256 two bytes of it");
+	t.assertseq(dec("5f1f00"), "OCTETS 0", "tag 31 needs the long form");
+	t.assertseq(dec("0303000102"), "BITS 2/0", "a BIT STRING");
+	t.assertseq(dec("030204f0"), "BITS 1/4", "four unused bits, clear");
+	# strings as their types have them
+	t.assertseq(dec("0c03616263"), "STRING 61 62 63", "UTF8String");
+	t.assertseq(dec("0c02c3a9"), "STRING e9", "UTF8String, two bytes for one character");
+	t.assertseq(dec("0c04f09f9a80"), "STRING 1f680", "UTF8String beyond U+FFFF");
+	t.assertseq(dec("1e06004100420043"), "STRING 41 42 43", "BMPString (it was 0 41 0 42 0 43)");
+	t.assertseq(dec("1e0220ac"), "STRING 20ac", "BMPString beyond Latin-1");
+	t.assertseq(dec("1c08000000410001f680"), "STRING 41 1f680", "UniversalString");
+	t.assertseq(dec("1401e9"), "STRING e9", "TeletexString as Latin-1 (it was U+FFFD)");
+	t.assertseq(dec("1303414243"), "STRING 41 42 43", "PrintableString");
+	t.assertseq(dec("1603614062"), "STRING 61 40 62", "IA5String");
+	t.assertseq(dec("0c03410042"), "STRING 41 0 42", "a NUL is kept, for whoever reads names to refuse");
+	# an INTEGER's bytes are DER's, whatever its size
+	(nil, e) := asn1->decode(hex("02020080"));
+	(ok, b) := e.is_bigint();
+	t.assert(ok && len b == 2 && b[0] == byte 0 && b[1] == byte 16r80, "is_bigint of 128 is 00 80 (it was 80, which is -128's)");
+	(nil, e) = asn1->decode(hex("020180"));
+	(ok, b) = e.is_bigint();
+	t.assert(ok && len b == 1 && b[0] == byte 16r80, "is_bigint of -128 is 80 (it was ff ff ff 80)");
+	(nil, e) = asn1->decode(hex("020100"));
+	(ok, b) = e.is_bigint();
+	t.assert(ok && len b == 1 && b[0] == byte 0, "is_bigint of 0 is 00");
+	(nil, e) = asn1->decode(hex("0203010001"));
+	(ok, b) = e.is_bigint();
+	t.assert(ok && len b == 3 && b[0] == byte 1, "is_bigint of 65537 is 01 00 01");
+}
+
+rep(s: string, n: int): string
+{
+	r := "";
+	while(n-- > 0)
+		r += s;
+	return r;
 }
 
 testAsn1Lengths(t: ref T)
@@ -283,12 +390,12 @@ refused(m: array of byte, root, inter: array of byte): string
 			if(c != nil && cerr == "")
 				return "decoded as a certificate";
 		}
-		(ok, err) := x509->verify_certchain_roots(m :: inter :: nil, root :: nil, nil, NOW);
+		(ok, err) := x509->verify_certchain_roots(m :: inter :: nil, root :: nil, nil, NOW, X509->Usage_Any);
 		if(ok)
 			return "verified";
 		if(internal(err))
 			return err;
-		(ok, err) = x509->verify_certchain_roots(m :: nil, m :: nil, m :: nil, NOW);
+		(ok, err) = x509->verify_certchain_roots(m :: nil, m :: nil, m :: nil, NOW, X509->Usage_Any);
 		if(ok)
 			return "verified as its own root";
 		if(internal(err))
@@ -312,12 +419,8 @@ testMalformedCertificates(t: ref T)
 	(nil, e) := asn1->decode(s.tobe_signed);
 	(nil, el) := e.is_seq();
 	t.asserteq(len el, 8, "the leaf has version, six fields and extensions");
-	f := array[8] of array of byte;
-	i := 0;
-	for(; el != nil; el = tl el) {
-		(nil, f[i]) = asn1->encode(hd el);
-		i++;
-	}
+	f := fields(s.tobe_signed);
+	t.asserteq(len f, 8, "and eight runs of bytes");
 	body := array[0] of byte;
 	cases: list of (string, array of byte);
 	cases = ("a TBSCertificate of no fields", signedof(tlv(16r30, body))) :: cases;
@@ -446,7 +549,7 @@ testRsaKeys(t: ref T)
 testPkcs(t: ref T)
 {
 	{
-		# the fixture's public key will do for a key: nothing is signed
+		# the fixture's public key will do for a key
 		(nil, s) := Signed.decode(fixture(t, "rsaroot"));
 		(nil, c) := Certificate.decode(s.tobe_signed);
 		(nil, nil, pk) := c.subject_pkinfo.getPublicKey();
@@ -455,21 +558,20 @@ testPkcs(t: ref T)
 		RSA =>
 			key = k.pk;
 		}
-		(serr, sig) := pkcs->rsa_sign(array of byte "message", key, 999);
-		t.assert(serr != "" && sig == nil, "rsa_sign with a digest it does not know is an error (it signed the empty message)");
-		(serr, sig) = pkcs->rsa_sign(array of byte "message", key, PKCS->MD2_WithRSAEncryption);
-		t.assert(serr != "" && sig == nil, "rsa_sign with MD2, which is not there, is an error (it signed a block with no digest in it)");
-		t.asserteq(pkcs->dss_verify(nil, nil, nil), 0, "dss_verify of nothing verifies nothing (it was 1)");
-		t.asserteq(pkcs->dss_verify(array[0] of byte, array[40] of byte, nil), 0, "dss_verify of an empty message");
-		(derr, d) := pkcs->rsa_decrypt(array[4] of byte, nil, 0);
-		t.assert(derr != "" && d == nil, "rsa_decrypt with no key is an error");
+		(eerr, eb) := pkcs->rsa_encrypt(array[48] of {* => byte 7}, key);
+		t.assert(eerr == "" && len eb == 256, "rsa_encrypt gives a block the modulus long: " + eerr);
+		(eerr, eb) = pkcs->rsa_encrypt(array[246] of byte, key);
+		t.assert(eerr != "" && eb == nil, "a message that leaves no room for eight octets of padding is refused");
+		(eerr, eb) = pkcs->rsa_encrypt(array[4] of byte, nil);
+		t.assert(eerr != "" && eb == nil, "rsa_encrypt with no key is an error");
 	} exception e {
 	"*" =>
 		t.error("exception " + e);
 	}
-	# SLH-DSA-SHAKE-192s and -256s, the sets Keyring implements (NIST's registry, RFC 9909)
-	t.assertseq((ref pkcs->objIdTab[PKCS->id_slhdsa192s]).tostring(), "2.16.840.1.101.3.4.3.28", "id-slh-dsa-shake-192s");
-	t.assertseq((ref pkcs->objIdTab[PKCS->id_slhdsa256s]).tostring(), "2.16.840.1.101.3.4.3.30", "id-slh-dsa-shake-256s");
+	# the curves and SHA-512 signatures are in the table the path looks algorithms up in
+	t.assertseq((ref pkcs->objIdTab[PKCS->id_secp384r1]).tostring(), "1.3.132.0.34", "secp384r1");
+	t.assertseq((ref pkcs->objIdTab[PKCS->id_prime256v1]).tostring(), "1.2.840.10045.3.1.7", "prime256v1");
+	t.assertseq((ref pkcs->objIdTab[PKCS->id_ecdsa_sha512]).tostring(), "1.2.840.10045.4.3.4", "ecdsa-with-SHA512");
 }
 
 # Signed.verify, for a signature algorithm the path does not take (MD5
@@ -487,7 +589,7 @@ testForgedSignature(t: ref T)
 	s := ref Signed(array of byte "forged message 1", md5rsa, cat(array[] of {byte 0}, hex(FORGED)));
 	ok := -1;
 	{
-		ok = s.verify(ref PublicKey.RSA(key), PKCS->MD5_WithRSAEncryption);
+		ok = s.verify(ref PublicKey.RSA(key));
 	} exception e {
 	"*" =>
 		t.error("exception " + e);
@@ -495,7 +597,9 @@ testForgedSignature(t: ref T)
 	t.asserteq(ok, 0, "a signature forged without the key, under md5WithRSAEncryption, does not verify");
 	md2rsa := ref X509->AlgIdentifier(ref Oid(array[] of {1, 2, 840, 113549, 1, 1, 2}), nil);
 	s.alg = md2rsa;
-	t.asserteq(s.verify(ref PublicKey.RSA(key), PKCS->MD2_WithRSAEncryption), 0, "nor under md2WithRSAEncryption");
+	t.asserteq(s.verify(ref PublicKey.RSA(key)), 0, "nor under md2WithRSAEncryption");
+	s.alg = ref X509->AlgIdentifier(ref Oid(array[] of {1, 2, 840, 113549, 1, 1, 11}), nil);
+	t.asserteq(s.verify(ref PublicKey.RSA(key)), 0, "nor under sha256WithRSAEncryption, with a key of 1024 bits");
 }
 
 extof(oid: array of int, value: string): ref Extension
@@ -596,13 +700,13 @@ testFixturesVerify(t: ref T)
 	inter := fixture(t, "inter");
 	leaf := fixture(t, "leaf");
 	crl := fixture(t, "crl");
-	(ok, err) := x509->verify_certchain_roots(leaf :: inter :: nil, root :: nil, crl :: nil, NOW);
+	(ok, err) := x509->verify_certchain_roots(leaf :: inter :: nil, root :: nil, crl :: nil, NOW, X509->Usage_Any);
 	t.assert(ok, "the chain with one of everything verifies: " + err);
-	(ok, err) = x509->verify_certchain_roots(leaf :: nil, root :: nil, nil, NOW);
+	(ok, err) = x509->verify_certchain_roots(leaf :: nil, root :: nil, nil, NOW, X509->Usage_Any);
 	t.assert(!ok, "but not without its intermediate");
-	(ok, err) = x509->verify_certchain_roots(leaf :: inter :: nil, root :: nil, nil, 0);
+	(ok, err) = x509->verify_certchain_roots(leaf :: inter :: nil, root :: nil, nil, 0, X509->Usage_Any);
 	t.assert(!ok, "nor with no clock");
-	(ok, err) = x509->verify_certchain_roots(fixture(t, "rsaleaf") :: nil, fixture(t, "rsaroot") :: nil, nil, NOW);
+	(ok, err) = x509->verify_certchain_roots(fixture(t, "rsaleaf") :: nil, fixture(t, "rsaroot") :: nil, nil, NOW, X509->Usage_Any);
 	t.assert(ok, "the RSA chain verifies: " + err);
 
 	# each decodes, and every extension of the three gets an answer
@@ -640,6 +744,7 @@ testPublicRoots(t: ref T)
 		t.skip("no " + dir);
 	n := 0;
 	rsa := 0;
+	p521 := 0;
 	for(;;) {
 		(nd, d) := sys->dirread(fd);
 		if(nd <= 0)
@@ -660,19 +765,102 @@ testPublicRoots(t: ref T)
 				continue;
 			}
 			(kerr, nil, pk) := c.subject_pkinfo.getPublicKey();
+			if(contains(kerr, "unsupported curve 1.3.132.0.35")) {
+				# secp521r1, which libsec does not have: the root
+				# stands as an anchor, and nothing it signs verifies
+				# (as before, when its key was "unsupported EC key size")
+				p521++;
+				kerr = "";
+			}
 			t.assertseq(kerr, "", name + ": its key");
 			if(pk != nil)
 				pick k := pk {
 				RSA =>
 					rsa++;
 				}
-			(ok, err) := x509->verify_certchain_roots(der :: nil, der :: nil, nil, STOREDAY);
+			(ok, err) := x509->verify_certchain_roots(der :: nil, der :: nil, nil, STOREDAY, X509->Usage_Any);
 			t.assert(ok, name + " as its own anchor: " + err);
 			n++;
 		}
 	}
 	t.assert(n > 100, sys->sprint("%d roots read", n));
-	t.log(sys->sprint("%d roots, %d of them RSA", n, rsa));
+	t.assert(p521 <= 1, sys->sprint("%d roots with a key on a curve not implemented", p521));
+	t.log(sys->sprint("%d roots, %d of them RSA, %d on P-521", n, rsa, p521));
+}
+
+# The stores are read again when their files change.  /lib/certs was
+# read once in the life of a module instance: a root put there was not
+# trusted, and one taken away went on being trusted, until whatever
+# held the module was started again (an LLM service, a mail server's
+# client, for days).
+writefile(path: string, b: array of byte): int
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return -1;
+	return sys->write(fd, b, len b);
+}
+
+storeproc(t: ref T, done: chan of int)
+{
+	{
+		storereload(t);
+	} exception e {
+	"fail:skip" =>
+		done <-= 0;
+		return;
+	"fail:*" =>
+		;
+	"*" =>
+		t.error("exception " + e);
+	}
+	done <-= 1;
+}
+
+storereload(t: ref T)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	d := "/tmp/x509_reload." + string sys->pctl(0, nil);
+	if(sys->create(d, Sys->OREAD, Sys->DMDIR | 8r755) == nil
+	|| sys->create(d + "/certs", Sys->OREAD, Sys->DMDIR | 8r755) == nil
+	|| sys->create(d + "/crls", Sys->OREAD, Sys->DMDIR | 8r755) == nil) {
+		t.skip(sys->sprint("cannot make %s: %r", d));
+	}
+	if(sys->bind(d + "/certs", "/lib/certs", Sys->MREPL) < 0 || sys->bind(d + "/crls", "/lib/crls", Sys->MREPL) < 0) {
+		t.error(sys->sprint("cannot bind over the stores: %r"));
+		return;
+	}
+	chain := fixture(t, "leaf") :: fixture(t, "inter") :: nil;
+	(ok, err) := x509->verify_certchain(chain, X509->Usage_Any);
+	t.assert(!ok && contains(err, "no trusted root"), "with no root in the store the chain does not verify: " + err);
+	writefile(d + "/certs/root.der", fixture(t, "root"));
+	(ok, err) = x509->verify_certchain(chain, X509->Usage_Any);
+	t.assert(ok, "a root put in the store is trusted at the next verification (it was not, until the module was loaded again): " + err);
+	(ok, err) = x509->verify_certchain(chain, X509->Usage_Any);
+	t.assert(ok, "and at the one after: " + err);
+	# a CRL put in the CRL store is applied (the fixture's lists 5001 and 5002, of the root's)
+	writefile(d + "/crls/junk.der", array of byte "not a CRL");
+	(ok, err) = x509->verify_certchain(chain, X509->Usage_Any);
+	t.assert(!ok && contains(err, "junk.der"), "a file put in the CRL store that is no CRL fails every verification: " + err);
+	sys->remove(d + "/crls/junk.der");
+	writefile(d + "/crls/root.der", fixture(t, "crl"));
+	(ok, err) = x509->verify_certchain(chain, X509->Usage_Any);
+	t.assert(ok, "and taken away, with a CRL that names other certificates in its place, none: " + err);
+	sys->remove(d + "/certs/root.der");
+	(ok, err) = x509->verify_certchain(chain, X509->Usage_Any);
+	t.assert(!ok && contains(err, "no trusted root"), "a root taken out of the store is not trusted at the next verification: " + err);
+	sys->remove(d + "/crls/root.der");
+	sys->remove(d + "/certs");
+	sys->remove(d + "/crls");
+	sys->remove(d);
+}
+
+testStoreReload(t: ref T)
+{
+	done := chan of int;
+	spawn storeproc(t, done);
+	if(<-done == 0)
+		raise "fail:skip";
 }
 
 # A change made somewhere in a copy of a: what a peer that can send
@@ -743,14 +931,6 @@ same(a, b: array of byte): int
 	return 1;
 }
 
-# the same bytes signed, and the same signature
-samesigned(a, b: array of byte): int
-{
-	(nil, sa) := Signed.decode(a);
-	(nil, sb) := Signed.decode(b);
-	return sa != nil && sb != nil && same(sa.tobe_signed, sb.tobe_signed) && same(sa.signature, sb.signature);
-}
-
 # everything a decoder can be asked of m: nil, or what went wrong
 decodes(m: array of byte): string
 {
@@ -813,12 +993,12 @@ testMutations(t: ref T)
 		{
 			# in the place its original has in a chain
 			case which {
-			0 =>	(ok, err) = x509->verify_certchain_roots(m :: inter :: nil, root :: nil, crl :: nil, NOW);
-			1 =>	(ok, err) = x509->verify_certchain_roots(leaf :: m :: nil, root :: nil, crl :: nil, NOW);
-			2 =>	(ok, err) = x509->verify_certchain_roots(leaf :: inter :: nil, m :: nil, nil, NOW);
-			3 =>	(ok, err) = x509->verify_certchain_roots(leaf :: inter :: nil, root :: nil, m :: nil, NOW);
-			4 =>	(ok, err) = x509->verify_certchain_roots(m :: nil, rsaroot :: nil, nil, NOW);
-			5 =>	(ok, err) = x509->verify_certchain_roots(rsaleaf :: nil, m :: nil, nil, NOW);
+			0 =>	(ok, err) = x509->verify_certchain_roots(m :: inter :: nil, root :: nil, crl :: nil, NOW, X509->Usage_Any);
+			1 =>	(ok, err) = x509->verify_certchain_roots(leaf :: m :: nil, root :: nil, crl :: nil, NOW, X509->Usage_Any);
+			2 =>	(ok, err) = x509->verify_certchain_roots(leaf :: inter :: nil, m :: nil, nil, NOW, X509->Usage_Any);
+			3 =>	(ok, err) = x509->verify_certchain_roots(leaf :: inter :: nil, root :: nil, m :: nil, NOW, X509->Usage_Any);
+			4 =>	(ok, err) = x509->verify_certchain_roots(m :: nil, rsaroot :: nil, nil, NOW, X509->Usage_Any);
+			5 =>	(ok, err) = x509->verify_certchain_roots(rsaleaf :: nil, m :: nil, nil, NOW, X509->Usage_Any);
 			}
 			if(internal(err))
 				r = err;
@@ -837,10 +1017,11 @@ testMutations(t: ref T)
 		# A changed leaf or intermediate is another certificate or
 		# none, and a changed CRL one no root signed: the chain does
 		# not verify.  (A root is trusted as it is given, changed or
-		# not; and a certificate whose signed bytes and signature are
-		# the original's is the original: the algorithm written
-		# between them is not signed.)
-		if(ok && which != 2 && which != 5 && !samesigned(m, orig)) {
+		# not.)  That holds for a change to the bytes that are not
+		# signed too, the algorithm between the signed part and the
+		# signature: it is the signed part's own, or the certificate
+		# is refused (RFC 5280 4.1.1.2).
+		if(ok && which != 2 && which != 5) {
 			bad++;
 			t.error(sys->sprint("mutant %d (of fixture %d) verified", i, which));
 		}
@@ -877,6 +1058,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	run("Asn1Values", testAsn1Values);
+	run("Asn1Der", testAsn1Der);
 	run("Asn1Lengths", testAsn1Lengths);
 	run("MalformedCertificates", testMalformedCertificates);
 	run("RsaKeys", testRsaKeys);
@@ -885,6 +1067,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Extensions", testExtensions);
 	run("FixturesVerify", testFixturesVerify);
 	run("PublicRoots", testPublicRoots);
+	run("StoreReload", testStoreReload);
 	run("Mutations", testMutations);
 
 	if(testing->summary(passed, failed, skipped) > 0)

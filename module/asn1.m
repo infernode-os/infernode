@@ -54,7 +54,7 @@ ASN1: module {
 	Tag: adt {
 		class: int;
 		num: int;
-		constr: int;	# ignored by encode()
+		constr: int;
 
 		tostring: fn(t: self Tag) : string;
 	};
@@ -62,8 +62,7 @@ ASN1: module {
 	Value: adt {
 		pick {
 			Bool or Int =>
-				# Bool: the value's byte, 0 for FALSE; DER's
-				# TRUE is 16rFF, BER's anything but 0
+				# Bool: 0 for FALSE, 16rFF for TRUE
 				v: int;
 			Octets or BigInt or Real or Other =>
 				# BigInt: integer too big for limbo int
@@ -75,11 +74,13 @@ ASN1: module {
 				# unused bits in last byte
 				unusedbits: int;
 				bits: array of byte;
-			Null or EOC =>
+			Null =>
 				dummy: int;
 			ObjId =>
 				id: ref Oid;
 			String =>
+				# the text, decoded as its type has it
+				# (tag.num says which)
 				s: string;
 			Seq or Set =>
 				l: list of ref Elem;
@@ -95,12 +96,15 @@ ASN1: module {
 	};
 
 	init: fn();
-	# Definite lengths only (DER has no others).  Whatever the bytes,
-	# the answer is an element or an error: no exception.
+	# DER (X.690 10, 11): definite lengths and tag numbers in their
+	# shortest form, INTEGERs in the fewest bytes, BOOLEANs 00 or FF,
+	# strings primitive and in their type's characters, a BIT
+	# STRING's unused bits zero.  Whatever the bytes, the answer is
+	# an element or an error: no exception.
 	decode: fn(a: array of byte) : (string, ref Elem);
+	# the elements that fill a (a SEQUENCE's contents)
 	decode_seq: fn(a: array of byte) : (string, list of ref Elem);
 	decode_value: fn(a: array of byte, kind, constr: int) : (string, ref Value);
-	encode: fn(e: ref Elem) : (string, array of byte);
 	oid_lookup: fn(o: ref Oid, tab: array of Oid) : int;
 	print_elem: fn(e: ref Elem);
 };

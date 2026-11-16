@@ -1,5 +1,9 @@
 #
-# X.509 v3 by ITU-T Recommendation (11/93) & PKCS7 & PKCS10
+# X.509 v3 certificates and CRLs, read and verified (RFC 5280)
+#
+# The module decodes and verifies; it makes nothing.  (It had an
+# encoder for every type and a Signed.sign, none of which had a
+# caller or could have worked.)
 #
 
 X509: module {
@@ -65,9 +69,10 @@ X509: module {
   		signature		: array of byte; # BIT STRING, DER encoding
 		
 		decode: fn(a: array of byte): (string, ref Signed);
-		encode: fn(s: self ref Signed): (string, array of byte);
-		sign: fn(s: self ref Signed, sk: ref PrivateKey, hash: int): (string, array of byte);
-		verify: fn(s: self ref Signed, pk: ref PublicKey, hash: int): int;
+		# is the signature pk's, by the algorithm alg names?
+		# RSA PKCS #1 v1.5 and ECDSA (P-256, P-384), each with
+		# SHA-256, SHA-384 or SHA-512; anything else does not verify
+		verify: fn(s: self ref Signed, pk: ref PublicKey): int;
 		tostring: fn(s: self ref Signed): string;
 	};
 
@@ -75,15 +80,33 @@ X509: module {
 
 	# Each returns (1, "") for a chain that verifies and (0, why) for one
 	# that does not; none raises an exception, whatever the bytes.
-	verify_certchain: fn(cs: list of array of byte): (int, string);
-	verify_certpath: fn(cp: list of (ref Signed, ref Certificate)): (int, string);
-	# The same against roots given, not /lib/certs: a client's chain
-	# against the CAs a server names (DER, each a CA certificate), with
-	# the CRLs given (DER; each must be signed by one of the roots, or
-	# the call fails) and the time now (seconds since the epoch: a
+	#
+	# verify_certchain: a chain as a TLS peer presents it (the leaf
+	# first, the rest in any order) against the roots in /lib/certs,
+	# the CRLs in /lib/crls and the time in /dev/time.  The stores are
+	# read at the first use and again whenever a file of theirs has
+	# been added, removed or changed.
+	#
+	# usage is what the chain is for, Usage_ServerAuth or
+	# Usage_ClientAuth: every certificate of the path below the trust
+	# anchor that has an extendedKeyUsage must name it or
+	# anyExtendedKeyUsage, the CAs as well as the leaf (CA/Browser
+	# Forum Baseline Requirements 7.1.2.10.6, and what browsers apply:
+	# a CA limited to signing email does not make TLS servers).
+	# Usage_Any asks nothing.
+	verify_certchain: fn(cs: list of array of byte, usage: int): (int, string);
+	# The same against roots given, not /lib/certs: a chain against
+	# the CAs a caller names (DER, each a CA certificate), with the
+	# CRLs given (DER) and the time now (seconds since the epoch: a
 	# confined caller has no /dev/time).  Neither store is read.
+	# Every CRL given must be one the call can check, or the call
+	# fails: signed by one of the roots, or by a CA certificate of the
+	# chain, which then signs it with the key the path verifies (and
+	# with cRLSign, if it has a keyUsage).
 	verify_certchain_roots: fn(cs: list of array of byte, roots: list of array of byte,
-		crls: list of array of byte, now: int): (int, string);
+		crls: list of array of byte, now: int, usage: int): (int, string);
+
+	Usage_Any, Usage_ServerAuth, Usage_ClientAuth: con iota;
 
 	## TBS (Public Key) Certificate
 
@@ -100,15 +123,15 @@ X509: module {
   		subject_uid		: array of byte; # v2 or v3
   		exts			: list of ref Extension; # v3
 
+		# a is a TBSCertificate: Signed.decode's tobe_signed
 		decode: fn(a: array of byte): (string, ref Certificate);
-		encode: fn(c: self ref Certificate): (string, array of byte);
 		tostring: fn(c: self ref Certificate): string;
 		is_expired: fn(c: self ref Certificate, date: int): int;
 	};
 
 	AlgIdentifier: adt {
 		oid			: ref ASN1->Oid;
-		parameter		: array of byte;
+		parameter		: array of byte;	# the parameters' DER; nil if absent
 
 		tostring: fn(a: self ref AlgIdentifier): string;
 	};
@@ -146,6 +169,8 @@ X509: module {
   		alg_id			: ref AlgIdentifier;
   		subject_pk		: array of byte; # BIT STRING
 
+		# (error, the algorithm as PKCS->id_pkcs_rsaEncryption or
+		# PKCS->id_ec_publicKey, the key)
 		getPublicKey: fn(c: self ref SubjectPKInfo): (string, int, ref PublicKey);
 		tostring: fn(c: self ref SubjectPKInfo): string;
 	};
@@ -162,23 +187,10 @@ X509: module {
 		pick {
 		RSA =>
 			pk		: ref PKCS->RSAKey;
-		DSS =>
-			pk		: ref PKCS->DSSPublicKey;
-		DH =>
-			pk		: ref PKCS->DHPublicKey;
 		EC =>
+			# an uncompressed point on the curve the key's
+			# parameters name: 65 bytes on P-256, 97 on P-384
 			point		: array of byte;
-		}
-	};
-
-	PrivateKey: adt {
-		pick {
-		RSA =>
-			sk		: ref PKCS->RSAKey;
-		DSS =>
-			sk		: ref PKCS->DSSPrivateKey;
-		DH =>
-			sk		: ref PKCS->DHPrivateKey;
 		}
 	};
 
@@ -193,8 +205,8 @@ X509: module {
 		revoked_certs		: list of ref RevokedCert; # OPTIONAL
 		exts			: list of ref Extension; # OPTIONAL
 
+		# a is a TBSCertList: Signed.decode's tobe_signed
 		decode: fn(a: array of byte): (string, ref CRL);
-		encode: fn(c: self ref CRL): (string, array of byte);
 		tostring: fn(c: self ref CRL): string;
 		is_revoked: fn(c: self ref CRL, sn: ref Keyring->IPint): int;
 	};
@@ -209,16 +221,12 @@ X509: module {
 
 	## Certificate Extensions
 
-	# get critical extensions	
-	cr_exts: fn(es: list of ref Extension): list of ref Extension;
-
-	# get non-critical extensions
-	noncr_exts: fn(es: list of ref Extension): list of ref Extension;
-
-	# decode a list of extensions
+	# The extensions that have a class here, decoded; the rest are
+	# left out.  Whether a certificate may be used with a critical
+	# extension is the path's question (verify_certchain), which
+	# reads more extensions than these.
 	parse_exts: fn(es: list of ref Extension): (string, list of ref ExtClass);
 
-	# extension classes
 	ExtClass: adt {
 		pick {
 		AuthorityKeyIdentifier =>
@@ -227,54 +235,19 @@ X509: module {
 			serial_number	: ref Keyring->IPint;
 		SubjectKeyIdentifier =>
 			id		: array of byte; # OCTET STRING
-		BasicConstraints =>	
-			depth		: int; # certificate path constraints
+		BasicConstraints =>
+			ca		: int;
+			pathlen		: int;	# pathLenConstraint, or -1
 		KeyUsage =>
 			usage		: int;
-		PrivateKeyUsage =>
-			period		: ref Validity;
-		PolicyMapping =>	# (issuer, subject) domain policy pairs
-			pairs		: list of (ref ASN1->Oid, ref ASN1->Oid);
-		CertificatePolicies =>
-			policies	: list of ref PolicyInfo;
-		IssuerAltName =>
-			alias		: list of ref GeneralName;
 		SubjectAltName =>
 			alias		: list of ref GeneralName;
-		NameConstraints =>
-			permitted	: list of ref GSubtree;
-			excluded	: list of ref GSubtree;
-		PolicyConstraints =>
-			require		: int;
-			inhibit		: int;
-		CRLNumber =>
-			curr		: int;
 		ReasonCode =>
 			code		: int;
-		InstructionCode =>
-			oid		: ref ASN1->Oid; # hold instruction code field
-		InvalidityDate =>
-			date		: big;
-		CRLDistributionPoint =>
-			ps		: list of ref DistrPoint;
-		IssuingDistributionPoint =>
-			name		: ref DistrPointName;
-			only_usercerts	: int; # DEFAULT FALSE
-			only_cacerts	: int; # DEFAULT FALSE
-			only_reasons	: int;
-			indirect_crl	: int; # DEFAULT FALSE	 	 
-		CertificateIssuer =>
-			names		: list of ref GeneralName;
-		DeltaCRLIndicator =>
-			number		: ref Keyring->IPint;
-		SubjectDirectoryAttributes =>
-			attrs		: list of ref Attribute;
-		UnknownType =>
-			ext		: ref Extension;
 		}
 
+		# nil and no error for an extension with no class here
 		decode: fn(ext: ref Extension): (string, ref ExtClass);
-		encode: fn(et: self ref ExtClass, critical: int): ref Extension;
 		tostring: fn(et: self ref ExtClass): string;
 	};
 
@@ -300,7 +273,7 @@ X509: module {
 		dNSName or 		# [2]
 		x400Address or 		# [3]
 		uniformResourceIdentifier => # [6]
-			str		: string;
+			str		: string;	# otherName: its type's OID as text
 		iPAddress =>		# [7]
 			ip		: array of byte;
 		registeredID =>		# [8]
@@ -314,72 +287,4 @@ X509: module {
 
 		tostring: fn(g: self ref GeneralName): string;
 	};
-
-	# security policies
-	PolicyInfo: adt {
-		oid			: ref ASN1->Oid;
-		qualifiers		: list of ref PolicyQualifier;
-
-		tostring: fn(pi: self ref PolicyInfo): string;
-	};
-
-	PolicyQualifier: adt {
-		oid			: ref ASN1->Oid;
-		value			: array of byte; # OCTET STRING; OPTIONAL
-
-		tostring: fn(pq: self ref PolicyQualifier): string;
-	};
-
-	GSubtree: adt {
-		base			: ref GeneralName;
-		min			: int;
-		max			: int;
-	
-		tostring: fn(gs: self ref GSubtree): string;
-	};
-	
-	# crl distribution point
-	# with known reason code
-	# Unused [0], KeyCompromise [1], CACompromise [2], AffilationChanged [3],
-	# Superseded [4], CessationOfOperation [5], CertificateHold [6] 
-	DistrPoint: adt{
-		name			: ref DistrPointName;
- 		reasons			: int;
-		issuer			: list of ref GeneralName;
-
-		tostring: fn(dp: self ref DistrPoint): string;
-	};
-	
-	DistrPointName: adt {
-		full_name		: list of ref GeneralName;
-		rdname			: list of ref RDName;
-	};
-
-	Attribute: adt {
-		id			: ASN1->Oid;
-		value			: array of byte;
-	};
 };
-
-#X509Attribute: module {
-#
-#	## Attribute Certificate
-#
-#	AttrCert: adt {
-#		version			: int; # default v1
-#		base_certid		: ref IssuerSerial; # [0]
-#		subject_name		: list of ref GeneralName; # [1]
-#		issuer			: list of ref GeneralName;
-#		serial_number		: ref IPint;
-#		validity		: ref Validity;
-#		attrs			: list of ref Attribute;
-#		issuer_uid		: array of byte; # OPTIONAL
-#		exts			: list of ref Extension; # OPTIONAL			
-#	};
-#
-#	IssuerSerial: adt {
-#		issuer			: list of ref GeneralName;
-#		serial			: ref IPint;
-#		issuer_uid		: array of byte; # OPTIONAL
-#	};
-#};

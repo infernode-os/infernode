@@ -105,10 +105,20 @@ init(nil: ref Draw->Context, args: list of string)
 			w = tl w;
 		}
 		roots, crls, chain: list of array of byte;
+		usage := X509->Usage_Any;
 		for(; w != nil; w = tl w) {
 			a := hd w;
 			if(len a < 3 || a[1] != '=')
 				continue;
+			case a[0] {
+			'u' =>
+				# what the chain is for: u=server, u=client
+				case a[2:] {
+				"server" =>	usage = X509->Usage_ServerAuth;
+				"client" =>	usage = X509->Usage_ClientAuth;
+				}
+				continue;
+			}
 			b := readfile(a[2:]);
 			case a[0] {
 			'r' =>	roots = b :: roots;
@@ -120,9 +130,9 @@ init(nil: ref Draw->Context, args: list of string)
 		err := "";
 		{
 			if(mode == "store")
-				(ok, err) = x509->verify_certchain(rev(chain));
+				(ok, err) = x509->verify_certchain(rev(chain), usage);
 			else
-				(ok, err) = x509->verify_certchain_roots(rev(chain), rev(roots), rev(crls), now);
+				(ok, err) = x509->verify_certchain_roots(rev(chain), rev(roots), rev(crls), now, usage);
 			if(ok)
 				sys->print("%s: ACCEPT\n", label);
 			else

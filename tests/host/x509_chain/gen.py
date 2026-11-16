@@ -122,28 +122,47 @@ def nc(permitted=(), excluded=(), critical=True, minimum=None):
         parts.append(ctx(1, subtrees(excluded)))
     return ext(NC, seq(*parts), critical)
 
-def tbs(serial, issuer, subject, pub, exts=None, nb=nb, na=na, sigalg=ECDSA256, version=2):
+def tbs(serial, issuer, subject, pub, exts=None, nb=nb, na=na, sigalg=ECDSA256, version=2, validity=None):
     parts = []
     if version:
         parts.append(ctx(0, integer(version)))
-    parts += [integer(serial), sigalg, issuer, seq(utctime(nb), utctime(na)), subject, pub]
+    if isinstance(serial, int):
+        serial = integer(serial)
+    parts += [serial, sigalg, issuer, validity or seq(utctime(nb), utctime(na)), subject, pub]
     if exts:
         parts.append(ctx(3, seq(*exts)))
     return seq(*parts)
 
-def sign(key, body):
+ECDSA384 = seq(oid('1.2.840.10045.4.3.3'))
+ECDSA512 = seq(oid('1.2.840.10045.4.3.4'))
+RSA512 = seq(oid('1.2.840.113549.1.1.13'), NULL)
+HASHOF = {ECDSA256: hashes.SHA256, ECDSA384: hashes.SHA384, ECDSA512: hashes.SHA512, RSA256: hashes.SHA256, RSA512: hashes.SHA512}
+
+def sign(key, body, alg=None):
     """(algorithm, signature bytes) by key over body"""
     if isinstance(key, ec.EllipticCurvePrivateKey):
-        r, s = utils.decode_dss_signature(key.sign(body, ec.ECDSA(hashes.SHA256())))
-        return ECDSA256, seq(integer(r), integer(s))
-    return RSA256, key.sign(body, padding.PKCS1v15(), hashes.SHA256())
+        alg = alg or ECDSA256
+        r, s = utils.decode_dss_signature(key.sign(body, ec.ECDSA(HASHOF[alg]())))
+        return alg, seq(integer(r), integer(s))
+    alg = alg or RSA256
+    return alg, key.sign(body, padding.PKCS1v15(), HASHOF[alg]())
 
-def mk(key, body):
-    alg, sig = sign(key, body)
+def mk(key, body, alg=None):
+    alg, sig = sign(key, body, alg)
     return seq(body, alg, bitstr(sig))
 
-def crl(key, issuer, serials, this, nxt, exts=None):
-    parts = [integer(1), ECDSA256, issuer, utctime(this)]
+def gentime(t): return tlv(0x18, time.strftime('%Y%m%d%H%M%SZ', time.gmtime(t)).encode())
+def longlen(der, extra=1):
+    """the same value with its length written in more bytes than it needs"""
+    tag, n = der[0], der[1]
+    if n < 0x80:
+        body = der[2:]
+        return bytes([tag, 0x80 | extra]) + len(body).to_bytes(extra, 'big') + body
+    k = n & 0x7f
+    return bytes([tag, 0x80 | (k + extra)]) + b'\x00' * extra + der[2:]
+
+def crl(key, issuer, serials, this, nxt, exts=None, inner=ECDSA256):
+    parts = [integer(1), inner, issuer, utctime(this)]
     if nxt is not None:
         parts.append(utctime(nxt))
     if serials:
@@ -215,9 +234,10 @@ def chains():
             f.write(b)
         return fn
     def f(fn): return INEMU + '/' + fn + '.der'
-    def case(label, want, chain, roots=('root',), crls=(), now=NOW, why=''):
-        cases.append('%s roots %d %s %s %s' % (label, now,
-            ' '.join('r=' + f(r) for r in roots), ' '.join('c=' + f(c) for c in crls), ' '.join('l=' + f(c) for c in chain)))
+    def case(label, want, chain, roots=('root',), crls=(), now=NOW, why='', usage=None):
+        cases.append('%s roots %d %s %s %s %s' % (label, now,
+            ' '.join('r=' + f(r) for r in roots), ' '.join('c=' + f(c) for c in crls), ' '.join('l=' + f(c) for c in chain),
+            'u=' + usage if usage else ''))
         expect.append('%s %s %s' % (label, want, why))
     def storecase(label, want, chain, certs, crls, why=''):
         cases.append('%s store %s/%s %s/%s %s' % (label, INEMU, certs, INEMU, crls, ' '.join('l=' + f(c) for c in chain)))
@@ -239,12 +259,12 @@ def chains():
             exts = [bc(), ku([0]), san(cn)]
         return mk(key or kint, tbs(ser(), name(issuer), subject or name(cn), P(kleaf), exts, **kw))
 
-    def under(label, want, caexts, why='', leafexts=None, subject=None, lsubject=None, cn='victim.example', version=2):
+    def under(label, want, caexts, why='', leafexts=None, subject=None, lsubject=None, cn='victim.example', version=2, usage=None, lissuer=None):
         """Root -> X (extensions caexts) -> a leaf signed by X's key"""
         xs = subject or name('X-' + label)
         w('x-' + label, mk(kroot, tbs(ser(), name('Root'), xs, P(k2), caexts, version=version)))
-        w('l-' + label, mk(k2, tbs(ser(), xs, lsubject or name(cn), P(kleaf), [san(cn)] if leafexts is None else leafexts)))
-        case(label, want, ['l-' + label, 'x-' + label], why=why)
+        w('l-' + label, mk(k2, tbs(ser(), lissuer or xs, lsubject or name(cn), P(kleaf), [san(cn)] if leafexts is None else leafexts)))
+        case(label, want, ['l-' + label, 'x-' + label], why=why, usage=usage)
 
     def onleaf(label, want, exts, why='', **kw):
         w('leaf-' + label, leaf(exts=exts, **kw))
@@ -409,8 +429,11 @@ def chains():
         lsubject=dn((C, printable('us')), (O, printable(' corp  ')), (CN, utf8('victim.example'))))
     under('nc-dir-permit-outside', 'REJECT', DNP, 'not in a permitted subtree', subject=sub((CN, utf8('Corp CA'))),
         lsubject=dn((C, printable('US')), (O, utf8('Other')), (CN, utf8('victim.example'))))
-    under('nc-dir-permit-bmpstring', 'REJECT', DNP, 'not in a permitted subtree', subject=sub((CN, utf8('Corp CA'))),
+    # a BMPString is its text (asn1 gave its bytes, which were no name's)
+    under('nc-dir-permit-bmpstring', 'ACCEPT', DNP, subject=sub((CN, utf8('Corp CA'))),
         lsubject=dn((C, printable('US')), (O, bmp('Corp')), (CN, utf8('victim.example'))))
+    under('nc-dir-permit-bmpstring-other', 'REJECT', DNP, 'not in a permitted subtree', subject=sub((CN, utf8('Corp CA'))),
+        lsubject=dn((C, printable('US')), (O, bmp('Corq')), (CN, utf8('victim.example'))))
     DNX = CAEXT + [nc(excluded=[gdir(dn((C, printable('US')), (O, utf8('Evil'))))])]
     under('nc-dir-exclude-inside', 'REJECT', DNX, 'excluded subtree', lsubject=dn((C, printable('US')), (O, utf8('EVIL')), (CN, utf8('victim.example'))))
     under('nc-dir-exclude-bmpstring', 'REJECT', DNX, 'excluded subtree', lsubject=dn((C, printable('US')), (O, bmp('Evil')), (CN, utf8('victim.example'))))
@@ -467,6 +490,194 @@ def chains():
     storedir('s-rootexp', {'root.der': mk(kroot, tbs(1, name('Root'), name('Root'), P(kroot), CAEXT, nb=NOW - 100 * D, na=NOW - 1))})
     storecase('anchor-expired-store', 'REJECT', ['okleaf'], 's-rootexp', 's-none', 'trust anchor')
 
+    # ---- 7. one meaning for a certificate: RFC 5280 4.1.1.2, DER, the two time forms
+    def signedleaf(label, want, body, why='', key=None, alg=None, outer=None, sig=None, chain=('inter',), **kw):
+        """a leaf whose TBSCertificate is body, signed by Inter's key unless said"""
+        a, sg = sign(key or kint, body, alg)
+        w('leaf-' + label, seq(body, outer or a, bitstr(sg if sig is None else sig)))
+        case(label, want, ['leaf-' + label] + list(chain), why=why, **kw)
+    LEAFX = [bc(), ku([0]), san('leaf.example')]
+    def lt(**kw): return tbs(ser(), name('Inter'), name('leaf.example'), P(kleaf), LEAFX, **kw)
+    # the algorithm beside the signature is the one the signed part names
+    signedleaf('alg-inner-sha384-outer-sha256', 'REJECT', lt(sigalg=ECDSA384), 'signatureAlgorithm')
+    signedleaf('alg-inner-md5rsa-outer-ecdsa256', 'REJECT', lt(sigalg=seq(oid('1.2.840.113549.1.1.4'), NULL)), 'signatureAlgorithm')
+    signedleaf('alg-inner-null-outer-none', 'REJECT', lt(sigalg=seq(oid('1.2.840.10045.4.3.2'), NULL)), 'signatureAlgorithm')
+    signedleaf('alg-both-with-null', 'ACCEPT', lt(sigalg=seq(oid('1.2.840.10045.4.3.2'), NULL)), outer=seq(oid('1.2.840.10045.4.3.2'), NULL))
+    signedleaf('alg-both-with-parameters', 'REJECT', lt(sigalg=seq(oid('1.2.840.10045.4.3.2'), integer(5))), 'with parameters', outer=seq(oid('1.2.840.10045.4.3.2'), integer(5)))
+    signedleaf('alg-ecdsa-sha384', 'ACCEPT', lt(sigalg=ECDSA384), alg=ECDSA384)
+    signedleaf('alg-ecdsa-sha512', 'ACCEPT', lt(sigalg=ECDSA512), alg=ECDSA512)
+    w('crl-alg-differs', crl(kroot, name('Root'), [5], NOW - D, NOW + D, inner=ECDSA384))
+    case('crl-alg-inner-sha384-outer-sha256', 'REJECT', ['leaf', 'inter'], crls=('crl-alg-differs',), why='signatureAlgorithm')
+    # an ECDSA signature is DER: two positive INTEGERs in the fewest bytes, and nothing else
+    body = lt()
+    r, sv = utils.decode_dss_signature(kint.sign(body, ec.ECDSA(hashes.SHA256())))
+    def rawint(n, pad=0):
+        b = n.to_bytes((n.bit_length() + 8) // 8, 'big')
+        return tlv(0x02, b'\x00' * pad + b)
+    signedleaf('ecdsa-der', 'ACCEPT', body, sig=seq(integer(r), integer(sv)))
+    signedleaf('ecdsa-r-padded', 'REJECT', body, 'ECDSA signature', sig=seq(rawint(r, 1), integer(sv)))
+    signedleaf('ecdsa-s-padded', 'REJECT', body, 'ECDSA signature', sig=seq(integer(r), rawint(sv, 2)))
+    signedleaf('ecdsa-seq-long-length', 'REJECT', body, 'ECDSA signature', sig=longlen(seq(integer(r), integer(sv))))
+    signedleaf('ecdsa-r-long-length', 'REJECT', body, 'ECDSA signature', sig=seq(longlen(integer(r)), integer(sv)))
+    while True:	# a signature whose r has its top bit set, written without the 00 that makes it positive
+        nbody = lt()
+        r2, s2 = utils.decode_dss_signature(kint.sign(nbody, ec.ECDSA(hashes.SHA256())))
+        if r2.bit_length() == 256:
+            break
+    signedleaf('ecdsa-r-negative-encoding', 'REJECT', nbody, 'ECDSA signature', sig=seq(tlv(0x02, r2.to_bytes(32, 'big')), integer(s2)))
+    signedleaf('ecdsa-bytes-after', 'REJECT', body, 'ECDSA signature', sig=seq(integer(r), integer(sv)) + b'\x00')
+    signedleaf('ecdsa-three-integers', 'REJECT', body, 'ECDSA signature', sig=seq(integer(r), integer(sv), integer(1)))
+    # an EC key is a point of the curve its certificate names
+    def eccert(label, want, pub, why='', key=None, alg=None):
+        xs = name('E-' + label)
+        w('x-' + label, mk(kroot, tbs(ser(), name('Root'), xs, pub, CAEXT)))
+        lb = tbs(ser(), xs, name('victim.example'), P(kleaf), [san('victim.example')], sigalg=alg or ECDSA256)
+        w('l-' + label, mk(key or k2, lb, alg))
+        case(label, want, ['l-' + label, 'x-' + label], why=why)
+    point = k2.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    ECPUB = '1.2.840.10045.2.1'
+    eccert('ec-p256', 'ACCEPT', seq(seq(oid(ECPUB), oid('1.2.840.10045.3.1.7')), bitstr(point)))
+    eccert('ec-p256-point-named-secp256k1', 'REJECT', seq(seq(oid(ECPUB), oid('1.3.132.0.10')), bitstr(point)), 'unsupported curve')
+    eccert('ec-p256-point-named-p384', 'REJECT', seq(seq(oid(ECPUB), oid('1.3.132.0.34')), bitstr(point)), 'point of its curve')
+    eccert('ec-no-curve-named', 'REJECT', seq(seq(oid(ECPUB)), bitstr(point)), 'no curve')
+    eccert('ec-curve-not-named-but-written', 'REJECT', seq(seq(oid(ECPUB), seq(integer(1))), bitstr(point)), 'named curve')
+    eccert('ec-compressed-point', 'REJECT', seq(seq(oid(ECPUB), oid('1.2.840.10045.3.1.7')),
+        bitstr(k2.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.CompressedPoint))), 'point of its curve')
+    eccert('ec-key-under-ecdsa-oid', 'REJECT', seq(seq(oid('1.2.840.10045.4.3.2'), oid('1.2.840.10045.3.1.7')), bitstr(point)), 'unsupported algorithm')
+    k384 = ec.generate_private_key(ec.SECP384R1())
+    eccert('ec-p384', 'ACCEPT', P(k384), key=k384, alg=ECDSA384)
+    p384 = k384.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    eccert('ec-p384-point-named-p256', 'REJECT', seq(seq(oid(ECPUB), oid('1.2.840.10045.3.1.7')), bitstr(p384)), 'point of its curve', key=k384, alg=ECDSA384)
+    # an RSA key's parameters are NULL (RFC 3279 2.3.1)
+    nopar = seq(seq(oid('1.2.840.113549.1.1.1')), bitstr(seq(integer(nrsa), integer(65537))))
+    xs = name('R-nopar')
+    w('x-rsa-no-null', mk(kroot, tbs(ser(), name('Root'), xs, nopar, CAEXT)))
+    lb = tbs(ser(), xs, name('victim.example'), P(kleaf), [san('victim.example')], sigalg=RSA256)
+    w('l-rsa-no-null', mk(krsa, lb))
+    case('rsa-key-without-null', 'REJECT', ['l-rsa-no-null', 'x-rsa-no-null'], why='NULL')
+    xs = name('R-512')
+    w('x-rsa-sha512', mk(kroot, tbs(ser(), name('Root'), xs, P(krsa), CAEXT)))
+    w('l-rsa-sha512', mk(krsa, tbs(ser(), xs, name('victim.example'), P(kleaf), [san('victim.example')], sigalg=RSA512), RSA512))
+    case('rsa-sha512', 'ACCEPT', ['l-rsa-sha512', 'x-rsa-sha512'])
+    # times: UTCTime YYMMDDHHMMSSZ and GeneralizedTime YYYYMMDDHHMMSSZ, and no other form (RFC 5280 4.1.2.5)
+    def T(tag, fmt, t): return tlv(tag, time.strftime(fmt, time.gmtime(t)).encode())
+    def timed(label, want, a, b, why='certificate'):
+        signedleaf('time-' + label, want, lt(validity=seq(a, b)), why if want == 'REJECT' else '')
+    timed('generalized', 'ACCEPT', utctime(nb), gentime(na))
+    timed('generalized-both', 'ACCEPT', gentime(nb), gentime(na))
+    timed('gentime-no-zone', 'REJECT', utctime(nb), T(0x18, '%Y%m%d%H%M%S', na))
+    timed('utctime-no-seconds', 'REJECT', utctime(nb), T(0x17, '%y%m%d%H%MZ', na))
+    timed('utctime-offset', 'REJECT', utctime(nb), T(0x17, '%y%m%d%H%M%S+0000', na))
+    timed('gentime-offset', 'REJECT', utctime(nb), T(0x18, '%Y%m%d%H%M%S-0100', na))
+    timed('gentime-fraction', 'REJECT', utctime(nb), T(0x18, '%Y%m%d%H%M%S.5Z', na))
+    timed('gentime-hour-only', 'REJECT', utctime(nb), T(0x18, '%Y%m%d%HZ', na))
+    timed('utctime-second-60', 'REJECT', utctime(nb), tlv(0x17, time.strftime('%y%m%d%H%M', time.gmtime(na)).encode() + b'60Z'))
+    timed('utctime-as-generalized-tag', 'REJECT', utctime(nb), T(0x18, '%y%m%d%H%M%SZ', na))
+    w('crl-time-no-seconds', mk(kroot, seq(integer(1), ECDSA256, name('Root'), T(0x17, '%y%m%d%H%MZ', NOW - D), utctime(NOW + D))))
+    case('crl-time-no-seconds', 'REJECT', ['leaf', 'inter'], crls=('crl-time-no-seconds',), why='CRL')
+    # DER: lengths and INTEGERs in the fewest bytes, primitive strings, BOOLEAN FF
+    good = lt()
+    a, sg = sign(kint, good)
+    w('leaf-der-outer-long-length', longlen(seq(good, a, bitstr(sg))))
+    case('der-outer-long-length', 'REJECT', ['leaf-der-outer-long-length', 'inter'], why='certificate')
+    signedleaf('der-tbs-long-length', 'REJECT', longlen(lt()), 'certificate')
+    signedleaf('der-tbs-long-length-2', 'REJECT', longlen(lt(), 2), 'certificate')
+    signedleaf('der-serial-padded', 'REJECT', tbs(b'\x02\x03\x00\x00\x05', name('Inter'), name('leaf.example'), P(kleaf), LEAFX), 'certificate')
+    signedleaf('der-serial-ff-padded', 'REJECT', tbs(b'\x02\x02\xff\x80', name('Inter'), name('leaf.example'), P(kleaf), LEAFX), 'certificate')
+    signedleaf('der-name-long-length', 'REJECT', tbs(ser(), name('Inter'), longlen(name('leaf.example')), P(kleaf), LEAFX), 'certificate')
+    signedleaf('der-ext-value-long-length', 'REJECT', tbs(ser(), name('Inter'), name('leaf.example'), P(kleaf),
+        [seq(oid(SAN), longlen(octet(seq(gdns('leaf.example')))))]), 'certificate')
+    signedleaf('der-oid-leading-80', 'REJECT', tbs(ser(), name('Inter'), name('leaf.example'), P(kleaf),
+        [seq(tlv(0x06, b'\x80\x55\x1d\x11'), octet(seq(gdns('leaf.example'))))]), 'certificate')
+    signedleaf('der-constructed-octets', 'REJECT', tbs(ser(), name('Inter'), name('leaf.example'), P(kleaf),
+        [seq(oid(SAN), tlv(0x24, octet(seq(gdns('leaf.example')))))]), 'certificate')
+    signedleaf('der-key-unused-bits-set', 'REJECT', tbs(ser(), name('Inter'), name('leaf.example'),
+        seq(seq(oid(ECPUB), oid('1.2.840.10045.3.1.7')), tlv(0x03, b'\x01' + point[:-1] + bytes([point[-1] | 1])))), 'certificate')
+    # names: a string is its type's text, and a name has no NUL in it
+    def named(label, want, lsubject, why='', lissuer=None, leafexts=None):
+        under('name-' + label, want, CAEXT, why, lsubject=lsubject, lissuer=lissuer, leafexts=leafexts)
+    named('issuer-as-bmpstring', 'ACCEPT', name('victim.example'), lissuer=dn((O, bmp('T6 Test')), (CN, bmp('X-name-issuer-as-bmpstring'))))
+    named('issuer-as-printable', 'ACCEPT', name('victim.example'), lissuer=dn((O, printable('T6 Test')), (CN, printable('X-name-issuer-as-printable'))))
+    named('issuer-bmpstring-other', 'REJECT', name('victim.example'), 'no trusted root', lissuer=dn((O, bmp('T6 Test')), (CN, bmp('X-name-issuer-bmpstring-othex'))))
+    named('cn-teletex-latin1', 'ACCEPT', dn((O, utf8('T6 Test')), (CN, tlv(0x14, b'caf\xe9'))))
+    named('cn-universalstring', 'ACCEPT', dn((O, utf8('T6 Test')), (CN, tlv(0x1c, 'victim'.encode('utf-32-be')))))
+    named('cn-with-nul', 'REJECT', dn((O, utf8('T6 Test')), (CN, utf8(b'victim.example\x00.evil.example'))), 'certificate')
+    named('cn-bmp-with-nul', 'REJECT', dn((O, utf8('T6 Test')), (CN, bmp('a\x00b'))), 'certificate')
+    named('cn-utf8-not-utf8', 'REJECT', dn((O, utf8('T6 Test')), (CN, utf8(b'caf\xe9'))), 'certificate')
+    named('cn-utf8-overlong', 'REJECT', dn((O, utf8('T6 Test')), (CN, utf8(b'a\xc0\x80b'))), 'certificate')
+    named('cn-bmp-odd-length', 'REJECT', dn((O, utf8('T6 Test')), (CN, tlv(0x1e, b'\x00a\x00'))), 'certificate')
+    named('cn-printable-high-byte', 'REJECT', dn((O, utf8('T6 Test')), (CN, tlv(0x13, b'caf\xe9'))), 'certificate')
+    named('san-dns-with-nul', 'REJECT', name('victim.example'), 'subjectAltName', leafexts=[ext(SAN, seq(ctx(2, b'victim.example\x00.evil.example', False)))])
+    named('san-dns-high-byte', 'REJECT', name('victim.example'), 'subjectAltName', leafexts=[ext(SAN, seq(ctx(2, b'caf\xe9.example', False)))])
+    # a serial number is the number its INTEGER is: -128 is not 128
+    kn = eckey()
+    w('neg-leaf', mk(kroot, tbs(b'\x02\x01\x80', name('Root'), name('neg.example'), P(kn), [san('neg.example')])))
+    w('crl-128', crl(kroot, name('Root'), [128, 0xffffff80], NOW - D, NOW + D))
+    w('crl-neg128', mk(kroot, seq(integer(1), ECDSA256, name('Root'), utctime(NOW - D), utctime(NOW + D), seq(seq(b'\x02\x01\x80', utctime(NOW - D))))))
+    case('serial-minus-128-crl-128-and-4294967168', 'ACCEPT', ['neg-leaf'], crls=('crl-128',))
+    case('serial-minus-128-crl-minus-128', 'REJECT', ['neg-leaf'], crls=('crl-neg128',), why='revoked')
+
+    # ---- 8. what a CA is for: extendedKeyUsage in a CA's certificate limits what it issues for
+    under('eku-ca-none-server', 'ACCEPT', CAEXT, usage='server')
+    under('eku-ca-serverauth-server', 'ACCEPT', CAEXT + [eku(SERVERAUTH)], usage='server')
+    under('eku-ca-any-server', 'ACCEPT', CAEXT + [eku(ANYEKU)], usage='server')
+    under('eku-ca-email-server', 'REJECT', CAEXT + [eku(EMAILPROT)], 'CA certificate is not for server authentication', usage='server')
+    under('eku-ca-clientauth-server', 'REJECT', CAEXT + [eku(CLIENTAUTH)], 'CA certificate is not for server authentication', usage='server')
+    under('eku-ca-clientauth-client', 'ACCEPT', CAEXT + [eku(CLIENTAUTH)], usage='client')
+    under('eku-ca-serverauth-client', 'REJECT', CAEXT + [eku(SERVERAUTH)], 'CA certificate is not for client authentication', usage='client')
+    under('eku-ca-email-any', 'ACCEPT', CAEXT + [eku(EMAILPROT)])
+    under('eku-leaf-email-server', 'REJECT', CAEXT, 'certificate is not for server authentication', leafexts=[san('victim.example'), eku(EMAILPROT)], usage='server')
+    under('eku-leaf-serverauth-server', 'ACCEPT', CAEXT, leafexts=[san('victim.example'), eku(SERVERAUTH)], usage='server')
+    # two levels: the limit is anywhere above the leaf
+    w('x-eku2', mk(kroot, tbs(ser(), name('Root'), name('X-eku2'), P(k2), CAEXT + [eku(EMAILPROT)])))
+    w('y-eku2', mk(k2, tbs(ser(), name('X-eku2'), name('Y-eku2'), P(kb), CAEXT)))
+    w('l-eku2', mk(kb, tbs(ser(), name('Y-eku2'), name('victim.example'), P(kleaf), [san('victim.example'), eku(SERVERAUTH)])))
+    case('eku-two-levels-up', 'REJECT', ['l-eku2', 'y-eku2', 'x-eku2'], why='CA certificate is not for server authentication', usage='server')
+    # the anchor is not asked
+    w('root-eku-email', mk(kroot, tbs(1, name('Root'), name('Root'), P(kroot), CAEXT + [eku(EMAILPROT)])))
+    case('eku-anchor-not-asked', 'ACCEPT', ['leaf', 'inter'], roots=('root-eku-email',), usage='server')
+
+    # ---- 9. an intermediate's CRL revokes what it issued
+    ILEAF = ser()
+    w('ileaf', mk(kint, tbs(ILEAF, name('Inter'), name('leaf.example'), P(kleaf), LEAFX)))
+    w('crl-inter', crl(kint, name('Inter'), [ILEAF], NOW - D, NOW + D))
+    w('crl-inter-other', crl(kint, name('Inter'), [ILEAF + 1000], NOW - D, NOW + D))
+    w('crl-inter-forged', crl(k2, name('Inter'), [ILEAF + 1000], NOW - D, NOW + D))
+    w('crl-root-empty', crl(kroot, name('Root'), [999999], NOW - D, NOW + D))
+    case('crl-inter-revoked', 'REJECT', ['ileaf', 'inter'], crls=('crl-inter',), why='revoked')
+    case('crl-inter-and-root', 'REJECT', ['ileaf', 'inter'], crls=('crl-root-empty', 'crl-inter'), why='revoked')
+    case('crl-inter-not-revoked', 'ACCEPT', ['ileaf', 'inter'], crls=('crl-inter-other', 'crl-root-empty'))
+    case('crl-inter-forged', 'REJECT', ['ileaf', 'inter'], crls=('crl-inter-forged',), why='CRL not signed by its issuer')
+    case('crl-inter-not-in-chain', 'REJECT', ['okleaf'], crls=('crl-inter',), why='CRL not signed by a root or by a CA of the chain')
+    kx = eckey()
+    w('nocrl-ca', mk(kroot, tbs(ser(), name('Root'), name('NoCRL'), P(kx), [bc(True), ku([5])])))
+    w('nocrl-leaf', mk(kx, tbs(ser(), name('NoCRL'), name('leaf.example'), P(kleaf), LEAFX)))
+    w('crl-nocrl', crl(kx, name('NoCRL'), [5], NOW - D, NOW + D))
+    case('crl-inter-without-crlsign', 'REJECT', ['nocrl-leaf', 'nocrl-ca'], crls=('crl-nocrl',), why='cRLSign')
+    w('root-nocrlsign', mk(kroot, tbs(1, name('Root'), name('Root'), P(kroot), [bc(True), ku([5])])))
+    case('crl-root-without-crlsign', 'REJECT', ['leaf', 'inter'], roots=('root-nocrlsign',), crls=('crl-root-empty',), why='CRL not signed by a root')
+    # two levels: each CA's CRL, each checked with its own key
+    kc2 = eckey()
+    w('x-c2', mk(kroot, tbs(ser(), name('Root'), name('X-c2'), P(k2), CAEXT)))
+    YSER = ser()
+    w('y-c2', mk(k2, tbs(YSER, name('X-c2'), name('Y-c2'), P(kc2), CAEXT)))
+    LSER = ser()
+    w('l-c2', mk(kc2, tbs(LSER, name('Y-c2'), name('leaf.example'), P(kleaf), LEAFX)))
+    w('crl-x-c2', crl(k2, name('X-c2'), [YSER], NOW - D, NOW + D))
+    w('crl-x-c2-empty', crl(k2, name('X-c2'), [1], NOW - D, NOW + D))
+    w('crl-y-c2', crl(kc2, name('Y-c2'), [LSER], NOW - D, NOW + D))
+    w('crl-y-c2-empty', crl(kc2, name('Y-c2'), [1], NOW - D, NOW + D))
+    case('crl-two-levels-none-revoked', 'ACCEPT', ['l-c2', 'y-c2', 'x-c2'], crls=('crl-x-c2-empty', 'crl-y-c2-empty', 'crl-root-empty'))
+    case('crl-two-levels-leaf-revoked', 'REJECT', ['l-c2', 'y-c2', 'x-c2'], crls=('crl-x-c2-empty', 'crl-y-c2'), why='revoked')
+    case('crl-two-levels-ca-revoked', 'REJECT', ['l-c2', 'y-c2', 'x-c2'], crls=('crl-x-c2', 'crl-y-c2-empty'), why='revoked')
+    # an intermediate given as an anchor is no anchor once a root's CRL names it
+    INTSER = ser()
+    w('inter2', mk(kroot, tbs(INTSER, name('Root'), name('Inter'), P(kint), [bc(True, 0), ku([5, 6])])))
+    w('crl-root-inter2', crl(kroot, name('Root'), [INTSER], NOW - D, NOW + D))
+    case('crl-anchor-revoked-by-root', 'REJECT', ['ileaf'], roots=('root', 'inter2'), crls=('crl-root-inter2',), why='revoked')
+    case('crl-anchor-not-revoked', 'ACCEPT', ['ileaf'], roots=('root', 'inter2'), crls=('crl-root-empty', 'crl-inter-other'))
+    case('crl-anchor-inter-revokes-leaf', 'REJECT', ['ileaf'], roots=('root', 'inter2'), crls=('crl-inter',), why='revoked')
+
     with open(OUT + '/cases', 'w') as fd:
         fd.write('\n'.join(cases) + '\n')
     with open(OUT + '/expect', 'w') as fd:
@@ -495,14 +706,19 @@ def chains():
     served('tls-no-eku', 'OK', '-', [san('leaf.example')])
     served('tls-eku-any', 'OK', '-', [san('leaf.example'), eku(ANYEKU)])
     served('tls-eku-server-and-client', 'OK', '-', [san('leaf.example'), eku(CLIENTAUTH, SERVERAUTH)])
-    served('tls-eku-clientauth-only', 'FAIL', 'extended key usage', [san('leaf.example'), eku(CLIENTAUTH)])
-    served('tls-eku-email-cn-only', 'FAIL', 'extended key usage', [eku(EMAILPROT)])
+    served('tls-eku-clientauth-only', 'FAIL', 'extendedKeyUsage', [san('leaf.example'), eku(CLIENTAUTH)])
+    served('tls-eku-email-cn-only', 'FAIL', 'extendedKeyUsage', [eku(EMAILPROT)])
     served('tls-ku-certsign-only', 'FAIL', 'digitalSignature', [san('leaf.example'), ku([5])])
     served('tls-unknown-critical', 'FAIL', 'unrecognized critical extension', [san('leaf.example'), ext(UNKNOWN, octet(b'x'), True)])
     served('tls-san-othername-beside-dns', 'OK', '-', [ext(SAN, seq(ctx(0, oid('1.3.6.1.4.1.311.20.2.3') + ctx(0, utf8('u@x'))), gdns('leaf.example')))])
     kc = eckey()
     cons = mk(kroot, tbs(ser(), name('Root'), name('Constrained'), P(kc), PERMIT_CORP))
     served('tls-nc-outside', 'FAIL', 'not in a permitted subtree', [san('leaf.example')], chain=[cons], issuer=('Constrained', kc))
+    kmail = eckey()
+    mailca = mk(kroot, tbs(ser(), name('Root'), name('Mail CA'), P(kmail), CAEXT + [eku(EMAILPROT)]))
+    served('tls-ca-for-email', 'FAIL', 'CA certificate is not for server authentication', [san('leaf.example')], chain=[mailca], issuer=('Mail CA', kmail))
+    webca = mk(kroot, tbs(ser(), name('Root'), name('Web CA'), P(kmail), CAEXT + [eku(SERVERAUTH, CLIENTAUTH)]))
+    served('tls-ca-for-servers', 'OK', '-', [san('leaf.example')], chain=[webca], issuer=('Web CA', kmail))
     served('tls-nc-inside', 'OK', '-', [san('a.corp.example')], cn='a.corp.example', ask='a.corp.example', chain=[cons], issuer=('Constrained', kc))
 
     def scripted(label, want, why, files, mode, ask='leaf.example'):

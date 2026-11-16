@@ -3097,6 +3097,22 @@ out:
 		*f->ret = kept(ai);
 }
 
+/*
+ * A cipher's state holds its key (AES's schedule, in three forms;
+ * ChaCha's key itself; RC4's permutation) and a digest's may hold a
+ * keyed hash's (HMAC).  None holds a pointer.  They were given back to
+ * the heap as they were, and the key stayed in the freed block until
+ * something else was put there: in the emulator's memory, a core file,
+ * the heap as /prog/n/heap gives it to a debugger.  Cleared when the
+ * block goes, by its last reference or by the collector.
+ */
+static void
+freestate(Heap *h, int swept)
+{
+	USED(swept);
+	secureZero(H2D(void*, h), h->t->size);
+}
+
 void
 keyringmodinit(void)
 {
@@ -3116,13 +3132,13 @@ keyringmodinit(void)
 	TPK = dtype(freePK, sizeof(PK), PKmap, sizeof(PKmap));
 	TCertificate = dtype(freeCertificate, sizeof(Certificate), Certificatemap,
 		sizeof(Certificatemap));
-	TDigestState = dtype(freeheap, sizeof(XDigestState), DigestStatemap,
+	TDigestState = dtype(freestate, sizeof(XDigestState), DigestStatemap,
 		sizeof(DigestStatemap));
-	TAESstate = dtype(freeheap, sizeof(XAESstate), AESstatemap,
+	TAESstate = dtype(freestate, sizeof(XAESstate), AESstatemap,
 		sizeof(AESstatemap));
-	TAESGCMstate = dtype(freeheap, sizeof(XAESGCMstate), AESGCMstatemap,
+	TAESGCMstate = dtype(freestate, sizeof(XAESGCMstate), AESGCMstatemap,
 		sizeof(AESGCMstatemap));
-	TChaChastate = dtype(freeheap, sizeof(XChaChastate), ChaChastatemap,
+	TChaChastate = dtype(freestate, sizeof(XChaChastate), ChaChastatemap,
 		sizeof(ChaChastatemap));
 	TECpoint = dtype(freeheap, sizeof(XECpoint), ECpointmap,
 		sizeof(ECpointmap));
@@ -3132,7 +3148,7 @@ keyringmodinit(void)
 		sizeof(IDEAstatemap));
 	TBFstate = dtype(freeheap, sizeof(XBFstate), BFstatemap,
 		sizeof(BFstatemap));
-	TRC4state = dtype(freeheap, sizeof(XRC4state), RC4statemap,
+	TRC4state = dtype(freestate, sizeof(XRC4state), RC4statemap,
 		sizeof(RC4statemap));
 	TAuthinfo = dtype(freeheap, sizeof(Keyring_Authinfo), Authinfomap, sizeof(Authinfomap));
 	TDSAsk = dtype(freeheap, sizeof(Keyring_DSAsk), DSAskmap, sizeof(DSAskmap));

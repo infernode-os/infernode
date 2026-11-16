@@ -16,6 +16,8 @@
 #include "ipint.h"
 #include "../libkeyring/keys.h"
 
+extern int	upkilled(void);	/* is this Prog being killed (the kernels' dis.c)? */
+
 static Type*	TDigestState;
 static Type*	TAESstate;
 static Type*	TAESGCMstate;
@@ -1914,10 +1916,17 @@ Keyring_dhparams(void *fp)
 		ok = gensafeprime(p, alpha, f->nbits, 0);
 	acquire();
 	if(ok < 0){
-		/* the search gave up: two zeros are no group */
+		/*
+		 * the search gave up: two zeros are no group.  It also stops
+		 * when this Prog is being killed, and then there is nothing
+		 * to raise: the kill is raised as the call returns, and an
+		 * error raised here left the Prog broken in its place.
+		 */
 		mpfree(p);
 		mpfree(alpha);
-		error("dhparams: no prime found");
+		if(!upkilled())
+			error("dhparams: no prime found");
+		return;
 	}
 	/* newIPint frees its number when it raises, but not the other one */
 	c = cres(p, (void(*)(void*))mpfree);
@@ -4145,8 +4154,12 @@ EGsk_gen(void *fp)
 		egprivfree(p);
 	}
 	acquire();
-	if(p == nil)	/* eggen found no group, or was told to stop */
-		error("EGsk.gen: no key made");
+	if(p == nil){
+		/* eggen found no group, or was told to stop: see dhparams */
+		if(!upkilled())
+			error("EGsk.gen: no key made");
+		return;
+	}
 	c = cres(p, (void(*)(void*))egprivfree);
 	sk = newthing(TEGsk, 0);
 	sk->pk = newthing(TEGpk, 0);

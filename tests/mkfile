@@ -204,6 +204,7 @@ TARG=\
 	ninep_nul_test.dis\
 	keyring_rsa_test.dis\
 	keyring_dsa_test.dis\
+	keyring_noresult_test.dis\
 	ipints_prime_test.dis\
 	prime_kill_test.dis\
 	elgamal_forge_test.dis\

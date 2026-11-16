@@ -336,6 +336,7 @@ TARG=\
 	tls_pq_test.dis\
 	x509_test.dis\
 	x509_path_test.dis\
+	x509_total_test.dis\
 	tls_chain_live.dis\
 	xml_test.dis\
 	xenith_concurrency_test.dis\
@@ -387,6 +388,8 @@ TARG=\
 	llmclient_proxy_test.dis\
 	llmclient_pool_test.dis\
 	tlsclient.dis\
+	tlsverify.dis\
+	x509_chain.dis\
 	tlspinclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\

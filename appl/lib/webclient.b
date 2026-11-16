@@ -135,7 +135,30 @@ tlsclient0(fd, cfd: ref Sys->FD, servername: string): (ref Sys->FD, string)
 	cfg := tls->defaultconfig();
 	cfg.servername = servername;
 
-	(conn, terr) := tls->client(fd, cfg);
+	conn: ref Conn;
+	terr: string;
+	ms := stallms;
+	if(ms <= 0)
+		(conn, terr) = tls->client(fd, cfg);
+	else {
+		# The handshake is a read like any other to a server that
+		# says nothing, and had as long as the server liked.  It has
+		# ms; then the connection is hung up, which ends it (one on a
+		# pipe, with no ctl file, is left to its server).
+		h := ref Shake(0, 0);
+		res := chan[1] of (ref Conn, string);
+		late := chan[1] of int;
+		spawn shake(fd, cfg, h, res);
+		spawn shakewatch(h, cfd, ms, late);
+		alt {
+		(conn, terr) = <-res =>
+			;
+		<-late =>
+			;
+		}
+		if(h.over)	# (what the hangup made of it is not the answer)
+			return (nil, "tls: handshake timed out");
+	}
 	if(terr != nil) {
 		if(len terr < 4 || terr[0:4] != "tls:")
 			terr = "tls: " + terr;
@@ -144,6 +167,45 @@ tlsclient0(fd, cfd: ref Sys->FD, servername: string): (ref Sys->FD, string)
 
 	# Wrap TLS conn as a pipe-like FD pair
 	return tlsconnfd(conn, cfd);
+}
+
+Shake: adt {
+	done:	int;
+	over:	int;	# its time ran out
+};
+
+# [private]
+shake(fd: ref Sys->FD, cfg: ref TLS->Config, h: ref Shake, res: chan of (ref Conn, string))
+{
+	conn: ref Conn;
+	err: string;
+	{
+		(conn, err) = tls->client(fd, cfg);
+	} exception x {
+	"*" =>
+		conn = nil;
+		err = x;
+	}
+	h.done = 1;
+	res <-= (conn, err);
+}
+
+# [private]
+shakewatch(h: ref Shake, cfd: ref Sys->FD, ms: int, late: chan of int)
+{
+	t0 := sys->millisec();
+	for(;;) {
+		sys->sleep(POLLMS);
+		if(h.done)
+			return;
+		if(sys->millisec() - t0 >= ms) {
+			h.over = 1;
+			if(cfd != nil)
+				sys->fprint(cfd, "hangup");
+			late <-= 1;
+			return;
+		}
+	}
 }
 
 # ---- a TLS connection as a file ----
@@ -256,12 +318,12 @@ tlswritepump(p: ref Tpipe, fd: ref Sys->FD)
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(newreq(0, 0), method, requrl, hdrs, body, 0, nil, nil);
+	return runreq(newreq(totalms, stallms, 0), method, requrl, hdrs, body, 0, nil, nil);
 }
 
 requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(newreq(0, 0), method, requrl, hdrs, body, 1, nil, nil);
+	return runreq(newreq(totalms, stallms, 0), method, requrl, hdrs, body, 1, nil, nil);
 }
 
 # ---- a request with a deadline ----
@@ -281,6 +343,17 @@ requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte)
 # killed holding the pool's lock would stop every later request), so it
 # is the hangup that ends it; one still in a connect is not reachable so
 # and ends when the connect does, holding nothing.
+#
+# That was requestbounded alone.  request, requestjar, requesttypes, get
+# and post had no deadline, and a server that accepted a connection and
+# said nothing, or sent "100 Continue" for ever, kept their caller for
+# ever: a page's fetch in webfs, a clone in git, a payment in stripe.
+# They are now made the same way, under the module's own two limits
+# (setdeadline): the whole exchange within totalms, and no longer than
+# stallms with no byte moving on its connection, so that a long
+# download is not cut for being long and a silent server is not waited
+# for an hour.  The TLS handshake of tlsdial and tlsclient is given
+# stallms.
 
 Etimeout: con "request timed out";
 # A body that ended before its header said it would.  It was a
@@ -292,25 +365,44 @@ Ecut: con "response body cut short";
 Ebadlength: con "bad Content-Length in response";
 POLLMS: con 100;	# how often the deadline is looked at
 
+MAXINTERIM: con 8;	# 1xx responses read before the one that answers
+
+totalms := DEADLINE;
+stallms := STALL;
+
+setdeadline(total, stall: int)
+{
+	if(total < 0)
+		total = 0;
+	if(stall < 0)
+		stall = 0;
+	totalms = total;
+	stallms = stall;
+}
+
 Req: adt {
 	ms:	int;		# from the start to the end of the body; 0: no deadline
+	stall:	int;	# the longest with no byte moving; 0: no limit
 	t0:	int;
 	maxbody:	int;	# bytes of body kept
-	lk:	chan of int;	# cur and over
+	lk:	chan of int;	# cur, mark and over
 	cur:	ref Link;	# the connection in use
+	mark:	int;	# when cur last changed
 	over:	int;	# the deadline passed: nothing more is read or dialled
 	done:	int;	# answered: the watch ends
 
 	attach:	fn(r: self ref Req, l: ref Link): int;
 	detach:	fn(r: self ref Req);
 	expire:	fn(r: self ref Req);
+	late:	fn(r: self ref Req, now: int): int;
 };
 
-newreq(ms, maxbody: int): ref Req
+newreq(ms, stall, maxbody: int): ref Req
 {
 	if(maxbody <= 0 || maxbody > MAXBODY)
 		maxbody = MAXBODY;
-	return ref Req(ms, sys->millisec(), maxbody, chan[1] of int, nil, 0, 0);
+	t := sys->millisec();
+	return ref Req(ms, stall, t, maxbody, chan[1] of int, nil, t, 0, 0);
 }
 
 # l is the connection in use, unless the time is up (0)
@@ -318,8 +410,10 @@ Req.attach(r: self ref Req, l: ref Link): int
 {
 	r.lk <-= 1;
 	ok := !r.over;
-	if(ok)
+	if(ok) {
 		r.cur = l;
+		r.mark = l.act = sys->millisec();
+	}
 	<-r.lk;
 	return ok;
 }
@@ -330,7 +424,24 @@ Req.detach(r: self ref Req)
 {
 	r.lk <-= 1;
 	r.cur = nil;
+	r.mark = sys->millisec();
 	<-r.lk;
+}
+
+# whether its time is up: all of it, or the time it may go with
+# nothing moving (on its connection; with none, since it had one)
+Req.late(r: self ref Req, now: int): int
+{
+	if(r.ms > 0 && now - r.t0 >= r.ms)
+		return 1;
+	if(r.stall <= 0)
+		return 0;
+	r.lk <-= 1;
+	t := r.mark;
+	if(r.cur != nil && r.cur.act - t > 0)
+		t = r.cur.act;
+	<-r.lk;
+	return now - t >= r.stall;
 }
 
 Req.expire(r: self ref Req)
@@ -344,12 +455,17 @@ Req.expire(r: self ref Req)
 
 requestbounded(method, requrl: string, hdrs: list of Header, body: array of byte, public, ms, maxbody: int): (ref Response, string)
 {
-	rq := newreq(ms, maxbody);
-	if(ms <= 0)
-		return request0(rq, method, requrl, hdrs, body, public, nil, nil);
+	return runreq(newreq(ms, 0, maxbody), method, requrl, hdrs, body, public, nil, nil);
+}
+
+# request0 under rq's limits, if it has any
+runreq(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar, types: list of string): (ref Response, string)
+{
+	if(rq.ms <= 0 && rq.stall <= 0)
+		return request0(rq, method, requrl, hdrs, body, public, jar, types);
 	res := chan[1] of (ref Response, string);
 	late := chan[1] of int;
-	spawn bounded(rq, method, requrl, hdrs, body, public, res);
+	spawn bounded(rq, method, requrl, hdrs, body, public, jar, types, res);
 	spawn watch(rq, late);
 	alt {
 	(r, e) := <-res =>
@@ -360,12 +476,12 @@ requestbounded(method, requrl: string, hdrs: list of Header, body: array of byte
 	}
 }
 
-bounded(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array of byte, public: int, res: chan of (ref Response, string))
+bounded(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar, types: list of string, res: chan of (ref Response, string))
 {
 	r: ref Response;
 	e: string;
 	{
-		(r, e) = request0(rq, method, requrl, hdrs, body, public, nil, nil);
+		(r, e) = request0(rq, method, requrl, hdrs, body, public, jar, types);
 	} exception x {
 	"*" =>
 		r = nil;
@@ -373,6 +489,7 @@ bounded(rq: ref Req, method, requrl: string, hdrs: list of Header, body: array o
 	}
 	if(rq.over)
 		(r, e) = (nil, Etimeout);
+	rq.done = 1;	# (here too: the caller may have gone)
 	res <-= (r, e);
 }
 
@@ -383,7 +500,7 @@ watch(rq: ref Req, late: chan of int)
 		sys->sleep(POLLMS);
 		if(rq.done)
 			return;
-		if(sys->millisec() - rq.t0 >= rq.ms) {
+		if(rq.late(sys->millisec())) {
 			rq.expire();
 			late <-= 1;
 			return;
@@ -398,7 +515,7 @@ requestjar(method, requrl: string, hdrs: list of Header, body: array of byte, ja
 
 requesttypes(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar, types: list of string): (ref Response, string)
 {
-	(resp, err) := request0(newreq(0, 0), method, requrl, hdrs, body, 0, jar, types);
+	(resp, err) := runreq(newreq(totalms, stallms, 0), method, requrl, hdrs, body, 0, jar, types);
 	if(resp != nil && resp.body != nil) {
 		ce := str->tolower(resp.hdrval("Content-Encoding"));
 		case ce {
@@ -778,6 +895,7 @@ Link: adt {
 	p, n:	int;	# buf[p:n] read and not yet taken
 	idle:	int;	# sys->millisec() when it was put back
 	reused:	int;
+	act:	int;	# sys->millisec() when a byte last moved on it
 
 	read:	fn(l: self ref Link, a: array of byte): int;
 	write:	fn(l: self ref Link, a: array of byte): int;
@@ -803,9 +921,14 @@ Link.read(l: self ref Link, a: array of byte): int
 		l.p += m;
 		return m;
 	}
+	n: int;
 	if(l.tls != nil)
-		return l.tls.read(a, len a);
-	return sys->read(l.fd, a, len a);
+		n = l.tls.read(a, len a);
+	else
+		n = sys->read(l.fd, a, len a);
+	if(n > 0)
+		l.act = sys->millisec();
+	return n;
 }
 
 Link.getc(l: self ref Link): int
@@ -820,17 +943,29 @@ Link.getc(l: self ref Link): int
 		if(m <= 0)
 			return -1;
 		l.n = m;
+		l.act = sys->millisec();
 	}
 	return int l.buf[l.p++];
 }
 
+# In pieces, so that a long body's going is seen to move.
 Link.write(l: self ref Link, a: array of byte): int
 {
-	if(len a == 0)
-		return 0;
-	if(l.tls != nil)
-		return l.tls.write(a, len a);
-	return sys->write(l.fd, a, len a);
+	for(o := 0; o < len a; ) {
+		m := len a - o;
+		if(m > 65536)
+			m = 65536;
+		n: int;
+		if(l.tls != nil)
+			n = l.tls.write(a[o:o+m], m);
+		else
+			n = sys->write(l.fd, a[o:o+m], m);
+		if(n != m)
+			return -1;
+		o += m;
+		l.act = sys->millisec();
+	}
+	return len a;
 }
 
 # Hang it up: a read outstanding on it fails.
@@ -906,7 +1041,7 @@ newlink(rq: ref Req, key, addr, host: string, ishttps: int): (ref Link, string)
 	c := dial->dial(addr, nil);
 	if(c == nil)
 		return (nil, sys->sprint("dial %s: %r", addr));
-	l := ref Link(key, nil, c.dfd, c.cfd, array[16384] of byte, 0, 0, 0, 0);
+	l := ref Link(key, nil, c.dfd, c.cfd, array[16384] of byte, 0, 0, 0, 0, 0);
 	if(!rq.attach(l)) {
 		l.hangup();
 		l.close();
@@ -1060,7 +1195,7 @@ readinto(rq: ref Req, l: ref Link, g: ref Grow, want: int): int
 readresponse(rq: ref Req, l: ref Link, method: string, types: list of string): (ref Response, int, string)
 {
 	resp: ref Response;
-	for(;;) {
+	for(n := 0; ; n++) {
 		(hdr, herr) := readheader(l);
 		if(herr != nil)
 			return (nil, 0, herr);
@@ -1070,7 +1205,10 @@ readresponse(rq: ref Req, l: ref Link, method: string, types: list of string): (
 			return (nil, 0, err);
 		if(resp.statuscode < 100 || resp.statuscode >= 200 || resp.statuscode == 101)
 			break;
-		# 1xx: an interim response; the real one follows
+		# 1xx: an interim response; the real one follows, and not
+		# after any number of them
+		if(n >= MAXINTERIM)
+			return (nil, 0, "too many interim responses");
 	}
 	keep := 1;
 	conn := str->tolower(resp.hdrval("Connection"));

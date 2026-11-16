@@ -133,6 +133,12 @@ Opening it for reading, or reading
 or
 .BR header ,
 makes the request; each waits until it completes.
+A request is given up as
+.B "request timed out"
+when no byte has moved on its connection for five minutes, or when an
+hour has passed since it began; its connection is then hung up.
+A body that ends before its length or its last chunk is an error, not
+a short body.
 A body sent with a gzip or deflate Content-Encoding is decoded.
 .TP
 .B status

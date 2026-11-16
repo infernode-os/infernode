@@ -55,6 +55,21 @@ Webclient: module {
 		clear:	fn(j: self ref Jar);
 	};
 
+	# How long request, requestpublic, requestjar, requesttypes, get and
+	# post wait for a server: the whole exchange, redirects and body
+	# included, is over within total milliseconds, and no more than
+	# stall milliseconds pass with no byte moving on its connection.
+	# Then the answer is "request timed out" and the connection is
+	# hung up, as at requestbounded's deadline.  The TLS handshake of
+	# tlsdial and tlsclient is given stall ("tls: handshake timed
+	# out").  They start as DEADLINE and STALL, generous enough for a
+	# 64 MB body on a slow line and a server slow to answer;
+	# setdeadline changes them for this load of the module, 0 for
+	# either being no limit.  A connect is the system's to time.
+	DEADLINE: con 60*60*1000;
+	STALL: con 5*60*1000;
+	setdeadline:	fn(total, stall: int);
+
 	request:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte): (ref Response, string);
 	# Resolve and dial only validated public IPv4 destinations. Revalidates every
@@ -67,7 +82,8 @@ Webclient: module {
 	# bytes of body are kept (Response.truncated says when there were
 	# more).  At the deadline the answer is "request timed out" and the
 	# connection is hung up, so nothing goes on behind the caller's back.
-	# ms 0: no deadline; maxbody 0: MAXBODY.
+	# ms 0: no deadline (and no stall limit: setdeadline's are not
+	# requestbounded's); maxbody 0: MAXBODY.
 	requestbounded: fn(method, url: string, hdrs: list of Header,
 			   body: array of byte, public, ms, maxbody: int): (ref Response, string);
 	# request, keeping cookies in jar across redirects, and decoding a

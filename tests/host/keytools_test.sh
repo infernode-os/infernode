@@ -18,6 +18,7 @@
 #     that does not read back, and said it had worked.
 #   - getpk's exit status was success when a file could not be read.
 #
+# KEYS_EMUFLAGS=-c0 runs it interpreted.
 # Skips (exit 77) with no emulator.
 #
 . "$(dirname "$0")/common.sh"
@@ -91,7 +92,7 @@ auth/getpk ai.file nosuch > /dev/null >[2] /dev/null
 echo pk-both: \$status.
 echo halt > /dev/sysctl
 INFERNO
-OUT=$(with_timeout 120 "$EMU" -r"$ROOT" -c1 sh "$G/script" 2>&1 < /dev/null || true)
+OUT=$(with_timeout 120 "$EMU" -r"$ROOT" ${KEYS_EMUFLAGS:--c1} sh "$G/script" 2>&1 < /dev/null || true)
 
 check "createsignerkey makes a key" '^cs-new: \.$' 'cs-new'
 [ "$(mode sk.new)" = "-rw-------" ] && ok "in a new file of mode 600" || bad "a new signer key file is $(mode sk.new)"

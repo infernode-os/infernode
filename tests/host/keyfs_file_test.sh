@@ -37,6 +37,7 @@
 #     array bounds error), a confirmation that differs is refused, a key
 #     typed twice starts a new store.
 #
+# KEYS_EMUFLAGS=-c0 runs it interpreted.
 # Skips (exit 77) with no emulator, no python3 or no cryptography.
 #
 . "$(dirname "$0")/common.sh"
@@ -63,7 +64,7 @@ mode() { ls -l "$1" | cut -c1-10; }
 # run an Inferno script (its body on standard input) and print what it says
 emu() {
 	{ echo "load std"; cat; echo "echo halt > /dev/sysctl"; } > "$DIR/script.$1"
-	with_timeout "${2:-60}" "$EMU" -r"$ROOT" -c1 sh "$G/script.$1" 2>&1 < /dev/null || true
+	with_timeout "${2:-60}" "$EMU" -r"$ROOT" ${KEYS_EMUFLAGS:--c1} sh "$G/script.$1" 2>&1 < /dev/null || true
 }
 has() { echo "$OUT" | grep -q -e "$1"; }
 # check NAME PATTERN: OUT has a line matching it
@@ -247,7 +248,7 @@ cp "$DIR/g.keys" "$DIR/g.orig"
   echo "echo G-survived"
   echo "echo halt > /dev/sysctl"; } > "$DIR/script.g"
 # no file may grow: the write of the change ends the emulator (SIGXFSZ)
-OUT=$( (ulimit -f 0; with_timeout 60 "$EMU" -r"$ROOT" -c1 sh "$G/script.g" 2>&1 < /dev/null | cat) || true)
+OUT=$( (ulimit -f 0; with_timeout 60 "$EMU" -r"$ROOT" ${KEYS_EMUFLAGS:--c1} sh "$G/script.g" 2>&1 < /dev/null | cat) || true)
 if has '^G-started: \.$' && ! has 'G-survived'; then
 	if cmp -s "$DIR/g.keys" "$DIR/g.orig"; then
 		ok "an emulator ended as it wrote a change leaves the file whole"
@@ -339,7 +340,7 @@ mkdir -p "$DIR/mnt.c1" "$DIR/mnt.c2" "$DIR/mnt.c3"
 mkfifo "$DIR/cons"
 ( python3 -c "print('x'*300); print('a'); print('conspw'); print('conspw')"; exec sleep 120 ) > "$DIR/cons" &
 conspid=$!
-OUT=$(with_timeout 60 "$EMU" -r"$ROOT" -c1 sh "$G/script.k" 2>&1 < "$DIR/cons" || true)
+OUT=$(with_timeout 60 "$EMU" -r"$ROOT" ${KEYS_EMUFLAGS:--c1} sh "$G/script.k" 2>&1 < "$DIR/cons" || true)
 kill $conspid 2>/dev/null
 wait $conspid 2>/dev/null
 check "a key of 300 characters is refused as too long" "couldn't get key: line too long"

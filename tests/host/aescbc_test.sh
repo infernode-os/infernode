@@ -21,6 +21,7 @@
 #     file and through a pipe, 10200 bytes and 300000; two encryptions of
 #     one file differ; the old format is read with -c.
 #
+# KEYS_EMUFLAGS=-c0 runs it interpreted.
 # Skips (exit 77) with no emulator or no python3. The old format's own
 # files need Python's cryptography; without it those checks are left out.
 #
@@ -41,7 +42,7 @@ bad() { echo "FAIL: $1"; rc=1; }
 ok() { echo "PASS: $1"; }
 emu() {
 	{ echo "load std"; echo "cd $G"; cat; echo "echo halt > /dev/sysctl"; } > "$DIR/script.$1"
-	with_timeout 90 "$EMU" -r"$ROOT" -c1 sh "$G/script.$1" 2>&1 < /dev/null || true
+	with_timeout 90 "$EMU" -r"$ROOT" ${KEYS_EMUFLAGS:--c1} sh "$G/script.$1" 2>&1 < /dev/null || true
 }
 has() { echo "$OUT" | grep -q -e "$1"; }
 check() {

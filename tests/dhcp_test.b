@@ -402,11 +402,18 @@ server(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int, p
 	}
 }
 
+# What the synthetic server does for the tests of the command itself
+# (CommandNak, CommandRetry), and what it tells them of it.
+mode := "";
+notes: chan of string;
+srvname := "dhcptest";
+
 server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 {
 	pending: list of array of byte;
 	readers: list of Rread;
 	phase := 0;
+	cmdphase := 0;
 	mac := macb();
 	for(;;)alt{
 	<-quit =>
@@ -467,7 +474,38 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 			}else
 				replies = mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
 		Request =>
-			case phase {
+			if(mode == "nakrenew"){
+				# a short lease, and its renewal refused
+				if(cmdphase == 0){
+					replies = mkreply(xid, mac, Ouraddr, ack3opts(), nil, nil) :: nil;
+					cmdphase = 1;
+				}else{
+					replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
+					if(cmdphase == 1)
+						notes <-= "nak";
+					cmdphase = 2;
+				}
+			}else if(mode == "failfirst"){
+				# refused once, then granted; each time, whether
+				# the request carried the host name it was given
+				host := "host=0";
+				if(findopt(buf, 12) != nil)
+					host = "host=1";
+				# (six times: the client asks again by itself after
+				# a refusal, and gives up, for the command to try
+				# again, after a few)
+				if(cmdphase < 6){
+					replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
+					if(cmdphase == 0)
+						notes <-= "refused " + host;
+					cmdphase++;
+				}else{
+					replies = mkreply(xid, mac, Ouraddr, ack2opts(), nil, nil) :: nil;
+					if(cmdphase == 6)
+						notes <-= "granted " + host;
+					cmdphase = 7;
+				}
+			}else case phase {
 			0 or 1 =>
 				# the first exchange: an ACK whose options are
 				# overloaded into the file field
@@ -547,12 +585,12 @@ setupnet(): (ref FileIO, ref FileIO, string)
 	# Names of their own: the srv device is shared by everything in
 	# this emu, and "clone" is not a name to claim in it.
 	#
-	clone := sys->file2chan(Netdir+"/srv", "dhcptestclone");
-	data := sys->file2chan(Netdir+"/srv", "dhcptestdata");
+	clone := sys->file2chan(Netdir+"/srv", srvname+"clone");
+	data := sys->file2chan(Netdir+"/srv", srvname+"data");
 	if(clone == nil || data == nil)
 		return (nil, nil, sys->sprint("file2chan: %r"));
-	if(sys->bind(Netdir+"/srv/dhcptestclone", Netdir+"/udp/clone", Sys->MREPL) < 0 ||
-	   sys->bind(Netdir+"/srv/dhcptestdata", Netdir+"/udp/1/data", Sys->MREPL) < 0)
+	if(sys->bind(Netdir+"/srv/"+srvname+"clone", Netdir+"/udp/clone", Sys->MREPL) < 0 ||
+	   sys->bind(Netdir+"/srv/"+srvname+"data", Netdir+"/udp/1/data", Sys->MREPL) < 0)
 		return (nil, nil, sys->sprint("cannot bind the udp files: %r"));
 	return (clone, data, nil);
 }
@@ -1160,6 +1198,114 @@ testExchange(t: ref T)
 }
 
 #
+# The command, ip/dhcp, against the synthetic server: in a name space
+# and a process group of its own, its standard output nowhere.  done
+# gets "returned", or "raised ..." if it raised.
+#
+Command: module
+{
+	init:	fn(nil: ref Draw->Context, argv: list of string);
+};
+
+command(argv: list of string, done: chan of string, pidc: chan of int)
+{
+	sys->pctl(Sys->FORKNS|Sys->NEWPGRP|Sys->FORKFD, nil);
+	pidc <-= sys->pctl(0, nil);
+	(clone, data, e) := setupnet();
+	if(e != nil){
+		done <-= "setup: " + e;
+		return;
+	}
+	mkdir(Netdir+"/ifc");
+	mkfile(Netdir+"/ifc/ctl", nil);
+	mkfile(Netdir+"/ifc/status", array of byte "device /n/ether maxtu 1500\n");
+	mkfile(Netdir+"/iproute", nil);
+	spid := chan of int;
+	spawn server(clone, data, chan[256] of array of byte, chan of int, spid);
+	<-spid;
+	null := sys->open("/dev/null", Sys->OWRITE);
+	if(null != nil)
+		sys->dup(null.fd, 1);
+	dhcp := load Command "/dis/ip/dhcp.dis";
+	if(dhcp == nil){
+		done <-= sys->sprint("cannot load ip/dhcp: %r");
+		return;
+	}
+	{
+		dhcp->init(nil, argv);
+		done <-= "returned";
+	} exception x {
+	"*" =>
+		done <-= "raised " + x;
+	}
+}
+
+killgrp(pid: int)
+{
+	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# the next of the server's notes or the command's end, or "nothing"
+await(done: chan of string, ms: int): string
+{
+	late := chan[1] of int;
+	pc := chan of int;
+	spawn deadline(late, pc, ms);
+	lpid := <-pc;
+	s := "nothing";
+	alt{
+	s = <-notes =>
+		;
+	s = <-done =>
+		;
+	<-late =>
+		;
+	}
+	killproc(lpid);
+	return s;
+}
+
+testCommandNak(t: ref T)
+{
+	# dhcp -m -p: a renewal refused is a lease lost, which comes to the
+	# command's monitor with no configuration.  It printed it.
+	mode = "nakrenew";
+	srvname = "dhcpcmdnak";
+	notes = chan[8] of string;
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn command("dhcp" :: "-m" :: "-p" :: "-x" :: Netdir :: Netdir+"/ifc" :: nil, done, pidc);
+	pid := <-pidc;
+	s := await(done, 30*1000);
+	t.assertseq(s, "nak", "a lease of four seconds is renewed, and the renewal refused");
+	if(s == "nak"){
+		s = await(done, 3000);
+		t.assertseq(s, "nothing", "and the command goes on");
+	}
+	killgrp(pid);
+	mode = "";
+}
+
+testCommandRetry(t: ref T)
+{
+	# dhcp -r -h myname: refused, it asks again for what it was told to
+	mode = "failfirst";
+	srvname = "dhcpcmdretry";
+	notes = chan[8] of string;
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn command("dhcp" :: "-r" :: "-h" :: "myname" :: "-x" :: Netdir :: Netdir+"/ifc" :: nil, done, pidc);
+	pid := <-pidc;
+	t.assertseq(await(done, 30*1000), "refused host=1", "the first request carries the host name, and is refused");
+	t.assertseq(await(done, 90*1000), "granted host=1", "the command's next attempt carries it too");
+	t.assertseq(await(done, 30*1000), "returned", "and the command ends");
+	killgrp(pid);
+	mode = "";
+}
+
+#
 # The clock this test runs against. It reports its own pid so that a
 # run which finishes early can kill it: a process left asleep is a
 # process, and a hosted emu does not exit while one is running.
@@ -1213,6 +1359,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Strings", testStrings);
 	run("Timers", testTimers);
 	run("Exchange", testExchange);
+	run("CommandNak", testCommandNak);
+	run("CommandRetry", testCommandRetry);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

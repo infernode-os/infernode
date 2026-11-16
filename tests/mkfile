@@ -154,6 +154,7 @@ TARG=\
 	print_edge_test.dis\
 	math_edge_test.dis\
 	alt_edge_test.dis\
+	tls_record_test.dis\
 	attrdb_test.dis\
 	dial_lib_test.dis\
 	post9p_test.dis\

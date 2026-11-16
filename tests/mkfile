@@ -156,6 +156,7 @@ TARG=\
 	alt_edge_test.dis\
 	auth_bind_test.dis\
 	tls_record_test.dis\
+	random_fail_test.dis\
 	attrdb_test.dis\
 	dial_lib_test.dis\
 	post9p_test.dis\

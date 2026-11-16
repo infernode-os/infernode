@@ -42,6 +42,7 @@ reqpool: list of chan of (ref Tmsg, ref Aux, ref Fid);
 reqidle: int;
 reqdone: chan of chan of (ref Tmsg, ref Aux, ref Fid);
 srv: ref Styxserver;
+commitc: chan of (string, chan of (int, string));	# a page written to new, to the committer
 
 filelist := array[] of {
 	"index.html",
@@ -148,7 +149,9 @@ serve(tchan: chan of ref Tmsg, navops: chan of ref Navop)
 	pidregister = chan of (int, int);
 	flush = chan of (int, int, chan of int);
 	reqdone = chan of chan of (ref Tmsg, ref Aux, ref Fid);
+	commitc = chan of (string, chan of (int, string));
 	spawn flushproc(flush);
+	spawn committer();
 
 Serve:
 	for(;;)alt{
@@ -194,7 +197,38 @@ Serve:
 			reqidle--;
 		}
 	}
+	commitc <-= (nil, nil);	# after the page being written, if one is
 	navops <-= nil;
+}
+
+# The one process that writes pages.  An edit says which version it was
+# made from, and is a conflict if the page is no longer that one: the
+# compare and the write are one step only because no other write runs
+# between them, and the lock wiki.b takes round them is a file made for
+# exclusive use, which the emulator's host file system does not have.
+# Not a lock held by the worker: a flush kills workers, and a killed
+# one would keep it.  The answer waits in the channel for a worker that
+# has been killed.
+committer()
+{
+	for(;;){
+		(file, rc) := <-commitc;
+		if(rc == nil)
+			break;
+		{
+			rc <-= newfile(file);
+		} exception e {
+		"*" =>
+			rc <-= (-1, "wikifs: " + e);
+		}
+	}
+}
+
+commit(file: string): (int, string)
+{
+	rc := chan[1] of (int, string);
+	commitc <-= (file, rc);
+	return <-rc;
 }
 
 request(m: ref Styx->Tmsg, fid: ref Fid)
@@ -252,7 +286,7 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 					p[0:] = m.data;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				}else if(len fid.data != 0) {
-					(n, err) := newfile(string fid.data);
+					(n, err) := commit(string fid.data);
 					if(n < 0){
 						# why: a title that names no page, a full wiki
 						fid.data = nil;

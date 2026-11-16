@@ -20,6 +20,9 @@ implement WikifsTest;
 # then two writes nobody checked; one holding its title alone was a
 # history of no versions, indexed by whoever looked at it.
 #
+# The update-conflict check was made under a lock that is a file made
+# for exclusive use, which the host file system does not have: two
+# edits of one version at once were both taken.
 #
 
 include "sys.m";
@@ -581,6 +584,52 @@ testPostRefusals(t: ref T)
 	rmrf(dir);
 }
 
+# Two writers at once, each with the version the other has: one is the
+# page, the other a conflict.
+testSimultaneous(t: ref T)
+{
+	dir := hoststore(t);
+	mountwiki(t, dir);
+	(name, err) := post("race page", 0, "start\n");
+	t.assert(name == "race_page" && err == nil, "a page made");
+	both := none := 0;
+	ROUNDS: con 30;
+	for(i := 0; i < ROUNDS; i++){
+		v := version("race_page");
+		go := chan of int;
+		res := chan of string;
+		for(k := 0; k < 2; k++)
+			spawn writer(go, res, v, sys->sprint("round %d writer %d\n", i, k));
+		go <-= 1;
+		go <-= 1;
+		ok := 0;
+		for(k = 0; k < 2; k++)
+			if(<-res == nil)
+				ok++;
+		if(ok == 2)
+			both++;
+		if(ok == 0)
+			none++;
+	}
+	t.asserteq(both, 0, sys->sprint("of %d pairs of edits of one version at once, those both taken", ROUNDS));
+	t.asserteq(none, 0, "those neither taken");
+	h := getfile("/n/race_page/history.txt");
+	nc := 0;
+	for(i = 0; i + 11 <= len h; i++)
+		if(h[i:i+11] == "conflicting")
+			nc++;
+	t.asserteq(nc, ROUNDS, "each pair's other edit is in the history as a conflicting write");
+	unmountwiki();
+	rmrf(dir);
+}
+
+writer(go: chan of int, res: chan of string, v: int, text: string)
+{
+	<-go;
+	(nil, err) := post("race page", v, text);
+	res <-= err;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -608,6 +657,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DamagedStore", testDamagedStore);
 	run("WriteChecked", testWriteChecked);
 	run("PostRefusals", testPostRefusals);
+	run("Simultaneous", testSimultaneous);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -16,7 +16,8 @@
 #      twice taken once; what anyone may write kept out of the markup
 #      (a link's URL, a javascript: link, a title, </textarea>); numbers
 #      that are no page not found (five of them stopped the wiki), titles
-#      that can name no page and one too long refused; timings.
+#      that can name no page and one too long refused, two edits of one
+#      version at once (one the page, the other a conflict); timings.
 #
 # Prints PASS:/FAIL: lines; exits with the number failed.
 #
@@ -181,6 +182,35 @@ for title, why in (("Map", "reserved"), (" new", "reserved"), ("42", "digits"), 
     st, hd, b = req("POST", "/magic/wikipost", form, {"Content-Type": "application/x-www-form-urlencoded"})
     check(st in (400, 422) and why.encode() in b, "a page titled %r refused, saying why (%d %r)" % (title[:12], st, b[:60]))
 check(req("GET", "/wiki/1/index.html")[0] == 200, "and the wiki answers")
+
+# Two edits of one version at once: one is the page, the other a
+# conflict.  The check was made under a lock that is a file made for
+# exclusive use, which the host's file system does not have, so both
+# were told they were the page and one text silently was not.
+import threading
+post("race page", "0", "start\n")
+both = neither = 0
+ROUNDS = 12
+for i in range(ROUNDS):
+    v = version("race_page")
+    res = [None, None]
+    bar = threading.Barrier(2)
+
+    def w(k):
+        bar.wait()
+        res[k] = post("race page", v, "round %d writer %d\n" % (i, k))
+    th = [threading.Thread(target=w, args=(k,)) for k in (0, 1)]
+    [x.start() for x in th]
+    [x.join() for x in th]
+    ok = [r for r in res if r and r[0] == 303 and r[1].endswith("/index.html")]
+    lost = [r for r in res if r and r[0] == 303 and r[1].endswith("/werror.html")]
+    if len(ok) == 2:
+        both += 1
+    if len(ok) != 1 or len(lost) != 1:
+        neither += 1
+check(both == 0, "of %d pairs of edits of one version at once, both taken in %d" % (ROUNDS, both))
+check(neither == 0, "each pair: one the page, the other sent to werror.html (%d not)" % neither)
+check(page("race_page", "history.html").count("conflicting write") == ROUNDS, "and each other edit is in the history as a conflicting write")
 
 for f in ("", "create.html", "1/", "wiki_syntax/"):
     st, hd, b = req("GET", "/wiki/" + f)

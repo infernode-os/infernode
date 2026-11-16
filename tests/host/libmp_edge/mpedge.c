@@ -25,20 +25,34 @@ static jmp_buf raised;
 static char raisemsg[256];
 static int refuse;	/* allocations to refuse: all at or past this many bytes */
 static int refused;
+static int failat;	/* or the allocation of this number, counted in nalloc */
+static int nalloc;
+static int live;	/* allocations not yet freed */
 
 void*
 xmalloc(size_t n)
 {
+	void *p;
+
 	if(refuse && n >= refuse){
 		refused++;
 		return nil;
 	}
-	return malloc(n);
+	if(failat && ++nalloc == failat){
+		refused++;
+		return nil;
+	}
+	p = malloc(n);
+	if(p != nil)
+		live++;
+	return p;
 }
 
 void
 xfree(void *p)
 {
+	if(p != nil)
+		live--;
 	free(p);
 }
 
@@ -397,6 +411,174 @@ nomem(void)
 	check(did && same(p1, p2), "the product made without Karatsuba's scratch is another number");
 }
 
+/*
+ * No memory at each allocation in turn.  libmp says so by raising
+ * (sysfatal is error in the kernels) and has no handler, so what a
+ * function held when it, or a function it called, raised was lost: a
+ * working number, a copy of an operand, a table.  Each operation here
+ * is run with its first allocation refused, then its second, and so on
+ * until it gets them all: after every refusal nothing more is allocated
+ * than before the call, and with them all the answer is right.
+ */
+static mpint *sa, *sb, *sc, *sm, *se, *sr, *sx, *sy, *sv, *want, *want2;
+static mpint *cp, *cq, *ckp, *ckq, *cc2;
+static char *stext;
+static int sbase;
+
+static void op_expmont(void) { mpexp(sa, se, sm, sr); }
+static void op_expbig(void) { mpexp(sb, se, sm, sr); }
+static void op_expneg(void) { mpexp(sc, se, sm, sr); }
+static void op_expeven(void) { mpexp(sa, se, sm, sr); }
+static void op_expnomod(void) { mpexp(sa, se, nil, sr); }
+static void op_expinb(void) { mpassign(sa, sr); mpexp(sr, se, sm, sr); }
+static void op_expinm(void) { mpassign(sm, sr); mpexp(sa, se, sr, sr); }
+static void op_gcd(void) { mpextendedgcd(sa, sb, sv, sx, sy); }
+static void op_invert(void) { mpinvert(sa, sm, sr); }
+static void op_invertinm(void) { mpassign(sm, sr); mpinvert(sa, sr, sr); }
+static void op_div(void) { mpdiv(sb, sa, sx, sr); }
+static void op_mod(void) { mpassign(sm, sr); mpmod(sc, sr, sr); }
+static void op_mul(void) { mpassign(sa, sr); mpmul(sr, sb, sr); }
+#ifndef OLDLIBMP
+static void op_muladd(void) { mpmuladdmod(sa, sb, sc, sm, sr); }
+static void op_crt(void) { if(mpexpcrt(sa, cp, cq, ckp, ckq, cc2, sr) < 0) sysfatal("mpexpcrt refused"); }
+#endif
+static mpint *made;
+static char *madetext;
+static void op_strtomp(void) { made = strtomp(stext, nil, sbase, nil); }
+static void op_mptoa(void) { madetext = mptoa(sb, 10, nil, 0); }
+
+/* 1 if no refusal lost anything and the last run, refused nothing, gave want in sr */
+static void
+sweep(char *what, void (*op)(void), mpint *res, mpint *wanted)
+{
+	int n, before, lost, raises, done;
+
+	lost = raises = done = 0;
+	for(n = 1; n < 200 && !done; n++){
+		made = nil;
+		madetext = nil;
+		before = live;
+		nalloc = 0;
+		refused = 0;
+		failat = n;
+		if(setjmp(raised) != 0)
+			raises++;
+		else{
+			(*op)();
+			if(refused == 0)
+				done = 1;
+		}
+		failat = 0;
+		/* a number or text the operation returns is the caller's */
+		if(made != nil){
+			if(done && wanted != nil && !same(made, wanted))
+				check(0, "%s: with memory, another number: %s", what, hex(made));
+			mpfree(made);
+		}
+		if(madetext != nil)
+			xfree(madetext);
+		if(live != before)
+			lost += live - before;
+	}
+	check(done, "%s: still refused after %d allocations", what, n);
+	check(lost == 0, "%s: %d allocations lost over %d refusals (%d raised)", what, lost, n-2, raises);
+	if(done && res != nil && wanted != nil)
+		check(same(res, wanted), "%s: with memory, another number: %s", what, hex(res));
+}
+
+static void
+sweeps(void)
+{
+	int i;
+
+	sa = num("1234567890ABCDEF0FEDCBA9876543211122334455667788990011223344556677");
+	sb = num("FEDCBA98765432100123456789ABCDEFFFEEDDCCBBAA99887766554433221100FFEEDDCCBBAA998877665544332211001234567890ABCDEF0FEDCBA987654321");
+	sc = num("-ABCDEF0123456789ABCDEF0123456789");
+	se = num("10001F00D");
+	sm = num("C000000000000000000000000000000000000000000000000000000000000000000000000000001F");	/* odd */
+	sr = mpnew(0);
+	sx = mpnew(0);
+	sy = mpnew(0);
+	sv = mpnew(0);
+	want = mpnew(0);
+	want2 = mpnew(0);
+
+	mpexp(sa, se, sm, want);
+	sweep("mpexp, Montgomery", op_expmont, sr, want);
+	sweep("mpexp, result in place of the base", op_expinb, sr, want);
+	sweep("mpexp, result in place of the modulus", op_expinm, sr, want);
+	mpexp(sb, se, sm, want);
+	sweep("mpexp, a base longer than the modulus", op_expbig, sr, want);
+	mpexp(sc, se, sm, want);
+	sweep("mpexp, a negative base", op_expneg, sr, want);
+	mpinvert(sa, sm, want);
+	sweep("mpinvert", op_invert, sr, want);
+	sweep("mpinvert, result in place of the modulus", op_invertinm, sr, want);
+	mpmul(sa, want, want2);
+	mpmod(want2, sm, want2);
+	check(same(want2, num("1")), "mpinvert's result times the number is %s", hex(want2));
+	mpextendedgcd(sa, sb, want, want2, sy);
+	sweep("mpextendedgcd", op_gcd, sv, want);
+	check(same(sx, want2), "mpextendedgcd: with memory, another coefficient");
+	mpdiv(sb, sa, want2, want);
+	sweep("mpdiv", op_div, sr, want);
+	mpmod(sc, sm, want);
+	sweep("mpmod, the remainder in place of the modulus", op_mod, sr, want);
+	mpmul(sa, sb, want);
+	sweep("mpmul in place", op_mul, sr, want);
+#ifndef OLDLIBMP
+	mpmul(sa, sb, want);
+	mpadd(want, num("ABCDEF0123456789ABCDEF0123456789"), want);
+	mpmod(want, sm, want);
+	sc->sign = 1;
+	sweep("mpmuladdmod", op_muladd, sr, want);
+	sm->p[0] &= ~1;	/* even: the general way */
+	mpmul(sa, sb, want);
+	mpadd(want, sc, want);
+	mpmod(want, sm, want);
+	sweep("mpmuladdmod, an even modulus", op_muladd, sr, want);
+	sc->sign = -1;
+	sm->p[0] |= 1;
+
+	/* 2^89-1 and 2^61-1 are primes */
+	cp = num("1FFFFFFFFFFFFFFFFFFFFFF");
+	cq = num("1FFFFFFFFFFFFFFF");
+	ckp = num("10001");
+	ckq = num("10001");
+	cc2 = mpnew(0);
+	mpinvert(cp, cq, cc2);
+	sa = num("123456789ABCDEF0FEDCBA987654321");
+	mpexp(sa, ckp, cp, want);	/* v1 */
+	mpexp(sa, ckq, cq, want2);	/* v2 */
+	mpsub(want2, want, want2);
+	mpmul(want2, cc2, want2);
+	mpmod(want2, cq, want2);
+	mpmul(want2, cp, want2);
+	mpadd(want, want2, want);
+	sweep("mpexpcrt", op_crt, sr, want);
+	sa = num("1234567890ABCDEF0FEDCBA9876543211122334455667788990011223344556677");
+#endif
+	sm->p[0] &= ~1;
+	mpexp(sa, se, sm, want);
+	sweep("mpexp, an even modulus", op_expeven, sr, want);
+	sm->p[0] |= 1;
+	se = num("7");
+	mpexp(sa, se, nil, want);
+	sweep("mpexp, no modulus", op_expnomod, sr, want);
+
+	/* text: a number made for the caller is not left behind */
+	stext = malloc(3001);
+	for(i = 0; i < 3000; i++)
+		stext[i] = '2' + i%6;	/* digits of every base */
+	stext[3000] = 0;
+	for(sbase = 10; sbase <= 64; sbase = sbase == 10? 16: sbase*2){
+		want = strtomp(stext, nil, sbase, nil);
+		check(want != nil, "strtomp of 3000 digits in base %d", sbase);
+		sweep("strtomp", op_strtomp, nil, want);
+	}
+	sweep("mptoa in base 10", op_mptoa, nil, nil);
+}
+
 static void
 vectors(char *file)
 {
@@ -455,7 +637,7 @@ main(int argc, char **argv)
 	char *only;
 
 	if(argc != 2 && argc != 3){
-		fprintf(stderr, "usage: mpedge vectors.txt [sizes|rands|text|arith|nomem|vectors]\n");
+		fprintf(stderr, "usage: mpedge vectors.txt [sizes|rands|text|arith|nomem|sweeps|vectors]\n");
 		return 2;
 	}
 	only = argc == 3? argv[2]: nil;
@@ -470,6 +652,8 @@ main(int argc, char **argv)
 		arith();
 	if(WANT("nomem"))
 		nomem();
+	if(WANT("sweeps"))
+		sweeps();
 	if(WANT("vectors"))
 		vectors(argv[1]);
 	if(fails){

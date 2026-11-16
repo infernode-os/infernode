@@ -136,12 +136,23 @@ to10(mpint *b, char *buf, int len)
 	if(len < 1)
 		return -1;
 
-	d = mpcopy(b);
+	// (mptrycopy: mpcopy raises with no memory, and the text the
+	// caller of this made room for, mptoa's own included, was lost)
+	d = mptrycopy(b);
+	if(d == nil)
+		return -1;
 	r = nil;
 	billion = nil;
 	if(Dbits > 32){
-		r = mpnew(0);
-		billion = uitomp(1000000000, nil);
+		r = mptrynew(2*Dbits);
+		billion = mptrynew(2*Dbits);
+		if(r == nil || billion == nil){
+			mpfree(d);
+			mpfree(r);
+			mpfree(billion);
+			return -1;
+		}
+		uitomp(1000000000, billion);
 	}
 	out = buf+len;
 	*--out = 0;

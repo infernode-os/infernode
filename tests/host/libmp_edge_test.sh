@@ -28,6 +28,14 @@
 #     with digits to the gcd (for ever)
 #   - a product is made without Karatsuba's scratch when there is no
 #     memory for it (the raise left every level's scratch behind)
+#   - no memory at each allocation in turn, for mpexp by each of its
+#     paths and with its result in place of an operand, mpexpcrt,
+#     mpmuladdmod, mpextendedgcd, mpinvert, mpdiv, mpmod, mpmul, strtomp
+#     in each base and mptoa: after every refusal nothing more is
+#     allocated than before the call (libmp raises and has no handler:
+#     a working number, a copy, a table or the caller's new number was
+#     lost with each raise), and with memory the answer is right;
+#     mpinvert with its result in place of the modulus (it was 0)
 #   - 3000 divisions and remainders of mixed signs, and 3300 numbers
 #     written and read in bases 10, 16, 32 and 64, against Python's
 #     (tests/host/libmp_edge/vectors.txt, made by gen.py)
@@ -59,7 +67,7 @@ CFLAGS="-g -O -fno-strict-aliasing -w -fsanitize=address,undefined -fno-sanitize
 LIBMP="${LIBMP_SRC:-$ROOT/libmp}"
 SRCS=""
 for f in mpaux mpadd mpsub mpcmp mpmul mpleft mpright mpvecadd mpvecsub \
-	mpvecdigmuladd mpveccmp mpdigdiv mpdiv mpmod mpexp mpextendedgcd \
+	mpvecdigmuladd mpveccmp mpdigdiv mpdiv mpmod mpexp mpextendedgcd mpinvert \
 	betomp letomp mptobe mprand mptoi mptoui mpfmt strtomp; do
 	SRCS="$SRCS $LIBMP/$f.c"
 done

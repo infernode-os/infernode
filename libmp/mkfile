@@ -12,7 +12,6 @@ FILES=\
 	mpadd\
 	mpsub\
 	mpcmp\
-	mpfactorial\
 	mpmul\
 	mpleft\
 	mpright\

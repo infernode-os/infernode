@@ -43,6 +43,18 @@ init(void)
 	tab.inited = 1;
 }
 
+// Room in b for a number of bits, or -1: there is no memory, or no
+// number is that long.  The converters below return nil for it, and
+// strtomp raises once it has freed the number it made: mpbits raised
+// from inside them, and that number was lost with the raise.
+static int
+room(mpint *b, vlong bits)
+{
+	if(bits > MAXBITS || mpreservetry(b, bits) < 0)
+		return -1;
+	return 0;
+}
+
 static char*
 from16(char *a, mpint *b)
 {
@@ -55,7 +67,9 @@ from16(char *a, mpint *b)
 		if(tab.t16[*(uchar*)p] == INVAL)
 			break;
 	// the digits' bits were an int: see dat.h
-	mpbits(b, mpsizebits(0, (vlong)(p-a)*4, "strtomp"));
+	if(room(b, (vlong)(p-a)*4) < 0)
+		return nil;
+	mpbits(b, (p-a)*4);
 	b->top = 0;
 	next = p;
 	while(p > a){
@@ -103,7 +117,9 @@ from10(char *a, mpint *b)
 	// (and the count of them an int's worth: see dat.h)
 	for(p = a; tab.t10[*(uchar*)p] != INVAL; p++)
 		;
-	mpbits(b, mpsizebits(1, (vlong)(p-a)*4, "strtomp"));
+	if(room(b, (vlong)(p-a)*4 + Dbits) < 0)
+		return nil;
+	mpbits(b, (p-a)*4 + Dbits);
 
 	pow = nil;
 	r = nil;
@@ -153,7 +169,8 @@ from64(char *a, mpint *b)
 
 	for(; tab.t64[*(uchar*)a] != INVAL; a++)
 		;
-	mpsizebits(0, (vlong)(a-buf)*6, "strtomp");
+	if(room(b, (vlong)(a-buf)*6) < 0)
+		return nil;
 	n = a-buf;
 	p = malloc(n);
 	if(p == nil)
@@ -179,7 +196,8 @@ from32(char *a, mpint *b)
 	// that are not base 32's read as zeros)
 	for(; tab.t32[*(uchar*)a] != INVAL; a++)
 		;
-	mpsizebits(0, (vlong)(a-buf)*5, "strtomp");
+	if(room(b, (vlong)(a-buf)*5) < 0)
+		return nil;
 	n = a-buf;
 	p = malloc(n);
 	if(p == nil)
@@ -238,6 +256,13 @@ strtomp(char *a, char **pp, int base, mpint *b)
 	case 64:
 		e = from64(a, b);
 		break;
+	}
+
+	// no room for it: said as libmp says it, with nothing left behind
+	if(e == nil){
+		if(alloced)
+			mpfree(b);
+		sysfatal("strtomp: number too large");
 	}
 
 	// if no characters parsed, there wasn't a number to convert

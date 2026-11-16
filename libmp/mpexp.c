@@ -652,20 +652,13 @@ mpmuladdmod(mpint *a, mpint *b, mpint *c, mpint *m, mpint *res)
 	free(mem);
 }
 
-enum {
-	Freeb=	0x1,
-	Freee=	0x2,
-	Freem=	0x4,
-};
-
 //int expdebug;
 
 // the general path: any modulus (or none), any base
 static void
 mpexpslow(mpint *b, mpint *e, mpint *m, mpint *res)
 {
-	mpint *t[2];
-	int tofree;
+	mpint *t[2], *bc, *ec, *mc;
 	mpdigit d, bit;
 	int i, j, etop, rbits;
 	vlong v;
@@ -697,27 +690,36 @@ mpexpslow(mpint *b, mpint *e, mpint *m, mpint *res)
 			rbits = v;
 		mpreserve(res, rbits);
 	}
-	t[0] = mpnew(rbits);
-	mpassign(b, t[0]);
-	t[1] = res;
+	// a zero modulus is refused now, before anything is held
+	if(m != nil){
+		for(i = m->top; i > 0 && m->p[i-1] == 0; i--)
+			;
+		if(i == 0)
+			sysfatal("mpdiv: divide by zero");
+	}
 
-	tofree = 0;
-	if(res == b){
-		b = mpcopy(b);
-		tofree |= Freeb;
-	}
-	if(res == e){
-		e = mpcopy(e);
-		tofree |= Freee;
-	}
-	if(res == m){
-		m = mpcopy(m);
-		tofree |= Freem;
-	}
+	// The working number and the copies are made together, and the
+	// products and divisions below say when there is no memory rather
+	// than raise: libmp has no handler, and what this held (a working
+	// number, three copies) was lost with a raise from any of them.
+	t[0] = mptrynew(rbits);
+	t[1] = res;
+	bc = b;
+	ec = e;
+	mc = m;
+	if(res == b)
+		bc = mptrycopy(b);
+	if(res == e)
+		ec = mptrycopy(e);
+	if(res == m)
+		mc = mptrycopy(m);
+	if(t[0] == nil || bc == nil || ec == nil || (m != nil && mc == nil))
+		goto Nomem;
+	mpassign(b, t[0]);
 
 	// skip first bit
 	i = etop-1;
-	d = e->p[i];
+	d = ec->p[i];
 	for(bit = mpdighi; (bit & d) == 0; bit >>= 1)
 		;
 	bit >>= 1;
@@ -725,40 +727,54 @@ mpexpslow(mpint *b, mpint *e, mpint *m, mpint *res)
 	j = 0;
 	for(;;){
 		for(; bit != 0; bit >>= 1){
-			mpmul(t[j], t[j], t[j^1]);
-			if(bit & d)
-				mpmul(t[j^1], b, t[j]);
-			else
+			if(mpmultry(t[j], t[j], t[j^1]) < 0)
+				goto Nomem;
+			if(bit & d){
+				if(mpmultry(t[j^1], bc, t[j]) < 0)
+					goto Nomem;
+			}else
 				j ^= 1;
-			if(m != nil && t[j]->top > m->top){
-				mpmod(t[j], m, t[j^1]);
+			if(mc != nil && t[j]->top > mc->top){
+				if(mpmodtry(t[j], mc, t[j^1]) < 0)
+					goto Nomem;
 				j ^= 1;
 			}
 		}
 		if(--i < 0)
 			break;
 		bit = mpdighi;
-		d = e->p[i];
+		d = ec->p[i];
 	}
-	if(m != nil){
-		mpmod(t[j], m, t[j^1]);
+	if(mc != nil){
+		if(mpmodtry(t[j], mc, t[j^1]) < 0)
+			goto Nomem;
 		j ^= 1;
 	}
-	if(t[j] == res){
-		mpfree(t[j^1]);
-	} else {
+	if(t[j] != res){
+		// (room for it was made in res when the last product or
+		// remainder was put in t[j]: they are of a size)
+		if(mpreservetry(res, t[j]->top*Dbits) < 0)
+			goto Nomem;
 		mpassign(t[j], res);
-		mpfree(t[j]);
 	}
+	mpfree(t[0]);
+	if(bc != b)
+		mpfree(bc);
+	if(ec != e)
+		mpfree(ec);
+	if(mc != m)
+		mpfree(mc);
+	return;
 
-	if(tofree){
-		if(tofree & Freeb)
-			mpfree(b);
-		if(tofree & Freee)
-			mpfree(e);
-		if(tofree & Freem)
-			mpfree(m);
-	}
+Nomem:
+	mpfree(t[0]);
+	if(bc != b)
+		mpfree(bc);
+	if(ec != e)
+		mpfree(ec);
+	if(mc != m)
+		mpfree(mc);
+	sysfatal("mpexp: no memory");
 }
 
 void

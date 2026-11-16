@@ -86,6 +86,7 @@ try(which: string, x, y, m: ref IPint): int
 		"div" =>	x.div(y);
 		"mod" =>	x.mod(y);
 		"expmod" =>	x.expmod(y, m);
+		"expeven" =>	x.expmod(y, m);
 		}
 	} exception {
 	"*" =>
@@ -140,7 +141,8 @@ init(nil: ref Draw->Context, nil: list of string)
 	d := IPint.random(8192).ori(IPint.inttoip(1).shl(8191));
 	m := d.ori(IPint.inttoip(1));
 	e := IPint.random(64).ori(IPint.inttoip(1).shl(63));
-	ops := array[] of {"mul", "div", "mod", "expmod"};
+	meven := d.shl(1);	# libmp's general power, which holds copies and a working number
+	ops := array[] of {"mul", "div", "mod", "expmod", "expeven"};
 	for(i = 0; i < len ops; i++){
 		main0 := used("main");
 		raised := 0;
@@ -152,6 +154,7 @@ init(nil: ref Draw->Context, nil: list of string)
 				"div" =>	raised += try("div", x, d, nil);
 				"mod" =>	raised += try("mod", x, d, nil);
 				"expmod" =>	raised += try("expmod", x, e, m);
+				"expeven" =>	raised += try("expeven", x, e, meven);
 				}
 			fill = nil;
 			small = nil;

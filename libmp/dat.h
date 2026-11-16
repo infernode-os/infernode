@@ -32,6 +32,7 @@ void	mpreserve(mpint *b, int n);
 int	mpdivtry(mpint *dividend, mpint *divisor, mpint *quotient, mpint *remainder);
 int	mpmodtry(mpint *b, mpint *m, mpint *remainder);
 int	mpmultry(mpint *b1, mpint *b2, mpint *prod);
+int	mpextendedgcdtry(mpint *a, mpint *b, mpint *d, mpint *x, mpint *y);
 int	mpreservetry(mpint *b, int n);
 mpint*	mptrycopy(mpint *b);
 

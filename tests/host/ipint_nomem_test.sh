@@ -11,10 +11,13 @@
 # nothing, and three such calls left the kernel without memory, for
 # every program, until the emulator was started again.
 #
-# - mul, div, mod and expmod of a 5MB number, nine times each with 8MB
+# - mul, div, mod and expmod (with an odd modulus and an even one,
+#   libmp's two powers) of a 5MB number, nine times each with 8MB
 #   of the main pool free in one piece: the copy fits and the result or
 #   libmp's working number does not; every call raises and the main
-#   pool is where it was afterwards (5MB a round stayed lost)
+#   pool is where it was afterwards (5MB a round stayed lost).
+#   tests/host/libmp_edge_test.sh refuses each allocation of each
+#   libmp function in turn.
 # - strtoip in base 32 of a length base 32 does not have is nil (the
 #   decoder's -1 was a count of bytes to betomp, which read 4GB and wrote
 #   backwards through the main pool: the emulator ended, or went on
@@ -41,7 +44,7 @@ for mode in -c1 -c0; do
 	echo "$out" | grep -q '^DONE$' || { fail "$mode: the program did not finish: $(echo "$out" | grep -v '^pool \|^fs:\|^	' | tail -3 | tr '\n' ' ' | cut -c1-300)"; ok=0; }
 	echo "$out" | grep -q '^B32 6 of 6 nil$' || { fail "$mode: base 32 of a length it does not have: $(echo "$out" | grep '^B32' | tr '\n' ' ')"; ok=0; }
 	echo "$out" | grep -q '^BYTES 3 of 3 refused$' || { fail "$mode: bytes whose bits pass an int: $(echo "$out" | grep '^BYTES' | tr '\n' ' ')"; ok=0; }
-	for op in mul div mod expmod; do
+	for op in mul div mod expmod expeven; do
 		line=$(echo "$out" | grep "^LOST $op ")
 		lost=$(echo "$line" | awk '{print $3}')
 		raised=$(echo "$line" | awk '{print $5}')

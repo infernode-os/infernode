@@ -11,14 +11,30 @@ signer, verify, countersigner \- set-top box authentication
 .I Signer
 and
 .I countersigner
-listen for requests on the service ports
+answer requests on the service ports
 .B infsigner
 and
 .BR infcsigner ,
-respectively.
-They are typically run via
-.IR svc (8)
-on a machine acting as authentication server for a network.
+respectively, on a machine acting as authentication server for a network.
+They are not started by
+.IR svc (8):
+no program in this system is their client (the
+.IR register (8)
+that page describes is not here), they answer anybody who connects, and
+the certificates they issue have no expiry time.
+A realm that wants this enrolment starts them on purpose, after
+.B svc/auth
+(which starts
+.IR keyfs (4)):
+.IP
+.EX
+listen -v -t -A 'tcp!*!infsigner' {auth/signer&}
+listen -v -t -A 'tcp!*!infcsigner' {auth/countersigner&}
+.EE
+.PP
+or, from the shell functions of
+.BR /lib/sh/srv ,
+.BR srv.signer .
 .I Verify
 is invoked on the same server, after
 .I signer
@@ -31,14 +47,22 @@ constructs an authentication certificate from the signer's key (in
 .BR /keydb/signerkey )
 and information from the requesting client, including
 the set top box ID.
-The signer's key can be created using
-.IR createsignerkey (8),
-but if the key does not yet exist,
+The signer's key is made by
+.IR createsignerkey (8).
+With no key file, or one that does not read as a key or has expired,
 .I signer
-creates and initialises
-.B /keydb/signerkey
-itself, with an owner name of
-.LR * .
+signs nothing, tells the caller the service is unavailable,
+and says on its standard error to run
+.IR createsignerkey .
+(It once made a key itself, owned by
+.LR * ,
+in place of whatever file did not read:
+a damaged key file was silently replaced, orphaning every certificate of the realm.)
+In CNSA mode
+.RB ( /env/cnsamode
+set) the key must be CNSA's whole, as
+.B "createsignerkey -c"
+makes it, or nothing is signed.
 .PP
 The set top box ID is the owner's name in the key the client sends.
 It becomes the name of a file in
@@ -58,7 +82,30 @@ or
 no control character), and refuses any other before it signs or writes anything.
 It does not certify its own name (the owner of
 .BR /keydb/signerkey )
-for anybody.
+for anybody, nor the name
+.LR * .
+The key certified must be of the signer's own algorithm,
+and an RSA, ElGamal or DSA key must have a modulus of 2048 bits or more.
+.PP
+A request is made before anything is known of its caller, so what one
+caller can cost is bounded.
+One request waits for a name at a time:
+a second for that name is refused while the first waits for
+.I verify
+(it once replaced the first, and the operator then compared the wrong caller's digest).
+A request not answered by the operator within 15 minutes is discarded.
+At most 256 requests wait.
+Requests are counted by the throttle of
+.IR logind (8)
+(in
+.BR /keydb/loginfail ):
+after ten in a row the next are refused for a minute.
+A caller that is refused is sent an error message saying why
+(the protocol's
+.BR ! InnnP
+message, which
+.B Keyring->getmsg
+gives as the error string); a refusal was once a connection that closed.
 A certificate that would not fit one of the protocol's messages (4096 bytes:
 an ML-DSA-87 signature is larger) is refused before any record of the request is made.
 .PP
@@ -88,7 +135,13 @@ created by
 The file contains the previously crafted authentication certificate and the `blinded' version of the certificate that was sent to the requesting client.
 .PP
 .I Verify
-displays the `blinded' version textually or graphically, as appropriate, so that it can be compared to that reported by the set-top-box owner over a secure independent mechanism (for example, telephone). If the operator of
+displays a digest of the `blinded' version, as 32 words, so that it can be compared to that reported by the set-top-box owner over a secure independent mechanism (for example, telephone).
+The digest is the first 16 bytes of the SHA-256 of the signer's public key, the caller's, and the blinded certificate
+(it was an MD5).
+A request the operator answers is removed from
+.BR /keydb/signed ,
+accepted or rejected, so that a rejected caller can ask again.
+If the operator of
 .I verify
 is convinced of the identity of the caller, the operator should accept when prompted by
 .IR verify .
@@ -116,7 +169,9 @@ to read it.
 sends the blinding data in
 .BI /keydb/countersigned/ set-top-box-id
 to the requesting client.
-The ID a client gives must again be one name; and
+The ID a client gives must again be one name;
+a client whose ID is no name, or names no approved request, is sent an
+error message saying which; and
 .I countersigner
 runs in a name space in which
 .B /keydb

@@ -57,10 +57,17 @@ init(nil: ref Draw->Context, nil: list of string)
 	}
 	boxid := string buf;
 
+	# A refusal is said to the client (an error message of the
+	# protocol's, which its getmsg gives as the error): each was a
+	# connection that closed, and a client could not tell a request not
+	# yet approved from a network fault.  A name that is none and a
+	# name not approved are told apart; nothing else is said of why.
+
 	# the boxid is one name (login(6)), as the owner signer(8) took was
 	e := login->okname(boxid);
 	if(e != nil){
 		sys->fprint(stderr, "countersigner: bad boxid: %s\n", e);
+		msgio->senderrmsg(stdout, "bad id: " + e);
 		raise "fail:bad boxid";
 	}
 
@@ -69,11 +76,13 @@ init(nil: ref Draw->Context, nil: list of string)
 	fd := sys->open(file, Sys->OREAD);
 	if(fd == nil){
 		sys->fprint(stderr, "countersigner: can't open countersigned/%s: %r\n", file);
+		msgio->senderrmsg(stdout, "no approved request for that id");
 		raise "fail:bad boxid";
 	}
 	blind := msgio->getmsg(fd);
 	if(blind == nil){
 		sys->fprint(stderr, "countersigner: can't read countersigned/%s\n", file);
+		msgio->senderrmsg(stdout, "countersigning service unavailable");
 		raise "fail:no blind";
 	}
 

@@ -69,9 +69,16 @@ If the password is valid, listeners are started for
 .IR keysrv (4),
 to allow passwords to be changed remotely,
 .IR logind (8),
-to provide signed certificates,
-and
-.IR signer (8).
+to provide signed certificates.
+It does not start
+.IR signer (8)
+or its
+.IR countersigner :
+nothing in the system is a client of that enrolment, it answers requests from anybody,
+and the certificates it issues never expire.
+A realm that wants it starts the two listeners itself, as
+.IR signer (8)
+shows.
 Note that although an authentication server must be present to run
 .IR getauthinfo (8)
 to obtain credentials to access another service, once those have been

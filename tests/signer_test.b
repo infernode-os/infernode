@@ -25,6 +25,17 @@ implement SignerTest;
 # large for a message (ML-DSA-87's) is refused before its record is
 # made, not after.
 #
+# And what was left of the flow's looseness:
+#   - a second request for a name replaced the first (the operator then
+#     compared the second caller's digest, and turned the first away);
+#   - with no key file that read, signer made a new key for the realm,
+#     owned by "*", and said nothing;
+#   - any key that parsed was signed, for "*" too, and each connection
+#     cost a signature, a read of /dev/random and a file, without limit;
+#   - the digest the operator compares was MD5;
+#   - a refusal, by signer or countersigner, was a connection that
+#     closed; verify left a rejected request where it was.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -36,6 +47,9 @@ include "keyring.m";
 
 include "msgio.m";
 	msgio: Msgio;
+
+include "daytime.m";
+	daytime: Daytime;
 
 include "sh.m";
 
@@ -155,11 +169,19 @@ service(prog, keydb: string): ref Sys->FD
 	return p[0];
 }
 
+svccnsa := 0;	# the services' cnsamode
+svcargs: list of string;	# and arguments
+keepcount := 0;	# leave the throttle's counts between requests
+
 runsvc(prog, keydb: string, fd: ref Sys->FD, done: chan of int)
 {
-	sys->pctl(Sys->FORKFD|Sys->NEWPGRP|Sys->FORKNS, nil);
+	args := svcargs;
+	sys->pctl(Sys->FORKFD|Sys->NEWPGRP|Sys->FORKNS|Sys->FORKENV, nil);
+	setcnsa(svccnsa);
 	if(keydb != nil)
 		sys->bind(keydb, "/keydb", Sys->MREPL|Sys->MCREATE);
+	if(!keepcount)
+		sys->remove("/keydb/loginfail");
 	sys->dup(fd.fd, 0);
 	sys->dup(fd.fd, 1);
 	fd = nil;
@@ -169,7 +191,7 @@ runsvc(prog, keydb: string, fd: ref Sys->FD, done: chan of int)
 	if(c == nil)
 		return;
 	{
-		c->init(nil, prog :: nil);
+		c->init(nil, prog :: args);
 	} exception {
 	"*" =>
 		;
@@ -196,6 +218,30 @@ msgreader(fd: ref Sys->FD, res: chan of array of byte)
 	res <-= kr->getmsg(fd);
 }
 
+# a message, or nil and what the service said in place of one
+getmsge(fd: ref Sys->FD): (array of byte, string)
+{
+	res := chan[1] of (array of byte, string);
+	spawn msgereader(fd, res);
+	tick := chan of int;
+	spawn sleeper(tick, 20000);
+	alt {
+	(b, e) := <-res =>
+		return (b, e);
+	<-tick =>
+		return (nil, "no answer in 20 seconds");
+	}
+}
+
+msgereader(fd: ref Sys->FD, res: chan of (array of byte, string))
+{
+	b := kr->getmsg(fd);
+	e: string;
+	if(b == nil)
+		e = sys->sprint("%r");
+	res <-= (b, e);
+}
+
 sleeper(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
@@ -211,29 +257,104 @@ sleeper(c: chan of int, ms: int)
 # the signer's key, the caller's as sent, and the blinded certificate.
 asksigner(owner, keydb: string): (ref Keyring->PK, array of byte, array of byte)
 {
+	(spk, mypk, blinded, nil) := asksignerwith("ed25519", owner, keydb);
+	return (spk, mypk, blinded);
+}
+
+# the same with a key of alg, and what the signer said if it refused
+asksignerwith(alg, owner, keydb: string): (ref Keyring->PK, array of byte, array of byte, string)
+{
 	fd := service("/dis/auth/signer.dis", keydb);
 	if(fd == nil)
-		return (nil, nil, nil);
-	spkb := getmsg(fd);
+		return (nil, nil, nil, "no service");
+	(spkb, e) := getmsge(fd);
 	if(spkb == nil)
-		return (nil, nil, nil);
+		return (nil, nil, nil, e);
 	getmsg(fd);	# alpha
 	getmsg(fd);	# p
-	sk := kr->genSK("ed25519", "x", 0);
+	sk := kr->genSK(alg, "x", 0);
 	pk := kr->sktopk(sk);
 	pk.owner = owner;
 	mypk := array of byte kr->pktostr(pk);
 	kr->sendmsg(fd, mypk, len mypk);
-	return (kr->strtopk(string spkb), mypk, getmsg(fd));
+	blinded: array of byte;
+	(blinded, e) = getmsge(fd);
+	return (kr->strtopk(string spkb), mypk, blinded, e);
 }
 
 askcounter(boxid: array of byte): array of byte
 {
+	(b, nil) := askcountere(boxid);
+	return b;
+}
+
+askcountere(boxid: array of byte): (array of byte, string)
+{
 	fd := service("/dis/auth/countersigner.dis", nil);
 	if(fd == nil)
-		return nil;
+		return (nil, "no service");
 	msgio->sendmsg(fd, boxid, len boxid);
-	return getmsg(fd);
+	return getmsge(fd);
+}
+
+# verify(8) for owner, the operator answering y or n: what it left
+verify(owner, answer: string)
+{
+	svcargs = owner :: nil;
+	fd := service("/dis/auth/verify.dis", nil);
+	svcargs = nil;
+	if(fd == nil)
+		return;
+	sys->fprint(fd, "%s\n", answer);
+	# its words, until it has gone
+	buf := array[512] of byte;
+	tick := chan of int;
+	done := chan[1] of int;
+	spawn drain(fd, buf, done);
+	spawn sleeper(tick, 10000);
+	alt {
+	<-done =>
+		;
+	<-tick =>
+		;
+	}
+}
+
+drain(fd: ref Sys->FD, buf: array of byte, done: chan of int)
+{
+	while(sys->read(fd, buf, len buf) > 0)
+		;
+	done <-= 1;
+}
+
+readfile(f: string): array of byte
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[16384] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return buf[0:n];
+}
+
+eq(a, b: array of byte): int
+{
+	if(a == nil || b == nil || len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }
 
 # what verify(8) does once the operator accepts: the pad, first
@@ -384,10 +505,137 @@ testOwner(t: ref T)
 testLargeCert(t: ref T)
 {
 	keydb := testdir + "/pq";
-	(spk, nil, blinded) := asksigner("dave", keydb);
+	(spk, nil, blinded, e) := asksignerwith("mldsa87", "dave", keydb);
 	t.assert(spk != nil, "a signer with an ML-DSA-87 key sends its key");
 	t.assert(blinded == nil, "its certificate, which no message holds, is not sent");
+	t.assert(contains(e, "does not fit"), "and the caller is told it does not fit: " + e);
 	t.assert(!exists(keydb+"/signed/dave"), "and no record of a request that cannot be answered is left");
+}
+
+# One request waits for a name: a second replaced it, and the operator
+# compared the wrong caller's digest.
+testPending(t: ref T)
+{
+	(spk, mypk, blinded, e) := asksignerwith("ed25519", "erin", nil);
+	if(blinded == nil)
+		t.fatal("no request for erin: " + e);
+	rec := readfile("/keydb/signed/erin");
+	t.assert(rec != nil, "erin's request is recorded");
+	(nil, nil, b2, e2) := asksignerwith("ed25519", "erin", nil);
+	t.assert(b2 == nil, "a second request for erin, while the first waits, is not signed");
+	t.assert(contains(e2, "pending"), "and its caller is told one is pending: " + e2);
+	t.assert(eq(readfile("/keydb/signed/erin"), rec), "the first request's record is as it was");
+
+	# the digest the operator and the caller compare: SHA-256 of the
+	# signer's key, the caller's and the blinded certificate
+	fd := sys->open("/keydb/signed/erin", Sys->OREAD);
+	kr->getmsg(fd);
+	digest := kr->getmsg(fd);
+	spkb := array of byte kr->pktostr(spk);
+	st := kr->sha256(spkb, len spkb, nil, nil);
+	kr->sha256(mypk, len mypk, nil, st);
+	want := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(blinded, len blinded, want, st);
+	t.assert(eq(digest, want), sys->sprint("the record's digest is the SHA-256 (%d bytes kept)", len digest));
+	fd = nil;
+
+	# the operator says no: the request is gone, and another is taken
+	verify("erin", "n");
+	t.assert(!exists("/keydb/signed/erin"), "a request the operator rejects is gone from signed/");
+	t.assert(!exists("/keydb/countersigned/erin"), "and is not approved");
+	(nil, nil, b3, e3) := asksignerwith("ed25519", "erin", nil);
+	t.assert(b3 != nil, "after which a request for erin is taken: " + e3);
+
+	# the operator says yes: approved, and gone from signed/
+	verify("erin", "y");
+	t.assert(exists("/keydb/countersigned/erin"), "a request the operator accepts is in countersigned/");
+	t.assert(!exists("/keydb/signed/erin"), "and gone from signed/");
+
+	# one nobody answered is replaced once it is old
+	(nil, nil, b4, nil) := asksignerwith("ed25519", "frank", nil);
+	t.assert(b4 != nil, "a request for frank");
+	nd := sys->nulldir;
+	nd.mtime = daytime->now() - 3600;
+	if(sys->wstat("/keydb/signed/frank", nd) < 0)
+		t.fatal(sys->sprint("can't age frank's request: %r"));
+	(nil, nil, b5, e5) := asksignerwith("ed25519", "frank", nil);
+	t.assert(b5 != nil, "a request left an hour gives way to a new one: " + e5);
+}
+
+# With no key file, signer made a key for the realm and went on.
+testNoKey(t: ref T)
+{
+	keydb := testdir + "/nokey";
+	if(mkdir(keydb) < 0 || mkdir(keydb+"/signed") < 0 || mkdir(keydb+"/countersigned") < 0)
+		t.fatal(sys->sprint("can't make %s: %r", keydb));
+	(spk, nil, blinded, e) := asksignerwith("ed25519", "grace", keydb);
+	t.assert(spk == nil && blinded == nil, "a signer with no key file sends no key and signs nothing");
+	t.assert(contains(e, "unavailable"), "and says the service is unavailable: " + e);
+	t.assert(!exists(keydb+"/signerkey"), "it makes no key of its own");
+	# nor with a file that is no key
+	fd := sys->create(keydb+"/signerkey", Sys->OWRITE, 8r600);
+	sys->fprint(fd, "not a key\n");
+	fd = nil;
+	was := readfile(keydb+"/signerkey");
+	(spk, nil, blinded, e) = asksignerwith("ed25519", "grace", keydb);
+	t.assert(spk == nil && blinded == nil, "nor with a file that is no key");
+	t.assert(eq(readfile(keydb+"/signerkey"), was), "which it leaves as it was");
+}
+
+# The key certified, and its owner.
+testKeyChecked(t: ref T)
+{
+	(nil, nil, blinded, e) := asksignerwith("ed25519", "*", nil);
+	t.assert(blinded == nil, "a key owned by * is not signed: " + e);
+	t.assert(!exists("/keydb/signed/*"), "and leaves no record");
+	(nil, nil, blinded, e) = asksignerwith("mldsa65", "heidi", nil);
+	t.assert(blinded == nil, "a key that is not of the signer's algorithm is not signed");
+	t.assert(contains(e, "algorithm"), "and its caller is told why: " + e);
+	t.assert(!exists("/keydb/signed/heidi"), "and leaves no record");
+}
+
+# CNSA mode: a signer's key that is not CNSA's signs nothing.
+testCNSA(t: ref T)
+{
+	svccnsa = 1;
+	(spk, nil, blinded, e) := asksignerwith("ed25519", "ivan", nil);
+	svccnsa = 0;
+	t.assert(spk == nil && blinded == nil, "in CNSA mode a signer with an Ed25519 key sends no key and signs nothing");
+	t.assert(contains(e, "CNSA"), "and says its key is not CNSA's: " + e);
+	t.assert(!exists("/keydb/signed/ivan"), "and leaves no record");
+}
+
+# Ten requests in a row, and the next are refused for a minute: each
+# cost a signature and a file, from anybody, without limit.
+testThrottle(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	keepcount = 1;
+	n := 0;
+	e: string;
+	for(i := 0; i < 14; i++){
+		spk: ref Keyring->PK;
+		(spk, nil, nil, e) = asksignerwith("ed25519", ".", nil);	# a name refused: cheap
+		if(spk == nil)
+			break;
+		n++;
+	}
+	keepcount = 0;
+	t.asserteq(n, 10, "requests answered before the signer refuses them");
+	t.assert(contains(e, "too many requests"), "the next is told there are too many: " + e);
+	sys->remove("/keydb/loginfail");
+	(spk, nil, nil, nil) := asksignerwith("ed25519", ".", nil);
+	t.assert(spk != nil, "and with the count gone the signer answers");
+}
+
+# countersigner says why it gives nothing.
+testCounterSays(t: ref T)
+{
+	(b, e) := askcountere(array of byte "nobody-approved");
+	t.assert(b == nil, "an id nobody approved is given nothing");
+	t.assert(contains(e, "no approved request"), "and is told so: " + e);
+	(b, e) = askcountere(array of byte "../signed/alice");
+	t.assert(b == nil && contains(e, "bad id"), "an id that is no name is told so: " + e);
 }
 
 rmtree(d: string)
@@ -429,6 +677,11 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load msgio";
 	}
 	msgio->init();
+	daytime = load Daytime Daytime->PATH;
+	if(daytime == nil){
+		sys->fprint(sys->fildes(2), "cannot load %s: %r\n", Daytime->PATH);
+		raise "fail:cannot load daytime";
+	}
 
 	sys->pctl(Sys->FORKNS|Sys->FORKENV, nil);
 	err := setup();
@@ -441,6 +694,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Signer/Boxid", testBoxid);
 	run("Signer/Owner", testOwner);
 	run("Signer/LargeCert", testLargeCert);
+	run("Signer/Pending", testPending);
+	run("Signer/NoKey", testNoKey);
+	run("Signer/KeyChecked", testKeyChecked);
+	run("Signer/CNSA", testCNSA);
+	run("Signer/Throttle", testThrottle);
+	run("Signer/CounterSays", testCounterSays);
 
 	rmtree(testdir);
 	if(testing->summary(passed, failed, skipped) > 0)

@@ -124,8 +124,23 @@ mlkem_poly_sample_cbd(int16 r[MLKEM_N], const uchar seed[32], uchar nonce, int e
 }
 
 /*
- * Compress: round(2^d / q * x) mod 2^d
- * Constant-time compression of a coefficient.
+ * Compress_d(x) = round(2^d / q * x) mod 2^d (FIPS 203 section 4.2.1),
+ * for x in [0, q); a negative x has q added.
+ *
+ * x is secret (decryption compresses v - s^T u to the message bits, and
+ * the re-encryption compresses what follows from them), so the rounding
+ * must not be a division: a divide instruction takes time that depends
+ * on its operands, and a compiler asked for small code, or none asked
+ * for speed, emits one for "/ q" (the KyberSlash attacks on other
+ * implementations).  The quotient is taken by a multiplication:
+ *
+ *	floor(y / q) = (y * 10321340) >> 35	for 0 <= y < 2^23
+ *
+ * 10321340 is ceil(2^35 / q), which is 2492/q too much; y * 2492 is
+ * below 2^35 for y < 2^23, so the excess never carries the quotient to
+ * the next integer.  Here y = x*2^d + (q-1)/2 <= 3328*2048 + 1664 < 2^23
+ * for every d up to 11.  tests/host/pq_nodivide_test.sh checks every x
+ * and d against the division, and that no divide is compiled.
  */
 static u16int
 compress(int16 x, int d)
@@ -136,8 +151,9 @@ compress(int16 x, int d)
 	t = (u32int)(int32)x;
 	t += (MLKEM_Q & (0u - (t >> 31)));	/* if negative, add q */
 
-	/* round((2^d * t + q/2) / q) mod 2^d */
-	t = ((t << d) + MLKEM_Q/2) / MLKEM_Q;
+	/* floor((2^d * t + (q-1)/2) / q) mod 2^d */
+	t = (t << d) + MLKEM_Q/2;
+	t = (u32int)(((u64int)t * 10321340) >> 35);
 	t &= (1u << d) - 1;
 	return (u16int)t;
 }

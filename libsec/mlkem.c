@@ -108,7 +108,7 @@ typedef struct {
 
 /*
  * K-PKE.KeyGen: Generate CPAPKE key pair.
- * Algorithm 4 in FIPS 203.
+ * Algorithm 13 in FIPS 203.
  */
 static int
 cpapke_keygen(uchar *pk, uchar *sk, const uchar seed[32], int k, int eta1)
@@ -116,6 +116,7 @@ cpapke_keygen(uchar *pk, uchar *sk, const uchar seed[32], int k, int eta1)
 	MLKEMKeygenState *st;
 	uchar rho[32], sigma[32];
 	uchar buf[64];
+	uchar dbuf[33];
 	int i, j;
 	uchar nonce;
 
@@ -123,8 +124,17 @@ cpapke_keygen(uchar *pk, uchar *sk, const uchar seed[32], int k, int eta1)
 	if(st == nil)
 		return -1;
 
-	/* G(seed) = (rho, sigma) */
-	sha3_512(seed, 32, buf);
+	/*
+	 * (rho, sigma) = G(d || k): FIPS 203 Algorithm 13 line 1.  The
+	 * byte k separates the parameter sets, so that one seed does not
+	 * give related keys in ML-KEM-768 and ML-KEM-1024.  It was G(d):
+	 * the draft's derivation, under which a key kept or exchanged as
+	 * its seed (d, z) is another implementation's different key.
+	 */
+	memmove(dbuf, seed, 32);
+	dbuf[32] = k;
+	sha3_512(dbuf, sizeof(dbuf), buf);
+	secureZero(dbuf, sizeof(dbuf));
 	memmove(rho, buf, 32);
 	memmove(sigma, buf+32, 32);
 
@@ -193,7 +203,7 @@ typedef struct {
 
 /*
  * K-PKE.Encrypt: CPAPKE encryption.
- * Algorithm 5 in FIPS 203.
+ * Algorithm 14 in FIPS 203.
  */
 static int
 cpapke_enc(uchar *ct, const uchar *pk, const uchar msg[32],
@@ -280,78 +290,115 @@ cpapke_enc(uchar *ct, const uchar *pk, const uchar msg[32],
 }
 
 /*
- * K-PKE.Decrypt: CPAPKE decryption.
- * Algorithm 6 in FIPS 203.
+ * Heap-allocated state for CPAPKE decryption: 5K of polynomials, which
+ * with the re-encryption under it was 7K of a native kernel's 16K stack.
  */
-static void
+typedef struct {
+	int16	u[MLKEM_MAXK][MLKEM_N];
+	int16	s[MLKEM_MAXK][MLKEM_N];
+	int16	v[MLKEM_N];
+	int16	w[MLKEM_N];
+} MLKEMDecState;
+
+/*
+ * K-PKE.Decrypt: CPAPKE decryption.
+ * Algorithm 15 in FIPS 203.
+ *
+ * Returns 0, or -1 with msg untouched if there is no memory.
+ */
+static int
 cpapke_dec(uchar msg[32], const uchar *ct, const uchar *sk,
 	int k, int du, int dv)
 {
-	int16 u[MLKEM_MAXK][MLKEM_N];
-	int16 s[MLKEM_MAXK][MLKEM_N];
-	int16 v[MLKEM_N];
-	int16 w[MLKEM_N];
+	MLKEMDecState *st;
 	int i;
-	int du_bytes, dv_bytes;
+	int du_bytes;
+
+	st = malloc(sizeof(MLKEMDecState));
+	if(st == nil)
+		return -1;
 
 	du_bytes = du * MLKEM_N / 8;
-	dv_bytes = dv * MLKEM_N / 8;
 
 	/* Decode and decompress u */
 	for(i = 0; i < k; i++){
-		mlkem_poly_decode(u[i], ct + i * du_bytes, du);
-		mlkem_poly_decompress(u[i], du);
-		mlkem_ntt(u[i]);
+		mlkem_poly_decode(st->u[i], ct + i * du_bytes, du);
+		mlkem_poly_decompress(st->u[i], du);
+		mlkem_ntt(st->u[i]);
 	}
 
 	/* Decode and decompress v */
-	mlkem_poly_decode(v, ct + k * du_bytes, dv);
-	mlkem_poly_decompress(v, dv);
+	mlkem_poly_decode(st->v, ct + k * du_bytes, dv);
+	mlkem_poly_decompress(st->v, dv);
 
 	/* Decode secret key s */
 	for(i = 0; i < k; i++)
-		mlkem_poly_decode(s[i], sk + i * 384, 12);
+		mlkem_poly_decode(st->s[i], sk + i * 384, 12);
 
 	/* w = v - s^T * NTT^{-1}(u) */
-	inner_product(w, s, u, k);
-	mlkem_invntt(w);
-	mlkem_poly_sub(w, v, w);
+	inner_product(st->w, st->s, st->u, k);
+	mlkem_invntt(st->w);
+	mlkem_poly_sub(st->w, st->v, st->w);
 
 	/* Compress to 1 bit and encode as message */
-	mlkem_poly_compress(w, 1);
-	mlkem_poly_encode(msg, w, 1);
+	mlkem_poly_compress(st->w, 1);
+	mlkem_poly_encode(msg, st->w, 1);
 
-	/* Clear sensitive data */
-	secureZero(s, sizeof(s));
+	/* Clear sensitive data: s, and w, which is the message */
+	secureZero(st, sizeof(MLKEMDecState));
+	free(st);
+	return 0;
+}
+
+/*
+ * x, as far as the optimizer can tell, any value (libsec/ecc.c has the
+ * same).  A mask the compiler can see is 0 or all ones is an invitation:
+ * clang made the masked copy below a choice between two pointers and a
+ * load from the one chosen, so the address read said whether the
+ * ciphertext had been accepted.
+ */
+static u32int
+ctbarrier(u32int x)
+{
+#if defined(__GNUC__) || defined(__clang__)
+	__asm__("" : "+r"(x));
+	return x;
+#else
+	volatile u32int v;
+
+	v = x;
+	return v;
+#endif
 }
 
 /*
  * Constant-time comparison of two byte arrays.
- * Returns 0 if equal, non-zero otherwise.
+ * Returns 0 if equal, 1 otherwise, with no branch on the bytes.
  */
-static int
+static u32int
 ct_memcmp(const uchar *a, const uchar *b, int len)
 {
 	int i;
-	uchar diff;
+	u32int diff;
 
 	diff = 0;
 	for(i = 0; i < len; i++)
 		diff |= a[i] ^ b[i];
-	return diff;
+	return (0 - diff) >> 31;
 }
 
 /*
- * Constant-time conditional move: if b != 0, copy src to dst.
+ * Constant-time conditional move: if b is 1, copy src to dst; if 0,
+ * leave dst.  Every byte of both is read and every byte of dst written
+ * either way.
  */
 static void
-ct_cmov(uchar *dst, const uchar *src, int len, uchar b)
+ct_cmov(uchar *dst, const uchar *src, int len, u32int b)
 {
 	int i;
 	uchar mask;
 
-	/* b must be 0 or 1 */
-	mask = -(uchar)(b != 0);
+	mask = (uchar)ctbarrier(0 - b);
 	for(i = 0; i < len; i++)
 		dst[i] ^= mask & (dst[i] ^ src[i]);
 }
@@ -391,7 +438,7 @@ static int
 dkcheck(const uchar *sk, int pklen, int sklen_inner)
 {
 	uchar h[32];
-	int fail;
+	u32int fail;
 
 	sha3_256(sk + sklen_inner, pklen, h);
 	fail = ct_memcmp(h, sk + sklen_inner + pklen, 32);
@@ -401,7 +448,7 @@ dkcheck(const uchar *sk, int pklen, int sklen_inner)
 
 /*
  * ML-KEM.KeyGen: Full key generation.
- * Algorithm 15 in FIPS 203.
+ * Algorithms 19 and 16 in FIPS 203.
  *
  * pk: public key (encapsulation key)
  * sk: secret key (decapsulation key)
@@ -446,7 +493,7 @@ mlkem_keygen_internal(uchar *pk, uchar *sk, int k, int eta1,
 
 /*
  * ML-KEM.Encaps: Encapsulation.
- * Algorithm 16 in FIPS 203.
+ * Algorithms 20 and 17 in FIPS 203.
  *
  * ct: ciphertext
  * ss: shared secret (32 bytes)
@@ -495,7 +542,7 @@ mlkem_encaps_internal(uchar *ct, uchar *ss, const uchar *pk,
 
 /*
  * ML-KEM.Decaps: Decapsulation.
- * Algorithm 17 in FIPS 203.
+ * Algorithms 21 and 18 in FIPS 203.
  *
  * Implements implicit rejection: if the ciphertext is invalid,
  * returns a pseudorandom shared secret derived from z and ct,
@@ -512,7 +559,7 @@ mlkem_decaps_internal(uchar *ss, const uchar *ct, const uchar *sk,
 	uchar ct2[MLKEM1024_CTLEN];	/* max ciphertext size */
 	uchar Krej[32];
 	SHA3state js;
-	int fail;
+	u32int fail;
 
 	/* Parse secret key: sk_cpapke || pk || H(pk) || z */
 	sk_cpapke = sk;
@@ -524,7 +571,8 @@ mlkem_decaps_internal(uchar *ss, const uchar *ct, const uchar *sk,
 		return -1;
 
 	/* m' = Decrypt(sk_cpapke, ct) */
-	cpapke_dec(m, ct, sk_cpapke, k, du, dv);
+	if(cpapke_dec(m, ct, sk_cpapke, k, du, dv) != 0)
+		return -1;
 
 	/* (K', r') = G(m' || H(pk)) */
 	memmove(g_input, m, 32);
@@ -551,7 +599,7 @@ mlkem_decaps_internal(uchar *ss, const uchar *ct, const uchar *sk,
 
 	/* Constant-time selection: if ct == ct', use Kbar; else use Krej */
 	fail = ct_memcmp(ct, ct2, ctlen);
-	ct_cmov(Kbar, Krej, 32, (uchar)(fail != 0));
+	ct_cmov(Kbar, Krej, 32, fail);
 
 	memmove(ss, Kbar, 32);
 

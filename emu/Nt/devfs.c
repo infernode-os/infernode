@@ -898,6 +898,13 @@ fswstat(Chan *c, uchar *buf, int n)
 	if(n == 0)
 		error(Eshortstat);
 
+	/*
+	 * path and newpath are MAX_PATH bytes and a name here can be near
+	 * a thousand: fspath refuses (Etoolong) what does not fit before
+	 * it copies anything, for the file's own name and for the new one
+	 * below, and the wide copies are no longer than the bytes.
+	 */
+	sd = nil;	/* (it was given to CreateFile unset where there is no security) */
 	last = fspath(FS(c)->name, 0, path, FS(c)->spec);
 	utftorunes(wspath, path, MAX_PATH);
 
@@ -954,6 +961,7 @@ fswstat(Chan *c, uchar *buf, int n)
 		}
 		if(sd != (void*)sdrock)
 			free(sd);
+		sd = nil;	/* (freed: it was given to CreateFile below when the mode did not change) */
 
 		/*
 		 * permission rules:
@@ -1002,9 +1010,13 @@ fswstat(Chan *c, uchar *buf, int n)
 			nexterror();
 		}
 		ph = fswalkpath(ph, dir.name, 0);
+		/*
+		 * (the new name, which fspath has held to MAX_PATH: it was
+		 * asked of wpath, the name's wide copy, freed just above)
+		 */
 		fspath(ph, 0, newpath, FS(c)->spec);
 		utftorunes(wsnewpath, newpath, MAX_PATH);
-		if(GetFileAttributes(wpath) != 0xffffffff && !winfileclash(newpath))
+		if(GetFileAttributes(wsnewpath) != 0xffffffff && !winfileclash(newpath))
 			error("file already exists");
 		if(fsisroot(c))
 			error(Eperm);
@@ -1081,6 +1093,7 @@ fswstat(Chan *c, uchar *buf, int n)
 			sa.nLength = sizeof(sa);
 			sa.lpSecurityDescriptor = sd;
 			sa.bInheritHandle = 0;
+			aflag = 0;	/* (unset unless ORCLOSE) */
 			if(c->flag & CRCLOSE)
 				aflag = FILE_FLAG_DELETE_ON_CLOSE;
 			h = CreateFile(wsnewpath, fsomode(c->mode & 0x3), FILE_SHARE_READ|FILE_SHARE_WRITE|file_share_delete, &sa, OPEN_EXISTING, aflag, 0);

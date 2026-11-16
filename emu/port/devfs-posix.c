@@ -667,7 +667,8 @@ fswstat(Chan *c, uchar *buf, int nb)
 	Cname *volatile nm;
 	struct stat st;
 	struct utimbuf utbuf;
-	int tsync, fd, rv, oerrno;
+	int tsync, fd, rv, oerrno, same;
+	char uidbuf[NUMSIZE];
 
 	/* the name as it is now; a rename below replaces it (see fsname) */
 	nm = fsname(c);
@@ -700,6 +701,33 @@ fswstat(Chan *c, uchar *buf, int nb)
 	    d->atime != ~0 && d->atime != st.st_atime ||
 	    d->mtime != ~0 && d->mtime != st.st_mtime) && up->env->uid != st.st_uid)
 		error(Eowner);
+	/*
+	 * The owner is not changed by a wstat (stat(5): only where the
+	 * server allows it, and a host's files are the host's to give
+	 * away).  A new owner was not looked at at all: the wstat did the
+	 * rest and said it had succeeded, so chgrp -o and cp -u reported
+	 * an owner changed that was not.  Naming the owner it has is no
+	 * change.  Refused before anything else is done.
+	 */
+	if(!emptystr(d->uid)){
+		qlock(&idl);
+		if(waserror()){
+			qunlock(&idl);
+			nexterror();
+		}
+		p = id2user(uidmap, st.st_uid, newuid);
+		if(p != nil)
+			same = strcmp(p->name, d->uid) == 0;
+		else{
+			/* an owner with no name is "#n" (fsdirconv) */
+			snprint(uidbuf, sizeof(uidbuf), "#%lud", (long)st.st_uid);
+			same = strcmp(uidbuf, d->uid) == 0;
+		}
+		if(!same)
+			error(Eperm);
+		poperror();
+		qunlock(&idl);
+	}
 	if(!emptystr(d->name) && strcmp(d->name, fslastelem(nm)) != 0) {
 		tsync = 0;
 		validname(d->name, 0);

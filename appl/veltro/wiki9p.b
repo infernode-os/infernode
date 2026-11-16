@@ -1183,17 +1183,23 @@ Serve:
 				j := ref Job(fs, path == Qquery, string m.data);
 				if(j.query)
 					j.arg = strip(j.arg);
+				# The last result is cleared before the worker has the
+				# job: cleared after, a job that finished at once (a lint
+				# with no model) had its answer erased, and the read got
+				# nothing.
+				(oreq, oqresp, ocresp, orpos) := (fs.queryreq, fs.queryresp, fs.ctlresp, fs.rpos);
+				if(j.query) {
+					fs.queryreq = j.arg;
+					fs.queryresp = nil;
+				} else
+					fs.ctlresp = nil;
+				fs.rpos = 0;
 				alt {
 				jobs <-= j =>
 					fs.busy++;
-					if(j.query) {
-						fs.queryreq = j.arg;
-						fs.queryresp = nil;
-					} else
-						fs.ctlresp = nil;
-					fs.rpos = 0;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				* =>
+					(fs.queryreq, fs.queryresp, fs.ctlresp, fs.rpos) = (oreq, oqresp, ocresp, orpos);
 					srv.reply(ref Rmsg.Error(m.tag, "too many operations queued"));
 				}
 			* =>

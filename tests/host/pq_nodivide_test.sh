@@ -19,7 +19,8 @@
 #   - each function is taken from the real source file, compiled, and
 #     checked on every input against the standard's definition written
 #     with / and %: Compress_d (FIPS 203 section 4.2.1) for every
-#     coefficient in (-q, q) and every d from 1 to 11
+#     coefficient in (-q, q) and every d from 1 to 11; mod 5 for every
+#     half byte
 #   - compiled at -O0, -O1, -O2 and -Os by each compiler here (cc, and
 #     clang where there is one, for this machine and for the native
 #     kernels' aarch64 and riscv64 and a 32-bit ARM where clang has the
@@ -160,5 +161,49 @@ nodivide() {	# what file.c
 }
 
 nodivide "ML-KEM compress" "$BUILD/compress.c"
+
+# ML-DSA: the secret vectors' sampler for eta = 2 (FIPS 204 Algorithm 15,
+# CoeffFromHalfByte: 2 - (b mod 5)), and the mod 5 it uses
+DSAPRE="$PRE typedef struct SHA3state SHA3state; struct SHA3state { u64int a[25]; uchar buf[200]; int rate, pt, mdlen; };
+enum { MLDSA_N = 256, MLDSA_Q = 8380417 };
+void shake256_init(SHA3state*); void shake256_absorb(SHA3state*, const uchar*, unsigned long);
+void shake256_finalize(SHA3state*); void shake256_squeeze(SHA3state*, uchar*, unsigned long);
+void secureZero(void*, unsigned long);"
+if extract "$ROOT/libsec/mldsa_poly.c" int32 mod5 "$BUILD/mod5.c" "$PRE" 2>/dev/null; then
+	cat >"$BUILD/mod5_main.c" <<'EOF2'
+#include <stdio.h>
+int mod5(int a);
+int
+main(void)
+{
+	int a, bad;
+
+	bad = 0;
+	for(a = 0; a <= 15; a++)
+		if(mod5(a) != a % 5){
+			printf("  MISMATCH mod5(%d) = %d\n", a, mod5(a));
+			bad = 1;
+		}
+	return bad;
+}
+EOF2
+	sed -i 's/^static int32$/int32/' "$BUILD/mod5.c"
+	if "$CC" -O2 -o "$BUILD/mod5_t" "$BUILD/mod5.c" "$BUILD/mod5_main.c" 2>"$BUILD/cc.log" && "$BUILD/mod5_t" >"$BUILD/out" 2>&1; then
+		pass "ML-DSA mod5 is a mod 5 for every half byte"
+	else
+		cat "$BUILD/cc.log" "$BUILD/out" 2>/dev/null | sed 's/^/  /' | head
+		fail "ML-DSA mod5 is not a mod 5"
+	fi
+	extract "$ROOT/libsec/mldsa_poly.c" int32 mod5 "$BUILD/eta.c" "$DSAPRE"
+else
+	fail "libsec/mldsa_poly.c has no mod5: the sampler reduces mod 5 some other way"
+	echo "$DSAPRE" >"$BUILD/eta.c"
+fi
+if extract "$ROOT/libsec/mldsa_poly.c" void mldsa_poly_uniform_eta "$BUILD/eta_fn.c" ""; then
+	cat "$BUILD/eta_fn.c" >>"$BUILD/eta.c"
+	nodivide "ML-DSA's sampler of s1 and s2 (mldsa_poly_uniform_eta)" "$BUILD/eta.c"
+else
+	fail "could not take mldsa_poly_uniform_eta out of libsec/mldsa_poly.c"
+fi
 
 summary

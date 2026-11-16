@@ -152,7 +152,7 @@ typedef struct {
 
 /*
  * ML-DSA.KeyGen: Key generation.
- * Algorithm 1 in FIPS 204.
+ * Algorithms 1 and 6 in FIPS 204.
  */
 static int
 mldsa_keygen_internal(uchar *pk, uchar *sk,
@@ -290,8 +290,24 @@ typedef struct {
 } MLDSASignState;
 
 /*
- * ML-DSA.Sign: Signature generation.
- * Algorithm 2 in FIPS 204.
+ * The most rounds of the rejection loop before signing gives up.  FIPS
+ * 204 Appendix C allows a bound and gives 814 as one a key that is a
+ * key reaches with probability below 2^-256 (a round succeeds about
+ * once in five).  A secret key whose s1 or s2 is not short (a damaged
+ * or made-up key file) may never be accepted; the loop used to have no
+ * end, and its counter of masks, 16 bits, came round.
+ */
+#ifndef MLDSA_MAXROUNDS
+#define MLDSA_MAXROUNDS	814	/* a test builds with less, to see the bound kept */
+#endif
+
+/*
+ * ML-DSA.Sign_internal: Signature generation.
+ * Algorithm 7 in FIPS 204, on the caller's message as M' (the caller,
+ * Keyring, signs a digest of its own format; the framing of Algorithm 2
+ * is not applied here).  Hedged: rnd is 32 fresh random bytes.
+ *
+ * Returns 0, or -1 with nothing written to sig.
  */
 static int
 mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
@@ -301,10 +317,11 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	MLDSASignState *st;
 	uchar rho[32], K[32], tr[64];
 	uchar mu[64], rhoprime[64];
+	uchar rnd[32];
 	uchar ctilde[64];
 	int skoff, i, j;
 	u16int kappa;
-	int reject, hints_n;
+	int reject, hints_n, rounds;
 	int sigoff, eta_bytes;
 
 	st = malloc(sizeof(MLDSASignState));
@@ -341,15 +358,27 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 		shake256_squeeze(&hs, mu, 64);
 	}
 
-	/* rhoprime = H(K || mu) for deterministic signing */
+	/*
+	 * rho'' = H(K || rnd || mu): FIPS 204 Algorithm 7 line 7, with rnd
+	 * 32 random bytes (Algorithm 2's hedged variant, the standard's
+	 * default).  It was H(K || mu), with no rnd at all: neither the
+	 * hedged variant nor the deterministic one (rnd of 32 zero bytes),
+	 * and the same masks every time a message was signed, which is
+	 * what an induced fault needs to recover the key from two
+	 * signatures.  A verifier never sees rho'', so signatures verify
+	 * as they did.
+	 */
+	genrandom(rnd, sizeof(rnd));
 	{
 		SHA3state hs;
 		shake256_init(&hs);
 		shake256_absorb(&hs, K, 32);
+		shake256_absorb(&hs, rnd, sizeof(rnd));
 		shake256_absorb(&hs, mu, 64);
 		shake256_finalize(&hs);
 		shake256_squeeze(&hs, rhoprime, 64);
 	}
+	secureZero(rnd, sizeof(rnd));
 
 	/* NTT(s1), NTT(s2), NTT(t0) for later use */
 	for(i = 0; i < l; i++)
@@ -361,7 +390,15 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 
 	/* Rejection sampling loop */
 	kappa = 0;
-	for(;;){
+	for(rounds = 0;; rounds++){
+		if(rounds >= MLDSA_MAXROUNDS){
+			secureZero(K, sizeof(K));
+			secureZero(rhoprime, sizeof(rhoprime));
+			secureZero(st, sizeof(MLDSASignState));
+			free(st);
+			return -1;
+		}
+
 		/* Sample y */
 		for(i = 0; i < l; i++)
 			mldsa_poly_uniform_gamma1(st->y[i], rhoprime, kappa + (u16int)i, gamma1_bits);
@@ -439,7 +476,8 @@ mldsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 			mldsa_poly_reduce(st->tmp);
 			for(j = 0; j < MLDSA_N; j++){
 				int32 r0 = mldsa_lowbits(st->tmp[j], gamma2);
-				if(r0 < 0) r0 = -r0;
+				int32 sgn = r0 >> 31;
+				r0 = (r0 ^ sgn) - sgn;	/* |r0|, with no branch on its sign */
 				if(r0 >= gamma2 - beta){
 					reject = 1;
 					break;
@@ -554,8 +592,8 @@ typedef struct {
 } MLDSAVerifyState;
 
 /*
- * ML-DSA.Verify: Signature verification.
- * Algorithm 3 in FIPS 204.
+ * ML-DSA.Verify_internal: Signature verification.
+ * Algorithm 8 in FIPS 204, on the caller's message as M'.
  */
 static int
 mldsa_verify_internal(const uchar *sig, const uchar *msg, ulong msglen,
@@ -697,6 +735,14 @@ mldsa_verify_internal(const uchar *sig, const uchar *msg, ulong msglen,
 		mldsa_ntt(t1_scaled);
 		mldsa_poly_pointwise(st->tmp, st->chat, t1_scaled);
 		mldsa_poly_sub(st->w1prime[i], st->w1prime[i], st->tmp);
+		/*
+		 * Reduced before the inverse transform, as every other
+		 * input to it is: a difference of a reduced sum and a
+		 * product can be 12.7M either way, and invntt adds 256 of
+		 * them into one coefficient, which an int32 holds only if
+		 * they do not all lean one way.  The signature decides them.
+		 */
+		mldsa_poly_reduce(st->w1prime[i]);
 		mldsa_invntt(st->w1prime[i]);
 		mldsa_poly_reduce(st->w1prime[i]);
 

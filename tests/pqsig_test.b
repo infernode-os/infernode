@@ -16,6 +16,9 @@ implement PQSigTest;
 #
 # ML-DSA (mldsa65, mldsa87) certificates must go on verifying as they
 # did: a certificate made by OpenSSL in Keyring's format is the guard.
+# Its signing left the standard's randomness out, so a message's
+# signature was always the same; and a secret key's text was taken
+# whatever its fields held.
 #
 # For every algorithm: a changed signature is refused, and a key that is
 # generated signs and verifies.
@@ -214,14 +217,60 @@ generated(t: ref T, alg: string)
 	t.assert(kr->verify(other, cert, state(MSG)) == 0, alg + ": certificate refused under another key");
 }
 
+# ML-DSA signing is FIPS 204's hedged variant: fresh randomness goes into
+# each signature, so two of one message differ (they were the same: the
+# randomness was left out altogether), and both verify
+hedged(t: ref T, alg: string)
+{
+	sk := kr->genSK(alg, "pqsig", 0);
+	if(sk == nil)
+		t.fatal(alg + ": genSK gave no key");
+	pk := kr->sktopk(sk);
+	c1 := kr->sign(sk, 0, state(MSG), "sha256");
+	c2 := kr->sign(sk, 0, state(MSG), "sha256");
+	if(c1 == nil || c2 == nil)
+		t.fatal(alg + ": sign gave no certificate");
+	t.assert(kr->certtostr(c1) != kr->certtostr(c2), alg + ": two signatures of one message differ");
+	t.assert(kr->verify(pk, c1, state(MSG)) != 0 && kr->verify(pk, c2, state(MSG)) != 0, alg + ": both verify");
+}
+
+# a secret key's text whose s1 holds fields no key has (bytes of ff:
+# coefficients of -11 where they lie between -4 and 4, or -5 for -2 to 2)
+# is not a key.  It was taken, and signed with.
+badkey(t: ref T, alg: string)
+{
+	sk := kr->genSK(alg, "pqsig", 0);
+	if(sk == nil)
+		t.fatal(alg + ": genSK gave no key");
+	text := kr->sktostr(sk);
+	t.assert(kr->strtosk(text) != nil, alg + ": a key's own text is read back");
+	# the third line is the secret key in base64; its bytes 150 to 152
+	# (in s1, which starts at byte 128) are characters 200 to 203
+	b := 0;
+	for(nl := 0; nl < 2; b++)
+		if(text[b] == '\n')
+			nl++;
+	bad := text[0:b+200] + "////" + text[b+204:];
+	t.assert(len bad == len text, alg + ": changed text is the same length");
+	t.assert(kr->strtosk(bad) == nil, alg + ": a secret key with fields out of range is refused");
+}
+
 testMLDSA65Generated(t: ref T)
 {
 	generated(t, "mldsa65");
+	hedged(t, "mldsa65");
 }
 
 testMLDSA87Generated(t: ref T)
 {
 	generated(t, "mldsa87");
+	hedged(t, "mldsa87");
+}
+
+testMLDSABadKey(t: ref T)
+{
+	badkey(t, "mldsa65");
+	badkey(t, "mldsa87");
 }
 
 # slhdsa192s only: a signature takes seconds, and slhdsa_test generates both
@@ -251,6 +300,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("MLDSA87Fixture", testMLDSA87Fixture);
 	run("MLDSA65Generated", testMLDSA65Generated);
 	run("MLDSA87Generated", testMLDSA87Generated);
+	run("MLDSABadKey", testMLDSABadKey);
 	run("SLH192Generated", testSLH192Generated);
 
 	if(testing->summary(passed, failed, skipped) > 0)

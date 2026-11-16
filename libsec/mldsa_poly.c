@@ -175,6 +175,21 @@ mldsa_poly_uniform(int32 r[MLDSA_N], const uchar rho[32], uchar i, uchar j)
 }
 
 /*
+ * a mod 5 for a from 0 to 15 (FIPS 204 Algorithm 15, CoeffFromHalfByte,
+ * needs it below 15), with no division: a is half a byte of the secret
+ * seed's expansion, a divide instruction takes time that depends on its
+ * operands, and "% 5" is one under a compiler asked for small code or
+ * not asked to optimise.  205/1024 is a little more than 1/5, and
+ * floor(205*a / 1024) is floor(a / 5) up to a = 15.
+ * tests/host/pq_nodivide_test.sh checks it, and for a divide.
+ */
+static int32
+mod5(int32 a)
+{
+	return a - ((205 * a) >> 10) * 5;
+}
+
+/*
  * Sample short polynomial with coefficients in [-eta, eta].
  * eta=4 for ML-DSA-65, eta=2 for ML-DSA-87.
  * Uses SHAKE-256 with (rhoprime || nonce).
@@ -208,11 +223,11 @@ mldsa_poly_uniform_eta(int32 r[MLDSA_N], const uchar rhoprime[64],
 				a = t & 0x0F;
 				b = t >> 4;
 				if(a < 15){
-					a = a % 5;
+					a = mod5(a);
 					r[ctr++] = 2 - a;
 				}
 				if(ctr < MLDSA_N && b < 15){
-					b = b % 5;
+					b = mod5(b);
 					r[ctr++] = 2 - b;
 				}
 			} else {

@@ -168,6 +168,43 @@ mldsa_sizes(int level, int *sklen, int *pklen, int *siglen)
 }
 
 /*
+ * Are the secret vectors of a secret key short?  s1 and s2 are packed
+ * after rho, K and tr (128 bytes) as eta - coefficient: for ML-DSA-65
+ * (eta 4, l+k = 11 polynomials) half bytes from 0 to 8, for ML-DSA-87
+ * (eta 2, l+k = 15) fields of three bits from 0 to 4.  A key text of
+ * the right length was taken whatever its fields held (FIPS 204's
+ * skDecode, Algorithm 25, leaves a key from elsewhere to its caller to
+ * check), and signing with one that is not a key made signatures that
+ * do not verify, slowly.  Every field is looked at, with no branch on
+ * any: the key is secret.
+ */
+static int
+mldsa_skshort(const uchar *sk, int level)
+{
+	const uchar *p;
+	u32int bad, b;
+	int i, j, n;
+
+	p = sk + 128;
+	bad = 0;
+	if(level == 87){
+		n = (7 + 8) * 96;
+		for(i = 0; i < n; i += 3){
+			b = p[i] | (u32int)p[i+1] << 8 | (u32int)p[i+2] << 16;
+			for(j = 0; j < 24; j += 3)
+				bad |= 4 - ((b >> j) & 7);	/* wraps if above 4 */
+		}
+	} else {
+		n = (5 + 6) * 128;
+		for(i = 0; i < n; i++){
+			bad |= 8 - (u32int)(p[i] & 0x0F);
+			bad |= 8 - (u32int)(p[i] >> 4);
+		}
+	}
+	return (bad >> 31) == 0;
+}
+
+/*
  * String to key conversions for ML-DSA-65
  */
 static void*
@@ -187,7 +224,7 @@ mldsa65_str2sk(char *str, char **strp)
 
 	/* Read secret key */
 	n = base64tobytes(str, k->sk, MLDSA65_SKLEN, &p);
-	if(n != MLDSA65_SKLEN){
+	if(n != MLDSA65_SKLEN || !mldsa_skshort(k->sk, 65)){
 		mldsaprivfree(k);
 		return nil;
 	}
@@ -276,7 +313,7 @@ mldsa87_str2sk(char *str, char **strp)
 	k->pklen = MLDSA87_PKLEN;
 
 	n = base64tobytes(str, k->sk, MLDSA87_SKLEN, &p);
-	if(n != MLDSA87_SKLEN){
+	if(n != MLDSA87_SKLEN || !mldsa_skshort(k->sk, 87)){
 		mldsaprivfree(k);
 		return nil;
 	}

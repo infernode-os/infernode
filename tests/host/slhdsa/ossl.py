@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-# SLH-DSA from the OpenSSL that Python's `cryptography` package carries.
+# SLH-DSA, and what ML-DSA's API in Python does not offer, from the
+# OpenSSL that Python's `cryptography` package carries.
 #
-# cryptography (50) has no SLH-DSA in its API, but the OpenSSL (3.5 or
-# later) linked into its extension module has the algorithm, and the
-# module keeps its symbol table.  The EVP functions are local symbols, so
-# they are found in the module's .symtab and called by address through
-# ctypes.  Nothing here is a supported interface of either project: where
-# any step fails, available() says why and the callers skip.
+# cryptography (50) has no SLH-DSA in its API, and no way to give ML-DSA
+# its signing randomness, but the OpenSSL (3.5 or later) linked into its
+# extension module has both, and the module keeps its symbol table.  The
+# EVP functions are local symbols, so they are found in the module's
+# .symtab and called by address through ctypes.  Nothing here is a
+# supported interface of either project: where any step fails,
+# available() says why and the callers skip.
 #
-#   keygen(alg, seed)            seed = SK.seed || SK.prf || PK.seed -> (pk, sk)
-#   sign(alg, sk, msg, ctx=b"")  pure SLH-DSA, deterministic (opt_rand = PK.seed)
-#   verify(alg, pk, msg, sig, ctx=b"")
-# alg is OpenSSL's name: "SLH-DSA-SHAKE-192s", "SLH-DSA-SHAKE-256s".
+#   keygen(alg, seed)            -> (pk, sk); seed is SK.seed || SK.prf ||
+#                                PK.seed for SLH-DSA, xi for ML-DSA
+#   sign(alg, sk, msg, ctx=b"", params=None)
+#                                the pure signature, deterministic unless
+#                                params says otherwise
+#   verify(alg, pk, msg, sig, ctx=b"", params=None)
+# alg is OpenSSL's name: "SLH-DSA-SHAKE-192s", "SLH-DSA-SHAKE-256s",
+# "ML-DSA-65", "ML-DSA-87".
 import ctypes, struct, os
 
 _fn = {}
@@ -138,8 +144,7 @@ def keygen(alg, seed):
 		p, keep = _params([(b"seed", seed)])
 		_need(_fn["EVP_PKEY_CTX_set_params"](c, p) == 1, "set seed")
 		_need(_fn["EVP_PKEY_generate"](c, ctypes.byref(pkey)) == 1, "generate")
-		n = len(seed) // 3
-		return _getoctets(pkey, b"pub", 2 * n), _getoctets(pkey, b"priv", 4 * n)
+		return _getoctets(pkey, b"pub", 8192), _getoctets(pkey, b"priv", 8192)
 	finally:
 		_fn["EVP_PKEY_CTX_free"](c)
 		if pkey:
@@ -159,12 +164,14 @@ def _load(alg, name, key, selection):
 
 _PUBLIC, _KEYPAIR = 0x86, 0x87	# EVP_PKEY_PUBLIC_KEY, EVP_PKEY_KEYPAIR
 
-def sign(alg, sk, msg, ctx=b""):
+def sign(alg, sk, msg, ctx=b"", params=None):
+	"""params: OpenSSL signature parameters in place of deterministic=1,
+	as (name, int or bytes) pairs"""
 	_init(); _need(not _why, "init")
 	pkey = _load(alg, b"priv", sk, _KEYPAIR)
 	md = _fn["EVP_MD_CTX_new"]()
 	try:
-		items = [(b"deterministic", 1)]
+		items = [(b"deterministic", 1)] if params is None else list(params)
 		if ctx:
 			items.append((b"context-string", ctx))
 		p, keep = _params(items)
@@ -178,12 +185,15 @@ def sign(alg, sk, msg, ctx=b""):
 		_fn["EVP_MD_CTX_free"](md)
 		_fn["EVP_PKEY_free"](pkey)
 
-def verify(alg, pk, msg, sig, ctx=b""):
+def verify(alg, pk, msg, sig, ctx=b"", params=None):
 	_init(); _need(not _why, "init")
 	pkey = _load(alg, b"pub", pk, _PUBLIC)
 	md = _fn["EVP_MD_CTX_new"]()
 	try:
-		p, keep = _params([(b"context-string", ctx)] if ctx else [])
+		items = [] if params is None else list(params)
+		if ctx:
+			items.append((b"context-string", ctx))
+		p, keep = _params(items)
 		_need(_fn["EVP_DigestVerifyInit_ex"](md, None, None, None, None, pkey, p) == 1, "DigestVerifyInit")
 		return _fn["EVP_DigestVerify"](md, sig, len(sig), msg, len(msg)) == 1
 	finally:

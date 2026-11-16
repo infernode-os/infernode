@@ -527,8 +527,8 @@ exercised end-to-end is a real iPhone with a SIM. Ba'al (the test
 device in the project memory entries — iPhone 17 Pro Max running iOS
 26.4.2 with Developer Mode ON) is the canonical target. The recipe
 below works against any iPhone that has been provisioned for the
-`os.infernode.ios` profile (cert `Apple Development: p.d.finn@gmail.com`,
-team `9Z8Z334UUU`).
+`os.infernode.ios` profile with your own Apple Development certificate
+and team.
 
 ### Build + install on device
 

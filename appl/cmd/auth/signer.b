@@ -11,6 +11,7 @@ include "keyring.m";
 
 include "security.m";
 	random: Random;
+	login: Login;
 
 Signer: module
 {
@@ -23,6 +24,9 @@ PKmodlen:		con 2048;
 # size in bits of modulus for diffie hellman
 DHmodlen:		con 2048;
 
+# the most Keyring's getmsg takes (libinterp/keyring.c Maxmsg)
+Maxmsg:	con 4096;
+
 stderr, stdin, stdout: ref Sys->FD;
 
 init(nil: ref Draw->Context, nil: list of string)
@@ -30,6 +34,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys = load Sys Sys->PATH;
 	random = load Random Random->PATH;
 	kr = load Keyring Keyring->PATH;
+	login = load Login Login->PATH;
 
 	stdin = sys->fildes(0);
 	stdout = sys->fildes(1);
@@ -39,6 +44,10 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(sys->chdir("/keydb") < 0){
 		sys->fprint(stderr, "signer: no key database\n");
 		raise "fail:no keydb";
+	}
+	if(login == nil){
+		sys->fprint(stderr, "signer: can't load %s: %r\n", Login->PATH);
+		raise "fail:load";
 	}
 
 	err := sign();
@@ -56,11 +65,12 @@ sign(): string
 
 	# send public part to client
 	mypkbuf := array of byte kr->pktostr(kr->sktopk(info.mysk));
-	kr->sendmsg(stdout, mypkbuf, len mypkbuf);
 	alphabuf := array of byte info.alpha.iptob64();
-	kr->sendmsg(stdout, alphabuf, len alphabuf);
 	pbuf := array of byte info.p.iptob64();
-	kr->sendmsg(stdout, pbuf, len pbuf);
+	if(kr->sendmsg(stdout, mypkbuf, len mypkbuf) < 0 ||
+	   kr->sendmsg(stdout, alphabuf, len alphabuf) < 0 ||
+	   kr->sendmsg(stdout, pbuf, len pbuf) < 0)
+		return sys->sprint("can't send key: %r");
 
 	# get client's public key
 	hisPKbuf := kr->getmsg(stdin);
@@ -69,6 +79,18 @@ sign(): string
 	hisPK := kr->strtopk(string hisPKbuf);
 	if(hisPK == nil)
 		return "illegal caller PK";
+
+	# The key's owner becomes the name of a file here (signed/owner)
+	# and of an account in the certificate, so it must be one name
+	# (login(6)) before anything is signed or made: an owner of
+	# ../signerkey had the request's record written over the signer's
+	# own key, by anybody who connected.
+	err := login->okname(hisPK.owner);
+	if(err != nil)
+		return "illegal owner name: " + err;
+	# the signer's own name is certified by its key file alone
+	if(hisPK.owner == info.mypk.owner)
+		return "illegal owner name: the signer's own";
 
 	# hash, sign, and blind
 	state := certdigest(info.mysk, hisPKbuf);
@@ -79,7 +101,12 @@ sign(): string
 	if(kr->verify(info.mypk, cert, state) == 0)
 		return "bad signer certificate";
 
+	# A certificate that does not fit a message (an ML-DSA-87
+	# signature is 4627 bytes) cannot be sent, and was found out only
+	# after its record had been left in signed/.
 	certbuf := array of byte kr->certtostr(cert);
+	if(len certbuf > Maxmsg)
+		return sys->sprint("certificate of %d bytes is more than a message holds (%d)", len certbuf, Maxmsg);
 	blind := random->randombuf(random->ReallyRandom, len certbuf);
 	for(i := 0; i < len blind; i++)
 		certbuf[i] = certbuf[i] ^ blind[i];
@@ -102,7 +129,11 @@ sign(): string
 	}
 
 	# send blinded cert to client
-	kr->sendmsg(stdout, certbuf, len certbuf);
+	fd = nil;
+	if(kr->sendmsg(stdout, certbuf, len certbuf) < 0){
+		sys->remove(file);
+		return sys->sprint("can't send certificate: %r");
+	}
 
 	return nil;
 }

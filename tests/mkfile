@@ -63,6 +63,7 @@ TARG=\
 	errlabel_leak_test.dis\
 	crypto_test.dis\
 	login_test.dis\
+	signer_test.dis\
 	ssl_record_test.dis\
 	delegation_budget_test.dis\
 	destructor_test.dis\
@@ -568,6 +569,7 @@ SYSMODULES=\
 	audit.m\
 	sexprs.m\
 	spki.m\
+	msgio.m\
 
 DISBIN=$ROOT/dis/tests
 

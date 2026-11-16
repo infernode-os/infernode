@@ -40,6 +40,28 @@ creates and initialises
 itself, with an owner name of
 .LR * .
 .PP
+The set top box ID is the owner's name in the key the client sends.
+It becomes the name of a file in
+.B /keydb/signed
+and the name certified, so
+.I signer
+takes only one account name as
+.IR login (6)
+defines it (no
+.B /
+or
+.BR \e ,
+not
+.B .
+or
+.BR .. ,
+no control character), and refuses any other before it signs or writes anything.
+It does not certify its own name (the owner of
+.BR /keydb/signerkey )
+for anybody.
+A certificate that would not fit one of the protocol's messages (4096 bytes:
+an ML-DSA-87 signature is larger) is refused before any record of the request is made.
+.PP
 .I Signer
 `blinds'
 the certificate by XOR-ing it with a random bit mask, then sends the result to the requesting client.
@@ -94,6 +116,19 @@ to read it.
 sends the blinding data in
 .BI /keydb/countersigned/ set-top-box-id
 to the requesting client.
+The ID a client gives must again be one name; and
+.I countersigner
+runs in a name space in which
+.B /keydb
+holds only the contents of
+.BR /keydb/countersigned ,
+so that the records an operator has approved are all an ID can name.
+(An ID of
+.B ../signed/\fIid\fP
+was answered with the blinding data of a request nobody had approved,
+which with the blinded certificate
+.I signer
+had sent is a certificate.)
 .SH FILES
 .TF /keydb/countersigned/set-top-box-id
 .TP
@@ -112,6 +147,7 @@ Repository of `unblinded' certificates.
 .br
 .B /appl/cmd/auth/countersigner.b
 .SH SEE ALSO
+.IR login (6),
 .IR createsignerkey (8),
 .IR register (8),
 .IR svc (8)

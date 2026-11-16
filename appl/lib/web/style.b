@@ -91,7 +91,24 @@ kw(k: int): Len
 	return Len(k, 0.0, 0.0, nil);
 }
 
+# the largest a calculation's value is: infinity, a division by zero
+CALCMAX: con 33554400.0;
+
+calcclamp(v: real): real
+{
+	if(v > CALCMAX)
+		return CALCMAX;
+	if(v < -CALCMAX)
+		return -CALCMAX;
+	return v;
+}
+
 evalexpr(e: ref Expr, basis: real): real
+{
+	return calcclamp(evalexpr1(e, basis));
+}
+
+evalexpr1(e: ref Expr, basis: real): real
 {
 	case e.op {
 	'n' =>
@@ -106,9 +123,13 @@ evalexpr(e: ref Expr, basis: real): real
 		return evalexpr(e.kids[0], basis) * evalexpr(e.kids[1], basis);
 	'/' =>
 		d := evalexpr(e.kids[1], basis);
-		if(d == 0.0)
-			return 0.0;
-		return evalexpr(e.kids[0], basis) / d;
+		n := evalexpr(e.kids[0], basis);
+		if(d == 0.0) {
+			if(n < 0.0)
+				return -CALCMAX;	# a division by zero is infinite
+			return CALCMAX;
+		}
+		return n / d;
 	'm' or 'M' =>
 		v := evalexpr(e.kids[0], basis);
 		for(i := 1; i < len e.kids; i++) {
@@ -318,7 +339,7 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			for(k := 0; k < len decls && !sibfns; k++)
 				sibfns = hassibfn(decls[k].val);
 			for(k = 0; k < len r.sels; k++)
-				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0, nil));
+				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0, nil, curcq));
 			ix.order++;
 		Media =>
 			if(mediamatch(r.cond, ix.env))
@@ -327,7 +348,12 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			if(supports(r.cond))
 				indexrules(ix, r.rules, origin, layer, base, depth+1);
 		Container =>
+			# its rules hold where the condition does: asked when an
+			# element matches (cqmatch), of its container's size
+			ocq := curcq;
+			curcq = cqprelude(r.cond) :: curcq;
 			indexrules(ix, r.rules, origin, layer, base, depth+1);
+			curcq = ocq;
 		Layer =>
 			if(r.rules == nil)
 				continue;
@@ -353,6 +379,92 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			}
 			indexrules(ix, sh.rules, origin, l, u, depth+1);
 		}
+}
+
+# ---- container queries (Conditional 5 §5) ----
+
+curcq: list of (string, array of ref Tok);	# while indexing: the @container blocks a rule is in
+cqsizes: array of (int, int);	# by node: a container's content box, the last layout's
+cqcomp: ref Computed;	# being computed: its containers' styles
+cqasked := 0;
+
+setcontainers(sizes: array of (int, int))
+{
+	cqsizes = sizes;
+}
+
+containersasked(): int
+{
+	a := cqasked;
+	cqasked = 0;
+	return a;
+}
+
+strmember(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+# @container [name] query: its name (nil for any container) and query
+cqprelude(v: array of ref Tok): (string, array of ref Tok)
+{
+	v = nows(v);
+	if(len v > 0 && v[0].kind == Kident) {
+		case lower(v[0].s) {
+		"not" or "and" or "or" =>
+			;
+		* =>
+			return (v[0].s, nows(v[1:]));
+		}
+	}
+	return (nil, v);
+}
+
+# whether n's containers meet every condition the entry is under
+cqmatch(m: ref M, n: int, cq: list of (string, array of ref Tok)): int
+{
+	for(; cq != nil; cq = tl cq) {
+		(name, q) := hd cq;
+		if(!cqone(m, n, name, q))
+			return 0;
+	}
+	return 1;
+}
+
+cqone(m: ref M, n: int, name: string, q: array of ref Tok): int
+{
+	cqasked = 1;
+	d := m.d;
+	# the nearest ancestor that is a query container of that name
+	c := 0;
+	ctype := 0;
+	for(a := parentel(d, n); a != 0; a = parentel(d, a)) {
+		st: ref St;
+		if(cqcomp != nil && a < len cqcomp.st)
+			st = cqcomp.st[a];
+		if(st == nil || st.cqtype == 0)
+			continue;
+		if(name != nil && !strmember(name, st.cqnames))
+			continue;
+		c = a;
+		ctype = st.cqtype;
+		break;
+	}
+	if(c == 0)
+		return 0;	# no such container: the condition is unknown, so false
+	env := ref *m.env;
+	w := -1;
+	h := -1;
+	if(cqsizes != nil && c < len cqsizes)
+		(w, h) = cqsizes[c];
+	if(w >= 0)
+		env.width = w;
+	if(ctype == 2 && h >= 0)
+		env.height = h;
+	return mediamatch(q, env);
 }
 
 # Make url() values in declarations absolute against the sheet's address.
@@ -2527,7 +2639,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil, Ccurrent, 0, nil, ~0, 0, nil);
 	s.fontsize = 16.0 * dpr;
 	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
 	return s;
@@ -2555,6 +2667,7 @@ inherit(p: ref St): ref St
 	s.smallcaps = p.smallcaps;
 	s.lineheight = p.lineheight;
 	s.align = p.align;
+	s.kidalign = p.kidalign;
 	s.alignlast = p.alignlast;
 	s.indent = p.indent;
 	s.transform = p.transform;
@@ -2591,6 +2704,7 @@ inherit(p: ref St): ref St
 	s.hideempty = p.hideempty;
 	s.accent = p.accent;
 	s.caret = p.caret;
+	s.textfill = p.textfill;
 	s.svgfill = p.svgfill;
 	s.svgstroke = p.svgstroke;
 	s.vars = p.vars;
@@ -2622,7 +2736,7 @@ isinherited(nm: string): int
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
-	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "fill" or "stroke" or
+	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "-webkit-text-fill-color" or "fill" or "stroke" or
 	"font-kerning" or "font-feature-settings" or "font-variation-settings" or "image-orientation" =>
 		return 1;
 	}
@@ -2682,6 +2796,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	lastenv = ref *env;	# for light-dark() in colours parsed without a context
 	setdpr(env);
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	cqcomp = c;
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
@@ -2884,6 +2999,7 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 	setdpr(env);
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
 		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
+	cqcomp = c;
 	ctx := ref Ctx(16.0*dpr, c.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;
@@ -3064,6 +3180,7 @@ restyleflat(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed, m: ref 
 	setdpr(env);
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
 		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
+	cqcomp = c;
 	ctx := ref Ctx(16.0*dpr, c.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;
@@ -3343,6 +3460,7 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 	if(chain == nil || hd chain != root)
 		return nil;	# not in the document's tree
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	cqcomp = c;
 	m := matcher(d, env);
 	ctx := ref Ctx(16.0*dpr, 16.0*dpr, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
@@ -3662,6 +3780,8 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 		return nil;	# cellpadding and border come from the table
 	if(rowish(nd.tag) && tablerules(d, n) != nil)
 		return nil;	# so do its rules
+	if(nd.tag == Dom->Timg && nd.parent != 0 && d.nodes[nd.parent].tag == Dom->Tpicture)
+		return nil;	# its size may be its <source>'s
 	if(nd.attrs != nil) {
 		k += "|" + nd.name;
 		for(l := nd.attrs; l != nil; l = tl l)
@@ -3804,7 +3924,7 @@ trybucket(m: ref M, l: list of ref Entry, key: string, n: int, filter: array of 
 		e.mark = candgen;
 		if(e.anc != nil && !bloomok(filter, e.anc))
 			continue;
-		if(matchsel(m, e.sel, n))
+		if(matchsel(m, e.sel, n) && (e.cq == nil || cqmatch(m, n, e.cq)))
 			r = e :: r;
 	}
 	return r;
@@ -4237,11 +4357,55 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 	}
 	if(d != nil && isroot(d, n) && st.display == Dcontents)
 		st.display = Dblock;
+	# a table takes none of the -webkit- alignments, which go back to
+	# start (as Blink's style adjuster has it): <center> places its
+	# table, but not the table's text (Hacker News's titles, centred)
+	if((st.display == Dtable || st.display == Dinlinetable) && st.kidalign != 0) {
+		st.align = Astart;
+		st.kidalign = 0;
+	}
 }
 
 # ---- value parsing ----
 
 # A <length-percentage>, or a calc() family function.
+# polygon()'s arguments: its points, x and y alternately, and its fill rule
+polygon(v: array of ref Tok, ctx: ref Ctx): (array of Len, int, int)
+{
+	args := commas(v);
+	wind := ~0;
+	if(args != nil) {
+		a := nows(hd args);
+		if(len a == 1 && a[0].kind == Kident) {
+			case lower(a[0].s) {
+			"evenodd" => wind = 1;
+			"nonzero" => ;
+			* => return (nil, 0, 0);
+			}
+			args = tl args;
+		}
+	}
+	pts: list of Len;
+	n := 0;
+	for(; args != nil; args = tl args) {
+		a := nows(hd args);
+		if(len a != 2)
+			return (nil, 0, 0);
+		(okx, lx) := length(a[0:1], ctx);
+		(oky, ly) := length(a[1:2], ctx);
+		if(!okx || !oky)
+			return (nil, 0, 0);
+		pts = ly :: lx :: pts;
+		n += 2;
+	}
+	if(n < 6)
+		return (nil, 0, 0);	# fewer than three points: nothing shows
+	r := array[n] of Len;
+	for(k := n - 1; pts != nil; pts = tl pts)
+		r[k--] = hd pts;
+	return (r, wind, 1);
+}
+
 length(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 {
 	v = trim(v);
@@ -4428,6 +4592,12 @@ operand(t: ref Tok, ctx: ref Ctx): ref Expr
 		case lower(t.s) {
 		"pi" => return ref Expr('k', Math->Pi, 0.0, nil);
 		"e" => return ref Expr('k', 2.718281828459045, 0.0, nil);
+		# (Values 4 §10.7.1): as large as a length can be, as
+		# Chromium has it; NaN as 0.  Tailwind 4's rounded-full is
+		# calc(infinity * 1px): Cloudflare's pills were squares
+		"infinity" => return ref Expr('k', CALCMAX, 0.0, nil);
+		"-infinity" => return ref Expr('k', -CALCMAX, 0.0, nil);
+		"nan" => return ref Expr('k', 0.0, 0.0, nil);
 		}
 	}
 	return nil;
@@ -4453,13 +4623,20 @@ fold(e: ref Expr): (int, real, real)
 		if(!a || !b)
 			return (0, 0.0, 0.0);
 		if(e.kids[0].op == 'k' || isnum(e.kids[0]))
-			return (1, bp*ap, bpc*ap);
-		return (1, ap*bp, apc*bp);
+			return (1, calcclamp(bp*ap), calcclamp(bpc*ap));
+		return (1, calcclamp(ap*bp), calcclamp(apc*bp));
 	'/' =>
 		(a, ap, apc) := fold(e.kids[0]);
 		(b, bp, nil) := fold(e.kids[1]);
-		if(!a || !b || bp == 0.0)
+		if(!a || !b)
 			return (0, 0.0, 0.0);
+		if(bp == 0.0) {
+			if(apc != 0.0)
+				return (0, 0.0, 0.0);
+			if(ap < 0.0)
+				return (1, -CALCMAX, 0.0);
+			return (1, CALCMAX, 0.0);
+		}
 		return (1, ap/bp, apc/bp);
 	'm' or 'M' or 'c' =>
 		# without percentages, evaluate now
@@ -5559,8 +5736,17 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return nil;	# only the CSS-wide keywords, handled above
 	"border-image" =>
 		return borderimage(x);
+	"container" =>
+		# <name>... [/ <type>]
+		parts := slashes(x);
+		if(len parts == 0 || len parts > 2)
+			return nil;
+		ty := array[] of {ref Tok(Kident, "normal", 0.0, 0, nil)};
+		if(len parts == 2)
+			ty = nows(parts[1]);
+		return ("container-name", nows(parts[0])) :: ("container-type", ty) :: nil;
 	"transition" or "animation" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" or "font-variant" =>
+	"scroll-margin" or "scroll-padding" or "font-variant" =>
 		return nil;
 	}
 	return nil;
@@ -5707,8 +5893,9 @@ shorthand(nm: string): list of string
 		return r;
 	"border-image" => return list of {"border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"};
 	"mask" => return list of {"mask-image", "mask-repeat", "mask-position", "mask-size", "mask-origin", "mask-clip"};
+	"container" => return list of {"container-name", "container-type"};
 	"transition" or "animation" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" =>
+	"scroll-margin" or "scroll-padding" =>
 		return "-x-ignored" :: nil;
 	}
 	return nil;
@@ -5723,7 +5910,7 @@ allprops := array[] of {
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
 	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
-	"mask-image", "object-fit", "object-position", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change",
+	"mask-image", "object-fit", "object-position", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change", "container-type", "container-name",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -6149,7 +6336,11 @@ font(x: array of ref Tok): list of (string, array of ref Tok)
 				continue;
 			}
 		}
-		if(t.kind == Knumber && k+1 < len x) {
+		# a number is a weight (1 to 1000); a 0 is the size, as a
+		# length (font: 0/0 a, the image-replacement idiom: weather.gov's
+		# header drew its text over its picture of it, the rule dropped)
+		if(t.kind == Knumber && k+1 < len x && t.n >= 1.0 && t.n <= 1000.0 &&
+		   !(x[k+1].kind == Kdelim && x[k+1].s == "/")) {
 			r = ("font-weight", x[k:k+1]) :: r;
 			continue;
 		}
@@ -6369,7 +6560,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"column-rule-style" => st.colrules = b;
 		}
 	"border-top-color" or "border-right-color" or "border-bottom-color" or "border-left-color" or
-	"outline-color" or "text-decoration-color" or "column-rule-color" or "accent-color" or "caret-color" =>
+	"outline-color" or "text-decoration-color" or "column-rule-color" or "accent-color" or "caret-color" or
+	"-webkit-text-fill-color" =>
 		(ok, c) := color(v);
 		if(!ok) {
 			if(id == "auto" && (nm == "accent-color" || nm == "caret-color" || nm == "outline-color"))
@@ -6387,6 +6579,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"column-rule-color" => st.colrulec = c;
 		"accent-color" => st.accent = c;
 		"caret-color" => st.caret = c;
+		"-webkit-text-fill-color" => st.textfill = c;	# (gradient text: transparent, the background clipped to it)
 		}
 	"fill" or "stroke" =>
 		# for inline svg, which readsvg draws: kept as it can read it
@@ -6794,10 +6987,29 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.ctx |= SCblend;
 		else
 			return 0;
+	"container-type" =>
+		case id {
+		"normal" => st.cqtype = 0;
+		"inline-size" => st.cqtype = 1;
+		"size" => st.cqtype = 2;
+		* => return 0;
+		}
+	"container-name" =>
+		st.cqnames = nil;
+		if(id != "none") {
+			x := nows(v);
+			for(k := len x - 1; k >= 0; k--) {
+				if(x[k].kind != Kident)
+					return 0;
+				st.cqnames = x[k].s :: st.cqnames;
+			}
+		}
 	"clip-path" =>
-		# a stacking context; clipped to an inset() rectangle (other
-		# shapes are not clipped yet)
+		# a stacking context; clipped to an inset() rectangle or a
+		# polygon() (other shapes are not clipped yet)
 		st.clipinset = nil;
+		st.clippoly = nil;
+		st.clipwind = ~0;
 		if(id == "none")
 			st.ctx &= ~SCclippath;
 		else if(len trim(v) > 0) {
@@ -6824,6 +7036,14 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				3 => ins[3] = ins[1];
 				}
 				st.clipinset = ins;
+			} else if(len x >= 1 && x[0].kind == Kfunction && lower(x[0].s) == "polygon") {
+				# polygon([fill-rule,] x y, ...): Mozilla's hero ends
+				# in steps, a ::before cut to one
+				(pts, wind, ok) := polygon(x[0].kids, ctx);
+				if(!ok)
+					return 0;
+				st.clippoly = pts;
+				st.clipwind = wind;
 			}
 		} else
 			return 0;
@@ -6839,7 +7059,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"transform" =>
 		# a list of transform functions (the 2D ones; 3D ones are
 		# taken for their 2D part or ignored).  Translations alone
-		# are kept as one offset, the general case as the list.
+		# are kept as one offset, the general case as the list; a
+		# function that changes nothing is left out (Tailwind's
+		# translate(...) rotate(0) skewX(0) skewY(0) scaleX(1)
+		# scaleY(1) is a translation, drawn as one and not warped)
 		if(id == "none") {
 			st.translated = 0;
 			st.tx = st.ty = px(0.0);
@@ -6888,8 +7111,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				(ok, a) := angle(hd args, ctx);
 				if(!ok)
 					return 0;
-				tfl = ref Tf(TFrotate, array[] of {a}, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(a != 0.0) {	# rotate(0), as Tailwind writes between every translation and scale, moves nothing
+					tfl = ref Tf(TFrotate, array[] of {a}, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"scale" or "scalex" or "scaley" or "scale3d" =>
 				if(n < 1 || n > 3)
 					return 0;
@@ -6911,8 +7136,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						return 0;
 					sy = f;
 				}
-				tfl = ref Tf(TFscale, array[] of {sx, sy}, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(sx != 1.0 || sy != 1.0) {
+					tfl = ref Tf(TFscale, array[] of {sx, sy}, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"skew" or "skewx" or "skewy" =>
 				if(n < 1 || n > 2)
 					return 0;
@@ -6931,8 +7158,10 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						return 0;
 					ay = a;
 				}
-				tfl = ref Tf(TFskew, array[] of {ax, ay}, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(ax != 0.0 || ay != 0.0) {
+					tfl = ref Tf(TFskew, array[] of {ax, ay}, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"matrix" =>
 				if(n != 6)
 					return 0;
@@ -6944,8 +7173,15 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						return 0;
 					m[k] = f;
 				}
-				tfl = ref Tf(TFmatrix, m, px(0.0), px(0.0)) :: tfl;
-				pure = 0;
+				if(m[0] == 1.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 1.0) {
+					# a translation: what computed styles write for one
+					tx += m[4];
+					ty += m[5];
+					tfl = ref Tf(TFtranslate, nil, px(m[4]), px(m[5])) :: tfl;
+				} else {
+					tfl = ref Tf(TFmatrix, m, px(0.0), px(0.0)) :: tfl;
+					pure = 0;
+				}
 			"rotatex" or "rotatey" or "rotate3d" or "scalez" or "matrix3d" or "perspective" =>
 				;	# no depth here
 			* =>
@@ -7156,19 +7392,31 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			return 0;
 		st.lineheight = px(l.resolve(st.fontsize));	# % is of the font size
 	"text-align" =>
+		# the -webkit-, -moz- and -internal- values align the block
+		# children too (HTML §15.3.3, <center> and align=: a table in
+		# a <td align=center> is centred in it)
+		st.kidalign = 0;
 		case id {
 		"start" => st.align = Astart;
 		"end" => st.align = Aend;
-		"left" or "-webkit-left" => st.align = Aleft;
-		"right" or "-webkit-right" => st.align = Aright;
-		"center" or "-webkit-center" or "-moz-center" or "-internal-center" => st.align = Acenter;
+		"left" => st.align = Aleft;
+		"right" => st.align = Aright;
+		"center" => st.align = Acenter;
+		"-webkit-left" or "-moz-left" or "-internal-left" =>
+			st.align = st.kidalign = Aleft;
+		"-webkit-right" or "-moz-right" or "-internal-right" =>
+			st.align = st.kidalign = Aright;
+		"-webkit-center" or "-moz-center" or "-internal-center" =>
+			st.align = st.kidalign = Acenter;
 		"justify" => st.align = Ajustify;
 		"justify-all" =>
 			st.align = Ajustify;
 			st.alignlast = Ajustify;	# the last line too (Text 3 §7.1)
 		"match-parent" =>
-			if(parent != nil)
+			if(parent != nil) {
 				st.align = parent.align;
+				st.kidalign = parent.kidalign;
+			}
 		* => return 0;
 		}
 	"text-align-last" =>
@@ -7829,6 +8077,26 @@ counters(v: array of ref Tok): array of ref Tok
 	return nows(v);
 }
 
+# A calc(), min(), max() or clamp() lentoks left in a track list, its
+# lengths px and percentages, as a Len to resolve against the grid's
+# width (Notion's hero grid: calc(100% - 128px) and min()s of it, and
+# a track layout could not read was no track, every line after it moved)
+tracklen(t: ref Tok): (int, Len)
+{
+	if(t == nil || t.kind != Kfunction)
+		return (0, px(0.0));
+	env := lastenv;
+	if(env == nil)
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
+	e := calcexpr(t, ref Ctx(16.0, 16.0, 19.2, env, 1, nil, 400, 0));
+	if(e == nil)
+		return (0, px(0.0));
+	(lin, p, pc) := fold(e);
+	if(lin)
+		return (1, Len(Lpx, p, pc, nil));
+	return (1, Len(Lcalc, 0.0, 0.0, e));
+}
+
 # Compute the lengths inside a token list (grid tracks, transforms) to
 # px dimensions, leaving the structure for layout to interpret.
 lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
@@ -7852,6 +8120,8 @@ lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
 					t = ref Tok(Kdimension, "px", p, 0, nil);
 				else if(lin && p == 0.0)
 					t = ref Tok(Kpercent, nil, pc, 0, nil);
+				else	# px and %: its lengths px now, for tracklen at layout
+					t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));
 			} else
 				t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));	# (an angle's, say: what is in it, now)
 		} else if(t.kids != nil)
@@ -8317,6 +8587,10 @@ copyprop(d, s: ref St, nm: string)
 	"clip-path" =>
 		d.ctx = d.ctx & ~SCclippath | s.ctx & SCclippath;
 		d.clipinset = s.clipinset;
+		d.clippoly = s.clippoly;
+		d.clipwind = s.clipwind;
+	"container-type" => d.cqtype = s.cqtype;
+	"container-name" => d.cqnames = s.cqnames;
 	"will-change" => d.ctx = d.ctx & ~SCwillchange | s.ctx & SCwillchange;
 	"transform" =>
 		d.translated = s.translated;
@@ -8350,7 +8624,9 @@ copyprop(d, s: ref St, nm: string)
 	"font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" => d.synth = s.synth;
 	"font-variant" or "font-variant-caps" => d.smallcaps = s.smallcaps;
 	"line-height" => d.lineheight = s.lineheight;
-	"text-align" => d.align = s.align;
+	"text-align" =>
+		d.align = s.align;
+		d.kidalign = s.kidalign;
 	"text-align-last" => d.alignlast = s.alignlast;
 	"text-indent" => d.indent = s.indent;
 	"text-transform" => d.transform = s.transform;
@@ -8434,6 +8710,7 @@ copyprop(d, s: ref St, nm: string)
 	"appearance" => d.appearance = s.appearance;
 	"accent-color" => d.accent = s.accent;
 	"caret-color" => d.caret = s.caret;
+	"-webkit-text-fill-color" => d.textfill = s.textfill;
 	"fill" => d.svgfill = s.svgfill;
 	"stroke" => d.svgstroke = s.svgstroke;
 	}
@@ -8533,8 +8810,16 @@ hints(d: ref Doc, n: int): list of ref Decl
 		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
 			s += "border-width:0;";
 		if(nd.tag != Dom->Tinput || lower(d.attr(n, "type")) == "image") {
-			if(nd.tag != Dom->Tcanvas)	# a canvas's width and height are its bitmap's: its natural size, not a hint
-				s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
+			if(nd.tag != Dom->Tcanvas) {	# a canvas's width and height are its bitmap's: its natural size, not a hint
+				# an <img>'s are its <picture>'s chosen <source>'s, should
+				# that have either (HTML §4.8.4.3.4: Wikipedia's footer
+				# badges, 84 by 29, were drawn in the <img>'s 25 by 25)
+				dn := n;
+				if(nd.tag == Dom->Timg && (c := chosensource(d, n)) != 0 &&
+				   (d.hasattr(c, "width") || d.hasattr(c, "height")))
+					dn = c;
+				s += dimhint(d, dn, "width", "width") + dimhint(d, dn, "height", "height");
+			}
 			if((h := d.attr(n, "hspace")) != nil)
 				s += sys->sprint("margin-left:%dpx;margin-right:%dpx;", atoi(h), atoi(h));
 			if((v := d.attr(n, "vspace")) != nil)
@@ -8637,6 +8922,40 @@ colorhint(d: ref Doc, n: int, attr, prop: string): string
 	return prop + ":" + v + ";";
 }
 
+# the <source> of its <picture> an <img> shows, as layout's imgsrc
+# chooses it: the first whose media matches, whose type is decoded, and
+# that has a srcset; 0 for none (the <img>'s own)
+chosensource(d: ref Doc, n: int): int
+{
+	p := d.nodes[n].parent;
+	if(p == 0 || d.nodes[p].tag != Dom->Tpicture || d.nodes[p].ns != Dom->HTML)
+		return 0;
+	for(c := d.nodes[p].first; c != 0 && c != n; c = d.nodes[c].next) {
+		nd := d.nodes[c];
+		if(nd.kind != Dom->Element || nd.tag != Dom->Tsource)
+			continue;
+		if(d.hasattr(c, "media") && trimstr(d.attr(c, "media")) != "" &&
+		   (lastenv == nil || !mediamatch(css->tokenize(d.attr(c, "media")), lastenv)))
+			continue;
+		if(d.hasattr(c, "type") && !decodedtype(d.attr(c, "type")))
+			continue;
+		if(trimstr(d.attr(c, "srcset")) != "")
+			return c;
+	}
+	return 0;
+}
+
+# image types the engine decodes (layout's decodes)
+decodedtype(t: string): int
+{
+	case lower(trimstr(t)) {
+	"image/png" or "image/jpeg" or "image/jpg" or "image/gif" or "image/webp" or
+	"image/svg+xml" =>
+		return 1;
+	}
+	return 0;
+}
+
 dimhint(d: ref Doc, n: int, attr, prop: string): string
 {
 	v := d.attr(n, attr);
@@ -8656,9 +8975,9 @@ dimhint(d: ref Doc, n: int, attr, prop: string): string
 alignhint(d: ref Doc, n: int): string
 {
 	case lower(d.attr(n, "align")) {
-	"left" => return "text-align:left;";
-	"right" => return "text-align:right;";
-	"center" or "middle" => return "text-align:center;";
+	"left" => return "text-align:-internal-left;";
+	"right" => return "text-align:-internal-right;";
+	"center" or "middle" => return "text-align:-internal-center;";
 	"justify" => return "text-align:justify;";
 	}
 	return "";
@@ -8717,6 +9036,8 @@ dump(st: ref St): string
 	s += "padding " + lenstr(st.pt) + " " + lenstr(st.pr) + " " + lenstr(st.pb) + " " + lenstr(st.pl) + "\n";
 	s += sys->sprint("border-width %d %d %d %d\n", st.bt, st.br, st.bb, st.bl);
 	s += "color " + colstr(st.color) + "\n";
+	if(st.textfill != Ccurrent)
+		s += "-webkit-text-fill-color " + colstr(st.textfill) + "\n";
 	s += "background-color " + colstr(st.bgcolor) + "\n";
 	fam := "";
 	for(l := st.family; l != nil; l = tl l) {
@@ -8730,6 +9051,8 @@ dump(st: ref St): string
 	s += "font-style " + names3[st.fontstyle] + "\n";
 	s += "line-height " + lenstr(st.lineheight) + "\n";
 	s += "text-align " + names4[st.align] + "\n";
+	if(st.kidalign != 0)
+		s += "-internal-align-children " + names4[st.kidalign] + "\n";
 	s += "white-space " + names5[st.whitespace] + "\n";
 	s += "opacity " + realstr(st.opacity) + "\n";
 	if(st.translated)

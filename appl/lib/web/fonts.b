@@ -26,13 +26,55 @@ FALLBACK: con "/fonts/combined/unicode.sans.%d.font";
 
 display: ref Display;
 
-# the twelve shipped faces: family * 4 + (bold?1:0) + (italic?2:0)
-Sans, Serif, Mono: con iota;
+# the shipped faces: family * 4 + (bold?1:0) + (italic?2:0)
+#
+# Arial and Helvetica, and Times, are what pages are written for: the
+# browsers' defaults for sans-serif and serif, and what most pages name.
+# TeX Gyre Heros and Termes have their advances exactly (Liberation
+# Sans's and Serif's, which are Arial's and Times New Roman's); DejaVu
+# Sans is 14% wider and DejaVu Serif 25%, so lines broke where no
+# browser breaks them and navigation bars wrapped.  Their vertical
+# metrics are their own, taller (line-height: normal 1.43 em), so the
+# originals' are used (vmetrics).  What they lack (they have Latin and
+# Greek) is DejaVu's, of the same kind.  Wide families (Verdana's,
+# DejaVu's own) keep DejaVu Sans.
+Sans, Serif, Mono, Helv, Times: con iota;
+GYRE: con "/fonts/texgyre/";
 files := array[] of {
 	"DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf",
 	"DejaVuSerif.ttf", "DejaVuSerif-Bold.ttf", "DejaVuSerif-Italic.ttf", "DejaVuSerif-BoldItalic.ttf",
 	"DejaVuSansMono.ttf", "DejaVuSansMono-Bold.ttf", "DejaVuSansMono-Oblique.ttf", "DejaVuSansMono-BoldOblique.ttf",
+	GYRE+"texgyreheros-regular.otf", GYRE+"texgyreheros-bold.otf", GYRE+"texgyreheros-italic.otf", GYRE+"texgyreheros-bolditalic.otf",
+	GYRE+"texgyretermes-regular.otf", GYRE+"texgyretermes-bold.otf", GYRE+"texgyretermes-italic.otf", GYRE+"texgyretermes-bolditalic.otf",
 };
+
+# the ascent, descent and line gap, in em, of the faces a stand-in has
+# the advances of: Arial's (Liberation Sans's) and Times New Roman's
+# (Liberation Serif's), from their hhea; 0.0 for a face's own.
+# line-height: normal is the three, each rounded (Chromium's: Arial
+# at 16px is 14 + 3 + 1, at 13px 12 + 3 + 0)
+vmetrics(fam: int): (real, real, real)
+{
+	case fam {
+	Helv =>
+		return (1854.0/2048.0, 434.0/2048.0, 67.0/2048.0);
+	Times =>
+		return (1825.0/2048.0, 443.0/2048.0, 87.0/2048.0);
+	}
+	return (0.0, 0.0, 0.0);
+}
+
+# the family that stands in for what fam lacks
+behind(fam: int): int
+{
+	case fam {
+	Helv =>
+		return Sans;
+	Times =>
+		return Serif;
+	}
+	return -1;
+}
 loaded: array of ref OutlineFont->Face;
 fallbacks: array of ref Font;
 
@@ -76,7 +118,10 @@ loadface(i: int): ref OutlineFont->Face
 {
 	if(loaded[i] != nil)
 		return loaded[i];
-	fd := sys->open(DIR + "/" + files[i], Sys->OREAD);
+	path := DIR + "/" + files[i];
+	if(files[i][0] == '/')
+		path = files[i];
+	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	(ok, dir) := sys->fstat(fd);
@@ -99,10 +144,13 @@ loadface(i: int): ref OutlineFont->Face
 family(nm: string): int
 {
 	case nm {
-	"serif" or "ui-serif" or "times" or "times new roman" or "georgia" or "garamond" or
+	"serif" or "ui-serif" or "times" or "times new roman" or "liberation serif" or "tinos" or
+	"nimbus roman" or "nimbus roman no9 l" or "tex gyre termes" =>
+		return Times;
+	"georgia" or "garamond" or
 	"cambria" or "palatino" or "palatino linotype" or "book antiqua" or "baskerville" or
 	"linux libertine" or "libertinus serif" or "noto serif" or "dejavu serif" or
-	"liberation serif" or "source serif pro" or "merriweather" or "charter" or "iowan old style" =>
+	"source serif pro" or "merriweather" or "charter" or "iowan old style" =>
 		return Serif;
 	"monospace" or "ui-monospace" or "courier" or "courier new" or "consolas" or "menlo" or
 	"monaco" or "sf mono" or "sfmono-regular" or "dejavu sans mono" or "liberation mono" or
@@ -110,12 +158,17 @@ family(nm: string): int
 	"ubuntu mono" or "lucida console" or "andale mono" or "cascadia code" or "ibm plex mono" =>
 		return Mono;
 	"sans-serif" or "system-ui" or "ui-sans-serif" or "-apple-system" or "blinkmacsystemfont" or
-	"segoe ui" or "roboto" or "helvetica" or "helvetica neue" or "arial" or "verdana" or
-	"tahoma" or "trebuchet ms" or "open sans" or "inter" or "noto sans" or "ubuntu" or
-	"cantarell" or "fira sans" or "liberation sans" or "dejavu sans" or "lato" or "montserrat" or
-	"source sans pro" or "pt sans" or "lucida grande" or "geneva" or "ibm plex sans" or
+	"segoe ui" or "roboto" or "helvetica" or "helvetica neue" or "arial" or
+	"trebuchet ms" or "open sans" or "inter" or "noto sans" or "ubuntu" or
+	"cantarell" or "fira sans" or "liberation sans" or "arimo" or "nimbus sans" or "nimbus sans l" or
+	"tex gyre heros" or "lato" or "source sans pro" or "pt sans" or "ibm plex sans" =>
+		return Helv;	# (the system faces are within a few per cent of Arial)
+	"verdana" or "tahoma" or "dejavu sans" or "bitstream vera sans" or "montserrat" or
 	"cursive" or "fantasy" or "math" or "emoji" =>
 		return Sans;
+	# Lucida Grande and Geneva are the Mac's alone: elsewhere a browser
+	# takes the next family (arXiv's "Lucida Grande", helvetica, arial),
+	# and so does this, as it does for a name it does not know
 	}
 	return -1;
 }
@@ -196,12 +249,17 @@ xmetrics(f: ref Typeface): (real, real)
 
 shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 {
-	fam := Serif;
+	fam := Times;	# the browsers' default, Times New Roman
 	for(l := families; l != nil; l = tl l)
 		if((fi := family(hd l)) >= 0) {
 			fam = fi;
 			break;
 		}
+	return shipped1(fam, weight, italic, size);
+}
+
+shipped1(fam, weight, italic: int, size: real): ref Typeface
+{
 	i := fam*4;
 	if(weight >= 600)
 		i += 1;
@@ -216,11 +274,22 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 	o := loadface(i);
 	if(o == nil)
 		o = loadface(fam*4);
+	if(o == nil && (bf := behind(fam)) >= 0)
+		return shipped1(bf, weight, italic, size);	# a stand-in not there: what is behind it
 	f: ref Typeface;
 	if(o != nil) {
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f = ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), nil, nil, 0, 0);
+		(va, vd, vg) := vmetrics(fam);
+		gap := 0.0;
+		if(va > 0.0) {
+			asc = va * size;
+			desc = vd * size;
+			gap = real int (vg * size);	# (int rounds)
+		}
+		f = ref Typeface(o, size, asc, desc, normal(asc, desc) + gap, 0.0, fallback(size), nil, nil, 0, 0);
+		if((bf := behind(fam)) >= 0)
+			f.next = shipped1(bf, weight, italic, size);
 	} else {
 		# no outline file: the bitmap fallback is the face
 		fb := fallback(size);
@@ -268,8 +337,25 @@ SCRIPTDIR: con "/fonts/ttf/noto";
 thaifaces := array[2] of ref OutlineFont->Face;
 thaitried := array[2] of { * => 0 };
 
+# what draws emoji, and what else past U+FFFF it has: Noto Emoji's
+# outlines, read when the first is wanted (the bitmap fallback stops at
+# U+FFFD, so NPR's "🎧 Listen" was a speck)
+EMOJIFONT: con "/fonts/ttf/notoemoji/NotoEmoji-Regular.ttf";
+emojiface: ref OutlineFont->Face;
+emojitried := 0;
+
 scriptglyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 {
+	if(c > 16rFFFF) {
+		if(!emojitried) {
+			emojitried = 1;
+			if((d := readall(EMOJIFONT)) != nil)
+				(emojiface, nil) = ofont->open(d, "ttf");
+		}
+		if(emojiface != nil && (g := emojiface.lookup(c)) >= 0)
+			return (emojiface, g);
+		return (nil, -1);
+	}
 	if(c < 16r0E00 || c > 16r0E7F)
 		return (nil, -1);
 	b := 0;
@@ -621,15 +707,21 @@ Typeface.width(f: self ref Typeface, s: string): real
 
 Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image, rtl: int): real
 {
+	return f.drawat(dst, p, 0.0, s, src, rtl);
+}
+
+Typeface.drawat(f: self ref Typeface, dst: ref Image, p: Point, dx: real, s: string, src: ref Image, rtl: int): real
+{
 	a := shape(f, s);
 	(xs, adv, ys, on, w) := positions(f, a);
+	x0 := real p.x + dx;
 	for(i := 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
-		gx := real p.x + xs[i];
+		gx := x0 + xs[i];
 		if(rtl) {	# the first glyph at the right end
-			gx = real p.x + w - xs[i] - adv[i];
+			gx = x0 + w - xs[i] - adv[i];
 			if(on[i] >= 0)	# a mark keeps its offset from its base
-				gx = real p.x + w - xs[on[i]] - adv[on[i]] + xs[i] - xs[on[i]];
+				gx = x0 + w - xs[on[i]] - adv[on[i]] + xs[i] - xs[on[i]];
 		}
 		gy := p.y - int ys[i];
 		if(o == nil && f.fallback != nil) {
@@ -660,9 +752,51 @@ Web: adt {
 	family:	string;
 	weight:	int;	# for matching: the weight, or the range's own nearest
 	italic:	int;
-	part:	ref Part;
+	part:	ref Part;	# its outline nil until the face is used
 	desc:	ref Desc;
+	data:	array of byte;	# the file, until it is read (ready)
+	bad:	int;	# it could not be read
 };
+
+# A page's web faces are read when text is set in them, not when the
+# page names them: CNN's front page has 17 @font-face rules, an Arabic
+# face in two formats among them, and reading every WOFF2 (Brotli,
+# then the glyphs' transforms) took 2.3 s before a line was laid out.
+# Matching a family, its style and a declared weight needs no reading.
+ready(w: ref Web): int
+{
+	if(w.part.outline != nil)
+		return 1;
+	if(w.bad)
+		return 0;
+	data := w.data;
+	w.data = nil;
+	err: string;
+	if(len data >= 4 && string data[0:4] == "wOFF")
+		(data, err) = woff(data);
+	else if(len data >= 4 && string data[0:4] == "wOF2") {
+		if(woff2 == nil && (woff2 = load Woff2 Woff2->PATH) == nil)
+			err = sys->sprint("cannot load %s: %r", Woff2->PATH);
+		else
+			(data, err) = woff2->decode(data);
+	}
+	o: ref OutlineFont->Face;
+	if(err == nil)
+		(o, err) = ofont->open(data, "ttf");
+	if(o == nil) {
+		w.bad = 1;
+		sys->fprint(sys->fildes(2), "charon: font %s: %s\n", w.family, err);
+		return 0;
+	}
+	w.part.outline = o;
+	# font-weight auto: the face's own weight, its OS/2 weight class (a
+	# Bold file declared without a weight is bold, not made bolder:
+	# font-synthesis-weight-webfont-bold)
+	if(w.desc != nil && w.desc.wmax <= 0 && (wc := weightclass(data)) > 0)
+		w.weight = wc;
+	return 1;
+}
+
 
 webfaces: list of ref Web;
 
@@ -672,7 +806,8 @@ clearfaces(): list of ref OutlineFont->Face
 	# variable face, one for each size: bbc.com's), for the caller
 	made: list of ref OutlineFont->Face;
 	for(wl := webfaces; wl != nil; wl = tl wl)
-		made = (hd wl).part.outline :: made;
+		if((hd wl).part.outline != nil)
+			made = (hd wl).part.outline :: made;
 	for(pm := partsmade; pm != nil; pm = tl pm) {
 		(nil, nil, pa, nil) := hd pm;
 		for(i := 0; i < len pa; i++)
@@ -713,25 +848,48 @@ readall(f: string): array of byte
 	return b[0:n];
 }
 
+# what can be told of a font file without reading it: its kind, and
+# that its header and table directory are within it
+fontheader(d: array of byte): string
+{
+	n := len d;
+	if(n < 12)
+		return "too short";
+	u16 := be16(d, 4);
+	case string d[0:4] {
+	"wOFF" or "wOF2" =>
+		hdr := 44;
+		ent := 20;
+		if(string d[0:4] == "wOF2") {
+			hdr = 48;
+			ent = 2;	# (entries vary: at least a flag byte and a length)
+		}
+		if(n < hdr)
+			return "a WOFF header cut short";
+		if(be32(d, 8) != n)
+			return "a WOFF whose length is not its own";
+		nt := be16(d, 12);
+		if(nt == 0 || hdr + ent*nt > n)
+			return "a WOFF table directory not within it";
+	"OTTO" or "true" or "ttcf" =>
+		if(string d[0:4] != "ttcf" && (u16 == 0 || 12 + 16*u16 > n))
+			return "a table directory not within it";
+	* =>
+		if(!(d[0] == byte 0 && d[1] == byte 1 && d[2] == byte 0 && d[3] == byte 0))
+			return "not TrueType, OpenType, WOFF or WOFF2";
+		if(u16 == 0 || 12 + 16*u16 > n)
+			return "a table directory not within it";
+	}
+	return nil;
+}
+
 addface(family: string, weight, italic: int, ranges: array of int, data: array of byte): string
 {
-	if(len data >= 4 && string data[0:4] == "wOFF") {
-		err: string;
-		(data, err) = woff(data);
-		if(err != nil)
-			return err;
-	} else if(len data >= 4 && string data[0:4] == "wOF2") {
-		if(woff2 == nil && (woff2 = load Woff2 Woff2->PATH) == nil)
-			return sys->sprint("cannot load %s: %r", Woff2->PATH);
-		err: string;
-		(data, err) = woff2->decode(data);
-		if(err != nil)
-			return err;
-	}
-	(o, err) := ofont->open(data, "ttf");
-	if(o == nil)
+	# what is no font at all is refused now, as it was read (an EOT, an
+	# SVG font); the rest is read when it is used (ready)
+	if((err := fontheader(data)) != nil)
 		return "cannot read the font: " + err;
-	webfaces = ref Web(family, weight, italic, ref Part(o, ranges), nil) :: webfaces;
+	webfaces = ref Web(family, weight, italic, ref Part(nil, ranges), nil, data, 0) :: webfaces;
 	return nil;
 }
 
@@ -743,12 +901,7 @@ addfacedesc(family: string, d: ref Desc, ranges: array of int, data: array of by
 	if((err := addface(family, w, d.style > 0, ranges, data)) != nil)
 		return err;
 	wf := hd webfaces;
-	wf.desc = d;
-	# font-weight auto: the face's own weight, its OS/2 weight class (a
-	# Bold file declared without a weight is bold, not made bolder:
-	# font-synthesis-weight-webfont-bold)
-	if(d.wmax <= 0 && (wc := weightclass(sfntof(data))) > 0)
-		wf.weight = wc;
+	wf.desc = d;	# (an auto weight is the face's own, which ready reads)
 	return nil;
 }
 
@@ -795,11 +948,27 @@ partsmade: list of (string, string, array of ref Part, int);
 # the faces, and the weight they stand at (for synthetic bold)
 webparts(family: string, weight, style: int, slant, stretch, size: real, vars: list of (string, real)): (array of ref Part, int)
 {
+	# the faces that match, chosen before any is read; read, and chosen
+	# again without any that could not be
+	faces: list of ref Web;
+	best := 0;
+	for(;;) {
+		(faces, best) = choose(family, weight, style);
+		if(faces == nil)
+			return (nil, 0);
+		allread := 1;
+		for(l := faces; l != nil; l = tl l)
+			if(!ready(hd l))
+				allread = 0;
+		if(allread)
+			break;
+	}
 	# the optical size follows the font size (font-optical-sizing:
-	# auto, Fonts 4 §7.1), for a family with an opsz axis
+	# auto, Fonts 4 §7.1), for faces with an opsz axis
 	opsz := 0.0;
-	if(opszfamily(family))
-		opsz = size;
+	for(l := faces; l != nil; l = tl l)
+		if(hasaxis(ofont->axes((hd l).part.outline), "opsz"))
+			opsz = size;
 	vk := sys->sprint("%d %d %g %g %g ", weight, style, slant, stretch, opsz);
 	for(vl := vars; vl != nil; vl = tl vl)
 		vk += sys->sprint("%s=%g,", (hd vl).t0, (hd vl).t1);
@@ -808,17 +977,54 @@ webparts(family: string, weight, style: int, slant, stretch, size: real, vars: l
 		if(pf == family && pv == vk)
 			return (pa, pw);
 	}
-	(a, w) := webparts1(family, weight, style, slant, stretch, opsz, vars);
+	(a, w) := webparts1(faces, best, weight, style, slant, stretch, opsz, vars);
 	if(a != nil)
 		partsmade = (family, vk, a, w) :: partsmade;
 	return (a, w);
+}
+
+# The family's faces nearest the style and weight wanted (Fonts 4
+# §5.2), and the weight they are at; none read but a face whose weight
+# is its own (auto), which only reading it gives
+choose(family: string, weight, style: int): (list of ref Web, int)
+{
+	italic := style != 0;
+	best := -1;
+	bestit := -1;
+	for(l := webfaces; l != nil; l = tl l) {
+		w := hd l;
+		if(w.family != family || w.bad)
+			continue;
+		it := w.italic == italic;
+		fw := faceweight(w, weight);
+		if(w.bad)
+			continue;
+		if(bestit < 0 || it && !bestit || it == bestit && closer(weight, fw, best)) {
+			best = fw;
+			bestit = it;
+		}
+	}
+	if(best < 0)
+		return (nil, 0);
+	r: list of ref Web;
+	for(l = webfaces; l != nil; l = tl l) {
+		w := hd l;
+		if(w.family == family && !w.bad && faceweight(w, weight) == best && (w.italic == italic) == bestit)
+			r = w :: r;
+	}
+	# in the order of webfaces, as webparts1 has always taken them (a
+	# part's unicode-range is tried in that order)
+	o: list of ref Web;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return (o, best);
 }
 
 # the weight a face is matched by: a range's nearest to the one wanted
 faceweight(w: ref Web, weight: int): int
 {
 	d := w.desc;
-	if(d != nil && d.wmax <= 0) {
+	if(d != nil && d.wmax <= 0 && ready(w)) {
 		# auto: a variable face's own wght range
 		for(al := ofont->axes(w.part.outline); al != nil; al = tl al) {
 			(tag, mn, nil, mx) := hd al;
@@ -840,46 +1046,21 @@ faceweight(w: ref Web, weight: int): int
 	return weight;
 }
 
-# does a face of the family have an optical size axis?
-opszfamily(family: string): int
-{
-	for(l := webfaces; l != nil; l = tl l)
-		if((hd l).family == family && hasaxis(ofont->axes((hd l).part.outline), "opsz"))
-			return 1;
-	return 0;
-}
 
-webparts1(family: string, weight, style: int, slant, stretch, opsz: real, vars: list of (string, real)): (array of ref Part, int)
+# the chosen faces, read, as parts at the weight, style and axes wanted
+webparts1(faces: list of ref Web, best, weight, style: int, slant, stretch, opsz: real, vars: list of (string, real)): (array of ref Part, int)
 {
-	italic := style != 0;
-	best := -1;
-	bestit := -1;
-	for(l := webfaces; l != nil; l = tl l) {
-		w := hd l;
-		if(w.family != family)
-			continue;
-		it := w.italic == italic;
-		fw := faceweight(w, weight);
-		if(bestit < 0 || it && !bestit || it == bestit && closer(weight, fw, best)) {
-			best = fw;
-			bestit = it;
-		}
-	}
-	if(best < 0)
-		return (nil, 0);
 	r: list of ref Part;
 	sw := best;	# the weight it stands at, for synthetic bold
-	for(l = webfaces; l != nil; l = tl l) {
+	for(l := faces; l != nil; l = tl l) {
 		w := hd l;
-		if(w.family == family && faceweight(w, weight) == best && (w.italic == italic) == bestit) {
-			r = varied(w, weight, style, slant, stretch, opsz, vars) :: r;
-			# a variable face whose weight is its own (auto) is not
-			# made bolder past its range (synthetic-bold-out-of-
-			# capabilities-range); one its rule holds to a weight is
-			# (font-weight-3)
-			if((w.desc == nil || w.desc.wmax <= 0) && hasaxis(ofont->axes(w.part.outline), "wght"))
-				sw = weight;
-		}
+		r = varied(w, weight, style, slant, stretch, opsz, vars) :: r;
+		# a variable face whose weight is its own (auto) is not
+		# made bolder past its range (synthetic-bold-out-of-
+		# capabilities-range); one its rule holds to a weight is
+		# (font-weight-3)
+		if((w.desc == nil || w.desc.wmax <= 0) && hasaxis(ofont->axes(w.part.outline), "wght"))
+			sw = weight;
 	}
 	a := array[len r] of ref Part;
 	for(i := 0; r != nil; r = tl r)

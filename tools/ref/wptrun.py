@@ -304,9 +304,17 @@ def main():
             ti = load(t)
             if ti is None:
                 status, detail = 'ERROR', results.get(pages.get(t)) or 'no image'
+            # one match reference matching is enough, and every
+            # mismatch reference must differ (WPT's "Multiple
+            # References"): shy-styling-001 has a hyphen-minus and a
+            # hyphen as alternatives
+            matched = None	# None: no match reference; else whether one matched
+            miss = ''
             for kind, r in refs:
                 if status != 'PASS':
                     break
+                if kind == 'match' and matched:
+                    continue
                 if not os.path.exists(r):
                     status, detail = 'ERROR', 'missing reference ' + os.path.relpath(r, root)
                     break
@@ -316,9 +324,17 @@ def main():
                     break
                 ok, mx, n = compare(ti, ri, fuzzy)
                 if kind == 'mismatch':
-                    ok = n != 0
-                if not ok:
-                    status, detail = 'FAIL', '%s maxdiff=%d pixels=%d' % (kind, mx, n)
+                    if n == 0:
+                        status, detail = 'FAIL', 'mismatch maxdiff=%d pixels=%d' % (mx, n)
+                    continue
+                if ok:
+                    matched = True
+                else:
+                    if matched is None:
+                        miss = 'match maxdiff=%d pixels=%d' % (mx, n)	# the first one's, as before
+                    matched = False
+            if status == 'PASS' and matched is False:
+                status, detail = 'FAIL', miss
             if status == 'PASS' and ti is not None and (ti == ti[0, 0]).all():
                 detail = 'blank'	# a pass that shows nothing proves little
             if js:

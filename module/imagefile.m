@@ -50,3 +50,14 @@ Imageremap: module
 	init:	fn(d: ref Draw->Display);
 	remap:	fn(i: ref RImagefile->Rawimage, d: ref Draw->Display, errdiff: int): (ref Draw->Image, string);
 };
+
+Jpegscaled: module
+{
+	PATH:	con "/dis/lib/readjpg.dis";	# readjpg(2) implements this too
+	# The image decoded at the smallest of 1, 1/2, 1/4 and 1/8 of its
+	# size that is at least minw wide and minh high (libjpeg's
+	# scale_num/scale_denom, by reduced inverse DCTs): (image, its own
+	# width and height, nil), or nil and the reason.  0 by 0 is the
+	# whole size.
+	scaled:	fn(d: array of byte, minw, minh: int): (ref RImagefile->Rawimage, int, int, string);
+};

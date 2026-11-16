@@ -1,4 +1,4 @@
-implement RImagefile, Jpegplanes;
+implement RImagefile, Jpegplanes, Jpegscaled;
 
 #
 # JPEG (ITU T.81) decoder: baseline and extended sequential (SOF0,
@@ -14,6 +14,14 @@ implement RImagefile, Jpegplanes;
 # are refused.  EXIF orientation is not applied: that is the caller's
 # (image-orientation).
 #
+# Jpegscaled decodes at 1/2, 1/4 or 1/8 of the size, as libjpeg's
+# scale_num/scale_denom does: each block's lowest 4x4, 2x2 or 1x1
+# coefficients through an inverse DCT of that size, which is the
+# 8-point one sampled at the centres of the pixels' 2x2, 4x4 or 8x8
+# squares.  The entropy decoding is the same; the IDCT, upsampling and
+# colour conversion are done for a quarter, a sixteenth or a
+# sixty-fourth of the pixels.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -28,10 +36,16 @@ include "bufio.m";
 
 include "imagefile.m";
 include "jpeg.m";
+include "math.m";
 
 Huff: adt
 {
 	look:	array of int;	# 9-bit lookahead: length<<8 | value, 0 when the code is longer
+	# an AC table's codes whose run, size and the coefficient's bits all
+	# fit in the 9-bit lookahead (libjpeg-turbo's fast AC): bits taken<<8
+	# | run, 0 when not; the coefficient in facv
+	fac:	array of int;
+	facv:	array of int;
 	maxcode:	array of int;	# by length 1..16: the largest code, -1 when none
 	mincode:	array of int;
 	valptr:	array of int;
@@ -43,7 +57,8 @@ Comp: adt
 	id, h, v, tq:	int;
 	bw, bh:	int;	# blocks across and down, padded to whole MCUs
 	dw, dh:	int;	# the component's own width and height in samples
-	plane:	array of byte;	# bw*8 by bh*8 samples
+	sw, sh:	int;	# the same at the scale decoded
+	plane:	array of byte;	# bw*bs by bh*bs samples
 	coef:	array of int;	# progressive: 64 coefficients a block, natural order
 	pred:	int;	# DC predictor
 	td, ta:	int;	# Huffman tables of this scan
@@ -56,7 +71,10 @@ Dec: adt
 	buf, cnt:	int;	# entropy-coded bits, right aligned
 	atmarker:	int;	# a marker (or the end) stopped the bits: zeros follow
 
-	x, y:	int;
+	x, y:	int;	# the image's size
+	sx, sy:	int;	# the size decoded: x and y over the scale, rounded up
+	bs:	int;	# a block's samples across as decoded: 8, 4, 2 or 1
+	minw, minh:	int;	# what the scale must leave: the smallest size wanted
 	comps:	array of ref Comp;
 	hmax, vmax:	int;
 	mcux, mcuy:	int;
@@ -88,6 +106,8 @@ init(iomod: Bufio)
 {
 	if(sys == nil)
 		sys = load Sys Sys->PATH;
+	if(kn == nil)
+		mkkn();
 	draw = load Draw Draw->PATH;
 	bufio = iomod;
 	idctlimit = array[1024] of byte;
@@ -197,13 +217,13 @@ planes(d: array of byte): (int, int, array of byte, array of byte, array of byte
 	c := dc.comps;
 	if(len c != 3 || c[0].h != 2 || c[0].v != 2 || c[1].h != 1 || c[1].v != 1 || c[2].h != 1 || c[2].v != 1)
 		return (0, 0, nil, nil, nil, "ReadJPG: not 4:2:0 YCbCr");
-	w := dc.x;
-	h := dc.y;
+	w := dc.sx;
+	h := dc.sy;
 	p := array[3] of array of byte;
 	for(i := 0; i < 3; i++){
-		pw := c[i].dw;
-		ph := c[i].dh;
-		stride := c[i].bw * 8;
+		pw := c[i].sw;
+		ph := c[i].sh;
+		stride := c[i].bw * dc.bs;
 		p[i] = array[pw*ph] of byte;
 		for(r := 0; r < ph; r++)
 			p[i][r*pw:] = c[i].plane[r*stride:r*stride+pw];
@@ -214,9 +234,14 @@ planes(d: array of byte): (int, int, array of byte, array of byte, array of byte
 # the segments and scans: the planes decoded, before output
 parse(d: array of byte): (ref Dec, string)
 {
+	return parse1(d, 0, 0);
+}
+
+parse1(d: array of byte, minw, minh: int): (ref Dec, string)
+{
 	if(len d < 4 || d[0] != byte 16rFF || d[1] != byte 16rD8)
 		return (nil, "ReadJPG: not a JPEG file");
-	dc := ref Dec(d, 2, 0, 0, 0, 0, 0, nil, 0, 0, 0, 0, 0,
+	dc := ref Dec(d, 2, 0, 0, 0, 0, 0, 0, 0, 8, minw, minh, nil, 0, 0, 0, 0, 0,
 		array[4] of array of int, array[4] of ref Huff, array[4] of ref Huff,
 		0, 0, 0, -1, 0);
 	err: string;
@@ -325,7 +350,7 @@ frame(dc: ref Dec, b: array of byte, prog: int): string
 	dc.vmax = 1;
 	for(i := 0; i < nf; i++) {
 		hv := int b[6+3*i+1];
-		c := ref Comp(int b[6+3*i], hv >> 4, hv & 15, int b[6+3*i+2] & 3, 0, 0, 0, 0, nil, nil, 0, 0, 0);
+		c := ref Comp(int b[6+3*i], hv >> 4, hv & 15, int b[6+3*i+2] & 3, 0, 0, 0, 0, 0, 0, nil, nil, 0, 0, 0);
 		if(c.h < 1 || c.h > 4 || c.v < 1 || c.v > 4)
 			return "ReadJPG: bad sampling factors";
 		if(c.h > dc.hmax)
@@ -339,6 +364,14 @@ frame(dc: ref Dec, b: array of byte, prog: int): string
 		c := dc.comps[0];
 		c.h = c.v = dc.hmax = dc.vmax = 1;
 	}
+	# the smallest scale that leaves minw by minh
+	s := 1;
+	if(dc.minw > 0 || dc.minh > 0)
+		while(s < 8 && (dc.x + 2*s - 1) / (2*s) >= dc.minw && (dc.y + 2*s - 1) / (2*s) >= dc.minh)
+			s *= 2;
+	dc.bs = 8 / s;
+	dc.sx = (dc.x + s - 1) / s;
+	dc.sy = (dc.y + s - 1) / s;
 	dc.mcux = (dc.x + 8*dc.hmax - 1) / (8*dc.hmax);
 	dc.mcuy = (dc.y + 8*dc.vmax - 1) / (8*dc.vmax);
 	for(i = 0; i < nf; i++) {
@@ -349,7 +382,10 @@ frame(dc: ref Dec, b: array of byte, prog: int): string
 		c.bh = dc.mcuy * c.v;
 		c.dw = (dc.x * c.h + dc.hmax - 1) / dc.hmax;
 		c.dh = (dc.y * c.v + dc.vmax - 1) / dc.vmax;
-		c.plane = array[c.bw*8 * c.bh*8] of byte;
+		# the samples decoded, at the scale (libjpeg's downsampled_width)
+		c.sw = (dc.sx * c.h + dc.hmax - 1) / dc.hmax;
+		c.sh = (dc.sy * c.v + dc.vmax - 1) / dc.vmax;
+		c.plane = array[c.bw*dc.bs * c.bh*dc.bs] of byte;
 		if(prog)
 			c.coef = array[c.bw * c.bh * 64] of {* => 0};
 	}
@@ -396,7 +432,7 @@ huffman(dc: ref Dec, b: array of byte): string
 			n += int counts[i];
 		if(n > 256 || l + 17 + n > len b)
 			return "ReadJPG: bad Huffman table";
-		h := ref Huff(array[512] of {* => 0}, array[18] of {* => -1}, array[17] of {* => 0}, array[17] of {* => 0}, array[n] of int);
+		h := ref Huff(array[512] of {* => 0}, nil, nil, array[18] of {* => -1}, array[17] of {* => 0}, array[17] of {* => 0}, array[n] of int);
 		for(i = 0; i < n; i++)
 			h.vals[i] = int b[l+17+i];
 		# canonical codes (C.2, F.15)
@@ -421,6 +457,8 @@ huffman(dc: ref Dec, b: array of byte): string
 			code <<= 1;
 		}
 		h.maxcode[17] = 16r7FFFFFFF;	# a sentinel: decode stops at 16 bits
+		if(tc == 1)
+			fastac(h);
 		if(tc == 0)
 			dc.dc[th] = h;
 		else
@@ -428,6 +466,29 @@ huffman(dc: ref Dec, b: array of byte): string
 		l += 17 + n;
 	}
 	return nil;
+}
+
+# the fast AC table: for each 9 bits, a code of length l whose symbol
+# is run r and size s, with l + s <= 9, decodes to the coefficient
+# whole from those bits
+fastac(h: ref Huff)
+{
+	h.fac = array[512] of {* => 0};
+	h.facv = array[512] of {* => 0};
+	for(c := 0; c < 512; c++) {
+		lk := h.look[c];
+		if(lk == 0)
+			continue;
+		l := lk >> 8;
+		rs := lk & 255;
+		r := rs >> 4;
+		sz := rs & 15;
+		if(sz == 0 || l + sz > 9)
+			continue;	# EOB and ZRL, or bits past the lookahead
+		v := (c >> (9 - l - sz)) & ((1 << sz) - 1);
+		h.fac[c] = ((l + sz) << 8) | r;
+		h.facv[c] = extend(v, sz);
+	}
 }
 
 # ---- entropy-coded bits ----
@@ -637,15 +698,50 @@ block(dc: ref Dec, c: ref Comp, bx, by, kind, ss, se, al: int, zz: array of int)
 		c.pred += extend(getbits(dc, t), t);
 		zz[0] = c.pred;
 		ac := dc.ac[c.ta];
+		# the AC coefficients, the bits kept in locals between fills
+		# and most codes taken by the fast table: entropy decoding is
+		# most of a photograph's time (an 800 by 766 one at quality
+		# 90: 55 of its 59 ms, whatever the scale)
+		(fac, facv, look) := (ac.fac, ac.facv, ac.look);
+		(buf, cnt) := (dc.buf, dc.cnt);
 		for(k = 1; k < 64; ) {
-			rs := huff(dc, ac);
+			if(cnt < 16) {
+				(dc.buf, dc.cnt) = (buf, cnt);
+				fill(dc);
+				(buf, cnt) = (dc.buf, dc.cnt);
+			}
+			c9 := (buf >> (cnt - 9)) & 511;
+			if((f := fac[c9]) != 0) {
+				cnt -= f >> 8;
+				k += f & 255;
+				if(k > 63)
+					break;
+				zz[zig[k]] = facv[c9];
+				k++;
+				continue;
+			}
+			rs: int;
+			if((lk := look[c9]) != 0) {
+				cnt -= lk >> 8;
+				rs = lk & 255;
+			} else {
+				(dc.buf, dc.cnt) = (buf, cnt);
+				rs = huff(dc, ac);
+				(buf, cnt) = (dc.buf, dc.cnt);
+			}
 			r := rs >> 4;
-			s := rs & 15;
-			if(s != 0) {
+			sz := rs & 15;
+			if(sz != 0) {
 				k += r;
 				if(k > 63)
 					break;
-				zz[zig[k]] = extend(getbits(dc, s), s);
+				if(cnt < sz) {
+					(dc.buf, dc.cnt) = (buf, cnt);
+					fill(dc);
+					(buf, cnt) = (dc.buf, dc.cnt);
+				}
+				cnt -= sz;
+				zz[zig[k]] = extend((buf >> cnt) & ((1 << sz) - 1), sz);
 				k++;
 			} else {
 				if(r != 15)
@@ -653,8 +749,13 @@ block(dc: ref Dec, c: ref Comp, bx, by, kind, ss, se, al: int, zz: array of int)
 				k += 16;
 			}
 		}
-		stride := c.bw * 8;
-		idct(zz, dc.qt[c.tq], c.plane, by*8*stride + bx*8, stride);
+		(dc.buf, dc.cnt) = (buf, cnt);
+		bs := dc.bs;
+		stride := c.bw * bs;
+		if(bs == 8)
+			idct(zz, dc.qt[c.tq], c.plane, by*8*stride + bx*8, stride);
+		else
+			idctn(zz, dc.qt[c.tq], c.plane, by*bs*stride + bx*bs, stride, bs);
 	1 =>
 		t := huff(dc, dc.dc[c.td]);
 		c.pred += extend(getbits(dc, t), t);
@@ -758,14 +859,18 @@ finishcoef(dc: ref Dec, c: ref Comp)
 	q := dc.qt[c.tq];
 	if(q == nil)
 		return;
-	stride := c.bw * 8;
+	bs := dc.bs;
+	stride := c.bw * bs;
 	zz := array[64] of int;
 	co := c.coef;
 	for(by := 0; by < c.bh; by++)
 		for(bx := 0; bx < c.bw; bx++) {
 			o := (by*c.bw + bx)*64;
 			zz[0:] = co[o:o+64];
-			idct(zz, q, c.plane, by*8*stride + bx*8, stride);
+			if(bs == 8)
+				idct(zz, q, c.plane, by*8*stride + bx*8, stride);
+			else
+				idctn(zz, q, c.plane, by*bs*stride + bx*bs, stride, bs);
 		}
 	c.coef = nil;
 }
@@ -898,16 +1003,98 @@ idct(in: array of int, q: array of int, out: array of byte, o, stride: int)
 	}
 }
 
+# ---- the reduced inverse DCTs: n by n samples (n 4, 2 or 1) from a
+# block's lowest n by n coefficients ----
+#
+# f(y,x) = 1/4 sum C(u)C(v) F(v,u) cos((2y+1)v pi/2n) cos((2x+1)u pi/2n),
+# C(0) = 1/sqrt 2: the 8-point IDCT at the centres of the n by n
+# squares the block's pixels make.  kn[n][y*n+v] is C(v) cos(...)
+# scaled by 2^13.  Pass 1 keeps two bits more (as islow's PASS1_BITS).
+
+kn: array of array of int;
+
+mkkn()
+{
+	math := load Math Math->PATH;
+	kn = array[5] of array of int;
+	for(n := 1; n <= 4; n *= 2) {
+		k := array[n*n] of int;
+		for(y := 0; y < n; y++)
+			for(v := 0; v < n; v++) {
+				c := math->cos(real((2*y+1)*v) * Math->Pi / real(2*n));
+				if(v == 0)
+					c = 1.0 / math->sqrt(2.0);
+				k[y*n+v] = int(c * 8192.0 + 0.5*real(sgn(c)));
+			}
+		kn[n] = k;
+	}
+}
+
+sgn(r: real): int
+{
+	if(r < 0.0)
+		return -1;
+	return 1;
+}
+
+wsn := array[16] of int;
+
+idctn(in: array of int, q: array of int, out: array of byte, o, stride, n: int)
+{
+	lim := idctlimit;
+	if(n == 1) {
+		out[o] = lim[((in[0] * q[0] + 4) >> 3) & 1023];
+		return;
+	}
+	k := kn[n];
+	# pass 1: columns u, the 8-point block's rows v < n
+	for(u := 0; u < n; u++)
+		for(y := 0; y < n; y++) {
+			t := 0;
+			for(v := 0; v < n; v++)
+				t += k[y*n+v] * in[v*8+u] * q[v*8+u];
+			wsn[y*n+u] = (t + (1 << 10)) >> 11;
+		}
+	# pass 2: rows
+	for(y = 0; y < n; y++) {
+		p := o + y*stride;
+		for(x := 0; x < n; x++) {
+			t := 0;
+			for(u = 0; u < n; u++)
+				t += k[x*n+u] * wsn[y*n+u];
+			out[p+x] = lim[((t + (1 << 16)) >> 17) & 1023];
+		}
+	}
+}
+
+# Jpegscaled: the image at the smallest of 1/1, 1/2, 1/4, 1/8 its size
+# that is still minw by minh, and its own size
+scaled(d: array of byte, minw, minh: int): (ref Rawimage, int, int, string)
+{
+	if(idctlimit == nil)
+		init(nil);
+	{
+		(dc, err) := parse1(d, minw, minh);
+		if(dc == nil)
+			return (nil, 0, 0, err);
+		(img, oerr) := output(dc);
+		return (img, dc.x, dc.y, oerr);
+	} exception e {
+	"*" =>
+		return (nil, 0, 0, "ReadJPG: " + e);
+	}
+}
+
 # ---- upsampling and colour, as libjpeg-turbo's jdsample.c and jdcolor.c ----
 
 # component c's samples for output row y, at full width, into row
-uprow(c: ref Comp, hmax, vmax, y: int, row, colsum: array of int)
+uprow(c: ref Comp, hmax, vmax, y, bs: int, row, colsum: array of int)
 {
 	hr := hmax / c.h;
 	vr := vmax / c.v;
-	stride := c.bw * 8;
+	stride := c.bw * bs;
 	pl := c.plane;
-	dw := c.dw;
+	dw := c.sw;
 	if(hr == 1 && vr == 1) {
 		p := y * stride;
 		for(x := 0; x < dw; x++)
@@ -927,7 +1114,7 @@ uprow(c: ref Comp, hmax, vmax, y: int, row, colsum: array of int)
 			nr = ir + 1;
 			bias = 2;
 		}
-		nr = cliprow(nr, c.dh);
+		nr = cliprow(nr, c.sh);
 		p0 := ir * stride;
 		p1 := nr * stride;
 		for(x := 0; x < dw; x++)
@@ -939,7 +1126,7 @@ uprow(c: ref Comp, hmax, vmax, y: int, row, colsum: array of int)
 		nr := ir - 1;
 		if(y & 1)
 			nr = ir + 1;
-		nr = cliprow(nr, c.dh);
+		nr = cliprow(nr, c.sh);
 		p0 := ir * stride;
 		p1 := nr * stride;
 		for(x := 0; x < dw; x++)
@@ -956,7 +1143,7 @@ uprow(c: ref Comp, hmax, vmax, y: int, row, colsum: array of int)
 		return;
 	}
 	# replication (int_upsample, and h2v1/h2v2 under three samples wide)
-	p := cliprow(y / vr, c.dh) * stride;
+	p := cliprow(y / vr, c.sh) * stride;
 	j := 0;
 	for(x := 0; x < dw; x++) {
 		v := int pl[p+x];
@@ -992,8 +1179,8 @@ cliprow(r, h: int): int
 
 output(dc: ref Dec): (ref Rawimage, string)
 {
-	X := dc.x;
-	Y := dc.y;
+	X := dc.sx;
+	Y := dc.sy;
 	nf := len dc.comps;
 	nout := 3;
 	cd := RImagefile->CRGB;
@@ -1006,7 +1193,7 @@ output(dc: ref Dec): (ref Rawimage, string)
 		img.chans[i] = array[X*Y] of byte;
 	if(nf == 1) {
 		c := dc.comps[0];
-		stride := c.bw * 8;
+		stride := c.bw * dc.bs;
 		out := img.chans[0];
 		for(y := 0; y < Y; y++)
 			out[y*X:] = c.plane[y*stride:y*stride+X];
@@ -1032,7 +1219,7 @@ output(dc: ref Dec): (ref Rawimage, string)
 	cl := clamp;
 	for(y := 0; y < Y; y++) {
 		for(i = 0; i < nf; i++)
-			uprow(dc.comps[i], dc.hmax, dc.vmax, y, rows[i], colsum);
+			uprow(dc.comps[i], dc.hmax, dc.vmax, y, dc.bs, rows[i], colsum);
 		o := y * X;
 		r0 := rows[0];
 		r1 := rows[1];

@@ -1,0 +1,8 @@
+<!doctype html><title>calc(): infinity, and a division by zero, as large as a length can be</title>
+<style>
+body{margin:0}
+.r{width:100px;height:50px;background:red}
+.g{height:50px;background:green;max-width:100px}
+</style>
+<div class=r><div class=g style="width:calc(infinity * 1px)"></div></div>
+<div class=r><div class=g style="width:calc(100px / 0)"></div></div>

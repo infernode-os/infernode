@@ -1,0 +1,5 @@
+<!doctype html><title>a transform whose other functions change nothing is a translation, filtered or not</title>
+<style>body{margin:0} .r{position:relative;width:100px;height:100px;background:red}
+.g{position:absolute;left:300px;top:0;width:100px;height:50px;background:green;transform:translate(-300px,0) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)}
+.f{top:50px;filter:brightness(1)}</style>
+<div class=r><div class=g></div><div class="g f"></div></div>

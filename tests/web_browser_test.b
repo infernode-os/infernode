@@ -10,7 +10,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display: import draw;
+	Display, Rect, Point, Image: import draw;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -565,6 +565,149 @@ testLeaveBusy(t: ref T)
 	}
 }
 
+# The image of a page whose script holds the session: the file waits
+# for it rather than give the blank image it was painted into (a
+# window keeps what it showed; a reader of the file had a white page,
+# usa.gov's while its scripts ran on after it loaded)
+testImageBusy(t: ref T)
+{
+	if(disp == nil)
+		t.skip("no display: nothing is rendered");
+	scripts(t, "on");
+	navto(t, "open " + DIR + "busygreen.html", DIR + "busygreen.html");
+	sys->sleep(300);	# its script is running, the lock held
+	fd := sys->open(MNT + "/image", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open image: %r"));
+	img := disp.readimage(fd);
+	if(img == nil)
+		t.fatal(sys->sprint("read image: %r"));
+	px := disp.newimage(Rect((0, 0), (1, 1)), Draw->RGB24, 0, Draw->White);
+	px.draw(px.r, img, nil, Point(img.r.dx()/2, img.r.dy()/2));
+	a := array[3] of byte;
+	px.readpixels(px.r, a);
+	t.assert(int a[0] == 0 && int a[1] == 255 && int a[2] == 0,
+		sys->sprint("the page's green, not a blank image: %d %d %d (b g r)", int a[0], int a[1], int a[2]));
+	scripts(t, "off");
+}
+
+# An <img loading=lazy> far below the view is not sent for until the
+# view comes near it: scrolled there through ctl (no window, so nothing
+# calls viewing), it is.  Both images are missing, so each sent for is
+# an error
+testLazy(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "lazy.html"), "done " + DIR + "lazy.html", "load");
+	errs := "";
+	for(i := 0; i < 30 && !contains(errs, "lazynear.png"); i++) {
+		sys->sleep(100);
+		errs = rd("errors");
+	}
+	t.assert(contains(errs, "lazynear.png"), "the one in view sent for: " + errs);
+	t.assert(!contains(errs, "lazyfar.png"), "the one 4000px down not: " + errs);
+	wr("ctl", "scroll 3600");
+	for(i = 0; i < 50 && !contains(errs, "lazyfar.png"); i++) {
+		sys->sleep(100);
+		errs = rd("errors");
+	}
+	t.assert(contains(errs, "lazyfar.png"), "scrolled near it: sent for: " + errs);
+	wr("ctl", "scroll 0");
+}
+
+# Selecting text through ctl's select and reading it back: a drag
+# across two paragraphs is their text a line each, a word the word
+# under the point, a paragraph wrapped in a narrow box its words with a
+# blank where it wrapped, everything the whole page
+testSelect(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "select.html"), "done " + DIR + "select.html", "load");
+	t.assertnil(wr("ctl", "select all"), "select all");
+	t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.\nalpha beta gamma delta", "all");
+	t.assertnil(wr("ctl", "select 0 10 2000 50"), "select a drag");
+	t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.", "two paragraphs");
+	t.assertnil(wr("ctl", "select 2000 50 0 10"), "select a drag backwards");
+	t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.", "the same, dragged up");
+	t.assertnil(wr("ctl", "select word 3 50"), "select a word");
+	t.assertseq(rd("selection"), "Second", "the word");
+	t.assertnil(wr("ctl", "select 0 90 2000 400"), "select past the end");
+	t.assertseq(rd("selection"), "alpha beta gamma delta", "wrapped lines joined by blanks");
+	t.assertnil(wr("ctl", "select none"), "select none");
+	t.assertseq(rd("selection"), "", "none");
+	t.assertsne(wr("ctl", "select 1 2"), nil, "a bad select refused");
+
+	# where it is: the last of the wrapped lines, found and selected,
+	# drawn inside the page (a fragment's y is its box's, and was taken
+	# as its line's: Find's mark fell lines below the match)
+	(ok, r) := sess.findat("delta", -1);
+	t.assert(ok, "delta found");
+	h := sess.pageheight();
+	t.assert(r.min.y >= 80 && r.max.y <= h, sys->sprint("delta's mark %d..%d in the paragraph, the page %d high", r.min.y, r.max.y, h));
+	(w, rects) := sess.selection(r.min.add((2, 2)), r.min.add((2, 2)), 1, 0);
+	t.assertseq(w, "delta", "the word at delta's mark");
+	t.asserteq(len rects, 1, "one rect");
+	if(rects != nil)
+		t.assert((hd rects).eq(r), sys->sprint("its rect %d,%d %d,%d delta's mark %d,%d %d,%d",
+			(hd rects).min.x, (hd rects).min.y, (hd rects).max.x, (hd rects).max.y, r.min.x, r.min.y, r.max.x, r.max.y));
+}
+
+# ctl's zoom: the page laid out again at twice the pixels to the CSS
+# px, its text drawn twice the size and the same text; a bad ratio
+# refused; back at 1, as it was
+testZoom(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "select.html"), "done " + DIR + "select.html", "load");
+	(ok, r) := sess.findat("delta", -1);
+	t.assert(ok, "delta found");
+	h := sess.pageheight();
+	t.assertnil(wr("ctl", "zoom 2"), "zoom 2");
+	{
+		(ok2, r2) := sess.findat("delta", -1);
+		t.assert(ok2, "delta found at 2");
+		t.assert(r2.dx() >= 2*r.dx() - 2 && r2.dx() <= 2*r.dx() + 2, sys->sprint("delta %d wide at 2, %d at 1", r2.dx(), r.dx()));
+		h2 := sess.pageheight();
+		t.assert(h2 >= 2*h - 4 && h2 <= 2*h + 4, sys->sprint("the page %d high at 2, %d at 1", h2, h));
+		t.assertnil(wr("ctl", "select all"), "select all");
+		t.assertseq(rd("selection"), "First paragraph here.\nSecond bold words.\nalpha beta gamma delta", "the same text");
+		t.assertsne(wr("ctl", "zoom x"), nil, "a bad ratio refused");
+	} exception e {
+	"*" =>
+		wr("ctl", "zoom 1");
+		raise e;
+	}
+	# below 1 too, as a browser zooms out
+	t.assertnil(wr("ctl", "zoom 0.5"), "zoom 0.5");
+	(nil, rh) := sess.findat("delta", -1);
+	t.assert(rh.dx() >= r.dx()/2 - 2 && rh.dx() <= r.dx()/2 + 2, sys->sprint("delta %d wide at 0.5, %d at 1", rh.dx(), r.dx()));
+	t.assertnil(wr("ctl", "zoom 1"), "zoom 1");
+	(nil, r3) := sess.findat("delta", -1);
+	t.assert(r3.eq(r), "back as it was");
+	t.asserteq(sess.pageheight(), h, "the page's height as it was");
+}
+
+# ctl's history n and the history file: three pages opened, two back
+# in one step to the first, the two after it forward of it in the
+# order they were opened; two forward again; too far refused
+testHistoryJump(t: ref T)
+{
+	a := DIR + "a.html";
+	b := DIR + "b.html";
+	c := DIR + "select.html";
+	for(l := a :: b :: c :: nil; l != nil; l = tl l)
+		t.assertseq(nav(t, "open " + hd l), "done " + hd l, "open " + hd l);
+	h := rd("history");
+	t.assert(contains(h, "-2 " + a + "\n-1 " + b + "\n0 " + c + "\n"), "three opened: " + h);
+	t.assertseq(nav(t, "history -2"), "done " + a, "two back");
+	t.assertseq(chomp(rd("url")), a, "the first");
+	h = rd("history");
+	t.assert(contains(h, "0 " + a + "\n1 " + b + "\n2 " + c + "\n"), "two back: " + h);
+	t.assertseq(nav(t, "history 2"), "done " + c, "two forward");
+	h = rd("history");
+	t.assert(contains(h, "-2 " + a + "\n-1 " + b + "\n0 " + c + "\n"), "two forward: " + h);
+	t.assert(!contains(h, "\n1 "), "nothing forward: " + h);
+	t.assertsne(wr("ctl", "history 1"), nil, "past the end refused");
+	t.assertsne(wr("ctl", "history -99"), nil, "before the start refused");
+}
+
 # navto, its answer sent on c, so a test can wait for it with a limit
 navasync(c: chan of string, cmd, url: string)
 {
@@ -710,6 +853,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);
+	run("ImageBusy", testImageBusy);
+	run("Lazy", testLazy);
+	run("Select", testSelect);
+	run("Zoom", testZoom);
+	run("HistoryJump", testHistoryJump);
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);

@@ -1,14 +1,15 @@
 implement WebPageTest;
 
 #
-# The page pipeline (page(2)): what a page asks for, in what order.
+# The page pipeline (page(2)): what a page asks for, in what order;
+# what it lays out.
 #
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display: import draw;
+	Display, Rect, Point, Image: import draw;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -128,6 +129,290 @@ testScale(t: ref T)
 		t.error("no box for #mq");
 }
 
+# a page of src, laid out at w by h, no picture fetched
+pageof(t: ref T, src: string, w, h: int): ref Pg
+{
+	f := "/tmp/web_page_test_src.html";
+	fd := sys->create(f, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create %s: %r", f));
+	b := array of byte src;
+	sys->write(fd, b, len b);
+	fd = nil;
+	(pg, err) := page->begin("file://" + f, "GET", nil, nil, w, h);
+	sys->remove(f);
+	if(pg == nil)
+		t.fatal("begin: " + err);
+	layout = page->layoutmod();
+	return pg;
+}
+
+# A select draws its arrow, unless its appearance is none: then the
+# page draws one (DuckDuckGo's chevron, an ::after), and there were two
+testSelectArrow(t: ref T)
+{
+	pg := pageof(t, "<select id=a><option>All Regions</select>" +
+		"<select id=n style='appearance:none'><option>Any Time</select>" +
+		"<select id=w style='-webkit-appearance:none'><option>Any Time</select>", 800, 600);
+	if((a := boxof(pg.doc, pg.root, "a")) != nil)
+		t.assertseq(a.text, "All Regions ▾", "appearance auto: the arrow");
+	else
+		t.error("no box for #a");
+	if((n := boxof(pg.doc, pg.root, "n")) != nil)
+		t.assertseq(n.text, "Any Time", "appearance none: no arrow");
+	else
+		t.error("no box for #n");
+	if((w := boxof(pg.doc, pg.root, "w")) != nil)
+		t.assertseq(w.text, "Any Time", "-webkit-appearance none: no arrow");
+	else
+		t.error("no box for #w");
+}
+
+# A grid's min-content size counts a track with a length for its
+# minimum at that length, whatever its items: a minmax(0, 1fr) column
+# adds nothing (an fr's flex fraction is zero there, Grid §12.7.1).
+# Tailwind's hero, an auto column's item beside such a grid holding a
+# 1536px carousel, was laid out 4017px wide in a 1200px grid
+testGridMinContent(t: ref T)
+{
+	pg := pageof(t, "<style>body{margin:0} .w{width:2000px;height:1px}</style>" +
+		"<div id=o style='display:grid;width:600px'><div id=i>" +
+		"<div id=g style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px'>" +
+		"<div style='overflow:hidden'><div class=w></div></div><div><div class=w></div></div><div>c</div></div>" +
+		"<div id=t style='display:grid;grid-template-columns:minmax(0,100px) 50px'><div><div class=w></div></div><div></div></div>" +
+		"</div></div>", 1280, 800);
+	if((i := boxof(pg.doc, pg.root, "i")) != nil)
+		t.asserteq(i.w, 600, "the auto column's item: the grid's width, not its 2000px items'");
+	else
+		t.error("no box for #i");
+	if((g := boxof(pg.doc, pg.root, "g")) != nil)
+		t.asserteq(g.w, 600, "the minmax(0, 1fr) grid fills it");
+	else
+		t.error("no box for #g");
+	if((k := boxof(pg.doc, pg.root, "t")) != nil)
+		t.asserteq(k.w, 600, "minmax(0, 100px) and 50px: a block, as wide as its container");
+	else
+		t.error("no box for #t");
+}
+
+# font: 0/0 a, the image-replacement idiom, sets a size of 0 and a
+# line height of 0: the 0 was taken for a weight, the rule dropped, and
+# weather.gov's header drew its text over its picture of that text
+testFontZero(t: ref T)
+{
+	pg := pageof(t, "<style>div{margin:0}</style>" +
+		"<div id=z style='font:0/0 serif'>text</div>" +
+		"<div id=g style='font:0/0 a'><span style='font:3px/1 a'>x</span></div>" +
+		"<div id=w style='font:700 20px/30px serif'>bold</div>", 800, 600);
+	if((z := boxof(pg.doc, pg.root, "z")) != nil)
+		t.asserteq(z.h, 0, "font: 0/0: no height");
+	else
+		t.error("no box for #z");
+	if((g := boxof(pg.doc, pg.root, "g")) != nil)
+		t.asserteq(g.h, 3, "a 3px/1 span inside it: 3 high");
+	else
+		t.error("no box for #g");
+	if((w := boxof(pg.doc, pg.root, "w")) != nil)
+		t.asserteq(w.h, 30, "a weight before the size is still a weight");
+	else
+		t.error("no box for #w");
+}
+
+# <center> and align= place their block children, and centre their
+# text: a table in a <td align=center> is centred in it (plan9.io's
+# were at its left), a heading in <center> is centred, a div in it
+# places its own children; a table's text goes back to the start, as
+# Blink's has it (Hacker News's titles, in a <center>'d table)
+testAlignChildren(t: ref T)
+{
+	pg := pageof(t, "<body style='margin:0'><table id=o style='width:300px;border-spacing:0'><tr><td id=c align=center style='padding:0'>" +
+		"<table id=i style='width:100px;border-spacing:0'><tr><td>x</td></tr></table></td></tr></table>" +
+		"<center><div style='width:400px'><table id=n style='width:100px'><tr><td>y</td></tr></table></div>" +
+		"<table id=t style='width:200px'><tr><td id=tc>title</td></tr></table></center>" +
+		"<div align=right style='width:300px'><table id=r style='width:100px'><tr><td>z</td></tr></table></div>", 800, 600);
+	if((i := boxof(pg.doc, pg.root, "i")) != nil)
+		t.asserteq(absx(i), 100, "a table in a td align=center: centred");
+	else
+		t.error("no box for #i");
+	if((n := boxof(pg.doc, pg.root, "n")) != nil)
+		t.asserteq(absx(n), 350, "in <center>, a div's table: centred in the div (400 wide at 200)");
+	else
+		t.error("no box for #n");
+	if((r := boxof(pg.doc, pg.root, "r")) != nil)
+		t.asserteq(absx(r), 200, "in a div align=right, at its right");
+	else
+		t.error("no box for #r");
+	if((tc := boxof(pg.doc, pg.root, "tc")) != nil)
+		t.asserteq(tc.st.align, Style->Astart, "a <center>'d table's cell: its text at the start");
+	else
+		t.error("no box for #tc");
+}
+
+# The size each image is shown at, where the layout already knows it:
+# an <img> with a width, the largest of two boxes of one image, and not
+# an image with no size yet (its own size decides) or a background
+testShown(t: ref T)
+{
+	pg := pageof(t, "<body style='margin:0'>" +
+		"<img src=w.jpg width=120>" +
+		"<img src=two.jpg style='width:40px;height:30px'><img src=two.jpg style='width:90px;height:20px'>" +
+		"<img src=free.jpg>" +
+		"<img src=bg.jpg style='width:50px;height:50px'><div style='width:9px;height:9px;background:url(bg.jpg)'></div>", 800, 600);
+	urls := "file:///tmp/w.jpg" :: "file:///tmp/two.jpg" :: "file:///tmp/free.jpg" :: "file:///tmp/bg.jpg" :: nil;
+	got := "";
+	for(l := pg.shown(urls); l != nil; l = tl l) {
+		(u, w, h) := hd l;
+		got += sys->sprint(" %s=%dx%d", u[len "file:///tmp/":], w, h);
+	}
+	t.log("shown:" + got);
+	t.assert(contains(got, " two.jpg=90x30"), "two boxes: the largest of each: " + got);
+	t.assert(contains(got, " w.jpg=120x"), "a width given: " + got);
+	t.assert(!contains(got, "free.jpg"), "no size yet: left out: " + got);
+	t.assert(!contains(got, "bg.jpg"), "a background: left out: " + got);
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i+len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+# With lazy set (a browser's view), an <img loading=lazy> is wanted
+# only within LAZYMARGIN (1250px) of the view; one not lazy, or a lazy
+# image's URL also used near the view, always; all of them when every
+# image is wanted
+testLazy(t: ref T)
+{
+	pg := pageof(t, "<body style='margin:0'>" +
+		"<img src=near.png loading=lazy style='width:10px;height:10px'>" +
+		"<div style='height:4000px'></div>" +
+		"<img src=far.png loading=LAZY style='width:10px;height:10px'>" +
+		"<img src=eager.png style='width:10px;height:10px'>" +
+		"<img src=twice.png loading=lazy style='width:10px;height:10px'>" +
+		"<div style='height:4000px'></div>" +
+		"<img src=twice.png style='width:10px;height:10px'>", 800, 600);
+	t.assertseq(names(pg.wanted()), " near far eager twice", "not lazy: all");
+	pg.lazy = 1;
+	pg.view = 0;
+	t.assertseq(names(pg.wanted()), " near eager twice", "at the top");
+	pg.view = 3000;
+	t.assertseq(names(pg.wanted()), " far eager twice", "scrolled down to it, near gone out of range");
+	pg.view = 0;
+	pg.wantall();
+	t.assertseq(names(pg.wanted()), " near far eager twice", "every image wanted");
+}
+
+names(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		u := hd l;
+		for(i := len u - 1; i >= 0 && u[i] != '/'; i--)
+			;
+		u = u[i+1:];
+		if(len u > 4 && u[len u - 4:] == ".png")
+			u = u[0:len u - 4];
+		s += " " + u;
+	}
+	return s;
+}
+
+# A picture whose boxes it cannot resize (an <img width height>, a
+# background) is put in them with no relayout, at the size given; one
+# that sizes its box is laid out with the page again, sized by it
+testInstallPlaced(t: ref T)
+{
+	needdisplay(t);
+	data := readfile("/tests/imgload/rb.png");
+	if(data == nil)
+		t.fatal("no /tests/imgload/rb.png");
+	pg := pageof(t, "<body style='margin:0'><img id=f src=f.png width=30 height=20>" +
+		"<div id=d style='width:10px;height:10px;background:url(bg.png)'></div><img id=n src=n.png>", 800, 600);
+	pg.install(page->picture("file:///tmp/f.png", data, "image/png", nil) ::
+		page->picture("file:///tmp/bg.png", data, "image/png", nil) :: nil);
+	f := boxof(pg.doc, pg.root, "f");
+	if(f == nil)
+		t.fatal("no box for #f");
+	t.assert(f.img != nil, "its picture in its box");
+	t.asserteq(f.w, 30, "its width as given");
+	t.asserteq(f.h, 20, "its height as given");
+	pg.install(page->picture("file:///tmp/n.png", data, "image/png", nil) :: nil);
+	n := boxof(pg.doc, pg.root, "n");
+	if(n == nil)
+		t.fatal("no box for #n");
+	t.assert(n.img != nil, "the other's picture in its box");
+	t.asserteq(n.w, 8, "sized by its picture (8x8)");
+	f = boxof(pg.doc, pg.root, "f");
+	t.assert(f != nil && f.img != nil, "the first still has its picture after the relayout");
+}
+
+readfile(f: string): array of byte
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0)
+		return nil;
+	b := array[int d.length] of byte;
+	if(sys->readn(fd, b, len b) != len b)
+		return nil;
+	return b;
+}
+
+display: ref Display;	# nil where there is no /dev/draw (the runner's name space)
+
+# pictures are decoded only with a display: without one, skip
+needdisplay(t: ref T)
+{
+	if(display == nil)
+		t.skip("no /dev/draw");
+}
+
+absx(b: ref Box): int
+{
+	x := 0;
+	for(; b != nil; b = b.parent)
+		x += b.x;
+	return x;
+}
+
+# the colour at the middle of the picture a box shows, as 16rRRGGBB
+midcolour(b: ref Box): int
+{
+	if(b == nil || b.img == nil)
+		return -1;
+	d := b.img.display;
+	px := d.newimage(Rect((0, 0), (1, 1)), Draw->RGB24, 0, Draw->White);
+	c := b.img.r.min.add(Point(b.img.r.dx()/2, b.img.r.dy()/2));
+	px.draw(px.r, b.img, nil, c);
+	a := array[3] of byte;
+	px.readpixels(px.r, a);
+	return (int a[2] << 16) | (int a[1] << 8) | int a[0];
+}
+
+# An inline svg's presentation attributes take var() from the custom
+# properties of the element they are on, falling back as var() does:
+# the picture is drawn from markup, where they meant nothing, and
+# Stripe's customer logos (fill="var(--customerLogoColor, #003478)")
+# and Sign in button were black
+testSvgVars(t: ref T)
+{
+	needdisplay(t);
+	pg := pageof(t, "<style>body{margin:0;--c:#00ff00} .k{--d:#ff0000}</style>" +
+		"<svg id=v width=20 height=20><rect width=20 height=20 fill='var(--c)'/></svg>" +
+		"<svg id=f width=20 height=20><rect width=20 height=20 fill='var(--none, #0000ff)'/></svg>" +
+		"<svg id=n class=k width=20 height=20><rect width=20 height=20 fill='var(--none, var(--d))'/></svg>", 800, 600);
+	for(l := ("v", 16r00FF00, "var(--c)") :: ("f", 16r0000FF, "a fallback") :: ("n", 16rFF0000, "a fallback that is a var()") :: nil; l != nil; l = tl l) {
+		(id, want, what) := hd l;
+		b := boxof(pg.doc, pg.root, id);
+		got := midcolour(b);
+		t.assert(got == want, sys->sprint("%s: %.6x, want %.6x", what, got, want));
+	}
+}
+
 # the first box of the element with id
 boxof(d: ref Doc, root: ref Box, id: string): ref Box
 {
@@ -156,12 +441,21 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "cannot load %s: %r\n", Page->PATH);
 		raise "fail:load";
 	}
-	if((err := page->init(Display.allocate(nil))) != nil) {
+	display = Display.allocate(nil);
+	if((err := page->init(display)) != nil) {
 		sys->fprint(sys->fildes(2), "page: %s\n", err);
 		raise "fail:init";
 	}
 	run("WantedOrder", testWantedOrder);
 	run("Scale", testScale);
+	run("SelectArrow", testSelectArrow);
+	run("GridMinContent", testGridMinContent);
+	run("SvgVars", testSvgVars);
+	run("FontZero", testFontZero);
+	run("AlignChildren", testAlignChildren);
+	run("Shown", testShown);
+	run("Lazy", testLazy);
+	run("InstallPlaced", testInstallPlaced);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

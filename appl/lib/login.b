@@ -255,6 +255,13 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	info.spk = kr->strtopk(s);
 	if(info.spk == nil)
 		return ("signer's public key is not a key", nil);
+	# In CNSA mode the signer's key is ML-DSA-87 or it is not taken
+	# (and the key made below, which is like it, is then one too): the
+	# suite alone was checked, so a client in the mode took a
+	# certificate from an Ed25519 or a 512-bit RSA signer.
+	cnsa := suite == Aesgcm;
+	if(cnsa && (err = cnsaalg(info.spk.sa.name)) != nil)
+		return ("signer's key: " + err, nil);
 	(s, err) = kr->getstring(c.dfd);
 	if(err != nil)
 		return ("can't get signer's alpha: " + err, nil);
@@ -268,6 +275,8 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	bits := info.p.bits();
 	if(bits < Minrealm || bits > Maxrealm)
 		return (sys->sprint("signer's Diffie-Hellman modulus has %d bits: %d to %d are taken", bits, Minrealm, Maxrealm), nil);
+	if(cnsa && bits < CNSAdhbits)
+		return (sys->sprint("CNSA mode: signer's Diffie-Hellman modulus has %d bits; %d at least are required", bits, CNSAdhbits), nil);
 	pb := info.p.iptobytes();
 	if(!inrange(info.alpha, info.p) || (int pb[len pb-1] & 1) == 0)
 		return ("bogus diffie hellman constants", nil);
@@ -285,8 +294,8 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 
 	# user->CA	user's public key
 	mypk := kr->pktostr(info.mypk);
-	if(kr->putstring(c.dfd, mypk) < 0)
-		return (sys->sprint("can't send your public: %r"), nil);
+	if((err = putstring(c.dfd, mypk)) != nil)
+		return ("can't send your public key: " + err, nil);
 
 	# CA->user	user's public key certificate
 	(s, err) = kr->getstring(c.dfd);
@@ -298,12 +307,18 @@ login(id, password, dest: string): (string, ref Keyring->Authinfo)
 	info.cert = kr->strtocert(s);
 	if(info.cert == nil)
 		return ("signer's certificate is not one", nil);
+	if(cnsa && ((err = cnsaalg(info.cert.sa.name)) != nil || (err = cnsahash(info.cert.ha)) != nil))
+		return ("signer's certificate: " + err, nil);
 	b := array of byte mypk;
 	state: ref Keyring->DigestState;
-	if(info.cert.ha == "sha384")
+	case info.cert.ha {
+	"sha384" =>
 		state = kr->sha384(b, len b, nil, nil);
-	else
+	"sha512" =>
+		state = kr->sha512(b, len b, nil, nil);
+	* =>
 		state = kr->sha256(b, len b, nil, nil);
+	}
 	if(kr->verify(info.spk, info.cert, state) == 0)
 		return ("signer's certificate does not verify with its key", nil);
 	return(nil, info);
@@ -511,9 +526,24 @@ keys(suite: int, name: string, pw, hello, reply, share, z: array of byte): (arra
 		expand(suite, prk, array of byte "infernode login 2 session", n));
 }
 
-# CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.
+#
+# CNSA 2.0 mode: the /env/cnsamode policy flag (the emulator sets it
+# from the host's CNSAMODE).  Anything in it but 0, n or N as its first
+# byte is on, so a word nobody expected errs to the stricter side.
+#
+# The mode is a rule, not a default: what it takes is ML-DSA-87 for
+# signatures (FIPS 204, category 5), SHA-384 or SHA-512 under them, and
+# a Diffie-Hellman modulus of 3072 bits or more
+# (docs/compliance/CNSA-2.0.md).  It used to choose only what a program
+# made when nothing was asked for: createsignerkey -a rsa -b 512 gave a
+# 512-bit RSA signer in the mode, and logind signed with whatever key
+# its file held.  Every program that makes or takes a key asks here, so
+# there is one statement of the rule.
+#
 cnsamode(): int
 {
+	if(init() != nil)
+		return 1;	# cannot tell: the stricter side
 	fd := sys->open("/env/cnsamode", Sys->OREAD);
 	if(fd == nil)
 		return 0;
@@ -524,6 +554,87 @@ cnsamode(): int
 	c := buf[0];
 	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
 }
+
+cnsaalg(alg: string): string
+{
+	if(alg == CNSAsig)
+		return nil;
+	if(alg == nil)
+		alg = "a key of no algorithm";
+	return "CNSA mode takes ML-DSA-87 (mldsa87) signature keys alone, not " + alg;
+}
+
+cnsahash(ha: string): string
+{
+	if(ha == "sha384" || ha == "sha512")
+		return nil;
+	if(ha == nil)
+		ha = "no hash";
+	return "CNSA mode takes SHA-384 or SHA-512 under a signature, not " + ha;
+}
+
+# A key file as readauthinfo gives it: the holder's key, the signer's
+# key, the certificate's algorithm and hash, and the realm's modulus.
+cnsakey(info: ref Keyring->Authinfo): string
+{
+	if(init() != nil)
+		return "cannot load Keyring";
+	if(info == nil)
+		return "no key";
+	err: string;
+	if(info.mysk != nil && info.mysk.sa != nil && (err = cnsaalg(info.mysk.sa.name)) != nil)
+		return "its secret key: " + err;
+	if(info.mypk == nil || info.mypk.sa == nil)
+		return "it has no public key";
+	if((err = cnsaalg(info.mypk.sa.name)) != nil)
+		return "its public key: " + err;
+	if(info.spk == nil || info.spk.sa == nil)
+		return "it has no signer's key";
+	if((err = cnsaalg(info.spk.sa.name)) != nil)
+		return "its signer's key: " + err;
+	if(info.cert == nil || info.cert.sa == nil)
+		return "it has no certificate";
+	if((err = cnsaalg(info.cert.sa.name)) != nil)
+		return "its certificate: " + err;
+	if((err = cnsahash(info.cert.ha)) != nil)
+		return "its certificate: " + err;
+	if(info.p == nil || info.alpha == nil)
+		return "it has no Diffie-Hellman modulus";
+	bits := info.p.bits();
+	if(bits < CNSAdhbits)
+		return sys->sprint("its Diffie-Hellman modulus has %d bits: CNSA mode takes %d or more", bits, CNSAdhbits);
+	return nil;
+}
+
+# Keyring's putstring cuts what does not fit one of its messages and
+# says it sent it: a certificate cut short was "not a certificate" at
+# the far end, with nothing to say why.
+putstring(fd: ref Sys->FD, s: string): string
+{
+	if(init() != nil)
+		return "cannot load Keyring";
+	n := len array of byte s;
+	# What a message holds is Keyring's to say (4096 bytes once, and
+	# every message that size or less has always fitted), and it says
+	# so only by the count it returns: so a longer string goes first
+	# into a pipe nobody reads, and to fd only if all of it went.
+	if(n >= Fits && n < Pipeholds){
+		p := array[2] of ref Sys->FD;
+		if(sys->pipe(p) < 0)
+			return sys->sprint("pipe: %r");
+		if(kr->putstring(p[0], s) != n+1)
+			return sys->sprint("%d bytes are more than one of Keyring's messages holds", n);
+	}
+	m := kr->putstring(fd, s);
+	if(m < 0)
+		return sys->sprint("%r");
+	if(m != n+1)
+		return sys->sprint("%d bytes are more than one of Keyring's messages holds (%d sent)", n, m-1);
+	return nil;
+}
+
+Fits: con 4000;	# a string this long has always fitted a message
+Pipeholds: con 16*1024;	# and one this long might fill a pipe
 
 nomod(mod: string): (string, ref Keyring->Authinfo)
 {

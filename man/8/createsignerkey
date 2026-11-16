@@ -1,6 +1,6 @@
 .TH CREATESIGNERKEY 8
 .SH NAME
-createsignerkey \- create signer key on authentication server
+createsignerkey, mkauthinfo \- create signer key on authentication server, and keys signed by it
 .SH SYNOPSIS
 .B auth/createsignerkey
 [
@@ -15,6 +15,17 @@ createsignerkey \- create signer key on authentication server
 .BI -b " bitsize"
 ]
 .I name
+.PP
+.B auth/mkauthinfo
+[
+.BI -k " keyspec"
+] [
+.BI -e " expiry"
+]
+.I user
+[
+.I keyfile
+]
 .SH DESCRIPTION
 .I Createsignerkey
 creates public and private keys that are used by a server acting as `signer' to generate certificates for users.
@@ -36,7 +47,10 @@ By default the server's certificate never expires.
 .PP
 For the algorithms that take a size, the key will be
 .I bitsize
-long (default: 2048 bits) with a minimum of 32 bits and a maximum of 4096 bits.
+long (default: 2048 bits) with a minimum of 2048 bits and a maximum of 4096 bits;
+.B -b
+with an algorithm whose keys have one size is refused.
+(The minimum was once 32 bits, and a 32-bit signer's own certificate did not verify.)
 .I Keyfile
 is the file in which the server stores its keys;
 the default is
@@ -70,15 +84,48 @@ option specifies the signature algorithm, one of
 .B elgamal
 or
 .BR dsa .
+.PP
 The
 .B -c
 option, or the environment variable
 .B cnsamode
-set, makes
-.B mldsa87
-the default; an
+set, is CNSA 2.0 mode, and the mode is a rule for the key made, not a default:
+the key is
+.BR mldsa87 ,
+its certificate is hashed with SHA-384, and the Diffie-Hellman modulus written
+with it is RFC 3526's 3072-bit group (2048 bits otherwise).
+In the mode an
 .B -a
-after it still chooses another.
+naming any other algorithm, before or after
+.BR -c ,
+and any
+.BR -b ,
+are refused, saying why, and nothing is written.
+(The mode once only chose the algorithm when none was given:
+.B "-a rsa -b 512"
+made a 512-bit RSA signer in it.)
+.PP
+.I Mkauthinfo
+makes a key for
+.I user
+like the signer's and a certificate for it signed by the key
+.I keyspec
+names (default
+.BR key=default ,
+see
+.IR security-auth (2)),
+good until the end of the day
+.I expiry
+or without limit, and writes both to
+.I keyfile
+(default: standard output) in the form of
+.IR keytext (6),
+mode 600.
+In CNSA mode
+.I mkauthinfo
+signs only with a key file that is CNSA's whole
+(ML-DSA-87 keys, a certificate under SHA-384 or SHA-512, a modulus of 3072 bits or more)
+and says what is wrong with one that is not.
 .PP
 An
 .B elgamal
@@ -91,6 +138,8 @@ make the signer's key again and have the users enrol again.
 .B /keydb/signerkey
 .SH SOURCE
 .B /appl/cmd/auth/createsignerkey.b
+.br
+.B /appl/cmd/auth/mkauthinfo.b
 .SH SEE ALSO
 .IR security-auth (2),
 .IR keyring-gensk (2),

@@ -63,7 +63,7 @@ implementation and the regression test.
 |------|--------|
 | Requirement | AES with 256-bit keys |
 | Implementation | `libsec/aes.c`, AES-GCM in `libsec/aesgcm.c` (`setupAESGCMstate` accepts `keylen`; 32 = AES-256) — decl `include/libsec.h:53` |
-| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
+| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). The login exchange (login(6), version 2) in CNSA mode is suite 2 alone: AES-256 in counter mode for the masked value, HKDF and proofs under SHA-384, a 3072-bit group or larger, then `aes_256_gcm` records; outside the mode suite 1 (ChaCha20, SHA-256, 2048 bits) is also taken — `appl/lib/login.b`, `appl/cmd/auth/logind.b` |
 | Evidence | `tests/tls_crypto_test.b` (AES-GCM NIST vectors), `tests/secstore_crypto_test.b` (SGCM file encryption) |
 | Status | **Met** — AES-256-GCM available and negotiated |
 
@@ -99,7 +99,7 @@ implementation and the regression test.
 | Key generation | `auth/createsignerkey -a mldsa87 <name>`, or the **`-c` CNSA flag** (selects ML-DSA-87 in one option) (`appl/cmd/auth/createsignerkey.b`) |
 | Evidence | `tests/mldsa_test.b` (KAT, sign/verify, wrong-key rejection, cert verify), `tests/mldsa_stress_test.b`, `tests/pqauth_test.b` *HybridHandshakeMLDSA* (fully-PQ handshake) |
 | Cert hash | An ML-DSA-87 signer self-cert is hashed with **SHA-384** (FIPS 204 Cat-5 pairing), not SHA-256 — verified end-to-end: `createsignerkey -c` emits `cert.ha=sha384`, and two CNSA nodes mutually authenticate over TCP exchanging SHA-384 ML-DSA-87 certs (`tests/cnsa_nodepair_test.sh`, `both-cnsa-1024-mldsa87` PASS) |
-| Status | **Met (CNSA-strict mode)** — with CNSA mode on (`/env/cnsamode`), `createsignerkey` defaults to **ML-DSA-87** (verified: the generated key matches the `-c` mldsa87 key size, ~20 KB, vs the 651 B ed25519 default); the `-c` flag and `-a` override are unchanged. Default deployments stay on ed25519. |
+| Status | **Met (CNSA-strict mode)** — CNSA mode (`/env/cnsamode`, or `createsignerkey -c`) is a **rule, not a default**: `createsignerkey` makes **ML-DSA-87** with a SHA-384 certificate and RFC 3526's 3072-bit Diffie-Hellman group, and **refuses** an `-a` naming any other algorithm and any `-b`, saying why (it used to accept `-a rsa -b 512` in the mode). The programs that take a key in the mode refuse one that is not CNSA's whole (ML-DSA-87 keys, certificate under SHA-384/512, modulus ≥ 3072 bits): `mkauthinfo` (the signing key), `logind` and `signer` (the signer's key, at each connection), the login client (the signer's key, modulus and certificate), factotum's `genkey` and `proto=sign`. The rule is stated once, in `appl/lib/login.b` (`cnsaalg`, `cnsahash`, `cnsakey`); `tests/cnsa_mode_test.b`, `tests/login_test.b`. Default deployments stay on ed25519. |
 
 ### 3.5 Software/firmware signing — LMS/XMSS — Not Applicable (no firmware in scope)
 

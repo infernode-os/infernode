@@ -111,6 +111,15 @@ dologin(c: ref Sys->Connection): string
 		sys->fprint(stderr, "logind: can't read signer's own key: %s\n", err);
 		return "login service unavailable";
 	}
+	# In CNSA mode the signer's key is CNSA's or nothing is signed
+	# with it: the mode held the exchange to AES-256 and SHA-384 and
+	# then certified with whatever the file held, an Ed25519 key or a
+	# 512-bit RSA one.
+	cnsa := login->cnsamode();
+	if(cnsa && (err = login->cnsakey(info)) != nil){
+		sys->fprint(stderr, "logind: CNSA mode: /keydb/signerkey is not taken: %s; make one with createsignerkey -c\n", err);
+		return "login service unavailable: signer's key is not CNSA's";
+	}
 
 	# The user's name, which must be one account name before it is
 	# acknowledged, counted, looked up or signed: "carol/." was carol to
@@ -147,7 +156,7 @@ dologin(c: ref Sys->Connection): string
 	gid := mingroup;
 	case suite {
 	Login->Chacha =>
-		if(cnsamode())
+		if(cnsa)
 			return "CNSA mode: AES-256-GCM logins only; set cnsamode on the client";
 	Login->Aesgcm =>
 		if(gid < 15)
@@ -285,8 +294,8 @@ dologin(c: ref Sys->Connection): string
 	# send our public key, and the alpha and p of our key file: they
 	# are not this exchange's (which uses login(6)'s groups whatever
 	# the file has) but auth(2)'s, between holders of our certificates
-	if(kr->putstring(c.dfd, kr->pktostr(kr->sktopk(info.mysk))) < 0)
-		return sys->sprint("can't send signer's public key: %r");
+	if((err = login->putstring(c.dfd, kr->pktostr(kr->sktopk(info.mysk)))) != nil)
+		return "can't send signer's public key: " + err;
 	if(kr->putstring(c.dfd, info.alpha.iptob64()) < 0 ||
 	   kr->putstring(c.dfd, info.p.iptob64()) < 0)
 		return sys->sprint("can't send alpha, p: %r");
@@ -301,6 +310,10 @@ dologin(c: ref Sys->Connection): string
 		return "client's public key is not a key";
 	if(hisPK.owner != name)
 		return "pk name doesn't match user name";
+	# The key certified is of the signer's algorithm (the client makes
+	# it like the signer's); any key at all was signed.
+	if(hisPK.sa == nil || hisPK.sa.name != info.mypk.sa.name)
+		return "client's key is not of the signer's algorithm";
 
 	# sign and return
 	state := certdigest(info.mysk, hisPKbuf);
@@ -308,25 +321,15 @@ dologin(c: ref Sys->Connection): string
 	if(cert == nil)
 		return "can't sign";
 
-	if(kr->putstring(c.dfd, kr->certtostr(cert)) < 0)
-		return sys->sprint("can't send certificate: %r");
+	# whole, or said not to be: one that did not fit a message (an
+	# ML-DSA-87 certificate past 4096 bytes) went cut short, as sent
+	if((err = login->putstring(c.dfd, kr->certtostr(cert))) != nil){
+		sys->fprint(stderr, "logind: can't send certificate: %s\n", err);
+		return "certificate does not fit a message";
+	}
 	auditlog("authok", sys->sprint("user=%s exp=%d", auditval(name), userexp));
 
 	return nil;
-}
-
-# CNSA 2.0 strict mode: the /env/cnsamode policy flag, as signer(8) reads it.
-cnsamode(): int
-{
-	fd := sys->open("/env/cnsamode", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	buf := array[8] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return 0;
-	c := buf[0];
-	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
 }
 
 nomod(mod: string)

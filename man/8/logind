@@ -59,7 +59,19 @@ In CNSA mode
 .RB ( /env/cnsamode
 set)
 .I logind
-refuses a client that does not offer the CNSA suite, saying so.
+refuses a client that does not offer the CNSA suite, saying so,
+and signs only with a signer's key that is CNSA's whole:
+ML-DSA-87, its certificate under SHA-384 or SHA-512, a Diffie-Hellman
+modulus of 3072 bits or more, as
+.B "createsignerkey -c"
+makes it.
+With any other key in
+.B /keydb/signerkey
+every login is refused (``signer's key is not CNSA's''),
+the console saying what is wrong with the key.
+The key certified is always of the signer's own algorithm.
+A certificate that does not fit one of the protocol's messages
+is not sent cut short: the client is told it does not fit.
 .PP
 The name a client gives must be one account name, as
 .IR login (6)

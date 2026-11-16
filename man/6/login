@@ -72,6 +72,9 @@ Suite 2 is AES-256 in counter mode (as GCM runs it) and SHA-384, with a group of
 A client in CNSA mode (\f5/env/cnsamode\fP set) offers and takes only suite 2,
 and a CA in CNSA mode refuses suite 1, saying so.
 A CA not in CNSA mode takes either.
+In CNSA mode the CA's own key must be ML-DSA-87 with a modulus of 3072 bits or more
+(the CA refuses to sign with another, and the client refuses a CA's key,
+modulus or certificate that is not: ML-DSA-87, SHA-384 or SHA-512, 3072 bits).
 .TP
 .I group
 is 14, 15 or 16: RFC 3526's groups of 2048, 3072 and 4096 bits.

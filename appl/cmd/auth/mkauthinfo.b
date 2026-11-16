@@ -15,6 +15,7 @@ include "keyring.m";
 
 include "security.m";
 	auth: Auth;
+	login: Login;
 
 include "daytime.m";
 	daytime: Daytime;
@@ -83,6 +84,16 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:no key";
 	}
 
+	# In CNSA mode the key that signs is CNSA's, all of it (ML-DSA-87,
+	# SHA-384, a modulus of 3072 bits), and so then is the one made,
+	# which is like it.  The mode was not asked: any key signed.
+	login = load Login Login->PATH;
+	if(login == nil)
+		nomod(Login->PATH);
+	cnsa := login->cnsamode();
+	if(cnsa && (cerr := login->cnsakey(sai)) != nil)
+		fatal("CNSA mode: the signing key is not taken: " + cerr);
+
 	info := ref Keyring->Authinfo;
 	info.alpha = sai.alpha;
 	info.p = sai.p;
@@ -92,6 +103,10 @@ init(nil: ref Draw->Context, args: list of string)
 	pkbuf := array of byte kr->pktostr(info.mypk);
 	state := certdigest(sai.mysk, pkbuf);
 	info.cert = kr->sign(sai.mysk, expiry, state, certhash(sai.mysk));
+	if(info.cert == nil)
+		fatal("can't sign");
+	if(cnsa && (cerr = login->cnsakey(info)) != nil)
+		fatal("CNSA mode: the key made is not taken: " + cerr);
 	if((err := private(dstfile, args == nil)) != nil)
 		fatal(err);
 	if(kr->writeauthinfo(dstfile, info) < 0){

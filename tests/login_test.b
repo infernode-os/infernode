@@ -186,7 +186,7 @@ setup(): string
 		return sys->sprint("can't load createsignerkey: %r");
 	setcnsa(0);
 	{
-		csk->init(nil, "createsignerkey" :: "-a" :: "ed25519" :: "-b" :: "1024" :: "-f" :: "/keydb/signerkey" :: "signer" :: nil);
+		csk->init(nil, "createsignerkey" :: "-a" :: "ed25519" :: "-f" :: "/keydb/signerkey" :: "signer" :: nil);
 	} exception e {
 	"*" =>
 		return "createsignerkey: " + e;
@@ -194,7 +194,58 @@ setup(): string
 	(ok, nil) := sys->stat("/keydb/signerkey");
 	if(ok < 0)
 		return sys->sprint("no signer key made: %r");
+	# and a CNSA signer's key (ML-DSA-87, SHA-384, 3072 bits), which a
+	# logind in CNSA mode has in place of the other
+	cnsakey = d + "/cnsakey";
+	{
+		csk->init(nil, "createsignerkey" :: "-c" :: "-f" :: cnsakey :: "signer" :: nil);
+	} exception e {
+	"*" =>
+		return "createsignerkey -c: " + e;
+	}
+	(ok, nil) = sys->stat(cnsakey);
+	if(ok < 0)
+		return sys->sprint("no CNSA signer key made: %r");
 	return nil;
+}
+
+cnsakey: string;
+
+# how a signer is run: in CNSA mode or not, and with the other mode's key
+Otherkey: con 2;
+
+# Keyring's messages hold so much (4096 bytes, keyring.c's Maxmsg), and
+# an ML-DSA-87 certificate is 6197 as text: until they hold one, a
+# signer with a CNSA key can do everything but deliver the certificate,
+# and says so.
+bigmsgs(): int
+{
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return 0;
+	s := "";
+	for(i := 0; i < 70; i++)
+		s += "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789";
+	# 7000 bytes do not fill a pipe
+	if(login->putstring(p[0], s) != nil)
+		return 0;
+	(got, nil) := kr->getstring(p[1]);
+	return got == s;
+}
+
+# A CNSA login that got no certificate because one does not fit a
+# message is skipped, having said so; any other failure is one.
+cnsaloggedin(t: ref T, what: string, err: string, info: ref Keyring->Authinfo)
+{
+	if(info == nil && !bigmsgs()){
+		t.assert(err != nil && contains(err, "does not fit a message"), what + ": the signer says its certificate does not fit a message: " + err);
+		t.skip(what + ": Keyring's messages do not hold an ML-DSA-87 certificate yet");
+	}
+	loggedin(t, what, err, info);
+	if(info != nil){
+		t.assertnil(login->cnsakey(info), what + ": the key file is CNSA's");
+		t.assertseq(info.cert.ha, "sha384", what + ": the certificate's hash");
+	}
 }
 
 #
@@ -203,8 +254,16 @@ setup(): string
 #
 serve(cnsa: int, addrc: chan of string)
 {
-	sys->pctl(Sys->FORKENV|Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKENV|Sys->FORKNS|Sys->NEWPGRP, nil);
+	other := cnsa & Otherkey;
+	cnsa &= 1;
 	setcnsa(cnsa);
+	if(cnsa != 0 && !other || cnsa == 0 && other)
+		if(sys->bind(cnsakey, "/keydb/signerkey", Sys->MREPL) < 0){
+			addrc <-= nil;
+			addrc <-= sys->sprint("can't bind the CNSA key: %r");
+			return;
+		}
 	(ok, c) := sys->announce("tcp!127.0.0.1!0");
 	if(ok < 0){
 		addrc <-= nil;
@@ -323,13 +382,30 @@ testPlain(t: ref T)
 testCNSABoth(t: ref T)
 {
 	(err, info) := dologin(t, 1, 1, Password);
-	loggedin(t, "both in CNSA mode (AES-256-GCM)", err, info);
+	cnsaloggedin(t, "both in CNSA mode (AES-256-GCM, an ML-DSA-87 signer)", err, info);
 }
 
+# A client in CNSA mode takes a certificate from a CNSA signer's key
+# alone, whatever mode the signer is in: it took one from an Ed25519
+# signer, the suite being all it asked about.
 testCNSAClient(t: ref T)
 {
 	(err, info) := dologin(t, 1, 0, Password);
-	loggedin(t, "a CNSA client, a signer not in CNSA mode", err, info);
+	t.assert(info == nil, "a CNSA client gets nothing from an Ed25519 signer not in CNSA mode");
+	t.assert(err != nil && contains(err, "ML-DSA-87"), "and says what it takes: " + err);
+	(err, info) = dologin(t, 1, 0|Otherkey, Password);
+	cnsaloggedin(t, "a CNSA client, an ML-DSA-87 signer not in CNSA mode", err, info);
+}
+
+# A signer in CNSA mode signs with a CNSA key or not at all: it signed
+# with whatever /keydb/signerkey held.
+testCNSASignerKey(t: ref T)
+{
+	(err, info) := dologin(t, 1, 1|Otherkey, Password);
+	t.assert(info == nil, "a signer in CNSA mode with an Ed25519 key gives nothing");
+	t.assert(err != nil && contains(err, "not CNSA's"), "and says its key is not CNSA's: " + err);
+	(err, info) = dologin(t, 0, 1|Otherkey, Password);
+	t.assert(info == nil, "to a client not in the mode either");
 }
 
 testCNSAServerRefuses(t: ref T)
@@ -871,14 +947,19 @@ testManual(t: ref T)
 		t.fatal("AES-256-GCM: " + err);
 	t.asserteq(cv.gid, 15, "AES-256-GCM: group 15 (3072 bits)");
 	t.asserteq(len cv.reply, 3+Noncelen+384, "AES-256-GCM: the reply's length");
-	(err, info) = finish(cv, Password);
-	loggedin(t, "a client written from login(6), AES-256-GCM", err, info);
+	cnsacv := cv;
 
 	# a signer not in CNSA mode gives a client offering suite 2 no less
 	(cv, err) = begin(logind(t, 0), User, Aesgcm, nil);
 	if(cv == nil)
 		t.fatal("AES-256-GCM, signer not in CNSA mode: " + err);
 	t.asserteq(cv.gid, 15, "AES-256-GCM from a signer not in CNSA mode: still group 15");
+
+	# the signer in CNSA mode has an ML-DSA-87 key (last: it may skip)
+	(err, info) = finish(cnsacv, Password);
+	if(err != nil)
+		info = nil;
+	cnsaloggedin(t, "a client written from login(6), AES-256-GCM", err, info);
 }
 
 # the count /keydb/loginfail has for name; 0 if none
@@ -1272,7 +1353,10 @@ pwsigner(c: ref Sys->Connection, arg: string): string
 	(secretin, secretout) := ssl->secrets(sk, 0);
 	if(ssl->secret(c, secretin, secretout) != nil || sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
 		return "can't seal";
-	info := kr->readauthinfo("/keydb/signerkey");
+	keyfile := "/keydb/signerkey";
+	if(arg == "cnsakey" || arg == "cnsakey256")
+		keyfile = cnsakey;
+	info := kr->readauthinfo(keyfile);
 	if(info == nil)
 		return "no signer key";
 	sp := info.p.iptob64();
@@ -1303,6 +1387,8 @@ pwsigner(c: ref Sys->Connection, arg: string): string
 		# a certificate, but by a key that is not the one just sent
 		other := kr->genSK("ed25519", "signer", 0);
 		kr->putstring(c.dfd, kr->certtostr(kr->sign(other, 0, kr->sha256(b, len b, nil, nil), "sha256")));
+	"cnsakey" =>
+		kr->putstring(c.dfd, kr->certtostr(kr->sign(info.mysk, 0, kr->sha384(b, len b, nil, nil), "sha384")));
 	* =>
 		kr->putstring(c.dfd, kr->certtostr(kr->sign(info.mysk, 0, kr->sha256(b, len b, nil, nil), "sha256")));
 	}
@@ -1397,8 +1483,16 @@ testSignerValues(t: ref T)
 	# and the script is a signer when it does nothing wrong
 	(err, info, nil) := fakelogin(t, pwsigner, "", 0);
 	loggedin(t, "a signer written from login(6)", err, info);
+	# a client in CNSA mode: refused for the Ed25519 key, and for a
+	# CNSA key whose certificate is under SHA-256
 	(err, info, nil) = fakelogin(t, pwsigner, "", 1);
-	loggedin(t, "a signer written from login(6), CNSA client", err, info);
+	t.assert(info == nil && err != nil && contains(err, "ML-DSA-87"), "a CNSA client refuses the script's Ed25519 key: " + err);
+	if(bigmsgs()){
+		(err, info, nil) = fakelogin(t, pwsigner, "cnsakey", 1);
+		loggedin(t, "a signer written from login(6), CNSA client", err, info);
+		(err, info, nil) = fakelogin(t, pwsigner, "cnsakey256", 1);
+		t.assert(info == nil && err != nil && contains(err, "SHA-384"), "a CNSA client refuses a certificate under SHA-256: " + err);
+	}
 }
 
 #
@@ -1627,6 +1721,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Login/Plain", testPlain);
 	run("Login/CNSABoth", testCNSABoth);
 	run("Login/CNSAClient", testCNSAClient);
+	run("Login/CNSASignerKey", testCNSASignerKey);
 	run("Login/CNSAServerRefuses", testCNSAServerRefuses);
 	run("Login/WrongPassword", testWrongPassword);
 	run("Login/Lockout", testLockout);

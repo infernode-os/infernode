@@ -11,6 +11,11 @@ login: fn(name, password, addr: string):
 	(string, ref Keyring->Authinfo);
 
 okname:  fn(name: string): string;
+cnsamode: fn(): int;
+cnsaalg:  fn(alg: string): string;
+cnsahash: fn(ha: string): string;
+cnsakey:  fn(info: ref Keyring->Authinfo): string;
+putstring: fn(fd: ref Sys->FD, s: string): string;
 charge:  fn(prog, name: string): (int, string);
 cleared: fn(prog, name: string);
 .EE
@@ -102,7 +107,46 @@ In CNSA mode
 .RB ( /env/cnsamode
 set)
 .B login
-offers only the CNSA suite and refuses a group of fewer than 3072 bits.
+offers only the CNSA suite and refuses a group of fewer than 3072 bits,
+a signer whose key is not ML-DSA-87, a signer's modulus of fewer than 3072 bits,
+and a certificate that is not ML-DSA-87's under SHA-384 or SHA-512.
+.PP
+.B Cnsamode
+reports whether CNSA 2.0 mode is on
+.RB ( /env/cnsamode
+holding anything that does not begin with
+.BR 0 ,
+.B n
+or
+.BR N ).
+The mode is a rule for every key made or taken in it, and these state the rule once:
+.B cnsaalg
+returns nil for the one signature algorithm it takes
+.RB ( mldsa87 ,
+.BR Login->CNSAsig )
+and otherwise the reason;
+.B cnsahash
+the same for a certificate's hash
+.RB ( sha384
+or
+.BR sha512 );
+.B cnsakey
+the same for a whole key file as
+.B Keyring->readauthinfo
+gives it: its keys, its signer's key, its certificate's algorithm and hash, and
+its Diffie-Hellman modulus, which must have
+.B Login->CNSAdhbits
+(3072) bits or more.
+.B Putstring
+sends
+.I s
+as one of Keyring's messages (see
+.IR keyring-getstring (2))
+and returns nil, or sends nothing and returns the reason when
+.I s
+does not fit one:
+.B Keyring->putstring
+cuts such a string short and reports success.
 .PP
 The other functions are for the signer's programs, which share them so
 that there is one of each.

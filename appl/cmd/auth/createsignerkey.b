@@ -9,6 +9,10 @@ include "daytime.m";
 
 include "keyring.m";
 	kr: Keyring;
+	IPint: import kr;
+
+include "security.m";
+	login: Login;
 
 include "arg.m";
 
@@ -17,6 +21,7 @@ SKexpire:       con 0;
 
 # size in bits of modulus for public keys
 PKmodlen:		con 2048;
+Minmodlen:		con 2048;
 
 # size in bits of modulus for diffie hellman
 DHmodlen:		con 2048;
@@ -27,22 +32,6 @@ Createsignerkey: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
-
-# CNSA 2.0 strict mode: read the /env/cnsamode policy flag (off by default).
-# When set, CNSA-strict parameters (here, ML-DSA-87) become the defaults.
-# Non-CNSA deployments leave the flag unset and are unchanged.
-cnsamode(): int
-{
-	fd := sys->open("/env/cnsamode", Sys->OREAD);
-	if(fd == nil)
-		return 0;
-	buf := array[8] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return 0;
-	c := buf[0];
-	return c != byte '0' && c != byte 'n' && c != byte 'N' && c != byte '\n';
-}
 
 # CNSA 2.0: bind the certificate hash to the signing key's strength.
 # ML-DSA / SLH-DSA (FIPS 204/205, NIST Cat >=3) keys pair with SHA-384;
@@ -77,14 +66,22 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(arg == nil)
 		loaderr(Arg->PATH);
 
+	login = load Login Login->PATH;
+	if(login == nil)
+		loaderr(Login->PATH);
+
 	arg->init(argv);
 	arg->setusage("createsignerkey [-a algorithm] [-c] [-f keyfile] [-e ddmmyyyy] [-b size-in-bits] name-of-owner");
-	alg := algs[0];
-	if(cnsamode())
-		alg = "mldsa87";	# CNSA 2.0 strict: ML-DSA-87 default (FIPS 204, Cat 5)
+	alg := "";
+	# CNSA 2.0 mode, by /env/cnsamode or -c wherever it is among the
+	# options: a rule for the key made, not a default.  It chose the
+	# algorithm only when none was given, so -a rsa -b 512 made a
+	# 512-bit RSA signer in the mode, and -a rsa -c and -c -a rsa made
+	# different keys.
+	cnsa := login->cnsamode();
 	filename := "/keydb/signerkey";
 	expire := SKexpire;
-	bits := PKmodlen;
+	bits := 0;
 	while((c := arg->opt()) != 0){
 		case c {
 		'a' =>
@@ -98,8 +95,7 @@ init(nil: ref Draw->Context, argv: list of string)
 					break;
 			}
 		'c' =>
-			# CNSA 2.0 mode: ML-DSA-87 signer (FIPS 204, NIST Category 5).
-			alg = "mldsa87";
+			cnsa = 1;
 		'f' or 'k' =>
 			filename = arg->earg();
 		'e' =>
@@ -110,8 +106,11 @@ init(nil: ref Draw->Context, argv: list of string)
 		'b' =>
 			s := arg->earg();
 			bits = int s;
-			if(bits < 32 || bits > 4096)
-				error("modulus must be in the range of 32 to 4096 bits");
+			# 2048 is the least modulus anything here still takes
+			# for a signature (SP 800-131A); it was 32, and a
+			# 32-bit signer's own certificate did not verify.
+			if(bits < Minmodlen || bits > 4096)
+				error(sys->sprint("modulus must be in the range of %d to 4096 bits", Minmodlen));
 		* =>
 			arg->usage();
 		}
@@ -122,6 +121,21 @@ init(nil: ref Draw->Context, argv: list of string)
 	arg = nil;
 
 	owner := hd argv;
+
+	if(cnsa){
+		if(alg == nil)
+			alg = Login->CNSAsig;
+		if((err = login->cnsaalg(alg)) != nil)
+			error(err);
+		if(bits != 0)
+			error("CNSA mode: ML-DSA-87 has one size; -b is not taken");
+	}
+	if(alg == nil)
+		alg = algs[0];
+	if(bits == 0)
+		bits = PKmodlen;
+	else if(alg != "rsa" && alg != "elgamal" && alg != "dsa")
+		error(sys->sprint("-b: a %s key has one size", alg));
 
 	# generate a local key, self-signed
 	info := ref Keyring->Authinfo;
@@ -134,7 +148,20 @@ init(nil: ref Draw->Context, argv: list of string)
 	state := certdigest(info.mysk, myPKbuf);
 	info.cert = kr->sign(info.mysk, expire, state, certhash(info.mysk));
 
-	(info.alpha, info.p) = kr->dhparams(DHmodlen);
+	# The realm's Diffie-Hellman modulus, which auth(2) uses between
+	# holders of this signer's certificates: RFC 3526's 2048-bit group,
+	# and in CNSA mode its 3072-bit one (the file had 2048 bits in the
+	# mode too).  Both have generator 2.
+	if(cnsa){
+		(p, nil) := login->group(Login->CNSAgroup);
+		if(p == nil)
+			error("no 3072-bit group");
+		info.alpha = IPint.inttoip(2);
+		info.p = p;
+	}else
+		(info.alpha, info.p) = kr->dhparams(DHmodlen);
+	if(cnsa && (err = login->cnsakey(info)) != nil)
+		error("the key made is not CNSA mode's: " + err);
 
 	if((err = private(filename)) != nil)
 		error(err);

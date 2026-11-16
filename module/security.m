@@ -69,6 +69,18 @@ Login: module
 			(array of byte, array of byte, array of byte);
 	same:	fn(a, b: array of byte): int;	# equal, in time that does not say where not
 
+	# CNSA 2.0 mode (/env/cnsamode) and what it takes, for every
+	# program that makes or takes a key in it: each gives nil, or why not.
+	CNSAsig:	con "mldsa87";	# signatures: ML-DSA-87 alone (FIPS 204)
+	CNSAdhbits:	con 3072;	# the least Diffie-Hellman modulus
+	CNSAgroup:	con 15;	# RFC 3526's 3072-bit group, for a new key file
+	cnsamode:	fn(): int;
+	cnsaalg:	fn(alg: string): string;	# a signature algorithm's name
+	cnsahash:	fn(ha: string): string;	# a certificate's hash
+	cnsakey:	fn(info: ref Keyring->Authinfo): string;	# a key file, all of it
+	# a string as one of Keyring's messages, whole or not at all
+	putstring:	fn(fd: ref Sys->FD, s: string): string;
+
 	# logind(8)'s count, by name, of attempts that did not prove a
 	# password: the seconds name is still refused for, or 0 and this
 	# attempt counted until cleared

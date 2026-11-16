@@ -191,20 +191,6 @@ rsa_sign(data: array of byte, sk: ref RSAKey, algid: int): (string, array of byt
 	return rsa_encrypt(ph, sk, 0); # blocktype <- padding with zero
 }
 
-# [public]
-
-rsa_verify(data, signature: array of byte, pk: ref RSAKey, algid: int): int
-{
-	# digesting and add proper padding to it
-	ph := padhash(data, algid);
-    
-	(err, orig) := rsa_decrypt(signature, pk, 0); # blocktype ?
-	if(err != "" || !byte_cmp(orig, ph))
-		return 0;
-
-	return 1;
-}
-
 # [private]
 # padding block A
 PA := array [] of {

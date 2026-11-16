@@ -576,10 +576,18 @@ Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
 			digestinfo384[len sha384pfx:] = digest384;
 			ok = rsa_pkcs1_verify(s.signature, key.pk, digestinfo384);
 		} else
-			ok = pkcs->rsa_verify(s.tobe_signed, s.signature, key.pk, hash);
+			# Any other algorithm does not verify.  This went on to
+			# pkcs->rsa_verify with MD2 or MD5, which took any block
+			# that decrypted to 00 02, something, 00 and the digest:
+			# with an exponent of 3 anyone can write one, and no
+			# genuine PKCS #1 signature (block type 1) passed.  The
+			# path never came this way (verify_issued takes the two
+			# algorithms above and SHA-512 itself); the function is
+			# gone with its last use.
+			ok = 0;
 	DSS =>
-		# TODO: hash s.tobe_signed for verifying
-		ok = pkcs->dss_verify(s.tobe_signed, s.signature, key.pk);
+		# DSA is not implemented: nothing verifies
+		ok = 0;
 	DH =>
 		# simply failure
 		;

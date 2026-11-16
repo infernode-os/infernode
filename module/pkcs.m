@@ -77,7 +77,6 @@ PKCS: module {
 	rsa_encrypt: fn(data: array of byte, key: ref RSAKey, blocktype: int): (string, array of byte); 
 	rsa_decrypt: fn(data: array of byte, key: ref RSAKey, public: int): (string, array of byte); 
 	rsa_sign: fn(data: array of byte, sk: ref RSAKey, algid: int): (string, array of byte);
-	rsa_verify: fn(data, signature: array of byte, pk: ref RSAKey, algid: int): int;
 	# A key that can be one, or an error: an odd modulus of 2048 to
 	# 8192 bits, an odd public exponent of 3 or more below it.
 	decode_rsapubkey: fn(a: array of byte): (string, ref RSAKey);

@@ -156,6 +156,7 @@ TARG=\
 	llmclient_edge_test.dis\
 	fetchtools_edge_test.dis\
 	fakecs.dis\
+	ftpfs_test.dis\
 	webclient_body_test.dis\
 	webclient_cookie_test.dis\
 	webclient_deadline_test.dis\

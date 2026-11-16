@@ -70,6 +70,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	if(user == nil || user == "")
 		fatal("no username");
+	# the name is a directory in the store, as the server takes it
+	if(user == "." || user == ".." || hasslash(user))
+		fatal("user name cannot be a path: " + user);
 
 	sys->fprint(stderr, "secstore setup for user: %s\n", user);
 	sys->fprint(stderr, "store directory: %s\n", storedir);
@@ -100,14 +103,24 @@ init(nil: ref Draw->Context, args: list of string)
 	userdir := storedir + "/" + user;
 	sys->create(storedir, Sys->OREAD, Sys->DMDIR | 8r700);
 	sys->create(userdir, Sys->OREAD, Sys->DMDIR | 8r700);
+	(dok, dd) := sys->stat(userdir);
+	if(dok < 0 || (dd.mode & Sys->DMDIR) == 0)
+		fatal(sys->sprint("can't make the directory %s: %r", userdir));
 
-	# Write verifier
+	# Write verifier: all of it, or no account.  The write's result was
+	# not looked at, and "setup complete" was printed over a verifier cut
+	# short, which is an account nobody can log in to.
 	pakpath := userdir + "/PAK";
 	fd := sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		fatal(sys->sprint("can't create %s: %r", pakpath));
 	b := array of byte secstore->formatverifier(version, hexHi);
-	sys->write(fd, b, len b);
+	if(sys->write(fd, b, len b) != len b){
+		e := sys->sprint("can't write %s: %r", pakpath);
+		fd = nil;
+		sys->remove(pakpath);
+		fatal(e);
+	}
 	fd = nil;
 
 	sys->fprint(stderr, "PAK verifier stored in %s\n", pakpath);
@@ -132,7 +145,12 @@ init(nil: ref Draw->Context, args: list of string)
 			fd = sys->create(fpath, Sys->OWRITE, 8r600);
 			if(fd == nil)
 				fatal(sys->sprint("can't create %s: %r", fpath));
-			sys->write(fd, encrypted, len encrypted);
+			if(sys->write(fd, encrypted, len encrypted) != len encrypted){
+				e := sys->sprint("can't write %s: %r", fpath);
+				fd = nil;
+				sys->remove(fpath);
+				fatal(e);
+			}
 			fd = nil;
 			sys->fprint(stderr, "imported factotum keys to %s\n", fpath);
 		}
@@ -146,8 +164,8 @@ promptpassword(prompt: string): string
 	sys->fprint(stderr, "%s", prompt);
 
 	consctl := sys->open("/dev/consctl", Sys->OWRITE);
-	if(consctl != nil)
-		sys->fprint(consctl, "rawon");
+	if(consctl == nil || sys->fprint(consctl, "rawon") < 0)
+		sys->fprint(stderr, "secstore-setup: warning: cannot hide the typed password\n");
 
 	fd := sys->open("/dev/cons", Sys->OREAD);
 	if(fd == nil)
@@ -177,6 +195,14 @@ promptpassword(prompt: string): string
 	if(len pass > 0)
 		return pass;
 	return nil;
+}
+
+hasslash(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 1;
+	return 0;
 }
 
 readfile(path: string): string

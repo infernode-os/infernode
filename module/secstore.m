@@ -15,8 +15,12 @@ Secstore: module
 	dial:		fn(addr: string): ref Dial->Connection;
 	auth:		fn(conn: ref Dial->Connection, user: string, pwhash: array of byte): (string, string);
 	sendpin:	fn(conn: ref Dial->Connection, pin: string): int;
-	files:		fn(conn: ref Dial->Connection): list of (string, int, string, string, array of byte);
+	# (name, size, date, hash as text, hash) of each file, or why not
+	files:		fn(conn: ref Dial->Connection): (list of (string, int, string, string, array of byte), string);
 	getfile:	fn(conn: ref Dial->Connection, filename: string, maxsize: int): array of byte;
+	# (file, 0, nil); (nil, 1, nil) if the server has no such file;
+	# (nil, 0, why) if it could not be read.  getfile is nil for both.
+	fetch:		fn(conn: ref Dial->Connection, filename: string, maxsize: int): (array of byte, int, string);
 	remove:	fn(conn: ref Dial->Connection, filename: string): int;
 	putfile:	fn(conn: ref Dial->Connection, filename: string, data: array of byte): int;
 	bye:		fn(conn: ref Dial->Connection);

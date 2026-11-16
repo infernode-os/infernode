@@ -20,9 +20,11 @@ connect:    fn(addr: string, user: string, seckey: array of byte):
                 (ref Dial->Connection, string, string);
 sendpin:    fn(conn: ref Dial->Connection, pin: string): int;
 files:       fn(conn: ref Dial->Connection):
-                list of (string, int, string, string, array of byte);
+                (list of (string, int, string, string, array of byte), string);
 getfile:    fn(conn: ref Dial->Connection, name: string,
                 maxsize: int): array of byte;
+fetch:      fn(conn: ref Dial->Connection, name: string,
+                maxsize: int): (array of byte, int, string);
 putfile:    fn(conn: ref Dial->Connection, name: string, data: array of byte): int;
 remove:     fn(conn: ref Dial->Connection, file: string): int;
 bye:        fn(conn: ref Dial->Connection);
@@ -178,6 +180,37 @@ from the secure store, and returns its contents as an array of bytes.
 .I Maxsize
 gives the largest acceptable file size; if the value is zero or negative,
 a large value is used by default.
+It returns nil, with the error string set, both when the server has no such file
+and when the file could not be read.
+.B Fetch
+tells them apart: it returns a tuple
+.BI ( file,\ absent,\ err ),
+the file's contents with
+.I absent
+zero and
+.I err
+nil; or nil with
+.I absent
+non-zero when the server says it has no file of that name; or nil and a diagnostic
+when the file could not be read (the server's own error, an answer that is not a size,
+a connection that ended part way).
+A caller that will later store the file should use
+.BR fetch :
+a file that could not be read is not a file that is not there.
+.B Files
+returns the account's files as a list of tuples
+.BI ( name,\ size,\ date,\ hash,\ rawhash )
+and a diagnostic, nil if the listing was read.
+A Plan 9
+.I secstore
+lists each file's SHA-1 hash;
+.IR secstored (8)
+sends its directory, which has none, and
+.I hash
+is then
+.BR - .
+Nothing a server sends raises an exception in these functions: an answer that is not
+what the protocol has is an error.
 The files stored on the service are separately encrypted under the user's secret key.
 .B Mkfilekey
 takes a textual secret

@@ -32,6 +32,8 @@ stderr: ref Sys->FD;
 conn: ref Dial->Connection;
 seckey: array of byte;
 seckey2: array of byte;
+rootkey: array of byte;	# files as logon and factotum write them (SGCM2)
+filekey2: array of byte;	# the two older formats, read only
 filekey: array of byte;
 file: array of byte;
 verbose := 0;
@@ -101,7 +103,11 @@ init(nil: ref Draw->Context, args: list of string)
 		if(nf > 1)
 			pin = hd tl flds;
 	}
-	conn: ref Dial->Connection;
+	# The connection is the module's (conn, above), used after this loop.
+	# A second conn was declared here and a third by the := in the loop:
+	# the one the operations used was never set, and every operation
+	# ended "dereference of nil" once the password had been proved.
+	srvname, diag: string;
 Auth:
 	for(;;){
 		if(!iflag)
@@ -111,60 +117,111 @@ Auth:
 		erase();
 		seckey = secstore->mkseckey(pass);
 		seckey2 = secstore->mkseckey2(pass);
+		rootkey = secstore->mkfilekey3(user, pass);
+		filekey2 = secstore->mkfilekey2(pass);
 		filekey = secstore->mkfilekey(pass);
 		for(i := 0; i < len pass; i++)
 			pass[i] = 0;	# clear it
-		(conn, srvname, diag) := secstore->connect2(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2);
+		{
+			(conn, srvname, diag) = secstore->connect2(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2);
+		}exception e{
+		"*" =>
+			# nothing the server sends should raise; if it does, say so
+			conn = nil;
+			srvname = nil;
+			diag = "exception: " + e;
+		}
 		if(srvname == nil){
 			sys->fprint(stderr, "secstore: authentication failed: %s\n",  diag);
-			if(iflag)
+			if(iflag){
+				erase();
 				raise "fail:auth";
+			}
 			continue;
 		}
 		case diag {
 		"" =>
-			if(verbose)
-				sys->fprint(stderr, "server: %s\n", srvname);
-			secstore->erasekey(seckey);
-			secstore->erasekey(seckey2);
-			seckey = nil;
-			seckey2 = nil;
 			break Auth;
 		"need pin" =>
 			if(!iflag){
 				pin = readpassword("STA PIN+SecureID");
 				if(len pin == 0){
 					sys->fprint(stderr, "cancelled");
+					erase();
 					exit;
 				}
-			}else if(pin == nil)
+			}else if(pin == nil){
+				erase();
 				raise "fail:no pin";
-			if(secstore->sendpin(conn, pin) < 0){
+			}
+			r := secstore->sendpin(conn, pin);
+			for(i = 0; i < len pin; i++)
+				pin[i] = 0;
+			if(r < 0){
 				sys->fprint(stderr, "secstore: pin rejected: %r\n");
-				if(iflag)
+				if(iflag){
+					erase();
 					raise "fail:bad pin";
+				}
 				continue;
 			}
+			# the pin was taken: authenticated.  (Nothing left the
+			# loop here, so the password was asked for again.)
+			break Auth;
+		* =>
+			sys->fprint(stderr, "secstore: authentication failed: %s\n",  diag);
+			erase();
+			raise "fail:auth";
 		}
 	}
+	if(verbose)
+		sys->fprint(stderr, "server: %s\n", clean(srvname));
+	secstore->erasekey(seckey);
+	secstore->erasekey(seckey2);
+	seckey = nil;
+	seckey2 = nil;
+	{
+		operate(op, args);
+	}exception e{
+	"fail:*" =>
+		erase();
+		secstore->bye(conn);
+		raise e;
+	"*" =>
+		erase();
+		sys->fprint(stderr, "secstore: %s\n", e);
+		raise "fail:error";
+	}
+	erase();
+	secstore->bye(conn);
+}
+
+operate(op: int, args: list of string)
+{
 	if(op == 't'){
 		erase();	# no longer need the keys
-		entries := secstore->files(conn);
+		(entries, lerr) := secstore->files(conn);
+		if(lerr != nil)
+			error("can't list files: " + lerr);
 		for(; entries != nil; entries = tl entries){
 			(name, size, date, hash, nil) := hd entries;
+			# only the files named, if any are (the loop compared each
+			# with the first name and then asked whether the list was
+			# empty: nothing was ever left out)
 			if(args != nil){
 				for(l := args; l != nil; l = tl l)
-					if((hd args) == name)
+					if(hd l == name)
 						break;
-				if(args == nil)
+				if(l == nil)
 					continue;
 			}
+			# the names and dates are the server's
 			if(verbose)
-				sys->print("%-14q %10d %s %s\n", name, size, date, hash);
+				sys->print("%-14q %10d %s %s\n", clean(name), size, clean(date), clean(hash));
 			else
-				sys->print("%q\n", name);
+				sys->print("%q\n", clean(name));
 		}
-		exit;
+		return;
 	}
 	for(; args != nil; args = tl args){
 		fname := hd args;
@@ -173,10 +230,16 @@ Auth:
 			checkname(fname, 1);
 			if(secstore->remove(conn, fname) < 0)
 				error(sys->sprint("can't remove %q: %r", fname));
+			# the server does not answer a remove: ask it
+			(nil, absent, rerr) := secstore->fetch(conn, fname, 0);
+			if(rerr != nil)
+				error(sys->sprint("can't tell whether %q was removed: %s", fname, rerr));
+			if(!absent)
+				error(sys->sprint("%q was not removed by the server", fname));
 			verb('d', fname);
 		'p' =>
 			checkname(fname, 1);
-			file = getfile(conn, fname, filekey);
+			file = getfile(fname);
 			lines := secstore->lines(file);
 			lno := 1;
 			for(; lines != nil; lines = tl lines){
@@ -190,7 +253,7 @@ Auth:
 			verb('p', fname);
 		'x' =>
 			checkname(fname, 1);
-			file = getfile(conn, fname, filekey);
+			file = getfile(fname);
 			ofd := sys->create(fname, Sys->OWRITE, 8r600);
 			if(ofd == nil)
 				error(sys->sprint("can't create %q: %r", fname));
@@ -200,28 +263,54 @@ Auth:
 			file = nil;
 			verb('x', fname);
 		'r' =>
-			checkname(fname, 1);
+			# on the server, the last component of the local name
+			sname := checkname(fname, 0);
 			fd := sys->open(fname, sys->OREAD);
 			if(fd == nil)
 				error(sys->sprint("open %q: %r", fname));
 			(ok, dir) := sys->fstat(fd);
 			if(ok != 0)
 				error(sys->sprint("stat %q: %r", fname));
-			if(int dir.length > Maxfilesize)
+			if(dir.length > big Maxfilesize)
 				error(sys->sprint("length %bd > Maxfilesize %d", dir.length, Maxfilesize));
 			file = array[int dir.length] of byte;
 			if(sys->readn(fd, file, len file) != len file)
 				error(sys->sprint("short read: %r"));
-			if(putfile(conn, fname, file, filekey) < 0)
-				error(sys->sprint("putfile: %r"));
+			sent := secstore->encrypt3(file, rootkey);
+			if(sent == nil || secstore->putfile(conn, sname, sent) < 0)
+				error(sys->sprint("can't store %q: %r", sname));
+			# the server does not answer a store: read it back
+			(back, nil, berr) := secstore->fetch(conn, sname, 0);
+			if(berr != nil)
+				error(sys->sprint("can't tell whether %q was stored: %s", sname, berr));
+			if(!same(back, sent))
+				error(sys->sprint("%q was not stored by the server", sname));
 			secstore->erasekey(file);
 			file = nil;
-			verb('r', fname);
+			verb('r', sname);
 		* =>
 			error(sys->sprint("op %c not implemented", op));
 		}
 	}
-	erase();
+}
+
+same(a, b: array of byte): int
+{
+	if(a == nil || len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+# the server's text, for the terminal: no control characters
+clean(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] == 16r7f)
+			s[i] = '?';
+	return s;
 }
 
 checkname(s: string, noslash: int): string
@@ -236,7 +325,8 @@ checkname(s: string, noslash: int): string
 		if(s[i] == '\n' || s[i] <= ' ')
 			break;
 	}
-	if(s == nil || tail == nil || i < len s || s == "..")
+	# (PAK is where a server keeps the account's verifier, beside its files)
+	if(s == nil || tail == nil || i < len s || tail == ".." || tail == "." || tail == "PAK")
 		error(sys->sprint("can't use %q as a secstore file name", s));	# server checks as well, of course
 	return tail;
 }
@@ -247,31 +337,34 @@ verb(op: int, n: string)
 		sys->fprint(stderr, "%c %q\n", op, n);
 }
 
-getfile(conn: ref Dial->Connection, fname: string, key: array of byte): array of byte
+#
+# A file, decrypted: as logon and factotum write it (AES-256-GCM under a
+# key made from the user and the password), or in either older format.
+# Only the oldest was read, so the file this command exists to print,
+# factotum, could not be.
+#
+getfile(fname: string): array of byte
 {
-	f := secstore->getfile(conn, fname, 0);
+	(f, absent, err) := secstore->fetch(conn, fname, 0);
+	if(absent)
+		error(sys->sprint("can't fetch %q: the server has no such file", fname));
+	if(err != nil)
+		error(sys->sprint("can't fetch %q: %s", fname, err));
+	if(len f == 0)
+		error(sys->sprint("%q is empty on the server: not an encrypted file", fname));
+	f = secstore->decrypt3(f, rootkey, filekey2, filekey);
 	if(f == nil)
-		error(sys->sprint("can't fetch %q: %r", fname));
-	if(fname != "."){
-		f = secstore->decrypt(f, key);
-		if(f == nil)
-			error(sys->sprint("can't decrypt %q: %r", fname));
-	}
+		error(sys->sprint("can't decrypt %q: %r", fname));
 	return f;
-}
-
-putfile(conn: ref Dial->Connection, fname: string, data, key: array of byte): int
-{
-	data = secstore->encrypt(data, key);
-	if(data == nil)
-		return -1;
-	return secstore->putfile(conn, fname, data);
 }
 
 erase()
 {
 	if(secstore != nil){
 		secstore->erasekey(seckey);
+		secstore->erasekey(seckey2);
+		secstore->erasekey(rootkey);
+		secstore->erasekey(filekey2);
 		secstore->erasekey(filekey);
 		secstore->erasekey(file);
 	}

@@ -43,6 +43,7 @@ after encrypting them.
 In each case, the file name on the server is the last component of the local file name
 (ie, everything after the final
 .RB ` / ').
+Each file is read back from the server to check that it was stored.
 .TP
 .B t
 List a table of contents of
@@ -51,11 +52,28 @@ collection on the the server.
 By default, only the names are listed, one per line, but
 given the
 .B -v
-option, each line displays name, file size in bytes, date last stored, and SHA-1 hash of the file's contents.
+option, each line displays name, file size in bytes, date last stored, and SHA-1 hash of the file's contents
+(or
+.BR - :
+.IR secstored (8)
+gives none).
+If files are named, only those are listed.
 .TP
 .B x
 Extract the named files into files of the same name in the current directory.
 By default, they are decrypted (ie, in clear text).
+.PP
+Files are encrypted as
+.IR logon (1)
+and
+.IR factotum (4)
+write them (AES-256-GCM under a key made from the user's name and the secret);
+files in the two older formats are still read.
+A file of an account with a second factor is under that account's data key, and is not
+decrypted by the secret alone.
+The name
+.B PAK
+is refused: it is where a server keeps the account's verifier.
 .PP
 If no
 .I op

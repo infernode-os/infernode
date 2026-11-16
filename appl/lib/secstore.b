@@ -22,6 +22,12 @@ include "security.m";
 include "encoding.m";
 	base64: Encoding;
 
+include "styx.m";
+	styx: Styx;
+
+include "daytime.m";
+	daytime: Daytime;
+
 include "secstore.m";
 
 
@@ -72,23 +78,42 @@ connect(addr: string, user: string, pwhash: array of byte): (ref Dial->Connectio
 	return connectver(addr, user, VERSION1, pwhash);
 }
 
+#
+# The account's version is the server's to say.  Version 3 is tried, and
+# the version 1 exchange only when the server refuses version 3 as a
+# version: it has another's verifier for the account, or does not know
+# the protocol.  It was tried after any failure at all (a wrong password,
+# a dropped connection, whatever a peer answered), so every such failure
+# cost a second handshake and was reported in the second's words: a wrong
+# password read "account version mismatch".
+#
+# VERSION2 (secstore2) retired: nothing enrols it, and legacy V1 accounts
+# self-upgrade straight to VERSION3 on first login (see logon migratepak).
+#
 connect2(addr: string, user: string, pwhash: array of byte, pwhash2: array of byte): (ref Dial->Connection, string, string)
 {
-	conn: ref Dial->Connection;
-	sname, diag: string;
-	lastdiag := "no secstore credentials";
-
 	if(pwhash2 != nil){
-		(conn, sname, diag) = connectver(addr, user, VERSION3, pwhash2);
-		if(conn != nil)
+		(conn, sname, diag) := connectver(addr, user, VERSION3, pwhash2);
+		if(conn != nil || pwhash == nil || !refusedversion(diag))
 			return (conn, sname, diag);
-		lastdiag = diag;
 	}
-	# VERSION2 (secstore2) retired: nothing enrols it, and legacy V1 accounts
-	# self-upgrade straight to VERSION3 on first login (see logon migratepak).
 	if(pwhash != nil)
 		return connectver(addr, user, VERSION1, pwhash);
-	return (nil, nil, lastdiag);
+	return (nil, nil, "no secstore credentials");
+}
+
+# what a server says of a version it will not speak for this account
+Eacctver: con "account version mismatch";
+Eprotover: con "bad protocol";
+
+refusedversion(diag: string): int
+{
+	return hassuffix(diag, Eacctver) || hassuffix(diag, Eprotover);
+}
+
+hassuffix(s, suf: string): int
+{
+	return len s >= len suf && s[len s - len suf:] == suf;
 }
 
 connectver(addr: string, user: string, version: string, pwhash: array of byte): (ref Dial->Connection, string, string)
@@ -175,7 +200,7 @@ authprecompver(conn: ref Dial->Connection, user: string, version: string, hexHi:
 		return (sname, "need pin");
 	if(s != "OK"){
 		if(s != nil)
-			sys->werrstr(s);
+			sys->werrstr("unexpected answer from server: " + cleantext(s));
 		return (nil, sys->sprint("%r"));
 	}
 	return (sname, nil);
@@ -191,7 +216,7 @@ auth(conn: ref Dial->Connection, user: string, pwhash: array of byte): (string, 
 		return (sname, "need pin");
 	if(s != "OK"){
 		if(s != nil)
-			sys->werrstr(s);
+			sys->werrstr("unexpected answer from server: " + cleantext(s));
 		return (nil, sys->sprint("%r"));
 	}
 	return (sname, nil);
@@ -218,72 +243,158 @@ sendpin(conn: ref Dial->Connection, pin: string): int
 	s := readstr(conn.dfd);
 	if(s != "OK"){
 		if(s != nil)
-			sys->werrstr(s);
+			sys->werrstr("unexpected answer from server: " + cleantext(s));
 		return -1;
 	}
 	return 0;
 }
 
-files(conn: ref Dial->Connection): list of (string, int, string, string, array of byte)
+#
+# The account's files: (name, size, date, hash as text, hash).  A Plan 9
+# secstore answers "GET ." with a line for each,
+#	factotum\t2552 Dec  9 13:04:49 GMT 2005 n9wSk45SPDxgljOIflGQoXjOkjs=
+# and auth/secstored with its directory as read: stat(5) entries, which
+# give a name, a size and a time and no hash.  Either is read, and
+# nothing else: a line was sliced where its fields ought to be, so one
+# that was short raised an exception in the caller, and the size lost
+# its first digit.  The error says which entry was not one.
+#
+files(conn: ref Dial->Connection): (list of (string, int, string, string, array of byte), string)
 {
-	file := getfile(conn, ".", 0);
-	if(file == nil)
-		return nil;
+	(file, absent, err) := fetch(conn, ".", 0);
+	if(err != nil)
+		return (nil, err);
+	if(absent)
+		return (nil, "server gives no listing");
 	rl: list of (string, int, string, string, array of byte);
+	if(len file > 0 && !printable(file)){
+		(rl, err) = dirlisting(file);
+		if(err != nil)
+			return (nil, err);
+	}else
 	for(linelist := lines(file); linelist != nil; linelist = tl linelist){
 		s := string hd linelist;
-		# factotum\t2552 Dec  9 13:04:49 GMT 2005 n9wSk45SPDxgljOIflGQoXjOkjs=
+		while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
+			s = s[0:len s-1];
+		if(s == nil)
+			continue;
 		for(i := 0; i < len s && s[i] != '\t' && s[i] != ' '; i++){}	# can be trailing spaces
 		name := s[0:i];
 		for(; i < len s && (s[i] == ' ' || s[i] == '\t'); i++){}
-		for(j := i; j  < len s && s[j] != ' '; j++){}
-		size := int s[i+1:j];
+		for(j := i; j < len s && s[j] != ' '; j++){}
+		if(name == nil || j == i || j - i > 9 || !alldigits(s[i:j]))
+			return (nil, "malformed listing from server: " + cleantext(s));
+		size := int s[i:j];
 		for(i = j; i < len s && s[i] == ' '; i++){}
+		if(i + 24 + 1 >= len s)
+			return (nil, "malformed listing from server: " + cleantext(s));
 		date := s[i:i+24];
-		i += 24+1;
-		for(j = i; j < len s && s[j] != '\n'; j++){}
-		sha1 := s[i:j];
-		rl = (name, int size, date, sha1, base64->dec(sha1)) :: rl;
+		sha1 := s[i+24+1:];
+		rl = (name, size, date, sha1, base64->dec(sha1)) :: rl;
 	}
 	l: list of (string, int, string, string, array of byte);
 	for(; rl != nil; rl = tl rl)
 		l = hd rl :: l;
-	return l;
+	return (l, nil);
+}
+
+# a directory as read (stat(5) entries, one after another), most recent
+# entry first as files() builds its list
+dirlisting(a: array of byte): (list of (string, int, string, string, array of byte), string)
+{
+	if(styx == nil){
+		styx = load Styx Styx->PATH;
+		if(styx == nil)
+			return (nil, sys->sprint("can't load %s: %r", Styx->PATH));
+		styx->init();
+	}
+	if(daytime == nil)
+		daytime = load Daytime Daytime->PATH;
+	rl: list of (string, int, string, string, array of byte);
+	for(o := 0; o < len a;){
+		(n, d) := styx->unpackdir(a[o:]);
+		if(n <= 0)
+			return (nil, "malformed listing from server");
+		o += n;
+		# the verifier is the account's, not one of its files
+		if((d.mode & Sys->DMDIR) != 0 || d.name == "PAK" || d.name == "PAK.new")
+			continue;
+		if(d.length > big Maxfilesize)
+			d.length = big Maxfilesize;
+		date := string d.mtime;
+		if(daytime != nil)
+			date = daytime->text(daytime->gmt(d.mtime));
+		rl = (cleantext(d.name), int d.length, date, "-", nil) :: rl;
+	}
+	return (rl, nil);
+}
+
+printable(a: array of byte): int
+{
+	for(i := 0; i < len a; i++)
+		if(a[i] < byte ' ' && a[i] != byte '\n' && a[i] != byte '\t')
+			return 0;
+	return 1;
+}
+
+alldigits(s: string): int
+{
+	if(len s == 0)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
 }
 
 getfile(conn: ref Dial->Connection, name: string, maxsize: int): array of byte
+{
+	(file, absent, err) := fetch(conn, name, maxsize);
+	if(absent)
+		err = sys->sprint("remote file %q does not exist", name);
+	if(err != nil){
+		sys->werrstr(err);
+		return nil;
+	}
+	return file;
+}
+
+#
+# A file of the account's: (file, 0, nil); (nil, 1, nil) when the server
+# says it has none of that name; (nil, 0, why) when it could not be
+# read.  getfile gives nil for the last two alike, and its callers took
+# every nil for an account with nothing stored yet: a read that failed
+# (the server's error, a connection cut part way) was then a login with
+# no keys, and the next key added was saved over the file not read.
+#
+# The server's answer is a size and nothing else.  It was converted as
+# it came, and text that is no number is 0: a file of no bytes.
+#
+fetch(conn: ref Dial->Connection, name: string, maxsize: int): (array of byte, int, string)
 {
 	fd := conn.dfd;
 	if(maxsize <= 0)
 		maxsize = Maxfilesize;
 	if(sys->fprint(fd, "GET %s\n", name) < 0 ||
-	   (s := readstr(fd)) == nil){
-		sys->werrstr(sys->sprint("can't get %q: %r", name));
-		return nil;
-	}
+	   (s := readstr(fd)) == nil)
+		return (nil, 0, sys->sprint("can't get %q: %r", name));
+	if(s == "-1")
+		return (nil, 1, nil);
+	if(len s > 9 || !alldigits(s))
+		return (nil, 0, sys->sprint("can't get %q: server's size is no number: %s", name, cleantext(s)));
 	nb := int s;
-	if(nb == -1){
-		sys->werrstr(sys->sprint("remote file %q does not exist", name));
-		return nil;
-	}
-	if(nb < 0 || nb > maxsize){
-		sys->werrstr(sys->sprint("implausible file size %d for %q", nb, name));
-		return nil;
-	}
+	if(nb > maxsize)
+		return (nil, 0, sys->sprint("implausible file size %d for %q", nb, name));
 	file := array[nb] of byte;
 	for(nr := 0; nr < nb;){
 		n :=  sys->read(fd, file[nr:], nb-nr);
-		if(n < 0){
-			sys->werrstr(sys->sprint("error reading %q: %r", name));
-			return nil;
-		}
-		if(n == 0){
-			sys->werrstr(sys->sprint("empty file chunk reading %q at offset %d", name, nr));
-			return nil;
-		}
+		if(n < 0)
+			return (nil, 0, sys->sprint("error reading %q: %r", name));
+		if(n == 0)
+			return (nil, 0, sys->sprint("%q cut short by the server: %d bytes of %d", name, nr, nb));
 		nr += n;
 	}
-	return file;
+	return (file, 0, nil);
 }
 
 remove(conn: ref Dial->Connection, name: string): int
@@ -391,11 +502,13 @@ mkfilekey(s: string): array of byte
 
 decrypt(file: array of byte, key: array of byte): array of byte
 {
+	# an empty file is not an encrypted one (it was returned as its own
+	# plaintext, whatever the key)
 	length := len file;
-	if(length == 0)
-		return file;
-	if(length < AESbsize+Checklen)
+	if(length < AESbsize+Checklen){
+		sys->werrstr("file too short to be an encrypted one");
 		return nil;
+	}
 	state := kr->aessetup(key, file[0:AESbsize]);
 	if(state == nil){
 		sys->werrstr("can't set AES state");
@@ -412,9 +525,11 @@ decrypt(file: array of byte, key: array of byte): array of byte
 encrypt(file: array of byte, key: array of byte): array of byte
 {
 	dat := array[AESbsize+len file+Checklen] of byte;
-	iv := random->randombuf(random->NotQuiteRandom, AESbsize);
-	if(len iv != AESbsize)
+	iv := randbytes(random->NotQuiteRandom, AESbsize);
+	if(iv == nil){
+		sys->werrstr("can't generate IV");
 		return nil;
+	}
 	dat[:] = iv;
 	dat[len iv:] = file;
 	dat[len iv+len file:] = array of byte Checkpat;
@@ -521,6 +636,31 @@ mkaddaad(magic, salt: array of byte): array of byte
 }
 
 #
+# n random bytes, or nil: read here, and the read checked.  random(2)'s
+# randombuf gives an array of zeros when the device cannot be opened or
+# read, with no error, and its length is right; the checks that were
+# made of it could not fail.  A nonce of zeros under AES-GCM is the same
+# nonce for every file (SP 800-38D 8: it must not repeat under a key).
+#
+randbytes(which, n: int): array of byte
+{
+	f := "/dev/random";
+	if(which == random->NotQuiteRandom)
+		f = "/dev/notquiterandom";
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[n] of byte;
+	for(o := 0; o < n;){
+		k := sys->read(fd, buf[o:], n - o);
+		if(k <= 0)
+			return nil;
+		o += k;
+	}
+	return buf;
+}
+
+#
 # Encrypt with AES-256-GCM using the older SGCM1 format.
 # Output format: "SGCM1\n" + 12-byte nonce + ciphertext + 16-byte GCM tag.
 # Kept for compatibility; new callers should prefer encrypt3.
@@ -530,8 +670,8 @@ encrypt2(file: array of byte, key: array of byte): array of byte
 	magic := array of byte SGCM1_MAGIC;
 
 	# Generate random nonce using host CSPRNG
-	nonce := random->randombuf(random->ReallyRandom, SGCM_NONCE_LEN);
-	if(nonce == nil || len nonce != SGCM_NONCE_LEN){
+	nonce := randbytes(random->ReallyRandom, SGCM_NONCE_LEN);
+	if(nonce == nil){
 		sys->werrstr("can't generate nonce");
 		return nil;
 	}
@@ -570,13 +710,13 @@ encrypt2(file: array of byte, key: array of byte): array of byte
 encrypt3(file: array of byte, rootkey: array of byte): array of byte
 {
 	magic := array of byte SGCM2_MAGIC;
-	salt := random->randombuf(random->ReallyRandom, SGCM3_SALT_LEN);
-	if(salt == nil || len salt != SGCM3_SALT_LEN){
+	salt := randbytes(random->ReallyRandom, SGCM3_SALT_LEN);
+	if(salt == nil){
 		sys->werrstr("can't generate blob salt");
 		return nil;
 	}
-	nonce := random->randombuf(random->ReallyRandom, SGCM_NONCE_LEN);
-	if(nonce == nil || len nonce != SGCM_NONCE_LEN){
+	nonce := randbytes(random->ReallyRandom, SGCM_NONCE_LEN);
+	if(nonce == nil){
 		sys->werrstr("can't generate nonce");
 		return nil;
 	}
@@ -725,6 +865,13 @@ lines(file: array of byte): list of array of byte
 	return l;
 }
 
+#
+# One message from the server; nil with the error string set for no
+# message, and for the server's own refusal ("!why").  The server is
+# whoever answered the dial, and this is read before anything has been
+# authenticated: a message of no bytes (a record that is its header
+# alone) was indexed and raised an exception in the caller.
+#
 readstr(fd: ref Sys->FD): string
 {
 	buf := array[500] of byte;
@@ -732,11 +879,29 @@ readstr(fd: ref Sys->FD): string
 	if(n < 0)
 		return nil;
 	s := string buf[0:n];
+	if(len s == 0){
+		sys->werrstr("empty message from server");
+		return nil;
+	}
 	if(s[0] == '!'){
-		sys->werrstr(s[1:]);
+		sys->werrstr(cleantext(s[1:]));
 		return nil;
 	}
 	return s;
+}
+
+# The server's text for an error string: one line of printable
+# characters and no more than a line's worth, whatever was sent.
+cleantext(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s && len r < 120; i++){
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			c = ' ';
+		r[len r] = c;
+	}
+	return r;
 }
 
 writerr(fd: ref Sys->FD, s: string)
@@ -823,9 +988,7 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
-	# the server's, and an element of the group or nothing: one that is
-	# no number was a nil dereference here
-	if(mu == nil || mu.cmp(IPint.inttoip(0)) <= 0 || mu.cmp(params.p) >= 0){
+	if(!goodmu(mu, params)){
 		writerr(dfd, "bad mu");
 		sys->werrstr("secstore: server's mu is outside the group");
 		return nil;
@@ -851,9 +1014,11 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 		hexsigma[i] = 0;
 
 	err := setsecretver(conn, digest, 0, version);
-	if(err != nil)
-		return nil;
 	erasekey(digest);
+	if(err != nil){
+		sys->werrstr("can't set the session's secrets: " + err);
+		return nil;
+	}
 	if(sys->fprint(conn.cfd, "alg aes_256_gcm") < 0)
 		return nil;
 	return S;
@@ -1135,9 +1300,7 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 		return nil;
 	}
 	mu := IPint.strtoip(hexmu, 64);
-	# the server's, and an element of the group or nothing: one that is
-	# no number was a nil dereference here
-	if(mu == nil || mu.cmp(IPint.inttoip(0)) <= 0 || mu.cmp(params.p) >= 0){
+	if(!goodmu(mu, params)){
 		writerr(dfd, "bad mu");
 		sys->werrstr("secstore: server's mu is outside the group");
 		return nil;
@@ -1163,12 +1326,30 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 		hexsigma[i] = 0;
 
 	err := setsecretver(conn, digest, 0, version);
-	if(err != nil)
-		return nil;
 	erasekey(digest);
+	if(err != nil){
+		sys->werrstr("can't set the session's secrets: " + err);
+		return nil;
+	}
 	if(sys->fprint(conn.cfd, "alg aes_256_gcm") < 0)
 		return nil;
 	return S;
+}
+
+#
+# The server's public value, validated as SP 800-56A rev. 3, 5.6.2.3.1
+# (FFC full public-key validation) has it: 2 <= mu <= p-2, and mu of
+# order q (mu^q mod p = 1).  Only 0 < mu < p was asked: with mu = 1 (or
+# p-1) the shared value is 1 (or +-1) whatever the client's secret, so
+# the session's key followed from public values and the verifier alone.
+# One that is no number was a nil dereference before that.
+#
+goodmu(mu: ref IPint, params: ref PAKparams): int
+{
+	one := IPint.inttoip(1);
+	if(mu == nil || mu.cmp(one) <= 0 || mu.cmp(params.p.sub(one)) >= 0)
+		return 0;
+	return mu.expmod(params.q, params.p).eq(one);
 }
 
 ex(tag: string, s: string): string

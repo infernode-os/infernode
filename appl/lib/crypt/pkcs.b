@@ -62,8 +62,11 @@ objIdTab = array [] of {
 	id_sha384WithRSAEncryption =>	Oid(array [] of {1,2,840,113549,1,1,12}),
 	id_mldsa65 =>			Oid(array [] of {2,16,840,1,101,3,4,3,18}),
 	id_mldsa87 =>			Oid(array [] of {2,16,840,1,101,3,4,3,19}),
-	id_slhdsa192s =>		Oid(array [] of {2,16,840,1,101,3,4,3,22}),
-	id_slhdsa256s =>		Oid(array [] of {2,16,840,1,101,3,4,3,26})
+	# SLH-DSA-SHAKE-192s and -256s, the parameter sets Keyring has
+	# (NIST's registry, RFC 9909: .28 and .30; they were .22 and .26,
+	# which are SLH-DSA-SHA2-192s and SLH-DSA-SHAKE-128s)
+	id_slhdsa192s =>		Oid(array [] of {2,16,840,1,101,3,4,3,28}),
+	id_slhdsa256s =>		Oid(array [] of {2,16,840,1,101,3,4,3,30})
 };
 
 # [public]
@@ -129,6 +132,8 @@ rsa_encrypt(data: array of byte, key: ref RSAKey, blocktype: int)
 rsa_decrypt(data: array of byte, key: ref RSAKey, public: int) 
 	: (string, array of byte)
 {
+	if(key == nil || key.modulus == nil || key.exponent == nil)
+		return ("null pkcs#1 key", nil);
 	eb := rsacomp(data, key);
 	k := key.modlen;
 	if(len eb == k) {
@@ -178,6 +183,10 @@ rsa_sign(data: array of byte, sk: ref RSAKey, algid: int): (string, array of byt
 {
 	# digesting and add proper padding to it
 	ph := padhash(data, algid);
+	# a digest this does not make (it then signed the empty message,
+	# and said it had signed the data)
+	if(ph == nil)
+		return ("unsupported digest algorithm", nil);
 
 	return rsa_encrypt(ph, sk, 0); # blocktype <- padding with zero
 }
@@ -218,9 +227,9 @@ padhash(data: array of byte, algid: int): array of byte
 	padded := array [34] of byte;
 	case algid {
 	MD2_WithRSAEncryption =>
-		padded[13] = byte 2;
-		# TODO: implement md2 in keyring module
-		# keyring->md2(data, len data, padded[18:], nil);
+		# there is no MD2 here (the block was built with no digest in
+		# it: the same for every message)
+		return nil;
 
 	MD5_WithRSAEncryption =>	
 		padded[13] = byte 5;
@@ -265,19 +274,50 @@ RSAKey.bits(key: self ref RSAKey): int
 #		publicExponent INTEGER
 #	}
 
+#
+# A key is taken only if it can be one.  The numbers come from a
+# peer's certificate, and whoever verifies with them does arithmetic
+# modulo the first: a modulus of 0 was accepted, and RSA-PSS in a TLS
+# handshake then divided by it before the chain had been looked at.
+#   - both are positive INTEGERs (a first byte with its top bit set is
+#     a negative number in DER, and was read as a large positive one);
+#   - the modulus is odd (a product of two odd primes) and of
+#     RSAMINBITS to RSAMAXBITS bits.  2048 is the least a CA may
+#     certify (CA/Browser Forum Baseline Requirements 6.1.5) and the
+#     least SP 800-131A r2 counts as acceptable rather than legacy; no
+#     root in /lib/certs is shorter.  The upper bound is what the
+#     verifiers already asked for, so that a key cannot be made to
+#     cost seconds a signature.
+#   - the public exponent is odd and at least 3 (SP 800-56B r2 6.2:
+#     an odd integer; 1 makes a signature its own message), and less
+#     than the modulus.
+
+RSAMINBITS: con 2048;
+RSAMAXBITS: con 8192;
+
+# The bytes asn1 gives for an INTEGER, of a negative number (or none)?
+# One of more than four bytes is given as it was encoded, two's
+# complement.  A shorter one has been through an int: its bytes are
+# the int's, less leading zeros, so that 16rA88B is A8 8B and only a
+# negative number still has all four.
+negative(b: array of byte): int
+{
+	return len b == 0 || len b >= 4 && (int b[0] & 16r80);
+}
+
 decode_rsapubkey(a: array of byte): (string, ref RSAKey)
 {
 parse:
 	for(;;) {
 		(err, e) := asn1->decode(a);
-		if(err != "")
+		if(err != "" || e == nil)
 			break parse;
 		(ok, el) := e.is_seq();
 		if(!ok || len el != 2)
 			break parse;
 		modbytes, expbytes: array of byte;
 		(ok, modbytes) = (hd el).is_bigint();
-		if(!ok)
+		if(!ok || negative(modbytes))
 			break parse;
 		modulus := IPint.bebytestoip(modbytes);
 		# get modlen this way, because sometimes it
@@ -285,9 +325,20 @@ parse:
 		mbytes := modulus.iptobebytes();
 		modlen := len mbytes;
 		(ok, expbytes) = (hd tl el).is_bigint();
-		if(!ok)
+		if(!ok || negative(expbytes))
 			break parse;
 		exponent := keyring->IPint.bebytestoip(expbytes);
+		bits := modulus.bits();
+		if(bits < RSAMINBITS)
+			return (sys->sprint("rsa public key: modulus of %d bits, under %d", bits, RSAMINBITS), nil);
+		if(bits > RSAMAXBITS)
+			return (sys->sprint("rsa public key: modulus of %d bits, over %d", bits, RSAMAXBITS), nil);
+		if((int modbytes[len modbytes-1] & 1) == 0)
+			return ("rsa public key: even modulus", nil);
+		if((int expbytes[len expbytes-1] & 1) == 0 || exponent.bits() < 2)
+			return ("rsa public key: public exponent even or under 3", nil);
+		if(exponent.cmp(modulus) >= 0)
+			return ("rsa public key: public exponent not under the modulus", nil);
 		return ("", ref RSAKey(modulus, modlen, exponent));
 	}
 	return ("rsa public key: syntax error", nil);
@@ -332,29 +383,11 @@ dss_sign(a: array of byte, sk: ref DSSPrivateKey): (string, array of byte)
 
 # [public]
 
-dss_verify(a, signa: array of byte, pk: ref DSSPublicKey): int
+dss_verify(nil, nil: array of byte, nil: ref DSSPublicKey): int
 {
-	unsigned: array of byte;
-
-	#case hash {
-	#Keyring->MD4 =>
-	#	digest = array [Keyring->MD4dlen] of byte;
-	#	keyring->md4(a, len a, digest, nil);
-	#Keyring->MD5 =>
-	#	digest = array [Keyring->MD5dlen] of byte;
-	#	keyring->md5(a, len a, digest, nil);
-	#Keyring->SHA =>
-	#	digest = array [Keyring->SHA1dlen] of byte;
-	#	keyring->sha1(a, len a, digest, nil);
-	#* =>
-	#	return 0;
-	#}
-
-	# get unsigned from signa and compare it with digest
-
-	if(byte_cmp(unsigned, a))
-		return 1;
-
+	# DSA is not implemented (see dss_sign), so nothing verifies: this
+	# compared the message with an array it never filled, and so said
+	# an empty message was signed, by anyone
 	return 0;
 }
 

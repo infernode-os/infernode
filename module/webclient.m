@@ -26,6 +26,15 @@ Webclient: module {
 
 	# An HTTP state store (RFC 6265): cookies set by responses, sent
 	# with the requests they match.  One jar is one browsing session.
+	# set() takes what RFC 6265 §5.3 and its revision (6265bis) let a
+	# response set: no control characters; a Domain the host is, or
+	# ends in, that is not a name sites are registered under (one
+	# label; co.uk, com.au and their like; a short list of others and
+	# of hosting services: there is no Public Suffix List here, so a
+	# registry not among them is not known for one); no Secure cookie
+	# from a URL that is not https, and none that would replace or
+	# shadow one; __Secure- and __Host- names as they promise.  A
+	# Secure cookie is in header() only for an https URL.
 	Cookie: adt {
 		name, value:	string;
 		domain, path:	string;	# domain lower case, without a leading dot

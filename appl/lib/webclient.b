@@ -1256,7 +1256,35 @@ concatchunks(chunks: list of array of byte, total: int): array of byte
 	return result;
 }
 
-# ---- cookies (RFC 6265 §5) ----
+# ---- cookies (RFC 6265 §5, as RFC 6265bis tightens it) ----
+#
+# What a response may put in the jar.  A Set-Cookie was taken on the
+# strength of its Domain matching the host's tail and nothing else, so a
+# page at evil.com set a cookie for "com", sent from then on to every
+# .com site (one site choosing another's session); with a control
+# character in its value every request that cookie matched was refused
+# as a bad header, until it expired; and a response over plain http
+# replaced or deleted a cookie a site had marked Secure.  Now:
+#
+# - a header with a control character in it, or a name and value past
+#   4096 characters, is ignored whole (6265bis, the Set-Cookie header);
+# - a Domain must be a name of at least two labels that is not one
+#   sites are registered under (publicsuffix below), and the host must
+#   be it or end in it; a Domain that is such a name, or an address, is
+#   taken only from the host of that very name, as a cookie for that
+#   host alone (RFC 6265 §5.3 steps 5 and 6);
+# - a response not over https sets no Secure cookie, and none of the
+#   name of a Secure cookie it would be sent beside ("leave secure
+#   cookies alone", 6265bis); __Secure- and __Host- names keep their
+#   promises (6265bis, cookie name prefixes);
+# - a jar holds MAXPERDOMAIN cookies for a domain and MAXCOOKIES in
+#   all, the oldest going first.
+
+MAXCOOKIE: con 4096;	# a name and its value
+MAXATTR: con 1024;	# an attribute's value
+MAXPERDOMAIN: con 180;
+MAXCOOKIES: con 3000;
+MAXAGE: con 400*24*60*60;	# the longest a cookie is kept (6265bis)
 
 Jar.new(): ref Jar
 {
@@ -1298,6 +1326,99 @@ isip(h: string): int
 		if(!(h[i] >= '0' && h[i] <= '9' || h[i] == '.' || h[i] == ':'))
 			return 0;
 	return 1;
+}
+
+# A cookie's name or value as it can be sent: nothing a header refuses
+# (validheadervalue), which would refuse every request it went with.
+cookietext(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] == 16r7F)
+			return 0;
+	return 1;
+}
+
+# Names sites are registered under, which no site may set a cookie for.
+# There is no Public Suffix List in the tree (it is some 15000 lines and
+# changes weekly); this is the part of it that can be carried:
+# - a name of one label (com, uk, localhost);
+# - under a country's two-letter domain, the second-level labels
+#   registries use the world over (co.uk, com.au, ac.jp, gov.br);
+# - the entries below, taken by hand from the list
+#   (publicsuffix.org/list/public_suffix_list.dat): second levels the
+#   rule misses, and the hosting services whose customers are each a
+#   name under theirs.
+# What it misses (k12.ca.us, a city's registry, a small host) is a
+# domain whose customers can still set cookies for one another.
+sld2 := array[] of {
+	"ac", "co", "com", "edu", "go", "gob", "gouv", "gov", "govt",
+	"mil", "ne", "net", "nom", "or", "org", "sch",
+};
+
+suffixes := array[] of {
+	# registries
+	"me.uk", "ltd.uk", "plc.uk", "nhs.uk", "police.uk",
+	"ad.jp", "ed.jp", "gr.jp", "lg.jp",
+	"asn.au", "id.au",
+	"geek.nz", "gen.nz", "school.nz", "maori.nz", "iwi.nz",
+	"firm.in", "gen.in", "ind.in", "res.in", "nic.in",
+	"re.kr", "pe.kr",
+	"uk.com", "us.com", "eu.com", "de.com", "gb.net", "uk.net",
+	# hosting services
+	"github.io", "githubusercontent.com", "gitlab.io", "codeberg.page",
+	"herokuapp.com", "appspot.com", "blogspot.com", "cloudfront.net",
+	"s3.amazonaws.com", "azurewebsites.net", "web.app", "firebaseapp.com",
+	"netlify.app", "vercel.app", "now.sh", "pages.dev", "workers.dev",
+	"glitch.me", "fly.dev", "onrender.com", "neocities.org",
+	"readthedocs.io", "surge.sh", "ngrok.io", "myshopify.com", "wixsite.com",
+};
+
+publicsuffix(d: string): int
+{
+	dot := -1;
+	ndot := 0;
+	for(i := 0; i < len d; i++)
+		if(d[i] == '.') {
+			dot = i;
+			ndot++;
+		}
+	if(ndot == 0)
+		return 1;
+	if(ndot == 1 && len d - dot - 1 == 2) {
+		s := d[0:dot];
+		for(i = 0; i < len sld2; i++)
+			if(s == sld2[i])
+				return 1;
+	}
+	for(i = 0; i < len suffixes; i++)
+		if(d == suffixes[i])
+			return 1;
+	return 0;
+}
+
+# a domain name: labels with something in each
+validdomain(d: string): int
+{
+	if(d == "" || d[0] == '.' || d[len d - 1] == '.')
+		return 0;
+	for(i := 1; i < len d; i++)
+		if(d[i] == '.' && d[i-1] == '.')
+			return 0;
+	return 1;
+}
+
+hasblank(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == ' ' || s[i] == '\t')
+			return 1;
+	return 0;
+}
+
+# case folded: whether s begins with p (lower case)
+hasprefix(s, p: string): int
+{
+	return len s >= len p && str->tolower(s[0:len p]) == p;
 }
 
 pathmatch(rpath, cpath: string): int
@@ -1346,7 +1467,7 @@ jarheader(j: ref Jar, u: string): string
 		if(!pathmatch(path, c.path))
 			continue;
 		if(c.secure && scheme != "https")
-			continue;
+			continue;	# never in clear
 		if(r != "")
 			r += "; ";
 		r += c.name + "=" + c.value;
@@ -1371,12 +1492,15 @@ jarset(j: ref Jar, u, sc: string)
 	(scheme, host, path) := urlparts(u);
 	if(host == nil)
 		return;
+	for(i := 0; i < len sc; i++)
+		if(sc[i] < ' ' && sc[i] != '\t' || sc[i] == 16r7F)
+			return;
 	(nil, parts) := sys->tokenize(sc, ";");
 	if(parts == nil)
 		return;
 	nv := trimsp(hd parts);
 	eq := -1;
-	for(i := 0; i < len nv; i++)
+	for(i = 0; i < len nv; i++)
 		if(nv[i] == '=') {
 			eq = i;
 			break;
@@ -1384,8 +1508,12 @@ jarset(j: ref Jar, u, sc: string)
 	if(eq <= 0)
 		return;
 	c := ref Cookie(trimsp(nv[0:eq]), trimsp(nv[eq+1:]), host, defaultpath(path), 1, 0, 0, 0);
-	maxage := -1;
+	if(c.name == "" || !cookietext(c.name) || !cookietext(c.value) || len c.name + len c.value > MAXCOOKIE)
+		return;
+	maxage := 0;
 	hasmaxage := 0;
+	haspath := 0;
+	dom: string;	# the last Domain attribute is the one
 	for(parts = tl parts; parts != nil; parts = tl parts) {
 		a := trimsp(hd parts);
 		k := a;
@@ -1396,25 +1524,29 @@ jarset(j: ref Jar, u, sc: string)
 				v = trimsp(a[i+1:]);
 				break;
 			}
+		if(len v > MAXATTR)
+			continue;
 		case str->tolower(k) {
 		"domain" =>
 			d := str->tolower(v);
 			if(len d > 0 && d[0] == '.')
 				d = d[1:];
-			if(d == "")
-				break;
-			if(!domainmatch(host, d))
-				return;	# a cookie for some other site
-			c.domain = d;
-			c.hostonly = 0;
+			dom = d;
 		"path" =>
-			if(len v > 0 && v[0] == '/')
+			# (a blank in it: no request's path has one, and
+			# text() could not write it)
+			if(len v > 0 && v[0] == '/' && !hasblank(v)) {
 				c.path = v;
+				haspath = 1;
+			}
 		"max-age" =>
-			hasmaxage = 1;
-			maxage = int v;
+			(ok, n) := cookieage(v);
+			if(ok) {
+				hasmaxage = 1;
+				maxage = n;
+			}
 		"expires" =>
-			if(!hasmaxage && now() != 0) {
+			if(now() != 0) {
 				tm := daytime->string2tm(v);
 				if(tm != nil)
 					c.expires = daytime->tm2epoch(tm);
@@ -1431,18 +1563,103 @@ jarset(j: ref Jar, u, sc: string)
 		else
 			c.expires = now() + maxage;
 	}
-	if(c.secure && scheme != "https")
+	if(dom != nil) {
+		if(!validdomain(dom))
+			return;
+		if(publicsuffix(dom) || isip(dom)) {
+			if(dom != host)
+				return;	# a cookie for every site under it
+			# its own name: this host's alone
+		} else {
+			if(!domainmatch(host, dom))
+				return;	# a cookie for some other site
+			c.domain = dom;
+			c.hostonly = 0;
+		}
+	}
+	if(hasprefix(c.name, "__secure-") && !c.secure)
 		return;
+	if(hasprefix(c.name, "__host-") && !(c.secure && c.hostonly && haspath && c.path == "/"))
+		return;
+	t := now();
+	if(scheme != "https") {
+		if(c.secure)
+			return;
+		# nor one that would be sent where a Secure cookie of its
+		# name is: it would replace it, delete it, or shadow it
+		for(l := j.cookies; l != nil; l = tl l) {
+			o := hd l;
+			if(o.secure && o.name == c.name && (o.expires == 0 || o.expires > t) &&
+			   (domainmatch(o.domain, c.domain) || domainmatch(c.domain, o.domain)) &&
+			   pathmatch(c.path, o.path))
+				return;
+		}
+	}
 	# replace any cookie with the same name, domain and path
 	keep: list of ref Cookie;
 	for(l := j.cookies; l != nil; l = tl l) {
 		o := hd l;
-		if(o.name == c.name && o.domain == c.domain && o.path == c.path)
+		if(o.name == c.name && o.domain == c.domain && o.hostonly == c.hostonly && o.path == c.path)
 			continue;
 		keep = o :: keep;
 	}
-	if(c.expires == 0 || c.expires > now())
+	if(c.expires == 0 || c.expires > t)
 		keep = c :: keep;
+	j.cookies = nil;
+	for(; keep != nil; keep = tl keep)
+		j.cookies = hd keep :: j.cookies;
+	jarlimit(j, c.domain);
+}
+
+# Max-Age's seconds: (whether it is a number, the number, no more than
+# a cookie is kept).  Text that was no number was 0, which deletes.
+cookieage(v: string): (int, int)
+{
+	i := 0;
+	if(len v > 0 && v[0] == '-')
+		i = 1;
+	if(i == len v)
+		return (0, 0);
+	for(k := i; k < len v; k++)
+		if(v[k] < '0' || v[k] > '9')
+			return (0, 0);
+	if(i == 1)
+		return (1, 0);
+	if(len v > 9)
+		return (1, MAXAGE);
+	n := int v;
+	if(n > MAXAGE)
+		n = MAXAGE;
+	return (1, n);
+}
+
+# No more than MAXPERDOMAIN cookies for domain and MAXCOOKIES in all:
+# the oldest (the first in the list) go.
+jarlimit(j: ref Jar, domain: string)
+{
+	nd := 0;
+	n := 0;
+	for(l := j.cookies; l != nil; l = tl l) {
+		n++;
+		if((hd l).domain == domain)
+			nd++;
+	}
+	if(nd <= MAXPERDOMAIN && n <= MAXCOOKIES)
+		return;
+	keep: list of ref Cookie;
+	for(l = j.cookies; l != nil; l = tl l) {
+		o := hd l;
+		if(nd > MAXPERDOMAIN && o.domain == domain) {
+			nd--;
+			n--;
+			continue;
+		}
+		if(n > MAXCOOKIES) {
+			n--;
+			continue;
+		}
+		keep = o :: keep;
+	}
 	j.cookies = nil;
 	for(; keep != nil; keep = tl keep)
 		j.cookies = hd keep :: j.cookies;
@@ -1475,6 +1692,15 @@ Jar.add(j: self ref Jar, line: string): string
 	return r;
 }
 
+# A line of text(): "domain path name=value expires secure httponly
+# hostonly", the four numbers optional when written by hand.  A value
+# may hold blanks ("a=b c"); a line of more than seven fields ends in
+# its four numbers and what lies between the path and them is the
+# cookie.  (Its second word was read as the expiry and the rest as the
+# flags, so a host's cookie "x=y 0 0 0 0" came back as one for every
+# name under the host.)  What a response could not have set is refused
+# here too, and a cookie for a name sites are registered under is that
+# host's alone.
 jaradd(j: ref Jar, line: string): string
 {
 	(n, f) := sys->tokenize(line, " \t");
@@ -1484,6 +1710,10 @@ jaradd(j: ref Jar, line: string): string
 	path := hd tl f;
 	nv := hd tl tl f;
 	f = tl tl tl f;
+	for(n -= 3; n > 4; n--) {
+		nv += " " + hd f;
+		f = tl f;
+	}
 	for(i := 0; i < len nv; i++)
 		if(nv[i] == '=')
 			break;
@@ -1504,15 +1734,22 @@ jaradd(j: ref Jar, line: string): string
 	}
 	if(f != nil)
 		c.hostonly = int hd f;
+	if(!cookietext(c.name) || !cookietext(c.value) || !cookietext(path) || len c.name + len c.value > MAXCOOKIE)
+		return "bad cookie: a control character, or too long";
+	if(!validdomain(dom))
+		return "bad cookie: not a domain: " + dom;
+	if(publicsuffix(dom) || isip(dom))
+		c.hostonly = 1;	# never one for every site under it
 	keep: list of ref Cookie;
 	for(l := j.cookies; l != nil; l = tl l) {
 		o := hd l;
-		if(!(o.name == c.name && o.domain == c.domain && o.path == c.path))
+		if(!(o.name == c.name && o.domain == c.domain && o.hostonly == c.hostonly && o.path == c.path))
 			keep = o :: keep;
 	}
 	j.cookies = c :: nil;
 	for(; keep != nil; keep = tl keep)
 		j.cookies = hd keep :: j.cookies;
+	jarlimit(j, c.domain);
 	return nil;
 }
 

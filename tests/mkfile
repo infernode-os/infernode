@@ -157,6 +157,7 @@ TARG=\
 	fetchtools_edge_test.dis\
 	fakecs.dis\
 	webclient_body_test.dis\
+	webclient_cookie_test.dis\
 	webclient_deadline_test.dis\
 	veltro_coord_test.dis\
 	link_digest_test.dis\

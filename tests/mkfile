@@ -154,6 +154,7 @@ TARG=\
 	math_edge_test.dis\
 	alt_edge_test.dis\
 	attrdb_test.dis\
+	post9p_test.dis\
 	auth_algs_test.dis\
 	registry_test.dis\
 	cs_cancel.dis\
@@ -578,6 +579,7 @@ SYSMODULES=\
 	attrdb.m\
 	ip.m\
 	ipattr.m\
+	post9p.m\
 
 DISBIN=$ROOT/dis/tests
 

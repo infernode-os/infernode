@@ -153,6 +153,7 @@ TARG=\
 	print_edge_test.dis\
 	math_edge_test.dis\
 	alt_edge_test.dis\
+	attrdb_test.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\
 	llmclient_edge_test.dis\
@@ -571,6 +572,9 @@ SYSMODULES=\
 	sexprs.m\
 	spki.m\
 	msgio.m\
+	attrdb.m\
+	ip.m\
+	ipattr.m\
 
 DISBIN=$ROOT/dis/tests
 

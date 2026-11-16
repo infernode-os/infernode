@@ -116,7 +116,7 @@ findnetattrs(ndb: ref Db, attr: string, val: string, rattrs: list of string): (l
 		# look for attributes associated with networks that include `a'
 		(ok, a) := IPaddr.parse(val);
 		if(ok < 0)
-			return (nil, "invalid ip address in db");
+			return (nil, "invalid ip address");	# the caller's, not the database's
 		netattrs := mkattrlist(rattrs);
 		netattributes(ndb, a, netattrs);
 		rl = (a, netattrs) :: nil;
@@ -152,6 +152,7 @@ netattributes(ndb: ref Db, a: IPaddr, nas: list of ref Netattr): string
 {
 	e: ref Dbentry;
 	ptr: ref Attrdb->Dbptr;
+	err: string;
 	for(;;){
 		(e, ptr) = ndb.find(ptr, "ipnet");
 		if(e == nil)
@@ -159,9 +160,16 @@ netattributes(ndb: ref Db, a: IPaddr, nas: list of ref Netattr): string
 		ipaddr := e.findfirst("ip");
 		if(ipaddr == nil)
 			continue;
+		# an entry that is no network is passed over: it used to
+		# end the scan, so every ipnet after it in the database
+		# was not looked at, and nobody was told (the result is
+		# not looked at by any caller)
 		(ok, netip) := IPaddr.parse(ipaddr);
-		if(ok < 0)
-			return "bad ip address in db";
+		if(ok < 0){
+			if(err == nil)
+				err = "bad ip address in db: "+ipaddr;
+			continue;
+		}
 		netmask: IPaddr;
 		mask := e.findfirst("ipmask");
 		if(mask == nil){
@@ -170,13 +178,20 @@ netattributes(ndb: ref Db, a: IPaddr, nas: list of ref Netattr): string
 			netmask = netip.classmask();
 		}else{
 			(ok, netmask) = IPaddr.parsemask(mask);
-			if(ok < 0)
-				return "bad ipmask in db";
+			if(ok < 0){
+				if(err == nil)
+					err = "bad ipmask in db: "+mask;
+				continue;
+			}
 		}
+		# the network is the address under its mask: written with
+		# a host's bits in it (ip=10.1.2.3 ipmask=255.255.0.0) it
+		# was compared as written, and matched no address
+		netip = netip.mask(netmask);
 		if(a.mask(netmask).eq(netip))
 			attribute(e, netip, netmask, nas, 0);
 	}
-	return nil;
+	return err;
 }
 
 attribute(e: ref Dbentry, netip: IPaddr, netmask: IPaddr, nas: list of ref Netattr, ishost: int)

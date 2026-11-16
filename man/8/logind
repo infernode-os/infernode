@@ -160,9 +160,8 @@ is
 (no account, or one that cannot log in; the client is answered as for a wrong password),
 or
 .B badname
-(not an account name; no
-.B user
-is recorded).
+(not an account name; the first 64 characters of what was given are recorded as
+.BR user ).
 What a client is told never says more than
 .BR "name or secret incorrect" :
 when the key file or the count of attempts cannot be used it is told

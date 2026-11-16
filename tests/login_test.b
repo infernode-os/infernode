@@ -1073,6 +1073,7 @@ testReplay(t: ref T)
 testBadNames(t: ref T)
 {
 	sys->remove("/keydb/loginfail");
+	auditlines = nil;
 	long := "";
 	for(i := 0; i < 300; i++)
 		long[len long] = 'a';
@@ -1106,6 +1107,8 @@ testBadNames(t: ref T)
 	}
 	(ok, nil) := sys->stat("/keydb/loginfail");
 	t.assert(ok < 0, "and no count is made for any of them");
+	t.assert(audited("logind authfail user=carol/. reason=badname"), "each is recorded");
+	t.assert(audited("logind authfail user=carol%09x reason=badname"), "as one value of its record, whatever is in it");
 	(err, info) := userlogin(t, "carol/.", 0, 0, Password);
 	t.assert(info == nil && err != nil && contains(err, "bad user name"), "login(2) refuses such a name itself: " + err);
 }

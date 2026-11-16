@@ -123,7 +123,10 @@ dologin(c: ref Sys->Connection): string
 	name := s;
 	err = login->okname(name);
 	if(err != nil){
-		auditlog("authfail", "reason=badname");
+		# recorded as one value, and no more of it than a name has
+		if(len s > 64)
+			s = s[0:64];
+		auditlog("authfail", sys->sprint("user=%s reason=badname", auditval(s)));
 		sys->fprint(stderr, "logind: refused a name: %s\n", err);
 		return "bad user name";
 	}

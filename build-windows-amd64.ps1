@@ -232,12 +232,12 @@ Push-Location "$ROOT\libmp"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $mpSrc = @(
-    "mpaux.c", "mpfmt.c", "strtomp.c", "mptobe.c", "mptole.c",
+    "mpaux.c", "mpfmt.c", "strtomp.c", "mptobe.c",
     "betomp.c", "letomp.c", "mpadd.c", "mpsub.c", "mpcmp.c",
     "mpmul.c", "mpleft.c", "mpright.c",
     "mpvecadd.c", "mpvecsub.c", "mpvecdigmuladd.c", "mpveccmp.c",
     "mpdigdiv.c", "mpdiv.c", "mpexp.c", "mpmod.c",
-    "mpextendedgcd.c", "mpinvert.c", "mprand.c", "crt.c",
+    "mpextendedgcd.c", "mpinvert.c", "mprand.c",
     "mptoi.c", "mptoui.c", "mptov.c", "mptouv.c"
 )
 $mpFlags = @("/I$ROOT\libmp", "/I$ROOT\include", "/I$ROOT\Nt\amd64\include")
@@ -253,20 +253,19 @@ Push-Location "$ROOT\libsec"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $secSrc = @(
-    "des.c", "desmodes.c", "desECB.c", "desCBC.c", "des3ECB.c", "des3CBC.c",
-    "aes.c", "aesarm64.c", "aesctr.c", "aesgcm.c", "ghasharm64.c", "blowfish.c",
+    "aes.c", "aesarm64.c", "aesgcm.c", "ghasharm64.c", "blowfish.c",
     "chacha.c", "poly1305.c", "ccpoly.c",
     "x25519.c", "ecc.c",
     "idea.c",
     "hmac.c", "hmacdrbg.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
     "sha2.c", "sha256block.c", "sha256arm64.c", "sha512block.c",
-    "sha1pickle.c", "md5pickle.c", "rc4.c",
-    "genrandom.c", "prng.c", "fastrand.c", "nfastrand.c", "securezero.c", "nonce.c", "mpnonce.c",
+    "rc4.c",
+    "genrandom.c", "prng.c", "fastrand.c", "securezero.c", "nonce.c", "mpnonce.c",
     "secp256k1.c", "keccak256.c",
     "probably_prime.c", "smallprimetest.c", "genprime.c", "dsaprimes.c",
     "gensafeprime.c", "genstrongprime.c", "dhparams.c",
     "rsagen.c", "rsafill.c", "rsaencrypt.c", "rsadecrypt.c", "rsaalloc.c", "rsaprivtopub.c",
-    "eggen.c", "egencrypt.c", "egdecrypt.c", "egalloc.c", "egprivtopub.c",
+    "eggen.c", "egalloc.c", "egprivtopub.c",
     "egsign.c", "egverify.c",
     "dsagen.c", "dsaalloc.c", "dsaprivtopub.c", "dsasign.c", "dsaverify.c",
     "sha3.c",
@@ -574,11 +573,10 @@ Write-Host "  Generating runtime headers..."
 & $LIMBO -a -I "$ROOT\module" "keyringif.m" 2>$null | Set-Content -Path "keyringif.h" -Encoding ASCII
 & $LIMBO -t Loader -I "$ROOT\module" "$ROOT\module\runt.m" 2>$null | Set-Content -Path "loadermod.h" -Encoding ASCII
 & $LIMBO -t IPints -I "$ROOT\module" "$ROOT\module\ipints.m" 2>$null | Set-Content -Path "ipintsmod.h" -Encoding ASCII
-& $LIMBO -t Crypt -I "$ROOT\module" "$ROOT\module\runt.m" 2>$null | Set-Content -Path "cryptmod.h" -Encoding ASCII
 & $LIMBO -t Tk -I "$ROOT\module" "$ROOT\module\runt.m" 2>$null | Set-Content -Path "tkmod.h" -Encoding ASCII
 
 $interpSrc = @(
-    "alt.c", "conv.c", "crypt.c", "dec.c", "draw.c", "gc.c", "geom.c",
+    "alt.c", "conv.c", "dec.c", "draw.c", "gc.c", "geom.c",
     "heap.c", "heapaudit.c", "ipint.c", "link.c", "load.c", "math.c",
     "raise.c", "readmod.c", "runt.c", "sign.c", "stack.c", "tk.c",
     "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c"
@@ -771,14 +769,12 @@ extern void sysmodinit(void);
 extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
-extern void cryptmodinit(void);
 extern void ipintsmodinit(void);
 void modinit(void){
 	sysmodinit();
 	mathmodinit();
 	srvmodinit();
 	keyringmodinit();
-	cryptmodinit();
 	ipintsmodinit();
 }
 

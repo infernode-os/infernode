@@ -159,6 +159,14 @@ rc4 keyring-rc4
 rc4back keyring-rc4
 rc4setup keyring-rc4
 rc4skip keyring-rc4
+dsapk keyring-rsa
+dsask keyring-rsa
+egpk keyring-rsa
+egsk keyring-rsa
+keyring keyring-rsa
+keyring-rsa keyring-rsa
+rsapk keyring-rsa
+rsask keyring-rsa
 hmac_md5 keyring-sha1
 hmac_sha1 keyring-sha1
 keyring keyring-sha1

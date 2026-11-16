@@ -298,7 +298,7 @@ build_kernel() {
         comp-riscv64.c) ;;
         comp-*.c) continue;;
         das-*.c) continue;;
-        gpu.c|crypt.c) continue;;
+        gpu.c) continue;;
         i420.c|bayer.c) continue;;		# $I420, $Bayer: registered by the emulators and the Pi kernels
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
@@ -311,8 +311,7 @@ build_kernel() {
 
     for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
         case "$(basename "$f")" in
-        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
-        decodepem.c|prng.c) continue;;
+        prng.c) continue;;
         esac
         o="$BUILD/crypto-$(basename "$f").o"
         "$CC" "${CFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1

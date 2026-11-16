@@ -41,7 +41,6 @@ mpint*	strtomp(char*, char**, int, mpint*);	/* ascii */
 int	mpfmt(Fmt*);
 char*	mptoa(mpint*, int, char*, int);
 mpint*	letomp(uchar*, uint, mpint*);	/* byte array, little-endian */
-int	mptole(mpint*, uchar*, uint, uchar**);
 mpint*	betomp(uchar*, uint, mpint*);	/* byte array, little-endian */
 int	mptobe(mpint*, uchar*, uint, uchar**);
 uint	mptoui(mpint*);			/* unsigned int */
@@ -120,24 +119,6 @@ void	mpdigdiv(mpdigit *dividend, mpdigit divisor, mpdigit *quotient);
 int	mpmagcmp(mpint *b1, mpint *b2);
 void	mpmagadd(mpint *b1, mpint *b2, mpint *sum);	/* sum = b1+b2 */
 void	mpmagsub(mpint *b1, mpint *b2, mpint *sum);	/* sum = b1+b2 */
-
-/* chinese remainder theorem */
-typedef struct CRTpre	CRTpre;		/* precomputed values for converting */
-					/*  twixt residues and mpint */
-typedef struct CRTres	CRTres;		/* residue form of an mpint */
-
-struct CRTres
-{
-	int	n;		/* number of residues */
-	mpint	*r[1];		/* residues */
-};
-
-CRTpre*	crtpre(int, mpint**);			/* precompute conversion values */
-CRTres*	crtin(CRTpre*, mpint*);			/* convert mpint to residues */
-void	crtout(CRTpre*, CRTres*, mpint*);	/* convert residues to mpint */
-void	crtprefree(CRTpre*);
-void	crtresfree(CRTres*);
-
 
 #pragma	varargck	type	"B"	mpint*
 #pragma varargck	type	"U" mpint*

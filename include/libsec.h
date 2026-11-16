@@ -35,12 +35,6 @@ void	aesCTR32(AESstate *s, const uchar ctr[16], uchar *p, ulong n);
 void	clearAESstate(AESstate *s);	/* when done with one: it holds the key */
 
 /* ===================================================== */
-/* AES-CTR */
-/* ===================================================== */
-void	aesCTRencrypt(uchar *p, int len, AESstate *s);
-void	aesCTRdecrypt(uchar *p, int len, AESstate *s);
-
-/* ===================================================== */
 /* AES-GCM */
 /* ===================================================== */
 typedef struct AESGCMstate AESGCMstate;
@@ -188,7 +182,10 @@ void	bfECBencrypt(uchar*, int, BFstate*);
 void	bfECBdecrypt(uchar*, int, BFstate*);
 
 /* ===================================================== */
-/* DES definitions */
+/* DES is gone from libsec (des.c and its modes: nothing called them;
+ * Keyring's DES functions only refuse).  The state's type stays until
+ * libkeyring/keys.h's XDESstate, which those functions' adt is made of,
+ * goes with them. */
 /* ===================================================== */
 
 enum
@@ -196,7 +193,6 @@ enum
 	DESbsize=	8
 };
 
-/* single des */
 typedef struct DESstate DESstate;
 struct DESstate
 {
@@ -205,45 +201,6 @@ struct DESstate
 	ulong	expanded[32];	/* expanded key */
 	uchar	ivec[8];	/* initialization vector */
 };
-
-void	setupDESstate(DESstate *s, uchar key[8], uchar *ivec);
-void	des_key_setup(uchar[8], ulong[32]);
-void	block_cipher(ulong*, uchar*, int);
-void	desCBCencrypt(uchar*, int, DESstate*);
-void	desCBCdecrypt(uchar*, int, DESstate*);
-void	desECBencrypt(uchar*, int, DESstate*);
-void	desECBdecrypt(uchar*, int, DESstate*);
-
-/* for backward compatibility with 7 byte DES key format */
-void	des56to64(uchar *k56, uchar *k64);
-void	des64to56(uchar *k64, uchar *k56);
-void	key_setup(uchar[7], ulong[32]);
-
-/* triple des encrypt/decrypt orderings */
-enum {
-	DES3E=		0,
-	DES3D=		1,
-	DES3EEE=	0,
-	DES3EDE=	2,
-	DES3DED=	5,
-	DES3DDD=	7
-};
-
-typedef struct DES3state DES3state;
-struct DES3state
-{
-	ulong	setup;
-	uchar	key[3][8];		/* unexpanded key */
-	ulong	expanded[3][32];	/* expanded key */
-	uchar	ivec[8];		/* initialization vector */
-};
-
-void	setupDES3state(DES3state *s, uchar key[3][8], uchar *ivec);
-void	triple_block_cipher(ulong keys[3][32], uchar*, int);
-void	des3CBCencrypt(uchar*, int, DES3state*);
-void	des3CBCdecrypt(uchar*, int, DES3state*);
-void	des3ECBencrypt(uchar*, int, DES3state*);
-void	des3ECBdecrypt(uchar*, int, DES3state*);
 
 /* IDEA */
 typedef struct IDEAstate IDEAstate;
@@ -341,10 +298,6 @@ void	hmacdrbgreseed(uchar *k, uchar *v, uchar *e, int ne);
 void	hmacdrbggen(uchar *k, uchar *v, uchar *p, int n);
 int	hmacdrbgcheck(void);
 DigestState* hmac_sha512(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
-char* md5pickle(MD5state*);
-MD5state* md5unpickle(char*);
-char* sha1pickle(SHA1state*);
-SHA1state* sha1unpickle(char*);
 
 /* ===================================================== */
 /* SHA-3 / SHAKE (FIPS 202) */
@@ -569,7 +522,6 @@ void	_genrandomqunlock(void);
 void	prng(uchar *buf, int nbytes);
 int	prngtry(uchar *buf, int nbytes);	/* 0 ok, -1 no secure source (never aborts) */
 ulong	fastrand(void);
-ulong	nfastrand(ulong);
 
 /* ===================================================== */
 /* secure memory clearing */
@@ -655,8 +607,6 @@ RSApub*		rsaprivtopub(RSApriv*);
 RSApub*		X509toRSApub(uchar*, int, char*, int);
 RSApriv*	asn1toRSApriv(uchar*, int);
 void		asn1dump(uchar *der, int len);
-uchar*		decodePEM(char *s, char *type, int *len, char **new_s);
-PEMChain*	decodepemchain(char *s, char *type);
 uchar*		X509gen(RSApriv *priv, char *subj, ulong valid[2], int *certlen);
 uchar*		X509req(RSApriv *priv, char *subj, int *certlen);
 char*		X509verify(uchar *cert, int ncert, RSApub *pk);
@@ -691,8 +641,6 @@ struct EGsig
 };
 
 EGpriv*		eggen(int nlen, int rounds);
-mpint*		egencrypt(EGpub *k, mpint *in, mpint *out);	/* deprecated */
-mpint*		egdecrypt(EGpriv *k, mpint *in, mpint *out);
 EGsig*		egsign(EGpriv *k, mpint *m);
 EGsig*		egsignrnd(EGpriv *k, mpint *m, uchar *rnd, int nrnd);	/* the nonce's random bytes given: none, RFC 6979's own */
 int		egverify(EGpub *k, EGsig *sig, mpint *m);

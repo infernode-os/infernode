@@ -119,7 +119,7 @@ extern int	upkilled(void);
 void
 ipintsmodinit(void)
 {
-	/* can be called from modinit, Keyring or Crypt */
+	/* can be called from modinit or Keyring */
 	secstop = upkilled;
 	if(TIPint == nil)
 		TIPint = dtype(freeIPint, sizeof(IPint), IPintmap, sizeof(IPintmap));

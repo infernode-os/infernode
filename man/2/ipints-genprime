@@ -120,8 +120,7 @@ candidates, many times what a search is expected to take.
 .B /libsec/port/genstrongprime.c
 .br
 .SH SEE ALSO
-.IR crypt-intro (2),
-.IR crypt-crypt (2),
-.IR crypt-dsagen (2),
-.IR crypt-gensk (2),
+.IR keyring-intro (2),
+.IR keyring-gensk (2),
+.IR keyring-rsa (2),
 .IR ipints (2)

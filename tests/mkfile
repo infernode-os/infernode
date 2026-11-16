@@ -159,6 +159,7 @@ TARG=\
 	auth_algs_test.dis\
 	registry_test.dis\
 	cs_cancel.dis\
+	pqsig_test.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\
 	llmclient_edge_test.dis\

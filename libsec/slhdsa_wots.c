@@ -20,6 +20,7 @@
 enum {
 	WOTS_W = 16,		/* Winternitz parameter */
 	WOTS_LOGW = 4,		/* log2(w) */
+	WOTS_LEN2 = 3,		/* checksum digits, n = 24 and n = 32 */
 };
 
 /* Forward declarations for hash functions (slhdsa_hash.c) */
@@ -49,7 +50,7 @@ slhdsa_wots_len(int n)
 	 * For n=24: len1=48, 48*15=720, log_16(720)=2.37, len2=3
 	 * For n=32: len1=64, 64*15=960, log_16(960)=2.48, len2=3
 	 */
-	return len1 + 3;	/* len2=3 for both 192s and 256s */
+	return len1 + WOTS_LEN2;	/* len2=3 for both 192s and 256s */
 }
 
 /*
@@ -75,12 +76,24 @@ wots_chain_lengths(int *digits, const uchar *msg, int n)
 	for(i = 0; i < len1; i++)
 		csum += WOTS_W - 1 - digits[i];
 
-	/* Encode checksum as base-16 digits (3 digits for both levels) */
-	/* csum max = len1 * 15, fits in 12 bits for n<=32 */
-	csum <<= (8 - ((3 * WOTS_LOGW) % 8)) % 8;	/* left-align */
-	digits[len1]     = (csum >> 8) & 0x0f;
-	digits[len1 + 1] = (csum >> 4) & 0x0f;
-	digits[len1 + 2] = csum & 0x0f;
+	/*
+	 * FIPS 205 Algorithm 7 (and Algorithm 8, the same lines): the
+	 * checksum is shifted left so that its len2*lg(w) = 12 bits are
+	 * the top bits of ceil(12/8) = 2 bytes, and base_2b takes len2 = 3
+	 * digits from the top of those 16 bits.  csum <= len1*15 = 960
+	 * fits 12 bits, so nothing is lost.
+	 *
+	 * The digits used to be taken from the low 12 bits of the shifted
+	 * value: the checksum's top digit was dropped and the last was
+	 * always 0, so only the checksum mod 256 was signed.  Message
+	 * digits could then be raised by 256 in all with the same checksum
+	 * digits, and a signature chained forward to another message with
+	 * the public F alone.
+	 */
+	csum <<= (8 - ((WOTS_LEN2 * WOTS_LOGW) % 8)) % 8;
+	digits[len1]     = (csum >> 12) & 0x0f;
+	digits[len1 + 1] = (csum >> 8) & 0x0f;
+	digits[len1 + 2] = (csum >> 4) & 0x0f;
 }
 
 /*

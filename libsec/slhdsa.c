@@ -63,8 +63,8 @@ extern void slhdsa_adrs_set_tree(uchar*, u64int);
 extern void slhdsa_adrs_set_type(uchar*, u32int);
 extern void slhdsa_adrs_set_keypair(uchar*, u32int);
 extern void slhdsa_adrs_copy(uchar*, const uchar*);
-extern void slhdsa_H_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
-extern void slhdsa_PRF_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
+extern void slhdsa_H_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
+extern void slhdsa_PRF_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
 
 extern int  slhdsa_treehash(uchar*, uchar*, int, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
 extern void slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
@@ -74,47 +74,56 @@ extern int  slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int,
 extern int  slhdsa_wots_len(int);
 
 /*
- * Extract tree index and leaf index from message digest
+ * The header of M' for the pure signature with an empty context string:
+ * FIPS 205 Algorithms 22 (slh_sign) and 24 (slh_verify),
+ *	M' = toByte(0, 1) || toByte(|ctx|, 1) || ctx || M
+ * The functions below are the standard's slh_sign and slh_verify with
+ * ctx empty; M' is what slh_sign_internal and slh_verify_internal hash.
+ * (The caller's message used to be hashed as it came: the internal
+ * interface, which section 9 says is not to be an application's, and
+ * under which a message beginning 00 00 was to a conforming verifier a
+ * signature on the rest of it.)
+ */
+static const uchar mprefix[2] = { 0, 0 };
+
+/*
+ * Tree index and leaf index from the message digest.
  *
- * The H_msg output is split into:
- *   md[0..ceil(k*a/8)-1]         — FORS message digest
- *   followed by bits for idx_tree (h - h/d bits)
- *   followed by bits for idx_leaf (h/d bits)
+ * FIPS 205 Algorithm 19 (and Algorithm 20, the same lines): H_msg's
+ * m bytes are three byte strings,
+ *	md           ceil(k*a/8) bytes           the FORS message
+ *	tmp_idx_tree ceil((h - h/d)/8) bytes
+ *	tmp_idx_leaf ceil(h/(8d)) bytes
+ * and the indices are the two integers reduced:
+ *	idx_tree = toInt(tmp_idx_tree) mod 2^(h - h/d)
+ *	idx_leaf = toInt(tmp_idx_leaf) mod 2^(h/d)
+ * that is, the low bits of each byte string.  (They used to be read as
+ * one bit string from bit k*a on, which is other bits of the digest
+ * whenever k*a or h - h/d is not a multiple of 8, as in both sets here.)
  */
 static void
-split_digest(const uchar *digest, int digestlen,
+split_digest(const uchar *digest,
 	int k, int a, int h, int hprime,
 	u64int *idx_tree, u32int *idx_leaf)
 {
-	int md_bits, tree_bits, leaf_bits;
-	int byte_off, bit_off;
+	int mdlen, treelen, leaflen, i;
 	u64int treev;
 	u32int leafv;
-	int i;
 
-	md_bits = k * a;
-	tree_bits = h - hprime;
-	leaf_bits = hprime;
+	mdlen = (k * a + 7) / 8;
+	treelen = (h - hprime + 7) / 8;	/* 7 for both sets */
+	leaflen = (hprime + 7) / 8;
 
-	/* Extract tree index */
-	bit_off = md_bits;
 	treev = 0;
-	for(i = 0; i < tree_bits && i < 64; i++){
-		byte_off = (bit_off + i) / 8;
-		if(byte_off < digestlen
-		&& (digest[byte_off] & (1 << (7 - ((bit_off + i) % 8)))))
-			treev |= (1ULL << (tree_bits - 1 - i));
-	}
+	for(i = 0; i < treelen; i++)
+		treev = (treev << 8) | digest[mdlen + i];
+	if(h - hprime < 64)
+		treev &= (1ULL << (h - hprime)) - 1;
 
-	/* Extract leaf index */
-	bit_off = md_bits + tree_bits;
 	leafv = 0;
-	for(i = 0; i < leaf_bits; i++){
-		byte_off = (bit_off + i) / 8;
-		if(byte_off < digestlen
-		&& (digest[byte_off] & (1 << (7 - ((bit_off + i) % 8)))))
-			leafv |= (1U << (leaf_bits - 1 - i));
-	}
+	for(i = 0; i < leaflen; i++)
+		leafv = (leafv << 8) | digest[mdlen + treelen + i];
+	leafv &= (1U << hprime) - 1;
 
 	*idx_tree = treev;
 	*idx_leaf = leafv;
@@ -123,7 +132,7 @@ split_digest(const uchar *digest, int digestlen,
 /*
  * SLH-DSA key generation (generic for both parameter sets)
  *
- * Algorithm 21 from FIPS 205
+ * Algorithms 21 and 18 from FIPS 205
  *
  * SK = (SK.seed || SK.prf || PK.seed || PK.root)
  * PK = (PK.seed || PK.root)
@@ -166,9 +175,9 @@ slhdsa_keygen(uchar *pk, uchar *sk, int n, int hprime, int d)
 }
 
 /*
- * SLH-DSA signing (generic)
- *
- * Algorithm 22 from FIPS 205
+ * SLH-DSA signing (generic): slh_sign, FIPS 205 Algorithm 22, with an
+ * empty context string, over slh_sign_internal (Algorithm 19) in its
+ * deterministic variant (opt_rand = PK.seed).
  *
  * sig = R || SIG_FORS || SIG_HT
  */
@@ -197,8 +206,9 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	/* opt_rand = PK.seed for deterministic signing */
 	opt_rand = pkseed;
 
-	/* R = PRF_msg(SK.prf, opt_rand, M) */
-	slhdsa_PRF_msg(R, n, skprf, n, opt_rand, n, msg, msglen);
+	/* R = PRF_msg(SK.prf, opt_rand, M') */
+	slhdsa_PRF_msg(R, n, skprf, n, opt_rand, n,
+		mprefix, sizeof(mprefix), msg, msglen);
 	sig += n;
 
 	/* Compute message digest */
@@ -207,10 +217,11 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 	if(digest == nil)
 		return -1;
 
-	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n, msg, msglen);
+	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n,
+		mprefix, sizeof(mprefix), msg, msglen);
 
 	/* Extract tree and leaf indices */
-	split_digest(digest, digestlen, k, a, h, hprime, &idx_tree, &idx_leaf);
+	split_digest(digest, k, a, h, hprime, &idx_tree, &idx_leaf);
 
 	/* FORS signature */
 	slhdsa_adrs_init(adrs);
@@ -236,9 +247,8 @@ slhdsa_sign_internal(uchar *sig, const uchar *msg, ulong msglen,
 }
 
 /*
- * SLH-DSA verification (generic)
- *
- * Algorithm 24 from FIPS 205
+ * SLH-DSA verification (generic): slh_verify, FIPS 205 Algorithm 24,
+ * with an empty context string, over slh_verify_internal (Algorithm 20).
  *
  * Returns 1 if valid, 0 if invalid.
  */
@@ -280,10 +290,11 @@ slhdsa_verify_internal(const uchar *sig, ulong siglen,
 	if(digest == nil)
 		return 0;
 
-	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n, msg, msglen);
+	slhdsa_H_msg(digest, digestlen, R, n, pkseed, n, pkroot, n,
+		mprefix, sizeof(mprefix), msg, msglen);
 
 	/* Extract tree and leaf indices */
-	split_digest(digest, digestlen, k, a, h, hprime, &idx_tree, &idx_leaf);
+	split_digest(digest, k, a, h, hprime, &idx_tree, &idx_leaf);
 
 	/* Compute FORS public key from signature */
 	slhdsa_adrs_init(adrs);

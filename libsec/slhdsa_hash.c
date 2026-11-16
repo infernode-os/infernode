@@ -235,12 +235,16 @@ slhdsa_PRF(uchar *out, int n,
  * Pseudorandom function for randomized message hashing
  * Output: n bytes
  *
- * FIPS 205 Section 10.1
+ * M is pre || msg: the caller's header of M' (FIPS 205 Algorithm 22)
+ * and the message, absorbed in turn so that M' is never built.
+ *
+ * FIPS 205 Section 11.1
  */
 void
 slhdsa_PRF_msg(uchar *out, int n,
 	const uchar *skprf, int skprflen,
 	const uchar *optrand, int optrandlen,
+	const uchar *pre, int prelen,
 	const uchar *msg, ulong msglen)
 {
 	SHA3state s;
@@ -248,6 +252,7 @@ slhdsa_PRF_msg(uchar *out, int n,
 	shake256_init(&s);
 	shake256_absorb(&s, skprf, skprflen);
 	shake256_absorb(&s, optrand, optrandlen);
+	shake256_absorb(&s, pre, prelen);
 	shake256_absorb(&s, msg, msglen);
 	shake256_finalize(&s);
 	shake256_squeeze(&s, out, n);
@@ -258,13 +263,16 @@ slhdsa_PRF_msg(uchar *out, int n,
  * Message hash function
  * Output: m bytes (digest length for FORS)
  *
- * FIPS 205 Section 10.1
+ * M is pre || msg, as for PRF_msg.
+ *
+ * FIPS 205 Section 11.1
  */
 void
 slhdsa_H_msg(uchar *out, int outlen,
 	const uchar *R, int Rlen,
 	const uchar *pkseed, int pkseedlen,
 	const uchar *pkroot, int pkrootlen,
+	const uchar *pre, int prelen,
 	const uchar *msg, ulong msglen)
 {
 	SHA3state s;
@@ -273,6 +281,7 @@ slhdsa_H_msg(uchar *out, int outlen,
 	shake256_absorb(&s, R, Rlen);
 	shake256_absorb(&s, pkseed, pkseedlen);
 	shake256_absorb(&s, pkroot, pkrootlen);
+	shake256_absorb(&s, pre, prelen);
 	shake256_absorb(&s, msg, msglen);
 	shake256_finalize(&s);
 	shake256_squeeze(&s, out, outlen);

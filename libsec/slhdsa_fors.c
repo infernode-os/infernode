@@ -122,7 +122,13 @@ slhdsa_fors_sign(uchar *sig, int n,
 	if(nodes == nil)
 		return;
 
-	slhdsa_adrs_set_type(adrs, 3);	/* FORS_TREE */
+	/*
+	 * adrs comes as FIPS 205 Algorithm 19 makes it for fors_sign: type
+	 * FORS_TREE with the key pair address idx_leaf.  The type used to
+	 * be set again here, which clears the key pair address with the
+	 * rest of the address: every leaf of a bottom tree then shared one
+	 * FORS key pair, and no signature was the standard's.
+	 */
 
 	for(i = 0; i < k; i++){
 		idx = fors_get_index(md, i, a);
@@ -198,7 +204,7 @@ slhdsa_fors_pk_from_sig(uchar *pk, int n,
 	if(roots == nil)
 		return;
 
-	slhdsa_adrs_set_type(adrs, 3);	/* FORS_TREE */
+	/* adrs is FORS_TREE with the key pair address set: see slhdsa_fors_sign */
 
 	for(i = 0; i < k; i++){
 		idx = fors_get_index(md, i, a);

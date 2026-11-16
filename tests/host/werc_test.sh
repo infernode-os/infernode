@@ -26,8 +26,11 @@
 # a page's Content-Length, ETag, 304, ranges and HEAD; an edit, a new
 # page and a removed one seen at the next request, an unchanged page's
 # ETag kept; host symbolic links out of the site not followed (a page,
-# a file, a directory, an included file); 30 clients at once.  Then emu
-# must not have faulted.
+# a file, a directory, an included file); pages of Markdown nested
+# 20000 deep made (32 deep) and a source too long to be a page refused,
+# the site's other pages served after them (the first took the heap
+# and ended wercfs's one process: no request was answered again); 30
+# clients at once.  Then emu must not have faulted.
 #
 # Run from project root: ./tests/host/werc_test.sh
 #

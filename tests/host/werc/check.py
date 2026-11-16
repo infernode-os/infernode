@@ -202,6 +202,47 @@ with open(SITE + "/docs/_werc/config", "w") as f:
 st, h2, html = page("/docs/setup-guide")
 check('<span id="headerSubTitle">changed</span>' in html, "a changed _werc/config is seen")
 
+# --- a page that cannot be made is that page's error, and the site goes on
+# Markdown nested 20000 deep took the emulator's heap, the exception
+# ended wercfs's one process, and every request after it waited for
+# good, the page long since removed.  It is a page (nested 32 deep,
+# the rest its text); a source too long to be a page is an error of
+# its own (its first 16MB were made a page, and kept).
+with open(SITE + "/nested.md", "w") as f:
+    f.write("> " * 20000 + "nested\n")
+t0 = time.time()
+try:
+    st, h, html = page("/nested")
+except Exception as e:
+    st, html = 0, repr(e)
+check(st == 200 and html.count("<blockquote>") == 32 and "nested" in html and time.time() - t0 < 10,
+      "a page of quotes nested 20000 deep is made, 32 deep", "%s in %.1f s, %d quotes" % (st, time.time() - t0, html.count("<blockquote>")))
+with open(SITE + "/lists.md", "w") as f:
+    f.write("- " * 20000 + "x\n\n" + "[" * 20000 + "y" + "](u)" * 20000 + "\n")
+try:
+    st, h, html = page("/lists")
+except Exception as e:
+    st, html = 0, repr(e)
+check(st == 200 and html.count("<ul>") >= 32, "and one of lists and links nested as deep", str(st))
+with open(SITE + "/toolong.md", "wb") as f:
+    f.truncate(17 * 1024 * 1024)
+t0 = time.time()
+try:
+    st, h, b = get("/toolong")
+except Exception as e:
+    st = 0
+check(st == 404 and time.time() - t0 < 10, "a source longer than a page may be is refused, not made a page of its first part", "%s in %.1f s" % (st, time.time() - t0))
+try:
+    st, h, html = page("/about")
+except Exception as e:
+    st, html = 0, repr(e)
+check(st == 200 and "About us." in html, "and the site's other pages are served after them", str(st))
+for n in ("nested.md", "lists.md", "toolong.md"):
+    os.remove(SITE + "/" + n)
+time.sleep(1.2)
+st, h, html = page("/about")
+check(st == 200 and 'href="/nested"' not in menu(html), "and when they are gone", str(st))
+
 # --- many at once
 results = []
 def worker(i):
@@ -222,6 +263,7 @@ err = open(ERRS).read() if os.path.exists(ERRS) else ""
 check("not taken" in err and "conf_enable_blog" in err, "rc not taken is reported on stderr", err[:300])
 check("siteTitle='WRONG'" in err, "an assignment in braces is reported, not taken")
 check(err.count("conf_enable_blog") == 1, "each once", str(err.count("conf_enable_blog")))
+check("toolong.md" in err and "cannot make the page" in err, "a page that could not be made is reported", err[-300:])
 
 print("check.py: %d failed" % fails)
 sys.exit(min(fails, 100))

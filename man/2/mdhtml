@@ -89,6 +89,14 @@ Do not give
 .I html
 text from someone who must not write HTML into the page.
 .PP
+The text may be anyone's who can write a page, so its cost is held to
+its length.
+Block quotes and lists nest at most 32 deep, and so do links and
+emphasis inside one another; what is nested deeper is not looked into
+and is written as the text it is, escaped.
+A link's destination has at most 32 parentheses open at once, and a
+reference's id at most 999 characters; past either it is no link.
+.PP
 .I Escape
 returns
 .I s

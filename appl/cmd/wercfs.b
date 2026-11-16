@@ -95,6 +95,7 @@ Page: adt {
 	mtime:	int;	# the newest of what it was made from
 	made:	int;	# when it was made
 	deps:	list of (string, string);
+	err:	string;	# why it could not be made; then it has no data
 };
 
 # what a fid has open
@@ -113,6 +114,7 @@ Creq: adt {
 };
 
 MAXFILE: con 16*1024*1024;
+ERRKEEP: con 5;	# seconds a page that could not be made is not tried again
 
 sitedir: string;
 wercroot: string;
@@ -298,20 +300,41 @@ dropopen(l: list of ref Open, fid: int): list of ref Open
 
 core(navops: chan of ref Navop, creqs: chan of ref Creq)
 {
+	# Whatever goes wrong with one request is that request's error.
+	# Every request of the site waits for this process, and an
+	# exception in it (a page's Markdown that took the heap) left them
+	# all waiting for good, the page long since removed.
 	for(;;) alt {
 	op := <-navops =>
 		if(op == nil)
 			exit;
-		pick n := op {
-		Stat =>
-			n.reply <-= stat(n.path);
-		Walk =>
-			n.reply <-= walk(n.path, n.name);
-		Readdir =>
-			readdir(n.path, n.offset, n.count, n.reply);
+		{
+			navop(op);
+		} exception ex {
+		"*" =>
+			sayonce("navigating: " + ex);
+			op.reply <-= (nil, "wercfs: " + ex);
 		}
 	r := <-creqs =>
-		r.reply <-= content(r.path);
+		{
+			r.reply <-= content(r.path);
+		} exception ex {
+		"*" =>
+			sayonce("opening: " + ex);
+			r.reply <-= (nil, nil, nil, "wercfs: " + ex);
+		}
+	}
+}
+
+navop(op: ref Navop)
+{
+	pick n := op {
+	Stat =>
+		n.reply <-= stat(n.path);
+	Walk =>
+		n.reply <-= walk(n.path, n.name);
+	Readdir =>
+		readdir(n.path, n.offset, n.count, n.reply);
 	}
 }
 
@@ -380,6 +403,8 @@ content(q: big): (ref Sys->Dir, array of byte, string, string)
 		return (dirof(p, e), nil, e.src, nil);
 	Kpage or Kindex =>
 		pg := page(p, e);
+		if(pg.err != nil)
+			return (nil, nil, nil, pg.err);
 		return (pagedir(p, pg), pg.data, nil, nil);
 	}
 	return (nil, nil, nil, Eperm);
@@ -601,11 +626,26 @@ page(p: string, e: ref Ent): ref Page
 	for(l := pages[h]; l != nil; l = tl l)
 		if((hd l).t0 == p){
 			pg := (hd l).t1;
-			if(pg.made > pg.mtime + 1 && current(pg.deps))
+			if(pg.err == nil && pg.made > pg.mtime + 1 && current(pg.deps))
+				return pg;
+			# one that could not be made is not tried at every stat
+			# and open of a request, and is tried again soon: what was
+			# wrong (a file's permissions) may not show in a stat
+			if(pg.err != nil && daytime->now() - pg.made < ERRKEEP && current(pg.deps))
 				return pg;
 			break;
 		}
-	pg := make(p, e);
+	# A page that cannot be made is that page's error: its open says
+	# why, and the site goes on.
+	mk := ref Mk(nil, 0, nil, nil);
+	pg: ref Page;
+	{
+		pg = make(mk, p, e);
+	} exception ex {
+	"*" =>
+		sayonce(sys->sprint("/%s: cannot make the page: %s", p, ex));
+		pg = ref Page(nil, 0, mk.mtime, daytime->now(), mk.deps, "cannot make the page: " + ex);
+	}
 	r: list of (string, ref Page);
 	for(l = pages[h]; l != nil; l = tl l)
 		if((hd l).t0 != p)
@@ -683,7 +723,14 @@ Mk.read(mk: self ref Mk, name: string): string
 {
 	if(!mk.isfile(name))
 		return nil;
-	return readfile(name);
+	# A file that is there and cannot be read, or is too long to be a
+	# page's, fails the page: nil, or the first 16MB, was a page made
+	# and kept under the file's stat, which a permission put right
+	# does not change.
+	(t, err) := readfile(name);
+	if(err != nil)
+		raise name + ": " + err;
+	return t;
 }
 
 Mk.ls(mk: self ref Mk, name: string): array of ref Sys->Dir
@@ -721,10 +768,8 @@ Mk.hidden(mk: self ref Mk, path: string): int
 }
 
 # werc_exec_request and setup_handlers, for the page at p
-make(p: string, e: ref Ent): ref Page
+make(mk: ref Mk, p: string, e: ref Ent): ref Page
 {
-	mk := ref Mk(nil, 0, nil, nil);
-
 	# the request's path and its elements, as werc has them
 	reqpath := "/" + p;
 	if(e.kind == Kindex){
@@ -779,7 +824,7 @@ make(p: string, e: ref Ent): ref Page
 
 	s := master(mk, pagetitle, navtree(mk, reqpath, reqpaths), head, body, foot);
 	data := array of byte s;
-	return ref Page(data, bytehash(data), mk.mtime, daytime->now(), mk.deps);
+	return ref Page(data, bytehash(data), mk.mtime, daytime->now(), mk.deps, nil);
 }
 
 bytehash(a: array of byte): int
@@ -1130,12 +1175,33 @@ readconfig(mk: ref Mk, f, confwd: string)
 
 notdone(f: string, n: int, line: string)
 {
-	k := sys->sprint("%s:%d: %s", f, n, line);
+	sayonce(sys->sprint("not taken: %s:%d: %s", f, n, line));
+}
+
+# Said once on standard error.  What is said is partly a contributor's
+# (a config's line, a page's name): no control character of theirs
+# reaches the operator's terminal, and the list of what has been said
+# does not grow without end.
+MAXSAID: con 200;
+nsaid := 0;
+
+sayonce(k: string)
+{
+	if(len k > 300)
+		k = k[0:300] + "...";
+	for(i := 0; i < len k; i++)
+		if(k[i] < ' ' || k[i] == 16r7f)
+			k[i] = ' ';
 	for(l := said; l != nil; l = tl l)
 		if(hd l == k)
 			return;
+	if(nsaid >= MAXSAID){
+		said = nil;
+		nsaid = 0;
+	}
 	said = k :: said;
-	sys->fprint(stderr, "wercfs: not taken: %s\n", k);
+	nsaid++;
+	sys->fprint(stderr, "wercfs: %s\n", k);
 }
 
 # A line's words as rc reads them (quotes removed, ( ) and = kept in
@@ -1225,20 +1291,36 @@ isname(s: string): int
 # Files and strings
 #
 
-readfile(name: string): string
+# A file's text, whole, or why not.  (It grew its buffer by a copy at
+# each 8K read: 2000 copies for a file of the 16MB it stopped at.)
+readfile(name: string): (string, string)
 {
 	fd := sys->open(name, Sys->OREAD);
 	if(fd == nil)
-		return nil;
-	buf := array[8192] of byte;
-	a := array[0] of byte;
-	while(len a < MAXFILE && (n := sys->read(fd, buf, len buf)) > 0){
-		b := array[len a + n] of byte;
-		b[0:] = a;
-		b[len a:] = buf[0:n];
-		a = b;
+		return (nil, sys->sprint("%r"));
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0 && d.length > big MAXFILE)
+		return (nil, sys->sprint("longer than %d bytes", MAXFILE));
+	a := array[8192] of byte;
+	if(ok >= 0 && d.length > big 0)
+		a = array[int d.length + 1] of byte;
+	n := 0;
+	for(;;){
+		if(n == len a){
+			if(n >= MAXFILE)
+				return (nil, sys->sprint("longer than %d bytes", MAXFILE));
+			b := array[2*len a] of byte;
+			b[0:] = a;
+			a = b;
+		}
+		k := sys->read(fd, a[n:], len a - n);
+		if(k < 0)
+			return (nil, sys->sprint("%r"));
+		if(k == 0)
+			break;
+		n += k;
 	}
-	return string a;
+	return (string a[0:n], nil);
 }
 
 readsmall(name: string): string

@@ -46,6 +46,7 @@ Files: adt {
 	rpc:	ref Sys->FileIO;
 	proto:	ref Sys->FileIO;
 	needkey:	ref Sys->FileIO;
+	secstore:	ref Sys->FileIO;
 };
 
 Debug: con 0;
@@ -75,8 +76,8 @@ secstoreuser: string;		# username for secstore auth
 secstorepwhash: array of byte;	# legacy password hash for secstore auth
 secstorepwhash2: array of byte;	# secstore2 password hash for new PAK auth
 secstorerootkey: array of byte;	# SGCM2 root key for new secstore blobs
-secstorefilekey: array of byte;	# SGCM1 key for reading existing secstore blobs
-secstorelkey: array of byte;	# legacy file encryption key (AES-CBC, for reading old files)
+secstorepwhash4: array of byte;	# version 4's, from the file key's root (mkseckey4)
+secstorevault: array of byte;	# a second-factor account's vault key, shown before a save
 
 # Cached secstore connection — avoids full PAK handshake on every save
 secstoreconn: ref Dial->Connection;
@@ -137,11 +138,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(secstoreuser == nil)
 			secstoreuser = user();
 		if(secstorepassarg != nil){
-			secstorepwhash = secstore->mkseckey(secstorepassarg);
-			secstorepwhash2 = secstore->mkseckey2(secstorepassarg);
-			secstorerootkey = secstore->mkfilekey3(secstoreuser, secstorepassarg);
-			secstorefilekey = secstore->mkfilekey2(secstorepassarg);
-			secstorelkey = secstore->mkfilekey(secstorepassarg);
+			setsecstorekeys(secstorepassarg, nil);
 			secstorepassarg = nil;
 		}
 	} else if(keyfilepath != nil){
@@ -163,10 +160,32 @@ init(nil: ref Draw->Context, args: list of string)
 	files.rpc = sys->file2chan(mntpt, "rpc");
 	files.proto = sys->file2chan(mntpt, "proto");
 	files.needkey = sys->file2chan(mntpt, "needkey");
-	if(files.ctl == nil || files.rpc == nil || files.proto == nil || files.needkey == nil)
+	files.secstore = sys->file2chan(mntpt, "secstore");
+	if(files.ctl == nil || files.rpc == nil || files.proto == nil || files.needkey == nil || files.secstore == nil)
 		err(sys->sprint("can't create %s/*: %r", mntpt));
 	keymanc = chan of (list of ref Attr, int, chan of (list of ref Key, string));
 	spawn factotumsrv();
+}
+
+# The keys a secstore password gives: the three PAK hashes (version 4's
+# from the root of the file key, the others for an account not yet
+# moved) and the file key's root.  dk, when given, is a second-factor
+# account's data key: the files are under it, and its vault key is shown
+# to the server before each save.
+setsecstorekeys(pass: string, dk: array of byte)
+{
+	secstorepwhash = secstore->mkseckey(pass);
+	secstorepwhash2 = secstore->mkseckey2(pass);
+	root := secstore->mkfilekey3(secstoreuser, pass);
+	secstorepwhash4 = secstore->mkseckey4(root);
+	if(dk != nil){
+		secstore->erasekey(root);
+		secstorerootkey = dk;
+		secstorevault = secstore->vaultkey(dk);
+	}else{
+		secstorerootkey = root;
+		secstorevault = nil;
+	}
 }
 
 hexdig(c: int): int
@@ -437,19 +456,14 @@ factotumsrv()
 				wc <-= (0, "cannot load secstore module");
 				break;
 			}
-			if(secstore != nil){
-				secstorepwhash = secstore->mkseckey(spass);
-				secstorepwhash2 = secstore->mkseckey2(spass);
-				# 2FA: encrypt save-back under the data key (auth still uses the
-				# password); ordinary accounts use the password-derived root key.
-				dk2fa := unhexkey(sdk);
-				if(dk2fa != nil)
-					secstorerootkey = dk2fa;
-				else
-					secstorerootkey = secstore->mkfilekey3(secstoreuser, spass);
-				secstorefilekey = secstore->mkfilekey2(spass);
-				secstorelkey = secstore->mkfilekey(spass);
+			if(sdk != "" && unhexkey(sdk) == nil){
+				wc <-= (0, "the data key is 64 hexadecimal digits");
+				break;
 			}
+			# 2FA: encrypt save-back under the data key (auth still uses the
+			# password); ordinary accounts use the password-derived root key.
+			setsecstorekeys(spass, unhexkey(sdk));
+			secstoreconn = nil;	# a connection kept was another account's, or another password's
 			spass = nil;
 			sdk = nil;
 			# whoever configured this read the store itself (the
@@ -516,6 +530,17 @@ factotumsrv()
 			break;
 		rc <-= reads(readprotos(), off, nbytes);
 	(nil, nil, nil, wc) := <-files.proto.write =>
+		if(wc != nil)
+			wc <-= (0, "illegal operation");
+
+	# Where the keys are kept, from the one program that knows: a
+	# file in /tmp said "secstore is unlocked", made by whoever liked
+	# and left there from boot to boot.
+	(off, nbytes, nil, rc) := <-files.secstore.read =>
+		if(rc == nil)
+			break;
+		rc <-= reads(savestatus(), off, nbytes);
+	(nil, nil, nil, wc) := <-files.secstore.write =>
 		if(wc != nil)
 			wc <-= (0, "illegal operation");
 
@@ -1760,6 +1785,24 @@ dosave(): string
 
 nosave: string;	# why nothing is saved, when nothing may be
 
+# the secstore file: one line saying where keys added now are saved
+savestatus(): string
+{
+	if(secstoreaddr != nil){
+		if(nosave != nil)
+			return "notsaving " + nosave + "\n";
+		if(secstorepwhash4 == nil)
+			return "notsaving no secstore password yet\n";
+		s := sys->sprint("saving secstore %q %q", secstoreaddr, secstoreuser);
+		if(secstorevault != nil)
+			s += " 2fa";
+		return s + "\n";
+	}
+	if(keyfilepath != nil && keyfilepass != nil)
+		return sys->sprint("saving keyfile %q\n", keyfilepath);
+	return "none\n";
+}
+
 dosave1(): string
 {
 	if(nosave != nil)
@@ -1874,16 +1917,12 @@ secstoreload(): string
 		pass := promptpassword("secstore password: ");
 		if(pass == nil)
 			return "no password provided";
-		secstorepwhash = secstore->mkseckey(pass);
-		secstorepwhash2 = secstore->mkseckey2(pass);
-		secstorerootkey = secstore->mkfilekey3(secstoreuser, pass);
-		secstorefilekey = secstore->mkfilekey2(pass);
-		secstorelkey = secstore->mkfilekey(pass);
+		setsecstorekeys(pass, nil);
 		pass = nil;
 	}
 
 	# Connect and authenticate
-	(conn, sname, diag) := secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
+	(conn, sname, diag) := secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
 	if(conn == nil){
 		# Connect failed — auto-create account if it doesn't exist
 		reason := "";
@@ -1897,7 +1936,7 @@ secstoreload(): string
 		if(e != nil)
 			return "secstore setup: " + e;
 		# Retry connect after setup
-		(conn, sname, diag) = secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
+		(conn, sname, diag) = secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
 		if(conn == nil){
 			if(diag != nil)
 				return "secstore connect after setup: " + diag;
@@ -1927,9 +1966,15 @@ secstoreload(): string
 		return "the key file is empty (damaged)";
 
 	# Decrypt (auto-detects modern GCM vs legacy CBC format)
-	plaintext := secstore->decrypt3(file, secstorerootkey, secstorefilekey, secstorelkey);
-	if(plaintext == nil)
-		return "secstore: decryption failed (wrong password?)";
+	# The format written, and no other: given the older formats' keys
+	# every time, the file chose its own format, a weaker one if
+	# whoever wrote it liked.
+	plaintext := secstore->decrypt3(file, secstorerootkey, nil, nil);
+	if(plaintext == nil){
+		if(!secstore->iscurrent(file))
+			return "the key file is in an old format: move it with auth/secstore m factotum";
+		return "secstore: decryption failed (wrong password, or a second-factor account's file)";
+	}
 
 	# Parse key lines
 	s := string plaintext;
@@ -1972,7 +2017,7 @@ secstoreload(): string
 #
 secstoresetup(): string
 {
-	if(secstorepwhash == nil || secstorepwhash2 == nil)
+	if(secstorepwhash4 == nil)
 		return "no password";
 
 	storedir := "/usr/inferno/secstore";
@@ -1985,14 +2030,16 @@ secstoresetup(): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	hexHi := secstore->mkverifier(secstoreuser, "secstore3", secstorepwhash2);
+	hexHi := secstore->mkverifier(secstoreuser, "secstore4", secstorepwhash4);
+	if(hexHi == nil)
+		return "can't make the verifier";
 
 	# Write PAK verifier
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte secstore->formatverifier("secstore3", hexHi);
+	b := array of byte (secstore->formatverifier("secstore4", hexHi) + "\n");
 	# a verifier cut short locked the account out, with "created" said
 	if(sys->write(fd, b, len b) != len b){
 		why := sys->sprint("%r");
@@ -2037,6 +2084,8 @@ secstoresave(): string
 	now := int (sys->millisec() / 1000);
 	if(secstoreconn != nil && (now - secstoreconntime) < SECSTORE_CONN_TTL) {
 		rc := secstore->putfile(secstoreconn, "factotum", encrypted);
+		if(rc < 0)
+			sys->fprint(sys->fildes(2), "factotum: secstore: store on the kept connection: %r\n");
 		if(rc >= 0) {
 			secstoreconntime = now;	# refresh TTL on success
 			if(debug)
@@ -2050,18 +2099,32 @@ secstoresave(): string
 	}
 
 	# Connect and authenticate (full PAK handshake)
-	(conn, nil, diag) := secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
+	(conn, nil, diag) := secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore save connect: " + diag;
 		return sys->sprint("secstore save connect: %r");
 	}
 
-	# Put the file
+	# A second-factor account's files change only in a session that
+	# has shown the vault key; an account whose factor was enrolled
+	# before the server kept such keys is enrolled now.
+	if(secstorevault != nil){
+		(shown, verr) := secstore->showvault(conn, secstorevault);
+		if(shown == 0)
+			verr = secstore->enrolvault(conn, secstorevault);
+		if(verr != nil){
+			secstore->bye(conn);
+			return "secstore: the second factor's vault key: " + verr;
+		}
+	}
+
+	# Put the file (a version 4 session is told whether it was stored)
 	rc := secstore->putfile(conn, "factotum", encrypted);
 	if(rc < 0) {
+		e := sys->sprint("%r");
 		secstore->bye(conn);
-		return sys->sprint("secstore putfile: %r");
+		return "secstore putfile: " + e;
 	}
 
 	# Cache the connection for reuse (don't call bye)

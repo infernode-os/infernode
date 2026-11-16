@@ -113,6 +113,7 @@ WmLogon: module
 SECSTORE: con "tcp!127.0.0.1!5356";
 secstoreaddr := SECSTORE;
 SENTINEL: con "/tmp/.secstore-unlocked";
+Minpass: con 8;	# characters in a new account's password
 
 BODYFONT: con "/fonts/combined/unicode.sans.14.font";
 SMALLFONT: con "/fonts/combined/unicode.sans.12.font";
@@ -542,6 +543,14 @@ handleenter(): int
 	STATE_SETUP_PASS =>
 		if(passbuf == nil || passbuf == "") {
 			statusmsg = "Password required";
+			redraw();
+			return 0;
+		}
+		# SP 800-63B 5.1.1.2: eight characters at least.  The store
+		# is guessed at offline by whoever takes the disk.
+		if(len passbuf < Minpass) {
+			statusmsg = sys->sprint("The password must be at least %d characters", Minpass);
+			passbuf = "";
 			redraw();
 			return 0;
 		}
@@ -1091,15 +1100,14 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	pwhash := secstore->mkseckey(pass);
 	pwhash2 := secstore->mkseckey2(pass);
 	rootkey := secstore->mkfilekey3(user, pass);
-	filekey := secstore->mkfilekey2(pass);
-	legacykey := secstore->mkfilekey(pass);
+	pwhash4 := secstore->mkseckey4(rootkey);
 
 	# Whatever the server sends, the answer is a string for the screen:
 	# an exception here went up through the input loop and out of init.
 	err: string;
 	{
-		err = connectfactotum1(user, pass, recoverypass, fidopin,
-			pwhash, pwhash2, rootkey, filekey, legacykey);
+		err = connectfactotum1(user, recoverypass, fidopin,
+			pwhash, pwhash2, pwhash4, rootkey);
 	} exception e {
 	"*" =>
 		err = "secstore: " + e;
@@ -1107,16 +1115,17 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	# the keys made from the password are done with, however it went
 	secstore->erasekey(pwhash);
 	secstore->erasekey(pwhash2);
+	secstore->erasekey(pwhash4);
 	secstore->erasekey(rootkey);
-	secstore->erasekey(filekey);
-	secstore->erasekey(legacykey);
 	return err;
 }
 
-connectfactotum1(user, pass, recoverypass, fidopin: string,
-	pwhash, pwhash2, rootkey, filekey, legacykey: array of byte): string
+connectfactotum1(user, recoverypass, fidopin: string,
+	pwhash, pwhash2, pwhash4, rootkey: array of byte): string
 {
-	(conn, nil, diag) := secstore->connect2(secstoreaddr, user, pwhash, pwhash2);
+	# version 4 of the exchange; an account at an older version is
+	# moved to it by this login (secstore(2))
+	(conn, nil, diag) := secstore->connect4(secstoreaddr, user, pwhash, pwhash2, pwhash4);
 	if(conn == nil) {
 		if(diag != nil)
 			return "secstore: " + diag;
@@ -1156,14 +1165,23 @@ connectfactotum1(user, pass, recoverypass, fidopin: string,
 		(dk, unlockerr) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
 		if(dk != nil){
 			plaintext = secstore->decrypt3(file, dk, nil, nil);
-			current2fadkhex = tohex(dk);	# retain DK so save-back stays DK-encrypted (no downgrade)
+			if(plaintext != nil){
+				current2fadkhex = tohex(dk);	# retain DK so save-back stays DK-encrypted (no downgrade)
+				# the vault has been read under the data key: from
+				# now nothing under the password alone is the vault
+				twofaslot->markenrolled(user);
+			}
 		}
-		# Fall back to the password path if the blob is still password-encrypted
-		# — a legacy/un-migrated blob during an incomplete enroll/disable. A
-		# fully migrated 2FA blob will NOT decrypt under the password, so strong
-		# mode is preserved when the key is simply absent.
-		if(plaintext == nil)
-			plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
+		# A vault still under the password is taken only while the
+		# second factor is being enrolled or disabled (twofaslot's
+		# state: an enrolment or a disable that stopped part way, or an
+		# account whose vault has never yet been read under its data
+		# key).  It was taken whenever it decrypted: whoever had the
+		# password could store a vault of their own under it, and it
+		# was loaded with no second factor.
+		st := twofaslot->state(user);
+		if(plaintext == nil && (st == "enrolling" || st == "disabling"))
+			plaintext = secstore->decrypt3(file, rootkey, nil, nil);
 		if(plaintext == nil){
 			if(recoverypass == ""){
 				# NEEDRECOVERY tells logon to prompt for the recovery passphrase.
@@ -1176,9 +1194,14 @@ connectfactotum1(user, pass, recoverypass, fidopin: string,
 			return "recovery passphrase did not unlock";
 		}
 	}else{
-		plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
-		if(plaintext == nil)
+		# the format written, and no other (secstore(2)): an older
+		# file is moved by auth/secstore m, with the password
+		plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+		if(plaintext == nil){
+			if(!secstore->iscurrent(file))
+				return "the keys are in an old format: move them with auth/secstore m factotum";
 			return "wrong password";
+		}
 	}
 
 	# Parse key lines and add to running factotum
@@ -1216,90 +1239,7 @@ connectfactotum1(user, pass, recoverypass, fidopin: string,
 
 	sys->fprint(stderr, "logon: loaded %d keys from secstore\n", nloaded);
 
-	# The password just authenticated against the stored PAK verifier, so it is
-	# safe to (re)derive and upgrade a legacy verifier to secstore3. Best-effort.
-	migratepak(user, pass);
 	return nil;
-}
-
-#
-# Opportunistically upgrade the local secstore PAK verifier to secstore3 after a
-# verified login. The verifier is a one-way function of (user, password), so a
-# successful login is proof we can recompute it under the stronger suite; the
-# factotum blob and 2fa key-slots are keyed independently and are untouched.
-#
-# Best-effort: this must NEVER disturb the login that already succeeded, so any
-# error just logs and returns. Idempotent (skips if already secstore3), and it
-# stages to a temp file it reads back and validates before swapping, so a bad or
-# short write can never destroy the working verifier.
-#
-migratepak(user, pass: string)
-{
-	if(secstore == nil || user == nil || user == "")
-		return;
-	pakpath := "/usr/inferno/secstore/" + user + "/PAK";
-
-	rfd := sys->open(pakpath, Sys->OREAD);
-	if(rfd == nil)
-		return;			# no local PAK (e.g. remote store) — nothing to do
-	buf := array[4096] of byte;
-	n := sys->read(rfd, buf, len buf);
-	rfd = nil;
-	if(n <= 0)
-		return;
-	(curver, nil) := secstore->parseverifier(string buf[0:n]);
-	if(curver == "secstore3")
-		return;			# already migrated
-
-	pwhash2 := secstore->mkseckey2(pass);
-	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
-	secstore->erasekey(pwhash2);
-	content := array of byte (secstore->formatverifier("secstore3", hexHi) + "\n");
-
-	tmppath := pakpath + ".new";
-	wfd := sys->create(tmppath, Sys->OWRITE, 8r600);
-	if(wfd == nil){
-		sys->fprint(stderr, "logon: PAK migrate: create %s: %r\n", tmppath);
-		return;
-	}
-	if(sys->write(wfd, content, len content) != len content){
-		sys->fprint(stderr, "logon: PAK migrate: write %s: %r\n", tmppath);
-		wfd = nil;
-		sys->remove(tmppath);
-		return;
-	}
-	wfd = nil;
-
-	# Validate the staged file parses as secstore3 before committing.
-	vfd := sys->open(tmppath, Sys->OREAD);
-	if(vfd == nil){
-		sys->remove(tmppath);
-		return;
-	}
-	vn := sys->read(vfd, buf, len buf);
-	vfd = nil;
-	nver: string;
-	if(vn > 0)
-		(nver, nil) = secstore->parseverifier(string buf[0:vn]);
-	if(nver != "secstore3"){
-		sys->fprint(stderr, "logon: PAK migrate: staged verifier failed validation; leaving legacy PAK in place\n");
-		sys->remove(tmppath);
-		return;
-	}
-
-	# Commit: replace PAK with the validated staged file.
-	if(sys->remove(pakpath) < 0){
-		sys->fprint(stderr, "logon: PAK migrate: cannot remove old PAK: %r\n");
-		sys->remove(tmppath);
-		return;
-	}
-	d := sys->nulldir;
-	d.name = "PAK";
-	if(sys->wstat(tmppath, d) < 0){
-		sys->fprint(stderr, "logon: PAK migrate: rename failed: %r — recover with 'secstore-setup -u %s -V secstore3' (the .new file holds the new verifier)\n", user);
-		return;
-	}
-	sys->fprint(stderr, "logon: upgraded secstore PAK verifier to secstore3 for %s\n", user);
 }
 
 createsecstoreacct(pass: string): string
@@ -1327,8 +1267,15 @@ createsecstoreacct(pass: string): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	pwhash2 := secstore->mkseckey2(pass);
-	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
+	# version 4's verifier: from the file key's root, so that a guess
+	# costs as much against it as against the files (secstore(2))
+	rootkey := secstore->mkfilekey3(user, pass);
+	pwhash4 := secstore->mkseckey4(rootkey);
+	secstore->erasekey(rootkey);
+	hexHi := secstore->mkverifier(user, "secstore4", pwhash4);
+	secstore->erasekey(pwhash4);
+	if(hexHi == nil)
+		return "can't make the verifier";
 
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
@@ -1336,7 +1283,7 @@ createsecstoreacct(pass: string): string
 		return sys->sprint("can't create %s: %r", pakpath);
 	# all of it or no account: a verifier cut short is an account nobody
 	# can log in to, and the write's result was not looked at
-	b := array of byte secstore->formatverifier("secstore3", hexHi);
+	b := array of byte (secstore->formatverifier("secstore4", hexHi) + "\n");
 	if(sys->write(fd, b, len b) != len b){
 		e := sys->sprint("can't write %s: %r", pakpath);
 		fd = nil;

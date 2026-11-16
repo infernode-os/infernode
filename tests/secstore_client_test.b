@@ -519,15 +519,10 @@ testFiles(t: ref T)
 		(l, err) = secstore->files(conn);
 		t.assert(l == nil && err != nil, bad[i] + " is refused: " + err);
 	}
-	# a directory as read, which is what auth/secstored sends
+	# a directory as read, which is what auth/secstored once sent: it
+	# sends a listing now, and nothing else is one
 	(l, err) = secstore->files(conn);
-	t.assert(err == nil && len l == 2, sys->sprint("secstored's directory is read: %d %s", len l, err));
-	if(len l == 2){
-		(name, size, nil, nil, nil) := hd l;
-		t.assert(name == "factotum" && size == 2552, "its first file: " + name);
-		(name, size, nil, nil, nil) = hd tl l;
-		t.assert(name == "notes" && size == 17, "its second, and the verifier left out: " + name);
-	}
+	t.assert(l == nil && err != nil, "a directory's own bytes are no listing: " + err);
 	(l, err) = secstore->files(conn);
 	t.assert(l == nil && err == nil, "an empty listing is no files: " + err);
 	(l, err) = secstore->files(conn);
@@ -554,17 +549,65 @@ testEmptyFile(t: ref T)
 	g1 := secstore->mkfilekey2("a password");
 	lk := secstore->mkfilekey("a password");
 	e := array[0] of byte;
-	t.assert(secstore->decrypt(e, lk) == nil, "decrypt: an empty file is not an encrypted one");
-	t.assert(secstore->decrypt2(e, g1, lk) == nil, "decrypt2");
-	t.assert(secstore->decrypt3(e, rk, g1, lk) == nil, "decrypt3");
+	t.assert(secstore->decrypt3(e, rk, g1, lk) == nil, "decrypt3: an empty file is not an encrypted one");
 	t.assert(secstore->decrypt3(e, rk, nil, nil) == nil, "decrypt3 with no older keys");
 	# and a file that is one still decrypts
 	blob := secstore->encrypt3(array of byte "key x\n", rk);
-	p := secstore->decrypt3(blob, rk, g1, lk);
+	p := secstore->decrypt3(blob, rk, nil, nil);
 	t.assert(p != nil && string p == "key x\n", "a file still decrypts");
-	old := secstore->encrypt(array of byte "key y\n", lk);
-	p = secstore->decrypt3(old, rk, g1, lk);
-	t.assert(p != nil && string p == "key y\n", "and one in the oldest format");
+	t.assert(secstore->iscurrent(blob), "and is in the current format");
+}
+
+# the two formats nothing writes any more, made here as they were
+oldcbc(file, key: array of byte): array of byte
+{
+	iv := array[16] of {* => byte 7};
+	dat := array[16 + len file + 16] of byte;
+	dat[0:] = iv;
+	dat[16:] = file;
+	dat[16 + len file:] = array of byte "XXXXXXXXXXXXXXXX";
+	kr->aescbc(kr->aessetup(key, iv), dat[16:], len dat - 16, Keyring->Encrypt);
+	return dat;
+}
+
+oldgcm1(file, key: array of byte): array of byte
+{
+	magic := array of byte "SGCM1\n";
+	nonce := array[12] of {* => byte 9};
+	(ct, tag) := kr->aesgcmencrypt(kr->aesgcmsetup(key, nonce), file, magic);
+	out := array[len magic + 12 + len ct + len tag] of byte;
+	out[0:] = magic;
+	out[len magic:] = nonce;
+	out[len magic + 12:] = ct;
+	out[len magic + 12 + len ct:] = tag;
+	return out;
+}
+
+#
+# The file chose its own format: decrypt3 was given the keys of the two
+# older formats by every caller, so whoever could put a file in the
+# store could put one in the oldest format there (AES-CBC under a SHA-1
+# of the password, with no integrity) and have it taken.  The older
+# formats are read only by whoever gives their keys (auth/secstore m),
+# and nothing in the library writes them.
+#
+testOldFormats(t: ref T)
+{
+	rk := secstore->mkfilekey3(USER, "a password");
+	g1 := secstore->mkfilekey2("a password");
+	lk := secstore->mkfilekey("a password");
+	plain := array of byte "key y\n";
+	cbc := oldcbc(plain, lk);
+	gcm1 := oldgcm1(plain, g1);
+	t.assert(!secstore->iscurrent(cbc) && !secstore->iscurrent(gcm1), "neither old format is the current one");
+	t.assert(secstore->decrypt3(cbc, rk, nil, nil) == nil, "a file in the oldest format is not read by a login");
+	t.assert(has(sys->sprint("%r"), "auth/secstore m"), sys->sprint("which says how it is moved: %r"));
+	t.assert(secstore->decrypt3(gcm1, rk, nil, nil) == nil, "nor one in SGCM1");
+	p := secstore->decrypt3(cbc, rk, g1, lk);
+	t.assert(p != nil && string p == "key y\n", "given its key (a move), the oldest format is read");
+	p = secstore->decrypt3(gcm1, rk, g1, lk);
+	t.assert(p != nil && string p == "key y\n", "and SGCM1");
+	t.assert(secstore->decrypt3(gcm1, rk, nil, lk) == nil, "SGCM1 with only the oldest format's key is not");
 }
 
 #
@@ -585,10 +628,6 @@ norandom(c: chan of string)
 	r := "";
 	if(secstore->encrypt3(array of byte "secret", rk) != nil)
 		r += " encrypt3";
-	if(secstore->encrypt2(array of byte "secret", rk) != nil)
-		r += " encrypt2";
-	if(secstore->encrypt(array of byte "secret", rk[0:16]) != nil)
-		r += " encrypt";
 	c <-= r;
 }
 
@@ -651,6 +690,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Files", testFiles);
 	run("Pin", testPin);
 	run("EmptyFile", testEmptyFile);
+	run("OldFormats", testOldFormats);
 	run("NoRandom", testNoRandom);
 
 	if(testing->summary(passed, failed, skipped) > 0)

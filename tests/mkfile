@@ -158,6 +158,7 @@ TARG=\
 	tls_record_test.dis\
 	random_fail_test.dis\
 	cnsa_mode_test.dis\
+	secstored_test.dis\
 	attrdb_test.dis\
 	dial_lib_test.dis\
 	post9p_test.dis\

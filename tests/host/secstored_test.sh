@@ -29,7 +29,7 @@ mkdir -p /tmp/secstore_test/testuser
 
 # Start secstored on a test port
 echo '--- starting secstored ---'
-auth/secstored -d -s /tmp/secstore_test -a 'tcp!*!15356' &
+auth/secstored -d -s /tmp/secstore_test -a 'tcp!127.0.0.1!15356' &
 sleep 2
 
 # For now, just verify it's listening and exits cleanly

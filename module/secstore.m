@@ -12,6 +12,21 @@ Secstore: module
 	mkseckey2:	fn(pass: string): array of byte;
 	connect:		fn(addr: string, user: string, pwhash: array of byte): (ref Dial->Connection, string, string);
 	connect2:	fn(addr: string, user: string, pwhash: array of byte, pwhash2: array of byte): (ref Dial->Connection, string, string);
+	# Version 4 first (pwhash4 = mkseckey4(mkfilekey3(user, pass))); an
+	# account at an older version is logged in to with the older
+	# hashes, moved to version 4, and logged in to again.  A version 4
+	# session's putfile and remove are answered by the server.
+	mkseckey4:	fn(rootkey: array of byte): array of byte;
+	connect4:	fn(addr: string, user: string, pwhash, pwhash2, pwhash4: array of byte): (ref Dial->Connection, string, string);
+	setverifier:	fn(conn: ref Dial->Connection, version, hexHi: string): string;
+	# The second factor's lock on the account's files: once the vault
+	# key (made from the data key) is enrolled, the server stores and
+	# removes only in a session that has shown it.
+	vaultkey:	fn(dk: array of byte): array of byte;
+	vaultstate:	fn(conn: ref Dial->Connection): (int, string);	# 1 enrolled, 0 not, -1 and why
+	showvault:	fn(conn: ref Dial->Connection, wk: array of byte): (int, string);	# 1 shown, 0 none enrolled, -1 and why
+	enrolvault:	fn(conn: ref Dial->Connection, wk: array of byte): string;
+	unenrolvault:	fn(conn: ref Dial->Connection): string;
 	dial:		fn(addr: string): ref Dial->Connection;
 	auth:		fn(conn: ref Dial->Connection, user: string, pwhash: array of byte): (string, string);
 	sendpin:	fn(conn: ref Dial->Connection, pin: string): int;
@@ -28,9 +43,9 @@ Secstore: module
 	formatverifier:	fn(version, hexHi: string): string;
 	parseverifier:	fn(s: string): (string, string);
 
+	# the keys of the two formats no longer written, for decrypt3 by
+	# whoever moves an old file (auth/secstore m)
 	mkfilekey:	fn(pass: string): array of byte;
-	decrypt:	fn(a: array of byte, key: array of byte): array of byte;
-	encrypt:	fn(a: array of byte, key: array of byte): array of byte;
 	erasekey:	fn(a: array of byte);
 
 	# Modern crypto (AES-256-GCM, HMAC-SHA256 key derivation)
@@ -39,10 +54,12 @@ Secstore: module
 	# Mix a hardware second-factor secret R into an already-stretched root key
 	# to form a key-encryption key for a 2FA slot (see docs/second-factor-auth.md).
 	mkkek2fa:	fn(rootkey, R: array of byte): array of byte;
-	encrypt2:	fn(a: array of byte, key: array of byte): array of byte;
-	decrypt2:	fn(a: array of byte, key: array of byte, legacykey: array of byte): array of byte;
+	# SGCM2, the one format written.  decrypt3 reads an older format
+	# only when given its key (gcm1key: mkfilekey2; legacykey: mkfilekey);
+	# iscurrent says whether a file is SGCM2.
 	encrypt3:	fn(a: array of byte, rootkey: array of byte): array of byte;
 	decrypt3:	fn(a: array of byte, rootkey: array of byte, gcm1key: array of byte, legacykey: array of byte): array of byte;
+	iscurrent:	fn(a: array of byte): int;
 
 	lines:	fn(file: array of byte): list of array of byte;
 };

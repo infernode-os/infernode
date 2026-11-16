@@ -49,18 +49,26 @@ init(nil: ref Draw->Context, args: list of string)
 	secstore->init();
 
 	user := readfile("/dev/user");
-	importkeys := 0;
+	force := 0;
 	pass: string;
-	version := "secstore3";
+	version := "secstore4";
 
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("auth/secstore-setup [-i] [-k password] [-s storedir] [-u user] [-V secstore|secstore3]");
+		arg->setusage("auth/secstore-setup [-f] [-k password] [-s storedir] [-u user] [-V secstore|secstore3|secstore4]");
 		while((o := arg->opt()) != 0)
 			case o {
-			'i' =>	importkeys = 1;
-			'k' =>	pass = arg->earg();
+			'f' =>	force = 1;
+			'i' =>
+				# It wrote a file "factotum" made of what a read
+				# of factotum's ctl gives, which has no secrets
+				# in it and is not in the form logon loads: an
+				# import of nothing, said to have worked.
+				fatal("-i is gone: factotum gives no secrets to be read; it saves its own keys once it is told the account (auth/factotum -S, or a login)");
+			'k' =>
+				pass = arg->earg();
+				sys->fprint(stderr, "secstore-setup: warning: a password given with -k can be read by other programs (in /prog); it is for tests\n");
 			's' =>	storedir = arg->earg();
 			'u' =>	user = arg->earg();
 			'V' =>	version = arg->earg();
@@ -73,9 +81,22 @@ init(nil: ref Draw->Context, args: list of string)
 	# the name is a directory in the store, as the server takes it
 	if(user == "." || user == ".." || hasslash(user))
 		fatal("user name cannot be a path: " + user);
+	if(version != "secstore" && version != "secstore3" && version != "secstore4")
+		fatal("unsupported verifier version");
+	if(version != "secstore4")
+		sys->fprint(stderr, "secstore-setup: warning: a %s account is one to be moved: its first login makes it secstore4\n", version);
 
 	sys->fprint(stderr, "secstore setup for user: %s\n", user);
 	sys->fprint(stderr, "store directory: %s\n", storedir);
+
+	# An account that is there is not written over: its verifier was
+	# replaced without a word, and its files, under the old password,
+	# were then beyond the account's reach.
+	userdir := storedir + "/" + user;
+	pakpath := userdir + "/PAK";
+	(pok, nil) := sys->stat(pakpath);
+	if(pok >= 0 && !force)
+		fatal(sys->sprint("the account %s exists (%s): -f replaces its verifier; its files stay under the old password", user, pakpath));
 
 	# Prompt for password if not provided via -k
 	if(pass == nil || pass == "") {
@@ -86,22 +107,36 @@ init(nil: ref Draw->Context, args: list of string)
 		if(pass2 != pass)
 			fatal("passwords don't match");
 	}
+	# SP 800-63B 5.1.1.2: a memorized secret is at least 8 characters;
+	# the store may be read by whoever takes the disk, and is guessed
+	# at offline from then on
+	if(len pass < Minpass)
+		fatal(sys->sprint("the password must be at least %d characters", Minpass));
 
-	if(version != "secstore" && version != "secstore3")
-		fatal("unsupported verifier version");
-
-	# Compute PAK verifier
-	pwhash := secstore->mkseckey(pass);
-	if(version != "secstore"){
-		secstore->erasekey(pwhash);
+	# Compute the PAK verifier: only the hash its version takes
+	pwhash: array of byte;
+	case version {
+	"secstore" =>
+		pwhash = secstore->mkseckey(pass);
+	"secstore3" =>
 		pwhash = secstore->mkseckey2(pass);
+	* =>
+		root := secstore->mkfilekey3(user, pass);
+		pwhash = secstore->mkseckey4(root);
+		secstore->erasekey(root);
 	}
 	hexHi := secstore->mkverifier(user, version, pwhash);
 	secstore->erasekey(pwhash);
+	if(hexHi == nil)
+		fatal("can't make the verifier");
 
-	# Create user directory
-	userdir := storedir + "/" + user;
+	# Create user directory.  Each must be a directory when this is
+	# done: one that could not be made, with a file of that name in
+	# its place, was not noticed.
 	sys->create(storedir, Sys->OREAD, Sys->DMDIR | 8r700);
+	(sok, sd) := sys->stat(storedir);
+	if(sok < 0 || (sd.mode & Sys->DMDIR) == 0)
+		fatal(sys->sprint("can't make the directory %s: %r", storedir));
 	sys->create(userdir, Sys->OREAD, Sys->DMDIR | 8r700);
 	(dok, dd) := sys->stat(userdir);
 	if(dok < 0 || (dd.mode & Sys->DMDIR) == 0)
@@ -109,55 +144,37 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Write verifier: all of it, or no account.  The write's result was
 	# not looked at, and "setup complete" was printed over a verifier cut
-	# short, which is an account nobody can log in to.
-	pakpath := userdir + "/PAK";
-	fd := sys->create(pakpath, Sys->OWRITE, 8r600);
+	# short, which is an account nobody can log in to.  It is written
+	# beside the old one and renamed, so a stop leaves one of them.
+	tmp := userdir + "/.new.PAK";
+	sys->remove(tmp);
+	fd := sys->create(tmp, Sys->OWRITE|Sys->OEXCL, 8r600);
 	if(fd == nil)
-		fatal(sys->sprint("can't create %s: %r", pakpath));
-	b := array of byte secstore->formatverifier(version, hexHi);
+		fatal(sys->sprint("can't create %s: %r", tmp));
+	b := array of byte (secstore->formatverifier(version, hexHi) + "\n");
 	if(sys->write(fd, b, len b) != len b){
-		e := sys->sprint("can't write %s: %r", pakpath);
+		e := sys->sprint("can't write %s: %r", tmp);
 		fd = nil;
-		sys->remove(pakpath);
+		sys->remove(tmp);
 		fatal(e);
 	}
 	fd = nil;
-
-	sys->fprint(stderr, "PAK verifier stored in %s\n", pakpath);
-
-	# Optionally import factotum keys
-	if(importkeys){
-		keys := readfile("/mnt/factotum/ctl");
-		if(keys == nil || keys == ""){
-			sys->fprint(stderr, "no keys in factotum to import\n");
-		} else {
-			# Encrypt with modern AES-GCM file key
-			filekey := secstore->mkfilekey3(user, pass);
-			plaintext := array of byte keys;
-			encrypted := secstore->encrypt3(plaintext, filekey);
-			secstore->erasekey(filekey);
-			secstore->erasekey(plaintext);
-
-			if(encrypted == nil)
-				fatal("encryption failed");
-
-			fpath := userdir + "/factotum";
-			fd = sys->create(fpath, Sys->OWRITE, 8r600);
-			if(fd == nil)
-				fatal(sys->sprint("can't create %s: %r", fpath));
-			if(sys->write(fd, encrypted, len encrypted) != len encrypted){
-				e := sys->sprint("can't write %s: %r", fpath);
-				fd = nil;
-				sys->remove(fpath);
-				fatal(e);
-			}
-			fd = nil;
-			sys->fprint(stderr, "imported factotum keys to %s\n", fpath);
+	nd := sys->nulldir;
+	nd.name = "PAK";
+	if(sys->wstat(tmp, nd) < 0){
+		sys->remove(pakpath);
+		if(sys->wstat(tmp, nd) < 0){
+			e := sys->sprint("can't rename %s to PAK: %r", tmp);
+			sys->remove(tmp);
+			fatal(e);
 		}
 	}
 
+	sys->fprint(stderr, "PAK verifier stored in %s\n", pakpath);
 	sys->fprint(stderr, "setup complete\n");
 }
+
+Minpass: con 8;
 
 promptpassword(prompt: string): string
 {
@@ -179,13 +196,24 @@ promptpassword(prompt: string): string
 			break;
 		s := string buf[0:n];
 		for(i := 0; i < len s; i++){
-			if(s[i] == '\n' || s[i] == '\r'){
+			case s[i] {
+			'\n' =>
 				if(consctl != nil)
 					sys->fprint(consctl, "rawoff");
 				sys->fprint(stderr, "\n");
 				return pass;
+			'\r' =>
+				;
+			'\b' or 16r7f =>
+				# raw mode edits nothing: a backspace was a
+				# character of the password
+				if(len pass > 0)
+					pass = pass[0:len pass-1];
+			16r15 =>
+				pass = "";
+			* =>
+				pass[len pass] = s[i];
 			}
-			pass[len pass] = s[i];
 		}
 	}
 

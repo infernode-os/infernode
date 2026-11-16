@@ -32,6 +32,11 @@ is one of the following operations:
 .B d
 Delete the given files on the server.
 .TP
+.B m
+Move each file from one of the two formats no longer written to the current one:
+it is fetched, decrypted with the secret, encrypted again and stored.
+No other operation, and no login, reads the older formats.
+.TP
 .B p
 Print the contents of each file on standard output.
 Each line is written separately, so that files of keys will be received correctly when written to
@@ -52,28 +57,42 @@ collection on the the server.
 By default, only the names are listed, one per line, but
 given the
 .B -v
-option, each line displays name, file size in bytes, date last stored, and SHA-1 hash of the file's contents
-(or
-.BR - :
-.IR secstored (8)
-gives none).
+option, each line displays name, file size in bytes, date last stored, and the hash of the file's contents
+the server gives (SHA-1 from Plan 9's,
+SHA-256 from
+.IR secstored (8)).
 If files are named, only those are listed.
 .TP
 .B x
 Extract the named files into files of the same name in the current directory.
 By default, they are decrypted (ie, in clear text).
+Each is made anew, mode 600: a file of that name already there is removed first,
+not written into.
 .PP
 Files are encrypted as
 .IR logon (1)
 and
 .IR factotum (4)
-write them (AES-256-GCM under a key made from the user's name and the secret);
-files in the two older formats are still read.
+write them (AES-256-GCM under a key made from the user's name and the secret).
+A file in one of the two older formats (the secure store's first, AES-CBC under a SHA-1 of the secret;
+and the one after it) is not read, by
+.IR secstore ,
+.IR logon (1)
+or
+.IR factotum (4),
+until
+.B m
+has moved it: the error says so.
 A file of an account with a second factor is under that account's data key, and is not
-decrypted by the secret alone.
+decrypted by the secret alone; nor does
+.IR secstored (8)
+store or remove such an account's files for
+.IR secstore ,
+which has only the secret.
 The name
 .B PAK
 is refused: it is where a server keeps the account's verifier.
+An account made for an older version of the exchange is moved to the current one by its first use.
 .PP
 If no
 .I op
@@ -106,6 +125,12 @@ Use
 as the secret to authenticate with the
 .B secstore
 service.
+An argument can be read by other programs (in
+.BR /prog );
+.I secstore
+warns of it, and
+.B -i
+is the way to give a secret without typing it.
 .TP
 .BI -p " pin"
 Supply
@@ -146,6 +171,7 @@ auth/secstore p factotum >/mnt/factotum/ctl
 .IR crypt (1),
 .IR secstore (2),
 .IR factotum (4),
+.IR secstored (8),
 .br
 ``Plan 9 Security'',
 .IR "Plan 9 Programmer's Manual" ,

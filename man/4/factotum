@@ -62,6 +62,20 @@ for maintaining keys; when read, it returns a list of keys.
 For secret attributes, only the attribute name follow by a
 .L ?
 is returned.
+.TP
+.B secstore
+when read, one line saying where a key added now is saved:
+.B none
+(nowhere);
+.BI "saving secstore " "address user"
+(followed by
+.B 2fa
+for an account with a second factor);
+.BI "saving keyfile " fileR;
+or
+.BI notsaving " reason"
+when a store is configured and nothing is being saved to it.
+It is the answer to ``is the secstore unlocked'' that no other program can forge.
 .PD
 .PP
 In any authentication, the caller typically acts as a client

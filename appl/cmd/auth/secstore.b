@@ -32,6 +32,7 @@ stderr: ref Sys->FD;
 conn: ref Dial->Connection;
 seckey: array of byte;
 seckey2: array of byte;
+seckey4: array of byte;
 rootkey: array of byte;	# files as logon and factotum write them (SGCM2)
 filekey2: array of byte;	# the two older formats, read only
 filekey: array of byte;
@@ -54,13 +55,17 @@ init(nil: ref Draw->Context, args: list of string)
 	user := readfile("/dev/user");
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage("auth/secstore [-iv] [-k key] [-p pin] [-s net!server!secstore] [-u user] [{drptx} file ...]");
+	arg->setusage("auth/secstore [-iv] [-k key] [-p pin] [-s net!server!secstore] [-u user] [{dmrptx} file ...]");
 	iflag := 0;
 	pass, pin: string;
 	while((o := arg->opt()) != 0)
 		case o {
 		'i' => iflag = 1;
-		'k' => pass = arg->earg();
+		'k' =>
+			pass = arg->earg();
+			iflag = 2;	# given, not asked for: as -i, with nothing to read
+			# an argument is read by whoever lists the processes
+			sys->fprint(stderr, "secstore: warning: a password given with -k can be read by other programs (in /prog); use -i\n");
 		'v' => verbose = 1;
 		's' =>	addr = arg->earg();
 		'u' => user = arg->earg();
@@ -76,7 +81,7 @@ init(nil: ref Draw->Context, args: list of string)
 		op = (hd args)[0];
 		args = tl args;
 		case op {
-		'd' or 'r' or 'p' or 'x' =>
+		'd' or 'r' or 'p' or 'x' or 'm' =>
 			if(args == nil)
 				arg->usage();
 		't' =>
@@ -87,7 +92,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	arg = nil;
 
-	if(iflag){
+	# (-k's password was asked for again at the console all the same)
+	if(iflag == 1){
 		buf := array[Secstore->Maxmsg] of byte;
 		stdin := sys->fildes(0);
 		for(nr := 0; nr < len buf && (n := sys->read(stdin, buf, len buf-nr)) > 0;)
@@ -118,12 +124,17 @@ Auth:
 		seckey = secstore->mkseckey(pass);
 		seckey2 = secstore->mkseckey2(pass);
 		rootkey = secstore->mkfilekey3(user, pass);
-		filekey2 = secstore->mkfilekey2(pass);
-		filekey = secstore->mkfilekey(pass);
+		seckey4 = secstore->mkseckey4(rootkey);
+		# the two formats no longer written have keys only for m,
+		# which moves a file out of them
+		if(op == 'm'){
+			filekey2 = secstore->mkfilekey2(pass);
+			filekey = secstore->mkfilekey(pass);
+		}
 		for(i := 0; i < len pass; i++)
 			pass[i] = 0;	# clear it
 		{
-			(conn, srvname, diag) = secstore->connect2(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2);
+			(conn, srvname, diag) = secstore->connect4(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2, seckey4);
 		}exception e{
 		"*" =>
 			# nothing the server sends should raise; if it does, say so
@@ -178,8 +189,10 @@ Auth:
 		sys->fprint(stderr, "server: %s\n", clean(srvname));
 	secstore->erasekey(seckey);
 	secstore->erasekey(seckey2);
+	secstore->erasekey(seckey4);
 	seckey = nil;
 	seckey2 = nil;
+	seckey4 = nil;
 	{
 		operate(op, args);
 	}exception e{
@@ -254,7 +267,12 @@ operate(op: int, args: list of string)
 		'x' =>
 			checkname(fname, 1);
 			file = getfile(fname);
-			ofd := sys->create(fname, Sys->OWRITE, 8r600);
+			# A new file, mode 600, and never one that is already
+			# there: the decrypted secret was written into whatever
+			# file of that name the directory held, with its mode
+			# and its owner.
+			sys->remove(fname);
+			ofd := sys->create(fname, Sys->OWRITE|Sys->OEXCL, 8r600);
 			if(ofd == nil)
 				error(sys->sprint("can't create %q: %r", fname));
 			if(sys->write(ofd, file, len file) != len file)
@@ -288,6 +306,36 @@ operate(op: int, args: list of string)
 			secstore->erasekey(file);
 			file = nil;
 			verb('r', sname);
+		'm' =>
+			# Move a file of an older format (SGCM1, or Plan 9's
+			# AES-CBC under a SHA-1 of the password) to the one
+			# written now.  Nothing else reads the older formats.
+			checkname(fname, 1);
+			(old, absent, merr) := secstore->fetch(conn, fname, 0);
+			if(absent)
+				error(sys->sprint("can't fetch %q: the server has no such file", fname));
+			if(merr != nil)
+				error(sys->sprint("can't fetch %q: %s", fname, merr));
+			if(secstore->iscurrent(old)){
+				if(secstore->decrypt3(old, rootkey, nil, nil) == nil)
+					error(sys->sprint("%q is in the current format and does not decrypt with this password", fname));
+				sys->fprint(stderr, "secstore: %q is already in the current format\n", fname);
+				break;
+			}
+			file = secstore->decrypt3(old, rootkey, filekey2, filekey);
+			if(file == nil)
+				error(sys->sprint("can't decrypt %q: %r", fname));
+			sent := secstore->encrypt3(file, rootkey);
+			secstore->erasekey(file);
+			file = nil;
+			if(sent == nil || secstore->putfile(conn, fname, sent) < 0)
+				error(sys->sprint("can't store %q: %r", fname));
+			(back, nil, berr) := secstore->fetch(conn, fname, 0);
+			if(berr != nil)
+				error(sys->sprint("can't tell whether %q was stored: %s", fname, berr));
+			if(!same(back, sent))
+				error(sys->sprint("%q was not stored by the server", fname));
+			verb('m', fname);
 		* =>
 			error(sys->sprint("op %c not implemented", op));
 		}
@@ -352,9 +400,13 @@ getfile(fname: string): array of byte
 		error(sys->sprint("can't fetch %q: %s", fname, err));
 	if(len f == 0)
 		error(sys->sprint("%q is empty on the server: not an encrypted file", fname));
-	f = secstore->decrypt3(f, rootkey, filekey2, filekey);
-	if(f == nil)
+	enc := f;
+	f = secstore->decrypt3(enc, rootkey, nil, nil);
+	if(f == nil){
+		if(!secstore->iscurrent(enc))
+			error(sys->sprint("%q is in an old format: move it with auth/secstore m %s", fname, fname));
 		error(sys->sprint("can't decrypt %q: %r", fname));
+	}
 	return f;
 }
 
@@ -363,6 +415,7 @@ erase()
 	if(secstore != nil){
 		secstore->erasekey(seckey);
 		secstore->erasekey(seckey2);
+		secstore->erasekey(seckey4);
 		secstore->erasekey(rootkey);
 		secstore->erasekey(filekey2);
 		secstore->erasekey(filekey);

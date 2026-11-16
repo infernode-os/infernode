@@ -157,9 +157,9 @@ if has hostile 'exception\|Broken'; then check 1 "and no exception"; else check 
 # --- a password with a blank in it ---
 rm -f "$F"
 boot blank <<SCRIPT
-auth/secstore-setup -s '#U/$T/store' -u \$user -k 'my pass' >[2] /dev/null
+auth/secstore-setup -f -s '#U/$T/store' -u \$user -k 'my password' >[2] /dev/null
 echo UNLOCKING
-unlock direct $A 'my pass'
+unlock direct $A 'my password'
 mark blank
 echo 'key proto=pass service=blank user=u !password=three' > /mnt/factotum/ctl
 echo sync > /mnt/factotum/ctl; echo SYNC \$status
@@ -168,15 +168,39 @@ SCRIPT
 has blank '^UNLOCK err=<> save=<'; check $? "a password with a blank unlocks"
 n=$(sed -n '/^UNLOCKING/,$p' "$ROOT/$T/blank.out" | grep -c 'PAK auth failed')
 [ "$n" = 0 ]; check $? "and factotum never tries a piece of it at the server ($n failed logins)"
-if has blank '^UNLOCK err=<> save=<>'; then
-	has blank '^SYNC *$' && [ -s "$F" ]; check $? "saving was arranged, and a key added is saved"
-else
-	has blank '^UNLOCK err=<> save=<.*blank'; check $? "saving is refused by this factotum, and said to be"
-	has blank '^SYNC ..*'; check $? "so nothing is saved, and nothing claims to be"
-fi
+# factotum takes the password quoted (secstoreq): cut at its blank, the
+# account logged in and then saved nothing
+has blank '^UNLOCK err=<> save=<>'; check $? "and saving is arranged, with the whole password"
+has blank '^SYNC *$' && [ -s "$F" ]; check $? "so a key added is saved"
+
+# --- an account with a second factor ---
+# A vault under the password alone was taken for such an account whenever
+# it decrypted: whoever had the password could store one of their own
+# making and have it loaded with no key present.  It is taken only while
+# the factor is being enrolled or disabled (twofaslot's state), not once
+# the vault has been read under the factor's data key.
+rm -f "$F"
+boot twofa <<SCRIPT
+mkdir -p /usr/inferno/secstore
+bind -c '#U/$T/store' /usr/inferno/secstore
+auth/secstore-setup -f -s '#U/$T/store' -u \$user -k 'plainpass' >[2] /dev/null
+unlock direct $A plainpass
+echo 'key proto=pass service=twofa user=u !password=vault' > /mnt/factotum/ctl
+echo sync > /mnt/factotum/ctl; echo SYNC \$status
+sleep 1
+echo SLOTS \`{/tests/logon_unlock.dis slots \$user plainpass 'a recovery phrase' >[2] /dev/null}
+echo ENROLLING \`{unlock direct $A plainpass}
+echo MARKED \`{/tests/logon_unlock.dis mark \$user >[2] /dev/null}
+echo ENROLLED \`{unlock direct $A plainpass}
+SCRIPT
+has twofa '^SYNC *$' && [ -s "$F" ]; check $? "an account's vault is stored under its password"
+has twofa '^SLOTS STATE enrolling err=<>'; check $? "given a slot, its second factor is being enrolled"
+has twofa '^ENROLLING UNLOCK err=<> '; check $? "and the vault under the password is still taken"
+has twofa '^MARKED STATE enrolled err=<>'; check $? "once the vault has been read under the data key the account is enrolled"
+has twofa '^ENROLLED UNLOCK err=<NEEDRECOVERY'; check $? "and a vault under the password alone is no longer the vault"
 
 if [ "$failed" != 0 ]; then
-	for f in new again cut nobytes hostile blank; do
+	for f in new again cut nobytes hostile blank twofa; do
 		echo "--- $f ---"
 		grep -v '^fs:' "$ROOT/$T/$f.out" | tail -15
 	done

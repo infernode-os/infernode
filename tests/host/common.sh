@@ -50,6 +50,23 @@ with_timeout() {
     fi
 }
 
+# A TCP port on the loopback that nothing is listening on: the system's
+# choice where there is python3, else a guess from the process id.  A
+# test's own port, so that it need not clear anybody off a port it
+# shares (the secstore tests killed whatever held 5356: another test's
+# emulator, or the user's own).
+freeport() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()'
+    else
+        echo $((20000 + $$ % 20000))
+    fi
+}
+
 emu_timeout_ok() {
     case "$1" in
         0|124|137) return 0 ;;

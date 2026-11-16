@@ -22,7 +22,7 @@ echo '--- setup legacy account ---'
 auth/secstore-setup -V secstore -k legacypass123 -u legacyuser -s /tmp/secstore_legacy
 
 echo '--- starting secstored ---'
-auth/secstored -d -s /tmp/secstore_legacy -a 'tcp!*!15358' &
+auth/secstored -d -s /tmp/secstore_legacy -a 'tcp!127.0.0.1!15358' &
 sleep 2
 
 echo '--- starting factotum with current client ---'
@@ -43,17 +43,23 @@ if [ ! -f "$ROOT/tmp/secstore_legacy/legacyuser/PAK" ]; then
     echo "FAIL: legacy PAK file missing"
     exit 1
 fi
-PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/tmp/secstore_legacy/legacyuser/PAK" 2>/dev/null || true)
-if [ "$PAKHDR" = "secstore2" ] || [ "$PAKHDR" = "secstore3" ]; then
-    echo "FAIL: legacy account unexpectedly wrote modern verifier"
+# An account at the first version is moved by its first login with a
+# current client: the verifier is version 4's, made at the file key's
+# cost, and the old one is gone once a version 4 login has worked (the
+# move's own second step is one).  The account used to stay as it was.
+PAKHDR=$(LC_ALL=C awk 'NR==1{print $1}' "$ROOT/tmp/secstore_legacy/legacyuser/PAK" 2>/dev/null || true)
+PAKLINES=$(wc -l < "$ROOT/tmp/secstore_legacy/legacyuser/PAK" | tr -d ' ')
+if [ "$PAKHDR" != "secstore4" ] || [ "$PAKLINES" != 1 ]; then
+    echo "FAIL: the legacy account was not moved to version 4 by its login (PAK: $PAKHDR, $PAKLINES lines)"
     exit 1
 fi
+echo "PASS: the legacy account is at version 4 alone after its first login"
 
 cat > "$ROOT/tmp/secstore_legacy_p2.sh" << 'INFERNO'
 load std
 
 echo '--- starting secstored ---'
-auth/secstored -d -s /tmp/secstore_legacy -a 'tcp!*!15358' &
+auth/secstored -d -s /tmp/secstore_legacy -a 'tcp!127.0.0.1!15358' &
 sleep 2
 
 echo '--- starting factotum with current client ---'
@@ -71,7 +77,7 @@ echo "$P2_OUT"
 
 if echo "$P2_OUT" | grep -q "legacy-auth-test"; then
     echo ""
-    echo "=== PASS: current client still authenticates legacy secstore account ==="
+    echo "=== PASS: the account moved from the first version keeps its keys ==="
 else
     echo ""
     echo "FAIL: current client could not reload legacy secstore account"

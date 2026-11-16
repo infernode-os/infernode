@@ -14,11 +14,26 @@ implement LogonUnlock;
 # server here that answers the hello with a record of no bytes.
 # Prints "UNLOCK err=<...> save=<...>".
 #
+#	logon_unlock slots user password recovery
+#	logon_unlock mark user
+#
+# slots: gives the account a second factor's recovery slot (a data key
+# wrapped under the recovery passphrase), as an enrolment's first step
+# does, and prints the state twofaslot(2) then reports.  mark: records
+# that the vault has been read under the data key.  For the states in
+# which the login screen takes a vault that is under the password alone.
+#
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+
+include "dial.m";
+
+include "secstore.m";
+
+include "twofaslot.m";
 
 LogonUnlock: module
 {
@@ -44,6 +59,29 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:usage";
 	addr, pass: string;
 	case hd args {
+	"slots" or "mark" =>
+		secstore := load Secstore Secstore->PATH;
+		ts := load Twofaslot Twofaslot->PATH;
+		if(secstore == nil || ts == nil){
+			sys->print("SLOTS cannot load: %r\n");
+			raise "fail:load";
+		}
+		secstore->init();
+		ts->init();
+		if(hd args == "mark"){
+			if(len args != 2)
+				raise "fail:usage";
+			e := ts->markenrolled(hd tl args);
+			sys->print("STATE %s err=<%s>\n", ts->state(hd tl args), e);
+			return;
+		}
+		if(len args != 4)
+			raise "fail:usage";
+		user := hd tl args;
+		dk := array[32] of {* => byte 16r42};
+		e := ts->writeslots(user, secstore->mkfilekey3(user, hd tl tl args), dk, nil, hd tl tl tl args, "");
+		sys->print("STATE %s err=<%s>\n", ts->state(user), e);
+		return;
 	"direct" =>
 		if(len args != 3)
 			raise "fail:usage";

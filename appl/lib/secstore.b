@@ -22,12 +22,6 @@ include "security.m";
 include "encoding.m";
 	base64: Encoding;
 
-include "styx.m";
-	styx: Styx;
-
-include "daytime.m";
-	daytime: Daytime;
-
 include "secstore.m";
 
 
@@ -44,25 +38,6 @@ init()
 	if(dialler == nil)
 		raise "fail:cannot load Dial";
 	initPAKparams();
-}
-
-# PAK_Hi cache — deterministic function of (user, pwhash), expensive to compute
-cached_pakhi_version: string;
-cached_pakhi_user: string;
-cached_pakhi_pwhash: array of byte;
-cached_pakhi_hexHi: string;
-cached_pakhi_H: ref IPint;
-
-pwhash_eq(a, b: array of byte): int
-{
-	if(a == nil || b == nil)
-		return 0;
-	if(len a != len b)
-		return 0;
-	for(i := 0; i < len a; i++)
-		if(a[i] != b[i])
-			return 0;
-	return 1;
 }
 
 privacy(): int
@@ -92,14 +67,163 @@ connect(addr: string, user: string, pwhash: array of byte): (ref Dial->Connectio
 #
 connect2(addr: string, user: string, pwhash: array of byte, pwhash2: array of byte): (ref Dial->Connection, string, string)
 {
-	if(pwhash2 != nil){
-		(conn, sname, diag) := connectver(addr, user, VERSION3, pwhash2);
-		if(conn != nil || pwhash == nil || !refusedversion(diag))
+	return connect4(addr, user, pwhash, pwhash2, nil);
+}
+
+#
+# Version 4 is tried first, with the key mkseckey4 makes from the file
+# key's root.  An account not yet at version 4 is logged in to at its
+# own version (as above), given its version 4 verifier, and logged in
+# to again at version 4: so a connection from here is a version 4
+# session, whose stores and removes are answered, unless the server
+# knows nothing of version 4 (and then it is what connect2 gives).
+#
+connect4(addr: string, user: string, pwhash, pwhash2, pwhash4: array of byte): (ref Dial->Connection, string, string)
+{
+	conn: ref Dial->Connection;
+	sname, diag: string;
+	if(pwhash4 != nil){
+		(conn, sname, diag) = connectver(addr, user, VERSION4, pwhash4);
+		if(conn != nil){
+			acked = conn :: acked;
 			return (conn, sname, diag);
+		}
+		if(pwhash == nil && pwhash2 == nil || !refusedversion(diag))
+			return (nil, nil, diag);
 	}
-	if(pwhash != nil)
-		return connectver(addr, user, VERSION1, pwhash);
-	return (nil, nil, "no secstore credentials");
+	if(pwhash2 != nil){
+		(conn, sname, diag) = connectver(addr, user, VERSION3, pwhash2);
+		if(conn == nil && (pwhash == nil || !refusedversion(diag)))
+			return (nil, nil, diag);
+	}
+	if(conn == nil && pwhash != nil)
+		(conn, sname, diag) = connectver(addr, user, VERSION1, pwhash);
+	if(conn == nil){
+		if(diag == nil)
+			diag = "no secstore credentials";
+		return (nil, nil, diag);
+	}
+	if(pwhash4 == nil || diag != nil)	# diag: "need pin", the caller's to answer
+		return (conn, sname, diag);
+	# move the account, and begin again at version 4
+	err := setverifier(conn, VERSION4, mkverifier(user, VERSION4, pwhash4));
+	if(err != nil){
+		sys->fprint(sys->fildes(2), "secstore: account %s not moved to version 4: %s\n", user, err);
+		return (conn, sname, diag);
+	}
+	bye(conn);
+	(conn, sname, diag) = connectver(addr, user, VERSION4, pwhash4);
+	if(conn != nil)
+		acked = conn :: acked;
+	return (conn, sname, diag);
+}
+
+# the connections that are version 4 sessions
+acked: list of ref Dial->Connection;
+
+isacked(conn: ref Dial->Connection): int
+{
+	for(l := acked; l != nil; l = tl l)
+		if(hd l == conn)
+			return 1;
+	return 0;
+}
+
+# OK from the server, or its refusal: nil, or why not
+ack(conn: ref Dial->Connection): string
+{
+	s := readstr(conn.dfd);
+	if(s == nil)
+		return sys->sprint("%r");
+	if(s != "OK")
+		return "unexpected answer from server: " + cleantext(s);
+	return nil;
+}
+
+#
+# The account's verifier, replaced by a session that has proved the
+# password: a version 4 verifier for an account at an older version
+# (kept beside the old one until a version 4 login has worked), or a
+# new one for a new password.
+#
+setverifier(conn: ref Dial->Connection, version, hexHi: string): string
+{
+	if(hexHi == nil)
+		return "no verifier";
+	if(sys->fprint(conn.dfd, "VERIFIER %s %s", version, hexHi) < 0)
+		return sys->sprint("%r");
+	return ack(conn);
+}
+
+#
+# The second factor's lock on an account's files (secstored(8)).  The
+# vault key is made from the data key the second factor unwraps; the
+# server keeps its hash once the factor is enrolled, and from then on
+# stores and removes only in a session that has shown the key.
+#
+vaultkey(dk: array of byte): array of byte
+{
+	label := array of byte "secstore vault key";
+	wk := array[Keyring->SHA256dlen] of byte;
+	kr->hmac_sha256(label, len label, dk, wk, nil);
+	return wk;
+}
+
+hexof(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%.2ux", int a[i]);
+	return s;
+}
+
+# 1: enrolled; 0: not; -1 and why
+vaultstate(conn: ref Dial->Connection): (int, string)
+{
+	if(sys->fprint(conn.dfd, "VAULT?") < 0)
+		return (-1, sys->sprint("%r"));
+	s := readstr(conn.dfd);
+	case s {
+	"enrolled" =>
+		return (1, nil);
+	"none" =>
+		return (0, nil);
+	}
+	if(s == nil)
+		return (-1, sys->sprint("%r"));
+	return (-1, "unexpected answer from server: " + cleantext(s));
+}
+
+# 1: shown, and this session may store; 0: no second factor is
+# enrolled (it may anyway); -1 and why
+showvault(conn: ref Dial->Connection, wk: array of byte): (int, string)
+{
+	if(sys->fprint(conn.dfd, "VAULTKEY %s", hexof(wk)) < 0)
+		return (-1, sys->sprint("%r"));
+	s := readstr(conn.dfd);
+	case s {
+	"OK" =>
+		return (1, nil);
+	"none" =>
+		return (0, nil);
+	}
+	if(s == nil)
+		return (-1, sys->sprint("%r"));
+	return (-1, "unexpected answer from server: " + cleantext(s));
+}
+
+enrolvault(conn: ref Dial->Connection, wk: array of byte): string
+{
+	if(sys->fprint(conn.dfd, "ENROLL2FA %s", hexof(wk)) < 0)
+		return sys->sprint("%r");
+	return ack(conn);
+}
+
+unenrolvault(conn: ref Dial->Connection): string
+{
+	if(sys->fprint(conn.dfd, "UNENROLL2FA") < 0)
+		return sys->sprint("%r");
+	return ack(conn);
 }
 
 # what a server says of a version it will not speak for this account
@@ -123,25 +247,12 @@ connectver(addr: string, user: string, version: string, pwhash: array of byte): 
 		return (nil, nil, "unsupported verifier version");
 
 	# Pre-compute PAK crypto before dialing to avoid TCP idle timeout.
-	# Use cached PAK_Hi if (user, pwhash) match — avoids expensive modexp.
-	hexHi: string;
-	H: ref IPint;
-	if(cached_pakhi_version == version && cached_pakhi_user == user && pwhash_eq(cached_pakhi_pwhash, pwhash)
-	   && cached_pakhi_hexHi != nil) {
-		sys->fprint(sys->fildes(2), "secstore: step 1: PAK_Hi (cached)\n");
-		hexHi = cached_pakhi_hexHi;
-		H = cached_pakhi_H;
-	} else {
-		sys->fprint(sys->fildes(2), "secstore: step 1: PAK_Hi...\n");
-		(hexHi, H, nil) = PAK_Hiver(version, user, pwhash);
-		# Cache for next time
-		cached_pakhi_version = version;
-		cached_pakhi_user = user;
-		cached_pakhi_pwhash = array[len pwhash] of byte;
-		cached_pakhi_pwhash[0:] = pwhash;
-		cached_pakhi_hexHi = hexHi;
-		cached_pakhi_H = H;
-	}
+	# (The verifier was kept in the module from one connection to the
+	# next, with the password's hash beside it: it is an exponentiation
+	# to make again, and is password-equivalent to keep.)
+	(hexHi, H, nil) := PAK_Hiver(version, user, pwhash);
+	if(H == nil)
+		return (nil, nil, "can't make the verifier");
 	sys->fprint(sys->fildes(2), "secstore: step 2: random...\n");
 	x := mod(IPint.random(exponentbits(version), exponentbits(version)), params.q);
 	if(x.eq(IPint.inttoip(0)))
@@ -253,11 +364,12 @@ sendpin(conn: ref Dial->Connection, pin: string): int
 # The account's files: (name, size, date, hash as text, hash).  A Plan 9
 # secstore answers "GET ." with a line for each,
 #	factotum\t2552 Dec  9 13:04:49 GMT 2005 n9wSk45SPDxgljOIflGQoXjOkjs=
-# and auth/secstored with its directory as read: stat(5) entries, which
-# give a name, a size and a time and no hash.  Either is read, and
-# nothing else: a line was sliced where its fields ought to be, so one
-# that was short raised an exception in the caller, and the size lost
-# its first digit.  The error says which entry was not one.
+# and so does auth/secstored (which once sent its directory as read,
+# stat(5) entries and all); the hash is whatever the server gives, its
+# SHA-256 of the file from secstored.  Nothing else is read: a line was
+# sliced where its fields ought to be, so one that was short raised an
+# exception in the caller, and the size lost its first digit.  The
+# error says which entry was not one.
 #
 files(conn: ref Dial->Connection): (list of (string, int, string, string, array of byte), string)
 {
@@ -266,12 +378,9 @@ files(conn: ref Dial->Connection): (list of (string, int, string, string, array 
 		return (nil, err);
 	if(absent)
 		return (nil, "server gives no listing");
+	if(!printable(file))
+		return (nil, "malformed listing from server");
 	rl: list of (string, int, string, string, array of byte);
-	if(len file > 0 && !printable(file)){
-		(rl, err) = dirlisting(file);
-		if(err != nil)
-			return (nil, err);
-	}else
 	for(linelist := lines(file); linelist != nil; linelist = tl linelist){
 		s := string hd linelist;
 		while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
@@ -289,44 +398,13 @@ files(conn: ref Dial->Connection): (list of (string, int, string, string, array 
 		if(i + 24 + 1 >= len s)
 			return (nil, "malformed listing from server: " + cleantext(s));
 		date := s[i:i+24];
-		sha1 := s[i+24+1:];
-		rl = (name, size, date, sha1, base64->dec(sha1)) :: rl;
+		hash := s[i+24+1:];
+		rl = (name, size, date, hash, base64->dec(hash)) :: rl;
 	}
 	l: list of (string, int, string, string, array of byte);
 	for(; rl != nil; rl = tl rl)
 		l = hd rl :: l;
 	return (l, nil);
-}
-
-# a directory as read (stat(5) entries, one after another), most recent
-# entry first as files() builds its list
-dirlisting(a: array of byte): (list of (string, int, string, string, array of byte), string)
-{
-	if(styx == nil){
-		styx = load Styx Styx->PATH;
-		if(styx == nil)
-			return (nil, sys->sprint("can't load %s: %r", Styx->PATH));
-		styx->init();
-	}
-	if(daytime == nil)
-		daytime = load Daytime Daytime->PATH;
-	rl: list of (string, int, string, string, array of byte);
-	for(o := 0; o < len a;){
-		(n, d) := styx->unpackdir(a[o:]);
-		if(n <= 0)
-			return (nil, "malformed listing from server");
-		o += n;
-		# the verifier is the account's, not one of its files
-		if((d.mode & Sys->DMDIR) != 0 || d.name == "PAK" || d.name == "PAK.new")
-			continue;
-		if(d.length > big Maxfilesize)
-			d.length = big Maxfilesize;
-		date := string d.mtime;
-		if(daytime != nil)
-			date = daytime->text(daytime->gmt(d.mtime));
-		rl = (cleantext(d.name), int d.length, date, "-", nil) :: rl;
-	}
-	return (rl, nil);
 }
 
 printable(a: array of byte): int
@@ -397,11 +475,16 @@ fetch(conn: ref Dial->Connection, name: string, maxsize: int): (array of byte, i
 	return (file, 0, nil);
 }
 
+# A version 4 session's removes and stores are answered: the result
+# is the server's.  In an older session nothing is said either way.
 remove(conn: ref Dial->Connection, name: string): int
 {
 	if(sys->fprint(conn.dfd, "RM %s\n", name) < 0)
 		return -1;
-
+	if(isacked(conn) && (e := ack(conn)) != nil){
+		sys->werrstr(e);
+		return -1;
+	}
 	return 0;
 }
 
@@ -424,6 +507,10 @@ putfile(conn: ref Dial->Connection, name: string, data: array of byte): int
 			return -1;
 		o += n;
 	}
+	if(isacked(conn) && (e := ack(conn)) != nil){
+		sys->werrstr(e);
+		return -1;
+	}
 	return 0;
 }
 
@@ -434,6 +521,11 @@ bye(conn: ref Dial->Connection)
 			sys->fprint(conn.dfd, "BYE");
 		conn.dfd = nil;
 		conn.cfd = nil;
+		nl: list of ref Dial->Connection;
+		for(l := acked; l != nil; l = tl l)
+			if(hd l != conn)
+				nl = hd l :: nl;
+		acked = nl;
 	}
 }
 
@@ -452,6 +544,24 @@ mkseckey2(s: string): array of byte
 	skey := array[Keyring->SHA256dlen] of byte;
 	kr->sha256(key, len key, skey, nil);
 	erasekey(key);
+	return skey;
+}
+
+#
+# Version 4's key for PAK: made from the root of the file key
+# (mkfilekey3: 100000 HMACs of the password), so that a guess at the
+# password costs as much against the verifier a server keeps as against
+# the files beside it.  Version 3's was one SHA-256 of the password
+# (mkseckey2): whoever read a server's store tried a password against
+# its verifier for an exponentiation, some hundredth of the cost of
+# trying it against a file.  The root itself is not what is sent into
+# PAK: a keyed hash of it, so that the verifier's key is no file's.
+#
+mkseckey4(rootkey: array of byte): array of byte
+{
+	label := array of byte "secstore4 verifier";
+	skey := array[Keyring->SHA256dlen] of byte;
+	kr->hmac_sha256(label, len label, rootkey, skey, nil);
 	return skey;
 }
 
@@ -480,7 +590,7 @@ parseverifier(s: string): (string, string)
 	if(nf >= 2){
 		version := hd flds;
 		hexHi := hd tl flds;
-		if(version == VERSION1 || version == VERSION3)
+		if(version == VERSION1 || version == VERSION3 || version == VERSION4)
 			return (version, hexHi);
 	}
 	return (nil, nil);
@@ -522,26 +632,6 @@ decrypt(file: array of byte, key: array of byte): array of byte
 	return file[AESbsize: length-Checklen];
 }
 
-encrypt(file: array of byte, key: array of byte): array of byte
-{
-	dat := array[AESbsize+len file+Checklen] of byte;
-	iv := randbytes(random->NotQuiteRandom, AESbsize);
-	if(iv == nil){
-		sys->werrstr("can't generate IV");
-		return nil;
-	}
-	dat[:] = iv;
-	dat[len iv:] = file;
-	dat[len iv+len file:] = array of byte Checkpat;
-	state := kr->aessetup(key, iv);
-	if(state == nil){
-		sys->werrstr("can't set AES state");
-		return nil;
-	}
-	kr->aescbc(state, dat[AESbsize:], len dat-AESbsize, Keyring->Encrypt);
-	return dat;
-}
-
 # ── Modern crypto (AES-256-GCM, HMAC-SHA256 key derivation) ──
 
 SGCM1_MAGIC: con "SGCM1\n";
@@ -564,13 +654,15 @@ mkfilekey2(s: string): array of byte
 	# First round
 	kr->hmac_sha256(salt, len salt, pass, key, nil);
 
-	# Iterate
+	# Iterate (one block for the value before, erased at the end: a
+	# new one was made each round and left for the collector)
+	prev := array[Keyring->SHA256dlen] of byte;
 	for(i := 1; i < SGCM1_KDF_ROUNDS; i++){
-		prev := array[Keyring->SHA256dlen] of byte;
 		prev[0:] = key;
 		kr->hmac_sha256(prev, len prev, pass, key, nil);
 	}
 
+	erasekey(prev);
 	erasekey(pass);
 	return key;
 }
@@ -591,12 +683,13 @@ mkfilekey3(user, s: string): array of byte
 	key := array[Keyring->SHA256dlen] of byte;
 
 	kr->hmac_sha256(data, len data, pass, key, nil);
+	prev := array[Keyring->SHA256dlen] of byte;
 	for(i := 1; i < SGCM3_ROOT_ROUNDS; i++){
-		prev := array[Keyring->SHA256dlen] of byte;
 		prev[0:] = key;
 		kr->hmac_sha256(prev, len prev, pass, key, nil);
 	}
 
+	erasekey(prev);
 	erasekey(pass);
 	erasekey(data);
 	return key;
@@ -658,47 +751,6 @@ randbytes(which, n: int): array of byte
 		o += k;
 	}
 	return buf;
-}
-
-#
-# Encrypt with AES-256-GCM using the older SGCM1 format.
-# Output format: "SGCM1\n" + 12-byte nonce + ciphertext + 16-byte GCM tag.
-# Kept for compatibility; new callers should prefer encrypt3.
-#
-encrypt2(file: array of byte, key: array of byte): array of byte
-{
-	magic := array of byte SGCM1_MAGIC;
-
-	# Generate random nonce using host CSPRNG
-	nonce := randbytes(random->ReallyRandom, SGCM_NONCE_LEN);
-	if(nonce == nil){
-		sys->werrstr("can't generate nonce");
-		return nil;
-	}
-
-	state := kr->aesgcmsetup(key, nonce);
-	if(state == nil){
-		sys->werrstr("can't set AES-GCM state");
-		return nil;
-	}
-	(ciphertext, tag) := kr->aesgcmencrypt(state, file, magic);
-	if(ciphertext == nil || tag == nil){
-		sys->werrstr("AES-GCM encryption failed");
-		return nil;
-	}
-
-	# Build output: magic + nonce + ciphertext + tag
-	outlen := len magic + SGCM_NONCE_LEN + len ciphertext + len tag;
-	out := array[outlen] of byte;
-	off := 0;
-	out[off:] = magic;
-	off += len magic;
-	out[off:] = nonce;
-	off += SGCM_NONCE_LEN;
-	out[off:] = ciphertext;
-	off += len ciphertext;
-	out[off:] = tag;
-	return out;
 }
 
 #
@@ -780,6 +832,10 @@ decrypt2(file: array of byte, key: array of byte, legacykey: array of byte): arr
 			ciphertext := file[off:length-SGCM_TAG_LEN];
 			tag := file[length-SGCM_TAG_LEN:length];
 
+			if(key == nil){
+				sys->werrstr("SGCM1 format but no key for it");
+				return nil;
+			}
 			state := kr->aesgcmsetup(key, nonce);
 			if(state == nil){
 				sys->werrstr("can't set AES-GCM state");
@@ -802,6 +858,16 @@ decrypt2(file: array of byte, key: array of byte, legacykey: array of byte): arr
 	return decrypt(file, legacykey);
 }
 
+#
+# A file of the account's, decrypted.  Its format is SGCM2, which is
+# all that is written: AES-256-GCM, the format's name and the file's
+# salt under the tag.  The two formats before it (SGCM1; and Plan 9's
+# AES-CBC under a SHA-1 of the password, with no integrity) are read
+# only when the caller gives their keys, which is to say only by
+# whoever is moving an old file (auth/secstore m): given the keys every
+# time, as they were, the file chose its own format, and whoever could
+# put a file in the store could put an old, weaker one in its place.
+#
 decrypt3(file: array of byte, rootkey: array of byte, gcm1key: array of byte, legacykey: array of byte): array of byte
 {
 	magic := array of byte SGCM2_MAGIC;
@@ -844,7 +910,23 @@ decrypt3(file: array of byte, rootkey: array of byte, gcm1key: array of byte, le
 		}
 	}
 
+	if(gcm1key == nil && legacykey == nil){
+		sys->werrstr("not in the current format (SGCM2): an older file is moved with auth/secstore m");
+		return nil;
+	}
 	return decrypt2(file, gcm1key, legacykey);
+}
+
+# whether file is in the format that is written
+iscurrent(file: array of byte): int
+{
+	magic := array of byte SGCM2_MAGIC;
+	if(len file < len magic)
+		return 0;
+	for(i := 0; i < len magic; i++)
+		if(file[i] != magic[i])
+			return 0;
+	return 1;
 }
 
 lines(file: array of byte): list of array of byte
@@ -1030,6 +1112,7 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 
 VERSION1: con "secstore";		# legacy: 1024-bit group, pre-SHA-256 hash
 VERSION3: con "secstore3";		# CNSA: 2048-bit group + SHA-256 (VERSION2 retired)
+VERSION4: con "secstore4";		# the same, its verifier from the file key's root (mkseckey4)
 
 PAKparams: adt {
 	q:	ref IPint;
@@ -1096,7 +1179,7 @@ initPAKparams()
 pakparams(version: string): ref PAKparams
 {
 	initPAKparams();
-	if(version == VERSION3)
+	if(version == VERSION3 || version == VERSION4)
 		return pak3;
 	if(version == VERSION1)
 		return paklegacy;
@@ -1105,12 +1188,12 @@ pakparams(version: string): ref PAKparams
 
 hashis256(version: string): int
 {
-	return version == VERSION3;
+	return version == VERSION3 || version == VERSION4;
 }
 
 exponentbits(version: string): int
 {
-	if(version == VERSION3)
+	if(version == VERSION3 || version == VERSION4)
 		return 320;
 	return 240;
 }

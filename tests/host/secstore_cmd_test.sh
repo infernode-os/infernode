@@ -44,13 +44,25 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 A="tcp!127.0.0.1!$PORT"
 
+# A file in the oldest format (Plan 9's aescbc under a SHA-1 of the
+# password), which nothing in the tree writes any more: made here, in
+# the account's store, with the key file test's control.
+mkdir -p "$ROOT/$T/store/cmduser"
+python3 - "$ROOT/tests/host/keyfs" "$ROOT/$T/store/cmduser/oldfile" <<'PY' 2>/dev/null && : > "$ROOT/$T/store/cmduser/oldfile.made" || true
+import sys, os
+sys.path.insert(0, sys.argv[1])
+import kf
+plain = b"an old secret\n" + b"X" * 16
+open(sys.argv[2], "wb").write(kf.oldenc(kf.oldkey(b"pass word"), os.urandom(16), plain))
+PY
+
 cat > "$ROOT/$T/run.sh" <<SCRIPT
 load std
 bind -a '#I' /net
 auth/secstored -d -s /$T/store -a $A >[2=1] &
 sleep 2
 auth/secstore-setup -s /$T/store -u cmduser -k 'pass word' >[2] /dev/null
-auth/secstore-setup -s /$T/store -u olduser -V secstore -k oldpass >[2] /dev/null
+auth/secstore-setup -s /$T/store -u olduser -V secstore -k oldpassword >[2] /dev/null
 cd /$T/work
 echo 'key proto=pass service=x user=u !password=sekrit' > factotum
 echo 'second line' >> factotum
@@ -66,8 +78,24 @@ echo MARK longlist
 sec -v t
 echo MARK extract
 mv factotum factotum.orig
+# a file of that name already there, open to everybody: the secret must
+# not be written into it
+echo planted > factotum
+chmod 666 factotum
 sec x factotum; echo STATUS x \$status
 if {cmp -s factotum factotum.orig} {echo EXTRACT-SAME} {echo EXTRACT-DIFFERS}
+echo MODE \`{ls -l factotum}
+echo MARK oldformat
+if {ftest -f /$T/store/cmduser/oldfile} {
+	sec x oldfile; echo STATUS oldx \$status
+	sec p oldfile; echo STATUS oldp \$status
+	sec m oldfile; echo STATUS oldm \$status
+	echo OLDMAGIC \`{read 5 < /$T/store/cmduser/oldfile}
+	sec p oldfile; echo STATUS newp \$status
+	sec m oldfile; echo STATUS again \$status
+}
+echo MARK warn
+auth/secstore -k 'pass word' -u cmduser -s $A t; echo STATUS k \$status
 echo MARK print
 sec p factotum
 echo MARK sub
@@ -86,12 +114,23 @@ sec d PAK; echo STATUS dpak \$status
 echo MARK wrong
 echo 'wrong pass' | auth/secstore -i -u cmduser -s $A t; echo STATUS wrong \$status
 echo MARK old
-echo oldpass | auth/secstore -i -u olduser -s $A t; echo STATUS old \$status
+echo oldpassword | auth/secstore -i -u olduser -s $A t; echo STATUS old \$status
+echo OLDPAK \`{cat /$T/store/olduser/PAK}
+echo MARK oldagain
+echo oldpassword | auth/secstore -i -u olduser -s $A t; echo STATUS oldagain \$status
 echo MARK nouser
 echo x | auth/secstore -i -u nosuchuser -s $A t; echo STATUS nouser \$status
 echo MARK setup
-auth/secstore-setup -s /$T/nosuchdir/store -u someone -k pw; echo STATUS setupdir \$status
-auth/secstore-setup -s /$T/store -u ../cmduser -k pw; echo STATUS setuppath \$status
+auth/secstore-setup -s /$T/nosuchdir/store -u someone -k longenough; echo STATUS setupdir \$status
+auth/secstore-setup -s /$T/store -u ../cmduser -k longenough; echo STATUS setuppath \$status
+echo MARK setup2
+auth/secstore-setup -s /$T/store -u cmduser -k 'another word'; echo STATUS exists \$status
+echo 'pass word' | auth/secstore -i -u cmduser -s $A t; echo STATUS stillin \$status
+auth/secstore-setup -s /$T/store -u shorty -k seven77; echo STATUS short \$status
+auth/secstore-setup -i -s /$T/store -u importer -k longenough; echo STATUS import \$status
+auth/secstore-setup -s /$T/store -u fresh -k longenough; echo STATUS fresh \$status
+echo FRESHPAK \`{cat /$T/store/fresh/PAK}
+auth/secstore-setup -f -s /$T/store -u fresh -k longenough2; echo STATUS force \$status
 echo MARK end
 echo halt > /dev/sysctl
 SCRIPT
@@ -138,9 +177,34 @@ has wrong '^STATUS wrong .'; check $? "a wrong password fails"
 hasnot wrong 'version mismatch'; check $? "and is not reported as a version mismatch"
 n=$(sect wrong | grep -c 'secstored: new connection' || true)
 [ "$n" = 1 ]; check $? "a wrong password is one exchange with the server (was $n)"
-has old '^STATUS old *$'; check $? "an account on the older version is reached"
+has old '^STATUS old *$'; check $? "an account on the oldest version is reached"
 n=$(sect old | grep -c 'secstored: new connection' || true)
-[ "$n" = 2 ]; check $? "by the fallback the server asks for ($n connections)"
+[ "$n" = 4 ]; check $? "by the fallbacks the server asks for, and then again at version 4 ($n connections)"
+has old '^OLDPAK secstore4 [^ ]*$'; check $? "and the account is at version 4 alone after it"
+n=$(sect oldagain | grep -c 'secstored: new connection' || true)
+has oldagain '^STATUS oldagain *$' && [ "$n" = 1 ]; check $? "its next login is one exchange ($n)"
+
+has extract '^MODE --rw------- '; check $? "x makes its file anew, mode 600, whatever was there"
+if [ -f "$ROOT/$T/store/cmduser/oldfile.made" ]; then
+	has oldformat '^STATUS oldx .'; check $? "x does not read a file in an old format"
+	has oldformat 'auth/secstore m'; check $? "and says how it is moved"
+	has oldformat '^STATUS oldp .'; check $? "nor does p"
+	has oldformat '^STATUS oldm *$'; check $? "m moves it"
+	has oldformat '^OLDMAGIC SGCM2'; check $? "into the current format"
+	has oldformat '^an old secret$'; check $? "and then p prints it"
+	has oldformat '^STATUS again *$'; check $? "m of a file already moved is no error"
+else
+	echo "SKIP: no python3 with cryptography: the old-format file was not made"
+fi
+has warn 'warning: a password given with -k'; check $? "-k warns that the password can be read"
+has warn '^STATUS k *$'; check $? "and still works"
+has setup2 '^STATUS exists .'; check $? "secstore-setup does not write over an account that is there"
+has setup2 '^STATUS stillin *$'; check $? "whose password still logs in"
+has setup2 '^STATUS short .'; check $? "a password of seven characters is refused"
+[ ! -e "$ROOT/$T/store/shorty/PAK" ]; check $? "and makes no account"
+has setup2 '^STATUS import .'; check $? "-i, which imported nothing, is refused"
+has setup2 '^STATUS fresh *$' && has setup2 '^FRESHPAK secstore4 '; check $? "a new account is at version 4"
+has setup2 '^STATUS force *$'; check $? "-f replaces a verifier"
 has nouser '^STATUS nouser .'; check $? "no account fails"
 n=$(sect nouser | grep -c 'secstored: new connection' || true)
 [ "$n" = 1 ]; check $? "and is one exchange ($n)"

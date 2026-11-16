@@ -37,6 +37,8 @@ rstyxd rstyxd
 styxd rstyxd
 shutdown shutdown
 countersigner signer
+secstored secstored
+secstore-setup secstored
 signer signer
 verify signer
 styxchat styxchat

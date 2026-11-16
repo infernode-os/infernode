@@ -537,8 +537,13 @@ requesttypes(method, requrl: string, hdrs: list of Header, body: array of byte, 
 				brotli = load Brotli Brotli->PATH;
 			if(brotli == nil)
 				derr = sys->sprint("cannot load %s: %r", Brotli->PATH);
-			else
-				(b, derr) = brotli->decompress(resp.body, -1);
+			else {
+				# to MAXBODY, as the others: a stream of no stated
+				# length had no bound in the decoder
+				(b, derr) = brotli->decompressmax(resp.body, MAXBODY);
+				if(derr == Brotli->Ebig)
+					derr = Ebig;
+			}
 		* =>
 			return (resp, err);
 		}

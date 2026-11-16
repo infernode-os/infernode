@@ -199,6 +199,23 @@ serve(c: Sys->Connection, mode: string, n: int, done: chan of int)
 		say(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
 	"real" =>
 		say(fd, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nREAL");
+	"br" =>
+		# a Brotli body from a file of the tests' (n: which)
+		f := "/tests/web/brotli/hello.br";
+		if(n == 1)
+			f = "/tests/web/brotli/zeros-1m.br";
+		if(n == 96)
+			f = "/tests/web/brotli/zeros-96m.br";
+		b := array[256] of byte;
+		bfd := sys->open(f, Sys->OREAD);
+		bn := 0;
+		if(bfd != nil)
+			bn = sys->read(bfd, b, len b);
+		if(bn < 0)
+			bn = 0;
+		b = b[0:bn];
+		say(fd, sys->sprint("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: br\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len b));
+		sys->write(fd, b, len b);
 	}
 	fd = nil;
 	done <-= 0;
@@ -405,6 +422,27 @@ testCutShort(t: ref T)
 	}
 }
 
+# A body in Brotli decodes to no more than a body may be.  The decoder
+# had no ceiling for a stream of no stated length: 77 bytes from a
+# server were 96MB in the client (tests/web/brotli/mkzeros.py), and a
+# few kilobytes would be gigabytes.
+testBrotliCeiling(t: ref T)
+{
+	(c, url) := announce(t);
+	done := chan[1] of int;
+	spawn serve(c, "br", 1, done);
+	(r, err) := webclient->requestjar("GET", url, nil, nil, nil);
+	<-done;
+	t.assert(r != nil && err == nil && len r.body == 1000000, "a megabyte of zeros from 13 bytes of Brotli: " + err);
+
+	(c, url) = announce(t);
+	spawn serve(c, "br", 96, done);
+	t0 := sys->millisec();
+	(r, err) = webclient->requestjar("GET", url, nil, nil, nil);
+	<-done;
+	t.assert(r == nil && contains(err, "too large"), sys->sprint("96MB from 77 bytes is refused as too large (it was a response of 96MB): %s (%dms)", err, sys->millisec() - t0));
+}
+
 # What is not a response is refused as what it is.
 testNotAResponse(t: ref T)
 {
@@ -491,6 +529,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WholeBodies", testWholeBodies);
 	run("RedirectToFile", testRedirectToFile);
 	run("CutShort", testCutShort);
+	run("BrotliCeiling", testBrotliCeiling);
 	run("NotAResponse", testNotAResponse);
 	run("NegativeLength", testNegativeLength);
 

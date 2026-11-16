@@ -14,9 +14,6 @@ include "keyring.m";
 	kr: Keyring;
 	AESbsize, AESstate: import kr;
 
-include "rand.m";
-	rand: Rand;
-
 include "styx.m";
 	styx: Styx;
 	Tmsg, Rmsg: import styx;
@@ -37,7 +34,7 @@ User: adt
 {
 	x:	int;		# table index
 	name:	string;
-	secret:	array of byte;	# eg, password hashed by SHA1
+	secret:	array of byte;	# eg, the password's SHA-256 (changelogin(8))
 	expire:	int;	# expiration time (epoch seconds)
 	status:	int;
 	failed:	int;	# count of failed attempts
@@ -53,8 +50,9 @@ files := array[] of {
 };
 
 Maxsecret: con 255;
-Maxname: con 255;
+Maxname: con 255;	# bytes of UTF-8: an entry's name has one byte of length
 Maxfail: con 50;
+Maxcount: con 255;	# an entry's count of failures has one byte
 users: array of ref User;
 Sok, Sdisabled: con iota;
 status := array[] of {Sok => "ok", Sdisabled => "disabled" };
@@ -92,13 +90,9 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers = load Styxservers Styxservers->PATH;
 	if(styxservers == nil)
 		nomod(Styxservers->PATH);
-	rand = load Rand Rand->PATH;
-	if(rand == nil)
-		nomod(Rand->PATH);
 
 	styx->init();
 	styxservers->init(styx);
-	rand->init(sys->millisec());
 
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
@@ -125,6 +119,12 @@ init(nil: ref Draw->Context, args: list of string)
 	if(args != nil)
 		keyfile = hd args;
 
+	# with no clock no account would ever expire: time() gave 0,
+	# and every expiry time is after that
+	if(time() == 0)
+		error(sys->sprint("can't read the time from /dev/time: %r"));
+	timefd = nil;	# the server opens its own, in its own fd group
+
 	pwd, err: string;
 	if(nvram != nil){
 		pwd = rf(nvram);
@@ -132,16 +132,23 @@ init(nil: ref Draw->Context, args: list of string)
 			error(sys->sprint("can't read %s: %r", nvram));
 	}
 	if(pwd == nil){
+		# an error first: a line too long came back with no key,
+		# and keyfs left without a word
 		(pwd, err) = readconsline("Key: ", 1);
-		if(pwd == nil || err == "exit")
+		if(err == "exit")
 			exit;
 		if(err != nil)
 			error(sys->sprint("couldn't get key: %s", err));
-		(rc, d) := sys->stat(keyfile);
-		if(rc == -1 || d.length == big 0){
+		if(pwd == nil)
+			exit;
+		if(isfresh(keyfile)){
 			pwd0 := pwd;
 			(pwd, err) = readconsline("Confirm key: ", 1);
-			if(pwd == nil || err == "exit")
+			if(err == "exit")
+				exit;
+			if(err != nil)
+				error(sys->sprint("couldn't get key: %s", err));
+			if(pwd == nil)
 				exit;
 			if(pwd != pwd0)
 				error("key mismatch");
@@ -150,13 +157,13 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	}
 
-	thekey = hashkey(pwd);
-	for(i:=0; i<len pwd; i++)
-		pwd[i] = ' ';	# clear it out
-
 	sys->pctl(Sys->NEWPGRP|Sys->FORKFD, nil);	# immediately avoid sharing keyfd
 
-	readkeys(keyfile);
+	master := array of byte pwd;
+	for(i:=0; i<len pwd; i++)
+		pwd[i] = ' ';	# clear it out
+	readkeys(keyfile, master);
+	clear(master);
 
 	user = rf("/dev/user");
 	if(user == nil)
@@ -208,18 +215,22 @@ error(s: string)
 	quit("error");
 }
 
-thekey: array of byte;
-
-hashkey(s: string): array of byte
+#
+# the key of the old format: one SHA-1 of the master password, as Plan 9's
+# aescbc has it. It is used only to read a file of that format.
+#
+oldkey(key: array of byte): array of byte
 {
-	key := array of byte s;
 	skey := array[Keyring->SHA1dlen] of byte;
 	sha := kr->sha1(array of byte "aescbc file", 11, nil, nil);
 	kr->sha1(key, len key, skey, sha);
-	for(i:=0; i<len key; i++)
-		key[i] = byte 0;	# clear it out
-#{sys->print("HEX="); for(i:=0;i<len skey&&i<AESbsize; i++)sys->print("%.2ux", int skey[i]);sys->print("\n");}
 	return skey[0:AESbsize];
+}
+
+clear(a: array of byte)
+{
+	for(i := 0; i < len a; i++)
+		a[i] = byte 0;
 }
 
 readconsline(prompt: string, raw: int): (string, string)
@@ -251,7 +262,7 @@ readconsline(prompt: string, raw: int): (string, string)
 		'\n' or '\r' or 16r4 =>
 			break Read;
 		* =>
-			if(o > len line){
+			if(o >= len line){	# it was >, and a 257th character an array bounds error
 				err = "line too long";
 				break Read;
 			}
@@ -263,9 +274,13 @@ readconsline(prompt: string, raw: int): (string, string)
 		err = sys->sprint("can't read cons: %r");
 	if(raw)
 		sys->fprint(fdctl, "rawoff");
-	if(err != nil)
+	if(err != nil){
+		clear(line);
 		return (nil, err);
-	return (string line[0:o], err);
+	}
+	s := string line[0:o];
+	clear(line);
+	return (s, err);
 }
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop, keyfile: string)
@@ -293,11 +308,18 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 					srv.reply(ref Rmsg.Error(m.tag, "user already exists"));
 					continue;
 				}
-				if(len m.name > Maxname){
+				# in bytes, as an entry holds it: 86 runes of three
+				# bytes each passed a count of runes, and pack then
+				# stopped the server
+				if(len array of byte m.name > Maxname){
 					srv.reply(ref Rmsg.Error(m.tag, "user name too long"));
 					continue;
 				}
 				u = newuser(m.name, nil);
+				if(u == nil){
+					srv.reply(ref Rmsg.Error(m.tag, "too many users"));
+					continue;
+				}
 				qid := Qid((u.path | big Quser), 0, Sys->QTDIR);
 				c.open(mode, qid);
 				writekeys(keyfile);
@@ -373,7 +395,9 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 			Qexpire =>
 				s := trim(string m.data);
 				if(s != "never"){
-					if(!isnumeric(s)){
+					# a time is kept in 31 bits: a larger number was
+					# stored as the largest, not refused
+					if(!isnumeric(s) || len s > 10 || big s > big 16r7FFFFFFF){
 						srv.reply(ref Rmsg.Error(m.tag, "illegal expiry time"));
 						break;
 					}
@@ -398,7 +422,10 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 			Qlog =>
 				s := trim(string m.data);
 				if(s != "good" && s != "ok"){
-					if(++u.failed >= Maxfail)
+					# the file has a byte for the count: 300 was written as 44
+					if(u.failed < Maxcount)
+						u.failed++;
+					if(u.failed >= Maxfail)
 						u.status = Sdisabled;
 				}else
 					u.failed = 0;
@@ -461,6 +488,16 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 				srv.reply(ref Rmsg.Error(m.tag, "user already exists"));
 				break;
 			}
+			# a name too long for an entry reached pack, which
+			# stopped the server
+			if(len array of byte new > Maxname){
+				srv.reply(ref Rmsg.Error(m.tag, "user name too long"));
+				break;
+			}
+			if(!nameok(new)){
+				srv.reply(ref Rmsg.Error(m.tag, "bad user name"));
+				break;
+			}
 			# unhashuser(u);
 			u.name = new;
 			# hashuser(u);
@@ -494,9 +531,17 @@ TYPE(path: big): int
 	return int path & 16rF;
 }
 
+#
+# A path is the file's type in its low four bits, the user's slot in the
+# 28 above and the slot's generation above that. The slot had 12 bits and
+# the generation was shifted by 16: slot 4096 of one generation was slot 0
+# of the next, so the 4097th user's files were another user's.
+#
+Maxusers: con 1<<28;
+
 INDEX(path: big): int
 {
-	return (int path & 16rFFFF) >> 4;
+	return int ((path >> 4) & big (Maxusers-1));
 }
 
 finduserpath(path: big): ref User
@@ -520,9 +565,11 @@ newuser(name: string, u: ref User): ref User
 	for(i := 0; i < len users; i++)
 		if(users[i] == nil)
 			break;
+	if(i >= Maxusers)
+		return nil;
 	if(i >= len users)
-		users = (array[i+16] of ref User)[0:] = users;
-	path := big ((pathgen++ << 16) | (i<<4));
+		users = (array[i+16+len users/4] of ref User)[0:] = users;
+	path := (big pathgen++ << 32) | big (i<<4);
 	if(u == nil)
 		u = ref User(i, name, nil, Never, Sok, 0, path);
 	else{
@@ -676,8 +723,50 @@ time(): int
 	return int t;
 }
 
+#
+# The key file.
+#
+# Its format (the second):
+#	magic[8]	"keyfs 2\n"
+#	iterations[4]	of PBKDF2, most significant byte first
+#	salt[16]	random, made when the file is first written in this format
+#	nonce[12]	random, new for every write
+#	AES-256-GCM of count[4] and the entries, with the 40 bytes above as
+#		its associated data (SP 800-38D)
+#	tag[16]
+# The key is the first 32 bytes of PBKDF2 with HMAC-SHA-384 (RFC 8018 5.2,
+# SP 800-132) of the master password, the salt and the iterations.
+#
+# The first format was Plan 9's aescbc: a 16-byte IV, then AES-128-CBC of
+# the entries and sixteen X's under SHA1("aescbc file" + password). A copy
+# of the file tested a guess at the password with one SHA-1; a changed byte
+# changed an entry (the first byte, a disabled account to ok) and nothing
+# noticed; and it was rewritten in place, so a crash between the truncate
+# and the write left an empty file, which is a new store. A file in that
+# format is still read, and written in this one at the next change.
+#
 Checkpat: con "XXXXXXXXXXXXXXXX";	# it's what Plan 9's aescbc uses
 Checklen: con len Checkpat;
+
+Magic: con "keyfs 2\n";
+Saltlen: con 16;
+Noncelen: con 12;	# SP 800-38D 8.2.2: 96 random bits
+Taglen: con 16;
+Keylen: con 32;
+Filehdrlen: con len Magic+4+Saltlen+Noncelen;
+#
+# 200000 iterations of HMAC-SHA-384 are half a second on a 2 GHz amd64
+# and a few seconds on a Raspberry Pi 3, paid once when keyfs starts
+# (the key is kept, not derived again for each write). The count is in
+# the file, so it can be raised without another format.
+#
+Iterations: con 200000;
+Miniter: con 1000;
+Maxiter: con 10000000;	# what a file may ask for: more is minutes of work on its say-so
+
+thekey: array of byte;	# AES-256 key of the file as it will be written
+salt: array of byte;
+iterations := Iterations;
 
 Hdrlen: con 1+1+4;
 
@@ -690,7 +779,10 @@ pack(u: ref User): array of byte
 {
 	a := array[packedsize(u)] of byte;
 	a[0] = byte u.status;
-	a[1] = byte u.failed;
+	failed := u.failed;
+	if(failed > Maxcount)
+		failed = Maxcount;
+	a[1] = byte failed;
 	a[2] = byte u.expire;
 	a[3] = byte (u.expire>>8);
 	a[4] = byte (u.expire>>16);
@@ -707,29 +799,56 @@ pack(u: ref User): array of byte
 	return a;
 }
 
-unpack(a: array of byte): (ref User, int)
+#
+# a name that can be a directory of the mount point
+#
+nameok(s: string): int
+{
+	if(s == nil || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/' || s[i] == 0)
+			return 0;
+	return 1;
+}
+
+#
+# An entry of the file, or why it is not one. A status that was neither
+# ok nor disabled was taken, and the first read of the status file indexed
+# the table of names with it: the server stopped, with its mount.
+#
+unpack(a: array of byte): (ref User, int, string)
 {
 	if(len a < Hdrlen+2)
-		return (nil, 0);
+		return (nil, 0, sys->sprint("%d bytes where an entry has at least %d", len a, Hdrlen+2));
 	u := ref User;
 	u.status = int a[0];
 	u.failed = int a[1];
 	u.expire = (int a[5] << 24) | (int a[4] << 16) | (int a[3] << 8) | int a[2];
 	n := int a[6];
 	j := 7+n;
-	if(j > len a)
-		return (nil, 0);
-	u.name = string a[7:j];
 	if(j >= len a)
-		return (nil, 0);
+		return (nil, 0, "name longer than what is left of the file");
+	u.name = string a[7:j];
+	if(!nameok(u.name))
+		return (nil, 0, "bad name");
+	# bytes that are not UTF-8 would not be written back as they were read
+	bn := array of byte u.name;
+	if(len bn != n)
+		return (nil, 0, "name not UTF-8");
+	for(i := 0; i < n; i++)
+		if(bn[i] != a[7+i])
+			return (nil, 0, "name not UTF-8");
+	if(u.status < 0 || u.status >= len status)
+		return (nil, 0, sys->sprint("%q: status %d", u.name, u.status));
 	n = int a[j++];
 	if(j+n > len a)
-		return (nil, 0);
+		return (nil, 0, sys->sprint("%q: secret longer than what is left of the file", u.name));
 	if(n > 0){
 		u.secret = array[n] of byte;
 		u.secret[0:] = a[j:j+n];
 	}
-	return (u, j+n);
+	return (u, j+n, nil);
 }
 
 corrupt(keyfile: string)
@@ -737,70 +856,306 @@ corrupt(keyfile: string)
 	error(sys->sprint("%s: incorrect key or corrupt/damaged keyfile", keyfile));
 }
 
-readkeys(keyfile: string)
+badentry(keyfile: string, n: int, why: string)
+{
+	error(sys->sprint("%s: entry %d: %s", keyfile, n, why));
+}
+
+random(n: int): array of byte
+{
+	a := array[n] of byte;
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
+	if(fd == nil || sys->readn(fd, a, n) != n)
+		error(sys->sprint("can't read /dev/notquiterandom: %r"));
+	return a;
+}
+
+#
+# PBKDF2 (RFC 8018 5.2) with HMAC-SHA-384: the first Keylen bytes of
+# its first block
+#
+pbkdf2(pw, salt: array of byte, iter: int): array of byte
+{
+	u := array[len salt + 4] of byte;
+	u[0:] = salt;
+	u[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
+	t := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(u, len u, pw, t, nil);
+	u = array[Keyring->SHA384dlen] of byte;
+	u[0:] = t;
+	v := array[Keyring->SHA384dlen] of byte;
+	for(i := 1; i < iter; i++){
+		kr->hmac_sha384(u, len u, pw, v, nil);
+		for(j := 0; j < len t; j++)
+			t[j] ^= v[j];
+		(u, v) = (v, u);
+	}
+	k := array[Keylen] of byte;
+	k[0:] = t[0:Keylen];
+	clear(t);
+	clear(u);
+	clear(v);
+	return k;
+}
+
+put4(a: array of byte, v: int)
+{
+	a[0] = byte (v>>24);
+	a[1] = byte (v>>16);
+	a[2] = byte (v>>8);
+	a[3] = byte v;
+}
+
+get4(a: array of byte): int
+{
+	return (int a[0]<<24) | (int a[1]<<16) | (int a[2]<<8) | int a[3];
+}
+
+ismagic(buf: array of byte): int
+{
+	m := array of byte Magic;
+	if(len buf < len m)
+		return 0;
+	for(i := 0; i < len m; i++)
+		if(buf[i] != m[i])
+			return 0;
+	return 1;
+}
+
+#
+# a file that is there and empty is a store not yet begun
+# (keyfs does not make the file, and does not leave it empty)
+#
+isfresh(keyfile: string): int
+{
+	(rc, d) := sys->stat(keyfile);
+	return rc == 0 && d.length == big 0;
+}
+
+lastelem(s: string): string
+{
+	for(i := len s; i > 0; i--)
+		if(s[i-1] == '/')
+			return s[i:];
+	return s;
+}
+
+#
+# The file is written whole beside the old one and renamed over it, so
+# at any moment one of them is a whole file. Where a file server will not
+# rename onto a name in use, the old file is removed first: a stop just
+# then leaves only the new one, which is taken at the next start (it is
+# known to be whole because it authenticates).
+#
+newname(keyfile: string): string
+{
+	return keyfile+".new";
+}
+
+readkeys(keyfile: string, master: array of byte)
 {
 	fd := sys->open(keyfile, Sys->OREAD);
-	if(fd == nil)
-		error(sys->sprint("can't open %s: %r", keyfile));
+	if(fd == nil){
+		why := sys->sprint("%r");
+		fd = sys->open(newname(keyfile), Sys->OREAD);
+		if(fd == nil)
+			error(sys->sprint("can't open %s: %s", keyfile, why));
+		warn(sys->sprint("%s is not there: reading %s, left by a change that was interrupted", keyfile, newname(keyfile)));
+		rdkeys(fd, newname(keyfile), master, 1);
+		fd = nil;
+		d := sys->nulldir;
+		d.name = lastelem(keyfile);
+		if(sys->wstat(newname(keyfile), d) < 0)
+			error(sys->sprint("can't rename %s to %s: %r", newname(keyfile), keyfile));
+		return;
+	}
+	rdkeys(fd, keyfile, master, 0);
+}
+
+warn(s: string)
+{
+	sys->fprint(sys->fildes(2), "keyfs: %s\n", s);
+}
+
+rdkeys(fd: ref Sys->FD, keyfile: string, master: array of byte, mustnew: int)
+{
 	(rc, d) := sys->fstat(fd);
 	if(rc < 0)
 		error(sys->sprint("can't get status of %s: %r", keyfile));
+	#
+	# keyfs does not make the file, so its mode is whatever its maker's
+	# was: after "touch /keydb/keys", readable by all. It is put right
+	# rather than refused: refusing would stop every login of a realm
+	# that was set up as the manual said, and whoever could read the
+	# file has had the time to copy it either way, which is said.
+	#
+	if(d.mode & 8r077){
+		nd := sys->nulldir;
+		nd.mode = (d.mode & ~8r777) | 8r600;
+		if(sys->fwstat(fd, nd) < 0)
+			warn(sys->sprint("%s has mode %uo, open to users other than its owner, and it cannot be changed: %r", keyfile, d.mode&8r777));
+		else
+			warn(sys->sprint("%s had mode %uo, open to users other than its owner: now 600. If others could reach it, change the master key and the users' secrets",
+				keyfile, d.mode&8r777));
+	}
+	if(d.length > big (64*1024*1024))
+		error(sys->sprint("%s: %bd bytes is no key file", keyfile, d.length));
 	length := int d.length;
-	if(length == 0)
+	if(length == 0){
+		if(mustnew)
+			corrupt(keyfile);
+		warn(sys->sprint("%s is empty: a new store, under the key given", keyfile));
+		salt = random(Saltlen);
+		thekey = pbkdf2(master, salt, iterations);
 		return;
-	if(length < AESbsize+Checklen)
-		corrupt(keyfile);
+	}
 	buf := array[length] of byte;
-	if(sys->read(fd, buf, len buf) != len buf)
+	if(sys->readn(fd, buf, len buf) != len buf)
 		error(sys->sprint("can't read %s: %r", keyfile));
-	state := kr->aessetup(thekey, buf[0:AESbsize]);
+	plain: array of byte;
+	if(ismagic(buf)){
+		if(length < Filehdrlen+4+Taglen)
+			corrupt(keyfile);
+		o := len Magic;
+		iter := get4(buf[o:]);
+		if(iter < Miniter || iter > Maxiter)
+			corrupt(keyfile);
+		o += 4;
+		salt = array[Saltlen] of byte;
+		salt[0:] = buf[o:o+Saltlen];
+		o += Saltlen;
+		iterations = iter;
+		thekey = pbkdf2(master, salt, iterations);
+		state := kr->aesgcmsetup(thekey, buf[o:o+Noncelen]);
+		if(state == nil)
+			error("can't initialise AES");
+		# nil unless the tag is right for the header and every byte after it
+		plain = kr->aesgcmdecrypt(state, buf[Filehdrlen:length-Taglen], buf[0:Filehdrlen], buf[length-Taglen:]);
+		if(plain == nil || len plain < 4)
+			corrupt(keyfile);
+		n := get4(plain);
+		i := 4;
+		for(e := 0; e < n; e++){
+			(u, m, err) := unpack(plain[i:]);
+			if(u == nil)
+				badentry(keyfile, e, err);
+			adduser(keyfile, e, u);
+			i += m;
+		}
+		if(i != len plain)
+			error(sys->sprint("%s: %d bytes after the last of %d entries", keyfile, len plain-i, n));
+		clear(plain);
+		return;
+	}
+	if(mustnew || length < AESbsize+Checklen)
+		corrupt(keyfile);
+	okey := oldkey(master);
+	state := kr->aessetup(okey, buf[0:AESbsize]);
 	if(state == nil)
 		error("can't initialise AES");
 	kr->aescbc(state, buf[AESbsize:], length-AESbsize, Keyring->Decrypt);
+	clear(okey);
 	if(string buf[length-Checklen:] != Checkpat)
 		corrupt(keyfile);
 	length -= Checklen;
-	for(i := AESbsize; i < length;){
-		(u, n) := unpack(buf[i:]);
+	e := 0;
+	for(i := AESbsize; i < length; e++){
+		(u, n, err) := unpack(buf[i:length]);
 		if(u == nil)
-			corrupt(keyfile);
-		newuser(u.name, u);
+			badentry(keyfile, e, err);
+		adduser(keyfile, e, u);
 		i += n;
 	}
+	clear(buf);
+	warn(sys->sprint("%s is in the old format, which has no check of its integrity and a key one SHA-1 from the master key: it will be written in the new one at the next change", keyfile));
+	salt = random(Saltlen);
+	thekey = pbkdf2(master, salt, iterations);
+}
+
+#
+# names seen in the file, to refuse a second entry of a name
+# (it could never be reached: a walk finds the first)
+#
+seen: array of list of string;
+
+adduser(keyfile: string, e: int, u: ref User)
+{
+	if(seen == nil)
+		seen = array[1021] of list of string;
+	h := 0;
+	for(i := 0; i < len u.name; i++)
+		h = (h*31 + u.name[i]) & 16r7FFFFFF;
+	h %= len seen;
+	for(l := seen[h]; l != nil; l = tl l)
+		if(hd l == u.name)
+			badentry(keyfile, e, sys->sprint("%q: a second entry of that name", u.name));
+	seen[h] = u.name :: seen[h];
+	if(newuser(u.name, u) == nil)
+		error(sys->sprint("%s: too many entries", keyfile));
 }
 
 writekeys(keyfile: string)
 {
-	length := 0;
+	seen = nil;
+	length := 4;
+	n := 0;
 	for(i := 0; i < len users; i++)
-		if((u := users[i]) != nil)
+		if((u := users[i]) != nil){
 			length += packedsize(u);
-	if(length == 0){
-		# leave it empty for clarity
-		fd := sys->create(keyfile, Sys->OWRITE, 8r600);
-		if(fd == nil)
-			error(sys->sprint("can't create %s: %r", keyfile));
-		return;
-	}
-	length += AESbsize+Checklen;
-	buf := array[length] of byte;
-	for(i=0; i<AESbsize; i++)
-		buf[i] = byte rand->rand(256);
-	j := AESbsize;
+			n++;
+		}
+	plain := array[length] of byte;
+	put4(plain, n);
+	j := 4;
 	for(i = 0; i < len users; i++)
 		if((u = users[i]) != nil){
 			a := pack(u);
-			buf[j:] = a;
+			plain[j:] = a;
 			j += len a;
+			clear(a);
 		}
-	buf[length-Checklen:] = array of byte Checkpat;
-	state := kr->aessetup(thekey, buf[0:AESbsize]);
+	hdr := array[Filehdrlen] of byte;
+	hdr[0:] = array of byte Magic;
+	o := len Magic;
+	put4(hdr[o:], iterations);
+	o += 4;
+	hdr[o:] = salt;
+	o += Saltlen;
+	# a new nonce for each write under the one key (SP 800-38D 8.2.2)
+	nonce := random(Noncelen);
+	hdr[o:] = nonce;
+	state := kr->aesgcmsetup(thekey, nonce);
 	if(state == nil)
 		error("can't initialise AES");
-	kr->aescbc(state, buf[AESbsize:], length-AESbsize, Keyring->Encrypt);
-	fd := sys->create(keyfile, Sys->OWRITE, 8r600);
+	(ct, tag) := kr->aesgcmencrypt(state, plain, hdr);
+	clear(plain);
+	if(ct == nil || len ct != length || tag == nil || len tag != Taglen)
+		error("can't encrypt the key file");
+	buf := array[Filehdrlen+length+Taglen] of byte;
+	buf[0:] = hdr;
+	buf[Filehdrlen:] = ct;
+	buf[Filehdrlen+length:] = tag;
+
+	# a file left there keeps its mode when created again: start afresh
+	new := newname(keyfile);
+	sys->remove(new);
+	fd := sys->create(new, Sys->OWRITE, 8r600);
 	if(fd == nil)
-		error(sys->sprint("can't create %s: %r", keyfile));
-	if(sys->write(fd, buf, len buf) != len buf)
-		error(sys->sprint("error writing to %s: %r", keyfile));
+		error(sys->sprint("can't create %s: %r", new));
+	if(sys->write(fd, buf, len buf) != len buf){
+		why := sys->sprint("%r");
+		fd = nil;
+		sys->remove(new);
+		error(sys->sprint("error writing to %s: %s", new, why));
+	}
+	# a wstat that changes nothing is a request to commit the file (stat(5))
+	sys->fwstat(fd, sys->nulldir);
+	fd = nil;
+	d := sys->nulldir;
+	d.name = lastelem(keyfile);
+	if(sys->wstat(new, d) < 0){
+		sys->remove(keyfile);
+		if(sys->wstat(new, d) < 0)
+			error(sys->sprint("can't rename %s to %s: %r", new, keyfile));
+	}
 }

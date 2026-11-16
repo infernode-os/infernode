@@ -54,5 +54,12 @@ if {brick key -d $root/rlprofile >/dev/null} {echo RL-STALE-LOCK-TAKEN} {echo BA
 touch $root/rlprofile/pair.lock
 if {brick key -d $root/rlprofile >/dev/null} {echo BAD-RL-FRESH-LOCK} {echo RL-FRESH-LOCK-HELD}
 rm $root/rlprofile/pair.lock
+
+# with no random numbers no key is made, and the brick is not touched
+echo 'pub aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > $root/rl/config/sdg
+bind /dev/null /dev/random
+if {brick pair -R -d $root/rlprofile $root/rl} {echo BAD-RL-NORANDOM} {echo RL-NORANDOM-REFUSED}
+unmount /dev/random
+echo RL-NR-SDG `{cat $root/rl/config/sdg}
 echo FACTOTUM-ROTATE-LEGACY-DONE
 echo halt > '#c/sysctl'

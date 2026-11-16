@@ -182,6 +182,9 @@ not_contains "and the passphrase is not" "$CASE_OUTPUT" "^RL-AUDIT2 .*hunter2"
 contains "a pair.lock left long ago is taken" "$CASE_OUTPUT" "RL-STALE-LOCK-TAKEN"
 contains "a new pair.lock is respected" "$CASE_OUTPUT" "RL-FRESH-LOCK-HELD"
 contains "and the refusal names the file" "$CASE_OUTPUT" "holds .*rlprofile/pair.lock"
+contains "with no random numbers pairing is refused" "$CASE_OUTPUT" "RL-NORANDOM-REFUSED"
+contains "and the brick is given no key" "$CASE_OUTPUT" "^RL-NR-SDG pub aaaa"
+not_contains "least of all one of zeros" "$CASE_OUTPUT" "psk 0000000000000000"
 
 echo "=== $TESTS tests, $FAILURES failures ==="
 if [ "$FAILURES" -ne 0 ]; then

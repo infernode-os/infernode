@@ -37,8 +37,6 @@ include "keyring.m";
 include "tls.m";
 	tls: TLS;
 	Conn: import tls;
-include "security.m";
-	random: Random;
 include "sdg.m";
 	sdg: Sdg;
 include "audit.m";
@@ -1030,13 +1028,22 @@ scrub(path: string)
 	sys->fwstat(fd, sys->nulldir);	# a wstat changing nothing is a sync
 }
 
+# 32 random bytes for a key, read here with the read checked: random(2)'s
+# randombuf returns zeros, and no error, when /dev/random cannot be
+# opened or read, and a key of zeros would have been paired.
 rand32(): array of byte
 {
-	if(random == nil)
-		random = load Random Random->PATH;
-	if(random == nil)
-		fail("load", sys->sprint("can't load %s: %r", Random->PATH));
-	return random->randombuf(Random->ReallyRandom, 32);
+	fd := sys->open("/dev/random", Sys->OREAD);
+	if(fd == nil)
+		fail("keys", sys->sprint("no random numbers for a key: %r"));
+	buf := array[32] of byte;
+	for(o := 0; o < len buf;){
+		n := sys->read(fd, buf[o:], len buf - o);
+		if(n <= 0)
+			fail("keys", sys->sprint("no random numbers for a key: %r"));
+		o += n;
+	}
+	return buf;
 }
 
 # A legacy cleartext file while credentials are being replaced: not read,

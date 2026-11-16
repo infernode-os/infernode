@@ -160,6 +160,7 @@ TARG=\
 	registry_test.dis\
 	cs_cancel.dis\
 	pqsig_test.dis\
+	mailconn_test.dis\
 	toolcall.dis\
 	tls_closeread_test.dis\
 	llmclient_edge_test.dis\
@@ -533,6 +534,7 @@ SYSMODULES=\
 	keyringinst.m\
 	l2cap.m\
 	mailparse.m\
+	mailconn.m\
 	memfs.m\
 	msgsrc.m\
 	plumbmsg.m\

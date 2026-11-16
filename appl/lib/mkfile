@@ -84,6 +84,7 @@ TARG=\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
+	mailconn.dis\
 	inflate.dis\
 	ip.dis\
 	ipattr.dis\
@@ -382,6 +383,7 @@ SYSMODULES=\
 	docreg.m\
 	keyringinst.m\
 	mailparse.m\
+	mailconn.m\
 	mermaid.m\
 	popup.m\
 	publicnet.m\

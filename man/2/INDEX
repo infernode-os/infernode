@@ -239,6 +239,7 @@ rooted names
 newns newns
 nmea nmea
 plumbmsg plumbmsg
+mailconn mailconn
 pop3 pop3
 print print
 prof prof

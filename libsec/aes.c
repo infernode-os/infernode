@@ -414,9 +414,9 @@ store(uchar *out, u64 *q, int n)
 				out[16*k + 4*c + r] = q[4*(c&1) + k] >> (8*(2*r + (c>>1)));
 }
 
-/* the cipher (FIPS 197 5.1) on the blocks in q */
+/* the cipher (FIPS 197 5.1) on the blocks in q (not named encrypt: the native kernels' lib.h has one) */
 static void
-encrypt(const u64 *rk, int rounds, u64 *q)
+cipher(const u64 *rk, int rounds, u64 *q)
 {
 	int i;
 
@@ -434,7 +434,7 @@ encrypt(const u64 *rk, int rounds, u64 *q)
 
 /* the inverse cipher (FIPS 197 5.3), with the same round keys */
 static void
-decrypt(const u64 *rk, int rounds, u64 *q)
+invcipher(const u64 *rk, int rounds, u64 *q)
 {
 	int i;
 
@@ -573,7 +573,7 @@ encrypt1(AESstate *s, const uchar *pt, uchar *ct)
 	u64 q[8];
 
 	load(q, pt, 1);
-	encrypt(s->bkey, s->rounds, q);
+	cipher(s->bkey, s->rounds, q);
 	store(ct, q, 1);
 	secureZero(q, sizeof q);
 }
@@ -643,7 +643,7 @@ aesCBCdecrypt(uchar *p, int len, AESstate *s)
 			n = 4;
 		memmove(ct, p, n*AESbsize);
 		load(b, p, n);
-		decrypt(s->bkey, s->rounds, b);
+		invcipher(s->bkey, s->rounds, b);
 		store(p, b, n);
 		for(i = 0; i < AESbsize; i++)
 			p[i] ^= s->ivec[i];
@@ -715,7 +715,7 @@ aesCTR32(AESstate *s, const uchar ctr[16], uchar *p, ulong n)
 		}
 		base += 4;
 		load(q, blk, 4);
-		encrypt(s->bkey, s->rounds, q);
+		cipher(s->bkey, s->rounds, q);
 		store(blk, q, 4);
 		m = n;
 		if(m > sizeof blk)

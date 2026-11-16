@@ -16,7 +16,10 @@ implement Sdgsrv;
 # sdgsrv.peer (the one commander's public key) and sdg.psk (the
 # pre-shared key).  -g makes a set: those three, and the commander's
 # side beside them as sdg(2) and brick(1) name it (sdg.key, sdg.brick,
-# sdg.psk), to be copied to the commander.
+# sdg.psk), to be copied to the commander.  It also holds sdgsrv.ctr.a
+# and .b, the newest initiation counter accepted, so that an initiation
+# recorded before a restart is as old after it (the brick's rule is
+# "since boot"; a machine that restarts with its keys needs more).
 #
 # Each accepted handshake is a session of its own, with its own export of
 # dir, as each TCP connection to `listen ... {export dir}` is: several
@@ -37,8 +40,6 @@ include "sys.m";
 include "draw.m";
 include "keyring.m";
 	kr: Keyring;
-include "security.m";
-	random: Random;
 
 Sdgsrv: module
 {
@@ -64,6 +65,8 @@ verbose := 0;
 spriv, speer, psk: array of byte;
 mac1key: array of byte;
 lastctr: array of byte;		# the newest initiation counter accepted (12 bytes)
+ctrfile: string;		# where it is kept: ctrfile.a and ctrfile.b
+ctrslot := 0;			# the slot holding it (the next goes in the other)
 sessions: list of ref Session;
 dir: string;
 udp: ref Sys->FD;
@@ -73,7 +76,6 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	kr = load Keyring Keyring->PATH;
-	random = load Random Random->PATH;
 	stderr = sys->fildes(2);
 	args = tl args;
 	if(args != nil && hd args == "-g"){
@@ -112,7 +114,11 @@ init(nil: ref Draw->Context, args: list of string)
 		fatal("no keys in " + kd + " (sdgsrv -g makes them)");
 	spub := kr->x25519_base(spriv);
 	mac1key = sha(cat(array of byte "mac1", spub));
-	lastctr = array[12] of {* => byte 0};
+	ctrfile = kd + "/sdgsrv.ctr";
+	cerr: string;
+	(lastctr, cerr) = ctrload(ctrfile);
+	if(cerr != nil)
+		fatal(cerr);
 
 	(ok, c) := sys->announce(addr);
 	if(ok < 0)
@@ -143,9 +149,11 @@ fatal(s: string)
 
 genkeys(kd: string)
 {
-	sk := random->randombuf(Random->NotQuiteRandom, 32);	# ours
-	ck := random->randombuf(Random->NotQuiteRandom, 32);	# the commander's
-	p := random->randombuf(Random->NotQuiteRandom, 32);
+	sk := randbytes(32);	# ours
+	ck := randbytes(32);	# the commander's
+	p := randbytes(32);
+	if(sk == nil || ck == nil || p == nil)
+		fatal(sys->sprint("no random numbers: %r"));
 	sys->create(kd, Sys->OREAD, Sys->DMDIR|8r700);
 	put(kd + "/sdgsrv.key", sk, 8r600);
 	put(kd + "/sdgsrv.peer", kr->x25519_base(ck), 8r644);
@@ -204,6 +212,99 @@ unhex(s: string): array of byte
 		b[i] = byte v;
 	}
 	return b;
+}
+
+# n random bytes, or nil.  random(2)'s randombuf gives zeros, with no
+# error, when its device cannot be opened or read: keys of zeros.
+randbytes(n: int): array of byte
+{
+	fd := sys->open("/dev/notquiterandom", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[n] of byte;
+	for(o := 0; o < n;){
+		k := sys->read(fd, buf[o:], n - o);
+		if(k <= 0)
+			return nil;
+		o += k;
+	}
+	return buf;
+}
+
+#
+# The newest initiation counter accepted, kept as sdg(2) keeps the
+# commander's: two slots, f.a and f.b, each a line "counter check"
+# (check the first 16 hex digits of SHA-256("sdgsrv counter " counter)),
+# the new value written to the slot not holding the last, synced and
+# read back before the initiation is answered.  A crash can spoil only
+# the slot being written.  It started from zero at every start, so a
+# first message recorded from the network opened a session with a
+# server restarted since (which the replayer cannot use, and which costs
+# an export and its processes for two minutes).
+#
+ctrcheck(h: string): string
+{
+	return hex(sha(array of byte ("sdgsrv counter " + h)))[0:16];
+}
+
+ctrread(f: string): (array of byte, int)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return (nil, 0);	# not there
+	b := array[128] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return (nil, 1);
+	(nf, fl) := sys->tokenize(string b[0:n], " \n");
+	if(nf != 2 || len hd fl != 24 || ctrcheck(hd fl) != hd tl fl)
+		return (nil, 1);
+	return (unhex(hd fl), 1);
+}
+
+# the counter to start from: zeros with no store yet; an error when
+# there is a store and neither slot can be trusted
+ctrload(f: string): (array of byte, string)
+{
+	(a, ea) := ctrread(f + ".a");
+	(b, eb) := ctrread(f + ".b");
+	if(a == nil && b == nil){
+		if(ea || eb)
+			return (nil, "the initiation counter in " + f + ".a and .b cannot be read; " +
+				"removing them lets a recorded handshake be accepted once");
+		return (array[12] of {* => byte 0}, nil);
+	}
+	if(b == nil || (a != nil && newer(a, b))){
+		ctrslot = 0;
+		return (a, nil);
+	}
+	ctrslot = 1;
+	return (b, nil);
+}
+
+# keep ctr as the newest accepted: nil, or why it could not be kept
+ctrstore(ctr: array of byte): string
+{
+	slot := 1 - ctrslot;
+	f := ctrfile + ".a";
+	if(slot)
+		f = ctrfile + ".b";
+	fd := sys->create(f, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return sys->sprint("can't write %s: %r", f);
+	h := hex(ctr);
+	b := array of byte (h + " " + ctrcheck(h) + "\n");
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("short write to %s: %r", f);
+	# a wstat changing nothing is a sync (fsync on the host)
+	if(sys->fwstat(fd, sys->nulldir) < 0)
+		return sys->sprint("can't sync %s: %r", f);
+	fd = nil;
+	(back, nil) := ctrread(f);
+	if(back == nil || !same(back, ctr))
+		return "counter read back from " + f + " is not the one written";
+	ctrslot = slot;
+	return nil;
 }
 
 # ---- primitives ----
@@ -362,7 +463,12 @@ answer(m: array of byte, hdr: array of byte): (array of byte, ref Session)
 	if(ctr == nil || len ctr != 12 || !newer(ctr, lastctr))
 		return (nil, nil);
 
-	ep := random->randombuf(Random->NotQuiteRandom, 32);
+	ep := randbytes(32);
+	mer := randbytes(4);
+	if(ep == nil || mer == nil){
+		sys->fprint(stderr, "sdgsrv: no random numbers: %r\n");
+		return (nil, nil);
+	}
 	re := kr->x25519_base(ep);
 	ee := kr->x25519(ep, ei);
 	se := kr->x25519(ep, si);
@@ -379,12 +485,18 @@ answer(m: array of byte, hdr: array of byte): (array of byte, ref Session)
 	s.n = 0;
 	c := encrypt(s, array[] of {byte 1});
 
-	me := get4(random->randombuf(Random->NotQuiteRandom, 4), 0);
+	me := get4(mer, 0);
 	out := array[1 + 4 + 4] of byte;
 	out[0] = byte Presp;
 	put4(out, 1, me);
 	put4(out, 5, sender);
 	(krecv, ksend, nil) := hkdf(s.ck, nil);
+	# The counter is kept before the initiation is answered, and an
+	# initiation whose counter cannot be kept is not answered.
+	if((e := ctrstore(ctr)) != nil){
+		sys->fprint(stderr, "sdgsrv: initiation refused: %s\n", e);
+		return (nil, nil);
+	}
 	lastctr = ctr;
 	ss := newsession(me, sender, krecv, ksend, hdr);
 	return (cat(cat(out, re), c), ss);
@@ -500,12 +612,10 @@ expreader(ss: ref Session)
 session(ss: ref Session)
 {
 	tick := chan of int;
-	spawn ticker(tick);
+	spawn ticker(tick, ss);
 	for(;;) alt {
 	(hdr, p) := <-ss.pkts =>
-		ss.hdr = hdr;
-		ss.last = sys->millisec();
-		datapkt(ss, p);
+		datapkt(ss, hdr, p);
 	m := <-ss.replies =>
 		if(m == nil){
 			drop(ss);
@@ -523,10 +633,14 @@ session(ss: ref Session)
 	}
 }
 
-ticker(c: chan of int)
+# Ends with its session: one was left running for every session there
+# had ever been.
+ticker(c: chan of int, ss: ref Session)
 {
 	for(;;){
 		sys->sleep(5000);
+		if(ss.dead)
+			return;
 		alt {
 		c <-= 1 =>
 			;
@@ -543,8 +657,13 @@ drop(ss: ref Session)
 	ss.exp = nil;
 }
 
-# an authenticated data packet's request
-datapkt(ss: ref Session, m: array of byte)
+# A data packet under the session's index, from hdr's address: its
+# request, if it authenticates.  Where the session's replies go and when
+# it was last heard from are taken from a packet only once it has
+# opened.  They were set from any packet carrying the index, which is in
+# the clear in every packet of the session: junk under it sent the
+# replies to another address and kept the session from idling out.
+datapkt(ss: ref Session, hdr: array of byte, m: array of byte)
 {
 	if(len m < 13 + 16 + 4)
 		return;
@@ -557,6 +676,8 @@ datapkt(ss: ref Session, m: array of byte)
 	if(p == nil || len p < 4)
 		return;
 	seen(ss, n);
+	ss.hdr = hdr;
+	ss.last = sys->millisec();
 	rid := get4(p, 0);
 	if(rid == 0)
 		return;		# keepalive
@@ -590,6 +711,12 @@ datapkt(ss: ref Session, m: array of byte)
 	}
 	if(len msg < 7 || get4(msg, 0) != len msg || len msg > MSIZE)
 		return;
+	# a rid far above the window leaves nothing of the map: stepping the
+	# floor to it one at a time was up to 2^31 turns of this loop
+	if(rid - ss.floor > Window + 64){
+		ss.floor = rid - Window;
+		ss.runmap = big 0;
+	}
 	while(rid - ss.floor > Window){
 		# the oldest open rid is abandoned (or, run, closed): the floor moves up
 		ss.floor++;
@@ -656,12 +783,17 @@ run(ss: ref Session, rid: int, msg: array of byte)
 	}
 	if(typ == Tflush && len msg >= 9){
 		# the request flushed: the newest running under that tag of the commander's
+		# One no longer running names no request of ours: NOTAG, which
+		# the export answers and flushes nothing by.  The commander's
+		# number was passed on, and could be another request's tag here.
 		old := get2(msg, 7);
+		ours := NOTAG;
 		for(l := ss.running; l != nil; l = tl l)
 			if((hd l).ctag == old && !(hd l).closed){
-				put2(msg, 7, (hd l).stag);
+				ours = (hd l).stag;
 				break;
 			}
+		put2(msg, 7, ours);
 	}
 	if(verbose && typ == Tversion)
 		sys->fprint(stderr, "sdgsrv: Tversion msize %d\n", get4(msg, 7));

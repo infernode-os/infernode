@@ -1517,6 +1517,7 @@ loadfonts(p: ref Pg)
 	fontowner = p;
 	fontownerclosed = 0;
 	punlock();
+	featurevalues(p, fm);
 	if(setting("fonts") == "system")
 		return;	# the faces the system has, nothing fetched
 	srcs: list of ref Fontsrc;
@@ -1550,6 +1551,227 @@ loadfonts(p: ref Pg)
 	}
 }
 
+# font-feature-settings' value (Fonts 4 §6.12): normal, or a list of
+# a tag and on, off or a whole number; nil for normal or an error
+featuresettings(x: array of ref Css->Tok): list of (string, int)
+{
+	r: list of (string, int);
+	for(i := 0; i < len x; ) {
+		if(x[i].kind != Css->Kstring || len x[i].s != 4)
+			return nil;
+		tag := x[i++].s;
+		val := 1;
+		if(i < len x && x[i].kind == Css->Knumber) {
+			if(!(x[i].flag & 1) || x[i].n < 0.0)
+				return nil;
+			val = int x[i++].n;
+		} else if(i < len x && x[i].kind == Css->Kident) {
+			case lower(x[i++].s) {
+			"on" =>	val = 1;
+			"off" =>	val = 0;
+			* =>	return nil;
+			}
+		}
+		r = (tag, val) :: r;
+		if(i < len x) {
+			if(x[i].kind != Css->Kcomma)
+				return nil;
+			i++;
+		}
+	}
+	o: list of (string, int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+# ---- @font-feature-values (Fonts 4 §6.9) ----
+
+# The values a rule gives a name, for a family, with the layer the
+# rule is in ("" unlayered) and its place in the document
+Ffv: adt {
+	family, kind, name:	string;
+	vals:	array of int;
+	layer:	string;
+	seq:	int;
+};
+
+# Register the document's @font-feature-values with the fonts: those
+# of later layers over earlier, unlayered rules over all, and in one
+# layer the last in the document (as the cascade orders declarations)
+featurevalues(p: ref Pg, fm: Fonts)
+{
+	layers: list of string;	# the layer order as met, reversed
+	acc: list of ref Ffv;
+	seq := 0;
+	for(l := p.styles.sheets; l != nil; l = tl l) {
+		(sh, nil, nil) := hd l;
+		(acc, layers, seq) = ffvrules(p, sh.rules, "", acc, layers, seq);
+	}
+	if(acc == nil)
+		return;
+	nl := 0;
+	for(ll := layers; ll != nil; ll = tl ll)
+		nl++;
+	a := array[seq] of (int, ref Ffv);
+	n := 0;
+	for(; acc != nil; acc = tl acc) {
+		e := hd acc;
+		rank := nl;	# unlayered
+		if(e.layer != "") {
+			k := nl;
+			for(ll = layers; ll != nil; ll = tl ll) {
+				k--;
+				if(hd ll == e.layer)
+					break;
+			}
+			rank = k;
+		}
+		a[n++] = (rank, e);
+	}
+	for(i := 1; i < n; i++)
+		for(j := i; j > 0 && (a[j].t0 < a[j-1].t0 || a[j].t0 == a[j-1].t0 && a[j].t1.seq < a[j-1].t1.seq); j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	for(i = 0; i < n; i++) {
+		e := a[i].t1;
+		fm->addfeaturevalues(e.family, e.kind, e.name, e.vals);
+	}
+}
+
+ffvrules(p: ref Pg, rs: array of ref Css->Rule, layer: string,
+	acc: list of ref Ffv, layers: list of string, seq: int): (list of ref Ffv, list of string, int)
+{
+	for(i := 0; i < len rs; i++)
+		pick r := rs[i] {
+		Media =>
+			if(style->mediamatch(r.cond, p.env))
+				(acc, layers, seq) = ffvrules(p, r.rules, layer, acc, layers, seq);
+		Supports =>
+			if(style->supports(r.cond))
+				(acc, layers, seq) = ffvrules(p, r.rules, layer, acc, layers, seq);
+		Layer =>
+			for(nl := r.names; nl != nil; nl = tl nl) {
+				full := hd nl;
+				if(layer != "")
+					full = layer + "." + full;
+				ll: list of string;
+				for(ll = layers; ll != nil; ll = tl ll)
+					if(hd ll == full)
+						break;
+				if(ll == nil)
+					layers = full :: layers;
+				if(r.rules != nil)
+					(acc, layers, seq) = ffvrules(p, r.rules, full, acc, layers, seq);
+			}
+		Other =>
+			if(r.name != "font-feature-values")
+				continue;
+			blk := ffvblock(r.block);
+			for(fams := ffvfamilies(r.prelude); fams != nil; fams = tl fams)
+				for(vl := blk; vl != nil; vl = tl vl) {
+					(kind, name, vals) := hd vl;
+					acc = ref Ffv(hd fams, kind, name, vals, layer, seq++) :: acc;
+				}
+		}
+	return (acc, layers, seq);
+}
+
+# the prelude's family names: idents (several make one name) or
+# strings, between commas
+ffvfamilies(v: array of ref Css->Tok): list of string
+{
+	r: list of string;
+	cur := "";
+	for(i := 0; i <= len v; i++) {
+		if(i == len v || v[i].kind == Css->Kcomma) {
+			if(cur != "")
+				r = cur :: r;
+			cur = "";
+			continue;
+		}
+		case v[i].kind {
+		Css->Kstring =>
+			cur = v[i].s;
+		Css->Kident =>
+			if(cur != "")
+				cur += " ";
+			cur += v[i].s;
+		}
+	}
+	return r;
+}
+
+# the block's @stylistic, @styleset ... blocks, as (kind, name, values):
+# each declaration a name and its whole numbers; a value that is not
+# one leaves the declaration out
+ffvblock(v: array of ref Css->Tok): list of (string, string, array of int)
+{
+	r: list of (string, string, array of int);
+	for(i := 0; i < len v; i++) {
+		if(v[i].kind != Css->Katkeyword)
+			continue;
+		kind := v[i].s;
+		case kind {
+		"stylistic" or "styleset" or "character-variant" or "swash" or "ornaments" or "annotation" =>
+			;
+		* =>
+			continue;
+		}
+		j := i + 1;
+		while(j < len v && v[j].kind == Css->Kws)
+			j++;
+		if(j >= len v || v[j].kind != Css->Kblock || v[j].s != "{")
+			continue;
+		b := v[j].kids;
+		i = j;
+		for(k := 0; k < len b; ) {
+			while(k < len b && (b[k].kind == Css->Kws || b[k].kind == Css->Ksemicolon))
+				k++;
+			if(k >= len b)
+				break;
+			e := k;
+			while(e < len b && b[e].kind != Css->Ksemicolon)
+				e++;
+			d := b[k:e];
+			k = e;
+			# name : n n ...
+			if(len d < 3 || d[0].kind != Css->Kident)
+				continue;
+			c := 1;
+			while(c < len d && d[c].kind == Css->Kws)
+				c++;
+			if(c >= len d || d[c].kind != Css->Kcolon)
+				continue;
+			nums: list of int;
+			nn := 0;
+			ok := 1;
+			for(c++; c < len d; c++) {
+				if(d[c].kind == Css->Kws)
+					continue;
+				if(d[c].kind != Css->Knumber || !(d[c].flag & 1) || d[c].n < 0.0) {
+					ok = 0;
+					break;
+				}
+				nums = int d[c].n :: nums;
+				nn++;
+			}
+			if(!ok || nn == 0)
+				continue;
+			# one value but for styleset (any) and character-variant (two)
+			if(nn > 1 && kind != "styleset" && (kind != "character-variant" || nn > 2))
+				continue;
+			vals := array[nn] of int;
+			for(; nums != nil; nums = tl nums)
+				vals[--nn] = hd nums;
+			r = (kind, d[0].s, vals) :: r;
+		}
+	}
+	o: list of (string, string, array of int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
 fontrules(p: ref Pg, rs: array of ref Css->Rule, base: string, acc: list of ref Fontsrc): list of ref Fontsrc
 {
 	for(i := 0; i < len rs; i++)
@@ -1571,7 +1793,7 @@ fontrules(p: ref Pg, rs: array of ref Css->Rule, base: string, acc: list of ref 
 
 fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 {
-	f := ref Fontsrc(nil, 400, 0, nil, nil, ref Fonts->Desc(0, 0, 0.0, 0.0, -1, 0.0, 0.0, nil));	# auto: the font's own ranges (Fonts 4 §4)
+	f := ref Fontsrc(nil, 400, 0, nil, nil, ref Fonts->Desc(0, 0, 0.0, 0.0, -1, 0.0, 0.0, nil, nil));	# auto: the font's own ranges (Fonts 4 §4)
 	for(i := 0; i < len decls; i++) {
 		d := decls[i];
 		v := d.val;
@@ -1635,6 +1857,8 @@ fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 					r = (x[j].s, x[j+1].n) :: r;
 			for(; r != nil; r = tl r)
 				f.desc.vars = hd r :: f.desc.vars;
+		"font-feature-settings" =>
+			f.desc.feats = featuresettings(nows(v));
 		"unicode-range" =>
 			f.ranges = uranges(css->tostring(v));
 		"src" =>

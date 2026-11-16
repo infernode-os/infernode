@@ -415,6 +415,71 @@ testMultiContourGlyphs(t: ref T)
 	t.log(sys->sprint("all pages: %d chars (multi-contour glyphs exercised)", len alltext));
 }
 
+# GSUB through substitute(), on DejaVu Sans: a script's default
+# language system's features in lookup order, a feature turned off or
+# on, a language's system chosen, and the plan kept under its key
+# telling feature lists apart.
+testSubstitute(t: ref T)
+{
+	if(outlinefont == nil)
+		t.skip("outlinefont module not available");
+	data := readall("/fonts/ttf/dejavu/DejaVuSans.ttf");
+	if(data == nil)
+		t.skip("no /fonts/ttf/dejavu/DejaVuSans.ttf");
+	disp := Display.allocate(nil);
+	if(disp == nil)
+		t.skip("no display");
+	outlinefont->init(disp);
+	(f, err) := outlinefont->open(data, "ttf");
+	if(f == nil)
+		t.fatal("open: " + err);
+	dflt := ("ccmp", 1) :: ("liga", 1) :: ("clig", 1) :: ("calt", 1) :: ("locl", 1) :: nil;
+
+	# fi: liga's ligature, standing for both
+	fi := array[] of {f.chartogid('f'), f.chartogid('i')};
+	(r, cnt) := f.substitute(fi, dflt, "latn", nil, "d");
+	t.asserteq(len r, 1, "fi is one glyph");
+	if(len r == 1)
+		t.asserteq(r[0], f.chartogid(16rFB01), "the fi ligature");
+	t.assert(cnt != nil && len cnt == 1 && cnt[0] == 2, "it stands for two");
+	t.asserteq(fi[0], f.chartogid('f'), "the run given is left as it was");
+
+	# liga off, a later setting replacing the earlier
+	(r, cnt) = f.substitute(fi, ("liga", 1) :: ("liga", 0) :: nil, "latn", nil, "noliga");
+	t.asserteq(len r, 2, "liga off: two glyphs");
+	t.assert(cnt == nil, "and no count");
+
+	# st: dlig's, only when asked
+	st := array[] of {f.chartogid('s'), f.chartogid('t')};
+	(r, nil) = f.substitute(st, dflt, "latn", nil, "d");
+	t.asserteq(len r, 2, "st by default: two glyphs");
+	(r, nil) = f.substitute(st, ("dlig", 1) :: nil, "latn", nil, "dlig");
+	t.assert(len r == 1 && r[0] == f.chartogid(16rFB06), "dlig: the st ligature");
+
+	# a single substitution, salt's a to U+0251
+	a := array[] of {f.chartogid('a')};
+	(r, cnt) = f.substitute(a, ("salt", 1) :: nil, "latn", nil, "salt");
+	t.asserteq(r[0], f.chartogid(16r251), "salt: a's alternate");
+	t.assert(cnt == nil, "one for one: no count");
+	(r, nil) = f.substitute(a, dflt, "latn", nil, "d");
+	t.asserteq(r[0], f.chartogid('a'), "no salt by default");
+
+	# Serbian: locl's be is only in the SRB language system
+	be := array[] of {f.chartogid(16r431)};
+	(r, nil) = f.substitute(be, dflt, "cyrl", nil, "d");
+	t.asserteq(r[0], f.chartogid(16r431), "be in Cyrillic's default system");
+	(r, nil) = f.substitute(be, dflt, "cyrl", "SRB ", "d");
+	t.asserteq(r[0], f.chartogid(16rF6C5), "be in Serbian: locl's form");
+	(r, nil) = f.substitute(be, dflt, "cyrl", nil, "d");
+	t.asserteq(r[0], f.chartogid(16r431), "and Cyrillic's default again (plans kept apart)");
+
+	# a feature the font does not have, an empty run
+	(r, cnt) = f.substitute(fi, ("zzzz", 1) :: nil, "latn", nil, "zzzz");
+	t.assert(len r == 2 && cnt == nil, "an unknown feature changes nothing");
+	(r, cnt) = f.substitute(array[0] of int, dflt, "latn", nil, "d");
+	t.assert(len r == 0 && cnt == nil, "nothing to shape");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -448,6 +513,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CacheIsolation", testCacheIsolation);
 	run("MultiContourGlyphs", testMultiContourGlyphs);
 	run("BadEndpoints", testBadEndpoints);
+	run("Substitute", testSubstitute);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

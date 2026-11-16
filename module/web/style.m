@@ -296,6 +296,12 @@ Style: module
 		clipwind:	int;	# its fill rule, as fillpath's: ~0 nonzero, 1 evenodd
 		cqtype:	int;	# container-type: 0 normal, 1 inline-size, 2 size
 		cqnames:	list of string;	# container-name
+		# OpenType features (inherited): font-variant-ligatures, -caps,
+		# -numeric, -east-asian and -position, as (tag, value); nil for normal
+		fvlig, fvcaps, fvnum, fvea, fvpos:	list of (string, int);
+		fvalt:	list of (string, string);	# font-variant-alternates: (function, name), "historical-forms" with no name; resolved by @font-feature-values
+		ffs:	list of (string, int);	# font-feature-settings, in order; nil for normal
+		langover:	string;	# font-language-override: an OpenType language system tag, four characters ("TRK "); nil for normal
 
 		new:	fn(): ref St;		# initial values
 	};

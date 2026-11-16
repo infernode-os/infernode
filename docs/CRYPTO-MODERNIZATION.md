@@ -579,6 +579,30 @@ Under it:
   multiplication otherwise (after BearSSL). AES and SHA-256 use the ARMv8
   instructions where `ID_AA64ISAR0_EL1` says the core has them, in the
   emulator and the native kernels.
+- **AES in constant time without the instructions.** Where the processor
+  has no AES instructions (amd64 as the emulator is built, the Pi 3 and 4,
+  RISC-V) `libsec/aes.c` was four tables indexed by the key exclusive-ored
+  with the data, which a cache shared with an attacker shows. It is
+  bitsliced now: eight 64-bit words hold one bit each of up to four
+  blocks, SubBytes is Boyar and Peralta's 113-gate circuit, and nothing
+  is indexed or branched on. It costs speed: AES-256-GCM about half what
+  it was on amd64 (55 MB/s against 109), CBC decryption the same, CBC
+  encryption a seventh (25 against 172), since a chained block cannot
+  share the words with three others. `tests/host/armcrypto_test.sh`
+  holds it to FIPS 197, SP 800-38A, OpenSSL's GCM answers and a plain
+  reference, and runs it under valgrind with key and data secret.
+- **Private keys and nonces away from the clock.** RSA's private
+  operation is `libmp`'s `mpexpcrt`: both powers and Garner's
+  recombination in Montgomery arithmetic at the primes' length, no
+  division, on an input blinded with a fresh random number
+  (`libsec/rsadecrypt.c`). A DSA, ElGamal or ECDSA nonce is RFC 6979's
+  with 32 random bytes beside the key and the digest (its section 3.6),
+  so a generator that repeats does not repeat a nonce; DSA inverts it as
+  a power and makes s with `mpmuladdmod`; ElGamal, whose modulus p-1 is
+  even, inverts it blinded and says in `libsec/egsign.c` what remains
+  general arithmetic. `tests/host/rsa_edge_test.sh`,
+  `tests/host/sign_nonce_test.sh` and `tests/host/ecc_test.sh` hold them
+  to known answers (RFC 6979's own for P-256 and P-384) and to valgrind.
 - **One generator, NIST's.** Every random number, in the emulator
   (`libsec/genrandom.c`) and the native kernels (`os/port/random.c`), comes
   from HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1, `libsec/hmacdrbg.c`),

@@ -98,7 +98,7 @@ first, as
 .IR eia (3)
 expects.
 .TP
-.BI source " \fR[\fPformat\fR]\fP net\fB!\fPhost\fB!\fPport"
+.BI source " \fR[\fPformat\fR]\fP net\fB!\fPhost\fB!\fPport \fR[\fPsync\fR]"
 a network connection, as
 .IR dial (2)
 makes.
@@ -108,8 +108,15 @@ With host
 is listened to: the datagrams any sender sends to that port, as a
 marine gateway (port 10110) or an ADS-B receiver (port 4000) sends
 them; an NMEA datagram is whole, a newline or not.
+With
+.B sync
+the source's times may set the clock (the
+.B time
+file, below); without it they are not offered for that, since what a
+network source says is said by whoever answers at its address, and at
+a port listened to by anyone who sends to it.
 .TP
-.BI "source gpsd" " host"
+.BI "source gpsd" " host \fR[\fPsync\fR]"
 .IR gpsd ,
 at
 .IR host ,
@@ -339,7 +346,11 @@ sentence's first took at the line's baud rate, when it is given.
 .B Sync=yes
 only for a live receiver speaking NMEA; a recording, a feed, and a
 receiver whose fixes this host stamps (garmin, gdl90) say
-.BR no .
+.BR no ,
+and so does a network source (a connection,
+.IR gpsd ,
+a port listened to) unless its command ended
+.BR sync .
 .IR Timesync (8)
 sets the clock from it.
 .TP

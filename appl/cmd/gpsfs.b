@@ -18,11 +18,14 @@ implement Gpsfs;
 #                      source [format] <path> [baud]
 #                                       a file or serial port; baud is
 #                                       written to <path>ctl
-#                      source [format] <net!host!port>
+#                      source [format] <net!host!port> [sync]
 #                                       a network connection; with host
 #                                       * (udp!*!10110), datagrams sent
 #                                       to that port
-#                      source gpsd <host[!port]>  gpsd, in its NMEA mode
+#                      source gpsd <host[!port]> [sync]
+#                                       gpsd, in its NMEA mode
+#                    sync says a network source may set the clock
+#                    (the time file, below)
 #                      replay <path>    an NMEA log, paced by its times
 #                      stop
 #                    format is nmea (the default), garmin or gdl90.  A
@@ -56,7 +59,13 @@ implement Gpsfs;
 #                    and their difference) sync=yes|no.  sync is yes only
 #                    for a live receiver speaking NMEA: never for a
 #                    recording, a feed, or a format with no time of its
-#                    own (garmin, gdl90, whose fixes this host stamps).
+#                    own (garmin, gdl90, whose fixes this host stamps);
+#                    and for a network source only if its command said
+#                    sync.  A receiver on a serial port is this machine's;
+#                    a network source is whoever answers at that address,
+#                    and a UDP port listened to anyone who sends to it:
+#                    marked sync=yes as a receiver is, any host on the
+#                    network chose the clock when timesync(8) ran.
 #                    timesync(8) sets the clock from it.
 #
 # A fix from a recording (replay, or a source that is a file with a
@@ -205,6 +214,7 @@ Source: adt {
 	addr:	string;
 	baud:	string;
 	origin:	string;		# "" live, or recorded
+	clock:	int;		# its times may set the clock: a local receiver, or a network source so marked
 };
 
 user := "gps";
@@ -380,7 +390,7 @@ Serve:
 			waitsrc = nil;
 		Iline =>
 			if(len in.line > 0 && (in.line[0] == '$' || in.line[0] == '!') && src != nil)
-				st.take(in.line, src.origin, src.format == "nmea", in.us);
+				st.take(in.line, src.origin, src.format == "nmea" && src.clock, in.us);
 		Itarget =>
 			st.target(in.target);
 		Ibad =>
@@ -823,8 +833,14 @@ parsecmd(s: string): (ref Source, string)
 	"replay" =>
 		if(n != 2)
 			return (nil, "usage: replay <path>");
-		return (ref Source("replay " + a[1], "replay", "nmea", a[1], nil, "recorded"), nil);
+		return (ref Source("replay " + a[1], "replay", "nmea", a[1], nil, "recorded", 0), nil);
 	"source" =>
+		# sync, last: this source may set the clock
+		sync := 0;
+		if(n > 2 && a[n-1] == "sync") {
+			sync = 1;
+			a = a[0:--n];
+		}
 		if(n == 3 && a[1] == "gpsd") {
 			# host, host!port, net!host, net!host!port
 			addr := a[2];
@@ -840,7 +856,10 @@ parsecmd(s: string): (ref Source, string)
 					addr = "tcp!" + addr;
 				}
 			}
-			return (ref Source("source gpsd " + a[2], "gpsd", "nmea", addr, nil, nil), nil);
+			cmd := "source gpsd " + a[2];
+			if(sync)
+				cmd += " sync";
+			return (ref Source(cmd, "gpsd", "nmea", addr, nil, nil, sync), nil);
 		}
 		cmd := "source";
 		format := "nmea";
@@ -851,7 +870,7 @@ parsecmd(s: string): (ref Source, string)
 			a = a[1:];
 		}
 		if(len a < 1 || len a > 2)
-			return (nil, "usage: source [nmea|garmin|gdl90] <path> [baud] | source [nmea|garmin|gdl90] <net!host!port> | source gpsd <host>");
+			return (nil, "usage: source [nmea|garmin|gdl90] <path> [baud] | source [nmea|garmin|gdl90] <net!host!port> [sync] | source gpsd <host> [sync]");
 		cmd += " " + a[0];
 		baud: string;
 		if(len a == 2) {
@@ -861,6 +880,7 @@ parsecmd(s: string): (ref Source, string)
 			cmd += " " + baud;
 		}
 		verb := "file";
+		clock := 1;	# a file is this machine's: a serial port, a device
 		if(count(a[0], '!') > 0) {
 			if(baud != nil)
 				return (nil, "a baud rate is for a serial port, not " + a[0]);
@@ -871,8 +891,11 @@ parsecmd(s: string): (ref Source, string)
 				verb = "listen";
 			} else
 				verb = "dial";
+			clock = sync;
 		}
-		return (ref Source(cmd, verb, format, a[0], baud, nil), nil);
+		if(sync)
+			cmd += " sync";
+		return (ref Source(cmd, verb, format, a[0], baud, nil, clock), nil);
 	}
 	return (nil, "unknown command " + a[0]);
 }

@@ -194,6 +194,7 @@ TARG=\
 	pop3cli.dis\
 	webgetcli.dis\
 	print_heapfull.dis\
+	timerec.dis\
 	tool9call.dis\
 	exec_fd_probe.dis\
 	load_heapfull.dis\

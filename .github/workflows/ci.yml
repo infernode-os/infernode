@@ -1839,7 +1839,14 @@ jobs:
           - arch: arm64
             label: ARM64
             runner: macos-15
-            backstop: 1500  # the suite runs interpreted here (no -c1)
+            # The suite runs interpreted here (no -c1).  At 1500 it was cut
+            # off in bt_ns, the first sh test, on 2026-11-17, nothing hung:
+            # its Limbo tests alone add up to 1396 s, 192 s more than on
+            # master (wikifs, secstore_client, keyring_letgo and
+            # keyring_msg are new, webclient_deadline 37 s longer), and
+            # bt_ns takes 113 s here.  The backstop bounds a hang, and the
+            # job has 75 minutes, as AMD64's does.
+            backstop: 2400
             gui: wm
           - arch: arm64
             label: ARM64 GUI (osk)

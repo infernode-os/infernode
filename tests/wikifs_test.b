@@ -693,7 +693,11 @@ writer(go: chan of int, res: chan of string, v: int, text: string)
 # ---- the server itself
 
 # Progs that are wikifs's
-wikiprogs(): int
+# The wikifs processes among those made after pid "after": only theirs
+# are read.  The suite's earlier tests leave Progs behind (3362 of them
+# by here on macOS's Intel runner, interpreted), and reading every one's
+# status, as this did, took the test past its deadline there.
+wikiprogs(after: int): int
 {
 	n := 0;
 	fd := sys->open("/prog", Sys->OREAD);
@@ -704,6 +708,8 @@ wikiprogs(): int
 		if(k <= 0)
 			break;
 		for(i := 0; i < k; i++){
+			if(int d[i].name <= after)
+				continue;
 			s := getfile("/prog/" + d[i].name + "/status");
 			if(contains(s, "Wikifs") && !contains(s, "WikifsTest") || contains(s, " Wiki") && !contains(s, "Wikifs"))
 				n++;
@@ -712,20 +718,38 @@ wikiprogs(): int
 	return n;
 }
 
+# The highest pid there is now; pids only grow
+lastpid(): int
+{
+	last := 0;
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	for(;;){
+		(k, d) := sys->dirread(fd);
+		if(k <= 0)
+			break;
+		for(i := 0; i < k; i++)
+			if(int d[i].name > last)
+				last = int d[i].name;
+	}
+	return last;
+}
+
 testEndsWithConnection(t: ref T)
 {
 	dir := hoststore(t);
 	addpage(dir, 0, "front page", "the front page");
-	before := wikiprogs();
+	after := lastpid();
 	mountwiki(t, dir);
 	for(i := 0; i < 5; i++)
 		getfile("/n/0/index.html");
 	post("another", 0, "text\n");
-	t.assert(wikiprogs() > before, "wikifs is running");
+	t.assert(wikiprogs(after) > 0, "wikifs is running");
 	unmountwiki();
-	for(i = 0; i < 50 && wikiprogs() > before; i++)
+	for(i = 0; i < 50 && wikiprogs(after) > 0; i++)
 		sys->sleep(100);
-	t.asserteq(wikiprogs(), before, "none of its processes is left when its connection has gone");
+	t.asserteq(wikiprogs(after), 0, "none of its processes is left when its connection has gone");
 	rmrf(dir);
 }
 
